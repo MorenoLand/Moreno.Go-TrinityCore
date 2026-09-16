@@ -2293,11 +2293,17 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			AuraInterruptFlags: spell.AuraInterruptFlags,
 			TriggerSpell:       eff.TriggerSpell,
 			DRGroup:            drGroup,
+			StackAmount:        spell.StackAmount,
+			RemainingCharges:   uint8(spell.ProcCharges),
 		}
 		targetSess.activeAuras[spell.ID] = aura
 		targetSess.castMu.Unlock()
 
-		updatePkt := protocol.BuildAuraUpdate(targetGUID, s.playerGUID, slot, spell.ID, false, positive, durationMs, durationMs, s.player.Level)
+		stackCount := uint8(1)
+		if spell.StackAmount == 0 && spell.ProcCharges > 0 {
+			stackCount = uint8(spell.ProcCharges)
+		}
+		updatePkt := protocol.BuildAuraUpdateWithStack(targetGUID, s.playerGUID, slot, spell.ID, false, positive, durationMs, durationMs, s.player.Level, stackCount)
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 		if s.server != nil {
 			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, targetSess)
@@ -2352,27 +2358,33 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	}
 	slot := uint8(len(s.server.activeCreatureAuras[targetGUID]) % 64)
 	aura := &activeAura{
-		SpellID:      spell.ID,
-		DispelType:   spell.DispelType,
-		Mechanic:     spell.Mechanic,
-		AuraType:     eff.Aura,
-		CasterGUID:   s.playerGUID,
-		TargetGUID:   targetGUID,
-		SchoolMask:   schoolMask,
-		MiscValue:    eff.MiscValue,
-		Amount:       amount,
-		DurationMs:   durationMs,
-		PeriodMs:     periodMs,
-		RemainingMs:  durationMs,
-		Slot:         slot,
-		Positive:     positive,
-		CasterLevel:  s.player.Level,
-		TriggerSpell: eff.TriggerSpell,
+		SpellID:          spell.ID,
+		DispelType:       spell.DispelType,
+		Mechanic:         spell.Mechanic,
+		AuraType:         eff.Aura,
+		CasterGUID:       s.playerGUID,
+		TargetGUID:       targetGUID,
+		SchoolMask:       schoolMask,
+		MiscValue:        eff.MiscValue,
+		Amount:           amount,
+		DurationMs:       durationMs,
+		PeriodMs:         periodMs,
+		RemainingMs:      durationMs,
+		Slot:             slot,
+		Positive:         positive,
+		CasterLevel:      s.player.Level,
+		TriggerSpell:     eff.TriggerSpell,
+		StackAmount:      spell.StackAmount,
+		RemainingCharges: uint8(spell.ProcCharges),
 	}
 	s.server.activeCreatureAuras[targetGUID][spell.ID] = aura
 	s.server.auraMu.Unlock()
 
-	updatePkt := protocol.BuildAuraUpdate(targetGUID, s.playerGUID, slot, spell.ID, false, positive, durationMs, durationMs, s.player.Level)
+	stackCount := uint8(1)
+	if spell.StackAmount == 0 && spell.ProcCharges > 0 {
+		stackCount = uint8(spell.ProcCharges)
+	}
+	updatePkt := protocol.BuildAuraUpdateWithStack(targetGUID, s.playerGUID, slot, spell.ID, false, positive, durationMs, durationMs, s.player.Level, stackCount)
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, s)
 
