@@ -358,6 +358,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 
 	_ = s.loadOptionalPlayerState(ctx, &state)
 	_ = s.loadFishingSteps(ctx, &state)
+	applyOfflineRestBonus(&state)
 	_ = s.loadPlayerAuras(ctx, &state)
 	s.loadGlyphAuras(&state)
 	_ = s.calculatePlayerStats(ctx, &state)
@@ -366,6 +367,25 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	s.restoreLoadedCorpseState(ctx, &state)
 	s.player = &state
 	return state, nil
+}
+
+func applyOfflineRestBonus(state *playerState) {
+	if state == nil || state.LogoutTime <= 0 || time.Now().Unix() <= state.LogoutTime || state.Level == 0 || int(state.Level) >= len(xpCurve) {
+		return
+	}
+	elapsed := time.Now().Unix() - state.LogoutTime
+	bubble := float32(0.031)
+	if state.LogoutResting {
+		bubble = 0.125
+	}
+	nextLevelXP := float32(xpCurve[state.Level])
+	state.RestBonus += float32(elapsed) * (nextLevelXP / 72000) * bubble
+	maxRestBonus := nextLevelXP * 1.5 / 2
+	if state.RestBonus < 0 {
+		state.RestBonus = 0
+	} else if state.RestBonus > maxRestBonus {
+		state.RestBonus = maxRestBonus
+	}
 }
 
 func (s *session) loadFishingSteps(ctx context.Context, state *playerState) error {

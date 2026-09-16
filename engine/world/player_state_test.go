@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -145,6 +146,21 @@ func TestInstanceStateLoad(t *testing.T) {
 	state := playerState{GUID: 7}
 	if err := sess.loadInstanceState(context.Background(), &state); err != nil || state.InstanceID != 42 || state.InstanceModeMask != 33 || state.DungeonDifficulty != 1 || state.RaidDifficulty != 2 {
 		t.Fatalf("instance state=%d/%d dungeon=%d raid=%d err=%v", state.InstanceID, state.InstanceModeMask, state.DungeonDifficulty, state.RaidDifficulty, err)
+	}
+}
+
+func TestApplyOfflineRestBonusUsesReferenceBubblesAndCap(t *testing.T) {
+	state := &playerState{Level: 20, LogoutTime: time.Now().Unix() - 3600, RestBonus: 0, LogoutResting: true}
+	applyOfflineRestBonus(state)
+	want := float32(xpCurve[20]) * 1.5 / 2
+	if state.RestBonus <= 0 || state.RestBonus > want {
+		t.Fatalf("rest bonus=%f want positive <= %f", state.RestBonus, want)
+	}
+	state.RestBonus = want * 2
+	state.LogoutTime = time.Now().Unix() - 3600
+	applyOfflineRestBonus(state)
+	if state.RestBonus != want {
+		t.Fatalf("rest cap=%f want=%f", state.RestBonus, want)
 	}
 }
 
