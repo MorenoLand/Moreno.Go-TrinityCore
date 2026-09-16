@@ -568,6 +568,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.sendLoginEffect(); err != nil {
 		return false
 	}
+	if err := s.sendLoginFlightState(); err != nil {
+		return false
+	}
 	if err := s.sendLoginMovementStates(); err != nil {
 		return false
 	}
@@ -685,6 +688,22 @@ func (s *session) sendLoginMovementStates() error {
 	packet.WriteU32(uint32(state.Len()))
 	packet.Write(state.Bytes())
 	return s.write(uint16(protocol.OpcodeSMSG_MULTIPLE_MOVES), packet.Bytes(), true)
+}
+
+func (s *session) sendLoginFlightState() error {
+	if s == nil || s.player == nil {
+		return nil
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || (aura.AuraType != 201 && aura.AuraType != 207) {
+			continue
+		}
+		packet := protocol.NewBuffer(packedGUIDSize(s.playerGUID) + 4)
+		packet.WritePackedGUID(s.playerGUID)
+		packet.WriteU32(0)
+		return s.write(uint16(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY), packet.Bytes(), true)
+	}
+	return nil
 }
 
 func packedGUIDSize(guid uint64) int {

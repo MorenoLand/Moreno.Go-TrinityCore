@@ -207,3 +207,30 @@ func TestSendLoginMovementStatesUsesReferenceCompoundPacket(t *testing.T) {
 		}
 	}
 }
+
+func TestSendLoginFlightStateUsesReferenceCanFlyPacket(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	sess := &session{conn: serverConn, playerGUID: 9, player: &playerState{GUID: 9}, activeAuras: map[uint32]*activeAura{1: {SpellID: 201, AuraType: 201}}}
+	done := make(chan error, 1)
+	go func() { done <- sess.sendLoginFlightState() }()
+	opcode, payload, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if opcode != uint16(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY) {
+		t.Fatalf("opcode=%x", opcode)
+	}
+	reader := protocol.NewReader(payload)
+	guid, err := reader.ReadPackedGUID()
+	if err != nil || guid != 9 {
+		t.Fatalf("guid=%d err=%v", guid, err)
+	}
+	if counter, err := reader.ReadU32(); err != nil || counter != 0 || reader.Remaining() != 0 {
+		t.Fatalf("counter=%d remaining=%d err=%v", counter, reader.Remaining(), err)
+	}
+}
