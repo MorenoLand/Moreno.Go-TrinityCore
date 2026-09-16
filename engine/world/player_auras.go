@@ -27,6 +27,10 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 	s.auras = make(map[uint32]struct{})
 	s.auraSlots = make(map[uint32]uint8)
 	s.activeAuras = make(map[uint32]*activeAura)
+	offlineMs := int64(0)
+	if state.LogoutTime > 0 && time.Now().Unix() > state.LogoutTime {
+		offlineMs = (time.Now().Unix() - state.LogoutTime) * 1000
+	}
 	var periodic []*activeAura
 	for rows.Next() {
 		var casterGUID, itemGUID uint64
@@ -82,6 +86,12 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 				}
 				aura.Positive = !isHarmfulAura(aura.AuraType)
 			}
+		}
+		if !aura.Positive && aura.RemainingMs > 0 && offlineMs > 0 {
+			if offlineMs >= int64(aura.RemainingMs) {
+				continue
+			}
+			aura.RemainingMs -= uint32(offlineMs)
 		}
 		if aura.DurationMs > 0 && aura.RemainingMs > aura.DurationMs {
 			aura.RemainingMs = aura.DurationMs
