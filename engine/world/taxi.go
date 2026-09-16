@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -395,11 +396,67 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte) bool {
 	return reply(taxiErrOK)
 }
 
-// startTaxiFlight mounts the player and broadcasts the taxi spline.
-func (s *session) startTaxiFlight(pathID, mountDisplay uint32, takeoff bool) {
+func taxiResumeStartNode(points []wotlk.TaxiSplinePoint, mapID uint32, x, y, z float32) int {
+	if len(points) < 2 {
+		return 0
+	}
+	distNext := float64((points[0].X-x)*(points[0].X-x) + (points[0].Y-y)*(points[0].Y-y) + (points[0].Z-z)*(points[0].Z-z))
+	for index := 1; index < len(points); index++ {
+		point, previous := points[index], points[index-1]
+		if point.MapID != int32(mapID) {
+			continue
+		}
+		distPrevious := distNext
+		distNext = float64((point.X-x)*(point.X-x) + (point.Y-y)*(point.Y-y) + (point.Z-z)*(point.Z-z))
+		distNodes := float64((point.X-previous.X)*(point.X-previous.X) + (point.Y-previous.Y)*(point.Y-previous.Y) + (point.Z-previous.Z)*(point.Z-previous.Z))
+		if distNext+distPrevious < distNodes {
+			return index
+		}
+	}
+	return 0
+}
+
+func (s *session) continueTaxiFlight() {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	nodes := strings.Fields(s.player.TaxiPath)
+	if len(nodes) < 3 {
+		return
+	}
+	source, sourceErr := strconv.ParseUint(nodes[1], 10, 32)
+	destination, destinationErr := strconv.ParseUint(nodes[2], 10, 32)
+	if sourceErr != nil || destinationErr != nil {
+		return
+	}
+	pathID, _, found, err := s.server.Data.TaxiPathLinks(uint32(source), uint32(destination))
+	if err != nil || !found {
+		return
+	}
+	mount, err := s.server.Data.TaxiNodeMount(uint32(source), s.playerAlliance())
+	if err != nil || mount == 0 {
+		return
+	}
 	points, err := s.server.Data.TaxiPathPoints(pathID)
 	if err != nil || len(points) == 0 {
 		return
+	}
+	startNode := taxiResumeStartNode(points, s.player.Map, s.player.X, s.player.Y, s.player.Z)
+	s.startTaxiFlightFrom(pathID, mount, startNode)
+}
+
+// startTaxiFlight mounts the player and broadcasts the taxi spline.
+func (s *session) startTaxiFlight(pathID, mountDisplay uint32, takeoff bool) {
+	s.startTaxiFlightFrom(pathID, mountDisplay, 0)
+}
+
+func (s *session) startTaxiFlightFrom(pathID, mountDisplay uint32, startNode int) {
+	points, err := s.server.Data.TaxiPathPoints(pathID)
+	if err != nil || len(points) == 0 {
+		return
+	}
+	if startNode > 0 && startNode < len(points) {
+		points = points[startNode:]
 	}
 	if mountDisplay != 0 {
 		s.player.MountDisplayID = mountDisplay

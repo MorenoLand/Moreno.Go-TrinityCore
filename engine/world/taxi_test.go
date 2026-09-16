@@ -2,10 +2,22 @@ package world
 
 import (
 	"context"
+	"math"
 	"testing"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
+
+func TestTaxiResumeStartNodeMatchesReferenceMidpointSearch(t *testing.T) {
+	points := []wotlk.TaxiSplinePoint{{MapID: 0, X: 0, Y: 0, Z: 0}, {MapID: 0, X: 10, Y: 0, Z: 0}, {MapID: 0, X: 20, Y: 0, Z: 0}, {MapID: 1, X: 0, Y: 0, Z: 0}}
+	if got := taxiResumeStartNode(points, 0, 16, 0, 0); got != 2 {
+		t.Fatalf("start node=%d want=2", got)
+	}
+	if got := taxiResumeStartNode(points, 1, math.SmallestNonzeroFloat32, 0, 0); got != 3 {
+		t.Fatalf("cross-map start node=%d want=3", got)
+	}
+}
 
 func TestTaxiMenuAndActivation(t *testing.T) {
 	srv := &Server{}
