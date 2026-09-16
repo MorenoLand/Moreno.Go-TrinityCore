@@ -569,10 +569,10 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true); err != nil {
 		return false
 	}
-	if err := s.sendLoginMovementStates(); err != nil {
+	if err := s.sendLoginEffect(); err != nil {
 		return false
 	}
-	if err := s.sendLoginEffect(); err != nil {
+	if err := s.sendLoginMovementStates(); err != nil {
 		return false
 	}
 	s.sendLoadedAuras()
