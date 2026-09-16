@@ -516,10 +516,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(updates.Opcode, updates.Payload.Bytes(), true); err != nil {
 		return false
 	}
-	if state.PlayerFlags&playerFlagGhost != 0 {
-		s.sendLoadedCorpse(ctx)
-	}
-
 	// Concurrently query nearby creatures and gameobjects
 	var nearbyCreatures, nearbyGameObjects *protocol.Packet
 	var creatureCount, goCount int
@@ -586,6 +582,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.debug("world login stage", "stage", "account-online-complete", "guid", guid)
 	s.sendLoadedGroup()
 	s.server.broadcastFriendStatus(s.playerGUID, friendsResultOnline, uint32(state.Zone), uint32(state.Level), uint32(state.Class))
+	if state.PlayerFlags&playerFlagGhost != 0 {
+		s.sendLoadedCorpse(ctx)
+	}
 	// Spawn active pet if one was active at logout (slot 0)
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
 		var petID, entry, modelID, level, reactState, curHealth, curMana int64
