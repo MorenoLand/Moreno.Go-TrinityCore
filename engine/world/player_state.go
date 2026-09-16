@@ -359,6 +359,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	_ = s.loadOptionalPlayerState(ctx, &state)
 	_ = s.loadFishingSteps(ctx, &state)
 	applyOfflineRestBonus(&state)
+	_ = s.updateOfflineRealtimeItemDurations(ctx, &state)
 	_ = s.loadPlayerAuras(ctx, &state)
 	s.loadGlyphAuras(&state)
 	_ = s.calculatePlayerStats(ctx, &state)
@@ -367,6 +368,60 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	s.restoreLoadedCorpseState(ctx, &state)
 	s.player = &state
 	return state, nil
+}
+
+const itemFlagsCustomRealTimeDuration uint32 = 0x0001
+
+func (s *session) updateOfflineRealtimeItemDurations(ctx context.Context, state *playerState) error {
+	if s == nil || state == nil || state.LogoutTime <= 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return nil
+	}
+	elapsed := time.Now().Unix() - state.LogoutTime
+	if elapsed <= 0 {
+		return nil
+	}
+	elapsedMs := elapsed * 1000
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.item, ii.itemEntry, COALESCE(ii.duration, 0)
+		FROM character_inventory AS ci
+		JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ii.duration > 0`, state.GUID)
+	if err != nil {
+		if missingTable(err) || isMissingColumn(err) {
+			return nil
+		}
+		return err
+	}
+	type realtimeItem struct{ guid, entry, duration int64 }
+	items := make([]realtimeItem, 0)
+	for rows.Next() {
+		var item realtimeItem
+		if rows.Scan(&item.guid, &item.entry, &item.duration) == nil {
+			var flags int64
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(flagsCustom, 0) FROM item_template WHERE entry = ?", item.entry).Scan(&flags); err == nil && uint32(flags)&itemFlagsCustomRealTimeDuration != 0 {
+				items = append(items, item)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, item := range items {
+		if item.duration <= elapsedMs {
+			if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", state.GUID, item.guid); err != nil {
+				return err
+			}
+			if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", item.guid); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE item_instance SET duration = ? WHERE guid = ?", item.duration-elapsedMs, item.guid); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func applyOfflineRestBonus(state *playerState) {

@@ -164,6 +164,54 @@ func TestApplyOfflineRestBonusUsesReferenceBubblesAndCap(t *testing.T) {
 	}
 }
 
+func TestOfflineRealtimeItemDurationsAdvanceAndExpire(t *testing.T) {
+	charactersDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer charactersDB.Close()
+	worldDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worldDB.Close()
+	for _, statement := range []string{
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER)",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, duration INTEGER)",
+		"INSERT INTO item_instance VALUES (10, 100, 60000), (11, 101, 20000)",
+		"INSERT INTO character_inventory VALUES (9, 0, 23, 10), (9, 0, 24, 11)",
+	} {
+		if _, err := charactersDB.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := worldDB.Exec("CREATE TABLE item_template (entry INTEGER PRIMARY KEY, flagsCustom INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := worldDB.Exec("INSERT INTO item_template VALUES (100, 1), (101, 1)"); err != nil {
+		t.Fatal(err)
+	}
+	store := &session{server: &Server{CharactersStore: &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: charactersDB}, WorldStore: &database.Store{Name: "world", Backend: database.BackendSQLite, DB: worldDB}}, playerGUID: 9}
+	state := &playerState{GUID: 9, LogoutTime: time.Now().Unix() - 30}
+	if err := store.updateOfflineRealtimeItemDurations(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	var duration int64
+	if err := charactersDB.QueryRow("SELECT duration FROM item_instance WHERE guid = 10").Scan(&duration); err != nil {
+		t.Fatal(err)
+	}
+	if duration < 29000 || duration > 31000 {
+		t.Fatalf("remaining duration=%d", duration)
+	}
+	var expired int
+	if err := charactersDB.QueryRow("SELECT COUNT(*) FROM item_instance WHERE guid = 11").Scan(&expired); err != nil {
+		t.Fatal(err)
+	}
+	if expired != 0 {
+		t.Fatalf("expired item remains=%d", expired)
+	}
+}
+
 func TestBuildBagCreateBlockIncludesContentsAndContainer(t *testing.T) {
 	bagGUID := uint64(0x4000000000000019)
 	itemGUID := uint64(0x4000000000000020)
