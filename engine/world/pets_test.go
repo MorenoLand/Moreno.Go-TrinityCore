@@ -3,7 +3,10 @@ package world
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -622,6 +625,63 @@ func TestPetSpellPacketIncludesSavedCooldowns(t *testing.T) {
 	duration, _ := r.ReadU32()
 	if cooldownCount != 1 || spell != 3110 || category != 7 || duration < 58000 || duration > 62000 {
 		t.Fatalf("cooldowns=%d spell=%d category=%d duration=%d", cooldownCount, spell, category, duration)
+	}
+}
+
+func TestLoadPetAurasRestoresDBCBackedAura(t *testing.T) {
+	cdb, wdb := setupPetTestDatabases(t)
+	defer cdb.Close()
+	defer wdb.Close()
+	if _, err := cdb.Exec(`CREATE TABLE pet_aura (
+		guid INTEGER, casterGuid INTEGER, spell INTEGER, effectMask INTEGER, stackCount INTEGER,
+		amount0 INTEGER, amount1 INTEGER, amount2 INTEGER, base_amount0 INTEGER, base_amount1 INTEGER, base_amount2 INTEGER,
+		maxDuration INTEGER, remainTime INTEGER, remainCharges INTEGER, critChance REAL, applyResilience INTEGER
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cdb.Exec("INSERT INTO pet_aura VALUES (9, 0, 9000, 1, 2, 11, 0, 0, 11, 0, 0, 60000, 30000, 0, 0, 0)"); err != nil {
+		t.Fatal(err)
+	}
+	dbcDir := t.TempDir()
+	const fieldCount = 234
+	record := make([]uint32, fieldCount)
+	record[0] = 9000
+	record[39] = 1
+	record[71] = 3
+	record[80] = 10
+	record[95] = 3
+	recordBytes := make([]byte, len(record)*4)
+	for i, value := range record {
+		binary.LittleEndian.PutUint32(recordBytes[i*4:], value)
+	}
+	header := make([]byte, 20)
+	copy(header, "WDBC")
+	binary.LittleEndian.PutUint32(header[4:8], 1)
+	binary.LittleEndian.PutUint32(header[8:12], fieldCount)
+	binary.LittleEndian.PutUint32(header[12:16], fieldCount*4)
+	binary.LittleEndian.PutUint32(header[16:20], 1)
+	if err := os.WriteFile(filepath.Join(dbcDir, "Spell.dbc"), append(header, append(recordBytes, 0)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	server := &Server{CharactersStore: &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: cdb}, WorldStore: &database.Store{Name: "world", Backend: database.BackendSQLite, DB: wdb}, Data: wotlk.NewStore(dbcDir), activeCreatureAuras: make(map[uint64]map[uint32]*activeAura), creatureAuras: make(map[uint64]map[uint32]struct{})}
+	sess := &session{server: server, conn: serverConn, playerGUID: 1001, player: &playerState{GUID: 1001, Level: 8}}
+	petGUID := uint64(9) | (uint64(0xF140) << 48)
+	done := make(chan struct{})
+	go func() {
+		sess.loadPetAuras(context.Background(), 9, petGUID)
+		close(done)
+	}()
+	opcode, payload, err := readServerFrame(clientConn, nil)
+	if err != nil || opcode != uint16(protocol.OpcodeSMSG_AURA_UPDATE_ALL) || len(payload) == 0 {
+		t.Fatalf("opcode=%x payload=%d err=%v", opcode, len(payload), err)
+	}
+	<-done
+	aura := server.activeCreatureAuras[petGUID][9000]
+	if aura == nil || aura.AuraType != 3 || aura.Amount != 11 || aura.StackCount != 2 || aura.RemainingMs != 30000 {
+		t.Fatalf("aura=%+v", aura)
 	}
 }
 
