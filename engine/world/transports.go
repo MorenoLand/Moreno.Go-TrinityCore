@@ -238,6 +238,10 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 		if sess.player.TransportGUID == rawGUID && change.OldSpawn.Map == change.Spawn.Map {
 			x, y, z, o := CalculatePassengerPosition(change.Spawn.X, change.Spawn.Y, change.Spawn.Z, change.Spawn.Orientation, sess.player.TransportX, sess.player.TransportY, sess.player.TransportZ, sess.player.TransportO)
 			sess.player.X, sess.player.Y, sess.player.Z, sess.player.Orientation = x, y, z, o
+		} else if sess.player.TransportGUID == rawGUID && change.OldSpawn.Map != change.Spawn.Map {
+			x, y, z, o := CalculatePassengerPosition(change.Spawn.X, change.Spawn.Y, change.Spawn.Z, change.Spawn.Orientation, sess.player.TransportX, sess.player.TransportY, sess.player.TransportZ, sess.player.TransportO)
+			sess.teleportTo(change.Spawn.Map, x, y, z, o)
+			continue
 		}
 		oldNear := sess.player.Map == change.OldSpawn.Map && math.Hypot(float64(change.OldSpawn.X-sess.player.X), float64(change.OldSpawn.Y-sess.player.Y)) <= distance
 		newNear := sess.player.Map == change.Spawn.Map && math.Hypot(float64(change.Spawn.X-sess.player.X), float64(change.Spawn.Y-sess.player.Y)) <= distance

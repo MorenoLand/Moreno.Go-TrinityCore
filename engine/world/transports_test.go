@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"math"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -99,4 +100,55 @@ func TestContinentTransportMovesPassengerFromOffsets(t *testing.T) {
 	if sess.player.X != x || sess.player.Y != y || sess.player.Z != z || sess.player.Orientation != o {
 		t.Fatalf("passenger position=(%v,%v,%v,%v) want=(%v,%v,%v,%v)", sess.player.X, sess.player.Y, sess.player.Z, sess.player.Orientation, x, y, z, o)
 	}
+}
+
+func TestContinentTransportTeleportsPassengerAcrossMaps(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	server := &Server{Config: config.Default(), sessions: make(map[*session]struct{})}
+	sess := &session{server: server, conn: serverConn, authed: true, playerLoaded: true, player: &playerState{GUID: 9, Map: 0, TransportGUID: gameObjectGUID(7, 9000), TransportX: 1, TransportY: 2, TransportZ: 3, TransportO: 0.5}}
+	server.sessions[sess] = struct{}{}
+	change := continentTransportMovement{OldSpawn: gameObjectSpawn{GUID: 7, Entry: 9000, Map: 0, X: 10, Y: 10, Z: 20, Orientation: 0}, Spawn: gameObjectSpawn{GUID: 7, Entry: 9000, Map: 1, X: 20, Y: 30, Z: 40, Orientation: math.Pi / 2}}
+	done := make(chan struct{})
+	go func() {
+		server.broadcastTransportMovement(change)
+		close(done)
+	}()
+	opcode, payload, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opcode != uint16(protocol.OpcodeSMSG_NEW_WORLD) {
+		t.Fatalf("opcode=%x", opcode)
+	}
+	reader := protocol.NewReader(payload)
+	mapID, err := reader.ReadU32()
+	if err != nil || mapID != 1 {
+		t.Fatalf("map=%d err=%v", mapID, err)
+	}
+	x, err := reader.ReadF32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	y, err := reader.ReadF32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	z, err := reader.ReadF32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := reader.ReadF32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantX, wantY, wantZ, wantO := CalculatePassengerPosition(change.Spawn.X, change.Spawn.Y, change.Spawn.Z, change.Spawn.Orientation, 1, 2, 3, 0.5)
+	if x != wantX || y != wantY || z != wantZ || o != wantO || sess.player.Map != 1 {
+		t.Fatalf("passenger=(%v,%v,%v,%v) map=%d want=(%v,%v,%v,%v) map=1", x, y, z, o, sess.player.Map, wantX, wantY, wantZ, wantO)
+	}
+	if _, _, err := readServerFrame(clientConn, nil); err != nil {
+		t.Fatal(err)
+	}
+	<-done
 }
