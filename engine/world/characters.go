@@ -507,14 +507,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			}
 		}
 	}
-	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHAR_ONLINE", guid); err != nil {
-		return false
-	}
-	s.debug("world login stage", "stage", "character-online-complete", "guid", guid)
-	if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_ONLINE", s.accountID); err != nil {
-		return false
-	}
-	s.debug("world login stage", "stage", "account-online-complete", "guid", guid)
 	s.lastFallZ = state.Z
 	s.lastFallTime = 0
 	updates, err := s.server.buildPlayerUpdate(state)
@@ -584,6 +576,14 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if !s.sendQuestgiverStatusMultiple(ctx) || !s.sendTaxiNodeStatusMultiple(ctx) {
 		return false
 	}
+	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHAR_ONLINE", guid); err != nil {
+		return false
+	}
+	s.debug("world login stage", "stage", "character-online-complete", "guid", guid)
+	if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_ONLINE", s.accountID); err != nil {
+		return false
+	}
+	s.debug("world login stage", "stage", "account-online-complete", "guid", guid)
 	s.sendLoadedGroup()
 	// Spawn active pet if one was active at logout (slot 0)
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
