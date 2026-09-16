@@ -203,13 +203,6 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if danceOpcode != uint16(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES) || len(dancePayload) != 8 {
 		t.Fatalf("dance opcode=%x payload=%d", danceOpcode, len(dancePayload))
 	}
-	instanceOpcode, instancePayload, err := readServerFrame(clientConn, clientCrypt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if instanceOpcode != uint16(protocol.OpcodeSMSG_INSTANCE_DIFFICULTY) || len(instancePayload) != 8 {
-		t.Fatalf("instance difficulty opcode=%x payload=%d", instanceOpcode, len(instancePayload))
-	}
 	contactOpcode, _, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {
 		t.Fatal(err)
@@ -230,6 +223,13 @@ func TestAuthSessionAndPing(t *testing.T) {
 	}
 	if talentsOpcode != uint16(protocol.OpcodeSMSG_TALENTS_INFO) {
 		t.Fatalf("talents opcode=%x", talentsOpcode)
+	}
+	instanceOpcode, instancePayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if instanceOpcode != uint16(protocol.OpcodeSMSG_INSTANCE_DIFFICULTY) || len(instancePayload) != 8 {
+		t.Fatalf("instance difficulty opcode=%x payload=%d", instanceOpcode, len(instancePayload))
 	}
 	initialSpellsOpcode, initialSpellsPayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {

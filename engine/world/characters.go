@@ -437,10 +437,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(uint16(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES), buildLearnedDanceMoves(), true); err != nil {
 		return false
 	}
-	instanceDifficulty, dynamicDifficulty := s.loginInstanceDifficulty(ctx, state)
-	if err := s.write(uint16(protocol.OpcodeSMSG_INSTANCE_DIFFICULTY), buildInstanceDifficultyForMap(instanceDifficulty, dynamicDifficulty), true); err != nil {
-		return false
-	}
 	if err := s.sendContactList(ctx, uint32(socialFlagFriend|socialFlagIgnored|socialFlagMuted)); err != nil {
 		return false
 	}
@@ -448,6 +444,10 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		return false
 	}
 	if err := s.sendTalentsInfo(false); err != nil {
+		return false
+	}
+	instanceDifficulty, dynamicDifficulty := s.loginInstanceDifficulty(ctx, state)
+	if err := s.write(uint16(protocol.OpcodeSMSG_INSTANCE_DIFFICULTY), buildInstanceDifficultyForMap(instanceDifficulty, dynamicDifficulty), true); err != nil {
 		return false
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_INITIAL_SPELLS), buildInitialSpells(state), true); err != nil {
