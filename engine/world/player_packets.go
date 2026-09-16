@@ -325,12 +325,17 @@ func buildInitialSpells(state playerState) []byte {
 		packet.WriteU32(cooldown.Spell)
 		packet.WriteU16(cooldown.Item)
 		packet.WriteU16(cooldown.Category)
+		if cooldown.End >= now+15*24*60*60 {
+			packet.WriteU32(1)
+			packet.WriteU32(0x80000000)
+			continue
+		}
 		cooldownTime := remainingMilliseconds(cooldown.End, now)
 		categoryTime := remainingMilliseconds(cooldown.CategoryEnd, now)
 		if cooldownTime == 0 {
 			packet.WriteU32(0)
 			packet.WriteU32(0)
-		} else if categoryTime > 0 {
+		} else if cooldown.CategoryEnd >= now {
 			packet.WriteU32(0)
 			packet.WriteU32(categoryTime)
 		} else {

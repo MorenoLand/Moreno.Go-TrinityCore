@@ -107,6 +107,28 @@ func TestInstanceDifficultyPacketPreservesDynamicFlag(t *testing.T) {
 	}
 }
 
+func TestInitialSpellsUsesReferenceInfiniteCooldownEncoding(t *testing.T) {
+	payload := buildInitialSpells(playerState{Cooldowns: []spellCooldown{{Spell: 123, Item: 456, Category: 7, End: time.Now().Unix() + 30*24*60*60}}})
+	reader := protocol.NewReader(payload)
+	if _, err := reader.ReadU8(); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := reader.ReadU16(); err != nil || count != 0 {
+		t.Fatalf("spell count=%d err=%v", count, err)
+	}
+	if count, err := reader.ReadU16(); err != nil || count != 1 {
+		t.Fatalf("cooldown count=%d err=%v", count, err)
+	}
+	spell, _ := reader.ReadU32()
+	item, _ := reader.ReadU16()
+	category, _ := reader.ReadU16()
+	cooldown, _ := reader.ReadU32()
+	categoryCooldown, _ := reader.ReadU32()
+	if spell != 123 || item != 456 || category != 7 || cooldown != 1 || categoryCooldown != 0x80000000 {
+		t.Fatalf("cooldown=%d item=%d category=%d duration=%d categoryDuration=%x", spell, item, category, cooldown, categoryCooldown)
+	}
+}
+
 func TestLoginRaidDifficultyUsesSavedPlayerStateWhenLeavingRaid(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
