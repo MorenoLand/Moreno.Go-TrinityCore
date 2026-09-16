@@ -550,6 +550,10 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 	}
 	defer rows.Close()
 	loaded := make([]*activeAura, 0)
+	offlineMs := int64(0)
+	if s.player != nil && s.player.LogoutTime > 0 && time.Now().Unix() > s.player.LogoutTime {
+		offlineMs = (time.Now().Unix() - s.player.LogoutTime) * 1000
+	}
 	s.server.auraMu.Lock()
 	if s.server.creatureAuras == nil {
 		s.server.creatureAuras = make(map[uint64]map[uint32]struct{})
@@ -607,6 +611,12 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 		}
 		if aura.AuraType == 0 {
 			continue
+		}
+		if !aura.Positive && aura.RemainingMs > 0 && offlineMs > 0 {
+			if offlineMs >= int64(aura.RemainingMs) {
+				continue
+			}
+			aura.RemainingMs -= uint32(offlineMs)
 		}
 		if aura.DurationMs > 0 && aura.RemainingMs > aura.DurationMs {
 			aura.RemainingMs = aura.DurationMs

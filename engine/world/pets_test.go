@@ -639,7 +639,7 @@ func TestLoadPetAurasRestoresDBCBackedAura(t *testing.T) {
 	)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cdb.Exec("INSERT INTO pet_aura VALUES (9, 0, 9000, 1, 2, 11, 0, 0, 11, 0, 0, 60000, 30000, 0, 0, 0)"); err != nil {
+	if _, err := cdb.Exec("INSERT INTO pet_aura VALUES (9, 0, 9000, 1, 2, 11, 0, 0, 11, 0, 0, 60000, 60000, 0, 0, 0)"); err != nil {
 		t.Fatal(err)
 	}
 	dbcDir := t.TempDir()
@@ -667,7 +667,7 @@ func TestLoadPetAurasRestoresDBCBackedAura(t *testing.T) {
 	defer serverConn.Close()
 	defer clientConn.Close()
 	server := &Server{CharactersStore: &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: cdb}, WorldStore: &database.Store{Name: "world", Backend: database.BackendSQLite, DB: wdb}, Data: wotlk.NewStore(dbcDir), activeCreatureAuras: make(map[uint64]map[uint32]*activeAura), creatureAuras: make(map[uint64]map[uint32]struct{})}
-	sess := &session{server: server, conn: serverConn, playerGUID: 1001, player: &playerState{GUID: 1001, Level: 8}}
+	sess := &session{server: server, conn: serverConn, playerGUID: 1001, player: &playerState{GUID: 1001, Level: 8, LogoutTime: time.Now().Unix() - 30}}
 	petGUID := uint64(9) | (uint64(0xF140) << 48)
 	done := make(chan struct{})
 	go func() {
@@ -680,7 +680,7 @@ func TestLoadPetAurasRestoresDBCBackedAura(t *testing.T) {
 	}
 	<-done
 	aura := server.activeCreatureAuras[petGUID][9000]
-	if aura == nil || aura.AuraType != 3 || aura.Amount != 11 || aura.StackCount != 2 || aura.RemainingMs != 30000 {
+	if aura == nil || aura.AuraType != 3 || aura.Amount != 11 || aura.StackCount != 2 || aura.RemainingMs < 28000 || aura.RemainingMs > 31000 {
 		t.Fatalf("aura=%+v", aura)
 	}
 }
