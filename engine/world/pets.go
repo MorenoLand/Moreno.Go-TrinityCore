@@ -483,6 +483,7 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 	}
 
 	s.sendPlayerUpdate()
+	s.loadPetAuras(ctx, petID, petGUID)
 	s.sendPetSpells(ctx, petID, entry, reactState)
 
 	if s.server != nil {
@@ -533,6 +534,104 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 	}
 
 	s.debug("pet spawned", "account", s.accountName, "petID", petID, "entry", entry, "name", name, "level", level)
+}
+
+func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.Data == nil {
+		return
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT casterGuid, spell, effectMask, stackCount, amount0, maxDuration, remainTime, remainCharges
+		FROM pet_aura WHERE guid = ? ORDER BY spell`, petID)
+	if err != nil {
+		if errorsMissingAuraTable(err) {
+			return
+		}
+		return
+	}
+	defer rows.Close()
+	loaded := make([]*activeAura, 0)
+	s.server.auraMu.Lock()
+	if s.server.creatureAuras == nil {
+		s.server.creatureAuras = make(map[uint64]map[uint32]struct{})
+	}
+	if s.server.creatureAuras[petGUID] == nil {
+		s.server.creatureAuras[petGUID] = make(map[uint32]struct{})
+	}
+	if s.server.activeCreatureAuras == nil {
+		s.server.activeCreatureAuras = make(map[uint64]map[uint32]*activeAura)
+	}
+	if s.server.activeCreatureAuras[petGUID] == nil {
+		s.server.activeCreatureAuras[petGUID] = make(map[uint32]*activeAura)
+	}
+	for rows.Next() {
+		var casterGUID uint64
+		var spellID, effectMask, stackCount, amount, maxDuration, remainTime, remainCharges int64
+		if rows.Scan(&casterGUID, &spellID, &effectMask, &stackCount, &amount, &maxDuration, &remainTime, &remainCharges) != nil || spellID <= 0 || spellID > int64(^uint32(0)) {
+			continue
+		}
+		spell, found, spellErr := s.server.Data.Spell(uint32(spellID))
+		if spellErr != nil || !found {
+			continue
+		}
+		if casterGUID == 0 {
+			casterGUID = petGUID
+		}
+		aura := &activeAura{SpellID: uint32(spellID), CasterGUID: casterGUID, TargetGUID: petGUID, Slot: uint8(len(s.server.activeCreatureAuras[petGUID]) % 64), Positive: true, CasterLevel: s.player.Level}
+		if maxDuration > 0 {
+			aura.DurationMs = clampAuraDuration(maxDuration)
+		}
+		if remainTime > 0 {
+			aura.RemainingMs = clampAuraDuration(remainTime)
+		}
+		if amount > 0 {
+			aura.Amount = uint32(amount)
+		}
+		if stackCount > 0 {
+			aura.StackCount = uint8(stackCount)
+		}
+		if remainCharges > 0 {
+			aura.RemainingCharges = uint8(remainCharges)
+		}
+		for index, effect := range spell.Effects {
+			if effect.Effect == 0 || effect.Aura == 0 || effectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			aura.AuraType = effect.Aura
+			aura.MiscValue = effect.MiscValue
+			aura.PeriodMs = effect.AuraPeriod
+			if aura.Amount == 0 && effect.BasePoints >= 0 {
+				aura.Amount = uint32(effect.BasePoints + 1)
+			}
+			aura.Positive = !isHarmfulAura(effect.Aura)
+			break
+		}
+		if aura.AuraType == 0 {
+			continue
+		}
+		if aura.DurationMs > 0 && aura.RemainingMs > aura.DurationMs {
+			aura.RemainingMs = aura.DurationMs
+		}
+		s.server.creatureAuras[petGUID][aura.SpellID] = struct{}{}
+		s.server.activeCreatureAuras[petGUID][aura.SpellID] = aura
+		loaded = append(loaded, aura)
+	}
+	s.server.auraMu.Unlock()
+	if len(loaded) == 0 {
+		return
+	}
+	records := make([]protocol.AuraUpdateRecord, 0, len(loaded))
+	for _, aura := range loaded {
+		records = append(records, protocol.AuraUpdateRecord{CasterGUID: aura.CasterGUID, Slot: aura.Slot, SpellID: aura.SpellID, Positive: aura.Positive, MaxDurationMs: aura.DurationMs, DurationMs: aura.RemainingMs, CasterLevel: aura.CasterLevel, StackCount: aura.StackCount})
+		if aura.PeriodMs > 0 {
+			s.scheduleCreaturePeriodicTick(aura, aura.PeriodMs)
+		}
+		if aura.DurationMs > 0 && aura.DurationMs < 18000000 {
+			aura.Timer = time.AfterFunc(time.Duration(aura.RemainingMs)*time.Millisecond, func(spellID uint32, slot uint8) func() {
+				return func() { s.expireCreatureAura(petGUID, spellID, slot) }
+			}(aura.SpellID, aura.Slot))
+		}
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE_ALL), protocol.BuildAuraUpdateAll(petGUID, records), true)
 }
 
 func (s *session) unsummonPet(ctx context.Context, mode uint8) {
