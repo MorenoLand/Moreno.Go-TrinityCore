@@ -450,6 +450,7 @@ func TestSpellEquipmentFields(t *testing.T) {
 	rec[5] = 0x10     // AttributesEx
 	rec[6] = 0x20     // AttributesEx1
 	rec[7] = 0x400    // AttributesEx3 (SPELL_ATTR3_MAIN_HAND)
+	rec[8] = 0x4      // AttributesEx4 (SPELL_ATTR4_FADES_WHILE_LOGGED_OUT)
 	rec[68] = 4       // EquippedItemClass = 4 (ITEM_CLASS_ARMOR)
 	rec[69] = 1 << 6  // EquippedItemSubClass = Shield (bit 6)
 	rec[70] = 1 << 14 // EquippedItemInvTypes = Shield (INVTYPE_SHIELD)
@@ -481,6 +482,9 @@ func TestSpellEquipmentFields(t *testing.T) {
 	}
 	if sp.AttributesEx3 != 0x400 {
 		t.Errorf("expected AttributesEx3 0x400, got 0x%X", sp.AttributesEx3)
+	}
+	if sp.AttributesEx4 != 0x4 {
+		t.Errorf("expected AttributesEx4 0x4, got 0x%X", sp.AttributesEx4)
 	}
 	if sp.EquippedItemClass != 4 {
 		t.Errorf("expected EquippedItemClass 4, got %d", sp.EquippedItemClass)
