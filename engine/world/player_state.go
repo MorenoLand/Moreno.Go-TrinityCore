@@ -404,6 +404,14 @@ func (s *session) loadInstanceState(ctx context.Context, state *playerState) err
 	}
 	if instanceModeMask > 0 {
 		state.InstanceModeMask = uint32(instanceModeMask)
+		dungeonDifficulty := uint8(instanceModeMask & 0x0F)
+		if dungeonDifficulty < 2 {
+			state.DungeonDifficulty = dungeonDifficulty
+		}
+		raidDifficulty := uint8((instanceModeMask >> 4) & 0x0F)
+		if raidDifficulty < 4 {
+			state.RaidDifficulty = raidDifficulty
+		}
 	}
 	return nil
 }

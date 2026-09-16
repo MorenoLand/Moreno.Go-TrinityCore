@@ -235,6 +235,7 @@ func TestMapLoading(t *testing.T) {
 	record := make([]uint32, fieldCount)
 	record[0] = 33 // Shadowfang Keep
 	record[2] = 1  // InstanceType = MAP_INSTANCE
+	record[3] = MapFlagDynamicDifficulty
 	record[59] = 0 // CorpseMapID = Eastern Kingdoms (0)
 
 	recordBytes := make([]byte, fieldCount*4)
@@ -258,6 +259,9 @@ func TestMapLoading(t *testing.T) {
 	}
 	if !m.IsDungeon() || !m.IsNonRaidDungeon() || m.IsRaid() {
 		t.Fatalf("expected dungeon map 33, got %+v", m)
+	}
+	if !m.IsDynamicDifficultyMap() {
+		t.Fatal("expected dynamic difficulty map")
 	}
 	if m.CorpseMapID != 0 {
 		t.Fatalf("expected corpseMapID 0, got %d", m.CorpseMapID)

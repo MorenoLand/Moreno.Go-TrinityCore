@@ -92,6 +92,47 @@ func TestLoginSetTimeSpeedUsesUnixGameTime(t *testing.T) {
 	}
 }
 
+func TestInstanceDifficultyPacketPreservesDynamicFlag(t *testing.T) {
+	reader := protocol.NewReader(buildInstanceDifficultyForMap(2, true))
+	difficulty, err := reader.ReadU32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dynamic, err := reader.ReadU32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if difficulty != 2 || dynamic != 1 || reader.Remaining() != 0 {
+		t.Fatalf("difficulty=%d dynamic=%d remaining=%d", difficulty, dynamic, reader.Remaining())
+	}
+}
+
+func TestLoginRaidDifficultyUsesSavedPlayerStateWhenLeavingRaid(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	sess := &session{conn: serverConn, groupID: 5}
+	done := make(chan error, 1)
+	go func() { done <- sess.sendLoginRaidDifficulty(context.Background(), playerState{RaidDifficulty: 2}) }()
+	opcode, payload, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if opcode != uint16(protocol.OpcodeMSG_SET_RAID_DIFFICULTY) || len(payload) != 12 {
+		t.Fatalf("opcode=%x payload=%x", opcode, payload)
+	}
+	reader := protocol.NewReader(payload)
+	difficulty, _ := reader.ReadU32()
+	marker, _ := reader.ReadU32()
+	isInGroup, _ := reader.ReadU32()
+	if difficulty != 2 || marker != 1 || isInGroup != 1 {
+		t.Fatalf("difficulty=%d marker=%d group=%d", difficulty, marker, isInGroup)
+	}
+}
+
 func TestCompleteCinematicPersists(t *testing.T) {
 	root, err := packageRoot()
 	if err != nil {

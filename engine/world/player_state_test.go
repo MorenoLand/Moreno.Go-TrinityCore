@@ -138,13 +138,13 @@ func TestInstanceStateLoad(t *testing.T) {
 	if _, err := db.Exec("CREATE TABLE characters (guid INTEGER PRIMARY KEY, instance_id INTEGER, instance_mode_mask INTEGER)"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec("INSERT INTO characters VALUES (7, 42, 3)"); err != nil {
+	if _, err := db.Exec("INSERT INTO characters VALUES (7, 42, 33)"); err != nil {
 		t.Fatal(err)
 	}
 	sess := &session{server: &Server{CharactersStore: &database.Store{DB: db}}}
 	state := playerState{GUID: 7}
-	if err := sess.loadInstanceState(context.Background(), &state); err != nil || state.InstanceID != 42 || state.InstanceModeMask != 3 {
-		t.Fatalf("instance state=%d/%d err=%v", state.InstanceID, state.InstanceModeMask, err)
+	if err := sess.loadInstanceState(context.Background(), &state); err != nil || state.InstanceID != 42 || state.InstanceModeMask != 33 || state.DungeonDifficulty != 1 || state.RaidDifficulty != 2 {
+		t.Fatalf("instance state=%d/%d dungeon=%d raid=%d err=%v", state.InstanceID, state.InstanceModeMask, state.DungeonDifficulty, state.RaidDifficulty, err)
 	}
 }
 

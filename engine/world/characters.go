@@ -437,7 +437,8 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(uint16(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES), buildLearnedDanceMoves(), true); err != nil {
 		return false
 	}
-	if err := s.write(uint16(protocol.OpcodeSMSG_INSTANCE_DIFFICULTY), buildInstanceDifficulty(uint32(state.DungeonDifficulty)), true); err != nil {
+	instanceDifficulty, dynamicDifficulty := s.loginInstanceDifficulty(ctx, state)
+	if err := s.write(uint16(protocol.OpcodeSMSG_INSTANCE_DIFFICULTY), buildInstanceDifficultyForMap(instanceDifficulty, dynamicDifficulty), true); err != nil {
 		return false
 	}
 	if err := s.sendContactList(ctx, uint32(socialFlagFriend|socialFlagIgnored|socialFlagMuted)); err != nil {
@@ -577,6 +578,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	s.questStatusSent = true
 	if !s.sendQuestgiverStatusMultiple(ctx) || !s.sendTaxiNodeStatusMultiple(ctx) {
+		return false
+	}
+	if err := s.sendLoginRaidDifficulty(ctx, state); err != nil {
 		return false
 	}
 	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHAR_ONLINE", guid); err != nil {
@@ -2202,10 +2206,92 @@ func buildInitWorldStates(state playerState) []byte {
 }
 
 func buildInstanceDifficulty(difficulty uint32) []byte {
+	return buildInstanceDifficultyForMap(difficulty, false)
+}
+
+func buildInstanceDifficultyForMap(difficulty uint32, dynamic bool) []byte {
 	packet := protocol.NewBuffer(8)
 	packet.WriteU32(difficulty)
-	packet.WriteU32(0)
+	if dynamic {
+		packet.WriteU32(1)
+	} else {
+		packet.WriteU32(0)
+	}
 	return packet.Bytes()
+}
+
+func (s *session) loginInstanceDifficulty(ctx context.Context, state playerState) (uint32, bool) {
+	difficulty := uint32(state.DungeonDifficulty)
+	dynamic := false
+	instanceDifficulty, hasInstanceDifficulty := s.loadLoginInstanceDifficulty(ctx, state)
+	if hasInstanceDifficulty {
+		difficulty = instanceDifficulty
+	}
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return difficulty, dynamic
+	}
+	entry, ok, err := s.server.Data.Map(state.Map)
+	if err != nil || !ok {
+		return difficulty, dynamic
+	}
+	if entry.IsRaid() {
+		if !hasInstanceDifficulty {
+			difficulty = uint32(state.RaidDifficulty)
+		}
+		dynamic = entry.IsDynamicDifficultyMap() && difficulty >= 2
+	} else {
+		dynamic = entry.IsDynamicDifficultyMap() && difficulty >= 1
+	}
+	return difficulty, dynamic
+}
+
+func (s *session) loadLoginInstanceDifficulty(ctx context.Context, state playerState) (uint32, bool) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || state.InstanceID == 0 {
+		return 0, false
+	}
+	var difficulty int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT difficulty FROM instance WHERE id = ?", state.InstanceID).Scan(&difficulty); err != nil || difficulty < 0 {
+		return 0, false
+	}
+	return uint32(difficulty), true
+}
+
+func (s *session) sendLoginRaidDifficulty(ctx context.Context, state playerState) error {
+	stored := uint8((state.InstanceModeMask >> 4) & 0x0F)
+	if stored >= 4 {
+		stored = 0
+	}
+	mapIsRaid := false
+	if s != nil && s.server != nil && s.server.Data != nil {
+		if entry, ok, err := s.server.Data.Map(state.Map); err == nil && ok {
+			mapIsRaid = entry.IsRaid()
+		}
+	}
+	forced := state.RaidDifficulty
+	if mapIsRaid {
+		if mapDifficulty, ok := s.loadLoginInstanceDifficulty(ctx, state); ok {
+			if mapDifficulty >= 4 {
+				mapDifficulty = 0
+			}
+			forced = uint8(mapDifficulty)
+		}
+		if forced == state.RaidDifficulty {
+			return nil
+		}
+	} else if state.RaidDifficulty == stored {
+		return nil
+	} else {
+		forced = state.RaidDifficulty
+	}
+	isInGroup := uint32(0)
+	if s.groupID != 0 {
+		isInGroup = 1
+	}
+	packet := protocol.NewBuffer(12)
+	packet.WriteU32(uint32(forced))
+	packet.WriteU32(1)
+	packet.WriteU32(isInGroup)
+	return s.write(uint16(protocol.OpcodeMSG_SET_RAID_DIFFICULTY), packet.Bytes(), true)
 }
 
 func buildTimeSyncRequest(counter uint32) []byte {

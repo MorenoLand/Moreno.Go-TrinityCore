@@ -25,6 +25,7 @@ type Store struct {
 }
 
 const MountedFlightSpeedAura uint32 = 207
+const MapFlagDynamicDifficulty uint32 = 0x100
 
 type Race struct {
 	ID                uint32
@@ -190,6 +191,10 @@ func (m MapEntry) IsNonRaidDungeon() bool {
 
 func (m MapEntry) IsRaid() bool {
 	return m.InstanceType == 2
+}
+
+func (m MapEntry) IsDynamicDifficultyMap() bool {
+	return m.Flags&MapFlagDynamicDifficulty != 0
 }
 
 func (m MapEntry) IsBattleground() bool {
