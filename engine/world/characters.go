@@ -30,8 +30,10 @@ const (
 	characterCustomizeFaction    uint32 = 0x00010000
 	characterCustomizeRace       uint32 = 0x00100000
 	atLoginRename                uint64 = 0x001
+	atLoginResetSpells           uint64 = 0x002
 	atLoginResetTalents          uint64 = 0x004 // AT_LOGIN_RESET_TALENTS (Player.h:459)
 	atLoginCustomize             uint64 = 0x008
+	atLoginResetPetTalents       uint64 = 0x010
 	atLoginFirst                 uint64 = 0x020
 	atLoginChangeFaction         uint64 = 0x040
 	atLoginChangeRace            uint64 = 0x080
@@ -464,15 +466,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	s.loadAchievementState(ctx)
 	s.loadExploredZones(ctx)
-	// Reference Player::LoadFromDB: AT_LOGIN_RESET_TALENTS resets talents
-	// without cost at login.
-	if s.player.AtLogin&uint32(atLoginResetTalents) != 0 {
-		s.player.AtLogin &^= uint32(atLoginResetTalents)
-		_ = s.resetTalents(ctx, true)
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET at_login = at_login & ~4 WHERE guid = ?", s.playerGUID)
-		}
-	}
 	s.sendAllAchievementData()
 	s.updateAchievementCriteria(criteriaTypeOnLogin, 0, 1)
 	s.setAchievementCriteria(criteriaTypeKnownFactions, 0, uint32(len(state.Reputations)))
@@ -616,6 +609,18 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			}
 			s.spawnPet(ctx, uint32(petID), uint32(entry), petName, uint32(level), uint32(modelID), uint32(curHealth), maxHP, uint32(curMana), maxMP, uint8(reactState))
 			_ = s.sendTalentsInfo(true)
+		}
+	}
+	if s.player.AtLogin&uint32(atLoginResetTalents) != 0 {
+		hadTalents := len(s.player.Talents) != 0
+		if s.resetTalents(ctx, true) {
+			if !hadTalents {
+				_ = s.sendTalentsInfo(false)
+			}
+			s.player.AtLogin &^= uint32(atLoginResetTalents)
+			if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET at_login = at_login & ~4 WHERE guid = ?", s.playerGUID)
+			}
 		}
 	}
 	s.loadMailState(ctx)
