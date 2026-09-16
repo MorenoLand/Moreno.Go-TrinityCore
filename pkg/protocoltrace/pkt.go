@@ -94,12 +94,90 @@ func LoadPKT(r io.Reader, source string) (Trace, error) {
 	}
 }
 
+func (t Trace) WritePKT(w io.Writer) error {
+	if w == nil {
+		return errors.New("PKT writer is nil")
+	}
+	if t.Header.Format != "" && (t.Header.Format != Format || t.Header.Version != Version) {
+		return fmt.Errorf("unsupported protocol trace header %q version %d", t.Header.Format, t.Header.Version)
+	}
+	header := make([]byte, pktHeaderSize)
+	copy(header[:3], []byte("PKT"))
+	binary.LittleEndian.PutUint16(header[3:5], pktVersion)
+	header[5] = 'T'
+	binary.LittleEndian.PutUint32(header[6:10], 12340)
+	copy(header[10:14], []byte("enUS"))
+	now := time.Now()
+	binary.LittleEndian.PutUint32(header[54:58], uint32(now.Unix()))
+	binary.LittleEndian.PutUint32(header[58:62], uint32(now.UnixMilli()))
+	if err := writePKTBytes(w, header); err != nil {
+		return err
+	}
+	startTicks := binary.LittleEndian.Uint32(header[58:62])
+	for index, event := range t.Events {
+		payload, err := t.Payload(event)
+		if err != nil {
+			return err
+		}
+		if event.TimeNS < 0 || uint64(len(payload))+4 > uint64(^uint32(0)) {
+			return fmt.Errorf("PKT event %d has invalid time or payload length", index+1)
+		}
+		var direction uint32
+		switch event.Direction {
+		case ClientToServer:
+			direction = pktClientDirection
+		case ServerToClient:
+			direction = pktServerDirection
+		default:
+			return fmt.Errorf("PKT event %d has invalid direction %q", index+1, event.Direction)
+		}
+		optional := make([]byte, pktOptionalDataSize)
+		if ip := net.ParseIP(event.RemoteIP); ip != nil {
+			if ip4 := ip.To4(); ip4 != nil {
+				copy(optional[:4], ip4)
+			} else {
+				copy(optional[:16], ip.To16())
+			}
+		}
+		binary.LittleEndian.PutUint32(optional[16:20], event.RemotePort)
+		packetHeader := make([]byte, 44)
+		binary.LittleEndian.PutUint32(packetHeader[0:4], direction)
+		binary.LittleEndian.PutUint32(packetHeader[4:8], event.ConnectionID)
+		binary.LittleEndian.PutUint32(packetHeader[8:12], startTicks+uint32(event.TimeNS/int64(time.Millisecond)))
+		binary.LittleEndian.PutUint32(packetHeader[12:16], pktOptionalDataSize)
+		binary.LittleEndian.PutUint32(packetHeader[16:20], uint32(4+len(payload)))
+		copy(packetHeader[20:40], optional)
+		binary.LittleEndian.PutUint32(packetHeader[40:44], event.Opcode)
+		if err := writePKTBytes(w, packetHeader); err != nil {
+			return err
+		}
+		if err := writePKTBytes(w, payload); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func discardPKTBytes(r io.Reader, count int64) error {
 	if count == 0 {
 		return nil
 	}
 	_, err := io.CopyN(io.Discard, r, count)
 	return err
+}
+
+func writePKTBytes(w io.Writer, data []byte) error {
+	for len(data) > 0 {
+		written, err := w.Write(data)
+		if err != nil {
+			return err
+		}
+		if written == 0 {
+			return io.ErrShortWrite
+		}
+		data = data[written:]
+	}
+	return nil
 }
 
 func pktAddress(data []byte) string {

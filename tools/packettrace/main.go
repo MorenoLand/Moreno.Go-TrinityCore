@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocoltrace"
 )
@@ -143,6 +144,21 @@ func runSelfCheck() error {
 	firstPayload, err := trace.Payload(first)
 	if err != nil || !bytes.Equal(firstPayload, []byte{1, 2, 3}) {
 		return fmt.Errorf("unexpected first PKT payload: %x: %w", firstPayload, err)
+	}
+	var encoded bytes.Buffer
+	if err := trace.WritePKT(&encoded); err != nil {
+		return err
+	}
+	roundTrip, err := protocoltrace.LoadPKT(bytes.NewReader(encoded.Bytes()), "round-trip")
+	if err != nil {
+		return err
+	}
+	differences, err := protocoltrace.Diff(trace, roundTrip, protocoltrace.CompareOptions{CompareTiming: true, TimingTolerance: time.Millisecond, IgnoreState: true})
+	if err != nil {
+		return err
+	}
+	if len(differences) != 0 {
+		return fmt.Errorf("PKT round-trip differences: %+v", differences)
 	}
 	return nil
 }

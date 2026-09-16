@@ -128,7 +128,12 @@ func persistProtocolTrace(path string, recorder *protocoltrace.Recorder) {
 		return
 	}
 	defer file.Close()
-	_ = recorder.Snapshot().Write(file)
+	trace := recorder.Snapshot()
+	if filepath.Ext(path) == ".pkt" {
+		_ = trace.WritePKT(file)
+		return
+	}
+	_ = trace.Write(file)
 }
 
 func authHandler(store *database.Store, logger *slog.Logger, realmID uint32) func(context.Context, net.Conn) {
