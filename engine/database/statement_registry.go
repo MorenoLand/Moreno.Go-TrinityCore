@@ -143,6 +143,6 @@ func (s *Store) ExecStatement(ctx context.Context, id StatementID, args ...any) 
 		return nil, err
 	}
 	result, execErr := s.DB.ExecContext(ctx, query, args...)
-	s.recordDatabaseEvent("exec", string(id), len(args), execErr)
+	s.recordDatabaseResult("exec", string(id), len(args), result, execErr)
 	return result, execErr
 }

@@ -88,7 +88,7 @@ func (s *Store) Ping(ctx context.Context) error { return s.DB.PingContext(ctx) }
 func (s *Store) Close() error                   { return s.DB.Close() }
 func (s *Store) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	result, err := s.DB.ExecContext(ctx, query, args...)
-	s.recordDatabaseEvent("exec", query, len(args), err)
+	s.recordDatabaseResult("exec", query, len(args), result, err)
 	return result, err
 }
 func (s *Store) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
@@ -114,10 +114,22 @@ func (s *Store) Begin(ctx context.Context, options *sql.TxOptions) (*sql.Tx, err
 }
 
 func (s *Store) recordDatabaseEvent(operation, statement string, argumentCount int, err error) {
+	s.recordDatabaseResult(operation, statement, argumentCount, nil, err)
+}
+
+func (s *Store) recordDatabaseResult(operation, statement string, argumentCount int, result sql.Result, err error) {
 	if s == nil || s.TraceRecorder == nil {
 		return
 	}
 	event := map[string]any{"store": s.Name, "operation": operation, "statement": statement, "argument_count": argumentCount}
+	if result != nil {
+		if rows, resultErr := result.RowsAffected(); resultErr == nil {
+			event["rows_affected"] = rows
+		}
+		if insertID, resultErr := result.LastInsertId(); resultErr == nil {
+			event["last_insert_id"] = insertID
+		}
+	}
 	if err != nil {
 		event["error"] = err.Error()
 	}
