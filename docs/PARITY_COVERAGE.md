@@ -4,19 +4,19 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 327 / 126398 | — |
+| Server source files / lines | 1410 / 710273 | 327 / 126542 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
 | Client opcode registrations | 727 | 727 | 0 |
 | Client behavioral opcode bindings (reference, non-NULL) | 430 | — | — |
 | Go session handler definitions | — | 430 | — |
 | Go trivial session handlers (`return true/false`) | — | 0 | — |
-| Go registered opcodes with static test references | — | 36 | — |
+| Go registered opcodes with static test references | — | 37 | — |
 | Achievement criteria types | 124 | 124 | 0 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 0 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
 | Script source files / lines | 707 / 316814 | 6 / 2681 | — |
-| Test source files / lines | 9 / 1390 | 165 / 45225 | — |
+| Test source files / lines | 9 / 1390 | 165 / 45296 | — |
 
 ## Missing behavioral client opcode handlers
 
@@ -709,7 +709,6 @@ No missing symbols detected.
 - `MSG_RAID_TARGET_UPDATE`
 - `MSG_RANDOM_ROLL`
 - `MSG_SAVE_GUILD_EMBLEM`
-- `MSG_SET_DUNGEON_DIFFICULTY`
 - `MSG_SET_RAID_DIFFICULTY`
 - `MSG_TABARDVENDOR_ACTIVATE`
 - `MSG_VIEW_PHASE_SHIFT`
