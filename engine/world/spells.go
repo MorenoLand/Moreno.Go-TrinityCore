@@ -2051,11 +2051,15 @@ func (s *session) clearActiveAuras() {
 }
 
 func (s *session) sendAuraUpdate(slot uint8, spellID uint32, remove, positive bool, maxDurationMs, durationMs uint32) {
+	s.sendAuraUpdateWithStack(slot, spellID, remove, positive, maxDurationMs, durationMs, 1)
+}
+
+func (s *session) sendAuraUpdateWithStack(slot uint8, spellID uint32, remove, positive bool, maxDurationMs, durationMs uint32, stackCount uint8) {
 	level := uint8(1)
 	if s.player != nil && s.player.Level > 0 {
 		level = s.player.Level
 	}
-	pkt := protocol.BuildAuraUpdate(s.playerGUID, s.playerGUID, slot, spellID, remove, positive, maxDurationMs, durationMs, level)
+	pkt := protocol.BuildAuraUpdateWithStack(s.playerGUID, s.playerGUID, slot, spellID, remove, positive, maxDurationMs, durationMs, level, stackCount)
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), pkt, true)
 }
 
@@ -2107,11 +2111,18 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	var dispelType uint32
 	var mechanic uint32
 	var miscValue int32
+	stackCount := uint8(1)
+	var stackAmount, procCharges uint32
 	if s.server != nil && s.server.Data != nil {
 		if sp, found, _ := s.server.Data.Spell(spellID); found {
 			auraInterruptFlags = sp.AuraInterruptFlags
 			dispelType = sp.DispelType
 			mechanic = sp.Mechanic
+			stackAmount = sp.StackAmount
+			procCharges = sp.ProcCharges
+			if sp.StackAmount == 0 && sp.ProcCharges > 0 {
+				stackCount = uint8(sp.ProcCharges)
+			}
 			if len(sp.Effects) > 0 {
 				auraType = sp.Effects[0].Aura
 				miscValue = sp.Effects[0].MiscValue
@@ -2135,6 +2146,8 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 		Slot:               slot,
 		Positive:           positive,
 		AuraInterruptFlags: auraInterruptFlags,
+		StackAmount:        stackAmount,
+		RemainingCharges:   uint8(procCharges),
 	}
 	if durationMs > 0 && durationMs < 18000000 {
 		aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() {
@@ -2144,7 +2157,7 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	s.activeAuras[spellID] = aura
 	s.castMu.Unlock()
 
-	s.sendAuraUpdate(slot, spellID, false, positive, durationMs, durationMs)
+	s.sendAuraUpdateWithStack(slot, spellID, false, positive, durationMs, durationMs, stackCount)
 	s.sendPlayerUpdate()
 }
 
