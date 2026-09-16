@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -805,9 +806,25 @@ func buildInitialReputations(state playerState) []byte {
 	return packet.Bytes()
 }
 
-func buildForcedReactions() []byte {
-	packet := protocol.NewBuffer(4)
-	packet.WriteU32(0)
+func buildForcedReactions(auras []*activeAura) []byte {
+	forced := make(map[uint32]uint32)
+	for _, aura := range auras {
+		if aura == nil || aura.AuraType != 139 || aura.MiscValue < 0 {
+			continue
+		}
+		forced[uint32(aura.MiscValue)] = aura.Amount
+	}
+	factions := make([]uint32, 0, len(forced))
+	for factionID := range forced {
+		factions = append(factions, factionID)
+	}
+	sort.Slice(factions, func(i, j int) bool { return factions[i] < factions[j] })
+	packet := protocol.NewBuffer(4 + len(factions)*8)
+	packet.WriteU32(uint32(len(factions)))
+	for _, factionID := range factions {
+		packet.WriteU32(factionID)
+		packet.WriteU32(forced[factionID])
+	}
 	return packet.Bytes()
 }
 

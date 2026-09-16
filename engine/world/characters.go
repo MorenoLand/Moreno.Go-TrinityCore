@@ -478,7 +478,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(uint16(protocol.OpcodeSMSG_LOGIN_SET_TIME_SPEED), buildLoginSetTimeSpeed(time.Now()), true); err != nil {
 		return false
 	}
-	if err := s.write(uint16(protocol.OpcodeSMSG_SET_FORCED_REACTIONS), buildForcedReactions(), true); err != nil {
+	if err := s.write(uint16(protocol.OpcodeSMSG_SET_FORCED_REACTIONS), buildForcedReactions(s.loadedAuras()), true); err != nil {
 		return false
 	}
 	if err := s.sendResyncRunes(); err != nil {

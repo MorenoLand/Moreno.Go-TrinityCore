@@ -234,3 +234,22 @@ func TestSendLoginFlightStateUsesReferenceCanFlyPacket(t *testing.T) {
 		t.Fatalf("counter=%d remaining=%d err=%v", counter, reader.Remaining(), err)
 	}
 }
+
+func TestBuildForcedReactionsUsesForceReactionAuras(t *testing.T) {
+	payload := buildForcedReactions([]*activeAura{{AuraType: 139, MiscValue: 72, Amount: 4}, {AuraType: 139, MiscValue: 47, Amount: 5}})
+	reader := protocol.NewReader(payload)
+	count, err := reader.ReadU32()
+	if err != nil || count != 2 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+	faction, _ := reader.ReadU32()
+	rank, _ := reader.ReadU32()
+	if faction != 47 || rank != 5 {
+		t.Fatalf("first reaction faction=%d rank=%d", faction, rank)
+	}
+	faction, _ = reader.ReadU32()
+	rank, _ = reader.ReadU32()
+	if faction != 72 || rank != 4 || reader.Remaining() != 0 {
+		t.Fatalf("second reaction faction=%d rank=%d remaining=%d", faction, rank, reader.Remaining())
+	}
+}
