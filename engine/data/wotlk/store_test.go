@@ -268,6 +268,29 @@ func TestMapLoading(t *testing.T) {
 	}
 }
 
+func TestGlyphPropertiesLoading(t *testing.T) {
+	dbcDir := t.TempDir()
+	const fieldCount = 4
+	record := []uint32{420, 12345, 7, 88}
+	recordBytes := make([]byte, fieldCount*4)
+	for i, value := range record {
+		binary.LittleEndian.PutUint32(recordBytes[i*4:], value)
+	}
+	header := make([]byte, 20)
+	copy(header, "WDBC")
+	binary.LittleEndian.PutUint32(header[4:8], 1)
+	binary.LittleEndian.PutUint32(header[8:12], fieldCount)
+	binary.LittleEndian.PutUint32(header[12:16], fieldCount*4)
+	binary.LittleEndian.PutUint32(header[16:20], 1)
+	if err := os.WriteFile(filepath.Join(dbcDir, "GlyphProperties.dbc"), append(header, append(recordBytes, 0)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	glyph, found, err := NewStore(dbcDir).GlyphProperties(420)
+	if err != nil || !found || glyph.SpellID != 12345 || glyph.GlyphSlotFlags != 7 || glyph.SpellIconID != 88 {
+		t.Fatalf("glyph=%+v found=%v err=%v", glyph, found, err)
+	}
+}
+
 func TestVehicleAndVehicleSeatLoading(t *testing.T) {
 	dbcDir := t.TempDir()
 

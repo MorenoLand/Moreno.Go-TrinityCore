@@ -938,6 +938,37 @@ func (s *Store) GemProperties(id uint32) (GemPropertiesEntry, bool, error) {
 	}, true, nil
 }
 
+type GlyphPropertiesEntry struct {
+	ID             uint32
+	SpellID        uint32
+	GlyphSlotFlags uint32
+	SpellIconID    uint32
+}
+
+func (s *Store) GlyphProperties(id uint32) (GlyphPropertiesEntry, bool, error) {
+	file, err := s.File("GlyphProperties")
+	if err != nil {
+		return GlyphPropertiesEntry{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return GlyphPropertiesEntry{}, false, nil
+	}
+	spellID, err := record.Uint32(1)
+	if err != nil {
+		return GlyphPropertiesEntry{}, false, err
+	}
+	slotFlags, err := record.Uint32(2)
+	if err != nil {
+		return GlyphPropertiesEntry{}, false, err
+	}
+	iconID, err := record.Uint32(3)
+	if err != nil {
+		return GlyphPropertiesEntry{}, false, err
+	}
+	return GlyphPropertiesEntry{ID: id, SpellID: spellID, GlyphSlotFlags: slotFlags, SpellIconID: iconID}, true, nil
+}
+
 // SkillLineAbilityEntry represents a record from SkillLineAbility.dbc.
 type SkillLineAbilityEntry struct {
 	ID                uint32

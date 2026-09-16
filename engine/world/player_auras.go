@@ -111,6 +111,59 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 	return nil
 }
 
+func (s *session) loadGlyphAuras(state *playerState) {
+	if s == nil || state == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	s.castMu.Lock()
+	if s.auras == nil {
+		s.auras = make(map[uint32]struct{})
+	}
+	if s.auraSlots == nil {
+		s.auraSlots = make(map[uint32]uint8)
+	}
+	if s.activeAuras == nil {
+		s.activeAuras = make(map[uint32]*activeAura)
+	}
+	for _, glyphID := range state.Glyphs[state.ActiveTalentGroup] {
+		if glyphID == 0 {
+			continue
+		}
+		glyph, found, err := s.server.Data.GlyphProperties(uint32(glyphID))
+		if err != nil || !found || glyph.SpellID == 0 {
+			continue
+		}
+		if _, exists := s.activeAuras[glyph.SpellID]; exists {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(glyph.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		aura := &activeAura{SpellID: glyph.SpellID, CasterGUID: state.GUID, TargetGUID: state.GUID, Slot: uint8(len(s.activeAuras)), Positive: true, CasterLevel: state.Level}
+		for _, effect := range spell.Effects {
+			if effect.Effect == 0 || effect.Aura == 0 {
+				continue
+			}
+			aura.AuraType = effect.Aura
+			aura.MiscValue = effect.MiscValue
+			if effect.BasePoints >= 0 {
+				aura.Amount = uint32(effect.BasePoints + 1)
+			}
+			aura.PeriodMs = effect.AuraPeriod
+			aura.Positive = !isHarmfulAura(effect.Aura)
+			break
+		}
+		if aura.AuraType == 0 {
+			continue
+		}
+		s.auras[glyph.SpellID] = struct{}{}
+		s.auraSlots[glyph.SpellID] = aura.Slot
+		s.activeAuras[glyph.SpellID] = aura
+	}
+	s.castMu.Unlock()
+}
+
 func errorsMissingAuraTable(err error) bool {
 	value := strings.ToLower(err.Error())
 	return sql.ErrNoRows == err || strings.Contains(value, "no such table") || strings.Contains(value, "no such column") || strings.Contains(value, "unknown column")

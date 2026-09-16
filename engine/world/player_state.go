@@ -357,9 +357,10 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 
 	_ = s.loadOptionalPlayerState(ctx, &state)
 	_ = s.loadFishingSteps(ctx, &state)
+	_ = s.loadPlayerAuras(ctx, &state)
+	s.loadGlyphAuras(&state)
 	_ = s.calculatePlayerStats(ctx, &state)
 	_ = s.loadPlayerReputations(ctx, &state)
-	_ = s.loadPlayerAuras(ctx, &state)
 	restoreLoadedDeathState(&state)
 	s.restoreLoadedCorpseState(ctx, &state)
 	s.player = &state
