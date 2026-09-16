@@ -97,7 +97,13 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 				}
 			}
 		}
-		if !aura.Positive && aura.RemainingMs > 0 && offlineMs > 0 {
+		fadesWhileOffline := false
+		if s.server.Data != nil {
+			if spell, found, _ := s.server.Data.Spell(id); found {
+				fadesWhileOffline = spell.AttributesEx4&0x00000004 != 0 && id != 15007
+			}
+		}
+		if (!aura.Positive || fadesWhileOffline) && aura.RemainingMs > 0 && offlineMs > 0 {
 			if offlineMs >= int64(aura.RemainingMs) {
 				continue
 			}

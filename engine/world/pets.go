@@ -619,7 +619,8 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 		if aura.AuraType == 0 {
 			continue
 		}
-		if !aura.Positive && aura.RemainingMs > 0 && offlineMs > 0 {
+		fadesWhileOffline := spell.AttributesEx4&0x00000004 != 0 && aura.SpellID != 15007
+		if (!aura.Positive || fadesWhileOffline) && aura.RemainingMs > 0 && offlineMs > 0 {
 			if offlineMs >= int64(aura.RemainingMs) {
 				continue
 			}
