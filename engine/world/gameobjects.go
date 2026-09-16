@@ -193,6 +193,10 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 	if err := rows.Err(); err != nil {
 		return nil, count, err
 	}
+	for _, passenger := range s.nearbyTransportObjectPassengers(state, distance) {
+		updates.AddUpdateBlock(buildGameObjectUpdate(passenger))
+		count++
+	}
 	s.objectsMu.RLock()
 	for _, dyn := range s.dynamicGameObjects {
 		if dyn == nil || dyn.Map != state.Map || dyn.Hidden || !dyn.IsRuntimeSpawn {

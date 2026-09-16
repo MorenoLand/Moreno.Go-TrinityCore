@@ -134,6 +134,9 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		if err := rows.Err(); err != nil {
 			return nil, count, err
 		}
+		transportSpawns := s.nearbyTransportCreaturePassengers(state, distance)
+		spawns = append(spawns, transportSpawns...)
+		count += len(transportSpawns)
 		if count == 0 {
 			return nil, 0, nil
 		}
@@ -165,6 +168,9 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 	if err := rows.Err(); err != nil {
 		return nil, count, err
 	}
+	transportSpawns := s.nearbyTransportCreaturePassengers(state, distance)
+	spawns = append(spawns, transportSpawns...)
+	count += len(transportSpawns)
 	if count == 0 {
 		return nil, 0, nil
 	}
