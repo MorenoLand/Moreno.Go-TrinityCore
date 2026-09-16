@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -31,15 +29,12 @@ type Header struct {
 }
 
 type Event struct {
-	Sequence     uint64    `json:"sequence"`
-	TimeNS       int64     `json:"time_ns"`
-	Direction    Direction `json:"direction"`
-	Opcode       uint32    `json:"opcode"`
-	Payload      string    `json:"payload_base64"`
-	State        string    `json:"state,omitempty"`
-	ConnectionID uint32    `json:"connection_id,omitempty"`
-	RemoteIP     string    `json:"remote_ip,omitempty"`
-	RemotePort   uint32    `json:"remote_port,omitempty"`
+	Sequence  uint64    `json:"sequence"`
+	TimeNS    int64     `json:"time_ns"`
+	Direction Direction `json:"direction"`
+	Opcode    uint32    `json:"opcode"`
+	Payload   string    `json:"payload_base64"`
+	State     string    `json:"state,omitempty"`
 }
 
 type Trace struct {
@@ -54,43 +49,18 @@ type Recorder struct {
 	events  []Event
 }
 
-type PacketMetadata struct {
-	ConnectionID uint32
-	RemoteIP     string
-	RemotePort   uint32
-}
-
 func NewRecorder(source string) *Recorder {
 	return &Recorder{header: Header{Format: Format, Version: Version, Source: source}, started: time.Now()}
 }
 
 func (r *Recorder) Record(direction Direction, opcode uint32, payload []byte, state string) uint64 {
-	return r.RecordPacket(direction, opcode, payload, state, PacketMetadata{})
-}
-
-func (r *Recorder) RecordPacket(direction Direction, opcode uint32, payload []byte, state string, metadata PacketMetadata) uint64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	sequence := uint64(len(r.events) + 1)
 	data := make([]byte, len(payload))
 	copy(data, payload)
-	r.events = append(r.events, Event{Sequence: sequence, TimeNS: time.Since(r.started).Nanoseconds(), Direction: direction, Opcode: opcode, Payload: base64.StdEncoding.EncodeToString(data), State: state, ConnectionID: metadata.ConnectionID, RemoteIP: metadata.RemoteIP, RemotePort: metadata.RemotePort})
+	r.events = append(r.events, Event{Sequence: sequence, TimeNS: time.Since(r.started).Nanoseconds(), Direction: direction, Opcode: opcode, Payload: base64.StdEncoding.EncodeToString(data), State: state})
 	return sequence
-}
-
-func MetadataFromConn(conn net.Conn) PacketMetadata {
-	if conn == nil || conn.RemoteAddr() == nil {
-		return PacketMetadata{}
-	}
-	host, port, err := net.SplitHostPort(conn.RemoteAddr().String())
-	if err != nil {
-		return PacketMetadata{RemoteIP: conn.RemoteAddr().String()}
-	}
-	value, err := strconv.ParseUint(port, 10, 32)
-	if err != nil {
-		return PacketMetadata{RemoteIP: host}
-	}
-	return PacketMetadata{RemoteIP: host, RemotePort: uint32(value)}
 }
 
 func (r *Recorder) Snapshot() Trace {
@@ -176,7 +146,6 @@ func (t Trace) Payload(event Event) ([]byte, error) {
 type CompareOptions struct {
 	CompareTiming   bool
 	TimingTolerance time.Duration
-	IgnoreState     bool
 }
 
 type Difference struct {
@@ -224,17 +193,8 @@ func Diff(expected, actual Trace, options CompareOptions) ([]Difference, error) 
 		if !bytes.Equal(expectedPayload, actualPayload) {
 			differences = append(differences, Difference{Sequence: sequence, Field: "payload_base64", Expected: expectedEvent.Payload, Actual: actualEvent.Payload})
 		}
-		if !options.IgnoreState && expectedEvent.State != actualEvent.State {
+		if expectedEvent.State != actualEvent.State {
 			differences = append(differences, Difference{Sequence: sequence, Field: "state", Expected: expectedEvent.State, Actual: actualEvent.State})
-		}
-		if expectedEvent.ConnectionID != actualEvent.ConnectionID {
-			differences = append(differences, Difference{Sequence: sequence, Field: "connection_id", Expected: fmt.Sprint(expectedEvent.ConnectionID), Actual: fmt.Sprint(actualEvent.ConnectionID)})
-		}
-		if expectedEvent.RemoteIP != actualEvent.RemoteIP {
-			differences = append(differences, Difference{Sequence: sequence, Field: "remote_ip", Expected: expectedEvent.RemoteIP, Actual: actualEvent.RemoteIP})
-		}
-		if expectedEvent.RemotePort != actualEvent.RemotePort {
-			differences = append(differences, Difference{Sequence: sequence, Field: "remote_port", Expected: fmt.Sprint(expectedEvent.RemotePort), Actual: fmt.Sprint(actualEvent.RemotePort)})
 		}
 		if options.CompareTiming && absDuration(time.Duration(expectedEvent.TimeNS-actualEvent.TimeNS)) > options.TimingTolerance {
 			differences = append(differences, Difference{Sequence: sequence, Field: "time_ns", Expected: fmt.Sprint(expectedEvent.TimeNS), Actual: fmt.Sprint(actualEvent.TimeNS)})
