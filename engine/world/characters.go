@@ -412,6 +412,13 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.playerGUID = guid
 	s.player = &state
 	s.playerLoaded = true
+	difficulty := protocol.NewBuffer(12)
+	difficulty.WriteU32(uint32(state.DungeonDifficulty))
+	difficulty.WriteU32(1)
+	difficulty.WriteU32(0)
+	if err := s.write(uint16(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY), difficulty.Bytes(), true); err != nil {
+		return false
+	}
 
 	// Stream core login verification and capabilities
 	if err := s.write(uint16(protocol.OpcodeSMSG_LOGIN_VERIFY_WORLD), buildLoginVerifyWorld(state), true); err != nil {

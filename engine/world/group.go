@@ -147,6 +147,10 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 	s.server.groups[g.ID] = g
 	s.server.groupsMu.Unlock()
 	s.groupID = g.ID
+	if s.player != nil {
+		s.player.DungeonDifficulty = g.DungeonDiff
+		s.player.RaidDifficulty = g.RaidDiff
+	}
 }
 
 func (s *session) sendLoadedGroup() {

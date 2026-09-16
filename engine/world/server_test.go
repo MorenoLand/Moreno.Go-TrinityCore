@@ -161,6 +161,13 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_PLAYER_LOGIN), loginPayload.Bytes(), clientCrypt); err != nil {
 		t.Fatal(err)
 	}
+	dungeonOpcode, dungeonPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dungeonOpcode != uint16(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY) || len(dungeonPayload) != 12 {
+		t.Fatalf("dungeon difficulty opcode=%x payload=%d", dungeonOpcode, len(dungeonPayload))
+	}
 	verifyOpcode, verifyPayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {
 		t.Fatal(err)
