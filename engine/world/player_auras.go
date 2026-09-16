@@ -88,6 +88,13 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 					break
 				}
 				aura.Positive = !isHarmfulAura(aura.AuraType)
+				if spell.ProcCharges > 0 {
+					if aura.RemainingCharges == 0 || aura.RemainingCharges > uint8(spell.ProcCharges) {
+						aura.RemainingCharges = uint8(spell.ProcCharges)
+					}
+				} else {
+					aura.RemainingCharges = 0
+				}
 			}
 		}
 		if !aura.Positive && aura.RemainingMs > 0 && offlineMs > 0 {

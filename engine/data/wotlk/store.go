@@ -88,6 +88,7 @@ type Spell struct {
 	FacingCasterFlags     uint32 // Spell.dbc field 19 = FacingCasterFlags (DBCStructure.h:1409)
 	CastingTimeIndex      uint32
 	RecoveryTime          uint32
+	ProcCharges           uint32 // Spell.dbc field 36 = ProcCharges (DBCStructure.h:1426)
 	PowerType             uint32
 	ManaCost              uint32
 	ManaCostPct           uint32
@@ -469,6 +470,7 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{19, &spell.FacingCasterFlags}, // Spell.dbc field 19 = FacingCasterFlags (DBCStructure.h:1409)
 		{28, &spell.CastingTimeIndex},
 		{29, &spell.RecoveryTime},
+		{36, &spell.ProcCharges},
 		{41, &spell.PowerType},
 		{42, &spell.ManaCost},
 		{204, &spell.ManaCostPct}, // Spell.dbc field 204 = ManaCostPct (DBCStructure.h:1476)

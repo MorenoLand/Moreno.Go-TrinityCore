@@ -609,6 +609,13 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 			aura.Positive = !isHarmfulAura(effect.Aura)
 			break
 		}
+		if spell.ProcCharges > 0 {
+			if aura.RemainingCharges == 0 || aura.RemainingCharges > uint8(spell.ProcCharges) {
+				aura.RemainingCharges = uint8(spell.ProcCharges)
+			}
+		} else {
+			aura.RemainingCharges = 0
+		}
 		if aura.AuraType == 0 {
 			continue
 		}
