@@ -154,18 +154,18 @@ func TestContinentTransportTeleportsPassengerAcrossMaps(t *testing.T) {
 }
 
 func TestContinentTransportTransformsStaticPassengers(t *testing.T) {
-	transport := &continentTransport{Spawn: gameObjectSpawn{Map: 1, X: 20, Y: 30, Z: 40, Orientation: math.Pi / 2}, StaticCreatures: []creatureSpawn{{GUID: 8, Entry: 68, Map: 593, X: 1, Y: 2, Z: 3, Orientation: 0}}, StaticObjects: []gameObjectSpawn{{GUID: 9, Entry: 100, Map: 593, X: 4, Y: 5, Z: 6, Orientation: 0}}}
+	transport := &continentTransport{Spawn: gameObjectSpawn{GUID: 7, Entry: 9000, Map: 1, X: 20, Y: 30, Z: 40, Orientation: math.Pi / 2}, StaticCreatures: []creatureSpawn{{GUID: 8, Entry: 68, Map: 593, X: 1, Y: 2, Z: 3, Orientation: 0}}, StaticObjects: []gameObjectSpawn{{GUID: 9, Entry: 100, Map: 593, X: 4, Y: 5, Z: 6, Orientation: 0}}}
 	creatures := transport.passengerCreatures()
 	objects := transport.passengerObjects()
 	if len(creatures) != 1 || len(objects) != 1 {
 		t.Fatalf("passengers creatures=%d objects=%d", len(creatures), len(objects))
 	}
 	cx, cy, cz, co := CalculatePassengerPosition(20, 30, 40, math.Pi/2, 1, 2, 3, 0)
-	if creatures[0].Map != 1 || creatures[0].X != cx || creatures[0].Y != cy || creatures[0].Z != cz || creatures[0].Orientation != co {
+	if creatures[0].Map != 1 || creatures[0].TransportGUID != gameObjectGUID(7, 9000) || creatures[0].TransportX != 1 || creatures[0].TransportY != 2 || creatures[0].TransportZ != 3 || creatures[0].TransportO != 0 || creatures[0].X != cx || creatures[0].Y != cy || creatures[0].Z != cz || creatures[0].Orientation != co {
 		t.Fatalf("creature passenger=%+v want=(%v,%v,%v,%v)", creatures[0], cx, cy, cz, co)
 	}
 	ox, oy, oz, oo := CalculatePassengerPosition(20, 30, 40, math.Pi/2, 4, 5, 6, 0)
-	if objects[0].Map != 1 || objects[0].X != ox || objects[0].Y != oy || objects[0].Z != oz || objects[0].Orientation != oo {
+	if objects[0].Map != 1 || objects[0].TransportGUID != gameObjectGUID(7, 9000) || objects[0].TransportX != 4 || objects[0].TransportY != 5 || objects[0].TransportZ != 6 || objects[0].TransportO != 0 || objects[0].X != ox || objects[0].Y != oy || objects[0].Z != oz || objects[0].Orientation != oo {
 		t.Fatalf("object passenger=%+v want=(%v,%v,%v,%v)", objects[0], ox, oy, oz, oo)
 	}
 }

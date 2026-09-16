@@ -51,6 +51,11 @@ type creatureSpawn struct {
 	Item1          uint32
 	Item2          uint32
 	Item3          uint32
+	TransportGUID  uint64
+	TransportX     float32
+	TransportY     float32
+	TransportZ     float32
+	TransportO     float32
 }
 
 func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerState) (*protocol.Packet, int, error) {
@@ -256,13 +261,26 @@ func buildCreatureUpdate(spawn creatureSpawn) []byte {
 	block.WritePackedGUID(rawGUID)
 	block.WriteU8(3)
 	block.WriteU16(creatureUpdateFlags)
-	block.WriteU32(0)
+	if spawn.TransportGUID != 0 {
+		block.WriteU32(movementOnTransport)
+	} else {
+		block.WriteU32(0)
+	}
 	block.WriteU16(0)
 	block.WriteU32(uint32(time.Now().UnixMilli()))
 	block.WriteF32(spawn.X)
 	block.WriteF32(spawn.Y)
 	block.WriteF32(spawn.Z)
 	block.WriteF32(spawn.Orientation)
+	if spawn.TransportGUID != 0 {
+		block.WritePackedGUID(spawn.TransportGUID)
+		block.WriteF32(spawn.TransportX)
+		block.WriteF32(spawn.TransportY)
+		block.WriteF32(spawn.TransportZ)
+		block.WriteF32(spawn.TransportO)
+		block.WriteU32(0)
+		block.WriteI8(-1)
+	}
 	block.WriteU32(0)
 	for _, speed := range []float32{2.5 * spawn.WalkSpeed, 7 * spawn.RunSpeed, 4.5 * spawn.RunSpeed, 4.722222 * spawn.WalkSpeed, 2.5 * spawn.WalkSpeed, 7 * spawn.RunSpeed, 4.5 * spawn.RunSpeed, 3.141594, 3.14} {
 		block.WriteF32(speed)

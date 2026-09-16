@@ -113,6 +113,11 @@ type gameObjectSpawn struct {
 	Faction           uint32
 	ParentRotation    [4]float32
 	TransportProgress uint32
+	TransportGUID     uint64
+	TransportX        float32
+	TransportY        float32
+	TransportZ        float32
+	TransportO        float32
 }
 
 func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerState) (*protocol.Packet, int, error) {
@@ -266,13 +271,23 @@ func buildGameObjectUpdate(spawn gameObjectSpawn) []byte {
 	block.WritePackedGUID(rawGUID)
 	block.WriteU8(5)
 	block.WriteU16(gameObjectUpdateFlags)
-	block.WriteU8(0)
+	if spawn.TransportGUID != 0 {
+		block.WritePackedGUID(spawn.TransportGUID)
+	} else {
+		block.WriteU8(0)
+	}
 	block.WriteF32(spawn.X)
 	block.WriteF32(spawn.Y)
 	block.WriteF32(spawn.Z)
-	block.WriteF32(spawn.X)
-	block.WriteF32(spawn.Y)
-	block.WriteF32(spawn.Z)
+	if spawn.TransportGUID != 0 {
+		block.WriteF32(spawn.TransportX)
+		block.WriteF32(spawn.TransportY)
+		block.WriteF32(spawn.TransportZ)
+	} else {
+		block.WriteF32(spawn.X)
+		block.WriteF32(spawn.Y)
+		block.WriteF32(spawn.Z)
+	}
 	block.WriteF32(spawn.Orientation)
 	block.WriteF32(0)
 	block.WriteU32(spawn.GUID)

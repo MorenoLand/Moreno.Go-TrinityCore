@@ -283,6 +283,8 @@ func (t *continentTransport) passengerCreatures() []creatureSpawn {
 	result := make([]creatureSpawn, 0, len(t.StaticCreatures))
 	for _, local := range t.StaticCreatures {
 		spawn := local
+		spawn.TransportGUID = gameObjectGUID(t.Spawn.GUID, t.Spawn.Entry)
+		spawn.TransportX, spawn.TransportY, spawn.TransportZ, spawn.TransportO = local.X, local.Y, local.Z, local.Orientation
 		spawn.Map = t.Spawn.Map
 		spawn.X, spawn.Y, spawn.Z, spawn.Orientation = CalculatePassengerPosition(t.Spawn.X, t.Spawn.Y, t.Spawn.Z, t.Spawn.Orientation, local.X, local.Y, local.Z, local.Orientation)
 		result = append(result, spawn)
@@ -297,6 +299,8 @@ func (t *continentTransport) passengerObjects() []gameObjectSpawn {
 	result := make([]gameObjectSpawn, 0, len(t.StaticObjects))
 	for _, local := range t.StaticObjects {
 		spawn := local
+		spawn.TransportGUID = gameObjectGUID(t.Spawn.GUID, t.Spawn.Entry)
+		spawn.TransportX, spawn.TransportY, spawn.TransportZ, spawn.TransportO = local.X, local.Y, local.Z, local.Orientation
 		spawn.Map = t.Spawn.Map
 		spawn.X, spawn.Y, spawn.Z, spawn.Orientation = CalculatePassengerPosition(t.Spawn.X, t.Spawn.Y, t.Spawn.Z, t.Spawn.Orientation, local.X, local.Y, local.Z, local.Orientation)
 		result = append(result, spawn)
