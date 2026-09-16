@@ -433,10 +433,10 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(uint16(protocol.OpcodeSMSG_INSTANCE_DIFFICULTY), buildInstanceDifficulty(uint32(state.DungeonDifficulty)), true); err != nil {
 		return false
 	}
-	if err := s.write(uint16(protocol.OpcodeSMSG_BIND_POINT_UPDATE), buildBindPointUpdate(&state), true); err != nil {
+	if err := s.sendContactList(ctx, uint32(socialFlagFriend|socialFlagIgnored|socialFlagMuted)); err != nil {
 		return false
 	}
-	if err := s.sendContactList(ctx, uint32(socialFlagFriend|socialFlagIgnored|socialFlagMuted)); err != nil {
+	if err := s.write(uint16(protocol.OpcodeSMSG_BIND_POINT_UPDATE), buildBindPointUpdate(&state), true); err != nil {
 		return false
 	}
 	if err := s.sendTalentsInfo(false); err != nil {
