@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -575,6 +576,53 @@ func setupPetTestDatabases(t *testing.T) (*sql.DB, *sql.DB) {
 
 func isUpdateOpcode(op uint16) bool {
 	return op == uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) || op == uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT)
+}
+
+func TestPetSpellPacketIncludesSavedCooldowns(t *testing.T) {
+	cdb, wdb := setupPetTestDatabases(t)
+	defer cdb.Close()
+	defer wdb.Close()
+	if _, err := cdb.Exec("INSERT INTO character_pet (id, entry, owner, level, name, slot, curhealth, curmana) VALUES (9, 416, 1001, 8, 'Imp', 0, 100, 20)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cdb.Exec("INSERT INTO pet_spell_cooldown (guid, spell, time, categoryId, categoryEnd) VALUES (9, 3110, ?, 7, 0)", time.Now().Unix()+60); err != nil {
+		t.Fatal(err)
+	}
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	sess := &session{server: &Server{CharactersStore: &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: cdb}, WorldStore: &database.Store{Name: "world", Backend: database.BackendSQLite, DB: wdb}}, conn: serverConn, playerGUID: 1001, player: &playerState{GUID: 1001, Level: 8}}
+	done := make(chan struct{})
+	go func() {
+		sess.sendPetSpells(context.Background(), 9, 416, 1)
+		close(done)
+	}()
+	opcode, payload, err := readServerFrame(clientConn, nil)
+	if err != nil || opcode != uint16(protocol.OpcodeSMSG_PET_SPELLS) {
+		t.Fatalf("opcode=%x err=%v", opcode, err)
+	}
+	<-done
+	r := protocol.NewReader(payload)
+	_, _ = r.ReadU64()
+	_, _ = r.ReadU16()
+	_, _ = r.ReadU32()
+	_, _ = r.ReadU8()
+	_, _ = r.ReadU8()
+	_, _ = r.ReadU16()
+	for i := 0; i < 10; i++ {
+		_, _ = r.ReadU32()
+	}
+	additional, _ := r.ReadU8()
+	for i := uint8(0); i < additional; i++ {
+		_, _ = r.ReadU32()
+	}
+	cooldownCount, _ := r.ReadU8()
+	spell, _ := r.ReadU32()
+	category, _ := r.ReadU16()
+	duration, _ := r.ReadU32()
+	if cooldownCount != 1 || spell != 3110 || category != 7 || duration < 58000 || duration > 62000 {
+		t.Fatalf("cooldowns=%d spell=%d category=%d duration=%d", cooldownCount, spell, category, duration)
+	}
 }
 
 func TestSummonPet_WarlockDemon(t *testing.T) {

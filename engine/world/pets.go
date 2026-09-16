@@ -685,8 +685,41 @@ func (s *session) sendPetSpells(ctx context.Context, petID uint32, entry uint32,
 		buf.WriteU32(sp.spellID | (actType << 24))
 	}
 
-	// Cooldown count
-	buf.WriteU8(0)
+	type petCooldown struct {
+		spell, category  uint32
+		end, categoryEnd int64
+	}
+	cooldowns := make([]petCooldown, 0)
+	now := time.Now().Unix()
+	if rows, err := cdb.QueryContext(ctx, "SELECT spell, categoryId, time, categoryEnd FROM pet_spell_cooldown WHERE guid = ? AND time > ? ORDER BY spell", petID, now); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var cooldown petCooldown
+			if rows.Scan(&cooldown.spell, &cooldown.category, &cooldown.end, &cooldown.categoryEnd) == nil {
+				cooldowns = append(cooldowns, cooldown)
+			}
+		}
+	}
+	if len(cooldowns) > 255 {
+		cooldowns = cooldowns[:255]
+	}
+	buf.WriteU8(uint8(len(cooldowns)))
+	for _, cooldown := range cooldowns {
+		buf.WriteU32(cooldown.spell)
+		buf.WriteU16(uint16(cooldown.category))
+		cooldownMs := remainingMilliseconds(cooldown.end, now)
+		categoryMs := remainingMilliseconds(cooldown.categoryEnd, now)
+		if cooldownMs == 0 {
+			buf.WriteU32(0)
+			buf.WriteU32(0)
+		} else if cooldown.categoryEnd >= now {
+			buf.WriteU32(0)
+			buf.WriteU32(categoryMs)
+		} else {
+			buf.WriteU32(cooldownMs)
+			buf.WriteU32(0)
+		}
+	}
 
 	_ = s.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
 }
