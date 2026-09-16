@@ -912,6 +912,12 @@ func (s *session) buildEnumCharacter(ctx context.Context, packet *protocol.Buffe
 	petDisplay, petLevel, petFamily := uint32(0), uint32(0), uint32(0)
 	if c.PetEntry != 0 && c.PlayerFlags&playerFlagGhost == 0 && (c.Class == 3 || c.Class == 6 || c.Class == 9) {
 		petDisplay, petLevel = c.PetDisplay, c.PetLevel
+		if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			var family int64
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(family, 0) FROM creature_template WHERE entry = ?", c.PetEntry).Scan(&family); err == nil && family > 0 {
+				petFamily = uint32(family)
+			}
+		}
 	}
 	packet.WriteU32(petDisplay)
 	packet.WriteU32(petLevel)
