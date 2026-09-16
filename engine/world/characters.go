@@ -585,6 +585,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	s.debug("world login stage", "stage", "account-online-complete", "guid", guid)
 	s.sendLoadedGroup()
+	s.server.broadcastFriendStatus(s.playerGUID, friendsResultOnline, uint32(state.Zone), uint32(state.Level), uint32(state.Class))
 	// Spawn active pet if one was active at logout (slot 0)
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
 		var petID, entry, modelID, level, reactState, curHealth, curMana int64
