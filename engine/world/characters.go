@@ -632,6 +632,21 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			s.sendNotification("All spells have been reset.")
 		}
 	}
+	if s.player.AtLogin&uint32(atLoginFirst) != 0 {
+		for _, spellID := range s.loadFirstLoginCastSpellIDs(ctx, s.player.Race, s.player.Class) {
+			if s.server.Data == nil {
+				continue
+			}
+			if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+				target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: s.playerGUID}
+				s.finishSpellCast(ctx, 0, spellID, spell, target)
+			}
+		}
+		s.player.AtLogin &^= uint32(atLoginFirst)
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET at_login = at_login & ~32 WHERE guid = ?", s.playerGUID)
+		}
+	}
 	s.loadMailState(ctx)
 	s.sendNewMailNotification(ctx)
 	s.debug("world login stage", "stage", "player-login-hooks-start", "guid", guid)
@@ -1259,40 +1274,8 @@ func (s *session) createStarterSpells(ctx context.Context, guid uint64, race, cl
 		}
 	}
 
-	// 3. Spells from playercreateinfo_action for this race and class (starting abilities)
-	actionRows, err := wdb.QueryContext(ctx, "SELECT action FROM playercreateinfo_action WHERE race = ? AND class = ? AND type = 0 AND action > 0", race, class)
-	if err == nil {
-		defer actionRows.Close()
-		for actionRows.Next() {
-			var act int64
-			if err := actionRows.Scan(&act); err == nil && act > 0 {
-				id := uint32(act)
-				if !seen[id] {
-					seen[id] = true
-					_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, id)
-				}
-			}
-		}
-	}
-
-	// 4. Cast spells from playercreateinfo_cast_spell (stances, presences, passives)
+	// Custom spells from playercreateinfo_spell_custom (only if PlayerStart.AllSpells enabled)
 	raceMask, classMask := playerCreateMask(race), playerCreateMask(class)
-	castRows, err := wdb.QueryContext(ctx, "SELECT spell FROM playercreateinfo_cast_spell WHERE (raceMask = 0 OR (raceMask & ?) <> 0) AND (classMask = 0 OR (classMask & ?) <> 0)", raceMask, classMask)
-	if err == nil {
-		defer castRows.Close()
-		for castRows.Next() {
-			var spID int64
-			if err := castRows.Scan(&spID); err == nil && spID > 0 {
-				id := uint32(spID)
-				if !seen[id] {
-					seen[id] = true
-					_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, id)
-				}
-			}
-		}
-	}
-
-	// 5. Custom spells from playercreateinfo_spell_custom (only if PlayerStart.AllSpells enabled)
 	if s.server != nil && s.server.Config.PlayerStartAllSpells {
 		rows, err := wdb.QueryContext(ctx, "SELECT Spell FROM playercreateinfo_spell_custom WHERE (racemask = 0 OR (racemask & ?) <> 0) AND (classmask = 0 OR (classmask & ?) <> 0)", raceMask, classMask)
 		if err == nil {

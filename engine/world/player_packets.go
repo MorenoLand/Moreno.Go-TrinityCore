@@ -123,25 +123,6 @@ func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race, clas
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, def.ID)
 		}
 	}
-	starterIDs := s.loadStarterSpellIDs(ctx, race, class)
-	for _, id := range starterIDs {
-		if !s.spellAvailableAtLevel(id, level) {
-			continue
-		}
-		found := false
-		for _, sp := range result {
-			if sp.ID == id {
-				found = true
-				break
-			}
-		}
-		if found {
-			continue
-		}
-		result = append(result, learnedSpell{ID: id, Active: true})
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, id)
-	}
-
 	// If player has few spells, ensure custom starter spells from playercreateinfo_spell_custom are also learned (if PlayerStart.AllSpells enabled)
 	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil && s.server.Config.PlayerStartAllSpells {
 		raceMask, classMask := playerCreateMask(race), playerCreateMask(class)
@@ -190,35 +171,24 @@ func (s *session) spellAvailableAtLevel(spellID uint32, level uint8) bool {
 	return true
 }
 
-func (s *session) loadStarterSpellIDs(ctx context.Context, race, class uint8) []uint32 {
+func (s *session) loadFirstLoginCastSpellIDs(ctx context.Context, race, class uint8) []uint32 {
 	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return nil
 	}
-	result := make([]uint32, 0, 16)
-	appendRows := func(query string, args ...any) {
-		rows, err := s.server.WorldStore.DB.QueryContext(ctx, query, args...)
-		if err != nil {
-			return
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var spellID int64
-			if rows.Scan(&spellID) == nil && spellID > 0 && spellID <= int64(^uint32(0)) {
-				result = append(result, uint32(spellID))
-			}
-		}
-	}
-	appendRows("SELECT action FROM playercreateinfo_action WHERE race = ? AND class = ? AND type = 0 AND action > 0 ORDER BY button", race, class)
 	raceMask, classMask := playerCreateMask(race), playerCreateMask(class)
-	appendRows("SELECT spell FROM playercreateinfo_cast_spell WHERE (raceMask = 0 OR (raceMask & ?) <> 0) AND (classMask = 0 OR (classMask & ?) <> 0) ORDER BY spell", raceMask, classMask)
-	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
-	unique := result[:0]
-	for _, id := range result {
-		if len(unique) == 0 || unique[len(unique)-1] != id {
-			unique = append(unique, id)
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT spell FROM playercreateinfo_cast_spell WHERE (raceMask = 0 OR (raceMask & ?) <> 0) AND (classMask = 0 OR (classMask & ?) <> 0) ORDER BY spell", raceMask, classMask)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	result := make([]uint32, 0)
+	for rows.Next() {
+		var spellID int64
+		if err := rows.Scan(&spellID); err == nil && spellID > 0 && spellID <= int64(^uint32(0)) {
+			result = append(result, uint32(spellID))
 		}
 	}
-	return unique
+	return result
 }
 
 func playerCreateMask(id uint8) uint32 {

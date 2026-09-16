@@ -357,16 +357,22 @@ func TestPlayerStartAllSpellsConfigGating(t *testing.T) {
 		}
 	}
 	for _, id := range []uint32{1001, 1002} {
-		found := false
 		for _, sp := range spells {
-			if sp.ID == id && sp.Active && !sp.Disabled {
-				found = true
-				break
+			if sp.ID == id {
+				t.Fatalf("creation action/cast spell %d was incorrectly persisted as learned", id)
 			}
 		}
-		if !found {
-			t.Fatalf("expected starter spell %d in loaded spells", id)
-		}
+	}
+	var castCount int
+	if err := cdb.QueryRow("SELECT COUNT(*) FROM character_spell WHERE guid = 100 AND spell = 1002").Scan(&castCount); err != nil {
+		t.Fatal(err)
+	}
+	if castCount != 0 {
+		t.Fatalf("first-login cast spell was persisted=%d", castCount)
+	}
+	castIDs := sessDefault.loadFirstLoginCastSpellIDs(ctx, 1, 1)
+	if len(castIDs) != 1 || castIDs[0] != 1002 {
+		t.Fatalf("first-login cast IDs=%v", castIDs)
 	}
 
 	// 2. When PlayerStartAllSpells = true (optional full spell learning mode)
