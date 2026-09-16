@@ -856,7 +856,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 		}
 		state.debug("world packet received", "account", state.accountName, "opcode", opcodeName(header.Opcode), "size", len(payload))
 		if state.server != nil && state.server.TraceRecorder != nil {
-			state.server.TraceRecorder.Record(protocoltrace.ClientToServer, header.Opcode, payload, opcodeName(header.Opcode))
+			state.server.TraceRecorder.RecordPacket(protocoltrace.ClientToServer, header.Opcode, payload, opcodeName(header.Opcode), protocoltrace.MetadataFromConn(state.conn))
 		}
 		if !state.logoutAt.IsZero() && !time.Now().Before(state.logoutAt) {
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
@@ -3172,7 +3172,7 @@ func (s *session) write(opcode uint16, payload []byte, encrypt bool) error {
 		payload = packet.Data
 	}
 	if s != nil && s.server != nil && s.server.TraceRecorder != nil {
-		s.server.TraceRecorder.Record(protocoltrace.ServerToClient, uint32(opcode), payload, opcodeName(uint32(opcode)))
+		s.server.TraceRecorder.RecordPacket(protocoltrace.ServerToClient, uint32(opcode), payload, opcodeName(uint32(opcode)), protocoltrace.MetadataFromConn(s.conn))
 	}
 	if s == nil || s.conn == nil {
 		return nil

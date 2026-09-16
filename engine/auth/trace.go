@@ -32,9 +32,10 @@ func (c *traceConn) end() {
 	if !c.active {
 		return
 	}
-	c.recorder.Record(protocoltrace.ClientToServer, uint32(c.opcode), c.in, "auth")
+	metadata := protocoltrace.MetadataFromConn(c.Conn)
+	c.recorder.RecordPacket(protocoltrace.ClientToServer, uint32(c.opcode), c.in, "auth", metadata)
 	if len(c.out) > 0 {
-		c.recorder.Record(protocoltrace.ServerToClient, uint32(c.out[0]), c.out[1:], "auth")
+		c.recorder.RecordPacket(protocoltrace.ServerToClient, uint32(c.out[0]), c.out[1:], "auth", metadata)
 	}
 	c.active = false
 	c.in = c.in[:0]
