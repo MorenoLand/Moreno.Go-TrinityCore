@@ -607,6 +607,7 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 				aura.Amount = uint32(effect.BasePoints + 1)
 			}
 			aura.Positive = !isHarmfulAura(effect.Aura)
+			aura.StackAmount = spell.StackAmount
 			break
 		}
 		if spell.ProcCharges > 0 {
@@ -639,7 +640,11 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 	}
 	records := make([]protocol.AuraUpdateRecord, 0, len(loaded))
 	for _, aura := range loaded {
-		records = append(records, protocol.AuraUpdateRecord{CasterGUID: aura.CasterGUID, Slot: aura.Slot, SpellID: aura.SpellID, Positive: aura.Positive, MaxDurationMs: aura.DurationMs, DurationMs: aura.RemainingMs, CasterLevel: aura.CasterLevel, StackCount: aura.StackCount})
+		stackCount := aura.StackCount
+		if aura.StackAmount == 0 {
+			stackCount = aura.RemainingCharges
+		}
+		records = append(records, protocol.AuraUpdateRecord{CasterGUID: aura.CasterGUID, Slot: aura.Slot, SpellID: aura.SpellID, Positive: aura.Positive, MaxDurationMs: aura.DurationMs, DurationMs: aura.RemainingMs, CasterLevel: aura.CasterLevel, StackCount: stackCount})
 		if aura.PeriodMs > 0 {
 			s.scheduleCreaturePeriodicTick(aura, aura.PeriodMs)
 		}

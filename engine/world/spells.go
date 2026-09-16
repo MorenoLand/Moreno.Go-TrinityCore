@@ -1742,6 +1742,7 @@ type activeAura struct {
 	CasterLevel        uint8
 	StackCount         uint8
 	RemainingCharges   uint8
+	StackAmount        uint32
 	AuraInterruptFlags uint32
 	TriggerSpell       uint32
 	DRGroup            DiminishingGroup
