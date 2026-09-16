@@ -169,6 +169,7 @@ func TestSendLoginMovementStatesUsesReferenceCompoundPacket(t *testing.T) {
 		2: {SpellID: 2, AuraType: 104},
 		3: {SpellID: 3, AuraType: 105},
 		4: {SpellID: 4, AuraType: 106},
+		5: {SpellID: 5, AuraType: 12},
 	}}
 	go func() {
 		if err := sess.sendLoginMovementStates(); err != nil {

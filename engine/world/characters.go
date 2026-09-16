@@ -637,17 +637,29 @@ func (s *session) sendLoginMovementStates() error {
 	}
 	const (
 		auraRoot        uint32 = 26
+		auraStun        uint32 = 12
 		auraWaterWalk   uint32 = 104
 		auraFeatherFall uint32 = 105
 		auraHover       uint32 = 106
 	)
 	auras := s.loadedAuras()
 	state := protocol.NewBuffer(64)
-	for _, auraType := range []uint32{auraRoot, auraFeatherFall, auraWaterWalk, auraHover} {
+	rooted := false
+	for _, aura := range auras {
+		if aura != nil && (aura.AuraType == auraRoot || aura.AuraType == auraStun) {
+			rooted = true
+			break
+		}
+	}
+	if rooted {
+		state.WriteU8(uint8(2 + packedGUIDSize(s.playerGUID) + 4))
+		state.WriteU16(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT))
+		state.WritePackedGUID(s.playerGUID)
+		state.WriteU32(0)
+	}
+	for _, auraType := range []uint32{auraFeatherFall, auraWaterWalk, auraHover} {
 		var opcode protocol.Opcode
 		switch auraType {
-		case auraRoot:
-			opcode = protocol.OpcodeSMSG_FORCE_MOVE_ROOT
 		case auraFeatherFall:
 			opcode = protocol.OpcodeSMSG_MOVE_FEATHER_FALL
 		case auraWaterWalk:
