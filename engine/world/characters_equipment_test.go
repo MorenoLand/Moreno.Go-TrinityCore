@@ -53,3 +53,28 @@ func TestLoadEquipmentCachePreservesExistingValues(t *testing.T) {
 		t.Fatalf("equipment cache changed: got %q want %q", got, cached)
 	}
 }
+
+func TestLoadEnumEquipmentPacksVisibleEnchantments(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, statement := range []string{
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER)",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, enchantments TEXT)",
+		"INSERT INTO item_instance VALUES (100, 9001, '123 60000 0 456 60000 0')",
+		"INSERT INTO character_inventory VALUES (1, 0, 0, 100)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sess := &session{server: &Server{CharactersStore: &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}}}
+	character := enumCharacter{GUID: 1}
+	sess.loadEnumEquipment(context.Background(), &character)
+	fields := strings.Fields(character.Equipment)
+	if len(fields) != int(inventorySlotBagEnd)*2 || fields[1] != "29884539" {
+		t.Fatalf("equipment=%q", character.Equipment)
+	}
+}

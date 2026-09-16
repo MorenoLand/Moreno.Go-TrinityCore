@@ -919,6 +919,27 @@ type GemPropertiesEntry struct {
 	Type      uint32
 }
 
+type SpellItemEnchantmentEntry struct {
+	ID         uint32
+	ItemVisual uint32
+}
+
+func (s *Store) SpellItemEnchantment(id uint32) (SpellItemEnchantmentEntry, bool, error) {
+	file, err := s.File("SpellItemEnchantment")
+	if err != nil {
+		return SpellItemEnchantmentEntry{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return SpellItemEnchantmentEntry{}, false, nil
+	}
+	visual, err := record.Uint32(31)
+	if err != nil {
+		return SpellItemEnchantmentEntry{}, false, err
+	}
+	return SpellItemEnchantmentEntry{ID: id, ItemVisual: visual}, true, nil
+}
+
 // GemProperties loads a record by ID from GemProperties.dbc.
 func (s *Store) GemProperties(id uint32) (GemPropertiesEntry, bool, error) {
 	file, err := s.File("GemProperties")

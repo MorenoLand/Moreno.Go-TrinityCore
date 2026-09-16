@@ -156,7 +156,8 @@ func (s *session) loadEquipmentCache(ctx context.Context, guid uint64, cached st
 	for i := range parts {
 		parts[i] = "0"
 	}
-	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.slot, ii.itemEntry
+	itemSlots := make(map[int64]int64)
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.slot, ii.guid, ii.itemEntry
 		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
 		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot < ? ORDER BY ci.slot`, guid, inventorySlotBagEnd)
 	if err != nil {
@@ -164,16 +165,40 @@ func (s *session) loadEquipmentCache(ctx context.Context, guid uint64, cached st
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var slot, itemEntry int64
-		if rows.Scan(&slot, &itemEntry) != nil || slot < 0 || slot >= int64(inventorySlotBagEnd) || itemEntry <= 0 {
+		var slot, itemGUID, itemEntry int64
+		if rows.Scan(&slot, &itemGUID, &itemEntry) != nil || slot < 0 || slot >= int64(inventorySlotBagEnd) || itemEntry <= 0 {
 			continue
 		}
 		parts[slot*2] = strconv.FormatInt(itemEntry, 10)
+		itemSlots[itemGUID] = slot
 	}
-	if err := rows.Err(); err == nil {
-		return strings.Join(parts, " ")
+	if err := rows.Err(); err != nil {
+		return cached
 	}
-	return cached
+	rows.Close()
+	for itemGUID, slot := range itemSlots {
+		var enchantments sql.NullString
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(enchantments, '') FROM item_instance WHERE guid = ?", itemGUID).Scan(&enchantments); err != nil || !enchantments.Valid {
+			continue
+		}
+		parts[slot*2+1] = strconv.FormatUint(uint64(packVisibleEnchantments(enchantments.String)), 10)
+	}
+	return strings.Join(parts, " ")
+}
+
+func packVisibleEnchantments(raw string) uint32 {
+	fields := strings.Fields(raw)
+	var packed uint32
+	for _, index := range []int{0, 3} {
+		if index >= len(fields) {
+			continue
+		}
+		value, err := strconv.ParseUint(fields[index], 10, 16)
+		if err == nil {
+			packed |= uint32(value) << uint(index/3*16)
+		}
+	}
+	return packed
 }
 
 func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
@@ -940,9 +965,23 @@ func (s *session) buildEnumCharacter(ctx context.Context, packet *protocol.Buffe
 			writeEmptyEnumEquipment(packet)
 			continue
 		}
+		enchantVisual := uint32(0)
+		if itemIndex+1 < len(equipment) && s.server.Data != nil {
+			if packed, parseErr := strconv.ParseUint(equipment[itemIndex+1], 10, 32); parseErr == nil {
+				for _, enchantID := range []uint32{uint32(packed) & 0xFFFF, uint32(packed) >> 16} {
+					if enchantID == 0 {
+						continue
+					}
+					if enchant, found, enchantErr := s.server.Data.SpellItemEnchantment(enchantID); enchantErr == nil && found {
+						enchantVisual = enchant.ItemVisual
+						break
+					}
+				}
+			}
+		}
 		packet.WriteU32(uint32(displayID))
 		packet.WriteU8(uint8(inventoryType))
-		packet.WriteU32(0)
+		packet.WriteU32(enchantVisual)
 	}
 }
 

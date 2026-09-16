@@ -291,6 +291,31 @@ func TestGlyphPropertiesLoading(t *testing.T) {
 	}
 }
 
+func TestSpellItemEnchantmentLoading(t *testing.T) {
+	dbcDir := t.TempDir()
+	const fieldCount = 32
+	record := make([]uint32, fieldCount)
+	record[0] = 123
+	record[31] = 77
+	recordBytes := make([]byte, fieldCount*4)
+	for i, value := range record {
+		binary.LittleEndian.PutUint32(recordBytes[i*4:], value)
+	}
+	header := make([]byte, 20)
+	copy(header, "WDBC")
+	binary.LittleEndian.PutUint32(header[4:8], 1)
+	binary.LittleEndian.PutUint32(header[8:12], fieldCount)
+	binary.LittleEndian.PutUint32(header[12:16], fieldCount*4)
+	binary.LittleEndian.PutUint32(header[16:20], 1)
+	if err := os.WriteFile(filepath.Join(dbcDir, "SpellItemEnchantment.dbc"), append(header, append(recordBytes, 0)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	enchant, found, err := NewStore(dbcDir).SpellItemEnchantment(123)
+	if err != nil || !found || enchant.ItemVisual != 77 {
+		t.Fatalf("enchant=%+v found=%v err=%v", enchant, found, err)
+	}
+}
+
 func TestVehicleAndVehicleSeatLoading(t *testing.T) {
 	dbcDir := t.TempDir()
 
