@@ -107,7 +107,7 @@ func TestLoadAndSendPersistentAura(t *testing.T) {
 	)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec("INSERT INTO character_aura VALUES (9, 9, 0, 123, 1, 2, 50, 60000, 30000, 0)"); err != nil {
+	if _, err := db.Exec("INSERT INTO character_aura VALUES (9, 0, 0, 123, 1, 2, 50, 60000, 30000, 0)"); err != nil {
 		t.Fatal(err)
 	}
 	serverConn, clientConn := net.Pipe()
@@ -120,7 +120,7 @@ func TestLoadAndSendPersistentAura(t *testing.T) {
 		t.Fatal(err)
 	}
 	aura, ok := sess.activeAuras[123]
-	if !ok || aura.RemainingMs != 30000 || aura.DurationMs != 60000 || aura.Amount != 50 || aura.StackCount != 2 {
+	if !ok || aura.CasterGUID != 9 || aura.RemainingMs != 30000 || aura.DurationMs != 60000 || aura.Amount != 50 || aura.StackCount != 2 {
 		t.Fatalf("aura=%+v present=%v", aura, ok)
 	}
 	go sess.sendLoadedAuras()
