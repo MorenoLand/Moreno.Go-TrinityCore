@@ -775,7 +775,7 @@ func (s *session) handleNextCinematicCamera() bool {
 		s.player.Cinematic = 1
 		s.player.AtLogin &= ^uint32(atLoginFirst)
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(), "UPDATE characters SET cinematic = 1, at_login = at_login & ~1 WHERE guid = ?", s.playerGUID)
+			_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(), "UPDATE characters SET cinematic = 1, at_login = at_login & ~32 WHERE guid = ?", s.playerGUID)
 		}
 	}
 	return true
@@ -805,7 +805,7 @@ func (s *session) handleCompleteCinematic(ctx context.Context) bool {
 	s.player.Cinematic = 1
 	s.player.AtLogin &= ^uint32(atLoginFirst)
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET cinematic = 1, at_login = at_login & ~1 WHERE guid = ?", s.playerGUID); err != nil {
+		if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET cinematic = 1, at_login = at_login & ~32 WHERE guid = ?", s.playerGUID); err != nil {
 			s.debug("cinematic completion save failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
 			return false
 		}
@@ -1770,7 +1770,7 @@ func (s *session) handleCompleteMovie(ctx context.Context, payload []byte) bool 
 		s.player.Cinematic = 1
 		s.player.AtLogin &= ^uint32(atLoginFirst)
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET cinematic = 1, at_login = at_login & ~1 WHERE guid = ?", s.playerGUID)
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET cinematic = 1, at_login = at_login & ~32 WHERE guid = ?", s.playerGUID)
 		}
 	}
 	s.debug("movie completed", "account", s.accountName)
