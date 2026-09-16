@@ -623,6 +623,15 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			}
 		}
 	}
+	if s.player.AtLogin&uint32(atLoginResetSpells) != 0 {
+		if err := s.resetSpellsAtLogin(ctx); err == nil {
+			s.player.AtLogin &^= uint32(atLoginResetSpells)
+			if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET at_login = at_login & ~2 WHERE guid = ?", s.playerGUID)
+			}
+			s.sendNotification("All spells have been reset.")
+		}
+	}
 	s.loadMailState(ctx)
 	s.sendNewMailNotification(ctx)
 	s.debug("world login stage", "stage", "player-login-hooks-start", "guid", guid)

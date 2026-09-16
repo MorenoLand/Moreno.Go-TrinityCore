@@ -660,9 +660,8 @@ func (s *session) handleCmdUnlearn(ctx context.Context, args []string) {
 			"DELETE FROM character_spell WHERE guid = ? AND spell = ?",
 			s.playerGUID, spellID)
 	}
-	pkt := protocol.NewBuffer(8)
+	pkt := protocol.NewBuffer(4)
 	pkt.WriteU32(uint32(spellID))
-	pkt.WriteU32(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_REMOVED_SPELL), pkt.Bytes(), true)
 	s.sendSysMessage(fmt.Sprintf("Unlearned spell %d.", spellID))
 }

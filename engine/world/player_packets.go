@@ -42,6 +42,44 @@ func (s *session) loadPlayerPacketsState(ctx context.Context, state *playerState
 	return nil
 }
 
+func (s *session) resetSpellsAtLogin(ctx context.Context) error {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return nil
+	}
+	previous := append([]learnedSpell(nil), s.player.Spells...)
+	cdb := s.server.CharactersStore.DB
+	if _, err := cdb.ExecContext(ctx, "DELETE FROM character_spell WHERE guid = ?", s.playerGUID); err != nil && !missingTable(err) {
+		return err
+	}
+	for _, spell := range previous {
+		if spell.ID == 0 {
+			continue
+		}
+		packet := protocol.NewBuffer(4)
+		packet.WriteU32(spell.ID)
+		if err := s.write(uint16(protocol.OpcodeSMSG_REMOVED_SPELL), packet.Bytes(), true); err != nil {
+			return err
+		}
+	}
+	spells, err := s.loadLearnedSpells(ctx, s.playerGUID, s.player.Race, s.player.Class, s.player.Level)
+	if err != nil {
+		return err
+	}
+	s.player.Spells = spells
+	for _, spell := range spells {
+		if !spell.Active || spell.Disabled {
+			continue
+		}
+		packet := protocol.NewBuffer(6)
+		packet.WriteU32(spell.ID)
+		packet.WriteU16(0)
+		if err := s.write(uint16(protocol.OpcodeSMSG_LEARNED_SPELL), packet.Bytes(), true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race, class, level uint8) ([]learnedSpell, error) {
 	defaults := defaultRacialSpells(race)
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {

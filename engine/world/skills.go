@@ -350,9 +350,8 @@ func (s *session) resetTalents(ctx context.Context, free bool) bool {
 		if tEntry, ok, err := s.server.Data.Talent(talentID); err == nil && ok && uint32(rank) < uint32(len(tEntry.SpellRank)) {
 			spellID := tEntry.SpellRank[rank]
 			if spellID != 0 {
-				removed := protocol.NewBuffer(8)
+				removed := protocol.NewBuffer(4)
 				removed.WriteU32(spellID)
-				removed.WriteU32(0)
 				_ = s.write(uint16(protocol.OpcodeSMSG_REMOVED_SPELL), removed.Bytes(), true)
 			}
 		}

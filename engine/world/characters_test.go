@@ -398,6 +398,35 @@ func TestPlayerStartAllSpellsConfigGating(t *testing.T) {
 	}
 }
 
+func TestResetSpellsAtLoginRebuildsReferenceDefaults(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE character_spell (guid INTEGER, spell INTEGER, active INTEGER, disabled INTEGER, PRIMARY KEY (guid, spell))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO character_spell VALUES (9, 9999, 1, 0)"); err != nil {
+		t.Fatal(err)
+	}
+	store := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	sess := &session{server: &Server{CharactersStore: store}, playerGUID: 9, player: &playerState{GUID: 9, Race: 1, Class: 1, Level: 1, Spells: []learnedSpell{{ID: 9999, Active: true}}}}
+	if err := sess.resetSpellsAtLogin(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var oldCount, defaultCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM character_spell WHERE guid = 9 AND spell = 9999").Scan(&oldCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM character_spell WHERE guid = 9 AND spell IN (6603, 668)").Scan(&defaultCount); err != nil {
+		t.Fatal(err)
+	}
+	if oldCount != 0 || defaultCount != 2 {
+		t.Fatalf("old=%d defaults=%d spells=%v", oldCount, defaultCount, sess.player.Spells)
+	}
+}
+
 func TestLearnedSpellsHideFutureSpellLevels(t *testing.T) {
 	cdb, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
