@@ -542,39 +542,45 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(updates.Opcode, updates.Payload.Bytes(), true); err != nil {
 		return false
 	}
-	// Concurrently query nearby creatures and gameobjects
-	var nearbyCreatures, nearbyGameObjects *protocol.Packet
-	var creatureCount, goCount int
-	var creatureErr, goErr error
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		nearbyCreatures, creatureCount, creatureErr = s.server.buildNearbyCreatureUpdates(ctx, state)
-	}()
-	go func() {
-		defer wg.Done()
-		nearbyGameObjects, goCount, goErr = s.server.buildNearbyGameObjectUpdates(ctx, state)
-	}()
-	wg.Wait()
-
-	if creatureErr != nil {
-		s.debug("nearby creature load failed", "account", s.accountName, "error", creatureErr)
-		return false
-	} else if nearbyCreatures != nil {
-		if err := s.write(nearbyCreatures.Opcode, nearbyCreatures.Payload.Bytes(), true); err != nil {
+	sendNearbyObjects := func() bool {
+		var nearbyCreatures, nearbyGameObjects *protocol.Packet
+		var creatureCount, goCount int
+		var creatureErr, goErr error
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			nearbyCreatures, creatureCount, creatureErr = s.server.buildNearbyCreatureUpdates(ctx, state)
+		}()
+		go func() {
+			defer wg.Done()
+			nearbyGameObjects, goCount, goErr = s.server.buildNearbyGameObjectUpdates(ctx, state)
+		}()
+		wg.Wait()
+		if creatureErr != nil {
+			s.debug("nearby creature load failed", "account", s.accountName, "error", creatureErr)
 			return false
 		}
-		s.debug("nearby creatures sent", "account", s.accountName, "count", creatureCount)
+		if nearbyCreatures != nil {
+			if err := s.write(nearbyCreatures.Opcode, nearbyCreatures.Payload.Bytes(), true); err != nil {
+				return false
+			}
+			s.debug("nearby creatures sent", "account", s.accountName, "count", creatureCount)
+		}
+		if goErr != nil {
+			s.debug("nearby gameobjects load failed", "account", s.accountName, "error", goErr)
+			return false
+		}
+		if nearbyGameObjects != nil {
+			if err := s.write(nearbyGameObjects.Opcode, nearbyGameObjects.Payload.Bytes(), true); err != nil {
+				return false
+			}
+			s.debug("nearby gameobjects sent", "account", s.accountName, "count", goCount)
+		}
+		return true
 	}
-	if goErr != nil {
-		s.debug("nearby gameobjects load failed", "account", s.accountName, "error", goErr)
+	if !sendNearbyObjects() || !sendNearbyObjects() {
 		return false
-	} else if nearbyGameObjects != nil {
-		if err := s.write(nearbyGameObjects.Opcode, nearbyGameObjects.Payload.Bytes(), true); err != nil {
-			return false
-		}
-		s.debug("nearby gameobjects sent", "account", s.accountName, "count", goCount)
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), buildInitWorldStates(state), true); err != nil {
 		return false
