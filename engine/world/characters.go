@@ -542,6 +542,10 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(updates.Opcode, updates.Payload.Bytes(), true); err != nil {
 		return false
 	}
+	if err := s.sendInventoryItems(ctx); err != nil {
+		s.debug("inventory load failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
+		return false
+	}
 	sendNearbyObjects := func() bool {
 		var nearbyCreatures, nearbyGameObjects *protocol.Packet
 		var creatureCount, goCount int
@@ -601,10 +605,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		return false
 	}
 	s.sendLoadedAuras()
-	if err := s.sendInventoryItems(ctx); err != nil {
-		s.debug("inventory load failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
-		return false
-	}
 	s.questStatusSent = true
 	if !s.sendQuestgiverStatusMultiple(ctx) || !s.sendTaxiNodeStatusMultiple(ctx) {
 		return false
