@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -71,7 +72,7 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 	}
 	key := channelKey(name)
 	flags := channelFlags(channelID, name)
-	if flags&channelFlagCity != 0 && !isCityZone(s.player.Zone) {
+	if flags&channelFlagCity != 0 && !s.isCityZone(s.player.Zone) {
 		s.debug("city channel join rejected: outside city zone", "account", s.accountName, "zone", s.player.Zone, "channel", name)
 		return s.sendChannelNotify(channelNotInAreaNotice, name, nil) == nil
 	}
@@ -370,12 +371,15 @@ func (s *Server) removeSessionChannels(member *session) {
 	}
 }
 
-func isCityZone(zone uint32) bool {
-	switch zone {
-	case 1519, 1537, 1657, 3557, 1637, 1638, 1497, 3487, 3703, 4395, 4375, 4378, 4742, 4814, 4815:
-		return true
+func (s *session) isCityZone(zone uint32) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return false
 	}
-	return false
+	area, found, err := s.server.Data.Area(zone)
+	if err != nil || !found {
+		return false
+	}
+	return area.Flags&wotlk.AreaFlagSlaveCapital != 0
 }
 
 func (s *session) updateLocalChannels(newZone uint32) {
@@ -383,7 +387,7 @@ func (s *session) updateLocalChannels(newZone uint32) {
 		return
 	}
 	s.player.Zone = newZone
-	if !isCityZone(newZone) {
+	if !s.isCityZone(newZone) {
 		// Player left city: remove from all city-only channels (Trade, GuildRecruitment)
 		type departure struct {
 			name  string

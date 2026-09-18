@@ -147,14 +147,16 @@ type WorldSafeLoc struct {
 }
 
 // AreaTableEntry mirrors AreaTableEntry (DBCStructure.h): fields ID (u32),
-// ContinentID/map (u32), ParentAreaID/zone (u32), AreaBit (u32), and Flags (u32).
+// ContinentID/map (u32), ParentAreaID/zone (u32), AreaBit (u32), Flags (u32),
+// and FactionGroupMask (u32).
 type AreaTableEntry struct {
-	ID           uint32
-	ContinentID  uint32
-	ParentAreaID uint32
-	AreaBit      uint32
-	Flags        uint32
-	Name         string
+	ID               uint32
+	ContinentID      uint32
+	ParentAreaID     uint32
+	AreaBit          uint32
+	Flags            uint32
+	FactionGroupMask uint32
+	Name             string
 }
 
 // TalentEntry mirrors TrinityCore's TalentEntry (DBCStructure.h:1663).
@@ -209,6 +211,7 @@ func (m MapEntry) IsBattleArena() bool {
 }
 
 const (
+	AreaFlagSlaveCapital uint32 = 0x00000008 // AREA_FLAG_SLAVE_CAPITAL (DBCEnums.h:250)
 	AreaFlagWintergrasp2 uint32 = 0x08000000 // AREA_FLAG_WINTERGRASP_2 (DBCEnums.h:274)
 )
 
@@ -725,14 +728,16 @@ func (s *Store) Area(id uint32) (AreaTableEntry, bool, error) {
 	if err != nil {
 		return AreaTableEntry{}, false, err
 	}
+	factionGroupMask, _ := record.Uint32(28)
 	name, _ := record.String(11)
 	return AreaTableEntry{
-		ID:           id,
-		ContinentID:  continentID,
-		ParentAreaID: parentAreaID,
-		AreaBit:      areaBit,
-		Flags:        flags,
-		Name:         name,
+		ID:               id,
+		ContinentID:      continentID,
+		ParentAreaID:     parentAreaID,
+		AreaBit:          areaBit,
+		Flags:            flags,
+		FactionGroupMask: factionGroupMask,
+		Name:             name,
 	}, true, nil
 }
 
