@@ -710,10 +710,24 @@ func (s *session) sendLoginMovementStates() error {
 	auras := s.loadedAuras()
 	state := protocol.NewBuffer(64)
 	rooted := false
+	stunned := false
 	for _, aura := range auras {
-		if aura != nil && (aura.AuraType == auraRoot || aura.AuraType == auraStun) {
+		if aura == nil {
+			continue
+		}
+		if aura.AuraType == auraRoot {
 			rooted = true
-			break
+		}
+		if aura.AuraType == auraStun {
+			stunned = true
+		}
+	}
+	if stunned {
+		packet := protocol.NewBuffer(packedGUIDSize(s.playerGUID) + 4)
+		packet.WritePackedGUID(s.playerGUID)
+		packet.WriteU32(0)
+		if err := s.write(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT), packet.Bytes(), true); err != nil {
+			return err
 		}
 	}
 	if rooted {
