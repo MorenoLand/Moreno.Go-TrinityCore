@@ -149,6 +149,8 @@ type session struct {
 	player                *playerState
 	logoutAt              time.Time
 	writeMu               sync.Mutex
+	captureUpdatePackets  bool
+	capturedUpdatePackets []*protocol.Packet
 	selection             uint64
 	auras                 map[uint32]struct{}
 	auraSlots             map[uint32]uint8
@@ -3170,6 +3172,10 @@ func (s *session) write(opcode uint16, payload []byte, encrypt bool) error {
 		}
 		opcode = uint16(packet.Opcode)
 		payload = packet.Data
+	}
+	if s != nil && s.captureUpdatePackets && (opcode == uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) || opcode == uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT)) {
+		s.capturedUpdatePackets = append(s.capturedUpdatePackets, protocol.PacketFrom(opcode, append([]byte(nil), payload...)))
+		return nil
 	}
 	if s != nil && s.server != nil && s.server.TraceRecorder != nil {
 		s.server.TraceRecorder.Record(protocoltrace.ServerToClient, uint32(opcode), payload, opcodeName(uint32(opcode)))
