@@ -627,7 +627,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.sendLoadedGroup()
 	s.server.broadcastFriendStatus(s.playerGUID, friendsResultOnline, uint32(state.Zone), uint32(state.Level), uint32(state.Class))
 	if state.PlayerFlags&playerFlagGhost != 0 {
-		s.sendLoadedCorpse(ctx)
+		if !s.sendLoadedCorpse(ctx) {
+			s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK))
+		}
 	}
 	s.continueTaxiFlight()
 	// Spawn active pet if one was active at logout (slot 0)

@@ -587,10 +587,10 @@ func (s *session) loadCorpseObject(ctx context.Context) (corpseObjectState, bool
 	return corpse, true
 }
 
-func (s *session) sendLoadedCorpse(ctx context.Context) {
+func (s *session) sendLoadedCorpse(ctx context.Context) bool {
 	corpse, ok := s.loadCorpseObject(ctx)
 	if !ok {
-		return
+		return false
 	}
 	flags := corpse.Flags
 	if flags == 0 {
@@ -607,6 +607,7 @@ func (s *session) sendLoadedCorpse(ctx context.Context) {
 	}
 	s.sendCorpseReclaimDelay(s.corpseReclaimDelaySeconds(corpse.CorpseType == corpseTypePvP))
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK))
+	return true
 }
 
 func (s *session) prepareLoginResurrection(ctx context.Context, state *playerState) {
