@@ -542,7 +542,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(updates.Opcode, updates.Payload.Bytes(), true); err != nil {
 		return false
 	}
-	if err := s.sendInventoryItems(ctx); err != nil {
+	if err := s.sendInventoryItemsBeforeMap(ctx); err != nil {
 		s.debug("inventory load failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
 		return false
 	}
@@ -605,6 +605,10 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		return false
 	}
 	s.sendLoadedAuras()
+	if err := s.sendInventoryDurations(ctx); err != nil {
+		s.debug("inventory duration load failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
+		return false
+	}
 	s.questStatusSent = true
 	if !s.sendQuestgiverStatusMultiple(ctx) || !s.sendTaxiNodeStatusMultiple(ctx) {
 		return false

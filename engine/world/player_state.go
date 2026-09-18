@@ -1810,7 +1810,25 @@ func (s *session) sendItemCreate(itemGUID uint64, itemEntry, count uint32, bag, 
 	return s.write(packet.Opcode, packet.Payload.Bytes(), true)
 }
 
+const (
+	inventoryUpdateAll uint8 = iota
+	inventoryUpdateCreateOnly
+	inventoryUpdateDurationsOnly
+)
+
 func (s *session) sendInventoryItems(ctx context.Context) error {
+	return s.sendInventoryItemsMode(ctx, inventoryUpdateAll)
+}
+
+func (s *session) sendInventoryItemsBeforeMap(ctx context.Context) error {
+	return s.sendInventoryItemsMode(ctx, inventoryUpdateCreateOnly)
+}
+
+func (s *session) sendInventoryDurations(ctx context.Context) error {
+	return s.sendInventoryItemsMode(ctx, inventoryUpdateDurationsOnly)
+}
+
+func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error {
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return nil
@@ -1963,10 +1981,12 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 		} else {
 			itemState.Durability = itemDurability(itemGUID)
 		}
-		block := buildItemCreateBlockForLocationWithState(fullGUID, uint32(itemEntry), uint32(count), s.playerGUID, containedGUID, cSlots, contents[int64(fullGUID)], itemState)
-		updates.AddUpdateBlock(block)
+		if mode != inventoryUpdateDurationsOnly {
+			block := buildItemCreateBlockForLocationWithState(fullGUID, uint32(itemEntry), uint32(count), s.playerGUID, containedGUID, cSlots, contents[int64(fullGUID)], itemState)
+			updates.AddUpdateBlock(block)
+		}
 
-		if cSlots > 0 {
+		if cSlots > 0 && mode != inventoryUpdateDurationsOnly {
 			valBlock := buildContainerValuesUpdate(fullGUID, cSlots, contents[int64(fullGUID)])
 			updates.AddUpdateBlock(valBlock)
 		}
@@ -1986,8 +2006,10 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 			fields[priceField] = bb.Price
 			fields[timeField] = bb.Timestamp
 			cSlots, maxD := itemTemplateInfo(int64(bb.ItemEntry))
-			block := buildItemCreateBlockForLocationWithDurability(bb.ItemGUID, bb.ItemEntry, bb.Count, s.playerGUID, s.playerGUID, cSlots, nil, maxD, maxD)
-			updates.AddUpdateBlock(block)
+			if mode != inventoryUpdateDurationsOnly {
+				block := buildItemCreateBlockForLocationWithDurability(bb.ItemGUID, bb.ItemEntry, bb.Count, s.playerGUID, s.playerGUID, cSlots, nil, maxD, maxD)
+				updates.AddUpdateBlock(block)
+			}
 		} else {
 			fields[priceField] = 0
 			fields[timeField] = 0
@@ -2021,29 +2043,33 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 			fields[playerVisibleItemStart+slot*2+1] = enchant
 		}
 	}
-	if len(fields) > 0 {
+	if len(fields) > 0 && mode != inventoryUpdateDurationsOnly {
 		valBlock := buildPlayerValuesBlock(s.playerGUID, fields)
 		if valBlock != nil {
 			updates.AddUpdateBlock(valBlock)
 		}
 	}
-	if updates.HasData() {
+	if mode != inventoryUpdateDurationsOnly && updates.HasData() {
 		packet, err := updates.BuildPacket(0)
 		if err == nil && packet != nil {
 			_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 		}
 	}
-	for _, enchant := range enchantDurations {
-		if err := s.write(uint16(protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE), protocol.BuildItemEnchantTimeUpdate(s.playerGUID, enchant.itemGUID, enchant.slot, enchant.duration), true); err != nil {
-			return err
+	if mode != inventoryUpdateCreateOnly {
+		for _, enchant := range enchantDurations {
+			if err := s.write(uint16(protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE), protocol.BuildItemEnchantTimeUpdate(s.playerGUID, enchant.itemGUID, enchant.slot, enchant.duration), true); err != nil {
+				return err
+			}
 		}
 	}
-	for _, item := range items {
-		if item.duration <= 0 {
-			continue
-		}
-		if err := s.write(uint16(protocol.OpcodeSMSG_ITEM_TIME_UPDATE), protocol.BuildItemTimeUpdate(uint64(item.itemGUID)|(uint64(0x4000)<<48), toUint32(item.duration)), true); err != nil {
-			return err
+	if mode != inventoryUpdateCreateOnly {
+		for _, item := range items {
+			if item.duration <= 0 {
+				continue
+			}
+			if err := s.write(uint16(protocol.OpcodeSMSG_ITEM_TIME_UPDATE), protocol.BuildItemTimeUpdate(uint64(item.itemGUID)|(uint64(0x4000)<<48), toUint32(item.duration)), true); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
