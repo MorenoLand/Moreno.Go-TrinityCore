@@ -23,6 +23,8 @@ const (
 	unitFieldBytes0                             = 23 // UNIT_FIELD_BYTES_0: Race, Class, Gender, PowerType
 	unitFieldHealth                             = 24
 	unitFieldPower1                             = 25
+	unitFieldFlags2                             = 60
+	unitFieldHoverHeight                        = 146
 	unitFieldLevel                              = 54
 	unitFieldFaction                            = 55
 	unitFieldFlags                              = 59
@@ -106,6 +108,7 @@ const (
 	playerFieldModHealingDonePct                = 1194
 	playerFieldCombatRating1                    = 1231 // 1231..1255
 	unitFlagPlayerControlled             uint32 = 0x00000008
+	unitFlag2RegeneratePower             uint32 = 0x00000800
 	unitFlagInCombat                     uint32 = 0x00080000
 )
 
@@ -1297,6 +1300,8 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 		class = 1
 	}
 	values[unitFieldBytes0] = uint32(race) | uint32(class)<<8 | uint32(state.Gender)<<16 | uint32(powerType)<<24
+	values[unitFieldFlags2] = unitFlag2RegeneratePower
+	values[unitFieldHoverHeight] = math.Float32bits(1)
 	values[unitFieldBytes1] = uint32(state.StandState)
 	values[unitFieldFaction] = s.raceFaction(state.Race)
 	values[unitFieldFlags] = unitFlagPlayerControlled | state.UnitFlags
