@@ -592,7 +592,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	s.updateLocalChannels(state.Zone)
 	s.exploreZone(ctx, state.Zone)
-	if err := s.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), buildInitWorldStates(state), true); err != nil {
+	if err := s.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), buildInitWorldStates(state, s.server.Config.ArenaSeasonID, s.server.Config.ArenaSeasonInProgress), true); err != nil {
 		return false
 	}
 	s.lastStreamX, s.lastStreamY, s.lastStreamZ = state.X, state.Y, state.Z
@@ -2268,9 +2268,19 @@ func buildLearnedDanceMoves() []byte {
 	return packet.Bytes()
 }
 
-func buildInitWorldStates(state playerState) []byte {
-	worldStates := [][2]int32{{2264, 0}, {2263, 0}, {2262, 0}, {2261, 0}, {2260, 0}, {2259, 0}, {3191, 0}, {3901, 0}}
-	if state.Map == 489 {
+func buildInitWorldStates(state playerState, arenaSeasonID uint32, arenaSeasonInProgress bool) []byte {
+	season := int32(0)
+	previousSeason := int32(0)
+	if arenaSeasonInProgress {
+		season = int32(arenaSeasonID)
+		if arenaSeasonID > 0 {
+			previousSeason = int32(arenaSeasonID - 1)
+		}
+	}
+	worldStates := [][2]int32{{2264, 0}, {2263, 0}, {2262, 0}, {2261, 0}, {2260, 0}, {2259, 0}, {3191, season}, {3901, previousSeason}}
+	if state.Map == 530 {
+		worldStates = append(worldStates, [2]int32{2495, 0}, [2]int32{2493, 15}, [2]int32{2491, 15})
+	} else if state.Map == 489 {
 		worldStates = append(worldStates,
 			[2]int32{1581, 0}, // WS_FLAG_CAPTURES_ALLIANCE
 			[2]int32{1582, 0}, // WS_FLAG_CAPTURES_HORDE
