@@ -582,6 +582,8 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if !sendNearbyObjects() || !sendNearbyObjects() {
 		return false
 	}
+	s.updateLocalChannels(state.Zone)
+	s.exploreZone(ctx, state.Zone)
 	if err := s.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), buildInitWorldStates(state), true); err != nil {
 		return false
 	}
