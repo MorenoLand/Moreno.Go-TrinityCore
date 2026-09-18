@@ -14,6 +14,42 @@ const (
 	factionFlagVisible         uint8 = 0x01
 )
 
+func (s *session) applyStartAllReputation(ctx context.Context) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	factions := []uint32{942, 935, 936, 1011, 970, 967, 989, 932, 934, 1038, 1077, 1106, 1104, 1090, 1098, 1156, 1073, 1105, 1119, 1091}
+	if teamForRace(s.player.Race) == 0 {
+		factions = append(factions, 72, 47, 69, 930, 730, 978, 54, 946, 1037, 1068, 1126, 1094, 1050)
+	} else {
+		factions = append(factions, 76, 68, 81, 911, 729, 941, 530, 947, 1052, 1067, 1124, 1064, 1085)
+	}
+	for _, factionID := range factions {
+		reputation, found, err := s.server.Data.Reputation(factionID, s.player.Race, s.player.Class)
+		if err != nil || !found || reputation.ReputationList < 0 {
+			continue
+		}
+		index := -1
+		for i := range s.player.Reputations {
+			if s.player.Reputations[i].FactionID == factionID {
+				index = i
+				break
+			}
+		}
+		if index < 0 {
+			s.player.Reputations = append(s.player.Reputations, playerReputation{FactionID: factionID, ListID: uint32(reputation.ReputationList), Base: reputation.BaseStanding, Flags: reputation.DefaultFlags})
+			index = len(s.player.Reputations) - 1
+		}
+		s.player.Reputations[index].ListID = uint32(reputation.ReputationList)
+		s.player.Reputations[index].Standing = 42999
+		if s.player.Reputations[index].Flags == 0 {
+			s.player.Reputations[index].Flags = reputation.DefaultFlags
+		}
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_reputation (guid, faction, standing, flags) VALUES (?, ?, ?, ?)", s.playerGUID, factionID, s.player.Reputations[index].Standing, s.player.Reputations[index].Flags)
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_INITIALIZE_FACTIONS), buildInitialReputations(*s.player), true)
+}
+
 // handleSetWatchedFaction mirrors WorldSession::HandleSetWatchedFactionOpcode
 // (CharacterHandler.cpp): read the reputation list index and store it in
 // PLAYER_FIELD_WATCHED_FACTION_INDEX, pushing the field change to the owning

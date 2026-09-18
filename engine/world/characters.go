@@ -686,6 +686,16 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 				s.finishSpellCast(ctx, 0, spellID, spell, target)
 			}
 		}
+		if s.server.Config.PlayerStartMapsExplored {
+			for i := range s.player.ExploredZones {
+				s.player.ExploredZones[i] = ^uint32(0)
+			}
+			s.persistExploredZones(ctx)
+			s.sendPlayerUpdate()
+		}
+		if s.server.Config.PlayerStartAllReputation {
+			s.applyStartAllReputation(ctx)
+		}
 	}
 	s.loadMailState(ctx)
 	s.sendNewMailNotification(ctx)
