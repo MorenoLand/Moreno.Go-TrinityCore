@@ -748,14 +748,24 @@ func (s *session) sendLoginFlightState() error {
 	if s == nil || s.player == nil {
 		return nil
 	}
-	for _, aura := range s.loadedAuras() {
-		if aura == nil || (aura.AuraType != 201 && aura.AuraType != 207) {
+	auras := s.loadedAuras()
+	for _, auraType := range []uint32{201, 207} {
+		found := false
+		for _, aura := range auras {
+			if aura != nil && aura.AuraType == auraType {
+				found = true
+				break
+			}
+		}
+		if !found {
 			continue
 		}
 		packet := protocol.NewBuffer(packedGUIDSize(s.playerGUID) + 4)
 		packet.WritePackedGUID(s.playerGUID)
 		packet.WriteU32(0)
-		return s.write(uint16(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY), packet.Bytes(), true)
+		if err := s.write(uint16(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY), packet.Bytes(), true); err != nil {
+			return err
+		}
 	}
 	return nil
 }
