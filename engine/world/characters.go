@@ -539,11 +539,11 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err != nil {
 		return false
 	}
-	if err := s.write(updates.Opcode, updates.Payload.Bytes(), true); err != nil {
-		return false
-	}
 	if err := s.sendInventoryItemsBeforeMap(ctx); err != nil {
 		s.debug("inventory load failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
+		return false
+	}
+	if err := s.write(updates.Opcode, updates.Payload.Bytes(), true); err != nil {
 		return false
 	}
 	sendNearbyObjects := func() bool {
