@@ -668,6 +668,10 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			_ = s.sendTalentsInfo(true)
 		}
 	}
+	if s.server.Config.GameType == 16 && s.security == 0 && s.player.ExtraFlags&playerExtraGMOn == 0 && s.player.PlayerFlags&playerFlagGM == 0 && s.player.PlayerFlags&playerFlagResting == 0 {
+		s.player.PVPFlags |= 0x04
+		s.sendPlayerUpdate()
+	}
 	if s.player.AtLogin&uint32(atLoginResetSpells) != 0 {
 		if err := s.resetSpellsAtLogin(ctx); err == nil {
 			s.player.AtLogin &^= uint32(atLoginResetSpells)

@@ -203,6 +203,7 @@ type playerState struct {
 	Cooldowns            []spellCooldown
 	Equipment            string
 	SheathState          uint8
+	PVPFlags             uint8
 	TaxiMask             [taxiMaskSize]uint32
 	QuestLog             [playerQuestLogSlots]questLogEntry
 	MountDisplayID       uint32
@@ -1328,7 +1329,7 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 		values[playerExploredZonesStart+i] = state.ExploredZones[i]
 	}
 	values[unitFieldPlayerBytes] = uint32(state.Skin) | uint32(state.Face)<<8 | uint32(state.HairStyle)<<16 | uint32(state.HairColor)<<24
-	values[unitFieldBytes2] = uint32(state.SheathState)
+	values[unitFieldBytes2] = uint32(state.SheathState) | uint32(state.PVPFlags)<<8
 	values[unitFieldPlayerBytes2] = uint32(state.FacialStyle) | uint32(state.BankBagSlots)<<16 | uint32(state.RestState)<<24
 	values[unitFieldPlayerBytes3] = uint32(state.Gender) | uint32(uint8(state.DrunkenState))<<8
 	values[unitFieldGuildID] = state.GuildID
