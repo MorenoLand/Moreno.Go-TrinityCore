@@ -565,21 +565,25 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			s.debug("nearby creature load failed", "account", s.accountName, "error", creatureErr)
 			return false
 		}
-		if nearbyCreatures != nil {
-			if err := s.write(nearbyCreatures.Opcode, nearbyCreatures.Payload.Bytes(), true); err != nil {
-				return false
-			}
-			s.debug("nearby creatures sent", "account", s.accountName, "count", creatureCount)
-		}
 		if goErr != nil {
 			s.debug("nearby gameobjects load failed", "account", s.accountName, "error", goErr)
 			return false
 		}
-		if nearbyGameObjects != nil {
-			if err := s.write(nearbyGameObjects.Opcode, nearbyGameObjects.Payload.Bytes(), true); err != nil {
+		packet, err := protocol.MergeUpdatePackets(nearbyCreatures, nearbyGameObjects)
+		if err != nil {
+			s.debug("nearby visibility merge failed", "account", s.accountName, "error", err)
+			return false
+		}
+		if packet != nil {
+			if err := s.write(packet.Opcode, packet.Payload.Bytes(), true); err != nil {
 				return false
 			}
-			s.debug("nearby gameobjects sent", "account", s.accountName, "count", goCount)
+			if nearbyCreatures != nil {
+				s.debug("nearby creatures sent", "account", s.accountName, "count", creatureCount)
+			}
+			if nearbyGameObjects != nil {
+				s.debug("nearby gameobjects sent", "account", s.accountName, "count", goCount)
+			}
 		}
 		return true
 	}
