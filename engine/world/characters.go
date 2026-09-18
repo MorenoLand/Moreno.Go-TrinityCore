@@ -650,18 +650,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			_ = s.sendTalentsInfo(true)
 		}
 	}
-	if s.player.AtLogin&uint32(atLoginResetTalents) != 0 {
-		hadTalents := len(s.player.Talents) != 0
-		if s.resetTalents(ctx, true) {
-			if !hadTalents {
-				_ = s.sendTalentsInfo(false)
-			}
-			s.player.AtLogin &^= uint32(atLoginResetTalents)
-			if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET at_login = at_login & ~4 WHERE guid = ?", s.playerGUID)
-			}
-		}
-	}
 	if s.player.AtLogin&uint32(atLoginResetSpells) != 0 {
 		if err := s.resetSpellsAtLogin(ctx); err == nil {
 			s.player.AtLogin &^= uint32(atLoginResetSpells)
@@ -669,6 +657,15 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET at_login = at_login & ~2 WHERE guid = ?", s.playerGUID)
 			}
 			s.sendNotification("All spells have been reset.")
+		}
+	}
+	if s.player.AtLogin&uint32(atLoginResetTalents) != 0 {
+		if s.resetTalents(ctx, true) {
+			_ = s.sendTalentsInfo(false)
+			s.player.AtLogin &^= uint32(atLoginResetTalents)
+			if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET at_login = at_login & ~4 WHERE guid = ?", s.playerGUID)
+			}
 		}
 	}
 	if s.player.AtLogin&uint32(atLoginFirst) != 0 {
