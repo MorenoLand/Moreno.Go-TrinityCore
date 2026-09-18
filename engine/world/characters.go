@@ -533,6 +533,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			}
 		}
 	}
+	if state.AtLogin&uint32(atLoginFirst) != 0 && s.server.Config.PlayerStartString != "" {
+		s.sendSysMessage(s.server.Config.PlayerStartString)
+	}
 	s.lastFallZ = state.Z
 	s.lastFallTime = 0
 	updates, err := s.server.buildPlayerUpdate(state)
