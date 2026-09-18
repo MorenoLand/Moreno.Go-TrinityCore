@@ -669,6 +669,10 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		}
 	}
 	if s.player.AtLogin&uint32(atLoginFirst) != 0 {
+		s.player.AtLogin &^= uint32(atLoginFirst)
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET at_login = at_login & ~32 WHERE guid = ?", s.playerGUID)
+		}
 		for _, spellID := range s.loadFirstLoginCastSpellIDs(ctx, s.player.Race, s.player.Class) {
 			if s.server.Data == nil {
 				continue
@@ -677,10 +681,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 				target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: s.playerGUID}
 				s.finishSpellCast(ctx, 0, spellID, spell, target)
 			}
-		}
-		s.player.AtLogin &^= uint32(atLoginFirst)
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET at_login = at_login & ~32 WHERE guid = ?", s.playerGUID)
 		}
 	}
 	s.loadMailState(ctx)
