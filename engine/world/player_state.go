@@ -978,7 +978,16 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 		COALESCE(trans_o, 0), COALESCE(transguid, 0) FROM characters WHERE guid = ?`, state.GUID).Scan(&transportX, &transportY, &transportZ, &transportO, &transportGUID); err == nil {
 		state.TransportX, state.TransportY, state.TransportZ, state.TransportO = transportX, transportY, transportZ, transportO
 		if transportGUID > 0 {
-			state.TransportGUID = uint64(transportGUID)
+			if spawn, found := s.server.transportSpawnForGUID(uint64(transportGUID)); found && math.Abs(float64(transportX)) <= 250 && math.Abs(float64(transportY)) <= 250 && math.Abs(float64(transportZ)) <= 250 {
+				state.TransportGUID = gameObjectGUID(spawn.GUID, spawn.Entry)
+				state.TransportSeat = -1
+				state.X, state.Y, state.Z, state.Orientation = CalculatePassengerPosition(spawn.X, spawn.Y, spawn.Z, spawn.Orientation, transportX, transportY, transportZ, transportO)
+				state.Map = spawn.Map
+			} else {
+				state.TransportGUID = 0
+				state.TransportX, state.TransportY, state.TransportZ, state.TransportO = 0, 0, 0, 0
+				state.Map, state.X, state.Y, state.Z = state.HomebindMap, state.HomebindX, state.HomebindY, state.HomebindZ
+			}
 		}
 	}
 	var bankSlots int64
@@ -1499,13 +1508,26 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	block.WritePackedGUID(state.GUID)
 	block.WriteU8(4)
 	block.WriteU16(0x0061)
-	block.WriteU32(0)
+	if state.TransportGUID != 0 {
+		block.WriteU32(movementOnTransport)
+	} else {
+		block.WriteU32(0)
+	}
 	block.WriteU16(0)
 	block.WriteU32(uint32(time.Now().UnixMilli()))
 	block.WriteF32(state.X)
 	block.WriteF32(state.Y)
 	block.WriteF32(state.Z)
 	block.WriteF32(state.Orientation)
+	if state.TransportGUID != 0 {
+		block.WritePackedGUID(state.TransportGUID)
+		block.WriteF32(state.TransportX)
+		block.WriteF32(state.TransportY)
+		block.WriteF32(state.TransportZ)
+		block.WriteF32(state.TransportO)
+		block.WriteU32(0)
+		block.WriteI8(state.TransportSeat)
+	}
 	block.WriteU32(0)
 	for _, speed := range []float32{2.5, 7, 4.5, 4.722222, 2.5, 7, 4.5, 3.141594, 3.14} {
 		block.WriteF32(speed)

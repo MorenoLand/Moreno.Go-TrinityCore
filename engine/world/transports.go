@@ -81,6 +81,24 @@ func (s *Server) loadContinentTransports(ctx context.Context) {
 	}
 }
 
+func (s *Server) transportSpawnForGUID(guid uint64) (gameObjectSpawn, bool) {
+	if s == nil {
+		return gameObjectSpawn{}, false
+	}
+	s.transportMu.Lock()
+	defer s.transportMu.Unlock()
+	for _, transport := range s.transports {
+		if transport == nil {
+			continue
+		}
+		rawGUID := gameObjectGUID(transport.Spawn.GUID, transport.Spawn.Entry)
+		if guid == uint64(transport.Spawn.GUID) || guid == rawGUID {
+			return transport.Spawn, true
+		}
+	}
+	return gameObjectSpawn{}, false
+}
+
 func (s *Server) loadTransportPassengers(ctx context.Context, transport *continentTransport) {
 	if s == nil || transport == nil || transport.TransportMapID == 0 || s.WorldStore == nil || s.WorldStore.DB == nil {
 		return
