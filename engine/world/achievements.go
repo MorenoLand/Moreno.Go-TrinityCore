@@ -1118,8 +1118,11 @@ func (s *session) completeAchievement(achievementID uint32) {
 	packet := protocol.NewBuffer(24)
 	packet.WritePackedGUID(s.playerGUID)
 	packet.WriteU32(achievementID)
-	packet.WriteU32(now)
-	packet.WriteU32(1) // initial
+	packet.WritePackedTime(time.Unix(int64(now), 0))
+	packet.WriteU32(0)
+	if s.playerLoading {
+		return
+	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_ACHIEVEMENT_EARNED), packet.Bytes(), true)
 	if s.server != nil {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ACHIEVEMENT_EARNED), packet.Bytes(), s)

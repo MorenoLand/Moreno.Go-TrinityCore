@@ -399,7 +399,9 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 
 func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (success bool) {
 	var guid uint64
+	s.playerLoading = true
 	defer func() {
+		s.playerLoading = false
 		if !success {
 			s.debug("player login failed", "account", s.accountName, "guid", guid)
 		}
@@ -502,11 +504,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.loadAchievementState(ctx)
 	s.loadExploredZones(ctx)
 	s.sendAllAchievementData()
-	s.updateAchievementCriteria(criteriaTypeOnLogin, 0, 1)
-	s.setAchievementCriteria(criteriaTypeKnownFactions, 0, uint32(len(state.Reputations)))
-	if s.player.ChosenTitle > 0 {
-		s.updateAchievementCriteria(criteriaTypeOwnRank, s.player.ChosenTitle, 1)
-	}
 	s.debug("world login stage", "stage", "equipment-set-list-start", "guid", guid)
 	s.sendEquipmentSetList(ctx)
 	s.debug("world login stage", "stage", "equipment-set-list-complete", "guid", guid)
@@ -798,6 +795,12 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	if s.player.PlayerFlags&playerFlagGM != 0 || s.player.ExtraFlags&playerExtraGMOn != 0 {
 		s.sendNotification("GM mode is ON")
+	}
+	s.playerLoading = false
+	s.updateAchievementCriteria(criteriaTypeOnLogin, 0, 1)
+	s.setAchievementCriteria(criteriaTypeKnownFactions, 0, uint32(len(state.Reputations)))
+	if s.player.ChosenTitle > 0 {
+		s.updateAchievementCriteria(criteriaTypeOwnRank, s.player.ChosenTitle, 1)
 	}
 	s.debug("world login stage", "stage", "player-login-hooks-start", "guid", guid)
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventLogin, s.luaPlayer())

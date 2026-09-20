@@ -149,6 +149,7 @@ type session struct {
 	legitimate            map[uint64]struct{}
 	mounts                *MountState
 	playerGUID            uint64
+	playerLoading         bool
 	playerLoaded          bool
 	player                *playerState
 	visiblePlayersMu      sync.Mutex
