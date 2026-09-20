@@ -34,3 +34,5 @@ This matrix is based on the pinned TrinityCore checkout at `dcdbc0c5d88eb96f412f
 | 28 | release/build/test owners across reference and Go repositories | `scripts`, `go.mod`, `docs`, remote `main` | signed pushes, source compilation, vet, build; race environment blocked | open until 1–27 acceptance gates pass |
 
 The first open behavioral gate remains the complete source-defined login packet/update-mask/state comparison in items 4–5; later rows are not promoted by inventory counts.
+
+The login regression verifier includes an executable self-check (`go run ./tools/logincheck -self-check`) for the pre-`SMSG_LOGIN_VERIFY_WORLD` achievement-packet ordering rule (`a8c2896`).
