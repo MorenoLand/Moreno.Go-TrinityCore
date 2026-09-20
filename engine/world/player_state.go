@@ -946,12 +946,26 @@ func (s *session) loadPlayerReputations(ctx context.Context, state *playerState)
 		if err := rows.Scan(&faction, &standing, &flags); err != nil {
 			continue
 		}
-		index, found := byFaction[uint32(faction)]
+		factionID := uint32(faction)
+		listID := factionID
+		base := int32(0)
+		defaultFlags := uint8(0)
+		if s.server.Data != nil {
+			reputation, found, repErr := s.server.Data.Reputation(factionID, state.Race, state.Class)
+			if repErr != nil || !found || reputation.ReputationList < 0 || reputation.ReputationList >= 128 {
+				continue
+			}
+			listID = uint32(reputation.ReputationList)
+			base = reputation.BaseStanding
+			defaultFlags = reputation.DefaultFlags
+		}
+		index, found := byFaction[factionID]
 		if !found {
 			index = len(state.Reputations)
-			byFaction[uint32(faction)] = index
-			state.Reputations = append(state.Reputations, playerReputation{FactionID: uint32(faction), ListID: uint32(faction)})
+			byFaction[factionID] = index
+			state.Reputations = append(state.Reputations, playerReputation{FactionID: factionID, ListID: listID, Base: base, Flags: defaultFlags})
 		}
+		state.Reputations[index].ListID = listID
 		state.Reputations[index].Standing = int32(standing)
 		state.Reputations[index].Flags = uint8(flags)
 	}
