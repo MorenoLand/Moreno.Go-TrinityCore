@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -176,9 +177,14 @@ func (s *session) sendTalentsInfo(pet bool) error {
 		if spec != s.player.ActiveTalentGroup {
 			talents = s.loadTalentsForGroup(spec)
 		}
-		talentCount := uint8(len(talents))
-		buf.WriteU8(talentCount)
-		for tid, rank := range talents {
+		talentIDs := make([]uint32, 0, len(talents))
+		for tid := range talents {
+			talentIDs = append(talentIDs, tid)
+		}
+		sort.Slice(talentIDs, func(i, j int) bool { return talentIDs[i] < talentIDs[j] })
+		buf.WriteU8(uint8(len(talentIDs)))
+		for _, tid := range talentIDs {
+			rank := talents[tid]
 			buf.WriteU32(tid)
 			buf.WriteU8(rank)
 		}
