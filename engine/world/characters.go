@@ -2433,6 +2433,10 @@ func buildInitWorldStates(state playerState, areaID, arenaSeasonID uint32, arena
 	return packet.Bytes()
 }
 
+func BuildInitialWorldStates(mapID, zoneID, areaID, arenaSeasonID uint32, arenaSeasonInProgress bool) []byte {
+	return buildInitWorldStates(playerState{Map: mapID, Zone: zoneID}, areaID, arenaSeasonID, arenaSeasonInProgress)
+}
+
 func buildInstanceDifficulty(difficulty uint32) []byte {
 	return buildInstanceDifficultyForMap(difficulty, false)
 }
