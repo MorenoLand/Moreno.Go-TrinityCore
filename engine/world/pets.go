@@ -856,10 +856,7 @@ func (s *session) sendPetSpells(ctx context.Context, petID uint32, entry uint32,
 
 		for i := 0; i < 4; i++ {
 			if i < len(allSpells) {
-				actType := uint32(0x81) // ACT_DISABLED (castable)
-				if allSpells[i].active != 0 {
-					actType = 0xC1 // ACT_ENABLED (autocast)
-				}
+				actType := uint32(allSpells[i].active)
 				buf.WriteU32(allSpells[i].spellID | (actType << 24))
 			} else {
 				buf.WriteU32(0)
@@ -874,10 +871,7 @@ func (s *session) sendPetSpells(ctx context.Context, petID uint32, entry uint32,
 	// Additional spells list (populates client Spellbook Pet tab!)
 	buf.WriteU8(uint8(len(allSpells)))
 	for _, sp := range allSpells {
-		actType := uint32(0x81)
-		if sp.active != 0 {
-			actType = 0xC1
-		}
+		actType := uint32(sp.active)
 		buf.WriteU32(sp.spellID | (actType << 24))
 	}
 
