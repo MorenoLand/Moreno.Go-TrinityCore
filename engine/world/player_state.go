@@ -1760,6 +1760,28 @@ func (s *Server) buildNearbyPlayerUpdates(state playerState) (*protocol.Packet, 
 	return packet, count
 }
 
+func (s *Server) broadcastPlayerCreate(state playerState, source *session) {
+	if s == nil || source == nil || s.Config.VisibilityDistanceContinents <= 0 {
+		return
+	}
+	packet, err := s.buildPlayerUpdateForTarget(state, false)
+	if err != nil || packet == nil {
+		return
+	}
+	distance := float64(s.Config.VisibilityDistanceContinents)
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for target := range s.sessions {
+		if target == source || !target.authed || !target.playerLoaded || target.player == nil || target.player.Map != state.Map {
+			continue
+		}
+		if math.Hypot(float64(target.player.X-state.X), float64(target.player.Y-state.Y)) > distance {
+			continue
+		}
+		_ = target.write(packet.Opcode, packet.Payload.Bytes(), true)
+	}
+}
+
 func playerFieldBytesValue(state playerState) uint32 {
 	value := state.PlayerFieldBytes &^ 0x00000100
 	if state.GrantableLevels > 0 {

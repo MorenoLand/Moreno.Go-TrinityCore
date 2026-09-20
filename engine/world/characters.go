@@ -577,6 +577,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(initialUpdate.Opcode, initialUpdate.Payload.Bytes(), true); err != nil {
 		return false
 	}
+	s.server.broadcastPlayerCreate(state, s)
 	mapTransportUpdates, err := s.server.buildMapTransportUpdates(state, state.TransportGUID)
 	if err != nil {
 		return false
