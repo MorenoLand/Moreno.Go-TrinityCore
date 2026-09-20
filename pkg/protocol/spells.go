@@ -278,6 +278,7 @@ type AuraUpdateRecord struct {
 	CasterGUID    uint64
 	Slot          uint8
 	SpellID       uint32
+	EffectMask    uint8
 	Positive      bool
 	MaxDurationMs uint32
 	DurationMs    uint32
@@ -309,7 +310,19 @@ func BuildAuraUpdateAll(targetGUID uint64, records []AuraUpdateRecord) []byte {
 func writeAuraUpdateRecord(buf *Buffer, targetGUID uint64, record AuraUpdateRecord) {
 	buf.WriteU8(record.Slot)
 	buf.WriteU32(record.SpellID)
-	flags := AuraFlagEffIndex0
+	flags := uint8(0)
+	if record.EffectMask&0x01 != 0 {
+		flags |= AuraFlagEffIndex0
+	}
+	if record.EffectMask&0x02 != 0 {
+		flags |= AuraFlagEffIndex1
+	}
+	if record.EffectMask&0x04 != 0 {
+		flags |= AuraFlagEffIndex2
+	}
+	if flags&0x07 == 0 {
+		flags |= AuraFlagEffIndex0
+	}
 	if record.CasterGUID == 0 || record.CasterGUID == targetGUID {
 		flags |= AuraFlagCaster
 	}

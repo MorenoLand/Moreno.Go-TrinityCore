@@ -1731,6 +1731,7 @@ type activeAura struct {
 	DispelType         uint32
 	Mechanic           uint32
 	AuraType           uint32
+	EffectMask         uint8
 	CasterGUID         uint64
 	TargetGUID         uint64
 	SchoolMask         uint32
@@ -2155,6 +2156,7 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 		DispelType:         dispelType,
 		Mechanic:           mechanic,
 		AuraType:           auraType,
+		EffectMask:         0x01,
 		CasterGUID:         s.playerGUID,
 		TargetGUID:         s.playerGUID,
 		MiscValue:          miscValue,
@@ -2310,6 +2312,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			DispelType:         spell.DispelType,
 			Mechanic:           spell.Mechanic,
 			AuraType:           eff.Aura,
+			EffectMask:         0x01,
 			CasterGUID:         s.playerGUID,
 			TargetGUID:         targetGUID,
 			SchoolMask:         schoolMask,
@@ -2395,6 +2398,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		DispelType:       spell.DispelType,
 		Mechanic:         spell.Mechanic,
 		AuraType:         eff.Aura,
+		EffectMask:       0x01,
 		CasterGUID:       s.playerGUID,
 		TargetGUID:       targetGUID,
 		SchoolMask:       schoolMask,

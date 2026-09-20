@@ -51,7 +51,7 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 		if _, exists := s.activeAuras[id]; exists {
 			continue
 		}
-		aura := &activeAura{SpellID: id, CasterGUID: casterGUID, TargetGUID: state.GUID, Slot: uint8(len(s.activeAuras)), Positive: true, CasterLevel: state.Level}
+		aura := &activeAura{SpellID: id, CasterGUID: casterGUID, TargetGUID: state.GUID, EffectMask: uint8(effectMask) & 0x07, Slot: uint8(len(s.activeAuras)), Positive: true, CasterLevel: state.Level}
 		if maxDuration > 0 {
 			aura.DurationMs = clampAuraDuration(maxDuration)
 		}
@@ -168,7 +168,7 @@ func (s *session) loadGlyphAuras(state *playerState) {
 		if err != nil || !found {
 			continue
 		}
-		aura := &activeAura{SpellID: glyph.SpellID, CasterGUID: state.GUID, TargetGUID: state.GUID, Slot: uint8(len(s.activeAuras)), Positive: true, CasterLevel: state.Level}
+		aura := &activeAura{SpellID: glyph.SpellID, CasterGUID: state.GUID, TargetGUID: state.GUID, EffectMask: 0x01, Slot: uint8(len(s.activeAuras)), Positive: true, CasterLevel: state.Level}
 		for _, effect := range spell.Effects {
 			if effect.Effect == 0 || effect.Aura == 0 {
 				continue
@@ -186,6 +186,9 @@ func (s *session) loadGlyphAuras(state *playerState) {
 		}
 		if aura.AuraType == 0 {
 			continue
+		}
+		if aura.EffectMask == 0 {
+			aura.EffectMask = 0x01
 		}
 		s.auras[glyph.SpellID] = struct{}{}
 		s.auraSlots[glyph.SpellID] = aura.Slot
@@ -235,7 +238,7 @@ func (s *session) sendLoadedAuras() {
 		if aura.HideDuration {
 			maxDuration, duration = 0, 0
 		}
-		records = append(records, protocol.AuraUpdateRecord{CasterGUID: aura.CasterGUID, Slot: aura.Slot, SpellID: aura.SpellID, Positive: aura.Positive, MaxDurationMs: maxDuration, DurationMs: duration, CasterLevel: aura.CasterLevel, StackCount: stackCount})
+		records = append(records, protocol.AuraUpdateRecord{CasterGUID: aura.CasterGUID, Slot: aura.Slot, SpellID: aura.SpellID, EffectMask: aura.EffectMask, Positive: aura.Positive, MaxDurationMs: maxDuration, DurationMs: duration, CasterLevel: aura.CasterLevel, StackCount: stackCount})
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE_ALL), protocol.BuildAuraUpdateAll(s.playerGUID, records), true)
 }

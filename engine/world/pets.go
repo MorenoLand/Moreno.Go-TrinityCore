@@ -626,7 +626,7 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 		if casterGUID == 0 {
 			casterGUID = petGUID
 		}
-		aura := &activeAura{SpellID: uint32(spellID), CasterGUID: casterGUID, TargetGUID: petGUID, Slot: uint8(len(s.server.activeCreatureAuras[petGUID]) % 64), Positive: true, CasterLevel: s.player.Level}
+		aura := &activeAura{SpellID: uint32(spellID), CasterGUID: casterGUID, TargetGUID: petGUID, EffectMask: uint8(effectMask) & 0x07, Slot: uint8(len(s.server.activeCreatureAuras[petGUID]) % 64), Positive: true, CasterLevel: s.player.Level}
 		aura.HideDuration = spell.AttributesEx5&spellAttr5HideDuration != 0
 		if maxDuration > 0 {
 			aura.DurationMs = clampAuraDuration(maxDuration)
@@ -667,6 +667,9 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 		if aura.AuraType == 0 {
 			continue
 		}
+		if aura.EffectMask == 0 {
+			aura.EffectMask = 0x01
+		}
 		fadesWhileOffline := spell.AttributesEx4&0x00000004 != 0 && aura.SpellID != 15007
 		if (!aura.Positive || fadesWhileOffline) && aura.RemainingMs > 0 && offlineMs > 0 {
 			if offlineMs >= int64(aura.RemainingMs) {
@@ -695,7 +698,7 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 		if aura.HideDuration {
 			maxDuration, duration = 0, 0
 		}
-		records = append(records, protocol.AuraUpdateRecord{CasterGUID: aura.CasterGUID, Slot: aura.Slot, SpellID: aura.SpellID, Positive: aura.Positive, MaxDurationMs: maxDuration, DurationMs: duration, CasterLevel: aura.CasterLevel, StackCount: stackCount})
+		records = append(records, protocol.AuraUpdateRecord{CasterGUID: aura.CasterGUID, Slot: aura.Slot, SpellID: aura.SpellID, EffectMask: aura.EffectMask, Positive: aura.Positive, MaxDurationMs: maxDuration, DurationMs: duration, CasterLevel: aura.CasterLevel, StackCount: stackCount})
 		if aura.PeriodMs > 0 {
 			s.scheduleCreaturePeriodicTick(aura, aura.PeriodMs)
 		}
