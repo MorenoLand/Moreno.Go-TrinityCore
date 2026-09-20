@@ -192,6 +192,8 @@ type session struct {
 	lastZoneUpdate        time.Time
 	logoutHook            bool
 	questStatusSent       bool
+	timeSyncNextCounter   uint32
+	timeSyncDue           time.Time
 	gossip                *gossipMenuState
 	gossipClosed          bool
 	channels              map[string]struct{}
@@ -566,6 +568,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 				_, _ = s.Features.Scripts.TriggerServerEvent(ctx, 13, uint32(100))
 			}
 			s.updateContinentTransports(now)
+			s.updateTimeSync(now)
 			s.updateMailDeliveries(ctx, now.Unix())
 			s.updateActiveCreatures(ctx)
 			s.updateDynamicSpellAuras(ctx, now)
@@ -578,6 +581,28 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updatePlayerUnderwater(ctx, now)
 			s.updateWardenSessions(ctx, 100*time.Millisecond)
 		}
+	}
+}
+
+func (s *Server) updateTimeSync(now time.Time) {
+	if s == nil {
+		return
+	}
+	s.sessionsMu.RLock()
+	sessions := make([]*session, 0, len(s.sessions))
+	for sess := range s.sessions {
+		if sess.playerLoaded && sess.player != nil && !sess.timeSyncDue.IsZero() && !now.Before(sess.timeSyncDue) {
+			sessions = append(sessions, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range sessions {
+		counter := sess.timeSyncNextCounter
+		if sess.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(counter), true) != nil {
+			continue
+		}
+		sess.timeSyncNextCounter++
+		sess.timeSyncDue = now.Add(10 * time.Second)
 	}
 }
 

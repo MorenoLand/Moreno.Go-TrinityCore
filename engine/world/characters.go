@@ -644,6 +644,8 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true); err != nil {
 		return false
 	}
+	s.timeSyncNextCounter = 1
+	s.timeSyncDue = time.Now().Add(5 * time.Second)
 	if err := s.sendLoginEffect(); err != nil {
 		return false
 	}
