@@ -197,6 +197,18 @@ func (t *continentTransport) updatePosition() {
 		t.Spawn.Orientation = float32(math.Atan2(float64(to.Y-from.Y), float64(to.X-from.X)) + math.Pi)
 	}
 	t.Spawn.TransportProgress = t.pathProgress()
+	t.Spawn.TransportPeriod = uint32(t.pathPeriod())
+}
+
+func (t *continentTransport) pathPeriod() float64 {
+	if t == nil || len(t.Points) < 2 {
+		return 0
+	}
+	var total float64
+	for i := range t.Points {
+		total += t.segmentDuration(i)
+	}
+	return total
 }
 
 func (t *continentTransport) pathProgress() uint32 {

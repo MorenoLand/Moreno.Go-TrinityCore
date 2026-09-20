@@ -113,6 +113,7 @@ type gameObjectSpawn struct {
 	Faction           uint32
 	ParentRotation    [4]float32
 	TransportProgress uint32
+	TransportPeriod   uint32
 	TransportGUID     uint64
 	TransportX        float32
 	TransportY        float32
@@ -259,7 +260,7 @@ func buildGameObjectUpdate(spawn gameObjectSpawn) []byte {
 	values[gameObjectParentRotation+1] = math.Float32bits(spawn.ParentRotation[1])
 	values[gameObjectParentRotation+2] = math.Float32bits(spawn.ParentRotation[2])
 	values[gameObjectParentRotation+3] = math.Float32bits(spawn.ParentRotation[3])
-	values[gameObjectDynamic] = 0xFFFF0000
+	values[gameObjectDynamic] = gameObjectDynamicValue(spawn)
 	values[gameObjectFaction] = spawn.Faction
 	values[gameObjectBytes1] = uint32(spawn.State) | uint32(spawn.Type)<<8 | uint32(spawn.ArtKit)<<16 | uint32(spawn.AnimProgress)<<24
 	mask := protocol.NewUpdateMask(len(values))
@@ -325,7 +326,7 @@ func buildTransportGameObjectUpdate(spawn gameObjectSpawn, create bool) []byte {
 	values[gameObjectParentRotation+1] = math.Float32bits(spawn.ParentRotation[1])
 	values[gameObjectParentRotation+2] = math.Float32bits(spawn.ParentRotation[2])
 	values[gameObjectParentRotation+3] = math.Float32bits(spawn.ParentRotation[3])
-	values[gameObjectDynamic] = 0xFFFF0000
+	values[gameObjectDynamic] = gameObjectDynamicValue(spawn)
 	values[gameObjectFaction] = spawn.Faction
 	values[gameObjectBytes1] = uint32(spawn.State) | uint32(spawn.Type)<<8 | uint32(spawn.ArtKit)<<16 | uint32(spawn.AnimProgress)<<24
 	block := protocol.NewBuffer(256)
@@ -366,6 +367,14 @@ func buildTransportGameObjectUpdate(spawn gameObjectSpawn, create bool) []byte {
 
 func gameObjectGUID(guid, entry uint32) uint64 {
 	return uint64(guid) | uint64(entry)<<24 | uint64(0xF110)<<48
+}
+
+func gameObjectDynamicValue(spawn gameObjectSpawn) uint32 {
+	if (spawn.Type == GameObjectTypeTransport || spawn.Type == GameObjectTypeMOTransport) && spawn.TransportPeriod > 0 {
+		progress := uint32(float64(spawn.TransportProgress%spawn.TransportPeriod) / float64(spawn.TransportPeriod) * 65535)
+		return uint32(uint16(progress)) << 16
+	}
+	return 0xFFFF0000
 }
 
 func packGameObjectRotation(x, y, z, w float32) uint64 {
