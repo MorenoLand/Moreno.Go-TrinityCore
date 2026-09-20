@@ -22,6 +22,31 @@ type guildMemberInfo struct {
 	Online      bool
 }
 
+const (
+	guildEventJoined    uint8 = 3
+	guildEventLeft      uint8 = 4
+	guildEventSignedOn  uint8 = 12
+	guildEventSignedOff uint8 = 13
+)
+
+func guildEventPayload(eventType uint8, guid uint64, params ...string) []byte {
+	count := len(params)
+	for count > 0 && params[count-1] == "" {
+		count--
+	}
+	buf := protocol.NewBuffer(10 + len(params)*8)
+	buf.WriteU8(eventType)
+	buf.WriteU8(uint8(count))
+	for _, param := range params[:count] {
+		buf.WriteCString(param)
+	}
+	switch eventType {
+	case guildEventJoined, guildEventLeft, guildEventSignedOn, guildEventSignedOff:
+		buf.WriteU64(guid)
+	}
+	return buf.Bytes()
+}
+
 // Petition result codes mirroring TrinityCore PetitionMgr.h:30-42.
 const (
 	petitionTurnOk                 uint32 = 0
@@ -113,11 +138,7 @@ func (s *session) sendGuildLoginInfo(ctx context.Context) {
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT motd FROM guild WHERE guildid = ? LIMIT 1", s.player.GuildID).Scan(&motd); err != nil {
 		return
 	}
-	event := protocol.NewBuffer(len(motd) + 8)
-	event.WriteU8(2)
-	event.WriteU8(1)
-	event.WriteCString(motd)
-	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event.Bytes(), true)
+	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), guildEventPayload(2, 0, motd), true)
 	s.sendGuildBankTabsInfo(ctx)
 	_ = s.handleGuildRoster(ctx)
 	s.broadcastGuildMemberLogin()
@@ -160,18 +181,14 @@ func (s *session) broadcastGuildMemberLogout() {
 	if s == nil || s.player == nil || s.player.GuildID == 0 || s.server == nil {
 		return
 	}
-	event := protocol.NewBuffer(32 + len(s.player.Name))
-	event.WriteU8(13)
-	event.WriteU8(1)
-	event.WriteCString(s.player.Name)
-	event.WriteU64(s.playerGUID)
+	event := guildEventPayload(guildEventSignedOff, s.playerGUID, s.player.Name)
 	s.server.sessionsMu.RLock()
 	defer s.server.sessionsMu.RUnlock()
 	for target := range s.server.sessions {
 		if target == s || !target.playerLoaded || target.player == nil || target.player.GuildID != s.player.GuildID {
 			continue
 		}
-		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event.Bytes(), true)
+		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
 	}
 }
 
@@ -179,18 +196,14 @@ func (s *session) broadcastGuildMemberLogin() {
 	if s == nil || s.player == nil || s.player.GuildID == 0 || s.server == nil {
 		return
 	}
-	event := protocol.NewBuffer(32 + len(s.player.Name))
-	event.WriteU8(12)
-	event.WriteU8(1)
-	event.WriteCString(s.player.Name)
-	event.WriteU64(s.playerGUID)
+	event := guildEventPayload(guildEventSignedOn, s.playerGUID, s.player.Name)
 	s.server.sessionsMu.RLock()
 	defer s.server.sessionsMu.RUnlock()
 	for target := range s.server.sessions {
 		if !target.playerLoaded || target.player == nil || target.player.GuildID != s.player.GuildID {
 			continue
 		}
-		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event.Bytes(), true)
+		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
 	}
 }
 
