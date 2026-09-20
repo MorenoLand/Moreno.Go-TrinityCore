@@ -1369,6 +1369,10 @@ func classPowerType(class uint8) uint8 {
 }
 
 func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) {
+	return s.buildPlayerUpdateForTarget(state, true)
+}
+
+func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) (*protocol.Packet, error) {
 	values := make([]uint32, playerValuesCount)
 	values[0] = uint32(state.GUID)
 	values[objectFieldType] = 0x19
@@ -1619,7 +1623,7 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 
 	mask := protocol.NewUpdateMask(len(values))
 	for index, value := range values {
-		if value != 0 {
+		if value != 0 && (targetSelf || playerFieldPublic(index)) {
 			if err := mask.Set(index); err != nil {
 				return nil, err
 			}
@@ -1628,16 +1632,22 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	if err := mask.Set(1); err != nil {
 		return nil, err
 	}
-	_ = mask.Set(unitFieldLevel)
-	_ = mask.Set(unitFieldBytes0)
-	_ = mask.Set(unitFieldMaxLevel)
-	_ = mask.Set(unitFieldNextLevelXP)
-	_ = mask.Set(unitFieldXP)
+	if targetSelf {
+		_ = mask.Set(unitFieldLevel)
+		_ = mask.Set(unitFieldBytes0)
+		_ = mask.Set(unitFieldMaxLevel)
+		_ = mask.Set(unitFieldNextLevelXP)
+		_ = mask.Set(unitFieldXP)
+	}
 	block := protocol.NewBuffer(256)
 	block.WriteU8(protocol.UpdateCreateObject2)
 	block.WritePackedGUID(state.GUID)
 	block.WriteU8(4)
-	block.WriteU16(0x0061)
+	flags := uint16(0x0060)
+	if targetSelf {
+		flags |= 0x0001
+	}
+	block.WriteU16(flags)
 	if state.TransportGUID != 0 {
 		block.WriteU32(movementOnTransport)
 	} else {
@@ -1672,6 +1682,82 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(block.Bytes())
 	return updates.BuildPacket(0)
+}
+
+func playerFieldPublic(index int) bool {
+	switch {
+	case index >= 0 && index <= 4:
+		return true
+	case index >= 6 && index <= 39:
+		return true
+	case index >= 54 && index <= 63:
+		return true
+	case index >= 65 && index <= 69:
+		return true
+	case index >= 74 && index <= 76:
+		return true
+	case index >= 79 && index <= 83:
+		return true
+	case index == 120 || index == 122:
+		return true
+	case index >= 148 && index <= 157:
+		return true
+	case index >= playerVisibleItemStart && index <= playerVisibleItemStart+playerVisibleItemCount*2:
+		return true
+	}
+	return false
+}
+
+func (s *Server) buildNearbyPlayerUpdates(state playerState) (*protocol.Packet, int) {
+	if s == nil || state.GUID == 0 || s.Config.VisibilityDistanceContinents <= 0 {
+		return nil, 0
+	}
+	distance := float64(s.Config.VisibilityDistanceContinents)
+	updates := protocol.NewUpdateData()
+	count := 0
+	s.sessionsMu.RLock()
+	for sess := range s.sessions {
+		if sess == nil || !sess.playerLoaded || sess.player == nil || sess.player.GUID == state.GUID || sess.player.Map != state.Map {
+			continue
+		}
+		if math.Hypot(float64(sess.player.X-state.X), float64(sess.player.Y-state.Y)) > distance {
+			continue
+		}
+		packet, packetErr := s.buildPlayerUpdateForTarget(*sess.player, false)
+		if packetErr != nil || packet == nil {
+			continue
+		}
+		var body []byte
+		var err error
+		if packet.Opcode == uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) {
+			body = packet.Payload.Bytes()
+		} else {
+			body, err = protocol.DecompressUpdatePayload(packet.Payload.Bytes())
+		}
+		if err != nil || len(body) < 4 {
+			continue
+		}
+		reader := protocol.NewReader(body)
+		blockCount, err := reader.ReadU32()
+		if err != nil || blockCount == 0 {
+			continue
+		}
+		block, err := reader.Read(reader.Remaining())
+		if err != nil {
+			continue
+		}
+		updates.AddUpdateBlock(block)
+		count++
+	}
+	s.sessionsMu.RUnlock()
+	if count == 0 || !updates.HasData() {
+		return nil, 0
+	}
+	packet, err := updates.BuildPacket(0)
+	if err != nil {
+		return nil, 0
+	}
+	return packet, count
 }
 
 func playerFieldBytesValue(state playerState) uint32 {

@@ -587,11 +587,15 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		}
 	}
 	sendNearbyObjects := func() bool {
-		var nearbyCreatures, nearbyGameObjects *protocol.Packet
-		var creatureCount, goCount int
+		var nearbyPlayers, nearbyCreatures, nearbyGameObjects *protocol.Packet
+		var playerCount, creatureCount, goCount int
 		var creatureErr, goErr error
 		var wg sync.WaitGroup
-		wg.Add(2)
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			nearbyPlayers, playerCount = s.server.buildNearbyPlayerUpdates(state)
+		}()
 		go func() {
 			defer wg.Done()
 			nearbyCreatures, creatureCount, creatureErr = s.server.buildNearbyCreatureUpdates(ctx, state)
@@ -609,7 +613,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			s.debug("nearby gameobjects load failed", "account", s.accountName, "error", goErr)
 			return false
 		}
-		packet, err := protocol.MergeUpdatePackets(nearbyCreatures, nearbyGameObjects)
+		packet, err := protocol.MergeUpdatePackets(nearbyPlayers, nearbyCreatures, nearbyGameObjects)
 		if err != nil {
 			s.debug("nearby visibility merge failed", "account", s.accountName, "error", err)
 			return false
@@ -620,6 +624,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			}
 			if nearbyCreatures != nil {
 				s.debug("nearby creatures sent", "account", s.accountName, "count", creatureCount)
+			}
+			if nearbyPlayers != nil {
+				s.debug("nearby players sent", "account", s.accountName, "count", playerCount)
 			}
 			if nearbyGameObjects != nil {
 				s.debug("nearby gameobjects sent", "account", s.accountName, "count", goCount)
