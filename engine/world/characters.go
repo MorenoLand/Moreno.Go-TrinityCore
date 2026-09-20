@@ -548,6 +548,10 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err != nil {
 		return false
 	}
+	attachedTransport, err := s.server.buildAttachedTransportUpdate(state)
+	if err != nil {
+		return false
+	}
 	s.captureUpdatePackets = true
 	s.capturedUpdatePackets = nil
 	inventoryErr := s.sendInventoryItemsBeforeMap(ctx)
@@ -558,13 +562,27 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		s.debug("inventory load failed", "account", s.accountName, "guid", s.playerGUID, "error", inventoryErr)
 		return false
 	}
-	initialUpdatePackets := append(capturedInventoryPackets, updates)
+	initialUpdatePackets := make([]*protocol.Packet, 0, len(capturedInventoryPackets)+2)
+	if attachedTransport != nil {
+		initialUpdatePackets = append(initialUpdatePackets, attachedTransport)
+	}
+	initialUpdatePackets = append(initialUpdatePackets, capturedInventoryPackets...)
+	initialUpdatePackets = append(initialUpdatePackets, updates)
 	initialUpdate, err := protocol.MergeUpdatePackets(initialUpdatePackets...)
 	if err != nil || initialUpdate == nil {
 		return false
 	}
 	if err := s.write(initialUpdate.Opcode, initialUpdate.Payload.Bytes(), true); err != nil {
 		return false
+	}
+	mapTransportUpdates, err := s.server.buildMapTransportUpdates(state, state.TransportGUID)
+	if err != nil {
+		return false
+	}
+	if mapTransportUpdates != nil {
+		if err := s.write(mapTransportUpdates.Opcode, mapTransportUpdates.Payload.Bytes(), true); err != nil {
+			return false
+		}
 	}
 	sendNearbyObjects := func() bool {
 		var nearbyCreatures, nearbyGameObjects *protocol.Packet
@@ -578,7 +596,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		}()
 		go func() {
 			defer wg.Done()
-			nearbyGameObjects, goCount, goErr = s.server.buildNearbyGameObjectUpdates(ctx, state)
+			nearbyGameObjects, goCount, goErr = s.server.buildNearbyGameObjectUpdates(ctx, state, false)
 		}()
 		wg.Wait()
 		if creatureErr != nil {

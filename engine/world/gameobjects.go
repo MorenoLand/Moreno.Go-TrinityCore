@@ -120,7 +120,7 @@ type gameObjectSpawn struct {
 	TransportO        float32
 }
 
-func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerState) (*protocol.Packet, int, error) {
+func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerState, includeTransportRoots bool) (*protocol.Packet, int, error) {
 	distance := float64(s.Config.VisibilityDistanceContinents)
 	if distance <= 0 {
 		return nil, 0, nil
@@ -229,9 +229,11 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 		count++
 	}
 	s.objectsMu.RUnlock()
-	for _, transport := range s.nearbyTransportSpawns(state, distance) {
-		updates.AddUpdateBlock(buildGameObjectUpdate(transport))
-		count++
+	if includeTransportRoots {
+		for _, transport := range s.nearbyTransportSpawns(state, distance) {
+			updates.AddUpdateBlock(buildGameObjectUpdate(transport))
+			count++
+		}
 	}
 	if count == 0 {
 		return nil, 0, nil

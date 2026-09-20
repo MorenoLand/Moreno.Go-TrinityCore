@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"math"
+	"sort"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -292,6 +293,49 @@ func (s *Server) nearbyTransportSpawns(state playerState, distance float64) []ga
 	}
 	s.transportMu.Unlock()
 	return result
+}
+
+func (s *Server) buildAttachedTransportUpdate(state playerState) (*protocol.Packet, error) {
+	if s == nil || state.TransportGUID == 0 {
+		return nil, nil
+	}
+	spawn, found := s.transportSpawnForGUID(state.TransportGUID)
+	if !found {
+		return nil, nil
+	}
+	updates := protocol.NewUpdateData()
+	updates.AddUpdateBlock(buildTransportGameObjectUpdate(spawn, true))
+	return updates.BuildPacket(0)
+}
+
+func (s *Server) buildMapTransportUpdates(state playerState, exclude uint64) (*protocol.Packet, error) {
+	if s == nil {
+		return nil, nil
+	}
+	spawns := make([]gameObjectSpawn, 0)
+	s.transportMu.Lock()
+	for _, transport := range s.transports {
+		if transport == nil || transport.Spawn.Map != state.Map {
+			continue
+		}
+		rawGUID := gameObjectGUID(transport.Spawn.GUID, transport.Spawn.Entry)
+		if rawGUID == exclude {
+			continue
+		}
+		spawns = append(spawns, transport.Spawn)
+	}
+	s.transportMu.Unlock()
+	sort.Slice(spawns, func(i, j int) bool {
+		return gameObjectGUID(spawns[i].GUID, spawns[i].Entry) < gameObjectGUID(spawns[j].GUID, spawns[j].Entry)
+	})
+	if len(spawns) == 0 {
+		return nil, nil
+	}
+	updates := protocol.NewUpdateData()
+	for _, spawn := range spawns {
+		updates.AddUpdateBlock(buildTransportGameObjectUpdate(spawn, true))
+	}
+	return updates.BuildPacket(0)
 }
 
 func (t *continentTransport) passengerCreatures() []creatureSpawn {

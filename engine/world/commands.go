@@ -393,7 +393,7 @@ func (s *session) streamNearbyObjects(ctx context.Context) {
 	if packet, count, err := s.server.buildNearbyCreatureUpdates(ctx, *s.player); err == nil && count > 0 && packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 	}
-	if packet, count, err := s.server.buildNearbyGameObjectUpdates(ctx, *s.player); err == nil && count > 0 && packet != nil {
+	if packet, count, err := s.server.buildNearbyGameObjectUpdates(ctx, *s.player, true); err == nil && count > 0 && packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 	}
 	s.streamDynamicSpellObjects()

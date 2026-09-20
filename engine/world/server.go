@@ -1412,10 +1412,16 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 		case uint32(protocol.OpcodeMSG_MOVE_WORLDPORT_ACK):
 			if state.authed && state.player != nil {
 				state.sendPlayerUpdate()
+				if update, err := state.server.buildAttachedTransportUpdate(*state.player); err == nil && update != nil {
+					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
+				}
+				if update, err := state.server.buildMapTransportUpdates(*state.player, state.player.TransportGUID); err == nil && update != nil {
+					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
+				}
 				if update, _, err := state.server.buildNearbyCreatureUpdates(ctx, *state.player); err == nil && update != nil {
 					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
 				}
-				if update, _, err := state.server.buildNearbyGameObjectUpdates(ctx, *state.player); err == nil && update != nil {
+				if update, _, err := state.server.buildNearbyGameObjectUpdates(ctx, *state.player, false); err == nil && update != nil {
 					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
 				}
 				_ = state.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true)
