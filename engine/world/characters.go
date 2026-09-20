@@ -519,6 +519,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	// TrinityCore sends the first-login cinematic after the pre-map packet set and
 	// before the player is added to the map.
 	sendCinematic := false
+	firstLoginCinematic := state.Cinematic == 0
 	if state.Cinematic == 0 {
 		cinematicID := s.getStartingCinematicID(state.Race, state.Class)
 		if cinematicID > 0 {
@@ -540,7 +541,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			}
 		}
 	}
-	if state.AtLogin&uint32(atLoginFirst) != 0 && s.server.Config.PlayerStartString != "" {
+	if firstLoginCinematic && s.server.Config.PlayerStartString != "" {
 		s.sendSysMessage(s.server.Config.PlayerStartString)
 	}
 	s.lastFallZ = state.Z
