@@ -183,6 +183,7 @@ type playerState struct {
 	Health               uint32
 	MaxHealth            uint32
 	HealthLoaded         bool
+	repopOnLogin         bool
 	BaseMana             uint32
 	Powers               [7]uint32
 	MaxPowers            [7]uint32
@@ -810,6 +811,7 @@ func restoreLoadedDeathState(state *playerState) {
 	if state == nil || !state.HealthLoaded || state.Health != 0 || state.AtLogin&uint32(atLoginResurrect) != 0 {
 		return
 	}
+	state.repopOnLogin = true
 	state.PlayerFlags |= playerFlagGhost
 	state.PlayerFieldBytes |= playerFieldByteReleaseTimer
 	state.Health = 1
@@ -824,6 +826,7 @@ func (s *session) restoreLoadedCorpseState(ctx context.Context, state *playerSta
 		return
 	}
 	state.PlayerFlags |= playerFlagGhost
+	state.repopOnLogin = true
 	state.PlayerFieldBytes |= playerFieldByteReleaseTimer
 	if state.Health == 0 {
 		state.Health = 1

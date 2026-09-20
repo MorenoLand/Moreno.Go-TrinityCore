@@ -731,6 +731,11 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	s.loadMailState(ctx)
 	s.sendNewMailNotification(ctx)
+	if s.player.repopOnLogin {
+		s.buildPlayerRepop(ctx)
+		s.repopAtGraveyard(ctx)
+		s.player.repopOnLogin = false
+	}
 	s.debug("world login stage", "stage", "player-login-hooks-start", "guid", guid)
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventLogin, s.luaPlayer())
 	s.debug("world login stage", "stage", "player-login-hooks-complete", "guid", guid)
