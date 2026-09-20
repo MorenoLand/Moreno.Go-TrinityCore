@@ -151,6 +151,7 @@ type playerSkill struct {
 type playerState struct {
 	GUID                 uint64
 	PetGUID              uint64
+	PetNumber            uint32
 	Name                 string
 	Race                 uint8
 	Class                uint8

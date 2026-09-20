@@ -24,6 +24,40 @@ const (
 	unitFieldCreatedBySpell   = 81
 )
 
+func (s *Server) nextPetLowGUID() uint32 {
+	s.objectsMu.Lock()
+	defer s.objectsMu.Unlock()
+	s.nextPetGUID++
+	if s.nextPetGUID == 0 {
+		s.nextPetGUID = 1
+	}
+	return s.nextPetGUID
+}
+
+func (s *session) activePetNumber() uint32 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	if s.player.PetNumber != 0 {
+		return s.player.PetNumber
+	}
+	return uint32(s.player.PetGUID & 0xFFFFFFFF)
+}
+
+func (s *session) petNumberForGUID(guid uint64) uint32 {
+	if s != nil && s.player != nil && s.player.PetGUID == guid && s.player.PetNumber != 0 {
+		return s.player.PetNumber
+	}
+	return uint32(guid & 0xFFFFFFFF)
+}
+
+func (s *session) petGUIDForNumber(number uint32) uint64 {
+	if s != nil && s.player != nil && s.player.PetNumber == number && s.player.PetGUID != 0 {
+		return s.player.PetGUID
+	}
+	return uint64(number) | (uint64(0xF140) << 48)
+}
+
 type petSpellRank struct {
 	spellID  uint32
 	minLevel uint32
@@ -364,7 +398,7 @@ func (s *session) getPetStats(ctx context.Context, entry uint32, level uint32) (
 	return hp, hp, mana, mana
 }
 
-func buildPetUpdate(petGUID uint64, entry uint32, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, ownerGUID uint64, faction uint32, ownerClass, petType uint8, createdBySpell, petExperience uint32, x, y, z, o float32) []byte {
+func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, ownerGUID uint64, faction uint32, ownerClass, petType uint8, createdBySpell, petExperience uint32, x, y, z, o float32) []byte {
 	values := make([]uint32, creatureValuesCount)
 	values[0] = uint32(petGUID)
 	values[1] = uint32(petGUID >> 32)
@@ -402,8 +436,7 @@ func buildPetUpdate(petGUID uint64, entry uint32, level uint32, modelID uint32, 
 	}
 	values[unitFieldBytes0] = petClass << 8
 	values[unitFieldBytes0] |= powerType << 24
-	petID := uint32(petGUID & 0xFFFFFFFF)
-	values[unitFieldPetNumber] = petID
+	values[unitFieldPetNumber] = petNumber
 	values[unitFieldPetNameTimestamp] = uint32(time.Now().Unix())
 	if petType == 1 && int(level) < len(xpCurve) {
 		values[unitFieldPetNextLevelExp] = xpCurve[level] / 20
@@ -491,8 +524,9 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 	if s.player == nil || petID == 0 {
 		return
 	}
-	petGUID := uint64(petID) | (uint64(0xF140) << 48)
+	petGUID := uint64(s.server.nextPetLowGUID()) | (uint64(0xF140) << 48)
 	s.player.PetGUID = petGUID
+	s.player.PetNumber = petID
 	var createdBySpell, petType, petExperience int64
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(CreatedBySpell, 0), COALESCE(PetType, 0), COALESCE(exp, 0) FROM character_pet WHERE id = ? AND owner = ?", petID, s.playerGUID).Scan(&createdBySpell, &petType, &petExperience)
@@ -538,7 +572,7 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		petO = s.player.Orientation
 	}
 
-	updateBlock := buildPetUpdate(petGUID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, s.playerGUID, faction, s.player.Class, uint8(petType), uint32(createdBySpell), uint32(petExperience), petX, petY, petZ, petO)
+	updateBlock := buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, s.playerGUID, faction, s.player.Class, uint8(petType), uint32(createdBySpell), uint32(petExperience), petX, petY, petZ, petO)
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(updateBlock)
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
@@ -736,7 +770,7 @@ func (s *session) unsummonPet(ctx context.Context, mode uint8) {
 		return
 	}
 	petGUID := s.player.PetGUID
-	petID := uint32(petGUID & 0xFFFFFFFF)
+	petID := s.petNumberForGUID(petGUID)
 
 	cdb := s.server.CharactersStore.DB
 	if cdb != nil && petID != 0 {
@@ -774,6 +808,7 @@ func (s *session) unsummonPet(ctx context.Context, mode uint8) {
 	}
 
 	s.player.PetGUID = 0
+	s.player.PetNumber = 0
 	s.sendPlayerUpdate()
 	s.debug("pet unsummoned", "account", s.accountName, "petID", petID, "mode", mode)
 }
@@ -806,7 +841,7 @@ func (s *session) sendPetSpells(ctx context.Context, petID uint32, entry uint32,
 	}
 	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(abdata, '') FROM character_pet WHERE id = ?", petID).Scan(&abdata)
 
-	petGUID := uint64(petID) | (uint64(0xF140) << 48)
+	petGUID := s.petGUIDForNumber(petID)
 	buf := protocol.NewBuffer(64)
 	buf.WriteU64(petGUID)
 	buf.WriteU16(family)
@@ -923,7 +958,7 @@ func (s *session) updatePetOnLevelUp(ctx context.Context) {
 		return
 	}
 
-	petID := uint32(s.player.PetGUID & 0xFFFFFFFF)
+	petID := s.activePetNumber()
 	var entry, currentLevel, petType int64
 	err := cdb.QueryRowContext(ctx, "SELECT entry, level, PetType FROM character_pet WHERE id = ? AND owner = ?", petID, s.playerGUID).Scan(&entry, &currentLevel, &petType)
 	if err != nil {
@@ -995,7 +1030,7 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 			return
 		}
 		if s.player.PetGUID != 0 {
-			if uint32(s.player.PetGUID&0xFFFFFFFF) == uint32(petID) {
+			if s.activePetNumber() == uint32(petID) {
 				return // already active
 			}
 			s.unsummonPet(ctx, petSaveNotInSlot)
@@ -1020,7 +1055,7 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 
 	if err == nil && petID > 0 {
 		if s.player.PetGUID != 0 {
-			if uint32(s.player.PetGUID&0xFFFFFFFF) == uint32(petID) {
+			if s.activePetNumber() == uint32(petID) {
 				return // already active
 			}
 			s.unsummonPet(ctx, petSaveNotInSlot)
@@ -1109,7 +1144,7 @@ func (s *session) handleResurrectPet(ctx context.Context, spellID uint32) {
 		"UPDATE character_pet SET slot = 0, curhealth = ?, curmana = ?, savetime = ? WHERE id = ? AND owner = ?",
 		maxHP, maxMP, time.Now().Unix(), petID, s.playerGUID)
 
-	if s.player.PetGUID != 0 && uint32(s.player.PetGUID&0xFFFFFFFF) == uint32(petID) {
+	if s.player.PetGUID != 0 && s.activePetNumber() == uint32(petID) {
 		return
 	}
 
@@ -1177,7 +1212,7 @@ func (s *session) handleFeedPet(ctx context.Context, spellID uint32) {
 	if s.player == nil || s.player.PetGUID == 0 {
 		return
 	}
-	petID := uint32(s.player.PetGUID & 0xFFFFFFFF)
+	petID := s.activePetNumber()
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil && petID != 0 {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
 			"UPDATE character_pet SET curhappiness = MIN(curhappiness + 333000, 1050000) WHERE owner = ? AND id = ?",
@@ -1600,7 +1635,7 @@ func (s *session) handlePetCancelAura(ctx context.Context, payload []byte) bool 
 	r := protocol.NewReader(payload)
 	petGUID, _ := r.ReadU64()
 	spellID, _ := r.ReadU32()
-	petNumber := uint32(petGUID & 0xFFFFFF)
+	petNumber := s.petNumberForGUID(petGUID)
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM pet_aura WHERE guid = ? AND spell = ?", petNumber, spellID)
 	}
@@ -1656,7 +1691,7 @@ func (s *session) handlePetLearnTalent(ctx context.Context, payload []byte) bool
 	petGUID, _ := r.ReadU64()
 	talentID, _ := r.ReadU32()
 	rank, _ := r.ReadU32()
-	petNumber := uint32(petGUID & 0xFFFFFFFF)
+	petNumber := s.petNumberForGUID(petGUID)
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil && s.server.Data != nil {
 		if tEntry, ok, err := s.server.Data.Talent(talentID); err == nil && ok && rank < 5 {
 			spellID := tEntry.SpellRank[rank]
@@ -1723,7 +1758,7 @@ func (s *session) handlePetRename(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		petNumber := uint32(petGUID & 0xFFFFFF)
+		petNumber := s.petNumberForGUID(petGUID)
 		now := time.Now().Unix()
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
 			"UPDATE character_pet SET name = ?, renamed = 1, savetime = ? WHERE id = ? AND owner = ?",
@@ -1789,7 +1824,7 @@ func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
 		slots[pos] = actionSlot{actType: aType, action: aAction}
 
 		// Synchronize pet_spell table when spell action buttons change active state
-		petNumber := uint32(petGUID & 0xFFFFFFFF)
+		petNumber := s.petNumberForGUID(petGUID)
 		if aAction > 0 && petNumber > 0 {
 			if aType == 0xC1 { // ACT_ENABLED (autocast enabled)
 				_, _ = cdb.ExecContext(ctx, "UPDATE pet_spell SET active = 1 WHERE guid = ? AND spell = ?", petNumber, aAction)
@@ -1854,7 +1889,7 @@ func (s *session) syncPetSpellAutocast(ctx context.Context, petID uint32, spellI
 	}
 
 	if s.server != nil {
-		petGUID := uint64(petID) | (uint64(0xF140) << 48)
+		petGUID := s.petGUIDForNumber(petID)
 		s.server.onPetToggleAutocast(petGUID, spellID, active != 0)
 	}
 }
@@ -1878,7 +1913,7 @@ func (s *session) handlePetSpellAutocast(ctx context.Context, payload []byte) bo
 	if err != nil {
 		return false
 	}
-	petNumber := uint32(petGUID & 0xFFFFFFFF)
+	petNumber := s.petNumberForGUID(petGUID)
 	s.syncPetSpellAutocast(ctx, petNumber, spellID, state)
 	s.debug("pet spell autocast", "account", s.accountName, "pet", petNumber, "spell", spellID, "state", state)
 	return true
@@ -1977,7 +2012,7 @@ func (s *session) handleLearnPreviewTalentsPet(ctx context.Context, payload []by
 	r := protocol.NewReader(payload)
 	petGUID, _ := r.ReadU64()
 	talentCount, _ := r.ReadU32()
-	petNumber := uint32(petGUID & 0xFFFFFFFF)
+	petNumber := s.petNumberForGUID(petGUID)
 
 	for i := uint32(0); i < talentCount && r.Remaining() >= 8; i++ {
 		talentID, _ := r.ReadU32()

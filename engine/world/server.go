@@ -85,6 +85,7 @@ type Server struct {
 	totemMu                 sync.RWMutex
 	activeTotems            map[uint64][4]*activeTotem
 	nextDynamicCreatureGUID uint32
+	nextPetGUID             uint32
 	creatureAuras           map[uint64]map[uint32]struct{}
 	auraMu                  sync.Mutex
 	activeCreatureAuras     map[uint64]map[uint32]*activeAura
