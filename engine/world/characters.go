@@ -553,7 +553,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err != nil {
 		return false
 	}
-	attachedTransport, err := s.server.buildAttachedTransportUpdate(state)
+	attachedTransport, err := s.server.buildAttachedTransportUpdate(ctx, state)
 	if err != nil {
 		return false
 	}

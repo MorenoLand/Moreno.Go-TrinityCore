@@ -1439,7 +1439,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 		case uint32(protocol.OpcodeMSG_MOVE_WORLDPORT_ACK):
 			if state.authed && state.player != nil {
 				state.sendPlayerUpdate()
-				if update, err := state.server.buildAttachedTransportUpdate(*state.player); err == nil && update != nil {
+				if update, err := state.server.buildAttachedTransportUpdate(ctx, *state.player); err == nil && update != nil {
 					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
 				}
 				if update, err := state.server.buildMapTransportUpdates(*state.player, state.player.TransportGUID); err == nil && update != nil {

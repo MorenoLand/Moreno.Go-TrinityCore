@@ -295,16 +295,37 @@ func (s *Server) nearbyTransportSpawns(state playerState, distance float64) []ga
 	return result
 }
 
-func (s *Server) buildAttachedTransportUpdate(state playerState) (*protocol.Packet, error) {
+func (s *Server) buildAttachedTransportUpdate(ctx context.Context, state playerState) (*protocol.Packet, error) {
 	if s == nil || state.TransportGUID == 0 {
 		return nil, nil
 	}
-	spawn, found := s.transportSpawnForGUID(state.TransportGUID)
+	var transport continentTransport
+	found := false
+	s.transportMu.Lock()
+	for _, candidate := range s.transports {
+		if candidate == nil || (state.TransportGUID != uint64(candidate.Spawn.GUID) && state.TransportGUID != gameObjectGUID(candidate.Spawn.GUID, candidate.Spawn.Entry)) {
+			continue
+		}
+		transport = *candidate
+		transport.StaticCreatures = append([]creatureSpawn(nil), candidate.StaticCreatures...)
+		transport.StaticObjects = append([]gameObjectSpawn(nil), candidate.StaticObjects...)
+		found = true
+		break
+	}
+	s.transportMu.Unlock()
 	if !found {
 		return nil, nil
 	}
 	updates := protocol.NewUpdateData()
-	updates.AddUpdateBlock(buildTransportGameObjectUpdate(spawn, true))
+	updates.AddUpdateBlock(buildTransportGameObjectUpdate(transport.Spawn, true))
+	for _, passenger := range transport.passengerCreatures() {
+		stats := s.loadCreatureStats(ctx, passenger.Entry)
+		passenger.BoundingRadius, passenger.CombatReach = stats.BoundingRadius, stats.CombatReach
+		updates.AddUpdateBlock(buildCreatureUpdate(passenger))
+	}
+	for _, passenger := range transport.passengerObjects() {
+		updates.AddUpdateBlock(buildGameObjectUpdate(passenger))
+	}
 	return updates.BuildPacket(0)
 }
 
