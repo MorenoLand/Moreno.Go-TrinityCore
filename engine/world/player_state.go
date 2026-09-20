@@ -51,9 +51,12 @@ const (
 	unitFieldChosenTitle                        = 1195
 	unitFieldAmmoID                             = 1198
 	unitFieldPlayerSelfResSpell                 = 1199 // PLAYER_SELF_RES_SPELL = UNIT_END + 0x041B
-	playerFieldHonorCurrency                    = 1208 // PLAYER_FIELD_HONOR_CURRENCY = UNIT_END + 0x0424
-	playerFieldArenaCurrency                    = 1209 // PLAYER_FIELD_ARENA_CURRENCY = UNIT_END + 0x0425
-	playerFieldLifetimeHonorableKills           = 1210 // PLAYER_FIELD_LIFETIME_HONORABLE_KILLS = UNIT_END + 0x0426
+	playerFieldKills                            = 1225 // PLAYER_FIELD_KILLS = UNIT_END + 0x0435
+	playerFieldTodayContribution                = 1226 // PLAYER_FIELD_TODAY_CONTRIBUTION = UNIT_END + 0x0436
+	playerFieldYesterdayContribution            = 1227 // PLAYER_FIELD_YESTERDAY_CONTRIBUTION = UNIT_END + 0x0437
+	playerFieldLifetimeHonorableKills           = 1228 // PLAYER_FIELD_LIFETIME_HONORABLE_KILLS = UNIT_END + 0x0438
+	playerFieldHonorCurrency                    = 1277 // PLAYER_FIELD_HONOR_CURRENCY = UNIT_END + 0x0469
+	playerFieldArenaCurrency                    = 1278 // PLAYER_FIELD_ARENA_CURRENCY = UNIT_END + 0x046A
 	playerFieldDuelArbiter                      = 148  // PLAYER_DUEL_ARBITER = UNIT_END + 0x0000 (Size 2)
 	playerFieldDuelTeam                         = 156  // PLAYER_DUEL_TEAM = UNIT_END + 0x0008 (Size 1)
 	playerExploredZonesStart                    = 1041 // PLAYER_EXPLORED_ZONES_1 = UNIT_END + 0x037D
@@ -1360,6 +1363,9 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	values[unitFieldAmmoID] = state.AmmoID
 	values[playerFieldHonorCurrency] = state.TotalHonorPoints
 	values[playerFieldArenaCurrency] = state.ArenaPoints
+	values[playerFieldKills] = uint32(state.TodayKills) | uint32(state.YesterdayKills)<<16
+	values[playerFieldTodayContribution] = state.TodayHonorPoints
+	values[playerFieldYesterdayContribution] = state.YesterdayHonorPoints
 	values[playerFieldLifetimeHonorableKills] = state.TotalKills
 	if state.DuelArbiter != 0 {
 		values[playerFieldDuelArbiter] = uint32(state.DuelArbiter)
