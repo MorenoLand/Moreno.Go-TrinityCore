@@ -120,6 +120,7 @@ func (s *session) sendGuildLoginInfo(ctx context.Context) {
 	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event.Bytes(), true)
 	s.sendGuildBankTabsInfo(ctx)
 	_ = s.handleGuildRoster(ctx)
+	s.broadcastGuildMemberLogin()
 }
 
 func (s *session) sendGuildBankTabsInfo(ctx context.Context) {
@@ -168,6 +169,25 @@ func (s *session) broadcastGuildMemberLogout() {
 	defer s.server.sessionsMu.RUnlock()
 	for target := range s.server.sessions {
 		if target == s || !target.playerLoaded || target.player == nil || target.player.GuildID != s.player.GuildID {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event.Bytes(), true)
+	}
+}
+
+func (s *session) broadcastGuildMemberLogin() {
+	if s == nil || s.player == nil || s.player.GuildID == 0 || s.server == nil {
+		return
+	}
+	event := protocol.NewBuffer(32 + len(s.player.Name))
+	event.WriteU8(12)
+	event.WriteU8(1)
+	event.WriteCString(s.player.Name)
+	event.WriteU64(s.playerGUID)
+	s.server.sessionsMu.RLock()
+	defer s.server.sessionsMu.RUnlock()
+	for target := range s.server.sessions {
+		if !target.playerLoaded || target.player == nil || target.player.GuildID != s.player.GuildID {
 			continue
 		}
 		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event.Bytes(), true)
