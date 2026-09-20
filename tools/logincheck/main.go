@@ -118,7 +118,126 @@ func requireCreateBlock(event protocoltrace.Event) error {
 	if kind != protocol.UpdateCreateObject && kind != protocol.UpdateCreateObject2 {
 		return fmt.Errorf("first player update block kind=%d, want create", kind)
 	}
+	return requirePlayerCreateFields(reader)
+}
+
+func requirePlayerCreateFields(reader *protocol.Buffer) error {
+	if _, err := reader.ReadPackedGUID(); err != nil {
+		return fmt.Errorf("player create GUID is truncated: %w", err)
+	}
+	typeID, err := reader.ReadU8()
+	if err != nil {
+		return fmt.Errorf("player create type is truncated: %w", err)
+	}
+	if typeID != 4 {
+		return fmt.Errorf("first create object type=%d, want player type 4", typeID)
+	}
+	flags, err := reader.ReadU16()
+	if err != nil {
+		return fmt.Errorf("player movement flags are truncated: %w", err)
+	}
+	if flags&0x20 != 0 {
+		if err := skipLivingMovement(reader); err != nil {
+			return err
+		}
+	} else if flags&0x40 != 0 {
+		if _, err := reader.Read(16); err != nil {
+			return fmt.Errorf("player stationary movement is truncated: %w", err)
+		}
+	}
+	if flags&0x8 != 0 {
+		if _, err := reader.ReadU32(); err != nil {
+			return fmt.Errorf("player unknown movement field is truncated: %w", err)
+		}
+	}
+	if flags&0x10 != 0 {
+		if _, err := reader.ReadU32(); err != nil {
+			return fmt.Errorf("player low-guid movement field is truncated: %w", err)
+		}
+	}
+	if flags&0x4 != 0 {
+		if _, err := reader.ReadPackedGUID(); err != nil {
+			return fmt.Errorf("player target movement field is truncated: %w", err)
+		}
+	}
+	if flags&0x2 != 0 {
+		if _, err := reader.ReadU32(); err != nil {
+			return fmt.Errorf("player transport movement field is truncated: %w", err)
+		}
+	}
+	maskBlocks, err := reader.ReadU8()
+	if err != nil {
+		return fmt.Errorf("player update mask is truncated: %w", err)
+	}
+	mask := make([]uint32, maskBlocks)
+	for index := range mask {
+		mask[index], err = reader.ReadU32()
+		if err != nil {
+			return fmt.Errorf("player update mask block %d is truncated: %w", index, err)
+		}
+	}
+	if !updateMaskHas(mask, 0) {
+		return fmt.Errorf("player update mask omits OBJECT_FIELD_GUID low word")
+	}
+	if !updateMaskHas(mask, 2) || !updateMaskHas(mask, 23) || !updateMaskHas(mask, 67) {
+		return fmt.Errorf("player update mask omits required type, race/class, or display fields")
+	}
 	return nil
+}
+
+func skipLivingMovement(reader *protocol.Buffer) error {
+	movementFlags, err := reader.ReadU32()
+	if err != nil {
+		return fmt.Errorf("player movement flags are truncated: %w", err)
+	}
+	extraFlags, err := reader.ReadU16()
+	if err != nil {
+		return fmt.Errorf("player extra movement flags are truncated: %w", err)
+	}
+	if _, err := reader.Read(20); err != nil {
+		return fmt.Errorf("player movement position is truncated: %w", err)
+	}
+	if movementFlags&0x200 != 0 {
+		if _, err := reader.ReadPackedGUID(); err != nil {
+			return fmt.Errorf("player transport GUID is truncated: %w", err)
+		}
+		if _, err := reader.Read(17); err != nil {
+			return fmt.Errorf("player transport offsets are truncated: %w", err)
+		}
+		if extraFlags&0x1 != 0 {
+			if _, err := reader.ReadU32(); err != nil {
+				return fmt.Errorf("player interpolated transport time is truncated: %w", err)
+			}
+		}
+	}
+	if movementFlags&(0x2000|0x4000) != 0 || extraFlags&0x2 != 0 {
+		if _, err := reader.ReadF32(); err != nil {
+			return fmt.Errorf("player pitch is truncated: %w", err)
+		}
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		return fmt.Errorf("player fall time is truncated: %w", err)
+	}
+	if movementFlags&0x1000 != 0 {
+		if _, err := reader.Read(16); err != nil {
+			return fmt.Errorf("player jump movement is truncated: %w", err)
+		}
+	}
+	if movementFlags&0x04000000 != 0 {
+		if _, err := reader.ReadF32(); err != nil {
+			return fmt.Errorf("player spline elevation is truncated: %w", err)
+		}
+	}
+	if _, err := reader.Read(36); err != nil {
+		return fmt.Errorf("player movement speeds are truncated: %w", err)
+	}
+	return nil
+}
+
+func updateMaskHas(mask []uint32, field int) bool {
+	block := field / 32
+	bit := uint(field % 32)
+	return block >= 0 && block < len(mask) && mask[block]&(uint32(1)<<bit) != 0
 }
 
 func eventPayload(event protocoltrace.Event) ([]byte, error) {
