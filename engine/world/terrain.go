@@ -439,7 +439,7 @@ func (s *Server) mapWMOAreaID(mapID uint32, x, y, z float32) (uint32, bool) {
 	point := terrainVector{terrainMapHalfSize - x, terrainMapHalfSize - y, z}
 	best := terrainWMOHit{Ground: -float32(math.Inf(1))}
 	found := false
-	for _, spawn := range s.terrainTile(mapID, tileX, tileY) {
+	for _, spawn := range s.terrainTile(mapID, 63-tileX, 63-tileY) {
 		if spawn.Flags&terrainModelM2 != 0 || spawn.Flags&terrainModelHasBound == 0 {
 			continue
 		}
@@ -462,7 +462,7 @@ func (s *Server) mapAreaID(mapID uint32, x, y float32) (uint32, bool) {
 	if gridX < 0 || gridX >= 64 || gridY < 0 || gridY >= 64 {
 		return 0, false
 	}
-	path := filepath.Join(s.Config.GameDataDir, "maps", fmt.Sprintf("%03d%02d%02d.map", mapID, gridX, gridY))
+	path := filepath.Join(s.Config.GameDataDir, "maps", fmt.Sprintf("%03d%02d%02d.map", mapID, 63-gridX, 63-gridY))
 	file, err := os.Open(path)
 	if err != nil {
 		return 0, false
