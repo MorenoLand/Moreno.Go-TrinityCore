@@ -1744,6 +1744,7 @@ type activeAura struct {
 	StackCount         uint8
 	RemainingCharges   uint8
 	StackAmount        uint32
+	HideDuration       bool
 	AuraInterruptFlags uint32
 	TriggerSpell       uint32
 	DRGroup            DiminishingGroup

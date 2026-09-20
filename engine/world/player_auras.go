@@ -89,6 +89,7 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 				}
 				aura.Positive = !isHarmfulAura(aura.AuraType)
 				aura.StackAmount = spell.StackAmount
+				aura.HideDuration = spell.AttributesEx5&0x00000400 != 0
 				if spell.ProcCharges > 0 {
 					if aura.RemainingCharges == 0 || aura.RemainingCharges > uint8(spell.ProcCharges) {
 						aura.RemainingCharges = uint8(spell.ProcCharges)
@@ -180,6 +181,7 @@ func (s *session) loadGlyphAuras(state *playerState) {
 			aura.PeriodMs = effect.AuraPeriod
 			aura.Positive = !isHarmfulAura(effect.Aura)
 			aura.StackAmount = spell.StackAmount
+			aura.HideDuration = spell.AttributesEx5&0x00000400 != 0
 			break
 		}
 		if aura.AuraType == 0 {
@@ -229,7 +231,11 @@ func (s *session) sendLoadedAuras() {
 		if aura.StackAmount == 0 {
 			stackCount = aura.RemainingCharges
 		}
-		records = append(records, protocol.AuraUpdateRecord{CasterGUID: aura.CasterGUID, Slot: aura.Slot, SpellID: aura.SpellID, Positive: aura.Positive, MaxDurationMs: aura.DurationMs, DurationMs: aura.RemainingMs, CasterLevel: aura.CasterLevel, StackCount: stackCount})
+		maxDuration, duration := aura.DurationMs, aura.RemainingMs
+		if aura.HideDuration {
+			maxDuration, duration = 0, 0
+		}
+		records = append(records, protocol.AuraUpdateRecord{CasterGUID: aura.CasterGUID, Slot: aura.Slot, SpellID: aura.SpellID, Positive: aura.Positive, MaxDurationMs: maxDuration, DurationMs: duration, CasterLevel: aura.CasterLevel, StackCount: stackCount})
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE_ALL), protocol.BuildAuraUpdateAll(s.playerGUID, records), true)
 }
