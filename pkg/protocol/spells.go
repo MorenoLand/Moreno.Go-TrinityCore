@@ -287,6 +287,10 @@ type AuraUpdateRecord struct {
 }
 
 func BuildAuraUpdateWithStack(targetGUID, casterGUID uint64, slot uint8, spellID uint32, remove, positive bool, maxDurationMs, durationMs uint32, casterLevel, stackCount uint8) []byte {
+	return BuildAuraUpdateWithStackEffect(targetGUID, casterGUID, slot, spellID, remove, positive, maxDurationMs, durationMs, casterLevel, stackCount, 0x01)
+}
+
+func BuildAuraUpdateWithStackEffect(targetGUID, casterGUID uint64, slot uint8, spellID uint32, remove, positive bool, maxDurationMs, durationMs uint32, casterLevel, stackCount, effectMask uint8) []byte {
 	buf := NewBuffer(36)
 	buf.WritePackedGUID(targetGUID)
 	if remove {
@@ -294,7 +298,7 @@ func BuildAuraUpdateWithStack(targetGUID, casterGUID uint64, slot uint8, spellID
 		buf.WriteU32(0)
 		return buf.Bytes()
 	}
-	writeAuraUpdateRecord(buf, targetGUID, AuraUpdateRecord{CasterGUID: casterGUID, Slot: slot, SpellID: spellID, Positive: positive, MaxDurationMs: maxDurationMs, DurationMs: durationMs, CasterLevel: casterLevel, StackCount: stackCount})
+	writeAuraUpdateRecord(buf, targetGUID, AuraUpdateRecord{CasterGUID: casterGUID, Slot: slot, SpellID: spellID, EffectMask: effectMask, Positive: positive, MaxDurationMs: maxDurationMs, DurationMs: durationMs, CasterLevel: casterLevel, StackCount: stackCount})
 	return buf.Bytes()
 }
 

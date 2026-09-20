@@ -2064,11 +2064,17 @@ func (s *session) sendAuraUpdateWithStack(slot uint8, spellID uint32, remove, po
 			maxDurationMs, durationMs = auraWireDurations(spell, maxDurationMs, durationMs)
 		}
 	}
+	effectMask := uint8(0x01)
+	s.castMu.Lock()
+	if aura := s.activeAuras[spellID]; aura != nil && aura.EffectMask != 0 {
+		effectMask = aura.EffectMask
+	}
+	s.castMu.Unlock()
 	level := uint8(1)
 	if s.player != nil && s.player.Level > 0 {
 		level = s.player.Level
 	}
-	pkt := protocol.BuildAuraUpdateWithStack(s.playerGUID, s.playerGUID, slot, spellID, remove, positive, maxDurationMs, durationMs, level, stackCount)
+	pkt := protocol.BuildAuraUpdateWithStackEffect(s.playerGUID, s.playerGUID, slot, spellID, remove, positive, maxDurationMs, durationMs, level, stackCount, effectMask)
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), pkt, true)
 }
 
@@ -2348,7 +2354,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			stackCount = uint8(spell.ProcCharges)
 		}
 		wireMaxDuration, wireDuration := auraWireDurations(spell, durationMs, durationMs)
-		updatePkt := protocol.BuildAuraUpdateWithStack(targetGUID, s.playerGUID, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, s.player.Level, stackCount)
+		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, s.playerGUID, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, s.player.Level, stackCount, spellEffectMask(spell, eff))
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 		if s.server != nil {
 			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, targetSess)
@@ -2432,7 +2438,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		stackCount = uint8(spell.ProcCharges)
 	}
 	wireMaxDuration, wireDuration := auraWireDurations(spell, durationMs, durationMs)
-	updatePkt := protocol.BuildAuraUpdateWithStack(targetGUID, s.playerGUID, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, s.player.Level, stackCount)
+	updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, s.playerGUID, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, s.player.Level, stackCount, spellEffectMask(spell, eff))
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, s)
 
