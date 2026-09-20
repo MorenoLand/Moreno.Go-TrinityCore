@@ -151,6 +151,8 @@ type session struct {
 	playerGUID            uint64
 	playerLoaded          bool
 	player                *playerState
+	visiblePlayersMu      sync.Mutex
+	visiblePlayers        map[uint64]struct{}
 	logoutAt              time.Time
 	writeMu               sync.Mutex
 	captureUpdatePackets  bool
@@ -1443,7 +1445,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				if update, err := state.server.buildMapTransportUpdates(*state.player, state.player.TransportGUID); err == nil && update != nil {
 					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
 				}
-				if update, _ := state.server.buildNearbyPlayerUpdates(*state.player); update != nil {
+				if update, _ := state.server.buildNearbyPlayerUpdates(state); update != nil {
 					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
 				}
 				if update, _, err := state.server.buildNearbyCreatureUpdates(ctx, *state.player); err == nil && update != nil {

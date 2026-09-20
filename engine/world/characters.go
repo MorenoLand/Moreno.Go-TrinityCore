@@ -440,6 +440,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.fatigueTimer = -1
 	s.playerGUID = guid
 	s.player = &state
+	s.visiblePlayersMu.Lock()
+	s.visiblePlayers = nil
+	s.visiblePlayersMu.Unlock()
 	if state.PlayerFlags&playerFlagContestedPVP != 0 {
 		s.contestedPVPEnd = time.Now().Add(30 * time.Second)
 	} else {
@@ -595,7 +598,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		wg.Add(3)
 		go func() {
 			defer wg.Done()
-			nearbyPlayers, playerCount = s.server.buildNearbyPlayerUpdates(state)
+			nearbyPlayers, playerCount = s.server.buildNearbyPlayerUpdates(s)
 		}()
 		go func() {
 			defer wg.Done()

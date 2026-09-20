@@ -129,6 +129,9 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) {
 		s.updateZoneAndArea(context.Background(), true)
 	} else {
 		s.lastZoneUpdate = time.Time{}
+		s.visiblePlayersMu.Lock()
+		s.visiblePlayers = nil
+		s.visiblePlayersMu.Unlock()
 	}
 	s.isFalling = false
 	s.isMoving = false
@@ -391,6 +394,9 @@ func (s *session) streamNearbyObjects(ctx context.Context) {
 	s.lastStreamY = s.player.Y
 	s.lastStreamZ = s.player.Z
 	if packet, count, err := s.server.buildNearbyCreatureUpdates(ctx, *s.player); err == nil && count > 0 && packet != nil {
+		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+	}
+	if packet, _ := s.server.buildNearbyPlayerUpdates(s); packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 	}
 	if packet, count, err := s.server.buildNearbyGameObjectUpdates(ctx, *s.player, true); err == nil && count > 0 && packet != nil {

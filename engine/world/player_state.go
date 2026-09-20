@@ -1708,22 +1708,43 @@ func playerFieldPublic(index int) bool {
 	return false
 }
 
-func (s *Server) buildNearbyPlayerUpdates(state playerState) (*protocol.Packet, int) {
-	if s == nil || state.GUID == 0 || s.Config.VisibilityDistanceContinents <= 0 {
+func (s *Server) buildNearbyPlayerUpdates(observer *session) (*protocol.Packet, int) {
+	if s == nil || observer == nil || observer.player == nil || observer.player.GUID == 0 || s.Config.VisibilityDistanceContinents <= 0 {
 		return nil, 0
 	}
+	state := *observer.player
 	distance := float64(s.Config.VisibilityDistanceContinents)
 	updates := protocol.NewUpdateData()
 	count := 0
+	candidates := make(map[uint64]playerState)
 	s.sessionsMu.RLock()
 	for sess := range s.sessions {
-		if sess == nil || !sess.playerLoaded || sess.player == nil || sess.player.GUID == state.GUID || sess.player.Map != state.Map {
+		if sess == nil || sess == observer || !sess.playerLoaded || sess.player == nil || sess.player.GUID == state.GUID || sess.player.Map != state.Map {
 			continue
 		}
 		if math.Hypot(float64(sess.player.X-state.X), float64(sess.player.Y-state.Y)) > distance {
 			continue
 		}
-		packet, packetErr := s.buildPlayerUpdateForTarget(*sess.player, false)
+		candidates[sess.player.GUID] = *sess.player
+	}
+	s.sessionsMu.RUnlock()
+	observer.visiblePlayersMu.Lock()
+	defer observer.visiblePlayersMu.Unlock()
+	if observer.visiblePlayers == nil {
+		observer.visiblePlayers = make(map[uint64]struct{})
+	}
+	for guid := range observer.visiblePlayers {
+		if _, ok := candidates[guid]; !ok {
+			updates.AddOutOfRangeGUID(guid)
+			delete(observer.visiblePlayers, guid)
+			count++
+		}
+	}
+	for guid, targetState := range candidates {
+		if _, ok := observer.visiblePlayers[guid]; ok {
+			continue
+		}
+		packet, packetErr := s.buildPlayerUpdateForTarget(targetState, false)
 		if packetErr != nil || packet == nil {
 			continue
 		}
@@ -1747,9 +1768,9 @@ func (s *Server) buildNearbyPlayerUpdates(state playerState) (*protocol.Packet, 
 			continue
 		}
 		updates.AddUpdateBlock(block)
+		observer.visiblePlayers[guid] = struct{}{}
 		count++
 	}
-	s.sessionsMu.RUnlock()
 	if count == 0 || !updates.HasData() {
 		return nil, 0
 	}
@@ -1778,6 +1799,16 @@ func (s *Server) broadcastPlayerCreate(state playerState, source *session) {
 		if math.Hypot(float64(target.player.X-state.X), float64(target.player.Y-state.Y)) > distance {
 			continue
 		}
+		target.visiblePlayersMu.Lock()
+		if target.visiblePlayers == nil {
+			target.visiblePlayers = make(map[uint64]struct{})
+		}
+		if _, ok := target.visiblePlayers[state.GUID]; ok {
+			target.visiblePlayersMu.Unlock()
+			continue
+		}
+		target.visiblePlayers[state.GUID] = struct{}{}
+		target.visiblePlayersMu.Unlock()
 		_ = target.write(packet.Opcode, packet.Payload.Bytes(), true)
 	}
 }
