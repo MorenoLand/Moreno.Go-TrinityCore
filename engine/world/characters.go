@@ -610,9 +610,12 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if !sendNearbyObjects() || !sendNearbyObjects() {
 		return false
 	}
+	zoneID, areaID := s.server.zoneAndAreaID(state.Map, state.X, state.Y, state.Z, state.Zone)
+	state.Zone = zoneID
+	s.player.Zone = state.Zone
 	s.updateLocalChannels(state.Zone)
 	s.exploreZone(ctx, state.Zone)
-	if err := s.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), buildInitWorldStates(state, s.server.Config.ArenaSeasonID, s.server.Config.ArenaSeasonInProgress), true); err != nil {
+	if err := s.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), buildInitWorldStates(state, areaID, s.server.Config.ArenaSeasonID, s.server.Config.ArenaSeasonInProgress), true); err != nil {
 		return false
 	}
 	s.lastStreamX, s.lastStreamY, s.lastStreamZ = state.X, state.Y, state.Z
@@ -2295,7 +2298,7 @@ func buildLearnedDanceMoves() []byte {
 	return packet.Bytes()
 }
 
-func buildInitWorldStates(state playerState, arenaSeasonID uint32, arenaSeasonInProgress bool) []byte {
+func buildInitWorldStates(state playerState, areaID, arenaSeasonID uint32, arenaSeasonInProgress bool) []byte {
 	season := int32(0)
 	previousSeason := int32(0)
 	if arenaSeasonInProgress {
@@ -2355,7 +2358,7 @@ func buildInitWorldStates(state playerState, arenaSeasonID uint32, arenaSeasonIn
 	packet := protocol.NewBuffer(16 + len(worldStates)*8)
 	packet.WriteI32(int32(state.Map))
 	packet.WriteI32(int32(state.Zone))
-	packet.WriteI32(0)
+	packet.WriteI32(int32(areaID))
 	packet.WriteU16(uint16(len(worldStates)))
 	for _, worldState := range worldStates {
 		packet.WriteI32(worldState[0])
