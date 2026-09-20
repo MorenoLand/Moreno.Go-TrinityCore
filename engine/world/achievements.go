@@ -31,6 +31,7 @@ import (
 
 // CriteriaTypeCount defines the full range of achievement criteria types (0..123).
 const CriteriaTypeCount = 124
+const achievementFlagHidden uint32 = 0x00000002
 
 // Achievement criteria types (0..123) matching TrinityCore 3.3.5 and Achievement_Criteria.dbc.
 const (
@@ -576,6 +577,17 @@ func writeCriteriaProgress(buffer *protocol.Buffer, playerGUID uint64, progress 
 	buffer.WriteU32(0) // creation time
 }
 
+func (s *session) hiddenAchievement(achievementID uint32) bool {
+	if s == nil || s.server == nil {
+		return false
+	}
+	s.server.loadAchievementIndex()
+	achievementIndex.mu.RLock()
+	entry, found := achievementIndex.achieveByID[achievementID]
+	achievementIndex.mu.RUnlock()
+	return found && entry.Flags&achievementFlagHidden != 0
+}
+
 // sendAllAchievementData mirrors AchievementMgr::SendAllAchievementData:
 // earned block, -1 separator, progress block, -1 separator.
 func (s *session) sendAllAchievementData() {
@@ -585,6 +597,9 @@ func (s *session) sendAllAchievementData() {
 	packet := protocol.NewBuffer(256)
 	ids := make([]uint32, 0, len(s.earnedAchievements))
 	for id := range s.earnedAchievements {
+		if s.hiddenAchievement(id) {
+			continue
+		}
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
@@ -645,6 +660,9 @@ func (s *session) handleQueryInspectAchievements(ctx context.Context, payload []
 	packet.WritePackedGUID(targetGUID)
 	ids := make([]uint32, 0, len(earned))
 	for id := range earned {
+		if s.hiddenAchievement(id) {
+			continue
+		}
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
@@ -1120,12 +1138,11 @@ func (s *session) completeAchievement(achievementID uint32) {
 	packet.WriteU32(achievementID)
 	packet.WritePackedTime(time.Unix(int64(now), 0))
 	packet.WriteU32(0)
-	if s.playerLoading {
-		return
-	}
-	_ = s.write(uint16(protocol.OpcodeSMSG_ACHIEVEMENT_EARNED), packet.Bytes(), true)
-	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ACHIEVEMENT_EARNED), packet.Bytes(), s)
+	if !s.playerLoading && !s.hiddenAchievement(achievementID) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_ACHIEVEMENT_EARNED), packet.Bytes(), true)
+		if s.server != nil {
+			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ACHIEVEMENT_EARNED), packet.Bytes(), s)
+		}
 	}
 	s.debug("achievement earned", "account", s.accountName, "guid", s.playerGUID, "achievement", achievementID)
 
