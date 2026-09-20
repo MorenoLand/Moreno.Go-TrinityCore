@@ -8,5 +8,15 @@
     "fallback": 0,
     "zone": 36,
     "area": 1339
+  },
+  {
+    "name": "wmo-area-triple-probe",
+    "map": 0,
+    "x": -8890.3,
+    "y": -188.3,
+    "z": 169,
+    "fallback": 0,
+    "zone": 12,
+    "area": 9
   }
 ]
