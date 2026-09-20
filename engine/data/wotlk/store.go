@@ -805,6 +805,43 @@ func (s *Store) TalentBySpell(spellID uint32) (uint32, uint8, bool) {
 	return 0, 0, false
 }
 
+func (s *Store) PetTalentSpells() (map[uint32]struct{}, error) {
+	talents, err := s.File("Talent")
+	if err != nil {
+		return nil, err
+	}
+	tabs, err := s.File("TalentTab")
+	if err != nil {
+		return nil, err
+	}
+	spells := make(map[uint32]struct{})
+	for i := 0; i < talents.Records(); i++ {
+		record, recordErr := talents.Record(i)
+		if recordErr != nil {
+			continue
+		}
+		tabID, tabErr := record.Uint32(1)
+		if tabErr != nil {
+			continue
+		}
+		tab, found := tabs.Find(tabID)
+		if !found {
+			continue
+		}
+		petMask, maskErr := tab.Uint32(21)
+		if maskErr != nil || petMask == 0 {
+			continue
+		}
+		for rank := 0; rank < 5; rank++ {
+			spellID, spellErr := record.Uint32(4 + rank)
+			if spellErr == nil && spellID != 0 {
+				spells[spellID] = struct{}{}
+			}
+		}
+	}
+	return spells, nil
+}
+
 // SpellDuration mirrors SpellInfo::GetDuration from SpellDuration.dbc
 // (DBCStructure.h:1524, format "niii"): Duration + DurationPerLevel * (level-1)
 // clamped to MaxDuration when positive. A negative base duration (-1) means

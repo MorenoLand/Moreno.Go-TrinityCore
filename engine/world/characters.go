@@ -656,6 +656,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		}
 	}
 	s.continueTaxiFlight()
+	if s.player.AtLogin&uint32(atLoginResetPetTalents) != 0 {
+		s.resetPetTalentsAtLogin(ctx)
+	}
 	// Spawn active pet if one was active at logout (slot 0)
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
 		var petID, entry, modelID, level, reactState, curHealth, curMana int64

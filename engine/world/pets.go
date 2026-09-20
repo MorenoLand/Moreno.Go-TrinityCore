@@ -425,6 +425,52 @@ func buildPetUpdate(petGUID uint64, entry uint32, level uint32, modelID uint32, 
 	return block.Bytes()
 }
 
+func (s *session) resetPetTalentsAtLogin(ctx context.Context) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.player.AtLogin&uint32(atLoginResetPetTalents) == 0 {
+		return true
+	}
+	cdb := s.server.CharactersStore.DB
+	if _, err := cdb.ExecContext(ctx, "UPDATE characters SET at_login = at_login & ~16 WHERE guid = ?", s.playerGUID); err != nil {
+		s.debug("pet talent reset flag update failed", "account", s.accountName, "error", err)
+		return false
+	}
+	s.player.AtLogin &^= uint32(atLoginResetPetTalents)
+	if s.server.Data == nil {
+		return true
+	}
+	petTalents, err := s.server.Data.PetTalentSpells()
+	if err != nil {
+		s.debug("pet talent spell lookup failed", "account", s.accountName, "error", err)
+		return true
+	}
+	rows, err := cdb.QueryContext(ctx, "SELECT ps.guid, ps.spell FROM pet_spell ps JOIN character_pet cp ON cp.id = ps.guid WHERE cp.owner = ?", s.playerGUID)
+	if err != nil {
+		s.debug("pet talent reset query failed", "account", s.accountName, "error", err)
+		return true
+	}
+	type petSpell struct{ guid, spell uint32 }
+	var removals []petSpell
+	for rows.Next() {
+		var removal petSpell
+		if rows.Scan(&removal.guid, &removal.spell) == nil {
+			if _, found := petTalents[removal.spell]; found {
+				removals = append(removals, removal)
+			}
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		s.debug("pet talent reset rows failed", "account", s.accountName, "error", err)
+		return true
+	}
+	for _, removal := range removals {
+		if _, err := cdb.ExecContext(ctx, "DELETE FROM pet_spell WHERE guid = ? AND spell = ?", removal.guid, removal.spell); err != nil {
+			s.debug("pet talent spell removal failed", "account", s.accountName, "pet", removal.guid, "spell", removal.spell, "error", err)
+		}
+	}
+	return true
+}
+
 func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name string, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, reactState uint8) {
 	if s.player == nil || petID == 0 {
 		return
