@@ -48,7 +48,7 @@ const (
 	playerFieldKnownTitles                      = 626
 	unitFieldKnownCurrencies                    = 632
 	unitFieldWatchedFaction                     = 1230
-	unitFieldChosenTitle                        = 1195
+	unitFieldChosenTitle                        = 321
 	unitFieldAmmoID                             = 1198
 	unitFieldPlayerSelfResSpell                 = 1199 // PLAYER_SELF_RES_SPELL = UNIT_END + 0x041B
 	playerFieldKills                            = 1225 // PLAYER_FIELD_KILLS = UNIT_END + 0x0435
