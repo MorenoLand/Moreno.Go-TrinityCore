@@ -607,7 +607,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		}
 		return true
 	}
-	if !sendNearbyObjects() || !sendNearbyObjects() {
+	if !sendNearbyObjects() {
 		return false
 	}
 	zoneID, areaID := s.server.zoneAndAreaID(state.Map, state.X, state.Y, state.Z, state.Zone)
