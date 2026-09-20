@@ -729,12 +729,23 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			s.applyStartAllReputation(ctx)
 		}
 	}
+	if s.server.Config.AllFlightPaths {
+		s.player.ExtraFlags |= playerExtraTaxiCheat
+		s.persistExtraFlags()
+	}
 	s.loadMailState(ctx)
 	s.sendNewMailNotification(ctx)
 	if s.player.repopOnLogin {
 		s.buildPlayerRepop(ctx)
 		s.repopAtGraveyard(ctx)
 		s.player.repopOnLogin = false
+	}
+	if s.player.StandState != 0 && s.player.UnitFlags&unitFlagStunned == 0 {
+		s.player.StandState = 0
+		s.sendPlayerUpdate()
+	}
+	if s.player.PlayerFlags&playerFlagGM != 0 || s.player.ExtraFlags&playerExtraGMOn != 0 {
+		s.sendNotification("GM mode is ON")
 	}
 	s.debug("world login stage", "stage", "player-login-hooks-start", "guid", guid)
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventLogin, s.luaPlayer())
