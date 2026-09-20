@@ -641,6 +641,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if !sendNearbyObjects() {
 		return false
 	}
+	s.streamDynamicSpellObjects()
 	zoneID, areaID := s.server.zoneAndAreaID(state.Map, state.X, state.Y, state.Z, state.Zone)
 	state.Zone = zoneID
 	s.player.Zone = state.Zone
