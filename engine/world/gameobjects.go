@@ -263,6 +263,9 @@ func buildGameObjectUpdate(spawn gameObjectSpawn) []byte {
 	values[gameObjectDynamic] = gameObjectDynamicValue(spawn)
 	values[gameObjectFaction] = spawn.Faction
 	values[gameObjectBytes1] = uint32(spawn.State) | uint32(spawn.Type)<<8 | uint32(spawn.ArtKit)<<16 | uint32(spawn.AnimProgress)<<24
+	if spawn.Type == GameObjectTypeMOTransport && spawn.TransportPeriod > 0 {
+		values[gameObjectLevel] = spawn.TransportPeriod
+	}
 	mask := protocol.NewUpdateMask(len(values))
 	for index, value := range values {
 		if value != 0 {
@@ -329,6 +332,9 @@ func buildTransportGameObjectUpdate(spawn gameObjectSpawn, create bool) []byte {
 	values[gameObjectDynamic] = gameObjectDynamicValue(spawn)
 	values[gameObjectFaction] = spawn.Faction
 	values[gameObjectBytes1] = uint32(spawn.State) | uint32(spawn.Type)<<8 | uint32(spawn.ArtKit)<<16 | uint32(spawn.AnimProgress)<<24
+	if spawn.Type == GameObjectTypeMOTransport && spawn.TransportPeriod > 0 {
+		values[gameObjectLevel] = spawn.TransportPeriod
+	}
 	block := protocol.NewBuffer(256)
 	if create {
 		block.WriteU8(protocol.UpdateCreateObject2)
