@@ -110,6 +110,10 @@ const (
 	playerFieldModHealingPct                    = 1193
 	playerFieldModHealingDonePct                = 1194
 	playerFieldCombatRating1                    = 1231 // 1231..1255
+	playerInventoryStart                        = 324
+	playerInventoryCount                        = 150
+	playerBuybackPriceStart                     = 1201
+	playerBuybackTimestampStart                 = 1213
 	playerDailyQuestsStart                      = 1280
 	playerDailyQuestsCount                      = 25
 	playerRuneRegenStart                        = 1305
@@ -237,6 +241,8 @@ type playerState struct {
 	GlyphSlots           [6]uint32
 	GlyphsEnabled        uint32
 	DailyQuests          [playerDailyQuestsCount]uint32
+	InventorySlots       [playerInventoryCount]uint64
+	Buyback              [12]*buybackSlot
 	Stats                [5]uint32
 	Armor                uint32
 	Resistances          [7]uint32
@@ -380,6 +386,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	s.loadDailyQuests(ctx, &state)
 	_ = s.calculatePlayerStats(ctx, &state)
 	_ = s.loadPlayerReputations(ctx, &state)
+	s.loadInventorySlots(ctx, &state)
 	restoreLoadedDeathState(&state)
 	s.restoreLoadedCorpseState(ctx, &state)
 	s.player = &state
@@ -407,6 +414,24 @@ func (s *session) loadGlyphFields(state *playerState) {
 	}
 	if state.Level >= 80 {
 		state.GlyphsEnabled |= 0x20
+	}
+}
+
+func (s *session) loadInventorySlots(ctx context.Context, state *playerState) {
+	if s == nil || state == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT bag, slot, item FROM character_inventory WHERE guid = ? ORDER BY bag, slot", state.GUID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var bag, slot, item int64
+		if rows.Scan(&bag, &slot, &item) != nil || bag != 0 || slot < 0 || slot >= playerInventoryCount || item <= 0 {
+			continue
+		}
+		state.InventorySlots[slot] = uint64(item) | (uint64(0x4000) << 48)
 	}
 }
 
@@ -1421,6 +1446,17 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	values[unitFieldAmmoID] = state.AmmoID
 	values[playerFieldHonorCurrency] = state.TotalHonorPoints
 	values[playerFieldArenaCurrency] = state.ArenaPoints
+	for slot, itemGUID := range state.InventorySlots {
+		values[playerInventoryStart+slot*2] = uint32(itemGUID)
+		values[playerInventoryStart+slot*2+1] = uint32(itemGUID >> 32)
+	}
+	for slot, item := range state.Buyback {
+		if item == nil {
+			continue
+		}
+		values[playerBuybackPriceStart+slot] = item.Price
+		values[playerBuybackTimestampStart+slot] = item.Timestamp
+	}
 	values[playerFieldKills] = uint32(state.TodayKills) | uint32(state.YesterdayKills)<<16
 	values[playerFieldTodayContribution] = state.TodayHonorPoints
 	values[playerFieldYesterdayContribution] = state.YesterdayHonorPoints
@@ -2080,7 +2116,7 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 			updates.AddUpdateBlock(block)
 		}
 
-		if cSlots > 0 && mode != inventoryUpdateDurationsOnly {
+		if cSlots > 0 && mode != inventoryUpdateDurationsOnly && mode != inventoryUpdateCreateOnly {
 			valBlock := buildContainerValuesUpdate(fullGUID, cSlots, contents[int64(fullGUID)])
 			updates.AddUpdateBlock(valBlock)
 		}
@@ -2112,7 +2148,7 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 
 	// TrinityCore: populate slots 0..149 so unequipped/empty slots are cleared to 0 (equipment, backpack, bank, bank bags, buyback, keyring, currency)
 	for sl := 0; sl < 150; sl++ {
-		invField := 324 + sl*2
+		invField := playerInventoryStart + sl*2
 		guid := slotItems[sl]
 		fields[invField] = uint32(guid)
 		fields[invField+1] = uint32(guid >> 32)
@@ -2137,7 +2173,7 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 			fields[playerVisibleItemStart+slot*2+1] = enchant
 		}
 	}
-	if len(fields) > 0 && mode != inventoryUpdateDurationsOnly {
+	if len(fields) > 0 && mode != inventoryUpdateDurationsOnly && mode != inventoryUpdateCreateOnly {
 		valBlock := buildPlayerValuesBlock(s.playerGUID, fields)
 		if valBlock != nil {
 			updates.AddUpdateBlock(valBlock)

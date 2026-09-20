@@ -426,6 +426,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	s.mounts = mounts
 	s.loadBuybackState(ctx, guid)
+	state.Buyback = s.buyback
 	s.logoutHook = false
 	s.questStatusSent = false
 	s.logoutAt = time.Time{}
