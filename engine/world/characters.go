@@ -322,7 +322,7 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 		uint32(0), uint32(0), float32(0), uint32(0), uint8(0), uint32(0), uint32(0),
 		uint16(0), uint8(0), uint16(atLoginFirst), uint16(spawn.Zone), uint32(0), "",
 		startArena, startHonor, uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0),
-		uint64(0), uint32(0), uint8(0), uint32(1),
+		uint64(0), uint32(0), uint32(^uint32(0)), uint32(1),
 		uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0),
 		uint8(1), uint8(0), "", "", uint32(0), "", uint8(0), uint32(0),
 	}
