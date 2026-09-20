@@ -36,3 +36,5 @@ This matrix is based on the pinned TrinityCore checkout at `dcdbc0c5d88eb96f412f
 The first open behavioral gate remains the complete source-defined login packet/update-mask/state comparison in items 4–5; later rows are not promoted by inventory counts.
 
 The login regression verifier includes an executable self-check (`go run ./tools/logincheck -self-check`) for the pre-`SMSG_LOGIN_VERIFY_WORLD` achievement-packet ordering rule (`a8c2896`).
+
+Active pets now use a runtime object GUID separate from the persistent pet number, matching the pinned `Pet::LoadPetFromDB` identity boundary (`80b5fbd`).
