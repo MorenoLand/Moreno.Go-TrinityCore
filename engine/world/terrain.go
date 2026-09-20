@@ -20,6 +20,7 @@ import (
 const (
 	terrainGridSize             = float64(533.3333)
 	terrainCenterGrid           = 32.0
+	terrainMapHalfSize          = float32(0.5 * 64.0 * 533.33333333)
 	terrainAreaNoArea    uint16 = 0x0001
 	terrainModelM2              = uint32(0x00000001)
 	terrainModelHasBound        = uint32(0x00000004)
@@ -435,7 +436,7 @@ func (s *Server) mapWMOAreaID(mapID uint32, x, y, z float32) (uint32, bool) {
 	if tileX < 0 || tileX >= 64 || tileY < 0 || tileY >= 64 {
 		return 0, false
 	}
-	point := terrainVector{x, y, z}
+	point := terrainVector{terrainMapHalfSize - x, terrainMapHalfSize - y, z}
 	best := terrainWMOHit{Ground: -float32(math.Inf(1))}
 	found := false
 	for _, spawn := range s.terrainTile(mapID, tileX, tileY) {
