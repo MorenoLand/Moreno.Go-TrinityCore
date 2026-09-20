@@ -1685,7 +1685,9 @@ func playerFieldPublic(index int) bool {
 	switch {
 	case index >= 0 && index <= 4:
 		return true
-	case index >= 6 && index <= 39:
+	case index >= 6 && index <= 9:
+		return true
+	case index >= 12 && index <= 39:
 		return true
 	case index >= 54 && index <= 63:
 		return true
@@ -1693,13 +1695,15 @@ func playerFieldPublic(index int) bool {
 		return true
 	case index >= 74 && index <= 76:
 		return true
-	case index >= 79 && index <= 83:
+	case index == 80 || index == 81 || index == 83:
 		return true
 	case index == 120 || index == 122:
 		return true
+	case index == 146:
+		return true
 	case index >= 148 && index <= 157:
 		return true
-	case index >= playerVisibleItemStart && index <= playerVisibleItemStart+playerVisibleItemCount*2:
+	case index >= playerVisibleItemStart && index <= playerVisibleItemStart+playerVisibleItemCount*2+1:
 		return true
 	}
 	return false
