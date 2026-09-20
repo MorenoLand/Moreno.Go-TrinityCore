@@ -17,9 +17,10 @@ const (
 	spellCastFlagGo       uint32 = 0x00000100
 	spellCastFlagPending  uint32 = 0x00000001
 
-	spellAttr3MainHand   uint32 = 0x00000400 // SPELL_ATTR3_MAIN_HAND: Require main hand weapon (SharedDefines.h:533)
-	spellAttr3ReqOffhand uint32 = 0x01000000 // SPELL_ATTR3_REQ_OFFHAND: Require offhand weapon (SharedDefines.h:547)
-	spellAttr3ReqWand    uint32 = 0x00400000 // SPELL_ATTR3_REQ_WAND: Requires equipped Wand (SharedDefines.h:545)
+	spellAttr3MainHand     uint32 = 0x00000400 // SPELL_ATTR3_MAIN_HAND: Require main hand weapon (SharedDefines.h:533)
+	spellAttr3ReqOffhand   uint32 = 0x01000000 // SPELL_ATTR3_REQ_OFFHAND: Require offhand weapon (SharedDefines.h:547)
+	spellAttr3ReqWand      uint32 = 0x00400000 // SPELL_ATTR3_REQ_WAND: Requires equipped Wand (SharedDefines.h:545)
+	spellAttr5HideDuration uint32 = 0x00000400 // SPELL_ATTR5_HIDE_DURATION (SharedDefines.h:607)
 
 	spellFailedEquippedItemClass         uint8 = 29  // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
 	spellFailedEquippedItemClassMainhand uint8 = 30  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
@@ -2057,12 +2058,24 @@ func (s *session) sendAuraUpdate(slot uint8, spellID uint32, remove, positive bo
 }
 
 func (s *session) sendAuraUpdateWithStack(slot uint8, spellID uint32, remove, positive bool, maxDurationMs, durationMs uint32, stackCount uint8) {
+	if !remove && s.server != nil && s.server.Data != nil {
+		if spell, found, _ := s.server.Data.Spell(spellID); found {
+			maxDurationMs, durationMs = auraWireDurations(spell, maxDurationMs, durationMs)
+		}
+	}
 	level := uint8(1)
 	if s.player != nil && s.player.Level > 0 {
 		level = s.player.Level
 	}
 	pkt := protocol.BuildAuraUpdateWithStack(s.playerGUID, s.playerGUID, slot, spellID, remove, positive, maxDurationMs, durationMs, level, stackCount)
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), pkt, true)
+}
+
+func auraWireDurations(spell wotlk.Spell, maxDurationMs, durationMs uint32) (uint32, uint32) {
+	if spell.AttributesEx5&spellAttr5HideDuration != 0 {
+		return 0, 0
+	}
+	return maxDurationMs, durationMs
 }
 
 func (s *session) applyAura(spellID uint32) {
@@ -2115,12 +2128,14 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	var miscValue int32
 	stackCount := uint8(1)
 	var stackAmount, procCharges uint32
+	hideDuration := false
 	if s.server != nil && s.server.Data != nil {
 		if sp, found, _ := s.server.Data.Spell(spellID); found {
 			auraInterruptFlags = sp.AuraInterruptFlags
 			dispelType = sp.DispelType
 			mechanic = sp.Mechanic
 			stackAmount = sp.StackAmount
+			hideDuration = sp.AttributesEx5&spellAttr5HideDuration != 0
 			procCharges = sp.ProcCharges
 			if sp.StackAmount == 0 && sp.ProcCharges > 0 {
 				stackCount = uint8(sp.ProcCharges)
@@ -2149,6 +2164,7 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 		Positive:           positive,
 		AuraInterruptFlags: auraInterruptFlags,
 		StackAmount:        stackAmount,
+		HideDuration:       hideDuration,
 		RemainingCharges:   uint8(procCharges),
 	}
 	if durationMs > 0 && durationMs < 18000000 {
@@ -2309,6 +2325,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			TriggerSpell:       eff.TriggerSpell,
 			DRGroup:            drGroup,
 			StackAmount:        spell.StackAmount,
+			HideDuration:       spell.AttributesEx5&spellAttr5HideDuration != 0,
 			RemainingCharges:   uint8(spell.ProcCharges),
 		}
 		targetSess.activeAuras[spell.ID] = aura
@@ -2318,7 +2335,8 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		if spell.StackAmount == 0 && spell.ProcCharges > 0 {
 			stackCount = uint8(spell.ProcCharges)
 		}
-		updatePkt := protocol.BuildAuraUpdateWithStack(targetGUID, s.playerGUID, slot, spell.ID, false, positive, durationMs, durationMs, s.player.Level, stackCount)
+		wireMaxDuration, wireDuration := auraWireDurations(spell, durationMs, durationMs)
+		updatePkt := protocol.BuildAuraUpdateWithStack(targetGUID, s.playerGUID, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, s.player.Level, stackCount)
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 		if s.server != nil {
 			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, targetSess)
@@ -2390,6 +2408,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		CasterLevel:      s.player.Level,
 		TriggerSpell:     eff.TriggerSpell,
 		StackAmount:      spell.StackAmount,
+		HideDuration:     spell.AttributesEx5&spellAttr5HideDuration != 0,
 		RemainingCharges: uint8(spell.ProcCharges),
 	}
 	s.server.activeCreatureAuras[targetGUID][spell.ID] = aura
@@ -2399,7 +2418,8 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	if spell.StackAmount == 0 && spell.ProcCharges > 0 {
 		stackCount = uint8(spell.ProcCharges)
 	}
-	updatePkt := protocol.BuildAuraUpdateWithStack(targetGUID, s.playerGUID, slot, spell.ID, false, positive, durationMs, durationMs, s.player.Level, stackCount)
+	wireMaxDuration, wireDuration := auraWireDurations(spell, durationMs, durationMs)
+	updatePkt := protocol.BuildAuraUpdateWithStack(targetGUID, s.playerGUID, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, s.player.Level, stackCount)
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, s)
 
