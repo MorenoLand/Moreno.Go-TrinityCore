@@ -29,6 +29,10 @@ func (s *session) sendPlayerUpdate() {
 		}
 		return
 	}
+	pvpFlags := s.player.PVPFlags
+	if s.server.Config.GameType == 4 || s.server.Config.GameType == 6 {
+		pvpFlags |= 0x01
+	}
 	fields := map[int]uint32{
 		unitFieldHealth:            s.player.Health,
 		unitFieldMaxHealth:         s.player.MaxHealth,
@@ -38,7 +42,7 @@ func (s *session) sendPlayerUpdate() {
 		unitFieldBytes1:            uint32(s.player.StandState),
 		unitFieldPlayerFlags:       s.player.PlayerFlags,
 		unitFieldPlayerFieldBytes:  playerFieldBytesValue(*s.player),
-		unitFieldBytes2:            uint32(s.player.SheathState) | uint32(s.player.PVPFlags)<<8,
+		unitFieldBytes2:            uint32(s.player.SheathState) | uint32(pvpFlags)<<8,
 		unitFieldPlayerBytes2:      uint32(s.player.FacialStyle) | uint32(s.player.BankBagSlots)<<16 | uint32(s.player.RestState)<<24,
 		unitFieldPlayerBytes3:      uint32(s.player.Gender) | uint32(uint8(s.player.DrunkenState))<<8,
 		unitFieldChosenTitle:       s.player.ChosenTitle,
