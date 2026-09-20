@@ -231,6 +231,8 @@ type playerState struct {
 	TalentGroupsCount    uint8
 	ActiveTalentGroup    uint8
 	Glyphs               [2][6]uint16
+	GlyphSlots           [6]uint32
+	GlyphsEnabled        uint32
 	Stats                [5]uint32
 	Armor                uint32
 	Resistances          [7]uint32
@@ -370,12 +372,37 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	_ = s.updateOfflineRealtimeItemDurations(ctx, &state)
 	_ = s.loadPlayerAuras(ctx, &state)
 	s.loadGlyphAuras(&state)
+	s.loadGlyphFields(&state)
 	_ = s.calculatePlayerStats(ctx, &state)
 	_ = s.loadPlayerReputations(ctx, &state)
 	restoreLoadedDeathState(&state)
 	s.restoreLoadedCorpseState(ctx, &state)
 	s.player = &state
 	return state, nil
+}
+
+func (s *session) loadGlyphFields(state *playerState) {
+	if state == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	if slots, err := s.server.Data.GlyphSlots(); err == nil {
+		state.GlyphSlots = slots
+	}
+	if state.Level >= 15 {
+		state.GlyphsEnabled |= 0x03
+	}
+	if state.Level >= 30 {
+		state.GlyphsEnabled |= 0x08
+	}
+	if state.Level >= 50 {
+		state.GlyphsEnabled |= 0x04
+	}
+	if state.Level >= 70 {
+		state.GlyphsEnabled |= 0x10
+	}
+	if state.Level >= 80 {
+		state.GlyphsEnabled |= 0x20
+	}
 }
 
 const itemFlagsCustomRealTimeDuration uint32 = 0x0001
@@ -1367,6 +1394,11 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	values[playerFieldTodayContribution] = state.TodayHonorPoints
 	values[playerFieldYesterdayContribution] = state.YesterdayHonorPoints
 	values[playerFieldLifetimeHonorableKills] = state.TotalKills
+	for i := 0; i < 6; i++ {
+		values[1312+i] = state.GlyphSlots[i]
+		values[1318+i] = uint32(state.Glyphs[state.ActiveTalentGroup][i])
+	}
+	values[1324] = state.GlyphsEnabled
 	if state.DuelArbiter != 0 {
 		values[playerFieldDuelArbiter] = uint32(state.DuelArbiter)
 		values[playerFieldDuelArbiter+1] = uint32(state.DuelArbiter >> 32)

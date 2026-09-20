@@ -1072,6 +1072,26 @@ func (s *Store) GlyphProperties(id uint32) (GlyphPropertiesEntry, bool, error) {
 	return GlyphPropertiesEntry{ID: id, SpellID: spellID, GlyphSlotFlags: slotFlags, SpellIconID: iconID}, true, nil
 }
 
+func (s *Store) GlyphSlots() ([6]uint32, error) {
+	file, err := s.File("GlyphSlot")
+	if err != nil {
+		return [6]uint32{}, err
+	}
+	var slots [6]uint32
+	for i := 0; i < file.Records(); i++ {
+		record, recordErr := file.Record(i)
+		if recordErr != nil {
+			continue
+		}
+		id, idErr := record.Uint32(0)
+		tooltip, tooltipErr := record.Uint32(2)
+		if idErr == nil && tooltipErr == nil && tooltip >= 1 && tooltip <= 6 {
+			slots[tooltip-1] = id
+		}
+	}
+	return slots, nil
+}
+
 // SkillLineAbilityEntry represents a record from SkillLineAbility.dbc.
 type SkillLineAbilityEntry struct {
 	ID                uint32
