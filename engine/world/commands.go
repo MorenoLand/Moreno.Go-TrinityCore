@@ -115,6 +115,11 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) {
 	s.player.Y = y
 	s.player.Z = z
 	s.player.Orientation = orientation
+	if sameMap {
+		s.updateZoneAndArea(context.Background(), true)
+	} else {
+		s.lastZoneUpdate = time.Time{}
+	}
 	s.isFalling = false
 	s.isMoving = false
 

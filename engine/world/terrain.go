@@ -2,6 +2,7 @@ package world
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -9,6 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 const (
@@ -75,6 +79,30 @@ func (s *Server) zoneAndAreaID(mapID uint32, x, y, z float32, fallback uint32) (
 		zoneID = fallback
 	}
 	return zoneID, areaID
+}
+
+func (s *session) updateZoneAndArea(ctx context.Context, force bool) {
+	if s == nil || s.server == nil || s.player == nil || !s.playerLoaded {
+		return
+	}
+	now := time.Now()
+	if !force && !s.lastZoneUpdate.IsZero() && now.Sub(s.lastZoneUpdate) < time.Second {
+		return
+	}
+	zoneID, areaID := s.server.zoneAndAreaID(s.player.Map, s.player.X, s.player.Y, s.player.Z, s.player.Zone)
+	oldZone, oldArea := s.player.Zone, s.areaID
+	s.player.Zone, s.areaID, s.lastZoneUpdate = zoneID, areaID, now
+	if zoneID == 0 {
+		s.player.Zone = oldZone
+	}
+	if oldZone != s.player.Zone {
+		s.updateLocalChannels(s.player.Zone)
+		s.exploreZone(ctx, s.player.Zone)
+		_ = s.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), buildInitWorldStates(*s.player, areaID, s.server.Config.ArenaSeasonID, s.server.Config.ArenaSeasonInProgress), true)
+	}
+	if oldArea != areaID && oldZone == s.player.Zone {
+		s.sendPlayerUpdate()
+	}
 }
 
 func (s *Server) terrainTile(mapID uint32, tileX, tileY int) []terrainSpawn {

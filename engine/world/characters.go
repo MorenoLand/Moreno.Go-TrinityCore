@@ -613,6 +613,8 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	zoneID, areaID := s.server.zoneAndAreaID(state.Map, state.X, state.Y, state.Z, state.Zone)
 	state.Zone = zoneID
 	s.player.Zone = state.Zone
+	s.areaID = areaID
+	s.lastZoneUpdate = time.Now()
 	s.updateLocalChannels(state.Zone)
 	s.exploreZone(ctx, state.Zone)
 	if err := s.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), buildInitWorldStates(state, areaID, s.server.Config.ArenaSeasonID, s.server.Config.ArenaSeasonInProgress), true); err != nil {

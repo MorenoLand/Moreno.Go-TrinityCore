@@ -188,6 +188,8 @@ type session struct {
 	lastCastTime          time.Time
 	lastCombatTime        time.Time
 	contestedPVPEnd       time.Time
+	areaID                uint32
+	lastZoneUpdate        time.Time
 	logoutHook            bool
 	questStatusSent       bool
 	gossip                *gossipMenuState

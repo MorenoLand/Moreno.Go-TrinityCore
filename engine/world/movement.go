@@ -111,6 +111,7 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		}
 	}
 	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
+	s.updateZoneAndArea(ctx, false)
 	if info.Flags&movementOnTransport != 0 && info.Transport != nil {
 		s.player.TransportGUID = info.Transport.GUID
 		s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = info.Transport.X, info.Transport.Y, info.Transport.Z, info.Transport.Orientation
