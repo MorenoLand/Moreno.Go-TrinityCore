@@ -560,7 +560,7 @@ func (s *session) loadAchievementState(ctx context.Context) {
 // writeEarnedAchievement appends one EarnedAchievement block (u32 id, u32 date).
 func writeEarnedAchievement(buffer *protocol.Buffer, id, date uint32) {
 	buffer.WriteU32(id)
-	buffer.WriteU32(date)
+	buffer.WritePackedTime(time.Unix(int64(date), 0))
 }
 
 // writeCriteriaProgress appends one CriteriaProgress block per
@@ -571,7 +571,7 @@ func writeCriteriaProgress(buffer *protocol.Buffer, playerGUID uint64, progress 
 	buffer.WritePackedGUID(uint64(progress.Counter))
 	buffer.WritePackedGUID(playerGUID)
 	buffer.WriteU32(0) // flags
-	buffer.WriteU32(progress.Date)
+	buffer.WritePackedTime(time.Unix(int64(progress.Date), 0))
 	buffer.WriteU32(0) // elapsed time
 	buffer.WriteU32(0) // creation time
 }
@@ -671,7 +671,7 @@ func (s *session) sendCriteriaUpdate(progress *criteriaProgressState) {
 	packet.WritePackedGUID(uint64(progress.Counter))
 	packet.WritePackedGUID(s.playerGUID)
 	packet.WriteU32(0) // flags
-	packet.WriteU32(progress.Date)
+	packet.WritePackedTime(time.Unix(int64(progress.Date), 0))
 	packet.WriteU32(0) // elapsed
 	packet.WriteU32(0) // creation
 	_ = s.write(uint16(protocol.OpcodeSMSG_CRITERIA_UPDATE), packet.Bytes(), true)
