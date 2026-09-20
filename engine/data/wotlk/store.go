@@ -11,9 +11,12 @@ import (
 )
 
 type Store struct {
-	Dir   string
-	mu    sync.RWMutex
-	files map[string]*dbc.File
+	Dir         string
+	mu          sync.RWMutex
+	files       map[string]*dbc.File
+	wmoAreaOnce sync.Once
+	wmoAreas    map[wmoAreaKey]uint32
+	wmoAreaErr  error
 
 	taxiOnce sync.Once
 	taxi     *taxiNetwork
@@ -23,6 +26,8 @@ type Store struct {
 	slaMap  map[uint32][]SkillLineAbilityEntry
 	slaErr  error
 }
+
+type wmoAreaKey struct{ root, adt, group int32 }
 
 const MountedFlightSpeedAura uint32 = 207
 const MapFlagDynamicDifficulty uint32 = 0x100
@@ -239,6 +244,35 @@ func (s *Store) File(name string) (*dbc.File, error) {
 	}
 	s.mu.Unlock()
 	return file, nil
+}
+
+func (s *Store) WMOArea(root, adt, group int32) (uint32, bool, error) {
+	s.wmoAreaOnce.Do(func() {
+		s.wmoAreas = make(map[wmoAreaKey]uint32)
+		file, err := s.File("WMOAreaTable")
+		if err != nil {
+			s.wmoAreaErr = err
+			return
+		}
+		for i := 0; i < file.Records(); i++ {
+			record, recordErr := file.Record(i)
+			if recordErr != nil {
+				continue
+			}
+			wmoID, wmoErr := record.Int32(1)
+			nameSetID, nameErr := record.Int32(2)
+			groupID, groupErr := record.Int32(3)
+			areaID, areaErr := record.Uint32(10)
+			if wmoErr == nil && nameErr == nil && groupErr == nil && areaErr == nil && areaID != 0 {
+				s.wmoAreas[wmoAreaKey{root: wmoID, adt: nameSetID, group: groupID}] = areaID
+			}
+		}
+	})
+	if s.wmoAreaErr != nil {
+		return 0, false, s.wmoAreaErr
+	}
+	areaID, found := s.wmoAreas[wmoAreaKey{root: root, adt: adt, group: group}]
+	return areaID, found, nil
 }
 
 func (s *Store) Race(id uint32) (Race, bool, error) {
