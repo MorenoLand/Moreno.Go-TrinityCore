@@ -627,6 +627,7 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 			casterGUID = petGUID
 		}
 		aura := &activeAura{SpellID: uint32(spellID), CasterGUID: casterGUID, TargetGUID: petGUID, Slot: uint8(len(s.server.activeCreatureAuras[petGUID]) % 64), Positive: true, CasterLevel: s.player.Level}
+		aura.HideDuration = spell.AttributesEx5&spellAttr5HideDuration != 0
 		if maxDuration > 0 {
 			aura.DurationMs = clampAuraDuration(maxDuration)
 		}
@@ -690,7 +691,11 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 		if aura.StackAmount == 0 {
 			stackCount = aura.RemainingCharges
 		}
-		records = append(records, protocol.AuraUpdateRecord{CasterGUID: aura.CasterGUID, Slot: aura.Slot, SpellID: aura.SpellID, Positive: aura.Positive, MaxDurationMs: aura.DurationMs, DurationMs: aura.RemainingMs, CasterLevel: aura.CasterLevel, StackCount: stackCount})
+		maxDuration, duration := aura.DurationMs, aura.RemainingMs
+		if aura.HideDuration {
+			maxDuration, duration = 0, 0
+		}
+		records = append(records, protocol.AuraUpdateRecord{CasterGUID: aura.CasterGUID, Slot: aura.Slot, SpellID: aura.SpellID, Positive: aura.Positive, MaxDurationMs: maxDuration, DurationMs: duration, CasterLevel: aura.CasterLevel, StackCount: stackCount})
 		if aura.PeriodMs > 0 {
 			s.scheduleCreaturePeriodicTick(aura, aura.PeriodMs)
 		}
