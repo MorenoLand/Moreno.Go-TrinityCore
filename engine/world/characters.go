@@ -2332,35 +2332,82 @@ func buildInitWorldStates(state playerState, areaID, arenaSeasonID uint32, arena
 		worldStates = append(worldStates,
 			[2]int32{1581, 0}, // WS_FLAG_CAPTURES_ALLIANCE
 			[2]int32{1582, 0}, // WS_FLAG_CAPTURES_HORDE
+			[2]int32{1545, 0},
+			[2]int32{1546, 0},
+			[2]int32{1547, 2},
 			[2]int32{1601, 3}, // WS_FLAG_MAX_CAPTURES
 			[2]int32{2338, 1}, // WS_FLAG_STATE_HORDE (1 = base)
 			[2]int32{2339, 1}, // WS_FLAG_STATE_ALLIANCE (1 = base)
 		)
 	} else if state.Map == 529 {
 		worldStates = append(worldStates,
-			[2]int32{1776, 0},    // Resources Ally
-			[2]int32{1777, 0},    // Resources Horde
-			[2]int32{1778, 1600}, // Resources Max
-			[2]int32{1779, 0},    // Occupied Bases Ally
-			[2]int32{1780, 0},    // Occupied Bases Horde
-			[2]int32{1771, 1},    // Stables neutral
-			[2]int32{1781, 1},    // Blacksmith neutral
-			[2]int32{1786, 1},    // Farm neutral
-			[2]int32{1791, 1},    // Lumber Mill neutral
-			[2]int32{1796, 1},    // Gold Mine neutral
+			[2]int32{1767, 0},
+			[2]int32{1768, 0},
+			[2]int32{1769, 0},
+			[2]int32{1770, 0},
+			[2]int32{1772, 0},
+			[2]int32{1773, 0},
+			[2]int32{1774, 0},
+			[2]int32{1775, 0},
+			[2]int32{1776, 0}, // Resources Ally
+			[2]int32{1777, 0}, // Resources Horde
+			[2]int32{1778, 0},
+			[2]int32{1779, 0},
+			[2]int32{1780, 2000},
+			[2]int32{1782, 0},
+			[2]int32{1783, 0},
+			[2]int32{1784, 0},
+			[2]int32{1785, 0},
+			[2]int32{1787, 0},
+			[2]int32{1788, 0},
+			[2]int32{1789, 0},
+			[2]int32{1790, 0},
+			[2]int32{1792, 0},
+			[2]int32{1793, 0},
+			[2]int32{1794, 0},
+			[2]int32{1795, 0},
+			[2]int32{1842, 1},
+			[2]int32{1843, 1},
+			[2]int32{1844, 1},
+			[2]int32{1845, 1},
+			[2]int32{1846, 1},
+			[2]int32{1861, 2},
+			[2]int32{1955, 1800},
 		)
 	} else if state.Map == 566 {
 		worldStates = append(worldStates,
-			[2]int32{2749, 0},    // Resources Ally
-			[2]int32{2750, 0},    // Resources Horde
-			[2]int32{2751, 1600}, // Resources Max
-			[2]int32{2752, 0},    // Occupied Bases Ally
-			[2]int32{2753, 0},    // Occupied Bases Horde
-			[2]int32{2757, 1},    // Flag state (1 = center)
-			[2]int32{2724, 1},    // Mage Tower neutral
-			[2]int32{2727, 1},    // Draenei Ruins neutral
-			[2]int32{2730, 1},    // Blood Elf Tower neutral
-			[2]int32{2733, 1},    // Fel Reaver Ruins neutral
+			[2]int32{2753, 0},
+			[2]int32{2752, 0},
+			[2]int32{2742, 0},
+			[2]int32{2741, 0},
+			[2]int32{2740, 0},
+			[2]int32{2739, 0},
+			[2]int32{2738, 0},
+			[2]int32{2737, 0},
+			[2]int32{2736, 0},
+			[2]int32{2735, 0},
+			[2]int32{2733, 0},
+			[2]int32{2732, 0},
+			[2]int32{2731, 1},
+			[2]int32{2730, 0},
+			[2]int32{2729, 0},
+			[2]int32{2728, 1},
+			[2]int32{2727, 0},
+			[2]int32{2726, 0},
+			[2]int32{2725, 1},
+			[2]int32{2724, 0},
+			[2]int32{2723, 0},
+			[2]int32{2722, 1},
+			[2]int32{2757, 1},
+			[2]int32{2770, 1},
+			[2]int32{2769, 1},
+			[2]int32{2749, 0}, // Resources Ally
+			[2]int32{2750, 0}, // Resources Horde
+			[2]int32{2565, 142},
+			[2]int32{2720, 0},
+			[2]int32{2719, 0},
+			[2]int32{2718, 0},
+			[2]int32{3085, 379},
 		)
 	} else if state.Map == 571 && state.Zone == 4197 {
 		worldStates = append(worldStates,
