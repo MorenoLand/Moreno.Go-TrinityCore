@@ -118,7 +118,41 @@ func (s *session) sendGuildLoginInfo(ctx context.Context) {
 	event.WriteU8(1)
 	event.WriteCString(motd)
 	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event.Bytes(), true)
+	s.sendGuildBankTabsInfo(ctx)
 	_ = s.handleGuildRoster(ctx)
+}
+
+func (s *session) sendGuildBankTabsInfo(ctx context.Context) {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	var guildID, bankMoney, rank int64
+	if err := cdb.QueryRowContext(ctx, "SELECT g.guildid, g.BankMoney, gm.rank FROM guild_member AS gm JOIN guild AS g ON g.guildid = gm.guildid WHERE gm.guid = ? LIMIT 1", s.playerGUID).Scan(&guildID, &bankMoney, &rank); err != nil || guildID == 0 {
+		return
+	}
+	remaining := int32(-1)
+	if rank != 0 {
+		var rights, limit int64
+		if err := cdb.QueryRowContext(ctx, "SELECT gbright, SlotPerDay FROM guild_bank_right WHERE guildid = ? AND TabId = 0 AND rid = ?", guildID, rank).Scan(&rights, &limit); err != nil || rights&1 == 0 {
+			remaining = 0
+		} else if limit != int64(^uint32(0)) {
+			var withdrawn int64
+			_ = cdb.QueryRowContext(ctx, "SELECT tab0 FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&withdrawn)
+			if limit <= withdrawn {
+				remaining = 0
+			} else {
+				remaining = int32(limit - withdrawn)
+			}
+		}
+	}
+	buf := protocol.NewBuffer(15)
+	buf.WriteU64(uint64(bankMoney))
+	buf.WriteU8(0)
+	buf.WriteI32(remaining)
+	buf.WriteU8(0)
+	buf.WriteU8(0)
+	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_BANK_LIST), buf.Bytes(), true)
 }
 
 func (s *session) broadcastGuildMemberLogout() {
