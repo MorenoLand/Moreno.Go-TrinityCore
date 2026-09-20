@@ -934,6 +934,9 @@ func (s *session) broadcastLoginMovementState(opcode protocol.Opcode, movementFl
 	}
 	packet := protocol.NewBuffer(80)
 	packet.WritePackedGUID(s.playerGUID)
+	if s.player.TransportGUID != 0 {
+		movementFlags |= movementOnTransport
+	}
 	packet.WriteU32(movementFlags)
 	packet.WriteU16(0)
 	packet.WriteU32(uint32(time.Now().UnixMilli()))
@@ -941,6 +944,15 @@ func (s *session) broadcastLoginMovementState(opcode protocol.Opcode, movementFl
 	packet.WriteF32(s.player.Y)
 	packet.WriteF32(s.player.Z)
 	packet.WriteF32(s.player.Orientation)
+	if movementFlags&movementOnTransport != 0 {
+		packet.WritePackedGUID(s.player.TransportGUID)
+		packet.WriteF32(s.player.TransportX)
+		packet.WriteF32(s.player.TransportY)
+		packet.WriteF32(s.player.TransportZ)
+		packet.WriteF32(s.player.TransportO)
+		packet.WriteU32(0)
+		packet.WriteI8(s.player.TransportSeat)
+	}
 	packet.WriteU32(0)
 	for _, speed := range []float32{2.5, 7.0, 4.5, 4.722222, 2.5, 7.0, 4.5, 3.141594, 3.14} {
 		packet.WriteF32(speed)
