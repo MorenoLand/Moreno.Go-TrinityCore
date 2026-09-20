@@ -29,8 +29,18 @@ func main() {
 		if err := runtime.LoadString(`assert(string.match("#display 123", "#display") == "#display"); local words = {}; for word in ("one,two"):gmatch("([^,]+)") do words[#words + 1] = word end; assert(#words == 2 and words[1] == "one" and words[2] == "two"); assert(string.find("abc123", "%d+") == 4)`); err != nil {
 			fail(err)
 		}
+		player := &scripting.Object{Type: "Player", Methods: map[string]scripting.ObjectMethod{"GetGMRank": func(context.Context, []any) ([]any, error) { return []any{uint8(0)}, nil }}}
+		values, err := runtime.TriggerPlayerEvent(context.Background(), scripting.PlayerEventChat, scripting.PlayerEventChat, player, "hello", 0, 0)
+		if err != nil {
+			fail(err)
+		}
+		for _, value := range values {
+			if cancelled, ok := value.(bool); ok && !cancelled {
+				fail(fmt.Errorf("normal chat was cancelled by a Lua hook"))
+			}
+		}
 	}
-	fmt.Printf("lua scripts loaded=%d string_probes=%t\n", len(runtime.LoadedFiles()), *probe)
+	fmt.Printf("lua scripts loaded=%d string_probes=%t normal_chat_probe=passed\n", len(runtime.LoadedFiles()), *probe)
 }
 
 func fail(err error) {
