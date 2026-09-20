@@ -2079,6 +2079,15 @@ func auraWireDurations(spell wotlk.Spell, maxDurationMs, durationMs uint32) (uin
 	return maxDurationMs, durationMs
 }
 
+func spellEffectMask(spell wotlk.Spell, effect wotlk.SpellEffect) uint8 {
+	for index, candidate := range spell.Effects {
+		if candidate == effect && index < 8 {
+			return uint8(1 << uint(index))
+		}
+	}
+	return 0x01
+}
+
 func (s *session) applyAura(spellID uint32) {
 	s.applyAuraWithDuration(spellID, 1800000)
 }
@@ -2312,7 +2321,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			DispelType:         spell.DispelType,
 			Mechanic:           spell.Mechanic,
 			AuraType:           eff.Aura,
-			EffectMask:         0x01,
+			EffectMask:         spellEffectMask(spell, eff),
 			CasterGUID:         s.playerGUID,
 			TargetGUID:         targetGUID,
 			SchoolMask:         schoolMask,
@@ -2398,7 +2407,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		DispelType:       spell.DispelType,
 		Mechanic:         spell.Mechanic,
 		AuraType:         eff.Aura,
-		EffectMask:       0x01,
+		EffectMask:       spellEffectMask(spell, eff),
 		CasterGUID:       s.playerGUID,
 		TargetGUID:       targetGUID,
 		SchoolMask:       schoolMask,
