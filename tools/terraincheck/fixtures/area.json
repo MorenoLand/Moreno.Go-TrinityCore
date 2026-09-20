@@ -1,0 +1,12 @@
+[
+  {
+    "name": "map-zero-grid-area",
+    "map": 0,
+    "x": 0,
+    "y": 0,
+    "z": 10000,
+    "fallback": 0,
+    "zone": 36,
+    "area": 278
+  }
+]

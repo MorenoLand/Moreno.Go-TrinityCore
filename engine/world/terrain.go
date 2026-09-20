@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -53,6 +55,15 @@ type terrainWMOHit struct {
 	ADT    uint16
 	Group  uint32
 	Ground float32
+}
+
+func ResolveTerrainZoneAndArea(dataDir string, mapID uint32, x, y, z float32, fallback uint32) (uint32, uint32, error) {
+	if dataDir == "" {
+		return 0, 0, fmt.Errorf("terrain data directory is required")
+	}
+	server := &Server{Config: config.Config{GameDataDir: dataDir}, Data: wotlk.NewStore(filepath.Join(dataDir, "dbc")), terrainTiles: make(map[uint64][]terrainSpawn), terrainTileKnown: make(map[uint64]bool), terrainModels: make(map[string]*terrainModel)}
+	zoneID, areaID := server.zoneAndAreaID(mapID, x, y, z, fallback)
+	return zoneID, areaID, nil
 }
 
 func (s *Server) zoneAndAreaID(mapID uint32, x, y, z float32, fallback uint32) (uint32, uint32) {
