@@ -1442,6 +1442,9 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				if update, err := state.server.buildAttachedTransportUpdate(ctx, *state.player); err == nil && update != nil {
 					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
 				}
+				if update, err := state.server.buildAttachedTransportPassengerUpdates(ctx, *state.player); err == nil && update != nil {
+					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
+				}
 				if update, err := state.server.buildMapTransportUpdates(*state.player, state.player.TransportGUID); err == nil && update != nil {
 					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
 				}

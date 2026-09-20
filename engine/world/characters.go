@@ -557,6 +557,10 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err != nil {
 		return false
 	}
+	attachedTransportPassengers, err := s.server.buildAttachedTransportPassengerUpdates(ctx, state)
+	if err != nil {
+		return false
+	}
 	s.captureUpdatePackets = true
 	s.capturedUpdatePackets = nil
 	inventoryErr := s.sendInventoryItemsBeforeMap(ctx)
@@ -567,12 +571,15 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		s.debug("inventory load failed", "account", s.accountName, "guid", s.playerGUID, "error", inventoryErr)
 		return false
 	}
-	initialUpdatePackets := make([]*protocol.Packet, 0, len(capturedInventoryPackets)+2)
+	initialUpdatePackets := make([]*protocol.Packet, 0, len(capturedInventoryPackets)+3)
 	if attachedTransport != nil {
 		initialUpdatePackets = append(initialUpdatePackets, attachedTransport)
 	}
 	initialUpdatePackets = append(initialUpdatePackets, capturedInventoryPackets...)
 	initialUpdatePackets = append(initialUpdatePackets, updates)
+	if attachedTransportPassengers != nil {
+		initialUpdatePackets = append(initialUpdatePackets, attachedTransportPassengers)
+	}
 	initialUpdate, err := protocol.MergeUpdatePackets(initialUpdatePackets...)
 	if err != nil || initialUpdate == nil {
 		return false

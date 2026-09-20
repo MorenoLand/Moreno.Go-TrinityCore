@@ -1629,9 +1629,6 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 			}
 		}
 	}
-	if err := mask.Set(1); err != nil {
-		return nil, err
-	}
 	if targetSelf {
 		_ = mask.Set(unitFieldLevel)
 		_ = mask.Set(unitFieldBytes0)

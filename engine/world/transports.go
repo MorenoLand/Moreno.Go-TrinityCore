@@ -295,13 +295,13 @@ func (s *Server) nearbyTransportSpawns(state playerState, distance float64) []ga
 	return result
 }
 
-func (s *Server) buildAttachedTransportUpdate(ctx context.Context, state playerState) (*protocol.Packet, error) {
+func (s *Server) attachedTransportSnapshot(state playerState) (continentTransport, bool) {
 	if s == nil || state.TransportGUID == 0 {
-		return nil, nil
+		return continentTransport{}, false
 	}
 	var transport continentTransport
-	found := false
 	s.transportMu.Lock()
+	defer s.transportMu.Unlock()
 	for _, candidate := range s.transports {
 		if candidate == nil || (state.TransportGUID != uint64(candidate.Spawn.GUID) && state.TransportGUID != gameObjectGUID(candidate.Spawn.GUID, candidate.Spawn.Entry)) {
 			continue
@@ -309,15 +309,27 @@ func (s *Server) buildAttachedTransportUpdate(ctx context.Context, state playerS
 		transport = *candidate
 		transport.StaticCreatures = append([]creatureSpawn(nil), candidate.StaticCreatures...)
 		transport.StaticObjects = append([]gameObjectSpawn(nil), candidate.StaticObjects...)
-		found = true
-		break
+		return transport, true
 	}
-	s.transportMu.Unlock()
+	return continentTransport{}, false
+}
+
+func (s *Server) buildAttachedTransportUpdate(ctx context.Context, state playerState) (*protocol.Packet, error) {
+	transport, found := s.attachedTransportSnapshot(state)
 	if !found {
 		return nil, nil
 	}
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(buildTransportGameObjectUpdate(transport.Spawn, true))
+	return updates.BuildPacket(0)
+}
+
+func (s *Server) buildAttachedTransportPassengerUpdates(ctx context.Context, state playerState) (*protocol.Packet, error) {
+	transport, found := s.attachedTransportSnapshot(state)
+	if !found {
+		return nil, nil
+	}
+	updates := protocol.NewUpdateData()
 	for _, passenger := range transport.passengerCreatures() {
 		stats := s.loadCreatureStats(ctx, passenger.Entry)
 		passenger.BoundingRadius, passenger.CombatReach = stats.BoundingRadius, stats.CombatReach
@@ -325,6 +337,9 @@ func (s *Server) buildAttachedTransportUpdate(ctx context.Context, state playerS
 	}
 	for _, passenger := range transport.passengerObjects() {
 		updates.AddUpdateBlock(buildGameObjectUpdate(passenger))
+	}
+	if !updates.HasData() {
+		return nil, nil
 	}
 	return updates.BuildPacket(0)
 }
