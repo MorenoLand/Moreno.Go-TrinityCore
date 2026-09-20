@@ -114,7 +114,7 @@ func (s *session) sendGuildLoginInfo(ctx context.Context) {
 		return
 	}
 	event := protocol.NewBuffer(len(motd) + 8)
-	event.WriteU8(5)
+	event.WriteU8(2)
 	event.WriteU8(1)
 	event.WriteCString(motd)
 	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event.Bytes(), true)
