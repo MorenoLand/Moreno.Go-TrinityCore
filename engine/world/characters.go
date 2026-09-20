@@ -940,7 +940,7 @@ func (s *session) sendLoginEffect() error {
 func buildLoginSetTimeSpeed(now time.Time) []byte {
 	packet := protocol.NewBuffer(12)
 	packet.WritePackedTime(now)
-	packet.WriteF32(0.5)
+	packet.WriteF32(float32(0.01666667 * 30))
 	packet.WriteU32(0)
 	return packet.Bytes()
 }
