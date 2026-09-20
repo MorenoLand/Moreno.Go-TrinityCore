@@ -858,13 +858,21 @@ func (s *session) sendLoginMovementStates() error {
 	}
 	for _, auraType := range []uint32{auraWaterWalk, auraFeatherFall, auraHover} {
 		var opcode protocol.Opcode
+		var broadcastOpcode protocol.Opcode
+		var movementFlags uint32
 		switch auraType {
 		case auraFeatherFall:
 			opcode = protocol.OpcodeSMSG_MOVE_FEATHER_FALL
+			broadcastOpcode = protocol.OpcodeMSG_MOVE_FEATHER_FALL
+			movementFlags = 0x20000000
 		case auraWaterWalk:
 			opcode = protocol.OpcodeSMSG_MOVE_WATER_WALK
+			broadcastOpcode = protocol.OpcodeMSG_MOVE_WATER_WALK
+			movementFlags = 0x10000000
 		case auraHover:
 			opcode = protocol.OpcodeSMSG_MOVE_SET_HOVER
+			broadcastOpcode = protocol.OpcodeMSG_MOVE_HOVER
+			movementFlags = 0x40000000
 		}
 		for _, aura := range auras {
 			if aura == nil || aura.AuraType != auraType {
@@ -876,6 +884,7 @@ func (s *session) sendLoginMovementStates() error {
 			if err := s.write(uint16(opcode), packet.Bytes(), true); err != nil {
 				return err
 			}
+			s.broadcastLoginMovementState(broadcastOpcode, movementFlags)
 			state.WriteU8(uint8(2 + packedGUIDSize(s.playerGUID) + 4))
 			state.WriteU16(uint16(opcode))
 			state.WritePackedGUID(s.playerGUID)
@@ -914,8 +923,29 @@ func (s *session) sendLoginFlightState() error {
 		if err := s.write(uint16(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY), packet.Bytes(), true); err != nil {
 			return err
 		}
+		s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_UPDATE_CAN_FLY, 0x01000000)
 	}
 	return nil
+}
+
+func (s *session) broadcastLoginMovementState(opcode protocol.Opcode, movementFlags uint32) {
+	if s == nil || s.server == nil || s.player == nil || opcode == 0 {
+		return
+	}
+	packet := protocol.NewBuffer(80)
+	packet.WritePackedGUID(s.playerGUID)
+	packet.WriteU32(movementFlags)
+	packet.WriteU16(0)
+	packet.WriteU32(uint32(time.Now().UnixMilli()))
+	packet.WriteF32(s.player.X)
+	packet.WriteF32(s.player.Y)
+	packet.WriteF32(s.player.Z)
+	packet.WriteF32(s.player.Orientation)
+	packet.WriteU32(0)
+	for _, speed := range []float32{2.5, 7.0, 4.5, 4.722222, 2.5, 7.0, 4.5, 3.141594, 3.14} {
+		packet.WriteF32(speed)
+	}
+	s.server.broadcastToNearby(uint16(opcode), packet.Bytes(), s)
 }
 
 func packedGUIDSize(guid uint64) int {
