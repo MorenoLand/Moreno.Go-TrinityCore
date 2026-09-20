@@ -958,11 +958,41 @@ func playerReputationMap(values []playerReputation) map[uint32]playerReputation 
 	return reputations
 }
 
+func (s *session) contestedPvPActive(now time.Time) bool {
+	if s == nil || s.player == nil || s.player.PlayerFlags&playerFlagContestedPVP == 0 {
+		return false
+	}
+	if !s.contestedPVPEnd.IsZero() && !now.Before(s.contestedPVPEnd) && s.attackTarget == 0 && s.player.UnitFlags&unitFlagInCombat == 0 {
+		s.player.PlayerFlags &^= playerFlagContestedPVP
+		s.contestedPVPEnd = time.Time{}
+		s.sendPlayerUpdate()
+		return false
+	}
+	return true
+}
+
+func (s *Server) updateContestedPvP(now time.Time) {
+	s.sessionsMu.RLock()
+	sessions := make([]*session, 0, len(s.sessions))
+	for sess := range s.sessions {
+		if sess.playerLoaded && sess.player != nil {
+			sessions = append(sessions, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range sessions {
+		sess.contestedPvPActive(now)
+	}
+}
+
 func (s *Server) isHostileFaction(creatureFaction uint32, player playerPos) bool {
 	if s.Data != nil && player.FactionTemplate != 0 {
 		creatureTemplate, creatureFound, creatureErr := s.Data.FactionTemplate(creatureFaction)
 		playerTemplate, playerFound, playerErr := s.Data.FactionTemplate(player.FactionTemplate)
 		if creatureErr == nil && playerErr == nil && creatureFound && playerFound {
+			if player.Sess != nil && player.Sess.contestedPvPActive(time.Now()) && creatureTemplate.Flags&0x00001000 != 0 {
+				return true
+			}
 			if reputation, found, err := s.Data.Reputation(creatureTemplate.Faction, player.Race, player.Class); err == nil && found && reputation.ReputationList >= 0 {
 				standing := int64(reputation.BaseStanding)
 				if saved, ok := player.Reputations[creatureTemplate.Faction]; ok {

@@ -25,6 +25,7 @@ const (
 	characterFlagLockedByBilling uint32 = 0x01000000
 	characterFlagDeclined        uint32 = 0x02000000
 	playerFlagGhost              uint32 = 0x00000010
+	playerFlagContestedPVP       uint32 = 0x00000100
 	characterCustomizeNone       uint32 = 0
 	characterCustomizeCustomize  uint32 = 0x00000001
 	characterCustomizeFaction    uint32 = 0x00010000
@@ -438,6 +439,11 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.fatigueTimer = -1
 	s.playerGUID = guid
 	s.player = &state
+	if state.PlayerFlags&playerFlagContestedPVP != 0 {
+		s.contestedPVPEnd = time.Now().Add(30 * time.Second)
+	} else {
+		s.contestedPVPEnd = time.Time{}
+	}
 	s.playerLoaded = true
 	difficulty := protocol.NewBuffer(12)
 	difficulty.WriteU32(uint32(state.DungeonDifficulty))

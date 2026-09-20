@@ -183,6 +183,7 @@ type session struct {
 	lastRegenTick         time.Time
 	lastCastTime          time.Time
 	lastCombatTime        time.Time
+	contestedPVPEnd       time.Time
 	logoutHook            bool
 	questStatusSent       bool
 	gossip                *gossipMenuState
@@ -563,6 +564,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updateActiveCreatures(ctx)
 			s.updateDynamicSpellAuras(ctx, now)
 			s.updatePlayerCombat(ctx)
+			s.updateContestedPvP(now)
 			s.updatePlayerRegeneration(ctx, now)
 			s.processCreatureRespawns(ctx, now)
 			s.updatePlayerDeathTimers(ctx, now)
