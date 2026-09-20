@@ -112,6 +112,7 @@ const (
 	playerFieldCombatRating1                    = 1231 // 1231..1255
 	playerDailyQuestsStart                      = 1280
 	playerDailyQuestsCount                      = 25
+	playerRuneRegenStart                        = 1305
 	unitFlagPlayerControlled             uint32 = 0x00000008
 	unitFlag2RegeneratePower             uint32 = 0x00000800
 	unitFlagInCombat                     uint32 = 0x00080000
@@ -1431,6 +1432,11 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	values[1324] = state.GlyphsEnabled
 	for i := 0; i < playerDailyQuestsCount; i++ {
 		values[playerDailyQuestsStart+i] = state.DailyQuests[i]
+	}
+	if state.Class == 6 {
+		for i := 0; i < 4; i++ {
+			values[playerRuneRegenStart+i] = math.Float32bits(0.1)
+		}
 	}
 	if state.DuelArbiter != 0 {
 		values[playerFieldDuelArbiter] = uint32(state.DuelArbiter)
