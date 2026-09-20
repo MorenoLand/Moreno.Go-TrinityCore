@@ -2420,6 +2420,7 @@ func buildInitWorldStates(state playerState, areaID, arenaSeasonID uint32, arena
 			[2]int32{3681, 8}, // WS_BATTLEFIELD_WG_MAX_VEHICLE_H
 		)
 	}
+	worldStates = append(worldStates, initialZoneWorldStates(state.Zone)...)
 	packet := protocol.NewBuffer(16 + len(worldStates)*8)
 	packet.WriteI32(int32(state.Map))
 	packet.WriteI32(int32(state.Zone))
