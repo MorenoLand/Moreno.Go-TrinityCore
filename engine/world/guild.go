@@ -17,16 +17,18 @@ type guildMemberInfo struct {
 	ClassID     uint8
 	Gender      uint8
 	AreaID      int32
+	LastSave    float32
 	Note        string
 	OfficerNote string
-	Online      bool
+	Status      uint8
 }
 
 const (
-	guildEventJoined    uint8 = 3
-	guildEventLeft      uint8 = 4
-	guildEventSignedOn  uint8 = 12
-	guildEventSignedOff uint8 = 13
+	guildEventJoined          uint8  = 3
+	guildEventLeft            uint8  = 4
+	guildEventSignedOn        uint8  = 12
+	guildEventSignedOff       uint8  = 13
+	guildRightViewOfficerNote uint32 = 0x00004000
 )
 
 func guildEventPayload(eventType uint8, guid uint64, params ...string) []byte {
@@ -327,19 +329,45 @@ func (s *session) handleGuildRoster(ctx context.Context) bool {
 			{RankID: 4, Name: "Initiate", Rights: 0x00000040, GoldLimit: 0},
 		}
 	}
+	viewOfficerNote := false
+	for _, rank := range ranks {
+		if rank.RankID == uint32(s.player.GuildRank) {
+			viewOfficerNote = rank.Rights&guildRightViewOfficerNote != 0
+			break
+		}
+	}
 
 	var members []guildMemberInfo
-	memRows, err := cdb.QueryContext(ctx, `SELECT gm.guid, c.name, gm.rank, c.level, c.class, c.gender, c.zone, gm.pnote, gm.offnote
+	memRows, err := cdb.QueryContext(ctx, `SELECT gm.guid, c.name, gm.rank, c.level, c.class, c.gender, c.zone, c.logout_time, gm.pnote, gm.offnote
 		FROM guild_member AS gm
 		JOIN characters AS c ON c.guid = gm.guid
 		WHERE gm.guildid = ?`, guildID)
 	if err == nil {
 		defer memRows.Close()
 		for memRows.Next() {
-			var mGuid, rank, lvl, cls, gnd, zone int64
+			var mGuid, rank, lvl, cls, gnd, zone, logoutTime int64
 			var mName, pNote, offNote string
-			if scanErr := memRows.Scan(&mGuid, &mName, &rank, &lvl, &cls, &gnd, &zone, &pNote, &offNote); scanErr == nil {
-				online := s.server.findSessionByGUID(uint64(mGuid)) != nil
+			if scanErr := memRows.Scan(&mGuid, &mName, &rank, &lvl, &cls, &gnd, &zone, &logoutTime, &pNote, &offNote); scanErr == nil {
+				status := uint8(0)
+				if memberSession := s.server.findSessionByGUID(uint64(mGuid)); memberSession != nil && memberSession.player != nil {
+					status = 1
+					if memberSession.player.PlayerFlags&playerFlagAFK != 0 {
+						status |= 2
+					}
+					if memberSession.player.PlayerFlags&playerFlagDND != 0 {
+						status |= 4
+					}
+				}
+				lastSave := float32(0)
+				if status == 0 && logoutTime > 0 {
+					elapsed := time.Now().Unix() - logoutTime
+					if elapsed > 0 {
+						lastSave = float32(elapsed) / 86400
+					}
+				}
+				if !viewOfficerNote {
+					offNote = ""
+				}
 				members = append(members, guildMemberInfo{
 					GUID:        uint64(mGuid),
 					Name:        mName,
@@ -348,9 +376,10 @@ func (s *session) handleGuildRoster(ctx context.Context) bool {
 					ClassID:     uint8(cls),
 					Gender:      uint8(gnd),
 					AreaID:      int32(zone),
+					LastSave:    lastSave,
 					Note:        pNote,
 					OfficerNote: offNote,
-					Online:      online,
+					Status:      status,
 				})
 			}
 		}
@@ -371,19 +400,15 @@ func (s *session) handleGuildRoster(ctx context.Context) bool {
 	}
 	for _, m := range members {
 		buf.WriteU64(m.GUID)
-		if m.Online {
-			buf.WriteU8(1)
-		} else {
-			buf.WriteU8(0)
-		}
+		buf.WriteU8(m.Status)
 		buf.WriteCString(m.Name)
 		buf.WriteI32(m.RankID)
 		buf.WriteU8(m.Level)
 		buf.WriteU8(m.ClassID)
 		buf.WriteU8(m.Gender)
 		buf.WriteI32(m.AreaID)
-		if !m.Online {
-			buf.WriteF32(0) // LastSave
+		if m.Status == 0 {
+			buf.WriteF32(m.LastSave)
 		}
 		buf.WriteCString(m.Note)
 		buf.WriteCString(m.OfficerNote)
