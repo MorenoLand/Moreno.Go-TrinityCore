@@ -1346,7 +1346,11 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 		values[unitFieldNextLevelXP] = xpCurve[state.Level]
 	}
 	values[unitFieldCoinage] = state.Money
-	values[unitFieldMaxLevel] = 80
+	maxLevel := s.Config.MaxPlayerLevel
+	if maxLevel == 0 || maxLevel > 100 {
+		maxLevel = 80
+	}
+	values[unitFieldMaxLevel] = maxLevel
 	values[unitFieldKnownCurrencies] = state.KnownCurrency
 	values[unitFieldWatchedFaction] = state.WatchedFaction
 	values[unitFieldChosenTitle] = state.ChosenTitle
