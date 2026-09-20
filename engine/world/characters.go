@@ -591,11 +591,11 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		}
 	}
 	sendNearbyObjects := func() bool {
-		var nearbyPlayers, nearbyCreatures, nearbyGameObjects *protocol.Packet
-		var playerCount, creatureCount, goCount int
-		var creatureErr, goErr error
+		var nearbyPlayers, nearbyCreatures, nearbyGameObjects, nearbyCorpses *protocol.Packet
+		var playerCount, creatureCount, goCount, corpseCount int
+		var creatureErr, goErr, corpseErr error
 		var wg sync.WaitGroup
-		wg.Add(3)
+		wg.Add(4)
 		go func() {
 			defer wg.Done()
 			nearbyPlayers, playerCount = s.server.buildNearbyPlayerUpdates(s)
@@ -608,6 +608,10 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			defer wg.Done()
 			nearbyGameObjects, goCount, goErr = s.server.buildNearbyGameObjectUpdates(ctx, state, false)
 		}()
+		go func() {
+			defer wg.Done()
+			nearbyCorpses, corpseCount, corpseErr = s.server.buildNearbyCorpseUpdates(ctx, state)
+		}()
 		wg.Wait()
 		if creatureErr != nil {
 			s.debug("nearby creature load failed", "account", s.accountName, "error", creatureErr)
@@ -617,7 +621,11 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			s.debug("nearby gameobjects load failed", "account", s.accountName, "error", goErr)
 			return false
 		}
-		packet, err := protocol.MergeUpdatePackets(nearbyPlayers, nearbyCreatures, nearbyGameObjects)
+		if corpseErr != nil {
+			s.debug("nearby corpses load failed", "account", s.accountName, "error", corpseErr)
+			return false
+		}
+		packet, err := protocol.MergeUpdatePackets(nearbyPlayers, nearbyCreatures, nearbyGameObjects, nearbyCorpses)
 		if err != nil {
 			s.debug("nearby visibility merge failed", "account", s.accountName, "error", err)
 			return false
@@ -634,6 +642,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			}
 			if nearbyGameObjects != nil {
 				s.debug("nearby gameobjects sent", "account", s.accountName, "count", goCount)
+			}
+			if nearbyCorpses != nil {
+				s.debug("nearby corpses sent", "account", s.accountName, "count", corpseCount)
 			}
 		}
 		return true

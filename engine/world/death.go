@@ -46,6 +46,50 @@ const (
 	defaultGraveyardHorde    uint32 = 10 // Crossroads (ObjectMgr.cpp:6853)
 )
 
+func (s *Server) buildNearbyCorpseUpdates(ctx context.Context, state playerState) (*protocol.Packet, int, error) {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil || s.Config.VisibilityDistanceContinents <= 0 {
+		return nil, 0, nil
+	}
+	distance := float64(s.Config.VisibilityDistanceContinents)
+	rows, err := s.CharactersStore.DB.QueryContext(ctx, `SELECT guid, mapId, posX, posY, posZ, orientation, displayId, bytes1, bytes2, guildId, flags, dynFlags, corpseType
+		FROM corpse WHERE mapId = ? AND posX BETWEEN ? AND ? AND posY BETWEEN ? AND ? ORDER BY guid`, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance)
+	if err != nil {
+		if missingTable(err) || isMissingColumn(err) {
+			return nil, 0, nil
+		}
+		return nil, 0, err
+	}
+	defer rows.Close()
+	updates := protocol.NewUpdateData()
+	count := 0
+	for rows.Next() {
+		var guid, mapID, displayID, bytes1, bytes2, guildID, flags, dynamicFlags, corpseType int64
+		var x, y, z, orientation float64
+		if err := rows.Scan(&guid, &mapID, &x, &y, &z, &orientation, &displayID, &bytes1, &bytes2, &guildID, &flags, &dynamicFlags, &corpseType); err != nil {
+			return nil, count, err
+		}
+		if guid <= 0 || uint64(guid) == state.GUID || uint32(mapID) != state.Map || math.Hypot(x-float64(state.X), y-float64(state.Y)) > distance || !validMovementPosition(float32(x), float32(y), float32(z), float32(orientation)) {
+			continue
+		}
+		ownerGUID := uint64(guid)
+		if corpseType == int64(corpseTypeBones) {
+			ownerGUID = 0
+		}
+		corpseGUID := uint64(guid) | (uint64(0xF101) << 48)
+		block := buildCorpseCreateBlockWithFields(corpseGUID, corpseObjectFields{OwnerGUID: ownerGUID, DisplayID: uint32(displayID), Bytes1: uint32(bytes1), Bytes2: uint32(bytes2), GuildID: uint32(guildID), Flags: uint32(flags), DynamicFlags: uint32(dynamicFlags)}, float32(x), float32(y), float32(z), float32(orientation))
+		updates.AddUpdateBlock(block)
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return nil, count, err
+	}
+	if count == 0 {
+		return nil, 0, nil
+	}
+	packet, err := updates.BuildPacket(0)
+	return packet, count, err
+}
+
 func isBattlegroundMap(mapID uint32) bool {
 	switch mapID {
 	case 30, 489, 529, 559, 562, 566, 572, 607, 617, 618, 628:

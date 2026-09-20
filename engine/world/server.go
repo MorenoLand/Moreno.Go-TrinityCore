@@ -1451,6 +1451,9 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				if update, _, err := state.server.buildNearbyCreatureUpdates(ctx, *state.player); err == nil && update != nil {
 					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
 				}
+				if update, _, err := state.server.buildNearbyCorpseUpdates(ctx, *state.player); err == nil && update != nil {
+					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
+				}
 				if update, _, err := state.server.buildNearbyGameObjectUpdates(ctx, *state.player, false); err == nil && update != nil {
 					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
 				}
