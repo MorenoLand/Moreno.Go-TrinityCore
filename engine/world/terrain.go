@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 )
@@ -39,8 +38,8 @@ func (s *Server) zoneAndAreaID(mapID uint32, x, y, _ float32, fallback uint32) (
 }
 
 func (s *Server) mapAreaID(mapID uint32, x, y float32) (uint32, bool) {
-	gridX := int(math.Floor(terrainCenterGrid - float64(x)/terrainGridSize))
-	gridY := int(math.Floor(terrainCenterGrid - float64(y)/terrainGridSize))
+	gridX := int(float64(x)/terrainGridSize + terrainCenterGrid)
+	gridY := int(float64(y)/terrainGridSize + terrainCenterGrid)
 	if gridX < 0 || gridX >= 64 || gridY < 0 || gridY >= 64 {
 		return 0, false
 	}
