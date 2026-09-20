@@ -15,6 +15,7 @@ const (
 	spellAttributePassive uint32 = 0x00000040
 	spellCastFlagStart    uint32 = 0x00000002
 	spellCastFlagGo       uint32 = 0x00000100
+	spellCastFlagPending  uint32 = 0x00000001
 
 	spellAttr3MainHand   uint32 = 0x00000400 // SPELL_ATTR3_MAIN_HAND: Require main hand weapon (SharedDefines.h:533)
 	spellAttr3ReqOffhand uint32 = 0x01000000 // SPELL_ATTR3_REQ_OFFHAND: Require offhand weapon (SharedDefines.h:547)

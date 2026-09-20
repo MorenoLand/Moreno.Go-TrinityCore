@@ -891,7 +891,7 @@ func (s *session) sendLoginEffect() error {
 		return nil
 	}
 	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: s.playerGUID}
-	packet := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 1, 836, spellCastFlagGo, uint32(time.Now().UnixMilli()), []uint64{s.playerGUID}, nil, target)
+	packet := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 0, 836, spellCastFlagGo|spellCastFlagPending, uint32(time.Now().UnixMilli()), []uint64{s.playerGUID}, nil, target)
 	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), packet, true); err != nil {
 		return err
 	}
