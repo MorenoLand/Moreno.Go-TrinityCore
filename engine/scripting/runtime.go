@@ -314,6 +314,7 @@ func (r *Runtime) initializeLocked() {
 	}
 	r.state = lua.NewState()
 	lua.OpenLibraries(r.state)
+	installLuaStringCompatibility(r.state)
 	for _, name := range []string{"Map", "Player", "Creature", "GameObject"} {
 		r.state.NewTable()
 		r.state.SetGlobal(name)
