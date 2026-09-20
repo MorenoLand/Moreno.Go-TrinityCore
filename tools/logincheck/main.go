@@ -16,7 +16,15 @@ type loginStage struct {
 
 func main() {
 	tracePath := flag.String("trace", "", "recorded protocol trace JSONL")
+	selfCheck := flag.Bool("self-check", false, "validate the login loading-order regression guard")
 	flag.Parse()
+	if *selfCheck {
+		if err := runSelfCheck(); err != nil {
+			fail(err.Error())
+		}
+		fmt.Println("login loading-order self-check passed")
+		return
+	}
 	if *tracePath == "" {
 		fail("-trace is required")
 	}
@@ -44,6 +52,21 @@ func main() {
 		fail("trace contains no CMSG_PLAYER_LOGIN event")
 	}
 	fmt.Printf("login traces checked=%d order=create-update-gate-passed\n", checked)
+}
+
+func runSelfCheck() error {
+	login := uint32(protocol.OpcodeCMSG_PLAYER_LOGIN)
+	verify := uint32(protocol.OpcodeSMSG_LOGIN_VERIFY_WORLD)
+	criteria := uint32(protocol.OpcodeSMSG_CRITERIA_UPDATE)
+	bad := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: criteria}}}
+	if err := rejectPreVerifyAchievementPackets(bad, 0); err == nil {
+		return fmt.Errorf("pre-verify achievement packet was not rejected")
+	}
+	good := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: verify}}}
+	if err := rejectPreVerifyAchievementPackets(good, 0); err != nil {
+		return fmt.Errorf("valid verify-world ordering was rejected: %w", err)
+	}
+	return nil
 }
 
 func checkLogin(trace protocoltrace.Trace, start int) error {
