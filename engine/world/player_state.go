@@ -110,6 +110,8 @@ const (
 	playerFieldModHealingPct                    = 1193
 	playerFieldModHealingDonePct                = 1194
 	playerFieldCombatRating1                    = 1231 // 1231..1255
+	playerDailyQuestsStart                      = 1280
+	playerDailyQuestsCount                      = 25
 	unitFlagPlayerControlled             uint32 = 0x00000008
 	unitFlag2RegeneratePower             uint32 = 0x00000800
 	unitFlagInCombat                     uint32 = 0x00080000
@@ -233,6 +235,7 @@ type playerState struct {
 	Glyphs               [2][6]uint16
 	GlyphSlots           [6]uint32
 	GlyphsEnabled        uint32
+	DailyQuests          [playerDailyQuestsCount]uint32
 	Stats                [5]uint32
 	Armor                uint32
 	Resistances          [7]uint32
@@ -373,6 +376,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	_ = s.loadPlayerAuras(ctx, &state)
 	s.loadGlyphAuras(&state)
 	s.loadGlyphFields(&state)
+	s.loadDailyQuests(ctx, &state)
 	_ = s.calculatePlayerStats(ctx, &state)
 	_ = s.loadPlayerReputations(ctx, &state)
 	restoreLoadedDeathState(&state)
@@ -402,6 +406,32 @@ func (s *session) loadGlyphFields(state *playerState) {
 	}
 	if state.Level >= 80 {
 		state.GlyphsEnabled |= 0x20
+	}
+}
+
+func (s *session) loadDailyQuests(ctx context.Context, state *playerState) {
+	if s == nil || state == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT quest FROM character_queststatus_daily WHERE guid = ?", state.GUID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	index := 0
+	for rows.Next() && index < playerDailyQuestsCount {
+		var questID uint32
+		if rows.Scan(&questID) != nil || questID == 0 {
+			continue
+		}
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			var exists int64
+			if s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM quest_template WHERE ID = ? LIMIT 1", questID).Scan(&exists) != nil {
+				continue
+			}
+		}
+		state.DailyQuests[index] = questID
+		index++
 	}
 }
 
@@ -1399,6 +1429,9 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 		values[1318+i] = uint32(state.Glyphs[state.ActiveTalentGroup][i])
 	}
 	values[1324] = state.GlyphsEnabled
+	for i := 0; i < playerDailyQuestsCount; i++ {
+		values[playerDailyQuestsStart+i] = state.DailyQuests[i]
+	}
 	if state.DuelArbiter != 0 {
 		values[playerFieldDuelArbiter] = uint32(state.DuelArbiter)
 		values[playerFieldDuelArbiter+1] = uint32(state.DuelArbiter >> 32)
