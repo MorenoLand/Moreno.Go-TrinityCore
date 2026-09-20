@@ -208,7 +208,7 @@ func (s *session) sendResyncRunes() error {
 	buf.WriteU32(6)
 	for _, runeType := range []uint8{0, 0, 1, 1, 2, 2} {
 		buf.WriteU8(runeType)
-		buf.WriteU8(0)
+		buf.WriteU8(255)
 	}
 	return s.write(uint16(protocol.OpcodeSMSG_RESYNC_RUNES), buf.Bytes(), true)
 }
