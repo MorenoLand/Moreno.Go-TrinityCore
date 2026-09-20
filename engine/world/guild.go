@@ -195,10 +195,12 @@ func (s *session) broadcastGuildMemberLogin() {
 }
 
 type guildRankInfo struct {
-	RankID    uint32
-	Name      string
-	Rights    uint32
-	GoldLimit uint32
+	RankID            uint32
+	Name              string
+	Rights            uint32
+	GoldLimit         uint32
+	TabFlags          [6]uint32
+	TabWithdrawLimits [6]uint32
 }
 
 func (s *session) handleGuildQuery(ctx context.Context, payload []byte) bool {
@@ -273,7 +275,6 @@ func (s *session) handleGuildRoster(ctx context.Context) bool {
 	var ranks []guildRankInfo
 	rankRows, err := cdb.QueryContext(ctx, "SELECT rid, rname, rights, BankMoneyPerDay FROM guild_rank WHERE guildid = ? ORDER BY rid", guildID)
 	if err == nil {
-		defer rankRows.Close()
 		for rankRows.Next() {
 			var rid, rights, goldLimit int64
 			var rname string
@@ -286,6 +287,23 @@ func (s *session) handleGuildRoster(ctx context.Context) bool {
 				})
 			}
 		}
+		rankRows.Close()
+	}
+	if rightsRows, rightsErr := cdb.QueryContext(ctx, "SELECT rid, TabId, gbright, SlotPerDay FROM guild_bank_right WHERE guildid = ? ORDER BY rid, TabId", guildID); rightsErr == nil {
+		for rightsRows.Next() {
+			var rid, tabID, flags, limit int64
+			if rightsRows.Scan(&rid, &tabID, &flags, &limit) != nil || tabID < 0 || tabID >= 6 {
+				continue
+			}
+			for index := range ranks {
+				if ranks[index].RankID == uint32(rid) {
+					ranks[index].TabFlags[tabID] = uint32(flags)
+					ranks[index].TabWithdrawLimits[tabID] = uint32(limit)
+					break
+				}
+			}
+		}
+		rightsRows.Close()
 	}
 	if len(ranks) == 0 {
 		ranks = []guildRankInfo{
@@ -334,8 +352,8 @@ func (s *session) handleGuildRoster(ctx context.Context) bool {
 		buf.WriteU32(r.Rights)
 		buf.WriteU32(r.GoldLimit)
 		for i := 0; i < 6; i++ {
-			buf.WriteU32(0) // TabFlags
-			buf.WriteU32(0) // TabWithdrawLimit
+			buf.WriteU32(r.TabFlags[i])
+			buf.WriteU32(r.TabWithdrawLimits[i])
 		}
 	}
 	for _, m := range members {
