@@ -856,7 +856,7 @@ func (s *session) sendLoginMovementStates() error {
 		state.WritePackedGUID(s.playerGUID)
 		state.WriteU32(0)
 	}
-	for _, auraType := range []uint32{auraFeatherFall, auraWaterWalk, auraHover} {
+	for _, auraType := range []uint32{auraWaterWalk, auraFeatherFall, auraHover} {
 		var opcode protocol.Opcode
 		switch auraType {
 		case auraFeatherFall:
@@ -869,6 +869,12 @@ func (s *session) sendLoginMovementStates() error {
 		for _, aura := range auras {
 			if aura == nil || aura.AuraType != auraType {
 				continue
+			}
+			packet := protocol.NewBuffer(packedGUIDSize(s.playerGUID) + 4)
+			packet.WritePackedGUID(s.playerGUID)
+			packet.WriteU32(0)
+			if err := s.write(uint16(opcode), packet.Bytes(), true); err != nil {
+				return err
 			}
 			state.WriteU8(uint8(2 + packedGUIDSize(s.playerGUID) + 4))
 			state.WriteU16(uint16(opcode))
