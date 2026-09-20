@@ -1180,6 +1180,14 @@ func (s *Server) creditHonorableKill(killer, victim *session) {
 	if victim.player.Race == 0 || victim.player.Class == 0 {
 		return
 	}
+	if killer.player.TodayKills < ^uint16(0) {
+		killer.player.TodayKills++
+	}
+	killer.player.TotalKills++
+	if killer.server != nil && killer.server.CharactersStore != nil && killer.server.CharactersStore.DB != nil {
+		_, _ = killer.server.CharactersStore.DB.Exec("UPDATE characters SET totalKills = ?, todayKills = ? WHERE guid = ?", killer.player.TotalKills, killer.player.TodayKills, killer.playerGUID)
+	}
+	killer.sendPlayerUpdate()
 	killer.updateAchievementCriteria(criteriaTypeHonorableKill, 0, 1)
 	killer.updateAchievementCriteria(criteriaTypeEarnHonorableKill, 0, 1)
 	if killer.player.Zone > 0 {
