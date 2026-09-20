@@ -47,6 +47,9 @@ func main() {
 }
 
 func checkLogin(trace protocoltrace.Trace, start int) error {
+	if err := rejectPreVerifyAchievementPackets(trace, start); err != nil {
+		return err
+	}
 	stages := []loginStage{
 		{"MSG_SET_DUNGEON_DIFFICULTY", exact(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY)},
 		{"SMSG_LOGIN_VERIFY_WORLD", exact(protocol.OpcodeSMSG_LOGIN_VERIFY_WORLD)},
@@ -97,6 +100,29 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 		position = found
 	}
 	return nil
+}
+
+func rejectPreVerifyAchievementPackets(trace protocoltrace.Trace, start int) error {
+	for index := start + 1; index < len(trace.Events); index++ {
+		event := trace.Events[index]
+		if event.Direction == protocoltrace.ServerToClient && event.Opcode == uint32(protocol.OpcodeSMSG_LOGIN_VERIFY_WORLD) {
+			return nil
+		}
+		if event.Direction == protocoltrace.ServerToClient && (event.Opcode == uint32(protocol.OpcodeSMSG_CRITERIA_UPDATE) || event.Opcode == uint32(protocol.OpcodeSMSG_ACHIEVEMENT_EARNED)) {
+			return fmt.Errorf("%s was sent before SMSG_LOGIN_VERIFY_WORLD", opcodeName(event.Opcode))
+		}
+		if event.Direction == protocoltrace.ClientToServer && (event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) || event.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST)) {
+			return fmt.Errorf("login ended before SMSG_LOGIN_VERIFY_WORLD")
+		}
+	}
+	return fmt.Errorf("missing SMSG_LOGIN_VERIFY_WORLD")
+}
+
+func opcodeName(opcode uint32) string {
+	if name, ok := protocol.OpcodeNames[protocol.Opcode(opcode)]; ok {
+		return name
+	}
+	return fmt.Sprintf("opcode 0x%X", opcode)
 }
 
 func exact(opcode protocol.Opcode) func(uint32) bool {
