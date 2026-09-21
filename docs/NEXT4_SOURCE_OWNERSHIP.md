@@ -57,6 +57,8 @@ The login fixture suite now exercises exact payload contracts for world verifica
 
 The login effect `SMSG_SPELL_GO` now matches `Spell::SendSpellGo`: the self packet carries `CAST_FLAG_POWER_LEFT_SELF` and remaining power, while the nearby packet removes both fields; the fixture validates the complete payload (`c396319`).
 
+Login `SMSG_INSTANCE_DIFFICULTY` now derives its value from the current map type and instance difficulty, keeping saved dungeon settings off continent maps and matching `Map::GetDifficulty` (`cae1d75`).
+
 Corpse repopulation now occurs after the loading flag clears and ON_LOGIN criteria update, immediately before the login hook, matching `CharacterHandler.cpp` (`e083f6a`).
 
 The self-player update now serializes the computed shield-block value into `PLAYER_SHIELD_BLOCK`, matching `Player::UpdateAllStats` field delivery (`43c5918`).
