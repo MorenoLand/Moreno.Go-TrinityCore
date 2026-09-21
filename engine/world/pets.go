@@ -524,6 +524,12 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 	if s.player == nil || petID == 0 {
 		return
 	}
+	if maxHealth > 0 && curHealth > maxHealth {
+		curHealth = maxHealth
+	}
+	if maxMana > 0 && curMana > maxMana {
+		curMana = maxMana
+	}
 	petGUID := uint64(s.server.nextPetLowGUID()) | (uint64(0xF140) << 48)
 	s.player.PetGUID = petGUID
 	s.player.PetNumber = petID
