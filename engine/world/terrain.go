@@ -339,7 +339,7 @@ func (s *session) updateZoneAndArea(ctx context.Context, force bool) {
 			stateChanged = s.destroyZoneLimitedItems(ctx, s.player.Zone) || stateChanged
 			stateChanged = s.autoUnequipOffhandIfNeeded(ctx) || stateChanged
 		}
-		stateChanged = s.applyZoneState(s.player, s.player.Zone, areaID) || stateChanged
+		stateChanged = s.applyZoneState(ctx, s.player, s.player.Zone, areaID) || stateChanged
 	}
 	if oldZone != s.player.Zone {
 		s.server.ensureZoneWeather(ctx, s.player.Zone, s)
