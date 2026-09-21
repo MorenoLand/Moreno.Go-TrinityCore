@@ -813,6 +813,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		s.player.ExtraFlags |= playerExtraTaxiCheat
 		s.persistExtraFlags()
 	}
+	s.expireOldMails(ctx)
 	s.loadMailState(ctx)
 	s.sendNewMailNotification(ctx)
 	if s.player.repopOnLogin {
