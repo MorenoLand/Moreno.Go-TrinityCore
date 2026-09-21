@@ -156,6 +156,7 @@ type session struct {
 	playerLoaded          bool
 	farTeleportPending    bool
 	randomBGWinner        bool
+	bgData                battlegroundLoginData
 	player                *playerState
 	visiblePlayersMu      sync.Mutex
 	visiblePlayers        map[uint64]struct{}
@@ -278,6 +279,19 @@ type bgQueueEntry struct {
 	ArenaFaction uint8
 	MapID        uint32
 	StartTime    time.Time
+}
+
+type battlegroundLoginData struct {
+	InstanceID uint32
+	Team       uint16
+	JoinX      float32
+	JoinY      float32
+	JoinZ      float32
+	JoinO      float32
+	JoinMap    uint32
+	TaxiStart  uint32
+	TaxiEnd    uint32
+	MountSpell uint32
 }
 
 type buybackSlot struct {

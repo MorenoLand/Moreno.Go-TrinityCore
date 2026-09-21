@@ -425,6 +425,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		return false
 	}
 	s.loadRandomBGStatus(ctx, guid)
+	s.loadBattlegroundData(ctx, guid)
 	s.prepareLoginResurrection(ctx, &state)
 	mounts, err := s.loadMountState(ctx, guid)
 	if err != nil {
@@ -853,6 +854,15 @@ func (s *session) loadRandomBGStatus(ctx context.Context, guid uint64) {
 	if s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT 1 FROM character_battleground_random WHERE guid = ? LIMIT 1", guid).Scan(&found) == nil {
 		s.randomBGWinner = found != 0
 	}
+}
+
+func (s *session) loadBattlegroundData(ctx context.Context, guid uint64) {
+	s.bgData = battlegroundLoginData{}
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT instanceId, team, joinX, joinY, joinZ, joinO, joinMapId, taxiStart, taxiEnd, mountSpell
+		FROM character_battleground_data WHERE guid = ?`, guid).Scan(&s.bgData.InstanceID, &s.bgData.Team, &s.bgData.JoinX, &s.bgData.JoinY, &s.bgData.JoinZ, &s.bgData.JoinO, &s.bgData.JoinMap, &s.bgData.TaxiStart, &s.bgData.TaxiEnd, &s.bgData.MountSpell)
 }
 
 func (s *session) applyZoneState(ctx context.Context, state *playerState, zoneID, areaID uint32) bool {
