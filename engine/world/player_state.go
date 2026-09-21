@@ -2392,6 +2392,7 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 	values[unitFieldPlayerFlags] = state.PlayerFlags
 	values[unitFieldPlayerFieldBytes] = playerFieldBytesValue(state)
 	values[unitFieldPlayerSelfResSpell] = state.SelfResSpell
+	values[playerShieldBlock] = state.Block
 	for i := 0; i < playerExploredZonesCount; i++ {
 		values[playerExploredZonesStart+i] = state.ExploredZones[i]
 	}
