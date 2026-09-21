@@ -2896,7 +2896,7 @@ func buildInstanceDifficultyForMap(difficulty uint32, dynamic bool) []byte {
 }
 
 func (s *session) loginInstanceDifficulty(ctx context.Context, state playerState) (uint32, bool) {
-	difficulty := uint32(state.DungeonDifficulty)
+	difficulty := uint32(0)
 	dynamic := false
 	instanceDifficulty, hasInstanceDifficulty := s.loadLoginInstanceDifficulty(ctx, state)
 	if hasInstanceDifficulty {
@@ -2914,7 +2914,10 @@ func (s *session) loginInstanceDifficulty(ctx context.Context, state playerState
 			difficulty = uint32(state.RaidDifficulty)
 		}
 		dynamic = entry.IsDynamicDifficultyMap() && difficulty >= 2
-	} else {
+	} else if entry.IsDungeon() {
+		if !hasInstanceDifficulty {
+			difficulty = uint32(state.DungeonDifficulty)
+		}
 		dynamic = entry.IsDynamicDifficultyMap() && difficulty >= 1
 	}
 	return difficulty, dynamic
