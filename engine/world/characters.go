@@ -1473,11 +1473,9 @@ func (s *session) buildEnumCharacter(ctx context.Context, packet *protocol.Buffe
 	customize := characterCustomizeNone
 	if c.AtLogin&uint16(atLoginCustomize) != 0 {
 		customize = characterCustomizeCustomize
-	}
-	if c.AtLogin&uint16(atLoginChangeFaction) != 0 {
+	} else if c.AtLogin&uint16(atLoginChangeFaction) != 0 {
 		customize = characterCustomizeFaction
-	}
-	if c.AtLogin&uint16(atLoginChangeRace) != 0 {
+	} else if c.AtLogin&uint16(atLoginChangeRace) != 0 {
 		customize = characterCustomizeRace
 	}
 	packet.WriteU32(customize)
