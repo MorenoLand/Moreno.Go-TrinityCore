@@ -537,6 +537,14 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(CreatedBySpell, 0), COALESCE(PetType, 0), COALESCE(exp, 0) FROM character_pet WHERE id = ? AND owner = ?", petID, s.playerGUID).Scan(&createdBySpell, &petType, &petExperience)
 	}
+	if createdBySpell > 0 && createdBySpell <= int64(^uint32(0)) {
+		packet := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 0, uint32(createdBySpell), spellCastFlagGo, uint32(time.Now().UnixMilli()), nil, nil, protocol.SpellTargetData{})
+		if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), packet, true); err != nil {
+			s.debug("pet summon effect failed", "account", s.accountName, "petID", petID, "spell", createdBySpell, "error", err)
+		} else if s.server != nil {
+			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), packet, s)
+		}
+	}
 
 	if modelID == 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil && entry != 0 {
 		var mID int64
