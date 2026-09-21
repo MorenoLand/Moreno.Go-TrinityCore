@@ -935,6 +935,7 @@ func requireCreateBlock(event protocoltrace.Event) error {
 	if err != nil || count == 0 {
 		return fmt.Errorf("player update has no blocks")
 	}
+	playerFound := false
 	for index := uint32(0); index < count; index++ {
 		kind, err := reader.ReadU8()
 		if err != nil {
@@ -952,12 +953,21 @@ func requireCreateBlock(event protocoltrace.Event) error {
 				}
 			}
 		case protocol.UpdateCreateObject, protocol.UpdateCreateObject2:
-			player, err := parseCreateObjectBlock(reader)
+			typeID, err := parseCreateObjectBlock(reader)
 			if err != nil {
 				return fmt.Errorf("create block %d: %w", index, err)
 			}
-			if player {
-				return nil
+			if typeID == 1 || typeID == 2 {
+				if playerFound {
+					return fmt.Errorf("item/container create block %d arrived after self-player create", index)
+				}
+			}
+			if typeID == 4 {
+				if playerFound {
+					return fmt.Errorf("duplicate self-player create block %d", index)
+
+				}
+				playerFound = true
 			}
 		case protocol.UpdateValues:
 			if err := skipValuesUpdate(reader); err != nil {
@@ -971,54 +981,57 @@ func requireCreateBlock(event protocoltrace.Event) error {
 			return fmt.Errorf("unsupported update block kind=%d", kind)
 		}
 	}
-	return fmt.Errorf("player create block not found")
+	if !playerFound {
+		return fmt.Errorf("player create block not found")
+	}
+	return nil
 }
 
-func parseCreateObjectBlock(reader *protocol.Buffer) (bool, error) {
+func parseCreateObjectBlock(reader *protocol.Buffer) (uint8, error) {
 	if _, err := reader.ReadPackedGUID(); err != nil {
-		return false, fmt.Errorf("create GUID is truncated: %w", err)
+		return 0, fmt.Errorf("create GUID is truncated: %w", err)
 	}
 	typeID, err := reader.ReadU8()
 	if err != nil {
-		return false, fmt.Errorf("create type is truncated: %w", err)
+		return 0, fmt.Errorf("create type is truncated: %w", err)
 	}
 	flags, err := reader.ReadU16()
 	if err != nil {
-		return false, fmt.Errorf("create movement flags are truncated: %w", err)
+		return 0, fmt.Errorf("create movement flags are truncated: %w", err)
 	}
 	if err := skipCreateMovement(reader, flags); err != nil {
-		return false, err
+		return 0, err
 	}
 	mask, values, err := readUpdateValues(reader)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	if typeID != 4 {
-		return false, nil
+		return typeID, nil
 	}
 	if flags != 0x0061 {
-		return false, fmt.Errorf("player create flags=0x%X, want 0x61", flags)
+		return 0, fmt.Errorf("player create flags=0x%X, want 0x61", flags)
 	}
 	if len(mask) != 42 {
-		return false, fmt.Errorf("player update mask blocks=%d, want 42", len(mask))
+		return 0, fmt.Errorf("player update mask blocks=%d, want 42", len(mask))
 	}
 	for field := 1326; field < len(mask)*32; field++ {
 		if updateMaskHas(mask, field) {
-			return false, fmt.Errorf("player update mask sets out-of-range field %d", field)
+			return 0, fmt.Errorf("player update mask sets out-of-range field %d", field)
 		}
 	}
 	for _, field := range []int{0, 2, 4, 23, 24, 32, 54, 59, 67, 68} {
 		if !updateMaskHas(mask, field) {
-			return false, fmt.Errorf("player update mask omits required field %d", field)
+			return 0, fmt.Errorf("player update mask omits required field %d", field)
 		}
 	}
 	if values[2] != 0x19 || values[23] == 0 || values[54] == 0 || values[67] == 0 || values[68] == 0 || values[24] == 0 || values[32] == 0 {
-		return false, fmt.Errorf("player create required field values are invalid")
+		return 0, fmt.Errorf("player create required field values are invalid")
 	}
 	if values[59]&0x00000008 == 0 {
-		return false, fmt.Errorf("player create omits UNIT_FLAG_PLAYER_CONTROLLED")
+		return 0, fmt.Errorf("player create omits UNIT_FLAG_PLAYER_CONTROLLED")
 	}
-	return true, nil
+	return typeID, nil
 }
 
 func skipCreateMovement(reader *protocol.Buffer, flags uint16) error {
