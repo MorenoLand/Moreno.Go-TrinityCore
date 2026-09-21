@@ -89,6 +89,10 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "invalid addon language type", "type", typeID)
 		return true
 	}
+	if language == languageAddon && (s.server == nil || !s.server.Config.AddonChannel) {
+		s.debug("chat rejected", "account", s.accountName, "reason", "addon channel disabled")
+		return true
+	}
 	if language != languageAddon && typeID != chatAFK && typeID != chatDND {
 		if language == languageUniversal {
 			s.sendNotification("Unknown language")
