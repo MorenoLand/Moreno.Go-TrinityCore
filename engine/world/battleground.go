@@ -251,6 +251,44 @@ func (s *session) sendBattlefieldStatus(slot uint8) {
 	_ = s.write(uint16(protocol.OpcodeSMSG_BATTLEFIELD_STATUS), buf.Bytes(), true)
 }
 
+func (s *session) restoreBattlegroundLoginQueue(state playerState) {
+	if s == nil || s.bgData.InstanceID == 0 || !isBattlegroundMap(state.Map) {
+		return
+	}
+	bgTypeID, arenaType, isArena, ok := battlegroundTypeForMap(state.Map)
+	if !ok {
+		return
+	}
+	for index := range s.bgQueues {
+		if s.bgQueues[index].Active {
+			continue
+		}
+		s.bgQueues[index] = bgQueueEntry{Active: true, BgTypeID: bgTypeID, InstanceID: s.bgData.InstanceID, Status: 3, ArenaType: arenaType, IsArena: isArena, MapID: state.Map, StartTime: time.Now(), ArenaFaction: uint8(s.bgData.Team)}
+		return
+	}
+}
+
+func battlegroundTypeForMap(mapID uint32) (uint32, uint8, bool, bool) {
+	switch mapID {
+	case 30:
+		return 1, 0, false, true
+	case 489:
+		return 2, 0, false, true
+	case 529:
+		return 3, 0, false, true
+	case 566:
+		return 7, 0, false, true
+	case 607:
+		return 9, 0, false, true
+	case 628:
+		return 30, 0, false, true
+	case 559, 562, 572, 617, 618:
+		return 4, uint8(2), true, true
+	default:
+		return 0, 0, false, false
+	}
+}
+
 // handleBfEntryInviteResponse processes CMSG_BATTLEFIELD_MGR_ENTRY_INVITE_RESPONSE (0x4DF).
 // Reference: WorldSession::HandleBfEntryInviteResponse (BattlefieldHandler.cpp:143).
 func (s *session) handleBfEntryInviteResponse(ctx context.Context, payload []byte) bool {
