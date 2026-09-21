@@ -877,9 +877,13 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 				grp.IsLFG = true
 				grp.LFGDungeonID = proposal.DungeonID
 				grp.LFGState = LFGStateDungeon
+				dbGroupID := grp.DBID
 				s.server.groupsMu.Unlock()
+				if dbGroupID == 0 {
+					dbGroupID = uint32(proposal.Group)
+				}
 				if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-					_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(), "REPLACE INTO lfg_data (guid, dungeon, state) VALUES (?, ?, ?)", proposal.Group, proposal.DungeonID, LFGStateDungeon)
+					_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(), "REPLACE INTO lfg_data (guid, dungeon, state) VALUES (?, ?, ?)", dbGroupID, proposal.DungeonID, LFGStateDungeon)
 				}
 			}
 		}
@@ -1107,10 +1111,14 @@ func (s *Server) completeLFGDungeon(groupID uint32, dungeonID uint32) {
 	}
 	grp.LFGState = LFGStateFinishedDungeon
 	grp.LFGDungeonID = dungeonID
+	dbGroupID := grp.DBID
 	members := append([]groupMember(nil), grp.Members...)
 	s.groupsMu.Unlock()
+	if dbGroupID == 0 {
+		dbGroupID = groupID
+	}
 	if s.CharactersStore != nil && s.CharactersStore.DB != nil {
-		_, _ = s.CharactersStore.DB.ExecContext(context.Background(), "REPLACE INTO lfg_data (guid, dungeon, state) VALUES (?, ?, ?)", groupID, dungeonID, LFGStateFinishedDungeon)
+		_, _ = s.CharactersStore.DB.ExecContext(context.Background(), "REPLACE INTO lfg_data (guid, dungeon, state) VALUES (?, ?, ?)", dbGroupID, dungeonID, LFGStateFinishedDungeon)
 	}
 	for _, m := range members {
 		if sess := s.findSessionByGUID(m.GUID); sess != nil {

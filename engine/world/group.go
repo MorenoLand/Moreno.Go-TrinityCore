@@ -25,6 +25,7 @@ const (
 // Mirrors TrinityCore's Group class (Groups/Group.h).
 type groupState struct {
 	ID            uint64
+	DBID          uint32
 	LFGState      uint8
 	LeaderGUID    uint64
 	Members       []groupMember // ordered; first entry is leader
@@ -108,21 +109,29 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 		return
 	}
 	db := s.server.CharactersStore.DB
-	var groupID int64
-	if err := db.QueryRowContext(ctx, "SELECT guid FROM group_member WHERE memberGuid = ? LIMIT 1", guid).Scan(&groupID); err != nil {
+	var dbGroupID int64
+	if err := db.QueryRowContext(ctx, "SELECT guid FROM group_member WHERE memberGuid = ? LIMIT 1", guid).Scan(&dbGroupID); err != nil {
+		return
+	}
+	if group := s.server.findGroupByDBID(uint64(dbGroupID)); group != nil {
+		s.groupID = group.ID
+		if s.player != nil {
+			s.player.DungeonDifficulty = group.DungeonDiff
+			s.player.RaidDifficulty = group.RaidDiff
+		}
 		return
 	}
 	var leaderGUID, lootMethod, looterGUID, lootThreshold, groupType, dungeonDiff, raidDiff, masterLooterGUID int64
 	var icons [8]int64
-	err := db.QueryRowContext(ctx, "SELECT leaderGuid, lootMethod, looterGuid, lootThreshold, icon1, icon2, icon3, icon4, icon5, icon6, icon7, icon8, groupType, difficulty, raidDifficulty, masterLooterGuid FROM `groups` WHERE guid = ?", groupID).Scan(&leaderGUID, &lootMethod, &looterGUID, &lootThreshold, &icons[0], &icons[1], &icons[2], &icons[3], &icons[4], &icons[5], &icons[6], &icons[7], &groupType, &dungeonDiff, &raidDiff, &masterLooterGUID)
+	err := db.QueryRowContext(ctx, "SELECT leaderGuid, lootMethod, looterGuid, lootThreshold, icon1, icon2, icon3, icon4, icon5, icon6, icon7, icon8, groupType, difficulty, raidDifficulty, masterLooterGuid FROM `groups` WHERE guid = ?", dbGroupID).Scan(&leaderGUID, &lootMethod, &looterGUID, &lootThreshold, &icons[0], &icons[1], &icons[2], &icons[3], &icons[4], &icons[5], &icons[6], &icons[7], &groupType, &dungeonDiff, &raidDiff, &masterLooterGUID)
 	if err != nil {
 		return
 	}
 	var lfgDungeonID, lfgState int64
 	if uint8(groupType)&0x08 != 0 {
-		_ = db.QueryRowContext(ctx, "SELECT dungeon, state FROM lfg_data WHERE guid = ?", groupID).Scan(&lfgDungeonID, &lfgState)
+		_ = db.QueryRowContext(ctx, "SELECT dungeon, state FROM lfg_data WHERE guid = ?", dbGroupID).Scan(&lfgDungeonID, &lfgState)
 	}
-	rows, err := db.QueryContext(ctx, "SELECT gm.memberGuid, gm.memberFlags, gm.subgroup, gm.roles, c.name FROM group_member gm JOIN characters c ON c.guid = gm.memberGuid WHERE gm.guid = ? ORDER BY gm.memberGuid", groupID)
+	rows, err := db.QueryContext(ctx, "SELECT gm.memberGuid, gm.memberFlags, gm.subgroup, gm.roles, c.name FROM group_member gm JOIN characters c ON c.guid = gm.memberGuid WHERE gm.guid = ? ORDER BY gm.memberGuid", dbGroupID)
 	if err != nil {
 		return
 	}
@@ -145,7 +154,7 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 		}
 		return members[j].GUID != uint64(leaderGUID) && members[i].GUID < members[j].GUID
 	})
-	g := &groupState{ID: uint64(groupID), LFGState: uint8(lfgState), LeaderGUID: uint64(leaderGUID), Members: members, LootMethod: uint8(lootMethod), LooterGUID: uint64(looterGUID), LootThreshold: uint8(lootThreshold), MasterLooter: uint64(masterLooterGUID), DungeonDiff: uint8(dungeonDiff), RaidDiff: uint8(raidDiff), GroupType: uint8(groupType), IsRaid: uint8(groupType)&0x02 != 0, IsLFG: uint8(groupType)&0x08 != 0, LFGDungeonID: uint32(lfgDungeonID)}
+	g := &groupState{ID: newGroupID(), DBID: uint32(dbGroupID), LFGState: uint8(lfgState), LeaderGUID: uint64(leaderGUID), Members: members, LootMethod: uint8(lootMethod), LooterGUID: uint64(looterGUID), LootThreshold: uint8(lootThreshold), MasterLooter: uint64(masterLooterGUID), DungeonDiff: uint8(dungeonDiff), RaidDiff: uint8(raidDiff), GroupType: uint8(groupType), IsRaid: uint8(groupType)&0x02 != 0, IsLFG: uint8(groupType)&0x08 != 0, LFGDungeonID: uint32(lfgDungeonID)}
 	for index, icon := range icons {
 		g.TargetIcons[index] = uint64(icon)
 	}
@@ -175,7 +184,7 @@ func (s *session) sendLoadedGroup() {
 var groupNextID uint64 = 1
 
 func newGroupID() uint64 {
-	return atomic.AddUint64(&groupNextID, 1)
+	return atomic.AddUint64(&groupNextID, 1) - 1
 }
 
 // PartyOperation enum, mirrors TrinityCore's PartyOperation.
@@ -329,6 +338,17 @@ func (s *Server) findGroupByID(id uint64) *groupState {
 	s.groupsMu.RLock()
 	defer s.groupsMu.RUnlock()
 	return s.groups[id]
+}
+
+func (s *Server) findGroupByDBID(id uint64) *groupState {
+	s.groupsMu.RLock()
+	defer s.groupsMu.RUnlock()
+	for _, group := range s.groups {
+		if group != nil && uint64(group.DBID) == id {
+			return group
+		}
+	}
+	return nil
 }
 
 func (s *Server) getGroup(id uint64) *groupState {
@@ -500,6 +520,7 @@ func (s *session) handleGroupAccept(_ context.Context, _ []byte) bool {
 		// Create new group
 		g = &groupState{
 			ID:            newGroupID(),
+			DBID:          0,
 			LeaderGUID:    leaderGUID,
 			LootMethod:    3, // Group Loot default in retail / TrinityCore
 			LootThreshold: 2, // uncommon
