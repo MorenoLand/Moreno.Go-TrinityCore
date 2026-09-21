@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	PlayerEventLogin   = 3
-	PlayerEventLogout  = 4
-	PlayerEventChat    = 18
-	PlayerEventCommand = 42
+	PlayerEventLogin      = 3
+	PlayerEventLogout     = 4
+	PlayerEventChat       = 18
+	PlayerEventUpdateZone = 27
+	PlayerEventCommand    = 42
 )
 
 type Hook struct {

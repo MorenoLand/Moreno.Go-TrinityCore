@@ -14,6 +14,7 @@ import (
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -299,6 +300,9 @@ func (s *session) updateZoneAndArea(ctx context.Context, force bool) {
 		s.exploreZone(ctx, s.player.Zone)
 		s.sendLoadedGroup()
 		_ = s.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), buildInitWorldStates(*s.player, areaID, s.server.Config.ArenaSeasonID, s.server.Config.ArenaSeasonInProgress), true)
+	}
+	if oldZone != s.player.Zone || oldArea != areaID {
+		s.triggerPlayerEvent(ctx, scripting.PlayerEventUpdateZone, s.luaPlayer(), s.player.Zone, areaID)
 	}
 	if stateChanged || (oldArea != areaID && oldZone == s.player.Zone) {
 		s.sendPlayerUpdate()
