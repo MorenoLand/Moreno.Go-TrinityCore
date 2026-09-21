@@ -198,3 +198,5 @@ Faction login state now keeps the persisted standing offset separate from DBC ba
 Login and runtime action-bar toggles now serialize `PLAYER_FIELD_BYTES` byte 2, matching `HandleSetActionBarToggles` and `Player::LoadFromDB` (`31785e3`).
 
 Offline rest-bonus loading now honors the configured max-level rule and serializes `PLAYER_REST_STATE_EXPERIENCE`, matching `SetRestBonus` (`c2ed09d`).
+
+Character login now rejects active character bans, invalid names, invalid gender values, and invalid race/class definitions before state or packet construction, matching `Player::LoadFromDB` (`d00b9da`).
