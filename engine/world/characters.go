@@ -419,6 +419,8 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if _, ok := s.legitimate[guid]; !ok {
 		return false
 	}
+	s.playerGUID = guid
+	s.loadAchievementState(ctx)
 	state, err := s.loadPlayerState(ctx, guid)
 	if err != nil {
 		return false
@@ -442,7 +444,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.gossipClosed = false
 	s.breathTimer = -1
 	s.fatigueTimer = -1
-	s.playerGUID = guid
 	s.player = &state
 	s.visiblePlayersMu.Lock()
 	s.visiblePlayers = nil
@@ -503,7 +504,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(uint16(protocol.OpcodeSMSG_INITIALIZE_FACTIONS), buildInitialReputations(state), true); err != nil {
 		return false
 	}
-	s.loadAchievementState(ctx)
 	s.loadExploredZones(ctx)
 	s.sendAllAchievementData()
 	s.debug("world login stage", "stage", "equipment-set-list-start", "guid", guid)
