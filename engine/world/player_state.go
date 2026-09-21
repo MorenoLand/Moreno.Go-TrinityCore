@@ -261,6 +261,8 @@ type playerState struct {
 	RangedCrit           float32
 	OffhandCrit          float32
 	SpellCrit            [7]float32
+	BlockPercentage      float32
+	DodgePercentage      float32
 	Armor                uint32
 	Resistances          [7]uint32
 	Block                uint32
@@ -1738,6 +1740,44 @@ func (s *session) calculatePlayerCritFields(state *playerState, level uint8) {
 			state.SpellCrit[school] = (spellBase+float32(state.Stats[3])*spellRatio)*100 + ratingBonus(10)
 		}
 	}
+	defenseSkill := uint32(0)
+	for _, skill := range state.Skills {
+		if skill.Skill == 95 {
+			defenseSkill = uint32(skill.Value)
+			break
+		}
+	}
+	maxSkill := uint32(level) * 5
+	dodgeBase := [...]float32{0.036640, 0.034943, -0.040873, 0.020957, 0.034178, 0.036640, 0.021080, 0.036587, 0.024211, 0, 0.056097}
+	critToDodge := [...]float32{0.85 / 1.15, 1 / 1.15, 1.11 / 1.15, 2 / 1.15, 1 / 1.15, 0.85 / 1.15, 1.60 / 1.15, 1 / 1.15, 0.97 / 1.15, 0, 2 / 1.15}
+	dodgeCap := [...]float32{88.129021, 88.129021, 145.560408, 145.560408, 150.375940, 88.129021, 145.560408, 150.375940, 150.375940, 0, 116.890707}
+	dodgeRatio := meleeRatio
+	if meleeBaseOK && meleeRatioOK && classIndex < len(dodgeCap) && dodgeCap[classIndex] > 0 {
+		baseAgility := float32(state.BaseStats[1])
+		bonusAgility := float32(state.Stats[1]) - baseAgility
+		diminishing := 100*bonusAgility*dodgeRatio*critToDodge[classIndex] + ratingBonus(0)*0.04 + ratingBonus(1)
+		nondiminishing := 100 * (dodgeBase[classIndex] + baseAgility*dodgeRatio*critToDodge[classIndex])
+		if defenseSkill > maxSkill {
+			nondiminishing += float32(defenseSkill-maxSkill) * 0.04
+		} else {
+			nondiminishing -= float32(maxSkill-defenseSkill) * 0.04
+		}
+		state.DodgePercentage = dodgeCap[classIndex]*diminishing/(diminishing+dodgeCap[classIndex]*[...]float32{0.956, 0.956, 0.988, 0.988, 0.983, 0.956, 0.988, 0.983, 0.983, 0, 0.972}[classIndex]) + nondiminishing
+		if state.DodgePercentage < 0 {
+			state.DodgePercentage = 0
+		}
+	}
+	if state.Block > 0 && (state.Class == 1 || state.Class == 2 || state.Class == 6 || state.Class == 7) {
+		state.BlockPercentage = 5 + ratingBonus(3)
+		if defenseSkill > maxSkill {
+			state.BlockPercentage += float32(defenseSkill-maxSkill) * 0.04
+		} else {
+			state.BlockPercentage -= float32(maxSkill-defenseSkill) * 0.04
+		}
+		if state.BlockPercentage < 0 {
+			state.BlockPercentage = 0
+		}
+	}
 }
 
 func restorePlayerHealth(savedHealth, maxHealth uint32, loaded bool, xp uint32, level uint8) uint32 {
@@ -2642,6 +2682,8 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 	values[playerCritPercentage] = math.Float32bits(state.MeleeCrit)
 	values[playerRangedCritPercentage] = math.Float32bits(state.RangedCrit)
 	values[playerOffhandCritPercentage] = math.Float32bits(state.OffhandCrit)
+	values[playerBlockPercentage] = math.Float32bits(state.BlockPercentage)
+	values[playerDodgePercentage] = math.Float32bits(state.DodgePercentage)
 
 	// Free talent points & spent points
 	if state.Level >= 10 {
