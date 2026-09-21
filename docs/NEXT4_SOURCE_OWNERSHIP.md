@@ -48,3 +48,5 @@ Nearby login movement packets now retain transport-relative GUID/offset/seat dat
 Mounted-flight aura login now recalculates and broadcasts flight speed packets through the source `UpdateSpeed(MOVE_FLIGHT)` branch (`c60e325`).
 
 Persisted transform auras now resolve their creature-template display before the player create update, matching `_LoadAuras` and `HandleAuraTransform` (`2ad2911`).
+
+Special transform spells now use the pinned race/gender display mappings for login serialization (`13d8503`).
