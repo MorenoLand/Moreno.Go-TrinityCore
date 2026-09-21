@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -158,6 +159,7 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) {
 		packet.WriteF32(z)
 		packet.WriteF32(orientation)
 		_ = s.write(uint16(protocol.OpcodeSMSG_NEW_WORLD), packet.Bytes(), true)
+		s.triggerPlayerEvent(context.Background(), scripting.PlayerEventMapChange, s.luaPlayer())
 	}
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
