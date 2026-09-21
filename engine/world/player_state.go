@@ -2693,6 +2693,10 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 	}
 	values[playerFieldModHealingPct] = math.Float32bits(1.0)
 	values[playerFieldModHealingDonePct] = math.Float32bits(1.0)
+	values[playerFieldModHealingDonePos] = state.SpellPower
+	for school := 1; school < 7; school++ {
+		values[playerFieldModDamageDonePos+school] = state.SpellPower
+	}
 	values[playerCritPercentage] = math.Float32bits(state.MeleeCrit)
 	values[playerRangedCritPercentage] = math.Float32bits(state.RangedCrit)
 	values[playerOffhandCritPercentage] = math.Float32bits(state.OffhandCrit)
