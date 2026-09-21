@@ -70,13 +70,17 @@ func runSelfCheck() error {
 	if err := rejectPreVerifyAchievementPackets(good, 0); err != nil {
 		return fmt.Errorf("valid verify-world ordering was rejected: %w", err)
 	}
-	validMovement := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_FEATHER_FALL)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_SET_HOVER)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_FORCE_MOVE_ROOT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MULTIPLE_MOVES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL)}}}
+	validMovement := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_FEATHER_FALL)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_SET_HOVER)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_FORCE_MOVE_ROOT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MULTIPLE_MOVES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL)}}}
 	if err := checkLoginMovementOrder(validMovement, 0); err != nil {
 		return fmt.Errorf("valid movement ordering was rejected: %w", err)
 	}
 	invalidMovement := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK)}}}
 	if err := checkLoginMovementOrder(invalidMovement, 0); err == nil {
 		return fmt.Errorf("out-of-order movement packets were not rejected")
+	}
+	preTimeSyncMovement := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}}}
+	if err := checkLoginMovementOrder(preTimeSyncMovement, 0); err == nil {
+		return fmt.Errorf("movement packet before time sync was not rejected")
 	}
 	for _, compressed := range []bool{false, true} {
 		event, err := loginCreateFixture(compressed)
@@ -265,6 +269,7 @@ func checkLoginMovementOrder(trace protocoltrace.Trace, start int) error {
 	}
 	last := -1
 	seen := make(map[int]struct{}, len(order))
+	timeSyncSeen := false
 	for index := start + 1; index < len(trace.Events); index++ {
 		event := trace.Events[index]
 		if event.Direction == protocoltrace.ClientToServer && (event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) || event.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST)) {
@@ -273,9 +278,16 @@ func checkLoginMovementOrder(trace protocoltrace.Trace, start int) error {
 		if event.Direction != protocoltrace.ServerToClient {
 			continue
 		}
+		if event.Opcode == uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ) {
+			timeSyncSeen = true
+			continue
+		}
 		stage, ok := order[event.Opcode]
 		if !ok {
 			continue
+		}
+		if !timeSyncSeen {
+			return fmt.Errorf("movement packet %s arrived before SMSG_TIME_SYNC_REQ", opcodeName(event.Opcode))
 		}
 		if _, alreadySeen := seen[stage]; alreadySeen {
 			continue
