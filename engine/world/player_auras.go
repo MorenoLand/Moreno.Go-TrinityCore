@@ -51,6 +51,12 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 		if _, exists := s.activeAuras[id]; exists {
 			continue
 		}
+		if s.server.Data != nil {
+			_, found, spellErr := s.server.Data.Spell(id)
+			if spellErr != nil || !found {
+				continue
+			}
+		}
 		aura := &activeAura{SpellID: id, CasterGUID: casterGUID, TargetGUID: state.GUID, EffectMask: uint8(effectMask) & 0x07, Slot: uint8(len(s.activeAuras)), Positive: true, CasterLevel: state.Level}
 		if maxDuration > 0 {
 			aura.DurationMs = clampAuraDuration(maxDuration)
