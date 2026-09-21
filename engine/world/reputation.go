@@ -41,7 +41,7 @@ func (s *session) applyStartAllReputation(ctx context.Context) {
 			index = len(s.player.Reputations) - 1
 		}
 		s.player.Reputations[index].ListID = uint32(reputation.ReputationList)
-		s.player.Reputations[index].Standing = 42999
+		s.player.Reputations[index].Standing = 42999 - reputation.BaseStanding
 		if s.player.Reputations[index].Flags == 0 {
 			s.player.Reputations[index].Flags = reputation.DefaultFlags
 		}

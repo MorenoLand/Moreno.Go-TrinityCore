@@ -1692,7 +1692,7 @@ func (s *session) loadPlayerReputations(ctx context.Context, state *playerState)
 	byFaction := make(map[uint32]int, len(defaults))
 	for _, reputation := range defaults {
 		byFaction[reputation.ID] = len(state.Reputations)
-		state.Reputations = append(state.Reputations, playerReputation{FactionID: reputation.ID, ListID: uint32(reputation.ReputationList), Base: reputation.BaseStanding, Standing: reputation.BaseStanding, Flags: reputation.DefaultFlags})
+		state.Reputations = append(state.Reputations, playerReputation{FactionID: reputation.ID, ListID: uint32(reputation.ReputationList), Base: reputation.BaseStanding, Flags: reputation.DefaultFlags})
 	}
 	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT faction, standing, flags FROM character_reputation WHERE guid = ? ORDER BY faction", state.GUID)
 	if err != nil {
