@@ -393,6 +393,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	}
 	_ = s.CharGuild(ctx, &state)
 	s.loadPlayerGroup(ctx, guid)
+	s.validateBoundInstances(ctx, guid)
 	_ = s.loadPlayerSkills(ctx, &state)
 	_ = s.loadPlayerPacketsState(ctx, &state)
 
@@ -924,6 +925,39 @@ func (s *session) loadInstanceState(ctx context.Context, state *playerState) err
 		}
 	}
 	return nil
+}
+
+func (s *session) validateBoundInstances(ctx context.Context, guid uint64) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	rows, err := cdb.QueryContext(ctx, `SELECT ci.instance, ci.permanent, i.map, i.difficulty, ci.extendState
+		FROM character_instance AS ci JOIN instance AS i ON i.id = ci.instance WHERE ci.guid = ?`, guid)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var instanceID, permanent, mapID, difficulty, extendState int64
+		if rows.Scan(&instanceID, &permanent, &mapID, &difficulty, &extendState) != nil || instanceID <= 0 {
+			continue
+		}
+		invalid := difficulty < 0 || difficulty >= 6
+		if s.server.Data != nil && mapID >= 0 {
+			entry, found, mapErr := s.server.Data.Map(uint32(mapID))
+			if mapErr == nil && (!found || !entry.IsDungeon()) {
+				invalid = true
+			}
+		}
+		if permanent == 0 && s.groupID != 0 {
+			invalid = true
+		}
+		if invalid {
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_instance WHERE guid = ? AND instance = ?", guid, instanceID)
+		}
+		_ = extendState
+	}
 }
 
 func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) error {
