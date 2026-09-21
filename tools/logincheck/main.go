@@ -119,6 +119,7 @@ func runSelfCheck() error {
 		{"aura-update-all", protocol.OpcodeSMSG_AURA_UPDATE_ALL, auraUpdateFixture(), requireAuraUpdateAll},
 		{"item-time-update", protocol.OpcodeSMSG_ITEM_TIME_UPDATE, protocol.BuildItemTimeUpdate(0x4000000000000106, 1234), requirePayloadLengthExact(12)},
 		{"item-enchant-time-update", protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE, protocol.BuildItemEnchantTimeUpdate(0x106, 0x4000000000000106, 2, 1234), requirePayloadLengthExact(24)},
+		{"pet-spells", protocol.OpcodeSMSG_PET_SPELLS, petSpellsFixture(), requirePetSpells},
 	}
 	for _, check := range payloadChecks {
 		event := protocoltrace.Event{Direction: protocoltrace.ServerToClient, Opcode: uint32(check.opcode), Payload: base64.StdEncoding.EncodeToString(check.payload)}
@@ -173,6 +174,24 @@ func resyncRunesFixture() []byte {
 
 func auraUpdateFixture() []byte {
 	return protocol.BuildAuraUpdateAll(0x106, []protocol.AuraUpdateRecord{{CasterGUID: 0x106, Slot: 0, SpellID: 836, EffectMask: 0x01, Positive: true, MaxDurationMs: 1000, DurationMs: 500, CasterLevel: 10, StackCount: 2}})
+}
+
+func petSpellsFixture() []byte {
+	buf := protocol.NewBuffer(64)
+	buf.WriteU64(0xF140000000000106)
+	buf.WriteU16(23)
+	buf.WriteU32(0)
+	buf.WriteU8(1)
+	buf.WriteU8(1)
+	buf.WriteU16(0)
+	for range 10 {
+		buf.WriteU32(0)
+	}
+	buf.WriteU8(2)
+	buf.WriteU32(6307 | 0x81000000)
+	buf.WriteU32(7799 | 0x81000000)
+	buf.WriteU8(0)
+	return buf.Bytes()
 }
 
 func actionButtonsFixture() []byte {
@@ -403,6 +422,8 @@ func checkOptionalLoginPayloads(trace protocoltrace.Trace, start int) error {
 			validate = requirePayloadLengthExact(24)
 		case uint32(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE):
 			validate = requireQuestStatusMultiple
+		case uint32(protocol.OpcodeSMSG_PET_SPELLS):
+			validate = requirePetSpells
 		}
 		if validate != nil {
 			if err := validate(event); err != nil {
@@ -640,6 +661,56 @@ func requireQuestStatusMultiple(event protocoltrace.Event) error {
 	}
 	if reader.Remaining() != 0 {
 		return fmt.Errorf("unexpected quest-status payload bytes=%d", reader.Remaining())
+	}
+	return nil
+}
+
+func requirePetSpells(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	if len(payload) == 8 {
+		return nil
+	}
+	reader := protocol.NewReader(payload)
+	if _, err := reader.ReadU64(); err != nil {
+		return fmt.Errorf("pet GUID is truncated: %w", err)
+	}
+	if _, err := reader.ReadU16(); err != nil {
+		return fmt.Errorf("pet family is truncated: %w", err)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		return fmt.Errorf("pet duration is truncated: %w", err)
+	}
+	if _, err := reader.ReadU8(); err != nil {
+		return fmt.Errorf("pet react state is truncated: %w", err)
+	}
+	if _, err := reader.ReadU8(); err != nil {
+		return fmt.Errorf("pet command state is truncated: %w", err)
+	}
+	if _, err := reader.ReadU16(); err != nil {
+		return fmt.Errorf("pet flags are truncated: %w", err)
+	}
+	if _, err := reader.Read(10 * 4); err != nil {
+		return fmt.Errorf("pet action bar is truncated: %w", err)
+	}
+	spellCount, err := reader.ReadU8()
+	if err != nil {
+		return fmt.Errorf("pet spell count is truncated: %w", err)
+	}
+	if _, err := reader.Read(int(spellCount) * 4); err != nil {
+		return fmt.Errorf("pet spell list is truncated: %w", err)
+	}
+	cooldownCount, err := reader.ReadU8()
+	if err != nil {
+		return fmt.Errorf("pet cooldown count is truncated: %w", err)
+	}
+	if _, err := reader.Read(int(cooldownCount) * 14); err != nil {
+		return fmt.Errorf("pet cooldown list is truncated: %w", err)
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected pet-spell payload bytes=%d", reader.Remaining())
 	}
 	return nil
 }
