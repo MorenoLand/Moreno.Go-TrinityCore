@@ -225,6 +225,12 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 		switch stage.Name {
 		case "SMSG_LOGIN_VERIFY_WORLD":
 			validate = requireLoginVerifyWorld
+		case "SMSG_LEARNED_DANCE_MOVES":
+			validate = func(event protocoltrace.Event) error { return requirePayloadLength(event, 8) }
+		case "SMSG_FEATURE_SYSTEM_STATUS":
+			validate = func(event protocoltrace.Event) error { return requirePayloadLength(event, 2) }
+		case "SMSG_BIND_POINT_UPDATE":
+			validate = func(event protocoltrace.Event) error { return requirePayloadLength(event, 20) }
 		case "SMSG_INSTANCE_DIFFICULTY":
 			validate = requireEightBytePayload
 		case "SMSG_INITIAL_SPELLS":
@@ -317,12 +323,16 @@ func requireLoginVerifyWorld(event protocoltrace.Event) error {
 }
 
 func requireEightBytePayload(event protocoltrace.Event) error {
+	return requirePayloadLength(event, 8)
+}
+
+func requirePayloadLength(event protocoltrace.Event, want int) error {
 	payload, err := eventPayload(event)
 	if err != nil {
 		return err
 	}
-	if len(payload) != 8 {
-		return fmt.Errorf("payload length=%d, want 8", len(payload))
+	if len(payload) != want {
+		return fmt.Errorf("payload length=%d, want %d", len(payload), want)
 	}
 	return nil
 }
