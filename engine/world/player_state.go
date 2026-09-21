@@ -16,115 +16,117 @@ import (
 )
 
 const (
-	playerValuesCount                           = 1326
-	objectFieldType                             = 2
-	objectFieldEntry                            = 3
-	objectFieldScale                            = 4
-	unitFieldSummon                             = 8
-	unitFieldBytes0                             = 23 // UNIT_FIELD_BYTES_0: Race, Class, Gender, PowerType
-	unitFieldHealth                             = 24
-	unitFieldPower1                             = 25
-	unitFieldFlags2                             = 60
-	unitFieldHoverHeight                        = 146
-	unitFieldLevel                              = 54
-	unitFieldFaction                            = 55
-	unitFieldFlags                              = 59
-	unitFieldAttackTime                         = 62
-	unitFieldAttackTimeOffhand                  = 63
-	unitFieldBoundingRadius                     = 65
-	unitFieldCombatReach                        = 66
-	unitFieldDisplayID                          = 67
-	unitFieldNativeDisplayID                    = 68
-	unitFieldPlayerFlags                        = 150
-	unitFieldPlayerBytes                        = 153
-	unitFieldPlayerBytes2                       = 154
-	unitFieldPlayerBytes3                       = 155
-	unitFieldGuildID                            = 151
-	unitFieldGuildRank                          = 152
-	unitFieldGuildTimestamp                     = 157
-	unitFieldXP                                 = 634
-	unitFieldNextLevelXP                        = 635
-	unitFieldCoinage                            = 1170
-	playerFieldRestStateExperience              = 1169
-	unitFieldMaxLevel                           = 1279
-	playerFieldKnownTitles                      = 626
-	unitFieldKnownCurrencies                    = 632
-	unitFieldWatchedFaction                     = 1230
-	unitFieldChosenTitle                        = 321
-	unitFieldAmmoID                             = 1198
-	unitFieldPlayerSelfResSpell                 = 1199 // PLAYER_SELF_RES_SPELL = UNIT_END + 0x041B
-	playerFieldKills                            = 1225 // PLAYER_FIELD_KILLS = UNIT_END + 0x0435
-	playerFieldTodayContribution                = 1226 // PLAYER_FIELD_TODAY_CONTRIBUTION = UNIT_END + 0x0436
-	playerFieldYesterdayContribution            = 1227 // PLAYER_FIELD_YESTERDAY_CONTRIBUTION = UNIT_END + 0x0437
-	playerFieldLifetimeHonorableKills           = 1228 // PLAYER_FIELD_LIFETIME_HONORABLE_KILLS = UNIT_END + 0x0438
-	playerFieldHonorCurrency                    = 1277 // PLAYER_FIELD_HONOR_CURRENCY = UNIT_END + 0x0469
-	playerFieldArenaCurrency                    = 1278 // PLAYER_FIELD_ARENA_CURRENCY = UNIT_END + 0x046A
-	playerFieldArenaTeamInfoStart               = 1256 // PLAYER_FIELD_ARENA_TEAM_INFO_1_1 = UNIT_END + 0x0454
-	playerFieldDuelArbiter                      = 148  // PLAYER_DUEL_ARBITER = UNIT_END + 0x0000 (Size 2)
-	playerFieldDuelTeam                         = 156  // PLAYER_DUEL_TEAM = UNIT_END + 0x0008 (Size 1)
-	playerExploredZonesStart                    = 1041 // PLAYER_EXPLORED_ZONES_1 = UNIT_END + 0x037D
-	playerExploredZonesCount                    = 128
-	playerQuestLogStart                         = 158 // PLAYER_QUEST_LOG_1_1; stride 5 per TC MAX_QUEST_OFFSET
-	playerQuestLogSlots                         = 25
-	playerSkillInfoStart                        = 636
-	playerMaxSkills                             = 128
-	playerVisibleItemStart                      = 283
-	playerVisibleItemCount                      = 19
-	unitFieldMaxHealth                          = 32
-	unitFieldMaxPower1                          = 33
-	unitFieldRangedAttackTime                   = 64
-	unitFieldMinDamage                          = 70
-	unitFieldMaxDamage                          = 71
-	unitFieldMinOffhandDamage                   = 72
-	unitFieldMaxOffhandDamage                   = 73
-	unitModCastSpeed                            = 80
-	unitFieldStat0                              = 84 // Strength
-	unitFieldStat1                              = 85 // Agility
-	unitFieldStat2                              = 86 // Stamina
-	unitFieldStat3                              = 87 // Intellect
-	unitFieldStat4                              = 88 // Spirit
-	unitFieldPosStat0                           = 89
-	unitFieldNegStat0                           = 94
-	unitFieldResistances                        = 99 // 99..105 (Physical/Armor, Holy, Fire, Nature, Frost, Shadow, Arcane)
-	unitFieldBaseMana                           = 120
-	unitFieldBaseHealth                         = 121
-	unitFieldAttackPower                        = 123
-	unitFieldAttackPowerMods                    = 124
-	unitFieldAttackPowerMultiplier              = 125
-	unitFieldRangedAttackPower                  = 126
-	unitFieldRangedAttackPowerMods              = 127
-	unitFieldRangedAttackPowerMultiplier        = 128
-	unitFieldMinRangedDamage                    = 129
-	unitFieldMaxRangedDamage                    = 130
-	playerCharacterPoints1                      = 1020 // Free talent points
-	playerCharacterPoints2                      = 1021
-	playerBlockPercentage                       = 1024
-	playerDodgePercentage                       = 1025
-	playerParryPercentage                       = 1026
-	playerExpertise                             = 1027
-	playerOffhandExpertise                      = 1028
-	playerCritPercentage                        = 1029
-	playerRangedCritPercentage                  = 1030
-	playerOffhandCritPercentage                 = 1031
-	playerSpellCritPercentage1                  = 1032 // 1032..1038
-	playerShieldBlock                           = 1039
-	playerFieldModDamageDonePos                 = 1171 // 1171..1177
-	playerFieldModDamageDoneNeg                 = 1178 // 1178..1184
-	playerFieldModDamageDonePct                 = 1185 // 1185..1191
-	playerFieldModHealingDonePos                = 1192
-	playerFieldModHealingPct                    = 1193
-	playerFieldModHealingDonePct                = 1194
-	playerFieldCombatRating1                    = 1231 // 1231..1255
-	playerInventoryStart                        = 324
-	playerInventoryCount                        = 150
-	playerBuybackPriceStart                     = 1201
-	playerBuybackTimestampStart                 = 1213
-	playerDailyQuestsStart                      = 1280
-	playerDailyQuestsCount                      = 25
-	playerRuneRegenStart                        = 1305
-	unitFlagPlayerControlled             uint32 = 0x00000008
-	unitFlag2RegeneratePower             uint32 = 0x00000800
-	unitFlagInCombat                     uint32 = 0x00080000
+	playerValuesCount                             = 1326
+	objectFieldType                               = 2
+	objectFieldEntry                              = 3
+	objectFieldScale                              = 4
+	unitFieldSummon                               = 8
+	unitFieldBytes0                               = 23 // UNIT_FIELD_BYTES_0: Race, Class, Gender, PowerType
+	unitFieldHealth                               = 24
+	unitFieldPower1                               = 25
+	unitFieldFlags2                               = 60
+	unitFieldHoverHeight                          = 146
+	unitFieldLevel                                = 54
+	unitFieldFaction                              = 55
+	unitFieldFlags                                = 59
+	unitFieldAttackTime                           = 62
+	unitFieldAttackTimeOffhand                    = 63
+	unitFieldBoundingRadius                       = 65
+	unitFieldCombatReach                          = 66
+	unitFieldDisplayID                            = 67
+	unitFieldNativeDisplayID                      = 68
+	unitFieldPlayerFlags                          = 150
+	unitFieldPlayerBytes                          = 153
+	unitFieldPlayerBytes2                         = 154
+	unitFieldPlayerBytes3                         = 155
+	unitFieldGuildID                              = 151
+	unitFieldGuildRank                            = 152
+	unitFieldGuildTimestamp                       = 157
+	unitFieldXP                                   = 634
+	unitFieldNextLevelXP                          = 635
+	unitFieldCoinage                              = 1170
+	playerFieldRestStateExperience                = 1169
+	unitFieldMaxLevel                             = 1279
+	playerFieldKnownTitles                        = 626
+	unitFieldKnownCurrencies                      = 632
+	unitFieldWatchedFaction                       = 1230
+	unitFieldChosenTitle                          = 321
+	unitFieldAmmoID                               = 1198
+	unitFieldPlayerSelfResSpell                   = 1199 // PLAYER_SELF_RES_SPELL = UNIT_END + 0x041B
+	playerFieldKills                              = 1225 // PLAYER_FIELD_KILLS = UNIT_END + 0x0435
+	playerFieldTodayContribution                  = 1226 // PLAYER_FIELD_TODAY_CONTRIBUTION = UNIT_END + 0x0436
+	playerFieldYesterdayContribution              = 1227 // PLAYER_FIELD_YESTERDAY_CONTRIBUTION = UNIT_END + 0x0437
+	playerFieldLifetimeHonorableKills             = 1228 // PLAYER_FIELD_LIFETIME_HONORABLE_KILLS = UNIT_END + 0x0438
+	playerFieldHonorCurrency                      = 1277 // PLAYER_FIELD_HONOR_CURRENCY = UNIT_END + 0x0469
+	playerFieldArenaCurrency                      = 1278 // PLAYER_FIELD_ARENA_CURRENCY = UNIT_END + 0x046A
+	playerFieldArenaTeamInfoStart                 = 1256 // PLAYER_FIELD_ARENA_TEAM_INFO_1_1 = UNIT_END + 0x0454
+	playerFieldDuelArbiter                        = 148  // PLAYER_DUEL_ARBITER = UNIT_END + 0x0000 (Size 2)
+	playerFieldDuelTeam                           = 156  // PLAYER_DUEL_TEAM = UNIT_END + 0x0008 (Size 1)
+	playerExploredZonesStart                      = 1041 // PLAYER_EXPLORED_ZONES_1 = UNIT_END + 0x037D
+	playerExploredZonesCount                      = 128
+	playerQuestLogStart                           = 158 // PLAYER_QUEST_LOG_1_1; stride 5 per TC MAX_QUEST_OFFSET
+	playerQuestLogSlots                           = 25
+	playerSkillInfoStart                          = 636
+	playerMaxSkills                               = 128
+	playerVisibleItemStart                        = 283
+	playerVisibleItemCount                        = 19
+	unitFieldMaxHealth                            = 32
+	unitFieldMaxPower1                            = 33
+	unitFieldRangedAttackTime                     = 64
+	unitFieldMinDamage                            = 70
+	unitFieldMaxDamage                            = 71
+	unitFieldMinOffhandDamage                     = 72
+	unitFieldMaxOffhandDamage                     = 73
+	unitModCastSpeed                              = 80
+	unitFieldStat0                                = 84 // Strength
+	unitFieldStat1                                = 85 // Agility
+	unitFieldStat2                                = 86 // Stamina
+	unitFieldStat3                                = 87 // Intellect
+	unitFieldStat4                                = 88 // Spirit
+	unitFieldPosStat0                             = 89
+	unitFieldNegStat0                             = 94
+	unitFieldResistances                          = 99 // 99..105 (Physical/Armor, Holy, Fire, Nature, Frost, Shadow, Arcane)
+	unitFieldBaseMana                             = 120
+	unitFieldBaseHealth                           = 121
+	unitFieldAttackPower                          = 123
+	unitFieldAttackPowerMods                      = 124
+	unitFieldAttackPowerMultiplier                = 125
+	unitFieldRangedAttackPower                    = 126
+	unitFieldRangedAttackPowerMods                = 127
+	unitFieldRangedAttackPowerMultiplier          = 128
+	unitFieldMinRangedDamage                      = 129
+	unitFieldMaxRangedDamage                      = 130
+	playerCharacterPoints1                        = 1020 // Free talent points
+	playerCharacterPoints2                        = 1021
+	playerBlockPercentage                         = 1024
+	playerDodgePercentage                         = 1025
+	playerParryPercentage                         = 1026
+	playerExpertise                               = 1027
+	playerOffhandExpertise                        = 1028
+	playerCritPercentage                          = 1029
+	playerRangedCritPercentage                    = 1030
+	playerOffhandCritPercentage                   = 1031
+	playerSpellCritPercentage1                    = 1032 // 1032..1038
+	playerShieldBlock                             = 1039
+	playerFieldModDamageDonePos                   = 1171 // 1171..1177
+	playerFieldModDamageDoneNeg                   = 1178 // 1178..1184
+	playerFieldModDamageDonePct                   = 1185 // 1185..1191
+	playerFieldModHealingDonePos                  = 1192
+	playerFieldModHealingPct                      = 1193
+	playerFieldModHealingDonePct                  = 1194
+	playerFieldModTargetResistance                = 1195
+	playerFieldModTargetPhysicalResistance        = 1196
+	playerFieldCombatRating1                      = 1231 // 1231..1255
+	playerInventoryStart                          = 324
+	playerInventoryCount                          = 150
+	playerBuybackPriceStart                       = 1201
+	playerBuybackTimestampStart                   = 1213
+	playerDailyQuestsStart                        = 1280
+	playerDailyQuestsCount                        = 25
+	playerRuneRegenStart                          = 1305
+	unitFlagPlayerControlled               uint32 = 0x00000008
+	unitFlag2RegeneratePower               uint32 = 0x00000800
+	unitFlagInCombat                       uint32 = 0x00080000
 )
 
 // questCompleteStateFlag sets the per-slot complete bit the client reads
@@ -2696,6 +2698,9 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 	values[playerFieldModHealingDonePos] = state.SpellPower
 	for school := 1; school < 7; school++ {
 		values[playerFieldModDamageDonePos+school] = state.SpellPower
+	}
+	if state.SpellPenetration > 0 {
+		values[playerFieldModTargetResistance] = uint32(-int32(state.SpellPenetration))
 	}
 	values[playerCritPercentage] = math.Float32bits(state.MeleeCrit)
 	values[playerRangedCritPercentage] = math.Float32bits(state.RangedCrit)
