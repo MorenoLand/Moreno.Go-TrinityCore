@@ -327,7 +327,7 @@ func (s *session) updateZoneAndArea(ctx context.Context, force bool) {
 		return
 	}
 	zoneID, areaID := s.server.zoneAndAreaID(s.player.Map, s.player.X, s.player.Y, s.player.Z, s.player.Zone)
-	oldZone, oldArea := s.player.Zone, s.areaID
+	oldZone, oldArea, oldMap := s.player.Zone, s.areaID, s.player.Map
 	s.player.Zone, s.areaID, s.lastZoneUpdate = zoneID, areaID, now
 	if zoneID == 0 {
 		s.player.Zone = oldZone
@@ -342,6 +342,12 @@ func (s *session) updateZoneAndArea(ctx context.Context, force bool) {
 		stateChanged = s.applyZoneState(ctx, s.player, s.player.Zone, areaID) || stateChanged
 	}
 	if oldZone != s.player.Zone {
+		if oldMap == WGMapID && oldZone == WGZoneID {
+			s.server.handleWGPlayerLeave(s)
+		}
+		if s.player.Map == WGMapID && s.player.Zone == WGZoneID {
+			s.server.handleWGPlayerEnter(s)
+		}
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ZONE", s.player.Zone, s.playerGUID)
 		}

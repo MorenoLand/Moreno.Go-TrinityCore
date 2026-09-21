@@ -676,6 +676,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if s.applyZoneState(ctx, &state, zoneID, areaID) || auraChanged || itemChanged {
 		s.sendPlayerUpdate()
 	}
+	if state.Map == WGMapID && zoneID == WGZoneID {
+		s.server.handleWGPlayerEnter(s)
+	}
 	s.server.ensureZoneWeather(ctx, zoneID, s)
 	s.lastZoneUpdate = time.Now()
 	s.updateLocalChannels(state.Zone)
