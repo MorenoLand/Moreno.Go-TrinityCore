@@ -432,6 +432,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	if s.removeInvalidInventoryItems(ctx, &state) {
 		state.Equipment = s.loadEquipmentCache(ctx, state.GUID, "")
 	}
+	s.normalizeInventoryItemFields(ctx, &state)
 	s.validateInventoryTradeData(ctx, &state)
 	if s.removeInactiveHolidayItems(ctx, &state) {
 		state.Equipment = s.loadEquipmentCache(ctx, state.GUID, "")
@@ -962,6 +963,7 @@ func (s *session) loadPeriodicQuestStatuses(ctx context.Context, state *playerSt
 const itemFlagsCustomRealTimeDuration uint32 = 0x0001
 const itemTemplateFlagConjured uint32 = 0x00000002
 const itemInstanceFlagSoulbound uint32 = 0x00000001
+const itemInstanceFlagWrapped uint32 = 0x00000008
 const itemInstanceFlagBOPTradeable uint32 = 0x00000100
 const itemInstanceFlagRefundable uint32 = 0x00001000
 const itemInventoryTypeBag int64 = 18
@@ -1029,6 +1031,58 @@ func (s *session) validateInventoryTradeData(ctx context.Context, state *playerS
 		if len(looters) <= 1 || stackable != 1 || uint32(item.flags)&itemInstanceFlagSoulbound == 0 {
 			clearTradeData(item, true)
 		}
+	}
+	return changed
+}
+
+func (s *session) normalizeInventoryItemFields(ctx context.Context, state *playerState) bool {
+	if s == nil || state == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	cdb, wdb := s.server.CharactersStore.DB, s.server.WorldStore.DB
+	rows, err := cdb.QueryContext(ctx, `SELECT ci.item, ii.itemEntry, COALESCE(ii.duration, 0), COALESCE(ii.flags, 0), COALESCE(ii.durability, 0)
+		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = ?`, state.GUID)
+	if err != nil {
+		return false
+	}
+	type itemFields struct{ guid, entry, duration, flags, durability int64 }
+	items := make([]itemFields, 0)
+	for rows.Next() {
+		var item itemFields
+		if rows.Scan(&item.guid, &item.entry, &item.duration, &item.flags, &item.durability) == nil {
+			items = append(items, item)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return false
+	}
+	rows.Close()
+	changed := false
+	for _, item := range items {
+		var templateDuration, bonding, maxDurability int64
+		if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(Duration, 0), COALESCE(Bonding, 0), COALESCE(MaxDurability, 0) FROM item_template WHERE entry = ?", item.entry).Scan(&templateDuration, &bonding, &maxDurability); err != nil {
+			if isMissingColumn(err) || strings.Contains(strings.ToLower(err.Error()), "no such table") {
+				return changed
+			}
+			continue
+		}
+		duration, flags, durability := item.duration, item.flags, item.durability
+		if (templateDuration == 0) != (duration == 0) {
+			duration = templateDuration
+		}
+		if uint32(flags)&itemInstanceFlagSoulbound != 0 && bonding == 0 {
+			flags &^= int64(itemInstanceFlagSoulbound)
+		}
+		if uint32(flags)&itemInstanceFlagWrapped == 0 && durability > maxDurability {
+			durability = maxDurability
+		}
+		if duration == item.duration && flags == item.flags && durability == item.durability {
+			continue
+		}
+		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET duration = ?, flags = ?, durability = ? WHERE guid = ?", duration, flags, durability, item.guid)
+		changed = true
+		s.debug("inventory item fields normalized", "guid", state.GUID, "item", item.guid)
 	}
 	return changed
 }
