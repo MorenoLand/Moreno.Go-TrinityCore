@@ -385,6 +385,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	_ = s.loadPlayerAuras(ctx, &state)
 	s.loadGlyphAuras(&state)
 	s.loadTransformDisplay(ctx, &state)
+	s.loadMountDisplay(ctx, &state)
 	s.loadGlyphFields(&state)
 	s.loadDailyQuests(ctx, &state)
 	_ = s.calculatePlayerStats(ctx, &state)
@@ -415,6 +416,22 @@ func (s *session) loadTransformDisplay(ctx context.Context, state *playerState) 
 		var dbDisplayID int64
 		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 16358) FROM creature_template WHERE entry = ?", aura.MiscValue).Scan(&dbDisplayID); err == nil && dbDisplayID > 0 {
 			state.TransformDisplayID = uint32(dbDisplayID)
+		}
+		return
+	}
+}
+
+func (s *session) loadMountDisplay(ctx context.Context, state *playerState) {
+	if s == nil || state == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.AuraType != 78 || aura.MiscValue <= 0 {
+			continue
+		}
+		var displayID int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 0) FROM creature_template WHERE entry = ?", aura.MiscValue).Scan(&displayID); err == nil && displayID > 0 {
+			state.MountDisplayID = uint32(displayID)
 		}
 		return
 	}
