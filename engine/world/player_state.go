@@ -265,6 +265,8 @@ type playerState struct {
 	RangedCrit           float32
 	OffhandCrit          float32
 	SpellCrit            [7]float32
+	SpellDamagePositive  [7]int32
+	SpellDamageNegative  [7]int32
 	BlockPercentage      float32
 	DodgePercentage      float32
 	Expertise            uint32
@@ -1701,6 +1703,31 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 		state.MaxRangedDamage += rapBonus
 	}
 	s.calculatePlayerCritFields(state, lvl)
+	for school := 1; school < 7; school++ {
+		state.SpellDamagePositive[school] = int32(state.SpellPower)
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.AuraType != 13 || aura.MiscValue <= 0 {
+			continue
+		}
+		amount := int32(aura.Amount)
+		for _, value := range aura.Amounts {
+			if value < 0 {
+				amount = value
+				break
+			}
+		}
+		for school := 1; school < 7; school++ {
+			if uint32(aura.MiscValue)&(1<<uint(school)) == 0 {
+				continue
+			}
+			if amount < 0 {
+				state.SpellDamageNegative[school] += amount
+			} else {
+				state.SpellDamagePositive[school] += amount
+			}
+		}
+	}
 
 	return nil
 }
@@ -2697,7 +2724,11 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 	values[playerFieldModHealingDonePct] = math.Float32bits(1.0)
 	values[playerFieldModHealingDonePos] = state.SpellPower
 	for school := 1; school < 7; school++ {
-		values[playerFieldModDamageDonePos+school] = state.SpellPower
+		positive := state.SpellDamagePositive[school]
+		if positive > 0 {
+			values[playerFieldModDamageDonePos+school] = uint32(positive)
+		}
+		values[playerFieldModDamageDoneNeg+school] = uint32(state.SpellDamageNegative[school])
 	}
 	if state.SpellPenetration > 0 {
 		values[playerFieldModTargetResistance] = uint32(-int32(state.SpellPenetration))
