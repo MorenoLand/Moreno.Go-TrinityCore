@@ -120,6 +120,8 @@ func runSelfCheck() error {
 		{"item-time-update", protocol.OpcodeSMSG_ITEM_TIME_UPDATE, protocol.BuildItemTimeUpdate(0x4000000000000106, 1234), requirePayloadLengthExact(12)},
 		{"item-enchant-time-update", protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE, protocol.BuildItemEnchantTimeUpdate(0x106, 0x4000000000000106, 2, 1234), requirePayloadLengthExact(24)},
 		{"pet-spells", protocol.OpcodeSMSG_PET_SPELLS, petSpellsFixture(), requirePetSpells},
+		{"quest-status-multiple", protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE, make([]byte, 4), requireQuestStatusMultiple},
+		{"taxi-node-status", protocol.OpcodeSMSG_TAXINODE_STATUS, make([]byte, 9), requirePayloadLengthExact(9)},
 	}
 	for _, check := range payloadChecks {
 		event := protocoltrace.Event{Direction: protocoltrace.ServerToClient, Opcode: uint32(check.opcode), Payload: base64.StdEncoding.EncodeToString(check.payload)}
@@ -422,6 +424,8 @@ func checkOptionalLoginPayloads(trace protocoltrace.Trace, start int) error {
 			validate = requirePayloadLengthExact(24)
 		case uint32(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE):
 			validate = requireQuestStatusMultiple
+		case uint32(protocol.OpcodeSMSG_TAXINODE_STATUS):
+			validate = requirePayloadLengthExact(9)
 		case uint32(protocol.OpcodeSMSG_PET_SPELLS):
 			validate = requirePetSpells
 		}
