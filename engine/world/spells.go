@@ -585,6 +585,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 
 	castTimeStamp := uint32(time.Now().UnixMilli())
 	pType := spell.PowerType
+	castFlags := spellCastFlagGo
+	var remainingPower *uint32
+	if pType < 7 {
+		castFlags |= protocol.SpellCastFlagPowerLeftSelf
+		power := s.player.Powers[pType]
+		remainingPower = &power
+	}
 	cost := s.calculateSpellPowerCost(spell)
 	if pType < 7 && cost > 0 {
 		if s.player.Powers[pType] >= cost {
@@ -605,7 +612,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, fmt.Sprintf("UPDATE characters SET %s = ? WHERE guid = ?", col), s.player.Powers[pType], s.playerGUID)
 		}
 	}
-	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, missStatus, target), true)
+	goPacket := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, missStatus, target, remainingPower)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true)
+	if s.server != nil {
+		nearbyFlags := castFlags &^ protocol.SpellCastFlagPowerLeftSelf
+		nearbyPacket := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, nearbyFlags, castTimeStamp, hitTargets, missStatus, target)
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
+	}
 	if isFishingSpell(spellID) {
 		s.spawnFishingBobber(ctx, target)
 		return
