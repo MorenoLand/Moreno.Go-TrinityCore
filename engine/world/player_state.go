@@ -398,6 +398,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	s.loadPlayerGroup(ctx, guid)
 	s.validateBoundInstances(ctx, guid)
 	_ = s.loadPlayerSkills(ctx, &state)
+	s.loadSkillRewardedSpells(ctx, &state)
 	_ = s.loadPlayerPacketsState(ctx, &state)
 
 	_ = s.loadOptionalPlayerState(ctx, &state)
@@ -2104,6 +2105,46 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 	}
 	state.Skills = skills
 	return nil
+}
+
+func (s *session) loadSkillRewardedSpells(ctx context.Context, state *playerState) {
+	if s == nil || state == nil || s.server == nil || s.server.Data == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	raceMask, classMask := playerCreateMask(state.Race), playerCreateMask(state.Class)
+	for _, skill := range state.Skills {
+		abilities, found, err := s.server.Data.SkillLineAbilitiesForSkill(uint32(skill.Skill))
+		if err != nil || !found {
+			continue
+		}
+		for _, ability := range abilities {
+			if ability.AcquireMethod != 1 && ability.AcquireMethod != 2 || (ability.RaceMask != 0 && ability.RaceMask&raceMask == 0) || (ability.ClassMask != 0 && ability.ClassMask&classMask == 0) {
+				continue
+			}
+			if _, spellFound, spellErr := s.server.Data.Spell(ability.Spell); spellErr != nil || !spellFound {
+				continue
+			}
+			if ability.AcquireMethod == 1 && uint32(skill.Value) < ability.MinSkillLineRank {
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_spell WHERE guid = ? AND spell = ?", state.GUID, ability.Spell)
+				continue
+			}
+			if ability.AcquireMethod == 2 && ability.SupercededBySpell != 0 {
+				if superseded, supersededFound, supersededErr := s.server.Data.SkillLineAbilities(ability.SupercededBySpell); supersededErr == nil && supersededFound {
+					skip := false
+					for _, next := range superseded {
+						if next.AcquireMethod == 2 && uint32(skill.Value) >= next.MinSkillLineRank {
+							skip = true
+							break
+						}
+					}
+					if skip {
+						continue
+					}
+				}
+			}
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", state.GUID, ability.Spell)
+		}
+	}
 }
 
 func isLanguageSkill(skill uint16) bool {

@@ -22,9 +22,10 @@ type Store struct {
 	taxi     *taxiNetwork
 	taxiErr  error
 
-	slaOnce sync.Once
-	slaMap  map[uint32][]SkillLineAbilityEntry
-	slaErr  error
+	slaOnce    sync.Once
+	slaMap     map[uint32][]SkillLineAbilityEntry
+	slaBySkill map[uint32][]SkillLineAbilityEntry
+	slaErr     error
 }
 
 type wmoAreaKey struct{ root, adt, group int32 }
@@ -1203,6 +1204,7 @@ func (s *Store) loadSkillLineAbilities() {
 		return
 	}
 	m := make(map[uint32][]SkillLineAbilityEntry, file.Records())
+	bySkill := make(map[uint32][]SkillLineAbilityEntry)
 	for i := 0; i < file.Records(); i++ {
 		rec, err := file.Record(i)
 		if err != nil {
@@ -1219,7 +1221,7 @@ func (s *Store) loadSkillLineAbilities() {
 		trivialRankHigh, _ := rec.Uint32(10)
 		trivialRankLow, _ := rec.Uint32(11)
 		if spell > 0 {
-			m[spell] = append(m[spell], SkillLineAbilityEntry{
+			entry := SkillLineAbilityEntry{
 				ID:                id,
 				SkillLine:         skillLine,
 				Spell:             spell,
@@ -1230,10 +1232,13 @@ func (s *Store) loadSkillLineAbilities() {
 				AcquireMethod:     acquireMethod,
 				TrivialRankHigh:   trivialRankHigh,
 				TrivialRankLow:    trivialRankLow,
-			})
+			}
+			m[spell] = append(m[spell], entry)
+			bySkill[skillLine] = append(bySkill[skillLine], entry)
 		}
 	}
 	s.slaMap = m
+	s.slaBySkill = bySkill
 }
 
 // SkillLineAbilities returns all SkillLineAbility records for the given spell.
@@ -1243,6 +1248,15 @@ func (s *Store) SkillLineAbilities(spellID uint32) ([]SkillLineAbilityEntry, boo
 		return nil, false, s.slaErr
 	}
 	abilities, ok := s.slaMap[spellID]
+	return abilities, ok, nil
+}
+
+func (s *Store) SkillLineAbilitiesForSkill(skillID uint32) ([]SkillLineAbilityEntry, bool, error) {
+	s.slaOnce.Do(s.loadSkillLineAbilities)
+	if s.slaErr != nil {
+		return nil, false, s.slaErr
+	}
+	abilities, ok := s.slaBySkill[skillID]
 	return abilities, ok, nil
 }
 
