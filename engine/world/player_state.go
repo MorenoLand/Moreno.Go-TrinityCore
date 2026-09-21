@@ -432,6 +432,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	if s.removeInvalidInventoryItems(ctx, &state) {
 		state.Equipment = s.loadEquipmentCache(ctx, state.GUID, "")
 	}
+	s.validateInventoryTradeData(ctx, &state)
 	s.loadInventorySlots(ctx, &state)
 	restoreLoadedDeathState(&state)
 	s.restoreLoadedCorpseState(ctx, &state)
@@ -957,8 +958,77 @@ func (s *session) loadPeriodicQuestStatuses(ctx context.Context, state *playerSt
 
 const itemFlagsCustomRealTimeDuration uint32 = 0x0001
 const itemTemplateFlagConjured uint32 = 0x00000002
+const itemInstanceFlagSoulbound uint32 = 0x00000001
+const itemInstanceFlagBOPTradeable uint32 = 0x00000100
 const itemInstanceFlagRefundable uint32 = 0x00001000
 const itemInventoryTypeBag int64 = 18
+
+func (s *session) validateInventoryTradeData(ctx context.Context, state *playerState) bool {
+	if s == nil || state == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	cdb, wdb := s.server.CharactersStore.DB, s.server.WorldStore.DB
+	rows, err := cdb.QueryContext(ctx, `SELECT ci.item, ii.itemEntry, ii.flags
+		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND (ii.flags & ?) <> 0`, state.GUID, int64(itemInstanceFlagBOPTradeable))
+	if err != nil {
+		return false
+	}
+	type tradeItem struct{ guid, entry, flags int64 }
+	items := make([]tradeItem, 0)
+	for rows.Next() {
+		var item tradeItem
+		if rows.Scan(&item.guid, &item.entry, &item.flags) == nil {
+			items = append(items, item)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return false
+	}
+	rows.Close()
+	changed := false
+	clearTradeData := func(item tradeItem, deleteData bool) {
+		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET flags = flags & ? WHERE guid = ?", ^int64(itemInstanceFlagBOPTradeable), item.guid)
+		if deleteData {
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_soulbound_trade_data WHERE itemGuid = ?", item.guid)
+		}
+		changed = true
+		s.debug("stale BOP trade data cleared", "guid", state.GUID, "item", item.guid)
+	}
+	for _, item := range items {
+		var allowedPlayers string
+		tradeErr := cdb.QueryRowContext(ctx, "SELECT allowedPlayers FROM item_soulbound_trade_data WHERE itemGuid = ? LIMIT 1", item.guid).Scan(&allowedPlayers)
+		if tradeErr != nil {
+			if errors.Is(tradeErr, sql.ErrNoRows) {
+				clearTradeData(item, false)
+				continue
+			}
+			if isMissingColumn(tradeErr) || strings.Contains(strings.ToLower(tradeErr.Error()), "no such table") {
+				return changed
+			}
+			return changed
+		}
+		looters := make(map[uint64]struct{})
+		for _, token := range strings.Fields(allowedPlayers) {
+			guid, parseErr := strconv.ParseUint(token, 10, 64)
+			if parseErr == nil && guid > 0 {
+				looters[guid] = struct{}{}
+			}
+		}
+		var stackable int64
+		if templateErr := wdb.QueryRowContext(ctx, "SELECT COALESCE(stackable, 1) FROM item_template WHERE entry = ?", item.entry).Scan(&stackable); templateErr != nil {
+			if isMissingColumn(templateErr) || strings.Contains(strings.ToLower(templateErr.Error()), "no such table") {
+				return changed
+			}
+			continue
+		}
+		if len(looters) <= 1 || stackable != 1 || uint32(item.flags)&itemInstanceFlagSoulbound == 0 {
+			clearTradeData(item, true)
+		}
+	}
+	return changed
+}
 
 func (s *session) updateOfflineRealtimeItemDurations(ctx context.Context, state *playerState) error {
 	if s == nil || state == nil || state.LogoutTime <= 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
