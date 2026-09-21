@@ -280,3 +280,18 @@ func (s *Store) TaxiNodeMount(node uint32, teamAlliance bool) (uint32, error) {
 	}
 	return 0, nil
 }
+
+func (s *Store) OldContinentsTaxiNodes() ([]uint32, error) {
+	network, err := s.taxiNetwork()
+	if err != nil {
+		return nil, err
+	}
+	nodes := make([]uint32, 0)
+	for _, node := range network.nodes {
+		if node.ID == 0 || !node.HasOutgoingPath || !(node.ContinentID < 2 || node.ID == 82 || node.ID == 83 || node.ID == 93 || node.ID == 94) {
+			continue
+		}
+		nodes = append(nodes, node.ID)
+	}
+	return nodes, nil
+}

@@ -530,6 +530,13 @@ func (s *session) initTaxiNodesForLevel() {
 	if s.player == nil {
 		return
 	}
+	if s.player.Class == 6 && s.server != nil && s.server.Data != nil {
+		if nodes, err := s.server.Data.OldContinentsTaxiNodes(); err == nil {
+			for _, node := range nodes {
+				s.setTaxiMaskNode(node)
+			}
+		}
+	}
 	// Race specific initial known nodes: capital and taxi hub.
 	switch s.player.Race {
 	case 1: // Human
@@ -559,6 +566,9 @@ func (s *session) initTaxiNodesForLevel() {
 		s.setTaxiMaskNode(100)
 	} else {
 		s.setTaxiMaskNode(99)
+	}
+	if s.player.Level >= 68 {
+		s.setTaxiMaskNode(213)
 	}
 }
 
