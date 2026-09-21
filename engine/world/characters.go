@@ -679,6 +679,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.sendLoginFlightState(); err != nil {
 		return false
 	}
+	if err := s.sendLoginFlightSpeed(); err != nil {
+		return false
+	}
 	if err := s.sendLoginMovementStates(); err != nil {
 		return false
 	}
@@ -925,6 +928,59 @@ func (s *session) sendLoginFlightState() error {
 		}
 		s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_UPDATE_CAN_FLY, 0x01000000)
 	}
+	return nil
+}
+
+func (s *session) sendLoginFlightSpeed() error {
+	if s == nil || s.player == nil {
+		return nil
+	}
+	modifier := uint32(0)
+	for _, aura := range s.loadedAuras() {
+		if aura != nil && aura.AuraType == 207 && aura.Amount > modifier {
+			modifier = aura.Amount
+		}
+	}
+	if modifier == 0 && s.mounts != nil {
+		if preferred := s.mounts.PreferredFlightSpeed(true); preferred > 100 {
+			modifier = uint32(preferred - 100)
+		}
+	}
+	if modifier == 0 {
+		return nil
+	}
+	speed := float32(7.0 * (1.0 + float64(modifier)/100.0))
+	self := protocol.NewBuffer(packedGUIDSize(s.playerGUID) + 8)
+	self.WritePackedGUID(s.playerGUID)
+	self.WriteU32(0)
+	self.WriteF32(speed)
+	if err := s.write(uint16(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE), self.Bytes(), true); err != nil {
+		return err
+	}
+	nearby := protocol.NewBuffer(96)
+	nearby.WritePackedGUID(s.playerGUID)
+	nearby.WriteU32(0x01000000)
+	nearby.WriteU16(0)
+	nearby.WriteU32(uint32(time.Now().UnixMilli()))
+	nearby.WriteF32(s.player.X)
+	nearby.WriteF32(s.player.Y)
+	nearby.WriteF32(s.player.Z)
+	nearby.WriteF32(s.player.Orientation)
+	if s.player.TransportGUID != 0 {
+		nearby.WritePackedGUID(s.player.TransportGUID)
+		nearby.WriteF32(s.player.TransportX)
+		nearby.WriteF32(s.player.TransportY)
+		nearby.WriteF32(s.player.TransportZ)
+		nearby.WriteF32(s.player.TransportO)
+		nearby.WriteU32(0)
+		nearby.WriteI8(s.player.TransportSeat)
+	}
+	nearby.WriteU32(0)
+	for _, base := range []float32{2.5, 7.0, 4.5, 4.722222, 2.5, 7.0, 4.5, 3.141594, 3.14} {
+		nearby.WriteF32(base)
+	}
+	nearby.WriteF32(speed)
+	s.server.broadcastToNearby(uint16(protocol.OpcodeMSG_MOVE_SET_FLIGHT_SPEED), nearby.Bytes(), s)
 	return nil
 }
 
