@@ -17,6 +17,7 @@ type gameEvent struct {
 	End        int64
 	Occurrence int64 // minutes
 	Length     int64 // minutes
+	Holiday    int64
 	WorldEvent int64
 }
 
@@ -25,24 +26,25 @@ const gameEventStateNormal = 0
 // activeGameEvents computes the currently active event set the way
 // GameEventMgr does for GAMEEVENT_NORMAL rows: the event is active when now
 // lies inside [start, end) and inside the current occurrence window.
-func (s *Server) activeGameEvents(ctx context.Context) map[int64]struct{} {
+func (s *Server) activeGameEventSets(ctx context.Context) (map[int64]struct{}, map[int64]struct{}) {
+	active := make(map[int64]struct{})
+	holidays := make(map[int64]struct{})
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
-		return nil
+		return active, holidays
 	}
 	now := time.Now().Unix()
-	active := make(map[int64]struct{})
-	query := "SELECT eventEntry, COALESCE(UNIX_TIMESTAMP(start_time), 0), COALESCE(UNIX_TIMESTAMP(end_time), 0), occurence, length, world_event FROM game_event"
+	query := "SELECT eventEntry, COALESCE(UNIX_TIMESTAMP(start_time), 0), COALESCE(UNIX_TIMESTAMP(end_time), 0), occurence, length, holiday, world_event FROM game_event"
 	if s.WorldStore.Backend == database.BackendSQLite {
-		query = "SELECT eventEntry, CAST(strftime('%s', start_time) AS INTEGER), CAST(strftime('%s', end_time) AS INTEGER), occurence, length, world_event FROM game_event"
+		query = "SELECT eventEntry, CAST(strftime('%s', start_time) AS INTEGER), CAST(strftime('%s', end_time) AS INTEGER), occurence, length, holiday, world_event FROM game_event"
 	}
 	rows, err := s.WorldStore.DB.QueryContext(ctx, query)
 	if err != nil {
-		return active
+		return active, holidays
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var event gameEvent
-		if err := rows.Scan(&event.Entry, &event.Start, &event.End, &event.Occurrence, &event.Length, &event.WorldEvent); err != nil {
+		if err := rows.Scan(&event.Entry, &event.Start, &event.End, &event.Occurrence, &event.Length, &event.Holiday, &event.WorldEvent); err != nil {
 			continue
 		}
 		if event.WorldEvent != gameEventStateNormal {
@@ -61,13 +63,22 @@ func (s *Server) activeGameEvents(ctx context.Context) map[int64]struct{} {
 			continue
 		}
 		active[event.Entry] = struct{}{}
+		if event.Holiday > 0 {
+			holidays[event.Holiday] = struct{}{}
+		}
 	}
+	return active, holidays
+}
+
+func (s *Server) activeGameEvents(ctx context.Context) map[int64]struct{} {
+	active, _ := s.activeGameEventSets(ctx)
 	return active
 }
 
 type gameEventCache struct {
 	mu        sync.RWMutex
 	events    map[int64]struct{}
+	holidays  map[int64]struct{}
 	refreshed time.Time
 }
 
@@ -83,12 +94,30 @@ func (s *Server) cachedActiveGameEvents(ctx context.Context) map[int64]struct{} 
 	if fresh {
 		return events
 	}
-	active := s.activeGameEvents(ctx)
+	active, holidays := s.activeGameEventSets(ctx)
 	eventCache.mu.Lock()
 	eventCache.events = active
+	eventCache.holidays = holidays
 	eventCache.refreshed = time.Now()
 	eventCache.mu.Unlock()
 	return active
+}
+
+func (s *Server) cachedActiveGameHolidays(ctx context.Context) map[int64]struct{} {
+	eventCache.mu.RLock()
+	fresh := time.Since(eventCache.refreshed) < time.Minute
+	holidays := eventCache.holidays
+	eventCache.mu.RUnlock()
+	if fresh {
+		return holidays
+	}
+	active, refreshedHolidays := s.activeGameEventSets(ctx)
+	eventCache.mu.Lock()
+	eventCache.events = active
+	eventCache.holidays = refreshedHolidays
+	eventCache.refreshed = time.Now()
+	eventCache.mu.Unlock()
+	return refreshedHolidays
 }
 
 // conditionRow is one `conditions` row; rows sharing an ElseGroup are AND'ed

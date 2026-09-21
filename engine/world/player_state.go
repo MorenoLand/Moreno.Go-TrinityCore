@@ -433,6 +433,9 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 		state.Equipment = s.loadEquipmentCache(ctx, state.GUID, "")
 	}
 	s.validateInventoryTradeData(ctx, &state)
+	if s.removeInactiveHolidayItems(ctx, &state) {
+		state.Equipment = s.loadEquipmentCache(ctx, state.GUID, "")
+	}
 	s.loadInventorySlots(ctx, &state)
 	restoreLoadedDeathState(&state)
 	s.restoreLoadedCorpseState(ctx, &state)
@@ -1026,6 +1029,56 @@ func (s *session) validateInventoryTradeData(ctx context.Context, state *playerS
 		if len(looters) <= 1 || stackable != 1 || uint32(item.flags)&itemInstanceFlagSoulbound == 0 {
 			clearTradeData(item, true)
 		}
+	}
+	return changed
+}
+
+func (s *session) removeInactiveHolidayItems(ctx context.Context, state *playerState) bool {
+	if s == nil || state == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	activeHolidays := s.server.cachedActiveGameHolidays(ctx)
+	cdb, wdb := s.server.CharactersStore.DB, s.server.WorldStore.DB
+	rows, err := cdb.QueryContext(ctx, `SELECT ci.item, ii.itemEntry, ii.flags
+		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = ?`, state.GUID)
+	if err != nil {
+		return false
+	}
+	type holidayItem struct{ guid, entry, flags int64 }
+	items := make([]holidayItem, 0)
+	for rows.Next() {
+		var item holidayItem
+		if rows.Scan(&item.guid, &item.entry, &item.flags) == nil {
+			items = append(items, item)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return false
+	}
+	rows.Close()
+	changed := false
+	for _, item := range items {
+		if uint32(item.flags)&(itemInstanceFlagRefundable|itemInstanceFlagBOPTradeable) != 0 {
+			continue
+		}
+		var holiday int64
+		if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(HolidayId, 0) FROM item_template WHERE entry = ?", item.entry).Scan(&holiday); err != nil {
+			if isMissingColumn(err) || strings.Contains(strings.ToLower(err.Error()), "no such table") {
+				return changed
+			}
+			continue
+		}
+		if holiday == 0 {
+			continue
+		}
+		if _, active := activeHolidays[holiday]; active {
+			continue
+		}
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", state.GUID, item.guid)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", item.guid)
+		changed = true
+		s.debug("inactive holiday item removed", "guid", state.GUID, "item", item.guid, "holiday", holiday)
 	}
 	return changed
 }
