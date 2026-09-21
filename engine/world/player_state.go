@@ -422,6 +422,17 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	_ = s.loadPlayerPacketsState(ctx, &state)
 
 	_ = s.loadOptionalPlayerState(ctx, &state)
+	validMap := true
+	if s.server.Data != nil {
+		_, found, mapErr := s.server.Data.Map(state.Map)
+		validMap = mapErr == nil && found
+	}
+	if !validMovementPosition(state.X, state.Y, state.Z, state.Orientation) || !validMap {
+		s.debug("invalid persisted player position recovered", "guid", state.GUID, "map", state.Map, "x", state.X, "y", state.Y, "z", state.Z)
+		state.Map, state.InstanceID = state.HomebindMap, 0
+		state.X, state.Y, state.Z = state.HomebindX, state.HomebindY, state.HomebindZ
+		state.TransportGUID, state.TransportX, state.TransportY, state.TransportZ, state.TransportO = 0, 0, 0, 0, 0
+	}
 	if state.ChosenTitle != 0 {
 		field := state.ChosenTitle / 32
 		bit := uint32(1) << (state.ChosenTitle % 32)
