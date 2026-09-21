@@ -314,7 +314,17 @@ func (s *Server) isChannelMuted(member *session, name string) bool {
 	return muted
 }
 
-func channelKey(name string) string { return strings.ToLower(strings.TrimSpace(name)) }
+func channelKey(name string) string {
+	key := strings.ToLower(strings.TrimSpace(name))
+	if separator := strings.Index(key, " - "); separator >= 0 {
+		base := strings.ReplaceAll(strings.TrimSpace(key[:separator]), " ", "")
+		switch base {
+		case "trade", "guildrecruitment", "lookingforgroup":
+			return strings.TrimSpace(key[:separator])
+		}
+	}
+	return key
+}
 
 func channelFlags(id uint32, name string) uint8 {
 	if id == 0 {
@@ -328,7 +338,7 @@ func channelFlags(id uint32, name string) uint8 {
 	case "trade":
 		return channelFlagGeneral | channelFlagNotLFG | channelFlagTrade | channelFlagCity
 	case "lookingforgroup":
-		return channelFlagGeneral | channelFlagLFG
+		return channelFlagGeneral | channelFlagLFG | channelFlagCity
 	case "guildrecruitment":
 		return channelFlagGeneral | channelFlagNotLFG | channelFlagCity
 	default:
