@@ -43,9 +43,13 @@ func (s *session) sendBattlefieldList(bmGUID uint64, fromWhere uint8, bgTypeID u
 	buf.WriteU64(bmGUID)
 	buf.WriteU8(fromWhere)
 	buf.WriteU32(bgTypeID)
-	buf.WriteU8(0)  // unk
-	buf.WriteU8(0)  // unk
-	buf.WriteU8(0)  // hasWin
+	buf.WriteU8(0) // unk
+	buf.WriteU8(0) // unk
+	if s.randomBGWinner {
+		buf.WriteU8(1)
+	} else {
+		buf.WriteU8(0)
+	}
 	buf.WriteU32(0) // winHonor
 	buf.WriteU32(0) // winArena
 	buf.WriteU32(0) // lossHonor

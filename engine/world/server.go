@@ -155,6 +155,7 @@ type session struct {
 	playerLoading         bool
 	playerLoaded          bool
 	farTeleportPending    bool
+	randomBGWinner        bool
 	player                *playerState
 	visiblePlayersMu      sync.Mutex
 	visiblePlayers        map[uint64]struct{}
