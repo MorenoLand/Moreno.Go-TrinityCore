@@ -97,3 +97,30 @@ func (s *Store) SkillRangeType(skillID uint32, race, class uint8) (uint8, bool, 
 	}
 	return SkillRangeLevel, true, nil
 }
+
+func (s *Store) SkillStep(skillID uint32, race, class uint8, max uint16) (uint16, bool, error) {
+	entry, found, err := s.SkillRaceClassInfo(skillID, race, class)
+	if err != nil || !found {
+		return 0, found, err
+	}
+	if entry.SkillTierID == 0 {
+		return 0, true, nil
+	}
+	file, fileErr := s.File("SkillTiers")
+	if fileErr != nil {
+		return 0, false, fileErr
+	}
+	record, recordFound := file.Find(entry.SkillTierID)
+	if !recordFound {
+		return 0, true, nil
+	}
+	var step uint32
+	for index := uint32(0); index < 16; index++ {
+		value, valueErr := record.Uint32(17 + int(step))
+		if valueErr == nil && value == uint32(max) {
+			step = index + 1
+			break
+		}
+	}
+	return uint16(step), true, nil
+}

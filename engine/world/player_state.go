@@ -2051,7 +2051,7 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 		if value != originalValue || max != originalMax {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_skills SET value = ?, max = ? WHERE guid = ? AND skill = ?", value, max, state.GUID, skill)
 		}
-		skills = append(skills, playerSkill{Skill: skill, Step: 1, Value: value, Max: max})
+		skills = append(skills, playerSkill{Skill: skill, Step: s.skillStep(state.Race, state.Class, skill, max), Value: value, Max: max})
 	}
 	for _, def := range defaults {
 		found := false
@@ -2067,6 +2067,7 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 			}
 		}
 		if !found {
+			def.Step = s.skillStep(state.Race, state.Class, def.Skill, def.Max)
 			skills = append(skills, def)
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", state.GUID, def.Skill, def.Value, def.Max)
 		}
@@ -2108,7 +2109,7 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 				if rank > 0 && rank <= 65535 {
 					value = uint16(rank)
 				}
-				newSkill := playerSkill{Skill: uint16(skillID), Step: 1, Value: value, Max: max}
+				newSkill := playerSkill{Skill: uint16(skillID), Step: s.skillStep(state.Race, state.Class, uint16(skillID), max), Value: value, Max: max}
 				skills = append(skills, newSkill)
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", state.GUID, newSkill.Skill, newSkill.Value, newSkill.Max)
 			}
@@ -2188,6 +2189,15 @@ func (s *session) skillRangeType(race, class uint8, skill uint16) uint8 {
 		return wotlk.SkillRangeLevel
 	}
 	return wotlk.SkillRangeNone
+}
+
+func (s *session) skillStep(race, class uint8, skill, max uint16) uint16 {
+	if s != nil && s.server != nil && s.server.Data != nil {
+		if step, found, err := s.server.Data.SkillStep(uint32(skill), race, class, max); err == nil && found {
+			return step
+		}
+	}
+	return 1
 }
 
 func isLevelScaledSkill(skill uint16) bool {
