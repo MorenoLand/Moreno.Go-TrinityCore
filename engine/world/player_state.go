@@ -129,6 +129,9 @@ func questCompleteStateFlag(status int64) uint32 {
 	if status == questStatusComplete {
 		return 1
 	}
+	if status == 5 {
+		return 2
+	}
 	return 0
 }
 
@@ -357,13 +360,19 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	// Rebuild login state in one owner sequence so packet fields and shared session
 	// maps cannot be observed half-written by timer, script, or network callbacks.
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		qRows, qErr := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT quest, status, explored, timer, mobcount1, mobcount2, mobcount3, mobcount4 FROM character_queststatus WHERE guid = ? AND status IN (1, 3) ORDER BY quest", guid)
+		qRows, qErr := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT quest, status, explored, timer, mobcount1, mobcount2, mobcount3, mobcount4 FROM character_queststatus WHERE guid = ? ORDER BY quest", guid)
 		if qErr == nil {
 			slot := 0
 			for qRows.Next() && slot < playerQuestLogSlots {
 				var questID, status, explored, timer, mob1, mob2, mob3, mob4 int64
 				if err := qRows.Scan(&questID, &status, &explored, &timer, &mob1, &mob2, &mob3, &mob4); err != nil {
 					continue
+				}
+				if status == 0 {
+					continue
+				}
+				if status < 0 || status >= 7 {
+					status = questStatusIncomplete
 				}
 				state.QuestLog[slot] = questLogEntry{QuestID: uint32(questID), State: questCompleteStateFlag(status), Timer: uint32(timer), Counters: [4]uint16{uint16(mob1), uint16(mob2), uint16(mob3), uint16(mob4)}}
 				slot++
