@@ -922,6 +922,116 @@ func (s *session) hasPvPForcingQuest(ctx context.Context) bool {
 	return err == nil && found != 0
 }
 
+func (s *session) completeWorldPort(ctx context.Context) bool {
+	if s == nil || s.server == nil || s.player == nil {
+		return false
+	}
+	state := *s.player
+	attachedTransport, err := s.server.buildAttachedTransportUpdate(ctx, state)
+	if err != nil {
+		return false
+	}
+	attachedPassengers, err := s.server.buildAttachedTransportPassengerUpdates(ctx, state)
+	if err != nil {
+		return false
+	}
+	playerUpdate, err := s.server.buildPlayerUpdate(state)
+	if err != nil || playerUpdate == nil {
+		return false
+	}
+	s.captureUpdatePackets = true
+	s.capturedUpdatePackets = nil
+	if err := s.sendInventoryItemsBeforeMap(ctx); err != nil {
+		s.captureUpdatePackets = false
+		s.capturedUpdatePackets = nil
+		return false
+	}
+	inventoryPackets := s.capturedUpdatePackets
+	s.captureUpdatePackets = false
+	s.capturedUpdatePackets = nil
+	initialPackets := make([]*protocol.Packet, 0, len(inventoryPackets)+3)
+	if attachedTransport != nil {
+		initialPackets = append(initialPackets, attachedTransport)
+	}
+	initialPackets = append(initialPackets, inventoryPackets...)
+	initialPackets = append(initialPackets, playerUpdate)
+	if attachedPassengers != nil {
+		initialPackets = append(initialPackets, attachedPassengers)
+	}
+	initialUpdate, err := protocol.MergeUpdatePackets(initialPackets...)
+	if err != nil || initialUpdate == nil {
+		return false
+	}
+	if err := s.write(initialUpdate.Opcode, initialUpdate.Payload.Bytes(), true); err != nil {
+		return false
+	}
+	s.server.broadcastPlayerCreate(state, s)
+	if mapTransports, err := s.server.buildMapTransportUpdates(state, state.TransportGUID); err != nil {
+		return false
+	} else if mapTransports != nil {
+		if err := s.write(mapTransports.Opcode, mapTransports.Payload.Bytes(), true); err != nil {
+			return false
+		}
+	}
+	nearbyPlayers, _ := s.server.buildNearbyPlayerUpdates(s)
+	nearbyCreatures, _, creatureErr := s.server.buildNearbyCreatureUpdates(ctx, state)
+	if creatureErr != nil {
+		return false
+	}
+	nearbyGameObjects, _, gameObjectErr := s.server.buildNearbyGameObjectUpdates(ctx, state, false)
+	if gameObjectErr != nil {
+		return false
+	}
+	nearbyCorpses, _, corpseErr := s.server.buildNearbyCorpseUpdates(ctx, state)
+	if corpseErr != nil {
+		return false
+	}
+	if nearby, err := protocol.MergeUpdatePackets(nearbyPlayers, nearbyCreatures, nearbyGameObjects, nearbyCorpses); err != nil {
+		return false
+	} else if nearby != nil {
+		if err := s.write(nearby.Opcode, nearby.Payload.Bytes(), true); err != nil {
+			return false
+		}
+	}
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventMapChange, s.luaPlayer())
+	s.streamDynamicSpellObjects()
+	s.updateZoneAndArea(ctx, true)
+	if err := s.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true); err != nil {
+		return false
+	}
+	s.timeSyncNextCounter = 1
+	s.timeSyncDue = time.Now().Add(5 * time.Second)
+	if err := s.sendLoginEffect(); err != nil {
+		return false
+	}
+	if err := s.sendLoginMovementDirectStates(); err != nil {
+		return false
+	}
+	if err := s.sendLoginFlightState(); err != nil {
+		return false
+	}
+	if err := s.sendLoginFlightSpeed(); err != nil {
+		return false
+	}
+	if err := s.sendLoginMovementStunAndCompoundStates(); err != nil {
+		return false
+	}
+	s.sendLoadedAuras()
+	if err := s.sendInventoryDurations(ctx); err != nil {
+		return false
+	}
+	s.questStatusSent = true
+	if !s.sendQuestgiverStatusMultiple(ctx) || !s.sendTaxiNodeStatusMultiple(ctx) {
+		return false
+	}
+	if err := s.sendLoginRaidDifficulty(ctx, *s.player); err != nil {
+		return false
+	}
+	s.lastStreamX, s.lastStreamY, s.lastStreamZ = s.player.X, s.player.Y, s.player.Z
+	s.farTeleportPending = false
+	return true
+}
+
 func (s *session) sendLoginMovementDirectStates() error {
 	if s == nil || s.player == nil {
 		return nil

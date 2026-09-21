@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -120,7 +119,14 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) {
 	if s.player == nil {
 		return
 	}
-	sameMap := s.player.Map == mapID
+	oldMap := s.player.Map
+	transportGUID := s.player.TransportGUID
+	transportX, transportY, transportZ, transportO := s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO
+	transportAttached := false
+	if transportGUID != 0 && s.server != nil {
+		_, transportAttached = s.server.transportSpawnForGUID(transportGUID)
+	}
+	sameMap := oldMap == mapID
 	s.player.Map = mapID
 	s.player.X = x
 	s.player.Y = y
@@ -130,6 +136,7 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) {
 		s.updateZoneAndArea(context.Background(), true)
 	} else {
 		s.lastZoneUpdate = time.Time{}
+		s.farTeleportPending = true
 		s.visiblePlayersMu.Lock()
 		s.visiblePlayers = nil
 		s.visiblePlayersMu.Unlock()
@@ -152,14 +159,28 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) {
 		_ = s.write(uint16(protocol.OpcodeMSG_MOVE_TELEPORT_ACK), packet.Bytes(), true)
 		s.refreshNearbyObjects(context.Background())
 	} else {
+		pending := protocol.NewBuffer(12)
+		pending.WriteU32(mapID)
+		if transportAttached {
+			spawn, _ := s.server.transportSpawnForGUID(transportGUID)
+			pending.WriteU32(spawn.Entry)
+			pending.WriteU32(oldMap)
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRANSFER_PENDING), pending.Bytes(), true)
 		packet := protocol.NewBuffer(20)
 		packet.WriteU32(mapID)
-		packet.WriteF32(x)
-		packet.WriteF32(y)
-		packet.WriteF32(z)
-		packet.WriteF32(orientation)
+		if transportAttached {
+			packet.WriteF32(transportX)
+			packet.WriteF32(transportY)
+			packet.WriteF32(transportZ)
+			packet.WriteF32(transportO)
+		} else {
+			packet.WriteF32(x)
+			packet.WriteF32(y)
+			packet.WriteF32(z)
+			packet.WriteF32(orientation)
+		}
 		_ = s.write(uint16(protocol.OpcodeSMSG_NEW_WORLD), packet.Bytes(), true)
-		s.triggerPlayerEvent(context.Background(), scripting.PlayerEventMapChange, s.luaPlayer())
 	}
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
@@ -168,7 +189,9 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) {
 	}
 	s.lastFallZ = z
 	s.lastFallTime = 0
-	s.sendPlayerUpdate()
+	if sameMap {
+		s.sendPlayerUpdate()
+	}
 }
 
 func (s *session) executeCommand(ctx context.Context, line string) bool {

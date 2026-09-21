@@ -154,6 +154,7 @@ type session struct {
 	playerGUID            uint64
 	playerLoading         bool
 	playerLoaded          bool
+	farTeleportPending    bool
 	player                *playerState
 	visiblePlayersMu      sync.Mutex
 	visiblePlayers        map[uint64]struct{}
@@ -1445,30 +1446,8 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				return
 			}
 		case uint32(protocol.OpcodeMSG_MOVE_WORLDPORT_ACK):
-			if state.authed && state.player != nil {
-				state.sendPlayerUpdate()
-				if update, err := state.server.buildAttachedTransportUpdate(ctx, *state.player); err == nil && update != nil {
-					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
-				}
-				if update, err := state.server.buildAttachedTransportPassengerUpdates(ctx, *state.player); err == nil && update != nil {
-					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
-				}
-				if update, err := state.server.buildMapTransportUpdates(*state.player, state.player.TransportGUID); err == nil && update != nil {
-					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
-				}
-				if update, _ := state.server.buildNearbyPlayerUpdates(state); update != nil {
-					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
-				}
-				if update, _, err := state.server.buildNearbyCreatureUpdates(ctx, *state.player); err == nil && update != nil {
-					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
-				}
-				if update, _, err := state.server.buildNearbyCorpseUpdates(ctx, *state.player); err == nil && update != nil {
-					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
-				}
-				if update, _, err := state.server.buildNearbyGameObjectUpdates(ctx, *state.player, false); err == nil && update != nil {
-					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
-				}
-				_ = state.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true)
+			if state.authed && state.player != nil && state.farTeleportPending && !state.completeWorldPort(ctx) {
+				return
 			}
 		case uint32(protocol.OpcodeMSG_MOVE_TELEPORT), uint32(protocol.OpcodeMSG_MOVE_TELEPORT_ACK), uint32(protocol.OpcodeCMSG_MOVE_SET_CAN_FLY_ACK),
 			uint32(protocol.OpcodeCMSG_FORCE_RUN_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_RUN_BACK_SPEED_CHANGE_ACK),
