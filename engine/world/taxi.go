@@ -78,16 +78,15 @@ func (s *session) saveTaxiMask(ctx context.Context) {
 
 // loadTaxiMask mirrors PlayerTaxi::LoadTaxiMask (space separated words).
 func (s *session) loadTaxiMask(raw sql.NullString) {
-	for i := range s.player.TaxiMask {
-		s.player.TaxiMask[i] = 0
-	}
-	if !raw.Valid {
+	if s == nil || s.player == nil || !raw.Valid {
 		return
 	}
 	tokens := strings.Fields(raw.String)
 	for i := 0; i < taxiMaskSize && i < len(tokens); i++ {
 		if v, err := strconv.ParseUint(tokens[i], 10, 32); err == nil {
 			s.player.TaxiMask[i] = uint32(v)
+		} else {
+			s.player.TaxiMask[i] = 0
 		}
 	}
 }

@@ -389,12 +389,9 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 			qRows.Close()
 		}
 		var taximask sql.NullString
+		s.initTaxiNodesForLevel()
 		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT taximask FROM characters WHERE guid = ?", guid).Scan(&taximask); err == nil {
 			s.loadTaxiMask(taximask)
-		} else {
-			// TrinityCore PlayerTaxi::InitTaxiNodesForLevel seeds the race and
-			// continent starting nodes for characters without saved masks.
-			s.initTaxiNodesForLevel()
 		}
 	}
 	_ = s.CharGuild(ctx, &state)
