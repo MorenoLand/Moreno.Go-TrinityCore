@@ -414,6 +414,9 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	_ = s.loadFishingSteps(ctx, &state)
 	applyOfflineRestBonus(&state)
 	_ = s.updateOfflineRealtimeItemDurations(ctx, &state)
+	if s.updateOfflineItemLoadState(ctx, &state) {
+		state.Equipment = s.loadEquipmentCache(ctx, state.GUID, "")
+	}
 	_ = s.loadPlayerAuras(ctx, &state)
 	s.loadGlyphAuras(&state)
 	s.loadTransformDisplay(ctx, &state)
@@ -888,6 +891,8 @@ func (s *session) loadPeriodicQuestStatuses(ctx context.Context, state *playerSt
 }
 
 const itemFlagsCustomRealTimeDuration uint32 = 0x0001
+const itemTemplateFlagConjured uint32 = 0x00000002
+const itemInstanceFlagRefundable uint32 = 0x00001000
 
 func (s *session) updateOfflineRealtimeItemDurations(ctx context.Context, state *playerState) error {
 	if s == nil || state == nil || state.LogoutTime <= 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
@@ -939,6 +944,59 @@ func (s *session) updateOfflineRealtimeItemDurations(ctx context.Context, state 
 		}
 	}
 	return nil
+}
+
+func (s *session) updateOfflineItemLoadState(ctx context.Context, state *playerState) bool {
+	if s == nil || state == nil || state.LogoutTime <= 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	elapsed := time.Now().Unix() - state.LogoutTime
+	if elapsed <= 0 {
+		return false
+	}
+	cdb, wdb := s.server.CharactersStore.DB, s.server.WorldStore.DB
+	rows, err := cdb.QueryContext(ctx, `SELECT ci.item, ii.itemEntry, ii.flags, ii.playedTime
+		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = ?`, state.GUID)
+	if err != nil {
+		return false
+	}
+	type itemLoadState struct{ guid, entry, flags, playedTime int64 }
+	var items []itemLoadState
+	for rows.Next() {
+		var item itemLoadState
+		if rows.Scan(&item.guid, &item.entry, &item.flags, &item.playedTime) == nil {
+			items = append(items, item)
+		}
+	}
+	rows.Close()
+	changed := false
+	for _, item := range items {
+		var templateFlags int64
+		if wdb.QueryRowContext(ctx, "SELECT COALESCE(Flags, 0) FROM item_template WHERE entry = ?", item.entry).Scan(&templateFlags) != nil {
+			continue
+		}
+		if elapsed > 15*60 && uint32(templateFlags)&itemTemplateFlagConjured != 0 {
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", state.GUID, item.guid)
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", item.guid)
+			changed = true
+			continue
+		}
+		if uint32(item.flags)&itemInstanceFlagRefundable == 0 {
+			continue
+		}
+		if item.playedTime > 2*60*60 {
+			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET flags = flags & ? WHERE guid = ?", ^int64(itemInstanceFlagRefundable), item.guid)
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_refund_instance WHERE item_guid = ? AND player_guid = ?", item.guid, state.GUID)
+			changed = true
+			continue
+		}
+		var refundCount int64
+		if cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM item_refund_instance WHERE item_guid = ? AND player_guid = ?", item.guid, state.GUID).Scan(&refundCount) == nil && refundCount == 0 {
+			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET flags = flags & ? WHERE guid = ?", ^int64(itemInstanceFlagRefundable), item.guid)
+			changed = true
+		}
+	}
+	return changed
 }
 
 func applyOfflineRestBonus(state *playerState) {
