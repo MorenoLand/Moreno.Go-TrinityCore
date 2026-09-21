@@ -361,6 +361,16 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 		state.ExtraFlags &= ^playerExtraGMOn
 		state.PlayerFlags &= ^playerFlagGM
 	}
+	visibleState := 2
+	if s.server.Config.GMVisibleState >= 0 && s.server.Config.GMVisibleState <= 2 {
+		visibleState = s.server.Config.GMVisibleState
+	}
+	if visibleState == 0 || (visibleState == 2 && state.ExtraFlags&playerExtraGMInvisible != 0) {
+		state.ExtraFlags |= playerExtraGMInvisible | playerExtraGMOn
+		state.PlayerFlags |= playerFlagGM
+	} else {
+		state.ExtraFlags &= ^playerExtraGMInvisible
+	}
 	if (state.ExtraFlags&playerExtraGMChat != 0) || (state.ExtraFlags&playerExtraGMOn != 0) {
 		s.gmChat = true
 		state.ExtraFlags |= playerExtraGMChat
