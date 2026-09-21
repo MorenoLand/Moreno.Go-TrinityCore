@@ -190,3 +190,5 @@ Persisted achievement loading now rejects unknown Achievement.dbc and criteria r
 Persisted action buttons now reject unknown spells, missing item templates, and unsupported action types before `SMSG_ACTION_BUTTONS`, matching `Player::IsActionButtonDataValid` (`b7741fd`).
 
 Persisted character-spell rows now preserve the source active/disabled state and only reject unknown DBC spells; class/race and level gates remain in `LearnSkillRewardedSpells`, not `_LoadSpells` (`22eb90b`).
+
+Persisted glyphs now require matching `GlyphProperties.dbc` and `GlyphSlot.dbc` slot types before their aura is applied, matching `_LoadGlyphAuras` (`14c27bc`).
