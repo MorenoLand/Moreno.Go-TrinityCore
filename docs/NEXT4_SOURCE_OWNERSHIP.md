@@ -59,6 +59,8 @@ The login effect `SMSG_SPELL_GO` now matches `Spell::SendSpellGo`: the self pack
 
 Login `SMSG_INSTANCE_DIFFICULTY` now derives its value from the current map type and instance difficulty, keeping saved dungeon settings off continent maps and matching `Map::GetDifficulty` (`cae1d75`).
 
+The shared player cast path now sends `CAST_FLAG_POWER_LEFT_SELF` with remaining power to the caster and a flag-cleared `SMSG_SPELL_GO` to nearby clients, matching `Spell::SendSpellGo` (`a7871db`).
+
 Corpse repopulation now occurs after the loading flag clears and ON_LOGIN criteria update, immediately before the login hook, matching `CharacterHandler.cpp` (`e083f6a`).
 
 The self-player update now serializes the computed shield-block value into `PLAYER_SHIELD_BLOCK`, matching `Player::UpdateAllStats` field delivery (`43c5918`).
