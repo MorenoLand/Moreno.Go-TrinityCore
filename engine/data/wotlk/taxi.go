@@ -295,3 +295,11 @@ func (s *Store) OldContinentsTaxiNodes() ([]uint32, error) {
 	}
 	return nodes, nil
 }
+
+func (s *Store) TaxiMask() ([14]uint32, error) {
+	network, err := s.taxiNetwork()
+	if err != nil {
+		return [14]uint32{}, err
+	}
+	return network.mask, nil
+}

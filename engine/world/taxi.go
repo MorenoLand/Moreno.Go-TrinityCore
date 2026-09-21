@@ -82,9 +82,19 @@ func (s *session) loadTaxiMask(raw sql.NullString) {
 		return
 	}
 	tokens := strings.Fields(raw.String)
+	var validMask [taxiMaskSize]uint32
+	if s.server != nil && s.server.Data != nil {
+		if mask, err := s.server.Data.TaxiMask(); err == nil {
+			validMask = mask
+		}
+	}
 	for i := 0; i < taxiMaskSize && i < len(tokens); i++ {
 		if v, err := strconv.ParseUint(tokens[i], 10, 32); err == nil {
-			s.player.TaxiMask[i] = uint32(v)
+			value := uint32(v)
+			if validMask != [taxiMaskSize]uint32{} {
+				value &= validMask[i]
+			}
+			s.player.TaxiMask[i] = value
 		} else {
 			s.player.TaxiMask[i] = 0
 		}
