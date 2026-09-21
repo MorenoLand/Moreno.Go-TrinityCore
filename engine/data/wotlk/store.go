@@ -1202,6 +1202,25 @@ func (s *Store) GlyphSlotType(id uint32) (uint32, bool, error) {
 	return typeFlags, true, nil
 }
 
+func (s *Store) GTFloat(name string, index int) (float32, bool, error) {
+	file, err := s.File(name)
+	if err != nil {
+		return 0, false, err
+	}
+	if index < 0 || index >= file.Records() {
+		return 0, false, nil
+	}
+	record, err := file.Record(index)
+	if err != nil {
+		return 0, false, err
+	}
+	value, err := record.Float32(0)
+	if err != nil {
+		return 0, false, err
+	}
+	return value, true, nil
+}
+
 // SkillLineAbilityEntry represents a record from SkillLineAbility.dbc.
 type SkillLineAbilityEntry struct {
 	ID                uint32

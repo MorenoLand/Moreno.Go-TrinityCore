@@ -257,6 +257,10 @@ type playerState struct {
 	Buyback              [12]*buybackSlot
 	Stats                [5]uint32
 	BaseStats            [5]uint32
+	MeleeCrit            float32
+	RangedCrit           float32
+	OffhandCrit          float32
+	SpellCrit            [7]float32
 	Armor                uint32
 	Resistances          [7]uint32
 	Block                uint32
@@ -1688,8 +1692,52 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 		state.MinRangedDamage += rapBonus
 		state.MaxRangedDamage += rapBonus
 	}
+	s.calculatePlayerCritFields(state, lvl)
 
 	return nil
+}
+
+func (s *session) calculatePlayerCritFields(state *playerState, level uint8) {
+	if s == nil || state == nil || s.server == nil || s.server.Data == nil || state.Class == 0 {
+		return
+	}
+	if level > 100 {
+		level = 100
+	}
+	classIndex := int(state.Class) - 1
+	if classIndex < 0 || classIndex >= 12 || level == 0 {
+		return
+	}
+	gt := func(name string, index int) (float32, bool) {
+		value, found, err := s.server.Data.GTFloat(name, index)
+		return value, err == nil && found
+	}
+	ratingBonus := func(rating int) float32 {
+		if rating < 0 || rating >= len(state.CombatRatings) {
+			return 0
+		}
+		ratingValue, ratingOK := gt("gtCombatRatings", rating*100+int(level)-1)
+		scalarValue, scalarOK := gt("gtOCTClassCombatRatingScalar", classIndex*32+rating+1)
+		if !ratingOK || !scalarOK || ratingValue == 0 {
+			return 0
+		}
+		return float32(state.CombatRatings[rating]) * scalarValue / ratingValue
+	}
+	meleeBase, meleeBaseOK := gt("gtChanceToMeleeCritBase", classIndex)
+	meleeRatio, meleeRatioOK := gt("gtChanceToMeleeCrit", classIndex*100+int(level)-1)
+	spellBase, spellBaseOK := gt("gtChanceToSpellCritBase", classIndex)
+	spellRatio, spellRatioOK := gt("gtChanceToSpellCrit", classIndex*100+int(level)-1)
+	if meleeBaseOK && meleeRatioOK {
+		base := (meleeBase + float32(state.Stats[1])*meleeRatio) * 100
+		state.MeleeCrit = base + ratingBonus(8)
+		state.RangedCrit = base + ratingBonus(9)
+		state.OffhandCrit = state.MeleeCrit
+	}
+	if spellBaseOK && spellRatioOK {
+		for school := 1; school < len(state.SpellCrit); school++ {
+			state.SpellCrit[school] = (spellBase+float32(state.Stats[3])*spellRatio)*100 + ratingBonus(10)
+		}
+	}
 }
 
 func restorePlayerHealth(savedHealth, maxHealth uint32, loaded bool, xp uint32, level uint8) uint32 {
@@ -2587,13 +2635,13 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 	// Modifiers & Ratings (required by client PaperDoll formulas)
 	for i := 0; i < 7; i++ {
 		values[playerFieldModDamageDonePct+i] = math.Float32bits(1.0)
-		values[playerSpellCritPercentage1+i] = math.Float32bits(5.0)
+		values[playerSpellCritPercentage1+i] = math.Float32bits(state.SpellCrit[i])
 	}
 	values[playerFieldModHealingPct] = math.Float32bits(1.0)
 	values[playerFieldModHealingDonePct] = math.Float32bits(1.0)
-	values[playerCritPercentage] = math.Float32bits(5.0)
-	values[playerRangedCritPercentage] = math.Float32bits(5.0)
-	values[playerOffhandCritPercentage] = math.Float32bits(5.0)
+	values[playerCritPercentage] = math.Float32bits(state.MeleeCrit)
+	values[playerRangedCritPercentage] = math.Float32bits(state.RangedCrit)
+	values[playerOffhandCritPercentage] = math.Float32bits(state.OffhandCrit)
 
 	// Free talent points & spent points
 	if state.Level >= 10 {
