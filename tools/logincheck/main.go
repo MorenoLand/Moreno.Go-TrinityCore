@@ -221,6 +221,26 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 			}
 			playerCreateIndex = found
 		}
+		var validate func(protocoltrace.Event) error
+		switch stage.Name {
+		case "SMSG_LOGIN_VERIFY_WORLD":
+			validate = requireLoginVerifyWorld
+		case "SMSG_INSTANCE_DIFFICULTY":
+			validate = requireEightBytePayload
+		case "SMSG_INITIAL_SPELLS":
+			validate = requireInitialSpells
+		case "SMSG_SEND_UNLEARN_SPELLS":
+			validate = requireUnlearnSpells
+		case "SMSG_ACTION_BUTTONS":
+			validate = requireActionButtons
+		case "SMSG_INITIALIZE_FACTIONS":
+			validate = requireInitialFactions
+		}
+		if validate != nil {
+			if err := validate(trace.Events[found]); err != nil {
+				return fmt.Errorf("%s: %w", stage.Name, err)
+			}
+		}
 		if stage.Name == "SMSG_LOGIN_SET_TIME_SPEED" {
 			if err := requireLoginTimeSpeed(trace.Events[found]); err != nil {
 				return err
@@ -268,6 +288,130 @@ func requireLoginTimeSpeed(event protocoltrace.Event) error {
 	}
 	if speed != 0.5 || holiday != 0 || reader.Remaining() != 0 {
 		return fmt.Errorf("invalid login time-speed payload speed=%v holiday=%d remaining=%d", speed, holiday, reader.Remaining())
+	}
+	return nil
+}
+
+func requireLoginVerifyWorld(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	if _, err := reader.ReadI32(); err != nil {
+		return fmt.Errorf("map ID is truncated: %w", err)
+	}
+	for index := 0; index < 4; index++ {
+		value, readErr := reader.ReadF32()
+		if readErr != nil {
+			return fmt.Errorf("position field %d is truncated: %w", index, readErr)
+		}
+		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+			return fmt.Errorf("position field %d is not finite", index)
+		}
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected login verify payload bytes=%d", reader.Remaining())
+	}
+	return nil
+}
+
+func requireEightBytePayload(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	if len(payload) != 8 {
+		return fmt.Errorf("payload length=%d, want 8", len(payload))
+	}
+	return nil
+}
+
+func requireInitialSpells(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	if _, err := reader.ReadU8(); err != nil {
+		return fmt.Errorf("initial spell flags are truncated: %w", err)
+	}
+	count, err := reader.ReadU16()
+	if err != nil {
+		return fmt.Errorf("initial spell count is truncated: %w", err)
+	}
+	for index := uint16(0); index < count; index++ {
+		if _, err := reader.Read(6); err != nil {
+			return fmt.Errorf("initial spell %d is truncated: %w", index, err)
+		}
+	}
+	cooldowns, err := reader.ReadU16()
+	if err != nil {
+		return fmt.Errorf("initial cooldown count is truncated: %w", err)
+	}
+	for index := uint16(0); index < cooldowns; index++ {
+		if _, err := reader.Read(16); err != nil {
+			return fmt.Errorf("initial cooldown %d is truncated: %w", index, err)
+		}
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected initial-spell payload bytes=%d", reader.Remaining())
+	}
+	return nil
+}
+
+func requireUnlearnSpells(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	count, err := reader.ReadU32()
+	if err != nil {
+		return fmt.Errorf("unlearn count is truncated: %w", err)
+	}
+	if _, err := reader.Read(int(count) * 4); err != nil {
+		return fmt.Errorf("unlearn spell list is truncated: %w", err)
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected unlearn payload bytes=%d", reader.Remaining())
+	}
+	return nil
+}
+
+func requireActionButtons(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	state := byte(0)
+	if len(payload) > 0 {
+		state = payload[0]
+	}
+	if len(payload) != 1+144*4 || state != 1 {
+		return fmt.Errorf("action-button payload length/state=%d/%d, want 577/1", len(payload), state)
+	}
+	return nil
+}
+
+func requireInitialFactions(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	if len(payload) < 4 {
+		return fmt.Errorf("faction payload is truncated")
+	}
+	reader := protocol.NewReader(payload)
+	count, err := reader.ReadU32()
+	if err != nil || count != 128 {
+		return fmt.Errorf("faction count=%d, want 128", count)
+	}
+	if _, err := reader.Read(128 * 5); err != nil {
+		return fmt.Errorf("faction state list is truncated: %w", err)
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected faction payload bytes=%d", reader.Remaining())
 	}
 	return nil
 }
