@@ -58,6 +58,7 @@ const (
 	playerFieldLifetimeHonorableKills           = 1228 // PLAYER_FIELD_LIFETIME_HONORABLE_KILLS = UNIT_END + 0x0438
 	playerFieldHonorCurrency                    = 1277 // PLAYER_FIELD_HONOR_CURRENCY = UNIT_END + 0x0469
 	playerFieldArenaCurrency                    = 1278 // PLAYER_FIELD_ARENA_CURRENCY = UNIT_END + 0x046A
+	playerFieldArenaTeamInfoStart               = 1256 // PLAYER_FIELD_ARENA_TEAM_INFO_1_1 = UNIT_END + 0x0454
 	playerFieldDuelArbiter                      = 148  // PLAYER_DUEL_ARBITER = UNIT_END + 0x0000 (Size 2)
 	playerFieldDuelTeam                         = 156  // PLAYER_DUEL_TEAM = UNIT_END + 0x0008 (Size 1)
 	playerExploredZonesStart                    = 1041 // PLAYER_EXPLORED_ZONES_1 = UNIT_END + 0x037D
@@ -281,6 +282,7 @@ type playerState struct {
 	TransportO           float32
 	TransportSeat        int8
 	ArenaPoints          uint32
+	ArenaTeamInfo        [21]uint32
 	TotalHonorPoints     uint32
 	TodayHonorPoints     uint32
 	YesterdayHonorPoints uint32
@@ -404,6 +406,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 		}
 	}
 	s.loadRewardedQuestState(ctx, &state)
+	s.loadArenaTeamInfo(ctx, &state)
 	_ = s.loadFishingSteps(ctx, &state)
 	applyOfflineRestBonus(&state)
 	_ = s.updateOfflineRealtimeItemDurations(ctx, &state)
@@ -472,6 +475,47 @@ func hasLearnedSpell(spells []learnedSpell, spellID uint32) bool {
 		}
 	}
 	return false
+}
+
+func (s *session) loadArenaTeamInfo(ctx context.Context, state *playerState) {
+	if s == nil || state == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT atm.arenaTeamId, atm.weekGames, atm.weekWins, atm.seasonGames, atm.seasonWins, atm.personalRating, COALESCE(at.type, 0), COALESCE(at.captainGuid, 0)
+		FROM arena_team_member AS atm LEFT JOIN arena_team AS at ON at.arenaTeamId = atm.arenaTeamId WHERE atm.guid = ?`, state.GUID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var teamID, weekGames, weekWins, seasonGames, seasonWins, personalRating, teamType, captain uint32
+		if rows.Scan(&teamID, &weekGames, &weekWins, &seasonGames, &seasonWins, &personalRating, &teamType, &captain) != nil {
+			continue
+		}
+		slot := -1
+		switch teamType {
+		case 2:
+			slot = 0
+		case 3:
+			slot = 1
+		case 5:
+			slot = 2
+		}
+		if slot < 0 {
+			continue
+		}
+		base := slot * 7
+		state.ArenaTeamInfo[base] = teamID
+		state.ArenaTeamInfo[base+1] = teamType
+		if captain != uint32(state.GUID) {
+			state.ArenaTeamInfo[base+2] = 1
+		}
+		state.ArenaTeamInfo[base+3] = weekGames
+		state.ArenaTeamInfo[base+4] = seasonGames
+		state.ArenaTeamInfo[base+5] = seasonWins
+		state.ArenaTeamInfo[base+6] = personalRating
+		_ = weekWins
+	}
 }
 
 func (s *session) loadTransformDisplay(ctx context.Context, state *playerState) {
@@ -1802,6 +1846,9 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 	values[unitFieldAmmoID] = state.AmmoID
 	values[playerFieldHonorCurrency] = state.TotalHonorPoints
 	values[playerFieldArenaCurrency] = state.ArenaPoints
+	for index, value := range state.ArenaTeamInfo {
+		values[playerFieldArenaTeamInfoStart+index] = value
+	}
 	for slot, itemGUID := range state.InventorySlots {
 		values[playerInventoryStart+slot*2] = uint32(itemGUID)
 		values[playerInventoryStart+slot*2+1] = uint32(itemGUID >> 32)
