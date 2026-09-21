@@ -1,5 +1,13 @@
 package wotlk
 
+const (
+	SkillRangeLanguage uint8 = iota
+	SkillRangeLevel
+	SkillRangeMono
+	SkillRangeRank
+	SkillRangeNone
+)
+
 type SkillRaceClassInfoEntry struct {
 	SkillID     uint32
 	RaceMask    uint32
@@ -50,4 +58,42 @@ func (s *Store) SkillRaceClassInfo(skillID uint32, race, class uint8) (SkillRace
 		}
 	}
 	return SkillRaceClassInfoEntry{}, false, nil
+}
+
+func (s *Store) SkillRangeType(skillID uint32, race, class uint8) (uint8, bool, error) {
+	entry, found, err := s.SkillRaceClassInfo(skillID, race, class)
+	if err != nil || !found {
+		return SkillRangeNone, found, err
+	}
+	if entry.SkillTierID != 0 {
+		tiers, tierErr := s.File("SkillTiers")
+		if tierErr != nil {
+			return SkillRangeNone, false, tierErr
+		}
+		if _, tierFound := tiers.Find(entry.SkillTierID); tierFound {
+			return SkillRangeRank, true, nil
+		}
+	}
+	if skillID == 776 {
+		return SkillRangeMono, true, nil
+	}
+	file, fileErr := s.File("SkillLine")
+	if fileErr != nil {
+		return SkillRangeNone, false, fileErr
+	}
+	record, recordFound := file.Find(skillID)
+	if !recordFound {
+		return SkillRangeNone, false, nil
+	}
+	category, categoryErr := record.Int32(1)
+	if categoryErr != nil {
+		return SkillRangeNone, false, categoryErr
+	}
+	if category == 8 {
+		return SkillRangeMono, true, nil
+	}
+	if category == 10 {
+		return SkillRangeLanguage, true, nil
+	}
+	return SkillRangeLevel, true, nil
 }

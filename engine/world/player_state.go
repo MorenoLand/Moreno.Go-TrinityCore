@@ -2027,9 +2027,12 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 			continue
 		}
 		originalValue, originalMax := value, max
-		if isLanguageSkill(skill) {
+		rangeType := s.skillRangeType(state.Race, state.Class, skill)
+		if rangeType == wotlk.SkillRangeLanguage {
 			value, max = 300, 300
-		} else if isLevelScaledSkill(skill) {
+		} else if rangeType == wotlk.SkillRangeMono {
+			value, max = 1, 1
+		} else if rangeType == wotlk.SkillRangeLevel || isLevelScaledSkill(skill) {
 			expectedMax := uint16(state.Level) * 5
 			if expectedMax < 5 {
 				expectedMax = 5
@@ -2055,7 +2058,7 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 		for i, sk := range skills {
 			if sk.Skill == def.Skill {
 				found = true
-				if isLanguageSkill(sk.Skill) && (sk.Value == 0 || sk.Max == 0) {
+				if s.skillRangeType(state.Race, state.Class, sk.Skill) == wotlk.SkillRangeLanguage && (sk.Value == 0 || sk.Max == 0) {
 					skills[i].Value = 300
 					skills[i].Max = 300
 					_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, 300, 300)", state.GUID, def.Skill)
@@ -2088,9 +2091,12 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 					continue
 				}
 				value, max := uint16(1), uint16(1)
-				if isLanguageSkill(uint16(skillID)) {
+				rangeType := s.skillRangeType(state.Race, state.Class, uint16(skillID))
+				if rangeType == wotlk.SkillRangeLanguage {
 					value, max = 300, 300
-				} else if isLevelScaledSkill(uint16(skillID)) {
+				} else if rangeType == wotlk.SkillRangeMono {
+					value, max = 1, 1
+				} else if rangeType == wotlk.SkillRangeLevel || isLevelScaledSkill(uint16(skillID)) {
 					max = uint16(state.Level) * 5
 					if max < 5 {
 						max = 5
@@ -2167,6 +2173,21 @@ func (s *session) skillAllowed(race, class uint8, skill uint16) bool {
 		}
 	}
 	return isAllowedClassSkill(class, skill)
+}
+
+func (s *session) skillRangeType(race, class uint8, skill uint16) uint8 {
+	if s != nil && s.server != nil && s.server.Data != nil {
+		if rangeType, found, err := s.server.Data.SkillRangeType(uint32(skill), race, class); err == nil && found {
+			return rangeType
+		}
+	}
+	if isLanguageSkill(skill) {
+		return wotlk.SkillRangeLanguage
+	}
+	if isLevelScaledSkill(skill) {
+		return wotlk.SkillRangeLevel
+	}
+	return wotlk.SkillRangeNone
 }
 
 func isLevelScaledSkill(skill uint16) bool {

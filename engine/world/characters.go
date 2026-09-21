@@ -1921,10 +1921,14 @@ func (s *session) createStarterSkills(ctx context.Context, guid uint64, race, cl
 				}
 				val := 1
 				max := 1
-				if isLanguageSkill(uint16(skillID)) {
+				rangeType := s.skillRangeType(race, class, uint16(skillID))
+				if rangeType == wotlk.SkillRangeLanguage {
 					val = 300
 					max = 300
-				} else if isLevelScaledSkill(uint16(skillID)) {
+				} else if rangeType == wotlk.SkillRangeMono {
+					val = 1
+					max = 1
+				} else if rangeType == wotlk.SkillRangeLevel || isLevelScaledSkill(uint16(skillID)) {
 					val = 1
 					max = 5 // level 1 * 5
 				}
