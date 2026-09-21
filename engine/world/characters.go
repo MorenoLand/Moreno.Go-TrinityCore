@@ -25,6 +25,7 @@ const (
 	characterFlagLockedByBilling uint32 = 0x01000000
 	characterFlagDeclined        uint32 = 0x02000000
 	playerFlagGhost              uint32 = 0x00000010
+	playerFlagInPVP              uint32 = 0x00000200
 	playerFlagContestedPVP       uint32 = 0x00000100
 	characterCustomizeNone       uint32 = 0
 	characterCustomizeCustomize  uint32 = 0x00000001
@@ -661,6 +662,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	state.Zone = zoneID
 	s.player.Zone = state.Zone
 	s.areaID = areaID
+	if s.applyLoginZoneState(&state, zoneID) {
+		s.sendPlayerUpdate()
+	}
 	s.lastZoneUpdate = time.Now()
 	s.updateLocalChannels(state.Zone)
 	s.exploreZone(ctx, state.Zone)
@@ -817,6 +821,52 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	s.debug("player login complete", "account", s.accountName, "guid", s.playerGUID, "map", state.Map, "x", state.X, "y", state.Y, "z", state.Z)
 	return true
+}
+
+func (s *session) applyLoginZoneState(state *playerState, zoneID uint32) bool {
+	if s == nil || state == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	area, found, err := s.server.Data.Area(zoneID)
+	if err != nil || !found {
+		return false
+	}
+	oldFlags, oldPlayerFlags := state.PVPFlags, state.PlayerFlags
+	pvpRealm := s.server.Config.GameType == 1 || s.server.Config.GameType == 4 || s.server.Config.GameType == 6
+	team := teamForRace(state.Race)
+	hostile := false
+	switch area.FactionGroupMask {
+	case 2:
+		hostile = team != 0 && (pvpRealm || area.Flags&wotlk.AreaFlagCapital != 0)
+	case 4:
+		hostile = team != 1 && (pvpRealm || area.Flags&wotlk.AreaFlagCapital != 0)
+	case 0:
+		inBattleground := false
+		if entry, ok, mapErr := s.server.Data.Map(state.Map); mapErr == nil && ok {
+			inBattleground = entry.IsBattleground() || entry.IsBattleArena()
+		}
+		hostile = pvpRealm || inBattleground || area.Flags&wotlk.AreaFlagWintergrasp != 0
+	}
+	sanctuary := area.Flags&wotlk.AreaFlagSanctuary != 0
+	if sanctuary {
+		state.PVPFlags |= 0x08
+	} else {
+		state.PVPFlags &^= 0x08
+	}
+	if area.Flags&wotlk.AreaFlagArena != 0 || s.server.Config.GameType == 6 {
+		state.PVPFlags |= 0x04
+	} else {
+		state.PVPFlags &^= 0x04
+	}
+	if state.PlayerFlags&playerFlagInPVP != 0 || (hostile && state.PlayerFlags&playerFlagGM == 0) {
+		state.PVPFlags |= 0x01
+	} else if !hostile {
+		state.PVPFlags &^= 0x01
+	}
+	if area.Flags&wotlk.AreaFlagCapital != 0 && (!hostile || sanctuary) {
+		state.PlayerFlags |= playerFlagResting
+	}
+	return state.PVPFlags != oldFlags || state.PlayerFlags != oldPlayerFlags
 }
 
 func (s *session) sendLoginMovementStates() error {
