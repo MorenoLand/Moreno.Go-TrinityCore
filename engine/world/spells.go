@@ -3347,6 +3347,9 @@ func (s *session) activateSpec(ctx context.Context, targetSpec uint8) {
 		tRows.Close()
 		for _, sp := range newSpells {
 			_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", s.playerGUID, sp)
+			if !hasLearnedSpell(s.player.Spells, sp) {
+				s.player.Spells = append(s.player.Spells, learnedSpell{ID: sp, Active: true})
+			}
 			learnBuf := protocol.NewBuffer(6)
 			learnBuf.WriteU32(sp)
 			learnBuf.WriteU16(0)
@@ -3355,7 +3358,7 @@ func (s *session) activateSpec(ctx context.Context, targetSpec uint8) {
 	}
 
 	// 5. Load and send action buttons for new spec
-	if actions, err := s.loadActionButtons(ctx, s.playerGUID, s.player.Race, s.player.Class); err == nil {
+	if actions, err := s.loadActionButtons(ctx, s.playerGUID, s.player.Race, s.player.Class, s.player.Spells); err == nil {
 		s.player.Actions = actions
 		s.sendActionButtons()
 	}

@@ -30,7 +30,7 @@ func (s *session) loadPlayerPacketsState(ctx context.Context, state *playerState
 	if err != nil {
 		return err
 	}
-	actions, err := s.loadActionButtons(ctx, state.GUID, state.Race, state.Class)
+	actions, err := s.loadActionButtons(ctx, state.GUID, state.Race, state.Class, spells)
 	if err != nil {
 		return err
 	}
@@ -259,8 +259,41 @@ func isLanguageSpell(spellID uint32) bool {
 	return false
 }
 
-func (s *session) loadActionButtons(ctx context.Context, guid uint64, race, class uint8) ([144]uint32, error) {
+func (s *session) loadActionButtons(ctx context.Context, guid uint64, race, class uint8, spells []learnedSpell) ([144]uint32, error) {
 	var result [144]uint32
+	knownSpells := make(map[uint32]struct{}, len(spells))
+	for _, spell := range spells {
+		if spell.Active && !spell.Disabled {
+			knownSpells[spell.ID] = struct{}{}
+		}
+	}
+	validAction := func(action, kind int64) bool {
+		if action < 0 || action >= 0x01000000 || kind < 0 || kind > 255 {
+			return false
+		}
+		switch uint8(kind) {
+		case 0:
+			if _, ok := knownSpells[uint32(action)]; !ok {
+				return false
+			}
+			if s.server.Data == nil {
+				return true
+			}
+			_, found, err := s.server.Data.Spell(uint32(action))
+			return err == nil && found
+		case 1, 0x20, 0x40, 0x41:
+			return true
+		case 0x80:
+			if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+				return true
+			}
+			var found int64
+			err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM item_template WHERE entry = ? LIMIT 1", action).Scan(&found)
+			return err == nil && found != 0
+		default:
+			return false
+		}
+	}
 	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT button, action, type FROM character_action WHERE guid = ? AND spec = (SELECT activeTalentGroup FROM characters WHERE guid = ?) ORDER BY button", guid, guid)
 	if err != nil {
 		if missingTable(err) || isMissingColumn(err) {
@@ -274,10 +307,12 @@ func (s *session) loadActionButtons(ctx context.Context, guid uint64, race, clas
 		if err := rows.Scan(&button, &action, &kind); err != nil {
 			return result, err
 		}
-		if button >= 0 && button < int64(len(result)) && action >= 0 && action < 0x01000000 && kind >= 0 && kind <= 255 {
+		hasActions = true
+		if button >= 0 && button < int64(len(result)) && validAction(action, kind) {
 			result[button] = uint32(action) | uint32(kind)<<24
-			hasActions = true
+			continue
 		}
+		s.debug("invalid action button skipped", "guid", guid, "button", button, "action", action, "type", kind)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -291,10 +326,12 @@ func (s *session) loadActionButtons(ctx context.Context, guid uint64, race, clas
 			for arows.Next() {
 				var button, action, kind int64
 				if err := arows.Scan(&button, &action, &kind); err == nil {
-					if button >= 0 && button < int64(len(result)) && action >= 0 && action < 0x01000000 && kind >= 0 && kind <= 255 {
+					if button >= 0 && button < int64(len(result)) && validAction(action, kind) {
 						result[button] = uint32(action) | uint32(kind)<<24
 						starterActions = append(starterActions, struct{ button, action, kind int64 }{button, action, kind})
+						continue
 					}
+					s.debug("invalid starter action button skipped", "guid", guid, "button", button, "action", action, "type", kind)
 				}
 			}
 			rowsErr := arows.Err()
