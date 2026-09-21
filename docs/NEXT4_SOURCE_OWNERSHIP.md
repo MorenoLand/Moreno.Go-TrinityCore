@@ -55,6 +55,8 @@ Login replay now validates fixed lengths for dance moves, feature status, and bi
 
 The login fixture suite now exercises exact payload contracts for world verification, instance difficulty, initial and unlearned spells, action buttons, faction initialization, dance moves, feature status, bind point, and login time speed (`774de93`).
 
+The login effect `SMSG_SPELL_GO` now matches `Spell::SendSpellGo`: the self packet carries `CAST_FLAG_POWER_LEFT_SELF` and remaining power, while the nearby packet removes both fields; the fixture validates the complete payload (`c396319`).
+
 Corpse repopulation now occurs after the loading flag clears and ON_LOGIN criteria update, immediately before the login hook, matching `CharacterHandler.cpp` (`e083f6a`).
 
 The self-player update now serializes the computed shield-block value into `PLAYER_SHIELD_BLOCK`, matching `Player::UpdateAllStats` field delivery (`43c5918`).
