@@ -1306,12 +1306,17 @@ func (s *session) sendLoginEffect() error {
 		return nil
 	}
 	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: s.playerGUID}
-	packet := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 0, 836, spellCastFlagGo|spellCastFlagPending, uint32(time.Now().UnixMilli()), []uint64{s.playerGUID}, nil, target)
+	castFlags := spellCastFlagGo | spellCastFlagPending | protocol.SpellCastFlagPowerLeftSelf
+	castTime := uint32(time.Now().UnixMilli())
+	power := s.player.Powers[classPowerType(s.player.Class)]
+	packet := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, 0, 836, castFlags, castTime, []uint64{s.playerGUID}, nil, target, &power)
 	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), packet, true); err != nil {
 		return err
 	}
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), packet, s)
+		nearbyFlags := castFlags &^ protocol.SpellCastFlagPowerLeftSelf
+		nearby := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 0, 836, nearbyFlags, castTime, []uint64{s.playerGUID}, nil, target)
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearby, s)
 	}
 	return nil
 }

@@ -111,6 +111,7 @@ func runSelfCheck() error {
 		{"feature-status", protocol.OpcodeSMSG_FEATURE_SYSTEM_STATUS, make([]byte, 2), func(event protocoltrace.Event) error { return requirePayloadLength(event, 2) }},
 		{"bind-point", protocol.OpcodeSMSG_BIND_POINT_UPDATE, make([]byte, 20), func(event protocoltrace.Event) error { return requirePayloadLength(event, 20) }},
 		{"time-speed", protocol.OpcodeSMSG_LOGIN_SET_TIME_SPEED, loginTimeSpeedFixture(), requireLoginTimeSpeed},
+		{"login-effect", protocol.OpcodeSMSG_SPELL_GO, loginEffectFixture(), requireLoginEffect},
 	}
 	for _, check := range payloadChecks {
 		event := protocoltrace.Event{Direction: protocoltrace.ServerToClient, Opcode: uint32(check.opcode), Payload: base64.StdEncoding.EncodeToString(check.payload)}
@@ -136,6 +137,12 @@ func loginTimeSpeedFixture() []byte {
 	buf.WriteF32(0.5)
 	buf.WriteU32(0)
 	return buf.Bytes()
+}
+
+func loginEffectFixture() []byte {
+	power := uint32(777)
+	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: 0x106}
+	return protocol.BuildSpellGoWithPower(0x106, 0x106, 0, 836, 0x901, 123, []uint64{0x106}, nil, target, &power)
 }
 
 func actionButtonsFixture() []byte {
@@ -353,6 +360,63 @@ func requireLoginTimeSpeed(event protocoltrace.Event) error {
 	}
 	if speed != 0.5 || holiday != 0 || reader.Remaining() != 0 {
 		return fmt.Errorf("invalid login time-speed payload speed=%v holiday=%d remaining=%d", speed, holiday, reader.Remaining())
+	}
+	return nil
+}
+
+func requireLoginEffect(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	if _, err := reader.ReadPackedGUID(); err != nil {
+		return fmt.Errorf("login effect caster GUID is truncated: %w", err)
+	}
+	if _, err := reader.ReadPackedGUID(); err != nil {
+		return fmt.Errorf("login effect caster-unit GUID is truncated: %w", err)
+	}
+	if _, err := reader.ReadU8(); err != nil {
+		return fmt.Errorf("login effect cast ID is truncated: %w", err)
+	}
+	spellID, err := reader.ReadU32()
+	if err != nil || spellID != 836 {
+		return fmt.Errorf("login effect spell ID=%d, want 836", spellID)
+	}
+	flags, err := reader.ReadU32()
+	if err != nil {
+		return fmt.Errorf("login effect cast flags are truncated: %w", err)
+	}
+	if flags&protocol.SpellCastFlagPowerLeftSelf == 0 || flags&0x100 == 0 || flags&0x1 == 0 {
+		return fmt.Errorf("login effect cast flags=0x%08x, want unknown-9/pending/power-left-self", flags)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		return fmt.Errorf("login effect cast time is truncated: %w", err)
+	}
+	hitCount, err := reader.ReadU8()
+	if err != nil || hitCount != 1 {
+		return fmt.Errorf("login effect hit count=%d, want 1", hitCount)
+	}
+	if _, err := reader.ReadU64(); err != nil {
+		return fmt.Errorf("login effect hit target is truncated: %w", err)
+	}
+	missCount, err := reader.ReadU8()
+	if err != nil || missCount != 0 {
+		return fmt.Errorf("login effect miss count=%d, want 0", missCount)
+	}
+	target, err := protocol.ReadSpellTargetData(reader)
+	if err != nil {
+		return fmt.Errorf("login effect target is truncated: %w", err)
+	}
+	if target.Flags != protocol.SpellTargetFlagUnit || target.UnitGUID != 0x106 {
+		return fmt.Errorf("login effect target flags/guid=0x%08x/0x%x", target.Flags, target.UnitGUID)
+	}
+	power, err := reader.ReadU32()
+	if err != nil || power != 777 {
+		return fmt.Errorf("login effect remaining power=%d, want 777", power)
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected login effect payload bytes=%d", reader.Remaining())
 	}
 	return nil
 }

@@ -15,6 +15,7 @@ const (
 	SpellTargetFlagUnitWireMask          = SpellTargetFlagUnit | SpellTargetFlagUnitMinipet | SpellTargetFlagGameObject | SpellTargetFlagCorpseEnemy | SpellTargetFlagCorpseAlly
 	SpellTargetFlagItemWireMask          = SpellTargetFlagItem | SpellTargetFlagTradeItem
 	SpellCastFlagVisualChain      uint32 = 0x00080000
+	SpellCastFlagPowerLeftSelf    uint32 = 0x00000800
 
 	SpellMissNone    uint8 = 0
 	SpellMissMiss    uint8 = 1
@@ -129,6 +130,10 @@ func BuildSpellStart(casterGUID, casterUnitGUID uint64, castID uint8, spellID, c
 }
 
 func BuildSpellGo(casterGUID, casterUnitGUID uint64, castID uint8, spellID, castFlags, castTime uint32, hitTargets []uint64, missStatus []SpellMissStatus, target SpellTargetData) []byte {
+	return BuildSpellGoWithPower(casterGUID, casterUnitGUID, castID, spellID, castFlags, castTime, hitTargets, missStatus, target, nil)
+}
+
+func BuildSpellGoWithPower(casterGUID, casterUnitGUID uint64, castID uint8, spellID, castFlags, castTime uint32, hitTargets []uint64, missStatus []SpellMissStatus, target SpellTargetData, remainingPower *uint32) []byte {
 	packet := NewBuffer(96)
 	writeSpellCastHeader(packet, casterGUID, casterUnitGUID, castID, spellID, castFlags, castTime)
 	if len(hitTargets) > 255 {
@@ -150,6 +155,9 @@ func BuildSpellGo(casterGUID, casterUnitGUID uint64, castID uint8, spellID, cast
 		}
 	}
 	writeSpellTargetData(packet, target)
+	if remainingPower != nil && castFlags&SpellCastFlagPowerLeftSelf != 0 {
+		packet.WriteU32(*remainingPower)
+	}
 	writeSpellCastTrailer(packet, castFlags, target.Flags)
 	return packet.Bytes()
 }
