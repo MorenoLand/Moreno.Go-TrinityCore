@@ -249,6 +249,9 @@ type playerState struct {
 	GlyphSlots           [6]uint32
 	GlyphsEnabled        uint32
 	DailyQuests          [playerDailyQuestsCount]uint32
+	WeeklyQuests         map[uint32]struct{}
+	MonthlyQuests        map[uint32]struct{}
+	SeasonalQuests       map[uint32]map[uint32]struct{}
 	InventorySlots       [playerInventoryCount]uint64
 	Buyback              [12]*buybackSlot
 	Stats                [5]uint32
@@ -417,6 +420,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	s.loadMountDisplay(ctx, &state)
 	s.loadGlyphFields(&state)
 	s.loadDailyQuests(ctx, &state)
+	s.loadPeriodicQuestStatuses(ctx, &state)
 	_ = s.calculatePlayerStats(ctx, &state)
 	_ = s.loadPlayerReputations(ctx, &state)
 	if s.removeZoneLimitedItemsFromState(ctx, &state) {
@@ -801,6 +805,47 @@ func (s *session) loadDailyQuests(ctx context.Context, state *playerState) {
 		}
 		state.DailyQuests[index] = questID
 		index++
+	}
+}
+
+func (s *session) loadPeriodicQuestStatuses(ctx context.Context, state *playerState) {
+	if s == nil || state == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	state.WeeklyQuests = make(map[uint32]struct{})
+	state.MonthlyQuests = make(map[uint32]struct{})
+	state.SeasonalQuests = make(map[uint32]map[uint32]struct{})
+	cdb := s.server.CharactersStore.DB
+	if rows, err := cdb.QueryContext(ctx, "SELECT quest FROM character_queststatus_weekly WHERE guid = ?", state.GUID); err == nil {
+		for rows.Next() {
+			var questID uint32
+			if rows.Scan(&questID) == nil && questID != 0 {
+				state.WeeklyQuests[questID] = struct{}{}
+			}
+		}
+		rows.Close()
+	}
+	if rows, err := cdb.QueryContext(ctx, "SELECT quest FROM character_queststatus_monthly WHERE guid = ?", state.GUID); err == nil {
+		for rows.Next() {
+			var questID uint32
+			if rows.Scan(&questID) == nil && questID != 0 {
+				state.MonthlyQuests[questID] = struct{}{}
+			}
+		}
+		rows.Close()
+	}
+	if rows, err := cdb.QueryContext(ctx, "SELECT quest, event FROM character_queststatus_seasonal WHERE guid = ?", state.GUID); err == nil {
+		for rows.Next() {
+			var questID, eventID uint32
+			if rows.Scan(&questID, &eventID) != nil || questID == 0 {
+				continue
+			}
+			if state.SeasonalQuests[eventID] == nil {
+				state.SeasonalQuests[eventID] = make(map[uint32]struct{})
+			}
+			state.SeasonalQuests[eventID][questID] = struct{}{}
+		}
+		rows.Close()
 	}
 }
 
