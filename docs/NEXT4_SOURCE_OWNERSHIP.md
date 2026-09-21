@@ -50,3 +50,5 @@ Mounted-flight aura login now recalculates and broadcasts flight speed packets t
 Persisted transform auras now resolve their creature-template display before the player create update, matching `_LoadAuras` and `HandleAuraTransform` (`2ad2911`).
 
 Special transform spells now use the pinned race/gender display mappings for login serialization (`13d8503`).
+
+Persisted mounted auras now resolve mount creature display models before player create serialization, matching `HandleAuraMounted` (`a10722a`).
