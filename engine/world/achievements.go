@@ -532,17 +532,32 @@ func (s *Server) loadAchievementIndex() {
 func (s *session) loadAchievementState(ctx context.Context) {
 	s.earnedAchievements = make(map[uint32]uint32)
 	s.criteriaProgress = make(map[uint32]*criteriaProgressState)
+	s.server.loadAchievementIndex()
 	cdb := s.server.CharactersStore
 	if cdb == nil || cdb.DB == nil {
 		return
 	}
+	achievementIndex.mu.RLock()
+	validateAchievements := len(achievementIndex.achieveByID) != 0
+	validateCriteria := len(achievementIndex.byID) != 0
+	achievementIndex.mu.RUnlock()
 	rows, err := cdb.DB.QueryContext(ctx, "SELECT achievement, date FROM character_achievement WHERE guid = ?", s.playerGUID)
 	if err == nil {
 		for rows.Next() {
 			var id, date uint32
-			if rows.Scan(&id, &date) == nil {
-				s.earnedAchievements[id] = date
+			if rows.Scan(&id, &date) != nil {
+				continue
 			}
+			if validateAchievements {
+				achievementIndex.mu.RLock()
+				_, found := achievementIndex.achieveByID[id]
+				achievementIndex.mu.RUnlock()
+				if !found {
+					s.debug("achievement load skipped", "guid", s.playerGUID, "achievement", id, "reason", "unknown achievement")
+					continue
+				}
+			}
+			s.earnedAchievements[id] = date
 		}
 		rows.Close()
 	}
@@ -550,9 +565,22 @@ func (s *session) loadAchievementState(ctx context.Context) {
 	if err == nil {
 		for rows.Next() {
 			var id, counter, date uint32
-			if rows.Scan(&id, &counter, &date) == nil {
-				s.criteriaProgress[id] = &criteriaProgressState{CriteriaID: id, Counter: counter, Date: date}
+			if rows.Scan(&id, &counter, &date) != nil {
+				continue
 			}
+			if validateCriteria {
+				achievementIndex.mu.RLock()
+				criteria, found := achievementIndex.byID[id]
+				achievementIndex.mu.RUnlock()
+				if !found {
+					s.debug("achievement criteria load skipped", "guid", s.playerGUID, "criteria", id, "reason", "unknown criteria")
+					continue
+				}
+				if criteria.StartTimer > 0 && int64(date)+int64(criteria.StartTimer) < time.Now().Unix() {
+					continue
+				}
+			}
+			s.criteriaProgress[id] = &criteriaProgressState{CriteriaID: id, Counter: counter, Date: date}
 		}
 		rows.Close()
 	}
