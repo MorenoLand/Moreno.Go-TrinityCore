@@ -1839,6 +1839,16 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 			state.TaxiPath = taxiPath.String
 		}
 	}
+	if state.LogoutTime > 0 {
+		elapsed := time.Now().Unix() - state.LogoutTime
+		if elapsed > 0 {
+			if uint64(elapsed) < uint64(state.DrunkenState)*9 {
+				state.DrunkenState -= uint16(elapsed / 9)
+			} else {
+				state.DrunkenState = 0
+			}
+		}
+	}
 	var resetTalentsCost, resetTalentsTime int64
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(resettalents_cost, 0), COALESCE(resettalents_time, 0) FROM characters WHERE guid = ?", state.GUID).Scan(&resetTalentsCost, &resetTalentsTime); err == nil {
 		if resetTalentsCost >= 0 {
