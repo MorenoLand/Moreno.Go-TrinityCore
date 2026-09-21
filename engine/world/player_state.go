@@ -394,6 +394,14 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	_ = s.loadPlayerPacketsState(ctx, &state)
 
 	_ = s.loadOptionalPlayerState(ctx, &state)
+	if state.ChosenTitle != 0 {
+		field := state.ChosenTitle / 32
+		bit := uint32(1) << (state.ChosenTitle % 32)
+		if int(field) >= len(state.KnownTitles) || state.KnownTitles[field]&bit == 0 {
+			state.ChosenTitle = 0
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET chosenTitle = 0 WHERE guid = ?", state.GUID)
+		}
+	}
 	_ = s.loadFishingSteps(ctx, &state)
 	applyOfflineRestBonus(&state)
 	_ = s.updateOfflineRealtimeItemDurations(ctx, &state)
