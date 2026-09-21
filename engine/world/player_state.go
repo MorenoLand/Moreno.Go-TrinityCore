@@ -2704,6 +2704,8 @@ type itemUpdateState struct {
 	Duration         uint32
 	SpellCharges     [5]uint32
 	Flags            uint32
+	CreatorGUID      uint64
+	GiftCreatorGUID  uint64
 	Enchantments     [36]uint32
 	PropertySeed     uint32
 	RandomPropertyID uint32
@@ -2752,6 +2754,10 @@ func buildItemCreateBlockForLocationWithState(fullGUID uint64, itemEntry, count 
 	values[7] = uint32(ownerGUID >> 32)
 	values[8] = uint32(containedGUID)
 	values[9] = uint32(containedGUID >> 32)
+	values[10] = uint32(state.CreatorGUID)
+	values[11] = uint32(state.CreatorGUID >> 32)
+	values[12] = uint32(state.GiftCreatorGUID)
+	values[13] = uint32(state.GiftCreatorGUID >> 32)
 	values[14] = count
 	values[15] = state.Duration
 	for index, charge := range state.SpellCharges {
@@ -2873,11 +2879,12 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 		return nil
 	}
 	type inventoryItem struct {
-		bag, slot, itemGUID, itemEntry, count, duration, flags, randomPropertyID, playedTime, durability int64
-		charges, enchantments                                                                            string
+		bag, slot, itemGUID, itemEntry, count, creatorGUID, giftCreatorGUID, duration, flags, randomPropertyID, playedTime, durability int64
+		charges, enchantments                                                                                                          string
 	}
 	fullState := true
 	rows, err := cdb.QueryContext(ctx, `SELECT ci.bag, ci.slot, ci.item, ii.itemEntry, ii.count,
+		COALESCE(ii.creatorGuid, 0), COALESCE(ii.giftCreatorGuid, 0),
 		COALESCE(ii.duration, 0), COALESCE(ii.charges, ''), COALESCE(ii.flags, 0),
 		COALESCE(ii.enchantments, ''), COALESCE(ii.randomPropertyId, 0),
 		COALESCE(ii.playedTime, 0), COALESCE(ii.durability, 0)
@@ -2909,7 +2916,7 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 		var item inventoryItem
 		var scanErr error
 		if fullState {
-			scanErr = rows.Scan(&item.bag, &item.slot, &item.itemGUID, &item.itemEntry, &item.count, &item.duration, &item.charges, &item.flags, &item.enchantments, &item.randomPropertyID, &item.playedTime, &item.durability)
+			scanErr = rows.Scan(&item.bag, &item.slot, &item.itemGUID, &item.itemEntry, &item.count, &item.creatorGUID, &item.giftCreatorGUID, &item.duration, &item.charges, &item.flags, &item.enchantments, &item.randomPropertyID, &item.playedTime, &item.durability)
 		} else {
 			scanErr = rows.Scan(&item.bag, &item.slot, &item.itemGUID, &item.itemEntry, &item.count)
 		}
@@ -3001,6 +3008,12 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 		cSlots, maxD := itemTemplateInfo(itemEntry)
 		itemState := itemUpdateState{MaxDurability: maxD, DurabilityLoaded: fullState}
 		if fullState {
+			if item.creatorGUID > 0 {
+				itemState.CreatorGUID = uint64(item.creatorGUID)
+			}
+			if item.giftCreatorGUID > 0 {
+				itemState.GiftCreatorGUID = uint64(item.giftCreatorGUID)
+			}
 			itemState.Duration = toUint32(item.duration)
 			itemState.Flags = toUint32(item.flags)
 			itemState.RandomPropertyID = uint32(int32(item.randomPropertyID))
