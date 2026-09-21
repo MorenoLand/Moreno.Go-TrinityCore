@@ -116,6 +116,9 @@ func runSelfCheck() error {
 		{"forced-reactions", protocol.OpcodeSMSG_SET_FORCED_REACTIONS, make([]byte, 4), requireForcedReactions},
 		{"resync-runes", protocol.OpcodeSMSG_RESYNC_RUNES, resyncRunesFixture(), requireResyncRunes},
 		{"time-sync", protocol.OpcodeSMSG_TIME_SYNC_REQ, make([]byte, 4), requireTimeSyncRequest},
+		{"aura-update-all", protocol.OpcodeSMSG_AURA_UPDATE_ALL, auraUpdateFixture(), requireAuraUpdateAll},
+		{"item-time-update", protocol.OpcodeSMSG_ITEM_TIME_UPDATE, protocol.BuildItemTimeUpdate(0x4000000000000106, 1234), requirePayloadLengthExact(12)},
+		{"item-enchant-time-update", protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE, protocol.BuildItemEnchantTimeUpdate(0x106, 0x4000000000000106, 2, 1234), requirePayloadLengthExact(24)},
 	}
 	for _, check := range payloadChecks {
 		event := protocoltrace.Event{Direction: protocoltrace.ServerToClient, Opcode: uint32(check.opcode), Payload: base64.StdEncoding.EncodeToString(check.payload)}
@@ -166,6 +169,10 @@ func resyncRunesFixture() []byte {
 		buf.WriteU8(0)
 	}
 	return buf.Bytes()
+}
+
+func auraUpdateFixture() []byte {
+	return protocol.BuildAuraUpdateAll(0x106, []protocol.AuraUpdateRecord{{CasterGUID: 0x106, Slot: 0, SpellID: 836, EffectMask: 0x01, Positive: true, MaxDurationMs: 1000, DurationMs: 500, CasterLevel: 10, StackCount: 2}})
 }
 
 func actionButtonsFixture() []byte {
@@ -518,6 +525,56 @@ func requireTimeSyncRequest(event protocoltrace.Event) error {
 	counter, err := reader.ReadU32()
 	if err != nil || counter != 0 {
 		return fmt.Errorf("initial time-sync counter=%d, want 0", counter)
+	}
+	return nil
+}
+
+func requirePayloadLengthExact(length int) func(protocoltrace.Event) error {
+	return func(event protocoltrace.Event) error {
+		return requirePayloadLength(event, length)
+	}
+}
+
+func requireAuraUpdateAll(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	if _, err := reader.ReadPackedGUID(); err != nil {
+		return fmt.Errorf("aura target GUID is truncated: %w", err)
+	}
+	if _, err := reader.ReadU8(); err != nil {
+		return fmt.Errorf("aura slot is truncated: %w", err)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		return fmt.Errorf("aura spell is truncated: %w", err)
+	}
+	flags, err := reader.ReadU8()
+	if err != nil {
+		return fmt.Errorf("aura flags are truncated: %w", err)
+	}
+	if _, err := reader.ReadU8(); err != nil {
+		return fmt.Errorf("aura caster level is truncated: %w", err)
+	}
+	if _, err := reader.ReadU8(); err != nil {
+		return fmt.Errorf("aura stack count is truncated: %w", err)
+	}
+	if flags&protocol.AuraFlagCaster == 0 {
+		if _, err := reader.ReadPackedGUID(); err != nil {
+			return fmt.Errorf("aura caster GUID is truncated: %w", err)
+		}
+	}
+	if flags&protocol.AuraFlagDuration != 0 {
+		if _, err := reader.ReadU32(); err != nil {
+			return fmt.Errorf("aura max duration is truncated: %w", err)
+		}
+		if _, err := reader.ReadU32(); err != nil {
+			return fmt.Errorf("aura duration is truncated: %w", err)
+		}
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected aura payload bytes=%d", reader.Remaining())
 	}
 	return nil
 }
