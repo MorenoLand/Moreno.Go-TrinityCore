@@ -313,6 +313,25 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	}
 	s.deathExpireTime = deathExpireTime
 	state.Race, state.Class, state.Gender, state.Skin, state.Face, state.HairStyle, state.HairColor, state.FacialStyle, state.Level = uint8(race), uint8(class), uint8(gender), uint8(skin), uint8(face), uint8(hairStyle), uint8(hairColor), uint8(facialStyle), uint8(level)
+	if !validCharacterName(state.Name) {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET at_login = at_login | 1 WHERE guid = ?", guid)
+		return playerState{}, fmt.Errorf("invalid character name for guid %d", guid)
+	}
+	if state.Gender > 2 {
+		return playerState{}, fmt.Errorf("invalid character gender for guid %d", guid)
+	}
+	if valid, _ := s.server.raceDefinition(state.Race); !valid {
+		return playerState{}, fmt.Errorf("invalid character race for guid %d", guid)
+	}
+	if valid, _ := s.server.classDefinition(state.Class); !valid {
+		return playerState{}, fmt.Errorf("invalid character class for guid %d", guid)
+	}
+	var bannedGUID uint64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid FROM character_banned WHERE guid = ? AND active = 1 LIMIT 1", guid).Scan(&bannedGUID); err == nil {
+		return playerState{}, fmt.Errorf("banned character for guid %d", guid)
+	} else if err != nil && !errors.Is(err, sql.ErrNoRows) && !missingTable(err) {
+		return playerState{}, err
+	}
 	if s.server.Data != nil {
 		if valid, known, appearanceErr := s.server.Data.ValidateAppearance(state.Race, state.Class, state.Gender, state.HairStyle, state.HairColor, state.Face, state.FacialStyle, state.Skin); appearanceErr == nil && known && !valid {
 			return playerState{}, fmt.Errorf("invalid character appearance for guid %d", guid)
