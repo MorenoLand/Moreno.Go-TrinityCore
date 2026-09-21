@@ -101,6 +101,8 @@ const (
 	playerBlockPercentage                       = 1024
 	playerDodgePercentage                       = 1025
 	playerParryPercentage                       = 1026
+	playerExpertise                             = 1027
+	playerOffhandExpertise                      = 1028
 	playerCritPercentage                        = 1029
 	playerRangedCritPercentage                  = 1030
 	playerOffhandCritPercentage                 = 1031
@@ -263,6 +265,8 @@ type playerState struct {
 	SpellCrit            [7]float32
 	BlockPercentage      float32
 	DodgePercentage      float32
+	Expertise            uint32
+	OffhandExpertise     uint32
 	Armor                uint32
 	Resistances          [7]uint32
 	Block                uint32
@@ -1778,6 +1782,11 @@ func (s *session) calculatePlayerCritFields(state *playerState, level uint8) {
 			state.BlockPercentage = 0
 		}
 	}
+	expertise := ratingBonus(23)
+	if expertise > 0 {
+		state.Expertise = uint32(expertise)
+		state.OffhandExpertise = state.Expertise
+	}
 }
 
 func restorePlayerHealth(savedHealth, maxHealth uint32, loaded bool, xp uint32, level uint8) uint32 {
@@ -2482,7 +2491,12 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 	values[unitFieldPlayerFlags] = state.PlayerFlags
 	values[unitFieldPlayerFieldBytes] = playerFieldBytesValue(state)
 	values[unitFieldPlayerSelfResSpell] = state.SelfResSpell
-	values[playerShieldBlock] = state.Block
+	shieldBlock := float32(state.Block) + float32(state.Stats[0])*0.5 - 10
+	if shieldBlock > 0 {
+		values[playerShieldBlock] = uint32(shieldBlock)
+	}
+	values[playerExpertise] = state.Expertise
+	values[playerOffhandExpertise] = state.OffhandExpertise
 	for i := 0; i < playerExploredZonesCount; i++ {
 		values[playerExploredZonesStart+i] = state.ExploredZones[i]
 	}
