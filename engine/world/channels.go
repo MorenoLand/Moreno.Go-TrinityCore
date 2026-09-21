@@ -74,7 +74,7 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 	flags := channelFlags(channelID, name)
 	if flags&channelFlagCity != 0 && !s.isCityZone(s.player.Zone) {
 		s.debug("city channel join rejected: outside city zone", "account", s.accountName, "zone", s.player.Zone, "channel", name)
-		return s.sendChannelNotify(channelNotInAreaNotice, name, nil) == nil
+		return true
 	}
 	s.server.channelsMu.Lock()
 	if s.server.channels == nil {
