@@ -13,9 +13,12 @@ import (
 )
 
 const (
-	memberFlagAssistant  uint8 = 0x01
-	memberFlagMainTank   uint8 = 0x02
-	memberFlagMainAssist uint8 = 0x04
+	memberFlagAssistant       uint8 = 0x01
+	memberFlagMainTank        uint8 = 0x02
+	memberFlagMainAssist      uint8 = 0x04
+	groupTypeBattleground     uint8 = 0x01
+	groupTypeRaid             uint8 = 0x02
+	groupTypeBattlegroundRaid uint8 = 0x03
 )
 
 // groupState holds all state for a 5-man or raid group.
@@ -234,7 +237,7 @@ func buildGroupList(srv *Server, g *groupState, forGUID uint64) []byte {
 
 	groupType := g.GroupType
 	if groupType == 0 && g.IsRaid {
-		groupType = 0x02
+		groupType = groupTypeRaid
 	}
 	if g.IsLFG {
 		groupType |= 0x08
@@ -275,7 +278,7 @@ func buildGroupList(srv *Server, g *groupState, forGUID uint64) []byte {
 		if sess := srv.findSessionByGUID(m.GUID); sess != nil && sess.playerLoaded && sess.logoutAt.IsZero() {
 			status = 1
 		}
-		if groupType&0x03 != 0 {
+		if groupType == groupTypeBattleground || groupType == groupTypeBattlegroundRaid {
 			status |= 0x02
 		}
 		b.WriteU8(status)
