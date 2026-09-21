@@ -873,8 +873,14 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 		if proposal.Group != 0 {
 			grp := s.server.getGroup(proposal.Group)
 			if grp != nil {
+				s.server.groupsMu.Lock()
 				grp.IsLFG = true
 				grp.LFGDungeonID = proposal.DungeonID
+				grp.LFGState = LFGStateDungeon
+				s.server.groupsMu.Unlock()
+				if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+					_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(), "REPLACE INTO lfg_data (guid, dungeon, state) VALUES (?, ?, ?)", proposal.Group, proposal.DungeonID, LFGStateDungeon)
+				}
 			}
 		}
 
@@ -1089,13 +1095,24 @@ func (s *session) handleSetLfgComment(ctx context.Context, payload []byte) bool 
 
 // completeLFGDungeon rewards players in an LFG dungeon group and triggers criteria.
 func (s *Server) completeLFGDungeon(groupID uint32, dungeonID uint32) {
-	s.groupsMu.RLock()
+	s.groupsMu.Lock()
 	grp := s.groups[uint64(groupID)]
-	s.groupsMu.RUnlock()
 	if grp == nil || !grp.IsLFG {
+		s.groupsMu.Unlock()
 		return
 	}
-	for _, m := range grp.Members {
+	if grp.LFGState == LFGStateFinishedDungeon {
+		s.groupsMu.Unlock()
+		return
+	}
+	grp.LFGState = LFGStateFinishedDungeon
+	grp.LFGDungeonID = dungeonID
+	members := append([]groupMember(nil), grp.Members...)
+	s.groupsMu.Unlock()
+	if s.CharactersStore != nil && s.CharactersStore.DB != nil {
+		_, _ = s.CharactersStore.DB.ExecContext(context.Background(), "REPLACE INTO lfg_data (guid, dungeon, state) VALUES (?, ?, ?)", groupID, dungeonID, LFGStateFinishedDungeon)
+	}
+	for _, m := range members {
 		if sess := s.findSessionByGUID(m.GUID); sess != nil {
 			sess.updateAchievementCriteria(criteriaTypeLFGCompletion, dungeonID, 1)
 			sess.updateAchievementCriteria(criteriaTypeLFGDungeonReward, 0, 1)
