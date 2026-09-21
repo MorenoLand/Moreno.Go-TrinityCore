@@ -662,7 +662,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	state.Zone = zoneID
 	s.player.Zone = state.Zone
 	s.areaID = areaID
-	if s.applyLoginZoneState(&state, zoneID) {
+	if s.applyLoginZoneState(&state, zoneID, areaID) {
 		s.sendPlayerUpdate()
 	}
 	s.lastZoneUpdate = time.Now()
@@ -823,23 +823,29 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	return true
 }
 
-func (s *session) applyLoginZoneState(state *playerState, zoneID uint32) bool {
+func (s *session) applyLoginZoneState(state *playerState, zoneID, areaID uint32) bool {
 	if s == nil || state == nil || s.server == nil || s.server.Data == nil {
 		return false
 	}
-	area, found, err := s.server.Data.Area(zoneID)
+	zone, found, err := s.server.Data.Area(zoneID)
 	if err != nil || !found {
 		return false
+	}
+	area := zone
+	if areaID != 0 {
+		if detail, areaFound, areaErr := s.server.Data.Area(areaID); areaErr == nil && areaFound {
+			area = detail
+		}
 	}
 	oldFlags, oldPlayerFlags := state.PVPFlags, state.PlayerFlags
 	pvpRealm := s.server.Config.GameType == 1 || s.server.Config.GameType == 4 || s.server.Config.GameType == 6
 	team := teamForRace(state.Race)
 	hostile := false
-	switch area.FactionGroupMask {
+	switch zone.FactionGroupMask {
 	case 2:
-		hostile = team != 0 && (pvpRealm || area.Flags&wotlk.AreaFlagCapital != 0)
+		hostile = team != 0 && (pvpRealm || zone.Flags&wotlk.AreaFlagCapital != 0)
 	case 4:
-		hostile = team != 1 && (pvpRealm || area.Flags&wotlk.AreaFlagCapital != 0)
+		hostile = team != 1 && (pvpRealm || zone.Flags&wotlk.AreaFlagCapital != 0)
 	case 0:
 		inBattleground := false
 		if entry, ok, mapErr := s.server.Data.Map(state.Map); mapErr == nil && ok {
@@ -863,7 +869,7 @@ func (s *session) applyLoginZoneState(state *playerState, zoneID uint32) bool {
 	} else if !hostile {
 		state.PVPFlags &^= 0x01
 	}
-	if area.Flags&wotlk.AreaFlagCapital != 0 && (!hostile || sanctuary) {
+	if zone.Flags&wotlk.AreaFlagCapital != 0 && (!hostile || sanctuary) {
 		state.PlayerFlags |= playerFlagResting
 	}
 	return state.PVPFlags != oldFlags || state.PlayerFlags != oldPlayerFlags
