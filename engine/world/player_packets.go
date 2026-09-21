@@ -90,28 +90,25 @@ func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race, clas
 		return defaults, nil
 	}
 	result := make([]learnedSpell, 0)
-	futureSpells := make([]uint32, 0)
 	for rows.Next() {
 		var spell, active, disabled int64
 		if err := rows.Scan(&spell, &active, &disabled); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
+		if spell <= 0 || spell > int64(^uint32(0)) {
+			continue
+		}
 		spellID := uint32(spell)
-		isActive := active != 0
-		if isActive && !s.spellFitsClassRace(spellID, race, class) {
-			isActive = false
+		if s.server.Data != nil {
+			if _, found, spellErr := s.server.Data.Spell(spellID); spellErr != nil || !found {
+				s.debug("unknown persisted spell skipped", "guid", guid, "spell", spellID)
+				continue
+			}
 		}
-		if isActive && !s.spellAvailableAtLevel(spellID, level) {
-			isActive = false
-			futureSpells = append(futureSpells, spellID)
-		}
-		result = append(result, learnedSpell{ID: spellID, Active: isActive, Disabled: disabled != 0})
+		result = append(result, learnedSpell{ID: spellID, Active: active != 0, Disabled: disabled != 0})
 	}
 	_ = rows.Close()
-	for _, spellID := range futureSpells {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_spell SET active = 0 WHERE guid = ? AND spell = ? AND active <> 0", guid, spellID)
-	}
 
 	for _, def := range defaults {
 		found := false
@@ -136,6 +133,11 @@ func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race, clas
 				var customSpell int64
 				if err := crows.Scan(&customSpell); err == nil && customSpell > 0 {
 					id := uint32(customSpell)
+					if s.server.Data != nil {
+						if _, found, spellErr := s.server.Data.Spell(id); spellErr != nil || !found {
+							continue
+						}
+					}
 					found := false
 					for _, sp := range result {
 						if sp.ID == id {
