@@ -318,6 +318,9 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 		}
 	}
 	state.PlayerFlags, state.Map, state.ExtraFlags, state.AtLogin, state.Zone, state.Cinematic = uint32(playerFlags), uint32(mapID), uint32(extraFlags), uint32(atLogin), uint32(zone), uint32(cinematic)
+	if state.AtLogin&uint32(atLoginRename) != 0 {
+		return playerState{}, fmt.Errorf("character %d requires a rename", guid)
+	}
 	if equipment.Valid {
 		state.Equipment = equipment.String
 	}
