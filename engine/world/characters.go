@@ -740,12 +740,16 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	// Spawn active pet if one was active at logout (slot 0)
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
-		var petID, entry, modelID, level, reactState, curHealth, curMana int64
+		var petID, entry, modelID, level, petType, reactState, curHealth, curMana int64
 		var petName string
 		if err := cdb.QueryRowContext(ctx,
-			"SELECT id, entry, modelid, level, name, curhealth, curmana, COALESCE(Reactstate, 1) FROM character_pet WHERE owner = ? AND slot = 0",
-			s.playerGUID).Scan(&petID, &entry, &modelID, &level, &petName, &curHealth, &curMana, &reactState); err == nil && curHealth > 0 {
-			maxHP, _, maxMP, _ := s.getPetStats(ctx, uint32(entry), uint32(level))
+			"SELECT id, entry, modelid, level, name, curhealth, curmana, COALESCE(PetType, 0), COALESCE(Reactstate, 1) FROM character_pet WHERE owner = ? AND slot = 0",
+			s.playerGUID).Scan(&petID, &entry, &modelID, &level, &petName, &curHealth, &curMana, &petType, &reactState); err == nil && curHealth > 0 {
+			petLevel := uint32(level)
+			if petType == 0 && state.Level > 0 {
+				petLevel = uint32(state.Level)
+			}
+			maxHP, _, maxMP, _ := s.getPetStats(ctx, uint32(entry), petLevel)
 			if maxHP == 0 {
 				maxHP = uint32(curHealth)
 			}
@@ -758,7 +762,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			if curMana > int64(maxMP) {
 				curMana = int64(maxMP)
 			}
-			s.spawnPet(ctx, uint32(petID), uint32(entry), petName, uint32(level), uint32(modelID), uint32(curHealth), maxHP, uint32(curMana), maxMP, uint8(reactState))
+			s.spawnPet(ctx, uint32(petID), uint32(entry), petName, petLevel, uint32(modelID), uint32(curHealth), maxHP, uint32(curMana), maxMP, uint8(reactState))
 			_ = s.sendTalentsInfo(true)
 		}
 	}
