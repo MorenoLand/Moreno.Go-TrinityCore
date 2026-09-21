@@ -441,9 +441,9 @@ func (s *session) guildChatSpeakAllowed(officer bool) bool {
 		WHERE gm.guildid = ? AND gm.guid = ? LIMIT 1`, s.player.GuildID, s.playerGUID).Scan(&rights); err != nil {
 		return false
 	}
-	required := int64(0x42)
+	required := int64(0x02)
 	if officer {
-		required = 0x48
+		required = 0x08
 	}
 	return rights&required == required
 }
@@ -458,9 +458,9 @@ func (s *Server) guildChatListenAllowed(target *session, officer bool) bool {
 		WHERE gm.guildid = ? AND gm.guid = ? LIMIT 1`, target.player.GuildID, target.playerGUID).Scan(&rights); err != nil {
 		return false
 	}
-	required := int64(0x41)
+	required := int64(0x01)
 	if officer {
-		required = 0x44
+		required = 0x04
 	}
 	return rights&required == required
 }
