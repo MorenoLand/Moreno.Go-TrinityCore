@@ -194,3 +194,5 @@ Persisted character-spell rows now preserve the source active/disabled state and
 Persisted glyphs now require matching `GlyphProperties.dbc` and `GlyphSlot.dbc` slot types before their aura is applied, matching `_LoadGlyphAuras` (`14c27bc`).
 
 Faction login state now keeps the persisted standing offset separate from DBC base standing, matching `ReputationMgr::Initialize` and `LoadFromDB` (`426e6fd`).
+
+Login and runtime action-bar toggles now serialize `PLAYER_FIELD_BYTES` byte 2, matching `HandleSetActionBarToggles` and `Player::LoadFromDB` (`31785e3`).
