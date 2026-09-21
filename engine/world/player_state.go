@@ -426,6 +426,9 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	if s.removeZoneLimitedItemsFromState(ctx, &state) {
 		state.Equipment = s.loadEquipmentCache(ctx, state.GUID, "")
 	}
+	if s.removeInvalidInventoryItems(ctx, &state) {
+		state.Equipment = s.loadEquipmentCache(ctx, state.GUID, "")
+	}
 	s.loadInventorySlots(ctx, &state)
 	restoreLoadedDeathState(&state)
 	s.restoreLoadedCorpseState(ctx, &state)
@@ -760,6 +763,41 @@ func (s *session) removeZoneLimitedItemsFromState(ctx context.Context, state *pl
 	for _, item := range items {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", state.GUID, item)
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", item)
+	}
+	return true
+}
+
+func (s *session) removeInvalidInventoryItems(ctx context.Context, state *playerState) bool {
+	if s == nil || state == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	cdb, wdb := s.server.CharactersStore.DB, s.server.WorldStore.DB
+	rows, err := cdb.QueryContext(ctx, `SELECT ci.item, ii.itemEntry, ii.count
+		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = ?`, state.GUID)
+	if err != nil {
+		return false
+	}
+	var invalid []uint64
+	for rows.Next() {
+		var itemGUID, itemEntry, count int64
+		if rows.Scan(&itemGUID, &itemEntry, &count) != nil || itemGUID <= 0 || itemEntry <= 0 || count <= 0 {
+			if itemGUID > 0 {
+				invalid = append(invalid, uint64(itemGUID))
+			}
+			continue
+		}
+		var exists int64
+		if wdb.QueryRowContext(ctx, "SELECT 1 FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&exists) != nil {
+			invalid = append(invalid, uint64(itemGUID))
+		}
+	}
+	rows.Close()
+	if len(invalid) == 0 {
+		return false
+	}
+	for _, itemGUID := range invalid {
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", state.GUID, itemGUID)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
 	}
 	return true
 }
