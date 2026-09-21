@@ -169,6 +169,8 @@ Saved taxi-mask words are now intersected with the DBC-derived valid taxi-node m
 
 `PLAYER_CHARACTER_POINTS2` now carries the configurable free primary-profession cap (default 2) instead of the spent-talent count, matching `InitPrimaryProfessions` (`f407b3d`).
 
+Pet aura loading now preserves the complete persisted effect and resilience metadata with the source reduced-schema fallback (`44ff067`).
+
 Login now reconstructs SkillLineAbility spells from loaded skill values with source acquire-method, race/class, threshold, and supersession rules before initial-spell serialization (`a3e3a2f`).
 
 Level-scaled skills now apply the configured `AlwaysMaxSkillForLevel` behavior during login, matching `Player::UpdateSkillsForLevel` (`0ee6135`).
