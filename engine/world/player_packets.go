@@ -99,6 +99,9 @@ func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race, clas
 		}
 		spellID := uint32(spell)
 		isActive := active != 0
+		if isActive && !s.spellFitsClassRace(spellID, race, class) {
+			isActive = false
+		}
 		if isActive && !s.spellAvailableAtLevel(spellID, level) {
 			isActive = false
 			futureSpells = append(futureSpells, spellID)
@@ -149,6 +152,26 @@ func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race, clas
 		}
 	}
 	return result, nil
+}
+
+func (s *session) spellFitsClassRace(spellID uint32, race, class uint8) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return true
+	}
+	abilities, found, err := s.server.Data.SkillLineAbilities(spellID)
+	if err != nil || !found {
+		return true
+	}
+	raceMask, classMask := playerCreateMask(race), playerCreateMask(class)
+	for _, ability := range abilities {
+		if ability.RaceMask != 0 && ability.RaceMask&raceMask == 0 || ability.ClassMask != 0 && ability.ClassMask&classMask == 0 {
+			continue
+		}
+		if _, skillFound, skillErr := s.server.Data.SkillRaceClassInfo(ability.SkillLine, race, class); skillErr == nil && skillFound {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *session) spellAvailableAtLevel(spellID uint32, level uint8) bool {
