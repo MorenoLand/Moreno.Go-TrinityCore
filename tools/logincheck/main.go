@@ -66,11 +66,22 @@ func runSelfCheck() error {
 	if err := rejectPreVerifyAchievementPackets(good, 0); err != nil {
 		return fmt.Errorf("valid verify-world ordering was rejected: %w", err)
 	}
+	validMovement := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_FEATHER_FALL)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_SET_HOVER)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_FORCE_MOVE_ROOT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MULTIPLE_MOVES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL)}}}
+	if err := checkLoginMovementOrder(validMovement, 0); err != nil {
+		return fmt.Errorf("valid movement ordering was rejected: %w", err)
+	}
+	invalidMovement := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK)}}}
+	if err := checkLoginMovementOrder(invalidMovement, 0); err == nil {
+		return fmt.Errorf("out-of-order movement packets were not rejected")
+	}
 	return nil
 }
 
 func checkLogin(trace protocoltrace.Trace, start int) error {
 	if err := rejectPreVerifyAchievementPackets(trace, start); err != nil {
+		return err
+	}
+	if err := checkLoginMovementOrder(trace, start); err != nil {
 		return err
 	}
 	stages := []loginStage{
@@ -139,6 +150,43 @@ func rejectPreVerifyAchievementPackets(trace protocoltrace.Trace, start int) err
 		}
 	}
 	return fmt.Errorf("missing SMSG_LOGIN_VERIFY_WORLD")
+}
+
+func checkLoginMovementOrder(trace protocoltrace.Trace, start int) error {
+	order := map[uint32]int{
+		uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK):           0,
+		uint32(protocol.OpcodeSMSG_MOVE_FEATHER_FALL):         1,
+		uint32(protocol.OpcodeSMSG_MOVE_SET_HOVER):            2,
+		uint32(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY):          3,
+		uint32(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE): 4,
+		uint32(protocol.OpcodeSMSG_FORCE_MOVE_ROOT):           5,
+		uint32(protocol.OpcodeSMSG_MULTIPLE_MOVES):            6,
+		uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL):           7,
+	}
+	last := -1
+	seen := make(map[int]struct{}, len(order))
+	for index := start + 1; index < len(trace.Events); index++ {
+		event := trace.Events[index]
+		if event.Direction == protocoltrace.ClientToServer && (event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) || event.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST)) {
+			break
+		}
+		if event.Direction != protocoltrace.ServerToClient {
+			continue
+		}
+		stage, ok := order[event.Opcode]
+		if !ok {
+			continue
+		}
+		if _, alreadySeen := seen[stage]; alreadySeen {
+			continue
+		}
+		if stage < last {
+			return fmt.Errorf("movement packet %s arrived after a later movement stage", opcodeName(event.Opcode))
+		}
+		seen[stage] = struct{}{}
+		last = stage
+	}
+	return nil
 }
 
 func opcodeName(opcode uint32) string {

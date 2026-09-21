@@ -680,13 +680,16 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.sendLoginEffect(); err != nil {
 		return false
 	}
+	if err := s.sendLoginMovementDirectStates(); err != nil {
+		return false
+	}
 	if err := s.sendLoginFlightState(); err != nil {
 		return false
 	}
 	if err := s.sendLoginFlightSpeed(); err != nil {
 		return false
 	}
-	if err := s.sendLoginMovementStates(); err != nil {
+	if err := s.sendLoginMovementStunAndCompoundStates(); err != nil {
 		return false
 	}
 	s.sendLoadedAuras()
@@ -881,46 +884,16 @@ func (s *session) applyLoginZoneState(state *playerState, zoneID, areaID uint32)
 	return state.PVPFlags != oldFlags || state.PlayerFlags != oldPlayerFlags
 }
 
-func (s *session) sendLoginMovementStates() error {
+func (s *session) sendLoginMovementDirectStates() error {
 	if s == nil || s.player == nil {
 		return nil
 	}
 	const (
-		auraRoot        uint32 = 26
-		auraStun        uint32 = 12
 		auraWaterWalk   uint32 = 104
 		auraFeatherFall uint32 = 105
 		auraHover       uint32 = 106
 	)
 	auras := s.loadedAuras()
-	state := protocol.NewBuffer(64)
-	rooted := false
-	stunned := false
-	for _, aura := range auras {
-		if aura == nil {
-			continue
-		}
-		if aura.AuraType == auraRoot {
-			rooted = true
-		}
-		if aura.AuraType == auraStun {
-			stunned = true
-		}
-	}
-	if stunned {
-		packet := protocol.NewBuffer(packedGUIDSize(s.playerGUID) + 4)
-		packet.WritePackedGUID(s.playerGUID)
-		packet.WriteU32(0)
-		if err := s.write(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT), packet.Bytes(), true); err != nil {
-			return err
-		}
-	}
-	if rooted {
-		state.WriteU8(uint8(2 + packedGUIDSize(s.playerGUID) + 4))
-		state.WriteU16(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT))
-		state.WritePackedGUID(s.playerGUID)
-		state.WriteU32(0)
-	}
 	for _, auraType := range []uint32{auraWaterWalk, auraFeatherFall, auraHover} {
 		var opcode protocol.Opcode
 		var broadcastOpcode protocol.Opcode
@@ -950,6 +923,61 @@ func (s *session) sendLoginMovementStates() error {
 				return err
 			}
 			s.broadcastLoginMovementState(broadcastOpcode, movementFlags)
+			break
+		}
+	}
+	return nil
+}
+
+func (s *session) sendLoginMovementStunAndCompoundStates() error {
+	if s == nil || s.player == nil {
+		return nil
+	}
+	const (
+		auraRoot  uint32 = 26
+		auraStun  uint32 = 12
+		auraWater uint32 = 104
+		auraFall  uint32 = 105
+		auraHover uint32 = 106
+	)
+	auras := s.loadedAuras()
+	rooted, stunned := false, false
+	for _, aura := range auras {
+		if aura == nil {
+			continue
+		}
+		rooted = rooted || aura.AuraType == auraRoot
+		stunned = stunned || aura.AuraType == auraStun
+	}
+	if stunned {
+		packet := protocol.NewBuffer(packedGUIDSize(s.playerGUID) + 4)
+		packet.WritePackedGUID(s.playerGUID)
+		packet.WriteU32(0)
+		if err := s.write(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT), packet.Bytes(), true); err != nil {
+			return err
+		}
+	}
+	state := protocol.NewBuffer(64)
+	if rooted {
+		state.WriteU8(uint8(2 + packedGUIDSize(s.playerGUID) + 4))
+		state.WriteU16(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT))
+		state.WritePackedGUID(s.playerGUID)
+		state.WriteU32(0)
+	}
+	for _, auraType := range []uint32{auraFall, auraWater, auraHover} {
+		var opcode protocol.Opcode
+		switch auraType {
+		case auraFall:
+			opcode = protocol.OpcodeSMSG_MOVE_FEATHER_FALL
+		case auraWater:
+			opcode = protocol.OpcodeSMSG_MOVE_WATER_WALK
+		case auraHover:
+			opcode = protocol.OpcodeSMSG_MOVE_SET_HOVER
+		}
+		for _, aura := range auras {
+			if aura == nil || aura.AuraType != auraType {
+				continue
+			}
 			state.WriteU8(uint8(2 + packedGUIDSize(s.playerGUID) + 4))
 			state.WriteU16(uint16(opcode))
 			state.WritePackedGUID(s.playerGUID)
