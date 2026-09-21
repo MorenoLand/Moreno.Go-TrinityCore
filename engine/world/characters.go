@@ -662,7 +662,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	state.Zone = zoneID
 	s.player.Zone = state.Zone
 	s.areaID = areaID
-	if s.applyLoginZoneState(&state, zoneID, areaID) {
+	if s.applyZoneState(&state, zoneID, areaID) {
 		s.sendPlayerUpdate()
 	}
 	s.lastZoneUpdate = time.Now()
@@ -832,7 +832,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	return true
 }
 
-func (s *session) applyLoginZoneState(state *playerState, zoneID, areaID uint32) bool {
+func (s *session) applyZoneState(state *playerState, zoneID, areaID uint32) bool {
 	if s == nil || state == nil || s.server == nil || s.server.Data == nil {
 		return false
 	}

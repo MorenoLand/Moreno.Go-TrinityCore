@@ -107,12 +107,16 @@ func (s *session) updateZoneAndArea(ctx context.Context, force bool) {
 	if zoneID == 0 {
 		s.player.Zone = oldZone
 	}
+	stateChanged := false
+	if oldZone != s.player.Zone || oldArea != areaID {
+		stateChanged = s.applyZoneState(s.player, s.player.Zone, areaID)
+	}
 	if oldZone != s.player.Zone {
 		s.updateLocalChannels(s.player.Zone)
 		s.exploreZone(ctx, s.player.Zone)
 		_ = s.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), buildInitWorldStates(*s.player, areaID, s.server.Config.ArenaSeasonID, s.server.Config.ArenaSeasonInProgress), true)
 	}
-	if oldArea != areaID && oldZone == s.player.Zone {
+	if stateChanged || (oldArea != areaID && oldZone == s.player.Zone) {
 		s.sendPlayerUpdate()
 	}
 }
