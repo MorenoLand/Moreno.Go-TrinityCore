@@ -107,6 +107,13 @@ func (s *session) handleCharEnum(ctx context.Context) bool {
 		if character.Race == 0 || character.Class == 0 || character.Gender > 2 {
 			continue
 		}
+		if s.server.Data != nil {
+			if valid, known, appearanceErr := s.server.Data.ValidateAppearance(character.Race, character.Class, character.Gender, character.HairStyle, character.HairColor, character.Face, character.FacialStyle, character.Skin); appearanceErr == nil && known && !valid {
+				character.Skin, character.Face, character.HairStyle, character.HairColor, character.FacialStyle = 0, 0, 0, 0, 0
+				character.AtLogin |= uint16(atLoginCustomize)
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET skin = 0, face = 0, hairStyle = 0, hairColor = 0, facialStyle = 0, at_login = at_login | 8 WHERE guid = ? AND account = ?", character.GUID, s.accountID)
+			}
+		}
 		characters = append(characters, character)
 	}
 	if err := rows.Err(); err != nil {

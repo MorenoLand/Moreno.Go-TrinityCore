@@ -318,6 +318,55 @@ func (s *Store) Race(id uint32) (Race, bool, error) {
 	return Race{ID: id, Flags: flags, FactionID: factionID, MaleDisplayID: maleDisplayID, FemaleDisplayID: femaleDisplayID, CinematicSequence: cinematic, Alliance: alliance, RequiredExpansion: requiredExpansion}, true, nil
 }
 
+func (s *Store) ValidateAppearance(race, class, gender, hairID, hairColor, faceID, facialHair, skinColor uint8) (bool, bool, error) {
+	sections, err := s.File("CharSections")
+	if err != nil {
+		return true, false, err
+	}
+	facial, err := s.File("CharacterFacialHairStyles")
+	if err != nil {
+		return true, false, err
+	}
+	sectionValid := func(sectionType, variation, color uint32) bool {
+		for index := 0; index < sections.Records(); index++ {
+			record, recordErr := sections.Record(index)
+			if recordErr != nil {
+				continue
+			}
+			r, rErr := record.Uint32(1)
+			g, gErr := record.Uint32(2)
+			base, baseErr := record.Uint32(3)
+			flags, flagsErr := record.Uint32(7)
+			variationIndex, variationErr := record.Uint32(8)
+			colorIndex, colorErr := record.Uint32(9)
+			if rErr == nil && gErr == nil && baseErr == nil && flagsErr == nil && variationErr == nil && colorErr == nil && r == uint32(race) && g == uint32(gender) && base == sectionType && variationIndex == variation && colorIndex == color {
+				return class == 6 || flags&0x04 == 0
+			}
+		}
+		return false
+	}
+	if !sectionValid(0, 0, uint32(skinColor)) || !sectionValid(1, uint32(faceID), uint32(skinColor)) || !sectionValid(3, uint32(hairID), uint32(hairColor)) {
+		return false, true, nil
+	}
+	excludeFacial := race == 6 || race == 11 || (gender == 1 && race != 4 && race != 5)
+	if !excludeFacial && !sectionValid(2, uint32(facialHair), uint32(hairColor)) {
+		return false, true, nil
+	}
+	for index := 0; index < facial.Records(); index++ {
+		record, recordErr := facial.Record(index)
+		if recordErr != nil {
+			continue
+		}
+		r, rErr := record.Uint32(0)
+		g, gErr := record.Uint32(1)
+		v, vErr := record.Uint32(2)
+		if rErr == nil && gErr == nil && vErr == nil && r == uint32(race) && g == uint32(gender) && v == uint32(facialHair) {
+			return true, true, nil
+		}
+	}
+	return false, true, nil
+}
+
 func (s *Store) Class(id uint32) (Class, bool, error) {
 	file, err := s.File("ChrClasses")
 	if err != nil {

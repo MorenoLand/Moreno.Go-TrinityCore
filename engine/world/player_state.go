@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 	"strconv"
@@ -302,6 +303,11 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	}
 	s.deathExpireTime = deathExpireTime
 	state.Race, state.Class, state.Gender, state.Skin, state.Face, state.HairStyle, state.HairColor, state.FacialStyle, state.Level = uint8(race), uint8(class), uint8(gender), uint8(skin), uint8(face), uint8(hairStyle), uint8(hairColor), uint8(facialStyle), uint8(level)
+	if s.server.Data != nil {
+		if valid, known, appearanceErr := s.server.Data.ValidateAppearance(state.Race, state.Class, state.Gender, state.HairStyle, state.HairColor, state.Face, state.FacialStyle, state.Skin); appearanceErr == nil && known && !valid {
+			return playerState{}, fmt.Errorf("invalid character appearance for guid %d", guid)
+		}
+	}
 	state.PlayerFlags, state.Map, state.ExtraFlags, state.AtLogin, state.Zone, state.Cinematic = uint32(playerFlags), uint32(mapID), uint32(extraFlags), uint32(atLogin), uint32(zone), uint32(cinematic)
 	if equipment.Valid {
 		state.Equipment = equipment.String
