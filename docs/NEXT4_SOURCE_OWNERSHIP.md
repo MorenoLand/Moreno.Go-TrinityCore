@@ -192,3 +192,5 @@ Persisted action buttons now reject unknown spells, missing item templates, and 
 Persisted character-spell rows now preserve the source active/disabled state and only reject unknown DBC spells; class/race and level gates remain in `LearnSkillRewardedSpells`, not `_LoadSpells` (`22eb90b`).
 
 Persisted glyphs now require matching `GlyphProperties.dbc` and `GlyphSlot.dbc` slot types before their aura is applied, matching `_LoadGlyphAuras` (`14c27bc`).
+
+Faction login state now keeps the persisted standing offset separate from DBC base standing, matching `ReputationMgr::Initialize` and `LoadFromDB` (`426e6fd`).
