@@ -673,7 +673,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.areaID = areaID
 	auraChanged := s.updateAreaDependentAuras(ctx, zoneID, areaID)
 	itemChanged := s.autoUnequipOffhandIfNeeded(ctx)
-	if s.applyZoneState(&state, zoneID, areaID) || auraChanged || itemChanged {
+	if s.applyZoneState(ctx, &state, zoneID, areaID) || auraChanged || itemChanged {
 		s.sendPlayerUpdate()
 	}
 	s.server.ensureZoneWeather(ctx, zoneID, s)
@@ -844,7 +844,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	return true
 }
 
-func (s *session) applyZoneState(state *playerState, zoneID, areaID uint32) bool {
+func (s *session) applyZoneState(ctx context.Context, state *playerState, zoneID, areaID uint32) bool {
 	if s == nil || state == nil || s.server == nil || s.server.Data == nil {
 		return false
 	}
@@ -861,7 +861,7 @@ func (s *session) applyZoneState(state *playerState, zoneID, areaID uint32) bool
 	oldFlags, oldPlayerFlags := state.PVPFlags, state.PlayerFlags
 	pvpRealm := s.server.Config.GameType == 1 || s.server.Config.GameType == 4 || s.server.Config.GameType == 6
 	team := teamForRace(state.Race)
-	hostile := false
+	hostile := s.hasPvPForcingQuest(ctx)
 	switch zone.FactionGroupMask {
 	case 2:
 		hostile = team != 0 && (pvpRealm || zone.Flags&wotlk.AreaFlagCapital != 0)
@@ -904,6 +904,15 @@ func (s *session) applyZoneState(state *playerState, zoneID, areaID uint32) bool
 		state.PlayerFlags |= playerFlagResting
 	}
 	return state.PVPFlags != oldFlags || state.PlayerFlags != oldPlayerFlags
+}
+
+func (s *session) hasPvPForcingQuest(ctx context.Context) bool {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return false
+	}
+	var found int64
+	err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT 1 FROM character_queststatus AS cqs JOIN quest_template AS qt ON qt.ID = cqs.quest WHERE cqs.guid = ? AND cqs.status IN (1, 3) AND (qt.Flags & 0x00002000) <> 0 LIMIT 1`, s.playerGUID).Scan(&found)
+	return err == nil && found != 0
 }
 
 func (s *session) sendLoginMovementDirectStates() error {
