@@ -2919,6 +2919,22 @@ func (s *Server) buildNearbyPlayerUpdates(observer *session) (*protocol.Packet, 
 	return packet, count
 }
 
+func (s *session) markVisiblePlayers(guids []uint64) {
+	if s == nil || len(guids) == 0 {
+		return
+	}
+	s.visiblePlayersMu.Lock()
+	if s.visiblePlayers == nil {
+		s.visiblePlayers = make(map[uint64]struct{})
+	}
+	for _, guid := range guids {
+		if guid != 0 && guid != s.playerGUID {
+			s.visiblePlayers[guid] = struct{}{}
+		}
+	}
+	s.visiblePlayersMu.Unlock()
+}
+
 func (s *Server) broadcastPlayerCreate(state playerState, source *session) {
 	if s == nil || source == nil || s.Config.VisibilityDistanceContinents <= 0 {
 		return

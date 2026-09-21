@@ -356,6 +356,44 @@ func (s *Server) buildAttachedTransportPassengerUpdates(ctx context.Context, sta
 	return updates.BuildPacket(0)
 }
 
+func (s *Server) buildAttachedTransportPlayerUpdates(state playerState, exclude uint64) (*protocol.Packet, []uint64, error) {
+	transport, found := s.attachedTransportSnapshot(state)
+	if !found {
+		return nil, nil, nil
+	}
+	rawGUID := gameObjectGUID(transport.Spawn.GUID, transport.Spawn.Entry)
+	players := make([]playerState, 0)
+	s.sessionsMu.RLock()
+	for sess := range s.sessions {
+		if sess == nil || !sess.playerLoaded || sess.player == nil || sess.player.GUID == exclude {
+			continue
+		}
+		if sess.player.TransportGUID != rawGUID && sess.player.TransportGUID != uint64(transport.Spawn.GUID) {
+			continue
+		}
+		players = append(players, *sess.player)
+	}
+	s.sessionsMu.RUnlock()
+	sort.Slice(players, func(i, j int) bool { return players[i].GUID < players[j].GUID })
+	packets := make([]*protocol.Packet, 0, len(players))
+	guids := make([]uint64, 0, len(players))
+	for _, passenger := range players {
+		packet, err := s.buildPlayerUpdateForTarget(passenger, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		if packet != nil {
+			packets = append(packets, packet)
+			guids = append(guids, passenger.GUID)
+		}
+	}
+	if len(packets) == 0 {
+		return nil, nil, nil
+	}
+	packet, err := protocol.MergeUpdatePackets(packets...)
+	return packet, guids, err
+}
+
 func (s *Server) buildMapTransportUpdates(state playerState, exclude uint64) (*protocol.Packet, error) {
 	if s == nil {
 		return nil, nil

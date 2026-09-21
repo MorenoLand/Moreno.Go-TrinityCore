@@ -563,6 +563,10 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err != nil {
 		return false
 	}
+	attachedTransportPlayers, attachedTransportPlayerGUIDs, err := s.server.buildAttachedTransportPlayerUpdates(state, s.playerGUID)
+	if err != nil {
+		return false
+	}
 	s.captureUpdatePackets = true
 	s.capturedUpdatePackets = nil
 	inventoryErr := s.sendInventoryItemsBeforeMap(ctx)
@@ -582,6 +586,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if attachedTransportPassengers != nil {
 		initialUpdatePackets = append(initialUpdatePackets, attachedTransportPassengers)
 	}
+	if attachedTransportPlayers != nil {
+		initialUpdatePackets = append(initialUpdatePackets, attachedTransportPlayers)
+	}
 	initialUpdate, err := protocol.MergeUpdatePackets(initialUpdatePackets...)
 	if err != nil || initialUpdate == nil {
 		return false
@@ -589,6 +596,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(initialUpdate.Opcode, initialUpdate.Payload.Bytes(), true); err != nil {
 		return false
 	}
+	s.markVisiblePlayers(attachedTransportPlayerGUIDs)
 	s.server.broadcastPlayerCreate(state, s)
 	mapTransportUpdates, err := s.server.buildMapTransportUpdates(state, state.TransportGUID)
 	if err != nil {
@@ -972,6 +980,10 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
+	attachedPlayers, attachedPlayerGUIDs, err := s.server.buildAttachedTransportPlayerUpdates(state, s.playerGUID)
+	if err != nil {
+		return false
+	}
 	playerUpdate, err := s.server.buildPlayerUpdate(state)
 	if err != nil || playerUpdate == nil {
 		return false
@@ -995,6 +1007,9 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	if attachedPassengers != nil {
 		initialPackets = append(initialPackets, attachedPassengers)
 	}
+	if attachedPlayers != nil {
+		initialPackets = append(initialPackets, attachedPlayers)
+	}
 	initialUpdate, err := protocol.MergeUpdatePackets(initialPackets...)
 	if err != nil || initialUpdate == nil {
 		return false
@@ -1002,6 +1017,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	if err := s.write(initialUpdate.Opcode, initialUpdate.Payload.Bytes(), true); err != nil {
 		return false
 	}
+	s.markVisiblePlayers(attachedPlayerGUIDs)
 	s.server.broadcastPlayerCreate(state, s)
 	if mapTransports, err := s.server.buildMapTransportUpdates(state, state.TransportGUID); err != nil {
 		return false
