@@ -53,6 +53,8 @@ Login replay now validates payload layouts and exact lengths for world verificat
 
 Login replay now validates fixed lengths for dance moves, feature status, and bind-point packets against `MiscPackets.cpp` (`47bdb7d`).
 
+The login fixture suite now exercises exact payload contracts for world verification, instance difficulty, initial and unlearned spells, action buttons, faction initialization, dance moves, feature status, bind point, and login time speed (`774de93`).
+
 Corpse repopulation now occurs after the loading flag clears and ON_LOGIN criteria update, immediately before the login hook, matching `CharacterHandler.cpp` (`e083f6a`).
 
 The self-player update now serializes the computed shield-block value into `PLAYER_SHIELD_BLOCK`, matching `Player::UpdateAllStats` field delivery (`43c5918`).
