@@ -775,32 +775,97 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 		return false
 	}
 	cdb, wdb := s.server.CharactersStore.DB, s.server.WorldStore.DB
-	rows, err := cdb.QueryContext(ctx, `SELECT ci.item, ii.itemEntry, ii.count
-		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = ?`, state.GUID)
+	rows, err := cdb.QueryContext(ctx, `SELECT ci.bag, ci.slot, ci.item, ii.itemEntry, ii.count
+		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = ? ORDER BY ci.bag, ci.slot, ci.item`, state.GUID)
 	if err != nil {
 		return false
 	}
-	var invalid []uint64
+	type inventoryRecord struct {
+		bag, slot, item, entry, count int64
+		containerSlots                int64
+		isBag                         bool
+	}
+	type invalidInventoryRow struct {
+		record         inventoryRecord
+		deleteInstance bool
+	}
+	var records []inventoryRecord
+	var invalid []invalidInventoryRow
 	for rows.Next() {
-		var itemGUID, itemEntry, count int64
-		if rows.Scan(&itemGUID, &itemEntry, &count) != nil || itemGUID <= 0 || itemEntry <= 0 || count <= 0 {
-			if itemGUID > 0 {
-				invalid = append(invalid, uint64(itemGUID))
-			}
+		var record inventoryRecord
+		if rows.Scan(&record.bag, &record.slot, &record.item, &record.entry, &record.count) != nil {
 			continue
 		}
-		var exists int64
-		if wdb.QueryRowContext(ctx, "SELECT 1 FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&exists) != nil {
-			invalid = append(invalid, uint64(itemGUID))
+		if record.item <= 0 || record.entry <= 0 || record.count <= 0 {
+			invalid = append(invalid, invalidInventoryRow{record: record, deleteInstance: record.item > 0})
+			continue
 		}
+		var inventoryType int64
+		if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(ContainerSlots, 0), COALESCE(InventoryType, 0) FROM item_template WHERE entry = ?", record.entry).Scan(&record.containerSlots, &inventoryType); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				invalid = append(invalid, invalidInventoryRow{record: record, deleteInstance: true})
+				continue
+			}
+			if isMissingColumn(err) || strings.Contains(strings.ToLower(err.Error()), "no such table") {
+				rows.Close()
+				return false
+			}
+			rows.Close()
+			return false
+		}
+		record.isBag = inventoryType == itemInventoryTypeBag
+		records = append(records, record)
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return false
+	}
+	seenPositions := make(map[struct{ bag, slot int64 }]struct{})
+	seenItems := make(map[int64]struct{})
+	rootBags := make(map[int64]int64)
+	for _, record := range records {
+		position := struct{ bag, slot int64 }{record.bag, record.slot}
+		if _, found := seenPositions[position]; found {
+			invalid = append(invalid, invalidInventoryRow{record: record})
+			continue
+		}
+		if _, found := seenItems[record.item]; found {
+			invalid = append(invalid, invalidInventoryRow{record: record})
+			continue
+		}
+		seenPositions[position] = struct{}{}
+		seenItems[record.item] = struct{}{}
+		if record.bag == 0 && ((record.slot >= 19 && record.slot < inventorySlotBagEnd) || (record.slot >= 67 && record.slot < 74)) && record.isBag && record.containerSlots > 0 {
+			if record.containerSlots > 36 {
+				record.containerSlots = 36
+			}
+			rootBags[record.item] = record.containerSlots
+		}
+	}
+	for _, record := range records {
+		if record.bag == 0 {
+			continue
+		}
+		containerSlots, found := rootBags[record.bag]
+		if !found || record.slot < 0 || record.slot >= containerSlots {
+			invalid = append(invalid, invalidInventoryRow{record: record})
+		}
+	}
 	if len(invalid) == 0 {
 		return false
 	}
-	for _, itemGUID := range invalid {
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", state.GUID, itemGUID)
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
+	for _, row := range invalid {
+		if row.deleteInstance {
+			if row.record.item > 0 {
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", state.GUID, row.record.item)
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", row.record.item)
+			} else {
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", state.GUID, row.record.bag, row.record.slot)
+			}
+		} else {
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ? AND item = ?", state.GUID, row.record.bag, row.record.slot, row.record.item)
+		}
+		s.debug("invalid inventory row removed", "guid", state.GUID, "item", row.record.item, "bag", row.record.bag, "slot", row.record.slot)
 	}
 	return true
 }
@@ -893,6 +958,7 @@ func (s *session) loadPeriodicQuestStatuses(ctx context.Context, state *playerSt
 const itemFlagsCustomRealTimeDuration uint32 = 0x0001
 const itemTemplateFlagConjured uint32 = 0x00000002
 const itemInstanceFlagRefundable uint32 = 0x00001000
+const itemInventoryTypeBag int64 = 18
 
 func (s *session) updateOfflineRealtimeItemDurations(ctx context.Context, state *playerState) error {
 	if s == nil || state == nil || state.LogoutTime <= 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
