@@ -1734,9 +1734,15 @@ type activeAura struct {
 	EffectMask         uint8
 	CasterGUID         uint64
 	TargetGUID         uint64
+	ItemGUID           uint64
 	SchoolMask         uint32
 	MiscValue          int32
 	Amount             uint32
+	Amounts            [3]int32
+	BaseAmounts        [3]int32
+	RecalculateMask    uint8
+	CritChance         float32
+	ApplyResilience    bool
 	DurationMs         uint32
 	PeriodMs           uint32
 	RemainingMs        uint32

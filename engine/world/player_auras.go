@@ -14,13 +14,24 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 	if s == nil || state == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return nil
 	}
-	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT casterGuid, itemGuid, spell, effectMask, stackCount,
-		amount0, maxDuration, remainTime, remainCharges FROM character_aura WHERE guid = ? ORDER BY spell`, state.GUID)
+	fullState := true
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT casterGuid, itemGuid, spell, effectMask, recalculateMask, stackCount,
+		amount0, amount1, amount2, base_amount0, base_amount1, base_amount2, maxDuration, remainTime, remainCharges, critChance, applyResilience
+		FROM character_aura WHERE guid = ? ORDER BY spell`, state.GUID)
 	if err != nil {
 		if errorsMissingAuraTable(err) {
-			return nil
+			fullState = false
+			rows, err = s.server.CharactersStore.DB.QueryContext(ctx, `SELECT casterGuid, itemGuid, spell, effectMask, stackCount,
+				amount0, maxDuration, remainTime, remainCharges FROM character_aura WHERE guid = ? ORDER BY spell`, state.GUID)
+			if err != nil {
+				if errorsMissingAuraTable(err) {
+					return nil
+				}
+				return err
+			}
+		} else {
+			return err
 		}
-		return err
 	}
 	defer rows.Close()
 	s.castMu.Lock()
@@ -34,8 +45,17 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 	var periodic []*activeAura
 	for rows.Next() {
 		var casterGUID, itemGUID uint64
-		var spellID, effectMask, stackCount, amount, maxDuration, remainTime, remainCharges int64
-		if err := rows.Scan(&casterGUID, &itemGUID, &spellID, &effectMask, &stackCount, &amount, &maxDuration, &remainTime, &remainCharges); err != nil {
+		var spellID, effectMask, recalculateMask, stackCount, maxDuration, remainTime, remainCharges int64
+		var amounts, baseAmounts [3]int64
+		var critChance float64
+		var applyResilience bool
+		var scanErr error
+		if fullState {
+			scanErr = rows.Scan(&casterGUID, &itemGUID, &spellID, &effectMask, &recalculateMask, &stackCount, &amounts[0], &amounts[1], &amounts[2], &baseAmounts[0], &baseAmounts[1], &baseAmounts[2], &maxDuration, &remainTime, &remainCharges, &critChance, &applyResilience)
+		} else {
+			scanErr = rows.Scan(&casterGUID, &itemGUID, &spellID, &effectMask, &stackCount, &amounts[0], &maxDuration, &remainTime, &remainCharges)
+		}
+		if scanErr != nil {
 			continue
 		}
 		if spellID <= 0 || (remainTime == 0 || remainTime < -1) || spellID > int64(^uint32(0)) || len(s.activeAuras) >= 64 {
@@ -57,15 +77,16 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 				continue
 			}
 		}
-		aura := &activeAura{SpellID: id, CasterGUID: casterGUID, TargetGUID: state.GUID, EffectMask: uint8(effectMask) & 0x07, Slot: uint8(len(s.activeAuras)), Positive: true, CasterLevel: state.Level}
+		aura := &activeAura{SpellID: id, CasterGUID: casterGUID, TargetGUID: state.GUID, ItemGUID: itemGUID, EffectMask: uint8(effectMask) & 0x07, RecalculateMask: uint8(recalculateMask), CritChance: float32(critChance), ApplyResilience: applyResilience, Slot: uint8(len(s.activeAuras)), Positive: true, CasterLevel: state.Level}
+		for index := range amounts {
+			aura.Amounts[index] = int32(amounts[index])
+			aura.BaseAmounts[index] = int32(baseAmounts[index])
+		}
 		if maxDuration > 0 {
 			aura.DurationMs = clampAuraDuration(maxDuration)
 		}
 		if remainTime > 0 {
 			aura.RemainingMs = clampAuraDuration(remainTime)
-		}
-		if amount > 0 {
-			aura.Amount = uint32(amount)
 		}
 		if stackCount > 0 {
 			aura.StackCount = uint8(stackCount)
@@ -85,6 +106,9 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 					}
 					aura.AuraType = effect.Aura
 					aura.MiscValue = effect.MiscValue
+					if aura.Amounts[index] > 0 {
+						aura.Amount = uint32(aura.Amounts[index])
+					}
 					if effect.AuraPeriod > 0 {
 						aura.PeriodMs = effect.AuraPeriod
 					}
