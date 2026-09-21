@@ -1792,7 +1792,13 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 		}
 		return optionalErr
 	}
-	state.XP, state.Money = uint32(xp), uint32(money)
+	state.XP = uint32(xp)
+	if money > int64(^uint32(0)>>1) {
+		money = int64(^uint32(0) >> 1)
+	}
+	if money >= 0 {
+		state.Money = uint32(money)
+	}
 	if health >= 0 {
 		state.Health, state.MaxHealth = uint32(health), uint32(health)
 		state.HealthLoaded = true
