@@ -342,6 +342,9 @@ func (s *session) updateZoneAndArea(ctx context.Context, force bool) {
 		stateChanged = s.applyZoneState(ctx, s.player, s.player.Zone, areaID) || stateChanged
 	}
 	if oldZone != s.player.Zone {
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ZONE", s.player.Zone, s.playerGUID)
+		}
 		s.server.ensureZoneWeather(ctx, s.player.Zone, s)
 		s.updateLocalChannels(s.player.Zone)
 		s.exploreZone(ctx, s.player.Zone)
