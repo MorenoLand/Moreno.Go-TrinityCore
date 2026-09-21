@@ -68,7 +68,7 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 	if name == "" || (name[0] >= '0' && name[0] <= '9') {
 		return s.sendChannelNotify(channelInvalidNameNotice, name, nil) == nil
 	}
-	if len(name) > 31 || len(password) > 31 {
+	if len(name) > 31 || len(password) > 31 || strings.Contains(name, "|") {
 		return true
 	}
 	key := s.scopedChannelKey(name)
