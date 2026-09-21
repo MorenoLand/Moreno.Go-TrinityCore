@@ -70,6 +70,10 @@ func runSelfCheck() error {
 	if err := rejectPreVerifyAchievementPackets(good, 0); err != nil {
 		return fmt.Errorf("valid verify-world ordering was rejected: %w", err)
 	}
+	goodAchievement := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: verify}, {Direction: protocoltrace.ServerToClient, Opcode: criteria}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_ACHIEVEMENT_EARNED)}}}
+	if err := rejectPreVerifyAchievementPackets(goodAchievement, 0); err != nil {
+		return fmt.Errorf("post-verify achievement packet was rejected: %w", err)
+	}
 	validMovement := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_FEATHER_FALL)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_SET_HOVER)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_FORCE_MOVE_ROOT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MULTIPLE_MOVES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL)}}}
 	if err := checkLoginMovementOrder(validMovement, 0); err != nil {
 		return fmt.Errorf("valid movement ordering was rejected: %w", err)
