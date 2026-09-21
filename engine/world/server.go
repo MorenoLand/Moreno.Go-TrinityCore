@@ -3495,6 +3495,9 @@ func (s *session) handleSetActionBarToggles(payload []byte) bool {
 	}
 	if s.player != nil {
 		s.player.ActionBars = uint32(toggles)
+		if packet, err := s.server.buildPlayerValuesUpdate(s.playerGUID, map[int]uint32{unitFieldPlayerFieldBytes: playerFieldBytesValue(*s.player)}); err == nil && packet != nil {
+			_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+		}
 	}
 	return true
 }

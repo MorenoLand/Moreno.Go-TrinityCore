@@ -2750,10 +2750,11 @@ func (s *Server) broadcastPlayerCreate(state playerState, source *session) {
 }
 
 func playerFieldBytesValue(state playerState) uint32 {
-	value := state.PlayerFieldBytes &^ 0x00000100
+	value := state.PlayerFieldBytes &^ 0x00FF0100
 	if state.GrantableLevels > 0 {
 		value |= 0x00000100
 	}
+	value |= (state.ActionBars & 0xFF) << 16
 	return value
 }
 
