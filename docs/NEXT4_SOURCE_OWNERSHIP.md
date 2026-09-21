@@ -65,6 +65,8 @@ The login replay verifier now validates `SMSG_INIT_WORLD_STATES`, `SMSG_SET_FORC
 
 The same verifier now validates aura replay records plus the fixed 12-byte item-duration and 24-byte enchant-duration payloads delivered after map entry (`7c99054`).
 
+Recorded login traces now receive the same optional-packet validation for rune resync, aura replay, item durations, enchant durations, and quest-giver status entries, preventing malformed post-map packets from passing replay (`40738f7`).
+
 Corpse repopulation now occurs after the loading flag clears and ON_LOGIN criteria update, immediately before the login hook, matching `CharacterHandler.cpp` (`e083f6a`).
 
 The self-player update now serializes the computed shield-block value into `PLAYER_SHIELD_BLOCK`, matching `Player::UpdateAllStats` field delivery (`43c5918`).
