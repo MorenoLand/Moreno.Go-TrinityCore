@@ -45,6 +45,8 @@ Achievement criteria state is now retained/persisted during loading without emit
 
 Login movement replay now rejects movement-state packets before `SMSG_TIME_SYNC_REQ`, matching `Player::SendInitialPacketsAfterAddToMap` (`6868aa8`).
 
+The replay self-check now proves both rejection of pre-verify achievement packets and acceptance of criteria/earned packets after `SMSG_LOGIN_VERIFY_WORLD` (`0eaba87`).
+
 Corpse repopulation now occurs after the loading flag clears and ON_LOGIN criteria update, immediately before the login hook, matching `CharacterHandler.cpp` (`e083f6a`).
 
 The self-player update now serializes the computed shield-block value into `PLAYER_SHIELD_BLOCK`, matching `Player::UpdateAllStats` field delivery (`43c5918`).
