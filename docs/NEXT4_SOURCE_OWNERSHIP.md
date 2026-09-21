@@ -184,3 +184,5 @@ Login skill update fields now derive the source skill step from `SkillTiers.dbc`
 Saved spell rows now pass SkillLineAbility race/class masks and SkillRaceClassInfo legality before being exposed as active spells (`52a8206`).
 
 Player aura loading now preserves item/caster GUIDs, recalculate masks, all effect/base amounts, crit chance, and resilience metadata, with a reduced-schema fallback (`55d6019`).
+
+Persisted achievement loading now rejects unknown Achievement.dbc and criteria rows and drops expired timed criteria before `SMSG_ALL_ACHIEVEMENT_DATA`, matching `AchievementMgr::LoadFromDB` (`e11614d`).
