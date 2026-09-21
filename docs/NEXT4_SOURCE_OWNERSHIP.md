@@ -71,6 +71,8 @@ The replay gate now also validates permanent-pet login `SMSG_PET_SPELLS` framing
 
 Recorded login traces now validate taxi-node status records and quest-giver status-multiple count/GUID/status framing as well (`16a408c`).
 
+The create-update verifier now parses the complete self-login update batch and rejects item/container creates after the player create or duplicate self-player blocks, matching `Player::BuildCreateUpdateBlockForPlayer` ordering (`2fd2be3`).
+
 Corpse repopulation now occurs after the loading flag clears and ON_LOGIN criteria update, immediately before the login hook, matching `CharacterHandler.cpp` (`e083f6a`).
 
 The self-player update now serializes the computed shield-block value into `PLAYER_SHIELD_BLOCK`, matching `Player::UpdateAllStats` field delivery (`43c5918`).
