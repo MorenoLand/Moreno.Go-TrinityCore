@@ -95,7 +95,66 @@ func runSelfCheck() error {
 			return fmt.Errorf("login create fixture rejected: %w", err)
 		}
 	}
+	payloadChecks := []struct {
+		name     string
+		opcode   protocol.Opcode
+		payload  []byte
+		validate func(protocoltrace.Event) error
+	}{
+		{"verify-world", protocol.OpcodeSMSG_LOGIN_VERIFY_WORLD, loginVerifyFixture(), requireLoginVerifyWorld},
+		{"instance-difficulty", protocol.OpcodeSMSG_INSTANCE_DIFFICULTY, make([]byte, 8), requireEightBytePayload},
+		{"initial-spells", protocol.OpcodeSMSG_INITIAL_SPELLS, []byte{0, 0, 0, 0, 0}, requireInitialSpells},
+		{"unlearn-spells", protocol.OpcodeSMSG_SEND_UNLEARN_SPELLS, []byte{0, 0, 0, 0}, requireUnlearnSpells},
+		{"action-buttons", protocol.OpcodeSMSG_ACTION_BUTTONS, actionButtonsFixture(), requireActionButtons},
+		{"factions", protocol.OpcodeSMSG_INITIALIZE_FACTIONS, initialFactionsFixture(), requireInitialFactions},
+		{"dance-moves", protocol.OpcodeSMSG_LEARNED_DANCE_MOVES, make([]byte, 8), func(event protocoltrace.Event) error { return requirePayloadLength(event, 8) }},
+		{"feature-status", protocol.OpcodeSMSG_FEATURE_SYSTEM_STATUS, make([]byte, 2), func(event protocoltrace.Event) error { return requirePayloadLength(event, 2) }},
+		{"bind-point", protocol.OpcodeSMSG_BIND_POINT_UPDATE, make([]byte, 20), func(event protocoltrace.Event) error { return requirePayloadLength(event, 20) }},
+		{"time-speed", protocol.OpcodeSMSG_LOGIN_SET_TIME_SPEED, loginTimeSpeedFixture(), requireLoginTimeSpeed},
+	}
+	for _, check := range payloadChecks {
+		event := protocoltrace.Event{Direction: protocoltrace.ServerToClient, Opcode: uint32(check.opcode), Payload: base64.StdEncoding.EncodeToString(check.payload)}
+		if err := check.validate(event); err != nil {
+			return fmt.Errorf("%s payload fixture rejected: %w", check.name, err)
+		}
+	}
 	return nil
+}
+
+func loginVerifyFixture() []byte {
+	buf := protocol.NewBuffer(20)
+	buf.WriteI32(0)
+	for range 4 {
+		buf.WriteF32(0)
+	}
+	return buf.Bytes()
+}
+
+func loginTimeSpeedFixture() []byte {
+	buf := protocol.NewBuffer(12)
+	buf.WriteU32(0)
+	buf.WriteF32(0.5)
+	buf.WriteU32(0)
+	return buf.Bytes()
+}
+
+func actionButtonsFixture() []byte {
+	buf := protocol.NewBuffer(1 + 144*4)
+	buf.WriteU8(1)
+	for range 144 {
+		buf.WriteU32(0)
+	}
+	return buf.Bytes()
+}
+
+func initialFactionsFixture() []byte {
+	buf := protocol.NewBuffer(4 + 128*5)
+	buf.WriteU32(128)
+	for range 128 {
+		buf.WriteU8(0)
+		buf.WriteU32(0)
+	}
+	return buf.Bytes()
 }
 
 func loginCreateFixture(compressed bool) (protocoltrace.Event, error) {
