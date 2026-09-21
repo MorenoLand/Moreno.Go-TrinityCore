@@ -196,3 +196,5 @@ Persisted glyphs now require matching `GlyphProperties.dbc` and `GlyphSlot.dbc` 
 Faction login state now keeps the persisted standing offset separate from DBC base standing, matching `ReputationMgr::Initialize` and `LoadFromDB` (`426e6fd`).
 
 Login and runtime action-bar toggles now serialize `PLAYER_FIELD_BYTES` byte 2, matching `HandleSetActionBarToggles` and `Player::LoadFromDB` (`31785e3`).
+
+Offline rest-bonus loading now honors the configured max-level rule and serializes `PLAYER_REST_STATE_EXPERIENCE`, matching `SetRestBonus` (`c2ed09d`).
