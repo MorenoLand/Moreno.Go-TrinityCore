@@ -52,3 +52,5 @@ Persisted transform auras now resolve their creature-template display before the
 Special transform spells now use the pinned race/gender display mappings for login serialization (`13d8503`).
 
 Persisted mounted auras now resolve mount creature display models before player create serialization, matching `HandleAuraMounted` (`a10722a`).
+
+Persisted aura loading now drops unknown spell rows before client serialization, matching `_LoadAuras` validation (`c0b7734`).
