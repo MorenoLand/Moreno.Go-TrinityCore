@@ -186,3 +186,5 @@ Saved spell rows now pass SkillLineAbility race/class masks and SkillRaceClassIn
 Player aura loading now preserves item/caster GUIDs, recalculate masks, all effect/base amounts, crit chance, and resilience metadata, with a reduced-schema fallback (`55d6019`).
 
 Persisted achievement loading now rejects unknown Achievement.dbc and criteria rows and drops expired timed criteria before `SMSG_ALL_ACHIEVEMENT_DATA`, matching `AchievementMgr::LoadFromDB` (`e11614d`).
+
+Persisted action buttons now reject unknown spells, missing item templates, and unsupported action types before `SMSG_ACTION_BUTTONS`, matching `Player::IsActionButtonDataValid` (`b7741fd`).
