@@ -426,6 +426,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	s.loadRandomBGStatus(ctx, guid)
 	s.loadBattlegroundData(ctx, guid)
+	s.loadInstanceTimeRestrictions(ctx)
 	s.prepareLoginResurrection(ctx, &state)
 	mounts, err := s.loadMountState(ctx, guid)
 	if err != nil {
@@ -864,6 +865,26 @@ func (s *session) loadBattlegroundData(ctx context.Context, guid uint64) {
 	}
 	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT instanceId, team, joinX, joinY, joinZ, joinO, joinMapId, taxiStart, taxiEnd, mountSpell
 		FROM character_battleground_data WHERE guid = ?`, guid).Scan(&s.bgData.InstanceID, &s.bgData.Team, &s.bgData.JoinX, &s.bgData.JoinY, &s.bgData.JoinZ, &s.bgData.JoinO, &s.bgData.JoinMap, &s.bgData.TaxiStart, &s.bgData.TaxiEnd, &s.bgData.MountSpell)
+}
+
+func (s *session) loadInstanceTimeRestrictions(ctx context.Context) {
+	s.instanceLockTimes = make(map[uint32]int64)
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT instanceId, releaseTime FROM account_instance_times WHERE accountId = ?", s.accountID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	now := time.Now().Unix()
+	for rows.Next() {
+		var instanceID, releaseTime int64
+		if rows.Scan(&instanceID, &releaseTime) != nil || instanceID <= 0 || releaseTime <= now {
+			continue
+		}
+		s.instanceLockTimes[uint32(instanceID)] = releaseTime
+	}
 }
 
 func (s *session) applyZoneState(ctx context.Context, state *playerState, zoneID, areaID uint32) bool {

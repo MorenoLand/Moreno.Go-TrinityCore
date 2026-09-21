@@ -157,6 +157,7 @@ type session struct {
 	farTeleportPending    bool
 	randomBGWinner        bool
 	bgData                battlegroundLoginData
+	instanceLockTimes     map[uint32]int64
 	player                *playerState
 	visiblePlayersMu      sync.Mutex
 	visiblePlayers        map[uint64]struct{}
