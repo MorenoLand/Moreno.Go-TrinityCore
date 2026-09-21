@@ -188,3 +188,5 @@ Player aura loading now preserves item/caster GUIDs, recalculate masks, all effe
 Persisted achievement loading now rejects unknown Achievement.dbc and criteria rows and drops expired timed criteria before `SMSG_ALL_ACHIEVEMENT_DATA`, matching `AchievementMgr::LoadFromDB` (`e11614d`).
 
 Persisted action buttons now reject unknown spells, missing item templates, and unsupported action types before `SMSG_ACTION_BUTTONS`, matching `Player::IsActionButtonDataValid` (`b7741fd`).
+
+Persisted character-spell rows now preserve the source active/disabled state and only reject unknown DBC spells; class/race and level gates remain in `LearnSkillRewardedSpells`, not `_LoadSpells` (`22eb90b`).
