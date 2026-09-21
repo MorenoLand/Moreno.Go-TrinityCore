@@ -112,6 +112,7 @@ func runSelfCheck() error {
 		{"bind-point", protocol.OpcodeSMSG_BIND_POINT_UPDATE, make([]byte, 20), func(event protocoltrace.Event) error { return requirePayloadLength(event, 20) }},
 		{"time-speed", protocol.OpcodeSMSG_LOGIN_SET_TIME_SPEED, loginTimeSpeedFixture(), requireLoginTimeSpeed},
 		{"login-effect", protocol.OpcodeSMSG_SPELL_GO, loginEffectFixture(), requireLoginEffect},
+		{"group-list", protocol.OpcodeSMSG_GROUP_LIST, groupListFixture(), requireGroupList},
 		{"world-states", protocol.OpcodeSMSG_INIT_WORLD_STATES, initWorldStatesFixture(), requireInitWorldStates},
 		{"forced-reactions", protocol.OpcodeSMSG_SET_FORCED_REACTIONS, make([]byte, 4), requireForcedReactions},
 		{"resync-runes", protocol.OpcodeSMSG_RESYNC_RUNES, resyncRunesFixture(), requireResyncRunes},
@@ -147,6 +148,31 @@ func loginTimeSpeedFixture() []byte {
 	buf.WriteF32(0.5)
 	buf.WriteU32(0)
 	return buf.Bytes()
+}
+
+func groupListFixture() []byte {
+	packet := protocol.NewBuffer(64)
+	packet.WriteU8(0)
+	packet.WriteU8(0)
+	packet.WriteU8(0)
+	packet.WriteU8(0)
+	packet.WriteU64(uint64(0x1F50)<<48 | 1)
+	packet.WriteU32(0)
+	packet.WriteU32(1)
+	packet.WriteCString("Noradinia")
+	packet.WriteU64(126)
+	packet.WriteU8(0)
+	packet.WriteU8(0)
+	packet.WriteU8(0)
+	packet.WriteU8(0)
+	packet.WriteU64(127)
+	packet.WriteU8(3)
+	packet.WriteU64(0)
+	packet.WriteU8(2)
+	packet.WriteU8(0)
+	packet.WriteU8(0)
+	packet.WriteU8(0)
+	return packet.Bytes()
 }
 
 func loginEffectFixture() []byte {
@@ -428,6 +454,8 @@ func checkOptionalLoginPayloads(trace protocoltrace.Trace, start int) error {
 			validate = requirePayloadLengthExact(9)
 		case uint32(protocol.OpcodeSMSG_PET_SPELLS):
 			validate = requirePetSpells
+		case uint32(protocol.OpcodeSMSG_GROUP_LIST):
+			validate = requireGroupList
 		}
 		if validate != nil {
 			if err := validate(event); err != nil {
@@ -843,6 +871,72 @@ func requireInitialFactions(event protocoltrace.Event) error {
 	}
 	if reader.Remaining() != 0 {
 		return fmt.Errorf("unexpected faction payload bytes=%d", reader.Remaining())
+	}
+	return nil
+}
+
+func requireGroupList(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	groupType, err := reader.ReadU8()
+	if err != nil {
+		return fmt.Errorf("group type is truncated: %w", err)
+	}
+	if _, err := reader.Read(3); err != nil {
+		return fmt.Errorf("group slot state is truncated: %w", err)
+	}
+	if groupType&0x08 != 0 {
+		if _, err := reader.ReadU8(); err != nil {
+			return fmt.Errorf("LFG status is truncated: %w", err)
+		}
+		if _, err := reader.ReadU32(); err != nil {
+			return fmt.Errorf("LFG dungeon is truncated: %w", err)
+		}
+	}
+	groupGUID, err := reader.ReadU64()
+	if err != nil {
+		return fmt.Errorf("group GUID is truncated: %w", err)
+	}
+	if groupGUID>>48 != 0x1F50 || groupGUID&0xFFFFFFFF == 0 {
+		return fmt.Errorf("group GUID=0x%016x, want HighGuid::Group 0x1F50 with nonzero low word", groupGUID)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		return fmt.Errorf("group counter is truncated: %w", err)
+	}
+	memberCount, err := reader.ReadU32()
+	if err != nil {
+		return fmt.Errorf("group member count is truncated: %w", err)
+	}
+	for index := uint32(0); index < memberCount; index++ {
+		if _, err := reader.ReadCString(); err != nil {
+			return fmt.Errorf("group member %d name is truncated: %w", index, err)
+		}
+		if _, err := reader.ReadU64(); err != nil {
+			return fmt.Errorf("group member %d GUID is truncated: %w", index, err)
+		}
+		if _, err := reader.Read(4); err != nil {
+			return fmt.Errorf("group member %d state is truncated: %w", index, err)
+		}
+	}
+	if _, err := reader.ReadU64(); err != nil {
+		return fmt.Errorf("group leader GUID is truncated: %w", err)
+	}
+	if memberCount > 0 {
+		if _, err := reader.ReadU8(); err != nil {
+			return fmt.Errorf("group loot method is truncated: %w", err)
+		}
+		if _, err := reader.ReadU64(); err != nil {
+			return fmt.Errorf("group master looter GUID is truncated: %w", err)
+		}
+		if _, err := reader.Read(4); err != nil {
+			return fmt.Errorf("group difficulty state is truncated: %w", err)
+		}
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected group-list payload bytes=%d", reader.Remaining())
 	}
 	return nil
 }
