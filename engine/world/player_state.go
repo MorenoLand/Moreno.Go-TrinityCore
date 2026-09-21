@@ -256,6 +256,7 @@ type playerState struct {
 	InventorySlots       [playerInventoryCount]uint64
 	Buyback              [12]*buybackSlot
 	Stats                [5]uint32
+	BaseStats            [5]uint32
 	Armor                uint32
 	Resistances          [7]uint32
 	Block                uint32
@@ -1419,6 +1420,7 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	state.Stats[2] = uint32(sta)
 	state.Stats[3] = uint32(inte)
 	state.Stats[4] = uint32(spi)
+	state.BaseStats = state.Stats
 	// Reference ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_STAT: absolute per-stat
 	// progress (asset: 0 str, 1 agi, 2 sta, 3 int, 4 spi).
 	for statIndex, statValue := range state.Stats {
@@ -2556,7 +2558,10 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 			statVal = uint32(20 + int(state.Level)*2)
 		}
 		values[unitFieldStat0+i] = statVal
-		values[unitFieldPosStat0+i] = statVal
+		baseStat := state.BaseStats[i]
+		if baseStat < statVal {
+			values[unitFieldPosStat0+i] = statVal - baseStat
+		}
 	}
 	armor := state.Armor
 	if armor == 0 {
