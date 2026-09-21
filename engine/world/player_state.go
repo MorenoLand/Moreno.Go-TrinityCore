@@ -3004,16 +3004,57 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 		}
 		contents[int64(bagGUID)][uint32(item.slot)] = uint64(item.itemGUID) | (uint64(0x4000) << 48)
 	}
-	itemTemplateInfo := func(entry int64) (uint32, uint32) {
+	type itemTemplateState struct {
+		ContainerSlots, MaxDurability, ItemLevel, Quality, InventoryType, RandomSuffix uint32
+	}
+	itemTemplateInfo := func(entry int64) itemTemplateState {
+		result := itemTemplateState{}
 		if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
-			return 0, 0
+			return result
 		}
-		var slots, maxD int64
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(ContainerSlots, 0), COALESCE(MaxDurability, 0) FROM item_template WHERE entry = ?", entry).Scan(&slots, &maxD)
+		var slots, maxD, itemLevel, quality, inventoryType, randomSuffix int64
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(ContainerSlots, 0), COALESCE(MaxDurability, 0), COALESCE(ItemLevel, 0), COALESCE(Quality, 0), COALESCE(InventoryType, 0), COALESCE(RandomSuffix, 0) FROM item_template WHERE entry = ?", entry).Scan(&slots, &maxD, &itemLevel, &quality, &inventoryType, &randomSuffix)
 		if slots > 36 {
 			slots = 36
 		}
-		return uint32(slots), uint32(maxD)
+		result.ContainerSlots, result.MaxDurability = uint32(slots), uint32(maxD)
+		result.ItemLevel, result.Quality, result.InventoryType, result.RandomSuffix = uint32(itemLevel), uint32(quality), uint32(inventoryType), uint32(randomSuffix)
+		return result
+	}
+	itemSuffixFactor := func(template itemTemplateState) uint32 {
+		if template.RandomSuffix == 0 || s.server.Data == nil {
+			return 0
+		}
+		points, found, err := s.server.Data.RandPropPoints(template.ItemLevel)
+		if err != nil || !found {
+			return 0
+		}
+		index := -1
+		switch template.InventoryType {
+		case 1, 4, 5, 7, 17, 20:
+			index = 0
+		case 3, 6, 8, 10, 12:
+			index = 1
+		case 2, 9, 11, 14, 16, 23:
+			index = 2
+		case 13, 21, 22:
+			index = 3
+		case 15, 25, 26:
+			index = 4
+		}
+		if index < 0 {
+			return 0
+		}
+		switch template.Quality {
+		case 2:
+			return points.Good[index]
+		case 3:
+			return points.Superior[index]
+		case 4:
+			return points.Epic[index]
+		default:
+			return 0
+		}
 	}
 	itemDurability := func(guid int64) uint32 {
 		var d int64
@@ -3059,7 +3100,8 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 		if bag != 0 {
 			containedGUID = bagItems[bag]
 		}
-		cSlots, maxD := itemTemplateInfo(itemEntry)
+		template := itemTemplateInfo(itemEntry)
+		cSlots, maxD := template.ContainerSlots, template.MaxDurability
 		itemState := itemUpdateState{MaxDurability: maxD, DurabilityLoaded: fullState}
 		if fullState {
 			if item.creatorGUID > 0 {
@@ -3070,6 +3112,9 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 			}
 			itemState.Duration = toUint32(item.duration)
 			itemState.Flags = toUint32(item.flags)
+			if item.randomPropertyID < 0 {
+				itemState.PropertySeed = itemSuffixFactor(template)
+			}
 			itemState.RandomPropertyID = uint32(int32(item.randomPropertyID))
 			itemState.CreatePlayedTime = toUint32(item.playedTime)
 			itemState.Durability = toUint32(item.durability)
@@ -3111,7 +3156,8 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 			slotItems[sl] = bb.ItemGUID
 			fields[priceField] = bb.Price
 			fields[timeField] = bb.Timestamp
-			cSlots, maxD := itemTemplateInfo(int64(bb.ItemEntry))
+			template := itemTemplateInfo(int64(bb.ItemEntry))
+			cSlots, maxD := template.ContainerSlots, template.MaxDurability
 			if mode != inventoryUpdateDurationsOnly {
 				block := buildItemCreateBlockForLocationWithDurability(bb.ItemGUID, bb.ItemEntry, bb.Count, s.playerGUID, s.playerGUID, cSlots, nil, maxD, maxD)
 				updates.AddUpdateBlock(block)
