@@ -134,7 +134,7 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	s.debug("chat request parsed", "account", s.accountName, "type", typeID, "language", language, "size", len(payload))
-	if len(message) > 255 || strings.ContainsAny(message, "\r\n") || strings.IndexFunc(message, func(r rune) bool { return r < 32 && r != '\t' }) >= 0 {
+	if len(message) > 255 || (language != languageAddon && (strings.ContainsAny(message, "\r\n") || strings.IndexFunc(message, func(r rune) bool { return r < 32 && r != '\t' }) >= 0)) {
 		s.debug("chat rejected", "account", s.accountName, "reason", "invalid characters")
 		return true
 	}
