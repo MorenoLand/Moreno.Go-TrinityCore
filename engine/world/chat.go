@@ -514,7 +514,11 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 			continue
 		}
 		if receiver != nil {
-			if value != source && value != receiver {
+			if language == languageAddon {
+				if value != receiver {
+					continue
+				}
+			} else if value != source && value != receiver {
 				continue
 			}
 		} else if chatType == chatChannel {
