@@ -720,6 +720,9 @@ func (s *session) sendCriteriaUpdate(progress *criteriaProgressState) {
 	packet.WritePackedTime(time.Unix(int64(progress.Date), 0))
 	packet.WriteU32(0) // elapsed
 	packet.WriteU32(0) // creation
+	if s.playerLoading {
+		return
+	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_CRITERIA_UPDATE), packet.Bytes(), true)
 }
 
