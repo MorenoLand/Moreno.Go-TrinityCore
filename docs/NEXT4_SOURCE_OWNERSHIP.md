@@ -202,3 +202,5 @@ Offline rest-bonus loading now honors the configured max-level rule and serializ
 Character login now rejects active character bans, invalid names, invalid gender values, and invalid race/class definitions before state or packet construction, matching `Player::LoadFromDB` (`d00b9da`).
 
 Persisted player positions and map IDs now recover to the homebind before login serialization when invalid, matching the source map/coordinate recovery path (`2e8c0d8`).
+
+GM login now restores `GM.VisibleState` and saved invisible state with the source GM-on/visibility semantics, matching `Player::SetGMVisible` (`63d5205`).
