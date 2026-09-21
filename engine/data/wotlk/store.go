@@ -82,6 +82,7 @@ type SpellEffect struct {
 
 type Spell struct {
 	ID                    uint32
+	AreaGroupID           int32
 	DispelType            uint32 // Spell.dbc field 2 = DispelType (DBCStructure.h:1394)
 	Mechanic              uint32 // Spell.dbc field 3 = Mechanic (DBCStructure.h:1395)
 	Attributes            uint32
@@ -539,6 +540,9 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 			return Spell{}, false, err
 		}
 	}
+	if areaGroupID, areaGroupErr := record.Int32(224); areaGroupErr == nil {
+		spell.AreaGroupID = areaGroupID
+	}
 	if itemClass, itemErr := record.Int32(68); itemErr == nil {
 		spell.EquippedItemClass = itemClass
 	}
@@ -779,6 +783,37 @@ func (s *Store) Area(id uint32) (AreaTableEntry, bool, error) {
 		FactionGroupMask: factionGroupMask,
 		Name:             name,
 	}, true, nil
+}
+
+func (s *Store) AreaGroupAllows(id, zoneID, areaID uint32) (bool, bool, error) {
+	if id == 0 {
+		return true, true, nil
+	}
+	file, err := s.File("AreaGroup")
+	if err != nil {
+		return false, false, err
+	}
+	for depth := 0; depth < 32 && id != 0; depth++ {
+		record, found := file.Find(id)
+		if !found {
+			return false, false, nil
+		}
+		for field := 1; field <= 6; field++ {
+			area, fieldErr := record.Uint32(field)
+			if fieldErr != nil {
+				return false, true, fieldErr
+			}
+			if area != 0 && (area == zoneID || area == areaID) {
+				return true, true, nil
+			}
+		}
+		next, nextErr := record.Uint32(7)
+		if nextErr != nil {
+			return false, true, nextErr
+		}
+		id = next
+	}
+	return false, true, nil
 }
 
 // Talent loads a talent record by ID from Talent.dbc.

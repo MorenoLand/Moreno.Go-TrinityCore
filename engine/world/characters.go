@@ -662,7 +662,8 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	state.Zone = zoneID
 	s.player.Zone = state.Zone
 	s.areaID = areaID
-	if s.applyZoneState(&state, zoneID, areaID) {
+	auraChanged := s.updateAreaDependentAuras(ctx, zoneID, areaID)
+	if s.applyZoneState(&state, zoneID, areaID) || auraChanged {
 		s.sendPlayerUpdate()
 	}
 	s.lastZoneUpdate = time.Now()

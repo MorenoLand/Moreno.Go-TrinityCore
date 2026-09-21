@@ -93,6 +93,32 @@ func (s *Server) zoneAndAreaID(mapID uint32, x, y, z float32, fallback uint32) (
 	return zoneID, areaID
 }
 
+func (s *session) updateAreaDependentAuras(ctx context.Context, zoneID, areaID uint32) bool {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil {
+		return false
+	}
+	changed := false
+	for _, aura := range s.loadedAuras() {
+		if aura == nil {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || spell.AreaGroupID <= 0 {
+			continue
+		}
+		allowed, known, groupErr := s.server.Data.AreaGroupAllows(uint32(spell.AreaGroupID), zoneID, areaID)
+		if groupErr != nil || !known || allowed {
+			continue
+		}
+		s.removeAura(aura.SpellID)
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_aura WHERE guid = ? AND spell = ?", s.playerGUID, aura.SpellID)
+		}
+		changed = true
+	}
+	return changed
+}
+
 func (s *session) updateZoneAndArea(ctx context.Context, force bool) {
 	if s == nil || s.server == nil || s.player == nil || !s.playerLoaded {
 		return
@@ -109,7 +135,8 @@ func (s *session) updateZoneAndArea(ctx context.Context, force bool) {
 	}
 	stateChanged := false
 	if oldZone != s.player.Zone || oldArea != areaID {
-		stateChanged = s.applyZoneState(s.player, s.player.Zone, areaID)
+		stateChanged = s.updateAreaDependentAuras(ctx, s.player.Zone, areaID)
+		stateChanged = s.applyZoneState(s.player, s.player.Zone, areaID) || stateChanged
 	}
 	if oldZone != s.player.Zone {
 		s.updateLocalChannels(s.player.Zone)
