@@ -45,6 +45,7 @@ const (
 	unitFieldXP                                 = 634
 	unitFieldNextLevelXP                        = 635
 	unitFieldCoinage                            = 1170
+	playerFieldRestStateExperience              = 1169
 	unitFieldMaxLevel                           = 1279
 	playerFieldKnownTitles                      = 626
 	unitFieldKnownCurrencies                    = 632
@@ -413,7 +414,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	s.loadRewardedQuestState(ctx, &state)
 	s.loadArenaTeamInfo(ctx, &state)
 	_ = s.loadFishingSteps(ctx, &state)
-	applyOfflineRestBonus(&state)
+	s.applyOfflineRestBonus(&state)
 	_ = s.updateOfflineRealtimeItemDurations(ctx, &state)
 	if s.updateOfflineItemLoadState(ctx, &state) {
 		state.Equipment = s.loadEquipmentCache(ctx, state.GUID, "")
@@ -1243,8 +1244,16 @@ func (s *session) updateOfflineItemLoadState(ctx context.Context, state *playerS
 	return changed
 }
 
-func applyOfflineRestBonus(state *playerState) {
+func (s *session) applyOfflineRestBonus(state *playerState) {
 	if state == nil || state.LogoutTime <= 0 || time.Now().Unix() <= state.LogoutTime || state.Level == 0 || int(state.Level) >= len(xpCurve) {
+		return
+	}
+	maxLevel := uint8(80)
+	if s != nil && s.server != nil && s.server.Config.MaxPlayerLevel > 0 && s.server.Config.MaxPlayerLevel < 256 {
+		maxLevel = uint8(s.server.Config.MaxPlayerLevel)
+	}
+	if state.Level >= maxLevel {
+		state.RestBonus = 0
 		return
 	}
 	elapsed := time.Now().Unix() - state.LogoutTime
@@ -2361,6 +2370,9 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 		values[unitFieldNextLevelXP] = xpCurve[state.Level]
 	}
 	values[unitFieldCoinage] = state.Money
+	if state.RestBonus > 0 {
+		values[playerFieldRestStateExperience] = uint32(state.RestBonus)
+	}
 	maxLevel := s.Config.MaxPlayerLevel
 	if maxLevel == 0 || maxLevel > 100 {
 		maxLevel = 80
