@@ -734,6 +734,12 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			if maxMP == 0 {
 				maxMP = uint32(curMana)
 			}
+			if curHealth > int64(maxHP) {
+				curHealth = int64(maxHP)
+			}
+			if curMana > int64(maxMP) {
+				curMana = int64(maxMP)
+			}
 			s.spawnPet(ctx, uint32(petID), uint32(entry), petName, uint32(level), uint32(modelID), uint32(curHealth), maxHP, uint32(curMana), maxMP, uint8(reactState))
 			_ = s.sendTalentsInfo(true)
 		}
