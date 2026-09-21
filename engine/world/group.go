@@ -253,7 +253,7 @@ func buildGroupList(srv *Server, g *groupState, forGUID uint64) []byte {
 		b.WriteU8(0)
 		b.WriteU32(g.LFGDungeonID)
 	}
-	b.WriteU64(g.ID)
+	b.WriteU64(groupGUID(g.ID))
 	b.WriteU32(g.counter)
 	b.WriteU32(uint32(membersCount))
 	for _, m := range g.Members {
@@ -293,6 +293,8 @@ func buildGroupList(srv *Server, g *groupState, forGUID uint64) []byte {
 	}
 	return b.Bytes()
 }
+
+func groupGUID(low uint64) uint64 { return low | (uint64(0x1F50) << 48) }
 
 // buildGroupInvite builds SMSG_GROUP_INVITE sent to the invited player.
 // flag: 1 = valid invite, 0 = already in group notification.
