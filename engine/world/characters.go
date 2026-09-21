@@ -864,15 +864,15 @@ func (s *session) applyZoneState(ctx context.Context, state *playerState, zoneID
 	hostile := s.hasPvPForcingQuest(ctx)
 	switch zone.FactionGroupMask {
 	case 2:
-		hostile = team != 0 && (pvpRealm || zone.Flags&wotlk.AreaFlagCapital != 0)
+		hostile = hostile || (team != 0 && (pvpRealm || zone.Flags&wotlk.AreaFlagCapital != 0))
 	case 4:
-		hostile = team != 1 && (pvpRealm || zone.Flags&wotlk.AreaFlagCapital != 0)
+		hostile = hostile || (team != 1 && (pvpRealm || zone.Flags&wotlk.AreaFlagCapital != 0))
 	case 0:
 		inBattleground := false
 		if entry, ok, mapErr := s.server.Data.Map(state.Map); mapErr == nil && ok {
 			inBattleground = entry.IsBattleground() || entry.IsBattleArena()
 		}
-		hostile = pvpRealm || inBattleground || area.Flags&wotlk.AreaFlagWintergrasp != 0
+		hostile = hostile || pvpRealm || inBattleground || area.Flags&wotlk.AreaFlagWintergrasp != 0
 	}
 	sanctuary := area.Flags&wotlk.AreaFlagSanctuary != 0
 	if sanctuary {
