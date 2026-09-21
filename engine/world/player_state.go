@@ -1578,6 +1578,43 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", state.GUID, def.Skill, def.Value, def.Max)
 		}
 	}
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		raceMask, classMask := playerCreateMask(state.Race), playerCreateMask(state.Class)
+		if defaultRows, defaultErr := s.server.WorldStore.DB.QueryContext(ctx, "SELECT skill, rank FROM playercreateinfo_skills WHERE (raceMask = 0 OR (raceMask & ?) <> 0) AND (classMask = 0 OR (classMask & ?) <> 0)", raceMask, classMask); defaultErr == nil {
+			defer defaultRows.Close()
+			for defaultRows.Next() {
+				var skillID, rank int64
+				if defaultRows.Scan(&skillID, &rank) != nil || skillID <= 0 || skillID > 65535 || !isAllowedClassSkill(state.Class, uint16(skillID)) {
+					continue
+				}
+				found := false
+				for _, skill := range skills {
+					if skill.Skill == uint16(skillID) {
+						found = true
+						break
+					}
+				}
+				if found {
+					continue
+				}
+				value, max := uint16(1), uint16(1)
+				if isLanguageSkill(uint16(skillID)) {
+					value, max = 300, 300
+				} else if isLevelScaledSkill(uint16(skillID)) {
+					max = uint16(state.Level) * 5
+					if max < 5 {
+						max = 5
+					}
+				}
+				if rank > 0 && rank <= 65535 {
+					value = uint16(rank)
+				}
+				newSkill := playerSkill{Skill: uint16(skillID), Step: 1, Value: value, Max: max}
+				skills = append(skills, newSkill)
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", state.GUID, newSkill.Skill, newSkill.Value, newSkill.Max)
+			}
+		}
+	}
 	state.Skills = skills
 	return nil
 }
