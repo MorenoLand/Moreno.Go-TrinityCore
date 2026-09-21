@@ -1186,6 +1186,22 @@ func (s *Store) GlyphSlots() ([6]uint32, error) {
 	return slots, nil
 }
 
+func (s *Store) GlyphSlotType(id uint32) (uint32, bool, error) {
+	file, err := s.File("GlyphSlot")
+	if err != nil {
+		return 0, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return 0, false, nil
+	}
+	typeFlags, err := record.Uint32(1)
+	if err != nil {
+		return 0, false, err
+	}
+	return typeFlags, true, nil
+}
+
 // SkillLineAbilityEntry represents a record from SkillLineAbility.dbc.
 type SkillLineAbilityEntry struct {
 	ID                uint32

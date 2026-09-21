@@ -183,12 +183,18 @@ func (s *session) loadGlyphAuras(state *playerState) {
 	if s.activeAuras == nil {
 		s.activeAuras = make(map[uint32]*activeAura)
 	}
-	for _, glyphID := range state.Glyphs[state.ActiveTalentGroup] {
+	for index, glyphID := range state.Glyphs[state.ActiveTalentGroup] {
 		if glyphID == 0 {
 			continue
 		}
 		glyph, found, err := s.server.Data.GlyphProperties(uint32(glyphID))
 		if err != nil || !found || glyph.SpellID == 0 {
+			state.Glyphs[state.ActiveTalentGroup][index] = 0
+			continue
+		}
+		slotType, slotFound, slotErr := s.server.Data.GlyphSlotType(state.GlyphSlots[index])
+		if slotErr != nil || !slotFound || slotType != glyph.GlyphSlotFlags {
+			state.Glyphs[state.ActiveTalentGroup][index] = 0
 			continue
 		}
 		if _, exists := s.activeAuras[glyph.SpellID]; exists {
