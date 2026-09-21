@@ -154,14 +154,6 @@ func (s *session) loadEquipmentCache(ctx context.Context, guid uint64, cached st
 	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return cached
 	}
-	fields := strings.Fields(cached)
-	if len(fields) >= int(inventorySlotBagEnd)*2 {
-		for index := 0; index < len(fields); index += 2 {
-			if fields[index] != "0" {
-				return cached
-			}
-		}
-	}
 	parts := make([]string, int(inventorySlotBagEnd)*2)
 	for i := range parts {
 		parts[i] = "0"
