@@ -396,6 +396,9 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	s.loadDailyQuests(ctx, &state)
 	_ = s.calculatePlayerStats(ctx, &state)
 	_ = s.loadPlayerReputations(ctx, &state)
+	if s.removeZoneLimitedItemsFromState(ctx, &state) {
+		state.Equipment = s.loadEquipmentCache(ctx, state.GUID, "")
+	}
 	s.loadInventorySlots(ctx, &state)
 	restoreLoadedDeathState(&state)
 	s.restoreLoadedCorpseState(ctx, &state)
@@ -616,6 +619,32 @@ func (s *session) loadGlyphFields(state *playerState) {
 	if state.Level >= 80 {
 		state.GlyphsEnabled |= 0x20
 	}
+}
+
+func (s *session) removeZoneLimitedItemsFromState(ctx context.Context, state *playerState) bool {
+	if s == nil || state == nil || state.Health == 0 || state.PlayerFlags&playerFlagGhost != 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.item FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item JOIN item_template AS it ON it.entry = ii.itemEntry WHERE ci.guid = ? AND ((COALESCE(it.Map, 0) <> 0 AND it.Map <> ?) OR (COALESCE(it.area, 0) <> 0 AND it.area <> ?))`, state.GUID, state.Map, state.Zone)
+	if err != nil {
+		return false
+	}
+	items := make([]uint64, 0)
+	for rows.Next() {
+		var item uint64
+		if rows.Scan(&item) == nil && item != 0 {
+			items = append(items, item)
+		}
+	}
+	rows.Close()
+	if len(items) == 0 {
+		return false
+	}
+	for _, item := range items {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", state.GUID, item)
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", item)
+	}
+	return true
 }
 
 func (s *session) loadInventorySlots(ctx context.Context, state *playerState) {
