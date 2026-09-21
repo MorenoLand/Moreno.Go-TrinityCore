@@ -816,11 +816,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.expireOldMails(ctx)
 	s.loadMailState(ctx)
 	s.sendNewMailNotification(ctx)
-	if s.player.repopOnLogin {
-		s.buildPlayerRepop(ctx)
-		s.repopAtGraveyard(ctx)
-		s.player.repopOnLogin = false
-	}
 	if s.player.StandState != 0 && s.player.UnitFlags&unitFlagStunned == 0 {
 		s.player.StandState = 0
 		s.sendPlayerUpdate()
@@ -831,6 +826,11 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.playerLoading = false
 	s.updateAchievementCriteria(criteriaTypeOnLogin, 0, 1)
 	s.setAchievementCriteria(criteriaTypeKnownFactions, 0, uint32(len(state.Reputations)))
+	if s.player.repopOnLogin {
+		s.buildPlayerRepop(ctx)
+		s.repopAtGraveyard(ctx)
+		s.player.repopOnLogin = false
+	}
 	if s.player.ChosenTitle > 0 {
 		s.updateAchievementCriteria(criteriaTypeOwnRank, s.player.ChosenTitle, 1)
 	}
