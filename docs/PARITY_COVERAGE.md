@@ -4,7 +4,7 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 173 / 87606 | — |
+| Server source files / lines | 1410 / 710273 | 173 / 87611 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
 | Client opcode registrations | 727 | 727 | 0 |
 | Client behavioral opcode bindings (reference, non-NULL) | 430 | — | — |

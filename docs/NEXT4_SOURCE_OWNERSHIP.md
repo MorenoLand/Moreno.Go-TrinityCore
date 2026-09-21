@@ -55,6 +55,8 @@ Self-player expertise and shield-block fields now use the source rating coeffici
 
 Self-player client-side spell-power state now serializes healing and per-school positive damage fields from the loaded spell-power total (`cb9eebd`).
 
+Self-player spell penetration now serializes the source negative target-resistance field from equipped-item state (`22b34c6`).
+
 Active pets now use a runtime object GUID separate from the persistent pet number, matching the pinned `Pet::LoadPetFromDB` identity boundary (`80b5fbd`).
 
 Login aura movement now emits the standalone water-walk, feather-fall, and hover packets before the compound movement state, matching `Player::SendInitialPacketsAfterAddToMap` (`44f92c3`).
