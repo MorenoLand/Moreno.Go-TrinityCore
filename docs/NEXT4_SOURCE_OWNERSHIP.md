@@ -49,6 +49,8 @@ The replay self-check now proves both rejection of pre-verify achievement packet
 
 Login replay now validates the `SMSG_LOGIN_SET_TIME_SPEED` packed-time, fixed `0.5` speed, zero holiday offset, and exact payload length (`fe05780`).
 
+Login replay now validates payload layouts and exact lengths for world verification, instance difficulty, initial/unlearned spells, action buttons, and the 128-entry faction table (`c5a3d78`).
+
 Corpse repopulation now occurs after the loading flag clears and ON_LOGIN criteria update, immediately before the login hook, matching `CharacterHandler.cpp` (`e083f6a`).
 
 The self-player update now serializes the computed shield-block value into `PLAYER_SHIELD_BLOCK`, matching `Player::UpdateAllStats` field delivery (`43c5918`).
