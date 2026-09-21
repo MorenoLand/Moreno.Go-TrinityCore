@@ -190,6 +190,8 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 		{"SMSG_SPELL_GO", exact(protocol.OpcodeSMSG_SPELL_GO)},
 	}
 	position := start
+	verifyIndex := -1
+	playerCreateIndex := -1
 	for _, stage := range stages {
 		found := -1
 		for index := position + 1; index < len(trace.Events); index++ {
@@ -209,8 +211,27 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 			if err := requireCreateBlock(trace.Events[found]); err != nil {
 				return err
 			}
+			playerCreateIndex = found
+		}
+		if stage.Name == "SMSG_LOGIN_VERIFY_WORLD" {
+			verifyIndex = found
 		}
 		position = found
+	}
+	for index := start + 1; index < len(trace.Events); index++ {
+		event := trace.Events[index]
+		if event.Direction == protocoltrace.ClientToServer && (event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) || event.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST)) {
+			break
+		}
+		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_TRIGGER_CINEMATIC) {
+			continue
+		}
+		if verifyIndex >= 0 && index < verifyIndex {
+			return fmt.Errorf("SMSG_TRIGGER_CINEMATIC was sent before SMSG_LOGIN_VERIFY_WORLD")
+		}
+		if playerCreateIndex >= 0 && index > playerCreateIndex {
+			return fmt.Errorf("SMSG_TRIGGER_CINEMATIC was sent after player create update")
+		}
 	}
 	return nil
 }
