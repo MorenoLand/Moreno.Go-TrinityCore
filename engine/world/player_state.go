@@ -440,7 +440,8 @@ func (s *session) loadRewardedQuestState(ctx context.Context, state *playerState
 			continue
 		}
 		var title, bonusTalents int64
-		if s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(RewardTitle, 0), COALESCE(RewardTalents, 0) FROM quest_template WHERE ID = ?", questID).Scan(&title, &bonusTalents) != nil {
+		var rewardSpell int64
+		if s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(RewardTitle, 0), COALESCE(RewardTalents, 0), COALESCE(RewardSpell, 0) FROM quest_template WHERE ID = ?", questID).Scan(&title, &bonusTalents, &rewardSpell) != nil {
 			continue
 		}
 		if title > 0 && title < int64(len(state.KnownTitles)*32) {
@@ -450,7 +451,27 @@ func (s *session) loadRewardedQuestState(ctx context.Context, state *playerState
 		if bonusTalents > 0 {
 			state.QuestBonus += uint32(bonusTalents)
 		}
+		if rewardSpell > 0 && rewardSpell <= int64(^uint32(0)) && s.server.Data != nil {
+			if spell, found, spellErr := s.server.Data.Spell(uint32(rewardSpell)); spellErr == nil && found {
+				for _, effect := range spell.Effects {
+					if effect.Effect != 36 || effect.TriggerSpell == 0 || hasLearnedSpell(state.Spells, effect.TriggerSpell) {
+						continue
+					}
+					state.Spells = append(state.Spells, learnedSpell{ID: effect.TriggerSpell, Active: true})
+					_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", state.GUID, effect.TriggerSpell)
+				}
+			}
+		}
 	}
+}
+
+func hasLearnedSpell(spells []learnedSpell, spellID uint32) bool {
+	for _, spell := range spells {
+		if spell.ID == spellID && spell.Active && !spell.Disabled {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *session) loadTransformDisplay(ctx context.Context, state *playerState) {
