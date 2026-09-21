@@ -3405,7 +3405,19 @@ func (s *session) handleNameQuery(ctx context.Context, payload []byte) bool {
 	packet.WriteU8(uint8(race))
 	packet.WriteU8(uint8(gender))
 	packet.WriteU8(uint8(class))
-	packet.WriteU8(0)
+	declined := [5]string{}
+	declinedLoaded := false
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil && ((s.player != nil && s.player.GUID == guid) || s.server.findSessionByGUID(guid) != nil) {
+		declinedLoaded = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT genitive, dative, accusative, instrumental, prepositional FROM character_declinedname WHERE guid = ?`, guid).Scan(&declined[0], &declined[1], &declined[2], &declined[3], &declined[4]) == nil
+	}
+	if declinedLoaded {
+		packet.WriteU8(1)
+		for _, name := range declined {
+			packet.WriteCString(name)
+		}
+	} else {
+		packet.WriteU8(0)
+	}
 	return s.write(uint16(protocol.OpcodeSMSG_NAME_QUERY_RESPONSE), packet.Bytes(), true) == nil
 }
 
