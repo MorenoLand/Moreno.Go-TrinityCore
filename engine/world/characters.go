@@ -665,7 +665,8 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.player.Zone = state.Zone
 	s.areaID = areaID
 	auraChanged := s.updateAreaDependentAuras(ctx, zoneID, areaID)
-	if s.applyZoneState(&state, zoneID, areaID) || auraChanged {
+	itemChanged := s.autoUnequipOffhandIfNeeded(ctx)
+	if s.applyZoneState(&state, zoneID, areaID) || auraChanged || itemChanged {
 		s.sendPlayerUpdate()
 	}
 	s.server.ensureZoneWeather(ctx, zoneID, s)

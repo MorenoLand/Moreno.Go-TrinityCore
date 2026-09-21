@@ -171,6 +171,52 @@ func (s *session) destroyZoneLimitedItems(ctx context.Context, zoneID uint32) bo
 	return true
 }
 
+func (s *session) autoUnequipOffhandIfNeeded(ctx context.Context) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return false
+	}
+	cdb := s.server.CharactersStore.DB
+	var offItem, offEntry, offInvType, mainInvType int64
+	if err := cdb.QueryRowContext(ctx, `SELECT ci.item, ii.itemEntry, COALESCE(it.InventoryType, 0) FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item JOIN item_template AS it ON it.entry = ii.itemEntry WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot = ? LIMIT 1`, s.playerGUID, equipSlotOffhand).Scan(&offItem, &offEntry, &offInvType); err != nil || offItem == 0 {
+		return false
+	}
+	_ = cdb.QueryRowContext(ctx, `SELECT COALESCE(it.InventoryType, 0) FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item JOIN item_template AS it ON it.entry = ii.itemEntry WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot = ? LIMIT 1`, s.playerGUID, equipSlotMainhand).Scan(&mainInvType)
+	canDualWield := false
+	canTitanGrip := false
+	for _, learned := range s.player.Spells {
+		if !learned.Active || learned.Disabled {
+			continue
+		}
+		if learned.ID == 674 {
+			canDualWield = true
+		}
+		if s.server.Data != nil {
+			if spell, found, err := s.server.Data.Spell(learned.ID); err == nil && found {
+				for _, effect := range spell.Effects {
+					if effect.Effect == 155 {
+						canTitanGrip = true
+					}
+				}
+			}
+		}
+	}
+	force := !canDualWield && (offInvType == 13 || offInvType == 22)
+	if !force && (canTitanGrip || (offInvType != 17 && mainInvType != 17)) {
+		return false
+	}
+	freeSlot, ok := s.findFreeBackpackSlot(ctx)
+	if !ok {
+		return false
+	}
+	if _, err := cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = 0, slot = ? WHERE guid = ? AND item = ?", freeSlot, s.playerGUID, offItem); err != nil {
+		return false
+	}
+	s.syncEquipmentCache(ctx)
+	_ = s.sendInventoryItems(ctx)
+	s.sendPlayerUpdate()
+	return true
+}
+
 func (s *session) removeAreaRestrictedAura(ctx context.Context, spellID uint32) {
 	s.removeAura(spellID)
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
@@ -291,6 +337,7 @@ func (s *session) updateZoneAndArea(ctx context.Context, force bool) {
 		stateChanged = s.updateAreaDependentAuras(ctx, s.player.Zone, areaID)
 		if oldZone != s.player.Zone {
 			stateChanged = s.destroyZoneLimitedItems(ctx, s.player.Zone) || stateChanged
+			stateChanged = s.autoUnequipOffhandIfNeeded(ctx) || stateChanged
 		}
 		stateChanged = s.applyZoneState(s.player, s.player.Zone, areaID) || stateChanged
 	}
