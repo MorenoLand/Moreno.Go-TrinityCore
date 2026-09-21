@@ -425,12 +425,28 @@ func (s *session) loadMountDisplay(ctx context.Context, state *playerState) {
 	if s == nil || state == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return
 	}
-	for _, aura := range s.loadedAuras() {
+	auras := s.loadedAuras()
+	hasMountedFlight := false
+	for _, aura := range auras {
+		if aura != nil && aura.AuraType == 207 {
+			hasMountedFlight = true
+			break
+		}
+	}
+	for _, aura := range auras {
 		if aura == nil || aura.AuraType != 78 || aura.MiscValue <= 0 {
 			continue
 		}
+		entry := uint32(aura.MiscValue)
+		if aura.SpellID == 62061 {
+			if hasMountedFlight {
+				entry = 24906
+			} else {
+				entry = 15665
+			}
+		}
 		var displayID int64
-		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 0) FROM creature_template WHERE entry = ?", aura.MiscValue).Scan(&displayID); err == nil && displayID > 0 {
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 0) FROM creature_template WHERE entry = ?", entry).Scan(&displayID); err == nil && displayID > 0 {
 			state.MountDisplayID = uint32(displayID)
 		}
 		return
