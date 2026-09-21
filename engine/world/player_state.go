@@ -205,7 +205,7 @@ type playerState struct {
 	MaxPowers            [7]uint32
 	Cinematic            uint32
 	Movie                uint32
-	KnownCurrency        uint32
+	KnownCurrency        uint64
 	WatchedFaction       uint32
 	AmmoID               uint32
 	ChosenTitle          uint32
@@ -1807,7 +1807,7 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 		state.Powers[i] = uint32(power)
 		state.MaxPowers[i] = uint32(power)
 	}
-	state.Cinematic, state.KnownCurrency, state.WatchedFaction, state.AmmoID, state.ActionBars = uint32(cinematic), uint32(knownCurrency), uint32(watchedFaction), uint32(ammoID), uint32(actionBars)
+	state.Cinematic, state.KnownCurrency, state.WatchedFaction, state.AmmoID, state.ActionBars = uint32(cinematic), uint64(knownCurrency), uint32(watchedFaction), uint32(ammoID), uint32(actionBars)
 	_ = s.loadInstanceState(ctx, state)
 	var grantableLevels int64
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(CAST(grantableLevels AS INTEGER), 0) FROM characters WHERE guid = ?", state.GUID).Scan(&grantableLevels); err == nil && grantableLevels > 0 {
@@ -2280,7 +2280,8 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 		maxLevel = 80
 	}
 	values[unitFieldMaxLevel] = maxLevel
-	values[unitFieldKnownCurrencies] = state.KnownCurrency
+	values[unitFieldKnownCurrencies] = uint32(state.KnownCurrency)
+	values[unitFieldKnownCurrencies+1] = uint32(state.KnownCurrency >> 32)
 	values[unitFieldWatchedFaction] = state.WatchedFaction
 	values[unitFieldChosenTitle] = state.ChosenTitle
 	for i := 0; i < 6; i++ {
