@@ -654,13 +654,21 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.Data == nil {
 		return
 	}
-	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT casterGuid, spell, effectMask, stackCount, amount0, maxDuration, remainTime, remainCharges
+	fullState := true
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT casterGuid, spell, effectMask, recalculateMask, stackCount,
+		amount0, amount1, amount2, base_amount0, base_amount1, base_amount2, maxDuration, remainTime, remainCharges, critChance, applyResilience
 		FROM pet_aura WHERE guid = ? ORDER BY spell`, petID)
 	if err != nil {
 		if errorsMissingAuraTable(err) {
+			fullState = false
+			rows, err = s.server.CharactersStore.DB.QueryContext(ctx, `SELECT casterGuid, spell, effectMask, stackCount, amount0, maxDuration, remainTime, remainCharges
+				FROM pet_aura WHERE guid = ? ORDER BY spell`, petID)
+			if err != nil {
+				return
+			}
+		} else {
 			return
 		}
-		return
 	}
 	defer rows.Close()
 	loaded := make([]*activeAura, 0)
@@ -683,8 +691,17 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 	}
 	for rows.Next() {
 		var casterGUID uint64
-		var spellID, effectMask, stackCount, amount, maxDuration, remainTime, remainCharges int64
-		if rows.Scan(&casterGUID, &spellID, &effectMask, &stackCount, &amount, &maxDuration, &remainTime, &remainCharges) != nil || spellID <= 0 || spellID > int64(^uint32(0)) {
+		var spellID, effectMask, recalculateMask, stackCount, maxDuration, remainTime, remainCharges int64
+		var amounts, baseAmounts [3]int64
+		var critChance float64
+		var applyResilience bool
+		var scanErr error
+		if fullState {
+			scanErr = rows.Scan(&casterGUID, &spellID, &effectMask, &recalculateMask, &stackCount, &amounts[0], &amounts[1], &amounts[2], &baseAmounts[0], &baseAmounts[1], &baseAmounts[2], &maxDuration, &remainTime, &remainCharges, &critChance, &applyResilience)
+		} else {
+			scanErr = rows.Scan(&casterGUID, &spellID, &effectMask, &stackCount, &amounts[0], &maxDuration, &remainTime, &remainCharges)
+		}
+		if scanErr != nil || spellID <= 0 || spellID > int64(^uint32(0)) {
 			continue
 		}
 		spell, found, spellErr := s.server.Data.Spell(uint32(spellID))
@@ -694,16 +711,17 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 		if casterGUID == 0 {
 			casterGUID = petGUID
 		}
-		aura := &activeAura{SpellID: uint32(spellID), CasterGUID: casterGUID, TargetGUID: petGUID, EffectMask: uint8(effectMask) & 0x07, Slot: uint8(len(s.server.activeCreatureAuras[petGUID]) % 64), Positive: true, CasterLevel: s.player.Level}
+		aura := &activeAura{SpellID: uint32(spellID), CasterGUID: casterGUID, TargetGUID: petGUID, EffectMask: uint8(effectMask) & 0x07, RecalculateMask: uint8(recalculateMask), CritChance: float32(critChance), ApplyResilience: applyResilience, Slot: uint8(len(s.server.activeCreatureAuras[petGUID]) % 64), Positive: true, CasterLevel: s.player.Level}
+		for index := range amounts {
+			aura.Amounts[index] = int32(amounts[index])
+			aura.BaseAmounts[index] = int32(baseAmounts[index])
+		}
 		aura.HideDuration = spell.AttributesEx5&spellAttr5HideDuration != 0
 		if maxDuration > 0 {
 			aura.DurationMs = clampAuraDuration(maxDuration)
 		}
 		if remainTime > 0 {
 			aura.RemainingMs = clampAuraDuration(remainTime)
-		}
-		if amount > 0 {
-			aura.Amount = uint32(amount)
 		}
 		if stackCount > 0 {
 			aura.StackCount = uint8(stackCount)
@@ -717,6 +735,9 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 			}
 			aura.AuraType = effect.Aura
 			aura.MiscValue = effect.MiscValue
+			if aura.Amounts[index] > 0 {
+				aura.Amount = uint32(aura.Amounts[index])
+			}
 			aura.PeriodMs = effect.AuraPeriod
 			if aura.Amount == 0 && effect.BasePoints >= 0 {
 				aura.Amount = uint32(effect.BasePoints + 1)
