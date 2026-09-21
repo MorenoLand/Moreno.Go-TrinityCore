@@ -79,15 +79,6 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "malformed language", "error", err)
 		return true
 	}
-	if language == languageUniversal && s.twoSideChat && typeID != chatAFK && typeID != chatDND {
-		if s.playerAlliance() && s.hasLanguageSkill(98) {
-			language = 7
-			s.debug("universal client chat language normalized", "account", s.accountName, "language", language, "skill", 98)
-		} else if !s.playerAlliance() && s.hasLanguageSkill(109) {
-			language = 1
-			s.debug("universal client chat language normalized", "account", s.accountName, "language", language, "skill", 109)
-		}
-	}
 	languageSkillID, languageKnown := languageSkill(language)
 	s.debug("chat packet received", "account", s.accountName, "guid", s.playerGUID, "character", s.player.Name, "type", typeID, "language", language, "language_skill", languageSkillID, "language_known", languageKnown, "loaded_skill_count", len(s.player.Skills))
 	if typeID >= maxChatMessageType {
