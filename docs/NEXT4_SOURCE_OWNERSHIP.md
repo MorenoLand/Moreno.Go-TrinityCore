@@ -43,6 +43,8 @@ Corpse repopulation now occurs after the loading flag clears and ON_LOGIN criter
 
 The self-player update now serializes the computed shield-block value into `PLAYER_SHIELD_BLOCK`, matching `Player::UpdateAllStats` field delivery (`43c5918`).
 
+Self-player update fields now separate total stats from positive equipment/stat bonuses, matching `Unit::BuildValuesUpdate` and `Player::UpdateAllStats` (`746eb67`).
+
 Active pets now use a runtime object GUID separate from the persistent pet number, matching the pinned `Pet::LoadPetFromDB` identity boundary (`80b5fbd`).
 
 Login aura movement now emits the standalone water-walk, feather-fall, and hover packets before the compound movement state, matching `Player::SendInitialPacketsAfterAddToMap` (`44f92c3`).
