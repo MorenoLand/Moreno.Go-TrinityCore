@@ -22,6 +22,7 @@ const (
 // Mirrors TrinityCore's Group class (Groups/Group.h).
 type groupState struct {
 	ID            uint64
+	LFGState      uint8
 	LeaderGUID    uint64
 	Members       []groupMember // ordered; first entry is leader
 	LootMethod    uint8         // 0=Free, 1=RR, 2=MasterLoot, 3=GroupLoot, 4=NeedBeforeGreed
@@ -114,6 +115,10 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 	if err != nil {
 		return
 	}
+	var lfgDungeonID, lfgState int64
+	if uint8(groupType)&0x08 != 0 {
+		_ = db.QueryRowContext(ctx, "SELECT dungeon, state FROM lfg_data WHERE guid = ?", groupID).Scan(&lfgDungeonID, &lfgState)
+	}
 	rows, err := db.QueryContext(ctx, "SELECT gm.memberGuid, gm.memberFlags, gm.subgroup, gm.roles, c.name FROM group_member gm JOIN characters c ON c.guid = gm.memberGuid WHERE gm.guid = ? ORDER BY gm.memberGuid", groupID)
 	if err != nil {
 		return
@@ -137,7 +142,7 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 		}
 		return members[j].GUID != uint64(leaderGUID) && members[i].GUID < members[j].GUID
 	})
-	g := &groupState{ID: uint64(groupID), LeaderGUID: uint64(leaderGUID), Members: members, LootMethod: uint8(lootMethod), LooterGUID: uint64(looterGUID), LootThreshold: uint8(lootThreshold), MasterLooter: uint64(masterLooterGUID), DungeonDiff: uint8(dungeonDiff), RaidDiff: uint8(raidDiff), GroupType: uint8(groupType), IsRaid: uint8(groupType)&0x02 != 0, IsLFG: uint8(groupType)&0x08 != 0}
+	g := &groupState{ID: uint64(groupID), LFGState: uint8(lfgState), LeaderGUID: uint64(leaderGUID), Members: members, LootMethod: uint8(lootMethod), LooterGUID: uint64(looterGUID), LootThreshold: uint8(lootThreshold), MasterLooter: uint64(masterLooterGUID), DungeonDiff: uint8(dungeonDiff), RaidDiff: uint8(raidDiff), GroupType: uint8(groupType), IsRaid: uint8(groupType)&0x02 != 0, IsLFG: uint8(groupType)&0x08 != 0, LFGDungeonID: uint32(lfgDungeonID)}
 	for index, icon := range icons {
 		g.TargetIcons[index] = uint64(icon)
 	}
@@ -250,7 +255,11 @@ func buildGroupList(srv *Server, g *groupState, forGUID uint64) []byte {
 	b.WriteU8(flags)
 	b.WriteU8(roles)
 	if groupType&0x08 != 0 {
-		b.WriteU8(0)
+		status := uint8(0)
+		if g.LFGState == LFGStateFinishedDungeon {
+			status = 2
+		}
+		b.WriteU8(status)
 		b.WriteU32(g.LFGDungeonID)
 	}
 	b.WriteU64(groupGUID(g.ID))
