@@ -26,6 +26,9 @@ type Store struct {
 	slaMap     map[uint32][]SkillLineAbilityEntry
 	slaBySkill map[uint32][]SkillLineAbilityEntry
 	slaErr     error
+	srciOnce   sync.Once
+	srciMap    map[uint32][]SkillRaceClassInfoEntry
+	srciErr    error
 }
 
 type wmoAreaKey struct{ root, adt, group int32 }

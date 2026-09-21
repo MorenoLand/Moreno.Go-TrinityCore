@@ -1916,7 +1916,7 @@ func (s *session) createStarterSkills(ctx context.Context, guid uint64, race, cl
 		for rows.Next() {
 			var skillID, rank int64
 			if err := rows.Scan(&skillID, &rank); err == nil && skillID > 0 {
-				if !isAllowedClassSkill(class, uint16(skillID)) {
+				if !s.skillAllowed(race, class, uint16(skillID)) {
 					continue
 				}
 				val := 1
