@@ -1839,6 +1839,15 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 			state.TaxiPath = taxiPath.String
 		}
 	}
+	var resetTalentsCost, resetTalentsTime int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(resettalents_cost, 0), COALESCE(resettalents_time, 0) FROM characters WHERE guid = ?", state.GUID).Scan(&resetTalentsCost, &resetTalentsTime); err == nil {
+		if resetTalentsCost >= 0 {
+			state.ResetTalentsCost = uint32(resetTalentsCost)
+		}
+		if resetTalentsTime >= 0 {
+			state.ResetTalentsTime = uint32(resetTalentsTime)
+		}
+	}
 	var transportGUID int64
 	var transportX, transportY, transportZ, transportO float32
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(trans_x, 0), COALESCE(trans_y, 0), COALESCE(trans_z, 0),
