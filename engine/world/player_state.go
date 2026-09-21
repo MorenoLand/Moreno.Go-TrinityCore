@@ -2467,8 +2467,8 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 		if totalPoints > spent {
 			values[playerCharacterPoints1] = totalPoints - spent
 		}
-		values[playerCharacterPoints2] = spent
 	}
+	values[playerCharacterPoints2] = s.Config.MaxPrimaryTradeSkill
 
 	mask := protocol.NewUpdateMask(len(values))
 	for index, value := range values {
