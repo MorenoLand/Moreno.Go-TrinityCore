@@ -112,6 +112,10 @@ func runSelfCheck() error {
 		{"bind-point", protocol.OpcodeSMSG_BIND_POINT_UPDATE, make([]byte, 20), func(event protocoltrace.Event) error { return requirePayloadLength(event, 20) }},
 		{"time-speed", protocol.OpcodeSMSG_LOGIN_SET_TIME_SPEED, loginTimeSpeedFixture(), requireLoginTimeSpeed},
 		{"login-effect", protocol.OpcodeSMSG_SPELL_GO, loginEffectFixture(), requireLoginEffect},
+		{"world-states", protocol.OpcodeSMSG_INIT_WORLD_STATES, initWorldStatesFixture(), requireInitWorldStates},
+		{"forced-reactions", protocol.OpcodeSMSG_SET_FORCED_REACTIONS, make([]byte, 4), requireForcedReactions},
+		{"resync-runes", protocol.OpcodeSMSG_RESYNC_RUNES, resyncRunesFixture(), requireResyncRunes},
+		{"time-sync", protocol.OpcodeSMSG_TIME_SYNC_REQ, make([]byte, 4), requireTimeSyncRequest},
 	}
 	for _, check := range payloadChecks {
 		event := protocoltrace.Event{Direction: protocoltrace.ServerToClient, Opcode: uint32(check.opcode), Payload: base64.StdEncoding.EncodeToString(check.payload)}
@@ -143,6 +147,25 @@ func loginEffectFixture() []byte {
 	power := uint32(777)
 	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: 0x106}
 	return protocol.BuildSpellGoWithPower(0x106, 0x106, 0, 836, 0x901, 123, []uint64{0x106}, nil, target, &power)
+}
+
+func initWorldStatesFixture() []byte {
+	buf := protocol.NewBuffer(14)
+	buf.WriteI32(0)
+	buf.WriteI32(0)
+	buf.WriteI32(0)
+	buf.WriteU16(0)
+	return buf.Bytes()
+}
+
+func resyncRunesFixture() []byte {
+	buf := protocol.NewBuffer(16)
+	buf.WriteU32(6)
+	for range 6 {
+		buf.WriteU8(0)
+		buf.WriteU8(0)
+	}
+	return buf.Bytes()
 }
 
 func actionButtonsFixture() []byte {
@@ -417,6 +440,84 @@ func requireLoginEffect(event protocoltrace.Event) error {
 	}
 	if reader.Remaining() != 0 {
 		return fmt.Errorf("unexpected login effect payload bytes=%d", reader.Remaining())
+	}
+	return nil
+}
+
+func requireInitWorldStates(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	for range 3 {
+		if _, err := reader.ReadI32(); err != nil {
+			return fmt.Errorf("world-state map/zone/area is truncated: %w", err)
+		}
+	}
+	count, err := reader.ReadU16()
+	if err != nil {
+		return fmt.Errorf("world-state count is truncated: %w", err)
+	}
+	if _, err := reader.Read(int(count) * 8); err != nil {
+		return fmt.Errorf("world-state entries are truncated: %w", err)
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected world-state payload bytes=%d", reader.Remaining())
+	}
+	return nil
+}
+
+func requireForcedReactions(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	count, err := reader.ReadU32()
+	if err != nil {
+		return fmt.Errorf("forced-reaction count is truncated: %w", err)
+	}
+	if _, err := reader.Read(int(count) * 8); err != nil {
+		return fmt.Errorf("forced-reaction entries are truncated: %w", err)
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected forced-reaction payload bytes=%d", reader.Remaining())
+	}
+	return nil
+}
+
+func requireResyncRunes(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	count, err := reader.ReadU32()
+	if err != nil || count != 6 {
+		return fmt.Errorf("rune count=%d, want 6", count)
+	}
+	if _, err := reader.Read(int(count) * 2); err != nil {
+		return fmt.Errorf("rune entries are truncated: %w", err)
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected rune payload bytes=%d", reader.Remaining())
+	}
+	return nil
+}
+
+func requireTimeSyncRequest(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	if len(payload) != 4 {
+		return fmt.Errorf("time-sync payload length=%d, want 4", len(payload))
+	}
+	reader := protocol.NewReader(payload)
+	counter, err := reader.ReadU32()
+	if err != nil || counter != 0 {
+		return fmt.Errorf("initial time-sync counter=%d, want 0", counter)
 	}
 	return nil
 }
