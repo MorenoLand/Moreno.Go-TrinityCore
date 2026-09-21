@@ -61,6 +61,8 @@ Login `SMSG_INSTANCE_DIFFICULTY` now derives its value from the current map type
 
 The shared player cast path now sends `CAST_FLAG_POWER_LEFT_SELF` with remaining power to the caster and a flag-cleared `SMSG_SPELL_GO` to nearby clients, matching `Spell::SendSpellGo` (`a7871db`).
 
+The login replay verifier now validates `SMSG_INIT_WORLD_STATES`, `SMSG_SET_FORCED_REACTIONS`, six-rune `SMSG_RESYNC_RUNES`, and the initial zero-counter `SMSG_TIME_SYNC_REQ` payload contracts (`4fd9463`).
+
 Corpse repopulation now occurs after the loading flag clears and ON_LOGIN criteria update, immediately before the login hook, matching `CharacterHandler.cpp` (`e083f6a`).
 
 The self-player update now serializes the computed shield-block value into `PLAYER_SHIELD_BLOCK`, matching `Player::UpdateAllStats` field delivery (`43c5918`).
