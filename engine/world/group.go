@@ -30,6 +30,7 @@ type groupState struct {
 	LooterGUID    uint64 // current round-robin looter GUID
 	DungeonDiff   uint8
 	RaidDiff      uint8
+	GroupType     uint8
 	IsRaid        bool
 	IsLFG         bool
 	LFGDungeonID  uint32
@@ -136,7 +137,7 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 		}
 		return members[j].GUID != uint64(leaderGUID) && members[i].GUID < members[j].GUID
 	})
-	g := &groupState{ID: uint64(groupID), LeaderGUID: uint64(leaderGUID), Members: members, LootMethod: uint8(lootMethod), LooterGUID: uint64(looterGUID), LootThreshold: uint8(lootThreshold), MasterLooter: uint64(masterLooterGUID), DungeonDiff: uint8(dungeonDiff), RaidDiff: uint8(raidDiff), IsRaid: uint8(groupType)&0x02 != 0, IsLFG: uint8(groupType)&0x08 != 0}
+	g := &groupState{ID: uint64(groupID), LeaderGUID: uint64(leaderGUID), Members: members, LootMethod: uint8(lootMethod), LooterGUID: uint64(looterGUID), LootThreshold: uint8(lootThreshold), MasterLooter: uint64(masterLooterGUID), DungeonDiff: uint8(dungeonDiff), RaidDiff: uint8(raidDiff), GroupType: uint8(groupType), IsRaid: uint8(groupType)&0x02 != 0, IsLFG: uint8(groupType)&0x08 != 0}
 	for index, icon := range icons {
 		g.TargetIcons[index] = uint64(icon)
 	}
@@ -212,7 +213,7 @@ func buildPartyCommandResult(operation uint32, member string, result uint32) []b
 // buildGroupList sends SMSG_GROUP_LIST to a specific member, excluding themselves.
 // Mirrors Group::SendUpdate (Group.cpp:1755).
 // groupType: 0=party, 1=BG, 2=raid
-func buildGroupList(g *groupState, forGUID uint64) []byte {
+func buildGroupList(srv *Server, g *groupState, forGUID uint64) []byte {
 	// Find the member slot for the recipient.
 	var slot *groupMember
 	for i := range g.Members {
@@ -226,9 +227,12 @@ func buildGroupList(g *groupState, forGUID uint64) []byte {
 		membersCount = 0
 	}
 
-	groupType := uint8(0)
-	if g.IsRaid {
-		groupType = 1
+	groupType := g.GroupType
+	if groupType == 0 && g.IsRaid {
+		groupType = 0x02
+	}
+	if g.IsLFG {
+		groupType |= 0x08
 	}
 
 	subGroup := uint8(0)
@@ -245,7 +249,10 @@ func buildGroupList(g *groupState, forGUID uint64) []byte {
 	b.WriteU8(subGroup)
 	b.WriteU8(flags)
 	b.WriteU8(roles)
-	// no LFG fields (not an LFG group)
+	if groupType&0x08 != 0 {
+		b.WriteU8(0)
+		b.WriteU32(g.LFGDungeonID)
+	}
 	b.WriteU64(g.ID)
 	b.WriteU32(g.counter)
 	b.WriteU32(uint32(membersCount))
@@ -255,7 +262,14 @@ func buildGroupList(g *groupState, forGUID uint64) []byte {
 		}
 		b.WriteCString(m.Name)
 		b.WriteU64(m.GUID)
-		b.WriteU8(1) // online status (MEMBER_STATUS_ONLINE=1)
+		status := uint8(0)
+		if sess := srv.findSessionByGUID(m.GUID); sess != nil && sess.playerLoaded && sess.logoutAt.IsZero() {
+			status = 1
+		}
+		if groupType&0x03 != 0 {
+			status |= 0x02
+		}
+		b.WriteU8(status)
 		b.WriteU8(m.SubGroup)
 		b.WriteU8(m.Flags)
 		b.WriteU8(m.Roles)
@@ -263,11 +277,19 @@ func buildGroupList(g *groupState, forGUID uint64) []byte {
 	b.WriteU64(g.LeaderGUID)
 	if membersCount > 0 {
 		b.WriteU8(g.LootMethod)
-		b.WriteU64(g.MasterLooter)
+		if g.LootMethod == 2 {
+			b.WriteU64(g.MasterLooter)
+		} else {
+			b.WriteU64(0)
+		}
 		b.WriteU8(g.LootThreshold)
 		b.WriteU8(g.DungeonDiff)
 		b.WriteU8(g.RaidDiff)
-		b.WriteU8(0) // dynamic raid difficulty flag
+		if g.RaidDiff >= 2 {
+			b.WriteU8(1)
+		} else {
+			b.WriteU8(0)
+		}
 	}
 	return b.Bytes()
 }
@@ -336,13 +358,13 @@ func (s *Server) removeSessionFromGroup(member *session) {
 }
 
 func (s *Server) broadcastGroupList(g *groupState) {
-	g.counter++
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
 		if sess.groupID == g.ID {
-			pkt := buildGroupList(g, sess.playerGUID)
+			pkt := buildGroupList(s, g, sess.playerGUID)
 			_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), pkt, true)
+			g.counter++
 		}
 	}
 }
@@ -589,7 +611,7 @@ func (s *session) removeFromGroup(g *groupState, target *session) bool {
 				// SMSG_GROUP_DESTROYED
 				_ = last.write(uint16(protocol.OpcodeSMSG_GROUP_DESTROYED), nil, true)
 				// Also send empty group list to clear UI
-				emptyList := buildGroupList(&groupState{ID: g.ID, LeaderGUID: g.Members[0].GUID}, g.Members[0].GUID)
+				emptyList := buildGroupList(srv, &groupState{ID: g.ID, LeaderGUID: g.Members[0].GUID}, g.Members[0].GUID)
 				_ = last.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), emptyList, true)
 			}
 		}
@@ -711,7 +733,7 @@ func (s *session) handleGroupDisband(_ context.Context, _ []byte) bool {
 			}
 			sess.groupID = 0
 			_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_DESTROYED), nil, true)
-			empty := buildGroupList(&groupState{ID: g.ID, LeaderGUID: guid}, guid)
+			empty := buildGroupList(srv, &groupState{ID: g.ID, LeaderGUID: guid}, guid)
 			_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), empty, true)
 		}
 	} else {
@@ -735,7 +757,7 @@ func (s *session) handleGroupDisband(_ context.Context, _ []byte) bool {
 				if last := srv.findSessionByGUID(lastGUID); last != nil {
 					last.groupID = 0
 					_ = last.write(uint16(protocol.OpcodeSMSG_GROUP_DESTROYED), nil, true)
-					emptyG := buildGroupList(&groupState{ID: g.ID, LeaderGUID: lastGUID}, lastGUID)
+					emptyG := buildGroupList(srv, &groupState{ID: g.ID, LeaderGUID: lastGUID}, lastGUID)
 					_ = last.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), emptyG, true)
 				}
 			}
@@ -908,6 +930,11 @@ func (s *session) handleGroupRaidConvert(_ context.Context, _ []byte) bool {
 		return false
 	}
 	g.IsRaid = !g.IsRaid
+	if g.IsRaid {
+		g.GroupType |= 0x02
+	} else {
+		g.GroupType &^= 0x02
+	}
 	srv.groupsMu.Unlock()
 	_ = s.sendPartyResult(partyOpInvite, "", errPartyResultOK)
 	srv.broadcastGroupList(g)
