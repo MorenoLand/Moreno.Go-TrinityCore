@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"math/rand"
-	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -148,12 +147,6 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 	if len(members) < 2 {
 		return
 	}
-	sort.SliceStable(members, func(i, j int) bool {
-		if members[i].GUID == uint64(leaderGUID) {
-			return true
-		}
-		return members[j].GUID != uint64(leaderGUID) && members[i].GUID < members[j].GUID
-	})
 	g := &groupState{ID: newGroupID(), DBID: uint32(dbGroupID), LFGState: uint8(lfgState), LeaderGUID: uint64(leaderGUID), Members: members, LootMethod: uint8(lootMethod), LooterGUID: uint64(looterGUID), LootThreshold: uint8(lootThreshold), MasterLooter: uint64(masterLooterGUID), DungeonDiff: uint8(dungeonDiff), RaidDiff: uint8(raidDiff), GroupType: uint8(groupType), IsRaid: uint8(groupType)&0x02 != 0, IsLFG: uint8(groupType)&0x08 != 0, LFGDungeonID: uint32(lfgDungeonID)}
 	for index, icon := range icons {
 		g.TargetIcons[index] = uint64(icon)
