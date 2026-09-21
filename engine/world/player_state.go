@@ -401,15 +401,158 @@ func (s *session) loadTransformDisplay(ctx context.Context, state *playerState) 
 		return
 	}
 	for _, aura := range s.loadedAuras() {
-		if aura == nil || aura.AuraType != 56 || aura.MiscValue <= 0 {
+		if aura == nil || aura.AuraType != 56 {
 			continue
 		}
-		var displayID int64
-		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 16358) FROM creature_template WHERE entry = ?", aura.MiscValue).Scan(&displayID); err == nil && displayID > 0 {
-			state.TransformDisplayID = uint32(displayID)
+		displayID := specialTransformDisplay(state, aura.SpellID)
+		if displayID != 0 {
+			state.TransformDisplayID = displayID
+			return
+		}
+		if aura.MiscValue <= 0 {
+			continue
+		}
+		var dbDisplayID int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 16358) FROM creature_template WHERE entry = ?", aura.MiscValue).Scan(&dbDisplayID); err == nil && dbDisplayID > 0 {
+			state.TransformDisplayID = uint32(dbDisplayID)
 		}
 		return
 	}
+}
+
+func specialTransformDisplay(state *playerState, spellID uint32) uint32 {
+	if state == nil {
+		return 0
+	}
+	male := state.Gender == 0
+	switch spellID {
+	case 16739:
+		switch state.Race {
+		case 10:
+			if male {
+				return 17829
+			}
+			return 17830
+		case 2:
+			if male {
+				return 10139
+			}
+			return 10140
+		case 8:
+			if male {
+				return 10135
+			}
+			return 10134
+		case 6:
+			if male {
+				return 10136
+			}
+			return 10147
+		case 5:
+			if male {
+				return 10146
+			}
+			return 10145
+		case 11:
+			if male {
+				return 17827
+			}
+			return 17828
+		case 3:
+			if male {
+				return 10141
+			}
+			return 10142
+		case 7:
+			if male {
+				return 10148
+			}
+			return 10149
+		case 1:
+			if male {
+				return 10137
+			}
+			return 10138
+		case 4:
+			if male {
+				return 10143
+			}
+			return 10144
+		}
+	case 42365:
+		return 21723
+	case 50517, 51926:
+		switch state.Race {
+		case 10:
+			if male {
+				return 25032
+			}
+			return 25043
+		case 2:
+			if male {
+				return 25039
+			}
+			return 25050
+		case 8:
+			if male {
+				return 25041
+			}
+			return 25052
+		case 6:
+			if male {
+				return 25040
+			}
+			return 25051
+		case 5:
+			if male {
+				return 25042
+			}
+			return 25053
+		case 11:
+			if male {
+				return 25033
+			}
+			return 25044
+		case 3:
+			if male {
+				return 25034
+			}
+			return 25045
+		case 7:
+			if male {
+				return 25035
+			}
+			return 25046
+		case 1:
+			if male {
+				return 25037
+			}
+			return 25048
+		case 4:
+			if male {
+				return 25038
+			}
+			return 25049
+		}
+	case 53806:
+		return 22512
+	case 65386, 65495:
+		if male {
+			return 29203
+		}
+		return 29204
+	case 75532:
+		if male {
+			return 31737
+		}
+		return 31738
+	case 75531:
+		if male {
+			return 31654
+		}
+		return 31655
+	}
+	return 0
 }
 
 func (s *session) loadGlyphFields(state *playerState) {
