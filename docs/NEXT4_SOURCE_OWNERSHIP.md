@@ -67,6 +67,8 @@ The same verifier now validates aura replay records plus the fixed 12-byte item-
 
 Recorded login traces now receive the same optional-packet validation for rune resync, aura replay, item durations, enchant durations, and quest-giver status entries, preventing malformed post-map packets from passing replay (`40738f7`).
 
+The replay gate now also validates permanent-pet login `SMSG_PET_SPELLS` framing, including the 10-button action bar, spell list, and cooldown records used by active summoned pets (`5a8ad4a`).
+
 Corpse repopulation now occurs after the loading flag clears and ON_LOGIN criteria update, immediately before the login hook, matching `CharacterHandler.cpp` (`e083f6a`).
 
 The self-player update now serializes the computed shield-block value into `PLAYER_SHIELD_BLOCK`, matching `Player::UpdateAllStats` field delivery (`43c5918`).
