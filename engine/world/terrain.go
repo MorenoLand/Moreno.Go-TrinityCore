@@ -58,6 +58,18 @@ type terrainWMOHit struct {
 	Ground float32
 }
 
+type spellAreaRule struct {
+	Area             uint32
+	QuestStart       uint32
+	QuestEnd         uint32
+	AuraSpell        int32
+	RaceMask         uint32
+	Gender           uint8
+	Autocast         bool
+	QuestStartStatus uint32
+	QuestEndStatus   uint32
+}
+
 func ResolveTerrainZoneAndArea(dataDir string, mapID uint32, x, y, z float32, fallback uint32) (uint32, uint32, error) {
 	if dataDir == "" {
 		return 0, 0, fmt.Errorf("terrain data directory is required")
@@ -103,20 +115,130 @@ func (s *session) updateAreaDependentAuras(ctx context.Context, zoneID, areaID u
 			continue
 		}
 		spell, found, err := s.server.Data.Spell(aura.SpellID)
-		if err != nil || !found || spell.AreaGroupID <= 0 {
+		if err != nil || !found {
 			continue
 		}
-		allowed, known, groupErr := s.server.Data.AreaGroupAllows(uint32(spell.AreaGroupID), zoneID, areaID)
-		if groupErr != nil || !known || allowed {
+		if spell.AreaGroupID > 0 {
+			allowed, known, groupErr := s.server.Data.AreaGroupAllows(uint32(spell.AreaGroupID), zoneID, areaID)
+			if groupErr != nil || !known {
+				continue
+			}
+			if !allowed {
+				s.removeAreaRestrictedAura(ctx, aura.SpellID)
+				changed = true
+				continue
+			}
+		}
+		rules, hasRules := s.spellAreaRules(ctx, aura.SpellID)
+		if !hasRules || s.spellAreaRulesFit(ctx, rules, zoneID, areaID) {
 			continue
 		}
-		s.removeAura(aura.SpellID)
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_aura WHERE guid = ? AND spell = ?", s.playerGUID, aura.SpellID)
-		}
+		s.removeAreaRestrictedAura(ctx, aura.SpellID)
 		changed = true
 	}
+	s.applySpellAreaAutocasts(ctx, zoneID, areaID)
 	return changed
+}
+
+func (s *session) removeAreaRestrictedAura(ctx context.Context, spellID uint32) {
+	s.removeAura(spellID)
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_aura WHERE guid = ? AND spell = ?", s.playerGUID, spellID)
+	}
+}
+
+func (s *session) spellAreaRules(ctx context.Context, spellID uint32) ([]spellAreaRule, bool) {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return nil, false
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT area, quest_start, quest_end, aura_spell, racemask, gender, autocast, quest_start_status, quest_end_status FROM spell_area WHERE spell = ?`, spellID)
+	if err != nil {
+		return nil, false
+	}
+	defer rows.Close()
+	rules := make([]spellAreaRule, 0)
+	for rows.Next() {
+		var rule spellAreaRule
+		var auraSpell, gender, autocast int64
+		if err := rows.Scan(&rule.Area, &rule.QuestStart, &rule.QuestEnd, &auraSpell, &rule.RaceMask, &gender, &autocast, &rule.QuestStartStatus, &rule.QuestEndStatus); err != nil {
+			continue
+		}
+		rule.AuraSpell, rule.Gender, rule.Autocast = int32(auraSpell), uint8(gender), autocast != 0
+		rules = append(rules, rule)
+	}
+	return rules, rows.Err() == nil && len(rules) > 0
+}
+
+func (s *session) spellAreaQuestStatus(ctx context.Context, questID uint32) int64 {
+	if questID == 0 {
+		return 0
+	}
+	status, _ := s.characterQuestStatus(ctx, questID)
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var rewarded int64
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_rewarded WHERE guid = ? AND quest = ?", s.playerGUID, questID).Scan(&rewarded); err == nil && rewarded > 0 {
+			return 6
+		}
+	}
+	return status
+}
+
+func (s *session) spellAreaRuleFits(ctx context.Context, rule spellAreaRule, zoneID, areaID uint32) bool {
+	if rule.Area != 0 && rule.Area != zoneID && rule.Area != areaID {
+		return false
+	}
+	if rule.RaceMask != 0 && rule.RaceMask&playerCreateMask(s.player.Race) == 0 {
+		return false
+	}
+	if rule.Gender != 2 && rule.Gender != s.player.Gender {
+		return false
+	}
+	if rule.QuestStart != 0 && rule.QuestStartStatus&(uint32(1)<<uint(s.spellAreaQuestStatus(ctx, rule.QuestStart))) == 0 {
+		return false
+	}
+	if rule.QuestEnd != 0 && rule.QuestEndStatus&(uint32(1)<<uint(s.spellAreaQuestStatus(ctx, rule.QuestEnd))) == 0 {
+		return false
+	}
+	if rule.AuraSpell > 0 && !s.hasAura(uint32(rule.AuraSpell)) {
+		return false
+	}
+	if rule.AuraSpell < 0 && s.hasAura(uint32(-rule.AuraSpell)) {
+		return false
+	}
+	return true
+}
+
+func (s *session) spellAreaRulesFit(ctx context.Context, rules []spellAreaRule, zoneID, areaID uint32) bool {
+	for _, rule := range rules {
+		if s.spellAreaRuleFits(ctx, rule, zoneID, areaID) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *session) applySpellAreaAutocasts(ctx context.Context, zoneID, areaID uint32) {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.player == nil {
+		return
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT DISTINCT spell FROM spell_area WHERE autocast <> 0 AND (area = 0 OR area = ? OR area = ?)", zoneID, areaID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var spellID uint32
+		if rows.Scan(&spellID) != nil || spellID == 0 || s.hasAura(spellID) {
+			continue
+		}
+		rules, hasRules := s.spellAreaRules(ctx, spellID)
+		if !hasRules || !s.spellAreaRulesFit(ctx, rules, zoneID, areaID) {
+			continue
+		}
+		if _, found, spellErr := s.server.Data.Spell(spellID); spellErr == nil && found {
+			s.castSpellDirect(ctx, spellID, s.playerGUID)
+		}
+	}
 }
 
 func (s *session) updateZoneAndArea(ctx context.Context, force bool) {
