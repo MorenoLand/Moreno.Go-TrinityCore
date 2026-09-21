@@ -337,6 +337,14 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 			validate = requireActionButtons
 		case "SMSG_INITIALIZE_FACTIONS":
 			validate = requireInitialFactions
+		case "SMSG_SET_FORCED_REACTIONS":
+			validate = requireForcedReactions
+		case "SMSG_INIT_WORLD_STATES":
+			validate = requireInitWorldStates
+		case "SMSG_TIME_SYNC_REQ":
+			validate = requireTimeSyncRequest
+		case "SMSG_SPELL_GO":
+			validate = requireLoginEffect
 		}
 		if validate != nil {
 			if err := validate(trace.Events[found]); err != nil {
@@ -353,6 +361,9 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 		}
 		position = found
 	}
+	if err := checkOptionalLoginPayloads(trace, start); err != nil {
+		return err
+	}
 	for index := start + 1; index < len(trace.Events); index++ {
 		event := trace.Events[index]
 		if event.Direction == protocoltrace.ClientToServer && (event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) || event.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST)) {
@@ -366,6 +377,37 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 		}
 		if playerCreateIndex >= 0 && index > playerCreateIndex {
 			return fmt.Errorf("SMSG_TRIGGER_CINEMATIC was sent after player create update")
+		}
+	}
+	return nil
+}
+
+func checkOptionalLoginPayloads(trace protocoltrace.Trace, start int) error {
+	for index := start + 1; index < len(trace.Events); index++ {
+		event := trace.Events[index]
+		if event.Direction == protocoltrace.ClientToServer && (event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) || event.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST)) {
+			break
+		}
+		if event.Direction != protocoltrace.ServerToClient {
+			continue
+		}
+		var validate func(protocoltrace.Event) error
+		switch event.Opcode {
+		case uint32(protocol.OpcodeSMSG_RESYNC_RUNES):
+			validate = requireResyncRunes
+		case uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL):
+			validate = requireAuraUpdateAll
+		case uint32(protocol.OpcodeSMSG_ITEM_TIME_UPDATE):
+			validate = requirePayloadLengthExact(12)
+		case uint32(protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE):
+			validate = requirePayloadLengthExact(24)
+		case uint32(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE):
+			validate = requireQuestStatusMultiple
+		}
+		if validate != nil {
+			if err := validate(event); err != nil {
+				return fmt.Errorf("%s: %w", opcodeName(event.Opcode), err)
+			}
 		}
 	}
 	return nil
@@ -544,37 +586,60 @@ func requireAuraUpdateAll(event protocoltrace.Event) error {
 	if _, err := reader.ReadPackedGUID(); err != nil {
 		return fmt.Errorf("aura target GUID is truncated: %w", err)
 	}
-	if _, err := reader.ReadU8(); err != nil {
-		return fmt.Errorf("aura slot is truncated: %w", err)
+	count := 0
+	for reader.Remaining() > 0 {
+		if _, err := reader.ReadU8(); err != nil {
+			return fmt.Errorf("aura slot is truncated: %w", err)
+		}
+		if _, err := reader.ReadU32(); err != nil {
+			return fmt.Errorf("aura spell is truncated: %w", err)
+		}
+		flags, err := reader.ReadU8()
+		if err != nil {
+			return fmt.Errorf("aura flags are truncated: %w", err)
+		}
+		if _, err := reader.ReadU8(); err != nil {
+			return fmt.Errorf("aura caster level is truncated: %w", err)
+		}
+		if _, err := reader.ReadU8(); err != nil {
+			return fmt.Errorf("aura stack count is truncated: %w", err)
+		}
+		if flags&protocol.AuraFlagCaster == 0 {
+			if _, err := reader.ReadPackedGUID(); err != nil {
+				return fmt.Errorf("aura caster GUID is truncated: %w", err)
+			}
+		}
+		if flags&protocol.AuraFlagDuration != 0 {
+			if _, err := reader.ReadU32(); err != nil {
+				return fmt.Errorf("aura max duration is truncated: %w", err)
+			}
+			if _, err := reader.ReadU32(); err != nil {
+				return fmt.Errorf("aura duration is truncated: %w", err)
+			}
+		}
+		count++
 	}
-	if _, err := reader.ReadU32(); err != nil {
-		return fmt.Errorf("aura spell is truncated: %w", err)
+	if count == 0 {
+		return fmt.Errorf("aura update has no records")
 	}
-	flags, err := reader.ReadU8()
+	return nil
+}
+
+func requireQuestStatusMultiple(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
 	if err != nil {
-		return fmt.Errorf("aura flags are truncated: %w", err)
+		return err
 	}
-	if _, err := reader.ReadU8(); err != nil {
-		return fmt.Errorf("aura caster level is truncated: %w", err)
+	reader := protocol.NewReader(payload)
+	count, err := reader.ReadU32()
+	if err != nil {
+		return fmt.Errorf("quest-status count is truncated: %w", err)
 	}
-	if _, err := reader.ReadU8(); err != nil {
-		return fmt.Errorf("aura stack count is truncated: %w", err)
-	}
-	if flags&protocol.AuraFlagCaster == 0 {
-		if _, err := reader.ReadPackedGUID(); err != nil {
-			return fmt.Errorf("aura caster GUID is truncated: %w", err)
-		}
-	}
-	if flags&protocol.AuraFlagDuration != 0 {
-		if _, err := reader.ReadU32(); err != nil {
-			return fmt.Errorf("aura max duration is truncated: %w", err)
-		}
-		if _, err := reader.ReadU32(); err != nil {
-			return fmt.Errorf("aura duration is truncated: %w", err)
-		}
+	if _, err := reader.Read(int(count) * 9); err != nil {
+		return fmt.Errorf("quest-status entries are truncated: %w", err)
 	}
 	if reader.Remaining() != 0 {
-		return fmt.Errorf("unexpected aura payload bytes=%d", reader.Remaining())
+		return fmt.Errorf("unexpected quest-status payload bytes=%d", reader.Remaining())
 	}
 	return nil
 }
