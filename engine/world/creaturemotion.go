@@ -985,6 +985,29 @@ func (s *Server) updateContestedPvP(now time.Time) {
 	}
 }
 
+func (s *Server) updatePvPFlags(now time.Time) {
+	if s == nil {
+		return
+	}
+	s.sessionsMu.RLock()
+	sessions := make([]*session, 0, len(s.sessions))
+	for sess := range s.sessions {
+		if sess.playerLoaded && sess.player != nil && !sess.pvpEnd.IsZero() && !now.Before(sess.pvpEnd) {
+			sessions = append(sessions, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range sessions {
+		if sess.pvpHostile || sess.player.PlayerFlags&playerFlagInPVP != 0 {
+			continue
+		}
+		sess.pvpEnd = time.Time{}
+		sess.player.PlayerFlags &^= playerFlagPVPTimer
+		sess.player.PVPFlags &^= 0x01
+		sess.sendPlayerUpdate()
+	}
+}
+
 func (s *Server) isHostileFaction(creatureFaction uint32, player playerPos) bool {
 	if s.Data != nil && player.FactionTemplate != 0 {
 		creatureTemplate, creatureFound, creatureErr := s.Data.FactionTemplate(creatureFaction)

@@ -194,6 +194,8 @@ type session struct {
 	lastCastTime          time.Time
 	lastCombatTime        time.Time
 	contestedPVPEnd       time.Time
+	pvpEnd                time.Time
+	pvpHostile            bool
 	areaID                uint32
 	lastZoneUpdate        time.Time
 	logoutHook            bool
@@ -581,6 +583,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updateDynamicSpellAuras(ctx, now)
 			s.updatePlayerCombat(ctx)
 			s.updateContestedPvP(now)
+			s.updatePvPFlags(now)
 			s.updatePlayerRegeneration(ctx, now)
 			s.processCreatureRespawns(ctx, now)
 			s.updatePlayerDeathTimers(ctx, now)

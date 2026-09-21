@@ -26,6 +26,7 @@ const (
 	characterFlagDeclined        uint32 = 0x02000000
 	playerFlagGhost              uint32 = 0x00000010
 	playerFlagInPVP              uint32 = 0x00000200
+	playerFlagPVPTimer           uint32 = 0x00040000
 	playerFlagContestedPVP       uint32 = 0x00000100
 	characterCustomizeNone       uint32 = 0
 	characterCustomizeCustomize  uint32 = 0x00000001
@@ -879,6 +880,16 @@ func (s *session) applyZoneState(state *playerState, zoneID, areaID uint32) bool
 		state.PVPFlags |= 0x01
 	} else if !hostile {
 		state.PVPFlags &^= 0x01
+	}
+	s.pvpHostile = hostile
+	if hostile || state.PlayerFlags&playerFlagInPVP != 0 {
+		s.pvpEnd = time.Time{}
+		state.PlayerFlags &^= playerFlagPVPTimer
+	} else if state.PVPFlags&0x01 != 0 {
+		if s.pvpEnd.IsZero() {
+			s.pvpEnd = time.Now()
+			state.PlayerFlags |= playerFlagPVPTimer
+		}
 	}
 	if zone.Flags&wotlk.AreaFlagCapital != 0 && (!hostile || sanctuary) {
 		state.PlayerFlags |= playerFlagResting
