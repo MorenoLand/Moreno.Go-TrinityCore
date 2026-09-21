@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -70,7 +71,7 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 	if len(name) > 31 || len(password) > 31 {
 		return true
 	}
-	key := channelKey(name)
+	key := s.scopedChannelKey(name)
 	flags := channelFlags(channelID, name)
 	if flags&channelFlagCity != 0 && !s.isCityZone(s.player.Zone) {
 		s.debug("city channel join rejected: outside city zone", "account", s.accountName, "zone", s.player.Zone, "channel", name)
@@ -148,7 +149,7 @@ func (s *session) handleLeaveChannel(payload []byte) bool {
 	if channelID == 0 && name == "" {
 		return true
 	}
-	key := channelKey(name)
+	key := s.scopedChannelKey(name)
 	s.server.channelsMu.Lock()
 	channel := s.server.channels[key]
 	if channel == nil && channelID != 0 {
@@ -199,7 +200,7 @@ func (s *session) handleChannelList(payload []byte) bool {
 	if err != nil {
 		return false
 	}
-	key := channelKey(name)
+	key := s.scopedChannelKey(name)
 	s.server.channelsMu.RLock()
 	channel := s.server.channels[key]
 	if channel == nil {
@@ -275,8 +276,8 @@ func buildChannelNotify(notice uint8, name string, extra any) []byte {
 	return packet.Bytes()
 }
 
-func (s *Server) channelMembers(name string) map[*session]struct{} {
-	key := channelKey(name)
+func (s *Server) channelMembers(member *session, name string) map[*session]struct{} {
+	key := member.scopedChannelKey(name)
 	s.channelsMu.RLock()
 	channel := s.channels[key]
 	result := make(map[*session]struct{})
@@ -290,7 +291,7 @@ func (s *Server) channelMembers(name string) map[*session]struct{} {
 }
 
 func (s *Server) isChannelMember(member *session, name string) bool {
-	key := channelKey(name)
+	key := member.scopedChannelKey(name)
 	s.channelsMu.RLock()
 	channel := s.channels[key]
 	ok := false
@@ -303,7 +304,7 @@ func (s *Server) isChannelMember(member *session, name string) bool {
 
 // isChannelMuted reports whether the speaker carries the channel mute flag.
 func (s *Server) isChannelMuted(member *session, name string) bool {
-	key := channelKey(name)
+	key := member.scopedChannelKey(name)
 	s.channelsMu.RLock()
 	channel := s.channels[key]
 	muted := false
@@ -324,6 +325,14 @@ func channelKey(name string) string {
 		}
 	}
 	return key
+}
+
+func (s *session) scopedChannelKey(name string) string {
+	key := channelKey(name)
+	if s == nil || s.player == nil || s.twoSideChannelInteraction() {
+		return key
+	}
+	return strconv.FormatUint(uint64(playerTeam(s.player.Race)), 10) + ":" + key
 }
 
 func channelFlags(id uint32, name string) uint8 {
@@ -514,7 +523,7 @@ func (c *worldChannel) findMemberByName(name string) *session {
 // RBAC_PERM_CHANGE_CHANNEL_NOT_MODERATOR, which has no wiring here yet.
 func (s *session) channelCommandGuard(name string) (*worldChannel, bool) {
 	s.server.channelsMu.RLock()
-	ch := s.server.channels[channelKey(name)]
+	ch := s.server.channels[s.scopedChannelKey(name)]
 	if ch == nil {
 		s.server.channelsMu.RUnlock()
 		return nil, false
@@ -563,7 +572,7 @@ func (s *session) handleChannelPassword(ctx context.Context, payload []byte) boo
 		return false
 	}
 	s.server.channelsMu.Lock()
-	if ch := s.server.channels[channelKey(name)]; ch != nil && ch.isModerator(s.playerGUID) {
+	if ch := s.server.channels[s.scopedChannelKey(name)]; ch != nil && ch.isModerator(s.playerGUID) {
 		if _, on := ch.Members[s]; on {
 			ch.Password = password
 			members := s.server.channelMembersSnapshot(ch)
@@ -591,7 +600,7 @@ func (s *session) handleChannelSetOwner(ctx context.Context, payload []byte) boo
 		return false
 	}
 	s.server.channelsMu.Lock()
-	ch := s.server.channels[channelKey(name)]
+	ch := s.server.channels[s.scopedChannelKey(name)]
 	if ch == nil {
 		s.server.channelsMu.Unlock()
 		return true
@@ -641,7 +650,7 @@ func (s *session) handleChannelOwner(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	s.server.channelsMu.RLock()
-	ch := s.server.channels[channelKey(name)]
+	ch := s.server.channels[s.scopedChannelKey(name)]
 	if ch == nil {
 		s.server.channelsMu.RUnlock()
 		return true
@@ -671,7 +680,7 @@ func (s *session) channelSetMode(payload []byte, moderator, set bool) bool {
 		return false
 	}
 	s.server.channelsMu.Lock()
-	ch := s.server.channels[channelKey(name)]
+	ch := s.server.channels[s.scopedChannelKey(name)]
 	if ch == nil {
 		s.server.channelsMu.Unlock()
 		return true
@@ -760,7 +769,7 @@ func (s *session) handleChannelInvite(ctx context.Context, payload []byte) bool 
 		return false
 	}
 	s.server.channelsMu.RLock()
-	ch := s.server.channels[channelKey(name)]
+	ch := s.server.channels[s.scopedChannelKey(name)]
 	if ch == nil {
 		s.server.channelsMu.RUnlock()
 		return true
@@ -786,7 +795,7 @@ func (s *session) handleChannelInvite(ctx context.Context, payload []byte) bool 
 		return true
 	}
 	s.server.channelsMu.RLock()
-	ch = s.server.channels[channelKey(name)]
+	ch = s.server.channels[s.scopedChannelKey(name)]
 	if ch == nil {
 		s.server.channelsMu.RUnlock()
 		return true
@@ -840,7 +849,7 @@ func (s *session) channelKickBan(payload []byte, ban bool) bool {
 		return false
 	}
 	s.server.channelsMu.Lock()
-	ch := s.server.channels[channelKey(name)]
+	ch := s.server.channels[s.scopedChannelKey(name)]
 	if ch == nil {
 		s.server.channelsMu.Unlock()
 		return true
@@ -869,7 +878,7 @@ func (s *session) channelKickBan(payload []byte, ban bool) bool {
 	victimGUID := target.playerGUID
 	delete(ch.Members, target)
 	if target.channels != nil {
-		delete(target.channels, channelKey(name))
+		delete(target.channels, target.scopedChannelKey(name))
 	}
 	if ban {
 		ch.Banned[victimGUID] = struct{}{}
@@ -911,7 +920,7 @@ func (s *session) handleChannelUnban(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	s.server.channelsMu.Lock()
-	ch := s.server.channels[channelKey(name)]
+	ch := s.server.channels[s.scopedChannelKey(name)]
 	if ch == nil {
 		s.server.channelsMu.Unlock()
 		return true
@@ -960,7 +969,7 @@ func (s *session) handleChannelAnnouncements(ctx context.Context, payload []byte
 		return false
 	}
 	s.server.channelsMu.Lock()
-	ch := s.server.channels[channelKey(name)]
+	ch := s.server.channels[s.scopedChannelKey(name)]
 	if ch == nil {
 		s.server.channelsMu.Unlock()
 		return true
@@ -1026,7 +1035,7 @@ func (s *session) handleGetChannelMemberCount(ctx context.Context, payload []byt
 		return false
 	}
 	s.server.channelsMu.RLock()
-	ch := s.server.channels[channelKey(channelName)]
+	ch := s.server.channels[s.scopedChannelKey(channelName)]
 	if ch == nil {
 		s.server.channelsMu.RUnlock()
 		return true

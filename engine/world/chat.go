@@ -508,7 +508,7 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 	}
 	s.sessionsMu.RLock()
 	targets := make([]*session, 0, len(s.sessions))
-	channelTargets := s.channelMembers(channel)
+	channelTargets := s.channelMembers(source, channel)
 	for value := range s.sessions {
 		if !value.authed || !value.playerLoaded || value.player == nil {
 			continue
