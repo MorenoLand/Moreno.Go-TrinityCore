@@ -289,9 +289,11 @@ func (s *session) handleCmdGM(args []string) {
 	case "visible", "vis":
 		if len(args) > 1 && strings.ToLower(args[1]) == "off" {
 			if s.player != nil {
-				s.player.ExtraFlags |= playerExtraGMInvisible
+				s.player.ExtraFlags |= playerExtraGMInvisible | playerExtraGMOn
+				s.player.PlayerFlags |= playerFlagGM
 				s.persistExtraFlags()
 				s.sendPlayerUpdate()
+				s.refreshNearbyObjects(context.Background())
 			}
 			s.sendNotification("You are now invisible.")
 			s.sendSysMessage("GM visibility is OFF (Invisible)")
@@ -300,6 +302,7 @@ func (s *session) handleCmdGM(args []string) {
 				s.player.ExtraFlags &= ^playerExtraGMInvisible
 				s.persistExtraFlags()
 				s.sendPlayerUpdate()
+				s.refreshNearbyObjects(context.Background())
 			}
 			s.sendNotification("You are now visible.")
 			s.sendSysMessage("GM visibility is ON")
