@@ -126,6 +126,12 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 	if err != nil {
 		return
 	}
+	if dungeonDiff < 0 || dungeonDiff >= 3 {
+		dungeonDiff = 0
+	}
+	if raidDiff < 0 || raidDiff >= 4 {
+		raidDiff = 0
+	}
 	var lfgDungeonID, lfgState int64
 	if uint8(groupType)&0x08 != 0 {
 		_ = db.QueryRowContext(ctx, "SELECT dungeon, state FROM lfg_data WHERE guid = ?", dbGroupID).Scan(&lfgDungeonID, &lfgState)
