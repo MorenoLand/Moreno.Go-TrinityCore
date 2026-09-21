@@ -84,10 +84,30 @@ func (s *session) canTakeQuest(ctx context.Context, questID uint32) (bool, error
 	if wdb == nil {
 		return false, nil
 	}
+	var questFlags int64
+	_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(Flags, 0) FROM quest_template WHERE ID = ?", questID).Scan(&questFlags)
+	if questFlags&0x00008000 != 0 {
+		var count int64
+		if s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_weekly WHERE guid = ? AND quest = ?", s.playerGUID, questID).Scan(&count) == nil && count > 0 {
+			return false, nil
+		}
+	}
+	var monthlySpecialFlags int64
+	_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&monthlySpecialFlags)
+	if monthlySpecialFlags&0x00000010 != 0 {
+		var count int64
+		if s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_monthly WHERE guid = ? AND quest = ?", s.playerGUID, questID).Scan(&count) == nil && count > 0 {
+			return false, nil
+		}
+	}
 
 	// 1. Seasonal / World Event checks
 	var eventEntry sql.NullInt64
 	if err := wdb.QueryRowContext(ctx, "SELECT eventEntry FROM game_event_seasonal_questrelation WHERE questId = ?", questID).Scan(&eventEntry); err == nil && eventEntry.Valid && eventEntry.Int64 > 0 {
+		var count int64
+		if s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_seasonal WHERE guid = ? AND quest = ? AND event = ?", s.playerGUID, questID, eventEntry.Int64).Scan(&count) == nil && count > 0 {
+			return false, nil
+		}
 		activeEvents := s.server.cachedActiveGameEvents(ctx)
 		if _, active := activeEvents[eventEntry.Int64]; !active {
 			return false, nil
