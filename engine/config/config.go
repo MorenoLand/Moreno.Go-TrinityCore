@@ -61,6 +61,8 @@ type Config struct {
 	AlwaysMaxSkillForLevel                  bool
 	DisableFatigue                          int
 	VisibilityDistanceContinents            float64
+	WeatherEnabled                          bool
+	WeatherChangeInterval                   uint32
 	SoloLFGEnable                           bool
 	SoloLFGAnnounce                         bool
 	GMLoginState                            int
@@ -141,6 +143,8 @@ func Default() (c Config) {
 	defer func() {
 		c.DeathBonesWorld = true
 		c.DeathBonesBattleground = true
+		c.WeatherEnabled = true
+		c.WeatherChangeInterval = 600000
 		c.NPCBots.DamagePhysicalMultiplier = 1
 		c.NPCBots.DamageSpellMultiplier = 1
 	}()
@@ -211,6 +215,12 @@ func (c *Config) ApplyEnv() {
 	}
 	if value, ok := os.LookupEnv("MORENOCORE_GAME_DATA_DIR"); ok {
 		c.GameDataDir = value
+	}
+	if value, ok := os.LookupEnv("MORENOCORE_WEATHER_ENABLED"); ok {
+		_ = c.set("Weather.Enabled", value)
+	}
+	if value, ok := os.LookupEnv("MORENOCORE_WEATHER_CHANGE_INTERVAL"); ok {
+		_ = c.set("Weather.ChangeInterval", value)
 	}
 }
 
@@ -432,6 +442,14 @@ func (c *Config) set(key, value string) error {
 		return setInt(&c.DisableFatigue, key, value)
 	case "Visibility.Distance.Continents":
 		return setFloat64(&c.VisibilityDistanceContinents, key, value)
+	case "Weather.Enabled":
+		return setBool(&c.WeatherEnabled, key, value)
+	case "Weather.ChangeInterval":
+		return setUint32(&c.WeatherChangeInterval, key, value)
+	case "ActivateWeather":
+		return setBool(&c.WeatherEnabled, key, value)
+	case "ChangeWeatherInterval":
+		return setUint32(&c.WeatherChangeInterval, key, value)
 	case "GM.LoginState":
 		return setInt(&c.GMLoginState, key, value)
 	case "GM.VisibleState":

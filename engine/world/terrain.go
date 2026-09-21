@@ -261,6 +261,7 @@ func (s *session) updateZoneAndArea(ctx context.Context, force bool) {
 		stateChanged = s.applyZoneState(s.player, s.player.Zone, areaID) || stateChanged
 	}
 	if oldZone != s.player.Zone {
+		s.server.ensureZoneWeather(ctx, s.player.Zone, s)
 		s.updateLocalChannels(s.player.Zone)
 		s.exploreZone(ctx, s.player.Zone)
 		s.sendLoadedGroup()

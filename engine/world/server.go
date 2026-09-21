@@ -127,6 +127,8 @@ type Server struct {
 	terrainTiles            map[uint64][]terrainSpawn
 	terrainTileKnown        map[uint64]bool
 	terrainModels           map[string]*terrainModel
+	weatherMu               sync.Mutex
+	weather                 map[uint32]*zoneWeather
 	stopOnce                sync.Once
 }
 
@@ -572,6 +574,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 				_, _ = s.Features.Scripts.TriggerServerEvent(ctx, 13, uint32(100))
 			}
 			s.updateContinentTransports(now)
+			s.updateWeather(ctx, now)
 			s.updateTimeSync(now)
 			s.updateMailDeliveries(ctx, now.Unix())
 			s.updateActiveCreatures(ctx)
