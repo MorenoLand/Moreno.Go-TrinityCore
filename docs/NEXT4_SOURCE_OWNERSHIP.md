@@ -39,6 +39,8 @@ The login regression verifier includes an executable self-check (`go run ./tools
 
 The same verifier now decodes compressed updates, walks merged item/player blocks, and validates the self-player create movement framing, 42-field-block mask, required fields, and range bits with deterministic compressed/uncompressed fixtures (`39e265d`).
 
+Login replay now rejects cinematic packets before world verification or after the self-player create block, matching the source first-login cinematic branch (`7909904`).
+
 Corpse repopulation now occurs after the loading flag clears and ON_LOGIN criteria update, immediately before the login hook, matching `CharacterHandler.cpp` (`e083f6a`).
 
 The self-player update now serializes the computed shield-block value into `PLAYER_SHIELD_BLOCK`, matching `Player::UpdateAllStats` field delivery (`43c5918`).
