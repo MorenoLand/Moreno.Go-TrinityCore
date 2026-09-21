@@ -221,6 +221,11 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 			}
 			playerCreateIndex = found
 		}
+		if stage.Name == "SMSG_LOGIN_SET_TIME_SPEED" {
+			if err := requireLoginTimeSpeed(trace.Events[found]); err != nil {
+				return err
+			}
+		}
 		if stage.Name == "SMSG_LOGIN_VERIFY_WORLD" {
 			verifyIndex = found
 		}
@@ -240,6 +245,29 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 		if playerCreateIndex >= 0 && index > playerCreateIndex {
 			return fmt.Errorf("SMSG_TRIGGER_CINEMATIC was sent after player create update")
 		}
+	}
+	return nil
+}
+
+func requireLoginTimeSpeed(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	if _, err := reader.ReadU32(); err != nil {
+		return fmt.Errorf("login time field is truncated: %w", err)
+	}
+	speed, err := reader.ReadF32()
+	if err != nil {
+		return fmt.Errorf("login time speed is truncated: %w", err)
+	}
+	holiday, err := reader.ReadU32()
+	if err != nil {
+		return fmt.Errorf("login holiday offset is truncated: %w", err)
+	}
+	if speed != 0.5 || holiday != 0 || reader.Remaining() != 0 {
+		return fmt.Errorf("invalid login time-speed payload speed=%v holiday=%d remaining=%d", speed, holiday, reader.Remaining())
 	}
 	return nil
 }
