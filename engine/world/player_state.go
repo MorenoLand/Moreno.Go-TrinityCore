@@ -2035,7 +2035,9 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 				expectedMax = 5
 			}
 			max = expectedMax
-			if value > max {
+			if s.server.Config.AlwaysMaxSkillForLevel {
+				value = max
+			} else if value > max {
 				value = max
 			}
 		}
@@ -2092,6 +2094,9 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 					max = uint16(state.Level) * 5
 					if max < 5 {
 						max = 5
+					}
+					if s.server.Config.AlwaysMaxSkillForLevel {
+						value = max
 					}
 				}
 				if rank > 0 && rank <= 65535 {
