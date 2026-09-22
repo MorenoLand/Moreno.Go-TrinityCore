@@ -143,6 +143,9 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 				aura.Positive = !isHarmfulAura(aura.AuraType)
 				if aura.AuraType == spellAuraStun || aura.AuraType == spellAuraRoot {
 					s.rooted = true
+					if aura.AuraType == spellAuraStun {
+						state.UnitFlags |= unitFlagStunned
+					}
 				}
 				aura.StackAmount = spell.StackAmount
 				aura.HideDuration = spell.AttributesEx5&0x00000400 != 0
