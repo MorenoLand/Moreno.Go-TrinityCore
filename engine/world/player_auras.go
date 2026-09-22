@@ -79,6 +79,26 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 			if spell.Attributes&spellAttributePassive != 0 || spell.AttributesEx1&(spellAttr1Channeled1|spellAttr1Channeled2) != 0 {
 				continue
 			}
+			switch id {
+			case 44413, 40075, 55849, 73822, 73828:
+				continue
+			}
+			if itemGUID != 0 && maxDuration <= 0 {
+				continue
+			}
+			unsavable := false
+			for index, effect := range spell.Effects {
+				if effectMask&(1<<uint(index)) == 0 {
+					continue
+				}
+				switch effect.Aura {
+				case 1, 2, 6, 128, 177, 236, 249, 292:
+					unsavable = true
+				}
+			}
+			if unsavable {
+				continue
+			}
 		}
 		aura := &activeAura{SpellID: id, CasterGUID: casterGUID, TargetGUID: state.GUID, ItemGUID: itemGUID, EffectMask: uint8(effectMask) & 0x07, RecalculateMask: uint8(recalculateMask), CritChance: float32(critChance), ApplyResilience: applyResilience, Slot: uint8(len(s.activeAuras)), Positive: true, CasterLevel: state.Level}
 		for index := range amounts {
