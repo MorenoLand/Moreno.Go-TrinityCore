@@ -313,4 +313,4 @@ GameDataDir resolution now falls back to the configured DataDir, allowing MPQ-de
 
 World initialization now reports the exact required login DBC files when the configured game-data directory is incomplete, preventing silent DBC-backed client-state failures (runtime-input diagnostics milestone).
 
-Saved-pet restoration no longer emits an extra `SMSG_SPELL_GO` for `CreatedBySpell`, matching `Player::LoadPet` and `Pet::LoadPetFromDB` packet ownership (saved-pet login milestone).
+Saved-pet restoration emits the source fake-summon `SMSG_SPELL_GO` with `CAST_FLAG_UNKNOWN_9` for `CreatedBySpell`, matching `Pet::LoadPetFromDB` packet ownership (saved-pet login milestone).
