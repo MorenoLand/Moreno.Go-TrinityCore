@@ -326,3 +326,5 @@ Saved pet action-bar entries now clear unknown DBC-known spells and force non-au
 Saved pets now use model combat reach plus `PET_FOLLOW_DIST` and `PET_FOLLOW_ANGLE` for the initial close-point position, and serialize the same model bounding radius and combat reach into the create update when model data is available, matching `Pet::LoadPetFromDB` and `WorldObject::GetClosePoint` (saved-pet geometry milestone).
 
 The login replay checker now validates the pre-map dungeon-difficulty flags, `PER_CHARACTER_CACHE_MASK` account-data-times framing, and MOTD line framing emitted by `CharacterHandler.cpp` before accepting the player-create boundary (pre-map login payload milestone).
+
+Contact-list and friend-status serialization now preserve TrinityCore's bit-valued AFK/DND/RAF states, emit status fields for online-result packets even when the target has gone offline, and include zone/level/class only for non-offline list entries, matching `PlayerSocial::SendSocialList`, `SocialMgr::GetFriendInfo`, and `SocialMgr::SendFriendStatus` (social login packet milestone).

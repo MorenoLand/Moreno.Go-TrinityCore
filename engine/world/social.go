@@ -36,9 +36,8 @@ const (
 	friendStatusOffline uint8 = 0
 	friendStatusOnline  uint8 = 1
 	friendStatusAFK     uint8 = 2
-	friendStatusUnknown uint8 = 3
 	friendStatusDND     uint8 = 4
-	friendStatusRAF     uint8 = 5
+	friendStatusRAF     uint8 = 8
 )
 
 // Social contact flags from SocialMgr.h.
@@ -59,6 +58,20 @@ const (
 // TrinityCore: PlayerSocial::SendSocialList
 // flags: 0x1=friends, 0x2=ignored, 0x4=muted
 // -----------------------------------------------------------------
+func (s *Server) friendStatus(guid uint64) (uint8, uint32, uint32, uint32) {
+	friendSess := s.findSessionByGUID(guid)
+	if friendSess == nil || !friendSess.playerLoaded || friendSess.player == nil {
+		return friendStatusOffline, 0, 0, 0
+	}
+	status := friendStatusOnline
+	if friendSess.player.PlayerFlags&playerFlagDND != 0 {
+		status = friendStatusDND
+	} else if friendSess.player.PlayerFlags&playerFlagAFK != 0 {
+		status = friendStatusAFK
+	}
+	return status, uint32(friendSess.player.Zone), uint32(friendSess.player.Level), uint32(friendSess.player.Class)
+}
+
 func (s *session) sendContactList(ctx context.Context, flags uint32) error {
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
@@ -124,23 +137,12 @@ func (s *session) sendContactList(ctx context.Context, flags uint32) error {
 		b.WriteU32(uint32(c.Flags))
 		b.WriteCString(c.Note)
 		if c.Flags&socialFlagFriend != 0 {
-			// Check if online
-			friendSess := s.server.findSessionByGUID(c.GUID)
-			if friendSess != nil && friendSess.playerLoaded {
-				b.WriteU8(friendStatusOnline)
-				zone := uint32(0)
-				level := uint32(0)
-				class := uint32(0)
-				if friendSess.player != nil {
-					zone = uint32(friendSess.player.Zone)
-					level = uint32(friendSess.player.Level)
-					class = uint32(friendSess.player.Class)
-				}
+			status, zone, level, class := s.server.friendStatus(c.GUID)
+			b.WriteU8(status)
+			if status != friendStatusOffline {
 				b.WriteU32(zone)
 				b.WriteU32(level)
 				b.WriteU32(class)
-			} else {
-				b.WriteU8(friendStatusOffline)
 			}
 		}
 	}
@@ -161,16 +163,11 @@ func (s *session) sendFriendStatus(result uint8, friendGUID uint64, note string)
 
 	switch result {
 	case friendsResultAddedOnline, friendsResultOnline:
-		// If friend is online, add their status/zone/level/class
-		friendSess := s.server.findSessionByGUID(friendGUID)
-		if friendSess != nil && friendSess.playerLoaded && friendSess.player != nil {
-			b.WriteU8(friendStatusOnline)
-			b.WriteU32(uint32(friendSess.player.Zone))
-			b.WriteU32(uint32(friendSess.player.Level))
-			b.WriteU32(uint32(friendSess.player.Class))
-		} else {
-			b.WriteU8(friendStatusOffline)
-		}
+		status, zone, level, class := s.server.friendStatus(friendGUID)
+		b.WriteU8(status)
+		b.WriteU32(zone)
+		b.WriteU32(level)
+		b.WriteU32(class)
 	}
 
 	return s.write(uint16(protocol.OpcodeSMSG_FRIEND_STATUS), b.Bytes(), true)
