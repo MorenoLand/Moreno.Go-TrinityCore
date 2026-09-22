@@ -14,6 +14,7 @@ import (
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/version"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -478,6 +479,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_MOTD), buildMotd(s.server.Config.Motd), true); err != nil {
 		return false
+	}
+	if s.server.Config.ServerLoginInfo {
+		s.sendSysMessage(version.String())
 	}
 	s.sendGuildLoginInfo(ctx)
 	if err := s.write(uint16(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES), buildLearnedDanceMoves(), true); err != nil {

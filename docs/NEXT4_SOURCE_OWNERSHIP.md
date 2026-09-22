@@ -338,3 +338,5 @@ Runtime faction hostility, vendor reputation requirements, and reputation achiev
 The login replay checker now parses `SMSG_TALENTS_INFO` player and pet variants, including spec counts, active spec, learned talent records, and glyph slots, matching `BuildPlayerTalentsInfoData` and `BuildPetTalentsInfoData` (talent login packet milestone).
 
 The login replay checker now parses both terminated sections of `SMSG_ALL_ACHIEVEMENT_DATA`, including packed criterion counters/player GUIDs, flags, and timestamp fields, matching `AchievementMgr::BuildAllDataPacket` (achievement login packet milestone).
+
+Optional login revision chat now follows `CONFIG_ENABLE_SINFO_LOGIN` through `Server.LoginInfo` and `MORENOCORE_SERVER_LOGIN_INFO`, sending the Go build revision immediately after MOTD like `CharacterHandler.cpp` (login server-info milestone).
