@@ -734,6 +734,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	s.sendLoadedAuras()
 	s.sendLoginCharmControl()
+	s.sendPlayerCollisionHeight()
 	if err := s.sendInventoryDurations(ctx); err != nil {
 		s.debug("inventory duration load failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
 		return false
@@ -1112,6 +1113,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	}
 	s.sendLoadedAuras()
 	s.sendLoginCharmControl()
+	s.sendPlayerCollisionHeight()
 	if err := s.sendInventoryDurations(ctx); err != nil {
 		return false
 	}

@@ -3180,6 +3180,29 @@ func (s *session) sendPlayerMountUpdate() {
 	if s.server != nil {
 		s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
 	}
+	s.sendPlayerCollisionHeight()
+}
+
+func (s *session) sendPlayerCollisionHeight() {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	nativeDisplayID := uint32(0)
+	if race, found, err := s.server.Data.Race(uint32(s.player.Race)); err == nil && found {
+		nativeDisplayID = race.MaleDisplayID
+		if s.player.Gender != 0 {
+			nativeDisplayID = race.FemaleDisplayID
+		}
+	}
+	height, found, err := s.server.Data.CollisionHeight(s.player.MountDisplayID, nativeDisplayID, s.player.MountDisplayID != 0 || s.hasAuraType(spellAuraMounted))
+	if err != nil || !found {
+		return
+	}
+	packet := protocol.NewBuffer(packedGUIDSize(s.playerGUID) + 8)
+	packet.WritePackedGUID(s.playerGUID)
+	packet.WriteU32(uint32(time.Now().Unix()))
+	packet.WriteF32(height)
+	_ = s.write(uint16(protocol.OpcodeSMSG_MOVE_SET_COLLISION_HGT), packet.Bytes(), true)
 }
 
 func (s *session) sendPlayerDismount() {

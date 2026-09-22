@@ -257,6 +257,70 @@ func (s *Store) File(name string) (*dbc.File, error) {
 	return file, nil
 }
 
+func (s *Store) CollisionHeight(mountDisplayID, nativeDisplayID uint32, mounted bool) (float32, bool, error) {
+	const defaultCollisionHeight = float32(2.03128)
+	displays, err := s.File("CreatureDisplayInfo")
+	if err != nil {
+		return 0, false, err
+	}
+	models, err := s.File("CreatureModelData")
+	if err != nil {
+		return 0, false, err
+	}
+	loadModel := func(displayID uint32) (float32, float32, float32, float32, bool, error) {
+		display, found := displays.Find(displayID)
+		if !found {
+			return 0, 0, 0, 0, false, nil
+		}
+		modelID, err := display.Uint32(1)
+		if err != nil {
+			return 0, 0, 0, 0, false, err
+		}
+		displayScale, err := display.Float32(4)
+		if err != nil {
+			return 0, 0, 0, 0, false, err
+		}
+		model, found := models.Find(modelID)
+		if !found {
+			return 0, 0, 0, 0, false, nil
+		}
+		modelScaleDBC, err := model.Float32(4)
+		if err != nil {
+			return 0, 0, 0, 0, false, err
+		}
+		collisionHeight, err := model.Float32(15)
+		if err != nil {
+			return 0, 0, 0, 0, false, err
+		}
+		mountHeight, err := model.Float32(16)
+		if err != nil {
+			return 0, 0, 0, 0, false, err
+		}
+		return modelScaleDBC, displayScale, collisionHeight, mountHeight, true, nil
+	}
+	nativeModelScale, nativeDisplayScale, nativeCollision, _, nativeFound, err := loadModel(nativeDisplayID)
+	if err != nil {
+		return 0, false, err
+	}
+	if !nativeFound {
+		return defaultCollisionHeight, true, nil
+	}
+	height := nativeModelScale * nativeCollision * nativeDisplayScale
+	if mounted && mountDisplayID != 0 {
+		_, _, _, mountHeight, found, mountErr := loadModel(mountDisplayID)
+		if mountErr != nil {
+			return 0, false, mountErr
+		}
+		if found {
+			height = mountHeight + nativeModelScale*nativeCollision*nativeDisplayScale*0.5
+		}
+	}
+	if height == 0 {
+		height = defaultCollisionHeight
+	}
+	return height, true, nil
+}
+
 func (s *Store) WMOArea(root, adt, group int32) (uint32, bool, error) {
 	s.wmoAreaOnce.Do(func() {
 		s.wmoAreas = make(map[wmoAreaKey]uint32)

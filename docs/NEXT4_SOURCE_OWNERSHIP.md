@@ -444,3 +444,5 @@ Creature-target charm now marks the live creature player-controlled, changes its
 Player-backed vehicle enter/exit now emits `SMSG_PLAYER_VEHICLE_DATA` with the vehicle ID and zero removal state, matching the source vehicle-kit transition packet ownership (player vehicle packet correction).
 
 Mounted-aura removal now emits the source `SMSG_DISMOUNT` packed-GUID transition after clearing `UNIT_FIELD_MOUNTDISPLAYID` and `UNIT_FLAG_MOUNT`; mount collision-height calculation remains dependent on the missing DBC model data (dismount packet correction).
+
+Mount login/runtime collision-height packets now use the source `CreatureDisplayInfo.dbc` and `CreatureModelData.dbc` fields, including the `2.03128f` default and mounted-height formula, matching `Unit::GetCollisionHeight` and `SMSG_MOVE_SET_COLLISION_HGT` (DBC-backed mount collision correction).
