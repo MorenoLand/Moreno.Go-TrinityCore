@@ -264,3 +264,5 @@ Persisted player positions and map IDs now recover to the homebind before login 
 GM login now restores `GM.VisibleState` and saved invisible state with the source GM-on/visibility semantics, matching `Player::SetGMVisible` (`63d5205`).
 
 Runtime `.gm visible` transitions now restore GM mode and refresh/destroy nearby visibility state, matching `SetGMVisible` and `UpdateObjectVisibility` (`e5dcf0c`).
+
+Character login now captures the persisted first-login flag and fires Eluna `PLAYER_EVENT_ON_FIRST_LOGIN` (event 30) before the normal login event, matching `ScriptMgr::OnPlayerLogin` (`435f5b9`).
