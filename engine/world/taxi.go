@@ -159,7 +159,7 @@ func (s *session) handleTaxiNodeStatusQuery(ctx context.Context, payload []byte)
 		return true
 	}
 	known := uint8(0)
-	if s.isTaxiMaskNodeKnown(node) || s.isTaxiCheater() {
+	if s.isTaxiMaskNodeKnown(node) {
 		known = 1
 	}
 	packet := protocol.NewBuffer(9)
@@ -212,7 +212,7 @@ func (s *session) sendTaxiNodeStatusMultiple(ctx context.Context) bool {
 		}
 		packet := protocol.NewBuffer(9)
 		packet.WriteU64(creatureWorldGUID(master.guid, master.entry))
-		if s.isTaxiMaskNodeKnown(node) || s.isTaxiCheater() {
+		if s.isTaxiMaskNodeKnown(node) {
 			packet.WriteU8(1)
 		} else {
 			packet.WriteU8(0)
