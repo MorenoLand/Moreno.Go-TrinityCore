@@ -2319,7 +2319,9 @@ func (s *session) sendEquipmentSetList(ctx context.Context) {
 			continue
 		}
 		for i := 0; i < 19; i++ {
-			entry.items[i] = uint64(itemCols[i])
+			if itemCols[i] > 0 {
+				entry.items[i] = uint64(itemCols[i]) | (uint64(0x4000) << 48)
+			}
 		}
 		sets = append(sets, entry)
 	}
