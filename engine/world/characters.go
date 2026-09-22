@@ -680,6 +680,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			}
 		}
 		s.sendVisiblePlayerAuras(nearbyPlayerGUIDs)
+		s.sendVisibleCreatureAuras(state)
 		return true
 	}
 	if !sendNearbyObjects() {
@@ -1084,6 +1085,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 		}
 	}
 	s.sendVisiblePlayerAuras(nearbyPlayerGUIDs)
+	s.sendVisibleCreatureAuras(state)
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventMapChange, s.luaPlayer())
 	s.streamDynamicSpellObjects()
 	s.updateZoneAndArea(ctx, true)

@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"database/sql"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -317,7 +318,7 @@ func (s *session) sendLoadedAuras() {
 func auraUpdateRecords(auras []*activeAura) []protocol.AuraUpdateRecord {
 	records := make([]protocol.AuraUpdateRecord, 0, len(auras))
 	for _, aura := range auras {
-		if aura == nil {
+		if aura == nil || aura.Stopped {
 			continue
 		}
 		stackCount := aura.StackCount
@@ -339,9 +340,15 @@ func (s *session) sendAurasForTarget(targetGUID uint64, target *session) {
 	}
 	records := auraUpdateRecords(target.loadedAuras())
 	if len(records) == 0 {
+		if target.player != nil && target.player.Health > 0 && target.attackTarget != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(target.playerGUID, target.attackTarget), true)
+		}
 		return
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE_ALL), protocol.BuildAuraUpdateAll(targetGUID, records), true)
+	if target.player != nil && target.player.Health > 0 && target.attackTarget != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(target.playerGUID, target.attackTarget), true)
+	}
 }
 
 func (s *session) sendVisiblePlayerAuras(guids []uint64) {
@@ -351,6 +358,59 @@ func (s *session) sendVisiblePlayerAuras(guids []uint64) {
 	for _, guid := range guids {
 		if target := s.server.findSessionByGUID(guid); target != nil {
 			s.sendAurasForTarget(guid, target)
+		}
+	}
+}
+
+func (s *session) sendVisibleCreatureAuras(state playerState) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	type auraTarget struct {
+		guid  uint64
+		auras []*activeAura
+		x, y  float32
+	}
+	s.server.auraMu.Lock()
+	targets := make([]auraTarget, 0, len(s.server.activeCreatureAuras))
+	for guid, auraMap := range s.server.activeCreatureAuras {
+		if len(auraMap) == 0 {
+			continue
+		}
+		auras := make([]*activeAura, 0, len(auraMap))
+		for _, aura := range auraMap {
+			if aura != nil && !aura.Stopped {
+				auras = append(auras, aura)
+			}
+		}
+		if len(auras) > 0 {
+			targets = append(targets, auraTarget{guid: guid, auras: auras})
+		}
+	}
+	s.server.auraMu.Unlock()
+	s.server.motionMu.Lock()
+	for index := range targets {
+		motion := s.server.creatureMotion[targets[index].guid]
+		if motion == nil {
+			low := uint32(targets[index].guid & 0x00FFFFFF)
+			entry := uint32((targets[index].guid >> 24) & 0x00FFFFFF)
+			motion = s.server.creatureMotion[creatureWorldGUID(low, entry)]
+		}
+		if motion != nil && motion.Map == state.Map {
+			targets[index].x, targets[index].y = motion.X, motion.Y
+		} else {
+			targets[index].guid = 0
+		}
+	}
+	s.server.motionMu.Unlock()
+	distance := float64(s.server.Config.VisibilityDistanceContinents)
+	for _, target := range targets {
+		if target.guid == 0 || math.Hypot(float64(target.x-state.X), float64(target.y-state.Y)) > distance {
+			continue
+		}
+		records := auraUpdateRecords(target.auras)
+		if len(records) > 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE_ALL), protocol.BuildAuraUpdateAll(target.guid, records), true)
 		}
 	}
 }

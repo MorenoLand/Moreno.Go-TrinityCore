@@ -453,6 +453,7 @@ func (s *session) streamNearbyObjects(ctx context.Context) {
 	if packet, _, created := s.server.buildNearbyPlayerUpdatesWithCreated(s); packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 		s.sendVisiblePlayerAuras(created)
+		s.sendVisibleCreatureAuras(*s.player)
 	}
 	if packet, count, err := s.server.buildNearbyGameObjectUpdates(ctx, *s.player, true); err == nil && count > 0 && packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
