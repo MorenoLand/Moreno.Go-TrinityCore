@@ -6,6 +6,10 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
+func totalReputationStanding(reputation playerReputation) int32 {
+	return reputation.Base + reputation.Standing
+}
+
 const (
 	factionFlagAtWar           uint8 = 0x02
 	factionFlagHidden          uint8 = 0x04
@@ -162,16 +166,17 @@ func (s *session) giveReputation(ctx context.Context, factionID uint32, amount i
 		if s.player.Reputations[i].FactionID == factionID {
 			s.player.Reputations[i].Standing += amount
 			_, _ = cdb.ExecContext(ctx, "UPDATE character_reputation SET standing = ? WHERE guid = ? AND faction = ?", s.player.Reputations[i].Standing, s.playerGUID, factionID)
-			if s.player.Reputations[i].Standing > 0 {
-				s.setAchievementCriteria(criteriaTypeGainReputation, factionID, uint32(s.player.Reputations[i].Standing))
-				if s.player.Reputations[i].Standing >= 9000 {
+			totalStanding := totalReputationStanding(s.player.Reputations[i])
+			if totalStanding > 0 {
+				s.setAchievementCriteria(criteriaTypeGainReputation, factionID, uint32(totalStanding))
+				if totalStanding >= 9000 {
 					s.updateAchievementCriteria(criteriaTypeHonoredRep, factionID, 1)
 				}
-				if s.player.Reputations[i].Standing >= 21000 {
+				if totalStanding >= 21000 {
 					s.updateAchievementCriteria(criteriaTypeReveredRep, factionID, 1)
 				}
 				// Reference GAIN_EXALTED_REPUTATION: any faction at 42000+ counts.
-				if s.player.Reputations[i].Standing >= 42000 {
+				if totalStanding >= 42000 {
 					s.updateAchievementCriteria(criteriaTypeExaltedRep, factionID, 1)
 				}
 			}

@@ -328,3 +328,5 @@ Saved pets now use model combat reach plus `PET_FOLLOW_DIST` and `PET_FOLLOW_ANG
 The login replay checker now validates the pre-map dungeon-difficulty flags, `PER_CHARACTER_CACHE_MASK` account-data-times framing, and MOTD line framing emitted by `CharacterHandler.cpp` before accepting the player-create boundary (pre-map login payload milestone).
 
 Contact-list and friend-status serialization now preserve TrinityCore's bit-valued AFK/DND/RAF states, emit status fields for online-result packets even when the target has gone offline, and include zone/level/class only for non-offline list entries, matching `PlayerSocial::SendSocialList`, `SocialMgr::GetFriendInfo`, and `SocialMgr::SendFriendStatus` (social login packet milestone).
+
+Runtime faction hostility, vendor reputation requirements, and reputation achievements now evaluate DBC base standing plus the persisted character-reputation offset, matching `ReputationMgr::GetReputation` and `LoadFromDB` instead of treating the stored offset as an absolute standing (reputation-state milestone).

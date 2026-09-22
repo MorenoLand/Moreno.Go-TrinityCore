@@ -431,7 +431,7 @@ func (s *session) vendorReputationRank(ctx context.Context, factionID uint32) ui
 	if s.player != nil {
 		for _, reputation := range s.player.Reputations {
 			if reputation.FactionID == factionID {
-				return reputationRank(int64(reputation.Standing))
+				return reputationRank(int64(totalReputationStanding(reputation)))
 			}
 		}
 	}
@@ -441,6 +441,11 @@ func (s *session) vendorReputationRank(ctx context.Context, factionID uint32) ui
 	var standing int64
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT standing FROM character_reputation WHERE guid = ? AND faction = ?", s.playerGUID, factionID).Scan(&standing); err != nil {
 		return 0
+	}
+	if s.server.Data != nil {
+		if reputation, found, err := s.server.Data.Reputation(factionID, s.player.Race, s.player.Class); err == nil && found {
+			standing += int64(reputation.BaseStanding)
+		}
 	}
 	return reputationRank(standing)
 }
