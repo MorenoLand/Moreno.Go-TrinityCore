@@ -954,8 +954,12 @@ func (s *session) applyZoneState(ctx context.Context, state *playerState, zoneID
 		hostile = hostile || pvpRealm || inBattleground || area.Flags&wotlk.AreaFlagWintergrasp != 0
 	}
 	sanctuary := area.Flags&wotlk.AreaFlagSanctuary != 0
+	wasSanctuary := oldFlags&0x08 != 0
 	if sanctuary {
 		state.PVPFlags |= 0x08
+		if !wasSanctuary {
+			s.stopPvPCombatForSanctuary()
+		}
 	} else {
 		state.PVPFlags &^= 0x08
 	}

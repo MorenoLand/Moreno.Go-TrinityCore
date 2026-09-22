@@ -398,3 +398,5 @@ Character reputation loading now merges database visibility/war/inactive toggles
 Live player values now include `PLAYER_GUILDID` and `PLAYER_GUILDRANK`, allowing membership and rank changes to reach the owner and nearby clients through the source-public update mask, matching `Player::SetInGuild`, `Player::SetRank`, and `Guild::Member::ChangeRank` (live guild-field correction).
 
 New character creation now persists watched faction `-1` and drunkenness `0`, matching `Player::Create` initialization; `tools/logincheck --self-check` guards both defaults (character-creation login-state correction).
+
+Sanctuary area transitions now stop active player-vs-player attack state and clear the combat update fields for both participants, while creature combat remains intact, matching `Player::UpdateArea` and `CombatStopWithPets` (sanctuary PvP transition correction).

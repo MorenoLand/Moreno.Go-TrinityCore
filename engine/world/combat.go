@@ -824,6 +824,29 @@ func (s *session) handleAttackStop() bool {
 	return true
 }
 
+func (s *session) stopPvPCombatForSanctuary() {
+	if s == nil || s.player == nil || s.server == nil || s.duelPartner != 0 || s.attackTarget == 0 {
+		return
+	}
+	opponent := s.server.findSessionByGUID(s.attackTarget)
+	if opponent == nil || opponent == s || !opponent.playerLoaded || opponent.player == nil {
+		return
+	}
+	victim := s.attackTarget
+	s.attackTarget = 0
+	_ = s.sendAttackStop(victim, false)
+	s.player.UnitFlags &^= unitFlagInCombat
+	s.sendPlayerUpdate()
+	if opponent.attackTarget == s.playerGUID {
+		opponent.attackTarget = 0
+		_ = opponent.sendAttackStop(s.playerGUID, false)
+		if opponent.player != nil {
+			opponent.player.UnitFlags &^= unitFlagInCombat
+			opponent.sendPlayerUpdate()
+		}
+	}
+}
+
 func (s *session) handleSetSheathed(payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
 		return true
