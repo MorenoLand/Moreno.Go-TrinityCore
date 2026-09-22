@@ -733,6 +733,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		return false
 	}
 	s.sendLoadedAuras()
+	s.sendLoginCharmControl()
 	if err := s.sendInventoryDurations(ctx); err != nil {
 		s.debug("inventory duration load failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
 		return false
@@ -1110,6 +1111,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 		return false
 	}
 	s.sendLoadedAuras()
+	s.sendLoginCharmControl()
 	if err := s.sendInventoryDurations(ctx); err != nil {
 		return false
 	}
@@ -1168,6 +1170,13 @@ func (s *session) sendLoginMovementDirectStates() error {
 		}
 	}
 	return nil
+}
+
+func (s *session) sendLoginCharmControl() {
+	if s == nil || s.player == nil || !s.hasAuraType(spellAuraCharm) {
+		return
+	}
+	s.sendClientControl(s.playerGUID, false)
 }
 
 func (s *session) sendLoginMovementStunAndCompoundStates() error {

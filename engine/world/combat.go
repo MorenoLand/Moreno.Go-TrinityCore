@@ -169,7 +169,7 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 		s.attackTarget = 0
 		return true
 	}
-	if s.player.UnitFlags&(unitFlagConfused|unitFlagFleeing) != 0 {
+	if s.player.UnitFlags&(unitFlagConfused|unitFlagFleeing) != 0 || s.hasAuraType(spellAuraCharm) {
 		s.attackTarget = 0
 		return true
 	}

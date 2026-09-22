@@ -434,3 +434,5 @@ Login spell loading now rejects DBC-invalid race/class or level-ineligible activ
 Persisted and reconstructed player skills now enforce the pinned `PLAYER_MAX_SKILLS = 127` client slot boundary across database rows, racial defaults, and `playercreateinfo_skills` additions, matching `Player::_LoadSkills` and preventing overflow into client update fields (skill-slot login correction).
 
 Persisted and runtime `SPELL_AURA_MOD_CONFUSE` and `SPELL_AURA_MOD_FEAR` now set the source client control flags, interrupt active casts and melee, reject client movement/attacks while controlled, and clear each flag only after the final matching aura is removed, matching `Unit::SetControlled`, `SetConfused`, and `SetFeared` (fear/confuse control-state correction).
+
+Player-target `SPELL_AURA_MOD_CHARM` now disables client control after login/worldport and runtime application, dismounts the target, interrupts casts/melee, rejects target input while the aura remains, and restores client control after the final charm aura is removed, matching the player-target portion of `Unit::SetCharmedBy`/`RemoveCharmedBy` (player charm-control correction).

@@ -249,7 +249,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterDead), true)
 		return true
 	}
-	if s.player.UnitFlags&(unitFlagConfused|unitFlagFleeing) != 0 {
+	if s.player.UnitFlags&(unitFlagConfused|unitFlagFleeing) != 0 || s.hasAuraType(spellAuraCharm) {
 		return true
 	}
 	clientCastFlags, err := reader.ReadU8()
@@ -2258,6 +2258,7 @@ func (s *session) removeAura(spellID uint32) {
 	wasMovementControl := false
 	wasConfused := false
 	wasFleeing := false
+	wasCharmed := false
 	wasTransform := false
 	wasStealth := false
 	wasInvisibility := false
@@ -2274,6 +2275,7 @@ func (s *session) removeAura(spellID uint32) {
 			wasMovementControl = aura.AuraType == spellAuraStun || aura.AuraType == spellAuraRoot
 			wasConfused = aura.AuraType == spellAuraConfuse
 			wasFleeing = aura.AuraType == spellAuraFear
+			wasCharmed = aura.AuraType == spellAuraCharm
 			wasTransform = aura.AuraType == 56
 			wasStealth = aura.AuraType == spellAuraStealth
 			wasInvisibility = aura.AuraType == spellAuraInvisibility
@@ -2337,6 +2339,9 @@ func (s *session) removeAura(spellID uint32) {
 	}
 	if wasFleeing && !s.hasAuraType(spellAuraFear) && s.player != nil {
 		s.player.UnitFlags &^= unitFlagFleeing
+	}
+	if wasCharmed && !s.hasAuraType(spellAuraCharm) {
+		s.sendClientControl(s.playerGUID, true)
 	}
 	if removedFakeInebriation > 0 && s.player != nil {
 		if removedFakeInebriation >= s.player.FakeInebriation {
@@ -2556,6 +2561,15 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			} else {
 				targetSess.player.UnitFlags |= unitFlagFleeing
 			}
+		}
+		if eff.Aura == spellAuraCharm {
+			targetSess.clearOtherMountedAuras(0)
+			targetSess.interruptCurrentCast()
+			targetSess.interruptCurrentChannel()
+			if targetSess.attackTarget != 0 {
+				_ = targetSess.handleAttackStop()
+			}
+			targetSess.sendClientControl(targetSess.playerGUID, false)
 		}
 		if eff.Aura == spellAuraMounted {
 			targetSess.applyMountedDisplay(ctx, aura)

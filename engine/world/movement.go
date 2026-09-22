@@ -96,7 +96,7 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		s.debug("movement rejected", "account", s.accountName, "reason", "rooted", "opcode", opcode)
 		return true
 	}
-	if isMove && s.player.UnitFlags&(unitFlagConfused|unitFlagFleeing) != 0 {
+	if isMove && (s.player.UnitFlags&(unitFlagConfused|unitFlagFleeing) != 0 || s.hasAuraType(spellAuraCharm)) {
 		s.debug("movement rejected", "account", s.accountName, "reason", "controlled", "opcode", opcode)
 		return true
 	}
