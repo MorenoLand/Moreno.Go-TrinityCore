@@ -266,3 +266,5 @@ GM login now restores `GM.VisibleState` and saved invisible state with the sourc
 Runtime `.gm visible` transitions now restore GM mode and refresh/destroy nearby visibility state, matching `SetGMVisible` and `UpdateObjectVisibility` (`e5dcf0c`).
 
 Character login now captures the persisted first-login flag and fires Eluna `PLAYER_EVENT_ON_FIRST_LOGIN` (event 30) before the normal login event, matching `ScriptMgr::OnPlayerLogin` (`435f5b9`).
+
+The login replay verifier now parses `SMSG_QUEST_GIVER_QUEST_DETAILS` counts, reward fields, faction arrays, and emote framing for quest-sharing replay (`b077406`).
