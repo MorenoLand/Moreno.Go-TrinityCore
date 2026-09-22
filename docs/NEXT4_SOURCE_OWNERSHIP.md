@@ -370,3 +370,7 @@ Continent boats and zeppelins now serialize the source mobile-transport GUID hig
 Creature activation now honors persisted `creature.curhealth` instead of manufacturing health for zero-health rows, and first activation clamps current health to source-calculated template health, matching `Creature::SetSpawnHealth` and preventing dead/low-health critters from becoming inflated combat targets (creature current-health correction).
 
 Runtime mounted auras now preserve source infinite `SpellDuration` values, remove competing mounted auras, resolve the mount creature display, set and clear `UNIT_FLAG_MOUNT` with `UNIT_FIELD_MOUNTDISPLAYID`, broadcast the update, and remove the aura on cancel, matching `AuraEffect::HandleAuraMounted` and `Unit::Mount` (runtime mount-state correction).
+
+First-login cast spells now use the triggered-cast path, avoiding normal player power consumption, cooldown persistence, and cast-start state while preserving the source `Player::CastSpell(..., true)` `SMSG_SPELL_GO` effect application (first-login triggered-spell correction).
+
+The login replay checker now validates a non-login-effect triggered first-login `SMSG_SPELL_GO` with `CAST_FLAG_UNKNOWN_9`, pending, self-power, self-target, and remaining-power framing, matching `Spell::SendSpellGo` for `Player::CastSpell(..., true)` (first-login triggered-spell packet evidence).

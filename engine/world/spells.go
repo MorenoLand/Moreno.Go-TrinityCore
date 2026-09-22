@@ -1226,6 +1226,14 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 // castSpellDirect triggers an immediate, instant cast of a spell without cast time or resource cost.
 // Mirrors TrinityCore Unit::CastSpell (Spell.cpp: triggered = true).
 func (s *session) castSpellDirect(ctx context.Context, spellID uint32, targetGUID uint64) {
+	s.castSpellDirectWithOptions(ctx, spellID, targetGUID, false)
+}
+
+func (s *session) castFirstLoginSpell(ctx context.Context, spellID uint32, targetGUID uint64) {
+	s.castSpellDirectWithOptions(ctx, spellID, targetGUID, true)
+}
+
+func (s *session) castSpellDirectWithOptions(ctx context.Context, spellID uint32, targetGUID uint64, firstLogin bool) {
 	if s == nil || s.player == nil || spellID == 0 {
 		return
 	}
@@ -1251,7 +1259,17 @@ func (s *session) castSpellDirect(ctx context.Context, spellID uint32, targetGUI
 	castTimeStamp := uint32(now.UnixMilli())
 	hitTargets := []uint64{targetGUID}
 	spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
-	goPkt := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, spellTarget)
+	castFlags := uint32(spellCastFlagGo)
+	var remainingPower *uint32
+	if firstLogin {
+		castFlags |= spellCastFlagPending
+		if spell.PowerType < 7 {
+			castFlags |= protocol.SpellCastFlagPowerLeftSelf
+			power := s.player.Powers[spell.PowerType]
+			remainingPower = &power
+		}
+	}
+	goPkt := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, nil, spellTarget, remainingPower)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 	if s.server != nil {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)

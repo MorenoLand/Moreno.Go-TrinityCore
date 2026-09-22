@@ -125,6 +125,7 @@ func runSelfCheck() error {
 		{"bind-point", protocol.OpcodeSMSG_BIND_POINT_UPDATE, make([]byte, 20), func(event protocoltrace.Event) error { return requirePayloadLength(event, 20) }},
 		{"time-speed", protocol.OpcodeSMSG_LOGIN_SET_TIME_SPEED, loginTimeSpeedFixture(), requireLoginTimeSpeed},
 		{"login-effect", protocol.OpcodeSMSG_SPELL_GO, loginEffectFixture(), requireLoginEffect},
+		{"first-login-triggered-cast", protocol.OpcodeSMSG_SPELL_GO, firstLoginCastFixture(), requireFirstLoginCast},
 		{"equipment-sets", protocol.OpcodeSMSG_EQUIPMENT_SET_LIST, []byte{0, 0, 0, 0}, requireEquipmentSetList},
 		{"group-list", protocol.OpcodeSMSG_GROUP_LIST, groupListFixture(), requireGroupList},
 		{"world-states", protocol.OpcodeSMSG_INIT_WORLD_STATES, initWorldStatesFixture(), requireInitWorldStates},
@@ -303,6 +304,12 @@ func loginEffectFixture() []byte {
 	power := uint32(777)
 	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: 0x106}
 	return protocol.BuildSpellGoWithPower(0x106, 0x106, 0, 836, 0x901, 123, []uint64{0x106}, nil, target, &power)
+}
+
+func firstLoginCastFixture() []byte {
+	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: 0x106}
+	power := uint32(777)
+	return protocol.BuildSpellGoWithPower(0x106, 0x106, 1, 668, 0x901, 123, []uint64{0x106}, nil, target, &power)
 }
 
 func initWorldStatesFixture() []byte {
@@ -1218,6 +1225,58 @@ func requireLoginEffect(event protocoltrace.Event) error {
 	}
 	if reader.Remaining() != 0 {
 		return fmt.Errorf("unexpected login effect payload bytes=%d", reader.Remaining())
+	}
+	return nil
+}
+
+func requireFirstLoginCast(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	if _, err := reader.ReadPackedGUID(); err != nil {
+		return fmt.Errorf("first-login caster GUID is truncated: %w", err)
+	}
+	if _, err := reader.ReadPackedGUID(); err != nil {
+		return fmt.Errorf("first-login caster-unit GUID is truncated: %w", err)
+	}
+	if _, err := reader.ReadU8(); err != nil {
+		return fmt.Errorf("first-login cast ID is truncated: %w", err)
+	}
+	spellID, err := reader.ReadU32()
+	if err != nil || spellID == 0 || spellID == 836 {
+		return fmt.Errorf("first-login spell ID=%d is invalid", spellID)
+	}
+	flags, err := reader.ReadU32()
+	if err != nil || flags != 0x901 {
+		return fmt.Errorf("first-login cast flags=0x%08x, want unknown-9/pending/power-left-self", flags)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		return fmt.Errorf("first-login cast time is truncated: %w", err)
+	}
+	hitCount, err := reader.ReadU8()
+	if err != nil || hitCount != 1 {
+		return fmt.Errorf("first-login hit count=%d, want 1", hitCount)
+	}
+	targetGUID, err := reader.ReadU64()
+	if err != nil || targetGUID != 0x106 {
+		return fmt.Errorf("first-login hit target=0x%x, want 0x106", targetGUID)
+	}
+	missCount, err := reader.ReadU8()
+	if err != nil || missCount != 0 {
+		return fmt.Errorf("first-login miss count=%d, want 0", missCount)
+	}
+	target, err := protocol.ReadSpellTargetData(reader)
+	if err != nil || target.Flags != protocol.SpellTargetFlagUnit || target.UnitGUID != 0x106 {
+		return fmt.Errorf("first-login target is invalid: %w", err)
+	}
+	power, err := reader.ReadU32()
+	if err != nil || power != 777 {
+		return fmt.Errorf("first-login remaining power=%d, want 777", power)
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected first-login cast payload bytes=%d", reader.Remaining())
 	}
 	return nil
 }

@@ -819,9 +819,8 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			if s.server.Data == nil {
 				continue
 			}
-			if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
-				target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: s.playerGUID}
-				s.finishSpellCast(ctx, 0, spellID, spell, target)
+			if _, found, err := s.server.Data.Spell(spellID); err == nil && found {
+				s.castFirstLoginSpell(ctx, spellID, s.playerGUID)
 			}
 		}
 		if s.server.Config.PlayerStartMapsExplored {
