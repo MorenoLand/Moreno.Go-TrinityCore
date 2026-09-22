@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/world"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocoltrace"
@@ -104,6 +105,9 @@ func runSelfCheck() error {
 	if err := checkMovementSpeedAuraClassification(); err != nil {
 		return fmt.Errorf("movement speed aura check failed: %w", err)
 	}
+	if err := checkCollisionHeightFormula(); err != nil {
+		return fmt.Errorf("collision-height formula check failed: %w", err)
+	}
 	if err := checkReputationFlags(); err != nil {
 		return fmt.Errorf("reputation flag check failed: %w", err)
 	}
@@ -178,6 +182,19 @@ func runSelfCheck() error {
 		if err := check.validate(event); err != nil {
 			return fmt.Errorf("%s payload fixture rejected: %w", check.name, err)
 		}
+	}
+	return nil
+}
+
+func checkCollisionHeightFormula() error {
+	if got := wotlk.CalculateCollisionHeight(false, 1, 0, 1.2, 2, 0.75); math.Abs(float64(got-1.8)) > 0.0001 {
+		return fmt.Errorf("unmounted collision height was %f", got)
+	}
+	if got := wotlk.CalculateCollisionHeight(true, 1, 1.5, 1.2, 2, 0.75); math.Abs(float64(got-2.4)) > 0.0001 {
+		return fmt.Errorf("mounted collision height was %f", got)
+	}
+	if got := wotlk.CalculateCollisionHeight(false, 1, 0, 0, 0, 0); math.Abs(float64(got-2.03128)) > 0.0001 {
+		return fmt.Errorf("default collision height was %f", got)
 	}
 	return nil
 }

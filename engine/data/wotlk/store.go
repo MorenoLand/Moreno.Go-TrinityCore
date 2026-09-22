@@ -31,6 +31,21 @@ type Store struct {
 	srciErr    error
 }
 
+func CalculateCollisionHeight(mounted bool, objectScale, mountHeight, modelScale, collisionHeight, displayScale float32) float32 {
+	const defaultCollisionHeight = float32(2.03128)
+	if objectScale == 0 {
+		objectScale = 1
+	}
+	height := objectScale * modelScale * collisionHeight * displayScale
+	if mounted {
+		height = objectScale * (mountHeight + modelScale*collisionHeight*displayScale*0.5)
+	}
+	if height == 0 {
+		return defaultCollisionHeight
+	}
+	return height
+}
+
 type wmoAreaKey struct{ root, adt, group int32 }
 
 const MountedFlightSpeedAura uint32 = 207
@@ -258,7 +273,6 @@ func (s *Store) File(name string) (*dbc.File, error) {
 }
 
 func (s *Store) CollisionHeight(mountDisplayID, nativeDisplayID uint32, mounted bool) (float32, bool, error) {
-	const defaultCollisionHeight = float32(2.03128)
 	displays, err := s.File("CreatureDisplayInfo")
 	if err != nil {
 		return 0, false, err
@@ -303,20 +317,17 @@ func (s *Store) CollisionHeight(mountDisplayID, nativeDisplayID uint32, mounted 
 		return 0, false, err
 	}
 	if !nativeFound {
-		return defaultCollisionHeight, true, nil
+		return CalculateCollisionHeight(false, 1, 0, 0, 0, 0), true, nil
 	}
-	height := nativeModelScale * nativeCollision * nativeDisplayScale
+	height := CalculateCollisionHeight(false, 1, 0, nativeModelScale, nativeCollision, nativeDisplayScale)
 	if mounted && mountDisplayID != 0 {
 		_, _, _, mountHeight, found, mountErr := loadModel(mountDisplayID)
 		if mountErr != nil {
 			return 0, false, mountErr
 		}
 		if found {
-			height = mountHeight + nativeModelScale*nativeCollision*nativeDisplayScale*0.5
+			height = CalculateCollisionHeight(true, 1, mountHeight, nativeModelScale, nativeCollision, nativeDisplayScale)
 		}
-	}
-	if height == 0 {
-		height = defaultCollisionHeight
 	}
 	return height, true, nil
 }
