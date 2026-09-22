@@ -19,6 +19,7 @@ import (
 )
 
 const (
+	PlayerEventFirstLogin = 30
 	PlayerEventLogin      = 3
 	PlayerEventLogout     = 4
 	PlayerEventChat       = 18

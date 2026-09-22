@@ -424,6 +424,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err != nil {
 		return false
 	}
+	firstLogin := state.AtLogin&uint32(atLoginFirst) != 0
 	s.loadRandomBGStatus(ctx, guid)
 	s.loadBattlegroundData(ctx, guid)
 	s.loadInstanceTimeRestrictions(ctx)
@@ -853,6 +854,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		s.updateAchievementCriteria(criteriaTypeOwnRank, s.player.ChosenTitle, 1)
 	}
 	s.debug("world login stage", "stage", "player-login-hooks-start", "guid", guid)
+	if firstLogin {
+		s.triggerPlayerEvent(ctx, scripting.PlayerEventFirstLogin, s.luaPlayer())
+	}
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventLogin, s.luaPlayer())
 	s.debug("world login stage", "stage", "player-login-hooks-complete", "guid", guid)
 	s.server.Features.OnPlayerLogin()
