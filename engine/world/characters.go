@@ -2406,6 +2406,9 @@ const (
 	logoutDelay       = 20 * time.Second
 	playerFlagResting = uint32(0x00000020)
 	unitFlagStunned   = uint32(0x00040000)
+	unitFlagConfused  = uint32(0x00400000)
+	unitFlagFleeing   = uint32(0x00800000)
+	unitFlagPossessed = uint32(0x01000000)
 )
 
 func (s *session) setRooted(root bool) {

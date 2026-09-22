@@ -182,6 +182,12 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 						state.UnitFlags |= unitFlagStunned
 					}
 				}
+				if aura.AuraType == spellAuraConfuse {
+					state.UnitFlags |= unitFlagConfused
+				}
+				if aura.AuraType == spellAuraFear {
+					state.UnitFlags |= unitFlagFleeing
+				}
 				aura.StackAmount = spell.StackAmount
 				aura.HideDuration = spell.AttributesEx5&0x00000400 != 0
 				if spell.ProcCharges > 0 {

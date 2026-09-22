@@ -169,6 +169,10 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 		s.attackTarget = 0
 		return true
 	}
+	if s.player.UnitFlags&(unitFlagConfused|unitFlagFleeing) != 0 {
+		s.attackTarget = 0
+		return true
+	}
 	reader := protocol.NewReader(payload)
 	victim, err := reader.ReadU64()
 	if err != nil {

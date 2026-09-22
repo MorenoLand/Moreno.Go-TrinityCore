@@ -96,6 +96,10 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		s.debug("movement rejected", "account", s.accountName, "reason", "rooted", "opcode", opcode)
 		return true
 	}
+	if isMove && s.player.UnitFlags&(unitFlagConfused|unitFlagFleeing) != 0 {
+		s.debug("movement rejected", "account", s.accountName, "reason", "controlled", "opcode", opcode)
+		return true
+	}
 	isFalling := (info.Flags & movementFalling) != 0
 	if opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) {
 		isFalling = false

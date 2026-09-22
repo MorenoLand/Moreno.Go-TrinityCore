@@ -432,3 +432,5 @@ Newly visible player and creature units now receive `SMSG_AURA_UPDATE_ALL` and a
 Login spell loading now rejects DBC-invalid race/class or level-ineligible active rows and deactivates lower non-stackable ranks when a higher `SkillLineAbility::SupercededBySpell` rank is active, matching `Player::_LoadSpells` plus `Player::AddSpell` rank-state behavior (initial spell-rank correction).
 
 Persisted and reconstructed player skills now enforce the pinned `PLAYER_MAX_SKILLS = 127` client slot boundary across database rows, racial defaults, and `playercreateinfo_skills` additions, matching `Player::_LoadSkills` and preventing overflow into client update fields (skill-slot login correction).
+
+Persisted and runtime `SPELL_AURA_MOD_CONFUSE` and `SPELL_AURA_MOD_FEAR` now set the source client control flags, interrupt active casts and melee, reject client movement/attacks while controlled, and clear each flag only after the final matching aura is removed, matching `Unit::SetControlled`, `SetConfused`, and `SetFeared` (fear/confuse control-state correction).

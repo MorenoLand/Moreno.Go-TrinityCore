@@ -44,6 +44,9 @@ const (
 	spellEffectTriggerSpell              = 64
 	spellEffectHealMaxHealth             = 67
 	spellAuraMounted                     = 78
+	spellAuraConfuse                     = 5
+	spellAuraCharm                       = 6
+	spellAuraFear                        = 7
 	spellAuraStun                        = 12
 	spellAuraRoot                        = 26
 	spellAuraStealth                     = 16
@@ -244,6 +247,9 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	}
 	if s.isDeadOrGhost() {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterDead), true)
+		return true
+	}
+	if s.player.UnitFlags&(unitFlagConfused|unitFlagFleeing) != 0 {
 		return true
 	}
 	clientCastFlags, err := reader.ReadU8()
@@ -2250,6 +2256,8 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 func (s *session) removeAura(spellID uint32) {
 	wasMounted := false
 	wasMovementControl := false
+	wasConfused := false
+	wasFleeing := false
 	wasTransform := false
 	wasStealth := false
 	wasInvisibility := false
@@ -2264,6 +2272,8 @@ func (s *session) removeAura(spellID uint32) {
 			removedAuraType = aura.AuraType
 			wasMounted = aura.AuraType == spellAuraMounted
 			wasMovementControl = aura.AuraType == spellAuraStun || aura.AuraType == spellAuraRoot
+			wasConfused = aura.AuraType == spellAuraConfuse
+			wasFleeing = aura.AuraType == spellAuraFear
 			wasTransform = aura.AuraType == 56
 			wasStealth = aura.AuraType == spellAuraStealth
 			wasInvisibility = aura.AuraType == spellAuraInvisibility
@@ -2321,6 +2331,12 @@ func (s *session) removeAura(spellID uint32) {
 			s.player.UnitFlags &^= unitFlagStunned
 			s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_UNROOT))
 		}
+	}
+	if wasConfused && !s.hasAuraType(spellAuraConfuse) && s.player != nil {
+		s.player.UnitFlags &^= unitFlagConfused
+	}
+	if wasFleeing && !s.hasAuraType(spellAuraFear) && s.player != nil {
+		s.player.UnitFlags &^= unitFlagFleeing
 	}
 	if removedFakeInebriation > 0 && s.player != nil {
 		if removedFakeInebriation >= s.player.FakeInebriation {
@@ -2528,6 +2544,18 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				targetSess.player.UnitFlags |= unitFlagStunned
 			}
 			targetSess.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT))
+		}
+		if eff.Aura == spellAuraConfuse || eff.Aura == spellAuraFear {
+			targetSess.interruptCurrentCast()
+			targetSess.interruptCurrentChannel()
+			if targetSess.attackTarget != 0 {
+				_ = targetSess.handleAttackStop()
+			}
+			if eff.Aura == spellAuraConfuse {
+				targetSess.player.UnitFlags |= unitFlagConfused
+			} else {
+				targetSess.player.UnitFlags |= unitFlagFleeing
+			}
 		}
 		if eff.Aura == spellAuraMounted {
 			targetSess.applyMountedDisplay(ctx, aura)
