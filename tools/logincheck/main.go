@@ -394,7 +394,7 @@ func loginCreateFixture(compressed bool) (protocoltrace.Event, error) {
 		player.WriteF32(1)
 	}
 	mask := make([]uint32, 42)
-	values := map[int]uint32{0: 1, 2: 0x19, 4: math.Float32bits(1), 23: 0x01020304, 24: 100, 32: 100, 54: 10, 59: 8, 67: 123, 68: 123}
+	values := map[int]uint32{0: 1, 2: 0x19, 4: math.Float32bits(1), 23: 0x01020304, 24: 100, 32: 100, 54: 10, 59: 8, 67: 123, 68: 123, 283: 1234, 284: 5678}
 	for field := range values {
 		mask[field/32] |= 1 << uint(field%32)
 	}
@@ -1927,12 +1927,12 @@ func parseCreateObjectBlock(reader *protocol.Buffer) (uint8, error) {
 			return 0, fmt.Errorf("player update mask sets out-of-range field %d", field)
 		}
 	}
-	for _, field := range []int{0, 2, 4, 23, 24, 32, 54, 59, 67, 68} {
+	for _, field := range []int{0, 2, 4, 23, 24, 32, 54, 59, 67, 68, 283, 284} {
 		if !updateMaskHas(mask, field) {
 			return 0, fmt.Errorf("player update mask omits required field %d", field)
 		}
 	}
-	if values[2] != 0x19 || values[23] == 0 || values[54] == 0 || values[67] == 0 || values[68] == 0 || values[24] == 0 || values[32] == 0 {
+	if values[2] != 0x19 || values[23] == 0 || values[54] == 0 || values[67] == 0 || values[68] == 0 || values[24] == 0 || values[32] == 0 || values[283] == 0 || values[284] == 0 {
 		return 0, fmt.Errorf("player create required field values are invalid")
 	}
 	if values[59]&0x00000008 == 0 {

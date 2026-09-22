@@ -355,4 +355,6 @@ The login replay checker now validates known and unknown `SMSG_NAME_QUERY_RESPON
 
 The login replay checker now validates the nine-byte `SMSG_PLAYED_TIME` total/level/trigger response framing (played-time packet evidence milestone).
 
+The self-player create fixture now requires populated visible equipment entry/enchantment fields at `PLAYER_VISIBLE_ITEM_1_ENTRYID`, matching the source public update-field boundary used by `Player::BuildCreateUpdateBlockForPlayer` (equipment visibility packet evidence milestone).
+
 The login replay checker now validates the `SMSG_SET_FACTION_STANDING` float/flag/count/standing-entry framing used by the start-reputation transition (start-reputation packet evidence milestone).
