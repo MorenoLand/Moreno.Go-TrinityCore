@@ -341,7 +341,7 @@ func (s *session) handleGuildRoster(ctx context.Context) bool {
 	memRows, err := cdb.QueryContext(ctx, `SELECT gm.guid, c.name, gm.rank, c.level, c.class, c.gender, c.zone, c.logout_time, gm.pnote, gm.offnote
 		FROM guild_member AS gm
 		JOIN characters AS c ON c.guid = gm.guid
-		WHERE gm.guildid = ?`, guildID)
+		WHERE gm.guildid = ? ORDER BY gm.guid`, guildID)
 	if err == nil {
 		defer memRows.Close()
 		for memRows.Next() {

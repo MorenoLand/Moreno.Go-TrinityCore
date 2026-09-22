@@ -107,6 +107,10 @@ func runSelfCheck() error {
 		{"unlearn-spells", protocol.OpcodeSMSG_SEND_UNLEARN_SPELLS, []byte{0, 0, 0, 0}, requireUnlearnSpells},
 		{"action-buttons", protocol.OpcodeSMSG_ACTION_BUTTONS, actionButtonsFixture(), requireActionButtons},
 		{"factions", protocol.OpcodeSMSG_INITIALIZE_FACTIONS, initialFactionsFixture(), requireInitialFactions},
+		{"contact-list", protocol.OpcodeSMSG_CONTACT_LIST, []byte{7, 0, 0, 0, 0, 0, 0, 0}, requireContactList},
+		{"guild-event", protocol.OpcodeSMSG_GUILD_EVENT, []byte{2, 0}, requireGuildEvent},
+		{"guild-bank-list", protocol.OpcodeSMSG_GUILD_BANK_LIST, []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, requireGuildBankList},
+		{"guild-roster", protocol.OpcodeSMSG_GUILD_ROSTER, []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, requireGuildRoster},
 		{"dance-moves", protocol.OpcodeSMSG_LEARNED_DANCE_MOVES, make([]byte, 8), func(event protocoltrace.Event) error { return requirePayloadLength(event, 8) }},
 		{"feature-status", protocol.OpcodeSMSG_FEATURE_SYSTEM_STATUS, make([]byte, 2), func(event protocoltrace.Event) error { return requirePayloadLength(event, 2) }},
 		{"bind-point", protocol.OpcodeSMSG_BIND_POINT_UPDATE, make([]byte, 20), func(event protocoltrace.Event) error { return requirePayloadLength(event, 20) }},
@@ -397,6 +401,8 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 			validate = func(event protocoltrace.Event) error { return requirePayloadLength(event, 2) }
 		case "SMSG_BIND_POINT_UPDATE":
 			validate = func(event protocoltrace.Event) error { return requirePayloadLength(event, 20) }
+		case "SMSG_CONTACT_LIST":
+			validate = requireContactList
 		case "SMSG_INSTANCE_DIFFICULTY":
 			validate = requireEightBytePayload
 		case "SMSG_INITIAL_SPELLS":
@@ -530,6 +536,12 @@ func checkOptionalLoginPayloads(trace protocoltrace.Trace, start int) error {
 			validate = requireQuestGiverDetails
 		case uint32(protocol.OpcodeSMSG_GROUP_LIST):
 			validate = requireGroupList
+		case uint32(protocol.OpcodeSMSG_GUILD_EVENT):
+			validate = requireGuildEvent
+		case uint32(protocol.OpcodeSMSG_GUILD_BANK_LIST):
+			validate = requireGuildBankList
+		case uint32(protocol.OpcodeSMSG_GUILD_ROSTER):
+			validate = requireGuildRoster
 		}
 		if validate != nil {
 			if err := validate(event); err != nil {
@@ -597,6 +609,223 @@ func requireEquipmentSetList(event protocoltrace.Event) error {
 	}
 	if reader.Remaining() != 0 {
 		return fmt.Errorf("unexpected equipment-set payload bytes=%d", reader.Remaining())
+	}
+	return nil
+}
+
+func requireContactList(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	if _, err := reader.ReadU32(); err != nil {
+		return fmt.Errorf("contact flags are truncated: %w", err)
+	}
+	count, err := reader.ReadU32()
+	if err != nil {
+		return fmt.Errorf("contact count is truncated: %w", err)
+	}
+	for index := uint32(0); index < count; index++ {
+		if _, err := reader.ReadU64(); err != nil {
+			return fmt.Errorf("contact %d GUID is truncated: %w", index, err)
+		}
+		flags, err := reader.ReadU32()
+		if err != nil {
+			return fmt.Errorf("contact %d flags are truncated: %w", index, err)
+		}
+		if _, err := reader.ReadCString(); err != nil {
+			return fmt.Errorf("contact %d note is truncated: %w", index, err)
+		}
+		if flags&1 != 0 {
+			status, err := reader.ReadU8()
+			if err != nil {
+				return fmt.Errorf("contact %d status is truncated: %w", index, err)
+			}
+			if status != 0 {
+				if _, err := reader.Read(12); err != nil {
+					return fmt.Errorf("contact %d online fields are truncated: %w", index, err)
+				}
+			}
+		}
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected contact payload bytes=%d", reader.Remaining())
+	}
+	return nil
+}
+
+func requireGuildEvent(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	eventType, err := reader.ReadU8()
+	if err != nil {
+		return fmt.Errorf("guild event type is truncated: %w", err)
+	}
+	count, err := reader.ReadU8()
+	if err != nil || count > 3 {
+		return fmt.Errorf("invalid guild event parameter count=%d", count)
+	}
+	for index := uint8(0); index < count; index++ {
+		if _, err := reader.ReadCString(); err != nil {
+			return fmt.Errorf("guild event parameter %d is truncated: %w", index, err)
+		}
+	}
+	if eventType == 3 || eventType == 4 || eventType == 12 || eventType == 13 {
+		if _, err := reader.ReadU64(); err != nil {
+			return fmt.Errorf("guild event GUID is truncated: %w", err)
+		}
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected guild event payload bytes=%d", reader.Remaining())
+	}
+	return nil
+}
+
+func requireGuildBankList(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	if _, err := reader.ReadU64(); err != nil {
+		return fmt.Errorf("guild bank money is truncated: %w", err)
+	}
+	tab, err := reader.ReadU8()
+	if err != nil {
+		return fmt.Errorf("guild bank tab is truncated: %w", err)
+	}
+	if _, err := reader.ReadI32(); err != nil {
+		return fmt.Errorf("guild bank withdrawals are truncated: %w", err)
+	}
+	fullUpdate, err := reader.ReadU8()
+	if err != nil {
+		return fmt.Errorf("guild bank full-update flag is truncated: %w", err)
+	}
+	if tab == 0 && fullUpdate != 0 {
+		tabCount, err := reader.ReadU8()
+		if err != nil {
+			return fmt.Errorf("guild bank tab count is truncated: %w", err)
+		}
+		for index := uint8(0); index < tabCount; index++ {
+			if _, err := reader.ReadCString(); err != nil {
+				return fmt.Errorf("guild bank tab %d name is truncated: %w", index, err)
+			}
+			if _, err := reader.ReadCString(); err != nil {
+				return fmt.Errorf("guild bank tab %d icon is truncated: %w", index, err)
+			}
+		}
+	}
+	itemCount, err := reader.ReadU8()
+	if err != nil {
+		return fmt.Errorf("guild bank item count is truncated: %w", err)
+	}
+	for index := uint8(0); index < itemCount; index++ {
+		if _, err := reader.ReadU8(); err != nil {
+			return fmt.Errorf("guild bank item %d slot is truncated: %w", index, err)
+		}
+		itemID, err := reader.ReadU32()
+		if err != nil {
+			return fmt.Errorf("guild bank item %d ID is truncated: %w", index, err)
+		}
+		if itemID == 0 {
+			continue
+		}
+		if _, err := reader.ReadI32(); err != nil {
+			return fmt.Errorf("guild bank item %d flags are truncated: %w", index, err)
+		}
+		randomPropertyID, err := reader.ReadI32()
+		if err != nil {
+			return fmt.Errorf("guild bank item %d random property is truncated: %w", index, err)
+		}
+		if randomPropertyID != 0 {
+			if _, err := reader.ReadU32(); err != nil {
+				return fmt.Errorf("guild bank item %d suffix seed is truncated: %w", index, err)
+			}
+		}
+		if _, err := reader.ReadI32(); err != nil {
+			return fmt.Errorf("guild bank item %d count is truncated: %w", index, err)
+		}
+		if _, err := reader.ReadI32(); err != nil {
+			return fmt.Errorf("guild bank item %d enchantment is truncated: %w", index, err)
+		}
+		charges, err := reader.ReadU8()
+		if err != nil {
+			return fmt.Errorf("guild bank item %d charges are truncated: %w", index, err)
+		}
+		_ = charges
+		socketCount, err := reader.ReadU8()
+		if err != nil {
+			return fmt.Errorf("guild bank item %d socket count is truncated: %w", index, err)
+		}
+		for socket := uint8(0); socket < socketCount; socket++ {
+			if _, err := reader.Read(5); err != nil {
+				return fmt.Errorf("guild bank item %d socket %d is truncated: %w", index, socket, err)
+			}
+		}
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected guild bank payload bytes=%d", reader.Remaining())
+	}
+	return nil
+}
+
+func requireGuildRoster(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	members, err := reader.ReadU32()
+	if err != nil {
+		return fmt.Errorf("guild roster member count is truncated: %w", err)
+	}
+	if _, err := reader.ReadCString(); err != nil {
+		return fmt.Errorf("guild roster welcome text is truncated: %w", err)
+	}
+	if _, err := reader.ReadCString(); err != nil {
+		return fmt.Errorf("guild roster info text is truncated: %w", err)
+	}
+	ranks, err := reader.ReadU32()
+	if err != nil {
+		return fmt.Errorf("guild roster rank count is truncated: %w", err)
+	}
+	for index := uint32(0); index < ranks; index++ {
+		if _, err := reader.Read(56); err != nil {
+			return fmt.Errorf("guild roster rank %d is truncated: %w", index, err)
+		}
+	}
+	for index := uint32(0); index < members; index++ {
+		if _, err := reader.ReadU64(); err != nil {
+			return fmt.Errorf("guild roster member %d GUID is truncated: %w", index, err)
+		}
+		status, err := reader.ReadU8()
+		if err != nil {
+			return fmt.Errorf("guild roster member %d status is truncated: %w", index, err)
+		}
+		if _, err := reader.ReadCString(); err != nil {
+			return fmt.Errorf("guild roster member %d name is truncated: %w", index, err)
+		}
+		if _, err := reader.Read(11); err != nil {
+			return fmt.Errorf("guild roster member %d fields are truncated: %w", index, err)
+		}
+		if status == 0 {
+			if _, err := reader.ReadF32(); err != nil {
+				return fmt.Errorf("guild roster member %d last-save is truncated: %w", index, err)
+			}
+		}
+		if _, err := reader.ReadCString(); err != nil {
+			return fmt.Errorf("guild roster member %d note is truncated: %w", index, err)
+		}
+		if _, err := reader.ReadCString(); err != nil {
+			return fmt.Errorf("guild roster member %d officer note is truncated: %w", index, err)
+		}
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected guild roster payload bytes=%d", reader.Remaining())
 	}
 	return nil
 }

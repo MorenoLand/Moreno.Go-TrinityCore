@@ -68,7 +68,7 @@ func (s *session) sendContactList(ctx context.Context, flags uint32) error {
 		return s.write(uint16(protocol.OpcodeSMSG_CONTACT_LIST), b.Bytes(), true)
 	}
 	rows, err := cdb.QueryContext(ctx,
-		"SELECT friend, flags, note FROM character_social WHERE guid = ?",
+		"SELECT friend, flags, note FROM character_social WHERE guid = ? ORDER BY friend",
 		s.playerGUID)
 	if err != nil {
 		if missingTable(err) || errors.Is(err, sql.ErrNoRows) {
