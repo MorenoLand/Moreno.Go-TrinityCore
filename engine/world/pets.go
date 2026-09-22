@@ -643,14 +643,18 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 	s.sendPetSpells(ctx, petID, entry, reactState)
 
 	if s.server != nil {
-		var autocast []uint32
+		var knownSpells, autocast []uint32
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			if rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT spell FROM pet_spell WHERE guid = ? AND active = 1", petID); err == nil {
+			if rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT spell, active FROM pet_spell WHERE guid = ? ORDER BY spell", petID); err == nil {
 				defer rows.Close()
 				for rows.Next() {
 					var sp uint32
-					if rows.Scan(&sp) == nil && sp > 0 {
-						autocast = append(autocast, sp)
+					var active uint8
+					if rows.Scan(&sp, &active) == nil && sp > 0 {
+						knownSpells = append(knownSpells, sp)
+						if active != 0 {
+							autocast = append(autocast, sp)
+						}
 					}
 				}
 			}
@@ -680,6 +684,8 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 			Health:         curHealth,
 			MaxHealth:      maxHealth,
 			OwnerGUID:      s.playerGUID,
+			Spells:         knownSpells,
+			SpellCooldowns: make(map[uint32]time.Time),
 			PetCommand:     PetCommandFollow,
 			PetReact:       reactState,
 			AutocastSpells: autocast,
@@ -1588,9 +1594,8 @@ func (s *session) handleUnstablePet(ctx context.Context, payload []byte) bool {
 	return true
 }
 
-// Pet command handlers below require a live pet entity (spawned pet object,
-// pet AI, charm info) which the Go server does not model yet; the packets are
-// consumed and logged until the pet entity system exists. Reference:
+// Pet command handlers below use the live creature-motion pet entity and
+// persisted pet state. Reference:
 // PetHandler.cpp HandlePetAction (73), HandlePetCancelAuraOpcode (215),
 // HandlePetCastSpellOpcode (241), HandlePetLearnTalent (265), HandlePetRename
 // (284), HandlePetSetAction (328), HandlePetSpellAutocastOpcode (365),
@@ -1737,26 +1742,82 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	castFlags, _ := r.ReadU8()
-	target, _ := protocol.ReadSpellTargetData(r)
+	target, targetErr := protocol.ReadSpellTargetData(r)
+	if targetErr != nil {
+		return false
+	}
 	if castFlags&0x02 != 0 {
 		_, _ = r.ReadF32()
 		_, _ = r.ReadF32()
 	}
-
-	if spellID > 0 {
-		castTimeStamp := uint32(time.Now().UnixMilli())
-		var hitTargets []uint64
-		if target.UnitGUID != 0 {
-			hitTargets = []uint64{target.UnitGUID}
+	if spellID == 0 || s.server == nil || s.server.Data == nil || s.player == nil {
+		return true
+	}
+	motion, ok := s.petMotionForCast(petGUID)
+	if !ok {
+		return true
+	}
+	spell, found, spellErr := s.server.Data.Spell(spellID)
+	if spellErr != nil || !found || spell.Attributes&spellAttributePassive != 0 || !s.petKnowsSpell(ctx, motion, spellID) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
+		return true
+	}
+	if target.UnitGUID == 0 {
+		if isSelfCastOnly(spell) {
+			target.UnitGUID = motion.GUID
+			target.Flags |= protocol.SpellTargetFlagUnitWireMask
+		} else if s.selection != 0 {
+			target.UnitGUID = s.selection
+			target.Flags |= protocol.SpellTargetFlagUnitWireMask
 		}
-		goPkt := protocol.BuildSpellGo(petGUID, petGUID, castCount, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, target)
-		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
-		if s.server != nil {
-			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
-		}
+	}
+	s.server.motionMu.Lock()
+	lastSpell := motion.SpellCooldowns[spellID]
+	s.server.motionMu.Unlock()
+	if spell.RecoveryTime > 0 && !lastSpell.IsZero() && time.Since(lastSpell) < time.Duration(spell.RecoveryTime)*time.Millisecond {
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
+		return true
+	}
+	if !s.executePetSpell(ctx, motion, spell, castCount, target) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
 	}
 	s.debug("pet cast spell", "account", s.accountName, "pet", petGUID, "spell", spellID, "castCount", castCount)
 	return true
+}
+
+func (s *session) petMotionForCast(petGUID uint64) (*creatureMotion, bool) {
+	if s == nil || s.server == nil || petGUID == 0 {
+		return nil, false
+	}
+	s.server.motionMu.Lock()
+	defer s.server.motionMu.Unlock()
+	motion := s.server.creatureMotion[petGUID]
+	if motion == nil {
+		low := uint32(petGUID & 0x00FFFFFF)
+		entry := uint32((petGUID >> 24) & 0x00FFFFFF)
+		motion = s.server.creatureMotion[creatureWorldGUID(low, entry)]
+	}
+	if motion == nil || motion.Health == 0 || (motion.OwnerGUID != s.playerGUID && motion.CharmerGUID != s.playerGUID) {
+		return nil, false
+	}
+	return motion, true
+}
+
+func (s *session) petKnowsSpell(ctx context.Context, motion *creatureMotion, spellID uint32) bool {
+	if motion == nil {
+		return false
+	}
+	for _, known := range motion.Spells {
+		if known == spellID {
+			return true
+		}
+	}
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.player == nil || s.player.PetNumber == 0 {
+		return false
+	}
+	var found int64
+	err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT 1 FROM pet_spell WHERE guid = ? AND spell = ? LIMIT 1", s.player.PetNumber, spellID).Scan(&found)
+	return err == nil && found != 0
 }
 
 func (s *session) handlePetLearnTalent(ctx context.Context, payload []byte) bool {

@@ -62,12 +62,13 @@ type creatureMotion struct {
 	Health    uint32
 	MaxHealth uint32
 
-	TargetGUID   uint64
-	InCombat     bool
-	LastAttack   time.Time
-	LastSpell    time.Time
-	Spells       []uint32
-	NextSpellIdx int
+	TargetGUID     uint64
+	InCombat       bool
+	LastAttack     time.Time
+	LastSpell      time.Time
+	Spells         []uint32
+	NextSpellIdx   int
+	SpellCooldowns map[uint32]time.Time
 
 	ThreatMgr  *ThreatManager
 	BossAI     BossAI

@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	protocol "github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -436,4 +437,142 @@ func (s *Server) executePetAutocast(ctx context.Context, motion *creatureMotion,
 	}
 	s.motionMu.Unlock()
 	motion.LastSpell = now
+}
+
+func (s *session) executePetSpell(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, castCount uint8, target protocol.SpellTargetData) bool {
+	if s == nil || s.server == nil || motion == nil {
+		return false
+	}
+	targetGUID := target.UnitGUID
+	if targetGUID == 0 {
+		targetGUID = motion.GUID
+	}
+	hitTargets := []uint64{targetGUID}
+	stamp := uint32(time.Now().UnixMilli())
+	goPacket := protocol.BuildSpellGo(motion.GUID, motion.GUID, castCount, spell.ID, spellCastFlagGo, stamp, hitTargets, nil, target)
+	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true); err != nil {
+		return false
+	}
+	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, s)
+	damage, hasDamage := creatureSpellDamage(spell)
+	if !hasDamage {
+		now := time.Now()
+		s.server.motionMu.Lock()
+		if motion.SpellCooldowns == nil {
+			motion.SpellCooldowns = make(map[uint32]time.Time)
+		}
+		motion.SpellCooldowns[spell.ID] = now
+		s.server.motionMu.Unlock()
+		motion.LastSpell = now
+		return true
+	}
+	schoolMask := uint8(spell.SchoolMask)
+	if schoolMask == 0 {
+		schoolMask = 1
+	}
+	s.executePetSpellDamage(ctx, motion, targetGUID, spell.ID, damage, schoolMask)
+	now := time.Now()
+	s.server.motionMu.Lock()
+	if motion.SpellCooldowns == nil {
+		motion.SpellCooldowns = make(map[uint32]time.Time)
+	}
+	motion.SpellCooldowns[spell.ID] = now
+	s.server.motionMu.Unlock()
+	motion.LastSpell = now
+	return true
+}
+
+func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID, damage uint32, schoolMask uint8) {
+	if s == nil || s.server == nil || caster == nil || damage == 0 {
+		return
+	}
+	target, ok := s.getCombatTarget(ctx, targetGUID)
+	if !ok || target.Health == 0 {
+		return
+	}
+	isPlayerVictim := s.server.findSessionByGUID(target.GUID) != nil
+	hitInfo := uint32(0)
+	resisted := uint32(0)
+	absorbed := uint32(0)
+	if target.GUID != caster.GUID {
+		miss := magicSpellHitResult(uint8(maxUint32(caster.Level, 1)), target.Level, isPlayerVictim)
+		if miss != protocol.SpellMissNone {
+			damage = 0
+			hitInfo = 0x01
+		}
+	}
+	if damage > 0 && schoolMask > 1 {
+		resistance := target.Resistances[schoolMaskToResistanceIndex(schoolMask)]
+		resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistance, uint8(maxUint32(caster.Level, 1)), target.Level)
+	}
+	if isPlayerVictim {
+		if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil {
+			victim.applyResilienceToDamage(true, &damage, false, CombatRatingCritTakenSpell)
+			if damage > 0 {
+				absorbed, damage = victim.applyAbsorptionShields(damage, schoolMask)
+			}
+		}
+	}
+	overkill := uint32(0)
+	if damage >= target.Health && target.Health > 0 {
+		overkill = damage - target.Health
+	}
+	logPacket := buildSpellNonMeleeDamageLog(target.GUID, caster.GUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, true)
+	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, s)
+	if damage == 0 {
+		return
+	}
+	if isPlayerVictim {
+		victim := s.server.findSessionByGUID(target.GUID)
+		if victim == nil || victim.player == nil {
+			return
+		}
+		if damage >= victim.player.Health {
+			victim.player.Health = 0
+			victim.sendPlayerUpdate()
+			victim.killPlayer(ctx)
+		} else {
+			victim.player.Health -= damage
+			victim.sendPlayerUpdate()
+		}
+		return
+	}
+	low := uint32(target.GUID & 0x00FFFFFF)
+	entry := uint32((target.GUID >> 24) & 0x00FFFFFF)
+	key := creatureWorldGUID(low, entry)
+	s.server.motionMu.Lock()
+	targetMotion := s.server.creatureMotion[target.GUID]
+	if targetMotion == nil {
+		targetMotion = s.server.creatureMotion[key]
+	}
+	if targetMotion != nil {
+		if damage >= targetMotion.Health {
+			targetMotion.Health = 0
+			targetMotion.InCombat = false
+			targetMotion.TargetGUID = 0
+			targetMotion.Moving = false
+			if targetMotion.ThreatMgr != nil {
+				targetMotion.ThreatMgr.ClearThreat()
+			}
+		} else {
+			targetMotion.Health -= damage
+			if targetMotion.ThreatMgr == nil {
+				targetMotion.ThreatMgr = NewThreatManager(targetMotion.GUID)
+			}
+			targetMotion.ThreatMgr.AddThreat(caster.OwnerGUID, float32(damage), false)
+		}
+	}
+	s.server.motionMu.Unlock()
+	if targetMotion == nil {
+		return
+	}
+	if targetMotion.Health == 0 {
+		s.server.stopCreatureMotion(targetMotion.Map, targetMotion.GUID, targetMotion.X, targetMotion.Y, targetMotion.Z)
+		s.server.broadcastCreatureValuesUpdate(targetMotion.Map, targetMotion.GUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: 1})
+		s.onCreatureKilled(ctx, target)
+	} else {
+		s.server.broadcastCreatureValuesUpdate(targetMotion.Map, targetMotion.GUID, map[int]uint32{unitFieldHealth: targetMotion.Health})
+		s.server.triggerCreatureAggro(ctx, targetMotion.GUID, caster.OwnerGUID)
+	}
 }
