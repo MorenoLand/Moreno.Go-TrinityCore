@@ -2255,10 +2255,13 @@ func (s *session) removeAura(spellID uint32) {
 	wasInvisibility := false
 	wasTrackStealthed := false
 	wasVisibilityAura := false
+	wasMovementSpeedAura := false
+	removedAuraType := uint32(0)
 	removedFakeInebriation := uint32(0)
 	s.castMu.Lock()
 	if s.activeAuras != nil {
 		if aura, ok := s.activeAuras[spellID]; ok && aura != nil {
+			removedAuraType = aura.AuraType
 			wasMounted = aura.AuraType == spellAuraMounted
 			wasMovementControl = aura.AuraType == spellAuraStun || aura.AuraType == spellAuraRoot
 			wasTransform = aura.AuraType == 56
@@ -2266,6 +2269,7 @@ func (s *session) removeAura(spellID uint32) {
 			wasInvisibility = aura.AuraType == spellAuraInvisibility
 			wasTrackStealthed = aura.AuraType == spellAuraTrackStealthed
 			wasVisibilityAura = affectsPlayerVisibility(aura.AuraType)
+			wasMovementSpeedAura = movementSpeedAura(aura.AuraType)
 			if aura.AuraType == spellAuraFakeInebriation {
 				removedFakeInebriation = aura.Amount
 			}
@@ -2329,6 +2333,9 @@ func (s *session) removeAura(spellID uint32) {
 	if wasVisibilityAura && s.server != nil {
 		s.server.refreshPlayerVisibility()
 	}
+	if wasMovementSpeedAura {
+		s.sendRuntimeMovementUpdates(removedAuraType)
+	}
 }
 
 func (s *session) hasAura(spellID uint32) bool {
@@ -2348,7 +2355,7 @@ func (s *session) clearOtherMountedAuras(spellID uint32) {
 }
 
 func (s *session) applyMountedDisplay(ctx context.Context, aura *activeAura) {
-	if s == nil || s.player == nil || aura == nil || aura.MiscValue <= 0 || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+	if s == nil || s.player == nil || aura == nil {
 		return
 	}
 	entry := uint32(aura.MiscValue)
@@ -2364,8 +2371,10 @@ func (s *session) applyMountedDisplay(ctx context.Context, aura *activeAura) {
 		}
 	}
 	var displayID int64
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 0) FROM creature_template WHERE entry = ?", entry).Scan(&displayID); err == nil && displayID > 0 {
-		s.player.MountDisplayID = uint32(displayID)
+	if entry > 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 0) FROM creature_template WHERE entry = ?", entry).Scan(&displayID); err == nil && displayID > 0 {
+			s.player.MountDisplayID = uint32(displayID)
+		}
 	}
 	s.sendPlayerMountUpdate()
 }
@@ -2548,6 +2557,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, targetSess)
 		}
 		targetSess.sendPlayerUpdate()
+		if movementSpeedAura(eff.Aura) {
+			targetSess.sendRuntimeMovementUpdates(eff.Aura)
+		}
 		if affectsPlayerVisibility(eff.Aura) && targetSess.server != nil {
 			targetSess.server.refreshPlayerVisibility()
 		}

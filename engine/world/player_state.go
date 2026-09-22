@@ -636,7 +636,11 @@ func (s *session) loadMountDisplay(ctx context.Context, state *playerState) {
 		}
 	}
 	for _, aura := range auras {
-		if aura == nil || aura.AuraType != 78 || aura.MiscValue <= 0 {
+		if aura == nil || aura.AuraType != 78 {
+			continue
+		}
+		state.UnitFlags |= unitFlagMount
+		if aura.MiscValue <= 0 {
 			continue
 		}
 		entry := uint32(aura.MiscValue)
@@ -2517,7 +2521,7 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 	values[unitFieldBytes1] = uint32(state.StandState) | uint32(state.StandFlags)<<16
 	values[unitFieldFaction] = s.raceFaction(state.Race)
 	unitFlags := state.UnitFlags
-	if state.MountDisplayID != 0 {
+	if state.MountDisplayID != 0 || state.UnitFlags&unitFlagMount != 0 {
 		unitFlags |= unitFlagMount
 	}
 	values[unitFieldFlags] = unitFlagPlayerControlled | unitFlags
@@ -3145,7 +3149,7 @@ func (s *session) sendPlayerMountUpdate() {
 		return
 	}
 	flags := s.player.UnitFlags
-	if s.player.MountDisplayID != 0 {
+	if s.player.MountDisplayID != 0 || s.hasAuraType(spellAuraMounted) {
 		flags |= unitFlagMount
 	} else {
 		flags &^= unitFlagMount

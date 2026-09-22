@@ -101,6 +101,9 @@ func runSelfCheck() error {
 	if err := checkVisibilityAuraTransitions(); err != nil {
 		return fmt.Errorf("visibility aura transition check failed: %w", err)
 	}
+	if err := checkMovementSpeedAuraClassification(); err != nil {
+		return fmt.Errorf("movement speed aura check failed: %w", err)
+	}
 	if err := checkReputationFlags(); err != nil {
 		return fmt.Errorf("reputation flag check failed: %w", err)
 	}
@@ -188,6 +191,20 @@ func checkVisibilityAuraTransitions() error {
 	for _, auraType := range []uint32{78, 151, 304} {
 		if world.AffectsPlayerVisibility(auraType) {
 			return fmt.Errorf("aura type %d incorrectly changed player visibility", auraType)
+		}
+	}
+	return nil
+}
+
+func checkMovementSpeedAuraClassification() error {
+	for _, auraType := range []uint32{31, 32, 78, 129, 130, 171, 172, 201, 207, 208, 209, 211} {
+		if !world.AffectsMovementSpeedAura(auraType) {
+			return fmt.Errorf("aura type %d did not require movement-speed reconciliation", auraType)
+		}
+	}
+	for _, auraType := range []uint32{16, 18, 151, 304} {
+		if world.AffectsMovementSpeedAura(auraType) {
+			return fmt.Errorf("aura type %d incorrectly changed movement speed", auraType)
 		}
 	}
 	return nil
