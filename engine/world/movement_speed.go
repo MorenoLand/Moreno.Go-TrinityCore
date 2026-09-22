@@ -274,28 +274,10 @@ func (s *session) sendRuntimeMovementSpeed(opcode protocol.Opcode, nearbyOpcode 
 	if err := s.write(uint16(opcode), self.Bytes(), true); err != nil {
 		return
 	}
-	nearby := protocol.NewBuffer(96)
-	nearby.WritePackedGUID(s.playerGUID)
-	nearby.WriteU32(0)
-	nearby.WriteU16(0)
-	nearby.WriteU32(uint32(time.Now().UnixMilli()))
-	nearby.WriteF32(s.player.X)
-	nearby.WriteF32(s.player.Y)
-	nearby.WriteF32(s.player.Z)
-	nearby.WriteF32(s.player.Orientation)
-	if s.player.TransportGUID != 0 {
-		nearby.WritePackedGUID(s.player.TransportGUID)
-		nearby.WriteF32(s.player.TransportX)
-		nearby.WriteF32(s.player.TransportY)
-		nearby.WriteF32(s.player.TransportZ)
-		nearby.WriteF32(s.player.TransportO)
-		nearby.WriteU32(0)
-		nearby.WriteI8(s.player.TransportSeat)
-	}
-	nearby.WriteU32(0)
-	for _, base := range []float32{2.5, 7, 4.5, 4.722222, 2.5, 7, 4.5, 3.141594, 3.14} {
-		nearby.WriteF32(base)
-	}
+	info := s.movementInfoForCreate(*s.player)
+	info.Time = uint32(time.Now().UnixMilli())
+	nearby := protocol.NewBuffer(64)
+	writeMovementInfo(nearby, info)
 	nearby.WriteF32(speed)
 	s.server.broadcastToNearby(uint16(nearbyOpcode), nearby.Bytes(), s)
 }

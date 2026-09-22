@@ -145,6 +145,9 @@ func runSelfCheck() error {
 	if err := checkPublicPlayerValuesUpdate(); err != nil {
 		return fmt.Errorf("public player values update check failed: %w", err)
 	}
+	if err := checkGroupFactionFields(); err != nil {
+		return fmt.Errorf("group faction update check failed: %w", err)
+	}
 	if err := checkVisibilityAuraTransitions(); err != nil {
 		return fmt.Errorf("visibility aura transition check failed: %w", err)
 	}
@@ -170,12 +173,14 @@ func runSelfCheck() error {
 		return fmt.Errorf("loaded corpse conversion check failed: %w", err)
 	}
 	for _, compressed := range []bool{false, true} {
-		event, err := loginCreateFixture(compressed)
-		if err != nil {
-			return fmt.Errorf("login create fixture build failed: %w", err)
-		}
-		if err := requireCreateBlock(event); err != nil {
-			return fmt.Errorf("login create fixture rejected: %w", err)
+		for _, victimGUID := range []uint64{0, 0xF130000001} {
+			event, err := loginCreateFixture(compressed, victimGUID)
+			if err != nil {
+				return fmt.Errorf("login create fixture build failed: %w", err)
+			}
+			if err := requireCreateBlock(event); err != nil {
+				return fmt.Errorf("login create fixture rejected: %w", err)
+			}
 		}
 	}
 	payloadChecks := []struct {
@@ -370,6 +375,36 @@ func checkCorpseReleaseTimerBoundary() error {
 	}
 	if world.CorpseReleaseTimerRequired(1) || world.CorpseReleaseTimerRequired(2) || world.CorpseReleaseTimerRequired(3) {
 		return fmt.Errorf("instance corpse incorrectly required release timer")
+	}
+	return nil
+}
+
+func checkGroupFactionFields() error {
+	cfg := config.Default()
+	if cfg.AllowTwoSideInteractionGroup {
+		return fmt.Errorf("cross-faction group interaction default must be disabled")
+	}
+	if err := cfg.Set("AllowTwoSide.Interaction.Group", "1"); err != nil || !cfg.AllowTwoSideInteractionGroup {
+		return fmt.Errorf("cross-faction group configuration was not parsed: enabled=%t error=%v", cfg.AllowTwoSideInteractionGroup, err)
+	}
+	source := wotlk.FactionTemplate{ID: 1, Faction: 72, FactionGroup: 1, FriendGroup: 1, Enemies: [4]uint32{76}}
+	recipient := wotlk.FactionTemplate{ID: 2, Faction: 76, FactionGroup: 2, FriendGroup: 2}
+	bytes2, faction, override := world.ResolvePlayerGroupFactionFields(0x0000FF17, source, recipient, cfg.AllowTwoSideInteractionGroup, true, false)
+	if !override || bytes2 != 0x00000800 || faction != 2 {
+		return fmt.Errorf("cross-faction group values=%08x/%d override=%t", bytes2, faction, override)
+	}
+	for name, conditions := range map[string][3]bool{"disabled": {false, true, false}, "not-grouped": {true, false, false}, "self": {true, true, true}} {
+		unchangedBytes, unchangedFaction, changed := world.ResolvePlayerGroupFactionFields(0x0000FF17, source, recipient, conditions[0], conditions[1], conditions[2])
+		if changed || unchangedBytes != 0x0000FF17 || unchangedFaction != 0 {
+			return fmt.Errorf("%s group values changed unexpectedly", name)
+		}
+	}
+	friendly := source
+	friendly.Enemies = [4]uint32{}
+	friendly.Friends = [4]uint32{76}
+	unchangedBytes, unchangedFaction, changed := world.ResolvePlayerGroupFactionFields(0x0000FF17, friendly, recipient, true, true, false)
+	if changed || unchangedBytes != 0x0000FF17 || unchangedFaction != 0 {
+		return fmt.Errorf("friendly faction values were overridden")
 	}
 	return nil
 }
@@ -703,7 +738,7 @@ func initialSpellsCategoryCooldownFixture() []byte {
 	return buf.Bytes()
 }
 
-func loginCreateFixture(compressed bool) (protocoltrace.Event, error) {
+func loginCreateFixture(compressed bool, victimGUID uint64) (protocoltrace.Event, error) {
 	item := protocol.NewBuffer(64)
 	item.WriteU8(protocol.UpdateCreateObject2)
 	item.WritePackedGUID(0x4001)
@@ -719,7 +754,7 @@ func loginCreateFixture(compressed bool) (protocoltrace.Event, error) {
 	player.WriteU8(protocol.UpdateCreateObject2)
 	player.WritePackedGUID(1)
 	player.WriteU8(4)
-	player.WriteU16(0x0061)
+	player.WriteU16(world.PlayerCreateUpdateFlags(true, victimGUID != 0))
 	player.WriteU32(0)
 	player.WriteU16(0)
 	player.WriteU32(1)
@@ -730,6 +765,9 @@ func loginCreateFixture(compressed bool) (protocoltrace.Event, error) {
 	player.WriteU32(0)
 	for range 9 {
 		player.WriteF32(1)
+	}
+	if victimGUID != 0 {
+		player.WritePackedGUID(victimGUID)
 	}
 	mask := make([]uint32, 42)
 	values := map[int]uint32{0: 1, 2: 0x19, 4: math.Float32bits(1), 23: 0x01020304, 24: 100, 32: 100, 54: 10, 59: 8, 67: 123, 68: 123, 283: 1234, 284: 5678}
@@ -2437,8 +2475,8 @@ func parseCreateObjectBlock(reader *protocol.Buffer) (uint8, error) {
 	if typeID != 4 {
 		return typeID, nil
 	}
-	if flags != 0x0061 {
-		return 0, fmt.Errorf("player create flags=0x%X, want 0x61", flags)
+	if flags != 0x0061 && flags != 0x0065 {
+		return 0, fmt.Errorf("player create flags=0x%X, want 0x61 or 0x65", flags)
 	}
 	if len(mask) != 42 {
 		return 0, fmt.Errorf("player update mask blocks=%d, want 42", len(mask))

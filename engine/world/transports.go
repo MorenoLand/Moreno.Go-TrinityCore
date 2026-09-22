@@ -304,29 +304,34 @@ func (s *Server) buildAttachedTransportPassengerUpdates(ctx context.Context, sta
 	return updates.BuildPacket(0)
 }
 
-func (s *Server) buildAttachedTransportPlayerUpdates(state playerState, exclude uint64) (*protocol.Packet, []uint64, error) {
+func (s *Server) buildAttachedTransportPlayerUpdates(state playerState, exclude uint64, observer *session) (*protocol.Packet, []uint64, error) {
 	transport, found := s.attachedTransportSnapshot(state)
 	if !found {
 		return nil, nil, nil
 	}
 	rawGUID := transportGUID(transport.Spawn.GUID)
 	players := make([]playerState, 0)
+	runtimeSessions := make(map[uint64]*session)
 	s.sessionsMu.RLock()
 	for sess := range s.sessions {
-		if sess == nil || !sess.playerLoaded || sess.player == nil || sess.player.GUID == exclude {
+		if sess == nil || !sess.playerLoaded || sess.player == nil || sess.player.GUID == exclude || sess.player.Map != state.Map || sess.player.InstanceID != state.InstanceID {
 			continue
 		}
 		if sess.player.TransportGUID != rawGUID && sess.player.TransportGUID != uint64(transport.Spawn.GUID) {
 			continue
 		}
 		players = append(players, *sess.player)
+		runtimeSessions[sess.player.GUID] = sess
 	}
 	s.sessionsMu.RUnlock()
 	sort.Slice(players, func(i, j int) bool { return players[i].GUID < players[j].GUID })
 	packets := make([]*protocol.Packet, 0, len(players))
 	guids := make([]uint64, 0, len(players))
 	for _, passenger := range players {
-		packet, err := s.buildPlayerUpdateForTarget(passenger, false)
+		runtime := runtimeSessions[passenger.GUID]
+		partyMember := observer != nil && observer.groupID != 0 && runtime != nil && runtime.groupID == observer.groupID
+		recipient := state
+		packet, err := s.buildPlayerUpdateForRecipient(passenger, false, partyMember, runtime, &recipient)
 		if err != nil {
 			return nil, nil, err
 		}

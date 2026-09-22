@@ -578,7 +578,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err != nil {
 		return false
 	}
-	attachedTransportPlayers, attachedTransportPlayerGUIDs, err := s.server.buildAttachedTransportPlayerUpdates(state, s.playerGUID)
+	attachedTransportPlayers, attachedTransportPlayerGUIDs, err := s.server.buildAttachedTransportPlayerUpdates(state, s.playerGUID, s)
 	if err != nil {
 		return false
 	}
@@ -1019,7 +1019,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	attachedPlayers, attachedPlayerGUIDs, err := s.server.buildAttachedTransportPlayerUpdates(state, s.playerGUID)
+	attachedPlayers, attachedPlayerGUIDs, err := s.server.buildAttachedTransportPlayerUpdates(state, s.playerGUID, s)
 	if err != nil {
 		return false
 	}
@@ -1296,10 +1296,6 @@ func (s *session) broadcastLoginMovementState(opcode protocol.Opcode, movementFl
 	s.setLastMovementInfo(info)
 	packet := protocol.NewBuffer(112)
 	writeMovementInfo(packet, info)
-	for _, speed := range s.movementSpeeds() {
-		packet.WriteF32(speed)
-	}
-	_ = s.write(uint16(opcode), packet.Bytes(), true)
 	s.server.broadcastToNearby(uint16(opcode), packet.Bytes(), s)
 }
 

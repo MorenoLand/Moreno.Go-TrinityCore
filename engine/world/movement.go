@@ -446,7 +446,7 @@ func (s *Server) broadcastMovement(opcode uint16, payload []byte, info movementI
 	s.sessionsMu.RLock()
 	targets := make([]*session, 0, len(s.sessions))
 	for target := range s.sessions {
-		if target == source || !target.authed || !target.playerLoaded || target.player == nil || target.player.Map != source.player.Map {
+		if target == source || !target.authed || !target.playerLoaded || target.player == nil || target.player.Map != source.player.Map || target.player.InstanceID != source.player.InstanceID {
 			continue
 		}
 		if source != nil && source.isStealthed() && !target.canDetectStealthOf(source) {
@@ -528,7 +528,7 @@ func (s *Server) broadcastToNearby(opcode uint16, payload []byte, source *sessio
 		if !target.authed || !target.playerLoaded || target.player == nil {
 			continue
 		}
-		if source != nil && (target == source || target.player.Map != source.player.Map) {
+		if source != nil && (target == source || target.player.Map != source.player.Map || target.player.InstanceID != source.player.InstanceID) {
 			continue
 		}
 		_ = target.write(opcode, payload, true)

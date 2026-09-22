@@ -57,6 +57,7 @@ type Config struct {
 	StartPlayerLevel                        uint32
 	StartDeathKnightPlayerLevel             uint32
 	GameType                                uint32
+	AllowTwoSideInteractionGroup            bool
 	StartHonorPoints                        uint32
 	StartArenaPoints                        uint32
 	AllFlightPaths                          bool
@@ -465,6 +466,8 @@ func (c *Config) set(key, value string) error {
 		return setUint32(&c.StartDeathKnightPlayerLevel, key, value)
 	case "GameType":
 		return setUint32(&c.GameType, key, value)
+	case "AllowTwoSide.Interaction.Group":
+		return setBool(&c.AllowTwoSideInteractionGroup, key, value)
 	case "AllFlightPaths":
 		return setBool(&c.AllFlightPaths, key, value)
 	case "StartHonorPoints":

@@ -29,6 +29,7 @@ const (
 	unitFieldHoverHeight                          = 146
 	unitFieldLevel                                = 54
 	unitFieldFaction                              = 55
+	unitByte2FlagSanctuary                 uint32 = 0x08
 	unitFieldFlags                                = 59
 	unitFieldAttackTime                           = 62
 	unitFieldAttackTimeOffhand                    = 63
@@ -2511,10 +2512,10 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 }
 
 func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) (*protocol.Packet, error) {
-	return s.buildPlayerUpdateForRecipient(state, targetSelf, false, s.playerSessionForGUID(state.GUID))
+	return s.buildPlayerUpdateForRecipient(state, targetSelf, false, s.playerSessionForGUID(state.GUID), nil)
 }
 
-func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, partyMember bool, runtime *session) (*protocol.Packet, error) {
+func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, partyMember bool, runtime *session, recipient *playerState) (*protocol.Packet, error) {
 	values := make([]uint32, playerValuesCount)
 	values[0] = uint32(state.GUID)
 	values[objectFieldType] = 0x19
@@ -2584,6 +2585,11 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 		pvpFlags |= 0x01
 	}
 	values[unitFieldBytes2] = uint32(state.SheathState) | uint32(pvpFlags)<<8
+	if recipient != nil {
+		if bytes2, faction, override := s.resolvePlayerGroupFactionFields(state, *recipient, values[unitFieldBytes2], partyMember, targetSelf); override {
+			values[unitFieldBytes2], values[unitFieldFaction] = bytes2, faction
+		}
+	}
 	values[unitFieldPlayerBytes2] = uint32(state.FacialStyle) | uint32(state.BankBagSlots)<<16 | uint32(state.RestState)<<24
 	values[playerFieldBytes2] = uint32(state.AuraVision) << 24
 	values[unitFieldPlayerBytes3] = uint32(state.Gender) | uint32(uint8(state.DrunkenState))<<8
@@ -2969,7 +2975,7 @@ func (s *Server) buildNearbyPlayerUpdatesWithCreated(observer *session) (*protoc
 		if _, ok := observer.visiblePlayers[guid]; ok {
 			continue
 		}
-		packet, packetErr := s.buildPlayerUpdateForRecipient(targetState, false, partyMembers[guid], runtimeSessions[guid])
+		packet, packetErr := s.buildPlayerUpdateForRecipient(targetState, false, partyMembers[guid], runtimeSessions[guid], &state)
 		if packetErr != nil || packet == nil {
 			continue
 		}
@@ -3061,7 +3067,8 @@ func (s *Server) broadcastPlayerCreate(state playerState, source *session) {
 		if math.Hypot(float64(target.player.X-state.X), float64(target.player.Y-state.Y)) > distance {
 			continue
 		}
-		packet, err := s.buildPlayerUpdateForRecipient(state, false, target.groupID != 0 && target.groupID == source.groupID, source)
+		recipientState := *target.player
+		packet, err := s.buildPlayerUpdateForRecipient(state, false, target.groupID != 0 && target.groupID == source.groupID, source, &recipientState)
 		if err != nil || packet == nil {
 			continue
 		}
@@ -3155,10 +3162,10 @@ func (s *Server) buildPlayerValuesUpdate(guid uint64, fields map[int]uint32) (*p
 }
 
 func (s *Server) buildPlayerValuesUpdateForTarget(guid uint64, fields map[int]uint32, targetSelf bool) (*protocol.Packet, error) {
-	return s.buildPlayerValuesUpdateForRecipient(guid, fields, targetSelf, false)
+	return s.buildPlayerValuesUpdateForRecipient(guid, fields, targetSelf, false, nil, nil)
 }
 
-func (s *Server) buildPlayerValuesUpdateForRecipient(guid uint64, fields map[int]uint32, targetSelf, partyMember bool) (*protocol.Packet, error) {
+func (s *Server) buildPlayerValuesUpdateForRecipient(guid uint64, fields map[int]uint32, targetSelf, partyMember bool, source, recipient *playerState) (*protocol.Packet, error) {
 	if !targetSelf {
 		public := make(map[int]uint32, len(fields))
 		for index, value := range fields {
@@ -3170,8 +3177,64 @@ func (s *Server) buildPlayerValuesUpdateForRecipient(guid uint64, fields map[int
 			return nil, nil
 		}
 		fields = public
+		if source != nil && recipient != nil {
+			bytes2, hasBytes2 := fields[unitFieldBytes2]
+			_, hasFaction := fields[unitFieldFaction]
+			if hasBytes2 || hasFaction {
+				if !hasBytes2 {
+					pvpFlags := source.PVPFlags
+					if s.Config.GameType == 4 || s.Config.GameType == 6 {
+						pvpFlags |= 0x01
+					}
+					bytes2 = uint32(source.SheathState) | uint32(pvpFlags)<<8
+				}
+				if adjustedBytes2, faction, override := s.resolvePlayerGroupFactionFields(*source, *recipient, bytes2, partyMember, false); override {
+					if hasBytes2 {
+						fields[unitFieldBytes2] = adjustedBytes2
+					}
+					if hasFaction {
+						fields[unitFieldFaction] = faction
+					}
+				}
+			}
+		}
 	}
 	return s.buildPlayerValuesUpdate(guid, fields)
+}
+
+func (s *Server) resolvePlayerGroupFactionFields(source, recipient playerState, bytes2 uint32, partyMember, targetSelf bool) (uint32, uint32, bool) {
+	if s == nil || s.Data == nil || !s.Config.AllowTwoSideInteractionGroup || !partyMember || targetSelf || source.GUID == recipient.GUID {
+		return bytes2, 0, false
+	}
+	sourceTemplate, sourceFound, sourceErr := s.Data.FactionTemplate(s.raceFaction(source.Race))
+	recipientTemplate, recipientFound, recipientErr := s.Data.FactionTemplate(s.raceFaction(recipient.Race))
+	if sourceErr != nil || recipientErr != nil || !sourceFound || !recipientFound {
+		return bytes2, 0, false
+	}
+	return ResolvePlayerGroupFactionFields(bytes2, sourceTemplate, recipientTemplate, true, true, false)
+}
+
+func ResolvePlayerGroupFactionFields(bytes2 uint32, source, recipient wotlk.FactionTemplate, enabled, sameRaid, targetSelf bool) (uint32, uint32, bool) {
+	if !enabled || !sameRaid || targetSelf || factionTemplateFriendly(source, recipient) {
+		return bytes2, 0, false
+	}
+	return bytes2 & (unitByte2FlagSanctuary << 8), recipient.ID, true
+}
+
+func factionTemplateFriendly(source, target wotlk.FactionTemplate) bool {
+	if target.Faction != 0 {
+		for _, enemy := range source.Enemies {
+			if enemy == target.Faction {
+				return false
+			}
+		}
+		for _, friend := range source.Friends {
+			if friend == target.Faction {
+				return true
+			}
+		}
+	}
+	return source.FriendGroup&target.FactionGroup != 0 || source.FactionGroup&target.FriendGroup != 0
 }
 
 func (s *Server) broadcastPlayerValuesUpdateFromSession(source *session, fields map[int]uint32) {
@@ -3196,7 +3259,8 @@ func (s *Server) broadcastPlayerValuesUpdateFromSession(source *session, fields 
 			continue
 		}
 		partyMember := source.groupID != 0 && source.groupID == target.groupID
-		packet, err := s.buildPlayerValuesUpdateForRecipient(state.GUID, fields, false, partyMember)
+		recipient := *target.player
+		packet, err := s.buildPlayerValuesUpdateForRecipient(state.GUID, fields, false, partyMember, &state, &recipient)
 		if err == nil && packet != nil {
 			_ = target.write(packet.Opcode, packet.Payload.Bytes(), true)
 		}
