@@ -81,8 +81,11 @@ func (s *session) sendContactList(ctx context.Context, flags uint32) error {
 		return s.write(uint16(protocol.OpcodeSMSG_CONTACT_LIST), b.Bytes(), true)
 	}
 	rows, err := cdb.QueryContext(ctx,
-		"SELECT friend, flags, note FROM character_social WHERE guid = ? ORDER BY friend",
+		"SELECT cs.friend, cs.flags, cs.note FROM character_social cs JOIN characters c ON c.guid = cs.friend WHERE cs.guid = ? AND (c.deleteInfos_Name IS NULL OR c.deleteInfos_Name = '') ORDER BY cs.friend LIMIT 255",
 		s.playerGUID)
+	if err != nil && isMissingColumn(err) {
+		rows, err = cdb.QueryContext(ctx, "SELECT friend, flags, note FROM character_social WHERE guid = ? ORDER BY friend LIMIT 255", s.playerGUID)
+	}
 	if err != nil {
 		if missingTable(err) || errors.Is(err, sql.ErrNoRows) {
 			b := protocol.NewBuffer(8)

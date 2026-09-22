@@ -451,4 +451,6 @@ Mount login/runtime collision-height packets now use the source `CreatureDisplay
 
 Runtime `SPELL_AURA_FORCE_REACTION` apply/remove now rebuilds and sends `SMSG_SET_FORCED_REACTIONS`, matching `AuraEffect::HandleForceReaction` and `ReputationMgr::SendForceReactions` (live forced-reaction correction).
 
+Login and manual social-list responses now filter deleted characters through the source character-cache join and enforce the 255-row bound, with a reduced-schema fallback (social login-list correction).
+
 Friendly forced reactions now also stop the player’s current attack and hostile creature motions against the matching faction, matching `Unit::StopAttackFaction` (forced-reaction combat cleanup).
