@@ -248,7 +248,7 @@ func buildPartyCommandResult(operation uint32, member string, result uint32) []b
 // buildGroupList sends SMSG_GROUP_LIST to a specific member, excluding themselves.
 // Mirrors Group::SendUpdate (Group.cpp:1755).
 // groupType: 0=party, 1=BG, 2=raid
-func buildGroupList(srv *Server, g *groupState, forGUID uint64) []byte {
+func buildGroupList(srv *Server, g *groupState, forGUID uint64, counter uint32) []byte {
 	// Find the member slot for the recipient.
 	var slot *groupMember
 	for i := range g.Members {
@@ -293,7 +293,7 @@ func buildGroupList(srv *Server, g *groupState, forGUID uint64) []byte {
 		b.WriteU32(g.LFGDungeonID)
 	}
 	b.WriteU64(groupGUID(g.ID))
-	b.WriteU32(g.counter)
+	b.WriteU32(counter)
 	b.WriteU32(uint32(membersCount))
 	for _, m := range g.Members {
 		if m.GUID == forGUID {
@@ -414,9 +414,9 @@ func (s *Server) broadcastGroupList(g *groupState) {
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
 		if sess.groupID == g.ID {
-			pkt := buildGroupList(s, g, sess.playerGUID)
+			counter := atomic.AddUint32(&g.counter, 1) - 1
+			pkt := buildGroupList(s, g, sess.playerGUID, counter)
 			_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), pkt, true)
-			g.counter++
 		}
 	}
 }
@@ -664,7 +664,7 @@ func (s *session) removeFromGroup(g *groupState, target *session) bool {
 				// SMSG_GROUP_DESTROYED
 				_ = last.write(uint16(protocol.OpcodeSMSG_GROUP_DESTROYED), nil, true)
 				// Also send empty group list to clear UI
-				emptyList := buildGroupList(srv, &groupState{ID: g.ID, LeaderGUID: g.Members[0].GUID}, g.Members[0].GUID)
+				emptyList := buildGroupList(srv, &groupState{ID: g.ID, LeaderGUID: g.Members[0].GUID}, g.Members[0].GUID, 0)
 				_ = last.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), emptyList, true)
 			}
 		}
@@ -786,7 +786,7 @@ func (s *session) handleGroupDisband(_ context.Context, _ []byte) bool {
 			}
 			sess.groupID = 0
 			_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_DESTROYED), nil, true)
-			empty := buildGroupList(srv, &groupState{ID: g.ID, LeaderGUID: guid}, guid)
+			empty := buildGroupList(srv, &groupState{ID: g.ID, LeaderGUID: guid}, guid, 0)
 			_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), empty, true)
 		}
 	} else {
@@ -810,7 +810,7 @@ func (s *session) handleGroupDisband(_ context.Context, _ []byte) bool {
 				if last := srv.findSessionByGUID(lastGUID); last != nil {
 					last.groupID = 0
 					_ = last.write(uint16(protocol.OpcodeSMSG_GROUP_DESTROYED), nil, true)
-					emptyG := buildGroupList(srv, &groupState{ID: g.ID, LeaderGUID: lastGUID}, lastGUID)
+					emptyG := buildGroupList(srv, &groupState{ID: g.ID, LeaderGUID: lastGUID}, lastGUID, 0)
 					_ = last.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), emptyG, true)
 				}
 			}
