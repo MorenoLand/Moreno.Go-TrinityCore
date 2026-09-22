@@ -330,3 +330,5 @@ The login replay checker now validates the pre-map dungeon-difficulty flags, `PE
 Contact-list and friend-status serialization now preserve TrinityCore's bit-valued AFK/DND/RAF states, emit status fields for online-result packets even when the target has gone offline, and include zone/level/class only for non-offline list entries, matching `PlayerSocial::SendSocialList`, `SocialMgr::GetFriendInfo`, and `SocialMgr::SendFriendStatus` (social login packet milestone).
 
 Runtime faction hostility, vendor reputation requirements, and reputation achievements now evaluate DBC base standing plus the persisted character-reputation offset, matching `ReputationMgr::GetReputation` and `LoadFromDB` instead of treating the stored offset as an absolute standing (reputation-state milestone).
+
+The login replay checker now parses `SMSG_TALENTS_INFO` player and pet variants, including spec counts, active spec, learned talent records, and glyph slots, matching `BuildPlayerTalentsInfoData` and `BuildPetTalentsInfoData` (talent login packet milestone).

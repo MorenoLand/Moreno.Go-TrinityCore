@@ -106,6 +106,7 @@ func runSelfCheck() error {
 		{"account-data-times", protocol.OpcodeSMSG_ACCOUNT_DATA_TIMES, accountDataTimesFixture(), requireAccountDataTimes},
 		{"motd", protocol.OpcodeSMSG_MOTD, motdFixture(), requireMotd},
 		{"instance-difficulty", protocol.OpcodeSMSG_INSTANCE_DIFFICULTY, make([]byte, 8), requireEightBytePayload},
+		{"talents-info", protocol.OpcodeSMSG_TALENTS_INFO, talentsInfoFixture(), requireTalentsInfo},
 		{"initial-spells", protocol.OpcodeSMSG_INITIAL_SPELLS, []byte{0, 0, 0, 0, 0}, requireInitialSpells},
 		{"unlearn-spells", protocol.OpcodeSMSG_SEND_UNLEARN_SPELLS, []byte{0, 0, 0, 0}, requireUnlearnSpells},
 		{"action-buttons", protocol.OpcodeSMSG_ACTION_BUTTONS, actionButtonsFixture(), requireActionButtons},
@@ -185,6 +186,20 @@ func motdFixture() []byte {
 	buf.WriteU32(2)
 	buf.WriteCString("one")
 	buf.WriteCString("two")
+	return buf.Bytes()
+}
+
+func talentsInfoFixture() []byte {
+	buf := protocol.NewBuffer(20)
+	buf.WriteU8(0)
+	buf.WriteU32(0)
+	buf.WriteU8(1)
+	buf.WriteU8(0)
+	buf.WriteU8(0)
+	buf.WriteU8(6)
+	for range 6 {
+		buf.WriteU16(0)
+	}
 	return buf.Bytes()
 }
 
@@ -433,6 +448,8 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 			validate = requireAccountDataTimes
 		case "SMSG_MOTD":
 			validate = requireMotd
+		case "SMSG_TALENTS_INFO":
+			validate = requireTalentsInfo
 		case "SMSG_LEARNED_DANCE_MOVES":
 			validate = func(event protocoltrace.Event) error { return requirePayloadLength(event, 8) }
 		case "SMSG_FEATURE_SYSTEM_STATUS":
@@ -586,6 +603,79 @@ func checkOptionalLoginPayloads(trace protocoltrace.Trace, start int) error {
 				return fmt.Errorf("%s: %w", opcodeName(event.Opcode), err)
 			}
 		}
+	}
+	return nil
+}
+
+func requireTalentsInfo(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	pet, err := reader.ReadU8()
+	if err != nil {
+		return fmt.Errorf("talents-info pet flag is truncated: %w", err)
+	}
+	if pet != 0 && pet != 1 {
+		return fmt.Errorf("invalid talents-info pet flag=%d", pet)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		return fmt.Errorf("talents-info points are truncated: %w", err)
+	}
+	count, err := reader.ReadU8()
+	if err != nil {
+		return fmt.Errorf("talents-info talent count is truncated: %w", err)
+	}
+	if pet != 0 {
+		for index := uint8(0); index < count; index++ {
+			if _, err := reader.ReadU32(); err != nil {
+				return fmt.Errorf("pet talent %d ID is truncated: %w", index, err)
+			}
+			if _, err := reader.ReadU8(); err != nil {
+				return fmt.Errorf("pet talent %d rank is truncated: %w", index, err)
+			}
+		}
+		if reader.Remaining() != 0 {
+			return fmt.Errorf("unexpected pet talents-info bytes=%d", reader.Remaining())
+		}
+		return nil
+	}
+	activeSpec, err := reader.ReadU8()
+	if err != nil {
+		return fmt.Errorf("talents-info active spec is truncated: %w", err)
+	}
+	if count > 2 || count == 0 && activeSpec != 0 || count > 0 && activeSpec >= count {
+		return fmt.Errorf("invalid talents-info spec count=%d active=%d", count, activeSpec)
+	}
+	for spec := uint8(0); spec < count; spec++ {
+		talentCount, err := reader.ReadU8()
+		if err != nil {
+			return fmt.Errorf("talent spec %d count is truncated: %w", spec, err)
+		}
+		for index := uint8(0); index < talentCount; index++ {
+			if _, err := reader.ReadU32(); err != nil {
+				return fmt.Errorf("talent spec %d talent %d ID is truncated: %w", spec, index, err)
+			}
+			if _, err := reader.ReadU8(); err != nil {
+				return fmt.Errorf("talent spec %d talent %d rank is truncated: %w", spec, index, err)
+			}
+		}
+		glyphCount, err := reader.ReadU8()
+		if err != nil {
+			return fmt.Errorf("talent spec %d glyph count is truncated: %w", spec, err)
+		}
+		if glyphCount > 6 {
+			return fmt.Errorf("talent spec %d glyph count=%d exceeds client slots", spec, glyphCount)
+		}
+		for glyph := uint8(0); glyph < glyphCount; glyph++ {
+			if _, err := reader.ReadU16(); err != nil {
+				return fmt.Errorf("talent spec %d glyph %d is truncated: %w", spec, glyph, err)
+			}
+		}
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected talents-info bytes=%d", reader.Remaining())
 	}
 	return nil
 }
