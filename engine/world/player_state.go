@@ -1845,6 +1845,10 @@ func (s *session) restoreLoadedCorpseState(ctx context.Context, state *playerSta
 	if s == nil || state == nil || state.AtLogin&uint32(atLoginResurrect) != 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return
 	}
+	if state.Health != 0 {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM corpse WHERE guid = ? AND corpseType <> ?", state.GUID, corpseTypeBones)
+		return
+	}
 	var corpseType int64
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT corpseType FROM corpse WHERE guid = ? AND corpseType <> ? LIMIT 1", state.GUID, corpseTypeBones).Scan(&corpseType); err != nil {
 		return
