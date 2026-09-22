@@ -107,6 +107,7 @@ func runSelfCheck() error {
 		{"motd", protocol.OpcodeSMSG_MOTD, motdFixture(), requireMotd},
 		{"instance-difficulty", protocol.OpcodeSMSG_INSTANCE_DIFFICULTY, make([]byte, 8), requireEightBytePayload},
 		{"talents-info", protocol.OpcodeSMSG_TALENTS_INFO, talentsInfoFixture(), requireTalentsInfo},
+		{"achievement-data", protocol.OpcodeSMSG_ALL_ACHIEVEMENT_DATA, achievementDataFixture(), requireAchievementData},
 		{"initial-spells", protocol.OpcodeSMSG_INITIAL_SPELLS, []byte{0, 0, 0, 0, 0}, requireInitialSpells},
 		{"unlearn-spells", protocol.OpcodeSMSG_SEND_UNLEARN_SPELLS, []byte{0, 0, 0, 0}, requireUnlearnSpells},
 		{"action-buttons", protocol.OpcodeSMSG_ACTION_BUTTONS, actionButtonsFixture(), requireActionButtons},
@@ -200,6 +201,13 @@ func talentsInfoFixture() []byte {
 	for range 6 {
 		buf.WriteU16(0)
 	}
+	return buf.Bytes()
+}
+
+func achievementDataFixture() []byte {
+	buf := protocol.NewBuffer(8)
+	buf.WriteU32(0xFFFFFFFF)
+	buf.WriteU32(0xFFFFFFFF)
 	return buf.Bytes()
 }
 
@@ -450,6 +458,8 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 			validate = requireMotd
 		case "SMSG_TALENTS_INFO":
 			validate = requireTalentsInfo
+		case "SMSG_ALL_ACHIEVEMENT_DATA":
+			validate = requireAchievementData
 		case "SMSG_LEARNED_DANCE_MOVES":
 			validate = func(event protocoltrace.Event) error { return requirePayloadLength(event, 8) }
 		case "SMSG_FEATURE_SYSTEM_STATUS":
@@ -603,6 +613,57 @@ func checkOptionalLoginPayloads(trace protocoltrace.Trace, start int) error {
 				return fmt.Errorf("%s: %w", opcodeName(event.Opcode), err)
 			}
 		}
+	}
+	return nil
+}
+
+func requireAchievementData(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	for {
+		id, err := reader.ReadU32()
+		if err != nil {
+			return fmt.Errorf("achievement ID is truncated: %w", err)
+		}
+		if id == 0xFFFFFFFF {
+			break
+		}
+		if _, err := reader.ReadU32(); err != nil {
+			return fmt.Errorf("achievement %d packed date is truncated: %w", id, err)
+		}
+	}
+	for {
+		criteria, err := reader.ReadU32()
+		if err != nil {
+			return fmt.Errorf("achievement criteria ID is truncated: %w", err)
+		}
+		if criteria == 0xFFFFFFFF {
+			break
+		}
+		if _, err := reader.ReadPackedGUID(); err != nil {
+			return fmt.Errorf("achievement criteria %d counter is truncated: %w", criteria, err)
+		}
+		if _, err := reader.ReadPackedGUID(); err != nil {
+			return fmt.Errorf("achievement criteria %d player GUID is truncated: %w", criteria, err)
+		}
+		if _, err := reader.ReadU32(); err != nil {
+			return fmt.Errorf("achievement criteria %d flags are truncated: %w", criteria, err)
+		}
+		if _, err := reader.ReadU32(); err != nil {
+			return fmt.Errorf("achievement criteria %d packed date is truncated: %w", criteria, err)
+		}
+		if _, err := reader.ReadU32(); err != nil {
+			return fmt.Errorf("achievement criteria %d elapsed time is truncated: %w", criteria, err)
+		}
+		if _, err := reader.ReadU32(); err != nil {
+			return fmt.Errorf("achievement criteria %d creation time is truncated: %w", criteria, err)
+		}
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected achievement-data bytes=%d", reader.Remaining())
 	}
 	return nil
 }

@@ -332,3 +332,5 @@ Contact-list and friend-status serialization now preserve TrinityCore's bit-valu
 Runtime faction hostility, vendor reputation requirements, and reputation achievements now evaluate DBC base standing plus the persisted character-reputation offset, matching `ReputationMgr::GetReputation` and `LoadFromDB` instead of treating the stored offset as an absolute standing (reputation-state milestone).
 
 The login replay checker now parses `SMSG_TALENTS_INFO` player and pet variants, including spec counts, active spec, learned talent records, and glyph slots, matching `BuildPlayerTalentsInfoData` and `BuildPetTalentsInfoData` (talent login packet milestone).
+
+The login replay checker now parses both terminated sections of `SMSG_ALL_ACHIEVEMENT_DATA`, including packed criterion counters/player GUIDs, flags, and timestamp fields, matching `AchievementMgr::BuildAllDataPacket` (achievement login packet milestone).
