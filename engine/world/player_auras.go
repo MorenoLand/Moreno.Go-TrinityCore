@@ -72,8 +72,11 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 			continue
 		}
 		if s.server.Data != nil {
-			_, found, spellErr := s.server.Data.Spell(id)
+			spell, found, spellErr := s.server.Data.Spell(id)
 			if spellErr != nil || !found {
+				continue
+			}
+			if spell.Attributes&spellAttributePassive != 0 || spell.AttributesEx1&(spellAttr1Channeled1|spellAttr1Channeled2) != 0 {
 				continue
 			}
 		}
