@@ -110,6 +110,7 @@ func (s *session) handleTransportUse(spawn gameObjectSpawn) bool {
 		s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = 0, 0, 0, 0
 		s.player.TransportSeat = 0
 		s.sendPlayerUpdate()
+		s.sendTransportMovement(false)
 		s.debug("transport passenger removed", "guid", rawGUID, "entry", spawn.Entry)
 		return true
 	}
@@ -121,9 +122,24 @@ func (s *session) handleTransportUse(spawn gameObjectSpawn) bool {
 	s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = transportX, transportY, transportZ, transportO
 	s.player.TransportSeat = -1
 	s.sendPlayerUpdate()
-	s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_HEARTBEAT, movementOnTransport)
+	s.sendTransportMovement(true)
 	s.debug("transport passenger added", "guid", rawGUID, "entry", spawn.Entry, "x", transportX, "y", transportY, "z", transportZ)
 	return true
+}
+
+func (s *session) sendTransportMovement(attached bool) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	info := movementInfo{GUID: s.playerGUID, Time: uint32(time.Now().UnixMilli()), X: s.player.X, Y: s.player.Y, Z: s.player.Z, Orientation: s.player.Orientation}
+	if attached && s.player.TransportGUID != 0 {
+		info.Flags = movementOnTransport
+		info.Transport = &transportMovement{GUID: s.player.TransportGUID, X: s.player.TransportX, Y: s.player.TransportY, Z: s.player.TransportZ, Orientation: s.player.TransportO, Seat: s.player.TransportSeat}
+	}
+	packet := protocol.NewBuffer(96)
+	writeMovementInfo(packet, info)
+	_ = s.write(uint16(protocol.OpcodeMSG_MOVE_HEARTBEAT), packet.Bytes(), true)
+	s.server.broadcastMovement(uint16(protocol.OpcodeMSG_MOVE_HEARTBEAT), packet.Bytes(), info, s)
 }
 
 func (s *Server) loadTransportPassengers(ctx context.Context, transport *continentTransport) {

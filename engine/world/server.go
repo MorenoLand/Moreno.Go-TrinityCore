@@ -3409,50 +3409,56 @@ func (f *Features) OnPlayerLogin() {
 }
 
 func (s *session) handleNameQuery(ctx context.Context, payload []byte) bool {
-	guid, err := readObjectGUID(payload)
+	guids, err := readObjectGUIDCandidates(payload)
 	if err != nil {
 		s.debug("name query rejected", "account", s.accountName, "error", err)
 		return false
 	}
-	lowGUID := guid & 0xFFFFFFFF
-	packet := protocol.NewBuffer(32)
-	packet.WritePackedGUID(guid)
+	requestedGUID := guids[0]
 	var name string
 	var race, gender, class int64
+	resolvedGUID := uint64(0)
 	resolved := false
-	for _, candidate := range []uint64{guid, lowGUID} {
-		if candidate == 0 || (candidate == lowGUID && guid != lowGUID && resolved) {
-			continue
+	for _, guid := range guids {
+		lowGUID := guid & 0xFFFFFFFF
+		candidates := []uint64{guid}
+		if lowGUID != 0 && lowGUID != guid {
+			candidates = append(candidates, lowGUID)
 		}
-		if s.player != nil && (s.player.GUID == candidate || s.player.GUID == lowGUID) {
-			name, race, gender, class = s.player.Name, int64(s.player.Race), int64(s.player.Gender), int64(s.player.Class)
-			resolved = true
-			break
-		}
-		if online := s.server.findSessionByGUID(candidate); online != nil && online.player != nil {
-			name, race, gender, class = online.player.Name, int64(online.player.Race), int64(online.player.Gender), int64(online.player.Class)
-			resolved = true
-			break
-		}
-		if cached, ok := s.characterNames[candidate]; ok {
-			name, race, gender, class = cached.Name, int64(cached.Race), int64(cached.Gender), int64(cached.Class)
-			resolved = true
-			break
-		}
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT name, race, gender, class FROM characters WHERE guid = ? AND (deleteInfos_Name IS NULL OR deleteInfos_Name = '')", candidate).Scan(&name, &race, &gender, &class)
-			if err != nil && isMissingColumn(err) {
-				err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT name, race, gender, class FROM characters WHERE guid = ?", candidate).Scan(&name, &race, &gender, &class)
-			}
-			if err == nil {
+		for _, candidate := range candidates {
+			if s.player != nil && (s.player.GUID == candidate || s.player.GUID == lowGUID) {
+				name, race, gender, class = s.player.Name, int64(s.player.Race), int64(s.player.Gender), int64(s.player.Class)
 				resolved = true
+			} else if online := s.server.findSessionByGUID(candidate); online != nil && online.player != nil {
+				name, race, gender, class = online.player.Name, int64(online.player.Race), int64(online.player.Gender), int64(online.player.Class)
+				resolved = true
+			} else if cached, ok := s.characterNames[candidate]; ok {
+				name, race, gender, class = cached.Name, int64(cached.Race), int64(cached.Gender), int64(cached.Class)
+				resolved = true
+			} else if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT name, race, gender, class FROM characters WHERE guid = ? AND (deleteInfos_Name IS NULL OR deleteInfos_Name = '')", candidate).Scan(&name, &race, &gender, &class)
+				if err != nil && isMissingColumn(err) {
+					err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT name, race, gender, class FROM characters WHERE guid = ?", candidate).Scan(&name, &race, &gender, &class)
+				}
+				resolved = err == nil
+				if !resolved && !errors.Is(err, sql.ErrNoRows) {
+					s.debug("name query lookup failed", "account", s.accountName, "guid", guid, "candidate", candidate, "error", err)
+				}
+			}
+			if resolved {
+				resolvedGUID = guid
 				break
 			}
-			if !errors.Is(err, sql.ErrNoRows) {
-				s.debug("name query lookup failed", "account", s.accountName, "guid", guid, "candidate", candidate, "error", err)
-			}
+		}
+		if resolved {
+			break
 		}
 	}
+	packet := protocol.NewBuffer(32)
+	if resolvedGUID == 0 {
+		resolvedGUID = requestedGUID
+	}
+	packet.WritePackedGUID(resolvedGUID)
 	if !resolved {
 		packet.WriteU8(1)
 		return s.write(uint16(protocol.OpcodeSMSG_NAME_QUERY_RESPONSE), packet.Bytes(), true) == nil
@@ -3465,6 +3471,8 @@ func (s *session) handleNameQuery(ctx context.Context, payload []byte) bool {
 	packet.WriteU8(uint8(class))
 	declined := [5]string{}
 	declinedLoaded := false
+	guid := resolvedGUID
+	lowGUID := guid & 0xFFFFFFFF
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil && ((s.player != nil && (s.player.GUID == guid || s.player.GUID == lowGUID)) || s.server.findSessionByGUID(guid) != nil || s.server.findSessionByGUID(lowGUID) != nil) {
 		declinedLoaded = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT genitive, dative, accusative, instrumental, prepositional FROM character_declinedname WHERE guid = ?`, lowGUID).Scan(&declined[0], &declined[1], &declined[2], &declined[3], &declined[4]) == nil
 	}

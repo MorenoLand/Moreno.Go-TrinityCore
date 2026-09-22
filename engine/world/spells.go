@@ -2223,11 +2223,24 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 			if sp.StackAmount == 0 && sp.ProcCharges > 0 {
 				stackCount = uint8(sp.ProcCharges)
 			}
-			if len(sp.Effects) > 0 {
-				auraType = sp.Effects[0].Aura
-				miscValue = sp.Effects[0].MiscValue
+			for index, effect := range sp.Effects {
+				if effect.Effect == 0 || (index > 0 && auraType != 0 && effect.Aura != spellAuraMounted) {
+					continue
+				}
+				auraType = effect.Aura
+				miscValue = effect.MiscValue
+				if auraType == spellAuraMounted {
+					break
+				}
 			}
 		}
+	}
+	mounted := auraType == spellAuraMounted
+	if mounted {
+		s.clearOtherMountedAuras(spellID)
+		durationMs = 0
+		stackCount = 1
+		procCharges = 0
 	}
 	positive := !isHarmfulAura(auraType)
 	if spellID == 15007 {
@@ -2259,8 +2272,14 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	s.activeAuras[spellID] = aura
 	s.castMu.Unlock()
 
+	if mounted {
+		s.applyMountedDisplay(context.Background(), aura)
+	}
 	s.sendAuraUpdateWithStack(slot, spellID, false, positive, durationMs, durationMs, stackCount)
 	s.sendPlayerUpdate()
+	if mounted {
+		s.sendRuntimeMovementUpdates(spellAuraMounted)
+	}
 }
 
 func (s *session) removeAura(spellID uint32) {
@@ -2633,7 +2652,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 
 		stackCount := uint8(1)
-		if spell.StackAmount == 0 && spell.ProcCharges > 0 {
+		if eff.Aura != spellAuraMounted && spell.StackAmount == 0 && spell.ProcCharges > 0 {
 			stackCount = uint8(spell.ProcCharges)
 		}
 		wireMaxDuration, wireDuration := auraWireDurations(spell, durationMs, durationMs)

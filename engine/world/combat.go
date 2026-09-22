@@ -1171,6 +1171,8 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 	if curHealth.Valid {
 		if curHealth.Int64 > 0 {
 			target.Health = uint32(curHealth.Int64)
+		} else {
+			target.Health = st.Health
 		}
 	} else {
 		target.Health = st.Health
