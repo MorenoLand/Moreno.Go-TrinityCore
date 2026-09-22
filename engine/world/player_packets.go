@@ -153,6 +153,44 @@ func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race, clas
 			}
 		}
 	}
+	if s.server != nil && s.server.Data != nil {
+		for index := range result {
+			if !result[index].Active || result[index].Disabled {
+				continue
+			}
+			if !s.spellFitsClassRace(result[index].ID, race, class) || !s.spellAvailableAtLevel(result[index].ID, level) {
+				result[index].Active = false
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_spell SET active = 0 WHERE guid = ? AND spell = ?", guid, result[index].ID)
+			}
+		}
+		active := make(map[uint32]struct{}, len(result))
+		for _, spell := range result {
+			if spell.Active && !spell.Disabled {
+				active[spell.ID] = struct{}{}
+			}
+		}
+		for index := range result {
+			if !result[index].Active || result[index].Disabled {
+				continue
+			}
+			abilities, found, err := s.server.Data.SkillLineAbilities(result[index].ID)
+			if err != nil || !found {
+				continue
+			}
+			for _, ability := range abilities {
+				if ability.SupercededBySpell == 0 {
+					continue
+				}
+				if _, known := active[ability.SupercededBySpell]; !known {
+					continue
+				}
+				result[index].Active = false
+				delete(active, result[index].ID)
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_spell SET active = 0 WHERE guid = ? AND spell = ?", guid, result[index].ID)
+				break
+			}
+		}
+	}
 	return result, nil
 }
 

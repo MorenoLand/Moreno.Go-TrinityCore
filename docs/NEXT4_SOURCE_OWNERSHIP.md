@@ -428,3 +428,5 @@ Stealth, invisibility, stealth-detection, invisibility-detection, and stealth-le
 Mounted and flight speed aura changes now recalculate source stack/non-stack modifiers at runtime, emit self and nearby run/flight speed packets, and set or unset client fly state when the final flight aura changes, matching `Unit::UpdateSpeed`, `Player::SetCanFly`, and the mounted-speed aura handlers (runtime mounted-speed correction).
 
 Newly visible player and creature units now receive `SMSG_AURA_UPDATE_ALL` and active player melee `SMSG_ATTACK_START` after their create update, including login, worldport, movement streaming, and visibility-transition paths, matching `Player::SendInitialVisiblePackets` and `SendAurasForTarget` (visible-unit initial-state packet correction).
+
+Login spell loading now rejects DBC-invalid race/class or level-ineligible active rows and deactivates lower non-stackable ranks when a higher `SkillLineAbility::SupercededBySpell` rank is active, matching `Player::_LoadSpells` plus `Player::AddSpell` rank-state behavior (initial spell-rank correction).
