@@ -28,6 +28,8 @@ func (s *session) applyStartAllReputation(ctx context.Context) {
 	} else {
 		factions = append(factions, 76, 68, 81, 911, 729, 941, 530, 947, 1052, 1067, 1124, 1064, 1085)
 	}
+	changed := make([]playerReputation, 0, len(factions))
+	increased := false
 	for _, factionID := range factions {
 		reputation, found, err := s.server.Data.Reputation(factionID, s.player.Race, s.player.Class)
 		if err != nil || !found || reputation.ReputationList < 0 {
@@ -44,14 +46,36 @@ func (s *session) applyStartAllReputation(ctx context.Context) {
 			s.player.Reputations = append(s.player.Reputations, playerReputation{FactionID: factionID, ListID: uint32(reputation.ReputationList), Base: reputation.BaseStanding, Flags: reputation.DefaultFlags})
 			index = len(s.player.Reputations) - 1
 		}
+		oldRank := reputationRank(int64(totalReputationStanding(s.player.Reputations[index])))
 		s.player.Reputations[index].ListID = uint32(reputation.ReputationList)
 		s.player.Reputations[index].Standing = 42999 - reputation.BaseStanding
-		if s.player.Reputations[index].Flags == 0 {
-			s.player.Reputations[index].Flags = reputation.DefaultFlags
+		s.player.Reputations[index].Flags |= factionFlagVisible
+		if s.player.Reputations[index].Flags == factionFlagVisible {
+			s.player.Reputations[index].Flags |= reputation.DefaultFlags
 		}
+		if reputationRank(int64(totalReputationStanding(s.player.Reputations[index]))) > oldRank {
+			increased = true
+		}
+		changed = append(changed, s.player.Reputations[index])
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_reputation (guid, faction, standing, flags) VALUES (?, ?, ?, ?)", s.playerGUID, factionID, s.player.Reputations[index].Standing, s.player.Reputations[index].Flags)
 	}
-	_ = s.write(uint16(protocol.OpcodeSMSG_INITIALIZE_FACTIONS), buildInitialReputations(*s.player), true)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SET_FACTION_STANDING), buildFactionStandingState(changed, increased), true)
+}
+
+func buildFactionStandingState(reputations []playerReputation, increased bool) []byte {
+	packet := protocol.NewBuffer(13 + len(reputations)*8)
+	packet.WriteF32(0)
+	if increased {
+		packet.WriteU8(1)
+	} else {
+		packet.WriteU8(0)
+	}
+	packet.WriteU32(uint32(len(reputations)))
+	for _, reputation := range reputations {
+		packet.WriteU32(reputation.ListID)
+		packet.WriteU32(uint32(reputation.Standing))
+	}
+	return packet.Bytes()
 }
 
 // handleSetWatchedFaction mirrors WorldSession::HandleSetWatchedFactionOpcode

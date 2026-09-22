@@ -340,3 +340,7 @@ The login replay checker now parses `SMSG_TALENTS_INFO` player and pet variants,
 The login replay checker now parses both terminated sections of `SMSG_ALL_ACHIEVEMENT_DATA`, including packed criterion counters/player GUIDs, flags, and timestamp fields, matching `AchievementMgr::BuildAllDataPacket` (achievement login packet milestone).
 
 Optional login revision chat now follows `CONFIG_ENABLE_SINFO_LOGIN` through `Server.LoginInfo` and `MORENOCORE_SERVER_LOGIN_INFO`, sending the Go build revision immediately after MOTD like `CharacterHandler.cpp` (login server-info milestone).
+
+`PlayerStart.AllReputation` now emits the source `SMSG_SET_FACTION_STANDING` transition after initial faction initialization, preserves visible faction flags, and reports rank increases like `ReputationMgr::SetOneFactionReputation` and `SendState` instead of sending a second initialization packet (start-reputation login milestone).
+
+The login replay checker now validates the `SMSG_SET_FACTION_STANDING` float/flag/count/standing-entry framing used by the start-reputation transition (start-reputation packet evidence milestone).

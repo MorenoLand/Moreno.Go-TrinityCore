@@ -112,6 +112,7 @@ func runSelfCheck() error {
 		{"unlearn-spells", protocol.OpcodeSMSG_SEND_UNLEARN_SPELLS, []byte{0, 0, 0, 0}, requireUnlearnSpells},
 		{"action-buttons", protocol.OpcodeSMSG_ACTION_BUTTONS, actionButtonsFixture(), requireActionButtons},
 		{"factions", protocol.OpcodeSMSG_INITIALIZE_FACTIONS, initialFactionsFixture(), requireInitialFactions},
+		{"faction-standing", protocol.OpcodeSMSG_SET_FACTION_STANDING, factionStandingFixture(), requireFactionStanding},
 		{"contact-list", protocol.OpcodeSMSG_CONTACT_LIST, []byte{7, 0, 0, 0, 0, 0, 0, 0}, requireContactList},
 		{"guild-event", protocol.OpcodeSMSG_GUILD_EVENT, []byte{2, 0}, requireGuildEvent},
 		{"guild-bank-list", protocol.OpcodeSMSG_GUILD_BANK_LIST, []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, requireGuildBankList},
@@ -208,6 +209,16 @@ func achievementDataFixture() []byte {
 	buf := protocol.NewBuffer(8)
 	buf.WriteU32(0xFFFFFFFF)
 	buf.WriteU32(0xFFFFFFFF)
+	return buf.Bytes()
+}
+
+func factionStandingFixture() []byte {
+	buf := protocol.NewBuffer(17)
+	buf.WriteF32(0)
+	buf.WriteU8(1)
+	buf.WriteU32(1)
+	buf.WriteU32(72)
+	buf.WriteU32(42999)
 	return buf.Bytes()
 }
 
@@ -460,6 +471,8 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 			validate = requireTalentsInfo
 		case "SMSG_ALL_ACHIEVEMENT_DATA":
 			validate = requireAchievementData
+		case "SMSG_SET_FACTION_STANDING":
+			validate = requireFactionStanding
 		case "SMSG_LEARNED_DANCE_MOVES":
 			validate = func(event protocoltrace.Event) error { return requirePayloadLength(event, 8) }
 		case "SMSG_FEATURE_SYSTEM_STATUS":
@@ -607,6 +620,8 @@ func checkOptionalLoginPayloads(trace protocoltrace.Trace, start int) error {
 			validate = requireGuildBankList
 		case uint32(protocol.OpcodeSMSG_GUILD_ROSTER):
 			validate = requireGuildRoster
+		case uint32(protocol.OpcodeSMSG_SET_FACTION_STANDING):
+			validate = requireFactionStanding
 		}
 		if validate != nil {
 			if err := validate(event); err != nil {
@@ -1512,6 +1527,31 @@ func requireActionButtons(event protocoltrace.Event) error {
 	}
 	if len(payload) != 1+144*4 || state != 1 {
 		return fmt.Errorf("action-button payload length/state=%d/%d, want 577/1", len(payload), state)
+	}
+	return nil
+}
+
+func requireFactionStanding(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	if _, err := reader.ReadF32(); err != nil {
+		return fmt.Errorf("faction-standing increase is truncated: %w", err)
+	}
+	if _, err := reader.ReadU8(); err != nil {
+		return fmt.Errorf("faction-standing increase flag is truncated: %w", err)
+	}
+	count, err := reader.ReadU32()
+	if err != nil {
+		return fmt.Errorf("faction-standing count is truncated: %w", err)
+	}
+	if _, err := reader.Read(int(count) * 8); err != nil {
+		return fmt.Errorf("faction-standing entries are truncated: %w", err)
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected faction-standing bytes=%d", reader.Remaining())
 	}
 	return nil
 }
