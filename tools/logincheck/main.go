@@ -436,6 +436,9 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 	if err := checkOptionalLoginPayloads(trace, start); err != nil {
 		return err
 	}
+	if err := checkPostMapLoginOrder(trace, start, playerCreateIndex); err != nil {
+		return err
+	}
 	for index := start + 1; index < len(trace.Events); index++ {
 		event := trace.Events[index]
 		if event.Direction == protocoltrace.ClientToServer && (event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) || event.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST)) {
@@ -450,6 +453,50 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 		if playerCreateIndex >= 0 && index > playerCreateIndex {
 			return fmt.Errorf("SMSG_TRIGGER_CINEMATIC was sent after player create update")
 		}
+	}
+	return nil
+}
+
+func checkPostMapLoginOrder(trace protocoltrace.Trace, start, playerCreateIndex int) error {
+	if playerCreateIndex < 0 {
+		return fmt.Errorf("post-map login order has no player create boundary")
+	}
+	order := map[uint32]int{
+		uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES):          0,
+		uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ):              1,
+		uint32(protocol.OpcodeSMSG_SPELL_GO):                   2,
+		uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL):            3,
+		uint32(protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE):   4,
+		uint32(protocol.OpcodeSMSG_ITEM_TIME_UPDATE):           5,
+		uint32(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE): 6,
+		uint32(protocol.OpcodeSMSG_TAXINODE_STATUS):            7,
+		uint32(protocol.OpcodeMSG_SET_RAID_DIFFICULTY):         8,
+		uint32(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS):  9,
+		uint32(protocol.OpcodeSMSG_GROUP_LIST):                 10,
+		uint32(protocol.OpcodeSMSG_PET_SPELLS):                 11,
+	}
+	seen := make(map[int]struct{}, len(order))
+	last := -1
+	for index := playerCreateIndex + 1; index < len(trace.Events); index++ {
+		event := trace.Events[index]
+		if event.Direction == protocoltrace.ClientToServer && (event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) || event.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST)) {
+			break
+		}
+		if event.Direction != protocoltrace.ServerToClient {
+			continue
+		}
+		stage, ok := order[event.Opcode]
+		if !ok {
+			continue
+		}
+		if _, ok := seen[stage]; ok {
+			continue
+		}
+		if stage < last {
+			return fmt.Errorf("post-map packet %s arrived after a later login stage", opcodeName(event.Opcode))
+		}
+		seen[stage] = struct{}{}
+		last = stage
 	}
 	return nil
 }
