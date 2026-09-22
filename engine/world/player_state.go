@@ -125,6 +125,7 @@ const (
 	playerDailyQuestsCount                        = 25
 	playerRuneRegenStart                          = 1305
 	unitFlagPlayerControlled               uint32 = 0x00000008
+	unitFlagMount                          uint32 = 0x08000000
 	unitFlag2RegeneratePower               uint32 = 0x00000800
 	unitFlagInCombat                       uint32 = 0x00080000
 )
@@ -2497,7 +2498,11 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 	values[unitFieldHoverHeight] = math.Float32bits(1)
 	values[unitFieldBytes1] = uint32(state.StandState)
 	values[unitFieldFaction] = s.raceFaction(state.Race)
-	values[unitFieldFlags] = unitFlagPlayerControlled | state.UnitFlags
+	unitFlags := state.UnitFlags
+	if state.MountDisplayID != 0 {
+		unitFlags |= unitFlagMount
+	}
+	values[unitFieldFlags] = unitFlagPlayerControlled | unitFlags
 	values[unitFieldAttackTime] = 2000
 	values[unitFieldAttackTimeOffhand] = 2000
 	values[unitFieldBoundingRadius] = math.Float32bits(0.306349)

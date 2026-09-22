@@ -359,4 +359,6 @@ The login replay checker now validates the nine-byte `SMSG_PLAYED_TIME` total/le
 
 The self-player create fixture now requires populated visible equipment entry/enchantment fields at `PLAYER_VISIBLE_ITEM_1_ENTRYID`, matching the source public update-field boundary used by `Player::BuildCreateUpdateBlockForPlayer` (equipment visibility packet evidence milestone).
 
+Mounted login reconstruction now sets `UNIT_FLAG_MOUNT` whenever a persisted mounted aura supplies `UNIT_FIELD_MOUNTDISPLAYID`, matching `Unit::Mount` and preventing a display-only mount create update (mounted login field milestone).
+
 The login replay checker now validates the `SMSG_SET_FACTION_STANDING` float/flag/count/standing-entry framing used by the start-reputation transition (start-reputation packet evidence milestone).
