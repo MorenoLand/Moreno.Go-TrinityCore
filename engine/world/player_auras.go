@@ -58,7 +58,7 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 		if scanErr != nil {
 			continue
 		}
-		if spellID <= 0 || (remainTime == 0 || remainTime < -1) || spellID > int64(^uint32(0)) || len(s.activeAuras) >= 64 {
+		if spellID <= 0 || effectMask <= 0 || effectMask&^int64(0x07) != 0 || (remainTime == 0 || remainTime < -1) || spellID > int64(^uint32(0)) || len(s.activeAuras) >= 64 {
 			continue
 		}
 		id := uint32(spellID)
