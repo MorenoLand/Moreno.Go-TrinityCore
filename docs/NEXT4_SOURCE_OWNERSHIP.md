@@ -374,3 +374,5 @@ Runtime mounted auras now preserve source infinite `SpellDuration` values, remov
 First-login cast spells now use the triggered-cast path, avoiding normal player power consumption, cooldown persistence, and cast-start state while preserving the source `Player::CastSpell(..., true)` `SMSG_SPELL_GO` effect application (first-login triggered-spell correction).
 
 The login replay checker now validates a non-login-effect triggered first-login `SMSG_SPELL_GO` with `CAST_FLAG_UNKNOWN_9`, pending, self-power, self-target, and remaining-power framing, matching `Spell::SendSpellGo` for `Player::CastSpell(..., true)` (first-login triggered-spell packet evidence).
+
+The replay gate now enforces the optional pre-map guild login window: guild MOTD, bank-list, and roster packets must occur after MOTD and before learned dance moves in the source order from `Guild::SendLoginInfo` and `CharacterHandler.cpp` (pre-map guild login ordering evidence).

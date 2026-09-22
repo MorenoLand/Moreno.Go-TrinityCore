@@ -1255,6 +1255,9 @@ func (s *session) castSpellDirectWithOptions(ctx context.Context, spellID uint32
 	}
 
 	castID := uint8(1)
+	if firstLogin {
+		castID = 0
+	}
 	now := time.Now()
 	castTimeStamp := uint32(now.UnixMilli())
 	hitTargets := []uint64{targetGUID}

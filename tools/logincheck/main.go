@@ -78,6 +78,14 @@ func runSelfCheck() error {
 	if err := checkLoginMovementOrder(validMovement, 0); err != nil {
 		return fmt.Errorf("valid movement ordering was rejected: %w", err)
 	}
+	guildOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOTD)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_EVENT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_BANK_LIST)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_ROSTER)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}}}
+	if err := checkPreMapGuildLoginOrder(guildOrder, 0, 6); err != nil {
+		return fmt.Errorf("valid pre-map guild ordering was rejected: %w", err)
+	}
+	badGuildOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOTD)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_ROSTER)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_EVENT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}}}
+	if err := checkPreMapGuildLoginOrder(badGuildOrder, 0, 5); err == nil {
+		return fmt.Errorf("out-of-order pre-map guild packets were not rejected")
+	}
 	invalidMovement := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK)}}}
 	if err := checkLoginMovementOrder(invalidMovement, 0); err == nil {
 		return fmt.Errorf("out-of-order movement packets were not rejected")
@@ -580,6 +588,9 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 	if err := checkPostMapLoginOrder(trace, start, playerCreateIndex); err != nil {
 		return err
 	}
+	if err := checkPreMapGuildLoginOrder(trace, start, playerCreateIndex); err != nil {
+		return err
+	}
 	for index := start + 1; index < len(trace.Events); index++ {
 		event := trace.Events[index]
 		if event.Direction == protocoltrace.ClientToServer && (event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) || event.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST)) {
@@ -594,6 +605,52 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 		if playerCreateIndex >= 0 && index > playerCreateIndex {
 			return fmt.Errorf("SMSG_TRIGGER_CINEMATIC was sent after player create update")
 		}
+	}
+	return nil
+}
+
+func checkPreMapGuildLoginOrder(trace protocoltrace.Trace, start, playerCreateIndex int) error {
+	end := playerCreateIndex
+	if end < 0 || end >= len(trace.Events) {
+		end = len(trace.Events)
+	}
+	motdIndex, danceIndex := -1, end
+	for index := start + 1; index < end; index++ {
+		event := trace.Events[index]
+		if event.Direction != protocoltrace.ServerToClient {
+			continue
+		}
+		if event.Opcode == uint32(protocol.OpcodeSMSG_MOTD) && motdIndex < 0 {
+			motdIndex = index
+		}
+		if event.Opcode == uint32(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES) && danceIndex == end {
+			danceIndex = index
+		}
+	}
+	lastStage := -1
+	for index := start + 1; index < end; index++ {
+		event := trace.Events[index]
+		if event.Direction != protocoltrace.ServerToClient {
+			continue
+		}
+		stage := -1
+		switch event.Opcode {
+		case uint32(protocol.OpcodeSMSG_GUILD_EVENT):
+			stage = 0
+		case uint32(protocol.OpcodeSMSG_GUILD_BANK_LIST):
+			stage = 1
+		case uint32(protocol.OpcodeSMSG_GUILD_ROSTER):
+			stage = 2
+		default:
+			continue
+		}
+		if motdIndex < 0 || index <= motdIndex || index >= danceIndex {
+			return fmt.Errorf("guild packet %s is outside the source MOTD-to-dance window", opcodeName(event.Opcode))
+		}
+		if stage < lastStage {
+			return fmt.Errorf("guild packet %s arrived after a later guild login stage", opcodeName(event.Opcode))
+		}
+		lastStage = stage
 	}
 	return nil
 }
