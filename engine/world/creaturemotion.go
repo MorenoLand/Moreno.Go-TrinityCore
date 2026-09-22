@@ -302,9 +302,9 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 	}
 }
 
-func (s *Server) charmCreature(ctx context.Context, creatureGUID, charmerGUID uint64, charmerRace uint8) []uint32 {
+func (s *Server) charmCreature(ctx context.Context, creatureGUID, charmerGUID uint64, charmerRace uint8) ([]uint32, uint8, uint8) {
 	if s == nil || creatureGUID == 0 || charmerGUID == 0 {
-		return nil
+		return nil, 0, 0
 	}
 	s.motionMu.Lock()
 	motion := s.creatureMotion[creatureGUID]
@@ -315,7 +315,7 @@ func (s *Server) charmCreature(ctx context.Context, creatureGUID, charmerGUID ui
 	}
 	if motion == nil {
 		s.motionMu.Unlock()
-		return nil
+		return nil, 0, 0
 	}
 	if len(motion.Spells) == 0 {
 		motion.Spells = s.loadCreatureSpells(ctx, motion.Entry)
@@ -326,7 +326,7 @@ func (s *Server) charmCreature(ctx context.Context, creatureGUID, charmerGUID ui
 	}
 	motion.CharmerGUID = charmerGUID
 	motion.Charmed = true
-	motion.UnitFlags |= unitFlagPlayerControlled | unitFlagPossessed
+	motion.UnitFlags |= unitFlagPlayerControlled
 	motion.Faction = s.raceFaction(charmerRace)
 	motion.InCombat = false
 	motion.TargetGUID = 0
@@ -335,11 +335,12 @@ func (s *Server) charmCreature(ctx context.Context, creatureGUID, charmerGUID ui
 		motion.ThreatMgr.ClearThreat()
 	}
 	spells := append([]uint32(nil), motion.Spells...)
+	reactState, commandState := motion.ReactState, motion.PetCommand
 	mapID, rawGUID := motion.Map, motion.GUID
 	flags, faction := motion.UnitFlags, motion.Faction
 	s.motionMu.Unlock()
 	s.broadcastCreatureValuesUpdate(mapID, rawGUID, map[int]uint32{unitFieldFlags: flags, unitFieldFaction: faction})
-	return spells
+	return spells, reactState, commandState
 }
 
 func (s *Server) uncharmCreature(creatureGUID, charmerGUID uint64) {

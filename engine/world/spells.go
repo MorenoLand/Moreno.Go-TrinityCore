@@ -2680,9 +2680,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	s.server.activeCreatureAuras[targetGUID][spell.ID] = aura
 	s.server.auraMu.Unlock()
 	if eff.Aura == spellAuraCharm {
-		spells := s.server.charmCreature(ctx, targetGUID, s.playerGUID, s.player.Race)
+		spells, reactState, commandState := s.server.charmCreature(ctx, targetGUID, s.playerGUID, s.player.Race)
 		s.sendClientControl(targetGUID, true)
-		s.sendCharmPetSpells(targetGUID, spells)
+		s.sendCharmPetSpells(targetGUID, spells, reactState, commandState)
 	}
 
 	stackCount := uint8(1)
