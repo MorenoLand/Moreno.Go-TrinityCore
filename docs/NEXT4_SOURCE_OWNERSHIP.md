@@ -284,3 +284,5 @@ Persisted aura loading now honors TrinityCore's `MAX_AURAS` capacity of 255 inst
 Login inventory create blocks now follow TrinityCore equipment/top-level slot order and recursively emit bag contents by slot (`2dcc610`).
 
 Login questgiver status now includes visible gameobject questgivers, source-style three-dimensional range filtering, and raw creature/gameobject GUIDs (`6597c3d`).
+
+Taxi status packets now report only the persisted taxi-mask bit, matching `Player::SendTaxiStatus` and `SendTaxiNodeStatusMultiple`; taxi-cheat authorization remains separate (`f01ce06`).
