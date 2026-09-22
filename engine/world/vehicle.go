@@ -580,6 +580,29 @@ func (s *session) sendVehiclePetSpells(vehicleGUID uint64, spells []uint32) {
 	_ = s.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
 }
 
+func (s *session) sendCharmPetSpells(creatureGUID uint64, spells []uint32) {
+	if s == nil || s.conn == nil || creatureGUID == 0 {
+		return
+	}
+	buf := protocol.NewBuffer(64)
+	buf.WriteU64(creatureGUID)
+	buf.WriteU16(0)
+	buf.WriteU32(0)
+	buf.WriteU8(2)
+	buf.WriteU8(0)
+	buf.WriteU16(0)
+	for i := 0; i < 10; i++ {
+		if i < len(spells) && spells[i] != 0 {
+			buf.WriteU32(spells[i] | (uint32(i+8) << 24))
+		} else {
+			buf.WriteU32(0)
+		}
+	}
+	buf.WriteU8(0)
+	buf.WriteU8(0)
+	_ = s.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
+}
+
 // sendCancelExpectedRideVehicleAura sends SMSG_ON_CANCEL_EXPECTED_RIDE_VEHICLE_AURA (0x49D).
 // Reference: Unit.cpp:8330-8331.
 func (s *session) sendCancelExpectedRideVehicleAura() {

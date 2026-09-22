@@ -75,6 +75,10 @@ type creatureMotion struct {
 	Name       string
 
 	OwnerGUID      uint64
+	CharmerGUID    uint64
+	Charmed        bool
+	CharmUnitFlags uint32
+	CharmFaction   uint32
 	PetCommand     uint8 // 0: stay, 1: follow, 2: attack
 	PetReact       uint8 // 0: passive, 1: defensive, 2: aggressive
 	AutocastSpells []uint32
@@ -298,6 +302,73 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 	}
 }
 
+func (s *Server) charmCreature(ctx context.Context, creatureGUID, charmerGUID uint64, charmerRace uint8) []uint32 {
+	if s == nil || creatureGUID == 0 || charmerGUID == 0 {
+		return nil
+	}
+	s.motionMu.Lock()
+	motion := s.creatureMotion[creatureGUID]
+	if motion == nil {
+		low := uint32(creatureGUID & 0x00FFFFFF)
+		entry := uint32((creatureGUID >> 24) & 0x00FFFFFF)
+		motion = s.creatureMotion[creatureWorldGUID(low, entry)]
+	}
+	if motion == nil {
+		s.motionMu.Unlock()
+		return nil
+	}
+	if len(motion.Spells) == 0 {
+		motion.Spells = s.loadCreatureSpells(ctx, motion.Entry)
+	}
+	if !motion.Charmed {
+		motion.CharmUnitFlags = motion.UnitFlags
+		motion.CharmFaction = motion.Faction
+	}
+	motion.CharmerGUID = charmerGUID
+	motion.Charmed = true
+	motion.UnitFlags |= unitFlagPlayerControlled | unitFlagPossessed
+	motion.Faction = s.raceFaction(charmerRace)
+	motion.InCombat = false
+	motion.TargetGUID = 0
+	motion.Moving = false
+	if motion.ThreatMgr != nil {
+		motion.ThreatMgr.ClearThreat()
+	}
+	spells := append([]uint32(nil), motion.Spells...)
+	mapID, rawGUID := motion.Map, motion.GUID
+	flags, faction := motion.UnitFlags, motion.Faction
+	s.motionMu.Unlock()
+	s.broadcastCreatureValuesUpdate(mapID, rawGUID, map[int]uint32{unitFieldFlags: flags, unitFieldFaction: faction})
+	return spells
+}
+
+func (s *Server) uncharmCreature(creatureGUID, charmerGUID uint64) {
+	if s == nil || creatureGUID == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	motion := s.creatureMotion[creatureGUID]
+	if motion == nil {
+		low := uint32(creatureGUID & 0x00FFFFFF)
+		entry := uint32((creatureGUID >> 24) & 0x00FFFFFF)
+		motion = s.creatureMotion[creatureWorldGUID(low, entry)]
+	}
+	if motion == nil || !motion.Charmed || (charmerGUID != 0 && motion.CharmerGUID != charmerGUID) {
+		s.motionMu.Unlock()
+		return
+	}
+	motion.Charmed = false
+	motion.CharmerGUID = 0
+	motion.UnitFlags = motion.CharmUnitFlags
+	motion.Faction = motion.CharmFaction
+	motion.CharmUnitFlags = 0
+	motion.CharmFaction = 0
+	mapID, rawGUID := motion.Map, motion.GUID
+	flags, faction := motion.UnitFlags, motion.Faction
+	s.motionMu.Unlock()
+	s.broadcastCreatureValuesUpdate(mapID, rawGUID, map[int]uint32{unitFieldFlags: flags, unitFieldFaction: faction})
+}
+
 // isCreatureEvading returns true if the creature is currently evading back to spawn.
 // During evade mode, the creature is immune to all attacks, spells, and threat.
 func (s *Server) isCreatureEvading(guid uint64) bool {
@@ -516,6 +587,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		motion.InCombat = false
 		motion.TargetGUID = 0
 		motion.Moving = false
+		return
+	}
+	if motion.Charmed {
 		return
 	}
 	if isCreaturePassive(motion) && motion.InCombat {

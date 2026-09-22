@@ -2679,6 +2679,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	}
 	s.server.activeCreatureAuras[targetGUID][spell.ID] = aura
 	s.server.auraMu.Unlock()
+	if eff.Aura == spellAuraCharm {
+		spells := s.server.charmCreature(ctx, targetGUID, s.playerGUID, s.player.Race)
+		s.sendClientControl(targetGUID, true)
+		s.sendCharmPetSpells(targetGUID, spells)
+	}
 
 	stackCount := uint8(1)
 	if spell.StackAmount == 0 && spell.ProcCharges > 0 {
@@ -3066,10 +3071,14 @@ func (s *session) expireCreatureAura(creatureGUID uint64, spellID uint32, slot u
 	if s.server == nil {
 		return
 	}
+	wasCharm := false
+	charmerGUID := uint64(0)
 	s.server.auraMu.Lock()
 	if s.server.activeCreatureAuras != nil {
 		if auras, ok := s.server.activeCreatureAuras[creatureGUID]; ok {
 			if aura, exists := auras[spellID]; exists && aura != nil {
+				wasCharm = aura.AuraType == spellAuraCharm
+				charmerGUID = aura.CasterGUID
 				aura.Stopped = true
 				if aura.TickTimer != nil {
 					aura.TickTimer.Stop()
@@ -3084,6 +3093,11 @@ func (s *session) expireCreatureAura(creatureGUID uint64, spellID uint32, slot u
 		}
 	}
 	s.server.auraMu.Unlock()
+	if wasCharm {
+		s.server.uncharmCreature(creatureGUID, charmerGUID)
+		s.sendClientControl(creatureGUID, false)
+		s.sendVehiclePetSpells(0, nil)
+	}
 
 	removePkt := protocol.BuildAuraUpdate(creatureGUID, s.playerGUID, slot, 0, true, false, 0, 0, 1)
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, true)
@@ -3094,11 +3108,15 @@ func (s *Server) removeCreatureAura(creatureGUID uint64, spellID uint32) {
 	if s == nil || creatureGUID == 0 || spellID == 0 {
 		return
 	}
+	wasCharm := false
+	charmerGUID := uint64(0)
 	s.auraMu.Lock()
 	var slot uint8
 	if s.activeCreatureAuras != nil {
 		if auras, ok := s.activeCreatureAuras[creatureGUID]; ok {
 			if aura, exists := auras[spellID]; exists && aura != nil {
+				wasCharm = aura.AuraType == spellAuraCharm
+				charmerGUID = aura.CasterGUID
 				aura.Stopped = true
 				slot = aura.Slot
 				if aura.Timer != nil {
@@ -3117,6 +3135,13 @@ func (s *Server) removeCreatureAura(creatureGUID uint64, spellID uint32) {
 		}
 	}
 	s.auraMu.Unlock()
+	if wasCharm {
+		s.uncharmCreature(creatureGUID, charmerGUID)
+		if charmer := s.findSessionByGUID(charmerGUID); charmer != nil {
+			charmer.sendClientControl(creatureGUID, false)
+			charmer.sendVehiclePetSpells(0, nil)
+		}
+	}
 
 	removePkt := protocol.BuildAuraUpdate(creatureGUID, 0, slot, 0, true, false, 0, 0, 1)
 	s.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, nil)
