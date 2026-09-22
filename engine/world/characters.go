@@ -745,6 +745,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_ONLINE", s.accountID); err != nil {
 		return false
 	}
+	s.gameTimeStartedAt = time.Now()
 	s.debug("world login stage", "stage", "account-online-complete", "guid", guid)
 	s.sendLoadedGroup()
 	s.server.broadcastFriendStatus(s.playerGUID, friendsResultOnline, uint32(state.Zone), uint32(state.Level), uint32(state.Class))
@@ -2636,6 +2637,7 @@ func (s *session) savePlayerState(ctx context.Context, online uint32) error {
 		return nil
 	}
 	state := s.player
+	s.updatePlayedTime(time.Now())
 	taxi := make([]string, len(state.TaxiMask))
 	for i, value := range state.TaxiMask {
 		taxi[i] = strconv.FormatUint(uint64(value), 10)
@@ -2654,6 +2656,19 @@ func (s *session) savePlayerState(ctx context.Context, online uint32) error {
 		err = s.saveFishingSteps(ctx, state)
 	}
 	return err
+}
+
+func (s *session) updatePlayedTime(now time.Time) {
+	if s == nil || s.player == nil || s.gameTimeStartedAt.IsZero() || !now.After(s.gameTimeStartedAt) {
+		return
+	}
+	elapsed := uint32(now.Sub(s.gameTimeStartedAt) / time.Second)
+	if elapsed == 0 {
+		return
+	}
+	s.player.TotalPlayedTime += elapsed
+	s.player.LevelPlayedTime += elapsed
+	s.gameTimeStartedAt = s.gameTimeStartedAt.Add(time.Duration(elapsed) * time.Second)
 }
 
 func (s *session) saveFishingSteps(ctx context.Context, state *playerState) error {

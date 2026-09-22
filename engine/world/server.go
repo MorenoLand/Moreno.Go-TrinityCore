@@ -163,6 +163,7 @@ type session struct {
 	visiblePlayersMu      sync.Mutex
 	visiblePlayers        map[uint64]struct{}
 	logoutAt              time.Time
+	gameTimeStartedAt     time.Time
 	writeMu               sync.Mutex
 	captureUpdatePackets  bool
 	capturedUpdatePackets []*protocol.Packet
@@ -3475,10 +3476,15 @@ func (s *session) handlePlayedTime(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	var total, level int64
-	err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT totaltime, leveltime FROM characters WHERE guid = ? AND account = ?", s.playerGUID, s.accountID).Scan(&total, &level)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		s.debug("played time query failed", "account", s.accountName, "error", err)
-		return false
+	if s.playerLoaded && s.player != nil {
+		s.updatePlayedTime(time.Now())
+		total, level = int64(s.player.TotalPlayedTime), int64(s.player.LevelPlayedTime)
+	} else {
+		err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT totaltime, leveltime FROM characters WHERE guid = ? AND account = ?", s.playerGUID, s.accountID).Scan(&total, &level)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			s.debug("played time query failed", "account", s.accountName, "error", err)
+			return false
+		}
 	}
 	packet := protocol.NewBuffer(9)
 	packet.WriteU32(uint32(total))

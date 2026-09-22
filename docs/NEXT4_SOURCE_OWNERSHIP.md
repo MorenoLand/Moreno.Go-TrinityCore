@@ -345,4 +345,6 @@ Optional login revision chat now follows `CONFIG_ENABLE_SINFO_LOGIN` through `Se
 
 Dead player login now keeps saved health at zero through the self-player create update and explicitly masks that zero field, leaving `BuildPlayerRepop` to set health to one at the source post-login repop boundary (dead-player update-mask milestone).
 
+Login now starts an in-game clock after account-online state, advances total/level played time on saves and played-time queries, and persists the counters, matching `Player::SetInGameTime`, `Player::Update`, and `HandlePlayedTime` (played-time login-state milestone).
+
 The login replay checker now validates the `SMSG_SET_FACTION_STANDING` float/flag/count/standing-entry framing used by the start-reputation transition (start-reputation packet evidence milestone).
