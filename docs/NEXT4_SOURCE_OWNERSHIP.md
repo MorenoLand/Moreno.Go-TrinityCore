@@ -320,3 +320,7 @@ Group-list counters are now allocated atomically per emitted packet, matching Tr
 Saved pet action-bar serialization now preserves TrinityCore default command/spell/reaction slots when custom action-bar tokens are malformed, while retaining valid custom slots (saved-pet action-bar milestone).
 
 Saved pet spell packets now discard invalid DBC-known spell rows before `PetSpellInitialize` serialization, while retaining rows when DBC input is unavailable (saved-pet spell validation milestone).
+
+Saved pet action-bar entries now clear unknown DBC-known spells and force non-autocastable spells to passive, matching `CharmInfo::LoadPetActionBar` and the pinned `SPELL_ATTR0_PASSIVE`/`SPELL_ATTR1_UNAUTOCASTABLE_BY_PET` rules (saved-pet action-bar validation milestone).
+
+Saved pets now use model combat reach plus `PET_FOLLOW_DIST` and `PET_FOLLOW_ANGLE` for the initial close-point position, and serialize the same model bounding radius and combat reach into the create update when model data is available, matching `Pet::LoadPetFromDB` and `WorldObject::GetClosePoint` (saved-pet geometry milestone).

@@ -15,6 +15,13 @@ const (
 	petSaveAsCurrent uint8 = 1
 	petSaveNotInSlot uint8 = 2
 
+	petActionPassive   uint8  = 0x01
+	petActionDisabled  uint8  = 0x81
+	petActionEnabled   uint8  = 0xC1
+	petSpellPassive    uint32 = 0x00000040
+	petSpellNoAutocast uint32 = 0x00020000
+	petFollowDistance         = float32(1.0)
+
 	unitFieldSummonedBy       = 14
 	unitFieldCreatedBy        = 16
 	unitFieldPetNumber        = 75
@@ -23,6 +30,31 @@ const (
 	unitFieldPetNextLevelExp  = 78
 	unitFieldCreatedBySpell   = 81
 )
+
+func (s *session) normalizePetActionBarSlot(slot uint32) uint32 {
+	actionType := uint8(slot >> 24)
+	action := slot & 0x00FFFFFF
+	if actionType != petActionPassive && actionType != petActionDisabled && actionType != petActionEnabled {
+		return slot
+	}
+	if action == 0 {
+		return uint32(petActionPassive) << 24
+	}
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return slot
+	}
+	spell, found, err := s.server.Data.Spell(action)
+	if err != nil {
+		return slot
+	}
+	if !found {
+		return uint32(petActionPassive) << 24
+	}
+	if spell.Attributes&petSpellPassive != 0 || spell.AttributesEx&petSpellNoAutocast != 0 {
+		return action | uint32(petActionPassive)<<24
+	}
+	return slot
+}
 
 func (s *Server) nextPetLowGUID() uint32 {
 	s.objectsMu.Lock()
@@ -398,7 +430,7 @@ func (s *session) getPetStats(ctx context.Context, entry uint32, level uint32) (
 	return hp, hp, mana, mana
 }
 
-func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, ownerGUID uint64, faction uint32, ownerClass, petType uint8, createdBySpell, petExperience uint32, x, y, z, o float32) []byte {
+func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, ownerGUID uint64, faction uint32, ownerClass, petType uint8, createdBySpell, petExperience uint32, boundingRadius, combatReach, x, y, z, o float32) []byte {
 	values := make([]uint32, creatureValuesCount)
 	values[0] = uint32(petGUID)
 	values[1] = uint32(petGUID >> 32)
@@ -418,8 +450,8 @@ func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, model
 	values[unitFieldHoverHeight] = math.Float32bits(1)
 	values[unitFieldAttackTime] = 2000
 	values[unitFieldAttackTimeOffhand] = 2000
-	values[unitFieldBoundingRadius] = math.Float32bits(0.306349)
-	values[unitFieldCombatReach] = math.Float32bits(1.5)
+	values[unitFieldBoundingRadius] = math.Float32bits(boundingRadius)
+	values[unitFieldCombatReach] = math.Float32bits(combatReach)
 	values[unitFieldDisplayID] = modelID
 	values[unitFieldNativeDisplayID] = modelID
 	values[unitFieldSummonedBy] = uint32(ownerGUID)
@@ -572,6 +604,18 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 			modelID = 1132
 		}
 	}
+	petBoundingRadius, petCombatReach := float32(0.306349), float32(1.5)
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil && modelID != 0 {
+		var boundingRadius, combatReach float64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT BoundingRadius, CombatReach FROM creature_model_info WHERE DisplayID = ?", modelID).Scan(&boundingRadius, &combatReach); err == nil {
+			if boundingRadius > 0 {
+				petBoundingRadius = float32(boundingRadius)
+			}
+			if combatReach > 0 {
+				petCombatReach = float32(combatReach)
+			}
+		}
+	}
 
 	faction := uint32(35)
 	if s.server != nil {
@@ -580,13 +624,13 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 
 	var petX, petY, petZ, petO float32
 	if s.player != nil {
-		petX = s.player.X + 1.5
-		petY = s.player.Y + 1.5
-		petZ = s.player.Z
 		petO = s.player.Orientation
+		petX = s.player.X + (petCombatReach+petFollowDistance)*float32(math.Cos(float64(petO)+math.Pi/2))
+		petY = s.player.Y + (petCombatReach+petFollowDistance)*float32(math.Sin(float64(petO)+math.Pi/2))
+		petZ = s.player.Z
 	}
 
-	updateBlock := buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, s.playerGUID, faction, s.player.Class, uint8(petType), uint32(createdBySpell), uint32(petExperience), petX, petY, petZ, petO)
+	updateBlock := buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, s.playerGUID, faction, s.player.Class, uint8(petType), uint32(createdBySpell), uint32(petExperience), petBoundingRadius, petCombatReach, petX, petY, petZ, petO)
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(updateBlock)
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
@@ -634,7 +678,7 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 			Level:          level,
 			UnitFlags:      unitFlagPlayerControlled,
 			AttackTime:     2000,
-			CombatReach:    1.5,
+			CombatReach:    petCombatReach,
 			Health:         curHealth,
 			MaxHealth:      maxHealth,
 			OwnerGUID:      s.playerGUID,
@@ -898,6 +942,9 @@ func (s *session) sendPetSpells(ctx context.Context, petID uint32, entry uint32,
 				customSlots[i] = uint32(a) | (uint32(t) << 24)
 			}
 		}
+	}
+	for i := range customSlots {
+		customSlots[i] = s.normalizePetActionBarSlot(customSlots[i])
 	}
 
 	type petSpellInfo struct {
