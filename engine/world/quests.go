@@ -211,7 +211,11 @@ func (s *session) canTakeQuest(ctx context.Context, questID uint32) (bool, error
 }
 
 func (s *session) questDialogStatus(ctx context.Context, entry uint32) (uint8, error) {
-	enderIDs, err := loadQuestRelationIDs(ctx, s.server.WorldStore.DB, "creature_questender", entry)
+	return s.questDialogStatusFromRelations(ctx, entry, "creature_questender", "creature_queststarter")
+}
+
+func (s *session) questDialogStatusFromRelations(ctx context.Context, entry uint32, enderTable, starterTable string) (uint8, error) {
+	enderIDs, err := loadQuestRelationIDs(ctx, s.server.WorldStore.DB, enderTable, entry)
 	if err != nil {
 		return questDialogNone, err
 	}
@@ -236,7 +240,7 @@ func (s *session) questDialogStatus(ctx context.Context, entry uint32) (uint8, e
 	if s.player == nil {
 		return questDialogNone, nil
 	}
-	starterIDs, err := loadQuestRelationIDs(ctx, s.server.WorldStore.DB, "creature_queststarter", entry)
+	starterIDs, err := loadQuestRelationIDs(ctx, s.server.WorldStore.DB, starterTable, entry)
 	if err != nil {
 		return questDialogNone, err
 	}
@@ -579,7 +583,7 @@ func (s *session) sendQuestgiverStatusMultiple(ctx context.Context) bool {
 	if distance <= 0 {
 		distance = 150
 	}
-	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.position_x, c.position_y, COALESCE(t.faction, 0)
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0)
 		FROM creature AS c JOIN creature_template AS t ON t.entry = c.id
 		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
 		AND (COALESCE(t.npcflag, 0) & 2) <> 0`, s.player.Map, float64(s.player.X)-distance, float64(s.player.X)+distance, float64(s.player.Y)-distance, float64(s.player.Y)+distance)
@@ -587,21 +591,39 @@ func (s *session) sendQuestgiverStatusMultiple(ctx context.Context) bool {
 		return s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE), []byte{0, 0, 0, 0}, true) == nil
 	}
 	type questgiver struct {
-		guid, entry uint32
-		faction     uint32
+		guid         uint64
+		entry        uint32
+		faction      uint32
+		enderTable   string
+		starterTable string
 	}
 	questgivers := make([]questgiver, 0)
 	for rows.Next() {
 		var guid, entry, faction int64
-		var x, y float64
-		if rows.Scan(&guid, &entry, &x, &y, &faction) != nil || guid <= 0 || entry <= 0 || math.Hypot(x-float64(s.player.X), y-float64(s.player.Y)) > distance {
+		var x, y, z float64
+		if rows.Scan(&guid, &entry, &x, &y, &z, &faction) != nil || guid <= 0 || entry <= 0 || math.Sqrt((x-float64(s.player.X))*(x-float64(s.player.X))+(y-float64(s.player.Y))*(y-float64(s.player.Y))+(z-float64(s.player.Z))*(z-float64(s.player.Z))) > distance {
 			continue
 		}
-		questgivers = append(questgivers, questgiver{guid: uint32(guid), entry: uint32(entry), faction: uint32(faction)})
+		questgivers = append(questgivers, questgiver{guid: creatureWorldGUID(uint32(guid), uint32(entry)), entry: uint32(entry), faction: uint32(faction), enderTable: "creature_questender", starterTable: "creature_queststarter"})
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return false
+	}
+	objectRows, objectErr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT g.guid, g.id, g.position_x, g.position_y, g.position_z
+		FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id
+		WHERE g.map = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ? AND t.type = 2
+		ORDER BY g.guid`, s.player.Map, float64(s.player.X)-distance, float64(s.player.X)+distance, float64(s.player.Y)-distance, float64(s.player.Y)+distance)
+	if objectErr == nil {
+		for objectRows.Next() {
+			var guid, entry int64
+			var x, y, z float64
+			if objectRows.Scan(&guid, &entry, &x, &y, &z) != nil || guid <= 0 || entry <= 0 || math.Sqrt((x-float64(s.player.X))*(x-float64(s.player.X))+(y-float64(s.player.Y))*(y-float64(s.player.Y))+(z-float64(s.player.Z))*(z-float64(s.player.Z))) > distance {
+				continue
+			}
+			questgivers = append(questgivers, questgiver{guid: gameObjectGUID(uint32(guid), uint32(entry)), entry: uint32(entry), enderTable: "gameobject_questender", starterTable: "gameobject_queststarter"})
+		}
+		objectRows.Close()
 	}
 	player := playerPos{Map: s.player.Map, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	entries := make([]struct {
@@ -609,17 +631,17 @@ func (s *session) sendQuestgiverStatusMultiple(ctx context.Context) bool {
 		status uint8
 	}, 0, len(questgivers))
 	for _, questgiver := range questgivers {
-		if s.server.isHostileFaction(questgiver.faction, player) {
+		if questgiver.faction != 0 && s.server.isHostileFaction(questgiver.faction, player) {
 			continue
 		}
-		status, statusErr := s.questDialogStatus(ctx, questgiver.entry)
+		status, statusErr := s.questDialogStatusFromRelations(ctx, questgiver.entry, questgiver.enderTable, questgiver.starterTable)
 		if statusErr != nil {
 			continue
 		}
 		entries = append(entries, struct {
 			guid   uint64
 			status uint8
-		}{creatureWorldGUID(questgiver.guid, questgiver.entry), status})
+		}{questgiver.guid, status})
 	}
 	packet := protocol.NewBuffer(4 + len(entries)*9)
 	packet.WriteU32(uint32(len(entries)))
