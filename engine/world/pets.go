@@ -550,6 +550,10 @@ func (s *session) resetPetTalentsAtLogin(ctx context.Context) bool {
 	return true
 }
 
+func ShouldTemporarilyUnsummonSavedPet(health, playerFlags, unitFlags, mountDisplay uint32, temporarySummon bool) bool {
+	return temporarySummon || health == 0 || playerFlags&playerFlagGhost != 0 || unitFlags&unitFlagMount != 0 || mountDisplay != 0
+}
+
 func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name string, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, reactState uint8) {
 	if s.player == nil || petID == 0 {
 		return

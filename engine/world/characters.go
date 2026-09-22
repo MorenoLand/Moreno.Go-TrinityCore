@@ -777,30 +777,40 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	// Spawn active pet if one was active at logout (slot 0)
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
-		var petID, entry, modelID, level, petType, reactState, curHealth, curMana int64
+		var petID, entry, modelID, level, petType, reactState, curHealth, curMana, createdBySpell int64
 		var petName string
 		if err := cdb.QueryRowContext(ctx,
-			"SELECT id, entry, modelid, level, name, curhealth, curmana, COALESCE(PetType, 0), COALESCE(Reactstate, 1) FROM character_pet WHERE owner = ? AND slot = 0",
-			s.playerGUID).Scan(&petID, &entry, &modelID, &level, &petName, &curHealth, &curMana, &petType, &reactState); err == nil {
-			petLevel := uint32(level)
-			if petType == 0 && state.Level > 0 {
-				petLevel = uint32(state.Level)
+			"SELECT id, entry, modelid, level, name, curhealth, curmana, COALESCE(PetType, 0), COALESCE(Reactstate, 1), COALESCE(CreatedBySpell, 0) FROM character_pet WHERE owner = ? AND slot = 0",
+			s.playerGUID).Scan(&petID, &entry, &modelID, &level, &petName, &curHealth, &curMana, &petType, &reactState, &createdBySpell); err == nil {
+			temporarySummon := false
+			if createdBySpell > 0 && s.server.Data != nil {
+				if spell, found, spellErr := s.server.Data.Spell(uint32(createdBySpell)); spellErr == nil && found && spell.DurationIndex > 0 {
+					if duration, durationFound, durationErr := s.server.Data.SpellDuration(spell.DurationIndex, 1); durationErr == nil && durationFound && duration > 0 {
+						temporarySummon = true
+					}
+				}
 			}
-			maxHP, _, maxMP, _ := s.getPetStats(ctx, uint32(entry), petLevel)
-			if maxHP == 0 {
-				maxHP = uint32(curHealth)
+			if !ShouldTemporarilyUnsummonSavedPet(state.Health, state.PlayerFlags, state.UnitFlags, state.MountDisplayID, temporarySummon) {
+				petLevel := uint32(level)
+				if petType == 0 && state.Level > 0 {
+					petLevel = uint32(state.Level)
+				}
+				maxHP, _, maxMP, _ := s.getPetStats(ctx, uint32(entry), petLevel)
+				if maxHP == 0 {
+					maxHP = uint32(curHealth)
+				}
+				if maxMP == 0 {
+					maxMP = uint32(curMana)
+				}
+				if curHealth > int64(maxHP) {
+					curHealth = int64(maxHP)
+				}
+				if curMana > int64(maxMP) {
+					curMana = int64(maxMP)
+				}
+				s.spawnPet(ctx, uint32(petID), uint32(entry), petName, petLevel, uint32(modelID), uint32(curHealth), maxHP, uint32(curMana), maxMP, uint8(reactState))
+				_ = s.sendTalentsInfo(true)
 			}
-			if maxMP == 0 {
-				maxMP = uint32(curMana)
-			}
-			if curHealth > int64(maxHP) {
-				curHealth = int64(maxHP)
-			}
-			if curMana > int64(maxMP) {
-				curMana = int64(maxMP)
-			}
-			s.spawnPet(ctx, uint32(petID), uint32(entry), petName, petLevel, uint32(modelID), uint32(curHealth), maxHP, uint32(curMana), maxMP, uint8(reactState))
-			_ = s.sendTalentsInfo(true)
 		}
 	}
 	if s.server.Config.GameType == 16 && s.security == 0 && s.player.ExtraFlags&playerExtraGMOn == 0 && s.player.PlayerFlags&playerFlagGM == 0 && s.player.PlayerFlags&playerFlagResting == 0 {
@@ -2612,6 +2622,7 @@ func (s *session) savePlayerState(ctx context.Context, online uint32) error {
 		return nil
 	}
 	state := s.player
+	state.LogoutResting = IsPlayerRestingForLogout(state.PlayerFlags)
 	s.updatePlayedTime(time.Now())
 	taxi := make([]string, len(state.TaxiMask))
 	for i, value := range state.TaxiMask {
@@ -2635,6 +2646,10 @@ func (s *session) savePlayerState(ctx context.Context, online uint32) error {
 		err = s.saveFishingSteps(ctx, state)
 	}
 	return err
+}
+
+func IsPlayerRestingForLogout(playerFlags uint32) bool {
+	return playerFlags&playerFlagResting != 0
 }
 
 func (s *session) updatePlayedTime(now time.Time) {

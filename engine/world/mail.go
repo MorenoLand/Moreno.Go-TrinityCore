@@ -2,6 +2,8 @@ package world
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -55,11 +57,15 @@ type mailEntryRecord struct {
 }
 
 type mailItemRecord struct {
-	AttachID      uint32
-	ItemEntry     uint32
-	Count         uint32
-	MaxDurability uint32
-	Durability    uint32
+	AttachID           uint32
+	ItemEntry          uint32
+	Count              uint32
+	MaxDurability      uint32
+	Durability         uint32
+	Enchantments       [21]uint32
+	RandomPropertyID   uint32
+	RandomPropertySeed uint32
+	Charges            uint32
 }
 
 func (s *session) sendNewMailNotification(ctx context.Context) {
@@ -174,22 +180,81 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 		mails = append(mails, m)
 	}
 	rows.Close()
+	itemMailProperties := func(itemEntry int64) (uint32, uint32) {
+		if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+			return 0, 0
+		}
+		var itemLevel, quality, inventoryType, randomSuffix, maxDurability int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(ItemLevel, 0), COALESCE(Quality, 0), COALESCE(InventoryType, 0), COALESCE(RandomSuffix, 0), COALESCE(MaxDurability, 0) FROM item_template WHERE entry = ?", itemEntry).Scan(&itemLevel, &quality, &inventoryType, &randomSuffix, &maxDurability); err != nil {
+			return 0, 0
+		}
+		maxD := uint32(maxDurability)
+		if s.server.Data == nil || randomSuffix == 0 {
+			return 0, maxD
+		}
+		points, found, err := s.server.Data.RandPropPoints(uint32(itemLevel))
+		if err != nil || !found {
+			return 0, maxD
+		}
+		index := -1
+		switch inventoryType {
+		case 1, 4, 5, 7, 17, 20:
+			index = 0
+		case 3, 6, 8, 10, 12:
+			index = 1
+		case 2, 9, 11, 14, 16, 23:
+			index = 2
+		case 13, 21, 22:
+			index = 3
+		case 15, 25, 26:
+			index = 4
+		}
+		if index < 0 {
+			return 0, maxD
+		}
+		switch quality {
+		case 2:
+			return points.Good[index], maxD
+		case 3:
+			return points.Superior[index], maxD
+		case 4:
+			return points.Epic[index], maxD
+		}
+		return 0, maxD
+	}
 	// Load attached items per drained mail.
 	for i := range mails {
-		iRows, iErr := db.QueryContext(ctx, `SELECT mi.item_guid, mi.item_template, COALESCE(ii.count, 1), COALESCE(ii.durability, 0)
+		iRows, iErr := db.QueryContext(ctx, `SELECT mi.item_guid, mi.item_template, COALESCE(ii.count, 1), COALESCE(ii.durability, 0), COALESCE(ii.enchantments, ''), COALESCE(ii.randomPropertyId, 0), COALESCE(ii.charges, '')
 			FROM mail_items AS mi
 			LEFT JOIN item_instance AS ii ON ii.guid = mi.item_guid
 			WHERE mi.mail_id = ?`, mails[i].ID)
 		if iErr == nil {
 			for iRows.Next() {
-				var iGuid, iTmpl, iCount, iDur int64
-				if iRows.Scan(&iGuid, &iTmpl, &iCount, &iDur) == nil {
-					mails[i].Items = append(mails[i].Items, mailItemRecord{
-						AttachID:   uint32(iGuid),
-						ItemEntry:  uint32(iTmpl),
-						Count:      uint32(iCount),
-						Durability: uint32(iDur),
-					})
+				var iGuid, iTmpl, iCount, iDur, randomPropertyID int64
+				var enchantments, charges string
+				if iRows.Scan(&iGuid, &iTmpl, &iCount, &iDur, &enchantments, &randomPropertyID, &charges) == nil {
+					item := mailItemRecord{AttachID: uint32(iGuid), ItemEntry: uint32(iTmpl), Count: uint32(iCount), Durability: uint32(iDur), RandomPropertyID: uint32(int32(randomPropertyID))}
+					item.RandomPropertySeed, item.MaxDurability = 0, 0
+					seed, maxDurability := itemMailProperties(iTmpl)
+					item.MaxDurability = maxDurability
+					if randomPropertyID < 0 {
+						item.RandomPropertySeed = seed
+					}
+					for index, token := range strings.Fields(enchantments) {
+						if index >= len(item.Enchantments) {
+							break
+						}
+						if value, err := strconv.ParseInt(token, 10, 64); err == nil {
+							item.Enchantments[index] = uint32(value)
+						}
+					}
+					chargeFields := strings.Fields(charges)
+					if len(chargeFields) == 5 {
+						if value, err := strconv.ParseInt(chargeFields[0], 10, 32); err == nil {
+							item.Charges = uint32(int32(value))
+						}
+					}
+					mails[i].Items = append(mails[i].Items, item)
 				}
 			}
 			iRows.Close()
@@ -226,15 +291,15 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 			msgBuf.WriteU8(uint8(pos))
 			msgBuf.WriteU32(it.AttachID)
 			msgBuf.WriteU32(it.ItemEntry)
-			for j := 0; j < 6; j++ {
-				msgBuf.WriteU32(0)
-				msgBuf.WriteU32(0)
-				msgBuf.WriteU32(0)
+			for j := 0; j < len(it.Enchantments); j += 3 {
+				msgBuf.WriteU32(it.Enchantments[j])
+				msgBuf.WriteU32(it.Enchantments[j+1])
+				msgBuf.WriteU32(it.Enchantments[j+2])
 			}
-			msgBuf.WriteU32(0) // RandomPropertiesID
-			msgBuf.WriteU32(0) // RandomPropertiesSeed
+			msgBuf.WriteU32(it.RandomPropertyID)
+			msgBuf.WriteU32(it.RandomPropertySeed)
 			msgBuf.WriteU32(it.Count)
-			msgBuf.WriteU32(0) // Charges
+			msgBuf.WriteU32(it.Charges)
 			msgBuf.WriteU32(it.MaxDurability)
 			msgBuf.WriteU32(it.Durability)
 			msgBuf.WriteU8(1) // Unlocked

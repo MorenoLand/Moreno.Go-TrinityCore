@@ -71,6 +71,13 @@ func (g *groupState) isLeader(guid uint64) bool {
 	return g.LeaderGUID == guid
 }
 
+func UpdatePlayerGroupLeaderFlag(flags uint32, leader bool) uint32 {
+	if leader {
+		return flags | playerFlagGroupLeader
+	}
+	return flags &^ playerFlagGroupLeader
+}
+
 func (g *groupState) isAssistant(guid uint64) bool {
 	for _, m := range g.Members {
 		if m.GUID == guid && (m.Flags&memberFlagAssistant != 0) {
@@ -104,6 +111,9 @@ type groupMember struct {
 }
 
 func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
+	if s != nil && s.player != nil {
+		s.player.PlayerFlags = UpdatePlayerGroupLeaderFlag(s.player.PlayerFlags, false)
+	}
 	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return
 	}
@@ -115,6 +125,7 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 	if group := s.server.findGroupByDBID(uint64(dbGroupID)); group != nil {
 		s.groupID = group.ID
 		if s.player != nil {
+			s.player.PlayerFlags = UpdatePlayerGroupLeaderFlag(s.player.PlayerFlags, group.isLeader(guid))
 			s.player.DungeonDifficulty = group.DungeonDiff
 			s.player.RaidDifficulty = group.RaidDiff
 		}
@@ -172,6 +183,7 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 	s.server.groupsMu.Unlock()
 	s.groupID = g.ID
 	if s.player != nil {
+		s.player.PlayerFlags = UpdatePlayerGroupLeaderFlag(s.player.PlayerFlags, g.isLeader(guid))
 		s.player.DungeonDifficulty = g.DungeonDiff
 		s.player.RaidDifficulty = g.RaidDiff
 	}

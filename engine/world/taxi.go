@@ -27,7 +27,8 @@ const (
 	playerFlagAFK              uint32 = 0x00000002
 	playerFlagDND              uint32 = 0x00000004
 	playerFlagGM               uint32 = 0x00000008
-	playerFlagAllowOnlyAbility uint32 = 0x00000001
+	playerFlagGroupLeader      uint32 = 0x00000001
+	playerFlagAllowOnlyAbility uint32 = 0x00800000
 )
 
 // setTaxiMaskNode mirrors PlayerTaxi::SetTaximaskNode; returns true when the
@@ -399,10 +400,26 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte) bool {
 	if mountDisplay, err := s.server.Data.TaxiNodeMount(sourceNode, s.playerAlliance()); err == nil {
 		mount = mountDisplay
 	}
-	s.startTaxiFlight(pathID, mount, nearest == sourceNode)
+	previousTaxiPath := s.player.TaxiPath
+	s.player.TaxiPath = strings.Join([]string{strconv.FormatUint(uint64(s.taxiFlightMasterFaction(ctx, guid)), 10), strconv.FormatUint(uint64(sourceNode), 10), strconv.FormatUint(uint64(destNode), 10)}, " ") + " "
+	if !s.startTaxiFlight(pathID, mount, nearest == sourceNode) {
+		s.player.TaxiPath = previousTaxiPath
+	}
 	s.updateAchievementCriteria(criteriaTypeFlightPathsTaken, 0, 1)
 	s.debug("taxi flight activated", "account", s.accountName, "master", guid, "source", sourceNode, "dest", destNode, "cost", price)
 	return reply(taxiErrOK)
+}
+
+func (s *session) taxiFlightMasterFaction(ctx context.Context, guid uint64) uint32 {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return 0
+	}
+	var faction uint32
+	low, entry := uint32(guid&0x00FFFFFF), uint32((guid>>24)&0x00FFFFFF)
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT t.faction FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", low, entry).Scan(&faction); err != nil {
+		return 0
+	}
+	return faction
 }
 
 func taxiResumeStartNode(points []wotlk.TaxiSplinePoint, mapID uint32, x, y, z float32) int {
@@ -455,14 +472,14 @@ func (s *session) continueTaxiFlight() {
 }
 
 // startTaxiFlight mounts the player and broadcasts the taxi spline.
-func (s *session) startTaxiFlight(pathID, mountDisplay uint32, takeoff bool) {
-	s.startTaxiFlightFrom(pathID, mountDisplay, 0)
+func (s *session) startTaxiFlight(pathID, mountDisplay uint32, takeoff bool) bool {
+	return s.startTaxiFlightFrom(pathID, mountDisplay, 0)
 }
 
-func (s *session) startTaxiFlightFrom(pathID, mountDisplay uint32, startNode int) {
+func (s *session) startTaxiFlightFrom(pathID, mountDisplay uint32, startNode int) bool {
 	points, err := s.server.Data.TaxiPathPoints(pathID)
 	if err != nil || len(points) == 0 {
-		return
+		return false
 	}
 	if startNode > 0 && startNode < len(points) {
 		points = points[startNode:]
@@ -508,13 +525,18 @@ func (s *session) startTaxiFlightFrom(pathID, mountDisplay uint32, startNode int
 	}
 	s.inFlight = true
 	// Dismount when the flight window elapses.
+	taxiPath := s.player.TaxiPath
 	time.AfterFunc(time.Duration(duration)*time.Millisecond, func() {
 		s.inFlight = false
+		if s.player != nil && s.player.TaxiPath == taxiPath {
+			s.player.TaxiPath = ""
+		}
 		if s.currentPlayer() != nil {
 			s.player.MountDisplayID = 0
 			s.sendPlayerMountUpdate()
 		}
 	})
+	return true
 }
 
 // isInFlight mirrors Unit::IsInFlight (UNIT_STATE_IN_FLIGHT).
@@ -528,6 +550,7 @@ func (s *session) finishTaxiFlight() {
 		return
 	}
 	s.inFlight = false
+	s.player.TaxiPath = ""
 	if s.currentPlayer() != nil && s.player.MountDisplayID != 0 {
 		s.player.MountDisplayID = 0
 		s.sendPlayerMountUpdate()

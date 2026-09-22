@@ -6,17 +6,24 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 const (
-	questRewardChoiceLimit = 6
-	inventoryRewardBag     = 0
-	inventoryRewardFirst   = 23
-	inventoryRewardLast    = 38
-	questInventoryFull     = 4
+	questRewardChoiceLimit  = 6
+	inventoryRewardBag      = 0
+	inventoryRewardFirst    = 23
+	inventoryRewardLast     = 38
+	questInventoryFull      = 4
+	questFlagsDaily         = 0x00001000
+	questFlagsWeekly        = 0x00008000
+	questSpecialRepeatable  = 0x001
+	questSpecialDungeonFind = 0x008
+	questSpecialMonthly     = 0x010
+	questSpecialAllowed     = 0x03F
 )
 
 var errQuestInventoryFull = errors.New("quest reward inventory is full")
@@ -37,6 +44,18 @@ type questItemGrant struct {
 	Slot           uint32
 	InventoryCount uint32
 	Stacked        bool
+}
+
+type questRewardPersistenceState struct {
+	DailyFlag     bool
+	DailyStatus   bool
+	DungeonFinder bool
+	Weekly        bool
+	Monthly       bool
+	Seasonal      bool
+	Rewarded      bool
+	SortID        int32
+	EventID       uint32
 }
 
 func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []byte) bool {
@@ -156,6 +175,10 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 func (s *session) commitQuestReward(ctx context.Context, view questRewardView, choice uint32) ([]questItemGrant, []uint64, error) {
 	s.server.inventoryMu.Lock()
 	defer s.server.inventoryMu.Unlock()
+	questState, err := s.loadQuestRewardPersistenceState(ctx, view.Detail.ID)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	fixed := append([]questRewardItem(nil), view.Detail.RewardItems...)
 	if len(view.Detail.ChoiceItems) > 0 && choice < uint32(len(view.Detail.ChoiceItems)) {
@@ -204,34 +227,163 @@ func (s *session) commitQuestReward(ctx context.Context, view questRewardView, c
 	if _, err := tx.ExecContext(ctx, "DELETE FROM character_queststatus WHERE guid = ? AND quest = ?", s.playerGUID, view.Detail.ID); err != nil {
 		return rollback(err)
 	}
-	rewardedInsert := "INSERT OR IGNORE INTO character_queststatus_rewarded (guid, quest, active) VALUES (?, ?, 1)"
+	insertIgnore := "INSERT OR IGNORE"
 	if s.server.CharactersStore.Backend != database.BackendSQLite {
-		rewardedInsert = "INSERT IGNORE INTO character_queststatus_rewarded (guid, quest, active) VALUES (?, ?, 1)"
+		insertIgnore = "INSERT IGNORE"
 	}
-	if _, err := tx.ExecContext(ctx, rewardedInsert, s.playerGUID, view.Detail.ID); err != nil {
-		return rollback(err)
+	if questState.DailyStatus {
+		if _, err := tx.ExecContext(ctx, insertIgnore+" INTO character_queststatus_daily (guid, quest, time) VALUES (?, ?, ?)", s.playerGUID, view.Detail.ID, time.Now().Unix()); err != nil {
+			return rollback(err)
+		}
+	} else if questState.Weekly {
+		if _, err := tx.ExecContext(ctx, insertIgnore+" INTO character_queststatus_weekly (guid, quest) VALUES (?, ?)", s.playerGUID, view.Detail.ID); err != nil {
+			return rollback(err)
+		}
+	} else if questState.Monthly {
+		if _, err := tx.ExecContext(ctx, insertIgnore+" INTO character_queststatus_monthly (guid, quest) VALUES (?, ?)", s.playerGUID, view.Detail.ID); err != nil {
+			return rollback(err)
+		}
+	} else if questState.Seasonal {
+		if _, err := tx.ExecContext(ctx, insertIgnore+" INTO character_queststatus_seasonal (guid, quest, event) VALUES (?, ?, ?)", s.playerGUID, view.Detail.ID, questState.EventID); err != nil {
+			return rollback(err)
+		}
+	}
+	if questState.Rewarded {
+		if _, err := tx.ExecContext(ctx, insertIgnore+" INTO character_queststatus_rewarded (guid, quest, active) VALUES (?, ?, 1)", s.playerGUID, view.Detail.ID); err != nil {
+			return rollback(err)
+		}
 	}
 	questID := view.Detail.ID
 	if err := tx.Commit(); err != nil {
 		return nil, nil, err
 	}
+	s.applyQuestRewardPersistenceState(questID, questState)
 	s.updateAchievementCriteria(criteriaTypeCompleteQuest, questID, 1)
 	s.updateAchievementCriteria(criteriaTypeQuestCount, 0, 1)
 	if view.Detail.RewardMoney > 0 {
 		s.updateAchievementCriteria(criteriaTypeMoneyFromQuest, 0, uint32(view.Detail.RewardMoney))
 	}
-	var questSortID int32
-	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(QuestSortID, 0) FROM quest_template WHERE ID = ?", questID).Scan(&questSortID)
+	if questState.SortID > 0 {
+		s.updateAchievementCriteria(criteriaTypeCompleteQuestsInZone, uint32(questState.SortID), 1)
 	}
-	if questSortID > 0 {
-		s.updateAchievementCriteria(criteriaTypeCompleteQuestsInZone, uint32(questSortID), 1)
-	}
-	if view.Detail.Flags&0x1000 != 0 {
+	if questState.DailyFlag {
 		s.updateAchievementCriteria(criteriaTypeCompleteDailyQuest, 0, 1)
 		s.updateAchievementCriteria(criteriaTypeCompleteDailyQuestDaily, 0, 1)
 	}
 	return grants, destroyedGUIDs, nil
+}
+
+func (s *session) loadQuestRewardPersistenceState(ctx context.Context, questID uint32) (questRewardPersistenceState, error) {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return questRewardPersistenceState{}, errors.New("world database unavailable for quest reward state")
+	}
+	var flags uint32
+	var sortID int32
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Flags, QuestSortID FROM quest_template WHERE ID = ?", questID).Scan(&flags, &sortID); err != nil {
+		return questRewardPersistenceState{}, err
+	}
+	var specialFlags uint32
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
+	if err != nil && err != sql.ErrNoRows {
+		return questRewardPersistenceState{}, err
+	}
+	specialFlags &= questSpecialAllowed
+	if flags&(questFlagsDaily|questFlagsWeekly) != 0 {
+		specialFlags |= questSpecialRepeatable
+	}
+	state := questRewardPersistenceState{
+		DailyFlag:     flags&questFlagsDaily != 0,
+		DailyStatus:   flags&questFlagsDaily != 0 || specialFlags&questSpecialDungeonFind != 0,
+		DungeonFinder: specialFlags&questSpecialDungeonFind != 0,
+		Weekly:        flags&questFlagsWeekly != 0,
+		Monthly:       specialFlags&questSpecialMonthly != 0,
+		SortID:        sortID,
+	}
+	state.Seasonal = isSeasonalQuestSort(sortID) && specialFlags&questSpecialRepeatable == 0
+	state.Rewarded = !state.DungeonFinder && !state.DailyFlag && (specialFlags&questSpecialRepeatable == 0 || state.Weekly || state.Monthly || state.Seasonal)
+	if state.DailyStatus || state.Weekly {
+		state.Monthly = false
+		state.Seasonal = false
+	} else if state.Monthly {
+		state.Seasonal = false
+	}
+	if state.Seasonal {
+		rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT eventEntry FROM game_event_seasonal_questrelation WHERE questId = ?", questID)
+		if err != nil {
+			return questRewardPersistenceState{}, err
+		}
+		for rows.Next() {
+			var eventID int64
+			if err := rows.Scan(&eventID); err != nil {
+				_ = rows.Close()
+				return questRewardPersistenceState{}, err
+			}
+			if eventID >= 0 {
+				state.EventID = uint32(uint16(eventID))
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return questRewardPersistenceState{}, err
+		}
+		if err := rows.Close(); err != nil {
+			return questRewardPersistenceState{}, err
+		}
+	}
+	return state, nil
+}
+
+func isSeasonalQuestSort(sortID int32) bool {
+	switch sortID {
+	case -22, -284, -366, -369, -370, -374, -376:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *session) applyQuestRewardPersistenceState(questID uint32, state questRewardPersistenceState) {
+	if s.player == nil {
+		return
+	}
+	if state.DailyStatus {
+		if dailyTime := time.Now().Unix(); dailyTime > s.player.LastDailyQuestTime {
+			s.player.LastDailyQuestTime = dailyTime
+		}
+		if state.DungeonFinder {
+			if s.player.DungeonFinderQuests == nil {
+				s.player.DungeonFinderQuests = make(map[uint32]struct{})
+			}
+			s.player.DungeonFinderQuests[questID] = struct{}{}
+		} else {
+			for index := range s.player.DailyQuests {
+				if s.player.DailyQuests[index] == 0 {
+					s.player.DailyQuests[index] = questID
+					break
+				}
+			}
+		}
+		return
+	}
+	if state.Weekly {
+		if s.player.WeeklyQuests == nil {
+			s.player.WeeklyQuests = make(map[uint32]struct{})
+		}
+		s.player.WeeklyQuests[questID] = struct{}{}
+	} else if state.Monthly {
+		if s.player.MonthlyQuests == nil {
+			s.player.MonthlyQuests = make(map[uint32]struct{})
+		}
+		s.player.MonthlyQuests[questID] = struct{}{}
+	} else if state.Seasonal {
+		if s.player.SeasonalQuests == nil {
+			s.player.SeasonalQuests = make(map[uint32]map[uint32]struct{})
+		}
+		if s.player.SeasonalQuests[state.EventID] == nil {
+			s.player.SeasonalQuests[state.EventID] = make(map[uint32]struct{})
+		}
+		s.player.SeasonalQuests[state.EventID][questID] = struct{}{}
+	}
 }
 
 func loadInventoryRewardRecords(ctx context.Context, tx *sql.Tx, guid uint64) ([]inventoryRewardRecord, error) {

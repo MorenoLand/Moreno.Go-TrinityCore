@@ -106,6 +106,13 @@ func (s *session) isDeadOrGhost() bool {
 // copseReclaimDelay mirrors the static table in Player.cpp:177.
 var copseReclaimDelay = [maxDeathCount]uint32{30, 60, 120}
 
+func ClampLoadedDeathExpireTime(now, deathExpire int64) int64 {
+	if deathExpire > now+int64(maxDeathCount)*deathExpireStepSeconds {
+		return now + int64(maxDeathCount)*deathExpireStepSeconds - 1
+	}
+	return deathExpire
+}
+
 func CalculateLoadedCorpseReclaimDelay(now, deathExpire, ghostTime int64, reclaimEnabled bool) (uint32, bool) {
 	if ghostTime > deathExpire {
 		return 0, false

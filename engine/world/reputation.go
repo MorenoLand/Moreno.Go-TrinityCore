@@ -21,7 +21,7 @@ const (
 	factionFlagVisible         uint8 = 0x01
 )
 
-func MergeReputationFlags(defaultFlags, databaseFlags uint8, standing int32) uint8 {
+func MergeReputationFlags(defaultFlags, databaseFlags uint8, totalStanding int32) uint8 {
 	flags := defaultFlags
 	if databaseFlags&factionFlagVisible != 0 && (flags&(factionFlagInvisibleForced|factionFlagHidden) == 0 || flags&factionFlagSpecial != 0) {
 		flags |= factionFlagVisible
@@ -31,10 +31,16 @@ func MergeReputationFlags(defaultFlags, databaseFlags uint8, standing int32) uin
 	} else if databaseFlags&factionFlagInactive == 0 && flags&factionFlagVisible != 0 {
 		flags &^= factionFlagInactive
 	}
-	if databaseFlags&factionFlagAtWar != 0 && flags&(factionFlagInvisibleForced|factionFlagHidden) == 0 && (flags&factionFlagPeaceForced == 0 || flags&factionFlagRival != 0 || reputationRank(int64(standing)) <= 3) {
+	rank := reputationRank(int64(totalStanding))
+	canChangeWar := flags&(factionFlagInvisibleForced|factionFlagHidden) == 0
+	canDeclareWar := flags&factionFlagPeaceForced == 0 || flags&factionFlagRival != 0 || rank == 0
+	if databaseFlags&factionFlagAtWar != 0 && canChangeWar && canDeclareWar {
 		flags |= factionFlagAtWar
-	} else if databaseFlags&factionFlagAtWar == 0 && flags&factionFlagVisible != 0 {
+	} else if databaseFlags&factionFlagAtWar == 0 && flags&factionFlagVisible != 0 && canChangeWar {
 		flags &^= factionFlagAtWar
+	}
+	if rank <= 1 && canChangeWar && canDeclareWar {
+		flags |= factionFlagAtWar
 	}
 	return flags
 }

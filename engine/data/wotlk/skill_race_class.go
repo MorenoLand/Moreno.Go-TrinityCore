@@ -8,6 +8,8 @@ const (
 	SkillRangeNone
 )
 
+const SkillFlagAlwaysMaxValue uint32 = 0x10
+
 type SkillRaceClassInfoEntry struct {
 	SkillID     uint32
 	RaceMask    uint32
@@ -114,13 +116,34 @@ func (s *Store) SkillStep(skillID uint32, race, class uint8, max uint16) (uint16
 	if !recordFound {
 		return 0, true, nil
 	}
-	var step uint32
 	for index := uint32(0); index < 16; index++ {
-		value, valueErr := record.Uint32(17 + int(step))
+		value, valueErr := record.Uint32(17 + int(index))
 		if valueErr == nil && value == uint32(max) {
-			step = index + 1
-			break
+			return uint16(index + 1), true, nil
 		}
 	}
-	return uint16(step), true, nil
+	return 0, true, nil
+}
+
+func (s *Store) SkillTierValue(skillID uint32, race, class uint8, rank uint16) (uint16, bool, error) {
+	if rank == 0 || rank > 16 {
+		return 0, false, nil
+	}
+	entry, found, err := s.SkillRaceClassInfo(skillID, race, class)
+	if err != nil || !found || entry.SkillTierID == 0 {
+		return 0, found, err
+	}
+	file, err := s.File("SkillTiers")
+	if err != nil {
+		return 0, false, err
+	}
+	record, found := file.Find(entry.SkillTierID)
+	if !found {
+		return 0, false, nil
+	}
+	value, err := record.Uint32(16 + int(rank))
+	if err != nil || value > uint32(^uint16(0)) {
+		return 0, false, err
+	}
+	return uint16(value), true, nil
 }

@@ -160,6 +160,27 @@ func runSelfCheck() error {
 	if err := checkReputationFlags(); err != nil {
 		return fmt.Errorf("reputation flag check failed: %w", err)
 	}
+	if err := checkDefaultRankSkill(); err != nil {
+		return fmt.Errorf("default ranked-skill check failed: %w", err)
+	}
+	if err := checkRankSkillDBC(); err != nil {
+		return fmt.Errorf("ranked-skill DBC check failed: %w", err)
+	}
+	if err := checkGroupLeaderFlag(); err != nil {
+		return fmt.Errorf("group leader flag check failed: %w", err)
+	}
+	if err := checkItemEnchantmentDuration(); err != nil {
+		return fmt.Errorf("item enchantment-duration check failed: %w", err)
+	}
+	if err := checkRestRateParity(); err != nil {
+		return fmt.Errorf("offline rested-state check failed: %w", err)
+	}
+	if err := checkDailyQuestFieldStatus(); err != nil {
+		return fmt.Errorf("daily quest field classification check failed: %w", err)
+	}
+	if err := checkSavedPetUnsummon(); err != nil {
+		return fmt.Errorf("saved pet unsummon check failed: %w", err)
+	}
 	if err := checkCharacterCreationDefaults(); err != nil {
 		return fmt.Errorf("character creation default check failed: %w", err)
 	}
@@ -168,6 +189,9 @@ func runSelfCheck() error {
 	}
 	if err := checkLoadedCorpseReclaimDelay(); err != nil {
 		return fmt.Errorf("loaded corpse reclaim-delay check failed: %w", err)
+	}
+	if err := checkLoadedDeathExpireClamp(); err != nil {
+		return fmt.Errorf("loaded death-expire clamp check failed: %w", err)
 	}
 	if err := checkLoadedCorpseConversion(); err != nil {
 		return fmt.Errorf("loaded corpse conversion check failed: %w", err)
@@ -369,6 +393,20 @@ func checkLoadedCorpseReclaimDelay() error {
 	return nil
 }
 
+func checkLoadedDeathExpireClamp() error {
+	const now int64 = 1_800_000_000
+	if value := world.ClampLoadedDeathExpireTime(now, now+900); value != now+900 {
+		return fmt.Errorf("death-expire exact cap=%d want %d", value, now+900)
+	}
+	if value := world.ClampLoadedDeathExpireTime(now, now+901); value != now+899 {
+		return fmt.Errorf("death-expire overflow cap=%d want %d", value, now+899)
+	}
+	if value := world.ClampLoadedDeathExpireTime(now, now-1); value != now-1 {
+		return fmt.Errorf("past death-expire value=%d want %d", value, now-1)
+	}
+	return nil
+}
+
 func checkCorpseReleaseTimerBoundary() error {
 	if !world.CorpseReleaseTimerRequired(0) {
 		return fmt.Errorf("continent corpse did not require release timer")
@@ -428,6 +466,151 @@ func checkReputationFlags() error {
 	peace := world.MergeReputationFlags(0x11, 0x02, 42000)
 	if peace&0x02 != 0 {
 		return fmt.Errorf("peace-forced faction was marked at war")
+	}
+	hostile := world.MergeReputationFlags(0x01, 0, -42000)
+	if hostile&0x02 == 0 {
+		return fmt.Errorf("hostile faction was not forced at war")
+	}
+	peaceForcedHostile := world.MergeReputationFlags(0x11, 0x02, -5000)
+	if peaceForcedHostile&0x02 != 0 {
+		return fmt.Errorf("peace-forced hostile faction ignored source rank threshold")
+	}
+	baseAdjusted := world.MergeReputationFlags(0x01, 0, -7000)
+	if baseAdjusted&0x02 == 0 {
+		return fmt.Errorf("base-adjusted hostile faction was not at war")
+	}
+	return nil
+}
+
+func checkDefaultRankSkill() error {
+	step, value, max, ok := world.ResolveDefaultRankSkill(3, 225, 0, 1, 21)
+	if !ok || step != 3 || value != 1 || max != 225 {
+		return fmt.Errorf("ranked default skill=%d/%d/%d valid=%t want 3/1/225", step, value, max, ok)
+	}
+	step, value, max, ok = world.ResolveDefaultRankSkill(2, 150, wotlk.SkillFlagAlwaysMaxValue, 1, 21)
+	if !ok || step != 2 || value != 150 || max != 150 {
+		return fmt.Errorf("always-max ranked skill=%d/%d/%d valid=%t want 2/150/150", step, value, max, ok)
+	}
+	step, value, max, ok = world.ResolveDefaultRankSkill(3, 225, 0, 6, 10)
+	if !ok || step != 3 || value != 45 || max != 225 {
+		return fmt.Errorf("death-knight ranked skill=%d/%d/%d valid=%t want 3/45/225", step, value, max, ok)
+	}
+	if _, _, _, ok := world.ResolveDefaultRankSkill(0, 225, 0, 6, 10); ok {
+		return fmt.Errorf("zero-rank default skill was initialized")
+	}
+	return nil
+}
+
+func checkRankSkillDBC() error {
+	store := wotlk.NewStore(filepath.Join(config.Default().GameDataDir, "dbc"))
+	file, err := store.File("SkillRaceClassInfo")
+	if err != nil {
+		return err
+	}
+	for index := 0; index < file.Records(); index++ {
+		record, err := file.Record(index)
+		if err != nil {
+			continue
+		}
+		skillID, skillErr := record.Uint32(1)
+		raceMask, raceErr := record.Uint32(2)
+		classMask, classErr := record.Uint32(3)
+		flags, flagsErr := record.Uint32(4)
+		tierID, tierErr := record.Uint32(6)
+		if skillErr != nil || raceErr != nil || classErr != nil || flagsErr != nil || tierErr != nil || skillID == 0 || tierID == 0 {
+			continue
+		}
+		race, class := firstSkillMaskMember(raceMask), firstSkillMaskMember(classMask)
+		rangeType, found, rangeErr := store.SkillRangeType(skillID, race, class)
+		if rangeErr != nil || !found || rangeType != wotlk.SkillRangeRank {
+			continue
+		}
+		tierMax, found, tierErr := store.SkillTierValue(skillID, race, class, 1)
+		if tierErr != nil || !found || tierMax == 0 {
+			return fmt.Errorf("ranked skill %d tier %d did not load rank 1", skillID, tierID)
+		}
+		step, value, max, valid := world.ResolveDefaultRankSkill(1, tierMax, flags, 1, 1)
+		if !valid || step != 1 || max != tierMax || value < 1 || value > max {
+			return fmt.Errorf("ranked skill %d resolved %d/%d/%d valid=%t", skillID, step, value, max, valid)
+		}
+		return nil
+	}
+	return fmt.Errorf("SkillRaceClassInfo.dbc contains no rank-tier skill usable by a test race/class")
+}
+
+func firstSkillMaskMember(mask uint32) uint8 {
+	if mask == 0 {
+		return 1
+	}
+	for index := uint32(0); index < 32; index++ {
+		if mask&(uint32(1)<<index) != 0 {
+			return uint8(index + 1)
+		}
+	}
+	return 0
+}
+
+func checkGroupLeaderFlag() error {
+	flags := uint32(0x00800002)
+	if result := world.UpdatePlayerGroupLeaderFlag(flags, true); result != flags|0x01 {
+		return fmt.Errorf("leader player flags=%08x want %08x", result, flags|0x01)
+	}
+	if result := world.UpdatePlayerGroupLeaderFlag(flags|0x01, false); result != flags {
+		return fmt.Errorf("non-leader player flags=%08x want %08x", result, flags)
+	}
+	return nil
+}
+
+func checkItemEnchantmentDuration() error {
+	for _, location := range [][2]int64{{0, 15}, {0, 23}, {0, 67}, {812345, 2}} {
+		if !world.ShouldTrackItemEnchantmentDuration(location[0], location[1], 1, 60000) {
+			return fmt.Errorf("timed enchant at bag/slot %d/%d was not scheduled", location[0], location[1])
+		}
+	}
+	if world.ShouldTrackItemEnchantmentDuration(0, 15, 0, 60000) || world.ShouldTrackItemEnchantmentDuration(0, 15, 1, 0) {
+		return fmt.Errorf("empty or permanent enchant was scheduled")
+	}
+	return nil
+}
+
+func checkRestRateParity() error {
+	cfg := config.Default()
+	if cfg.RestOfflineInTavernOrCityRate != 1 || cfg.RestOfflineInWildernessRate != 1 {
+		return fmt.Errorf("offline rest defaults=%v/%v want 1/1", cfg.RestOfflineInTavernOrCityRate, cfg.RestOfflineInWildernessRate)
+	}
+	if err := cfg.Set("Rate.Rest.Offline.InTavernOrCity", "0.5"); err != nil || cfg.RestOfflineInTavernOrCityRate != 0.5 {
+		return fmt.Errorf("tavern rest rate=%v error=%v", cfg.RestOfflineInTavernOrCityRate, err)
+	}
+	if err := cfg.Set("Rate.Rest.Offline.InWilderness", "2"); err != nil || cfg.RestOfflineInWildernessRate != 2 {
+		return fmt.Errorf("wilderness rest rate=%v error=%v", cfg.RestOfflineInWildernessRate, err)
+	}
+	if !world.IsPlayerRestingForLogout(0x20) || world.IsPlayerRestingForLogout(0x08) {
+		return fmt.Errorf("logout resting state does not follow PLAYER_FLAGS_RESTING")
+	}
+	return nil
+}
+
+func checkDailyQuestFieldStatus() error {
+	if fieldQuest, dungeonFinder := world.DailyQuestFieldStatus(0x1000, 0); !fieldQuest || dungeonFinder {
+		return fmt.Errorf("ordinary daily quest classification=%t/%t", fieldQuest, dungeonFinder)
+	}
+	if fieldQuest, dungeonFinder := world.DailyQuestFieldStatus(0x1000, 0x08); fieldQuest || !dungeonFinder {
+		return fmt.Errorf("Dungeon Finder daily classification=%t/%t", fieldQuest, dungeonFinder)
+	}
+	if fieldQuest, dungeonFinder := world.DailyQuestFieldStatus(0, 0); fieldQuest || dungeonFinder {
+		return fmt.Errorf("non-daily quest classification=%t/%t", fieldQuest, dungeonFinder)
+	}
+	return nil
+}
+
+func checkSavedPetUnsummon() error {
+	for _, state := range [][5]uint32{{100, 0, 0, 0, 1}, {0, 0, 0, 0, 0}, {100, 0x10, 0, 0, 0}, {100, 0, 0x08000000, 0, 0}, {100, 0, 0, 1, 0}} {
+		if !world.ShouldTemporarilyUnsummonSavedPet(state[0], state[1], state[2], state[3], state[4] != 0) {
+			return fmt.Errorf("saved pet state %v was not deferred", state)
+		}
+	}
+	if world.ShouldTemporarilyUnsummonSavedPet(100, 0, 0, 0, false) {
+		return fmt.Errorf("permanent pet of a live, unmounted owner was deferred")
 	}
 	return nil
 }

@@ -262,6 +262,8 @@ type playerState struct {
 	GlyphSlots           [6]uint32
 	GlyphsEnabled        uint32
 	DailyQuests          [playerDailyQuestsCount]uint32
+	DungeonFinderQuests  map[uint32]struct{}
+	LastDailyQuestTime   int64
 	WeeklyQuests         map[uint32]struct{}
 	MonthlyQuests        map[uint32]struct{}
 	SeasonalQuests       map[uint32]map[uint32]struct{}
@@ -335,7 +337,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid, name, race, class, gender, COALESCE(skin, 0), COALESCE(face, 0), COALESCE(hairStyle, 0), COALESCE(hairColor, 0), COALESCE(facialStyle, 0), level, playerFlags, map, position_x, position_y, position_z, orientation, extra_flags, at_login, zone, equipmentCache, death_expire_time, COALESCE(cinematic, 0) FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&state.GUID, &state.Name, &race, &class, &gender, &skin, &face, &hairStyle, &hairColor, &facialStyle, &level, &playerFlags, &mapID, &state.X, &state.Y, &state.Z, &state.Orientation, &extraFlags, &atLogin, &zone, &equipment, &deathExpireTime, &cinematic); err != nil {
 		return playerState{}, err
 	}
-	s.deathExpireTime = deathExpireTime
+	s.deathExpireTime = ClampLoadedDeathExpireTime(time.Now().Unix(), deathExpireTime)
 	state.Race, state.Class, state.Gender, state.Skin, state.Face, state.HairStyle, state.HairColor, state.FacialStyle, state.Level = uint8(race), uint8(class), uint8(gender), uint8(skin), uint8(face), uint8(hairStyle), uint8(hairColor), uint8(facialStyle), uint8(level)
 	if !validCharacterName(state.Name) {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET at_login = at_login | 1 WHERE guid = ?", guid)
@@ -372,7 +374,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	// TrinityCore LoadFromDB/InitStatsForLevel cleans transient player flags
 	// (AFK/DND/GM/GHOST) before GM state is re-applied from extra_flags per
 	// GM.LoginState (0 off, 1 on, 2 saved state).
-	transient := uint32(playerFlagAFK | playerFlagDND | playerFlagGM | playerFlagGhost | playerFlagAllowOnlyAbility)
+	transient := uint32(playerFlagGroupLeader | playerFlagAFK | playerFlagDND | playerFlagGM | playerFlagGhost | playerFlagAllowOnlyAbility)
 	state.PlayerFlags &= ^transient
 	loginState := 2
 	if s.server.Config.GMLoginState >= 0 && s.server.Config.GMLoginState <= 2 {
@@ -443,10 +445,10 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 			qRows.Close()
 		}
 		var taximask sql.NullString
-		s.initTaxiNodesForLevel()
 		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT taximask FROM characters WHERE guid = ?", guid).Scan(&taximask); err == nil {
 			s.loadTaxiMask(taximask)
 		}
+		s.initTaxiNodesForLevel()
 	}
 	_ = s.CharGuild(ctx, &state)
 	s.loadPlayerGroup(ctx, guid)
@@ -967,26 +969,47 @@ func (s *session) loadDailyQuests(ctx context.Context, state *playerState) {
 	if s == nil || state == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return
 	}
-	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT quest FROM character_queststatus_daily WHERE guid = ?", state.GUID)
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT quest, time FROM character_queststatus_daily WHERE guid = ?", state.GUID)
 	if err != nil {
 		return
 	}
 	defer rows.Close()
+	state.DungeonFinderQuests = make(map[uint32]struct{})
 	index := 0
-	for rows.Next() && index < playerDailyQuestsCount {
+	for rows.Next() {
 		var questID uint32
-		if rows.Scan(&questID) != nil || questID == 0 {
+		var dailyTime int64
+		if rows.Scan(&questID, &dailyTime) != nil || questID == 0 {
 			continue
 		}
+		if dailyTime > state.LastDailyQuestTime {
+			state.LastDailyQuestTime = dailyTime
+		}
+		var flags, specialFlags int64
 		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-			var exists int64
-			if s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM quest_template WHERE ID = ? LIMIT 1", questID).Scan(&exists) != nil {
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(q.Flags, 0), COALESCE(a.SpecialFlags, 0) FROM quest_template AS q LEFT JOIN quest_template_addon AS a ON a.ID = q.ID WHERE q.ID = ?", questID).Scan(&flags, &specialFlags); err != nil {
 				continue
 			}
+		}
+		fieldQuest, dungeonFinder := DailyQuestFieldStatus(uint32(flags), uint32(specialFlags))
+		if dungeonFinder {
+			state.DungeonFinderQuests[questID] = struct{}{}
+			continue
+		}
+		if !fieldQuest {
+			continue
+		}
+		if index >= playerDailyQuestsCount {
+			break
 		}
 		state.DailyQuests[index] = questID
 		index++
 	}
+}
+
+func DailyQuestFieldStatus(flags, specialFlags uint32) (bool, bool) {
+	dungeonFinder := specialFlags&0x08 != 0
+	return flags&0x00001000 != 0 && !dungeonFinder, dungeonFinder
 }
 
 func (s *session) loadPeriodicQuestStatuses(ctx context.Context, state *playerState) {
@@ -1325,9 +1348,14 @@ func (s *session) applyOfflineRestBonus(state *playerState) {
 		return
 	}
 	elapsed := time.Now().Unix() - state.LogoutTime
-	bubble := float32(0.031)
+	wildernessRate, tavernRate := float32(1), float32(1)
+	if s != nil && s.server != nil {
+		wildernessRate = float32(s.server.Config.RestOfflineInWildernessRate)
+		tavernRate = float32(s.server.Config.RestOfflineInTavernOrCityRate)
+	}
+	bubble := float32(0.031) * wildernessRate
 	if state.LogoutResting {
-		bubble = 0.125
+		bubble = float32(0.125) * tavernRate
 	}
 	nextLevelXP := float32(xpCurve[state.Level])
 	state.RestBonus += float32(elapsed) * (nextLevelXP / 72000) * bubble
@@ -1929,7 +1957,7 @@ func (s *session) loadPlayerReputations(ctx context.Context, state *playerState)
 		}
 		state.Reputations[index].ListID = listID
 		state.Reputations[index].Standing = int32(standing)
-		state.Reputations[index].Flags = MergeReputationFlags(state.Reputations[index].Flags, uint8(flags), int32(standing))
+		state.Reputations[index].Flags = MergeReputationFlags(state.Reputations[index].Flags, uint8(flags), base+int32(standing))
 	}
 	return rows.Err()
 }
@@ -2310,6 +2338,7 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 				}
 				value, max := uint16(1), uint16(1)
 				rangeType := s.skillRangeType(state.Race, state.Class, uint16(skillID))
+				step := uint16(0)
 				if rangeType == wotlk.SkillRangeLanguage {
 					value, max = 300, 300
 				} else if rangeType == wotlk.SkillRangeMono {
@@ -2322,11 +2351,25 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 					if s.server.Config.AlwaysMaxSkillForLevel {
 						value = max
 					}
+				} else if rangeType == wotlk.SkillRangeRank {
+					if rank <= 0 || rank > 16 || s.server.Data == nil {
+						continue
+					}
+					info, infoFound, infoErr := s.server.Data.SkillRaceClassInfo(uint32(skillID), state.Race, state.Class)
+					tierMax, tierFound, tierErr := s.server.Data.SkillTierValue(uint32(skillID), state.Race, state.Class, uint16(rank))
+					if infoErr != nil || tierErr != nil || !infoFound || !tierFound {
+						continue
+					}
+					var valid bool
+					step, value, max, valid = ResolveDefaultRankSkill(uint16(rank), tierMax, info.Flags, state.Class, state.Level)
+					if !valid {
+						continue
+					}
 				}
-				if rank > 0 && rank <= 65535 {
-					value = uint16(rank)
+				if rangeType != wotlk.SkillRangeRank {
+					step = s.skillStep(state.Race, state.Class, uint16(skillID), max)
 				}
-				newSkill := playerSkill{Skill: uint16(skillID), Step: s.skillStep(state.Race, state.Class, uint16(skillID), max), Value: value, Max: max}
+				newSkill := playerSkill{Skill: uint16(skillID), Step: step, Value: value, Max: max}
 				skills = append(skills, newSkill)
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", state.GUID, newSkill.Skill, newSkill.Value, newSkill.Max)
 			}
@@ -2334,6 +2377,25 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 	}
 	state.Skills = skills
 	return nil
+}
+
+func ResolveDefaultRankSkill(rank, tierMax uint16, flags uint32, class, level uint8) (uint16, uint16, uint16, bool) {
+	if rank == 0 || tierMax == 0 {
+		return 0, 0, 0, false
+	}
+	value := uint16(1)
+	if flags&wotlk.SkillFlagAlwaysMaxValue != 0 {
+		value = tierMax
+	} else if class == 6 {
+		value = 1
+		if level > 1 {
+			value = uint16(level-1) * 5
+		}
+		if value > tierMax {
+			value = tierMax
+		}
+	}
+	return rank, value, tierMax, true
 }
 
 func (s *session) loadSkillRewardedSpells(ctx context.Context, state *playerState) {
@@ -3551,6 +3613,10 @@ func (s *session) sendInventoryDurations(ctx context.Context) error {
 	return s.sendInventoryItemsMode(ctx, inventoryUpdateDurationsOnly)
 }
 
+func ShouldTrackItemEnchantmentDuration(_, _ int64, enchantID, duration uint32) bool {
+	return enchantID != 0 && duration > 0
+}
+
 func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error {
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
@@ -3607,7 +3673,6 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 		items = append(items, item)
 		if item.bag == 0 && ((item.slot >= 19 && item.slot <= 22) || (item.slot >= 67 && item.slot <= 73)) {
 			bagItems[item.itemGUID] = uint64(item.itemGUID) | (uint64(0x4000) << 48)
-			bagItems[item.slot] = uint64(item.itemGUID) | (uint64(0x4000) << 48)
 		}
 	}
 	rows.Close()
@@ -3798,13 +3863,11 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 			itemState.Durability = toUint32(item.durability)
 			parseItemFields(item.charges, itemState.SpellCharges[:])
 			parseItemFields(item.enchantments, itemState.Enchantments[:])
-			if bag == 0 && slot >= 0 && slot < 19 {
-				for enchantSlot := 0; enchantSlot < 12; enchantSlot++ {
-					enchantID := itemState.Enchantments[enchantSlot*3]
-					enchantDuration := itemState.Enchantments[enchantSlot*3+1]
-					if enchantID != 0 && enchantDuration > 0 {
-						enchantDurations = append(enchantDurations, enchantDurationUpdate{itemGUID: fullGUID, slot: uint32(enchantSlot), duration: enchantDuration / 1000})
-					}
+			for enchantSlot := 0; enchantSlot < 12; enchantSlot++ {
+				enchantID := itemState.Enchantments[enchantSlot*3]
+				enchantDuration := itemState.Enchantments[enchantSlot*3+1]
+				if ShouldTrackItemEnchantmentDuration(bag, slot, enchantID, enchantDuration) {
+					enchantDurations = append(enchantDurations, enchantDurationUpdate{itemGUID: fullGUID, slot: uint32(enchantSlot), duration: enchantDuration / 1000})
 				}
 			}
 		} else {
