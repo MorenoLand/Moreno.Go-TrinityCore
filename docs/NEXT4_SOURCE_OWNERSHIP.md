@@ -316,3 +316,5 @@ World initialization now reports the exact required login DBC files when the con
 Saved-pet restoration emits the source fake-summon `SMSG_SPELL_GO` with `CAST_FLAG_UNKNOWN_9` for `CreatedBySpell`, matching `Pet::LoadPetFromDB` packet ownership (saved-pet login milestone).
 
 Group-list counters are now allocated atomically per emitted packet, matching TrinityCore's `m_counter++` semantics without a read-lock data race (group-login counter milestone).
+
+Saved pet action-bar serialization now preserves TrinityCore default command/spell/reaction slots when custom action-bar tokens are malformed, while retaining valid custom slots (saved-pet action-bar milestone).

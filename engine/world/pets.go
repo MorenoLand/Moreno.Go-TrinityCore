@@ -885,15 +885,16 @@ func (s *session) sendPetSpells(ctx context.Context, petID uint32, entry uint32,
 	buf.WriteU8(1)  // commandState (1 = FOLLOW)
 	buf.WriteU16(0) // flags
 
-	hasCustomAB := false
-	var customSlots [10]uint32
+	customSlots := [10]uint32{0x07000002, 0x07000001, 0x07000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x06000002, 0x06000001, 0x06000000}
 	if abdata != "" {
 		tokens := strings.Fields(abdata)
 		if len(tokens) == 20 {
-			hasCustomAB = true
 			for i := 0; i < 10; i++ {
-				t, _ := strconv.ParseUint(tokens[i*2], 10, 8)
-				a, _ := strconv.ParseUint(tokens[i*2+1], 10, 32)
+				t, typeErr := strconv.ParseUint(tokens[i*2], 10, 8)
+				a, actionErr := strconv.ParseUint(tokens[i*2+1], 10, 32)
+				if typeErr != nil || actionErr != nil {
+					continue
+				}
 				customSlots[i] = uint32(a) | (uint32(t) << 24)
 			}
 		}
@@ -915,27 +916,16 @@ func (s *session) sendPetSpells(ctx context.Context, petID uint32, entry uint32,
 		}
 	}
 
-	if hasCustomAB {
-		for i := 0; i < 10; i++ {
-			buf.WriteU32(customSlots[i])
-		}
-	} else {
-		buf.WriteU32(0x07000002) // Slot 0: Attack (COMMAND_ATTACK = 2 | ACT_COMMAND = 0x07)
-		buf.WriteU32(0x07000001) // Slot 1: Follow (COMMAND_FOLLOW = 1 | ACT_COMMAND = 0x07)
-		buf.WriteU32(0x07000000) // Slot 2: Stay   (COMMAND_STAY = 0 | ACT_COMMAND = 0x07)
-
-		for i := 0; i < 4; i++ {
-			if i < len(allSpells) {
-				actType := uint32(allSpells[i].active)
-				buf.WriteU32(allSpells[i].spellID | (actType << 24))
-			} else {
-				buf.WriteU32(0)
+	for _, spell := range allSpells {
+		for slot := 3; slot < 7; slot++ {
+			if customSlots[slot]&0x00FFFFFF == 0 {
+				customSlots[slot] = spell.spellID | (uint32(spell.active) << 24)
+				break
 			}
 		}
-
-		buf.WriteU32(0x06000002) // Slot 7: Aggressive (REACT_AGGRESSIVE = 2 | ACT_REACTION = 0x06)
-		buf.WriteU32(0x06000001) // Slot 8: Defensive  (REACT_DEFENSIVE = 1 | ACT_REACTION = 0x06)
-		buf.WriteU32(0x06000000) // Slot 9: Passive    (REACT_PASSIVE = 0 | ACT_REACTION = 0x06)
+	}
+	for i := 0; i < 10; i++ {
+		buf.WriteU32(customSlots[i])
 	}
 
 	// Additional spells list (populates client Spellbook Pet tab!)
