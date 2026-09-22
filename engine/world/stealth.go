@@ -91,6 +91,32 @@ func (s *session) canDetectStealthOf(target *session) bool {
 	return dist <= visibilityRange
 }
 
+func (s *session) canDetectInvisibilityOfPlayer(target *session) bool {
+	if target == nil || target.player == nil {
+		return true
+	}
+	if (s.player != nil && (s.player.ExtraFlags&playerExtraGMOn != 0 || s.player.PlayerFlags&playerFlagGM != 0)) || s.security > 0 {
+		return true
+	}
+	detect := s.loadedAuras()
+	for _, targetAura := range target.loadedAuras() {
+		if targetAura == nil || targetAura.AuraType != 18 {
+			continue
+		}
+		found := false
+		for _, detectAura := range detect {
+			if detectAura != nil && detectAura.AuraType == 19 && detectAura.MiscValue == targetAura.MiscValue && detectAura.Amount >= targetAura.Amount {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
 // canCreatureDetectStealthOfPlayer determines if a creature can detect a stealthed player.
 // Mirrors TrinityCore WorldObject::CanDetectStealthOf for Creature observers.
 func canCreatureDetectStealthOfPlayer(motion *creatureMotion, targetSess *session, dist float32) bool {

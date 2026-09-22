@@ -2992,15 +2992,15 @@ func canSeePlayer(observer, target *session) bool {
 		return false
 	}
 	if target.player.PlayerFlags&playerFlagGhost == 0 {
-		return observer.canDetectStealthOf(target)
+		return observer.canDetectInvisibilityOfPlayer(target) && observer.canDetectStealthOf(target)
 	}
 	if observer.player.PlayerFlags&playerFlagGhost != 0 {
-		return observer.canDetectStealthOf(target)
+		return observer.canDetectInvisibilityOfPlayer(target) && observer.canDetectStealthOf(target)
 	}
 	if teamForRace(observer.player.Race) != teamForRace(target.player.Race) {
 		return false
 	}
-	return observer.groupID != 0 && observer.groupID == target.groupID && observer.canDetectStealthOf(target)
+	return observer.groupID != 0 && observer.groupID == target.groupID && observer.canDetectInvisibilityOfPlayer(target) && observer.canDetectStealthOf(target)
 }
 
 func playerFieldBytesValue(state playerState) uint32 {

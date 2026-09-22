@@ -386,3 +386,5 @@ Persisted and runtime fake-inebriation aura amounts now populate and maintain th
 Initial nearby-player visibility and reciprocal player-create broadcasts now apply GM-invisibility, ghost, faction, and group visibility checks, matching `WorldObject::CanSeeOrDetect` and `Player::UpdateVisibilityForPlayer` (player visibility correction).
 
 The same login visibility paths now apply the pinned stealth detection calculation, including GM/group/track-stealth/contact/arc/rating behavior from `WorldObject::CanDetectStealthOf` (stealth visibility correction).
+
+Player visibility now also compares each target invisibility aura type/value against the observer's matching detection auras, with GM override, matching `WorldObject::CanDetectInvisibilityOf` (invisibility visibility correction).
