@@ -296,3 +296,5 @@ Saved equipment sets with client-invalid indexes are now rejected during login l
 Login flightmaster status candidates now use the source visible-object three-dimensional range (`55eb76a`).
 
 The login replay harness now parses and validates `SMSG_EQUIPMENT_SET_LIST` framing, packed item GUIDs, client set limits, and trailing bytes (`66e7412`).
+
+The login replay harness now enforces source post-map ordering across world states, time sync, login effect, aura/duration updates, quest/taxi statuses, raid difficulty, quest sharing, group state, and pet state (`931317f`).
