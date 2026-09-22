@@ -131,6 +131,7 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 			}
 		}
 		if info.Transport != nil {
+			info.Transport.GUID = canonicalTransportGUID
 			s.player.TransportGUID = canonicalTransportGUID
 			s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = info.Transport.X, info.Transport.Y, info.Transport.Z, info.Transport.Orientation
 			s.player.TransportSeat = info.Transport.Seat
@@ -184,6 +185,7 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 				info.X, info.Y, info.Z, info.Orientation, s.player.Map, s.player.Zone, s.playerGUID)
 		}
 	}
+	s.setLastMovementInfo(info)
 	packet := protocol.NewBuffer(len(payload))
 	writeMovementInfo(packet, info)
 	s.server.broadcastMovement(uint16(opcode), packet.Bytes(), info, s)
@@ -335,6 +337,69 @@ func writeRawMovementInfo(b *protocol.Buffer, info movementInfo) {
 	if info.HasSpline {
 		b.WriteF32(info.SplineElevation)
 	}
+}
+
+func (s *session) setLastMovementInfo(info movementInfo) {
+	if s == nil {
+		return
+	}
+	if info.Transport != nil {
+		transport := *info.Transport
+		info.Transport = &transport
+	}
+	s.movementMu.Lock()
+	s.lastMovementInfo, s.lastMovementInfoSet = info, true
+	s.movementMu.Unlock()
+}
+
+func (s *session) clearLastMovementInfo() {
+	if s == nil {
+		return
+	}
+	s.movementMu.Lock()
+	s.lastMovementInfo, s.lastMovementInfoSet = movementInfo{}, false
+	s.movementMu.Unlock()
+}
+
+func (s *session) lastMovementInfoSnapshot() (movementInfo, bool) {
+	if s == nil {
+		return movementInfo{}, false
+	}
+	s.movementMu.RLock()
+	info, exists := s.lastMovementInfo, s.lastMovementInfoSet
+	s.movementMu.RUnlock()
+	if info.Transport != nil {
+		transport := *info.Transport
+		info.Transport = &transport
+	}
+	return info, exists
+}
+
+func (s *session) movementInfoForCreate(state playerState) movementInfo {
+	info := movementInfo{GUID: state.GUID, Time: uint32(time.Now().UnixMilli()), X: state.X, Y: state.Y, Z: state.Z, Orientation: state.Orientation}
+	if last, exists := s.lastMovementInfoSnapshot(); exists {
+		info = last
+	}
+	info.GUID = state.GUID
+	info.X, info.Y, info.Z, info.Orientation = state.X, state.Y, state.Z, state.Orientation
+	if state.TransportGUID != 0 {
+		info.Flags |= movementOnTransport
+		if info.Transport == nil {
+			info.Transport = &transportMovement{}
+		}
+		info.Transport.GUID = state.TransportGUID
+		info.Transport.X, info.Transport.Y, info.Transport.Z, info.Transport.Orientation = state.TransportX, state.TransportY, state.TransportZ, state.TransportO
+		info.Transport.Seat = state.TransportSeat
+	} else {
+		info.Flags &^= movementOnTransport
+		info.Transport = nil
+	}
+	if s != nil && s.rooted {
+		info.Flags |= movementRoot
+	} else {
+		info.Flags &^= movementRoot
+	}
+	return info
 }
 
 func sanitizeMovementFlags(flags uint32) uint32 {

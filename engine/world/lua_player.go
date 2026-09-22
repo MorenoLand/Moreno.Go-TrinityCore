@@ -57,13 +57,13 @@ func (s *session) luaPlayer() *scripting.Object {
 		return nil
 	}
 	state := s.player
-	fields := map[string]any{"Name": state.Name, "GUID": state.GUID, "GUIDLow": uint32(state.GUID), "MapId": state.Map, "Level": state.Level, "Race": state.Race, "Class": state.Class, "Gender": state.Gender, "Team": teamForRace(state.Race), "IsGM": s.security > 0, "InWorld": true, "X": state.X, "Y": state.Y, "Z": state.Z, "Orientation": state.Orientation, "Zone": state.Zone, "Health": state.Health, "MaxHealth": state.MaxHealth, "Power": state.Powers[0], "MaxPower": state.MaxPowers[0], "PowerType": classPowerType(state.Class), "InCombat": s.attackTarget != 0 || state.UnitFlags&unitFlagInCombat != 0}
+	fields := map[string]any{"Name": state.Name, "GUID": state.GUID, "GUIDLow": uint32(state.GUID), "MapId": state.Map, "InstanceId": state.InstanceID, "Level": state.Level, "Race": state.Race, "Class": state.Class, "Gender": state.Gender, "Team": teamForRace(state.Race), "IsGM": s.security > 0, "InWorld": true, "X": state.X, "Y": state.Y, "Z": state.Z, "Orientation": state.Orientation, "Zone": state.Zone, "Health": state.Health, "MaxHealth": state.MaxHealth, "Power": state.Powers[0], "MaxPower": state.MaxPowers[0], "PowerType": classPowerType(state.Class), "InCombat": s.attackTarget != 0 || state.UnitFlags&unitFlagInCombat != 0}
 	methods := map[string]scripting.ObjectMethod{}
 	methods["GetName"] = luaNoArgs(func() any { return state.Name })
 	methods["GetGUID"] = luaNoArgs(func() any { return state.GUID })
 	methods["GetGUIDLow"] = luaNoArgs(func() any { return uint32(state.GUID) })
 	methods["GetMapId"] = luaNoArgs(func() any { return state.Map })
-	methods["GetInstanceId"] = luaNoArgs(func() any { return uint32(0) })
+	methods["GetInstanceId"] = luaNoArgs(func() any { return state.InstanceID })
 	methods["GetObjectType"] = luaNoArgs(func() any { return "Player" })
 	methods["GetZ"] = luaNoArgs(func() any { return state.Z })
 	methods["GetLevel"] = luaNoArgs(func() any { return state.Level })
@@ -406,6 +406,16 @@ func (s *session) luaPlayer() *scripting.Object {
 		return []any{object}, nil
 	}
 	return &scripting.Object{Type: "Player", Fields: fields, Methods: methods}
+}
+
+func (s *session) triggerMapEntryEvent(ctx context.Context) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
+		return
+	}
+	mapObject := &scripting.Object{Type: "Map", Fields: map[string]any{"MapId": s.player.Map, "InstanceId": s.player.InstanceID, "InWorld": true}}
+	if _, err := s.server.Features.Scripts.TriggerMapEvent(ctx, s.player.Map, scripting.MapEventOnPlayerEnter, mapObject, s.luaPlayer()); err != nil {
+		s.debug("lua map entry event failed", "map", s.player.Map, "instance", s.player.InstanceID, "error", err)
+	}
 }
 
 func (s *session) luaMessageMethod() scripting.ObjectMethod {

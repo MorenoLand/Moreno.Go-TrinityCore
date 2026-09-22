@@ -58,6 +58,12 @@ const (
 	spellAuraInvisibilityDetect          = 19
 	spellAuraStealthLevel                = 154
 	spellAuraTrackStealthed              = 151
+	spellAuraConvertRune                 = 249
+	spellAuraDamagePercentDone            = 79
+	spellAuraAttackPowerPercent           = 166
+	spellAuraRangedAttackPowerPercent     = 167
+	spellAuraCastingSpeedNotStack         = 65
+	spellAuraHasteSpells                  = 216
 	spellAuraFakeInebriation             = 304
 	unitStandFlagCreep                   = 0x02
 	playerAuraVisionStealth              = 0x20

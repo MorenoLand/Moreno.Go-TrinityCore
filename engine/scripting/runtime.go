@@ -26,6 +26,7 @@ const (
 	PlayerEventUpdateZone = 27
 	PlayerEventMapChange  = 28
 	PlayerEventCommand    = 42
+	MapEventOnPlayerEnter = 21
 )
 
 type Hook struct {
@@ -256,6 +257,10 @@ func (r *Runtime) Trigger(ctx context.Context, kind string, event int, args ...a
 
 func (r *Runtime) TriggerPlayerEvent(ctx context.Context, event int, args ...any) ([]any, error) {
 	return r.Trigger(ctx, "player", event, args...)
+}
+
+func (r *Runtime) TriggerMapEvent(ctx context.Context, mapID uint32, event int, args ...any) ([]any, error) {
+	return r.Trigger(ctx, "map:"+strconv.FormatUint(uint64(mapID), 10), event, append([]any{event}, args...)...)
 }
 
 func (r *Runtime) TriggerServerEvent(ctx context.Context, event int, args ...any) ([]any, error) {

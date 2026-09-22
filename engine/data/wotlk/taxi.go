@@ -206,11 +206,14 @@ func (s *Store) TaxiPathLinks(from, to uint32) (uint32, uint32, bool, error) {
 
 // TaxiSplinePoint is one TaxiPathNode.dbc vertex of a flight path.
 type TaxiSplinePoint struct {
-	MapID int32
-	X     float32
-	Y     float32
-	Z     float32
-	Delay uint32
+	MapID            int32
+	X                float32
+	Y                float32
+	Z                float32
+	Flags            uint32
+	Delay            uint32
+	ArrivalEventID   uint32
+	DepartureEventID uint32
 }
 
 // TaxiPathPoints loads the ordered spline vertices for a TaxiPath id.
@@ -248,10 +251,13 @@ func (s *Store) TaxiPathPoints(pathID uint32) ([]TaxiSplinePoint, error) {
 		if point.Z, err = record.Float32(6); err != nil {
 			continue
 		}
+		point.Flags, _ = record.Uint32(7)
 		delay, err := record.Uint32(8)
 		if err == nil {
 			point.Delay = delay
 		}
+		point.ArrivalEventID, _ = record.Uint32(9)
+		point.DepartureEventID, _ = record.Uint32(10)
 		points = append(points, indexed{index: nodeIndex, point: point})
 	}
 	sort.Slice(points, func(i, j int) bool { return points[i].index < points[j].index })

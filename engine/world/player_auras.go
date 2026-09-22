@@ -337,10 +337,14 @@ func (s *session) sendLoadedAuras() {
 	s.sendAurasForTarget(s.playerGUID, s)
 }
 
+func clientVisibleAura(aura *activeAura) bool {
+	return aura != nil && !aura.Stopped && aura.EffectMask != 0 && aura.Slot < 64
+}
+
 func auraUpdateRecords(auras []*activeAura) []protocol.AuraUpdateRecord {
 	records := make([]protocol.AuraUpdateRecord, 0, len(auras))
 	for _, aura := range auras {
-		if aura == nil || aura.Stopped {
+		if !clientVisibleAura(aura) {
 			continue
 		}
 		stackCount := aura.StackCount

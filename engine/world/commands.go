@@ -143,6 +143,7 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) {
 	if s.player == nil {
 		return
 	}
+	s.clearLastMovementInfo()
 	oldMap := s.player.Map
 	s.selection = 0
 	s.player.Selection = 0

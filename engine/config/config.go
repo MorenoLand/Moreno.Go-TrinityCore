@@ -257,7 +257,7 @@ func (c *Config) ApplyWorkDir(workDir string) {
 			c.LogsDir = filepath.Clean(filepath.Join(cleanWork, c.LogsDir))
 		}
 	}
-	c.GameDataDir = resolvePath(
+	c.GameDataDir = resolveGameDataPath(
 		filepath.Join(cleanWork, c.GameDataDir),
 		filepath.Join(cleanWork, "data"),
 		c.GameDataDir,
@@ -288,7 +288,7 @@ func (c *Config) ApplyWorkDir(workDir string) {
 
 func (c *Config) ResolvePaths() {
 	c.DataDir = resolvePath(c.DataDir, "bin", filepath.Join("..", "bin"), filepath.Join("..", "..", "bin"))
-	c.GameDataDir = resolvePath(c.GameDataDir, filepath.Join(c.DataDir, "data"), c.DataDir, filepath.Join("bin", c.GameDataDir), filepath.Join("bin", "data"), filepath.Join("..", c.GameDataDir))
+	c.GameDataDir = resolveGameDataPath(c.GameDataDir, filepath.Join(c.DataDir, "data"), c.DataDir, filepath.Join("bin", c.GameDataDir), filepath.Join("bin", "data"), filepath.Join("..", c.GameDataDir))
 	c.SchemaDir = resolvePath(c.SchemaDir, filepath.Join("bin", c.SchemaDir), filepath.Join("bin", "sql"), filepath.Join("..", c.SchemaDir))
 	c.LuaScriptPath = resolvePath(c.LuaScriptPath, filepath.Join(c.DataDir, "lua_scripts"), filepath.Join("bin", c.LuaScriptPath), filepath.Join("bin", "lua_scripts"), filepath.Join("..", c.LuaScriptPath))
 	if c.ProtocolTracePath != "" && !filepath.IsAbs(c.ProtocolTracePath) {
@@ -309,6 +309,29 @@ func resolvePath(path string, alternatives ...string) string {
 		}
 	}
 	return filepath.Clean(path)
+}
+
+func resolveGameDataPath(path string, alternatives ...string) string {
+	if path == "" || filepath.IsAbs(path) {
+		return path
+	}
+	for _, candidate := range append([]string{path}, alternatives...) {
+		if candidate == "" {
+			continue
+		}
+		complete := true
+		for _, name := range []string{"ChrRaces.dbc", "ChrClasses.dbc", "Spell.dbc", "Map.dbc"} {
+			info, err := os.Stat(filepath.Join(candidate, "dbc", name))
+			if err != nil || info.IsDir() {
+				complete = false
+				break
+			}
+		}
+		if complete {
+			return candidate
+		}
+	}
+	return resolvePath(path, alternatives...)
 }
 
 func (c Config) DatabasePath(name string) string {

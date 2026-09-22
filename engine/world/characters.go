@@ -450,6 +450,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.attackTarget = 0
 	s.autoRepeatSpell = 0
 	s.autoRepeatTarget = 0
+	s.clearLastMovementInfo()
 	s.rooted = false
 	s.playerLocked = false
 	s.inFlight = false
@@ -691,6 +692,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		s.loadedCorpseBones = false
 	}
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventMapChange, s.luaPlayer())
+	s.triggerMapEntryEvent(ctx)
 	s.streamDynamicSpellObjects()
 	zoneID, areaID := s.server.zoneAndAreaID(state.Map, state.X, state.Y, state.Z, state.Zone)
 	state.Zone = zoneID
@@ -724,9 +726,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		return false
 	}
 	if err := s.sendLoginFlightState(); err != nil {
-		return false
-	}
-	if err := s.sendLoginFlightSpeed(); err != nil {
 		return false
 	}
 	if err := s.sendLoginMovementStunAndCompoundStates(); err != nil {
@@ -1089,6 +1088,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	s.sendVisiblePlayerAuras(nearbyPlayerGUIDs)
 	s.sendVisibleCreatureAuras(state)
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventMapChange, s.luaPlayer())
+	s.triggerMapEntryEvent(ctx)
 	s.streamDynamicSpellObjects()
 	s.updateZoneAndArea(ctx, true)
 	if err := s.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true); err != nil {
@@ -1103,9 +1103,6 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 		return false
 	}
 	if err := s.sendLoginFlightState(); err != nil {
-		return false
-	}
-	if err := s.sendLoginFlightSpeed(); err != nil {
 		return false
 	}
 	if err := s.sendLoginMovementStunAndCompoundStates(); err != nil {
@@ -1251,78 +1248,23 @@ func (s *session) sendLoginFlightState() error {
 		return nil
 	}
 	auras := s.loadedAuras()
-	for _, auraType := range []uint32{201, 207} {
-		found := false
-		for _, aura := range auras {
-			if aura != nil && aura.AuraType == auraType {
-				found = true
-				break
-			}
+	canFly := false
+	for _, aura := range auras {
+		if aura != nil && (aura.AuraType == 201 || aura.AuraType == 207) {
+			canFly = true
+			break
 		}
-		if !found {
-			continue
-		}
-		packet := protocol.NewBuffer(packedGUIDSize(s.playerGUID) + 4)
-		packet.WritePackedGUID(s.playerGUID)
-		packet.WriteU32(0)
-		if err := s.write(uint16(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY), packet.Bytes(), true); err != nil {
-			return err
-		}
-		s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_UPDATE_CAN_FLY, 0x01000000)
 	}
-	return nil
-}
-
-func (s *session) sendLoginFlightSpeed() error {
-	if s == nil || s.player == nil {
+	if !canFly {
 		return nil
 	}
-	modifier := uint32(0)
-	for _, aura := range s.loadedAuras() {
-		if aura != nil && aura.AuraType == 207 && aura.Amount > modifier {
-			modifier = aura.Amount
-		}
-	}
-	if modifier == 0 && s.mounts != nil {
-		if preferred := s.mounts.PreferredFlightSpeed(true); preferred > 100 {
-			modifier = uint32(preferred - 100)
-		}
-	}
-	if modifier == 0 {
-		return nil
-	}
-	speed := float32(7.0 * (1.0 + float64(modifier)/100.0))
-	self := protocol.NewBuffer(packedGUIDSize(s.playerGUID) + 8)
-	self.WritePackedGUID(s.playerGUID)
-	self.WriteU32(0)
-	self.WriteF32(speed)
-	if err := s.write(uint16(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE), self.Bytes(), true); err != nil {
+	packet := protocol.NewBuffer(packedGUIDSize(s.playerGUID) + 4)
+	packet.WritePackedGUID(s.playerGUID)
+	packet.WriteU32(0)
+	if err := s.write(uint16(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY), packet.Bytes(), true); err != nil {
 		return err
 	}
-	nearby := protocol.NewBuffer(96)
-	nearby.WritePackedGUID(s.playerGUID)
-	nearby.WriteU32(0x01000000)
-	nearby.WriteU16(0)
-	nearby.WriteU32(uint32(time.Now().UnixMilli()))
-	nearby.WriteF32(s.player.X)
-	nearby.WriteF32(s.player.Y)
-	nearby.WriteF32(s.player.Z)
-	nearby.WriteF32(s.player.Orientation)
-	if s.player.TransportGUID != 0 {
-		nearby.WritePackedGUID(s.player.TransportGUID)
-		nearby.WriteF32(s.player.TransportX)
-		nearby.WriteF32(s.player.TransportY)
-		nearby.WriteF32(s.player.TransportZ)
-		nearby.WriteF32(s.player.TransportO)
-		nearby.WriteU32(0)
-		nearby.WriteI8(s.player.TransportSeat)
-	}
-	nearby.WriteU32(0)
-	for _, base := range []float32{2.5, 7.0, 4.5, 4.722222, 2.5, 7.0, 4.5, 3.141594, 3.14} {
-		nearby.WriteF32(base)
-	}
-	nearby.WriteF32(speed)
-	s.server.broadcastToNearby(uint16(protocol.OpcodeMSG_MOVE_SET_FLIGHT_SPEED), nearby.Bytes(), s)
+	s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_UPDATE_CAN_FLY, 0x01000000)
 	return nil
 }
 
@@ -1330,29 +1272,31 @@ func (s *session) broadcastLoginMovementState(opcode protocol.Opcode, movementFl
 	if s == nil || s.server == nil || s.player == nil || opcode == 0 {
 		return
 	}
-	packet := protocol.NewBuffer(80)
-	packet.WritePackedGUID(s.playerGUID)
+	info := s.movementInfoForCreate(*s.player)
+	var stateFlag uint32
+	switch opcode {
+	case protocol.OpcodeMSG_MOVE_WATER_WALK:
+		stateFlag = 0x10000000
+	case protocol.OpcodeMSG_MOVE_FEATHER_FALL:
+		stateFlag = 0x20000000
+	case protocol.OpcodeMSG_MOVE_HOVER:
+		stateFlag = 0x40000000
+	case protocol.OpcodeMSG_MOVE_UPDATE_CAN_FLY:
+		stateFlag = 0x01000000
+	}
+	if stateFlag == 0 {
+		info.Flags = movementFlags
+	} else {
+		info.Flags = info.Flags&^stateFlag | movementFlags&stateFlag
+	}
 	if s.player.TransportGUID != 0 {
-		movementFlags |= movementOnTransport
+		info.Flags |= movementOnTransport
 	}
-	packet.WriteU32(movementFlags)
-	packet.WriteU16(0)
-	packet.WriteU32(uint32(time.Now().UnixMilli()))
-	packet.WriteF32(s.player.X)
-	packet.WriteF32(s.player.Y)
-	packet.WriteF32(s.player.Z)
-	packet.WriteF32(s.player.Orientation)
-	if movementFlags&movementOnTransport != 0 {
-		packet.WritePackedGUID(s.player.TransportGUID)
-		packet.WriteF32(s.player.TransportX)
-		packet.WriteF32(s.player.TransportY)
-		packet.WriteF32(s.player.TransportZ)
-		packet.WriteF32(s.player.TransportO)
-		packet.WriteU32(0)
-		packet.WriteI8(s.player.TransportSeat)
-	}
-	packet.WriteU32(0)
-	for _, speed := range []float32{2.5, 7.0, 4.5, 4.722222, 2.5, 7.0, 4.5, 3.141594, 3.14} {
+	info.Time = uint32(time.Now().UnixMilli())
+	s.setLastMovementInfo(info)
+	packet := protocol.NewBuffer(112)
+	writeMovementInfo(packet, info)
+	for _, speed := range s.movementSpeeds() {
 		packet.WriteF32(speed)
 	}
 	_ = s.write(uint16(opcode), packet.Bytes(), true)

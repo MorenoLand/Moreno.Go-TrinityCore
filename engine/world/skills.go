@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -200,13 +201,54 @@ func (s *session) sendTalentsInfo(pet bool) error {
 	return s.write(uint16(protocol.OpcodeSMSG_TALENTS_INFO), buf.Bytes(), true)
 }
 
+func ResolveDeathKnightRuneTypes(initial [6]uint8, spells []wotlk.Spell) [6]uint8 {
+	for _, spell := range spells {
+		if spell.Attributes&spellAttributePassive == 0 {
+			continue
+		}
+		for _, effect := range spell.Effects {
+			if effect.Effect == 0 || effect.Aura != spellAuraConvertRune {
+				continue
+			}
+			remaining := uint32(effect.BasePoints) + 1
+			for index, runeType := range initial {
+				if remaining == 0 {
+					break
+				}
+				if runeType == uint8(effect.MiscValue) {
+					initial[index] = uint8(effect.MiscValueB)
+					remaining--
+				}
+			}
+		}
+	}
+	return initial
+}
+
 func (s *session) sendResyncRunes() error {
 	if s.player == nil || s.player.Class != 6 {
 		return nil
 	}
+	runeTypes := [6]uint8{0, 0, 1, 1, 2, 2}
+	spells := append([]learnedSpell(nil), s.player.Spells...)
+	sort.Slice(spells, func(i, j int) bool { return spells[i].ID < spells[j].ID })
+	passiveSpells := make([]wotlk.Spell, 0)
+	if s.server != nil && s.server.Data != nil {
+		for _, learned := range spells {
+			if !learned.Active || learned.Disabled {
+				continue
+			}
+			spell, found, err := s.server.Data.Spell(learned.ID)
+			if err != nil || !found || spell.Attributes&spellAttributePassive == 0 {
+				continue
+			}
+			passiveSpells = append(passiveSpells, spell)
+		}
+	}
+	runeTypes = ResolveDeathKnightRuneTypes(runeTypes, passiveSpells)
 	buf := protocol.NewBuffer(16)
 	buf.WriteU32(6)
-	for _, runeType := range []uint8{0, 0, 1, 1, 2, 2} {
+	for _, runeType := range runeTypes {
 		buf.WriteU8(runeType)
 		buf.WriteU8(255)
 	}

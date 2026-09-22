@@ -6,7 +6,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -15,12 +14,10 @@ type continentTransport struct {
 	Name            string
 	TransportMapID  uint32
 	PathID          uint32
-	Speed           float32
-	Points          []wotlk.TaxiSplinePoint
+	Path            *TransportTrajectory
+	PathProgress    uint32
 	StaticCreatures []creatureSpawn
 	StaticObjects   []gameObjectSpawn
-	Segment         int
-	SegmentProgress float64
 	LastUpdate      time.Time
 }
 
@@ -33,9 +30,9 @@ func (s *Server) loadContinentTransports(ctx context.Context) {
 	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || s.Data == nil {
 		return
 	}
-	rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT tr.guid, tr.entry, COALESCE(gt.name, ''), COALESCE(gt.data0, 0), COALESCE(gt.data1, 0), COALESCE(gt.data6, 0), COALESCE(gt.displayId, 0), COALESCE(gt.size, 1) FROM transports AS tr JOIN gameobject_template AS gt ON gt.entry = tr.entry WHERE gt.type = 15 ORDER BY tr.guid`)
+	rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT tr.guid, tr.entry, COALESCE(gt.name, ''), COALESCE(gt.data0, 0), COALESCE(gt.data1, 0), COALESCE(gt.data2, 0), COALESCE(gt.data6, 0), COALESCE(gt.displayId, 0), COALESCE(gt.size, 1) FROM transports AS tr JOIN gameobject_template AS gt ON gt.entry = tr.entry WHERE gt.type = 15 ORDER BY tr.guid`)
 	if err != nil && isMissingColumn(err) {
-		rows, err = s.WorldStore.DB.QueryContext(ctx, `SELECT tr.guid, tr.entry, COALESCE(gt.name, ''), COALESCE(gt.data0, 0), COALESCE(gt.data1, 0), 0, COALESCE(gt.displayId, 0), COALESCE(gt.size, 1) FROM transports AS tr JOIN gameobject_template AS gt ON gt.entry = tr.entry WHERE gt.type = 15 ORDER BY tr.guid`)
+		rows, err = s.WorldStore.DB.QueryContext(ctx, `SELECT tr.guid, tr.entry, COALESCE(gt.name, ''), COALESCE(gt.data0, 0), COALESCE(gt.data1, 0), COALESCE(gt.data2, 0), 0, COALESCE(gt.displayId, 0), COALESCE(gt.size, 1) FROM transports AS tr JOIN gameobject_template AS gt ON gt.entry = tr.entry WHERE gt.type = 15 ORDER BY tr.guid`)
 	}
 	if err != nil {
 		if !missingTable(err) && s.Logger != nil {
@@ -49,24 +46,26 @@ func (s *Server) loadContinentTransports(ctx context.Context) {
 	for rows.Next() {
 		var guid, entry, pathID, transportMapID, displayID int64
 		var name string
-		var speed, size float64
-		if err := rows.Scan(&guid, &entry, &name, &pathID, &speed, &transportMapID, &displayID, &size); err != nil || guid <= 0 || entry <= 0 || pathID <= 0 {
+		var speed, acceleration, size float64
+		if err := rows.Scan(&guid, &entry, &name, &pathID, &speed, &acceleration, &transportMapID, &displayID, &size); err != nil || guid <= 0 || entry <= 0 || pathID <= 0 {
 			continue
 		}
 		points, err := s.Data.TaxiPathPoints(uint32(pathID))
-		if err != nil || len(points) < 2 {
+		path, pathErr := NewTransportTrajectory(points, float32(speed), float32(acceleration))
+		if err != nil || pathErr != nil {
 			if s.Logger != nil {
+				if err == nil {
+					err = pathErr
+				}
 				s.Logger.Warn("continent transport route unavailable", "entry", entry, "path", pathID, "error", err)
 			}
 			continue
 		}
-		if speed <= 0 {
-			speed = 30
-		}
 		if size <= 0 {
 			size = 1
 		}
-		transport := &continentTransport{Spawn: gameObjectSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: transportPointMap(points[0]), X: points[0].X, Y: points[0].Y, Z: points[0].Z, Type: GameObjectTypeMOTransport, DisplayID: uint32(displayID), Size: float32(size), RotationW: 1, ParentRotation: [4]float32{0, 0, 0, 1}}, Name: name, TransportMapID: uint32(transportMapID), PathID: uint32(pathID), Speed: float32(speed), Points: points, LastUpdate: now}
+		mapID, x, y, z, orientation := path.Position(0)
+		transport := &continentTransport{Spawn: gameObjectSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: mapID, X: x, Y: y, Z: z, Orientation: orientation, Type: GameObjectTypeMOTransport, DisplayID: uint32(displayID), Size: float32(size), RotationW: 1, ParentRotation: [4]float32{0, 0, 0, 1}}, Name: name, TransportMapID: uint32(transportMapID), PathID: uint32(pathID), Path: path, LastUpdate: now}
 		s.loadTransportPassengers(ctx, transport)
 		transport.updatePosition()
 		s.transportMu.Lock()
@@ -191,92 +190,17 @@ func (s *Server) loadTransportPassengers(ctx context.Context, transport *contine
 	}
 }
 
-func transportPointMap(point wotlk.TaxiSplinePoint) uint32 {
-	if point.MapID < 0 {
-		return 0
-	}
-	return uint32(point.MapID)
-}
-
-func (t *continentTransport) segmentDuration(index int) float64 {
-	if t == nil || len(t.Points) < 2 {
-		return 0
-	}
-	from := t.Points[index%len(t.Points)]
-	to := t.Points[(index+1)%len(t.Points)]
-	distance := math.Sqrt(float64((to.X-from.X)*(to.X-from.X) + (to.Y-from.Y)*(to.Y-from.Y) + (to.Z-from.Z)*(to.Z-from.Z)))
-	speed := float64(t.Speed)
-	if speed <= 0 {
-		speed = 30
-	}
-	travel := distance / speed * 1000
-	if travel < 250 {
-		travel = 250
-	}
-	return float64(from.Delay)*1000 + travel
-}
-
 func (t *continentTransport) updatePosition() {
-	if t == nil || len(t.Points) < 2 {
+	if t == nil || t.Path == nil {
 		return
 	}
-	from := t.Points[t.Segment%len(t.Points)]
-	to := t.Points[(t.Segment+1)%len(t.Points)]
-	travel := t.segmentDuration(t.Segment) - float64(from.Delay)*1000
-	progress := t.SegmentProgress - float64(from.Delay)*1000
-	alpha := float64(0)
-	if progress > 0 && travel > 0 && from.MapID == to.MapID {
-		alpha = progress / travel
-		if alpha > 1 {
-			alpha = 1
-		}
-	}
-	t.Spawn.Map = transportPointMap(from)
-	t.Spawn.X = from.X + float32(float64(to.X-from.X)*alpha)
-	t.Spawn.Y = from.Y + float32(float64(to.Y-from.Y)*alpha)
-	t.Spawn.Z = from.Z + float32(float64(to.Z-from.Z)*alpha)
-	if from.MapID == to.MapID && (to.X != from.X || to.Y != from.Y) {
-		t.Spawn.Orientation = float32(math.Atan2(float64(to.Y-from.Y), float64(to.X-from.X)) + math.Pi)
-	}
-	t.Spawn.TransportProgress = t.pathProgress()
-	t.Spawn.TransportPeriod = uint32(t.pathPeriod())
-}
-
-func (t *continentTransport) pathPeriod() float64 {
-	if t == nil || len(t.Points) < 2 {
-		return 0
-	}
-	var total float64
-	for i := range t.Points {
-		total += t.segmentDuration(i)
-	}
-	return total
-}
-
-func (t *continentTransport) pathProgress() uint32 {
-	if t == nil || len(t.Points) < 2 {
-		return 0
-	}
-	var progress, total float64
-	for i := range t.Points {
-		duration := t.segmentDuration(i)
-		total += duration
-		if i < t.Segment {
-			progress += duration
-		}
-	}
-	progress += t.SegmentProgress
-	if total > 0 {
-		progress = math.Mod(progress, total)
-	}
-	if progress < 0 {
-		return 0
-	}
-	return uint32(progress)
+	t.Spawn.Map, t.Spawn.X, t.Spawn.Y, t.Spawn.Z, t.Spawn.Orientation = t.Path.Position(t.PathProgress)
+	t.Spawn.TransportProgress = t.PathProgress
+	t.Spawn.TransportPeriod = t.Path.Period()
 }
 
 func (t *continentTransport) advance(now time.Time) bool {
-	if t == nil || len(t.Points) < 2 {
+	if t == nil || t.Path == nil || t.Path.Period() == 0 {
 		return false
 	}
 	if t.LastUpdate.IsZero() {
@@ -284,30 +208,12 @@ func (t *continentTransport) advance(now time.Time) bool {
 		t.updatePosition()
 		return false
 	}
-	delta := now.Sub(t.LastUpdate).Seconds() * 1000
+	delta := now.Sub(t.LastUpdate).Milliseconds()
 	t.LastUpdate = now
 	if delta <= 0 {
 		return false
 	}
-	if delta > 5000 {
-		delta = 5000
-	}
-	for delta > 0 {
-		remaining := t.segmentDuration(t.Segment) - t.SegmentProgress
-		if remaining <= 0 {
-			t.Segment = (t.Segment + 1) % len(t.Points)
-			t.SegmentProgress = 0
-			continue
-		}
-		if delta < remaining {
-			t.SegmentProgress += delta
-			delta = 0
-			break
-		}
-		delta -= remaining
-		t.Segment = (t.Segment + 1) % len(t.Points)
-		t.SegmentProgress = 0
-	}
+	t.PathProgress += uint32(delta)
 	t.updatePosition()
 	return true
 }

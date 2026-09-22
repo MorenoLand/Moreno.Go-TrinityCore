@@ -166,6 +166,7 @@ type session struct {
 	logoutAt              time.Time
 	gameTimeStartedAt     time.Time
 	writeMu               sync.Mutex
+	movementMu            sync.RWMutex
 	captureUpdatePackets  bool
 	capturedUpdatePackets []*protocol.Packet
 	selection             uint64
@@ -189,6 +190,8 @@ type session struct {
 	autoRepeatTarget      uint64
 	isMoving              bool
 	isFalling             bool
+	lastMovementInfo      movementInfo
+	lastMovementInfoSet   bool
 	lastFallZ             float32
 	lastFallTime          uint32
 	isSwimming            bool
@@ -270,6 +273,20 @@ type activeCastState struct {
 	CastTimeMs   uint32
 	Pushbacks    int
 	InterruptFlg uint32
+}
+
+func (s *Server) playerSessionForGUID(guid uint64) *session {
+	if s == nil || guid == 0 {
+		return nil
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for current := range s.sessions {
+		if current != nil && current.playerGUID == guid && current.player != nil && current.player.GUID == guid {
+			return current
+		}
+	}
+	return nil
 }
 
 type bgQueueEntry struct {

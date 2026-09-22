@@ -97,6 +97,7 @@ type SpellEffect struct {
 	ImplicitTargetB uint32
 	RadiusIndex     uint32
 	MiscValue       int32
+	MiscValueB      int32
 	TriggerSpell    uint32
 }
 
@@ -714,6 +715,10 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		if err != nil {
 			return Spell{}, false, err
 		}
+		miscValueB, err := record.Int32(113 + i)
+		if err != nil {
+			return Spell{}, false, err
+		}
 		auraPeriod, err := record.Uint32(98 + i) // EffectAuraPeriod, DBCStructure.h:1492 area (98-100)
 		if err != nil {
 			return Spell{}, false, err
@@ -722,7 +727,7 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		if err != nil {
 			return Spell{}, false, err
 		}
-		spell.Effects[i] = SpellEffect{Effect: effect, BasePoints: basePoints, Aura: aura, AuraPeriod: auraPeriod, ImplicitTargetA: implicitTargetA, ImplicitTargetB: implicitTargetB, RadiusIndex: radiusIndex, MiscValue: miscValue, TriggerSpell: triggerSpell}
+		spell.Effects[i] = SpellEffect{Effect: effect, BasePoints: basePoints, Aura: aura, AuraPeriod: auraPeriod, ImplicitTargetA: implicitTargetA, ImplicitTargetB: implicitTargetB, RadiusIndex: radiusIndex, MiscValue: miscValue, MiscValueB: miscValueB, TriggerSpell: triggerSpell}
 	}
 	return spell, true, nil
 }

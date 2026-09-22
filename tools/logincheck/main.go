@@ -3,13 +3,17 @@ package main
 import (
 	"bytes"
 	"compress/zlib"
+	"context"
 	"encoding/base64"
 	"flag"
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/world"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocoltrace"
@@ -61,6 +65,29 @@ func main() {
 }
 
 func runSelfCheck() error {
+	if err := checkMapEntryEvent(); err != nil {
+		return fmt.Errorf("map entry hook check failed: %w", err)
+	}
+	if speed := world.ResolveMovementSpeed(1, -90, 60); speed != 0.6 {
+		return fmt.Errorf("movement slow/minimum-speed ordering produced %f", speed)
+	}
+	if multiplier := world.ResolveAuraPercentMultiplier([]int32{20, 10}); math.Abs(float64(multiplier-1.32)) > 0.001 {
+		return fmt.Errorf("stacked aura multiplier produced %f", multiplier)
+	}
+	if multiplier := world.ResolveCastSpeedMultiplier([]int32{20, -20}); math.Abs(float64(multiplier-1)) > 0.001 {
+		return fmt.Errorf("cast-time aura multiplier produced %f", multiplier)
+	}
+	if err := checkGameDataPathResolution(); err != nil {
+		return fmt.Errorf("game data path resolution check failed: %w", err)
+	}
+	if err := checkTransportTrajectory(); err != nil {
+		return fmt.Errorf("transport trajectory check failed: %w", err)
+	}
+	baseRuneTypes := [6]uint8{0, 0, 1, 1, 2, 2}
+	runeTypes := world.ResolveDeathKnightRuneTypes(baseRuneTypes, []wotlk.Spell{{Attributes: 0x40, Effects: [3]wotlk.SpellEffect{{Effect: 6, Aura: 249, MiscValue: 0, MiscValueB: 3}, {Effect: 6, Aura: 249, BasePoints: 1, MiscValue: 1, MiscValueB: 3}}}, {Effects: [3]wotlk.SpellEffect{{Effect: 6, Aura: 249, MiscValue: 0, MiscValueB: 3}}}})
+	if runeTypes != [6]uint8{3, 0, 3, 3, 2, 2} {
+		return fmt.Errorf("passive rune conversions produced rune types %v", runeTypes)
+	}
 	login := uint32(protocol.OpcodeCMSG_PLAYER_LOGIN)
 	verify := uint32(protocol.OpcodeSMSG_LOGIN_VERIFY_WORLD)
 	criteria := uint32(protocol.OpcodeSMSG_CRITERIA_UPDATE)
@@ -83,6 +110,22 @@ func runSelfCheck() error {
 	guildOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOTD)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_EVENT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_BANK_LIST)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_ROSTER)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}}}
 	if err := checkPreMapGuildLoginOrder(guildOrder, 0, 6); err != nil {
 		return fmt.Errorf("valid pre-map guild ordering was rejected: %w", err)
+	}
+	runeOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_SET_FORCED_REACTIONS)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_RESYNC_RUNES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}}}
+	if err := checkOptionalPreMapRuneOrder(runeOrder, 0, 3); err != nil {
+		return fmt.Errorf("valid pre-map rune ordering was rejected: %w", err)
+	}
+	badRuneOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_SET_FORCED_REACTIONS)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_RESYNC_RUNES)}}}
+	if err := checkOptionalPreMapRuneOrder(badRuneOrder, 0, 2); err == nil {
+		return fmt.Errorf("post-map rune resync was not rejected")
+	}
+	validDurationOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_ITEM_TIME_UPDATE)}}}
+	if err := checkPostMapLoginOrder(validDurationOrder, 0, 1); err != nil {
+		return fmt.Errorf("valid post-map duration ordering was rejected: %w", err)
+	}
+	badDurationOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_ITEM_TIME_UPDATE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE)}}}
+	if err := checkPostMapLoginOrder(badDurationOrder, 0, 1); err == nil {
+		return fmt.Errorf("reversed post-map duration ordering was not rejected")
 	}
 	badGuildOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOTD)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_ROSTER)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_EVENT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}}}
 	if err := checkPreMapGuildLoginOrder(badGuildOrder, 0, 5); err == nil {
@@ -182,6 +225,77 @@ func runSelfCheck() error {
 		if err := check.validate(event); err != nil {
 			return fmt.Errorf("%s payload fixture rejected: %w", check.name, err)
 		}
+	}
+	return nil
+}
+
+func checkTransportTrajectory() error {
+	points := []wotlk.TaxiSplinePoint{{MapID: 0, X: 0, Flags: 2}, {MapID: 0, X: 10, Flags: 2, Delay: 2}, {MapID: 0, X: 20, Flags: 2}}
+	path, err := world.NewTransportTrajectory(points, 10, 1)
+	if err != nil || path.Period() < 10000 {
+		return fmt.Errorf("stop-keyed path period was invalid: path=%v error=%v", path, err)
+	}
+	mapID, x, _, _, _ := path.Position(7000)
+	if mapID != 0 || math.Abs(float64(x-10)) > 0.001 {
+		return fmt.Errorf("transport did not hold at stop frame: map=%d x=%f", mapID, x)
+	}
+	_, x, _, _, _ = path.Position(9000)
+	if x <= 10 || x >= 20 {
+		return fmt.Errorf("transport did not depart stop frame: x=%f", x)
+	}
+	_, x, _, _, _ = path.Position(path.Period())
+	if math.Abs(float64(x)) > 0.001 {
+		return fmt.Errorf("transport path did not wrap at its source period: x=%f", x)
+	}
+	return nil
+}
+
+func checkMapEntryEvent() error {
+	runtime := scripting.NewRuntime(scripting.Config{Enabled: true})
+	if err := runtime.LoadString(`RegisterMapEvent(530, 21, function(event, map, player) return event + map:GetMapId() + player:GetInstanceId() end)`); err != nil {
+		return err
+	}
+	mapObject := &scripting.Object{Type: "Map", Fields: map[string]any{"MapId": uint32(530), "InstanceId": uint32(4)}}
+	playerObject := &scripting.Object{Type: "Player", Fields: map[string]any{"MapId": uint32(530), "InstanceId": uint32(7)}}
+	values, err := runtime.TriggerMapEvent(context.Background(), 530, scripting.MapEventOnPlayerEnter, mapObject, playerObject)
+	if err != nil {
+		return err
+	}
+	if len(values) != 1 || fmt.Sprint(values[0]) != "558" {
+		return fmt.Errorf("map entry hook returned %v", values)
+	}
+	return nil
+}
+
+func checkGameDataPathResolution() error {
+	if _, err := os.Stat(filepath.Join("data", "dbc", "Spell.dbc")); err != nil {
+		return nil
+	}
+	workDir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat("bin"); err != nil {
+		return nil
+	}
+	if err := os.Chdir("bin"); err != nil {
+		return err
+	}
+	defer os.Chdir(workDir)
+	c := config.Default()
+	c.DataDir = "bin"
+	c.GameDataDir = "data"
+	c.ResolvePaths()
+	resolved, err := filepath.Abs(c.GameDataDir)
+	if err != nil {
+		return err
+	}
+	expected, err := filepath.Abs(filepath.Join(workDir, "data"))
+	if err != nil {
+		return err
+	}
+	if filepath.Clean(resolved) != filepath.Clean(expected) {
+		return fmt.Errorf("resolved game data %q, expected %q from bin working directory", resolved, expected)
 	}
 	return nil
 }
@@ -776,6 +890,9 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 	if err := checkPostMapLoginOrder(trace, start, playerCreateIndex); err != nil {
 		return err
 	}
+	if err := checkOptionalPreMapRuneOrder(trace, start, playerCreateIndex); err != nil {
+		return err
+	}
 	if err := checkPreMapGuildLoginOrder(trace, start, playerCreateIndex); err != nil {
 		return err
 	}
@@ -793,6 +910,39 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 		if playerCreateIndex >= 0 && index > playerCreateIndex {
 			return fmt.Errorf("SMSG_TRIGGER_CINEMATIC was sent after player create update")
 		}
+	}
+	return nil
+}
+
+func checkOptionalPreMapRuneOrder(trace protocoltrace.Trace, start, playerCreateIndex int) error {
+	end := playerCreateIndex
+	if end < 0 || end >= len(trace.Events) {
+		end = len(trace.Events)
+	}
+	forcedIndex, runeIndex := -1, -1
+	for index := start + 1; index < len(trace.Events); index++ {
+		event := trace.Events[index]
+		if event.Direction == protocoltrace.ClientToServer && (event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) || event.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST)) {
+			break
+		}
+		if event.Direction != protocoltrace.ServerToClient {
+			continue
+		}
+		if event.Opcode == uint32(protocol.OpcodeSMSG_SET_FORCED_REACTIONS) && forcedIndex < 0 {
+			forcedIndex = index
+		}
+		if event.Opcode != uint32(protocol.OpcodeSMSG_RESYNC_RUNES) {
+			continue
+		}
+		if index >= end {
+			return fmt.Errorf("SMSG_RESYNC_RUNES arrived after the player create update")
+		}
+		if runeIndex < 0 {
+			runeIndex = index
+		}
+	}
+	if runeIndex >= 0 && forcedIndex >= 0 && runeIndex < forcedIndex {
+		return fmt.Errorf("SMSG_RESYNC_RUNES arrived before SMSG_SET_FORCED_REACTIONS")
 	}
 	return nil
 }
