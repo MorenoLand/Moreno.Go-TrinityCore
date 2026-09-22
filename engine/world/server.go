@@ -3411,11 +3411,12 @@ func (s *session) handleNameQuery(ctx context.Context, payload []byte) bool {
 		s.debug("name query rejected", "account", s.accountName, "error", err)
 		return false
 	}
+	lowGUID := guid & 0xFFFFFFFF
 	packet := protocol.NewBuffer(32)
 	packet.WritePackedGUID(guid)
 	var name string
 	var race, gender, class int64
-	if s.player != nil && s.player.GUID == guid {
+	if s.player != nil && (s.player.GUID == guid || s.player.GUID == lowGUID) {
 		name = s.player.Name
 		race = int64(s.player.Race)
 		gender = int64(s.player.Gender)
@@ -3427,6 +3428,9 @@ func (s *session) handleNameQuery(ctx context.Context, payload []byte) bool {
 		class = int64(online.player.Class)
 	} else {
 		err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT name, race, gender, class FROM characters WHERE guid = ? AND (deleteInfos_Name IS NULL OR deleteInfos_Name = '')", guid).Scan(&name, &race, &gender, &class)
+		if errors.Is(err, sql.ErrNoRows) && lowGUID != guid {
+			err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT name, race, gender, class FROM characters WHERE guid = ? AND (deleteInfos_Name IS NULL OR deleteInfos_Name = '')", lowGUID).Scan(&name, &race, &gender, &class)
+		}
 		if errors.Is(err, sql.ErrNoRows) {
 			packet.WriteU8(1)
 			return s.write(uint16(protocol.OpcodeSMSG_NAME_QUERY_RESPONSE), packet.Bytes(), true) == nil
@@ -3443,8 +3447,8 @@ func (s *session) handleNameQuery(ctx context.Context, payload []byte) bool {
 	packet.WriteU8(uint8(class))
 	declined := [5]string{}
 	declinedLoaded := false
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil && ((s.player != nil && s.player.GUID == guid) || s.server.findSessionByGUID(guid) != nil) {
-		declinedLoaded = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT genitive, dative, accusative, instrumental, prepositional FROM character_declinedname WHERE guid = ?`, guid).Scan(&declined[0], &declined[1], &declined[2], &declined[3], &declined[4]) == nil
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil && ((s.player != nil && (s.player.GUID == guid || s.player.GUID == lowGUID)) || s.server.findSessionByGUID(guid) != nil || s.server.findSessionByGUID(lowGUID) != nil) {
+		declinedLoaded = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT genitive, dative, accusative, instrumental, prepositional FROM character_declinedname WHERE guid = ?`, lowGUID).Scan(&declined[0], &declined[1], &declined[2], &declined[3], &declined[4]) == nil
 	}
 	if declinedLoaded {
 		packet.WriteU8(1)
