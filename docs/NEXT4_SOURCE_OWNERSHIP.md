@@ -282,3 +282,5 @@ Persisted groups now allocate runtime `HighGuid::Group` lows deterministically f
 Persisted aura loading now honors TrinityCore's `MAX_AURAS` capacity of 255 instead of truncating at 64 (`70fa46c`).
 
 Login inventory create blocks now follow TrinityCore equipment/top-level slot order and recursively emit bag contents by slot (`2dcc610`).
+
+Login questgiver status now includes visible gameobject questgivers, source-style three-dimensional range filtering, and raw creature/gameobject GUIDs (`6597c3d`).
