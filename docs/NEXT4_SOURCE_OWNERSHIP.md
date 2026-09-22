@@ -280,3 +280,5 @@ Persisted aura loading now rejects source-unsavable control/vehicle/bind-sight e
 Persisted groups now allocate runtime `HighGuid::Group` lows deterministically from valid database-group order instead of first-login order (`1dfdeca`).
 
 Persisted aura loading now honors TrinityCore's `MAX_AURAS` capacity of 255 instead of truncating at 64 (`70fa46c`).
+
+Login inventory create blocks now follow TrinityCore equipment/top-level slot order and recursively emit bag contents by slot (`2dcc610`).
