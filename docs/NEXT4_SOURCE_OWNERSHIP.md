@@ -327,6 +327,8 @@ Saved pets now use model combat reach plus `PET_FOLLOW_DIST` and `PET_FOLLOW_ANG
 
 Saved summon pets now serialize the source Mage class and mana power fields for every `SUMMON_PET`, while hunter pets retain Warrior class and focus power, matching the `Pet::LoadPetFromDB` pet-type branches (saved-pet class/power milestone).
 
+Active saved pets with zero persisted health now still reach create, aura, and pet-spell restoration, matching `Player::LoadPet` and `Pet::LoadPetFromDB` dead-hunter handling instead of being silently omitted at login (saved-pet death-state milestone).
+
 The login replay checker now validates the pre-map dungeon-difficulty flags, `PER_CHARACTER_CACHE_MASK` account-data-times framing, and MOTD line framing emitted by `CharacterHandler.cpp` before accepting the player-create boundary (pre-map login payload milestone).
 
 Contact-list and friend-status serialization now preserve TrinityCore's bit-valued AFK/DND/RAF states, emit status fields for online-result packets even when the target has gone offline, and include zone/level/class only for non-offline list entries, matching `PlayerSocial::SendSocialList`, `SocialMgr::GetFriendInfo`, and `SocialMgr::SendFriendStatus` (social login packet milestone).

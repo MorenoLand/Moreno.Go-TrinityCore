@@ -759,7 +759,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		var petName string
 		if err := cdb.QueryRowContext(ctx,
 			"SELECT id, entry, modelid, level, name, curhealth, curmana, COALESCE(PetType, 0), COALESCE(Reactstate, 1) FROM character_pet WHERE owner = ? AND slot = 0",
-			s.playerGUID).Scan(&petID, &entry, &modelID, &level, &petName, &curHealth, &curMana, &petType, &reactState); err == nil && curHealth > 0 {
+			s.playerGUID).Scan(&petID, &entry, &modelID, &level, &petName, &curHealth, &curMana, &petType, &reactState); err == nil {
 			petLevel := uint32(level)
 			if petType == 0 && state.Level > 0 {
 				petLevel = uint32(state.Level)
