@@ -2857,6 +2857,10 @@ func playerFieldPublic(index int) bool {
 	return false
 }
 
+func IsPlayerFieldPublic(index int) bool {
+	return playerFieldPublic(index)
+}
+
 func (s *Server) buildNearbyPlayerUpdates(observer *session) (*protocol.Packet, int) {
 	if s == nil || observer == nil || observer.player == nil || observer.player.GUID == 0 || s.Config.VisibilityDistanceContinents <= 0 {
 		return nil, 0
@@ -3054,6 +3058,22 @@ func (s *Server) buildPlayerValuesUpdate(guid uint64, fields map[int]uint32) (*p
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(block)
 	return updates.BuildPacket(0)
+}
+
+func (s *Server) buildPlayerValuesUpdateForTarget(guid uint64, fields map[int]uint32, targetSelf bool) (*protocol.Packet, error) {
+	if !targetSelf {
+		public := make(map[int]uint32, len(fields))
+		for index, value := range fields {
+			if playerFieldPublic(index) {
+				public[index] = value
+			}
+		}
+		if len(public) == 0 {
+			return nil, nil
+		}
+		fields = public
+	}
+	return s.buildPlayerValuesUpdate(guid, fields)
 }
 
 // sendPlayerQuestLogUpdate pushes one quest log slot (or its clearing) to

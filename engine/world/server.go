@@ -883,9 +883,11 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 		}
 
 		if changed && len(fields) > 0 {
-			if packet, err := s.buildPlayerValuesUpdate(sess.playerGUID, fields); err == nil && packet != nil {
+			if packet, err := s.buildPlayerValuesUpdateForTarget(sess.playerGUID, fields, true); err == nil && packet != nil {
 				_ = sess.write(packet.Opcode, packet.Payload.Bytes(), true)
-				s.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), sess)
+				if publicPacket, publicErr := s.buildPlayerValuesUpdateForTarget(sess.playerGUID, fields, false); publicErr == nil && publicPacket != nil {
+					s.broadcastToNearby(publicPacket.Opcode, publicPacket.Payload.Bytes(), sess)
+				}
 			}
 		}
 	}

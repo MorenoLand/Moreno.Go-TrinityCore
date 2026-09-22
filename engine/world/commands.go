@@ -109,10 +109,14 @@ func (s *session) sendPlayerUpdate() {
 		fields[playerVisibleItemStart+slot*2] = itemID
 		fields[playerVisibleItemStart+slot*2+1] = enchant
 	}
-	packet, err := s.server.buildPlayerValuesUpdate(s.playerGUID, fields)
-	if err == nil && packet != nil {
-		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
-		s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
+	packet, err := s.server.buildPlayerValuesUpdateForTarget(s.playerGUID, fields, true)
+	if err != nil || packet == nil {
+		return
+	}
+	_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+	publicPacket, publicErr := s.server.buildPlayerValuesUpdateForTarget(s.playerGUID, fields, false)
+	if publicErr == nil && publicPacket != nil {
+		s.server.broadcastToNearby(publicPacket.Opcode, publicPacket.Payload.Bytes(), s)
 	}
 }
 

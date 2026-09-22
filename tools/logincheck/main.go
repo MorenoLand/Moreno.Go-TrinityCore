@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/world"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocoltrace"
 )
@@ -94,6 +95,9 @@ func runSelfCheck() error {
 	if err := checkLoginMovementOrder(preTimeSyncMovement, 0); err == nil {
 		return fmt.Errorf("movement packet before time sync was not rejected")
 	}
+	if err := checkPublicPlayerValuesUpdate(); err != nil {
+		return fmt.Errorf("public player values update check failed: %w", err)
+	}
 	for _, compressed := range []bool{false, true} {
 		event, err := loginCreateFixture(compressed)
 		if err != nil {
@@ -155,6 +159,71 @@ func runSelfCheck() error {
 		}
 	}
 	return nil
+}
+
+func checkPublicPlayerValuesUpdate() error {
+	fields := map[int]uint32{24: 100, 67: 12345, 1020: 4}
+	public := make(map[int]uint32, len(fields))
+	for field, value := range fields {
+		if world.IsPlayerFieldPublic(field) {
+			public[field] = value
+		}
+	}
+	if _, ok := public[1020]; ok {
+		return fmt.Errorf("private player field 1020 was retained")
+	}
+	for _, field := range []int{24, 67} {
+		if _, ok := public[field]; !ok {
+			return fmt.Errorf("public player field %d was filtered", field)
+		}
+	}
+	payload := valuesUpdateFixture(0x4000000000000106, public)
+	reader := protocol.NewReader(payload)
+	kind, err := reader.ReadU8()
+	if err != nil || kind != protocol.UpdateValues {
+		return fmt.Errorf("values update kind=%d error=%v", kind, err)
+	}
+	if _, err := reader.ReadPackedGUID(); err != nil {
+		return fmt.Errorf("values update GUID: %w", err)
+	}
+	_, values, err := readUpdateValues(reader)
+	if err != nil {
+		return err
+	}
+	if len(values) != len(public) {
+		return fmt.Errorf("values update field count=%d want=%d", len(values), len(public))
+	}
+	if _, ok := values[1020]; ok {
+		return fmt.Errorf("values update contains private field 1020")
+	}
+	return nil
+}
+
+func valuesUpdateFixture(guid uint64, fields map[int]uint32) []byte {
+	maxField := 0
+	for field := range fields {
+		if field > maxField {
+			maxField = field
+		}
+	}
+	maskBlocks := maxField/32 + 1
+	mask := make([]uint32, maskBlocks)
+	for field := range fields {
+		mask[field/32] |= uint32(1) << uint(field%32)
+	}
+	buf := protocol.NewBuffer(32 + len(fields)*4)
+	buf.WriteU8(protocol.UpdateValues)
+	buf.WritePackedGUID(guid)
+	buf.WriteU8(uint8(maskBlocks))
+	for _, block := range mask {
+		buf.WriteU32(block)
+	}
+	for field := 0; field <= maxField; field++ {
+		if mask[field/32]&(uint32(1)<<uint(field%32)) != 0 {
+			buf.WriteU32(fields[field])
+		}
+	}
+	return buf.Bytes()
 }
 
 func loginVerifyFixture() []byte {

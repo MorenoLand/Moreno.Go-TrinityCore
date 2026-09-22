@@ -388,3 +388,5 @@ Initial nearby-player visibility and reciprocal player-create broadcasts now app
 The same login visibility paths now apply the pinned stealth detection calculation, including GM/group/track-stealth/contact/arc/rating behavior from `WorldObject::CanDetectStealthOf` (stealth visibility correction).
 
 Player visibility now also compares each target invisibility aura type/value against the observer's matching detection auras, with GM override, matching `WorldObject::CanDetectInvisibilityOf` (invisibility visibility correction).
+
+Live player value updates now build separate self and nearby-client masks, filtering the nearby packet through the source `UF_FLAG_PUBLIC` field set instead of rebroadcasting owner/private fields. The regeneration path uses the same split, and `tools/logincheck --self-check` validates public health/display fields while rejecting a private talent field, matching `Object::_BuildValuesUpdate` and `UnitUpdateFieldFlags.cpp` (public live-update mask correction).
