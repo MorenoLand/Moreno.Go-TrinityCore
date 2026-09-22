@@ -272,3 +272,5 @@ The login replay verifier now parses `SMSG_QUEST_GIVER_QUEST_DETAILS` counts, re
 Persisted aura loading now rejects zero and out-of-range effect masks before aura construction, matching `_LoadAuras` and `Aura::TryCreate` input requirements (`8e97006`).
 
 Persisted aura loading now skips passive and channeled spells, matching `Aura::CanBeSaved` (`88c5e78`).
+
+Persisted aura loading now rejects source-unsavable control/vehicle/bind-sight effects, item-permanent auras, and the pinned temporary aura blacklist (`ab58402`).
