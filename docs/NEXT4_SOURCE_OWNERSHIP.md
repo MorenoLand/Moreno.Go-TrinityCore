@@ -300,3 +300,5 @@ The login replay harness now parses and validates `SMSG_EQUIPMENT_SET_LIST` fram
 The login replay harness now enforces source post-map ordering across world states, time sync, login effect, aura/duration updates, quest/taxi statuses, raid difficulty, quest sharing, group state, and pet state (`931317f`).
 
 Login raid-difficulty comparison now stores the current map difficulty, including zero outside raids, before deciding whether to emit `MSG_SET_RAID_DIFFICULTY` (`8c208e0`).
+
+Login corpse restoration now clears stale resurrectable corpse rows for characters with saved health instead of incorrectly setting ghost/repop state (`3658fcd`).
