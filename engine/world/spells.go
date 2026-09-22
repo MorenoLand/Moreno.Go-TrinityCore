@@ -31,6 +31,9 @@ const (
 	spellFailedSilenced                  uint8 = 104 // SPELL_FAILED_SILENCED (SharedDefines.h:1086)
 	spellFailedCasterDead                uint8 = 23  // SPELL_FAILED_CASTER_DEAD (SharedDefines.h:1003)
 	spellFailedNotFishable               uint8 = 58  // SPELL_FAILED_NOT_FISHABLE (SharedDefines.h:1040)
+	spellFailedCharmed                   uint8 = 24  // SPELL_FAILED_CHARMED (SharedDefines.h:1006)
+	spellFailedConfused                  uint8 = 26  // SPELL_FAILED_CONFUSED (SharedDefines.h:1008)
+	spellFailedFleeing                   uint8 = 34  // SPELL_FAILED_FLEEING (SharedDefines.h:1016)
 
 	itemClassWeapon = 2
 	itemClassArmor  = 4
@@ -250,6 +253,13 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	if s.player.UnitFlags&(unitFlagConfused|unitFlagFleeing) != 0 || s.hasAuraType(spellAuraCharm) {
+		failure := spellFailedCharmed
+		if s.player.UnitFlags&unitFlagConfused != 0 {
+			failure = spellFailedConfused
+		} else if s.player.UnitFlags&unitFlagFleeing != 0 {
+			failure = spellFailedFleeing
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
 		return true
 	}
 	clientCastFlags, err := reader.ReadU8()
