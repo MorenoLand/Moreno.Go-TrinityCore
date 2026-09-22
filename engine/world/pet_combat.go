@@ -478,6 +478,18 @@ func (s *session) executePetSpell(ctx context.Context, motion *creatureMotion, s
 				handledEffect = true
 			}
 		}
+		if effect.Effect == 6 || effect.Effect == 27 || effect.Effect == 35 {
+			durationMs := uint32(0)
+			if spell.DurationIndex > 0 {
+				if duration, found, err := s.server.Data.SpellDuration(spell.DurationIndex, casterLevel(motion)); err == nil && found && duration > 0 {
+					durationMs = uint32(duration)
+				}
+			}
+			amount := uint32(effect.BasePoints + 1)
+			if s.applyPetAura(ctx, motion, spell, effect, targetGUID, durationMs, amount) {
+				handledEffect = true
+			}
+		}
 	}
 	if !handledEffect {
 		now := time.Now()
@@ -498,6 +510,98 @@ func (s *session) executePetSpell(ctx context.Context, motion *creatureMotion, s
 	motion.SpellCooldowns[spell.ID] = now
 	s.server.motionMu.Unlock()
 	motion.LastSpell = now
+	return true
+}
+
+func casterLevel(motion *creatureMotion) uint32 {
+	if motion == nil || motion.Level == 0 {
+		return 1
+	}
+	return motion.Level
+}
+
+func (s *session) applyPetAura(ctx context.Context, caster *creatureMotion, spell wotlk.Spell, effect wotlk.SpellEffect, targetGUID uint64, durationMs, amount uint32) bool {
+	if s == nil || s.server == nil || caster == nil || targetGUID == 0 {
+		return false
+	}
+	positive := !isHarmfulAura(effect.Aura)
+	periodMs := effect.AuraPeriod
+	if periodMs == 0 && (effect.Aura == 3 || effect.Aura == 8 || effect.Aura == 23 || effect.Aura == 24 || effect.Aura == 89) {
+		periodMs = 3000
+	}
+	if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+		targetSess.castMu.Lock()
+		if targetSess.activeAuras == nil {
+			targetSess.activeAuras = make(map[uint32]*activeAura)
+		}
+		if targetSess.auras == nil {
+			targetSess.auras = make(map[uint32]struct{})
+		}
+		if targetSess.auraSlots == nil {
+			targetSess.auraSlots = make(map[uint32]uint8)
+		}
+		if previous := targetSess.activeAuras[spell.ID]; previous != nil {
+			previous.Stopped = true
+			if previous.Timer != nil {
+				previous.Timer.Stop()
+			}
+			if previous.TickTimer != nil {
+				previous.TickTimer.Stop()
+			}
+		}
+		slot, found := targetSess.auraSlots[spell.ID]
+		if !found {
+			slot = uint8(len(targetSess.auraSlots))
+			targetSess.auraSlots[spell.ID] = slot
+		}
+		aura := &activeAura{SpellID: spell.ID, DispelType: spell.DispelType, Mechanic: spell.Mechanic, AuraType: effect.Aura, EffectMask: spellEffectMask(spell, effect), CasterGUID: caster.GUID, TargetGUID: targetGUID, SchoolMask: spell.SchoolMask, MiscValue: effect.MiscValue, Amount: amount, DurationMs: durationMs, PeriodMs: periodMs, RemainingMs: durationMs, Slot: slot, Positive: positive, CasterLevel: uint8(casterLevel(caster)), AuraInterruptFlags: spell.AuraInterruptFlags, TriggerSpell: effect.TriggerSpell, StackAmount: spell.StackAmount, HideDuration: spell.AttributesEx5&spellAttr5HideDuration != 0, StackCount: 1}
+		targetSess.activeAuras[spell.ID] = aura
+		targetSess.auras[spell.ID] = struct{}{}
+		targetSess.castMu.Unlock()
+		wireMax, wireDuration := auraWireDurations(spell, durationMs, durationMs)
+		packet := protocol.BuildAuraUpdateWithStackEffect(targetGUID, caster.GUID, slot, spell.ID, false, positive, wireMax, wireDuration, uint8(casterLevel(caster)), 1, aura.EffectMask)
+		_ = targetSess.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, true)
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, targetSess)
+		if periodMs > 0 {
+			targetSess.schedulePlayerPeriodicTick(aura, periodMs)
+		}
+		if durationMs > 0 && durationMs < 18000000 {
+			aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() { targetSess.expirePlayerAura(spell.ID) })
+		}
+		return true
+	}
+	target, ok := s.getCombatTarget(ctx, targetGUID)
+	if !ok || target.Health == 0 {
+		return false
+	}
+	s.server.auraMu.Lock()
+	if s.server.activeCreatureAuras == nil {
+		s.server.activeCreatureAuras = make(map[uint64]map[uint32]*activeAura)
+	}
+	if s.server.activeCreatureAuras[targetGUID] == nil {
+		s.server.activeCreatureAuras[targetGUID] = make(map[uint32]*activeAura)
+	}
+	if s.server.creatureAuras == nil {
+		s.server.creatureAuras = make(map[uint64]map[uint32]struct{})
+	}
+	if s.server.creatureAuras[targetGUID] == nil {
+		s.server.creatureAuras[targetGUID] = make(map[uint32]struct{})
+	}
+	slot := uint8(len(s.server.activeCreatureAuras[targetGUID]))
+	aura := &activeAura{SpellID: spell.ID, DispelType: spell.DispelType, Mechanic: spell.Mechanic, AuraType: effect.Aura, EffectMask: spellEffectMask(spell, effect), CasterGUID: caster.GUID, TargetGUID: targetGUID, SchoolMask: spell.SchoolMask, MiscValue: effect.MiscValue, Amount: amount, DurationMs: durationMs, PeriodMs: periodMs, RemainingMs: durationMs, Slot: slot, Positive: positive, CasterLevel: uint8(casterLevel(caster)), AuraInterruptFlags: spell.AuraInterruptFlags, TriggerSpell: effect.TriggerSpell, StackAmount: spell.StackAmount, HideDuration: spell.AttributesEx5&spellAttr5HideDuration != 0, StackCount: 1}
+	s.server.activeCreatureAuras[targetGUID][spell.ID] = aura
+	s.server.creatureAuras[targetGUID][spell.ID] = struct{}{}
+	s.server.auraMu.Unlock()
+	wireMax, wireDuration := auraWireDurations(spell, durationMs, durationMs)
+	packet := protocol.BuildAuraUpdateWithStackEffect(targetGUID, caster.GUID, slot, spell.ID, false, positive, wireMax, wireDuration, uint8(casterLevel(caster)), 1, aura.EffectMask)
+	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, true)
+	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, s)
+	if periodMs > 0 {
+		s.scheduleCreaturePeriodicTick(aura, periodMs)
+	}
+	if durationMs > 0 && durationMs < 18000000 {
+		aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() { s.expireCreatureAura(targetGUID, spell.ID, slot) })
+	}
 	return true
 }
 
