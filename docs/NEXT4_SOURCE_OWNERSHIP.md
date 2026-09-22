@@ -384,3 +384,5 @@ Persisted stun auras now also set `UNIT_FLAG_STUNNED` before the self-player cre
 Persisted and runtime fake-inebriation aura amounts now populate and maintain the public `PLAYER_FAKE_INEBRIATION` field separately from raw drunkenness, matching `AuraEffect::HandleAuraModFakeInebriation` and `Player::SetDrunkValue` (fake-inebriation update-field correction).
 
 Initial nearby-player visibility and reciprocal player-create broadcasts now apply GM-invisibility, ghost, faction, and group visibility checks, matching `WorldObject::CanSeeOrDetect` and `Player::UpdateVisibilityForPlayer` (player visibility correction).
+
+The same login visibility paths now apply the pinned stealth detection calculation, including GM/group/track-stealth/contact/arc/rating behavior from `WorldObject::CanDetectStealthOf` (stealth visibility correction).
