@@ -268,3 +268,5 @@ Runtime `.gm visible` transitions now restore GM mode and refresh/destroy nearby
 Character login now captures the persisted first-login flag and fires Eluna `PLAYER_EVENT_ON_FIRST_LOGIN` (event 30) before the normal login event, matching `ScriptMgr::OnPlayerLogin` (`435f5b9`).
 
 The login replay verifier now parses `SMSG_QUEST_GIVER_QUEST_DETAILS` counts, reward fields, faction arrays, and emote framing for quest-sharing replay (`b077406`).
+
+Persisted aura loading now rejects zero and out-of-range effect masks before aura construction, matching `_LoadAuras` and `Aura::TryCreate` input requirements (`8e97006`).
