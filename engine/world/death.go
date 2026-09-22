@@ -160,6 +160,10 @@ func (s *session) sendCorpseReclaimDelay(delay uint32) {
 	_ = s.write(uint16(protocol.OpcodeSMSG_CORPSE_RECLAIM_DELAY), packet.Bytes(), true)
 }
 
+func CorpseReleaseTimerRequired(instanceType uint32) bool {
+	return instanceType == 0
+}
+
 // killPlayer mirrors Player::KillPlayer for the lethal-damage call site: root
 // the corpse in place, keep health at zero, raise the release timer flag on
 // non-instance maps (the Go server has no instance maps), start the 6 minute

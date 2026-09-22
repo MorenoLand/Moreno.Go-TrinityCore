@@ -1840,7 +1840,6 @@ func restoreLoadedDeathState(state *playerState) {
 	}
 	state.repopOnLogin = true
 	state.PlayerFlags |= playerFlagGhost
-	state.PlayerFieldBytes |= playerFieldByteReleaseTimer
 }
 
 func (s *session) restoreLoadedCorpseState(ctx context.Context, state *playerState) {
@@ -1851,13 +1850,20 @@ func (s *session) restoreLoadedCorpseState(ctx context.Context, state *playerSta
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM corpse WHERE guid = ? AND corpseType <> ?", state.GUID, corpseTypeBones)
 		return
 	}
-	var corpseType int64
-	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT corpseType FROM corpse WHERE guid = ? AND corpseType <> ? LIMIT 1", state.GUID, corpseTypeBones).Scan(&corpseType); err != nil {
+	var corpseMap, corpseType int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT mapId, corpseType FROM corpse WHERE guid = ? AND corpseType <> ? LIMIT 1", state.GUID, corpseTypeBones).Scan(&corpseMap, &corpseType); err != nil {
 		return
 	}
 	state.PlayerFlags |= playerFlagGhost
 	state.repopOnLogin = true
-	state.PlayerFieldBytes |= playerFieldByteReleaseTimer
+	state.PlayerFieldBytes &^= playerFieldByteReleaseTimer
+	if s.server.Data == nil {
+		state.PlayerFieldBytes |= playerFieldByteReleaseTimer
+		return
+	}
+	if mapInfo, found, err := s.server.Data.Map(uint32(corpseMap)); err == nil && found && CorpseReleaseTimerRequired(mapInfo.InstanceType) {
+		state.PlayerFieldBytes |= playerFieldByteReleaseTimer
+	}
 }
 
 func (s *session) loadPlayerReputations(ctx context.Context, state *playerState) error {

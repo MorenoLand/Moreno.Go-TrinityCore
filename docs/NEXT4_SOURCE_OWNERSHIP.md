@@ -400,3 +400,5 @@ Live player values now include `PLAYER_GUILDID` and `PLAYER_GUILDRANK`, allowing
 New character creation now persists watched faction `-1` and drunkenness `0`, matching `Player::Create` initialization; `tools/logincheck --self-check` guards both defaults (character-creation login-state correction).
 
 Sanctuary area transitions now stop active player-vs-player attack state and clear the combat update fields for both participants, while creature combat remains intact, matching `Player::UpdateArea` and `CombatStopWithPets` (sanctuary PvP transition correction).
+
+Loaded corpse restoration now applies `PLAYER_FIELD_BYTE_RELEASE_TIMER` only for non-instance corpse maps and leaves it clear for dungeon/raid/battleground maps, matching `Player::LoadCorpse`; the logincheck self-check covers the instance-type boundary (corpse login-state correction).

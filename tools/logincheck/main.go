@@ -104,6 +104,9 @@ func runSelfCheck() error {
 	if err := checkCharacterCreationDefaults(); err != nil {
 		return fmt.Errorf("character creation default check failed: %w", err)
 	}
+	if err := checkCorpseReleaseTimerBoundary(); err != nil {
+		return fmt.Errorf("corpse release-timer check failed: %w", err)
+	}
 	for _, compressed := range []bool{false, true} {
 		event, err := loginCreateFixture(compressed)
 		if err != nil {
@@ -163,6 +166,16 @@ func runSelfCheck() error {
 		if err := check.validate(event); err != nil {
 			return fmt.Errorf("%s payload fixture rejected: %w", check.name, err)
 		}
+	}
+	return nil
+}
+
+func checkCorpseReleaseTimerBoundary() error {
+	if !world.CorpseReleaseTimerRequired(0) {
+		return fmt.Errorf("continent corpse did not require release timer")
+	}
+	if world.CorpseReleaseTimerRequired(1) || world.CorpseReleaseTimerRequired(2) || world.CorpseReleaseTimerRequired(3) {
+		return fmt.Errorf("instance corpse incorrectly required release timer")
 	}
 	return nil
 }
