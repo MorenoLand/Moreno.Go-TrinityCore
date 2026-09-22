@@ -723,6 +723,16 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.sendLoginRaidDifficulty(ctx, state); err != nil {
 		return false
 	}
+	if s.sharingQuestID != 0 {
+		if quest, questErr := s.loadQuestDetailData(ctx, s.sharingQuestID); questErr == nil {
+			if err := s.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), buildQuestGiverDetails(quest, s.playerGUID, 0), true); err != nil {
+				return false
+			}
+		} else {
+			s.sharingQuestID = 0
+			s.sharingQuestSender = 0
+		}
+	}
 	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHAR_ONLINE", guid); err != nil {
 		return false
 	}
