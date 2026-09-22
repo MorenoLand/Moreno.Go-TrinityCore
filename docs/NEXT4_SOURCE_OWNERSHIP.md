@@ -353,4 +353,6 @@ Initial spell cooldown loading now retains rows with an expired spell timer but 
 
 The login replay checker now validates known and unknown `SMSG_NAME_QUERY_RESPONSE` forms, including packed GUID, character fields, and declined-name framing (player-name packet evidence milestone).
 
+The login replay checker now validates the nine-byte `SMSG_PLAYED_TIME` total/level/trigger response framing (played-time packet evidence milestone).
+
 The login replay checker now validates the `SMSG_SET_FACTION_STANDING` float/flag/count/standing-entry framing used by the start-reputation transition (start-reputation packet evidence milestone).

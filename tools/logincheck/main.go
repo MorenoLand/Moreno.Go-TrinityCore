@@ -115,6 +115,7 @@ func runSelfCheck() error {
 		{"faction-standing", protocol.OpcodeSMSG_SET_FACTION_STANDING, factionStandingFixture(), requireFactionStanding},
 		{"name-query-known", protocol.OpcodeSMSG_NAME_QUERY_RESPONSE, nameQueryKnownFixture(), requireNameQueryResponse},
 		{"name-query-unknown", protocol.OpcodeSMSG_NAME_QUERY_RESPONSE, nameQueryUnknownFixture(), requireNameQueryResponse},
+		{"played-time", protocol.OpcodeSMSG_PLAYED_TIME, playedTimeFixture(), requirePlayedTime},
 		{"contact-list", protocol.OpcodeSMSG_CONTACT_LIST, []byte{7, 0, 0, 0, 0, 0, 0, 0}, requireContactList},
 		{"guild-event", protocol.OpcodeSMSG_GUILD_EVENT, []byte{2, 0}, requireGuildEvent},
 		{"guild-bank-list", protocol.OpcodeSMSG_GUILD_BANK_LIST, []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, requireGuildBankList},
@@ -240,6 +241,14 @@ func nameQueryKnownFixture() []byte {
 func nameQueryUnknownFixture() []byte {
 	buf := protocol.NewBuffer(10)
 	buf.WritePackedGUID(999999)
+	buf.WriteU8(1)
+	return buf.Bytes()
+}
+
+func playedTimeFixture() []byte {
+	buf := protocol.NewBuffer(9)
+	buf.WriteU32(3600)
+	buf.WriteU32(120)
 	buf.WriteU8(1)
 	return buf.Bytes()
 }
@@ -497,6 +506,8 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 			validate = requireFactionStanding
 		case "SMSG_NAME_QUERY_RESPONSE":
 			validate = requireNameQueryResponse
+		case "SMSG_PLAYED_TIME":
+			validate = requirePlayedTime
 		case "SMSG_LEARNED_DANCE_MOVES":
 			validate = func(event protocoltrace.Event) error { return requirePayloadLength(event, 8) }
 		case "SMSG_FEATURE_SYSTEM_STATUS":
@@ -648,6 +659,8 @@ func checkOptionalLoginPayloads(trace protocoltrace.Trace, start int) error {
 			validate = requireFactionStanding
 		case uint32(protocol.OpcodeSMSG_NAME_QUERY_RESPONSE):
 			validate = requireNameQueryResponse
+		case uint32(protocol.OpcodeSMSG_PLAYED_TIME):
+			validate = requirePlayedTime
 		}
 		if validate != nil {
 			if err := validate(event); err != nil {
@@ -1553,6 +1566,27 @@ func requireActionButtons(event protocoltrace.Event) error {
 	}
 	if len(payload) != 1+144*4 || state != 1 {
 		return fmt.Errorf("action-button payload length/state=%d/%d, want 577/1", len(payload), state)
+	}
+	return nil
+}
+
+func requirePlayedTime(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	if len(payload) != 9 {
+		return fmt.Errorf("played-time payload length=%d, want 9", len(payload))
+	}
+	reader := protocol.NewReader(payload)
+	if _, err := reader.ReadU32(); err != nil {
+		return fmt.Errorf("played-time total is truncated: %w", err)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		return fmt.Errorf("played-time level is truncated: %w", err)
+	}
+	if _, err := reader.ReadU8(); err != nil {
+		return fmt.Errorf("played-time trigger is truncated: %w", err)
 	}
 	return nil
 }
