@@ -276,3 +276,5 @@ Persisted aura loading now skips passive and channeled spells, matching `Aura::C
 Persisted aura loading now rejects source-unsavable control/vehicle/bind-sight effects, item-permanent auras, and the pinned temporary aura blacklist (`ab58402`).
 
 `ChrRaces.dbc` resurrection-sickness spell IDs are now loaded and used for offline aura decay instead of a fixed spell ID (`1cbd245`).
+
+Persisted groups now allocate runtime `HighGuid::Group` lows deterministically from valid database-group order instead of first-login order (`1dfdeca`).
