@@ -37,14 +37,15 @@ const MountedFlightSpeedAura uint32 = 207
 const MapFlagDynamicDifficulty uint32 = 0x100
 
 type Race struct {
-	ID                uint32
-	Flags             uint32
-	FactionID         uint32
-	MaleDisplayID     uint32
-	FemaleDisplayID   uint32
-	CinematicSequence uint32
-	Alliance          uint32
-	RequiredExpansion uint32
+	ID                 uint32
+	Flags              uint32
+	FactionID          uint32
+	MaleDisplayID      uint32
+	FemaleDisplayID    uint32
+	ResSicknessSpellID uint32
+	CinematicSequence  uint32
+	Alliance           uint32
+	RequiredExpansion  uint32
 }
 
 type Class struct {
@@ -311,6 +312,7 @@ func (s *Store) Race(id uint32) (Race, bool, error) {
 		return Race{}, false, err
 	}
 	cinematic, _ := record.Uint32(12)
+	resSickness, _ := record.Uint32(9)
 	alliance, err := record.Uint32(13)
 	if err != nil {
 		return Race{}, false, err
@@ -319,7 +321,7 @@ func (s *Store) Race(id uint32) (Race, bool, error) {
 	if err != nil {
 		return Race{}, false, err
 	}
-	return Race{ID: id, Flags: flags, FactionID: factionID, MaleDisplayID: maleDisplayID, FemaleDisplayID: femaleDisplayID, CinematicSequence: cinematic, Alliance: alliance, RequiredExpansion: requiredExpansion}, true, nil
+	return Race{ID: id, Flags: flags, FactionID: factionID, MaleDisplayID: maleDisplayID, FemaleDisplayID: femaleDisplayID, ResSicknessSpellID: resSickness, CinematicSequence: cinematic, Alliance: alliance, RequiredExpansion: requiredExpansion}, true, nil
 }
 
 func (s *Store) ValidateAppearance(race, class, gender, hairID, hairColor, faceID, facialHair, skinColor uint8) (bool, bool, error) {
