@@ -349,4 +349,6 @@ Login now starts an in-game clock after account-online state, advances total/lev
 
 Name-query handling now preserves the requested packed GUID while resolving player cache/database and declined-name records through the source `HighGuid::Player` low counter, matching `WorldSession::HandleNameQueryOpcode` and `SendNameQueryOpcode` (player-name login visibility milestone).
 
+The login replay checker now validates known and unknown `SMSG_NAME_QUERY_RESPONSE` forms, including packed GUID, character fields, and declined-name framing (player-name packet evidence milestone).
+
 The login replay checker now validates the `SMSG_SET_FACTION_STANDING` float/flag/count/standing-entry framing used by the start-reputation transition (start-reputation packet evidence milestone).

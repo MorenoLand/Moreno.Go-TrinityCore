@@ -113,6 +113,8 @@ func runSelfCheck() error {
 		{"action-buttons", protocol.OpcodeSMSG_ACTION_BUTTONS, actionButtonsFixture(), requireActionButtons},
 		{"factions", protocol.OpcodeSMSG_INITIALIZE_FACTIONS, initialFactionsFixture(), requireInitialFactions},
 		{"faction-standing", protocol.OpcodeSMSG_SET_FACTION_STANDING, factionStandingFixture(), requireFactionStanding},
+		{"name-query-known", protocol.OpcodeSMSG_NAME_QUERY_RESPONSE, nameQueryKnownFixture(), requireNameQueryResponse},
+		{"name-query-unknown", protocol.OpcodeSMSG_NAME_QUERY_RESPONSE, nameQueryUnknownFixture(), requireNameQueryResponse},
 		{"contact-list", protocol.OpcodeSMSG_CONTACT_LIST, []byte{7, 0, 0, 0, 0, 0, 0, 0}, requireContactList},
 		{"guild-event", protocol.OpcodeSMSG_GUILD_EVENT, []byte{2, 0}, requireGuildEvent},
 		{"guild-bank-list", protocol.OpcodeSMSG_GUILD_BANK_LIST, []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, requireGuildBankList},
@@ -219,6 +221,26 @@ func factionStandingFixture() []byte {
 	buf.WriteU32(1)
 	buf.WriteU32(72)
 	buf.WriteU32(42999)
+	return buf.Bytes()
+}
+
+func nameQueryKnownFixture() []byte {
+	buf := protocol.NewBuffer(32)
+	buf.WritePackedGUID(26)
+	buf.WriteU8(0)
+	buf.WriteCString("Denveous")
+	buf.WriteU8(0)
+	buf.WriteU8(4)
+	buf.WriteU8(1)
+	buf.WriteU8(2)
+	buf.WriteU8(0)
+	return buf.Bytes()
+}
+
+func nameQueryUnknownFixture() []byte {
+	buf := protocol.NewBuffer(10)
+	buf.WritePackedGUID(999999)
+	buf.WriteU8(1)
 	return buf.Bytes()
 }
 
@@ -473,6 +495,8 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 			validate = requireAchievementData
 		case "SMSG_SET_FACTION_STANDING":
 			validate = requireFactionStanding
+		case "SMSG_NAME_QUERY_RESPONSE":
+			validate = requireNameQueryResponse
 		case "SMSG_LEARNED_DANCE_MOVES":
 			validate = func(event protocoltrace.Event) error { return requirePayloadLength(event, 8) }
 		case "SMSG_FEATURE_SYSTEM_STATUS":
@@ -622,6 +646,8 @@ func checkOptionalLoginPayloads(trace protocoltrace.Trace, start int) error {
 			validate = requireGuildRoster
 		case uint32(protocol.OpcodeSMSG_SET_FACTION_STANDING):
 			validate = requireFactionStanding
+		case uint32(protocol.OpcodeSMSG_NAME_QUERY_RESPONSE):
+			validate = requireNameQueryResponse
 		}
 		if validate != nil {
 			if err := validate(event); err != nil {
@@ -1527,6 +1553,56 @@ func requireActionButtons(event protocoltrace.Event) error {
 	}
 	if len(payload) != 1+144*4 || state != 1 {
 		return fmt.Errorf("action-button payload length/state=%d/%d, want 577/1", len(payload), state)
+	}
+	return nil
+}
+
+func requireNameQueryResponse(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	if _, err := reader.ReadPackedGUID(); err != nil {
+		return fmt.Errorf("name-query GUID is truncated: %w", err)
+	}
+	known, err := reader.ReadU8()
+	if err != nil {
+		return fmt.Errorf("name-query result is truncated: %w", err)
+	}
+	if known != 0 {
+		if known != 1 || reader.Remaining() != 0 {
+			return fmt.Errorf("invalid unknown name-query response bytes=%d", reader.Remaining())
+		}
+		return nil
+	}
+	if _, err := reader.ReadCString(); err != nil {
+		return fmt.Errorf("name-query name is truncated: %w", err)
+	}
+	if _, err := reader.ReadU8(); err != nil {
+		return fmt.Errorf("name-query realm field is truncated: %w", err)
+	}
+	for field := 0; field < 3; field++ {
+		if _, err := reader.ReadU8(); err != nil {
+			return fmt.Errorf("name-query character field %d is truncated: %w", field, err)
+		}
+	}
+	declined, err := reader.ReadU8()
+	if err != nil {
+		return fmt.Errorf("name-query declined flag is truncated: %w", err)
+	}
+	if declined > 1 {
+		return fmt.Errorf("invalid name-query declined flag=%d", declined)
+	}
+	if declined != 0 {
+		for index := 0; index < 5; index++ {
+			if _, err := reader.ReadCString(); err != nil {
+				return fmt.Errorf("name-query declined name %d is truncated: %w", index, err)
+			}
+		}
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected name-query bytes=%d", reader.Remaining())
 	}
 	return nil
 }
