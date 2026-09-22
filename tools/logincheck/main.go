@@ -65,6 +65,9 @@ func main() {
 }
 
 func runSelfCheck() error {
+	if world.PlayerCreateUpdateFlags(false, false) != 0x0060 || world.PlayerCreateUpdateFlags(true, false) != 0x0061 || world.PlayerCreateUpdateFlags(false, true) != 0x0064 {
+		return fmt.Errorf("player create update flags do not match victim/self source flags")
+	}
 	if err := checkMapEntryEvent(); err != nil {
 		return fmt.Errorf("map entry hook check failed: %w", err)
 	}
@@ -395,6 +398,9 @@ func checkReputationFlags() error {
 }
 
 func checkPublicPlayerValuesUpdate() error {
+	if !world.IsPlayerFieldVisibleToRecipient(158, false, true) || world.IsPlayerFieldVisibleToRecipient(158, false, false) || !world.IsPlayerFieldVisibleToRecipient(158, true, false) {
+		return fmt.Errorf("party quest field 158 recipient visibility is incorrect")
+	}
 	fields := map[int]uint32{18: 0x12345678, 19: 0x40000000, 24: 100, 67: 12345, 74: 0x00020000, 1197: 0x00000002, 1229: 0x60000000, 151: 42, 152: 3, 1020: 4}
 	public := make(map[int]uint32, len(fields))
 	for field, value := range fields {

@@ -1,5 +1,7 @@
 # Next4 source ownership and acceptance matrix
 
+The 2026-09-22 follow-up restores the source `UPDATEFLAG_HAS_TARGET` create payload for players with a victim and recipient-specific incremental `UF_FLAG_PARTY_MEMBER` quest IDs, including same-instance visibility filtering for quest, emote, and stat updates. Forward swim rates now apply the same source minimum/slow modifiers as the other serialized movement modes. Login self-checks guard update-flag combinations, party-only quest-field visibility, and movement modifier arithmetic. Item 4 remains open for the remaining source-owner comparison and compatible-client acceptance.
+
 This matrix is based on the pinned TrinityCore checkout at `dcdbc0c5d88eb96f412f69c34bd5b9de2eed5df6`, the current Go tree, and executable evidence paths. Historical local test evidence was removed from the public tree by policy; source compilation or a self-check is not a behavioral acceptance claim.
 
 | No. | Pinned reference owner | Go owner | Current evidence | Acceptance |

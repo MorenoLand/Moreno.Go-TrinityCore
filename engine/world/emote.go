@@ -17,7 +17,7 @@ func (s *session) handleStandStateChange(ctx context.Context, payload []byte) bo
 		return true
 	}
 	s.player.StandState = uint8(state)
-	s.server.broadcastPlayerValuesUpdate(s.player.Map, map[int]uint32{unitFieldBytes1: state})
+	s.server.broadcastPlayerValuesUpdateFromSession(s, map[int]uint32{unitFieldBytes1: state})
 	s.debug("stand state changed", "account", s.accountName, "state", state)
 	return true
 }
@@ -122,18 +122,4 @@ func (s *session) handleTextEmote(ctx context.Context, payload []byte) bool {
 		}
 	}
 	return true
-}
-
-func (s *Server) broadcastPlayerValuesUpdate(mapID uint32, fields map[int]uint32) {
-	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
-	for member := range s.sessions {
-		if !member.playerLoaded || member.player == nil || member.player.Map != mapID {
-			continue
-		}
-		guidPacket, buildErr := s.buildPlayerValuesUpdate(member.playerGUID, fields)
-		if buildErr == nil && guidPacket != nil {
-			_ = member.write(guidPacket.Opcode, guidPacket.Payload.Bytes(), true)
-		}
-	}
 }

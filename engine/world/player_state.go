@@ -2840,10 +2840,7 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	block.WriteU8(protocol.UpdateCreateObject2)
 	block.WritePackedGUID(state.GUID)
 	block.WriteU8(4)
-	flags := uint16(0x0060)
-	if targetSelf {
-		flags |= 0x0001
-	}
+	flags := PlayerCreateUpdateFlags(targetSelf, runtime != nil && runtime.attackTarget != 0)
 	block.WriteU16(flags)
 	writeRawMovementInfo(block, runtime.movementInfoForCreate(state))
 	speeds := [...]float32{2.5, 7, 4.5, 4.722222, 2.5, 7, 4.5, 3.141594, 3.14}
@@ -2852,6 +2849,9 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	}
 	for _, speed := range speeds {
 		block.WriteF32(speed)
+	}
+	if flags&0x0004 != 0 {
+		block.WritePackedGUID(runtime.attackTarget)
 	}
 	block.WriteU8(uint8(mask.BlockCount()))
 	mask.AppendTo(block)
@@ -2901,8 +2901,23 @@ func playerFieldVisibleToRecipient(index int, targetSelf, partyMember bool) bool
 	return targetSelf || playerFieldPublic(index) || partyMember && playerFieldPartyMember(index)
 }
 
+func IsPlayerFieldVisibleToRecipient(index int, targetSelf, partyMember bool) bool {
+	return playerFieldVisibleToRecipient(index, targetSelf, partyMember)
+}
+
 func IsPlayerFieldPublic(index int) bool {
 	return playerFieldPublic(index)
+}
+
+func PlayerCreateUpdateFlags(targetSelf, hasVictim bool) uint16 {
+	flags := uint16(0x0060)
+	if targetSelf {
+		flags |= 0x0001
+	}
+	if hasVictim {
+		flags |= 0x0004
+	}
+	return flags
 }
 
 func (s *Server) buildNearbyPlayerUpdates(observer *session) (*protocol.Packet, int) {
@@ -3140,10 +3155,14 @@ func (s *Server) buildPlayerValuesUpdate(guid uint64, fields map[int]uint32) (*p
 }
 
 func (s *Server) buildPlayerValuesUpdateForTarget(guid uint64, fields map[int]uint32, targetSelf bool) (*protocol.Packet, error) {
+	return s.buildPlayerValuesUpdateForRecipient(guid, fields, targetSelf, false)
+}
+
+func (s *Server) buildPlayerValuesUpdateForRecipient(guid uint64, fields map[int]uint32, targetSelf, partyMember bool) (*protocol.Packet, error) {
 	if !targetSelf {
 		public := make(map[int]uint32, len(fields))
 		for index, value := range fields {
-			if playerFieldPublic(index) {
+			if playerFieldVisibleToRecipient(index, false, partyMember) {
 				public[index] = value
 			}
 		}
@@ -3153,6 +3172,35 @@ func (s *Server) buildPlayerValuesUpdateForTarget(guid uint64, fields map[int]ui
 		fields = public
 	}
 	return s.buildPlayerValuesUpdate(guid, fields)
+}
+
+func (s *Server) broadcastPlayerValuesUpdateFromSession(source *session, fields map[int]uint32) {
+	if s == nil || source == nil || source.player == nil || s.Config.VisibilityDistanceContinents <= 0 {
+		return
+	}
+	state := *source.player
+	distance := float64(s.Config.VisibilityDistanceContinents)
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for target := range s.sessions {
+		if target == source || !target.authed || !target.playerLoaded || target.player == nil || target.player.Map != state.Map || target.player.InstanceID != state.InstanceID || !canSeePlayer(target, source) {
+			continue
+		}
+		if math.Hypot(float64(target.player.X-state.X), float64(target.player.Y-state.Y)) > distance {
+			continue
+		}
+		target.visiblePlayersMu.Lock()
+		_, visible := target.visiblePlayers[state.GUID]
+		target.visiblePlayersMu.Unlock()
+		if !visible {
+			continue
+		}
+		partyMember := source.groupID != 0 && source.groupID == target.groupID
+		packet, err := s.buildPlayerValuesUpdateForRecipient(state.GUID, fields, false, partyMember)
+		if err == nil && packet != nil {
+			_ = target.write(packet.Opcode, packet.Payload.Bytes(), true)
+		}
+	}
 }
 
 // sendPlayerQuestLogUpdate pushes one quest log slot (or its clearing) to
@@ -3177,6 +3225,7 @@ func (s *session) sendPlayerQuestLogUpdate(slot int) {
 		return
 	}
 	_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+	s.server.broadcastPlayerValuesUpdateFromSession(s, fields)
 }
 
 // sendPlayerMountUpdate pushes UNIT_FIELD_MOUNTDISPLAYID as a values update.

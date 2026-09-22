@@ -133,10 +133,7 @@ func (s *session) sendPlayerUpdate() {
 		return
 	}
 	_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
-	publicPacket, publicErr := s.server.buildPlayerValuesUpdateForTarget(s.playerGUID, fields, false)
-	if publicErr == nil && publicPacket != nil {
-		s.server.broadcastToNearby(publicPacket.Opcode, publicPacket.Payload.Bytes(), s)
-	}
+	s.server.broadcastPlayerValuesUpdateFromSession(s, fields)
 }
 
 func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) {
