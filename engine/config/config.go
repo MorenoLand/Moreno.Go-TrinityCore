@@ -286,7 +286,7 @@ func (c *Config) ApplyWorkDir(workDir string) {
 
 func (c *Config) ResolvePaths() {
 	c.DataDir = resolvePath(c.DataDir, "bin", filepath.Join("..", "bin"), filepath.Join("..", "..", "bin"))
-	c.GameDataDir = resolvePath(c.GameDataDir, filepath.Join(c.DataDir, "data"), filepath.Join("bin", c.GameDataDir), filepath.Join("bin", "data"), filepath.Join("..", c.GameDataDir))
+	c.GameDataDir = resolvePath(c.GameDataDir, filepath.Join(c.DataDir, "data"), c.DataDir, filepath.Join("bin", c.GameDataDir), filepath.Join("bin", "data"), filepath.Join("..", c.GameDataDir))
 	c.SchemaDir = resolvePath(c.SchemaDir, filepath.Join("bin", c.SchemaDir), filepath.Join("bin", "sql"), filepath.Join("..", c.SchemaDir))
 	c.LuaScriptPath = resolvePath(c.LuaScriptPath, filepath.Join(c.DataDir, "lua_scripts"), filepath.Join("bin", c.LuaScriptPath), filepath.Join("bin", "lua_scripts"), filepath.Join("..", c.LuaScriptPath))
 	if c.ProtocolTracePath != "" && !filepath.IsAbs(c.ProtocolTracePath) {
