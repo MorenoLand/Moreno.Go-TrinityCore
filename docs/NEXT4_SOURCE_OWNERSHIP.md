@@ -294,3 +294,5 @@ Login now emits the zero-count equipment-set list packet when the set table is e
 Saved equipment sets with client-invalid indexes are now rejected during login loading at the pinned ten-slot limit (`eeba440`).
 
 Login flightmaster status candidates now use the source visible-object three-dimensional range (`55eb76a`).
+
+The login replay harness now parses and validates `SMSG_EQUIPMENT_SET_LIST` framing, packed item GUIDs, client set limits, and trailing bytes (`66e7412`).
