@@ -2043,14 +2043,14 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 			state.ResetTalentsTime = uint32(resetTalentsTime)
 		}
 	}
-	var transportGUID int64
+	var savedTransportGUID int64
 	var transportX, transportY, transportZ, transportO float32
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(trans_x, 0), COALESCE(trans_y, 0), COALESCE(trans_z, 0),
-		COALESCE(trans_o, 0), COALESCE(transguid, 0) FROM characters WHERE guid = ?`, state.GUID).Scan(&transportX, &transportY, &transportZ, &transportO, &transportGUID); err == nil {
+		COALESCE(trans_o, 0), COALESCE(transguid, 0) FROM characters WHERE guid = ?`, state.GUID).Scan(&transportX, &transportY, &transportZ, &transportO, &savedTransportGUID); err == nil {
 		state.TransportX, state.TransportY, state.TransportZ, state.TransportO = transportX, transportY, transportZ, transportO
-		if transportGUID > 0 {
-			if spawn, found := s.server.transportSpawnForGUID(uint64(transportGUID)); found && math.Abs(float64(transportX)) <= 250 && math.Abs(float64(transportY)) <= 250 && math.Abs(float64(transportZ)) <= 250 {
-				state.TransportGUID = gameObjectGUID(spawn.GUID, spawn.Entry)
+		if savedTransportGUID > 0 {
+			if spawn, found := s.server.transportSpawnForGUID(uint64(savedTransportGUID)); found && math.Abs(float64(transportX)) <= 250 && math.Abs(float64(transportY)) <= 250 && math.Abs(float64(transportZ)) <= 250 {
+				state.TransportGUID = transportGUID(spawn.GUID)
 				state.TransportSeat = -1
 				state.X, state.Y, state.Z, state.Orientation = CalculatePassengerPosition(spawn.X, spawn.Y, spawn.Z, spawn.Orientation, transportX, transportY, transportZ, transportO)
 				state.Map = spawn.Map
@@ -3057,11 +3057,21 @@ func (s *session) sendPlayerMountUpdate() {
 	if s.player == nil {
 		return
 	}
-	packet, err := s.server.buildPlayerValuesUpdate(s.playerGUID, map[int]uint32{unitFieldMountDisplayID: s.player.MountDisplayID})
+	flags := s.player.UnitFlags
+	if s.player.MountDisplayID != 0 {
+		flags |= unitFlagMount
+	} else {
+		flags &^= unitFlagMount
+	}
+	s.player.UnitFlags = flags
+	packet, err := s.server.buildPlayerValuesUpdate(s.playerGUID, map[int]uint32{unitFieldFlags: unitFlagPlayerControlled | flags, unitFieldMountDisplayID: s.player.MountDisplayID})
 	if err != nil {
 		return
 	}
 	_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
+	}
 }
 
 // currentPlayer returns the live player state for timer callbacks.

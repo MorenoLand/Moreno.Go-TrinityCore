@@ -151,6 +151,7 @@ type session struct {
 	gmMessage             bool
 	twoSideChat           bool
 	legitimate            map[uint64]struct{}
+	characterNames        map[uint64]enumCharacter
 	mounts                *MountState
 	playerGUID            uint64
 	playerLoading         bool
@@ -901,7 +902,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 		}
 	}()
 	defer close(closed)
-	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{}), auras: make(map[uint32]struct{}), auraSlots: make(map[uint32]uint8), channels: make(map[string]struct{}), scale: 1, breathTimer: -1, fatigueTimer: -1, schoolLockouts: make(map[uint32]int64)}
+	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{}), characterNames: make(map[uint64]enumCharacter), auras: make(map[uint32]struct{}), auraSlots: make(map[uint32]uint8), channels: make(map[string]struct{}), scale: 1, breathTimer: -1, fatigueTimer: -1, schoolLockouts: make(map[uint32]int64)}
 	s.addSession(state)
 	defer s.removeSession(state)
 	defer state.logout()
@@ -3416,28 +3417,40 @@ func (s *session) handleNameQuery(ctx context.Context, payload []byte) bool {
 	packet.WritePackedGUID(guid)
 	var name string
 	var race, gender, class int64
-	if s.player != nil && (s.player.GUID == guid || s.player.GUID == lowGUID) {
-		name = s.player.Name
-		race = int64(s.player.Race)
-		gender = int64(s.player.Gender)
-		class = int64(s.player.Class)
-	} else if online := s.server.findSessionByGUID(guid); online != nil && online.player != nil {
-		name = online.player.Name
-		race = int64(online.player.Race)
-		gender = int64(online.player.Gender)
-		class = int64(online.player.Class)
-	} else {
-		err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT name, race, gender, class FROM characters WHERE guid = ? AND (deleteInfos_Name IS NULL OR deleteInfos_Name = '')", guid).Scan(&name, &race, &gender, &class)
-		if errors.Is(err, sql.ErrNoRows) && lowGUID != guid {
-			err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT name, race, gender, class FROM characters WHERE guid = ? AND (deleteInfos_Name IS NULL OR deleteInfos_Name = '')", lowGUID).Scan(&name, &race, &gender, &class)
+	resolved := false
+	for _, candidate := range []uint64{guid, lowGUID} {
+		if candidate == 0 || (candidate == lowGUID && guid != lowGUID && resolved) {
+			continue
 		}
-		if errors.Is(err, sql.ErrNoRows) {
-			packet.WriteU8(1)
-			return s.write(uint16(protocol.OpcodeSMSG_NAME_QUERY_RESPONSE), packet.Bytes(), true) == nil
-		} else if err != nil {
-			s.debug("name query failed", "account", s.accountName, "guid", guid, "error", err)
-			return false
+		if s.player != nil && (s.player.GUID == candidate || s.player.GUID == lowGUID) {
+			name, race, gender, class = s.player.Name, int64(s.player.Race), int64(s.player.Gender), int64(s.player.Class)
+			resolved = true
+			break
 		}
+		if online := s.server.findSessionByGUID(candidate); online != nil && online.player != nil {
+			name, race, gender, class = online.player.Name, int64(online.player.Race), int64(online.player.Gender), int64(online.player.Class)
+			resolved = true
+			break
+		}
+		if cached, ok := s.characterNames[candidate]; ok {
+			name, race, gender, class = cached.Name, int64(cached.Race), int64(cached.Gender), int64(cached.Class)
+			resolved = true
+			break
+		}
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT name, race, gender, class FROM characters WHERE guid = ? AND (deleteInfos_Name IS NULL OR deleteInfos_Name = '')", candidate).Scan(&name, &race, &gender, &class)
+			if err == nil {
+				resolved = true
+				break
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				s.debug("name query lookup failed", "account", s.accountName, "guid", guid, "candidate", candidate, "error", err)
+			}
+		}
+	}
+	if !resolved {
+		packet.WriteU8(1)
+		return s.write(uint16(protocol.OpcodeSMSG_NAME_QUERY_RESPONSE), packet.Bytes(), true) == nil
 	}
 	packet.WriteU8(0)
 	packet.WriteCString(name)

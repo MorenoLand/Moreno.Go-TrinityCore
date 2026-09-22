@@ -139,7 +139,7 @@ func creatureRunVelocity(multiplier float64) float32 {
 	return float32(multiplier) * creatureBaseRunSpeed
 }
 
-func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y, z float32, moveType uint32, wander float64, walkSpeed float32) *creatureMotion {
+func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y, z float32, moveType uint32, wander float64, walkSpeed float32, currentHealth uint32) *creatureMotion {
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
 	if s.creatureMotion == nil {
@@ -149,6 +149,10 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y,
 	motion := s.creatureMotion[key]
 	if motion == nil || motion.Entry != entry {
 		st := s.loadCreatureStats(ctx, entry)
+		health := st.Health
+		if currentHealth > 0 && currentHealth < health {
+			health = currentHealth
+		}
 		motion = &creatureMotion{
 			GUID:            key,
 			Entry:           entry,
@@ -163,7 +167,7 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y,
 			RunSpeed:        creatureBaseRunSpeed,
 			MoveType:        moveType,
 			Wander:          wander,
-			Health:          st.Health,
+			Health:          health,
 			MaxHealth:       st.MaxHealth,
 			Armor:           st.Armor,
 			Resistances:     st.Resistances,
@@ -430,7 +434,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 	query := `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, c.MovementType, c.wander_distance,
 		COALESCE(NULLIF(t.speed_walk, 0), 1.0), COALESCE(NULLIF(t.speed_run, 0), 1.14286),
 		COALESCE(t.faction, 0), COALESCE(t.maxlevel, 1), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), COALESCE(NULLIF(t.BaseAttackTime, 0), 2000),
-		CASE WHEN c.curhealth > 0 THEN c.curhealth ELSE COALESCE(NULLIF(t.maxlevel*30, 0), 42) END
+		c.curhealth
 		FROM creature AS c
 		JOIN creature_template AS t ON t.entry = c.id
 		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
@@ -456,7 +460,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 				continue
 			}
 			walkVelocity := creatureWalkVelocity(walkSpeed)
-			motion := s.motionFor(ctx, uint32(guid), uint32(entry), p.Map, float32(x), float32(y), float32(z), uint32(moveType), wander, walkVelocity)
+			motion := s.motionFor(ctx, uint32(guid), uint32(entry), p.Map, float32(x), float32(y), float32(z), uint32(moveType), wander, walkVelocity, uint32(curHealth))
 			motion.Faction = uint32(faction)
 			motion.Level = uint32(level)
 			motion.UnitFlags = uint32(unitFlags)

@@ -316,7 +316,7 @@ func buildGameObjectMovementUpdate(spawn gameObjectSpawn) []byte {
 }
 
 func buildTransportGameObjectUpdate(spawn gameObjectSpawn, create bool) []byte {
-	rawGUID := gameObjectGUID(spawn.GUID, spawn.Entry)
+	rawGUID := transportGUID(spawn.GUID)
 	values := make([]uint32, gameObjectValuesCount)
 	values[0] = uint32(rawGUID)
 	values[1] = uint32(rawGUID >> 32)
@@ -373,6 +373,10 @@ func buildTransportGameObjectUpdate(spawn gameObjectSpawn, create bool) []byte {
 
 func gameObjectGUID(guid, entry uint32) uint64 {
 	return uint64(guid) | uint64(entry)<<24 | uint64(0xF110)<<48
+}
+
+func transportGUID(guid uint32) uint64 {
+	return uint64(guid) | uint64(0x1FC0)<<48
 }
 
 func gameObjectDynamicValue(spawn gameObjectSpawn) uint32 {

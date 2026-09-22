@@ -92,8 +92,8 @@ func (s *Server) transportSpawnForGUID(guid uint64) (gameObjectSpawn, bool) {
 		if transport == nil {
 			continue
 		}
-		rawGUID := gameObjectGUID(transport.Spawn.GUID, transport.Spawn.Entry)
-		if guid == uint64(transport.Spawn.GUID) || guid == rawGUID {
+		rawGUID := transportGUID(transport.Spawn.GUID)
+		if guid == uint64(transport.Spawn.GUID) || guid == rawGUID || guid == gameObjectGUID(transport.Spawn.GUID, transport.Spawn.Entry) {
 			return transport.Spawn, true
 		}
 	}
@@ -315,7 +315,7 @@ func (s *Server) attachedTransportSnapshot(state playerState) (continentTranspor
 	s.transportMu.Lock()
 	defer s.transportMu.Unlock()
 	for _, candidate := range s.transports {
-		if candidate == nil || (state.TransportGUID != uint64(candidate.Spawn.GUID) && state.TransportGUID != gameObjectGUID(candidate.Spawn.GUID, candidate.Spawn.Entry)) {
+		if candidate == nil || (state.TransportGUID != uint64(candidate.Spawn.GUID) && state.TransportGUID != transportGUID(candidate.Spawn.GUID) && state.TransportGUID != gameObjectGUID(candidate.Spawn.GUID, candidate.Spawn.Entry)) {
 			continue
 		}
 		transport = *candidate
@@ -361,7 +361,7 @@ func (s *Server) buildAttachedTransportPlayerUpdates(state playerState, exclude 
 	if !found {
 		return nil, nil, nil
 	}
-	rawGUID := gameObjectGUID(transport.Spawn.GUID, transport.Spawn.Entry)
+	rawGUID := transportGUID(transport.Spawn.GUID)
 	players := make([]playerState, 0)
 	s.sessionsMu.RLock()
 	for sess := range s.sessions {
@@ -404,7 +404,7 @@ func (s *Server) buildMapTransportUpdates(state playerState, exclude uint64) (*p
 		if transport == nil || transport.Spawn.Map != state.Map {
 			continue
 		}
-		rawGUID := gameObjectGUID(transport.Spawn.GUID, transport.Spawn.Entry)
+		rawGUID := transportGUID(transport.Spawn.GUID)
 		if rawGUID == exclude {
 			continue
 		}
@@ -412,7 +412,7 @@ func (s *Server) buildMapTransportUpdates(state playerState, exclude uint64) (*p
 	}
 	s.transportMu.Unlock()
 	sort.Slice(spawns, func(i, j int) bool {
-		return gameObjectGUID(spawns[i].GUID, spawns[i].Entry) < gameObjectGUID(spawns[j].GUID, spawns[j].Entry)
+		return transportGUID(spawns[i].GUID) < transportGUID(spawns[j].GUID)
 	})
 	if len(spawns) == 0 {
 		return nil, nil
@@ -431,7 +431,7 @@ func (t *continentTransport) passengerCreatures() []creatureSpawn {
 	result := make([]creatureSpawn, 0, len(t.StaticCreatures))
 	for _, local := range t.StaticCreatures {
 		spawn := local
-		spawn.TransportGUID = gameObjectGUID(t.Spawn.GUID, t.Spawn.Entry)
+		spawn.TransportGUID = transportGUID(t.Spawn.GUID)
 		spawn.TransportX, spawn.TransportY, spawn.TransportZ, spawn.TransportO = local.X, local.Y, local.Z, local.Orientation
 		spawn.Map = t.Spawn.Map
 		spawn.X, spawn.Y, spawn.Z, spawn.Orientation = CalculatePassengerPosition(t.Spawn.X, t.Spawn.Y, t.Spawn.Z, t.Spawn.Orientation, local.X, local.Y, local.Z, local.Orientation)
@@ -447,7 +447,7 @@ func (t *continentTransport) passengerObjects() []gameObjectSpawn {
 	result := make([]gameObjectSpawn, 0, len(t.StaticObjects))
 	for _, local := range t.StaticObjects {
 		spawn := local
-		spawn.TransportGUID = gameObjectGUID(t.Spawn.GUID, t.Spawn.Entry)
+		spawn.TransportGUID = transportGUID(t.Spawn.GUID)
 		spawn.TransportX, spawn.TransportY, spawn.TransportZ, spawn.TransportO = local.X, local.Y, local.Z, local.Orientation
 		spawn.Map = t.Spawn.Map
 		spawn.X, spawn.Y, spawn.Z, spawn.Orientation = CalculatePassengerPosition(t.Spawn.X, t.Spawn.Y, t.Spawn.Z, t.Spawn.Orientation, local.X, local.Y, local.Z, local.Orientation)
@@ -490,7 +490,7 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 	if distance <= 0 {
 		distance = 150
 	}
-	rawGUID := gameObjectGUID(change.Spawn.GUID, change.Spawn.Entry)
+	rawGUID := transportGUID(change.Spawn.GUID)
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {

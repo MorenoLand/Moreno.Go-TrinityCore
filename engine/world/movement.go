@@ -113,10 +113,22 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
 	s.updateZoneAndArea(ctx, false)
 	if info.Flags&movementOnTransport != 0 && info.Transport != nil {
-		s.player.TransportGUID = info.Transport.GUID
-		s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = info.Transport.X, info.Transport.Y, info.Transport.Z, info.Transport.Orientation
-		s.player.TransportSeat = info.Transport.Seat
-	} else {
+		canonicalTransportGUID := info.Transport.GUID
+		if s.player.VehicleGUID == 0 && s.server != nil {
+			if spawn, found := s.server.transportSpawnForGUID(canonicalTransportGUID); found {
+				canonicalTransportGUID = transportGUID(spawn.GUID)
+			} else {
+				info.Flags &^= movementOnTransport
+				info.Transport = nil
+			}
+		}
+		if info.Transport != nil {
+			s.player.TransportGUID = canonicalTransportGUID
+			s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = info.Transport.X, info.Transport.Y, info.Transport.Z, info.Transport.Orientation
+			s.player.TransportSeat = info.Transport.Seat
+		}
+	}
+	if info.Flags&movementOnTransport == 0 || info.Transport == nil {
 		s.player.TransportGUID = 0
 		s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = 0, 0, 0, 0
 		s.player.TransportSeat = 0

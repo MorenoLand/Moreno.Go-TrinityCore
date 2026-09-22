@@ -362,3 +362,11 @@ The self-player create fixture now requires populated visible equipment entry/en
 Mounted login reconstruction now sets `UNIT_FLAG_MOUNT` whenever a persisted mounted aura supplies `UNIT_FIELD_MOUNTDISPLAYID`, matching `Unit::Mount` and preventing a display-only mount create update (mounted login field milestone).
 
 The login replay checker now validates the `SMSG_SET_FACTION_STANDING` float/flag/count/standing-entry framing used by the start-reputation transition (start-reputation packet evidence milestone).
+
+Character name lookup now retains the complete character-enum cache before world entry and resolves packed player GUIDs through the online session, enum cache, and low-counter database paths without closing the connection on a lookup error, matching `QueryHandler.cpp` and the global `HighGuid::Player` counter (character-name visibility correction).
+
+Continent boats and zeppelins now serialize the source mobile-transport GUID high value `0x1FC0`, persist only the transport low counter in `characters.transguid`, normalize client transport attachments, and retain compatibility reads for the previous game-object GUID form, matching `TransportMgr::CreateTransport`, `Transport::AddPassenger`, and `MovementHandler.cpp` (continent-transport GUID correction). Runtime initialization loaded 20 configured continent transports in the current local world database; client boarding and cross-map world-port replay remain open acceptance evidence.
+
+Creature activation now honors persisted `creature.curhealth` instead of manufacturing health for zero-health rows, and first activation clamps current health to source-calculated template health, matching `Creature::SetSpawnHealth` and preventing dead/low-health critters from becoming inflated combat targets (creature current-health correction).
+
+Runtime mounted auras now preserve source infinite `SpellDuration` values, remove competing mounted auras, resolve the mount creature display, set and clear `UNIT_FLAG_MOUNT` with `UNIT_FIELD_MOUNTDISPLAYID`, broadcast the update, and remove the aura on cancel, matching `AuraEffect::HandleAuraMounted` and `Unit::Mount` (runtime mount-state correction).

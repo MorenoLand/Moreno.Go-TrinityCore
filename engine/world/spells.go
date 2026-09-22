@@ -43,6 +43,7 @@ const (
 	spellEffectThreat        = 63
 	spellEffectTriggerSpell  = 64
 	spellEffectHealMaxHealth = 67
+	spellAuraMounted         = 78
 )
 
 // isSelfCastOnly checks if all active spell effects target the caster unit.
@@ -173,7 +174,7 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 	}
 	s.server.sessionsMu.RUnlock()
 	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), COALESCE(NULLIF(c.curhealth, 0), NULLIF(t.maxlevel * 30, 0), 1) FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, player.Map, float64(centerX-radius), float64(centerX+radius), float64(centerY-radius), float64(centerY+radius))
+		rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, player.Map, float64(centerX-radius), float64(centerX+radius), float64(centerY-radius), float64(centerY+radius))
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
@@ -746,9 +747,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				if durationMs == 0 && eff.AuraPeriod > 0 {
 					durationMs = eff.AuraPeriod * 5
-				}
-				if durationMs == 0 && eff.Effect == 6 && !isHarmfulAura(eff.Aura) {
-					durationMs = 1800000 // 30 min default for passive buffs
 				}
 				periodMs := eff.AuraPeriod
 				if periodMs == 0 && (eff.Aura == 3 || eff.Aura == 8 || eff.Aura == 23 || eff.Aura == 24 || eff.Aura == 89) {
@@ -2216,9 +2214,11 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 }
 
 func (s *session) removeAura(spellID uint32) {
+	wasMounted := false
 	s.castMu.Lock()
 	if s.activeAuras != nil {
 		if aura, ok := s.activeAuras[spellID]; ok && aura != nil {
+			wasMounted = aura.AuraType == spellAuraMounted
 			aura.Stopped = true
 			if aura.Timer != nil {
 				aura.Timer.Stop()
@@ -2244,6 +2244,10 @@ func (s *session) removeAura(spellID uint32) {
 			delete(s.auraSlots, spellID)
 		}
 	}
+	if wasMounted && !s.hasAuraType(spellAuraMounted) && s.player != nil {
+		s.player.MountDisplayID = 0
+		s.sendPlayerMountUpdate()
+	}
 	s.sendPlayerUpdate()
 }
 
@@ -2253,6 +2257,37 @@ func (s *session) hasAura(spellID uint32) bool {
 	}
 	_, ok := s.auras[spellID]
 	return ok
+}
+
+func (s *session) clearOtherMountedAuras(spellID uint32) {
+	for _, aura := range s.loadedAuras() {
+		if aura != nil && aura.AuraType == spellAuraMounted && aura.SpellID != spellID {
+			s.removeAura(aura.SpellID)
+		}
+	}
+}
+
+func (s *session) applyMountedDisplay(ctx context.Context, aura *activeAura) {
+	if s == nil || s.player == nil || aura == nil || aura.MiscValue <= 0 || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	entry := uint32(aura.MiscValue)
+	if aura.SpellID == 62061 {
+		for _, current := range s.loadedAuras() {
+			if current != nil && current.AuraType == wotlk.MountedFlightSpeedAura {
+				entry = 24906
+				break
+			}
+		}
+		if entry == uint32(aura.MiscValue) {
+			entry = 15665
+		}
+	}
+	var displayID int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 0) FROM creature_template WHERE entry = ?", entry).Scan(&displayID); err == nil && displayID > 0 {
+		s.player.MountDisplayID = uint32(displayID)
+	}
+	s.sendPlayerMountUpdate()
 }
 
 func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, durationMs, periodMs, amount, schoolMask uint32) {
@@ -2283,6 +2318,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		if targetSess.isImmuneToSpell(spell) {
 			return
+		}
+		if eff.Aura == spellAuraMounted {
+			targetSess.clearOtherMountedAuras(spell.ID)
 		}
 
 		var drGroup DiminishingGroup
@@ -2367,6 +2405,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		targetSess.activeAuras[spell.ID] = aura
 		targetSess.castMu.Unlock()
+		if eff.Aura == spellAuraMounted {
+			targetSess.applyMountedDisplay(ctx, aura)
+		}
 
 		stackCount := uint8(1)
 		if spell.StackAmount == 0 && spell.ProcCharges > 0 {
@@ -2887,9 +2928,14 @@ func (s *session) handleCancelMountAura(payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
+	for _, aura := range s.loadedAuras() {
+		if aura != nil && aura.AuraType == spellAuraMounted {
+			s.removeAura(aura.SpellID)
+		}
+	}
 	if s.player.MountDisplayID != 0 {
 		s.player.MountDisplayID = 0
-		s.sendPlayerUpdate()
+		s.sendPlayerMountUpdate()
 	}
 	return true
 }

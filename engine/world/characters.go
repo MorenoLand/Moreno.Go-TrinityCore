@@ -98,6 +98,7 @@ func (s *session) handleCharEnum(ctx context.Context) bool {
 	packet := protocol.NewBuffer(1 + 128)
 	packet.WriteU8(0)
 	s.legitimate = make(map[uint64]struct{})
+	s.characterNames = make(map[uint64]enumCharacter)
 	characters := make([]enumCharacter, 0)
 	for rows.Next() {
 		character, err := scanEnumCharacter(rows)
@@ -126,6 +127,7 @@ func (s *session) handleCharEnum(ctx context.Context) bool {
 	for _, character := range characters {
 		s.loadEnumEquipment(ctx, &character)
 		s.buildEnumCharacter(ctx, packet, character)
+		s.characterNames[character.GUID] = character
 		if !character.Banned {
 			s.legitimate[character.GUID] = struct{}{}
 		}
@@ -2650,7 +2652,11 @@ func (s *session) savePlayerState(ctx context.Context, online uint32) error {
 	for _, value := range state.ExploredZones {
 		fmt.Fprintf(&explored, "%02x%02x%02x%02x", byte(value), byte(value>>8), byte(value>>16), byte(value>>24))
 	}
-	args := []any{state.Name, state.Race, state.Class, state.Gender, state.Level, state.XP, state.Money, state.Skin, state.Face, state.HairStyle, state.HairColor, state.FacialStyle, state.BankBagSlots, state.RestState, state.PlayerFlags, state.Map, state.InstanceID, state.InstanceModeMask, state.X, state.Y, state.Z, state.Orientation, state.TransportX, state.TransportY, state.TransportZ, state.TransportO, state.TransportGUID, strings.Join(taxi, " "), state.Cinematic, state.TotalPlayedTime, state.LevelPlayedTime, state.RestBonus, state.LogoutTime, state.LogoutResting, state.ResetTalentsCost, state.ResetTalentsTime, state.ExtraFlags, state.StableSlots, state.AtLogin, state.Zone, s.deathExpireTime, state.TaxiPath, state.ArenaPoints, state.TotalHonorPoints, state.TodayHonorPoints, state.YesterdayHonorPoints, state.TotalKills, state.TodayKills, state.YesterdayKills, state.ChosenTitle, state.KnownCurrency, state.WatchedFaction, state.DrunkenState, state.Health, state.Powers[0], state.Powers[1], state.Powers[2], state.Powers[3], state.Powers[4], state.Powers[5], state.Powers[6], s.latency.Load(), state.TalentGroupsCount, state.ActiveTalentGroup, explored.String(), state.Equipment, state.AmmoID, strings.Join(titles, " "), state.ActionBars, state.GrantableLevels, online, state.GUID}
+	transportLow := uint64(0)
+	if state.TransportGUID != 0 {
+		transportLow = state.TransportGUID & 0xFFFFFFFF
+	}
+	args := []any{state.Name, state.Race, state.Class, state.Gender, state.Level, state.XP, state.Money, state.Skin, state.Face, state.HairStyle, state.HairColor, state.FacialStyle, state.BankBagSlots, state.RestState, state.PlayerFlags, state.Map, state.InstanceID, state.InstanceModeMask, state.X, state.Y, state.Z, state.Orientation, state.TransportX, state.TransportY, state.TransportZ, state.TransportO, transportLow, strings.Join(taxi, " "), state.Cinematic, state.TotalPlayedTime, state.LevelPlayedTime, state.RestBonus, state.LogoutTime, state.LogoutResting, state.ResetTalentsCost, state.ResetTalentsTime, state.ExtraFlags, state.StableSlots, state.AtLogin, state.Zone, s.deathExpireTime, state.TaxiPath, state.ArenaPoints, state.TotalHonorPoints, state.TodayHonorPoints, state.YesterdayHonorPoints, state.TotalKills, state.TodayKills, state.YesterdayKills, state.ChosenTitle, state.KnownCurrency, state.WatchedFaction, state.DrunkenState, state.Health, state.Powers[0], state.Powers[1], state.Powers[2], state.Powers[3], state.Powers[4], state.Powers[5], state.Powers[6], s.latency.Load(), state.TalentGroupsCount, state.ActiveTalentGroup, explored.String(), state.Equipment, state.AmmoID, strings.Join(titles, " "), state.ActionBars, state.GrantableLevels, online, state.GUID}
 	_, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHARACTER", args...)
 	if err == nil {
 		err = s.saveFishingSteps(ctx, state)
