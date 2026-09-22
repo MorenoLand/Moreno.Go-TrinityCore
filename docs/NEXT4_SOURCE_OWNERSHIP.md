@@ -438,3 +438,5 @@ Persisted and runtime `SPELL_AURA_MOD_CONFUSE` and `SPELL_AURA_MOD_FEAR` now set
 Player-target `SPELL_AURA_MOD_CHARM` now disables client control after login/worldport and runtime application, dismounts the target, interrupts casts/melee, rejects target input while the aura remains, and restores client control after the final charm aura is removed, matching the player-target portion of `Unit::SetCharmedBy`/`RemoveCharmedBy` (player charm-control correction).
 
 Creature-target charm now marks the live creature player-controlled, changes its faction to the charmer, clears combat, sends `SMSG_CLIENT_CONTROL_UPDATE` and a source-shaped `SMSG_PET_SPELLS` charm bar with creature react/command state, and restores the original creature state when the aura expires or is dispelled, matching normal `CHARM_TYPE_CHARM` in `Unit::SetCharmedBy`, `CharmSpellInitialize`, and `RemoveCharmedBy` (creature charm-control correction).
+
+Player-backed vehicle enter/exit now emits `SMSG_PLAYER_VEHICLE_DATA` with the vehicle ID and zero removal state, matching the source vehicle-kit transition packet ownership (player vehicle packet correction).

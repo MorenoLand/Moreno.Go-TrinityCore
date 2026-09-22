@@ -643,6 +643,7 @@ func (s *session) enterVehicle(vehicleGUID uint64, seatID int8) {
 	s.player.MountDisplayID = 0
 
 	actualSeat := seatID
+	playerVehicleID := uint32(0)
 	if s.server != nil {
 		if kit := s.server.getVehicleKit(vehicleGUID); kit != nil {
 			assigned, seatInfo, ok := kit.AddPassenger(s.playerGUID, seatID)
@@ -650,6 +651,9 @@ func (s *session) enterVehicle(vehicleGUID uint64, seatID int8) {
 				return
 			}
 			actualSeat = assigned
+			if kit.IsPlayer {
+				playerVehicleID = kit.VehicleID
+			}
 			if seatInfo != nil {
 				if seatInfo.CanControl() {
 					s.sendClientControl(vehicleGUID, true)
@@ -665,6 +669,9 @@ func (s *session) enterVehicle(vehicleGUID uint64, seatID int8) {
 
 	s.player.VehicleGUID = vehicleGUID
 	s.player.VehicleSeat = actualSeat
+	if playerVehicleID != 0 {
+		s.sendPlayerVehicleData(playerVehicleID)
+	}
 	s.sendCancelExpectedRideVehicleAura()
 	s.sendPlayerMountUpdate()
 	s.sendPlayerUpdate()
@@ -678,8 +685,12 @@ func (s *session) exitVehicle() {
 	}
 
 	oldVehGUID := s.player.VehicleGUID
+	playerVehicleID := uint32(0)
 	if s.server != nil {
 		if kit := s.server.getVehicleKit(oldVehGUID); kit != nil {
+			if kit.IsPlayer {
+				playerVehicleID = kit.VehicleID
+			}
 			_, seatInfo, _ := kit.RemovePassenger(s.playerGUID)
 			if seatInfo != nil {
 				if seatInfo.CanControl() {
@@ -702,6 +713,9 @@ func (s *session) exitVehicle() {
 
 	s.player.VehicleGUID = 0
 	s.player.VehicleSeat = 0
+	if playerVehicleID != 0 {
+		s.sendPlayerVehicleData(0)
+	}
 	s.sendPlayerUpdate()
 }
 
