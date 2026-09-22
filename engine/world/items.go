@@ -2325,6 +2325,9 @@ func (s *session) sendEquipmentSetList(ctx context.Context) {
 		if err := rows.Scan(scanArgs...); err != nil {
 			continue
 		}
+		if entry.setIndex >= maxEquipmentSetIndex {
+			continue
+		}
 		for i := 0; i < 19; i++ {
 			if itemCols[i] > 0 {
 				entry.items[i] = uint64(itemCols[i]) | (uint64(0x4000) << 48)
