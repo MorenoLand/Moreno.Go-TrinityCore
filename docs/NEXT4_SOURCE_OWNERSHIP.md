@@ -324,3 +324,5 @@ Saved pet spell packets now discard invalid DBC-known spell rows before `PetSpel
 Saved pet action-bar entries now clear unknown DBC-known spells and force non-autocastable spells to passive, matching `CharmInfo::LoadPetActionBar` and the pinned `SPELL_ATTR0_PASSIVE`/`SPELL_ATTR1_UNAUTOCASTABLE_BY_PET` rules (saved-pet action-bar validation milestone).
 
 Saved pets now use model combat reach plus `PET_FOLLOW_DIST` and `PET_FOLLOW_ANGLE` for the initial close-point position, and serialize the same model bounding radius and combat reach into the create update when model data is available, matching `Pet::LoadPetFromDB` and `WorldObject::GetClosePoint` (saved-pet geometry milestone).
+
+The login replay checker now validates the pre-map dungeon-difficulty flags, `PER_CHARACTER_CACHE_MASK` account-data-times framing, and MOTD line framing emitted by `CharacterHandler.cpp` before accepting the player-create boundary (pre-map login payload milestone).

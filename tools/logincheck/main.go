@@ -102,6 +102,9 @@ func runSelfCheck() error {
 		validate func(protocoltrace.Event) error
 	}{
 		{"verify-world", protocol.OpcodeSMSG_LOGIN_VERIFY_WORLD, loginVerifyFixture(), requireLoginVerifyWorld},
+		{"dungeon-difficulty", protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY, dungeonDifficultyFixture(), requireDungeonDifficulty},
+		{"account-data-times", protocol.OpcodeSMSG_ACCOUNT_DATA_TIMES, accountDataTimesFixture(), requireAccountDataTimes},
+		{"motd", protocol.OpcodeSMSG_MOTD, motdFixture(), requireMotd},
 		{"instance-difficulty", protocol.OpcodeSMSG_INSTANCE_DIFFICULTY, make([]byte, 8), requireEightBytePayload},
 		{"initial-spells", protocol.OpcodeSMSG_INITIAL_SPELLS, []byte{0, 0, 0, 0, 0}, requireInitialSpells},
 		{"unlearn-spells", protocol.OpcodeSMSG_SEND_UNLEARN_SPELLS, []byte{0, 0, 0, 0}, requireUnlearnSpells},
@@ -153,6 +156,35 @@ func loginTimeSpeedFixture() []byte {
 	buf.WriteU32(0)
 	buf.WriteF32(0.5)
 	buf.WriteU32(0)
+	return buf.Bytes()
+}
+
+func dungeonDifficultyFixture() []byte {
+	buf := protocol.NewBuffer(12)
+	buf.WriteU32(0)
+	buf.WriteU32(1)
+	buf.WriteU32(0)
+	return buf.Bytes()
+}
+
+func accountDataTimesFixture() []byte {
+	buf := protocol.NewBuffer(29)
+	buf.WriteU32(0)
+	buf.WriteU8(1)
+	buf.WriteU32(0xEA)
+	for index := uint32(0); index < 8; index++ {
+		if 0xEA&(1<<index) != 0 {
+			buf.WriteU32(0)
+		}
+	}
+	return buf.Bytes()
+}
+
+func motdFixture() []byte {
+	buf := protocol.NewBuffer(12)
+	buf.WriteU32(2)
+	buf.WriteCString("one")
+	buf.WriteCString("two")
 	return buf.Bytes()
 }
 
@@ -393,8 +425,14 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 		}
 		var validate func(protocoltrace.Event) error
 		switch stage.Name {
+		case "MSG_SET_DUNGEON_DIFFICULTY":
+			validate = requireDungeonDifficulty
 		case "SMSG_LOGIN_VERIFY_WORLD":
 			validate = requireLoginVerifyWorld
+		case "SMSG_ACCOUNT_DATA_TIMES":
+			validate = requireAccountDataTimes
+		case "SMSG_MOTD":
+			validate = requireMotd
 		case "SMSG_LEARNED_DANCE_MOVES":
 			validate = func(event protocoltrace.Event) error { return requirePayloadLength(event, 8) }
 		case "SMSG_FEATURE_SYSTEM_STATUS":
@@ -548,6 +586,83 @@ func checkOptionalLoginPayloads(trace protocoltrace.Trace, start int) error {
 				return fmt.Errorf("%s: %w", opcodeName(event.Opcode), err)
 			}
 		}
+	}
+	return nil
+}
+
+func requireDungeonDifficulty(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	if _, err := reader.ReadU32(); err != nil {
+		return fmt.Errorf("dungeon difficulty is truncated: %w", err)
+	}
+	marker, err := reader.ReadU32()
+	if err != nil {
+		return fmt.Errorf("dungeon difficulty marker is truncated: %w", err)
+	}
+	inGroup, err := reader.ReadU32()
+	if err != nil {
+		return fmt.Errorf("dungeon difficulty group flag is truncated: %w", err)
+	}
+	if marker != 1 || inGroup != 0 || reader.Remaining() != 0 {
+		return fmt.Errorf("invalid dungeon difficulty payload marker=%d inGroup=%d remaining=%d", marker, inGroup, reader.Remaining())
+	}
+	return nil
+}
+
+func requireAccountDataTimes(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	if _, err := reader.ReadU32(); err != nil {
+		return fmt.Errorf("account-data server time is truncated: %w", err)
+	}
+	version, err := reader.ReadU8()
+	if err != nil {
+		return fmt.Errorf("account-data version is truncated: %w", err)
+	}
+	mask, err := reader.ReadU32()
+	if err != nil {
+		return fmt.Errorf("account-data mask is truncated: %w", err)
+	}
+	if version != 1 || mask != 0xEA {
+		return fmt.Errorf("invalid character account-data header version=%d mask=0x%08x", version, mask)
+	}
+	for index := uint32(0); index < 8; index++ {
+		if mask&(1<<index) != 0 {
+			if _, err := reader.ReadU32(); err != nil {
+				return fmt.Errorf("account-data timestamp %d is truncated: %w", index, err)
+			}
+		}
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected account-data bytes=%d", reader.Remaining())
+	}
+	return nil
+}
+
+func requireMotd(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	count, err := reader.ReadU32()
+	if err != nil {
+		return fmt.Errorf("motd line count is truncated: %w", err)
+	}
+	for index := uint32(0); index < count; index++ {
+		if _, err := reader.ReadCString(); err != nil {
+			return fmt.Errorf("motd line %d is truncated: %w", index, err)
+		}
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected motd bytes=%d", reader.Remaining())
 	}
 	return nil
 }
