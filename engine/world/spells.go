@@ -2416,6 +2416,8 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		if eff.Aura == spellAuraMounted {
 			targetSess.clearOtherMountedAuras(spell.ID)
+			durationMs = 0
+			periodMs = 0
 		}
 
 		var drGroup DiminishingGroup

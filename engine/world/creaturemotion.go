@@ -150,8 +150,11 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y,
 	if motion == nil || motion.Entry != entry {
 		st := s.loadCreatureStats(ctx, entry)
 		health := st.Health
-		if currentHealth > 0 && currentHealth < health {
+		if currentHealth > 0 {
 			health = currentHealth
+		}
+		if st.MaxHealth > 0 && health > st.MaxHealth {
+			health = st.MaxHealth
 		}
 		motion = &creatureMotion{
 			GUID:            key,
@@ -479,6 +482,9 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 					health = 42
 				}
 				motion.Health, motion.MaxHealth = health, health
+			}
+			if motion.MaxHealth > 0 && motion.Health > motion.MaxHealth {
+				motion.Health = motion.MaxHealth
 			}
 			if motion.Health == 0 {
 				continue

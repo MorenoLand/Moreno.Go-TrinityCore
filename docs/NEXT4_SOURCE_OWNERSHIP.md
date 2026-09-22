@@ -414,3 +414,11 @@ Persisted and runtime stealth auras now set and clear the source creep flag in `
 Persisted and runtime invisibility auras now set and clear the private `PLAYER_FIELD_BYTES2` invisibility glow bit, matching `AuraEffect::HandleModInvisibility` and preserving the source client visibility state (invisibility client-field correction).
 
 Persisted and runtime track-stealth auras now set and clear private `PLAYER_FIELD_BYTE_TRACK_STEALTHED` in `PLAYER_FIELD_BYTES`, matching `AuraEffect::HandleAuraTrackStealthed` and preserving the source client tracking state (track-stealth client-field correction).
+
+Name queries now decode the raw `ObjectGuid` input used by `WorldSession::HandleNameQueryOpcode`, while retaining packed GUID output in `SMSG_NAME_QUERY_RESPONSE` (name-query wire correction).
+
+Mobile transport gameobject uses now resolve the source `HighGuid::Mo_Transport` object before ordinary gameobject lookup, attach/detach player transport offsets, and retain the canonical transport GUID used by `Transport::AddPassenger` and movement handling (boat/zeppelin boarding correction).
+
+Creature creates now expose template-derived maximum health separately from persisted current health, and combat target/motion state clamps stale persisted current health to that maximum, preserving `Creature::LoadFromDB` and `Unit::GetMaxHealth` semantics for critters and ordinary creatures (creature health-state correction).
+
+Mounted auras now clear other mounted auras, keep the mount aura indefinite through login and runtime application, and dismount removes the actual mounted aura and client mount fields, matching `AuraEffect::HandleAuraMounted`, `Unit::Mount`, and `Unit::Dismount` (mount state correction).

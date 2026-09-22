@@ -100,6 +100,32 @@ func (s *Server) transportSpawnForGUID(guid uint64) (gameObjectSpawn, bool) {
 	return gameObjectSpawn{}, false
 }
 
+func (s *session) handleTransportUse(spawn gameObjectSpawn) bool {
+	if s == nil || s.player == nil || s.server == nil {
+		return true
+	}
+	rawGUID := transportGUID(spawn.GUID)
+	if s.player.TransportGUID == rawGUID {
+		s.player.TransportGUID = 0
+		s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = 0, 0, 0, 0
+		s.player.TransportSeat = 0
+		s.sendPlayerUpdate()
+		s.debug("transport passenger removed", "guid", rawGUID, "entry", spawn.Entry)
+		return true
+	}
+	if s.player.Map != spawn.Map || distance3D(s.player.X, s.player.Y, s.player.Z, spawn.X, spawn.Y, spawn.Z) > 12 {
+		return true
+	}
+	transportX, transportY, transportZ, transportO := CalculatePassengerOffset(spawn.X, spawn.Y, spawn.Z, spawn.Orientation, s.player.X, s.player.Y, s.player.Z, s.player.Orientation)
+	s.player.TransportGUID = rawGUID
+	s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = transportX, transportY, transportZ, transportO
+	s.player.TransportSeat = -1
+	s.sendPlayerUpdate()
+	s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_HEARTBEAT, movementOnTransport)
+	s.debug("transport passenger added", "guid", rawGUID, "entry", spawn.Entry, "x", transportX, "y", transportY, "z", transportZ)
+	return true
+}
+
 func (s *Server) loadTransportPassengers(ctx context.Context, transport *continentTransport) {
 	if s == nil || transport == nil || transport.TransportMapID == 0 || s.WorldStore == nil || s.WorldStore.DB == nil {
 		return
@@ -344,7 +370,7 @@ func (s *Server) buildAttachedTransportPassengerUpdates(ctx context.Context, sta
 	updates := protocol.NewUpdateData()
 	for _, passenger := range transport.passengerCreatures() {
 		stats := s.loadCreatureStats(ctx, passenger.Entry)
-		passenger.BoundingRadius, passenger.CombatReach = stats.BoundingRadius, stats.CombatReach
+		passenger.BoundingRadius, passenger.CombatReach, passenger.MaxHealth = stats.BoundingRadius, stats.CombatReach, stats.MaxHealth
 		updates.AddUpdateBlock(buildCreatureUpdate(passenger))
 	}
 	for _, passenger := range transport.passengerObjects() {

@@ -467,6 +467,9 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 	if s.server == nil {
 		return true
 	}
+	if spawn, ok := s.server.transportSpawnForGUID(guid); ok {
+		return s.handleTransportUse(spawn)
+	}
 
 	goState, err := s.server.getOrLoadGameObjectState(ctx, guid, lowGUID, entry)
 	if err != nil || goState == nil {

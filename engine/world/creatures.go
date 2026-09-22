@@ -36,6 +36,7 @@ type creatureSpawn struct {
 	DynamicFlags   uint32
 	Level          uint32
 	Health         uint32
+	MaxHealth      uint32
 	Mana           uint32
 	Scale          float32
 	HoverHeight    float32
@@ -149,7 +150,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		updates := protocol.NewUpdateData()
 		for index := range spawns {
 			stats := s.loadCreatureStats(ctx, spawns[index].Entry)
-			spawns[index].BoundingRadius, spawns[index].CombatReach = stats.BoundingRadius, stats.CombatReach
+			spawns[index].BoundingRadius, spawns[index].CombatReach, spawns[index].MaxHealth = stats.BoundingRadius, stats.CombatReach, stats.MaxHealth
 			updates.AddUpdateBlock(buildCreatureUpdate(spawns[index]))
 		}
 		packet, err := updates.BuildPacket(0)
@@ -183,7 +184,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 	updates := protocol.NewUpdateData()
 	for index := range spawns {
 		stats := s.loadCreatureStats(ctx, spawns[index].Entry)
-		spawns[index].BoundingRadius, spawns[index].CombatReach = stats.BoundingRadius, stats.CombatReach
+		spawns[index].BoundingRadius, spawns[index].CombatReach, spawns[index].MaxHealth = stats.BoundingRadius, stats.CombatReach, stats.MaxHealth
 		updates.AddUpdateBlock(buildCreatureUpdate(spawns[index]))
 	}
 	packet, err := updates.BuildPacket(0)
@@ -247,7 +248,9 @@ func buildCreatureUpdate(spawn creatureSpawn) []byte {
 	if spawn.Bytes2 != 0 {
 		values[unitFieldBytes2] = spawn.Bytes2
 	}
-	if spawn.Health > 0 {
+	if spawn.MaxHealth > 0 {
+		values[unitFieldMaxHealth] = spawn.MaxHealth
+	} else if spawn.Health > 0 {
 		values[unitFieldMaxHealth] = spawn.Health
 	} else {
 		values[unitFieldMaxHealth] = maxUint32(spawn.Level*30, 100)

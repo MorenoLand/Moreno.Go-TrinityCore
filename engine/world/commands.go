@@ -986,7 +986,12 @@ func (s *session) handleCmdDismount(ctx context.Context) {
 	if s.player == nil {
 		return
 	}
-	s.mounts = &MountState{}
+	for _, aura := range s.loadedAuras() {
+		if aura != nil && aura.AuraType == spellAuraMounted {
+			s.removeAura(aura.SpellID)
+		}
+	}
+	s.player.MountDisplayID = 0
 	s.sendPlayerUpdate()
 	s.sendSysMessage("You have dismounted.")
 }

@@ -3410,7 +3410,7 @@ func (f *Features) OnPlayerLogin() {
 
 func (s *session) handleNameQuery(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
-	guid, err := reader.ReadPackedGUID()
+	guid, err := reader.ReadU64()
 	if err != nil {
 		s.debug("name query rejected", "account", s.accountName, "error", err)
 		return false

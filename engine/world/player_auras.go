@@ -142,6 +142,10 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 					break
 				}
 				aura.Positive = !isHarmfulAura(aura.AuraType)
+				if aura.AuraType == spellAuraMounted {
+					aura.DurationMs = 0
+					aura.RemainingMs = 0
+				}
 				if aura.AuraType == spellAuraFakeInebriation {
 					state.FakeInebriation += aura.Amount
 				}

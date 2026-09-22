@@ -1161,9 +1161,14 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 	target.MaxHealth = st.MaxHealth
 	target.CombatReach = st.CombatReach
 	if curHealth.Valid {
-		target.Health = uint32(curHealth.Int64)
+		if curHealth.Int64 > 0 {
+			target.Health = uint32(curHealth.Int64)
+		}
 	} else {
 		target.Health = st.Health
+	}
+	if target.MaxHealth > 0 && target.Health > target.MaxHealth {
+		target.Health = target.MaxHealth
 	}
 
 	s.server.motionMu.Lock()
