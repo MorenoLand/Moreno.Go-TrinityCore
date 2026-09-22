@@ -79,6 +79,7 @@ type creatureMotion struct {
 	Charmed        bool
 	CharmUnitFlags uint32
 	CharmFaction   uint32
+	CharmOwnerGUID uint64
 	PetCommand     uint8 // 0: stay, 1: follow, 2: attack
 	PetReact       uint8 // 0: passive, 1: defensive, 2: aggressive
 	AutocastSpells []uint32
@@ -302,9 +303,9 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 	}
 }
 
-func (s *Server) charmCreature(ctx context.Context, creatureGUID, charmerGUID uint64, charmerRace uint8) ([]uint32, uint8, uint8) {
+func (s *Server) charmCreature(ctx context.Context, creatureGUID, charmerGUID uint64, charmerRace uint8) ([]uint32, uint8, uint8, bool) {
 	if s == nil || creatureGUID == 0 || charmerGUID == 0 {
-		return nil, 0, 0
+		return nil, 0, 0, false
 	}
 	s.motionMu.Lock()
 	motion := s.creatureMotion[creatureGUID]
@@ -315,7 +316,7 @@ func (s *Server) charmCreature(ctx context.Context, creatureGUID, charmerGUID ui
 	}
 	if motion == nil {
 		s.motionMu.Unlock()
-		return nil, 0, 0
+		return nil, 0, 0, false
 	}
 	if len(motion.Spells) == 0 {
 		motion.Spells = s.loadCreatureSpells(ctx, motion.Entry)
@@ -323,11 +324,15 @@ func (s *Server) charmCreature(ctx context.Context, creatureGUID, charmerGUID ui
 	if !motion.Charmed {
 		motion.CharmUnitFlags = motion.UnitFlags
 		motion.CharmFaction = motion.Faction
+		motion.CharmOwnerGUID = motion.OwnerGUID
 	}
 	motion.CharmerGUID = charmerGUID
 	motion.Charmed = true
 	motion.UnitFlags |= unitFlagPlayerControlled
 	motion.Faction = s.raceFaction(charmerRace)
+	motion.OwnerGUID = charmerGUID
+	motion.PetCommand = PetCommandFollow
+	motion.PetReact = PetReactDefensive
 	motion.InCombat = false
 	motion.TargetGUID = 0
 	motion.Moving = false
@@ -340,7 +345,7 @@ func (s *Server) charmCreature(ctx context.Context, creatureGUID, charmerGUID ui
 	flags, faction := motion.UnitFlags, motion.Faction
 	s.motionMu.Unlock()
 	s.broadcastCreatureValuesUpdate(mapID, rawGUID, map[int]uint32{unitFieldFlags: flags, unitFieldFaction: faction})
-	return spells, reactState, commandState
+	return spells, reactState, commandState, true
 }
 
 func (s *Server) uncharmCreature(creatureGUID, charmerGUID uint64) {
@@ -362,8 +367,12 @@ func (s *Server) uncharmCreature(creatureGUID, charmerGUID uint64) {
 	motion.CharmerGUID = 0
 	motion.UnitFlags = motion.CharmUnitFlags
 	motion.Faction = motion.CharmFaction
+	motion.OwnerGUID = motion.CharmOwnerGUID
+	motion.PetCommand = PetCommandStay
+	motion.PetReact = PetReactPassive
 	motion.CharmUnitFlags = 0
 	motion.CharmFaction = 0
+	motion.CharmOwnerGUID = 0
 	mapID, rawGUID := motion.Map, motion.GUID
 	flags, faction := motion.UnitFlags, motion.Faction
 	s.motionMu.Unlock()
@@ -590,7 +599,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		motion.Moving = false
 		return
 	}
-	if motion.Charmed {
+	if motion.Charmed && motion.OwnerGUID == 0 {
 		return
 	}
 	if isCreaturePassive(motion) && motion.InCombat {
