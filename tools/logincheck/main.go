@@ -230,7 +230,7 @@ func checkReputationFlags() error {
 }
 
 func checkPublicPlayerValuesUpdate() error {
-	fields := map[int]uint32{24: 100, 67: 12345, 151: 42, 152: 3, 1020: 4}
+	fields := map[int]uint32{18: 0x12345678, 19: 0x40000000, 24: 100, 67: 12345, 151: 42, 152: 3, 1020: 4}
 	public := make(map[int]uint32, len(fields))
 	for field, value := range fields {
 		if world.IsPlayerFieldPublic(field) {
@@ -240,7 +240,7 @@ func checkPublicPlayerValuesUpdate() error {
 	if _, ok := public[1020]; ok {
 		return fmt.Errorf("private player field 1020 was retained")
 	}
-	for _, field := range []int{24, 67, 151, 152} {
+	for _, field := range []int{18, 19, 24, 67, 151, 152} {
 		if _, ok := public[field]; !ok {
 			return fmt.Errorf("public player field %d was filtered", field)
 		}

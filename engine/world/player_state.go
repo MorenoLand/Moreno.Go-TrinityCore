@@ -21,6 +21,7 @@ const (
 	objectFieldEntry                              = 3
 	objectFieldScale                              = 4
 	unitFieldSummon                               = 8
+	unitFieldTarget                               = 18
 	unitFieldBytes0                               = 23 // UNIT_FIELD_BYTES_0: Race, Class, Gender, PowerType
 	unitFieldHealth                               = 24
 	unitFieldPower1                               = 25
@@ -162,6 +163,7 @@ type playerSkill struct {
 
 type playerState struct {
 	GUID                 uint64
+	Selection            uint64
 	PetGUID              uint64
 	PetNumber            uint32
 	Name                 string
@@ -2536,6 +2538,8 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 		values[unitFieldMountDisplayID] = state.MountDisplayID
 	}
 	values[unitFieldPlayerFlags] = state.PlayerFlags
+	values[unitFieldTarget] = uint32(state.Selection)
+	values[unitFieldTarget+1] = uint32(state.Selection >> 32)
 	values[unitFieldPlayerFieldBytes] = playerFieldBytesValue(state)
 	values[unitFieldPlayerSelfResSpell] = state.SelfResSpell
 	shieldBlock := float32(state.Block) + float32(state.Stats[0])*0.5 - 10

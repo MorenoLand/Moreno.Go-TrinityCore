@@ -44,6 +44,10 @@ func (s *session) handleSetSelection(payload []byte) bool {
 		return false
 	}
 	s.selection = selection
+	if s.player != nil {
+		s.player.Selection = selection
+		s.sendPlayerUpdate()
+	}
 	return true
 }
 

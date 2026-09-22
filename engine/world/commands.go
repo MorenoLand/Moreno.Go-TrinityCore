@@ -42,6 +42,8 @@ func (s *session) sendPlayerUpdate() {
 		unitFieldBytes1:                   uint32(s.player.StandState),
 		unitFieldPlayerFlags:              s.player.PlayerFlags,
 		unitFieldPlayerFieldBytes:         playerFieldBytesValue(*s.player),
+		unitFieldTarget:                   uint32(s.selection),
+		unitFieldTarget + 1:               uint32(s.selection >> 32),
 		unitFieldGuildID:                  s.player.GuildID,
 		unitFieldGuildRank:                uint32(s.player.GuildRank),
 		unitFieldBytes2:                   uint32(s.player.SheathState) | uint32(pvpFlags)<<8,
@@ -141,6 +143,8 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) {
 		return
 	}
 	oldMap := s.player.Map
+	s.selection = 0
+	s.player.Selection = 0
 	transportGUID := s.player.TransportGUID
 	transportX, transportY, transportZ, transportO := s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO
 	transportAttached := false

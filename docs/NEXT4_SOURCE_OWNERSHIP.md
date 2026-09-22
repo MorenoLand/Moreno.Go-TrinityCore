@@ -406,3 +406,5 @@ Loaded corpse restoration now applies `PLAYER_FIELD_BYTE_RELEASE_TIMER` only for
 Loaded corpse replay now computes `SMSG_CORPSE_RECLAIM_DELAY` from the persisted corpse ghost timestamp and death-expire time, suppressing the packet after expiry, matching `Player::CalculateCorpseReclaimDelay(true)` (corpse reclaim packet correction).
 
 Alive-player login now defers same-map persisted corpse conversion until after nearby visibility is sent, then emits the corpse destroy and optional bones create while removing the resurrectable row, matching `Map::AddPlayerToMap` and `Map::ConvertCorpseToBones` (stale-corpse login visibility correction).
+
+Player selection now updates `UNIT_FIELD_TARGET` in self and nearby player values, persists through the initial player create state, and clears on teleport, matching `Player::SetSelection` and the public unit update field flags (selection update-field correction).
