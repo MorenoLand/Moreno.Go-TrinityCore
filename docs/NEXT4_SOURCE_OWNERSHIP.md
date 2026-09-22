@@ -306,3 +306,5 @@ Login corpse restoration now clears stale resurrectable corpse rows for characte
 Contact and guild roster loading now preserve source map ordering, and the login replay harness validates contact-list, guild-event, guild-bank, and guild-roster framing (`069a666`).
 
 Cinematic opening, next-camera, and completion handlers now leave cinematic persistence to the login/save owners, matching `CinematicMgr` packet-handler ownership (`9e11e7d`).
+
+Login now suppresses persisted corpse-object creates when the source state is scheduled for `BuildPlayerRepop`, preventing an old corpse from being sent before the new ghost corpse is created (login-corpse-repop milestone).
