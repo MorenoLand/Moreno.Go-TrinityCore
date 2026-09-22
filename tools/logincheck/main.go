@@ -112,6 +112,7 @@ func runSelfCheck() error {
 		{"bind-point", protocol.OpcodeSMSG_BIND_POINT_UPDATE, make([]byte, 20), func(event protocoltrace.Event) error { return requirePayloadLength(event, 20) }},
 		{"time-speed", protocol.OpcodeSMSG_LOGIN_SET_TIME_SPEED, loginTimeSpeedFixture(), requireLoginTimeSpeed},
 		{"login-effect", protocol.OpcodeSMSG_SPELL_GO, loginEffectFixture(), requireLoginEffect},
+		{"equipment-sets", protocol.OpcodeSMSG_EQUIPMENT_SET_LIST, []byte{0, 0, 0, 0}, requireEquipmentSetList},
 		{"group-list", protocol.OpcodeSMSG_GROUP_LIST, groupListFixture(), requireGroupList},
 		{"world-states", protocol.OpcodeSMSG_INIT_WORLD_STATES, initWorldStatesFixture(), requireInitWorldStates},
 		{"forced-reactions", protocol.OpcodeSMSG_SET_FORCED_REACTIONS, make([]byte, 4), requireForcedReactions},
@@ -408,6 +409,8 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 			validate = requireInitialFactions
 		case "SMSG_SET_FORCED_REACTIONS":
 			validate = requireForcedReactions
+		case "SMSG_EQUIPMENT_SET_LIST":
+			validate = requireEquipmentSetList
 		case "SMSG_INIT_WORLD_STATES":
 			validate = requireInitWorldStates
 		case "SMSG_TIME_SYNC_REQ":
@@ -509,6 +512,44 @@ func requireLoginTimeSpeed(event protocoltrace.Event) error {
 	}
 	if speed != 0.5 || holiday != 0 || reader.Remaining() != 0 {
 		return fmt.Errorf("invalid login time-speed payload speed=%v holiday=%d remaining=%d", speed, holiday, reader.Remaining())
+	}
+	return nil
+}
+
+func requireEquipmentSetList(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	count, err := reader.ReadU32()
+	if err != nil {
+		return fmt.Errorf("equipment-set count is truncated: %w", err)
+	}
+	if count > 10 {
+		return fmt.Errorf("equipment-set count=%d exceeds client limit", count)
+	}
+	for index := uint32(0); index < count; index++ {
+		if _, err := reader.ReadPackedGUID(); err != nil {
+			return fmt.Errorf("equipment-set %d GUID is truncated: %w", index, err)
+		}
+		if _, err := reader.ReadU32(); err != nil {
+			return fmt.Errorf("equipment-set %d index is truncated: %w", index, err)
+		}
+		if _, err := reader.ReadCString(); err != nil {
+			return fmt.Errorf("equipment-set %d name is truncated: %w", index, err)
+		}
+		if _, err := reader.ReadCString(); err != nil {
+			return fmt.Errorf("equipment-set %d icon is truncated: %w", index, err)
+		}
+		for slot := 0; slot < 19; slot++ {
+			if _, err := reader.ReadPackedGUID(); err != nil {
+				return fmt.Errorf("equipment-set %d item %d is truncated: %w", index, slot, err)
+			}
+		}
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected equipment-set payload bytes=%d", reader.Remaining())
 	}
 	return nil
 }
