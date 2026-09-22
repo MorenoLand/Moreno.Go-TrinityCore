@@ -312,3 +312,5 @@ Login now suppresses persisted corpse-object creates when the source state is sc
 GameDataDir resolution now falls back to the configured DataDir, allowing MPQ-derived `dbc`, `maps`, `vmaps`, and `mmaps` directories directly under the configured bin layout (runtime-input path milestone).
 
 World initialization now reports the exact required login DBC files when the configured game-data directory is incomplete, preventing silent DBC-backed client-state failures (runtime-input diagnostics milestone).
+
+Saved-pet restoration no longer emits an extra `SMSG_SPELL_GO` for `CreatedBySpell`, matching `Player::LoadPet` and `Pet::LoadPetFromDB` packet ownership (saved-pet login milestone).
