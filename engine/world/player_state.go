@@ -1838,7 +1838,6 @@ func restoreLoadedDeathState(state *playerState) {
 	state.repopOnLogin = true
 	state.PlayerFlags |= playerFlagGhost
 	state.PlayerFieldBytes |= playerFieldByteReleaseTimer
-	state.Health = 1
 }
 
 func (s *session) restoreLoadedCorpseState(ctx context.Context, state *playerState) {
@@ -1856,9 +1855,6 @@ func (s *session) restoreLoadedCorpseState(ctx context.Context, state *playerSta
 	state.PlayerFlags |= playerFlagGhost
 	state.repopOnLogin = true
 	state.PlayerFieldBytes |= playerFieldByteReleaseTimer
-	if state.Health == 0 {
-		state.Health = 1
-	}
 }
 
 func (s *session) loadPlayerReputations(ctx context.Context, state *playerState) error {
@@ -2643,7 +2639,7 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 			}
 		}
 	}
-	values[unitFieldHealth] = maxUint32(state.Health, 1)
+	values[unitFieldHealth] = state.Health
 	values[unitFieldMaxHealth] = maxUint32(state.MaxHealth, 1)
 	for i, power := range state.Powers {
 		values[unitFieldPower1+i] = power
@@ -2776,6 +2772,9 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 		_ = mask.Set(unitFieldMaxLevel)
 		_ = mask.Set(unitFieldNextLevelXP)
 		_ = mask.Set(unitFieldXP)
+	}
+	if state.Health == 0 {
+		_ = mask.Set(unitFieldHealth)
 	}
 	block := protocol.NewBuffer(256)
 	block.WriteU8(protocol.UpdateCreateObject2)

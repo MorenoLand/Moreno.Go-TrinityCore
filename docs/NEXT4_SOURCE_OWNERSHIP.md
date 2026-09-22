@@ -343,4 +343,6 @@ Optional login revision chat now follows `CONFIG_ENABLE_SINFO_LOGIN` through `Se
 
 `PlayerStart.AllReputation` now emits the source `SMSG_SET_FACTION_STANDING` transition after initial faction initialization, preserves visible faction flags, and reports rank increases like `ReputationMgr::SetOneFactionReputation` and `SendState` instead of sending a second initialization packet (start-reputation login milestone).
 
+Dead player login now keeps saved health at zero through the self-player create update and explicitly masks that zero field, leaving `BuildPlayerRepop` to set health to one at the source post-login repop boundary (dead-player update-mask milestone).
+
 The login replay checker now validates the `SMSG_SET_FACTION_STANDING` float/flag/count/standing-entry framing used by the start-reputation transition (start-reputation packet evidence milestone).
