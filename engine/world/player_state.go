@@ -3182,6 +3182,18 @@ func (s *session) sendPlayerMountUpdate() {
 	}
 }
 
+func (s *session) sendPlayerDismount() {
+	if s == nil || s.player == nil {
+		return
+	}
+	packet := protocol.NewBuffer(packedGUIDSize(s.playerGUID))
+	packet.WritePackedGUID(s.playerGUID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_DISMOUNT), packet.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_DISMOUNT), packet.Bytes(), s)
+	}
+}
+
 // currentPlayer returns the live player state for timer callbacks.
 func (s *session) currentPlayer() *playerState {
 	return s.player

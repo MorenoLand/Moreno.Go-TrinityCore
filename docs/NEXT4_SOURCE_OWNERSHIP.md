@@ -442,3 +442,5 @@ Controlled player cast attempts now return the source `SPELL_FAILED_CHARMED`, `S
 Creature-target charm now marks the live creature player-controlled, changes its faction to the charmer, routes it through the existing pet follow/attack motion controller, clears combat, sends `SMSG_CLIENT_CONTROL_UPDATE` and a source-shaped `SMSG_PET_SPELLS` charm bar with creature react/command state, and restores the original creature state when the aura expires or is dispelled, matching normal `CHARM_TYPE_CHARM` in `Unit::SetCharmedBy`, `CharmSpellInitialize`, and `RemoveCharmedBy` (creature charm-control correction).
 
 Player-backed vehicle enter/exit now emits `SMSG_PLAYER_VEHICLE_DATA` with the vehicle ID and zero removal state, matching the source vehicle-kit transition packet ownership (player vehicle packet correction).
+
+Mounted-aura removal now emits the source `SMSG_DISMOUNT` packed-GUID transition after clearing `UNIT_FIELD_MOUNTDISPLAYID` and `UNIT_FLAG_MOUNT`; mount collision-height calculation remains dependent on the missing DBC model data (dismount packet correction).

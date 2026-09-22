@@ -2323,6 +2323,7 @@ func (s *session) removeAura(spellID uint32) {
 	if wasMounted && !s.hasAuraType(spellAuraMounted) && s.player != nil {
 		s.player.MountDisplayID = 0
 		s.sendPlayerMountUpdate()
+		s.sendPlayerDismount()
 	}
 	if wasTransform && s.player != nil {
 		s.refreshTransformDisplay(context.Background())
@@ -3173,6 +3174,7 @@ func (s *session) handleCancelMountAura(payload []byte) bool {
 	if s.player.MountDisplayID != 0 {
 		s.player.MountDisplayID = 0
 		s.sendPlayerMountUpdate()
+		s.sendPlayerDismount()
 	}
 	return true
 }
