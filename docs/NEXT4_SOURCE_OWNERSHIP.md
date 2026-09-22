@@ -302,3 +302,5 @@ The login replay harness now enforces source post-map ordering across world stat
 Login raid-difficulty comparison now stores the current map difficulty, including zero outside raids, before deciding whether to emit `MSG_SET_RAID_DIFFICULTY` (`8c208e0`).
 
 Login corpse restoration now clears stale resurrectable corpse rows for characters with saved health instead of incorrectly setting ghost/repop state (`3658fcd`).
+
+Contact and guild roster loading now preserve source map ordering, and the login replay harness validates contact-list, guild-event, guild-bank, and guild-roster framing (`069a666`).
