@@ -286,3 +286,5 @@ Login inventory create blocks now follow TrinityCore equipment/top-level slot or
 Login questgiver status now includes visible gameobject questgivers, source-style three-dimensional range filtering, and raw creature/gameobject GUIDs (`6597c3d`).
 
 Taxi status packets now report only the persisted taxi-mask bit, matching `Player::SendTaxiStatus` and `SendTaxiNodeStatusMultiple`; taxi-cheat authorization remains separate (`f01ce06`).
+
+Equipment-set login entries now encode saved piece counters as Item high GUIDs before `SMSG_EQUIPMENT_SET_LIST`, matching `_LoadEquipmentSets` (`59a7417`).
