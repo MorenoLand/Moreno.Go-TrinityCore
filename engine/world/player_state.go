@@ -3335,6 +3335,60 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 		}
 		contents[int64(bagGUID)][uint32(item.slot)] = uint64(item.itemGUID) | (uint64(0x4000) << 48)
 	}
+	orderedItems := make([]inventoryItem, 0, len(items))
+	children := make(map[int64][]inventoryItem)
+	for _, item := range items {
+		children[item.bag] = append(children[item.bag], item)
+	}
+	itemSlotOrder := func(slot int64) int64 {
+		switch {
+		case slot >= 0 && slot < 19:
+			return slot
+		case slot >= 19 && slot < 74:
+			return 1000 + slot
+		case slot >= 86 && slot < 150:
+			return 2000 + slot
+		default:
+			return 3000 + slot
+		}
+	}
+	sort.SliceStable(children[0], func(i, j int) bool { return itemSlotOrder(children[0][i].slot) < itemSlotOrder(children[0][j].slot) })
+	for bagGUID := range children {
+		if bagGUID == 0 {
+			continue
+		}
+		sort.SliceStable(children[bagGUID], func(i, j int) bool { return children[bagGUID][i].slot < children[bagGUID][j].slot })
+	}
+	visited := make(map[int64]struct{}, len(items))
+	var appendItem func(inventoryItem)
+	appendItem = func(item inventoryItem) {
+		if _, ok := visited[item.itemGUID]; ok {
+			return
+		}
+		visited[item.itemGUID] = struct{}{}
+		orderedItems = append(orderedItems, item)
+		for _, child := range children[item.itemGUID] {
+			appendItem(child)
+		}
+	}
+	for _, item := range children[0] {
+		appendItem(item)
+	}
+	orphans := make([]inventoryItem, 0)
+	for _, item := range items {
+		if _, ok := visited[item.itemGUID]; !ok {
+			orphans = append(orphans, item)
+		}
+	}
+	sort.SliceStable(orphans, func(i, j int) bool {
+		if orphans[i].bag != orphans[j].bag {
+			return orphans[i].bag < orphans[j].bag
+		}
+		return orphans[i].slot < orphans[j].slot
+	})
+	for _, item := range orphans {
+		appendItem(item)
+	}
 	type itemTemplateState struct {
 		ContainerSlots, MaxDurability, ItemLevel, Quality, InventoryType, RandomSuffix uint32
 	}
@@ -3421,7 +3475,7 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 		duration uint32
 	}
 	enchantDurations := make([]enchantDurationUpdate, 0)
-	for _, item := range items {
+	for _, item := range orderedItems {
 		bag, slot, itemGUID, itemEntry, count := item.bag, item.slot, item.itemGUID, item.itemEntry, item.count
 		if count <= 0 {
 			count = 1
@@ -3546,7 +3600,7 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 		}
 	}
 	if mode != inventoryUpdateCreateOnly {
-		for _, item := range items {
+		for _, item := range orderedItems {
 			if item.duration <= 0 {
 				continue
 			}
