@@ -51,6 +51,7 @@ const (
 	unitFieldKnownCurrencies                      = 632
 	unitFieldWatchedFaction                       = 1230
 	unitFieldChosenTitle                          = 321
+	playerFieldFakeInebriation                    = 322
 	unitFieldAmmoID                               = 1198
 	unitFieldPlayerSelfResSpell                   = 1199 // PLAYER_SELF_RES_SPELL = UNIT_END + 0x041B
 	playerFieldKills                              = 1225 // PLAYER_FIELD_KILLS = UNIT_END + 0x0435
@@ -310,6 +311,7 @@ type playerState struct {
 	TodayKills           uint16
 	YesterdayKills       uint16
 	DrunkenState         uint16
+	FakeInebriation      uint32
 }
 
 type playerReputation struct {
@@ -2542,6 +2544,7 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 	values[unitFieldBytes2] = uint32(state.SheathState) | uint32(pvpFlags)<<8
 	values[unitFieldPlayerBytes2] = uint32(state.FacialStyle) | uint32(state.BankBagSlots)<<16 | uint32(state.RestState)<<24
 	values[unitFieldPlayerBytes3] = uint32(state.Gender) | uint32(uint8(state.DrunkenState))<<8
+	values[playerFieldFakeInebriation] = state.FakeInebriation
 	values[unitFieldGuildID] = state.GuildID
 	values[unitFieldGuildRank] = uint32(state.GuildRank)
 	values[unitFieldXP] = state.XP

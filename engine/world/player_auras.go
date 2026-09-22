@@ -38,6 +38,7 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 	s.auras = make(map[uint32]struct{})
 	s.auraSlots = make(map[uint32]uint8)
 	s.activeAuras = make(map[uint32]*activeAura)
+	state.FakeInebriation = 0
 	offlineMs := int64(0)
 	if state.LogoutTime > 0 && time.Now().Unix() > state.LogoutTime {
 		offlineMs = (time.Now().Unix() - state.LogoutTime) * 1000
@@ -141,6 +142,9 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 					break
 				}
 				aura.Positive = !isHarmfulAura(aura.AuraType)
+				if aura.AuraType == spellAuraFakeInebriation {
+					state.FakeInebriation += aura.Amount
+				}
 				if aura.AuraType == spellAuraStun || aura.AuraType == spellAuraRoot {
 					s.rooted = true
 					if aura.AuraType == spellAuraStun {

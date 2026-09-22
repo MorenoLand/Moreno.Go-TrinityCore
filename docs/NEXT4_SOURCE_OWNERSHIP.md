@@ -380,3 +380,5 @@ The replay gate now enforces the optional pre-map guild login window: guild MOTD
 Persisted and runtime stun/root auras now retain server movement-control state, set the source stunned flag, replay force-root state, reject movement while rooted, and clear state with force-unroot when the final control aura is removed, matching `HandleAuraModStun`, `HandleAuraModRoot`, and `Player::SendInitialPacketsAfterAddToMap` (login movement-control correction).
 
 Persisted stun auras now also set `UNIT_FLAG_STUNNED` before the self-player create update is serialized, matching the source aura application state visible in `Player::BuildCreateUpdateBlockForPlayer` (persisted control-flag update-mask correction).
+
+Persisted and runtime fake-inebriation aura amounts now populate and maintain the public `PLAYER_FAKE_INEBRIATION` field separately from raw drunkenness, matching `AuraEffect::HandleAuraModFakeInebriation` and `Player::SetDrunkValue` (fake-inebriation update-field correction).

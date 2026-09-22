@@ -46,6 +46,7 @@ const (
 	spellAuraMounted         = 78
 	spellAuraStun            = 12
 	spellAuraRoot            = 26
+	spellAuraFakeInebriation = 304
 )
 
 // isSelfCastOnly checks if all active spell effects target the caster unit.
@@ -2239,11 +2240,15 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 func (s *session) removeAura(spellID uint32) {
 	wasMounted := false
 	wasMovementControl := false
+	removedFakeInebriation := uint32(0)
 	s.castMu.Lock()
 	if s.activeAuras != nil {
 		if aura, ok := s.activeAuras[spellID]; ok && aura != nil {
 			wasMounted = aura.AuraType == spellAuraMounted
 			wasMovementControl = aura.AuraType == spellAuraStun || aura.AuraType == spellAuraRoot
+			if aura.AuraType == spellAuraFakeInebriation {
+				removedFakeInebriation = aura.Amount
+			}
 			aura.Stopped = true
 			if aura.Timer != nil {
 				aura.Timer.Stop()
@@ -2278,6 +2283,13 @@ func (s *session) removeAura(spellID uint32) {
 		if s.player != nil {
 			s.player.UnitFlags &^= unitFlagStunned
 			s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_UNROOT))
+		}
+	}
+	if removedFakeInebriation > 0 && s.player != nil {
+		if removedFakeInebriation >= s.player.FakeInebriation {
+			s.player.FakeInebriation = 0
+		} else {
+			s.player.FakeInebriation -= removedFakeInebriation
 		}
 	}
 	s.sendPlayerUpdate()
@@ -2437,6 +2449,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		targetSess.activeAuras[spell.ID] = aura
 		targetSess.castMu.Unlock()
+		if eff.Aura == spellAuraFakeInebriation {
+			targetSess.player.FakeInebriation += amount
+		}
 		if eff.Aura == spellAuraStun || eff.Aura == spellAuraRoot {
 			targetSess.rooted = true
 			if eff.Aura == spellAuraStun {
