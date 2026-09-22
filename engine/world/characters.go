@@ -1362,27 +1362,16 @@ func buildLoginSetTimeSpeed(now time.Time) []byte {
 // handleNextCinematicCamera processes CMSG_NEXT_CINEMATIC_CAMERA (0x0FB).
 // Reference: WorldSession::HandleNextCinematicCamera (MiscHandler.cpp:905).
 func (s *session) handleNextCinematicCamera() bool {
-	if s.player != nil {
-		s.player.Cinematic = 1
-		s.player.AtLogin &= ^uint32(atLoginFirst)
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(), "UPDATE characters SET cinematic = 1, at_login = at_login & ~32 WHERE guid = ?", s.playerGUID)
-		}
-	}
 	return true
 }
 
 func (s *session) handleOpeningCinematic() bool {
-	if !s.playerLoaded || s.player == nil || s.player.Cinematic != 0 || s.player.XP != 0 {
+	if !s.playerLoaded || s.player == nil || s.player.XP != 0 {
 		return true
 	}
 	cinematicID := s.getStartingCinematicID(s.player.Race, s.player.Class)
 	if cinematicID == 0 {
 		return true
-	}
-	s.player.Cinematic = 1
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(), "UPDATE characters SET cinematic = 1 WHERE guid = ?", s.playerGUID)
 	}
 	packet := protocol.NewBuffer(4)
 	packet.WriteU32(cinematicID)
@@ -1390,18 +1379,6 @@ func (s *session) handleOpeningCinematic() bool {
 }
 
 func (s *session) handleCompleteCinematic(ctx context.Context) bool {
-	if !s.playerLoaded || s.player == nil {
-		return true
-	}
-	s.player.Cinematic = 1
-	s.player.AtLogin &= ^uint32(atLoginFirst)
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET cinematic = 1, at_login = at_login & ~32 WHERE guid = ?", s.playerGUID); err != nil {
-			s.debug("cinematic completion save failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
-			return false
-		}
-	}
-	s.debug("cinematic completed", "account", s.accountName, "guid", s.playerGUID)
 	return true
 }
 
