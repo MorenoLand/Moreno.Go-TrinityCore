@@ -2871,6 +2871,9 @@ func (s *Server) buildNearbyPlayerUpdates(observer *session) (*protocol.Packet, 
 		if sess == nil || sess == observer || !sess.playerLoaded || sess.player == nil || sess.player.GUID == state.GUID || sess.player.Map != state.Map {
 			continue
 		}
+		if !canSeePlayer(observer, sess) {
+			continue
+		}
 		if math.Hypot(float64(sess.player.X-state.X), float64(sess.player.Y-state.Y)) > distance {
 			continue
 		}
@@ -2961,6 +2964,9 @@ func (s *Server) broadcastPlayerCreate(state playerState, source *session) {
 		if target == source || !target.authed || !target.playerLoaded || target.player == nil || target.player.Map != state.Map {
 			continue
 		}
+		if !canSeePlayer(target, source) {
+			continue
+		}
 		if math.Hypot(float64(target.player.X-state.X), float64(target.player.Y-state.Y)) > distance {
 			continue
 		}
@@ -2976,6 +2982,25 @@ func (s *Server) broadcastPlayerCreate(state playerState, source *session) {
 		target.visiblePlayersMu.Unlock()
 		_ = target.write(packet.Opcode, packet.Payload.Bytes(), true)
 	}
+}
+
+func canSeePlayer(observer, target *session) bool {
+	if observer == nil || target == nil || observer.player == nil || target.player == nil {
+		return false
+	}
+	if target.player.ExtraFlags&playerExtraGMInvisible != 0 && observer.security < target.security {
+		return false
+	}
+	if target.player.PlayerFlags&playerFlagGhost == 0 {
+		return true
+	}
+	if observer.player.PlayerFlags&playerFlagGhost != 0 {
+		return true
+	}
+	if teamForRace(observer.player.Race) != teamForRace(target.player.Race) {
+		return false
+	}
+	return observer.groupID != 0 && observer.groupID == target.groupID
 }
 
 func playerFieldBytesValue(state playerState) uint32 {
