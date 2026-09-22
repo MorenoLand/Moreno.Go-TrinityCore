@@ -193,7 +193,7 @@ func (s *session) sendTaxiNodeStatusMultiple(ctx context.Context) bool {
 	for rows.Next() {
 		var guid, entry, faction int64
 		var x, y, z float64
-		if rows.Scan(&guid, &entry, &x, &y, &z, &faction) == nil {
+		if rows.Scan(&guid, &entry, &x, &y, &z, &faction) == nil && math.Sqrt((x-float64(s.player.X))*(x-float64(s.player.X))+(y-float64(s.player.Y))*(y-float64(s.player.Y))+(z-float64(s.player.Z))*(z-float64(s.player.Z))) <= distance {
 			masters = append(masters, flightmaster{guid: uint32(guid), entry: uint32(entry), x: float32(x), y: float32(y), z: float32(z), faction: uint32(faction)})
 		}
 	}
