@@ -50,6 +50,7 @@ const (
 	unitFieldMaxLevel                             = 1279
 	playerFieldKnownTitles                        = 626
 	unitFieldKnownCurrencies                      = 632
+	playerFieldBytes2                             = 1229
 	unitFieldWatchedFaction                       = 1230
 	unitFieldChosenTitle                          = 321
 	playerFieldFakeInebriation                    = 322
@@ -230,6 +231,8 @@ type playerState struct {
 	Equipment            string
 	SheathState          uint8
 	PVPFlags             uint8
+	StandFlags           uint8
+	AuraVision           uint8
 	TaxiMask             [taxiMaskSize]uint32
 	QuestLog             [playerQuestLogSlots]questLogEntry
 	MountDisplayID       uint32
@@ -2511,7 +2514,7 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 	values[unitFieldBytes0] = uint32(race) | uint32(class)<<8 | uint32(state.Gender)<<16 | uint32(powerType)<<24
 	values[unitFieldFlags2] = unitFlag2RegeneratePower
 	values[unitFieldHoverHeight] = math.Float32bits(1)
-	values[unitFieldBytes1] = uint32(state.StandState)
+	values[unitFieldBytes1] = uint32(state.StandState) | uint32(state.StandFlags)<<16
 	values[unitFieldFaction] = s.raceFaction(state.Race)
 	unitFlags := state.UnitFlags
 	if state.MountDisplayID != 0 {
@@ -2558,6 +2561,7 @@ func (s *Server) buildPlayerUpdateForTarget(state playerState, targetSelf bool) 
 	}
 	values[unitFieldBytes2] = uint32(state.SheathState) | uint32(pvpFlags)<<8
 	values[unitFieldPlayerBytes2] = uint32(state.FacialStyle) | uint32(state.BankBagSlots)<<16 | uint32(state.RestState)<<24
+	values[playerFieldBytes2] = uint32(state.AuraVision) << 24
 	values[unitFieldPlayerBytes3] = uint32(state.Gender) | uint32(uint8(state.DrunkenState))<<8
 	values[playerFieldFakeInebriation] = state.FakeInebriation
 	values[unitFieldGuildID] = state.GuildID

@@ -408,3 +408,5 @@ Loaded corpse replay now computes `SMSG_CORPSE_RECLAIM_DELAY` from the persisted
 Alive-player login now defers same-map persisted corpse conversion until after nearby visibility is sent, then emits the corpse destroy and optional bones create while removing the resurrectable row, matching `Map::AddPlayerToMap` and `Map::ConvertCorpseToBones` (stale-corpse login visibility correction).
 
 Player selection now updates `UNIT_FIELD_TARGET` in self and nearby player values, persists through the initial player create state, and clears on teleport, matching `Player::SetSelection` and the public unit update field flags (selection update-field correction).
+
+Persisted and runtime stealth auras now set and clear the source creep flag in `UNIT_FIELD_BYTES_1` and private stealth aura-vision bit in `PLAYER_FIELD_BYTES2`; live/create field coverage is included in logincheck, matching `AuraEffect::HandleModStealth` (stealth client-field correction).

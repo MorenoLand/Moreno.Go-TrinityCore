@@ -145,6 +145,10 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 				if aura.AuraType == spellAuraFakeInebriation {
 					state.FakeInebriation += aura.Amount
 				}
+				if aura.AuraType == spellAuraStealth {
+					state.StandFlags |= unitStandFlagCreep
+					state.AuraVision |= playerAuraVisionStealth
+				}
 				if aura.AuraType == spellAuraStun || aura.AuraType == spellAuraRoot {
 					s.rooted = true
 					if aura.AuraType == spellAuraStun {

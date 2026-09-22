@@ -46,7 +46,10 @@ const (
 	spellAuraMounted         = 78
 	spellAuraStun            = 12
 	spellAuraRoot            = 26
+	spellAuraStealth         = 16
 	spellAuraFakeInebriation = 304
+	unitStandFlagCreep       = 0x02
+	playerAuraVisionStealth  = 0x20
 )
 
 // isSelfCastOnly checks if all active spell effects target the caster unit.
@@ -2241,6 +2244,7 @@ func (s *session) removeAura(spellID uint32) {
 	wasMounted := false
 	wasMovementControl := false
 	wasTransform := false
+	wasStealth := false
 	removedFakeInebriation := uint32(0)
 	s.castMu.Lock()
 	if s.activeAuras != nil {
@@ -2248,6 +2252,7 @@ func (s *session) removeAura(spellID uint32) {
 			wasMounted = aura.AuraType == spellAuraMounted
 			wasMovementControl = aura.AuraType == spellAuraStun || aura.AuraType == spellAuraRoot
 			wasTransform = aura.AuraType == 56
+			wasStealth = aura.AuraType == spellAuraStealth
 			if aura.AuraType == spellAuraFakeInebriation {
 				removedFakeInebriation = aura.Amount
 			}
@@ -2282,6 +2287,10 @@ func (s *session) removeAura(spellID uint32) {
 	}
 	if wasTransform && s.player != nil {
 		s.refreshTransformDisplay(context.Background())
+	}
+	if wasStealth && s.player != nil && !s.hasAuraType(spellAuraStealth) {
+		s.player.StandFlags &^= unitStandFlagCreep
+		s.player.AuraVision &^= playerAuraVisionStealth
 	}
 	if wasMovementControl && !s.hasAuraType(spellAuraStun) && !s.hasAuraType(spellAuraRoot) {
 		s.rooted = false
@@ -2489,6 +2498,10 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		if eff.Aura == spellAuraMounted {
 			targetSess.applyMountedDisplay(ctx, aura)
+		}
+		if eff.Aura == spellAuraStealth {
+			targetSess.player.StandFlags |= unitStandFlagCreep
+			targetSess.player.AuraVision |= playerAuraVisionStealth
 		}
 		if eff.Aura == 56 {
 			targetSess.refreshTransformDisplay(ctx)
