@@ -396,3 +396,5 @@ Live transform aura application and removal now refresh `UNIT_FIELD_DISPLAYID` w
 Character reputation loading now merges database visibility/war/inactive toggles with the DBC default flags and enforces the source hidden/invisible/peace-forced rules instead of replacing defaults with raw database flags. `tools/logincheck --self-check` covers visible default preservation and peace-forced war rejection, matching `ReputationMgr::Initialize`, `SetVisible`, `SetAtWar`, `SetInactive`, and `LoadFromDB` (reputation login-state correction).
 
 Live player values now include `PLAYER_GUILDID` and `PLAYER_GUILDRANK`, allowing membership and rank changes to reach the owner and nearby clients through the source-public update mask, matching `Player::SetInGuild`, `Player::SetRank`, and `Guild::Member::ChangeRank` (live guild-field correction).
+
+New character creation now persists watched faction `-1` and drunkenness `0`, matching `Player::Create` initialization; `tools/logincheck --self-check` guards both defaults (character-creation login-state correction).

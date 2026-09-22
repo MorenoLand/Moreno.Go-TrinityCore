@@ -85,6 +85,10 @@ type enumCharacter struct {
 	Banned      bool
 }
 
+func CharacterCreationDefaults() (uint32, uint32) {
+	return ^uint32(0), 0
+}
+
 func (s *session) handleCharEnum(ctx context.Context) bool {
 	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_DEL_EXPIRED_BANS"); err != nil {
 		s.debug("character enumeration cleanup failed", "account", s.accountName, "error", err)
@@ -315,6 +319,7 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	startHonor := s.server.Config.StartHonorPoints
 	startArena := s.server.Config.StartArenaPoints
 
+	watchedFaction, drunkenness := CharacterCreationDefaults()
 	args := []any{
 		uint32(guid), s.accountID, name, race, class, gender,
 		startLevel, uint32(0), startMoney,
@@ -326,7 +331,7 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 		uint32(0), uint32(0), float32(0), uint32(0), uint8(0), uint32(0), uint32(0),
 		uint16(0), uint8(0), uint16(atLoginFirst), uint16(spawn.Zone), uint32(0), "",
 		startArena, startHonor, uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0),
-		uint64(0), uint32(0), uint32(^uint32(0)), uint32(1),
+		uint64(0), watchedFaction, drunkenness, uint32(1),
 		uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0),
 		uint8(1), uint8(0), "", "", uint32(0), "", uint8(0), uint32(0),
 	}

@@ -101,6 +101,9 @@ func runSelfCheck() error {
 	if err := checkReputationFlags(); err != nil {
 		return fmt.Errorf("reputation flag check failed: %w", err)
 	}
+	if err := checkCharacterCreationDefaults(); err != nil {
+		return fmt.Errorf("character creation default check failed: %w", err)
+	}
 	for _, compressed := range []bool{false, true} {
 		event, err := loginCreateFixture(compressed)
 		if err != nil {
@@ -160,6 +163,17 @@ func runSelfCheck() error {
 		if err := check.validate(event); err != nil {
 			return fmt.Errorf("%s payload fixture rejected: %w", check.name, err)
 		}
+	}
+	return nil
+}
+
+func checkCharacterCreationDefaults() error {
+	watchedFaction, drunkenness := world.CharacterCreationDefaults()
+	if watchedFaction != 0xFFFFFFFF {
+		return fmt.Errorf("watched faction default=%d want -1", watchedFaction)
+	}
+	if drunkenness != 0 {
+		return fmt.Errorf("drunkenness default=%d want 0", drunkenness)
 	}
 	return nil
 }
