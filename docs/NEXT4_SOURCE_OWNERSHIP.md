@@ -298,3 +298,5 @@ Login flightmaster status candidates now use the source visible-object three-dim
 The login replay harness now parses and validates `SMSG_EQUIPMENT_SET_LIST` framing, packed item GUIDs, client set limits, and trailing bytes (`66e7412`).
 
 The login replay harness now enforces source post-map ordering across world states, time sync, login effect, aura/duration updates, quest/taxi statuses, raid difficulty, quest sharing, group state, and pet state (`931317f`).
+
+Login raid-difficulty comparison now stores the current map difficulty, including zero outside raids, before deciding whether to emit `MSG_SET_RAID_DIFFICULTY` (`8c208e0`).
