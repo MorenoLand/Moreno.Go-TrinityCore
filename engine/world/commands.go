@@ -45,6 +45,7 @@ func (s *session) sendPlayerUpdate() {
 		unitFieldBytes2:                   uint32(s.player.SheathState) | uint32(pvpFlags)<<8,
 		unitFieldPlayerBytes2:             uint32(s.player.FacialStyle) | uint32(s.player.BankBagSlots)<<16 | uint32(s.player.RestState)<<24,
 		unitFieldPlayerBytes3:             uint32(s.player.Gender) | uint32(uint8(s.player.DrunkenState))<<8,
+		playerFieldFakeInebriation:        s.player.FakeInebriation,
 		unitFieldChosenTitle:              s.player.ChosenTitle,
 		unitFieldSummon:                   uint32(s.player.PetGUID),
 		unitFieldSummon + 1:               uint32(s.player.PetGUID >> 32),
