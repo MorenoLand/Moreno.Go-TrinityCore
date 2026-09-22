@@ -422,3 +422,5 @@ Mobile transport gameobject uses now resolve the source `HighGuid::Mo_Transport`
 Creature creates now expose template-derived maximum health separately from persisted current health, and combat target/motion state clamps stale persisted current health to that maximum, preserving `Creature::LoadFromDB` and `Unit::GetMaxHealth` semantics for critters and ordinary creatures (creature health-state correction).
 
 Mounted auras now clear other mounted auras, keep the mount aura indefinite through login and runtime application, and dismount removes the actual mounted aura and client mount fields, matching `AuraEffect::HandleAuraMounted`, `Unit::Mount`, and `Unit::Dismount` (mount state correction).
+
+Stealth, invisibility, stealth-detection, invisibility-detection, and stealth-level aura transitions now reconcile every loaded observer's player visibility set after the client fields change, emitting the corresponding create or out-of-range update, matching the source `AuraEffect` handlers' `Unit::UpdateObjectVisibility` calls (aura visibility transition correction).

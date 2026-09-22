@@ -2956,6 +2956,26 @@ func (s *Server) buildNearbyPlayerUpdates(observer *session) (*protocol.Packet, 
 	return packet, count
 }
 
+func (s *Server) refreshPlayerVisibility() {
+	if s == nil {
+		return
+	}
+	s.sessionsMu.RLock()
+	observers := make([]*session, 0, len(s.sessions))
+	for observer := range s.sessions {
+		if observer != nil && observer.authed && observer.playerLoaded && observer.player != nil {
+			observers = append(observers, observer)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, observer := range observers {
+		packet, _ := s.buildNearbyPlayerUpdates(observer)
+		if packet != nil {
+			_ = observer.write(packet.Opcode, packet.Payload.Bytes(), true)
+		}
+	}
+}
+
 func (s *session) markVisiblePlayers(guids []uint64) {
 	if s == nil || len(guids) == 0 {
 		return

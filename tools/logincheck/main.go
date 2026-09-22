@@ -98,6 +98,9 @@ func runSelfCheck() error {
 	if err := checkPublicPlayerValuesUpdate(); err != nil {
 		return fmt.Errorf("public player values update check failed: %w", err)
 	}
+	if err := checkVisibilityAuraTransitions(); err != nil {
+		return fmt.Errorf("visibility aura transition check failed: %w", err)
+	}
 	if err := checkReputationFlags(); err != nil {
 		return fmt.Errorf("reputation flag check failed: %w", err)
 	}
@@ -171,6 +174,20 @@ func runSelfCheck() error {
 		event := protocoltrace.Event{Direction: protocoltrace.ServerToClient, Opcode: uint32(check.opcode), Payload: base64.StdEncoding.EncodeToString(check.payload)}
 		if err := check.validate(event); err != nil {
 			return fmt.Errorf("%s payload fixture rejected: %w", check.name, err)
+		}
+	}
+	return nil
+}
+
+func checkVisibilityAuraTransitions() error {
+	for _, auraType := range []uint32{16, 17, 18, 19, 154} {
+		if !world.AffectsPlayerVisibility(auraType) {
+			return fmt.Errorf("aura type %d did not require visibility reconciliation", auraType)
+		}
+	}
+	for _, auraType := range []uint32{78, 151, 304} {
+		if world.AffectsPlayerVisibility(auraType) {
+			return fmt.Errorf("aura type %d incorrectly changed player visibility", auraType)
 		}
 	}
 	return nil

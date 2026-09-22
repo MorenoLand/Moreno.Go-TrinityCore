@@ -48,6 +48,9 @@ const (
 	spellAuraRoot                        = 26
 	spellAuraStealth                     = 16
 	spellAuraInvisibility                = 18
+	spellAuraStealthDetect               = 17
+	spellAuraInvisibilityDetect          = 19
+	spellAuraStealthLevel                = 154
 	spellAuraTrackStealthed              = 151
 	spellAuraFakeInebriation             = 304
 	unitStandFlagCreep                   = 0x02
@@ -2251,6 +2254,7 @@ func (s *session) removeAura(spellID uint32) {
 	wasStealth := false
 	wasInvisibility := false
 	wasTrackStealthed := false
+	wasVisibilityAura := false
 	removedFakeInebriation := uint32(0)
 	s.castMu.Lock()
 	if s.activeAuras != nil {
@@ -2261,6 +2265,7 @@ func (s *session) removeAura(spellID uint32) {
 			wasStealth = aura.AuraType == spellAuraStealth
 			wasInvisibility = aura.AuraType == spellAuraInvisibility
 			wasTrackStealthed = aura.AuraType == spellAuraTrackStealthed
+			wasVisibilityAura = affectsPlayerVisibility(aura.AuraType)
 			if aura.AuraType == spellAuraFakeInebriation {
 				removedFakeInebriation = aura.Amount
 			}
@@ -2321,6 +2326,9 @@ func (s *session) removeAura(spellID uint32) {
 		}
 	}
 	s.sendPlayerUpdate()
+	if wasVisibilityAura && s.server != nil {
+		s.server.refreshPlayerVisibility()
+	}
 }
 
 func (s *session) hasAura(spellID uint32) bool {
@@ -2540,6 +2548,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, targetSess)
 		}
 		targetSess.sendPlayerUpdate()
+		if affectsPlayerVisibility(eff.Aura) && targetSess.server != nil {
+			targetSess.server.refreshPlayerVisibility()
+		}
 
 		if periodMs > 0 {
 			targetSess.schedulePlayerPeriodicTick(aura, periodMs)
@@ -2632,6 +2643,19 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		})
 		s.server.auraMu.Unlock()
 	}
+}
+
+func affectsPlayerVisibility(auraType uint32) bool {
+	switch auraType {
+	case spellAuraStealth, spellAuraInvisibility, spellAuraStealthDetect, spellAuraInvisibilityDetect, spellAuraStealthLevel:
+		return true
+	default:
+		return false
+	}
+}
+
+func AffectsPlayerVisibility(auraType uint32) bool {
+	return affectsPlayerVisibility(auraType)
 }
 
 func (ts *session) schedulePlayerPeriodicTick(aura *activeAura, periodMs uint32) {
