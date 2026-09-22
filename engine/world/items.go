@@ -2286,7 +2286,13 @@ func (s *session) handleEquipmentSetSave(ctx context.Context, payload []byte) bo
 }
 
 func (s *session) sendEquipmentSetList(ctx context.Context) {
+	empty := func() {
+		if s != nil {
+			_ = s.write(uint16(protocol.OpcodeSMSG_EQUIPMENT_SET_LIST), []byte{0, 0, 0, 0}, true)
+		}
+	}
 	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		empty()
 		return
 	}
 	cdb := s.server.CharactersStore.DB
@@ -2295,6 +2301,7 @@ func (s *session) sendEquipmentSetList(ctx context.Context) {
 		item10, item11, item12, item13, item14, item15, item16, item17, item18
 		FROM character_equipmentsets WHERE guid = ? ORDER BY setindex`, s.playerGUID)
 	if err != nil {
+		empty()
 		return
 	}
 	defer rows.Close()
@@ -2327,9 +2334,11 @@ func (s *session) sendEquipmentSetList(ctx context.Context) {
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
+		empty()
 		return
 	}
 	if err := rows.Close(); err != nil {
+		empty()
 		return
 	}
 
