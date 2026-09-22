@@ -270,3 +270,5 @@ Character login now captures the persisted first-login flag and fires Eluna `PLA
 The login replay verifier now parses `SMSG_QUEST_GIVER_QUEST_DETAILS` counts, reward fields, faction arrays, and emote framing for quest-sharing replay (`b077406`).
 
 Persisted aura loading now rejects zero and out-of-range effect masks before aura construction, matching `_LoadAuras` and `Aura::TryCreate` input requirements (`8e97006`).
+
+Persisted aura loading now skips passive and channeled spells, matching `Aura::CanBeSaved` (`88c5e78`).
