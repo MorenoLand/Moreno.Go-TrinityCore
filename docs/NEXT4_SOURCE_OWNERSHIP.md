@@ -450,3 +450,5 @@ Mount login/runtime collision-height packets now use the source `CreatureDisplay
 `tools/logincheck --self-check` now exercises the mounted, unmounted, and default collision-height formula branches directly (collision-height fixture coverage).
 
 Runtime `SPELL_AURA_FORCE_REACTION` apply/remove now rebuilds and sends `SMSG_SET_FORCED_REACTIONS`, matching `AuraEffect::HandleForceReaction` and `ReputationMgr::SendForceReactions` (live forced-reaction correction).
+
+Friendly forced reactions now also stop the player’s current attack and hostile creature motions against the matching faction, matching `Unit::StopAttackFaction` (forced-reaction combat cleanup).

@@ -2270,6 +2270,8 @@ func (s *session) removeAura(spellID uint32) {
 	wasFleeing := false
 	wasCharmed := false
 	wasForcedReaction := false
+	forcedReactionFaction := uint32(0)
+	forcedReactionRank := uint32(0)
 	wasTransform := false
 	wasStealth := false
 	wasInvisibility := false
@@ -2288,6 +2290,10 @@ func (s *session) removeAura(spellID uint32) {
 			wasFleeing = aura.AuraType == spellAuraFear
 			wasCharmed = aura.AuraType == spellAuraCharm
 			wasForcedReaction = aura.AuraType == 139
+			if wasForcedReaction && aura.MiscValue >= 0 {
+				forcedReactionFaction = uint32(aura.MiscValue)
+				forcedReactionRank = aura.Amount
+			}
 			wasTransform = aura.AuraType == 56
 			wasStealth = aura.AuraType == spellAuraStealth
 			wasInvisibility = aura.AuraType == spellAuraInvisibility
@@ -2358,6 +2364,20 @@ func (s *session) removeAura(spellID uint32) {
 	}
 	if wasForcedReaction {
 		_ = s.sendForcedReactions()
+		if forcedReactionFaction != 0 {
+			rank := forcedReactionRank
+			for _, reputation := range s.player.Reputations {
+				if reputation.FactionID == forcedReactionFaction {
+					if current := uint32(reputationRank(int64(reputation.Standing))); current > rank {
+						rank = current
+					}
+					break
+				}
+			}
+			if rank >= 4 {
+				s.stopAttacksForFaction(context.Background(), forcedReactionFaction)
+			}
+		}
 	}
 	if removedFakeInebriation > 0 && s.player != nil {
 		if removedFakeInebriation >= s.player.FakeInebriation {
@@ -2589,6 +2609,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		if eff.Aura == 139 {
 			_ = targetSess.sendForcedReactions()
+			if eff.MiscValue >= 0 && amount >= 4 {
+				targetSess.stopAttacksForFaction(ctx, uint32(eff.MiscValue))
+			}
 		}
 		if eff.Aura == spellAuraMounted {
 			targetSess.applyMountedDisplay(ctx, aura)

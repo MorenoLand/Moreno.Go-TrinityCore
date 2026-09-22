@@ -65,6 +65,7 @@ type combatTarget struct {
 	Level       uint8
 	UnitFlags   uint32
 	FlagsExtra  uint32
+	Faction     uint32
 	CombatReach float32
 }
 
@@ -112,6 +113,7 @@ func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarge
 				Level:       playerSess.player.Level,
 				UnitFlags:   playerSess.player.UnitFlags,
 				FlagsExtra:  0,
+				Faction:     0,
 				CombatReach: reach,
 			}, true
 		}
@@ -146,6 +148,7 @@ func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarge
 				Level:       uint8(motion.Level),
 				UnitFlags:   motion.UnitFlags,
 				FlagsExtra:  motion.FlagsExtra,
+				Faction:     motion.Faction,
 				CombatReach: reach,
 			}
 			s.server.motionMu.Unlock()
@@ -1157,6 +1160,7 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 	st := s.server.loadCreatureStats(ctx, uint32(entry))
 	target.UnitFlags = st.UnitFlags
 	target.FlagsExtra = st.FlagsExtra
+	_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(faction, 0) FROM creature_template WHERE entry = ?", uint32(entry)).Scan(&target.Faction)
 	target.Armor = st.Armor
 	target.Resistances = st.Resistances
 	target.MinDamage = st.MinDamage
@@ -1229,6 +1233,37 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 	}
 	s.server.motionMu.Unlock()
 	return target, nil
+}
+
+func (s *session) stopAttacksForFaction(ctx context.Context, factionID uint32) {
+	if s == nil || s.player == nil || factionID == 0 || s.server == nil {
+		return
+	}
+	if s.attackTarget != 0 {
+		if target, ok := s.getCombatTarget(ctx, s.attackTarget); ok && target.Faction == factionID {
+			_ = s.handleAttackStop()
+		}
+	}
+	stops := make([]uint64, 0)
+	s.server.motionMu.Lock()
+	for _, motion := range s.server.creatureMotion {
+		if motion == nil || motion.TargetGUID != s.playerGUID || motion.Faction != factionID {
+			continue
+		}
+		motion.TargetGUID = 0
+		motion.InCombat = false
+		motion.Moving = false
+		if motion.ThreatMgr != nil {
+			motion.ThreatMgr.RemoveThreat(s.playerGUID)
+		}
+		stops = append(stops, motion.GUID)
+	}
+	s.server.motionMu.Unlock()
+	for _, guid := range stops {
+		packet := buildAttackStop(guid, s.playerGUID, false)
+		_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), packet, true)
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), packet, s)
+	}
 }
 
 func distance3D(x1, y1, z1, x2, y2, z2 float32) float64 {
