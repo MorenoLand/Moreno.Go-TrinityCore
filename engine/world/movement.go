@@ -92,6 +92,10 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	info.Flags = sanitizeMovementFlags(info.Flags)
 	isMove := info.Flags&(movementForward|movementBackward|movementStrafeLeft|movementStrafeRight|movementFalling) != 0
 	s.isMoving = isMove
+	if isMove && s.rooted {
+		s.debug("movement rejected", "account", s.accountName, "reason", "rooted", "opcode", opcode)
+		return true
+	}
 	isFalling := (info.Flags & movementFalling) != 0
 	if opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) {
 		isFalling = false

@@ -376,3 +376,5 @@ First-login cast spells now use the triggered-cast path, avoiding normal player 
 The login replay checker now validates a non-login-effect triggered first-login `SMSG_SPELL_GO` with `CAST_FLAG_UNKNOWN_9`, pending, self-power, self-target, and remaining-power framing, matching `Spell::SendSpellGo` for `Player::CastSpell(..., true)` (first-login triggered-spell packet evidence).
 
 The replay gate now enforces the optional pre-map guild login window: guild MOTD, bank-list, and roster packets must occur after MOTD and before learned dance moves in the source order from `Guild::SendLoginInfo` and `CharacterHandler.cpp` (pre-map guild login ordering evidence).
+
+Persisted and runtime stun/root auras now retain server movement-control state, set the source stunned flag, replay force-root state, reject movement while rooted, and clear state with force-unroot when the final control aura is removed, matching `HandleAuraModStun`, `HandleAuraModRoot`, and `Player::SendInitialPacketsAfterAddToMap` (login movement-control correction).

@@ -44,6 +44,8 @@ const (
 	spellEffectTriggerSpell  = 64
 	spellEffectHealMaxHealth = 67
 	spellAuraMounted         = 78
+	spellAuraStun            = 12
+	spellAuraRoot            = 26
 )
 
 // isSelfCastOnly checks if all active spell effects target the caster unit.
@@ -2236,10 +2238,12 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 
 func (s *session) removeAura(spellID uint32) {
 	wasMounted := false
+	wasMovementControl := false
 	s.castMu.Lock()
 	if s.activeAuras != nil {
 		if aura, ok := s.activeAuras[spellID]; ok && aura != nil {
 			wasMounted = aura.AuraType == spellAuraMounted
+			wasMovementControl = aura.AuraType == spellAuraStun || aura.AuraType == spellAuraRoot
 			aura.Stopped = true
 			if aura.Timer != nil {
 				aura.Timer.Stop()
@@ -2268,6 +2272,13 @@ func (s *session) removeAura(spellID uint32) {
 	if wasMounted && !s.hasAuraType(spellAuraMounted) && s.player != nil {
 		s.player.MountDisplayID = 0
 		s.sendPlayerMountUpdate()
+	}
+	if wasMovementControl && !s.hasAuraType(spellAuraStun) && !s.hasAuraType(spellAuraRoot) {
+		s.rooted = false
+		if s.player != nil {
+			s.player.UnitFlags &^= unitFlagStunned
+			s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_UNROOT))
+		}
 	}
 	s.sendPlayerUpdate()
 }
@@ -2426,6 +2437,13 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		targetSess.activeAuras[spell.ID] = aura
 		targetSess.castMu.Unlock()
+		if eff.Aura == spellAuraStun || eff.Aura == spellAuraRoot {
+			targetSess.rooted = true
+			if eff.Aura == spellAuraStun {
+				targetSess.player.UnitFlags |= unitFlagStunned
+			}
+			targetSess.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT))
+		}
 		if eff.Aura == spellAuraMounted {
 			targetSess.applyMountedDisplay(ctx, aura)
 		}

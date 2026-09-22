@@ -445,6 +445,8 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.attackTarget = 0
 	s.autoRepeatSpell = 0
 	s.autoRepeatTarget = 0
+	s.rooted = false
+	s.playerLocked = false
 	s.inFlight = false
 	s.gossip = nil
 	s.gossipClosed = false
