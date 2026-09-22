@@ -350,7 +350,8 @@ func (s *session) loadActionButtons(ctx context.Context, guid uint64, race, clas
 }
 
 func (s *session) loadSpellCooldowns(ctx context.Context, guid uint64) ([]spellCooldown, error) {
-	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT spell, item, categoryId, time, categoryEnd FROM character_spell_cooldown WHERE guid = ? AND time > ? ORDER BY spell", guid, time.Now().Unix())
+	now := time.Now().Unix()
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT spell, item, categoryId, time, categoryEnd FROM character_spell_cooldown WHERE guid = ? AND (time > ? OR categoryEnd > ?) ORDER BY spell", guid, now, now)
 	if err != nil {
 		if missingTable(err) {
 			return nil, nil
