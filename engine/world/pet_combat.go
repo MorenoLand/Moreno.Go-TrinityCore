@@ -455,7 +455,31 @@ func (s *session) executePetSpell(ctx context.Context, motion *creatureMotion, s
 	}
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, s)
 	damage, hasDamage := creatureSpellDamage(spell)
-	if !hasDamage {
+	handledEffect := false
+	if hasDamage {
+		schoolMask := uint8(spell.SchoolMask)
+		if schoolMask == 0 {
+			schoolMask = 1
+		}
+		s.executePetSpellDamage(ctx, motion, targetGUID, spell.ID, damage, schoolMask)
+		handledEffect = true
+	}
+	for _, effect := range spell.Effects {
+		if effect.Effect == 10 || effect.Effect == 105 || effect.Effect == 136 {
+			heal := uint32(effect.BasePoints + 1)
+			if heal > 0 {
+				s.executePetSpellHeal(ctx, motion, targetGUID, spell.ID, heal)
+				handledEffect = true
+			}
+		}
+		if effect.Effect == spellEffectTriggerSpell && effect.TriggerSpell != 0 && effect.TriggerSpell != spell.ID {
+			if triggered, found, err := s.server.Data.Spell(effect.TriggerSpell); err == nil && found {
+				s.executePetSpell(ctx, motion, triggered, castCount, target)
+				handledEffect = true
+			}
+		}
+	}
+	if !handledEffect {
 		now := time.Now()
 		s.server.motionMu.Lock()
 		if motion.SpellCooldowns == nil {
@@ -466,11 +490,6 @@ func (s *session) executePetSpell(ctx context.Context, motion *creatureMotion, s
 		motion.LastSpell = now
 		return true
 	}
-	schoolMask := uint8(spell.SchoolMask)
-	if schoolMask == 0 {
-		schoolMask = 1
-	}
-	s.executePetSpellDamage(ctx, motion, targetGUID, spell.ID, damage, schoolMask)
 	now := time.Now()
 	s.server.motionMu.Lock()
 	if motion.SpellCooldowns == nil {
@@ -480,6 +499,51 @@ func (s *session) executePetSpell(ctx context.Context, motion *creatureMotion, s
 	s.server.motionMu.Unlock()
 	motion.LastSpell = now
 	return true
+}
+
+func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID, heal uint32) {
+	if s == nil || s.server == nil || caster == nil || heal == 0 {
+		return
+	}
+	target, ok := s.getCombatTarget(ctx, uint64(targetGUID))
+	if !ok || target.Health == 0 {
+		return
+	}
+	overheal := uint32(0)
+	if uint64(target.Health)+uint64(heal) > uint64(target.MaxHealth) {
+		overheal = uint32(uint64(target.Health) + uint64(heal) - uint64(target.MaxHealth))
+	}
+	packet := buildSpellHealLog(target.GUID, caster.GUID, spellID, heal, overheal, 0, false)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, true)
+	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, s)
+	if targetSess := s.server.findSessionByGUID(target.GUID); targetSess != nil && targetSess.player != nil {
+		newHealth := targetSess.player.Health + heal
+		if newHealth > targetSess.player.MaxHealth {
+			newHealth = targetSess.player.MaxHealth
+		}
+		targetSess.player.Health = newHealth
+		targetSess.sendPlayerUpdate()
+		return
+	}
+	low := uint32(target.GUID & 0x00FFFFFF)
+	entry := uint32((target.GUID >> 24) & 0x00FFFFFF)
+	key := creatureWorldGUID(low, entry)
+	s.server.motionMu.Lock()
+	targetMotion := s.server.creatureMotion[target.GUID]
+	if targetMotion == nil {
+		targetMotion = s.server.creatureMotion[key]
+	}
+	if targetMotion != nil {
+		newHealth := targetMotion.Health + heal
+		if newHealth > targetMotion.MaxHealth {
+			newHealth = targetMotion.MaxHealth
+		}
+		targetMotion.Health = newHealth
+	}
+	s.server.motionMu.Unlock()
+	if targetMotion != nil {
+		s.server.broadcastCreatureValuesUpdate(targetMotion.Map, targetMotion.GUID, map[int]uint32{unitFieldHealth: targetMotion.Health})
+	}
 }
 
 func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID, damage uint32, schoolMask uint8) {

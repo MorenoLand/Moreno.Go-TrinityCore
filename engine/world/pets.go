@@ -1771,6 +1771,25 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 			target.Flags |= protocol.SpellTargetFlagUnitWireMask
 		}
 	}
+	if isHarmfulSpell(spell) && target.UnitGUID == motion.GUID && !isSelfCastOnly(spell) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
+		return true
+	}
+	if target.UnitGUID != 0 && target.UnitGUID != motion.GUID {
+		targetState, targetFound := s.getCombatTarget(ctx, target.UnitGUID)
+		if !targetFound || targetState.Map != motion.Map {
+			_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
+			return true
+		}
+		if spell.RangeIndex > 0 {
+			if rangeInfo, rangeFound, rangeErr := s.server.Data.SpellRange(spell.RangeIndex); rangeErr == nil && rangeFound && rangeInfo.MaxHostile > 0 {
+				if distance3D(motion.X, motion.Y, motion.Z, targetState.X, targetState.Y, targetState.Z) > float64(rangeInfo.MaxHostile)+5 {
+					_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, 97), true)
+					return true
+				}
+			}
+		}
+	}
 	s.server.motionMu.Lock()
 	lastSpell := motion.SpellCooldowns[spellID]
 	s.server.motionMu.Unlock()
