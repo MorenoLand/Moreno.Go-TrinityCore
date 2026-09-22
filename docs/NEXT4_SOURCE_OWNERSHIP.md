@@ -394,3 +394,5 @@ Live player value updates now build separate self and nearby-client masks, filte
 Live transform aura application and removal now refresh `UNIT_FIELD_DISPLAYID` while preserving the race/gender native display, matching `AuraEffect::HandleAuraTransform`; player live update packets now include both display fields so self and nearby clients receive the transition (live transform display correction).
 
 Character reputation loading now merges database visibility/war/inactive toggles with the DBC default flags and enforces the source hidden/invisible/peace-forced rules instead of replacing defaults with raw database flags. `tools/logincheck --self-check` covers visible default preservation and peace-forced war rejection, matching `ReputationMgr::Initialize`, `SetVisible`, `SetAtWar`, `SetInactive`, and `LoadFromDB` (reputation login-state correction).
+
+Live player values now include `PLAYER_GUILDID` and `PLAYER_GUILDRANK`, allowing membership and rank changes to reach the owner and nearby clients through the source-public update mask, matching `Player::SetInGuild`, `Player::SetRank`, and `Guild::Member::ChangeRank` (live guild-field correction).
