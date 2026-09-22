@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -332,6 +333,7 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 }
 
 func (s *Server) Initialize(ctx context.Context) error {
+	s.warnMissingGameData()
 	s.clearOnlineState(ctx)
 	s.loadClientCacheVersion(ctx)
 	if err := s.Features.Initialize(ctx); err != nil {
@@ -348,6 +350,23 @@ func (s *Server) Initialize(ctx context.Context) error {
 	s.loadContinentTransports(ctx)
 	go s.runWorldTick(ctx)
 	return nil
+}
+
+func (s *Server) warnMissingGameData() {
+	if s == nil || s.Logger == nil || s.Config.GameDataDir == "" {
+		return
+	}
+	dbcDir := filepath.Join(s.Config.GameDataDir, "dbc")
+	required := []string{"ChrRaces.dbc", "ChrClasses.dbc", "Spell.dbc", "Map.dbc"}
+	missing := make([]string, 0, len(required))
+	for _, name := range required {
+		if _, err := os.Stat(filepath.Join(dbcDir, name)); err != nil {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) != 0 {
+		s.Logger.Warn("DBC-backed game data is incomplete", "directory", dbcDir, "missing", strings.Join(missing, ","))
+	}
 }
 
 func (s *Server) loadClientCacheVersion(ctx context.Context) {
