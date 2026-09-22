@@ -304,3 +304,5 @@ Login raid-difficulty comparison now stores the current map difficulty, includin
 Login corpse restoration now clears stale resurrectable corpse rows for characters with saved health instead of incorrectly setting ghost/repop state (`3658fcd`).
 
 Contact and guild roster loading now preserve source map ordering, and the login replay harness validates contact-list, guild-event, guild-bank, and guild-roster framing (`069a666`).
+
+Cinematic opening, next-camera, and completion handlers now leave cinematic persistence to the login/save owners, matching `CinematicMgr` packet-handler ownership (`9e11e7d`).
