@@ -412,3 +412,5 @@ Player selection now updates `UNIT_FIELD_TARGET` in self and nearby player value
 Persisted and runtime stealth auras now set and clear the source creep flag in `UNIT_FIELD_BYTES_1` and private stealth aura-vision bit in `PLAYER_FIELD_BYTES2`; live/create field coverage is included in logincheck, matching `AuraEffect::HandleModStealth` (stealth client-field correction).
 
 Persisted and runtime invisibility auras now set and clear the private `PLAYER_FIELD_BYTES2` invisibility glow bit, matching `AuraEffect::HandleModInvisibility` and preserving the source client visibility state (invisibility client-field correction).
+
+Persisted and runtime track-stealth auras now set and clear private `PLAYER_FIELD_BYTE_TRACK_STEALTHED` in `PLAYER_FIELD_BYTES`, matching `AuraEffect::HandleAuraTrackStealthed` and preserving the source client tracking state (track-stealth client-field correction).

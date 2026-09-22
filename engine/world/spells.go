@@ -38,20 +38,22 @@ const (
 	itemSubclassArmorBuckler = 5
 	itemSubclassArmorShield  = 6
 
-	spellEffectEnergize      = 30
-	spellEffectPowerBurn     = 62
-	spellEffectThreat        = 63
-	spellEffectTriggerSpell  = 64
-	spellEffectHealMaxHealth = 67
-	spellAuraMounted         = 78
-	spellAuraStun            = 12
-	spellAuraRoot            = 26
-	spellAuraStealth         = 16
-	spellAuraInvisibility    = 18
-	spellAuraFakeInebriation = 304
-	unitStandFlagCreep       = 0x02
-	playerAuraVisionStealth  = 0x20
-	playerAuraVisionInvis    = 0x40
+	spellEffectEnergize                  = 30
+	spellEffectPowerBurn                 = 62
+	spellEffectThreat                    = 63
+	spellEffectTriggerSpell              = 64
+	spellEffectHealMaxHealth             = 67
+	spellAuraMounted                     = 78
+	spellAuraStun                        = 12
+	spellAuraRoot                        = 26
+	spellAuraStealth                     = 16
+	spellAuraInvisibility                = 18
+	spellAuraTrackStealthed              = 151
+	spellAuraFakeInebriation             = 304
+	unitStandFlagCreep                   = 0x02
+	playerAuraVisionStealth              = 0x20
+	playerAuraVisionInvis                = 0x40
+	playerFieldByteTrackStealthed uint32 = 0x00000002
 )
 
 // isSelfCastOnly checks if all active spell effects target the caster unit.
@@ -2248,6 +2250,7 @@ func (s *session) removeAura(spellID uint32) {
 	wasTransform := false
 	wasStealth := false
 	wasInvisibility := false
+	wasTrackStealthed := false
 	removedFakeInebriation := uint32(0)
 	s.castMu.Lock()
 	if s.activeAuras != nil {
@@ -2257,6 +2260,7 @@ func (s *session) removeAura(spellID uint32) {
 			wasTransform = aura.AuraType == 56
 			wasStealth = aura.AuraType == spellAuraStealth
 			wasInvisibility = aura.AuraType == spellAuraInvisibility
+			wasTrackStealthed = aura.AuraType == spellAuraTrackStealthed
 			if aura.AuraType == spellAuraFakeInebriation {
 				removedFakeInebriation = aura.Amount
 			}
@@ -2298,6 +2302,9 @@ func (s *session) removeAura(spellID uint32) {
 	}
 	if wasInvisibility && s.player != nil && !s.hasAuraType(spellAuraInvisibility) {
 		s.player.AuraVision &^= playerAuraVisionInvis
+	}
+	if wasTrackStealthed && s.player != nil && !s.hasAuraType(spellAuraTrackStealthed) {
+		s.player.PlayerFieldBytes &^= playerFieldByteTrackStealthed
 	}
 	if wasMovementControl && !s.hasAuraType(spellAuraStun) && !s.hasAuraType(spellAuraRoot) {
 		s.rooted = false
@@ -2512,6 +2519,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		if eff.Aura == spellAuraInvisibility {
 			targetSess.player.AuraVision |= playerAuraVisionInvis
+		}
+		if eff.Aura == spellAuraTrackStealthed {
+			targetSess.player.PlayerFieldBytes |= playerFieldByteTrackStealthed
 		}
 		if eff.Aura == 56 {
 			targetSess.refreshTransformDisplay(ctx)
