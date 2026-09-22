@@ -106,6 +106,24 @@ func (s *session) isDeadOrGhost() bool {
 // copseReclaimDelay mirrors the static table in Player.cpp:177.
 var copseReclaimDelay = [maxDeathCount]uint32{30, 60, 120}
 
+func CalculateLoadedCorpseReclaimDelay(now, deathExpire, ghostTime int64, reclaimEnabled bool) (uint32, bool) {
+	if ghostTime > deathExpire {
+		return 0, false
+	}
+	count := uint64(0)
+	if reclaimEnabled && deathExpire > ghostTime {
+		count = uint64(deathExpire-ghostTime) / deathExpireStepSeconds
+		if count >= maxDeathCount {
+			count = maxDeathCount - 1
+		}
+	}
+	expected := ghostTime + int64(copseReclaimDelay[count])
+	if now >= expected {
+		return 0, false
+	}
+	return uint32(expected - now), true
+}
+
 // corpseReclaimDelaySeconds mirrors Player::GetCorpseReclaimDelay: PvE deaths
 // with Death.CorpseReclaimDelay.PvE disabled return 0; PvP deaths with the PvP
 // option disabled still use the first table entry. The death count is derived
@@ -653,7 +671,14 @@ func (s *session) sendLoadedCorpse(ctx context.Context) bool {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 		s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
 	}
-	s.sendCorpseReclaimDelay(s.corpseReclaimDelaySeconds(corpse.CorpseType == corpseTypePvP))
+	pvp := corpse.CorpseType == corpseTypePvP
+	reclaimEnabled := s.server.Config.DeathCorpseReclaimDelayPvE
+	if pvp {
+		reclaimEnabled = s.server.Config.DeathCorpseReclaimDelayPvP
+	}
+	if delay, ok := CalculateLoadedCorpseReclaimDelay(time.Now().Unix(), s.deathExpireTime, corpse.GhostTime, reclaimEnabled); ok {
+		s.sendCorpseReclaimDelay(delay)
+	}
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK))
 	return true
 }

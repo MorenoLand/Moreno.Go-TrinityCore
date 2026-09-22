@@ -107,6 +107,9 @@ func runSelfCheck() error {
 	if err := checkCorpseReleaseTimerBoundary(); err != nil {
 		return fmt.Errorf("corpse release-timer check failed: %w", err)
 	}
+	if err := checkLoadedCorpseReclaimDelay(); err != nil {
+		return fmt.Errorf("loaded corpse reclaim-delay check failed: %w", err)
+	}
 	for _, compressed := range []bool{false, true} {
 		event, err := loginCreateFixture(compressed)
 		if err != nil {
@@ -166,6 +169,16 @@ func runSelfCheck() error {
 		if err := check.validate(event); err != nil {
 			return fmt.Errorf("%s payload fixture rejected: %w", check.name, err)
 		}
+	}
+	return nil
+}
+
+func checkLoadedCorpseReclaimDelay() error {
+	if delay, ok := world.CalculateLoadedCorpseReclaimDelay(100, 130, 90, true); !ok || delay != 20 {
+		return fmt.Errorf("active corpse delay=%d present=%t want 20 seconds", delay, ok)
+	}
+	if _, ok := world.CalculateLoadedCorpseReclaimDelay(200, 130, 90, true); ok {
+		return fmt.Errorf("expired corpse still produced reclaim delay")
 	}
 	return nil
 }

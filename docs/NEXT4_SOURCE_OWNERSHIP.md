@@ -402,3 +402,5 @@ New character creation now persists watched faction `-1` and drunkenness `0`, ma
 Sanctuary area transitions now stop active player-vs-player attack state and clear the combat update fields for both participants, while creature combat remains intact, matching `Player::UpdateArea` and `CombatStopWithPets` (sanctuary PvP transition correction).
 
 Loaded corpse restoration now applies `PLAYER_FIELD_BYTE_RELEASE_TIMER` only for non-instance corpse maps and leaves it clear for dungeon/raid/battleground maps, matching `Player::LoadCorpse`; the logincheck self-check covers the instance-type boundary (corpse login-state correction).
+
+Loaded corpse replay now computes `SMSG_CORPSE_RECLAIM_DELAY` from the persisted corpse ghost timestamp and death-expire time, suppressing the packet after expiry, matching `Player::CalculateCorpseReclaimDelay(true)` (corpse reclaim packet correction).
