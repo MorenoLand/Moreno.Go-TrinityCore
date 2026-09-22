@@ -230,7 +230,7 @@ func checkReputationFlags() error {
 }
 
 func checkPublicPlayerValuesUpdate() error {
-	fields := map[int]uint32{18: 0x12345678, 19: 0x40000000, 24: 100, 67: 12345, 74: 0x00020000, 1229: 0x20000000, 151: 42, 152: 3, 1020: 4}
+	fields := map[int]uint32{18: 0x12345678, 19: 0x40000000, 24: 100, 67: 12345, 74: 0x00020000, 1229: 0x60000000, 151: 42, 152: 3, 1020: 4}
 	public := make(map[int]uint32, len(fields))
 	for field, value := range fields {
 		if world.IsPlayerFieldPublic(field) {

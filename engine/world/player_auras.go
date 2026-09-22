@@ -149,6 +149,9 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 					state.StandFlags |= unitStandFlagCreep
 					state.AuraVision |= playerAuraVisionStealth
 				}
+				if aura.AuraType == spellAuraInvisibility {
+					state.AuraVision |= playerAuraVisionInvis
+				}
 				if aura.AuraType == spellAuraStun || aura.AuraType == spellAuraRoot {
 					s.rooted = true
 					if aura.AuraType == spellAuraStun {

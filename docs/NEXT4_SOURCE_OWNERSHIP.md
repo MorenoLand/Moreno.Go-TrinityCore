@@ -410,3 +410,5 @@ Alive-player login now defers same-map persisted corpse conversion until after n
 Player selection now updates `UNIT_FIELD_TARGET` in self and nearby player values, persists through the initial player create state, and clears on teleport, matching `Player::SetSelection` and the public unit update field flags (selection update-field correction).
 
 Persisted and runtime stealth auras now set and clear the source creep flag in `UNIT_FIELD_BYTES_1` and private stealth aura-vision bit in `PLAYER_FIELD_BYTES2`; live/create field coverage is included in logincheck, matching `AuraEffect::HandleModStealth` (stealth client-field correction).
+
+Persisted and runtime invisibility auras now set and clear the private `PLAYER_FIELD_BYTES2` invisibility glow bit, matching `AuraEffect::HandleModInvisibility` and preserving the source client visibility state (invisibility client-field correction).
