@@ -318,3 +318,5 @@ Saved-pet restoration emits the source fake-summon `SMSG_SPELL_GO` with `CAST_FL
 Group-list counters are now allocated atomically per emitted packet, matching TrinityCore's `m_counter++` semantics without a read-lock data race (group-login counter milestone).
 
 Saved pet action-bar serialization now preserves TrinityCore default command/spell/reaction slots when custom action-bar tokens are malformed, while retaining valid custom slots (saved-pet action-bar milestone).
+
+Saved pet spell packets now discard invalid DBC-known spell rows before `PetSpellInitialize` serialization, while retaining rows when DBC input is unavailable (saved-pet spell validation milestone).

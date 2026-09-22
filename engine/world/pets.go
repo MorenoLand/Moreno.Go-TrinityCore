@@ -910,7 +910,13 @@ func (s *session) sendPetSpells(ctx context.Context, petID uint32, entry uint32,
 		defer rows.Close()
 		for rows.Next() {
 			var spID, act int64
-			if rows.Scan(&spID, &act) == nil {
+			if rows.Scan(&spID, &act) == nil && spID > 0 && spID <= int64(^uint32(0)) {
+				if s.server.Data != nil {
+					_, found, spellErr := s.server.Data.Spell(uint32(spID))
+					if spellErr == nil && !found {
+						continue
+					}
+				}
 				allSpells = append(allSpells, petSpellInfo{spellID: uint32(spID), active: uint8(act)})
 			}
 		}
