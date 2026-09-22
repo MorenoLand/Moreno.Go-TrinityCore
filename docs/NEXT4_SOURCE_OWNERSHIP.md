@@ -404,3 +404,5 @@ Sanctuary area transitions now stop active player-vs-player attack state and cle
 Loaded corpse restoration now applies `PLAYER_FIELD_BYTE_RELEASE_TIMER` only for non-instance corpse maps and leaves it clear for dungeon/raid/battleground maps, matching `Player::LoadCorpse`; the logincheck self-check covers the instance-type boundary (corpse login-state correction).
 
 Loaded corpse replay now computes `SMSG_CORPSE_RECLAIM_DELAY` from the persisted corpse ghost timestamp and death-expire time, suppressing the packet after expiry, matching `Player::CalculateCorpseReclaimDelay(true)` (corpse reclaim packet correction).
+
+Alive-player login now defers same-map persisted corpse conversion until after nearby visibility is sent, then emits the corpse destroy and optional bones create while removing the resurrectable row, matching `Map::AddPlayerToMap` and `Map::ConvertCorpseToBones` (stale-corpse login visibility correction).

@@ -182,6 +182,10 @@ func CorpseReleaseTimerRequired(instanceType uint32) bool {
 	return instanceType == 0
 }
 
+func ShouldConvertLoadedCorpseToBones(playerMap, corpseMap uint32, alive bool) bool {
+	return alive && playerMap == corpseMap
+}
+
 // killPlayer mirrors Player::KillPlayer for the lethal-damage call site: root
 // the corpse in place, keep health at zero, raise the release timer flag on
 // non-instance maps (the Go server has no instance maps), start the 6 minute
@@ -739,9 +743,20 @@ func (s *session) shouldCreateCorpseBones(mapID uint32) bool {
 // spawnCorpseBones mirrors Player::SpawnCorpseBones and Map::ConvertCorpseToBones:
 // remove the resurrectable corpse from persistence, then optionally create ownerless bones at its stored location.
 func (s *session) spawnCorpseBones(ctx context.Context) {
+	s.convertCorpseToBones(ctx, false)
+}
+
+func (s *session) spawnLoadedCorpseBones(ctx context.Context) {
+	s.convertCorpseToBones(ctx, true)
+}
+
+func (s *session) convertCorpseToBones(ctx context.Context, destroyVisible bool) {
 	corpse, ok := s.loadCorpseObject(ctx)
 	if !ok {
 		return
+	}
+	if destroyVisible {
+		s.despawnCorpseObject()
 	}
 	if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM corpse WHERE guid = ? AND corpseType <> ?", s.playerGUID, corpseTypeBones); err != nil {
 		return

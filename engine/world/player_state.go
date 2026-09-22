@@ -1847,6 +1847,11 @@ func (s *session) restoreLoadedCorpseState(ctx context.Context, state *playerSta
 		return
 	}
 	if state.Health != 0 {
+		var corpseMap int64
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT mapId FROM corpse WHERE guid = ? AND corpseType <> ? LIMIT 1", state.GUID, corpseTypeBones).Scan(&corpseMap); err == nil && ShouldConvertLoadedCorpseToBones(state.Map, uint32(corpseMap), true) {
+			s.loadedCorpseBones = true
+			return
+		}
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM corpse WHERE guid = ? AND corpseType <> ?", state.GUID, corpseTypeBones)
 		return
 	}

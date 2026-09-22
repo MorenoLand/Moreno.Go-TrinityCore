@@ -110,6 +110,9 @@ func runSelfCheck() error {
 	if err := checkLoadedCorpseReclaimDelay(); err != nil {
 		return fmt.Errorf("loaded corpse reclaim-delay check failed: %w", err)
 	}
+	if err := checkLoadedCorpseConversion(); err != nil {
+		return fmt.Errorf("loaded corpse conversion check failed: %w", err)
+	}
 	for _, compressed := range []bool{false, true} {
 		event, err := loginCreateFixture(compressed)
 		if err != nil {
@@ -169,6 +172,16 @@ func runSelfCheck() error {
 		if err := check.validate(event); err != nil {
 			return fmt.Errorf("%s payload fixture rejected: %w", check.name, err)
 		}
+	}
+	return nil
+}
+
+func checkLoadedCorpseConversion() error {
+	if !world.ShouldConvertLoadedCorpseToBones(0, 0, true) {
+		return fmt.Errorf("same-map alive corpse was not selected for conversion")
+	}
+	if world.ShouldConvertLoadedCorpseToBones(0, 1, true) || world.ShouldConvertLoadedCorpseToBones(0, 0, false) {
+		return fmt.Errorf("cross-map or dead corpse was incorrectly selected for conversion")
 	}
 	return nil
 }

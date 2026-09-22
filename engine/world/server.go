@@ -201,6 +201,7 @@ type session struct {
 	lastCastTime          time.Time
 	lastCombatTime        time.Time
 	contestedPVPEnd       time.Time
+	loadedCorpseBones     bool
 	pvpEnd                time.Time
 	pvpHostile            bool
 	areaID                uint32
