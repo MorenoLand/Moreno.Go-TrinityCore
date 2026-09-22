@@ -71,6 +71,20 @@ func (s *session) sendPlayerUpdate() {
 		playerFieldHonorCurrency:          s.player.TotalHonorPoints,
 		playerFieldArenaCurrency:          s.player.ArenaPoints,
 	}
+	if s.server.Data != nil {
+		if race, found, err := s.server.Data.Race(uint32(s.player.Race)); err == nil && found {
+			nativeDisplayID := race.MaleDisplayID
+			if s.player.Gender != 0 {
+				nativeDisplayID = race.FemaleDisplayID
+			}
+			displayID := nativeDisplayID
+			if s.player.TransformDisplayID != 0 {
+				displayID = s.player.TransformDisplayID
+			}
+			fields[unitFieldDisplayID] = displayID
+			fields[unitFieldNativeDisplayID] = nativeDisplayID
+		}
+	}
 	for i := 0; i < 5; i++ {
 		fields[unitFieldStat0+i] = s.player.Stats[i]
 		fields[unitFieldPosStat0+i] = s.player.Stats[i]

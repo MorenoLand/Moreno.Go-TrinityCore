@@ -2240,12 +2240,14 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 func (s *session) removeAura(spellID uint32) {
 	wasMounted := false
 	wasMovementControl := false
+	wasTransform := false
 	removedFakeInebriation := uint32(0)
 	s.castMu.Lock()
 	if s.activeAuras != nil {
 		if aura, ok := s.activeAuras[spellID]; ok && aura != nil {
 			wasMounted = aura.AuraType == spellAuraMounted
 			wasMovementControl = aura.AuraType == spellAuraStun || aura.AuraType == spellAuraRoot
+			wasTransform = aura.AuraType == 56
 			if aura.AuraType == spellAuraFakeInebriation {
 				removedFakeInebriation = aura.Amount
 			}
@@ -2277,6 +2279,9 @@ func (s *session) removeAura(spellID uint32) {
 	if wasMounted && !s.hasAuraType(spellAuraMounted) && s.player != nil {
 		s.player.MountDisplayID = 0
 		s.sendPlayerMountUpdate()
+	}
+	if wasTransform && s.player != nil {
+		s.refreshTransformDisplay(context.Background())
 	}
 	if wasMovementControl && !s.hasAuraType(spellAuraStun) && !s.hasAuraType(spellAuraRoot) {
 		s.rooted = false
@@ -2332,6 +2337,29 @@ func (s *session) applyMountedDisplay(ctx context.Context, aura *activeAura) {
 		s.player.MountDisplayID = uint32(displayID)
 	}
 	s.sendPlayerMountUpdate()
+}
+
+func (s *session) refreshTransformDisplay(ctx context.Context) {
+	if s == nil || s.player == nil {
+		return
+	}
+	displayID := uint32(0)
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.AuraType != 56 {
+			continue
+		}
+		displayID = specialTransformDisplay(s.player, aura.SpellID)
+		if displayID == 0 && aura.MiscValue > 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			var dbDisplayID int64
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 16358) FROM creature_template WHERE entry = ?", aura.MiscValue).Scan(&dbDisplayID); err == nil && dbDisplayID > 0 {
+				displayID = uint32(dbDisplayID)
+			}
+		}
+		if displayID != 0 {
+			break
+		}
+	}
+	s.player.TransformDisplayID = displayID
 }
 
 func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, durationMs, periodMs, amount, schoolMask uint32) {
@@ -2461,6 +2489,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		if eff.Aura == spellAuraMounted {
 			targetSess.applyMountedDisplay(ctx, aura)
+		}
+		if eff.Aura == 56 {
+			targetSess.refreshTransformDisplay(ctx)
 		}
 
 		stackCount := uint8(1)

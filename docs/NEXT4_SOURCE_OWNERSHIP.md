@@ -390,3 +390,5 @@ The same login visibility paths now apply the pinned stealth detection calculati
 Player visibility now also compares each target invisibility aura type/value against the observer's matching detection auras, with GM override, matching `WorldObject::CanDetectInvisibilityOf` (invisibility visibility correction).
 
 Live player value updates now build separate self and nearby-client masks, filtering the nearby packet through the source `UF_FLAG_PUBLIC` field set instead of rebroadcasting owner/private fields. The regeneration path uses the same split, and `tools/logincheck --self-check` validates public health/display fields while rejecting a private talent field, matching `Object::_BuildValuesUpdate` and `UnitUpdateFieldFlags.cpp` (public live-update mask correction).
+
+Live transform aura application and removal now refresh `UNIT_FIELD_DISPLAYID` while preserving the race/gender native display, matching `AuraEffect::HandleAuraTransform`; player live update packets now include both display fields so self and nearby clients receive the transition (live transform display correction).
