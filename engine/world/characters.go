@@ -2963,7 +2963,7 @@ func (s *session) loadLoginInstanceDifficulty(ctx context.Context, state playerS
 }
 
 func (s *session) sendLoginRaidDifficulty(ctx context.Context, state playerState) error {
-	stored := uint8((state.InstanceModeMask >> 4) & 0x0F)
+	stored := uint8(0)
 	if stored >= 4 {
 		stored = 0
 	}
@@ -2979,7 +2979,10 @@ func (s *session) sendLoginRaidDifficulty(ctx context.Context, state playerState
 			if mapDifficulty >= 4 {
 				mapDifficulty = 0
 			}
+			stored = uint8(mapDifficulty)
 			forced = uint8(mapDifficulty)
+		} else {
+			stored = state.RaidDifficulty
 		}
 		if forced == state.RaidDifficulty {
 			return nil
