@@ -430,3 +430,5 @@ Mounted and flight speed aura changes now recalculate source stack/non-stack mod
 Newly visible player and creature units now receive `SMSG_AURA_UPDATE_ALL` and active player melee `SMSG_ATTACK_START` after their create update, including login, worldport, movement streaming, and visibility-transition paths, matching `Player::SendInitialVisiblePackets` and `SendAurasForTarget` (visible-unit initial-state packet correction).
 
 Login spell loading now rejects DBC-invalid race/class or level-ineligible active rows and deactivates lower non-stackable ranks when a higher `SkillLineAbility::SupercededBySpell` rank is active, matching `Player::_LoadSpells` plus `Player::AddSpell` rank-state behavior (initial spell-rank correction).
+
+Persisted and reconstructed player skills now enforce the pinned `PLAYER_MAX_SKILLS = 127` client slot boundary across database rows, racial defaults, and `playercreateinfo_skills` additions, matching `Player::_LoadSkills` and preventing overflow into client update fields (skill-slot login correction).

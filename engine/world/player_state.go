@@ -70,7 +70,7 @@ const (
 	playerQuestLogStart                           = 158 // PLAYER_QUEST_LOG_1_1; stride 5 per TC MAX_QUEST_OFFSET
 	playerQuestLogSlots                           = 25
 	playerSkillInfoStart                          = 636
-	playerMaxSkills                               = 128
+	playerMaxSkills                               = 127
 	playerVisibleItemStart                        = 283
 	playerVisibleItemCount                        = 19
 	unitFieldMaxHealth                            = 32
@@ -2221,6 +2221,9 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 	rows.Close()
 	skills := make([]playerSkill, 0, 16)
 	for _, loadedSkill := range loaded {
+		if len(skills) >= playerMaxSkills {
+			break
+		}
 		skill, value, max := loadedSkill.skill, loadedSkill.value, loadedSkill.max
 		if !s.skillAllowed(state.Race, state.Class, skill) {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_skills WHERE guid = ? AND skill = ?", state.GUID, skill)
@@ -2254,6 +2257,9 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 		skills = append(skills, playerSkill{Skill: skill, Step: s.skillStep(state.Race, state.Class, skill, max), Value: value, Max: max})
 	}
 	for _, def := range defaults {
+		if len(skills) >= playerMaxSkills {
+			break
+		}
 		found := false
 		for i, sk := range skills {
 			if sk.Skill == def.Skill {
@@ -2277,6 +2283,9 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 		if defaultRows, defaultErr := s.server.WorldStore.DB.QueryContext(ctx, "SELECT skill, rank FROM playercreateinfo_skills WHERE (raceMask = 0 OR (raceMask & ?) <> 0) AND (classMask = 0 OR (classMask & ?) <> 0)", raceMask, classMask); defaultErr == nil {
 			defer defaultRows.Close()
 			for defaultRows.Next() {
+				if len(skills) >= playerMaxSkills {
+					break
+				}
 				var skillID, rank int64
 				if defaultRows.Scan(&skillID, &rank) != nil || skillID <= 0 || skillID > 65535 || !s.skillAllowed(state.Race, state.Class, uint16(skillID)) {
 					continue
