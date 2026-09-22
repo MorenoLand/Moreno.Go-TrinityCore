@@ -218,14 +218,21 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 	}
 	if motion == nil && s.WorldStore != nil && s.WorldStore.DB != nil {
 		var x, y, z float64
-		var mapID, faction int64
+		var mapID, faction, curHealth int64
 		var name, scriptName string
 		if err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT c.map, c.position_x, c.position_y, c.position_z,
-			COALESCE(t.faction, 0), COALESCE(t.name, ''), COALESCE(t.ScriptName, '')
+			COALESCE(t.faction, 0), COALESCE(t.name, ''), COALESCE(t.ScriptName, ''), COALESCE(c.curhealth, 0)
 			FROM creature AS c
 			JOIN creature_template AS t ON t.entry = c.id
-			WHERE c.guid = ?`, guid).Scan(&mapID, &x, &y, &z, &faction, &name, &scriptName); err == nil {
+			WHERE c.guid = ?`, guid).Scan(&mapID, &x, &y, &z, &faction, &name, &scriptName, &curHealth); err == nil {
 			st := s.loadCreatureStats(ctx, entry)
+			health := st.Health
+			if curHealth > 0 {
+				health = uint32(curHealth)
+			}
+			if st.MaxHealth > 0 && health > st.MaxHealth {
+				health = st.MaxHealth
+			}
 			motion = &creatureMotion{
 				GUID:            creatureGUID,
 				Entry:           entry,
@@ -240,7 +247,7 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				RunSpeed:        creatureBaseRunSpeed,
 				Faction:         uint32(faction),
 				Level:           st.Level,
-				Health:          st.Health,
+				Health:          health,
 				MaxHealth:       st.MaxHealth,
 				Armor:           st.Armor,
 				MinDamage:       st.MinDamage,

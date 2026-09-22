@@ -654,8 +654,8 @@ func (s *session) loadMountDisplay(ctx context.Context, state *playerState) {
 		var displayID int64
 		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 0) FROM creature_template WHERE entry = ?", entry).Scan(&displayID); err == nil && displayID > 0 {
 			state.MountDisplayID = uint32(displayID)
+			return
 		}
-		return
 	}
 }
 

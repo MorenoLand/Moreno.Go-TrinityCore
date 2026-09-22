@@ -3409,8 +3409,7 @@ func (f *Features) OnPlayerLogin() {
 }
 
 func (s *session) handleNameQuery(ctx context.Context, payload []byte) bool {
-	reader := protocol.NewReader(payload)
-	guid, err := reader.ReadU64()
+	guid, err := readObjectGUID(payload)
 	if err != nil {
 		s.debug("name query rejected", "account", s.accountName, "error", err)
 		return false
@@ -3442,6 +3441,9 @@ func (s *session) handleNameQuery(ctx context.Context, payload []byte) bool {
 		}
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT name, race, gender, class FROM characters WHERE guid = ? AND (deleteInfos_Name IS NULL OR deleteInfos_Name = '')", candidate).Scan(&name, &race, &gender, &class)
+			if err != nil && isMissingColumn(err) {
+				err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT name, race, gender, class FROM characters WHERE guid = ?", candidate).Scan(&name, &race, &gender, &class)
+			}
 			if err == nil {
 				resolved = true
 				break

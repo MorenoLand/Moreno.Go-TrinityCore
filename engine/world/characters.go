@@ -1344,6 +1344,7 @@ func (s *session) broadcastLoginMovementState(opcode protocol.Opcode, movementFl
 	for _, speed := range []float32{2.5, 7.0, 4.5, 4.722222, 2.5, 7.0, 4.5, 3.141594, 3.14} {
 		packet.WriteF32(speed)
 	}
+	_ = s.write(uint16(opcode), packet.Bytes(), true)
 	s.server.broadcastToNearby(uint16(opcode), packet.Bytes(), s)
 }
 

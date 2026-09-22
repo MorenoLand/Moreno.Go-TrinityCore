@@ -45,6 +45,7 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 		offlineMs = (time.Now().Unix() - state.LogoutTime) * 1000
 	}
 	var periodic []*activeAura
+	mountedAuraLoaded := false
 	for rows.Next() {
 		var casterGUID, itemGUID uint64
 		var spellID, effectMask, recalculateMask, stackCount, maxDuration, remainTime, remainCharges int64
@@ -125,14 +126,24 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 				aura.Mechanic = spell.Mechanic
 				aura.SchoolMask = spell.SchoolMask
 				aura.AuraInterruptFlags = spell.AuraInterruptFlags
+				selectedEffect := -1
 				for index, effect := range spell.Effects {
 					if effect.Effect == 0 || effect.Aura == 0 || effectMask&(1<<uint(index)) == 0 {
 						continue
 					}
+					if selectedEffect < 0 || effect.Aura == spellAuraMounted {
+						selectedEffect = index
+					}
+					if effect.Aura == spellAuraMounted {
+						break
+					}
+				}
+				if selectedEffect >= 0 {
+					effect := spell.Effects[selectedEffect]
 					aura.AuraType = effect.Aura
 					aura.MiscValue = effect.MiscValue
-					if aura.Amounts[index] > 0 {
-						aura.Amount = uint32(aura.Amounts[index])
+					if aura.Amounts[selectedEffect] > 0 {
+						aura.Amount = uint32(aura.Amounts[selectedEffect])
 					}
 					if effect.AuraPeriod > 0 {
 						aura.PeriodMs = effect.AuraPeriod
@@ -140,12 +151,17 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 					if aura.Amount == 0 && effect.BasePoints >= 0 {
 						aura.Amount = uint32(effect.BasePoints + 1)
 					}
-					break
 				}
 				aura.Positive = !isHarmfulAura(aura.AuraType)
 				if aura.AuraType == spellAuraMounted {
+					if mountedAuraLoaded {
+						continue
+					}
+					mountedAuraLoaded = true
 					aura.DurationMs = 0
 					aura.RemainingMs = 0
+					aura.StackCount = 1
+					aura.RemainingCharges = 0
 				}
 				if aura.AuraType == spellAuraFakeInebriation {
 					state.FakeInebriation += aura.Amount
@@ -324,6 +340,9 @@ func auraUpdateRecords(auras []*activeAura) []protocol.AuraUpdateRecord {
 		stackCount := aura.StackCount
 		if aura.StackAmount == 0 {
 			stackCount = aura.RemainingCharges
+		}
+		if stackCount == 0 {
+			stackCount = 1
 		}
 		maxDuration, duration := aura.DurationMs, aura.RemainingMs
 		if aura.HideDuration {

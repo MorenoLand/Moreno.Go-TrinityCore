@@ -411,11 +411,10 @@ func packGameObjectRotation(x, y, z, w float32) uint64 {
 // handleGameObjectUse processes CMSG_GAMEOBJ_USE (0x0B1).
 // Reference: WorldSession::HandleGameObjectUseOpcode (SpellHandler.cpp:300) -> GameObject::Use (GameObject.cpp:1290).
 func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+	if !s.playerLoaded || s.player == nil || len(payload) == 0 {
 		return false
 	}
-	r := protocol.NewReader(payload)
-	guid, err := r.ReadU64()
+	guid, err := readObjectGUID(payload)
 	if err != nil || guid == 0 {
 		return false
 	}
@@ -528,8 +527,7 @@ func (s *session) handleGameObjectReportUse(ctx context.Context, payload []byte)
 	if !s.playerLoaded || s.player == nil {
 		return false
 	}
-	r := protocol.NewReader(payload)
-	guid, err := r.ReadU64()
+	guid, err := readObjectGUID(payload)
 	if err != nil {
 		return false
 	}

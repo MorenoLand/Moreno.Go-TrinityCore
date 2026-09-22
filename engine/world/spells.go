@@ -2531,6 +2531,8 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		if eff.Aura == spellAuraMounted {
 			targetSess.applyMountedDisplay(ctx, aura)
+			aura.StackCount = 1
+			aura.RemainingCharges = 0
 		}
 		if eff.Aura == spellAuraStealth {
 			targetSess.player.StandFlags |= unitStandFlagCreep
