@@ -2269,6 +2269,7 @@ func (s *session) removeAura(spellID uint32) {
 	wasConfused := false
 	wasFleeing := false
 	wasCharmed := false
+	wasForcedReaction := false
 	wasTransform := false
 	wasStealth := false
 	wasInvisibility := false
@@ -2286,6 +2287,7 @@ func (s *session) removeAura(spellID uint32) {
 			wasConfused = aura.AuraType == spellAuraConfuse
 			wasFleeing = aura.AuraType == spellAuraFear
 			wasCharmed = aura.AuraType == spellAuraCharm
+			wasForcedReaction = aura.AuraType == 139
 			wasTransform = aura.AuraType == 56
 			wasStealth = aura.AuraType == spellAuraStealth
 			wasInvisibility = aura.AuraType == spellAuraInvisibility
@@ -2353,6 +2355,9 @@ func (s *session) removeAura(spellID uint32) {
 	}
 	if wasCharmed && !s.hasAuraType(spellAuraCharm) {
 		s.sendClientControl(s.playerGUID, true)
+	}
+	if wasForcedReaction {
+		_ = s.sendForcedReactions()
 	}
 	if removedFakeInebriation > 0 && s.player != nil {
 		if removedFakeInebriation >= s.player.FakeInebriation {
@@ -2581,6 +2586,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				_ = targetSess.handleAttackStop()
 			}
 			targetSess.sendClientControl(targetSess.playerGUID, false)
+		}
+		if eff.Aura == 139 {
+			_ = targetSess.sendForcedReactions()
 		}
 		if eff.Aura == spellAuraMounted {
 			targetSess.applyMountedDisplay(ctx, aura)

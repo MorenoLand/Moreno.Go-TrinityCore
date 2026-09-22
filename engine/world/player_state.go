@@ -1971,6 +1971,13 @@ func buildForcedReactions(auras []*activeAura) []byte {
 	return packet.Bytes()
 }
 
+func (s *session) sendForcedReactions() error {
+	if s == nil {
+		return nil
+	}
+	return s.write(uint16(protocol.OpcodeSMSG_SET_FORCED_REACTIONS), buildForcedReactions(s.loadedAuras()), true)
+}
+
 func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerState) error {
 	var xp, money, health, cinematic, knownCurrency, watchedFaction, ammoID, actionBars int64
 	var powers [7]int64

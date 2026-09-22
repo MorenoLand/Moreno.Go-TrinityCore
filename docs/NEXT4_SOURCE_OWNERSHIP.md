@@ -448,3 +448,5 @@ Mounted-aura removal now emits the source `SMSG_DISMOUNT` packed-GUID transition
 Mount login/runtime collision-height packets now use the source `CreatureDisplayInfo.dbc` and `CreatureModelData.dbc` fields, including the `2.03128f` default and mounted-height formula, matching `Unit::GetCollisionHeight` and `SMSG_MOVE_SET_COLLISION_HGT` (DBC-backed mount collision correction).
 
 `tools/logincheck --self-check` now exercises the mounted, unmounted, and default collision-height formula branches directly (collision-height fixture coverage).
+
+Runtime `SPELL_AURA_FORCE_REACTION` apply/remove now rebuilds and sends `SMSG_SET_FORCED_REACTIONS`, matching `AuraEffect::HandleForceReaction` and `ReputationMgr::SendForceReactions` (live forced-reaction correction).
