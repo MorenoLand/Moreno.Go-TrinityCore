@@ -98,6 +98,9 @@ func runSelfCheck() error {
 	if err := checkPublicPlayerValuesUpdate(); err != nil {
 		return fmt.Errorf("public player values update check failed: %w", err)
 	}
+	if err := checkReputationFlags(); err != nil {
+		return fmt.Errorf("reputation flag check failed: %w", err)
+	}
 	for _, compressed := range []bool{false, true} {
 		event, err := loginCreateFixture(compressed)
 		if err != nil {
@@ -157,6 +160,18 @@ func runSelfCheck() error {
 		if err := check.validate(event); err != nil {
 			return fmt.Errorf("%s payload fixture rejected: %w", check.name, err)
 		}
+	}
+	return nil
+}
+
+func checkReputationFlags() error {
+	visible := world.MergeReputationFlags(0x01, 0, 42000)
+	if visible&0x01 == 0 {
+		return fmt.Errorf("default visible faction was cleared by an empty database flag set")
+	}
+	peace := world.MergeReputationFlags(0x11, 0x02, 42000)
+	if peace&0x02 != 0 {
+		return fmt.Errorf("peace-forced faction was marked at war")
 	}
 	return nil
 }

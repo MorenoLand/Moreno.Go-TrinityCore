@@ -1908,7 +1908,7 @@ func (s *session) loadPlayerReputations(ctx context.Context, state *playerState)
 		}
 		state.Reputations[index].ListID = listID
 		state.Reputations[index].Standing = int32(standing)
-		state.Reputations[index].Flags = uint8(flags)
+		state.Reputations[index].Flags = MergeReputationFlags(state.Reputations[index].Flags, uint8(flags), int32(standing))
 	}
 	return rows.Err()
 }

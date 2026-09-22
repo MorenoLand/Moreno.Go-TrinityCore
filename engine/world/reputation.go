@@ -14,9 +14,30 @@ const (
 	factionFlagAtWar           uint8 = 0x02
 	factionFlagHidden          uint8 = 0x04
 	factionFlagInvisibleForced uint8 = 0x08
+	factionFlagPeaceForced     uint8 = 0x10
 	factionFlagInactive        uint8 = 0x20
+	factionFlagRival           uint8 = 0x40
+	factionFlagSpecial         uint8 = 0x80
 	factionFlagVisible         uint8 = 0x01
 )
+
+func MergeReputationFlags(defaultFlags, databaseFlags uint8, standing int32) uint8 {
+	flags := defaultFlags
+	if databaseFlags&factionFlagVisible != 0 && (flags&(factionFlagInvisibleForced|factionFlagHidden) == 0 || flags&factionFlagSpecial != 0) {
+		flags |= factionFlagVisible
+	}
+	if databaseFlags&factionFlagInactive != 0 && flags&(factionFlagInvisibleForced|factionFlagHidden) == 0 && flags&factionFlagVisible != 0 {
+		flags |= factionFlagInactive
+	} else if databaseFlags&factionFlagInactive == 0 && flags&factionFlagVisible != 0 {
+		flags &^= factionFlagInactive
+	}
+	if databaseFlags&factionFlagAtWar != 0 && flags&(factionFlagInvisibleForced|factionFlagHidden) == 0 && (flags&factionFlagPeaceForced == 0 || flags&factionFlagRival != 0 || reputationRank(int64(standing)) <= 3) {
+		flags |= factionFlagAtWar
+	} else if databaseFlags&factionFlagAtWar == 0 && flags&factionFlagVisible != 0 {
+		flags &^= factionFlagAtWar
+	}
+	return flags
+}
 
 func (s *session) applyStartAllReputation(ctx context.Context) {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
