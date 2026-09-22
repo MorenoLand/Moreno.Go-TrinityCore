@@ -121,6 +121,7 @@ func runSelfCheck() error {
 		{"item-time-update", protocol.OpcodeSMSG_ITEM_TIME_UPDATE, protocol.BuildItemTimeUpdate(0x4000000000000106, 1234), requirePayloadLengthExact(12)},
 		{"item-enchant-time-update", protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE, protocol.BuildItemEnchantTimeUpdate(0x106, 0x4000000000000106, 2, 1234), requirePayloadLengthExact(24)},
 		{"pet-spells", protocol.OpcodeSMSG_PET_SPELLS, petSpellsFixture(), requirePetSpells},
+		{"quest-giver-details", protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS, questGiverDetailsFixture(), requireQuestGiverDetails},
 		{"quest-status-multiple", protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE, make([]byte, 4), requireQuestStatusMultiple},
 		{"taxi-node-status", protocol.OpcodeSMSG_TAXINODE_STATUS, make([]byte, 9), requirePayloadLengthExact(9)},
 	}
@@ -148,6 +149,27 @@ func loginTimeSpeedFixture() []byte {
 	buf.WriteF32(0.5)
 	buf.WriteU32(0)
 	return buf.Bytes()
+}
+
+func questGiverDetailsFixture() []byte {
+	packet := protocol.NewBuffer(256)
+	packet.WriteU64(1)
+	packet.WriteU64(0)
+	packet.WriteU32(100)
+	packet.WriteCString("Quest")
+	packet.WriteCString("Details")
+	packet.WriteCString("Objectives")
+	packet.WriteU8(1)
+	packet.WriteU32(0)
+	packet.WriteU32(0)
+	packet.WriteU8(0)
+	packet.WriteU32(0)
+	packet.WriteU32(0)
+	for index := 0; index < 10+15; index++ {
+		packet.WriteU32(0)
+	}
+	packet.WriteI32(0)
+	return packet.Bytes()
 }
 
 func groupListFixture() []byte {
@@ -454,6 +476,8 @@ func checkOptionalLoginPayloads(trace protocoltrace.Trace, start int) error {
 			validate = requirePayloadLengthExact(9)
 		case uint32(protocol.OpcodeSMSG_PET_SPELLS):
 			validate = requirePetSpells
+		case uint32(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS):
+			validate = requireQuestGiverDetails
 		case uint32(protocol.OpcodeSMSG_GROUP_LIST):
 			validate = requireGroupList
 		}
@@ -693,6 +717,62 @@ func requireQuestStatusMultiple(event protocoltrace.Event) error {
 	}
 	if reader.Remaining() != 0 {
 		return fmt.Errorf("unexpected quest-status payload bytes=%d", reader.Remaining())
+	}
+	return nil
+}
+
+func requireQuestGiverDetails(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	if _, err := reader.ReadU64(); err != nil {
+		return fmt.Errorf("quest giver GUID is truncated: %w", err)
+	}
+	if _, err := reader.ReadU64(); err != nil {
+		return fmt.Errorf("quest inform GUID is truncated: %w", err)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		return fmt.Errorf("quest ID is truncated: %w", err)
+	}
+	for _, field := range []string{"title", "details", "objectives"} {
+		if _, err := reader.ReadCString(); err != nil {
+			return fmt.Errorf("quest %s is truncated: %w", field, err)
+		}
+	}
+	if _, err := reader.ReadU8(); err != nil {
+		return fmt.Errorf("quest auto-launch flag is truncated: %w", err)
+	}
+	if _, err := reader.Read(9); err != nil {
+		return fmt.Errorf("quest header fields are truncated: %w", err)
+	}
+	choiceCount, err := reader.ReadU32()
+	if err != nil {
+		return fmt.Errorf("quest choice count is truncated: %w", err)
+	}
+	if _, err := reader.Read(int(choiceCount) * 12); err != nil {
+		return fmt.Errorf("quest choice items are truncated: %w", err)
+	}
+	rewardCount, err := reader.ReadU32()
+	if err != nil {
+		return fmt.Errorf("quest reward count is truncated: %w", err)
+	}
+	if _, err := reader.Read(int(rewardCount) * 12); err != nil {
+		return fmt.Errorf("quest reward items are truncated: %w", err)
+	}
+	if _, err := reader.Read(40 + 60); err != nil {
+		return fmt.Errorf("quest reward fields are truncated: %w", err)
+	}
+	emoteCount, err := reader.ReadI32()
+	if err != nil || emoteCount < 0 {
+		return fmt.Errorf("quest emote count=%d", emoteCount)
+	}
+	if _, err := reader.Read(int(emoteCount) * 8); err != nil {
+		return fmt.Errorf("quest emotes are truncated: %w", err)
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected quest-details payload bytes=%d", reader.Remaining())
 	}
 	return nil
 }
