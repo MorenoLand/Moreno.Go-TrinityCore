@@ -290,3 +290,5 @@ Taxi status packets now report only the persisted taxi-mask bit, matching `Playe
 Equipment-set login entries now encode saved piece counters as Item high GUIDs before `SMSG_EQUIPMENT_SET_LIST`, matching `_LoadEquipmentSets` (`59a7417`).
 
 Login now emits the zero-count equipment-set list packet when the set table is empty, unavailable, or reduced, preserving TrinityCore's packet sequence (`fe2b826`).
+
+Saved equipment sets with client-invalid indexes are now rejected during login loading at the pinned ten-slot limit (`eeba440`).
