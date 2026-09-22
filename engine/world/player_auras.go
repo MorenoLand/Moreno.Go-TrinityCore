@@ -311,12 +311,15 @@ func (s *session) loadedAuras() []*activeAura {
 }
 
 func (s *session) sendLoadedAuras() {
-	auras := s.loadedAuras()
-	if len(auras) == 0 {
-		return
-	}
+	s.sendAurasForTarget(s.playerGUID, s)
+}
+
+func auraUpdateRecords(auras []*activeAura) []protocol.AuraUpdateRecord {
 	records := make([]protocol.AuraUpdateRecord, 0, len(auras))
 	for _, aura := range auras {
+		if aura == nil {
+			continue
+		}
 		stackCount := aura.StackCount
 		if aura.StackAmount == 0 {
 			stackCount = aura.RemainingCharges
@@ -327,5 +330,27 @@ func (s *session) sendLoadedAuras() {
 		}
 		records = append(records, protocol.AuraUpdateRecord{CasterGUID: aura.CasterGUID, Slot: aura.Slot, SpellID: aura.SpellID, EffectMask: aura.EffectMask, Positive: aura.Positive, MaxDurationMs: maxDuration, DurationMs: duration, CasterLevel: aura.CasterLevel, StackCount: stackCount})
 	}
-	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE_ALL), protocol.BuildAuraUpdateAll(s.playerGUID, records), true)
+	return records
+}
+
+func (s *session) sendAurasForTarget(targetGUID uint64, target *session) {
+	if s == nil || target == nil || targetGUID == 0 {
+		return
+	}
+	records := auraUpdateRecords(target.loadedAuras())
+	if len(records) == 0 {
+		return
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE_ALL), protocol.BuildAuraUpdateAll(targetGUID, records), true)
+}
+
+func (s *session) sendVisiblePlayerAuras(guids []uint64) {
+	if s == nil || s.server == nil {
+		return
+	}
+	for _, guid := range guids {
+		if target := s.server.findSessionByGUID(guid); target != nil {
+			s.sendAurasForTarget(guid, target)
+		}
+	}
 }

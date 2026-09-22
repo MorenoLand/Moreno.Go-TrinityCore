@@ -2885,13 +2885,19 @@ func IsPlayerFieldPublic(index int) bool {
 }
 
 func (s *Server) buildNearbyPlayerUpdates(observer *session) (*protocol.Packet, int) {
+	packet, count, _ := s.buildNearbyPlayerUpdatesWithCreated(observer)
+	return packet, count
+}
+
+func (s *Server) buildNearbyPlayerUpdatesWithCreated(observer *session) (*protocol.Packet, int, []uint64) {
 	if s == nil || observer == nil || observer.player == nil || observer.player.GUID == 0 || s.Config.VisibilityDistanceContinents <= 0 {
-		return nil, 0
+		return nil, 0, nil
 	}
 	state := *observer.player
 	distance := float64(s.Config.VisibilityDistanceContinents)
 	updates := protocol.NewUpdateData()
 	count := 0
+	created := make([]uint64, 0)
 	candidates := make(map[uint64]playerState)
 	s.sessionsMu.RLock()
 	for sess := range s.sessions {
@@ -2948,16 +2954,17 @@ func (s *Server) buildNearbyPlayerUpdates(observer *session) (*protocol.Packet, 
 		}
 		updates.AddUpdateBlock(block)
 		observer.visiblePlayers[guid] = struct{}{}
+		created = append(created, guid)
 		count++
 	}
 	if count == 0 || !updates.HasData() {
-		return nil, 0
+		return nil, 0, created
 	}
 	packet, err := updates.BuildPacket(0)
 	if err != nil {
-		return nil, 0
+		return nil, 0, created
 	}
-	return packet, count
+	return packet, count, created
 }
 
 func (s *Server) refreshPlayerVisibility() {
@@ -2973,10 +2980,11 @@ func (s *Server) refreshPlayerVisibility() {
 	}
 	s.sessionsMu.RUnlock()
 	for _, observer := range observers {
-		packet, _ := s.buildNearbyPlayerUpdates(observer)
+		packet, _, created := s.buildNearbyPlayerUpdatesWithCreated(observer)
 		if packet != nil {
 			_ = observer.write(packet.Opcode, packet.Payload.Bytes(), true)
 		}
+		observer.sendVisiblePlayerAuras(created)
 	}
 }
 

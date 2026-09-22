@@ -623,13 +623,14 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	sendNearbyObjects := func() bool {
 		var nearbyPlayers, nearbyCreatures, nearbyGameObjects, nearbyCorpses *protocol.Packet
+		var nearbyPlayerGUIDs []uint64
 		var playerCount, creatureCount, goCount, corpseCount int
 		var creatureErr, goErr, corpseErr error
 		var wg sync.WaitGroup
 		wg.Add(4)
 		go func() {
 			defer wg.Done()
-			nearbyPlayers, playerCount = s.server.buildNearbyPlayerUpdates(s)
+			nearbyPlayers, playerCount, nearbyPlayerGUIDs = s.server.buildNearbyPlayerUpdatesWithCreated(s)
 		}()
 		go func() {
 			defer wg.Done()
@@ -678,6 +679,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 				s.debug("nearby corpses sent", "account", s.accountName, "count", corpseCount)
 			}
 		}
+		s.sendVisiblePlayerAuras(nearbyPlayerGUIDs)
 		return true
 	}
 	if !sendNearbyObjects() {
@@ -1061,7 +1063,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 			return false
 		}
 	}
-	nearbyPlayers, _ := s.server.buildNearbyPlayerUpdates(s)
+	nearbyPlayers, _, nearbyPlayerGUIDs := s.server.buildNearbyPlayerUpdatesWithCreated(s)
 	nearbyCreatures, _, creatureErr := s.server.buildNearbyCreatureUpdates(ctx, state)
 	if creatureErr != nil {
 		return false
@@ -1081,6 +1083,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 			return false
 		}
 	}
+	s.sendVisiblePlayerAuras(nearbyPlayerGUIDs)
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventMapChange, s.luaPlayer())
 	s.streamDynamicSpellObjects()
 	s.updateZoneAndArea(ctx, true)
