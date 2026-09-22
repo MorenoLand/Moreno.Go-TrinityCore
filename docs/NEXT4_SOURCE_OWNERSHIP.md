@@ -351,6 +351,8 @@ Name-query handling now preserves the requested packed GUID while resolving play
 
 Initial spell cooldown loading now retains rows with an expired spell timer but an active category timer, matching `SpellHistory::WritePacket<Player>` and the source cooldown retention boundary (login cooldown packet milestone).
 
+The login replay checker now exercises that category-only cooldown case with a one-spell `SMSG_INITIAL_SPELLS` fixture requiring zero spell duration and a positive category duration (login cooldown packet evidence milestone).
+
 The login replay checker now validates known and unknown `SMSG_NAME_QUERY_RESPONSE` forms, including packed GUID, character fields, and declined-name framing (player-name packet evidence milestone).
 
 The login replay checker now validates the nine-byte `SMSG_PLAYED_TIME` total/level/trigger response framing (played-time packet evidence milestone).

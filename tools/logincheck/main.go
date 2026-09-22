@@ -108,7 +108,7 @@ func runSelfCheck() error {
 		{"instance-difficulty", protocol.OpcodeSMSG_INSTANCE_DIFFICULTY, make([]byte, 8), requireEightBytePayload},
 		{"talents-info", protocol.OpcodeSMSG_TALENTS_INFO, talentsInfoFixture(), requireTalentsInfo},
 		{"achievement-data", protocol.OpcodeSMSG_ALL_ACHIEVEMENT_DATA, achievementDataFixture(), requireAchievementData},
-		{"initial-spells", protocol.OpcodeSMSG_INITIAL_SPELLS, []byte{0, 0, 0, 0, 0}, requireInitialSpells},
+		{"initial-spells", protocol.OpcodeSMSG_INITIAL_SPELLS, initialSpellsCategoryCooldownFixture(), requireInitialSpellsCategoryCooldown},
 		{"unlearn-spells", protocol.OpcodeSMSG_SEND_UNLEARN_SPELLS, []byte{0, 0, 0, 0}, requireUnlearnSpells},
 		{"action-buttons", protocol.OpcodeSMSG_ACTION_BUTTONS, actionButtonsFixture(), requireActionButtons},
 		{"factions", protocol.OpcodeSMSG_INITIALIZE_FACTIONS, initialFactionsFixture(), requireInitialFactions},
@@ -362,6 +362,21 @@ func initialFactionsFixture() []byte {
 		buf.WriteU8(0)
 		buf.WriteU32(0)
 	}
+	return buf.Bytes()
+}
+
+func initialSpellsCategoryCooldownFixture() []byte {
+	buf := protocol.NewBuffer(29)
+	buf.WriteU8(0)
+	buf.WriteU16(1)
+	buf.WriteU32(133)
+	buf.WriteU16(0)
+	buf.WriteU16(1)
+	buf.WriteU32(133)
+	buf.WriteU16(0)
+	buf.WriteU16(5)
+	buf.WriteU32(0)
+	buf.WriteU32(60000)
 	return buf.Bytes()
 }
 
@@ -1499,6 +1514,52 @@ func requirePayloadLength(event protocoltrace.Event, want int) error {
 	}
 	if len(payload) != want {
 		return fmt.Errorf("payload length=%d, want %d", len(payload), want)
+	}
+	return nil
+}
+
+func requireInitialSpellsCategoryCooldown(event protocoltrace.Event) error {
+	if err := requireInitialSpells(event); err != nil {
+		return err
+	}
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	if _, err := reader.ReadU8(); err != nil {
+		return err
+	}
+	spellCount, err := reader.ReadU16()
+	if err != nil {
+		return err
+	}
+	if _, err := reader.Read(int(spellCount) * 6); err != nil {
+		return err
+	}
+	cooldownCount, err := reader.ReadU16()
+	if err != nil || cooldownCount != 1 {
+		return fmt.Errorf("category cooldown count=%d, want 1", cooldownCount)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		return err
+	}
+	if _, err := reader.ReadU16(); err != nil {
+		return err
+	}
+	if _, err := reader.ReadU16(); err != nil {
+		return err
+	}
+	spellDuration, err := reader.ReadU32()
+	if err != nil {
+		return err
+	}
+	categoryDuration, err := reader.ReadU32()
+	if err != nil {
+		return err
+	}
+	if spellDuration != 0 || categoryDuration == 0 || reader.Remaining() != 0 {
+		return fmt.Errorf("invalid category-only cooldown spell=%d category=%d remaining=%d", spellDuration, categoryDuration, reader.Remaining())
 	}
 	return nil
 }
