@@ -995,6 +995,7 @@ func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 	if count == 0 || currentCount <= int64(count) {
 		removedCount = uint32(currentCount)
 	}
+	s.adjustQuestItemCount(ctx, uint32(itemEntry), removedCount, false)
 	if currentCount <= int64(count) || count == 0 {
 		_, _ = db.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, itemGUID)
 		_, _ = db.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
@@ -1002,7 +1003,6 @@ func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 	} else {
 		_, _ = db.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", count, itemGUID)
 	}
-	s.adjustQuestItemCount(ctx, uint32(itemEntry), removedCount, false)
 	s.syncEquipmentCache(ctx)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()

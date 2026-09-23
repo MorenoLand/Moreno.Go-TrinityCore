@@ -726,8 +726,11 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 	defer rows.Close()
 	loaded := make([]*activeAura, 0)
 	offlineMs := int64(0)
-	if s.player != nil && s.player.LogoutTime > 0 && time.Now().Unix() > s.player.LogoutTime {
-		offlineMs = (time.Now().Unix() - s.player.LogoutTime) * 1000
+	var petSaveTime int64
+	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(savetime, 0) FROM character_pet WHERE owner = ? AND id = ?", s.playerGUID, petID).Scan(&petSaveTime)
+	now := time.Now().Unix()
+	if petSaveTime > 0 && now > petSaveTime {
+		offlineMs = (now - petSaveTime) * 1000
 	}
 	s.server.auraMu.Lock()
 	if s.server.creatureAuras == nil {

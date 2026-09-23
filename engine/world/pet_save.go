@@ -174,7 +174,11 @@ func (s *session) savePetState(ctx context.Context, tx *sql.Tx, saveMode ...uint
 		if stackCount == 0 {
 			stackCount = 1
 		}
-		toInsert = append(toInsert, petAuraInsert{spellID: aura.SpellID, args: []any{petID, aura.CasterGUID, aura.SpellID, aura.EffectMask, aura.RecalculateMask, stackCount, aura.Amounts[0], aura.Amounts[1], aura.Amounts[2], aura.BaseAmounts[0], aura.BaseAmounts[1], aura.BaseAmounts[2], maxDuration, remaining, aura.RemainingCharges, aura.CritChance, aura.ApplyResilience}})
+		casterGUID := aura.CasterGUID
+		if casterGUID == petGUID {
+			casterGUID = 0
+		}
+		toInsert = append(toInsert, petAuraInsert{spellID: aura.SpellID, args: []any{petID, casterGUID, aura.SpellID, aura.EffectMask, aura.RecalculateMask, stackCount, aura.Amounts[0], aura.Amounts[1], aura.Amounts[2], aura.BaseAmounts[0], aura.BaseAmounts[1], aura.BaseAmounts[2], maxDuration, remaining, aura.RemainingCharges, aura.CritChance, aura.ApplyResilience}})
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM pet_aura WHERE guid = ?", petID); err != nil {
 		if isMissingAuraTableError(err) {

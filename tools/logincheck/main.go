@@ -183,7 +183,7 @@ func runSelfCheck() error {
 		inventory       uint32
 		required, count uint32
 		added           bool
-	}{{2, 3, 0, 3, 2, true}, {2, 1, 0, 3, 1, false}, {3, 1, 2, 3, 1, false}, {3, 0, 0, 3, 1, false}, {3, 3, 0, 3, 1, true}} {
+	}{{2, 3, 0, 3, 2, true}, {2, 1, 0, 3, 1, false}, {3, 1, 2, 3, 1, false}, {3, 0, 0, 3, 1, false}, {3, 3, 0, 3, 1, true}, {10, 9, 10, 10, 1, false}} {
 		if actual := world.QuestItemCountAfterDelta(test.current, test.inventory, test.required, test.count, test.added); actual != test.want {
 			return fmt.Errorf("quest item count transition was %d, want %d", actual, test.want)
 		}
@@ -200,6 +200,17 @@ func runSelfCheck() error {
 	postMapTrace := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, playerCreateEvent, spellGoTrace(57940), {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, spellGoTrace(836), {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE)}}}
 	if err := checkPostMapLoginOrder(postMapTrace, 0, 1); err != nil {
 		return fmt.Errorf("zone spell before world states was rejected: %w", err)
+	}
+	petGUID := uint64(0xF140000000000001)
+	petSpells := protocol.NewBuffer(8)
+	petSpells.WriteU64(petGUID)
+	latePetAuraTrace := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, playerCreateEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, spellGoTrace(836), {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL), Payload: base64.StdEncoding.EncodeToString(protocol.BuildAuraUpdateAll(petGUID, nil))}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_PET_SPELLS), Payload: base64.StdEncoding.EncodeToString(petSpells.Bytes())}}}
+	if err := checkPostMapLoginOrder(latePetAuraTrace, 0, 1); err != nil {
+		return fmt.Errorf("pet aura after post-map packets was rejected: %w", err)
+	}
+	latePlayerAuraTrace := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, playerCreateEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL), Payload: base64.StdEncoding.EncodeToString(protocol.BuildAuraUpdateAll(0x106, nil))}}}
+	if err := checkPostMapLoginOrder(latePlayerAuraTrace, 0, 1); err == nil {
+		return fmt.Errorf("late player aura packet after post-map packets was not rejected")
 	}
 	lateMovementTrace := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK)}}}
 	if err := checkLoginMovementOrder(lateMovementTrace, 0); err != nil {
@@ -1522,6 +1533,31 @@ func checkPostMapLoginOrder(trace protocoltrace.Trace, start, playerCreateIndex 
 	if playerCreateIndex < 0 {
 		return fmt.Errorf("post-map login order has no player create boundary")
 	}
+	petGUIDs := make(map[uint64]struct{})
+	for index := playerCreateIndex + 1; index < len(trace.Events); index++ {
+		event := trace.Events[index]
+		if event.Direction == protocoltrace.ClientToServer && (event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) || event.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST)) {
+			break
+		}
+		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_PET_SPELLS) {
+			continue
+		}
+		payload, err := eventPayload(event)
+		if err != nil {
+			return fmt.Errorf("SMSG_PET_SPELLS: %w", err)
+		}
+		if len(payload) < 8 {
+			continue
+		}
+		reader := protocol.NewReader(payload)
+		guid, err := reader.ReadU64()
+		if err != nil {
+			return fmt.Errorf("SMSG_PET_SPELLS pet GUID: %w", err)
+		}
+		if guid != 0 {
+			petGUIDs[guid] = struct{}{}
+		}
+	}
 	order := map[uint32]int{
 		uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES):          0,
 		uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ):              1,
@@ -1544,6 +1580,20 @@ func checkPostMapLoginOrder(trace protocoltrace.Trace, start, playerCreateIndex 
 		}
 		if event.Direction != protocoltrace.ServerToClient {
 			continue
+		}
+		if event.Opcode == uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL) && len(event.Payload) > 0 {
+			payload, err := eventPayload(event)
+			if err != nil {
+				return fmt.Errorf("SMSG_AURA_UPDATE_ALL: %w", err)
+			}
+			reader := protocol.NewReader(payload)
+			guid, err := reader.ReadPackedGUID()
+			if err != nil {
+				return fmt.Errorf("SMSG_AURA_UPDATE_ALL target GUID: %w", err)
+			}
+			if _, ok := petGUIDs[guid]; ok {
+				continue
+			}
 		}
 		stage, ok := order[event.Opcode]
 		if event.Opcode == uint32(protocol.OpcodeSMSG_SPELL_GO) {
