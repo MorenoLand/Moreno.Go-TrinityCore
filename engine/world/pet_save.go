@@ -201,11 +201,11 @@ func (s *session) savePetState(ctx context.Context, tx *sql.Tx, saveMode ...uint
 		}
 	}
 	type savedCooldown struct {
-		spell, item, category uint32
-		end, categoryEnd      int64
+		spell, category  uint32
+		end, categoryEnd int64
 	}
 	nowUnix := now.Unix()
-	cooldownRows, err := tx.QueryContext(ctx, "SELECT spell, item, categoryId, time, categoryEnd FROM pet_spell_cooldown WHERE guid = ?", petID)
+	cooldownRows, err := tx.QueryContext(ctx, "SELECT spell, categoryId, time, categoryEnd FROM pet_spell_cooldown WHERE guid = ?", petID)
 	if err != nil && !missingTable(err) {
 		return err
 	}
@@ -213,7 +213,7 @@ func (s *session) savePetState(ctx context.Context, tx *sql.Tx, saveMode ...uint
 	if err == nil {
 		for cooldownRows.Next() {
 			var row savedCooldown
-			if scanErr := cooldownRows.Scan(&row.spell, &row.item, &row.category, &row.end, &row.categoryEnd); scanErr != nil {
+			if scanErr := cooldownRows.Scan(&row.spell, &row.category, &row.end, &row.categoryEnd); scanErr != nil {
 				_ = cooldownRows.Close()
 				return scanErr
 			}
@@ -244,7 +244,6 @@ func (s *session) savePetState(ctx context.Context, tx *sql.Tx, saveMode ...uint
 		if spell.RecoveryTime == 0 && categoryRecoveryTime == 0 {
 			continue
 		}
-		itemID := cooldowns[spellID].item
 		end := nowUnix
 		if spell.RecoveryTime > 0 {
 			end = castAt.Add(time.Duration(spell.RecoveryTime) * time.Millisecond).Unix()
@@ -257,7 +256,7 @@ func (s *session) savePetState(ctx context.Context, tx *sql.Tx, saveMode ...uint
 			delete(cooldowns, spellID)
 			continue
 		}
-		cooldowns[spellID] = savedCooldown{spell: spellID, item: itemID, category: categoryID, end: end, categoryEnd: categoryEnd}
+		cooldowns[spellID] = savedCooldown{spell: spellID, category: categoryID, end: end, categoryEnd: categoryEnd}
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM pet_spell_cooldown WHERE guid = ?", petID); err != nil && !missingTable(err) {
 		return err
