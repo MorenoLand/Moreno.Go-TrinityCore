@@ -2483,7 +2483,6 @@ func (s *session) completeLogout(ctx context.Context) error {
 		return nil
 	}
 	s.stopSpellLifecycle()
-	s.clearActiveAuras()
 	s.stopTimedAchievements()
 	s.broadcastGuildMemberLogout()
 	s.triggerLogout(ctx)
@@ -2510,6 +2509,7 @@ func (s *session) completeLogout(ctx context.Context) error {
 		firstErr = err
 		_ = s.savePlayerPosition(ctx)
 	}
+	s.clearActiveAuras()
 	if err := s.clearBuybackState(ctx); err != nil && firstErr == nil {
 		firstErr = err
 	}
@@ -2653,6 +2653,12 @@ func (s *session) savePlayerState(ctx context.Context, online uint32) error {
 		return err
 	}
 	if err = s.savePlayerAuras(ctx, tx, state); err != nil {
+		return err
+	}
+	if err = s.savePlayerSpellCooldowns(ctx, tx, state); err != nil {
+		return err
+	}
+	if err = s.savePetState(ctx, tx); err != nil {
 		return err
 	}
 	return tx.Commit()

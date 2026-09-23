@@ -27,8 +27,8 @@ func boolToInt(value bool) int64 {
 
 type spellCooldown struct {
 	Spell       uint32
-	Item        uint16
-	Category    uint16
+	Item        uint32
+	Category    uint32
 	End         int64
 	CategoryEnd int64
 }
@@ -458,7 +458,7 @@ func (s *session) loadSpellCooldowns(ctx context.Context, guid uint64) ([]spellC
 		if err := rows.Scan(&spell, &item, &category, &end, &categoryEnd); err != nil {
 			return nil, err
 		}
-		result = append(result, spellCooldown{Spell: uint32(spell), Item: uint16(item), Category: uint16(category), End: end, CategoryEnd: categoryEnd})
+		result = append(result, spellCooldown{Spell: uint32(spell), Item: uint32(item), Category: uint32(category), End: end, CategoryEnd: categoryEnd})
 	}
 	return result, rows.Err()
 }
@@ -487,8 +487,8 @@ func buildInitialSpells(state playerState) []byte {
 	packet.WriteU16(uint16(len(cooldowns)))
 	for _, cooldown := range cooldowns {
 		packet.WriteU32(cooldown.Spell)
-		packet.WriteU16(cooldown.Item)
-		packet.WriteU16(cooldown.Category)
+		packet.WriteU16(uint16(cooldown.Item))
+		packet.WriteU16(uint16(cooldown.Category))
 		if cooldown.End >= now+15*24*60*60 {
 			packet.WriteU32(1)
 			packet.WriteU32(0x80000000)

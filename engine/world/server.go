@@ -3384,6 +3384,9 @@ func (s *session) logout() {
 	s.releaseActiveLoot()
 	if s.playerLoaded {
 		s.triggerLogout(ctx)
+		if s.player != nil && s.player.PetGUID != 0 {
+			s.unsummonPet(ctx, petSaveAsCurrent)
+		}
 		if err := s.savePlayerState(ctx, 0); err != nil {
 			s.debug("player position save failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
 			_ = s.savePlayerPosition(ctx)

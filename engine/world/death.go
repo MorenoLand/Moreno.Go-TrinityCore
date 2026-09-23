@@ -34,6 +34,7 @@ const (
 	corpseTypeBones     uint32 = 0
 	corpseTypePvE       uint32 = 1 // CORPSE_RESURRECTABLE_PVE
 	corpseTypePvP       uint32 = 2 // CORPSE_RESURRECTABLE_PVP
+	corpsePhaseAuraType uint32 = 261
 	corpseFlagBones     uint32 = 0x01
 	corpseFlagUnk2      uint32 = 0x04
 	playerFlagHideHelm  uint32 = 0x00000400
@@ -45,6 +46,27 @@ const (
 	defaultGraveyardAlliance uint32 = 4  // Westfall (ObjectMgr.cpp:6855)
 	defaultGraveyardHorde    uint32 = 10 // Crossroads (ObjectMgr.cpp:6853)
 )
+
+func (s *session) currentPlayerPhaseMask() uint32 {
+	if s == nil || s.player == nil {
+		return 1
+	}
+	if s.player.PlayerFlags&playerFlagGM != 0 || s.player.ExtraFlags&playerExtraGMOn != 0 {
+		return ^uint32(0)
+	}
+	s.castMu.Lock()
+	phaseMask := uint32(0)
+	for _, aura := range s.activeAuras {
+		if aura != nil && !aura.Stopped && aura.AuraType == corpsePhaseAuraType {
+			phaseMask |= uint32(aura.MiscValue)
+		}
+	}
+	s.castMu.Unlock()
+	if phaseMask == 0 {
+		return 1
+	}
+	return phaseMask
+}
 
 func (s *Server) buildNearbyCorpseUpdates(ctx context.Context, state playerState) (*protocol.Packet, int, error) {
 	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil || s.Config.VisibilityDistanceContinents <= 0 {
@@ -402,7 +424,7 @@ func (s *session) buildPlayerRepop(ctx context.Context) {
 		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_DEL_CORPSE", s.playerGUID)
 		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_CORPSE",
 			s.playerGUID, s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.Map,
-			displayID, s.player.Equipment, bytes1, bytes2, s.player.GuildID, corpseFlags(s.player), 0, time.Now().Unix(), corpseTypePvE, 0, 1)
+			displayID, s.player.Equipment, bytes1, bytes2, s.player.GuildID, corpseFlags(s.player), 0, time.Now().Unix(), corpseTypePvE, 0, s.currentPlayerPhaseMask())
 	}
 
 	s.player.PlayerFlags |= playerFlagGhost

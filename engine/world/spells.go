@@ -2,9 +2,11 @@ package world
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"sort"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -673,23 +675,30 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	s.updateAchievementCriteria(criteriaTypeCastSpell, spellID, 1)
 	s.updateAchievementCriteria(criteriaTypeCastSpell2, spellID, 1)
 	s.startTimedAchievement(timedTypeSpellCast, spellID)
-	if spell.RecoveryTime > 0 {
-		nowUnix := time.Now().Unix()
-		cooldownEnd := nowUnix + int64((spell.RecoveryTime+999)/1000)
-		s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: spellID, End: cooldownEnd})
-		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spellID, uint32(spell.RecoveryTime)), true)
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_spell_cooldown (guid, spell, item, time, categoryId, categoryEnd) VALUES (?, ?, 0, ?, 0, 0)", s.playerGUID, spellID, cooldownEnd)
+	categoryID, categoryRecoveryTime, categoryErr := s.spellCooldownCategory(spellID)
+	if categoryErr != nil {
+		s.debug("spell cooldown category lookup failed", "spell", spellID, "error", categoryErr)
+		categoryID, categoryRecoveryTime = 0, 0
+	}
+	now := time.Now()
+	categoryEnd := now.Unix()
+	if categoryRecoveryTime > 0 {
+		categoryEnd = now.Add(time.Duration(categoryRecoveryTime) * time.Millisecond).Unix()
+	}
+	if spell.RecoveryTime > 0 || categoryRecoveryTime > 0 {
+		cooldownEnd := categoryEnd
+		if spell.RecoveryTime > 0 {
+			cooldownEnd = now.Add(time.Duration(spell.RecoveryTime) * time.Millisecond).Unix()
+		}
+		s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: spellID, Category: categoryID, End: cooldownEnd, CategoryEnd: categoryEnd})
+		if spell.RecoveryTime > 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spellID, spell.RecoveryTime), true)
 		}
 	}
 	if spellID == 8690 {
-		nowUnix := time.Now().Unix()
-		cooldownEnd := nowUnix + 900 // 15 min cooldown
-		s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: spellID, End: cooldownEnd})
+		cooldownEnd := now.Add(15 * time.Minute).Unix() // 15 min cooldown
+		s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: spellID, Item: 6948, Category: categoryID, End: cooldownEnd, CategoryEnd: categoryEnd})
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spellID, 900000), true)
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_spell_cooldown (guid, spell, item, time, categoryId, categoryEnd) VALUES (?, ?, 6948, ?, 0, 0)", s.playerGUID, spellID, cooldownEnd)
-		}
 	}
 
 	// Reference SpellEffects.cpp:3858-3874: Spell 7266 (Duel)
@@ -3318,6 +3327,54 @@ func buildCastFailed(castID uint8, spellID uint32, result uint8) []byte {
 	buf.WriteU32(spellID)
 	buf.WriteU8(result)
 	return buf.Bytes()
+}
+
+func (s *session) spellCooldownCategory(spellID uint32) (uint32, uint32, error) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0, 0, fmt.Errorf("spell cooldown data store is unavailable")
+	}
+	file, err := s.server.Data.File("Spell")
+	if err != nil {
+		return 0, 0, fmt.Errorf("load Spell.dbc cooldown data: %w", err)
+	}
+	record, found := file.Find(spellID)
+	if !found {
+		return 0, 0, fmt.Errorf("spell %d is missing from Spell.dbc", spellID)
+	}
+	category, err := record.Uint32(1)
+	if err != nil {
+		return 0, 0, fmt.Errorf("read Spell.dbc category for spell %d: %w", spellID, err)
+	}
+	categoryRecoveryTime, err := record.Uint32(30)
+	if err != nil {
+		return 0, 0, fmt.Errorf("read Spell.dbc category recovery time for spell %d: %w", spellID, err)
+	}
+	return category, categoryRecoveryTime, nil
+}
+
+func (s *session) savePlayerSpellCooldowns(ctx context.Context, tx *sql.Tx, state *playerState) error {
+	if s == nil || tx == nil || state == nil || s.server == nil || s.server.CharactersStore == nil {
+		return nil
+	}
+	if _, err := s.server.CharactersStore.ExecStatementTx(ctx, tx, "CHAR_DEL_CHAR_SPELL_COOLDOWNS", state.GUID); err != nil {
+		return err
+	}
+	bySpell := make(map[uint32]spellCooldown, len(state.Cooldowns))
+	for _, cooldown := range state.Cooldowns {
+		bySpell[cooldown.Spell] = cooldown
+	}
+	spellIDs := make([]uint32, 0, len(bySpell))
+	for spellID := range bySpell {
+		spellIDs = append(spellIDs, spellID)
+	}
+	sort.Slice(spellIDs, func(i, j int) bool { return spellIDs[i] < spellIDs[j] })
+	for _, spellID := range spellIDs {
+		cooldown := bySpell[spellID]
+		if _, err := s.server.CharactersStore.ExecStatementTx(ctx, tx, "CHAR_INS_CHAR_SPELL_COOLDOWN", state.GUID, cooldown.Spell, cooldown.Item, cooldown.End, cooldown.Category, cooldown.CategoryEnd); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func buildSpellCooldown(playerGUID uint64, spellID uint32, cooldownDurationMs uint32) []byte {

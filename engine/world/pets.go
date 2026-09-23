@@ -11,9 +11,10 @@ import (
 )
 
 const (
-	petSaveAsDeleted uint8 = 0
-	petSaveAsCurrent uint8 = 1
-	petSaveNotInSlot uint8 = 2
+	petSaveAsDeleted        uint8 = 0
+	petSaveAsCurrent        uint8 = 1
+	petSaveNotInSlot        uint8 = 2
+	petStorageSlotNotInSlot uint8 = 100
 
 	petActionPassive   uint8  = 0x01
 	petActionDisabled  uint8  = 0x81
@@ -859,19 +860,23 @@ func (s *session) unsummonPet(ctx context.Context, mode uint8) {
 	petGUID := s.player.PetGUID
 	petID := s.petNumberForGUID(petGUID)
 
-	cdb := s.server.CharactersStore.DB
-	if cdb != nil && petID != 0 {
-		switch mode {
-		case petSaveAsDeleted:
-			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_pet WHERE owner = ? AND id = ?", s.playerGUID, petID)
-			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_pet_declinedname WHERE owner = ? AND id = ?", s.playerGUID, petID)
-			_, _ = cdb.ExecContext(ctx, "DELETE FROM pet_spell WHERE guid = ?", petID)
-			_, _ = cdb.ExecContext(ctx, "DELETE FROM pet_spell_cooldown WHERE guid = ?", petID)
-		case petSaveNotInSlot:
-			_, _ = cdb.ExecContext(ctx, "UPDATE character_pet SET slot = 100, savetime = ? WHERE owner = ? AND id = ?", time.Now().Unix(), s.playerGUID, petID)
-		case petSaveAsCurrent:
-			_, _ = cdb.ExecContext(ctx, "UPDATE character_pet SET savetime = ? WHERE owner = ? AND id = ?", time.Now().Unix(), s.playerGUID, petID)
+	if petID != 0 && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		tx, err := s.server.CharactersStore.DB.BeginTx(ctx, nil)
+		if err == nil {
+			err = s.savePetState(ctx, tx, mode)
+			if err == nil {
+				err = tx.Commit()
+			}
+			if err != nil {
+				_ = tx.Rollback()
+			}
 		}
+		if err != nil {
+			s.debug("pet state save failed", "account", s.accountName, "petID", petID, "mode", mode, "error", err)
+		}
+	}
+	if s.server != nil {
+		s.server.clearCreatureAuras(petGUID)
 	}
 
 	s.sendDestroyObject(petGUID, false)
