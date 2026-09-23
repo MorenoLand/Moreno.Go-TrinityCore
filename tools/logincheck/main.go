@@ -37,6 +37,7 @@ func main() {
 	selfCheck := flag.Bool("self-check", false, "validate the login loading-order regression guard")
 	replayWork := flag.String("replay-work", "", "isolated work directory containing auth.db, characters.db, and world.db; runs core login with Eluna disabled")
 	replayGUID := flag.Uint64("replay-guid", 0, "character GUID for an in-process login replay; 0 selects the first real character")
+	replayPetCooldownSpell := flag.Uint("replay-pet-cooldown-spell", 0, "after login, assert a saved pet category cooldown rejects this spell")
 	replayTrace := flag.String("trace-out", "", "optional JSONL path for the in-process login trace")
 	flag.Parse()
 	if *selfCheck {
@@ -47,7 +48,7 @@ func main() {
 		return
 	}
 	if *replayWork != "" {
-		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayTrace); err != nil {
+		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayTrace, uint32(*replayPetCooldownSpell)); err != nil {
 			fail(err.Error())
 		}
 		return
@@ -3369,7 +3370,7 @@ func eventPayload(event protocoltrace.Event) ([]byte, error) {
 	return protocoltrace.Trace{Events: []protocoltrace.Event{event}}.Payload(event)
 }
 
-func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string) error {
+func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, petCooldownSpell uint32) error {
 	workDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return err
@@ -3415,7 +3416,13 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string) 
 		server.Stop()
 		return err
 	}
-	trace, replayErr := world.ReplayCharacterLogin(ctx, server, guid)
+	var trace protocoltrace.Trace
+	var replayErr error
+	if petCooldownSpell != 0 {
+		trace, replayErr = world.ReplayCharacterPetCooldown(ctx, server, guid, petCooldownSpell)
+	} else {
+		trace, replayErr = world.ReplayCharacterLogin(ctx, server, guid)
+	}
 	cancel()
 	server.Stop()
 	after, snapshotErr := snapshotCharacterState(stores.Characters.DB, guid)
@@ -3467,7 +3474,11 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string) 
 		}
 	}
 	sort.Strings(changed)
-	fmt.Printf("real-character login replay passed lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
+	if petCooldownSpell != 0 {
+		fmt.Printf("real-character pet cooldown replay passed spell=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", petCooldownSpell, len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
+	} else {
+		fmt.Printf("real-character login replay passed lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
+	}
 	return nil
 }
 

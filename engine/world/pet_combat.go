@@ -493,23 +493,11 @@ func (s *session) executePetSpell(ctx context.Context, motion *creatureMotion, s
 	}
 	if !handledEffect {
 		now := time.Now()
-		s.server.motionMu.Lock()
-		if motion.SpellCooldowns == nil {
-			motion.SpellCooldowns = make(map[uint32]time.Time)
-		}
-		motion.SpellCooldowns[spell.ID] = now
-		s.server.motionMu.Unlock()
-		motion.LastSpell = now
+		s.recordPetSpellCooldown(motion, spell, now)
 		return true
 	}
 	now := time.Now()
-	s.server.motionMu.Lock()
-	if motion.SpellCooldowns == nil {
-		motion.SpellCooldowns = make(map[uint32]time.Time)
-	}
-	motion.SpellCooldowns[spell.ID] = now
-	s.server.motionMu.Unlock()
-	motion.LastSpell = now
+	s.recordPetSpellCooldown(motion, spell, now)
 	return true
 }
 

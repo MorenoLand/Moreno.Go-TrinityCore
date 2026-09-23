@@ -633,6 +633,7 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		petZ = s.player.Z
 	}
 
+	s.registerPetMotion(ctx, petGUID, petID, entry, level, faction, curHealth, maxHealth, uint8(reactState), petCombatReach, petX, petY, petZ, petO)
 	updateBlock := buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petBoundingRadius, petCombatReach, petX, petY, petZ, petO)
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(updateBlock)
@@ -646,59 +647,6 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 	s.sendPlayerUpdate()
 	s.loadPetAuras(ctx, petID, petGUID)
 	s.sendPetSpells(ctx, petID, entry, reactState)
-
-	if s.server != nil {
-		var knownSpells, autocast []uint32
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			if rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT spell, active FROM pet_spell WHERE guid = ? ORDER BY spell", petID); err == nil {
-				defer rows.Close()
-				for rows.Next() {
-					var sp uint32
-					var active uint8
-					if rows.Scan(&sp, &active) == nil && sp > 0 {
-						knownSpells = append(knownSpells, sp)
-						if active != 0 {
-							autocast = append(autocast, sp)
-						}
-					}
-				}
-			}
-		}
-		s.server.motionMu.Lock()
-		if s.server.creatureMotion == nil {
-			s.server.creatureMotion = make(map[uint64]*creatureMotion)
-		}
-		s.server.creatureMotion[petGUID] = &creatureMotion{
-			GUID:           petGUID,
-			Entry:          entry,
-			Map:            s.player.Map,
-			HomeX:          petX,
-			HomeY:          petY,
-			HomeZ:          petZ,
-			X:              petX,
-			Y:              petY,
-			Z:              petZ,
-			Orientation:    petO,
-			Speed:          2.5,
-			RunSpeed:       7.0,
-			Faction:        faction,
-			Level:          level,
-			UnitFlags:      unitFlagPlayerControlled,
-			AttackTime:     2000,
-			CombatReach:    petCombatReach,
-			Health:         curHealth,
-			MaxHealth:      maxHealth,
-			OwnerGUID:      s.playerGUID,
-			Spells:         knownSpells,
-			SpellCooldowns: make(map[uint32]time.Time),
-			PetCommand:     PetCommandFollow,
-			PetReact:       reactState,
-			AutocastSpells: autocast,
-			MinDamage:      float32(maxUint32(level*2, 5)),
-			MaxDamage:      float32(maxUint32(level*3, 10)),
-		}
-		s.server.motionMu.Unlock()
-	}
 
 	s.debug("pet spawned", "account", s.accountName, "petID", petID, "entry", entry, "name", name, "level", level)
 }
@@ -1808,6 +1756,15 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 	if spell.RecoveryTime > 0 && !lastSpell.IsZero() && time.Since(lastSpell) < time.Duration(spell.RecoveryTime)*time.Millisecond {
 		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
 		return true
+	}
+	if categoryID, _, categoryErr := s.spellCooldownCategory(spellID); categoryErr == nil && categoryID != 0 {
+		s.server.motionMu.Lock()
+		categoryEnd := motion.SpellCategoryCooldowns[categoryID]
+		s.server.motionMu.Unlock()
+		if categoryEnd.After(time.Now()) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
+			return true
+		}
 	}
 	if !s.executePetSpell(ctx, motion, spell, castCount, target) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
