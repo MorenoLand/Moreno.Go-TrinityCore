@@ -214,15 +214,6 @@ func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race, clas
 			if !result[index].Active || result[index].Disabled {
 				continue
 			}
-			if !s.spellFitsClassRace(result[index].ID, race, class) || !s.spellAvailableAtLevel(result[index].ID, level) {
-				result[index].Active = false
-				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_spell SET active = 0 WHERE guid = ? AND spell = ?", guid, result[index].ID)
-			}
-		}
-		for index := range result {
-			if !result[index].Active || result[index].Disabled {
-				continue
-			}
 			stackable, found, err := s.server.Data.SpellStackableWithRanks(result[index].ID)
 			if err != nil {
 				return nil, err
@@ -247,46 +238,6 @@ func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race, clas
 		}
 	}
 	return result, nil
-}
-
-func (s *session) spellFitsClassRace(spellID uint32, race, class uint8) bool {
-	if s == nil || s.server == nil || s.server.Data == nil {
-		return true
-	}
-	abilities, found, err := s.server.Data.SkillLineAbilities(spellID)
-	if err != nil || !found {
-		return true
-	}
-	raceMask, classMask := playerCreateMask(race), playerCreateMask(class)
-	for _, ability := range abilities {
-		if ability.RaceMask != 0 && ability.RaceMask&raceMask == 0 || ability.ClassMask != 0 && ability.ClassMask&classMask == 0 {
-			continue
-		}
-		if _, skillFound, skillErr := s.server.Data.SkillRaceClassInfo(ability.SkillLine, race, class); skillErr == nil && skillFound {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *session) spellAvailableAtLevel(spellID uint32, level uint8) bool {
-	if s == nil || s.server == nil || s.server.Config.PlayerStartAllSpells || s.server.Data == nil || level == 0 {
-		return true
-	}
-	spell, found, err := s.server.Data.Spell(spellID)
-	if err != nil || !found {
-		return true
-	}
-	if spell.SpellLevel > 0 {
-		return spell.SpellLevel <= uint32(level)
-	}
-	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		var requiredLevel sql.NullInt64
-		if err := s.server.WorldStore.DB.QueryRowContext(context.Background(), "SELECT MIN(ReqLevel) FROM trainer_spell WHERE SpellId = ? AND ReqLevel > 0", spellID).Scan(&requiredLevel); err == nil && requiredLevel.Valid && requiredLevel.Int64 > 0 {
-			return requiredLevel.Int64 <= int64(level)
-		}
-	}
-	return true
 }
 
 func (s *session) loadFirstLoginCastSpellIDs(ctx context.Context, race, class uint8) []uint32 {
