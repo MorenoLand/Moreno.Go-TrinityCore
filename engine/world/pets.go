@@ -646,6 +646,7 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 
 	s.sendPlayerUpdate()
 	s.loadPetAuras(ctx, petID, petGUID)
+	s.applyOwnerPetAuras(ctx, entry, petGUID)
 	s.sendPetSpells(ctx, petID, entry, reactState)
 
 	s.debug("pet spawned", "account", s.accountName, "petID", petID, "entry", entry, "name", name, "level", level)

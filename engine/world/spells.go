@@ -1835,6 +1835,7 @@ type activeAura struct {
 	TriggerSpell       uint32
 	DRGroup            DiminishingGroup
 	DamageTaken        uint32
+	OwnerPetAura       bool
 	Timer              *time.Timer
 	TickTimer          *time.Timer
 	Stopped            bool

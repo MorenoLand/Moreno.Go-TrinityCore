@@ -121,6 +121,9 @@ func (s *session) savePetState(ctx context.Context, tx *sql.Tx, saveMode ...uint
 	}
 	toInsert := make([]petAuraInsert, 0, len(auras))
 	for _, aura := range auras {
+		if aura.OwnerPetAura {
+			continue
+		}
 		spell, found, err := s.server.Data.Spell(aura.SpellID)
 		if err != nil {
 			return err
