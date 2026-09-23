@@ -14,6 +14,247 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
+const itemFlagUniqueEquippable uint32 = 0x00080000
+
+func playerHasSpell(state *playerState, spellID uint32) bool {
+	if state == nil || spellID == 0 {
+		return false
+	}
+	for _, spell := range state.Spells {
+		if spell.ID == spellID && !spell.Disabled {
+			return true
+		}
+	}
+	return false
+}
+
+func itemFitsEquipmentSlot(state *playerState, equipped map[int64]itemQueryData, item itemQueryData, slot int64) bool {
+	dualWield, titanGrip := playerHasSpell(state, 674), playerHasSpell(state, 46917)
+	var slots []int64
+	switch item.InventoryType {
+	case 1:
+		slots = []int64{0}
+	case 2:
+		slots = []int64{1}
+	case 3:
+		slots = []int64{2}
+	case 4:
+		slots = []int64{3}
+	case 5, 20:
+		slots = []int64{4}
+	case 6:
+		slots = []int64{5}
+	case 7:
+		slots = []int64{6}
+	case 8:
+		slots = []int64{7}
+	case 9:
+		slots = []int64{8}
+	case 10:
+		slots = []int64{9}
+	case 11:
+		slots = []int64{10, 11}
+	case 12:
+		slots = []int64{12, 13}
+	case 13:
+		slots = []int64{15}
+		if dualWield {
+			slots = append(slots, 16)
+		}
+	case 14, 22, 23:
+		slots = []int64{16}
+	case 15, 25, 26:
+		slots = []int64{17}
+	case 16:
+		slots = []int64{14}
+	case 17, 21:
+		slots = []int64{15}
+		if item.InventoryType == 17 && dualWield && titanGrip {
+			slots = append(slots, 16)
+		}
+	case 19:
+		slots = []int64{18}
+	case 28:
+		switch item.SubClass {
+		case 0:
+			if state.Class == 9 {
+				slots = []int64{17}
+			}
+		case 7:
+			if state.Class == 2 {
+				slots = []int64{17}
+			}
+		case 8:
+			if state.Class == 11 {
+				slots = []int64{17}
+			}
+		case 9:
+			if state.Class == 7 {
+				slots = []int64{17}
+			}
+		case 10:
+			if state.Class == 6 {
+				slots = []int64{17}
+			}
+		}
+	}
+	for _, candidate := range slots {
+		if candidate != slot {
+			continue
+		}
+		if slot == 16 {
+			if item.InventoryType == 13 && item.Class == 2 && item.SubClass == 6 || (item.InventoryType == 13 || item.InventoryType == 22) && !dualWield {
+				return false
+			}
+			if item.InventoryType == 17 && (!dualWield || !titanGrip) {
+				return false
+			}
+			if mainHand, ok := equipped[15]; ok && mainHand.InventoryType == 17 {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func (s *session) canUseItemTemplate(ctx context.Context, entry uint32) bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	data, err := s.loadItemQueryData(ctx, entry)
+	if err != nil {
+		return false
+	}
+	return s.canUseItemData(ctx, s.player, data)
+}
+
+func (s *session) canUseItemData(ctx context.Context, state *playerState, data itemQueryData) bool {
+	if s == nil || state == nil || uint32(state.Level) < data.RequiredLevel {
+		return false
+	}
+	weaponSkills := [...]uint32{44, 172, 45, 46, 54, 160, 229, 43, 55, 0, 136, 0, 0, 473, 0, 173, 176, 253, 226, 228, 356}
+	weaponSpells := [...]uint32{196, 197, 264, 266, 198, 199, 200, 201, 202, 0, 227, 0, 0, 0, 0, 1180, 2567, 3386, 5011, 5009, 0}
+	armorSkills := [...]uint32{0, 415, 414, 413, 293, 0, 433, 0, 0, 0, 0}
+	armorSpells := [...]uint32{0, 9078, 9077, 8737, 750, 0, 9116, 0, 0, 0, 0}
+	itemSkill, itemSpell := uint32(0), uint32(0)
+	switch data.Class {
+	case itemClassWeapon:
+		if data.SubClass < uint32(len(weaponSkills)) {
+			itemSkill, itemSpell = weaponSkills[data.SubClass], weaponSpells[data.SubClass]
+		}
+	case itemClassArmor:
+		if data.SubClass < uint32(len(armorSkills)) {
+			itemSkill, itemSpell = armorSkills[data.SubClass], armorSpells[data.SubClass]
+		}
+	}
+	hasSkill := func(skillID uint32) bool {
+		if skillID == 0 {
+			return false
+		}
+		for _, skill := range state.Skills {
+			if uint32(skill.Skill) == skillID {
+				return true
+			}
+		}
+		return false
+	}
+	skillValue := func(skillID uint32) uint16 {
+		for _, skill := range state.Skills {
+			if uint32(skill.Skill) == skillID {
+				return skill.Value
+			}
+		}
+		return 0
+	}
+	maxSkill := func(skillID uint32) {
+		if skillID == 0 || skillID > 0xffff || skillValue(skillID) != 0 {
+			return
+		}
+		for i := range state.Skills {
+			if uint32(state.Skills[i].Skill) == skillID {
+				state.Skills[i].Value, state.Skills[i].Max = 400, 400
+				if db := s.server.CharactersStore.DB; db != nil {
+					_, _ = db.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, 400, 400)", state.GUID, skillID)
+				}
+				return
+			}
+		}
+		state.Skills = append(state.Skills, playerSkill{Skill: uint16(skillID), Value: 400, Max: 400})
+		if db := s.server.CharactersStore.DB; db != nil {
+			_, _ = db.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, 400, 400)", state.GUID, skillID)
+		}
+	}
+	if playerHasSpell(state, itemSpell) || hasSkill(itemSkill) {
+		maxSkill(itemSkill)
+		return true
+	}
+	team := playerTeam(state.Race)
+	if (data.Flags2&0x01 != 0 && team != teamHorde) || (data.Flags2&0x02 != 0 && team != teamAlliance) {
+		return false
+	}
+	classMask, raceMask := uint32(0), uint32(0)
+	if state.Class > 0 {
+		classMask = uint32(1) << uint(state.Class-1)
+	}
+	if state.Race > 0 {
+		raceMask = uint32(1) << uint(state.Race-1)
+	}
+	if data.AllowableClass&classMask == 0 || data.AllowableRace&raceMask == 0 {
+		return false
+	}
+	templateBypass := playerHasSpell(state, data.RequiredSpell) || hasSkill(data.RequiredSkill)
+	if templateBypass {
+		maxSkill(data.RequiredSkill)
+	}
+	if !templateBypass {
+		if data.RequiredSkill != 0 {
+			requiredSkillValue := skillValue(data.RequiredSkill)
+			if requiredSkillValue == 0 || uint32(requiredSkillValue) < data.RequiredSkillRank {
+				return false
+			}
+		}
+		if data.RequiredSpell != 0 && !playerHasSpell(state, data.RequiredSpell) {
+			return false
+		}
+		if data.HolidayID != 0 {
+			if _, active := s.server.cachedActiveGameHolidays(ctx)[int64(data.HolidayID)]; !active {
+				return false
+			}
+		}
+		if (data.Spells[0].ID == 483 || data.Spells[0].ID == 55884) && data.Spells[1].ID > 0 && playerHasSpell(state, uint32(data.Spells[1].ID)) {
+			return false
+		}
+	}
+	if itemSkill != 0 && s.getSkillValue(itemSkill) == 0 {
+		allowHeirloom := false
+		if data.Quality == 7 && data.Class == itemClassArmor && !hasSkill(itemSkill) {
+			switch s.player.Class {
+			case 3, 7:
+				allowHeirloom = itemSkill == 413
+			case 1, 2:
+				allowHeirloom = itemSkill == 293
+			}
+		}
+		if !allowHeirloom {
+			return false
+		}
+	}
+	if data.RequiredReputationFaction != 0 {
+		rank := uint32(3)
+		for _, reputation := range state.Reputations {
+			if reputation.FactionID == data.RequiredReputationFaction {
+				rank = reputationRank(int64(totalReputationStanding(reputation)))
+				break
+			}
+		}
+		if rank < data.RequiredReputationRank {
+			return false
+		}
+	}
+	return true
+}
+
 const (
 	equipSlotHead     uint8 = 0
 	equipSlotNeck     uint8 = 1

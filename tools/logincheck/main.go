@@ -195,6 +195,12 @@ func runSelfCheck() error {
 	if err := checkRankSkillDBC(); err != nil {
 		return fmt.Errorf("ranked-skill DBC check failed: %w", err)
 	}
+	if err := checkItemLimitCategoryDBC(); err != nil {
+		return fmt.Errorf("item-limit DBC check failed: %w", err)
+	}
+	if err := checkSpellRankStackabilityDBC(); err != nil {
+		return fmt.Errorf("spell-rank DBC check failed: %w", err)
+	}
 	if err := checkGroupLeaderFlag(); err != nil {
 		return fmt.Errorf("group leader flag check failed: %w", err)
 	}
@@ -565,6 +571,63 @@ func checkRankSkillDBC() error {
 		return nil
 	}
 	return fmt.Errorf("SkillRaceClassInfo.dbc contains no rank-tier skill usable by a test race/class")
+}
+
+func checkItemLimitCategoryDBC() error {
+	store := wotlk.NewStore(filepath.Join(config.Default().GameDataDir, "dbc"))
+	file, err := store.File("ItemLimitCategory")
+	if err != nil {
+		return err
+	}
+	for index := 0; index < file.Records(); index++ {
+		record, err := file.Record(index)
+		if err != nil {
+			continue
+		}
+		id, err := record.Uint32(0)
+		if err != nil || id == 0 {
+			continue
+		}
+		entry, found, err := store.ItemLimitCategory(id)
+		if err != nil || !found || entry.ID != id || entry.Flags > 1 {
+			return fmt.Errorf("item limit category %d decoded as %+v found=%t error=%v", id, entry, found, err)
+		}
+		return nil
+	}
+	return fmt.Errorf("ItemLimitCategory.dbc contains no usable records")
+}
+
+func checkSpellRankStackabilityDBC() error {
+	store := wotlk.NewStore(filepath.Join(config.Default().GameDataDir, "dbc"))
+	file, err := store.File("Spell")
+	if err != nil {
+		return err
+	}
+	stackable, nonStackable := false, false
+	for index := 0; index < file.Records(); index++ {
+		record, err := file.Record(index)
+		if err != nil {
+			continue
+		}
+		id, err := record.Uint32(0)
+		if err != nil || id == 0 {
+			continue
+		}
+		value, found, err := store.SpellStackableWithRanks(id)
+		if err != nil {
+			return err
+		}
+		if found && value {
+			stackable = true
+		}
+		if found && !value {
+			nonStackable = true
+		}
+		if stackable && nonStackable {
+			return nil
+		}
+	}
+	return fmt.Errorf("Spell.dbc did not yield both stackable and non-stackable rank categories")
 }
 
 func firstSkillMaskMember(mask uint32) uint8 {

@@ -12,9 +12,17 @@ import (
 )
 
 type learnedSpell struct {
-	ID       uint32
-	Active   bool
-	Disabled bool
+	ID        uint32
+	Active    bool
+	Disabled  bool
+	Dependent bool
+}
+
+func boolToInt(value bool) int64 {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 type spellCooldown struct {
@@ -154,6 +162,54 @@ func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race, clas
 		}
 	}
 	if s.server != nil && s.server.Data != nil {
+		for index := 0; index < len(result); index++ {
+			spell := result[index]
+			if _, _, talent := s.server.Data.TalentBySpell(spell.ID); talent {
+				continue
+			}
+			previous := s.server.getPrevSpellInChain(spell.ID)
+			for previous != 0 {
+				if _, found, spellErr := s.server.Data.Spell(previous); spellErr != nil || !found {
+					break
+				}
+				foundIndex := -1
+				for existing := range result {
+					if result[existing].ID == previous {
+						foundIndex = existing
+						break
+					}
+				}
+				if foundIndex < 0 {
+					result = append(result, learnedSpell{ID: previous, Active: spell.Active, Disabled: spell.Disabled, Dependent: true})
+					_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, ?, ?)", guid, previous, boolToInt(spell.Active), boolToInt(spell.Disabled))
+				} else {
+					result[foundIndex].Active, result[foundIndex].Disabled, result[foundIndex].Dependent = spell.Active, spell.Disabled, true
+					_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_spell SET active = ?, disabled = ? WHERE guid = ? AND spell = ?", boolToInt(spell.Active), boolToInt(spell.Disabled), guid, previous)
+				}
+				if _, _, talent := s.server.Data.TalentBySpell(previous); talent {
+					break
+				}
+				previous = s.server.getPrevSpellInChain(previous)
+			}
+		}
+	}
+	if s.server != nil && s.server.Data != nil {
+		selectedTalentSpell := make(map[uint32]uint32)
+		selectedTalentRank := make(map[uint32]uint8)
+		for _, spell := range result {
+			if talentID, rank, found := s.server.Data.TalentBySpell(spell.ID); found && (selectedTalentSpell[talentID] == 0 || rank > selectedTalentRank[talentID]) {
+				selectedTalentSpell[talentID], selectedTalentRank[talentID] = spell.ID, rank
+			}
+		}
+		filtered := make([]learnedSpell, 0, len(result))
+		for _, spell := range result {
+			if talentID, _, found := s.server.Data.TalentBySpell(spell.ID); found && selectedTalentSpell[talentID] != spell.ID {
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_spell WHERE guid = ? AND spell = ?", guid, spell.ID)
+				continue
+			}
+			filtered = append(filtered, spell)
+		}
+		result = filtered
 		for index := range result {
 			if !result[index].Active || result[index].Disabled {
 				continue
@@ -163,31 +219,30 @@ func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race, clas
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_spell SET active = 0 WHERE guid = ? AND spell = ?", guid, result[index].ID)
 			}
 		}
-		active := make(map[uint32]struct{}, len(result))
-		for _, spell := range result {
-			if spell.Active && !spell.Disabled {
-				active[spell.ID] = struct{}{}
-			}
-		}
 		for index := range result {
 			if !result[index].Active || result[index].Disabled {
 				continue
 			}
-			abilities, found, err := s.server.Data.SkillLineAbilities(result[index].ID)
-			if err != nil || !found {
+			stackable, found, err := s.server.Data.SpellStackableWithRanks(result[index].ID)
+			if err != nil {
+				return nil, err
+			}
+			if !found || stackable {
 				continue
 			}
-			for _, ability := range abilities {
-				if ability.SupercededBySpell == 0 {
-					continue
+			seenRanks := map[uint32]struct{}{result[index].ID: {}}
+			for previous := s.server.getPrevSpellInChain(result[index].ID); previous != 0; previous = s.server.getPrevSpellInChain(previous) {
+				if _, seen := seenRanks[previous]; seen {
+					break
 				}
-				if _, known := active[ability.SupercededBySpell]; !known {
-					continue
+				seenRanks[previous] = struct{}{}
+				for previousIndex := range result {
+					if result[previousIndex].ID == previous && result[previousIndex].Active && !result[previousIndex].Disabled {
+						result[previousIndex].Active = false
+						_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_spell SET active = 0 WHERE guid = ? AND spell = ?", guid, previous)
+						break
+					}
 				}
-				result[index].Active = false
-				delete(active, result[index].ID)
-				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_spell SET active = 0 WHERE guid = ? AND spell = ?", guid, result[index].ID)
-				break
 			}
 		}
 	}

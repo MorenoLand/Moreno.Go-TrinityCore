@@ -488,10 +488,13 @@ func (s *session) questObjectivesComplete(ctx context.Context, questID uint32, e
 	}
 	var reqIDs, reqCounts [4]int64
 	var itemIDs, itemCounts [6]int64
-	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT RequiredNpcOrGo1, RequiredNpcOrGo2, RequiredNpcOrGo3, RequiredNpcOrGo4, RequiredNpcOrGoCount1, RequiredNpcOrGoCount2, RequiredNpcOrGoCount3, RequiredNpcOrGoCount4, RequiredItemId1, RequiredItemId2, RequiredItemId3, RequiredItemId4, RequiredItemId5, RequiredItemId6, RequiredItemCount1, RequiredItemCount2, RequiredItemCount3, RequiredItemCount4, RequiredItemCount5, RequiredItemCount6 FROM quest_template WHERE ID = ?", questID).Scan(&reqIDs[0], &reqIDs[1], &reqIDs[2], &reqIDs[3], &reqCounts[0], &reqCounts[1], &reqCounts[2], &reqCounts[3], &itemIDs[0], &itemIDs[1], &itemIDs[2], &itemIDs[3], &itemIDs[4], &itemIDs[5], &itemCounts[0], &itemCounts[1], &itemCounts[2], &itemCounts[3], &itemCounts[4], &itemCounts[5])
+	var requiredPlayerKills, timeLimit, requiredMoney, repFaction, repValue int64
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT RequiredNpcOrGo1, RequiredNpcOrGo2, RequiredNpcOrGo3, RequiredNpcOrGo4, RequiredNpcOrGoCount1, RequiredNpcOrGoCount2, RequiredNpcOrGoCount3, RequiredNpcOrGoCount4, RequiredItemId1, RequiredItemId2, RequiredItemId3, RequiredItemId4, RequiredItemId5, RequiredItemId6, RequiredItemCount1, RequiredItemCount2, RequiredItemCount3, RequiredItemCount4, RequiredItemCount5, RequiredItemCount6, RequiredPlayerKills, TimeLimit, RewOrReqMoney, RepObjectiveFaction, RepObjectiveValue FROM quest_template WHERE ID = ?", questID).Scan(&reqIDs[0], &reqIDs[1], &reqIDs[2], &reqIDs[3], &reqCounts[0], &reqCounts[1], &reqCounts[2], &reqCounts[3], &itemIDs[0], &itemIDs[1], &itemIDs[2], &itemIDs[3], &itemIDs[4], &itemIDs[5], &itemCounts[0], &itemCounts[1], &itemCounts[2], &itemCounts[3], &itemCounts[4], &itemCounts[5], &requiredPlayerKills, &timeLimit, &requiredMoney, &repFaction, &repValue)
 	if err != nil {
 		return false
 	}
+	var specialFlags int64
+	_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
 	for objective := 0; objective < 4; objective++ {
 		if reqCounts[objective] > 0 && uint32(entry.Counters[objective]) < uint32(reqCounts[objective]) {
 			return false
@@ -507,6 +510,24 @@ func (s *session) questObjectivesComplete(ctx context.Context, questID uint32, e
 			if have < itemCounts[index] {
 				return false
 			}
+		}
+	}
+	if requiredPlayerKills > 0 && int64(entry.PlayerCount) < requiredPlayerKills || timeLimit > 0 && entry.Timer == 0 || specialFlags&0x02 != 0 && !entry.Explored {
+		return false
+	}
+	if requiredMoney < 0 && (s.player == nil || int64(s.player.Money) < -requiredMoney) {
+		return false
+	}
+	if repFaction > 0 && s.player != nil {
+		standing := int64(0)
+		for _, reputation := range s.player.Reputations {
+			if int64(reputation.FactionID) == repFaction {
+				standing = int64(totalReputationStanding(reputation))
+				break
+			}
+		}
+		if standing < repValue {
+			return false
 		}
 	}
 	return true

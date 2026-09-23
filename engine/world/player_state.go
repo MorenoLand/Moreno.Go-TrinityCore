@@ -149,10 +149,13 @@ func questCompleteStateFlag(status int64) uint32 {
 // questLogEntry mirrors one PLAYER_QUEST_LOG slot: quest id, state byte,
 // four objective counters packed into two uint32 fields and the timer.
 type questLogEntry struct {
-	QuestID  uint32
-	State    uint32
-	Timer    uint32
-	Counters [4]uint16
+	QuestID     uint32
+	State       uint32
+	Timer       uint32
+	Counters    [4]uint16
+	ItemCounts  [6]uint16
+	PlayerCount uint16
+	Explored    bool
 }
 
 type playerSkill struct {
@@ -425,12 +428,12 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	// Rebuild login state in one owner sequence so packet fields and shared session
 	// maps cannot be observed half-written by timer, script, or network callbacks.
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		qRows, qErr := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT quest, status, explored, timer, mobcount1, mobcount2, mobcount3, mobcount4 FROM character_queststatus WHERE guid = ? ORDER BY quest", guid)
+		qRows, qErr := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT quest, status, explored, timer, mobcount1, mobcount2, mobcount3, mobcount4, itemcount1, itemcount2, itemcount3, itemcount4, itemcount5, itemcount6, playercount FROM character_queststatus WHERE guid = ? ORDER BY quest", guid)
 		if qErr == nil {
 			slot := 0
 			for qRows.Next() && slot < playerQuestLogSlots {
-				var questID, status, explored, timer, mob1, mob2, mob3, mob4 int64
-				if err := qRows.Scan(&questID, &status, &explored, &timer, &mob1, &mob2, &mob3, &mob4); err != nil {
+				var questID, status, explored, timer, mob1, mob2, mob3, mob4, item1, item2, item3, item4, item5, item6, playerCount int64
+				if err := qRows.Scan(&questID, &status, &explored, &timer, &mob1, &mob2, &mob3, &mob4, &item1, &item2, &item3, &item4, &item5, &item6, &playerCount); err != nil {
 					continue
 				}
 				if status == 0 {
@@ -439,7 +442,11 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 				if status < 0 || status >= 7 {
 					status = questStatusIncomplete
 				}
-				state.QuestLog[slot] = questLogEntry{QuestID: uint32(questID), State: questCompleteStateFlag(status), Timer: uint32(timer), Counters: [4]uint16{uint16(mob1), uint16(mob2), uint16(mob3), uint16(mob4)}}
+				counters := [4]uint16{uint16(mob1), uint16(mob2), uint16(mob3), uint16(mob4)}
+				if playerCount > 0 {
+					counters[0] = uint16(playerCount)
+				}
+				state.QuestLog[slot] = questLogEntry{QuestID: uint32(questID), State: questCompleteStateFlag(status), Timer: uint32(timer), Counters: counters, ItemCounts: [6]uint16{uint16(item1), uint16(item2), uint16(item3), uint16(item4), uint16(item5), uint16(item6)}, PlayerCount: uint16(playerCount), Explored: explored != 0}
 				slot++
 			}
 			qRows.Close()
@@ -861,10 +868,12 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 		bag, slot, item, entry, count int64
 		containerSlots                int64
 		isBag                         bool
+		data                          itemQueryData
 	}
 	type invalidInventoryRow struct {
 		record         inventoryRecord
 		deleteInstance bool
+		mail           bool
 	}
 	var records []inventoryRecord
 	var invalid []invalidInventoryRow
@@ -877,20 +886,22 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 			invalid = append(invalid, invalidInventoryRow{record: record, deleteInstance: record.item > 0})
 			continue
 		}
-		var inventoryType int64
-		if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(ContainerSlots, 0), COALESCE(InventoryType, 0) FROM item_template WHERE entry = ?", record.entry).Scan(&record.containerSlots, &inventoryType); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
+		itemData, itemErr := s.loadItemQueryData(ctx, uint32(record.entry))
+		if itemErr != nil {
+			if errors.Is(itemErr, sql.ErrNoRows) {
 				invalid = append(invalid, invalidInventoryRow{record: record, deleteInstance: true})
 				continue
 			}
-			if isMissingColumn(err) || strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			if isMissingColumn(itemErr) || strings.Contains(strings.ToLower(itemErr.Error()), "no such table") {
 				rows.Close()
 				return false
 			}
 			rows.Close()
 			return false
 		}
-		record.isBag = inventoryType == itemInventoryTypeBag
+		record.data = itemData
+		record.containerSlots = int64(itemData.ContainerSlots)
+		record.isBag = itemData.InventoryType == uint32(itemInventoryTypeBag)
 		records = append(records, record)
 	}
 	rows.Close()
@@ -900,10 +911,163 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 	seenPositions := make(map[struct{ bag, slot int64 }]struct{})
 	seenItems := make(map[int64]struct{})
 	rootBags := make(map[int64]int64)
+	rootBagData := make(map[int64]itemQueryData)
+	mailItems := make([]inventoryRecord, 0)
+	equipped := make(map[int64]itemQueryData)
+	equippedItemCounts := make(map[uint32]int64)
+	equippedLimitCounts := make(map[uint32]int64)
+	itemLimitCategoryCache := make(map[uint32]struct {
+		quantity uint32
+		flags    uint32
+		found    bool
+	})
+	itemLimitCategory := func(id uint32) (uint32, uint32, bool) {
+		if id == 0 {
+			return 0, 0, true
+		}
+		if cached, ok := itemLimitCategoryCache[id]; ok {
+			return cached.quantity, cached.flags, cached.found
+		}
+		if s.server.Data == nil {
+			return 0, 0, false
+		}
+		entry, found, err := s.server.Data.ItemLimitCategory(id)
+		cached := struct {
+			quantity uint32
+			flags    uint32
+			found    bool
+		}{entry.Quantity, entry.Flags, found && err == nil}
+		itemLimitCategoryCache[id] = cached
+		return cached.quantity, cached.flags, cached.found
+	}
+	weaponSkills := [...]uint32{44, 172, 45, 46, 54, 160, 229, 43, 55, 0, 136, 0, 0, 473, 0, 173, 176, 253, 226, 228, 356}
+	weaponSpells := [...]uint32{196, 197, 264, 266, 198, 199, 200, 201, 202, 0, 227, 0, 0, 0, 0, 1180, 2567, 3386, 5011, 5009, 0}
+	armorSkills := [...]uint32{0, 415, 414, 413, 293, 0, 433, 0, 0, 0, 0}
+	armorSpells := [...]uint32{0, 9078, 9077, 8737, 750, 0, 9116, 0, 0, 0, 0}
+	hasSkill := func(skillID uint32) bool {
+		if skillID == 0 {
+			return false
+		}
+		for _, skill := range state.Skills {
+			if uint32(skill.Skill) == skillID {
+				return true
+			}
+		}
+		return false
+	}
+	skillValue := func(skillID uint32) uint16 {
+		for _, skill := range state.Skills {
+			if uint32(skill.Skill) == skillID {
+				return skill.Value
+			}
+		}
+		return 0
+	}
+	hasSpell := func(spellID uint32) bool {
+		if spellID == 0 {
+			return false
+		}
+		for _, spell := range state.Spells {
+			if spell.ID == spellID && !spell.Disabled {
+				return true
+			}
+		}
+		return false
+	}
+	grantSkill := func(skillID uint32) {
+		if skillID == 0 || skillValue(skillID) != 0 || skillID > 65535 {
+			return
+		}
+		found := false
+		for i := range state.Skills {
+			if uint32(state.Skills[i].Skill) == skillID {
+				state.Skills[i].Step, state.Skills[i].Value, state.Skills[i].Max = 0, 400, 400
+				found = true
+				break
+			}
+		}
+		if !found {
+			state.Skills = append(state.Skills, playerSkill{Skill: uint16(skillID), Value: 400, Max: 400})
+		}
+		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, 400, 400)", state.GUID, skillID)
+	}
+	itemProficiencies := func(item itemQueryData) (uint32, uint32) {
+		skillID, spellID := uint32(0), uint32(0)
+		switch item.Class {
+		case 2:
+			if item.SubClass < uint32(len(weaponSkills)) {
+				skillID, spellID = weaponSkills[item.SubClass], weaponSpells[item.SubClass]
+			}
+		case 4:
+			if item.SubClass < uint32(len(armorSkills)) {
+				skillID, spellID = armorSkills[item.SubClass], armorSpells[item.SubClass]
+			}
+		}
+		return skillID, spellID
+	}
+	canUseEquippedItem := func(item itemQueryData) (bool, string) {
+		if !s.canUseItemData(ctx, state, item) {
+			return false, "item requirements"
+		}
+		if uint32(state.Level) < item.RequiredLevel {
+			return false, "required level"
+		}
+		itemSkill, itemSpell := itemProficiencies(item)
+		if hasSpell(itemSpell) || hasSkill(itemSkill) {
+			grantSkill(itemSkill)
+			return true, ""
+		}
+		team := teamForRace(state.Race)
+		if item.Flags2&0x00000001 != 0 && team != 1 || item.Flags2&0x00000002 != 0 && team != 0 {
+			return false, "faction"
+		}
+		if item.AllowableClass&playerCreateMask(state.Class) == 0 || item.AllowableRace&playerCreateMask(state.Race) == 0 {
+			return false, "class or race"
+		}
+		if hasSpell(item.RequiredSpell) || hasSkill(item.RequiredSkill) {
+			grantSkill(item.RequiredSkill)
+			return true, ""
+		}
+		if item.RequiredSkill != 0 {
+			value := skillValue(item.RequiredSkill)
+			if value == 0 {
+				return false, "required skill"
+			}
+			if uint32(value) < item.RequiredSkillRank {
+				return false, "required skill rank"
+			}
+		}
+		if item.RequiredSpell != 0 && !hasSpell(item.RequiredSpell) {
+			return false, "required spell"
+		}
+		if (item.Spells[0].ID == 483 || item.Spells[0].ID == 55884) && item.Spells[1].ID > 0 && hasSpell(uint32(item.Spells[1].ID)) {
+			return false, "already learned item spell"
+		}
+		if itemSkill != 0 && skillValue(itemSkill) == 0 {
+			heirloomProficiency := item.Quality == 7 && item.Class == 4 && (state.Class == 3 && itemSkill == 413 || state.Class == 7 && itemSkill == 413 || state.Class == 2 && itemSkill == 293 || state.Class == 1 && itemSkill == 293)
+			if !heirloomProficiency {
+				return false, "item proficiency"
+			}
+		}
+		if item.RequiredReputationFaction != 0 {
+			rank := uint32(reputationRank(0))
+			for _, reputation := range state.Reputations {
+				if reputation.FactionID == item.RequiredReputationFaction {
+					rank = reputationRank(int64(totalReputationStanding(reputation)))
+					break
+				}
+			}
+			if rank < item.RequiredReputationRank {
+				return false, "required reputation rank"
+			}
+		}
+		return true, ""
+	}
 	for _, record := range records {
 		position := struct{ bag, slot int64 }{record.bag, record.slot}
 		if _, found := seenPositions[position]; found {
-			invalid = append(invalid, invalidInventoryRow{record: record})
+			mailItems = append(mailItems, record)
+			invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
 			continue
 		}
 		if _, found := seenItems[record.item]; found {
@@ -912,11 +1076,59 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 		}
 		seenPositions[position] = struct{}{}
 		seenItems[record.item] = struct{}{}
-		if record.bag == 0 && ((record.slot >= 19 && record.slot < inventorySlotBagEnd) || (record.slot >= 67 && record.slot < 74)) && record.isBag && record.containerSlots > 0 {
+		if record.bag == 0 && record.slot >= 0 && record.slot < 19 {
+			item := record.data
+			if !itemFitsEquipmentSlot(state, equipped, item, record.slot) {
+				mailItems = append(mailItems, record)
+				invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
+				s.debug("equipped item rejected during login", "guid", state.GUID, "item", record.item, "entry", record.entry, "slot", record.slot, "reason", "slot compatibility")
+				continue
+			}
+			if canUse, reason := canUseEquippedItem(item); !canUse {
+				mailItems = append(mailItems, record)
+				invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
+				s.debug("equipped item rejected during login", "guid", state.GUID, "item", record.item, "entry", record.entry, "slot", record.slot, "reason", reason)
+				continue
+			}
+			if item.MaxCount > 0 && equippedItemCounts[item.Entry]+record.count > int64(item.MaxCount) {
+				mailItems = append(mailItems, record)
+				invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
+				s.debug("equipped item rejected during login", "guid", state.GUID, "item", record.item, "entry", record.entry, "slot", record.slot, "reason", "item count limit")
+				continue
+			}
+			if item.ItemLimitCategory != 0 {
+				quantity, _, found := itemLimitCategory(item.ItemLimitCategory)
+				if !found || equippedLimitCounts[item.ItemLimitCategory] >= int64(quantity) {
+					mailItems = append(mailItems, record)
+					invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
+					s.debug("equipped item rejected during login", "guid", state.GUID, "item", record.item, "entry", record.entry, "slot", record.slot, "reason", "equipped category limit")
+					continue
+				}
+			}
+			if item.Flags&itemFlagUniqueEquippable != 0 && equippedItemCounts[item.Entry] > 0 {
+				mailItems = append(mailItems, record)
+				invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
+				s.debug("equipped item rejected during login", "guid", state.GUID, "item", record.item, "entry", record.entry, "slot", record.slot, "reason", "unique equipped")
+				continue
+			}
+			equipped[record.slot] = item
+			equippedItemCounts[item.Entry]++
+			if item.ItemLimitCategory != 0 {
+				equippedLimitCounts[item.ItemLimitCategory]++
+			}
+		}
+		if record.bag == 0 && ((record.slot >= 19 && record.slot < inventorySlotBagEnd) || (record.slot >= 67 && record.slot < 74)) {
+			if !record.isBag {
+				mailItems = append(mailItems, record)
+				invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
+				s.debug("inventory bag slot rejected during login", "guid", state.GUID, "item", record.item, "entry", record.entry, "slot", record.slot, "reason", "item is not a bag")
+				continue
+			}
 			if record.containerSlots > 36 {
 				record.containerSlots = 36
 			}
 			rootBags[record.item] = record.containerSlots
+			rootBagData[record.item] = record.data
 		}
 	}
 	for _, record := range records {
@@ -924,25 +1136,94 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 			continue
 		}
 		containerSlots, found := rootBags[record.bag]
-		if !found || record.slot < 0 || record.slot >= containerSlots {
-			invalid = append(invalid, invalidInventoryRow{record: record})
+		if !found {
+			invalid = append(invalid, invalidInventoryRow{record: record, deleteInstance: true})
+			continue
+		}
+		bag := rootBagData[record.bag]
+		if record.slot < 0 || record.slot >= containerSlots || record.isBag || bag.BagFamily != 0 && record.data.BagFamily&bag.BagFamily == 0 {
+			mailItems = append(mailItems, record)
+			invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
 		}
 	}
 	if len(invalid) == 0 {
 		return false
 	}
+	const (
+		langNotEquippedItem = 706
+		gmStationery        = 61
+		mailCheckCopied     = 0x04
+		mailItemsPerMessage = 12
+		mailExpiration      = 30 * 86400
+	)
+	var subject string
+	if len(mailItems) > 0 {
+		if err := wdb.QueryRowContext(ctx, "SELECT content_default FROM trinity_string WHERE entry = ?", langNotEquippedItem).Scan(&subject); err != nil {
+			return false
+		}
+	}
+	tx, err := cdb.BeginTx(ctx, nil)
+	if err != nil {
+		return false
+	}
+	defer tx.Rollback()
+	if len(mailItems) > 0 {
+		now := time.Now().Unix()
+		var nextMailID int64
+		if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&nextMailID); err != nil {
+			return false
+		}
+		for start := 0; start < len(mailItems); start += mailItemsPerMessage {
+			end := start + mailItemsPerMessage
+			if end > len(mailItems) {
+				end = len(mailItems)
+			}
+			mailID := nextMailID
+			nextMailID++
+			if _, err := tx.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
+				VALUES (?, 0, ?, 0, ?, ?, ?, ?, 1, ?, ?, 0, 0, ?)`, mailID, gmStationery, state.GUID, state.GUID, subject, "There were problems with equipping item(s).", now+mailExpiration, now, mailCheckCopied); err != nil {
+				return false
+			}
+			for _, item := range mailItems[start:end] {
+				if _, err := tx.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", state.GUID, item.item); err != nil {
+					return false
+				}
+				if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", state.GUID, item.item); err != nil {
+					return false
+				}
+				if _, err := tx.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, item_template, receiver) VALUES (?, ?, ?, ?)", mailID, item.item, item.entry, state.GUID); err != nil {
+					return false
+				}
+			}
+		}
+	}
 	for _, row := range invalid {
+		if row.mail {
+			continue
+		}
 		if row.deleteInstance {
 			if row.record.item > 0 {
-				_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", state.GUID, row.record.item)
-				_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", row.record.item)
-			} else {
-				_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", state.GUID, row.record.bag, row.record.slot)
+				if _, err := tx.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", state.GUID, row.record.item); err != nil {
+					return false
+				}
+				if _, err := tx.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", row.record.item); err != nil {
+					return false
+				}
+			} else if _, err := tx.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", state.GUID, row.record.bag, row.record.slot); err != nil {
+				return false
 			}
-		} else {
-			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ? AND item = ?", state.GUID, row.record.bag, row.record.slot, row.record.item)
+		} else if _, err := tx.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ? AND item = ?", state.GUID, row.record.bag, row.record.slot, row.record.item); err != nil {
+			return false
 		}
-		s.debug("invalid inventory row removed", "guid", state.GUID, "item", row.record.item, "bag", row.record.bag, "slot", row.record.slot)
+	}
+	if err := tx.Commit(); err != nil {
+		s.debug("inventory correction transaction failed", "guid", state.GUID, "error", err)
+		return false
+	}
+	for _, row := range invalid {
+		if !row.mail {
+			s.debug("invalid inventory row removed", "guid", state.GUID, "item", row.record.item, "bag", row.record.bag, "slot", row.record.slot)
+		}
 	}
 	return true
 }

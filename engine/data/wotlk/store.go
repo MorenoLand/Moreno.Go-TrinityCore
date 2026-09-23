@@ -107,6 +107,7 @@ type Spell struct {
 	DispelType            uint32 // Spell.dbc field 2 = DispelType (DBCStructure.h:1394)
 	Mechanic              uint32 // Spell.dbc field 3 = Mechanic (DBCStructure.h:1395)
 	Attributes            uint32
+	SpellFamilyName       uint32
 	AttributesEx          uint32 // Spell.dbc field 5 = AttributesEx (DBCStructure.h:1397)
 	AttributesEx1         uint32 // Spell.dbc field 6 = AttributesExB (DBCStructure.h:1398)
 	AttributesEx3         uint32 // Spell.dbc field 7 = AttributesExC (DBCStructure.h:1399)
@@ -641,6 +642,7 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{2, &spell.DispelType}, // Spell.dbc field 2 = DispelType (DBCStructure.h:1394)
 		{3, &spell.Mechanic},   // Spell.dbc field 3 = Mechanic (DBCStructure.h:1395)
 		{4, &spell.Attributes},
+		{208, &spell.SpellFamilyName},
 		{225, &spell.SchoolMask}, // Spell.dbc field 225 = SchoolMask (DBCStructure.h:1492)
 		{16, &spell.Targets},
 		{19, &spell.FacingCasterFlags}, // Spell.dbc field 19 = FacingCasterFlags (DBCStructure.h:1409)
@@ -730,6 +732,49 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		spell.Effects[i] = SpellEffect{Effect: effect, BasePoints: basePoints, Aura: aura, AuraPeriod: auraPeriod, ImplicitTargetA: implicitTargetA, ImplicitTargetB: implicitTargetB, RadiusIndex: radiusIndex, MiscValue: miscValue, MiscValueB: miscValueB, TriggerSpell: triggerSpell}
 	}
 	return spell, true, nil
+}
+
+func (s *Store) SpellStackableWithRanks(id uint32) (bool, bool, error) {
+	spell, found, err := s.Spell(id)
+	if err != nil || !found {
+		return false, found, err
+	}
+	if spell.Attributes&0x40 != 0 || spell.PowerType != 0 && spell.PowerType != 0xFFFFFFFE {
+		return false, true, nil
+	}
+	for _, effect := range spell.Effects {
+		if effect.Effect != 118 {
+			continue
+		}
+		skill := uint32(effect.MiscValue)
+		if skill == 129 || skill == 185 || skill == 356 || skill == 762 {
+			return false, true, nil
+		}
+		category, skillFound, skillErr := s.SkillLineCategory(skill)
+		if skillErr != nil {
+			return false, false, skillErr
+		}
+		if skillFound && category == 11 {
+			return false, true, nil
+		}
+	}
+	abilities, found, err := s.SkillLineAbilities(id)
+	if err != nil {
+		return false, false, err
+	}
+	if found {
+		for _, ability := range abilities {
+			if ability.AcquireMethod == 1 && ability.MinSkillLineRank > 0 {
+				return false, true, nil
+			}
+		}
+	}
+	for _, effect := range spell.Effects {
+		if spell.SpellFamilyName == 10 && effect.Effect == 65 || spell.SpellFamilyName == 7 && effect.Effect == 6 && effect.Aura == 36 {
+			return false, true, nil
+		}
+	}
+	return true, true, nil
 }
 
 func (s *Store) SpellCastTime(id uint32) (int32, bool, error) {
@@ -1176,6 +1221,12 @@ type SpellItemEnchantmentEntry struct {
 	ItemVisual uint32
 }
 
+type ItemLimitCategoryEntry struct {
+	ID       uint32
+	Quantity uint32
+	Flags    uint32
+}
+
 func (s *Store) SpellItemEnchantment(id uint32) (SpellItemEnchantmentEntry, bool, error) {
 	file, err := s.File("SpellItemEnchantment")
 	if err != nil {
@@ -1190,6 +1241,42 @@ func (s *Store) SpellItemEnchantment(id uint32) (SpellItemEnchantmentEntry, bool
 		return SpellItemEnchantmentEntry{}, false, err
 	}
 	return SpellItemEnchantmentEntry{ID: id, ItemVisual: visual}, true, nil
+}
+
+func (s *Store) ItemLimitCategory(id uint32) (ItemLimitCategoryEntry, bool, error) {
+	file, err := s.File("ItemLimitCategory")
+	if err != nil {
+		return ItemLimitCategoryEntry{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return ItemLimitCategoryEntry{}, false, nil
+	}
+	quantity, err := record.Uint32(18)
+	if err != nil {
+		return ItemLimitCategoryEntry{}, false, err
+	}
+	flags, err := record.Uint32(19)
+	if err != nil {
+		return ItemLimitCategoryEntry{}, false, err
+	}
+	return ItemLimitCategoryEntry{ID: id, Quantity: quantity, Flags: flags}, true, nil
+}
+
+func (s *Store) SkillLineCategory(id uint32) (int32, bool, error) {
+	file, err := s.File("SkillLine")
+	if err != nil {
+		return 0, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return 0, false, nil
+	}
+	category, err := record.Int32(1)
+	if err != nil {
+		return 0, false, err
+	}
+	return category, true, nil
 }
 
 // GemProperties loads a record by ID from GemProperties.dbc.
