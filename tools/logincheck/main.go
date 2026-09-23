@@ -124,8 +124,9 @@ func runSelfCheck() error {
 	if err := rejectPreVerifyAchievementPackets(goodAchievement, 0); err != nil {
 		return fmt.Errorf("post-verify achievement packet was rejected: %w", err)
 	}
+	loginGUID := uint64(1)
 	loginPayload := protocol.NewBuffer(8)
-	loginPayload.WriteU64(1)
+	loginPayload.WriteU64(loginGUID)
 	loginEvent := protocoltrace.Event{Direction: protocoltrace.ClientToServer, Opcode: login, Payload: base64.StdEncoding.EncodeToString(loginPayload.Bytes())}
 	playerCreateEvent, err := loginCreateFixture(false, 0)
 	if err != nil {
@@ -167,11 +168,17 @@ func runSelfCheck() error {
 	if err := checkOptionalPreMapRuneOrder(badRuneOrder, 0, 3); err == nil {
 		return fmt.Errorf("pre-map rune resync before forced reactions was not rejected")
 	}
-	validDurationOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_ITEM_TIME_UPDATE)}}}
+	power := uint32(777)
+	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: loginGUID}
+	spellGoTrace := func(spellID uint32) protocoltrace.Event {
+		payload := protocol.BuildSpellGoWithPower(loginGUID, loginGUID, 0, spellID, 0x40901, 123, []uint64{loginGUID}, nil, target, &power)
+		return protocoltrace.Event{Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_SPELL_GO), Payload: base64.StdEncoding.EncodeToString(payload)}
+	}
+	validDurationOrder := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, playerCreateEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, spellGoTrace(836), {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_ITEM_TIME_UPDATE)}}}
 	if err := checkPostMapLoginOrder(validDurationOrder, 0, 1); err != nil {
 		return fmt.Errorf("valid post-map duration ordering was rejected: %w", err)
 	}
-	badDurationOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_ITEM_TIME_UPDATE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE)}}}
+	badDurationOrder := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, playerCreateEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, spellGoTrace(836), {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_ITEM_TIME_UPDATE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE)}}}
 	if err := checkPostMapLoginOrder(badDurationOrder, 0, 1); err == nil {
 		return fmt.Errorf("reversed post-map duration ordering was not rejected")
 	}
@@ -192,11 +199,24 @@ func runSelfCheck() error {
 	if err := checkCreateMovementParser(); err != nil {
 		return err
 	}
-	power := uint32(777)
-	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: 0x106}
-	spellGoTrace := func(spellID uint32) protocoltrace.Event {
-		payload := protocol.BuildSpellGoWithPower(0x106, 0x106, 0, spellID, 0x901, 123, []uint64{0x106}, nil, target, &power)
-		return protocoltrace.Event{Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_SPELL_GO), Payload: base64.StdEncoding.EncodeToString(payload)}
+	missingLoginEffect := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, playerCreateEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}}}
+	if err := checkPostMapLoginOrder(missingLoginEffect, 0, 1); err == nil {
+		return fmt.Errorf("missing source-required post-map spell 836 was not rejected")
+	}
+	wrongLoginEffectTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: loginGUID + 1}
+	wrongLoginEffectPayload := protocol.BuildSpellGoWithPower(loginGUID+1, loginGUID+1, 0, 836, 0x40901, 123, []uint64{loginGUID + 1}, nil, wrongLoginEffectTarget, &power)
+	wrongLoginEffect := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, playerCreateEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_SPELL_GO), Payload: base64.StdEncoding.EncodeToString(wrongLoginEffectPayload)}}}
+	if err := checkPostMapLoginOrder(wrongLoginEffect, 0, 1); err == nil {
+		return fmt.Errorf("login spell 836 targeting another unit was not rejected")
+	}
+	wrongLoginEffectFlagsPayload := protocol.BuildSpellGoWithPower(loginGUID, loginGUID, 0, 836, 0x901, 123, []uint64{loginGUID}, nil, target, &power)
+	wrongLoginEffectFlags := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, playerCreateEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_SPELL_GO), Payload: base64.StdEncoding.EncodeToString(wrongLoginEffectFlagsPayload)}}}
+	if err := checkPostMapLoginOrder(wrongLoginEffectFlags, 0, 1); err == nil {
+		return fmt.Errorf("login spell 836 without its source no-GCD flag was not rejected")
+	}
+	preMapLoginEffect := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, spellGoTrace(836), playerCreateEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, spellGoTrace(836)}}
+	if err := checkPostMapLoginOrder(preMapLoginEffect, 0, 2); err == nil {
+		return fmt.Errorf("pre-map spell 836 was not rejected")
 	}
 	postMapTrace := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, playerCreateEvent, spellGoTrace(57940), {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, spellGoTrace(836), {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE)}}}
 	if err := checkPostMapLoginOrder(postMapTrace, 0, 1); err != nil {
@@ -209,7 +229,7 @@ func runSelfCheck() error {
 	if err := checkPostMapLoginOrder(latePetAuraTrace, 0, 1); err != nil {
 		return fmt.Errorf("pet aura after post-map packets was rejected: %w", err)
 	}
-	latePlayerAuraTrace := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, playerCreateEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL), Payload: base64.StdEncoding.EncodeToString(protocol.BuildAuraUpdateAll(0x106, nil))}}}
+	latePlayerAuraTrace := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, playerCreateEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, spellGoTrace(836), {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL), Payload: base64.StdEncoding.EncodeToString(protocol.BuildAuraUpdateAll(loginGUID, nil))}}}
 	if err := checkPostMapLoginOrder(latePlayerAuraTrace, 0, 1); err == nil {
 		return fmt.Errorf("late player aura packet after post-map packets was not rejected")
 	}
@@ -1048,13 +1068,13 @@ func groupListFixture() []byte {
 func loginEffectFixture() []byte {
 	power := uint32(777)
 	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: 0x106}
-	return protocol.BuildSpellGoWithPower(0x106, 0x106, 0, 836, 0x901, 123, []uint64{0x106}, nil, target, &power)
+	return protocol.BuildSpellGoWithPower(0x106, 0x106, 0, 836, 0x40901, 123, []uint64{0x106}, nil, target, &power)
 }
 
 func firstLoginCastFixture() []byte {
 	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: 0x106}
 	power := uint32(777)
-	return protocol.BuildSpellGoWithPower(0x106, 0x106, 1, 668, 0x901, 123, []uint64{0x106}, nil, target, &power)
+	return protocol.BuildSpellGoWithPower(0x106, 0x106, 0, 668, 0x40901, 123, []uint64{0x106}, nil, target, &power)
 }
 
 func initWorldStatesFixture() []byte {
@@ -1531,8 +1551,25 @@ func checkPreMapGuildLoginOrder(trace protocoltrace.Trace, start, playerCreateIn
 }
 
 func checkPostMapLoginOrder(trace protocoltrace.Trace, start, playerCreateIndex int) error {
-	if playerCreateIndex < 0 {
+	if start < 0 || start >= len(trace.Events) || playerCreateIndex <= start || playerCreateIndex >= len(trace.Events) {
 		return fmt.Errorf("post-map login order has no player create boundary")
+	}
+	playerGUID, err := loginPlayerGUID(trace.Events[start])
+	if err != nil {
+		return err
+	}
+	for index := start + 1; index < playerCreateIndex; index++ {
+		event := trace.Events[index]
+		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_SPELL_GO) {
+			continue
+		}
+		spellID, err := spellGoSpellID(event)
+		if err != nil {
+			return fmt.Errorf("pre-map SMSG_SPELL_GO: %w", err)
+		}
+		if spellID == 836 {
+			return fmt.Errorf("login spell 836 was sent before the player create/map-entry boundary")
+		}
 	}
 	petGUIDs := make(map[uint64]struct{})
 	for index := playerCreateIndex + 1; index < len(trace.Events); index++ {
@@ -1574,6 +1611,7 @@ func checkPostMapLoginOrder(trace protocoltrace.Trace, start, playerCreateIndex 
 	}
 	seen := make(map[int]struct{}, len(order))
 	last := -1
+	loginEffectCount := 0
 	for index := playerCreateIndex + 1; index < len(trace.Events); index++ {
 		event := trace.Events[index]
 		if event.Direction == protocoltrace.ClientToServer && (event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) || event.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST)) {
@@ -1605,6 +1643,13 @@ func checkPostMapLoginOrder(trace protocoltrace.Trace, start, playerCreateIndex 
 			if spellID != 836 {
 				continue
 			}
+			loginEffectCount++
+			if loginEffectCount > 1 {
+				return fmt.Errorf("login spell 836 was sent more than once")
+			}
+			if err := requireLoginEffectForPlayer(event, playerGUID); err != nil {
+				return err
+			}
 			stage, ok = 2, true
 		}
 		if !ok {
@@ -1618,6 +1663,9 @@ func checkPostMapLoginOrder(trace protocoltrace.Trace, start, playerCreateIndex 
 		}
 		seen[stage] = struct{}{}
 		last = stage
+	}
+	if loginEffectCount != 1 {
+		return fmt.Errorf("post-map login effect spell 836 count=%d, want 1", loginEffectCount)
 	}
 	return nil
 }
@@ -2193,7 +2241,7 @@ func requireLoginEffect(event protocoltrace.Event) error {
 	if err != nil {
 		return fmt.Errorf("login effect cast flags are truncated: %w", err)
 	}
-	if flags&protocol.SpellCastFlagPowerLeftSelf == 0 || flags&0x100 == 0 || flags&0x1 == 0 {
+	if flags&protocol.SpellCastFlagPowerLeftSelf == 0 || flags&protocol.SpellCastFlagNoGCD == 0 || flags&0x100 == 0 || flags&0x1 == 0 {
 		return fmt.Errorf("login effect cast flags=0x%08x, want unknown-9/pending/power-left-self", flags)
 	}
 	if _, err := reader.ReadU32(); err != nil {
@@ -2227,6 +2275,63 @@ func requireLoginEffect(event protocoltrace.Event) error {
 	return nil
 }
 
+func requireLoginEffectForPlayer(event protocoltrace.Event, playerGUID uint64) error {
+	if playerGUID == 0 {
+		return fmt.Errorf("login effect player GUID is zero")
+	}
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	casterGUID, err := reader.ReadPackedGUID()
+	if err != nil || casterGUID != playerGUID {
+		return fmt.Errorf("login effect caster GUID=0x%x, want player 0x%x", casterGUID, playerGUID)
+	}
+	casterUnitGUID, err := reader.ReadPackedGUID()
+	if err != nil || casterUnitGUID != playerGUID {
+		return fmt.Errorf("login effect caster-unit GUID=0x%x, want player 0x%x", casterUnitGUID, playerGUID)
+	}
+	castID, err := reader.ReadU8()
+	if err != nil || castID != 0 {
+		return fmt.Errorf("login effect cast ID=%d, want 0", castID)
+	}
+	spellID, err := reader.ReadU32()
+	if err != nil || spellID != 836 {
+		return fmt.Errorf("login effect spell ID=%d, want 836", spellID)
+	}
+	flags, err := reader.ReadU32()
+	if err != nil || flags&protocol.SpellCastFlagPowerLeftSelf == 0 || flags&protocol.SpellCastFlagNoGCD == 0 || flags&0x100 == 0 || flags&0x1 == 0 {
+		return fmt.Errorf("login effect cast flags=0x%08x, want unknown-9/pending/power-left-self", flags)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		return fmt.Errorf("login effect cast time is truncated: %w", err)
+	}
+	hitCount, err := reader.ReadU8()
+	if err != nil || hitCount != 1 {
+		return fmt.Errorf("login effect hit count=%d, want 1", hitCount)
+	}
+	hitGUID, err := reader.ReadU64()
+	if err != nil || hitGUID != playerGUID {
+		return fmt.Errorf("login effect hit target GUID=0x%x, want player 0x%x", hitGUID, playerGUID)
+	}
+	missCount, err := reader.ReadU8()
+	if err != nil || missCount != 0 {
+		return fmt.Errorf("login effect miss count=%d, want 0", missCount)
+	}
+	target, err := protocol.ReadSpellTargetData(reader)
+	if err != nil || target.Flags != protocol.SpellTargetFlagUnit || target.UnitGUID != playerGUID {
+		return fmt.Errorf("login effect target flags/GUID=0x%08x/0x%x, want self unit 0x%x", target.Flags, target.UnitGUID, playerGUID)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		return fmt.Errorf("login effect remaining power is truncated: %w", err)
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("unexpected login effect payload bytes=%d", reader.Remaining())
+	}
+	return nil
+}
+
 func requireFirstLoginCast(event protocoltrace.Event) error {
 	payload, err := eventPayload(event)
 	if err != nil {
@@ -2239,16 +2344,17 @@ func requireFirstLoginCast(event protocoltrace.Event) error {
 	if _, err := reader.ReadPackedGUID(); err != nil {
 		return fmt.Errorf("first-login caster-unit GUID is truncated: %w", err)
 	}
-	if _, err := reader.ReadU8(); err != nil {
-		return fmt.Errorf("first-login cast ID is truncated: %w", err)
+	castID, err := reader.ReadU8()
+	if err != nil || castID != 0 {
+		return fmt.Errorf("first-login cast ID=%d, want 0", castID)
 	}
 	spellID, err := reader.ReadU32()
 	if err != nil || spellID == 0 || spellID == 836 {
 		return fmt.Errorf("first-login spell ID=%d is invalid", spellID)
 	}
 	flags, err := reader.ReadU32()
-	if err != nil || flags != 0x901 {
-		return fmt.Errorf("first-login cast flags=0x%08x, want unknown-9/pending/power-left-self", flags)
+	if err != nil || flags != 0x40901 {
+		return fmt.Errorf("first-login cast flags=0x%08x, want unknown-9/pending/power-left-self/no-GCD", flags)
 	}
 	if _, err := reader.ReadU32(); err != nil {
 		return fmt.Errorf("first-login cast time is truncated: %w", err)

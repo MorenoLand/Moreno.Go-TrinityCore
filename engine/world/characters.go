@@ -1320,22 +1320,41 @@ func packedGUIDSize(guid uint64) int {
 }
 
 func (s *session) sendLoginEffect() error {
-	if s == nil || s.player == nil {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return nil
+	}
+	spell, found, err := s.server.Data.Spell(836)
+	if err != nil {
+		return err
+	}
+	if !found {
 		return nil
 	}
 	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: s.playerGUID}
 	castFlags := spellCastFlagGo | spellCastFlagPending | protocol.SpellCastFlagPowerLeftSelf
-	castTime := uint32(time.Now().UnixMilli())
-	power := s.player.Powers[classPowerType(s.player.Class)]
-	packet := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, 0, 836, castFlags, castTime, []uint64{s.playerGUID}, nil, target, &power)
+	if spell.StartRecoveryTime == 0 {
+		castFlags |= protocol.SpellCastFlagNoGCD
+	}
+	if spell.PowerType == 0xFFFFFFFE {
+		castFlags &^= protocol.SpellCastFlagPowerLeftSelf
+	}
+	castTime := gameTimeMS()
+	var power uint32
+	var remainingPower *uint32
+	if castFlags&protocol.SpellCastFlagPowerLeftSelf != 0 {
+		if spell.PowerType >= uint32(len(s.player.Powers)) {
+			return fmt.Errorf("login effect 836 power type %d is out of range", spell.PowerType)
+		}
+		power = s.player.Powers[spell.PowerType]
+		remainingPower = &power
+	}
+	packet := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, 0, 836, castFlags, castTime, []uint64{s.playerGUID}, nil, target, remainingPower)
 	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), packet, true); err != nil {
 		return err
 	}
-	if s.server != nil {
-		nearbyFlags := castFlags &^ protocol.SpellCastFlagPowerLeftSelf
-		nearby := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 0, 836, nearbyFlags, castTime, []uint64{s.playerGUID}, nil, target)
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearby, s)
-	}
+	nearbyFlags := castFlags &^ protocol.SpellCastFlagPowerLeftSelf
+	nearby := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 0, 836, nearbyFlags, castTime, []uint64{s.playerGUID}, nil, target)
+	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearby, s)
 	return nil
 }
 

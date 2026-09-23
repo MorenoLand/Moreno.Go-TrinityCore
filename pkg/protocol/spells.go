@@ -14,8 +14,10 @@ const (
 	SpellTargetFlagDestTarget     uint32 = 0x040000
 	SpellTargetFlagUnitWireMask          = SpellTargetFlagUnit | SpellTargetFlagUnitMinipet | SpellTargetFlagGameObject | SpellTargetFlagCorpseEnemy | SpellTargetFlagCorpseAlly
 	SpellTargetFlagItemWireMask          = SpellTargetFlagItem | SpellTargetFlagTradeItem
+	SpellCastFlagAmmo             uint32 = 0x00000020
 	SpellCastFlagVisualChain      uint32 = 0x00080000
 	SpellCastFlagPowerLeftSelf    uint32 = 0x00000800
+	SpellCastFlagNoGCD            uint32 = 0x00040000
 
 	SpellMissNone    uint8 = 0
 	SpellMissMiss    uint8 = 1

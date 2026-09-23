@@ -1304,8 +1304,15 @@ func (s *session) castSpellDirectWithOptions(ctx context.Context, spellID uint32
 	}
 	now := time.Now()
 	castTimeStamp := uint32(now.UnixMilli())
+	if firstLogin {
+		castTimeStamp = gameTimeMS()
+	}
 	hitTargets := []uint64{targetGUID}
-	spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
+	spellTargetFlags := protocol.SpellTargetFlagUnitWireMask
+	if firstLogin {
+		spellTargetFlags = protocol.SpellTargetFlagUnit
+	}
+	spellTarget := protocol.SpellTargetData{Flags: spellTargetFlags, UnitGUID: targetGUID}
 	castFlags := uint32(spellCastFlagGo)
 	var remainingPower *uint32
 	if firstLogin {
@@ -1315,11 +1322,18 @@ func (s *session) castSpellDirectWithOptions(ctx context.Context, spellID uint32
 			power := s.player.Powers[spell.PowerType]
 			remainingPower = &power
 		}
+		if spell.StartRecoveryTime == 0 {
+			castFlags |= protocol.SpellCastFlagNoGCD
+		}
 	}
 	goPkt := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, nil, spellTarget, remainingPower)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
+		nearbyPacket := goPkt
+		if firstLogin && castFlags&protocol.SpellCastFlagPowerLeftSelf != 0 {
+			nearbyPacket = protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, castTimeStamp, hitTargets, nil, spellTarget)
+		}
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 	}
 
 	durationMs := uint32(0)

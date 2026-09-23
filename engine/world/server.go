@@ -47,6 +47,10 @@ const (
 // WorldSocket::HandlePing before the over-speed ping counter resets.
 const overspeedPingWindow = 27 * time.Second
 
+var applicationStartTime = time.Now()
+
+func gameTimeMS() uint32 { return uint32(time.Since(applicationStartTime) / time.Millisecond) }
+
 type Server struct {
 	AuthStore               *database.Store
 	CharactersStore         *database.Store
