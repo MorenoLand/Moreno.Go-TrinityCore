@@ -2653,30 +2653,21 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_skills WHERE guid = ? AND skill = ?", state.GUID, skill)
 			continue
 		}
-		originalValue, originalMax := value, max
 		rangeType := s.skillRangeType(state.Race, state.Class, skill)
 		if rangeType == wotlk.SkillRangeLanguage {
 			value, max = 300, 300
 		} else if rangeType == wotlk.SkillRangeMono {
 			value, max = 1, 1
-		} else if rangeType == wotlk.SkillRangeLevel || isLevelScaledSkill(skill) {
+		} else if rangeType == wotlk.SkillRangeLevel {
 			expectedMax := uint16(state.Level) * 5
 			if expectedMax < 5 {
 				expectedMax = 5
 			}
 			max = expectedMax
-			if s.server.Config.AlwaysMaxSkillForLevel {
-				value = max
-			} else if value > max {
-				value = max
-			}
 		}
 		if value == 0 {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_skills WHERE guid = ? AND skill = ?", state.GUID, skill)
 			continue
-		}
-		if value != originalValue || max != originalMax {
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_skills SET value = ?, max = ? WHERE guid = ? AND skill = ?", value, max, state.GUID, skill)
 		}
 		skills = append(skills, playerSkill{Skill: skill, Step: s.skillStep(state.Race, state.Class, skill, max), Value: value, Max: max})
 	}
