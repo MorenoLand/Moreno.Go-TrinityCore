@@ -1284,6 +1284,22 @@ func (s *Store) SkillLineCategory(id uint32) (int32, bool, error) {
 	return category, true, nil
 }
 
+func (s *Store) ScalingStatDistributionMaxLevel(id uint32) (uint32, bool, error) {
+	file, err := s.File("ScalingStatDistribution")
+	if err != nil {
+		return 0, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return 0, false, nil
+	}
+	maxLevel, err := record.Uint32(21)
+	if err != nil {
+		return 0, false, err
+	}
+	return maxLevel, true, nil
+}
+
 // GemProperties loads a record by ID from GemProperties.dbc.
 func (s *Store) GemProperties(id uint32) (GemPropertiesEntry, bool, error) {
 	file, err := s.File("GemProperties")

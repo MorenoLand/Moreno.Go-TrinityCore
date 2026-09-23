@@ -201,6 +201,9 @@ func runSelfCheck() error {
 	if err := checkSpellRankStackabilityDBC(); err != nil {
 		return fmt.Errorf("spell-rank DBC check failed: %w", err)
 	}
+	if err := checkScalingStatDistributionDBC(); err != nil {
+		return fmt.Errorf("scaling-item DBC check failed: %w", err)
+	}
 	if err := checkGroupLeaderFlag(); err != nil {
 		return fmt.Errorf("group leader flag check failed: %w", err)
 	}
@@ -628,6 +631,29 @@ func checkSpellRankStackabilityDBC() error {
 		}
 	}
 	return fmt.Errorf("Spell.dbc did not yield both stackable and non-stackable rank categories")
+}
+
+func checkScalingStatDistributionDBC() error {
+	store := wotlk.NewStore(filepath.Join(config.Default().GameDataDir, "dbc"))
+	file, err := store.File("ScalingStatDistribution")
+	if err != nil {
+		return err
+	}
+	for index := 0; index < file.Records(); index++ {
+		record, err := file.Record(index)
+		if err != nil {
+			continue
+		}
+		id, err := record.Uint32(0)
+		if err != nil || id == 0 {
+			continue
+		}
+		if _, found, err := store.ScalingStatDistributionMaxLevel(id); err != nil || !found {
+			return fmt.Errorf("scaling stat distribution %d did not decode: found=%t error=%v", id, found, err)
+		}
+		return nil
+	}
+	return fmt.Errorf("ScalingStatDistribution.dbc contains no usable records")
 }
 
 func firstSkillMaskMember(mask uint32) uint8 {

@@ -14,7 +14,12 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
-const itemFlagUniqueEquippable uint32 = 0x00080000
+const (
+	itemFlagUniqueEquippable uint32 = 0x00080000
+	defaultMaxPlayerLevel    uint32 = 80
+	itemBagFamilyKeys        uint32 = 0x00000100
+	itemBagFamilyCurrency    uint32 = 0x00002000
+)
 
 func playerHasSpell(state *playerState, spellID uint32) bool {
 	if state == nil || spellID == 0 {
@@ -148,6 +153,11 @@ func (s *session) canUseItemTemplate(ctx context.Context, entry uint32) bool {
 func (s *session) canUseItemData(ctx context.Context, state *playerState, data itemQueryData) bool {
 	if s == nil || state == nil || uint32(state.Level) < data.RequiredLevel {
 		return false
+	}
+	if data.ScalingStatDistribution != 0 && s.server.Data != nil {
+		if maxLevel, found, err := s.server.Data.ScalingStatDistributionMaxLevel(data.ScalingStatDistribution); err == nil && found && maxLevel < defaultMaxPlayerLevel && maxLevel < uint32(state.Level) {
+			return false
+		}
 	}
 	weaponSkills := [...]uint32{44, 172, 45, 46, 54, 160, 229, 43, 55, 0, 136, 0, 0, 473, 0, 173, 176, 253, 226, 228, 356}
 	weaponSpells := [...]uint32{196, 197, 264, 266, 198, 199, 200, 201, 202, 0, 227, 0, 0, 0, 0, 1180, 2567, 3386, 5011, 5009, 0}

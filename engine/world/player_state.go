@@ -1084,6 +1084,11 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 		seenPositions[position] = struct{}{}
 		seenItems[record.item] = struct{}{}
 		item := record.data
+		if record.bag == 0 && ((record.slot >= 86 && record.slot < 118 && item.BagFamily&itemBagFamilyKeys == 0) || (record.slot >= 118 && record.slot < 150 && item.BagFamily&itemBagFamilyCurrency == 0)) {
+			mailItems = append(mailItems, record)
+			invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
+			continue
+		}
 		if record.bag != 0 {
 			containerSlots, found := rootBags[record.bag]
 			bag := rootBagData[record.bag]
@@ -1201,6 +1206,12 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 				mailItems = append(mailItems, record)
 				invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
 				s.debug("inventory bag slot rejected during login", "guid", state.GUID, "item", record.item, "entry", record.entry, "slot", record.slot, "reason", "item is not a bag")
+				continue
+			}
+			if record.slot >= 67 && uint8(record.slot-67) >= state.BankBagSlots || record.slot >= 67 && !s.canUseItemData(ctx, state, record.data) {
+				mailItems = append(mailItems, record)
+				invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
+				s.debug("bank bag rejected during login", "guid", state.GUID, "item", record.item, "entry", record.entry, "slot", record.slot, "reason", "bank bag slot or item requirements")
 				continue
 			}
 			if record.containerSlots > 36 {
