@@ -106,6 +106,19 @@ func runSelfCheck() error {
 	if err := rejectPreVerifyAchievementPackets(goodAchievement, 0); err != nil {
 		return fmt.Errorf("post-verify achievement packet was rejected: %w", err)
 	}
+	loginOrderStages := []loginStage{{"difficulty", exact(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY)}, {"verify", exact(protocol.OpcodeSMSG_LOGIN_VERIFY_WORLD)}, {"contact", exact(protocol.OpcodeSMSG_CONTACT_LIST)}, {"player create update", exact(protocol.OpcodeSMSG_UPDATE_OBJECT)}, {"world states", exact(protocol.OpcodeSMSG_INIT_WORLD_STATES)}}
+	validLoginOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY)}, {Direction: protocoltrace.ServerToClient, Opcode: verify}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_CONTACT_LIST)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}}}
+	if _, err := findOrderedLoginStages(validLoginOrder, 0, loginOrderStages); err != nil {
+		return fmt.Errorf("valid login stage order was rejected: %w", err)
+	}
+	badEarlyLoginOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_CONTACT_LIST)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY)}, {Direction: protocoltrace.ServerToClient, Opcode: verify}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_CONTACT_LIST)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}}}
+	if _, err := findOrderedLoginStages(badEarlyLoginOrder, 0, loginOrderStages); err == nil {
+		return fmt.Errorf("out-of-order pre-map login packet was not rejected")
+	}
+	badEarlyWorldStates := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY)}, {Direction: protocoltrace.ServerToClient, Opcode: verify}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_CONTACT_LIST)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}}}
+	if _, err := findOrderedLoginStages(badEarlyWorldStates, 0, loginOrderStages); err == nil {
+		return fmt.Errorf("post-map world state sent before player create was not rejected")
+	}
 	validMovement := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_FEATHER_FALL)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_SET_HOVER)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_FORCE_MOVE_ROOT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MULTIPLE_MOVES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL)}}}
 	if err := checkLoginMovementOrder(validMovement, 0); err != nil {
 		return fmt.Errorf("valid movement ordering was rejected: %w", err)
@@ -118,9 +131,13 @@ func runSelfCheck() error {
 	if err := checkOptionalPreMapRuneOrder(runeOrder, 0, 3); err != nil {
 		return fmt.Errorf("valid pre-map rune ordering was rejected: %w", err)
 	}
-	badRuneOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_SET_FORCED_REACTIONS)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_RESYNC_RUNES)}}}
-	if err := checkOptionalPreMapRuneOrder(badRuneOrder, 0, 2); err == nil {
-		return fmt.Errorf("post-map rune resync was not rejected")
+	runtimeRuneOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_SET_FORCED_REACTIONS)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_RESYNC_RUNES)}}}
+	if err := checkOptionalPreMapRuneOrder(runtimeRuneOrder, 0, 2); err != nil {
+		return fmt.Errorf("runtime rune resync was rejected: %w", err)
+	}
+	badRuneOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_RESYNC_RUNES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_SET_FORCED_REACTIONS)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}}}
+	if err := checkOptionalPreMapRuneOrder(badRuneOrder, 0, 3); err == nil {
+		return fmt.Errorf("pre-map rune resync before forced reactions was not rejected")
 	}
 	validDurationOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_ITEM_TIME_UPDATE)}}}
 	if err := checkPostMapLoginOrder(validDurationOrder, 0, 1); err != nil {
@@ -133,6 +150,18 @@ func runSelfCheck() error {
 	badGuildOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOTD)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_ROSTER)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_EVENT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}}}
 	if err := checkPreMapGuildLoginOrder(badGuildOrder, 0, 5); err == nil {
 		return fmt.Errorf("out-of-order pre-map guild packets were not rejected")
+	}
+	validCinematicOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: verify}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_SET_FORCED_REACTIONS)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_RESYNC_RUNES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TRIGGER_CINEMATIC)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}}}
+	if err := checkInitialCinematicOrder(validCinematicOrder, 0, 1, 2, 5); err != nil {
+		return fmt.Errorf("valid first-login cinematic ordering was rejected: %w", err)
+	}
+	badEarlyCinematic := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: verify}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TRIGGER_CINEMATIC)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_SET_FORCED_REACTIONS)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}}}
+	if err := checkInitialCinematicOrder(badEarlyCinematic, 0, 1, 3, 4); err == nil {
+		return fmt.Errorf("pre-map cinematic before initial packets was not rejected")
+	}
+	postLoginCinematic := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: verify}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_SET_FORCED_REACTIONS)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TRIGGER_CINEMATIC)}}}
+	if err := checkInitialCinematicOrder(postLoginCinematic, 0, 1, 2, 3); err != nil {
+		return fmt.Errorf("post-map gameplay cinematic was rejected: %w", err)
 	}
 	invalidMovement := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK)}}}
 	if err := checkLoginMovementOrder(invalidMovement, 0); err == nil {
@@ -990,6 +1019,39 @@ func loginCreateFixture(compressed bool, victimGUID uint64) (protocoltrace.Event
 	return protocoltrace.Event{Direction: protocoltrace.ServerToClient, Opcode: opcode, Payload: base64.StdEncoding.EncodeToString(payload)}, nil
 }
 
+func findOrderedLoginStages(trace protocoltrace.Trace, start int, stages []loginStage) ([]int, error) {
+	if start < 0 || start >= len(trace.Events) {
+		return nil, fmt.Errorf("login start index %d is out of range", start)
+	}
+	positions := make([]int, len(stages))
+	position := start
+	for stageIndex, stage := range stages {
+		for index := start + 1; index < position; index++ {
+			event := trace.Events[index]
+			if event.Direction == protocoltrace.ServerToClient && stage.Match(event.Opcode) {
+				return nil, fmt.Errorf("%s appeared before an earlier login stage", stage.Name)
+			}
+		}
+		found := -1
+		for index := position + 1; index < len(trace.Events); index++ {
+			event := trace.Events[index]
+			if event.Direction == protocoltrace.ServerToClient && stage.Match(event.Opcode) {
+				found = index
+				break
+			}
+			if event.Direction == protocoltrace.ClientToServer && (event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) || event.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST)) {
+				break
+			}
+		}
+		if found < 0 {
+			return nil, fmt.Errorf("missing or out-of-order %s", stage.Name)
+		}
+		positions[stageIndex] = found
+		position = found
+	}
+	return positions, nil
+}
+
 func checkLogin(trace protocoltrace.Trace, start int) error {
 	if err := rejectPreVerifyAchievementPackets(trace, start); err != nil {
 		return err
@@ -1023,24 +1085,15 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 		{"SMSG_TIME_SYNC_REQ", exact(protocol.OpcodeSMSG_TIME_SYNC_REQ)},
 		{"SMSG_SPELL_GO", exact(protocol.OpcodeSMSG_SPELL_GO)},
 	}
-	position := start
 	verifyIndex := -1
+	forcedReactionsIndex := -1
 	playerCreateIndex := -1
-	for _, stage := range stages {
-		found := -1
-		for index := position + 1; index < len(trace.Events); index++ {
-			event := trace.Events[index]
-			if event.Direction == protocoltrace.ServerToClient && stage.Match(event.Opcode) {
-				found = index
-				break
-			}
-			if event.Direction == protocoltrace.ClientToServer && (event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) || event.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST)) {
-				break
-			}
-		}
-		if found < 0 {
-			return fmt.Errorf("missing or out-of-order %s", stage.Name)
-		}
+	positions, err := findOrderedLoginStages(trace, start, stages)
+	if err != nil {
+		return err
+	}
+	for stageIndex, stage := range stages {
+		found := positions[stageIndex]
 		if stage.Name == "player create update" {
 			if err := requireCreateBlock(trace.Events[found]); err != nil {
 				return err
@@ -1109,7 +1162,9 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 		if stage.Name == "SMSG_LOGIN_VERIFY_WORLD" {
 			verifyIndex = found
 		}
-		position = found
+		if stage.Name == "SMSG_SET_FORCED_REACTIONS" {
+			forcedReactionsIndex = found
+		}
 	}
 	if err := checkOptionalLoginPayloads(trace, start); err != nil {
 		return err
@@ -1123,19 +1178,34 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 	if err := checkPreMapGuildLoginOrder(trace, start, playerCreateIndex); err != nil {
 		return err
 	}
-	for index := start + 1; index < len(trace.Events); index++ {
+	if err := checkInitialCinematicOrder(trace, start, verifyIndex, forcedReactionsIndex, playerCreateIndex); err != nil {
+		return err
+	}
+	return nil
+}
+
+func checkInitialCinematicOrder(trace protocoltrace.Trace, start, verifyIndex, forcedReactionsIndex, playerCreateIndex int) error {
+	if verifyIndex < 0 || forcedReactionsIndex < 0 || playerCreateIndex < 0 {
+		return fmt.Errorf("cinematic ordering is missing a required login boundary")
+	}
+	runeIndex := -1
+	for index := forcedReactionsIndex + 1; index < playerCreateIndex; index++ {
 		event := trace.Events[index]
-		if event.Direction == protocoltrace.ClientToServer && (event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) || event.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST)) {
+		if event.Direction == protocoltrace.ServerToClient && event.Opcode == uint32(protocol.OpcodeSMSG_RESYNC_RUNES) {
+			runeIndex = index
 			break
 		}
+	}
+	for index := start + 1; index < playerCreateIndex; index++ {
+		event := trace.Events[index]
 		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_TRIGGER_CINEMATIC) {
 			continue
 		}
-		if verifyIndex >= 0 && index < verifyIndex {
+		if index < verifyIndex {
 			return fmt.Errorf("SMSG_TRIGGER_CINEMATIC was sent before SMSG_LOGIN_VERIFY_WORLD")
 		}
-		if playerCreateIndex >= 0 && index > playerCreateIndex {
-			return fmt.Errorf("SMSG_TRIGGER_CINEMATIC was sent after player create update")
+		if index < forcedReactionsIndex || runeIndex >= 0 && index < runeIndex {
+			return fmt.Errorf("SMSG_TRIGGER_CINEMATIC was sent before the pre-map login packets completed")
 		}
 	}
 	return nil
@@ -1143,11 +1213,11 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 
 func checkOptionalPreMapRuneOrder(trace protocoltrace.Trace, start, playerCreateIndex int) error {
 	end := playerCreateIndex
-	if end < 0 || end >= len(trace.Events) {
+	if end < 0 || end > len(trace.Events) {
 		end = len(trace.Events)
 	}
 	forcedIndex, runeIndex := -1, -1
-	for index := start + 1; index < len(trace.Events); index++ {
+	for index := start + 1; index < end; index++ {
 		event := trace.Events[index]
 		if event.Direction == protocoltrace.ClientToServer && (event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) || event.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST)) {
 			break
@@ -1160,9 +1230,6 @@ func checkOptionalPreMapRuneOrder(trace protocoltrace.Trace, start, playerCreate
 		}
 		if event.Opcode != uint32(protocol.OpcodeSMSG_RESYNC_RUNES) {
 			continue
-		}
-		if index >= end {
-			return fmt.Errorf("SMSG_RESYNC_RUNES arrived after the player create update")
 		}
 		if runeIndex < 0 {
 			runeIndex = index
