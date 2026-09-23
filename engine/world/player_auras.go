@@ -47,18 +47,29 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 	var periodic []*activeAura
 	mountedAuraLoaded := false
 	for rows.Next() {
-		var casterGUID, itemGUID uint64
+		var casterValue, itemValue any
 		var spellID, effectMask, recalculateMask, stackCount, maxDuration, remainTime, remainCharges int64
 		var amounts, baseAmounts [3]int64
 		var critChance float64
 		var applyResilience bool
 		var scanErr error
 		if fullState {
-			scanErr = rows.Scan(&casterGUID, &itemGUID, &spellID, &effectMask, &recalculateMask, &stackCount, &amounts[0], &amounts[1], &amounts[2], &baseAmounts[0], &baseAmounts[1], &baseAmounts[2], &maxDuration, &remainTime, &remainCharges, &critChance, &applyResilience)
+			scanErr = rows.Scan(&casterValue, &itemValue, &spellID, &effectMask, &recalculateMask, &stackCount, &amounts[0], &amounts[1], &amounts[2], &baseAmounts[0], &baseAmounts[1], &baseAmounts[2], &maxDuration, &remainTime, &remainCharges, &critChance, &applyResilience)
 		} else {
-			scanErr = rows.Scan(&casterGUID, &itemGUID, &spellID, &effectMask, &stackCount, &amounts[0], &maxDuration, &remainTime, &remainCharges)
+			scanErr = rows.Scan(&casterValue, &itemValue, &spellID, &effectMask, &stackCount, &amounts[0], &maxDuration, &remainTime, &remainCharges)
 		}
 		if scanErr != nil {
+			continue
+		}
+		casterGUID, casterOK := uint64(0), casterValue == nil
+		if casterValue != nil {
+			casterGUID, casterOK = auraGUIDUint64(casterValue)
+		}
+		itemGUID, itemOK := uint64(0), itemValue == nil
+		if itemValue != nil {
+			itemGUID, itemOK = auraGUIDUint64(itemValue)
+		}
+		if !casterOK || !itemOK {
 			continue
 		}
 		if spellID <= 0 || effectMask <= 0 || effectMask&^int64(0x07) != 0 || (remainTime == 0 || remainTime < -1) || spellID > int64(^uint32(0)) || len(s.activeAuras) >= 255 {

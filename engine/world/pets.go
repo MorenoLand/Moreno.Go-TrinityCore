@@ -706,19 +706,27 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 		s.server.activeCreatureAuras[petGUID] = make(map[uint32]*activeAura)
 	}
 	for rows.Next() {
-		var casterGUID uint64
+		var casterValue any
 		var spellID, effectMask, recalculateMask, stackCount, maxDuration, remainTime, remainCharges int64
 		var amounts, baseAmounts [3]int64
 		var critChance float64
 		var applyResilience bool
 		var scanErr error
 		if fullState {
-			scanErr = rows.Scan(&casterGUID, &spellID, &effectMask, &recalculateMask, &stackCount, &amounts[0], &amounts[1], &amounts[2], &baseAmounts[0], &baseAmounts[1], &baseAmounts[2], &maxDuration, &remainTime, &remainCharges, &critChance, &applyResilience)
+			scanErr = rows.Scan(&casterValue, &spellID, &effectMask, &recalculateMask, &stackCount, &amounts[0], &amounts[1], &amounts[2], &baseAmounts[0], &baseAmounts[1], &baseAmounts[2], &maxDuration, &remainTime, &remainCharges, &critChance, &applyResilience)
 		} else {
-			scanErr = rows.Scan(&casterGUID, &spellID, &effectMask, &stackCount, &amounts[0], &maxDuration, &remainTime, &remainCharges)
+			scanErr = rows.Scan(&casterValue, &spellID, &effectMask, &stackCount, &amounts[0], &maxDuration, &remainTime, &remainCharges)
 		}
 		if scanErr != nil || spellID <= 0 || spellID > int64(^uint32(0)) {
 			continue
+		}
+		casterGUID := uint64(0)
+		if casterValue != nil {
+			var casterOK bool
+			casterGUID, casterOK = auraGUIDUint64(casterValue)
+			if !casterOK {
+				continue
+			}
 		}
 		spell, found, spellErr := s.server.Data.Spell(uint32(spellID))
 		if spellErr != nil || !found {

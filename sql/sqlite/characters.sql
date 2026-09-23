@@ -165,7 +165,7 @@ PRIMARY KEY (`guid`,`slot`)
 );
 CREATE TABLE IF NOT EXISTS `character_aura` (
 `guid` INTEGER  NOT NULL DEFAULT '0',
-`casterGuid` INTEGER  NOT NULL DEFAULT '0',
+`casterGuid` TEXT NOT NULL DEFAULT '0',
 `itemGuid` INTEGER  NOT NULL DEFAULT '0',
 `spell` INTEGER  NOT NULL DEFAULT '0',
 `effectMask` INTEGER  NOT NULL DEFAULT '0',
@@ -913,7 +913,7 @@ CREATE INDEX IF NOT EXISTS `mail_items__idx_receiver` ON `mail_items` (`receiver
 CREATE INDEX IF NOT EXISTS `mail_items__idx_mail_id` ON `mail_items` (`mail_id`);
 CREATE TABLE IF NOT EXISTS `pet_aura` (
 `guid` INTEGER  NOT NULL DEFAULT '0',
-`casterGuid` INTEGER  NOT NULL DEFAULT '0',
+`casterGuid` TEXT NOT NULL DEFAULT '0',
 `spell` INTEGER  NOT NULL DEFAULT '0',
 `effectMask` INTEGER  NOT NULL DEFAULT '0',
 `recalculateMask` INTEGER  NOT NULL DEFAULT '0',

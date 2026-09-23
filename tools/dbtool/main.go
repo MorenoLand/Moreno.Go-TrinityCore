@@ -15,7 +15,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: dbtool schema|schema-audit|import-sql|verify|statement-audit|statement-exercise")
+		fmt.Fprintln(os.Stderr, "usage: dbtool schema|schema-audit|import-sql|repair-aura-guids|verify|statement-audit|statement-exercise")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -25,6 +25,8 @@ func main() {
 		os.Exit(schemaAudit(os.Args[2:]))
 	case "import-sql":
 		os.Exit(importSQL(os.Args[2:]))
+	case "repair-aura-guids":
+		os.Exit(repairAuraGUIDs(os.Args[2:]))
 	case "verify":
 		os.Exit(verify(os.Args[2:]))
 	case "statement-audit":
@@ -35,6 +37,42 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unknown dbtool command %q\n", os.Args[1])
 		os.Exit(2)
 	}
+}
+
+func repairAuraGUIDs(args []string) int {
+	fs := flag.NewFlagSet("repair-aura-guids", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	databasePath := fs.String("database", "", "SQLite characters database to repair")
+	sourceSQL := fs.String("source-sql", "", "original MySQL characters SQL dump")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *databasePath == "" || *sourceSQL == "" {
+		fmt.Fprintln(os.Stderr, "repair-aura-guids requires --database and --source-sql")
+		return 2
+	}
+	if _, err := os.Stat(*databasePath); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	db, err := sql.Open("sqlite", *databasePath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if err := db.PingContext(context.Background()); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	report, err := database.RepairSQLiteAuraGUIDs(context.Background(), db, *sourceSQL)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("character_aura source_rows=%d recovered=%d untouched=%d pet_aura source_rows=%d recovered=%d untouched=%d\n", report.CharacterSourceRows, report.CharacterRecovered, report.CharacterSkipped, report.PetSourceRows, report.PetRecovered, report.PetSkipped)
+	return 0
 }
 
 func schemaAudit(args []string) int {

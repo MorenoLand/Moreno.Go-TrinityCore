@@ -39,6 +39,7 @@ func NormalizeSQLiteCreateTable(statement string) ([]string, error) {
 		return nil, errors.New("CREATE TABLE has no table name")
 	}
 	table := match[1]
+	logicalTable := strings.Trim(table, "`\"")
 	definitions := splitTopLevel(statement[open+1 : close])
 	if len(definitions) == 0 {
 		return nil, fmt.Errorf("table %s has no columns", table)
@@ -67,6 +68,14 @@ func NormalizeSQLiteCreateTable(statement string) ([]string, error) {
 		case strings.HasPrefix(upper, "CHECK "):
 			columns = append(columns, normalizeConstraint(definition))
 		default:
+			if logicalTable == "character_aura" || logicalTable == "pet_aura" {
+				name, rest := firstToken(definition)
+				if strings.EqualFold(strings.Trim(name, "`\""), "casterGuid") {
+					if typeMatch := columnTypePattern.FindStringSubmatch(strings.TrimSpace(rest)); len(typeMatch) > 0 {
+						definition = name + " TEXT " + strings.TrimSpace(rest[len(typeMatch[0]):])
+					}
+				}
+			}
 			column, err := normalizeColumn(definition)
 			if err != nil {
 				return nil, fmt.Errorf("table %s: %w", table, err)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 )
 
 func (s *session) savePlayerAuras(ctx context.Context, tx *sql.Tx, state *playerState) error {
@@ -91,12 +92,19 @@ func (s *session) savePlayerAuras(ctx context.Context, tx *sql.Tx, state *player
 		if stackCount == 0 {
 			stackCount = 1
 		}
-		_, err = s.server.CharactersStore.ExecStatementTx(ctx, tx, "CHAR_INS_AURA", state.GUID, aura.CasterGUID, aura.ItemGUID, aura.SpellID, aura.EffectMask, aura.RecalculateMask, stackCount, aura.Amounts[0], aura.Amounts[1], aura.Amounts[2], aura.BaseAmounts[0], aura.BaseAmounts[1], aura.BaseAmounts[2], maxDuration, remaining, aura.RemainingCharges, aura.CritChance, aura.ApplyResilience)
+		_, err = s.server.CharactersStore.ExecStatementTx(ctx, tx, "CHAR_INS_AURA", state.GUID, auraGUIDDatabaseValue(s.server.CharactersStore.Backend, aura.CasterGUID), auraGUIDDatabaseValue(s.server.CharactersStore.Backend, aura.ItemGUID), aura.SpellID, aura.EffectMask, aura.RecalculateMask, stackCount, aura.Amounts[0], aura.Amounts[1], aura.Amounts[2], aura.BaseAmounts[0], aura.BaseAmounts[1], aura.BaseAmounts[2], maxDuration, remaining, aura.RemainingCharges, aura.CritChance, aura.ApplyResilience)
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func auraGUIDDatabaseValue(backend database.Backend, guid uint64) any {
+	if backend == database.BackendSQLite && guid > uint64(^uint64(0)>>1) {
+		return []byte(strconv.FormatUint(guid, 10))
+	}
+	return guid
 }
 
 type auraSaveKey struct {
