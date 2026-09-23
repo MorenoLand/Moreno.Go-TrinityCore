@@ -11,13 +11,33 @@ import (
 )
 
 const (
-	questStatusComplete   = 1
-	questStatusIncomplete = 3
-	questDialogNone       = 0
-	questDialogIncomplete = 5
-	questDialogReward     = 10
-	questDialogAvailable  = 8
+	questStatusComplete            = 1
+	questStatusIncomplete          = 3
+	QuestTypeRaid           uint32 = 62
+	QuestTypeRaid10         uint32 = 88
+	QuestTypeRaid25         uint32 = 89
+	RaidDifficulty25ManMask uint8  = 1
+	questDialogNone                = 0
+	questDialogIncomplete          = 5
+	questDialogReward              = 10
+	questDialogAvailable           = 8
 )
+
+func QuestAllowedInRaid(questType uint32, difficulty uint8, raidGroup, ignoreRaid bool) bool {
+	if !raidGroup || ignoreRaid {
+		return true
+	}
+	switch questType {
+	case QuestTypeRaid:
+		return true
+	case QuestTypeRaid10:
+		return difficulty&RaidDifficulty25ManMask == 0
+	case QuestTypeRaid25:
+		return difficulty&RaidDifficulty25ManMask != 0
+	default:
+		return false
+	}
+}
 
 func (s *session) refreshQuestItemCounts(ctx context.Context, itemEntry uint32, added bool, questFilter ...uint32) {
 	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {

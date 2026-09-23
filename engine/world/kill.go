@@ -419,8 +419,8 @@ func (s *session) creditPlayerKillQuest(ctx context.Context) {
 		if entry.QuestID == 0 || entry.State != 0 {
 			continue
 		}
-		var required, zone int64
-		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT RequiredPlayerKills, ZoneOrSort FROM quest_template WHERE ID = ?", entry.QuestID).Scan(&required, &zone); err != nil || required <= 0 || zone != int64(s.player.Zone) || int64(entry.PlayerCount) >= required {
+		var required, zone, questType int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT RequiredPlayerKills, ZoneOrSort, QuestType FROM quest_template WHERE ID = ?", entry.QuestID).Scan(&required, &zone, &questType); err != nil || required <= 0 || zone != int64(s.player.Zone) || int64(entry.PlayerCount) >= required || !s.questAllowedInRaid(uint32(questType)) {
 			continue
 		}
 		entry.PlayerCount++
@@ -442,6 +442,19 @@ func (s *session) creditPlayerKillQuest(ctx context.Context) {
 		}
 		break
 	}
+}
+
+func (s *session) questAllowedInRaid(questType uint32) bool {
+	if s == nil || s.player == nil || s.server == nil {
+		return true
+	}
+	groupRaid := false
+	if s.groupID != 0 {
+		if group := s.server.findGroupByID(s.groupID); group != nil {
+			groupRaid = group.IsRaid
+		}
+	}
+	return QuestAllowedInRaid(questType, s.player.RaidDifficulty, groupRaid, s.server.Config.QuestIgnoreRaid)
 }
 
 func (s *session) creditQuestKills(ctx context.Context, creatureEntry uint32, victimGUID uint64) {

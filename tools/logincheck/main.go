@@ -204,6 +204,9 @@ func runSelfCheck() error {
 	if err := checkScalingStatDistributionDBC(); err != nil {
 		return fmt.Errorf("scaling-item DBC check failed: %w", err)
 	}
+	if err := checkQuestRaidConfig(); err != nil {
+		return fmt.Errorf("raid-quest rule check failed: %w", err)
+	}
 	if err := checkGroupLeaderFlag(); err != nil {
 		return fmt.Errorf("group leader flag check failed: %w", err)
 	}
@@ -654,6 +657,30 @@ func checkScalingStatDistributionDBC() error {
 		return nil
 	}
 	return fmt.Errorf("ScalingStatDistribution.dbc contains no usable records")
+}
+
+func checkQuestRaidConfig() error {
+	const env = "MORENOCORE_QUEST_IGNORE_RAID"
+	oldValue, wasSet := os.LookupEnv(env)
+	defer func() {
+		if wasSet {
+			_ = os.Setenv(env, oldValue)
+		} else {
+			_ = os.Unsetenv(env)
+		}
+	}()
+	if err := os.Setenv(env, "true"); err != nil {
+		return err
+	}
+	cfg := config.Default()
+	cfg.ApplyEnv()
+	if !cfg.QuestIgnoreRaid {
+		return fmt.Errorf("Quests.IgnoreRaid environment mapping was not applied")
+	}
+	if !world.QuestAllowedInRaid(world.QuestTypeRaid, 0, true, false) || world.QuestAllowedInRaid(world.QuestTypeRaid10, world.RaidDifficulty25ManMask, true, false) || !world.QuestAllowedInRaid(world.QuestTypeRaid25, world.RaidDifficulty25ManMask, true, false) || world.QuestAllowedInRaid(0, 0, true, false) || !world.QuestAllowedInRaid(0, 0, true, true) {
+		return fmt.Errorf("source raid quest type/difficulty rules differ")
+	}
+	return nil
 }
 
 func firstSkillMaskMember(mask uint32) uint8 {
