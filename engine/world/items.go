@@ -28,6 +28,22 @@ func playerHasSpell(state *playerState, spellID uint32) bool {
 	return false
 }
 
+func socketGemEnchantmentIDs(enchantments string) []uint32 {
+	fields := strings.Fields(enchantments)
+	ids := make([]uint32, 0, 3)
+	for slot := 2; slot < 5; slot++ {
+		index := slot * 3
+		if index >= len(fields) {
+			continue
+		}
+		id, err := strconv.ParseUint(fields[index], 10, 32)
+		if err == nil && id != 0 {
+			ids = append(ids, uint32(id))
+		}
+	}
+	return ids
+}
+
 func itemFitsEquipmentSlot(state *playerState, equipped map[int64]itemQueryData, item itemQueryData, slot int64) bool {
 	dualWield, titanGrip := playerHasSpell(state, 674), playerHasSpell(state, 46917)
 	var slots []int64

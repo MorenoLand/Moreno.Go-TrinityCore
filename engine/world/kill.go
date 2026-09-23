@@ -411,6 +411,39 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 // creditQuestKills advances RequiredNpcOrGo objectives for quests in the
 // log, sending SMSG_QUESTUPDATE_ADD_KILL per TC
 // Player::KilledMonster / SendQuestUpdateAddCreatureOrGo.
+func (s *session) creditPlayerKillQuest(ctx context.Context) {
+	if s == nil || s.player == nil || s.bgData.InstanceID != 0 || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	for slot, entry := range s.player.QuestLog {
+		if entry.QuestID == 0 || entry.State != 0 {
+			continue
+		}
+		var required, zone int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT RequiredPlayerKills, ZoneOrSort FROM quest_template WHERE ID = ?", entry.QuestID).Scan(&required, &zone); err != nil || required <= 0 || zone != int64(s.player.Zone) || int64(entry.PlayerCount) >= required {
+			continue
+		}
+		entry.PlayerCount++
+		entry.Counters[0] = entry.PlayerCount
+		s.player.QuestLog[slot] = entry
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET playercount = ? WHERE guid = ? AND quest = ?", entry.PlayerCount, s.playerGUID, entry.QuestID)
+		packet := protocol.NewBuffer(12)
+		packet.WriteU32(entry.QuestID)
+		packet.WriteU32(uint32(entry.PlayerCount))
+		packet.WriteU32(uint32(required))
+		_ = s.write(uint16(protocol.OpcodeSMSG_QUESTUPDATE_ADD_PVP_KILL), packet.Bytes(), true)
+		s.sendPlayerQuestLogUpdate(slot)
+		if s.questObjectivesComplete(ctx, entry.QuestID, entry) {
+			entry.State = questCompleteStateFlag(questStatusComplete)
+			s.player.QuestLog[slot] = entry
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusComplete, s.playerGUID, entry.QuestID)
+			s.sendPlayerQuestLogUpdate(slot)
+			_ = s.write(uint16(protocol.OpcodeSMSG_QUESTUPDATE_COMPLETE), nil, true)
+		}
+		break
+	}
+}
+
 func (s *session) creditQuestKills(ctx context.Context, creatureEntry uint32, victimGUID uint64) {
 	if s.player == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return

@@ -1219,6 +1219,7 @@ type GemPropertiesEntry struct {
 type SpellItemEnchantmentEntry struct {
 	ID         uint32
 	ItemVisual uint32
+	SrcItemID  uint32
 }
 
 type ItemLimitCategoryEntry struct {
@@ -1240,7 +1241,11 @@ func (s *Store) SpellItemEnchantment(id uint32) (SpellItemEnchantmentEntry, bool
 	if err != nil {
 		return SpellItemEnchantmentEntry{}, false, err
 	}
-	return SpellItemEnchantmentEntry{ID: id, ItemVisual: visual}, true, nil
+	sourceItem, err := record.Uint32(33)
+	if err != nil {
+		return SpellItemEnchantmentEntry{}, false, err
+	}
+	return SpellItemEnchantmentEntry{ID: id, ItemVisual: visual, SrcItemID: sourceItem}, true, nil
 }
 
 func (s *Store) ItemLimitCategory(id uint32) (ItemLimitCategoryEntry, bool, error) {

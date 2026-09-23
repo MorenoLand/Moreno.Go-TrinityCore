@@ -859,7 +859,7 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 		return false
 	}
 	cdb, wdb := s.server.CharactersStore.DB, s.server.WorldStore.DB
-	rows, err := cdb.QueryContext(ctx, `SELECT ci.bag, ci.slot, ci.item, ii.itemEntry, ii.count
+	rows, err := cdb.QueryContext(ctx, `SELECT ci.bag, ci.slot, ci.item, ii.itemEntry, ii.count, COALESCE(ii.enchantments, '')
 		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = ? ORDER BY ci.bag, ci.slot, ci.item`, state.GUID)
 	if err != nil {
 		return false
@@ -868,6 +868,8 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 		bag, slot, item, entry, count int64
 		containerSlots                int64
 		isBag                         bool
+		enchantments                  string
+		gems                          []uint32
 		data                          itemQueryData
 	}
 	type invalidInventoryRow struct {
@@ -879,7 +881,7 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 	var invalid []invalidInventoryRow
 	for rows.Next() {
 		var record inventoryRecord
-		if rows.Scan(&record.bag, &record.slot, &record.item, &record.entry, &record.count) != nil {
+		if rows.Scan(&record.bag, &record.slot, &record.item, &record.entry, &record.count, &record.enchantments) != nil {
 			continue
 		}
 		if record.item <= 0 || record.entry <= 0 || record.count <= 0 {
@@ -902,6 +904,7 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 		record.data = itemData
 		record.containerSlots = int64(itemData.ContainerSlots)
 		record.isBag = itemData.InventoryType == uint32(itemInventoryTypeBag)
+		record.gems = socketGemEnchantmentIDs(record.enchantments)
 		records = append(records, record)
 	}
 	rows.Close()
@@ -916,6 +919,10 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 	equipped := make(map[int64]itemQueryData)
 	equippedItemCounts := make(map[uint32]int64)
 	equippedLimitCounts := make(map[uint32]int64)
+	equippedGemIDs := make(map[uint32]int64)
+	equippedGemLimitCounts := make(map[uint32]int64)
+	inventoryItemCounts := make(map[uint32]int64)
+	inventoryLimitCounts := make(map[uint32]int64)
 	itemLimitCategoryCache := make(map[uint32]struct {
 		quantity uint32
 		flags    uint32
@@ -1076,8 +1083,34 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 		}
 		seenPositions[position] = struct{}{}
 		seenItems[record.item] = struct{}{}
+		item := record.data
+		if record.bag != 0 {
+			containerSlots, found := rootBags[record.bag]
+			bag := rootBagData[record.bag]
+			if !found {
+				invalid = append(invalid, invalidInventoryRow{record: record, deleteInstance: true})
+				continue
+			}
+			if record.slot < 0 || record.slot >= containerSlots || record.isBag || bag.BagFamily != 0 && item.BagFamily&bag.BagFamily == 0 {
+				mailItems = append(mailItems, record)
+				invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
+				continue
+			}
+		}
+		if item.MaxCount > 0 && item.MaxCount != 2147483647 && inventoryItemCounts[item.Entry]+record.count > int64(item.MaxCount) {
+			mailItems = append(mailItems, record)
+			invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
+			continue
+		}
+		if item.ItemLimitCategory != 0 {
+			quantity, flags, found := itemLimitCategory(item.ItemLimitCategory)
+			if !found || flags == 0 && inventoryLimitCounts[item.ItemLimitCategory]+record.count > int64(quantity) {
+				mailItems = append(mailItems, record)
+				invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
+				continue
+			}
+		}
 		if record.bag == 0 && record.slot >= 0 && record.slot < 19 {
-			item := record.data
 			if !itemFitsEquipmentSlot(state, equipped, item, record.slot) {
 				mailItems = append(mailItems, record)
 				invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
@@ -1090,22 +1123,62 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 				s.debug("equipped item rejected during login", "guid", state.GUID, "item", record.item, "entry", record.entry, "slot", record.slot, "reason", reason)
 				continue
 			}
-			if item.MaxCount > 0 && equippedItemCounts[item.Entry]+record.count > int64(item.MaxCount) {
-				mailItems = append(mailItems, record)
-				invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
-				s.debug("equipped item rejected during login", "guid", state.GUID, "item", record.item, "entry", record.entry, "slot", record.slot, "reason", "item count limit")
-				continue
-			}
 			if item.ItemLimitCategory != 0 {
 				quantity, _, found := itemLimitCategory(item.ItemLimitCategory)
-				if !found || equippedLimitCounts[item.ItemLimitCategory] >= int64(quantity) {
+				if !found || equippedLimitCounts[item.ItemLimitCategory]+equippedGemLimitCounts[item.ItemLimitCategory] >= int64(quantity) {
 					mailItems = append(mailItems, record)
 					invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
 					s.debug("equipped item rejected during login", "guid", state.GUID, "item", record.item, "entry", record.entry, "slot", record.slot, "reason", "equipped category limit")
 					continue
 				}
 			}
-			if item.Flags&itemFlagUniqueEquippable != 0 && equippedItemCounts[item.Entry] > 0 {
+			gemItems := make([]itemQueryData, 0, len(record.gems))
+			candidateGemLimits := make(map[uint32]int64)
+			for _, enchantID := range record.gems {
+				if s.server.Data == nil {
+					break
+				}
+				enchantment, found, enchantErr := s.server.Data.SpellItemEnchantment(enchantID)
+				if enchantErr != nil {
+					return false
+				}
+				if !found || enchantment.SrcItemID == 0 {
+					continue
+				}
+				gemItem, gemErr := s.loadItemQueryData(ctx, enchantment.SrcItemID)
+				if gemErr != nil {
+					if errors.Is(gemErr, sql.ErrNoRows) {
+						continue
+					}
+					return false
+				}
+				gemItems = append(gemItems, gemItem)
+				if gemItem.ItemLimitCategory != 0 {
+					candidateGemLimits[gemItem.ItemLimitCategory]++
+				}
+			}
+			gemLimitExceeded := false
+			for category, count := range candidateGemLimits {
+				quantity, _, found := itemLimitCategory(category)
+				if !found || equippedLimitCounts[category]+equippedGemLimitCounts[category]+count > int64(quantity) {
+					gemLimitExceeded = true
+					break
+				}
+			}
+			if gemLimitExceeded {
+				mailItems = append(mailItems, record)
+				invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
+				s.debug("equipped item rejected during login", "guid", state.GUID, "item", record.item, "entry", record.entry, "slot", record.slot, "reason", "socketed gem category limit")
+				continue
+			}
+			uniqueEquippedItem := item.Flags&itemFlagUniqueEquippable != 0 && (equippedItemCounts[item.Entry] > 0 || item.GemProperties != 0 && equippedGemIDs[item.Entry] > 0)
+			for _, gemItem := range gemItems {
+				if gemItem.Flags&itemFlagUniqueEquippable != 0 && gemItem.GemProperties != 0 && equippedItemCounts[gemItem.Entry]+equippedGemIDs[gemItem.Entry] > 0 {
+					uniqueEquippedItem = true
+					break
+				}
+			}
+			if uniqueEquippedItem {
 				mailItems = append(mailItems, record)
 				invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
 				s.debug("equipped item rejected during login", "guid", state.GUID, "item", record.item, "entry", record.entry, "slot", record.slot, "reason", "unique equipped")
@@ -1115,6 +1188,12 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 			equippedItemCounts[item.Entry]++
 			if item.ItemLimitCategory != 0 {
 				equippedLimitCounts[item.ItemLimitCategory]++
+			}
+			for _, gemItem := range gemItems {
+				equippedGemIDs[gemItem.Entry]++
+				if gemItem.ItemLimitCategory != 0 {
+					equippedGemLimitCounts[gemItem.ItemLimitCategory]++
+				}
 			}
 		}
 		if record.bag == 0 && ((record.slot >= 19 && record.slot < inventorySlotBagEnd) || (record.slot >= 67 && record.slot < 74)) {
@@ -1130,20 +1209,12 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 			rootBags[record.item] = record.containerSlots
 			rootBagData[record.item] = record.data
 		}
-	}
-	for _, record := range records {
-		if record.bag == 0 {
-			continue
-		}
-		containerSlots, found := rootBags[record.bag]
-		if !found {
-			invalid = append(invalid, invalidInventoryRow{record: record, deleteInstance: true})
-			continue
-		}
-		bag := rootBagData[record.bag]
-		if record.slot < 0 || record.slot >= containerSlots || record.isBag || bag.BagFamily != 0 && record.data.BagFamily&bag.BagFamily == 0 {
-			mailItems = append(mailItems, record)
-			invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
+		inventoryItemCounts[item.Entry] += record.count
+		if item.ItemLimitCategory != 0 {
+			_, flags, _ := itemLimitCategory(item.ItemLimitCategory)
+			if flags == 0 {
+				inventoryLimitCounts[item.ItemLimitCategory] += record.count
+			}
 		}
 	}
 	if len(invalid) == 0 {

@@ -1248,6 +1248,7 @@ func (s *Server) creditHonorableKill(killer, victim *session) {
 	killer.updateAchievementCriteria(criteriaTypeHKClass, uint32(victim.player.Class), 1)
 	killer.updateAchievementCriteria(criteriaTypeHKRace, uint32(victim.player.Race), 1)
 	killer.updateAchievementCriteria(criteriaTypeSpecialPvPKill, 0, 1)
+	killer.creditPlayerKillQuest(context.Background())
 }
 
 // exploreZone mirrors Player::UpdateZone exploration (Player.cpp:6565): set
