@@ -2217,6 +2217,9 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	var dispelType uint32
 	var mechanic uint32
 	var miscValue int32
+	var effectMask, recalculateMask uint8
+	var amounts, baseAmounts [3]int32
+	var effectAmount uint32
 	stackCount := uint8(1)
 	var stackAmount, procCharges uint32
 	hideDuration := false
@@ -2237,6 +2240,15 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 				}
 				auraType = effect.Aura
 				miscValue = effect.MiscValue
+				if effect.Aura != 0 {
+					effectMask |= 1 << uint(index)
+					effectAmount = uint32(effect.BasePoints + 1)
+					amounts[index] = effect.BasePoints + 1
+					baseAmounts[index] = effect.BasePoints
+					if auraEffectCanBeRecalculated(effect.Aura) {
+						recalculateMask |= 1 << uint(index)
+					}
+				}
 				if auraType == spellAuraMounted {
 					break
 				}
@@ -2254,15 +2266,22 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	if spellID == 15007 {
 		positive = false
 	}
+	if effectMask == 0 {
+		effectMask = 0x01
+	}
 	aura := &activeAura{
 		SpellID:            spellID,
 		DispelType:         dispelType,
 		Mechanic:           mechanic,
 		AuraType:           auraType,
-		EffectMask:         0x01,
+		EffectMask:         effectMask,
 		CasterGUID:         s.playerGUID,
 		TargetGUID:         s.playerGUID,
 		MiscValue:          miscValue,
+		Amount:             effectAmount,
+		Amounts:            amounts,
+		BaseAmounts:        baseAmounts,
+		RecalculateMask:    recalculateMask,
 		DurationMs:         durationMs,
 		RemainingMs:        durationMs,
 		DurationUpdatedAt:  time.Now(),
@@ -2605,6 +2624,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			HideDuration:       spell.AttributesEx5&spellAttr5HideDuration != 0,
 			RemainingCharges:   uint8(spell.ProcCharges),
 		}
+		setAuraEffectPersistence(aura, spell, eff, amount)
 		targetSess.activeAuras[spell.ID] = aura
 		targetSess.castMu.Unlock()
 		if eff.Aura == spellAuraFakeInebriation {

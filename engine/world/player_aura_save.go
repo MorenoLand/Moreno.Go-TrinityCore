@@ -316,3 +316,33 @@ func isAreaAuraTarget(target uint32) bool {
 		return false
 	}
 }
+
+func setAuraEffectPersistence(aura *activeAura, spell wotlk.Spell, effect wotlk.SpellEffect, amount uint32) {
+	if aura == nil {
+		return
+	}
+	for index, candidate := range spell.Effects {
+		if candidate != effect {
+			continue
+		}
+		mask := uint8(1 << uint(index))
+		aura.EffectMask = mask
+		aura.Amounts[index] = int32(amount)
+		aura.BaseAmounts[index] = candidate.BasePoints
+		if auraEffectCanBeRecalculated(candidate.Aura) {
+			aura.RecalculateMask |= mask
+		} else {
+			aura.RecalculateMask &^= mask
+		}
+		return
+	}
+}
+
+func auraEffectCanBeRecalculated(auraType uint32) bool {
+	switch auraType {
+	case spellAuraConfuse, spellAuraFear, spellAuraStun, spellAuraRoot, 56, 69, 97:
+		return false
+	default:
+		return true
+	}
+}
