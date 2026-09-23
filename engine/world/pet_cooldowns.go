@@ -7,7 +7,7 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
 
-func (s *session) registerPetMotion(ctx context.Context, petGUID uint64, petID, entry, level, faction, health, maxHealth uint32, reactState uint8, combatReach float32, x, y, z, orientation float32) {
+func (s *session) registerPetMotion(ctx context.Context, petGUID uint64, petID, entry, level, faction, health, maxHealth, mana, maxMana, happiness, experience uint32, reactState uint8, combatReach float32, x, y, z, orientation float32) {
 	if s == nil || s.server == nil || s.player == nil || petGUID == 0 || petID == 0 {
 		return
 	}
@@ -28,7 +28,7 @@ func (s *session) registerPetMotion(ctx context.Context, petGUID uint64, petID, 
 			_ = rows.Close()
 		}
 	}
-	motion := &creatureMotion{GUID: petGUID, Entry: entry, Map: s.player.Map, HomeX: x, HomeY: y, HomeZ: z, X: x, Y: y, Z: z, Orientation: orientation, Speed: 2.5, RunSpeed: 7, Faction: faction, Level: level, UnitFlags: unitFlagPlayerControlled, AttackTime: 2000, CombatReach: combatReach, Health: health, MaxHealth: maxHealth, OwnerGUID: s.playerGUID, Spells: spells, SpellCooldowns: make(map[uint32]time.Time), SpellCategoryCooldowns: make(map[uint32]time.Time), PetCommand: PetCommandFollow, PetReact: reactState, AutocastSpells: autocast, MinDamage: float32(maxUint32(level*2, 5)), MaxDamage: float32(maxUint32(level*3, 10))}
+	motion := &creatureMotion{GUID: petGUID, Entry: entry, Map: s.player.Map, HomeX: x, HomeY: y, HomeZ: z, X: x, Y: y, Z: z, Orientation: orientation, Speed: 2.5, RunSpeed: 7, Faction: faction, Level: level, UnitFlags: unitFlagPlayerControlled, AttackTime: 2000, CombatReach: combatReach, Health: health, MaxHealth: maxHealth, Mana: mana, MaxMana: maxMana, Happiness: happiness, Experience: experience, OwnerGUID: s.playerGUID, Spells: spells, SpellCooldowns: make(map[uint32]time.Time), SpellCategoryCooldowns: make(map[uint32]time.Time), PetCommand: PetCommandFollow, PetReact: reactState, AutocastSpells: autocast, MinDamage: float32(maxUint32(level*2, 5)), MaxDamage: float32(maxUint32(level*3, 10))}
 	s.loadPetCooldowns(ctx, petID, motion)
 	s.server.motionMu.Lock()
 	if s.server.creatureMotion == nil {

@@ -63,7 +63,7 @@ func (s *session) savePetState(ctx context.Context, tx *sql.Tx, saveMode ...uint
 		s.server.motionMu.Unlock()
 		return nil
 	}
-	petLevel, health, reactState := motion.Level, motion.Health, motion.PetReact
+	petLevel, health, mana, happiness, experience, reactState := motion.Level, motion.Health, motion.Mana, motion.Happiness, motion.Experience, motion.PetReact
 	spellCooldowns := make(map[uint32]time.Time, len(motion.SpellCooldowns))
 	for spellID, castAt := range motion.SpellCooldowns {
 		spellCooldowns[spellID] = castAt
@@ -77,7 +77,7 @@ func (s *session) savePetState(ctx context.Context, tx *sql.Tx, saveMode ...uint
 	if mode == petSaveNotInSlot {
 		petSlot = petStorageSlotNotInSlot
 	}
-	result, err := tx.ExecContext(ctx, "UPDATE character_pet SET slot = ?, level = ?, curhealth = ?, Reactstate = ?, savetime = ? WHERE owner = ? AND id = ?", petSlot, petLevel, health, reactState, now.Unix(), state.GUID, petID)
+	result, err := tx.ExecContext(ctx, "UPDATE character_pet SET slot = ?, level = ?, curhealth = ?, curmana = ?, curhappiness = ?, exp = ?, Reactstate = ?, savetime = ? WHERE owner = ? AND id = ?", petSlot, petLevel, health, mana, happiness, experience, reactState, now.Unix(), state.GUID, petID)
 	if err != nil {
 		return err
 	}

@@ -59,8 +59,12 @@ type creatureMotion struct {
 	MinDamage   float32
 	MaxDamage   float32
 
-	Health    uint32
-	MaxHealth uint32
+	Health     uint32
+	MaxHealth  uint32
+	Mana       uint32
+	MaxMana    uint32
+	Happiness  uint32
+	Experience uint32
 
 	TargetGUID             uint64
 	InCombat               bool

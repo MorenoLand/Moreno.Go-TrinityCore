@@ -3005,7 +3005,7 @@ func inspectPlayerCreate(event protocoltrace.Event, playerGUID uint64, strict bo
 				}
 			}
 		case protocol.UpdateCreateObject, protocol.UpdateCreateObject2:
-			guid, typeID, err := parseCreateObjectBlock(reader, playerGUID)
+			guid, typeID, _, err := parseCreateObjectBlock(reader, playerGUID)
 			if err != nil {
 				if guid == playerGUID && typeID == 4 || strict || playerFound {
 					return playerFound || guid == playerGUID && typeID == 4, fmt.Errorf("create block %d: %w", index, err)
@@ -3048,52 +3048,52 @@ func inspectPlayerCreate(event protocoltrace.Event, playerGUID uint64, strict bo
 	return playerFound, nil
 }
 
-func parseCreateObjectBlock(reader *protocol.Buffer, playerGUID uint64) (uint64, uint8, error) {
+func parseCreateObjectBlock(reader *protocol.Buffer, playerGUID uint64) (uint64, uint8, map[int]uint32, error) {
 	guid, err := reader.ReadPackedGUID()
 	if err != nil {
-		return 0, 0, fmt.Errorf("create GUID is truncated: %w", err)
+		return 0, 0, nil, fmt.Errorf("create GUID is truncated: %w", err)
 	}
 	typeID, err := reader.ReadU8()
 	if err != nil {
-		return guid, 0, fmt.Errorf("create type is truncated: %w", err)
+		return guid, 0, nil, fmt.Errorf("create type is truncated: %w", err)
 	}
 	flags, err := reader.ReadU16()
 	if err != nil {
-		return guid, typeID, fmt.Errorf("create movement flags are truncated: %w", err)
+		return guid, typeID, nil, fmt.Errorf("create movement flags are truncated: %w", err)
 	}
 	if err := skipCreateMovement(reader, flags); err != nil {
-		return guid, typeID, err
+		return guid, typeID, nil, err
 	}
 	mask, values, err := readUpdateValues(reader)
 	if err != nil {
-		return guid, typeID, err
+		return guid, typeID, nil, err
 	}
 	if typeID != 4 || guid != playerGUID {
-		return guid, typeID, nil
+		return guid, typeID, values, nil
 	}
 	if flags != 0x0061 && flags != 0x0065 {
-		return guid, typeID, fmt.Errorf("player create flags=0x%X, want 0x61 or 0x65", flags)
+		return guid, typeID, nil, fmt.Errorf("player create flags=0x%X, want 0x61 or 0x65", flags)
 	}
 	if len(mask) != 42 {
-		return guid, typeID, fmt.Errorf("player update mask blocks=%d, want 42", len(mask))
+		return guid, typeID, nil, fmt.Errorf("player update mask blocks=%d, want 42", len(mask))
 	}
 	for field := 1326; field < len(mask)*32; field++ {
 		if updateMaskHas(mask, field) {
-			return guid, typeID, fmt.Errorf("player update mask sets out-of-range field %d", field)
+			return guid, typeID, nil, fmt.Errorf("player update mask sets out-of-range field %d", field)
 		}
 	}
 	for _, field := range []int{0, 2, 4, 23, 24, 32, 54, 59, 67, 68} {
 		if !updateMaskHas(mask, field) {
-			return guid, typeID, fmt.Errorf("player update mask omits required field %d", field)
+			return guid, typeID, nil, fmt.Errorf("player update mask omits required field %d", field)
 		}
 	}
 	if values[2] != 0x19 || values[23] == 0 || values[54] == 0 || values[67] == 0 || values[68] == 0 || values[24] == 0 || values[32] == 0 {
-		return guid, typeID, fmt.Errorf("player create required field values are invalid")
+		return guid, typeID, nil, fmt.Errorf("player create required field values are invalid")
 	}
 	if values[59]&0x00000008 == 0 {
-		return guid, typeID, fmt.Errorf("player create omits UNIT_FLAG_PLAYER_CONTROLLED")
+		return guid, typeID, nil, fmt.Errorf("player create omits UNIT_FLAG_PLAYER_CONTROLLED")
 	}
-	return guid, typeID, nil
+	return guid, typeID, values, nil
 }
 
 func skipCreateMovement(reader *protocol.Buffer, flags uint16) error {
@@ -3416,6 +3416,11 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 		server.Stop()
 		return err
 	}
+	petBefore, err := snapshotActivePetLoginState(ctx, stores.Characters.DB, guid)
+	if err != nil {
+		server.Stop()
+		return err
+	}
 	var trace protocoltrace.Trace
 	var replayErr error
 	if petCooldownSpell != 0 {
@@ -3457,6 +3462,9 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 	if err := checkLogin(trace, 0); err != nil {
 		return fmt.Errorf("real-character login packet replay failed: %w", err)
 	}
+	if err := checkPetLoginState(trace, petBefore); err != nil {
+		return fmt.Errorf("real-character pet state packet replay failed: %w", err)
+	}
 	changed := make([]string, 0)
 	for table, beforeSnapshot := range before {
 		afterSnapshot, exists := after[table]
@@ -3480,6 +3488,148 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 		fmt.Printf("real-character login replay passed lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
 	}
 	return nil
+}
+
+type replayPetLoginState struct {
+	petType    uint32
+	mana       uint32
+	happiness  uint32
+	experience uint32
+}
+
+func snapshotActivePetLoginState(ctx context.Context, db *sql.DB, ownerGUID uint64) (*replayPetLoginState, error) {
+	var id, petType, mana, happiness, experience int64
+	err := db.QueryRowContext(ctx, "SELECT id, COALESCE(PetType, 0), COALESCE(curmana, 0), COALESCE(curhappiness, 0), COALESCE(exp, 0) FROM character_pet WHERE owner = ? AND slot = 0 LIMIT 1", ownerGUID).Scan(&id, &petType, &mana, &happiness, &experience)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	values := []int64{petType, mana, happiness, experience}
+	converted := make([]uint32, len(values))
+	for index, value := range values {
+		if value < 0 || value > int64(^uint32(0)) {
+			return nil, fmt.Errorf("active pet state field %d is outside uint32 range", index)
+		}
+		converted[index] = uint32(value)
+	}
+	return &replayPetLoginState{petType: converted[0], mana: converted[1], happiness: converted[2], experience: converted[3]}, nil
+}
+
+func checkPetLoginState(trace protocoltrace.Trace, saved *replayPetLoginState) error {
+	if saved == nil {
+		return nil
+	}
+	petGUID := uint64(0)
+	for _, event := range trace.Events {
+		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_PET_SPELLS) {
+			continue
+		}
+		payload, err := eventPayload(event)
+		if err != nil {
+			return err
+		}
+		reader := protocol.NewReader(payload)
+		petGUID, err = reader.ReadU64()
+		if err != nil {
+			return fmt.Errorf("SMSG_PET_SPELLS pet GUID: %w", err)
+		}
+		if petGUID != 0 {
+			break
+		}
+	}
+	if petGUID == 0 {
+		return nil
+	}
+	fields, found, err := petCreateFields(trace, petGUID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("active pet %X has no create update", petGUID)
+	}
+	maxMana := fields[33]
+	expectedMana := saved.mana
+	if expectedMana > maxMana {
+		expectedMana = maxMana
+	}
+	if fields[25] != expectedMana || fields[77] != saved.experience {
+		return fmt.Errorf("active pet power/experience fields mismatch mana=%d/%d experience=%d/%d", fields[25], expectedMana, fields[77], saved.experience)
+	}
+	if saved.petType == 1 {
+		expectedHappiness := saved.happiness
+		if expectedHappiness > 1050000 {
+			expectedHappiness = 1050000
+		}
+		if fields[23]>>24&0xFF != 2 || fields[27] != 100 || fields[35] != 100 || fields[29] != expectedHappiness || fields[37] != 1050000 {
+			return fmt.Errorf("hunter pet power fields mismatch type=%d focus=%d/%d happiness=%d/%d", fields[23]>>24&0xFF, fields[27], fields[35], fields[29], expectedHappiness)
+		}
+	}
+	return nil
+}
+
+func petCreateFields(trace protocoltrace.Trace, petGUID uint64) (map[int]uint32, bool, error) {
+	for _, event := range trace.Events {
+		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_UPDATE_OBJECT) && event.Opcode != uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+			continue
+		}
+		payload, err := eventPayload(event)
+		if err != nil {
+			return nil, false, err
+		}
+		if event.Opcode == uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+			payload, err = protocol.DecompressUpdatePayload(payload)
+			if err != nil {
+				return nil, false, fmt.Errorf("compressed pet update decode failed: %w", err)
+			}
+		}
+		reader := protocol.NewReader(payload)
+		count, err := reader.ReadU32()
+		if err != nil {
+			return nil, false, fmt.Errorf("pet update block count: %w", err)
+		}
+		for index := uint32(0); index < count; index++ {
+			kind, err := reader.ReadU8()
+			if err != nil {
+				return nil, false, fmt.Errorf("pet update block %d: %w", index, err)
+			}
+			switch kind {
+			case protocol.UpdateOutOfRangeObjects:
+				outOfRange, err := reader.ReadU32()
+				if err != nil {
+					return nil, false, err
+				}
+				for guidIndex := uint32(0); guidIndex < outOfRange; guidIndex++ {
+					if _, err := reader.ReadPackedGUID(); err != nil {
+						return nil, false, err
+					}
+				}
+			case protocol.UpdateCreateObject, protocol.UpdateCreateObject2:
+				guid, typeID, fields, err := parseCreateObjectBlock(reader, 0)
+				if err != nil {
+					return nil, false, err
+				}
+				if guid == petGUID {
+					if typeID != 3 {
+						return nil, false, fmt.Errorf("active pet create type=%d, want unit type 3", typeID)
+					}
+					return fields, true, nil
+				}
+			case protocol.UpdateValues:
+				if err := skipValuesUpdate(reader); err != nil {
+					return nil, false, err
+				}
+			case protocol.UpdateMovement:
+				if err := skipMovementUpdate(reader); err != nil {
+					return nil, false, err
+				}
+			default:
+				return nil, false, fmt.Errorf("unsupported pet update block kind=%d", kind)
+			}
+		}
+	}
+	return nil, false, nil
 }
 
 type characterTableSnapshot struct {

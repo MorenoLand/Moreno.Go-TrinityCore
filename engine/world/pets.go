@@ -30,6 +30,8 @@ const (
 	unitFieldPetExperience    = 77
 	unitFieldPetNextLevelExp  = 78
 	unitFieldCreatedBySpell   = 81
+	petFocusMax               = 100
+	petHappinessMax           = 1050000
 )
 
 func (s *session) normalizePetActionBarSlot(slot uint32) uint32 {
@@ -431,7 +433,7 @@ func (s *session) getPetStats(ctx context.Context, entry uint32, level uint32) (
 	return hp, hp, mana, mana
 }
 
-func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, ownerGUID uint64, faction uint32, petType uint8, createdBySpell, petExperience uint32, boundingRadius, combatReach, x, y, z, o float32) []byte {
+func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, curHappiness uint32, ownerGUID uint64, faction uint32, petType uint8, createdBySpell, petExperience uint32, boundingRadius, combatReach, x, y, z, o float32) []byte {
 	values := make([]uint32, creatureValuesCount)
 	values[0] = uint32(petGUID)
 	values[1] = uint32(petGUID >> 32)
@@ -463,7 +465,11 @@ func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, model
 	values[unitFieldPetExperience] = petExperience
 	petClass, powerType := uint32(8), uint32(0)
 	if petType == 1 {
-		petClass, powerType = 1, 3
+		petClass, powerType = 1, 2
+		values[unitFieldPower1+2] = petFocusMax
+		values[unitFieldMaxPower1+2] = petFocusMax
+		values[unitFieldPower1+4] = curHappiness
+		values[unitFieldMaxPower1+4] = petHappinessMax
 	}
 	values[unitFieldBytes0] = petClass << 8
 	values[unitFieldBytes0] |= powerType << 24
@@ -568,9 +574,14 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 	petGUID := uint64(s.server.nextPetLowGUID()) | (uint64(0xF140) << 48)
 	s.player.PetGUID = petGUID
 	s.player.PetNumber = petID
-	var createdBySpell, petType, petExperience int64
+	var createdBySpell, petType, petExperience, petHappiness int64
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
-		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(CreatedBySpell, 0), COALESCE(PetType, 0), COALESCE(exp, 0) FROM character_pet WHERE id = ? AND owner = ?", petID, s.playerGUID).Scan(&createdBySpell, &petType, &petExperience)
+		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(CreatedBySpell, 0), COALESCE(PetType, 0), COALESCE(exp, 0), COALESCE(curhappiness, 0) FROM character_pet WHERE id = ? AND owner = ?", petID, s.playerGUID).Scan(&createdBySpell, &petType, &petExperience, &petHappiness)
+	}
+	if petHappiness < 0 {
+		petHappiness = 0
+	} else if petHappiness > int64(petHappinessMax) {
+		petHappiness = int64(petHappinessMax)
 	}
 	if createdBySpell > 0 && createdBySpell <= int64(^uint32(0)) {
 		packet := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 0, uint32(createdBySpell), spellCastFlagGo, uint32(time.Now().UnixMilli()), nil, nil, protocol.SpellTargetData{})
@@ -633,8 +644,8 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		petZ = s.player.Z
 	}
 
-	s.registerPetMotion(ctx, petGUID, petID, entry, level, faction, curHealth, maxHealth, uint8(reactState), petCombatReach, petX, petY, petZ, petO)
-	updateBlock := buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petBoundingRadius, petCombatReach, petX, petY, petZ, petO)
+	s.registerPetMotion(ctx, petGUID, petID, entry, level, faction, curHealth, maxHealth, curMana, maxMana, uint32(petHappiness), uint32(petExperience), uint8(reactState), petCombatReach, petX, petY, petZ, petO)
+	updateBlock := buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, uint32(petHappiness), s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petBoundingRadius, petCombatReach, petX, petY, petZ, petO)
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(updateBlock)
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
