@@ -442,6 +442,7 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", receiverGUID, att.ItemGUID)
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, item_template, receiver) VALUES (?, ?, ?, ?)", nextMailID, att.ItemGUID, itemEntry, receiverGUID)
 	}
+	s.refreshQuestItemCounts(ctx, 0, false)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(uint32(nextMailID), mailSend, mailOk, 0, 0, 0), true)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerMoneyUpdate()
@@ -543,6 +544,7 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, freeBagKey, freeSlot, attachID)
 	_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, attachID)
+	s.refreshQuestItemCounts(ctx, uint32(itemEntry), true)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ? AND item_guid = ?", mailID, attachID)
 	// Check if any items left
 	var remainingCount int64

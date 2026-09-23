@@ -563,8 +563,9 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 
 	// Consume ammo for hunter bow/gun/crossbow (Spell 75) (TC Spell::TakeAmmo)
 	if spellID == 75 && s.player.AmmoID > 0 && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		ammoEntry := s.player.AmmoID
 		var itemGUID, count int64
-		err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT ii.guid, ii.count FROM character_inventory ci JOIN item_instance ii ON ci.item = ii.guid WHERE ci.guid = ? AND ii.itemEntry = ? AND ii.count > 0 LIMIT 1", s.playerGUID, s.player.AmmoID).Scan(&itemGUID, &count)
+		err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT ii.guid, ii.count FROM character_inventory ci JOIN item_instance ii ON ci.item = ii.guid WHERE ci.guid = ? AND ii.itemEntry = ? AND ii.count > 0 LIMIT 1", s.playerGUID, ammoEntry).Scan(&itemGUID, &count)
 		if err == nil {
 			if count <= 1 {
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ?", itemGUID)
@@ -581,6 +582,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			} else {
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE item_instance SET count = count - 1 WHERE guid = ?", itemGUID)
 			}
+			s.refreshQuestItemCounts(ctx, ammoEntry, false)
 		}
 	}
 

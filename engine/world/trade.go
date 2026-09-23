@@ -415,6 +415,8 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET guid = ?, bag = ?, slot = ? WHERE item = ?", s.playerGUID, targetLoc.bagKey, targetLoc.slot, it.ItemGUID)
 		partner.despawnItem(it.ItemGUID)
 	}
+	s.refreshQuestItemCounts(ctx, 0, false)
+	partner.refreshQuestItemCounts(ctx, 0, false)
 
 	_ = s.sendTradeStatus(tradeStatusTradeComplete, 0, 0, 0, 0)
 	_ = partner.sendTradeStatus(tradeStatusTradeComplete, 0, 0, 0, 0)

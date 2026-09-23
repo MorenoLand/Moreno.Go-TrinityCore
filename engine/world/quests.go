@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"math"
+	"strconv"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -17,6 +18,61 @@ const (
 	questDialogReward     = 10
 	questDialogAvailable  = 8
 )
+
+func (s *session) refreshQuestItemCounts(ctx context.Context, itemEntry uint32, added bool, questFilter ...uint32) {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	for slot, entry := range s.player.QuestLog {
+		if entry.QuestID == 0 || added && entry.State != 0 || len(questFilter) > 0 && entry.QuestID != questFilter[0] {
+			continue
+		}
+		quest, err := s.loadQuestQueryData(ctx, entry.QuestID)
+		if err != nil {
+			continue
+		}
+		changed := false
+		for index, requiredItem := range quest.RequiredItemID {
+			if requiredItem == 0 || itemEntry != 0 && requiredItem != itemEntry || quest.RequiredItemCount[index] == 0 {
+				continue
+			}
+			var have int64
+			if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory ci
+				JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ?`, s.playerGUID, requiredItem).Scan(&have); err != nil {
+				continue
+			}
+			count := have
+			if count > int64(quest.RequiredItemCount[index]) {
+				count = int64(quest.RequiredItemCount[index])
+			}
+			if count < 0 {
+				count = 0
+			}
+			if entry.ItemCounts[index] == uint16(count) {
+				continue
+			}
+			entry.ItemCounts[index] = uint16(count)
+			column := "itemcount" + strconv.Itoa(index+1)
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET "+column+" = ? WHERE guid = ? AND quest = ?", entry.ItemCounts[index], s.playerGUID, entry.QuestID)
+			changed = true
+		}
+		if !changed {
+			continue
+		}
+		completed := len(questFilter) == 0 && s.questObjectivesComplete(ctx, entry.QuestID, entry)
+		if entry.State == 0 && completed {
+			entry.State = questCompleteStateFlag(questStatusComplete)
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusComplete, s.playerGUID, entry.QuestID)
+			_ = s.write(uint16(protocol.OpcodeSMSG_QUESTUPDATE_COMPLETE), nil, true)
+			s.sendPlayerQuestLogUpdate(slot)
+		} else if entry.State == questCompleteStateFlag(questStatusComplete) && !completed {
+			entry.State = questCompleteStateFlag(questStatusIncomplete)
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusIncomplete, s.playerGUID, entry.QuestID)
+			s.sendPlayerQuestLogUpdate(slot)
+		}
+		s.player.QuestLog[slot] = entry
+	}
+}
 
 func (s *session) handleQuestgiverHello(ctx context.Context, payload []byte) bool {
 	return s.handleGossipHello(ctx, payload)

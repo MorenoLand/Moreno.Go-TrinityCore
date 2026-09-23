@@ -1546,6 +1546,7 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 				}
 
 				s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogWithdrawItem, s.playerGUID, itemEntry, count, 0)
+				s.refreshQuestItemCounts(ctx, 0, false)
 				_ = s.sendInventoryItems(ctx)
 				s.sendPlayerUpdate()
 			}
@@ -1575,6 +1576,7 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 				}
 
 				s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogDepositItem, s.playerGUID, itemEntry, count, 0)
+				s.refreshQuestItemCounts(ctx, 0, false)
 				_ = s.sendInventoryItems(ctx)
 				s.sendPlayerUpdate()
 			}

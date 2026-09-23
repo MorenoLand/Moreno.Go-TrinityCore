@@ -970,9 +970,10 @@ func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	var itemGUID, currentCount int64
-	err := db.QueryRowContext(ctx, `SELECT ci.item, ii.count FROM character_inventory AS ci
+	var itemEntry int64
+	err := db.QueryRowContext(ctx, `SELECT ci.item, ii.count, ii.itemEntry FROM character_inventory AS ci
 		JOIN item_instance AS ii ON ii.guid = ci.item
-		WHERE ci.guid = ? AND ci.bag = ? AND ci.slot = ? LIMIT 1`, s.playerGUID, bagKey, slot).Scan(&itemGUID, &currentCount)
+		WHERE ci.guid = ? AND ci.bag = ? AND ci.slot = ? LIMIT 1`, s.playerGUID, bagKey, slot).Scan(&itemGUID, &currentCount, &itemEntry)
 	if err != nil || itemGUID == 0 {
 		return true
 	}
@@ -989,6 +990,7 @@ func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 	} else {
 		_, _ = db.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", count, itemGUID)
 	}
+	s.refreshQuestItemCounts(ctx, uint32(itemEntry), false)
 	s.syncEquipmentCache(ctx)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
@@ -1247,6 +1249,7 @@ func (s *session) handleItemRefund(ctx context.Context, payload []byte) bool {
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ? AND guid = ?", itemGUID, s.playerGUID)
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_refund_instance WHERE item_guid = ? AND player_guid = ?", itemGUID, s.playerGUID)
+	s.refreshQuestItemCounts(ctx, uint32(itemEntry), false)
 
 	s.player.Money += uint32(paidMoney)
 	s.player.TotalHonorPoints += extendedCost.HonorPoints
@@ -1425,6 +1428,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", dbItemGUID)
 				s.despawnItem(uint64(dbItemGUID))
 			}
+			s.refreshQuestItemCounts(ctx, uint32(itemEntry), false)
 			_ = s.sendInventoryItems(ctx)
 			s.sendPlayerUpdate()
 		}
@@ -1739,6 +1743,14 @@ func (s *session) findStackableInventorySlot(ctx context.Context, playerGUID uin
 }
 
 func (s *session) storeOrStackItem(ctx context.Context, playerGUID uint64, itemEntry, count uint32) (*inventoryStoreResult, error) {
+	result, err := s.storeOrStackItemCore(ctx, playerGUID, itemEntry, count)
+	if err == nil && result != nil && s.player != nil && playerGUID == s.playerGUID {
+		s.refreshQuestItemCounts(ctx, itemEntry, true)
+	}
+	return result, err
+}
+
+func (s *session) storeOrStackItemCore(ctx context.Context, playerGUID uint64, itemEntry, count uint32) (*inventoryStoreResult, error) {
 	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return nil, errors.New("characters database not available")
 	}
@@ -2090,6 +2102,7 @@ func (s *session) handleWrapItem(ctx context.Context, payload []byte) bool {
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, giftBag, giftSlot)
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", giftGUID)
 		}
+		s.refreshQuestItemCounts(ctx, uint32(giftEntry), false)
 
 		// Record original entry in character_gifts
 		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_gifts (guid, item_guid, entry, flags) VALUES (?, ?, ?, 0)", s.playerGUID, targetGUID, targetEntry)
@@ -2112,6 +2125,8 @@ func (s *session) handleWrapItem(ctx context.Context, payload []byte) bool {
 		}
 		// Set itemEntry = wrappedEntry and flags |= 0x8 (ITEM_FIELD_FLAG_WRAPPED)
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET itemEntry = ?, flags = flags | 8 WHERE guid = ?", wrappedEntry, targetGUID)
+		s.refreshQuestItemCounts(ctx, uint32(targetEntry), false)
+		s.refreshQuestItemCounts(ctx, wrappedEntry, true)
 		_ = s.sendInventoryItems(ctx)
 	}
 	return true
@@ -2360,6 +2375,7 @@ func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
 
 	var gemEnchants [3]uint32
 	var gemColors [3]uint32
+	var gemEntries [3]uint32
 	for i := 0; i < 3; i++ {
 		if gemGUIDs[i] == 0 {
 			continue
@@ -2374,6 +2390,7 @@ func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
 		if err != nil {
 			return true
 		}
+		gemEntries[i] = gemEntry
 
 		var gemPropID uint32
 		if gemData, err := s.loadItemQueryData(ctx, gemEntry); err == nil {
@@ -2456,11 +2473,12 @@ func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
 	_ = s.write(uint16(protocol.OpcodeSMSG_SOCKET_GEMS_RESULT), resBuf.Bytes(), true)
 
 	// Consume the socketed gems
-	for _, gemGUID := range gemGUIDs {
+	for index, gemGUID := range gemGUIDs {
 		if gemGUID != 0 {
 			rawGemGUID := gemGUID & 0x0000FFFFFFFFFFFF
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ? AND guid = ?", rawGemGUID, s.playerGUID)
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", rawGemGUID)
+			s.refreshQuestItemCounts(ctx, gemEntries[index], false)
 			s.despawnItem(rawGemGUID)
 		}
 	}

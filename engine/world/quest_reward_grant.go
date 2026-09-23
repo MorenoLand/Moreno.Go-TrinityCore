@@ -258,6 +258,7 @@ func (s *session) commitQuestReward(ctx context.Context, view questRewardView, c
 		return nil, nil, err
 	}
 	s.applyQuestRewardPersistenceState(questID, questState)
+	s.refreshQuestItemCounts(ctx, 0, false)
 	s.updateAchievementCriteria(criteriaTypeCompleteQuest, questID, 1)
 	s.updateAchievementCriteria(criteriaTypeQuestCount, 0, 1)
 	if view.Detail.RewardMoney > 0 {

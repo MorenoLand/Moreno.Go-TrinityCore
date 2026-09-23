@@ -206,6 +206,7 @@ func (s *session) addQuestToPlayer(ctx context.Context, questID uint32) bool {
 			s.sendPlayerQuestLogUpdate(targetSlot)
 		}
 	}
+	s.refreshQuestItemCounts(ctx, 0, true, questID)
 
 	// If quest has no objectives or immediate completion requirements, mark complete immediately (Player::AddQuestAndCheckCompletion)
 	if s.canCompleteQuest(ctx, questID) {
@@ -252,6 +253,7 @@ func (s *session) grantQuestStartItem(ctx context.Context, itemEntry uint32) {
 	}
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, 1, 0, 0, 0, '', 0, 100, 0, '')", nextGUID, itemEntry, s.playerGUID)
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextGUID)
+	s.refreshQuestItemCounts(ctx, itemEntry, true)
 	_ = s.sendItemCreate(nextGUID, itemEntry, 1, 0, freeSlot)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()

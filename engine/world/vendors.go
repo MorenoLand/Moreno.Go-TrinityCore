@@ -543,7 +543,11 @@ func (s *session) destroyVendorExtendedCostItems(ctx context.Context, entry wotl
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.refreshQuestItemCounts(ctx, 0, false)
+	return nil
 }
 
 func (s *session) destroyVendorInventoryItemCountTx(ctx context.Context, tx *sql.Tx, itemEntry, count uint32) error {
@@ -606,10 +610,12 @@ func (s *session) rollbackVendorStoredItem(ctx context.Context, result *inventor
 	cdb := s.server.CharactersStore.DB
 	if result.IsStack {
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ? AND count >= ?", count, result.ItemGUID, count)
+		s.refreshQuestItemCounts(ctx, 0, false)
 		return
 	}
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, result.ItemGUID)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", result.ItemGUID)
+	s.refreshQuestItemCounts(ctx, 0, false)
 }
 
 func (s *session) maxPersonalArenaRating(ctx context.Context, minSlot uint32) uint32 {
@@ -710,6 +716,7 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 		}
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count) VALUES (?, ?, ?, ?)", bbItemGUID, itemEntry, s.playerGUID, count)
 	}
+	s.refreshQuestItemCounts(ctx, uint32(itemEntry), false)
 
 	// TrinityCore: Player::AddItemToBuyBackSlot (Player.cpp:13495)
 	// Assign buyback slot (0..11 corresponding to BUYBACK_SLOT_START 74 .. BUYBACK_SLOT_END 86)
