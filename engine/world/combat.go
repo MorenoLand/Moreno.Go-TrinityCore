@@ -570,6 +570,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			if count <= 1 {
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ?", itemGUID)
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
+				s.adjustQuestItemCount(ctx, ammoEntry, 1, false)
 				s.player.AmmoID = 0
 				_ = s.calculatePlayerStats(ctx, s.player)
 				s.sendPlayerUpdate()
@@ -581,8 +582,8 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(1, spellID, 75), true) // SPELL_FAILED_NO_AMMO = 75
 			} else {
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE item_instance SET count = count - 1 WHERE guid = ?", itemGUID)
+				s.adjustQuestItemCount(ctx, ammoEntry, 1, false)
 			}
-			s.refreshQuestItemCounts(ctx, ammoEntry, false)
 		}
 	}
 

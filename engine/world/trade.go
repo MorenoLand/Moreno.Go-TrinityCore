@@ -358,14 +358,14 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 
 	// Only slots 0..5 (TRADE_SLOT_TRADED_COUNT = 6) are traded; slot 6 is non-traded
 	var sTradedItems []tradeSlotItem
-	for slot, it := range s.trade.Items {
-		if slot < tradeSlotTradedCount {
+	for slot := uint8(0); slot < tradeSlotTradedCount; slot++ {
+		if it, ok := s.trade.Items[slot]; ok {
 			sTradedItems = append(sTradedItems, it)
 		}
 	}
 	var partnerTradedItems []tradeSlotItem
-	for slot, it := range partner.trade.Items {
-		if slot < tradeSlotTradedCount {
+	for slot := uint8(0); slot < tradeSlotTradedCount; slot++ {
+		if it, ok := partner.trade.Items[slot]; ok {
 			partnerTradedItems = append(partnerTradedItems, it)
 		}
 	}
@@ -400,23 +400,37 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", partner.player.Money, partner.playerGUID)
 
-	// Items transfer
-	for _, it := range sTradedItems {
-		targetLoc := partnerSlots[0]
-		partnerSlots = partnerSlots[1:]
-		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", partner.playerGUID, it.ItemGUID)
-		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET guid = ?, bag = ?, slot = ? WHERE item = ?", partner.playerGUID, targetLoc.bagKey, targetLoc.slot, it.ItemGUID)
-		s.despawnItem(it.ItemGUID)
+	sTransferSlots := make(map[uint8]int, tradeSlotTradedCount)
+	partnerTransferSlots := make(map[uint8]int, tradeSlotTradedCount)
+	for slot := uint8(0); slot < tradeSlotTradedCount; slot++ {
+		if it, ok := s.trade.Items[slot]; ok {
+			sTransferSlots[slot] = len(sTransferSlots)
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, it.ItemGUID)
+			s.despawnItem(it.ItemGUID)
+			s.adjustQuestItemCount(ctx, it.ItemEntry, it.StackCount, false)
+		}
+		if it, ok := partner.trade.Items[slot]; ok {
+			partnerTransferSlots[slot] = len(partnerTransferSlots)
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", partner.playerGUID, it.ItemGUID)
+			partner.despawnItem(it.ItemGUID)
+			partner.adjustQuestItemCount(ctx, it.ItemEntry, it.StackCount, false)
+		}
 	}
-	for _, it := range partnerTradedItems {
-		targetLoc := sSlots[0]
-		sSlots = sSlots[1:]
-		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, it.ItemGUID)
-		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET guid = ?, bag = ?, slot = ? WHERE item = ?", s.playerGUID, targetLoc.bagKey, targetLoc.slot, it.ItemGUID)
-		partner.despawnItem(it.ItemGUID)
+
+	for slot := uint8(0); slot < tradeSlotTradedCount; slot++ {
+		if it, ok := s.trade.Items[slot]; ok {
+			targetLoc := partnerSlots[sTransferSlots[slot]]
+			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", partner.playerGUID, it.ItemGUID)
+			_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", partner.playerGUID, targetLoc.bagKey, targetLoc.slot, it.ItemGUID)
+			partner.adjustQuestItemCount(ctx, it.ItemEntry, it.StackCount, true)
+		}
+		if it, ok := partner.trade.Items[slot]; ok {
+			targetLoc := sSlots[partnerTransferSlots[slot]]
+			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, it.ItemGUID)
+			_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, targetLoc.bagKey, targetLoc.slot, it.ItemGUID)
+			s.adjustQuestItemCount(ctx, it.ItemEntry, it.StackCount, true)
+		}
 	}
-	s.refreshQuestItemCounts(ctx, 0, false)
-	partner.refreshQuestItemCounts(ctx, 0, false)
 
 	_ = s.sendTradeStatus(tradeStatusTradeComplete, 0, 0, 0, 0)
 	_ = partner.sendTradeStatus(tradeStatusTradeComplete, 0, 0, 0, 0)

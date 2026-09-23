@@ -15,10 +15,12 @@ const (
 	bankSlotPrice6 uint32 = 1000000 // 100g
 	bankSlotPrice7 uint32 = 2500000 // 250g
 
-	bankSlotStart uint8 = 39
-	bankSlotEnd   uint8 = 66 // 28 bank item slots (39..66)
-	bagSlotStart  uint8 = 23
-	bagSlotEnd    uint8 = 38 // 16 backpack slots (23..38)
+	bankSlotStart    uint8 = 39
+	bankSlotEnd      uint8 = 66 // 28 bank item slots (39..66)
+	bankBagSlotStart uint8 = 67
+	bankBagSlotEnd   uint8 = 74
+	bagSlotStart     uint8 = 23
+	bagSlotEnd       uint8 = 38 // 16 backpack slots (23..38)
 )
 
 var bankBagSlotPrices = []uint32{
@@ -128,9 +130,10 @@ func (s *session) handleAutoBankItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	var itemGUID int64
-	err = cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ? AND item != 0 LIMIT 1", s.playerGUID, srcBagKey, srcSlot).Scan(&itemGUID)
-	if err != nil || itemGUID == 0 {
+	var itemGUID, itemEntry, itemCount int64
+	err = cdb.QueryRowContext(ctx, `SELECT ci.item, ii.itemEntry, ii.count FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = ? AND ci.slot = ? AND ci.item != 0 LIMIT 1`, s.playerGUID, srcBagKey, srcSlot).Scan(&itemGUID, &itemEntry, &itemCount)
+	if err != nil || itemGUID == 0 || itemEntry <= 0 || itemCount <= 0 {
 		return true
 	}
 
@@ -183,7 +186,10 @@ func (s *session) handleAutoBankItem(ctx context.Context, payload []byte) bool {
 		return true // Bank full
 	}
 
-	_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?", destBagKey, destSlot, s.playerGUID, itemGUID)
+	if _, err := cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?", destBagKey, destSlot, s.playerGUID, itemGUID); err != nil {
+		return false
+	}
+	s.adjustQuestItemCount(ctx, uint32(itemEntry), uint32(itemCount), false)
 	if srcBagKey == 0 && srcSlot < equipSlotEnd {
 		s.syncEquipmentCache(ctx)
 	}
@@ -218,9 +224,10 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 		return true
 	}
 
-	var itemGUID int64
-	err = cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ? AND item != 0 LIMIT 1", s.playerGUID, srcBagKey, srcSlot).Scan(&itemGUID)
-	if err != nil || itemGUID == 0 {
+	var itemGUID, itemEntry, itemCount int64
+	err = cdb.QueryRowContext(ctx, `SELECT ci.item, ii.itemEntry, ii.count FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = ? AND ci.slot = ? AND ci.item != 0 LIMIT 1`, s.playerGUID, srcBagKey, srcSlot).Scan(&itemGUID, &itemEntry, &itemCount)
+	if err != nil || itemGUID == 0 || itemEntry <= 0 || itemCount <= 0 {
 		return true
 	}
 
@@ -273,7 +280,9 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 			s.sendEquipError(equipErrInvFull, uint64(itemGUID))
 			return true // Inventory full
 		}
-		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?", destBagKey, destSlot, s.playerGUID, itemGUID)
+		if _, err := cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?", destBagKey, destSlot, s.playerGUID, itemGUID); err != nil {
+			return false
+		}
 	} else {
 		// Move from player bags to bank
 		occupied := make(map[uint8]bool)
@@ -319,7 +328,14 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 			s.sendEquipError(equipErrInvFull, uint64(itemGUID))
 			return true // Bank full
 		}
-		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?", destBagKey, destSlot, s.playerGUID, itemGUID)
+		if _, err := cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?", destBagKey, destSlot, s.playerGUID, itemGUID); err != nil {
+			return false
+		}
+	}
+	if isBank {
+		s.adjustQuestItemCount(ctx, uint32(itemEntry), uint32(itemCount), true)
+	} else {
+		s.adjustQuestItemCount(ctx, uint32(itemEntry), uint32(itemCount), false)
 	}
 
 	if srcBagKey == 0 && srcSlot < equipSlotEnd {

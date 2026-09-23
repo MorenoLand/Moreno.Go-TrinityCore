@@ -509,9 +509,9 @@ func (s *session) vendorInventoryItemCount(ctx context.Context, itemEntry uint32
 	var count int64
 	err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0)
 		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
-		WHERE ci.guid = ? AND ((ci.bag = 0 AND ci.slot BETWEEN 0 AND 38) OR ci.bag IN
+		WHERE ci.guid = ? AND ((ci.bag = 0 AND (ci.slot BETWEEN 0 AND ? OR (ci.slot >= ? AND ci.slot < ?))) OR ci.bag IN
 			(SELECT bag.item FROM character_inventory AS bag WHERE bag.guid = ? AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))
-		AND ii.itemEntry = ?`, s.playerGUID, s.playerGUID, itemEntry).Scan(&count)
+		AND ii.itemEntry = ?`, s.playerGUID, invSlotItemEnd-1, invSlotKeyringStart, invSlotKeyringEnd, s.playerGUID, itemEntry).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -546,7 +546,11 @@ func (s *session) destroyVendorExtendedCostItems(ctx context.Context, entry wotl
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	s.refreshQuestItemCounts(ctx, 0, false)
+	for i, itemEntry := range entry.ItemIDs {
+		if itemEntry != 0 && entry.ItemCounts[i] != 0 {
+			s.adjustQuestItemCount(ctx, itemEntry, entry.ItemCounts[i]*count, false)
+		}
+	}
 	return nil
 }
 
@@ -556,9 +560,9 @@ func (s *session) destroyVendorInventoryItemCountTx(ctx context.Context, tx *sql
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT ci.item, ci.bag, ci.slot, ii.count
 		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
-		WHERE ci.guid = ? AND ((ci.bag = 0 AND ci.slot BETWEEN 0 AND 38) OR ci.bag IN
+		WHERE ci.guid = ? AND ((ci.bag = 0 AND (ci.slot BETWEEN 0 AND ? OR (ci.slot >= ? AND ci.slot < ?))) OR ci.bag IN
 			(SELECT bag.item FROM character_inventory AS bag WHERE bag.guid = ? AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))
-		AND ii.itemEntry = ? ORDER BY ci.bag, ci.slot`, s.playerGUID, s.playerGUID, itemEntry)
+		AND ii.itemEntry = ? ORDER BY ci.bag, ci.slot`, s.playerGUID, invSlotItemEnd-1, invSlotKeyringStart, invSlotKeyringEnd, s.playerGUID, itemEntry)
 	if err != nil {
 		return err
 	}
@@ -609,13 +613,21 @@ func (s *session) rollbackVendorStoredItem(ctx context.Context, result *inventor
 	}
 	cdb := s.server.CharactersStore.DB
 	if result.IsStack {
+		var itemEntry int64
+		_ = cdb.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", result.ItemGUID).Scan(&itemEntry)
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ? AND count >= ?", count, result.ItemGUID, count)
-		s.refreshQuestItemCounts(ctx, 0, false)
+		if itemEntry > 0 {
+			s.adjustQuestItemCount(ctx, uint32(itemEntry), count, false)
+		}
 		return
 	}
+	var itemEntry int64
+	_ = cdb.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", result.ItemGUID).Scan(&itemEntry)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, result.ItemGUID)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", result.ItemGUID)
-	s.refreshQuestItemCounts(ctx, 0, false)
+	if itemEntry > 0 {
+		s.adjustQuestItemCount(ctx, uint32(itemEntry), count, false)
+	}
 }
 
 func (s *session) maxPersonalArenaRating(ctx context.Context, minSlot uint32) uint32 {
@@ -716,7 +728,7 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 		}
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count) VALUES (?, ?, ?, ?)", bbItemGUID, itemEntry, s.playerGUID, count)
 	}
-	s.refreshQuestItemCounts(ctx, uint32(itemEntry), false)
+	s.adjustQuestItemCount(ctx, uint32(itemEntry), uint32(count), false)
 
 	// TrinityCore: Player::AddItemToBuyBackSlot (Player.cpp:13495)
 	// Assign buyback slot (0..11 corresponding to BUYBACK_SLOT_START 74 .. BUYBACK_SLOT_END 86)
@@ -803,7 +815,7 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	res, err := s.storeOrStackItem(ctx, s.playerGUID, entry.ItemEntry, entry.Count)
+	res, err := s.storeOrStackItemCore(ctx, s.playerGUID, entry.ItemEntry, entry.Count)
 	if err != nil {
 		s.sendEquipError(equipErrInvFull, entry.ItemGUID)
 		return true // Inventory full
@@ -818,6 +830,7 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ?", s.playerGUID, 74+eslot)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", int64(oldItemGUID&0xFFFFFFFF))
 	}
+	s.adjustQuestItemCount(ctx, entry.ItemEntry, entry.Count, true)
 
 	// Destroy temporary buyback item if stored GUID is different
 	newFullGUID := uint64(res.ItemGUID) | (uint64(0x4000) << 48)

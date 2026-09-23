@@ -435,14 +435,16 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	for _, att := range attachments {
-		var itemEntry int64
-		_ = cdb.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", att.ItemGUID).Scan(&itemEntry)
+		var itemEntry, itemCount int64
+		_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ?", att.ItemGUID).Scan(&itemEntry, &itemCount)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, att.ItemGUID)
+		if itemEntry > 0 && itemCount > 0 {
+			s.adjustQuestItemCount(ctx, uint32(itemEntry), uint32(itemCount), false)
+		}
 		s.despawnItem(att.ItemGUID)
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", receiverGUID, att.ItemGUID)
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, item_template, receiver) VALUES (?, ?, ?, ?)", nextMailID, att.ItemGUID, itemEntry, receiverGUID)
 	}
-	s.refreshQuestItemCounts(ctx, 0, false)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(uint32(nextMailID), mailSend, mailOk, 0, 0, 0), true)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerMoneyUpdate()
@@ -499,14 +501,18 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 	if cdb == nil {
 		return true
 	}
-	var itemEntry, senderGUID, cod int64
+	var itemEntry, itemCount, senderGUID, cod int64
 	var subject string
-	err = cdb.QueryRowContext(ctx, `SELECT m.sender, m.subject, m.cod, i.item_template
+	err = cdb.QueryRowContext(ctx, `SELECT m.sender, m.subject, m.cod, i.item_template, COALESCE(ii.count, 1)
 		FROM mail_items AS i
 		JOIN mail AS m ON m.id = i.mail_id
-		WHERE i.mail_id = ? AND i.item_guid = ? LIMIT 1`, mailID, attachID).Scan(&senderGUID, &subject, &cod, &itemEntry)
+		JOIN item_instance AS ii ON ii.guid = i.item_guid
+		WHERE i.mail_id = ? AND i.item_guid = ? LIMIT 1`, mailID, attachID).Scan(&senderGUID, &subject, &cod, &itemEntry, &itemCount)
 	if err != nil || itemEntry == 0 {
 		return true
+	}
+	if itemCount <= 0 {
+		itemCount = 1
 	}
 	// Check COD (Cash On Delivery) payment
 	if cod > 0 {
@@ -544,18 +550,13 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, freeBagKey, freeSlot, attachID)
 	_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, attachID)
-	s.refreshQuestItemCounts(ctx, uint32(itemEntry), true)
+	s.adjustQuestItemCount(ctx, uint32(itemEntry), uint32(itemCount), true)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ? AND item_guid = ?", mailID, attachID)
 	// Check if any items left
 	var remainingCount int64
 	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM mail_items WHERE mail_id = ?", mailID).Scan(&remainingCount)
 	if remainingCount == 0 {
 		_, _ = cdb.ExecContext(ctx, "UPDATE mail SET has_items = 0 WHERE id = ?", mailID)
-	}
-	var itemCount int64
-	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(count, 1) FROM item_instance WHERE guid = ?", attachID).Scan(&itemCount)
-	if itemCount <= 0 {
-		itemCount = 1
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailItemTaken, mailOk, 0, attachID, uint32(itemCount)), true)
 	_ = s.sendInventoryItems(ctx)

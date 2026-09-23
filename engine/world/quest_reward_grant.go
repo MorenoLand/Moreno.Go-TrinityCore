@@ -257,8 +257,17 @@ func (s *session) commitQuestReward(ctx context.Context, view questRewardView, c
 	if err := tx.Commit(); err != nil {
 		return nil, nil, err
 	}
+	for _, item := range view.RequiredItems {
+		if item.ID != 0 && item.Quantity != 0 {
+			s.adjustQuestItemCount(ctx, item.ID, item.Quantity, false)
+		}
+	}
+	for _, item := range fixed {
+		if item.ID != 0 && item.Quantity != 0 {
+			s.adjustQuestItemCount(ctx, item.ID, item.Quantity, true)
+		}
+	}
 	s.applyQuestRewardPersistenceState(questID, questState)
-	s.refreshQuestItemCounts(ctx, 0, false)
 	s.updateAchievementCriteria(criteriaTypeCompleteQuest, questID, 1)
 	s.updateAchievementCriteria(criteriaTypeQuestCount, 0, 1)
 	if view.Detail.RewardMoney > 0 {

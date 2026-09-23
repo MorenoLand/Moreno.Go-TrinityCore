@@ -1535,10 +1535,21 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 
 				var itemEntry, count uint32
 				_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ?", bankItemGUID).Scan(&itemEntry, &count)
+				var existingItemEntry, existingItemCount uint32
+				if existingInvItem > 0 {
+					_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ?", existingInvItem).Scan(&existingItemEntry, &existingItemCount)
+				}
 
 				_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_item WHERE guildid = ? AND TabId = ? AND SlotId = ?", guildID, bankTab, bankSlot)
+				if existingInvItem > 0 && existingItemEntry > 0 && existingItemCount > 0 {
+					_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, containerSlot, containerItemSlot)
+					s.adjustQuestItemCount(ctx, existingItemEntry, existingItemCount, false)
+				}
 				_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, containerSlot, containerItemSlot, bankItemGUID)
 				_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, bankItemGUID)
+				if itemEntry > 0 && count > 0 {
+					s.adjustQuestItemCount(ctx, itemEntry, count, true)
+				}
 
 				if existingInvItem > 0 {
 					_, _ = cdb.ExecContext(ctx, "REPLACE INTO guild_bank_item (guildid, TabId, SlotId, item_guid) VALUES (?, ?, ?, ?)", guildID, bankTab, bankSlot, existingInvItem)
@@ -1546,7 +1557,6 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 				}
 
 				s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogWithdrawItem, s.playerGUID, itemEntry, count, 0)
-				s.refreshQuestItemCounts(ctx, 0, false)
 				_ = s.sendInventoryItems(ctx)
 				s.sendPlayerUpdate()
 			}
@@ -1565,18 +1575,27 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 
 				var itemEntry, count uint32
 				_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ?", invItemGUID).Scan(&itemEntry, &count)
+				var existingItemEntry, existingItemCount uint32
+				if existingBankItem > 0 {
+					_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ?", existingBankItem).Scan(&existingItemEntry, &existingItemCount)
+				}
 
 				_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, containerSlot, containerItemSlot)
+				if itemEntry > 0 && count > 0 {
+					s.adjustQuestItemCount(ctx, itemEntry, count, false)
+				}
 				_, _ = cdb.ExecContext(ctx, "REPLACE INTO guild_bank_item (guildid, TabId, SlotId, item_guid) VALUES (?, ?, ?, ?)", guildID, bankTab, bankSlot, invItemGUID)
 				_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = 0 WHERE guid = ?", invItemGUID)
 
 				if existingBankItem > 0 {
 					_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, containerSlot, containerItemSlot, existingBankItem)
 					_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, existingBankItem)
+					if existingItemEntry > 0 && existingItemCount > 0 {
+						s.adjustQuestItemCount(ctx, existingItemEntry, existingItemCount, true)
+					}
 				}
 
 				s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogDepositItem, s.playerGUID, itemEntry, count, 0)
-				s.refreshQuestItemCounts(ctx, 0, false)
 				_ = s.sendInventoryItems(ctx)
 				s.sendPlayerUpdate()
 			}

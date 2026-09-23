@@ -145,14 +145,15 @@ func (s *session) destroyZoneLimitedItems(ctx context.Context, zoneID uint32) bo
 	if s == nil || s.player == nil || s.player.Health == 0 || s.player.PlayerFlags&playerFlagGhost != 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return false
 	}
-	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.item FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item JOIN item_template AS it ON it.entry = ii.itemEntry WHERE ci.guid = ? AND ((COALESCE(it.Map, 0) <> 0 AND it.Map <> ?) OR (COALESCE(it.area, 0) <> 0 AND it.area <> ?))`, s.playerGUID, s.player.Map, zoneID)
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.item, ii.itemEntry, ii.count FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item JOIN item_template AS it ON it.entry = ii.itemEntry WHERE ci.guid = ? AND ((COALESCE(it.Map, 0) <> 0 AND it.Map <> ?) OR (COALESCE(it.area, 0) <> 0 AND it.area <> ?))`, s.playerGUID, s.player.Map, zoneID)
 	if err != nil {
 		return false
 	}
-	items := make([]uint64, 0)
+	type zoneLimitedItem struct{ guid, entry, count uint64 }
+	items := make([]zoneLimitedItem, 0)
 	for rows.Next() {
-		var item uint64
-		if rows.Scan(&item) == nil && item != 0 {
+		var item zoneLimitedItem
+		if rows.Scan(&item.guid, &item.entry, &item.count) == nil && item.guid != 0 && item.entry != 0 && item.count != 0 {
 			items = append(items, item)
 		}
 	}
@@ -161,9 +162,10 @@ func (s *session) destroyZoneLimitedItems(ctx context.Context, zoneID uint32) bo
 		return false
 	}
 	for _, item := range items {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, item)
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", item)
-		s.despawnItem(item)
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, item.guid)
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", item.guid)
+		s.adjustQuestItemCount(ctx, uint32(item.entry), uint32(item.count), false)
+		s.despawnItem(item.guid)
 	}
 	s.syncEquipmentCache(ctx)
 	_ = s.sendInventoryItems(ctx)

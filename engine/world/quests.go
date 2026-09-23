@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 
@@ -39,12 +40,12 @@ func QuestAllowedInRaid(questType uint32, difficulty uint8, raidGroup, ignoreRai
 	}
 }
 
-func (s *session) refreshQuestItemCounts(ctx context.Context, itemEntry uint32, added bool, questFilter ...uint32) {
+func (s *session) initializeQuestItemCounts(ctx context.Context, questID uint32) {
 	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return
 	}
 	for slot, entry := range s.player.QuestLog {
-		if entry.QuestID == 0 || added && entry.State != 0 || len(questFilter) > 0 && entry.QuestID != questFilter[0] {
+		if entry.QuestID != questID || entry.State != 0 {
 			continue
 		}
 		quest, err := s.loadQuestQueryData(ctx, entry.QuestID)
@@ -53,25 +54,20 @@ func (s *session) refreshQuestItemCounts(ctx context.Context, itemEntry uint32, 
 		}
 		changed := false
 		for index, requiredItem := range quest.RequiredItemID {
-			if requiredItem == 0 || itemEntry != 0 && requiredItem != itemEntry || quest.RequiredItemCount[index] == 0 {
+			if requiredItem == 0 || quest.RequiredItemCount[index] == 0 {
 				continue
 			}
-			var have int64
-			if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory ci
-				JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ?`, s.playerGUID, requiredItem).Scan(&have); err != nil {
+			have, err := s.questInventoryItemCount(ctx, s.playerGUID, requiredItem, true)
+			if err != nil {
 				continue
 			}
-			count := have
-			if count > int64(quest.RequiredItemCount[index]) {
-				count = int64(quest.RequiredItemCount[index])
+			if have > quest.RequiredItemCount[index] {
+				have = quest.RequiredItemCount[index]
 			}
-			if count < 0 {
-				count = 0
-			}
-			if entry.ItemCounts[index] == uint16(count) {
+			if entry.ItemCounts[index] == uint16(have) {
 				continue
 			}
-			entry.ItemCounts[index] = uint16(count)
+			entry.ItemCounts[index] = uint16(have)
 			column := "itemcount" + strconv.Itoa(index+1)
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET "+column+" = ? WHERE guid = ? AND quest = ?", entry.ItemCounts[index], s.playerGUID, entry.QuestID)
 			changed = true
@@ -79,19 +75,123 @@ func (s *session) refreshQuestItemCounts(ctx context.Context, itemEntry uint32, 
 		if !changed {
 			continue
 		}
-		completed := len(questFilter) == 0 && s.questObjectivesComplete(ctx, entry.QuestID, entry)
-		if entry.State == 0 && completed {
-			entry.State = questCompleteStateFlag(questStatusComplete)
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusComplete, s.playerGUID, entry.QuestID)
-			_ = s.write(uint16(protocol.OpcodeSMSG_QUESTUPDATE_COMPLETE), nil, true)
-			s.sendPlayerQuestLogUpdate(slot)
-		} else if entry.State == questCompleteStateFlag(questStatusComplete) && !completed {
-			entry.State = questCompleteStateFlag(questStatusIncomplete)
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusIncomplete, s.playerGUID, entry.QuestID)
-			s.sendPlayerQuestLogUpdate(slot)
-		}
 		s.player.QuestLog[slot] = entry
 	}
+}
+
+func (s *session) questInventoryItemCount(ctx context.Context, guid uint64, itemEntry uint32, includeBank bool) (uint32, error) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0, fmt.Errorf("characters database not available")
+	}
+	bankIncluded := 0
+	if includeBank {
+		bankIncluded = 1
+	}
+	var count int64
+	err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory ci
+		JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ? AND (
+			(ci.bag = 0 AND ((ci.slot >= 0 AND ci.slot < ?) OR (ci.slot >= ? AND ci.slot < ?) OR (? = 1 AND ci.slot >= ? AND ci.slot < ?)))
+			OR ci.bag IN (SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND ((slot >= ? AND slot < ?) OR (? = 1 AND slot >= ? AND slot < ?)))
+		)`, guid, itemEntry, invSlotItemEnd, invSlotKeyringStart, invSlotKeyringEnd, bankIncluded, bankSlotStart, bankBagSlotEnd, guid, invSlotBagStart, invSlotBagEnd, bankIncluded, bankBagSlotStart, bankBagSlotEnd).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	if count < 0 {
+		return 0, nil
+	}
+	if count > int64(^uint32(0)) {
+		return ^uint32(0), nil
+	}
+	return uint32(count), nil
+}
+
+func (s *session) adjustQuestItemCount(ctx context.Context, itemEntry, count uint32, added bool) {
+	if s != nil && s.player != nil {
+		s.adjustQuestItemCountForState(ctx, s.player, itemEntry, count, added, true)
+	}
+}
+
+func (s *session) adjustQuestItemCountForState(ctx context.Context, state *playerState, itemEntry, count uint32, added, notify bool) {
+	if state == nil || itemEntry == 0 || count == 0 || s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	for slot, entry := range state.QuestLog {
+		if entry.QuestID == 0 || added && entry.State != 0 {
+			continue
+		}
+		quest, err := s.loadQuestQueryData(ctx, entry.QuestID)
+		if err != nil {
+			continue
+		}
+		changed, matched := false, false
+		for index, requiredItem := range quest.RequiredItemID {
+			if requiredItem != itemEntry || quest.RequiredItemCount[index] == 0 {
+				continue
+			}
+			matched = true
+			current := uint32(entry.ItemCounts[index])
+			if !added && current >= quest.RequiredItemCount[index] {
+				current, err = s.questInventoryItemCount(ctx, state.GUID, itemEntry, false)
+				if err != nil {
+					continue
+				}
+			}
+			updated := QuestItemCountAfterDelta(entry.ItemCounts[index], current, quest.RequiredItemCount[index], count, added)
+			if entry.ItemCounts[index] == updated {
+				if !added {
+					break
+				}
+				continue
+			}
+			entry.ItemCounts[index] = updated
+			column := "itemcount" + strconv.Itoa(index+1)
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET "+column+" = ? WHERE guid = ? AND quest = ?", entry.ItemCounts[index], state.GUID, entry.QuestID)
+			changed = true
+			if !added {
+				break
+			}
+		}
+		if !changed && !(added && matched) {
+			continue
+		}
+		if added && notify && s.questObjectivesComplete(ctx, entry.QuestID, entry) {
+			entry.State = questCompleteStateFlag(questStatusComplete)
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusComplete, state.GUID, entry.QuestID)
+			_ = s.write(uint16(protocol.OpcodeSMSG_QUESTUPDATE_COMPLETE), nil, true)
+			s.sendPlayerQuestLogUpdate(slot)
+		} else if !added && entry.State == questCompleteStateFlag(questStatusComplete) {
+			entry.State = questCompleteStateFlag(questStatusIncomplete)
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusIncomplete, state.GUID, entry.QuestID)
+			if notify {
+				s.sendPlayerQuestLogUpdate(slot)
+			}
+		}
+		state.QuestLog[slot] = entry
+	}
+}
+
+func QuestItemCountAfterDelta(current uint16, inventoryCount, required, count uint32, added bool) uint16 {
+	value := uint64(current)
+	if !added && value >= uint64(required) {
+		value = uint64(inventoryCount)
+	}
+	if added {
+		if value >= uint64(required) {
+			return current
+		}
+		value += uint64(count)
+	} else if uint64(count) >= value {
+		value = 0
+	} else {
+		value -= uint64(count)
+	}
+	if value > uint64(required) {
+		value = uint64(required)
+	}
+	if value > uint64(^uint16(0)) {
+		value = uint64(^uint16(0))
+	}
+	return uint16(value)
 }
 
 func (s *session) handleQuestgiverHello(ctx context.Context, payload []byte) bool {

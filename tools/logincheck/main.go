@@ -4,15 +4,23 @@ import (
 	"bytes"
 	"compress/zlib"
 	"context"
+	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/world"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -27,12 +35,21 @@ type loginStage struct {
 func main() {
 	tracePath := flag.String("trace", "", "recorded protocol trace JSONL")
 	selfCheck := flag.Bool("self-check", false, "validate the login loading-order regression guard")
+	replayWork := flag.String("replay-work", "", "isolated work directory containing auth.db, characters.db, and world.db; runs core login with Eluna disabled")
+	replayGUID := flag.Uint64("replay-guid", 0, "character GUID for an in-process login replay; 0 selects the first real character")
+	replayTrace := flag.String("trace-out", "", "optional JSONL path for the in-process login trace")
 	flag.Parse()
 	if *selfCheck {
 		if err := runSelfCheck(); err != nil {
 			fail(err.Error())
 		}
 		fmt.Println("login loading-order self-check passed")
+		return
+	}
+	if *replayWork != "" {
+		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayTrace); err != nil {
+			fail(err.Error())
+		}
 		return
 	}
 	if *tracePath == "" {
@@ -106,16 +123,23 @@ func runSelfCheck() error {
 	if err := rejectPreVerifyAchievementPackets(goodAchievement, 0); err != nil {
 		return fmt.Errorf("post-verify achievement packet was rejected: %w", err)
 	}
+	loginPayload := protocol.NewBuffer(8)
+	loginPayload.WriteU64(1)
+	loginEvent := protocoltrace.Event{Direction: protocoltrace.ClientToServer, Opcode: login, Payload: base64.StdEncoding.EncodeToString(loginPayload.Bytes())}
+	playerCreateEvent, err := loginCreateFixture(false, 0)
+	if err != nil {
+		return fmt.Errorf("login create fixture build failed: %w", err)
+	}
 	loginOrderStages := []loginStage{{"difficulty", exact(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY)}, {"verify", exact(protocol.OpcodeSMSG_LOGIN_VERIFY_WORLD)}, {"contact", exact(protocol.OpcodeSMSG_CONTACT_LIST)}, {"player create update", exact(protocol.OpcodeSMSG_UPDATE_OBJECT)}, {"world states", exact(protocol.OpcodeSMSG_INIT_WORLD_STATES)}}
-	validLoginOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY)}, {Direction: protocoltrace.ServerToClient, Opcode: verify}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_CONTACT_LIST)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}}}
+	validLoginOrder := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY)}, {Direction: protocoltrace.ServerToClient, Opcode: verify}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_CONTACT_LIST)}, playerCreateEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}}}
 	if _, err := findOrderedLoginStages(validLoginOrder, 0, loginOrderStages); err != nil {
 		return fmt.Errorf("valid login stage order was rejected: %w", err)
 	}
-	badEarlyLoginOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_CONTACT_LIST)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY)}, {Direction: protocoltrace.ServerToClient, Opcode: verify}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_CONTACT_LIST)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}}}
+	badEarlyLoginOrder := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_CONTACT_LIST)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY)}, {Direction: protocoltrace.ServerToClient, Opcode: verify}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_CONTACT_LIST)}, playerCreateEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}}}
 	if _, err := findOrderedLoginStages(badEarlyLoginOrder, 0, loginOrderStages); err == nil {
 		return fmt.Errorf("out-of-order pre-map login packet was not rejected")
 	}
-	badEarlyWorldStates := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY)}, {Direction: protocoltrace.ServerToClient, Opcode: verify}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_CONTACT_LIST)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}}}
+	badEarlyWorldStates := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY)}, {Direction: protocoltrace.ServerToClient, Opcode: verify}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_CONTACT_LIST)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}, playerCreateEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}}}
 	if _, err := findOrderedLoginStages(badEarlyWorldStates, 0, loginOrderStages); err == nil {
 		return fmt.Errorf("post-map world state sent before player create was not rejected")
 	}
@@ -123,8 +147,11 @@ func runSelfCheck() error {
 	if err := checkLoginMovementOrder(validMovement, 0); err != nil {
 		return fmt.Errorf("valid movement ordering was rejected: %w", err)
 	}
-	guildOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOTD)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_EVENT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_BANK_LIST)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_ROSTER)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}}}
-	if err := checkPreMapGuildLoginOrder(guildOrder, 0, 6); err != nil {
+	guildEventTrace := func(eventType uint8) protocoltrace.Event {
+		return protocoltrace.Event{Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_EVENT), Payload: base64.StdEncoding.EncodeToString([]byte{eventType})}
+	}
+	guildOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOTD)}, guildEventTrace(2), {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_BANK_LIST)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_ROSTER)}, guildEventTrace(12), {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}}}
+	if err := checkPreMapGuildLoginOrder(guildOrder, 0, 7); err != nil {
 		return fmt.Errorf("valid pre-map guild ordering was rejected: %w", err)
 	}
 	runeOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_SET_FORCED_REACTIONS)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_RESYNC_RUNES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}}}
@@ -147,9 +174,36 @@ func runSelfCheck() error {
 	if err := checkPostMapLoginOrder(badDurationOrder, 0, 1); err == nil {
 		return fmt.Errorf("reversed post-map duration ordering was not rejected")
 	}
-	badGuildOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOTD)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_ROSTER)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_EVENT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}}}
+	badGuildOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOTD)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_ROSTER)}, guildEventTrace(2), {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}}}
 	if err := checkPreMapGuildLoginOrder(badGuildOrder, 0, 5); err == nil {
 		return fmt.Errorf("out-of-order pre-map guild packets were not rejected")
+	}
+	for _, test := range []struct {
+		current, want   uint16
+		inventory       uint32
+		required, count uint32
+		added           bool
+	}{{2, 3, 0, 3, 2, true}, {2, 1, 0, 3, 1, false}, {3, 1, 2, 3, 1, false}, {3, 0, 0, 3, 1, false}, {3, 3, 0, 3, 1, true}} {
+		if actual := world.QuestItemCountAfterDelta(test.current, test.inventory, test.required, test.count, test.added); actual != test.want {
+			return fmt.Errorf("quest item count transition was %d, want %d", actual, test.want)
+		}
+	}
+	if err := checkCreateMovementParser(); err != nil {
+		return err
+	}
+	power := uint32(777)
+	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: 0x106}
+	spellGoTrace := func(spellID uint32) protocoltrace.Event {
+		payload := protocol.BuildSpellGoWithPower(0x106, 0x106, 0, spellID, 0x901, 123, []uint64{0x106}, nil, target, &power)
+		return protocoltrace.Event{Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_SPELL_GO), Payload: base64.StdEncoding.EncodeToString(payload)}
+	}
+	postMapTrace := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, playerCreateEvent, spellGoTrace(57940), {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, spellGoTrace(836), {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE)}}}
+	if err := checkPostMapLoginOrder(postMapTrace, 0, 1); err != nil {
+		return fmt.Errorf("zone spell before world states was rejected: %w", err)
+	}
+	lateMovementTrace := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK)}}}
+	if err := checkLoginMovementOrder(lateMovementTrace, 0); err != nil {
+		return fmt.Errorf("late ghost movement state was rejected: %w", err)
 	}
 	validCinematicOrder := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: verify}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_SET_FORCED_REACTIONS)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_RESYNC_RUNES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TRIGGER_CINEMATIC)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_UPDATE_OBJECT)}}}
 	if err := checkInitialCinematicOrder(validCinematicOrder, 0, 1, 2, 5); err != nil {
@@ -243,7 +297,7 @@ func runSelfCheck() error {
 			if err != nil {
 				return fmt.Errorf("login create fixture build failed: %w", err)
 			}
-			if err := requireCreateBlock(event); err != nil {
+			if err := requireCreateBlock(event, 1); err != nil {
 				return fmt.Errorf("login create fixture rejected: %w", err)
 			}
 		}
@@ -840,7 +894,7 @@ func loginVerifyFixture() []byte {
 func loginTimeSpeedFixture() []byte {
 	buf := protocol.NewBuffer(12)
 	buf.WriteU32(0)
-	buf.WriteF32(0.5)
+	buf.WriteF32(float32(0.01666667 * 30))
 	buf.WriteU32(0)
 	return buf.Bytes()
 }
@@ -1098,7 +1152,7 @@ func loginCreateFixture(compressed bool, victimGUID uint64) (protocoltrace.Event
 		player.WritePackedGUID(victimGUID)
 	}
 	mask := make([]uint32, 42)
-	values := map[int]uint32{0: 1, 2: 0x19, 4: math.Float32bits(1), 23: 0x01020304, 24: 100, 32: 100, 54: 10, 59: 8, 67: 123, 68: 123, 283: 1234, 284: 5678}
+	values := map[int]uint32{0: 1, 2: 0x19, 4: math.Float32bits(1), 23: 0x01020304, 24: 100, 32: 100, 54: 10, 59: 8, 67: 123, 68: 123}
 	for field := range values {
 		mask[field/32] |= 1 << uint(field%32)
 	}
@@ -1139,19 +1193,38 @@ func findOrderedLoginStages(trace protocoltrace.Trace, start int, stages []login
 	if start < 0 || start >= len(trace.Events) {
 		return nil, fmt.Errorf("login start index %d is out of range", start)
 	}
+	playerGUID := uint64(0)
+	for _, stage := range stages {
+		if stage.Name == "player create update" {
+			var err error
+			playerGUID, err = loginPlayerGUID(trace.Events[start])
+			if err != nil {
+				return nil, err
+			}
+			break
+		}
+	}
 	positions := make([]int, len(stages))
 	position := start
 	for stageIndex, stage := range stages {
 		for index := start + 1; index < position; index++ {
 			event := trace.Events[index]
-			if event.Direction == protocoltrace.ServerToClient && stage.Match(event.Opcode) {
+			matched, err := loginStageMatches(stage, event, playerGUID)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", stage.Name, err)
+			}
+			if event.Direction == protocoltrace.ServerToClient && matched {
 				return nil, fmt.Errorf("%s appeared before an earlier login stage", stage.Name)
 			}
 		}
 		found := -1
 		for index := position + 1; index < len(trace.Events); index++ {
 			event := trace.Events[index]
-			if event.Direction == protocoltrace.ServerToClient && stage.Match(event.Opcode) {
+			matched, err := loginStageMatches(stage, event, playerGUID)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", stage.Name, err)
+			}
+			if event.Direction == protocoltrace.ServerToClient && matched {
 				found = index
 				break
 			}
@@ -1168,11 +1241,38 @@ func findOrderedLoginStages(trace protocoltrace.Trace, start int, stages []login
 	return positions, nil
 }
 
+func loginStageMatches(stage loginStage, event protocoltrace.Event, playerGUID uint64) (bool, error) {
+	if stage.Name != "player create update" {
+		return stage.Match(event.Opcode), nil
+	}
+	if event.Opcode != uint32(protocol.OpcodeSMSG_UPDATE_OBJECT) && event.Opcode != uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		return false, nil
+	}
+	return containsPlayerCreate(event, playerGUID)
+}
+
+func loginPlayerGUID(event protocoltrace.Event) (uint64, error) {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return 0, err
+	}
+	reader := protocol.NewReader(payload)
+	guid, err := reader.ReadU64()
+	if err != nil || guid == 0 {
+		return 0, fmt.Errorf("CMSG_PLAYER_LOGIN has an invalid GUID")
+	}
+	return guid, nil
+}
+
 func checkLogin(trace protocoltrace.Trace, start int) error {
 	if err := rejectPreVerifyAchievementPackets(trace, start); err != nil {
 		return err
 	}
 	if err := checkLoginMovementOrder(trace, start); err != nil {
+		return err
+	}
+	playerGUID, err := loginPlayerGUID(trace.Events[start])
+	if err != nil {
 		return err
 	}
 	stages := []loginStage{
@@ -1199,7 +1299,6 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 		}},
 		{"SMSG_INIT_WORLD_STATES", exact(protocol.OpcodeSMSG_INIT_WORLD_STATES)},
 		{"SMSG_TIME_SYNC_REQ", exact(protocol.OpcodeSMSG_TIME_SYNC_REQ)},
-		{"SMSG_SPELL_GO", exact(protocol.OpcodeSMSG_SPELL_GO)},
 	}
 	verifyIndex := -1
 	forcedReactionsIndex := -1
@@ -1211,7 +1310,7 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 	for stageIndex, stage := range stages {
 		found := positions[stageIndex]
 		if stage.Name == "player create update" {
-			if err := requireCreateBlock(trace.Events[found]); err != nil {
+			if err := requireCreateBlock(trace.Events[found], playerGUID); err != nil {
 				return err
 			}
 			playerCreateIndex = found
@@ -1262,8 +1361,6 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 			validate = requireInitWorldStates
 		case "SMSG_TIME_SYNC_REQ":
 			validate = requireTimeSyncRequest
-		case "SMSG_SPELL_GO":
-			validate = requireLoginEffect
 		}
 		if validate != nil {
 			if err := validate(trace.Events[found]); err != nil {
@@ -1358,6 +1455,10 @@ func checkOptionalPreMapRuneOrder(trace protocoltrace.Trace, start, playerCreate
 }
 
 func checkPreMapGuildLoginOrder(trace protocoltrace.Trace, start, playerCreateIndex int) error {
+	const (
+		guildEventMOTD     uint8 = 2
+		guildEventSignedOn uint8 = 12
+	)
 	end := playerCreateIndex
 	if end < 0 || end >= len(trace.Events) {
 		end = len(trace.Events)
@@ -1384,7 +1485,21 @@ func checkPreMapGuildLoginOrder(trace protocoltrace.Trace, start, playerCreateIn
 		stage := -1
 		switch event.Opcode {
 		case uint32(protocol.OpcodeSMSG_GUILD_EVENT):
-			stage = 0
+			payload, err := eventPayload(event)
+			if err != nil {
+				return err
+			}
+			if len(payload) == 0 {
+				return fmt.Errorf("guild event payload is empty")
+			}
+			switch payload[0] {
+			case guildEventMOTD:
+				stage = 0
+			case guildEventSignedOn:
+				stage = 3
+			default:
+				continue
+			}
 		case uint32(protocol.OpcodeSMSG_GUILD_BANK_LIST):
 			stage = 1
 		case uint32(protocol.OpcodeSMSG_GUILD_ROSTER):
@@ -1410,7 +1525,6 @@ func checkPostMapLoginOrder(trace protocoltrace.Trace, start, playerCreateIndex 
 	order := map[uint32]int{
 		uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES):          0,
 		uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ):              1,
-		uint32(protocol.OpcodeSMSG_SPELL_GO):                   2,
 		uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL):            3,
 		uint32(protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE):   4,
 		uint32(protocol.OpcodeSMSG_ITEM_TIME_UPDATE):           5,
@@ -1432,6 +1546,16 @@ func checkPostMapLoginOrder(trace protocoltrace.Trace, start, playerCreateIndex 
 			continue
 		}
 		stage, ok := order[event.Opcode]
+		if event.Opcode == uint32(protocol.OpcodeSMSG_SPELL_GO) {
+			spellID, err := spellGoSpellID(event)
+			if err != nil {
+				return fmt.Errorf("SMSG_SPELL_GO: %w", err)
+			}
+			if spellID != 836 {
+				continue
+			}
+			stage, ok = 2, true
+		}
 		if !ok {
 			continue
 		}
@@ -1445,6 +1569,24 @@ func checkPostMapLoginOrder(trace protocoltrace.Trace, start, playerCreateIndex 
 		last = stage
 	}
 	return nil
+}
+
+func spellGoSpellID(event protocoltrace.Event) (uint32, error) {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return 0, err
+	}
+	reader := protocol.NewReader(payload)
+	if _, err := reader.ReadPackedGUID(); err != nil {
+		return 0, err
+	}
+	if _, err := reader.ReadPackedGUID(); err != nil {
+		return 0, err
+	}
+	if _, err := reader.ReadU8(); err != nil {
+		return 0, err
+	}
+	return reader.ReadU32()
 }
 
 func checkOptionalLoginPayloads(trace protocoltrace.Trace, start int) error {
@@ -1716,7 +1858,7 @@ func requireLoginTimeSpeed(event protocoltrace.Event) error {
 	if err != nil {
 		return fmt.Errorf("login holiday offset is truncated: %w", err)
 	}
-	if speed != 0.5 || holiday != 0 || reader.Remaining() != 0 {
+	if speed != float32(0.01666667*30) || holiday != 0 || reader.Remaining() != 0 {
 		return fmt.Errorf("invalid login time-speed payload speed=%v holiday=%d remaining=%d", speed, holiday, reader.Remaining())
 	}
 	return nil
@@ -2717,6 +2859,9 @@ func checkLoginMovementOrder(trace protocoltrace.Trace, start int) error {
 		if event.Direction != protocoltrace.ServerToClient {
 			continue
 		}
+		if event.Opcode == uint32(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE) {
+			break
+		}
 		if event.Opcode == uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ) {
 			timeSyncSeen = true
 			continue
@@ -2751,119 +2896,153 @@ func exact(opcode protocol.Opcode) func(uint32) bool {
 	return func(value uint32) bool { return value == uint32(opcode) }
 }
 
-func requireCreateBlock(event protocoltrace.Event) error {
-	payload, err := eventPayload(event)
+func requireCreateBlock(event protocoltrace.Event, playerGUID uint64) error {
+	found, err := inspectPlayerCreate(event, playerGUID, true)
 	if err != nil {
 		return err
+	}
+	if !found {
+		return fmt.Errorf("self player create block not found")
+	}
+	return nil
+}
+
+func containsPlayerCreate(event protocoltrace.Event, playerGUID uint64) (bool, error) {
+	return inspectPlayerCreate(event, playerGUID, false)
+}
+
+func inspectPlayerCreate(event protocoltrace.Event, playerGUID uint64, strict bool) (bool, error) {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return false, err
 	}
 	if event.Opcode == uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
 		payload, err = protocol.DecompressUpdatePayload(payload)
 		if err != nil {
-			return fmt.Errorf("compressed player update decode failed: %w", err)
+			return false, fmt.Errorf("compressed player update decode failed: %w", err)
 		}
 	}
 	reader := protocol.NewReader(payload)
 	count, err := reader.ReadU32()
 	if err != nil || count == 0 {
-		return fmt.Errorf("player update has no blocks")
+		return false, fmt.Errorf("player update has no blocks")
 	}
 	playerFound := false
 	for index := uint32(0); index < count; index++ {
 		kind, err := reader.ReadU8()
 		if err != nil {
-			return fmt.Errorf("player update block %d is truncated: %w", index, err)
+			if strict || playerFound {
+				return playerFound, fmt.Errorf("player update block %d is truncated: %w", index, err)
+			}
+			return false, nil
 		}
 		switch kind {
 		case protocol.UpdateOutOfRangeObjects:
 			outOfRange, err := reader.ReadU32()
 			if err != nil {
-				return fmt.Errorf("out-of-range update is truncated: %w", err)
+				if strict || playerFound {
+					return playerFound, fmt.Errorf("out-of-range update is truncated: %w", err)
+				}
+				return false, nil
 			}
 			for guidIndex := uint32(0); guidIndex < outOfRange; guidIndex++ {
 				if _, err := reader.ReadPackedGUID(); err != nil {
-					return fmt.Errorf("out-of-range GUID is truncated: %w", err)
+					if strict || playerFound {
+						return playerFound, fmt.Errorf("out-of-range GUID is truncated: %w", err)
+					}
+					return false, nil
 				}
 			}
 		case protocol.UpdateCreateObject, protocol.UpdateCreateObject2:
-			typeID, err := parseCreateObjectBlock(reader)
+			guid, typeID, err := parseCreateObjectBlock(reader, playerGUID)
 			if err != nil {
-				return fmt.Errorf("create block %d: %w", index, err)
-			}
-			if typeID == 1 || typeID == 2 {
-				if playerFound {
-					return fmt.Errorf("item/container create block %d arrived after self-player create", index)
+				if guid == playerGUID && typeID == 4 || strict || playerFound {
+					return playerFound || guid == playerGUID && typeID == 4, fmt.Errorf("create block %d: %w", index, err)
 				}
+				return false, nil
 			}
-			if typeID == 4 {
+			if (typeID == 1 || typeID == 2) && playerFound {
+				return true, fmt.Errorf("item/container create block %d arrived after self-player create", index)
+			}
+			if typeID == 4 && guid == playerGUID {
 				if playerFound {
-					return fmt.Errorf("duplicate self-player create block %d", index)
-
+					return true, fmt.Errorf("duplicate self-player create block %d", index)
 				}
 				playerFound = true
 			}
 		case protocol.UpdateValues:
 			if err := skipValuesUpdate(reader); err != nil {
-				return fmt.Errorf("values block %d: %w", index, err)
+				if strict || playerFound {
+					return playerFound, fmt.Errorf("values block %d: %w", index, err)
+				}
+				return false, nil
 			}
 		case protocol.UpdateMovement:
 			if err := skipMovementUpdate(reader); err != nil {
-				return fmt.Errorf("movement block %d: %w", index, err)
+				if strict || playerFound {
+					return playerFound, fmt.Errorf("movement block %d: %w", index, err)
+				}
+				return false, nil
 			}
 		default:
-			return fmt.Errorf("unsupported update block kind=%d", kind)
+			if strict || playerFound {
+				return playerFound, fmt.Errorf("unsupported update block kind=%d", kind)
+			}
+			return false, nil
 		}
 	}
-	if !playerFound {
-		return fmt.Errorf("player create block not found")
+	if strict && !playerFound {
+		return false, fmt.Errorf("self player create block not found")
 	}
-	return nil
+	return playerFound, nil
 }
 
-func parseCreateObjectBlock(reader *protocol.Buffer) (uint8, error) {
-	if _, err := reader.ReadPackedGUID(); err != nil {
-		return 0, fmt.Errorf("create GUID is truncated: %w", err)
+func parseCreateObjectBlock(reader *protocol.Buffer, playerGUID uint64) (uint64, uint8, error) {
+	guid, err := reader.ReadPackedGUID()
+	if err != nil {
+		return 0, 0, fmt.Errorf("create GUID is truncated: %w", err)
 	}
 	typeID, err := reader.ReadU8()
 	if err != nil {
-		return 0, fmt.Errorf("create type is truncated: %w", err)
+		return guid, 0, fmt.Errorf("create type is truncated: %w", err)
 	}
 	flags, err := reader.ReadU16()
 	if err != nil {
-		return 0, fmt.Errorf("create movement flags are truncated: %w", err)
+		return guid, typeID, fmt.Errorf("create movement flags are truncated: %w", err)
 	}
 	if err := skipCreateMovement(reader, flags); err != nil {
-		return 0, err
+		return guid, typeID, err
 	}
 	mask, values, err := readUpdateValues(reader)
 	if err != nil {
-		return 0, err
+		return guid, typeID, err
 	}
-	if typeID != 4 {
-		return typeID, nil
+	if typeID != 4 || guid != playerGUID {
+		return guid, typeID, nil
 	}
 	if flags != 0x0061 && flags != 0x0065 {
-		return 0, fmt.Errorf("player create flags=0x%X, want 0x61 or 0x65", flags)
+		return guid, typeID, fmt.Errorf("player create flags=0x%X, want 0x61 or 0x65", flags)
 	}
 	if len(mask) != 42 {
-		return 0, fmt.Errorf("player update mask blocks=%d, want 42", len(mask))
+		return guid, typeID, fmt.Errorf("player update mask blocks=%d, want 42", len(mask))
 	}
 	for field := 1326; field < len(mask)*32; field++ {
 		if updateMaskHas(mask, field) {
-			return 0, fmt.Errorf("player update mask sets out-of-range field %d", field)
+			return guid, typeID, fmt.Errorf("player update mask sets out-of-range field %d", field)
 		}
 	}
-	for _, field := range []int{0, 2, 4, 23, 24, 32, 54, 59, 67, 68, 283, 284} {
+	for _, field := range []int{0, 2, 4, 23, 24, 32, 54, 59, 67, 68} {
 		if !updateMaskHas(mask, field) {
-			return 0, fmt.Errorf("player update mask omits required field %d", field)
+			return guid, typeID, fmt.Errorf("player update mask omits required field %d", field)
 		}
 	}
-	if values[2] != 0x19 || values[23] == 0 || values[54] == 0 || values[67] == 0 || values[68] == 0 || values[24] == 0 || values[32] == 0 || values[283] == 0 || values[284] == 0 {
-		return 0, fmt.Errorf("player create required field values are invalid")
+	if values[2] != 0x19 || values[23] == 0 || values[54] == 0 || values[67] == 0 || values[68] == 0 || values[24] == 0 || values[32] == 0 {
+		return guid, typeID, fmt.Errorf("player create required field values are invalid")
 	}
 	if values[59]&0x00000008 == 0 {
-		return 0, fmt.Errorf("player create omits UNIT_FLAG_PLAYER_CONTROLLED")
+		return guid, typeID, fmt.Errorf("player create omits UNIT_FLAG_PLAYER_CONTROLLED")
 	}
-	return typeID, nil
+	return guid, typeID, nil
 }
 
 func skipCreateMovement(reader *protocol.Buffer, flags uint16) error {
@@ -2980,7 +3159,7 @@ func skipLivingMovement(reader *protocol.Buffer) error {
 		if _, err := reader.ReadPackedGUID(); err != nil {
 			return fmt.Errorf("player transport GUID is truncated: %w", err)
 		}
-		if _, err := reader.Read(17); err != nil {
+		if _, err := reader.Read(21); err != nil {
 			return fmt.Errorf("player transport offsets are truncated: %w", err)
 		}
 		if extraFlags&0x1 != 0 {
@@ -3010,6 +3189,123 @@ func skipLivingMovement(reader *protocol.Buffer) error {
 	if _, err := reader.Read(36); err != nil {
 		return fmt.Errorf("player movement speeds are truncated: %w", err)
 	}
+	if movementFlags&0x08000000 != 0 {
+		if err := skipCreateSpline(reader); err != nil {
+			return fmt.Errorf("player create spline is truncated: %w", err)
+		}
+	}
+	return nil
+}
+
+func skipCreateSpline(reader *protocol.Buffer) error {
+	flags, err := reader.ReadU32()
+	if err != nil {
+		return err
+	}
+	if flags&0x00020000 != 0 {
+		if _, err := reader.ReadF32(); err != nil {
+			return err
+		}
+	} else if flags&0x00010000 != 0 {
+		if _, err := reader.ReadPackedGUID(); err != nil {
+			return err
+		}
+	} else if flags&0x00008000 != 0 {
+		if _, err := reader.Read(12); err != nil {
+			return err
+		}
+	}
+	if _, err := reader.Read(28); err != nil {
+		return err
+	}
+	nodes, err := reader.ReadU32()
+	if err != nil {
+		return err
+	}
+	if uint64(nodes)*12 > uint64(reader.Remaining()) {
+		return fmt.Errorf("spline node count %d exceeds remaining bytes", nodes)
+	}
+	if _, err := reader.Read(int(nodes) * 12); err != nil {
+		return err
+	}
+	if _, err := reader.ReadU8(); err != nil {
+		return err
+	}
+	if _, err := reader.Read(12); err != nil {
+		return err
+	}
+	return nil
+}
+
+func checkCreateMovementParser() error {
+	for _, test := range []struct {
+		transport   bool
+		spline      bool
+		splineFlags uint32
+	}{{false, false, 0}, {true, false, 0}, {false, true, 0x00008000}, {true, true, 0}} {
+		payload := protocol.NewBuffer(256)
+		var movementFlags uint32
+		if test.transport {
+			movementFlags |= 0x200
+		}
+		if test.spline {
+			movementFlags |= 0x08000000
+		}
+		extraFlags := uint16(0)
+		if test.transport {
+			extraFlags = 1
+		}
+		payload.WriteU32(movementFlags)
+		payload.WriteU16(extraFlags)
+		payload.WriteU32(1)
+		for i := 0; i < 4; i++ {
+			payload.WriteF32(0)
+		}
+		if test.transport {
+			payload.WritePackedGUID(0x2000000000000001)
+			for i := 0; i < 4; i++ {
+				payload.WriteF32(0)
+			}
+			payload.WriteU32(2)
+			payload.WriteI8(0)
+			payload.WriteU32(3)
+		}
+		payload.WriteU32(0)
+		for i := 0; i < 9; i++ {
+			payload.WriteF32(1)
+		}
+		if test.spline {
+			payload.WriteU32(test.splineFlags)
+			if test.splineFlags&0x00020000 != 0 {
+				payload.WriteF32(0)
+			} else if test.splineFlags&0x00010000 != 0 {
+				payload.WritePackedGUID(0x106)
+			} else if test.splineFlags&0x00008000 != 0 {
+				payload.WriteF32(0)
+				payload.WriteF32(0)
+				payload.WriteF32(0)
+			}
+			payload.WriteU32(1)
+			payload.WriteU32(2)
+			payload.WriteU32(3)
+			payload.WriteF32(1)
+			payload.WriteF32(1)
+			payload.WriteF32(0)
+			payload.WriteU32(0)
+			payload.WriteU32(2)
+			for i := 0; i < 6; i++ {
+				payload.WriteF32(0)
+			}
+			payload.WriteU8(0)
+			for i := 0; i < 3; i++ {
+				payload.WriteF32(0)
+			}
+		}
+		reader := protocol.NewReader(payload.Bytes())
+		if err := skipLivingMovement(reader); err != nil || reader.Remaining() != 0 {
+			return fmt.Errorf("create movement transport=%t spline=%t remaining=%d: %v", test.transport, test.spline, reader.Remaining(), err)
+		}
+	}
 	return nil
 }
 
@@ -3021,6 +3317,212 @@ func updateMaskHas(mask []uint32, field int) bool {
 
 func eventPayload(event protocoltrace.Event) ([]byte, error) {
 	return protocoltrace.Trace{Events: []protocoltrace.Event{event}}.Payload(event)
+}
+
+func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string) error {
+	workDir, err := filepath.Abs(workDir)
+	if err != nil {
+		return err
+	}
+	for _, name := range []string{"auth.db", "characters.db", "world.db"} {
+		if _, err := os.Stat(filepath.Join(workDir, name)); err != nil {
+			return fmt.Errorf("replay work directory is missing %s: %w", name, err)
+		}
+	}
+	root, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	cfg := config.Default()
+	cfg.Backend = string(database.BackendSQLite)
+	cfg.LuaEnabled = false
+	cfg.DataDir = workDir
+	cfg.AuthDatabaseFile, cfg.CharactersDatabaseFile, cfg.WorldDatabaseFile = filepath.Join(workDir, "auth.db"), filepath.Join(workDir, "characters.db"), filepath.Join(workDir, "world.db")
+	cfg.SchemaDir, cfg.GameDataDir = filepath.Join(root, "sql"), filepath.Join(root, "data")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stores, err := database.OpenSet(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer stores.Close()
+	if guid == 0 {
+		var selectedGUID int64
+		if err := stores.Characters.DB.QueryRowContext(ctx, "SELECT guid FROM characters ORDER BY guid LIMIT 1").Scan(&selectedGUID); err != nil || selectedGUID <= 0 {
+			var characterCount int64
+			_ = stores.Characters.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM characters WHERE guid > 0").Scan(&characterCount)
+			return fmt.Errorf("replay database contains no usable real character rows (count=%d)", characterCount)
+		}
+		guid = uint64(selectedGUID)
+	}
+	server := world.NewServer(stores, slog.New(slog.NewTextHandler(io.Discard, nil)), cfg.RealmID, cfg)
+	if err := server.Initialize(ctx); err != nil {
+		server.Stop()
+		return err
+	}
+	before, err := snapshotCharacterState(stores.Characters.DB, guid)
+	if err != nil {
+		server.Stop()
+		return err
+	}
+	trace, replayErr := world.ReplayCharacterLogin(ctx, server, guid)
+	cancel()
+	server.Stop()
+	after, snapshotErr := snapshotCharacterState(stores.Characters.DB, guid)
+	if tracePath == "" {
+		tracePath = filepath.Join(workDir, "login-replay.jsonl")
+	} else if !filepath.IsAbs(tracePath) {
+		tracePath = filepath.Join(root, tracePath)
+	}
+	file, err := os.Create(tracePath)
+	if err != nil {
+		return err
+	}
+	writeErr := trace.Write(file)
+	closeErr := file.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if replayErr != nil {
+		return fmt.Errorf("real-character login replay failed (trace saved): %w", replayErr)
+	}
+	if snapshotErr != nil {
+		return snapshotErr
+	}
+	beforeCharacter, beforeFound := before["characters"]
+	afterCharacter, afterFound := after["characters"]
+	if !beforeFound || !afterFound || beforeCharacter.Rows != 1 || afterCharacter.Rows != 1 {
+		return fmt.Errorf("real-character login replay changed character-row presence before=%t after=%t", beforeFound && beforeCharacter.Rows == 1, afterFound && afterCharacter.Rows == 1)
+	}
+	if err := checkLogin(trace, 0); err != nil {
+		return fmt.Errorf("real-character login packet replay failed: %w", err)
+	}
+	changed := make([]string, 0)
+	for table, beforeSnapshot := range before {
+		afterSnapshot, exists := after[table]
+		if !exists {
+			changed = append(changed, table+"(missing)")
+			continue
+		}
+		if afterSnapshot.Digest != beforeSnapshot.Digest {
+			changed = append(changed, fmt.Sprintf("%s(rows=%d->%d;fields=%s)", table, beforeSnapshot.Rows, afterSnapshot.Rows, strings.Join(changedCharacterColumns(beforeSnapshot, afterSnapshot), "+")))
+		}
+	}
+	for table := range after {
+		if _, existed := before[table]; !existed {
+			changed = append(changed, table+"(new)")
+		}
+	}
+	sort.Strings(changed)
+	fmt.Printf("real-character login replay passed lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
+	return nil
+}
+
+type characterTableSnapshot struct {
+	Rows    int
+	Digest  string
+	Columns map[string]string
+}
+
+func changedCharacterColumns(before, after characterTableSnapshot) []string {
+	changed := make([]string, 0)
+	for column, digest := range before.Columns {
+		if after.Columns[column] != digest {
+			changed = append(changed, column)
+		}
+	}
+	for column := range after.Columns {
+		if _, exists := before.Columns[column]; !exists {
+			changed = append(changed, column)
+		}
+	}
+	sort.Strings(changed)
+	return changed
+}
+
+func snapshotCharacterState(db *sql.DB, guid uint64) (map[string]characterTableSnapshot, error) {
+	queries := []struct{ name, sql string }{
+		{"characters", "SELECT * FROM characters WHERE guid = ?"},
+		{"character_inventory", "SELECT * FROM character_inventory WHERE guid = ?"},
+		{"inventory_item_instances", "SELECT ii.* FROM item_instance ii JOIN character_inventory ci ON ci.item = ii.guid WHERE ci.guid = ?"},
+		{"character_spell", "SELECT * FROM character_spell WHERE guid = ?"},
+		{"character_spell_cooldown", "SELECT * FROM character_spell_cooldown WHERE guid = ?"},
+		{"character_skills", "SELECT * FROM character_skills WHERE guid = ?"},
+		{"character_reputation", "SELECT * FROM character_reputation WHERE guid = ?"},
+		{"character_queststatus", "SELECT * FROM character_queststatus WHERE guid = ?"},
+		{"character_queststatus_rewarded", "SELECT * FROM character_queststatus_rewarded WHERE guid = ?"},
+		{"character_queststatus_daily", "SELECT * FROM character_queststatus_daily WHERE guid = ?"},
+		{"character_queststatus_weekly", "SELECT * FROM character_queststatus_weekly WHERE guid = ?"},
+		{"character_queststatus_monthly", "SELECT * FROM character_queststatus_monthly WHERE guid = ?"},
+		{"character_queststatus_seasonal", "SELECT * FROM character_queststatus_seasonal WHERE guid = ?"},
+		{"character_aura", "SELECT * FROM character_aura WHERE guid = ?"},
+		{"character_talent", "SELECT * FROM character_talent WHERE guid = ?"},
+		{"character_glyphs", "SELECT * FROM character_glyphs WHERE guid = ?"},
+		{"character_homebind", "SELECT * FROM character_homebind WHERE guid = ?"},
+		{"character_instance", "SELECT * FROM character_instance WHERE guid = ?"},
+		{"character_battleground_data", "SELECT * FROM character_battleground_data WHERE guid = ?"},
+		{"character_equipmentsets", "SELECT * FROM character_equipmentsets WHERE guid = ?"},
+		{"guild_member", "SELECT * FROM guild_member WHERE guid = ?"},
+		{"group_member", "SELECT * FROM group_member WHERE memberGuid = ?"},
+		{"received_mail", "SELECT * FROM mail WHERE receiver = ?"},
+		{"received_mail_items", "SELECT mi.* FROM mail_items mi JOIN mail m ON m.id = mi.mail_id WHERE m.receiver = ?"},
+	}
+	result := make(map[string]characterTableSnapshot, len(queries))
+	for _, query := range queries {
+		rows, err := db.Query(query.sql, guid)
+		if err != nil {
+			return nil, fmt.Errorf("snapshot %s: %w", query.name, err)
+		}
+		columns, err := rows.Columns()
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rowHashes := make([]string, 0)
+		columnValues := make([][]string, len(columns))
+		for rows.Next() {
+			values := make([]any, len(columns))
+			targets := make([]any, len(columns))
+			for index := range values {
+				targets[index] = &values[index]
+			}
+			if err := rows.Scan(targets...); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			var encoded strings.Builder
+			for index, value := range values {
+				var columnValue strings.Builder
+				if data, ok := value.([]byte); ok {
+					fmt.Fprintf(&columnValue, "bytes:%x", data)
+				} else {
+					fmt.Fprintf(&columnValue, "%T:%v", value, value)
+				}
+				columnValues[index] = append(columnValues[index], columnValue.String())
+				fmt.Fprintf(&encoded, "%d:%s\x00", columnValue.Len(), columnValue.String())
+			}
+			hash := sha256.Sum256([]byte(encoded.String()))
+			rowHashes = append(rowHashes, hex.EncodeToString(hash[:]))
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+		sort.Strings(rowHashes)
+		digest := sha256.Sum256([]byte(strings.Join(rowHashes, "\n")))
+		columnDigests := make(map[string]string, len(columns))
+		for index, column := range columns {
+			sort.Strings(columnValues[index])
+			columnDigest := sha256.Sum256([]byte(strings.Join(columnValues[index], "\n")))
+			columnDigests[column] = hex.EncodeToString(columnDigest[:])
+		}
+		result[query.name] = characterTableSnapshot{Rows: len(rowHashes), Digest: hex.EncodeToString(digest[:]), Columns: columnDigests}
+	}
+	return result, nil
 }
 
 func fail(message string) {

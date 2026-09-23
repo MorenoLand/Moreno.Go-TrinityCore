@@ -832,14 +832,15 @@ func (s *session) removeZoneLimitedItemsFromState(ctx context.Context, state *pl
 	if s == nil || state == nil || state.Health == 0 || state.PlayerFlags&playerFlagGhost != 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return false
 	}
-	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.item FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item JOIN item_template AS it ON it.entry = ii.itemEntry WHERE ci.guid = ? AND ((COALESCE(it.Map, 0) <> 0 AND it.Map <> ?) OR (COALESCE(it.area, 0) <> 0 AND it.area <> ?))`, state.GUID, state.Map, state.Zone)
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.item, ii.itemEntry, ii.count FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item JOIN item_template AS it ON it.entry = ii.itemEntry WHERE ci.guid = ? AND ((COALESCE(it.Map, 0) <> 0 AND it.Map <> ?) OR (COALESCE(it.area, 0) <> 0 AND it.area <> ?))`, state.GUID, state.Map, state.Zone)
 	if err != nil {
 		return false
 	}
-	items := make([]uint64, 0)
+	type zoneLimitedItem struct{ guid, entry, count uint64 }
+	items := make([]zoneLimitedItem, 0)
 	for rows.Next() {
-		var item uint64
-		if rows.Scan(&item) == nil && item != 0 {
+		var item zoneLimitedItem
+		if rows.Scan(&item.guid, &item.entry, &item.count) == nil && item.guid != 0 && item.entry != 0 && item.count != 0 {
 			items = append(items, item)
 		}
 	}
@@ -848,8 +849,9 @@ func (s *session) removeZoneLimitedItemsFromState(ctx context.Context, state *pl
 		return false
 	}
 	for _, item := range items {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", state.GUID, item)
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", item)
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", state.GUID, item.guid)
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", item.guid)
+		s.adjustQuestItemCountForState(ctx, state, uint32(item.entry), uint32(item.count), false, false)
 	}
 	return true
 }
@@ -1625,7 +1627,7 @@ func (s *session) updateOfflineRealtimeItemDurations(ctx context.Context, state 
 		return nil
 	}
 	elapsedMs := elapsed * 1000
-	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.item, ii.itemEntry, COALESCE(ii.duration, 0)
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.item, ii.itemEntry, COALESCE(ii.duration, 0), ii.count
 		FROM character_inventory AS ci
 		JOIN item_instance AS ii ON ii.guid = ci.item
 		WHERE ci.guid = ? AND ii.duration > 0`, state.GUID)
@@ -1635,11 +1637,11 @@ func (s *session) updateOfflineRealtimeItemDurations(ctx context.Context, state 
 		}
 		return err
 	}
-	type realtimeItem struct{ guid, entry, duration int64 }
+	type realtimeItem struct{ guid, entry, duration, count int64 }
 	items := make([]realtimeItem, 0)
 	for rows.Next() {
 		var item realtimeItem
-		if rows.Scan(&item.guid, &item.entry, &item.duration) == nil {
+		if rows.Scan(&item.guid, &item.entry, &item.duration, &item.count) == nil {
 			var flags int64
 			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(flagsCustom, 0) FROM item_template WHERE entry = ?", item.entry).Scan(&flags); err == nil && uint32(flags)&itemFlagsCustomRealTimeDuration != 0 {
 				items = append(items, item)
@@ -1659,6 +1661,7 @@ func (s *session) updateOfflineRealtimeItemDurations(ctx context.Context, state 
 			if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", item.guid); err != nil {
 				return err
 			}
+			s.adjustQuestItemCountForState(ctx, state, uint32(item.entry), uint32(item.count), false, false)
 			continue
 		}
 		if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE item_instance SET duration = ? WHERE guid = ?", item.duration-elapsedMs, item.guid); err != nil {
