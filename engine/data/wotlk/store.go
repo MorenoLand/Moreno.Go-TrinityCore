@@ -22,13 +22,16 @@ type Store struct {
 	taxi     *taxiNetwork
 	taxiErr  error
 
-	slaOnce    sync.Once
-	slaMap     map[uint32][]SkillLineAbilityEntry
-	slaBySkill map[uint32][]SkillLineAbilityEntry
-	slaErr     error
-	srciOnce   sync.Once
-	srciMap    map[uint32][]SkillRaceClassInfoEntry
-	srciErr    error
+	slaOnce          sync.Once
+	slaMap           map[uint32][]SkillLineAbilityEntry
+	slaBySkill       map[uint32][]SkillLineAbilityEntry
+	slaErr           error
+	srciOnce         sync.Once
+	srciMap          map[uint32][]SkillRaceClassInfoEntry
+	srciErr          error
+	liquidAuraOnce   sync.Once
+	liquidAuraSpells map[uint32]struct{}
+	liquidAuraErr    error
 }
 
 func CalculateCollisionHeight(mounted bool, objectScale, mountHeight, modelScale, collisionHeight, displayScale float32) float32 {
@@ -108,6 +111,7 @@ type Spell struct {
 	Mechanic              uint32 // Spell.dbc field 3 = Mechanic (DBCStructure.h:1395)
 	Attributes            uint32
 	SpellFamilyName       uint32
+	SpellFamilyFlags      [3]uint32
 	AttributesEx          uint32 // Spell.dbc field 5 = AttributesEx (DBCStructure.h:1397)
 	AttributesEx1         uint32 // Spell.dbc field 6 = AttributesExB (DBCStructure.h:1398)
 	AttributesEx3         uint32 // Spell.dbc field 7 = AttributesExC (DBCStructure.h:1399)
@@ -250,6 +254,40 @@ const (
 
 func NewStore(dir string) *Store {
 	return &Store{Dir: dir, files: make(map[string]*dbc.File)}
+}
+
+func (s *Store) IsLiquidAuraSpell(spellID uint32) (bool, error) {
+	if s == nil || spellID == 0 {
+		return false, nil
+	}
+	s.liquidAuraOnce.Do(func() {
+		file, err := s.File("LiquidType")
+		if err != nil {
+			s.liquidAuraErr = err
+			return
+		}
+		s.liquidAuraSpells = make(map[uint32]struct{})
+		for index := 0; index < file.Records(); index++ {
+			record, recordErr := file.Record(index)
+			if recordErr != nil {
+				s.liquidAuraErr = recordErr
+				return
+			}
+			id, fieldErr := record.Uint32(5)
+			if fieldErr != nil {
+				s.liquidAuraErr = fieldErr
+				return
+			}
+			if id != 0 {
+				s.liquidAuraSpells[id] = struct{}{}
+			}
+		}
+	})
+	if s.liquidAuraErr != nil {
+		return false, s.liquidAuraErr
+	}
+	_, ok := s.liquidAuraSpells[spellID]
+	return ok, nil
 }
 
 func (s *Store) File(name string) (*dbc.File, error) {
@@ -643,6 +681,9 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{3, &spell.Mechanic},   // Spell.dbc field 3 = Mechanic (DBCStructure.h:1395)
 		{4, &spell.Attributes},
 		{208, &spell.SpellFamilyName},
+		{209, &spell.SpellFamilyFlags[0]},
+		{210, &spell.SpellFamilyFlags[1]},
+		{211, &spell.SpellFamilyFlags[2]},
 		{225, &spell.SchoolMask}, // Spell.dbc field 225 = SchoolMask (DBCStructure.h:1492)
 		{16, &spell.Targets},
 		{19, &spell.FacingCasterFlags}, // Spell.dbc field 19 = FacingCasterFlags (DBCStructure.h:1409)

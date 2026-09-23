@@ -41,34 +41,34 @@ const (
 	itemSubclassArmorBuckler = 5
 	itemSubclassArmorShield  = 6
 
-	spellEffectEnergize                  = 30
-	spellEffectPowerBurn                 = 62
-	spellEffectThreat                    = 63
-	spellEffectTriggerSpell              = 64
-	spellEffectHealMaxHealth             = 67
-	spellAuraMounted                     = 78
-	spellAuraConfuse                     = 5
-	spellAuraCharm                       = 6
-	spellAuraFear                        = 7
-	spellAuraStun                        = 12
-	spellAuraRoot                        = 26
-	spellAuraStealth                     = 16
-	spellAuraInvisibility                = 18
-	spellAuraStealthDetect               = 17
-	spellAuraInvisibilityDetect          = 19
-	spellAuraStealthLevel                = 154
-	spellAuraTrackStealthed              = 151
-	spellAuraConvertRune                 = 249
-	spellAuraDamagePercentDone            = 79
-	spellAuraAttackPowerPercent           = 166
-	spellAuraRangedAttackPowerPercent     = 167
-	spellAuraCastingSpeedNotStack         = 65
-	spellAuraHasteSpells                  = 216
-	spellAuraFakeInebriation             = 304
-	unitStandFlagCreep                   = 0x02
-	playerAuraVisionStealth              = 0x20
-	playerAuraVisionInvis                = 0x40
-	playerFieldByteTrackStealthed uint32 = 0x00000002
+	spellEffectEnergize                      = 30
+	spellEffectPowerBurn                     = 62
+	spellEffectThreat                        = 63
+	spellEffectTriggerSpell                  = 64
+	spellEffectHealMaxHealth                 = 67
+	spellAuraMounted                         = 78
+	spellAuraConfuse                         = 5
+	spellAuraCharm                           = 6
+	spellAuraFear                            = 7
+	spellAuraStun                            = 12
+	spellAuraRoot                            = 26
+	spellAuraStealth                         = 16
+	spellAuraInvisibility                    = 18
+	spellAuraStealthDetect                   = 17
+	spellAuraInvisibilityDetect              = 19
+	spellAuraStealthLevel                    = 154
+	spellAuraTrackStealthed                  = 151
+	spellAuraConvertRune                     = 249
+	spellAuraDamagePercentDone               = 79
+	spellAuraAttackPowerPercent              = 166
+	spellAuraRangedAttackPowerPercent        = 167
+	spellAuraCastingSpeedNotStack            = 65
+	spellAuraHasteSpells                     = 216
+	spellAuraFakeInebriation                 = 304
+	unitStandFlagCreep                       = 0x02
+	playerAuraVisionStealth                  = 0x20
+	playerAuraVisionInvis                    = 0x40
+	playerFieldByteTrackStealthed     uint32 = 0x00000002
 )
 
 // isSelfCastOnly checks if all active spell effects target the caster unit.
@@ -1813,10 +1813,12 @@ type activeAura struct {
 	DurationMs         uint32
 	PeriodMs           uint32
 	RemainingMs        uint32
+	DurationUpdatedAt  time.Time
 	Slot               uint8
 	Positive           bool
 	CasterLevel        uint8
 	StackCount         uint8
+	SingleTarget       bool
 	RemainingCharges   uint8
 	StackAmount        uint32
 	HideDuration       bool
@@ -2263,6 +2265,8 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 		MiscValue:          miscValue,
 		DurationMs:         durationMs,
 		RemainingMs:        durationMs,
+		DurationUpdatedAt:  time.Now(),
+		SingleTarget:       isSingleTargetAuraSpellID(s.server.Data, spellID),
 		Slot:               slot,
 		Positive:           positive,
 		AuraInterruptFlags: auraInterruptFlags,
@@ -2589,9 +2593,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			DurationMs:         durationMs,
 			PeriodMs:           periodMs,
 			RemainingMs:        durationMs,
+			DurationUpdatedAt:  time.Now(),
 			Slot:               slot,
 			Positive:           positive,
 			CasterLevel:        s.player.Level,
+			SingleTarget:       isSingleTargetAuraSpell(spell),
 			AuraInterruptFlags: spell.AuraInterruptFlags,
 			TriggerSpell:       eff.TriggerSpell,
 			DRGroup:            drGroup,
@@ -2723,26 +2729,28 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	}
 	slot := uint8(len(s.server.activeCreatureAuras[targetGUID]) % 64)
 	aura := &activeAura{
-		SpellID:          spell.ID,
-		DispelType:       spell.DispelType,
-		Mechanic:         spell.Mechanic,
-		AuraType:         eff.Aura,
-		EffectMask:       spellEffectMask(spell, eff),
-		CasterGUID:       s.playerGUID,
-		TargetGUID:       targetGUID,
-		SchoolMask:       schoolMask,
-		MiscValue:        eff.MiscValue,
-		Amount:           amount,
-		DurationMs:       durationMs,
-		PeriodMs:         periodMs,
-		RemainingMs:      durationMs,
-		Slot:             slot,
-		Positive:         positive,
-		CasterLevel:      s.player.Level,
-		TriggerSpell:     eff.TriggerSpell,
-		StackAmount:      spell.StackAmount,
-		HideDuration:     spell.AttributesEx5&spellAttr5HideDuration != 0,
-		RemainingCharges: uint8(spell.ProcCharges),
+		SpellID:           spell.ID,
+		DispelType:        spell.DispelType,
+		Mechanic:          spell.Mechanic,
+		AuraType:          eff.Aura,
+		EffectMask:        spellEffectMask(spell, eff),
+		CasterGUID:        s.playerGUID,
+		TargetGUID:        targetGUID,
+		SchoolMask:        schoolMask,
+		MiscValue:         eff.MiscValue,
+		Amount:            amount,
+		DurationMs:        durationMs,
+		PeriodMs:          periodMs,
+		RemainingMs:       durationMs,
+		DurationUpdatedAt: time.Now(),
+		Slot:              slot,
+		Positive:          positive,
+		CasterLevel:       s.player.Level,
+		SingleTarget:      isSingleTargetAuraSpell(spell),
+		TriggerSpell:      eff.TriggerSpell,
+		StackAmount:       spell.StackAmount,
+		HideDuration:      spell.AttributesEx5&spellAttr5HideDuration != 0,
+		RemainingCharges:  uint8(spell.ProcCharges),
 	}
 	s.server.activeCreatureAuras[targetGUID][spell.ID] = aura
 	s.server.auraMu.Unlock()
@@ -2801,11 +2809,7 @@ func (ts *session) schedulePlayerPeriodicTickLocked(aura *activeAura, periodMs u
 			ts.castMu.Unlock()
 			return
 		}
-		if aura.RemainingMs >= periodMs {
-			aura.RemainingMs -= periodMs
-		} else {
-			aura.RemainingMs = 0
-		}
+		advanceAuraDuration(aura, time.Now())
 		stillRunning := aura.RemainingMs > 0 || aura.DurationMs == 0
 		ts.castMu.Unlock()
 
@@ -2964,11 +2968,7 @@ func (s *session) scheduleCreaturePeriodicTickLocked(aura *activeAura, periodMs 
 			s.server.auraMu.Unlock()
 			return
 		}
-		if aura.RemainingMs >= periodMs {
-			aura.RemainingMs -= periodMs
-		} else {
-			aura.RemainingMs = 0
-		}
+		advanceAuraDuration(aura, time.Now())
 		stillRunning := aura.RemainingMs > 0 || aura.DurationMs == 0
 		s.server.auraMu.Unlock()
 

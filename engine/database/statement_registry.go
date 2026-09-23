@@ -146,3 +146,14 @@ func (s *Store) ExecStatement(ctx context.Context, id StatementID, args ...any) 
 	s.recordDatabaseResult("exec", string(id), len(args), result, execErr)
 	return result, execErr
 }
+
+func (s *Store) ExecStatementTx(ctx context.Context, tx *sql.Tx, id StatementID, args ...any) (sql.Result, error) {
+	query, err := StatementSQL(id, s.Backend)
+	if err != nil {
+		s.recordDatabaseEvent("exec", string(id), len(args), err)
+		return nil, err
+	}
+	result, execErr := tx.ExecContext(ctx, query, args...)
+	s.recordDatabaseResult("exec", string(id), len(args), result, execErr)
+	return result, execErr
+}

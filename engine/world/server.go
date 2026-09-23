@@ -3371,7 +3371,6 @@ func (s *session) debug(message string, args ...any) {
 func (s *session) logout() {
 	ctx := context.Background()
 	s.stopSpellLifecycle()
-	s.clearActiveAuras()
 	s.stopTimedAchievements()
 	if s.trade != nil {
 		s.handleCancelTrade(ctx)
@@ -3396,6 +3395,7 @@ func (s *session) logout() {
 			s.server.broadcastFriendStatus(s.playerGUID, friendsResultOffline, 0, 0, 0)
 		}
 	}
+	s.clearActiveAuras()
 	if s.accountID != 0 && !s.superseded {
 		_, _ = s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET online = 0 WHERE id = ?", s.accountID)
 	}
