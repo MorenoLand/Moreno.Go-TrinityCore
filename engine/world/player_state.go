@@ -915,6 +915,7 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 	seenItems := make(map[int64]struct{})
 	rootBags := make(map[int64]int64)
 	rootBagData := make(map[int64]itemQueryData)
+	rootBagSlots := make(map[int64]int64)
 	mailItems := make([]inventoryRecord, 0)
 	equipped := make(map[int64]itemQueryData)
 	equippedItemCounts := make(map[uint32]int64)
@@ -1214,11 +1215,33 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 				s.debug("bank bag rejected during login", "guid", state.GUID, "item", record.item, "entry", record.entry, "slot", record.slot, "reason", "bank bag slot or item requirements")
 				continue
 			}
+			if record.slot < inventorySlotBagEnd {
+				if !s.canUseItemData(ctx, state, record.data) {
+					mailItems = append(mailItems, record)
+					invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
+					continue
+				}
+				if record.data.Class == itemClassQuiver {
+					quiverConflict := false
+					for bagItem, bagData := range rootBagData {
+						if rootBagSlots[bagItem] >= 19 && rootBagSlots[bagItem] < inventorySlotBagEnd && bagData.Class == itemClassQuiver {
+							quiverConflict = true
+							break
+						}
+					}
+					if quiverConflict {
+						mailItems = append(mailItems, record)
+						invalid = append(invalid, invalidInventoryRow{record: record, mail: true})
+						continue
+					}
+				}
+			}
 			if record.containerSlots > 36 {
 				record.containerSlots = 36
 			}
 			rootBags[record.item] = record.containerSlots
 			rootBagData[record.item] = record.data
+			rootBagSlots[record.item] = record.slot
 		}
 		inventoryItemCounts[item.Entry] += record.count
 		if item.ItemLimitCategory != 0 {

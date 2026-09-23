@@ -16,9 +16,12 @@ import (
 
 const (
 	itemFlagUniqueEquippable uint32 = 0x00080000
+	itemClassQuiver          uint32 = 11
 	defaultMaxPlayerLevel    uint32 = 80
 	itemBagFamilyKeys        uint32 = 0x00000100
 	itemBagFamilyCurrency    uint32 = 0x00002000
+	itemSubClassPolearm      uint32 = 6
+	itemSubClassStaff        uint32 = 10
 )
 
 func playerHasSpell(state *playerState, spellID uint32) bool {
@@ -130,7 +133,10 @@ func itemFitsEquipmentSlot(state *playerState, equipped map[int64]itemQueryData,
 			if item.InventoryType == 17 && (!dualWield || !titanGrip) {
 				return false
 			}
-			if mainHand, ok := equipped[15]; ok && mainHand.InventoryType == 17 {
+			if item.InventoryType == 17 && (item.SubClass == itemSubClassPolearm || item.SubClass == itemSubClassStaff) {
+				return false
+			}
+			if mainHand, ok := equipped[15]; ok && mainHand.InventoryType == 17 && !titanGrip {
 				return false
 			}
 		}
