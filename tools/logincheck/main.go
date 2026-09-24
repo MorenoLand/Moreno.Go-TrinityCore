@@ -1505,7 +1505,7 @@ func sourceGemSocketEnchantActive(socketColor uint32, prismatic wotlk.SpellItemE
 	return socketColor != 0 || found && (prismatic.RequiredSkillID == 0 || skillValue >= prismatic.RequiredSkillRank)
 }
 
-func validateCharacterStatsSpellPower(ctx context.Context, charactersDB, worldDB *sql.DB, data *wotlk.Store, guid uint64) error {
+func validateCharacterStatsSpellPower(ctx context.Context, charactersDB, worldDB *sql.DB, data *wotlk.Store, guid uint64, trace protocoltrace.Trace) error {
 	var level uint32
 	if err := charactersDB.QueryRowContext(ctx, "SELECT level FROM characters WHERE guid = ?", guid).Scan(&level); err != nil {
 		return fmt.Errorf("read character level for spell-power parity: %w", err)
@@ -1663,12 +1663,66 @@ func validateCharacterStatsSpellPower(ctx context.Context, charactersDB, worldDB
 		return err
 	}
 	rows.Close()
-	var saved uint32
-	if err := charactersDB.QueryRowContext(ctx, "SELECT spellPower FROM character_stats WHERE guid = ?", guid).Scan(&saved); err != nil {
-		return fmt.Errorf("read saved character spell power: %w", err)
+	var maxHealth uint32
+	var maxPowers [7]uint32
+	var stats [5]uint32
+	var resistances [7]uint32
+	var blockPct, dodgePct, parryPct, critPct, rangedCritPct, spellCritPct float32
+	var attackPower, rangedAttackPower, savedSpellPower, resilience uint32
+	if err := charactersDB.QueryRowContext(ctx, `SELECT maxhealth, maxpower1, maxpower2, maxpower3, maxpower4, maxpower5, maxpower6, maxpower7,
+		strength, agility, stamina, intellect, spirit, armor, resHoly, resFire, resNature, resFrost, resShadow, resArcane,
+		blockPct, dodgePct, parryPct, critPct, rangedCritPct, spellCritPct, attackPower, rangedAttackPower, spellPower, resilience
+		FROM character_stats WHERE guid = ?`, guid).Scan(&maxHealth, &maxPowers[0], &maxPowers[1], &maxPowers[2], &maxPowers[3], &maxPowers[4], &maxPowers[5], &maxPowers[6], &stats[0], &stats[1], &stats[2], &stats[3], &stats[4], &resistances[0], &resistances[1], &resistances[2], &resistances[3], &resistances[4], &resistances[5], &resistances[6], &blockPct, &dodgePct, &parryPct, &critPct, &rangedCritPct, &spellCritPct, &attackPower, &rangedAttackPower, &savedSpellPower, &resilience); err != nil {
+		return fmt.Errorf("read saved character stats: %w", err)
 	}
-	if saved != expected {
-		return fmt.Errorf("character_stats spellPower=%d, equipped calculation=%d", saved, expected)
+	if savedSpellPower != expected {
+		return fmt.Errorf("character_stats spellPower=%d, equipped calculation=%d", savedSpellPower, expected)
+	}
+	playerFields, err := selfPlayerCreateFields(trace, guid)
+	if err != nil {
+		return fmt.Errorf("read player create fields for character stats comparison: %w", err)
+	}
+	compareField := func(field int, column string, value uint32) error {
+		if playerFields[field] != value {
+			return fmt.Errorf("character_stats.%s=%d differs from player create field %d=%d", column, value, field, playerFields[field])
+		}
+		return nil
+	}
+	if err := compareField(32, "maxhealth", maxHealth); err != nil {
+		return err
+	}
+	for index, value := range maxPowers {
+		if err := compareField(33+index, fmt.Sprintf("maxpower%d", index+1), value); err != nil {
+			return err
+		}
+	}
+	for index, value := range stats {
+		if err := compareField(84+index, []string{"strength", "agility", "stamina", "intellect", "spirit"}[index], value); err != nil {
+			return err
+		}
+	}
+	for index, value := range resistances {
+		if err := compareField(99+index, []string{"armor", "resHoly", "resFire", "resNature", "resFrost", "resShadow", "resArcane"}[index], value); err != nil {
+			return err
+		}
+	}
+	for _, value := range []struct {
+		field  int
+		column string
+		value  float32
+	}{{1024, "blockPct", blockPct}, {1025, "dodgePct", dodgePct}, {1026, "parryPct", parryPct}, {1029, "critPct", critPct}, {1030, "rangedCritPct", rangedCritPct}, {1032, "spellCritPct", spellCritPct}} {
+		if err := compareField(value.field, value.column, math.Float32bits(value.value)); err != nil {
+			return err
+		}
+	}
+	for _, value := range []struct {
+		field  int
+		column string
+		value  uint32
+	}{{123, "attackPower", attackPower}, {126, "rangedAttackPower", rangedAttackPower}, {1247, "resilience", resilience}} {
+		if err := compareField(value.field, value.column, value.value); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -4130,6 +4184,66 @@ func parseCreateObjectBlock(reader *protocol.Buffer, playerGUID uint64) (uint64,
 	return guid, typeID, values, nil
 }
 
+func selfPlayerCreateFields(trace protocoltrace.Trace, playerGUID uint64) (map[int]uint32, error) {
+	for _, event := range trace.Events {
+		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_UPDATE_OBJECT) && event.Opcode != uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+			continue
+		}
+		payload, err := eventPayload(event)
+		if err != nil {
+			return nil, err
+		}
+		if event.Opcode == uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+			payload, err = protocol.DecompressUpdatePayload(payload)
+			if err != nil {
+				return nil, err
+			}
+		}
+		reader := protocol.NewReader(payload)
+		count, err := reader.ReadU32()
+		if err != nil {
+			return nil, fmt.Errorf("update-object block count: %w", err)
+		}
+		for block := uint32(0); block < count; block++ {
+			kind, err := reader.ReadU8()
+			if err != nil {
+				return nil, err
+			}
+			switch kind {
+			case protocol.UpdateOutOfRangeObjects:
+				outOfRange, err := reader.ReadU32()
+				if err != nil {
+					return nil, err
+				}
+				for index := uint32(0); index < outOfRange; index++ {
+					if _, err := reader.ReadPackedGUID(); err != nil {
+						return nil, err
+					}
+				}
+			case protocol.UpdateCreateObject, protocol.UpdateCreateObject2:
+				guid, typeID, fields, err := parseCreateObjectBlock(reader, playerGUID)
+				if err != nil {
+					return nil, err
+				}
+				if guid == playerGUID && typeID == 4 {
+					return fields, nil
+				}
+			case protocol.UpdateValues:
+				if err := skipValuesUpdate(reader); err != nil {
+					return nil, err
+				}
+			case protocol.UpdateMovement:
+				if err := skipMovementUpdate(reader); err != nil {
+					return nil, err
+				}
+			default:
+				return nil, fmt.Errorf("unsupported update block kind=%d while extracting player stat fields", kind)
+			}
+		}
+	}
+	return nil, fmt.Errorf("self player create fields not found")
+}
+
 func skipCreateMovement(reader *protocol.Buffer, flags uint16) error {
 	if flags&0x20 != 0 {
 		if err := skipLivingMovement(reader); err != nil {
@@ -4540,7 +4654,7 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 		if statsRows != 1 {
 			return fmt.Errorf("character_stats rows after qualified logout=%d, want 1", statsRows)
 		}
-		if err := validateCharacterStatsSpellPower(context.Background(), stores.Characters.DB, stores.World.DB, server.Data, guid); err != nil {
+		if err := validateCharacterStatsSpellPower(context.Background(), stores.Characters.DB, stores.World.DB, server.Data, guid, trace); err != nil {
 			return err
 		}
 	}
