@@ -1690,6 +1690,17 @@ func validateCharacterStatsSpellPower(ctx context.Context, charactersDB, worldDB
 	if err != nil {
 		return fmt.Errorf("read player create fields for character stats comparison: %w", err)
 	}
+	var race, class, gender, savedLevel int64
+	if err := charactersDB.QueryRowContext(ctx, `SELECT race, class, gender, level FROM characters WHERE guid = ?`, guid).Scan(&race, &class, &gender, &savedLevel); err != nil {
+		return fmt.Errorf("read saved character identity: %w", err)
+	}
+	identity := playerFields[23]
+	if int64(uint8(identity)) != race || int64(uint8(identity>>8)) != class || int64(uint8(identity>>16)) != gender {
+		return fmt.Errorf("player create identity bytes race/class/gender=%d/%d/%d, saved character=%d/%d/%d", uint8(identity), uint8(identity>>8), uint8(identity>>16), race, class, gender)
+	}
+	if int64(playerFields[54]) != savedLevel {
+		return fmt.Errorf("player create level=%d, saved character level=%d", playerFields[54], savedLevel)
+	}
 	compareField := func(field int, column string, value uint32) error {
 		if playerFields[field] != value {
 			return fmt.Errorf("character_stats.%s=%d differs from player create field %d=%d", column, value, field, playerFields[field])
