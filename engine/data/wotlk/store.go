@@ -1334,9 +1334,16 @@ type GemPropertiesEntry struct {
 }
 
 type SpellItemEnchantmentEntry struct {
-	ID         uint32
-	ItemVisual uint32
-	SrcItemID  uint32
+	ID                uint32
+	Effects           [3]uint32
+	EffectPointsMin   [3]uint32
+	EffectArg         [3]uint32
+	ItemVisual        uint32
+	SrcItemID         uint32
+	ConditionID       uint32
+	RequiredSkillID   uint32
+	RequiredSkillRank uint32
+	MinLevel          uint32
 }
 
 type ItemLimitCategoryEntry struct {
@@ -1354,15 +1361,37 @@ func (s *Store) SpellItemEnchantment(id uint32) (SpellItemEnchantmentEntry, bool
 	if !ok {
 		return SpellItemEnchantmentEntry{}, false, nil
 	}
-	visual, err := record.Uint32(31)
-	if err != nil {
+	entry := SpellItemEnchantmentEntry{ID: id}
+	for index := range entry.Effects {
+		if entry.Effects[index], err = record.Uint32(2 + index); err != nil {
+			return SpellItemEnchantmentEntry{}, false, err
+		}
+		if entry.EffectPointsMin[index], err = record.Uint32(5 + index); err != nil {
+			return SpellItemEnchantmentEntry{}, false, err
+		}
+		if entry.EffectArg[index], err = record.Uint32(11 + index); err != nil {
+			return SpellItemEnchantmentEntry{}, false, err
+		}
+	}
+	if entry.ItemVisual, err = record.Uint32(31); err != nil {
 		return SpellItemEnchantmentEntry{}, false, err
 	}
-	sourceItem, err := record.Uint32(33)
-	if err != nil {
+	if entry.SrcItemID, err = record.Uint32(33); err != nil {
 		return SpellItemEnchantmentEntry{}, false, err
 	}
-	return SpellItemEnchantmentEntry{ID: id, ItemVisual: visual, SrcItemID: sourceItem}, true, nil
+	if entry.ConditionID, err = record.Uint32(34); err != nil {
+		return SpellItemEnchantmentEntry{}, false, err
+	}
+	if entry.RequiredSkillID, err = record.Uint32(35); err != nil {
+		return SpellItemEnchantmentEntry{}, false, err
+	}
+	if entry.RequiredSkillRank, err = record.Uint32(36); err != nil {
+		return SpellItemEnchantmentEntry{}, false, err
+	}
+	if entry.MinLevel, err = record.Uint32(37); err != nil {
+		return SpellItemEnchantmentEntry{}, false, err
+	}
+	return entry, true, nil
 }
 
 func (s *Store) ItemLimitCategory(id uint32) (ItemLimitCategoryEntry, bool, error) {

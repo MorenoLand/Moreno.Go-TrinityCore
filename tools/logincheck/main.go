@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -108,6 +109,9 @@ func main() {
 
 func runSelfCheck() error {
 	if err := checkPlayerStatsConfig(); err != nil {
+		return err
+	}
+	if err := checkSpellPowerEnchantmentDBC(); err != nil {
 		return err
 	}
 	if world.PlayerCreateUpdateFlags(false, false) != 0x0060 || world.PlayerCreateUpdateFlags(true, false) != 0x0061 || world.PlayerCreateUpdateFlags(false, true) != 0x0064 {
@@ -1273,6 +1277,146 @@ func checkPlayerStatsConfig() error {
 	}
 	if config.PlayerSaveStatsMinLevel != 0 || !config.PlayerSaveStatsSaveOnlyOnLogout {
 		return fmt.Errorf("default PlayerSave.Stats config min_level=%d save_only_on_logout=%t, want 0/true", config.PlayerSaveStatsMinLevel, config.PlayerSaveStatsSaveOnlyOnLogout)
+	}
+	return nil
+}
+
+func checkSpellPowerEnchantmentDBC() error {
+	data := wotlk.NewStore(filepath.Join(config.Default().GameDataDir, "dbc"))
+	file, err := data.File("SpellItemEnchantment")
+	if err != nil {
+		return fmt.Errorf("load SpellItemEnchantment.dbc: %w", err)
+	}
+	for index := 0; index < file.Records(); index++ {
+		record, err := file.Record(index)
+		if err != nil {
+			return err
+		}
+		id, err := record.Uint32(0)
+		if err != nil {
+			return err
+		}
+		entry, found, err := data.SpellItemEnchantment(id)
+		if err != nil {
+			return err
+		}
+		if !found || entry.ConditionID != 0 || entry.RequiredSkillID != 0 || entry.MinLevel > 80 {
+			continue
+		}
+		var want uint32
+		for effectIndex, effect := range entry.Effects {
+			if effect != 5 || entry.EffectArg[effectIndex] != 45 || entry.EffectPointsMin[effectIndex] == 0 {
+				continue
+			}
+			want += entry.EffectPointsMin[effectIndex]
+		}
+		if want == 0 {
+			continue
+		}
+		if amount := world.ResolveEquippedSpellPowerEnchant(entry, 80, 0, false); amount != want {
+			return fmt.Errorf("SpellItemEnchantment.dbc id=%d spell-power amount=%d, want %d", id, amount, want)
+		}
+		if amount := world.ResolveEquippedSpellPowerEnchant(entry, 80, 0, true); amount != 0 {
+			return fmt.Errorf("broken item retained spell-power enchant id=%d amount=%d", id, amount)
+		}
+		return nil
+	}
+	return fmt.Errorf("SpellItemEnchantment.dbc contains no unconditioned, unskilled spell-power stat effect")
+}
+
+func validateCharacterStatsSpellPower(ctx context.Context, charactersDB, worldDB *sql.DB, data *wotlk.Store, guid uint64) error {
+	var level uint32
+	if err := charactersDB.QueryRowContext(ctx, "SELECT level FROM characters WHERE guid = ?", guid).Scan(&level); err != nil {
+		return fmt.Errorf("read character level for spell-power parity: %w", err)
+	}
+	skillValues := make(map[uint32]uint32)
+	skillRows, err := charactersDB.QueryContext(ctx, "SELECT skill, value FROM character_skills WHERE guid = ?", guid)
+	if err != nil {
+		return fmt.Errorf("read character skills for spell-power parity: %w", err)
+	}
+	for skillRows.Next() {
+		var skill, value uint32
+		if err := skillRows.Scan(&skill, &value); err != nil {
+			skillRows.Close()
+			return err
+		}
+		skillValues[skill] = value
+	}
+	if err := skillRows.Err(); err != nil {
+		skillRows.Close()
+		return err
+	}
+	skillRows.Close()
+	rows, err := charactersDB.QueryContext(ctx, `SELECT ii.itemEntry, COALESCE(ii.enchantments, ''), COALESCE(ii.durability, 0)
+		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot < 19`, guid)
+	if err != nil {
+		return fmt.Errorf("read equipped items for spell-power parity: %w", err)
+	}
+	template, err := worldDB.PrepareContext(ctx, `SELECT stat_type1, stat_value1, stat_type2, stat_value2,
+		stat_type3, stat_value3, stat_type4, stat_value4, stat_type5, stat_value5,
+		stat_type6, stat_value6, stat_type7, stat_value7, stat_type8, stat_value8,
+		stat_type9, stat_value9, stat_type10, stat_value10, MaxDurability FROM item_template WHERE entry = ?`)
+	if err != nil {
+		rows.Close()
+		return fmt.Errorf("prepare world item stats for spell-power parity: %w", err)
+	}
+	defer template.Close()
+	var expected uint32
+	for rows.Next() {
+		var itemEntry uint32
+		var enchantments string
+		var durability uint32
+		if err := rows.Scan(&itemEntry, &enchantments, &durability); err != nil {
+			rows.Close()
+			return err
+		}
+		var statTypes, statValues [10]int64
+		var maxDurability uint32
+		err := template.QueryRowContext(ctx, itemEntry).Scan(&statTypes[0], &statValues[0], &statTypes[1], &statValues[1], &statTypes[2], &statValues[2], &statTypes[3], &statValues[3], &statTypes[4], &statValues[4], &statTypes[5], &statValues[5], &statTypes[6], &statValues[6], &statTypes[7], &statValues[7], &statTypes[8], &statValues[8], &statTypes[9], &statValues[9], &maxDurability)
+		if err == sql.ErrNoRows {
+			continue
+		}
+		if err != nil {
+			rows.Close()
+			return err
+		}
+		for index := range statTypes {
+			if statTypes[index] == 45 {
+				expected += uint32(statValues[index])
+			}
+		}
+		broken := maxDurability > 0 && durability == 0
+		fields := strings.Fields(enchantments)
+		for _, fieldIndex := range []int{0, 3} {
+			if fieldIndex >= len(fields) {
+				continue
+			}
+			enchantID, err := strconv.ParseUint(fields[fieldIndex], 10, 32)
+			if err != nil || enchantID == 0 {
+				continue
+			}
+			entry, found, err := data.SpellItemEnchantment(uint32(enchantID))
+			if err != nil {
+				rows.Close()
+				return err
+			}
+			if found {
+				expected += world.ResolveEquippedSpellPowerEnchant(entry, level, skillValues[entry.RequiredSkillID], broken)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	var saved uint32
+	if err := charactersDB.QueryRowContext(ctx, "SELECT spellPower FROM character_stats WHERE guid = ?", guid).Scan(&saved); err != nil {
+		return fmt.Errorf("read saved character spell power: %w", err)
+	}
+	if saved != expected {
+		return fmt.Errorf("character_stats spellPower=%d, equipped calculation=%d", saved, expected)
 	}
 	return nil
 }
@@ -4143,6 +4287,9 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 		}
 		if statsRows != 1 {
 			return fmt.Errorf("character_stats rows after qualified logout=%d, want 1", statsRows)
+		}
+		if err := validateCharacterStatsSpellPower(context.Background(), stores.Characters.DB, stores.World.DB, server.Data, guid); err != nil {
+			return err
 		}
 	}
 	beforeCharacter, beforeFound := before["characters"]

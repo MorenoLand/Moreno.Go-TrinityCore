@@ -1913,142 +1913,131 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	}
 
 	// 2. Iterate equipped items (slots 0..18)
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.slot, it.armor, it.block, it.delay, it.dmg_min1, it.dmg_max1,
-			it.stat_type1, it.stat_value1, it.stat_type2, it.stat_value2, it.stat_type3, it.stat_value3, it.stat_type4, it.stat_value4,
-			it.stat_type5, it.stat_value5, it.stat_type6, it.stat_value6, it.stat_type7, it.stat_value7, it.stat_type8, it.stat_value8,
-			it.stat_type9, it.stat_value9, it.stat_type10, it.stat_value10
-			FROM character_inventory AS ci
-			JOIN item_instance AS ii ON ii.guid = ci.item
-			JOIN item_template AS it ON it.entry = ii.itemEntry
-			WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot < 19`, state.GUID)
-		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var slot, armor, block, delay int64
-				var minDmg, maxDmg float64
-				var st [10]int64
-				var sv [10]int64
-				if scanErr := rows.Scan(&slot, &armor, &block, &delay, &minDmg, &maxDmg,
-					&st[0], &sv[0], &st[1], &sv[1], &st[2], &sv[2], &st[3], &sv[3],
-					&st[4], &sv[4], &st[5], &sv[5], &st[6], &sv[6], &st[7], &sv[7],
-					&st[8], &sv[8], &st[9], &sv[9]); scanErr != nil {
-					continue
-				}
-				if armor > 0 {
-					state.Armor += uint32(armor)
-				}
-				if block > 0 {
-					state.Block += uint32(block)
-				}
-				// Weapon slots: 15 = Main Hand, 16 = Off Hand, 17 = Ranged
-				if slot == 15 {
-					if minDmg > 0 {
-						state.MinDamage = float32(minDmg)
-					}
-					if maxDmg > 0 {
-						state.MaxDamage = float32(maxDmg)
-					}
-					if delay > 0 {
-						state.AttackTime = uint32(delay)
-					}
-				} else if slot == 16 {
-					if minDmg > 0 {
-						state.MinOffhandDamage = float32(minDmg)
-					}
-					if maxDmg > 0 {
-						state.MaxOffhandDamage = float32(maxDmg)
-					}
-					if delay > 0 {
-						state.OffhandAttackTime = uint32(delay)
-					}
-				} else if slot == 17 {
-					if minDmg > 0 {
-						state.MinRangedDamage = float32(minDmg)
-					}
-					if maxDmg > 0 {
-						state.MaxRangedDamage = float32(maxDmg)
-					}
-					if delay > 0 {
-						state.RangedAttackTime = uint32(delay)
-					}
-				}
-				// Stats
-				for k := 0; k < 10; k++ {
-					val := sv[k]
-					if val == 0 {
-						continue
-					}
-					switch st[k] {
-					case 3: // Agility
-						state.Stats[1] += uint32(val)
-					case 4: // Strength
-						state.Stats[0] += uint32(val)
-					case 5: // Intellect
-						state.Stats[3] += uint32(val)
-					case 6: // Spirit
-						state.Stats[4] += uint32(val)
-					case 7: // Stamina
-						state.Stats[2] += uint32(val)
-					case 12: // Defense rating
-						state.CombatRatings[CombatRatingDefenseSkill] += uint32(val)
-					case 13: // Dodge rating
-						state.CombatRatings[CombatRatingDodge] += uint32(val)
-					case 14: // Parry rating
-						state.CombatRatings[CombatRatingParry] += uint32(val)
-					case 15: // Block rating
-						state.CombatRatings[CombatRatingBlock] += uint32(val)
-					case 16: // Melee hit
-						state.CombatRatings[5] += uint32(val)
-					case 17: // Ranged hit
-						state.CombatRatings[6] += uint32(val)
-					case 18: // Spell hit
-						state.CombatRatings[7] += uint32(val)
-					case 31: // Universal hit
-						state.CombatRatings[5] += uint32(val)
-						state.CombatRatings[6] += uint32(val)
-						state.CombatRatings[7] += uint32(val)
-					case 19: // Melee crit
-						state.CombatRatings[8] += uint32(val)
-					case 20: // Ranged crit
-						state.CombatRatings[9] += uint32(val)
-					case 21: // Spell crit
-						state.CombatRatings[10] += uint32(val)
-					case 32: // Universal crit
-						state.CombatRatings[8] += uint32(val)
-						state.CombatRatings[9] += uint32(val)
-						state.CombatRatings[10] += uint32(val)
-					case 28: // Melee haste
-						state.CombatRatings[17] += uint32(val)
-					case 29: // Ranged haste
-						state.CombatRatings[18] += uint32(val)
-					case 30: // Spell haste
-						state.CombatRatings[19] += uint32(val)
-					case 36: // Universal haste
-						state.CombatRatings[17] += uint32(val)
-						state.CombatRatings[18] += uint32(val)
-						state.CombatRatings[19] += uint32(val)
-					case 35: // Resilience rating (ITEM_MOD_RESILIENCE_RATING)
-						state.CombatRatings[14] += uint32(val)
-						state.CombatRatings[15] += uint32(val)
-						state.CombatRatings[16] += uint32(val)
-					case 37: // Expertise rating (ITEM_MOD_EXPERTISE_RATING)
-						state.CombatRatings[23] += uint32(val)
-					case 38: // Attack power
-						state.AttackPower += uint32(val)
-					case 39: // Ranged attack power
-						state.RangedAttackPower += uint32(val)
-					case 44: // Armor penetration rating (ITEM_MOD_ARMOR_PENETRATION_RATING)
-						state.CombatRatings[24] += uint32(val)
-					case 45: // Spell power (ITEM_MOD_SPELL_POWER)
-						state.SpellPower += uint32(val)
-						state.BaseSpellPower += uint32(val)
-						s.setAchievementCriteria(criteriaTypeHighestSpellpower, 0, state.SpellPower)
-					case 47: // Spell penetration (ITEM_MOD_SPELL_PENETRATION)
-						state.SpellPenetration += uint32(val)
-					}
-				}
+	equippedItems, err := s.loadEquippedItemStats(ctx, state)
+	if err != nil {
+		return err
+	}
+	for _, item := range equippedItems {
+		slot, armor, block, delay := item.Slot, item.Armor, item.Block, item.Delay
+		minDmg, maxDmg := item.MinDamage, item.MaxDamage
+		st, sv := item.StatTypes, item.StatValues
+		enchantments := item.Enchantments
+		broken := item.MaxDurability > 0 && item.Durability == 0
+		if armor > 0 {
+			state.Armor += uint32(armor)
+		}
+		if block > 0 {
+			state.Block += uint32(block)
+		}
+		// Weapon slots: 15 = Main Hand, 16 = Off Hand, 17 = Ranged
+		if slot == 15 {
+			if minDmg > 0 {
+				state.MinDamage = float32(minDmg)
 			}
+			if maxDmg > 0 {
+				state.MaxDamage = float32(maxDmg)
+			}
+			if delay > 0 {
+				state.AttackTime = uint32(delay)
+			}
+		} else if slot == 16 {
+			if minDmg > 0 {
+				state.MinOffhandDamage = float32(minDmg)
+			}
+			if maxDmg > 0 {
+				state.MaxOffhandDamage = float32(maxDmg)
+			}
+			if delay > 0 {
+				state.OffhandAttackTime = uint32(delay)
+			}
+		} else if slot == 17 {
+			if minDmg > 0 {
+				state.MinRangedDamage = float32(minDmg)
+			}
+			if maxDmg > 0 {
+				state.MaxRangedDamage = float32(maxDmg)
+			}
+			if delay > 0 {
+				state.RangedAttackTime = uint32(delay)
+			}
+		}
+		// Stats
+		for k := 0; k < 10; k++ {
+			val := sv[k]
+			if val == 0 {
+				continue
+			}
+			switch st[k] {
+			case 3: // Agility
+				state.Stats[1] += uint32(val)
+			case 4: // Strength
+				state.Stats[0] += uint32(val)
+			case 5: // Intellect
+				state.Stats[3] += uint32(val)
+			case 6: // Spirit
+				state.Stats[4] += uint32(val)
+			case 7: // Stamina
+				state.Stats[2] += uint32(val)
+			case 12: // Defense rating
+				state.CombatRatings[CombatRatingDefenseSkill] += uint32(val)
+			case 13: // Dodge rating
+				state.CombatRatings[CombatRatingDodge] += uint32(val)
+			case 14: // Parry rating
+				state.CombatRatings[CombatRatingParry] += uint32(val)
+			case 15: // Block rating
+				state.CombatRatings[CombatRatingBlock] += uint32(val)
+			case 16: // Melee hit
+				state.CombatRatings[5] += uint32(val)
+			case 17: // Ranged hit
+				state.CombatRatings[6] += uint32(val)
+			case 18: // Spell hit
+				state.CombatRatings[7] += uint32(val)
+			case 31: // Universal hit
+				state.CombatRatings[5] += uint32(val)
+				state.CombatRatings[6] += uint32(val)
+				state.CombatRatings[7] += uint32(val)
+			case 19: // Melee crit
+				state.CombatRatings[8] += uint32(val)
+			case 20: // Ranged crit
+				state.CombatRatings[9] += uint32(val)
+			case 21: // Spell crit
+				state.CombatRatings[10] += uint32(val)
+			case 32: // Universal crit
+				state.CombatRatings[8] += uint32(val)
+				state.CombatRatings[9] += uint32(val)
+				state.CombatRatings[10] += uint32(val)
+			case 28: // Melee haste
+				state.CombatRatings[17] += uint32(val)
+			case 29: // Ranged haste
+				state.CombatRatings[18] += uint32(val)
+			case 30: // Spell haste
+				state.CombatRatings[19] += uint32(val)
+			case 36: // Universal haste
+				state.CombatRatings[17] += uint32(val)
+				state.CombatRatings[18] += uint32(val)
+				state.CombatRatings[19] += uint32(val)
+			case 35: // Resilience rating (ITEM_MOD_RESILIENCE_RATING)
+				state.CombatRatings[14] += uint32(val)
+				state.CombatRatings[15] += uint32(val)
+				state.CombatRatings[16] += uint32(val)
+			case 37: // Expertise rating (ITEM_MOD_EXPERTISE_RATING)
+				state.CombatRatings[23] += uint32(val)
+			case 38: // Attack power
+				state.AttackPower += uint32(val)
+			case 39: // Ranged attack power
+				state.RangedAttackPower += uint32(val)
+			case 44: // Armor penetration rating (ITEM_MOD_ARMOR_PENETRATION_RATING)
+				state.CombatRatings[24] += uint32(val)
+			case 45: // Spell power (ITEM_MOD_SPELL_POWER)
+				state.SpellPower += uint32(val)
+				state.BaseSpellPower += uint32(val)
+				s.setAchievementCriteria(criteriaTypeHighestSpellpower, 0, state.SpellPower)
+			case 47: // Spell penetration (ITEM_MOD_SPELL_PENETRATION)
+				state.SpellPenetration += uint32(val)
+			}
+		}
+		if err := s.applyPlayerSpellPowerEnchants(state, enchantments, broken); err != nil {
+			return err
 		}
 	}
 
