@@ -187,7 +187,7 @@ func (s *session) broadcastGuildMemberLogout() {
 	s.server.sessionsMu.RLock()
 	defer s.server.sessionsMu.RUnlock()
 	for target := range s.server.sessions {
-		if target == s || !target.playerLoaded || target.player == nil || target.player.GuildID != s.player.GuildID {
+		if target == s || !target.worldReady.Load() || target.player == nil || target.player.GuildID != s.player.GuildID {
 			continue
 		}
 		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
@@ -202,7 +202,7 @@ func (s *session) broadcastGuildMemberLogin() {
 	s.server.sessionsMu.RLock()
 	defer s.server.sessionsMu.RUnlock()
 	for target := range s.server.sessions {
-		if !target.playerLoaded || target.player == nil || target.player.GuildID != s.player.GuildID {
+		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != s.player.GuildID {
 			continue
 		}
 		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
@@ -489,7 +489,7 @@ func (s *session) handleGuildAccept(ctx context.Context) bool {
 func (s *session) handleGuildDecline(ctx context.Context) bool {
 	if s.guildInviterGUID != 0 && s.server != nil && s.player != nil {
 		inviterSess := s.server.findSessionByGUID(s.guildInviterGUID)
-		if inviterSess != nil && inviterSess.playerLoaded {
+		if inviterSess != nil && inviterSess.worldReady.Load() {
 			eventBuf := protocol.NewBuffer(64)
 			eventBuf.WriteU8(2) // GE_DECLINED
 			eventBuf.WriteU8(1)
@@ -2045,7 +2045,7 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 // sendPetitionShowSignatures sends SMSG_PETITION_SHOW_SIGNATURES (0x1BF).
 // Reference: WorldSession::SendPetitionSigns (PetitionsHandler.cpp:243).
 func (s *session) sendPetitionShowSignatures(target *session, petitionGUID uint64) {
-	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || target == nil || !target.playerLoaded {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || target == nil || !target.worldReady.Load() {
 		return
 	}
 	cdb := s.server.CharactersStore.DB
@@ -2319,7 +2319,7 @@ func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool
 	for _, signerGUID := range signers {
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_member (guildid, guid, rank, pnote, offnote) VALUES (?, ?, 4, '', '')", newGuildID, signerGUID)
 		if s.server != nil {
-			if signerSess := s.server.findSessionByGUID(uint64(signerGUID)); signerSess != nil && signerSess.playerLoaded {
+			if signerSess := s.server.findSessionByGUID(uint64(signerGUID)); signerSess != nil && signerSess.worldReady.Load() {
 				signerSess.player.GuildID = uint32(newGuildID)
 				signerSess.player.GuildRank = 4
 				signerSess.sendPlayerUpdate()
@@ -2356,7 +2356,7 @@ func (s *session) handleOfferPetition(ctx context.Context, payload []byte) bool 
 
 	if s.server != nil {
 		targetSess := s.server.findSessionByGUID(targetGUID)
-		if targetSess == nil || !targetSess.playerLoaded {
+		if targetSess == nil || !targetSess.worldReady.Load() {
 			return true
 		}
 
