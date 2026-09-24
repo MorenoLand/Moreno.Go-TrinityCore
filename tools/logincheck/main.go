@@ -111,6 +111,9 @@ func runSelfCheck() error {
 	if err := checkPlayerStatsConfig(); err != nil {
 		return err
 	}
+	if err := checkAuraGUIDRepresentations(); err != nil {
+		return err
+	}
 	if err := checkSpellPowerEnchantmentDBC(); err != nil {
 		return err
 	}
@@ -1305,6 +1308,20 @@ func checkPlayerStatsConfig() error {
 	}
 	if config.PlayerSaveStatsMinLevel != 0 || !config.PlayerSaveStatsSaveOnlyOnLogout {
 		return fmt.Errorf("default PlayerSave.Stats config min_level=%d save_only_on_logout=%t, want 0/true", config.PlayerSaveStatsMinLevel, config.PlayerSaveStatsSaveOnlyOnLogout)
+	}
+	return nil
+}
+
+func checkAuraGUIDRepresentations() error {
+	for _, test := range []struct {
+		value any
+		want  uint64
+		ok    bool
+	}{{int64(73), 73, true}, {uint64(math.MaxUint64), math.MaxUint64, true}, {[]byte("18446744073709551615"), math.MaxUint64, true}, {"18446744073709551615", math.MaxUint64, true}, {float64(9007199254740991), 9007199254740991, true}, {float64(9007199254740992), 0, false}, {float64(12.5), 0, false}, {float32(16777215), 16777215, true}, {float32(16777216), 0, false}} {
+		got, ok := world.ParseAuraGUID(test.value)
+		if got != test.want || ok != test.ok {
+			return fmt.Errorf("aura GUID decoding type=%T value=%v => %d/%t, want %d/%t", test.value, test.value, got, ok, test.want, test.ok)
+		}
 	}
 	return nil
 }

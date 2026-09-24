@@ -752,7 +752,7 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 		casterGUID := uint64(0)
 		if casterValue != nil {
 			var casterOK bool
-			casterGUID, casterOK = auraGUIDUint64(casterValue)
+			casterGUID, casterOK = ParseAuraGUID(casterValue)
 			if !casterOK {
 				continue
 			}

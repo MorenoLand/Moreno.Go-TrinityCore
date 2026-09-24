@@ -295,7 +295,7 @@ func unreadablePetAuraRows(ctx context.Context, tx *sql.Tx, petID uint32) ([]pet
 		spellID, spellOK := auraUint32(row.values[2])
 		casterGUID, casterOK := uint64(0), row.values[1] == nil
 		if row.values[1] != nil {
-			casterGUID, casterOK = auraGUIDUint64(row.values[1])
+			casterGUID, casterOK = ParseAuraGUID(row.values[1])
 		}
 		maxDuration, durationOK := auraInt64(row.values[12])
 		if spellOK && casterOK && durationOK {

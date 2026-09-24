@@ -131,8 +131,8 @@ func unreadableAuraRows(ctx context.Context, tx *sql.Tx, guid uint64) ([][18]any
 			return nil, nil, err
 		}
 		spell, spellOK := auraUint32(row[3])
-		caster, casterOK := auraGUIDUint64(row[1])
-		item, itemOK := auraGUIDUint64(row[2])
+		caster, casterOK := ParseAuraGUID(row[1])
+		item, itemOK := ParseAuraGUID(row[2])
 		maxDuration, durationOK := auraInt64(row[13])
 		if spellOK && casterOK && itemOK && durationOK {
 			maxDurations[auraSaveKey{spell: spell, caster: caster, item: item}] = maxDuration
@@ -145,11 +145,11 @@ func unreadableAuraRows(ctx context.Context, tx *sql.Tx, guid uint64) ([][18]any
 }
 
 func auraGUIDValueReadable(value any) bool {
-	_, ok := auraGUIDUint64(value)
+	_, ok := ParseAuraGUID(value)
 	return ok
 }
 
-func auraGUIDUint64(value any) (uint64, bool) {
+func ParseAuraGUID(value any) (uint64, bool) {
 	switch value := value.(type) {
 	case int64:
 		return uint64(value), value >= 0
@@ -165,6 +165,17 @@ func auraGUIDUint64(value any) (uint64, bool) {
 	case string:
 		parsed, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
 		return parsed, err == nil
+	case float64:
+		if value < 0 || value > float64(1<<53-1) || math.Trunc(value) != value {
+			return 0, false
+		}
+		return uint64(value), true
+	case float32:
+		number := float64(value)
+		if number < 0 || number > float64(1<<24-1) || math.Trunc(number) != number {
+			return 0, false
+		}
+		return uint64(number), true
 	default:
 		return 0, false
 	}

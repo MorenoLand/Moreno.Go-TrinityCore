@@ -63,11 +63,11 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 		}
 		casterGUID, casterOK := uint64(0), casterValue == nil
 		if casterValue != nil {
-			casterGUID, casterOK = auraGUIDUint64(casterValue)
+			casterGUID, casterOK = ParseAuraGUID(casterValue)
 		}
 		itemGUID, itemOK := uint64(0), itemValue == nil
 		if itemValue != nil {
-			itemGUID, itemOK = auraGUIDUint64(itemValue)
+			itemGUID, itemOK = ParseAuraGUID(itemValue)
 		}
 		if !casterOK || !itemOK {
 			continue
