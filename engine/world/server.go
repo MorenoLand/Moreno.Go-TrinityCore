@@ -175,6 +175,7 @@ type session struct {
 	writeMu                   sync.Mutex
 	movementMu                sync.RWMutex
 	captureUpdatePackets      bool
+	traceStatePrefix          string
 	capturedUpdatePackets     []*protocol.Packet
 	selection                 uint64
 	auras                     map[uint32]struct{}
@@ -3284,7 +3285,11 @@ func (s *session) write(opcode uint16, payload []byte, encrypt bool) error {
 		return nil
 	}
 	if s != nil && s.server != nil && s.server.TraceRecorder != nil {
-		s.server.TraceRecorder.Record(protocoltrace.ServerToClient, uint32(opcode), payload, opcodeName(uint32(opcode)))
+		state := opcodeName(uint32(opcode))
+		if s.traceStatePrefix != "" {
+			state = s.traceStatePrefix + " " + state
+		}
+		s.server.TraceRecorder.Record(protocoltrace.ServerToClient, uint32(opcode), payload, state)
 	}
 	if s == nil || s.conn == nil {
 		return nil

@@ -39,6 +39,7 @@ func main() {
 	selfCheck := flag.Bool("self-check", false, "validate the login loading-order regression guard")
 	replayWork := flag.String("replay-work", "", "isolated work directory containing auth.db, characters.db, and world.db; runs core login with Eluna disabled")
 	replayGUID := flag.Uint64("replay-guid", 0, "character GUID for an in-process login replay; 0 selects the first real character")
+	replayPeerGUID := flag.Uint64("replay-peer-guid", 0, "second character GUID for a same-server two-session login replay")
 	replayPetCooldownSpell := flag.Uint("replay-pet-cooldown-spell", 0, "after login, assert a saved pet category cooldown rejects this spell")
 	replayPetPowerSpell := flag.Uint("replay-pet-power-spell", 0, "after login, verify a known pet spell spends and reports its DBC power cost")
 	replayPetXPAward := flag.Uint("replay-pet-xp", 0, "after login, apply a hunter-pet XP award and verify fields and persistence")
@@ -73,7 +74,10 @@ func main() {
 		if petReplayCount > 1 || petReplayCount != 0 && (lfgReplayRequested || instanceReplayRequested || statsReplayRequested) || lfgReplayRequested && (instanceReplayRequested || statsReplayRequested) || instanceReplayRequested && statsReplayRequested || petFeedRequested && (*replayPetFeedSpell == 0 || *replayPetFeedItem == 0) || instanceReplayRequested && (*replayInstanceMap == 0 || *replayInstanceID == 0) {
 			fail("choose only one post-login replay scenario")
 		}
-		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem, uint32(*replayLFGDungeon), uint32(*replayInstanceMap), uint32(*replayInstanceID), uint32(*replayStatsMinLevel)); err != nil {
+		if *replayPeerGUID != 0 && (petReplayCount != 0 || lfgReplayRequested || instanceReplayRequested || statsReplayRequested) {
+			fail("paired login replay cannot be combined with a post-login replay scenario")
+		}
+		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayPeerGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem, uint32(*replayLFGDungeon), uint32(*replayInstanceMap), uint32(*replayInstanceID), uint32(*replayStatsMinLevel)); err != nil {
 			fail(err.Error())
 		}
 		return
@@ -231,7 +235,9 @@ func runSelfCheck() error {
 	if _, err := findOrderedLoginStages(badEarlyWorldStates, 0, loginOrderStages); err == nil {
 		return fmt.Errorf("post-map world state sent before player create was not rejected")
 	}
-	validMovement := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_FEATHER_FALL)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_SET_HOVER)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_FORCE_MOVE_ROOT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MULTIPLE_MOVES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL)}}}
+	movementAura := protocol.NewBuffer(8)
+	movementAura.WritePackedGUID(loginGUID)
+	validMovement := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_FEATHER_FALL)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_SET_HOVER)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_FORCE_MOVE_ROOT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MULTIPLE_MOVES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL), Payload: base64.StdEncoding.EncodeToString(movementAura.Bytes())}}}
 	if err := checkLoginMovementOrder(validMovement, 0); err != nil {
 		return fmt.Errorf("valid movement ordering was rejected: %w", err)
 	}
@@ -2673,6 +2679,9 @@ func checkPostMapLoginOrder(trace protocoltrace.Trace, start, playerCreateIndex 
 			if err != nil {
 				return fmt.Errorf("SMSG_AURA_UPDATE_ALL target GUID: %w", err)
 			}
+			if guid != playerGUID {
+				continue
+			}
 			if _, ok := petGUIDs[guid]; ok {
 				continue
 			}
@@ -2684,6 +2693,18 @@ func checkPostMapLoginOrder(trace protocoltrace.Trace, start, playerCreateIndex 
 				return fmt.Errorf("SMSG_SPELL_GO: %w", err)
 			}
 			if spellID != 836 {
+				continue
+			}
+			payload, err := eventPayload(event)
+			if err != nil {
+				return fmt.Errorf("SMSG_SPELL_GO payload: %w", err)
+			}
+			reader := protocol.NewReader(payload)
+			casterGUID, err := reader.ReadPackedGUID()
+			if err != nil {
+				return fmt.Errorf("SMSG_SPELL_GO caster GUID: %w", err)
+			}
+			if casterGUID != playerGUID {
 				continue
 			}
 			loginEffectCount++
@@ -4038,6 +4059,8 @@ func rejectPreVerifyAchievementPackets(trace protocoltrace.Trace, start int) err
 }
 
 func checkLoginMovementOrder(trace protocoltrace.Trace, start int) error {
+	var playerGUID uint64
+	playerGUIDKnown := false
 	order := map[uint32]int{
 		uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK):           0,
 		uint32(protocol.OpcodeSMSG_MOVE_FEATHER_FALL):         1,
@@ -4058,6 +4081,28 @@ func checkLoginMovementOrder(trace protocoltrace.Trace, start int) error {
 		}
 		if event.Direction != protocoltrace.ServerToClient {
 			continue
+		}
+		if event.Opcode == uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL) {
+			if !playerGUIDKnown {
+				var err error
+				playerGUID, err = loginPlayerGUID(trace.Events[start])
+				if err != nil {
+					return err
+				}
+				playerGUIDKnown = true
+			}
+			payload, err := eventPayload(event)
+			if err != nil {
+				return fmt.Errorf("SMSG_AURA_UPDATE_ALL: %w", err)
+			}
+			reader := protocol.NewReader(payload)
+			targetGUID, err := reader.ReadPackedGUID()
+			if err != nil {
+				return fmt.Errorf("SMSG_AURA_UPDATE_ALL target GUID: %w", err)
+			}
+			if targetGUID != playerGUID {
+				continue
+			}
 		}
 		if event.Opcode == uint32(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE) {
 			break
@@ -4303,6 +4348,70 @@ func selfPlayerCreateFields(trace protocoltrace.Trace, playerGUID uint64) (map[i
 		}
 	}
 	return nil, fmt.Errorf("self player create fields not found")
+}
+
+func countPlayerCreateBlocks(trace protocoltrace.Trace, playerGUID uint64) (int, error) {
+	count := 0
+	for _, event := range trace.Events {
+		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_UPDATE_OBJECT) && event.Opcode != uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+			continue
+		}
+		payload, err := eventPayload(event)
+		if err != nil {
+			return 0, err
+		}
+		if event.Opcode == uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+			payload, err = protocol.DecompressUpdatePayload(payload)
+			if err != nil {
+				return 0, err
+			}
+		}
+		reader := protocol.NewReader(payload)
+		blocks, err := reader.ReadU32()
+		if err != nil {
+			return 0, fmt.Errorf("update-object block count: %w", err)
+		}
+		for block := uint32(0); block < blocks; block++ {
+			kind, err := reader.ReadU8()
+			if err != nil {
+				return 0, fmt.Errorf("update block kind: %w", err)
+			}
+			switch kind {
+			case protocol.UpdateOutOfRangeObjects:
+				outOfRange, err := reader.ReadU32()
+				if err != nil {
+					return 0, err
+				}
+				for index := uint32(0); index < outOfRange; index++ {
+					if _, err := reader.ReadPackedGUID(); err != nil {
+						return 0, err
+					}
+				}
+			case protocol.UpdateCreateObject, protocol.UpdateCreateObject2:
+				guid, typeID, _, err := parseCreateObjectBlock(reader, 0)
+				if err != nil {
+					return 0, err
+				}
+				if guid == playerGUID && typeID == 4 {
+					count++
+				}
+			case protocol.UpdateValues:
+				if err := skipValuesUpdate(reader); err != nil {
+					return 0, err
+				}
+			case protocol.UpdateMovement:
+				if err := skipMovementUpdate(reader); err != nil {
+					return 0, err
+				}
+			default:
+				return 0, fmt.Errorf("unsupported update block kind=%d while counting player create deliveries", kind)
+			}
+		}
+		if reader.Remaining() != 0 {
+			return 0, fmt.Errorf("update-object payload has %d trailing bytes", reader.Remaining())
+		}
+	}
+	return count, nil
 }
 
 func skipCreateMovement(reader *protocol.Buffer, flags uint16) error {
@@ -4579,7 +4688,32 @@ func eventPayload(event protocoltrace.Event) ([]byte, error) {
 	return protocoltrace.Trace{Events: []protocoltrace.Event{event}}.Payload(event)
 }
 
-func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64, lfgDungeonID, instanceEntryMapID, instanceEntryID, statsMinLevel uint32) error {
+func pairedLoginTrace(trace protocoltrace.Trace, playerGUID uint64) (protocoltrace.Trace, error) {
+	filtered := trace
+	filtered.Events = nil
+	loginFound := false
+	prefix := fmt.Sprintf("recipient-guid=%d ", playerGUID)
+	for _, event := range trace.Events {
+		if event.Direction == protocoltrace.ClientToServer && event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) {
+			guid, err := loginPlayerGUID(event)
+			if err != nil {
+				return protocoltrace.Trace{}, err
+			}
+			if guid == playerGUID {
+				filtered.Events = append(filtered.Events, event)
+				loginFound = true
+			}
+		} else if event.Direction == protocoltrace.ServerToClient && strings.HasPrefix(event.State, prefix) {
+			filtered.Events = append(filtered.Events, event)
+		}
+	}
+	if !loginFound {
+		return protocoltrace.Trace{}, fmt.Errorf("paired login trace has no request for character %d", playerGUID)
+	}
+	return filtered, nil
+}
+
+func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64, lfgDungeonID, instanceEntryMapID, instanceEntryID, statsMinLevel uint32) error {
 	workDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return err
@@ -4616,6 +4750,22 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 		}
 		guid = uint64(selectedGUID)
 	}
+	if peerGUID != 0 {
+		if peerGUID == guid {
+			return fmt.Errorf("paired login replay requires distinct character GUIDs")
+		}
+		var accountID, guildID, mapID int64
+		if err := stores.Characters.DB.QueryRowContext(ctx, `SELECT c.account, COALESCE(g.guildid, 0), c.map FROM characters c LEFT JOIN guild_member g ON g.guid = c.guid WHERE c.guid = ?`, guid).Scan(&accountID, &guildID, &mapID); err != nil {
+			return fmt.Errorf("read first paired character: %w", err)
+		}
+		var peerAccountID, peerGuildID, peerMapID int64
+		if err := stores.Characters.DB.QueryRowContext(ctx, `SELECT c.account, COALESCE(g.guildid, 0), c.map FROM characters c LEFT JOIN guild_member g ON g.guid = c.guid WHERE c.guid = ?`, peerGUID).Scan(&peerAccountID, &peerGuildID, &peerMapID); err != nil {
+			return fmt.Errorf("read second paired character: %w", err)
+		}
+		if accountID == peerAccountID || guildID == 0 || guildID != peerGuildID || mapID != peerMapID {
+			return fmt.Errorf("paired login replay requires different accounts in the same guild and map")
+		}
+	}
 	server := world.NewServer(stores, slog.New(slog.NewTextHandler(io.Discard, nil)), cfg.RealmID, cfg)
 	if err := server.Initialize(ctx); err != nil {
 		server.Stop()
@@ -4644,9 +4794,19 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 		server.Stop()
 		return err
 	}
+	var peerBefore map[string]characterTableSnapshot
+	if peerGUID != 0 {
+		peerBefore, err = snapshotCharacterState(stores.Characters.DB, stores.World.DB, stores.Auth.DB, peerGUID)
+		if err != nil {
+			server.Stop()
+			return err
+		}
+	}
 	var trace protocoltrace.Trace
 	var replayErr error
-	if petCooldownSpell != 0 {
+	if peerGUID != 0 {
+		trace, replayErr = world.ReplayCharacterPairLogin(ctx, server, guid, peerGUID)
+	} else if petCooldownSpell != 0 {
 		trace, replayErr = world.ReplayCharacterPetCooldown(ctx, server, guid, petCooldownSpell)
 	} else if petPowerSpell != 0 {
 		trace, replayErr = world.ReplayCharacterPetPower(ctx, server, guid, petPowerSpell)
@@ -4668,6 +4828,11 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 	cancel()
 	server.Stop()
 	after, snapshotErr := snapshotCharacterState(stores.Characters.DB, stores.World.DB, stores.Auth.DB, guid)
+	var peerAfter map[string]characterTableSnapshot
+	var peerSnapshotErr error
+	if peerGUID != 0 {
+		peerAfter, peerSnapshotErr = snapshotCharacterState(stores.Characters.DB, stores.World.DB, stores.Auth.DB, peerGUID)
+	}
 	if tracePath == "" {
 		tracePath = filepath.Join(workDir, "login-replay.jsonl")
 	} else if !filepath.IsAbs(tracePath) {
@@ -4691,6 +4856,9 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 	if snapshotErr != nil {
 		return snapshotErr
 	}
+	if peerSnapshotErr != nil {
+		return peerSnapshotErr
+	}
 	var deltaErr error
 	if statsMinLevel != 0 {
 		deltaErr = validateCharacterStateDeltaWithStats(before, after, petFeedSpell != 0)
@@ -4699,6 +4867,11 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 	}
 	if deltaErr != nil {
 		return fmt.Errorf("real-character state delta mismatch (trace saved): %w", deltaErr)
+	}
+	if peerGUID != 0 {
+		if err := validateCharacterStateDelta(peerBefore, peerAfter, false); err != nil {
+			return fmt.Errorf("second real-character state delta mismatch (trace saved): %w", err)
+		}
 	}
 	if statsMinLevel != 0 {
 		var level uint32
@@ -4724,8 +4897,53 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 	if !beforeFound || !afterFound || beforeCharacter.Rows != 1 || afterCharacter.Rows != 1 {
 		return fmt.Errorf("real-character login replay changed character-row presence before=%t after=%t", beforeFound && beforeCharacter.Rows == 1, afterFound && afterCharacter.Rows == 1)
 	}
-	if err := checkLogin(trace, 0); err != nil {
-		return fmt.Errorf("real-character login packet replay failed: %w", err)
+	loginStarts := make([]int, 0, 2)
+	for index, event := range trace.Events {
+		if event.Direction == protocoltrace.ClientToServer && event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) {
+			loginStarts = append(loginStarts, index)
+		}
+	}
+	wantLogins := 1
+	if peerGUID != 0 {
+		wantLogins = 2
+	}
+	if len(loginStarts) != wantLogins {
+		return fmt.Errorf("real-character login replay captured %d player-login requests, want %d", len(loginStarts), wantLogins)
+	}
+	if peerGUID == 0 {
+		if err := checkLogin(trace, loginStarts[0]); err != nil {
+			return fmt.Errorf("real-character login packet replay failed at event %d: %w", loginStarts[0], err)
+		}
+	} else {
+		firstTrace, err := pairedLoginTrace(trace, guid)
+		if err != nil {
+			return err
+		}
+		secondTrace, err := pairedLoginTrace(trace, peerGUID)
+		if err != nil {
+			return err
+		}
+		if err := checkLogin(firstTrace, 0); err != nil {
+			return fmt.Errorf("first paired login packet replay failed: %w", err)
+		}
+		if err := checkLogin(secondTrace, 0); err != nil {
+			return fmt.Errorf("second paired login packet replay failed: %w", err)
+		}
+		firstSeesSecond, err := countPlayerCreateBlocks(firstTrace, peerGUID)
+		if err != nil {
+			return fmt.Errorf("count first recipient's peer create updates: %w", err)
+		}
+		secondSeesFirst, err := countPlayerCreateBlocks(secondTrace, guid)
+		if err != nil {
+			return fmt.Errorf("count second recipient's peer create updates: %w", err)
+		}
+		secondSelfCreates, err := countPlayerCreateBlocks(secondTrace, peerGUID)
+		if err != nil {
+			return fmt.Errorf("count second recipient's self create updates: %w", err)
+		}
+		if firstSeesSecond == 0 || secondSeesFirst == 0 || secondSelfCreates == 0 {
+			return fmt.Errorf("paired create deliveries missing: first-sees-second=%d second-sees-first=%d second-self=%d", firstSeesSecond, secondSeesFirst, secondSelfCreates)
+		}
 	}
 	if err := checkPetLoginState(trace, petBefore); err != nil {
 		return fmt.Errorf("real-character pet state packet replay failed: %w", err)
@@ -4747,7 +4965,9 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 		}
 	}
 	sort.Strings(changed)
-	if statsMinLevel != 0 {
+	if peerGUID != 0 {
+		fmt.Printf("real-character two-session login replay passed first=%d peer=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", guid, peerGUID, len(trace.Events)-2, len(changed), strings.Join(changed, ","), tracePath)
+	} else if statsMinLevel != 0 {
 		fmt.Printf("real-character stats save replay passed minimum_level=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", statsMinLevel, len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
 	} else if petCooldownSpell != 0 {
 		fmt.Printf("real-character pet cooldown replay passed spell=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", petCooldownSpell, len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
