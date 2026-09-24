@@ -510,7 +510,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 	var players []playerPos
 	s.sessionsMu.RLock()
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil {
+		if sess.worldReady.Load() && sess.player != nil {
 			isGM := (sess.player.ExtraFlags&playerExtraGMOn != 0) || (sess.player.PlayerFlags&playerFlagGM != 0)
 			isDead := (sess.player.Health == 0 && sess.player.MaxHealth > 0) || sess.player.PlayerFlags&playerFlagGhost != 0
 			players = append(players, playerPos{
@@ -1094,7 +1094,7 @@ func (s *Server) updateContestedPvP(now time.Time) {
 	s.sessionsMu.RLock()
 	sessions := make([]*session, 0, len(s.sessions))
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil {
+		if sess.worldReady.Load() && sess.player != nil {
 			sessions = append(sessions, sess)
 		}
 	}
@@ -1111,7 +1111,7 @@ func (s *Server) updatePvPFlags(now time.Time) {
 	s.sessionsMu.RLock()
 	sessions := make([]*session, 0, len(s.sessions))
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil && !sess.pvpEnd.IsZero() && !now.Before(sess.pvpEnd) {
+		if sess.worldReady.Load() && sess.player != nil && !sess.pvpEnd.IsZero() && !now.Before(sess.pvpEnd) {
 			sessions = append(sessions, sess)
 		}
 	}
@@ -1242,7 +1242,7 @@ func (s *Server) broadcastMonsterMoveStop(mapID uint32, guid uint64, x, y, z flo
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
-		if !sess.playerLoaded || sess.player == nil || sess.player.Map != mapID {
+		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID {
 			continue
 		}
 		if math.Hypot(float64(x-sess.player.X), float64(y-sess.player.Y)) <= distance {
@@ -1258,7 +1258,7 @@ func (s *Server) broadcastAIReaction(mapID uint32, guid uint64, reactionType uin
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
-		if !sess.playerLoaded || sess.player == nil || sess.player.Map != mapID {
+		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID {
 			continue
 		}
 		_ = sess.write(uint16(protocol.OpcodeSMSG_AI_REACTION), buf.Bytes(), true)

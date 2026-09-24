@@ -3385,7 +3385,7 @@ func (s *Server) buildNearbyPlayerUpdatesWithCreated(observer *session) (*protoc
 	runtimeSessions := make(map[uint64]*session)
 	s.sessionsMu.RLock()
 	for sess := range s.sessions {
-		if sess == nil || sess == observer || !sess.playerLoaded || sess.player == nil || sess.player.GUID == state.GUID || sess.player.Map != state.Map || sess.player.InstanceID != state.InstanceID {
+		if sess == nil || sess == observer || !sess.worldReady.Load() || sess.player == nil || sess.player.GUID == state.GUID || sess.player.Map != state.Map || sess.player.InstanceID != state.InstanceID {
 			continue
 		}
 		if !canSeePlayer(observer, sess) {
@@ -3460,7 +3460,7 @@ func (s *Server) refreshPlayerVisibility() {
 	s.sessionsMu.RLock()
 	observers := make([]*session, 0, len(s.sessions))
 	for observer := range s.sessions {
-		if observer != nil && observer.authed && observer.playerLoaded && observer.player != nil {
+		if observer != nil && observer.authed && observer.worldReady.Load() && observer.player != nil {
 			observers = append(observers, observer)
 		}
 	}
@@ -3498,7 +3498,7 @@ func (s *Server) broadcastPlayerCreate(state playerState, source *session) {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for target := range s.sessions {
-		if target == source || !target.authed || !target.playerLoaded || target.player == nil || target.player.Map != state.Map || target.player.InstanceID != state.InstanceID {
+		if target == source || !target.authed || !target.worldReady.Load() || target.player == nil || target.player.Map != state.Map || target.player.InstanceID != state.InstanceID {
 			continue
 		}
 		if !canSeePlayer(target, source) {
@@ -3686,7 +3686,7 @@ func (s *Server) broadcastPlayerValuesUpdateFromSession(source *session, fields 
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for target := range s.sessions {
-		if target == source || !target.authed || !target.playerLoaded || target.player == nil || target.player.Map != state.Map || target.player.InstanceID != state.InstanceID || !canSeePlayer(target, source) {
+		if target == source || !target.authed || !target.worldReady.Load() || target.player == nil || target.player.Map != state.Map || target.player.InstanceID != state.InstanceID || !canSeePlayer(target, source) {
 			continue
 		}
 		if math.Hypot(float64(target.player.X-state.X), float64(target.player.Y-state.Y)) > distance {

@@ -215,6 +215,14 @@ func runSelfCheck() error {
 	if _, err := findOrderedLoginStages(validLoginOrder, 0, loginOrderStages); err != nil {
 		return fmt.Errorf("valid login stage order was rejected: %w", err)
 	}
+	preCreateCombat := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_ATTACK_START)}, playerCreateEvent}}
+	if err := rejectWorldActivityBeforePlayerCreate(preCreateCombat, 0); err == nil {
+		return fmt.Errorf("world combat packet before the self-player create was not rejected")
+	}
+	postCreateCombat := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, playerCreateEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_ATTACK_START)}}}
+	if err := rejectWorldActivityBeforePlayerCreate(postCreateCombat, 0); err != nil {
+		return fmt.Errorf("world combat packet after the self-player create was rejected: %w", err)
+	}
 	badEarlyLoginOrder := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_CONTACT_LIST)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY)}, {Direction: protocoltrace.ServerToClient, Opcode: verify}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_CONTACT_LIST)}, playerCreateEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}}}
 	if _, err := findOrderedLoginStages(badEarlyLoginOrder, 0, loginOrderStages); err == nil {
 		return fmt.Errorf("out-of-order pre-map login packet was not rejected")
@@ -2265,6 +2273,45 @@ func loginStageMatches(stage loginStage, event protocoltrace.Event, playerGUID u
 	return containsPlayerCreate(event, playerGUID)
 }
 
+func rejectWorldActivityBeforePlayerCreate(trace protocoltrace.Trace, start int) error {
+	if start < 0 || start >= len(trace.Events) {
+		return fmt.Errorf("login world-activity boundary has no login event")
+	}
+	playerGUID, err := loginPlayerGUID(trace.Events[start])
+	if err != nil {
+		return err
+	}
+	createIndex := -1
+	for index := start + 1; index < len(trace.Events); index++ {
+		event := trace.Events[index]
+		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_UPDATE_OBJECT) && event.Opcode != uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+			continue
+		}
+		created, err := containsPlayerCreate(event, playerGUID)
+		if err != nil {
+			return err
+		}
+		if created {
+			createIndex = index
+			break
+		}
+	}
+	if createIndex < 0 {
+		return nil
+	}
+	for index := start + 1; index < createIndex; index++ {
+		event := trace.Events[index]
+		if event.Direction != protocoltrace.ServerToClient {
+			continue
+		}
+		switch event.Opcode {
+		case uint32(protocol.OpcodeSMSG_ATTACK_START), uint32(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), uint32(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), uint32(protocol.OpcodeSMSG_SPELL_GO):
+			return fmt.Errorf("%s arrived before the self-player create update", opcodeName(event.Opcode))
+		}
+	}
+	return nil
+}
+
 func loginPlayerGUID(event protocoltrace.Event) (uint64, error) {
 	payload, err := eventPayload(event)
 	if err != nil {
@@ -2283,6 +2330,9 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 		return err
 	}
 	if err := checkLoginMovementOrder(trace, start); err != nil {
+		return err
+	}
+	if err := rejectWorldActivityBeforePlayerCreate(trace, start); err != nil {
 		return err
 	}
 	playerGUID, err := loginPlayerGUID(trace.Events[start])

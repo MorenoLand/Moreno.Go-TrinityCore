@@ -160,6 +160,7 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) {
 		s.updateZoneAndArea(context.Background(), true)
 	} else {
 		s.lastZoneUpdate = time.Time{}
+		s.worldReady.Store(false)
 		s.farTeleportPending = true
 		s.visiblePlayersMu.Lock()
 		s.visiblePlayers = nil

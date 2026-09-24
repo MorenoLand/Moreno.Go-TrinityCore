@@ -162,6 +162,7 @@ type session struct {
 	playerGUID                uint64
 	playerLoading             bool
 	playerLoaded              bool
+	worldReady                atomic.Bool
 	farTeleportPending        bool
 	randomBGWinner            bool
 	bgData                    battlegroundLoginData
@@ -670,7 +671,7 @@ func (s *Server) updateTimeSync(now time.Time) {
 	s.sessionsMu.RLock()
 	sessions := make([]*session, 0, len(s.sessions))
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil && !sess.timeSyncDue.IsZero() && !now.Before(sess.timeSyncDue) {
+		if sess.worldReady.Load() && sess.player != nil && !sess.timeSyncDue.IsZero() && !now.Before(sess.timeSyncDue) {
 			sessions = append(sessions, sess)
 		}
 	}
@@ -689,7 +690,7 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 	s.sessionsMu.RLock()
 	var combatSessions []*session
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil && (sess.attackTarget != 0 || sess.autoRepeatSpell != 0) && !sess.isDeadOrGhost() {
+		if sess.worldReady.Load() && sess.player != nil && (sess.attackTarget != 0 || sess.autoRepeatSpell != 0) && !sess.isDeadOrGhost() {
 			combatSessions = append(combatSessions, sess)
 		}
 	}
@@ -798,7 +799,7 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 	s.sessionsMu.RLock()
 	var activeSessions []*session
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil && !sess.isDeadOrGhost() {
+		if sess.worldReady.Load() && sess.player != nil && !sess.isDeadOrGhost() {
 			activeSessions = append(activeSessions, sess)
 		}
 	}

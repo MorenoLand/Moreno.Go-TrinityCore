@@ -409,6 +409,7 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (success bool) {
 	var guid uint64
 	s.playerLoading = true
+	s.worldReady.Store(false)
 	defer func() {
 		s.playerLoading = false
 		if !success {
@@ -463,11 +464,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.visiblePlayersMu.Lock()
 	s.visiblePlayers = nil
 	s.visiblePlayersMu.Unlock()
-	if state.PlayerFlags&playerFlagContestedPVP != 0 {
-		s.contestedPVPEnd = time.Now().Add(30 * time.Second)
-	} else {
-		s.contestedPVPEnd = time.Time{}
-	}
+	s.contestedPVPEnd = time.Time{}
 	s.playerLoaded = true
 	s.recordInstanceEnterTime(ctx, time.Now())
 	difficulty := protocol.NewBuffer(12)
@@ -587,6 +584,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(initialUpdate.Opcode, initialUpdate.Payload.Bytes(), true); err != nil {
 		return false
 	}
+	s.worldReady.Store(true)
 	s.markVisiblePlayers(attachedTransportPlayerGUIDs)
 	s.server.broadcastPlayerCreate(state, s)
 	mapTransportUpdates, err := s.server.buildMapTransportUpdates(state, state.TransportGUID)
@@ -793,6 +791,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		s.player.PVPFlags |= 0x04
 		s.sendPlayerUpdate()
 	}
+	if s.player.PlayerFlags&playerFlagContestedPVP != 0 {
+		s.contestedPVPEnd = time.Now().Add(30 * time.Second)
+	}
 	if s.player.AtLogin&uint32(atLoginResetSpells) != 0 {
 		if err := s.resetSpellsAtLogin(ctx); err == nil {
 			s.player.AtLogin &^= uint32(atLoginResetSpells)
@@ -996,6 +997,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	if s == nil || s.server == nil || s.player == nil {
 		return false
 	}
+	s.worldReady.Store(false)
 	state := *s.player
 	attachedTransport, err := s.server.buildAttachedTransportUpdate(ctx, state)
 	if err != nil {
@@ -1042,6 +1044,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	if err := s.write(initialUpdate.Opcode, initialUpdate.Payload.Bytes(), true); err != nil {
 		return false
 	}
+	s.worldReady.Store(true)
 	s.markVisiblePlayers(attachedPlayerGUIDs)
 	s.server.broadcastPlayerCreate(state, s)
 	if mapTransports, err := s.server.buildMapTransportUpdates(state, state.TransportGUID); err != nil {
@@ -2466,6 +2469,7 @@ func (s *session) completeLogout(ctx context.Context) error {
 	if !s.playerLoaded {
 		return nil
 	}
+	s.worldReady.Store(false)
 	s.stopSpellLifecycle()
 	s.stopTimedAchievements()
 	s.broadcastGuildMemberLogout()
