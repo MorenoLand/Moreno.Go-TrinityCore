@@ -489,6 +489,16 @@ func (s *session) teleportToLFGDungeon(dungeonID uint32) {
 	if s.player == nil {
 		return
 	}
+	inDungeon := false
+	if s.server != nil && s.server.Data != nil {
+		if mapInfo, found, err := s.server.Data.Map(s.player.Map); err == nil && found {
+			inDungeon = mapInfo.IsDungeon()
+		}
+	}
+	if !inDungeon {
+		s.setBattlegroundEntryPoint()
+	}
+	s.finishTaxiFlight()
 	s.player.LfgEntryPointMap = s.player.Map
 	s.player.LfgEntryPointX = s.player.X
 	s.player.LfgEntryPointY = s.player.Y
@@ -1050,7 +1060,6 @@ func (s *session) handleLfgTeleport(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	s.finishTaxiFlight()
 	s.teleportToLFGDungeon(lfgDungeonID)
 	return true
 }

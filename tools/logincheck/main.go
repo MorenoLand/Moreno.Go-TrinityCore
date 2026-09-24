@@ -45,6 +45,7 @@ func main() {
 	replayPetFocusAuraSpell := flag.Uint("replay-pet-focus-aura-spell", 0, "replay a DBC Focus regeneration aura through the pet timer and power packet")
 	replayPetFeedSpell := flag.Uint("replay-pet-feed-spell", 0, "after login, cast a pet-feed spell against the supplied inventory item")
 	replayPetFeedItem := flag.Uint64("replay-pet-feed-item", 0, "inventory item GUID used by the pet-feed replay")
+	replayLFGDungeon := flag.Uint("replay-lfg-dungeon", 0, "after login, teleport through the LFG entrance and verify saved battleground return data")
 	replayTrace := flag.String("trace-out", "", "optional JSONL path for the in-process login trace")
 	flag.Parse()
 	if *selfCheck {
@@ -56,16 +57,17 @@ func main() {
 	}
 	if *replayWork != "" {
 		petFeedRequested := *replayPetFeedSpell != 0 || *replayPetFeedItem != 0
+		lfgReplayRequested := *replayLFGDungeon != 0
 		petReplayCount := 0
 		for _, requested := range []bool{*replayPetCooldownSpell != 0, *replayPetPowerSpell != 0, *replayPetXPAward != 0, *replayPetAuraSourceSpell != 0, *replayPetFocusAuraSpell != 0, petFeedRequested} {
 			if requested {
 				petReplayCount++
 			}
 		}
-		if petReplayCount > 1 || petFeedRequested && (*replayPetFeedSpell == 0 || *replayPetFeedItem == 0) {
-			fail("choose only one pet replay scenario")
+		if petReplayCount > 1 || petReplayCount != 0 && lfgReplayRequested || petFeedRequested && (*replayPetFeedSpell == 0 || *replayPetFeedItem == 0) {
+			fail("choose only one post-login replay scenario")
 		}
-		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem); err != nil {
+		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem, uint32(*replayLFGDungeon)); err != nil {
 			fail(err.Error())
 		}
 		return
@@ -3925,7 +3927,7 @@ func eventPayload(event protocoltrace.Event) ([]byte, error) {
 	return protocoltrace.Trace{Events: []protocoltrace.Event{event}}.Payload(event)
 }
 
-func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64) error {
+func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64, lfgDungeonID uint32) error {
 	workDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return err
@@ -4003,6 +4005,8 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 		trace, replayErr = world.ReplayCharacterPetFocusAura(ctx, server, guid, petFocusAuraSpell)
 	} else if petFeedSpell != 0 {
 		trace, replayErr = world.ReplayCharacterPetFeed(ctx, server, guid, petFeedSpell, petFoodGUID)
+	} else if lfgDungeonID != 0 {
+		trace, replayErr = world.ReplayCharacterLFGTeleport(ctx, server, guid, lfgDungeonID)
 	} else {
 		trace, replayErr = world.ReplayCharacterLogin(ctx, server, guid)
 	}

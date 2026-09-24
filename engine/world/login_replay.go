@@ -14,52 +14,59 @@ import (
 )
 
 func ReplayCharacterLogin(ctx context.Context, server *Server, guid uint64) (protocoltrace.Trace, error) {
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, 0)
+}
+
+func ReplayCharacterLFGTeleport(ctx context.Context, server *Server, guid uint64, dungeonID uint32) (protocoltrace.Trace, error) {
+	if dungeonID == 0 {
+		return protocoltrace.Trace{}, errors.New("LFG teleport replay requires a dungeon ID")
+	}
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, dungeonID)
 }
 
 func ReplayCharacterPetCooldown(ctx context.Context, server *Server, guid uint64, spellID uint32) (protocoltrace.Trace, error) {
 	if spellID == 0 {
 		return protocoltrace.Trace{}, errors.New("pet cooldown replay requires a spell ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, spellID, 0, 0, 0, 0, 0, 0)
+	return replayCharacterLogin(ctx, server, guid, spellID, 0, 0, 0, 0, 0, 0, 0)
 }
 
 func ReplayCharacterPetPower(ctx context.Context, server *Server, guid uint64, spellID uint32) (protocoltrace.Trace, error) {
 	if spellID == 0 {
 		return protocoltrace.Trace{}, errors.New("pet power replay requires a spell ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, spellID, 0, 0, 0, 0, 0)
+	return replayCharacterLogin(ctx, server, guid, 0, spellID, 0, 0, 0, 0, 0, 0)
 }
 
 func ReplayCharacterPetXP(ctx context.Context, server *Server, guid uint64, earnedXP uint32) (protocoltrace.Trace, error) {
 	if earnedXP == 0 {
 		return protocoltrace.Trace{}, errors.New("pet XP replay requires an XP award")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, earnedXP, 0, 0, 0, 0)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, earnedXP, 0, 0, 0, 0, 0)
 }
 
 func ReplayCharacterPetFeed(ctx context.Context, server *Server, guid uint64, feedSpell uint32, foodItemGUID uint64) (protocoltrace.Trace, error) {
 	if feedSpell == 0 || foodItemGUID == 0 {
 		return protocoltrace.Trace{}, errors.New("pet feed replay requires a spell and item GUID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, feedSpell, foodItemGUID, 0, 0)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, feedSpell, foodItemGUID, 0, 0, 0)
 }
 
 func ReplayCharacterPetAura(ctx context.Context, server *Server, guid uint64, ownerSpellID uint32) (protocoltrace.Trace, error) {
 	if ownerSpellID == 0 {
 		return protocoltrace.Trace{}, errors.New("owner pet-aura replay requires a source spell ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, ownerSpellID, 0)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, ownerSpellID, 0, 0)
 }
 
 func ReplayCharacterPetFocusAura(ctx context.Context, server *Server, guid uint64, spellID uint32) (protocoltrace.Trace, error) {
 	if spellID == 0 {
 		return protocoltrace.Trace{}, errors.New("pet focus-aura replay requires a DBC spell ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, spellID)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, spellID, 0)
 }
 
-func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petCooldownSpell, petPowerSpell, petXPAward, petFeedSpell uint32, petFoodGUID uint64, petAuraSourceSpell, petFocusAuraSpell uint32) (protocoltrace.Trace, error) {
+func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petCooldownSpell, petPowerSpell, petXPAward, petFeedSpell uint32, petFoodGUID uint64, petAuraSourceSpell, petFocusAuraSpell, lfgDungeonID uint32) (protocoltrace.Trace, error) {
 	if server == nil || server.CharactersStore == nil || server.CharactersStore.DB == nil || guid == 0 {
 		return protocoltrace.Trace{}, errors.New("login replay requires a server and character database")
 	}
@@ -121,6 +128,26 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 		if err := session.replayPetFocusAura(ctx, petFocusAuraSpell); err != nil {
 			session.logout()
 			return recorder.Snapshot(), err
+		}
+	}
+	if lfgDungeonID != 0 {
+		if session.player == nil {
+			session.logout()
+			return recorder.Snapshot(), errors.New("LFG teleport replay requires an active player")
+		}
+		before := *session.player
+		wasDungeon := false
+		if server.Data != nil {
+			if mapInfo, found, err := server.Data.Map(before.Map); err == nil && found {
+				wasDungeon = mapInfo.IsDungeon()
+			}
+		}
+		_, _, _, wasBattlefield := battlegroundTypeForMap(before.Map)
+		wasTaxiing := before.TaxiPath != ""
+		session.teleportToLFGDungeon(lfgDungeonID)
+		if !wasDungeon && !wasBattlefield && !wasTaxiing && (session.bgData.JoinMap != before.Map || session.bgData.JoinX != before.X || session.bgData.JoinY != before.Y || session.bgData.JoinZ != before.Z || session.bgData.JoinO != before.Orientation) {
+			session.logout()
+			return recorder.Snapshot(), fmt.Errorf("LFG return point map=%d position=(%v,%v,%v,%v), want map=%d position=(%v,%v,%v,%v)", session.bgData.JoinMap, session.bgData.JoinX, session.bgData.JoinY, session.bgData.JoinZ, session.bgData.JoinO, before.Map, before.X, before.Y, before.Z, before.Orientation)
 		}
 	}
 	if petCooldownSpell != 0 {
