@@ -887,7 +887,7 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 		if rows.Scan(&record.bag, &record.slot, &record.item, &record.entry, &record.count, &record.enchantments) != nil {
 			continue
 		}
-		if record.item <= 0 || record.entry <= 0 || record.count <= 0 {
+		if record.item <= 0 || record.entry <= 0 {
 			invalid = append(invalid, invalidInventoryRow{record: record, deleteInstance: record.item > 0})
 			continue
 		}

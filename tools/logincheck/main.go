@@ -865,6 +865,15 @@ func checkExpectedCharacterStateDelta() error {
 	if err := validateInventoryStateDelta(stackBefore, stackAfter, true); err != nil {
 		return fmt.Errorf("one-unit pet-feed stack decrement was rejected: %w", err)
 	}
+	zeroCountBefore := map[string]characterTableSnapshot{"character_inventory": feedBefore["character_inventory"], "inventory_item_instances": feedBefore["inventory_item_instances"]}
+	zeroCountItem := zeroCountBefore["inventory_item_instances"]
+	zeroCountRow := zeroCountItem.InventoryRows["99"]
+	zeroCountRow.Count, zeroCountRow.Digest = 0, "zero-count-item"
+	zeroCountItem.InventoryRows = map[string]inventoryRowSnapshot{"99": zeroCountRow}
+	zeroCountBefore["inventory_item_instances"] = zeroCountItem
+	if validateInventoryStateDelta(zeroCountBefore, feedAfter, false) == nil {
+		return fmt.Errorf("valid zero-count item removal was accepted as source invalid-item cleanup")
+	}
 	buybackBefore := map[string]characterTableSnapshot{"character_inventory": {InventoryRows: map[string]inventoryRowSnapshot{"1:0:74:102": {ItemGUID: 102, OwnerGUID: 1, Slot: 74, Digest: "buyback-row"}}}, "inventory_item_instances": {InventoryRows: map[string]inventoryRowSnapshot{"102": {ItemGUID: 102, OwnerGUID: 1, ItemEntry: 17194, Count: 1, ItemTemplateValid: true, Digest: "buyback-instance", DigestWithoutCount: "buyback-metadata"}}}}
 	buybackAfter := map[string]characterTableSnapshot{"character_inventory": {InventoryRows: map[string]inventoryRowSnapshot{}}, "inventory_item_instances": {InventoryRows: map[string]inventoryRowSnapshot{}}}
 	if err := validateInventoryStateDelta(buybackBefore, buybackAfter, false); err != nil {

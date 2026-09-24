@@ -173,7 +173,7 @@ func validateInventoryStateDelta(before, after map[string]characterTableSnapshot
 			removed[itemGUID] = struct{}{}
 			continue
 		}
-		if hasBeforeItem && (beforeItem.ItemEntry <= 0 || beforeItem.Count <= 0 || !beforeItem.ItemTemplateValid) {
+		if hasBeforeItem && (beforeItem.ItemEntry <= 0 || !beforeItem.ItemTemplateValid) {
 			removed[itemGUID] = struct{}{}
 			continue
 		}
