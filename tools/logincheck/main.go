@@ -114,6 +114,9 @@ func runSelfCheck() error {
 	if err := checkSpellPowerEnchantmentDBC(); err != nil {
 		return err
 	}
+	if err := checkRandomSuffixSpellPowerDBC(); err != nil {
+		return err
+	}
 	if world.PlayerCreateUpdateFlags(false, false) != 0x0060 || world.PlayerCreateUpdateFlags(true, false) != 0x0061 || world.PlayerCreateUpdateFlags(false, true) != 0x0064 {
 		return fmt.Errorf("player create update flags do not match victim/self source flags")
 	}
@@ -1319,9 +1322,82 @@ func checkSpellPowerEnchantmentDBC() error {
 		if amount := world.ResolveEquippedSpellPowerEnchant(entry, 80, 0, true); amount != 0 {
 			return fmt.Errorf("broken item retained spell-power enchant id=%d amount=%d", id, amount)
 		}
+		conditioned := entry
+		conditioned.ConditionID = 1
+		if amount := world.ResolveEquippedSpellPowerEnchant(conditioned, 80, 0, false); amount != 0 {
+			return fmt.Errorf("conditioned item enchant id=%d applied without its condition", id)
+		}
+		skilled := entry
+		skilled.RequiredSkillID, skilled.RequiredSkillRank = 164, 1
+		if amount := world.ResolveEquippedSpellPowerEnchant(skilled, 80, 0, false); amount != 0 || world.ResolveEquippedSpellPowerEnchant(skilled, 80, 1, false) != want {
+			return fmt.Errorf("required-skill gate for item enchant id=%d differs", id)
+		}
+		underLevel := entry
+		underLevel.MinLevel = 81
+		if amount := world.ResolveEquippedSpellPowerEnchant(underLevel, 80, 0, false); amount != 0 {
+			return fmt.Errorf("under-level item enchant id=%d was applied", id)
+		}
 		return nil
 	}
 	return fmt.Errorf("SpellItemEnchantment.dbc contains no unconditioned, unskilled spell-power stat effect")
+}
+
+func checkRandomSuffixSpellPowerDBC() error {
+	data := wotlk.NewStore(filepath.Join(config.Default().GameDataDir, "dbc"))
+	factor := uint32(0)
+	for level := uint32(1); level <= 80 && factor == 0; level++ {
+		factor = world.ResolveItemSuffixFactor(data, level, 4, 13, 1)
+	}
+	if factor == 0 {
+		return fmt.Errorf("RandPropPoints.dbc has no epic weapon suffix factor")
+	}
+	file, err := data.File("ItemRandomSuffix")
+	if err != nil {
+		return fmt.Errorf("load ItemRandomSuffix.dbc: %w", err)
+	}
+	for index := 0; index < file.Records(); index++ {
+		record, err := file.Record(index)
+		if err != nil {
+			return err
+		}
+		id, err := record.Uint32(0)
+		if err != nil {
+			return err
+		}
+		suffix, found, err := data.ItemRandomSuffix(id)
+		if err != nil {
+			return err
+		}
+		if !found {
+			continue
+		}
+		for effectIndex, enchantID := range suffix.Enchantment {
+			if enchantID == 0 || suffix.AllocationPct[effectIndex] == 0 {
+				continue
+			}
+			entry, found, err := data.SpellItemEnchantment(enchantID)
+			if err != nil {
+				return err
+			}
+			if !found || entry.ConditionID != 0 || entry.MinLevel > 80 {
+				continue
+			}
+			for statIndex, effect := range entry.Effects {
+				if effect != 5 || entry.EffectArg[statIndex] != 45 {
+					continue
+				}
+				amount := entry.EffectPointsMin[statIndex]
+				if amount == 0 {
+					amount = suffix.AllocationPct[effectIndex] * factor / 10000
+				}
+				if amount == 0 || world.ResolveRandomSuffixSpellPowerEnchant(entry, 80, entry.RequiredSkillRank, false, amount) != amount {
+					return fmt.Errorf("random suffix DBC scaling did not resolve spell-power enchant %d", enchantID)
+				}
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("ItemRandomSuffix.dbc contains no spell-power stat enchant for a qualified suffix fixture")
 }
 
 func validateCharacterStatsSpellPower(ctx context.Context, charactersDB, worldDB *sql.DB, data *wotlk.Store, guid uint64) error {
@@ -1347,7 +1423,7 @@ func validateCharacterStatsSpellPower(ctx context.Context, charactersDB, worldDB
 		return err
 	}
 	skillRows.Close()
-	rows, err := charactersDB.QueryContext(ctx, `SELECT ii.itemEntry, COALESCE(ii.enchantments, ''), COALESCE(ii.durability, 0)
+	rows, err := charactersDB.QueryContext(ctx, `SELECT ii.itemEntry, COALESCE(ii.enchantments, ''), COALESCE(ii.durability, 0), COALESCE(ii.randomPropertyId, 0)
 		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
 		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot < 19`, guid)
 	if err != nil {
@@ -1356,7 +1432,7 @@ func validateCharacterStatsSpellPower(ctx context.Context, charactersDB, worldDB
 	template, err := worldDB.PrepareContext(ctx, `SELECT stat_type1, stat_value1, stat_type2, stat_value2,
 		stat_type3, stat_value3, stat_type4, stat_value4, stat_type5, stat_value5,
 		stat_type6, stat_value6, stat_type7, stat_value7, stat_type8, stat_value8,
-		stat_type9, stat_value9, stat_type10, stat_value10, MaxDurability FROM item_template WHERE entry = ?`)
+		stat_type9, stat_value9, stat_type10, stat_value10, MaxDurability, ItemLevel, Quality, InventoryType, RandomSuffix FROM item_template WHERE entry = ?`)
 	if err != nil {
 		rows.Close()
 		return fmt.Errorf("prepare world item stats for spell-power parity: %w", err)
@@ -1367,13 +1443,14 @@ func validateCharacterStatsSpellPower(ctx context.Context, charactersDB, worldDB
 		var itemEntry uint32
 		var enchantments string
 		var durability uint32
-		if err := rows.Scan(&itemEntry, &enchantments, &durability); err != nil {
+		var randomPropertyID int32
+		if err := rows.Scan(&itemEntry, &enchantments, &durability, &randomPropertyID); err != nil {
 			rows.Close()
 			return err
 		}
 		var statTypes, statValues [10]int64
-		var maxDurability uint32
-		err := template.QueryRowContext(ctx, itemEntry).Scan(&statTypes[0], &statValues[0], &statTypes[1], &statValues[1], &statTypes[2], &statValues[2], &statTypes[3], &statValues[3], &statTypes[4], &statValues[4], &statTypes[5], &statValues[5], &statTypes[6], &statValues[6], &statTypes[7], &statValues[7], &statTypes[8], &statValues[8], &statTypes[9], &statValues[9], &maxDurability)
+		var maxDurability, itemLevel, quality, inventoryType, randomSuffix uint32
+		err := template.QueryRowContext(ctx, itemEntry).Scan(&statTypes[0], &statValues[0], &statTypes[1], &statValues[1], &statTypes[2], &statValues[2], &statTypes[3], &statValues[3], &statTypes[4], &statValues[4], &statTypes[5], &statValues[5], &statTypes[6], &statValues[6], &statTypes[7], &statValues[7], &statTypes[8], &statValues[8], &statTypes[9], &statValues[9], &maxDurability, &itemLevel, &quality, &inventoryType, &randomSuffix)
 		if err == sql.ErrNoRows {
 			continue
 		}
@@ -1387,6 +1464,22 @@ func validateCharacterStatsSpellPower(ctx context.Context, charactersDB, worldDB
 			}
 		}
 		broken := maxDurability > 0 && durability == 0
+		applyEnchant := func(enchantID, suffixAmount uint32, suffix bool) error {
+			if enchantID == 0 {
+				return nil
+			}
+			entry, found, err := data.SpellItemEnchantment(enchantID)
+			if err != nil || !found {
+				return err
+			}
+			skillValue := skillValues[entry.RequiredSkillID]
+			amount := world.ResolveEquippedSpellPowerEnchant(entry, level, skillValue, broken)
+			if suffix {
+				amount = world.ResolveRandomSuffixSpellPowerEnchant(entry, level, skillValue, broken, suffixAmount)
+			}
+			expected += amount
+			return nil
+		}
 		fields := strings.Fields(enchantments)
 		for _, fieldIndex := range []int{0, 3} {
 			if fieldIndex >= len(fields) {
@@ -1396,13 +1489,40 @@ func validateCharacterStatsSpellPower(ctx context.Context, charactersDB, worldDB
 			if err != nil || enchantID == 0 {
 				continue
 			}
-			entry, found, err := data.SpellItemEnchantment(uint32(enchantID))
+			if err := applyEnchant(uint32(enchantID), 0, false); err != nil {
+				rows.Close()
+				return err
+			}
+		}
+		if randomPropertyID > 0 {
+			property, found, err := data.ItemRandomProperties(uint32(randomPropertyID))
 			if err != nil {
 				rows.Close()
 				return err
 			}
 			if found {
-				expected += world.ResolveEquippedSpellPowerEnchant(entry, level, skillValues[entry.RequiredSkillID], broken)
+				for _, enchantID := range property.Enchantment {
+					if err := applyEnchant(enchantID, 0, false); err != nil {
+						rows.Close()
+						return err
+					}
+				}
+			}
+		} else if randomPropertyID < 0 {
+			suffix, found, err := data.ItemRandomSuffix(uint32(-int64(randomPropertyID)))
+			if err != nil {
+				rows.Close()
+				return err
+			}
+			if found {
+				factor := world.ResolveItemSuffixFactor(data, itemLevel, quality, inventoryType, randomSuffix)
+				for index, enchantID := range suffix.Enchantment {
+					amount := suffix.AllocationPct[index] * factor / 10000
+					if err := applyEnchant(enchantID, amount, true); err != nil {
+						rows.Close()
+						return err
+					}
+				}
 			}
 		}
 	}

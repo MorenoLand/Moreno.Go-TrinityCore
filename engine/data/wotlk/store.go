@@ -1346,6 +1346,17 @@ type SpellItemEnchantmentEntry struct {
 	MinLevel          uint32
 }
 
+type ItemRandomPropertiesEntry struct {
+	ID          uint32
+	Enchantment [3]uint32
+}
+
+type ItemRandomSuffixEntry struct {
+	ID            uint32
+	Enchantment   [3]uint32
+	AllocationPct [3]uint32
+}
+
 type ItemLimitCategoryEntry struct {
 	ID       uint32
 	Quantity uint32
@@ -1390,6 +1401,45 @@ func (s *Store) SpellItemEnchantment(id uint32) (SpellItemEnchantmentEntry, bool
 	}
 	if entry.MinLevel, err = record.Uint32(37); err != nil {
 		return SpellItemEnchantmentEntry{}, false, err
+	}
+	return entry, true, nil
+}
+
+func (s *Store) ItemRandomProperties(id uint32) (ItemRandomPropertiesEntry, bool, error) {
+	file, err := s.File("ItemRandomProperties")
+	if err != nil {
+		return ItemRandomPropertiesEntry{}, false, err
+	}
+	record, found := file.Find(id)
+	if !found {
+		return ItemRandomPropertiesEntry{}, false, nil
+	}
+	entry := ItemRandomPropertiesEntry{ID: id}
+	for index := range entry.Enchantment {
+		if entry.Enchantment[index], err = record.Uint32(2 + index); err != nil {
+			return ItemRandomPropertiesEntry{}, false, err
+		}
+	}
+	return entry, true, nil
+}
+
+func (s *Store) ItemRandomSuffix(id uint32) (ItemRandomSuffixEntry, bool, error) {
+	file, err := s.File("ItemRandomSuffix")
+	if err != nil {
+		return ItemRandomSuffixEntry{}, false, err
+	}
+	record, found := file.Find(id)
+	if !found {
+		return ItemRandomSuffixEntry{}, false, nil
+	}
+	entry := ItemRandomSuffixEntry{ID: id}
+	for index := range entry.Enchantment {
+		if entry.Enchantment[index], err = record.Uint32(19 + index); err != nil {
+			return ItemRandomSuffixEntry{}, false, err
+		}
+		if entry.AllocationPct[index], err = record.Uint32(24 + index); err != nil {
+			return ItemRandomSuffixEntry{}, false, err
+		}
 	}
 	return entry, true, nil
 }

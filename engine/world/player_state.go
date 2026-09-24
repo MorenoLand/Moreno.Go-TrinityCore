@@ -1921,8 +1921,6 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 		slot, armor, block, delay := item.Slot, item.Armor, item.Block, item.Delay
 		minDmg, maxDmg := item.MinDamage, item.MaxDamage
 		st, sv := item.StatTypes, item.StatValues
-		enchantments := item.Enchantments
-		broken := item.MaxDurability > 0 && item.Durability == 0
 		if armor > 0 {
 			state.Armor += uint32(armor)
 		}
@@ -2036,7 +2034,7 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 				state.SpellPenetration += uint32(val)
 			}
 		}
-		if err := s.applyPlayerSpellPowerEnchants(state, enchantments, broken); err != nil {
+		if err := s.applyPlayerSpellPowerEnchants(state, item); err != nil {
 			return err
 		}
 	}
@@ -4212,39 +4210,7 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 		return result
 	}
 	itemSuffixFactor := func(template itemTemplateState) uint32 {
-		if template.RandomSuffix == 0 || s.server.Data == nil {
-			return 0
-		}
-		points, found, err := s.server.Data.RandPropPoints(template.ItemLevel)
-		if err != nil || !found {
-			return 0
-		}
-		index := -1
-		switch template.InventoryType {
-		case 1, 4, 5, 7, 17, 20:
-			index = 0
-		case 3, 6, 8, 10, 12:
-			index = 1
-		case 2, 9, 11, 14, 16, 23:
-			index = 2
-		case 13, 21, 22:
-			index = 3
-		case 15, 25, 26:
-			index = 4
-		}
-		if index < 0 {
-			return 0
-		}
-		switch template.Quality {
-		case 2:
-			return points.Good[index]
-		case 3:
-			return points.Superior[index]
-		case 4:
-			return points.Epic[index]
-		default:
-			return 0
-		}
+		return ResolveItemSuffixFactor(s.server.Data, template.ItemLevel, template.Quality, template.InventoryType, template.RandomSuffix)
 	}
 	itemDurability := func(guid int64) uint32 {
 		var d int64
