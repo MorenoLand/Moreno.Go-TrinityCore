@@ -215,6 +215,8 @@ type playerState struct {
 	HealthLoaded         bool
 	repopOnLogin         bool
 	BaseMana             uint32
+	ItemHealthBonus      uint32
+	ItemManaBonus        uint32
 	Powers               [7]uint32
 	MaxPowers            [7]uint32
 	Cinematic            uint32
@@ -1905,6 +1907,8 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	state.Block = 0
 	state.AttackPower = 0
 	state.RangedAttackPower = 0
+	state.ItemHealthBonus = 0
+	state.ItemManaBonus = 0
 	state.SpellPower = 0
 	state.BaseSpellPower = 0
 	state.SpellPenetration = 0
@@ -1966,6 +1970,10 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 				continue
 			}
 			switch st[k] {
+			case 0: // Mana
+				state.ItemManaBonus += uint32(val)
+			case 1: // Health
+				state.ItemHealthBonus += uint32(val)
 			case 3: // Agility
 				state.Stats[1] += uint32(val)
 			case 4: // Strength
@@ -2034,7 +2042,7 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 				state.SpellPenetration += uint32(val)
 			}
 		}
-		if err := s.applyPlayerSpellPowerEnchants(state, item); err != nil {
+		if err := s.applyPlayerItemStatEnchants(state, item); err != nil {
 			return err
 		}
 	}
@@ -2045,8 +2053,8 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	totalStr := state.Stats[0]
 	totalAgi := state.Stats[1]
 
-	state.MaxHealth = uint32(baseHealth) + (totalSta * 10)
-	totalMana := uint32(baseMana) + (totalInte * 15)
+	state.MaxHealth = uint32(baseHealth) + (totalSta * 10) + state.ItemHealthBonus
+	totalMana := uint32(baseMana) + (totalInte * 15) + state.ItemManaBonus
 	if state.Class == 1 { // Warrior: rage max 1000
 		state.MaxPowers[1] = 1000
 	} else if state.Class == 4 { // Rogue: energy max 100

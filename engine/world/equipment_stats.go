@@ -32,6 +32,8 @@ type equippedItemStats struct {
 
 const (
 	itemEnchantmentTypeStat = 5
+	itemModMana             = 0
+	itemModHealth           = 1
 	itemModSpellPower       = 45
 )
 
@@ -80,24 +82,32 @@ func (s *session) loadEquippedItemStats(ctx context.Context, state *playerState)
 }
 
 func ResolveEquippedSpellPowerEnchant(enchantment wotlk.SpellItemEnchantmentEntry, level, requiredSkillValue uint32, broken bool) uint32 {
-	return resolveSpellPowerEnchant(enchantment, level, requiredSkillValue, broken, 0, false)
+	return ResolveEquippedItemStatEnchant(enchantment, itemModSpellPower, level, requiredSkillValue, broken)
 }
 
 func ResolveRandomSuffixSpellPowerEnchant(enchantment wotlk.SpellItemEnchantmentEntry, level, requiredSkillValue uint32, broken bool, suffixAmount uint32) uint32 {
-	return resolveSpellPowerEnchant(enchantment, level, requiredSkillValue, broken, suffixAmount, true)
+	return ResolveRandomSuffixItemStatEnchant(enchantment, itemModSpellPower, level, requiredSkillValue, broken, suffixAmount)
 }
 
 func ResolveGemSocketEnchantActive(socketColor uint32, prismatic wotlk.SpellItemEnchantmentEntry, prismaticFound bool, requiredSkillValue uint32) bool {
 	return socketColor != 0 || prismaticFound && (prismatic.RequiredSkillID == 0 || requiredSkillValue >= prismatic.RequiredSkillRank)
 }
 
-func resolveSpellPowerEnchant(enchantment wotlk.SpellItemEnchantmentEntry, level, requiredSkillValue uint32, broken bool, suffixAmount uint32, suffix bool) uint32 {
+func ResolveEquippedItemStatEnchant(enchantment wotlk.SpellItemEnchantmentEntry, itemMod, level, requiredSkillValue uint32, broken bool) uint32 {
+	return resolveItemStatEnchant(enchantment, itemMod, level, requiredSkillValue, broken, 0, false)
+}
+
+func ResolveRandomSuffixItemStatEnchant(enchantment wotlk.SpellItemEnchantmentEntry, itemMod, level, requiredSkillValue uint32, broken bool, suffixAmount uint32) uint32 {
+	return resolveItemStatEnchant(enchantment, itemMod, level, requiredSkillValue, broken, suffixAmount, true)
+}
+
+func resolveItemStatEnchant(enchantment wotlk.SpellItemEnchantmentEntry, itemMod, level, requiredSkillValue uint32, broken bool, suffixAmount uint32, suffix bool) uint32 {
 	if broken || enchantment.ConditionID != 0 || level < enchantment.MinLevel || requiredSkillValue < enchantment.RequiredSkillRank {
 		return 0
 	}
 	var amount uint32
 	for index, effect := range enchantment.Effects {
-		if effect == itemEnchantmentTypeStat && enchantment.EffectArg[index] == itemModSpellPower {
+		if effect == itemEnchantmentTypeStat && enchantment.EffectArg[index] == itemMod {
 			value := enchantment.EffectPointsMin[index]
 			if value == 0 && suffix {
 				value = suffixAmount
@@ -144,7 +154,7 @@ func ResolveItemSuffixFactor(data *wotlk.Store, itemLevel, quality, inventoryTyp
 	}
 }
 
-func (s *session) applyPlayerSpellPowerEnchants(state *playerState, item equippedItemStats) error {
+func (s *session) applyPlayerItemStatEnchants(state *playerState, item equippedItemStats) error {
 	if s == nil || s.server == nil || s.server.Data == nil || state == nil {
 		return nil
 	}
@@ -158,7 +168,7 @@ func (s *session) applyPlayerSpellPowerEnchants(state *playerState, item equippe
 		if err != nil || enchantID == 0 {
 			continue
 		}
-		if err := s.applyItemSpellPowerEnchant(state, uint32(enchantID), broken, 0, false); err != nil {
+		if err := s.applyItemStatEnchantment(state, uint32(enchantID), broken, 0, false); err != nil {
 			return err
 		}
 	}
@@ -185,7 +195,7 @@ func (s *session) applyPlayerSpellPowerEnchants(state *playerState, item equippe
 		if !ResolveGemSocketEnchantActive(item.SocketColors[socket], prismatic, prismaticFound, playerSkillValue(state, prismatic.RequiredSkillID)) {
 			continue
 		}
-		if err := s.applyItemSpellPowerEnchant(state, uint32(enchantID), broken, 0, false); err != nil {
+		if err := s.applyItemStatEnchantment(state, uint32(enchantID), broken, 0, false); err != nil {
 			return err
 		}
 	}
@@ -197,7 +207,7 @@ func (s *session) applyPlayerSpellPowerEnchants(state *playerState, item equippe
 		if found {
 			for _, enchantID := range property.Enchantment {
 				if enchantID != 0 {
-					if err := s.applyItemSpellPowerEnchant(state, enchantID, broken, 0, false); err != nil {
+					if err := s.applyItemStatEnchantment(state, enchantID, broken, 0, false); err != nil {
 						return err
 					}
 				}
@@ -216,7 +226,7 @@ func (s *session) applyPlayerSpellPowerEnchants(state *playerState, item equippe
 					continue
 				}
 				amount := suffix.AllocationPct[index] * factor / 10000
-				if err := s.applyItemSpellPowerEnchant(state, enchantID, broken, amount, true); err != nil {
+				if err := s.applyItemStatEnchantment(state, enchantID, broken, amount, true); err != nil {
 					return err
 				}
 			}
@@ -225,20 +235,30 @@ func (s *session) applyPlayerSpellPowerEnchants(state *playerState, item equippe
 	return nil
 }
 
-func (s *session) applyItemSpellPowerEnchant(state *playerState, enchantID uint32, broken bool, suffixAmount uint32, suffix bool) error {
+func (s *session) applyItemStatEnchantment(state *playerState, enchantID uint32, broken bool, suffixAmount uint32, suffix bool) error {
 	entry, found, err := s.server.Data.SpellItemEnchantment(enchantID)
 	if err != nil || !found {
 		return err
 	}
 	skillValue := playerSkillValue(state, entry.RequiredSkillID)
-	amount := ResolveEquippedSpellPowerEnchant(entry, uint32(state.Level), skillValue, broken)
-	if suffix {
-		amount = ResolveRandomSuffixSpellPowerEnchant(entry, uint32(state.Level), skillValue, broken, suffixAmount)
-	}
-	if amount > 0 {
-		state.BaseSpellPower += amount
-		state.SpellPower += amount
-		s.setAchievementCriteria(criteriaTypeHighestSpellpower, 0, state.SpellPower)
+	for _, itemMod := range []uint32{itemModMana, itemModHealth, itemModSpellPower} {
+		amount := ResolveEquippedItemStatEnchant(entry, itemMod, uint32(state.Level), skillValue, broken)
+		if suffix {
+			amount = ResolveRandomSuffixItemStatEnchant(entry, itemMod, uint32(state.Level), skillValue, broken, suffixAmount)
+		}
+		if amount == 0 {
+			continue
+		}
+		switch itemMod {
+		case itemModMana:
+			state.ItemManaBonus += amount
+		case itemModHealth:
+			state.ItemHealthBonus += amount
+		case itemModSpellPower:
+			state.BaseSpellPower += amount
+			state.SpellPower += amount
+			s.setAchievementCriteria(criteriaTypeHighestSpellpower, 0, state.SpellPower)
+		}
 	}
 	return nil
 }

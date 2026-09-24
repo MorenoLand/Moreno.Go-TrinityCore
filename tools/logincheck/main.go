@@ -117,6 +117,15 @@ func runSelfCheck() error {
 	if err := checkRandomSuffixSpellPowerDBC(); err != nil {
 		return err
 	}
+	statEnchant := wotlk.SpellItemEnchantmentEntry{Effects: [3]uint32{5, 5, 5}, EffectPointsMin: [3]uint32{20, 30, 40}, EffectArg: [3]uint32{0, 1, 45}}
+	if world.ResolveEquippedItemStatEnchant(statEnchant, 0, 80, 0, false) != 20 || world.ResolveEquippedItemStatEnchant(statEnchant, 1, 80, 0, false) != 30 || world.ResolveEquippedItemStatEnchant(statEnchant, 45, 80, 0, false) != 40 {
+		return fmt.Errorf("source item enchant stat args did not map mana, health, and spell power")
+	}
+	suffixStatEnchant := statEnchant
+	suffixStatEnchant.EffectPointsMin = [3]uint32{}
+	if world.ResolveRandomSuffixItemStatEnchant(suffixStatEnchant, 0, 80, 0, false, 17) != 17 || world.ResolveRandomSuffixItemStatEnchant(suffixStatEnchant, 1, 80, 0, false, 17) != 17 || world.ResolveRandomSuffixItemStatEnchant(suffixStatEnchant, 45, 80, 0, false, 17) != 17 {
+		return fmt.Errorf("source random-suffix stat args did not map mana, health, and spell power")
+	}
 	prismatic := wotlk.SpellItemEnchantmentEntry{RequiredSkillID: 164, RequiredSkillRank: 50}
 	for _, test := range []struct {
 		color   uint32
