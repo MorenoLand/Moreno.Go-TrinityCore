@@ -819,27 +819,75 @@ func checkExpectedCharacterStateDelta() error {
 		return fmt.Errorf("unclassified characters.level mutation was accepted")
 	}
 	feedBefore := map[string]characterTableSnapshot{
-		"character_inventory":      {Rows: 1, Digest: "inventory-before", Columns: map[string]string{"guid": "owner", "bag": "0", "slot": "29", "item": "food"}},
-		"inventory_item_instances": {Rows: 1, Digest: "item-before", Columns: map[string]string{"guid": "food", "itemEntry": "entry", "owner_guid": "owner", "creatorGuid": "zero", "giftCreatorGuid": "zero", "count": "1", "duration": "0", "charges": "", "flags": "0", "enchantments": "", "randomPropertyId": "0", "durability": "100", "playedTime": "0", "text": ""}},
+		"character_inventory":      {Rows: 1, Digest: "inventory-before", Columns: map[string]string{"guid": "owner", "bag": "0", "slot": "29", "item": "food"}, InventoryRows: map[string]inventoryRowSnapshot{"1:0:29:99": {ItemGUID: 99, OwnerGUID: 1, Slot: 29, Digest: "inventory-row"}}},
+		"inventory_item_instances": {Rows: 1, Digest: "item-before", Columns: map[string]string{"guid": "food", "itemEntry": "entry", "owner_guid": "owner", "creatorGuid": "zero", "giftCreatorGuid": "zero", "count": "1", "duration": "0", "charges": "", "flags": "0", "enchantments": "", "randomPropertyId": "0", "durability": "100", "playedTime": "0", "text": ""}, InventoryRows: map[string]inventoryRowSnapshot{"99": {ItemGUID: 99, OwnerGUID: 1, ItemEntry: 17194, Count: 1, ItemTemplateValid: true, Digest: "item-row-before", DigestWithoutCount: "item-metadata"}}},
 		"character_pet":            {Rows: 1, Digest: "pet-before", Columns: map[string]string{"level": "53", "exp": "0", "curhappiness": "0"}},
 		"pet_aura":                 {Rows: 0, Digest: "aura-before", Columns: map[string]string{}},
 	}
 	feedAfter := map[string]characterTableSnapshot{
-		"character_inventory":      {Rows: 0, Digest: "inventory-after", Columns: map[string]string{"guid": "", "bag": "", "slot": "", "item": ""}},
-		"inventory_item_instances": {Rows: 0, Digest: "item-after", Columns: map[string]string{"guid": "", "itemEntry": "", "owner_guid": "", "creatorGuid": "", "giftCreatorGuid": "", "count": "", "duration": "", "charges": "", "flags": "", "enchantments": "", "randomPropertyId": "", "durability": "", "playedTime": "", "text": ""}},
+		"character_inventory":      {Rows: 0, Digest: "inventory-after", Columns: map[string]string{"guid": "", "bag": "", "slot": "", "item": ""}, InventoryRows: map[string]inventoryRowSnapshot{}},
+		"inventory_item_instances": {Rows: 0, Digest: "item-after", Columns: map[string]string{"guid": "", "itemEntry": "", "owner_guid": "", "creatorGuid": "", "giftCreatorGuid": "", "count": "", "duration": "", "charges": "", "flags": "", "enchantments": "", "randomPropertyId": "", "durability": "", "playedTime": "", "text": ""}, InventoryRows: map[string]inventoryRowSnapshot{}},
 		"character_pet":            {Rows: 1, Digest: "pet-after", Columns: map[string]string{"level": "53", "exp": "0", "curhappiness": "35000"}},
 		"pet_aura":                 {Rows: 1, Digest: "aura-after", Columns: map[string]string{"guid": "pet", "casterGuid": "owner", "spell": "1539", "effectMask": "1", "recalculateMask": "0", "stackCount": "1", "amount0": "35000", "amount1": "0", "amount2": "0", "base_amount0": "34999", "base_amount1": "0", "base_amount2": "0", "maxDuration": "30000", "remainTime": "30000", "remainCharges": "0", "critChance": "0", "applyResilience": "0"}},
 	}
 	invalidInventoryBefore := map[string]characterTableSnapshot{"character_inventory": feedBefore["character_inventory"], "inventory_item_instances": feedBefore["inventory_item_instances"]}
 	invalidInventoryAfter := map[string]characterTableSnapshot{"character_inventory": feedAfter["character_inventory"], "inventory_item_instances": feedAfter["inventory_item_instances"]}
+	invalidItem := invalidInventoryBefore["inventory_item_instances"]
+	invalidItem.InventoryRows = map[string]inventoryRowSnapshot{"99": {ItemGUID: 99, OwnerGUID: 1, ItemEntry: 0, Count: 1, Digest: "invalid-item", DigestWithoutCount: "invalid-metadata"}}
+	invalidInventoryBefore["inventory_item_instances"] = invalidItem
 	if err := validateCharacterStateDelta(invalidInventoryBefore, invalidInventoryAfter, false); err != nil {
 		return fmt.Errorf("source invalid-item cleanup was rejected: %w", err)
+	}
+	missingTemplateBefore := map[string]characterTableSnapshot{"character_inventory": invalidInventoryBefore["character_inventory"], "inventory_item_instances": invalidInventoryBefore["inventory_item_instances"]}
+	missingTemplateItem := missingTemplateBefore["inventory_item_instances"]
+	missingTemplateRow := missingTemplateItem.InventoryRows["99"]
+	missingTemplateRow.ItemEntry = 999999
+	missingTemplateRow.ItemTemplateValid = false
+	missingTemplateItem.InventoryRows = map[string]inventoryRowSnapshot{"99": missingTemplateRow}
+	missingTemplateBefore["inventory_item_instances"] = missingTemplateItem
+	if err := validateCharacterStateDelta(missingTemplateBefore, invalidInventoryAfter, false); err != nil {
+		return fmt.Errorf("source missing-template item cleanup was rejected: %w", err)
+	}
+	if err := validateInventoryStateDelta(feedBefore, feedAfter, false); err == nil {
+		return fmt.Errorf("valid non-buyback inventory deletion without pet-feed authorization was accepted")
 	}
 	if err := validateCharacterStateDelta(feedBefore, feedAfter, false); err == nil {
 		return fmt.Errorf("pet happiness update outside pet-feed replay was accepted")
 	}
 	if err := validateCharacterStateDelta(feedBefore, feedAfter, true); err != nil {
 		return fmt.Errorf("pet-feed inventory consumption was rejected: %w", err)
+	}
+	stackBefore := map[string]characterTableSnapshot{"character_inventory": {InventoryRows: map[string]inventoryRowSnapshot{"1:0:29:101": {ItemGUID: 101, OwnerGUID: 1, Slot: 29, Digest: "inventory-row"}}}, "inventory_item_instances": {InventoryRows: map[string]inventoryRowSnapshot{"101": {ItemGUID: 101, OwnerGUID: 1, ItemEntry: 17194, Count: 2, ItemTemplateValid: true, Digest: "stack-two", DigestWithoutCount: "stack-metadata"}}}}
+	stackAfter := map[string]characterTableSnapshot{"character_inventory": {InventoryRows: map[string]inventoryRowSnapshot{"1:0:29:101": {ItemGUID: 101, OwnerGUID: 1, Slot: 29, Digest: "inventory-row"}}}, "inventory_item_instances": {InventoryRows: map[string]inventoryRowSnapshot{"101": {ItemGUID: 101, OwnerGUID: 1, ItemEntry: 17194, Count: 1, ItemTemplateValid: true, Digest: "stack-one", DigestWithoutCount: "stack-metadata"}}}}
+	if validateInventoryStateDelta(stackBefore, stackAfter, false) == nil {
+		return fmt.Errorf("inventory stack decrement without pet-feed authorization was accepted")
+	}
+	if err := validateInventoryStateDelta(stackBefore, stackAfter, true); err != nil {
+		return fmt.Errorf("one-unit pet-feed stack decrement was rejected: %w", err)
+	}
+	buybackBefore := map[string]characterTableSnapshot{"character_inventory": {InventoryRows: map[string]inventoryRowSnapshot{"1:0:74:102": {ItemGUID: 102, OwnerGUID: 1, Slot: 74, Digest: "buyback-row"}}}, "inventory_item_instances": {InventoryRows: map[string]inventoryRowSnapshot{"102": {ItemGUID: 102, OwnerGUID: 1, ItemEntry: 17194, Count: 1, ItemTemplateValid: true, Digest: "buyback-instance", DigestWithoutCount: "buyback-metadata"}}}}
+	buybackAfter := map[string]characterTableSnapshot{"character_inventory": {InventoryRows: map[string]inventoryRowSnapshot{}}, "inventory_item_instances": {InventoryRows: map[string]inventoryRowSnapshot{}}}
+	if err := validateInventoryStateDelta(buybackBefore, buybackAfter, false); err != nil {
+		return fmt.Errorf("source buyback cleanup was rejected: %w", err)
+	}
+	danglingInventory := inventoryRowSnapshot{ItemGUID: 103, OwnerGUID: 1, Bag: 900, Slot: 12, Digest: "dangling-link"}
+	danglingBefore := map[string]characterTableSnapshot{"character_inventory": {InventoryRows: map[string]inventoryRowSnapshot{"1:900:12:103": danglingInventory}}, "inventory_item_instances": {InventoryRows: map[string]inventoryRowSnapshot{}}}
+	danglingAfter := map[string]characterTableSnapshot{"character_inventory": {InventoryRows: map[string]inventoryRowSnapshot{"1:900:12:103": danglingInventory}}, "inventory_item_instances": {InventoryRows: map[string]inventoryRowSnapshot{}}}
+	if err := validateInventoryStateDelta(danglingBefore, danglingAfter, false); err != nil {
+		return fmt.Errorf("source-preserved dangling inventory reference was rejected: %w", err)
+	}
+	danglingRemoved := map[string]characterTableSnapshot{"character_inventory": {InventoryRows: map[string]inventoryRowSnapshot{}}, "inventory_item_instances": {InventoryRows: map[string]inventoryRowSnapshot{}}}
+	if validateInventoryStateDelta(danglingBefore, danglingRemoved, false) == nil {
+		return fmt.Errorf("dangling inventory reference cleanup without a source load row was accepted")
+	}
+	emptyGUIDLink := inventoryRowSnapshot{OwnerGUID: 1, Bag: 0, Slot: 30, Digest: "zero-item-link"}
+	emptyGUIDBefore := map[string]characterTableSnapshot{"character_inventory": {InventoryRows: map[string]inventoryRowSnapshot{"1:0:30:0": emptyGUIDLink}}, "inventory_item_instances": {InventoryRows: map[string]inventoryRowSnapshot{}}}
+	if err := validateInventoryStateDelta(emptyGUIDBefore, emptyGUIDBefore, false); err != nil {
+		return fmt.Errorf("source-unloaded zero-item inventory reference was rejected: %w", err)
+	}
+	emptyGUIDAfter := map[string]characterTableSnapshot{"character_inventory": {InventoryRows: map[string]inventoryRowSnapshot{}}, "inventory_item_instances": {InventoryRows: map[string]inventoryRowSnapshot{}}}
+	if validateInventoryStateDelta(emptyGUIDBefore, emptyGUIDAfter, false) == nil {
+		return fmt.Errorf("zero-item inventory reference deletion was accepted outside its source load path")
 	}
 	cooldownBefore := map[string]characterTableSnapshot{"character_spell_cooldown": {Rows: 1, Columns: map[string]string{"guid": "owner", "spell": "expired", "item": "0", "time": "old", "categoryId": "0", "categoryEnd": "old"}}}
 	cooldownExpired := map[string]characterTableSnapshot{"character_spell_cooldown": {Rows: 0, Columns: map[string]string{"guid": "", "spell": "", "item": "", "time": "", "categoryId": "", "categoryEnd": ""}}}
@@ -3922,7 +3970,7 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 			return fmt.Errorf("inject isolated owner pet-aura fixture spell %d: %w", petAuraSourceSpell, err)
 		}
 	}
-	before, err := snapshotCharacterState(stores.Characters.DB, guid)
+	before, err := snapshotCharacterState(stores.Characters.DB, stores.World.DB, guid)
 	if err != nil {
 		server.Stop()
 		return err
@@ -3951,7 +3999,7 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 	}
 	cancel()
 	server.Stop()
-	after, snapshotErr := snapshotCharacterState(stores.Characters.DB, guid)
+	after, snapshotErr := snapshotCharacterState(stores.Characters.DB, stores.World.DB, guid)
 	if tracePath == "" {
 		tracePath = filepath.Join(workDir, "login-replay.jsonl")
 	} else if !filepath.IsAbs(tracePath) {
@@ -4171,6 +4219,7 @@ type characterTableSnapshot struct {
 	Digest            string
 	Columns           map[string]string
 	PetSpellCooldowns map[petSpellCooldownKey]petSpellCooldownSnapshot
+	InventoryRows     map[string]inventoryRowSnapshot
 }
 
 type petSpellCooldownKey struct {
@@ -4299,10 +4348,13 @@ func validateCharacterStateDelta(before, after map[string]characterTableSnapshot
 			return fmt.Errorf("snapshot table %s appeared", table)
 		}
 	}
+	if err := validateInventoryStateDelta(before, after, allowPetFeedProgress); err != nil {
+		return err
+	}
 	return nil
 }
 
-func snapshotCharacterState(db *sql.DB, guid uint64) (map[string]characterTableSnapshot, error) {
+func snapshotCharacterState(db, worldDB *sql.DB, guid uint64) (map[string]characterTableSnapshot, error) {
 	queries := []struct{ name, sql string }{
 		{"characters", "SELECT * FROM characters WHERE guid = ?"},
 		{"character_account_data", "SELECT * FROM character_account_data WHERE guid = ?"},
@@ -4374,7 +4426,19 @@ func snapshotCharacterState(db *sql.DB, guid uint64) (map[string]characterTableS
 		{"quest_tracker", "SELECT * FROM quest_tracker WHERE character_guid = ?"},
 	}
 	result := make(map[string]characterTableSnapshot, len(queries))
+	inventoryRows := map[string]map[string]inventoryRowSnapshot{"character_inventory": {}, "inventory_item_instances": {}}
+	itemTemplateExists := make(map[int64]bool)
+	defer func() {
+		for table, rows := range inventoryRows {
+			snapshot := result[table]
+			snapshot.InventoryRows = rows
+			result[table] = snapshot
+		}
+	}()
 	for _, query := range queries {
+		if query.name == "character_inventory" || query.name == "inventory_item_instances" {
+			inventoryRows[query.name] = make(map[string]inventoryRowSnapshot)
+		}
 		rows, err := db.Query(query.sql, guid)
 		if err != nil {
 			return nil, fmt.Errorf("snapshot %s: %w", query.name, err)
@@ -4396,6 +4460,28 @@ func snapshotCharacterState(db *sql.DB, guid uint64) (map[string]characterTableS
 			if err := rows.Scan(targets...); err != nil {
 				rows.Close()
 				return nil, err
+			}
+			if key, row, ok := captureInventoryRow(query.name, columns, values); ok {
+				if query.name == "inventory_item_instances" && row.ItemEntry > 0 {
+					if exists, cached := itemTemplateExists[row.ItemEntry]; cached {
+						row.ItemTemplateValid = exists
+					} else {
+						if worldDB == nil {
+							rows.Close()
+							return nil, fmt.Errorf("inventory item-template snapshot requires the world database")
+						}
+						var found int64
+						templateErr := worldDB.QueryRow("SELECT 1 FROM item_template WHERE entry = ?", row.ItemEntry).Scan(&found)
+						if templateErr == nil {
+							row.ItemTemplateValid = true
+						} else if templateErr != sql.ErrNoRows {
+							rows.Close()
+							return nil, fmt.Errorf("inventory item-template snapshot entry %d: %w", row.ItemEntry, templateErr)
+						}
+						itemTemplateExists[row.ItemEntry] = row.ItemTemplateValid
+					}
+				}
+				inventoryRows[query.name][key] = row
 			}
 			if query.name == "pet_spell_cooldown" {
 				var key petSpellCooldownKey
