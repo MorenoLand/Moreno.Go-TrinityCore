@@ -73,6 +73,46 @@ func ReplayCharacterPetFocusAura(ctx context.Context, server *Server, guid uint6
 	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, spellID, 0, 0, 0)
 }
 
+func validateWorldReadyFanout(server *Server, source *session) error {
+	if server == nil || source == nil || source.player == nil || server.TraceRecorder == nil || !source.worldReady.Load() {
+		return errors.New("world-ready fanout replay requires a mapped source session and trace recorder")
+	}
+	guid := source.playerGUID ^ (uint64(1) << 63)
+	if guid == 0 || guid == source.playerGUID {
+		guid = source.playerGUID + 1
+	}
+	peer := &session{server: server, authed: true, playerLoaded: true, playerGUID: guid, player: &playerState{GUID: guid, Map: source.player.Map, InstanceID: source.player.InstanceID}}
+	server.sessionsMu.Lock()
+	server.sessions[peer] = struct{}{}
+	server.sessionsMu.Unlock()
+	defer func() {
+		server.sessionsMu.Lock()
+		delete(server.sessions, peer)
+		server.sessionsMu.Unlock()
+	}()
+	countAttackStarts := func() int {
+		count := 0
+		for _, event := range server.TraceRecorder.Snapshot().Events {
+			if event.Direction == protocoltrace.ServerToClient && event.Opcode == uint32(protocol.OpcodeSMSG_ATTACK_START) {
+				count++
+			}
+		}
+		return count
+	}
+	before := countAttackStarts()
+	payload := buildAttackStart(source.playerGUID, guid)
+	server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), payload, source)
+	if got := countAttackStarts(); got != before {
+		return fmt.Errorf("world-ready fanout sent to pre-create session: attack-start count %d -> %d", before, got)
+	}
+	peer.worldReady.Store(true)
+	server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), payload, source)
+	if got := countAttackStarts(); got != before+1 {
+		return fmt.Errorf("world-ready fanout did not reach a mapped session: attack-start count %d -> %d", before, got)
+	}
+	return nil
+}
+
 func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petCooldownSpell, petPowerSpell, petXPAward, petFeedSpell uint32, petFoodGUID uint64, petAuraSourceSpell, petFocusAuraSpell, lfgDungeonID, instanceEntryMapID, instanceEntryID uint32) (protocoltrace.Trace, error) {
 	if server == nil || server.CharactersStore == nil || server.CharactersStore.DB == nil || guid == 0 {
 		return protocoltrace.Trace{}, errors.New("login replay requires a server and character database")
@@ -110,6 +150,10 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 	recorder.Record(protocoltrace.ClientToServer, uint32(protocol.OpcodeCMSG_PLAYER_LOGIN), packet.Bytes(), "isolated-character-login")
 	if !session.handlePlayerLogin(ctx, packet.Bytes()) {
 		return recorder.Snapshot(), errors.New("character login handler rejected the replay")
+	}
+	if err := validateWorldReadyFanout(server, session); err != nil {
+		session.logout()
+		return recorder.Snapshot(), err
 	}
 	if petAuraSourceSpell != 0 {
 		if err := session.validateOwnerPetAuraReplay(ctx, petAuraSourceSpell); err != nil {
