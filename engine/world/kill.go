@@ -276,7 +276,7 @@ func (s *session) applyNpcBotXPReduction(xp uint32) uint32 {
 	if xp == 0 || s == nil || s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
 		return xp
 	}
-	return ResolveNpcBotXPGain(xp, s.server.Features.NPCBots.CountByOwner(uint32(s.playerGUID)), uint8(s.server.Config.NPCBots.XPReduction))
+	return ResolveNpcBotXPGain(xp, s.server.runtimeNpcBotCountByOwner(s.playerGUID), uint8(s.server.Config.NPCBots.XPReduction))
 }
 
 func (s *Server) atGroupKillRewardDistance(member *session, target combatTarget, dungeon bool, rewardInstance uint32) bool {

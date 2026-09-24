@@ -58,7 +58,7 @@ func (s *session) sendPlayerUpdate() {
 		playerFieldDuelArbiter + 1:        uint32(s.player.DuelArbiter >> 32),
 		playerFieldDuelTeam:               s.player.DuelTeam,
 		unitFieldXP:                       s.player.XP,
-		unitFieldNextLevelXP:              xpCurve[s.player.Level],
+		unitFieldNextLevelXP:              playerNextLevelXP(s.player.Level),
 		unitFieldCoinage:                  s.player.Money,
 		unitFieldMountDisplayID:           s.player.MountDisplayID,
 		unitFieldAttackTime:               s.player.AttackTime,

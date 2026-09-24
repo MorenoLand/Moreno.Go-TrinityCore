@@ -2643,6 +2643,12 @@ func (s *session) savePlayerState(ctx context.Context, online uint32) error {
 	if err = s.savePetState(ctx, tx); err != nil {
 		return err
 	}
+	if err = s.saveBattlegroundData(ctx, tx, state); err != nil {
+		return err
+	}
+	if err = s.saveInstanceTimeRestrictions(ctx, tx); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

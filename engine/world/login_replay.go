@@ -440,9 +440,10 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 		}
 		return trace, nil
 	}
-	trace := recorder.Snapshot()
-	session.logout()
-	return trace, nil
+	if err := session.completeLogout(ctx); err != nil {
+		return recorder.Snapshot(), fmt.Errorf("complete character logout: %w", err)
+	}
+	return recorder.Snapshot(), nil
 }
 
 func (s *session) validateOwnerPetAuraReplay(ctx context.Context, ownerSpellID uint32) error {

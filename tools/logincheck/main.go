@@ -620,6 +620,11 @@ func checkPetRuntimeTick() error {
 	if share := world.ResolveGroupXPShare(1000, 20, 40, 20, 10, 1.166); share != 0 {
 		return fmt.Errorf("gray member group share=%d, want 0", share)
 	}
+	botRoster := []world.NpcBotRuntimeState{{GUID: 1, OwnerGUID: 7, Entry: 101}, {GUID: 2, OwnerGUID: 7, Entry: 102}, {GUID: 3, OwnerGUID: 7, Entry: 103, PetID: 44}, {GUID: 4, OwnerGUID: 8, Entry: 101}, {GUID: 5, OwnerGUID: 7, Entry: 999}, {GUID: 1, OwnerGUID: 7, Entry: 101}}
+	botEntries := map[uint32]struct{}{101: {}, 102: {}, 103: {}}
+	if count := world.ResolveNpcBotRuntimeCount(7, botEntries, botRoster); count != 2 || world.ResolveNpcBotXPGain(1000, count, 20) != 800 {
+		return fmt.Errorf("runtime NPCBot XP reduction count=%d, XP=%d; want count=2 XP=800", count, world.ResolveNpcBotXPGain(1000, count, 20))
+	}
 	if world.ResolveNpcBotXPGain(1000, 1, 20) != 1000 || world.ResolveNpcBotXPGain(1000, 3, 20) != 600 || world.ResolveNpcBotXPGain(1000, 8, 90) != 100 {
 		return fmt.Errorf("NPCBot XP reduction did not match per-bot percentage and 10%% floor")
 	}
@@ -4218,11 +4223,12 @@ func validatePetSpellCooldownDelta(before, after map[petSpellCooldownKey]petSpel
 
 func validateCharacterStateDelta(before, after map[string]characterTableSnapshot, allowPetFeedProgress bool) error {
 	allowedColumns := map[string]map[string]struct{}{
-		"characters":                     {"exploredZones": {}, "orientation": {}, "position_x": {}, "position_y": {}, "position_z": {}},
+		"characters":                     {"exploredZones": {}, "orientation": {}, "position_x": {}, "position_y": {}, "position_z": {}, "instance_id": {}, "instance_mode_mask": {}, "totaltime": {}, "leveltime": {}, "logout_time": {}, "is_logout_resting": {}},
 		"character_achievement":          {"guid": {}, "achievement": {}, "date": {}},
 		"character_achievement_progress": {"guid": {}, "criteria": {}, "counter": {}, "date": {}},
 		"character_aura":                 {"guid": {}, "casterGuid": {}, "itemGuid": {}, "spell": {}, "effectMask": {}, "recalculateMask": {}, "stackCount": {}, "amount0": {}, "amount1": {}, "amount2": {}, "base_amount0": {}, "base_amount1": {}, "base_amount2": {}, "maxDuration": {}, "remainTime": {}, "remainCharges": {}, "critChance": {}, "applyResilience": {}},
-		"character_pet":                  {"curhealth": {}, "curmana": {}, "exp": {}, "level": {}, "savetime": {}},
+		"character_battleground_data":    {"guid": {}, "instanceId": {}, "team": {}, "joinX": {}, "joinY": {}, "joinZ": {}, "joinO": {}, "joinMapId": {}, "taxiStart": {}, "taxiEnd": {}, "mountSpell": {}},
+		"character_pet":                  {"curhealth": {}, "curmana": {}, "exp": {}, "level": {}, "savetime": {}, "slot": {}, "Reactstate": {}},
 		"pet_aura":                       {"guid": {}, "casterGuid": {}, "spell": {}, "effectMask": {}, "recalculateMask": {}, "stackCount": {}, "amount0": {}, "amount1": {}, "amount2": {}, "base_amount0": {}, "base_amount1": {}, "base_amount2": {}, "maxDuration": {}, "remainTime": {}, "remainCharges": {}, "critChance": {}, "applyResilience": {}},
 		"pet_spell":                      {"active": {}, "guid": {}, "spell": {}},
 		"pet_spell_cooldown":             {"guid": {}, "spell": {}, "time": {}, "categoryId": {}, "categoryEnd": {}},
@@ -4246,15 +4252,13 @@ func validateCharacterStateDelta(before, after map[string]characterTableSnapshot
 	}
 	allowedColumns["character_spell"] = map[string]struct{}{"guid": {}, "spell": {}, "active": {}, "disabled": {}}
 	allowedColumns["character_skills"] = map[string]struct{}{"guid": {}, "skill": {}, "value": {}, "max": {}}
+	allowedColumns["character_fishingsteps"] = map[string]struct{}{"guid": {}, "fishingSteps": {}}
 	allowedColumns["character_spell_cooldown"] = map[string]struct{}{"guid": {}, "spell": {}, "item": {}, "time": {}, "categoryId": {}, "categoryEnd": {}}
 	allowedColumns["character_inventory"] = map[string]struct{}{"guid": {}, "bag": {}, "slot": {}, "item": {}}
 	allowedColumns["inventory_item_instances"] = map[string]struct{}{"guid": {}, "itemEntry": {}, "owner_guid": {}, "creatorGuid": {}, "giftCreatorGuid": {}, "count": {}, "duration": {}, "charges": {}, "flags": {}, "enchantments": {}, "randomPropertyId": {}, "durability": {}, "playedTime": {}, "text": {}}
-	allowedRowChanges := map[string]bool{"character_achievement": true, "character_achievement_progress": true, "character_aura": true, "character_inventory": true, "character_spell_cooldown": true, "inventory_item_instances": true, "pet_aura": true, "pet_spell": true, "pet_spell_cooldown": true}
+	allowedRowChanges := map[string]bool{"character_achievement": true, "character_achievement_progress": true, "character_aura": true, "character_battleground_data": true, "character_fishingsteps": true, "character_inventory": true, "character_spell_cooldown": true, "inventory_item_instances": true, "pet_aura": true, "pet_spell": true, "pet_spell_cooldown": true}
 	allowedRowChanges["character_spell"] = true
 	allowedRowChanges["character_skills"] = true
-	if allowPetFeedProgress {
-		allowedColumns["character_pet"]["curhappiness"] = struct{}{}
-	}
 	for table, beforeTable := range before {
 		afterTable, exists := after[table]
 		if !exists {
@@ -4263,6 +4267,9 @@ func validateCharacterStateDelta(before, after map[string]characterTableSnapshot
 		changedColumns := changedCharacterColumns(beforeTable, afterTable)
 		rowsChanged := beforeTable.Rows != afterTable.Rows
 		digestChanged := beforeTable.Digest != afterTable.Digest
+		if table == "character_battleground_data" && afterTable.Rows != 1 {
+			return fmt.Errorf("battleground return-state save left %d rows, want exactly one", afterTable.Rows)
+		}
 		if len(changedColumns) == 0 && !rowsChanged && !digestChanged {
 			continue
 		}
@@ -4274,6 +4281,9 @@ func validateCharacterStateDelta(before, after map[string]characterTableSnapshot
 			return fmt.Errorf("unclassified state mutation table=%s rows=%d->%d columns=%s", table, beforeTable.Rows, afterTable.Rows, strings.Join(changedColumns, "+"))
 		}
 		for _, column := range changedColumns {
+			if table == "character_pet" && column == "curhappiness" && (allowPetFeedProgress || sort.SearchStrings(changedColumns, "savetime") < len(changedColumns) && changedColumns[sort.SearchStrings(changedColumns, "savetime")] == "savetime") {
+				continue
+			}
 			if _, exists := allowed[column]; !exists {
 				return fmt.Errorf("unclassified state mutation table=%s column=%s", table, column)
 			}

@@ -1747,7 +1747,7 @@ func (s *session) applyOfflineRestBonus(state *playerState) {
 	if state.LogoutResting {
 		bubble = float32(0.125) * tavernRate
 	}
-	nextLevelXP := float32(xpCurve[state.Level])
+	nextLevelXP := float32(playerNextLevelXP(state.Level))
 	state.RestBonus += float32(elapsed) * (nextLevelXP / 72000) * bubble
 	maxRestBonus := nextLevelXP * 1.5 / 2
 	if state.RestBonus < 0 {
@@ -3039,7 +3039,7 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	values[unitFieldGuildRank] = uint32(state.GuildRank)
 	values[unitFieldXP] = state.XP
 	if state.Level > 0 && int(state.Level) < len(xpCurve) {
-		values[unitFieldNextLevelXP] = xpCurve[state.Level]
+		values[unitFieldNextLevelXP] = playerNextLevelXP(state.Level)
 	}
 	values[unitFieldCoinage] = state.Money
 	if state.RestBonus > 0 {
