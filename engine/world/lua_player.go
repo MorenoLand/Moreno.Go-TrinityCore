@@ -263,7 +263,7 @@ func (s *session) luaPlayer() *scripting.Object {
 		_, err = s.server.CharactersStore.DB.Exec("UPDATE characters SET health = ? WHERE guid = ?", health, state.GUID)
 		return nil, err
 	}
-	methods["LearnSpell"] = func(_ context.Context, args []any) ([]any, error) {
+	methods["LearnSpell"] = func(ctx context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {
 			return nil, err
@@ -273,14 +273,19 @@ func (s *session) luaPlayer() *scripting.Object {
 			query = "INSERT IGNORE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)"
 		}
 		_, err = s.server.CharactersStore.DB.Exec(query, state.GUID, spell)
+		s.learnOwnerPetAuraSources(ctx, spell)
 		return nil, err
 	}
-	methods["RemoveSpell"] = func(_ context.Context, args []any) ([]any, error) {
+	methods["RemoveSpell"] = func(ctx context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {
 			return nil, err
 		}
 		_, err = s.server.CharactersStore.DB.Exec("DELETE FROM character_spell WHERE guid = ? AND spell = ?", state.GUID, spell)
+		if s.hasAura(spell) {
+			s.removeAura(spell)
+		}
+		s.removeOwnerPetAurasForSpell(ctx, spell)
 		return nil, err
 	}
 	methods["HasQuest"] = func(_ context.Context, args []any) ([]any, error) {

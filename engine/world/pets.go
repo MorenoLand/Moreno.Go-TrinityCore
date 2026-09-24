@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -436,7 +437,22 @@ func (s *session) getPetStats(ctx context.Context, entry uint32, level uint32, p
 	return hp, hp, mana, mana
 }
 
-func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, curHappiness uint32, ownerGUID uint64, faction uint32, petType uint8, createdBySpell, petExperience, petNextLevelXP uint32, boundingRadius, combatReach, x, y, z, o float32) []byte {
+func (s *session) getPetAttributes(ctx context.Context, entry, level uint32, petType uint8) [5]uint32 {
+	attributes := [5]uint32{22, 22, 25, 28, 27}
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return attributes
+	}
+	if petType == 1 {
+		entry = 1
+	}
+	var strength, agility, stamina, intellect, spirit int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT str, agi, sta, inte, spi FROM pet_levelstats WHERE creature_entry = ? AND level = ?", entry, level).Scan(&strength, &agility, &stamina, &intellect, &spirit); err == nil && strength >= 0 && agility >= 0 && stamina >= 0 && intellect >= 0 && spirit >= 0 {
+		return [5]uint32{uint32(strength), uint32(agility), uint32(stamina), uint32(intellect), uint32(spirit)}
+	}
+	return attributes
+}
+
+func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, attributes [5]uint32, curHappiness uint32, ownerGUID uint64, faction uint32, petType uint8, createdBySpell, petExperience, petNextLevelXP uint32, boundingRadius, combatReach, x, y, z, o float32) []byte {
 	values := make([]uint32, creatureValuesCount)
 	values[0] = uint32(petGUID)
 	values[1] = uint32(petGUID >> 32)
@@ -448,6 +464,9 @@ func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, model
 	values[unitFieldPower1] = curMana
 	values[unitFieldMaxPower1] = maxMana
 	values[unitFieldBaseMana] = maxMana
+	for index, value := range attributes {
+		values[unitFieldStat0+index] = value
+	}
 	values[unitFieldLevel] = maxUint32(level, 1)
 	values[unitFieldFaction] = faction
 	values[unitFieldFlags] = unitFlagPlayerControlled
@@ -651,8 +670,9 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		petZ = s.player.Z
 	}
 
-	s.registerPetMotion(ctx, petGUID, petID, uint8(petType), entry, level, faction, curHealth, maxHealth, curMana, maxMana, uint32(petHappiness), uint32(petExperience), petNextLevelXP, uint8(reactState), petCombatReach, petX, petY, petZ, petO)
-	updateBlock := buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, uint32(petHappiness), s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petNextLevelXP, petBoundingRadius, petCombatReach, petX, petY, petZ, petO)
+	attributes := s.getPetAttributes(ctx, entry, level, uint8(petType))
+	s.registerPetMotion(ctx, petGUID, petID, uint8(petType), entry, level, faction, curHealth, maxHealth, curMana, maxMana, attributes, uint32(petHappiness), uint32(petExperience), petNextLevelXP, uint8(reactState), petCombatReach, petX, petY, petZ, petO)
+	updateBlock := buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, attributes, uint32(petHappiness), s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petNextLevelXP, petBoundingRadius, petCombatReach, petX, petY, petZ, petO)
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(updateBlock)
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
@@ -856,6 +876,7 @@ func (s *session) unsummonPet(ctx context.Context, mode uint8) {
 		}
 	}
 	if s.server != nil {
+		s.removeOwnerPetAuraSourcesOnPetChange(ctx, petGUID)
 		s.server.clearCreatureAuras(petGUID)
 	}
 
@@ -983,32 +1004,30 @@ func (s *session) sendPetSpells(ctx context.Context, petID uint32, entry uint32,
 
 	type petCooldown struct {
 		spell, category  uint32
-		end, categoryEnd int64
+		end, categoryEnd time.Time
 	}
 	cooldowns := make([]petCooldown, 0)
-	now := time.Now().Unix()
-	if rows, err := cdb.QueryContext(ctx, "SELECT spell, categoryId, time, categoryEnd FROM pet_spell_cooldown WHERE guid = ? AND time > ? ORDER BY spell", petID, now); err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var cooldown petCooldown
-			if rows.Scan(&cooldown.spell, &cooldown.category, &cooldown.end, &cooldown.categoryEnd) == nil {
-				cooldowns = append(cooldowns, cooldown)
-			}
+	now := time.Now()
+	s.server.motionMu.Lock()
+	if motion := s.server.creatureMotion[s.player.PetGUID]; motion != nil {
+		prunePetSpellCooldowns(motion, now)
+		for spellID, end := range motion.SpellCooldowns {
+			categoryID := motion.SpellCooldownCategories[spellID]
+			cooldowns = append(cooldowns, petCooldown{spell: spellID, category: categoryID, end: end, categoryEnd: motion.SpellCooldownCategoryEnds[spellID]})
 		}
 	}
-	if len(cooldowns) > 255 {
-		cooldowns = cooldowns[:255]
-	}
+	s.server.motionMu.Unlock()
+	sort.Slice(cooldowns, func(i, j int) bool { return cooldowns[i].spell < cooldowns[j].spell })
 	buf.WriteU8(uint8(len(cooldowns)))
 	for _, cooldown := range cooldowns {
 		buf.WriteU32(cooldown.spell)
 		buf.WriteU16(uint16(cooldown.category))
-		cooldownMs := remainingMilliseconds(cooldown.end, now)
-		categoryMs := remainingMilliseconds(cooldown.categoryEnd, now)
+		cooldownMs := petCooldownMilliseconds(cooldown.end, now)
+		categoryMs := petCooldownMilliseconds(cooldown.categoryEnd, now)
 		if cooldownMs == 0 {
 			buf.WriteU32(0)
 			buf.WriteU32(0)
-		} else if cooldown.categoryEnd >= now {
+		} else if categoryMs > 0 {
 			buf.WriteU32(0)
 			buf.WriteU32(categoryMs)
 		} else {
@@ -1821,21 +1840,23 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 	if !s.checkPetSpellPower(motion, spell, castCount) {
 		return true
 	}
+	now := time.Now()
+	categoryID, _, categoryErr := s.spellCooldownCategory(spellID)
 	s.server.motionMu.Lock()
-	lastSpell := motion.SpellCooldowns[spellID]
+	prunePetSpellCooldowns(motion, now)
+	spellCooldownEnd := motion.SpellCooldowns[spellID]
+	categoryEnd := time.Time{}
+	if categoryErr == nil && categoryID != 0 {
+		categoryEnd = motion.SpellCategoryCooldowns[categoryID]
+	}
 	s.server.motionMu.Unlock()
-	if spell.RecoveryTime > 0 && !lastSpell.IsZero() && time.Since(lastSpell) < time.Duration(spell.RecoveryTime)*time.Millisecond {
+	if !spellCooldownEnd.IsZero() && !spellCooldownEnd.Before(now) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
 		return true
 	}
-	if categoryID, _, categoryErr := s.spellCooldownCategory(spellID); categoryErr == nil && categoryID != 0 {
-		s.server.motionMu.Lock()
-		categoryEnd := motion.SpellCategoryCooldowns[categoryID]
-		s.server.motionMu.Unlock()
-		if categoryEnd.After(time.Now()) {
-			_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
-			return true
-		}
+	if !categoryEnd.IsZero() && !categoryEnd.Before(now) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
+		return true
 	}
 	if !s.executePetSpell(ctx, motion, spell, castCount, target) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)

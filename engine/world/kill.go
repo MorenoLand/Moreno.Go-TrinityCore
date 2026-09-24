@@ -3,10 +3,18 @@ package world
 import (
 	"context"
 	"math"
+	"sort"
 	"sync"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
+)
+
+const (
+	creatureTypeCritter         uint32 = 8
+	creatureTypeTotem           uint32 = 11
+	creatureFlagExtraNoXPAtKill uint32 = 0x00000040
 )
 
 // unitDynFlagLootable marks a corpse lootable in UNIT_FIELD_DYNAMIC_FLAGS.
@@ -167,6 +175,274 @@ func (s *Server) killXPGain(ctx context.Context, playerLevel, mobLevel uint32) u
 	return 0
 }
 
+func ResolveGroupXPRate(count uint32, raid bool) float32 {
+	if raid || count <= 2 {
+		return 1
+	}
+	switch count {
+	case 3:
+		return 1.166
+	case 4:
+		return 1.3
+	default:
+		return 1.4
+	}
+}
+
+func ResolveGroupXPShare(baseXP, playerLevel, sumLevel, maxLevel, maxNonGrayLevel uint32, groupRate float32) uint32 {
+	if baseXP == 0 || playerLevel == 0 || sumLevel == 0 || maxNonGrayLevel == 0 || playerLevel > maxNonGrayLevel {
+		return 0
+	}
+	rate := groupRate * float32(playerLevel) / float32(sumLevel)
+	share := float32(baseXP) * rate
+	if maxLevel != maxNonGrayLevel {
+		return uint32(share/2) + 1
+	}
+	return uint32(share)
+}
+
+func (s *Server) adjustCreatureKillXP(ctx context.Context, target combatTarget, creatureEntry, baseXP uint32) uint32 {
+	if s == nil || baseXP == 0 {
+		return 0
+	}
+	var creatureType, rank, flagsExtra int64
+	experienceModifier := float64(1)
+	if s.WorldStore != nil && s.WorldStore.DB != nil {
+		_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(type, 0), COALESCE(rank, 0), COALESCE(ExperienceModifier, 1), COALESCE(flags_extra, 0) FROM creature_template WHERE entry = ?", creatureEntry).Scan(&creatureType, &rank, &experienceModifier, &flagsExtra)
+	}
+	if uint32(creatureType) == creatureTypeCritter || uint32(creatureType) == creatureTypeTotem || uint32(flagsExtra)&creatureFlagExtraNoXPAtKill != 0 {
+		return 0
+	}
+	s.motionMu.Lock()
+	motion := s.creatureMotion[target.GUID]
+	isPet := motion != nil && motion.PetID != 0 && motion.OwnerGUID != 0
+	s.motionMu.Unlock()
+	if isPet {
+		return 0
+	}
+	multiplier := float32(1)
+	var isDungeon, isBattleground bool
+	if s.Data != nil {
+		if mapInfo, found, err := s.Data.Map(target.Map); err == nil && found {
+			isDungeon, isBattleground = mapInfo.IsDungeon(), mapInfo.IsBattleground()
+		}
+	}
+	if rank > 0 {
+		if isDungeon {
+			multiplier *= 2.75
+		} else {
+			multiplier *= 2
+		}
+	}
+	multiplier *= float32(experienceModifier)
+	if isBattleground {
+		multiplier *= float32(s.Config.XPRateBattlegroundKill)
+	} else {
+		multiplier *= float32(s.Config.XPRateKill)
+	}
+	return uint32(float32(baseXP) * multiplier)
+}
+
+func ResolveGroupXPMapEligibility(memberMap, rewardMap, memberInstance, rewardInstance uint32) bool {
+	return memberMap == rewardMap && memberInstance == rewardInstance
+}
+
+func ResolveGroupXPDistance(distance, memberReach, rewardReach float64) float64 {
+	if memberReach <= 0 {
+		memberReach = 1.5
+	}
+	if rewardReach <= 0 {
+		rewardReach = 1.5
+	}
+	distance -= memberReach + rewardReach
+	if distance < 0 {
+		return 0
+	}
+	return distance
+}
+
+func ResolveNpcBotXPGain(xp uint32, botCount, reduction uint8) uint32 {
+	if botCount <= 1 || reduction == 0 {
+		return xp
+	}
+	rate := 100 - int(botCount-1)*int(reduction)
+	if rate < 10 {
+		rate = 10
+	}
+	return xp * uint32(rate) / 100
+}
+
+func (s *session) applyNpcBotXPReduction(xp uint32) uint32 {
+	if xp == 0 || s == nil || s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
+		return xp
+	}
+	return ResolveNpcBotXPGain(xp, s.server.Features.NPCBots.CountByOwner(uint32(s.playerGUID)), uint8(s.server.Config.NPCBots.XPReduction))
+}
+
+func (s *Server) atGroupKillRewardDistance(member *session, target combatTarget, dungeon bool, rewardInstance uint32) bool {
+	if s == nil || member == nil || member.player == nil || !ResolveGroupXPMapEligibility(member.player.Map, target.Map, member.player.InstanceID, rewardInstance) {
+		return false
+	}
+	distance := ResolveGroupXPDistance(distance3D(member.player.X, member.player.Y, member.player.Z, target.X, target.Y, target.Z), float64(member.player.CombatReach), float64(target.CombatReach))
+	return dungeon || distance <= s.Config.MaxGroupXPDistance
+}
+
+func (s *session) experienceAuraMultiplier() float32 {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil {
+		return 1
+	}
+	modifiers := make([]PetFocusModifier, 0)
+	type effectKey struct {
+		SpellID uint32
+		Effect  uint8
+	}
+	seen := make(map[effectKey]struct{})
+	appendSpell := func(spellID uint32, spell wotlk.Spell, mask uint8, current *activeAura) {
+		for index, effect := range spell.Effects {
+			if effect.Effect == 0 || effect.Aura != 200 || mask&(1<<uint(index)) == 0 {
+				continue
+			}
+			key := effectKey{SpellID: spellID, Effect: uint8(index)}
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			amount := effect.BasePoints + 1
+			if current != nil {
+				amount = current.Amounts[index]
+				if amount == 0 && current.AuraType == effect.Aura && current.Amount != 0 {
+					amount = int32(current.Amount)
+				}
+				if amount == 0 && current.BaseAmounts[index] == 0 && effect.BasePoints != -1 {
+					amount = effect.BasePoints + 1
+				}
+			}
+			modifiers = append(modifiers, PetFocusModifier{SpellID: spellID, Effect: uint8(index), AuraType: effect.Aura, Amount: amount, StackGroup: s.server.petAuraStackGroup(spellID, effect.Aura)})
+		}
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		if spell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+			appendSpell(aura.SpellID, spell, aura.EffectMask, aura)
+		}
+	}
+	for _, learned := range s.player.Spells {
+		if !learned.Active || learned.Disabled {
+			continue
+		}
+		if spell, found, err := s.server.Data.Spell(learned.ID); err == nil && found && spell.Attributes&spellAttributePassive != 0 {
+			appendSpell(learned.ID, spell, 0x07, nil)
+		}
+	}
+	sort.SliceStable(modifiers, func(i, j int) bool {
+		if modifiers[i].SpellID != modifiers[j].SpellID {
+			return modifiers[i].SpellID < modifiers[j].SpellID
+		}
+		return modifiers[i].Effect < modifiers[j].Effect
+	})
+	return ResolveAuraPercentMultiplierByType(modifiers, spellAuraIncreaseXPPercent)
+}
+
+func (s *session) rewardCreatureKillXP(ctx context.Context, target combatTarget, creatureEntry, mobLevel uint32) {
+	if s == nil || s.server == nil || s.player == nil || mobLevel == 0 {
+		return
+	}
+	group := s.server.getGroup(s.groupID)
+	if group == nil {
+		baseXP := s.server.killXPGain(ctx, uint32(s.player.Level), mobLevel)
+		xp := s.server.adjustCreatureKillXP(ctx, target, creatureEntry, baseXP)
+		if xp > 0 {
+			xp = uint32(float32(xp) * s.experienceAuraMultiplier())
+			xp = s.applyNpcBotXPReduction(xp)
+			if xp > 0 {
+				s.grantXPWithVictimGroup(ctx, xp, target.GUID, false)
+			}
+		}
+		return
+	}
+	s.server.groupsMu.RLock()
+	members := append([]groupMember(nil), group.Members...)
+	isRaidGroup := group.IsRaid
+	s.server.groupsMu.RUnlock()
+	targetMapIsDungeon, targetMapIsRaid, targetMapIsBattleground := false, false, false
+	if s.server.Data != nil {
+		if mapInfo, found, err := s.server.Data.Map(target.Map); err == nil && found {
+			targetMapIsDungeon, targetMapIsRaid, targetMapIsBattleground = mapInfo.IsDungeon(), mapInfo.IsRaid(), mapInfo.IsBattleground()
+		}
+	}
+	type recipient struct {
+		session *session
+		level   uint32
+	}
+	recipients := make([]recipient, 0, len(members))
+	seen := make(map[uint64]struct{}, len(members))
+	count, sumLevel, maxLevel, maxNonGrayLevel := uint32(0), uint32(0), uint32(0), uint32(0)
+	addRecipient := func(member *session, killer bool) {
+		if member == nil || member.player == nil || !member.playerLoaded {
+			return
+		}
+		guid := member.playerGUID
+		if _, exists := seen[guid]; exists {
+			return
+		}
+		seen[guid] = struct{}{}
+		if !killer && !s.server.atGroupKillRewardDistance(member, target, targetMapIsDungeon, s.player.InstanceID) {
+			return
+		}
+		if member.player.Health == 0 {
+			return
+		}
+		level := uint32(member.player.Level)
+		if level == 0 {
+			return
+		}
+		recipients = append(recipients, recipient{session: member, level: level})
+		count++
+		sumLevel += level
+		if level > maxLevel {
+			maxLevel = level
+		}
+		if mobLevel > grayLevel(level) && level > maxNonGrayLevel {
+			maxNonGrayLevel = level
+		}
+	}
+	killerFound := false
+	for _, member := range members {
+		if member.GUID == s.playerGUID {
+			killerFound = true
+		}
+		addRecipient(s.server.findSessionByGUID(member.GUID), member.GUID == s.playerGUID)
+	}
+	if !killerFound {
+		addRecipient(s, true)
+	}
+	if count == 0 || sumLevel == 0 || maxNonGrayLevel == 0 {
+		return
+	}
+	baseXP := s.server.killXPGain(ctx, maxNonGrayLevel, mobLevel)
+	baseXP = s.server.adjustCreatureKillXP(ctx, target, creatureEntry, baseXP)
+	if baseXP == 0 {
+		return
+	}
+	groupRate := float32(1)
+	if !targetMapIsBattleground {
+		groupRate = ResolveGroupXPRate(count, targetMapIsRaid && isRaidGroup)
+	}
+	for _, member := range recipients {
+		share := ResolveGroupXPShare(baseXP, member.level, sumLevel, maxLevel, maxNonGrayLevel, groupRate)
+		if share == 0 {
+			continue
+		}
+		share = uint32(float32(share) * member.session.experienceAuraMultiplier())
+		share = member.session.applyNpcBotXPReduction(share)
+		if share > 0 {
+			member.session.grantXPWithVictimGroup(ctx, share, target.GUID, true)
+		}
+	}
+}
+
 // onCreatureKilled runs the full death chain for a melee kill: XP and
 // level-ups, lootable corpse flag, respawn scheduling and quest credit.
 func (s *session) onCreatureKilled(ctx context.Context, target combatTarget) {
@@ -178,14 +454,16 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget) {
 	now := time.Now()
 
 	// XP with the reference gray/zero-difference curve.
-	var mobLevel int64
-	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(maxlevel, 0), minlevel, 1) FROM creature_template WHERE entry = ?", creatureEntry).Scan(&mobLevel)
-	} else {
-		mobLevel = int64(target.Level)
-		if mobLevel == 0 {
-			mobLevel = 1
+	mobLevel := uint32(target.Level)
+	if mobLevel == 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var fallbackLevel int64
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(maxlevel, 0), minlevel, 1) FROM creature_template WHERE entry = ?", creatureEntry).Scan(&fallbackLevel)
+		if fallbackLevel > 0 {
+			mobLevel = uint32(fallbackLevel)
 		}
+	}
+	if mobLevel == 0 {
+		mobLevel = 1
 	}
 	if s.server != nil {
 		standardGUID := creatureWorldGUID(guid, creatureEntry)
@@ -197,10 +475,7 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget) {
 		s.server.creatureLootOwners[target.GUID] = owner
 		s.server.creatureLootOwners[standardGUID] = owner
 		s.server.lootMu.Unlock()
-		xp := s.server.killXPGain(ctx, uint32(s.player.Level), uint32(mobLevel))
-		if xp > 0 {
-			s.grantXPWithVictim(ctx, xp, target.GUID)
-		}
+		s.rewardCreatureKillXP(ctx, target, creatureEntry, mobLevel)
 
 		// Mark the corpse lootable for everyone in range (dynamic flags update).
 		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
@@ -265,11 +540,18 @@ func (s *session) grantXP(ctx context.Context, amount uint32) {
 
 // grantXPWithVictim applies XP with combat log SMSG_LOG_XPGAIN, repeated level-ups, and client field updates.
 func (s *session) grantXPWithVictim(ctx context.Context, amount uint32, victimGUID uint64) {
+	if s == nil {
+		return
+	}
+	s.grantXPWithVictimGroup(ctx, amount, victimGUID, s.groupID != 0)
+}
+
+func (s *session) grantXPWithVictimGroup(ctx context.Context, amount uint32, victimGUID uint64, grouped bool) {
 	if s.player == nil || amount == 0 {
 		return
 	}
 	petXP := amount
-	if s.groupID != 0 {
+	if grouped {
 		petXP /= 2
 	}
 	grantPetXP := func() {

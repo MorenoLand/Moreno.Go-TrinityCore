@@ -57,22 +57,31 @@ func (s *session) savePetState(ctx context.Context, tx *sql.Tx, saveMode ...uint
 	if mode != petSaveAsCurrent && mode != petSaveNotInSlot {
 		return errors.New("unknown pet save mode")
 	}
+	now := time.Now()
 	s.server.motionMu.Lock()
 	motion := s.server.creatureMotion[petGUID]
 	if motion == nil || motion.GUID != petGUID || motion.Entry == 0 || motion.OwnerGUID != state.GUID {
 		s.server.motionMu.Unlock()
 		return nil
 	}
+	prunePetSpellCooldowns(motion, now)
 	petLevel, health, mana, happiness, experience, reactState := motion.Level, motion.Health, motion.Mana, motion.Happiness, motion.Experience, motion.PetReact
 	spellCooldowns := make(map[uint32]time.Time, len(motion.SpellCooldowns))
-	for spellID, castAt := range motion.SpellCooldowns {
-		spellCooldowns[spellID] = castAt
+	for spellID, end := range motion.SpellCooldowns {
+		spellCooldowns[spellID] = end
+	}
+	spellCooldownCategories := make(map[uint32]uint32, len(motion.SpellCooldownCategories))
+	for spellID, categoryID := range motion.SpellCooldownCategories {
+		spellCooldownCategories[spellID] = categoryID
+	}
+	spellCooldownCategoryEnds := make(map[uint32]time.Time, len(motion.SpellCooldownCategoryEnds))
+	for spellID, end := range motion.SpellCooldownCategoryEnds {
+		spellCooldownCategoryEnds[spellID] = end
 	}
 	s.server.motionMu.Unlock()
 	if s.server.Data == nil {
 		return errors.New("active pet save requires game data")
 	}
-	now := time.Now()
 	petSlot := uint8(0)
 	if mode == petSaveNotInSlot {
 		petSlot = petStorageSlotNotInSlot
@@ -224,7 +233,7 @@ func (s *session) savePetState(ctx context.Context, tx *sql.Tx, saveMode ...uint
 				_ = cooldownRows.Close()
 				return scanErr
 			}
-			if row.end >= nowUnix {
+			if row.end > nowUnix {
 				cooldowns[row.spell] = row
 			}
 		}
@@ -236,34 +245,18 @@ func (s *session) savePetState(ctx context.Context, tx *sql.Tx, saveMode ...uint
 			return err
 		}
 	}
-	for spellID, castAt := range spellCooldowns {
-		spell, found, err := s.server.Data.Spell(spellID)
-		if err != nil {
-			return err
-		}
-		if !found || castAt.IsZero() {
+	for spellID, cooldownEnd := range spellCooldowns {
+		if cooldownEnd.IsZero() || cooldownEnd.Before(now) {
 			continue
 		}
-		categoryID, categoryRecoveryTime, err := s.spellCooldownCategory(spellID)
-		if err != nil {
-			return err
-		}
-		if spell.RecoveryTime == 0 && categoryRecoveryTime == 0 {
-			continue
-		}
-		end := nowUnix
-		if spell.RecoveryTime > 0 {
-			end = castAt.Add(time.Duration(spell.RecoveryTime) * time.Millisecond).Unix()
-		}
+		categoryID := spellCooldownCategories[spellID]
 		categoryEnd := int64(0)
-		if categoryID != 0 && categoryRecoveryTime > 0 {
-			categoryEnd = castAt.Add(time.Duration(categoryRecoveryTime) * time.Millisecond).Unix()
+		if categoryID != 0 {
+			if end, ok := spellCooldownCategoryEnds[spellID]; ok {
+				categoryEnd = end.Unix()
+			}
 		}
-		if end < nowUnix {
-			delete(cooldowns, spellID)
-			continue
-		}
-		cooldowns[spellID] = savedCooldown{spell: spellID, category: categoryID, end: end, categoryEnd: categoryEnd}
+		cooldowns[spellID] = savedCooldown{spell: spellID, category: categoryID, end: cooldownEnd.Unix(), categoryEnd: categoryEnd}
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM pet_spell_cooldown WHERE guid = ?", petID); err != nil && !missingTable(err) {
 		return err

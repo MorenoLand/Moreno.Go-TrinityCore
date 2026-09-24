@@ -14,38 +14,52 @@ import (
 )
 
 func ReplayCharacterLogin(ctx context.Context, server *Server, guid uint64) (protocoltrace.Trace, error) {
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0)
 }
 
 func ReplayCharacterPetCooldown(ctx context.Context, server *Server, guid uint64, spellID uint32) (protocoltrace.Trace, error) {
 	if spellID == 0 {
 		return protocoltrace.Trace{}, errors.New("pet cooldown replay requires a spell ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, spellID, 0, 0, 0, 0)
+	return replayCharacterLogin(ctx, server, guid, spellID, 0, 0, 0, 0, 0, 0)
 }
 
 func ReplayCharacterPetPower(ctx context.Context, server *Server, guid uint64, spellID uint32) (protocoltrace.Trace, error) {
 	if spellID == 0 {
 		return protocoltrace.Trace{}, errors.New("pet power replay requires a spell ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, spellID, 0, 0, 0)
+	return replayCharacterLogin(ctx, server, guid, 0, spellID, 0, 0, 0, 0, 0)
 }
 
 func ReplayCharacterPetXP(ctx context.Context, server *Server, guid uint64, earnedXP uint32) (protocoltrace.Trace, error) {
 	if earnedXP == 0 {
 		return protocoltrace.Trace{}, errors.New("pet XP replay requires an XP award")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, earnedXP, 0, 0)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, earnedXP, 0, 0, 0, 0)
 }
 
 func ReplayCharacterPetFeed(ctx context.Context, server *Server, guid uint64, feedSpell uint32, foodItemGUID uint64) (protocoltrace.Trace, error) {
 	if feedSpell == 0 || foodItemGUID == 0 {
 		return protocoltrace.Trace{}, errors.New("pet feed replay requires a spell and item GUID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, feedSpell, foodItemGUID)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, feedSpell, foodItemGUID, 0, 0)
 }
 
-func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petCooldownSpell, petPowerSpell, petXPAward, petFeedSpell uint32, petFoodGUID uint64) (protocoltrace.Trace, error) {
+func ReplayCharacterPetAura(ctx context.Context, server *Server, guid uint64, ownerSpellID uint32) (protocoltrace.Trace, error) {
+	if ownerSpellID == 0 {
+		return protocoltrace.Trace{}, errors.New("owner pet-aura replay requires a source spell ID")
+	}
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, ownerSpellID, 0)
+}
+
+func ReplayCharacterPetFocusAura(ctx context.Context, server *Server, guid uint64, spellID uint32) (protocoltrace.Trace, error) {
+	if spellID == 0 {
+		return protocoltrace.Trace{}, errors.New("pet focus-aura replay requires a DBC spell ID")
+	}
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, spellID)
+}
+
+func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petCooldownSpell, petPowerSpell, petXPAward, petFeedSpell uint32, petFoodGUID uint64, petAuraSourceSpell, petFocusAuraSpell uint32) (protocoltrace.Trace, error) {
 	if server == nil || server.CharactersStore == nil || server.CharactersStore.DB == nil || guid == 0 {
 		return protocoltrace.Trace{}, errors.New("login replay requires a server and character database")
 	}
@@ -83,6 +97,32 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 	if !session.handlePlayerLogin(ctx, packet.Bytes()) {
 		return recorder.Snapshot(), errors.New("character login handler rejected the replay")
 	}
+	if petAuraSourceSpell != 0 {
+		if err := session.validateOwnerPetAuraReplay(ctx, petAuraSourceSpell); err != nil {
+			session.logout()
+			return recorder.Snapshot(), err
+		}
+		session.applyAuraWithDuration(petAuraSourceSpell, 0)
+		if err := session.validateOwnerPetAuraReplay(ctx, petAuraSourceSpell); err != nil {
+			session.logout()
+			return recorder.Snapshot(), err
+		}
+		if err := session.replayOwnerPetAuraChange(ctx, petAuraSourceSpell); err != nil {
+			session.logout()
+			return recorder.Snapshot(), err
+		}
+		session.removeAura(petAuraSourceSpell)
+		if err := session.validateOwnerPetAuraRemoval(ctx, petAuraSourceSpell); err != nil {
+			session.logout()
+			return recorder.Snapshot(), err
+		}
+	}
+	if petFocusAuraSpell != 0 {
+		if err := session.replayPetFocusAura(ctx, petFocusAuraSpell); err != nil {
+			session.logout()
+			return recorder.Snapshot(), err
+		}
+	}
 	if petCooldownSpell != 0 {
 		if session.player == nil || session.player.PetGUID == 0 {
 			session.logout()
@@ -110,6 +150,10 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 			session.logout()
 			return recorder.Snapshot(), errors.New("pet category cooldown was not restored from the database")
 		}
+		if !petSpellPacketHasCategoryCooldown(recorder.Snapshot(), session.player.PetGUID, categoryID) {
+			session.logout()
+			return recorder.Snapshot(), errors.New("pet cooldown was missing from the live SMSG_PET_SPELLS packet")
+		}
 		cast := protocol.NewBuffer(24)
 		cast.WriteU64(session.player.PetGUID)
 		cast.WriteU8(1)
@@ -128,9 +172,13 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 			return recorder.Snapshot(), errors.New("pet cooldown cast handler rejected the replay")
 		}
 		trace := recorder.Snapshot()
+		categoryExpiryMatches := petCooldownExpiryClearsCategory(server, motion, petCooldownSpell, categoryID)
 		session.logout()
 		if !petCastFailedNotReady(trace, petCooldownSpell) {
 			return trace, errors.New("pet cast did not return SPELL_FAILED_NOT_READY for the persisted cooldown")
+		}
+		if !categoryExpiryMatches {
+			return trace, errors.New("expired pet spell cooldown retained its category lock")
 		}
 		return trace, nil
 	}
@@ -165,6 +213,14 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 		for id, value := range motion.SpellCategoryCooldowns {
 			originalCategoryCooldowns[id] = value
 		}
+		originalCooldownCategories := make(map[uint32]uint32, len(motion.SpellCooldownCategories))
+		for id, value := range motion.SpellCooldownCategories {
+			originalCooldownCategories[id] = value
+		}
+		originalCategoryEnds := make(map[uint32]time.Time, len(motion.SpellCooldownCategoryEnds))
+		for id, value := range motion.SpellCooldownCategoryEnds {
+			originalCategoryEnds[id] = value
+		}
 		motion.Powers[spell.PowerType] = cost - 1
 		if spell.PowerType == 0 {
 			motion.Mana = cost - 1
@@ -174,6 +230,7 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 			server.motionMu.Lock()
 			motion.Powers[spell.PowerType], motion.Mana, motion.LastSpell = originalPower, originalMana, originalLastSpell
 			motion.SpellCooldowns, motion.SpellCategoryCooldowns = originalSpellCooldowns, originalCategoryCooldowns
+			motion.SpellCooldownCategories, motion.SpellCooldownCategoryEnds = originalCooldownCategories, originalCategoryEnds
 			server.motionMu.Unlock()
 			session.logout()
 			return recorder.Snapshot(), errors.New("pet power replay accepted a cast with insufficient resource")
@@ -190,6 +247,7 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 			server.motionMu.Lock()
 			motion.Powers[spell.PowerType], motion.Mana, motion.LastSpell = originalPower, originalMana, originalLastSpell
 			motion.SpellCooldowns, motion.SpellCategoryCooldowns = originalSpellCooldowns, originalCategoryCooldowns
+			motion.SpellCooldownCategories, motion.SpellCooldownCategoryEnds = originalCooldownCategories, originalCategoryEnds
 			server.motionMu.Unlock()
 			session.logout()
 			return recorder.Snapshot(), errors.New("pet power replay spell executor rejected the cast")
@@ -200,6 +258,7 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 		actualPower := motion.Powers[spell.PowerType]
 		motion.Powers[spell.PowerType], motion.Mana, motion.LastSpell = originalPower, originalMana, originalLastSpell
 		motion.SpellCooldowns, motion.SpellCategoryCooldowns = originalSpellCooldowns, originalCategoryCooldowns
+		motion.SpellCooldownCategories, motion.SpellCooldownCategoryEnds = originalCooldownCategories, originalCategoryEnds
 		server.motionMu.Unlock()
 		session.logout()
 		if actualPower != expectedPower || !petSpellGoPowerMatches(trace, petPowerSpell, motion.GUID, expectedPower) || !petCastFailedWithResult(trace, petPowerSpell, petSpellFailedNoPower) {
@@ -386,6 +445,246 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 	return trace, nil
 }
 
+func (s *session) validateOwnerPetAuraReplay(ctx context.Context, ownerSpellID uint32) error {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil || s.player.PetGUID == 0 {
+		return errors.New("owner pet-aura replay requires an active pet")
+	}
+	ownerSpell, found, err := s.server.Data.Spell(ownerSpellID)
+	if err != nil || !found {
+		return errors.New("owner pet-aura replay source spell is missing from DBC")
+	}
+	s.server.motionMu.Lock()
+	motion := s.server.creatureMotion[s.player.PetGUID]
+	s.server.motionMu.Unlock()
+	if motion == nil {
+		return errors.New("owner pet-aura replay pet motion is missing")
+	}
+	validated := 0
+	for index, effect := range ownerSpell.Effects {
+		if effect.Effect != 3 && (effect.Effect != 6 || effect.Aura != 4) {
+			continue
+		}
+		key := ownerPetAuraKey{SpellID: ownerSpellID, EffectIndex: uint8(index)}
+		s.ownerPetAuraMu.Lock()
+		source, sourceFound := s.ownerPetAuraSources[key]
+		s.ownerPetAuraMu.Unlock()
+		if !sourceFound {
+			continue
+		}
+		auraSpellID := source.auraForPet(motion.Entry)
+		if auraSpellID == 0 {
+			continue
+		}
+		s.server.auraMu.Lock()
+		current := s.server.activeCreatureAuras[motion.GUID][auraSpellID]
+		var aura activeAura
+		if current != nil {
+			aura = *current
+		}
+		s.server.auraMu.Unlock()
+		if current == nil || !aura.OwnerPetAura || aura.OwnerPetAuraSourceSpell != ownerSpellID || aura.OwnerPetAuraSourceEffect != uint8(index) {
+			return fmt.Errorf("owner pet-aura replay missing derived spell %d for source %d effect %d", auraSpellID, ownerSpellID, index)
+		}
+		auraSpell, found, err := s.server.Data.Spell(auraSpellID)
+		if err != nil || !found || aura.EffectMask != PetAuraEffectMask(auraSpell) {
+			return fmt.Errorf("owner pet-aura replay spell %d has incomplete effect mask %d", auraSpellID, aura.EffectMask)
+		}
+		for effectIndex, effect := range auraSpell.Effects {
+			if aura.EffectMask&(1<<uint(effectIndex)) == 0 {
+				continue
+			}
+			if auraSpellID == 35696 && effectIndex == 0 {
+				expected := ResolveOwnerPetAuraAmount(auraSpellID, uint8(effectIndex), effect.BasePoints, aura.OwnerPetAuraSourceDamage, motion.Stats)
+				if aura.Amounts[effectIndex] != expected {
+					return fmt.Errorf("owner pet-aura replay Demonic Knowledge amount=%d, want %d", aura.Amounts[effectIndex], expected)
+				}
+			} else {
+				minValue, maxValue := effect.CalcValueRangeForLevel(auraSpell, uint32(motion.Level))
+				if aura.Amounts[effectIndex] < minValue || aura.Amounts[effectIndex] > maxValue {
+					return fmt.Errorf("owner pet-aura replay spell %d effect %d amount=%d, want range [%d,%d]", auraSpellID, effectIndex, aura.Amounts[effectIndex], minValue, maxValue)
+				}
+			}
+			if aura.BaseAmounts[effectIndex] != effect.BasePoints {
+				return fmt.Errorf("owner pet-aura replay spell %d effect %d base=%d, want %d", auraSpellID, effectIndex, aura.BaseAmounts[effectIndex], effect.BasePoints)
+			}
+		}
+		validated++
+	}
+	if validated == 0 {
+		return fmt.Errorf("owner pet-aura replay source spell %d mapped no aura to pet entry %d", ownerSpellID, motion.Entry)
+	}
+	return nil
+}
+
+func (s *session) validateOwnerPetAuraRemoval(ctx context.Context, ownerSpellID uint32) error {
+	if s == nil || s.server == nil || s.player == nil || s.player.PetGUID == 0 {
+		return errors.New("owner pet-aura removal replay requires an active pet")
+	}
+	motion, ok := s.petMotionForCast(s.player.PetGUID)
+	if !ok {
+		return errors.New("owner pet-aura removal replay pet motion is missing")
+	}
+	spell, found, err := s.server.Data.Spell(ownerSpellID)
+	if err != nil || !found {
+		return errors.New("owner pet-aura removal source spell is missing from DBC")
+	}
+	for index, effect := range spell.Effects {
+		if effect.Effect != 3 && (effect.Effect != 6 || effect.Aura != 4) {
+			continue
+		}
+		key := ownerPetAuraKey{SpellID: ownerSpellID, EffectIndex: uint8(index)}
+		s.ownerPetAuraMu.Lock()
+		_, sourceStillRegistered := s.ownerPetAuraSources[key]
+		s.ownerPetAuraMu.Unlock()
+		if sourceStillRegistered {
+			return fmt.Errorf("owner pet-aura removal left source %d effect %d registered", ownerSpellID, index)
+		}
+		if source, found := s.readOwnerPetAuraSource(ctx, ownerSpellID, uint8(index)); found {
+			if auraSpellID := source.auraForPet(motion.Entry); auraSpellID != 0 {
+				s.server.auraMu.Lock()
+				aura := s.server.activeCreatureAuras[motion.GUID][auraSpellID]
+				stillActive := aura != nil && aura.OwnerPetAura && aura.OwnerPetAuraSourceSpell == ownerSpellID && aura.OwnerPetAuraSourceEffect == uint8(index)
+				s.server.auraMu.Unlock()
+				if stillActive {
+					return fmt.Errorf("owner pet-aura removal left derived spell %d active", auraSpellID)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (s *session) replayOwnerPetAuraChange(ctx context.Context, ownerSpellID uint32) error {
+	if s == nil || s.server == nil || s.player == nil || s.player.PetGUID == 0 {
+		return errors.New("owner pet-aura change replay requires an active pet")
+	}
+	motion, ok := s.petMotionForCast(s.player.PetGUID)
+	if !ok {
+		return errors.New("owner pet-aura change replay pet motion is missing")
+	}
+	s.ownerPetAuraMu.Lock()
+	changeSources := make(map[ownerPetAuraKey]ownerPetAuraSource)
+	for key, source := range s.ownerPetAuraSources {
+		if key.SpellID == ownerSpellID && source.RemoveOnChange {
+			changeSources[key] = source
+		}
+	}
+	s.ownerPetAuraMu.Unlock()
+	if len(changeSources) == 0 {
+		return nil
+	}
+	s.removeOwnerPetAuraSourcesOnPetChange(ctx, motion.GUID)
+	s.applyOwnerPetAuras(ctx, motion.Entry, motion.GUID)
+	for key, source := range changeSources {
+		s.ownerPetAuraMu.Lock()
+		_, sourceStillRegistered := s.ownerPetAuraSources[key]
+		s.ownerPetAuraMu.Unlock()
+		if sourceStillRegistered {
+			return fmt.Errorf("owner pet-aura change retained source spell %d effect %d", key.SpellID, key.EffectIndex)
+		}
+		if auraSpellID := source.auraForPet(motion.Entry); auraSpellID != 0 {
+			s.server.auraMu.Lock()
+			aura := s.server.activeCreatureAuras[motion.GUID][auraSpellID]
+			stillActive := aura != nil && aura.OwnerPetAura && aura.OwnerPetAuraSourceSpell == key.SpellID && aura.OwnerPetAuraSourceEffect == key.EffectIndex
+			s.server.auraMu.Unlock()
+			if stillActive {
+				return fmt.Errorf("owner pet-aura change left derived spell %d active", auraSpellID)
+			}
+		}
+	}
+	return nil
+}
+
+func (s *session) replayPetFocusAura(ctx context.Context, spellID uint32) error {
+	if s == nil || s.server == nil || s.player == nil || s.player.PetGUID == 0 || s.server.TraceRecorder == nil {
+		return errors.New("pet focus-aura replay requires a traced login with an active pet")
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		return fmt.Errorf("pet focus-aura replay spell %d is missing from DBC", spellID)
+	}
+	effectIndex := -1
+	for index, effect := range spell.Effects {
+		if effect.Effect != 0 && effect.Aura == 110 && effect.MiscValue == 2 {
+			effectIndex = index
+			break
+		}
+	}
+	if effectIndex < 0 {
+		return fmt.Errorf("pet focus-aura replay spell %d has no DBC Focus regeneration percent effect", spellID)
+	}
+	petGUID := s.player.PetGUID
+	s.server.motionMu.Lock()
+	motion := s.server.creatureMotion[petGUID]
+	if motion == nil || motion.Health == 0 {
+		s.server.motionMu.Unlock()
+		return errors.New("pet focus-aura replay requires a living pet")
+	}
+	oldPowerType, oldPowers, oldMaxPowers := motion.PowerType, motion.Powers, motion.MaxPowers
+	oldFlags, oldFocusTimer, oldRefreshed := motion.UnitFlags2, motion.FocusRegenTimer, motion.Refreshed
+	motion.PowerType, motion.Powers[2], motion.MaxPowers[2] = 2, 0, 100
+	motion.UnitFlags2 |= unitFlag2RegeneratePower
+	motion.FocusRegenTimer = petFocusRegenInterval
+	s.server.motionMu.Unlock()
+	s.server.auraMu.Lock()
+	if s.server.activeCreatureAuras == nil {
+		s.server.activeCreatureAuras = make(map[uint64]map[uint32]*activeAura)
+	}
+	if s.server.activeCreatureAuras[petGUID] == nil {
+		s.server.activeCreatureAuras[petGUID] = make(map[uint32]*activeAura)
+	}
+	previousAura := s.server.activeCreatureAuras[petGUID][spellID]
+	effect := spell.Effects[effectIndex]
+	mask := uint8(1 << uint(effectIndex))
+	aura := &activeAura{SpellID: spellID, AuraType: effect.Aura, EffectMask: mask, CasterGUID: petGUID, TargetGUID: petGUID, MiscValue: effect.MiscValue, Amount: 50, Positive: true, StackCount: 1}
+	aura.Amounts[effectIndex], aura.BaseAmounts[effectIndex] = 50, effect.BasePoints
+	s.server.activeCreatureAuras[petGUID][spellID] = aura
+	s.server.auraMu.Unlock()
+	defer func() {
+		s.server.motionMu.Lock()
+		motion.PowerType, motion.Powers, motion.MaxPowers = oldPowerType, oldPowers, oldMaxPowers
+		motion.UnitFlags2, motion.FocusRegenTimer, motion.Refreshed = oldFlags, oldFocusTimer, oldRefreshed
+		s.server.motionMu.Unlock()
+		s.server.auraMu.Lock()
+		if previousAura == nil {
+			delete(s.server.activeCreatureAuras[petGUID], spellID)
+		} else {
+			s.server.activeCreatureAuras[petGUID][spellID] = previousAura
+		}
+		s.server.auraMu.Unlock()
+	}()
+	s.server.updatePetRuntime(time.Now(), petFocusRegenInterval)
+	s.server.motionMu.Lock()
+	actualPower := motion.Powers[2]
+	s.server.motionMu.Unlock()
+	if actualPower != 36 {
+		return fmt.Errorf("pet focus aura tick=%d, want 36", actualPower)
+	}
+	packetFound := false
+	trace := s.server.TraceRecorder.Snapshot()
+	for _, event := range trace.Events {
+		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_POWER_UPDATE) {
+			continue
+		}
+		payload, err := (protocoltrace.Trace{Events: []protocoltrace.Event{event}}).Payload(event)
+		if err != nil {
+			continue
+		}
+		reader := protocol.NewReader(payload)
+		guid, guidErr := reader.ReadPackedGUID()
+		powerType, typeErr := reader.ReadU8()
+		power, powerErr := reader.ReadU32()
+		if guidErr == nil && typeErr == nil && powerErr == nil && guid == petGUID && powerType == 2 && power == 36 {
+			packetFound = true
+			break
+		}
+	}
+	if !packetFound {
+		return errors.New("pet focus aura tick omitted the source SMSG_POWER_UPDATE")
+	}
+	return nil
+}
+
 func petCastFailedNotReady(trace protocoltrace.Trace, spellID uint32) bool {
 	for _, event := range trace.Events {
 		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_PET_CAST_FAILED) {
@@ -397,6 +696,103 @@ func petCastFailedNotReady(trace protocoltrace.Trace, spellID uint32) bool {
 		}
 	}
 	return false
+}
+
+func petSpellPacketHasCategoryCooldown(trace protocoltrace.Trace, petGUID uint64, categoryID uint32) bool {
+	for _, event := range trace.Events {
+		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_PET_SPELLS) {
+			continue
+		}
+		payload, err := (protocoltrace.Trace{Events: []protocoltrace.Event{event}}).Payload(event)
+		if err != nil {
+			continue
+		}
+		reader := protocol.NewReader(payload)
+		guid, err := reader.ReadU64()
+		if err != nil || guid != petGUID {
+			continue
+		}
+		if _, err := reader.Read(10); err != nil {
+			continue
+		}
+		if _, err := reader.Read(10 * 4); err != nil {
+			continue
+		}
+		spellCount, err := reader.ReadU8()
+		if err != nil || uint64(spellCount)*4 > uint64(reader.Remaining()) {
+			continue
+		}
+		if _, err := reader.Read(int(spellCount) * 4); err != nil {
+			continue
+		}
+		cooldownCount, err := reader.ReadU8()
+		if err != nil || uint64(cooldownCount)*14 > uint64(reader.Remaining()) {
+			continue
+		}
+		for index := uint8(0); index < cooldownCount; index++ {
+			if _, err := reader.ReadU32(); err != nil {
+				break
+			}
+			category, err := reader.ReadU16()
+			if err != nil {
+				break
+			}
+			if _, err := reader.ReadU32(); err != nil {
+				break
+			}
+			categoryMs, err := reader.ReadU32()
+			if err == nil && uint32(category) == categoryID && categoryMs > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func petCooldownExpiryClearsCategory(server *Server, motion *creatureMotion, spellID, categoryID uint32) bool {
+	if server == nil || motion == nil || spellID == 0 || categoryID == 0 {
+		return false
+	}
+	server.motionMu.Lock()
+	defer server.motionMu.Unlock()
+	spellCooldowns := make(map[uint32]time.Time, len(motion.SpellCooldowns))
+	for id, end := range motion.SpellCooldowns {
+		spellCooldowns[id] = end
+	}
+	categoryCooldowns := make(map[uint32]time.Time, len(motion.SpellCategoryCooldowns))
+	for id, end := range motion.SpellCategoryCooldowns {
+		categoryCooldowns[id] = end
+	}
+	spellCategories := make(map[uint32]uint32, len(motion.SpellCooldownCategories))
+	for id, category := range motion.SpellCooldownCategories {
+		spellCategories[id] = category
+	}
+	spellCategoryEnds := make(map[uint32]time.Time, len(motion.SpellCooldownCategoryEnds))
+	for id, end := range motion.SpellCooldownCategoryEnds {
+		spellCategoryEnds[id] = end
+	}
+	now := time.Now()
+	if motion.SpellCooldowns == nil {
+		motion.SpellCooldowns = make(map[uint32]time.Time)
+	}
+	if motion.SpellCategoryCooldowns == nil {
+		motion.SpellCategoryCooldowns = make(map[uint32]time.Time)
+	}
+	if motion.SpellCooldownCategories == nil {
+		motion.SpellCooldownCategories = make(map[uint32]uint32)
+	}
+	if motion.SpellCooldownCategoryEnds == nil {
+		motion.SpellCooldownCategoryEnds = make(map[uint32]time.Time)
+	}
+	motion.SpellCooldowns[spellID] = now.Add(-time.Second)
+	motion.SpellCategoryCooldowns[categoryID] = now.Add(time.Minute)
+	motion.SpellCooldownCategories[spellID] = categoryID
+	motion.SpellCooldownCategoryEnds[spellID] = now.Add(time.Minute)
+	prunePetSpellCooldowns(motion, now)
+	_, categoryStillActive := motion.SpellCategoryCooldowns[categoryID]
+	motion.SpellCooldowns, motion.SpellCategoryCooldowns = spellCooldowns, categoryCooldowns
+	motion.SpellCooldownCategories, motion.SpellCooldownCategoryEnds = spellCategories, spellCategoryEnds
+	return !categoryStillActive
 }
 
 func petCastFailedWithResult(trace protocoltrace.Trace, spellID uint32, result uint8) bool {

@@ -329,6 +329,15 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			return true
 		}
 	}
+	if categoryID, _, categoryErr := s.spellCooldownCategory(spellID); categoryErr == nil && categoryID != 0 {
+		for _, cooldown := range s.player.Cooldowns {
+			if cooldown.Category == categoryID && cooldown.End > nowUnix && cooldown.CategoryEnd > nowUnix {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "category cooldown active", "category", categoryID)
+				return true
+			}
+		}
+	}
 	// Self-cast only spells (e.g. Demon Skin, Demon Armor, Ice Barrier) must always target the caster
 	if isSelfCastOnly(spell) {
 		if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 && target.UnitGUID != s.playerGUID {
@@ -787,6 +796,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						s.castSpellDirect(effCtx, eff.TriggerSpell, effectTarget)
 					}
 				}
+			case 3:
+				s.addOwnerPetAuraSource(effCtx, spellID, uint8(effectIndex))
 			case spellEffectThreat:
 				amount := eff.BasePoints + 1
 				for _, effectTarget := range hitTargets {
@@ -1884,42 +1895,46 @@ func (s *session) handleCancelAura(payload []byte) bool {
 
 // activeAura tracks an applied periodic or timed aura on a unit (player or creature).
 type activeAura struct {
-	SpellID            uint32
-	DispelType         uint32
-	Mechanic           uint32
-	AuraType           uint32
-	EffectMask         uint8
-	CasterGUID         uint64
-	TargetGUID         uint64
-	ItemGUID           uint64
-	SchoolMask         uint32
-	MiscValue          int32
-	Amount             uint32
-	Amounts            [3]int32
-	BaseAmounts        [3]int32
-	RecalculateMask    uint8
-	CritChance         float32
-	ApplyResilience    bool
-	DurationMs         uint32
-	PeriodMs           uint32
-	RemainingMs        uint32
-	DurationUpdatedAt  time.Time
-	Slot               uint8
-	Positive           bool
-	CasterLevel        uint8
-	StackCount         uint8
-	SingleTarget       bool
-	RemainingCharges   uint8
-	StackAmount        uint32
-	HideDuration       bool
-	AuraInterruptFlags uint32
-	TriggerSpell       uint32
-	DRGroup            DiminishingGroup
-	DamageTaken        uint32
-	OwnerPetAura       bool
-	Timer              *time.Timer
-	TickTimer          *time.Timer
-	Stopped            bool
+	SpellID                    uint32
+	DispelType                 uint32
+	Mechanic                   uint32
+	AuraType                   uint32
+	EffectMask                 uint8
+	CasterGUID                 uint64
+	TargetGUID                 uint64
+	ItemGUID                   uint64
+	SchoolMask                 uint32
+	MiscValue                  int32
+	Amount                     uint32
+	Amounts                    [3]int32
+	BaseAmounts                [3]int32
+	RecalculateMask            uint8
+	CritChance                 float32
+	ApplyResilience            bool
+	DurationMs                 uint32
+	PeriodMs                   uint32
+	RemainingMs                uint32
+	DurationUpdatedAt          time.Time
+	Slot                       uint8
+	Positive                   bool
+	CasterLevel                uint8
+	StackCount                 uint8
+	SingleTarget               bool
+	RemainingCharges           uint8
+	StackAmount                uint32
+	HideDuration               bool
+	AuraInterruptFlags         uint32
+	TriggerSpell               uint32
+	DRGroup                    DiminishingGroup
+	DamageTaken                uint32
+	OwnerPetAura               bool
+	OwnerPetAuraSourceSpell    uint32
+	OwnerPetAuraSourceEffect   uint8
+	OwnerPetAuraSourceDamage   int32
+	OwnerPetAuraRemoveOnChange bool
+	Timer                      *time.Timer
+	TickTimer                  *time.Timer
+	Stopped                    bool
 }
 
 func isHarmfulAura(auraType uint32) bool {
@@ -2326,7 +2341,7 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 				stackCount = uint8(sp.ProcCharges)
 			}
 			for index, effect := range sp.Effects {
-				if effect.Effect == 0 || (index > 0 && auraType != 0 && effect.Aura != spellAuraMounted) {
+				if effect.Effect == 0 || (index > 0 && auraType != 0 && effect.Aura != spellAuraMounted && !(auraType == 4 && effect.Aura == 4)) {
 					continue
 				}
 				auraType = effect.Aura
@@ -2342,6 +2357,22 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 				}
 				if auraType == spellAuraMounted {
 					break
+				}
+			}
+			if mask, mountMisc, mountAmounts, mountBaseAmounts, mountedFlight := mountedFlightAuraEffects(sp); mountedFlight {
+				effectMask, auraType, miscValue = mask, spellAuraMounted, mountMisc
+				amounts, baseAmounts = mountAmounts, mountBaseAmounts
+				recalculateMask = 0
+				for index, effect := range sp.Effects {
+					if mask&(1<<uint(index)) == 0 {
+						continue
+					}
+					if auraEffectCanBeRecalculated(effect.Aura) {
+						recalculateMask |= 1 << uint(index)
+					}
+					if effect.Aura == spellAuraMounted {
+						effectAmount = uint32(effect.BasePoints + 1)
+					}
 				}
 			}
 		}
@@ -2397,6 +2428,9 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	}
 	s.sendAuraUpdateWithStack(slot, spellID, false, positive, durationMs, durationMs, stackCount)
 	s.sendPlayerUpdate()
+	if auraType == 4 {
+		s.addOwnerPetAuraEffects(context.Background(), spellID, effectMask)
+	}
 	if mounted {
 		s.sendRuntimeMovementUpdates(spellAuraMounted)
 	}
@@ -2417,13 +2451,17 @@ func (s *session) removeAura(spellID uint32) {
 	wasTrackStealthed := false
 	wasVisibilityAura := false
 	wasMovementSpeedAura := false
+	wasMountedFlight := false
 	removedAuraType := uint32(0)
 	removedFakeInebriation := uint32(0)
+	removedEffectMask := uint8(0)
 	s.castMu.Lock()
 	if s.activeAuras != nil {
 		if aura, ok := s.activeAuras[spellID]; ok && aura != nil {
+			removedEffectMask = aura.EffectMask
 			removedAuraType = aura.AuraType
 			wasMounted = aura.AuraType == spellAuraMounted
+			wasMountedFlight = wasMounted && s.activeAuraHasEffect(aura, spellAuraMountedFlightSpeed)
 			wasMovementControl = aura.AuraType == spellAuraStun || aura.AuraType == spellAuraRoot
 			wasConfused = aura.AuraType == spellAuraConfuse
 			wasFleeing = aura.AuraType == spellAuraFear
@@ -2457,6 +2495,10 @@ func (s *session) removeAura(spellID uint32) {
 		}
 	}
 	s.castMu.Unlock()
+	if removedEffectMask != 0 {
+		s.removeOwnerPetAuraEffects(context.Background(), spellID, removedEffectMask)
+	}
+	s.removeOwnerPetAurasForSpell(context.Background(), spellID)
 
 	if s.auras != nil {
 		delete(s.auras, spellID)
@@ -2532,6 +2574,9 @@ func (s *session) removeAura(spellID uint32) {
 	if wasMovementSpeedAura {
 		s.sendRuntimeMovementUpdates(removedAuraType)
 	}
+	if wasMountedFlight {
+		s.sendRuntimeMovementUpdates(spellAuraMountedFlightSpeed)
+	}
 }
 
 func (s *session) hasAura(spellID uint32) bool {
@@ -2556,13 +2601,9 @@ func (s *session) applyMountedDisplay(ctx context.Context, aura *activeAura) {
 	}
 	entry := uint32(aura.MiscValue)
 	if aura.SpellID == 62061 {
-		for _, current := range s.loadedAuras() {
-			if current != nil && current.AuraType == wotlk.MountedFlightSpeedAura {
-				entry = 24906
-				break
-			}
-		}
-		if entry == uint32(aura.MiscValue) {
+		if s.activeAuraHasEffect(aura, wotlk.MountedFlightSpeedAura) {
+			entry = 24906
+		} else {
 			entry = 15665
 		}
 	}
@@ -2605,6 +2646,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	if ctx == nil || ctx.Err() != nil {
 		ctx = context.Background()
 	}
+	mountEffectMask, mountMiscValue, mountAmounts, mountBaseAmounts, mountedFlight := mountedFlightAuraEffects(spell)
 
 	positive := !isHarmfulAura(eff.Aura) && eff.ImplicitTargetA != 6
 	if isAreaEnemySpell(spell) {
@@ -2627,7 +2669,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		if targetSess.isImmuneToSpell(spell) {
 			return
 		}
-		if eff.Aura == spellAuraMounted {
+		if eff.Aura == spellAuraMounted || mountedFlight {
 			targetSess.clearOtherMountedAuras(spell.ID)
 			durationMs = 0
 			periodMs = 0
@@ -2657,7 +2699,8 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			targetSess.activeAuras = make(map[uint32]*activeAura)
 		}
 
-		if existing, exists := targetSess.activeAuras[spell.ID]; exists && existing != nil {
+		previous := targetSess.activeAuras[spell.ID]
+		if existing := previous; existing != nil {
 			existing.Stopped = true
 			if existing.Timer != nil {
 				existing.Timer.Stop()
@@ -2716,6 +2759,43 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			RemainingCharges:   uint8(spell.ProcCharges),
 		}
 		setAuraEffectPersistence(aura, spell, eff, amount)
+		if eff.Aura == 4 && previous != nil && previous.AuraType == 4 {
+			currentMask := spellEffectMask(spell, eff)
+			aura.EffectMask |= previous.EffectMask
+			for index := range spell.Effects {
+				bit := uint8(1 << uint(index))
+				if previous.EffectMask&bit == 0 || currentMask&bit != 0 {
+					continue
+				}
+				aura.Amounts[index], aura.BaseAmounts[index] = previous.Amounts[index], previous.BaseAmounts[index]
+				aura.RecalculateMask |= previous.RecalculateMask & bit
+			}
+		}
+		if mountedFlight {
+			aura.EffectMask |= mountEffectMask
+			aura.AuraType = spellAuraMounted
+			aura.MiscValue = mountMiscValue
+			aura.Positive = true
+			aura.DurationMs, aura.RemainingMs, aura.PeriodMs = 0, 0, 0
+			aura.DRGroup, aura.StackCount, aura.RemainingCharges = DiminishingNone, 1, 0
+			aura.RecalculateMask &^= mountEffectMask
+			for index, effect := range spell.Effects {
+				bit := uint8(1 << uint(index))
+				if mountEffectMask&bit == 0 {
+					continue
+				}
+				aura.Amounts[index], aura.BaseAmounts[index] = mountAmounts[index], mountBaseAmounts[index]
+				if effect == eff {
+					aura.Amounts[index] = int32(amount)
+				}
+				if auraEffectCanBeRecalculated(effect.Aura) {
+					aura.RecalculateMask |= bit
+				}
+				if effect.Aura == spellAuraMounted {
+					aura.Amount = uint32(aura.Amounts[index])
+				}
+			}
+		}
 		targetSess.activeAuras[spell.ID] = aura
 		targetSess.castMu.Unlock()
 		if eff.Aura == spellAuraFakeInebriation {
@@ -2775,7 +2855,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 
 		stackCount := uint8(1)
-		if eff.Aura != spellAuraMounted && spell.StackAmount == 0 && spell.ProcCharges > 0 {
+		if !mountedFlight && eff.Aura != spellAuraMounted && spell.StackAmount == 0 && spell.ProcCharges > 0 {
 			stackCount = uint8(spell.ProcCharges)
 		}
 		wireMaxDuration, wireDuration := auraWireDurations(spell, durationMs, durationMs)
@@ -2785,6 +2865,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, targetSess)
 		}
 		targetSess.sendPlayerUpdate()
+		if eff.Aura == 4 {
+			targetSess.addOwnerPetAuraEffects(ctx, spell.ID, spellEffectMask(spell, eff))
+		}
 		if movementSpeedAura(eff.Aura) {
 			targetSess.sendRuntimeMovementUpdates(eff.Aura)
 		}
@@ -3454,8 +3537,12 @@ func (s *session) savePlayerSpellCooldowns(ctx context.Context, tx *sql.Tx, stat
 		spellIDs = append(spellIDs, spellID)
 	}
 	sort.Slice(spellIDs, func(i, j int) bool { return spellIDs[i] < spellIDs[j] })
+	now := time.Now().Unix()
 	for _, spellID := range spellIDs {
 		cooldown := bySpell[spellID]
+		if cooldown.End <= now {
+			continue
+		}
 		if _, err := s.server.CharactersStore.ExecStatementTx(ctx, tx, "CHAR_INS_CHAR_SPELL_COOLDOWN", state.GUID, cooldown.Spell, cooldown.Item, cooldown.End, cooldown.Category, cooldown.CategoryEnd); err != nil {
 			return err
 		}
@@ -3611,6 +3698,10 @@ func (s *session) handleTalentWipeConfirm(ctx context.Context, payload []byte) b
 			rows.Close()
 			for _, sp := range unlearnSpells {
 				_, _ = cdb.ExecContext(ctx, "DELETE FROM character_spell WHERE guid = ? AND spell = ?", s.playerGUID, sp)
+				if s.hasAura(sp) {
+					s.removeAura(sp)
+				}
+				s.removeOwnerPetAurasForSpell(ctx, sp)
 				unlearnBuf := protocol.NewBuffer(4)
 				unlearnBuf.WriteU32(sp)
 				_ = s.write(uint16(protocol.OpcodeSMSG_REMOVED_SPELL), unlearnBuf.Bytes(), true)
@@ -3838,6 +3929,10 @@ func (s *session) activateSpec(ctx context.Context, targetSpec uint8) {
 		rows.Close()
 		for _, sp := range oldSpells {
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_spell WHERE guid = ? AND spell = ?", s.playerGUID, sp)
+			if s.hasAura(sp) {
+				s.removeAura(sp)
+			}
+			s.removeOwnerPetAurasForSpell(ctx, sp)
 			unlearnBuf := protocol.NewBuffer(4)
 			unlearnBuf.WriteU32(sp)
 			_ = s.write(uint16(protocol.OpcodeSMSG_REMOVED_SPELL), unlearnBuf.Bytes(), true)

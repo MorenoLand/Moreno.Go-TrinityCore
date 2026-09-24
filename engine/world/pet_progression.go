@@ -71,6 +71,7 @@ func (s *session) applyPetLevel(ctx context.Context, petID, entry uint32, petTyp
 	}
 	s.server.motionMu.Unlock()
 	health, maxHealth, mana, maxMana := s.getPetStats(ctx, entry, newLevel, petType)
+	attributes := s.getPetAttributes(ctx, entry, newLevel, petType)
 	if health == 0 || maxHealth == 0 {
 		return false
 	}
@@ -87,7 +88,7 @@ func (s *session) applyPetLevel(ctx context.Context, petID, entry uint32, petTyp
 		s.server.motionMu.Unlock()
 		return false
 	}
-	motion.Level, motion.Experience = newLevel, experience
+	motion.Level, motion.Experience, motion.Stats = newLevel, experience, attributes
 	motion.Health, motion.MaxHealth, motion.Mana, motion.MaxMana = health, maxHealth, mana, maxMana
 	motion.Powers[0], motion.MaxPowers[0] = mana, maxMana
 	motion.PetNextLevelXP = nextLevelXP
@@ -95,6 +96,9 @@ func (s *session) applyPetLevel(ctx context.Context, petID, entry uint32, petTyp
 		motion.MinDamage, motion.MaxDamage = float32(newLevel-newLevel/4), float32(newLevel+newLevel/4)
 	}
 	fields := map[int]uint32{unitFieldLevel: newLevel, unitFieldHealth: health, unitFieldMaxHealth: maxHealth, unitFieldPower1: mana, unitFieldMaxPower1: maxMana, unitFieldPetExperience: experience}
+	for index, value := range attributes {
+		fields[unitFieldStat0+index] = value
+	}
 	if petType == 1 {
 		fields[unitFieldPetNextLevelExp] = nextLevelXP
 	}

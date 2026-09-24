@@ -641,7 +641,7 @@ func (s *session) loadMountDisplay(ctx context.Context, state *playerState) {
 	auras := s.loadedAuras()
 	hasMountedFlight := false
 	for _, aura := range auras {
-		if aura != nil && aura.AuraType == 207 {
+		if s.activeAuraHasEffect(aura, wotlk.MountedFlightSpeedAura) {
 			hasMountedFlight = true
 			break
 		}

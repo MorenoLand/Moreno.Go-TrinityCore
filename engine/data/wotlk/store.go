@@ -3,6 +3,7 @@ package wotlk
 import (
 	"encoding/binary"
 	"fmt"
+	"math/rand/v2"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -92,16 +93,63 @@ type FactionTemplate struct {
 }
 
 type SpellEffect struct {
-	Effect          uint32
-	BasePoints      int32
-	Aura            uint32
-	AuraPeriod      uint32
-	ImplicitTargetA uint32
-	ImplicitTargetB uint32
-	RadiusIndex     uint32
-	MiscValue       int32
-	MiscValueB      int32
-	TriggerSpell    uint32
+	Effect             uint32
+	BasePoints         int32
+	DieSides           int32
+	RealPointsPerLevel float32
+	Aura               uint32
+	AuraPeriod         uint32
+	ImplicitTargetA    uint32
+	ImplicitTargetB    uint32
+	RadiusIndex        uint32
+	MiscValue          int32
+	MiscValueB         int32
+	TriggerSpell       uint32
+}
+
+func (effect SpellEffect) CalcValue() int32 {
+	return effect.CalcValueForLevel(Spell{}, 0)
+}
+
+func (effect SpellEffect) calculatedBasePoints(spell Spell, casterLevel uint32) int64 {
+	basePoints := int64(effect.BasePoints)
+	if casterLevel > 0 && effect.RealPointsPerLevel != 0 {
+		level := casterLevel
+		if spell.MaxLevel > 0 && level > spell.MaxLevel {
+			level = spell.MaxLevel
+		} else if level < spell.BaseLevel {
+			level = spell.BaseLevel
+		}
+		minimumLevel := spell.BaseLevel
+		if spell.SpellLevel > minimumLevel {
+			minimumLevel = spell.SpellLevel
+		}
+		basePoints += int64(int32(float32(int64(level)-int64(minimumLevel)) * effect.RealPointsPerLevel))
+	}
+	return basePoints
+}
+
+func (effect SpellEffect) CalcValueForLevel(spell Spell, casterLevel uint32) int32 {
+	basePoints := effect.calculatedBasePoints(spell, casterLevel)
+	switch {
+	case effect.DieSides > 0:
+		return int32(basePoints + 1 + rand.Int64N(int64(effect.DieSides)))
+	case effect.DieSides < 0:
+		return int32(basePoints + int64(effect.DieSides) + rand.Int64N(2-int64(effect.DieSides)))
+	default:
+		return int32(basePoints)
+	}
+}
+
+func (effect SpellEffect) CalcValueRangeForLevel(spell Spell, casterLevel uint32) (int32, int32) {
+	basePoints := effect.calculatedBasePoints(spell, casterLevel)
+	minValue, maxValue := basePoints, basePoints
+	if effect.DieSides > 0 {
+		minValue, maxValue = basePoints+1, basePoints+int64(effect.DieSides)
+	} else if effect.DieSides < 0 {
+		minValue, maxValue = basePoints+int64(effect.DieSides), basePoints+1
+	}
+	return int32(minValue), int32(maxValue)
 }
 
 type Spell struct {
@@ -133,6 +181,8 @@ type Spell struct {
 	ChannelInterrupt      uint32
 	DurationIndex         uint32
 	SpellLevel            uint32
+	MaxLevel              uint32
+	BaseLevel             uint32
 	PreventionType        uint32 // Spell.dbc field 214 = PreventionType (DBCStructure.h:1484)
 	StartRecoveryCategory uint32 // Spell.dbc field 210 = StartRecoveryCategory (DBCStructure.h:1480)
 	StartRecoveryTime     uint32 // Spell.dbc field 211 = StartRecoveryTime (DBCStructure.h:1481)
@@ -721,6 +771,8 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{33, &spell.ChannelInterrupt},
 		{40, &spell.DurationIndex},
 		{39, &spell.SpellLevel},
+		{37, &spell.MaxLevel},
+		{38, &spell.BaseLevel},
 		{214, &spell.PreventionType},        // Spell.dbc field 214 = PreventionType (DBCStructure.h:1484)
 		{205, &spell.StartRecoveryCategory}, // Spell.dbc field 205 = StartRecoveryCategory
 		{206, &spell.StartRecoveryTime},     // Spell.dbc field 206 = StartRecoveryTime
@@ -747,6 +799,14 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 	}
 	for i := range spell.Effects {
 		effect, err := record.Uint32(71 + i)
+		if err != nil {
+			return Spell{}, false, err
+		}
+		dieSides, err := record.Int32(74 + i)
+		if err != nil {
+			return Spell{}, false, err
+		}
+		realPointsPerLevel, err := record.Float32(77 + i)
 		if err != nil {
 			return Spell{}, false, err
 		}
@@ -786,7 +846,7 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		if err != nil {
 			return Spell{}, false, err
 		}
-		spell.Effects[i] = SpellEffect{Effect: effect, BasePoints: basePoints, Aura: aura, AuraPeriod: auraPeriod, ImplicitTargetA: implicitTargetA, ImplicitTargetB: implicitTargetB, RadiusIndex: radiusIndex, MiscValue: miscValue, MiscValueB: miscValueB, TriggerSpell: triggerSpell}
+		spell.Effects[i] = SpellEffect{Effect: effect, BasePoints: basePoints, DieSides: dieSides, RealPointsPerLevel: realPointsPerLevel, Aura: aura, AuraPeriod: auraPeriod, ImplicitTargetA: implicitTargetA, ImplicitTargetB: implicitTargetB, RadiusIndex: radiusIndex, MiscValue: miscValue, MiscValueB: miscValueB, TriggerSpell: triggerSpell}
 	}
 	return spell, true, nil
 }

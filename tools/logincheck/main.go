@@ -41,6 +41,8 @@ func main() {
 	replayPetCooldownSpell := flag.Uint("replay-pet-cooldown-spell", 0, "after login, assert a saved pet category cooldown rejects this spell")
 	replayPetPowerSpell := flag.Uint("replay-pet-power-spell", 0, "after login, verify a known pet spell spends and reports its DBC power cost")
 	replayPetXPAward := flag.Uint("replay-pet-xp", 0, "after login, apply a hunter-pet XP award and verify fields and persistence")
+	replayPetAuraSourceSpell := flag.Uint("replay-pet-aura-source-spell", 0, "inject an owner source spell into the isolated character copy and verify its mapped pet aura")
+	replayPetFocusAuraSpell := flag.Uint("replay-pet-focus-aura-spell", 0, "replay a DBC Focus regeneration aura through the pet timer and power packet")
 	replayPetFeedSpell := flag.Uint("replay-pet-feed-spell", 0, "after login, cast a pet-feed spell against the supplied inventory item")
 	replayPetFeedItem := flag.Uint64("replay-pet-feed-item", 0, "inventory item GUID used by the pet-feed replay")
 	replayTrace := flag.String("trace-out", "", "optional JSONL path for the in-process login trace")
@@ -55,7 +57,7 @@ func main() {
 	if *replayWork != "" {
 		petFeedRequested := *replayPetFeedSpell != 0 || *replayPetFeedItem != 0
 		petReplayCount := 0
-		for _, requested := range []bool{*replayPetCooldownSpell != 0, *replayPetPowerSpell != 0, *replayPetXPAward != 0, petFeedRequested} {
+		for _, requested := range []bool{*replayPetCooldownSpell != 0, *replayPetPowerSpell != 0, *replayPetXPAward != 0, *replayPetAuraSourceSpell != 0, *replayPetFocusAuraSpell != 0, petFeedRequested} {
 			if requested {
 				petReplayCount++
 			}
@@ -63,7 +65,7 @@ func main() {
 		if petReplayCount > 1 || petFeedRequested && (*replayPetFeedSpell == 0 || *replayPetFeedItem == 0) {
 			fail("choose only one pet replay scenario")
 		}
-		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetFeedSpell), *replayPetFeedItem); err != nil {
+		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem); err != nil {
 			fail(err.Error())
 		}
 		return
@@ -553,12 +555,13 @@ func checkMovementSpeedAuraClassification() error {
 
 func checkMovementSpeedUpdatePlan() error {
 	for _, test := range []struct {
-		auraType, flightAura uint32
-		run, flight, canFly  bool
-	}{{31, 0, true, false, false}, {33, 0, true, true, false}, {78, 0, true, false, false}, {78, 1, true, true, false}, {201, 0, false, false, true}, {206, 0, false, true, false}, {207, 0, false, true, true}, {211, 0, false, true, false}} {
-		run, flight, canFly := world.ResolveMovementSpeedUpdatePlan(test.auraType, test.flightAura != 0)
+		auraType                                uint32
+		hasFlightSpeedAura, hasFlightCapability bool
+		run, flight, canFly                     bool
+	}{{31, false, false, true, false, false}, {33, false, false, true, true, false}, {78, false, false, true, false, false}, {78, true, false, true, true, false}, {78, true, true, true, true, true}, {201, false, false, false, false, true}, {206, false, false, false, true, false}, {207, false, false, false, true, true}, {211, false, false, false, true, false}} {
+		run, flight, canFly := world.ResolveMovementSpeedUpdatePlan(test.auraType, test.hasFlightSpeedAura, test.hasFlightCapability)
 		if run != test.run || flight != test.flight || canFly != test.canFly {
-			return fmt.Errorf("aura type %d flight-aura=%t plan=(%t,%t,%t) want=(%t,%t,%t)", test.auraType, test.flightAura != 0, run, flight, canFly, test.run, test.flight, test.canFly)
+			return fmt.Errorf("aura type %d flight-speed=%t can-fly=%t plan=(%t,%t,%t) want=(%t,%t,%t)", test.auraType, test.hasFlightSpeedAura, test.hasFlightCapability, run, flight, canFly, test.run, test.flight, test.canFly)
 		}
 	}
 	return nil
@@ -583,6 +586,90 @@ func checkPetSpellPowerCost() error {
 }
 
 func checkPetRuntimeTick() error {
+	if value := (wotlk.SpellEffect{BasePoints: 10}).CalcValue(); value != 10 {
+		return fmt.Errorf("unscaled DBC spell effect value=%d, want 10", value)
+	}
+	levelEffect := wotlk.SpellEffect{BasePoints: 10, RealPointsPerLevel: 2}
+	levelSpell := wotlk.Spell{BaseLevel: 1, SpellLevel: 2, MaxLevel: 5}
+	if value := levelEffect.CalcValueForLevel(levelSpell, 4); value != 14 || levelEffect.CalcValueForLevel(levelSpell, 10) != 16 {
+		return fmt.Errorf("DBC spell level value=%d cap=%d, want 14/16", value, levelEffect.CalcValueForLevel(levelSpell, 10))
+	}
+	for _, effect := range []wotlk.SpellEffect{{BasePoints: 10, DieSides: 3}, {BasePoints: 10, DieSides: -2}} {
+		minValue, maxValue := effect.CalcValueRangeForLevel(wotlk.Spell{}, 0)
+		for range 32 {
+			if value := effect.CalcValue(); value < minValue || value > maxValue {
+				return fmt.Errorf("DBC spell die-side value=%d outside [%d,%d]", value, minValue, maxValue)
+			}
+		}
+	}
+	if rate := world.ResolveGroupXPRate(3, false); rate != 1.166 {
+		return fmt.Errorf("three-member XP group rate=%v, want 1.166", rate)
+	}
+	if rate := world.ResolveGroupXPRate(4, false); rate != 1.3 {
+		return fmt.Errorf("four-member XP group rate=%v, want 1.3", rate)
+	}
+	if rate := world.ResolveGroupXPRate(5, true); rate != 1 {
+		return fmt.Errorf("raid XP group rate=%v, want 1", rate)
+	}
+	if share := world.ResolveGroupXPShare(1000, 10, 30, 10, 10, 1.166); share != 388 {
+		return fmt.Errorf("full-XP three-member share=%d, want 388", share)
+	}
+	if share := world.ResolveGroupXPShare(1000, 10, 40, 20, 10, 1.166); share != 146 {
+		return fmt.Errorf("mixed-gray group share=%d, want 146", share)
+	}
+	if share := world.ResolveGroupXPShare(1000, 20, 40, 20, 10, 1.166); share != 0 {
+		return fmt.Errorf("gray member group share=%d, want 0", share)
+	}
+	if world.ResolveNpcBotXPGain(1000, 1, 20) != 1000 || world.ResolveNpcBotXPGain(1000, 3, 20) != 600 || world.ResolveNpcBotXPGain(1000, 8, 90) != 100 {
+		return fmt.Errorf("NPCBot XP reduction did not match per-bot percentage and 10%% floor")
+	}
+	if !world.ResolveGroupXPMapEligibility(571, 571, 1, 1) || world.ResolveGroupXPMapEligibility(571, 571, 1, 2) || world.ResolveGroupXPMapEligibility(571, 572, 1, 1) {
+		return fmt.Errorf("group XP map/instance eligibility did not match same-instance reward rules")
+	}
+	if distance := world.ResolveGroupXPDistance(80, 1.5, 1.5); distance != 77 || world.ResolveGroupXPDistance(2, 1.5, 1.5) != 0 {
+		return fmt.Errorf("group XP distance did not subtract object combat reach: %v", distance)
+	}
+	cooldownStart := time.Unix(100, 0)
+	spellEnd, categoryEnd, hasCooldown := world.ResolvePetCooldownEnds(cooldownStart, 0, 5000)
+	if !hasCooldown || !spellEnd.Equal(categoryEnd) || spellEnd.Sub(cooldownStart) != 5*time.Second {
+		return fmt.Errorf("category-only cooldown ends spell=%v category=%v has=%t", spellEnd, categoryEnd, hasCooldown)
+	}
+	if _, _, hasCooldown := world.ResolvePetCooldownEnds(cooldownStart, 0, 0); hasCooldown {
+		return fmt.Errorf("zero-duration pet spell produced a cooldown")
+	}
+	if gain := world.ResolvePetFocusRegen(1, []world.PetFocusModifier{{AuraType: 85, Amount: 25}, {AuraType: 110, Amount: 50}}); gain != 56 {
+		return fmt.Errorf("source Focus aura formula=%d, want 56", gain)
+	}
+	if gain := world.ResolvePetFocusRegen(1, []world.PetFocusModifier{{AuraType: 85, Amount: 25, StackGroup: 100}, {AuraType: 85, Amount: 50, StackGroup: 100}}); gain != 64 {
+		return fmt.Errorf("same-effect flat Focus aura stack=%d, want 64", gain)
+	}
+	if gain := world.ResolvePetFocusRegen(1, []world.PetFocusModifier{{AuraType: 110, Amount: 25, StackGroup: 100}, {AuraType: 110, Amount: 50, StackGroup: 100}}); gain != 36 {
+		return fmt.Errorf("same-effect percent Focus aura stack=%d, want 36", gain)
+	}
+	if gain := world.ResolvePetFocusRegen(1, []world.PetFocusModifier{{AuraType: 110, Amount: 50, StackGroup: 100}, {AuraType: 110, Amount: 50, StackGroup: 101}}); gain != 54 {
+		return fmt.Errorf("independent percent Focus aura stack=%d, want 54", gain)
+	}
+	if multiplier := world.ResolveAuraPercentMultiplierByType([]world.PetFocusModifier{{AuraType: 200, Amount: 50}, {AuraType: 200, Amount: 50}}, 200); multiplier != 2.25 {
+		return fmt.Errorf("independent XP-aura multiplier=%v, want 2.25", multiplier)
+	}
+	if multiplier := world.ResolveAuraPercentMultiplierByType([]world.PetFocusModifier{{AuraType: 200, Amount: 25, StackGroup: 100}, {AuraType: 200, Amount: 50, StackGroup: 100}}, 200); multiplier != 1.5 {
+		return fmt.Errorf("same-effect XP-aura multiplier=%v, want 1.5", multiplier)
+	}
+	if gain := world.ResolvePetFocusRegen(1, []world.PetFocusModifier{{AuraType: 85, Amount: -25}}); gain != 858997 {
+		return fmt.Errorf("source signed flat Focus arithmetic=%d, want 858997", gain)
+	}
+	multiEffect := wotlk.Spell{Effects: [3]wotlk.SpellEffect{{Effect: 6, Aura: 20}, {Effect: 6, Aura: 118}}}
+	if mask := world.PetAuraEffectMask(multiEffect); mask != 3 {
+		return fmt.Errorf("mapped pet aura effect mask=%d, want 3", mask)
+	}
+	if amount := world.ResolveOwnerPetAuraAmount(35696, 0, 10, 4, [5]uint32{0, 0, 24, 33}); amount != 2 {
+		return fmt.Errorf("Demonic Knowledge scaling=%d, want 2", amount)
+	}
+	modifiedState := world.PetRuntimeState{PowerType: 2, UnitFlags2: 0x00000800, MaxPowers: [7]uint32{0, 0, 100}, FocusRegenTimer: 4 * time.Second}
+	modifiedState, modifiedFields := world.AdvancePetRuntimeWithAuras(modifiedState, 4*time.Second, 1, []world.PetFocusModifier{{AuraType: 85, Amount: 25}, {AuraType: 110, Amount: 50}})
+	if modifiedState.Powers[2] != 56 || modifiedFields[27] != 56 {
+		return fmt.Errorf("aura-modified Focus tick=%d fields=%v, want 56", modifiedState.Powers[2], modifiedFields)
+	}
 	state := world.PetRuntimeState{PetType: 1, PowerType: 2, UnitFlags2: 0x00000800, Powers: [7]uint32{0, 0, 0, 0, 10000}, MaxPowers: [7]uint32{0, 0, 100, 0, 1050000}, FocusRegenTimer: 4 * time.Second, HappinessTimer: 7500 * time.Millisecond}
 	next, fields := world.AdvancePetRuntime(state, 4*time.Second, 1)
 	if next.Powers[2] != 24 || next.Powers[4] != 10000 || next.FocusRegenTimer != 4*time.Second || next.HappinessTimer != 3500*time.Millisecond || len(fields) != 1 || fields[27] != 24 {
@@ -613,9 +700,13 @@ func checkPetRuntimeTick() error {
 	if config.Default().FocusRate != 1 {
 		return fmt.Errorf("default Rate.Focus=%v, want 1", config.Default().FocusRate)
 	}
+	defaults := config.Default()
+	if defaults.MaxGroupXPDistance != 74 || defaults.XPRateKill != 1 || defaults.XPRateBattlegroundKill != 1 {
+		return fmt.Errorf("default group/kill XP config=(%v,%v,%v)", defaults.MaxGroupXPDistance, defaults.XPRateKill, defaults.XPRateBattlegroundKill)
+	}
 	loaded, err := config.Load("configs/worldserver.conf.dist")
-	if err != nil || loaded.FocusRate != 1 {
-		return fmt.Errorf("worldserver config Rate.Focus=%v err=%v, want 1", loaded.FocusRate, err)
+	if err != nil || loaded.FocusRate != 1 || loaded.MaxGroupXPDistance != 74 || loaded.XPRateKill != 1 || loaded.XPRateBattlegroundKill != 1 {
+		return fmt.Errorf("worldserver group/focus XP config=(%v,%v,%v,%v) err=%v", loaded.FocusRate, loaded.MaxGroupXPDistance, loaded.XPRateKill, loaded.XPRateBattlegroundKill, err)
 	}
 	previous, hadPrevious := os.LookupEnv("MORENOCORE_RATE_FOCUS")
 	if err := os.Setenv("MORENOCORE_RATE_FOCUS", "1.5"); err != nil {
@@ -629,6 +720,37 @@ func checkPetRuntimeTick() error {
 	}
 	if loaded.FocusRate != 1.5 {
 		return fmt.Errorf("environment Rate.Focus=%v, want 1.5", loaded.FocusRate)
+	}
+	previousDistance, hadPreviousDistance := os.LookupEnv("MORENOCORE_MAX_GROUP_XP_DISTANCE")
+	previousKillRate, hadPreviousKillRate := os.LookupEnv("MORENOCORE_RATE_XP_KILL")
+	previousBGRRate, hadPreviousBGRRate := os.LookupEnv("MORENOCORE_RATE_XP_BATTLEGROUND_KILL")
+	if err := os.Setenv("MORENOCORE_MAX_GROUP_XP_DISTANCE", "91"); err != nil {
+		return err
+	}
+	if err := os.Setenv("MORENOCORE_RATE_XP_KILL", "1.25"); err != nil {
+		return err
+	}
+	if err := os.Setenv("MORENOCORE_RATE_XP_BATTLEGROUND_KILL", "2"); err != nil {
+		return err
+	}
+	loaded.ApplyEnv()
+	if hadPreviousDistance {
+		_ = os.Setenv("MORENOCORE_MAX_GROUP_XP_DISTANCE", previousDistance)
+	} else {
+		_ = os.Unsetenv("MORENOCORE_MAX_GROUP_XP_DISTANCE")
+	}
+	if hadPreviousKillRate {
+		_ = os.Setenv("MORENOCORE_RATE_XP_KILL", previousKillRate)
+	} else {
+		_ = os.Unsetenv("MORENOCORE_RATE_XP_KILL")
+	}
+	if hadPreviousBGRRate {
+		_ = os.Setenv("MORENOCORE_RATE_XP_BATTLEGROUND_KILL", previousBGRRate)
+	} else {
+		_ = os.Unsetenv("MORENOCORE_RATE_XP_BATTLEGROUND_KILL")
+	}
+	if loaded.MaxGroupXPDistance != 91 || loaded.XPRateKill != 1.25 || loaded.XPRateBattlegroundKill != 2 {
+		return fmt.Errorf("environment group/kill XP config=(%v,%v,%v)", loaded.MaxGroupXPDistance, loaded.XPRateKill, loaded.XPRateBattlegroundKill)
 	}
 	return nil
 }
@@ -722,6 +844,16 @@ func checkExpectedCharacterStateDelta() error {
 	cooldownUnknown := map[string]characterTableSnapshot{"character_spell_cooldown": {Rows: 1, Columns: map[string]string{"guid": "owner", "spell": "expired", "item": "0", "time": "old", "categoryId": "0", "categoryEnd": "old", "unexpected": "unclassified"}}}
 	if validateCharacterStateDelta(cooldownBefore, cooldownUnknown, false) == nil {
 		return fmt.Errorf("unclassified spell cooldown column was accepted")
+	}
+	petCooldownKey := petSpellCooldownKey{GUID: 14, Spell: 24453}
+	petCooldownBefore := map[string]characterTableSnapshot{"pet_spell_cooldown": {Rows: 1, Columns: map[string]string{"guid": "pet", "spell": "expired", "time": "old", "categoryId": "38", "categoryEnd": "old"}, PetSpellCooldowns: map[petSpellCooldownKey]petSpellCooldownSnapshot{petCooldownKey: {Time: time.Now().Unix() - 1, CategoryID: 38, CategoryEnd: time.Now().Unix() - 1}}}}
+	petCooldownAfter := map[string]characterTableSnapshot{"pet_spell_cooldown": {Rows: 0, Columns: map[string]string{"guid": "", "spell": "", "time": "", "categoryId": "", "categoryEnd": ""}, PetSpellCooldowns: map[petSpellCooldownKey]petSpellCooldownSnapshot{}}}
+	if err := validateCharacterStateDelta(petCooldownBefore, petCooldownAfter, false); err != nil {
+		return fmt.Errorf("expired pet cooldown removal was rejected: %w", err)
+	}
+	activePetCooldownBefore := map[string]characterTableSnapshot{"pet_spell_cooldown": {Rows: 1, Columns: petCooldownBefore["pet_spell_cooldown"].Columns, PetSpellCooldowns: map[petSpellCooldownKey]petSpellCooldownSnapshot{petCooldownKey: {Time: time.Now().Unix() + 60, CategoryID: 38, CategoryEnd: time.Now().Unix() + 60}}}}
+	if validateCharacterStateDelta(activePetCooldownBefore, petCooldownAfter, false) == nil {
+		return fmt.Errorf("active pet cooldown removal was accepted")
 	}
 	loginAchievementBefore := map[string]characterTableSnapshot{
 		"character_achievement":          {Rows: 0, Columns: map[string]string{}},
@@ -3731,7 +3863,7 @@ func eventPayload(event protocoltrace.Event) ([]byte, error) {
 	return protocoltrace.Trace{Events: []protocoltrace.Event{event}}.Payload(event)
 }
 
-func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petFeedSpell uint32, petFoodGUID uint64) error {
+func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64) error {
 	workDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return err
@@ -3772,6 +3904,19 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 		server.Stop()
 		return err
 	}
+	if petAuraSourceSpell != 0 {
+		if _, found, err := server.Data.Spell(petAuraSourceSpell); err != nil || !found {
+			server.Stop()
+			if err != nil {
+				return fmt.Errorf("load owner pet-aura fixture source spell %d: %w", petAuraSourceSpell, err)
+			}
+			return fmt.Errorf("owner pet-aura fixture source spell %d is missing from DBC", petAuraSourceSpell)
+		}
+		if _, err := stores.Characters.DB.ExecContext(ctx, "INSERT OR REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, petAuraSourceSpell); err != nil {
+			server.Stop()
+			return fmt.Errorf("inject isolated owner pet-aura fixture spell %d: %w", petAuraSourceSpell, err)
+		}
+	}
 	before, err := snapshotCharacterState(stores.Characters.DB, guid)
 	if err != nil {
 		server.Stop()
@@ -3790,6 +3935,10 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 		trace, replayErr = world.ReplayCharacterPetPower(ctx, server, guid, petPowerSpell)
 	} else if petXPAward != 0 {
 		trace, replayErr = world.ReplayCharacterPetXP(ctx, server, guid, petXPAward)
+	} else if petAuraSourceSpell != 0 {
+		trace, replayErr = world.ReplayCharacterPetAura(ctx, server, guid, petAuraSourceSpell)
+	} else if petFocusAuraSpell != 0 {
+		trace, replayErr = world.ReplayCharacterPetFocusAura(ctx, server, guid, petFocusAuraSpell)
 	} else if petFeedSpell != 0 {
 		trace, replayErr = world.ReplayCharacterPetFeed(ctx, server, guid, petFeedSpell, petFoodGUID)
 	} else {
@@ -3858,6 +4007,10 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 		fmt.Printf("real-character pet power replay passed spell=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", petPowerSpell, len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
 	} else if petXPAward != 0 {
 		fmt.Printf("real-character pet XP replay passed award=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", petXPAward, len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
+	} else if petAuraSourceSpell != 0 {
+		fmt.Printf("real-character owner pet-aura replay passed source=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", petAuraSourceSpell, len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
+	} else if petFocusAuraSpell != 0 {
+		fmt.Printf("real-character pet Focus aura replay passed spell=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", petFocusAuraSpell, len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
 	} else if petFeedSpell != 0 {
 		fmt.Printf("real-character pet feed replay passed spell=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", petFeedSpell, len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
 	} else {
@@ -4009,9 +4162,21 @@ func petCreateFields(trace protocoltrace.Trace, petGUID uint64) (map[int]uint32,
 }
 
 type characterTableSnapshot struct {
-	Rows    int
-	Digest  string
-	Columns map[string]string
+	Rows              int
+	Digest            string
+	Columns           map[string]string
+	PetSpellCooldowns map[petSpellCooldownKey]petSpellCooldownSnapshot
+}
+
+type petSpellCooldownKey struct {
+	GUID  int64
+	Spell int64
+}
+
+type petSpellCooldownSnapshot struct {
+	Time        int64
+	CategoryID  int64
+	CategoryEnd int64
 }
 
 func changedCharacterColumns(before, after characterTableSnapshot) []string {
@@ -4030,6 +4195,27 @@ func changedCharacterColumns(before, after characterTableSnapshot) []string {
 	return changed
 }
 
+func validatePetSpellCooldownDelta(before, after map[petSpellCooldownKey]petSpellCooldownSnapshot, now int64) error {
+	for key, old := range before {
+		current, exists := after[key]
+		if exists {
+			if current != old {
+				return fmt.Errorf("pet cooldown row guid=%d spell=%d was modified", key.GUID, key.Spell)
+			}
+			continue
+		}
+		if old.Time >= now {
+			return fmt.Errorf("active pet cooldown row guid=%d spell=%d was removed", key.GUID, key.Spell)
+		}
+	}
+	for key := range after {
+		if _, exists := before[key]; !exists {
+			return fmt.Errorf("new pet cooldown row guid=%d spell=%d was created", key.GUID, key.Spell)
+		}
+	}
+	return nil
+}
+
 func validateCharacterStateDelta(before, after map[string]characterTableSnapshot, allowPetFeedProgress bool) error {
 	allowedColumns := map[string]map[string]struct{}{
 		"characters":                     {"exploredZones": {}, "orientation": {}, "position_x": {}, "position_y": {}, "position_z": {}},
@@ -4039,6 +4225,7 @@ func validateCharacterStateDelta(before, after map[string]characterTableSnapshot
 		"character_pet":                  {"curhealth": {}, "curmana": {}, "exp": {}, "level": {}, "savetime": {}},
 		"pet_aura":                       {"guid": {}, "casterGuid": {}, "spell": {}, "effectMask": {}, "recalculateMask": {}, "stackCount": {}, "amount0": {}, "amount1": {}, "amount2": {}, "base_amount0": {}, "base_amount1": {}, "base_amount2": {}, "maxDuration": {}, "remainTime": {}, "remainCharges": {}, "critChance": {}, "applyResilience": {}},
 		"pet_spell":                      {"active": {}, "guid": {}, "spell": {}},
+		"pet_spell_cooldown":             {"guid": {}, "spell": {}, "time": {}, "categoryId": {}, "categoryEnd": {}},
 	}
 	allowedColumns["characters"]["health"] = struct{}{}
 	allowedColumns["characters"]["equipmentCache"] = struct{}{}
@@ -4062,7 +4249,7 @@ func validateCharacterStateDelta(before, after map[string]characterTableSnapshot
 	allowedColumns["character_spell_cooldown"] = map[string]struct{}{"guid": {}, "spell": {}, "item": {}, "time": {}, "categoryId": {}, "categoryEnd": {}}
 	allowedColumns["character_inventory"] = map[string]struct{}{"guid": {}, "bag": {}, "slot": {}, "item": {}}
 	allowedColumns["inventory_item_instances"] = map[string]struct{}{"guid": {}, "itemEntry": {}, "owner_guid": {}, "creatorGuid": {}, "giftCreatorGuid": {}, "count": {}, "duration": {}, "charges": {}, "flags": {}, "enchantments": {}, "randomPropertyId": {}, "durability": {}, "playedTime": {}, "text": {}}
-	allowedRowChanges := map[string]bool{"character_achievement": true, "character_achievement_progress": true, "character_aura": true, "character_inventory": true, "character_spell_cooldown": true, "inventory_item_instances": true, "pet_aura": true, "pet_spell": true}
+	allowedRowChanges := map[string]bool{"character_achievement": true, "character_achievement_progress": true, "character_aura": true, "character_inventory": true, "character_spell_cooldown": true, "inventory_item_instances": true, "pet_aura": true, "pet_spell": true, "pet_spell_cooldown": true}
 	allowedRowChanges["character_spell"] = true
 	allowedRowChanges["character_skills"] = true
 	if allowPetFeedProgress {
@@ -4089,6 +4276,11 @@ func validateCharacterStateDelta(before, after map[string]characterTableSnapshot
 		for _, column := range changedColumns {
 			if _, exists := allowed[column]; !exists {
 				return fmt.Errorf("unclassified state mutation table=%s column=%s", table, column)
+			}
+		}
+		if table == "pet_spell_cooldown" {
+			if err := validatePetSpellCooldownDelta(beforeTable.PetSpellCooldowns, afterTable.PetSpellCooldowns, time.Now().Unix()); err != nil {
+				return err
 			}
 		}
 	}
@@ -4184,6 +4376,7 @@ func snapshotCharacterState(db *sql.DB, guid uint64) (map[string]characterTableS
 		}
 		rowHashes := make([]string, 0)
 		columnValues := make([][]string, len(columns))
+		petCooldowns := make(map[petSpellCooldownKey]petSpellCooldownSnapshot)
 		for rows.Next() {
 			values := make([]any, len(columns))
 			targets := make([]any, len(columns))
@@ -4193,6 +4386,27 @@ func snapshotCharacterState(db *sql.DB, guid uint64) (map[string]characterTableS
 			if err := rows.Scan(targets...); err != nil {
 				rows.Close()
 				return nil, err
+			}
+			if query.name == "pet_spell_cooldown" {
+				var key petSpellCooldownKey
+				var cooldown petSpellCooldownSnapshot
+				for index, column := range columns {
+					switch column {
+					case "guid":
+						key.GUID = snapshotInt64(values[index])
+					case "spell":
+						key.Spell = snapshotInt64(values[index])
+					case "time":
+						cooldown.Time = snapshotInt64(values[index])
+					case "categoryId":
+						cooldown.CategoryID = snapshotInt64(values[index])
+					case "categoryEnd":
+						cooldown.CategoryEnd = snapshotInt64(values[index])
+					}
+				}
+				if key.GUID != 0 && key.Spell != 0 {
+					petCooldowns[key] = cooldown
+				}
 			}
 			var encoded strings.Builder
 			for index, value := range values {
@@ -4221,9 +4435,30 @@ func snapshotCharacterState(db *sql.DB, guid uint64) (map[string]characterTableS
 			columnDigest := sha256.Sum256([]byte(strings.Join(columnValues[index], "\n")))
 			columnDigests[column] = hex.EncodeToString(columnDigest[:])
 		}
-		result[query.name] = characterTableSnapshot{Rows: len(rowHashes), Digest: hex.EncodeToString(digest[:]), Columns: columnDigests}
+		result[query.name] = characterTableSnapshot{Rows: len(rowHashes), Digest: hex.EncodeToString(digest[:]), Columns: columnDigests, PetSpellCooldowns: petCooldowns}
 	}
 	return result, nil
+}
+
+func snapshotInt64(value any) int64 {
+	switch number := value.(type) {
+	case int64:
+		return number
+	case int:
+		return int64(number)
+	case float64:
+		return int64(number)
+	case []byte:
+		var parsed int64
+		_, _ = fmt.Sscan(string(number), &parsed)
+		return parsed
+	case string:
+		var parsed int64
+		_, _ = fmt.Sscan(number, &parsed)
+		return parsed
+	default:
+		return 0
+	}
 }
 
 func fail(message string) {

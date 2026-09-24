@@ -63,6 +63,9 @@ type Config struct {
 	AllFlightPaths                          bool
 	AlwaysMaxSkillForLevel                  bool
 	FocusRate                               float64
+	MaxGroupXPDistance                      float64
+	XPRateKill                              float64
+	XPRateBattlegroundKill                  float64
 	RestOfflineInTavernOrCityRate           float64
 	RestOfflineInWildernessRate             float64
 	DisableFatigue                          int
@@ -166,6 +169,9 @@ func Default() Config {
 	c.RestOfflineInTavernOrCityRate = 1
 	c.RestOfflineInWildernessRate = 1
 	c.FocusRate = 1
+	c.MaxGroupXPDistance = 74
+	c.XPRateKill = 1
+	c.XPRateBattlegroundKill = 1
 	return c
 }
 
@@ -204,6 +210,9 @@ func (c *Config) ApplyEnv() {
 	values["MORENOCORE_RATE_REST_OFFLINE_IN_TAVERN_OR_CITY"] = "Rate.Rest.Offline.InTavernOrCity"
 	values["MORENOCORE_RATE_REST_OFFLINE_IN_WILDERNESS"] = "Rate.Rest.Offline.InWilderness"
 	values["MORENOCORE_RATE_FOCUS"] = "Rate.Focus"
+	values["MORENOCORE_MAX_GROUP_XP_DISTANCE"] = "MaxGroupXPDistance"
+	values["MORENOCORE_RATE_XP_KILL"] = "Rate.XP.Kill"
+	values["MORENOCORE_RATE_XP_BATTLEGROUND_KILL"] = "Rate.XP.BattlegroundKill"
 	values["MORENOCORE_ADDON_CHANNEL"] = "AddonChannel"
 	values["MORENOCORE_SERVER_LOGIN_INFO"] = "Server.LoginInfo"
 	values["MORENOCORE_MAX_PLAYER_LEVEL"] = "MaxPlayerLevel"
@@ -500,6 +509,12 @@ func (c *Config) set(key, value string) error {
 		return setFloat64(&c.RestOfflineInWildernessRate, key, value)
 	case "Rate.Focus":
 		return setFloat64(&c.FocusRate, key, value)
+	case "MaxGroupXPDistance":
+		return setFloat64(&c.MaxGroupXPDistance, key, value)
+	case "Rate.XP.Kill":
+		return setFloat64(&c.XPRateKill, key, value)
+	case "Rate.XP.BattlegroundKill":
+		return setFloat64(&c.XPRateBattlegroundKill, key, value)
 	case "Visibility.Distance.Continents":
 		return setFloat64(&c.VisibilityDistanceContinents, key, value)
 	case "Weather.Enabled":

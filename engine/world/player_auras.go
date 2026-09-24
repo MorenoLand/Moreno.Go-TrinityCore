@@ -163,6 +163,27 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 						aura.Amount = uint32(effect.BasePoints + 1)
 					}
 				}
+				if mountMask, mountMisc, mountAmounts, mountBaseAmounts, mountedFlight := mountedFlightAuraEffects(spell); mountedFlight && aura.EffectMask&mountMask != 0 {
+					storedMask := aura.EffectMask
+					aura.EffectMask |= mountMask
+					aura.AuraType, aura.MiscValue = spellAuraMounted, mountMisc
+					aura.RecalculateMask &^= mountMask
+					for index, effect := range spell.Effects {
+						bit := uint8(1 << uint(index))
+						if mountMask&bit == 0 {
+							continue
+						}
+						if storedMask&bit == 0 {
+							aura.Amounts[index], aura.BaseAmounts[index] = mountAmounts[index], mountBaseAmounts[index]
+						}
+						if auraEffectCanBeRecalculated(effect.Aura) {
+							aura.RecalculateMask |= bit
+						}
+						if effect.Aura == spellAuraMounted {
+							aura.Amount = uint32(aura.Amounts[index])
+						}
+					}
+				}
 				aura.Positive = !isHarmfulAura(aura.AuraType)
 				if aura.AuraType == spellAuraMounted {
 					if mountedAuraLoaded {
@@ -243,6 +264,7 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 				return func() { s.expirePlayerAura(spellID) }
 			}(aura.SpellID))
 		}
+		s.addOwnerPetAuraEffects(ctx, aura.SpellID, aura.EffectMask)
 	}
 	return nil
 }

@@ -499,6 +499,10 @@ func (s *session) learnSpell(ctx context.Context, spellID uint32) {
 		if cdb != nil {
 			_, _ = cdb.ExecContext(ctx, "UPDATE character_spell SET active = 0 WHERE guid = ? AND spell = ?", s.playerGUID, prevSpellID)
 		}
+		if s.hasAura(prevSpellID) {
+			s.removeAura(prevSpellID)
+		}
+		s.removeOwnerPetAurasForSpell(ctx, prevSpellID)
 		for i := range s.player.Spells {
 			if s.player.Spells[i].ID == prevSpellID {
 				s.player.Spells[i].Active = false
@@ -510,6 +514,7 @@ func (s *session) learnSpell(ctx context.Context, spellID uint32) {
 	if cdb != nil {
 		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", s.playerGUID, spellID)
 	}
+	s.learnOwnerPetAuraSources(ctx, spellID)
 	s.player.Spells = append(s.player.Spells, learnedSpell{ID: spellID, Active: true, Disabled: false})
 
 	learnedBuf := protocol.NewBuffer(6)

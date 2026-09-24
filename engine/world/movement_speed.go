@@ -4,6 +4,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -260,6 +261,63 @@ func movementFlightSpeedAura(auraType uint32) bool {
 	return auraType == spellAuraDecreaseSpeed || auraType >= spellAuraIncreaseVehicleFlight && auraType <= spellAuraFlightSpeedNotStack
 }
 
+func mountedFlightAuraEffects(spell wotlk.Spell) (uint8, int32, [3]int32, [3]int32, bool) {
+	var mask uint8
+	var mountMisc int32
+	var amounts, baseAmounts [3]int32
+	hasMount, hasFlightSpeed := false, false
+	for index, effect := range spell.Effects {
+		if effect.Effect == 0 || effect.Aura == 0 {
+			continue
+		}
+		switch effect.Aura {
+		case spellAuraMounted:
+			hasMount, mountMisc = true, effect.MiscValue
+			mask |= 1 << uint(index)
+			amounts[index], baseAmounts[index] = effect.BasePoints+1, effect.BasePoints
+		case spellAuraMountedFlightSpeed, spellAuraMountedFlightSpeedAlways, spellAuraFlightSpeedNotStack:
+			hasFlightSpeed = true
+			mask |= 1 << uint(index)
+			amounts[index], baseAmounts[index] = effect.BasePoints+1, effect.BasePoints
+		}
+	}
+	return mask, mountMisc, amounts, baseAmounts, hasMount && hasFlightSpeed
+}
+
+func (s *session) activeAuraHasEffect(aura *activeAura, auraType uint32) bool {
+	if aura == nil || aura.Stopped {
+		return false
+	}
+	if aura.AuraType == auraType {
+		return true
+	}
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	spell, found, err := s.server.Data.Spell(aura.SpellID)
+	if err != nil || !found {
+		return false
+	}
+	for index, effect := range spell.Effects {
+		if aura.EffectMask&(1<<uint(index)) != 0 && effect.Aura == auraType {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *session) hasActiveFlightCapability() bool {
+	if s == nil {
+		return false
+	}
+	for _, aura := range s.loadedAuras() {
+		if s.activeAuraHasEffect(aura, 201) || s.activeAuraHasEffect(aura, spellAuraMountedFlightSpeed) {
+			return true
+		}
+	}
+	return false
+}
+
 func movementSpeedAura(auraType uint32) bool {
 	return movementRunSpeedAura(auraType) || movementFlightSpeedAura(auraType) || auraType == 201
 }
@@ -272,17 +330,25 @@ func AffectsRunSpeedAura(auraType uint32) bool { return movementRunSpeedAura(aur
 
 func AffectsFlightSpeedAura(auraType uint32) bool { return movementFlightSpeedAura(auraType) }
 
-func ResolveMovementSpeedUpdatePlan(auraType uint32, hasFlightAura bool) (runSpeed, flightSpeed, canFly bool) {
+func ResolveMovementSpeedUpdatePlan(auraType uint32, hasFlightSpeedAura, hasFlightCapability bool) (runSpeed, flightSpeed, canFly bool) {
 	if !movementSpeedAura(auraType) {
 		return false, false, false
 	}
-	return movementRunSpeedAura(auraType), movementFlightSpeedAura(auraType) || auraType == spellAuraMounted && hasFlightAura, auraType == 201 || auraType == 207
+	return movementRunSpeedAura(auraType), movementFlightSpeedAura(auraType) || auraType == spellAuraMounted && hasFlightSpeedAura, auraType == 201 || auraType == spellAuraMountedFlightSpeed || auraType == spellAuraMounted && hasFlightCapability
 }
 
 func (s *session) hasFlightSpeedAura() bool {
-	for _, auraType := range []uint32{201, spellAuraIncreaseVehicleFlight, spellAuraMountedFlightSpeed, spellAuraIncreaseFlightSpeed, spellAuraMountedFlightSpeedAlways, spellAuraVehicleSpeedAlways, spellAuraFlightSpeedNotStack} {
+	auraTypes := []uint32{201, spellAuraIncreaseVehicleFlight, spellAuraMountedFlightSpeed, spellAuraIncreaseFlightSpeed, spellAuraMountedFlightSpeedAlways, spellAuraVehicleSpeedAlways, spellAuraFlightSpeedNotStack}
+	for _, auraType := range auraTypes {
 		if s.hasAuraType(auraType) {
 			return true
+		}
+	}
+	for _, aura := range s.loadedAuras() {
+		for _, auraType := range auraTypes {
+			if s.activeAuraHasEffect(aura, auraType) {
+				return true
+			}
 		}
 	}
 	return false
@@ -314,7 +380,7 @@ func (s *session) sendRuntimeFlightState() {
 	if s == nil || s.player == nil {
 		return
 	}
-	canFly := s.hasAuraType(201) || s.hasAuraType(207)
+	canFly := s.hasActiveFlightCapability()
 	packet := protocol.NewBuffer(packedGUIDSize(s.playerGUID) + 4)
 	packet.WritePackedGUID(s.playerGUID)
 	packet.WriteU32(0)
@@ -331,7 +397,7 @@ func (s *session) sendRuntimeMovementUpdates(auraType uint32) {
 	if s == nil || s.player == nil {
 		return
 	}
-	runSpeed, flightSpeed, canFly := ResolveMovementSpeedUpdatePlan(auraType, s.hasFlightSpeedAura())
+	runSpeed, flightSpeed, canFly := ResolveMovementSpeedUpdatePlan(auraType, s.hasFlightSpeedAura(), s.hasActiveFlightCapability())
 	if canFly {
 		s.sendRuntimeFlightState()
 	}

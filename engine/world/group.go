@@ -12,12 +12,13 @@ import (
 )
 
 const (
-	memberFlagAssistant       uint8 = 0x01
-	memberFlagMainTank        uint8 = 0x02
-	memberFlagMainAssist      uint8 = 0x04
-	groupTypeBattleground     uint8 = 0x01
-	groupTypeRaid             uint8 = 0x02
-	groupTypeBattlegroundRaid uint8 = 0x03
+	memberFlagAssistant        uint8  = 0x01
+	memberFlagMainTank         uint8  = 0x02
+	memberFlagMainAssist       uint8  = 0x04
+	groupTypeBattleground      uint8  = 0x01
+	groupTypeRaid              uint8  = 0x02
+	groupTypeBattlegroundRaid  uint8  = 0x03
+	groupUpdateFlagPetCurPower uint32 = 0x00010000
 )
 
 // groupState holds all state for a 5-man or raid group.
@@ -368,6 +369,38 @@ func (s *Server) findGroupByID(id uint64) *groupState {
 	s.groupsMu.RLock()
 	defer s.groupsMu.RUnlock()
 	return s.groups[id]
+}
+
+func (s *Server) sendGroupPetCurrentPower(ownerGUID uint64, current uint32) {
+	if s == nil || ownerGUID == 0 {
+		return
+	}
+	owner := s.findSessionByGUID(ownerGUID)
+	if owner == nil || owner.player == nil || owner.groupID == 0 {
+		return
+	}
+	s.groupsMu.RLock()
+	group := s.groups[owner.groupID]
+	if group == nil {
+		s.groupsMu.RUnlock()
+		return
+	}
+	members := append([]groupMember(nil), group.Members...)
+	s.groupsMu.RUnlock()
+	packet := protocol.NewBuffer(24)
+	packet.WritePackedGUID(ownerGUID)
+	packet.WriteU32(groupUpdateFlagPetCurPower)
+	packet.WriteU16(uint16(current))
+	for _, member := range members {
+		if member.GUID == ownerGUID {
+			continue
+		}
+		target := s.findSessionByGUID(member.GUID)
+		if target == nil || target.player == nil || target.player.Map == owner.player.Map && distance3D(target.player.X, target.player.Y, target.player.Z, owner.player.X, owner.player.Y, owner.player.Z) <= 100.0 {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_PARTY_MEMBER_STATS), packet.Bytes(), true)
+	}
 }
 
 func (s *Server) findGroupByDBID(id uint64) *groupState {

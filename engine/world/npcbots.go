@@ -284,6 +284,24 @@ func (m *NPCBotManager) UpdateOwnerAll(ctx context.Context, previousOwner, owner
 	return nil
 }
 
+func (m *NPCBotManager) CountByOwner(owner uint32) uint8 {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if !m.loaded {
+		return 0
+	}
+	count := uint8(0)
+	for _, data := range m.bots {
+		if data.Owner == owner {
+			count++
+		}
+	}
+	return count
+}
+
 func (m *NPCBotManager) CountByRole(owner uint32, roles uint16) int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

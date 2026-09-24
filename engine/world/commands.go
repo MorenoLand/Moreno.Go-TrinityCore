@@ -695,6 +695,7 @@ func (s *session) handleCmdLearn(ctx context.Context, args []string) {
 			"INSERT INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)",
 			s.playerGUID, spellID)
 	}
+	s.learnOwnerPetAuraSources(ctx, uint32(spellID))
 	pkt := protocol.NewBuffer(6)
 	pkt.WriteU32(uint32(spellID))
 	pkt.WriteU16(0)
@@ -735,6 +736,10 @@ func (s *session) handleCmdUnlearn(ctx context.Context, args []string) {
 			"DELETE FROM character_spell WHERE guid = ? AND spell = ?",
 			s.playerGUID, spellID)
 	}
+	if s.hasAura(uint32(spellID)) {
+		s.removeAura(uint32(spellID))
+	}
+	s.removeOwnerPetAurasForSpell(ctx, uint32(spellID))
 	pkt := protocol.NewBuffer(4)
 	pkt.WriteU32(uint32(spellID))
 	_ = s.write(uint16(protocol.OpcodeSMSG_REMOVED_SPELL), pkt.Bytes(), true)

@@ -66,6 +66,7 @@ type creatureMotion struct {
 	PowerType       uint32
 	Powers          [7]uint32
 	MaxPowers       [7]uint32
+	Stats           [5]uint32
 	PetID           uint32
 	PetType         uint8
 	PetNextLevelXP  uint32
@@ -75,14 +76,16 @@ type creatureMotion struct {
 	Happiness       uint32
 	Experience      uint32
 
-	TargetGUID             uint64
-	InCombat               bool
-	LastAttack             time.Time
-	LastSpell              time.Time
-	Spells                 []uint32
-	NextSpellIdx           int
-	SpellCooldowns         map[uint32]time.Time
-	SpellCategoryCooldowns map[uint32]time.Time
+	TargetGUID                uint64
+	InCombat                  bool
+	LastAttack                time.Time
+	LastSpell                 time.Time
+	Spells                    []uint32
+	NextSpellIdx              int
+	SpellCooldowns            map[uint32]time.Time
+	SpellCategoryCooldowns    map[uint32]time.Time
+	SpellCooldownCategories   map[uint32]uint32
+	SpellCooldownCategoryEnds map[uint32]time.Time
 
 	ThreatMgr  *ThreatManager
 	BossAI     BossAI

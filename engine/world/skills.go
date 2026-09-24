@@ -77,9 +77,14 @@ func (s *session) learnTalent(ctx context.Context, talentID, requestedRank uint3
 		if oldSpellID > 0 {
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_talent WHERE guid = ? AND spell = ? AND talentGroup = ?", s.playerGUID, oldSpellID, s.player.ActiveTalentGroup)
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_spell WHERE guid = ? AND spell = ?", s.playerGUID, oldSpellID)
+			if s.hasAura(oldSpellID) {
+				s.removeAura(oldSpellID)
+			}
+			s.removeOwnerPetAurasForSpell(ctx, oldSpellID)
 		}
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO character_talent (guid, spell, talentGroup) VALUES (?, ?, ?)", s.playerGUID, spellID, s.player.ActiveTalentGroup)
 		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", s.playerGUID, spellID)
+		s.learnOwnerPetAuraSources(ctx, spellID)
 		s.updateAchievementCriteria(criteriaTypeLearnSpell, spellID, 1)
 	}
 	return true

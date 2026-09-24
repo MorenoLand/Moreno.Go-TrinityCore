@@ -1232,15 +1232,7 @@ func (s *session) sendLoginFlightState() error {
 	if s == nil || s.player == nil {
 		return nil
 	}
-	auras := s.loadedAuras()
-	canFly := false
-	for _, aura := range auras {
-		if aura != nil && (aura.AuraType == 201 || aura.AuraType == 207) {
-			canFly = true
-			break
-		}
-	}
-	if !canFly {
+	if !s.hasActiveFlightCapability() {
 		return nil
 	}
 	packet := protocol.NewBuffer(packedGUIDSize(s.playerGUID) + 4)
@@ -1250,6 +1242,7 @@ func (s *session) sendLoginFlightState() error {
 		return err
 	}
 	s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_UPDATE_CAN_FLY, 0x01000000)
+	s.sendRuntimeMovementSpeed(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_FLIGHT_SPEED, s.mountedFlightSpeed(), false)
 	return nil
 }
 
@@ -1597,7 +1590,7 @@ func (s *session) loadMountState(ctx context.Context, guid uint64) (*MountState,
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT extra_flags FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&extraFlags); err != nil {
 		return nil, err
 	}
-	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT spell FROM character_spell WHERE guid = ? AND active <> 0 AND disabled = 0 ORDER BY spell", guid)
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT spell FROM character_spell WHERE guid = ? ORDER BY spell", guid)
 	if err != nil {
 		return nil, err
 	}
