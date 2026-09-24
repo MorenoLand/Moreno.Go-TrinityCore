@@ -117,6 +117,18 @@ func runSelfCheck() error {
 	if err := checkRandomSuffixSpellPowerDBC(); err != nil {
 		return err
 	}
+	prismatic := wotlk.SpellItemEnchantmentEntry{RequiredSkillID: 164, RequiredSkillRank: 50}
+	for _, test := range []struct {
+		color   uint32
+		entry   wotlk.SpellItemEnchantmentEntry
+		found   bool
+		skill   uint32
+		allowed bool
+	}{{1, wotlk.SpellItemEnchantmentEntry{}, false, 0, true}, {0, wotlk.SpellItemEnchantmentEntry{}, false, 0, false}, {0, prismatic, true, 49, false}, {0, prismatic, true, 50, true}} {
+		if actual, expected := world.ResolveGemSocketEnchantActive(test.color, test.entry, test.found, test.skill), sourceGemSocketEnchantActive(test.color, test.entry, test.found, test.skill); actual != test.allowed || expected != test.allowed {
+			return fmt.Errorf("prismatic socket gate source=%t Go=%t, want %t", expected, actual, test.allowed)
+		}
+	}
 	if world.PlayerCreateUpdateFlags(false, false) != 0x0060 || world.PlayerCreateUpdateFlags(true, false) != 0x0061 || world.PlayerCreateUpdateFlags(false, true) != 0x0064 {
 		return fmt.Errorf("player create update flags do not match victim/self source flags")
 	}
@@ -1316,8 +1328,12 @@ func checkSpellPowerEnchantmentDBC() error {
 		if want == 0 {
 			continue
 		}
-		if amount := world.ResolveEquippedSpellPowerEnchant(entry, 80, 0, false); amount != want {
-			return fmt.Errorf("SpellItemEnchantment.dbc id=%d spell-power amount=%d, want %d", id, amount, want)
+		expected := sourceSpellPowerEnchant(entry, 80, 0, false, 0, false)
+		if expected != want {
+			return fmt.Errorf("SpellItemEnchantment.dbc id=%d source spell-power amount=%d, field sum=%d", id, expected, want)
+		}
+		if amount := world.ResolveEquippedSpellPowerEnchant(entry, 80, 0, false); amount != expected {
+			return fmt.Errorf("SpellItemEnchantment.dbc id=%d spell-power amount=%d, want %d", id, amount, expected)
 		}
 		if amount := world.ResolveEquippedSpellPowerEnchant(entry, 80, 0, true); amount != 0 {
 			return fmt.Errorf("broken item retained spell-power enchant id=%d amount=%d", id, amount)
@@ -1345,11 +1361,16 @@ func checkSpellPowerEnchantmentDBC() error {
 func checkRandomSuffixSpellPowerDBC() error {
 	data := wotlk.NewStore(filepath.Join(config.Default().GameDataDir, "dbc"))
 	factor := uint32(0)
+	var factorLevel uint32
 	for level := uint32(1); level <= 80 && factor == 0; level++ {
-		factor = world.ResolveItemSuffixFactor(data, level, 4, 13, 1)
+		factor = sourceItemSuffixFactor(data, level, 4, 13, 1)
+		factorLevel = level
 	}
 	if factor == 0 {
 		return fmt.Errorf("RandPropPoints.dbc has no epic weapon suffix factor")
+	}
+	if world.ResolveItemSuffixFactor(data, factorLevel, 4, 13, 1) != factor {
+		return fmt.Errorf("Go item suffix factor differs from the source level/inventory/quality lookup")
 	}
 	file, err := data.File("ItemRandomSuffix")
 	if err != nil {
@@ -1382,22 +1403,76 @@ func checkRandomSuffixSpellPowerDBC() error {
 			if !found || entry.ConditionID != 0 || entry.MinLevel > 80 {
 				continue
 			}
-			for statIndex, effect := range entry.Effects {
-				if effect != 5 || entry.EffectArg[statIndex] != 45 {
-					continue
-				}
-				amount := entry.EffectPointsMin[statIndex]
-				if amount == 0 {
-					amount = suffix.AllocationPct[effectIndex] * factor / 10000
-				}
-				if amount == 0 || world.ResolveRandomSuffixSpellPowerEnchant(entry, 80, entry.RequiredSkillRank, false, amount) != amount {
-					return fmt.Errorf("random suffix DBC scaling did not resolve spell-power enchant %d", enchantID)
-				}
-				return nil
+			amount := suffix.AllocationPct[effectIndex] * factor / 10000
+			expected := sourceSpellPowerEnchant(entry, 80, entry.RequiredSkillRank, false, amount, true)
+			if expected == 0 {
+				continue
 			}
+			if actual := world.ResolveRandomSuffixSpellPowerEnchant(entry, 80, entry.RequiredSkillRank, false, amount); actual != expected {
+				return fmt.Errorf("random suffix DBC spell-power enchant %d amount=%d, source amount=%d", enchantID, actual, expected)
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("ItemRandomSuffix.dbc contains no spell-power stat enchant for a qualified suffix fixture")
+}
+
+func sourceSpellPowerEnchant(enchantment wotlk.SpellItemEnchantmentEntry, level, skillValue uint32, broken bool, suffixAmount uint32, suffix bool) uint32 {
+	if broken || enchantment.ConditionID != 0 || level < enchantment.MinLevel || skillValue < enchantment.RequiredSkillRank {
+		return 0
+	}
+	var total uint32
+	for index, effect := range enchantment.Effects {
+		if effect != 5 || enchantment.EffectArg[index] != 45 {
+			continue
+		}
+		amount := enchantment.EffectPointsMin[index]
+		if amount == 0 && suffix {
+			amount = suffixAmount
+		}
+		total += amount
+	}
+	return total
+}
+
+func sourceItemSuffixFactor(data *wotlk.Store, itemLevel, quality, inventoryType, randomSuffix uint32) uint32 {
+	if randomSuffix == 0 || data == nil {
+		return 0
+	}
+	points, found, err := data.RandPropPoints(itemLevel)
+	if err != nil || !found {
+		return 0
+	}
+	index := -1
+	switch inventoryType {
+	case 1, 4, 5, 7, 17, 20:
+		index = 0
+	case 3, 6, 8, 10, 12:
+		index = 1
+	case 2, 9, 11, 14, 16, 23:
+		index = 2
+	case 13, 21, 22:
+		index = 3
+	case 15, 25, 26:
+		index = 4
+	}
+	if index < 0 {
+		return 0
+	}
+	switch quality {
+	case 2:
+		return points.Good[index]
+	case 3:
+		return points.Superior[index]
+	case 4:
+		return points.Epic[index]
+	default:
+		return 0
+	}
+}
+
+func sourceGemSocketEnchantActive(socketColor uint32, prismatic wotlk.SpellItemEnchantmentEntry, found bool, skillValue uint32) bool {
+	return socketColor != 0 || found && (prismatic.RequiredSkillID == 0 || skillValue >= prismatic.RequiredSkillRank)
 }
 
 func validateCharacterStatsSpellPower(ctx context.Context, charactersDB, worldDB *sql.DB, data *wotlk.Store, guid uint64) error {
@@ -1432,7 +1507,8 @@ func validateCharacterStatsSpellPower(ctx context.Context, charactersDB, worldDB
 	template, err := worldDB.PrepareContext(ctx, `SELECT stat_type1, stat_value1, stat_type2, stat_value2,
 		stat_type3, stat_value3, stat_type4, stat_value4, stat_type5, stat_value5,
 		stat_type6, stat_value6, stat_type7, stat_value7, stat_type8, stat_value8,
-		stat_type9, stat_value9, stat_type10, stat_value10, MaxDurability, ItemLevel, Quality, InventoryType, RandomSuffix FROM item_template WHERE entry = ?`)
+		stat_type9, stat_value9, stat_type10, stat_value10, MaxDurability, ItemLevel, Quality, InventoryType, RandomSuffix,
+		SocketColor_1, SocketColor_2, SocketColor_3 FROM item_template WHERE entry = ?`)
 	if err != nil {
 		rows.Close()
 		return fmt.Errorf("prepare world item stats for spell-power parity: %w", err)
@@ -1450,7 +1526,8 @@ func validateCharacterStatsSpellPower(ctx context.Context, charactersDB, worldDB
 		}
 		var statTypes, statValues [10]int64
 		var maxDurability, itemLevel, quality, inventoryType, randomSuffix uint32
-		err := template.QueryRowContext(ctx, itemEntry).Scan(&statTypes[0], &statValues[0], &statTypes[1], &statValues[1], &statTypes[2], &statValues[2], &statTypes[3], &statValues[3], &statTypes[4], &statValues[4], &statTypes[5], &statValues[5], &statTypes[6], &statValues[6], &statTypes[7], &statValues[7], &statTypes[8], &statValues[8], &statTypes[9], &statValues[9], &maxDurability, &itemLevel, &quality, &inventoryType, &randomSuffix)
+		var socketColors [3]uint32
+		err := template.QueryRowContext(ctx, itemEntry).Scan(&statTypes[0], &statValues[0], &statTypes[1], &statValues[1], &statTypes[2], &statValues[2], &statTypes[3], &statValues[3], &statTypes[4], &statValues[4], &statTypes[5], &statValues[5], &statTypes[6], &statValues[6], &statTypes[7], &statValues[7], &statTypes[8], &statValues[8], &statTypes[9], &statValues[9], &maxDurability, &itemLevel, &quality, &inventoryType, &randomSuffix, &socketColors[0], &socketColors[1], &socketColors[2])
 		if err == sql.ErrNoRows {
 			continue
 		}
@@ -1473,9 +1550,9 @@ func validateCharacterStatsSpellPower(ctx context.Context, charactersDB, worldDB
 				return err
 			}
 			skillValue := skillValues[entry.RequiredSkillID]
-			amount := world.ResolveEquippedSpellPowerEnchant(entry, level, skillValue, broken)
+			amount := sourceSpellPowerEnchant(entry, level, skillValue, broken, 0, false)
 			if suffix {
-				amount = world.ResolveRandomSuffixSpellPowerEnchant(entry, level, skillValue, broken, suffixAmount)
+				amount = sourceSpellPowerEnchant(entry, level, skillValue, broken, suffixAmount, true)
 			}
 			expected += amount
 			return nil
@@ -1487,6 +1564,31 @@ func validateCharacterStatsSpellPower(ctx context.Context, charactersDB, worldDB
 			}
 			enchantID, err := strconv.ParseUint(fields[fieldIndex], 10, 32)
 			if err != nil || enchantID == 0 {
+				continue
+			}
+			if err := applyEnchant(uint32(enchantID), 0, false); err != nil {
+				rows.Close()
+				return err
+			}
+		}
+		var prismatic wotlk.SpellItemEnchantmentEntry
+		var prismaticFound bool
+		if len(fields) > 18 {
+			if enchantID, err := strconv.ParseUint(fields[18], 10, 32); err == nil && enchantID != 0 {
+				prismatic, prismaticFound, err = data.SpellItemEnchantment(uint32(enchantID))
+				if err != nil {
+					rows.Close()
+					return err
+				}
+			}
+		}
+		for socket := range socketColors {
+			fieldIndex := (socket + 2) * 3
+			if fieldIndex >= len(fields) {
+				continue
+			}
+			enchantID, err := strconv.ParseUint(fields[fieldIndex], 10, 32)
+			if err != nil || enchantID == 0 || !sourceGemSocketEnchantActive(socketColors[socket], prismatic, prismaticFound, skillValues[prismatic.RequiredSkillID]) {
 				continue
 			}
 			if err := applyEnchant(uint32(enchantID), 0, false); err != nil {
@@ -1515,7 +1617,7 @@ func validateCharacterStatsSpellPower(ctx context.Context, charactersDB, worldDB
 				return err
 			}
 			if found {
-				factor := world.ResolveItemSuffixFactor(data, itemLevel, quality, inventoryType, randomSuffix)
+				factor := sourceItemSuffixFactor(data, itemLevel, quality, inventoryType, randomSuffix)
 				for index, enchantID := range suffix.Enchantment {
 					amount := suffix.AllocationPct[index] * factor / 10000
 					if err := applyEnchant(enchantID, amount, true); err != nil {

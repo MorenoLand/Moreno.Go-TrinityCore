@@ -27,6 +27,7 @@ type equippedItemStats struct {
 	Quality        uint32
 	InventoryType  uint32
 	RandomSuffix   uint32
+	SocketColors   [3]uint32
 }
 
 const (
@@ -48,7 +49,7 @@ func (s *session) loadEquippedItemStats(ctx context.Context, state *playerState)
 	template, err := s.server.WorldStore.DB.PrepareContext(ctx, `SELECT armor, block, delay, dmg_min1, dmg_max1,
 		stat_type1, stat_value1, stat_type2, stat_value2, stat_type3, stat_value3, stat_type4, stat_value4,
 		stat_type5, stat_value5, stat_type6, stat_value6, stat_type7, stat_value7, stat_type8, stat_value8,
-		stat_type9, stat_value9, stat_type10, stat_value10, MaxDurability, ItemLevel, Quality, InventoryType, RandomSuffix FROM item_template WHERE entry = ?`)
+		stat_type9, stat_value9, stat_type10, stat_value10, MaxDurability, ItemLevel, Quality, InventoryType, RandomSuffix, SocketColor_1, SocketColor_2, SocketColor_3 FROM item_template WHERE entry = ?`)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +64,7 @@ func (s *session) loadEquippedItemStats(ctx context.Context, state *playerState)
 		err := template.QueryRowContext(ctx, entry).Scan(&item.Armor, &item.Block, &item.Delay, &item.MinDamage, &item.MaxDamage,
 			&item.StatTypes[0], &item.StatValues[0], &item.StatTypes[1], &item.StatValues[1], &item.StatTypes[2], &item.StatValues[2], &item.StatTypes[3], &item.StatValues[3],
 			&item.StatTypes[4], &item.StatValues[4], &item.StatTypes[5], &item.StatValues[5], &item.StatTypes[6], &item.StatValues[6], &item.StatTypes[7], &item.StatValues[7],
-			&item.StatTypes[8], &item.StatValues[8], &item.StatTypes[9], &item.StatValues[9], &item.MaxDurability, &item.ItemLevel, &item.Quality, &item.InventoryType, &item.RandomSuffix)
+			&item.StatTypes[8], &item.StatValues[8], &item.StatTypes[9], &item.StatValues[9], &item.MaxDurability, &item.ItemLevel, &item.Quality, &item.InventoryType, &item.RandomSuffix, &item.SocketColors[0], &item.SocketColors[1], &item.SocketColors[2])
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
@@ -84,6 +85,10 @@ func ResolveEquippedSpellPowerEnchant(enchantment wotlk.SpellItemEnchantmentEntr
 
 func ResolveRandomSuffixSpellPowerEnchant(enchantment wotlk.SpellItemEnchantmentEntry, level, requiredSkillValue uint32, broken bool, suffixAmount uint32) uint32 {
 	return resolveSpellPowerEnchant(enchantment, level, requiredSkillValue, broken, suffixAmount, true)
+}
+
+func ResolveGemSocketEnchantActive(socketColor uint32, prismatic wotlk.SpellItemEnchantmentEntry, prismaticFound bool, requiredSkillValue uint32) bool {
+	return socketColor != 0 || prismaticFound && (prismatic.RequiredSkillID == 0 || requiredSkillValue >= prismatic.RequiredSkillRank)
 }
 
 func resolveSpellPowerEnchant(enchantment wotlk.SpellItemEnchantmentEntry, level, requiredSkillValue uint32, broken bool, suffixAmount uint32, suffix bool) uint32 {
@@ -157,6 +162,33 @@ func (s *session) applyPlayerSpellPowerEnchants(state *playerState, item equippe
 			return err
 		}
 	}
+	var prismatic wotlk.SpellItemEnchantmentEntry
+	var prismaticFound bool
+	if len(fields) > 18 {
+		if enchantID, err := strconv.ParseUint(fields[18], 10, 32); err == nil && enchantID != 0 {
+			var err error
+			prismatic, prismaticFound, err = s.server.Data.SpellItemEnchantment(uint32(enchantID))
+			if err != nil {
+				return err
+			}
+		}
+	}
+	for socket := range item.SocketColors {
+		fieldIndex := (socket + 2) * 3
+		if fieldIndex >= len(fields) {
+			continue
+		}
+		enchantID, err := strconv.ParseUint(fields[fieldIndex], 10, 32)
+		if err != nil || enchantID == 0 {
+			continue
+		}
+		if !ResolveGemSocketEnchantActive(item.SocketColors[socket], prismatic, prismaticFound, playerSkillValue(state, prismatic.RequiredSkillID)) {
+			continue
+		}
+		if err := s.applyItemSpellPowerEnchant(state, uint32(enchantID), broken, 0, false); err != nil {
+			return err
+		}
+	}
 	if item.RandomProperty > 0 {
 		property, found, err := s.server.Data.ItemRandomProperties(uint32(item.RandomProperty))
 		if err != nil {
@@ -198,13 +230,7 @@ func (s *session) applyItemSpellPowerEnchant(state *playerState, enchantID uint3
 	if err != nil || !found {
 		return err
 	}
-	var skillValue uint32
-	for _, skill := range state.Skills {
-		if uint32(skill.Skill) == entry.RequiredSkillID {
-			skillValue = uint32(skill.Value)
-			break
-		}
-	}
+	skillValue := playerSkillValue(state, entry.RequiredSkillID)
 	amount := ResolveEquippedSpellPowerEnchant(entry, uint32(state.Level), skillValue, broken)
 	if suffix {
 		amount = ResolveRandomSuffixSpellPowerEnchant(entry, uint32(state.Level), skillValue, broken, suffixAmount)
@@ -215,4 +241,13 @@ func (s *session) applyItemSpellPowerEnchant(state *playerState, enchantID uint3
 		s.setAchievementCriteria(criteriaTypeHighestSpellpower, 0, state.SpellPower)
 	}
 	return nil
+}
+
+func playerSkillValue(state *playerState, skillID uint32) uint32 {
+	for _, skill := range state.Skills {
+		if uint32(skill.Skill) == skillID {
+			return uint32(skill.Value)
+		}
+	}
+	return 0
 }
