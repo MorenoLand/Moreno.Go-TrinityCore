@@ -77,48 +77,47 @@ func validateWorldReadyFanout(server *Server, source *session) error {
 	if server == nil || source == nil || source.player == nil || server.TraceRecorder == nil || !source.worldReady.Load() {
 		return errors.New("world-ready fanout replay requires a mapped source session and trace recorder")
 	}
-	loginRecorder := server.TraceRecorder
-	server.TraceRecorder = protocoltrace.NewRecorder("morenocore-world-ready-fanout")
-	defer func() { server.TraceRecorder = loginRecorder }()
+	fanoutServer := &Server{Config: server.Config, sessions: make(map[*session]struct{}), TraceRecorder: protocoltrace.NewRecorder("morenocore-world-ready-fanout")}
 	guid := source.playerGUID ^ (uint64(1) << 63)
 	if guid == 0 || guid == source.playerGUID {
 		guid = source.playerGUID + 1
 	}
 	senderGUID := guid ^ (uint64(1) << 62)
-	peer := &session{server: server, authed: true, playerLoaded: true, playerGUID: guid, player: &playerState{GUID: guid, Map: source.player.Map, InstanceID: source.player.InstanceID, Name: "WorldReadyReplayPeer"}}
+	sourcePeer := &session{server: fanoutServer, authed: true, playerLoaded: true, playerGUID: source.playerGUID, player: &playerState{GUID: source.playerGUID, Map: source.player.Map, InstanceID: source.player.InstanceID, Name: "WorldReadyReplaySource"}}
+	sourcePeer.worldReady.Store(true)
+	peer := &session{server: fanoutServer, authed: true, playerLoaded: true, playerGUID: guid, player: &playerState{GUID: guid, Map: source.player.Map, InstanceID: source.player.InstanceID, Name: "WorldReadyReplayPeer"}}
 	groupID := uint64(uint32(source.playerGUID) + 1)
 	if groupID == 0 {
 		groupID = 1
 	}
-	if groupID == source.groupID {
-		groupID++
-		if groupID == 0 {
-			groupID = 1
-		}
-	}
-	guildID := source.player.GuildID ^ (uint32(1) << 31)
-	if guildID == 0 || guildID == source.player.GuildID {
-		guildID = source.player.GuildID + 1
+	guildID := uint32(1)
+	if source.player.GuildID != 1 {
+		guildID = source.player.GuildID ^ (uint32(1) << 31)
 		if guildID == 0 {
 			guildID = 1
 		}
 	}
 	peer.groupID, peer.player.GuildID = groupID, guildID
-	sender := &session{server: server, authed: true, playerLoaded: true, playerGUID: senderGUID, groupID: groupID, player: &playerState{GUID: senderGUID, Map: source.player.Map, InstanceID: source.player.InstanceID, Name: "WorldReadyReplaySender", GuildID: guildID}}
+	sender := &session{server: fanoutServer, authed: true, playerLoaded: true, playerGUID: senderGUID, groupID: groupID, player: &playerState{GUID: senderGUID, Map: source.player.Map, InstanceID: source.player.InstanceID, Name: "WorldReadyReplaySender", GuildID: guildID}}
 	group := &groupState{ID: groupID, LeaderGUID: senderGUID, Members: []groupMember{{GUID: senderGUID, Name: sender.player.Name}, {GUID: guid, Name: peer.player.Name}}}
-	server.sessionsMu.Lock()
-	server.sessions[peer] = struct{}{}
-	server.sessions[sender] = struct{}{}
-	server.sessionsMu.Unlock()
+	fanoutServer.sessionsMu.Lock()
+	fanoutServer.sessions[sourcePeer] = struct{}{}
+	fanoutServer.sessions[peer] = struct{}{}
+	fanoutServer.sessions[sender] = struct{}{}
+	fanoutServer.sessionsMu.Unlock()
 	defer func() {
-		server.sessionsMu.Lock()
-		delete(server.sessions, peer)
-		delete(server.sessions, sender)
-		server.sessionsMu.Unlock()
+		fanoutServer.sessionsMu.Lock()
+		delete(fanoutServer.sessions, sourcePeer)
+		delete(fanoutServer.sessions, peer)
+		delete(fanoutServer.sessions, sender)
+		fanoutServer.sessionsMu.Unlock()
 	}()
+	if fanoutServer.findSessionByGUID(guid) != nil || fanoutServer.findSessionByName(peer.player.Name) != nil {
+		return errors.New("pre-create peer leaked through online-session lookup")
+	}
 	countOpcode := func(opcode protocol.Opcode) int {
 		count := 0
-		for _, event := range server.TraceRecorder.Snapshot().Events {
+		for _, event := range fanoutServer.TraceRecorder.Snapshot().Events {
 			if event.Direction == protocoltrace.ServerToClient && event.Opcode == uint32(opcode) {
 				count++
 			}
@@ -126,8 +125,8 @@ func validateWorldReadyFanout(server *Server, source *session) error {
 		return count
 	}
 	beforeAttack, beforeGroup, beforeGuild := countOpcode(protocol.OpcodeSMSG_ATTACK_START), countOpcode(protocol.OpcodeSMSG_GROUP_LIST), countOpcode(protocol.OpcodeSMSG_GUILD_EVENT)
-	server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(source.playerGUID, guid), source)
-	server.broadcastGroupList(group)
+	fanoutServer.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(source.playerGUID, guid), sourcePeer)
+	fanoutServer.broadcastGroupList(group)
 	sender.broadcastGuildMemberLogin()
 	if got := countOpcode(protocol.OpcodeSMSG_ATTACK_START); got != beforeAttack {
 		return fmt.Errorf("world-ready fanout sent attack-start to pre-create session: count %d -> %d", beforeAttack, got)
@@ -139,8 +138,11 @@ func validateWorldReadyFanout(server *Server, source *session) error {
 		return fmt.Errorf("world-ready fanout sent guild event to pre-create session: count %d -> %d", beforeGuild, got)
 	}
 	peer.worldReady.Store(true)
-	server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(source.playerGUID, guid), source)
-	server.broadcastGroupList(group)
+	if fanoutServer.findSessionByGUID(guid) != peer || fanoutServer.findSessionByName(peer.player.Name) != peer {
+		return errors.New("mapped peer was not available through online-session lookup")
+	}
+	fanoutServer.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(source.playerGUID, guid), sourcePeer)
+	fanoutServer.broadcastGroupList(group)
 	sender.broadcastGuildMemberLogin()
 	if got := countOpcode(protocol.OpcodeSMSG_ATTACK_START); got != beforeAttack+1 {
 		return fmt.Errorf("world-ready fanout did not reach the mapped peer: attack-start count %d -> %d", beforeAttack, got)

@@ -106,7 +106,7 @@ func (s *session) handleWho(ctx context.Context, payload []byte) bool {
 	s.server.sessionsMu.RUnlock()
 
 	for _, targetSession := range allSessions {
-		if !targetSession.playerLoaded || targetSession.player == nil {
+		if !targetSession.worldReady.Load() || targetSession.player == nil {
 			continue
 		}
 		target := targetSession.player
@@ -240,7 +240,7 @@ func (s *session) handleWhoIs(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	targetSession := s.server.findSessionByName(charName)
-	if targetSession == nil || !targetSession.playerLoaded || targetSession.player == nil {
+	if targetSession == nil || !targetSession.worldReady.Load() || targetSession.player == nil {
 		s.sendNotification(fmt.Sprintf("Character '%s' is not online.", charName))
 		return true
 	}
@@ -279,7 +279,7 @@ func (s *session) handleInspect(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	targetSession := s.server.findSessionByGUID(targetGUID)
-	if targetSession == nil || !targetSession.playerLoaded || targetSession.player == nil {
+	if targetSession == nil || !targetSession.worldReady.Load() || targetSession.player == nil {
 		return true
 	}
 	target := targetSession.player

@@ -190,7 +190,7 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 	}
 	s.server.sessionsMu.RLock()
 	for targetSession := range s.server.sessions {
-		if targetSession == s || !targetSession.authed || !targetSession.playerLoaded || targetSession.player == nil || targetSession.player.Health == 0 || targetSession.player.Map != player.Map || targetSession.playerAlliance() == s.playerAlliance() {
+		if targetSession == s || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil || targetSession.player.Health == 0 || targetSession.player.Map != player.Map || targetSession.playerAlliance() == s.playerAlliance() {
 			continue
 		}
 		if distance3D(targetSession.player.X, targetSession.player.Y, targetSession.player.Z, centerX, centerY, centerZ) > float64(radius) {

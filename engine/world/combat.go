@@ -839,7 +839,7 @@ func (s *session) stopPvPCombatForSanctuary() {
 		return
 	}
 	opponent := s.server.findSessionByGUID(s.attackTarget)
-	if opponent == nil || opponent == s || !opponent.playerLoaded || opponent.player == nil {
+	if opponent == nil || opponent == s || !opponent.worldReady.Load() || opponent.player == nil {
 		return
 	}
 	victim := s.attackTarget
