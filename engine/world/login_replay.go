@@ -77,38 +77,79 @@ func validateWorldReadyFanout(server *Server, source *session) error {
 	if server == nil || source == nil || source.player == nil || server.TraceRecorder == nil || !source.worldReady.Load() {
 		return errors.New("world-ready fanout replay requires a mapped source session and trace recorder")
 	}
+	loginRecorder := server.TraceRecorder
+	server.TraceRecorder = protocoltrace.NewRecorder("morenocore-world-ready-fanout")
+	defer func() { server.TraceRecorder = loginRecorder }()
 	guid := source.playerGUID ^ (uint64(1) << 63)
 	if guid == 0 || guid == source.playerGUID {
 		guid = source.playerGUID + 1
 	}
-	peer := &session{server: server, authed: true, playerLoaded: true, playerGUID: guid, player: &playerState{GUID: guid, Map: source.player.Map, InstanceID: source.player.InstanceID}}
+	senderGUID := guid ^ (uint64(1) << 62)
+	peer := &session{server: server, authed: true, playerLoaded: true, playerGUID: guid, player: &playerState{GUID: guid, Map: source.player.Map, InstanceID: source.player.InstanceID, Name: "WorldReadyReplayPeer"}}
+	groupID := uint64(uint32(source.playerGUID) + 1)
+	if groupID == 0 {
+		groupID = 1
+	}
+	if groupID == source.groupID {
+		groupID++
+		if groupID == 0 {
+			groupID = 1
+		}
+	}
+	guildID := source.player.GuildID ^ (uint32(1) << 31)
+	if guildID == 0 || guildID == source.player.GuildID {
+		guildID = source.player.GuildID + 1
+		if guildID == 0 {
+			guildID = 1
+		}
+	}
+	peer.groupID, peer.player.GuildID = groupID, guildID
+	sender := &session{server: server, authed: true, playerLoaded: true, playerGUID: senderGUID, groupID: groupID, player: &playerState{GUID: senderGUID, Map: source.player.Map, InstanceID: source.player.InstanceID, Name: "WorldReadyReplaySender", GuildID: guildID}}
+	group := &groupState{ID: groupID, LeaderGUID: senderGUID, Members: []groupMember{{GUID: senderGUID, Name: sender.player.Name}, {GUID: guid, Name: peer.player.Name}}}
 	server.sessionsMu.Lock()
 	server.sessions[peer] = struct{}{}
+	server.sessions[sender] = struct{}{}
 	server.sessionsMu.Unlock()
 	defer func() {
 		server.sessionsMu.Lock()
 		delete(server.sessions, peer)
+		delete(server.sessions, sender)
 		server.sessionsMu.Unlock()
 	}()
-	countAttackStarts := func() int {
+	countOpcode := func(opcode protocol.Opcode) int {
 		count := 0
 		for _, event := range server.TraceRecorder.Snapshot().Events {
-			if event.Direction == protocoltrace.ServerToClient && event.Opcode == uint32(protocol.OpcodeSMSG_ATTACK_START) {
+			if event.Direction == protocoltrace.ServerToClient && event.Opcode == uint32(opcode) {
 				count++
 			}
 		}
 		return count
 	}
-	before := countAttackStarts()
-	payload := buildAttackStart(source.playerGUID, guid)
-	server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), payload, source)
-	if got := countAttackStarts(); got != before {
-		return fmt.Errorf("world-ready fanout sent to pre-create session: attack-start count %d -> %d", before, got)
+	beforeAttack, beforeGroup, beforeGuild := countOpcode(protocol.OpcodeSMSG_ATTACK_START), countOpcode(protocol.OpcodeSMSG_GROUP_LIST), countOpcode(protocol.OpcodeSMSG_GUILD_EVENT)
+	server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(source.playerGUID, guid), source)
+	server.broadcastGroupList(group)
+	sender.broadcastGuildMemberLogin()
+	if got := countOpcode(protocol.OpcodeSMSG_ATTACK_START); got != beforeAttack {
+		return fmt.Errorf("world-ready fanout sent attack-start to pre-create session: count %d -> %d", beforeAttack, got)
+	}
+	if got := countOpcode(protocol.OpcodeSMSG_GROUP_LIST); got != beforeGroup {
+		return fmt.Errorf("world-ready fanout sent group-list to pre-create session: count %d -> %d", beforeGroup, got)
+	}
+	if got := countOpcode(protocol.OpcodeSMSG_GUILD_EVENT); got != beforeGuild {
+		return fmt.Errorf("world-ready fanout sent guild event to pre-create session: count %d -> %d", beforeGuild, got)
 	}
 	peer.worldReady.Store(true)
-	server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), payload, source)
-	if got := countAttackStarts(); got != before+1 {
-		return fmt.Errorf("world-ready fanout did not reach a mapped session: attack-start count %d -> %d", before, got)
+	server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(source.playerGUID, guid), source)
+	server.broadcastGroupList(group)
+	sender.broadcastGuildMemberLogin()
+	if got := countOpcode(protocol.OpcodeSMSG_ATTACK_START); got != beforeAttack+1 {
+		return fmt.Errorf("world-ready fanout did not reach the mapped peer: attack-start count %d -> %d", beforeAttack, got)
+	}
+	if got := countOpcode(protocol.OpcodeSMSG_GROUP_LIST); got != beforeGroup+1 {
+		return fmt.Errorf("world-ready fanout did not reach the mapped peer: group-list count %d -> %d", beforeGroup, got)
+	}
+	if got := countOpcode(protocol.OpcodeSMSG_GUILD_EVENT); got != beforeGuild+1 {
+		return fmt.Errorf("world-ready fanout did not reach the mapped peer: guild-event count %d -> %d", beforeGuild, got)
 	}
 	return nil
 }
