@@ -368,6 +368,7 @@ func (s *session) sendRuntimeMovementSpeed(opcode protocol.Opcode, nearbyOpcode 
 	if err := s.write(uint16(opcode), self.Bytes(), true); err != nil {
 		return
 	}
+	s.debug("movement speed change sent", "account", s.accountName, "guid", s.playerGUID, "opcode", opcodeName(uint32(opcode)), "speed", speed, "mounted", s.hasAuraType(spellAuraMounted), "mount_display", s.player.MountDisplayID, "flight_aura_206", s.auraTypeModifiers(spellAuraIncreaseVehicleFlight), "flight_aura_207", s.auraTypeModifiers(spellAuraMountedFlightSpeed), "flight_aura_208", s.auraTypeModifiers(spellAuraIncreaseFlightSpeed), "flight_aura_209", s.auraTypeModifiers(spellAuraMountedFlightSpeedAlways), "flight_aura_211", s.auraTypeModifiers(spellAuraFlightSpeedNotStack))
 	info := s.movementInfoForCreate(*s.player)
 	info.Time = uint32(time.Now().UnixMilli())
 	nearby := protocol.NewBuffer(64)
