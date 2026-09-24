@@ -46,6 +46,8 @@ func main() {
 	replayPetFeedSpell := flag.Uint("replay-pet-feed-spell", 0, "after login, cast a pet-feed spell against the supplied inventory item")
 	replayPetFeedItem := flag.Uint64("replay-pet-feed-item", 0, "inventory item GUID used by the pet-feed replay")
 	replayLFGDungeon := flag.Uint("replay-lfg-dungeon", 0, "after login, teleport through the LFG entrance and verify saved battleground return data")
+	replayInstanceMap := flag.Uint("replay-instance-map", 0, "dungeon map used to exercise the source account instance-entry timer")
+	replayInstanceID := flag.Uint("replay-instance-id", 0, "instance ID used with --replay-instance-map")
 	replayTrace := flag.String("trace-out", "", "optional JSONL path for the in-process login trace")
 	flag.Parse()
 	if *selfCheck {
@@ -58,16 +60,17 @@ func main() {
 	if *replayWork != "" {
 		petFeedRequested := *replayPetFeedSpell != 0 || *replayPetFeedItem != 0
 		lfgReplayRequested := *replayLFGDungeon != 0
+		instanceReplayRequested := *replayInstanceMap != 0 || *replayInstanceID != 0
 		petReplayCount := 0
 		for _, requested := range []bool{*replayPetCooldownSpell != 0, *replayPetPowerSpell != 0, *replayPetXPAward != 0, *replayPetAuraSourceSpell != 0, *replayPetFocusAuraSpell != 0, petFeedRequested} {
 			if requested {
 				petReplayCount++
 			}
 		}
-		if petReplayCount > 1 || petReplayCount != 0 && lfgReplayRequested || petFeedRequested && (*replayPetFeedSpell == 0 || *replayPetFeedItem == 0) {
+		if petReplayCount > 1 || petReplayCount != 0 && (lfgReplayRequested || instanceReplayRequested) || lfgReplayRequested && instanceReplayRequested || petFeedRequested && (*replayPetFeedSpell == 0 || *replayPetFeedItem == 0) || instanceReplayRequested && (*replayInstanceMap == 0 || *replayInstanceID == 0) {
 			fail("choose only one post-login replay scenario")
 		}
-		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem, uint32(*replayLFGDungeon)); err != nil {
+		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem, uint32(*replayLFGDungeon), uint32(*replayInstanceMap), uint32(*replayInstanceID)); err != nil {
 			fail(err.Error())
 		}
 		return
@@ -588,6 +591,25 @@ func checkPetSpellPowerCost() error {
 }
 
 func checkPetRuntimeTick() error {
+	enteredAt := time.Unix(1_800_000_000, 0)
+	priorInstanceTimes := map[uint32]int64{3: enteredAt.Unix() - 1, 4: enteredAt.Unix() + 120}
+	updatedInstanceTimes := world.ResolveAccountInstanceEnterTime(priorInstanceTimes, 4, enteredAt)
+	if len(updatedInstanceTimes) != 1 || updatedInstanceTimes[4] != enteredAt.Unix()+120 || priorInstanceTimes[3] != enteredAt.Unix()-1 {
+		return fmt.Errorf("instance-entry timer pruning or non-refresh behavior mismatch: %#v", updatedInstanceTimes)
+	}
+	newInstanceTimes := world.ResolveAccountInstanceEnterTime(updatedInstanceTimes, 5, enteredAt)
+	if newInstanceTimes[5] != enteredAt.Add(time.Hour).Unix() {
+		return fmt.Errorf("new instance-entry timer=%d, want %d", newInstanceTimes[5], enteredAt.Add(time.Hour).Unix())
+	}
+	if err := validateAccountInstanceTimeDelta(priorInstanceTimes, newInstanceTimes, enteredAt.Unix()); err != nil {
+		return fmt.Errorf("source account instance-time delta was rejected: %w", err)
+	}
+	if validateAccountInstanceTimeDelta(map[uint32]int64{4: enteredAt.Unix() + 120}, map[uint32]int64{}, enteredAt.Unix()) == nil {
+		return fmt.Errorf("active account instance lock removal was accepted")
+	}
+	if validateAccountInstanceTimeDelta(map[uint32]int64{4: enteredAt.Unix() + 120}, map[uint32]int64{4: enteredAt.Add(time.Hour).Unix()}, enteredAt.Unix()) == nil {
+		return fmt.Errorf("account instance lock refresh on re-entry was accepted")
+	}
 	if value := (wotlk.SpellEffect{BasePoints: 10}).CalcValue(); value != 10 {
 		return fmt.Errorf("unscaled DBC spell effect value=%d, want 10", value)
 	}
@@ -3942,7 +3964,7 @@ func eventPayload(event protocoltrace.Event) ([]byte, error) {
 	return protocoltrace.Trace{Events: []protocoltrace.Event{event}}.Payload(event)
 }
 
-func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64, lfgDungeonID uint32) error {
+func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64, lfgDungeonID, instanceEntryMapID, instanceEntryID uint32) error {
 	workDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return err
@@ -4022,6 +4044,8 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 		trace, replayErr = world.ReplayCharacterPetFeed(ctx, server, guid, petFeedSpell, petFoodGUID)
 	} else if lfgDungeonID != 0 {
 		trace, replayErr = world.ReplayCharacterLFGTeleport(ctx, server, guid, lfgDungeonID)
+	} else if instanceEntryID != 0 {
+		trace, replayErr = world.ReplayCharacterInstanceEntry(ctx, server, guid, instanceEntryMapID, instanceEntryID)
 	} else {
 		trace, replayErr = world.ReplayCharacterLogin(ctx, server, guid)
 	}
@@ -4243,11 +4267,12 @@ func petCreateFields(trace protocoltrace.Trace, petGUID uint64) (map[int]uint32,
 }
 
 type characterTableSnapshot struct {
-	Rows              int
-	Digest            string
-	Columns           map[string]string
-	PetSpellCooldowns map[petSpellCooldownKey]petSpellCooldownSnapshot
-	InventoryRows     map[string]inventoryRowSnapshot
+	Rows                 int
+	Digest               string
+	Columns              map[string]string
+	PetSpellCooldowns    map[petSpellCooldownKey]petSpellCooldownSnapshot
+	InventoryRows        map[string]inventoryRowSnapshot
+	AccountInstanceTimes map[uint32]int64
 }
 
 type petSpellCooldownKey struct {
@@ -4305,6 +4330,7 @@ func validateCharacterStateDelta(before, after map[string]characterTableSnapshot
 		"character_achievement_progress": {"guid": {}, "criteria": {}, "counter": {}, "date": {}},
 		"character_aura":                 {"guid": {}, "casterGuid": {}, "itemGuid": {}, "spell": {}, "effectMask": {}, "recalculateMask": {}, "stackCount": {}, "amount0": {}, "amount1": {}, "amount2": {}, "base_amount0": {}, "base_amount1": {}, "base_amount2": {}, "maxDuration": {}, "remainTime": {}, "remainCharges": {}, "critChance": {}, "applyResilience": {}},
 		"character_battleground_data":    {"guid": {}, "instanceId": {}, "team": {}, "joinX": {}, "joinY": {}, "joinZ": {}, "joinO": {}, "joinMapId": {}, "taxiStart": {}, "taxiEnd": {}, "mountSpell": {}},
+		"account_instance_times":         {"accountId": {}, "instanceId": {}, "releaseTime": {}},
 		"character_pet":                  {"curhealth": {}, "curmana": {}, "exp": {}, "level": {}, "savetime": {}, "slot": {}, "Reactstate": {}},
 		"pet_aura":                       {"guid": {}, "casterGuid": {}, "spell": {}, "effectMask": {}, "recalculateMask": {}, "stackCount": {}, "amount0": {}, "amount1": {}, "amount2": {}, "base_amount0": {}, "base_amount1": {}, "base_amount2": {}, "maxDuration": {}, "remainTime": {}, "remainCharges": {}, "critChance": {}, "applyResilience": {}},
 		"pet_spell":                      {"active": {}, "guid": {}, "spell": {}},
@@ -4335,7 +4361,7 @@ func validateCharacterStateDelta(before, after map[string]characterTableSnapshot
 	allowedColumns["character_spell_cooldown"] = map[string]struct{}{"guid": {}, "spell": {}, "item": {}, "time": {}, "categoryId": {}, "categoryEnd": {}}
 	allowedColumns["character_inventory"] = map[string]struct{}{"guid": {}, "bag": {}, "slot": {}, "item": {}}
 	allowedColumns["inventory_item_instances"] = map[string]struct{}{"guid": {}, "itemEntry": {}, "owner_guid": {}, "creatorGuid": {}, "giftCreatorGuid": {}, "count": {}, "duration": {}, "charges": {}, "flags": {}, "enchantments": {}, "randomPropertyId": {}, "durability": {}, "playedTime": {}, "text": {}}
-	allowedRowChanges := map[string]bool{"character_achievement": true, "character_achievement_progress": true, "character_aura": true, "character_battleground_data": true, "character_fishingsteps": true, "character_inventory": true, "character_spell_cooldown": true, "inventory_item_instances": true, "pet_aura": true, "pet_spell": true, "pet_spell_cooldown": true}
+	allowedRowChanges := map[string]bool{"character_achievement": true, "character_achievement_progress": true, "character_aura": true, "character_battleground_data": true, "character_fishingsteps": true, "character_inventory": true, "character_spell_cooldown": true, "inventory_item_instances": true, "pet_aura": true, "pet_spell": true, "pet_spell_cooldown": true, "account_instance_times": true}
 	allowedRowChanges["character_spell"] = true
 	allowedRowChanges["character_skills"] = true
 	for table, beforeTable := range before {
@@ -4369,6 +4395,11 @@ func validateCharacterStateDelta(before, after map[string]characterTableSnapshot
 		}
 		if table == "pet_spell_cooldown" {
 			if err := validatePetSpellCooldownDelta(beforeTable.PetSpellCooldowns, afterTable.PetSpellCooldowns, time.Now().Unix()); err != nil {
+				return err
+			}
+		}
+		if table == "account_instance_times" {
+			if err := validateAccountInstanceTimeDelta(beforeTable.AccountInstanceTimes, afterTable.AccountInstanceTimes, time.Now().Unix()); err != nil {
 				return err
 			}
 		}
@@ -4468,12 +4499,16 @@ func snapshotCharacterState(db, worldDB, authDB *sql.DB, guid uint64) (map[strin
 	result["auth_account_online"] = authAccount
 	inventoryRows := map[string]map[string]inventoryRowSnapshot{"character_inventory": {}, "inventory_item_instances": {}}
 	itemTemplateExists := make(map[int64]bool)
+	instanceTimes := make(map[uint32]int64)
 	defer func() {
 		for table, rows := range inventoryRows {
 			snapshot := result[table]
 			snapshot.InventoryRows = rows
 			result[table] = snapshot
 		}
+		snapshot := result["account_instance_times"]
+		snapshot.AccountInstanceTimes = instanceTimes
+		result["account_instance_times"] = snapshot
 	}()
 	for _, query := range queries {
 		if query.name == "character_inventory" || query.name == "inventory_item_instances" {
@@ -4522,6 +4557,24 @@ func snapshotCharacterState(db, worldDB, authDB *sql.DB, guid uint64) (map[strin
 					}
 				}
 				inventoryRows[query.name][key] = row
+			}
+			if query.name == "account_instance_times" {
+				var instanceID uint32
+				var releaseTime int64
+				var accountID uint32
+				for index, column := range columns {
+					switch column {
+					case "accountId":
+						accountID = uint32(snapshotInt64(values[index]))
+					case "instanceId":
+						instanceID = uint32(snapshotInt64(values[index]))
+					case "releaseTime":
+						releaseTime = snapshotInt64(values[index])
+					}
+				}
+				if accountID > 0 && instanceID > 0 {
+					instanceTimes[instanceID] = releaseTime
+				}
 			}
 			if query.name == "pet_spell_cooldown" {
 				var key petSpellCooldownKey

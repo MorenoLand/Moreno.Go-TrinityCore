@@ -469,6 +469,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		s.contestedPVPEnd = time.Time{}
 	}
 	s.playerLoaded = true
+	s.recordInstanceEnterTime(ctx, time.Now())
 	difficulty := protocol.NewBuffer(12)
 	difficulty.WriteU32(uint32(state.DungeonDifficulty))
 	difficulty.WriteU32(1)
@@ -1076,6 +1077,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	s.triggerMapEntryEvent(ctx)
 	s.streamDynamicSpellObjects()
 	s.updateZoneAndArea(ctx, true)
+	s.recordInstanceEnterTime(ctx, time.Now())
 	if err := s.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true); err != nil {
 		return false
 	}
