@@ -37,6 +37,108 @@ const (
 	itemModSpellPower       = 45
 )
 
+type PlayerItemStatBonus struct {
+	Health            uint32
+	Mana              uint32
+	Stats             [5]uint32
+	CombatRatings     [25]uint32
+	AttackPower       uint32
+	RangedAttackPower uint32
+	SpellPower        uint32
+	SpellPenetration  uint32
+}
+
+func ResolvePlayerItemStatBonus(itemMod uint32, value int64) PlayerItemStatBonus {
+	amount := uint32(value)
+	var bonus PlayerItemStatBonus
+	switch itemMod {
+	case 0:
+		bonus.Mana = amount
+	case 1:
+		bonus.Health = amount
+	case 3:
+		bonus.Stats[1] = amount
+	case 4:
+		bonus.Stats[0] = amount
+	case 5:
+		bonus.Stats[3] = amount
+	case 6:
+		bonus.Stats[4] = amount
+	case 7:
+		bonus.Stats[2] = amount
+	case 12:
+		bonus.CombatRatings[0] = amount
+	case 13:
+		bonus.CombatRatings[1] = amount
+	case 14:
+		bonus.CombatRatings[2] = amount
+	case 15:
+		bonus.CombatRatings[3] = amount
+	case 16:
+		bonus.CombatRatings[5] = amount
+	case 17:
+		bonus.CombatRatings[6] = amount
+	case 18:
+		bonus.CombatRatings[7] = amount
+	case 19:
+		bonus.CombatRatings[8] = amount
+	case 20:
+		bonus.CombatRatings[9] = amount
+	case 21:
+		bonus.CombatRatings[10] = amount
+	case 28:
+		bonus.CombatRatings[17] = amount
+	case 29:
+		bonus.CombatRatings[18] = amount
+	case 30:
+		bonus.CombatRatings[19] = amount
+	case 31:
+		bonus.CombatRatings[5], bonus.CombatRatings[6], bonus.CombatRatings[7] = amount, amount, amount
+	case 32:
+		bonus.CombatRatings[8], bonus.CombatRatings[9], bonus.CombatRatings[10] = amount, amount, amount
+	case 35:
+		bonus.CombatRatings[14], bonus.CombatRatings[15], bonus.CombatRatings[16] = amount, amount, amount
+	case 36:
+		bonus.CombatRatings[17], bonus.CombatRatings[18], bonus.CombatRatings[19] = amount, amount, amount
+	case 37:
+		bonus.CombatRatings[23] = amount
+	case 38:
+		bonus.AttackPower = amount
+	case 39:
+		bonus.RangedAttackPower = amount
+	case 44:
+		bonus.CombatRatings[24] = amount
+	case 45:
+		bonus.SpellPower = amount
+	case 47:
+		bonus.SpellPenetration = amount
+	}
+	return bonus
+}
+
+func (s *session) applyPlayerItemStat(state *playerState, itemMod uint32, value int64) {
+	if s == nil || state == nil || value == 0 {
+		return
+	}
+	bonus := ResolvePlayerItemStatBonus(itemMod, value)
+	state.ItemHealthBonus += bonus.Health
+	state.ItemManaBonus += bonus.Mana
+	for index, rating := range bonus.CombatRatings {
+		state.CombatRatings[index] += rating
+	}
+	for index, stat := range bonus.Stats {
+		state.Stats[index] += stat
+	}
+	state.AttackPower += bonus.AttackPower
+	state.RangedAttackPower += bonus.RangedAttackPower
+	state.SpellPower += bonus.SpellPower
+	state.BaseSpellPower += bonus.SpellPower
+	state.SpellPenetration += bonus.SpellPenetration
+	if bonus.SpellPower > 0 {
+		s.setAchievementCriteria(criteriaTypeHighestSpellpower, 0, state.SpellPower)
+	}
+}
+
 func (s *session) loadEquippedItemStats(ctx context.Context, state *playerState) ([]equippedItemStats, error) {
 	if s == nil || s.server == nil || state == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return nil, nil
@@ -240,25 +342,18 @@ func (s *session) applyItemStatEnchantment(state *playerState, enchantID uint32,
 	if err != nil || !found {
 		return err
 	}
-	skillValue := playerSkillValue(state, entry.RequiredSkillID)
-	for _, itemMod := range []uint32{itemModMana, itemModHealth, itemModSpellPower} {
-		amount := ResolveEquippedItemStatEnchant(entry, itemMod, uint32(state.Level), skillValue, broken)
-		if suffix {
-			amount = ResolveRandomSuffixItemStatEnchant(entry, itemMod, uint32(state.Level), skillValue, broken, suffixAmount)
-		}
-		if amount == 0 {
+	if broken || entry.ConditionID != 0 || uint32(state.Level) < entry.MinLevel || playerSkillValue(state, entry.RequiredSkillID) < entry.RequiredSkillRank {
+		return nil
+	}
+	for index, effect := range entry.Effects {
+		if effect != itemEnchantmentTypeStat {
 			continue
 		}
-		switch itemMod {
-		case itemModMana:
-			state.ItemManaBonus += amount
-		case itemModHealth:
-			state.ItemHealthBonus += amount
-		case itemModSpellPower:
-			state.BaseSpellPower += amount
-			state.SpellPower += amount
-			s.setAchievementCriteria(criteriaTypeHighestSpellpower, 0, state.SpellPower)
+		amount := entry.EffectPointsMin[index]
+		if amount == 0 && suffix {
+			amount = suffixAmount
 		}
+		s.applyPlayerItemStat(state, entry.EffectArg[index], int64(amount))
 	}
 	return nil
 }

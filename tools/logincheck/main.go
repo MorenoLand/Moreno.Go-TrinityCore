@@ -126,6 +126,10 @@ func runSelfCheck() error {
 	if world.ResolveRandomSuffixItemStatEnchant(suffixStatEnchant, 0, 80, 0, false, 17) != 17 || world.ResolveRandomSuffixItemStatEnchant(suffixStatEnchant, 1, 80, 0, false, 17) != 17 || world.ResolveRandomSuffixItemStatEnchant(suffixStatEnchant, 45, 80, 0, false, 17) != 17 {
 		return fmt.Errorf("source random-suffix stat args did not map mana, health, and spell power")
 	}
+	manaStat, healthStat, strengthStat, hitStat := world.ResolvePlayerItemStatBonus(0, 20), world.ResolvePlayerItemStatBonus(1, 30), world.ResolvePlayerItemStatBonus(4, 5), world.ResolvePlayerItemStatBonus(31, 7)
+	if manaStat.Mana != 20 || healthStat.Health != 30 || strengthStat.Stats[0] != 5 || hitStat.CombatRatings[5] != 7 || hitStat.CombatRatings[6] != 7 || hitStat.CombatRatings[7] != 7 {
+		return fmt.Errorf("source item-template stat IDs did not map to player resource/stat/rating state")
+	}
 	prismatic := wotlk.SpellItemEnchantmentEntry{RequiredSkillID: 164, RequiredSkillRank: 50}
 	for _, test := range []struct {
 		color   uint32
