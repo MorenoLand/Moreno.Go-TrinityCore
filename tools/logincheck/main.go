@@ -287,6 +287,9 @@ func runSelfCheck() error {
 	if err := checkPetProgression(); err != nil {
 		return fmt.Errorf("pet progression check failed: %w", err)
 	}
+	if err := checkExpectedCharacterStateDelta(); err != nil {
+		return fmt.Errorf("expected character state delta check failed: %w", err)
+	}
 	if err := checkCollisionHeightFormula(); err != nil {
 		return fmt.Errorf("collision-height formula check failed: %w", err)
 	}
@@ -634,6 +637,31 @@ func checkPetProgression() error {
 	level, xp, nextXP = world.AdvanceHunterPetExperience(level, 12, 100, 4, nextXP, xpForLevel)
 	if level != 4 || xp != 12 || nextXP != xpForLevel[4]/20 {
 		return fmt.Errorf("max-level hunter pet accepted XP: result=(%d,%d,%d)", level, xp, nextXP)
+	}
+	return nil
+}
+
+func checkExpectedCharacterStateDelta() error {
+	before := map[string]characterTableSnapshot{
+		"characters":     {Rows: 1, Columns: map[string]string{"level": "a", "position_x": "b"}},
+		"character_aura": {Rows: 2, Columns: map[string]string{"remainTime": "c"}},
+	}
+	after := map[string]characterTableSnapshot{
+		"characters":     {Rows: 1, Columns: map[string]string{"level": "a", "position_x": "d"}},
+		"character_aura": {Rows: 1, Columns: map[string]string{"remainTime": "e"}},
+	}
+	if err := validateCharacterStateDelta(before, after); err != nil {
+		return fmt.Errorf("source-expected login/logout changes rejected: %w", err)
+	}
+	unchangedColumns := map[string]string{"first": "same", "second": "same"}
+	rowCompositionBefore := map[string]characterTableSnapshot{"characters": {Rows: 1, Digest: "before", Columns: unchangedColumns}}
+	rowCompositionAfter := map[string]characterTableSnapshot{"characters": {Rows: 1, Digest: "after", Columns: unchangedColumns}}
+	if err := validateCharacterStateDelta(rowCompositionBefore, rowCompositionAfter); err == nil {
+		return fmt.Errorf("row composition change with unchanged column digests was accepted")
+	}
+	after["characters"] = characterTableSnapshot{Rows: 1, Columns: map[string]string{"level": "f", "position_x": "d"}}
+	if err := validateCharacterStateDelta(before, after); err == nil {
+		return fmt.Errorf("unclassified characters.level mutation was accepted")
 	}
 	return nil
 }
@@ -3702,6 +3730,9 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 	if snapshotErr != nil {
 		return snapshotErr
 	}
+	if err := validateCharacterStateDelta(before, after); err != nil {
+		return fmt.Errorf("real-character state delta mismatch (trace saved): %w", err)
+	}
 	beforeCharacter, beforeFound := before["characters"]
 	afterCharacter, afterFound := after["characters"]
 	if !beforeFound || !afterFound || beforeCharacter.Rows != 1 || afterCharacter.Rows != 1 {
@@ -3904,6 +3935,46 @@ func changedCharacterColumns(before, after characterTableSnapshot) []string {
 	}
 	sort.Strings(changed)
 	return changed
+}
+
+func validateCharacterStateDelta(before, after map[string]characterTableSnapshot) error {
+	allowedColumns := map[string]map[string]struct{}{
+		"characters":     {"exploredZones": {}, "orientation": {}, "position_x": {}, "position_y": {}, "position_z": {}},
+		"character_aura": {"remainTime": {}},
+		"character_pet":  {"curhealth": {}, "curmana": {}, "exp": {}, "level": {}, "savetime": {}},
+		"pet_spell":      {"active": {}, "guid": {}, "spell": {}},
+	}
+	allowedRowChanges := map[string]bool{"character_aura": true, "pet_spell": true}
+	for table, beforeTable := range before {
+		afterTable, exists := after[table]
+		if !exists {
+			return fmt.Errorf("snapshot table %s disappeared", table)
+		}
+		changedColumns := changedCharacterColumns(beforeTable, afterTable)
+		rowsChanged := beforeTable.Rows != afterTable.Rows
+		digestChanged := beforeTable.Digest != afterTable.Digest
+		if len(changedColumns) == 0 && !rowsChanged && !digestChanged {
+			continue
+		}
+		if len(changedColumns) == 0 && !rowsChanged && digestChanged {
+			return fmt.Errorf("unclassified row composition change table=%s", table)
+		}
+		allowed, exists := allowedColumns[table]
+		if !exists || rowsChanged && !allowedRowChanges[table] {
+			return fmt.Errorf("unclassified state mutation table=%s rows=%d->%d columns=%s", table, beforeTable.Rows, afterTable.Rows, strings.Join(changedColumns, "+"))
+		}
+		for _, column := range changedColumns {
+			if _, exists := allowed[column]; !exists {
+				return fmt.Errorf("unclassified state mutation table=%s column=%s", table, column)
+			}
+		}
+	}
+	for table := range after {
+		if _, exists := before[table]; !exists {
+			return fmt.Errorf("snapshot table %s appeared", table)
+		}
+	}
+	return nil
 }
 
 func snapshotCharacterState(db *sql.DB, guid uint64) (map[string]characterTableSnapshot, error) {
