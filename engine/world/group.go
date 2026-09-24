@@ -315,7 +315,7 @@ func buildGroupList(srv *Server, g *groupState, forGUID uint64, counter uint32) 
 		b.WriteCString(m.Name)
 		b.WriteU64(m.GUID)
 		status := uint8(0)
-		if sess := srv.findSessionByGUID(m.GUID); sess != nil && sess.playerLoaded && sess.logoutAt.IsZero() {
+		if sess := srv.findSessionByGUID(m.GUID); sess != nil && sess.worldReady.Load() && sess.logoutAt.IsZero() {
 			status = 1
 		}
 		if groupType == groupTypeBattleground || groupType == groupTypeBattlegroundRaid {
@@ -458,7 +458,7 @@ func (s *Server) broadcastGroupList(g *groupState) {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
-		if sess.groupID == g.ID {
+		if sess.groupID == g.ID && sess.worldReady.Load() {
 			counter := atomic.AddUint32(&g.counter, 1) - 1
 			pkt := buildGroupList(s, g, sess.playerGUID, counter)
 			_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), pkt, true)
@@ -473,7 +473,7 @@ func (s *Server) broadcastToGroup(groupID uint64, opcode uint16, payload []byte)
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
-		if sess.groupID == groupID {
+		if sess.groupID == groupID && sess.worldReady.Load() {
 			_ = sess.write(opcode, payload, true)
 		}
 	}

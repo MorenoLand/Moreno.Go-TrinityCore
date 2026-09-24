@@ -657,7 +657,7 @@ func (s *session) handlePushQuestToParty(ctx context.Context, payload []byte) bo
 
 	members := s.server.getGroupSessions(s.groupID)
 	for _, receiver := range members {
-		if receiver == nil || receiver == s || !receiver.playerLoaded || receiver.player == nil {
+		if receiver == nil || receiver == s || !receiver.worldReady.Load() || receiver.player == nil {
 			continue
 		}
 

@@ -37,7 +37,7 @@ func (s *session) handleEmote(payload []byte) bool {
 	s.server.sessionsMu.RLock()
 	defer s.server.sessionsMu.RUnlock()
 	for member := range s.server.sessions {
-		if !member.playerLoaded || member.player == nil || member.player.Map != s.player.Map {
+		if !member.worldReady.Load() || member.player == nil || member.player.Map != s.player.Map {
 			continue
 		}
 		_ = member.write(uint16(protocol.OpcodeSMSG_EMOTE), packet.Bytes(), true)
@@ -113,7 +113,7 @@ func (s *session) handleTextEmote(ctx context.Context, payload []byte) bool {
 	s.server.sessionsMu.RLock()
 	defer s.server.sessionsMu.RUnlock()
 	for member := range s.server.sessions {
-		if !member.playerLoaded || member.player == nil || member.player.Map != s.player.Map {
+		if !member.worldReady.Load() || member.player == nil || member.player.Map != s.player.Map {
 			continue
 		}
 		_ = member.write(uint16(protocol.OpcodeSMSG_TEXT_EMOTE), packet.Bytes(), true)

@@ -336,7 +336,7 @@ func (s *Server) updatePlayerUnderwater(ctx context.Context, now time.Time) {
 	s.sessionsMu.RLock()
 	var sessions []*session
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil &&
+		if sess.worldReady.Load() && sess.player != nil &&
 			(sess.isSwimming || (sess.breathTimer != -1 && sess.breathTimer < maxBreathTimerMs) ||
 				sess.inDarkWater || (sess.fatigueTimer != -1 && sess.fatigueTimer < maxFatigueTimerMs)) {
 			sessions = append(sessions, sess)

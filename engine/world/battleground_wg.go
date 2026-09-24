@@ -390,7 +390,7 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 	// Reward players
 	s.sessionsMu.RLock()
 	for sess := range s.sessions {
-		if !sess.playerLoaded || sess.player == nil {
+		if !sess.worldReady.Load() || sess.player == nil {
 			continue
 		}
 		pGUID := sess.playerGUID
@@ -630,7 +630,7 @@ func (s *Server) DestroyWGBuilding(entry uint32) bool {
 					// Update tower control buffs
 					s.sessionsMu.RLock()
 					for sess := range s.sessions {
-						if !sess.playerLoaded || sess.player == nil || sess.player.Map != wg.MapID {
+						if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != wg.MapID {
 							continue
 						}
 						pTeam := teamForRace(sess.player.Race)
@@ -760,7 +760,7 @@ func (s *Server) UpdateWGTenacity() {
 
 	s.sessionsMu.RLock()
 	for sess := range s.sessions {
-		if !sess.playerLoaded || sess.player == nil || sess.player.Map != wg.MapID {
+		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != wg.MapID {
 			continue
 		}
 		pTeam := teamForRace(sess.player.Race)
@@ -998,7 +998,7 @@ func (s *Server) updateWGWorldState(variableID, value uint32) {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil && sess.player.Map == WGMapID {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == WGMapID {
 			sess.sendWorldState(variableID, value)
 		}
 	}
@@ -1009,7 +1009,7 @@ func (s *Server) broadcastWGInitWorldStates() {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil && sess.player.Map == WGMapID {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == WGMapID {
 			s.sendWGInitWorldStatesTo(sess)
 		}
 	}

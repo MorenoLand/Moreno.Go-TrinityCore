@@ -1652,7 +1652,7 @@ func (s *session) endDuel(won bool, winnerGUID uint64, fled bool) {
 		if s.server != nil && s.player != nil {
 			s.server.sessionsMu.RLock()
 			for target := range s.server.sessions {
-				if target == s || target == partner || !target.authed || !target.playerLoaded || target.player == nil {
+				if target == s || target == partner || !target.authed || !target.worldReady.Load() || target.player == nil {
 					continue
 				}
 				if target.player.Map == s.player.Map {

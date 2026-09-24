@@ -648,7 +648,7 @@ func (s *Server) broadcastToMap(mapID uint32, opcode uint16, payload []byte) {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for target := range s.sessions {
-		if !target.authed || !target.playerLoaded || target.player == nil || target.player.Map != mapID {
+		if !target.authed || !target.worldReady.Load() || target.player == nil || target.player.Map != mapID {
 			continue
 		}
 		_ = target.write(opcode, payload, true)

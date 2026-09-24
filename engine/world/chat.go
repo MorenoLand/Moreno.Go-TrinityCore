@@ -488,7 +488,7 @@ func (s *Server) findSessionByName(name string) *session {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for value := range s.sessions {
-		if value.playerLoaded && value.player != nil && strings.EqualFold(value.player.Name, name) {
+		if value.worldReady.Load() && value.player != nil && strings.EqualFold(value.player.Name, name) {
 			return value
 		}
 	}
@@ -499,7 +499,7 @@ func (s *Server) findSessionByGUID(guid uint64) *session {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for value := range s.sessions {
-		if value.playerLoaded && value.player != nil && value.player.GUID == guid {
+		if value.worldReady.Load() && value.player != nil && value.player.GUID == guid {
 			return value
 		}
 	}
@@ -514,7 +514,7 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 	targets := make([]*session, 0, len(s.sessions))
 	channelTargets := s.channelMembers(source, channel)
 	for value := range s.sessions {
-		if !value.authed || !value.playerLoaded || value.player == nil {
+		if !value.authed || !value.worldReady.Load() || value.player == nil {
 			continue
 		}
 		if receiver != nil {
@@ -612,7 +612,7 @@ func (s *session) handleChatIgnored(payload []byte) bool {
 		return false
 	}
 	targetSess := s.server.findSessionByGUID(targetGUID)
-	if targetSess == nil || !targetSess.playerLoaded || targetSess.player == nil {
+	if targetSess == nil || !targetSess.worldReady.Load() || targetSess.player == nil {
 		return true
 	}
 	msg := protocol.BuildChatMessageWithOptions(chatIgnored, languageUniversal, s.playerGUID, s.playerGUID, s.player.Name, "", false, "", s.chatTag())

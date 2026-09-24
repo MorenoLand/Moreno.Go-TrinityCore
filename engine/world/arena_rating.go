@@ -180,7 +180,7 @@ func (s *Server) broadcastArenaTeamStats(teamID, rating uint32) {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
-		if sess.authed && sess.playerLoaded {
+		if sess.authed && sess.worldReady.Load() {
 			_ = sess.write(uint16(protocol.OpcodeSMSG_ARENA_TEAM_STATS), sBuf.Bytes(), true)
 		}
 	}

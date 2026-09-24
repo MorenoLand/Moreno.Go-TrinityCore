@@ -459,7 +459,7 @@ func (s *Server) updateArenaWorldState(arena *arenaBattlegroundState, variableID
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil && sess.player.Map == arena.MapID {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == arena.MapID {
 			sess.sendWorldState(variableID, value)
 		}
 	}
@@ -604,7 +604,7 @@ func (s *Server) startArenaMatch(arena *arenaBattlegroundState) {
 	// Process all players in the arena
 	s.sessionsMu.RLock()
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil && sess.player.Map == arena.MapID {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == arena.MapID {
 			sess.removeAura(SpellArenaPreparation)
 			s.resetPlayerPowers(sess)
 
@@ -729,7 +729,7 @@ func (s *Server) endArena(arena *arenaBattlegroundState, winner int8) {
 	logData := s.buildArenaPvPLogDataPacket(arena)
 	s.sessionsMu.RLock()
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil && sess.player.Map == arena.MapID {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == arena.MapID {
 			_ = sess.write(uint16(protocol.OpcodeMSG_PVP_LOG_DATA), logData, true)
 
 			// Update queue entry
@@ -750,7 +750,7 @@ func (s *Server) awardLastManStanding(arena *arenaBattlegroundState, team uint8)
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil && sess.player.Map == arena.MapID && sess.player.Health > 0 {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == arena.MapID && sess.player.Health > 0 {
 			if arenaTeam, ok := arena.PlayerTeams[sess.playerGUID]; ok && arenaTeam == team {
 				sess.applyAura(SpellLastManStanding)
 				break
@@ -889,7 +889,7 @@ func (s *Server) broadcastArenaMessage(mapID uint32, msg string) {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil && sess.player.Map == mapID {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID {
 			sess.sendSystemMessage(msg)
 		}
 	}

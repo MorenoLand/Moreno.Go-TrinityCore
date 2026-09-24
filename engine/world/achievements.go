@@ -1385,7 +1385,7 @@ func (s *Server) creditBattlegroundWin(mapID, winningTeam uint32) {
 	s.sessionsMu.RLock()
 	var allParticipants, winners []*session
 	for sess := range s.sessions {
-		if !sess.playerLoaded || sess.player == nil || sess.player.Map != mapID {
+		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID {
 			continue
 		}
 		allParticipants = append(allParticipants, sess)
@@ -1409,7 +1409,7 @@ func (s *Server) creditArenaParticipants(mapID uint32, scores map[uint64]uint32,
 	s.sessionsMu.RLock()
 	var participants []*session
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil && sess.player.Map == mapID {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID {
 			participants = append(participants, sess)
 		}
 	}

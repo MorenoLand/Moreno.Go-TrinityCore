@@ -213,7 +213,7 @@ func (s *session) handleChannelList(payload []byte) bool {
 	}
 	members := make([]member, 0, len(channel.Members))
 	for session := range channel.Members {
-		if session.playerLoaded && session.player != nil {
+		if session.worldReady.Load() && session.player != nil {
 			members = append(members, member{guid: session.playerGUID})
 		}
 	}

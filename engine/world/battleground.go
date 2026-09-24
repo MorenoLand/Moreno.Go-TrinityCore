@@ -416,7 +416,7 @@ func (s *session) handleBattlegroundPlayerPositions(ctx context.Context, payload
 		if s.server != nil {
 			s.server.sessionsMu.RLock()
 			for other := range s.server.sessions {
-				if other != s && other.playerLoaded && other.player != nil && other.player.Map == s.player.Map && teamForRace(other.player.Race) == teamForRace(s.player.Race) {
+				if other != s && other.worldReady.Load() && other.player != nil && other.player.Map == s.player.Map && teamForRace(other.player.Race) == teamForRace(s.player.Race) {
 					teammates = append(teammates, other)
 				}
 			}

@@ -210,7 +210,7 @@ func (s *Server) updateWeather(ctx context.Context, now time.Time) {
 	s.sessionsMu.RLock()
 	sessions := make([]*session, 0, len(s.sessions))
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil {
+		if sess.worldReady.Load() && sess.player != nil {
 			sessions = append(sessions, sess)
 		}
 	}

@@ -604,7 +604,7 @@ func (s *Server) updatePlayerDeathTimers(ctx context.Context, now time.Time) {
 	s.sessionsMu.RLock()
 	var due []*session
 	for sess := range s.sessions {
-		if !sess.playerLoaded || sess.player == nil {
+		if !sess.worldReady.Load() || sess.player == nil {
 			continue
 		}
 		if sess.player.Health == 0 && sess.player.PlayerFlags&playerFlagGhost == 0 && !sess.deathTimer.IsZero() && !now.Before(sess.deathTimer) {
@@ -644,7 +644,7 @@ func (s *Server) updateSpiritHealerResurrectWaves(ctx context.Context, now time.
 
 	for playerGUID, spiritGUID := range queued {
 		sess := s.findSessionByGUID(playerGUID)
-		if sess != nil && sess.playerLoaded && sess.player != nil && sess.player.PlayerFlags&playerFlagGhost != 0 {
+		if sess != nil && sess.worldReady.Load() && sess.player != nil && sess.player.PlayerFlags&playerFlagGhost != 0 {
 			sess.resurrectPlayer(ctx, 1.0)
 			sess.removeAura(2584) // SPELL_WAITING_FOR_RESURRECT
 			sess.applyAura(22012) // SPELL_SPIRIT_HEAL_MANA

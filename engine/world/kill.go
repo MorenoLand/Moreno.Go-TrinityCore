@@ -380,7 +380,7 @@ func (s *session) rewardCreatureKillXP(ctx context.Context, target combatTarget,
 	seen := make(map[uint64]struct{}, len(members))
 	count, sumLevel, maxLevel, maxNonGrayLevel := uint32(0), uint32(0), uint32(0), uint32(0)
 	addRecipient := func(member *session, killer bool) {
-		if member == nil || member.player == nil || !member.playerLoaded {
+		if member == nil || member.player == nil || !member.worldReady.Load() {
 			return
 		}
 		guid := member.playerGUID

@@ -353,7 +353,7 @@ func (s *Server) broadcastMonsterMoveMode(mapID uint32, rawGUID uint64, startX, 
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
-		if !sess.playerLoaded || sess.player == nil || sess.player.Map != mapID {
+		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID {
 			continue
 		}
 		if math.Hypot(float64(startX-sess.player.X), float64(startY-sess.player.Y)) <= distance {
@@ -398,7 +398,7 @@ func (s *Server) broadcastCreatureValuesUpdate(mapID uint32, guid uint64, fields
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
-		if !sess.playerLoaded || sess.player == nil || sess.player.Map != mapID {
+		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID {
 			continue
 		}
 		_ = sess.write(packet.Opcode, packet.Payload.Bytes(), true)

@@ -505,7 +505,7 @@ func (s *Server) relocatePassengers(vehicleGUID uint64, transX, transY, transZ, 
 	kit.mu.RUnlock()
 
 	for _, rel := range relocations {
-		if sess := s.findSessionByGUID(rel.guid); sess != nil && sess.playerLoaded && sess.player != nil {
+		if sess := s.findSessionByGUID(rel.guid); sess != nil && sess.worldReady.Load() && sess.player != nil {
 			sess.player.X = rel.x
 			sess.player.Y = rel.y
 			sess.player.Z = rel.z
@@ -773,7 +773,7 @@ func (s *session) handleControllerEjectPassenger(ctx context.Context, payload []
 		if s.player.VehicleGUID != 0 {
 			vehGUID = s.player.VehicleGUID
 		}
-		if passSess := s.server.findSessionByGUID(passGUID); passSess != nil && passSess.playerLoaded && passSess.player != nil {
+		if passSess := s.server.findSessionByGUID(passGUID); passSess != nil && passSess.worldReady.Load() && passSess.player != nil {
 			if passSess.player.VehicleGUID == vehGUID || passSess.player.VehicleGUID == s.playerGUID {
 				passSess.exitVehicle()
 			}
@@ -798,7 +798,7 @@ func (s *session) handleDismissControlledVehicle(ctx context.Context, payload []
 	if s.server != nil {
 		s.server.sessionsMu.RLock()
 		for sess := range s.server.sessions {
-			if sess != s && sess.playerLoaded && sess.player != nil && (sess.player.VehicleGUID == vehGUID || sess.player.VehicleGUID == s.playerGUID) {
+			if sess != s && sess.worldReady.Load() && sess.player != nil && (sess.player.VehicleGUID == vehGUID || sess.player.VehicleGUID == s.playerGUID) {
 				sess.exitVehicle()
 			}
 		}

@@ -16,7 +16,7 @@ func (s *Server) luaPlayers() []*scripting.Object {
 	s.sessionsMu.RLock()
 	players := make([]*scripting.Object, 0, len(s.sessions))
 	for value := range s.sessions {
-		if value.playerLoaded {
+		if value.worldReady.Load() {
 			if player := value.luaPlayer(); player != nil {
 				players = append(players, player)
 			}
@@ -45,7 +45,7 @@ func (s *Server) findPlayer(guid uint64) *scripting.Object {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for value := range s.sessions {
-		if value.playerLoaded && value.playerGUID == guid {
+		if value.worldReady.Load() && value.playerGUID == guid {
 			return value.luaPlayer()
 		}
 	}

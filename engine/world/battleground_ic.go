@@ -737,7 +737,7 @@ func (s *Server) updateICWorldState(mapID, variableID, value uint32) {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil && sess.player.Map == mapID {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID {
 			sess.sendWorldState(variableID, value)
 		}
 	}

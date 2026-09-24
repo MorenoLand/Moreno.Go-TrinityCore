@@ -314,7 +314,7 @@ func (s *Server) buildAttachedTransportPlayerUpdates(state playerState, exclude 
 	runtimeSessions := make(map[uint64]*session)
 	s.sessionsMu.RLock()
 	for sess := range s.sessions {
-		if sess == nil || !sess.playerLoaded || sess.player == nil || sess.player.GUID == exclude || sess.player.Map != state.Map || sess.player.InstanceID != state.InstanceID {
+		if sess == nil || !sess.worldReady.Load() || sess.player == nil || sess.player.GUID == exclude || sess.player.Map != state.Map || sess.player.InstanceID != state.InstanceID {
 			continue
 		}
 		if sess.player.TransportGUID != rawGUID && sess.player.TransportGUID != uint64(transport.Spawn.GUID) {
@@ -447,7 +447,7 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
-		if !sess.authed || !sess.playerLoaded || sess.player == nil {
+		if !sess.authed || !sess.worldReady.Load() || sess.player == nil {
 			continue
 		}
 		if sess.player.TransportGUID == rawGUID && change.OldSpawn.Map == change.Spawn.Map {

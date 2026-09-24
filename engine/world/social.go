@@ -60,7 +60,7 @@ const (
 // -----------------------------------------------------------------
 func (s *Server) friendStatus(guid uint64) (uint8, uint32, uint32, uint32) {
 	friendSess := s.findSessionByGUID(guid)
-	if friendSess == nil || !friendSess.playerLoaded || friendSess.player == nil {
+	if friendSess == nil || !friendSess.worldReady.Load() || friendSess.player == nil {
 		return friendStatusOffline, 0, 0, 0
 	}
 	status := friendStatusOnline
@@ -217,7 +217,7 @@ func (s *Server) broadcastFriendStatus(playerGUID uint64, result uint8, zone, le
 	payload := b.Bytes()
 	for _, recipient := range recipientGUIDs {
 		sess := s.findSessionByGUID(recipient)
-		if sess != nil && sess.playerLoaded {
+		if sess != nil && sess.worldReady.Load() {
 			_ = sess.write(uint16(protocol.OpcodeSMSG_FRIEND_STATUS), payload, true)
 		}
 	}
