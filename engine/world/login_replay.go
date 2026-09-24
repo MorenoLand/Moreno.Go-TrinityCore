@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocoltrace"
 )
@@ -77,7 +79,19 @@ func validateWorldReadyFanout(server *Server, source *session) error {
 	if server == nil || source == nil || source.player == nil || server.TraceRecorder == nil || !source.worldReady.Load() {
 		return errors.New("world-ready fanout replay requires a mapped source session and trace recorder")
 	}
+	petitionDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		return fmt.Errorf("open petition replay database: %w", err)
+	}
+	defer petitionDB.Close()
+	if _, err := petitionDB.Exec("CREATE TABLE petition (ownerguid INTEGER, petitionguid INTEGER PRIMARY KEY, name TEXT, type INTEGER)"); err != nil {
+		return fmt.Errorf("create petition replay schema: %w", err)
+	}
+	if _, err := petitionDB.Exec("CREATE TABLE petition_sign (petitionguid INTEGER, playerguid INTEGER)"); err != nil {
+		return fmt.Errorf("create petition signature replay schema: %w", err)
+	}
 	fanoutServer := &Server{Config: server.Config, sessions: make(map[*session]struct{}), TraceRecorder: protocoltrace.NewRecorder("morenocore-world-ready-fanout")}
+	fanoutServer.CharactersStore = &database.Store{Backend: database.BackendSQLite, DB: petitionDB}
 	guid := source.playerGUID ^ (uint64(1) << 63)
 	if guid == 0 || guid == source.playerGUID {
 		guid = source.playerGUID + 1
@@ -86,6 +100,8 @@ func validateWorldReadyFanout(server *Server, source *session) error {
 	sourcePeer := &session{server: fanoutServer, authed: true, playerLoaded: true, playerGUID: source.playerGUID, player: &playerState{GUID: source.playerGUID, Map: source.player.Map, InstanceID: source.player.InstanceID, Name: "WorldReadyReplaySource"}}
 	sourcePeer.worldReady.Store(true)
 	peer := &session{server: fanoutServer, authed: true, playerLoaded: true, playerGUID: guid, player: &playerState{GUID: guid, Map: source.player.Map, InstanceID: source.player.InstanceID, Name: "WorldReadyReplayPeer"}}
+	petitionPeerGUID := guid ^ (uint64(1) << 61)
+	petitionPeer := &session{server: fanoutServer, authed: true, playerLoaded: true, playerGUID: petitionPeerGUID, player: &playerState{GUID: petitionPeerGUID, Map: source.player.Map + 1, InstanceID: source.player.InstanceID, Name: "WorldReadyPetitionPeer"}}
 	groupID := uint64(uint32(source.playerGUID) + 1)
 	if groupID == 0 {
 		groupID = 1
@@ -100,15 +116,28 @@ func validateWorldReadyFanout(server *Server, source *session) error {
 	peer.groupID, peer.player.GuildID = groupID, guildID
 	sender := &session{server: fanoutServer, authed: true, playerLoaded: true, playerGUID: senderGUID, groupID: groupID, player: &playerState{GUID: senderGUID, Map: source.player.Map, InstanceID: source.player.InstanceID, Name: "WorldReadyReplaySender", GuildID: guildID}}
 	group := &groupState{ID: groupID, LeaderGUID: senderGUID, Members: []groupMember{{GUID: senderGUID, Name: sender.player.Name}, {GUID: guid, Name: peer.player.Name}}}
+	petitionGUID := uint64(0x7ffffffe)
+	if _, err := petitionDB.Exec("INSERT INTO petition (ownerguid, petitionguid, name, type) VALUES (?, ?, ?, ?)", int64(senderGUID), int64(petitionGUID), "WorldReadyReplayGuild", 9); err != nil {
+		return fmt.Errorf("insert petition replay row: %w", err)
+	}
+	if _, err := petitionDB.Exec("INSERT INTO petition_sign (petitionguid, playerguid) VALUES (?, ?)", int64(petitionGUID), int64(petitionPeerGUID)); err != nil {
+		return fmt.Errorf("insert petition signature replay row: %w", err)
+	}
+	petitionPayload := protocol.NewBuffer(20)
+	petitionPayload.WriteU32(0)
+	petitionPayload.WriteU64(petitionGUID)
+	petitionPayload.WriteU64(petitionPeerGUID)
 	fanoutServer.sessionsMu.Lock()
 	fanoutServer.sessions[sourcePeer] = struct{}{}
 	fanoutServer.sessions[peer] = struct{}{}
+	fanoutServer.sessions[petitionPeer] = struct{}{}
 	fanoutServer.sessions[sender] = struct{}{}
 	fanoutServer.sessionsMu.Unlock()
 	defer func() {
 		fanoutServer.sessionsMu.Lock()
 		delete(fanoutServer.sessions, sourcePeer)
 		delete(fanoutServer.sessions, peer)
+		delete(fanoutServer.sessions, petitionPeer)
 		delete(fanoutServer.sessions, sender)
 		fanoutServer.sessionsMu.Unlock()
 	}()
@@ -124,10 +153,11 @@ func validateWorldReadyFanout(server *Server, source *session) error {
 		}
 		return count
 	}
-	beforeAttack, beforeGroup, beforeGuild := countOpcode(protocol.OpcodeSMSG_ATTACK_START), countOpcode(protocol.OpcodeSMSG_GROUP_LIST), countOpcode(protocol.OpcodeSMSG_GUILD_EVENT)
+	beforeAttack, beforeGroup, beforeGuild, beforePetition := countOpcode(protocol.OpcodeSMSG_ATTACK_START), countOpcode(protocol.OpcodeSMSG_GROUP_LIST), countOpcode(protocol.OpcodeSMSG_GUILD_EVENT), countOpcode(protocol.OpcodeSMSG_PETITION_SHOW_SIGNATURES)
 	fanoutServer.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(source.playerGUID, guid), sourcePeer)
 	fanoutServer.broadcastGroupList(group)
 	sender.broadcastGuildMemberLogin()
+	sender.handleOfferPetition(context.Background(), petitionPayload.Bytes())
 	if got := countOpcode(protocol.OpcodeSMSG_ATTACK_START); got != beforeAttack {
 		return fmt.Errorf("world-ready fanout sent attack-start to pre-create session: count %d -> %d", beforeAttack, got)
 	}
@@ -137,13 +167,18 @@ func validateWorldReadyFanout(server *Server, source *session) error {
 	if got := countOpcode(protocol.OpcodeSMSG_GUILD_EVENT); got != beforeGuild {
 		return fmt.Errorf("world-ready fanout sent guild event to pre-create session: count %d -> %d", beforeGuild, got)
 	}
+	if got := countOpcode(protocol.OpcodeSMSG_PETITION_SHOW_SIGNATURES); got != beforePetition {
+		return fmt.Errorf("world-ready fanout sent petition signatures to pre-create session: count %d -> %d", beforePetition, got)
+	}
 	peer.worldReady.Store(true)
+	petitionPeer.worldReady.Store(true)
 	if fanoutServer.findSessionByGUID(guid) != peer || fanoutServer.findSessionByName(peer.player.Name) != peer {
 		return errors.New("mapped peer was not available through online-session lookup")
 	}
 	fanoutServer.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(source.playerGUID, guid), sourcePeer)
 	fanoutServer.broadcastGroupList(group)
 	sender.broadcastGuildMemberLogin()
+	sender.handleOfferPetition(context.Background(), petitionPayload.Bytes())
 	if got := countOpcode(protocol.OpcodeSMSG_ATTACK_START); got != beforeAttack+1 {
 		return fmt.Errorf("world-ready fanout did not reach the mapped peer: attack-start count %d -> %d", beforeAttack, got)
 	}
@@ -152,6 +187,17 @@ func validateWorldReadyFanout(server *Server, source *session) error {
 	}
 	if got := countOpcode(protocol.OpcodeSMSG_GUILD_EVENT); got != beforeGuild+1 {
 		return fmt.Errorf("world-ready fanout did not reach the mapped peer: guild-event count %d -> %d", beforeGuild, got)
+	}
+	if got := countOpcode(protocol.OpcodeSMSG_PETITION_SHOW_SIGNATURES); got != beforePetition+1 {
+		return fmt.Errorf("world-ready fanout did not reach the mapped peer: petition-signature count %d -> %d", beforePetition, got)
+	}
+	missingPetition := protocol.NewBuffer(20)
+	missingPetition.WriteU32(0)
+	missingPetition.WriteU64(petitionGUID + 1)
+	missingPetition.WriteU64(petitionPeerGUID)
+	sender.handleOfferPetition(context.Background(), missingPetition.Bytes())
+	if got := countOpcode(protocol.OpcodeSMSG_PETITION_SHOW_SIGNATURES); got != beforePetition+1 {
+		return fmt.Errorf("petition replay emitted signatures for a missing petition: count %d -> %d", beforePetition+1, got)
 	}
 	return nil
 }

@@ -2045,24 +2045,31 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 // sendPetitionShowSignatures sends SMSG_PETITION_SHOW_SIGNATURES (0x1BF).
 // Reference: WorldSession::SendPetitionSigns (PetitionsHandler.cpp:243).
 func (s *session) sendPetitionShowSignatures(target *session, petitionGUID uint64) {
-	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || target == nil || !target.worldReady.Load() {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || target == nil || target.player == nil || !target.worldReady.Load() {
 		return
 	}
 	cdb := s.server.CharactersStore.DB
 
-	var ownerGUID int64
-	_ = cdb.QueryRow("SELECT ownerguid FROM petition WHERE petitionguid = ? LIMIT 1", petitionGUID).Scan(&ownerGUID)
+	var ownerGUID, petitionType int64
+	if err := cdb.QueryRow("SELECT ownerguid, type FROM petition WHERE petitionguid = ? LIMIT 1", petitionGUID).Scan(&ownerGUID, &petitionType); err != nil || petitionType == 9 && target.player.GuildID != 0 {
+		return
+	}
 
 	rows, err := cdb.Query("SELECT playerguid FROM petition_sign WHERE petitionguid = ?", petitionGUID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
 	var signs []uint64
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var pguid int64
-			if err := rows.Scan(&pguid); err == nil {
-				signs = append(signs, uint64(pguid))
-			}
+	for rows.Next() {
+		var pguid int64
+		if err := rows.Scan(&pguid); err != nil {
+			return
 		}
+		signs = append(signs, uint64(pguid))
+	}
+	if rows.Err() != nil {
+		return
 	}
 
 	buf := protocol.NewBuffer(32 + len(signs)*12)
