@@ -810,6 +810,21 @@ func checkExpectedCharacterStateDelta() error {
 	if err := validateCharacterStateDelta(before, after, false); err != nil {
 		return fmt.Errorf("source-expected login/logout changes rejected: %w", err)
 	}
+	accountOnlineBefore := map[string]characterTableSnapshot{
+		"account_characters":  {Rows: 2, Digest: "characters-before", Columns: map[string]string{"guid": "stable-guid-set", "online": "one-online"}},
+		"auth_account_online": {Rows: 1, Digest: "auth-before", Columns: map[string]string{"online": "1"}},
+	}
+	accountOnlineAfter := map[string]characterTableSnapshot{
+		"account_characters":  {Rows: 2, Digest: "characters-after", Columns: map[string]string{"guid": "stable-guid-set", "online": "all-offline"}},
+		"auth_account_online": {Rows: 1, Digest: "auth-after", Columns: map[string]string{"online": "0"}},
+	}
+	if err := validateCharacterStateDelta(accountOnlineBefore, accountOnlineAfter, false); err != nil {
+		return fmt.Errorf("source account-wide online reset was rejected: %w", err)
+	}
+	accountOnlineAfter["account_characters"] = characterTableSnapshot{Rows: 2, Digest: "characters-mutated", Columns: map[string]string{"guid": "changed-guid-set", "online": "all-offline"}}
+	if validateCharacterStateDelta(accountOnlineBefore, accountOnlineAfter, false) == nil {
+		return fmt.Errorf("unrelated account character identity change was accepted")
+	}
 	unchangedColumns := map[string]string{"first": "same", "second": "same"}
 	rowCompositionBefore := map[string]characterTableSnapshot{"characters": {Rows: 1, Digest: "before", Columns: unchangedColumns}}
 	rowCompositionAfter := map[string]characterTableSnapshot{"characters": {Rows: 1, Digest: "after", Columns: unchangedColumns}}
@@ -3981,7 +3996,7 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 			return fmt.Errorf("inject isolated owner pet-aura fixture spell %d: %w", petAuraSourceSpell, err)
 		}
 	}
-	before, err := snapshotCharacterState(stores.Characters.DB, stores.World.DB, guid)
+	before, err := snapshotCharacterState(stores.Characters.DB, stores.World.DB, stores.Auth.DB, guid)
 	if err != nil {
 		server.Stop()
 		return err
@@ -4012,7 +4027,7 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 	}
 	cancel()
 	server.Stop()
-	after, snapshotErr := snapshotCharacterState(stores.Characters.DB, stores.World.DB, guid)
+	after, snapshotErr := snapshotCharacterState(stores.Characters.DB, stores.World.DB, stores.Auth.DB, guid)
 	if tracePath == "" {
 		tracePath = filepath.Join(workDir, "login-replay.jsonl")
 	} else if !filepath.IsAbs(tracePath) {
@@ -4312,6 +4327,8 @@ func validateCharacterStateDelta(before, after map[string]characterTableSnapshot
 	for power := 1; power <= 7; power++ {
 		allowedColumns["characters"][fmt.Sprintf("power%d", power)] = struct{}{}
 	}
+	allowedColumns["account_characters"] = map[string]struct{}{"online": {}}
+	allowedColumns["auth_account_online"] = map[string]struct{}{"online": {}}
 	allowedColumns["character_spell"] = map[string]struct{}{"guid": {}, "spell": {}, "active": {}, "disabled": {}}
 	allowedColumns["character_skills"] = map[string]struct{}{"guid": {}, "skill": {}, "value": {}, "max": {}}
 	allowedColumns["character_fishingsteps"] = map[string]struct{}{"guid": {}, "fishingSteps": {}}
@@ -4367,9 +4384,18 @@ func validateCharacterStateDelta(before, after map[string]characterTableSnapshot
 	return nil
 }
 
-func snapshotCharacterState(db, worldDB *sql.DB, guid uint64) (map[string]characterTableSnapshot, error) {
+func snapshotCharacterState(db, worldDB, authDB *sql.DB, guid uint64) (map[string]characterTableSnapshot, error) {
+	var accountID int64
+	if err := db.QueryRow("SELECT account FROM characters WHERE guid = ?", guid).Scan(&accountID); err != nil {
+		return nil, fmt.Errorf("snapshot account for character %d: %w", guid, err)
+	}
+	authAccount, err := snapshotAuthAccountOnline(authDB, accountID)
+	if err != nil {
+		return nil, err
+	}
 	queries := []struct{ name, sql string }{
 		{"characters", "SELECT * FROM characters WHERE guid = ?"},
+		{"account_characters", "SELECT guid, online FROM characters WHERE account = (SELECT account FROM characters WHERE guid = ?) ORDER BY guid"},
 		{"character_account_data", "SELECT * FROM character_account_data WHERE guid = ?"},
 		{"account_data", "SELECT * FROM account_data WHERE accountId = (SELECT account FROM characters WHERE guid = ?)"},
 		{"account_instance_times", "SELECT * FROM account_instance_times WHERE accountId = (SELECT account FROM characters WHERE guid = ?)"},
@@ -4439,6 +4465,7 @@ func snapshotCharacterState(db, worldDB *sql.DB, guid uint64) (map[string]charac
 		{"quest_tracker", "SELECT * FROM quest_tracker WHERE character_guid = ?"},
 	}
 	result := make(map[string]characterTableSnapshot, len(queries))
+	result["auth_account_online"] = authAccount
 	inventoryRows := map[string]map[string]inventoryRowSnapshot{"character_inventory": {}, "inventory_item_instances": {}}
 	itemTemplateExists := make(map[int64]bool)
 	defer func() {
