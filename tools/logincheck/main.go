@@ -41,6 +41,8 @@ func main() {
 	replayPetCooldownSpell := flag.Uint("replay-pet-cooldown-spell", 0, "after login, assert a saved pet category cooldown rejects this spell")
 	replayPetPowerSpell := flag.Uint("replay-pet-power-spell", 0, "after login, verify a known pet spell spends and reports its DBC power cost")
 	replayPetXPAward := flag.Uint("replay-pet-xp", 0, "after login, apply a hunter-pet XP award and verify fields and persistence")
+	replayPetFeedSpell := flag.Uint("replay-pet-feed-spell", 0, "after login, cast a pet-feed spell against the supplied inventory item")
+	replayPetFeedItem := flag.Uint64("replay-pet-feed-item", 0, "inventory item GUID used by the pet-feed replay")
 	replayTrace := flag.String("trace-out", "", "optional JSONL path for the in-process login trace")
 	flag.Parse()
 	if *selfCheck {
@@ -51,10 +53,17 @@ func main() {
 		return
 	}
 	if *replayWork != "" {
-		if (*replayPetCooldownSpell != 0 && *replayPetPowerSpell != 0) || (*replayPetCooldownSpell != 0 && *replayPetXPAward != 0) || (*replayPetPowerSpell != 0 && *replayPetXPAward != 0) {
+		petFeedRequested := *replayPetFeedSpell != 0 || *replayPetFeedItem != 0
+		petReplayCount := 0
+		for _, requested := range []bool{*replayPetCooldownSpell != 0, *replayPetPowerSpell != 0, *replayPetXPAward != 0, petFeedRequested} {
+			if requested {
+				petReplayCount++
+			}
+		}
+		if petReplayCount > 1 || petFeedRequested && (*replayPetFeedSpell == 0 || *replayPetFeedItem == 0) {
 			fail("choose only one pet replay scenario")
 		}
-		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward)); err != nil {
+		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetFeedSpell), *replayPetFeedItem); err != nil {
 			fail(err.Error())
 		}
 		return
@@ -286,6 +295,9 @@ func runSelfCheck() error {
 	}
 	if err := checkPetProgression(); err != nil {
 		return fmt.Errorf("pet progression check failed: %w", err)
+	}
+	if err := checkPetFoodRules(); err != nil {
+		return fmt.Errorf("pet food rules check failed: %w", err)
 	}
 	if err := checkExpectedCharacterStateDelta(); err != nil {
 		return fmt.Errorf("expected character state delta check failed: %w", err)
@@ -641,27 +653,104 @@ func checkPetProgression() error {
 	return nil
 }
 
+func checkPetFoodRules() error {
+	if !world.PetFoodInDiet(1, 1) || !world.PetFoodInDiet(32, 1<<31) || world.PetFoodInDiet(0, ^uint32(0)) || world.PetFoodInDiet(33, ^uint32(0)) || world.PetFoodInDiet(2, 1) {
+		return fmt.Errorf("pet food mask bit selection mismatch")
+	}
+	for _, test := range []struct{ petLevel, itemLevel, benefit uint32 }{{60, 55, 35000}, {61, 55, 17000}, {69, 55, 8000}, {70, 55, 0}} {
+		if got := world.PetFoodBenefitLevel(test.petLevel, test.itemLevel); got != test.benefit {
+			return fmt.Errorf("pet food benefit pet=%d item=%d got=%d want=%d", test.petLevel, test.itemLevel, got, test.benefit)
+		}
+	}
+	data := wotlk.NewStore(filepath.Join(config.Default().GameDataDir, "dbc"))
+	if mask, found, err := data.CreatureFamilyPetFoodMask(21); err != nil || !found || mask != 58 {
+		return fmt.Errorf("CreatureFamily.dbc family 21 food mask=%d found=%t err=%v want=58", mask, found, err)
+	}
+	return nil
+}
+
 func checkExpectedCharacterStateDelta() error {
 	before := map[string]characterTableSnapshot{
-		"characters":     {Rows: 1, Columns: map[string]string{"level": "a", "position_x": "b"}},
+		"characters":     {Rows: 1, Columns: map[string]string{"level": "a", "position_x": "b", "health": "saved-health", "playerFlags": "saved-flags", "power1": "saved-over-max", "rest_bonus": "saved-rest", "taximask": "saved-mask", "zone": "stale-zone", "at_login": "first-login", "equipmentCache": "saved-cache", "knownTitles": "without-trailing-space", "extra_flags": "saved-gm-state", "map": "stored-transport-map", "trans_x": "old-x", "trans_y": "old-y", "trans_z": "old-z", "trans_o": "old-o", "transguid": "transport"}},
 		"character_aura": {Rows: 2, Columns: map[string]string{"remainTime": "c"}},
 	}
 	after := map[string]characterTableSnapshot{
-		"characters":     {Rows: 1, Columns: map[string]string{"level": "a", "position_x": "d"}},
+		"characters":     {Rows: 1, Columns: map[string]string{"level": "a", "position_x": "d", "health": "derived-max-health", "playerFlags": "restored-group-state", "power1": "derived-max-power", "rest_bonus": "calculated-rest", "taximask": "race-level-node-mask", "zone": "resolved-zone", "at_login": "cleared-first-login", "equipmentCache": "serialized-cache", "knownTitles": "source-serialized", "extra_flags": "config-derived-gm-state", "map": "live-transport-map", "trans_x": "new-x", "trans_y": "new-y", "trans_z": "new-z", "trans_o": "new-o", "transguid": "transport"}},
 		"character_aura": {Rows: 1, Columns: map[string]string{"remainTime": "e"}},
 	}
-	if err := validateCharacterStateDelta(before, after); err != nil {
+	if err := validateCharacterStateDelta(before, after, false); err != nil {
 		return fmt.Errorf("source-expected login/logout changes rejected: %w", err)
 	}
 	unchangedColumns := map[string]string{"first": "same", "second": "same"}
 	rowCompositionBefore := map[string]characterTableSnapshot{"characters": {Rows: 1, Digest: "before", Columns: unchangedColumns}}
 	rowCompositionAfter := map[string]characterTableSnapshot{"characters": {Rows: 1, Digest: "after", Columns: unchangedColumns}}
-	if err := validateCharacterStateDelta(rowCompositionBefore, rowCompositionAfter); err == nil {
+	if err := validateCharacterStateDelta(rowCompositionBefore, rowCompositionAfter, false); err == nil {
 		return fmt.Errorf("row composition change with unchanged column digests was accepted")
 	}
 	after["characters"] = characterTableSnapshot{Rows: 1, Columns: map[string]string{"level": "f", "position_x": "d"}}
-	if err := validateCharacterStateDelta(before, after); err == nil {
+	if err := validateCharacterStateDelta(before, after, false); err == nil {
 		return fmt.Errorf("unclassified characters.level mutation was accepted")
+	}
+	feedBefore := map[string]characterTableSnapshot{
+		"character_inventory":      {Rows: 1, Digest: "inventory-before", Columns: map[string]string{"guid": "owner", "bag": "0", "slot": "29", "item": "food"}},
+		"inventory_item_instances": {Rows: 1, Digest: "item-before", Columns: map[string]string{"guid": "food", "itemEntry": "entry", "owner_guid": "owner", "creatorGuid": "zero", "giftCreatorGuid": "zero", "count": "1", "duration": "0", "charges": "", "flags": "0", "enchantments": "", "randomPropertyId": "0", "durability": "100", "playedTime": "0", "text": ""}},
+		"character_pet":            {Rows: 1, Digest: "pet-before", Columns: map[string]string{"level": "53", "exp": "0", "curhappiness": "0"}},
+		"pet_aura":                 {Rows: 0, Digest: "aura-before", Columns: map[string]string{}},
+	}
+	feedAfter := map[string]characterTableSnapshot{
+		"character_inventory":      {Rows: 0, Digest: "inventory-after", Columns: map[string]string{"guid": "", "bag": "", "slot": "", "item": ""}},
+		"inventory_item_instances": {Rows: 0, Digest: "item-after", Columns: map[string]string{"guid": "", "itemEntry": "", "owner_guid": "", "creatorGuid": "", "giftCreatorGuid": "", "count": "", "duration": "", "charges": "", "flags": "", "enchantments": "", "randomPropertyId": "", "durability": "", "playedTime": "", "text": ""}},
+		"character_pet":            {Rows: 1, Digest: "pet-after", Columns: map[string]string{"level": "53", "exp": "0", "curhappiness": "35000"}},
+		"pet_aura":                 {Rows: 1, Digest: "aura-after", Columns: map[string]string{"guid": "pet", "casterGuid": "owner", "spell": "1539", "effectMask": "1", "recalculateMask": "0", "stackCount": "1", "amount0": "35000", "amount1": "0", "amount2": "0", "base_amount0": "34999", "base_amount1": "0", "base_amount2": "0", "maxDuration": "30000", "remainTime": "30000", "remainCharges": "0", "critChance": "0", "applyResilience": "0"}},
+	}
+	invalidInventoryBefore := map[string]characterTableSnapshot{"character_inventory": feedBefore["character_inventory"], "inventory_item_instances": feedBefore["inventory_item_instances"]}
+	invalidInventoryAfter := map[string]characterTableSnapshot{"character_inventory": feedAfter["character_inventory"], "inventory_item_instances": feedAfter["inventory_item_instances"]}
+	if err := validateCharacterStateDelta(invalidInventoryBefore, invalidInventoryAfter, false); err != nil {
+		return fmt.Errorf("source invalid-item cleanup was rejected: %w", err)
+	}
+	if err := validateCharacterStateDelta(feedBefore, feedAfter, false); err == nil {
+		return fmt.Errorf("pet happiness update outside pet-feed replay was accepted")
+	}
+	if err := validateCharacterStateDelta(feedBefore, feedAfter, true); err != nil {
+		return fmt.Errorf("pet-feed inventory consumption was rejected: %w", err)
+	}
+	cooldownBefore := map[string]characterTableSnapshot{"character_spell_cooldown": {Rows: 1, Columns: map[string]string{"guid": "owner", "spell": "expired", "item": "0", "time": "old", "categoryId": "0", "categoryEnd": "old"}}}
+	cooldownExpired := map[string]characterTableSnapshot{"character_spell_cooldown": {Rows: 0, Columns: map[string]string{"guid": "", "spell": "", "item": "", "time": "", "categoryId": "", "categoryEnd": ""}}}
+	if err := validateCharacterStateDelta(cooldownBefore, cooldownExpired, false); err != nil {
+		return fmt.Errorf("source expired cooldown cleanup was rejected: %w", err)
+	}
+	cooldownUnknown := map[string]characterTableSnapshot{"character_spell_cooldown": {Rows: 1, Columns: map[string]string{"guid": "owner", "spell": "expired", "item": "0", "time": "old", "categoryId": "0", "categoryEnd": "old", "unexpected": "unclassified"}}}
+	if validateCharacterStateDelta(cooldownBefore, cooldownUnknown, false) == nil {
+		return fmt.Errorf("unclassified spell cooldown column was accepted")
+	}
+	loginAchievementBefore := map[string]characterTableSnapshot{
+		"character_achievement":          {Rows: 0, Columns: map[string]string{}},
+		"character_achievement_progress": {Rows: 0, Columns: map[string]string{}},
+	}
+	loginAchievementAfter := map[string]characterTableSnapshot{
+		"character_achievement":          {Rows: 1, Columns: map[string]string{"guid": "owner", "achievement": "achievement", "date": "login-time"}},
+		"character_achievement_progress": {Rows: 1, Columns: map[string]string{"guid": "owner", "criteria": "criteria", "counter": "1", "date": "login-time"}},
+	}
+	if err := validateCharacterStateDelta(loginAchievementBefore, loginAchievementAfter, false); err != nil {
+		return fmt.Errorf("source ON_LOGIN achievement mutations were rejected: %w", err)
+	}
+	loginAchievementAfter["character_achievement"] = characterTableSnapshot{Rows: 1, Columns: map[string]string{"guid": "owner", "achievement": "achievement", "date": "login-time", "private": "unclassified"}}
+	if err := validateCharacterStateDelta(loginAchievementBefore, loginAchievementAfter, false); err == nil {
+		return fmt.Errorf("unclassified character achievement column was accepted")
+	}
+	defaultSpellBefore := map[string]characterTableSnapshot{"character_spell": {Rows: 0, Columns: map[string]string{}}}
+	defaultSpellAfter := map[string]characterTableSnapshot{"character_spell": {Rows: 1, Columns: map[string]string{"guid": "owner", "spell": "skill-default", "active": "1", "disabled": "0"}}}
+	if err := validateCharacterStateDelta(defaultSpellBefore, defaultSpellAfter, false); err != nil {
+		return fmt.Errorf("source learned-default-spell mutation was rejected: %w", err)
+	}
+	defaultSpellAfter["character_spell"] = characterTableSnapshot{Rows: 1, Columns: map[string]string{"guid": "owner", "spell": "skill-default", "active": "1", "disabled": "0", "unexpected": "unclassified"}}
+	if err := validateCharacterStateDelta(defaultSpellBefore, defaultSpellAfter, false); err == nil {
+		return fmt.Errorf("unclassified character spell column was accepted")
+	}
+	invalidSkillBefore := map[string]characterTableSnapshot{"character_skills": {Rows: 1, Columns: map[string]string{"guid": "owner", "skill": "invalid-race-class", "value": "400", "max": "400"}}}
+	invalidSkillAfter := map[string]characterTableSnapshot{"character_skills": {Rows: 0, Columns: map[string]string{"guid": "", "skill": "", "value": "", "max": ""}}}
+	if err := validateCharacterStateDelta(invalidSkillBefore, invalidSkillAfter, false); err != nil {
+		return fmt.Errorf("source invalid-skill removal was rejected: %w", err)
 	}
 	return nil
 }
@@ -3642,7 +3731,7 @@ func eventPayload(event protocoltrace.Event) ([]byte, error) {
 	return protocoltrace.Trace{Events: []protocoltrace.Event{event}}.Payload(event)
 }
 
-func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward uint32) error {
+func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petFeedSpell uint32, petFoodGUID uint64) error {
 	workDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return err
@@ -3701,6 +3790,8 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 		trace, replayErr = world.ReplayCharacterPetPower(ctx, server, guid, petPowerSpell)
 	} else if petXPAward != 0 {
 		trace, replayErr = world.ReplayCharacterPetXP(ctx, server, guid, petXPAward)
+	} else if petFeedSpell != 0 {
+		trace, replayErr = world.ReplayCharacterPetFeed(ctx, server, guid, petFeedSpell, petFoodGUID)
 	} else {
 		trace, replayErr = world.ReplayCharacterLogin(ctx, server, guid)
 	}
@@ -3730,7 +3821,7 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 	if snapshotErr != nil {
 		return snapshotErr
 	}
-	if err := validateCharacterStateDelta(before, after); err != nil {
+	if err := validateCharacterStateDelta(before, after, petFeedSpell != 0); err != nil {
 		return fmt.Errorf("real-character state delta mismatch (trace saved): %w", err)
 	}
 	beforeCharacter, beforeFound := before["characters"]
@@ -3767,6 +3858,8 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 		fmt.Printf("real-character pet power replay passed spell=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", petPowerSpell, len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
 	} else if petXPAward != 0 {
 		fmt.Printf("real-character pet XP replay passed award=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", petXPAward, len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
+	} else if petFeedSpell != 0 {
+		fmt.Printf("real-character pet feed replay passed spell=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", petFeedSpell, len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
 	} else {
 		fmt.Printf("real-character login replay passed lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
 	}
@@ -3937,14 +4030,44 @@ func changedCharacterColumns(before, after characterTableSnapshot) []string {
 	return changed
 }
 
-func validateCharacterStateDelta(before, after map[string]characterTableSnapshot) error {
+func validateCharacterStateDelta(before, after map[string]characterTableSnapshot, allowPetFeedProgress bool) error {
 	allowedColumns := map[string]map[string]struct{}{
-		"characters":     {"exploredZones": {}, "orientation": {}, "position_x": {}, "position_y": {}, "position_z": {}},
-		"character_aura": {"remainTime": {}},
-		"character_pet":  {"curhealth": {}, "curmana": {}, "exp": {}, "level": {}, "savetime": {}},
-		"pet_spell":      {"active": {}, "guid": {}, "spell": {}},
+		"characters":                     {"exploredZones": {}, "orientation": {}, "position_x": {}, "position_y": {}, "position_z": {}},
+		"character_achievement":          {"guid": {}, "achievement": {}, "date": {}},
+		"character_achievement_progress": {"guid": {}, "criteria": {}, "counter": {}, "date": {}},
+		"character_aura":                 {"guid": {}, "casterGuid": {}, "itemGuid": {}, "spell": {}, "effectMask": {}, "recalculateMask": {}, "stackCount": {}, "amount0": {}, "amount1": {}, "amount2": {}, "base_amount0": {}, "base_amount1": {}, "base_amount2": {}, "maxDuration": {}, "remainTime": {}, "remainCharges": {}, "critChance": {}, "applyResilience": {}},
+		"character_pet":                  {"curhealth": {}, "curmana": {}, "exp": {}, "level": {}, "savetime": {}},
+		"pet_aura":                       {"guid": {}, "casterGuid": {}, "spell": {}, "effectMask": {}, "recalculateMask": {}, "stackCount": {}, "amount0": {}, "amount1": {}, "amount2": {}, "base_amount0": {}, "base_amount1": {}, "base_amount2": {}, "maxDuration": {}, "remainTime": {}, "remainCharges": {}, "critChance": {}, "applyResilience": {}},
+		"pet_spell":                      {"active": {}, "guid": {}, "spell": {}},
 	}
-	allowedRowChanges := map[string]bool{"character_aura": true, "pet_spell": true}
+	allowedColumns["characters"]["health"] = struct{}{}
+	allowedColumns["characters"]["equipmentCache"] = struct{}{}
+	allowedColumns["characters"]["extra_flags"] = struct{}{}
+	allowedColumns["characters"]["knownTitles"] = struct{}{}
+	allowedColumns["characters"]["at_login"] = struct{}{}
+	allowedColumns["characters"]["latency"] = struct{}{}
+	allowedColumns["characters"]["map"] = struct{}{}
+	allowedColumns["characters"]["playerFlags"] = struct{}{}
+	allowedColumns["characters"]["rest_bonus"] = struct{}{}
+	allowedColumns["characters"]["taximask"] = struct{}{}
+	for _, column := range []string{"trans_x", "trans_y", "trans_z", "trans_o", "transguid"} {
+		allowedColumns["characters"][column] = struct{}{}
+	}
+	allowedColumns["characters"]["zone"] = struct{}{}
+	for power := 1; power <= 7; power++ {
+		allowedColumns["characters"][fmt.Sprintf("power%d", power)] = struct{}{}
+	}
+	allowedColumns["character_spell"] = map[string]struct{}{"guid": {}, "spell": {}, "active": {}, "disabled": {}}
+	allowedColumns["character_skills"] = map[string]struct{}{"guid": {}, "skill": {}, "value": {}, "max": {}}
+	allowedColumns["character_spell_cooldown"] = map[string]struct{}{"guid": {}, "spell": {}, "item": {}, "time": {}, "categoryId": {}, "categoryEnd": {}}
+	allowedColumns["character_inventory"] = map[string]struct{}{"guid": {}, "bag": {}, "slot": {}, "item": {}}
+	allowedColumns["inventory_item_instances"] = map[string]struct{}{"guid": {}, "itemEntry": {}, "owner_guid": {}, "creatorGuid": {}, "giftCreatorGuid": {}, "count": {}, "duration": {}, "charges": {}, "flags": {}, "enchantments": {}, "randomPropertyId": {}, "durability": {}, "playedTime": {}, "text": {}}
+	allowedRowChanges := map[string]bool{"character_achievement": true, "character_achievement_progress": true, "character_aura": true, "character_inventory": true, "character_spell_cooldown": true, "inventory_item_instances": true, "pet_aura": true, "pet_spell": true}
+	allowedRowChanges["character_spell"] = true
+	allowedRowChanges["character_skills"] = true
+	if allowPetFeedProgress {
+		allowedColumns["character_pet"]["curhappiness"] = struct{}{}
+	}
 	for table, beforeTable := range before {
 		afterTable, exists := after[table]
 		if !exists {

@@ -24,11 +24,15 @@ const (
 	spellAttr3ReqWand      uint32 = 0x00400000 // SPELL_ATTR3_REQ_WAND: Requires equipped Wand (SharedDefines.h:545)
 	spellAttr5HideDuration uint32 = 0x00000400 // SPELL_ATTR5_HIDE_DURATION (SharedDefines.h:607)
 
-	spellFailedEquippedItemClass         uint8 = 29  // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
-	spellFailedEquippedItemClassMainhand uint8 = 30  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
-	spellFailedEquippedItemClassOffhand  uint8 = 31  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND (SharedDefines.h:1013)
-	spellFailedNotInFront                uint8 = 61  // SPELL_FAILED_NOT_INFRONT (SharedDefines.h:1042)
-	spellFailedBadTargets                uint8 = 12  // SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992)
+	spellFailedEquippedItemClass         uint8 = 29 // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
+	spellFailedEquippedItemClassMainhand uint8 = 30 // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
+	spellFailedEquippedItemClassOffhand  uint8 = 31 // SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND (SharedDefines.h:1013)
+	spellFailedNotInFront                uint8 = 61 // SPELL_FAILED_NOT_INFRONT (SharedDefines.h:1042)
+	spellFailedBadTargets                uint8 = 12 // SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992)
+	spellFailedAffectingCombat           uint8 = 1
+	spellFailedFoodLowLevel              uint8 = 35
+	spellFailedNoPet                     uint8 = 84
+	spellFailedWrongPetFood              uint8 = 135
 	spellFailedNotReady                  uint8 = 67  // SPELL_FAILED_NOT_READY (SharedDefines.h:1049)
 	spellFailedSilenced                  uint8 = 104 // SPELL_FAILED_SILENCED (SharedDefines.h:1086)
 	spellFailedCasterDead                uint8 = 23  // SPELL_FAILED_CASTER_DEAD (SharedDefines.h:1003)
@@ -338,6 +342,16 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if isFishingSpell(spellID) && target.Flags&protocol.SpellTargetFlagDestLocation == 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotFishable), true)
 		return true
+	}
+	for _, effect := range spell.Effects {
+		if effect.Effect != 101 {
+			continue
+		}
+		if _, failure := s.checkPetFood(ctx, target.ItemGUID); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "pet food validation", "failure", failure)
+			return true
+		}
 	}
 	cost := s.calculateSpellPowerCost(spell)
 	pType := spell.PowerType
@@ -737,7 +751,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 		interruptHandled := false
 		damageEffectSeen := false
-		for _, eff := range spell.Effects {
+		for effectIndex, eff := range spell.Effects {
 			if eff.Effect == 0 {
 				continue
 			}
@@ -870,7 +884,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case 28: // SPELL_EFFECT_SUMMON
 				s.handleSummonPet(effCtx, spellID, uint32(eff.MiscValue))
 			case 101: // SPELL_EFFECT_FEED_PET
-				s.handleFeedPet(effCtx, spellID)
+				s.handleFeedPet(effCtx, spellID, target.ItemGUID, eff.TriggerSpell, uint8(effectIndex))
 			case 102: // SPELL_EFFECT_DISMISS_PET
 				s.handleDismissPet(effCtx)
 			case 109: // SPELL_EFFECT_RESURRECT_PET
@@ -1278,6 +1292,15 @@ func (s *session) castFirstLoginSpell(ctx context.Context, spellID uint32, targe
 }
 
 func (s *session) castSpellDirectWithOptions(ctx context.Context, spellID uint32, targetGUID uint64, firstLogin bool) {
+	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, firstLogin, nil)
+}
+
+func (s *session) castSpellDirectWithBasePoint(ctx context.Context, spellID uint32, targetGUID uint64, basePoint uint32) {
+	value := int32(basePoint)
+	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, &value)
+}
+
+func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint32, targetGUID uint64, firstLogin bool, basePoint0 *int32) {
 	if s == nil || s.player == nil || spellID == 0 {
 		return
 	}
@@ -1296,6 +1319,9 @@ func (s *session) castSpellDirectWithOptions(ctx context.Context, spellID uint32
 	}
 	if !found {
 		spell = wotlk.Spell{ID: spellID}
+	}
+	if basePoint0 != nil && len(spell.Effects) != 0 {
+		spell.Effects[0].BasePoints = *basePoint0 - 1
 	}
 
 	castID := uint8(1)
@@ -1468,6 +1494,47 @@ func (s *session) spellPowerTarget(targetGUID uint64) *session {
 func (s *session) adjustSpellPower(ctx context.Context, targetGUID uint64, powerType int32, delta int64) {
 	if s == nil || s.player == nil || powerType < 0 || powerType >= 7 || delta == 0 {
 		return
+	}
+	if s.server != nil && targetGUID != 0 && targetGUID != s.playerGUID {
+		s.server.motionMu.Lock()
+		motion := s.server.creatureMotion[targetGUID]
+		if motion == nil {
+			low := uint32(targetGUID & 0x00FFFFFF)
+			entry := uint32((targetGUID >> 24) & 0x00FFFFFF)
+			motion = s.server.creatureMotion[creatureWorldGUID(low, entry)]
+		}
+		if motion != nil && motion.PetID != 0 && motion.Health > 0 {
+			index := uint32(powerType)
+			maximum, old := motion.MaxPowers[index], motion.Powers[index]
+			if maximum != 0 {
+				var next uint32
+				if delta < 0 {
+					drain := uint64(-(delta + 1)) + 1
+					if drain >= uint64(old) {
+						next = 0
+					} else {
+						next = old - uint32(drain)
+					}
+				} else if delta >= int64(maximum-old) {
+					next = maximum
+				} else {
+					next = old + uint32(delta)
+				}
+				if next != old {
+					motion.Powers[index] = next
+					if index == 0 {
+						motion.Mana = next
+					} else if index == 4 {
+						motion.Happiness = next
+					}
+					mapID, petGUID := motion.Map, motion.GUID
+					s.server.motionMu.Unlock()
+					s.server.broadcastCreatureValuesUpdate(mapID, petGUID, map[int]uint32{unitFieldPower1 + int(index): next})
+					return
+				}
+			}
+		}
+		s.server.motionMu.Unlock()
 	}
 	target := s.spellPowerTarget(targetGUID)
 	if target == nil || target.player == nil || target.player.Health == 0 {
@@ -2967,7 +3034,8 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 
 	case 24: // SPELL_AURA_PERIODIC_ENERGIZE
-		logPkt := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, 0, aura.Amount)
+		powerType := uint32(aura.MiscValue)
+		logPkt := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, powerType, aura.Amount)
 		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if ts.server != nil {
 			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
@@ -2975,6 +3043,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			}
 			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, ts)
 		}
+		ts.adjustSpellPower(context.Background(), aura.TargetGUID, aura.MiscValue, int64(aura.Amount))
 	}
 }
 
@@ -3170,11 +3239,13 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		return true
 
 	case 24: // SPELL_AURA_PERIODIC_ENERGIZE
-		logPkt := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, 0, aura.Amount)
+		powerType := uint32(aura.MiscValue)
+		logPkt := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, powerType, aura.Amount)
 		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if s.server != nil {
 			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
 		}
+		s.adjustSpellPower(ctx, aura.TargetGUID, aura.MiscValue, int64(aura.Amount))
 		return true
 	}
 	return true
@@ -3804,7 +3875,7 @@ func (s *session) activateSpec(ctx context.Context, targetSpec uint8) {
 	}
 
 	// 5. Load and send action buttons for new spec
-	if actions, err := s.loadActionButtons(ctx, s.playerGUID, s.player.Race, s.player.Class, s.player.Spells); err == nil {
+	if actions, err := s.loadActionButtons(ctx, s.playerGUID, s.player.Spells); err == nil {
 		s.player.Actions = actions
 		s.sendActionButtons()
 	}

@@ -42,6 +42,23 @@ func AdvanceHunterPetExperience(level, currentXP, earnedXP, maxLevel, currentNex
 	return level, xp, nextLevelXP
 }
 
+func PetFoodInDiet(foodType, foodMask uint32) bool {
+	return foodType > 0 && foodType <= 32 && foodMask&(uint32(1)<<(foodType-1)) != 0
+}
+
+func PetFoodBenefitLevel(petLevel, itemLevel uint32) uint32 {
+	if petLevel <= itemLevel+5 {
+		return 35000
+	}
+	if petLevel <= itemLevel+10 {
+		return 17000
+	}
+	if petLevel <= itemLevel+14 {
+		return 8000
+	}
+	return 0
+}
+
 func (s *session) applyPetLevel(ctx context.Context, petID, entry uint32, petType uint8, oldLevel, newLevel, experience, nextLevelXP uint32) bool {
 	if s == nil || s.server == nil || s.player == nil || petID == 0 || entry == 0 || newLevel == 0 || oldLevel == newLevel || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return false

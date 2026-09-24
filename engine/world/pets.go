@@ -1247,17 +1247,88 @@ func (s *session) handleTameCreature(ctx context.Context, spellID uint32, target
 	s.spawnPet(ctx, newPetID, targetEntry, cName, petLevel, modelID, maxHP, maxHP, maxMP, maxMP, 1)
 }
 
-func (s *session) handleFeedPet(ctx context.Context, spellID uint32) {
-	if s.player == nil || s.player.PetGUID == 0 {
+type petFeedState struct {
+	PetGUID   uint64
+	PetID     uint32
+	ItemGUID  uint64
+	ItemEntry uint32
+	Benefit   uint32
+}
+
+func (s *session) checkPetFood(ctx context.Context, itemGUID uint64) (petFeedState, uint8) {
+	if s == nil || s.player == nil || s.server == nil || itemGUID == 0 || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return petFeedState{}, spellFailedBadTargets
+	}
+	var itemEntry, itemCount, foodType, itemLevel int64
+	err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT ii.itemEntry, ii.count FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ci.item = ? LIMIT 1`, s.playerGUID, int64(itemGUID)).Scan(&itemEntry, &itemCount)
+	if err != nil || itemEntry <= 0 || itemCount <= 0 || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return petFeedState{}, spellFailedBadTargets
+	}
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT FoodType, ItemLevel FROM item_template WHERE entry = ?", itemEntry).Scan(&foodType, &itemLevel); err != nil || foodType < 0 || itemLevel < 0 {
+		return petFeedState{}, spellFailedBadTargets
+	}
+	s.server.motionMu.Lock()
+	motion := s.server.creatureMotion[s.player.PetGUID]
+	petGUID, petID, petEntry, petLevel := uint64(0), uint32(0), uint32(0), uint32(0)
+	petInCombat := false
+	if motion != nil && motion.OwnerGUID == s.playerGUID {
+		petGUID, petID, petEntry, petLevel = motion.GUID, motion.PetID, motion.Entry, motion.Level
+		petInCombat = motion.InCombat || motion.UnitFlags&unitFlagInCombat != 0
+	}
+	s.server.motionMu.Unlock()
+	if petGUID == 0 {
+		return petFeedState{}, spellFailedNoPet
+	}
+	var family int64
+	if s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT family FROM creature_template WHERE entry = ?", petEntry).Scan(&family) != nil || family <= 0 || s.server.Data == nil {
+		return petFeedState{}, spellFailedWrongPetFood
+	}
+	foodMask, found, err := s.server.Data.CreatureFamilyPetFoodMask(uint32(family))
+	if err != nil || !found || !PetFoodInDiet(uint32(foodType), foodMask) {
+		return petFeedState{}, spellFailedWrongPetFood
+	}
+	benefit := PetFoodBenefitLevel(petLevel, uint32(itemLevel))
+	if benefit == 0 {
+		return petFeedState{}, spellFailedFoodLowLevel
+	}
+	if s.player.UnitFlags&unitFlagInCombat != 0 || petInCombat {
+		return petFeedState{}, spellFailedAffectingCombat
+	}
+	return petFeedState{PetGUID: petGUID, PetID: petID, ItemGUID: itemGUID, ItemEntry: uint32(itemEntry), Benefit: benefit}, 0
+}
+
+func (s *session) handleFeedPet(ctx context.Context, spellID uint32, itemGUID uint64, triggerSpell uint32, effectIndex uint8) {
+	feed, failure := s.checkPetFood(ctx, itemGUID)
+	if failure != 0 || feed.PetGUID == 0 || triggerSpell == 0 || s.server.Data == nil {
 		return
 	}
-	petID := s.activePetNumber()
-	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil && petID != 0 {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
-			"UPDATE character_pet SET curhappiness = MIN(curhappiness + 333000, 1050000) WHERE owner = ? AND id = ?",
-			s.playerGUID, petID)
+	spell, found, err := s.server.Data.Spell(triggerSpell)
+	if err != nil || !found || len(spell.Effects) == 0 {
+		return
 	}
-	s.debug("pet fed", "account", s.accountName, "petID", petID)
+	s.server.motionMu.Lock()
+	motion := s.server.creatureMotion[feed.PetGUID]
+	petAlive := motion != nil && motion.OwnerGUID == s.playerGUID && motion.Health != 0
+	s.server.motionMu.Unlock()
+	if !petAlive {
+		return
+	}
+	log := protocol.NewBuffer(32)
+	log.WritePackedGUID(s.playerGUID)
+	log.WriteU32(spellID)
+	log.WriteU32(1)
+	log.WriteU32(101)
+	log.WriteU32(1)
+	log.WriteU32(feed.ItemEntry)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
+	}
+	if !s.consumeInventoryItemByGUID(ctx, feed.ItemGUID, 1) {
+		return
+	}
+	s.castSpellDirectWithBasePoint(ctx, triggerSpell, feed.PetGUID, feed.Benefit)
+	s.debug("pet fed", "account", s.accountName, "petID", s.activePetNumber(), "item", feed.ItemEntry, "benefit", feed.Benefit, "effect", effectIndex)
 }
 
 var stableSlotPrices = []uint32{

@@ -14,31 +14,38 @@ import (
 )
 
 func ReplayCharacterLogin(ctx context.Context, server *Server, guid uint64) (protocoltrace.Trace, error) {
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0)
 }
 
 func ReplayCharacterPetCooldown(ctx context.Context, server *Server, guid uint64, spellID uint32) (protocoltrace.Trace, error) {
 	if spellID == 0 {
 		return protocoltrace.Trace{}, errors.New("pet cooldown replay requires a spell ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, spellID, 0, 0)
+	return replayCharacterLogin(ctx, server, guid, spellID, 0, 0, 0, 0)
 }
 
 func ReplayCharacterPetPower(ctx context.Context, server *Server, guid uint64, spellID uint32) (protocoltrace.Trace, error) {
 	if spellID == 0 {
 		return protocoltrace.Trace{}, errors.New("pet power replay requires a spell ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, spellID, 0)
+	return replayCharacterLogin(ctx, server, guid, 0, spellID, 0, 0, 0)
 }
 
 func ReplayCharacterPetXP(ctx context.Context, server *Server, guid uint64, earnedXP uint32) (protocoltrace.Trace, error) {
 	if earnedXP == 0 {
 		return protocoltrace.Trace{}, errors.New("pet XP replay requires an XP award")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, earnedXP)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, earnedXP, 0, 0)
 }
 
-func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petCooldownSpell, petPowerSpell, petXPAward uint32) (protocoltrace.Trace, error) {
+func ReplayCharacterPetFeed(ctx context.Context, server *Server, guid uint64, feedSpell uint32, foodItemGUID uint64) (protocoltrace.Trace, error) {
+	if feedSpell == 0 || foodItemGUID == 0 {
+		return protocoltrace.Trace{}, errors.New("pet feed replay requires a spell and item GUID")
+	}
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, feedSpell, foodItemGUID)
+}
+
+func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petCooldownSpell, petPowerSpell, petXPAward, petFeedSpell uint32, petFoodGUID uint64) (protocoltrace.Trace, error) {
 	if server == nil || server.CharactersStore == nil || server.CharactersStore.DB == nil || guid == 0 {
 		return protocoltrace.Trace{}, errors.New("login replay requires a server and character database")
 	}
@@ -246,6 +253,133 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 			return recorder.Snapshot(), fmt.Errorf("pet XP replay mismatch expected=(%d,%d) actual=(%d,%d) saved=(%d,%d) update=%t", expectedLevel, expectedXP, actualLevel, actualXP, savedLevel, savedXP, updatedPet)
 		}
 		return recorder.Snapshot(), nil
+	}
+	if petFeedSpell != 0 {
+		spell, found, err := server.Data.Spell(petFeedSpell)
+		if err != nil || !found || !session.hasActiveSpell(petFeedSpell) {
+			session.logout()
+			return recorder.Snapshot(), errors.New("pet feed replay spell was not loaded and learned")
+		}
+		var feedEffect *wotlk.SpellEffect
+		for index := range spell.Effects {
+			if spell.Effects[index].Effect == 101 {
+				feedEffect = &spell.Effects[index]
+				break
+			}
+		}
+		if feedEffect == nil || feedEffect.TriggerSpell == 0 {
+			session.logout()
+			return recorder.Snapshot(), errors.New("pet feed replay spell has no feed effect or triggered spell")
+		}
+		var originalItemCount int64
+		if err := server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE((SELECT count FROM item_instance WHERE guid = ?), 0)", int64(petFoodGUID)).Scan(&originalItemCount); err != nil || originalItemCount <= 0 {
+			session.logout()
+			return recorder.Snapshot(), errors.New("pet feed replay food item was not present")
+		}
+		beforeFeed, failure := session.checkPetFood(ctx, petFoodGUID)
+		if failure != 0 {
+			session.logout()
+			return recorder.Snapshot(), fmt.Errorf("pet feed fixture rejected with source cast result %d", failure)
+		}
+		server.motionMu.Lock()
+		motion := server.creatureMotion[beforeFeed.PetGUID]
+		if motion == nil || motion.Health == 0 {
+			server.motionMu.Unlock()
+			session.logout()
+			return recorder.Snapshot(), errors.New("pet feed replay requires a living pet")
+		}
+		beforeHappiness := motion.Happiness
+		beforePetType, beforePetID, beforePowerType := motion.PetType, motion.PetID, motion.PowerType
+		beforeMaxHappiness := motion.MaxPowers[4]
+		petGUID := motion.GUID
+		server.motionMu.Unlock()
+		cast := protocol.NewBuffer(32)
+		cast.WriteU8(1)
+		cast.WriteU32(petFeedSpell)
+		cast.WriteU8(0)
+		protocol.WriteSpellTargetData(cast, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagItemWireMask, ItemGUID: petFoodGUID})
+		recorder.Record(protocoltrace.ClientToServer, uint32(protocol.OpcodeCMSG_CAST_SPELL), cast.Bytes(), "pet-feed-item-target")
+		if !session.handleCastSpell(ctx, cast.Bytes()) {
+			session.logout()
+			return recorder.Snapshot(), errors.New("pet feed cast handler rejected the replay packet")
+		}
+		server.motionMu.Lock()
+		castMotion := server.creatureMotion[petGUID]
+		castPetType, castPetID, castMaxHappiness := uint8(0), uint32(0), uint32(0)
+		if castMotion != nil {
+			castPetType, castPetID, castMaxHappiness = castMotion.PetType, castMotion.PetID, castMotion.MaxPowers[4]
+		}
+		server.motionMu.Unlock()
+		deadline := time.Now().Add(2 * time.Second)
+		var aura *activeAura
+		for aura == nil && time.Now().Before(deadline) {
+			server.auraMu.Lock()
+			aura = server.activeCreatureAuras[petGUID][feedEffect.TriggerSpell]
+			if aura != nil && aura.TickTimer != nil {
+				aura.TickTimer.Stop()
+				aura.TickTimer = nil
+			}
+			server.auraMu.Unlock()
+			if aura == nil {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+		if aura == nil || aura.AuraType != 24 || aura.MiscValue != 4 || aura.Amount != beforeFeed.Benefit {
+			session.logout()
+			return recorder.Snapshot(), errors.New("pet feed triggered happiness aura did not match the DBC benefit")
+		}
+		if !session.executePeriodicTickOnCreature(aura) {
+			session.logout()
+			return recorder.Snapshot(), errors.New("pet feed happiness aura tick was rejected")
+		}
+		trace := recorder.Snapshot()
+		server.motionMu.Lock()
+		motion = server.creatureMotion[petGUID]
+		afterHappiness := uint32(0)
+		afterPower, maxHappiness := uint32(0), uint32(0)
+		afterPetType, afterPetID, afterPowerType := uint8(0), uint32(0), uint32(0)
+		if motion != nil {
+			afterHappiness = motion.Happiness
+			afterPower, maxHappiness = motion.Powers[4], motion.MaxPowers[4]
+			afterPetType, afterPetID, afterPowerType = motion.PetType, motion.PetID, motion.PowerType
+		}
+		server.motionMu.Unlock()
+		var remainingCount, remainingInventoryRows int64
+		if err := server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE((SELECT count FROM item_instance WHERE guid = ?), 0)", int64(petFoodGUID)).Scan(&remainingCount); err != nil {
+			session.logout()
+			return recorder.Snapshot(), err
+		}
+		if err := server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_inventory WHERE guid = ? AND item = ?", guid, int64(petFoodGUID)).Scan(&remainingInventoryRows); err != nil {
+			session.logout()
+			return recorder.Snapshot(), err
+		}
+		session.logout()
+		var savedHappiness int64
+		if err := server.CharactersStore.DB.QueryRowContext(ctx, "SELECT curhappiness FROM character_pet WHERE id = ? AND owner = ?", beforeFeed.PetID, guid).Scan(&savedHappiness); err != nil {
+			return recorder.Snapshot(), err
+		}
+		updatedPacket := false
+		spellLogPacket := false
+		for _, event := range trace.Events {
+			if event.Direction != protocoltrace.ServerToClient {
+				continue
+			}
+			if event.Opcode == uint32(protocol.OpcodeSMSG_UPDATE_OBJECT) {
+				updatedPacket = true
+			}
+			if event.Opcode == uint32(protocol.OpcodeSMSG_SPELLLOGEXECUTE) {
+				spellLogPacket = true
+			}
+		}
+		expectedRemainingCount := originalItemCount - 1
+		expectedInventoryRows := int64(1)
+		if expectedRemainingCount == 0 {
+			expectedInventoryRows = 0
+		}
+		if afterHappiness != beforeHappiness+beforeFeed.Benefit || uint32(savedHappiness) != afterHappiness || remainingCount != expectedRemainingCount || remainingInventoryRows != expectedInventoryRows || !updatedPacket || !spellLogPacket {
+			return trace, fmt.Errorf("pet feed replay mismatch happiness=%d->%d power=%d/%d pet-before=(type:%d id:%d power:%d max-happiness:%d) pet-after-cast=(type:%d id:%d max-happiness:%d) pet-after-tick=(type:%d id:%d power:%d) aura=(target:%d type:%d misc:%d amount:%d) saved=%d item-count=%d->%d inventory-rows=%d update=%t spell-log=%t", beforeHappiness, afterHappiness, afterPower, maxHappiness, beforePetType, beforePetID, beforePowerType, beforeMaxHappiness, castPetType, castPetID, castMaxHappiness, afterPetType, afterPetID, afterPowerType, aura.TargetGUID, aura.AuraType, aura.MiscValue, aura.Amount, savedHappiness, originalItemCount, remainingCount, remainingInventoryRows, updatedPacket, spellLogPacket)
+		}
+		return trace, nil
 	}
 	trace := recorder.Snapshot()
 	session.logout()

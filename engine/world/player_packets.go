@@ -38,7 +38,7 @@ func (s *session) loadPlayerPacketsState(ctx context.Context, state *playerState
 	if err != nil {
 		return err
 	}
-	actions, err := s.loadActionButtons(ctx, state.GUID, state.Race, state.Class, spells)
+	actions, err := s.loadActionButtons(ctx, state.GUID, spells)
 	if err != nil {
 		return err
 	}
@@ -305,7 +305,7 @@ func isLanguageSpell(spellID uint32) bool {
 	return false
 }
 
-func (s *session) loadActionButtons(ctx context.Context, guid uint64, race, class uint8, spells []learnedSpell) ([144]uint32, error) {
+func (s *session) loadActionButtons(ctx context.Context, guid uint64, spells []learnedSpell) ([144]uint32, error) {
 	var result [144]uint32
 	knownSpells := make(map[uint32]struct{}, len(spells))
 	for _, spell := range spells {
@@ -347,13 +347,11 @@ func (s *session) loadActionButtons(ctx context.Context, guid uint64, race, clas
 		}
 		return result, err
 	}
-	hasActions := false
 	for rows.Next() {
 		var button, action, kind int64
 		if err := rows.Scan(&button, &action, &kind); err != nil {
 			return result, err
 		}
-		hasActions = true
 		if button >= 0 && button < int64(len(result)) && validAction(action, kind) {
 			result[button] = uint32(action) | uint32(kind)<<24
 			continue
@@ -365,31 +363,6 @@ func (s *session) loadActionButtons(ctx context.Context, guid uint64, race, clas
 		return result, err
 	}
 	rows.Close()
-	if !hasActions && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		arows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT button, action, type FROM playercreateinfo_action WHERE race = ? AND class = ?", race, class)
-		if err == nil {
-			var starterActions []struct{ button, action, kind int64 }
-			for arows.Next() {
-				var button, action, kind int64
-				if err := arows.Scan(&button, &action, &kind); err == nil {
-					if button >= 0 && button < int64(len(result)) && validAction(action, kind) {
-						result[button] = uint32(action) | uint32(kind)<<24
-						starterActions = append(starterActions, struct{ button, action, kind int64 }{button, action, kind})
-						continue
-					}
-					s.debug("invalid starter action button skipped", "guid", guid, "button", button, "action", action, "type", kind)
-				}
-			}
-			rowsErr := arows.Err()
-			arows.Close()
-			if rowsErr != nil {
-				return result, rowsErr
-			}
-			for _, action := range starterActions {
-				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_action (guid, spec, button, action, type) VALUES (?, 0, ?, ?, ?)", guid, action.button, action.action, action.kind)
-			}
-		}
-	}
 	return result, nil
 }
 

@@ -312,6 +312,22 @@ func (s *Store) File(name string) (*dbc.File, error) {
 	return file, nil
 }
 
+func (s *Store) CreatureFamilyPetFoodMask(familyID uint32) (uint32, bool, error) {
+	if familyID == 0 {
+		return 0, false, nil
+	}
+	file, err := s.File("CreatureFamily")
+	if err != nil {
+		return 0, false, err
+	}
+	record, found := file.Find(familyID)
+	if !found {
+		return 0, false, nil
+	}
+	mask, err := record.Uint32(7)
+	return mask, err == nil, err
+}
+
 func (s *Store) CollisionHeight(mountDisplayID, nativeDisplayID uint32, mounted bool) (float32, bool, error) {
 	displays, err := s.File("CreatureDisplayInfo")
 	if err != nil {

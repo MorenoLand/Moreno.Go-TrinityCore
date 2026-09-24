@@ -1010,6 +1010,32 @@ func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 	return true
 }
 
+func (s *session) consumeInventoryItemByGUID(ctx context.Context, itemGUID uint64, count uint32) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || itemGUID == 0 || count == 0 {
+		return false
+	}
+	db := s.server.CharactersStore.DB
+	var itemEntry, currentCount int64
+	if err := db.QueryRowContext(ctx, "SELECT ii.itemEntry, ii.count FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ci.item = ? LIMIT 1", s.playerGUID, int64(itemGUID)).Scan(&itemEntry, &currentCount); err != nil || itemEntry <= 0 || currentCount < int64(count) {
+		return false
+	}
+	s.adjustQuestItemCount(ctx, uint32(itemEntry), count, false)
+	if currentCount == int64(count) {
+		if _, err := db.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, int64(itemGUID)); err != nil {
+			return false
+		}
+		if _, err := db.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", int64(itemGUID)); err != nil {
+			return false
+		}
+		s.despawnItem(itemGUID)
+	} else if _, err := db.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", count, int64(itemGUID)); err != nil {
+		return false
+	}
+	_ = s.sendInventoryItems(ctx)
+	s.sendPlayerUpdate()
+	return true
+}
+
 func (s *session) syncEquipmentCache(ctx context.Context) {
 	if !s.playerLoaded || s.player == nil || s.server.CharactersStore.DB == nil {
 		return
@@ -1043,7 +1069,7 @@ func (s *session) syncEquipmentCache(ctx context.Context) {
 		parts[i*2] = strconv.FormatUint(uint64(slots[i]), 10)
 		parts[i*2+1] = strconv.FormatUint(uint64(enchants[i]), 10)
 	}
-	cacheStr := strings.Join(parts, " ")
+	cacheStr := strings.Join(parts, " ") + " "
 	s.player.Equipment = cacheStr
 	_, _ = db.ExecContext(ctx, "UPDATE characters SET equipmentCache = ? WHERE guid = ?", cacheStr, s.playerGUID)
 	_ = s.calculatePlayerStats(ctx, s.player)

@@ -192,7 +192,7 @@ func (s *session) loadEquipmentCache(ctx context.Context, guid uint64, cached st
 		}
 		parts[slot*2+1] = strconv.FormatUint(uint64(packVisibleEnchantments(enchantments.String)), 10)
 	}
-	return strings.Join(parts, " ")
+	return strings.Join(parts, " ") + " "
 }
 
 func packVisibleEnchantments(raw string) uint32 {
@@ -536,32 +536,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.sendResyncRunes(); err != nil {
 		return false
 	}
-	// TrinityCore sends the first-login cinematic after the pre-map packet set and
-	// before the player is added to the map.
-	sendCinematic := false
-	firstLoginCinematic := state.Cinematic == 0
-	if state.Cinematic == 0 {
-		cinematicID := s.getStartingCinematicID(state.Race, state.Class)
-		if cinematicID > 0 {
-			sendCinematic = true
-		}
-		state.Cinematic = 1
-		if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET cinematic = 1 WHERE guid = ?", guid); err != nil {
-			s.debug("cinematic state save failed", "account", s.accountName, "guid", guid, "error", err)
-			return false
-		}
-	}
-	if sendCinematic {
-		cinematicID := s.getStartingCinematicID(state.Race, state.Class)
-		if cinematicID > 0 {
-			cinematicBuf := protocol.NewBuffer(4)
-			cinematicBuf.WriteU32(cinematicID)
-			if err := s.write(uint16(protocol.OpcodeSMSG_TRIGGER_CINEMATIC), cinematicBuf.Bytes(), true); err != nil {
-				return false
-			}
-		}
-	}
-	if firstLoginCinematic && s.server.Config.PlayerStartString != "" {
+	if firstLogin && s.server.Config.PlayerStartString != "" {
 		s.sendSysMessage(s.server.Config.PlayerStartString)
 	}
 	s.lastFallZ = state.Z
@@ -1826,7 +1801,7 @@ func (s *session) createStarterOutfit(ctx context.Context, guid uint64, race, cl
 		parts[i*2] = strconv.FormatUint(uint64(equippedSlots[i]), 10)
 		parts[i*2+1] = "0"
 	}
-	cacheStr := strings.Join(parts, " ")
+	cacheStr := strings.Join(parts, " ") + " "
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET equipmentCache = ? WHERE guid = ?", cacheStr, guid)
 }
 
@@ -2364,11 +2339,6 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 func (s *session) handleCompleteMovie(ctx context.Context, payload []byte) bool {
 	if s.player != nil {
 		s.player.Movie = 0
-		s.player.Cinematic = 1
-		s.player.AtLogin &= ^uint32(atLoginFirst)
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET cinematic = 1, at_login = at_login & ~32 WHERE guid = ?", s.playerGUID)
-		}
 	}
 	s.debug("movie completed", "account", s.accountName)
 	return true
@@ -2659,7 +2629,7 @@ func (s *session) savePlayerState(ctx context.Context, online uint32) error {
 	if state.TransportGUID != 0 {
 		transportLow = state.TransportGUID & 0xFFFFFFFF
 	}
-	args := []any{state.Name, state.Race, state.Class, state.Gender, state.Level, state.XP, state.Money, state.Skin, state.Face, state.HairStyle, state.HairColor, state.FacialStyle, state.BankBagSlots, state.RestState, state.PlayerFlags, state.Map, state.InstanceID, state.InstanceModeMask, state.X, state.Y, state.Z, state.Orientation, state.TransportX, state.TransportY, state.TransportZ, state.TransportO, transportLow, strings.Join(taxi, " "), state.Cinematic, state.TotalPlayedTime, state.LevelPlayedTime, state.RestBonus, state.LogoutTime, state.LogoutResting, state.ResetTalentsCost, state.ResetTalentsTime, state.ExtraFlags, state.StableSlots, state.AtLogin, state.Zone, s.deathExpireTime, state.TaxiPath, state.ArenaPoints, state.TotalHonorPoints, state.TodayHonorPoints, state.YesterdayHonorPoints, state.TotalKills, state.TodayKills, state.YesterdayKills, state.ChosenTitle, state.KnownCurrency, state.WatchedFaction, state.DrunkenState, state.Health, state.Powers[0], state.Powers[1], state.Powers[2], state.Powers[3], state.Powers[4], state.Powers[5], state.Powers[6], s.latency.Load(), state.TalentGroupsCount, state.ActiveTalentGroup, explored.String(), state.Equipment, state.AmmoID, strings.Join(titles, " "), state.ActionBars, state.GrantableLevels, online, state.GUID}
+	args := []any{state.Name, state.Race, state.Class, state.Gender, state.Level, state.XP, state.Money, state.Skin, state.Face, state.HairStyle, state.HairColor, state.FacialStyle, state.BankBagSlots, state.RestState, state.PlayerFlags, state.Map, state.InstanceID, state.InstanceModeMask, state.X, state.Y, state.Z, state.Orientation, state.TransportX, state.TransportY, state.TransportZ, state.TransportO, transportLow, strings.Join(taxi, " "), state.Cinematic, state.TotalPlayedTime, state.LevelPlayedTime, state.RestBonus, state.LogoutTime, state.LogoutResting, state.ResetTalentsCost, state.ResetTalentsTime, state.ExtraFlags, state.StableSlots, state.AtLogin, state.Zone, s.deathExpireTime, state.TaxiPath, state.ArenaPoints, state.TotalHonorPoints, state.TodayHonorPoints, state.YesterdayHonorPoints, state.TotalKills, state.TodayKills, state.YesterdayKills, state.ChosenTitle, state.KnownCurrency, state.WatchedFaction, state.DrunkenState, state.Health, state.Powers[0], state.Powers[1], state.Powers[2], state.Powers[3], state.Powers[4], state.Powers[5], state.Powers[6], s.latency.Load(), state.TalentGroupsCount, state.ActiveTalentGroup, explored.String(), state.Equipment, state.AmmoID, strings.Join(titles, " ") + " ", state.ActionBars, state.GrantableLevels, online, state.GUID}
 	tx, err := s.server.CharactersStore.Begin(ctx, nil)
 	if err != nil {
 		return err

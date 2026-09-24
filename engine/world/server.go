@@ -643,7 +643,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updateTimeSync(now)
 			s.updateMailDeliveries(ctx, now.Unix())
 			s.updateActiveCreatures(ctx)
-			s.updatePetRuntime(diff)
+			s.updatePetRuntime(now, diff)
 			s.updateDynamicSpellAuras(ctx, now)
 			s.updatePlayerCombat(ctx)
 			s.updateContestedPvP(now)

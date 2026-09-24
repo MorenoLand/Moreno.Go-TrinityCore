@@ -201,13 +201,6 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 				}
 				aura.StackAmount = spell.StackAmount
 				aura.HideDuration = spell.AttributesEx5&0x00000400 != 0
-				if spell.ProcCharges > 0 {
-					if aura.RemainingCharges == 0 || aura.RemainingCharges > uint8(spell.ProcCharges) {
-						aura.RemainingCharges = uint8(spell.ProcCharges)
-					}
-				} else {
-					aura.RemainingCharges = 0
-				}
 			}
 		}
 		fadesWhileOffline := false

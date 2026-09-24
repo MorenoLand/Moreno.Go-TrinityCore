@@ -76,7 +76,7 @@ func AdvancePetRuntime(state PetRuntimeState, diff time.Duration, focusRate floa
 	return state, fields
 }
 
-func (s *Server) updatePetRuntime(diff time.Duration) {
+func (s *Server) updatePetRuntime(now time.Time, diff time.Duration) {
 	if s == nil || diff <= 0 {
 		return
 	}
@@ -96,6 +96,7 @@ func (s *Server) updatePetRuntime(diff time.Duration) {
 			continue
 		}
 		seen[motion] = struct{}{}
+		motion.Refreshed = now
 		state := PetRuntimeState{PetType: motion.PetType, PowerType: motion.PowerType, UnitFlags2: motion.UnitFlags2, Powers: motion.Powers, MaxPowers: motion.MaxPowers, FocusRegenTimer: motion.FocusRegenTimer, HappinessTimer: motion.HappinessTimer, InCombat: motion.InCombat || motion.UnitFlags&unitFlagInCombat != 0}
 		state, fields := AdvancePetRuntime(state, diff, s.Config.FocusRate)
 		motion.Powers = state.Powers
