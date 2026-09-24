@@ -265,7 +265,21 @@ func (s *session) grantXP(ctx context.Context, amount uint32) {
 
 // grantXPWithVictim applies XP with combat log SMSG_LOG_XPGAIN, repeated level-ups, and client field updates.
 func (s *session) grantXPWithVictim(ctx context.Context, amount uint32, victimGUID uint64) {
-	if s.player == nil || amount == 0 || s.player.Level >= 80 {
+	if s.player == nil || amount == 0 {
+		return
+	}
+	petXP := amount
+	if s.groupID != 0 {
+		petXP /= 2
+	}
+	grantPetXP := func() {
+		if victimGUID != 0 {
+			s.giveHunterPetXP(ctx, petXP)
+		}
+	}
+	maxPlayerLevel := uint8(s.server.Config.MaxPlayerLevel)
+	if s.player.Level >= maxPlayerLevel {
+		grantPetXP()
 		return
 	}
 
@@ -284,7 +298,7 @@ func (s *session) grantXPWithVictim(ctx context.Context, amount uint32, victimGU
 	_ = s.write(uint16(protocol.OpcodeSMSG_LOG_XPGAIN), xpLog.Bytes(), true)
 
 	s.player.XP += amount
-	for s.player.Level < 80 {
+	for s.player.Level < maxPlayerLevel {
 		needed := s.server.xpForLevel(ctx, uint32(s.player.Level))
 		if needed == 0 || s.player.XP < needed {
 			break
@@ -342,6 +356,7 @@ func (s *session) grantXPWithVictim(ctx context.Context, amount uint32, victimGU
 		}
 	}
 	s.sendPlayerUpdate()
+	grantPetXP()
 }
 
 // broadcastCreatureValueUpdate pushes an UPDATETYPE_VALUES block for a

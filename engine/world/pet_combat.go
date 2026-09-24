@@ -10,6 +10,109 @@ import (
 	protocol "github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
+const (
+	petPowerTypeHealth            uint32 = 0xFFFFFFFE
+	petSpellFailedCasterAuraState uint8  = 22
+	petSpellFailedNoPower         uint8  = 85
+	petSpellFailedUnknown         uint8  = 187
+)
+
+func ResolvePetSpellPowerCost(spell wotlk.Spell, maxPower, maxHealth uint32) uint32 {
+	if spell.PowerType == petPowerTypeHealth {
+		maxPower = maxHealth
+	}
+	cost := uint64(spell.ManaCost) + uint64(maxPower)*uint64(spell.ManaCostPct)/100
+	if cost > uint64(^uint32(0)) {
+		return ^uint32(0)
+	}
+	return uint32(cost)
+}
+
+func PetCanPaySpell(spell wotlk.Spell, current, maxPower, maxHealth uint32) bool {
+	cost := ResolvePetSpellPowerCost(spell, maxPower, maxHealth)
+	if spell.PowerType == petPowerTypeHealth {
+		return current > cost
+	}
+	return current >= cost
+}
+
+func petSpellPowerState(motion *creatureMotion, powerType uint32) (uint32, uint32, int, bool, bool) {
+	if motion == nil {
+		return 0, 0, 0, false, false
+	}
+	if powerType == petPowerTypeHealth {
+		return motion.Health, motion.MaxHealth, unitFieldHealth, true, true
+	}
+	if powerType >= uint32(len(motion.Powers)) {
+		return 0, 0, 0, false, false
+	}
+	return motion.Powers[powerType], motion.MaxPowers[powerType], unitFieldPower1 + int(powerType), true, false
+}
+
+func (s *session) checkPetSpellPower(motion *creatureMotion, spell wotlk.Spell, castCount uint8) bool {
+	if s == nil || s.server == nil || motion == nil {
+		return false
+	}
+	s.server.motionMu.Lock()
+	current, maximum, _, valid, healthPower := petSpellPowerState(motion, spell.PowerType)
+	s.server.motionMu.Unlock()
+	if !valid {
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spell.ID, petSpellFailedUnknown), true)
+		return false
+	}
+	if !PetCanPaySpell(spell, current, maximum, motion.MaxHealth) {
+		failure := petSpellFailedNoPower
+		if healthPower {
+			failure = petSpellFailedCasterAuraState
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spell.ID, failure), true)
+		return false
+	}
+	return true
+}
+
+func (s *session) takePetSpellPower(motion *creatureMotion, spell wotlk.Spell, castCount uint8, ignoreCost bool) (uint32, bool, bool) {
+	if s == nil || s.server == nil || motion == nil {
+		return 0, false, false
+	}
+	s.server.motionMu.Lock()
+	current, maximum, field, valid, healthPower := petSpellPowerState(motion, spell.PowerType)
+	if !valid {
+		s.server.motionMu.Unlock()
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spell.ID, petSpellFailedUnknown), true)
+		return 0, false, false
+	}
+	cost := uint32(0)
+	if !ignoreCost {
+		cost = ResolvePetSpellPowerCost(spell, maximum, motion.MaxHealth)
+	}
+	if !ignoreCost && !PetCanPaySpell(spell, current, maximum, motion.MaxHealth) {
+		s.server.motionMu.Unlock()
+		failure := petSpellFailedNoPower
+		if healthPower {
+			failure = petSpellFailedCasterAuraState
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spell.ID, failure), true)
+		return 0, false, false
+	}
+	if cost > 0 {
+		current -= cost
+		if healthPower {
+			motion.Health = current
+		} else {
+			motion.Powers[spell.PowerType] = current
+			if spell.PowerType == 0 {
+				motion.Mana = current
+			}
+		}
+	}
+	s.server.motionMu.Unlock()
+	if cost > 0 {
+		s.server.broadcastCreatureValuesUpdate(motion.Map, motion.GUID, map[int]uint32{field: current})
+	}
+	return current, !healthPower, true
+}
+
 // Pet Action and Reaction constants mirroring TrinityCore PetDefines.h
 const (
 	PetCommandStay    uint8 = 0
@@ -413,33 +516,23 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 
 // executePetAutocast casts the highest priority available pet autocast spell.
 func (s *Server) executePetAutocast(ctx context.Context, motion *creatureMotion, targetGUID uint64, now time.Time) {
-	if len(motion.AutocastSpells) == 0 {
+	if s == nil || motion == nil || len(motion.AutocastSpells) == 0 || s.Data == nil {
 		return
 	}
 	spellID := motion.AutocastSpells[0]
-	castTimeStamp := uint32(now.UnixMilli())
-	spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
-	goPkt := protocol.BuildSpellGo(motion.GUID, motion.GUID, 1, spellID, spellCastFlagGo, castTimeStamp, []uint64{targetGUID}, nil, spellTarget)
-	s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, nil)
-
-	// Direct spell damage for pet abilities (e.g. Firebolt, Claw, Bite, Torment)
-	baseDmg := uint32(motion.Level*2 + 10)
-	s.motionMu.Lock()
-	if cMotion := s.creatureMotion[targetGUID]; cMotion != nil && cMotion.Health > 0 {
-		if baseDmg >= cMotion.Health {
-			cMotion.Health = 0
-			cMotion.InCombat = false
-			s.broadcastCreatureValuesUpdate(cMotion.Map, targetGUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: 1})
-		} else {
-			cMotion.Health -= baseDmg
-			s.broadcastCreatureValuesUpdate(cMotion.Map, targetGUID, map[int]uint32{unitFieldHealth: cMotion.Health})
-		}
+	owner := s.findSessionByGUID(motion.OwnerGUID)
+	spell, found, err := s.Data.Spell(spellID)
+	if owner == nil || err != nil || !found {
+		return
 	}
-	s.motionMu.Unlock()
-	motion.LastSpell = now
+	owner.executePetSpell(ctx, motion, spell, 0, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: targetGUID})
 }
 
 func (s *session) executePetSpell(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, castCount uint8, target protocol.SpellTargetData) bool {
+	return s.executePetSpellWithOptions(ctx, motion, spell, castCount, target, false)
+}
+
+func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, castCount uint8, target protocol.SpellTargetData, triggered bool) bool {
 	if s == nil || s.server == nil || motion == nil {
 		return false
 	}
@@ -447,13 +540,30 @@ func (s *session) executePetSpell(ctx context.Context, motion *creatureMotion, s
 	if targetGUID == 0 {
 		targetGUID = motion.GUID
 	}
+	remainingPower, hasRemainingPower, ok := s.takePetSpellPower(motion, spell, castCount, triggered)
+	if !ok {
+		return true
+	}
 	hitTargets := []uint64{targetGUID}
-	stamp := uint32(time.Now().UnixMilli())
-	goPacket := protocol.BuildSpellGo(motion.GUID, motion.GUID, castCount, spell.ID, spellCastFlagGo, stamp, hitTargets, nil, target)
+	stamp := gameTimeMS()
+	castFlags := uint32(spellCastFlagGo)
+	if triggered && castCount == 0 {
+		castFlags |= spellCastFlagPending
+	}
+	if spell.StartRecoveryTime == 0 {
+		castFlags |= protocol.SpellCastFlagNoGCD
+	}
+	var power *uint32
+	if hasRemainingPower {
+		castFlags |= protocol.SpellCastFlagPowerLeftSelf
+		power = &remainingPower
+	}
+	goPacket := protocol.BuildSpellGoWithPower(motion.GUID, motion.GUID, castCount, spell.ID, castFlags, stamp, hitTargets, nil, target, power)
 	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true); err != nil {
 		return false
 	}
-	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, s)
+	nearbyPacket := protocol.BuildSpellGo(motion.GUID, motion.GUID, castCount, spell.ID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, stamp, hitTargets, nil, target)
+	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 	damage, hasDamage := creatureSpellDamage(spell)
 	handledEffect := false
 	if hasDamage {
@@ -474,7 +584,7 @@ func (s *session) executePetSpell(ctx context.Context, motion *creatureMotion, s
 		}
 		if effect.Effect == spellEffectTriggerSpell && effect.TriggerSpell != 0 && effect.TriggerSpell != spell.ID {
 			if triggered, found, err := s.server.Data.Spell(effect.TriggerSpell); err == nil && found {
-				s.executePetSpell(ctx, motion, triggered, castCount, target)
+				s.executePetSpellWithOptions(ctx, motion, triggered, 0, target, true)
 				handledEffect = true
 			}
 		}
@@ -492,12 +602,14 @@ func (s *session) executePetSpell(ctx context.Context, motion *creatureMotion, s
 		}
 	}
 	if !handledEffect {
-		now := time.Now()
-		s.recordPetSpellCooldown(motion, spell, now)
+		if !triggered {
+			s.recordPetSpellCooldown(motion, spell, time.Now())
+		}
 		return true
 	}
-	now := time.Now()
-	s.recordPetSpellCooldown(motion, spell, now)
+	if !triggered {
+		s.recordPetSpellCooldown(motion, spell, time.Now())
+	}
 	return true
 }
 

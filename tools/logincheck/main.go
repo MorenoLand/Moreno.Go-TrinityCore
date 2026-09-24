@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -38,6 +39,8 @@ func main() {
 	replayWork := flag.String("replay-work", "", "isolated work directory containing auth.db, characters.db, and world.db; runs core login with Eluna disabled")
 	replayGUID := flag.Uint64("replay-guid", 0, "character GUID for an in-process login replay; 0 selects the first real character")
 	replayPetCooldownSpell := flag.Uint("replay-pet-cooldown-spell", 0, "after login, assert a saved pet category cooldown rejects this spell")
+	replayPetPowerSpell := flag.Uint("replay-pet-power-spell", 0, "after login, verify a known pet spell spends and reports its DBC power cost")
+	replayPetXPAward := flag.Uint("replay-pet-xp", 0, "after login, apply a hunter-pet XP award and verify fields and persistence")
 	replayTrace := flag.String("trace-out", "", "optional JSONL path for the in-process login trace")
 	flag.Parse()
 	if *selfCheck {
@@ -48,7 +51,10 @@ func main() {
 		return
 	}
 	if *replayWork != "" {
-		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayTrace, uint32(*replayPetCooldownSpell)); err != nil {
+		if (*replayPetCooldownSpell != 0 && *replayPetPowerSpell != 0) || (*replayPetCooldownSpell != 0 && *replayPetXPAward != 0) || (*replayPetPowerSpell != 0 && *replayPetXPAward != 0) {
+			fail("choose only one pet replay scenario")
+		}
+		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward)); err != nil {
 			fail(err.Error())
 		}
 		return
@@ -268,6 +274,18 @@ func runSelfCheck() error {
 	}
 	if err := checkMovementSpeedAuraClassification(); err != nil {
 		return fmt.Errorf("movement speed aura check failed: %w", err)
+	}
+	if err := checkMovementSpeedUpdatePlan(); err != nil {
+		return fmt.Errorf("movement speed update plan check failed: %w", err)
+	}
+	if err := checkPetSpellPowerCost(); err != nil {
+		return fmt.Errorf("pet spell power check failed: %w", err)
+	}
+	if err := checkPetRuntimeTick(); err != nil {
+		return fmt.Errorf("pet runtime tick check failed: %w", err)
+	}
+	if err := checkPetProgression(); err != nil {
+		return fmt.Errorf("pet progression check failed: %w", err)
 	}
 	if err := checkCollisionHeightFormula(); err != nil {
 		return fmt.Errorf("collision-height formula check failed: %w", err)
@@ -492,10 +510,130 @@ func checkMovementSpeedAuraClassification() error {
 			return fmt.Errorf("aura type %d did not require movement-speed reconciliation", auraType)
 		}
 	}
+	for _, auraType := range []uint32{33, 206, 207, 208, 209, 210, 211} {
+		if !world.AffectsFlightSpeedAura(auraType) {
+			return fmt.Errorf("aura type %d did not require flight-speed reconciliation", auraType)
+		}
+	}
+	for _, auraType := range []uint32{201, 206, 207, 208, 209, 210, 211} {
+		if world.AffectsRunSpeedAura(auraType) {
+			return fmt.Errorf("flight-only aura type %d incorrectly required run-speed reconciliation", auraType)
+		}
+	}
+	if !world.AffectsRunSpeedAura(33) {
+		return fmt.Errorf("aura type 33 did not require run-speed reconciliation")
+	}
+	for _, auraType := range []uint32{31, 32, 58, 78, 129, 130, 201, 305} {
+		if world.AffectsFlightSpeedAura(auraType) {
+			return fmt.Errorf("aura type %d incorrectly required flight-speed reconciliation", auraType)
+		}
+	}
 	for _, auraType := range []uint32{16, 18, 151, 304} {
 		if world.AffectsMovementSpeedAura(auraType) {
 			return fmt.Errorf("aura type %d incorrectly changed movement speed", auraType)
 		}
+	}
+	return nil
+}
+
+func checkMovementSpeedUpdatePlan() error {
+	for _, test := range []struct {
+		auraType, flightAura uint32
+		run, flight, canFly  bool
+	}{{31, 0, true, false, false}, {33, 0, true, true, false}, {78, 0, true, false, false}, {78, 1, true, true, false}, {201, 0, false, false, true}, {206, 0, false, true, false}, {207, 0, false, true, true}, {211, 0, false, true, false}} {
+		run, flight, canFly := world.ResolveMovementSpeedUpdatePlan(test.auraType, test.flightAura != 0)
+		if run != test.run || flight != test.flight || canFly != test.canFly {
+			return fmt.Errorf("aura type %d flight-aura=%t plan=(%t,%t,%t) want=(%t,%t,%t)", test.auraType, test.flightAura != 0, run, flight, canFly, test.run, test.flight, test.canFly)
+		}
+	}
+	return nil
+}
+
+func checkPetSpellPowerCost() error {
+	spell := wotlk.Spell{PowerType: 2, ManaCost: 12, ManaCostPct: 20}
+	if cost := world.ResolvePetSpellPowerCost(spell, 100, 0); cost != 32 {
+		return fmt.Errorf("focus spell cost=%d, want 32", cost)
+	}
+	if !world.PetCanPaySpell(spell, 32, 100, 0) || world.PetCanPaySpell(spell, 31, 100, 0) {
+		return fmt.Errorf("focus affordability did not follow source cost comparison")
+	}
+	healthSpell := wotlk.Spell{PowerType: 0xFFFFFFFE, ManaCost: 10, ManaCostPct: 10}
+	if cost := world.ResolvePetSpellPowerCost(healthSpell, 0, 200); cost != 30 {
+		return fmt.Errorf("health spell cost=%d, want 30", cost)
+	}
+	if world.PetCanPaySpell(healthSpell, 30, 0, 200) || !world.PetCanPaySpell(healthSpell, 31, 0, 200) {
+		return fmt.Errorf("health affordability did not preserve the caster at positive health")
+	}
+	return nil
+}
+
+func checkPetRuntimeTick() error {
+	state := world.PetRuntimeState{PetType: 1, PowerType: 2, UnitFlags2: 0x00000800, Powers: [7]uint32{0, 0, 0, 0, 10000}, MaxPowers: [7]uint32{0, 0, 100, 0, 1050000}, FocusRegenTimer: 4 * time.Second, HappinessTimer: 7500 * time.Millisecond}
+	next, fields := world.AdvancePetRuntime(state, 4*time.Second, 1)
+	if next.Powers[2] != 24 || next.Powers[4] != 10000 || next.FocusRegenTimer != 4*time.Second || next.HappinessTimer != 3500*time.Millisecond || len(fields) != 1 || fields[27] != 24 {
+		return fmt.Errorf("focus interval result=%+v fields=%v", next, fields)
+	}
+	next, fields = world.AdvancePetRuntime(next, 3500*time.Millisecond, 1)
+	if next.Powers[4] != 9330 || next.HappinessTimer != 7500*time.Millisecond || next.FocusRegenTimer != 500*time.Millisecond || len(fields) != 1 || fields[29] != 9330 {
+		return fmt.Errorf("hunter happiness interval result=%+v fields=%v", next, fields)
+	}
+	next.InCombat = true
+	next, fields = world.AdvancePetRuntime(next, 7500*time.Millisecond, 1.5)
+	if next.Powers[2] != 60 || next.Powers[4] != 8325 || next.FocusRegenTimer != 4*time.Second || next.HappinessTimer != 7500*time.Millisecond || len(fields) != 2 || fields[27] != 60 || fields[29] != 8325 {
+		return fmt.Errorf("combat focus/happiness result=%+v fields=%v", next, fields)
+	}
+	next.Powers[2] = 99
+	next.FocusRegenTimer = 4 * time.Second
+	next.HappinessTimer = 7500 * time.Millisecond
+	next, fields = world.AdvancePetRuntime(next, 4*time.Second, 1)
+	if next.Powers[2] != 100 || next.Powers[4] != 8325 || len(fields) != 1 || fields[27] != 100 {
+		return fmt.Errorf("focus cap result=%+v fields=%v", next, fields)
+	}
+	next.PetType = 0
+	next.FocusRegenTimer = 0
+	next, fields = world.AdvancePetRuntime(next, 7500*time.Millisecond, 1)
+	if next.Powers[4] != 8325 || fields != nil {
+		return fmt.Errorf("non-hunter happiness changed: result=%+v fields=%v", next, fields)
+	}
+	if config.Default().FocusRate != 1 {
+		return fmt.Errorf("default Rate.Focus=%v, want 1", config.Default().FocusRate)
+	}
+	loaded, err := config.Load("configs/worldserver.conf.dist")
+	if err != nil || loaded.FocusRate != 1 {
+		return fmt.Errorf("worldserver config Rate.Focus=%v err=%v, want 1", loaded.FocusRate, err)
+	}
+	previous, hadPrevious := os.LookupEnv("MORENOCORE_RATE_FOCUS")
+	if err := os.Setenv("MORENOCORE_RATE_FOCUS", "1.5"); err != nil {
+		return err
+	}
+	loaded.ApplyEnv()
+	if hadPrevious {
+		_ = os.Setenv("MORENOCORE_RATE_FOCUS", previous)
+	} else {
+		_ = os.Unsetenv("MORENOCORE_RATE_FOCUS")
+	}
+	if loaded.FocusRate != 1.5 {
+		return fmt.Errorf("environment Rate.Focus=%v, want 1.5", loaded.FocusRate)
+	}
+	return nil
+}
+
+func checkPetProgression() error {
+	if world.PetLevelForOwner(0, 40, 60) != 60 || world.PetLevelForOwner(1, 75, 70) != 70 || world.PetLevelForOwner(1, 60, 70) != 65 || world.PetLevelForOwner(1, 67, 70) != 67 {
+		return fmt.Errorf("pet level synchronization did not preserve summon and hunter-pet rules")
+	}
+	xpForLevel := []uint32{0, 400, 900, 1400, 2000, 2700}
+	level, xp, nextXP := world.AdvanceHunterPetExperience(1, 0, 100, 4, xpForLevel[2]/20, xpForLevel)
+	if level != 3 || xp != 10 || nextXP != xpForLevel[3]/20 {
+		return fmt.Errorf("hunter pet multi-level XP result=(%d,%d,%d)", level, xp, nextXP)
+	}
+	level, xp, nextXP = world.AdvanceHunterPetExperience(level, xp, 100, 4, nextXP, xpForLevel)
+	if level != 4 || xp != 0 || nextXP != xpForLevel[4]/20 {
+		return fmt.Errorf("hunter pet owner-level cap result=(%d,%d,%d)", level, xp, nextXP)
+	}
+	level, xp, nextXP = world.AdvanceHunterPetExperience(level, 12, 100, 4, nextXP, xpForLevel)
+	if level != 4 || xp != 12 || nextXP != xpForLevel[4]/20 {
+		return fmt.Errorf("max-level hunter pet accepted XP: result=(%d,%d,%d)", level, xp, nextXP)
 	}
 	return nil
 }
@@ -3476,7 +3614,7 @@ func eventPayload(event protocoltrace.Event) ([]byte, error) {
 	return protocoltrace.Trace{Events: []protocoltrace.Event{event}}.Payload(event)
 }
 
-func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, petCooldownSpell uint32) error {
+func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward uint32) error {
 	workDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return err
@@ -3531,6 +3669,10 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 	var replayErr error
 	if petCooldownSpell != 0 {
 		trace, replayErr = world.ReplayCharacterPetCooldown(ctx, server, guid, petCooldownSpell)
+	} else if petPowerSpell != 0 {
+		trace, replayErr = world.ReplayCharacterPetPower(ctx, server, guid, petPowerSpell)
+	} else if petXPAward != 0 {
+		trace, replayErr = world.ReplayCharacterPetXP(ctx, server, guid, petXPAward)
 	} else {
 		trace, replayErr = world.ReplayCharacterLogin(ctx, server, guid)
 	}
@@ -3590,6 +3732,10 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 	sort.Strings(changed)
 	if petCooldownSpell != 0 {
 		fmt.Printf("real-character pet cooldown replay passed spell=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", petCooldownSpell, len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
+	} else if petPowerSpell != 0 {
+		fmt.Printf("real-character pet power replay passed spell=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", petPowerSpell, len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
+	} else if petXPAward != 0 {
+		fmt.Printf("real-character pet XP replay passed award=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", petXPAward, len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
 	} else {
 		fmt.Printf("real-character login replay passed lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
 	}
@@ -3764,12 +3910,17 @@ func snapshotCharacterState(db *sql.DB, guid uint64) (map[string]characterTableS
 	queries := []struct{ name, sql string }{
 		{"characters", "SELECT * FROM characters WHERE guid = ?"},
 		{"character_account_data", "SELECT * FROM character_account_data WHERE guid = ?"},
+		{"account_data", "SELECT * FROM account_data WHERE accountId = (SELECT account FROM characters WHERE guid = ?)"},
+		{"account_instance_times", "SELECT * FROM account_instance_times WHERE accountId = (SELECT account FROM characters WHERE guid = ?)"},
+		{"account_tutorial", "SELECT * FROM account_tutorial WHERE accountId = (SELECT account FROM characters WHERE guid = ?)"},
 		{"character_achievement", "SELECT * FROM character_achievement WHERE guid = ?"},
 		{"character_achievement_progress", "SELECT * FROM character_achievement_progress WHERE guid = ?"},
 		{"character_action", "SELECT * FROM character_action WHERE guid = ?"},
 		{"character_arena_stats", "SELECT * FROM character_arena_stats WHERE guid = ?"},
+		{"arena_team_member", "SELECT * FROM arena_team_member WHERE guid = ?"},
 		{"character_banned", "SELECT * FROM character_banned WHERE guid = ?"},
 		{"character_battleground_random", "SELECT * FROM character_battleground_random WHERE guid = ?"},
+		{"battleground_deserters", "SELECT * FROM battleground_deserters WHERE guid = ?"},
 		{"character_declinedname", "SELECT * FROM character_declinedname WHERE guid = ?"},
 		{"character_fishingsteps", "SELECT * FROM character_fishingsteps WHERE guid = ?"},
 		{"character_gifts", "SELECT * FROM character_gifts WHERE guid = ?"},
@@ -3806,9 +3957,25 @@ func snapshotCharacterState(db *sql.DB, guid uint64) (map[string]characterTableS
 		{"petition", "SELECT * FROM petition WHERE ownerguid = ?"},
 		{"petition_sign", "SELECT * FROM petition_sign WHERE ? IN (ownerguid, playerguid)"},
 		{"guild_member", "SELECT * FROM guild_member WHERE guid = ?"},
+		{"guild_member_withdraw", "SELECT * FROM guild_member_withdraw WHERE guid = ?"},
+		{"guild_bank_eventlog_player_rows", "SELECT * FROM guild_bank_eventlog WHERE PlayerGuid = ?"},
+		{"guild_eventlog_player_rows", "SELECT * FROM guild_eventlog WHERE ? IN (PlayerGuid1, PlayerGuid2)"},
 		{"group_member", "SELECT * FROM group_member WHERE memberGuid = ?"},
 		{"received_mail", "SELECT * FROM mail WHERE receiver = ?"},
+		{"sent_mail", "SELECT * FROM mail WHERE sender = ?"},
 		{"received_mail_items", "SELECT mi.* FROM mail_items mi JOIN mail m ON m.id = mi.mail_id WHERE m.receiver = ?"},
+		{"received_mail_item_instances", "SELECT ii.* FROM item_instance ii JOIN mail_items mi ON mi.item_guid = ii.guid WHERE mi.receiver = ?"},
+		{"auctionhouse_player_rows", "SELECT * FROM auctionhouse WHERE ? IN (itemowner, buyguid)"},
+		{"auctionbidders_player_rows", "SELECT * FROM auctionbidders WHERE bidderguid = ?"},
+		{"auction_item_instances", "SELECT ii.* FROM item_instance ii JOIN auctionhouse ah ON ah.itemguid = ii.guid WHERE ? IN (ah.itemowner, ah.buyguid)"},
+		{"calendar_events_created", "SELECT * FROM calendar_events WHERE creator = ?"},
+		{"calendar_invites_player_rows", "SELECT * FROM calendar_invites WHERE ? IN (invitee, sender)"},
+		{"gm_ticket_player_rows", "SELECT * FROM gm_ticket WHERE playerGuid = ?"},
+		{"gm_survey_player_rows", "SELECT * FROM gm_survey WHERE guid = ?"},
+		{"gm_subsurvey_player_rows", "SELECT gs.* FROM gm_subsurvey gs JOIN gm_survey g ON g.surveyId = gs.surveyId WHERE g.guid = ?"},
+		{"lag_reports", "SELECT * FROM lag_reports WHERE guid = ?"},
+		{"pvpstats_players", "SELECT * FROM pvpstats_players WHERE character_guid = ?"},
+		{"quest_tracker", "SELECT * FROM quest_tracker WHERE character_guid = ?"},
 	}
 	result := make(map[string]characterTableSnapshot, len(queries))
 	for _, query := range queries {

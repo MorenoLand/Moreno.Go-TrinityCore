@@ -59,12 +59,21 @@ type creatureMotion struct {
 	MinDamage   float32
 	MaxDamage   float32
 
-	Health     uint32
-	MaxHealth  uint32
-	Mana       uint32
-	MaxMana    uint32
-	Happiness  uint32
-	Experience uint32
+	Health          uint32
+	MaxHealth       uint32
+	Mana            uint32
+	MaxMana         uint32
+	PowerType       uint32
+	Powers          [7]uint32
+	MaxPowers       [7]uint32
+	PetID           uint32
+	PetType         uint8
+	PetNextLevelXP  uint32
+	UnitFlags2      uint32
+	FocusRegenTimer time.Duration
+	HappinessTimer  time.Duration
+	Happiness       uint32
+	Experience      uint32
 
 	TargetGUID             uint64
 	InCombat               bool

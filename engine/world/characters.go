@@ -795,7 +795,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 				if petType == 0 && state.Level > 0 {
 					petLevel = uint32(state.Level)
 				}
-				maxHP, _, maxMP, _ := s.getPetStats(ctx, uint32(entry), petLevel)
+				maxHP, _, maxMP, _ := s.getPetStats(ctx, uint32(entry), petLevel, uint8(petType))
 				if maxHP == 0 {
 					maxHP = uint32(curHealth)
 				}

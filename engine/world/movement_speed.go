@@ -247,17 +247,45 @@ func ResolveAuraPercentMultiplier(amounts []int32) float32 {
 	return multiplier
 }
 
-func movementSpeedAura(auraType uint32) bool {
+func movementRunSpeedAura(auraType uint32) bool {
 	switch auraType {
-	case 31, 32, 33, 58, 78, 129, 130, 171, 172, 191, 201, 206, 207, 208, 209, 210, 211, 305:
+	case 31, 32, 33, 58, 78, 129, 130, 171, 172, 191, 305:
 		return true
 	default:
 		return false
 	}
 }
 
+func movementFlightSpeedAura(auraType uint32) bool {
+	return auraType == spellAuraDecreaseSpeed || auraType >= spellAuraIncreaseVehicleFlight && auraType <= spellAuraFlightSpeedNotStack
+}
+
+func movementSpeedAura(auraType uint32) bool {
+	return movementRunSpeedAura(auraType) || movementFlightSpeedAura(auraType) || auraType == 201
+}
+
 func AffectsMovementSpeedAura(auraType uint32) bool {
 	return movementSpeedAura(auraType)
+}
+
+func AffectsRunSpeedAura(auraType uint32) bool { return movementRunSpeedAura(auraType) }
+
+func AffectsFlightSpeedAura(auraType uint32) bool { return movementFlightSpeedAura(auraType) }
+
+func ResolveMovementSpeedUpdatePlan(auraType uint32, hasFlightAura bool) (runSpeed, flightSpeed, canFly bool) {
+	if !movementSpeedAura(auraType) {
+		return false, false, false
+	}
+	return movementRunSpeedAura(auraType), movementFlightSpeedAura(auraType) || auraType == spellAuraMounted && hasFlightAura, auraType == 201 || auraType == 207
+}
+
+func (s *session) hasFlightSpeedAura() bool {
+	for _, auraType := range []uint32{201, spellAuraIncreaseVehicleFlight, spellAuraMountedFlightSpeed, spellAuraIncreaseFlightSpeed, spellAuraMountedFlightSpeedAlways, spellAuraVehicleSpeedAlways, spellAuraFlightSpeedNotStack} {
+		if s.hasAuraType(auraType) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *session) sendRuntimeMovementSpeed(opcode protocol.Opcode, nearbyOpcode protocol.Opcode, speed float32, run bool) {
@@ -300,14 +328,17 @@ func (s *session) sendRuntimeFlightState() {
 }
 
 func (s *session) sendRuntimeMovementUpdates(auraType uint32) {
-	if s == nil || s.player == nil || !movementSpeedAura(auraType) {
+	if s == nil || s.player == nil {
 		return
 	}
-	if auraType == 201 || auraType == 207 {
+	runSpeed, flightSpeed, canFly := ResolveMovementSpeedUpdatePlan(auraType, s.hasFlightSpeedAura())
+	if canFly {
 		s.sendRuntimeFlightState()
 	}
-	s.sendRuntimeMovementSpeed(protocol.OpcodeSMSG_FORCE_RUN_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_RUN_SPEED, s.mountedRunSpeed(), true)
-	if s.hasAuraType(201) || s.hasAuraType(207) || s.hasAuraType(spellAuraIncreaseFlightSpeed) {
+	if runSpeed {
+		s.sendRuntimeMovementSpeed(protocol.OpcodeSMSG_FORCE_RUN_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_RUN_SPEED, s.mountedRunSpeed(), true)
+	}
+	if flightSpeed {
 		s.sendRuntimeMovementSpeed(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_FLIGHT_SPEED, s.mountedFlightSpeed(), false)
 	}
 }

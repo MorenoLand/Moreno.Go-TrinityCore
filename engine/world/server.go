@@ -625,12 +625,15 @@ func (s *Server) updateWardenSessions(ctx context.Context, diff time.Duration) {
 func (s *Server) runWorldTick(ctx context.Context) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+	lastUpdate := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			now := time.Now()
+			diff := now.Sub(lastUpdate)
+			lastUpdate = now
 			if s.Features != nil && s.Features.Scripts != nil {
 				_ = s.Features.Scripts.Tick(ctx, 100)
 				_, _ = s.Features.Scripts.TriggerServerEvent(ctx, 13, uint32(100))
@@ -640,6 +643,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updateTimeSync(now)
 			s.updateMailDeliveries(ctx, now.Unix())
 			s.updateActiveCreatures(ctx)
+			s.updatePetRuntime(diff)
 			s.updateDynamicSpellAuras(ctx, now)
 			s.updatePlayerCombat(ctx)
 			s.updateContestedPvP(now)

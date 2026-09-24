@@ -410,9 +410,12 @@ func (s *session) generatePetName(ctx context.Context, entry uint32) string {
 	return "Pet"
 }
 
-func (s *session) getPetStats(ctx context.Context, entry uint32, level uint32) (curHealth, maxHealth, curMana, maxMana uint32) {
+func (s *session) getPetStats(ctx context.Context, entry uint32, level uint32, petType uint8) (curHealth, maxHealth, curMana, maxMana uint32) {
 	if level == 0 {
 		level = 1
+	}
+	if petType == 1 {
+		entry = 1
 	}
 	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil && entry != 0 {
 		var hp, mana int64
@@ -433,7 +436,7 @@ func (s *session) getPetStats(ctx context.Context, entry uint32, level uint32) (
 	return hp, hp, mana, mana
 }
 
-func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, curHappiness uint32, ownerGUID uint64, faction uint32, petType uint8, createdBySpell, petExperience uint32, boundingRadius, combatReach, x, y, z, o float32) []byte {
+func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, curHappiness uint32, ownerGUID uint64, faction uint32, petType uint8, createdBySpell, petExperience, petNextLevelXP uint32, boundingRadius, combatReach, x, y, z, o float32) []byte {
 	values := make([]uint32, creatureValuesCount)
 	values[0] = uint32(petGUID)
 	values[1] = uint32(petGUID >> 32)
@@ -475,8 +478,8 @@ func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, model
 	values[unitFieldBytes0] |= powerType << 24
 	values[unitFieldPetNumber] = petNumber
 	values[unitFieldPetNameTimestamp] = uint32(time.Now().Unix())
-	if petType == 1 && int(level) < len(xpCurve) {
-		values[unitFieldPetNextLevelExp] = xpCurve[level] / 20
+	if petType == 1 {
+		values[unitFieldPetNextLevelExp] = petNextLevelXP
 	}
 
 	mask := protocol.NewUpdateMask(len(values))
@@ -583,6 +586,10 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 	} else if petHappiness > int64(petHappinessMax) {
 		petHappiness = int64(petHappinessMax)
 	}
+	petNextLevelXP := uint32(0)
+	if petType == 1 && s.server != nil {
+		petNextLevelXP = s.server.xpForLevel(ctx, uint32(level)+1) / 20
+	}
 	if createdBySpell > 0 && createdBySpell <= int64(^uint32(0)) {
 		packet := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 0, uint32(createdBySpell), spellCastFlagGo, uint32(time.Now().UnixMilli()), nil, nil, protocol.SpellTargetData{})
 		if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), packet, true); err != nil {
@@ -644,8 +651,8 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		petZ = s.player.Z
 	}
 
-	s.registerPetMotion(ctx, petGUID, petID, entry, level, faction, curHealth, maxHealth, curMana, maxMana, uint32(petHappiness), uint32(petExperience), uint8(reactState), petCombatReach, petX, petY, petZ, petO)
-	updateBlock := buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, uint32(petHappiness), s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petBoundingRadius, petCombatReach, petX, petY, petZ, petO)
+	s.registerPetMotion(ctx, petGUID, petID, uint8(petType), entry, level, faction, curHealth, maxHealth, curMana, maxMana, uint32(petHappiness), uint32(petExperience), petNextLevelXP, uint8(reactState), petCombatReach, petX, petY, petZ, petO)
+	updateBlock := buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, uint32(petHappiness), s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petNextLevelXP, petBoundingRadius, petCombatReach, petX, petY, petZ, petO)
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(updateBlock)
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
@@ -658,7 +665,9 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 	s.sendPlayerUpdate()
 	s.loadPetAuras(ctx, petID, petGUID)
 	s.applyOwnerPetAuras(ctx, entry, petGUID)
-	s.sendPetSpells(ctx, petID, entry, reactState)
+	if !s.updatePetOnLevelUp(ctx) {
+		s.sendPetSpells(ctx, petID, entry, reactState)
+	}
 
 	s.debug("pet spawned", "account", s.accountName, "petID", petID, "entry", entry, "name", name, "level", level)
 }
@@ -1011,64 +1020,36 @@ func (s *session) sendPetSpells(ctx context.Context, petID uint32, entry uint32,
 	_ = s.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
 }
 
-func (s *session) updatePetOnLevelUp(ctx context.Context) {
+func (s *session) updatePetOnLevelUp(ctx context.Context) bool {
 	if s.player == nil || s.player.PetGUID == 0 {
-		return
+		return false
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
-		return
+		return false
 	}
 
 	petID := s.activePetNumber()
-	var entry, currentLevel, petType int64
-	err := cdb.QueryRowContext(ctx, "SELECT entry, level, PetType FROM character_pet WHERE id = ? AND owner = ?", petID, s.playerGUID).Scan(&entry, &currentLevel, &petType)
+	var entry, currentLevel, petType, experience int64
+	err := cdb.QueryRowContext(ctx, "SELECT entry, level, PetType, exp FROM character_pet WHERE id = ? AND owner = ?", petID, s.playerGUID).Scan(&entry, &currentLevel, &petType, &experience)
 	if err != nil {
-		return
+		return false
 	}
-
-	playerLevel := uint32(s.player.Level)
-	if playerLevel <= uint32(currentLevel) {
-		return
+	targetLevel := PetLevelForOwner(uint8(petType), uint32(currentLevel), uint32(s.player.Level))
+	if targetLevel == uint32(currentLevel) {
+		return false
 	}
-
-	_, _ = cdb.ExecContext(ctx, "UPDATE character_pet SET level = ? WHERE id = ? AND owner = ?", playerLevel, petID, s.playerGUID)
-
-	chains := getPetSpellChains(uint32(entry))
-	for _, chain := range chains {
-		var oldRank, newRank *petSpellRank
-		for i := range chain {
-			if chain[i].minLevel <= uint32(currentLevel) {
-				oldRank = &chain[i]
-			}
-			if chain[i].minLevel <= playerLevel {
-				newRank = &chain[i]
-			}
-		}
-		if newRank != nil && (oldRank == nil || newRank.spellID != oldRank.spellID) {
-			if oldRank != nil {
-				_, _ = cdb.ExecContext(ctx, "DELETE FROM pet_spell WHERE guid = ? AND spell = ?", petID, oldRank.spellID)
-				unlearnBuf := protocol.NewBuffer(4)
-				unlearnBuf.WriteU32(oldRank.spellID)
-				_ = s.write(uint16(protocol.OpcodeSMSG_PET_UNLEARNED_SPELL), unlearnBuf.Bytes(), true)
-			}
-			activeVal := uint8(0)
-			if newRank.autocast {
-				activeVal = 1
-			}
-			_, _ = cdb.ExecContext(ctx, "INSERT OR REPLACE INTO pet_spell (guid, spell, active) VALUES (?, ?, ?)", petID, newRank.spellID, activeVal)
-			learnBuf := protocol.NewBuffer(4)
-			learnBuf.WriteU32(newRank.spellID)
-			_ = s.write(uint16(protocol.OpcodeSMSG_PET_LEARNED_SPELL), learnBuf.Bytes(), true)
-			s.debug("pet learned spell on level up", "account", s.accountName, "petID", petID, "spell", newRank.spellID)
-		}
-	}
-
+	petXP := uint32(experience)
+	nextLevelXP := uint32(0)
 	if petType == 1 {
-		s.sendTalentsInfo(true)
+		petXP = 0
+		nextLevelXP = s.server.xpForLevel(ctx, targetLevel) / 20
 	}
-
-	s.sendPetSpells(ctx, petID, uint32(entry), 1)
+	if !s.applyPetLevel(ctx, petID, uint32(entry), uint8(petType), uint32(currentLevel), targetLevel, petXP, nextLevelXP) {
+		return false
+	}
+	s.updatePetLevelSpells(ctx, petID, uint32(entry), uint32(currentLevel), targetLevel, uint8(petType), true)
+	return true
 }
 
 func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uint32) {
@@ -1082,11 +1063,11 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 
 	// If entry == 0 (e.g. Hunter Call Pet 883), summon current stabled or existing pet
 	if entry == 0 {
-		var petID, pEntry, modelID, level, reactState, curHealth, curMana int64
+		var petID, pEntry, modelID, level, petType, reactState, curHealth, curMana int64
 		var petName string
 		err := cdb.QueryRowContext(ctx,
-			"SELECT id, entry, modelid, level, name, curhealth, curmana, COALESCE(Reactstate, 1) FROM character_pet WHERE owner = ? ORDER BY slot ASC LIMIT 1",
-			s.playerGUID).Scan(&petID, &pEntry, &modelID, &level, &petName, &curHealth, &curMana, &reactState)
+			"SELECT id, entry, modelid, level, name, curhealth, curmana, COALESCE(PetType, 0), COALESCE(Reactstate, 1) FROM character_pet WHERE owner = ? ORDER BY slot ASC LIMIT 1",
+			s.playerGUID).Scan(&petID, &pEntry, &modelID, &level, &petName, &curHealth, &curMana, &petType, &reactState)
 		if err != nil {
 			s.debug("no pet found to call", "account", s.accountName)
 			return
@@ -1098,7 +1079,7 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 			s.unsummonPet(ctx, petSaveNotInSlot)
 		}
 		_, _ = cdb.ExecContext(ctx, "UPDATE character_pet SET slot = 0 WHERE id = ? AND owner = ?", petID, s.playerGUID)
-		maxHP, _, maxMana, _ := s.getPetStats(ctx, uint32(pEntry), uint32(level))
+		maxHP, _, maxMana, _ := s.getPetStats(ctx, uint32(pEntry), uint32(level), uint8(petType))
 		if maxHP == 0 {
 			maxHP = uint32(curHealth)
 		}
@@ -1109,11 +1090,11 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 		return
 	}
 
-	var petID, modelID, level, reactState, curHealth, curMana int64
+	var petID, modelID, level, petType, reactState, curHealth, curMana int64
 	var petName string
 	err := cdb.QueryRowContext(ctx,
-		"SELECT id, modelid, level, name, curhealth, curmana, COALESCE(Reactstate, 1) FROM character_pet WHERE owner = ? AND entry = ? LIMIT 1",
-		s.playerGUID, entry).Scan(&petID, &modelID, &level, &petName, &curHealth, &curMana, &reactState)
+		"SELECT id, modelid, level, name, curhealth, curmana, COALESCE(PetType, 0), COALESCE(Reactstate, 1) FROM character_pet WHERE owner = ? AND entry = ? LIMIT 1",
+		s.playerGUID, entry).Scan(&petID, &modelID, &level, &petName, &curHealth, &curMana, &petType, &reactState)
 
 	if err == nil && petID > 0 {
 		if s.player.PetGUID != 0 {
@@ -1123,11 +1104,7 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 			s.unsummonPet(ctx, petSaveNotInSlot)
 		}
 
-		playerLevel := uint32(s.player.Level)
-		if uint32(level) < playerLevel {
-			level = int64(playerLevel)
-		}
-		maxHP, _, maxMP, _ := s.getPetStats(ctx, entry, uint32(level))
+		maxHP, _, maxMP, _ := s.getPetStats(ctx, entry, uint32(level), uint8(petType))
 		curHealth = int64(maxHP)
 		curMana = int64(maxMP)
 
@@ -1157,7 +1134,7 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 	if playerLevel == 0 {
 		playerLevel = 1
 	}
-	maxHP, _, maxMP, _ := s.getPetStats(ctx, entry, playerLevel)
+	maxHP, _, maxMP, _ := s.getPetStats(ctx, entry, playerLevel, 0)
 
 	var model uint32
 	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
@@ -1192,16 +1169,16 @@ func (s *session) handleResurrectPet(ctx context.Context, spellID uint32) {
 		return
 	}
 
-	var petID, entry, modelID, level, reactState int64
+	var petID, entry, modelID, level, petType, reactState int64
 	var petName string
 	err := cdb.QueryRowContext(ctx,
-		"SELECT id, entry, modelid, level, name, COALESCE(Reactstate, 1) FROM character_pet WHERE owner = ? ORDER BY slot ASC LIMIT 1",
-		s.playerGUID).Scan(&petID, &entry, &modelID, &level, &petName, &reactState)
+		"SELECT id, entry, modelid, level, COALESCE(PetType, 0), name, COALESCE(Reactstate, 1) FROM character_pet WHERE owner = ? ORDER BY slot ASC LIMIT 1",
+		s.playerGUID).Scan(&petID, &entry, &modelID, &level, &petType, &petName, &reactState)
 	if err != nil || petID == 0 {
 		return
 	}
 
-	maxHP, _, maxMP, _ := s.getPetStats(ctx, uint32(entry), uint32(level))
+	maxHP, _, maxMP, _ := s.getPetStats(ctx, uint32(entry), uint32(level), uint8(petType))
 	_, _ = cdb.ExecContext(ctx,
 		"UPDATE character_pet SET slot = 0, curhealth = ?, curmana = ?, savetime = ? WHERE id = ? AND owner = ?",
 		maxHP, maxMP, time.Now().Unix(), petID, s.playerGUID)
@@ -1255,7 +1232,7 @@ func (s *session) handleTameCreature(ctx context.Context, spellID uint32, target
 		cName = "Pet"
 	}
 
-	maxHP, _, maxMP, _ := s.getPetStats(ctx, targetEntry, petLevel)
+	maxHP, _, maxMP, _ := s.getPetStats(ctx, targetEntry, petLevel, 1)
 	now := time.Now().Unix()
 
 	_, _ = cdb.ExecContext(ctx,
@@ -1769,6 +1746,9 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 				}
 			}
 		}
+	}
+	if !s.checkPetSpellPower(motion, spell, castCount) {
+		return true
 	}
 	s.server.motionMu.Lock()
 	lastSpell := motion.SpellCooldowns[spellID]
