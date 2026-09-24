@@ -48,11 +48,13 @@ const (
 	itemSubclassArmorShield  = 6
 
 	spellEffectEnergize                      = 30
+	spellEffectParry                         = 22
 	spellEffectPowerBurn                     = 62
 	spellEffectThreat                        = 63
 	spellEffectTriggerSpell                  = 64
 	spellEffectHealMaxHealth                 = 67
 	spellAuraMounted                         = 78
+	spellAuraModParryPercent                 = 47
 	spellAuraConfuse                         = 5
 	spellAuraCharm                           = 6
 	spellAuraFear                            = 7
@@ -789,6 +791,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if burned := s.applySpellPowerBurn(effCtx, effectTarget, eff.MiscValue, amount, spellID); burned > 0 {
 						s.executeSpellDamage(effCtx, effectTarget, spellID, burned)
 					}
+				}
+			case spellEffectParry:
+				if s.player != nil && !s.player.CanParry {
+					s.player.CanParry = true
+					s.updatePlayerParryPercentage(s.player, s.player.Level)
+					s.sendPlayerUpdate()
 				}
 			case spellEffectTriggerSpell:
 				for _, effectTarget := range hitTargets {
@@ -2423,6 +2431,9 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	s.activeAuras[spellID] = aura
 	s.castMu.Unlock()
 
+	if s.activeAuraHasEffect(aura, spellAuraModParryPercent) {
+		s.updatePlayerParryPercentage(s.player, s.player.Level)
+	}
 	if mounted {
 		s.applyMountedDisplay(context.Background(), aura)
 	}
@@ -2452,6 +2463,7 @@ func (s *session) removeAura(spellID uint32) {
 	wasVisibilityAura := false
 	wasMovementSpeedAura := false
 	wasMountedFlight := false
+	wasParryAura := false
 	removedAuraType := uint32(0)
 	removedFakeInebriation := uint32(0)
 	removedEffectMask := uint8(0)
@@ -2460,6 +2472,7 @@ func (s *session) removeAura(spellID uint32) {
 		if aura, ok := s.activeAuras[spellID]; ok && aura != nil {
 			removedEffectMask = aura.EffectMask
 			removedAuraType = aura.AuraType
+			wasParryAura = s.activeAuraHasEffect(aura, spellAuraModParryPercent)
 			wasMounted = aura.AuraType == spellAuraMounted
 			wasMountedFlight = wasMounted && s.activeAuraHasEffect(aura, spellAuraMountedFlightSpeed)
 			wasMovementControl = aura.AuraType == spellAuraStun || aura.AuraType == spellAuraRoot
@@ -2566,6 +2579,9 @@ func (s *session) removeAura(spellID uint32) {
 		} else {
 			s.player.FakeInebriation -= removedFakeInebriation
 		}
+	}
+	if wasParryAura && s.player != nil {
+		s.updatePlayerParryPercentage(s.player, s.player.Level)
 	}
 	s.sendPlayerUpdate()
 	if wasVisibilityAura && s.server != nil {
@@ -2798,6 +2814,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		targetSess.activeAuras[spell.ID] = aura
 		targetSess.castMu.Unlock()
+		if eff.Aura == spellAuraModParryPercent {
+			targetSess.updatePlayerParryPercentage(targetSess.player, targetSess.player.Level)
+		}
 		if eff.Aura == spellAuraFakeInebriation {
 			targetSess.player.FakeInebriation += amount
 		}

@@ -3400,7 +3400,7 @@ func (s *session) logout() {
 		if s.player != nil && s.player.PetGUID != 0 {
 			s.unsummonPet(ctx, petSaveAsCurrent)
 		}
-		if err := s.savePlayerState(ctx, 0); err != nil {
+		if err := s.savePlayerState(ctx, 0, true); err != nil {
 			s.debug("player position save failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
 			_ = s.savePlayerPosition(ctx)
 		}

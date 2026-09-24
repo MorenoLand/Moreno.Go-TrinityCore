@@ -62,6 +62,8 @@ type Config struct {
 	StartArenaPoints                        uint32
 	AllFlightPaths                          bool
 	AlwaysMaxSkillForLevel                  bool
+	PlayerSaveStatsMinLevel                 uint32
+	PlayerSaveStatsSaveOnlyOnLogout         bool
 	FocusRate                               float64
 	MaxGroupXPDistance                      float64
 	XPRateKill                              float64
@@ -157,6 +159,7 @@ func defaultConfig() (c Config) {
 		c.WeatherEnabled = true
 		c.WeatherChangeInterval = 600000
 		c.AddonChannel = true
+		c.PlayerSaveStatsSaveOnlyOnLogout = true
 		c.MaxPrimaryTradeSkill = 2
 		c.NPCBots.DamagePhysicalMultiplier = 1
 		c.NPCBots.DamageSpellMultiplier = 1
@@ -255,6 +258,12 @@ func (c *Config) ApplyEnv() {
 	}
 	if value, ok := os.LookupEnv("MORENOCORE_WEATHER_CHANGE_INTERVAL"); ok {
 		_ = c.set("Weather.ChangeInterval", value)
+	}
+	if value, ok := os.LookupEnv("MORENOCORE_PLAYER_STATS_MIN_LEVEL"); ok {
+		_ = c.set("PlayerSave.Stats.MinLevel", value)
+	}
+	if value, ok := os.LookupEnv("MORENOCORE_PLAYER_STATS_SAVE_ONLY_ON_LOGOUT"); ok {
+		_ = c.set("PlayerSave.Stats.SaveOnlyOnLogout", value)
 	}
 }
 
@@ -501,6 +510,16 @@ func (c *Config) set(key, value string) error {
 		return setUint32(&c.StartArenaPoints, key, value)
 	case "AlwaysMaxSkillForLevel":
 		return setBool(&c.AlwaysMaxSkillForLevel, key, value)
+	case "PlayerSave.Stats.MinLevel":
+		if err := setUint32(&c.PlayerSaveStatsMinLevel, key, value); err != nil {
+			return err
+		}
+		if c.PlayerSaveStatsMinLevel > 80 {
+			c.PlayerSaveStatsMinLevel = 0
+		}
+		return nil
+	case "PlayerSave.Stats.SaveOnlyOnLogout":
+		return setBool(&c.PlayerSaveStatsSaveOnlyOnLogout, key, value)
 	case "DisableFatigue":
 		return setInt(&c.DisableFatigue, key, value)
 	case "Rate.Rest.Offline.InTavernOrCity":

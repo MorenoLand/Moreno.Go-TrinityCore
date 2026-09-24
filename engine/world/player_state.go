@@ -282,6 +282,8 @@ type playerState struct {
 	SpellDamageNegative  [7]int32
 	BlockPercentage      float32
 	DodgePercentage      float32
+	CanParry             bool
+	ParryPercentage      float32
 	Expertise            uint32
 	OffhandExpertise     uint32
 	Armor                uint32
@@ -300,6 +302,7 @@ type playerState struct {
 	RangedAttackTime     uint32
 	CombatRatings        [25]uint32
 	SpellPower           uint32
+	BaseSpellPower       uint32
 	SpellPenetration     uint32
 	CombatReach          float32
 	AmmoDPS              float32
@@ -1903,6 +1906,7 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	state.AttackPower = 0
 	state.RangedAttackPower = 0
 	state.SpellPower = 0
+	state.BaseSpellPower = 0
 	state.SpellPenetration = 0
 	for i := range state.CombatRatings {
 		state.CombatRatings[i] = 0
@@ -1987,13 +1991,13 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 					case 7: // Stamina
 						state.Stats[2] += uint32(val)
 					case 12: // Defense rating
-						state.CombatRatings[0] += uint32(val)
+						state.CombatRatings[CombatRatingDefenseSkill] += uint32(val)
 					case 13: // Dodge rating
-						state.CombatRatings[1] += uint32(val)
+						state.CombatRatings[CombatRatingDodge] += uint32(val)
 					case 14: // Parry rating
-						state.CombatRatings[2] += uint32(val)
+						state.CombatRatings[CombatRatingParry] += uint32(val)
 					case 15: // Block rating
-						state.CombatRatings[3] += uint32(val)
+						state.CombatRatings[CombatRatingBlock] += uint32(val)
 					case 16: // Melee hit
 						state.CombatRatings[5] += uint32(val)
 					case 17: // Ranged hit
@@ -2038,6 +2042,7 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 						state.CombatRatings[24] += uint32(val)
 					case 45: // Spell power (ITEM_MOD_SPELL_POWER)
 						state.SpellPower += uint32(val)
+						state.BaseSpellPower += uint32(val)
 						s.setAchievementCriteria(criteriaTypeHighestSpellpower, 0, state.SpellPower)
 					case 47: // Spell penetration (ITEM_MOD_SPELL_PENETRATION)
 						state.SpellPenetration += uint32(val)
@@ -2164,7 +2169,11 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 }
 
 func (s *session) calculatePlayerCritFields(state *playerState, level uint8) {
-	if s == nil || state == nil || s.server == nil || s.server.Data == nil || state.Class == 0 {
+	if state == nil {
+		return
+	}
+	state.ParryPercentage = 0
+	if s == nil || s.server == nil || s.server.Data == nil || state.Class == 0 {
 		return
 	}
 	if level > 100 {
@@ -2179,15 +2188,7 @@ func (s *session) calculatePlayerCritFields(state *playerState, level uint8) {
 		return value, err == nil && found
 	}
 	ratingBonus := func(rating int) float32 {
-		if rating < 0 || rating >= len(state.CombatRatings) {
-			return 0
-		}
-		ratingValue, ratingOK := gt("gtCombatRatings", rating*100+int(level)-1)
-		scalarValue, scalarOK := gt("gtOCTClassCombatRatingScalar", classIndex*32+rating+1)
-		if !ratingOK || !scalarOK || ratingValue == 0 {
-			return 0
-		}
-		return float32(state.CombatRatings[rating]) * scalarValue / ratingValue
+		return s.playerCombatRatingBonus(state, level, rating)
 	}
 	meleeBase, meleeBaseOK := gt("gtChanceToMeleeCritBase", classIndex)
 	meleeRatio, meleeRatioOK := gt("gtChanceToMeleeCrit", classIndex*100+int(level)-1)
@@ -2219,7 +2220,7 @@ func (s *session) calculatePlayerCritFields(state *playerState, level uint8) {
 	if meleeBaseOK && meleeRatioOK && classIndex < len(dodgeCap) && dodgeCap[classIndex] > 0 {
 		baseAgility := float32(state.BaseStats[1])
 		bonusAgility := float32(state.Stats[1]) - baseAgility
-		diminishing := 100*bonusAgility*dodgeRatio*critToDodge[classIndex] + ratingBonus(0)*0.04 + ratingBonus(1)
+		diminishing := 100*bonusAgility*dodgeRatio*critToDodge[classIndex] + ratingBonus(int(CombatRatingDefenseSkill))*0.04 + ratingBonus(int(CombatRatingDodge))
 		nondiminishing := 100 * (dodgeBase[classIndex] + baseAgility*dodgeRatio*critToDodge[classIndex])
 		if defenseSkill > maxSkill {
 			nondiminishing += float32(defenseSkill-maxSkill) * 0.04
@@ -2232,7 +2233,7 @@ func (s *session) calculatePlayerCritFields(state *playerState, level uint8) {
 		}
 	}
 	if state.Block > 0 && (state.Class == 1 || state.Class == 2 || state.Class == 6 || state.Class == 7) {
-		state.BlockPercentage = 5 + ratingBonus(3)
+		state.BlockPercentage = 5 + ratingBonus(int(CombatRatingBlock))
 		if defenseSkill > maxSkill {
 			state.BlockPercentage += float32(defenseSkill-maxSkill) * 0.04
 		} else {
@@ -2247,6 +2248,83 @@ func (s *session) calculatePlayerCritFields(state *playerState, level uint8) {
 		state.Expertise = uint32(expertise)
 		state.OffhandExpertise = state.Expertise
 	}
+	s.updatePlayerParryPercentage(state, level)
+}
+
+var playerParryCaps = [...]float32{47.003525, 47.003525, 145.560408, 145.560408, 0, 47.003525, 145.560408, 0, 0, 0, 0}
+var playerParryDiminishingK = [...]float32{0.9560, 0.9560, 0.9880, 0.9880, 0.9830, 0.9560, 0.9880, 0.9830, 0.9830, 0, 0.9720}
+
+func ResolvePlayerParryPercentage(class uint8, canParry bool, defenseSkill, maxSkill uint32, parryRatingBonus, defenseRatingBonus, auraModifier float32) float32 {
+	classIndex := int(class) - 1
+	if !canParry || classIndex < 0 || classIndex >= len(playerParryCaps) || playerParryCaps[classIndex] <= 0 {
+		return 0
+	}
+	cap := playerParryCaps[classIndex]
+	diminishing := parryRatingBonus + defenseRatingBonus*0.04
+	nonDiminishing := 5 + float32(int32(defenseSkill)-int32(maxSkill))*0.04 + auraModifier
+	value := cap*diminishing/(diminishing+cap*playerParryDiminishingK[classIndex]) + nonDiminishing
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
+func (s *session) playerCombatRatingBonus(state *playerState, level uint8, rating int) float32 {
+	if s == nil || s.server == nil || s.server.Data == nil || state == nil || rating < 0 || rating >= len(state.CombatRatings) || level == 0 {
+		return 0
+	}
+	if level > 100 {
+		level = 100
+	}
+	classIndex := int(state.Class) - 1
+	if classIndex < 0 || classIndex >= 12 {
+		return 0
+	}
+	ratingValue, found, err := s.server.Data.GTFloat("gtCombatRatings", rating*100+int(level)-1)
+	if err != nil || !found || ratingValue == 0 {
+		return 0
+	}
+	scalarValue, found, err := s.server.Data.GTFloat("gtOCTClassCombatRatingScalar", classIndex*32+rating+1)
+	if err != nil || !found {
+		return 0
+	}
+	return float32(state.CombatRatings[rating]) * scalarValue / ratingValue
+}
+
+func (s *session) playerAuraModifier(auraType uint32) float32 {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	var total float32
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if index < len(aura.Amounts) && aura.EffectMask&(1<<uint(index)) != 0 && effect.Aura == auraType {
+				total += float32(aura.Amounts[index])
+			}
+		}
+	}
+	return total
+}
+
+func (s *session) updatePlayerParryPercentage(state *playerState, level uint8) {
+	if state == nil {
+		return
+	}
+	defenseSkill := uint32(0)
+	for _, skill := range state.Skills {
+		if skill.Skill == 95 {
+			defenseSkill = uint32(skill.Value)
+			break
+		}
+	}
+	state.ParryPercentage = ResolvePlayerParryPercentage(state.Class, state.CanParry, defenseSkill, uint32(level)*5, s.playerCombatRatingBonus(state, level, int(CombatRatingParry)), s.playerCombatRatingBonus(state, level, int(CombatRatingDefenseSkill)), s.playerAuraModifier(spellAuraModParryPercent))
 }
 
 func restorePlayerHealth(savedHealth, maxHealth uint32, loaded bool, xp uint32, level uint8) uint32 {
@@ -3245,6 +3323,7 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	values[playerOffhandCritPercentage] = math.Float32bits(state.OffhandCrit)
 	values[playerBlockPercentage] = math.Float32bits(state.BlockPercentage)
 	values[playerDodgePercentage] = math.Float32bits(state.DodgePercentage)
+	values[playerParryPercentage] = math.Float32bits(state.ParryPercentage)
 
 	// Free talent points & spent points
 	if state.Level >= 10 {

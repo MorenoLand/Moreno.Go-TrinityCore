@@ -48,6 +48,7 @@ func main() {
 	replayLFGDungeon := flag.Uint("replay-lfg-dungeon", 0, "after login, teleport through the LFG entrance and verify saved battleground return data")
 	replayInstanceMap := flag.Uint("replay-instance-map", 0, "dungeon map used to exercise the source account instance-entry timer")
 	replayInstanceID := flag.Uint("replay-instance-id", 0, "instance ID used with --replay-instance-map")
+	replayStatsMinLevel := flag.Uint("replay-stats-min-level", 0, "save and verify source character_stats output for characters at or above this level")
 	replayTrace := flag.String("trace-out", "", "optional JSONL path for the in-process login trace")
 	flag.Parse()
 	if *selfCheck {
@@ -58,6 +59,7 @@ func main() {
 		return
 	}
 	if *replayWork != "" {
+		statsReplayRequested := *replayStatsMinLevel != 0
 		petFeedRequested := *replayPetFeedSpell != 0 || *replayPetFeedItem != 0
 		lfgReplayRequested := *replayLFGDungeon != 0
 		instanceReplayRequested := *replayInstanceMap != 0 || *replayInstanceID != 0
@@ -67,10 +69,10 @@ func main() {
 				petReplayCount++
 			}
 		}
-		if petReplayCount > 1 || petReplayCount != 0 && (lfgReplayRequested || instanceReplayRequested) || lfgReplayRequested && instanceReplayRequested || petFeedRequested && (*replayPetFeedSpell == 0 || *replayPetFeedItem == 0) || instanceReplayRequested && (*replayInstanceMap == 0 || *replayInstanceID == 0) {
+		if petReplayCount > 1 || petReplayCount != 0 && (lfgReplayRequested || instanceReplayRequested || statsReplayRequested) || lfgReplayRequested && (instanceReplayRequested || statsReplayRequested) || instanceReplayRequested && statsReplayRequested || petFeedRequested && (*replayPetFeedSpell == 0 || *replayPetFeedItem == 0) || instanceReplayRequested && (*replayInstanceMap == 0 || *replayInstanceID == 0) {
 			fail("choose only one post-login replay scenario")
 		}
-		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem, uint32(*replayLFGDungeon), uint32(*replayInstanceMap), uint32(*replayInstanceID)); err != nil {
+		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem, uint32(*replayLFGDungeon), uint32(*replayInstanceMap), uint32(*replayInstanceID), uint32(*replayStatsMinLevel)); err != nil {
 			fail(err.Error())
 		}
 		return
@@ -105,8 +107,27 @@ func main() {
 }
 
 func runSelfCheck() error {
+	if err := checkPlayerStatsConfig(); err != nil {
+		return err
+	}
 	if world.PlayerCreateUpdateFlags(false, false) != 0x0060 || world.PlayerCreateUpdateFlags(true, false) != 0x0061 || world.PlayerCreateUpdateFlags(false, true) != 0x0064 {
 		return fmt.Errorf("player create update flags do not match victim/self source flags")
+	}
+	if value := world.ResolvePlayerParryPercentage(1, false, 100, 100, 10, 10, 10); value != 0 {
+		return fmt.Errorf("parry percentage ignored the source false-by-default capability gate: %f", value)
+	}
+	if value := world.ResolvePlayerParryPercentage(1, true, 100, 100, 0, 0, 0); math.Abs(float64(value-5)) > 0.0001 {
+		return fmt.Errorf("base parry percentage produced %f, want 5", value)
+	}
+	if value := world.ResolvePlayerParryPercentage(1, true, 95, 100, 0, 0, 0); math.Abs(float64(value-4.8)) > 0.0001 {
+		return fmt.Errorf("defense-skill parry adjustment produced %f, want 4.8", value)
+	}
+	if value := world.ResolvePlayerParryPercentage(5, true, 100, 100, 10, 10, 10); value != 0 {
+		return fmt.Errorf("zero-cap source class produced parry percentage %f", value)
+	}
+	wantParry := float32(47.003525)*10.2/(10.2+float32(47.003525)*0.9560) + 7
+	if value := world.ResolvePlayerParryPercentage(1, true, 100, 100, 10, 5, 2); math.Abs(float64(value-wantParry)) > 0.0001 {
+		return fmt.Errorf("rated/aura parry formula produced %f, want %f", value, wantParry)
 	}
 	if err := checkMapEntryEvent(); err != nil {
 		return fmt.Errorf("map entry hook check failed: %w", err)
@@ -832,6 +853,18 @@ func checkExpectedCharacterStateDelta() error {
 	if err := validateCharacterStateDelta(before, after, false); err != nil {
 		return fmt.Errorf("source-expected login/logout changes rejected: %w", err)
 	}
+	statsBefore := map[string]characterTableSnapshot{"character_stats": {Rows: 0, Digest: "empty", Columns: map[string]string{"guid": "empty", "maxhealth": "empty"}}}
+	statsAfter := map[string]characterTableSnapshot{"character_stats": {Rows: 1, Digest: "saved", Columns: map[string]string{"guid": "guid-8", "maxhealth": "health-8"}}}
+	if validateCharacterStateDelta(statsBefore, statsAfter, false) == nil {
+		return fmt.Errorf("disabled character_stats replay accepted a new stats row")
+	}
+	if err := validateCharacterStateDeltaWithStats(statsBefore, statsAfter, false); err != nil {
+		return fmt.Errorf("source-enabled character_stats row was rejected: %w", err)
+	}
+	statsAfter["character_stats"] = characterTableSnapshot{Rows: 1, Digest: "tampered", Columns: map[string]string{"guid": "guid-8", "private": "changed"}}
+	if validateCharacterStateDeltaWithStats(statsBefore, statsAfter, false) == nil {
+		return fmt.Errorf("unowned character_stats column change was accepted")
+	}
 	accountOnlineBefore := map[string]characterTableSnapshot{
 		"account_characters":  {Rows: 2, Digest: "characters-before", Columns: map[string]string{"guid": "stable-guid-set", "online": "one-online"}},
 		"auth_account_online": {Rows: 1, Digest: "auth-before", Columns: map[string]string{"online": "1"}},
@@ -1231,6 +1264,17 @@ func checkScalingStatDistributionDBC() error {
 		return nil
 	}
 	return fmt.Errorf("ScalingStatDistribution.dbc contains no usable records")
+}
+
+func checkPlayerStatsConfig() error {
+	config, err := config.Load(filepath.Join("configs", "worldserver.conf.dist"))
+	if err != nil {
+		return fmt.Errorf("load default player stats configuration: %w", err)
+	}
+	if config.PlayerSaveStatsMinLevel != 0 || !config.PlayerSaveStatsSaveOnlyOnLogout {
+		return fmt.Errorf("default PlayerSave.Stats config min_level=%d save_only_on_logout=%t, want 0/true", config.PlayerSaveStatsMinLevel, config.PlayerSaveStatsSaveOnlyOnLogout)
+	}
+	return nil
 }
 
 func checkQuestRaidConfig() error {
@@ -3964,7 +4008,7 @@ func eventPayload(event protocoltrace.Event) ([]byte, error) {
 	return protocoltrace.Trace{Events: []protocoltrace.Event{event}}.Payload(event)
 }
 
-func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64, lfgDungeonID, instanceEntryMapID, instanceEntryID uint32) error {
+func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64, lfgDungeonID, instanceEntryMapID, instanceEntryID, statsMinLevel uint32) error {
 	workDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return err
@@ -3981,6 +4025,7 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 	cfg := config.Default()
 	cfg.Backend = string(database.BackendSQLite)
 	cfg.LuaEnabled = false
+	cfg.PlayerSaveStatsMinLevel = statsMinLevel
 	cfg.DataDir = workDir
 	cfg.AuthDatabaseFile, cfg.CharactersDatabaseFile, cfg.WorldDatabaseFile = filepath.Join(workDir, "auth.db"), filepath.Join(workDir, "characters.db"), filepath.Join(workDir, "world.db")
 	cfg.SchemaDir, cfg.GameDataDir = filepath.Join(root, "sql"), filepath.Join(root, "data")
@@ -4075,8 +4120,30 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 	if snapshotErr != nil {
 		return snapshotErr
 	}
-	if err := validateCharacterStateDelta(before, after, petFeedSpell != 0); err != nil {
-		return fmt.Errorf("real-character state delta mismatch (trace saved): %w", err)
+	var deltaErr error
+	if statsMinLevel != 0 {
+		deltaErr = validateCharacterStateDeltaWithStats(before, after, petFeedSpell != 0)
+	} else {
+		deltaErr = validateCharacterStateDelta(before, after, petFeedSpell != 0)
+	}
+	if deltaErr != nil {
+		return fmt.Errorf("real-character state delta mismatch (trace saved): %w", deltaErr)
+	}
+	if statsMinLevel != 0 {
+		var level uint32
+		if err := stores.Characters.DB.QueryRowContext(context.Background(), "SELECT level FROM characters WHERE guid = ?", guid).Scan(&level); err != nil {
+			return fmt.Errorf("read replayed character level for stats save: %w", err)
+		}
+		if level < statsMinLevel {
+			return fmt.Errorf("stats-save fixture level=%d is below configured minimum=%d", level, statsMinLevel)
+		}
+		var statsRows int
+		if err := stores.Characters.DB.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM character_stats WHERE guid = ?", guid).Scan(&statsRows); err != nil {
+			return fmt.Errorf("read replayed character_stats row: %w", err)
+		}
+		if statsRows != 1 {
+			return fmt.Errorf("character_stats rows after qualified logout=%d, want 1", statsRows)
+		}
 	}
 	beforeCharacter, beforeFound := before["characters"]
 	afterCharacter, afterFound := after["characters"]
@@ -4106,7 +4173,9 @@ func runRealCharacterLoginReplay(workDir string, guid uint64, tracePath string, 
 		}
 	}
 	sort.Strings(changed)
-	if petCooldownSpell != 0 {
+	if statsMinLevel != 0 {
+		fmt.Printf("real-character stats save replay passed minimum_level=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", statsMinLevel, len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
+	} else if petCooldownSpell != 0 {
 		fmt.Printf("real-character pet cooldown replay passed spell=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", petCooldownSpell, len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
 	} else if petPowerSpell != 0 {
 		fmt.Printf("real-character pet power replay passed spell=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", petPowerSpell, len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
@@ -4324,6 +4393,14 @@ func validatePetSpellCooldownDelta(before, after map[petSpellCooldownKey]petSpel
 }
 
 func validateCharacterStateDelta(before, after map[string]characterTableSnapshot, allowPetFeedProgress bool) error {
+	return validateCharacterStateDeltaOptions(before, after, allowPetFeedProgress, false)
+}
+
+func validateCharacterStateDeltaWithStats(before, after map[string]characterTableSnapshot, allowPetFeedProgress bool) error {
+	return validateCharacterStateDeltaOptions(before, after, allowPetFeedProgress, true)
+}
+
+func validateCharacterStateDeltaOptions(before, after map[string]characterTableSnapshot, allowPetFeedProgress, allowCharacterStats bool) error {
 	allowedColumns := map[string]map[string]struct{}{
 		"characters":                     {"exploredZones": {}, "orientation": {}, "position_x": {}, "position_y": {}, "position_z": {}, "instance_id": {}, "instance_mode_mask": {}, "totaltime": {}, "leveltime": {}, "logout_time": {}, "is_logout_resting": {}},
 		"character_achievement":          {"guid": {}, "achievement": {}, "date": {}},
@@ -4362,6 +4439,14 @@ func validateCharacterStateDelta(before, after map[string]characterTableSnapshot
 	allowedColumns["character_inventory"] = map[string]struct{}{"guid": {}, "bag": {}, "slot": {}, "item": {}}
 	allowedColumns["inventory_item_instances"] = map[string]struct{}{"guid": {}, "itemEntry": {}, "owner_guid": {}, "creatorGuid": {}, "giftCreatorGuid": {}, "count": {}, "duration": {}, "charges": {}, "flags": {}, "enchantments": {}, "randomPropertyId": {}, "durability": {}, "playedTime": {}, "text": {}}
 	allowedRowChanges := map[string]bool{"character_achievement": true, "character_achievement_progress": true, "character_aura": true, "character_battleground_data": true, "character_fishingsteps": true, "character_inventory": true, "character_spell_cooldown": true, "inventory_item_instances": true, "pet_aura": true, "pet_spell": true, "pet_spell_cooldown": true, "account_instance_times": true}
+	if allowCharacterStats {
+		statsColumns := map[string]struct{}{"guid": {}, "maxhealth": {}, "strength": {}, "agility": {}, "stamina": {}, "intellect": {}, "spirit": {}, "armor": {}, "resHoly": {}, "resFire": {}, "resNature": {}, "resFrost": {}, "resShadow": {}, "resArcane": {}, "blockPct": {}, "dodgePct": {}, "parryPct": {}, "critPct": {}, "rangedCritPct": {}, "spellCritPct": {}, "attackPower": {}, "rangedAttackPower": {}, "spellPower": {}, "resilience": {}}
+		for power := 1; power <= 7; power++ {
+			statsColumns[fmt.Sprintf("maxpower%d", power)] = struct{}{}
+		}
+		allowedColumns["character_stats"] = statsColumns
+		allowedRowChanges["character_stats"] = true
+	}
 	allowedRowChanges["character_spell"] = true
 	allowedRowChanges["character_skills"] = true
 	for table, beforeTable := range before {
@@ -4374,6 +4459,9 @@ func validateCharacterStateDelta(before, after map[string]characterTableSnapshot
 		digestChanged := beforeTable.Digest != afterTable.Digest
 		if table == "character_battleground_data" && afterTable.Rows != 1 {
 			return fmt.Errorf("battleground return-state save left %d rows, want exactly one", afterTable.Rows)
+		}
+		if table == "character_stats" && allowCharacterStats && afterTable.Rows != 1 {
+			return fmt.Errorf("character stats save left %d rows, want exactly one", afterTable.Rows)
 		}
 		if len(changedColumns) == 0 && !rowsChanged && !digestChanged {
 			continue

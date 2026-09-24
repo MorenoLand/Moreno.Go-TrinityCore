@@ -2489,7 +2489,7 @@ func (s *session) completeLogout(ctx context.Context) error {
 		s.unsummonPet(ctx, petSaveAsCurrent)
 	}
 	var firstErr error
-	if err := s.savePlayerState(ctx, 0); err != nil {
+	if err := s.savePlayerState(ctx, 0, true); err != nil {
 		firstErr = err
 		_ = s.savePlayerPosition(ctx)
 	}
@@ -2601,7 +2601,7 @@ func (s *session) savePlayerPosition(ctx context.Context) error {
 	return err
 }
 
-func (s *session) savePlayerState(ctx context.Context, online uint32) error {
+func (s *session) savePlayerState(ctx context.Context, online uint32, logout bool) error {
 	if !s.playerLoaded || s.player == nil || s.server == nil || s.server.CharactersStore == nil {
 		return nil
 	}
@@ -2649,6 +2649,9 @@ func (s *session) savePlayerState(ctx context.Context, online uint32) error {
 		return err
 	}
 	if err = s.saveInstanceTimeRestrictions(ctx, tx); err != nil {
+		return err
+	}
+	if err = s.saveCharacterStats(ctx, tx, state, logout); err != nil {
 		return err
 	}
 	return tx.Commit()
