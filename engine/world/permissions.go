@@ -20,6 +20,10 @@ const permissionTwoSideInteractionChat uint32 = 25
 // permissionTwoSideInteractionChannel mirrors rbac::RBAC_PERM_TWO_SIDE_INTERACTION_CHANNEL (RBAC.h:79).
 const permissionTwoSideInteractionChannel uint32 = 26
 
+const permissionTwoSideWhoList uint32 = 28
+
+const permissionWhoSeeAllSecurityLevels uint32 = 35
+
 // permissionOpcodeWorldTeleport mirrors rbac::RBAC_PERM_OPCODE_WORLD_TELEPORT (RBAC.h:95).
 const permissionOpcodeWorldTeleport uint32 = 42
 

@@ -142,6 +142,9 @@ func runSelfCheck() error {
 	if err := checkPlayerStatsConfig(); err != nil {
 		return err
 	}
+	if err := checkWhoListConfig(); err != nil {
+		return err
+	}
 	if err := checkAuraGUIDRepresentations(); err != nil {
 		return err
 	}
@@ -1390,6 +1393,30 @@ func checkScalingStatDistributionDBC() error {
 		return nil
 	}
 	return fmt.Errorf("ScalingStatDistribution.dbc contains no usable records")
+}
+
+func checkWhoListConfig() error {
+	const envKey = "MORENOCORE_GM_IN_WHO_LIST_LEVEL"
+	previous, hadPrevious := os.LookupEnv(envKey)
+	defer func() {
+		if hadPrevious {
+			_ = os.Setenv(envKey, previous)
+		} else {
+			_ = os.Unsetenv(envKey)
+		}
+	}()
+	if config.Default().GMInWhoListLevel != 3 {
+		return fmt.Errorf("GM.InWhoList.Level default differs from TrinityCore administrator security level")
+	}
+	if err := os.Setenv(envKey, "1"); err != nil {
+		return err
+	}
+	loaded := config.Default()
+	loaded.ApplyEnv()
+	if loaded.GMInWhoListLevel != 1 {
+		return fmt.Errorf("GM.InWhoList.Level environment override was not applied")
+	}
+	return nil
 }
 
 func checkPlayerStatsConfig() error {

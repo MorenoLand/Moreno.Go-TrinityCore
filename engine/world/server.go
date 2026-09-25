@@ -156,6 +156,8 @@ type session struct {
 	gmChat                    bool
 	gmMessage                 bool
 	twoSideChat               bool
+	twoSideWhoList            bool
+	whoSeeAllSecurityLevels   bool
 	legitimate                map[uint64]struct{}
 	characterNames            map[uint64]enumCharacter
 	mounts                    *MountState
@@ -3065,6 +3067,14 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	if s.twoSideChat, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionTwoSideInteractionChat); err != nil {
 		s.twoSideChat = false
 		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionTwoSideInteractionChat, "error", err)
+	}
+	if s.twoSideWhoList, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionTwoSideWhoList); err != nil {
+		s.twoSideWhoList = false
+		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionTwoSideWhoList, "error", err)
+	}
+	if s.whoSeeAllSecurityLevels, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionWhoSeeAllSecurityLevels); err != nil {
+		s.whoSeeAllSecurityLevels = false
+		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionWhoSeeAllSecurityLevels, "error", err)
 	}
 	s.accountExpansion = account.Expansion
 	if s.server.Config.Expansion > 0 && s.accountExpansion > uint8(s.server.Config.Expansion) {

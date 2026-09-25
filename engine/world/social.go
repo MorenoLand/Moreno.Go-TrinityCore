@@ -58,9 +58,15 @@ const (
 // TrinityCore: PlayerSocial::SendSocialList
 // flags: 0x1=friends, 0x2=ignored, 0x4=muted
 // -----------------------------------------------------------------
-func (s *Server) friendStatus(guid uint64) (uint8, uint32, uint32, uint32) {
+func (s *Server) friendStatus(viewer *session, guid uint64) (uint8, uint32, uint32, uint32) {
+	if s == nil || viewer == nil || viewer.player == nil {
+		return friendStatusOffline, 0, 0, 0
+	}
 	friendSess := s.findSessionByGUID(guid)
 	if friendSess == nil || !friendSess.worldReady.Load() || friendSess.player == nil {
+		return friendStatusOffline, 0, 0, 0
+	}
+	if !s.canFriendSee(viewer, friendSess) {
 		return friendStatusOffline, 0, 0, 0
 	}
 	status := friendStatusOnline
@@ -70,6 +76,22 @@ func (s *Server) friendStatus(guid uint64) (uint8, uint32, uint32, uint32) {
 		status = friendStatusAFK
 	}
 	return status, uint32(friendSess.player.Zone), uint32(friendSess.player.Level), uint32(friendSess.player.Class)
+}
+
+func (s *Server) canFriendSee(viewer, target *session) bool {
+	if s == nil || viewer == nil || target == nil || viewer.player == nil || target.player == nil {
+		return false
+	}
+	if viewer.player.GUID == target.player.GUID {
+		return true
+	}
+	if !viewer.whoSeeAllSecurityLevels && int(target.security) > s.Config.GMInWhoListLevel {
+		return false
+	}
+	if playerTeam(viewer.player.Race) != playerTeam(target.player.Race) && !viewer.twoSideWhoList {
+		return false
+	}
+	return target.player.ExtraFlags&playerExtraGMInvisible == 0 || (viewer.security != 0 && target.security <= viewer.security)
 }
 
 func (s *session) sendContactList(ctx context.Context, flags uint32) error {
@@ -140,7 +162,7 @@ func (s *session) sendContactList(ctx context.Context, flags uint32) error {
 		b.WriteU32(uint32(c.Flags))
 		b.WriteCString(c.Note)
 		if c.Flags&socialFlagFriend != 0 {
-			status, zone, level, class := s.server.friendStatus(c.GUID)
+			status, zone, level, class := s.server.friendStatus(s, c.GUID)
 			b.WriteU8(status)
 			if status != friendStatusOffline {
 				b.WriteU32(zone)
@@ -166,7 +188,7 @@ func (s *session) sendFriendStatus(result uint8, friendGUID uint64, note string)
 
 	switch result {
 	case friendsResultAddedOnline, friendsResultOnline:
-		status, zone, level, class := s.server.friendStatus(friendGUID)
+		status, zone, level, class := s.server.friendStatus(s, friendGUID)
 		b.WriteU8(status)
 		b.WriteU32(zone)
 		b.WriteU32(level)
@@ -191,6 +213,10 @@ func (s *Server) broadcastFriendStatus(playerGUID uint64, result uint8, zone, le
 		return
 	}
 	defer rows.Close()
+	target := s.findSessionByGUID(playerGUID)
+	if target == nil || target.player == nil {
+		return
+	}
 
 	var recipientGUIDs []uint64
 	for rows.Next() {
@@ -217,9 +243,24 @@ func (s *Server) broadcastFriendStatus(playerGUID uint64, result uint8, zone, le
 	payload := b.Bytes()
 	for _, recipient := range recipientGUIDs {
 		sess := s.findSessionByGUID(recipient)
-		if sess != nil && sess.worldReady.Load() {
-			_ = sess.write(uint16(protocol.OpcodeSMSG_FRIEND_STATUS), payload, true)
+		if sess == nil || !sess.worldReady.Load() || !s.canFriendSee(sess, target) {
+			continue
 		}
+		if result == friendsResultOnline {
+			status, _, _, _ := s.friendStatus(sess, playerGUID)
+			if status == friendStatusOffline {
+				continue
+			}
+			b := protocol.NewBuffer(22)
+			b.WriteU8(result)
+			b.WriteU64(playerGUID)
+			b.WriteU8(status)
+			b.WriteU32(zone)
+			b.WriteU32(level)
+			b.WriteU32(class)
+			payload = b.Bytes()
+		}
+		_ = sess.write(uint16(protocol.OpcodeSMSG_FRIEND_STATUS), payload, true)
 	}
 }
 
