@@ -61,6 +61,7 @@ func main() {
 	replayInstanceID := flag.Uint("replay-instance-id", 0, "instance ID used with --replay-instance-map")
 	replayStatsMinLevel := flag.Uint("replay-stats-min-level", 0, "save and verify source character_stats output for characters at or above this level")
 	replayPlayerStartMessage := flag.Bool("replay-player-start-message", false, "verify the source PlayerStart.String first-login packet order")
+	replayQuestRewardTwiceID := flag.Uint("replay-quest-reward-twice", 0, "replay a one-time quest reward followed by a duplicate turn-in")
 	replayTrace := flag.String("trace-out", "", "optional JSONL path for the in-process login trace")
 	flag.Parse()
 	if *selfCheck {
@@ -76,19 +77,26 @@ func main() {
 		lfgReplayRequested := *replayLFGDungeon != 0
 		instanceReplayRequested := *replayInstanceMap != 0 || *replayInstanceID != 0
 		startMessageRequested := *replayPlayerStartMessage
+		questRewardReplayRequested := *replayQuestRewardTwiceID != 0
 		petReplayCount := 0
 		for _, requested := range []bool{*replayPetCooldownSpell != 0, *replayPetPowerSpell != 0, *replayPetXPAward != 0, *replayPetAuraSourceSpell != 0, *replayPetFocusAuraSpell != 0, petFeedRequested} {
 			if requested {
 				petReplayCount++
 			}
 		}
-		if petReplayCount > 1 || petReplayCount != 0 && (lfgReplayRequested || instanceReplayRequested || statsReplayRequested || startMessageRequested) || lfgReplayRequested && (instanceReplayRequested || statsReplayRequested || startMessageRequested) || instanceReplayRequested && (statsReplayRequested || startMessageRequested) || statsReplayRequested && startMessageRequested || petFeedRequested && (*replayPetFeedSpell == 0 || *replayPetFeedItem == 0) || instanceReplayRequested && (*replayInstanceMap == 0 || *replayInstanceID == 0) {
+		postLoginReplayCount := petReplayCount
+		for _, requested := range []bool{lfgReplayRequested, instanceReplayRequested, statsReplayRequested, startMessageRequested, questRewardReplayRequested} {
+			if requested {
+				postLoginReplayCount++
+			}
+		}
+		if postLoginReplayCount > 1 || petFeedRequested && (*replayPetFeedSpell == 0 || *replayPetFeedItem == 0) || instanceReplayRequested && (*replayInstanceMap == 0 || *replayInstanceID == 0) {
 			fail("choose only one post-login replay scenario")
 		}
-		if *replayPeerGUID != 0 && (petReplayCount != 0 || lfgReplayRequested || instanceReplayRequested || statsReplayRequested || startMessageRequested) {
+		if *replayPeerGUID != 0 && postLoginReplayCount != 0 {
 			fail("paired login replay cannot be combined with a post-login replay scenario")
 		}
-		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayPeerGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem, uint32(*replayLFGDungeon), uint32(*replayInstanceMap), uint32(*replayInstanceID), uint32(*replayStatsMinLevel), startMessageRequested); err != nil {
+		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayPeerGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem, uint32(*replayLFGDungeon), uint32(*replayInstanceMap), uint32(*replayInstanceID), uint32(*replayStatsMinLevel), startMessageRequested, uint32(*replayQuestRewardTwiceID)); err != nil {
 			fail(err.Error())
 		}
 		return
@@ -4881,7 +4889,7 @@ func pairedLoginTrace(trace protocoltrace.Trace, playerGUID uint64) (protocoltra
 	return filtered, nil
 }
 
-func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64, lfgDungeonID, instanceEntryMapID, instanceEntryID, statsMinLevel uint32, replayPlayerStartMessage bool) error {
+func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64, lfgDungeonID, instanceEntryMapID, instanceEntryID, statsMinLevel uint32, replayPlayerStartMessage bool, questRewardTwiceID uint32) error {
 	workDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return err
@@ -4955,6 +4963,20 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 			return fmt.Errorf("inject isolated owner pet-aura fixture spell %d: %w", petAuraSourceSpell, err)
 		}
 	}
+	if questRewardTwiceID != 0 {
+		if _, err := stores.Characters.DB.ExecContext(ctx, "DELETE FROM character_queststatus_rewarded WHERE guid = ? AND quest = ?", guid, questRewardTwiceID); err != nil {
+			server.Stop()
+			return fmt.Errorf("prepare first quest reward replay state: %w", err)
+		}
+		if _, err := stores.Characters.DB.ExecContext(ctx, "DELETE FROM character_queststatus WHERE guid = ? AND quest = ?", guid, questRewardTwiceID); err != nil {
+			server.Stop()
+			return fmt.Errorf("prepare rewarded quest replay status: %w", err)
+		}
+		if _, err := stores.Characters.DB.ExecContext(ctx, "INSERT INTO character_queststatus (guid, quest, status) VALUES (?, ?, 1)", guid, questRewardTwiceID); err != nil {
+			server.Stop()
+			return fmt.Errorf("prepare completed quest replay status: %w", err)
+		}
+	}
 	before, err := snapshotCharacterState(stores.Characters.DB, stores.World.DB, stores.Auth.DB, guid)
 	if err != nil {
 		server.Stop()
@@ -4995,6 +5017,8 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 		trace, replayErr = world.ReplayCharacterPetFocusAura(ctx, server, guid, petFocusAuraSpell)
 	} else if petFeedSpell != 0 {
 		trace, replayErr = world.ReplayCharacterPetFeed(ctx, server, guid, petFeedSpell, petFoodGUID)
+	} else if questRewardTwiceID != 0 {
+		trace, replayErr = world.ReplayCharacterQuestRewardTwice(ctx, server, guid, questRewardTwiceID)
 	} else if lfgDungeonID != 0 {
 		trace, replayErr = world.ReplayCharacterLFGTeleport(ctx, server, guid, lfgDungeonID)
 	} else if instanceEntryID != 0 {
@@ -5037,7 +5061,9 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 		return peerSnapshotErr
 	}
 	var deltaErr error
-	if statsMinLevel != 0 {
+	if questRewardTwiceID != 0 {
+		deltaErr = validateCharacterStateDeltaWithQuestReward(before, after)
+	} else if statsMinLevel != 0 {
 		deltaErr = validateCharacterStateDeltaWithStats(before, after, petFeedSpell != 0)
 	} else {
 		deltaErr = validateCharacterStateDelta(before, after, petFeedSpell != 0)
@@ -5378,14 +5404,18 @@ func validatePetSpellCooldownDelta(before, after map[petSpellCooldownKey]petSpel
 }
 
 func validateCharacterStateDelta(before, after map[string]characterTableSnapshot, allowPetFeedProgress bool) error {
-	return validateCharacterStateDeltaOptions(before, after, allowPetFeedProgress, false)
+	return validateCharacterStateDeltaOptions(before, after, allowPetFeedProgress, false, false)
 }
 
 func validateCharacterStateDeltaWithStats(before, after map[string]characterTableSnapshot, allowPetFeedProgress bool) error {
-	return validateCharacterStateDeltaOptions(before, after, allowPetFeedProgress, true)
+	return validateCharacterStateDeltaOptions(before, after, allowPetFeedProgress, true, false)
 }
 
-func validateCharacterStateDeltaOptions(before, after map[string]characterTableSnapshot, allowPetFeedProgress, allowCharacterStats bool) error {
+func validateCharacterStateDeltaWithQuestReward(before, after map[string]characterTableSnapshot) error {
+	return validateCharacterStateDeltaOptions(before, after, false, false, true)
+}
+
+func validateCharacterStateDeltaOptions(before, after map[string]characterTableSnapshot, allowPetFeedProgress, allowCharacterStats, allowQuestReward bool) error {
 	allowedColumns := map[string]map[string]struct{}{
 		"characters":                     {"cinematic": {}, "exploredZones": {}, "orientation": {}, "position_x": {}, "position_y": {}, "position_z": {}, "instance_id": {}, "instance_mode_mask": {}, "totaltime": {}, "leveltime": {}, "logout_time": {}, "is_logout_resting": {}},
 		"character_achievement":          {"guid": {}, "achievement": {}, "date": {}},
@@ -5424,6 +5454,15 @@ func validateCharacterStateDeltaOptions(before, after map[string]characterTableS
 	allowedColumns["character_inventory"] = map[string]struct{}{"guid": {}, "bag": {}, "slot": {}, "item": {}}
 	allowedColumns["inventory_item_instances"] = map[string]struct{}{"guid": {}, "itemEntry": {}, "owner_guid": {}, "creatorGuid": {}, "giftCreatorGuid": {}, "count": {}, "duration": {}, "charges": {}, "flags": {}, "enchantments": {}, "randomPropertyId": {}, "durability": {}, "playedTime": {}, "text": {}}
 	allowedRowChanges := map[string]bool{"character_achievement": true, "character_achievement_progress": true, "character_aura": true, "character_battleground_data": true, "character_fishingsteps": true, "character_inventory": true, "character_spell_cooldown": true, "inventory_item_instances": true, "pet_aura": true, "pet_spell": true, "pet_spell_cooldown": true, "account_instance_times": true}
+	if allowQuestReward {
+		allowedColumns["characters"]["xp"] = struct{}{}
+		allowedColumns["characters"]["money"] = struct{}{}
+		allowedColumns["characters"]["level"] = struct{}{}
+		allowedColumns["character_queststatus"] = map[string]struct{}{"guid": {}, "quest": {}, "status": {}, "explored": {}, "timer": {}, "mobcount1": {}, "mobcount2": {}, "mobcount3": {}, "mobcount4": {}, "itemcount1": {}, "itemcount2": {}, "itemcount3": {}, "itemcount4": {}, "itemcount5": {}, "itemcount6": {}, "playercount": {}}
+		allowedColumns["character_queststatus_rewarded"] = map[string]struct{}{"guid": {}, "quest": {}, "active": {}}
+		allowedRowChanges["character_queststatus"] = true
+		allowedRowChanges["character_queststatus_rewarded"] = true
+	}
 	if allowCharacterStats {
 		statsColumns := map[string]struct{}{"guid": {}, "maxhealth": {}, "strength": {}, "agility": {}, "stamina": {}, "intellect": {}, "spirit": {}, "armor": {}, "resHoly": {}, "resFire": {}, "resNature": {}, "resFrost": {}, "resShadow": {}, "resArcane": {}, "blockPct": {}, "dodgePct": {}, "parryPct": {}, "critPct": {}, "rangedCritPct": {}, "spellCritPct": {}, "attackPower": {}, "rangedAttackPower": {}, "spellPower": {}, "resilience": {}}
 		for power := 1; power <= 7; power++ {

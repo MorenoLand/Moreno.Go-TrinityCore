@@ -47,6 +47,9 @@ func (s *session) handleQuestgiverCompleteQuest(ctx context.Context, payload []b
 	if err != nil {
 		return false
 	}
+	if status != questStatusComplete && s.isQuestRewarded(ctx, questID) {
+		return s.sendQuestRequestItems(view, giverGUID, false, false)
+	}
 	if status == 0 && view.Detail.Flags&questAutoCompleteFlags == 0 {
 		return true
 	}
@@ -90,7 +93,7 @@ func (s *session) handleQuestgiverRequestReward(ctx context.Context, payload []b
 	if err != nil {
 		return false
 	}
-	if status != questStatusComplete && view.Detail.Flags&questAutoCompleteFlags == 0 {
+	if status != questStatusComplete || s.isQuestRewarded(ctx, questID) {
 		return true
 	}
 	if len(view.RequiredItems) != 0 {

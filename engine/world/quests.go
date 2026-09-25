@@ -234,11 +234,7 @@ func (s *session) isQuestRewarded(ctx context.Context, questID uint32) bool {
 		return false
 	}
 	var count int64
-	err := cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus WHERE guid = ? AND quest = ? AND status = 2", s.playerGUID, questID).Scan(&count)
-	if err == nil && count > 0 {
-		return true
-	}
-	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_rewarded WHERE guid = ? AND quest = ?", s.playerGUID, questID).Scan(&count)
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_rewarded WHERE guid = ? AND quest = ? AND active = 1", s.playerGUID, questID).Scan(&count)
 	return count > 0
 }
 
@@ -407,6 +403,9 @@ func (s *session) questDialogStatusFromRelations(ctx context.Context, entry uint
 			}
 		}
 		if status == questStatusComplete {
+			if s.isQuestRewarded(ctx, questID) {
+				continue
+			}
 			return questDialogReward, nil
 		}
 		if status == questStatusIncomplete {

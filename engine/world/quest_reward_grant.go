@@ -27,6 +27,7 @@ const (
 )
 
 var errQuestInventoryFull = errors.New("quest reward inventory is full")
+var errQuestAlreadyRewarded = errors.New("quest reward already claimed in current reset window")
 
 type inventoryRewardRecord struct {
 	Bag      int64
@@ -87,6 +88,10 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 		s.debug("quest reward load failed", "account", s.accountName, "quest", questID, "error", err)
 		return true
 	}
+	if s.isQuestRewarded(ctx, questID) {
+		s.debug("quest reward rejected", "account", s.accountName, "quest", questID, "reason", "already rewarded")
+		return true
+	}
 	status, err := s.characterQuestStatus(ctx, questID)
 	if err != nil {
 		return false
@@ -113,9 +118,20 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 		_ = s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_QUEST_FAILED), buildQuestFailed(view.Detail.ID, questInventoryFull), true)
 		return true
 	}
+	if errors.Is(err, errQuestAlreadyRewarded) {
+		s.debug("quest reward rejected", "account", s.accountName, "quest", questID, "reason", "already rewarded in current reset window")
+		return true
+	}
 	if err != nil {
 		s.debug("quest reward commit failed", "account", s.accountName, "quest", questID, "error", err)
 		return false
+	}
+	for slot := range s.player.QuestLog {
+		if s.player.QuestLog[slot].QuestID == questID {
+			s.player.QuestLog[slot] = questLogEntry{}
+			s.sendPlayerQuestLogUpdate(slot)
+			break
+		}
 	}
 	for _, fullGUID := range destroyedGUIDs {
 		s.sendDestroyObject(fullGUID, false)
@@ -207,6 +223,9 @@ func (s *session) commitQuestReward(ctx context.Context, view questRewardView, c
 		_ = tx.Rollback()
 		return nil, nil, cause
 	}
+	if err := rejectClaimedQuestReward(ctx, tx, s.playerGUID, view.Detail.ID, questState); err != nil {
+		return rollback(err)
+	}
 	inventory, err := loadInventoryRewardRecords(ctx, tx, s.playerGUID)
 	if err != nil {
 		return rollback(err)
@@ -281,6 +300,34 @@ func (s *session) commitQuestReward(ctx context.Context, view questRewardView, c
 		s.updateAchievementCriteria(criteriaTypeCompleteDailyQuestDaily, 0, 1)
 	}
 	return grants, destroyedGUIDs, nil
+}
+
+func rejectClaimedQuestReward(ctx context.Context, tx *sql.Tx, guid uint64, questID uint32, state questRewardPersistenceState) error {
+	queries := []struct {
+		enabled bool
+		query   string
+		args    []any
+	}{
+		{state.Rewarded, "SELECT 1 FROM character_queststatus_rewarded WHERE guid = ? AND quest = ? AND active = 1 LIMIT 1", []any{guid, questID}},
+		{state.DailyStatus, "SELECT 1 FROM character_queststatus_daily WHERE guid = ? AND quest = ? LIMIT 1", []any{guid, questID}},
+		{state.Weekly, "SELECT 1 FROM character_queststatus_weekly WHERE guid = ? AND quest = ? LIMIT 1", []any{guid, questID}},
+		{state.Monthly, "SELECT 1 FROM character_queststatus_monthly WHERE guid = ? AND quest = ? LIMIT 1", []any{guid, questID}},
+		{state.Seasonal, "SELECT 1 FROM character_queststatus_seasonal WHERE guid = ? AND quest = ? AND event = ? LIMIT 1", []any{guid, questID, state.EventID}},
+	}
+	for _, check := range queries {
+		if !check.enabled {
+			continue
+		}
+		var found int
+		err := tx.QueryRowContext(ctx, check.query, check.args...).Scan(&found)
+		if err == nil {
+			return errQuestAlreadyRewarded
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *session) loadQuestRewardPersistenceState(ctx context.Context, questID uint32) (questRewardPersistenceState, error) {
