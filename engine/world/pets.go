@@ -878,7 +878,11 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 			}(aura.SpellID, aura.Slot))
 		}
 	}
-	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE_ALL), protocol.BuildAuraUpdateAll(petGUID, records), true)
+	for _, record := range records {
+		packet := protocol.BuildAuraUpdateWithStackEffect(petGUID, record.CasterGUID, record.Slot, record.SpellID, false, record.Positive, record.MaxDurationMs, record.DurationMs, record.CasterLevel, record.StackCount, record.EffectMask)
+		_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, true)
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, s)
+	}
 }
 
 func (s *session) unsummonPet(ctx context.Context, mode uint8) {

@@ -349,7 +349,7 @@ func (s *session) handleGuildRoster(ctx context.Context) bool {
 			var mName, pNote, offNote string
 			if scanErr := memRows.Scan(&mGuid, &mName, &rank, &lvl, &cls, &gnd, &zone, &logoutTime, &pNote, &offNote); scanErr == nil {
 				status := uint8(0)
-				if memberSession := s.server.findSessionByGUID(uint64(mGuid)); memberSession != nil && memberSession.player != nil {
+				if memberSession := s.server.findSessionByGUID(uint64(mGuid)); memberSession != nil && memberSession.worldReady.Load() && memberSession.player != nil {
 					zone = int64(memberSession.player.Zone)
 					status = 1
 					if memberSession.player.PlayerFlags&playerFlagAFK != 0 {
