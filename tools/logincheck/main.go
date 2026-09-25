@@ -56,6 +56,7 @@ func main() {
 	replayPetFocusAuraSpell := flag.Uint("replay-pet-focus-aura-spell", 0, "replay a DBC Focus regeneration aura through the pet timer and power packet")
 	replayPetFeedSpell := flag.Uint("replay-pet-feed-spell", 0, "after login, cast a pet-feed spell against the supplied inventory item")
 	replayPetFeedItem := flag.Uint64("replay-pet-feed-item", 0, "inventory item GUID used by the pet-feed replay")
+	replayPetCritter := flag.Bool("replay-pet-critter", false, "verify a saved critter loads without controlled-pet fields, spells, or talents")
 	replayLFGDungeon := flag.Uint("replay-lfg-dungeon", 0, "after login, teleport through the LFG entrance and verify saved battleground return data")
 	replayInstanceMap := flag.Uint("replay-instance-map", 0, "dungeon map used to exercise the source account instance-entry timer")
 	replayInstanceID := flag.Uint("replay-instance-id", 0, "instance ID used with --replay-instance-map")
@@ -78,6 +79,7 @@ func main() {
 		instanceReplayRequested := *replayInstanceMap != 0 || *replayInstanceID != 0
 		startMessageRequested := *replayPlayerStartMessage
 		questRewardReplayRequested := *replayQuestRewardTwiceID != 0
+		petCritterReplayRequested := *replayPetCritter
 		petReplayCount := 0
 		for _, requested := range []bool{*replayPetCooldownSpell != 0, *replayPetPowerSpell != 0, *replayPetXPAward != 0, *replayPetAuraSourceSpell != 0, *replayPetFocusAuraSpell != 0, petFeedRequested} {
 			if requested {
@@ -85,7 +87,7 @@ func main() {
 			}
 		}
 		postLoginReplayCount := petReplayCount
-		for _, requested := range []bool{lfgReplayRequested, instanceReplayRequested, statsReplayRequested, startMessageRequested, questRewardReplayRequested} {
+		for _, requested := range []bool{lfgReplayRequested, instanceReplayRequested, statsReplayRequested, startMessageRequested, questRewardReplayRequested, petCritterReplayRequested} {
 			if requested {
 				postLoginReplayCount++
 			}
@@ -96,7 +98,7 @@ func main() {
 		if *replayPeerGUID != 0 && postLoginReplayCount != 0 {
 			fail("paired login replay cannot be combined with a post-login replay scenario")
 		}
-		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayPeerGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem, uint32(*replayLFGDungeon), uint32(*replayInstanceMap), uint32(*replayInstanceID), uint32(*replayStatsMinLevel), startMessageRequested, uint32(*replayQuestRewardTwiceID)); err != nil {
+		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayPeerGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem, uint32(*replayLFGDungeon), uint32(*replayInstanceMap), uint32(*replayInstanceID), uint32(*replayStatsMinLevel), startMessageRequested, uint32(*replayQuestRewardTwiceID), petCritterReplayRequested); err != nil {
 			fail(err.Error())
 		}
 		return
@@ -4317,6 +4319,90 @@ func containsPlayerCreate(event protocoltrace.Event, playerGUID uint64) (bool, e
 	return inspectPlayerCreate(event, playerGUID, false)
 }
 
+func checkCritterPetLoginTrace(trace protocoltrace.Trace) error {
+	petCreate, petSpellBar, petTalents := false, false, false
+	for _, event := range trace.Events {
+		if event.Direction != protocoltrace.ServerToClient {
+			continue
+		}
+		switch event.Opcode {
+		case uint32(protocol.OpcodeSMSG_PET_SPELLS):
+			petSpellBar = true
+		case uint32(protocol.OpcodeSMSG_TALENTS_INFO):
+			payload, err := eventPayload(event)
+			if err != nil {
+				return err
+			}
+			petTalents = petTalents || len(payload) != 0 && payload[0] == 1
+		case uint32(protocol.OpcodeSMSG_UPDATE_OBJECT), uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT):
+			found, err := containsCritterPetCreate(event)
+			if err != nil {
+				return err
+			}
+			petCreate = petCreate || found
+		}
+	}
+	if !petCreate || petSpellBar || petTalents {
+		return fmt.Errorf("critter login create=%t pet-spell-packet=%t pet-talents-packet=%t", petCreate, petSpellBar, petTalents)
+	}
+	return nil
+}
+
+func containsCritterPetCreate(event protocoltrace.Event) (bool, error) {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return false, err
+	}
+	if event.Opcode == uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		payload, err = protocol.DecompressUpdatePayload(payload)
+		if err != nil {
+			return false, err
+		}
+	}
+	reader := protocol.NewReader(payload)
+	count, err := reader.ReadU32()
+	if err != nil {
+		return false, err
+	}
+	for index := uint32(0); index < count; index++ {
+		kind, err := reader.ReadU8()
+		if err != nil {
+			return false, err
+		}
+		switch kind {
+		case protocol.UpdateOutOfRangeObjects:
+			outOfRange, err := reader.ReadU32()
+			if err != nil {
+				return false, err
+			}
+			for guidIndex := uint32(0); guidIndex < outOfRange; guidIndex++ {
+				if _, err := reader.ReadPackedGUID(); err != nil {
+					return false, err
+				}
+			}
+		case protocol.UpdateCreateObject, protocol.UpdateCreateObject2:
+			guid, typeID, _, err := parseCreateObjectBlock(reader, 0)
+			if err != nil {
+				return false, err
+			}
+			if typeID == 3 && guid>>48 == 0xF140 {
+				return true, nil
+			}
+		case protocol.UpdateValues:
+			if err := skipValuesUpdate(reader); err != nil {
+				return false, err
+			}
+		case protocol.UpdateMovement:
+			if err := skipMovementUpdate(reader); err != nil {
+				return false, err
+			}
+		default:
+			return false, fmt.Errorf("unsupported update block kind=%d", kind)
+		}
+	}
+	return false, nil
+}
+
 func inspectPlayerCreate(event protocoltrace.Event, playerGUID uint64, strict bool) (bool, error) {
 	payload, err := eventPayload(event)
 	if err != nil {
@@ -4889,7 +4975,7 @@ func pairedLoginTrace(trace protocoltrace.Trace, playerGUID uint64) (protocoltra
 	return filtered, nil
 }
 
-func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64, lfgDungeonID, instanceEntryMapID, instanceEntryID, statsMinLevel uint32, replayPlayerStartMessage bool, questRewardTwiceID uint32) error {
+func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64, lfgDungeonID, instanceEntryMapID, instanceEntryID, statsMinLevel uint32, replayPlayerStartMessage bool, questRewardTwiceID uint32, replayPetCritter bool) error {
 	workDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return err
@@ -4977,6 +5063,46 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 			return fmt.Errorf("prepare completed quest replay status: %w", err)
 		}
 	}
+	var replayCritterPetID int64
+	if replayPetCritter {
+		var activePets int64
+		if err := stores.Characters.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_pet WHERE owner = ? AND slot = 0", guid).Scan(&activePets); err != nil {
+			server.Stop()
+			return fmt.Errorf("check active pet before critter replay: %w", err)
+		}
+		if activePets != 0 {
+			server.Stop()
+			return fmt.Errorf("critter replay requires a character with no active pet; GUID %d has %d", guid, activePets)
+		}
+		var entry, model int64
+		var petName string
+		if err := stores.World.DB.QueryRowContext(ctx, `SELECT entry, COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 0), COALESCE(name, '')
+			FROM creature_template WHERE type = 8 AND (modelid1 > 0 OR modelid2 > 0 OR modelid3 > 0 OR modelid4 > 0) ORDER BY entry LIMIT 1`).Scan(&entry, &model, &petName); err != nil || entry == 0 || model == 0 {
+			server.Stop()
+			return fmt.Errorf("find a creature-template critter fixture: entry=%d model=%d err=%v", entry, model, err)
+		}
+		var level, petID int64
+		if err := stores.Characters.DB.QueryRowContext(ctx, "SELECT level FROM characters WHERE guid = ?", guid).Scan(&level); err != nil {
+			server.Stop()
+			return fmt.Errorf("read critter replay owner level: %w", err)
+		}
+		if err := stores.Characters.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM character_pet").Scan(&petID); err != nil || petID <= 0 {
+			server.Stop()
+			return fmt.Errorf("allocate critter replay pet ID: %d %v", petID, err)
+		}
+		if petName == "" {
+			petName = "Companion"
+		}
+		if _, err := stores.Characters.DB.ExecContext(ctx, `INSERT INTO character_pet (id, entry, owner, modelid, CreatedBySpell, PetType, level, exp, Reactstate, name, renamed, slot, curhealth, curmana, curhappiness, savetime, abdata)
+			VALUES (?, ?, ?, ?, 0, 0, ?, 0, 1, ?, 0, 0, 1, 0, 0, ?, '')`, petID, entry, guid, model, level, petName, time.Now().Unix()); err != nil {
+			server.Stop()
+			return fmt.Errorf("seed critter replay pet: %w", err)
+		}
+		replayCritterPetID = petID
+		defer func() {
+			_, _ = stores.Characters.DB.ExecContext(context.Background(), "DELETE FROM character_pet WHERE id = ? AND owner = ?", replayCritterPetID, guid)
+		}()
+	}
 	before, err := snapshotCharacterState(stores.Characters.DB, stores.World.DB, stores.Auth.DB, guid)
 	if err != nil {
 		server.Stop()
@@ -5019,6 +5145,8 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 		trace, replayErr = world.ReplayCharacterPetFeed(ctx, server, guid, petFeedSpell, petFoodGUID)
 	} else if questRewardTwiceID != 0 {
 		trace, replayErr = world.ReplayCharacterQuestRewardTwice(ctx, server, guid, questRewardTwiceID)
+	} else if replayPetCritter {
+		trace, replayErr = world.ReplayCharacterPetCritter(ctx, server, guid)
 	} else if lfgDungeonID != 0 {
 		trace, replayErr = world.ReplayCharacterLFGTeleport(ctx, server, guid, lfgDungeonID)
 	} else if instanceEntryID != 0 {
@@ -5053,6 +5181,11 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 	}
 	if replayErr != nil {
 		return fmt.Errorf("real-character login replay failed (trace saved): %w", replayErr)
+	}
+	if replayPetCritter {
+		if err := checkCritterPetLoginTrace(trace); err != nil {
+			return fmt.Errorf("critter pet packet replay failed: %w", err)
+		}
 	}
 	if snapshotErr != nil {
 		return snapshotErr

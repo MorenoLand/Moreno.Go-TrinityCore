@@ -16,14 +16,18 @@ import (
 )
 
 func ReplayCharacterLogin(ctx context.Context, server *Server, guid uint64) (protocoltrace.Trace, error) {
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false)
 }
 
 func ReplayCharacterQuestRewardTwice(ctx context.Context, server *Server, guid uint64, questID uint32) (protocoltrace.Trace, error) {
 	if questID == 0 {
 		return protocoltrace.Trace{}, errors.New("quest reward guard replay requires a quest ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, questID)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, questID, false)
+}
+
+func ReplayCharacterPetCritter(ctx context.Context, server *Server, guid uint64) (protocoltrace.Trace, error) {
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, true)
 }
 
 func ReplayCharacterPairLogin(ctx context.Context, server *Server, firstGUID, secondGUID uint64) (protocoltrace.Trace, error) {
@@ -113,56 +117,56 @@ func ReplayCharacterLFGTeleport(ctx context.Context, server *Server, guid uint64
 	if dungeonID == 0 {
 		return protocoltrace.Trace{}, errors.New("LFG teleport replay requires a dungeon ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, dungeonID, 0, 0, 0)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, dungeonID, 0, 0, 0, false)
 }
 
 func ReplayCharacterInstanceEntry(ctx context.Context, server *Server, guid uint64, mapID, instanceID uint32) (protocoltrace.Trace, error) {
 	if mapID == 0 || instanceID == 0 {
 		return protocoltrace.Trace{}, errors.New("instance-entry replay requires a dungeon map and instance ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, 0, mapID, instanceID, 0)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, 0, mapID, instanceID, 0, false)
 }
 
 func ReplayCharacterPetCooldown(ctx context.Context, server *Server, guid uint64, spellID uint32) (protocoltrace.Trace, error) {
 	if spellID == 0 {
 		return protocoltrace.Trace{}, errors.New("pet cooldown replay requires a spell ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, spellID, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+	return replayCharacterLogin(ctx, server, guid, spellID, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false)
 }
 
 func ReplayCharacterPetPower(ctx context.Context, server *Server, guid uint64, spellID uint32) (protocoltrace.Trace, error) {
 	if spellID == 0 {
 		return protocoltrace.Trace{}, errors.New("pet power replay requires a spell ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, spellID, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+	return replayCharacterLogin(ctx, server, guid, 0, spellID, 0, 0, 0, 0, 0, 0, 0, 0, 0, false)
 }
 
 func ReplayCharacterPetXP(ctx context.Context, server *Server, guid uint64, earnedXP uint32) (protocoltrace.Trace, error) {
 	if earnedXP == 0 {
 		return protocoltrace.Trace{}, errors.New("pet XP replay requires an XP award")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, earnedXP, 0, 0, 0, 0, 0, 0, 0, 0)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, earnedXP, 0, 0, 0, 0, 0, 0, 0, 0, false)
 }
 
 func ReplayCharacterPetFeed(ctx context.Context, server *Server, guid uint64, feedSpell uint32, foodItemGUID uint64) (protocoltrace.Trace, error) {
 	if feedSpell == 0 || foodItemGUID == 0 {
 		return protocoltrace.Trace{}, errors.New("pet feed replay requires a spell and item GUID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, feedSpell, foodItemGUID, 0, 0, 0, 0, 0, 0)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, feedSpell, foodItemGUID, 0, 0, 0, 0, 0, 0, false)
 }
 
 func ReplayCharacterPetAura(ctx context.Context, server *Server, guid uint64, ownerSpellID uint32) (protocoltrace.Trace, error) {
 	if ownerSpellID == 0 {
 		return protocoltrace.Trace{}, errors.New("owner pet-aura replay requires a source spell ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, ownerSpellID, 0, 0, 0, 0, 0)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, ownerSpellID, 0, 0, 0, 0, 0, false)
 }
 
 func ReplayCharacterPetFocusAura(ctx context.Context, server *Server, guid uint64, spellID uint32) (protocoltrace.Trace, error) {
 	if spellID == 0 {
 		return protocoltrace.Trace{}, errors.New("pet focus-aura replay requires a DBC spell ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, spellID, 0, 0, 0, 0)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, spellID, 0, 0, 0, 0, false)
 }
 
 func validateWorldReadyFanout(server *Server, source *session) error {
@@ -307,7 +311,7 @@ func newReplayCharacterSession(ctx context.Context, server *Server, guid uint64)
 	return sess, nil
 }
 
-func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petCooldownSpell, petPowerSpell, petXPAward, petFeedSpell uint32, petFoodGUID uint64, petAuraSourceSpell, petFocusAuraSpell, lfgDungeonID, instanceEntryMapID, instanceEntryID, rewardedQuestID uint32) (protocoltrace.Trace, error) {
+func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petCooldownSpell, petPowerSpell, petXPAward, petFeedSpell uint32, petFoodGUID uint64, petAuraSourceSpell, petFocusAuraSpell, lfgDungeonID, instanceEntryMapID, instanceEntryID, rewardedQuestID uint32, critterPetReplay bool) (protocoltrace.Trace, error) {
 	if server == nil || server.CharactersStore == nil || server.CharactersStore.DB == nil || guid == 0 {
 		return protocoltrace.Trace{}, errors.New("login replay requires a server and character database")
 	}
@@ -344,6 +348,12 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 	}
 	if rewardedQuestID != 0 {
 		if err := session.replayQuestRewardTwice(ctx, rewardedQuestID); err != nil {
+			session.logout()
+			return recorder.Snapshot(), err
+		}
+	}
+	if critterPetReplay {
+		if err := session.validateCritterPetLoginReplay(ctx); err != nil {
 			session.logout()
 			return recorder.Snapshot(), err
 		}
@@ -730,6 +740,32 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 		return recorder.Snapshot(), fmt.Errorf("complete character logout: %w", err)
 	}
 	return recorder.Snapshot(), nil
+}
+
+func (s *session) validateCritterPetLoginReplay(ctx context.Context) error {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.player == nil {
+		return errors.New("critter pet replay requires an active login session")
+	}
+	var petID, entry int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT id, entry FROM character_pet WHERE owner = ? AND slot = 0", s.playerGUID).Scan(&petID, &entry); err != nil {
+		return fmt.Errorf("read active critter pet replay row: %w", err)
+	}
+	var creatureType int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT type FROM creature_template WHERE entry = ?", entry).Scan(&creatureType); err != nil {
+		return fmt.Errorf("read critter pet replay template: %w", err)
+	}
+	if uint32(creatureType) != creatureTypeCritter {
+		return fmt.Errorf("pet %d template type=%d, want critter type %d", petID, creatureType, creatureTypeCritter)
+	}
+	if s.player.PetGUID != 0 || s.player.PetNumber != 0 {
+		return errors.New("critter login populated controlled-pet owner fields")
+	}
+	for _, event := range s.server.TraceRecorder.Snapshot().Events {
+		if event.Direction == protocoltrace.ServerToClient && event.Opcode == uint32(protocol.OpcodeSMSG_PET_SPELLS) {
+			return errors.New("critter login sent a controlled-pet spell bar")
+		}
+	}
+	return nil
 }
 
 func (s *session) replayQuestRewardTwice(ctx context.Context, questID uint32) error {

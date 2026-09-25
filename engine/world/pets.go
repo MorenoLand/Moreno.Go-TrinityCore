@@ -594,11 +594,18 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		curMana = maxMana
 	}
 	petGUID := uint64(s.server.nextPetLowGUID()) | (uint64(0xF140) << 48)
-	s.player.PetGUID = petGUID
-	s.player.PetNumber = petID
 	var createdBySpell, petType, petExperience, petHappiness int64
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(CreatedBySpell, 0), COALESCE(PetType, 0), COALESCE(exp, 0), COALESCE(curhappiness, 0) FROM character_pet WHERE id = ? AND owner = ?", petID, s.playerGUID).Scan(&createdBySpell, &petType, &petExperience, &petHappiness)
+	}
+	var creatureType int64
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT type FROM creature_template WHERE entry = ?", entry).Scan(&creatureType)
+	}
+	critter := uint32(creatureType) == creatureTypeCritter
+	if !critter {
+		s.player.PetGUID = petGUID
+		s.player.PetNumber = petID
 	}
 	if petHappiness < 0 {
 		petHappiness = 0
@@ -609,7 +616,7 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 	if petType == 1 && s.server != nil {
 		petNextLevelXP = s.server.xpForLevel(ctx, uint32(level)+1) / 20
 	}
-	if createdBySpell > 0 && createdBySpell <= int64(^uint32(0)) {
+	if !critter && createdBySpell > 0 && createdBySpell <= int64(^uint32(0)) {
 		packet := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 0, uint32(createdBySpell), spellCastFlagGo, uint32(time.Now().UnixMilli()), nil, nil, protocol.SpellTargetData{})
 		if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), packet, true); err != nil {
 			s.debug("pet summon effect failed", "account", s.accountName, "petID", petID, "spell", createdBySpell, "error", err)
@@ -622,6 +629,12 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		var mID int64
 		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT modelid1 FROM creature_template WHERE entry = ?", entry).Scan(&mID); err == nil && mID > 0 {
 			modelID = uint32(mID)
+		}
+	}
+	if critter && s.server.WorldStore != nil && s.server.WorldStore.DB != nil && entry != 0 {
+		var displayID int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 0) FROM creature_template WHERE entry = ?", entry).Scan(&displayID); err == nil && displayID > 0 {
+			modelID = uint32(displayID)
 		}
 	}
 	if modelID == 0 {
@@ -670,9 +683,20 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		petZ = s.player.Z
 	}
 
-	attributes := s.getPetAttributes(ctx, entry, level, uint8(petType))
-	s.registerPetMotion(ctx, petGUID, petID, uint8(petType), entry, level, faction, curHealth, maxHealth, curMana, maxMana, attributes, uint32(petHappiness), uint32(petExperience), petNextLevelXP, uint8(reactState), petCombatReach, petX, petY, petZ, petO)
-	updateBlock := buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, attributes, uint32(petHappiness), s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petNextLevelXP, petBoundingRadius, petCombatReach, petX, petY, petZ, petO)
+	var updateBlock []byte
+	if critter {
+		stats := s.server.loadCreatureStats(ctx, entry)
+		var npcFlags, dynamicFlags, rangeAttack int64
+		var scale, hoverHeight, walkSpeed, runSpeed float64
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(npcflag, 0), COALESCE(dynamicflags, 0), COALESCE(scale, 1), COALESCE(HoverHeight, 1), COALESCE(speed_walk, 1), COALESCE(speed_run, 1), COALESCE(RangeAttackTime, 2000) FROM creature_template WHERE entry = ?", entry).Scan(&npcFlags, &dynamicFlags, &scale, &hoverHeight, &walkSpeed, &runSpeed, &rangeAttack)
+		}
+		updateBlock = buildCreatureUpdate(creatureSpawn{GUID: uint32(petGUID), RawGUID: petGUID, Entry: entry, Map: s.player.Map, X: petX, Y: petY, Z: petZ, Orientation: petO, Model: modelID, Faction: faction, NPCFlags: uint32(npcFlags), UnitFlags: stats.UnitFlags, UnitFlags2: unitFlag2RegeneratePower, DynamicFlags: uint32(dynamicFlags), CreatedBySpell: uint32(createdBySpell), Level: stats.Level, Health: stats.Health, MaxHealth: stats.MaxHealth, Scale: float32(scale), HoverHeight: float32(hoverHeight), BoundingRadius: petBoundingRadius, CombatReach: petCombatReach, WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: stats.AttackTime, RangedAttack: uint32(rangeAttack)})
+	} else {
+		attributes := s.getPetAttributes(ctx, entry, level, uint8(petType))
+		s.registerPetMotion(ctx, petGUID, petID, uint8(petType), entry, level, faction, curHealth, maxHealth, curMana, maxMana, attributes, uint32(petHappiness), uint32(petExperience), petNextLevelXP, uint8(reactState), petCombatReach, petX, petY, petZ, petO)
+		updateBlock = buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, attributes, uint32(petHappiness), s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petNextLevelXP, petBoundingRadius, petCombatReach, petX, petY, petZ, petO)
+	}
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(updateBlock)
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
@@ -682,6 +706,10 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		}
 	}
 
+	if critter {
+		s.debug("critter added to map", "account", s.accountName, "petID", petID, "entry", entry, "name", name)
+		return
+	}
 	s.sendPlayerUpdate()
 	s.loadPetAuras(ctx, petID, petGUID)
 	s.applyOwnerPetAuras(ctx, entry, petGUID)
