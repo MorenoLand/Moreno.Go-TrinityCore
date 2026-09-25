@@ -1,12 +1,14 @@
 package world
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -92,6 +94,24 @@ func ReplayCharacterPairLogin(ctx context.Context, server *Server, firstGUID, se
 	if err := login(first); err != nil {
 		return recorder.Snapshot(), err
 	}
+	if first.groupID == 0 {
+		return recorder.Snapshot(), errors.New("paired group replay characters are not in a persisted group")
+	}
+	firstTrace := recorder.Snapshot()
+	firstCreateIndex, err := loginSelfCreateIndex(firstTrace, first)
+	if err != nil {
+		return recorder.Snapshot(), err
+	}
+	firstRoster, err := groupListMemberStatus(firstTrace, first, secondGUID, firstCreateIndex+1)
+	if err != nil {
+		return recorder.Snapshot(), err
+	}
+	if firstRoster&uint8(memberStatusOnline) != 0 {
+		return recorder.Snapshot(), errors.New("unlogged group peer appeared online in the first member roster")
+	}
+	if groupListIndex(firstTrace, second, 0) >= 0 {
+		return recorder.Snapshot(), errors.New("group roster was sent to the peer before its player create")
+	}
 	if server.findSessionByGUID(secondGUID) != nil {
 		return recorder.Snapshot(), errors.New("second character became visible before its create update")
 	}
@@ -104,13 +124,247 @@ func ReplayCharacterPairLogin(ctx context.Context, server *Server, firstGUID, se
 	if err := validateWorldReadyFanout(server, second); err != nil {
 		return recorder.Snapshot(), err
 	}
+	if second.groupID != first.groupID {
+		return recorder.Snapshot(), fmt.Errorf("paired characters loaded different groups: %d != %d", first.groupID, second.groupID)
+	}
+	pairedTrace := recorder.Snapshot()
+	secondCreateIndex, err := loginSelfCreateIndex(pairedTrace, second)
+	if err != nil {
+		return recorder.Snapshot(), err
+	}
+	if status, err := groupListMemberStatus(pairedTrace, first, secondGUID, secondCreateIndex+1); err != nil || status&uint8(memberStatusOnline) == 0 {
+		return recorder.Snapshot(), fmt.Errorf("existing member roster did not show the newly mapped peer online: status=%#x err=%v", status, err)
+	}
+	if status, err := groupListMemberStatus(pairedTrace, second, firstGUID, secondCreateIndex+1); err != nil || status&uint8(memberStatusOnline) == 0 {
+		return recorder.Snapshot(), fmt.Errorf("new member roster did not show its connected peer online: status=%#x err=%v", status, err)
+	}
+	if err := replayPartyMemberStats(ctx, recorder, first, secondGUID, second); err != nil {
+		return recorder.Snapshot(), err
+	}
 	if err := second.completeLogout(ctx); err != nil {
 		return recorder.Snapshot(), fmt.Errorf("complete second character logout: %w", err)
+	}
+	if err := replayPartyMemberStats(ctx, recorder, first, secondGUID, nil); err != nil {
+		return recorder.Snapshot(), err
 	}
 	if err := first.completeLogout(ctx); err != nil {
 		return recorder.Snapshot(), fmt.Errorf("complete first character logout: %w", err)
 	}
 	return recorder.Snapshot(), nil
+}
+
+func loginSelfCreateIndex(trace protocoltrace.Trace, sess *session) (int, error) {
+	if sess == nil || len(sess.loginCreateBlock) == 0 {
+		return -1, errors.New("paired login has no captured self-create block")
+	}
+	for index, event := range trace.Events {
+		if event.Direction != protocoltrace.ServerToClient || event.State != sess.traceStatePrefix && !strings.HasPrefix(event.State, sess.traceStatePrefix+" ") || event.Opcode != uint32(protocol.OpcodeSMSG_UPDATE_OBJECT) && event.Opcode != uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+			continue
+		}
+		payload, err := base64.StdEncoding.DecodeString(event.Payload)
+		if err != nil {
+			return -1, err
+		}
+		if event.Opcode == uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+			payload, err = protocol.DecompressUpdatePayload(payload)
+			if err != nil {
+				return -1, err
+			}
+		}
+		if bytes.Contains(payload, sess.loginCreateBlock) {
+			return index, nil
+		}
+	}
+	return -1, fmt.Errorf("paired login trace has no self create update for GUID %d", sess.playerGUID)
+}
+
+func groupListIndex(trace protocoltrace.Trace, sess *session, start int) int {
+	if sess == nil {
+		return -1
+	}
+	for index := start; index < len(trace.Events); index++ {
+		event := trace.Events[index]
+		if event.Direction == protocoltrace.ServerToClient && event.Opcode == uint32(protocol.OpcodeSMSG_GROUP_LIST) && (event.State == sess.traceStatePrefix || strings.HasPrefix(event.State, sess.traceStatePrefix+" ")) {
+			return index
+		}
+	}
+	return -1
+}
+
+func groupListMemberStatus(trace protocoltrace.Trace, sess *session, memberGUID uint64, start int) (uint8, error) {
+	index := groupListIndex(trace, sess, start)
+	if index < 0 {
+		return 0, fmt.Errorf("group list was not sent to GUID %d after event %d", sess.playerGUID, start)
+	}
+	payload, err := base64.StdEncoding.DecodeString(trace.Events[index].Payload)
+	if err != nil {
+		return 0, err
+	}
+	reader := protocol.NewReader(payload)
+	groupType, err := reader.ReadU8()
+	if err != nil {
+		return 0, err
+	}
+	for range 3 {
+		if _, err := reader.ReadU8(); err != nil {
+			return 0, err
+		}
+	}
+	if groupType&0x08 != 0 {
+		if _, err := reader.ReadU8(); err != nil {
+			return 0, err
+		}
+		if _, err := reader.ReadU32(); err != nil {
+			return 0, err
+		}
+	}
+	if _, err := reader.ReadU64(); err != nil {
+		return 0, err
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		return 0, err
+	}
+	memberCount, err := reader.ReadU32()
+	if err != nil {
+		return 0, err
+	}
+	group := sess.server.findGroupByID(sess.groupID)
+	if group == nil || int(memberCount) != len(group.Members)-1 {
+		return 0, fmt.Errorf("group list member count=%d differs from loaded group", memberCount)
+	}
+	status, memberFound := uint8(0), false
+	for member := uint32(0); member < memberCount; member++ {
+		if _, err := reader.ReadCString(); err != nil {
+			return 0, err
+		}
+		guid, err := reader.ReadU64()
+		if err != nil {
+			return 0, err
+		}
+		memberStatus, err := reader.ReadU8()
+		if err != nil {
+			return 0, err
+		}
+		for field := 0; field < 3; field++ {
+			if _, err := reader.ReadU8(); err != nil {
+				return 0, err
+			}
+		}
+		if guid == memberGUID {
+			status, memberFound = memberStatus, true
+		}
+	}
+	if !memberFound {
+		return 0, fmt.Errorf("group list for GUID %d omits peer GUID %d", sess.playerGUID, memberGUID)
+	}
+	if _, err := reader.ReadU64(); err != nil {
+		return 0, err
+	}
+	if memberCount > 0 {
+		if _, err := reader.ReadU8(); err != nil {
+			return 0, err
+		}
+		if _, err := reader.ReadU64(); err != nil {
+			return 0, err
+		}
+		for field := 0; field < 4; field++ {
+			if _, err := reader.ReadU8(); err != nil {
+				return 0, err
+			}
+		}
+	}
+	if reader.Remaining() != 0 {
+		return 0, fmt.Errorf("group list has %d trailing bytes", reader.Remaining())
+	}
+	return status, nil
+}
+
+func replayPartyMemberStats(ctx context.Context, recorder *protocoltrace.Recorder, requester *session, targetGUID uint64, target *session) error {
+	if requester == nil || requester.player == nil || requester.server == nil || recorder == nil || targetGUID == 0 {
+		return errors.New("party-member-stats replay requires a logged-in requester and trace")
+	}
+	request := protocol.NewBuffer(8)
+	request.WriteU64(targetGUID)
+	recorder.Record(protocoltrace.ClientToServer, uint32(protocol.OpcodeCMSG_REQUEST_PARTY_MEMBER_STATS), request.Bytes(), "paired-party-member-stats")
+	eventStart := len(recorder.Snapshot().Events)
+	if !requester.handleRequestPartyMemberStats(ctx, request.Bytes()) {
+		return errors.New("party-member-stats handler rejected a valid request")
+	}
+	events := recorder.Snapshot().Events
+	var response []byte
+	responses := 0
+	for _, event := range events[eventStart:] {
+		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_PARTY_MEMBER_STATS_FULL) {
+			continue
+		}
+		var err error
+		response, err = base64.StdEncoding.DecodeString(event.Payload)
+		if err != nil {
+			return err
+		}
+		responses++
+	}
+	if responses != 1 {
+		return fmt.Errorf("party-member-stats responses=%d, want 1", responses)
+	}
+	var expected []byte
+	if target == nil || target.player == nil {
+		expected = protocol.BuildPartyMemberStatsFull(protocol.PartyMemberStatsFull{GUID: targetGUID, UpdateFlags: groupUpdateFlagStatus, Status: memberStatusOffline})
+	} else {
+		expected = protocol.BuildPartyMemberStatsFull(partyMemberStatsReplayState(ctx, requester, target))
+	}
+	if string(response) != string(expected) {
+		return fmt.Errorf("SMSG_PARTY_MEMBER_STATS_FULL differs from live member state for GUID %d", targetGUID)
+	}
+	return nil
+}
+
+func partyMemberStatsReplayState(ctx context.Context, requester, target *session) protocol.PartyMemberStatsFull {
+	tp := target.player
+	powerType := classPowerType(tp.Class)
+	flags := groupUpdateFlagStatus | groupUpdateFlagCurHP | groupUpdateFlagMaxHP | groupUpdateFlagCurPower | groupUpdateFlagMaxPower | groupUpdateFlagLevel | groupUpdateFlagZone | groupUpdateFlagPosition | groupUpdateFlagAuras | groupUpdateFlagPetName | groupUpdateFlagPetModel | groupUpdateFlagPetAuras
+	if powerType != 0 {
+		flags |= groupUpdateFlagPowerType
+	}
+	pet := requester.groupPetStats(ctx, target)
+	if pet.guid != 0 {
+		flags |= groupUpdateFlagPetGUID | groupUpdateFlagPetCurHP | groupUpdateFlagPetMaxHP | groupUpdateFlagPetPower | groupUpdateFlagPetCurPower | groupUpdateFlagPetMaxPower
+	}
+	status := uint16(memberStatusOnline)
+	if tp.Health == 0 {
+		if tp.PlayerFlags&playerFlagGhost != 0 {
+			status |= memberStatusGhost
+		} else {
+			status |= memberStatusDead
+		}
+	}
+	if tp.PlayerFlags&0x02 != 0 {
+		status |= memberStatusPvP
+	}
+	if tp.PVPFlags&0x04 != 0 {
+		status |= memberStatusPvPFFA
+	}
+	if tp.PlayerFlags&playerFlagAFK != 0 {
+		status |= memberStatusAFK
+	}
+	if tp.PlayerFlags&playerFlagDND != 0 {
+		status |= memberStatusDND
+	}
+	currentPower, maximumPower := uint16(0), uint16(0)
+	if int(powerType) < len(tp.Powers) {
+		currentPower, maximumPower = uint16(tp.Powers[powerType]), uint16(tp.MaxPowers[powerType])
+	}
+	var vehicleSeat uint32
+	if tp.VehicleGUID != 0 {
+		if kit := requester.server.getVehicleKit(tp.VehicleGUID); kit != nil {
+			if _, seat, _ := kit.GetSeatForPassenger(target.playerGUID); seat != nil {
+				flags |= groupUpdateFlagVehicleSeat
+				vehicleSeat = seat.ID
+			}
+		}
+	}
+	auraMask, auras := groupAuraEntries(target.loadedAuras(), target.playerGUID)
+	return protocol.PartyMemberStatsFull{GUID: target.playerGUID, UpdateFlags: flags, Status: status, Health: tp.Health, MaximumHealth: tp.MaxHealth, PowerType: powerType, CurrentPower: currentPower, MaximumPower: maximumPower, Level: uint16(tp.Level), Zone: uint16(tp.Zone), X: uint16(tp.X), Y: uint16(tp.Y), AuraMask: auraMask, Auras: auras, PetGUID: pet.guid, PetName: pet.name, PetModelID: pet.model, PetHealth: pet.health, PetMaximumHealth: pet.maxHealth, PetPowerType: pet.powerType, PetCurrentPower: pet.currentPower, PetMaximumPower: pet.maxPower, PetAuraMask: pet.auraMask, PetAuras: pet.auras, VehicleSeatID: vehicleSeat}
 }
 
 func ReplayCharacterLFGTeleport(ctx context.Context, server *Server, guid uint64, dungeonID uint32) (protocoltrace.Trace, error) {
