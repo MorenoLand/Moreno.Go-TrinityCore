@@ -176,6 +176,7 @@ type session struct {
 	movementMu                sync.RWMutex
 	captureUpdatePackets      bool
 	traceStatePrefix          string
+	loginCreateBlock          []byte
 	capturedUpdatePackets     []*protocol.Packet
 	selection                 uint64
 	auras                     map[uint32]struct{}

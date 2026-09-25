@@ -1,6 +1,7 @@
 package world
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -580,6 +581,18 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	initialUpdate, err := protocol.MergeUpdatePackets(initialUpdatePackets...)
 	if err != nil || initialUpdate == nil {
 		return false
+	}
+	if s.server.TraceRecorder != nil {
+		payload := initialUpdate.Payload.Bytes()
+		if initialUpdate.Opcode == uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+			payload, err = protocol.DecompressUpdatePayload(payload)
+			if err != nil {
+				return false
+			}
+		}
+		if len(s.loginCreateBlock) == 0 || !bytes.Contains(payload, s.loginCreateBlock) {
+			return false
+		}
 	}
 	if err := s.write(initialUpdate.Opcode, initialUpdate.Payload.Bytes(), true); err != nil {
 		return false

@@ -3306,6 +3306,9 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 			block.WriteU32(value)
 		}
 	}
+	if targetSelf && runtime != nil && runtime.playerLoading && runtime.playerGUID == state.GUID {
+		runtime.loginCreateBlock = append([]byte(nil), block.Bytes()...)
+	}
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(block.Bytes())
 	return updates.BuildPacket(0)

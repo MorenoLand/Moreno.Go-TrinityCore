@@ -34,6 +34,15 @@ type loginStage struct {
 	Match func(uint32) bool
 }
 
+var sourcePlayerCreateVisibility = [...]uint32{
+	0xFFFFFFDF, 0xFFFFFFFF, 0xFFFB1FFF, 0xFFFFFFFF, 0xBFF7FFFF, 0xEF7BDEF7, 0x7BDEF7BD, 0xDEF7BDEF,
+	0xFFBDEF7B, 0xFFFFFFFF, 0xFFFFFFF7, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+	0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+	0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+	0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+	0xFFFFFFFF, 0x00003FFF,
+}
+
 func main() {
 	tracePath := flag.String("trace", "", "recorded protocol trace JSONL")
 	selfCheck := flag.Bool("self-check", false, "validate the login loading-order regression guard")
@@ -4274,6 +4283,18 @@ func parseCreateObjectBlock(reader *protocol.Buffer, playerGUID uint64) (uint64,
 	for field := 1326; field < len(mask)*32; field++ {
 		if updateMaskHas(mask, field) {
 			return guid, typeID, nil, fmt.Errorf("player update mask sets out-of-range field %d", field)
+		}
+	}
+	for field := 0; field < 1326; field++ {
+		if !updateMaskHas(mask, field) {
+			continue
+		}
+		allowed := sourcePlayerCreateVisibility[field/32]&(uint32(1)<<uint(field%32)) != 0
+		if !allowed && field >= 158 && field < 158+25*5 && (field-158)%5 == 0 {
+			allowed = true
+		}
+		if !allowed {
+			return guid, typeID, nil, fmt.Errorf("player update mask sets source-invisible self field %d", field)
 		}
 	}
 	for _, field := range []int{0, 2, 4, 23, 24, 32, 54, 59, 67, 68} {
