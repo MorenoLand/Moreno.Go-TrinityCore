@@ -60,6 +60,7 @@ func main() {
 	replayInstanceMap := flag.Uint("replay-instance-map", 0, "dungeon map used to exercise the source account instance-entry timer")
 	replayInstanceID := flag.Uint("replay-instance-id", 0, "instance ID used with --replay-instance-map")
 	replayStatsMinLevel := flag.Uint("replay-stats-min-level", 0, "save and verify source character_stats output for characters at or above this level")
+	replayPlayerStartMessage := flag.Bool("replay-player-start-message", false, "verify the source PlayerStart.String first-login packet order")
 	replayTrace := flag.String("trace-out", "", "optional JSONL path for the in-process login trace")
 	flag.Parse()
 	if *selfCheck {
@@ -74,19 +75,20 @@ func main() {
 		petFeedRequested := *replayPetFeedSpell != 0 || *replayPetFeedItem != 0
 		lfgReplayRequested := *replayLFGDungeon != 0
 		instanceReplayRequested := *replayInstanceMap != 0 || *replayInstanceID != 0
+		startMessageRequested := *replayPlayerStartMessage
 		petReplayCount := 0
 		for _, requested := range []bool{*replayPetCooldownSpell != 0, *replayPetPowerSpell != 0, *replayPetXPAward != 0, *replayPetAuraSourceSpell != 0, *replayPetFocusAuraSpell != 0, petFeedRequested} {
 			if requested {
 				petReplayCount++
 			}
 		}
-		if petReplayCount > 1 || petReplayCount != 0 && (lfgReplayRequested || instanceReplayRequested || statsReplayRequested) || lfgReplayRequested && (instanceReplayRequested || statsReplayRequested) || instanceReplayRequested && statsReplayRequested || petFeedRequested && (*replayPetFeedSpell == 0 || *replayPetFeedItem == 0) || instanceReplayRequested && (*replayInstanceMap == 0 || *replayInstanceID == 0) {
+		if petReplayCount > 1 || petReplayCount != 0 && (lfgReplayRequested || instanceReplayRequested || statsReplayRequested || startMessageRequested) || lfgReplayRequested && (instanceReplayRequested || statsReplayRequested || startMessageRequested) || instanceReplayRequested && (statsReplayRequested || startMessageRequested) || statsReplayRequested && startMessageRequested || petFeedRequested && (*replayPetFeedSpell == 0 || *replayPetFeedItem == 0) || instanceReplayRequested && (*replayInstanceMap == 0 || *replayInstanceID == 0) {
 			fail("choose only one post-login replay scenario")
 		}
-		if *replayPeerGUID != 0 && (petReplayCount != 0 || lfgReplayRequested || instanceReplayRequested || statsReplayRequested) {
+		if *replayPeerGUID != 0 && (petReplayCount != 0 || lfgReplayRequested || instanceReplayRequested || statsReplayRequested || startMessageRequested) {
 			fail("paired login replay cannot be combined with a post-login replay scenario")
 		}
-		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayPeerGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem, uint32(*replayLFGDungeon), uint32(*replayInstanceMap), uint32(*replayInstanceID), uint32(*replayStatsMinLevel)); err != nil {
+		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayPeerGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem, uint32(*replayLFGDungeon), uint32(*replayInstanceMap), uint32(*replayInstanceID), uint32(*replayStatsMinLevel), startMessageRequested); err != nil {
 			fail(err.Error())
 		}
 		return
@@ -121,6 +123,9 @@ func main() {
 }
 
 func runSelfCheck() error {
+	if err := checkPartyMemberStatsFullPacket(); err != nil {
+		return err
+	}
 	if err := checkPlayerStatsConfig(); err != nil {
 		return err
 	}
@@ -503,6 +508,56 @@ func runSelfCheck() error {
 		if err := check.validate(event); err != nil {
 			return fmt.Errorf("%s payload fixture rejected: %w", check.name, err)
 		}
+	}
+	return nil
+}
+
+func checkPartyMemberStatsFullPacket() error {
+	guid := uint64(0xF130000000001234)
+	flags := protocol.GroupUpdateFlagStatus | protocol.GroupUpdateFlagCurrentHealth | protocol.GroupUpdateFlagMaximumHealth | protocol.GroupUpdateFlagPowerType | protocol.GroupUpdateFlagCurrentPower | protocol.GroupUpdateFlagMaximumPower | protocol.GroupUpdateFlagLevel | protocol.GroupUpdateFlagZone | protocol.GroupUpdateFlagPosition | protocol.GroupUpdateFlagAuras | protocol.GroupUpdateFlagPetGUID | protocol.GroupUpdateFlagPetName | protocol.GroupUpdateFlagPetModelID | protocol.GroupUpdateFlagPetCurrentHealth | protocol.GroupUpdateFlagPetMaximumHealth | protocol.GroupUpdateFlagPetPowerType | protocol.GroupUpdateFlagPetCurrentPower | protocol.GroupUpdateFlagPetMaximumPower | protocol.GroupUpdateFlagPetAuras | protocol.GroupUpdateFlagVehicleSeat
+	value := protocol.PartyMemberStatsFull{GUID: guid, UpdateFlags: flags, Status: 0x41, MaximumHealth: 123, PowerType: 2, MaximumPower: 456, Zone: 42, AuraMask: 1 << 2, PetGUID: 0xF140000000004321, PetName: "", PetAuraMask: 1 << 63}
+	value.Auras[2] = protocol.PartyMemberAura{SpellID: 0, Flags: protocol.AuraFlagPositive}
+	value.PetAuras[63] = protocol.PartyMemberAura{SpellID: 7654, Flags: protocol.AuraFlagCaster}
+	packet := protocol.NewBuffer(256)
+	packet.WriteU8(0)
+	packet.WritePackedGUID(guid)
+	packet.WriteU32(flags)
+	packet.WriteU16(value.Status)
+	packet.WriteU32(value.Health)
+	packet.WriteU32(value.MaximumHealth)
+	packet.WriteU8(value.PowerType)
+	packet.WriteU16(value.CurrentPower)
+	packet.WriteU16(value.MaximumPower)
+	packet.WriteU16(value.Level)
+	packet.WriteU16(value.Zone)
+	packet.WriteU16(value.X)
+	packet.WriteU16(value.Y)
+	packet.WriteU64(value.AuraMask)
+	packet.WriteU32(value.Auras[2].SpellID)
+	packet.WriteU8(value.Auras[2].Flags)
+	packet.WriteU64(value.PetGUID)
+	packet.WriteCString(value.PetName)
+	packet.WriteU16(value.PetModelID)
+	packet.WriteU32(value.PetHealth)
+	packet.WriteU32(value.PetMaximumHealth)
+	packet.WriteU8(value.PetPowerType)
+	packet.WriteU16(value.PetCurrentPower)
+	packet.WriteU16(value.PetMaximumPower)
+	packet.WriteU64(value.PetAuraMask)
+	packet.WriteU32(value.PetAuras[63].SpellID)
+	packet.WriteU8(value.PetAuras[63].Flags)
+	packet.WriteU32(value.VehicleSeatID)
+	if actual := protocol.BuildPartyMemberStatsFull(value); string(actual) != string(packet.Bytes()) {
+		return fmt.Errorf("SMSG_PARTY_MEMBER_STATS_FULL field order or zero-value encoding differs from the fixture")
+	}
+	offline := protocol.PartyMemberStatsFull{GUID: guid, UpdateFlags: protocol.GroupUpdateFlagStatus}
+	packet = protocol.NewBuffer(16)
+	packet.WriteU8(0)
+	packet.WritePackedGUID(guid)
+	packet.WriteU32(protocol.GroupUpdateFlagStatus)
+	packet.WriteU16(0)
+	if actual := protocol.BuildPartyMemberStatsFull(offline); string(actual) != string(packet.Bytes()) {
+		return fmt.Errorf("offline SMSG_PARTY_MEMBER_STATS_FULL differs from the source fixture")
 	}
 	return nil
 }
@@ -2487,6 +2542,95 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 	return nil
 }
 
+func sourceLoginCinematicID(data *wotlk.Store, race, class uint32) uint32 {
+	if data == nil {
+		return 0
+	}
+	if entry, found, err := data.Class(class); err == nil && found && entry.CinematicSequence != 0 {
+		return entry.CinematicSequence
+	}
+	if entry, found, err := data.Race(race); err == nil && found {
+		return entry.CinematicSequence
+	}
+	return 0
+}
+
+func checkLoginCinematic(trace protocoltrace.Trace, expected, before, after uint32) error {
+	count := 0
+	for _, event := range trace.Events {
+		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_TRIGGER_CINEMATIC) {
+			continue
+		}
+		count++
+		payload, err := eventPayload(event)
+		if err != nil {
+			return err
+		}
+		reader := protocol.NewReader(payload)
+		cinematicID, err := reader.ReadU32()
+		if err != nil || reader.Remaining() != 0 || cinematicID != expected {
+			return fmt.Errorf("login cinematic payload=%d, want DBC sequence %d", cinematicID, expected)
+		}
+	}
+	wantCount := 0
+	if before == 0 && expected != 0 {
+		wantCount = 1
+	}
+	if count != wantCount {
+		return fmt.Errorf("login cinematic triggers=%d, want %d for saved cinematic state %d", count, wantCount, before)
+	}
+	wantSaved := before
+	if before == 0 {
+		wantSaved = 1
+	}
+	if after != wantSaved {
+		return fmt.Errorf("saved cinematic state after login=%d, want %d", after, wantSaved)
+	}
+	return nil
+}
+
+func checkLoginPlayerStartMessage(trace protocoltrace.Trace, playerGUID uint64, message string, expect bool) error {
+	messageIndex, cinematicIndex, createIndex, count := -1, -1, -1, 0
+	for index, event := range trace.Events {
+		if event.Direction != protocoltrace.ServerToClient {
+			continue
+		}
+		if event.Opcode == uint32(protocol.OpcodeSMSG_TRIGGER_CINEMATIC) && cinematicIndex < 0 {
+			cinematicIndex = index
+		}
+		if event.Opcode == uint32(protocol.OpcodeSMSG_MESSAGECHAT) {
+			payload, err := eventPayload(event)
+			if err != nil {
+				return err
+			}
+			if strings.Contains(string(payload), message) {
+				count++
+				messageIndex = index
+			}
+		}
+		if createIndex < 0 && (event.Opcode == uint32(protocol.OpcodeSMSG_UPDATE_OBJECT) || event.Opcode == uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT)) {
+			contains, err := containsPlayerCreate(event, playerGUID)
+			if err != nil {
+				return err
+			}
+			if contains {
+				createIndex = index
+			}
+		}
+	}
+	wantCount := 0
+	if expect {
+		wantCount = 1
+	}
+	if count != wantCount {
+		return fmt.Errorf("PlayerStart.String messages=%d, want %d", count, wantCount)
+	}
+	if expect && (cinematicIndex < 0 || messageIndex <= cinematicIndex || createIndex <= messageIndex) {
+		return fmt.Errorf("PlayerStart.String must follow the cinematic and precede the player create")
+	}
+	return nil
+}
+
 func checkInitialCinematicOrder(trace protocoltrace.Trace, start, verifyIndex, forcedReactionsIndex, playerCreateIndex int) error {
 	if verifyIndex < 0 || forcedReactionsIndex < 0 || playerCreateIndex < 0 {
 		return fmt.Errorf("cinematic ordering is missing a required login boundary")
@@ -4289,6 +4433,9 @@ func parseCreateObjectBlock(reader *protocol.Buffer, playerGUID uint64) (uint64,
 		if !updateMaskHas(mask, field) {
 			continue
 		}
+		if values[field] == 0 {
+			return guid, typeID, nil, fmt.Errorf("player create mask sets zero-valued field %d without a login field-notify source", field)
+		}
 		allowed := sourcePlayerCreateVisibility[field/32]&(uint32(1)<<uint(field%32)) != 0
 		if !allowed && field >= 158 && field < 158+25*5 && (field-158)%5 == 0 {
 			allowed = true
@@ -4734,7 +4881,7 @@ func pairedLoginTrace(trace protocoltrace.Trace, playerGUID uint64) (protocoltra
 	return filtered, nil
 }
 
-func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64, lfgDungeonID, instanceEntryMapID, instanceEntryID, statsMinLevel uint32) error {
+func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64, lfgDungeonID, instanceEntryMapID, instanceEntryID, statsMinLevel uint32, replayPlayerStartMessage bool) error {
 	workDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return err
@@ -4752,6 +4899,9 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 	cfg.Backend = string(database.BackendSQLite)
 	cfg.LuaEnabled = false
 	cfg.PlayerSaveStatsMinLevel = statsMinLevel
+	if replayPlayerStartMessage {
+		cfg.PlayerStartString = "logincheck-player-start-message"
+	}
 	cfg.DataDir = workDir
 	cfg.AuthDatabaseFile, cfg.CharactersDatabaseFile, cfg.WorldDatabaseFile = filepath.Join(workDir, "auth.db"), filepath.Join(workDir, "characters.db"), filepath.Join(workDir, "world.db")
 	cfg.SchemaDir, cfg.GameDataDir = filepath.Join(root, "sql"), filepath.Join(root, "data")
@@ -4823,6 +4973,12 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 			return err
 		}
 	}
+	var raceID, classID, cinematicBefore uint32
+	if err := stores.Characters.DB.QueryRowContext(ctx, "SELECT race, class, COALESCE(cinematic, 0) FROM characters WHERE guid = ?", guid).Scan(&raceID, &classID, &cinematicBefore); err != nil {
+		server.Stop()
+		return fmt.Errorf("read replay character cinematic state: %w", err)
+	}
+	expectedCinematic := sourceLoginCinematicID(server.Data, raceID, classID)
 	var trace protocoltrace.Trace
 	var replayErr error
 	if peerGUID != 0 {
@@ -4888,6 +5044,20 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 	}
 	if deltaErr != nil {
 		return fmt.Errorf("real-character state delta mismatch (trace saved): %w", deltaErr)
+	}
+	if peerGUID == 0 {
+		var cinematicAfter uint32
+		if err := stores.Characters.DB.QueryRowContext(context.Background(), "SELECT COALESCE(cinematic, 0) FROM characters WHERE guid = ?", guid).Scan(&cinematicAfter); err != nil {
+			return fmt.Errorf("read replayed character cinematic state: %w", err)
+		}
+		if err := checkLoginCinematic(trace, expectedCinematic, cinematicBefore, cinematicAfter); err != nil {
+			return err
+		}
+		if replayPlayerStartMessage {
+			if err := checkLoginPlayerStartMessage(trace, guid, cfg.PlayerStartString, cinematicBefore == 0); err != nil {
+				return err
+			}
+		}
 	}
 	if peerGUID != 0 {
 		if err := validateCharacterStateDelta(peerBefore, peerAfter, false); err != nil {
@@ -5217,7 +5387,7 @@ func validateCharacterStateDeltaWithStats(before, after map[string]characterTabl
 
 func validateCharacterStateDeltaOptions(before, after map[string]characterTableSnapshot, allowPetFeedProgress, allowCharacterStats bool) error {
 	allowedColumns := map[string]map[string]struct{}{
-		"characters":                     {"exploredZones": {}, "orientation": {}, "position_x": {}, "position_y": {}, "position_z": {}, "instance_id": {}, "instance_mode_mask": {}, "totaltime": {}, "leveltime": {}, "logout_time": {}, "is_logout_resting": {}},
+		"characters":                     {"cinematic": {}, "exploredZones": {}, "orientation": {}, "position_x": {}, "position_y": {}, "position_z": {}, "instance_id": {}, "instance_mode_mask": {}, "totaltime": {}, "leveltime": {}, "logout_time": {}, "is_logout_resting": {}},
 		"character_achievement":          {"guid": {}, "achievement": {}, "date": {}},
 		"character_achievement_progress": {"guid": {}, "criteria": {}, "counter": {}, "date": {}},
 		"character_aura":                 {"guid": {}, "casterGuid": {}, "itemGuid": {}, "spell": {}, "effectMask": {}, "recalculateMask": {}, "stackCount": {}, "amount0": {}, "amount1": {}, "amount2": {}, "base_amount0": {}, "base_amount1": {}, "base_amount2": {}, "maxDuration": {}, "remainTime": {}, "remainCharges": {}, "critChance": {}, "applyResilience": {}},

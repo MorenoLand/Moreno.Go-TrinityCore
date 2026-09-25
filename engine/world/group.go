@@ -18,7 +18,7 @@ const (
 	groupTypeBattleground      uint8  = 0x01
 	groupTypeRaid              uint8  = 0x02
 	groupTypeBattlegroundRaid  uint8  = 0x03
-	groupUpdateFlagPetCurPower uint32 = 0x00010000
+	groupUpdateFlagPetCurPower uint32 = protocol.GroupUpdateFlagPetCurrentPower
 )
 
 // groupState holds all state for a 5-man or raid group.
@@ -1621,15 +1621,25 @@ func (s *session) handleSetSavedInstanceExtend(ctx context.Context, payload []by
 }
 
 const (
-	groupUpdateFlagStatus    uint32 = 0x00000001
-	groupUpdateFlagCurHP     uint32 = 0x00000002
-	groupUpdateFlagMaxHP     uint32 = 0x00000004
-	groupUpdateFlagPowerType uint32 = 0x00000008
-	groupUpdateFlagCurPower  uint32 = 0x00000010
-	groupUpdateFlagMaxPower  uint32 = 0x00000020
-	groupUpdateFlagLevel     uint32 = 0x00000040
-	groupUpdateFlagZone      uint32 = 0x00000080
-	groupUpdateFlagPosition  uint32 = 0x00000100
+	groupUpdateFlagStatus      uint32 = protocol.GroupUpdateFlagStatus
+	groupUpdateFlagCurHP       uint32 = protocol.GroupUpdateFlagCurrentHealth
+	groupUpdateFlagMaxHP       uint32 = protocol.GroupUpdateFlagMaximumHealth
+	groupUpdateFlagPowerType   uint32 = protocol.GroupUpdateFlagPowerType
+	groupUpdateFlagCurPower    uint32 = protocol.GroupUpdateFlagCurrentPower
+	groupUpdateFlagMaxPower    uint32 = protocol.GroupUpdateFlagMaximumPower
+	groupUpdateFlagLevel       uint32 = protocol.GroupUpdateFlagLevel
+	groupUpdateFlagZone        uint32 = protocol.GroupUpdateFlagZone
+	groupUpdateFlagPosition    uint32 = protocol.GroupUpdateFlagPosition
+	groupUpdateFlagAuras       uint32 = protocol.GroupUpdateFlagAuras
+	groupUpdateFlagPetGUID     uint32 = protocol.GroupUpdateFlagPetGUID
+	groupUpdateFlagPetName     uint32 = protocol.GroupUpdateFlagPetName
+	groupUpdateFlagPetModel    uint32 = protocol.GroupUpdateFlagPetModelID
+	groupUpdateFlagPetCurHP    uint32 = protocol.GroupUpdateFlagPetCurrentHealth
+	groupUpdateFlagPetMaxHP    uint32 = protocol.GroupUpdateFlagPetMaximumHealth
+	groupUpdateFlagPetPower    uint32 = protocol.GroupUpdateFlagPetPowerType
+	groupUpdateFlagPetMaxPower uint32 = protocol.GroupUpdateFlagPetMaximumPower
+	groupUpdateFlagPetAuras    uint32 = protocol.GroupUpdateFlagPetAuras
+	groupUpdateFlagVehicleSeat uint32 = protocol.GroupUpdateFlagVehicleSeat
 )
 
 const (
@@ -1638,9 +1648,113 @@ const (
 	memberStatusPvP     uint16 = 0x0002
 	memberStatusDead    uint16 = 0x0004
 	memberStatusGhost   uint16 = 0x0008
+	memberStatusPvPFFA  uint16 = 0x0010
 	memberStatusAFK     uint16 = 0x0020
 	memberStatusDND     uint16 = 0x0040
 )
+
+type groupAuraEntry = protocol.PartyMemberAura
+
+type groupPetStats struct {
+	guid         uint64
+	name         string
+	model        uint16
+	health       uint32
+	maxHealth    uint32
+	powerType    uint8
+	currentPower uint16
+	maxPower     uint16
+	auraMask     uint64
+	auras        [64]groupAuraEntry
+}
+
+func groupAuraEntries(auras []*activeAura, targetGUID uint64) (uint64, [64]groupAuraEntry) {
+	var mask uint64
+	var entries [64]groupAuraEntry
+	for _, aura := range auras {
+		if !clientVisibleAura(aura) {
+			continue
+		}
+		flags := aura.EffectMask & 0x07
+		if flags == 0 {
+			flags = 0x01
+		}
+		if aura.CasterGUID == targetGUID {
+			flags |= protocol.AuraFlagCaster
+		}
+		if aura.Positive {
+			flags |= protocol.AuraFlagPositive
+		} else {
+			flags |= protocol.AuraFlagNegative
+		}
+		if aura.DurationMs > 0 && !aura.HideDuration {
+			flags |= protocol.AuraFlagDuration
+		}
+		entries[aura.Slot] = groupAuraEntry{SpellID: aura.SpellID, Flags: flags}
+		mask |= uint64(1) << aura.Slot
+	}
+	return mask, entries
+}
+
+func (s *session) groupPetStats(ctx context.Context, target *session) groupPetStats {
+	var result groupPetStats
+	if s == nil || s.server == nil || target == nil || target.player == nil || target.player.PetGUID == 0 {
+		return result
+	}
+	result.guid = target.player.PetGUID
+	var entry, level, petType, health, mana, model int64
+	petNumber := target.activePetNumber()
+	if petNumber != 0 && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT entry, level, COALESCE(PetType, 0), COALESCE(curhealth, 0), COALESCE(curmana, 0), COALESCE(modelid, 0), COALESCE(name, '') FROM character_pet WHERE id = ? AND owner = ?", petNumber, target.playerGUID).Scan(&entry, &level, &petType, &health, &mana, &model, &result.name)
+	}
+	hasMotion := false
+	s.server.motionMu.Lock()
+	if motion := s.server.creatureMotion[result.guid]; motion != nil {
+		hasMotion = true
+		entry, level, health, petType = int64(motion.Entry), int64(motion.Level), int64(motion.Health), int64(motion.PetType)
+		result.health, result.maxHealth = motion.Health, motion.MaxHealth
+		result.powerType = uint8(motion.PowerType)
+		if motion.PowerType < uint32(len(motion.Powers)) {
+			result.currentPower = uint16(motion.Powers[motion.PowerType])
+			result.maxPower = uint16(motion.MaxPowers[motion.PowerType])
+		}
+	}
+	s.server.motionMu.Unlock()
+	result.model = uint16(model)
+	if !hasMotion && health > 0 {
+		result.health = uint32(health)
+	}
+	if !hasMotion && entry > 0 {
+		_, maxHealth, _, maxMana := target.getPetStats(ctx, uint32(entry), uint32(maxUint32(uint32(level), 1)), uint8(petType))
+		result.maxHealth, result.maxPower = maxHealth, uint16(maxMana)
+		if petType == int64(petTypeHunter) {
+			result.powerType, result.maxPower = 2, uint16(petFocusMax)
+		}
+		result.currentPower = uint16(mana)
+	}
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil && entry > 0 && (result.name == "" || result.model == 0) {
+		var templateName string
+		var displayID int64
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT name, COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 0) FROM creature_template WHERE entry = ?", entry).Scan(&templateName, &displayID)
+		if result.name == "" {
+			result.name = templateName
+		}
+		if result.model == 0 {
+			result.model = uint16(displayID)
+		}
+	}
+	var petAuras []*activeAura
+	s.server.auraMu.Lock()
+	for _, aura := range s.server.activeCreatureAuras[result.guid] {
+		if aura != nil {
+			copy := *aura
+			petAuras = append(petAuras, &copy)
+		}
+	}
+	s.server.auraMu.Unlock()
+	result.auraMask, result.auras = groupAuraEntries(petAuras, result.guid)
+	return result
+}
 
 // handleRequestPartyMemberStats processes CMSG_REQUEST_PARTY_MEMBER_STATS (0x27F).
 // Reference: WorldSession::HandleRequestPartyMemberStatsOpcode (GroupHandler.cpp:920),
@@ -1658,12 +1772,8 @@ func (s *session) handleRequestPartyMemberStats(ctx context.Context, payload []b
 
 	targetSess := s.server.findSessionByGUID(targetGUID)
 	if targetSess == nil || targetSess.player == nil {
-		// Player offline: send offline status packet (matching TC HandleRequestPartyMemberStatsOpcode)
-		buf := protocol.NewBuffer(16)
-		buf.WritePackedGUID(targetGUID)
-		buf.WriteU32(groupUpdateFlagStatus)
-		buf.WriteU16(memberStatusOffline)
-		_ = s.write(uint16(protocol.OpcodeSMSG_PARTY_MEMBER_STATS), buf.Bytes(), true)
+		payload := protocol.BuildPartyMemberStatsFull(protocol.PartyMemberStatsFull{GUID: targetGUID, UpdateFlags: groupUpdateFlagStatus, Status: memberStatusOffline})
+		_ = s.write(uint16(protocol.OpcodeSMSG_PARTY_MEMBER_STATS_FULL), payload, true)
 		return true
 	}
 
@@ -1671,10 +1781,25 @@ func (s *session) handleRequestPartyMemberStats(ctx context.Context, payload []b
 	powerType := classPowerType(tp.Class)
 	mask := groupUpdateFlagStatus | groupUpdateFlagCurHP | groupUpdateFlagMaxHP |
 		groupUpdateFlagCurPower | groupUpdateFlagMaxPower |
-		groupUpdateFlagLevel | groupUpdateFlagZone | groupUpdateFlagPosition
+		groupUpdateFlagLevel | groupUpdateFlagZone | groupUpdateFlagPosition |
+		groupUpdateFlagAuras | groupUpdateFlagPetName | groupUpdateFlagPetModel | groupUpdateFlagPetAuras
 
 	if powerType != 0 { // 0 = POWER_MANA
 		mask |= groupUpdateFlagPowerType
+	}
+	pet := s.groupPetStats(ctx, targetSess)
+	if pet.guid != 0 {
+		mask |= groupUpdateFlagPetGUID | groupUpdateFlagPetCurHP | groupUpdateFlagPetMaxHP |
+			groupUpdateFlagPetPower | groupUpdateFlagPetCurPower | groupUpdateFlagPetMaxPower
+	}
+	var vehicleSeat uint32
+	if tp.VehicleGUID != 0 {
+		if kit := s.server.getVehicleKit(tp.VehicleGUID); kit != nil {
+			if _, seat, _ := kit.GetSeatForPassenger(targetGUID); seat != nil {
+				mask |= groupUpdateFlagVehicleSeat
+				vehicleSeat = seat.ID
+			}
+		}
 	}
 
 	var status uint16 = memberStatusOnline
@@ -1687,6 +1812,9 @@ func (s *session) handleRequestPartyMemberStats(ctx context.Context, payload []b
 	}
 	if tp.PlayerFlags&0x02 != 0 {
 		status |= memberStatusPvP
+	}
+	if tp.PVPFlags&0x04 != 0 {
+		status |= memberStatusPvPFFA
 	}
 	if tp.PlayerFlags&playerFlagAFK != 0 {
 		status |= memberStatusAFK
@@ -1701,22 +1829,7 @@ func (s *session) handleRequestPartyMemberStats(ctx context.Context, payload []b
 		curPower = uint16(tp.Powers[powerType])
 		maxPower = uint16(tp.MaxPowers[powerType])
 	}
-
-	buf := protocol.NewBuffer(64)
-	buf.WritePackedGUID(targetGUID)
-	buf.WriteU32(mask)
-	buf.WriteU16(status)
-	buf.WriteU32(tp.Health)
-	buf.WriteU32(tp.MaxHealth)
-	if mask&groupUpdateFlagPowerType != 0 {
-		buf.WriteU8(powerType)
-	}
-	buf.WriteU16(curPower)
-	buf.WriteU16(maxPower)
-	buf.WriteU16(uint16(tp.Level))
-	buf.WriteU16(uint16(tp.Zone))
-	buf.WriteU16(uint16(tp.X))
-	buf.WriteU16(uint16(tp.Y))
-	_ = s.write(uint16(protocol.OpcodeSMSG_PARTY_MEMBER_STATS), buf.Bytes(), true)
-	return true
+	auraMask, auras := groupAuraEntries(targetSess.loadedAuras(), targetGUID)
+	response := protocol.BuildPartyMemberStatsFull(protocol.PartyMemberStatsFull{GUID: targetGUID, UpdateFlags: mask, Status: status, Health: tp.Health, MaximumHealth: tp.MaxHealth, PowerType: powerType, CurrentPower: curPower, MaximumPower: maxPower, Level: uint16(tp.Level), Zone: uint16(tp.Zone), X: uint16(tp.X), Y: uint16(tp.Y), AuraMask: auraMask, Auras: auras, PetGUID: pet.guid, PetName: pet.name, PetModelID: pet.model, PetHealth: pet.health, PetMaximumHealth: pet.maxHealth, PetPowerType: pet.powerType, PetCurrentPower: pet.currentPower, PetMaximumPower: pet.maxPower, PetAuraMask: pet.auraMask, PetAuras: pet.auras, VehicleSeatID: vehicleSeat})
+	return s.write(uint16(protocol.OpcodeSMSG_PARTY_MEMBER_STATS_FULL), response, true) == nil
 }
