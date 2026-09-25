@@ -454,7 +454,7 @@ func (s *session) streamNearbyObjects(ctx context.Context) {
 		s.sendVisiblePlayerAuras(created)
 		s.sendVisibleCreatureAuras(*s.player)
 	}
-	if packet, count, err := s.server.buildNearbyGameObjectUpdates(ctx, *s.player, true); err == nil && count > 0 && packet != nil {
+	if packet, count, err := s.server.buildNearbyGameObjectUpdates(ctx, *s.player, false); err == nil && count > 0 && packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 	}
 	s.streamDynamicSpellObjects()

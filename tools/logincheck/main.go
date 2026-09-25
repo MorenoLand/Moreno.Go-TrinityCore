@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -58,6 +59,7 @@ func main() {
 	replayPetFeedItem := flag.Uint64("replay-pet-feed-item", 0, "inventory item GUID used by the pet-feed replay")
 	replayPetCritter := flag.Bool("replay-pet-critter", false, "verify a saved critter loads without controlled-pet fields, spells, or talents")
 	replayLFGDungeon := flag.Uint("replay-lfg-dungeon", 0, "after login, teleport through the LFG entrance and verify saved battleground return data")
+	replayFarTeleport := flag.Bool("replay-far-teleport", false, "replay a cross-map transfer and WORLDPORT_ACK from a valid world spawn")
 	replayInstanceMap := flag.Uint("replay-instance-map", 0, "dungeon map used to exercise the source account instance-entry timer")
 	replayInstanceID := flag.Uint("replay-instance-id", 0, "instance ID used with --replay-instance-map")
 	replayStatsMinLevel := flag.Uint("replay-stats-min-level", 0, "save and verify source character_stats output for characters at or above this level")
@@ -76,6 +78,7 @@ func main() {
 		statsReplayRequested := *replayStatsMinLevel != 0
 		petFeedRequested := *replayPetFeedSpell != 0 || *replayPetFeedItem != 0
 		lfgReplayRequested := *replayLFGDungeon != 0
+		farTeleportReplayRequested := *replayFarTeleport
 		instanceReplayRequested := *replayInstanceMap != 0 || *replayInstanceID != 0
 		startMessageRequested := *replayPlayerStartMessage
 		questRewardReplayRequested := *replayQuestRewardTwiceID != 0
@@ -87,7 +90,7 @@ func main() {
 			}
 		}
 		postLoginReplayCount := petReplayCount
-		for _, requested := range []bool{lfgReplayRequested, instanceReplayRequested, statsReplayRequested, startMessageRequested, questRewardReplayRequested, petCritterReplayRequested} {
+		for _, requested := range []bool{lfgReplayRequested, farTeleportReplayRequested, instanceReplayRequested, statsReplayRequested, startMessageRequested, questRewardReplayRequested, petCritterReplayRequested} {
 			if requested {
 				postLoginReplayCount++
 			}
@@ -98,7 +101,7 @@ func main() {
 		if *replayPeerGUID != 0 && postLoginReplayCount != 0 {
 			fail("paired login replay cannot be combined with a post-login replay scenario")
 		}
-		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayPeerGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem, uint32(*replayLFGDungeon), uint32(*replayInstanceMap), uint32(*replayInstanceID), uint32(*replayStatsMinLevel), startMessageRequested, uint32(*replayQuestRewardTwiceID), petCritterReplayRequested); err != nil {
+		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayPeerGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem, uint32(*replayLFGDungeon), uint32(*replayInstanceMap), uint32(*replayInstanceID), uint32(*replayStatsMinLevel), startMessageRequested, uint32(*replayQuestRewardTwiceID), petCritterReplayRequested, farTeleportReplayRequested); err != nil {
 			fail(err.Error())
 		}
 		return
@@ -2786,6 +2789,9 @@ func checkPostMapLoginOrder(trace protocoltrace.Trace, start, playerCreateIndex 
 	petGUIDs := make(map[uint64]struct{})
 	for index := playerCreateIndex + 1; index < len(trace.Events); index++ {
 		event := trace.Events[index]
+		if event.Direction == protocoltrace.ServerToClient && event.Opcode == uint32(protocol.OpcodeSMSG_TRANSFER_PENDING) {
+			break
+		}
 		if event.Direction == protocoltrace.ClientToServer && (event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) || event.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST)) {
 			break
 		}
@@ -2826,6 +2832,9 @@ func checkPostMapLoginOrder(trace protocoltrace.Trace, start, playerCreateIndex 
 	loginEffectCount := 0
 	for index := playerCreateIndex + 1; index < len(trace.Events); index++ {
 		event := trace.Events[index]
+		if event.Direction == protocoltrace.ServerToClient && event.Opcode == uint32(protocol.OpcodeSMSG_TRANSFER_PENDING) {
+			break
+		}
 		if event.Direction == protocoltrace.ClientToServer && (event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) || event.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST)) {
 			break
 		}
@@ -4348,6 +4357,148 @@ func checkCritterPetLoginTrace(trace protocoltrace.Trace) error {
 	return nil
 }
 
+func checkAttachedTransportLogin(trace protocoltrace.Trace, playerGUID, savedTransportGUID uint64, savedOffset [4]float32) error {
+	for _, event := range trace.Events {
+		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_UPDATE_OBJECT) && event.Opcode != uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+			continue
+		}
+		movement, transportBeforePlayer, found, err := attachedTransportPlayerCreate(event, playerGUID)
+		if err != nil {
+			return err
+		}
+		if !found {
+			continue
+		}
+		if !movement.OnTransport || movement.TransportGUID&0xFFFFFFFF != savedTransportGUID&0xFFFFFFFF {
+			return fmt.Errorf("player create transport flags=%#x GUID=%#x, saved transport=%#x", movement.Flags, movement.TransportGUID, savedTransportGUID)
+		}
+		if movement.TransportOffset != savedOffset {
+			return fmt.Errorf("player create transport offsets=%v, saved offsets=%v", movement.TransportOffset, savedOffset)
+		}
+		if !transportBeforePlayer {
+			return fmt.Errorf("attached transport create did not precede the passenger player create in one update")
+		}
+		for _, verify := range trace.Events {
+			if verify.Direction != protocoltrace.ServerToClient || verify.Opcode != uint32(protocol.OpcodeSMSG_LOGIN_VERIFY_WORLD) {
+				continue
+			}
+			payload, err := eventPayload(verify)
+			if err != nil {
+				return err
+			}
+			reader := protocol.NewReader(payload)
+			if _, err := reader.ReadI32(); err != nil {
+				return err
+			}
+			for index := range movement.Position {
+				position, err := reader.ReadF32()
+				if err != nil {
+					return err
+				}
+				if position != movement.Position[index] {
+					return fmt.Errorf("transported player verify/create position differs at component %d: %f != %f", index, position, movement.Position[index])
+				}
+			}
+			if reader.Remaining() != 0 {
+				return fmt.Errorf("transported player login verify has %d trailing bytes", reader.Remaining())
+			}
+			return nil
+		}
+		return fmt.Errorf("transported player login has no SMSG_LOGIN_VERIFY_WORLD")
+	}
+	return fmt.Errorf("transported player GUID %d create block was not found", playerGUID)
+}
+
+func attachedTransportPlayerCreate(event protocoltrace.Event, playerGUID uint64) (playerCreateMovement, bool, bool, error) {
+	var movement playerCreateMovement
+	payload, err := eventPayload(event)
+	if err != nil {
+		return movement, false, false, err
+	}
+	if event.Opcode == uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		payload, err = protocol.DecompressUpdatePayload(payload)
+		if err != nil {
+			return movement, false, false, err
+		}
+	}
+	reader := protocol.NewReader(payload)
+	blocks, err := reader.ReadU32()
+	if err != nil {
+		return movement, false, false, err
+	}
+	createdObjects := make([]struct {
+		guid   uint64
+		typeID uint8
+	}, 0, blocks)
+	for block := uint32(0); block < blocks; block++ {
+		kind, err := reader.ReadU8()
+		if err != nil {
+			return movement, false, false, err
+		}
+		switch kind {
+		case protocol.UpdateOutOfRangeObjects:
+			count, err := reader.ReadU32()
+			if err != nil {
+				return movement, false, false, err
+			}
+			for index := uint32(0); index < count; index++ {
+				if _, err := reader.ReadPackedGUID(); err != nil {
+					return movement, false, false, err
+				}
+			}
+		case protocol.UpdateCreateObject, protocol.UpdateCreateObject2:
+			guid, err := reader.ReadPackedGUID()
+			if err != nil {
+				return movement, false, false, err
+			}
+			typeID, err := reader.ReadU8()
+			if err != nil {
+				return movement, false, false, err
+			}
+			flags, err := reader.ReadU16()
+			if err != nil {
+				return movement, false, false, err
+			}
+			if guid == playerGUID && typeID == 4 {
+				movement, err = readPlayerCreateMovement(reader, flags)
+				if err != nil {
+					return movement, false, false, err
+				}
+				if _, _, err := readUpdateValues(reader); err != nil {
+					return movement, false, false, err
+				}
+				for _, object := range createdObjects {
+					if object.typeID == 5 && object.guid == movement.TransportGUID {
+						return movement, true, true, nil
+					}
+				}
+				return movement, false, true, nil
+			}
+			if err := skipCreateMovement(reader, flags); err != nil {
+				return movement, false, false, err
+			}
+			if _, _, err := readUpdateValues(reader); err != nil {
+				return movement, false, false, err
+			}
+			createdObjects = append(createdObjects, struct {
+				guid   uint64
+				typeID uint8
+			}{guid, typeID})
+		case protocol.UpdateValues:
+			if err := skipValuesUpdate(reader); err != nil {
+				return movement, false, false, err
+			}
+		case protocol.UpdateMovement:
+			if err := skipMovementUpdate(reader); err != nil {
+				return movement, false, false, err
+			}
+		default:
+			return movement, false, false, fmt.Errorf("unsupported update block kind=%d", kind)
+		}
+	}
+	return movement, false, false, nil
+}
+
 func containsCritterPetCreate(event protocoltrace.Event) (bool, error) {
 	payload, err := eventPayload(event)
 	if err != nil {
@@ -4693,6 +4844,10 @@ func skipCreateMovement(reader *protocol.Buffer, flags uint16) error {
 			return fmt.Errorf("stationary movement is truncated: %w", err)
 		}
 	}
+	return skipCreateMovementExtra(reader, flags)
+}
+
+func skipCreateMovementExtra(reader *protocol.Buffer, flags uint16) error {
 	if flags&0x8 != 0 {
 		if _, err := reader.ReadU32(); err != nil {
 			return fmt.Errorf("unknown movement field is truncated: %w", err)
@@ -4724,6 +4879,20 @@ func skipCreateMovement(reader *protocol.Buffer, flags uint16) error {
 		}
 	}
 	return nil
+}
+
+func readPlayerCreateMovement(reader *protocol.Buffer, flags uint16) (playerCreateMovement, error) {
+	if flags&0x20 == 0 {
+		return playerCreateMovement{}, errors.New("player create is missing UPDATEFLAG_LIVING")
+	}
+	movement, err := readLivingMovement(reader)
+	if err != nil {
+		return movement, err
+	}
+	if err := skipCreateMovementExtra(reader, flags); err != nil {
+		return movement, err
+	}
+	return movement, nil
 }
 
 func readUpdateValues(reader *protocol.Buffer) ([]uint32, map[int]uint32, error) {
@@ -4774,58 +4943,86 @@ func skipMovementUpdate(reader *protocol.Buffer) error {
 	return skipCreateMovement(reader, flags)
 }
 
+type playerCreateMovement struct {
+	Flags           uint32
+	Flags2          uint16
+	Position        [4]float32
+	OnTransport     bool
+	TransportGUID   uint64
+	TransportOffset [4]float32
+}
+
 func skipLivingMovement(reader *protocol.Buffer) error {
-	movementFlags, err := reader.ReadU32()
-	if err != nil {
-		return fmt.Errorf("player movement flags are truncated: %w", err)
+	_, err := readLivingMovement(reader)
+	return err
+}
+
+func readLivingMovement(reader *protocol.Buffer) (playerCreateMovement, error) {
+	var movement playerCreateMovement
+	var err error
+	if movement.Flags, err = reader.ReadU32(); err != nil {
+		return movement, fmt.Errorf("player movement flags are truncated: %w", err)
 	}
-	extraFlags, err := reader.ReadU16()
-	if err != nil {
-		return fmt.Errorf("player extra movement flags are truncated: %w", err)
+	if movement.Flags2, err = reader.ReadU16(); err != nil {
+		return movement, fmt.Errorf("player extra movement flags are truncated: %w", err)
 	}
-	if _, err := reader.Read(20); err != nil {
-		return fmt.Errorf("player movement position is truncated: %w", err)
+	if _, err := reader.ReadU32(); err != nil {
+		return movement, fmt.Errorf("player movement time is truncated: %w", err)
 	}
-	if movementFlags&0x200 != 0 {
-		if _, err := reader.ReadPackedGUID(); err != nil {
-			return fmt.Errorf("player transport GUID is truncated: %w", err)
+	for index := range movement.Position {
+		if movement.Position[index], err = reader.ReadF32(); err != nil {
+			return movement, fmt.Errorf("player movement position component %d is truncated: %w", index, err)
 		}
-		if _, err := reader.Read(21); err != nil {
-			return fmt.Errorf("player transport offsets are truncated: %w", err)
+	}
+	if movement.Flags&0x200 != 0 {
+		movement.OnTransport = true
+		if movement.TransportGUID, err = reader.ReadPackedGUID(); err != nil {
+			return movement, fmt.Errorf("player transport GUID is truncated: %w", err)
 		}
-		if extraFlags&0x1 != 0 {
+		for index := range movement.TransportOffset {
+			if movement.TransportOffset[index], err = reader.ReadF32(); err != nil {
+				return movement, fmt.Errorf("player transport offset component %d is truncated: %w", index, err)
+			}
+		}
+		if _, err := reader.ReadU32(); err != nil {
+			return movement, fmt.Errorf("player transport time is truncated: %w", err)
+		}
+		if _, err := reader.ReadU8(); err != nil {
+			return movement, fmt.Errorf("player transport seat is truncated: %w", err)
+		}
+		if movement.Flags2&0x1 != 0 {
 			if _, err := reader.ReadU32(); err != nil {
-				return fmt.Errorf("player interpolated transport time is truncated: %w", err)
+				return movement, fmt.Errorf("player interpolated transport time is truncated: %w", err)
 			}
 		}
 	}
-	if movementFlags&(0x2000|0x4000) != 0 || extraFlags&0x2 != 0 {
+	if movement.Flags&(0x2000|0x4000) != 0 || movement.Flags2&0x2 != 0 {
 		if _, err := reader.ReadF32(); err != nil {
-			return fmt.Errorf("player pitch is truncated: %w", err)
+			return movement, fmt.Errorf("player pitch is truncated: %w", err)
 		}
 	}
 	if _, err := reader.ReadU32(); err != nil {
-		return fmt.Errorf("player fall time is truncated: %w", err)
+		return movement, fmt.Errorf("player fall time is truncated: %w", err)
 	}
-	if movementFlags&0x1000 != 0 {
+	if movement.Flags&0x1000 != 0 {
 		if _, err := reader.Read(16); err != nil {
-			return fmt.Errorf("player jump movement is truncated: %w", err)
+			return movement, fmt.Errorf("player jump movement is truncated: %w", err)
 		}
 	}
-	if movementFlags&0x04000000 != 0 {
+	if movement.Flags&0x04000000 != 0 {
 		if _, err := reader.ReadF32(); err != nil {
-			return fmt.Errorf("player spline elevation is truncated: %w", err)
+			return movement, fmt.Errorf("player spline elevation is truncated: %w", err)
 		}
 	}
 	if _, err := reader.Read(36); err != nil {
-		return fmt.Errorf("player movement speeds are truncated: %w", err)
+		return movement, fmt.Errorf("player movement speeds are truncated: %w", err)
 	}
-	if movementFlags&0x08000000 != 0 {
+	if movement.Flags&0x08000000 != 0 {
 		if err := skipCreateSpline(reader); err != nil {
-			return fmt.Errorf("player create spline is truncated: %w", err)
+			return movement, fmt.Errorf("player create spline is truncated: %w", err)
 		}
 	}
-	return nil
+	return movement, nil
 }
 
 func skipCreateSpline(reader *protocol.Buffer) error {
@@ -4975,7 +5172,7 @@ func pairedLoginTrace(trace protocoltrace.Trace, playerGUID uint64) (protocoltra
 	return filtered, nil
 }
 
-func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64, lfgDungeonID, instanceEntryMapID, instanceEntryID, statsMinLevel uint32, replayPlayerStartMessage bool, questRewardTwiceID uint32, replayPetCritter bool) error {
+func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64, lfgDungeonID, instanceEntryMapID, instanceEntryID, statsMinLevel uint32, replayPlayerStartMessage bool, questRewardTwiceID uint32, replayPetCritter, replayFarTeleport bool) error {
 	workDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return err
@@ -5035,6 +5232,50 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 	if err := server.Initialize(ctx); err != nil {
 		server.Stop()
 		return err
+	}
+	var farTeleportMap uint32
+	var farTeleportPosition [4]float32
+	if replayFarTeleport {
+		var currentMap uint32
+		if err := stores.Characters.DB.QueryRowContext(ctx, "SELECT map FROM characters WHERE guid = ?", guid).Scan(&currentMap); err != nil {
+			server.Stop()
+			return fmt.Errorf("read far-teleport replay source map: %w", err)
+		}
+		rows, err := stores.World.DB.QueryContext(ctx, "SELECT map, position_x, position_y, position_z, orientation FROM creature WHERE map <> ? ORDER BY map, guid LIMIT 256", currentMap)
+		if err != nil {
+			server.Stop()
+			return fmt.Errorf("select far-teleport world spawn: %w", err)
+		}
+		found := false
+		for rows.Next() {
+			var mapID int64
+			var position [4]float32
+			if rows.Scan(&mapID, &position[0], &position[1], &position[2], &position[3]) != nil || mapID < 0 || mapID > int64(^uint32(0)) {
+				continue
+			}
+			if _, mapFound, mapErr := server.Data.Map(uint32(mapID)); mapErr != nil || !mapFound {
+				continue
+			}
+			valid := true
+			for _, coordinate := range position {
+				valid = valid && !math.IsNaN(float64(coordinate)) && !math.IsInf(float64(coordinate), 0)
+			}
+			if !valid {
+				continue
+			}
+			farTeleportMap, farTeleportPosition, found = uint32(mapID), position, true
+			break
+		}
+		rowsErr := rows.Err()
+		rows.Close()
+		if rowsErr != nil {
+			server.Stop()
+			return fmt.Errorf("scan far-teleport world spawn: %w", rowsErr)
+		}
+		if !found {
+			server.Stop()
+			return fmt.Errorf("no valid creature spawn exists outside source map %d", currentMap)
+		}
 	}
 	if petAuraSourceSpell != 0 {
 		if _, found, err := server.Data.Spell(petAuraSourceSpell); err != nil || !found {
@@ -5126,6 +5367,12 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 		server.Stop()
 		return fmt.Errorf("read replay character cinematic state: %w", err)
 	}
+	var savedTransportGUID int64
+	var savedTransportOffset [4]float32
+	if err := stores.Characters.DB.QueryRowContext(ctx, "SELECT COALESCE(transguid, 0), COALESCE(trans_x, 0), COALESCE(trans_y, 0), COALESCE(trans_z, 0), COALESCE(trans_o, 0) FROM characters WHERE guid = ?", guid).Scan(&savedTransportGUID, &savedTransportOffset[0], &savedTransportOffset[1], &savedTransportOffset[2], &savedTransportOffset[3]); err != nil {
+		server.Stop()
+		return fmt.Errorf("read saved transport attachment: %w", err)
+	}
 	expectedCinematic := sourceLoginCinematicID(server.Data, raceID, classID)
 	var trace protocoltrace.Trace
 	var replayErr error
@@ -5149,6 +5396,8 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 		trace, replayErr = world.ReplayCharacterPetCritter(ctx, server, guid)
 	} else if lfgDungeonID != 0 {
 		trace, replayErr = world.ReplayCharacterLFGTeleport(ctx, server, guid, lfgDungeonID)
+	} else if replayFarTeleport {
+		trace, replayErr = world.ReplayCharacterFarTeleport(ctx, server, guid, farTeleportMap, farTeleportPosition[0], farTeleportPosition[1], farTeleportPosition[2], farTeleportPosition[3])
 	} else if instanceEntryID != 0 {
 		trace, replayErr = world.ReplayCharacterInstanceEntry(ctx, server, guid, instanceEntryMapID, instanceEntryID)
 	} else {
@@ -5185,6 +5434,11 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 	if replayPetCritter {
 		if err := checkCritterPetLoginTrace(trace); err != nil {
 			return fmt.Errorf("critter pet packet replay failed: %w", err)
+		}
+	}
+	if savedTransportGUID != 0 {
+		if err := checkAttachedTransportLogin(trace, guid, uint64(savedTransportGUID), savedTransportOffset); err != nil {
+			return fmt.Errorf("attached transport login replay failed: %w", err)
 		}
 	}
 	if snapshotErr != nil {

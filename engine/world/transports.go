@@ -30,9 +30,9 @@ func (s *Server) loadContinentTransports(ctx context.Context) {
 	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || s.Data == nil {
 		return
 	}
-	rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT tr.guid, tr.entry, COALESCE(gt.name, ''), COALESCE(gt.data0, 0), COALESCE(gt.data1, 0), COALESCE(gt.data2, 0), COALESCE(gt.data6, 0), COALESCE(gt.displayId, 0), COALESCE(gt.size, 1) FROM transports AS tr JOIN gameobject_template AS gt ON gt.entry = tr.entry WHERE gt.type = 15 ORDER BY tr.guid`)
+	rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT tr.guid, tr.entry, COALESCE(gt.name, ''), COALESCE(gt.data0, 0), COALESCE(gt.data1, 0), COALESCE(gt.data2, 0), COALESCE(gt.data6, 0), COALESCE(gt.displayId, 0), COALESCE(gt.size, 1), COALESCE(gt.data8, 0) FROM transports AS tr JOIN gameobject_template AS gt ON gt.entry = tr.entry WHERE gt.type = 15 ORDER BY tr.guid`)
 	if err != nil && isMissingColumn(err) {
-		rows, err = s.WorldStore.DB.QueryContext(ctx, `SELECT tr.guid, tr.entry, COALESCE(gt.name, ''), COALESCE(gt.data0, 0), COALESCE(gt.data1, 0), COALESCE(gt.data2, 0), 0, COALESCE(gt.displayId, 0), COALESCE(gt.size, 1) FROM transports AS tr JOIN gameobject_template AS gt ON gt.entry = tr.entry WHERE gt.type = 15 ORDER BY tr.guid`)
+		rows, err = s.WorldStore.DB.QueryContext(ctx, `SELECT tr.guid, tr.entry, COALESCE(gt.name, ''), COALESCE(gt.data0, 0), COALESCE(gt.data1, 0), COALESCE(gt.data2, 0), 0, COALESCE(gt.displayId, 0), COALESCE(gt.size, 1), COALESCE(gt.data8, 0) FROM transports AS tr JOIN gameobject_template AS gt ON gt.entry = tr.entry WHERE gt.type = 15 ORDER BY tr.guid`)
 	}
 	if err != nil {
 		if !missingTable(err) && s.Logger != nil {
@@ -44,10 +44,10 @@ func (s *Server) loadContinentTransports(ctx context.Context) {
 	loaded := 0
 	now := time.Now()
 	for rows.Next() {
-		var guid, entry, pathID, transportMapID, displayID int64
+		var guid, entry, pathID, transportMapID, displayID, canBeStopped int64
 		var name string
 		var speed, acceleration, size float64
-		if err := rows.Scan(&guid, &entry, &name, &pathID, &speed, &acceleration, &transportMapID, &displayID, &size); err != nil || guid <= 0 || entry <= 0 || pathID <= 0 {
+		if err := rows.Scan(&guid, &entry, &name, &pathID, &speed, &acceleration, &transportMapID, &displayID, &size, &canBeStopped); err != nil || guid <= 0 || entry <= 0 || pathID <= 0 {
 			continue
 		}
 		points, err := s.Data.TaxiPathPoints(uint32(pathID))
@@ -65,7 +65,11 @@ func (s *Server) loadContinentTransports(ctx context.Context) {
 			size = 1
 		}
 		mapID, x, y, z, orientation := path.Position(0)
-		transport := &continentTransport{Spawn: gameObjectSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: mapID, X: x, Y: y, Z: z, Orientation: orientation, Type: GameObjectTypeMOTransport, DisplayID: uint32(displayID), Size: float32(size), RotationW: 1, ParentRotation: [4]float32{0, 0, 0, 1}}, Name: name, TransportMapID: uint32(transportMapID), PathID: uint32(pathID), Path: path, LastUpdate: now}
+		state := uint8(0)
+		if canBeStopped != 0 {
+			state = 1
+		}
+		transport := &continentTransport{Spawn: gameObjectSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: mapID, X: x, Y: y, Z: z, Orientation: orientation, State: state, AnimProgress: 255, Type: GameObjectTypeMOTransport, DisplayID: uint32(displayID), Size: float32(size), RotationW: 1, ParentRotation: [4]float32{0, 0, 0, 1}}, Name: name, TransportMapID: uint32(transportMapID), PathID: uint32(pathID), Path: path, LastUpdate: now}
 		s.loadTransportPassengers(ctx, transport)
 		transport.updatePosition()
 		s.transportMu.Lock()
@@ -439,10 +443,6 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 	if s == nil {
 		return
 	}
-	distance := float64(s.Config.VisibilityDistanceContinents)
-	if distance <= 0 {
-		distance = 150
-	}
 	rawGUID := transportGUID(change.Spawn.GUID)
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
@@ -458,9 +458,7 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 			sess.teleportTo(change.Spawn.Map, x, y, z, o)
 			continue
 		}
-		oldNear := sess.player.Map == change.OldSpawn.Map && math.Hypot(float64(change.OldSpawn.X-sess.player.X), float64(change.OldSpawn.Y-sess.player.Y)) <= distance
-		newNear := sess.player.Map == change.Spawn.Map && math.Hypot(float64(change.Spawn.X-sess.player.X), float64(change.Spawn.Y-sess.player.Y)) <= distance
-		if oldNear && !newNear {
+		if change.OldSpawn.Map != change.Spawn.Map && sess.player.Map == change.OldSpawn.Map {
 			updates := protocol.NewUpdateData()
 			updates.AddOutOfRangeGUID(rawGUID)
 			if packet, err := updates.BuildPacket(0); err == nil {
@@ -468,11 +466,11 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 			}
 			continue
 		}
-		if !newNear {
+		if sess.player.Map != change.Spawn.Map {
 			continue
 		}
 		updates := protocol.NewUpdateData()
-		if oldNear && change.OldSpawn.Map == change.Spawn.Map {
+		if change.OldSpawn.Map == change.Spawn.Map {
 			updates.AddUpdateBlock(buildGameObjectMovementUpdate(change.Spawn))
 		} else {
 			updates.AddUpdateBlock(buildGameObjectUpdate(change.Spawn))

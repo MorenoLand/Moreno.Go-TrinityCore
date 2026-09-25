@@ -337,7 +337,7 @@ func buildTransportGameObjectUpdate(spawn gameObjectSpawn, create bool) []byte {
 	}
 	block := protocol.NewBuffer(256)
 	if create {
-		block.WriteU8(protocol.UpdateCreateObject2)
+		block.WriteU8(protocol.UpdateCreateObject)
 	} else {
 		block.WriteU8(protocol.UpdateMovement)
 	}
@@ -381,8 +381,8 @@ func transportGUID(guid uint32) uint64 {
 
 func gameObjectDynamicValue(spawn gameObjectSpawn) uint32 {
 	if (spawn.Type == GameObjectTypeTransport || spawn.Type == GameObjectTypeMOTransport) && spawn.TransportPeriod > 0 {
-		progress := uint32(float64(spawn.TransportProgress%spawn.TransportPeriod) / float64(spawn.TransportPeriod) * 65535)
-		return uint32(uint16(progress)) << 16
+		progress := uint16(uint32(float32(spawn.TransportProgress%spawn.TransportPeriod) / float32(spawn.TransportPeriod) * 65535))
+		return uint32(progress) << 16
 	}
 	return 0xFFFF0000
 }
