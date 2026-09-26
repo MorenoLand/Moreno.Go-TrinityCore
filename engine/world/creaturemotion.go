@@ -12,6 +12,7 @@ import (
 
 type playerPos struct {
 	Map             uint32
+	InstanceID      uint32
 	X               float32
 	Y               float32
 	Z               float32
@@ -26,28 +27,37 @@ type playerPos struct {
 	Sess            *session
 }
 
+type creatureMotionSpawnKey struct {
+	MapID      uint32
+	InstanceID uint32
+	GUID       uint32
+}
+
 // creatureMotion tracks live server-side creature movement state, the role
 // TrinityCore's MotionMaster fills: home position (for random wander around
 // spawn), current position, waypoint path/point and the next move deadline.
 type creatureMotion struct {
-	GUID        uint64
-	Entry       uint32
-	Map         uint32
-	HomeX       float32
-	HomeY       float32
-	HomeZ       float32
-	X           float32
-	Y           float32
-	Z           float32
-	Orientation float32
-	Speed       float32 // yd/s walk speed used for wander
-	RunSpeed    float32 // yd/s run speed used for pursuit
-	MoveType    uint32  // 1 random, 2 waypoint
-	Wander      float64
+	GUID          uint64
+	Entry         uint32
+	Map           uint32
+	InstanceID    uint32
+	TransportGUID uint64
+	HomeX         float32
+	HomeY         float32
+	HomeZ         float32
+	X             float32
+	Y             float32
+	Z             float32
+	Orientation   float32
+	Speed         float32 // yd/s walk speed used for wander
+	RunSpeed      float32 // yd/s run speed used for pursuit
+	MoveType      uint32  // 1 random, 2 waypoint
+	Wander        float64
 
 	Faction         uint32
 	Level           uint32
 	UnitFlags       uint32
+	DynamicFlags    uint32
 	FlagsExtra      uint32
 	ReactState      uint8
 	ReactStateKnown bool
@@ -87,10 +97,12 @@ type creatureMotion struct {
 	SpellCooldownCategories   map[uint32]uint32
 	SpellCooldownCategoryEnds map[uint32]time.Time
 
-	ThreatMgr  *ThreatManager
-	BossAI     BossAI
-	ScriptName string
-	Name       string
+	ThreatMgr           *ThreatManager
+	BossAI              BossAI
+	ScriptName          string
+	Name                string
+	EncounterMapID      uint32
+	EncounterInstanceID uint32
 
 	OwnerGUID      uint64
 	CharmerGUID    uint64
@@ -162,15 +174,66 @@ func creatureRunVelocity(multiplier float64) float32 {
 	return float32(multiplier) * creatureBaseRunSpeed
 }
 
-func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y, z float32, moveType uint32, wander float64, walkSpeed float32, currentHealth uint32) *creatureMotion {
+func (s *Server) motionMapLocked(mapID, instanceID uint32) map[uint64]*creatureMotion {
+	key := instanceAdmissionKey{MapID: mapID, InstanceID: instanceID}
+	if s.instanceCreatureMotion == nil {
+		s.instanceCreatureMotion = make(map[instanceAdmissionKey]map[uint64]*creatureMotion)
+	}
+	if s.instanceCreatureMotion[key] == nil {
+		s.instanceCreatureMotion[key] = make(map[uint64]*creatureMotion)
+	}
+	return s.instanceCreatureMotion[key]
+}
+
+func (s *Server) findCreatureMotionLocked(mapID, instanceID uint32, guid uint64) *creatureMotion {
+	motions := s.motionMapLocked(mapID, instanceID)
+	if motion := motions[guid]; motion != nil && motion.Map == mapID && motion.InstanceID == instanceID {
+		return motion
+	}
+	low, entry := uint32(guid&0x00FFFFFF), uint32(guid>>24&0x00FFFFFF)
+	if motion := motions[creatureWorldGUID(low, entry)]; motion != nil && motion.Map == mapID && motion.InstanceID == instanceID {
+		return motion
+	}
+	return nil
+}
+
+func (s *Server) findCreatureMotion(mapID, instanceID uint32, guid uint64) *creatureMotion {
+	if s == nil {
+		return nil
+	}
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
-	if s.creatureMotion == nil {
-		s.creatureMotion = make(map[uint64]*creatureMotion)
+	return s.findCreatureMotionLocked(mapID, instanceID, guid)
+}
+
+func (s *session) findCreatureMotion(guid uint64) *creatureMotion {
+	if s == nil || s.server == nil || s.player == nil {
+		return nil
 	}
+	return s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, guid)
+}
+
+func (s *Server) storeCreatureMotion(mapID, instanceID uint32, guid uint64, motion *creatureMotion) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.motionMu.Lock()
+	motion.Map, motion.InstanceID = mapID, instanceID
+	s.motionMapLocked(mapID, instanceID)[guid] = motion
+	s.motionMu.Unlock()
+}
+
+func (s *Server) motionFor(ctx context.Context, guid, entry, mapID, instanceID uint32, x, y, z float32, moveType uint32, wander float64, walkSpeed float32, currentHealth uint32) *creatureMotion {
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	return s.motionForLocked(ctx, guid, entry, mapID, instanceID, x, y, z, moveType, wander, walkSpeed, currentHealth)
+}
+
+func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instanceID uint32, x, y, z float32, moveType uint32, wander float64, walkSpeed float32, currentHealth uint32) *creatureMotion {
+	motions := s.motionMapLocked(mapID, instanceID)
 	key := creatureWorldGUID(guid, entry)
-	motion := s.creatureMotion[key]
-	if motion == nil || motion.Entry != entry {
+	motion := motions[key]
+	if motion == nil || motion.Entry != entry || motion.Map != mapID || motion.InstanceID != instanceID {
 		st := s.loadCreatureStats(ctx, entry)
 		health := st.Health
 		if currentHealth > 0 {
@@ -183,6 +246,7 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y,
 			GUID:            key,
 			Entry:           entry,
 			Map:             mapID,
+			InstanceID:      instanceID,
 			HomeX:           x,
 			HomeY:           y,
 			HomeZ:           z,
@@ -220,25 +284,65 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y,
 			motion.PathID = s.loadCreaturePathID(ctx, guid, entry)
 			motion.Points = s.loadWaypoints(ctx, motion.PathID)
 		}
-		s.creatureMotion[key] = motion
+		motions[key] = motion
 	}
 	motion.Refreshed = time.Now()
 	return motion
 }
 
-func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerGUID uint64) {
+func (s *Server) relocateTransportCreatureMotions(ctx context.Context, passengers []creatureSpawn) {
+	if s == nil || len(passengers) == 0 {
+		return
+	}
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
-	if s.creatureMotion == nil {
-		s.creatureMotion = make(map[uint64]*creatureMotion)
+	now := time.Now()
+	for _, passenger := range passengers {
+		if passenger.GUID == 0 || passenger.Entry == 0 || passenger.TransportGUID == 0 {
+			continue
+		}
+		key := creatureWorldGUID(passenger.GUID, passenger.Entry)
+		isNew := s.motionMapLocked(passenger.Map, 0)[key] == nil
+		motion := s.motionForLocked(ctx, passenger.GUID, passenger.Entry, passenger.Map, 0, passenger.X, passenger.Y, passenger.Z, 0, 0, passenger.WalkSpeed, passenger.Health)
+		motion.TransportGUID = passenger.TransportGUID
+		motion.Map, motion.InstanceID = passenger.Map, 0
+		motion.HomeX, motion.HomeY, motion.HomeZ = passenger.X, passenger.Y, passenger.Z
+		motion.X, motion.Y, motion.Z, motion.Orientation = passenger.X, passenger.Y, passenger.Z, passenger.Orientation
+		motion.Moving, motion.MoveType, motion.Wander = false, 0, 0
+		motion.PathID, motion.Points, motion.NextIdx = 0, nil, 0
+		motion.MoveEnds, motion.Refreshed = time.Time{}, now
+		if isNew {
+			motion.Health = creatureSpawnHealth(passenger.RegenerateHealth, passenger.Health, motion.MaxHealth)
+		}
 	}
+}
+
+func (s *Server) unloadTransportCreatureMotions(mapID uint32, transportGUID uint64, passengers []creatureSpawn) {
+	if s == nil || len(passengers) == 0 || transportGUID == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	for _, passenger := range passengers {
+		key := creatureWorldGUID(passenger.GUID, passenger.Entry)
+		if motion := s.motionMapLocked(mapID, 0)[key]; motion != nil && motion.Map == mapID && motion.TransportGUID == transportGUID {
+			delete(s.motionMapLocked(mapID, 0), key)
+		}
+	}
+}
+
+func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerGUID uint64) {
+	playerSess := s.findSessionByGUID(playerGUID)
+	mapID, instanceID := uint32(0), uint32(0)
+	if playerSess != nil && playerSess.player != nil {
+		mapID, instanceID = playerSess.player.Map, playerSess.player.InstanceID
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
 	guid := uint32(creatureGUID & 0x00FFFFFF)
 	entry := uint32((creatureGUID >> 24) & 0x00FFFFFF)
 	stdKey := creatureWorldGUID(guid, entry)
-	motion := s.creatureMotion[creatureGUID]
-	if motion == nil {
-		motion = s.creatureMotion[stdKey]
-	}
+	motion := s.findCreatureMotionLocked(mapID, instanceID, creatureGUID)
 	if motion == nil && s.WorldStore != nil && s.WorldStore.DB != nil {
 		var x, y, z float64
 		var mapID, faction, curHealth int64
@@ -260,6 +364,7 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				GUID:            creatureGUID,
 				Entry:           entry,
 				Map:             uint32(mapID),
+				InstanceID:      instanceID,
 				HomeX:           float32(x),
 				HomeY:           float32(y),
 				HomeZ:           float32(z),
@@ -284,8 +389,9 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				Name:            name,
 				ScriptName:      scriptName,
 			}
-			s.creatureMotion[creatureGUID] = motion
-			s.creatureMotion[stdKey] = motion
+			motions := s.motionMapLocked(motion.Map, instanceID)
+			motions[creatureGUID] = motion
+			motions[stdKey] = motion
 		}
 	}
 	if motion != nil && motion.Health > 0 {
@@ -303,15 +409,18 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		}
 		motion.ThreatMgr.AddThreat(playerGUID, 100.0, true)
 		if !motion.InCombat {
-			s.broadcastAIReaction(motion.Map, creatureGUID, 2) // AI_REACTION_HOSTILE
+			s.broadcastAIReactionInInstance(motion.Map, motion.InstanceID, creatureGUID, 2)
 			startPkt := buildAttackStart(creatureGUID, playerGUID)
-			if playerSess := s.findSessionByGUID(playerGUID); playerSess != nil {
+			if playerSess != nil {
 				_ = playerSess.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, true)
-				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, playerSess)
+				s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, playerSess)
 			} else {
-				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, nil)
+				s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, nil)
 			}
 			if motion.BossAI != nil {
+				if playerSess != nil {
+					s.beginInstanceEncounter(motion, playerSess.player)
+				}
 				motion.BossAI.OnAggro(ctx, s, motion, playerGUID)
 			}
 		}
@@ -321,17 +430,12 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 	}
 }
 
-func (s *Server) charmCreature(ctx context.Context, creatureGUID, charmerGUID uint64, charmerRace uint8) ([]uint32, uint8, uint8, bool) {
-	if s == nil || creatureGUID == 0 || charmerGUID == 0 {
+func (s *Server) charmCreature(ctx context.Context, key creatureAuraKey, charmerGUID uint64, charmerRace uint8) ([]uint32, uint8, uint8, bool) {
+	if s == nil || key.GUID == 0 || charmerGUID == 0 {
 		return nil, 0, 0, false
 	}
 	s.motionMu.Lock()
-	motion := s.creatureMotion[creatureGUID]
-	if motion == nil {
-		low := uint32(creatureGUID & 0x00FFFFFF)
-		entry := uint32((creatureGUID >> 24) & 0x00FFFFFF)
-		motion = s.creatureMotion[creatureWorldGUID(low, entry)]
-	}
+	motion := s.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
 	if motion == nil {
 		s.motionMu.Unlock()
 		return nil, 0, 0, false
@@ -362,21 +466,16 @@ func (s *Server) charmCreature(ctx context.Context, creatureGUID, charmerGUID ui
 	mapID, rawGUID := motion.Map, motion.GUID
 	flags, faction := motion.UnitFlags, motion.Faction
 	s.motionMu.Unlock()
-	s.broadcastCreatureValuesUpdate(mapID, rawGUID, map[int]uint32{unitFieldFlags: flags, unitFieldFaction: faction})
+	s.broadcastCreatureValuesUpdateInInstance(mapID, motion.InstanceID, rawGUID, map[int]uint32{unitFieldFlags: flags, unitFieldFaction: faction})
 	return spells, reactState, commandState, true
 }
 
-func (s *Server) uncharmCreature(creatureGUID, charmerGUID uint64) {
-	if s == nil || creatureGUID == 0 {
+func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
+	if s == nil || key.GUID == 0 {
 		return
 	}
 	s.motionMu.Lock()
-	motion := s.creatureMotion[creatureGUID]
-	if motion == nil {
-		low := uint32(creatureGUID & 0x00FFFFFF)
-		entry := uint32((creatureGUID >> 24) & 0x00FFFFFF)
-		motion = s.creatureMotion[creatureWorldGUID(low, entry)]
-	}
+	motion := s.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
 	if motion == nil || !motion.Charmed || (charmerGUID != 0 && motion.CharmerGUID != charmerGUID) {
 		s.motionMu.Unlock()
 		return
@@ -394,30 +493,7 @@ func (s *Server) uncharmCreature(creatureGUID, charmerGUID uint64) {
 	mapID, rawGUID := motion.Map, motion.GUID
 	flags, faction := motion.UnitFlags, motion.Faction
 	s.motionMu.Unlock()
-	s.broadcastCreatureValuesUpdate(mapID, rawGUID, map[int]uint32{unitFieldFlags: flags, unitFieldFaction: faction})
-}
-
-// isCreatureEvading returns true if the creature is currently evading back to spawn.
-// During evade mode, the creature is immune to all attacks, spells, and threat.
-func (s *Server) isCreatureEvading(guid uint64) bool {
-	if s == nil {
-		return false
-	}
-	s.motionMu.Lock()
-	defer s.motionMu.Unlock()
-	if s.creatureMotion == nil {
-		return false
-	}
-	if motion, ok := s.creatureMotion[guid]; ok && motion != nil {
-		return motion.Evading
-	}
-	low := uint32(guid & 0x00FFFFFF)
-	entry := uint32((guid >> 24) & 0x00FFFFFF)
-	stdKey := creatureWorldGUID(low, entry)
-	if motion, ok := s.creatureMotion[stdKey]; ok && motion != nil {
-		return motion.Evading
-	}
-	return false
+	s.broadcastCreatureValuesUpdateInInstance(mapID, motion.InstanceID, rawGUID, map[int]uint32{unitFieldFlags: flags, unitFieldFaction: faction})
 }
 
 // triggerCreatureEvade resets a creature's combat state, clears threat & auras,
@@ -427,21 +503,26 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	if motion == nil {
 		return
 	}
+	if motion.TransportGUID != 0 {
+		motion.Moving = false
+		return
+	}
 	if motion.ThreatMgr != nil {
 		motion.ThreatMgr.ClearThreat()
 	}
 	stopPkt := buildAttackStop(motion.GUID, motion.TargetGUID, false)
-	s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
-	s.broadcastThreatClear(motion.Map, motion.GUID)
+	s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+	s.broadcastThreatClearInInstance(motion.Map, motion.InstanceID, motion.GUID)
 	if motion.BossAI != nil {
+		s.clearInstanceEncounter(motion)
 		motion.BossAI.OnEvade(ctx, s, motion)
 	}
 	motion.InCombat = false
 	motion.TargetGUID = 0
 	motion.Health = motion.MaxHealth
 	if s != nil {
-		s.clearCreatureAuras(motion.GUID)
-		s.broadcastCreatureValuesUpdate(motion.Map, motion.GUID, map[int]uint32{
+		s.clearCreatureAuras(creatureAuraKeyForMotion(motion))
+		s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, map[int]uint32{
 			unitFieldHealth: motion.MaxHealth,
 		})
 	}
@@ -455,7 +536,7 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 		if duration < 500 {
 			duration = 500
 		}
-		s.broadcastMonsterMove(motion.Map, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration)
+		s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false)
 		motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
 		motion.Moving = true
 		motion.Evading = true
@@ -515,6 +596,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 			isDead := (sess.player.Health == 0 && sess.player.MaxHealth > 0) || sess.player.PlayerFlags&playerFlagGhost != 0
 			players = append(players, playerPos{
 				Map:             sess.player.Map,
+				InstanceID:      sess.player.InstanceID,
 				X:               sess.player.X,
 				Y:               sess.player.Y,
 				Z:               sess.player.Z,
@@ -542,37 +624,39 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 	}
 	query := `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, c.MovementType, c.wander_distance,
 		COALESCE(NULLIF(t.speed_walk, 0), 1.0), COALESCE(NULLIF(t.speed_run, 0), 1.14286),
-		COALESCE(t.faction, 0), COALESCE(t.maxlevel, 1), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), COALESCE(NULLIF(t.BaseAttackTime, 0), 2000),
+		COALESCE(t.faction, 0), COALESCE(t.maxlevel, 1), COALESCE(t.unit_flags, 0), COALESCE(t.dynamicflags, 0), COALESCE(t.flags_extra, 0), COALESCE(NULLIF(t.BaseAttackTime, 0), 2000),
 		c.curhealth
 		FROM creature AS c
 		JOIN creature_template AS t ON t.entry = c.id
 		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
 		AND (? OR c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)
 		AND (? OR ? OR ((COALESCE(t.flags_extra, 0) & 0x400) = 0 AND (COALESCE(t.npcflag, 0) & 0xC000) = 0))`
-	seenCreatures := make(map[uint32]struct{})
+	seenCreatures := make(map[creatureMotionSpawnKey]struct{})
 	for _, p := range players {
 		rows, err := s.WorldStore.DB.QueryContext(ctx, query, p.Map, float64(p.X)-distance, float64(p.X)+distance, float64(p.Y)-distance, float64(p.Y)+distance, p.IsGM, p.IsGM, p.IsDead)
 		if err != nil {
 			continue
 		}
 		for rows.Next() {
-			var guid, entry, moveType, faction, level, unitFlags, flagsExtra, attackTime, curHealth int64
+			var guid, entry, moveType, faction, level, unitFlags, dynamicFlags, flagsExtra, attackTime, curHealth int64
 			var x, y, z, wander, walkSpeed, runSpeed float64
-			if err := rows.Scan(&guid, &entry, &x, &y, &z, &moveType, &wander, &walkSpeed, &runSpeed, &faction, &level, &unitFlags, &flagsExtra, &attackTime, &curHealth); err != nil {
+			if err := rows.Scan(&guid, &entry, &x, &y, &z, &moveType, &wander, &walkSpeed, &runSpeed, &faction, &level, &unitFlags, &dynamicFlags, &flagsExtra, &attackTime, &curHealth); err != nil {
 				continue
 			}
-			if _, dup := seenCreatures[uint32(guid)]; dup {
+			spawnKey := creatureMotionSpawnKey{MapID: p.Map, InstanceID: p.InstanceID, GUID: uint32(guid)}
+			if _, dup := seenCreatures[spawnKey]; dup {
 				continue
 			}
-			seenCreatures[uint32(guid)] = struct{}{}
+			seenCreatures[spawnKey] = struct{}{}
 			if curHealth <= 0 {
 				continue
 			}
 			walkVelocity := creatureWalkVelocity(walkSpeed)
-			motion := s.motionFor(ctx, uint32(guid), uint32(entry), p.Map, float32(x), float32(y), float32(z), uint32(moveType), wander, walkVelocity, uint32(curHealth))
+			motion := s.motionFor(ctx, uint32(guid), uint32(entry), p.Map, p.InstanceID, float32(x), float32(y), float32(z), uint32(moveType), wander, walkVelocity, uint32(curHealth))
 			motion.Faction = uint32(faction)
 			motion.Level = uint32(level)
 			motion.UnitFlags = uint32(unitFlags)
+			motion.DynamicFlags = uint32(dynamicFlags)
 			motion.FlagsExtra = uint32(flagsExtra)
 			if !motion.ReactStateKnown {
 				if reactState, known := s.loadCreatureReaction(ctx, uint32(entry)); known {
@@ -605,6 +689,10 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 // finishes in-flight moves, honors waypoint delays, or wanders randomly.
 func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion, players []playerPos, now time.Time) {
 	if motion == nil {
+		return
+	}
+	if motion.TransportGUID != 0 {
+		motion.Moving = false
 		return
 	}
 	if motion.MaxHealth == 0 {
@@ -659,7 +747,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				nextVictim := motion.ThreatMgr.GetCurrentVictim()
 				motion.TargetGUID = nextVictim
 				entries := motion.ThreatMgr.SortedEntries()
-				s.broadcastHighestThreatUpdate(motion.Map, motion.GUID, nextVictim, entries)
+				s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, nextVictim, entries)
 				return
 			}
 			s.triggerCreatureEvade(ctx, motion, now)
@@ -675,7 +763,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				nextVictim := motion.ThreatMgr.GetCurrentVictim()
 				motion.TargetGUID = nextVictim
 				entries := motion.ThreatMgr.SortedEntries()
-				s.broadcastHighestThreatUpdate(motion.Map, motion.GUID, nextVictim, entries)
+				s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, nextVictim, entries)
 				return
 			}
 			s.triggerCreatureEvade(ctx, motion, now)
@@ -722,7 +810,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 			}
 			if s != nil {
-				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, target.Sess)
+				s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, target.Sess)
 			}
 
 			schoolMask := uint8(1)
@@ -767,7 +855,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				logPkt := buildSpellNonMeleeDamageLog(target.GUID, motion.GUID, spellID, damage, overkill, schoolMask)
 				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
 				if s != nil {
-					s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, target.Sess)
+					s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, target.Sess)
 				}
 				target.Sess.lastCombatTime = now
 				if target.Sess.player.UnitFlags&unitFlagInCombat == 0 {
@@ -788,7 +876,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				if duration < 300 {
 					duration = 300
 				}
-				s.broadcastMonsterMoveMode(motion.Map, motion.GUID, motion.X, motion.Y, motion.Z, target.X, target.Y, target.Z, duration, false)
+				s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, target.X, target.Y, target.Z, duration, false)
 				motion.X, motion.Y, motion.Z = target.X, target.Y, target.Z
 				motion.Moving = true
 				motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
@@ -928,11 +1016,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			target.Sess.debug("creature melee attack", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "target_guid", target.GUID)
 			_ = target.Sess.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, true)
 			if s != nil {
-				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, target.Sess)
+				s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, target.Sess)
 			}
 			target.Sess.sendPlayerUpdate()
 			if s != nil {
-				s.triggerPetDefensive(target.GUID, motion.GUID)
+				s.triggerPetDefensive(target.Map, target.InstanceID, target.GUID, motion.GUID)
 			}
 			motion.LastAttack = now
 		}
@@ -954,7 +1042,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 
 	// 3. Check for nearby hostile aggro
 	for _, p := range players {
-		if p.Map != motion.Map || p.IsGM || p.IsDead || (motion.FlagsExtra&0x00000400 != 0) || isCreaturePassive(motion) || creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) {
+		if p.Map != motion.Map || p.InstanceID != motion.InstanceID || p.IsGM || p.IsDead || (motion.FlagsExtra&0x00000400 != 0) || isCreaturePassive(motion) || creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) {
 			continue
 		}
 		dist := float32(math.Hypot(float64(p.X-motion.X), float64(p.Y-motion.Y)))
@@ -971,10 +1059,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if motion.BossAI == nil {
 				motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
 			}
+			if isCreaturePassive(motion) {
+				continue
+			}
 			motion.ThreatMgr.AddThreat(p.GUID, 100.0, true)
 			motion.TargetGUID = p.GUID
 			motion.Moving = false
-			s.broadcastAIReaction(motion.Map, motion.GUID, 2) // AI_REACTION_HOSTILE
+			s.broadcastAIReactionInInstance(motion.Map, motion.InstanceID, motion.GUID, 2)
 			p.Sess.lastCombatTime = now
 			if p.Sess.player != nil && p.Sess.player.UnitFlags&unitFlagInCombat == 0 {
 				p.Sess.player.UnitFlags |= unitFlagInCombat
@@ -982,8 +1073,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 			startPkt := buildAttackStart(motion.GUID, p.GUID)
 			_ = p.Sess.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, true)
-			s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, p.Sess)
+			s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, p.Sess)
 			if motion.BossAI != nil {
+				if p.Sess != nil {
+					s.beginInstanceEncounter(motion, p.Sess.player)
+				}
 				motion.BossAI.OnAggro(ctx, s, motion, p.GUID)
 			}
 			return
@@ -1037,7 +1131,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	if duration < 250 {
 		duration = 250
 	}
-	s.broadcastMonsterMoveMode(motion.Map, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, walk)
+	s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, walk)
 	motion.X, motion.Y, motion.Z = destX, destY, destZ
 	motion.Moving = true
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
@@ -1199,9 +1293,14 @@ func isAllianceRace(race uint8) bool {
 func (s *Server) pruneCreatureMotion(now time.Time) {
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
-	for key, motion := range s.creatureMotion {
-		if now.Sub(motion.Refreshed) > motionTTL {
-			delete(s.creatureMotion, key)
+	for scope, motions := range s.instanceCreatureMotion {
+		for guid, motion := range motions {
+			if now.Sub(motion.Refreshed) > motionTTL {
+				delete(motions, guid)
+			}
+		}
+		if len(motions) == 0 {
+			delete(s.instanceCreatureMotion, scope)
 		}
 	}
 }
@@ -1209,21 +1308,34 @@ func (s *Server) pruneCreatureMotion(now time.Time) {
 // stopCreatureMotion immediately halts creature movement and broadcasts MonsterMoveStop.
 func (s *Server) stopCreatureMotion(mapID uint32, guid uint64, x, y, z float32) {
 	s.motionMu.Lock()
-	if s.creatureMotion != nil {
-		if motion, ok := s.creatureMotion[guid]; ok && motion != nil {
-			motion.Moving = false
-			motion.Evading = false
-			motion.InCombat = false
-			motion.TargetGUID = 0
-			if motion.X != 0 || motion.Y != 0 {
-				x = motion.X
-				y = motion.Y
-				z = motion.Z
-			}
+	if motion := s.findCreatureMotionLocked(mapID, 0, guid); motion != nil {
+		motion.Moving = false
+		motion.Evading = false
+		motion.InCombat = false
+		motion.TargetGUID = 0
+		if motion.X != 0 || motion.Y != 0 {
+			x = motion.X
+			y = motion.Y
+			z = motion.Z
 		}
 	}
 	s.motionMu.Unlock()
 	s.broadcastMonsterMoveStop(mapID, guid, x, y, z)
+}
+
+func (s *Server) stopCreatureMotionInInstance(mapID, instanceID uint32, guid uint64, x, y, z float32) {
+	s.motionMu.Lock()
+	if motion := s.findCreatureMotionLocked(mapID, instanceID, guid); motion != nil {
+		motion.Moving = false
+		motion.Evading = false
+		motion.InCombat = false
+		motion.TargetGUID = 0
+		if motion.X != 0 || motion.Y != 0 {
+			x, y, z = motion.X, motion.Y, motion.Z
+		}
+	}
+	s.motionMu.Unlock()
+	s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, x, y, z)
 }
 
 func (s *Server) broadcastMonsterMoveStop(mapID uint32, guid uint64, x, y, z float32) {
@@ -1251,6 +1363,31 @@ func (s *Server) broadcastMonsterMoveStop(mapID uint32, guid uint64, x, y, z flo
 	}
 }
 
+func (s *Server) broadcastMonsterMoveStopInInstance(mapID, instanceID uint32, guid uint64, x, y, z float32) {
+	packet := protocol.NewBuffer(32)
+	packet.WritePackedGUID(guid)
+	packet.WriteU8(0)
+	packet.WriteF32(x)
+	packet.WriteF32(y)
+	packet.WriteF32(z)
+	packet.WriteU32(0)
+	packet.WriteU8(1)
+	distance := s.Config.VisibilityDistanceContinents
+	if distance <= 0 {
+		distance = 150.0
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for sess := range s.sessions {
+		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID || sess.player.InstanceID != instanceID {
+			continue
+		}
+		if math.Hypot(float64(x-sess.player.X), float64(y-sess.player.Y)) <= distance {
+			_ = sess.write(uint16(protocol.OpcodeSMSG_MONSTER_MOVE), packet.Bytes(), true)
+		}
+	}
+}
+
 func (s *Server) broadcastAIReaction(mapID uint32, guid uint64, reactionType uint32) {
 	buf := protocol.NewBuffer(12)
 	buf.WriteU64(guid)
@@ -1263,6 +1400,13 @@ func (s *Server) broadcastAIReaction(mapID uint32, guid uint64, reactionType uin
 		}
 		_ = sess.write(uint16(protocol.OpcodeSMSG_AI_REACTION), buf.Bytes(), true)
 	}
+}
+
+func (s *Server) broadcastAIReactionInInstance(mapID, instanceID uint32, guid uint64, reactionType uint32) {
+	buf := protocol.NewBuffer(12)
+	buf.WriteU64(guid)
+	buf.WriteU32(reactionType)
+	s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_AI_REACTION), buf.Bytes(), nil)
 }
 
 // loadCreatureSpells queries spells configured for this creature entry from creature_template_spell.

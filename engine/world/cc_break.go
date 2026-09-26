@@ -126,8 +126,8 @@ func (s *session) procDamageAuras(isDirectDamage bool, damage ...uint32) {
 }
 
 // procCreatureDamageAuras breaks root and fear auras on creatures after exceeding damage thresholds.
-func (s *Server) procCreatureDamageAuras(creatureGUID uint64, isDirectDamage bool, damage uint32, maxHealth uint32) {
-	if s == nil || creatureGUID == 0 || damage == 0 {
+func (s *Server) procCreatureDamageAuras(key creatureAuraKey, isDirectDamage bool, damage uint32, maxHealth uint32) {
+	if s == nil || key.GUID == 0 || damage == 0 {
 		return
 	}
 
@@ -147,7 +147,7 @@ func (s *Server) procCreatureDamageAuras(creatureGUID uint64, isDirectDamage boo
 	var toRemove []uint32
 	s.auraMu.Lock()
 	if s.activeCreatureAuras != nil {
-		if auras, ok := s.activeCreatureAuras[creatureGUID]; ok && auras != nil {
+		if auras, ok := s.activeCreatureAuras[key]; ok && auras != nil {
 			for spellID, aura := range auras {
 				if aura == nil || aura.Stopped {
 					continue
@@ -169,7 +169,7 @@ func (s *Server) procCreatureDamageAuras(creatureGUID uint64, isDirectDamage boo
 	s.auraMu.Unlock()
 
 	for _, spellID := range toRemove {
-		s.removeCreatureAura(creatureGUID, spellID)
+		s.removeCreatureAura(key, spellID)
 	}
 }
 

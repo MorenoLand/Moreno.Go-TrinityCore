@@ -136,53 +136,124 @@ func (s *session) sendPlayerUpdate() {
 	s.server.broadcastPlayerValuesUpdateFromSession(s, fields)
 }
 
-func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) {
+func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) bool {
 	if s.player == nil {
-		return
+		return false
 	}
-	s.clearLastMovementInfo()
+	if s.server != nil && !s.validTrinityMapLocation(mapID, x, y, z, orientation) {
+		return false
+	}
+	if s.server != nil {
+		entry, found, err := s.server.Data.Map(mapID)
+		if err != nil || !found {
+			return false
+		}
+		difficulty := uint32(0)
+		if entry.IsDungeon() {
+			difficulty = uint32(s.player.DungeonDifficulty)
+			if entry.IsRaid() {
+				difficulty = uint32(s.player.RaidDifficulty)
+			}
+			_, difficulty, found, err = s.server.Data.DownscaledMapDifficulty(mapID, difficulty)
+			if err != nil || !found {
+				return false
+			}
+		}
+		if !s.skipMapDisableCheck(context.Background()) && s.mapDisabledForTeleport(context.Background(), entry, mapID, difficulty) {
+			s.sendTransferAborted(mapID, transferAbortMapNotAllowed, 0)
+			return false
+		}
+		if entry.IsBattleground() || entry.IsBattleArena() {
+			if s.bgData.InstanceID == 0 {
+				return false
+			}
+		}
+		if uint32(s.accountExpansion) < entry.ExpansionID {
+			s.sendTransferAborted(mapID, transferAbortExpansionLevel, uint8(entry.ExpansionID))
+			return false
+		}
+	}
 	oldMap := s.player.Map
+	sameMap := oldMap == mapID
+	if !sameMap && s.server != nil && !s.canStartMapTeleport(context.Background(), mapID) {
+		return false
+	}
+	if !sameMap && s.player.PetGUID != 0 {
+		s.temporarilyUnsummonPet(context.Background())
+	} else if sameMap && s.server != nil && s.player.PetGUID != 0 {
+		visibilityDistance := s.server.Config.VisibilityDistanceContinents
+		if visibilityDistance <= 0 {
+			visibilityDistance = 150
+		}
+		s.server.motionMu.Lock()
+		pet := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, s.player.PetGUID)
+		petX, petY, petZ := float32(0), float32(0), float32(0)
+		if pet != nil {
+			petX, petY, petZ = pet.X, pet.Y, pet.Z
+		}
+		s.server.motionMu.Unlock()
+		if pet == nil || distance3D(petX, petY, petZ, x, y, z) > float64(visibilityDistance) {
+			s.temporarilyUnsummonPet(context.Background())
+		}
+	}
+	movement := s.movementInfoForCreate(*s.player)
 	s.selection = 0
 	s.player.Selection = 0
 	transportGUID := s.player.TransportGUID
 	transportX, transportY, transportZ, transportO := s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO
 	transportAttached := false
+	var transportSpawn gameObjectSpawn
 	if transportGUID != 0 && s.server != nil {
-		_, transportAttached = s.server.transportSpawnForGUID(transportGUID)
+		transportSpawn, transportAttached = s.server.transportSpawnForGUID(transportGUID)
 	}
-	sameMap := oldMap == mapID
-	s.player.Map = mapID
-	s.player.X = x
-	s.player.Y = y
-	s.player.Z = z
-	s.player.Orientation = orientation
 	if sameMap {
-		s.updateZoneAndArea(context.Background(), true)
+		s.nearTeleportPending = true
 	} else {
+		s.clearLastMovementInfo()
+		s.farTeleportOriginOrientation = s.player.Orientation
+		s.nearTeleportPending = false
+		s.nearTeleportDest = nearTeleportDestination{}
+		s.player.Map, s.player.X, s.player.Y, s.player.Z, s.player.Orientation = mapID, x, y, z, orientation
+	}
+	if !sameMap {
 		s.lastZoneUpdate = time.Time{}
 		s.worldReady.Store(false)
 		s.farTeleportPending = true
 		s.visiblePlayersMu.Lock()
 		s.visiblePlayers = nil
 		s.visiblePlayersMu.Unlock()
+		s.resetTransportPassengerVisibility()
 	}
 	s.isFalling = false
 	s.isMoving = false
 
 	if sameMap {
-		packet := protocol.NewBuffer(48)
-		packet.WritePackedGUID(s.playerGUID)
-		packet.WriteU32(0) // counter
-		packet.WriteU32(0) // movement flags
-		packet.WriteU16(0) // extra flags
-		packet.WriteU32(uint32(time.Now().UnixMilli()))
-		packet.WriteF32(x)
-		packet.WriteF32(y)
-		packet.WriteF32(z)
-		packet.WriteF32(orientation)
-		packet.WriteU32(0) // fall time
-		_ = s.write(uint16(protocol.OpcodeMSG_MOVE_TELEPORT_ACK), packet.Bytes(), true)
-		s.refreshNearbyObjects(context.Background())
+		movement.GUID = s.playerGUID
+		movement.Flags &= movementPlayerStatusMask
+		if s.server != nil {
+			movement.Time = s.server.gameTimeMilliseconds()
+		}
+		movement.X, movement.Y, movement.Z, movement.Orientation = x, y, z, orientation
+		movement.FallTime, movement.Jump, movement.HasJump, movement.SplineElevation, movement.HasSpline = 0, [4]float32{}, false, 0, false
+		movement.HasPitch = movement.Flags&(movementSwimming|movementFlying) != 0 || movement.Flags2&movement2Pitch != 0
+		if transportAttached {
+			movement.Flags |= movementOnTransport
+			if movement.Transport == nil {
+				movement.Transport = &transportMovement{}
+			}
+			movement.Transport.GUID = transportGUID
+			movement.Transport.Seat = s.player.TransportSeat
+			movement.Transport.X, movement.Transport.Y, movement.Transport.Z, movement.Transport.Orientation = CalculatePassengerOffset(transportSpawn.X, transportSpawn.Y, transportSpawn.Z, transportSpawn.Orientation, x, y, z, orientation)
+		} else {
+			movement.Flags &^= movementOnTransport
+			movement.Transport = nil
+		}
+		s.nearTeleportDest = nearTeleportDestination{X: x, Y: y, Z: z, Orientation: orientation, Movement: movement}
+		selfPacket, nearbyPacket := buildTeleportMovementPackets(s.playerGUID, movement)
+		_ = s.write(uint16(protocol.OpcodeMSG_MOVE_TELEPORT_ACK), selfPacket, true)
+		if s.server != nil {
+			s.server.broadcastTeleportMovement(s, nearbyPacket)
+		}
 	} else {
 		pending := protocol.NewBuffer(12)
 		pending.WriteU32(mapID)
@@ -212,11 +283,13 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) {
 		_, _ = s.server.CharactersStore.DB.Exec("UPDATE characters SET map = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE guid = ?",
 			mapID, x, y, z, orientation, s.playerGUID)
 	}
-	s.lastFallZ = z
-	s.lastFallTime = 0
 	if sameMap {
-		s.sendPlayerUpdate()
+		s.lastFallZ = s.player.Z
+	} else {
+		s.lastFallZ = z
 	}
+	s.lastFallTime = 0
+	return true
 }
 
 func (s *session) executeCommand(ctx context.Context, line string) bool {
@@ -261,6 +334,7 @@ func (s *session) handleCmdGM(args []string) {
 			s.player.PlayerFlags |= playerFlagGM
 			s.player.ExtraFlags |= playerExtraGMOn | playerExtraGMChat
 			s.gmChat = true
+			s.updateWorldReadyGM()
 			s.persistExtraFlags()
 			s.sendPlayerUpdate()
 			s.refreshNearbyObjects(context.Background())
@@ -272,6 +346,7 @@ func (s *session) handleCmdGM(args []string) {
 			s.player.PlayerFlags &= ^playerFlagGM
 			s.player.ExtraFlags &= ^(playerExtraGMOn | playerExtraGMChat)
 			s.gmChat = false
+			s.updateWorldReadyGM()
 			s.persistExtraFlags()
 			s.sendPlayerUpdate()
 			s.refreshNearbyObjects(context.Background())
@@ -316,6 +391,7 @@ func (s *session) handleCmdGM(args []string) {
 			if s.player != nil {
 				s.player.ExtraFlags |= playerExtraGMInvisible | playerExtraGMOn
 				s.player.PlayerFlags |= playerFlagGM
+				s.updateWorldReadyGM()
 				s.persistExtraFlags()
 				s.sendPlayerUpdate()
 				s.refreshNearbyObjects(context.Background())
@@ -405,11 +481,25 @@ func (s *session) destroyHiddenGameObjectsInRange(ctx context.Context, state pla
 	}
 	hidden := make(map[uint64]struct{})
 	s.server.objectsMu.RLock()
-	for guid := range s.server.hiddenGameObjects {
+	if state.InstanceID == 0 {
+		for guid := range s.server.hiddenGameObjects {
+			hidden[guid] = struct{}{}
+		}
+	}
+	instanceKey := instanceAdmissionKey{MapID: state.Map, InstanceID: state.InstanceID}
+	for guid := range s.server.instanceHiddenGameObjects[instanceKey] {
 		hidden[guid] = struct{}{}
 	}
 	for guid, dyn := range s.server.dynamicGameObjects {
-		if dyn != nil && dyn.Map == state.Map && math.Hypot(float64(dyn.X-state.X), float64(dyn.Y-state.Y)) <= distance {
+		if dyn != nil && dyn.Map == state.Map && dyn.InstanceID == state.InstanceID && math.Hypot(float64(dyn.X-state.X), float64(dyn.Y-state.Y)) <= distance {
+			if _, ok := hidden[guid]; ok {
+				s.sendDestroyObject(guid, false)
+				delete(hidden, guid)
+			}
+		}
+	}
+	for guid, dyn := range s.server.instanceGameObjects[instanceKey] {
+		if dyn != nil && math.Hypot(float64(dyn.X-state.X), float64(dyn.Y-state.Y)) <= distance {
 			if _, ok := hidden[guid]; ok {
 				s.sendDestroyObject(guid, false)
 				delete(hidden, guid)
@@ -446,7 +536,7 @@ func (s *session) streamNearbyObjects(ctx context.Context) {
 	s.lastStreamX = s.player.X
 	s.lastStreamY = s.player.Y
 	s.lastStreamZ = s.player.Z
-	if packet, count, err := s.server.buildNearbyCreatureUpdates(ctx, *s.player); err == nil && count > 0 && packet != nil {
+	if packet, count, err := s.server.buildNearbyCreatureUpdates(ctx, *s.player, s.currentPlayerPhaseMask(), s); err == nil && count > 0 && packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 	}
 	if packet, _, created := s.server.buildNearbyPlayerUpdatesWithCreated(s); packet != nil {
@@ -454,7 +544,7 @@ func (s *session) streamNearbyObjects(ctx context.Context) {
 		s.sendVisiblePlayerAuras(created)
 		s.sendVisibleCreatureAuras(*s.player)
 	}
-	if packet, count, err := s.server.buildNearbyGameObjectUpdates(ctx, *s.player, false); err == nil && count > 0 && packet != nil {
+	if packet, count, err := s.server.buildNearbyGameObjectUpdates(ctx, *s.player, false, s); err == nil && count > 0 && packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 	}
 	s.streamDynamicSpellObjects()

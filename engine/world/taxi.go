@@ -178,10 +178,28 @@ func (s *session) sendTaxiNodeStatusMultiple(ctx context.Context) bool {
 	if distance <= 0 {
 		distance = 150
 	}
-	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0)
+	var selectArgs []any
+	npcFlagExpr := "0"
+	if flagClause, ok := s.server.gameEventNPCFlagClause(ctx, &selectArgs); ok {
+		npcFlagExpr = flagClause
+	}
+	var eventArgs []any
+	eventClause := gameEventSpawnClause("gec.eventEntry", s.server.activeEventList(ctx), &eventArgs)
+	isGM := s.player.ExtraFlags&playerExtraGMOn != 0 || s.player.PlayerFlags&playerFlagGM != 0
+	isGhost := s.player.Health > 0 && s.player.PlayerFlags&playerFlagGhost != 0
+	phaseMask := s.currentPlayerPhaseMask()
+	query := `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), (t.npcflag | ` + npcFlagExpr + `)
 		FROM creature AS c JOIN creature_template AS t ON t.entry = c.id
+		LEFT JOIN game_event_creature AS gec ON gec.guid = c.guid
 		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
-		AND (COALESCE(t.npcflag, 0) & ?) <> 0`, s.player.Map, float64(s.player.X)-distance, float64(s.player.X)+distance, float64(s.player.Y)-distance, float64(s.player.Y)+distance, unitNPCFlagFlightmaster)
+		AND (? OR (c.phaseMask & ?) <> 0)
+		AND (? OR ? OR ((COALESCE(t.flags_extra, 0) & 0x400) = 0 AND (COALESCE(t.npcflag, 0) & 0xC000) = 0))
+		AND ` + eventClause + ` ORDER BY c.guid`
+	queryArgs := make([]any, 0, len(selectArgs)+10+len(eventArgs))
+	queryArgs = append(queryArgs, selectArgs...)
+	queryArgs = append(queryArgs, s.player.Map, float64(s.player.X)-distance, float64(s.player.X)+distance, float64(s.player.Y)-distance, float64(s.player.Y)+distance, isGM, phaseMask, isGM, isGhost)
+	queryArgs = append(queryArgs, eventArgs...)
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return true
 	}
@@ -192,9 +210,9 @@ func (s *session) sendTaxiNodeStatusMultiple(ctx context.Context) bool {
 	}
 	masters := make([]flightmaster, 0)
 	for rows.Next() {
-		var guid, entry, faction int64
+		var guid, entry, faction, npcFlags int64
 		var x, y, z float64
-		if rows.Scan(&guid, &entry, &x, &y, &z, &faction) == nil && math.Sqrt((x-float64(s.player.X))*(x-float64(s.player.X))+(y-float64(s.player.Y))*(y-float64(s.player.Y))+(z-float64(s.player.Z))*(z-float64(s.player.Z))) <= distance {
+		if rows.Scan(&guid, &entry, &x, &y, &z, &faction, &npcFlags) == nil && uint32(npcFlags)&unitNPCFlagFlightmaster != 0 && validMovementPosition(float32(x), float32(y), float32(z), 0) && math.Sqrt((x-float64(s.player.X))*(x-float64(s.player.X))+(y-float64(s.player.Y))*(y-float64(s.player.Y))+(z-float64(s.player.Z))*(z-float64(s.player.Z))) <= distance {
 			masters = append(masters, flightmaster{guid: uint32(guid), entry: uint32(entry), x: float32(x), y: float32(y), z: float32(z), faction: uint32(faction)})
 		}
 	}
@@ -202,7 +220,7 @@ func (s *session) sendTaxiNodeStatusMultiple(ctx context.Context) bool {
 	if rows.Err() != nil {
 		return false
 	}
-	player := playerPos{Map: s.player.Map, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	for _, master := range masters {
 		if s.server.isHostileFaction(master.faction, player) {
 			continue

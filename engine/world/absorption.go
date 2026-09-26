@@ -148,8 +148,8 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 }
 
 // applyCreatureAbsorptionShields applies active absorption shields on a creature.
-func (s *Server) applyCreatureAbsorptionShields(creatureGUID uint64, damage uint32, schoolMask uint8) (absorbed uint32, remainingDamage uint32) {
-	if s == nil || creatureGUID == 0 || damage == 0 {
+func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint32, schoolMask uint8) (absorbed uint32, remainingDamage uint32) {
+	if s == nil || key.GUID == 0 || damage == 0 {
 		return 0, damage
 	}
 
@@ -158,7 +158,7 @@ func (s *Server) applyCreatureAbsorptionShields(creatureGUID uint64, damage uint
 
 	s.auraMu.Lock()
 	if s.activeCreatureAuras != nil {
-		if auras, ok := s.activeCreatureAuras[creatureGUID]; ok && auras != nil {
+		if auras, ok := s.activeCreatureAuras[key]; ok && auras != nil {
 			var shieldList []*activeAura
 			for _, aura := range auras {
 				if aura != nil && !aura.Stopped && aura.Amount > 0 {
@@ -198,7 +198,7 @@ func (s *Server) applyCreatureAbsorptionShields(creatureGUID uint64, damage uint
 	s.auraMu.Unlock()
 
 	for _, id := range exhaustedSpells {
-		s.removeCreatureAura(creatureGUID, id)
+		s.removeCreatureAura(key, id)
 	}
 
 	return absorbed, remainingDamage

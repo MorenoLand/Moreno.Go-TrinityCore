@@ -64,7 +64,7 @@ func (s *session) applyPetLevel(ctx context.Context, petID, entry uint32, petTyp
 		return false
 	}
 	s.server.motionMu.Lock()
-	motion := s.server.creatureMotion[s.player.PetGUID]
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, s.player.PetGUID)
 	if motion == nil || motion.PetID != petID || motion.Entry != entry || motion.Level != oldLevel {
 		s.server.motionMu.Unlock()
 		return false
@@ -84,7 +84,7 @@ func (s *session) applyPetLevel(ctx context.Context, petID, entry uint32, petTyp
 		return false
 	}
 	s.server.motionMu.Lock()
-	if s.server.creatureMotion[s.player.PetGUID] != motion || motion.Level != oldLevel {
+	if s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, s.player.PetGUID) != motion || motion.Level != oldLevel {
 		s.server.motionMu.Unlock()
 		return false
 	}
@@ -102,9 +102,9 @@ func (s *session) applyPetLevel(ctx context.Context, petID, entry uint32, petTyp
 	if petType == 1 {
 		fields[unitFieldPetNextLevelExp] = nextLevelXP
 	}
-	mapID, petGUID := motion.Map, motion.GUID
+	mapID, instanceID, petGUID := motion.Map, motion.InstanceID, motion.GUID
 	s.server.motionMu.Unlock()
-	s.server.broadcastCreatureValuesUpdate(mapID, petGUID, fields)
+	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, petGUID, fields)
 	return true
 }
 
@@ -161,7 +161,7 @@ func (s *session) giveHunterPetXP(ctx context.Context, earnedXP uint32) {
 		return
 	}
 	s.server.motionMu.Lock()
-	motion := s.server.creatureMotion[s.player.PetGUID]
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, s.player.PetGUID)
 	if motion == nil || motion.OwnerGUID != s.playerGUID || motion.PetType != 1 || motion.Health == 0 || motion.PetID == 0 {
 		s.server.motionMu.Unlock()
 		return
@@ -189,12 +189,12 @@ func (s *session) giveHunterPetXP(ctx context.Context, earnedXP uint32) {
 		return
 	}
 	s.server.motionMu.Lock()
-	if s.server.creatureMotion[s.player.PetGUID] != motion || motion.Level != oldLevel {
+	if s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, s.player.PetGUID) != motion || motion.Level != oldLevel {
 		s.server.motionMu.Unlock()
 		return
 	}
 	motion.Experience, motion.PetNextLevelXP = newXP, nextXP
-	mapID, petGUID := motion.Map, motion.GUID
+	mapID, instanceID, petGUID := motion.Map, motion.InstanceID, motion.GUID
 	s.server.motionMu.Unlock()
-	s.server.broadcastCreatureValuesUpdate(mapID, petGUID, map[int]uint32{unitFieldPetExperience: newXP, unitFieldPetNextLevelExp: nextXP})
+	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, petGUID, map[int]uint32{unitFieldPetExperience: newXP, unitFieldPetNextLevelExp: nextXP})
 }

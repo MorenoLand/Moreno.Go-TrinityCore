@@ -22,12 +22,13 @@ const unitDynFlagLootable uint32 = 0x00000001
 
 // creatureRespawn records when a killed spawn restores its health.
 type creatureRespawn struct {
-	GUID    uint32
-	At      time.Time
-	Health  uint32
-	Entry   uint32
-	Map     uint32
-	X, Y, Z float32
+	GUID       uint32
+	At         time.Time
+	Health     uint32
+	Entry      uint32
+	Map        uint32
+	InstanceID uint32
+	X, Y, Z    float32
 }
 
 // xpTable mirrors TDB 3.3.5a `player_xp_for_level`; preferred from the world
@@ -214,7 +215,7 @@ func (s *Server) adjustCreatureKillXP(ctx context.Context, target combatTarget, 
 		return 0
 	}
 	s.motionMu.Lock()
-	motion := s.creatureMotion[target.GUID]
+	motion := s.findCreatureMotionLocked(target.Map, target.InstanceID, target.GUID)
 	isPet := motion != nil && motion.PetID != 0 && motion.OwnerGUID != 0
 	s.motionMu.Unlock()
 	if isPet {
@@ -469,25 +470,26 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget) {
 		standardGUID := creatureWorldGUID(guid, creatureEntry)
 		s.server.lootMu.Lock()
 		if s.server.creatureLootOwners == nil {
-			s.server.creatureLootOwners = make(map[uint64]lootOwnerState)
+			s.server.creatureLootOwners = make(map[lootObjectKey]lootOwnerState)
 		}
 		owner := lootOwnerState{PlayerGUID: s.playerGUID, GroupID: s.groupID}
-		s.server.creatureLootOwners[target.GUID] = owner
-		s.server.creatureLootOwners[standardGUID] = owner
+		s.server.creatureLootOwners[lootObjectKey{MapID: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}] = owner
+		s.server.creatureLootOwners[lootObjectKey{MapID: target.Map, InstanceID: target.InstanceID, GUID: standardGUID}] = owner
 		s.server.lootMu.Unlock()
 		s.rewardCreatureKillXP(ctx, target, creatureEntry, mobLevel)
 
-		// Mark the corpse lootable for everyone in range (dynamic flags update).
-		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-			_, _ = s.server.WorldStore.DB.ExecContext(ctx, "UPDATE creature SET curhealth = 0 WHERE guid = ?", guid)
+		if target.InstanceID == 0 {
+			if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+				_, _ = s.server.WorldStore.DB.ExecContext(ctx, "UPDATE creature SET curhealth = 0 WHERE guid = ?", guid)
+			}
+			s.server.scheduleCreatureRespawn(ctx, guid, uint32(math.Max(float64(target.Health), 1)), now)
+		} else {
+			s.server.scheduleInstanceCreatureRespawn(ctx, target, uint32(math.Max(float64(target.Health), 1)), now)
 		}
-		s.server.broadcastCreatureValuesUpdate(s.player.Map, target.GUID, map[int]uint32{
+		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth:       0,
 			unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
 		})
-
-		// Schedule the respawn with the spawn's original health.
-		s.server.scheduleCreatureRespawn(ctx, guid, uint32(math.Max(float64(target.Health), 1)), now)
 	}
 
 	// Quest kill credit: RequiredNpcOrGo entries plus KillCredit templates.
@@ -514,7 +516,7 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget) {
 
 	// Clear any active auras/DoTs ticking on this creature
 	if s.server != nil {
-		s.server.clearCreatureAuras(target.GUID)
+		s.server.clearCreatureAuras(creatureAuraKeyForTarget(target))
 	}
 
 	// Alterac Valley (Map 30) creature kills (Generals, Captains, Mine bosses)
@@ -668,6 +670,35 @@ func (s *Server) scheduleCreatureRespawn(ctx context.Context, guid, health uint3
 	s.motionMu.Unlock()
 }
 
+func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target combatTarget, health uint32, now time.Time) {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || target.InstanceID == 0 {
+		return
+	}
+	guid := uint32(target.GUID & 0x00FFFFFF)
+	entry := uint32(target.GUID>>24) & 0x00FFFFFF
+	var seconds int64
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(spawntimesecs, 0), 300) FROM creature WHERE guid = ?", guid).Scan(&seconds); err != nil || seconds <= 0 {
+		seconds = 300
+	}
+	var spawnEntry int64
+	var mapID int64
+	var x, y, z float64
+	_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT id, map, position_x, position_y, position_z FROM creature WHERE guid = ?", guid).Scan(&spawnEntry, &mapID, &x, &y, &z)
+	if spawnEntry <= 0 {
+		spawnEntry = int64(entry)
+	}
+	key := instanceAdmissionKey{MapID: target.Map, InstanceID: target.InstanceID}
+	s.motionMu.Lock()
+	if s.instanceCreatureRespawns == nil {
+		s.instanceCreatureRespawns = make(map[instanceAdmissionKey]map[uint32]creatureRespawn)
+	}
+	if s.instanceCreatureRespawns[key] == nil {
+		s.instanceCreatureRespawns[key] = make(map[uint32]creatureRespawn)
+	}
+	s.instanceCreatureRespawns[key][guid] = creatureRespawn{GUID: guid, At: now.Add(time.Duration(seconds) * time.Second), Health: health, Entry: uint32(spawnEntry), Map: target.Map, InstanceID: target.InstanceID, X: float32(x), Y: float32(y), Z: float32(z)}
+	s.motionMu.Unlock()
+}
+
 // processCreatureRespawns restores expired spawns; called from world tick.
 func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
@@ -675,10 +706,26 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 	}
 	s.motionMu.Lock()
 	due := make([]creatureRespawn, 0, 8)
+	type instanceRespawn struct {
+		key     instanceAdmissionKey
+		respawn creatureRespawn
+	}
+	instanceDue := make([]instanceRespawn, 0, 8)
 	for guid, respawn := range s.creatureRespawns {
 		if now.After(respawn.At) {
 			due = append(due, respawn)
 			delete(s.creatureRespawns, guid)
+		}
+	}
+	for key, respawns := range s.instanceCreatureRespawns {
+		for guid, respawn := range respawns {
+			if now.After(respawn.At) {
+				instanceDue = append(instanceDue, instanceRespawn{key: key, respawn: respawn})
+				delete(respawns, guid)
+			}
+		}
+		if len(respawns) == 0 {
+			delete(s.instanceCreatureRespawns, key)
 		}
 	}
 	s.motionMu.Unlock()
@@ -689,18 +736,34 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 		if respawn.Entry != 0 {
 			rawGUID := creatureWorldGUID(respawn.GUID, respawn.Entry)
 			s.motionMu.Lock()
-			if motion := s.creatureMotion[rawGUID]; motion != nil {
+			if motion := s.findCreatureMotionLocked(respawn.Map, 0, rawGUID); motion != nil {
 				motion.Health = respawn.Health
 				motion.MaxHealth = respawn.Health
 				motion.X, motion.Y, motion.Z = respawn.X, respawn.Y, respawn.Z
 				motion.InCombat, motion.TargetGUID, motion.Moving = false, 0, false
 			}
 			s.motionMu.Unlock()
-			s.lootMu.Lock()
-			delete(s.creatureLoot, rawGUID)
-			delete(s.creatureLootOwners, rawGUID)
-			s.lootMu.Unlock()
-			s.broadcastCreatureValuesUpdate(respawn.Map, rawGUID, map[int]uint32{unitFieldHealth: respawn.Health, unitFieldDynamicFlags: 0})
+			s.clearLootState(respawn.Map, 0, rawGUID)
+			s.broadcastCreatureValuesUpdateInInstance(respawn.Map, 0, rawGUID, map[int]uint32{unitFieldHealth: respawn.Health, unitFieldDynamicFlags: 0})
+		}
+	}
+	for _, item := range instanceDue {
+		respawn := item.respawn
+		s.motionMu.Lock()
+		motion := s.findCreatureMotionLocked(item.key.MapID, item.key.InstanceID, creatureWorldGUID(respawn.GUID, respawn.Entry))
+		if motion != nil {
+			motion.Health, motion.MaxHealth, motion.DynamicFlags = respawn.Health, respawn.Health, 0
+			motion.X, motion.Y, motion.Z = respawn.X, respawn.Y, respawn.Z
+			motion.InCombat, motion.Evading, motion.TargetGUID, motion.Moving = false, false, 0, false
+			motion.Refreshed = now
+		}
+		s.motionMu.Unlock()
+		s.clearLootState(item.key.MapID, item.key.InstanceID, creatureWorldGUID(respawn.GUID, respawn.Entry))
+		if motion != nil {
+			if motion.BossAI != nil {
+				motion.BossAI.OnReset(ctx, s, motion)
+			}
+			s.broadcastCreatureValuesUpdateInInstance(item.key.MapID, item.key.InstanceID, motion.GUID, map[int]uint32{unitFieldHealth: motion.Health, unitFieldDynamicFlags: 0})
 		}
 	}
 }

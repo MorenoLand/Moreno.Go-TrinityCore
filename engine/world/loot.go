@@ -3,7 +3,6 @@ package world
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math/rand"
 	"sort"
 	"time"
@@ -24,6 +23,7 @@ type lootItem struct {
 type activeLootState struct {
 	TargetGUID       uint64
 	MapID            uint32
+	InstanceID       uint32
 	LootType         uint8
 	Money            uint32
 	Items            map[uint8]lootItem
@@ -31,19 +31,34 @@ type activeLootState struct {
 	Viewers          map[uint64]*session
 }
 
+type lootObjectKey struct {
+	MapID      uint32
+	InstanceID uint32
+	GUID       uint64
+}
+
+type lootRollKey struct {
+	Object lootObjectKey
+	Slot   uint32
+}
+
+func (l *activeLootState) objectKey() lootObjectKey {
+	return lootObjectKey{MapID: l.MapID, InstanceID: l.InstanceID, GUID: l.TargetGUID}
+}
+
 type lootOwnerState struct {
 	PlayerGUID uint64
 	GroupID    uint64
 }
 
-func (s *Server) creatureLootAllowed(targetGUID, standardGUID, playerGUID, groupID uint64) bool {
+func (s *Server) creatureLootAllowed(mapID, instanceID uint32, targetGUID, standardGUID, playerGUID, groupID uint64) bool {
 	if s == nil {
 		return false
 	}
 	s.lootMu.Lock()
-	owner, found := s.creatureLootOwners[targetGUID]
+	owner, found := s.creatureLootOwners[lootObjectKey{MapID: mapID, InstanceID: instanceID, GUID: targetGUID}]
 	if !found {
-		owner, found = s.creatureLootOwners[standardGUID]
+		owner, found = s.creatureLootOwners[lootObjectKey{MapID: mapID, InstanceID: instanceID, GUID: standardGUID}]
 	}
 	s.lootMu.Unlock()
 	if !found {
@@ -131,6 +146,8 @@ type activeGroupRoll struct {
 	RollVoteMask        uint8
 	GroupID             uint64
 	MapID               uint32
+	InstanceID          uint32
+	EligiblePlayers     map[uint64]struct{}
 	StartedAt           time.Time
 	Duration            time.Duration
 	TotalPlayersRolling int
@@ -140,6 +157,10 @@ type activeGroupRoll struct {
 	Votes               map[uint64]uint8
 	Rolls               map[uint64]uint8
 	Timer               *time.Timer
+}
+
+func rollLootObjectKey(roll *activeGroupRoll) lootObjectKey {
+	return lootObjectKey{MapID: roll.MapID, InstanceID: roll.InstanceID, GUID: roll.SourceGUID}
 }
 
 func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
@@ -185,15 +206,16 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 			lootID = int64(entry)
 		}
 
+		key := lootObjectKey{MapID: goMap, InstanceID: s.player.InstanceID, GUID: targetGUID}
 		s.server.lootMu.Lock()
 		if s.server.creatureLoot == nil {
-			s.server.creatureLoot = make(map[uint64]*activeLootState)
+			s.server.creatureLoot = make(map[lootObjectKey]*activeLootState)
 		}
-		loot := s.server.creatureLoot[targetGUID]
+		loot := s.server.creatureLoot[key]
 		newLoot := loot == nil
 		if newLoot {
-			loot = &activeLootState{TargetGUID: targetGUID, MapID: goMap, LootType: 1, Items: make(map[uint8]lootItem)}
-			s.server.creatureLoot[targetGUID] = loot
+			loot = &activeLootState{TargetGUID: targetGUID, MapID: goMap, InstanceID: s.player.InstanceID, LootType: 1, Items: make(map[uint8]lootItem)}
+			s.server.creatureLoot[key] = loot
 		}
 		s.server.lootMu.Unlock()
 
@@ -264,7 +286,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	}
 
 	target, ok := s.getCombatTarget(ctx, targetGUID)
-	if !ok || target.Map != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) > 5.0 {
+	if !ok || target.Map != s.player.Map || target.InstanceID != s.player.InstanceID || distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) > 5.0 {
 		return s.sendLootError(targetGUID, 4) == nil
 	}
 	if target.Health != 0 {
@@ -273,27 +295,29 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	guid := uint32(targetGUID & 0x00FFFFFF)
 	creatureEntry := uint32((targetGUID >> 24) & 0x00FFFFFF)
 	stdKey := creatureWorldGUID(guid, creatureEntry)
-	if !s.server.creatureLootAllowed(targetGUID, stdKey, s.playerGUID, s.groupID) {
+	if !s.server.creatureLootAllowed(target.Map, target.InstanceID, targetGUID, stdKey, s.playerGUID, s.groupID) {
 		return s.sendLootError(targetGUID, 0) == nil
 	}
 
 	s.server.lootMu.Lock()
+	key := lootObjectKey{MapID: target.Map, InstanceID: target.InstanceID, GUID: targetGUID}
+	standardKey := lootObjectKey{MapID: target.Map, InstanceID: target.InstanceID, GUID: stdKey}
 	if s.server.creatureLoot == nil {
-		s.server.creatureLoot = make(map[uint64]*activeLootState)
+		s.server.creatureLoot = make(map[lootObjectKey]*activeLootState)
 	}
-	loot := s.server.creatureLoot[targetGUID]
+	loot := s.server.creatureLoot[key]
 	if loot == nil {
-		loot = s.server.creatureLoot[stdKey]
+		loot = s.server.creatureLoot[standardKey]
 	}
 	newLoot := loot == nil
 	if newLoot {
-		loot = &activeLootState{TargetGUID: targetGUID, MapID: target.Map, LootType: 1, Items: make(map[uint8]lootItem)}
-		s.server.creatureLoot[targetGUID] = loot
-		s.server.creatureLoot[stdKey] = loot
+		loot = &activeLootState{TargetGUID: targetGUID, MapID: target.Map, InstanceID: target.InstanceID, LootType: 1, Items: make(map[uint8]lootItem)}
+		s.server.creatureLoot[key] = loot
+		s.server.creatureLoot[standardKey] = loot
 	}
 	s.server.lootMu.Unlock()
 	if !newLoot {
-		if !s.server.creatureLootAllowed(targetGUID, stdKey, s.playerGUID, s.groupID) {
+		if !s.server.creatureLootAllowed(target.Map, target.InstanceID, targetGUID, stdKey, s.playerGUID, s.groupID) {
 			return s.sendLootError(targetGUID, 0) == nil
 		}
 		loot.addViewer(s)
@@ -395,7 +419,7 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 		_ = s.write(uint16(protocol.OpcodeSMSG_FISH_NOT_HOOKED), nil, true)
 		return true
 	}
-	if goState.Map != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > 10.0 {
+	if goState.Map != s.player.Map || goState.InstanceID != s.player.InstanceID || distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > 10.0 {
 		return s.sendLootError(targetGUID, 4) == nil
 	}
 	if !requireOwner && goState.FishingMaxOpens > 0 && goState.FishingUses >= goState.FishingMaxOpens {
@@ -404,7 +428,7 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 	if requireOwner {
 		goState.FishingHandled = true
 	}
-	loot := &activeLootState{TargetGUID: targetGUID, MapID: goState.Map, LootType: 3, Items: make(map[uint8]lootItem)}
+	loot := &activeLootState{TargetGUID: targetGUID, MapID: goState.Map, InstanceID: goState.InstanceID, LootType: 3, Items: make(map[uint8]lootItem)}
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		if !requireOwner {
 			goState.FishingUses++
@@ -498,9 +522,9 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 	}
 	s.server.lootMu.Lock()
 	if s.server.creatureLoot == nil {
-		s.server.creatureLoot = make(map[uint64]*activeLootState)
+		s.server.creatureLoot = make(map[lootObjectKey]*activeLootState)
 	}
-	s.server.creatureLoot[targetGUID] = loot
+	s.server.creatureLoot[loot.objectKey()] = loot
 	s.server.lootMu.Unlock()
 	loot.addViewer(s)
 	s.activeLoot = loot
@@ -509,14 +533,14 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 		return false
 	}
 	if requireOwner {
-		s.server.despawnDynamicGameObject(targetGUID)
+		s.server.despawnDynamicGameObjectInInstance(goState.Map, goState.InstanceID, targetGUID)
 	} else {
 		goState.FishingUses++
 		if goState.FishingMaxOpens > 0 && goState.FishingUses >= goState.FishingMaxOpens {
-			s.server.setGameObjectState(targetGUID, GameObjectStateActive)
-			s.server.broadcastGameObjectDespawn(goState.Map, targetGUID)
+			s.server.setGameObjectStateInInstance(goState.Map, goState.InstanceID, targetGUID, GameObjectStateActive)
+			s.server.broadcastGameObjectDespawnInInstance(goState.Map, goState.InstanceID, targetGUID)
 		} else {
-			s.server.setGameObjectState(targetGUID, GameObjectStateReady)
+			s.server.setGameObjectStateInInstance(goState.Map, goState.InstanceID, targetGUID, GameObjectStateReady)
 		}
 	}
 	return true
@@ -584,7 +608,7 @@ func (s *session) sendLootResponse(loot *activeLootState) error {
 				}
 			case 3, 4: // Group Loot / Need Before Greed
 				if isOverThreshold {
-					rollKey := fmt.Sprintf("%d:%d", loot.TargetGUID, it.Slot)
+					rollKey := lootRollKey{Object: loot.objectKey(), Slot: uint32(it.Slot)}
 					s.server.lootMu.Lock()
 					activeRoll := s.server.groupRolls[rollKey]
 					s.server.lootMu.Unlock()
@@ -623,7 +647,7 @@ func (s *session) sendLootResponse(loot *activeLootState) error {
 		} else if grp.LootMethod == 3 || grp.LootMethod == 4 { // Group Loot / Need Before Greed
 			for _, it := range sortedLootItems(loot.Items) {
 				if it.Quality >= uint32(grp.LootThreshold) {
-					s.server.startGroupLootRoll(loot.TargetGUID, uint32(it.Slot), it.ItemEntry, it.Count, loot.MapID, s.groupID)
+					s.server.startGroupLootRoll(loot.TargetGUID, uint32(it.Slot), it.ItemEntry, it.Count, loot.MapID, loot.InstanceID, s.groupID)
 				}
 			}
 		}
@@ -671,29 +695,55 @@ func (s *session) clearCreatureLoot(loot *activeLootState) {
 		return
 	}
 	high := uint16(loot.TargetGUID >> 48)
-	if high == 0xF110 {
-		s.server.lootMu.Lock()
-		delete(s.server.creatureLoot, loot.TargetGUID)
-		s.server.lootMu.Unlock()
+	guids := []uint64{loot.TargetGUID}
+	if high != 0xF110 {
+		guid := uint32(loot.TargetGUID & 0x00FFFFFF)
+		creatureEntry := uint32((loot.TargetGUID >> 24) & 0x00FFFFFF)
+		guids = append(guids, creatureWorldGUID(guid, creatureEntry))
+	}
+	s.server.clearLootState(loot.MapID, loot.InstanceID, guids...)
+	if high != 0xF110 {
+		guid := uint32(loot.TargetGUID & 0x00FFFFFF)
+		creatureEntry := uint32((loot.TargetGUID >> 24) & 0x00FFFFFF)
+		stdGUID := creatureWorldGUID(guid, creatureEntry)
+		s.server.broadcastCreatureValuesUpdateInInstance(loot.MapID, loot.InstanceID, loot.TargetGUID, map[int]uint32{unitFieldDynamicFlags: 0})
+		s.server.broadcastCreatureValuesUpdateInInstance(loot.MapID, loot.InstanceID, stdGUID, map[int]uint32{unitFieldDynamicFlags: 0})
+	}
+}
+
+func (s *Server) clearLootState(mapID, instanceID uint32, guids ...uint64) {
+	if s == nil {
 		return
 	}
-	guid := uint32(loot.TargetGUID & 0x00FFFFFF)
-	creatureEntry := uint32((loot.TargetGUID >> 24) & 0x00FFFFFF)
-	stdKey := creatureWorldGUID(guid, creatureEntry)
-
-	s.server.lootMu.Lock()
-	delete(s.server.creatureLoot, loot.TargetGUID)
-	delete(s.server.creatureLoot, stdKey)
-	delete(s.server.creatureLootOwners, loot.TargetGUID)
-	delete(s.server.creatureLootOwners, stdKey)
-	s.server.lootMu.Unlock()
-	s.server.broadcastCreatureValuesUpdate(loot.MapID, loot.TargetGUID, map[int]uint32{unitFieldDynamicFlags: 0})
-	s.server.broadcastCreatureValuesUpdate(loot.MapID, stdKey, map[int]uint32{unitFieldDynamicFlags: 0})
+	s.lootMu.Lock()
+	for _, guid := range guids {
+		key := lootObjectKey{MapID: mapID, InstanceID: instanceID, GUID: guid}
+		delete(s.creatureLoot, key)
+		delete(s.creatureLootOwners, key)
+	}
+	for key, roll := range s.groupRolls {
+		if roll == nil || key.Object.MapID != mapID || key.Object.InstanceID != instanceID {
+			continue
+		}
+		for _, guid := range guids {
+			if key.Object.GUID == guid {
+				if roll.Timer != nil {
+					roll.Timer.Stop()
+				}
+				delete(s.groupRolls, key)
+				break
+			}
+		}
+	}
+	s.lootMu.Unlock()
 }
 
 func (s *session) handleLootMoney(ctx context.Context) bool {
 	if !s.playerLoaded || s.player == nil || s.activeLoot == nil || s.activeLoot.Money == 0 {
 		return true
+	}
+	if s.activeLoot.MapID != s.player.Map || s.activeLoot.InstanceID != s.player.InstanceID {
+		return s.sendLootError(s.activeLoot.TargetGUID, 4) == nil
 	}
 	copper := s.activeLoot.Money
 	s.activeLoot.Money = 0
@@ -702,7 +752,7 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 	if s.groupID != 0 && s.server != nil {
 		allGroupSess := s.server.getGroupSessions(s.groupID)
 		for _, m := range allGroupSess {
-			if m.player != nil && m.player.Map == s.player.Map && distance3D(s.player.X, s.player.Y, s.player.Z, m.player.X, m.player.Y, m.player.Z) <= 100.0 {
+			if m.player != nil && m.player.Map == s.player.Map && m.player.InstanceID == s.player.InstanceID && distance3D(s.player.X, s.player.Y, s.player.Z, m.player.X, m.player.Y, m.player.Z) <= 100.0 {
 				nearMembers = append(nearMembers, m)
 			}
 		}
@@ -746,6 +796,9 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 	if !s.playerLoaded || s.player == nil || s.activeLoot == nil || len(payload) < 1 {
 		return true
 	}
+	if s.activeLoot.MapID != s.player.Map || s.activeLoot.InstanceID != s.player.InstanceID {
+		return s.sendLootError(s.activeLoot.TargetGUID, 4) == nil
+	}
 	if s.isDeadOrGhost() {
 		return true
 	}
@@ -756,17 +809,17 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 	}
 	high := uint16(s.activeLoot.TargetGUID >> 48)
 	if high == 0xF110 {
-		if s.activeLoot.MapID != s.player.Map {
+		if s.activeLoot.MapID != s.player.Map || s.activeLoot.InstanceID != s.player.InstanceID {
 			return s.sendLootError(s.activeLoot.TargetGUID, 4) == nil
 		}
 	} else {
 		target, validTarget := s.getCombatTarget(ctx, s.activeLoot.TargetGUID)
-		if !validTarget || target.Map != s.player.Map || target.Health != 0 || distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) > 5.0 {
+		if !validTarget || target.Map != s.player.Map || target.InstanceID != s.player.InstanceID || target.Health != 0 || distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) > 5.0 {
 			return s.sendLootError(s.activeLoot.TargetGUID, 4) == nil
 		}
 		guid := uint32(s.activeLoot.TargetGUID & 0x00FFFFFF)
 		entry := uint32((s.activeLoot.TargetGUID >> 24) & 0x00FFFFFF)
-		if !s.server.creatureLootAllowed(s.activeLoot.TargetGUID, creatureWorldGUID(guid, entry), s.playerGUID, s.groupID) {
+		if !s.server.creatureLootAllowed(s.activeLoot.MapID, s.activeLoot.InstanceID, s.activeLoot.TargetGUID, creatureWorldGUID(guid, entry), s.playerGUID, s.groupID) {
 			return s.sendLootError(s.activeLoot.TargetGUID, 0) == nil
 		}
 	}
@@ -782,7 +835,7 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 				return true
 			}
 			if (grp.LootMethod == 3 || grp.LootMethod == 4) && isOverThreshold {
-				rollKey := fmt.Sprintf("%d:%d", s.activeLoot.TargetGUID, it.Slot)
+				rollKey := lootRollKey{Object: s.activeLoot.objectKey(), Slot: uint32(it.Slot)}
 				s.server.lootMu.Lock()
 				activeRoll := s.server.groupRolls[rollKey]
 				s.server.lootMu.Unlock()
@@ -864,6 +917,9 @@ func (s *session) handleLootRelease(payload []byte) bool {
 		return true
 	}
 	loot := s.activeLoot
+	if loot.MapID != s.player.Map || loot.InstanceID != s.player.InstanceID {
+		return s.sendLootError(targetGUID, 4) == nil
+	}
 	releasedRoundRobin := loot.RoundRobinPlayer == s.playerGUID
 	if releasedRoundRobin {
 		loot.RoundRobinPlayer = 0
@@ -917,11 +973,11 @@ func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool
 		_ = s.sendLootError(lootGUID, 10) // LOOT_ERROR_PLAYER_NOT_FOUND
 		return true
 	}
-	if targetSess.player.Map != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, targetSess.player.X, targetSess.player.Y, targetSess.player.Z) > 100.0 {
+	if targetSess.player.Map != s.player.Map || targetSess.player.InstanceID != s.player.InstanceID || distance3D(s.player.X, s.player.Y, s.player.Z, targetSess.player.X, targetSess.player.Y, targetSess.player.Z) > 100.0 {
 		_ = s.sendLootError(lootGUID, 14) // LOOT_ERROR_MASTER_OTHER
 		return true
 	}
-	if s.activeLoot == nil || s.activeLoot.TargetGUID != lootGUID {
+	if s.activeLoot == nil || s.activeLoot.TargetGUID != lootGUID || s.activeLoot.MapID != s.player.Map || s.activeLoot.InstanceID != s.player.InstanceID {
 		_ = s.sendLootError(lootGUID, 0)
 		return true
 	}
@@ -973,7 +1029,7 @@ func buildLootStartRollPacket(sourceGUID uint64, mapID, slot, itemEntry, randomS
 	return buf.Bytes()
 }
 
-func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry uint32, itemCount uint32, mapID uint32, groupID uint64) {
+func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry uint32, itemCount uint32, mapID, instanceID uint32, groupID uint64) {
 	if groupID == 0 {
 		return
 	}
@@ -983,7 +1039,7 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 	}
 	var eligible []*session
 	for _, m := range members {
-		if m.player != nil && m.player.Map == mapID {
+		if m.player != nil && m.player.Map == mapID && m.player.InstanceID == instanceID {
 			eligible = append(eligible, m)
 		}
 	}
@@ -991,10 +1047,11 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 		return
 	}
 
-	rollKey := fmt.Sprintf("%d:%d", sourceGUID, slot)
+	objectKey := lootObjectKey{MapID: mapID, InstanceID: instanceID, GUID: sourceGUID}
+	rollKey := lootRollKey{Object: objectKey, Slot: slot}
 	s.lootMu.Lock()
 	if s.groupRolls == nil {
-		s.groupRolls = make(map[string]*activeGroupRoll)
+		s.groupRolls = make(map[lootRollKey]*activeGroupRoll)
 	}
 	if existing := s.groupRolls[rollKey]; existing != nil {
 		s.lootMu.Unlock()
@@ -1024,13 +1081,18 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 		RollVoteMask:        baseMask,
 		GroupID:             groupID,
 		MapID:               mapID,
+		InstanceID:          instanceID,
+		EligiblePlayers:     make(map[uint64]struct{}, len(eligible)),
 		StartedAt:           time.Now(),
 		Duration:            60 * time.Second,
 		TotalPlayersRolling: len(eligible),
 		Votes:               make(map[uint64]uint8),
 		Rolls:               make(map[uint64]uint8),
 	}
-	if cLoot := s.creatureLoot[sourceGUID]; cLoot != nil {
+	for _, m := range eligible {
+		roll.EligiblePlayers[m.playerGUID] = struct{}{}
+	}
+	if cLoot := s.creatureLoot[objectKey]; cLoot != nil {
 		if li, ok := cLoot.Items[uint8(slot)]; ok {
 			li.IsBlocked = true
 			cLoot.Items[uint8(slot)] = li
@@ -1066,7 +1128,7 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 	})
 }
 
-func (s *Server) resolveGroupLootRoll(rollKey string) {
+func (s *Server) resolveGroupLootRoll(rollKey lootRollKey) {
 	s.lootMu.Lock()
 	roll := s.groupRolls[rollKey]
 	if roll == nil {
@@ -1169,7 +1231,7 @@ func (s *Server) resolveGroupLootRoll(rollKey string) {
 		s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_ALL_PASSED), passBuf.Bytes())
 
 		s.lootMu.Lock()
-		if cLoot := s.creatureLoot[roll.SourceGUID]; cLoot != nil {
+		if cLoot := s.creatureLoot[rollLootObjectKey(roll)]; cLoot != nil {
 			if li, ok := cLoot.Items[uint8(roll.Slot)]; ok {
 				li.IsBlocked = false
 				cLoot.Items[uint8(roll.Slot)] = li
@@ -1181,9 +1243,9 @@ func (s *Server) resolveGroupLootRoll(rollKey string) {
 
 func (s *Server) deliverGroupLootItem(roll *activeGroupRoll, winnerGUID uint64, winningType uint8) {
 	winnerSess := s.findSessionByGUID(winnerGUID)
-	if winnerSess == nil || winnerSess.player == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+	if winnerSess == nil || winnerSess.player == nil || winnerSess.player.Map != roll.MapID || winnerSess.player.InstanceID != roll.InstanceID || s.CharactersStore == nil || s.CharactersStore.DB == nil {
 		s.lootMu.Lock()
-		if cLoot := s.creatureLoot[roll.SourceGUID]; cLoot != nil {
+		if cLoot := s.creatureLoot[rollLootObjectKey(roll)]; cLoot != nil {
 			if li, ok := cLoot.Items[uint8(roll.Slot)]; ok {
 				li.IsBlocked = false
 				li.RollWinner = winnerGUID
@@ -1222,7 +1284,7 @@ func (s *Server) deliverGroupLootItem(roll *activeGroupRoll, winnerGUID uint64, 
 	if err != nil {
 		winnerSess.sendEquipError(equipErrInvFull, 0)
 		s.lootMu.Lock()
-		if cLoot := s.creatureLoot[roll.SourceGUID]; cLoot != nil {
+		if cLoot := s.creatureLoot[rollLootObjectKey(roll)]; cLoot != nil {
 			if li, ok := cLoot.Items[uint8(roll.Slot)]; ok {
 				li.IsBlocked = false
 				li.RollWinner = winnerGUID
@@ -1241,7 +1303,7 @@ func (s *Server) deliverGroupLootItem(roll *activeGroupRoll, winnerGUID uint64, 
 	_ = winnerSess.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(winnerGUID, res.ClientBag, slotForPush, deliveredItem, deliveredCount, res.InventoryCount), true)
 
 	s.lootMu.Lock()
-	cLoot := s.creatureLoot[roll.SourceGUID]
+	cLoot := s.creatureLoot[rollLootObjectKey(roll)]
 	if cLoot != nil {
 		delete(cLoot.Items, uint8(roll.Slot))
 	}
@@ -1271,12 +1333,18 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	rollKey := fmt.Sprintf("%d:%d", itemGUID, itemSlot)
+	rollKey := lootRollKey{Object: lootObjectKey{MapID: s.player.Map, InstanceID: s.player.InstanceID, GUID: itemGUID}, Slot: itemSlot}
 	s.server.lootMu.Lock()
 	roll := s.server.groupRolls[rollKey]
 	if roll == nil {
+		for key, other := range s.server.groupRolls {
+			if other != nil && other.GroupID == s.groupID && key.Object.MapID == s.player.Map && key.Object.GUID == itemGUID && key.Slot == itemSlot && key.Object.InstanceID != s.player.InstanceID {
+				s.server.lootMu.Unlock()
+				return true
+			}
+		}
 		var itemEntry uint32
-		if loot := s.server.creatureLoot[itemGUID]; loot != nil {
+		if loot := s.server.creatureLoot[rollKey.Object]; loot != nil {
 			if li, ok := loot.Items[uint8(itemSlot)]; ok {
 				itemEntry = li.ItemEntry
 			}
@@ -1299,6 +1367,14 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 		buf.WriteU8(rollType)      // rollType (0: pass, 1: need, 2: greed, 3: disenchant)
 		buf.WriteU8(0)             // autoPass
 		s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL), buf.Bytes())
+		return true
+	}
+	if roll.GroupID != s.groupID || roll.MapID != s.player.Map || roll.InstanceID != s.player.InstanceID {
+		s.server.lootMu.Unlock()
+		return true
+	}
+	if _, eligible := roll.EligiblePlayers[s.playerGUID]; !eligible {
+		s.server.lootMu.Unlock()
 		return true
 	}
 
@@ -1399,9 +1475,12 @@ func (s *Server) onPlayerLeaveGroupRolls(leavingGUID uint64, groupID uint64) {
 		return
 	}
 	s.lootMu.Lock()
-	var keysToResolve []string
+	var keysToResolve []lootRollKey
 	for key, roll := range s.groupRolls {
 		if roll != nil && roll.GroupID == groupID {
+			if _, eligible := roll.EligiblePlayers[leavingGUID]; !eligible {
+				continue
+			}
 			if _, voted := roll.Votes[leavingGUID]; !voted {
 				roll.Votes[leavingGUID] = rollPass
 				roll.TotalPass++

@@ -1709,7 +1709,7 @@ func (s *session) groupPetStats(ctx context.Context, target *session) groupPetSt
 	}
 	hasMotion := false
 	s.server.motionMu.Lock()
-	if motion := s.server.creatureMotion[result.guid]; motion != nil {
+	if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, result.guid); motion != nil {
 		hasMotion = true
 		entry, level, health, petType = int64(motion.Entry), int64(motion.Level), int64(motion.Health), int64(motion.PetType)
 		result.health, result.maxHealth = motion.Health, motion.MaxHealth
@@ -1745,7 +1745,7 @@ func (s *session) groupPetStats(ctx context.Context, target *session) groupPetSt
 	}
 	var petAuras []*activeAura
 	s.server.auraMu.Lock()
-	for _, aura := range s.server.activeCreatureAuras[result.guid] {
+	for _, aura := range s.server.activeCreatureAuras[creatureAuraKeyForPlayer(*target.player, result.guid)] {
 		if aura != nil {
 			copy := *aura
 			petAuras = append(petAuras, &copy)
@@ -1794,7 +1794,7 @@ func (s *session) handleRequestPartyMemberStats(ctx context.Context, payload []b
 	}
 	var vehicleSeat uint32
 	if tp.VehicleGUID != 0 {
-		if kit := s.server.getVehicleKit(tp.VehicleGUID); kit != nil {
+		if kit := s.server.getVehicleKit(tp.Map, tp.InstanceID, tp.VehicleGUID); kit != nil {
 			if _, seat, _ := kit.GetSeatForPassenger(targetGUID); seat != nil {
 				mask |= groupUpdateFlagVehicleSeat
 				vehicleSeat = seat.ID

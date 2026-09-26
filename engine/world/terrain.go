@@ -80,7 +80,7 @@ func ResolveTerrainZoneAndArea(dataDir string, mapID uint32, x, y, z float32, fa
 	return zoneID, areaID, nil
 }
 
-func (s *Server) zoneAndAreaID(mapID uint32, x, y, z float32, fallback uint32) (uint32, uint32) {
+func (s *Server) zoneAndAreaID(mapID uint32, x, y, z float32, _ uint32) (uint32, uint32) {
 	areaID, found := s.mapWMOAreaID(mapID, x, y, z)
 	if !found {
 		areaID, found = s.mapAreaID(mapID, x, y)
@@ -91,17 +91,11 @@ func (s *Server) zoneAndAreaID(mapID uint32, x, y, z float32, fallback uint32) (
 			found = areaID != 0
 		}
 	}
-	if !found {
-		areaID = fallback
-	}
 	zoneID := areaID
 	if s.Data != nil && areaID != 0 {
 		if area, ok, err := s.Data.Area(areaID); err == nil && ok && area.ParentAreaID != 0 {
 			zoneID = area.ParentAreaID
 		}
-	}
-	if zoneID == 0 {
-		zoneID = fallback
 	}
 	return zoneID, areaID
 }
@@ -331,9 +325,6 @@ func (s *session) updateZoneAndArea(ctx context.Context, force bool) {
 	zoneID, areaID := s.server.zoneAndAreaID(s.player.Map, s.player.X, s.player.Y, s.player.Z, s.player.Zone)
 	oldZone, oldArea, oldMap := s.player.Zone, s.areaID, s.player.Map
 	s.player.Zone, s.areaID, s.lastZoneUpdate = zoneID, areaID, now
-	if zoneID == 0 {
-		s.player.Zone = oldZone
-	}
 	stateChanged := false
 	if oldZone != s.player.Zone || oldArea != areaID {
 		stateChanged = s.updateAreaDependentAuras(ctx, s.player.Zone, areaID)

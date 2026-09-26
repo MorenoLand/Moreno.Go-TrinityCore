@@ -20,23 +20,25 @@ type luaCreatureState struct {
 	GossipMenuID uint32
 	NPCFlags     uint32
 	Map          uint32
+	InstanceID   uint32
 	X            float32
 	Y            float32
 	Z            float32
 }
 
 type luaGameObjectState struct {
-	GUID      uint64
-	LowGUID   uint32
-	Entry     uint32
-	DisplayID uint32
-	Name      string
-	Map       uint32
-	X         float32
-	Y         float32
-	Z         float32
-	GoState   uint32
-	LootState uint32
+	GUID       uint64
+	LowGUID    uint32
+	Entry      uint32
+	DisplayID  uint32
+	Name       string
+	Map        uint32
+	InstanceID uint32
+	X          float32
+	Y          float32
+	Z          float32
+	GoState    uint32
+	LootState  uint32
 }
 
 func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Object {
@@ -46,19 +48,16 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	low := uint32(guid & 0x00FFFFFF)
 	entry := uint32((guid >> 24) & 0x00FFFFFF)
 	var state luaCreatureState
-	var displayID, health, maxLevel, gossipMenuID, npcFlags int64
+	var displayID, gossipMenuID, npcFlags int64
 	var selectArgs []any
 	npcFlagExpr := "t.npcflag"
 	if flagClause, ok := s.server.gameEventNPCFlagClause(ctx, &selectArgs); ok {
 		npcFlagExpr = "(t.npcflag | " + flagClause + ")"
 	}
 	queryArgs := append(selectArgs, low, entry)
-	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), c.curhealth, t.maxlevel, t.gossip_menu_id, "+npcFlagExpr+", c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", queryArgs...).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &health, &maxLevel, &gossipMenuID, &npcFlags, &state.Map, &state.X, &state.Y, &state.Z)
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.gossip_menu_id, "+npcFlagExpr+", c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", queryArgs...).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &gossipMenuID, &npcFlags, &state.Map, &state.X, &state.Y, &state.Z)
 	if err != nil && missingTable(err) {
-		err = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), c.curhealth, t.maxlevel, t.gossip_menu_id, t.npcflag, c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", low, entry).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &health, &maxLevel, &gossipMenuID, &npcFlags, &state.Map, &state.X, &state.Y, &state.Z)
-	}
-	if err != nil && isMissingColumn(err) {
-		err = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), c.curhealth, t.maxlevel, t.gossip_menu_id, t.npcflag FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", low, entry).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &health, &maxLevel, &gossipMenuID, &npcFlags)
+		err = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.gossip_menu_id, t.npcflag, c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", low, entry).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &gossipMenuID, &npcFlags, &state.Map, &state.X, &state.Y, &state.Z)
 	}
 	if err != nil {
 		if !errorsIsNoRows(err) {
@@ -66,12 +65,20 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return nil
 	}
-	state.GUID = guid
-	state.DisplayID, state.Health = uint32(displayID), uint32(maxUint64(health, 1))
-	state.MaxHealth = state.Health
-	if maxLevel > 0 && state.MaxHealth < uint32(maxLevel) {
-		state.MaxHealth = uint32(maxLevel)
+	if s.player == nil || state.Map != s.player.Map {
+		return nil
 	}
+	s.server.motionMu.Lock()
+	motion := s.server.findCreatureMotionLocked(state.Map, s.player.InstanceID, guid)
+	if motion == nil || motion.Entry != entry {
+		s.server.motionMu.Unlock()
+		return nil
+	}
+	state.GUID = guid
+	state.InstanceID = motion.InstanceID
+	state.DisplayID, state.Health, state.MaxHealth, state.Level = uint32(displayID), motion.Health, motion.MaxHealth, motion.Level
+	state.X, state.Y, state.Z = motion.X, motion.Y, motion.Z
+	s.server.motionMu.Unlock()
 	state.GossipMenuID, state.NPCFlags = uint32(gossipMenuID), uint32(npcFlags)
 	methods := map[string]scripting.ObjectMethod{}
 	methods["GetName"] = luaNoArgs(func() any { return state.Name })
@@ -127,12 +134,13 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		if err != nil {
 			return nil, err
 		}
-		s.server.objectsMu.RLock()
-		_, found := s.server.creatureAuras[state.GUID][spell]
+		key := creatureAuraKey{Map: state.Map, InstanceID: state.InstanceID, GUID: state.GUID}
+		s.server.auraMu.Lock()
+		_, found := s.server.creatureAuras[key][spell]
 		if !found {
-			_, found = s.server.activeCreatureAuras[state.GUID][spell]
+			_, found = s.server.activeCreatureAuras[key][spell]
 		}
-		s.server.objectsMu.RUnlock()
+		s.server.auraMu.Unlock()
 		return []any{found}, nil
 	}
 	methods["RemoveAura"] = func(_ context.Context, args []any) ([]any, error) {
@@ -140,14 +148,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		if err != nil {
 			return nil, err
 		}
-		s.server.objectsMu.Lock()
-		if auras := s.server.creatureAuras[state.GUID]; auras != nil {
-			delete(auras, spell)
-		}
-		if auras := s.server.activeCreatureAuras[state.GUID]; auras != nil {
-			delete(auras, spell)
-		}
-		s.server.objectsMu.Unlock()
+		s.server.removeCreatureAura(creatureAuraKey{Map: state.Map, InstanceID: state.InstanceID, GUID: state.GUID}, spell)
 		return nil, nil
 	}
 	methods["IsAlive"] = luaNoArgs(func() any { return state.Health > 0 })
@@ -156,15 +157,16 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		if err != nil {
 			return nil, err
 		}
-		s.server.objectsMu.Lock()
+		key := creatureAuraKey{Map: state.Map, InstanceID: state.InstanceID, GUID: state.GUID}
+		s.server.auraMu.Lock()
 		if s.server.creatureAuras == nil {
-			s.server.creatureAuras = make(map[uint64]map[uint32]struct{})
+			s.server.creatureAuras = make(map[creatureAuraKey]map[uint32]struct{})
 		}
-		if s.server.creatureAuras[state.GUID] == nil {
-			s.server.creatureAuras[state.GUID] = make(map[uint32]struct{})
+		if s.server.creatureAuras[key] == nil {
+			s.server.creatureAuras[key] = make(map[uint32]struct{})
 		}
-		s.server.creatureAuras[state.GUID][spell] = struct{}{}
-		s.server.objectsMu.Unlock()
+		s.server.creatureAuras[key][spell] = struct{}{}
+		s.server.auraMu.Unlock()
 		return nil, nil
 	}
 	methods["SetHealth"] = func(_ context.Context, args []any) ([]any, error) {
@@ -172,24 +174,28 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		if err != nil {
 			return nil, err
 		}
-		if health > state.MaxHealth {
-			health = state.MaxHealth
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID)
+		if motion == nil || motion.Entry != state.Entry {
+			s.server.motionMu.Unlock()
+			return nil, nil
 		}
+		if health > motion.MaxHealth {
+			health = motion.MaxHealth
+		}
+		motion.Health = health
+		mapID, instanceID, liveGUID := motion.Map, motion.InstanceID, motion.GUID
+		s.server.motionMu.Unlock()
 		state.Health = health
-		_, err = s.server.WorldStore.DB.ExecContext(context.Background(), "UPDATE creature SET curhealth = ? WHERE guid = ?", health, uint32(state.GUID&0x00FFFFFF))
-		return nil, err
+		s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, liveGUID, map[int]uint32{unitFieldHealth: health})
+		return nil, nil
 	}
 	methods["SendBroadcastMessage"] = s.luaMessageMethod()
-	state.Level = uint32(maxLevel)
 	return &scripting.Object{Type: "Creature", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "GossipMenuID": state.GossipMenuID, "NPCFlags": state.NPCFlags, "Map": state.Map, "MapId": state.Map, "X": state.X, "Y": state.Y, "Z": state.Z, "Health": state.Health, "MaxHealth": state.MaxHealth, "Level": state.Level, "InWorld": true}, Methods: methods}
 }
 
 func (s *session) luaCreatureMotion(guid uint64, entry uint32) *creatureMotion {
-	motion := s.server.creatureMotion[guid]
-	if motion == nil {
-		motion = s.server.creatureMotion[creatureWorldGUID(uint32(guid&0x00FFFFFF), entry)]
-	}
-	return motion
+	return s.findCreatureMotion(guid)
 }
 
 func (s *session) luaGameObject(ctx context.Context, guid uint64) *scripting.Object {
@@ -199,7 +205,11 @@ func (s *session) luaGameObject(ctx context.Context, guid uint64) *scripting.Obj
 	low := uint32(guid & 0x00FFFFFF)
 	entry := uint32((guid >> 24) & 0x00FFFFFF)
 	state, ok := s.loadLuaGameObject(ctx, low, entry)
-	if !ok || s.server.isGameObjectHidden(state.GUID) {
+	if !ok || s.player == nil || state.Map != s.player.Map {
+		return nil
+	}
+	state.InstanceID = s.player.InstanceID
+	if s.server.isGameObjectHiddenInInstance(state.Map, state.InstanceID, state.GUID) {
 		return nil
 	}
 	return s.luaGameObjectObject(state)
@@ -224,7 +234,7 @@ func (s *session) luaGameObjectObject(state luaGameObjectState) *scripting.Objec
 	methods["GetDBTableGUIDLow"] = luaNoArgs(func() any { return state.LowGUID })
 	methods["GetGoState"] = luaNoArgs(func() any { return state.GoState })
 	methods["GetLootState"] = luaNoArgs(func() any { return state.LootState })
-	methods["IsSpawned"] = luaNoArgs(func() any { return !s.server.isGameObjectHidden(state.GUID) })
+	methods["IsSpawned"] = luaNoArgs(func() any { return !s.server.isGameObjectHiddenInInstance(state.Map, state.InstanceID, state.GUID) })
 	methods["IsActive"] = luaNoArgs(func() any { return state.GoState == 0 })
 	methods["GetGUID"] = luaNoArgs(func() any { return state.GUID })
 	methods["GetGUIDLow"] = luaNoArgs(func() any { return state.LowGUID })
@@ -234,12 +244,7 @@ func (s *session) luaGameObjectObject(state luaGameObjectState) *scripting.Objec
 	methods["GetY"] = luaNoArgs(func() any { return state.Y })
 	methods["GetZ"] = luaNoArgs(func() any { return state.Z })
 	methods["RemoveFromWorld"] = func(_ context.Context, _ []any) ([]any, error) {
-		s.server.objectsMu.Lock()
-		if s.server.hiddenGameObjects == nil {
-			s.server.hiddenGameObjects = make(map[uint64]struct{})
-		}
-		s.server.hiddenGameObjects[state.GUID] = struct{}{}
-		s.server.objectsMu.Unlock()
+		s.server.setGameObjectHiddenInInstance(state.Map, state.InstanceID, state.GUID, true)
 		return nil, nil
 	}
 	methods["SetGoState"] = func(_ context.Context, args []any) ([]any, error) {
@@ -271,28 +276,21 @@ func (s *session) luaGameObjectObject(state luaGameObjectState) *scripting.Objec
 		return nil, nil
 	}
 	methods["Despawn"] = func(_ context.Context, _ []any) ([]any, error) {
-		s.objectsMuLockGameObject(state.GUID)
+		s.objectsMuLockGameObject(state.Map, state.InstanceID, state.GUID)
 		return nil, nil
 	}
 	methods["Respawn"] = func(_ context.Context, _ []any) ([]any, error) {
-		s.objectsMuUnlockGameObject(state.GUID)
+		s.objectsMuUnlockGameObject(state.Map, state.InstanceID, state.GUID)
 		return nil, nil
 	}
 	return &scripting.Object{Type: "GameObject", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "Map": state.Map, "MapId": state.Map, "X": state.X, "Y": state.Y, "Z": state.Z, "DisplayID": state.DisplayID, "GoState": state.GoState, "LootState": state.LootState, "InWorld": true}, Methods: methods}
 }
 
-func (s *session) objectsMuLockGameObject(guid uint64) {
-	s.server.objectsMu.Lock()
-	if s.server.hiddenGameObjects == nil {
-		s.server.hiddenGameObjects = make(map[uint64]struct{})
-	}
-	s.server.hiddenGameObjects[guid] = struct{}{}
-	s.server.objectsMu.Unlock()
+func (s *session) objectsMuLockGameObject(mapID, instanceID uint32, guid uint64) {
+	s.server.setGameObjectHiddenInInstance(mapID, instanceID, guid, true)
 }
-func (s *session) objectsMuUnlockGameObject(guid uint64) {
-	s.server.objectsMu.Lock()
-	delete(s.server.hiddenGameObjects, guid)
-	s.server.objectsMu.Unlock()
+func (s *session) objectsMuUnlockGameObject(mapID, instanceID uint32, guid uint64) {
+	s.server.setGameObjectHiddenInInstance(mapID, instanceID, guid, false)
 }
 
 func (s *session) nearestGameObject(ctx context.Context, mapID uint32, x, y float32, distance float32) *scripting.Object {
@@ -309,9 +307,10 @@ func (s *session) nearestGameObject(ctx context.Context, mapID uint32, x, y floa
 			continue
 		}
 		candidate.Map = mapID
+		candidate.InstanceID = s.player.InstanceID
 		candidate.GoState, candidate.LootState = 1, 1
 		candidate.GUID = gameObjectGUID(candidate.LowGUID, candidate.Entry)
-		if s.server.isGameObjectHidden(candidate.GUID) {
+		if s.server.isGameObjectHiddenInInstance(candidate.Map, candidate.InstanceID, candidate.GUID) {
 			continue
 		}
 		currentDistance := float32(math.Hypot(float64(candidate.X-x), float64(candidate.Y-y)))

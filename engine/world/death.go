@@ -68,12 +68,12 @@ func (s *session) currentPlayerPhaseMask() uint32 {
 	return phaseMask
 }
 
-func (s *Server) buildNearbyCorpseUpdates(ctx context.Context, state playerState) (*protocol.Packet, int, error) {
+func (s *Server) buildNearbyCorpseUpdates(ctx context.Context, state playerState, phaseMask uint32) (*protocol.Packet, int, error) {
 	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil || s.Config.VisibilityDistanceContinents <= 0 {
 		return nil, 0, nil
 	}
 	distance := float64(s.Config.VisibilityDistanceContinents)
-	rows, err := s.CharactersStore.DB.QueryContext(ctx, `SELECT guid, mapId, posX, posY, posZ, orientation, displayId, bytes1, bytes2, guildId, flags, dynFlags, corpseType
+	rows, err := s.CharactersStore.DB.QueryContext(ctx, `SELECT guid, mapId, posX, posY, posZ, orientation, displayId, bytes1, bytes2, guildId, flags, dynFlags, corpseType, phaseMask
 		FROM corpse WHERE mapId = ? AND posX BETWEEN ? AND ? AND posY BETWEEN ? AND ? ORDER BY guid`, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance)
 	if err != nil {
 		if missingTable(err) || isMissingColumn(err) {
@@ -85,12 +85,12 @@ func (s *Server) buildNearbyCorpseUpdates(ctx context.Context, state playerState
 	updates := protocol.NewUpdateData()
 	count := 0
 	for rows.Next() {
-		var guid, mapID, displayID, bytes1, bytes2, guildID, flags, dynamicFlags, corpseType int64
+		var guid, mapID, displayID, bytes1, bytes2, guildID, flags, dynamicFlags, corpseType, corpsePhaseMask int64
 		var x, y, z, orientation float64
-		if err := rows.Scan(&guid, &mapID, &x, &y, &z, &orientation, &displayID, &bytes1, &bytes2, &guildID, &flags, &dynamicFlags, &corpseType); err != nil {
+		if err := rows.Scan(&guid, &mapID, &x, &y, &z, &orientation, &displayID, &bytes1, &bytes2, &guildID, &flags, &dynamicFlags, &corpseType, &corpsePhaseMask); err != nil {
 			return nil, count, err
 		}
-		if guid <= 0 || uint64(guid) == state.GUID || uint32(mapID) != state.Map || math.Hypot(x-float64(state.X), y-float64(state.Y)) > distance || !validMovementPosition(float32(x), float32(y), float32(z), float32(orientation)) {
+		if guid <= 0 || uint32(mapID) != state.Map || uint32(corpsePhaseMask)&phaseMask == 0 || math.Hypot(x-float64(state.X), y-float64(state.Y)) > distance || !validMovementPosition(float32(x), float32(y), float32(z), float32(orientation)) {
 			continue
 		}
 		ownerGUID := uint64(guid)
@@ -433,14 +433,15 @@ func (s *session) buildPlayerRepop(ctx context.Context) {
 	s.deathTimer = time.Time{}
 	if s.player.Race == 4 { // RACE_NIGHTELF
 		s.applyAura(20584) // Wisp Spirit
-	} else {
-		s.applyAura(8326) // Ghost
 	}
+	s.applyAura(8326) // Ghost
 	s.spawnCorpseObject(displayID)
+	s.player.UnitFlags &^= unitFlagSkinnable
 	s.sendPlayerUpdate()
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK))
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_UNROOT))
 	s.sendCorpseReclaimDelay(s.corpseReclaimDelaySeconds(false))
+	s.stopMirrorTimers()
 }
 
 // repopAtGraveyard mirrors Player::RepopAtGraveyard: locate the graveyard
@@ -690,19 +691,6 @@ func (s *session) sendLoadedCorpse(ctx context.Context) bool {
 	corpse, ok := s.loadCorpseObject(ctx)
 	if !ok {
 		return false
-	}
-	flags := corpse.Flags
-	if flags == 0 {
-		flags = corpseFlagUnk2
-	}
-	corpseGUID := s.playerGUID | (uint64(0xF101) << 48)
-	fields := corpseObjectFields{OwnerGUID: s.playerGUID, DisplayID: corpse.DisplayID, Bytes1: corpse.Bytes1, Bytes2: corpse.Bytes2, GuildID: corpse.GuildID, Flags: flags, DynamicFlags: corpse.DynamicFlags}
-	block := buildCorpseCreateBlockWithFields(corpseGUID, fields, corpse.X, corpse.Y, corpse.Z, corpse.Orientation)
-	updates := protocol.NewUpdateData()
-	updates.AddUpdateBlock(block)
-	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
-		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
-		s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
 	}
 	pvp := corpse.CorpseType == corpseTypePvP
 	reclaimEnabled := s.server.Config.DeathCorpseReclaimDelayPvE

@@ -72,6 +72,9 @@ type Config struct {
 	RestOfflineInWildernessRate             float64
 	DisableFatigue                          int
 	VisibilityDistanceContinents            float64
+	InstanceIgnoreLevel                     bool
+	InstanceIgnoreRaid                      bool
+	AccountInstancesPerHour                 int
 	WeatherEnabled                          bool
 	WeatherChangeInterval                   uint32
 	SoloLFGEnable                           bool
@@ -177,6 +180,7 @@ func Default() Config {
 	c.MaxGroupXPDistance = 74
 	c.XPRateKill = 1
 	c.XPRateBattlegroundKill = 1
+	c.AccountInstancesPerHour = 5
 	return c
 }
 
@@ -539,6 +543,12 @@ func (c *Config) set(key, value string) error {
 		return setFloat64(&c.XPRateBattlegroundKill, key, value)
 	case "Visibility.Distance.Continents":
 		return setFloat64(&c.VisibilityDistanceContinents, key, value)
+	case "Instance.IgnoreRaid":
+		return setBool(&c.InstanceIgnoreRaid, key, value)
+	case "Instance.IgnoreLevel":
+		return setBool(&c.InstanceIgnoreLevel, key, value)
+	case "AccountInstancesPerHour":
+		return setInt(&c.AccountInstancesPerHour, key, value)
 	case "Weather.Enabled":
 		return setBool(&c.WeatherEnabled, key, value)
 	case "Weather.ChangeInterval":

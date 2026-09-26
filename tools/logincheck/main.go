@@ -48,6 +48,7 @@ func main() {
 	tracePath := flag.String("trace", "", "recorded protocol trace JSONL")
 	selfCheck := flag.Bool("self-check", false, "validate the login loading-order regression guard")
 	replayWork := flag.String("replay-work", "", "isolated work directory containing auth.db, characters.db, and world.db; runs core login with Eluna disabled")
+	gameDataDir := flag.String("game-data", "", "3.3.5 data directory containing dbc; defaults to bin/data")
 	replayGUID := flag.Uint64("replay-guid", 0, "character GUID for an in-process login replay; 0 selects the first real character")
 	replayPeerGUID := flag.Uint64("replay-peer-guid", 0, "second character GUID for a same-server two-session login replay")
 	replayPetCooldownSpell := flag.Uint("replay-pet-cooldown-spell", 0, "after login, assert a saved pet category cooldown rejects this spell")
@@ -60,11 +61,15 @@ func main() {
 	replayPetCritter := flag.Bool("replay-pet-critter", false, "verify a saved critter loads without controlled-pet fields, spells, or talents")
 	replayLFGDungeon := flag.Uint("replay-lfg-dungeon", 0, "after login, teleport through the LFG entrance and verify saved battleground return data")
 	replayFarTeleport := flag.Bool("replay-far-teleport", false, "replay a cross-map transfer and WORLDPORT_ACK from a valid world spawn")
+	replayNearTeleport := flag.Bool("replay-near-teleport", false, "replay same-map teleport packets, wrong/correct ACKs, and persisted destination")
+	replayDungeonLogin := flag.Bool("replay-dungeon-login", false, "verify login creates and persists a new solo dungeon instance bind")
 	replayInstanceMap := flag.Uint("replay-instance-map", 0, "dungeon map used to exercise the source account instance-entry timer")
 	replayInstanceID := flag.Uint("replay-instance-id", 0, "instance ID used with --replay-instance-map")
 	replayStatsMinLevel := flag.Uint("replay-stats-min-level", 0, "save and verify source character_stats output for characters at or above this level")
 	replayPlayerStartMessage := flag.Bool("replay-player-start-message", false, "verify the source PlayerStart.String first-login packet order")
 	replayQuestRewardTwiceID := flag.Uint("replay-quest-reward-twice", 0, "replay a one-time quest reward followed by a duplicate turn-in")
+	replaySharedQuestDetailsID := flag.Uint("replay-shared-quest-details", 0, "verify shared-quest details precede active-pet spells during login")
+	replaySharedQuestSenderGUID := flag.Uint64("replay-shared-quest-sender", 0, "distinct existing character GUID that shared the quest")
 	replayTrace := flag.String("trace-out", "", "optional JSONL path for the in-process login trace")
 	flag.Parse()
 	if *selfCheck {
@@ -79,9 +84,15 @@ func main() {
 		petFeedRequested := *replayPetFeedSpell != 0 || *replayPetFeedItem != 0
 		lfgReplayRequested := *replayLFGDungeon != 0
 		farTeleportReplayRequested := *replayFarTeleport
+		nearTeleportReplayRequested := *replayNearTeleport
+		dungeonLoginReplayRequested := *replayDungeonLogin
 		instanceReplayRequested := *replayInstanceMap != 0 || *replayInstanceID != 0
 		startMessageRequested := *replayPlayerStartMessage
 		questRewardReplayRequested := *replayQuestRewardTwiceID != 0
+		sharedQuestDetailsRequested := *replaySharedQuestDetailsID != 0
+		if sharedQuestDetailsRequested != (*replaySharedQuestSenderGUID != 0) {
+			fail("shared-quest packet-order replay requires both quest ID and sender GUID")
+		}
 		petCritterReplayRequested := *replayPetCritter
 		petReplayCount := 0
 		for _, requested := range []bool{*replayPetCooldownSpell != 0, *replayPetPowerSpell != 0, *replayPetXPAward != 0, *replayPetAuraSourceSpell != 0, *replayPetFocusAuraSpell != 0, petFeedRequested} {
@@ -90,7 +101,7 @@ func main() {
 			}
 		}
 		postLoginReplayCount := petReplayCount
-		for _, requested := range []bool{lfgReplayRequested, farTeleportReplayRequested, instanceReplayRequested, statsReplayRequested, startMessageRequested, questRewardReplayRequested, petCritterReplayRequested} {
+		for _, requested := range []bool{lfgReplayRequested, farTeleportReplayRequested, nearTeleportReplayRequested, dungeonLoginReplayRequested, instanceReplayRequested, statsReplayRequested, startMessageRequested, questRewardReplayRequested, sharedQuestDetailsRequested, petCritterReplayRequested} {
 			if requested {
 				postLoginReplayCount++
 			}
@@ -101,7 +112,7 @@ func main() {
 		if *replayPeerGUID != 0 && postLoginReplayCount != 0 {
 			fail("paired login replay cannot be combined with a post-login replay scenario")
 		}
-		if err := runRealCharacterLoginReplay(*replayWork, *replayGUID, *replayPeerGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem, uint32(*replayLFGDungeon), uint32(*replayInstanceMap), uint32(*replayInstanceID), uint32(*replayStatsMinLevel), startMessageRequested, uint32(*replayQuestRewardTwiceID), petCritterReplayRequested, farTeleportReplayRequested); err != nil {
+		if err := runRealCharacterLoginReplay(*replayWork, *gameDataDir, *replayGUID, *replayPeerGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem, uint32(*replayLFGDungeon), uint32(*replayInstanceMap), uint32(*replayInstanceID), uint32(*replayStatsMinLevel), startMessageRequested, uint32(*replayQuestRewardTwiceID), petCritterReplayRequested, farTeleportReplayRequested, nearTeleportReplayRequested, dungeonLoginReplayRequested, uint32(*replaySharedQuestDetailsID), *replaySharedQuestSenderGUID); err != nil {
 			fail(err.Error())
 		}
 		return
@@ -267,9 +278,56 @@ func runSelfCheck() error {
 	}
 	movementAura := protocol.NewBuffer(8)
 	movementAura.WritePackedGUID(loginGUID)
-	validMovement := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_FEATHER_FALL)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_SET_HOVER)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_FORCE_MOVE_ROOT)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MULTIPLE_MOVES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL), Payload: base64.StdEncoding.EncodeToString(movementAura.Bytes())}}}
+	movementStateEvent := func(opcode protocol.Opcode, guid uint64, counter uint32) protocoltrace.Event {
+		payload := protocol.NewBuffer(16)
+		payload.WritePackedGUID(guid)
+		payload.WriteU32(counter)
+		return protocoltrace.Event{Direction: protocoltrace.ServerToClient, Opcode: uint32(opcode), Payload: base64.StdEncoding.EncodeToString(payload.Bytes())}
+	}
+	flightSpeedEvent := func(guid uint64, counter uint32, speed float32) protocoltrace.Event {
+		payload := protocol.NewBuffer(16)
+		payload.WritePackedGUID(guid)
+		payload.WriteU32(counter)
+		payload.WriteF32(speed)
+		return protocoltrace.Event{Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE), Payload: base64.StdEncoding.EncodeToString(payload.Bytes())}
+	}
+	compoundMovementEvent := func(guid uint64, opcodes ...protocol.Opcode) protocoltrace.Event {
+		states := protocol.NewBuffer(64)
+		for _, opcode := range opcodes {
+			state := protocol.NewBuffer(16)
+			state.WriteU16(uint16(opcode))
+			state.WritePackedGUID(guid)
+			state.WriteU32(0)
+			states.WriteU8(uint8(state.Len()))
+			states.Write(state.Bytes())
+		}
+		payload := protocol.NewBuffer(states.Len() + 4)
+		payload.WriteU32(uint32(states.Len()))
+		payload.Write(states.Bytes())
+		return protocoltrace.Event{Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MULTIPLE_MOVES), Payload: base64.StdEncoding.EncodeToString(payload.Bytes())}
+	}
+	validMovement := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, movementStateEvent(protocol.OpcodeSMSG_MOVE_WATER_WALK, loginGUID, 0), movementStateEvent(protocol.OpcodeSMSG_MOVE_FEATHER_FALL, loginGUID, 0), movementStateEvent(protocol.OpcodeSMSG_MOVE_SET_HOVER, loginGUID, 0), movementStateEvent(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY, loginGUID, 0), flightSpeedEvent(loginGUID, 0, 27), movementStateEvent(protocol.OpcodeSMSG_FORCE_MOVE_ROOT, loginGUID, 0), compoundMovementEvent(loginGUID, protocol.OpcodeSMSG_FORCE_MOVE_ROOT, protocol.OpcodeSMSG_MOVE_FEATHER_FALL, protocol.OpcodeSMSG_MOVE_WATER_WALK, protocol.OpcodeSMSG_MOVE_SET_HOVER), {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL), Payload: base64.StdEncoding.EncodeToString(movementAura.Bytes())}}}
 	if err := checkLoginMovementOrder(validMovement, 0); err != nil {
 		return fmt.Errorf("valid movement ordering was rejected: %w", err)
+	}
+	badMovementPayload := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, movementStateEvent(protocol.OpcodeSMSG_MOVE_WATER_WALK, loginGUID+1, 0)}}
+	if err := checkLoginMovementOrder(badMovementPayload, 0); err == nil {
+		return fmt.Errorf("movement packet addressed to a different player was not rejected")
+	}
+	badMovementCounter := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, movementStateEvent(protocol.OpcodeSMSG_MOVE_WATER_WALK, loginGUID, 1)}}
+	if err := checkLoginMovementOrder(badMovementCounter, 0); err == nil {
+		return fmt.Errorf("nonzero movement counter was not rejected")
+	}
+	badCompoundMovement := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, compoundMovementEvent(loginGUID, protocol.OpcodeSMSG_MOVE_WATER_WALK, protocol.OpcodeSMSG_FORCE_MOVE_ROOT)}}
+	if err := checkLoginMovementOrder(badCompoundMovement, 0); err == nil {
+		return fmt.Errorf("out-of-order compound movement states were not rejected")
+	}
+	otherRecipientState := fmt.Sprintf("recipient-guid=%d %s", loginGUID+1, opcodeName(uint32(protocol.OpcodeSMSG_GUILD_ROSTER)))
+	loginRecipientState := fmt.Sprintf("recipient-guid=%d %s", loginGUID, opcodeName(uint32(protocol.OpcodeSMSG_GUILD_ROSTER)))
+	recipientTrace := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_ROSTER), State: otherRecipientState}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_ROSTER), State: loginRecipientState}}}
+	scopedRecipientTrace, err := loginRecipientTrace(recipientTrace, 0, loginGUID)
+	if err != nil || len(scopedRecipientTrace.Events) != 2 || scopedRecipientTrace.Events[1].State != loginRecipientState {
+		return fmt.Errorf("login packet recipient filtering failed: events=%d err=%v", len(scopedRecipientTrace.Events), err)
 	}
 	guildEventTrace := func(eventType uint8) protocoltrace.Event {
 		return protocoltrace.Event{Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_EVENT), Payload: base64.StdEncoding.EncodeToString([]byte{eventType})}
@@ -321,6 +379,42 @@ func runSelfCheck() error {
 	if err := checkCreateMovementParser(); err != nil {
 		return err
 	}
+	if replayPlayerGloballyVisible(0x10, 3, 0, 2) || !replayPlayerGloballyVisible(0x10, 3, 3, 2) || !replayPlayerGloballyVisible(0, 3, 0, 2) {
+		return fmt.Errorf("source hidden-GM visibility rules failed")
+	}
+	roster := protocol.NewBuffer(128)
+	roster.WriteU32(2)
+	roster.WriteCString("")
+	roster.WriteCString("")
+	roster.WriteU32(0)
+	for _, member := range []struct {
+		guid   uint64
+		status uint8
+	}{{41, 0}, {42, 1}} {
+		roster.WriteU64(member.guid)
+		roster.WriteU8(member.status)
+		roster.WriteCString("member")
+		roster.WriteU32(0)
+		roster.WriteU8(1)
+		roster.WriteU8(1)
+		roster.WriteU8(0)
+		roster.WriteU32(0)
+		if member.status == 0 {
+			roster.WriteF32(0)
+		}
+		roster.WriteCString("")
+		roster.WriteCString("")
+	}
+	rosterTrace := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_GUILD_ROSTER), Payload: base64.StdEncoding.EncodeToString(roster.Bytes())}}}
+	for _, member := range []struct {
+		guid   uint64
+		status uint8
+	}{{41, 0}, {42, 1}} {
+		status, err := guildRosterMemberStatus(rosterTrace, member.guid)
+		if err != nil || status != member.status {
+			return fmt.Errorf("guild roster member %d status=%d want=%d err=%v", member.guid, status, member.status, err)
+		}
+	}
 	missingLoginEffect := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, playerCreateEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}}}
 	if err := checkPostMapLoginOrder(missingLoginEffect, 0, 1); err == nil {
 		return fmt.Errorf("missing source-required post-map spell 836 was not rejected")
@@ -355,7 +449,7 @@ func runSelfCheck() error {
 	if err := checkPostMapLoginOrder(latePlayerAuraTrace, 0, 1); err == nil {
 		return fmt.Errorf("late player aura packet after post-map packets was not rejected")
 	}
-	lateMovementTrace := protocoltrace.Trace{Events: []protocoltrace.Event{{Direction: protocoltrace.ClientToServer, Opcode: login}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK)}}}
+	lateMovementTrace := protocoltrace.Trace{Events: []protocoltrace.Event{loginEvent, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ)}, {Direction: protocoltrace.ServerToClient, Opcode: uint32(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE)}, movementStateEvent(protocol.OpcodeSMSG_MOVE_WATER_WALK, loginGUID, 0)}}
 	if err := checkLoginMovementOrder(lateMovementTrace, 0); err != nil {
 		return fmt.Errorf("late ghost movement state was rejected: %w", err)
 	}
@@ -474,6 +568,9 @@ func runSelfCheck() error {
 			}
 		}
 	}
+	taxiStatusFixture := protocol.NewBuffer(9)
+	taxiStatusFixture.WriteU64(uint64(0xF130)<<48 | 1)
+	taxiStatusFixture.WriteU8(1)
 	payloadChecks := []struct {
 		name     string
 		opcode   protocol.Opcode
@@ -517,7 +614,7 @@ func runSelfCheck() error {
 		{"pet-spells", protocol.OpcodeSMSG_PET_SPELLS, petSpellsFixture(), requirePetSpells},
 		{"quest-giver-details", protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS, questGiverDetailsFixture(), requireQuestGiverDetails},
 		{"quest-status-multiple", protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE, make([]byte, 4), requireQuestStatusMultiple},
-		{"taxi-node-status", protocol.OpcodeSMSG_TAXINODE_STATUS, make([]byte, 9), requirePayloadLengthExact(9)},
+		{"taxi-node-status", protocol.OpcodeSMSG_TAXINODE_STATUS, taxiStatusFixture.Bytes(), requireTaxiNodeStatus},
 	}
 	for _, check := range payloadChecks {
 		event := protocoltrace.Event{Direction: protocoltrace.ServerToClient, Opcode: uint32(check.opcode), Payload: base64.StdEncoding.EncodeToString(check.payload)}
@@ -617,7 +714,7 @@ func checkMapEntryEvent() error {
 }
 
 func checkGameDataPathResolution() error {
-	if _, err := os.Stat(filepath.Join("data", "dbc", "Spell.dbc")); err != nil {
+	if _, err := os.Stat(filepath.Join("bin", "data", "dbc", "Spell.dbc")); err != nil {
 		return nil
 	}
 	workDir, err := os.Getwd()
@@ -639,7 +736,7 @@ func checkGameDataPathResolution() error {
 	if err != nil {
 		return err
 	}
-	expected, err := filepath.Abs(filepath.Join(workDir, "data"))
+	expected, err := filepath.Abs(filepath.Join(workDir, "bin", "data"))
 	if err != nil {
 		return err
 	}
@@ -2408,11 +2505,14 @@ func rejectWorldActivityBeforePlayerCreate(trace protocoltrace.Trace, start int)
 		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_UPDATE_OBJECT) && event.Opcode != uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
 			continue
 		}
-		created, err := containsPlayerCreate(event, playerGUID)
+		_, _, inventoryAfterPlayer, created, err := attachedTransportPlayerCreate(event, playerGUID)
 		if err != nil {
 			return err
 		}
 		if created {
+			if inventoryAfterPlayer {
+				return fmt.Errorf("inventory item create followed the self-player create in the map self-init update")
+			}
 			createIndex = index
 			break
 		}
@@ -2447,6 +2547,18 @@ func loginPlayerGUID(event protocoltrace.Event) (uint64, error) {
 }
 
 func checkLogin(trace protocoltrace.Trace, start int) error {
+	if start < 0 || start >= len(trace.Events) {
+		return fmt.Errorf("login trace has no login event at index %d", start)
+	}
+	playerGUID, err := loginPlayerGUID(trace.Events[start])
+	if err != nil {
+		return err
+	}
+	trace, err = loginRecipientTrace(trace, start, playerGUID)
+	if err != nil {
+		return err
+	}
+	start = 0
 	if err := rejectPreVerifyAchievementPackets(trace, start); err != nil {
 		return err
 	}
@@ -2454,10 +2566,6 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 		return err
 	}
 	if err := rejectWorldActivityBeforePlayerCreate(trace, start); err != nil {
-		return err
-	}
-	playerGUID, err := loginPlayerGUID(trace.Events[start])
-	if err != nil {
 		return err
 	}
 	stages := []loginStage{
@@ -2580,6 +2688,37 @@ func checkLogin(trace protocoltrace.Trace, start int) error {
 		return err
 	}
 	return nil
+}
+
+func loginRecipientTrace(trace protocoltrace.Trace, start int, playerGUID uint64) (protocoltrace.Trace, error) {
+	if start < 0 || start >= len(trace.Events) || playerGUID == 0 {
+		return protocoltrace.Trace{}, fmt.Errorf("login recipient scope has an invalid start or GUID")
+	}
+	end, tagged := len(trace.Events), false
+	for index := start + 1; index < len(trace.Events); index++ {
+		event := trace.Events[index]
+		if event.Direction == protocoltrace.ClientToServer && (event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) || event.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST)) {
+			end = index
+			break
+		}
+		if event.Direction == protocoltrace.ServerToClient && strings.HasPrefix(event.State, "recipient-guid=") {
+			tagged = true
+		}
+	}
+	result := protocoltrace.Trace{Events: []protocoltrace.Event{trace.Events[start]}}
+	if !tagged {
+		result.Events = append(result.Events, trace.Events[start+1:end]...)
+		return result, nil
+	}
+	prefix := fmt.Sprintf("recipient-guid=%d", playerGUID)
+	for index := start + 1; index < end; index++ {
+		event := trace.Events[index]
+		if event.Direction != protocoltrace.ServerToClient || event.State != prefix && !strings.HasPrefix(event.State, prefix+" ") {
+			continue
+		}
+		result.Events = append(result.Events, event)
+	}
+	return result, nil
 }
 
 func sourceLoginCinematicID(data *wotlk.Store, race, class uint32) uint32 {
@@ -2973,7 +3112,7 @@ func checkOptionalLoginPayloads(trace protocoltrace.Trace, start int) error {
 		case uint32(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE):
 			validate = requireQuestStatusMultiple
 		case uint32(protocol.OpcodeSMSG_TAXINODE_STATUS):
-			validate = requirePayloadLengthExact(9)
+			validate = requireTaxiNodeStatus
 		case uint32(protocol.OpcodeSMSG_PET_SPELLS):
 			validate = requirePetSpells
 		case uint32(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS):
@@ -3479,6 +3618,509 @@ func requireGuildRoster(event protocoltrace.Event) error {
 		return fmt.Errorf("unexpected guild roster payload bytes=%d", reader.Remaining())
 	}
 	return nil
+}
+
+func guildRosterMemberStatus(trace protocoltrace.Trace, memberGUID uint64) (uint8, error) {
+	for _, event := range trace.Events {
+		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_GUILD_ROSTER) {
+			continue
+		}
+		if err := requireGuildRoster(event); err != nil {
+			return 0, err
+		}
+		payload, err := eventPayload(event)
+		if err != nil {
+			return 0, err
+		}
+		reader := protocol.NewReader(payload)
+		members, _ := reader.ReadU32()
+		_, _ = reader.ReadCString()
+		_, _ = reader.ReadCString()
+		ranks, _ := reader.ReadU32()
+		for rank := uint32(0); rank < ranks; rank++ {
+			_, _ = reader.Read(56)
+		}
+		for index := uint32(0); index < members; index++ {
+			guid, _ := reader.ReadU64()
+			status, _ := reader.ReadU8()
+			_, _ = reader.ReadCString()
+			_, _ = reader.Read(11)
+			if status == 0 {
+				_, _ = reader.ReadF32()
+			}
+			_, _ = reader.ReadCString()
+			_, _ = reader.ReadCString()
+			if guid == memberGUID {
+				return status, nil
+			}
+		}
+		return 0, fmt.Errorf("guild roster does not contain member GUID %d", memberGUID)
+	}
+	return 0, fmt.Errorf("trace contains no guild roster packet")
+}
+
+func validatePairedGuildLoginRecipients(ctx context.Context, db *sql.DB, firstTrace, secondTrace protocoltrace.Trace, firstGUID, secondGUID uint64, firstGuildID, secondGuildID uint32) error {
+	firstSignOnGUID := uint64(0)
+	if firstGuildID != 0 && firstGuildID == secondGuildID {
+		firstSignOnGUID = secondGUID
+	}
+	if err := validateGuildLoginRecipient(ctx, db, firstTrace, firstGUID, firstGuildID, firstSignOnGUID, 0, secondGUID, secondGuildID); err != nil {
+		return fmt.Errorf("first recipient: %w", err)
+	}
+	secondOnlineGUID := uint64(0)
+	if firstGuildID != 0 && firstGuildID == secondGuildID {
+		secondOnlineGUID = firstGUID
+	}
+	return validateGuildLoginRecipient(ctx, db, secondTrace, secondGUID, secondGuildID, 0, secondOnlineGUID, firstGUID, firstGuildID)
+}
+
+func validateGuildLoginRecipient(ctx context.Context, db *sql.DB, trace protocoltrace.Trace, recipientGUID uint64, guildID uint32, signedOnGUID, onlineGUID, peerGUID uint64, peerGuildID uint32) error {
+	var motdEvents, bankEvents, rosterEvents []protocoltrace.Event
+	var signedOnEvents []struct {
+		guid uint64
+		name string
+	}
+	for _, event := range trace.Events {
+		if event.Direction != protocoltrace.ServerToClient {
+			continue
+		}
+		switch event.Opcode {
+		case uint32(protocol.OpcodeSMSG_GUILD_EVENT):
+			eventType, params, guid, err := guildEventFields(event)
+			if err != nil {
+				return err
+			}
+			switch eventType {
+			case 2:
+				motdEvents = append(motdEvents, event)
+				var motd string
+				if err := db.QueryRowContext(ctx, "SELECT motd FROM guild WHERE guildid = ?", guildID).Scan(&motd); err != nil {
+					return fmt.Errorf("read guild %d MOTD: %w", guildID, err)
+				}
+				if motd == "" && len(params) == 0 {
+					break
+				}
+				if len(params) != 1 || params[0] != motd {
+					return fmt.Errorf("guild %d MOTD event=%q, want %q", guildID, params, motd)
+				}
+			case 12:
+				if len(params) != 1 {
+					return fmt.Errorf("guild signed-on event has %d parameters, want 1", len(params))
+				}
+				signedOnEvents = append(signedOnEvents, struct {
+					guid uint64
+					name string
+				}{guid: guid, name: params[0]})
+			}
+		case uint32(protocol.OpcodeSMSG_GUILD_BANK_LIST):
+			bankEvents = append(bankEvents, event)
+		case uint32(protocol.OpcodeSMSG_GUILD_ROSTER):
+			rosterEvents = append(rosterEvents, event)
+		}
+	}
+	wantLoginPackets := guildID != 0
+	wantCount := 0
+	if wantLoginPackets {
+		wantCount = 1
+	}
+	if len(motdEvents) != wantCount || len(bankEvents) != wantCount || len(rosterEvents) != wantCount {
+		return fmt.Errorf("guild login packet recipients MOTD/bank/roster=%d/%d/%d, want %d each", len(motdEvents), len(bankEvents), len(rosterEvents), wantCount)
+	}
+	wantSignOnCount := 0
+	if signedOnGUID != 0 {
+		wantSignOnCount = 1
+	}
+	if len(signedOnEvents) != wantSignOnCount {
+		return fmt.Errorf("guild signed-on recipient count=%d, want %d", len(signedOnEvents), wantSignOnCount)
+	}
+	if wantSignOnCount != 0 {
+		var wantName string
+		if err := db.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", signedOnGUID).Scan(&wantName); err != nil {
+			return fmt.Errorf("read guild signed-on member %d name: %w", signedOnGUID, err)
+		}
+		if signedOnEvents[0].guid != signedOnGUID || signedOnEvents[0].name != wantName {
+			return fmt.Errorf("guild signed-on payload=(%d,%q), want (%d,%q)", signedOnEvents[0].guid, signedOnEvents[0].name, signedOnGUID, wantName)
+		}
+	}
+	if !wantLoginPackets {
+		if len(signedOnEvents) != 0 {
+			return fmt.Errorf("unaffiliated GUID %d received guild login event", recipientGUID)
+		}
+		return nil
+	}
+	bankPayload, err := eventPayload(bankEvents[0])
+	if err != nil {
+		return err
+	}
+	bankReader := protocol.NewReader(bankPayload)
+	bankMoney, err := bankReader.ReadU64()
+	if err != nil {
+		return fmt.Errorf("guild bank money: %w", err)
+	}
+	tab, err := bankReader.ReadU8()
+	if err != nil {
+		return fmt.Errorf("guild bank tab: %w", err)
+	}
+	withdrawals, err := bankReader.ReadI32()
+	if err != nil {
+		return fmt.Errorf("guild bank withdrawals: %w", err)
+	}
+	fullUpdate, err := bankReader.ReadU8()
+	if err != nil {
+		return fmt.Errorf("guild bank full-update flag: %w", err)
+	}
+	itemCount, err := bankReader.ReadU8()
+	if err != nil {
+		return fmt.Errorf("guild bank item count: %w", err)
+	}
+	var wantMoney int64
+	if err := db.QueryRowContext(ctx, "SELECT BankMoney FROM guild WHERE guildid = ?", guildID).Scan(&wantMoney); err != nil {
+		return fmt.Errorf("read guild %d bank money: %w", guildID, err)
+	}
+	wantWithdrawals, err := guildLoginBankWithdrawals(ctx, db, recipientGUID, guildID)
+	if err != nil {
+		return err
+	}
+	if bankMoney != uint64(wantMoney) || tab != 0 || withdrawals != wantWithdrawals || fullUpdate != 0 || itemCount != 0 || bankReader.Remaining() != 0 {
+		return fmt.Errorf("guild bank login payload money/tab/withdrawals/full/items=%d/%d/%d/%d/%d, want %d/0/%d/0/0", bankMoney, tab, withdrawals, fullUpdate, itemCount, wantMoney, wantWithdrawals)
+	}
+	if err := validateGuildRosterAgainstDatabase(ctx, db, rosterEvents[0], guildID, recipientGUID, onlineGUID, peerGUID); err != nil {
+		return err
+	}
+	if peerGuildID != guildID {
+		if _, err := guildRosterMemberStatus(trace, peerGUID); err == nil {
+			return fmt.Errorf("guild roster for guild %d contains unrelated member GUID %d", guildID, peerGUID)
+		}
+	}
+	return nil
+}
+
+func validateGuildRosterAgainstDatabase(ctx context.Context, db *sql.DB, event protocoltrace.Event, guildID uint32, recipientGUID, onlineGUID, peerGUID uint64) error {
+	if err := requireGuildRoster(event); err != nil {
+		return err
+	}
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	memberCount, err := reader.ReadU32()
+	if err != nil {
+		return err
+	}
+	welcomeText, err := reader.ReadCString()
+	if err != nil {
+		return err
+	}
+	infoText, err := reader.ReadCString()
+	if err != nil {
+		return err
+	}
+	rankCount, err := reader.ReadU32()
+	if err != nil {
+		return err
+	}
+	var wantMotd, wantInfo string
+	if err := db.QueryRowContext(ctx, "SELECT motd, info FROM guild WHERE guildid = ?", guildID).Scan(&wantMotd, &wantInfo); err != nil {
+		return fmt.Errorf("read guild %d roster text: %w", guildID, err)
+	}
+	type guildRankRecord struct {
+		rights, gold uint32
+		tabRights    [6]uint32
+		tabSlots     [6]uint32
+	}
+	ranks := make([]guildRankRecord, 0)
+	rankRows, err := db.QueryContext(ctx, "SELECT rid, rights, BankMoneyPerDay FROM guild_rank WHERE guildid = ? ORDER BY rid", guildID)
+	if err != nil {
+		return fmt.Errorf("query guild %d ranks: %w", guildID, err)
+	}
+	rankIndexes := make(map[uint32]int)
+	for rankRows.Next() {
+		var rid, rights, gold int64
+		if err := rankRows.Scan(&rid, &rights, &gold); err != nil {
+			rankRows.Close()
+			return err
+		}
+		rankIndexes[uint32(rid)] = len(ranks)
+		ranks = append(ranks, guildRankRecord{rights: uint32(rights), gold: uint32(gold)})
+	}
+	if err := rankRows.Err(); err != nil {
+		rankRows.Close()
+		return err
+	}
+	rankRows.Close()
+	if len(ranks) == 0 {
+		ranks = []guildRankRecord{{rights: 0xFFFFFFFF, gold: 1000000}, {rights: 0xFF, gold: 500000}, {rights: 0x40, gold: 100000}, {rights: 0x40, gold: 50000}, {rights: 0x40}}
+	}
+	rightRows, err := db.QueryContext(ctx, "SELECT rid, TabId, gbright, SlotPerDay FROM guild_bank_right WHERE guildid = ? ORDER BY rid, TabId", guildID)
+	if err == nil {
+		for rightRows.Next() {
+			var rid, tab, rights, slots int64
+			if rightRows.Scan(&rid, &tab, &rights, &slots) != nil || tab < 0 || tab >= 6 {
+				continue
+			}
+			if index, ok := rankIndexes[uint32(rid)]; ok {
+				ranks[index].tabRights[tab], ranks[index].tabSlots[tab] = uint32(rights), uint32(slots)
+			}
+		}
+		rightRows.Close()
+	}
+	if uint32(len(ranks)) != rankCount || welcomeText != wantMotd || infoText != wantInfo {
+		return fmt.Errorf("guild roster header ranks/text=%d/%q/%q, want %d/%q/%q", rankCount, welcomeText, infoText, len(ranks), wantMotd, wantInfo)
+	}
+	for index, want := range ranks {
+		var got guildRankRecord
+		if got.rights, err = reader.ReadU32(); err != nil {
+			return fmt.Errorf("guild roster rank %d rights: %w", index, err)
+		}
+		if got.gold, err = reader.ReadU32(); err != nil {
+			return fmt.Errorf("guild roster rank %d gold limit: %w", index, err)
+		}
+		for tab := range got.tabRights {
+			if got.tabRights[tab], err = reader.ReadU32(); err != nil {
+				return fmt.Errorf("guild roster rank %d tab %d rights: %w", index, tab, err)
+			}
+			if got.tabSlots[tab], err = reader.ReadU32(); err != nil {
+				return fmt.Errorf("guild roster rank %d tab %d slots: %w", index, tab, err)
+			}
+		}
+		if got != want {
+			return fmt.Errorf("guild roster rank %d rights/gold/tabs=%#x/%d/%v/%v, want %#x/%d/%v/%v", index, got.rights, got.gold, got.tabRights, got.tabSlots, want.rights, want.gold, want.tabRights, want.tabSlots)
+		}
+	}
+	type rosterMember struct {
+		name, note, officerNote    string
+		rank, level, class, gender int64
+		zone                       int64
+	}
+	members := make(map[uint64]rosterMember)
+	memberRows, err := db.QueryContext(ctx, `SELECT gm.guid, c.name, gm.rank, c.level, c.class, c.gender, c.zone, gm.pnote, gm.offnote
+		FROM guild_member gm JOIN characters c ON c.guid = gm.guid WHERE gm.guildid = ? ORDER BY gm.guid`, guildID)
+	if err != nil {
+		return fmt.Errorf("query guild %d roster members: %w", guildID, err)
+	}
+	for memberRows.Next() {
+		var guid uint64
+		var member rosterMember
+		if err := memberRows.Scan(&guid, &member.name, &member.rank, &member.level, &member.class, &member.gender, &member.zone, &member.note, &member.officerNote); err != nil {
+			memberRows.Close()
+			return err
+		}
+		members[guid] = member
+	}
+	if err := memberRows.Err(); err != nil {
+		memberRows.Close()
+		return err
+	}
+	memberRows.Close()
+	if uint32(len(members)) != memberCount {
+		return fmt.Errorf("guild roster member count=%d, want %d", memberCount, len(members))
+	}
+	var viewerRank, viewerRights int64
+	if err := db.QueryRowContext(ctx, `SELECT gm.rank, COALESCE(gr.rights, 0) FROM guild_member gm LEFT JOIN guild_rank gr ON gr.guildid = gm.guildid AND gr.rid = gm.rank WHERE gm.guildid = ? AND gm.guid = ?`, guildID, recipientGUID).Scan(&viewerRank, &viewerRights); err != nil {
+		return fmt.Errorf("read guild roster viewer rights: %w", err)
+	}
+	seen := make(map[uint64]struct{}, len(members))
+	for index := uint32(0); index < memberCount; index++ {
+		guid, err := reader.ReadU64()
+		if err != nil {
+			return fmt.Errorf("guild roster member %d GUID: %w", index, err)
+		}
+		status, err := reader.ReadU8()
+		if err != nil {
+			return fmt.Errorf("guild roster member %d status: %w", index, err)
+		}
+		name, err := reader.ReadCString()
+		if err != nil {
+			return fmt.Errorf("guild roster member %d name: %w", index, err)
+		}
+		rank, err := reader.ReadI32()
+		if err != nil {
+			return fmt.Errorf("guild roster member %d rank: %w", index, err)
+		}
+		level, err := reader.ReadU8()
+		if err != nil {
+			return err
+		}
+		class, err := reader.ReadU8()
+		if err != nil {
+			return err
+		}
+		gender, err := reader.ReadU8()
+		if err != nil {
+			return err
+		}
+		area, err := reader.ReadI32()
+		if err != nil {
+			return err
+		}
+		if status == 0 {
+			lastSave, err := reader.ReadF32()
+			if err != nil || math.IsNaN(float64(lastSave)) || math.IsInf(float64(lastSave), 0) || lastSave < 0 {
+				return fmt.Errorf("guild roster member %d has invalid last-save value %v (err=%v)", index, lastSave, err)
+			}
+			if guid != recipientGUID && guid != peerGUID {
+				var logoutTime int64
+				if err := db.QueryRowContext(ctx, "SELECT logout_time FROM characters WHERE guid = ?", guid).Scan(&logoutTime); err != nil {
+					return fmt.Errorf("read guild roster member %d logout time: %w", guid, err)
+				}
+				wantLastSave := float32(0)
+				if logoutTime > 0 {
+					elapsed := time.Now().Unix() - logoutTime
+					if elapsed > 0 {
+						wantLastSave = float32(elapsed) / 86400
+					}
+				}
+				if math.Abs(float64(lastSave-wantLastSave)) > (60.0/86400)+1e-6 {
+					return fmt.Errorf("guild roster member %d last-save=%f days, want %f", guid, lastSave, wantLastSave)
+				}
+			}
+		}
+		note, err := reader.ReadCString()
+		if err != nil {
+			return err
+		}
+		officerNote, err := reader.ReadCString()
+		if err != nil {
+			return err
+		}
+		want, found := members[guid]
+		if !found || name != want.name || rank != int32(want.rank) || int64(level) != want.level || int64(class) != want.class || int64(gender) != want.gender || note != want.note || status&^uint8(7) != 0 {
+			return fmt.Errorf("guild roster member %d fields differ from saved guild_member/characters rows", guid)
+		}
+		if area != int32(want.zone) {
+			return fmt.Errorf("guild roster member %d area=%d, want saved zone %d", guid, area, want.zone)
+		}
+		if guid == onlineGUID {
+			var playerFlags uint32
+			if err := db.QueryRowContext(ctx, "SELECT playerFlags FROM characters WHERE guid = ?", guid).Scan(&playerFlags); err != nil {
+				return fmt.Errorf("read online guild member %d player flags: %w", guid, err)
+			}
+			wantStatus := uint8(1)
+			if playerFlags&0x2 != 0 {
+				wantStatus |= 0x2
+			}
+			if playerFlags&0x4 != 0 {
+				wantStatus |= 0x4
+			}
+			if status != wantStatus {
+				return fmt.Errorf("guild roster online member %d status=%#x, want %#x from player flags", guid, status, wantStatus)
+			}
+		} else if status != 0 {
+			return fmt.Errorf("guild roster offline member %d status=%#x, want 0", guid, status)
+		}
+		if viewerRights&0x4000 == 0 {
+			want.officerNote = ""
+		}
+		if officerNote != want.officerNote {
+			return fmt.Errorf("guild roster member %d officer note differs from rank visibility and saved note", guid)
+		}
+		if guid == recipientGUID && status != 0 {
+			return fmt.Errorf("guild roster login recipient GUID %d is not offline during pre-map roster send", guid)
+		}
+		seen[guid] = struct{}{}
+	}
+	if reader.Remaining() != 0 || len(seen) != len(members) {
+		return fmt.Errorf("guild roster has trailing bytes=%d or parsed members=%d want=%d", reader.Remaining(), len(seen), len(members))
+	}
+	return nil
+}
+
+func guildEventFields(event protocoltrace.Event) (uint8, []string, uint64, error) {
+	if err := requireGuildEvent(event); err != nil {
+		return 0, nil, 0, err
+	}
+	payload, err := eventPayload(event)
+	if err != nil {
+		return 0, nil, 0, err
+	}
+	reader := protocol.NewReader(payload)
+	eventType, _ := reader.ReadU8()
+	count, _ := reader.ReadU8()
+	params := make([]string, 0, count)
+	for index := uint8(0); index < count; index++ {
+		value, _ := reader.ReadCString()
+		params = append(params, value)
+	}
+	var guid uint64
+	if eventType == 3 || eventType == 4 || eventType == 12 || eventType == 13 {
+		guid, _ = reader.ReadU64()
+	}
+	return eventType, params, guid, nil
+}
+
+func guildLoginBankWithdrawals(ctx context.Context, db *sql.DB, playerGUID uint64, guildID uint32) (int32, error) {
+	var rank, rights, slotsPerDay, withdrawn uint32
+	if err := db.QueryRowContext(ctx, "SELECT rank FROM guild_member WHERE guildid = ? AND guid = ?", guildID, playerGUID).Scan(&rank); err != nil {
+		return 0, err
+	}
+	if rank == 0 {
+		return -1, nil
+	}
+	if err := db.QueryRowContext(ctx, "SELECT gbright, SlotPerDay FROM guild_bank_right WHERE guildid = ? AND TabId = 0 AND rid = ?", guildID, rank).Scan(&rights, &slotsPerDay); err != nil || rights&1 == 0 {
+		return 0, nil
+	}
+	_ = db.QueryRowContext(ctx, "SELECT tab0 FROM guild_member_withdraw WHERE guid = ?", playerGUID).Scan(&withdrawn)
+	remaining := int32(slotsPerDay) - int32(withdrawn)
+	if remaining > 0 {
+		return remaining, nil
+	}
+	return 0, nil
+}
+
+func guildRosterMemberRank(trace protocoltrace.Trace, memberGUID uint64) (int32, error) {
+	for _, event := range trace.Events {
+		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_GUILD_ROSTER) {
+			continue
+		}
+		if err := requireGuildRoster(event); err != nil {
+			return 0, err
+		}
+		payload, err := eventPayload(event)
+		if err != nil {
+			return 0, err
+		}
+		reader := protocol.NewReader(payload)
+		members, _ := reader.ReadU32()
+		_, _ = reader.ReadCString()
+		_, _ = reader.ReadCString()
+		ranks, _ := reader.ReadU32()
+		for rank := uint32(0); rank < ranks; rank++ {
+			_, _ = reader.Read(56)
+		}
+		for index := uint32(0); index < members; index++ {
+			guid, _ := reader.ReadU64()
+			status, _ := reader.ReadU8()
+			_, _ = reader.ReadCString()
+			rank, _ := reader.ReadI32()
+			_, _ = reader.Read(7)
+			if status == 0 {
+				_, _ = reader.ReadF32()
+			}
+			_, _ = reader.ReadCString()
+			_, _ = reader.ReadCString()
+			if guid == memberGUID {
+				return rank, nil
+			}
+		}
+		return 0, fmt.Errorf("guild roster does not contain member GUID %d", memberGUID)
+	}
+	return 0, fmt.Errorf("trace contains no guild roster packet")
+}
+
+func replaySecurityLevel(level int64) uint8 {
+	if level <= 0 || level > 255 {
+		return 0
+	}
+	return uint8(level)
+}
+
+func replayPlayerGloballyVisible(extraFlags uint32, targetSecurity, viewerSecurity uint8, visibilityState int) bool {
+	if visibilityState < 0 || visibilityState > 2 {
+		visibilityState = 2
+	}
+	hidden := visibilityState == 0 || visibilityState == 2 && extraFlags&0x10 != 0
+	return !hidden || viewerSecurity > 0 && targetSecurity <= viewerSecurity
 }
 
 func requireLoginEffect(event protocoltrace.Event) error {
@@ -4257,9 +4899,174 @@ func rejectPreVerifyAchievementPackets(trace protocoltrace.Trace, start int) err
 	return fmt.Errorf("missing SMSG_LOGIN_VERIFY_WORLD")
 }
 
+func requireTaxiNodeStatus(event protocoltrace.Event) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	if len(payload) != 9 {
+		return fmt.Errorf("taxi-node status payload length=%d, want 9", len(payload))
+	}
+	reader := protocol.NewReader(payload)
+	guid, err := reader.ReadU64()
+	if err != nil || guid>>48 != 0xF130 || uint32(guid) == 0 {
+		return fmt.Errorf("taxi-node status creature GUID=%#x (err=%v)", guid, err)
+	}
+	known, err := reader.ReadU8()
+	if err != nil || known > 1 || reader.Remaining() != 0 {
+		return fmt.Errorf("taxi-node known flag=%d remaining=%d (err=%v)", known, reader.Remaining(), err)
+	}
+	return nil
+}
+
+func validateTaxiNodeStatusPayloads(ctx context.Context, trace protocoltrace.Trace, characterDB, worldDB *sql.DB, data *wotlk.Store, playerGUID uint64, visibilityDistance float64) (int, error) {
+	if characterDB == nil || worldDB == nil || data == nil || playerGUID == 0 {
+		return 0, fmt.Errorf("taxi-node replay validation requires character/world databases and DBC data")
+	}
+	var race, level uint32
+	var taxiMaskText string
+	if err := characterDB.QueryRowContext(ctx, "SELECT race, level, COALESCE(taximask, '') FROM characters WHERE guid = ?", playerGUID).Scan(&race, &level, &taxiMaskText); err != nil {
+		return 0, fmt.Errorf("read taxi state for character %d: %w", playerGUID, err)
+	}
+	var mapID uint32
+	var x, y, z float32
+	verifyFound := false
+	for _, event := range trace.Events {
+		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_LOGIN_VERIFY_WORLD) {
+			continue
+		}
+		payload, err := eventPayload(event)
+		if err != nil {
+			return 0, err
+		}
+		reader := protocol.NewReader(payload)
+		if mapID, err = reader.ReadU32(); err != nil {
+			return 0, err
+		}
+		if x, err = reader.ReadF32(); err != nil {
+			return 0, err
+		}
+		if y, err = reader.ReadF32(); err != nil {
+			return 0, err
+		}
+		if z, err = reader.ReadF32(); err != nil {
+			return 0, err
+		}
+		verifyFound = true
+		break
+	}
+	if !verifyFound {
+		return 0, fmt.Errorf("taxi-node replay has no SMSG_LOGIN_VERIFY_WORLD")
+	}
+	validMask, err := data.TaxiMask()
+	if err != nil {
+		return 0, err
+	}
+	var knownMask [14]uint32
+	for index, token := range strings.Fields(taxiMaskText) {
+		if index >= len(knownMask) {
+			break
+		}
+		if value, err := strconv.ParseUint(token, 10, 32); err == nil {
+			knownMask[index] = uint32(value) & validMask[index]
+		}
+	}
+	setKnownNode := func(node uint32) {
+		if node == 0 {
+			return
+		}
+		field := (node - 1) / 32
+		if field < uint32(len(knownMask)) {
+			knownMask[field] |= 1 << ((node - 1) % 32)
+		}
+	}
+	alliance := race == 1 || race == 3 || race == 4 || race == 7 || race == 11
+	switch race {
+	case 1:
+		setKnownNode(2)
+	case 3, 7:
+		setKnownNode(6)
+	case 4:
+		setKnownNode(26)
+		setKnownNode(27)
+	case 11:
+		setKnownNode(94)
+	case 2, 8:
+		setKnownNode(23)
+	case 5:
+		setKnownNode(11)
+	case 6:
+		setKnownNode(22)
+	case 10:
+		setKnownNode(82)
+	}
+	if alliance {
+		setKnownNode(100)
+	} else {
+		setKnownNode(99)
+	}
+	if level >= 68 {
+		setKnownNode(213)
+	}
+	distance := visibilityDistance
+	if distance <= 0 {
+		distance = 150
+	}
+	seen := make(map[uint64]struct{})
+	count := 0
+	for _, event := range trace.Events {
+		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_TAXINODE_STATUS) {
+			continue
+		}
+		if err := requireTaxiNodeStatus(event); err != nil {
+			return count, err
+		}
+		payload, err := eventPayload(event)
+		if err != nil {
+			return count, err
+		}
+		reader := protocol.NewReader(payload)
+		guid, _ := reader.ReadU64()
+		known, _ := reader.ReadU8()
+		if _, exists := seen[guid]; exists {
+			return count, fmt.Errorf("duplicate taxi-node status for creature GUID %#x", guid)
+		}
+		seen[guid] = struct{}{}
+		lowGUID, entry := uint32(guid)&0x00FFFFFF, uint32(guid>>24)&0x00FFFFFF
+		var creatureMap, npcFlags int64
+		var creatureX, creatureY, creatureZ float64
+		if err := worldDB.QueryRowContext(ctx, `SELECT c.map,c.position_x,c.position_y,c.position_z,(COALESCE(t.npcflag,0) | COALESCE((SELECT SUM(npcflag) FROM game_event_npcflag WHERE guid=c.guid),0))
+			FROM creature c JOIN creature_template t ON t.entry=c.id WHERE c.guid=? AND c.id=?`, lowGUID, entry).Scan(&creatureMap, &creatureX, &creatureY, &creatureZ, &npcFlags); err != nil {
+			return count, fmt.Errorf("taxi status creature %d/%d is not a database spawn: %w", lowGUID, entry, err)
+		}
+		if uint32(creatureMap) != mapID || uint32(npcFlags)&0x2000 == 0 || math.Sqrt(math.Pow(creatureX-float64(x), 2)+math.Pow(creatureY-float64(y), 2)+math.Pow(creatureZ-float64(z), 2)) > distance {
+			return count, fmt.Errorf("taxi status creature %d/%d is not a nearby flightmaster on map %d", lowGUID, entry, mapID)
+		}
+		node, err := data.NearestTaxiNode(float32(creatureX), float32(creatureY), float32(creatureZ), mapID, alliance)
+		if err != nil || node == 0 {
+			return count, fmt.Errorf("taxi status creature %d/%d has no nearest DBC node (node=%d err=%v)", lowGUID, entry, node, err)
+		}
+		field := (node - 1) / 32
+		wantKnown := uint8(0)
+		if field < uint32(len(knownMask)) && knownMask[field]&(1<<((node-1)%32)) != 0 {
+			wantKnown = 1
+		}
+		if known != wantKnown {
+			return count, fmt.Errorf("taxi status creature %d/%d node=%d known=%d, want %d from saved mask", lowGUID, entry, node, known, wantKnown)
+		}
+		count++
+	}
+	return count, nil
+}
+
 func checkLoginMovementOrder(trace protocoltrace.Trace, start int) error {
-	var playerGUID uint64
-	playerGUIDKnown := false
+	if start < 0 || start >= len(trace.Events) {
+		return fmt.Errorf("movement login trace has no player login event")
+	}
+	playerGUID, err := loginPlayerGUID(trace.Events[start])
+	if err != nil {
+		return err
+	}
 	order := map[uint32]int{
 		uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK):           0,
 		uint32(protocol.OpcodeSMSG_MOVE_FEATHER_FALL):         1,
@@ -4282,14 +5089,6 @@ func checkLoginMovementOrder(trace protocoltrace.Trace, start int) error {
 			continue
 		}
 		if event.Opcode == uint32(protocol.OpcodeSMSG_AURA_UPDATE_ALL) {
-			if !playerGUIDKnown {
-				var err error
-				playerGUID, err = loginPlayerGUID(trace.Events[start])
-				if err != nil {
-					return err
-				}
-				playerGUIDKnown = true
-			}
 			payload, err := eventPayload(event)
 			if err != nil {
 				return fmt.Errorf("SMSG_AURA_UPDATE_ALL: %w", err)
@@ -4317,6 +5116,9 @@ func checkLoginMovementOrder(trace protocoltrace.Trace, start int) error {
 		if !timeSyncSeen {
 			return fmt.Errorf("movement packet %s arrived before SMSG_TIME_SYNC_REQ", opcodeName(event.Opcode))
 		}
+		if err := requireLoginMovementPayload(event, playerGUID); err != nil {
+			return err
+		}
 		if _, alreadySeen := seen[stage]; alreadySeen {
 			continue
 		}
@@ -4325,6 +5127,84 @@ func checkLoginMovementOrder(trace protocoltrace.Trace, start int) error {
 		}
 		seen[stage] = struct{}{}
 		last = stage
+	}
+	return nil
+}
+
+func requireLoginMovementPayload(event protocoltrace.Event, playerGUID uint64) error {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return err
+	}
+	reader := protocol.NewReader(payload)
+	switch protocol.Opcode(event.Opcode) {
+	case protocol.OpcodeSMSG_MOVE_WATER_WALK, protocol.OpcodeSMSG_MOVE_FEATHER_FALL, protocol.OpcodeSMSG_MOVE_SET_HOVER, protocol.OpcodeSMSG_MOVE_SET_CAN_FLY, protocol.OpcodeSMSG_FORCE_MOVE_ROOT:
+		if err := requireLoginMovementIdentity(reader, playerGUID); err != nil {
+			return fmt.Errorf("%s: %w", opcodeName(event.Opcode), err)
+		}
+		if reader.Remaining() != 0 {
+			return fmt.Errorf("%s has %d trailing bytes", opcodeName(event.Opcode), reader.Remaining())
+		}
+	case protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE:
+		if err := requireLoginMovementIdentity(reader, playerGUID); err != nil {
+			return fmt.Errorf("%s: %w", opcodeName(event.Opcode), err)
+		}
+		speed, err := reader.ReadF32()
+		if err != nil || speed <= 0 || math.IsNaN(float64(speed)) || math.IsInf(float64(speed), 0) {
+			return fmt.Errorf("%s has invalid speed %v (err=%v)", opcodeName(event.Opcode), speed, err)
+		}
+		if reader.Remaining() != 0 {
+			return fmt.Errorf("%s has %d trailing bytes", opcodeName(event.Opcode), reader.Remaining())
+		}
+	case protocol.OpcodeSMSG_MULTIPLE_MOVES:
+		length, err := reader.ReadU32()
+		if err != nil || int(length) != reader.Remaining() {
+			return fmt.Errorf("SMSG_MULTIPLE_MOVES size=%d remaining=%d (err=%v)", length, reader.Remaining(), err)
+		}
+		ranks := map[uint16]int{
+			uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT):   0,
+			uint16(protocol.OpcodeSMSG_MOVE_FEATHER_FALL): 1,
+			uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK):   2,
+			uint16(protocol.OpcodeSMSG_MOVE_SET_HOVER):    3,
+		}
+		last, count := -1, 0
+		for reader.Remaining() > 0 {
+			before := reader.Remaining()
+			packetLength, err := reader.ReadU8()
+			if err != nil || int(packetLength) > reader.Remaining() {
+				return fmt.Errorf("SMSG_MULTIPLE_MOVES subpacket length=%d remaining=%d (err=%v)", packetLength, reader.Remaining(), err)
+			}
+			opcode, err := reader.ReadU16()
+			if err != nil {
+				return fmt.Errorf("SMSG_MULTIPLE_MOVES opcode: %w", err)
+			}
+			rank, found := ranks[opcode]
+			if !found || rank <= last {
+				return fmt.Errorf("SMSG_MULTIPLE_MOVES opcode %s is unexpected or out of order", opcodeName(uint32(opcode)))
+			}
+			if err := requireLoginMovementIdentity(reader, playerGUID); err != nil {
+				return fmt.Errorf("SMSG_MULTIPLE_MOVES %s: %w", opcodeName(uint32(opcode)), err)
+			}
+			if before-reader.Remaining() != int(packetLength)+1 {
+				return fmt.Errorf("SMSG_MULTIPLE_MOVES %s subpacket length=%d actual=%d", opcodeName(uint32(opcode)), packetLength, before-reader.Remaining()-1)
+			}
+			last, count = rank, count+1
+		}
+		if count == 0 {
+			return fmt.Errorf("SMSG_MULTIPLE_MOVES contains no movement states")
+		}
+	}
+	return nil
+}
+
+func requireLoginMovementIdentity(reader *protocol.Buffer, playerGUID uint64) error {
+	guid, err := reader.ReadPackedGUID()
+	if err != nil || guid != playerGUID {
+		return fmt.Errorf("mover GUID=%d, want %d (err=%v)", guid, playerGUID, err)
+	}
+	counter, err := reader.ReadU32()
+	if err != nil || counter != 0 {
+		return fmt.Errorf("movement counter=%d, want 0 (err=%v)", counter, err)
 	}
 	return nil
 }
@@ -4389,7 +5269,7 @@ func checkAttachedTransportLogin(trace protocoltrace.Trace, playerGUID, savedTra
 		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_UPDATE_OBJECT) && event.Opcode != uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
 			continue
 		}
-		movement, transportBeforePlayer, found, err := attachedTransportPlayerCreate(event, playerGUID)
+		movement, transportBeforePlayer, inventoryAfterPlayer, found, err := attachedTransportPlayerCreate(event, playerGUID)
 		if err != nil {
 			return err
 		}
@@ -4404,6 +5284,9 @@ func checkAttachedTransportLogin(trace protocoltrace.Trace, playerGUID, savedTra
 		}
 		if !transportBeforePlayer {
 			return fmt.Errorf("attached transport create did not precede the passenger player create in one update")
+		}
+		if inventoryAfterPlayer {
+			return fmt.Errorf("inventory item create followed the self-player create in the map self-init update")
 		}
 		for _, verify := range trace.Events {
 			if verify.Direction != protocoltrace.ServerToClient || verify.Opcode != uint32(protocol.OpcodeSMSG_LOGIN_VERIFY_WORLD) {
@@ -4436,22 +5319,23 @@ func checkAttachedTransportLogin(trace protocoltrace.Trace, playerGUID, savedTra
 	return fmt.Errorf("transported player GUID %d create block was not found", playerGUID)
 }
 
-func attachedTransportPlayerCreate(event protocoltrace.Event, playerGUID uint64) (playerCreateMovement, bool, bool, error) {
+func attachedTransportPlayerCreate(event protocoltrace.Event, playerGUID uint64) (playerCreateMovement, bool, bool, bool, error) {
 	var movement playerCreateMovement
+	var transportBeforePlayer, inventoryAfterPlayer, playerFound bool
 	payload, err := eventPayload(event)
 	if err != nil {
-		return movement, false, false, err
+		return movement, false, false, false, err
 	}
 	if event.Opcode == uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
 		payload, err = protocol.DecompressUpdatePayload(payload)
 		if err != nil {
-			return movement, false, false, err
+			return movement, false, false, false, err
 		}
 	}
 	reader := protocol.NewReader(payload)
 	blocks, err := reader.ReadU32()
 	if err != nil {
-		return movement, false, false, err
+		return movement, false, false, false, err
 	}
 	createdObjects := make([]struct {
 		guid   uint64
@@ -4460,52 +5344,60 @@ func attachedTransportPlayerCreate(event protocoltrace.Event, playerGUID uint64)
 	for block := uint32(0); block < blocks; block++ {
 		kind, err := reader.ReadU8()
 		if err != nil {
-			return movement, false, false, err
+			return movement, false, false, false, err
 		}
 		switch kind {
 		case protocol.UpdateOutOfRangeObjects:
 			count, err := reader.ReadU32()
 			if err != nil {
-				return movement, false, false, err
+				return movement, false, false, false, err
 			}
 			for index := uint32(0); index < count; index++ {
 				if _, err := reader.ReadPackedGUID(); err != nil {
-					return movement, false, false, err
+					return movement, false, false, false, err
 				}
 			}
 		case protocol.UpdateCreateObject, protocol.UpdateCreateObject2:
 			guid, err := reader.ReadPackedGUID()
 			if err != nil {
-				return movement, false, false, err
+				return movement, false, false, false, err
 			}
 			typeID, err := reader.ReadU8()
 			if err != nil {
-				return movement, false, false, err
+				return movement, false, false, false, err
 			}
 			flags, err := reader.ReadU16()
 			if err != nil {
-				return movement, false, false, err
+				return movement, false, false, false, err
+			}
+			if playerFound && (typeID == 1 || typeID == 2) {
+				inventoryAfterPlayer = true
 			}
 			if guid == playerGUID && typeID == 4 {
+				if playerFound {
+					return movement, transportBeforePlayer, inventoryAfterPlayer, false, fmt.Errorf("duplicate self-player create in map self-init update")
+				}
 				movement, err = readPlayerCreateMovement(reader, flags)
 				if err != nil {
-					return movement, false, false, err
+					return movement, false, false, false, err
 				}
 				if _, _, err := readUpdateValues(reader); err != nil {
-					return movement, false, false, err
+					return movement, false, false, false, err
 				}
+				playerFound = true
 				for _, object := range createdObjects {
 					if object.typeID == 5 && object.guid == movement.TransportGUID {
-						return movement, true, true, nil
+						transportBeforePlayer = true
+						break
 					}
 				}
-				return movement, false, true, nil
+				continue
 			}
 			if err := skipCreateMovement(reader, flags); err != nil {
-				return movement, false, false, err
+				return movement, false, false, false, err
 			}
 			if _, _, err := readUpdateValues(reader); err != nil {
-				return movement, false, false, err
+				return movement, false, false, false, err
 			}
 			createdObjects = append(createdObjects, struct {
 				guid   uint64
@@ -4513,17 +5405,17 @@ func attachedTransportPlayerCreate(event protocoltrace.Event, playerGUID uint64)
 			}{guid, typeID})
 		case protocol.UpdateValues:
 			if err := skipValuesUpdate(reader); err != nil {
-				return movement, false, false, err
+				return movement, false, false, false, err
 			}
 		case protocol.UpdateMovement:
 			if err := skipMovementUpdate(reader); err != nil {
-				return movement, false, false, err
+				return movement, false, false, false, err
 			}
 		default:
-			return movement, false, false, fmt.Errorf("unsupported update block kind=%d", kind)
+			return movement, false, false, false, fmt.Errorf("unsupported update block kind=%d", kind)
 		}
 	}
-	return movement, false, false, nil
+	return movement, transportBeforePlayer, inventoryAfterPlayer, playerFound, nil
 }
 
 func containsCritterPetCreate(event protocoltrace.Event) (bool, error) {
@@ -5199,7 +6091,7 @@ func pairedLoginTrace(trace protocoltrace.Trace, playerGUID uint64) (protocoltra
 	return filtered, nil
 }
 
-func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64, lfgDungeonID, instanceEntryMapID, instanceEntryID, statsMinLevel uint32, replayPlayerStartMessage bool, questRewardTwiceID uint32, replayPetCritter, replayFarTeleport bool) error {
+func runRealCharacterLoginReplay(workDir, gameDataDir string, guid, peerGUID uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64, lfgDungeonID, instanceEntryMapID, instanceEntryID, statsMinLevel uint32, replayPlayerStartMessage bool, questRewardTwiceID uint32, replayPetCritter, replayFarTeleport, replayNearTeleport, replayDungeonLogin bool, sharedQuestDetailsQuestID uint32, sharedQuestDetailsSenderGUID uint64) error {
 	workDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return err
@@ -5213,6 +6105,17 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 	if err != nil {
 		return err
 	}
+	if gameDataDir == "" {
+		gameDataDir = filepath.Join(root, "bin", "data")
+	} else if !filepath.IsAbs(gameDataDir) {
+		gameDataDir = filepath.Join(root, gameDataDir)
+	}
+	gameDataDir = filepath.Clean(gameDataDir)
+	for _, name := range []string{"Map.dbc", "AreaTrigger.dbc", "MapDifficulty.dbc"} {
+		if _, err := os.Stat(filepath.Join(gameDataDir, "dbc", name)); err != nil {
+			return fmt.Errorf("game data directory missing dbc/%s: %w", name, err)
+		}
+	}
 	cfg := config.Default()
 	cfg.Backend = string(database.BackendSQLite)
 	cfg.LuaEnabled = false
@@ -5222,7 +6125,7 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 	}
 	cfg.DataDir = workDir
 	cfg.AuthDatabaseFile, cfg.CharactersDatabaseFile, cfg.WorldDatabaseFile = filepath.Join(workDir, "auth.db"), filepath.Join(workDir, "characters.db"), filepath.Join(workDir, "world.db")
-	cfg.SchemaDir, cfg.GameDataDir = filepath.Join(root, "sql"), filepath.Join(root, "data")
+	cfg.SchemaDir, cfg.GameDataDir = filepath.Join(root, "sql"), gameDataDir
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	stores, err := database.OpenSet(ctx, cfg)
@@ -5239,26 +6142,76 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 		}
 		guid = uint64(selectedGUID)
 	}
+	if sharedQuestDetailsQuestID != 0 {
+		if sharedQuestDetailsSenderGUID == 0 || sharedQuestDetailsSenderGUID == guid {
+			return errors.New("shared-quest replay requires a distinct sharer GUID")
+		}
+		var senderCount int64
+		if err := stores.Characters.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM characters WHERE guid = ?", sharedQuestDetailsSenderGUID).Scan(&senderCount); err != nil || senderCount != 1 {
+			return fmt.Errorf("shared-quest sender character %d is not present in the replay database", sharedQuestDetailsSenderGUID)
+		}
+	}
+	var firstExtraFlags, secondExtraFlags uint32
+	var firstGuildID, secondGuildID, firstMapID, secondMapID uint32
+	var firstX, firstY, secondX, secondY float64
+	var firstAccountSecurity, secondAccountSecurity uint8
 	if peerGUID != 0 {
 		if peerGUID == guid {
 			return fmt.Errorf("paired login replay requires distinct character GUIDs")
 		}
-		var accountID, guildID, mapID int64
-		if err := stores.Characters.DB.QueryRowContext(ctx, `SELECT c.account, COALESCE(g.guildid, 0), c.map FROM characters c LEFT JOIN guild_member g ON g.guid = c.guid WHERE c.guid = ?`, guid).Scan(&accountID, &guildID, &mapID); err != nil {
+		var accountID, guildID, mapID, extraFlags int64
+		if err := stores.Characters.DB.QueryRowContext(ctx, `SELECT c.account, COALESCE(g.guildid, 0), c.map, c.position_x, c.position_y, COALESCE(c.extra_flags, 0) FROM characters c LEFT JOIN guild_member g ON g.guid = c.guid WHERE c.guid = ?`, guid).Scan(&accountID, &guildID, &mapID, &firstX, &firstY, &extraFlags); err != nil {
 			return fmt.Errorf("read first paired character: %w", err)
 		}
-		var peerAccountID, peerGuildID, peerMapID int64
-		if err := stores.Characters.DB.QueryRowContext(ctx, `SELECT c.account, COALESCE(g.guildid, 0), c.map FROM characters c LEFT JOIN guild_member g ON g.guid = c.guid WHERE c.guid = ?`, peerGUID).Scan(&peerAccountID, &peerGuildID, &peerMapID); err != nil {
+		var peerAccountID, peerGuildID, peerMapID, peerExtraFlags int64
+		if err := stores.Characters.DB.QueryRowContext(ctx, `SELECT c.account, COALESCE(g.guildid, 0), c.map, c.position_x, c.position_y, COALESCE(c.extra_flags, 0) FROM characters c LEFT JOIN guild_member g ON g.guid = c.guid WHERE c.guid = ?`, peerGUID).Scan(&peerAccountID, &peerGuildID, &peerMapID, &secondX, &secondY, &peerExtraFlags); err != nil {
 			return fmt.Errorf("read second paired character: %w", err)
 		}
-		if accountID == peerAccountID || guildID == 0 || guildID != peerGuildID || mapID != peerMapID {
-			return fmt.Errorf("paired login replay requires different accounts in the same guild and map")
+		if accountID == peerAccountID {
+			return fmt.Errorf("paired login replay requires different accounts")
 		}
+		firstGuildID, secondGuildID, firstMapID, secondMapID = uint32(guildID), uint32(peerGuildID), uint32(mapID), uint32(peerMapID)
+		var firstSecurity, secondSecurity int64
+		if err := stores.Auth.DB.QueryRowContext(ctx, `SELECT COALESCE(MAX(SecurityLevel), 0) FROM account_access WHERE AccountID = ? AND RealmID IN (-1, ?)`, accountID, cfg.RealmID).Scan(&firstSecurity); err != nil {
+			return fmt.Errorf("read first paired account security: %w", err)
+		}
+		if err := stores.Auth.DB.QueryRowContext(ctx, `SELECT COALESCE(MAX(SecurityLevel), 0) FROM account_access WHERE AccountID = ? AND RealmID IN (-1, ?)`, peerAccountID, cfg.RealmID).Scan(&secondSecurity); err != nil {
+			return fmt.Errorf("read second paired account security: %w", err)
+		}
+		firstExtraFlags, secondExtraFlags = uint32(extraFlags), uint32(peerExtraFlags)
+		firstAccountSecurity, secondAccountSecurity = replaySecurityLevel(firstSecurity), replaySecurityLevel(secondSecurity)
 	}
 	server := world.NewServer(stores, slog.New(slog.NewTextHandler(io.Discard, nil)), cfg.RealmID, cfg)
 	if err := server.Initialize(ctx); err != nil {
 		server.Stop()
 		return err
+	}
+	dungeonLoginMapID := uint32(0)
+	if replayDungeonLogin {
+		var mapID, instanceID int64
+		if err := stores.Characters.DB.QueryRowContext(ctx, "SELECT map, instance_id FROM characters WHERE guid = ?", guid).Scan(&mapID, &instanceID); err != nil {
+			server.Stop()
+			return err
+		}
+		entry, found, err := server.Data.Map(uint32(mapID))
+		if err != nil || !found || !entry.IsDungeon() || instanceID != 0 {
+			server.Stop()
+			return fmt.Errorf("dungeon login replay requires a character saved in a dungeon with instance_id 0")
+		}
+		var characterBindCount, groupMemberCount int64
+		if err := stores.Characters.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_instance WHERE guid = ?", guid).Scan(&characterBindCount); err != nil {
+			server.Stop()
+			return err
+		}
+		if err := stores.Characters.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM group_member WHERE memberGuid = ?", guid).Scan(&groupMemberCount); err != nil {
+			server.Stop()
+			return err
+		}
+		if characterBindCount != 0 || groupMemberCount != 0 {
+			server.Stop()
+			return fmt.Errorf("dungeon login replay requires no saved character instance binds and no group membership")
+		}
+		dungeonLoginMapID = uint32(mapID)
 	}
 	var farTeleportMap uint32
 	var farTeleportPosition [4]float32
@@ -5303,6 +6256,35 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 			server.Stop()
 			return fmt.Errorf("no valid creature spawn exists outside source map %d", currentMap)
 		}
+	}
+	var nearTeleportMap uint32
+	var nearTeleportPosition [4]float32
+	if replayNearTeleport {
+		var mapID int64
+		if err := stores.Characters.DB.QueryRowContext(ctx, "SELECT map, position_x, position_y, position_z, orientation FROM characters WHERE guid = ?", guid).Scan(&mapID, &nearTeleportPosition[0], &nearTeleportPosition[1], &nearTeleportPosition[2], &nearTeleportPosition[3]); err != nil || mapID < 0 || mapID > int64(^uint32(0)) {
+			server.Stop()
+			return fmt.Errorf("read near-teleport replay source location: map=%d err=%v", mapID, err)
+		}
+		if _, found, err := server.Data.Map(uint32(mapID)); err != nil || !found {
+			server.Stop()
+			return fmt.Errorf("near-teleport replay source map %d is unavailable: %v", mapID, err)
+		}
+		const maxMapCoordinate = 17066.166015625
+		for _, coordinate := range nearTeleportPosition {
+			if math.IsNaN(float64(coordinate)) || math.IsInf(float64(coordinate), 0) || math.Abs(float64(coordinate)) > maxMapCoordinate {
+				server.Stop()
+				return fmt.Errorf("near-teleport replay source has invalid coordinates: %v", nearTeleportPosition)
+			}
+		}
+		destinationX := nearTeleportPosition[0] + 0.5
+		if destinationX > maxMapCoordinate {
+			destinationX = nearTeleportPosition[0] - 0.5
+		}
+		if destinationX == nearTeleportPosition[0] || math.Abs(float64(destinationX)) > maxMapCoordinate {
+			server.Stop()
+			return fmt.Errorf("cannot choose a valid near-teleport destination from %v", nearTeleportPosition)
+		}
+		nearTeleportMap, nearTeleportPosition[0] = uint32(mapID), destinationX
 	}
 	if petAuraSourceSpell != 0 {
 		if _, found, err := server.Data.Spell(petAuraSourceSpell); err != nil || !found {
@@ -5419,16 +6401,29 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 		trace, replayErr = world.ReplayCharacterPetFeed(ctx, server, guid, petFeedSpell, petFoodGUID)
 	} else if questRewardTwiceID != 0 {
 		trace, replayErr = world.ReplayCharacterQuestRewardTwice(ctx, server, guid, questRewardTwiceID)
+	} else if sharedQuestDetailsQuestID != 0 {
+		trace, replayErr = world.ReplayCharacterLoginWithSharedQuest(ctx, server, guid, sharedQuestDetailsQuestID, sharedQuestDetailsSenderGUID)
 	} else if replayPetCritter {
 		trace, replayErr = world.ReplayCharacterPetCritter(ctx, server, guid)
 	} else if lfgDungeonID != 0 {
 		trace, replayErr = world.ReplayCharacterLFGTeleport(ctx, server, guid, lfgDungeonID)
+	} else if replayNearTeleport {
+		trace, replayErr = world.ReplayCharacterNearTeleport(ctx, server, guid, nearTeleportMap, nearTeleportPosition[0], nearTeleportPosition[1], nearTeleportPosition[2], nearTeleportPosition[3])
 	} else if replayFarTeleport {
 		trace, replayErr = world.ReplayCharacterFarTeleport(ctx, server, guid, farTeleportMap, farTeleportPosition[0], farTeleportPosition[1], farTeleportPosition[2], farTeleportPosition[3])
 	} else if instanceEntryID != 0 {
 		trace, replayErr = world.ReplayCharacterInstanceEntry(ctx, server, guid, instanceEntryMapID, instanceEntryID)
 	} else {
 		trace, replayErr = world.ReplayCharacterLogin(ctx, server, guid)
+	}
+	if replayErr == nil {
+		taxiTrace := trace
+		if peerGUID != 0 {
+			taxiTrace, replayErr = pairedLoginTrace(trace, guid)
+		}
+		if replayErr == nil {
+			_, replayErr = validateTaxiNodeStatusPayloads(ctx, taxiTrace, stores.Characters.DB, stores.World.DB, server.Data, guid, cfg.VisibilityDistanceContinents)
+		}
 	}
 	cancel()
 	server.Stop()
@@ -5475,7 +6470,12 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 		return peerSnapshotErr
 	}
 	var deltaErr error
-	if questRewardTwiceID != 0 {
+	if replayDungeonLogin {
+		deltaErr = validateCharacterStateDeltaOptions(before, after, petFeedSpell != 0, false, false, true)
+		if deltaErr == nil {
+			deltaErr = validateDungeonLoginInstanceBinding(context.Background(), stores.Characters.DB, guid, dungeonLoginMapID, before, after)
+		}
+	} else if questRewardTwiceID != 0 {
 		deltaErr = validateCharacterStateDeltaWithQuestReward(before, after)
 	} else if statsMinLevel != 0 {
 		deltaErr = validateCharacterStateDeltaWithStats(before, after, petFeedSpell != 0)
@@ -5560,6 +6560,30 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 		if err := checkLogin(secondTrace, 0); err != nil {
 			return fmt.Errorf("second paired login packet replay failed: %w", err)
 		}
+		if err := validatePairedGuildLoginRecipients(context.Background(), stores.Characters.DB, firstTrace, secondTrace, guid, peerGUID, firstGuildID, secondGuildID); err != nil {
+			return fmt.Errorf("paired guild login recipient/payload replay failed: %w", err)
+		}
+		if firstGuildID != 0 && firstGuildID == secondGuildID {
+			firstOwnGuildStatus, err := guildRosterMemberStatus(firstTrace, guid)
+			if err != nil {
+				return fmt.Errorf("read first recipient's guild roster status: %w", err)
+			}
+			firstPeerGuildStatus, err := guildRosterMemberStatus(firstTrace, peerGUID)
+			if err != nil {
+				return fmt.Errorf("read first recipient's peer guild status: %w", err)
+			}
+			secondPeerGuildStatus, err := guildRosterMemberStatus(secondTrace, guid)
+			if err != nil {
+				return fmt.Errorf("read second recipient's peer guild status: %w", err)
+			}
+			secondOwnGuildStatus, err := guildRosterMemberStatus(secondTrace, peerGUID)
+			if err != nil {
+				return fmt.Errorf("read second recipient's own guild status: %w", err)
+			}
+			if firstOwnGuildStatus != 0 || firstPeerGuildStatus != 0 || secondPeerGuildStatus != 1 || secondOwnGuildStatus != 0 {
+				return fmt.Errorf("paired guild roster order/status mismatch: first=(self:%d peer:%d) second=(peer:%d self:%d), want (0,0) then (1,0)", firstOwnGuildStatus, firstPeerGuildStatus, secondPeerGuildStatus, secondOwnGuildStatus)
+			}
+		}
 		firstSeesSecond, err := countPlayerCreateBlocks(firstTrace, peerGUID)
 		if err != nil {
 			return fmt.Errorf("count first recipient's peer create updates: %w", err)
@@ -5572,8 +6596,11 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 		if err != nil {
 			return fmt.Errorf("count second recipient's self create updates: %w", err)
 		}
-		if firstSeesSecond == 0 || secondSeesFirst == 0 || secondSelfCreates == 0 {
-			return fmt.Errorf("paired create deliveries missing: first-sees-second=%d second-sees-first=%d second-self=%d", firstSeesSecond, secondSeesFirst, secondSelfCreates)
+		inSharedVisibilityRange := firstMapID == secondMapID && cfg.VisibilityDistanceContinents > 0 && math.Hypot(firstX-secondX, firstY-secondY) <= float64(cfg.VisibilityDistanceContinents)
+		wantFirstSeesSecond := inSharedVisibilityRange && replayPlayerGloballyVisible(secondExtraFlags, secondAccountSecurity, firstAccountSecurity, cfg.GMVisibleState)
+		wantSecondSeesFirst := inSharedVisibilityRange && replayPlayerGloballyVisible(firstExtraFlags, firstAccountSecurity, secondAccountSecurity, cfg.GMVisibleState)
+		if (firstSeesSecond != 0) != wantFirstSeesSecond || (secondSeesFirst != 0) != wantSecondSeesFirst || secondSelfCreates == 0 {
+			return fmt.Errorf("paired create visibility mismatch: first-sees-second=%d want=%t second-sees-first=%d want=%t second-self=%d", firstSeesSecond, wantFirstSeesSecond, secondSeesFirst, wantSecondSeesFirst, secondSelfCreates)
 		}
 	}
 	if err := checkPetLoginState(trace, petBefore); err != nil {
@@ -5598,6 +6625,10 @@ func runRealCharacterLoginReplay(workDir string, guid, peerGUID uint64, tracePat
 	sort.Strings(changed)
 	if peerGUID != 0 {
 		fmt.Printf("real-character two-session login replay passed first=%d peer=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", guid, peerGUID, len(trace.Events)-2, len(changed), strings.Join(changed, ","), tracePath)
+	} else if replayDungeonLogin {
+		fmt.Printf("real-character dungeon login replay passed map=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", dungeonLoginMapID, len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
+	} else if sharedQuestDetailsQuestID != 0 {
+		fmt.Printf("real-character shared-quest/pet packet-order replay passed quest=%d sender=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", sharedQuestDetailsQuestID, sharedQuestDetailsSenderGUID, len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
 	} else if statsMinLevel != 0 {
 		fmt.Printf("real-character stats save replay passed minimum_level=%d lua=disabled packets=%d changed_tables=%d diff=%s trace=%s\n", statsMinLevel, len(trace.Events)-1, len(changed), strings.Join(changed, ","), tracePath)
 	} else if petCooldownSpell != 0 {
@@ -5818,18 +6849,18 @@ func validatePetSpellCooldownDelta(before, after map[petSpellCooldownKey]petSpel
 }
 
 func validateCharacterStateDelta(before, after map[string]characterTableSnapshot, allowPetFeedProgress bool) error {
-	return validateCharacterStateDeltaOptions(before, after, allowPetFeedProgress, false, false)
+	return validateCharacterStateDeltaOptions(before, after, allowPetFeedProgress, false, false, false)
 }
 
 func validateCharacterStateDeltaWithStats(before, after map[string]characterTableSnapshot, allowPetFeedProgress bool) error {
-	return validateCharacterStateDeltaOptions(before, after, allowPetFeedProgress, true, false)
+	return validateCharacterStateDeltaOptions(before, after, allowPetFeedProgress, true, false, false)
 }
 
 func validateCharacterStateDeltaWithQuestReward(before, after map[string]characterTableSnapshot) error {
-	return validateCharacterStateDeltaOptions(before, after, false, false, true)
+	return validateCharacterStateDeltaOptions(before, after, false, false, true, false)
 }
 
-func validateCharacterStateDeltaOptions(before, after map[string]characterTableSnapshot, allowPetFeedProgress, allowCharacterStats, allowQuestReward bool) error {
+func validateCharacterStateDeltaOptions(before, after map[string]characterTableSnapshot, allowPetFeedProgress, allowCharacterStats, allowQuestReward, allowDungeonLoginBind bool) error {
 	allowedColumns := map[string]map[string]struct{}{
 		"characters":                     {"cinematic": {}, "exploredZones": {}, "orientation": {}, "position_x": {}, "position_y": {}, "position_z": {}, "instance_id": {}, "instance_mode_mask": {}, "totaltime": {}, "leveltime": {}, "logout_time": {}, "is_logout_resting": {}},
 		"character_achievement":          {"guid": {}, "achievement": {}, "date": {}},
@@ -5868,6 +6899,12 @@ func validateCharacterStateDeltaOptions(before, after map[string]characterTableS
 	allowedColumns["character_inventory"] = map[string]struct{}{"guid": {}, "bag": {}, "slot": {}, "item": {}}
 	allowedColumns["inventory_item_instances"] = map[string]struct{}{"guid": {}, "itemEntry": {}, "owner_guid": {}, "creatorGuid": {}, "giftCreatorGuid": {}, "count": {}, "duration": {}, "charges": {}, "flags": {}, "enchantments": {}, "randomPropertyId": {}, "durability": {}, "playedTime": {}, "text": {}}
 	allowedRowChanges := map[string]bool{"character_achievement": true, "character_achievement_progress": true, "character_aura": true, "character_battleground_data": true, "character_fishingsteps": true, "character_inventory": true, "character_spell_cooldown": true, "inventory_item_instances": true, "pet_aura": true, "pet_spell": true, "pet_spell_cooldown": true, "account_instance_times": true}
+	if allowDungeonLoginBind {
+		allowedColumns["instance"] = map[string]struct{}{"id": {}, "map": {}, "difficulty": {}, "resettime": {}, "data": {}, "completedEncounters": {}}
+		allowedColumns["character_instance"] = map[string]struct{}{"guid": {}, "instance": {}, "permanent": {}, "extendState": {}}
+		allowedRowChanges["instance"] = true
+		allowedRowChanges["character_instance"] = true
+	}
 	if allowQuestReward {
 		allowedColumns["characters"]["xp"] = struct{}{}
 		allowedColumns["characters"]["money"] = struct{}{}
@@ -5941,6 +6978,34 @@ func validateCharacterStateDeltaOptions(before, after map[string]characterTableS
 	return nil
 }
 
+func validateDungeonLoginInstanceBinding(ctx context.Context, db *sql.DB, guid uint64, mapID uint32, before, after map[string]characterTableSnapshot) error {
+	for _, table := range []string{"instance", "character_instance"} {
+		beforeTable, beforeFound := before[table]
+		afterTable, afterFound := after[table]
+		if !beforeFound || !afterFound || afterTable.Rows != beforeTable.Rows+1 {
+			return fmt.Errorf("dungeon login %s rows did not increase by exactly one", table)
+		}
+	}
+	var savedInstanceID, savedMapID, difficulty, permanent, extendState int64
+	err := db.QueryRowContext(ctx, `SELECT c.instance_id, i.map, i.difficulty, ci.permanent, ci.extendState
+		FROM characters AS c JOIN character_instance AS ci ON ci.guid = c.guid AND ci.instance = c.instance_id
+		JOIN instance AS i ON i.id = ci.instance WHERE c.guid = ?`, guid).Scan(&savedInstanceID, &savedMapID, &difficulty, &permanent, &extendState)
+	if err != nil {
+		return err
+	}
+	if savedInstanceID == 0 || savedMapID != int64(mapID) || difficulty < 0 || permanent != 0 || extendState != 1 {
+		return fmt.Errorf("dungeon login saved invalid character instance map=%d instance=%d difficulty=%d permanent=%d extendState=%d", savedMapID, savedInstanceID, difficulty, permanent, extendState)
+	}
+	var bindCount int64
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_instance WHERE guid = ?", guid).Scan(&bindCount); err != nil {
+		return err
+	}
+	if bindCount != 1 {
+		return fmt.Errorf("dungeon login saved %d character binds, want exactly one", bindCount)
+	}
+	return nil
+}
+
 func snapshotCharacterState(db, worldDB, authDB *sql.DB, guid uint64) (map[string]characterTableSnapshot, error) {
 	var accountID int64
 	if err := db.QueryRow("SELECT account FROM characters WHERE guid = ?", guid).Scan(&accountID); err != nil {
@@ -5987,6 +7052,7 @@ func snapshotCharacterState(db, worldDB, authDB *sql.DB, guid uint64) (map[strin
 		{"character_glyphs", "SELECT * FROM character_glyphs WHERE guid = ?"},
 		{"character_homebind", "SELECT * FROM character_homebind WHERE guid = ?"},
 		{"character_instance", "SELECT * FROM character_instance WHERE guid = ?"},
+		{"instance", "SELECT i.* FROM instance AS i JOIN character_instance AS ci ON ci.instance = i.id WHERE ci.guid = ?"},
 		{"character_battleground_data", "SELECT * FROM character_battleground_data WHERE guid = ?"},
 		{"character_equipmentsets", "SELECT * FROM character_equipmentsets WHERE guid = ?"},
 		{"character_pet", "SELECT * FROM character_pet WHERE owner = ?"},

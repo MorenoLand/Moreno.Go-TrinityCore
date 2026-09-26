@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -120,8 +121,13 @@ const (
 	guildBankLogMoveItem2     uint8 = 7
 	guildBankLogBuySlot       uint8 = 9
 
-	guildBankMaxTabs      uint8 = 6
-	guildBankMoneyLogsTab uint8 = 100
+	guildBankMaxTabs                 uint8 = 6
+	guildBankMaxSlots                uint8 = 98
+	guildBankMoneyLogsTab            uint8 = 100
+	guildEquipErrItemCantStack       uint8 = 19
+	guildEquipErrCantDropSoulbound   uint8 = 24
+	guildEquipErrBankFull            uint8 = 51
+	guildEquipErrItemDoesntGoIntoBag uint8 = 15
 )
 
 func (s *session) sendGuildCommandResult(cmdType uint32, param string, errCode uint32) {
@@ -158,16 +164,12 @@ func (s *session) sendGuildBankTabsInfo(ctx context.Context) {
 	remaining := int32(-1)
 	if rank != 0 {
 		var rights, limit int64
-		if err := cdb.QueryRowContext(ctx, "SELECT gbright, SlotPerDay FROM guild_bank_right WHERE guildid = ? AND TabId = 0 AND rid = ?", guildID, rank).Scan(&rights, &limit); err != nil || rights&1 == 0 {
+		if err := cdb.QueryRowContext(ctx, "SELECT gbright, SlotPerDay FROM guild_bank_right WHERE guildid = ? AND TabId = 0 AND rid = ?", guildID, rank).Scan(&rights, &limit); err != nil {
 			remaining = 0
-		} else if limit != int64(^uint32(0)) {
+		} else {
 			var withdrawn int64
 			_ = cdb.QueryRowContext(ctx, "SELECT tab0 FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&withdrawn)
-			if limit <= withdrawn {
-				remaining = 0
-			} else {
-				remaining = int32(limit - withdrawn)
-			}
+			remaining = guildBankRemainingSlots(uint32(rank), uint32(rights), uint32(limit), uint32(withdrawn))
 		}
 	}
 	buf := protocol.NewBuffer(15)
@@ -177,6 +179,17 @@ func (s *session) sendGuildBankTabsInfo(ctx context.Context) {
 	buf.WriteU8(0)
 	buf.WriteU8(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_BANK_LIST), buf.Bytes(), true)
+}
+
+func guildBankRemainingSlots(rank, rights, slotsPerDay, withdrawn uint32) int32 {
+	if rank == 0 {
+		return -1
+	}
+	remaining := int32(slotsPerDay) - int32(withdrawn)
+	if rights&1 == 0 || remaining <= 0 {
+		return 0
+	}
+	return remaining
 }
 
 func (s *session) broadcastGuildMemberLogout() {
@@ -1357,13 +1370,17 @@ func (s *session) checkGuildBankRights(ctx context.Context, guildID uint32, tabI
 	return true
 }
 
-func (s *session) checkAndConsumeGuildBankWithdraw(ctx context.Context, guildID uint32, tabID uint8) bool {
-	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || tabID >= guildBankMaxTabs {
+type guildWithdrawExecutor interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func guildConsumeBankWithdraw(ctx context.Context, q guildWithdrawExecutor, playerGUID uint64, guildID uint32, tabID uint8) bool {
+	if tabID >= guildBankMaxTabs {
 		return false
 	}
-	cdb := s.server.CharactersStore.DB
 	var rank uint32
-	err := cdb.QueryRowContext(ctx, "SELECT rank FROM guild_member WHERE guid = ? AND guildid = ?", s.playerGUID, guildID).Scan(&rank)
+	err := q.QueryRowContext(ctx, "SELECT rank FROM guild_member WHERE guid = ? AND guildid = ?", playerGUID, guildID).Scan(&rank)
 	if err != nil {
 		return false
 	}
@@ -1371,23 +1388,27 @@ func (s *session) checkAndConsumeGuildBankWithdraw(ctx context.Context, guildID 
 		return true
 	}
 	var gbright, slotPerDay uint32
-	err = cdb.QueryRowContext(ctx, "SELECT gbright, SlotPerDay FROM guild_bank_right WHERE guildid = ? AND TabId = ? AND rid = ?", guildID, tabID, rank).Scan(&gbright, &slotPerDay)
+	err = q.QueryRowContext(ctx, "SELECT gbright, SlotPerDay FROM guild_bank_right WHERE guildid = ? AND TabId = ? AND rid = ?", guildID, tabID, rank).Scan(&gbright, &slotPerDay)
 	if err != nil || gbright&0x01 == 0 || slotPerDay == 0 {
 		return false
 	}
 	if slotPerDay != 0xFFFFFFFF {
 		tabCol := fmt.Sprintf("tab%d", tabID)
 		var exists int
-		_ = cdb.QueryRowContext(ctx, "SELECT 1 FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&exists)
+		_ = q.QueryRowContext(ctx, "SELECT 1 FROM guild_member_withdraw WHERE guid = ?", playerGUID).Scan(&exists)
 		if exists == 0 {
-			_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_member_withdraw (guid, tab0, tab1, tab2, tab3, tab4, tab5, money) VALUES (?, 0, 0, 0, 0, 0, 0, 0)", s.playerGUID)
+			if _, err := q.ExecContext(ctx, "INSERT INTO guild_member_withdraw (guid, tab0, tab1, tab2, tab3, tab4, tab5, money) VALUES (?, 0, 0, 0, 0, 0, 0, 0)", playerGUID); err != nil {
+				return false
+			}
 		}
 		var currentWithdrawn uint32
-		_ = cdb.QueryRowContext(ctx, "SELECT "+tabCol+" FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&currentWithdrawn)
+		_ = q.QueryRowContext(ctx, "SELECT "+tabCol+" FROM guild_member_withdraw WHERE guid = ?", playerGUID).Scan(&currentWithdrawn)
 		if currentWithdrawn >= slotPerDay {
 			return false
 		}
-		_, _ = cdb.ExecContext(ctx, "UPDATE guild_member_withdraw SET "+tabCol+" = "+tabCol+" + 1 WHERE guid = ?", s.playerGUID)
+		if _, err := q.ExecContext(ctx, "UPDATE guild_member_withdraw SET "+tabCol+" = "+tabCol+" + 1 WHERE guid = ?", playerGUID); err != nil {
+			return false
+		}
 	}
 	return true
 }
@@ -1433,25 +1454,56 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 		return true
 	}
 	r := protocol.NewReader(payload)
-	bankerGUID, _ := r.ReadU64()
-	bankOnly, _ := r.ReadU8()
+	bankerGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	bankOnly, err := r.ReadU8()
+	if err != nil {
+		return false
+	}
 
 	guildID := s.player.GuildID
 	if guildID == 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return true
 	}
-	cdb := s.server.CharactersStore.DB
-
+	var purchasedTabs int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM guild_bank_tab WHERE guildid = ?", guildID).Scan(&purchasedTabs); err != nil || purchasedTabs <= 0 {
+		return true
+	}
 	var bankTab uint8
 	if bankOnly != 0 {
-		bankTab, _ = r.ReadU8()
-		bankSlot, _ := r.ReadU8()
-		_, _ = r.ReadU32() // itemID
-		bankTab1, _ := r.ReadU8()
-		bankSlot1, _ := r.ReadU8()
-		_, _ = r.ReadU32() // itemID1
+		bankTab, err = r.ReadU8()
+		if err != nil {
+			return false
+		}
+		bankSlot, err := r.ReadU8()
+		if err != nil {
+			return false
+		}
+		if _, err = r.ReadU32(); err != nil {
+			return false
+		}
+		bankTab1, err := r.ReadU8()
+		if err != nil {
+			return false
+		}
+		bankSlot1, err := r.ReadU8()
+		if err != nil {
+			return false
+		}
+		if _, err = r.ReadU32(); err != nil {
+			return false
+		}
+		if _, err = r.ReadU8(); err != nil { // AutoStore is consumed but unused for BankOnly
+			return false
+		}
+		bankItemCount, err := r.ReadU32()
+		if err != nil {
+			return false
+		}
 
-		if bankTab >= guildBankMaxTabs || bankTab1 >= guildBankMaxTabs {
+		if int64(bankTab) >= purchasedTabs || int64(bankTab1) >= purchasedTabs || bankSlot >= guildBankMaxSlots || bankSlot1 >= guildBankMaxSlots {
 			return true
 		}
 
@@ -1465,98 +1517,90 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 				s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildPermissions)
 				return true
 			}
-			if !s.checkAndConsumeGuildBankWithdraw(ctx, guildID, bankTab) {
-				s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildWithdrawLimit)
-				return true
-			}
 		}
 
-		var item1, item2 uint64
-		_ = cdb.QueryRowContext(ctx, "SELECT item_guid FROM guild_bank_item WHERE guildid = ? AND TabId = ? AND SlotId = ?", guildID, bankTab, bankSlot).Scan(&item1)
-		_ = cdb.QueryRowContext(ctx, "SELECT item_guid FROM guild_bank_item WHERE guildid = ? AND TabId = ? AND SlotId = ?", guildID, bankTab1, bankSlot1).Scan(&item2)
-
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_item WHERE guildid = ? AND ((TabId = ? AND SlotId = ?) OR (TabId = ? AND SlotId = ?))", guildID, bankTab, bankSlot, bankTab1, bankSlot1)
-		if item1 != 0 {
-			_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_bank_item (guildid, TabId, SlotId, item_guid) VALUES (?, ?, ?, ?)", guildID, bankTab1, bankSlot1, item1)
-			if bankTab != bankTab1 {
-				var itemEntry, count uint32
-				_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ?", item1).Scan(&itemEntry, &count)
-				s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogMoveItem, s.playerGUID, itemEntry, count, bankTab1)
-			}
-		}
-		if item2 != 0 {
-			_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_bank_item (guildid, TabId, SlotId, item_guid) VALUES (?, ?, ?, ?)", guildID, bankTab, bankSlot, item2)
-			if bankTab != bankTab1 {
-				var itemEntry2, count2 uint32
-				_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ?", item2).Scan(&itemEntry2, &count2)
-				s.logGuildBankEvent(ctx, guildID, bankTab1, guildBankLogMoveItem, s.playerGUID, itemEntry2, count2, bankTab)
+		source := guildMoveLocation{Bank: true, Tab: bankTab1, Slot: bankSlot1}
+		destination := guildMoveLocation{Bank: true, Tab: bankTab, Slot: bankSlot}
+		outcome, moved := s.guildMoveItem(ctx, guildID, source, &destination, false, bankItemCount)
+		if moved && bankTab != bankTab1 {
+			s.logGuildBankEvent(ctx, guildID, bankTab1, guildBankLogMoveItem, s.playerGUID, outcome.Source.Entry, outcome.Count, bankTab)
+			if outcome.Swapped {
+				s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogMoveItem, s.playerGUID, outcome.Destination.Entry, outcome.Destination.Count, bankTab1)
 			}
 		}
 	} else {
-		bankTab, _ = r.ReadU8()
-		bankSlot, _ := r.ReadU8()
-		_, _ = r.ReadU32() // itemID
-		autoStore, _ := r.ReadU8()
+		bankTab, err = r.ReadU8()
+		if err != nil {
+			return false
+		}
+		bankSlot, err := r.ReadU8()
+		if err != nil {
+			return false
+		}
+		if _, err = r.ReadU32(); err != nil {
+			return false
+		}
+		autoStoreByte, err := r.ReadU8()
+		if err != nil {
+			return false
+		}
+		autoStore := autoStoreByte != 0
 
-		if bankTab >= guildBankMaxTabs {
+		if int64(bankTab) >= purchasedTabs || bankSlot >= guildBankMaxSlots && bankSlot != 0xFF {
 			return true
 		}
 
 		var containerSlot, containerItemSlot, toSlot uint8
-		if autoStore != 0 {
-			_, _ = r.ReadU32() // bankItemCount
-			toSlot, _ = r.ReadU8()
-			_, _ = r.ReadU32() // stackCount
-			containerSlot = 0
-			containerItemSlot = 23
+		var splitCount uint32
+		if autoStore {
+			if _, err = r.ReadU32(); err != nil { // BankItemCount is parsed but the handler uses split amount zero for AutoStore
+				return false
+			}
+			if toSlot, err = r.ReadU8(); err != nil {
+				return false
+			}
+			if _, err = r.ReadU32(); err != nil { // StackCount is parsed but ignored by the handler for AutoStore
+				return false
+			}
 		} else {
-			containerSlot, _ = r.ReadU8()
-			containerItemSlot, _ = r.ReadU8()
-			toSlot, _ = r.ReadU8()
-			_, _ = r.ReadU32() // stackCount
+			if containerSlot, err = r.ReadU8(); err != nil {
+				return false
+			}
+			if containerItemSlot, err = r.ReadU8(); err != nil {
+				return false
+			}
+			if toSlot, err = r.ReadU8(); err != nil {
+				return false
+			}
+			if splitCount, err = r.ReadU32(); err != nil {
+				return false
+			}
 		}
 
-		if toSlot != 0 {
+		if autoStore || toSlot != 0 {
 			// Bank -> Player Inventory (Withdraw)
 			if !s.checkGuildBankRights(ctx, guildID, bankTab, false) {
 				s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildPermissions)
 				return true
 			}
-			if !s.checkAndConsumeGuildBankWithdraw(ctx, guildID, bankTab) {
-				s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildWithdrawLimit)
-				return true
+			source := guildMoveLocation{Bank: true, Tab: bankTab, Slot: bankSlot}
+			autoTarget := autoStore || containerSlot == 0xFF && containerItemSlot == 0xFF
+			var destination *guildMoveLocation
+			if !autoTarget {
+				bagKey, ok := s.inventoryBagKey(ctx, containerSlot)
+				if !ok {
+					return true
+				}
+				destination = &guildMoveLocation{Bag: bagKey, Slot: containerItemSlot}
+			} else {
+				destination = &guildMoveLocation{}
 			}
-
-			var bankItemGUID uint64
-			err := cdb.QueryRowContext(ctx, "SELECT item_guid FROM guild_bank_item WHERE guildid = ? AND TabId = ? AND SlotId = ?", guildID, bankTab, bankSlot).Scan(&bankItemGUID)
-			if err == nil && bankItemGUID > 0 {
-				var existingInvItem uint64
-				_ = cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, containerSlot, containerItemSlot).Scan(&existingInvItem)
-
-				var itemEntry, count uint32
-				_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ?", bankItemGUID).Scan(&itemEntry, &count)
-				var existingItemEntry, existingItemCount uint32
-				if existingInvItem > 0 {
-					_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ?", existingInvItem).Scan(&existingItemEntry, &existingItemCount)
+			outcome, moved := s.guildMoveItem(ctx, guildID, source, destination, autoTarget, splitCount)
+			if moved {
+				s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogWithdrawItem, s.playerGUID, outcome.Source.Entry, outcome.Count, 0)
+				if outcome.Swapped {
+					s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogDepositItem, s.playerGUID, outcome.Destination.Entry, outcome.Destination.Count, 0)
 				}
-
-				_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_item WHERE guildid = ? AND TabId = ? AND SlotId = ?", guildID, bankTab, bankSlot)
-				if existingInvItem > 0 && existingItemEntry > 0 && existingItemCount > 0 {
-					_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, containerSlot, containerItemSlot)
-					s.adjustQuestItemCount(ctx, existingItemEntry, existingItemCount, false)
-				}
-				_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, containerSlot, containerItemSlot, bankItemGUID)
-				_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, bankItemGUID)
-				if itemEntry > 0 && count > 0 {
-					s.adjustQuestItemCount(ctx, itemEntry, count, true)
-				}
-
-				if existingInvItem > 0 {
-					_, _ = cdb.ExecContext(ctx, "REPLACE INTO guild_bank_item (guildid, TabId, SlotId, item_guid) VALUES (?, ?, ?, ?)", guildID, bankTab, bankSlot, existingInvItem)
-					_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = 0 WHERE guid = ?", existingInvItem)
-				}
-
-				s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogWithdrawItem, s.playerGUID, itemEntry, count, 0)
 				_ = s.sendInventoryItems(ctx)
 				s.sendPlayerUpdate()
 			}
@@ -1567,35 +1611,18 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 				return true
 			}
 
-			var invItemGUID uint64
-			err := cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, containerSlot, containerItemSlot).Scan(&invItemGUID)
-			if err == nil && invItemGUID > 0 {
-				var existingBankItem uint64
-				_ = cdb.QueryRowContext(ctx, "SELECT item_guid FROM guild_bank_item WHERE guildid = ? AND TabId = ? AND SlotId = ?", guildID, bankTab, bankSlot).Scan(&existingBankItem)
-
-				var itemEntry, count uint32
-				_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ?", invItemGUID).Scan(&itemEntry, &count)
-				var existingItemEntry, existingItemCount uint32
-				if existingBankItem > 0 {
-					_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ?", existingBankItem).Scan(&existingItemEntry, &existingItemCount)
+			bagKey, ok := s.inventoryBagKey(ctx, containerSlot)
+			if !ok {
+				return true
+			}
+			source := guildMoveLocation{Bag: bagKey, Slot: containerItemSlot}
+			destination := guildMoveLocation{Bank: true, Tab: bankTab, Slot: bankSlot}
+			outcome, moved := s.guildMoveItem(ctx, guildID, source, &destination, false, splitCount)
+			if moved {
+				s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogDepositItem, s.playerGUID, outcome.Source.Entry, outcome.Count, 0)
+				if outcome.Swapped {
+					s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogWithdrawItem, s.playerGUID, outcome.Destination.Entry, outcome.Destination.Count, 0)
 				}
-
-				_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, containerSlot, containerItemSlot)
-				if itemEntry > 0 && count > 0 {
-					s.adjustQuestItemCount(ctx, itemEntry, count, false)
-				}
-				_, _ = cdb.ExecContext(ctx, "REPLACE INTO guild_bank_item (guildid, TabId, SlotId, item_guid) VALUES (?, ?, ?, ?)", guildID, bankTab, bankSlot, invItemGUID)
-				_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = 0 WHERE guid = ?", invItemGUID)
-
-				if existingBankItem > 0 {
-					_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, containerSlot, containerItemSlot, existingBankItem)
-					_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, existingBankItem)
-					if existingItemEntry > 0 && existingItemCount > 0 {
-						s.adjustQuestItemCount(ctx, existingItemEntry, existingItemCount, true)
-					}
-				}
-
-				s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogDepositItem, s.playerGUID, itemEntry, count, 0)
 				_ = s.sendInventoryItems(ctx)
 				s.sendPlayerUpdate()
 			}
@@ -1603,6 +1630,636 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 	}
 	s.sendGuildBankList(ctx, bankerGUID, bankTab, false)
 	return true
+}
+
+type guildMoveQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+type guildMoveLocation struct {
+	Bank bool
+	Tab  uint8
+	Bag  int64
+	Slot uint8
+}
+
+type guildMoveItem struct {
+	GUID  uint64
+	Entry uint32
+	Count uint32
+	Flags uint32
+}
+
+type guildMovePlacement struct {
+	Location     guildMoveLocation
+	ExistingGUID uint64
+	Count        uint32
+}
+
+type guildPlayerMoveSlot struct {
+	Location guildMoveLocation
+	Family   uint32
+	Item     guildMoveItem
+	Occupied bool
+}
+
+type guildMoveOutcome struct {
+	Source      guildMoveItem
+	Destination guildMoveItem
+	SourceLoc   guildMoveLocation
+	DestLoc     guildMoveLocation
+	Count       uint32
+	Swapped     bool
+}
+
+func guildReadMoveItem(ctx context.Context, q guildMoveQueryer, guildID, playerGUID uint64, loc guildMoveLocation) (guildMoveItem, error) {
+	var guid, entry, count, flags int64
+	var err error
+	if loc.Bank {
+		err = q.QueryRowContext(ctx, `SELECT gbi.item_guid, ii.itemEntry, ii.count, ii.flags
+			FROM guild_bank_item gbi JOIN item_instance ii ON ii.guid = gbi.item_guid
+			WHERE gbi.guildid = ? AND gbi.TabId = ? AND gbi.SlotId = ? LIMIT 1`, guildID, loc.Tab, loc.Slot).Scan(&guid, &entry, &count, &flags)
+	} else {
+		err = q.QueryRowContext(ctx, `SELECT ci.item, ii.itemEntry, ii.count, ii.flags
+			FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item
+			WHERE ci.guid = ? AND ci.bag = ? AND ci.slot = ? LIMIT 1`, playerGUID, loc.Bag, loc.Slot).Scan(&guid, &entry, &count, &flags)
+	}
+	if err != nil {
+		return guildMoveItem{}, err
+	}
+	if guid <= 0 || entry <= 0 || count <= 0 {
+		return guildMoveItem{}, sql.ErrNoRows
+	}
+	return guildMoveItem{GUID: uint64(guid), Entry: uint32(entry), Count: uint32(count), Flags: uint32(flags)}, nil
+}
+
+func guildClearMoveLocation(ctx context.Context, tx *sql.Tx, guildID, playerGUID uint64, loc guildMoveLocation) error {
+	if loc.Bank {
+		_, err := tx.ExecContext(ctx, "DELETE FROM guild_bank_item WHERE guildid = ? AND TabId = ? AND SlotId = ?", guildID, loc.Tab, loc.Slot)
+		return err
+	}
+	_, err := tx.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", playerGUID, loc.Bag, loc.Slot)
+	return err
+}
+
+func guildInsertMoveLocation(ctx context.Context, tx *sql.Tx, guildID, playerGUID uint64, loc guildMoveLocation, itemGUID uint64) error {
+	if loc.Bank {
+		_, err := tx.ExecContext(ctx, "INSERT INTO guild_bank_item (guildid, TabId, SlotId, item_guid) VALUES (?, ?, ?, ?)", guildID, loc.Tab, loc.Slot, itemGUID)
+		return err
+	}
+	_, err := tx.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", playerGUID, loc.Bag, loc.Slot, itemGUID)
+	return err
+}
+
+func guildMoveOwner(loc guildMoveLocation, playerGUID uint64) uint64 {
+	if loc.Bank {
+		return 0
+	}
+	return playerGUID
+}
+
+func (s *session) guildMoveMaxStack(ctx context.Context, entry uint32) uint32 {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return 1
+	}
+	var maxStack int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(stackable, 1) FROM item_template WHERE entry = ?", entry).Scan(&maxStack); err != nil || maxStack < 1 {
+		return 1
+	}
+	return uint32(maxStack)
+}
+
+func (s *session) guildCloneMoveItem(ctx context.Context, tx *sql.Tx, sourceGUID uint64, count uint32, ownerGUID uint64) (uint64, error) {
+	var entry, creator, giftCreator, duration, flags int64
+	if err := tx.QueryRowContext(ctx, "SELECT itemEntry, creatorGuid, giftCreatorGuid, duration, flags FROM item_instance WHERE guid = ?", sourceGUID).Scan(&entry, &creator, &giftCreator, &duration, &flags); err != nil {
+		return 0, err
+	}
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return 0, fmt.Errorf("world database unavailable for item clone")
+	}
+	var maxDurability, charge1, charge2, charge3, charge4, charge5 int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(MaxDurability, 0), COALESCE(spellcharges_1, 0), COALESCE(spellcharges_2, 0),
+		COALESCE(spellcharges_3, 0), COALESCE(spellcharges_4, 0), COALESCE(spellcharges_5, 0) FROM item_template WHERE entry = ?`, entry).Scan(&maxDurability, &charge1, &charge2, &charge3, &charge4, &charge5); err != nil {
+		return 0, err
+	}
+	var nextGUID int64
+	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextGUID); err != nil || nextGUID <= 0 || nextGUID > int64(^uint32(0)) {
+		return 0, fmt.Errorf("item guid space exhausted")
+	}
+	charges := fmt.Sprintf("%d %d %d %d %d ", charge1, charge2, charge3, charge4, charge5)
+	flags &^= int64(itemInstanceFlagRefundable | itemInstanceFlagBOPTradeable)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO item_instance
+		(guid, itemEntry, owner_guid, creatorGuid, giftCreatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, '')`, nextGUID, entry, ownerGUID, creator, giftCreator, count, duration, charges, flags, strings.Repeat("0 ", 36), maxDurability); err != nil {
+		return 0, err
+	}
+	return uint64(nextGUID), nil
+}
+
+func (s *session) guildBankMovePlan(ctx context.Context, q guildMoveQueryer, guildID uint64, destTab, destSlot uint8, sourceLoc guildMoveLocation, source guildMoveItem, moveCount, maxStack uint32, full bool) ([]guildMovePlacement, uint8) {
+	rows, err := q.QueryContext(ctx, `SELECT gbi.SlotId, gbi.item_guid, ii.itemEntry, ii.count
+		FROM guild_bank_item gbi JOIN item_instance ii ON ii.guid = gbi.item_guid
+		WHERE gbi.guildid = ? AND gbi.TabId = ? ORDER BY gbi.SlotId`, guildID, destTab)
+	if err != nil {
+		return nil, guildEquipErrBankFull
+	}
+	slots := make(map[uint8]guildMoveItem)
+	for rows.Next() {
+		var slot uint8
+		var guid, entry, count int64
+		if rows.Scan(&slot, &guid, &entry, &count) == nil && guid > 0 && entry > 0 && count > 0 {
+			slots[slot] = guildMoveItem{GUID: uint64(guid), Entry: uint32(entry), Count: uint32(count)}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, guildEquipErrBankFull
+	}
+	rows.Close()
+	if sourceLoc.Bank && sourceLoc.Tab == destTab && full {
+		delete(slots, sourceLoc.Slot)
+	}
+	remaining := moveCount
+	placements := make([]guildMovePlacement, 0, 3)
+	add := func(slot uint8, existing uint64, n uint32) {
+		placements = append(placements, guildMovePlacement{Location: guildMoveLocation{Bank: true, Tab: destTab, Slot: slot}, ExistingGUID: existing, Count: n})
+		remaining -= n
+	}
+	if destSlot != 0xFF {
+		if dest, ok := slots[destSlot]; ok {
+			if dest.Entry != source.Entry || dest.Count >= maxStack || maxStack <= 1 {
+				return nil, guildEquipErrItemCantStack
+			}
+			space := maxStack - dest.Count
+			n := remaining
+			if n > space {
+				n = space
+			}
+			add(destSlot, dest.GUID, n)
+		} else {
+			n := remaining
+			if n > maxStack {
+				n = maxStack
+			}
+			add(destSlot, 0, n)
+		}
+	}
+	for slot := uint8(0); slot < guildBankMaxSlots && remaining > 0; slot++ {
+		if slot == destSlot {
+			continue
+		}
+		if dest, ok := slots[slot]; ok && dest.GUID != source.GUID && dest.Entry == source.Entry && dest.Count < maxStack && maxStack > 1 {
+			space := maxStack - dest.Count
+			n := remaining
+			if n > space {
+				n = space
+			}
+			add(slot, dest.GUID, n)
+		}
+	}
+	for slot := uint8(0); slot < guildBankMaxSlots && remaining > 0; slot++ {
+		if slot == destSlot {
+			continue
+		}
+		if _, occupied := slots[slot]; occupied {
+			continue
+		}
+		n := remaining
+		if n > maxStack {
+			n = maxStack
+		}
+		add(slot, 0, n)
+	}
+	if remaining != 0 {
+		return nil, guildEquipErrBankFull
+	}
+	return placements, 0
+}
+
+func guildBagAccepts(itemFamily, bagFamily uint32) bool {
+	return bagFamily == 0 || itemFamily != 0 && itemFamily&bagFamily != 0
+}
+
+func (s *session) guildPlayerMoveSlots(ctx context.Context, q guildMoveQueryer, playerGUID uint64, itemEntry uint32) ([]guildPlayerMoveSlot, uint8) {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return nil, equipErrItemDoesntGoIntoBag
+	}
+	var itemFamily int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(BagFamily, 0) FROM item_template WHERE entry = ?", itemEntry).Scan(&itemFamily); err != nil {
+		return nil, equipErrItemDoesntGoIntoBag
+	}
+	type container struct {
+		key, slots int64
+		family     uint32
+	}
+	containers := []container{{key: 0, slots: int64(bagSlotEnd - bagSlotStart + 1)}}
+	for _, bag := range s.getEquippedBags(ctx, playerGUID) {
+		var family int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(t.BagFamily, 0) FROM item_instance ii
+			JOIN item_template t ON t.entry = ii.itemEntry WHERE ii.guid = ?`, bag.guid).Scan(&family); err != nil {
+			continue
+		}
+		containers = append(containers, container{key: bag.guid, slots: bag.slots, family: uint32(family)})
+	}
+	rows, err := q.QueryContext(ctx, `SELECT ci.bag, ci.slot, ci.item, ii.itemEntry, ii.count, ii.flags
+		FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ((ci.bag = 0 AND ci.slot >= ? AND ci.slot <= ?) OR ci.bag IN
+		(SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= 19 AND slot <= 22))`, playerGUID, bagSlotStart, bagSlotEnd, playerGUID)
+	if err != nil {
+		return nil, equipErrInvFull
+	}
+	type key struct{ bag, slot int64 }
+	items := make(map[key]guildMoveItem)
+	for rows.Next() {
+		var bag, slot, guid, entry, count, flags int64
+		if rows.Scan(&bag, &slot, &guid, &entry, &count, &flags) == nil && guid > 0 && entry > 0 && count > 0 {
+			items[key{bag: bag, slot: slot}] = guildMoveItem{GUID: uint64(guid), Entry: uint32(entry), Count: uint32(count), Flags: uint32(flags)}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, equipErrInvFull
+	}
+	rows.Close()
+	slots := make([]guildPlayerMoveSlot, 0, 16)
+	for index, bag := range containers {
+		first, limit := int64(0), bag.slots
+		if index == 0 {
+			first, limit = int64(bagSlotStart), int64(bagSlotEnd+1)
+		}
+		for slot := first; slot < limit; slot++ {
+			it, occupied := items[key{bag: bag.key, slot: slot}]
+			loc := guildMoveLocation{Bag: bag.key, Slot: uint8(slot)}
+			if !guildBagAccepts(uint32(itemFamily), bag.family) {
+				continue
+			}
+			slots = append(slots, guildPlayerMoveSlot{Location: loc, Family: bag.family, Item: it, Occupied: occupied})
+		}
+	}
+	return slots, 0
+}
+
+func (s *session) guildPlayerMovePlan(ctx context.Context, q guildMoveQueryer, playerGUID uint64, entry, count, maxStack uint32, target *guildMoveLocation) ([]guildMovePlacement, uint8) {
+	slots, errCode := s.guildPlayerMoveSlots(ctx, q, playerGUID, entry)
+	if errCode != 0 {
+		return nil, errCode
+	}
+	remaining := count
+	placements := make([]guildMovePlacement, 0, 3)
+	used := make(map[guildMoveLocation]bool)
+	add := func(slot guildPlayerMoveSlot, existing uint64, n uint32) {
+		placements = append(placements, guildMovePlacement{Location: slot.Location, ExistingGUID: existing, Count: n})
+		used[slot.Location] = true
+		remaining -= n
+	}
+	if target != nil {
+		found := false
+		for _, slot := range slots {
+			if slot.Location != *target {
+				continue
+			}
+			found = true
+			if slot.Occupied {
+				if slot.Item.Entry != entry || slot.Item.Count >= maxStack || maxStack <= 1 {
+					return nil, guildEquipErrItemCantStack
+				}
+				space := maxStack - slot.Item.Count
+				n := remaining
+				if n > space {
+					n = space
+				}
+				add(slot, slot.Item.GUID, n)
+			} else {
+				n := remaining
+				if n > maxStack {
+					n = maxStack
+				}
+				add(slot, 0, n)
+			}
+			break
+		}
+		if !found {
+			return nil, guildEquipErrItemDoesntGoIntoBag
+		}
+	}
+	for _, slot := range slots {
+		if remaining == 0 {
+			break
+		}
+		if used[slot.Location] || !slot.Occupied || slot.Item.Entry != entry || slot.Item.Count >= maxStack || maxStack <= 1 {
+			continue
+		}
+		space := maxStack - slot.Item.Count
+		n := remaining
+		if n > space {
+			n = space
+		}
+		add(slot, slot.Item.GUID, n)
+	}
+	for _, slot := range slots {
+		if remaining == 0 {
+			break
+		}
+		if used[slot.Location] || slot.Occupied {
+			continue
+		}
+		n := remaining
+		if n > maxStack {
+			n = maxStack
+		}
+		add(slot, 0, n)
+	}
+	if remaining != 0 {
+		return nil, equipErrInvFull
+	}
+	return placements, 0
+}
+
+func guildMoveClear(ctx context.Context, tx *sql.Tx, guildID, playerGUID uint64, loc guildMoveLocation) error {
+	return guildClearMoveLocation(ctx, tx, guildID, playerGUID, loc)
+}
+
+func (s *session) guildApplyMovePlan(ctx context.Context, tx *sql.Tx, guildID, playerGUID uint64, sourceLoc guildMoveLocation, source guildMoveItem, moveCount uint32, full bool, placements []guildMovePlacement) error {
+	if full {
+		if err := guildMoveClear(ctx, tx, guildID, playerGUID, sourceLoc); err != nil {
+			return err
+		}
+	} else if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", moveCount, source.GUID); err != nil {
+		return err
+	}
+	lastNew := -1
+	if full {
+		for i, placement := range placements {
+			if placement.ExistingGUID == 0 {
+				lastNew = i
+			}
+		}
+	}
+	for i, placement := range placements {
+		if placement.ExistingGUID != 0 {
+			if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET count = count + ? WHERE guid = ?", placement.Count, placement.ExistingGUID); err != nil {
+				return err
+			}
+			continue
+		}
+		var guid uint64
+		if i == lastNew {
+			guid = source.GUID
+			if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET count = ?, owner_guid = ? WHERE guid = ?", placement.Count, guildMoveOwner(placement.Location, playerGUID), guid); err != nil {
+				return err
+			}
+		} else {
+			var err error
+			guid, err = s.guildCloneMoveItem(ctx, tx, source.GUID, placement.Count, guildMoveOwner(placement.Location, playerGUID))
+			if err != nil {
+				return err
+			}
+		}
+		if err := guildInsertMoveLocation(ctx, tx, guildID, playerGUID, placement.Location, guid); err != nil {
+			return err
+		}
+	}
+	if full && lastNew < 0 {
+		_, err := tx.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", source.GUID)
+		return err
+	}
+	return nil
+}
+
+func (s *session) guildMoveCanSwap(ctx context.Context, sourceLoc, destLoc guildMoveLocation, source, destination guildMoveItem) uint8 {
+	if sourceLoc.Bank && destLoc.Bank {
+		if source.Flags&itemInstanceFlagSoulbound != 0 || destination.Flags&itemInstanceFlagSoulbound != 0 {
+			return guildEquipErrCantDropSoulbound
+		}
+		return 0
+	}
+	if destLoc.Bank && source.Flags&itemInstanceFlagSoulbound != 0 || sourceLoc.Bank && destination.Flags&itemInstanceFlagSoulbound != 0 {
+		return guildEquipErrCantDropSoulbound
+	}
+	if !destLoc.Bank {
+		if !s.guildItemFitsPlayerBag(ctx, destLoc.Bag, source.Entry) {
+			return guildEquipErrItemDoesntGoIntoBag
+		}
+	}
+	if !sourceLoc.Bank {
+		if !s.guildItemFitsPlayerBag(ctx, sourceLoc.Bag, destination.Entry) {
+			return guildEquipErrItemDoesntGoIntoBag
+		}
+	}
+	if !destLoc.Bank && s.guildItemIsNonemptyBag(ctx, destLoc, destination) {
+		return equipErrCanOnlyDoWithEmptyBags
+	}
+	return 0
+}
+
+func (s *session) guildItemFitsPlayerBag(ctx context.Context, bagKey int64, entry uint32) bool {
+	if bagKey == 0 {
+		return true
+	}
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	var itemFamily, bagFamily int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(BagFamily, 0) FROM item_template WHERE entry = ?", entry).Scan(&itemFamily); err != nil {
+		return false
+	}
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(t.BagFamily, 0) FROM item_instance ii
+		JOIN item_template t ON t.entry = ii.itemEntry WHERE ii.guid = ?`, bagKey).Scan(&bagFamily); err != nil {
+		return false
+	}
+	return guildBagAccepts(uint32(itemFamily), uint32(bagFamily))
+}
+
+func (s *session) guildItemIsNonemptyBag(ctx context.Context, loc guildMoveLocation, item guildMoveItem) bool {
+	if loc.Bank || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	var slots int64
+	if s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(ContainerSlots, 0) FROM item_template WHERE entry = ?", item.Entry).Scan(&slots) != nil || slots <= 0 {
+		return false
+	}
+	return !s.isBagEmpty(ctx, int64(item.GUID))
+}
+
+func (s *session) guildPlayerLocationValid(ctx context.Context, playerGUID uint64, loc guildMoveLocation) bool {
+	if loc.Bag == 0 {
+		return loc.Slot >= bagSlotStart && loc.Slot <= bagSlotEnd
+	}
+	var slots int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(t.ContainerSlots, 0) FROM character_inventory ci
+		JOIN item_instance ii ON ii.guid = ci.item JOIN item_template t ON t.entry = ii.itemEntry
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.item = ? AND ci.slot >= 19 AND ci.slot <= 22 LIMIT 1`, playerGUID, loc.Bag).Scan(&slots); err != nil {
+		return false
+	}
+	return loc.Slot < uint8(slots)
+}
+
+func guildSameMoveLocation(a, b guildMoveLocation) bool {
+	return a.Bank == b.Bank && a.Tab == b.Tab && a.Bag == b.Bag && a.Slot == b.Slot
+}
+
+func guildFullItemGUID(guid uint64) uint64 { return guid | (uint64(0x4000) << 48) }
+
+func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc guildMoveLocation, destination *guildMoveLocation, autoStore bool, requestedCount uint32) (guildMoveOutcome, bool) {
+	cdb := s.server.CharactersStore.DB
+	s.server.inventoryMu.Lock()
+	defer s.server.inventoryMu.Unlock()
+	tx, err := cdb.BeginTx(ctx, nil)
+	if err != nil {
+		return guildMoveOutcome{}, false
+	}
+	rollback := func(code uint8, itemGUID uint64) (guildMoveOutcome, bool) {
+		_ = tx.Rollback()
+		if code != 0 {
+			s.sendEquipError(code, guildFullItemGUID(itemGUID))
+		}
+		return guildMoveOutcome{}, false
+	}
+	source, err := guildReadMoveItem(ctx, tx, uint64(guildID), s.playerGUID, sourceLoc)
+	if err != nil {
+		_ = tx.Rollback()
+		return guildMoveOutcome{}, false
+	}
+	if !sourceLoc.Bank && !s.guildPlayerLocationValid(ctx, s.playerGUID, sourceLoc) {
+		_ = tx.Rollback()
+		s.sendEquipError(equipErrOk, 0)
+		return guildMoveOutcome{}, false
+	}
+	if destination != nil && !destination.Bank && !autoStore && !s.guildPlayerLocationValid(ctx, s.playerGUID, *destination) {
+		_ = tx.Rollback()
+		s.sendEquipError(equipErrOk, 0)
+		return guildMoveOutcome{}, false
+	}
+	if destination != nil && !autoStore && guildSameMoveLocation(sourceLoc, *destination) {
+		_ = tx.Rollback()
+		return guildMoveOutcome{}, false
+	}
+	if requestedCount > source.Count {
+		_ = tx.Rollback()
+		return guildMoveOutcome{}, false
+	}
+	moveCount, full := requestedCount, false
+	if moveCount == 0 || moveCount == source.Count {
+		moveCount, full = source.Count, true
+	}
+	if !sourceLoc.Bank {
+		if s.guildItemIsNonemptyBag(ctx, sourceLoc, source) {
+			return rollback(equipErrCanOnlyDoWithEmptyBags, source.GUID)
+		}
+	}
+	if destination != nil && destination.Bank && source.Flags&itemInstanceFlagSoulbound != 0 {
+		return rollback(guildEquipErrCantDropSoulbound, source.GUID)
+	}
+	maxStack := s.guildMoveMaxStack(ctx, source.Entry)
+	var destItem guildMoveItem
+	destExists := false
+	if destination != nil && !autoStore {
+		if it, readErr := guildReadMoveItem(ctx, tx, uint64(guildID), s.playerGUID, *destination); readErr == nil {
+			destItem, destExists = it, true
+		} else if readErr != sql.ErrNoRows {
+			_ = tx.Rollback()
+			return guildMoveOutcome{}, false
+		}
+	}
+	consumeWithdraw := func(swapping bool) bool {
+		if destination == nil {
+			return true
+		}
+		if sourceLoc.Bank && (!destination.Bank || sourceLoc.Tab != destination.Tab) && !guildConsumeBankWithdraw(ctx, tx, s.playerGUID, guildID, sourceLoc.Tab) {
+			return false
+		}
+		if swapping && destination.Bank && (!sourceLoc.Bank || sourceLoc.Tab != destination.Tab) && !guildConsumeBankWithdraw(ctx, tx, s.playerGUID, guildID, destination.Tab) {
+			return false
+		}
+		return true
+	}
+	var placements []guildMovePlacement
+	var storeErr uint8
+	if destination != nil && destination.Bank {
+		placements, storeErr = s.guildBankMovePlan(ctx, tx, uint64(guildID), destination.Tab, destination.Slot, sourceLoc, source, moveCount, maxStack, full)
+	} else {
+		var target *guildMoveLocation
+		if destination != nil && !autoStore {
+			target = destination
+		}
+		placements, storeErr = s.guildPlayerMovePlan(ctx, tx, s.playerGUID, source.Entry, moveCount, maxStack, target)
+	}
+	if storeErr != 0 && destination != nil && destExists && full {
+		if destination.Bank && !sourceLoc.Bank && !s.checkGuildBankRights(ctx, guildID, destination.Tab, false) {
+			return rollback(equipErrItemsCantBeSwapped, source.GUID)
+		}
+		if swapErr := s.guildMoveCanSwap(ctx, sourceLoc, *destination, source, destItem); swapErr != 0 {
+			return rollback(swapErr, source.GUID)
+		}
+		if !sourceLoc.Bank && s.guildItemIsNonemptyBag(ctx, sourceLoc, source) || !destination.Bank && s.guildItemIsNonemptyBag(ctx, *destination, destItem) {
+			return rollback(equipErrCanOnlyDoWithEmptyBags, source.GUID)
+		}
+		if !consumeWithdraw(true) {
+			_ = tx.Rollback()
+			s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildWithdrawLimit)
+			return guildMoveOutcome{}, false
+		}
+		if err := guildSwapMoveItems(ctx, tx, uint64(guildID), s.playerGUID, sourceLoc, *destination, source, destItem); err != nil {
+			return rollback(0, source.GUID)
+		}
+		if err := tx.Commit(); err != nil {
+			return guildMoveOutcome{}, false
+		}
+		if !sourceLoc.Bank {
+			s.adjustQuestItemCount(ctx, source.Entry, source.Count, false)
+		}
+		if !destination.Bank {
+			s.adjustQuestItemCount(ctx, destItem.Entry, destItem.Count, false)
+			s.adjustQuestItemCount(ctx, source.Entry, moveCount, true)
+		}
+		if !sourceLoc.Bank {
+			s.adjustQuestItemCount(ctx, destItem.Entry, destItem.Count, true)
+		}
+		return guildMoveOutcome{Source: source, Destination: destItem, SourceLoc: sourceLoc, DestLoc: *destination, Count: moveCount, Swapped: true}, true
+	}
+	if storeErr != 0 {
+		return rollback(storeErr, source.GUID)
+	}
+	if !consumeWithdraw(false) {
+		_ = tx.Rollback()
+		s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildWithdrawLimit)
+		return guildMoveOutcome{}, false
+	}
+	if err := s.guildApplyMovePlan(ctx, tx, uint64(guildID), s.playerGUID, sourceLoc, source, moveCount, full, placements); err != nil {
+		return rollback(0, source.GUID)
+	}
+	if err := tx.Commit(); err != nil {
+		return guildMoveOutcome{}, false
+	}
+	if !sourceLoc.Bank && full {
+		s.adjustQuestItemCount(ctx, source.Entry, source.Count, false)
+	}
+	if destination != nil && !destination.Bank {
+		s.adjustQuestItemCount(ctx, source.Entry, moveCount, true)
+	}
+	return guildMoveOutcome{Source: source, SourceLoc: sourceLoc, Count: moveCount, DestLoc: guildMoveLocation{Bank: destination != nil && destination.Bank}}, true
+}
+
+func guildSwapMoveItems(ctx context.Context, tx *sql.Tx, guildID, playerGUID uint64, sourceLoc, destination guildMoveLocation, source, dest guildMoveItem) error {
+	if err := guildMoveClear(ctx, tx, guildID, playerGUID, sourceLoc); err != nil {
+		return err
+	}
+	if err := guildMoveClear(ctx, tx, guildID, playerGUID, destination); err != nil {
+		return err
+	}
+	if err := guildInsertMoveLocation(ctx, tx, guildID, playerGUID, destination, source.GUID); err != nil {
+		return err
+	}
+	if err := guildInsertMoveLocation(ctx, tx, guildID, playerGUID, sourceLoc, dest.GUID); err != nil {
+		return err
+	}
+	ownerSource, ownerDest := guildMoveOwner(destination, playerGUID), guildMoveOwner(sourceLoc, playerGUID)
+	if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", ownerSource, source.GUID); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", ownerDest, dest.GUID)
+	return err
 }
 
 var guildBankTabPrices = []uint32{

@@ -32,9 +32,13 @@ func (s *Server) runtimeNpcBotCountByOwner(ownerGUID uint64) uint8 {
 	if s == nil || ownerGUID == 0 || s.Features == nil || s.Features.NPCBots == nil {
 		return 0
 	}
+	owner := s.findSessionByGUID(ownerGUID)
+	if owner == nil || owner.player == nil {
+		return 0
+	}
 	s.motionMu.Lock()
 	runtime := make([]NpcBotRuntimeState, 0)
-	for _, motion := range s.creatureMotion {
+	for _, motion := range s.motionMapLocked(owner.player.Map, owner.player.InstanceID) {
 		if motion != nil && motion.OwnerGUID == ownerGUID && motion.PetID == 0 {
 			runtime = append(runtime, NpcBotRuntimeState{GUID: motion.GUID, OwnerGUID: motion.OwnerGUID, Entry: motion.Entry, PetID: motion.PetID})
 		}

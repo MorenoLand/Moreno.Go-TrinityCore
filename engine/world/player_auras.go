@@ -422,13 +422,16 @@ func (s *session) sendVisibleCreatureAuras(state playerState) {
 		return
 	}
 	type auraTarget struct {
-		guid  uint64
+		key   creatureAuraKey
 		auras []*activeAura
 		x, y  float32
 	}
 	s.server.auraMu.Lock()
 	targets := make([]auraTarget, 0, len(s.server.activeCreatureAuras))
-	for guid, auraMap := range s.server.activeCreatureAuras {
+	for key, auraMap := range s.server.activeCreatureAuras {
+		if key.Map != state.Map || key.InstanceID != state.InstanceID {
+			continue
+		}
 		if len(auraMap) == 0 {
 			continue
 		}
@@ -439,33 +442,28 @@ func (s *session) sendVisibleCreatureAuras(state playerState) {
 			}
 		}
 		if len(auras) > 0 {
-			targets = append(targets, auraTarget{guid: guid, auras: auras})
+			targets = append(targets, auraTarget{key: key, auras: auras})
 		}
 	}
 	s.server.auraMu.Unlock()
 	s.server.motionMu.Lock()
 	for index := range targets {
-		motion := s.server.creatureMotion[targets[index].guid]
-		if motion == nil {
-			low := uint32(targets[index].guid & 0x00FFFFFF)
-			entry := uint32((targets[index].guid >> 24) & 0x00FFFFFF)
-			motion = s.server.creatureMotion[creatureWorldGUID(low, entry)]
-		}
+		motion := s.server.findCreatureMotionLocked(targets[index].key.Map, targets[index].key.InstanceID, targets[index].key.GUID)
 		if motion != nil && motion.Map == state.Map {
 			targets[index].x, targets[index].y = motion.X, motion.Y
 		} else {
-			targets[index].guid = 0
+			targets[index].key.GUID = 0
 		}
 	}
 	s.server.motionMu.Unlock()
 	distance := float64(s.server.Config.VisibilityDistanceContinents)
 	for _, target := range targets {
-		if target.guid == 0 || math.Hypot(float64(target.x-state.X), float64(target.y-state.Y)) > distance {
+		if target.key.GUID == 0 || math.Hypot(float64(target.x-state.X), float64(target.y-state.Y)) > distance {
 			continue
 		}
 		records := auraUpdateRecords(target.auras)
 		if len(records) > 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE_ALL), protocol.BuildAuraUpdateAll(target.guid, records), true)
+			_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE_ALL), protocol.BuildAuraUpdateAll(target.key.GUID, records), true)
 		}
 	}
 }

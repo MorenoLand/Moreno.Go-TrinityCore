@@ -130,6 +130,7 @@ const (
 	playerRuneRegenStart                          = 1305
 	unitFlagPlayerControlled               uint32 = 0x00000008
 	unitFlagMount                          uint32 = 0x08000000
+	unitFlagSkinnable                      uint32 = 0x04000000
 	unitFlag2RegeneratePower               uint32 = 0x00000800
 	unitFlagInCombat                       uint32 = 0x00080000
 )
@@ -470,16 +471,13 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	_ = s.loadPlayerPacketsState(ctx, &state)
 
 	_ = s.loadOptionalPlayerState(ctx, &state)
-	validMap := true
-	if s.server.Data != nil {
-		_, found, mapErr := s.server.Data.Map(state.Map)
-		validMap = mapErr == nil && found
+	if err := s.recoverLoginMapCreationFailure(ctx, &state); err != nil {
+		return playerState{}, err
 	}
-	if !validMovementPosition(state.X, state.Y, state.Z, state.Orientation) || !validMap {
-		s.debug("invalid persisted player position recovered", "guid", state.GUID, "map", state.Map, "x", state.X, "y", state.Y, "z", state.Z)
-		state.Map, state.InstanceID = state.HomebindMap, 0
-		state.X, state.Y, state.Z = state.HomebindX, state.HomebindY, state.HomebindZ
-		state.TransportGUID, state.TransportX, state.TransportY, state.TransportZ, state.TransportO = 0, 0, 0, 0, 0
+	if s.server.Data != nil {
+		if mapEntry, found, err := s.server.Data.Map(state.Map); err == nil && found && !mapEntry.IsDungeon() && !mapEntry.IsBattleground() && !mapEntry.IsBattleArena() {
+			state.InstanceID = 0
+		}
 	}
 	if state.ChosenTitle != 0 {
 		field := state.ChosenTitle / 32
@@ -3272,16 +3270,6 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 			}
 		}
 	}
-	if targetSelf {
-		_ = mask.Set(unitFieldLevel)
-		_ = mask.Set(unitFieldBytes0)
-		_ = mask.Set(unitFieldMaxLevel)
-		_ = mask.Set(unitFieldNextLevelXP)
-		_ = mask.Set(unitFieldXP)
-	}
-	if state.Health == 0 {
-		_ = mask.Set(unitFieldHealth)
-	}
 	block := protocol.NewBuffer(256)
 	block.WriteU8(protocol.UpdateCreateObject2)
 	block.WritePackedGUID(state.GUID)
@@ -3346,8 +3334,20 @@ func playerFieldPartyMember(index int) bool {
 	return index >= playerQuestLogStart && index < playerQuestLogStart+playerQuestLogSlots*5 && (index-playerQuestLogStart)%5 == 0
 }
 
+var playerFieldSourceVisibleToSelf = [...]uint32{
+	0xFFFFFFDF, 0xFFFFFFFF, 0xFFFB1FFF, 0xFFFFFFFF, 0xBFF7FFFF, 0xEF7BDEF7, 0x7BDEF7BD, 0xDEF7BDEF,
+	0xFFBDEF7B, 0xFFFFFFFF, 0xFFFFFFF7, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+	0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+	0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+	0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+	0xFFFFFFFF, 0x00003FFF,
+}
+
 func playerFieldVisibleToRecipient(index int, targetSelf, partyMember bool) bool {
-	return targetSelf || playerFieldPublic(index) || partyMember && playerFieldPartyMember(index)
+	if targetSelf {
+		return index >= 0 && index < playerValuesCount && (playerFieldSourceVisibleToSelf[index/32]&(uint32(1)<<uint(index%32)) != 0 || playerFieldPartyMember(index))
+	}
+	return playerFieldPublic(index) || partyMember && playerFieldPartyMember(index)
 }
 
 func IsPlayerFieldVisibleToRecipient(index int, targetSelf, partyMember bool) bool {

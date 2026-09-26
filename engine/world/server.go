@@ -52,230 +52,257 @@ var applicationStartTime = time.Now()
 func gameTimeMS() uint32 { return uint32(time.Since(applicationStartTime) / time.Millisecond) }
 
 type Server struct {
-	AuthStore               *database.Store
-	CharactersStore         *database.Store
-	WorldStore              *database.Store
-	Logger                  *slog.Logger
-	TraceRecorder           *protocoltrace.Recorder
-	RealmID                 uint32
-	Config                  config.Config
-	clientCacheVersion      uint32
-	Features                *Features
-	Data                    *wotlk.Store
-	sessionsMu              sync.RWMutex
-	sessions                map[*session]struct{}
-	objectsMu               sync.RWMutex
-	inventoryMu             sync.Mutex
-	hiddenGameObjects       map[uint64]struct{}
-	dynamicGameObjects      map[uint64]*dynamicGameObjectState
-	nextDynamicGOGUID       uint32
-	dynamicSpellObjects     map[uint64]*dynamicSpellObjectState
-	nextDynamicSpellGUID    uint32
-	wsgMu                   sync.RWMutex
-	wsgState                map[uint32]*wsgBattlegroundState
-	abMu                    sync.RWMutex
-	abState                 map[uint32]*abBattlegroundState
-	eotsMu                  sync.RWMutex
-	eotsState               map[uint32]*eotsBattlegroundState
-	avMu                    sync.RWMutex
-	avState                 map[uint32]*avBattlegroundState
-	saMu                    sync.RWMutex
-	saState                 map[uint32]*saBattlegroundState
-	icMu                    sync.RWMutex
-	icState                 map[uint32]*icBattlegroundState
-	arenaMu                 sync.RWMutex
-	arenaState              map[uint32]*arenaBattlegroundState
-	wgMu                    sync.RWMutex
-	wgState                 *wgBattlegroundState
-	totemMu                 sync.RWMutex
-	activeTotems            map[uint64][4]*activeTotem
-	nextDynamicCreatureGUID uint32
-	nextPetGUID             uint32
-	creatureAuras           map[uint64]map[uint32]struct{}
-	auraMu                  sync.Mutex
-	activeCreatureAuras     map[uint64]map[uint32]*activeAura
-	petAuraStackMu          sync.Mutex
-	petAuraStackCache       *petAuraStackCache
-	channelsMu              sync.RWMutex
-	channels                map[string]*worldChannel
-	vehicleMu               sync.RWMutex
-	vehicleKits             map[uint64]*VehicleKit
-	vehicleSeatAddons       map[uint32]*VehicleSeatAddon
-	vehicleAccessories      map[uint32][]VehicleAccessory
-	groupsMu                sync.RWMutex
-	groups                  map[uint64]*groupState // groupID -> groupState
-	motionMu                sync.Mutex
-	creatureMotion          map[uint64]*creatureMotion
-	creatureRespawns        map[uint32]creatureRespawn
-	transportMu             sync.Mutex
-	transports              map[uint32]*continentTransport
-	lootMu                  sync.Mutex
-	creatureLoot            map[uint64]*activeLootState
-	creatureLootOwners      map[uint64]lootOwnerState
-	vendorMu                sync.Mutex
-	vendorStock             map[vendorStockKey]*vendorStockState
-	statsMu                 sync.RWMutex
-	creatureStatsCache      map[uint32]creatureStats
-	groupRolls              map[string]*activeGroupRoll
-	spiritWaveMu            sync.Mutex
-	lastSpiritWave          time.Time
-	spiritReviveQueue       map[uint64]uint64 // playerGUID -> spiritGuideGUID
-	creatureTextMgr         *creatureTextMgr
-	wardenCheckMgr          *wardenCheckMgr
-	spellChainMu            sync.RWMutex
-	spellChainLoaded        bool
-	prevSpellInChain        map[uint32]uint32
-	spellCustomAttrMu       sync.RWMutex
-	spellCustomAttrLoaded   bool
-	spellCustomAttr         map[uint32]uint32
-	itemTemplateMu          sync.RWMutex
-	itemTemplates           map[uint32]itemTemplateClassInfo
-	terrainMu               sync.Mutex
-	terrainTiles            map[uint64][]terrainSpawn
-	terrainTileKnown        map[uint64]bool
-	terrainModels           map[string]*terrainModel
-	weatherMu               sync.Mutex
-	weather                 map[uint32]*zoneWeather
-	stopOnce                sync.Once
+	AuthStore                 *database.Store
+	CharactersStore           *database.Store
+	WorldStore                *database.Store
+	Logger                    *slog.Logger
+	worldTimeStartedAt        time.Time
+	TraceRecorder             *protocoltrace.Recorder
+	RealmID                   uint32
+	Config                    config.Config
+	clientCacheVersion        uint32
+	Features                  *Features
+	Data                      *wotlk.Store
+	sessionsMu                sync.RWMutex
+	sessions                  map[*session]struct{}
+	objectsMu                 sync.RWMutex
+	characterGUIDMu           sync.Mutex
+	characterGUIDNext         uint64
+	characterGUIDReady        bool
+	instanceIDMu              sync.Mutex
+	reservedInstanceIDs       map[uint32]struct{}
+	instanceAdmissionMu       sync.Mutex
+	pendingInstanceAdmissions map[instanceAdmissionKey]uint32
+	instanceEncounters        map[instanceAdmissionKey]map[uint64]struct{}
+	inventoryMu               sync.Mutex
+	hiddenGameObjects         map[uint64]struct{}
+	instanceHiddenGameObjects map[instanceAdmissionKey]map[uint64]struct{}
+	dynamicGameObjects        map[uint64]*dynamicGameObjectState
+	instanceGameObjects       map[instanceAdmissionKey]map[uint64]*dynamicGameObjectState
+	nextDynamicGOGUID         uint32
+	dynamicSpellObjects       map[uint64]*dynamicSpellObjectState
+	nextDynamicSpellGUID      uint32
+	wsgMu                     sync.RWMutex
+	wsgState                  map[uint32]*wsgBattlegroundState
+	abMu                      sync.RWMutex
+	abState                   map[uint32]*abBattlegroundState
+	eotsMu                    sync.RWMutex
+	eotsState                 map[uint32]*eotsBattlegroundState
+	avMu                      sync.RWMutex
+	avState                   map[uint32]*avBattlegroundState
+	saMu                      sync.RWMutex
+	saState                   map[uint32]*saBattlegroundState
+	icMu                      sync.RWMutex
+	icState                   map[uint32]*icBattlegroundState
+	arenaMu                   sync.RWMutex
+	arenaState                map[uint32]*arenaBattlegroundState
+	wgMu                      sync.RWMutex
+	wgState                   *wgBattlegroundState
+	totemMu                   sync.RWMutex
+	activeTotems              map[uint64][4]*activeTotem
+	nextDynamicCreatureGUID   uint32
+	nextPetGUID               map[instanceAdmissionKey]uint32
+	creatureAuras             map[creatureAuraKey]map[uint32]struct{}
+	auraMu                    sync.Mutex
+	activeCreatureAuras       map[creatureAuraKey]map[uint32]*activeAura
+	petAuraStackMu            sync.Mutex
+	petAuraStackCache         *petAuraStackCache
+	channelsMu                sync.RWMutex
+	channels                  map[string]*worldChannel
+	vehicleMu                 sync.RWMutex
+	vehicleKits               map[uint64]*VehicleKit
+	instanceVehicleKits       map[vehicleKitKey]*VehicleKit
+	vehicleSeatAddons         map[uint32]*VehicleSeatAddon
+	vehicleAccessories        map[uint32][]VehicleAccessory
+	groupsMu                  sync.RWMutex
+	groups                    map[uint64]*groupState // groupID -> groupState
+	motionMu                  sync.Mutex
+	instanceCreatureMotion    map[instanceAdmissionKey]map[uint64]*creatureMotion
+	creatureRespawns          map[uint32]creatureRespawn
+	instanceCreatureRespawns  map[instanceAdmissionKey]map[uint32]creatureRespawn
+	transportMu               sync.Mutex
+	transports                map[uint32]*continentTransport
+	lootMu                    sync.Mutex
+	creatureLoot              map[lootObjectKey]*activeLootState
+	creatureLootOwners        map[lootObjectKey]lootOwnerState
+	vendorMu                  sync.Mutex
+	vendorStock               map[vendorStockKey]*vendorStockState
+	statsMu                   sync.RWMutex
+	creatureStatsCache        map[uint32]creatureStats
+	groupRolls                map[lootRollKey]*activeGroupRoll
+	spiritWaveMu              sync.Mutex
+	lastSpiritWave            time.Time
+	spiritReviveQueue         map[uint64]uint64 // playerGUID -> spiritGuideGUID
+	creatureTextMgr           *creatureTextMgr
+	wardenCheckMgr            *wardenCheckMgr
+	spellChainMu              sync.RWMutex
+	spellChainLoaded          bool
+	prevSpellInChain          map[uint32]uint32
+	spellCustomAttrMu         sync.RWMutex
+	spellCustomAttrLoaded     bool
+	spellCustomAttr           map[uint32]uint32
+	itemTemplateMu            sync.RWMutex
+	itemTemplates             map[uint32]itemTemplateClassInfo
+	terrainMu                 sync.Mutex
+	terrainTiles              map[uint64][]terrainSpawn
+	terrainTileKnown          map[uint64]bool
+	terrainModels             map[string]*terrainModel
+	weatherMu                 sync.Mutex
+	weather                   map[uint32]*zoneWeather
+	stopOnce                  sync.Once
 }
 
 type session struct {
-	server                    *Server
-	conn                      net.Conn
-	authSeed                  [4]byte
-	crypt                     *crypto.AuthCrypt
-	authed                    bool
-	accountID                 uint32
-	accountName               string
-	security                  uint8
-	accountExpansion          uint8
-	superseded                bool
-	muteTime                  int64
-	speakTime                 int64
-	speakCount                uint32
-	gmChat                    bool
-	gmMessage                 bool
-	twoSideChat               bool
-	twoSideWhoList            bool
-	whoSeeAllSecurityLevels   bool
-	legitimate                map[uint64]struct{}
-	characterNames            map[uint64]enumCharacter
-	mounts                    *MountState
-	playerGUID                uint64
-	playerLoading             bool
-	playerLoaded              bool
-	worldReady                atomic.Bool
-	farTeleportPending        bool
-	randomBGWinner            bool
-	bgData                    battlegroundLoginData
-	instanceLockTimes         map[uint32]int64
-	player                    *playerState
-	visiblePlayersMu          sync.Mutex
-	visiblePlayers            map[uint64]struct{}
-	logoutAt                  time.Time
-	gameTimeStartedAt         time.Time
-	writeMu                   sync.Mutex
-	movementMu                sync.RWMutex
-	captureUpdatePackets      bool
-	traceStatePrefix          string
-	loginCreateBlock          []byte
-	capturedUpdatePackets     []*protocol.Packet
-	selection                 uint64
-	auras                     map[uint32]struct{}
-	auraSlots                 map[uint32]uint8
-	activeAuras               map[uint32]*activeAura
-	ownerPetAuraMu            sync.Mutex
-	ownerPetAuraSources       map[ownerPetAuraKey]ownerPetAuraSource
-	ownerPetAuraSourcesLoaded bool
-	scale                     float32
-	emoteState                uint32
-	playerLocked              bool
-	rooted                    bool
-	attackTarget              uint64
-	duelPartner               uint64
-	duelArbiterX              float32
-	duelArbiterY              float32
-	duelArbiterZ              float32
-	duelOutOfBounds           time.Time
-	lastSwing                 time.Time
-	lastOffhandSwing          time.Time
-	lastRangedSwing           time.Time
-	autoRepeatSpell           uint32
-	autoRepeatTarget          uint64
-	isMoving                  bool
-	isFalling                 bool
-	lastMovementInfo          movementInfo
-	lastMovementInfoSet       bool
-	lastFallZ                 float32
-	lastFallTime              uint32
-	isSwimming                bool
-	breathTimer               int32
-	lastBreathTick            time.Time
-	inDarkWater               bool
-	fatigueTimer              int32
-	lastFatigueTick           time.Time
-	lastRegenTick             time.Time
-	lastCastTime              time.Time
-	lastCombatTime            time.Time
-	contestedPVPEnd           time.Time
-	loadedCorpseBones         bool
-	pvpEnd                    time.Time
-	pvpHostile                bool
-	areaID                    uint32
-	lastZoneUpdate            time.Time
-	logoutHook                bool
-	questStatusSent           bool
-	timeSyncNextCounter       uint32
-	timeSyncDue               time.Time
-	gossip                    *gossipMenuState
-	gossipClosed              bool
-	channels                  map[string]struct{}
-	tutorials                 [8]uint32
-	tutorialsInDB             bool
-	unreadMails               uint32
-	nextMailDelivery          int64
-	activeLoot                *activeLootState
-	trade                     *playerTradeState
-	diminishing               [DiminishingMax]diminishingReturn
-	procICD                   map[uint32]time.Time
-	guildInvitedID            uint32
-	guildInviterGUID          uint64
-	groupID                   uint64 // GUID of the group this player is in (0 = no group)
-	pendingGroupLeader        uint64 // GUID of the player who invited us (0 = no invite pending)
-	lastStreamX               float32
-	lastStreamY               float32
-	lastStreamZ               float32
-	latency                   atomic.Uint32
-	lastPing                  time.Time
-	overSpeedPings            uint32
-	deathExpireTime           int64
-	deathTimer                time.Time
-	resurrection              *resurrectionData
-	earnedAchievements        map[uint32]uint32
-	criteriaProgress          map[uint32]*criteriaProgressState
-	timedCriteria             map[uint32]*time.Timer
-	inFlight                  bool
-	buyback                   [12]*buybackSlot
-	currentBuybackSlot        uint8
-	arenaTeamInvited          uint32
-	bgQueues                  [2]bgQueueEntry
-	afkReporters              map[uint64]struct{}
-	targetGlyphSlot           uint8
-	activeCast                *activeCastState
-	summonExpire              time.Time
-	summonerGUID              uint64
-	activeChannel             *activeChannelState
-	castMu                    sync.Mutex
-	schoolLockouts            map[uint32]int64
-	gcdEnd                    int64 // Unix millisecond timestamp when Global Cooldown expires
-	pendingBindInstanceID     uint64
-	pendingBindMapID          uint32
-	pendingBindDiff           uint32
-	pendingBindTimer          uint32
-	sharingQuestID            uint32
-	sharingQuestSender        uint64
-	warden                    *wardenSession
-	playerStateMu             sync.RWMutex
+	server                       *Server
+	conn                         net.Conn
+	authSeed                     [4]byte
+	crypt                        *crypto.AuthCrypt
+	authed                       bool
+	accountID                    uint32
+	accountName                  string
+	security                     uint8
+	raidMapDifficulty            uint8
+	raidMapDifficultyInitialized bool
+	accountExpansion             uint8
+	superseded                   bool
+	muteTime                     int64
+	speakTime                    int64
+	speakCount                   uint32
+	gmChat                       bool
+	gmMessage                    bool
+	twoSideChat                  bool
+	twoSideWhoList               bool
+	whoSeeAllSecurityLevels      bool
+	legitimate                   map[uint64]struct{}
+	characterNames               map[uint64]enumCharacter
+	mounts                       *MountState
+	playerGUID                   uint64
+	playerLoading                bool
+	playerLoaded                 bool
+	worldReady                   atomic.Bool
+	worldInstance                atomic.Uint64
+	worldReadyGM                 atomic.Bool
+	farTeleportPending           bool
+	farTeleportOriginOrientation float32
+	nearTeleportPending          bool
+	nearTeleportDest             nearTeleportDestination
+	initialLoginPending          bool
+	initialLoginFirst            bool
+	temporaryUnsummonedPetNumber uint32
+	randomBGWinner               bool
+	bgData                       battlegroundLoginData
+	instanceLockTimes            map[uint32]int64
+	player                       *playerState
+	visiblePlayersMu             sync.Mutex
+	visiblePlayers               map[uint64]struct{}
+	visibleTransportPassengersMu sync.Mutex
+	visibleTransportPassengers   map[uint64]uint64
+	logoutAt                     time.Time
+	gameTimeStartedAt            time.Time
+	writeMu                      sync.Mutex
+	movementMu                   sync.RWMutex
+	captureUpdatePackets         bool
+	traceStatePrefix             string
+	loginCreateBlock             []byte
+	capturedUpdatePackets        []*protocol.Packet
+	selection                    uint64
+	auras                        map[uint32]struct{}
+	auraSlots                    map[uint32]uint8
+	activeAuras                  map[uint32]*activeAura
+	ownerPetAuraMu               sync.Mutex
+	ownerPetAuraSources          map[ownerPetAuraKey]ownerPetAuraSource
+	ownerPetAuraSourcesLoaded    bool
+	scale                        float32
+	emoteState                   uint32
+	playerLocked                 bool
+	rooted                       bool
+	attackTarget                 uint64
+	duelPartner                  uint64
+	duelArbiterX                 float32
+	duelArbiterY                 float32
+	duelArbiterZ                 float32
+	duelOutOfBounds              time.Time
+	lastSwing                    time.Time
+	lastOffhandSwing             time.Time
+	lastRangedSwing              time.Time
+	autoRepeatSpell              uint32
+	autoRepeatTarget             uint64
+	isMoving                     bool
+	isFalling                    bool
+	lastMovementInfo             movementInfo
+	lastMovementInfoSet          bool
+	transportContactProbeGUID    uint64
+	transportContactProbeAt      time.Time
+	lastFallZ                    float32
+	lastFallTime                 uint32
+	isSwimming                   bool
+	breathTimer                  int32
+	lastBreathTick               time.Time
+	inDarkWater                  bool
+	fatigueTimer                 int32
+	lastFatigueTick              time.Time
+	lastRegenTick                time.Time
+	lastCastTime                 time.Time
+	lastCombatTime               time.Time
+	contestedPVPEnd              time.Time
+	loadedCorpseBones            bool
+	pvpEnd                       time.Time
+	pvpHostile                   bool
+	areaID                       uint32
+	lastZoneUpdate               time.Time
+	logoutHook                   bool
+	questStatusSent              bool
+	timeSyncNextCounter          uint32
+	timeSyncDue                  time.Time
+	gossip                       *gossipMenuState
+	gossipClosed                 bool
+	channels                     map[string]struct{}
+	tutorials                    [8]uint32
+	tutorialsInDB                bool
+	unreadMails                  uint32
+	nextMailDelivery             int64
+	activeLoot                   *activeLootState
+	trade                        *playerTradeState
+	diminishing                  [DiminishingMax]diminishingReturn
+	procICD                      map[uint32]time.Time
+	guildInvitedID               uint32
+	guildInviterGUID             uint64
+	groupID                      uint64 // GUID of the group this player is in (0 = no group)
+	pendingGroupLeader           uint64 // GUID of the player who invited us (0 = no invite pending)
+	lastStreamX                  float32
+	lastStreamY                  float32
+	lastStreamZ                  float32
+	latency                      atomic.Uint32
+	lastPing                     time.Time
+	overSpeedPings               uint32
+	deathExpireTime              int64
+	deathTimer                   time.Time
+	resurrection                 *resurrectionData
+	earnedAchievements           map[uint32]uint32
+	criteriaProgress             map[uint32]*criteriaProgressState
+	timedCriteria                map[uint32]*time.Timer
+	inFlight                     bool
+	buyback                      [12]*buybackSlot
+	currentBuybackSlot           uint8
+	arenaTeamInvited             uint32
+	bgQueues                     [2]bgQueueEntry
+	afkReporters                 map[uint64]struct{}
+	targetGlyphSlot              uint8
+	activeCast                   *activeCastState
+	summonExpire                 time.Time
+	summonerGUID                 uint64
+	activeChannel                *activeChannelState
+	castMu                       sync.Mutex
+	schoolLockouts               map[uint32]int64
+	gcdEnd                       int64 // Unix millisecond timestamp when Global Cooldown expires
+	pendingBindInstanceID        uint64
+	pendingBindMapID             uint32
+	pendingBindDiff              uint32
+	pendingBindTimer             uint32
+	sharingQuestID               uint32
+	sharingQuestSender           uint64
+	warden                       *wardenSession
+	playerStateMu                sync.RWMutex
 }
 
 type activeCastState struct {
@@ -357,18 +384,22 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 	if len(settings) != 0 {
 		c = settings[0]
 	}
-	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), hiddenGameObjects: make(map[uint64]struct{}), dynamicGameObjects: make(map[uint64]*dynamicGameObjectState), dynamicSpellObjects: make(map[uint64]*dynamicSpellObjectState), wsgState: make(map[uint32]*wsgBattlegroundState), abState: make(map[uint32]*abBattlegroundState), eotsState: make(map[uint32]*eotsBattlegroundState), avState: make(map[uint32]*avBattlegroundState), saState: make(map[uint32]*saBattlegroundState), icState: make(map[uint32]*icBattlegroundState), activeTotems: make(map[uint64][4]*activeTotem), creatureAuras: make(map[uint64]map[uint32]struct{}), activeCreatureAuras: make(map[uint64]map[uint32]*activeAura), channels: make(map[string]*worldChannel), groups: make(map[uint64]*groupState), creatureMotion: make(map[uint64]*creatureMotion), creatureRespawns: make(map[uint32]creatureRespawn), transports: make(map[uint32]*continentTransport), creatureLoot: make(map[uint64]*activeLootState), creatureLootOwners: make(map[uint64]lootOwnerState), creatureStatsCache: make(map[uint32]creatureStats), groupRolls: make(map[string]*activeGroupRoll), wardenCheckMgr: newWardenCheckMgr(), vehicleKits: make(map[uint64]*VehicleKit), vehicleSeatAddons: make(map[uint32]*VehicleSeatAddon), vehicleAccessories: make(map[uint32][]VehicleAccessory), terrainTiles: make(map[uint64][]terrainSpawn), terrainTileKnown: make(map[uint64]bool), terrainModels: make(map[string]*terrainModel)}
+	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), hiddenGameObjects: make(map[uint64]struct{}), dynamicGameObjects: make(map[uint64]*dynamicGameObjectState), dynamicSpellObjects: make(map[uint64]*dynamicSpellObjectState), wsgState: make(map[uint32]*wsgBattlegroundState), abState: make(map[uint32]*abBattlegroundState), eotsState: make(map[uint32]*eotsBattlegroundState), avState: make(map[uint32]*avBattlegroundState), saState: make(map[uint32]*saBattlegroundState), icState: make(map[uint32]*icBattlegroundState), activeTotems: make(map[uint64][4]*activeTotem), creatureAuras: make(map[creatureAuraKey]map[uint32]struct{}), activeCreatureAuras: make(map[creatureAuraKey]map[uint32]*activeAura), channels: make(map[string]*worldChannel), groups: make(map[uint64]*groupState), instanceCreatureMotion: make(map[instanceAdmissionKey]map[uint64]*creatureMotion), creatureRespawns: make(map[uint32]creatureRespawn), transports: make(map[uint32]*continentTransport), creatureLoot: make(map[lootObjectKey]*activeLootState), creatureLootOwners: make(map[lootObjectKey]lootOwnerState), creatureStatsCache: make(map[uint32]creatureStats), groupRolls: make(map[lootRollKey]*activeGroupRoll), wardenCheckMgr: newWardenCheckMgr(), vehicleKits: make(map[uint64]*VehicleKit), vehicleSeatAddons: make(map[uint32]*VehicleSeatAddon), vehicleAccessories: make(map[uint32][]VehicleAccessory), terrainTiles: make(map[uint64][]terrainSpawn), terrainTileKnown: make(map[uint64]bool), terrainModels: make(map[string]*terrainModel)}
 	server.Features.LFG.SetDungeonValidator(func(id uint32) bool {
 		dungeon, found, err := server.Data.LFGDungeon(id)
 		return err == nil && found && wotlk.IsSupportedLFGType(dungeon.TypeID)
 	})
 	server.Features.Scripts.SetPlayerProvider(server.luaPlayers)
+	server.worldTimeStartedAt = time.Now()
 	return server
 }
 
 func (s *Server) Initialize(ctx context.Context) error {
 	s.warnMissingGameData()
 	s.clearOnlineState(ctx)
+	if err := s.initializeCharacterGUIDs(ctx); err != nil {
+		return err
+	}
 	s.loadClientCacheVersion(ctx)
 	if err := s.Features.Initialize(ctx); err != nil {
 		return err
@@ -384,6 +415,38 @@ func (s *Server) Initialize(ctx context.Context) error {
 	s.loadContinentTransports(ctx)
 	go s.runWorldTick(ctx)
 	return nil
+}
+
+func (s *Server) initializeCharacterGUIDs(ctx context.Context) error {
+	s.characterGUIDMu.Lock()
+	defer s.characterGUIDMu.Unlock()
+	if s.characterGUIDReady {
+		return nil
+	}
+	for _, table := range []string{"characters", "character_spell", "character_queststatus", "character_queststatus_rewarded", "character_queststatus_daily", "character_queststatus_weekly", "character_queststatus_monthly", "character_queststatus_seasonal"} {
+		var highest uint64
+		if err := s.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) FROM "+table).Scan(&highest); err != nil {
+			return err
+		}
+		if highest > s.characterGUIDNext {
+			s.characterGUIDNext = highest
+		}
+	}
+	s.characterGUIDReady = true
+	return nil
+}
+
+func (s *Server) allocateCharacterGUID(ctx context.Context) (uint64, error) {
+	if err := s.initializeCharacterGUIDs(ctx); err != nil {
+		return 0, err
+	}
+	s.characterGUIDMu.Lock()
+	defer s.characterGUIDMu.Unlock()
+	if s.characterGUIDNext >= uint64(^uint32(0)) {
+		return 0, fmt.Errorf("player GUID space exhausted")
+	}
+	s.characterGUIDNext++
+	return s.characterGUIDNext, nil
 }
 
 func (s *Server) warnMissingGameData() {
@@ -832,12 +895,10 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 		if p.UnitFlags&unitFlagInCombat != 0 && sess.attackTarget == 0 && now.Sub(sess.lastCombatTime) >= 5*time.Second {
 			hasAggro := false
 			s.motionMu.Lock()
-			if s.creatureMotion != nil {
-				for _, m := range s.creatureMotion {
-					if m != nil && m.InCombat && m.TargetGUID == sess.playerGUID {
-						hasAggro = true
-						break
-					}
+			for _, m := range s.motionMapLocked(p.Map, p.InstanceID) {
+				if m != nil && m.InCombat && m.TargetGUID == sess.playerGUID {
+					hasAggro = true
+					break
 				}
 			}
 			s.motionMu.Unlock()
@@ -1522,7 +1583,11 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if state.authed && state.player != nil && state.farTeleportPending && !state.completeWorldPort(ctx) {
 				return
 			}
-		case uint32(protocol.OpcodeMSG_MOVE_TELEPORT), uint32(protocol.OpcodeMSG_MOVE_TELEPORT_ACK), uint32(protocol.OpcodeCMSG_MOVE_SET_CAN_FLY_ACK),
+		case uint32(protocol.OpcodeMSG_MOVE_TELEPORT_ACK):
+			if !state.authed || !state.handleMoveTeleportAck(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_MOVE_TELEPORT), uint32(protocol.OpcodeCMSG_MOVE_SET_CAN_FLY_ACK),
 			uint32(protocol.OpcodeCMSG_FORCE_RUN_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_RUN_BACK_SPEED_CHANGE_ACK),
 			uint32(protocol.OpcodeCMSG_FORCE_SWIM_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_SWIM_BACK_SPEED_CHANGE_ACK),
 			uint32(protocol.OpcodeCMSG_FORCE_WALK_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_FLIGHT_SPEED_CHANGE_ACK),
@@ -3323,7 +3388,9 @@ func (s *session) write(opcode uint16, payload []byte, encrypt bool) error {
 		}
 		frame = frame[n:]
 	}
-	s.debug("world packet sent", "account", s.accountName, "opcode", opcodeName(uint32(opcode)), "size", len(payload))
+	if opcode != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && opcode != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		s.debug("world packet sent", "account", s.accountName, "opcode", opcodeName(uint32(opcode)), "size", len(payload))
+	}
 	return nil
 }
 

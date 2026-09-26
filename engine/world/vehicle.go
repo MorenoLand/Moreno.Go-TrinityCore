@@ -73,6 +73,11 @@ type VehicleKit struct {
 	LastShootPos         [3]float32
 }
 
+type vehicleKitKey struct {
+	MapID, InstanceID uint32
+	GUID              uint64
+}
+
 // HasEmptySeat checks if the specified seat exists and is vacant.
 // Reference: Vehicle::HasEmptySeat (Vehicle.cpp:275-281).
 func (v *VehicleKit) HasEmptySeat(seatID int8) bool {
@@ -311,16 +316,14 @@ func CalculatePassengerOffset(transX, transY, transZ, transO float32, globalX, g
 
 // createVehicleKit initializes a VehicleKit for a given GUID, caching seats and accessories.
 // Reference: Unit::CreateVehicleKit (Unit.cpp:8320-8336) & Vehicle::Vehicle (Vehicle.cpp:36-58).
-func (s *Server) createVehicleKit(vehicleGUID uint64, vehicleID uint32, creatureEntry uint32, isPlayer bool) *VehicleKit {
+func (s *Server) createVehicleKit(mapID, instanceID uint32, vehicleGUID uint64, vehicleID uint32, creatureEntry uint32, isPlayer bool) *VehicleKit {
 	if s == nil {
 		return nil
 	}
 	s.vehicleMu.Lock()
 	defer s.vehicleMu.Unlock()
 
-	if s.vehicleKits == nil {
-		s.vehicleKits = make(map[uint64]*VehicleKit)
-	}
+	key := vehicleKitKey{MapID: mapID, InstanceID: instanceID, GUID: vehicleGUID}
 
 	kit := &VehicleKit{
 		VehicleGUID:   vehicleGUID,
@@ -380,28 +383,46 @@ func (s *Server) createVehicleKit(vehicleGUID uint64, vehicleID uint32, creature
 		}
 	}
 
-	s.vehicleKits[vehicleGUID] = kit
+	if isPlayer {
+		if s.vehicleKits == nil {
+			s.vehicleKits = make(map[uint64]*VehicleKit)
+		}
+		if s.instanceVehicleKits == nil {
+			s.instanceVehicleKits = make(map[vehicleKitKey]*VehicleKit)
+		}
+		s.vehicleKits[vehicleGUID] = kit
+		s.instanceVehicleKits[key] = kit
+	} else {
+		if s.instanceVehicleKits == nil {
+			s.instanceVehicleKits = make(map[vehicleKitKey]*VehicleKit)
+		}
+		s.instanceVehicleKits[key] = kit
+	}
 	return kit
 }
 
-// getVehicleKit retrieves an existing VehicleKit by vehicle GUID.
-func (s *Server) getVehicleKit(vehicleGUID uint64) *VehicleKit {
+func (s *Server) getVehicleKit(mapID, instanceID uint32, vehicleGUID uint64) *VehicleKit {
 	if s == nil {
 		return nil
 	}
 	s.vehicleMu.RLock()
 	defer s.vehicleMu.RUnlock()
-	return s.vehicleKits[vehicleGUID]
+	if kit := s.instanceVehicleKits[vehicleKitKey{MapID: mapID, InstanceID: instanceID, GUID: vehicleGUID}]; kit != nil {
+		return kit
+	}
+	return nil
 }
 
-// removeVehicleKit disassembles and deletes a VehicleKit.
-// Reference: Unit::RemoveVehicleKit (Unit.cpp:8395).
-func (s *Server) removeVehicleKit(vehicleGUID uint64) {
+func (s *Server) removeVehicleKit(mapID, instanceID uint32, vehicleGUID uint64) {
 	if s == nil {
 		return
 	}
 	s.vehicleMu.Lock()
-	delete(s.vehicleKits, vehicleGUID)
+	key := vehicleKitKey{MapID: mapID, InstanceID: instanceID, GUID: vehicleGUID}
+	if kit := s.instanceVehicleKits[key]; kit != nil && s.vehicleKits[vehicleGUID] == kit {
+		delete(s.vehicleKits, vehicleGUID)
+	}
+	delete(s.instanceVehicleKits, key)
 	s.vehicleMu.Unlock()
 }
 
@@ -468,11 +489,11 @@ func (s *Server) loadVehicleAccessories(ctx context.Context) {
 
 // relocatePassengers updates global coordinates for all passengers on vehicle.
 // Reference: Vehicle::RelocatePassengers (Vehicle.cpp:554-578).
-func (s *Server) relocatePassengers(vehicleGUID uint64, transX, transY, transZ, transO float32) {
+func (s *Server) relocatePassengers(mapID, instanceID uint32, vehicleGUID uint64, transX, transY, transZ, transO float32) {
 	if s == nil {
 		return
 	}
-	kit := s.getVehicleKit(vehicleGUID)
+	kit := s.getVehicleKit(mapID, instanceID, vehicleGUID)
 	if kit == nil {
 		return
 	}
@@ -645,7 +666,7 @@ func (s *session) enterVehicle(vehicleGUID uint64, seatID int8) {
 	actualSeat := seatID
 	playerVehicleID := uint32(0)
 	if s.server != nil {
-		if kit := s.server.getVehicleKit(vehicleGUID); kit != nil {
+		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, vehicleGUID); kit != nil {
 			assigned, seatInfo, ok := kit.AddPassenger(s.playerGUID, seatID)
 			if !ok {
 				return
@@ -687,7 +708,7 @@ func (s *session) exitVehicle() {
 	oldVehGUID := s.player.VehicleGUID
 	playerVehicleID := uint32(0)
 	if s.server != nil {
-		if kit := s.server.getVehicleKit(oldVehGUID); kit != nil {
+		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, oldVehGUID); kit != nil {
 			if kit.IsPlayer {
 				playerVehicleID = kit.VehicleID
 			}
@@ -735,7 +756,7 @@ func (s *session) handleChangeSeatsOnControlledVehicle(ctx context.Context, payl
 	}
 
 	if s.server != nil && s.player.VehicleGUID != 0 {
-		if kit := s.server.getVehicleKit(s.player.VehicleGUID); kit != nil {
+		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
 			newSeat, seatInfo, ok := kit.SwitchSeat(s.playerGUID, targetSeat)
 			if !ok {
 				return true
@@ -768,18 +789,35 @@ func (s *session) handleControllerEjectPassenger(ctx context.Context, payload []
 		return true
 	}
 
-	if s.server != nil {
-		vehGUID := s.playerGUID
-		if s.player.VehicleGUID != 0 {
-			vehGUID = s.player.VehicleGUID
-		}
-		if passSess := s.server.findSessionByGUID(passGUID); passSess != nil && passSess.worldReady.Load() && passSess.player != nil {
-			if passSess.player.VehicleGUID == vehGUID || passSess.player.VehicleGUID == s.playerGUID {
-				passSess.exitVehicle()
-			}
-		}
+	if s.server == nil {
+		return true
+	}
+	vehGUID := s.player.VehicleGUID
+	if vehGUID == 0 {
+		vehGUID = s.playerGUID
+	}
+	kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, vehGUID)
+	if !canEjectVehiclePassenger(kit, s.playerGUID, passGUID) {
+		return true
+	}
+	if passSess := s.server.findSessionByGUID(passGUID); passSess != nil && passSess.player.Map == s.player.Map && passSess.player.InstanceID == s.player.InstanceID && passSess.player.VehicleGUID == vehGUID {
+		passSess.exitVehicle()
 	}
 	return true
+}
+
+func canEjectVehiclePassenger(kit *VehicleKit, controllerGUID, passengerGUID uint64) bool {
+	if kit == nil || controllerGUID == 0 || passengerGUID == 0 {
+		return false
+	}
+	if !(kit.IsPlayer && kit.VehicleGUID == controllerGUID) {
+		_, controllerSeat, _ := kit.GetSeatForPassenger(controllerGUID)
+		if controllerSeat == nil || !controllerSeat.CanControl() {
+			return false
+		}
+	}
+	_, passengerSeat, _ := kit.GetSeatForPassenger(passengerGUID)
+	return passengerSeat != nil && passengerSeat.IsEjectable()
 }
 
 // handleDismissControlledVehicle processes CMSG_DISMISS_CONTROLLED_VEHICLE (0x46D).
@@ -788,25 +826,7 @@ func (s *session) handleDismissControlledVehicle(ctx context.Context, payload []
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-
-	vehGUID := s.playerGUID
-	if s.player.VehicleGUID != 0 {
-		vehGUID = s.player.VehicleGUID
-	}
-
 	s.exitVehicle()
-	if s.server != nil {
-		s.server.sessionsMu.RLock()
-		for sess := range s.server.sessions {
-			if sess != s && sess.worldReady.Load() && sess.player != nil && (sess.player.VehicleGUID == vehGUID || sess.player.VehicleGUID == s.playerGUID) {
-				sess.exitVehicle()
-			}
-		}
-		s.server.sessionsMu.RUnlock()
-
-		s.server.removeVehicleKit(vehGUID)
-		s.sendPlayerVehicleData(0)
-	}
 	return true
 }
 
@@ -828,8 +848,30 @@ func (s *session) handlePlayerVehicleEnter(ctx context.Context, payload []byte) 
 			seat = int8(sByte)
 		}
 	}
+	if s.server == nil || IsArenaMap(s.player.Map) {
+		return true
+	}
+	target := s.server.findSessionByGUID(vehGUID)
+	if !playerVehicleEntryAllowed(s, target) {
+		return true
+	}
+	kit := s.server.getVehicleKit(target.player.Map, target.player.InstanceID, vehGUID)
+	if kit == nil || !kit.IsPlayer {
+		return true
+	}
 	s.enterVehicle(vehGUID, seat)
 	return true
+}
+
+func playerVehicleEntryAllowed(player, target *session) bool {
+	if player == nil || target == nil || player.player == nil || target.player == nil || player != target && (player.groupID == 0 || player.groupID != target.groupID) {
+		return false
+	}
+	if player.player.Map != target.player.Map || player.player.InstanceID != target.player.InstanceID {
+		return false
+	}
+	interactionDistance := 5.0 + float64(player.player.CombatReach) + float64(target.player.CombatReach)
+	return distance3D(player.player.X, player.player.Y, player.player.Z, target.player.X, target.player.Y, target.player.Z) <= interactionDistance
 }
 
 // handleRequestVehicleExit processes CMSG_REQUEST_VEHICLE_EXIT (0x46F).
@@ -839,7 +881,7 @@ func (s *session) handleRequestVehicleExit(ctx context.Context, payload []byte) 
 		return true
 	}
 	if s.server != nil && s.player.VehicleGUID != 0 {
-		if kit := s.server.getVehicleKit(s.player.VehicleGUID); kit != nil {
+		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
 			_, seatInfo, _ := kit.GetSeatForPassenger(s.playerGUID)
 			if seatInfo != nil && !seatInfo.CanEnterOrExit() {
 				return true
@@ -857,7 +899,7 @@ func (s *session) handleRequestVehicleNextSeat(ctx context.Context, payload []by
 		return true
 	}
 	if s.server != nil && s.player.VehicleGUID != 0 {
-		if kit := s.server.getVehicleKit(s.player.VehicleGUID); kit != nil {
+		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
 			if nextSeat, ok := kit.GetNextEmptySeat(s.player.VehicleSeat, true); ok {
 				if assigned, seatInfo, switched := kit.SwitchSeat(s.playerGUID, nextSeat); switched {
 					s.player.VehicleSeat = assigned
@@ -884,7 +926,7 @@ func (s *session) handleRequestVehiclePrevSeat(ctx context.Context, payload []by
 		return true
 	}
 	if s.server != nil && s.player.VehicleGUID != 0 {
-		if kit := s.server.getVehicleKit(s.player.VehicleGUID); kit != nil {
+		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
 			if prevSeat, ok := kit.GetNextEmptySeat(s.player.VehicleSeat, false); ok {
 				if assigned, seatInfo, switched := kit.SwitchSeat(s.playerGUID, prevSeat); switched {
 					s.player.VehicleSeat = assigned
@@ -929,7 +971,7 @@ func (s *session) handleRequestVehicleSwitchSeat(ctx context.Context, payload []
 	}
 
 	if s.server != nil && s.player.VehicleGUID != 0 {
-		if kit := s.server.getVehicleKit(s.player.VehicleGUID); kit != nil {
+		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
 			if assigned, seatInfo, switched := kit.SwitchSeat(s.playerGUID, seat); switched {
 				s.player.VehicleSeat = assigned
 				if seatInfo != nil && seatInfo.CanControl() {

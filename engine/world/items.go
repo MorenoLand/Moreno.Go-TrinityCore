@@ -1983,6 +1983,8 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 			if qErr == nil {
 				loot := &activeLootState{
 					TargetGUID: uint64(itemGUID),
+					MapID:      s.player.Map,
+					InstanceID: s.player.InstanceID,
 					LootType:   1,
 					Items:      make(map[uint8]lootItem),
 				}
@@ -2019,9 +2021,9 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 				if len(loot.Items) > 0 {
 					s.server.lootMu.Lock()
 					if s.server.creatureLoot == nil {
-						s.server.creatureLoot = make(map[uint64]*activeLootState)
+						s.server.creatureLoot = make(map[lootObjectKey]*activeLootState)
 					}
-					s.server.creatureLoot[uint64(itemGUID)] = loot
+					s.server.creatureLoot[loot.objectKey()] = loot
 					s.server.lootMu.Unlock()
 					s.activeLoot = loot
 					return s.sendLootResponse(loot) == nil

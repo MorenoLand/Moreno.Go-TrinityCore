@@ -49,6 +49,7 @@ type activeTotem struct {
 	Entry      uint32
 	OwnerGUID  uint64
 	Map        uint32
+	InstanceID uint32
 	X, Y, Z    float32
 	DurationMs uint32
 	BuffSpell  uint32
@@ -187,6 +188,21 @@ func (s *Server) nextDynamicCreatureLowGUID() uint32 {
 	return s.nextDynamicCreatureGUID
 }
 
+func (s *Server) totemCreatureTargets(totem *activeTotem, radius float64) []*creatureMotion {
+	if s == nil || totem == nil {
+		return nil
+	}
+	s.motionMu.Lock()
+	targets := make([]*creatureMotion, 0)
+	for _, motion := range s.motionMapLocked(totem.Map, totem.InstanceID) {
+		if motion != nil && motion.GUID != totem.TotemGUID && motion.Map == totem.Map && motion.InstanceID == totem.InstanceID && motion.Health > 0 && distance3D(motion.X, motion.Y, motion.Z, totem.X, totem.Y, totem.Z) <= radius {
+			targets = append(targets, motion)
+		}
+	}
+	s.motionMu.Unlock()
+	return targets
+}
+
 func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 	if s == nil || s.player == nil {
 		return
@@ -229,6 +245,7 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 		Entry:      def.Entry,
 		OwnerGUID:  s.playerGUID,
 		Map:        s.player.Map,
+		InstanceID: s.player.InstanceID,
 		X:          s.player.X,
 		Y:          s.player.Y,
 		Z:          s.player.Z,
@@ -250,17 +267,15 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 
 		// Register creature in creatureMotion
 		s.server.motionMu.Lock()
-		if s.server.creatureMotion == nil {
-			s.server.creatureMotion = make(map[uint64]*creatureMotion)
-		}
-		s.server.creatureMotion[totemGUID] = &creatureMotion{
-			GUID:      totemGUID,
-			Map:       s.player.Map,
-			X:         s.player.X,
-			Y:         s.player.Y,
-			Z:         s.player.Z,
-			Health:    100,
-			MaxHealth: 100,
+		s.server.motionMapLocked(s.player.Map, s.player.InstanceID)[totemGUID] = &creatureMotion{
+			GUID:       totemGUID,
+			Map:        s.player.Map,
+			InstanceID: s.player.InstanceID,
+			X:          s.player.X,
+			Y:          s.player.Y,
+			Z:          s.player.Z,
+			Health:     100,
+			MaxHealth:  100,
 		}
 		s.server.motionMu.Unlock()
 	}
@@ -285,7 +300,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 			if s.server != nil && s.groupID != 0 {
 				s.server.sessionsMu.RLock()
 				for other := range s.server.sessions {
-					if other != s && other.worldReady.Load() && other.player != nil && other.groupID == s.groupID && other.player.Map == totem.Map {
+					if other != s && other.worldReady.Load() && other.player != nil && other.groupID == s.groupID && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID {
 						if distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) {
 							other.applyAura(def.BuffSpell)
 						}
@@ -301,7 +316,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 		if s.server != nil && s.groupID != 0 {
 			s.server.sessionsMu.RLock()
 			for other := range s.server.sessions {
-				if other != s && other.worldReady.Load() && other.player != nil && other.groupID == s.groupID && other.player.Map == totem.Map {
+				if other != s && other.worldReady.Load() && other.player != nil && other.groupID == s.groupID && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID {
 					if distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) {
 						other.executeSpellHeal(ctx, other.playerGUID, def.PulseSpell, healAmt)
 					}
@@ -312,17 +327,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 
 	case TotemPulseAoEDamage:
 		if s.server != nil {
-			s.server.motionMu.Lock()
-			var nearbyMobs []*creatureMotion
-			for _, m := range s.server.creatureMotion {
-				if m != nil && m.Health > 0 && m.Map == totem.Map {
-					if distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) {
-						nearbyMobs = append(nearbyMobs, m)
-					}
-				}
-			}
-			s.server.motionMu.Unlock()
-
+			nearbyMobs := s.server.totemCreatureTargets(totem, float64(def.Radius))
 			dmg := uint32(75)
 			for _, m := range nearbyMobs {
 				s.executeSpellDamage(ctx, m.GUID, def.PulseSpell, dmg)
@@ -331,19 +336,15 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 
 	case TotemPulseSingleTarget:
 		if s.server != nil {
-			s.server.motionMu.Lock()
 			var nearest *creatureMotion
 			minDist := float64(math.MaxFloat64)
-			for _, m := range s.server.creatureMotion {
-				if m != nil && m.Health > 0 && m.Map == totem.Map {
-					d := distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z)
-					if d <= float64(def.Radius) && d < minDist {
-						minDist = d
-						nearest = m
-					}
+			for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {
+				d := distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z)
+				if d < minDist {
+					minDist = d
+					nearest = m
 				}
 			}
-			s.server.motionMu.Unlock()
 
 			if nearest != nil {
 				dmg := uint32(60)
@@ -356,7 +357,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 		if s.server != nil && s.groupID != 0 {
 			s.server.sessionsMu.RLock()
 			for other := range s.server.sessions {
-				if other != s && other.worldReady.Load() && other.player != nil && other.groupID == s.groupID && other.player.Map == totem.Map {
+				if other != s && other.worldReady.Load() && other.player != nil && other.groupID == s.groupID && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID {
 					if distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) {
 						other.removeHarmfulDebuffs(3)
 					}
@@ -403,7 +404,7 @@ func (s *session) runTotemLifecycle(def TotemDef, totem *activeTotem) {
 		case <-totem.StopChan:
 			return
 		case <-durationTimer.C:
-			s.destroyTotem(def.SlotID)
+			s.destroyTotemGUID(def.SlotID, totem.TotemGUID)
 			return
 		case <-ticker.C:
 			totem.mu.Lock()
@@ -412,25 +413,35 @@ func (s *session) runTotemLifecycle(def TotemDef, totem *activeTotem) {
 			if stopped {
 				return
 			}
+			if !s.worldReady.Load() || s.player == nil || s.player.Map != totem.Map || s.player.InstanceID != totem.InstanceID {
+				s.destroyTotemGUID(def.SlotID, totem.TotemGUID)
+				return
+			}
 			s.executeTotemPulse(context.Background(), def, totem)
 		}
 	}
 }
 
 func (s *session) destroyTotem(slotID uint8) {
-	if s == nil || s.player == nil || slotID >= 4 {
+	s.destroyTotemGUID(slotID, 0)
+}
+
+func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
+	if s == nil || s.playerGUID == 0 || slotID >= 4 {
 		return
 	}
 
 	var totemGUID uint64
 	var buffSpell uint32
+	var mapID, instanceID uint32
+	matched := false
 
 	if s.server != nil {
 		s.server.totemMu.Lock()
 		if s.server.activeTotems != nil {
 			current := s.server.activeTotems[s.playerGUID]
 			totem := current[slotID]
-			if totem != nil {
+			if totem != nil && (expectedGUID == 0 || totem.TotemGUID == expectedGUID) {
 				totem.mu.Lock()
 				if !totem.Stopped {
 					totem.Stopped = true
@@ -438,6 +449,8 @@ func (s *session) destroyTotem(slotID uint8) {
 				}
 				totemGUID = totem.TotemGUID
 				buffSpell = totem.BuffSpell
+				mapID, instanceID = totem.Map, totem.InstanceID
+				matched = true
 				totem.mu.Unlock()
 				current[slotID] = nil
 				s.server.activeTotems[s.playerGUID] = current
@@ -447,16 +460,19 @@ func (s *session) destroyTotem(slotID uint8) {
 
 		if totemGUID != 0 {
 			s.server.motionMu.Lock()
-			if s.server.creatureMotion != nil {
-				delete(s.server.creatureMotion, totemGUID)
-			}
+			delete(s.server.motionMapLocked(mapID, instanceID), totemGUID)
 			s.server.motionMu.Unlock()
 		}
 	}
+	if expectedGUID != 0 && !matched {
+		return
+	}
 
-	s.player.TotemSlots[slotID] = 0
+	if s.player != nil {
+		s.player.TotemSlots[slotID] = 0
+	}
 
-	if buffSpell > 0 {
+	if buffSpell > 0 && s.player != nil {
 		s.removeAura(buffSpell)
 	}
 
@@ -470,7 +486,7 @@ func (s *session) destroyTotem(slotID uint8) {
 }
 
 func (s *session) destroyAllTotems() {
-	if s == nil || s.player == nil {
+	if s == nil || s.playerGUID == 0 {
 		return
 	}
 	for slot := uint8(0); slot < 4; slot++ {

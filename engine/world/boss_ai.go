@@ -72,7 +72,7 @@ func (ai *vancleefAI) OnReset(ctx context.Context, s *Server, m *creatureMotion)
 	ai.health50 = false
 	ai.health33 = false
 	ai.health25 = false
-	ai.despawnSummons(s)
+	ai.despawnSummons(s, m.Map, m.InstanceID)
 }
 
 func (ai *vancleefAI) OnAggro(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
@@ -109,6 +109,7 @@ func (ai *vancleefAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureM
 				GUID:       bgGUID,
 				Entry:      636,
 				Map:        m.Map,
+				InstanceID: m.InstanceID,
 				HomeX:      m.X + offset,
 				HomeY:      m.Y + offset,
 				HomeZ:      m.Z,
@@ -128,10 +129,10 @@ func (ai *vancleefAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureM
 			bgMotion.ThreatMgr = NewThreatManager(bgGUID)
 			bgMotion.ThreatMgr.AddThreat(m.TargetGUID, 100, true)
 			s.motionMu.Lock()
-			s.creatureMotion[bgGUID] = bgMotion
+			s.motionMapLocked(m.Map, m.InstanceID)[bgGUID] = bgMotion
 			s.motionMu.Unlock()
 			ai.summons = append(ai.summons, bgGUID)
-			s.broadcastMonsterMove(m.Map, bgGUID, bgMotion.X, bgMotion.Y, bgMotion.Z, bgMotion.X, bgMotion.Y, bgMotion.Z, 0)
+			s.broadcastMonsterMoveInInstance(m.Map, m.InstanceID, bgGUID, bgMotion.X, bgMotion.Y, bgMotion.Z, bgMotion.X, bgMotion.Y, bgMotion.Z, 0, false)
 		}
 	}
 
@@ -162,14 +163,14 @@ func (ai *vancleefAI) OnEvade(ctx context.Context, s *Server, m *creatureMotion)
 func (ai *vancleefAI) OnUpdate(ctx context.Context, s *Server, m *creatureMotion, diff time.Duration, players []playerPos, now time.Time) {
 }
 
-func (ai *vancleefAI) despawnSummons(s *Server) {
+func (ai *vancleefAI) despawnSummons(s *Server, mapID, instanceID uint32) {
 	if s == nil {
 		return
 	}
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
 	for _, guid := range ai.summons {
-		delete(s.creatureMotion, guid)
+		delete(s.motionMapLocked(mapID, instanceID), guid)
 	}
 	ai.summons = nil
 }

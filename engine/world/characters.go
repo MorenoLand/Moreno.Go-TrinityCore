@@ -300,8 +300,8 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	if realmCharacterCount >= int64(s.server.Config.CharactersPerRealm) {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateServerLimit)
 	}
-	var guid uint64
-	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM characters").Scan(&guid); err != nil {
+	guid, err := s.server.allocateCharacterGUID(ctx)
+	if err != nil {
 		return false
 	}
 
@@ -400,7 +400,20 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 	if errors.Is(err, sql.ErrNoRows) || err != nil || accountID != s.accountID {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_DELETE), 72)
 	}
-	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_DEL_CHARACTER", guid); err != nil {
+	tx, err := s.server.CharactersStore.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return false
+	}
+	defer tx.Rollback()
+	for _, table := range []string{"character_spell", "character_queststatus", "character_queststatus_rewarded", "character_queststatus_daily", "character_queststatus_weekly", "character_queststatus_monthly", "character_queststatus_seasonal"} {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE guid = ?", guid); err != nil {
+			return false
+		}
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM characters WHERE guid = ?", guid); err != nil {
+		return false
+	}
+	if err := tx.Commit(); err != nil {
 		return false
 	}
 	delete(s.legitimate, guid)
@@ -409,10 +422,24 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 
 func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (success bool) {
 	var guid uint64
+	var loginSelection worldportInstanceSelection
+	var loginInstanceCommitted, loginAdmissionReserved, loginAdmissionCommitted bool
 	s.playerLoading = true
 	s.worldReady.Store(false)
 	defer func() {
 		s.playerLoading = false
+		if success {
+			s.initialLoginPending = false
+		} else {
+			s.initialLoginPending = false
+			s.worldReady.Store(false)
+			if s.server != nil && loginAdmissionReserved && !loginAdmissionCommitted {
+				s.server.releaseWorldportAdmission(instanceAdmissionKey{MapID: loginSelection.MapID, InstanceID: loginSelection.InstanceID})
+			}
+			if s.server != nil && loginSelection.Reserved && !loginInstanceCommitted {
+				s.server.releaseWorldportInstanceID(loginSelection.InstanceID)
+			}
+		}
 		if !success {
 			s.debug("player login failed", "account", s.accountName, "guid", guid)
 		}
@@ -434,6 +461,35 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err != nil {
 		return false
 	}
+	s.initialLoginPending = true
+	mapEntry, mapFound, err := s.server.Data.Map(state.Map)
+	if err != nil || !mapFound {
+		return false
+	}
+	loginSelection = worldportInstanceSelection{MapID: state.Map, InstanceID: state.InstanceID}
+	if mapEntry.IsDungeon() {
+		var canCreate bool
+		loginSelection, canCreate, err = s.resolveWorldportInstance(ctx, state, mapEntry)
+		if err != nil {
+			return false
+		}
+		if !canCreate {
+			if loginSelection.Reserved {
+				s.server.releaseWorldportInstanceID(loginSelection.InstanceID)
+				loginSelection.Reserved = false
+			}
+			if err := s.recoverLoginInstanceMapFailure(ctx, &state); err != nil {
+				return false
+			}
+			mapEntry, mapFound, err = s.server.Data.Map(state.Map)
+			if err != nil || !mapFound {
+				return false
+			}
+			loginSelection = worldportInstanceSelection{MapID: state.Map, InstanceID: state.InstanceID}
+		} else {
+			state.InstanceID = loginSelection.InstanceID
+		}
+	}
 	firstLogin := state.AtLogin&uint32(atLoginFirst) != 0
 	s.loadRandomBGStatus(ctx, guid)
 	s.loadBattlegroundData(ctx, guid)
@@ -452,6 +508,8 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.attackTarget = 0
 	s.autoRepeatSpell = 0
 	s.autoRepeatTarget = 0
+	s.nearTeleportPending = false
+	s.nearTeleportDest = nearTeleportDestination{}
 	s.clearLastMovementInfo()
 	s.rooted = false
 	s.playerLocked = false
@@ -467,7 +525,26 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.visiblePlayersMu.Unlock()
 	s.contestedPVPEnd = time.Time{}
 	s.playerLoaded = true
-	s.recordInstanceEnterTime(ctx, time.Now())
+	if mapEntry.IsDungeon() {
+		if !s.worldportInstanceHasRoom(loginSelection, mapEntry) {
+			s.sendTransferAborted(state.Map, transferAbortMaxPlayers, 0)
+			if loginSelection.Reserved {
+				s.server.releaseWorldportInstanceID(loginSelection.InstanceID)
+				loginSelection.Reserved = false
+			}
+			if err := s.recoverLoginInstanceMapFailure(ctx, &state); err != nil {
+				return false
+			}
+			mapEntry, mapFound, err = s.server.Data.Map(state.Map)
+			if err != nil || !mapFound || mapEntry.IsDungeon() {
+				return false
+			}
+			loginSelection = worldportInstanceSelection{MapID: state.Map, InstanceID: state.InstanceID}
+			s.player = &state
+		} else {
+			loginAdmissionReserved = !s.isMapAdmissionGM()
+		}
+	}
 	difficulty := protocol.NewBuffer(12)
 	difficulty.WriteU32(uint32(state.DungeonDifficulty))
 	difficulty.WriteU32(1)
@@ -496,50 +573,20 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(uint16(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES), buildLearnedDanceMoves(), true); err != nil {
 		return false
 	}
-	if err := s.sendContactList(ctx, uint32(socialFlagFriend|socialFlagIgnored|socialFlagMuted)); err != nil {
-		return false
-	}
-	if err := s.write(uint16(protocol.OpcodeSMSG_BIND_POINT_UPDATE), buildBindPointUpdate(&state), true); err != nil {
-		return false
-	}
-	if err := s.sendTalentsInfo(false); err != nil {
-		return false
-	}
-	instanceDifficulty, dynamicDifficulty := s.loginInstanceDifficulty(ctx, state)
-	if err := s.write(uint16(protocol.OpcodeSMSG_INSTANCE_DIFFICULTY), buildInstanceDifficultyForMap(instanceDifficulty, dynamicDifficulty), true); err != nil {
-		return false
-	}
-	if err := s.write(uint16(protocol.OpcodeSMSG_INITIAL_SPELLS), buildInitialSpells(state), true); err != nil {
-		return false
-	}
-	if err := s.write(uint16(protocol.OpcodeSMSG_SEND_UNLEARN_SPELLS), s.buildUnlearnSpells(ctx, state), true); err != nil {
-		return false
-	}
-	if err := s.write(uint16(protocol.OpcodeSMSG_ACTION_BUTTONS), buildActionButtons(state.Actions), true); err != nil {
-		return false
-	}
-	if err := s.write(uint16(protocol.OpcodeSMSG_INITIALIZE_FACTIONS), buildInitialReputations(state), true); err != nil {
-		return false
-	}
 	s.loadExploredZones(ctx)
-	s.sendAllAchievementData()
-	s.debug("world login stage", "stage", "equipment-set-list-start", "guid", guid)
-	s.sendEquipmentSetList(ctx)
-	s.debug("world login stage", "stage", "equipment-set-list-complete", "guid", guid)
-	if err := s.write(uint16(protocol.OpcodeSMSG_LOGIN_SET_TIME_SPEED), buildLoginSetTimeSpeed(time.Now()), true); err != nil {
+	if err := s.sendInitialPacketsBeforeAddToMap(ctx, state); err != nil {
 		return false
-	}
-	if err := s.write(uint16(protocol.OpcodeSMSG_SET_FORCED_REACTIONS), buildForcedReactions(s.loadedAuras()), true); err != nil {
-		return false
-	}
-	if err := s.sendResyncRunes(); err != nil {
-		return false
-	}
-	if firstLogin && s.server.Config.PlayerStartString != "" {
-		s.sendSysMessage(s.server.Config.PlayerStartString)
 	}
 	s.lastFallZ = state.Z
 	s.lastFallTime = 0
+	if state.Cinematic == 0 {
+		if !s.handleOpeningCinematic() {
+			return false
+		}
+		if s.server.Config.PlayerStartString != "" {
+			s.sendSysMessage(s.server.Config.PlayerStartString)
+		}
+	}
 	updates, err := s.server.buildPlayerUpdate(state)
 	if err != nil {
 		return false
@@ -548,7 +595,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err != nil {
 		return false
 	}
-	attachedTransportPassengers, err := s.server.buildAttachedTransportPassengerUpdates(ctx, state)
+	attachedTransportPassengers, err := s.server.buildAttachedTransportPassengerUpdates(ctx, state, s)
 	if err != nil {
 		return false
 	}
@@ -597,7 +644,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(initialUpdate.Opcode, initialUpdate.Payload.Bytes(), true); err != nil {
 		return false
 	}
-	s.worldReady.Store(true)
 	s.markVisiblePlayers(attachedTransportPlayerGUIDs)
 	s.server.broadcastPlayerCreate(state, s)
 	mapTransportUpdates, err := s.server.buildMapTransportUpdates(state, state.TransportGUID)
@@ -609,6 +655,19 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			return false
 		}
 	}
+	if loginSelection.CreateSave || loginSelection.BindPlayer || loginSelection.BindGroup || loginSelection.UnbindPlayerInstanceID != 0 {
+		if err := s.persistWorldportInstance(ctx, loginSelection); err != nil {
+			return false
+		}
+		loginInstanceCommitted = true
+		if loginSelection.Reserved {
+			s.server.releaseWorldportInstanceID(loginSelection.InstanceID)
+		}
+	}
+	s.commitWorldportAdmission(loginSelection, loginAdmissionReserved)
+	loginAdmissionCommitted = true
+	s.sendWorldportGroupLockWarning(ctx, loginSelection)
+	s.recordInstanceEnterTime(ctx, time.Now())
 	sendNearbyObjects := func() bool {
 		var nearbyPlayers, nearbyCreatures, nearbyGameObjects, nearbyCorpses *protocol.Packet
 		var nearbyPlayerGUIDs []uint64
@@ -622,15 +681,15 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		}()
 		go func() {
 			defer wg.Done()
-			nearbyCreatures, creatureCount, creatureErr = s.server.buildNearbyCreatureUpdates(ctx, state)
+			nearbyCreatures, creatureCount, creatureErr = s.server.buildNearbyCreatureUpdates(ctx, state, s.currentPlayerPhaseMask(), s)
 		}()
 		go func() {
 			defer wg.Done()
-			nearbyGameObjects, goCount, goErr = s.server.buildNearbyGameObjectUpdates(ctx, state, false)
+			nearbyGameObjects, goCount, goErr = s.server.buildNearbyGameObjectUpdates(ctx, state, false, s)
 		}()
 		go func() {
 			defer wg.Done()
-			nearbyCorpses, corpseCount, corpseErr = s.server.buildNearbyCorpseUpdates(ctx, state)
+			nearbyCorpses, corpseCount, corpseErr = s.server.buildNearbyCorpseUpdates(ctx, state, s.currentPlayerPhaseMask())
 		}()
 		wg.Wait()
 		if creatureErr != nil {
@@ -732,15 +791,8 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.sendLoginRaidDifficulty(ctx, state); err != nil {
 		return false
 	}
-	if s.sharingQuestID != 0 {
-		if quest, questErr := s.loadQuestDetailData(ctx, s.sharingQuestID); questErr == nil {
-			if err := s.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), buildQuestGiverDetails(quest, s.playerGUID, 0), true); err != nil {
-				return false
-			}
-		} else {
-			s.sharingQuestID = 0
-			s.sharingQuestSender = 0
-		}
+	if err := s.sendSharedQuestDetails(ctx); err != nil {
+		return false
 	}
 	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHAR_ONLINE", guid); err != nil {
 		return false
@@ -1012,13 +1064,60 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	if s == nil || s.server == nil || s.player == nil {
 		return false
 	}
+	originOrientation := s.farTeleportOriginOrientation
 	s.worldReady.Store(false)
+	s.farTeleportPending = false
 	state := *s.player
+	if !s.validTrinityMapID(state.Map) || (!s.initialLoginPending && !validTrinityMapCoordinates(state.X, state.Y, state.Z, state.Orientation)) {
+		return false
+	}
+	mapEntry, found, err := s.server.Data.Map(state.Map)
+	if err != nil || !found {
+		return false
+	}
+	fallbackHomebind := func() bool {
+		if !s.validTrinityMapLocation(state.HomebindMap, state.HomebindX, state.HomebindY, state.HomebindZ, originOrientation) {
+			return false
+		}
+		return s.teleportTo(state.HomebindMap, state.HomebindX, state.HomebindY, state.HomebindZ, originOrientation)
+	}
+	selection, canCreate, err := s.resolveWorldportInstance(ctx, state, mapEntry)
+	if err != nil || !canCreate {
+		return fallbackHomebind()
+	}
+	instanceCommitted := false
+	if selection.Reserved {
+		defer func() {
+			if !instanceCommitted {
+				s.server.releaseWorldportInstanceID(selection.InstanceID)
+			}
+		}()
+	}
+	state.InstanceID = selection.InstanceID
+	if !s.worldportInstanceHasRoom(selection, mapEntry) {
+		return fallbackHomebind()
+	}
+	if !s.initialLoginPending && mapEntry.IsRaid() && s.server.instanceEncounterInProgress(state.Map, selection.InstanceID) {
+		return fallbackHomebind()
+	}
+	admissionReserved := mapEntry.IsDungeon() && !s.isMapAdmissionGM()
+	admissionCommitted := false
+	if admissionReserved {
+		defer func() {
+			if !admissionCommitted {
+				s.server.releaseWorldportAdmission(instanceAdmissionKey{MapID: mapEntry.ID, InstanceID: selection.InstanceID})
+			}
+		}()
+	}
+	s.player.InstanceID = selection.InstanceID
+	if err := s.sendInitialPacketsBeforeAddToMap(ctx, state); err != nil {
+		return false
+	}
 	attachedTransport, err := s.server.buildAttachedTransportUpdate(ctx, state)
 	if err != nil {
 		return false
 	}
-	attachedPassengers, err := s.server.buildAttachedTransportPassengerUpdates(ctx, state)
+	attachedPassengers, err := s.server.buildAttachedTransportPassengerUpdates(ctx, state, s)
 	if err != nil {
 		return false
 	}
@@ -1056,10 +1155,18 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	if err != nil || initialUpdate == nil {
 		return false
 	}
+	if selection.CreateSave || selection.BindPlayer || selection.BindGroup || selection.UnbindPlayerInstanceID != 0 {
+		if err := s.persistWorldportInstance(ctx, selection); err != nil {
+			return false
+		}
+		instanceCommitted = true
+		if selection.Reserved {
+			s.server.releaseWorldportInstanceID(selection.InstanceID)
+		}
+	}
 	if err := s.write(initialUpdate.Opcode, initialUpdate.Payload.Bytes(), true); err != nil {
 		return false
 	}
-	s.worldReady.Store(true)
 	s.markVisiblePlayers(attachedPlayerGUIDs)
 	s.server.broadcastPlayerCreate(state, s)
 	if mapTransports, err := s.server.buildMapTransportUpdates(state, state.TransportGUID); err != nil {
@@ -1069,16 +1176,19 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 			return false
 		}
 	}
+	s.commitWorldportAdmission(selection, admissionReserved)
+	admissionCommitted = true
+	s.sendWorldportGroupLockWarning(ctx, selection)
 	nearbyPlayers, _, nearbyPlayerGUIDs := s.server.buildNearbyPlayerUpdatesWithCreated(s)
-	nearbyCreatures, _, creatureErr := s.server.buildNearbyCreatureUpdates(ctx, state)
+	nearbyCreatures, _, creatureErr := s.server.buildNearbyCreatureUpdates(ctx, state, s.currentPlayerPhaseMask(), s)
 	if creatureErr != nil {
 		return false
 	}
-	nearbyGameObjects, _, gameObjectErr := s.server.buildNearbyGameObjectUpdates(ctx, state, false)
+	nearbyGameObjects, _, gameObjectErr := s.server.buildNearbyGameObjectUpdates(ctx, state, false, s)
 	if gameObjectErr != nil {
 		return false
 	}
-	nearbyCorpses, _, corpseErr := s.server.buildNearbyCorpseUpdates(ctx, state)
+	nearbyCorpses, _, corpseErr := s.server.buildNearbyCorpseUpdates(ctx, state, s.currentPlayerPhaseMask())
 	if corpseErr != nil {
 		return false
 	}
@@ -1126,9 +1236,68 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	if err := s.sendLoginRaidDifficulty(ctx, *s.player); err != nil {
 		return false
 	}
+	if err := s.sendSharedQuestDetails(ctx); err != nil {
+		return false
+	}
+	s.resummonTemporaryPet(ctx)
 	s.lastStreamX, s.lastStreamY, s.lastStreamZ = s.player.X, s.player.Y, s.player.Z
 	s.farTeleportPending = false
+	s.initialLoginPending = false
 	return true
+}
+
+func (s *session) sendSharedQuestDetails(ctx context.Context) error {
+	if s == nil || s.sharingQuestID == 0 {
+		return nil
+	}
+	quest, err := s.loadQuestDetailData(ctx, s.sharingQuestID)
+	if errors.Is(err, sql.ErrNoRows) {
+		s.sharingQuestID, s.sharingQuestSender = 0, 0
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return s.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), buildQuestGiverDetails(quest, s.playerGUID, s.sharingQuestSender), true)
+}
+
+func (s *session) sendInitialPacketsBeforeAddToMap(ctx context.Context, state playerState) error {
+	if err := s.sendContactList(ctx, uint32(socialFlagFriend|socialFlagIgnored|socialFlagMuted)); err != nil {
+		return err
+	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_BIND_POINT_UPDATE), buildBindPointUpdate(&state), true); err != nil {
+		return err
+	}
+	if err := s.sendTalentsInfo(false); err != nil {
+		return err
+	}
+	instanceDifficulty, dynamicDifficulty := s.loginInstanceDifficulty(ctx, state)
+	if err := s.write(uint16(protocol.OpcodeSMSG_INSTANCE_DIFFICULTY), buildInstanceDifficultyForMap(instanceDifficulty, dynamicDifficulty), true); err != nil {
+		return err
+	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_INITIAL_SPELLS), buildInitialSpells(state), true); err != nil {
+		return err
+	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_SEND_UNLEARN_SPELLS), s.buildUnlearnSpells(ctx, state), true); err != nil {
+		return err
+	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_ACTION_BUTTONS), buildActionButtons(state.Actions), true); err != nil {
+		return err
+	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_INITIALIZE_FACTIONS), buildInitialReputations(state), true); err != nil {
+		return err
+	}
+	s.sendAllAchievementData()
+	s.debug("world login stage", "stage", "equipment-set-list-start", "guid", s.playerGUID)
+	s.sendEquipmentSetList(ctx)
+	s.debug("world login stage", "stage", "equipment-set-list-complete", "guid", s.playerGUID)
+	if err := s.write(uint16(protocol.OpcodeSMSG_LOGIN_SET_TIME_SPEED), buildLoginSetTimeSpeed(time.Now()), true); err != nil {
+		return err
+	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_SET_FORCED_REACTIONS), buildForcedReactions(s.loadedAuras()), true); err != nil {
+		return err
+	}
+	return s.sendResyncRunes()
 }
 
 func (s *session) sendLoginMovementDirectStates() error {
@@ -1160,7 +1329,7 @@ func (s *session) sendLoginMovementDirectStates() error {
 			movementFlags = 0x40000000
 		}
 		for _, aura := range auras {
-			if aura == nil || aura.AuraType != auraType {
+			if !s.loginAuraHasEffectType(aura, auraType) {
 				continue
 			}
 			packet := protocol.NewBuffer(packedGUIDSize(s.playerGUID) + 4)
@@ -1174,6 +1343,28 @@ func (s *session) sendLoginMovementDirectStates() error {
 		}
 	}
 	return nil
+}
+
+func (s *session) loginAuraHasEffectType(aura *activeAura, auraType uint32) bool {
+	if aura == nil {
+		return false
+	}
+	if aura.AuraType == auraType {
+		return true
+	}
+	if s == nil || s.server == nil || s.server.Data == nil || aura.EffectMask == 0 {
+		return false
+	}
+	spell, found, err := s.server.Data.Spell(aura.SpellID)
+	if err != nil || !found {
+		return false
+	}
+	for index, effect := range spell.Effects {
+		if aura.EffectMask&(1<<uint(index)) != 0 && effect.Effect != 0 && effect.Aura == auraType {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *session) sendLoginCharmControl() {
@@ -1200,8 +1391,8 @@ func (s *session) sendLoginMovementStunAndCompoundStates() error {
 		if aura == nil {
 			continue
 		}
-		rooted = rooted || aura.AuraType == auraRoot
-		stunned = stunned || aura.AuraType == auraStun
+		rooted = rooted || s.loginAuraHasEffectType(aura, auraRoot)
+		stunned = stunned || s.loginAuraHasEffectType(aura, auraStun)
 	}
 	if stunned {
 		packet := protocol.NewBuffer(packedGUIDSize(s.playerGUID) + 4)
@@ -1229,7 +1420,7 @@ func (s *session) sendLoginMovementStunAndCompoundStates() error {
 			opcode = protocol.OpcodeSMSG_MOVE_SET_HOVER
 		}
 		for _, aura := range auras {
-			if aura == nil || aura.AuraType != auraType {
+			if !s.loginAuraHasEffectType(aura, auraType) {
 				continue
 			}
 			state.WriteU8(uint8(2 + packedGUIDSize(s.playerGUID) + 4))
@@ -1361,9 +1552,10 @@ func (s *session) handleNextCinematicCamera() bool {
 }
 
 func (s *session) handleOpeningCinematic() bool {
-	if !s.playerLoaded || s.player == nil || s.player.XP != 0 {
+	if !s.playerLoaded || s.player == nil || s.player.Cinematic != 0 {
 		return true
 	}
+	s.player.Cinematic = 1
 	cinematicID := s.getStartingCinematicID(s.player.Race, s.player.Class)
 	if cinematicID == 0 {
 		return true
@@ -2616,7 +2808,11 @@ func (s *session) savePlayerPosition(ctx context.Context) error {
 	if !s.playerLoaded || s.player == nil {
 		return nil
 	}
-	_, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHARACTER_POSITION", s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.Map, s.player.Zone, s.player.GUID)
+	x, y, z, orientation := s.player.X, s.player.Y, s.player.Z, s.player.Orientation
+	if s.nearTeleportPending {
+		x, y, z, orientation = s.nearTeleportDest.X, s.nearTeleportDest.Y, s.nearTeleportDest.Z, s.nearTeleportDest.Orientation
+	}
+	_, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHARACTER_POSITION", x, y, z, orientation, s.player.Map, s.player.Zone, s.player.GUID)
 	return err
 }
 
@@ -2624,9 +2820,22 @@ func (s *session) savePlayerState(ctx context.Context, online uint32, logout boo
 	if !s.playerLoaded || s.player == nil || s.server == nil || s.server.CharactersStore == nil {
 		return nil
 	}
-	state := s.player
-	state.LogoutResting = IsPlayerRestingForLogout(state.PlayerFlags)
 	s.updatePlayedTime(time.Now())
+	stateCopy := *s.player
+	if s.nearTeleportPending {
+		stateCopy.X, stateCopy.Y, stateCopy.Z, stateCopy.Orientation = s.nearTeleportDest.X, s.nearTeleportDest.Y, s.nearTeleportDest.Z, s.nearTeleportDest.Orientation
+		if s.nearTeleportDest.Movement.Flags&movementOnTransport != 0 && s.nearTeleportDest.Movement.Transport != nil {
+			stateCopy.TransportGUID = s.nearTeleportDest.Movement.Transport.GUID
+			stateCopy.TransportX, stateCopy.TransportY, stateCopy.TransportZ, stateCopy.TransportO = s.nearTeleportDest.Movement.Transport.X, s.nearTeleportDest.Movement.Transport.Y, s.nearTeleportDest.Movement.Transport.Z, s.nearTeleportDest.Movement.Transport.Orientation
+			stateCopy.TransportSeat = s.nearTeleportDest.Movement.Transport.Seat
+		} else {
+			stateCopy.TransportGUID = 0
+			stateCopy.TransportX, stateCopy.TransportY, stateCopy.TransportZ, stateCopy.TransportO = 0, 0, 0, 0
+			stateCopy.TransportSeat = 0
+		}
+	}
+	state := &stateCopy
+	state.LogoutResting = IsPlayerRestingForLogout(state.PlayerFlags)
 	taxi := make([]string, len(state.TaxiMask))
 	for i, value := range state.TaxiMask {
 		taxi[i] = strconv.FormatUint(uint64(value), 10)
@@ -2981,9 +3190,17 @@ func (s *session) loadLoginInstanceDifficulty(ctx context.Context, state playerS
 }
 
 func (s *session) sendLoginRaidDifficulty(ctx context.Context, state playerState) error {
-	stored := uint8(0)
+	mapDifficulty, mapDifficultyFound := s.loadLoginInstanceDifficulty(ctx, state)
+	if !s.raidMapDifficultyInitialized {
+		if mapDifficultyFound && mapDifficulty < 4 {
+			s.raidMapDifficulty = uint8(mapDifficulty)
+		}
+		s.raidMapDifficultyInitialized = true
+	}
+	stored := s.raidMapDifficulty
 	if stored >= 4 {
 		stored = 0
+		s.raidMapDifficulty = 0
 	}
 	mapIsRaid := false
 	if s != nil && s.server != nil && s.server.Data != nil {
@@ -2993,16 +3210,18 @@ func (s *session) sendLoginRaidDifficulty(ctx context.Context, state playerState
 	}
 	forced := state.RaidDifficulty
 	if mapIsRaid {
-		if mapDifficulty, ok := s.loadLoginInstanceDifficulty(ctx, state); ok {
+		if mapDifficultyFound {
 			if mapDifficulty >= 4 {
 				mapDifficulty = 0
 			}
-			stored = uint8(mapDifficulty)
-			forced = uint8(mapDifficulty)
+			if uint8(mapDifficulty) != state.RaidDifficulty {
+				stored = uint8(mapDifficulty)
+				s.raidMapDifficulty = stored
+				forced = stored
+			} else {
+				return nil
+			}
 		} else {
-			stored = state.RaidDifficulty
-		}
-		if forced == state.RaidDifficulty {
 			return nil
 		}
 	} else if state.RaidDifficulty == stored {

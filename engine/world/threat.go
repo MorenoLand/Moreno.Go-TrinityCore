@@ -189,6 +189,11 @@ func (s *Server) broadcastHighestThreatUpdate(mapID uint32, creatureGUID, highes
 	s.broadcastToNearby(uint16(protocol.OpcodeSMSG_HIGHEST_THREAT_UPDATE), payload, nil)
 }
 
+func (s *Server) broadcastHighestThreatUpdateInInstance(mapID, instanceID uint32, creatureGUID, highestGUID uint64, list []protocol.ThreatEntry) {
+	payload := protocol.BuildHighestThreatUpdate(creatureGUID, highestGUID, list)
+	s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_HIGHEST_THREAT_UPDATE), payload, nil)
+}
+
 func (s *Server) broadcastThreatRemove(mapID uint32, creatureGUID, victimGUID uint64) {
 	if s == nil {
 		return
@@ -203,6 +208,14 @@ func (s *Server) broadcastThreatClear(mapID uint32, creatureGUID uint64) {
 	}
 	payload := protocol.BuildThreatClear(creatureGUID)
 	s.broadcastToNearby(uint16(protocol.OpcodeSMSG_THREAT_CLEAR), payload, nil)
+}
+
+func (s *Server) broadcastThreatClearInInstance(mapID, instanceID uint32, creatureGUID uint64) {
+	if s == nil {
+		return
+	}
+	payload := protocol.BuildThreatClear(creatureGUID)
+	s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_THREAT_CLEAR), payload, nil)
 }
 
 // getThreatMultiplier calculates the session's current threat multiplier based on active stances and auras.
@@ -272,12 +285,7 @@ func (s *session) handleEffectTaunt(ctx context.Context, targetGUID uint64, spel
 	s.server.motionMu.Lock()
 	defer s.server.motionMu.Unlock()
 
-	motion := s.server.creatureMotion[targetGUID]
-	if motion == nil {
-		low := uint32(targetGUID & 0x00FFFFFF)
-		entry := uint32((targetGUID >> 24) & 0x00FFFFFF)
-		motion = s.server.creatureMotion[creatureWorldGUID(low, entry)]
-	}
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
 	if motion == nil || motion.Evading {
 		return
 	}
@@ -288,7 +296,7 @@ func (s *session) handleEffectTaunt(ctx context.Context, targetGUID uint64, spel
 	if switched || newVictim != motion.TargetGUID {
 		motion.TargetGUID = newVictim
 		entries := motion.ThreatMgr.SortedEntries()
-		s.server.broadcastHighestThreatUpdate(motion.Map, motion.GUID, newVictim, entries)
+		s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, entries)
 	}
 	motion.InCombat = true
 	motion.Moving = true
@@ -317,13 +325,10 @@ func (s *Server) distributeHealingThreat(ctx context.Context, healerGUID, target
 
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
-	if s.creatureMotion == nil {
-		return
-	}
 
 	var engaged []*creatureMotion
-	for _, m := range s.creatureMotion {
-		if m == nil || m.Health == 0 || !m.InCombat || m.Map != healerSess.player.Map || m.Evading {
+	for _, m := range s.motionMapLocked(healerSess.player.Map, healerSess.player.InstanceID) {
+		if m == nil || m.Health == 0 || !m.InCombat || m.Evading {
 			continue
 		}
 		isEngaged := false
@@ -354,7 +359,7 @@ func (s *Server) distributeHealingThreat(ctx context.Context, healerGUID, target
 		if switched && newVictim != m.TargetGUID {
 			m.TargetGUID = newVictim
 			entries := m.ThreatMgr.SortedEntries()
-			s.broadcastHighestThreatUpdate(m.Map, m.GUID, newVictim, entries)
+			s.broadcastHighestThreatUpdateInInstance(m.Map, m.InstanceID, m.GUID, newVictim, entries)
 		}
 		m.Moving = true
 	}

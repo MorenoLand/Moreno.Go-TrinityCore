@@ -233,13 +233,20 @@ func (s *Server) petAuraStackGroup(spellID, auraType uint32) uint32 {
 	return cache.groupBySpell[petAuraStackKey{SpellID: spellID, AuraType: auraType}]
 }
 
-func (s *Server) petFocusAuraModifiers(petGUID uint64) []PetFocusModifier {
+func (s *Server) petFocusAuraModifiers(mapID, instanceID uint32, petGUID uint64) []PetFocusModifier {
 	if s == nil || s.Data == nil || petGUID == 0 {
 		return nil
 	}
+	s.motionMu.Lock()
+	motion := s.findCreatureMotionLocked(mapID, instanceID, petGUID)
+	s.motionMu.Unlock()
+	if motion == nil || motion.OwnerGUID == 0 || motion.PetID == 0 {
+		return nil
+	}
+	key := creatureAuraKeyForMotion(motion)
 	s.auraMu.Lock()
-	active := make([]activeAura, 0, len(s.activeCreatureAuras[petGUID]))
-	for _, aura := range s.activeCreatureAuras[petGUID] {
+	active := make([]activeAura, 0, len(s.activeCreatureAuras[key]))
+	for _, aura := range s.activeCreatureAuras[key] {
 		if aura != nil && !aura.Stopped {
 			active = append(active, *aura)
 		}
@@ -347,29 +354,41 @@ func (s *Server) updatePetRuntime(now time.Time, diff time.Duration) {
 	}
 	type petUpdate struct {
 		mapID        uint32
+		instanceID   uint32
 		guid         uint64
 		ownerGUID    uint64
 		currentPower uint32
 		fields       map[int]uint32
 	}
 	updates := make([]petUpdate, 0)
-	motions := make([]*creatureMotion, 0)
+	type petMotionState struct {
+		motion     *creatureMotion
+		mapID      uint32
+		instanceID uint32
+	}
+	motions := make([]petMotionState, 0)
 	seen := make(map[*creatureMotion]struct{})
 	s.motionMu.Lock()
-	for _, motion := range s.creatureMotion {
-		if motion == nil || motion.PetID == 0 || motion.OwnerGUID == 0 || motion.Health == 0 {
-			continue
+	appendMotions := func(motionMap map[uint64]*creatureMotion) {
+		for _, motion := range motionMap {
+			if motion == nil || motion.PetID == 0 || motion.OwnerGUID == 0 || motion.Health == 0 {
+				continue
+			}
+			if _, ok := seen[motion]; ok {
+				continue
+			}
+			seen[motion] = struct{}{}
+			motions = append(motions, petMotionState{motion: motion, mapID: motion.Map, instanceID: motion.InstanceID})
 		}
-		if _, ok := seen[motion]; ok {
-			continue
-		}
-		seen[motion] = struct{}{}
-		motions = append(motions, motion)
+	}
+	for _, motionMap := range s.instanceCreatureMotion {
+		appendMotions(motionMap)
 	}
 	s.motionMu.Unlock()
-	for _, motion := range motions {
+	for _, petMotion := range motions {
+		motion := petMotion.motion
 		s.motionMu.Lock()
-		if s.creatureMotion[motion.GUID] != motion || motion.Health == 0 {
+		if s.findCreatureMotionLocked(petMotion.mapID, petMotion.instanceID, motion.GUID) != motion || motion.Health == 0 {
 			s.motionMu.Unlock()
 			continue
 		}
@@ -378,10 +397,10 @@ func (s *Server) updatePetRuntime(now time.Time, diff time.Duration) {
 		s.motionMu.Unlock()
 		var modifiers []PetFocusModifier
 		if focusDue {
-			modifiers = s.petFocusAuraModifiers(guid)
+			modifiers = s.petFocusAuraModifiers(petMotion.mapID, petMotion.instanceID, guid)
 		}
 		s.motionMu.Lock()
-		if s.creatureMotion[guid] != motion || motion.Health == 0 {
+		if s.findCreatureMotionLocked(petMotion.mapID, petMotion.instanceID, guid) != motion || motion.Health == 0 {
 			s.motionMu.Unlock()
 			continue
 		}
@@ -403,12 +422,12 @@ func (s *Server) updatePetRuntime(now time.Time, diff time.Duration) {
 			if motion.PowerType < uint32(len(motion.Powers)) {
 				currentPower = motion.Powers[motion.PowerType]
 			}
-			updates = append(updates, petUpdate{mapID: motion.Map, guid: motion.GUID, ownerGUID: motion.OwnerGUID, currentPower: currentPower, fields: fields})
+			updates = append(updates, petUpdate{mapID: petMotion.mapID, instanceID: petMotion.instanceID, guid: motion.GUID, ownerGUID: motion.OwnerGUID, currentPower: currentPower, fields: fields})
 		}
 		s.motionMu.Unlock()
 	}
 	for _, update := range updates {
-		s.broadcastCreatureValuesUpdate(update.mapID, update.guid, update.fields)
+		s.broadcastCreatureValuesUpdateInInstance(update.mapID, update.instanceID, update.guid, update.fields)
 		changedPower := false
 		for powerType := uint32(0); powerType < 7; powerType++ {
 			power, ok := update.fields[unitFieldPower1+int(powerType)]
@@ -420,7 +439,7 @@ func (s *Server) updatePetRuntime(now time.Time, diff time.Duration) {
 			packet.WritePackedGUID(update.guid)
 			packet.WriteU8(uint8(powerType))
 			packet.WriteU32(power)
-			s.broadcastToNearby(uint16(protocol.OpcodeSMSG_POWER_UPDATE), packet.Bytes(), nil)
+			s.broadcastToInstance(update.mapID, update.instanceID, uint16(protocol.OpcodeSMSG_POWER_UPDATE), packet.Bytes(), nil)
 		}
 		if changedPower {
 			s.sendGroupPetCurrentPower(update.ownerGUID, update.currentPower)

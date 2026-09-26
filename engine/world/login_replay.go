@@ -8,6 +8,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,18 +21,46 @@ import (
 )
 
 func ReplayCharacterLogin(ctx context.Context, server *Server, guid uint64) (protocoltrace.Trace, error) {
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, nil)
+}
+
+func ReplayCharacterLoginWithSharedQuest(ctx context.Context, server *Server, guid uint64, questID uint32, senderGUID uint64) (protocoltrace.Trace, error) {
+	if questID == 0 || senderGUID == 0 || senderGUID == guid {
+		return protocoltrace.Trace{}, errors.New("shared-quest login replay requires a quest ID and distinct sharer GUID")
+	}
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, nil, replayLoginOptions{sharedQuestID: questID, sharedQuestSender: senderGUID})
 }
 
 func ReplayCharacterQuestRewardTwice(ctx context.Context, server *Server, guid uint64, questID uint32) (protocoltrace.Trace, error) {
 	if questID == 0 {
 		return protocoltrace.Trace{}, errors.New("quest reward guard replay requires a quest ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, questID, false)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, questID, false, nil)
 }
 
 func ReplayCharacterPetCritter(ctx context.Context, server *Server, guid uint64) (protocoltrace.Trace, error) {
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, true)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, true, nil)
+}
+
+func ReplayCharacterFarTeleport(ctx context.Context, server *Server, guid uint64, mapID uint32, x, y, z, orientation float32) (protocoltrace.Trace, error) {
+	if server == nil || server.Data == nil {
+		return protocoltrace.Trace{}, errors.New("far-teleport replay requires loaded world data")
+	}
+	if _, found, err := server.Data.Map(mapID); err != nil || !found {
+		return protocoltrace.Trace{}, fmt.Errorf("far-teleport replay map %d is unavailable: %v", mapID, err)
+	}
+	target := &replayTeleportTarget{Map: mapID, X: x, Y: y, Z: z, Orientation: orientation}
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, target)
+}
+
+func ReplayCharacterNearTeleport(ctx context.Context, server *Server, guid uint64, mapID uint32, x, y, z, orientation float32) (protocoltrace.Trace, error) {
+	if server == nil || server.Data == nil || !validTrinityMapCoordinates(x, y, z, orientation) {
+		return protocoltrace.Trace{}, errors.New("near-teleport replay requires loaded world data and valid coordinates")
+	}
+	if _, found, err := server.Data.Map(mapID); err != nil || !found {
+		return protocoltrace.Trace{}, fmt.Errorf("near-teleport replay map %d is unavailable: %v", mapID, err)
+	}
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, &replayTeleportTarget{Map: mapID, X: x, Y: y, Z: z, Orientation: orientation, SameMap: true})
 }
 
 func ReplayCharacterPairLogin(ctx context.Context, server *Server, firstGUID, secondGUID uint64) (protocoltrace.Trace, error) {
@@ -94,23 +125,24 @@ func ReplayCharacterPairLogin(ctx context.Context, server *Server, firstGUID, se
 	if err := login(first); err != nil {
 		return recorder.Snapshot(), err
 	}
-	if first.groupID == 0 {
-		return recorder.Snapshot(), errors.New("paired group replay characters are not in a persisted group")
-	}
-	firstTrace := recorder.Snapshot()
-	firstCreateIndex, err := loginSelfCreateIndex(firstTrace, first)
-	if err != nil {
-		return recorder.Snapshot(), err
-	}
-	firstRoster, err := groupListMemberStatus(firstTrace, first, secondGUID, firstCreateIndex+1)
-	if err != nil {
-		return recorder.Snapshot(), err
-	}
-	if firstRoster&uint8(memberStatusOnline) != 0 {
-		return recorder.Snapshot(), errors.New("unlogged group peer appeared online in the first member roster")
-	}
-	if groupListIndex(firstTrace, second, 0) >= 0 {
-		return recorder.Snapshot(), errors.New("group roster was sent to the peer before its player create")
+	var secondGroupID uint64
+	sameGroup := server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid FROM group_member WHERE memberGuid = ? LIMIT 1", secondGUID).Scan(&secondGroupID) == nil && first.groupID != 0 && first.groupID == secondGroupID
+	if sameGroup {
+		firstTrace := recorder.Snapshot()
+		firstCreateIndex, err := loginSelfCreateIndex(firstTrace, first)
+		if err != nil {
+			return recorder.Snapshot(), err
+		}
+		firstRoster, err := groupListMemberStatus(firstTrace, first, secondGUID, firstCreateIndex+1)
+		if err != nil {
+			return recorder.Snapshot(), err
+		}
+		if firstRoster&uint8(memberStatusOnline) != 0 {
+			return recorder.Snapshot(), errors.New("unlogged group peer appeared online in the first member roster")
+		}
+		if groupListIndex(firstTrace, second, 0) >= 0 {
+			return recorder.Snapshot(), errors.New("group roster was sent to the peer before its player create")
+		}
 	}
 	if server.findSessionByGUID(secondGUID) != nil {
 		return recorder.Snapshot(), errors.New("second character became visible before its create update")
@@ -124,28 +156,32 @@ func ReplayCharacterPairLogin(ctx context.Context, server *Server, firstGUID, se
 	if err := validateWorldReadyFanout(server, second); err != nil {
 		return recorder.Snapshot(), err
 	}
-	if second.groupID != first.groupID {
-		return recorder.Snapshot(), fmt.Errorf("paired characters loaded different groups: %d != %d", first.groupID, second.groupID)
-	}
-	pairedTrace := recorder.Snapshot()
-	secondCreateIndex, err := loginSelfCreateIndex(pairedTrace, second)
-	if err != nil {
-		return recorder.Snapshot(), err
-	}
-	if status, err := groupListMemberStatus(pairedTrace, first, secondGUID, secondCreateIndex+1); err != nil || status&uint8(memberStatusOnline) == 0 {
-		return recorder.Snapshot(), fmt.Errorf("existing member roster did not show the newly mapped peer online: status=%#x err=%v", status, err)
-	}
-	if status, err := groupListMemberStatus(pairedTrace, second, firstGUID, secondCreateIndex+1); err != nil || status&uint8(memberStatusOnline) == 0 {
-		return recorder.Snapshot(), fmt.Errorf("new member roster did not show its connected peer online: status=%#x err=%v", status, err)
-	}
-	if err := replayPartyMemberStats(ctx, recorder, first, secondGUID, second); err != nil {
-		return recorder.Snapshot(), err
+	if sameGroup {
+		if second.groupID != first.groupID {
+			return recorder.Snapshot(), fmt.Errorf("paired characters loaded different groups: %d != %d", first.groupID, second.groupID)
+		}
+		pairedTrace := recorder.Snapshot()
+		secondCreateIndex, err := loginSelfCreateIndex(pairedTrace, second)
+		if err != nil {
+			return recorder.Snapshot(), err
+		}
+		if status, err := groupListMemberStatus(pairedTrace, first, secondGUID, secondCreateIndex+1); err != nil || status&uint8(memberStatusOnline) == 0 {
+			return recorder.Snapshot(), fmt.Errorf("existing member roster did not show the newly mapped peer online: status=%#x err=%v", status, err)
+		}
+		if status, err := groupListMemberStatus(pairedTrace, second, firstGUID, secondCreateIndex+1); err != nil || status&uint8(memberStatusOnline) == 0 {
+			return recorder.Snapshot(), fmt.Errorf("new member roster did not show its connected peer online: status=%#x err=%v", status, err)
+		}
+		if err := replayPartyMemberStats(ctx, recorder, first, secondGUID, second); err != nil {
+			return recorder.Snapshot(), err
+		}
 	}
 	if err := second.completeLogout(ctx); err != nil {
 		return recorder.Snapshot(), fmt.Errorf("complete second character logout: %w", err)
 	}
-	if err := replayPartyMemberStats(ctx, recorder, first, secondGUID, nil); err != nil {
-		return recorder.Snapshot(), err
+	if sameGroup {
+		if err := replayPartyMemberStats(ctx, recorder, first, secondGUID, nil); err != nil {
+			return recorder.Snapshot(), err
+		}
 	}
 	if err := first.completeLogout(ctx); err != nil {
 		return recorder.Snapshot(), fmt.Errorf("complete first character logout: %w", err)
@@ -356,7 +392,7 @@ func partyMemberStatsReplayState(ctx context.Context, requester, target *session
 	}
 	var vehicleSeat uint32
 	if tp.VehicleGUID != 0 {
-		if kit := requester.server.getVehicleKit(tp.VehicleGUID); kit != nil {
+		if kit := requester.server.getVehicleKit(tp.Map, tp.InstanceID, tp.VehicleGUID); kit != nil {
 			if _, seat, _ := kit.GetSeatForPassenger(target.playerGUID); seat != nil {
 				flags |= groupUpdateFlagVehicleSeat
 				vehicleSeat = seat.ID
@@ -371,56 +407,56 @@ func ReplayCharacterLFGTeleport(ctx context.Context, server *Server, guid uint64
 	if dungeonID == 0 {
 		return protocoltrace.Trace{}, errors.New("LFG teleport replay requires a dungeon ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, dungeonID, 0, 0, 0, false)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, dungeonID, 0, 0, 0, false, nil)
 }
 
 func ReplayCharacterInstanceEntry(ctx context.Context, server *Server, guid uint64, mapID, instanceID uint32) (protocoltrace.Trace, error) {
 	if mapID == 0 || instanceID == 0 {
 		return protocoltrace.Trace{}, errors.New("instance-entry replay requires a dungeon map and instance ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, 0, mapID, instanceID, 0, false)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, 0, 0, mapID, instanceID, 0, false, nil)
 }
 
 func ReplayCharacterPetCooldown(ctx context.Context, server *Server, guid uint64, spellID uint32) (protocoltrace.Trace, error) {
 	if spellID == 0 {
 		return protocoltrace.Trace{}, errors.New("pet cooldown replay requires a spell ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, spellID, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false)
+	return replayCharacterLogin(ctx, server, guid, spellID, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, nil)
 }
 
 func ReplayCharacterPetPower(ctx context.Context, server *Server, guid uint64, spellID uint32) (protocoltrace.Trace, error) {
 	if spellID == 0 {
 		return protocoltrace.Trace{}, errors.New("pet power replay requires a spell ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, spellID, 0, 0, 0, 0, 0, 0, 0, 0, 0, false)
+	return replayCharacterLogin(ctx, server, guid, 0, spellID, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, nil)
 }
 
 func ReplayCharacterPetXP(ctx context.Context, server *Server, guid uint64, earnedXP uint32) (protocoltrace.Trace, error) {
 	if earnedXP == 0 {
 		return protocoltrace.Trace{}, errors.New("pet XP replay requires an XP award")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, earnedXP, 0, 0, 0, 0, 0, 0, 0, 0, false)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, earnedXP, 0, 0, 0, 0, 0, 0, 0, 0, false, nil)
 }
 
 func ReplayCharacterPetFeed(ctx context.Context, server *Server, guid uint64, feedSpell uint32, foodItemGUID uint64) (protocoltrace.Trace, error) {
 	if feedSpell == 0 || foodItemGUID == 0 {
 		return protocoltrace.Trace{}, errors.New("pet feed replay requires a spell and item GUID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, feedSpell, foodItemGUID, 0, 0, 0, 0, 0, 0, false)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, feedSpell, foodItemGUID, 0, 0, 0, 0, 0, 0, false, nil)
 }
 
 func ReplayCharacterPetAura(ctx context.Context, server *Server, guid uint64, ownerSpellID uint32) (protocoltrace.Trace, error) {
 	if ownerSpellID == 0 {
 		return protocoltrace.Trace{}, errors.New("owner pet-aura replay requires a source spell ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, ownerSpellID, 0, 0, 0, 0, 0, false)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, ownerSpellID, 0, 0, 0, 0, 0, false, nil)
 }
 
 func ReplayCharacterPetFocusAura(ctx context.Context, server *Server, guid uint64, spellID uint32) (protocoltrace.Trace, error) {
 	if spellID == 0 {
 		return protocoltrace.Trace{}, errors.New("pet focus-aura replay requires a DBC spell ID")
 	}
-	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, spellID, 0, 0, 0, 0, false)
+	return replayCharacterLogin(ctx, server, guid, 0, 0, 0, 0, 0, 0, spellID, 0, 0, 0, 0, false, nil)
 }
 
 func validateWorldReadyFanout(server *Server, source *session) error {
@@ -558,14 +594,433 @@ func newReplayCharacterSession(ctx context.Context, server *Server, guid uint64)
 	sess := &session{server: server, authed: true, accountID: uint32(accountID), playerGUID: guid, legitimate: map[uint64]struct{}{guid: {}}, characterNames: make(map[uint64]enumCharacter), auras: make(map[uint32]struct{}), auraSlots: make(map[uint32]uint8), channels: make(map[string]struct{}), scale: 1, breathTimer: -1, fatigueTimer: -1, schoolLockouts: make(map[uint32]int64)}
 	if server.AuthStore != nil && server.AuthStore.DB != nil {
 		var security int64
-		if server.AuthStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(gmlevel), 0) FROM account_access WHERE id = ? AND RealmID IN (?, -1)", accountID, server.RealmID).Scan(&security) == nil && security > 0 && security <= 255 {
+		if server.AuthStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(SecurityLevel), 0) FROM account_access WHERE AccountID = ? AND RealmID IN (-1, ?)", accountID, server.RealmID).Scan(&security) == nil && security > 0 && security <= 255 {
 			sess.security = uint8(security)
+		}
+		if permission, err := accountHasPermission(ctx, server.AuthStore.DB, sess.accountID, server.RealmID, sess.security, permissionTwoSideWhoList); err == nil {
+			sess.twoSideWhoList = permission
+		}
+		if permission, err := accountHasPermission(ctx, server.AuthStore.DB, sess.accountID, server.RealmID, sess.security, permissionWhoSeeAllSecurityLevels); err == nil {
+			sess.whoSeeAllSecurityLevels = permission
 		}
 	}
 	return sess, nil
 }
 
-func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petCooldownSpell, petPowerSpell, petXPAward, petFeedSpell uint32, petFoodGUID uint64, petAuraSourceSpell, petFocusAuraSpell, lfgDungeonID, instanceEntryMapID, instanceEntryID, rewardedQuestID uint32, critterPetReplay bool) (protocoltrace.Trace, error) {
+type replayTeleportTarget struct {
+	Map         uint32
+	X           float32
+	Y           float32
+	Z           float32
+	Orientation float32
+	SameMap     bool
+}
+
+type replayLoginOptions struct {
+	sharedQuestID     uint32
+	sharedQuestSender uint64
+}
+
+func validateSharedQuestPetPacketOrder(trace protocoltrace.Trace, playerGUID, petGUID uint64, questID uint32, senderGUID uint64, expectedDetails []byte) error {
+	if playerGUID == 0 || petGUID == 0 || questID == 0 || senderGUID == 0 || senderGUID == playerGUID {
+		return errors.New("shared-quest/pet packet check requires distinct player and sender GUIDs, pet GUID, and quest ID")
+	}
+	questDetailsIndex := -1
+	for index, event := range trace.Events {
+		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS) {
+			continue
+		}
+		payload, err := trace.Payload(event)
+		if err != nil {
+			return err
+		}
+		reader := protocol.NewReader(payload)
+		giverGUID, err := reader.ReadU64()
+		if err != nil {
+			return fmt.Errorf("quest details giver GUID: %w", err)
+		}
+		informGUID, err := reader.ReadU64()
+		if err != nil {
+			return fmt.Errorf("quest details sharer GUID: %w", err)
+		}
+		reportedQuestID, err := reader.ReadU32()
+		if err != nil {
+			return fmt.Errorf("quest details quest ID: %w", err)
+		}
+		if reportedQuestID != questID {
+			continue
+		}
+		if giverGUID != playerGUID || informGUID != senderGUID {
+			return fmt.Errorf("quest details giver=%d sharer=%d, want giver=%d sharer=%d", giverGUID, informGUID, playerGUID, senderGUID)
+		}
+		if string(payload) != string(expectedDetails) {
+			return fmt.Errorf("shared quest %d details payload differs from the saved quest/DBC detail data", questID)
+		}
+		questDetailsIndex = index
+		break
+	}
+	if questDetailsIndex < 0 {
+		return fmt.Errorf("quest details for quest %d were not sent", questID)
+	}
+	for index, event := range trace.Events {
+		if index <= questDetailsIndex || event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_PET_SPELLS) {
+			continue
+		}
+		payload, err := trace.Payload(event)
+		if err != nil {
+			return err
+		}
+		reader := protocol.NewReader(payload)
+		reportedPetGUID, err := reader.ReadU64()
+		if err != nil {
+			return fmt.Errorf("pet-spells GUID: %w", err)
+		}
+		if reportedPetGUID == petGUID {
+			return nil
+		}
+	}
+	return fmt.Errorf("active pet %d did not receive SMSG_PET_SPELLS after quest %d details", petGUID, questID)
+}
+
+func (s *session) validateSavedInventoryDurationPayloads(ctx context.Context, trace protocoltrace.Trace) error {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return errors.New("inventory duration validation requires a logged-in player and character database")
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.bag,ci.slot,ii.guid,COALESCE(ii.duration,0),COALESCE(ii.enchantments,'')
+		FROM character_inventory ci JOIN item_instance ii ON ii.guid=ci.item WHERE ci.guid=? ORDER BY ci.bag,ci.slot`, s.playerGUID)
+	if err != nil {
+		if missingTable(err) || isMissingColumn(err) {
+			return nil
+		}
+		return err
+	}
+	expectedItems, expectedEnchants := make(map[string]int), make(map[string]int)
+	toUint32 := func(value int64) uint32 {
+		if value <= 0 {
+			return 0
+		}
+		if value > int64(^uint32(0)) {
+			return ^uint32(0)
+		}
+		return uint32(value)
+	}
+	for rows.Next() {
+		var bag, slot, itemGUID, duration int64
+		var enchantments string
+		if err := rows.Scan(&bag, &slot, &itemGUID, &duration, &enchantments); err != nil {
+			rows.Close()
+			return err
+		}
+		if bag == 0 && slot >= 74 && slot <= 85 {
+			continue
+		}
+		fullGUID := uint64(itemGUID) | (uint64(0x4000) << 48)
+		if duration > 0 {
+			payload := protocol.BuildItemTimeUpdate(fullGUID, toUint32(duration))
+			expectedItems[string(payload)]++
+		}
+		values := make([]uint32, 36)
+		tokens := strings.Fields(enchantments)
+		for index, token := range tokens {
+			if index >= len(values) {
+				break
+			}
+			value, parseErr := strconv.ParseUint(token, 10, 32)
+			if parseErr == nil {
+				values[index] = uint32(value)
+			}
+		}
+		for slot := 0; slot < 12; slot++ {
+			enchantID, enchantDuration := values[slot*3], values[slot*3+1]
+			if ShouldTrackItemEnchantmentDuration(bag, int64(slot), enchantID, enchantDuration) {
+				payload := protocol.BuildItemEnchantTimeUpdate(s.playerGUID, fullGUID, uint32(slot), enchantDuration/1000)
+				expectedEnchants[string(payload)]++
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, event := range trace.Events {
+		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_ITEM_TIME_UPDATE) && event.Opcode != uint32(protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE) {
+			continue
+		}
+		payload, err := trace.Payload(event)
+		if err != nil {
+			return err
+		}
+		key, expected := string(payload), expectedItems
+		if event.Opcode == uint32(protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE) {
+			expected = expectedEnchants
+		}
+		if expected[key] == 0 {
+			return fmt.Errorf("%s payload has no matching saved inventory duration", opcodeName(event.Opcode))
+		}
+		expected[key]--
+	}
+	for payload, count := range expectedItems {
+		if count != 0 {
+			return fmt.Errorf("missing SMSG_ITEM_TIME_UPDATE payload count=%d bytes=%x", count, []byte(payload))
+		}
+	}
+	for payload, count := range expectedEnchants {
+		if count != 0 {
+			return fmt.Errorf("missing SMSG_ITEM_ENCHANT_TIME_UPDATE payload count=%d bytes=%x", count, []byte(payload))
+		}
+	}
+	return nil
+}
+
+func (s *session) validateSavedPetSpellPayload(ctx context.Context, trace protocoltrace.Trace, petGUID uint64) error {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || petGUID == 0 || petGUID != s.player.PetGUID {
+		return errors.New("saved pet-spells validation requires the active pet and character database")
+	}
+	petID := s.activePetNumber()
+	var entry, petType, reactState int64
+	var actionBarData string
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT entry, COALESCE(PetType, 0), COALESCE(Reactstate, 1), COALESCE(abdata, '') FROM character_pet WHERE id = ? AND owner = ?", petID, s.playerGUID).Scan(&entry, &petType, &reactState, &actionBarData); err != nil {
+		return err
+	}
+	var family, creatureType int64
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT family FROM creature_template WHERE entry = ?", entry).Scan(&family)
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT type FROM creature_template WHERE entry = ?", entry).Scan(&creatureType)
+	}
+	var payload []byte
+	for _, event := range trace.Events {
+		if event.Direction != protocoltrace.ServerToClient || event.Opcode != uint32(protocol.OpcodeSMSG_PET_SPELLS) {
+			continue
+		}
+		data, err := trace.Payload(event)
+		if err != nil {
+			return err
+		}
+		reader := protocol.NewReader(data)
+		reportedGUID, err := reader.ReadU64()
+		if err == nil && reportedGUID == petGUID {
+			payload = data
+			break
+		}
+	}
+	if payload == nil {
+		return fmt.Errorf("active pet %d has no SMSG_PET_SPELLS payload", petGUID)
+	}
+	reader := protocol.NewReader(payload)
+	reportedGUID, _ := reader.ReadU64()
+	reportedFamily, err := reader.ReadU16()
+	if err != nil {
+		return err
+	}
+	duration, err := reader.ReadU32()
+	if err != nil {
+		return err
+	}
+	react, err := reader.ReadU8()
+	if err != nil {
+		return err
+	}
+	command, err := reader.ReadU8()
+	if err != nil {
+		return err
+	}
+	flags, err := reader.ReadU16()
+	if err != nil {
+		return err
+	}
+	if reportedGUID != petGUID || reportedFamily != uint16(family) || duration != 0 || react != uint8(reactState) || command != 1 || flags != 0 {
+		return fmt.Errorf("active pet spell header guid/family/duration/react/command/flags=%d/%d/%d/%d/%d/%#x differs from saved pet/template", reportedGUID, reportedFamily, duration, react, command, flags)
+	}
+	actionBarSlots := [10]uint32{0x07000002, 0x07000001, 0x07000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x06000002, 0x06000001, 0x06000000}
+	if actionBarData != "" {
+		tokens := strings.Fields(actionBarData)
+		if len(tokens) == 20 {
+			for index := 0; index < 10; index++ {
+				typ, typeErr := strconv.ParseUint(tokens[index*2], 10, 8)
+				value, valueErr := strconv.ParseUint(tokens[index*2+1], 10, 32)
+				if typeErr == nil && valueErr == nil {
+					actionBarSlots[index] = uint32(value) | uint32(typ)<<24
+				}
+			}
+		}
+	}
+	for index := range actionBarSlots {
+		actionBarSlots[index] = s.normalizePetActionBarSlot(actionBarSlots[index])
+	}
+	type petSpell struct {
+		id     uint32
+		active uint8
+	}
+	spells := make([]petSpell, 0)
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT spell, active FROM pet_spell WHERE guid = ? ORDER BY spell", petID)
+	if err == nil {
+		for rows.Next() {
+			var id, active int64
+			if rows.Scan(&id, &active) != nil || id <= 0 || id > int64(^uint32(0)) {
+				continue
+			}
+			if s.server.Data != nil {
+				if _, found, spellErr := s.server.Data.Spell(uint32(id)); spellErr == nil && !found {
+					continue
+				}
+			}
+			spells = append(spells, petSpell{id: uint32(id), active: uint8(active)})
+		}
+		rowsErr := rows.Err()
+		rows.Close()
+		if rowsErr != nil {
+			return rowsErr
+		}
+	}
+	for _, spell := range spells {
+		for slot := 3; slot < 7; slot++ {
+			if actionBarSlots[slot]&0x00FFFFFF == 0 {
+				actionBarSlots[slot] = spell.id | uint32(spell.active)<<24
+				break
+			}
+		}
+	}
+	for index, want := range actionBarSlots {
+		got, err := reader.ReadU32()
+		if err != nil || got != want {
+			return fmt.Errorf("active pet action-bar slot %d=%#x, want %#x (err=%v)", index, got, want, err)
+		}
+	}
+	permanent := petType == int64(petTypeHunter) || petType == int64(petTypeSummon) && (s.player.Class == 9 && uint32(creatureType) == creatureTypeDemon || s.player.Class == 6 && uint32(creatureType) == creatureTypeUndead)
+	wantSpellCount := 0
+	if permanent {
+		wantSpellCount = len(spells)
+	}
+	spellCount, err := reader.ReadU8()
+	if err != nil || int(spellCount) != wantSpellCount {
+		return fmt.Errorf("active pet additional-spell count=%d, want %d (err=%v)", spellCount, wantSpellCount, err)
+	}
+	for index := 0; index < wantSpellCount; index++ {
+		got, err := reader.ReadU32()
+		want := spells[index].id | uint32(spells[index].active)<<24
+		if err != nil || got != want {
+			return fmt.Errorf("active pet additional spell %d=%#x, want %#x (err=%v)", index, got, want, err)
+		}
+	}
+	type petCooldown struct {
+		spell, category  uint32
+		end, categoryEnd time.Time
+	}
+	cooldowns := make([]petCooldown, 0)
+	now := time.Now()
+	s.server.motionMu.Lock()
+	if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID); motion != nil {
+		for spell, end := range motion.SpellCooldowns {
+			cooldowns = append(cooldowns, petCooldown{spell: spell, category: motion.SpellCooldownCategories[spell], end: end, categoryEnd: motion.SpellCooldownCategoryEnds[spell]})
+		}
+	}
+	s.server.motionMu.Unlock()
+	sort.Slice(cooldowns, func(i, j int) bool { return cooldowns[i].spell < cooldowns[j].spell })
+	cooldownCount, err := reader.ReadU8()
+	if err != nil || int(cooldownCount) != len(cooldowns) {
+		return fmt.Errorf("active pet cooldown count=%d, want %d (err=%v)", cooldownCount, len(cooldowns), err)
+	}
+	for index, want := range cooldowns {
+		spell, err := reader.ReadU32()
+		if err != nil {
+			return err
+		}
+		category, err := reader.ReadU16()
+		if err != nil {
+			return err
+		}
+		spellMS, err := reader.ReadU32()
+		if err != nil {
+			return err
+		}
+		categoryMS, err := reader.ReadU32()
+		if err != nil {
+			return err
+		}
+		wantSpellMS := petCooldownMilliseconds(want.end, now)
+		wantCategoryMS := petCooldownMilliseconds(want.categoryEnd, now)
+		if wantSpellMS == 0 {
+			wantCategoryMS = 0
+		} else if wantCategoryMS > 0 {
+			wantSpellMS = 0
+		} else {
+			wantCategoryMS = 0
+		}
+		if spell != want.spell || category != uint16(want.category) || math.Abs(float64(int64(spellMS)-int64(wantSpellMS))) > 2000 || math.Abs(float64(int64(categoryMS)-int64(wantCategoryMS))) > 2000 {
+			return fmt.Errorf("active pet cooldown %d=(%d,%d,%d,%d), want (%d,%d,%d,%d)", index, spell, category, spellMS, categoryMS, want.spell, want.category, wantSpellMS, wantCategoryMS)
+		}
+	}
+	if reader.Remaining() != 0 {
+		return fmt.Errorf("active pet spell payload has %d trailing bytes", reader.Remaining())
+	}
+	return nil
+}
+
+func (s *session) validateLoginMovementAuraPackets(trace protocoltrace.Trace) error {
+	if s == nil || s.player == nil {
+		return nil
+	}
+	const (
+		auraRoot  uint32 = 26
+		auraStun  uint32 = 12
+		auraWater uint32 = 104
+		auraFall  uint32 = 105
+		auraHover uint32 = 106
+	)
+	want := map[uint32]bool{}
+	rooted, stunned, compound := false, false, false
+	for _, aura := range s.loadedAuras() {
+		rooted = rooted || s.loginAuraHasEffectType(aura, auraRoot)
+		stunned = stunned || s.loginAuraHasEffectType(aura, auraStun)
+		for _, auraType := range []uint32{auraWater, auraFall, auraHover} {
+			if s.loginAuraHasEffectType(aura, auraType) {
+				opcode := map[uint32]uint32{auraWater: uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK), auraFall: uint32(protocol.OpcodeSMSG_MOVE_FEATHER_FALL), auraHover: uint32(protocol.OpcodeSMSG_MOVE_SET_HOVER)}[auraType]
+				want[opcode] = true
+				compound = true
+			}
+		}
+	}
+	if s.hasActiveFlightCapability() {
+		want[uint32(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY)] = true
+		want[uint32(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE)] = true
+	}
+	if stunned {
+		want[uint32(protocol.OpcodeSMSG_FORCE_MOVE_ROOT)] = true
+	}
+	if rooted || compound {
+		want[uint32(protocol.OpcodeSMSG_MULTIPLE_MOVES)] = true
+	}
+	counts := make(map[uint32]int)
+	for _, event := range trace.Events {
+		if event.Direction != protocoltrace.ServerToClient {
+			continue
+		}
+		if s.traceStatePrefix != "" && event.State != s.traceStatePrefix && !strings.HasPrefix(event.State, s.traceStatePrefix+" ") {
+			continue
+		}
+		if event.Opcode == uint32(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE) {
+			break
+		}
+		switch event.Opcode {
+		case uint32(protocol.OpcodeSMSG_MOVE_WATER_WALK), uint32(protocol.OpcodeSMSG_MOVE_FEATHER_FALL), uint32(protocol.OpcodeSMSG_MOVE_SET_HOVER), uint32(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY), uint32(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE), uint32(protocol.OpcodeSMSG_FORCE_MOVE_ROOT), uint32(protocol.OpcodeSMSG_MULTIPLE_MOVES):
+			counts[event.Opcode]++
+		}
+	}
+	for opcode, count := range counts {
+		if !want[opcode] || count != 1 {
+			return fmt.Errorf("login movement packet %s count=%d is unexpected", opcodeName(opcode), count)
+		}
+	}
+	for opcode := range want {
+		if counts[opcode] != 1 {
+			return fmt.Errorf("login movement packet %s count=%d, want 1 from saved aura effects", opcodeName(opcode), counts[opcode])
+		}
+	}
+	return nil
+}
+
+func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petCooldownSpell, petPowerSpell, petXPAward, petFeedSpell uint32, petFoodGUID uint64, petAuraSourceSpell, petFocusAuraSpell, lfgDungeonID, instanceEntryMapID, instanceEntryID, rewardedQuestID uint32, critterPetReplay bool, farTeleportTarget *replayTeleportTarget, options ...replayLoginOptions) (protocoltrace.Trace, error) {
 	if server == nil || server.CharactersStore == nil || server.CharactersStore.DB == nil || guid == 0 {
 		return protocoltrace.Trace{}, errors.New("login replay requires a server and character database")
 	}
@@ -578,6 +1033,15 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 	session, err := newReplayCharacterSession(ctx, server, guid)
 	if err != nil {
 		return protocoltrace.Trace{}, err
+	}
+	if len(options) > 1 {
+		return protocoltrace.Trace{}, errors.New("login replay accepts at most one override")
+	}
+	if len(options) == 1 {
+		if options[0].sharedQuestID == 0 || options[0].sharedQuestSender == 0 || options[0].sharedQuestSender == guid {
+			return protocoltrace.Trace{}, errors.New("shared-quest login replay requires a quest ID and distinct sharer GUID")
+		}
+		session.sharingQuestID, session.sharingQuestSender = options[0].sharedQuestID, options[0].sharedQuestSender
 	}
 	recorder := protocoltrace.NewRecorder("morenocore-in-process-login-replay")
 	server.TraceRecorder = recorder
@@ -596,6 +1060,33 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 	if !session.handlePlayerLogin(ctx, packet.Bytes()) {
 		return recorder.Snapshot(), errors.New("character login handler rejected the replay")
 	}
+	if err := session.validateSavedInventoryDurationPayloads(ctx, recorder.Snapshot()); err != nil {
+		session.logout()
+		return recorder.Snapshot(), err
+	}
+	if err := session.validateLoginMovementAuraPackets(recorder.Snapshot()); err != nil {
+		session.logout()
+		return recorder.Snapshot(), err
+	}
+	if len(options) == 1 {
+		petGUID := uint64(0)
+		if session.player != nil {
+			petGUID = session.player.PetGUID
+		}
+		questDetails, err := session.loadQuestDetailData(ctx, options[0].sharedQuestID)
+		if err != nil {
+			return recorder.Snapshot(), err
+		}
+		expectedDetails := buildQuestGiverDetails(questDetails, guid, options[0].sharedQuestSender)
+		if err := validateSharedQuestPetPacketOrder(recorder.Snapshot(), guid, petGUID, options[0].sharedQuestID, options[0].sharedQuestSender, expectedDetails); err != nil {
+			session.logout()
+			return recorder.Snapshot(), err
+		}
+		if err := session.validateSavedPetSpellPayload(ctx, recorder.Snapshot(), petGUID); err != nil {
+			session.logout()
+			return recorder.Snapshot(), err
+		}
+	}
 	if err := validateWorldReadyFanout(server, session); err != nil {
 		session.logout()
 		return recorder.Snapshot(), err
@@ -610,6 +1101,18 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 		if err := session.validateCritterPetLoginReplay(ctx); err != nil {
 			session.logout()
 			return recorder.Snapshot(), err
+		}
+	}
+	if farTeleportTarget != nil {
+		var teleportErr error
+		if farTeleportTarget.SameMap {
+			teleportErr = session.replayNearTeleport(ctx, *farTeleportTarget)
+		} else {
+			teleportErr = session.replayFarTeleport(ctx, *farTeleportTarget)
+		}
+		if teleportErr != nil {
+			session.logout()
+			return recorder.Snapshot(), teleportErr
 		}
 	}
 	if petAuraSourceSpell != 0 {
@@ -652,10 +1155,60 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 		}
 		_, _, _, wasBattlefield := battlegroundTypeForMap(before.Map)
 		wasTaxiing := before.TaxiPath != ""
+		teleportTraceStart := len(recorder.Snapshot().Events)
 		session.teleportToLFGDungeon(lfgDungeonID)
 		if !wasDungeon && !wasBattlefield && !wasTaxiing && (session.bgData.JoinMap != before.Map || session.bgData.JoinX != before.X || session.bgData.JoinY != before.Y || session.bgData.JoinZ != before.Z || session.bgData.JoinO != before.Orientation) {
 			session.logout()
 			return recorder.Snapshot(), fmt.Errorf("LFG return point map=%d position=(%v,%v,%v,%v), want map=%d position=(%v,%v,%v,%v)", session.bgData.JoinMap, session.bgData.JoinX, session.bgData.JoinY, session.bgData.JoinZ, session.bgData.JoinO, before.Map, before.X, before.Y, before.Z, before.Orientation)
+		}
+		if !session.farTeleportPending || session.player.Map == before.Map {
+			session.logout()
+			return recorder.Snapshot(), errors.New("LFG replay did not enter the source far-teleport path")
+		}
+		teleportEvents := recorder.Snapshot().Events
+		transferPendingIndex, newWorldIndex := -1, -1
+		for index := teleportTraceStart; index < len(teleportEvents); index++ {
+			event := teleportEvents[index]
+			if event.Direction != protocoltrace.ServerToClient {
+				continue
+			}
+			if event.Opcode == uint32(protocol.OpcodeSMSG_TRANSFER_PENDING) && transferPendingIndex < 0 {
+				transferPendingIndex = index
+			}
+			if event.Opcode == uint32(protocol.OpcodeSMSG_NEW_WORLD) && newWorldIndex < 0 {
+				newWorldIndex = index
+			}
+		}
+		if transferPendingIndex < 0 || newWorldIndex <= transferPendingIndex {
+			session.logout()
+			return recorder.Snapshot(), errors.New("far teleport did not send TRANSFER_PENDING before NEW_WORLD")
+		}
+		worldportAckIndex := len(teleportEvents)
+		recorder.Record(protocoltrace.ClientToServer, uint32(protocol.OpcodeMSG_MOVE_WORLDPORT_ACK), nil, "in-process-worldport-ack")
+		if !session.completeWorldPort(ctx) || !session.worldReady.Load() || session.farTeleportPending {
+			session.logout()
+			return recorder.Snapshot(), errors.New("far teleport did not reconstruct the character after WORLDPORT_ACK")
+		}
+		teleportEvents = recorder.Snapshot().Events
+		spellIndex, createIndex, worldStatesIndex := -1, -1, -1
+		for index := worldportAckIndex + 1; index < len(teleportEvents); index++ {
+			event := teleportEvents[index]
+			if event.Direction != protocoltrace.ServerToClient {
+				continue
+			}
+			if spellIndex < 0 && event.Opcode == uint32(protocol.OpcodeSMSG_INITIAL_SPELLS) {
+				spellIndex = index
+			}
+			if createIndex < 0 && (event.Opcode == uint32(protocol.OpcodeSMSG_UPDATE_OBJECT) || event.Opcode == uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT)) {
+				createIndex = index
+			}
+			if worldStatesIndex < 0 && event.Opcode == uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES) {
+				worldStatesIndex = index
+			}
+		}
+		if spellIndex < 0 || createIndex <= spellIndex || worldStatesIndex <= createIndex {
+			session.logout()
+			return recorder.Snapshot(), errors.New("far teleport did not send source pre-map state, create update, and post-map world states in order")
 		}
 	}
 	if instanceEntryID != 0 {
@@ -677,6 +1230,10 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 		if session.player == nil || session.player.PetGUID == 0 {
 			session.logout()
 			return recorder.Snapshot(), errors.New("pet cooldown replay requires an active pet")
+		}
+		if session.player.PetGUID>>48 != 0xF140 || uint32(session.player.PetGUID>>24&0x00FFFFFF) != session.player.PetNumber || uint32(session.player.PetGUID&0x00FFFFFF) == 0 {
+			session.logout()
+			return recorder.Snapshot(), errors.New("pet runtime GUID does not contain the saved pet number and map counter")
 		}
 		motion, motionFound := session.petMotionForCast(session.player.PetGUID)
 		if !motionFound || !session.petKnowsSpell(ctx, motion, petCooldownSpell) {
@@ -822,7 +1379,7 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 			return recorder.Snapshot(), errors.New("pet XP replay requires an active pet")
 		}
 		server.motionMu.Lock()
-		motion := server.creatureMotion[session.player.PetGUID]
+		motion := server.findCreatureMotionLocked(session.player.Map, session.player.InstanceID, session.player.PetGUID)
 		if motion == nil || motion.PetType != 1 || motion.Health == 0 {
 			server.motionMu.Unlock()
 			session.logout()
@@ -891,7 +1448,7 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 			return recorder.Snapshot(), fmt.Errorf("pet feed fixture rejected with source cast result %d", failure)
 		}
 		server.motionMu.Lock()
-		motion := server.creatureMotion[beforeFeed.PetGUID]
+		motion := server.findCreatureMotionLocked(session.player.Map, session.player.InstanceID, beforeFeed.PetGUID)
 		if motion == nil || motion.Health == 0 {
 			server.motionMu.Unlock()
 			session.logout()
@@ -913,7 +1470,7 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 			return recorder.Snapshot(), errors.New("pet feed cast handler rejected the replay packet")
 		}
 		server.motionMu.Lock()
-		castMotion := server.creatureMotion[petGUID]
+		castMotion := server.findCreatureMotionLocked(session.player.Map, session.player.InstanceID, petGUID)
 		castPetType, castPetID, castMaxHappiness := uint8(0), uint32(0), uint32(0)
 		if castMotion != nil {
 			castPetType, castPetID, castMaxHappiness = castMotion.PetType, castMotion.PetID, castMotion.MaxPowers[4]
@@ -923,7 +1480,7 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 		var aura *activeAura
 		for aura == nil && time.Now().Before(deadline) {
 			server.auraMu.Lock()
-			aura = server.activeCreatureAuras[petGUID][feedEffect.TriggerSpell]
+			aura = server.activeCreatureAuras[creatureAuraKeyForMotion(castMotion)][feedEffect.TriggerSpell]
 			if aura != nil && aura.TickTimer != nil {
 				aura.TickTimer.Stop()
 				aura.TickTimer = nil
@@ -943,7 +1500,7 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 		}
 		trace := recorder.Snapshot()
 		server.motionMu.Lock()
-		motion = server.creatureMotion[petGUID]
+		motion = server.findCreatureMotionLocked(session.player.Map, session.player.InstanceID, petGUID)
 		afterHappiness := uint32(0)
 		afterPower, maxHappiness := uint32(0), uint32(0)
 		afterPetType, afterPetID, afterPowerType := uint8(0), uint32(0), uint32(0)
@@ -1018,6 +1575,211 @@ func (s *session) validateCritterPetLoginReplay(ctx context.Context) error {
 		if event.Direction == protocoltrace.ServerToClient && event.Opcode == uint32(protocol.OpcodeSMSG_PET_SPELLS) {
 			return errors.New("critter login sent a controlled-pet spell bar")
 		}
+	}
+	return nil
+}
+
+func (s *session) replayNearTeleport(ctx context.Context, target replayTeleportTarget) error {
+	if s == nil || s.server == nil || s.server.TraceRecorder == nil || s.player == nil || target.Map != s.player.Map || !validTrinityMapCoordinates(target.X, target.Y, target.Z, target.Orientation) {
+		return errors.New("near-teleport replay requires a valid same-map destination")
+	}
+	if s.player.TransportGUID != 0 {
+		return errors.New("near-teleport replay requires a passenger-free starting state")
+	}
+	old := *s.player
+	start := len(s.server.TraceRecorder.Snapshot().Events)
+	if !s.teleportTo(target.Map, target.X, target.Y, target.Z, target.Orientation) {
+		return errors.New("near teleport request was rejected")
+	}
+	if !s.nearTeleportPending || s.player.X != old.X || s.player.Y != old.Y || s.player.Z != old.Z || s.player.Orientation != old.Orientation {
+		return errors.New("near teleport committed before client acknowledgement")
+	}
+	move := protocol.NewBuffer(64)
+	writeMovementInfo(move, movementInfo{GUID: s.playerGUID, Flags: movementForward, Time: 1, X: target.X + 1, Y: target.Y, Z: target.Z, Orientation: target.Orientation})
+	s.server.TraceRecorder.Record(protocoltrace.ClientToServer, uint32(protocol.OpcodeMSG_MOVE_HEARTBEAT), move.Bytes(), "near-teleport-movement-before-ack")
+	if !s.handleMovement(ctx, uint32(protocol.OpcodeMSG_MOVE_HEARTBEAT), move.Bytes()) || !s.nearTeleportPending || s.player.X != old.X || s.player.Y != old.Y {
+		return errors.New("movement changed player state while near teleport ACK was pending")
+	}
+	events := s.server.TraceRecorder.Snapshot().Events
+	selfIndex := -1
+	for index := start; index < len(events); index++ {
+		if events[index].Direction == protocoltrace.ServerToClient && events[index].Opcode == uint32(protocol.OpcodeMSG_MOVE_TELEPORT_ACK) {
+			selfIndex = index
+			break
+		}
+	}
+	if selfIndex < 0 {
+		return errors.New("near teleport did not send a self MSG_MOVE_TELEPORT_ACK")
+	}
+	payload, err := base64.StdEncoding.DecodeString(events[selfIndex].Payload)
+	if err != nil {
+		return err
+	}
+	b := protocol.NewReader(payload)
+	guid, err := b.ReadPackedGUID()
+	if err != nil || guid != s.playerGUID {
+		return fmt.Errorf("near teleport ACK GUID=%d, want %d (err=%v)", guid, s.playerGUID, err)
+	}
+	sequence, err := b.ReadU32()
+	if err != nil || sequence != 0 {
+		return fmt.Errorf("near teleport ACK sequence=%d, want 0 (err=%v)", sequence, err)
+	}
+	movement, err := readMovementInfo(b)
+	if err != nil || movement.X != target.X || movement.Y != target.Y || movement.Z != target.Z || movement.Orientation != target.Orientation {
+		return fmt.Errorf("near teleport movement=%+v, want destination %+v (err=%v)", movement, target, err)
+	}
+	wrongAck := protocol.NewBuffer(16)
+	wrongAck.WritePackedGUID(s.playerGUID ^ 1)
+	wrongAck.WriteU32(0)
+	wrongAck.WriteU32(0)
+	s.server.TraceRecorder.Record(protocoltrace.ClientToServer, uint32(protocol.OpcodeMSG_MOVE_TELEPORT_ACK), wrongAck.Bytes(), "near-teleport-wrong-guid-ack")
+	if !s.handleMoveTeleportAck(ctx, wrongAck.Bytes()) || !s.nearTeleportPending || s.player.X != old.X || s.player.Y != old.Y {
+		return errors.New("near teleport accepted an ACK from a different player GUID")
+	}
+	ack := protocol.NewBuffer(16)
+	ack.WritePackedGUID(s.playerGUID)
+	ack.WriteU32(0)
+	ack.WriteU32(0)
+	s.server.TraceRecorder.Record(protocoltrace.ClientToServer, uint32(protocol.OpcodeMSG_MOVE_TELEPORT_ACK), ack.Bytes(), "near-teleport-ack")
+	if !s.handleMoveTeleportAck(ctx, ack.Bytes()) || s.nearTeleportPending || s.player.X != target.X || s.player.Y != target.Y || s.player.Z != target.Z || s.player.Orientation != target.Orientation {
+		return errors.New("matching near-teleport ACK did not commit the destination")
+	}
+	var savedMap uint32
+	var savedX, savedY, savedZ, savedOrientation float32
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT map, position_x, position_y, position_z, orientation FROM characters WHERE guid = ?", s.playerGUID).Scan(&savedMap, &savedX, &savedY, &savedZ, &savedOrientation); err != nil {
+		return err
+	}
+	if savedMap != target.Map || savedX != target.X || savedY != target.Y || savedZ != target.Z || savedOrientation != target.Orientation {
+		return fmt.Errorf("saved near-teleport location %d (%.3f,%.3f,%.3f,%.3f) does not match destination", savedMap, savedX, savedY, savedZ, savedOrientation)
+	}
+	return nil
+}
+
+func (s *session) replayFarTeleport(ctx context.Context, target replayTeleportTarget) error {
+	if s == nil || s.server == nil || s.server.TraceRecorder == nil || s.player == nil || target.Map == s.player.Map || !validMovementPosition(target.X, target.Y, target.Z, target.Orientation) {
+		return errors.New("far-teleport replay requires a valid cross-map destination")
+	}
+	if s.player.TransportGUID != 0 {
+		return errors.New("far-teleport replay requires a passenger-free starting state")
+	}
+	petGUIDBefore, petNumberBefore := s.player.PetGUID, s.activePetNumber()
+	petMapBefore, petInstanceBefore := s.player.Map, s.player.InstanceID
+	start := len(s.server.TraceRecorder.Snapshot().Events)
+	if !s.teleportTo(target.Map, target.X, target.Y, target.Z, target.Orientation) {
+		return errors.New("far teleport request was rejected")
+	}
+	if !s.farTeleportPending || s.player.Map != target.Map {
+		return errors.New("cross-map teleport did not enter far-transfer state")
+	}
+	petResummonNumber := s.temporaryUnsummonedPetNumber
+	if petGUIDBefore != 0 && (s.player.PetGUID != 0 || s.server.findCreatureMotion(petMapBefore, petInstanceBefore, petGUIDBefore) != nil) {
+		return errors.New("far teleport did not temporarily remove the active pet from the source map")
+	}
+	if petResummonNumber != 0 && petResummonNumber != petNumberBefore {
+		return fmt.Errorf("far teleport queued pet number %d, want %d", petResummonNumber, petNumberBefore)
+	}
+	events := s.server.TraceRecorder.Snapshot().Events
+	transferIndex, worldIndex := -1, -1
+	for index := start; index < len(events); index++ {
+		event := events[index]
+		if event.Direction != protocoltrace.ServerToClient {
+			continue
+		}
+		if event.Opcode == uint32(protocol.OpcodeSMSG_TRANSFER_PENDING) && transferIndex < 0 {
+			transferIndex = index
+		}
+		if event.Opcode == uint32(protocol.OpcodeSMSG_NEW_WORLD) && worldIndex < 0 {
+			worldIndex = index
+		}
+	}
+	if transferIndex < 0 || worldIndex <= transferIndex {
+		return errors.New("far transfer did not send TRANSFER_PENDING before NEW_WORLD")
+	}
+	worldPayload, err := base64.StdEncoding.DecodeString(events[worldIndex].Payload)
+	if err != nil {
+		return err
+	}
+	worldReader := protocol.NewReader(worldPayload)
+	worldMap, err := worldReader.ReadU32()
+	if err != nil || worldMap != target.Map {
+		return fmt.Errorf("SMSG_NEW_WORLD map=%d, want %d (err=%v)", worldMap, target.Map, err)
+	}
+	for _, expected := range []float32{target.X, target.Y, target.Z, target.Orientation} {
+		actual, readErr := worldReader.ReadF32()
+		if readErr != nil || actual != expected {
+			return fmt.Errorf("SMSG_NEW_WORLD position=%v, want %v (err=%v)", actual, expected, readErr)
+		}
+	}
+	if worldReader.Remaining() != 0 {
+		return fmt.Errorf("SMSG_NEW_WORLD has %d trailing bytes", worldReader.Remaining())
+	}
+	s.server.TraceRecorder.Record(protocoltrace.ClientToServer, uint32(protocol.OpcodeMSG_MOVE_WORLDPORT_ACK), nil, "in-process-worldport-ack")
+	ackIndex := len(s.server.TraceRecorder.Snapshot().Events) - 1
+	if !s.completeWorldPort(ctx) || !s.worldReady.Load() || s.farTeleportPending || s.player.Map != target.Map || s.player.X != target.X || s.player.Y != target.Y || s.player.Z != target.Z || s.player.Orientation != target.Orientation {
+		return errors.New("WORLDPORT_ACK did not reconstruct the player on the destination map")
+	}
+	if petResummonNumber != 0 {
+		if s.activePetNumber() != petResummonNumber || s.player.PetGUID == 0 || s.temporaryUnsummonedPetNumber != 0 {
+			return fmt.Errorf("WORLDPORT_ACK did not restore pet %d", petResummonNumber)
+		}
+		motion := s.server.findCreatureMotion(target.Map, s.player.InstanceID, s.player.PetGUID)
+		if motion == nil || motion.OwnerGUID != s.playerGUID || motion.PetID != petResummonNumber || s.server.findCreatureMotion(petMapBefore, petInstanceBefore, petGUIDBefore) != nil {
+			return fmt.Errorf("WORLDPORT_ACK pet runtime scope mismatch: new=%+v old=%+v", motion, s.server.findCreatureMotion(petMapBefore, petInstanceBefore, petGUIDBefore))
+		}
+	}
+	events = s.server.TraceRecorder.Snapshot().Events
+	spellIndex, createIndex, worldStatesIndex, timeSyncIndex, loginEffectIndex, petSpellsIndex, loginEffectCount := -1, -1, -1, -1, -1, -1, 0
+	for index := ackIndex + 1; index < len(events); index++ {
+		event := events[index]
+		if event.Direction != protocoltrace.ServerToClient {
+			continue
+		}
+		if spellIndex < 0 && event.Opcode == uint32(protocol.OpcodeSMSG_INITIAL_SPELLS) {
+			spellIndex = index
+		}
+		if createIndex < 0 && (event.Opcode == uint32(protocol.OpcodeSMSG_UPDATE_OBJECT) || event.Opcode == uint32(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT)) {
+			createIndex = index
+		}
+		if petSpellsIndex < 0 && event.Opcode == uint32(protocol.OpcodeSMSG_PET_SPELLS) {
+			petSpellsIndex = index
+		}
+		if worldStatesIndex < 0 && event.Opcode == uint32(protocol.OpcodeSMSG_INIT_WORLD_STATES) {
+			worldStatesIndex = index
+		}
+		if timeSyncIndex < 0 && event.Opcode == uint32(protocol.OpcodeSMSG_TIME_SYNC_REQ) {
+			timeSyncIndex = index
+		}
+		if event.Opcode == uint32(protocol.OpcodeSMSG_SPELL_GO) {
+			payload, err := base64.StdEncoding.DecodeString(event.Payload)
+			if err != nil {
+				return err
+			}
+			reader := protocol.NewReader(payload)
+			casterGUID, err := reader.ReadPackedGUID()
+			if err != nil {
+				return err
+			}
+			if _, err := reader.ReadPackedGUID(); err != nil {
+				return err
+			}
+			if _, err := reader.ReadU8(); err != nil {
+				return err
+			}
+			spellID, err := reader.ReadU32()
+			if err != nil {
+				return err
+			}
+			if spellID == 836 && casterGUID == s.playerGUID {
+				loginEffectCount++
+				loginEffectIndex = index
+			}
+		}
+	}
+	if spellIndex <= ackIndex || createIndex <= spellIndex || worldStatesIndex <= createIndex || timeSyncIndex <= worldStatesIndex || loginEffectCount != 1 || loginEffectIndex <= timeSyncIndex {
+		return errors.New("far-transfer login reconstruction packet order differs from source")
+	}
+	if petResummonNumber != 0 && petSpellsIndex <= ackIndex {
+		return fmt.Errorf("WORLDPORT_ACK did not send pet spells for restored pet %d", petResummonNumber)
 	}
 	return nil
 }
@@ -1146,7 +1908,7 @@ func (s *session) validateOwnerPetAuraReplay(ctx context.Context, ownerSpellID u
 		return errors.New("owner pet-aura replay source spell is missing from DBC")
 	}
 	s.server.motionMu.Lock()
-	motion := s.server.creatureMotion[s.player.PetGUID]
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, s.player.PetGUID)
 	s.server.motionMu.Unlock()
 	if motion == nil {
 		return errors.New("owner pet-aura replay pet motion is missing")
@@ -1168,7 +1930,8 @@ func (s *session) validateOwnerPetAuraReplay(ctx context.Context, ownerSpellID u
 			continue
 		}
 		s.server.auraMu.Lock()
-		current := s.server.activeCreatureAuras[motion.GUID][auraSpellID]
+		petKey := creatureAuraKeyForMotion(motion)
+		current := s.server.activeCreatureAuras[petKey][auraSpellID]
 		var aura activeAura
 		if current != nil {
 			aura = *current
@@ -1234,7 +1997,8 @@ func (s *session) validateOwnerPetAuraRemoval(ctx context.Context, ownerSpellID 
 		if source, found := s.readOwnerPetAuraSource(ctx, ownerSpellID, uint8(index)); found {
 			if auraSpellID := source.auraForPet(motion.Entry); auraSpellID != 0 {
 				s.server.auraMu.Lock()
-				aura := s.server.activeCreatureAuras[motion.GUID][auraSpellID]
+				petKey := creatureAuraKeyForMotion(motion)
+				aura := s.server.activeCreatureAuras[petKey][auraSpellID]
 				stillActive := aura != nil && aura.OwnerPetAura && aura.OwnerPetAuraSourceSpell == ownerSpellID && aura.OwnerPetAuraSourceEffect == uint8(index)
 				s.server.auraMu.Unlock()
 				if stillActive {
@@ -1276,7 +2040,8 @@ func (s *session) replayOwnerPetAuraChange(ctx context.Context, ownerSpellID uin
 		}
 		if auraSpellID := source.auraForPet(motion.Entry); auraSpellID != 0 {
 			s.server.auraMu.Lock()
-			aura := s.server.activeCreatureAuras[motion.GUID][auraSpellID]
+			petKey := creatureAuraKeyForMotion(motion)
+			aura := s.server.activeCreatureAuras[petKey][auraSpellID]
 			stillActive := aura != nil && aura.OwnerPetAura && aura.OwnerPetAuraSourceSpell == key.SpellID && aura.OwnerPetAuraSourceEffect == key.EffectIndex
 			s.server.auraMu.Unlock()
 			if stillActive {
@@ -1307,7 +2072,7 @@ func (s *session) replayPetFocusAura(ctx context.Context, spellID uint32) error 
 	}
 	petGUID := s.player.PetGUID
 	s.server.motionMu.Lock()
-	motion := s.server.creatureMotion[petGUID]
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID)
 	if motion == nil || motion.Health == 0 {
 		s.server.motionMu.Unlock()
 		return errors.New("pet focus-aura replay requires a living pet")
@@ -1320,17 +2085,18 @@ func (s *session) replayPetFocusAura(ctx context.Context, spellID uint32) error 
 	s.server.motionMu.Unlock()
 	s.server.auraMu.Lock()
 	if s.server.activeCreatureAuras == nil {
-		s.server.activeCreatureAuras = make(map[uint64]map[uint32]*activeAura)
+		s.server.activeCreatureAuras = make(map[creatureAuraKey]map[uint32]*activeAura)
 	}
-	if s.server.activeCreatureAuras[petGUID] == nil {
-		s.server.activeCreatureAuras[petGUID] = make(map[uint32]*activeAura)
+	petKey := creatureAuraKeyForMotion(motion)
+	if s.server.activeCreatureAuras[petKey] == nil {
+		s.server.activeCreatureAuras[petKey] = make(map[uint32]*activeAura)
 	}
-	previousAura := s.server.activeCreatureAuras[petGUID][spellID]
+	previousAura := s.server.activeCreatureAuras[petKey][spellID]
 	effect := spell.Effects[effectIndex]
 	mask := uint8(1 << uint(effectIndex))
-	aura := &activeAura{SpellID: spellID, AuraType: effect.Aura, EffectMask: mask, CasterGUID: petGUID, TargetGUID: petGUID, MiscValue: effect.MiscValue, Amount: 50, Positive: true, StackCount: 1}
+	aura := &activeAura{SpellID: spellID, AuraType: effect.Aura, EffectMask: mask, CasterGUID: petGUID, TargetGUID: petGUID, TargetKey: petKey, MiscValue: effect.MiscValue, Amount: 50, Positive: true, StackCount: 1}
 	aura.Amounts[effectIndex], aura.BaseAmounts[effectIndex] = 50, effect.BasePoints
-	s.server.activeCreatureAuras[petGUID][spellID] = aura
+	s.server.activeCreatureAuras[petKey][spellID] = aura
 	s.server.auraMu.Unlock()
 	defer func() {
 		s.server.motionMu.Lock()
@@ -1339,9 +2105,9 @@ func (s *session) replayPetFocusAura(ctx context.Context, spellID uint32) error 
 		s.server.motionMu.Unlock()
 		s.server.auraMu.Lock()
 		if previousAura == nil {
-			delete(s.server.activeCreatureAuras[petGUID], spellID)
+			delete(s.server.activeCreatureAuras[petKey], spellID)
 		} else {
-			s.server.activeCreatureAuras[petGUID][spellID] = previousAura
+			s.server.activeCreatureAuras[petKey][spellID] = previousAura
 		}
 		s.server.auraMu.Unlock()
 	}()

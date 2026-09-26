@@ -52,6 +52,7 @@ func calcParryHastedRemaining(remaining, attackTime time.Duration) time.Duration
 type combatTarget struct {
 	GUID        uint64
 	Map         uint32
+	InstanceID  uint32
 	X           float32
 	Y           float32
 	Z           float32
@@ -100,6 +101,7 @@ func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarge
 			return combatTarget{
 				GUID:        guid,
 				Map:         playerSess.player.Map,
+				InstanceID:  playerSess.player.InstanceID,
 				X:           playerSess.player.X,
 				Y:           playerSess.player.Y,
 				Z:           playerSess.player.Z,
@@ -119,14 +121,7 @@ func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarge
 		}
 	}
 	s.server.motionMu.Lock()
-	if s.server.creatureMotion != nil {
-		motion := s.server.creatureMotion[guid]
-		if motion == nil {
-			low := uint32(guid & 0x00FFFFFF)
-			entry := uint32((guid >> 24) & 0x00FFFFFF)
-			stdKey := creatureWorldGUID(low, entry)
-			motion = s.server.creatureMotion[stdKey]
-		}
+	if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, guid); motion != nil {
 		if motion != nil {
 			reach := motion.CombatReach
 			if reach <= 0 {
@@ -135,6 +130,7 @@ func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarge
 			target := combatTarget{
 				GUID:        guid,
 				Map:         motion.Map,
+				InstanceID:  motion.InstanceID,
 				X:           motion.X,
 				Y:           motion.Y,
 				Z:           motion.Z,
@@ -332,7 +328,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 				targetState = protocol.VictimStateIsImmune
 			}
 		}
-	} else if !isPlayerVictim && s.server != nil && s.server.isCreatureEvading(target.GUID) {
+	} else if !isPlayerVictim && s.server != nil && s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, target.GUID) {
 		outcome = protocol.MeleeHitEvade
 		hitInfo = protocol.HitInfoMiss
 		targetState = protocol.VictimStateEvades
@@ -376,7 +372,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			}
 		}
 	} else if !isPlayerVictim && s.server != nil && damage > 0 {
-		absorbed, remaining := s.server.applyCreatureAbsorptionShields(target.GUID, damage, 1)
+		absorbed, remaining := s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage, 1)
 		damage = remaining
 		if remaining == 0 && absorbed > 0 {
 			hitInfo |= protocol.HitInfoFullAbsorb
@@ -401,7 +397,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			}
 		} else {
 			s.server.motionMu.Lock()
-			if motion := s.server.creatureMotion[target.GUID]; motion != nil {
+			if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID); motion != nil {
 				if motion.FlagsExtra&creatureFlagExtraNoParryHasten == 0 {
 					cSpeed := time.Duration(motion.AttackTime) * time.Millisecond
 					if cSpeed <= 0 {
@@ -440,7 +436,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	s.procItemAndTrinketEffects(ctx, target, attType, outcome)
 
 	if s.server != nil {
-		s.server.triggerPetDefensive(s.playerGUID, target.GUID)
+		s.server.triggerPetDefensive(s.player.Map, s.player.InstanceID, s.playerGUID, target.GUID)
 	}
 
 	// If target is an online player (e.g. duel opponent or PvP)
@@ -478,25 +474,20 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	}
 
 	if damage == 0 {
-		if s.server != nil && (isPlayerVictim || !s.server.isCreatureEvading(target.GUID)) {
+		if s.server != nil && (isPlayerVictim || !s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, target.GUID)) {
 			s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
 		}
 		return
 	}
 
-	low := uint32(target.GUID & 0x00FFFFFF)
-	entry := uint32((target.GUID >> 24) & 0x00FFFFFF)
-	stdKey := creatureWorldGUID(low, entry)
-
 	if damage >= target.Health {
 		// Target dies
 		s.server.motionMu.Lock()
-		motion := s.server.creatureMotion[target.GUID]
-		if motion == nil {
-			motion = s.server.creatureMotion[stdKey]
-		}
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
 		if motion != nil {
+			s.server.clearInstanceEncounter(motion)
 			motion.Health = 0
+			motion.DynamicFlags |= unitDynFlagLootable
 			motion.InCombat = false
 			motion.TargetGUID = 0
 			motion.Moving = false
@@ -506,12 +497,12 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		}
 		s.server.motionMu.Unlock()
 
-		s.server.stopCreatureMotion(target.Map, target.GUID, target.X, target.Y, target.Z)
-		s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{
+		s.server.stopCreatureMotionInInstance(target.Map, target.InstanceID, target.GUID, target.X, target.Y, target.Z)
+		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth:       0,
 			unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
 		})
-		s.server.broadcastThreatClear(target.Map, target.GUID)
+		s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.GUID)
 		_ = s.sendAttackStop(target.GUID, true)
 		s.attackTarget = 0
 		s.onCreatureKilled(ctx, target)
@@ -519,10 +510,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	} else {
 		newHealth := target.Health - damage
 		s.server.motionMu.Lock()
-		motion := s.server.creatureMotion[target.GUID]
-		if motion == nil {
-			motion = s.server.creatureMotion[stdKey]
-		}
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
 		if motion != nil {
 			motion.Health = newHealth
 			if motion.ThreatMgr == nil {
@@ -538,7 +526,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			if switched && newVictim != motion.TargetGUID {
 				motion.TargetGUID = newVictim
 				entries := motion.ThreatMgr.SortedEntries()
-				s.server.broadcastHighestThreatUpdate(motion.Map, motion.GUID, newVictim, entries)
+				s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, entries)
 			}
 			if motion.BossAI != nil {
 				motion.BossAI.OnDamageTaken(ctx, s.server, motion, s.playerGUID, damage)
@@ -546,10 +534,10 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		}
 		s.server.motionMu.Unlock()
 
-		s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{
+		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth: newHealth,
 		})
-		s.server.procCreatureDamageAuras(target.GUID, true, damage, target.MaxHealth)
+		s.server.procCreatureDamageAuras(creatureAuraKeyForTarget(target), true, damage, target.MaxHealth)
 		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
 	}
 }
@@ -596,7 +584,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 	if s.server != nil {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
-		s.server.triggerPetDefensive(s.playerGUID, target.GUID)
+		s.server.triggerPetDefensive(s.player.Map, s.player.InstanceID, s.playerGUID, target.GUID)
 	}
 
 	// Outcome: ranged attacks can be dodged or blocked, but cannot be parried (TC rollMeleeOutcome)
@@ -629,7 +617,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				outcome = protocol.MeleeHitImmune
 			}
 		}
-	} else if !isPlayerVictim && s.server != nil && s.server.isCreatureEvading(target.GUID) {
+	} else if !isPlayerVictim && s.server != nil && s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, target.GUID) {
 		outcome = protocol.MeleeHitEvade
 	}
 
@@ -681,7 +669,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			absorbed, damage = vicSess.applyAbsorptionShields(damage, schoolMask)
 		}
 	} else if !isPlayerVictim && s.server != nil && damage > 0 {
-		absorbed, damage = s.server.applyCreatureAbsorptionShields(target.GUID, damage, schoolMask)
+		absorbed, damage = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage, schoolMask)
 	}
 
 	overkill := uint32(0)
@@ -740,19 +728,14 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		return
 	}
 
-	low := uint32(target.GUID & 0x00FFFFFF)
-	entry := uint32((target.GUID >> 24) & 0x00FFFFFF)
-	stdKey := creatureWorldGUID(low, entry)
-
 	if damage >= target.Health {
 		// Target dies
 		s.server.motionMu.Lock()
-		motion := s.server.creatureMotion[target.GUID]
-		if motion == nil {
-			motion = s.server.creatureMotion[stdKey]
-		}
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
 		if motion != nil {
+			s.server.clearInstanceEncounter(motion)
 			motion.Health = 0
+			motion.DynamicFlags |= unitDynFlagLootable
 			motion.InCombat = false
 			motion.TargetGUID = 0
 			motion.Moving = false
@@ -762,12 +745,12 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		}
 		s.server.motionMu.Unlock()
 
-		s.server.stopCreatureMotion(target.Map, target.GUID, target.X, target.Y, target.Z)
-		s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{
+		s.server.stopCreatureMotionInInstance(target.Map, target.InstanceID, target.GUID, target.X, target.Y, target.Z)
+		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth:       0,
 			unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
 		})
-		s.server.broadcastThreatClear(target.Map, target.GUID)
+		s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.GUID)
 		s.autoRepeatSpell = 0
 		s.autoRepeatTarget = 0
 		buf := protocol.NewBuffer(9)
@@ -776,15 +759,12 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		s.onCreatureKilled(ctx, target)
 		s.debug("target slain", "account", s.accountName, "guid", target.GUID)
 	} else {
-		if !isPlayerVictim && s.server != nil && s.server.isCreatureEvading(target.GUID) {
+		if !isPlayerVictim && s.server != nil && s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, target.GUID) {
 			return
 		}
 		newHealth := target.Health - damage
 		s.server.motionMu.Lock()
-		motion := s.server.creatureMotion[target.GUID]
-		if motion == nil {
-			motion = s.server.creatureMotion[stdKey]
-		}
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
 		if motion != nil {
 			motion.Health = newHealth
 			if motion.ThreatMgr == nil {
@@ -798,7 +778,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			if switched && newVictim != motion.TargetGUID {
 				motion.TargetGUID = newVictim
 				entries := motion.ThreatMgr.SortedEntries()
-				s.server.broadcastHighestThreatUpdate(motion.Map, motion.GUID, newVictim, entries)
+				s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, entries)
 			}
 			if motion.BossAI != nil {
 				motion.BossAI.OnDamageTaken(ctx, s.server, motion, s.playerGUID, damage)
@@ -806,7 +786,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		}
 		s.server.motionMu.Unlock()
 
-		s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{
+		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth: newHealth,
 		})
 		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
@@ -1185,10 +1165,7 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 	}
 
 	s.server.motionMu.Lock()
-	if s.server.creatureMotion == nil {
-		s.server.creatureMotion = make(map[uint64]*creatureMotion)
-	}
-	if motion := s.server.creatureMotion[target.GUID]; motion != nil {
+	if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID); motion != nil {
 		target.X, target.Y, target.Z, target.Orientation = motion.X, motion.Y, motion.Z, motion.Orientation
 		target.UnitFlags, target.FlagsExtra = motion.UnitFlags, motion.FlagsExtra
 		target.Health = motion.Health
@@ -1210,6 +1187,7 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 			GUID:        target.GUID,
 			Entry:       uint32(entry),
 			Map:         target.Map,
+			InstanceID:  s.player.InstanceID,
 			HomeX:       target.X,
 			HomeY:       target.Y,
 			HomeZ:       target.Z,
@@ -1231,9 +1209,10 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 			CombatReach: target.CombatReach,
 			Refreshed:   time.Now(),
 		}
-		s.server.creatureMotion[target.GUID] = motion
+		motions := s.server.motionMapLocked(target.Map, s.player.InstanceID)
+		motions[target.GUID] = motion
 		if guid != target.GUID {
-			s.server.creatureMotion[guid] = motion
+			motions[guid] = motion
 		}
 	}
 	s.server.motionMu.Unlock()
@@ -1251,7 +1230,7 @@ func (s *session) stopAttacksForFaction(ctx context.Context, factionID uint32) {
 	}
 	stops := make([]uint64, 0)
 	s.server.motionMu.Lock()
-	for _, motion := range s.server.creatureMotion {
+	for _, motion := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
 		if motion == nil || motion.TargetGUID != s.playerGUID || motion.Faction != factionID {
 			continue
 		}

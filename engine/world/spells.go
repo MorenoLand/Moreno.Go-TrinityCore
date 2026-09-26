@@ -161,11 +161,11 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 			centerX, centerY, centerZ = destination.X, destination.Y, destination.Z
 		}
 	}
-	player := playerPos{Map: s.player.Map, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	targets := make([]uint64, 0)
 	seen := make(map[uint64]struct{})
-	accept := func(guid uint64, mapID uint32, x, y, z float32, faction, unitFlags, flagsExtra, health uint32) {
-		if mapID != player.Map || health == 0 || creatureCombatDisabled(unitFlags, flagsExtra) || distance3D(x, y, z, centerX, centerY, centerZ) > float64(radius) || !s.server.isHostileFaction(faction, player) {
+	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, faction, unitFlags, flagsExtra, health uint32) {
+		if mapID != player.Map || instanceID != player.InstanceID || health == 0 || creatureCombatDisabled(unitFlags, flagsExtra) || distance3D(x, y, z, centerX, centerY, centerZ) > float64(radius) || !s.server.isHostileFaction(faction, player) {
 			return
 		}
 		if cone && !hasInArc(s.player.Orientation, s.player.X, s.player.Y, x, y, math.Pi/2) {
@@ -178,19 +178,22 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 		targets = append(targets, guid)
 	}
 	s.server.motionMu.Lock()
-	motions := make([]*creatureMotion, 0, len(s.server.creatureMotion))
-	for _, motion := range s.server.creatureMotion {
+	motionMap := s.server.motionMapLocked(player.Map, player.InstanceID)
+	motions := make([]*creatureMotion, 0, len(motionMap))
+	for _, motion := range motionMap {
 		if motion != nil {
 			motions = append(motions, motion)
 		}
 	}
 	s.server.motionMu.Unlock()
+	motionGUIDs := make(map[uint64]struct{}, len(motions))
 	for _, motion := range motions {
-		accept(motion.GUID, motion.Map, motion.X, motion.Y, motion.Z, motion.Faction, motion.UnitFlags, motion.FlagsExtra, motion.Health)
+		motionGUIDs[motion.GUID] = struct{}{}
+		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.Faction, motion.UnitFlags, motion.FlagsExtra, motion.Health)
 	}
 	s.server.sessionsMu.RLock()
 	for targetSession := range s.server.sessions {
-		if targetSession == s || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil || targetSession.player.Health == 0 || targetSession.player.Map != player.Map || targetSession.playerAlliance() == s.playerAlliance() {
+		if targetSession == s || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil || targetSession.player.Health == 0 || targetSession.player.Map != player.Map || targetSession.player.InstanceID != player.InstanceID || targetSession.playerAlliance() == s.playerAlliance() {
 			continue
 		}
 		if distance3D(targetSession.player.X, targetSession.player.Y, targetSession.player.Z, centerX, centerY, centerZ) > float64(radius) {
@@ -214,7 +217,10 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 				var low, entry, mapID, faction, unitFlags, flagsExtra, health int64
 				var x, y, z float64
 				if rows.Scan(&low, &entry, &mapID, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health) == nil {
-					accept(creatureWorldGUID(uint32(low), uint32(entry)), uint32(mapID), float32(x), float32(y), float32(z), uint32(faction), uint32(unitFlags), uint32(flagsExtra), uint32(health))
+					guid := creatureWorldGUID(uint32(low), uint32(entry))
+					if _, hasMotion := motionGUIDs[guid]; !hasMotion {
+						accept(guid, uint32(mapID), player.InstanceID, float32(x), float32(y), float32(z), uint32(faction), uint32(unitFlags), uint32(flagsExtra), uint32(health))
+					}
 				}
 			}
 		}
@@ -1048,7 +1054,7 @@ func (s *session) spawnPersistentAreaAura(ctx context.Context, spell wotlk.Spell
 	if schoolMask == 0 {
 		schoolMask = 1
 	}
-	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(lowGUID), CasterGUID: s.playerGUID, SpellID: uint64(spell.ID), Map: s.player.Map, X: x, Y: y, Z: z, Orientation: s.player.Orientation, Radius: radius, CastTime: uint32(time.Now().UnixMilli()), SpellData: spell, AuraEffect: auraEffect, AuraDurationMs: uint32(durationMs), AuraPeriodMs: periodMs, AuraAmount: amount, AuraSchoolMask: schoolMask, NextAuraTick: time.Now().Add(time.Duration(periodMs) * time.Millisecond)}
+	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(lowGUID), CasterGUID: s.playerGUID, SpellID: uint64(spell.ID), Map: s.player.Map, InstanceID: s.player.InstanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, Radius: radius, CastTime: uint32(time.Now().UnixMilli()), SpellData: spell, AuraEffect: auraEffect, AuraDurationMs: uint32(durationMs), AuraPeriodMs: periodMs, AuraAmount: amount, AuraSchoolMask: schoolMask, NextAuraTick: time.Now().Add(time.Duration(periodMs) * time.Millisecond)}
 	s.server.spawnDynamicSpellObject(object, time.Duration(durationMs)*time.Millisecond)
 }
 
@@ -1102,7 +1108,7 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 	}
 
 	isPlayerVictim := s.server != nil && s.server.findSessionByGUID(target.GUID) != nil
-	if !isPlayerVictim && s.server != nil && s.server.isCreatureEvading(target.GUID) {
+	if !isPlayerVictim && s.server != nil && s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, target.GUID) {
 		hitInfo := uint32(0x01) // SPELL_HIT_TYPE_MISS
 		damage = 0
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, 0, schoolMask, 0, 0, hitInfo), true)
@@ -1170,7 +1176,7 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 				}
 			}
 		} else if s.server != nil && damage > 0 {
-			absorbed, damage = s.server.applyCreatureAbsorptionShields(target.GUID, damage, schoolMask)
+			absorbed, damage = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage, schoolMask)
 		}
 	}
 
@@ -1228,19 +1234,14 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 		}
 	}
 
-	low := uint32(target.GUID & 0x00FFFFFF)
-	entry := uint32((target.GUID >> 24) & 0x00FFFFFF)
-	stdKey := creatureWorldGUID(low, entry)
-
 	if damage >= target.Health {
 		// Target dies
 		s.server.motionMu.Lock()
-		motion := s.server.creatureMotion[target.GUID]
-		if motion == nil {
-			motion = s.server.creatureMotion[stdKey]
-		}
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
 		if motion != nil {
+			s.server.clearInstanceEncounter(motion)
 			motion.Health = 0
+			motion.DynamicFlags |= unitDynFlagLootable
 			motion.InCombat = false
 			motion.TargetGUID = 0
 			motion.Moving = false
@@ -1250,12 +1251,12 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 		}
 		s.server.motionMu.Unlock()
 
-		s.server.stopCreatureMotion(target.Map, target.GUID, target.X, target.Y, target.Z)
-		s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{
+		s.server.stopCreatureMotionInInstance(target.Map, target.InstanceID, target.GUID, target.X, target.Y, target.Z)
+		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth:       0,
 			unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
 		})
-		s.server.broadcastThreatClear(target.Map, target.GUID)
+		s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.GUID)
 		_ = s.sendAttackStop(target.GUID, true)
 		s.attackTarget = 0
 		s.onCreatureKilled(ctx, target)
@@ -1263,10 +1264,7 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 	} else {
 		newHealth := target.Health - damage
 		s.server.motionMu.Lock()
-		motion := s.server.creatureMotion[target.GUID]
-		if motion == nil {
-			motion = s.server.creatureMotion[stdKey]
-		}
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
 		if motion != nil {
 			motion.Health = newHealth
 			motion.InCombat = true
@@ -1283,7 +1281,7 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 			if switched && newVictim != motion.TargetGUID {
 				motion.TargetGUID = newVictim
 				entries := motion.ThreatMgr.SortedEntries()
-				s.server.broadcastHighestThreatUpdate(motion.Map, motion.GUID, newVictim, entries)
+				s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, entries)
 			} else {
 				motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
 			}
@@ -1293,10 +1291,10 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 			motion.Moving = true
 		}
 		s.server.motionMu.Unlock()
-		s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{unitFieldHealth: newHealth})
-		s.server.procCreatureDamageAuras(target.GUID, true, damage, target.MaxHealth)
+		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldHealth: newHealth})
+		s.server.procCreatureDamageAuras(creatureAuraKeyForTarget(target), true, damage, target.MaxHealth)
 		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
-		s.server.triggerPetDefensive(s.playerGUID, targetGUID)
+		s.server.triggerPetDefensive(s.player.Map, s.player.InstanceID, s.playerGUID, targetGUID)
 	}
 }
 
@@ -1516,12 +1514,7 @@ func (s *session) adjustSpellPower(ctx context.Context, targetGUID uint64, power
 	}
 	if s.server != nil && targetGUID != 0 && targetGUID != s.playerGUID {
 		s.server.motionMu.Lock()
-		motion := s.server.creatureMotion[targetGUID]
-		if motion == nil {
-			low := uint32(targetGUID & 0x00FFFFFF)
-			entry := uint32((targetGUID >> 24) & 0x00FFFFFF)
-			motion = s.server.creatureMotion[creatureWorldGUID(low, entry)]
-		}
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
 		if motion != nil && motion.PetID != 0 && motion.Health > 0 {
 			index := uint32(powerType)
 			maximum, old := motion.MaxPowers[index], motion.Powers[index]
@@ -1548,7 +1541,7 @@ func (s *session) adjustSpellPower(ctx context.Context, targetGUID uint64, power
 					}
 					mapID, petGUID := motion.Map, motion.GUID
 					s.server.motionMu.Unlock()
-					s.server.broadcastCreatureValuesUpdate(mapID, petGUID, map[int]uint32{unitFieldPower1 + int(index): next})
+					s.server.broadcastCreatureValuesUpdateInInstance(mapID, motion.InstanceID, petGUID, map[int]uint32{unitFieldPower1 + int(index): next})
 					return
 				}
 			}
@@ -1602,12 +1595,7 @@ func (s *session) applySpellThreat(ctx context.Context, targetGUID uint64, amoun
 		return
 	}
 	s.server.motionMu.Lock()
-	motion := s.server.creatureMotion[targetGUID]
-	if motion == nil {
-		low := uint32(targetGUID & 0x00FFFFFF)
-		entry := uint32((targetGUID >> 24) & 0x00FFFFFF)
-		motion = s.server.creatureMotion[creatureWorldGUID(low, entry)]
-	}
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
 	if motion == nil || motion.Health == 0 || isCreaturePassive(motion) {
 		s.server.motionMu.Unlock()
 		return
@@ -1626,10 +1614,10 @@ func (s *session) applySpellThreat(ctx context.Context, targetGUID uint64, amoun
 	guid := motion.GUID
 	s.server.motionMu.Unlock()
 	if switched {
-		s.server.broadcastHighestThreatUpdate(mapID, guid, victim, entries)
+		s.server.broadcastHighestThreatUpdateInInstance(mapID, s.player.InstanceID, guid, victim, entries)
 	}
 	if !wasInCombat {
-		s.server.broadcastAIReaction(mapID, guid, 2)
+		s.server.broadcastAIReactionInInstance(mapID, s.player.InstanceID, guid, 2)
 		startPkt := buildAttackStart(guid, s.playerGUID)
 		_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, true)
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, s)
@@ -1910,6 +1898,7 @@ type activeAura struct {
 	EffectMask                 uint8
 	CasterGUID                 uint64
 	TargetGUID                 uint64
+	TargetKey                  creatureAuraKey
 	ItemGUID                   uint64
 	SchoolMask                 uint32
 	MiscValue                  int32
@@ -2190,14 +2179,14 @@ func calcMagicSpellResistance(damage uint32, schoolMask uint8, victimResistance 
 	return resisted, remainingDamage
 }
 
-func (s *Server) clearCreatureAuras(guid uint64) {
-	if s == nil {
+func (s *Server) clearCreatureAuras(key creatureAuraKey) {
+	if s == nil || key.GUID == 0 {
 		return
 	}
 	s.auraMu.Lock()
 	defer s.auraMu.Unlock()
 	if s.activeCreatureAuras != nil {
-		if auras, ok := s.activeCreatureAuras[guid]; ok {
+		if auras, ok := s.activeCreatureAuras[key]; ok {
 			for _, aura := range auras {
 				if aura != nil {
 					aura.Stopped = true
@@ -2209,11 +2198,11 @@ func (s *Server) clearCreatureAuras(guid uint64) {
 					}
 				}
 			}
-			delete(s.activeCreatureAuras, guid)
+			delete(s.activeCreatureAuras, key)
 		}
 	}
 	if s.creatureAuras != nil {
-		delete(s.creatureAuras, guid)
+		delete(s.creatureAuras, key)
 	}
 }
 
@@ -2912,26 +2901,27 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	if !ok || target.Health == 0 {
 		return
 	}
+	targetKey := creatureAuraKeyForTarget(target)
 
-	if s.server == nil || s.server.isCreatureEvading(targetGUID) {
+	if s.server == nil || s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, targetGUID) {
 		return
 	}
 	s.server.auraMu.Lock()
 	if s.server.creatureAuras == nil {
-		s.server.creatureAuras = make(map[uint64]map[uint32]struct{})
+		s.server.creatureAuras = make(map[creatureAuraKey]map[uint32]struct{})
 	}
-	if s.server.creatureAuras[targetGUID] == nil {
-		s.server.creatureAuras[targetGUID] = make(map[uint32]struct{})
+	if s.server.creatureAuras[targetKey] == nil {
+		s.server.creatureAuras[targetKey] = make(map[uint32]struct{})
 	}
-	s.server.creatureAuras[targetGUID][spell.ID] = struct{}{}
+	s.server.creatureAuras[targetKey][spell.ID] = struct{}{}
 
 	if s.server.activeCreatureAuras == nil {
-		s.server.activeCreatureAuras = make(map[uint64]map[uint32]*activeAura)
+		s.server.activeCreatureAuras = make(map[creatureAuraKey]map[uint32]*activeAura)
 	}
-	if s.server.activeCreatureAuras[targetGUID] == nil {
-		s.server.activeCreatureAuras[targetGUID] = make(map[uint32]*activeAura)
+	if s.server.activeCreatureAuras[targetKey] == nil {
+		s.server.activeCreatureAuras[targetKey] = make(map[uint32]*activeAura)
 	}
-	if existing, exists := s.server.activeCreatureAuras[targetGUID][spell.ID]; exists && existing != nil {
+	if existing, exists := s.server.activeCreatureAuras[targetKey][spell.ID]; exists && existing != nil {
 		existing.Stopped = true
 		if existing.Timer != nil {
 			existing.Timer.Stop()
@@ -2940,7 +2930,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			existing.TickTimer.Stop()
 		}
 	}
-	slot := uint8(len(s.server.activeCreatureAuras[targetGUID]) % 64)
+	slot := uint8(len(s.server.activeCreatureAuras[targetKey]) % 64)
 	aura := &activeAura{
 		SpellID:           spell.ID,
 		DispelType:        spell.DispelType,
@@ -2949,6 +2939,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		EffectMask:        spellEffectMask(spell, eff),
 		CasterGUID:        s.playerGUID,
 		TargetGUID:        targetGUID,
+		TargetKey:         targetKey,
 		SchoolMask:        schoolMask,
 		MiscValue:         eff.MiscValue,
 		Amount:            amount,
@@ -2965,10 +2956,10 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		HideDuration:      spell.AttributesEx5&spellAttr5HideDuration != 0,
 		RemainingCharges:  uint8(spell.ProcCharges),
 	}
-	s.server.activeCreatureAuras[targetGUID][spell.ID] = aura
+	s.server.activeCreatureAuras[targetKey][spell.ID] = aura
 	s.server.auraMu.Unlock()
 	if eff.Aura == spellAuraCharm {
-		spells, reactState, commandState, controlled := s.server.charmCreature(ctx, targetGUID, s.playerGUID, s.player.Race)
+		spells, reactState, commandState, controlled := s.server.charmCreature(ctx, targetKey, s.playerGUID, s.player.Race)
 		if controlled {
 			s.sendClientControl(targetGUID, true)
 			s.sendCharmPetSpells(targetGUID, spells, reactState, commandState)
@@ -2990,7 +2981,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	if durationMs > 0 && durationMs < 18000000 {
 		s.server.auraMu.Lock()
 		aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() {
-			s.expireCreatureAura(targetGUID, spell.ID, slot)
+			s.expireCreatureAura(targetKey, spell.ID, slot)
 		})
 		s.server.auraMu.Unlock()
 	}
@@ -3204,10 +3195,11 @@ func (s *session) scheduleCreaturePeriodicTickLocked(aura *activeAura, periodMs 
 
 func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 	ctx := context.Background()
+	key := aura.TargetKey
 	target, ok := s.getCombatTarget(ctx, aura.TargetGUID)
-	if !ok || target.Health == 0 || (s.server != nil && s.server.isCreatureEvading(aura.TargetGUID)) {
+	if !ok || target.Map != key.Map || target.InstanceID != key.InstanceID || target.Health == 0 || (s.server != nil && s.server.isCreatureEvadingInInstance(key.Map, key.InstanceID, key.GUID)) {
 		if s.server != nil {
-			s.server.clearCreatureAuras(aura.TargetGUID)
+			s.server.clearCreatureAuras(key)
 		}
 		return false
 	}
@@ -3241,21 +3233,18 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		logPkt := protocol.BuildPeriodicAuraLogDamage(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, dmg, overkill, aura.SchoolMask, 0, resisted, false)
 		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if s.server != nil {
-			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
+			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
 		}
 
 		if dmg >= targetHealth {
 			// Target slain by DoT
 			if s.server != nil {
 				s.server.motionMu.Lock()
-				motion := s.server.creatureMotion[aura.TargetGUID]
-				if motion == nil {
-					low := uint32(aura.TargetGUID & 0x00FFFFFF)
-					entry := uint32((aura.TargetGUID >> 24) & 0x00FFFFFF)
-					motion = s.server.creatureMotion[creatureWorldGUID(low, entry)]
-				}
+				motion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
 				if motion != nil {
+					s.server.clearInstanceEncounter(motion)
 					motion.Health = 0
+					motion.DynamicFlags |= unitDynFlagLootable
 					motion.InCombat = false
 					motion.TargetGUID = 0
 					motion.Moving = false
@@ -3265,13 +3254,13 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				}
 				s.server.motionMu.Unlock()
 
-				s.server.stopCreatureMotion(target.Map, target.GUID, target.X, target.Y, target.Z)
-				s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{
+				s.server.stopCreatureMotionInInstance(target.Map, target.InstanceID, target.GUID, target.X, target.Y, target.Z)
+				s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 					unitFieldHealth:       0,
 					unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
 				})
-				s.server.broadcastThreatClear(target.Map, target.GUID)
-				s.server.clearCreatureAuras(aura.TargetGUID)
+				s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.GUID)
+				s.server.clearCreatureAuras(key)
 			}
 			_ = s.sendAttackStop(target.GUID, true)
 			s.attackTarget = 0
@@ -3281,12 +3270,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			newHealth := targetHealth - dmg
 			if s.server != nil {
 				s.server.motionMu.Lock()
-				motion := s.server.creatureMotion[aura.TargetGUID]
-				if motion == nil {
-					low := uint32(aura.TargetGUID & 0x00FFFFFF)
-					entry := uint32((aura.TargetGUID >> 24) & 0x00FFFFFF)
-					motion = s.server.creatureMotion[creatureWorldGUID(low, entry)]
-				}
+				motion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
 				if motion != nil {
 					motion.Health = newHealth
 					motion.InCombat = true
@@ -3299,7 +3283,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 					motion.Moving = true
 				}
 				s.server.motionMu.Unlock()
-				s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{unitFieldHealth: newHealth})
+				s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldHealth: newHealth})
 				s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
 			}
 			return true
@@ -3319,14 +3303,14 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		logPkt := protocol.BuildPeriodicAuraLogHeal(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, heal, overheal, 0, false)
 		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if s.server != nil {
-			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
+			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
 			s.server.motionMu.Lock()
-			motion := s.server.creatureMotion[aura.TargetGUID]
+			motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, aura.TargetGUID)
 			if motion != nil {
 				motion.Health = newHP
 			}
 			s.server.motionMu.Unlock()
-			s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{unitFieldHealth: newHP})
+			s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldHealth: newHP})
 		}
 		return true
 
@@ -3345,7 +3329,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		logPkt := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, powerType, aura.Amount)
 		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if s.server != nil {
-			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
+			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
 		}
 		s.adjustSpellPower(ctx, aura.TargetGUID, aura.MiscValue, int64(aura.Amount))
 		return true
@@ -3353,7 +3337,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 	return true
 }
 
-func (s *session) expireCreatureAura(creatureGUID uint64, spellID uint32, slot uint8) {
+func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot uint8) {
 	if s.server == nil {
 		return
 	}
@@ -3361,7 +3345,7 @@ func (s *session) expireCreatureAura(creatureGUID uint64, spellID uint32, slot u
 	charmerGUID := uint64(0)
 	s.server.auraMu.Lock()
 	if s.server.activeCreatureAuras != nil {
-		if auras, ok := s.server.activeCreatureAuras[creatureGUID]; ok {
+		if auras, ok := s.server.activeCreatureAuras[key]; ok {
 			if aura, exists := auras[spellID]; exists && aura != nil {
 				wasCharm = aura.AuraType == spellAuraCharm
 				charmerGUID = aura.CasterGUID
@@ -3374,24 +3358,25 @@ func (s *session) expireCreatureAura(creatureGUID uint64, spellID uint32, slot u
 		}
 	}
 	if s.server.creatureAuras != nil {
-		if auras, ok := s.server.creatureAuras[creatureGUID]; ok {
+		if auras, ok := s.server.creatureAuras[key]; ok {
 			delete(auras, spellID)
 		}
 	}
 	s.server.auraMu.Unlock()
 	if wasCharm {
-		s.server.uncharmCreature(creatureGUID, charmerGUID)
-		s.sendClientControl(creatureGUID, false)
-		s.sendVehiclePetSpells(0, nil)
+		s.server.uncharmCreature(key, charmerGUID)
+		if charmer := s.server.findSessionByGUID(charmerGUID); charmer != nil && charmer.player != nil && charmer.player.Map == key.Map && charmer.player.InstanceID == key.InstanceID {
+			charmer.sendClientControl(key.GUID, false)
+			charmer.sendVehiclePetSpells(0, nil)
+		}
 	}
 
-	removePkt := protocol.BuildAuraUpdate(creatureGUID, s.playerGUID, slot, 0, true, false, 0, 0, 1)
-	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, true)
-	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, s)
+	removePkt := protocol.BuildAuraUpdate(key.GUID, s.playerGUID, slot, 0, true, false, 0, 0, 1)
+	s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, nil)
 }
 
-func (s *Server) removeCreatureAura(creatureGUID uint64, spellID uint32) {
-	if s == nil || creatureGUID == 0 || spellID == 0 {
+func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
+	if s == nil || key.GUID == 0 || spellID == 0 {
 		return
 	}
 	wasCharm := false
@@ -3399,7 +3384,7 @@ func (s *Server) removeCreatureAura(creatureGUID uint64, spellID uint32) {
 	s.auraMu.Lock()
 	var slot uint8
 	if s.activeCreatureAuras != nil {
-		if auras, ok := s.activeCreatureAuras[creatureGUID]; ok {
+		if auras, ok := s.activeCreatureAuras[key]; ok {
 			if aura, exists := auras[spellID]; exists && aura != nil {
 				wasCharm = aura.AuraType == spellAuraCharm
 				charmerGUID = aura.CasterGUID
@@ -3416,21 +3401,21 @@ func (s *Server) removeCreatureAura(creatureGUID uint64, spellID uint32) {
 		}
 	}
 	if s.creatureAuras != nil {
-		if auras, ok := s.creatureAuras[creatureGUID]; ok {
+		if auras, ok := s.creatureAuras[key]; ok {
 			delete(auras, spellID)
 		}
 	}
 	s.auraMu.Unlock()
 	if wasCharm {
-		s.uncharmCreature(creatureGUID, charmerGUID)
-		if charmer := s.findSessionByGUID(charmerGUID); charmer != nil {
-			charmer.sendClientControl(creatureGUID, false)
+		s.uncharmCreature(key, charmerGUID)
+		if charmer := s.findSessionByGUID(charmerGUID); charmer != nil && charmer.player != nil && charmer.player.Map == key.Map && charmer.player.InstanceID == key.InstanceID {
+			charmer.sendClientControl(key.GUID, false)
 			charmer.sendVehiclePetSpells(0, nil)
 		}
 	}
 
-	removePkt := protocol.BuildAuraUpdate(creatureGUID, 0, slot, 0, true, false, 0, 0, 1)
-	s.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, nil)
+	removePkt := protocol.BuildAuraUpdate(key.GUID, 0, slot, 0, true, false, 0, 0, 1)
+	s.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, nil)
 }
 
 // handleCancelMountAura processes CMSG_CANCEL_MOUNT_AURA (0x375).

@@ -76,13 +76,13 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 	var targetMap int64
 	var targetX, targetY, targetZ, targetOri float64
 	if err := wdb.QueryRowContext(ctx, "SELECT target_map, target_position_x, target_position_y, target_position_z, target_orientation FROM areatrigger_teleport WHERE id = ?", triggerID).Scan(&targetMap, &targetX, &targetY, &targetZ, &targetOri); err == nil {
-		// If entering dungeon/instance map as a ghost, revive player at entrance!
-		// Reference: MiscHandler.cpp:714 ("reviveAtTrigger: Player entering dungeon as ghost is resurrected")
-		if s.player.PlayerFlags&playerFlagGhost != 0 {
-			s.resurrectPlayer(ctx, 0.5)
-			s.spawnCorpseBones(ctx)
+		if uint32(targetMap) != s.player.Map {
+			check := s.playerCannotEnterMap(ctx, uint32(targetMap))
+			if check.Reason != mapEntryAllowed {
+				s.sendAreaTriggerEntryFailure(ctx, uint32(targetMap), check)
+				return true
+			}
 		}
-
 		s.teleportTo(uint32(targetMap), float32(targetX), float32(targetY), float32(targetZ), float32(targetOri))
 		return true
 	}

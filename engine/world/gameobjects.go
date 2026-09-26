@@ -71,6 +71,7 @@ type dynamicGameObjectState struct {
 	FishingUses     uint32
 	FishingMaxOpens uint32
 	Map             uint32
+	InstanceID      uint32
 	X               float32
 	Y               float32
 	Z               float32
@@ -121,7 +122,7 @@ type gameObjectSpawn struct {
 	TransportO        float32
 }
 
-func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerState, includeTransportRoots bool) (*protocol.Packet, int, error) {
+func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerState, includeTransportRoots bool, observer *session) (*protocol.Packet, int, error) {
 	distance := float64(s.Config.VisibilityDistanceContinents)
 	if distance <= 0 {
 		return nil, 0, nil
@@ -183,14 +184,12 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 		spawn.State, spawn.AnimProgress, spawn.ArtKit, spawn.Type = uint8(stateValue), uint8(animProgress), uint8(artKit), uint8(objectType)
 		spawn.DisplayID, spawn.Size, spawn.Flags, spawn.Faction = uint32(displayID), float32(size), uint32(flags), uint32(faction)
 		spawn.ParentRotation = [4]float32{float32(parentRotation0), float32(parentRotation1), float32(parentRotation2), float32(parentRotation3)}
-		s.objectsMu.RLock()
-		if dyn, ok := s.dynamicGameObjects[gameObjectGUID(spawn.GUID, spawn.Entry)]; ok && dyn != nil {
+		if dyn := s.gameObjectState(state.Map, state.InstanceID, gameObjectGUID(spawn.GUID, spawn.Entry)); dyn != nil {
 			spawn.State = dyn.State
 		}
-		s.objectsMu.RUnlock()
 		// Server-side visibility: script-hidden objects stay visible to
 		// GMs the way SetVisible(false) units remain visible to GM seers.
-		if !isGM && s.isGameObjectHidden(gameObjectGUID(spawn.GUID, spawn.Entry)) {
+		if !isGM && s.isGameObjectHiddenInInstance(state.Map, state.InstanceID, gameObjectGUID(spawn.GUID, spawn.Entry)) {
 			continue
 		}
 		updates.AddUpdateBlock(buildGameObjectUpdate(spawn))
@@ -200,12 +199,14 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 		return nil, count, err
 	}
 	for _, passenger := range s.nearbyTransportObjectPassengers(state, distance) {
+		if observer != nil && !observer.markTransportPassengerVisible(gameObjectGUID(passenger.GUID, passenger.Entry), passenger.TransportGUID) {
+			continue
+		}
 		updates.AddUpdateBlock(buildGameObjectUpdate(passenger))
 		count++
 	}
-	s.objectsMu.RLock()
-	for _, dyn := range s.dynamicGameObjects {
-		if dyn == nil || dyn.Map != state.Map || dyn.Hidden || !dyn.IsRuntimeSpawn {
+	for _, dyn := range s.gameObjectStatesInInstance(state.Map, state.InstanceID) {
+		if dyn.Hidden || !dyn.IsRuntimeSpawn {
 			continue
 		}
 		if math.Hypot(float64(dyn.X-state.X), float64(dyn.Y-state.Y)) > distance {
@@ -229,7 +230,6 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 		updates.AddUpdateBlock(buildGameObjectUpdate(spawn))
 		count++
 	}
-	s.objectsMu.RUnlock()
 	if includeTransportRoots {
 		for _, transport := range s.nearbyTransportSpawns(state, distance) {
 			updates.AddUpdateBlock(buildGameObjectUpdate(transport))
@@ -245,7 +245,7 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 
 func buildGameObjectUpdate(spawn gameObjectSpawn) []byte {
 	if spawn.Type == GameObjectTypeMOTransport {
-		return buildTransportGameObjectUpdate(spawn, true)
+		return buildTransportGameObjectUpdate(spawn, protocol.UpdateCreateObject)
 	}
 	rawGUID := gameObjectGUID(spawn.GUID, spawn.Entry)
 	values := make([]uint32, gameObjectValuesCount)
@@ -312,10 +312,10 @@ func buildGameObjectMovementUpdate(spawn gameObjectSpawn) []byte {
 	if spawn.Type != GameObjectTypeMOTransport {
 		return nil
 	}
-	return buildTransportGameObjectUpdate(spawn, false)
+	return buildTransportGameObjectUpdate(spawn, protocol.UpdateValues)
 }
 
-func buildTransportGameObjectUpdate(spawn gameObjectSpawn, create bool) []byte {
+func buildTransportGameObjectUpdate(spawn gameObjectSpawn, updateType uint8) []byte {
 	rawGUID := transportGUID(spawn.GUID)
 	values := make([]uint32, gameObjectValuesCount)
 	values[0] = uint32(rawGUID)
@@ -336,15 +336,19 @@ func buildTransportGameObjectUpdate(spawn gameObjectSpawn, create bool) []byte {
 		values[gameObjectLevel] = spawn.TransportPeriod
 	}
 	block := protocol.NewBuffer(256)
-	if create {
-		block.WriteU8(protocol.UpdateCreateObject)
-	} else {
-		block.WriteU8(protocol.UpdateMovement)
+	if updateType == protocol.UpdateValues {
+		block.WriteU8(protocol.UpdateValues)
+		block.WritePackedGUID(rawGUID)
+		mask := protocol.NewUpdateMask(len(values))
+		_ = mask.Set(gameObjectDynamic)
+		block.WriteU8(uint8(mask.BlockCount()))
+		mask.AppendTo(block)
+		block.WriteU32(values[gameObjectDynamic])
+		return block.Bytes()
 	}
+	block.WriteU8(updateType)
 	block.WritePackedGUID(rawGUID)
-	if create {
-		block.WriteU8(5)
-	}
+	block.WriteU8(5)
 	block.WriteU16(transportGameObjectUpdateFlags)
 	block.WriteF32(spawn.X)
 	block.WriteF32(spawn.Y)
@@ -353,19 +357,17 @@ func buildTransportGameObjectUpdate(spawn gameObjectSpawn, create bool) []byte {
 	block.WriteU32(spawn.GUID)
 	block.WriteU32(spawn.TransportProgress)
 	block.WriteU64(packGameObjectRotation(spawn.RotationX, spawn.RotationY, spawn.RotationZ, spawn.RotationW))
-	if create {
-		mask := protocol.NewUpdateMask(len(values))
-		for index, value := range values {
-			if value != 0 {
-				_ = mask.Set(index)
-			}
+	mask := protocol.NewUpdateMask(len(values))
+	for index, value := range values {
+		if value != 0 {
+			_ = mask.Set(index)
 		}
-		block.WriteU8(uint8(mask.BlockCount()))
-		mask.AppendTo(block)
-		for index, value := range values {
-			if mask.Has(index) {
-				block.WriteU32(value)
-			}
+	}
+	block.WriteU8(uint8(mask.BlockCount()))
+	mask.AppendTo(block)
+	for index, value := range values {
+		if mask.Has(index) {
+			block.WriteU32(value)
 		}
 	}
 	return block.Bytes()
@@ -470,13 +472,13 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		return s.handleTransportUse(spawn)
 	}
 
-	goState, err := s.server.getOrLoadGameObjectState(ctx, guid, lowGUID, entry)
+	goState, err := s.server.getOrLoadGameObjectState(ctx, guid, lowGUID, entry, s.player.Map, s.player.InstanceID)
 	if err != nil || goState == nil {
 		return false
 	}
 
 	// Range check (10.0 yards standard interaction distance)
-	if goState.Map != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > 10.0 {
+	if goState.Map != s.player.Map || goState.InstanceID != s.player.InstanceID || distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > 10.0 {
 		return true
 	}
 
@@ -487,17 +489,17 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		if goState.State == GameObjectStateActive {
 			newState = GameObjectStateReady
 		}
-		s.server.setGameObjectState(guid, newState)
-		s.server.broadcastGameObjectCustomAnim(goState.Map, guid, 0)
+		s.server.setGameObjectStateInInstance(goState.Map, goState.InstanceID, guid, newState)
+		s.server.broadcastGameObjectCustomAnimInInstance(goState.Map, goState.InstanceID, guid, 0)
 		if newState == GameObjectStateActive {
-			s.server.scheduleGameObjectReset(guid, 10*time.Second)
+			s.server.scheduleGameObjectResetInInstance(goState.Map, goState.InstanceID, guid, 10*time.Second)
 		}
 
 	case GameObjectTypeButton:
 		// Press button
-		s.server.setGameObjectState(guid, GameObjectStateActive)
-		s.server.broadcastGameObjectCustomAnim(goState.Map, guid, 0)
-		s.server.scheduleGameObjectReset(guid, 5*time.Second)
+		s.server.setGameObjectStateInInstance(goState.Map, goState.InstanceID, guid, GameObjectStateActive)
+		s.server.broadcastGameObjectCustomAnimInInstance(goState.Map, goState.InstanceID, guid, 0)
+		s.server.scheduleGameObjectResetInInstance(goState.Map, goState.InstanceID, guid, 5*time.Second)
 
 	case GameObjectTypeChest:
 		s.handleLoot(ctx, payload)
@@ -510,12 +512,12 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		return s.handleFishingHoleUse(ctx, payload, goState)
 
 	case GameObjectTypeGoober:
-		s.server.setGameObjectState(guid, GameObjectStateActive)
-		s.server.broadcastGameObjectCustomAnim(goState.Map, guid, 0)
+		s.server.setGameObjectStateInInstance(goState.Map, goState.InstanceID, guid, GameObjectStateActive)
+		s.server.broadcastGameObjectCustomAnimInInstance(goState.Map, goState.InstanceID, guid, 0)
 		if goState.Data1 > 0 {
 			s.castSpellDirect(ctx, goState.Data1, s.playerGUID)
 		}
-		s.server.scheduleGameObjectReset(guid, 10*time.Second)
+		s.server.scheduleGameObjectResetInInstance(goState.Map, goState.InstanceID, guid, 10*time.Second)
 	}
 
 	return true
@@ -535,16 +537,13 @@ func (s *session) handleGameObjectReportUse(ctx context.Context, payload []byte)
 	return true
 }
 
-func (s *Server) getOrLoadGameObjectState(ctx context.Context, guid uint64, lowGUID, entry uint32) (*dynamicGameObjectState, error) {
+func (s *Server) getOrLoadGameObjectState(ctx context.Context, guid uint64, lowGUID, entry, mapID, instanceID uint32) (*dynamicGameObjectState, error) {
 	if s == nil {
 		return nil, nil
 	}
-	s.objectsMu.RLock()
-	if dyn, ok := s.dynamicGameObjects[guid]; ok && dyn != nil {
-		s.objectsMu.RUnlock()
+	if dyn := s.gameObjectState(mapID, instanceID, guid); dyn != nil {
 		return dyn, nil
 	}
-	s.objectsMu.RUnlock()
 
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
 		return nil, nil
@@ -566,6 +565,7 @@ func (s *Server) getOrLoadGameObjectState(ctx context.Context, guid uint64, lowG
 		LowGUID:     lowGUID,
 		Entry:       entry,
 		Map:         uint32(goMap),
+		InstanceID:  instanceID,
 		X:           float32(goX),
 		Y:           float32(goY),
 		Z:           float32(goZ),
@@ -592,12 +592,7 @@ func (s *Server) getOrLoadGameObjectState(ctx context.Context, guid uint64, lowG
 		}
 	}
 
-	s.objectsMu.Lock()
-	if s.dynamicGameObjects == nil {
-		s.dynamicGameObjects = make(map[uint64]*dynamicGameObjectState)
-	}
-	s.dynamicGameObjects[guid] = dyn
-	s.objectsMu.Unlock()
+	s.storeGameObjectState(dyn)
 
 	return dyn, nil
 }
@@ -697,12 +692,7 @@ func (s *Server) spawnDynamicGameObject(dyn *dynamicGameObjectState) {
 	if s == nil || dyn == nil {
 		return
 	}
-	s.objectsMu.Lock()
-	if s.dynamicGameObjects == nil {
-		s.dynamicGameObjects = make(map[uint64]*dynamicGameObjectState)
-	}
-	s.dynamicGameObjects[dyn.GUID] = dyn
-	s.objectsMu.Unlock()
+	s.storeGameObjectState(dyn)
 
 	spawn := gameObjectSpawn{
 		GUID:           dyn.LowGUID,
@@ -722,7 +712,11 @@ func (s *Server) spawnDynamicGameObject(dyn *dynamicGameObjectState) {
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(buildGameObjectUpdate(spawn))
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
-		s.broadcastToMap(dyn.Map, packet.Opcode, packet.Payload.Bytes())
+		if dyn.InstanceID != 0 {
+			s.broadcastToInstance(dyn.Map, dyn.InstanceID, packet.Opcode, packet.Payload.Bytes(), nil)
+		} else {
+			s.broadcastToMap(dyn.Map, packet.Opcode, packet.Payload.Bytes())
+		}
 	}
 }
 
@@ -752,12 +746,12 @@ func (s *session) spawnFishingBobber(ctx context.Context, target protocol.SpellT
 		}
 	}
 	lowGUID := s.server.nextDynamicGameObjectLowGUID()
-	dyn := &dynamicGameObjectState{GUID: gameObjectGUID(lowGUID, entry), LowGUID: lowGUID, Entry: entry, OwnerGUID: s.playerGUID, Map: s.player.Map, X: target.Destination.X, Y: target.Destination.Y, Z: target.Destination.Z, Orientation: s.player.Orientation, State: GameObjectStateActive, Type: GameObjectTypeFishingNode, DisplayID: displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, IsRuntimeSpawn: true}
+	dyn := &dynamicGameObjectState{GUID: gameObjectGUID(lowGUID, entry), LowGUID: lowGUID, Entry: entry, OwnerGUID: s.playerGUID, Map: s.player.Map, InstanceID: s.player.InstanceID, X: target.Destination.X, Y: target.Destination.Y, Z: target.Destination.Z, Orientation: s.player.Orientation, State: GameObjectStateActive, Type: GameObjectTypeFishingNode, DisplayID: displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, IsRuntimeSpawn: true}
 	dyn.AutoCloseTimer = time.AfterFunc(5*time.Second, func() {
-		s.server.setGameObjectState(dyn.GUID, GameObjectStateReady)
-		s.server.broadcastGameObjectCustomAnim(dyn.Map, dyn.GUID, 0)
+		s.server.setGameObjectStateInInstance(dyn.Map, dyn.InstanceID, dyn.GUID, GameObjectStateReady)
+		s.server.broadcastGameObjectCustomAnimInInstance(dyn.Map, dyn.InstanceID, dyn.GUID, 0)
 	})
-	dyn.DespawnTimer = time.AfterFunc(30*time.Second, func() { s.server.despawnDynamicGameObject(dyn.GUID) })
+	dyn.DespawnTimer = time.AfterFunc(30*time.Second, func() { s.server.despawnDynamicGameObjectInInstance(dyn.Map, dyn.InstanceID, dyn.GUID) })
 	s.server.spawnDynamicGameObject(dyn)
 }
 

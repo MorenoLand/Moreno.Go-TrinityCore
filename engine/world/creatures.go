@@ -22,51 +22,62 @@ const (
 )
 
 type creatureSpawn struct {
-	GUID           uint32
-	Entry          uint32
-	Map            uint32
-	X              float32
-	Y              float32
-	Z              float32
-	Orientation    float32
-	Model          uint32
-	Faction        uint32
-	NPCFlags       uint32
-	UnitFlags      uint32
-	DynamicFlags   uint32
-	Level          uint32
-	Health         uint32
-	MaxHealth      uint32
-	Mana           uint32
-	Scale          float32
-	HoverHeight    float32
-	BoundingRadius float32
-	CombatReach    float32
-	WalkSpeed      float32
-	RunSpeed       float32
-	AttackTime     uint32
-	RangedAttack   uint32
-	Mount          uint32
-	Bytes1         uint32
-	Bytes2         uint32
-	Emote          uint32
-	Item1          uint32
-	Item2          uint32
-	Item3          uint32
-	TransportGUID  uint64
-	TransportX     float32
-	TransportY     float32
-	TransportZ     float32
-	TransportO     float32
+	GUID             uint32
+	RawGUID          uint64
+	Entry            uint32
+	Map              uint32
+	X                float32
+	Y                float32
+	Z                float32
+	Orientation      float32
+	Model            uint32
+	Faction          uint32
+	NPCFlags         uint32
+	UnitFlags        uint32
+	UnitFlags2       uint32
+	DynamicFlags     uint32
+	CreatedBySpell   uint32
+	Level            uint32
+	Health           uint32
+	MaxHealth        uint32
+	RegenerateHealth bool
+	Mana             uint32
+	Scale            float32
+	HoverHeight      float32
+	BoundingRadius   float32
+	CombatReach      float32
+	WalkSpeed        float32
+	RunSpeed         float32
+	AttackTime       uint32
+	RangedAttack     uint32
+	Mount            uint32
+	Bytes1           uint32
+	Bytes2           uint32
+	Emote            uint32
+	Item1            uint32
+	Item2            uint32
+	Item3            uint32
+	TransportGUID    uint64
+	TransportX       float32
+	TransportY       float32
+	TransportZ       float32
+	TransportO       float32
 }
 
-func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerState) (*protocol.Packet, int, error) {
+func creatureSpawnHealth(regenerate bool, current, maximum uint32) uint32 {
+	if regenerate {
+		return maximum
+	}
+	return current
+}
+
+func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerState, phaseMask uint32, observer *session) (*protocol.Packet, int, error) {
 	distance := float64(s.Config.VisibilityDistanceContinents)
 	if distance <= 0 {
 		return nil, 0, nil
 	}
 	isGM := state.ExtraFlags&playerExtraGMOn != 0 || state.PlayerFlags&playerFlagGM != 0
-	isGhost := state.Health == 0 || state.PlayerFlags&playerFlagGhost != 0
+	isGhost := state.Health > 0 && state.PlayerFlags&playerFlagGhost != 0
 	// Event creatures spawn only while their event runs; game_event_npcflag
 	// flags OR into the template npcflag during events (guards gaining
 	// seasonal gossip/questgiver flags).
@@ -80,7 +91,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 	fullQuery := `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, c.orientation,
 		COALESCE(NULLIF(c.modelid, 0), NULLIF(t.modelid1, 0), NULLIF(t.modelid2, 0), NULLIF(t.modelid3, 0), NULLIF(t.modelid4, 0), 1),
 		t.faction, (t.npcflag | ` + npcFlagExpr + `), t.unit_flags, t.dynamicflags,
-		t.maxlevel, c.curhealth, c.curmana, t.scale, t.HoverHeight, t.speed_walk, t.speed_run, t.BaseAttackTime, t.RangeAttackTime,
+		t.maxlevel, c.curhealth, t.RegenHealth, c.curmana, t.scale, t.HoverHeight, t.speed_walk, t.speed_run, t.BaseAttackTime, t.RangeAttackTime,
 		COALESCE(ca.mount, cta.mount, 0),
 		COALESCE(ca.bytes1, cta.bytes1, 0),
 		COALESCE(ca.bytes2, cta.bytes2, 0),
@@ -95,27 +106,27 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		LEFT JOIN creature_equip_template AS eq ON eq.CreatureID = c.id AND eq.ID = COALESCE(NULLIF(c.equipment_id, 0), 1)
 		LEFT JOIN game_event_creature AS gec ON gec.guid = c.guid
 		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
-		AND (? OR c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)
+		AND (? OR (c.phaseMask & ?) <> 0)
 		AND (? OR ? OR ((COALESCE(t.flags_extra, 0) & 0x400) = 0 AND (COALESCE(t.npcflag, 0) & 0xC000) = 0))
 		AND ` + eventClause + `
 		ORDER BY c.guid`
-	queryArgs := make([]any, 0, len(selectArgs)+8+len(eventArgs))
+	queryArgs := make([]any, 0, len(selectArgs)+9+len(eventArgs))
 	queryArgs = append(queryArgs, selectArgs...)
-	queryArgs = append(queryArgs, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, isGM, isGhost)
+	queryArgs = append(queryArgs, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, phaseMask, isGM, isGhost)
 	queryArgs = append(queryArgs, eventArgs...)
 	rows, err := s.WorldStore.DB.QueryContext(ctx, fullQuery, queryArgs...)
 	if err != nil {
 		fallbackQuery := `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, c.orientation,
 			COALESCE(NULLIF(c.modelid, 0), NULLIF(t.modelid1, 0), 1),
 			t.faction, t.npcflag, t.unit_flags, t.dynamicflags,
-			t.maxlevel, c.curhealth, c.curmana, t.scale, t.speed_walk, t.speed_run, t.BaseAttackTime, t.RangeAttackTime
+			t.maxlevel, c.curhealth, t.RegenHealth, c.curmana, t.scale, t.speed_walk, t.speed_run, t.BaseAttackTime, t.RangeAttackTime
 			FROM creature AS c
 			JOIN creature_template AS t ON t.entry = c.id
 			WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
-			AND (? OR c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)
+			AND (? OR (c.phaseMask & ?) <> 0)
 			AND (? OR ? OR ((COALESCE(t.flags_extra, 0) & 0x400) = 0 AND (COALESCE(t.npcflag, 0) & 0xC000) = 0))
 			ORDER BY c.guid`
-		rows, err = s.WorldStore.DB.QueryContext(ctx, fallbackQuery, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, isGM, isGhost)
+		rows, err = s.WorldStore.DB.QueryContext(ctx, fallbackQuery, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, phaseMask, isGM, isGhost)
 		if err != nil {
 			if missingTable(err) {
 				return nil, 0, nil
@@ -125,15 +136,15 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		spawns := make([]creatureSpawn, 0)
 		count := 0
 		for rows.Next() {
-			var guid, entry, mapID, model, faction, npcFlags, unitFlags, dynamicFlags, level, health, mana, attackTime, rangedAttack int64
+			var guid, entry, mapID, model, faction, npcFlags, unitFlags, dynamicFlags, level, health, regenerateHealth, mana, attackTime, rangedAttack int64
 			var x, y, z, orientation, scale, walkSpeed, runSpeed float64
-			if err := rows.Scan(&guid, &entry, &mapID, &x, &y, &z, &orientation, &model, &faction, &npcFlags, &unitFlags, &dynamicFlags, &level, &health, &mana, &scale, &walkSpeed, &runSpeed, &attackTime, &rangedAttack); err != nil {
+			if err := rows.Scan(&guid, &entry, &mapID, &x, &y, &z, &orientation, &model, &faction, &npcFlags, &unitFlags, &dynamicFlags, &level, &health, &regenerateHealth, &mana, &scale, &walkSpeed, &runSpeed, &attackTime, &rangedAttack); err != nil {
 				return nil, count, err
 			}
 			if math.Hypot(x-float64(state.X), y-float64(state.Y)) > distance || !validMovementPosition(float32(x), float32(y), float32(z), float32(orientation)) {
 				continue
 			}
-			spawn := creatureSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), Orientation: float32(orientation), Model: uint32(model), Faction: uint32(faction), NPCFlags: uint32(npcFlags), UnitFlags: uint32(unitFlags), DynamicFlags: uint32(dynamicFlags), Level: uint32(level), Health: uint32(health), Mana: uint32(mana), Scale: float32(scale), HoverHeight: 1, WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: uint32(attackTime), RangedAttack: uint32(rangedAttack)}
+			spawn := creatureSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), Orientation: float32(orientation), Model: uint32(model), Faction: uint32(faction), NPCFlags: uint32(npcFlags), UnitFlags: uint32(unitFlags), DynamicFlags: uint32(dynamicFlags), Level: uint32(level), Health: uint32(health), RegenerateHealth: regenerateHealth != 0, Mana: uint32(mana), Scale: float32(scale), HoverHeight: 1, WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: uint32(attackTime), RangedAttack: uint32(rangedAttack)}
 			spawns = append(spawns, spawn)
 			count++
 		}
@@ -141,7 +152,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		if err := rows.Err(); err != nil {
 			return nil, count, err
 		}
-		transportSpawns := s.nearbyTransportCreaturePassengers(state, distance)
+		transportSpawns := filterNewTransportCreaturePassengers(observer, s.nearbyTransportCreaturePassengers(state, distance))
 		spawns = append(spawns, transportSpawns...)
 		count += len(transportSpawns)
 		if count == 0 {
@@ -151,6 +162,8 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		for index := range spawns {
 			stats := s.loadCreatureStats(ctx, spawns[index].Entry)
 			spawns[index].BoundingRadius, spawns[index].CombatReach, spawns[index].MaxHealth = stats.BoundingRadius, stats.CombatReach, stats.MaxHealth
+			spawns[index].Health = creatureSpawnHealth(spawns[index].RegenerateHealth, spawns[index].Health, stats.MaxHealth)
+			s.applyCreatureMotionToSpawn(state, &spawns[index])
 			updates.AddUpdateBlock(buildCreatureUpdate(spawns[index]))
 		}
 		packet, err := updates.BuildPacket(0)
@@ -159,15 +172,15 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 	spawns := make([]creatureSpawn, 0)
 	count := 0
 	for rows.Next() {
-		var guid, entry, mapID, model, faction, npcFlags, unitFlags, dynamicFlags, level, health, mana, attackTime, rangedAttack, mount, bytes1, bytes2, emote, item1, item2, item3 int64
+		var guid, entry, mapID, model, faction, npcFlags, unitFlags, dynamicFlags, level, health, regenerateHealth, mana, attackTime, rangedAttack, mount, bytes1, bytes2, emote, item1, item2, item3 int64
 		var x, y, z, orientation, scale, hoverHeight, walkSpeed, runSpeed float64
-		if err := rows.Scan(&guid, &entry, &mapID, &x, &y, &z, &orientation, &model, &faction, &npcFlags, &unitFlags, &dynamicFlags, &level, &health, &mana, &scale, &hoverHeight, &walkSpeed, &runSpeed, &attackTime, &rangedAttack, &mount, &bytes1, &bytes2, &emote, &item1, &item2, &item3); err != nil {
+		if err := rows.Scan(&guid, &entry, &mapID, &x, &y, &z, &orientation, &model, &faction, &npcFlags, &unitFlags, &dynamicFlags, &level, &health, &regenerateHealth, &mana, &scale, &hoverHeight, &walkSpeed, &runSpeed, &attackTime, &rangedAttack, &mount, &bytes1, &bytes2, &emote, &item1, &item2, &item3); err != nil {
 			return nil, count, err
 		}
 		if math.Hypot(x-float64(state.X), y-float64(state.Y)) > distance || !validMovementPosition(float32(x), float32(y), float32(z), float32(orientation)) {
 			continue
 		}
-		spawn := creatureSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), Orientation: float32(orientation), Model: uint32(model), Faction: uint32(faction), NPCFlags: uint32(npcFlags), UnitFlags: uint32(unitFlags), DynamicFlags: uint32(dynamicFlags), Level: uint32(level), Health: uint32(health), Mana: uint32(mana), Scale: float32(scale), HoverHeight: float32(hoverHeight), WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: uint32(attackTime), RangedAttack: uint32(rangedAttack), Mount: uint32(mount), Bytes1: uint32(bytes1), Bytes2: uint32(bytes2), Emote: uint32(emote), Item1: uint32(item1), Item2: uint32(item2), Item3: uint32(item3)}
+		spawn := creatureSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), Orientation: float32(orientation), Model: uint32(model), Faction: uint32(faction), NPCFlags: uint32(npcFlags), UnitFlags: uint32(unitFlags), DynamicFlags: uint32(dynamicFlags), Level: uint32(level), Health: uint32(health), RegenerateHealth: regenerateHealth != 0, Mana: uint32(mana), Scale: float32(scale), HoverHeight: float32(hoverHeight), WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: uint32(attackTime), RangedAttack: uint32(rangedAttack), Mount: uint32(mount), Bytes1: uint32(bytes1), Bytes2: uint32(bytes2), Emote: uint32(emote), Item1: uint32(item1), Item2: uint32(item2), Item3: uint32(item3)}
 		spawns = append(spawns, spawn)
 		count++
 	}
@@ -175,7 +188,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 	if err := rows.Err(); err != nil {
 		return nil, count, err
 	}
-	transportSpawns := s.nearbyTransportCreaturePassengers(state, distance)
+	transportSpawns := filterNewTransportCreaturePassengers(observer, s.nearbyTransportCreaturePassengers(state, distance))
 	spawns = append(spawns, transportSpawns...)
 	count += len(transportSpawns)
 	if count == 0 {
@@ -185,15 +198,50 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 	for index := range spawns {
 		stats := s.loadCreatureStats(ctx, spawns[index].Entry)
 		spawns[index].BoundingRadius, spawns[index].CombatReach, spawns[index].MaxHealth = stats.BoundingRadius, stats.CombatReach, stats.MaxHealth
+		spawns[index].Health = creatureSpawnHealth(spawns[index].RegenerateHealth, spawns[index].Health, stats.MaxHealth)
+		s.applyCreatureMotionToSpawn(state, &spawns[index])
 		updates.AddUpdateBlock(buildCreatureUpdate(spawns[index]))
 	}
 	packet, err := updates.BuildPacket(0)
 	return packet, count, err
 }
 
+func (s *Server) applyCreatureMotionToSpawn(state playerState, spawn *creatureSpawn) {
+	if s == nil || spawn == nil {
+		return
+	}
+	if spawn.TransportGUID != 0 {
+		return
+	}
+	if motion := s.findCreatureMotion(state.Map, state.InstanceID, creatureWorldGUID(spawn.GUID, spawn.Entry)); motion != nil {
+		spawn.X, spawn.Y, spawn.Z, spawn.Orientation = motion.X, motion.Y, motion.Z, motion.Orientation
+		spawn.Health, spawn.UnitFlags, spawn.DynamicFlags, spawn.Faction = motion.Health, motion.UnitFlags, motion.DynamicFlags, motion.Faction
+	}
+}
+
+func filterNewTransportCreaturePassengers(observer *session, spawns []creatureSpawn) []creatureSpawn {
+	if observer == nil {
+		return spawns
+	}
+	visible := make([]creatureSpawn, 0, len(spawns))
+	for _, spawn := range spawns {
+		guid := spawn.RawGUID
+		if guid == 0 {
+			guid = creatureWorldGUID(spawn.GUID, spawn.Entry)
+		}
+		if observer.markTransportPassengerVisible(guid, spawn.TransportGUID) {
+			visible = append(visible, spawn)
+		}
+	}
+	return visible
+}
+
 func buildCreatureUpdate(spawn creatureSpawn) []byte {
 	values := make([]uint32, creatureValuesCount)
-	rawGUID := creatureWorldGUID(spawn.GUID, spawn.Entry)
+	rawGUID := spawn.RawGUID
+	if rawGUID == 0 {
+		rawGUID = creatureWorldGUID(spawn.GUID, spawn.Entry)
+	}
 	values[0] = uint32(rawGUID)
 	values[1] = uint32(rawGUID >> 32)
 	values[2] = creatureTypeMask
@@ -211,7 +259,9 @@ func buildCreatureUpdate(spawn creatureSpawn) []byte {
 		values[unitVirtualItemSlotID+2] = spawn.Item3
 	}
 	values[unitFieldFlags] = spawn.UnitFlags
+	values[unitFieldFlags2] = spawn.UnitFlags2
 	values[unitFieldDynamicFlags] = spawn.DynamicFlags
+	values[unitFieldCreatedBySpell] = spawn.CreatedBySpell
 	values[unitModCastSpeed] = math.Float32bits(1)
 	if spawn.Health == 0 {
 		values[unitFieldDynamicFlags] = 1 // UNIT_DYNFLAG_LOOTABLE
@@ -363,6 +413,31 @@ func (s *Server) broadcastMonsterMoveMode(mapID uint32, rawGUID uint64, startX, 
 	}
 }
 
+func (s *Server) broadcastMonsterMoveInInstance(mapID, instanceID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, walk bool) {
+	packet := buildMonsterMove(rawGUID, startX, startY, startZ, destX, destY, destZ, duration)
+	modeOpcode := protocol.OpcodeSMSG_SPLINE_MOVE_SET_RUN_MODE
+	if walk {
+		modeOpcode = protocol.OpcodeSMSG_SPLINE_MOVE_SET_WALK_MODE
+	}
+	modePacket := protocol.NewBuffer(16)
+	modePacket.WritePackedGUID(rawGUID)
+	distance := float64(s.Config.VisibilityDistanceContinents)
+	if distance <= 0 {
+		distance = 150.0
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for sess := range s.sessions {
+		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID || sess.player.InstanceID != instanceID {
+			continue
+		}
+		if math.Hypot(float64(startX-sess.player.X), float64(startY-sess.player.Y)) <= distance {
+			_ = sess.write(uint16(modeOpcode), modePacket.Bytes(), true)
+			_ = sess.write(uint16(protocol.OpcodeSMSG_MONSTER_MOVE), packet, true)
+		}
+	}
+}
+
 func (s *Server) buildCreatureValuesUpdate(guid uint64, fields map[int]uint32) (*protocol.Packet, error) {
 	values := make([]uint32, creatureValuesCount)
 	mask := protocol.NewUpdateMask(creatureValuesCount)
@@ -399,6 +474,21 @@ func (s *Server) broadcastCreatureValuesUpdate(mapID uint32, guid uint64, fields
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
 		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID {
+			continue
+		}
+		_ = sess.write(packet.Opcode, packet.Payload.Bytes(), true)
+	}
+}
+
+func (s *Server) broadcastCreatureValuesUpdateInInstance(mapID, instanceID uint32, guid uint64, fields map[int]uint32) {
+	packet, err := s.buildCreatureValuesUpdate(guid, fields)
+	if err != nil || packet == nil {
+		return
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for sess := range s.sessions {
+		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID || sess.player.InstanceID != instanceID {
 			continue
 		}
 		_ = sess.write(packet.Opcode, packet.Payload.Bytes(), true)

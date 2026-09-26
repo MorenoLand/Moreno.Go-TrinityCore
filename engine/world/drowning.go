@@ -303,14 +303,10 @@ func (s *session) handleFatigueTick(ctx context.Context, now time.Time) {
 // stopMirrorTimers stops all active mirror timers.
 // Mirrors Player::StopMirrorTimers (Player.cpp:848-853).
 func (s *session) stopMirrorTimers() {
-	if s.breathTimer != -1 {
-		s.breathTimer = -1
-		s.stopMirrorTimer(mirrorTimerBreath)
-	}
-	if s.fatigueTimer != -1 {
-		s.fatigueTimer = -1
-		s.stopMirrorTimer(mirrorTimerFatigue)
-	}
+	s.fatigueTimer, s.breathTimer = -1, -1
+	s.stopMirrorTimer(mirrorTimerFatigue)
+	s.stopMirrorTimer(mirrorTimerBreath)
+	s.stopMirrorTimer(mirrorTimerFire)
 }
 
 // isFatigueActive returns true if the player is in dark water or currently regenerating fatigue.

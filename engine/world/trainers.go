@@ -522,18 +522,6 @@ func (s *session) learnSpell(ctx context.Context, spellID uint32) {
 	learnedBuf.WriteU16(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_LEARNED_SPELL), learnedBuf.Bytes(), true)
 
-	// Yellow chat notification: "You have learned a new spell: <Name>."
-	if s.server != nil && s.server.Data != nil {
-		if name, rank, ok, err := s.server.Data.SpellName(spellID); err == nil && ok && name != "" {
-			msg := "You have learned a new spell: " + name
-			if rank != "" {
-				msg += " (" + rank + ")"
-			}
-			msg += "."
-			s.sendSystemMessage(msg)
-		}
-	}
-
 	// Check if passive spell (TC: if (spellInfo->IsPassive()) CastSpell(this, spellId, true))
 	if s.server != nil && s.server.Data != nil {
 		if sp, ok, err := s.server.Data.Spell(spellID); err == nil && ok {

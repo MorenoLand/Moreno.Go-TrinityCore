@@ -95,7 +95,7 @@ func (s *session) castOwnerPetAuraSource(ctx context.Context, key ownerPetAuraKe
 		return false
 	}
 	s.server.motionMu.Lock()
-	motion := s.server.creatureMotion[petGUID]
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID)
 	s.server.motionMu.Unlock()
 	if motion == nil || motion.OwnerGUID != s.playerGUID {
 		return false
@@ -105,7 +105,8 @@ func (s *session) castOwnerPetAuraSource(ctx context.Context, key ownerPetAuraKe
 		return false
 	}
 	s.server.auraMu.Lock()
-	active := s.server.activeCreatureAuras[petGUID][auraSpellID]
+	petKey := creatureAuraKeyForMotion(motion)
+	active := s.server.activeCreatureAuras[petKey][auraSpellID]
 	alreadyApplied := active != nil && active.OwnerPetAura && active.OwnerPetAuraSourceSpell == key.SpellID && active.OwnerPetAuraSourceEffect == key.EffectIndex
 	s.server.auraMu.Unlock()
 	if alreadyApplied {
@@ -154,11 +155,11 @@ func (s *session) removeOwnerPetAuraSource(ctx context.Context, key ownerPetAura
 		return
 	}
 	s.server.motionMu.Lock()
-	motion := s.server.creatureMotion[petGUID]
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID)
 	s.server.motionMu.Unlock()
-	if motion != nil {
+	if motion != nil && motion.OwnerGUID == s.playerGUID {
 		if auraSpellID := source.auraForPet(motion.Entry); auraSpellID != 0 {
-			s.server.removeCreatureAura(petGUID, auraSpellID)
+			s.server.removeCreatureAura(creatureAuraKeyForMotion(motion), auraSpellID)
 		}
 	}
 }
@@ -228,9 +229,9 @@ func (s *session) removeOwnerPetAuraSourcesOnPetChange(ctx context.Context, petG
 		return
 	}
 	s.server.motionMu.Lock()
-	motion := s.server.creatureMotion[petGUID]
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID)
 	s.server.motionMu.Unlock()
-	if motion == nil {
+	if motion == nil || motion.OwnerGUID != s.playerGUID {
 		return
 	}
 	s.ownerPetAuraMu.Lock()
@@ -244,7 +245,7 @@ func (s *session) removeOwnerPetAuraSourcesOnPetChange(ctx context.Context, petG
 	s.ownerPetAuraMu.Unlock()
 	for _, source := range removed {
 		if auraSpellID := source.auraForPet(motion.Entry); auraSpellID != 0 {
-			s.server.removeCreatureAura(petGUID, auraSpellID)
+			s.server.removeCreatureAura(creatureAuraKeyForMotion(motion), auraSpellID)
 		}
 	}
 }
@@ -254,7 +255,7 @@ func (s *session) applyOwnerPetAuras(ctx context.Context, petEntry uint32, petGU
 		return
 	}
 	s.server.motionMu.Lock()
-	motion := s.server.creatureMotion[petGUID]
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID)
 	s.server.motionMu.Unlock()
 	if motion == nil {
 		return

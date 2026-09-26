@@ -108,7 +108,7 @@ func (s *session) takePetSpellPower(motion *creatureMotion, spell wotlk.Spell, c
 	}
 	s.server.motionMu.Unlock()
 	if cost > 0 {
-		s.server.broadcastCreatureValuesUpdate(motion.Map, motion.GUID, map[int]uint32{field: current})
+		s.server.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, map[int]uint32{field: current})
 	}
 	return current, !healthPower, true
 }
@@ -127,16 +127,13 @@ const (
 
 // onPetCommandAttack handles ordering the pet to attack a specific target.
 // Mirrors TrinityCore PetAI::AttackStart (PetAI.cpp:115).
-func (s *Server) onPetCommandAttack(petGUID uint64, targetGUID uint64) {
+func (s *Server) onPetCommandAttack(mapID, instanceID uint32, petGUID uint64, targetGUID uint64) {
 	if s == nil || petGUID == 0 || targetGUID == 0 {
 		return
 	}
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
-	if s.creatureMotion == nil {
-		return
-	}
-	if motion, ok := s.creatureMotion[petGUID]; ok && motion != nil && motion.Health > 0 {
+	if motion := s.motionMapLocked(mapID, instanceID)[petGUID]; motion != nil && motion.Health > 0 {
 		motion.TargetGUID = targetGUID
 		motion.InCombat = true
 		motion.PetCommand = PetCommandAttack
@@ -146,16 +143,13 @@ func (s *Server) onPetCommandAttack(petGUID uint64, targetGUID uint64) {
 
 // onPetCommandFollow handles recalling the pet back to follow the owner.
 // Mirrors TrinityCore PetAI::DoRecall (PetAI.cpp:215).
-func (s *Server) onPetCommandFollow(petGUID uint64) {
+func (s *Server) onPetCommandFollow(mapID, instanceID uint32, petGUID uint64) {
 	if s == nil || petGUID == 0 {
 		return
 	}
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
-	if s.creatureMotion == nil {
-		return
-	}
-	if motion, ok := s.creatureMotion[petGUID]; ok && motion != nil {
+	if motion := s.motionMapLocked(mapID, instanceID)[petGUID]; motion != nil {
 		motion.TargetGUID = 0
 		motion.InCombat = false
 		motion.PetCommand = PetCommandFollow
@@ -167,16 +161,13 @@ func (s *Server) onPetCommandFollow(petGUID uint64) {
 }
 
 // onPetCommandStay handles ordering the pet to stay at its current position.
-func (s *Server) onPetCommandStay(petGUID uint64) {
+func (s *Server) onPetCommandStay(mapID, instanceID uint32, petGUID uint64) {
 	if s == nil || petGUID == 0 {
 		return
 	}
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
-	if s.creatureMotion == nil {
-		return
-	}
-	if motion, ok := s.creatureMotion[petGUID]; ok && motion != nil {
+	if motion := s.motionMapLocked(mapID, instanceID)[petGUID]; motion != nil {
 		motion.TargetGUID = 0
 		motion.InCombat = false
 		motion.PetCommand = PetCommandStay
@@ -188,16 +179,13 @@ func (s *Server) onPetCommandStay(petGUID uint64) {
 }
 
 // onPetSetReaction updates the pet's reaction state (passive, defensive, aggressive).
-func (s *Server) onPetSetReaction(petGUID uint64, reactState uint8) {
+func (s *Server) onPetSetReaction(mapID, instanceID uint32, petGUID uint64, reactState uint8) {
 	if s == nil || petGUID == 0 {
 		return
 	}
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
-	if s.creatureMotion == nil {
-		return
-	}
-	if motion, ok := s.creatureMotion[petGUID]; ok && motion != nil {
+	if motion := s.motionMapLocked(mapID, instanceID)[petGUID]; motion != nil {
 		motion.PetReact = reactState
 		if reactState == PetReactPassive {
 			// In passive mode, disengage unless ordered to attack
@@ -211,17 +199,14 @@ func (s *Server) onPetSetReaction(petGUID uint64, reactState uint8) {
 }
 
 // onPetToggleAutocast enables or disables auto-cast for a pet spell.
-func (s *Server) onPetToggleAutocast(petGUID uint64, spellID uint32, enable bool) {
+func (s *Server) onPetToggleAutocast(mapID, instanceID uint32, petGUID uint64, spellID uint32, enable bool) {
 	if s == nil || petGUID == 0 || spellID == 0 {
 		return
 	}
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
-	if s.creatureMotion == nil {
-		return
-	}
-	motion, ok := s.creatureMotion[petGUID]
-	if !ok || motion == nil {
+	motion := s.motionMapLocked(mapID, instanceID)[petGUID]
+	if motion == nil {
 		return
 	}
 
@@ -241,16 +226,13 @@ func (s *Server) onPetToggleAutocast(petGUID uint64, spellID uint32, enable bool
 
 // triggerPetDefensive triggers the owner's active pet into defensive attack mode if appropriate.
 // Mirrors TrinityCore PetAI::OwnerAttackedBy / PetAI::OwnerAttacked (PetAI.cpp:240-310).
-func (s *Server) triggerPetDefensive(ownerGUID uint64, targetGUID uint64) {
+func (s *Server) triggerPetDefensive(mapID, instanceID uint32, ownerGUID, targetGUID uint64) {
 	if s == nil || ownerGUID == 0 || targetGUID == 0 || ownerGUID == targetGUID {
 		return
 	}
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
-	if s.creatureMotion == nil {
-		return
-	}
-	for _, m := range s.creatureMotion {
+	for _, m := range s.motionMapLocked(mapID, instanceID) {
 		if m.OwnerGUID == ownerGUID && m.Health > 0 {
 			// Pet must be in Defensive mode, currently following, and not already attacking a target
 			if m.PetReact == PetReactDefensive && m.PetCommand == PetCommandFollow && (m.TargetGUID == 0 || !m.InCombat) {
@@ -271,7 +253,7 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 
 	var owner *playerPos
 	for i := range players {
-		if players[i].GUID == motion.OwnerGUID {
+		if players[i].GUID == motion.OwnerGUID && players[i].Map == motion.Map && players[i].InstanceID == motion.InstanceID {
 			owner = &players[i]
 			break
 		}
@@ -321,7 +303,7 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 				motion.Orientation = owner.Sess.player.Orientation
 			}
 			motion.Moving = false
-			s.broadcastMonsterMoveStop(motion.Map, motion.GUID, motion.X, motion.Y, motion.Z)
+			s.broadcastMonsterMoveStopInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z)
 		} else if dist > 3.0 {
 			// Run to catch up with owner
 			dx := owner.X - motion.X
@@ -343,7 +325,7 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 			motion.Y = destY
 			motion.Z = destZ
 			motion.Moving = true
-			s.broadcastMonsterMove(motion.Map, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration)
+			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, false)
 		} else {
 			motion.Moving = false
 		}
@@ -354,8 +336,8 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 func (s *Server) findNearbyPetHostile(pet *creatureMotion, maxDist float32, players []playerPos) uint64 {
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
-	for guid, m := range s.creatureMotion {
-		if guid == pet.GUID || m.OwnerGUID != 0 || m.Health == 0 || m.Map != pet.Map {
+	for guid, m := range s.motionMapLocked(pet.Map, pet.InstanceID) {
+		if guid == pet.GUID || m == nil || m.OwnerGUID != 0 || m.Health == 0 || m.InstanceID != pet.InstanceID {
 			continue
 		}
 		dist := float32(math.Hypot(float64(m.X-pet.X), float64(m.Y-pet.Y)))
@@ -389,7 +371,7 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 	} else {
 		// Check if target is creature
 		s.motionMu.Lock()
-		cMotion := s.creatureMotion[targetGUID]
+		cMotion := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, targetGUID)
 		if cMotion != nil {
 			targetFound = true
 			targetX, targetY, targetZ = cMotion.X, cMotion.Y, cMotion.Z
@@ -409,7 +391,7 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 			motion.PetCommand = PetCommandFollow
 		}
 		stopPkt := buildAttackStop(motion.GUID, targetGUID, false)
-		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+		s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
 		return
 	}
 
@@ -437,7 +419,7 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 		motion.Y = destY
 		motion.Z = destZ
 		motion.Moving = true
-		s.broadcastMonsterMove(motion.Map, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration)
+		s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, false)
 	} else {
 		motion.Moving = false
 
@@ -496,18 +478,18 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			targetSess.sendPlayerUpdate()
 		}
 	} else {
-		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, nil)
+		s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, nil)
 		s.motionMu.Lock()
-		cMotion := s.creatureMotion[targetGUID]
+		cMotion := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, targetGUID)
 		if cMotion != nil {
 			if damage >= cMotion.Health {
 				cMotion.Health = 0
 				cMotion.InCombat = false
 				cMotion.Moving = false
-				s.broadcastCreatureValuesUpdate(cMotion.Map, targetGUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: 1})
+				s.broadcastCreatureValuesUpdateInInstance(cMotion.Map, cMotion.InstanceID, targetGUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: 1})
 			} else {
 				cMotion.Health -= damage
-				s.broadcastCreatureValuesUpdate(cMotion.Map, targetGUID, map[int]uint32{unitFieldHealth: cMotion.Health})
+				s.broadcastCreatureValuesUpdateInInstance(cMotion.Map, cMotion.InstanceID, targetGUID, map[int]uint32{unitFieldHealth: cMotion.Health})
 			}
 		}
 		s.motionMu.Unlock()
@@ -696,23 +678,24 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	if !ok || target.Health == 0 {
 		return false
 	}
+	targetKey := creatureAuraKeyForTarget(target)
 	s.server.auraMu.Lock()
 	if s.server.activeCreatureAuras == nil {
-		s.server.activeCreatureAuras = make(map[uint64]map[uint32]*activeAura)
+		s.server.activeCreatureAuras = make(map[creatureAuraKey]map[uint32]*activeAura)
 	}
-	if s.server.activeCreatureAuras[targetGUID] == nil {
-		s.server.activeCreatureAuras[targetGUID] = make(map[uint32]*activeAura)
+	if s.server.activeCreatureAuras[targetKey] == nil {
+		s.server.activeCreatureAuras[targetKey] = make(map[uint32]*activeAura)
 	}
 	if s.server.creatureAuras == nil {
-		s.server.creatureAuras = make(map[uint64]map[uint32]struct{})
+		s.server.creatureAuras = make(map[creatureAuraKey]map[uint32]struct{})
 	}
-	if s.server.creatureAuras[targetGUID] == nil {
-		s.server.creatureAuras[targetGUID] = make(map[uint32]struct{})
+	if s.server.creatureAuras[targetKey] == nil {
+		s.server.creatureAuras[targetKey] = make(map[uint32]struct{})
 	}
-	slot := uint8(len(s.server.activeCreatureAuras[targetGUID]))
-	aura := &activeAura{SpellID: spell.ID, DispelType: spell.DispelType, Mechanic: spell.Mechanic, AuraType: effect.Aura, EffectMask: effectMask, RecalculateMask: recalculateMask, CasterGUID: caster.GUID, TargetGUID: targetGUID, SchoolMask: spell.SchoolMask, MiscValue: effect.MiscValue, Amount: uint32(amount), Amounts: amounts, BaseAmounts: baseAmounts, DurationMs: durationMs, PeriodMs: periodMs, RemainingMs: durationMs, Slot: slot, Positive: positive, CasterLevel: uint8(casterLevel(caster)), AuraInterruptFlags: spell.AuraInterruptFlags, TriggerSpell: effect.TriggerSpell, StackAmount: spell.StackAmount, HideDuration: spell.AttributesEx5&spellAttr5HideDuration != 0, StackCount: 1, OwnerPetAura: source.SpellID != 0, OwnerPetAuraSourceSpell: source.SpellID, OwnerPetAuraSourceEffect: source.EffectIndex, OwnerPetAuraSourceDamage: sourceDamage, OwnerPetAuraRemoveOnChange: removeOnChange}
-	s.server.activeCreatureAuras[targetGUID][spell.ID] = aura
-	s.server.creatureAuras[targetGUID][spell.ID] = struct{}{}
+	slot := uint8(len(s.server.activeCreatureAuras[targetKey]))
+	aura := &activeAura{SpellID: spell.ID, DispelType: spell.DispelType, Mechanic: spell.Mechanic, AuraType: effect.Aura, EffectMask: effectMask, RecalculateMask: recalculateMask, CasterGUID: caster.GUID, TargetGUID: targetGUID, TargetKey: targetKey, SchoolMask: spell.SchoolMask, MiscValue: effect.MiscValue, Amount: uint32(amount), Amounts: amounts, BaseAmounts: baseAmounts, DurationMs: durationMs, PeriodMs: periodMs, RemainingMs: durationMs, Slot: slot, Positive: positive, CasterLevel: uint8(casterLevel(caster)), AuraInterruptFlags: spell.AuraInterruptFlags, TriggerSpell: effect.TriggerSpell, StackAmount: spell.StackAmount, HideDuration: spell.AttributesEx5&spellAttr5HideDuration != 0, StackCount: 1, OwnerPetAura: source.SpellID != 0, OwnerPetAuraSourceSpell: source.SpellID, OwnerPetAuraSourceEffect: source.EffectIndex, OwnerPetAuraSourceDamage: sourceDamage, OwnerPetAuraRemoveOnChange: removeOnChange}
+	s.server.activeCreatureAuras[targetKey][spell.ID] = aura
+	s.server.creatureAuras[targetKey][spell.ID] = struct{}{}
 	s.server.auraMu.Unlock()
 	wireMax, wireDuration := auraWireDurations(spell, durationMs, durationMs)
 	packet := protocol.BuildAuraUpdateWithStackEffect(targetGUID, caster.GUID, slot, spell.ID, false, positive, wireMax, wireDuration, uint8(casterLevel(caster)), 1, aura.EffectMask)
@@ -722,7 +705,7 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 		s.scheduleCreaturePeriodicTick(aura, periodMs)
 	}
 	if durationMs > 0 && durationMs < 18000000 {
-		aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() { s.expireCreatureAura(targetGUID, spell.ID, slot) })
+		aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() { s.expireCreatureAura(targetKey, spell.ID, slot) })
 	}
 	return true
 }
@@ -751,14 +734,8 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 		targetSess.sendPlayerUpdate()
 		return
 	}
-	low := uint32(target.GUID & 0x00FFFFFF)
-	entry := uint32((target.GUID >> 24) & 0x00FFFFFF)
-	key := creatureWorldGUID(low, entry)
 	s.server.motionMu.Lock()
-	targetMotion := s.server.creatureMotion[target.GUID]
-	if targetMotion == nil {
-		targetMotion = s.server.creatureMotion[key]
-	}
+	targetMotion := s.server.findCreatureMotionLocked(target.Map, target.InstanceID, target.GUID)
 	if targetMotion != nil {
 		newHealth := targetMotion.Health + heal
 		if newHealth > targetMotion.MaxHealth {
@@ -768,7 +745,7 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 	}
 	s.server.motionMu.Unlock()
 	if targetMotion != nil {
-		s.server.broadcastCreatureValuesUpdate(targetMotion.Map, targetMotion.GUID, map[int]uint32{unitFieldHealth: targetMotion.Health})
+		s.server.broadcastCreatureValuesUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, map[int]uint32{unitFieldHealth: targetMotion.Health})
 	}
 }
 
@@ -828,14 +805,8 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		}
 		return
 	}
-	low := uint32(target.GUID & 0x00FFFFFF)
-	entry := uint32((target.GUID >> 24) & 0x00FFFFFF)
-	key := creatureWorldGUID(low, entry)
 	s.server.motionMu.Lock()
-	targetMotion := s.server.creatureMotion[target.GUID]
-	if targetMotion == nil {
-		targetMotion = s.server.creatureMotion[key]
-	}
+	targetMotion := s.server.findCreatureMotionLocked(target.Map, target.InstanceID, target.GUID)
 	if targetMotion != nil {
 		if damage >= targetMotion.Health {
 			targetMotion.Health = 0
@@ -858,11 +829,11 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		return
 	}
 	if targetMotion.Health == 0 {
-		s.server.stopCreatureMotion(targetMotion.Map, targetMotion.GUID, targetMotion.X, targetMotion.Y, targetMotion.Z)
-		s.server.broadcastCreatureValuesUpdate(targetMotion.Map, targetMotion.GUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: 1})
+		s.server.stopCreatureMotionInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, targetMotion.X, targetMotion.Y, targetMotion.Z)
+		s.server.broadcastCreatureValuesUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: 1})
 		s.onCreatureKilled(ctx, target)
 	} else {
-		s.server.broadcastCreatureValuesUpdate(targetMotion.Map, targetMotion.GUID, map[int]uint32{unitFieldHealth: targetMotion.Health})
+		s.server.broadcastCreatureValuesUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, map[int]uint32{unitFieldHealth: targetMotion.Health})
 		s.server.triggerCreatureAggro(ctx, targetMotion.GUID, caster.OwnerGUID)
 	}
 }

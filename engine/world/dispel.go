@@ -237,13 +237,13 @@ func (s *session) getDispellableAuraListForPlayer(targetSess *session, dispelMas
 
 // getDispellableAuraListForCreature returns dispellable auras on a creature.
 func (s *session) getDispellableAuraListForCreature(creatureGUID uint64, dispelMask uint32) []dispelCandidate {
-	if s.server == nil {
+	if s.server == nil || s.player == nil {
 		return nil
 	}
 	s.server.auraMu.Lock()
 	defer s.server.auraMu.Unlock()
 
-	auras := s.server.activeCreatureAuras[creatureGUID]
+	auras := s.server.activeCreatureAuras[creatureAuraKeyForPlayer(*s.player, creatureGUID)]
 	if len(auras) == 0 {
 		return nil
 	}
@@ -423,7 +423,7 @@ func (s *session) handleEffectDispel(ctx context.Context, targetGUID uint64, spe
 			if isTargetPlayer {
 				targetSess.expirePlayerAura(cand.SpellID)
 			} else {
-				s.expireCreatureAura(targetGUID, cand.SpellID, cand.Slot)
+				s.expireCreatureAura(creatureAuraKeyForPlayer(*s.player, targetGUID), cand.SpellID, cand.Slot)
 			}
 
 			// Devour Magic self-heal (SpellEffects.cpp:2520-2530)
@@ -551,7 +551,7 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 			if isTargetPlayer {
 				targetSess.expirePlayerAura(cand.SpellID)
 			} else {
-				s.expireCreatureAura(targetGUID, cand.SpellID, cand.Slot)
+				s.expireCreatureAura(creatureAuraKeyForPlayer(*s.player, targetGUID), cand.SpellID, cand.Slot)
 			}
 		} else {
 			failList = append(failList, cand.SpellID)
@@ -654,7 +654,8 @@ func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uin
 		}
 	} else if targetGUID != 0 && s.server != nil {
 		s.server.auraMu.Lock()
-		auras := s.server.activeCreatureAuras[targetGUID]
+		key := creatureAuraKeyForPlayer(*s.player, targetGUID)
+		auras := s.server.activeCreatureAuras[key]
 		var toRemove []struct {
 			spellID uint32
 			slot    uint8
@@ -673,7 +674,7 @@ func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uin
 		s.server.auraMu.Unlock()
 
 		for _, item := range toRemove {
-			s.expireCreatureAura(targetGUID, item.spellID, item.slot)
+			s.expireCreatureAura(key, item.spellID, item.slot)
 		}
 	}
 }

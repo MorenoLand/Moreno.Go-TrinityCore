@@ -31,7 +31,7 @@ func (s *session) savePetState(ctx context.Context, tx *sql.Tx, saveMode ...uint
 	petGUID := state.PetGUID
 	petID := state.PetNumber
 	if petID == 0 {
-		petID = uint32(petGUID)
+		petID = uint32(petGUID >> 24 & 0x00FFFFFF)
 	}
 	if petID == 0 || state.GUID == 0 {
 		return errors.New("active pet save has an invalid owner or pet GUID")
@@ -59,7 +59,7 @@ func (s *session) savePetState(ctx context.Context, tx *sql.Tx, saveMode ...uint
 	}
 	now := time.Now()
 	s.server.motionMu.Lock()
-	motion := s.server.creatureMotion[petGUID]
+	motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, petGUID)
 	if motion == nil || motion.GUID != petGUID || motion.Entry == 0 || motion.OwnerGUID != state.GUID {
 		s.server.motionMu.Unlock()
 		return nil
@@ -101,9 +101,10 @@ func (s *session) savePetState(ctx context.Context, tx *sql.Tx, saveMode ...uint
 		}
 	}
 	s.server.auraMu.Lock()
-	auras := make([]activeAura, 0, len(s.server.activeCreatureAuras[petGUID]))
-	for _, aura := range s.server.activeCreatureAuras[petGUID] {
-		if aura == nil || aura.Stopped || aura.TargetGUID != petGUID {
+	petKey := creatureAuraKeyForPlayer(*state, petGUID)
+	auras := make([]activeAura, 0, len(s.server.activeCreatureAuras[petKey]))
+	for _, aura := range s.server.activeCreatureAuras[petKey] {
+		if aura == nil || aura.Stopped || aura.TargetGUID != petGUID || aura.TargetKey != petKey {
 			continue
 		}
 		snapshot := *aura

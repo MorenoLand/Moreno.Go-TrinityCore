@@ -18,7 +18,7 @@ const (
 
 type dynamicSpellObjectState struct {
 	GUID, CasterGUID, SpellID uint64
-	Map                       uint32
+	Map, InstanceID           uint32
 	X, Y, Z, Orientation      float32
 	Radius                    float32
 	CastTime                  uint32
@@ -92,6 +92,9 @@ func (s *Server) spawnDynamicSpellObject(object *dynamicSpellObjectState, durati
 	if s == nil || object == nil || duration <= 0 {
 		return
 	}
+	if caster := s.findSessionByGUID(object.CasterGUID); caster != nil && caster.player != nil {
+		object.Map, object.InstanceID = caster.player.Map, caster.player.InstanceID
+	}
 	s.objectsMu.Lock()
 	if s.dynamicSpellObjects == nil {
 		s.dynamicSpellObjects = make(map[uint64]*dynamicSpellObjectState)
@@ -102,7 +105,7 @@ func (s *Server) spawnDynamicSpellObject(object *dynamicSpellObjectState, durati
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(buildDynamicSpellObjectUpdate(object))
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
-		s.broadcastToMap(object.Map, packet.Opcode, packet.Payload.Bytes())
+		s.broadcastToInstance(object.Map, object.InstanceID, packet.Opcode, packet.Payload.Bytes(), nil)
 	}
 }
 
@@ -122,7 +125,8 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 	s.objectsMu.Unlock()
 	for _, object := range objects {
 		caster := s.findSessionByGUID(object.CasterGUID)
-		if caster == nil || caster.player == nil {
+		if caster == nil || caster.player == nil || caster.player.Map != object.Map || caster.player.InstanceID != object.InstanceID {
+			s.despawnDynamicSpellObject(object.GUID)
 			continue
 		}
 		target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagDestLocation, Destination: protocol.SpellTargetLocation{X: object.X, Y: object.Y, Z: object.Z}}
@@ -140,13 +144,16 @@ func (s *session) hasDynamicAreaAura(targetGUID uint64, spellID uint32) bool {
 		return false
 	}
 	if target := s.server.findSessionByGUID(targetGUID); target != nil {
+		if target.player == nil || target.player.Map != s.player.Map || target.player.InstanceID != s.player.InstanceID {
+			return false
+		}
 		target.castMu.Lock()
 		_, found := target.activeAuras[spellID]
 		target.castMu.Unlock()
 		return found
 	}
 	s.server.auraMu.Lock()
-	_, found := s.server.activeCreatureAuras[targetGUID][spellID]
+	_, found := s.server.activeCreatureAuras[creatureAuraKeyForPlayer(*s.player, targetGUID)][spellID]
 	s.server.auraMu.Unlock()
 	return found
 }
@@ -163,10 +170,6 @@ func (s *Server) despawnDynamicSpellObject(guid uint64) {
 	if ok {
 		delete(s.dynamicSpellObjects, guid)
 	}
-	var mapID uint32
-	if object != nil {
-		mapID = object.Map
-	}
 	s.objectsMu.Unlock()
 	if !ok || object == nil {
 		return
@@ -174,7 +177,7 @@ func (s *Server) despawnDynamicSpellObject(guid uint64) {
 	packet := protocol.NewBuffer(9)
 	packet.WriteU64(object.GUID)
 	packet.WriteU8(0)
-	s.broadcastToMap(mapID, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), packet.Bytes())
+	s.broadcastToInstance(object.Map, object.InstanceID, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), packet.Bytes(), nil)
 }
 
 func (s *session) streamDynamicSpellObjects() {
@@ -188,7 +191,7 @@ func (s *session) streamDynamicSpellObjects() {
 	updates := protocol.NewUpdateData()
 	s.server.objectsMu.RLock()
 	for _, object := range s.server.dynamicSpellObjects {
-		if object == nil || object.Map != s.player.Map || math.Hypot(float64(object.X-s.player.X), float64(object.Y-s.player.Y)) > distance {
+		if object == nil || object.Map != s.player.Map || object.InstanceID != s.player.InstanceID || math.Hypot(float64(object.X-s.player.X), float64(object.Y-s.player.Y)) > distance {
 			continue
 		}
 		updates.AddUpdateBlock(buildDynamicSpellObjectUpdate(object))

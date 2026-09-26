@@ -10,23 +10,29 @@ import (
 )
 
 const (
-	movementOnTransport     uint32 = 0x00000200
-	movementFalling         uint32 = 0x00001000
-	movementSwimming        uint32 = 0x00200000
-	movementFlying          uint32 = 0x02000000
-	movementSplineElevation uint32 = 0x04000000
-	movementRoot            uint32 = 0x00000800
-	movementForward         uint32 = 0x00000001
-	movementBackward        uint32 = 0x00000002
-	movementStrafeLeft      uint32 = 0x00000004
-	movementStrafeRight     uint32 = 0x00000008
-	movementTurnLeft        uint32 = 0x00000010
-	movementTurnRight       uint32 = 0x00000020
-	movementAscending       uint32 = 0x00400000
-	movementDescending      uint32 = 0x00800000
-	movement2Pitch          uint16 = 0x00000020
-	movement2Interpolated   uint16 = 0x00000400
-	maxPositionCoordinate          = 17066.666
+	movementOnTransport      uint32 = 0x00000200
+	movementFalling          uint32 = 0x00001000
+	movementSwimming         uint32 = 0x00200000
+	movementFlying           uint32 = 0x02000000
+	movementSplineElevation  uint32 = 0x04000000
+	movementRoot             uint32 = 0x00000800
+	movementDisableGravity   uint32 = 0x00000400
+	movementCanFly           uint32 = 0x01000000
+	movementWaterWalking     uint32 = 0x10000000
+	movementFallingSlow      uint32 = 0x20000000
+	movementHover            uint32 = 0x40000000
+	movementPlayerStatusMask        = movementDisableGravity | movementRoot | movementCanFly | movementWaterWalking | movementFallingSlow | movementHover
+	movementForward          uint32 = 0x00000001
+	movementBackward         uint32 = 0x00000002
+	movementStrafeLeft       uint32 = 0x00000004
+	movementStrafeRight      uint32 = 0x00000008
+	movementTurnLeft         uint32 = 0x00000010
+	movementTurnRight        uint32 = 0x00000020
+	movementAscending        uint32 = 0x00400000
+	movementDescending       uint32 = 0x00800000
+	movement2Pitch           uint16 = 0x00000020
+	movement2Interpolated    uint16 = 0x00000400
+	maxPositionCoordinate           = 17066.666015625
 )
 
 type movementInfo struct {
@@ -60,8 +66,104 @@ type transportMovement struct {
 	HasTime2    bool
 }
 
+type nearTeleportDestination struct {
+	X           float32
+	Y           float32
+	Z           float32
+	Orientation float32
+	Movement    movementInfo
+}
+
+func buildTeleportMovementPackets(guid uint64, info movementInfo) ([]byte, []byte) {
+	info.GUID = guid
+	self := protocol.NewBuffer(64)
+	self.WritePackedGUID(guid)
+	self.WriteU32(0)
+	writeRawMovementInfo(self, info)
+	nearby := protocol.NewBuffer(64)
+	nearby.WritePackedGUID(guid)
+	writeRawMovementInfo(nearby, info)
+	return self.Bytes(), nearby.Bytes()
+}
+
+func (s *Server) gameTimeMilliseconds() uint32 {
+	if s == nil || s.worldTimeStartedAt.IsZero() {
+		return 0
+	}
+	return uint32(time.Since(s.worldTimeStartedAt) / time.Millisecond)
+}
+
+func (s *Server) broadcastTeleportMovement(source *session, payload []byte) {
+	if s == nil || source == nil || source.player == nil || !source.worldReady.Load() || s.Config.VisibilityDistanceContinents <= 0 {
+		return
+	}
+	distance := s.Config.VisibilityDistanceContinents
+	s.sessionsMu.RLock()
+	targets := make([]*session, 0, len(s.sessions))
+	for target := range s.sessions {
+		if target == source || !target.authed || !target.worldReady.Load() || target.player == nil || target.player.Map != source.player.Map || target.player.InstanceID != source.player.InstanceID || !canSeePlayer(target, source) {
+			continue
+		}
+		if math.Hypot(float64(target.player.X-source.player.X), float64(target.player.Y-source.player.Y)) > distance {
+			continue
+		}
+		targets = append(targets, target)
+	}
+	s.sessionsMu.RUnlock()
+	for _, target := range targets {
+		if err := target.write(uint16(protocol.OpcodeMSG_MOVE_TELEPORT), payload, true); err != nil {
+			target.debug("teleport movement broadcast failed", "account", target.accountName, "guid", source.playerGUID, "error", err)
+		}
+	}
+}
+
+func (s *session) handleMoveTeleportAck(ctx context.Context, payload []byte) bool {
+	if s == nil || !s.playerLoaded || s.player == nil {
+		return true
+	}
+	b := protocol.NewReader(payload)
+	guid, err := b.ReadPackedGUID()
+	if err != nil {
+		return false
+	}
+	if _, err := b.ReadU32(); err != nil {
+		return false
+	}
+	if _, err := b.ReadU32(); err != nil {
+		return false
+	}
+	if !s.nearTeleportPending || guid != s.playerGUID {
+		return true
+	}
+	dest := s.nearTeleportDest
+	s.nearTeleportPending = false
+	s.nearTeleportDest = nearTeleportDestination{}
+	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = dest.X, dest.Y, dest.Z, dest.Orientation
+	if dest.Movement.Flags&movementOnTransport != 0 && dest.Movement.Transport != nil {
+		s.player.TransportGUID = dest.Movement.Transport.GUID
+		s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = dest.Movement.Transport.X, dest.Movement.Transport.Y, dest.Movement.Transport.Z, dest.Movement.Transport.Orientation
+		s.player.TransportSeat = dest.Movement.Transport.Seat
+	} else {
+		s.player.TransportGUID = 0
+		s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = 0, 0, 0, 0
+		s.player.TransportSeat = 0
+	}
+	s.isMoving, s.isFalling = false, false
+	s.lastFallZ, s.lastFallTime = dest.Z, 0
+	s.setLastMovementInfo(dest.Movement)
+	s.updateZoneAndArea(ctx, true)
+	if s.worldReady.Load() {
+		s.refreshNearbyObjects(ctx)
+	}
+	s.resummonTemporaryPet(ctx)
+	return true
+}
+
 func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	if s.nearTeleportPending || s.farTeleportPending {
 		return true
 	}
 	b := protocol.NewReader(payload)
@@ -120,6 +222,36 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	}
 	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
 	s.updateZoneAndArea(ctx, false)
+	previousTransportGUID := s.player.TransportGUID
+	reportedTransportGUID := uint64(0)
+	reportedOnTransport := info.Flags&movementOnTransport != 0 && info.Transport != nil
+	if reportedOnTransport {
+		reportedTransportGUID = info.Transport.GUID
+	}
+	if s.server != nil {
+		contactGUID := uint64(0)
+		contactDistance := math.MaxFloat64
+		if reportedOnTransport {
+			contactGUID = reportedTransportGUID
+		} else {
+			probeDistance := s.server.Config.VisibilityDistanceContinents
+			if probeDistance <= 0 {
+				probeDistance = 150
+			}
+			for _, transport := range s.server.nearbyTransportSpawns(*s.player, probeDistance) {
+				distance := math.Hypot(float64(transport.X-s.player.X), float64(transport.Y-s.player.Y))
+				if distance < contactDistance {
+					contactDistance, contactGUID = distance, transportGUID(transport.GUID)
+				}
+			}
+		}
+		if contactGUID == 0 {
+			s.transportContactProbeGUID, s.transportContactProbeAt = 0, time.Time{}
+		} else if contactGUID != s.transportContactProbeGUID || time.Since(s.transportContactProbeAt) >= time.Second {
+			s.transportContactProbeGUID, s.transportContactProbeAt = contactGUID, time.Now()
+			s.debug("transport proximity movement", "player_guid", s.playerGUID, "player_map", s.player.Map, "player_x", s.player.X, "player_y", s.player.Y, "player_z", s.player.Z, "transport_guid", contactGUID, "transport_distance", contactDistance, "reported_transport_guid", reportedTransportGUID, "reported_on_transport", reportedOnTransport, "movement_flags", info.Flags)
+		}
+	}
 	if info.Flags&movementOnTransport != 0 && info.Transport != nil {
 		canonicalTransportGUID := info.Transport.GUID
 		if s.player.VehicleGUID == 0 && s.server != nil {
@@ -142,11 +274,14 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = 0, 0, 0, 0
 		s.player.TransportSeat = 0
 	}
+	if previousTransportGUID != s.player.TransportGUID {
+		s.debug("transport attachment changed", "player_guid", s.playerGUID, "previous_transport_guid", previousTransportGUID, "transport_guid", s.player.TransportGUID, "reported_transport_guid", reportedTransportGUID, "reported_on_transport", reportedOnTransport)
+	}
 	if s.server != nil {
 		if s.player.VehicleGUID != 0 {
-			s.server.relocatePassengers(s.player.VehicleGUID, info.X, info.Y, info.Z, info.Orientation)
+			s.server.relocatePassengers(s.player.Map, s.player.InstanceID, s.player.VehicleGUID, info.X, info.Y, info.Z, info.Orientation)
 		} else {
-			s.server.relocatePassengers(s.playerGUID, info.X, info.Y, info.Z, info.Orientation)
+			s.server.relocatePassengers(s.player.Map, s.player.InstanceID, s.playerGUID, info.X, info.Y, info.Z, info.Orientation)
 		}
 	}
 	s.checkDuelBounds()
@@ -427,6 +562,19 @@ func validMovementPosition(x, y, z, orientation float32) bool {
 	return math.Abs(float64(x)) <= maxPositionCoordinate && math.Abs(float64(y)) <= maxPositionCoordinate && math.Abs(float64(z)) <= maxPositionCoordinate
 }
 
+func validMapCellCoordinates(x, y float32) bool {
+	const centerCells = 256
+	const totalCells = 512
+	gridSize := float32(533.3333)
+	cellSize := gridSize / 8
+	cellOffset := cellSize / 2
+	cell := func(value float32) int {
+		return int((float64(value)-float64(cellOffset))/float64(cellSize) + centerCells + 0.5)
+	}
+	cellX, cellY := cell(x), cell(y)
+	return cellX >= 0 && cellX < totalCells && cellY >= 0 && cellY < totalCells
+}
+
 func (s *Server) addSession(value *session) {
 	s.sessionsMu.Lock()
 	if s.sessions == nil {
@@ -529,6 +677,17 @@ func (s *Server) broadcastToNearby(opcode uint16, payload []byte, source *sessio
 			continue
 		}
 		if source != nil && (target == source || target.player.Map != source.player.Map || target.player.InstanceID != source.player.InstanceID) {
+			continue
+		}
+		_ = target.write(opcode, payload, true)
+	}
+}
+
+func (s *Server) broadcastToInstance(mapID, instanceID uint32, opcode uint16, payload []byte, source *session) {
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for target := range s.sessions {
+		if !target.authed || !target.worldReady.Load() || target.player == nil || target.player.Map != mapID || target.player.InstanceID != instanceID || target == source {
 			continue
 		}
 		_ = target.write(opcode, payload, true)

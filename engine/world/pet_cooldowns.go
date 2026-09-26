@@ -40,14 +40,11 @@ func (s *session) registerPetMotion(ctx context.Context, petGUID uint64, petID u
 	if petType == 1 {
 		minDamage, maxDamage = float32(level-level/4), float32(level+level/4)
 	}
-	motion := &creatureMotion{GUID: petGUID, Entry: entry, Map: s.player.Map, HomeX: x, HomeY: y, HomeZ: z, X: x, Y: y, Z: z, Orientation: orientation, Speed: 2.5, RunSpeed: 7, Faction: faction, Level: level, UnitFlags: unitFlagPlayerControlled, UnitFlags2: unitFlag2RegeneratePower, AttackTime: 2000, CombatReach: combatReach, Health: health, MaxHealth: maxHealth, Mana: mana, MaxMana: maxMana, PowerType: powerType, Powers: powers, MaxPowers: maxPowers, PetID: petID, PetType: petType, PetNextLevelXP: nextLevelXP, FocusRegenTimer: 4 * time.Second, HappinessTimer: 7500 * time.Millisecond, Happiness: happiness, Experience: experience, OwnerGUID: s.playerGUID, Spells: spells, SpellCooldowns: make(map[uint32]time.Time), SpellCategoryCooldowns: make(map[uint32]time.Time), SpellCooldownCategories: make(map[uint32]uint32), SpellCooldownCategoryEnds: make(map[uint32]time.Time), PetCommand: PetCommandFollow, PetReact: reactState, AutocastSpells: autocast, MinDamage: minDamage, MaxDamage: maxDamage, Refreshed: time.Now()}
+	motion := &creatureMotion{GUID: petGUID, Entry: entry, Map: s.player.Map, InstanceID: s.player.InstanceID, HomeX: x, HomeY: y, HomeZ: z, X: x, Y: y, Z: z, Orientation: orientation, Speed: 2.5, RunSpeed: 7, Faction: faction, Level: level, UnitFlags: unitFlagPlayerControlled, UnitFlags2: unitFlag2RegeneratePower, AttackTime: 2000, CombatReach: combatReach, Health: health, MaxHealth: maxHealth, Mana: mana, MaxMana: maxMana, PowerType: powerType, Powers: powers, MaxPowers: maxPowers, PetID: petID, PetType: petType, PetNextLevelXP: nextLevelXP, FocusRegenTimer: 4 * time.Second, HappinessTimer: 7500 * time.Millisecond, Happiness: happiness, Experience: experience, OwnerGUID: s.playerGUID, Spells: spells, SpellCooldowns: make(map[uint32]time.Time), SpellCategoryCooldowns: make(map[uint32]time.Time), SpellCooldownCategories: make(map[uint32]uint32), SpellCooldownCategoryEnds: make(map[uint32]time.Time), PetCommand: PetCommandFollow, PetReact: reactState, AutocastSpells: autocast, MinDamage: minDamage, MaxDamage: maxDamage, Refreshed: time.Now()}
 	motion.Stats = attributes
 	s.loadPetCooldowns(ctx, petID, motion)
 	s.server.motionMu.Lock()
-	if s.server.creatureMotion == nil {
-		s.server.creatureMotion = make(map[uint64]*creatureMotion)
-	}
-	s.server.creatureMotion[petGUID] = motion
+	s.server.motionMapLocked(s.player.Map, s.player.InstanceID)[petGUID] = motion
 	s.server.motionMu.Unlock()
 }
 
