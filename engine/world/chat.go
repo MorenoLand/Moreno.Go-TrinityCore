@@ -63,15 +63,6 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			_, _ = s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET mutetime = 0 WHERE id = ?", s.accountID)
 		}
 	}
-	if s.muteTime > now {
-		remaining := s.muteTime - now
-		if remaining < 1 {
-			remaining = 1
-		}
-		s.sendNotification(fmt.Sprintf("You must wait %d seconds before speaking again.", remaining))
-		s.debug("chat rejected", "account", s.accountName, "reason", "account muted", "mute_until", s.muteTime)
-		return true
-	}
 	b := protocol.NewReader(payload)
 	typeID, err := b.ReadU32()
 	if err != nil {
@@ -83,40 +74,10 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "malformed language", "error", err)
 		return true
 	}
-	languageSkillID, languageKnown := languageSkill(language)
-	s.debug("chat packet received", "account", s.accountName, "guid", s.playerGUID, "character", s.player.Name, "type", typeID, "language", language, "language_skill", languageSkillID, "language_known", languageKnown, "loaded_skill_count", len(s.player.Skills))
+	s.debug("chat packet received", "account", s.accountName, "guid", s.playerGUID, "character", s.player.Name, "type", typeID, "language", language)
 	if typeID >= maxChatMessageType {
 		s.debug("chat rejected", "account", s.accountName, "reason", "invalid message type", "type", typeID)
 		return true
-	}
-	if language == languageAddon && !addonChatType(typeID) {
-		s.debug("chat rejected", "account", s.accountName, "reason", "invalid addon language type", "type", typeID)
-		return true
-	}
-	if language == languageAddon && (s.server == nil || !s.server.Config.AddonChannel) {
-		s.debug("chat rejected", "account", s.accountName, "reason", "addon channel disabled")
-		return true
-	}
-	if language != languageAddon && typeID != chatAFK && typeID != chatDND {
-		if language == languageUniversal {
-			s.sendNotification("Unknown language")
-			s.debug("chat rejected", "account", s.accountName, "reason", "universal language")
-			return true
-		}
-		skill, known := languageSkill(language)
-		if !known {
-			s.sendNotification("Unknown language")
-			s.debug("chat rejected", "account", s.accountName, "reason", "unknown language", "language", language)
-			return true
-		}
-		if skill != 0 && !s.hasLanguageSkill(skill) && !s.hasLanguageAura(language) {
-			s.sendNotification("You don't know that language")
-			s.debug("chat rejected", "account", s.accountName, "reason", "language not learned", "language", language, "skill", skill)
-			return true
-		}
-	}
-	if language != languageAddon && typeID != chatAFK && typeID != chatDND {
-		s.updateSpeakTime()
 	}
 	var targetName, channel, message string
 	switch uint8(typeID) {
@@ -146,12 +107,7 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "warden check response")
 		return true
 	}
-	if typeID != chatWhisper && s.hasAura(1852) {
-		s.sendNotification(fmt.Sprintf("Silence is ON for %s", s.player.Name))
-		s.debug("chat rejected", "account", s.accountName, "reason", "GM silence aura", "spell", 1852)
-		return true
-	}
-	if language != languageAddon && (strings.HasPrefix(message, ".") || strings.HasPrefix(message, "!")) {
+	if typeID != chatAFK && typeID != chatDND && language != languageAddon && (strings.HasPrefix(message, ".") || strings.HasPrefix(message, "!")) {
 		command := strings.TrimSpace(message[1:])
 		if command == "" {
 			return true
@@ -166,6 +122,51 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			}
 			return !luaCancelled(values)
 		}
+		return true
+	}
+	if s.muteTime > now {
+		remaining := s.muteTime - now
+		if remaining < 1 {
+			remaining = 1
+		}
+		s.sendNotification(fmt.Sprintf("You must wait %d seconds before speaking again.", remaining))
+		s.debug("chat rejected", "account", s.accountName, "reason", "account muted", "mute_until", s.muteTime)
+		return true
+	}
+	if language == languageAddon && !addonChatType(typeID) {
+		s.debug("chat rejected", "account", s.accountName, "reason", "invalid addon language type", "type", typeID)
+		return true
+	}
+	if language == languageAddon && (s.server == nil || !s.server.Config.AddonChannel) {
+		s.debug("chat rejected", "account", s.accountName, "reason", "addon channel disabled")
+		return true
+	}
+	languageSkillID, languageKnown := languageSkill(language)
+	s.debug("chat language checked", "account", s.accountName, "language", language, "language_skill", languageSkillID, "language_known", languageKnown, "loaded_skill_count", len(s.player.Skills))
+	if language != languageAddon && typeID != chatAFK && typeID != chatDND {
+		if language == languageUniversal {
+			s.sendNotification("Unknown language")
+			s.debug("chat rejected", "account", s.accountName, "reason", "universal language")
+			return true
+		}
+		skill, known := languageSkill(language)
+		if !known {
+			s.sendNotification("Unknown language")
+			s.debug("chat rejected", "account", s.accountName, "reason", "unknown language", "language", language)
+			return true
+		}
+		if skill != 0 && !s.hasLanguageSkill(skill) && !s.hasLanguageAura(language) {
+			s.sendNotification("You don't know that language")
+			s.debug("chat rejected", "account", s.accountName, "reason", "language not learned", "language", language, "skill", skill)
+			return true
+		}
+	}
+	if language != languageAddon && typeID != chatAFK && typeID != chatDND {
+		s.updateSpeakTime()
+	}
+	if typeID != chatWhisper && s.hasAura(1852) {
+		s.sendNotification(fmt.Sprintf("Silence is ON for %s", s.player.Name))
+		s.debug("chat rejected", "account", s.accountName, "reason", "GM silence aura", "spell", 1852)
 		return true
 	}
 	if s.player != nil && s.server != nil {
