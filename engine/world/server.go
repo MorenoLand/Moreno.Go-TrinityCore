@@ -3342,6 +3342,11 @@ func (s *session) decrypt(data []byte) error {
 }
 
 func (s *session) write(opcode uint16, payload []byte, encrypt bool) error {
+	_, err := s.writeWithStatus(opcode, payload, encrypt)
+	return err
+}
+
+func (s *session) writeWithStatus(opcode uint16, payload []byte, encrypt bool) (bool, error) {
 	if s != nil && s.authed && s.server != nil && s.server.Features != nil && s.server.Features.Scripts != nil {
 		packet := &scripting.Packet{Opcode: uint32(opcode), Data: append([]byte(nil), payload...)}
 		values, hookErr := s.server.Features.Scripts.TriggerPacketEvent(context.Background(), int(opcode), 7, packet, s.luaPlayer())
@@ -3350,7 +3355,7 @@ func (s *session) write(opcode uint16, payload []byte, encrypt bool) error {
 		}
 		for _, value := range values {
 			if allowed, ok := value.(bool); ok && !allowed {
-				return nil
+				return false, nil
 			}
 		}
 		opcode = uint16(packet.Opcode)
@@ -3358,7 +3363,7 @@ func (s *session) write(opcode uint16, payload []byte, encrypt bool) error {
 	}
 	if s != nil && s.captureUpdatePackets && (opcode == uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) || opcode == uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT)) {
 		s.capturedUpdatePackets = append(s.capturedUpdatePackets, protocol.PacketFrom(opcode, append([]byte(nil), payload...)))
-		return nil
+		return true, nil
 	}
 	if s != nil && s.server != nil && s.server.TraceRecorder != nil {
 		state := opcodeName(uint32(opcode))
@@ -3368,30 +3373,30 @@ func (s *session) write(opcode uint16, payload []byte, encrypt bool) error {
 		s.server.TraceRecorder.Record(protocoltrace.ServerToClient, uint32(opcode), payload, state)
 	}
 	if s == nil || s.conn == nil {
-		return nil
+		return false, nil
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	frame, headerSize, err := protocol.EncodeServerFrame(opcode, payload)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if encrypt && s.crypt != nil {
 		if err := s.crypt.EncryptSend(frame[:headerSize]); err != nil {
-			return err
+			return false, err
 		}
 	}
 	for len(frame) > 0 {
 		n, err := s.conn.Write(frame)
 		if err != nil {
-			return err
+			return false, err
 		}
 		frame = frame[n:]
 	}
 	if opcode != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && opcode != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
 		s.debug("world packet sent", "account", s.accountName, "opcode", opcodeName(uint32(opcode)), "size", len(payload))
 	}
-	return nil
+	return true, nil
 }
 
 func loadAccount(ctx context.Context, store *database.Store, username string, realmID uint32) (*account, error) {

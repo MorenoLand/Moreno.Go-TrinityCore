@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sort"
 	"time"
@@ -31,9 +32,9 @@ func (s *Server) loadContinentTransports(ctx context.Context) {
 	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || s.Data == nil {
 		return
 	}
-	rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT tr.guid, tr.entry, COALESCE(gt.name, ''), COALESCE(gt.data0, 0), COALESCE(gt.data1, 0), COALESCE(gt.data2, 0), COALESCE(gt.data6, 0), COALESCE(gt.displayId, 0), COALESCE(gt.size, 1), COALESCE(gt.data8, 0) FROM transports AS tr JOIN gameobject_template AS gt ON gt.entry = tr.entry WHERE gt.type = 15 ORDER BY tr.guid`)
+	rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT tr.guid, tr.entry, COALESCE(gt.name, ''), COALESCE(gt.data0, 0), COALESCE(gt.data1, 0), COALESCE(gt.data2, 0), COALESCE(gt.data6, 0), COALESCE(gt.displayId, 0), COALESCE(gt.size, 1), COALESCE(gt.data8, 0), COALESCE(ta.flags, 0), COALESCE(ta.faction, 0) FROM transports AS tr JOIN gameobject_template AS gt ON gt.entry = tr.entry LEFT JOIN gameobject_template_addon AS ta ON ta.entry = gt.entry WHERE gt.type = 15 ORDER BY tr.guid`)
 	if err != nil && isMissingColumn(err) {
-		rows, err = s.WorldStore.DB.QueryContext(ctx, `SELECT tr.guid, tr.entry, COALESCE(gt.name, ''), COALESCE(gt.data0, 0), COALESCE(gt.data1, 0), COALESCE(gt.data2, 0), 0, COALESCE(gt.displayId, 0), COALESCE(gt.size, 1), COALESCE(gt.data8, 0) FROM transports AS tr JOIN gameobject_template AS gt ON gt.entry = tr.entry WHERE gt.type = 15 ORDER BY tr.guid`)
+		rows, err = s.WorldStore.DB.QueryContext(ctx, `SELECT tr.guid, tr.entry, COALESCE(gt.name, ''), COALESCE(gt.data0, 0), COALESCE(gt.data1, 0), COALESCE(gt.data2, 0), 0, COALESCE(gt.displayId, 0), COALESCE(gt.size, 1), COALESCE(gt.data8, 0), COALESCE(ta.flags, 0), COALESCE(ta.faction, 0) FROM transports AS tr JOIN gameobject_template AS gt ON gt.entry = tr.entry LEFT JOIN gameobject_template_addon AS ta ON ta.entry = gt.entry WHERE gt.type = 15 ORDER BY tr.guid`)
 	}
 	if err != nil {
 		if !missingTable(err) && s.Logger != nil {
@@ -45,10 +46,10 @@ func (s *Server) loadContinentTransports(ctx context.Context) {
 	loaded := 0
 	now := time.Now()
 	for rows.Next() {
-		var guid, entry, pathID, transportMapID, displayID, canBeStopped int64
+		var guid, entry, pathID, transportMapID, displayID, canBeStopped, flags, faction int64
 		var name string
 		var speed, acceleration, size float64
-		if err := rows.Scan(&guid, &entry, &name, &pathID, &speed, &acceleration, &transportMapID, &displayID, &size, &canBeStopped); err != nil || guid <= 0 || entry <= 0 || pathID <= 0 {
+		if err := rows.Scan(&guid, &entry, &name, &pathID, &speed, &acceleration, &transportMapID, &displayID, &size, &canBeStopped, &flags, &faction); err != nil || guid <= 0 || entry <= 0 || pathID <= 0 {
 			continue
 		}
 		points, err := s.Data.TaxiPathPoints(uint32(pathID))
@@ -66,11 +67,11 @@ func (s *Server) loadContinentTransports(ctx context.Context) {
 			size = 1
 		}
 		mapID, x, y, z, orientation := path.Position(0)
-		state := uint8(0)
+		state := uint8(1)
 		if canBeStopped != 0 {
-			state = 1
+			state = 0
 		}
-		transport := &continentTransport{Spawn: gameObjectSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: mapID, X: x, Y: y, Z: z, Orientation: orientation, State: state, AnimProgress: 255, Type: GameObjectTypeMOTransport, DisplayID: uint32(displayID), Size: float32(size), RotationW: 1, ParentRotation: [4]float32{0, 0, 0, 1}}, Name: name, TransportMapID: uint32(transportMapID), PathID: uint32(pathID), Path: path, LastUpdate: now}
+		transport := &continentTransport{Spawn: gameObjectSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: mapID, X: x, Y: y, Z: z, Orientation: orientation, State: state, AnimProgress: 255, Type: GameObjectTypeMOTransport, DisplayID: uint32(displayID), Size: float32(size), Flags: uint32(flags), Faction: uint32(faction), RotationW: 1, ParentRotation: [4]float32{0, 0, 0, 1}}, Name: name, TransportMapID: uint32(transportMapID), PathID: uint32(pathID), Path: path, LastUpdate: now}
 		s.loadTransportPassengers(ctx, transport)
 		transport.updatePosition()
 		if s.Logger != nil {
@@ -269,12 +270,6 @@ func (t *continentTransport) updatePosition() {
 	t.Spawn.Map, t.Spawn.X, t.Spawn.Y, t.Spawn.Z, t.Spawn.Orientation = t.Path.Position(t.PathProgress)
 	t.Spawn.TransportProgress = t.PathProgress
 	t.Spawn.TransportPeriod = t.Path.Period()
-	for i := range t.StaticCreatures {
-		passenger := &t.StaticCreatures[i]
-		passenger.TransportGUID = transportGUID(t.Spawn.GUID)
-		passenger.Map = t.Spawn.Map
-		passenger.X, passenger.Y, passenger.Z, passenger.Orientation = CalculatePassengerPosition(t.Spawn.X, t.Spawn.Y, t.Spawn.Z, t.Spawn.Orientation, passenger.TransportX, passenger.TransportY, passenger.TransportZ, passenger.TransportO)
-	}
 }
 
 func (t *continentTransport) advance(now time.Time) bool {
@@ -436,6 +431,7 @@ func (s *Server) updateTransportPassengerVisibility(ctx context.Context, observe
 	}
 	updates := protocol.NewUpdateData()
 	creatureGUIDs := make([]uint64, 0, len(transport.StaticCreatures))
+	creaturePositions := make([]string, 0, len(transport.StaticCreatures))
 	objectGUIDs := make([]uint64, 0, len(transport.StaticObjects))
 	removedGUIDs := make([]uint64, 0)
 	for _, passenger := range transport.passengerCreatures() {
@@ -454,6 +450,7 @@ func (s *Server) updateTransportPassengerVisibility(ctx context.Context, observe
 			continue
 		}
 		creatureGUIDs = append(creatureGUIDs, guid)
+		creaturePositions = append(creaturePositions, fmt.Sprintf("%d@%.2f,%.2f,%.2f/%.2f,%.2f,%.2f,%.2f", guid, passenger.X, passenger.Y, passenger.Z, passenger.TransportX, passenger.TransportY, passenger.TransportZ, passenger.TransportO))
 		stats := s.loadCreatureStats(ctx, passenger.Entry)
 		passenger.BoundingRadius, passenger.CombatReach, passenger.MaxHealth = stats.BoundingRadius, stats.CombatReach, stats.MaxHealth
 		passenger.Health = creatureSpawnHealth(passenger.RegenerateHealth, passenger.Health, stats.MaxHealth)
@@ -477,10 +474,34 @@ func (s *Server) updateTransportPassengerVisibility(ctx context.Context, observe
 	if !updates.HasData() {
 		return
 	}
-	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
-		observer.debug("transport passengers streamed", "player_guid", observer.playerGUID, "transport_guid", transportGUID, "creature_guids", creatureGUIDs, "object_guids", objectGUIDs, "removed_guids", removedGUIDs)
-		_ = observer.write(packet.Opcode, packet.Payload.Bytes(), true)
+	rollbackVisibility := func() {
+		for _, guid := range creatureGUIDs {
+			observer.clearTransportPassengerVisible(guid, transportGUID)
+		}
+		for _, guid := range objectGUIDs {
+			observer.clearTransportPassengerVisible(guid, transportGUID)
+		}
+		for _, guid := range removedGUIDs {
+			observer.markTransportPassengerVisible(guid, transportGUID)
+		}
 	}
+	packet, err := updates.BuildPacket(0)
+	if err != nil || packet == nil {
+		rollbackVisibility()
+		if err != nil {
+			observer.debug("transport passenger update build failed", "player_guid", observer.playerGUID, "transport_guid", transportGUID, "error", err)
+		}
+		return
+	}
+	sent, err := observer.writeWithStatus(packet.Opcode, packet.Payload.Bytes(), true)
+	if err != nil || !sent {
+		rollbackVisibility()
+		if err != nil {
+			observer.debug("transport passenger update write failed", "player_guid", observer.playerGUID, "transport_guid", transportGUID, "creature_guids", creatureGUIDs, "object_guids", objectGUIDs, "removed_guids", removedGUIDs, "error", err)
+		}
+		return
+	}
+	observer.debug("transport passengers streamed", "player_guid", observer.playerGUID, "player_map", observer.player.Map, "player_x", observer.player.X, "player_y", observer.player.Y, "player_z", observer.player.Z, "transport_guid", transportGUID, "transport_map", transport.Spawn.Map, "transport_x", transport.Spawn.X, "transport_y", transport.Spawn.Y, "transport_z", transport.Spawn.Z, "transport_orientation", transport.Spawn.Orientation, "path_progress", transport.PathProgress, "creature_guids", creatureGUIDs, "creature_positions", creaturePositions, "object_guids", objectGUIDs, "removed_guids", removedGUIDs, "write_bytes", len(packet.Payload.Bytes()))
 }
 
 func (s *Server) buildAttachedTransportUpdate(ctx context.Context, state playerState) (*protocol.Packet, error) {
@@ -601,7 +622,15 @@ func (t *continentTransport) passengerCreatures() []creatureSpawn {
 	if t == nil {
 		return nil
 	}
-	return append([]creatureSpawn(nil), t.StaticCreatures...)
+	result := make([]creatureSpawn, 0, len(t.StaticCreatures))
+	for _, local := range t.StaticCreatures {
+		spawn := local
+		spawn.TransportGUID = transportGUID(t.Spawn.GUID)
+		spawn.Map = t.Spawn.Map
+		spawn.X, spawn.Y, spawn.Z, spawn.Orientation = CalculatePassengerPosition(t.Spawn.X, t.Spawn.Y, t.Spawn.Z, t.Spawn.Orientation, local.TransportX, local.TransportY, local.TransportZ, local.TransportO)
+		result = append(result, spawn)
+	}
+	return result
 }
 
 func (t *continentTransport) passengerObjects() []gameObjectSpawn {
@@ -707,7 +736,7 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 		if change.OldSpawn.Map == change.Spawn.Map {
 			updates.AddUpdateBlock(buildGameObjectMovementUpdate(change.Spawn))
 		} else {
-			updates.AddUpdateBlock(buildTransportGameObjectUpdate(change.Spawn, protocol.UpdateCreateObject2))
+			updates.AddUpdateBlock(buildTransportGameObjectUpdate(change.Spawn, protocol.UpdateCreateObject))
 		}
 		if packet, err := updates.BuildPacket(0); err == nil {
 			_ = sess.write(packet.Opcode, packet.Payload.Bytes(), true)
