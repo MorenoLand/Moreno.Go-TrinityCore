@@ -59,6 +59,7 @@ type creatureMotion struct {
 	UnitFlags       uint32
 	DynamicFlags    uint32
 	FlagsExtra      uint32
+	CanFly          bool
 	ReactState      uint8
 	ReactStateKnown bool
 	AttackTime      uint32
@@ -223,13 +224,13 @@ func (s *Server) storeCreatureMotion(mapID, instanceID uint32, guid uint64, moti
 	s.motionMu.Unlock()
 }
 
-func (s *Server) motionFor(ctx context.Context, guid, entry, mapID, instanceID uint32, x, y, z float32, moveType uint32, wander float64, walkSpeed float32, currentHealth uint32) *creatureMotion {
+func (s *Server) motionFor(ctx context.Context, guid, entry, mapID, instanceID uint32, x, y, z, orientation float32, moveType uint32, wander float64, walkSpeed float32, currentHealth uint32) *creatureMotion {
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
-	return s.motionForLocked(ctx, guid, entry, mapID, instanceID, x, y, z, moveType, wander, walkSpeed, currentHealth)
+	return s.motionForLocked(ctx, guid, entry, mapID, instanceID, x, y, z, orientation, moveType, wander, walkSpeed, currentHealth)
 }
 
-func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instanceID uint32, x, y, z float32, moveType uint32, wander float64, walkSpeed float32, currentHealth uint32) *creatureMotion {
+func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instanceID uint32, x, y, z, orientation float32, moveType uint32, wander float64, walkSpeed float32, currentHealth uint32) *creatureMotion {
 	motions := s.motionMapLocked(mapID, instanceID)
 	key := creatureWorldGUID(guid, entry)
 	motion := motions[key]
@@ -250,6 +251,7 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			HomeX:           x,
 			HomeY:           y,
 			HomeZ:           z,
+			Orientation:     orientation,
 			X:               x,
 			Y:               y,
 			Z:               z,
@@ -268,6 +270,7 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			CombatReach:     st.CombatReach,
 			UnitFlags:       st.UnitFlags,
 			FlagsExtra:      st.FlagsExtra,
+			CanFly:          st.CanFly,
 			ReactState:      st.ReactState,
 			ReactStateKnown: st.ReactStateKnown,
 		}
@@ -303,7 +306,7 @@ func (s *Server) relocateTransportCreatureMotions(ctx context.Context, passenger
 		}
 		key := creatureWorldGUID(passenger.GUID, passenger.Entry)
 		isNew := s.motionMapLocked(passenger.Map, 0)[key] == nil
-		motion := s.motionForLocked(ctx, passenger.GUID, passenger.Entry, passenger.Map, 0, passenger.X, passenger.Y, passenger.Z, 0, 0, passenger.WalkSpeed, passenger.Health)
+		motion := s.motionForLocked(ctx, passenger.GUID, passenger.Entry, passenger.Map, 0, passenger.X, passenger.Y, passenger.Z, passenger.Orientation, 0, 0, passenger.WalkSpeed, passenger.Health)
 		motion.TransportGUID = passenger.TransportGUID
 		motion.Map, motion.InstanceID = passenger.Map, 0
 		motion.HomeX, motion.HomeY, motion.HomeZ = passenger.X, passenger.Y, passenger.Z
@@ -384,6 +387,7 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				CombatReach:     st.CombatReach,
 				UnitFlags:       st.UnitFlags,
 				FlagsExtra:      st.FlagsExtra,
+				CanFly:          st.CanFly,
 				ReactState:      st.ReactState,
 				ReactStateKnown: st.ReactStateKnown,
 				Name:            name,
@@ -622,7 +626,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 	if distance <= 0 {
 		distance = 100.0
 	}
-	query := `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, c.MovementType, c.wander_distance,
+	query := `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, c.orientation, c.MovementType, c.wander_distance,
 		COALESCE(NULLIF(t.speed_walk, 0), 1.0), COALESCE(NULLIF(t.speed_run, 0), 1.14286),
 		COALESCE(t.faction, 0), COALESCE(t.maxlevel, 1), COALESCE(t.unit_flags, 0), COALESCE(t.dynamicflags, 0), COALESCE(t.flags_extra, 0), COALESCE(NULLIF(t.BaseAttackTime, 0), 2000),
 		c.curhealth
@@ -639,8 +643,8 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 		}
 		for rows.Next() {
 			var guid, entry, moveType, faction, level, unitFlags, dynamicFlags, flagsExtra, attackTime, curHealth int64
-			var x, y, z, wander, walkSpeed, runSpeed float64
-			if err := rows.Scan(&guid, &entry, &x, &y, &z, &moveType, &wander, &walkSpeed, &runSpeed, &faction, &level, &unitFlags, &dynamicFlags, &flagsExtra, &attackTime, &curHealth); err != nil {
+			var x, y, z, orientation, wander, walkSpeed, runSpeed float64
+			if err := rows.Scan(&guid, &entry, &x, &y, &z, &orientation, &moveType, &wander, &walkSpeed, &runSpeed, &faction, &level, &unitFlags, &dynamicFlags, &flagsExtra, &attackTime, &curHealth); err != nil {
 				continue
 			}
 			spawnKey := creatureMotionSpawnKey{MapID: p.Map, InstanceID: p.InstanceID, GUID: uint32(guid)}
@@ -652,7 +656,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 				continue
 			}
 			walkVelocity := creatureWalkVelocity(walkSpeed)
-			motion := s.motionFor(ctx, uint32(guid), uint32(entry), p.Map, p.InstanceID, float32(x), float32(y), float32(z), uint32(moveType), wander, walkVelocity, uint32(curHealth))
+			motion := s.motionFor(ctx, uint32(guid), uint32(entry), p.Map, p.InstanceID, float32(x), float32(y), float32(z), float32(orientation), uint32(moveType), wander, walkVelocity, uint32(curHealth))
 			motion.Faction = uint32(faction)
 			motion.Level = uint32(level)
 			motion.UnitFlags = uint32(unitFlags)
@@ -1045,12 +1049,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if p.Map != motion.Map || p.InstanceID != motion.InstanceID || p.IsGM || p.IsDead || (motion.FlagsExtra&0x00000400 != 0) || isCreaturePassive(motion) || creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) {
 			continue
 		}
-		dist := float32(math.Hypot(float64(p.X-motion.X), float64(p.Y-motion.Y)))
+		dist := float32(distance3D(p.X, p.Y, p.Z, motion.X, motion.Y, motion.Z))
 		if !canCreatureDetectStealthOfPlayer(motion, p.Sess, dist) {
 			continue
 		}
 		aggroDist := float32(15.0)
-		if s.isHostileFaction(motion.Faction, p) && dist <= aggroDist {
+		if s.isHostileFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist) {
 			s.debug("creature aggro", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "player_guid", p.GUID, "player_zone", p.Sess.player.Zone)
 			motion.InCombat = true
 			if motion.ThreatMgr == nil {
@@ -1136,6 +1140,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	motion.Moving = true
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 	motion.WaitUntil = motion.MoveEnds.Add(wait)
+}
+
+func canCreatureStartAttack(motion *creatureMotion, target playerPos, distance, attackDistance float32) bool {
+	return motion != nil && (motion.CanFly || math.Abs(float64(target.Z-motion.Z)) <= 3.0) && distance <= attackDistance
 }
 
 func creatureSpellDamage(spell wotlk.Spell) (uint32, bool) {

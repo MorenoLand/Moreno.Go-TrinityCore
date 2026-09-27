@@ -33,6 +33,12 @@ func (s *session) sendPlayerUpdate() {
 	if s.server.Config.GameType == 4 || s.server.Config.GameType == 6 {
 		pvpFlags |= 0x01
 	}
+	channelGUID, channelSpell := uint64(0), uint32(0)
+	s.castMu.Lock()
+	if s.activeChannel != nil {
+		channelGUID, channelSpell = s.activeChannel.TargetGUID, s.activeChannel.SpellID
+	}
+	s.castMu.Unlock()
 	fields := map[int]uint32{
 		unitFieldHealth:                   s.player.Health,
 		unitFieldMaxHealth:                s.player.MaxHealth,
@@ -44,6 +50,9 @@ func (s *session) sendPlayerUpdate() {
 		unitFieldPlayerFieldBytes:         playerFieldBytesValue(*s.player),
 		unitFieldTarget:                   uint32(s.selection),
 		unitFieldTarget + 1:               uint32(s.selection >> 32),
+		unitFieldChannelObject:            uint32(channelGUID),
+		unitFieldChannelObject + 1:        uint32(channelGUID >> 32),
+		unitFieldChannelSpell:             channelSpell,
 		unitFieldGuildID:                  s.player.GuildID,
 		unitFieldGuildRank:                uint32(s.player.GuildRank),
 		unitFieldBytes2:                   uint32(s.player.SheathState) | uint32(pvpFlags)<<8,
@@ -847,13 +856,19 @@ func (s *session) handleCmdCast(ctx context.Context, args []string) {
 		s.sendSysMessage("Invalid spell ID.")
 		return
 	}
-	castPkt := protocol.NewBuffer(16)
-	castPkt.WritePackedGUID(s.playerGUID)
-	castPkt.WritePackedGUID(s.playerGUID)
-	castPkt.WriteU8(1)
-	castPkt.WriteU32(uint32(spellID))
-	castPkt.WriteU32(0)
-	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), castPkt.Bytes(), true)
+	if s.server == nil || s.server.Data == nil {
+		s.sendSysMessage("Spell data is unavailable.")
+		return
+	}
+	if _, found, err := s.server.Data.Spell(uint32(spellID)); err != nil || !found {
+		s.sendSysMessage("Unknown spell ID.")
+		return
+	}
+	targetGUID := s.selection
+	if targetGUID == 0 {
+		targetGUID = s.playerGUID
+	}
+	s.castSpellDirect(ctx, uint32(spellID), targetGUID)
 	s.sendSysMessage(fmt.Sprintf("Casting spell %d.", spellID))
 }
 

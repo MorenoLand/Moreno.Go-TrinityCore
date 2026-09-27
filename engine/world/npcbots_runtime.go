@@ -32,14 +32,17 @@ func (s *Server) runtimeNpcBotCountByOwner(ownerGUID uint64) uint8 {
 	if s == nil || ownerGUID == 0 || s.Features == nil || s.Features.NPCBots == nil {
 		return 0
 	}
-	owner := s.findSessionByGUID(ownerGUID)
-	if owner == nil || owner.player == nil {
+	return s.runtimeNpcBotCountForSession(s.findSessionByGUID(ownerGUID))
+}
+
+func (s *Server) runtimeNpcBotCountForSession(owner *session) uint8 {
+	if s == nil || owner == nil || owner.player == nil || s.Features == nil || s.Features.NPCBots == nil {
 		return 0
 	}
 	s.motionMu.Lock()
 	runtime := make([]NpcBotRuntimeState, 0)
 	for _, motion := range s.motionMapLocked(owner.player.Map, owner.player.InstanceID) {
-		if motion != nil && motion.OwnerGUID == ownerGUID && motion.PetID == 0 {
+		if motion != nil && motion.OwnerGUID == owner.playerGUID && motion.PetID == 0 {
 			runtime = append(runtime, NpcBotRuntimeState{GUID: motion.GUID, OwnerGUID: motion.OwnerGUID, Entry: motion.Entry, PetID: motion.PetID})
 		}
 	}
@@ -50,5 +53,16 @@ func (s *Server) runtimeNpcBotCountByOwner(ownerGUID uint64) uint8 {
 			entries[bot.Entry] = struct{}{}
 		}
 	}
-	return ResolveNpcBotRuntimeCount(ownerGUID, entries, runtime)
+	return ResolveNpcBotRuntimeCount(owner.playerGUID, entries, runtime)
+}
+
+func (s *Server) instanceOccupantCount(owner *session, countNpcBots bool) uint32 {
+	if owner == nil {
+		return 0
+	}
+	count := uint32(1)
+	if countNpcBots {
+		count += uint32(s.runtimeNpcBotCountForSession(owner))
+	}
+	return count
 }

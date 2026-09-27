@@ -305,7 +305,8 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	learned := s.hasActiveSpell(spellID)
-	if !found || spell.Attributes&spellAttributePassive != 0 || !learned {
+	gmMode := s.player.ExtraFlags&playerExtraGMOn != 0 || s.player.PlayerFlags&playerFlagGM != 0
+	if !found || spell.Attributes&spellAttributePassive != 0 || !canPlayerCastSpell(learned, gmMode) {
 		s.debug("spell cast ignored", "account", s.accountName, "spell", spellID, "reason", spellCastIgnoreReason(spell, found, learned))
 		return true
 	}
@@ -914,7 +915,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleDismissPet(effCtx)
 			case 109: // SPELL_EFFECT_RESURRECT_PET
 				s.handleResurrectPet(effCtx, spellID)
-			case 54: // SPELL_EFFECT_TAMECREATURE
+			case 55: // SPELL_EFFECT_TAMECREATURE
 				s.handleTameCreature(effCtx, spellID, targetGUID)
 			case 135: // SPELL_EFFECT_CALL_PET
 				s.handleSummonPet(effCtx, spellID, 0)
@@ -1786,6 +1787,10 @@ func (s *session) hasActiveSpell(spellID uint32) bool {
 		}
 	}
 	return false
+}
+
+func canPlayerCastSpell(learned, gmMode bool) bool {
+	return learned || gmMode
 }
 
 func spellCastIgnoreReason(spell wotlk.Spell, found, learned bool) string {
@@ -3030,6 +3035,16 @@ func (ts *session) schedulePlayerPeriodicTickLocked(aura *activeAura, periodMs u
 }
 
 func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
+	if aura.AuraType == 23 && aura.TriggerSpell != 0 {
+		targetGUID := aura.TargetGUID
+		ts.castMu.Lock()
+		if channel := ts.activeChannel; channel != nil && channel.SpellID == aura.SpellID && channel.TargetGUID != 0 {
+			targetGUID = channel.TargetGUID
+		}
+		ts.castMu.Unlock()
+		ts.castSpellDirect(context.Background(), aura.TriggerSpell, targetGUID)
+		return
+	}
 	ts.playerStateMu.Lock()
 	defer ts.playerStateMu.Unlock()
 	if ts.player == nil || ts.player.Health == 0 {
@@ -4025,7 +4040,7 @@ type activeChannelState struct {
 }
 
 func isChanneledSpell(spell wotlk.Spell) bool {
-	return spell.AttributesEx1&(spellAttr1Channeled1|spellAttr1Channeled2) != 0
+	return spell.AttributesEx&(spellAttr1Channeled1|spellAttr1Channeled2) != 0
 }
 
 // sendChannelUpdate mirrors Spell::SendChannelUpdate: packed caster GUID plus
@@ -4035,6 +4050,9 @@ func (s *session) sendChannelUpdate(remainingMs uint32) {
 	packet.WritePackedGUID(s.playerGUID)
 	packet.WriteU32(remainingMs)
 	_ = s.write(uint16(protocol.OpcodeMSG_CHANNEL_UPDATE), packet.Bytes(), true)
+	if remainingMs == 0 {
+		s.sendPlayerUpdate()
+	}
 }
 
 // startChannel begins the channeled phase of a finished cast: broadcast the
@@ -4087,6 +4105,7 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 	if s.server != nil {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeMSG_CHANNEL_START), packet.Bytes(), s)
 	}
+	s.sendPlayerUpdate()
 
 	channel.Timer = time.AfterFunc(channel.Remaining, func() { s.finishChannel() })
 	if period > 0 && period <= uint32(durationMs) {
@@ -4157,7 +4176,7 @@ func (s *session) channelTick() {
 
 	ctx := context.Background()
 	for _, effect := range spell.Effects {
-		if effect.Effect == 0 {
+		if effect.Effect == 0 || effect.Effect == 6 && effect.Aura == 23 {
 			continue
 		}
 		amount := uint32(effect.BasePoints + 1)

@@ -299,6 +299,7 @@ type session struct {
 	pendingBindMapID             uint32
 	pendingBindDiff              uint32
 	pendingBindTimer             uint32
+	pendingBindMu                sync.Mutex
 	sharingQuestID               uint32
 	sharingQuestSender           uint64
 	warden                       *wardenSession
@@ -724,6 +725,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updatePlayerRegeneration(ctx, now)
 			s.processCreatureRespawns(ctx, now)
 			s.updatePlayerDeathTimers(ctx, now)
+			s.updatePendingInstanceBinds(ctx, diff)
 			s.updateSpiritHealerResurrectWaves(ctx, now)
 			s.updatePlayerUnderwater(ctx, now)
 			s.updateWardenSessions(ctx, 100*time.Millisecond)

@@ -188,7 +188,9 @@ func (s *session) sendAreaTriggerEntryFailure(ctx context.Context, mapID uint32,
 	case mapEntryCorpseInDifferentInstance:
 		_ = s.write(uint16(protocol.OpcodeSMSG_CORPSE_NOT_IN_INSTANCE), nil, true)
 	case mapEntryInstanceBindMismatch:
-		s.sendSystemMessage("You are permanently bound to a different instance than your group.")
+		if entry, found, err := s.server.Data.Map(mapID); err == nil && found {
+			s.sendSystemMessage("You are already locked to " + entry.MapName + ".")
+		}
 		reviveAtTrigger = true
 	case mapEntryTooManyInstances:
 		s.sendTransferAborted(mapID, transferAbortTooManyInstances, 0)

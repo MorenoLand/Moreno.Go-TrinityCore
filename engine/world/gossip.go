@@ -199,6 +199,20 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 		if item.Action == 3 || item.Action == 15 { // GOSSIP_OPTION_VENDOR / GOSSIP_OPTION_ARMORER
 			s.sendVendorList(ctx, guid)
 			s.gossipClosed = true
+		} else if item.Action == 6 { // GOSSIP_OPTION_SPIRITHEALER
+			if err := s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true); err != nil {
+				return false
+			}
+			s.gossipClosed = true
+			if s.isDeadOrGhost() && objectUint32OrZero(creature, "NPCFlags")&npcFlagSpiritHealer != 0 {
+				x, xOK := objectFloat32Field(creature, "X")
+				y, yOK := objectFloat32Field(creature, "Y")
+				z, zOK := objectFloat32Field(creature, "Z")
+				name, _ := creature.Fields["Name"].(string)
+				if xOK && yOK && zOK {
+					s.requestSpiritHealerResurrection(guid, name, s.player.Map, x, y, z)
+				}
+			}
 		} else if item.Action == 4 { // GOSSIP_OPTION_TAXIVENDOR
 			s.sendTaxiMenu(ctx, guid)
 			s.gossipClosed = true
@@ -298,6 +312,9 @@ func (s *session) prepareCreatureGossip(ctx context.Context, guid uint64, entry,
 		}
 	}
 	for _, option := range options {
+		if option.Item.Action == 6 && !s.isDeadOrGhost() {
+			continue
+		}
 		menu.Items[option.ID] = option.Item
 	}
 	if npcFlags&0x00000002 != 0 && s.player != nil {

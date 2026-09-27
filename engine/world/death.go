@@ -499,14 +499,20 @@ func playerTeam(race uint8) uint32 {
 	return 0
 }
 
-// closestGraveyard mirrors ObjectMgr::GetClosestGraveyard with the zone taken
-// from the persisted player zone instead of the reference map-data zone
-// lookup: graveyard_zone rows linked to the zone, filtered by faction, nearest
-// same-map entry by 3D distance, first other-map entry as fallback, and the
-// default Westfall/Crossroads graveyard when the zone has no links.
+// closestGraveyard mirrors ObjectMgr::GetClosestGraveyard.
 func (s *Server) closestGraveyard(ctx context.Context, x, y, z float32, mapID, zoneID, team uint32) (wotlk.WorldSafeLoc, bool) {
 	if s.WorldStore == nil || s.WorldStore.DB == nil || s.Data == nil {
 		return wotlk.WorldSafeLoc{}, false
+	}
+	mapEntry, hasMapEntry, mapErr := s.Data.Map(mapID)
+	if mapErr != nil {
+		s.debug("graveyard map lookup failed", "map", mapID, "error", mapErr)
+		hasMapEntry = false
+	}
+	if hasMapEntry && mapEntry.AreaTableID != 0 {
+		zoneID = s.rootAreaID(mapEntry.AreaTableID)
+	} else {
+		zoneID = s.rootAreaID(zoneID)
 	}
 	defaultFor := func() (wotlk.WorldSafeLoc, bool) {
 		id := uint32(0)
@@ -531,12 +537,7 @@ func (s *Server) closestGraveyard(ctx context.Context, x, y, z float32, mapID, z
 		return defaultFor()
 	}
 	defer rows.Close()
-	type candidate struct {
-		loc  wotlk.WorldSafeLoc
-		dist float32
-	}
-	var nearest *candidate
-	var farLoc *wotlk.WorldSafeLoc
+	locations := make([]wotlk.WorldSafeLoc, 0, 4)
 	for rows.Next() {
 		var safeLocID, faction uint32
 		if err := rows.Scan(&safeLocID, &faction); err != nil {
@@ -549,29 +550,63 @@ func (s *Server) closestGraveyard(ctx context.Context, x, y, z float32, mapID, z
 		if err != nil || !found {
 			continue
 		}
-		if loc.MapID == mapID {
-			dx := loc.X - x
-			dy := loc.Y - y
-			dz := loc.Z - z
-			dist := dx*dx + dy*dy + dz*dz
-			if nearest == nil || dist < nearest.dist {
-				nearest = &candidate{loc: loc, dist: dist}
-			}
-		} else if farLoc == nil {
-			far := loc
-			farLoc = &far
-		}
+		locations = append(locations, loc)
 	}
 	if err := rows.Err(); err != nil {
 		s.debug("graveyard zone rows failed", "error", err)
 	}
-	if nearest != nil {
-		return nearest.loc, true
-	}
-	if farLoc != nil {
-		return *farLoc, true
+	if loc, found := closestGraveyardCandidate(locations, mapID, mapEntry, hasMapEntry, x, y, z); found {
+		return loc, true
 	}
 	return defaultFor()
+}
+
+func (s *Server) rootAreaID(areaID uint32) uint32 {
+	for depth := 0; areaID != 0 && depth < 8; depth++ {
+		area, found, err := s.Data.Area(areaID)
+		if err != nil || !found || area.ParentAreaID == 0 {
+			return areaID
+		}
+		areaID = area.ParentAreaID
+	}
+	return areaID
+}
+
+func closestGraveyardCandidate(locations []wotlk.WorldSafeLoc, mapID uint32, mapEntry wotlk.MapEntry, hasMapEntry bool, x, y, z float32) (wotlk.WorldSafeLoc, bool) {
+	type candidate struct {
+		loc  wotlk.WorldSafeLoc
+		dist float32
+	}
+	var near, entrance *candidate
+	var far *wotlk.WorldSafeLoc
+	for _, loc := range locations {
+		if loc.MapID == mapID {
+			dx, dy, dz := loc.X-x, loc.Y-y, loc.Z-z
+			dist := dx*dx + dy*dy + dz*dz
+			if near == nil || dist < near.dist {
+				near = &candidate{loc: loc, dist: dist}
+			}
+		} else if hasMapEntry && mapEntry.CorpseMapID >= 0 && uint32(mapEntry.CorpseMapID) == loc.MapID && (mapEntry.CorpseX != 0 || mapEntry.CorpseY != 0) {
+			dx, dy := loc.X-mapEntry.CorpseX, loc.Y-mapEntry.CorpseY
+			dist := dx*dx + dy*dy
+			if entrance == nil || dist < entrance.dist {
+				entrance = &candidate{loc: loc, dist: dist}
+			}
+		} else if far == nil {
+			locCopy := loc
+			far = &locCopy
+		}
+	}
+	if near != nil {
+		return near.loc, true
+	}
+	if entrance != nil {
+		return entrance.loc, true
+	}
+	if far != nil {
+		return *far, true
+	}
+	return wotlk.WorldSafeLoc{}, false
 }
 
 // handleRepopRequest mirrors WorldSession::HandleRepopRequest: alive players
@@ -607,6 +642,11 @@ func (s *Server) updatePlayerDeathTimers(ctx context.Context, now time.Time) {
 	for sess := range s.sessions {
 		if !sess.worldReady.Load() || sess.player == nil {
 			continue
+		}
+		if s.Data != nil {
+			if mapEntry, found, err := s.Data.Map(sess.player.Map); err == nil && found && mapEntry.InstanceType != 0 {
+				continue
+			}
 		}
 		if sess.player.Health == 0 && sess.player.PlayerFlags&playerFlagGhost == 0 && !sess.deathTimer.IsZero() && !now.Before(sess.deathTimer) {
 			due = append(due, sess)
@@ -868,6 +908,29 @@ func (s *session) sendResurrectRequest(casterGUID uint64, name string, spiritHea
 	packet.WriteU8(boolByte(spiritHealer))
 	packet.WriteU8(boolByte(ignoreReclaimTimer))
 	_ = s.write(uint16(protocol.OpcodeSMSG_RESURRECT_REQUEST), packet.Bytes(), true)
+}
+
+func (s *session) requestSpiritHealerResurrection(casterGUID uint64, name string, mapID uint32, x, y, z float32) {
+	if s == nil || s.player == nil || !s.isDeadOrGhost() || s.resurrection != nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	spell, found, err := s.server.Data.Spell(17251)
+	if err != nil || !found {
+		s.debug("spirit healer spell lookup failed", "account", s.accountName, "spell", 17251, "error", err)
+		return
+	}
+	for _, effect := range spell.Effects {
+		if effect.Effect == spellEffectResurrectNew {
+			health := effect.CalcValueForLevel(spell, uint32(s.player.Level))
+			if health <= 0 {
+				return
+			}
+			mana := uint32(max(effect.MiscValue, 0))
+			s.setResurrectRequestData(casterGUID, mapID, x, y, z, uint32(health), mana)
+			s.sendResurrectRequest(casterGUID, name, true, true)
+			return
+		}
+	}
 }
 
 func boolByte(value bool) uint8 {

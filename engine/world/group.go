@@ -1482,15 +1482,73 @@ func (s *session) isDungeonMap(mapID uint32) bool {
 	return mapID != 0 && mapID != 1 && mapID != 530 && mapID != 571
 }
 
-func (s *session) hasPendingBind() bool {
-	return s.pendingBindInstanceID != 0 || s.pendingBindMapID != 0
-}
-
 func (s *session) setPendingBind(instanceID uint64, mapID, diff, timer uint32) {
+	if s == nil {
+		return
+	}
+	s.pendingBindMu.Lock()
 	s.pendingBindInstanceID = instanceID
 	s.pendingBindMapID = mapID
 	s.pendingBindDiff = diff
 	s.pendingBindTimer = timer
+	s.pendingBindMu.Unlock()
+}
+
+func (s *session) takePendingBind() (uint64, uint32, uint32, bool) {
+	if s == nil {
+		return 0, 0, 0, false
+	}
+	s.pendingBindMu.Lock()
+	defer s.pendingBindMu.Unlock()
+	if s.pendingBindInstanceID == 0 {
+		return 0, 0, 0, false
+	}
+	instanceID, mapID, difficulty := s.pendingBindInstanceID, s.pendingBindMapID, s.pendingBindDiff
+	s.pendingBindInstanceID, s.pendingBindMapID, s.pendingBindDiff, s.pendingBindTimer = 0, 0, 0, 0
+	return instanceID, mapID, difficulty, true
+}
+
+func (s *Server) updatePendingInstanceBinds(ctx context.Context, elapsed time.Duration) {
+	if s == nil || elapsed <= 0 {
+		return
+	}
+	elapsedMs := uint32(elapsed / time.Millisecond)
+	if elapsedMs == 0 {
+		return
+	}
+	s.sessionsMu.RLock()
+	sessions := make([]*session, 0, len(s.sessions))
+	for sess := range s.sessions {
+		if sess != nil {
+			sessions = append(sessions, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range sessions {
+		sess.pendingBindMu.Lock()
+		instanceID := sess.pendingBindInstanceID
+		if instanceID == 0 {
+			sess.pendingBindMu.Unlock()
+			continue
+		}
+		if !sess.playerLoaded || sess.player == nil {
+			sess.pendingBindMu.Unlock()
+			sess.setPendingBind(0, 0, 0, 0)
+			continue
+		}
+		if elapsedMs < sess.pendingBindTimer {
+			sess.pendingBindTimer -= elapsedMs
+			sess.pendingBindMu.Unlock()
+			continue
+		}
+		sess.pendingBindTimer = 0
+		sess.pendingBindMu.Unlock()
+		if uint64(sess.player.InstanceID) != instanceID {
+			sess.setPendingBind(0, 0, 0, 0)
+			continue
+		}
+		_ = sess.handleInstanceLockResponse(ctx, []byte{1})
+	}
 }
 
 func (s *session) sendInstanceLockWarningQuery(timeRemainingMs, completedEncounterMask uint32, extend uint8) {
@@ -1538,7 +1596,8 @@ func (s *session) handleInstanceLockResponse(ctx context.Context, payload []byte
 		return true
 	}
 
-	if !s.hasPendingBind() {
+	instanceID, mapID, difficulty, hasPendingBind := s.takePendingBind()
+	if !hasPendingBind {
 		return true
 	}
 
@@ -1548,27 +1607,26 @@ func (s *session) handleInstanceLockResponse(ctx context.Context, payload []byte
 		buf.WriteU32(0)
 		_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_SAVE_CREATED), buf.Bytes(), true)
 
-		var resetTime uint32 = 7 * 86400
-		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			cdb := s.server.CharactersStore.DB
-			var rt int64
-			if err := cdb.QueryRowContext(ctx, "SELECT resettime FROM instance WHERE id = ?", s.pendingBindInstanceID).Scan(&rt); err == nil {
-				now := time.Now().Unix()
-				if rt > now {
-					resetTime = uint32(rt - now)
+		if !s.isMapAdmissionGM() {
+			var resetTime uint32 = 7 * 86400
+			if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				cdb := s.server.CharactersStore.DB
+				var rt int64
+				if err := cdb.QueryRowContext(ctx, "SELECT resettime FROM instance WHERE id = ?", instanceID).Scan(&rt); err == nil {
+					now := time.Now().Unix()
+					if rt > now {
+						resetTime = uint32(rt - now)
+					}
 				}
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM character_instance WHERE guid = ? AND instance = ?", s.playerGUID, instanceID)
+				_, _ = cdb.ExecContext(ctx, "INSERT INTO character_instance (guid, instance, permanent, extendState) VALUES (?, ?, 1, 0)", s.playerGUID, instanceID)
 			}
-			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_instance WHERE guid = ? AND instance = ?", s.playerGUID, s.pendingBindInstanceID)
-			_, _ = cdb.ExecContext(ctx, "INSERT INTO character_instance (guid, instance, permanent, extendState) VALUES (?, ?, 1, 0)", s.playerGUID, s.pendingBindInstanceID)
+			s.sendCalendarRaidLockout(mapID, difficulty, resetTime, instanceID, true)
 		}
-
-		s.sendCalendarRaidLockout(s.pendingBindMapID, s.pendingBindDiff, resetTime, s.pendingBindInstanceID, true)
-		_ = s.handleRequestRaidInfo(ctx)
 	} else {
 		s.repopAtGraveyard(ctx)
 	}
 
-	s.setPendingBind(0, 0, 0, 0)
 	return true
 }
 

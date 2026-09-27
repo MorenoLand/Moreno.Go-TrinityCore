@@ -245,14 +245,19 @@ func (s *session) worldportInstanceHasRoom(selection worldportInstanceSelection,
 	defer s.server.instanceAdmissionMu.Unlock()
 	players := uint32(0)
 	players += s.server.pendingInstanceAdmissions[key]
+	countNpcBots := s.server.Config.NPCBots.LimitDungeon && entry.IsDungeon() && !entry.IsRaid() || s.server.Config.NPCBots.LimitRaid && entry.IsRaid()
+	var occupants []*session
 	s.server.sessionsMu.RLock()
 	for peer := range s.server.sessions {
 		if peer == s || peer == nil || !peer.worldReady.Load() || peer.worldReadyGM.Load() || peer.worldInstance.Load() != target {
 			continue
 		}
-		players++
+		occupants = append(occupants, peer)
 	}
 	s.server.sessionsMu.RUnlock()
+	for _, peer := range occupants {
+		players += s.server.instanceOccupantCount(peer, countNpcBots)
+	}
 	if players >= maxPlayers {
 		return false
 	}
@@ -280,14 +285,19 @@ func (s *session) worldportInstanceAtCapacity(selection worldportInstanceSelecti
 	s.server.instanceAdmissionMu.Lock()
 	defer s.server.instanceAdmissionMu.Unlock()
 	players := s.server.pendingInstanceAdmissions[key]
+	countNpcBots := s.server.Config.NPCBots.LimitDungeon && entry.IsDungeon() && !entry.IsRaid() || s.server.Config.NPCBots.LimitRaid && entry.IsRaid()
+	var occupants []*session
 	s.server.sessionsMu.RLock()
 	for peer := range s.server.sessions {
 		if peer == s || peer == nil || !peer.worldReady.Load() || peer.worldReadyGM.Load() || peer.worldInstance.Load() != target {
 			continue
 		}
-		players++
+		occupants = append(occupants, peer)
 	}
 	s.server.sessionsMu.RUnlock()
+	for _, peer := range occupants {
+		players += s.server.instanceOccupantCount(peer, countNpcBots)
+	}
 	return players >= maxPlayers
 }
 
@@ -335,8 +345,8 @@ func (s *session) sendWorldportGroupLockWarning(ctx context.Context, selection w
 	}
 	var encounterMask int64
 	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT completedEncounters FROM instance WHERE id = ?", selection.InstanceID).Scan(&encounterMask)
-	s.setPendingBind(uint64(selection.InstanceID), selection.MapID, selection.Difficulty, 60000)
 	s.sendInstanceLockWarningQuery(60000, uint32(encounterMask), 0)
+	s.setPendingBind(uint64(selection.InstanceID), selection.MapID, selection.Difficulty, 60000)
 }
 
 func (s *Server) beginInstanceEncounter(motion *creatureMotion, state *playerState) {

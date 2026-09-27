@@ -22,6 +22,8 @@ const (
 	objectFieldScale                              = 4
 	unitFieldSummon                               = 8
 	unitFieldTarget                               = 18
+	unitFieldChannelObject                        = 20
+	unitFieldChannelSpell                         = 22
 	unitFieldBytes0                               = 23 // UNIT_FIELD_BYTES_0: Race, Class, Gender, PowerType
 	unitFieldHealth                               = 24
 	unitFieldPower1                               = 25
@@ -385,30 +387,39 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	// GM.LoginState (0 off, 1 on, 2 saved state).
 	transient := uint32(playerFlagGroupLeader | playerFlagAFK | playerFlagDND | playerFlagGM | playerFlagGhost | playerFlagAllowOnlyAbility)
 	state.PlayerFlags &= ^transient
-	loginState := 2
-	if s.server.Config.GMLoginState >= 0 && s.server.Config.GMLoginState <= 2 {
-		loginState = s.server.Config.GMLoginState
+	restoreGMState := false
+	if s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
+		restoreGMState, _ = accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionRestoreSavedGMState)
 	}
-	if loginState == 1 || (loginState == 2 && state.ExtraFlags&playerExtraGMOn != 0) {
-		state.ExtraFlags |= playerExtraGMOn
-		state.PlayerFlags |= playerFlagGM
+	if restoreGMState {
+		loginState := 2
+		if s.server.Config.GMLoginState >= 0 && s.server.Config.GMLoginState <= 2 {
+			loginState = s.server.Config.GMLoginState
+		}
+		if loginState == 1 || (loginState == 2 && state.ExtraFlags&playerExtraGMOn != 0) {
+			state.ExtraFlags |= playerExtraGMOn
+			state.PlayerFlags |= playerFlagGM
+		} else {
+			state.ExtraFlags &= ^playerExtraGMOn
+			state.PlayerFlags &= ^playerFlagGM
+		}
+		visibleState := 2
+		if s.server.Config.GMVisibleState >= 0 && s.server.Config.GMVisibleState <= 2 {
+			visibleState = s.server.Config.GMVisibleState
+		}
+		if visibleState == 0 || (visibleState == 2 && state.ExtraFlags&playerExtraGMInvisible != 0) {
+			state.ExtraFlags |= playerExtraGMInvisible | playerExtraGMOn
+			state.PlayerFlags |= playerFlagGM
+		} else {
+			state.ExtraFlags &= ^playerExtraGMInvisible
+		}
+		if state.ExtraFlags&(playerExtraGMChat|playerExtraGMOn) != 0 {
+			s.gmChat = true
+			state.ExtraFlags |= playerExtraGMChat
+		}
 	} else {
-		state.ExtraFlags &= ^playerExtraGMOn
-		state.PlayerFlags &= ^playerFlagGM
-	}
-	visibleState := 2
-	if s.server.Config.GMVisibleState >= 0 && s.server.Config.GMVisibleState <= 2 {
-		visibleState = s.server.Config.GMVisibleState
-	}
-	if visibleState == 0 || (visibleState == 2 && state.ExtraFlags&playerExtraGMInvisible != 0) {
-		state.ExtraFlags |= playerExtraGMInvisible | playerExtraGMOn
-		state.PlayerFlags |= playerFlagGM
-	} else {
-		state.ExtraFlags &= ^playerExtraGMInvisible
-	}
-	if (state.ExtraFlags&playerExtraGMChat != 0) || (state.ExtraFlags&playerExtraGMOn != 0) {
-		s.gmChat = true
-		state.ExtraFlags |= playerExtraGMChat
+		state.ExtraFlags &^= playerExtraGMOn | playerExtraGMInvisible | playerExtraGMChat
+		s.gmChat = false
 	}
 	var homeMap, homeZone int64
 	var homeX, homeY, homeZ float32

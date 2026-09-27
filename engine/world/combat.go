@@ -939,6 +939,7 @@ type creatureStats struct {
 	CombatReach     float32
 	UnitFlags       uint32
 	FlagsExtra      uint32
+	CanFly          bool
 	ReactState      uint8
 	ReactStateKnown bool
 }
@@ -983,7 +984,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		return stats
 	}
 
-	var maxlevel, unitClass, exp, baseAttackTime, unitFlags, flagsExtra int64
+	var maxlevel, unitClass, exp, baseAttackTime, unitFlags, flagsExtra, flight int64
 	var healthMod, armorMod, damageMod float64
 
 	row := s.WorldStore.DB.QueryRowContext(ctx, `SELECT 
@@ -994,10 +995,11 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		COALESCE(HealthModifier, 1.0), 
 		COALESCE(ArmorModifier, 1.0), 
 		COALESCE(DamageModifier, 1.0),
-		COALESCE(unit_flags, 0),
-		COALESCE(flags_extra, 0)
-		FROM creature_template WHERE entry = ?`, entry)
-	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &armorMod, &damageMod, &unitFlags, &flagsExtra); err != nil {
+		COALESCE(ct.unit_flags, 0),
+		COALESCE(ct.flags_extra, 0),
+		COALESCE(ctm.Flight, 0)
+		FROM creature_template ct LEFT JOIN creature_template_movement ctm ON ctm.CreatureId = ct.entry WHERE ct.entry = ?`, entry)
+	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &flight); err != nil {
 		return stats
 	}
 	if reactState, known := s.loadCreatureReaction(ctx, entry); known {
@@ -1028,6 +1030,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	stats.AttackTime = uint32(baseAttackTime)
 	stats.UnitFlags = uint32(unitFlags)
 	stats.FlagsExtra = uint32(flagsExtra)
+	stats.CanFly = flight != 0
 
 	// Fallback values based on level
 	fallbackHealth := uint32(maxlevel * 30)
