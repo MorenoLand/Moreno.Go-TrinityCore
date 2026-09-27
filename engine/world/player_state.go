@@ -2596,11 +2596,6 @@ func (s *session) loadPlayerTalents(ctx context.Context, state *playerState) {
 			if s.server.Data != nil {
 				tid, r, found = s.server.Data.TalentBySpell(uint32(spellID))
 			}
-			if !found && spellID > 10 {
-				tid = uint32((spellID - 1) / 10)
-				r = uint8((spellID - 1) % 10)
-				found = true
-			}
 			if found {
 				state.Talents[tid] = r
 			}

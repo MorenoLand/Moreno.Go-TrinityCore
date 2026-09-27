@@ -67,7 +67,7 @@ func (s *session) learnTalent(ctx context.Context, talentID, requestedRank uint3
 		}
 	}
 	if spellID == 0 {
-		spellID = talentID*10 + requestedRank + 1
+		return false
 	}
 
 	s.player.Talents[talentID] = uint8(requestedRank)
@@ -109,11 +109,6 @@ func (s *session) loadTalentsForGroup(group uint8) map[uint32]uint8 {
 			var found bool
 			if s.server.Data != nil {
 				tid, r, found = s.server.Data.TalentBySpell(uint32(spellID))
-			}
-			if !found && spellID > 10 {
-				tid = uint32((spellID - 1) / 10)
-				r = uint8((spellID - 1) % 10)
-				found = true
 			}
 			if found {
 				talents[tid] = r
