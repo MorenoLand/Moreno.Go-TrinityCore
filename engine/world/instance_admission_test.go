@@ -1,6 +1,7 @@
 package world
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -105,6 +106,28 @@ func TestFullInstanceDenialSendsTransferAbort(t *testing.T) {
 	reason, _ := reader.ReadU8()
 	if mapID != 33 || reason != transferAbortMaxPlayers || len(payload) != 5 {
 		t.Fatalf("transfer-abort payload=%x map=%d reason=%d", payload, mapID, reason)
+	}
+}
+
+func TestPermanentBindDenialNamesTheRaid(t *testing.T) {
+	data, _ := admissionTestData(t)
+	entry, found, err := data.Map(532)
+	if err != nil || !found || entry.MapName == "" {
+		t.Fatalf("load raid map name: found=%t err=%v", found, err)
+	}
+	trace := protocoltrace.NewRecorder("instance-bind-denial-test")
+	s := &session{server: &Server{Data: data, TraceRecorder: trace}, player: &playerState{Health: 100}}
+	s.sendAreaTriggerEntryFailure(context.Background(), entry.ID, mapEntryCheck{Reason: mapEntryInstanceBindMismatch})
+	events := trace.Snapshot().Events
+	if len(events) != 1 || events[0].Opcode != uint32(protocol.OpcodeSMSG_MESSAGECHAT) {
+		t.Fatalf("bind-denial packets=%v", events)
+	}
+	payload, err := base64.StdEncoding.DecodeString(events[0].Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(payload, []byte("You are already locked to "+entry.MapName+".")) {
+		t.Fatalf("bind denial omitted map name %q: %q", entry.MapName, payload)
 	}
 }
 
