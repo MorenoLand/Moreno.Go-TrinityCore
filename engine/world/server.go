@@ -424,14 +424,12 @@ func (s *Server) initializeCharacterGUIDs(ctx context.Context) error {
 	if s.characterGUIDReady {
 		return nil
 	}
-	for _, table := range []string{"characters", "character_spell", "character_queststatus", "character_queststatus_rewarded", "character_queststatus_daily", "character_queststatus_weekly", "character_queststatus_monthly", "character_queststatus_seasonal"} {
-		var highest uint64
-		if err := s.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) FROM "+table).Scan(&highest); err != nil {
-			return err
-		}
-		if highest > s.characterGUIDNext {
-			s.characterGUIDNext = highest
-		}
+	highest, err := highestCharacterGUID(ctx, s.CharactersStore.DB)
+	if err != nil {
+		return err
+	}
+	if highest > s.characterGUIDNext {
+		s.characterGUIDNext = highest
 	}
 	s.characterGUIDReady = true
 	return nil

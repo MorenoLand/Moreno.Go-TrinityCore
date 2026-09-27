@@ -405,10 +405,8 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	defer tx.Rollback()
-	for _, table := range []string{"character_spell", "character_queststatus", "character_queststatus_rewarded", "character_queststatus_daily", "character_queststatus_weekly", "character_queststatus_monthly", "character_queststatus_seasonal"} {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE guid = ?", guid); err != nil {
-			return false
-		}
+	if err := deleteCharacterOwnedState(ctx, tx, guid); err != nil {
+		return false
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM characters WHERE guid = ?", guid); err != nil {
 		return false
