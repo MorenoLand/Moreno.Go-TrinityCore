@@ -615,11 +615,10 @@ func terrainWorldPoint(spawn terrainSpawn, point terrainVector) terrainVector {
 	return terrainAdd(spawn.Position, terrainVector{float32((m[0][0]*float64(point.X) + m[0][1]*float64(point.Y) + m[0][2]*float64(point.Z)) * float64(scale)), float32((m[1][0]*float64(point.X) + m[1][1]*float64(point.Y) + m[1][2]*float64(point.Z)) * float64(scale)), float32((m[2][0]*float64(point.X) + m[2][1]*float64(point.Y) + m[2][2]*float64(point.Z)) * float64(scale))})
 }
 
-func terrainTriangleDistance(origin terrainVector, triangle terrainTriangle, vertices []terrainVector, limit float64) (float64, bool) {
+func terrainTriangleDistance(origin, direction terrainVector, triangle terrainTriangle, vertices []terrainVector, limit float64) (float64, bool) {
 	if int(triangle.A) >= len(vertices) || int(triangle.B) >= len(vertices) || int(triangle.C) >= len(vertices) {
 		return 0, false
 	}
-	direction := terrainVector{0, 0, -1}
 	e1 := terrainSub(vertices[triangle.B], vertices[triangle.A])
 	e2 := terrainSub(vertices[triangle.C], vertices[triangle.A])
 	p := terrainCross(direction, e2)
@@ -656,7 +655,7 @@ func terrainModelHit(spawn terrainSpawn, model *terrainModel, point terrainVecto
 		origin.Z += 0.1
 		bestDistance := math.Inf(1)
 		for _, triangle := range group.Triangles {
-			if distance, ok := terrainTriangleDistance(origin, triangle, group.Vertices, bestDistance); ok {
+			if distance, ok := terrainTriangleDistance(origin, terrainVector{0, 0, -1}, triangle, group.Vertices, bestDistance); ok {
 				bestDistance = distance
 			}
 		}
@@ -669,6 +668,79 @@ func terrainModelHit(spawn terrainSpawn, model *terrainModel, point terrainVecto
 		}
 	}
 	return best, found
+}
+
+func terrainSegmentIntersectsBounds(start, end, low, high terrainVector) bool {
+	origin := [3]float64{float64(start.X), float64(start.Y), float64(start.Z)}
+	direction := [3]float64{float64(end.X - start.X), float64(end.Y - start.Y), float64(end.Z - start.Z)}
+	minimum := [3]float64{float64(low.X), float64(low.Y), float64(low.Z)}
+	maximum := [3]float64{float64(high.X), float64(high.Y), float64(high.Z)}
+	tMin, tMax := 0.0, 1.0
+	for axis := range origin {
+		if math.Abs(direction[axis]) < 1e-8 {
+			if origin[axis] < minimum[axis] || origin[axis] > maximum[axis] {
+				return false
+			}
+			continue
+		}
+		t1, t2 := (minimum[axis]-origin[axis])/direction[axis], (maximum[axis]-origin[axis])/direction[axis]
+		if t1 > t2 {
+			t1, t2 = t2, t1
+		}
+		if t1 > tMin {
+			tMin = t1
+		}
+		if t2 < tMax {
+			tMax = t2
+		}
+		if tMin > tMax {
+			return false
+		}
+	}
+	return tMax >= 0 && tMin <= 1
+}
+
+func (s *Server) hasLineOfSight(mapID uint32, x1, y1, z1, x2, y2, z2 float32) bool {
+	if s == nil || s.terrainTileKnown == nil || s.terrainTiles == nil || s.terrainModels == nil || x1 == x2 && y1 == y2 && z1 == z2 {
+		return true
+	}
+	gridX1 := int(float64(x1)/terrainGridSize + terrainCenterGrid)
+	gridY1 := int(float64(y1)/terrainGridSize + terrainCenterGrid)
+	gridX2 := int(float64(x2)/terrainGridSize + terrainCenterGrid)
+	gridY2 := int(float64(y2)/terrainGridSize + terrainCenterGrid)
+	minX, maxX := min(gridX1, gridX2), max(gridX1, gridX2)
+	minY, maxY := min(gridY1, gridY2), max(gridY1, gridY2)
+	if minX < 0 || maxX >= 64 || minY < 0 || maxY >= 64 {
+		return true
+	}
+	start := terrainVector{terrainMapHalfSize - x1, terrainMapHalfSize - y1, z1}
+	end := terrainVector{terrainMapHalfSize - x2, terrainMapHalfSize - y2, z2}
+	for gridX := minX; gridX <= maxX; gridX++ {
+		for gridY := minY; gridY <= maxY; gridY++ {
+			for _, spawn := range s.terrainTile(mapID, 63-gridX, 63-gridY) {
+				if spawn.Flags&terrainModelHasBound == 0 || !terrainSegmentIntersectsBounds(start, end, spawn.BoundsLow, spawn.BoundsHigh) {
+					continue
+				}
+				model := s.terrainModel(spawn.Name)
+				if model == nil {
+					continue
+				}
+				localStart, localEnd := terrainModelPoint(spawn, start), terrainModelPoint(spawn, end)
+				direction := terrainSub(localEnd, localStart)
+				for _, group := range model.Groups {
+					if !terrainSegmentIntersectsBounds(localStart, localEnd, group.Low, group.High) {
+						continue
+					}
+					for _, triangle := range group.Triangles {
+						if distance, ok := terrainTriangleDistance(localStart, direction, triangle, group.Vertices, 1); ok && distance > 0.001 && distance < 0.999 {
+							return false
+						}
+					}
+				}
+			}
+		}
+	}
+	return true
 }
 
 func (s *Server) mapWMOAreaID(mapID uint32, x, y, z float32) (uint32, bool) {

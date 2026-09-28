@@ -1054,7 +1054,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			continue
 		}
 		aggroDist := float32(15.0)
-		if s.isHostileFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist) {
+		if s.isHostileFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) {
 			s.debug("creature aggro", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "player_guid", p.GUID, "player_zone", p.Sess.player.Zone)
 			motion.InCombat = true
 			if motion.ThreatMgr == nil {
