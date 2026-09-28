@@ -6353,6 +6353,13 @@ func runRealCharacterLoginReplay(workDir, gameDataDir string, guid, peerGUID uin
 			_, _ = stores.Characters.DB.ExecContext(context.Background(), "DELETE FROM character_pet WHERE id = ? AND owner = ?", replayCritterPetID, guid)
 		}()
 	}
+	var explorationXPBefore int64
+	if peerGUID == 0 {
+		if err := stores.Characters.DB.QueryRowContext(ctx, "SELECT xp FROM characters WHERE guid = ?", guid).Scan(&explorationXPBefore); err != nil {
+			server.Stop()
+			return fmt.Errorf("read replay character XP before login: %w", err)
+		}
+	}
 	before, err := snapshotCharacterState(stores.Characters.DB, stores.World.DB, stores.Auth.DB, guid)
 	if err != nil {
 		server.Stop()
@@ -6428,6 +6435,12 @@ func runRealCharacterLoginReplay(workDir, gameDataDir string, guid, peerGUID uin
 	cancel()
 	server.Stop()
 	after, snapshotErr := snapshotCharacterState(stores.Characters.DB, stores.World.DB, stores.Auth.DB, guid)
+	var explorationXPAfter int64
+	if peerGUID == 0 {
+		if err := stores.Characters.DB.QueryRowContext(context.Background(), "SELECT xp FROM characters WHERE guid = ?", guid).Scan(&explorationXPAfter); err != nil {
+			return fmt.Errorf("read replay character XP after login: %w", err)
+		}
+	}
 	var peerAfter map[string]characterTableSnapshot
 	var peerSnapshotErr error
 	if peerGUID != 0 {
@@ -6470,17 +6483,29 @@ func runRealCharacterLoginReplay(workDir, gameDataDir string, guid, peerGUID uin
 		return peerSnapshotErr
 	}
 	var deltaErr error
+	deltaBefore := before
+	if peerGUID == 0 {
+		deltaBefore, deltaErr = normalizeExplorationXPDelta(before, after, trace, explorationXPBefore, explorationXPAfter)
+	}
 	if replayDungeonLogin {
-		deltaErr = validateCharacterStateDeltaOptions(before, after, petFeedSpell != 0, false, false, true)
 		if deltaErr == nil {
-			deltaErr = validateDungeonLoginInstanceBinding(context.Background(), stores.Characters.DB, guid, dungeonLoginMapID, before, after)
+			deltaErr = validateCharacterStateDeltaOptions(deltaBefore, after, petFeedSpell != 0, false, false, true)
+		}
+		if deltaErr == nil {
+			deltaErr = validateDungeonLoginInstanceBinding(context.Background(), stores.Characters.DB, guid, dungeonLoginMapID, deltaBefore, after)
 		}
 	} else if questRewardTwiceID != 0 {
-		deltaErr = validateCharacterStateDeltaWithQuestReward(before, after)
+		if deltaErr == nil {
+			deltaErr = validateCharacterStateDeltaWithQuestReward(deltaBefore, after)
+		}
 	} else if statsMinLevel != 0 {
-		deltaErr = validateCharacterStateDeltaWithStats(before, after, petFeedSpell != 0)
+		if deltaErr == nil {
+			deltaErr = validateCharacterStateDeltaWithStats(deltaBefore, after, petFeedSpell != 0)
+		}
 	} else {
-		deltaErr = validateCharacterStateDelta(before, after, petFeedSpell != 0)
+		if deltaErr == nil {
+			deltaErr = validateCharacterStateDelta(deltaBefore, after, petFeedSpell != 0)
+		}
 	}
 	if deltaErr != nil {
 		return fmt.Errorf("real-character state delta mismatch (trace saved): %w", deltaErr)
@@ -6850,6 +6875,57 @@ func validatePetSpellCooldownDelta(before, after map[petSpellCooldownKey]petSpel
 
 func validateCharacterStateDelta(before, after map[string]characterTableSnapshot, allowPetFeedProgress bool) error {
 	return validateCharacterStateDeltaOptions(before, after, allowPetFeedProgress, false, false, false)
+}
+
+func normalizeExplorationXPDelta(before, after map[string]characterTableSnapshot, trace protocoltrace.Trace, beforeXP, afterXP int64) (map[string]characterTableSnapshot, error) {
+	var packetXP uint64
+	packets := 0
+	for _, event := range trace.Events {
+		if event.Direction != "server_to_client" || event.Opcode != 504 {
+			continue
+		}
+		payload, err := trace.Payload(event)
+		if err != nil {
+			return nil, fmt.Errorf("decode exploration-experience packet: %w", err)
+		}
+		if len(payload) != 8 {
+			return nil, fmt.Errorf("exploration-experience packet size=%d, want 8", len(payload))
+		}
+		areaID := uint32(payload[0]) | uint32(payload[1])<<8 | uint32(payload[2])<<16 | uint32(payload[3])<<24
+		amount := uint64(payload[4]) | uint64(payload[5])<<8 | uint64(payload[6])<<16 | uint64(payload[7])<<24
+		if areaID == 0 || packetXP > ^uint64(0)-amount {
+			return nil, fmt.Errorf("invalid exploration-experience packet area=%d xp=%d", areaID, amount)
+		}
+		packetXP += amount
+		packets++
+	}
+	if packets == 0 || packetXP == 0 {
+		return before, nil
+	}
+	beforeCharacter, beforeOK := before["characters"]
+	afterCharacter, afterOK := after["characters"]
+	if !beforeOK || !afterOK || beforeCharacter.Rows != afterCharacter.Rows || beforeCharacter.Columns["guid"] != afterCharacter.Columns["guid"] {
+		return nil, fmt.Errorf("exploration XP packet accompanied by character row change")
+	}
+	if beforeCharacter.Columns["level"] != afterCharacter.Columns["level"] {
+		return nil, fmt.Errorf("exploration XP packet accompanied by level change")
+	}
+	if beforeXP < 0 || afterXP < beforeXP || uint64(afterXP-beforeXP) != packetXP {
+		return nil, fmt.Errorf("exploration XP packet total=%d does not match character XP delta=%d", packetXP, afterXP-beforeXP)
+	}
+	normalized := make(map[string]characterTableSnapshot, len(before))
+	for table, snapshot := range before {
+		normalized[table] = snapshot
+	}
+	columns := make(map[string]string, len(beforeCharacter.Columns))
+	for column, value := range beforeCharacter.Columns {
+		columns[column] = value
+	}
+	columns["xp"] = afterCharacter.Columns["xp"]
+	beforeCharacter.Columns = columns
+	beforeCharacter.Digest = afterCharacter.Digest
+	normalized["characters"] = beforeCharacter
+	return normalized, nil
 }
 
 func validateCharacterStateDeltaWithStats(before, after map[string]characterTableSnapshot, allowPetFeedProgress bool) error {
