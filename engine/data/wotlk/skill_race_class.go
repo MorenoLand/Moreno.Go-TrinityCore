@@ -9,6 +9,15 @@ const (
 )
 
 const SkillFlagAlwaysMaxValue uint32 = 0x10
+const skillLineCategoryProfession int32 = 11
+
+func isProfessionOrRidingSkill(skillID uint32, category int32) bool {
+	switch skillID {
+	case 129, 185, 356, 762:
+		return true
+	}
+	return category == skillLineCategoryProfession
+}
 
 type SkillRaceClassInfoEntry struct {
 	SkillID     uint32
@@ -98,6 +107,28 @@ func (s *Store) SkillRangeType(skillID uint32, race, class uint8) (uint8, bool, 
 		return SkillRangeLanguage, true, nil
 	}
 	return SkillRangeLevel, true, nil
+}
+
+func (s *Store) IsProfessionOrRidingSkill(skillID uint32) (bool, error) {
+	if s == nil {
+		return false, nil
+	}
+	if isProfessionOrRidingSkill(skillID, 0) {
+		return true, nil
+	}
+	file, err := s.File("SkillLine")
+	if err != nil {
+		return false, err
+	}
+	record, found := file.Find(skillID)
+	if !found {
+		return false, nil
+	}
+	category, err := record.Int32(1)
+	if err != nil {
+		return false, err
+	}
+	return isProfessionOrRidingSkill(skillID, category), nil
 }
 
 func (s *Store) SkillStep(skillID uint32, race, class uint8, max uint16) (uint16, bool, error) {

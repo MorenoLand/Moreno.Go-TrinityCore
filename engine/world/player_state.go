@@ -2705,6 +2705,20 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 		}
 		skills = append(skills, playerSkill{Skill: skill, Step: s.skillStep(state.Race, state.Class, skill, max), Value: value, Max: max})
 	}
+	unarmedValue, fistWeaponsIndex := uint16(0), -1
+	for index, skill := range skills {
+		if skill.Skill == 162 {
+			unarmedValue = skill.Value
+		}
+		if skill.Skill == 473 {
+			fistWeaponsIndex = index
+		}
+	}
+	if fistWeaponsIndex >= 0 {
+		skills[fistWeaponsIndex].Step = 0
+		skills[fistWeaponsIndex].Value = unarmedValue
+		skills[fistWeaponsIndex].Max = uint16(state.Level) * 5
+	}
 	for _, def := range defaults {
 		if len(skills) >= playerMaxSkills {
 			break
@@ -2729,81 +2743,103 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 	}
 	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		raceMask, classMask := playerCreateMask(state.Race), playerCreateMask(state.Class)
-		if defaultRows, defaultErr := s.server.WorldStore.DB.QueryContext(ctx, "SELECT skill, rank FROM playercreateinfo_skills WHERE (raceMask = 0 OR (raceMask & ?) <> 0) AND (classMask = 0 OR (classMask & ?) <> 0)", raceMask, classMask); defaultErr == nil {
+		if defaultRows, defaultErr := s.server.WorldStore.DB.QueryContext(ctx, "SELECT skill, rank FROM playercreateinfo_skills WHERE (raceMask = 0 OR (raceMask & ?) <> 0) AND (classMask = 0 OR (classMask & ?) <> 0) ORDER BY skill", raceMask, classMask); defaultErr == nil {
 			defer defaultRows.Close()
+			current := make(map[uint16]playerSkill, len(skills))
+			for _, skill := range skills {
+				current[skill.Skill] = skill
+			}
 			for defaultRows.Next() {
 				if len(skills) >= playerMaxSkills {
 					break
 				}
 				var skillID, rank int64
-				if defaultRows.Scan(&skillID, &rank) != nil || skillID <= 0 || skillID > 65535 || !s.skillAllowed(state.Race, state.Class, uint16(skillID)) {
+				if defaultRows.Scan(&skillID, &rank) != nil || skillID <= 0 || skillID > 65535 || rank < 0 || rank > 65535 || !s.skillAllowed(state.Race, state.Class, uint16(skillID)) {
 					continue
 				}
-				found := false
-				for _, skill := range skills {
-					if skill.Skill == uint16(skillID) {
-						found = true
-						break
-					}
-				}
-				if found {
+				if _, found := current[uint16(skillID)]; found {
 					continue
 				}
-				value, max := uint16(1), uint16(1)
-				rangeType := s.skillRangeType(state.Race, state.Class, uint16(skillID))
-				step := uint16(0)
-				if rangeType == wotlk.SkillRangeLanguage {
-					value, max = 300, 300
-				} else if rangeType == wotlk.SkillRangeMono {
-					value, max = 1, 1
-				} else if rangeType == wotlk.SkillRangeLevel || isLevelScaledSkill(uint16(skillID)) {
-					max = uint16(state.Level) * 5
-					if max < 5 {
-						max = 5
-					}
-					if s.server.Config.AlwaysMaxSkillForLevel {
-						value = max
-					}
-				} else if rangeType == wotlk.SkillRangeRank {
-					if rank <= 0 || rank > 16 || s.server.Data == nil {
-						continue
-					}
-					info, infoFound, infoErr := s.server.Data.SkillRaceClassInfo(uint32(skillID), state.Race, state.Class)
-					tierMax, tierFound, tierErr := s.server.Data.SkillTierValue(uint32(skillID), state.Race, state.Class, uint16(rank))
-					if infoErr != nil || tierErr != nil || !infoFound || !tierFound {
-						continue
-					}
-					var valid bool
-					step, value, max, valid = ResolveDefaultRankSkill(uint16(rank), tierMax, info.Flags, state.Class, state.Level)
-					if !valid {
-						continue
-					}
+				newSkill, valid := s.defaultPlayerSkill(state.Race, state.Class, uint16(skillID), uint16(rank), state.Level, current)
+				if !valid {
+					continue
 				}
-				if rangeType != wotlk.SkillRangeRank {
-					step = s.skillStep(state.Race, state.Class, uint16(skillID), max)
-				}
-				newSkill := playerSkill{Skill: uint16(skillID), Step: step, Value: value, Max: max}
 				skills = append(skills, newSkill)
+				current[newSkill.Skill] = newSkill
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", state.GUID, newSkill.Skill, newSkill.Value, newSkill.Max)
 			}
 		}
 	}
-	unarmedValue, fistWeaponsIndex := uint16(0), -1
-	for index, skill := range skills {
-		if skill.Skill == 162 {
-			unarmedValue = skill.Value
-		}
-		if skill.Skill == 473 {
-			fistWeaponsIndex = index
-		}
-	}
-	if fistWeaponsIndex >= 0 {
-		skills[fistWeaponsIndex].Step = 0
-		skills[fistWeaponsIndex].Value = unarmedValue
-		skills[fistWeaponsIndex].Max = uint16(state.Level) * 5
-	}
 	state.Skills = skills
 	return nil
+}
+
+func (s *session) defaultPlayerSkill(race, class uint8, skill, rank uint16, level uint8, current map[uint16]playerSkill) (playerSkill, bool) {
+	rangeType := s.skillRangeType(race, class, skill)
+	var flags, tierMax uint32
+	if s.server != nil && s.server.Data != nil {
+		if info, found, err := s.server.Data.SkillRaceClassInfo(uint32(skill), race, class); err == nil && found {
+			flags = info.Flags
+		}
+		if rangeType == wotlk.SkillRangeRank {
+			max, found, err := s.server.Data.SkillTierValue(uint32(skill), race, class, rank)
+			if err != nil || !found {
+				return playerSkill{}, false
+			}
+			tierMax = uint32(max)
+		}
+	}
+	profession := false
+	if rangeType == wotlk.SkillRangeLevel && s.server != nil && s.server.Data != nil {
+		profession, _ = s.server.Data.IsProfessionOrRidingSkill(uint32(skill))
+	}
+	alwaysMax := s.server != nil && s.server.Config.AlwaysMaxSkillForLevel
+	return resolveDefaultPlayerSkill(skill, rangeType, rank, uint16(tierMax), flags, class, level, alwaysMax, profession, current)
+}
+
+func resolveDefaultPlayerSkill(skill uint16, rangeType uint8, rank, tierMax uint16, flags uint32, class, level uint8, alwaysMax, profession bool, current map[uint16]playerSkill) (playerSkill, bool) {
+	result := playerSkill{Skill: skill}
+	switch rangeType {
+	case wotlk.SkillRangeLanguage:
+		result.Value, result.Max = 300, 300
+	case wotlk.SkillRangeMono:
+		result.Value, result.Max = 1, 1
+	case wotlk.SkillRangeLevel:
+		result.Value, result.Max = 1, uint16(level)*5
+		if result.Max < 5 {
+			result.Max = 5
+		}
+		if alwaysMax && !profession || flags&wotlk.SkillFlagAlwaysMaxValue != 0 {
+			result.Value = result.Max
+		} else if class == 6 {
+			if level > 1 {
+				result.Value = uint16(level-1) * 5
+			}
+			if result.Value == 0 {
+				result.Value = 1
+			}
+			if result.Value > result.Max {
+				result.Value = result.Max
+			}
+		} else if skill == 473 || skill == 633 {
+			currentSkill := skill
+			if skill == 473 {
+				currentSkill = 162
+			}
+			if prior, found := current[currentSkill]; found && prior.Value > 0 {
+				result.Value = prior.Value
+			}
+		}
+	case wotlk.SkillRangeRank:
+		step, value, max, valid := ResolveDefaultRankSkill(rank, tierMax, flags, class, level)
+		if !valid {
+			return playerSkill{}, false
+		}
+		result.Step, result.Value, result.Max = step, value, max
+	default:
+		return playerSkill{}, false
+	}
+	return result, true
 }
 
 func ResolveDefaultRankSkill(rank, tierMax uint16, flags uint32, class, level uint8) (uint16, uint16, uint16, bool) {
@@ -2953,27 +2989,27 @@ func defaultRacialSkills(race, class uint8) []playerSkill {
 	skills := make([]playerSkill, 0, 8)
 	switch race {
 	case 1: // Human
-		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300, Step: 1})
+		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300})
 	case 2: // Orc
-		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300, Step: 1})
+		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300})
 	case 3: // Dwarf
-		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 111, Value: 300, Max: 300, Step: 1})
+		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300}, playerSkill{Skill: 111, Value: 300, Max: 300})
 	case 4: // Night Elf
-		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 113, Value: 300, Max: 300, Step: 1})
+		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300}, playerSkill{Skill: 113, Value: 300, Max: 300})
 	case 5: // Undead
-		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 673, Value: 300, Max: 300, Step: 1})
+		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300}, playerSkill{Skill: 673, Value: 300, Max: 300})
 	case 6: // Tauren
-		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 115, Value: 300, Max: 300, Step: 1})
+		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300}, playerSkill{Skill: 115, Value: 300, Max: 300})
 	case 7: // Gnome
-		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 313, Value: 300, Max: 300, Step: 1})
+		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300}, playerSkill{Skill: 313, Value: 300, Max: 300})
 	case 8: // Troll
-		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 315, Value: 300, Max: 300, Step: 1})
+		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300}, playerSkill{Skill: 315, Value: 300, Max: 300})
 	case 10: // Blood Elf
-		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 137, Value: 300, Max: 300, Step: 1})
+		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300}, playerSkill{Skill: 137, Value: 300, Max: 300})
 	case 11: // Draenei
-		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 759, Value: 300, Max: 300, Step: 1})
+		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300}, playerSkill{Skill: 759, Value: 300, Max: 300})
 	default:
-		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300, Step: 1})
+		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300})
 	}
 	return skills
 }

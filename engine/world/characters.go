@@ -347,7 +347,7 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 
 	// Populate starter spells, skills, actions, equipment
 	s.createStarterSpells(ctx, guid, race, class)
-	s.createStarterSkills(ctx, guid, race, class)
+	s.createStarterSkills(ctx, guid, race, class, startLevel)
 	s.createStarterActions(ctx, guid, race, class)
 	s.createStarterOutfit(ctx, guid, race, class, gender)
 
@@ -2072,11 +2072,15 @@ func (s *session) createStarterSpells(ctx context.Context, guid uint64, race, cl
 	}
 }
 
-func (s *session) createStarterSkills(ctx context.Context, guid uint64, race, class uint8) {
+func (s *session) createStarterSkills(ctx context.Context, guid uint64, race, class, level uint8) {
 	cdb := s.server.CharactersStore.DB
 	wdb := s.server.WorldStore.DB
 	if cdb == nil || wdb == nil {
 		return
+	}
+	current := make(map[uint16]playerSkill)
+	for _, skill := range defaultRacialSkills(race, class) {
+		current[skill.Skill] = skill
 	}
 
 	var racialLangSkill uint32
@@ -2112,33 +2116,23 @@ func (s *session) createStarterSkills(ctx context.Context, guid uint64, race, cl
 	}
 
 	raceMask, classMask := playerCreateMask(race), playerCreateMask(class)
-	rows, err := wdb.QueryContext(ctx, "SELECT skill, rank FROM playercreateinfo_skills WHERE (raceMask = 0 OR (raceMask & ?) <> 0) AND (classMask = 0 OR (classMask & ?) <> 0)", raceMask, classMask)
+	rows, err := wdb.QueryContext(ctx, "SELECT skill, rank FROM playercreateinfo_skills WHERE (raceMask = 0 OR (raceMask & ?) <> 0) AND (classMask = 0 OR (classMask & ?) <> 0) ORDER BY skill", raceMask, classMask)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
 			var skillID, rank int64
-			if err := rows.Scan(&skillID, &rank); err == nil && skillID > 0 {
-				if !s.skillAllowed(race, class, uint16(skillID)) {
-					continue
-				}
-				val := 1
-				max := 1
-				rangeType := s.skillRangeType(race, class, uint16(skillID))
-				if rangeType == wotlk.SkillRangeLanguage {
-					val = 300
-					max = 300
-				} else if rangeType == wotlk.SkillRangeMono {
-					val = 1
-					max = 1
-				} else if rangeType == wotlk.SkillRangeLevel || isLevelScaledSkill(uint16(skillID)) {
-					val = 1
-					max = 5 // level 1 * 5
-				}
-				if rank > 0 {
-					val = int(rank)
-				}
-				_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", guid, skillID, val, max)
+			if rows.Scan(&skillID, &rank) != nil || skillID <= 0 || skillID > 65535 || rank < 0 || rank > 65535 || !s.skillAllowed(race, class, uint16(skillID)) {
+				continue
 			}
+			if _, found := current[uint16(skillID)]; found {
+				continue
+			}
+			skill, valid := s.defaultPlayerSkill(race, class, uint16(skillID), uint16(rank), level, current)
+			if !valid {
+				continue
+			}
+			_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", guid, skillID, skill.Value, skill.Max)
+			current[skill.Skill] = skill
 		}
 	}
 }
