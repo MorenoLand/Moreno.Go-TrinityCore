@@ -2578,6 +2578,16 @@ func (s *session) setRooted(root bool) {
 	}
 }
 
+func (s *session) canFreeMoveForLogout(ignoreLogoutLock bool) bool {
+	if s == nil || s.player == nil || s.inFlight || s.player.VehicleGUID != 0 || s.player.UnitFlags&(unitFlagConfused|unitFlagFleeing) != 0 {
+		return false
+	}
+	if ignoreLogoutLock {
+		return !s.hasAuraType(spellAuraRoot) && !s.hasAuraType(spellAuraStun)
+	}
+	return !s.rooted && s.player.UnitFlags&unitFlagStunned == 0
+}
+
 func (s *session) handleLogoutRequest(ctx context.Context) bool {
 	if !s.playerLoaded {
 		return true
@@ -2631,12 +2641,13 @@ func (s *session) handleLogoutRequest(ctx context.Context) bool {
 
 	// Reference MiscHandler.cpp:446-453:
 	// SetStandState(UNIT_STAND_STATE_SIT), SetRooted(true), SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED)
-	if s.player != nil {
+	if s.canFreeMoveForLogout(s.logoutFlagsApplied) {
 		if s.player.StandState == 0 { // UNIT_STAND_STATE_STAND
 			s.player.StandState = 1 // UNIT_STAND_STATE_SIT
 		}
 		s.player.UnitFlags |= unitFlagStunned
 		s.setRooted(true)
+		s.logoutFlagsApplied = true
 		s.sendPlayerUpdate()
 	}
 
@@ -2652,12 +2663,13 @@ func (s *session) handleLogoutCancel() bool {
 
 	// Reference MiscHandler.cpp:471-483:
 	// SetRooted(false), SetStandState(UNIT_STAND_STATE_STAND), RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED)
-	if s.player != nil {
+	if s.canFreeMoveForLogout(s.logoutFlagsApplied) {
 		s.player.StandState = 0 // UNIT_STAND_STATE_STAND
 		s.player.UnitFlags &^= unitFlagStunned
 		s.setRooted(false)
 		s.sendPlayerUpdate()
 	}
+	s.logoutFlagsApplied = false
 
 	s.debug("player logout cancelled", "account", s.accountName)
 	return s.write(uint16(protocol.OpcodeSMSG_LOGOUT_CANCEL_ACK), nil, true) == nil
@@ -2724,6 +2736,7 @@ func (s *session) completeLogout(ctx context.Context) error {
 	s.playerLoaded = false
 	s.player = nil
 	s.logoutAt = time.Time{}
+	s.logoutFlagsApplied = false
 	s.debug("player logged out", "account", s.accountName, "guid", s.playerGUID)
 	return firstErr
 }

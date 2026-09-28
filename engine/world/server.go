@@ -198,6 +198,7 @@ type session struct {
 	visibleTransportPassengersMu sync.Mutex
 	visibleTransportPassengers   map[uint64]uint64
 	logoutAt                     time.Time
+	logoutFlagsApplied           bool
 	gameTimeStartedAt            time.Time
 	writeMu                      sync.Mutex
 	movementMu                   sync.RWMutex
