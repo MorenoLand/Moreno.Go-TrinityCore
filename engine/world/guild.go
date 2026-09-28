@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -150,6 +151,49 @@ func (s *session) sendGuildLoginInfo(ctx context.Context) {
 	s.sendGuildBankTabsInfo(ctx)
 	_ = s.handleGuildRoster(ctx)
 	s.broadcastGuildMemberLogin()
+}
+
+func (s *session) ensureStartingGuild(ctx context.Context, playerGUID uint64) error {
+	if s == nil || s.server == nil || !s.server.Config.StartingGuildEnable || s.server.Config.StartingGuildID == 0 || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return nil
+	}
+	tx, err := s.server.CharactersStore.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var existingGuild uint32
+	if err := tx.QueryRowContext(ctx, "SELECT guildid FROM guild_member WHERE guid = ? LIMIT 1", playerGUID).Scan(&existingGuild); err == nil {
+		return nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	var guildID uint32
+	if err := tx.QueryRowContext(ctx, "SELECT guildid FROM guild WHERE guildid = ? LIMIT 1", s.server.Config.StartingGuildID).Scan(&guildID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	var rank sql.NullInt64
+	if err := tx.QueryRowContext(ctx, "SELECT MAX(rid) FROM guild_rank WHERE guildid = ?", guildID).Scan(&rank); err != nil {
+		return err
+	}
+	memberRank := uint32(4)
+	if rank.Valid {
+		memberRank = uint32(rank.Int64)
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO guild_member (guildid, guid, rank, pnote, offnote) VALUES (?, ?, ?, '', '')", guildID, playerGUID, memberRank); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if s.player != nil && s.playerGUID == playerGUID {
+		s.player.GuildID = guildID
+		s.player.GuildRank = uint8(memberRank)
+	}
+	return nil
 }
 
 func (s *session) sendGuildBankTabsInfo(ctx context.Context) {

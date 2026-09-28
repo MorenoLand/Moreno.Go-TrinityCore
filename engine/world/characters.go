@@ -339,6 +339,9 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_CHARACTER", args...); err != nil {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 48)
 	}
+	if err := s.ensureStartingGuild(ctx, guid); err != nil {
+		s.debug("starting guild assignment failed", "account", s.accountName, "guid", guid, "error", err)
+	}
 	_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_PLAYER_HOMEBIND", guid, spawn.Map, spawn.Zone, spawn.X, spawn.Y, spawn.Z)
 	s.initializeCreatedPlayerStats(ctx, guid, race, class, startLevel)
 
@@ -524,6 +527,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.visiblePlayersMu.Unlock()
 	s.contestedPVPEnd = time.Time{}
 	s.playerLoaded = true
+	if err := s.ensureStartingGuild(ctx, guid); err != nil {
+		s.debug("starting guild assignment failed", "account", s.accountName, "guid", guid, "error", err)
+	}
 	if mapEntry.IsDungeon() {
 		if !s.worldportInstanceHasRoom(loginSelection, mapEntry) {
 			s.sendTransferAborted(state.Map, transferAbortMaxPlayers, 0)

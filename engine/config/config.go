@@ -86,6 +86,8 @@ type Config struct {
 	GMLoginState                            int
 	GMVisibleState                          int
 	GMInWhoListLevel                        int
+	StartingGuildEnable                     bool
+	StartingGuildID                         uint32
 	ChatFloodMessageCount                   uint32
 	ChatFloodMessageDelay                   uint32
 	ChatFloodMuteTime                       uint32
@@ -177,6 +179,7 @@ func defaultConfig() (c Config) {
 func Default() Config {
 	c := defaultConfig()
 	c.GMInWhoListLevel = 3
+	c.StartingGuildID = 1
 	c.RestOfflineInTavernOrCityRate = 1
 	c.RestOfflineInWildernessRate = 1
 	c.FocusRate = 1
@@ -222,6 +225,8 @@ func (c *Config) ApplyEnv() {
 	values["MORENOCORE_QUEST_IGNORE_RAID"] = "Quests.IgnoreRaid"
 	values["MORENOCORE_GM_VISIBLE"] = "GM.Visible"
 	values["MORENOCORE_GM_IN_WHO_LIST_LEVEL"] = "GM.InWhoList.Level"
+	values["MORENOCORE_STARTING_GUILD_ENABLE"] = "StartingGuild.Enable"
+	values["MORENOCORE_STARTING_GUILD_ID"] = "StartingGuild.GuildID"
 	values["MORENOCORE_GAME_TYPE"] = "GameType"
 	values["MORENOCORE_RATE_REST_OFFLINE_IN_TAVERN_OR_CITY"] = "Rate.Rest.Offline.InTavernOrCity"
 	values["MORENOCORE_RATE_REST_OFFLINE_IN_WILDERNESS"] = "Rate.Rest.Offline.InWilderness"
@@ -577,6 +582,10 @@ func (c *Config) set(key, value string) error {
 		return setInt(&c.GMVisibleState, key, value)
 	case "GM.InWhoList.Level":
 		return setInt(&c.GMInWhoListLevel, key, value)
+	case "StartingGuild.Enable":
+		return setBool(&c.StartingGuildEnable, key, value)
+	case "StartingGuild.GuildID":
+		return setUint32(&c.StartingGuildID, key, value)
 	case "ChatFlood.MessageCount":
 		return setUint32(&c.ChatFloodMessageCount, key, value)
 	case "ChatFlood.MessageDelay":
