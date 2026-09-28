@@ -309,7 +309,7 @@ func (s *session) loadActionButtons(ctx context.Context, guid uint64, spells []l
 	var result [144]uint32
 	knownSpells := make(map[uint32]struct{}, len(spells))
 	for _, spell := range spells {
-		if spell.Active && !spell.Disabled {
+		if !spell.Disabled {
 			knownSpells[spell.ID] = struct{}{}
 		}
 	}
