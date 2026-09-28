@@ -68,6 +68,8 @@ type Config struct {
 	FocusRate                               float64
 	MaxGroupXPDistance                      float64
 	XPRateKill                              float64
+	XPRateQuest                             float64
+	XPRateExplore                           float64
 	XPRateBattlegroundKill                  float64
 	RestOfflineInTavernOrCityRate           float64
 	RestOfflineInWildernessRate             float64
@@ -180,6 +182,8 @@ func Default() Config {
 	c.FocusRate = 1
 	c.MaxGroupXPDistance = 74
 	c.XPRateKill = 1
+	c.XPRateQuest = 1
+	c.XPRateExplore = 1
 	c.XPRateBattlegroundKill = 1
 	c.AccountInstancesPerHour = 5
 	return c
@@ -223,6 +227,8 @@ func (c *Config) ApplyEnv() {
 	values["MORENOCORE_RATE_FOCUS"] = "Rate.Focus"
 	values["MORENOCORE_MAX_GROUP_XP_DISTANCE"] = "MaxGroupXPDistance"
 	values["MORENOCORE_RATE_XP_KILL"] = "Rate.XP.Kill"
+	values["MORENOCORE_RATE_XP_QUEST"] = "Rate.XP.Quest"
+	values["MORENOCORE_RATE_XP_EXPLORE"] = "Rate.XP.Explore"
 	values["MORENOCORE_RATE_XP_BATTLEGROUND_KILL"] = "Rate.XP.BattlegroundKill"
 	values["MORENOCORE_ADDON_CHANNEL"] = "AddonChannel"
 	values["MORENOCORE_SERVER_LOGIN_INFO"] = "Server.LoginInfo"
@@ -542,6 +548,10 @@ func (c *Config) set(key, value string) error {
 		return setFloat64(&c.MaxGroupXPDistance, key, value)
 	case "Rate.XP.Kill":
 		return setFloat64(&c.XPRateKill, key, value)
+	case "Rate.XP.Quest":
+		return setFloat64(&c.XPRateQuest, key, value)
+	case "Rate.XP.Explore":
+		return setFloat64(&c.XPRateExplore, key, value)
 	case "Rate.XP.BattlegroundKill":
 		return setFloat64(&c.XPRateBattlegroundKill, key, value)
 	case "Visibility.Distance.Continents":

@@ -1260,7 +1260,7 @@ func (s *session) exploreZone(ctx context.Context, zoneID uint32) {
 	if s.player == nil || s.server == nil || s.server.Data == nil || zoneID == 0 {
 		return
 	}
-	areaBit, _, found, err := s.server.Data.AreaTableInfo(zoneID)
+	areaBit, explorationLevel, found, err := s.server.Data.AreaTableInfo(zoneID)
 	if err != nil || !found || areaBit < 0 {
 		return
 	}
@@ -1318,7 +1318,44 @@ func (s *session) exploreZone(ctx context.Context, zoneID uint32) {
 		s.stopTimedAchievement(criteriaID)
 		s.checkAchievementComplete(criterion.AchievementID)
 	}
+	if explorationLevel > 0 {
+		xp := s.calculateExplorationXP(ctx, explorationLevel)
+		if xp > 0 {
+			s.grantXP(ctx, xp)
+		}
+		packet := protocol.NewBuffer(8)
+		packet.WriteU32(zoneID)
+		packet.WriteU32(xp)
+		_ = s.write(uint16(protocol.OpcodeSMSG_EXPLORATION_EXPERIENCE), packet.Bytes(), true)
+	}
 	s.debug("zone explored", "account", s.accountName, "zone", zoneID, "criteria", len(criteriaIDs))
+}
+
+func (s *session) calculateExplorationXP(ctx context.Context, explorationLevel int32) uint32 {
+	level := uint32(s.player.Level)
+	maxLevel := s.server.Config.MaxPlayerLevel
+	if maxLevel == 0 {
+		maxLevel = 80
+	}
+	if explorationLevel <= 0 || level == 0 || level >= maxLevel {
+		return 0
+	}
+	difference := int32(level) - explorationLevel
+	baseLevel := uint32(explorationLevel)
+	percent := int32(100)
+	if difference < -5 {
+		baseLevel = level + 5
+	} else if difference > 5 {
+		percent -= (difference - 5) * 5
+		if percent < 0 {
+			percent = 0
+		}
+	}
+	baseXP := s.server.baseXPForLevel(ctx, baseLevel)
+	if difference > 5 {
+		baseXP = baseXP * uint32(percent) / 100
+	}
+	return uint32(float64(baseXP) * s.server.Config.XPRateExplore)
 }
 
 // persistExploredZones writes the explored bitfield as hex to characters.

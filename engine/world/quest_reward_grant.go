@@ -700,7 +700,11 @@ func (s *session) calculateQuestRewardXP(ctx context.Context, questID, xpDiff ui
 	if !ok {
 		return 0
 	}
-	return entry[xpDiff]
+	xp := entry[xpDiff]
+	if s.server != nil {
+		xp = uint32(float64(xp) * s.server.Config.XPRateQuest)
+	}
+	return xp
 }
 
 var questXPDBC = map[uint32][9]uint32{
