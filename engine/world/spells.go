@@ -255,6 +255,73 @@ func (s *session) calculateSpellPowerCost(spell wotlk.Spell) uint32 {
 	return cost
 }
 
+func (s *session) hasSpellReagents(ctx context.Context, spell wotlk.Spell) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return true
+	}
+	for i := range spell.Reagent {
+		if spell.Reagent[i] <= 0 {
+			continue
+		}
+		itemID := spell.Reagent[i]
+		need := spell.ReagentCount[i]
+		if need == 0 {
+			need = 1
+		}
+		var have int64
+		err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count),0) FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ?`, s.playerGUID, int64(itemID)).Scan(&have)
+		if err != nil || have < int64(need) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *session) takeSpellReagents(ctx context.Context, spell wotlk.Spell) {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	for i := range spell.Reagent {
+		if spell.Reagent[i] <= 0 {
+			continue
+		}
+		itemID := spell.Reagent[i]
+		need := int64(spell.ReagentCount[i])
+		if need == 0 {
+			need = 1
+		}
+		rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.item, ii.count FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ? ORDER BY ii.count DESC`, s.playerGUID, int64(itemID))
+		if err != nil {
+			continue
+		}
+		type stack struct {
+			guid  int64
+			count int64
+		}
+		var stacks []stack
+		for rows.Next() {
+			var st stack
+			if rows.Scan(&st.guid, &st.count) == nil {
+				stacks = append(stacks, st)
+			}
+		}
+		rows.Close()
+		for _, st := range stacks {
+			if need <= 0 {
+				break
+			}
+			if st.count <= need {
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, `DELETE FROM character_inventory WHERE guid = ? AND item = ?`, s.playerGUID, st.guid)
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, `DELETE FROM item_instance WHERE guid = ?`, st.guid)
+				need -= st.count
+			} else {
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, `UPDATE item_instance SET count = count - ? WHERE guid = ?`, need, st.guid)
+				need = 0
+			}
+		}
+	}
+}
+
 func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || s.server.Data == nil {
 		return true
@@ -376,6 +443,11 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if cost > 0 && pType < 7 && s.player.Powers[pType] < cost {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 85), true) // SPELL_FAILED_NO_POWER = 85
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not enough power", "power", s.player.Powers[pType], "cost", cost)
+		return true
+	}
+	if !s.hasSpellReagents(ctx, spell) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 100), true) // SPELL_FAILED_REAGENTS = 100
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "missing reagents")
 		return true
 	}
 
@@ -682,6 +754,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, fmt.Sprintf("UPDATE characters SET %s = ? WHERE guid = ?", col), s.player.Powers[pType], s.playerGUID)
 		}
 	}
+	s.takeSpellReagents(ctx, spell)
 	goPacket := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, missStatus, target, remainingPower)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true)
 	if s.server != nil {

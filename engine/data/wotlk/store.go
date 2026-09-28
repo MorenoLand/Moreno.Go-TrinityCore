@@ -189,6 +189,8 @@ type Spell struct {
 	EquippedItemClass     int32  // Spell.dbc field 68 = EquippedItemClass (DBCStructure.h:1443), -1 = any
 	EquippedItemSubClass  uint32 // Spell.dbc field 69 = EquippedItemSubclass (DBCStructure.h:1444)
 	EquippedItemInvTypes  uint32 // Spell.dbc field 70 = EquippedItemInvTypes (DBCStructure.h:1445)
+	Reagent               [8]int32  // Spell.dbc fields 52-59 = Reagent (DBCStructure.h:1441)
+	ReagentCount          [8]uint32 // Spell.dbc fields 60-67 = ReagentCount (DBCStructure.h:1442)
 	Speed                 float32
 	Effects               [3]SpellEffect
 }
@@ -849,6 +851,18 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 			return Spell{}, false, err
 		}
 		spell.Effects[i] = SpellEffect{Effect: effect, BasePoints: basePoints, DieSides: dieSides, RealPointsPerLevel: realPointsPerLevel, Aura: aura, AuraPeriod: auraPeriod, ImplicitTargetA: implicitTargetA, ImplicitTargetB: implicitTargetB, RadiusIndex: radiusIndex, MiscValue: miscValue, MiscValueB: miscValueB, TriggerSpell: triggerSpell}
+	}
+	for i := range spell.Reagent {
+		reagent, err := record.Int32(52 + i) // Reagent, DBCStructure.h:1441 (52-59)
+		if err != nil {
+			return Spell{}, false, err
+		}
+		spell.Reagent[i] = reagent
+		count, err := record.Uint32(60 + i) // ReagentCount, DBCStructure.h:1442 (60-67)
+		if err != nil {
+			return Spell{}, false, err
+		}
+		spell.ReagentCount[i] = count
 	}
 	return spell, true, nil
 }
