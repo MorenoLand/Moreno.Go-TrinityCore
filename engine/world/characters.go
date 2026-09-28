@@ -2567,6 +2567,7 @@ func (s *session) setRooted(root bool) {
 	if s.player == nil {
 		return
 	}
+	s.rooted = root
 	buf := protocol.NewBuffer(16)
 	buf.WritePackedGUID(s.playerGUID)
 	buf.WriteU32(0) // movement counter
