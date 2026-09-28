@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -79,13 +80,12 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 		if casterGUID == 0 {
 			casterGUID = state.GUID
 		}
-		if id == 8326 || id == 20584 {
-			state.PlayerFlags |= playerFlagGhost
-		}
 		if _, exists := s.activeAuras[id]; exists {
 			continue
 		}
 		procCharges := uint32(0)
+		var loadedSpell wotlk.Spell
+		hasLoadedSpell := false
 		if s.server.Data != nil {
 			spell, found, spellErr := s.server.Data.Spell(id)
 			if spellErr != nil || !found {
@@ -94,6 +94,7 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 			if spell.Attributes&spellAttributePassive != 0 || spell.AttributesEx1&(spellAttr1Channeled1|spellAttr1Channeled2) != 0 {
 				continue
 			}
+			loadedSpell, hasLoadedSpell = spell, true
 			procCharges = spell.ProcCharges
 			switch id {
 			case 44413, 40075, 55849, 73822, 73828:
@@ -131,6 +132,12 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 			aura.StackCount = uint8(stackCount)
 		}
 		aura.RemainingCharges = normalizeAuraRemainingCharges(procCharges, remainCharges)
+		if hasLoadedSpell {
+			canSave, saveErr := s.canSavePlayerAura(state.GUID, aura, loadedSpell)
+			if saveErr != nil || !canSave {
+				continue
+			}
+		}
 		if s.server.Data != nil {
 			if spell, found, _ := s.server.Data.Spell(id); found {
 				aura.DispelType = spell.DispelType
@@ -242,6 +249,9 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 		}
 		if aura.DurationMs > 0 && aura.RemainingMs > aura.DurationMs {
 			aura.RemainingMs = aura.DurationMs
+		}
+		if id == 8326 || id == 20584 {
+			state.PlayerFlags |= playerFlagGhost
 		}
 		s.auras[id] = struct{}{}
 		s.auraSlots[id] = aura.Slot
