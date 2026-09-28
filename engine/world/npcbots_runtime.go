@@ -1,5 +1,7 @@
 package world
 
+const npcBotMirrorImageBlademaster uint32 = 70552
+
 type NpcBotRuntimeState struct {
 	GUID      uint64
 	OwnerGUID uint64
@@ -11,7 +13,7 @@ func ResolveNpcBotRuntimeCount(ownerGUID uint64, entries map[uint32]struct{}, ru
 	seen := make(map[uint64]struct{}, len(runtime))
 	var count uint8
 	for _, bot := range runtime {
-		if bot.GUID == 0 || bot.OwnerGUID != ownerGUID || bot.PetID != 0 {
+		if bot.GUID == 0 || bot.OwnerGUID != ownerGUID || bot.PetID != 0 || bot.Entry == npcBotMirrorImageBlademaster {
 			continue
 		}
 		if _, ok := entries[bot.Entry]; !ok {
