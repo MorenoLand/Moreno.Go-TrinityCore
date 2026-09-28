@@ -321,6 +321,7 @@ func (s *session) handleCmdHelp(args []string) {
 	s.sendSysMessage(".additem <itemId> [count] - Add item to inventory")
 	s.sendSysMessage(".learn <spellId> | .unlearn <spellId> - Manage spells")
 	s.sendSysMessage(".cast <spellId> - Cast a spell")
+	s.sendSysMessage(".cheat explore on|off - Toggle explored areas")
 	s.sendSysMessage(".lookup item|spell|creature|tele|quest <name>")
 	s.sendSysMessage(".server info|motd - Server status and info")
 	s.sendSysMessage(".character level|rename|customize|changefaction|changerace")
@@ -420,6 +421,48 @@ func (s *session) handleCmdGM(args []string) {
 	default:
 		s.sendSysMessage("Syntax: .gm on|off|chat|fly|visible")
 	}
+}
+
+func (s *session) handleCmdCheat(ctx context.Context, args []string) bool {
+	if len(args) != 2 || strings.ToLower(args[0]) != "explore" {
+		s.sendSysMessage("Syntax: .cheat explore on|off")
+		return true
+	}
+	enabled := false
+	switch strings.ToLower(args[1]) {
+	case "on", "1", "true":
+		enabled = true
+	case "off", "0", "false":
+	default:
+		s.sendSysMessage("Syntax: .cheat explore on|off")
+		return true
+	}
+	allowed := false
+	if s.server != nil && s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
+		allowed, _ = accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionCommandCheatExplore)
+	}
+	if !allowed {
+		s.sendNotification("You do not have permission to use that command.")
+		return true
+	}
+	if s.player == nil {
+		return true
+	}
+	explored := uint32(0)
+	if enabled {
+		explored = ^uint32(0)
+	}
+	for index := range s.player.ExploredZones {
+		s.player.ExploredZones[index] = explored
+	}
+	s.persistExploredZones(ctx)
+	s.sendPlayerUpdate()
+	if enabled {
+		s.sendSysMessage("All areas explored.")
+	} else {
+		s.sendSysMessage("All areas unexplored.")
+	}
+	return true
 }
 
 func (s *session) sendNotification(msg string) {
@@ -1230,6 +1273,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root := &commandNode{name: "", children: make(map[string]*commandNode)}
 	root.add("help", func(ctx context.Context, args []string) bool { s.handleCmdHelp(args); return true }, nil, map[string]string{"?": "help"})
 	root.add("gm", func(ctx context.Context, args []string) bool { s.handleCmdGM(args); return true }, []string{"on", "off", "chat", "fly", "visible"}, map[string]string{"vis": "visible"})
+	root.add("cheat", func(ctx context.Context, args []string) bool { return s.handleCmdCheat(ctx, args) }, []string{"explore"}, nil)
 	root.add("tele", func(ctx context.Context, args []string) bool { s.handleCmdTele(ctx, args); return true }, nil, nil)
 	root.add("go", func(ctx context.Context, args []string) bool { s.handleCmdGo(ctx, args); return true }, nil, nil)
 	root.add("modify", func(ctx context.Context, args []string) bool { s.handleCmdModify(ctx, args); return true }, []string{"hp", "health", "mana", "power", "speed", "run", "fly", "scale", "money", "gold", "level"}, map[string]string{"mod": "modify"})
