@@ -85,6 +85,7 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 		if _, exists := s.activeAuras[id]; exists {
 			continue
 		}
+		procCharges := uint32(0)
 		if s.server.Data != nil {
 			spell, found, spellErr := s.server.Data.Spell(id)
 			if spellErr != nil || !found {
@@ -93,6 +94,7 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 			if spell.Attributes&spellAttributePassive != 0 || spell.AttributesEx1&(spellAttr1Channeled1|spellAttr1Channeled2) != 0 {
 				continue
 			}
+			procCharges = spell.ProcCharges
 			switch id {
 			case 44413, 40075, 55849, 73822, 73828:
 				continue
@@ -128,9 +130,7 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 		if stackCount > 0 {
 			aura.StackCount = uint8(stackCount)
 		}
-		if remainCharges > 0 {
-			aura.RemainingCharges = uint8(remainCharges)
-		}
+		aura.RemainingCharges = normalizeAuraRemainingCharges(procCharges, remainCharges)
 		if s.server.Data != nil {
 			if spell, found, _ := s.server.Data.Spell(id); found {
 				aura.DispelType = spell.DispelType
@@ -267,6 +267,16 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 		s.addOwnerPetAuraEffects(ctx, aura.SpellID, aura.EffectMask)
 	}
 	return nil
+}
+
+func normalizeAuraRemainingCharges(procCharges uint32, savedCharges int64) uint8 {
+	if procCharges == 0 {
+		return 0
+	}
+	if savedCharges <= 0 {
+		return uint8(procCharges)
+	}
+	return uint8(savedCharges)
 }
 
 func (s *session) loadGlyphAuras(state *playerState) {
