@@ -2603,6 +2603,7 @@ func (s *session) handleLogoutRequest(ctx context.Context) bool {
 		reason = 2 // ERR_LOGOUT_FAILED_DUEL
 	}
 	if reason != 0 {
+		s.logoutAt = time.Time{}
 		response := protocol.NewBuffer(5)
 		response.WriteU32(reason)
 		response.WriteU8(0)
