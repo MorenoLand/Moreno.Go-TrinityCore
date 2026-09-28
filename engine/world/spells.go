@@ -1507,7 +1507,7 @@ func (s *session) applySpellPowerBurn(ctx context.Context, targetGUID uint64, po
 		return 0
 	}
 	target := s.spellPowerTarget(targetGUID)
-	if target == nil || target.player == nil || target.player.Health == 0 || classPowerType(target.player.Class) != uint8(powerType) {
+	if target == nil || target.player == nil || target.player.Health == 0 || playerPowerType(target.player) != uint8(powerType) {
 		return 0
 	}
 	maximum := target.player.MaxPowers[uint32(powerType)]
@@ -1821,6 +1821,15 @@ func (s *session) hasActiveSpell(spellID uint32) bool {
 	for _, spell := range s.player.Spells {
 		if spell.ID == spellID {
 			return spell.Active && !spell.Disabled
+		}
+	}
+	if s.player != nil && s.player.ShapeshiftForm != 0 && s.server != nil && s.server.Data != nil {
+		if form, found, err := s.server.Data.ShapeshiftForm(uint32(s.player.ShapeshiftForm)); err == nil && found {
+			for _, presetSpell := range form.PresetSpellIDs {
+				if presetSpell == spellID {
+					return true
+				}
+			}
 		}
 	}
 	return false
@@ -2489,6 +2498,7 @@ func (s *session) removeAura(spellID uint32) {
 	forcedReactionFaction := uint32(0)
 	forcedReactionRank := uint32(0)
 	wasTransform := false
+	wasShapeshift := false
 	wasStealth := false
 	wasInvisibility := false
 	wasTrackStealthed := false
@@ -2517,6 +2527,7 @@ func (s *session) removeAura(spellID uint32) {
 				forcedReactionRank = aura.Amount
 			}
 			wasTransform = aura.AuraType == 56
+			wasShapeshift = aura.AuraType == 36
 			wasStealth = aura.AuraType == spellAuraStealth
 			wasInvisibility = aura.AuraType == spellAuraInvisibility
 			wasTrackStealthed = aura.AuraType == spellAuraTrackStealthed
@@ -2559,7 +2570,7 @@ func (s *session) removeAura(spellID uint32) {
 		s.sendPlayerMountUpdate()
 		s.sendPlayerDismount()
 	}
-	if wasTransform && s.player != nil {
+	if (wasTransform || wasShapeshift) && s.player != nil {
 		s.refreshTransformDisplay(context.Background())
 	}
 	if wasStealth && s.player != nil && !s.hasAuraType(spellAuraStealth) {
@@ -2668,23 +2679,7 @@ func (s *session) refreshTransformDisplay(ctx context.Context) {
 	if s == nil || s.player == nil {
 		return
 	}
-	displayID := uint32(0)
-	for _, aura := range s.loadedAuras() {
-		if aura == nil || aura.AuraType != 56 {
-			continue
-		}
-		displayID = specialTransformDisplay(s.player, aura.SpellID)
-		if displayID == 0 && aura.MiscValue > 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-			var dbDisplayID int64
-			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 16358) FROM creature_template WHERE entry = ?", aura.MiscValue).Scan(&dbDisplayID); err == nil && dbDisplayID > 0 {
-				displayID = uint32(dbDisplayID)
-			}
-		}
-		if displayID != 0 {
-			break
-		}
-	}
-	s.player.TransformDisplayID = displayID
+	s.loadTransformDisplay(ctx, s.player)
 }
 
 func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, durationMs, periodMs, amount, schoolMask uint32) {
@@ -2720,6 +2715,13 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		if targetSess.isImmuneToSpell(spell) {
 			return
+		}
+		if eff.Aura == 36 {
+			for _, existing := range targetSess.loadedAuras() {
+				if existing != nil && existing.AuraType == 36 && existing.SpellID != spell.ID {
+					targetSess.removeAura(existing.SpellID)
+				}
+			}
 		}
 		if eff.Aura == spellAuraMounted || mountedFlight {
 			targetSess.clearOtherMountedAuras(spell.ID)
@@ -2824,6 +2826,14 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				aura.RecalculateMask |= previous.RecalculateMask & bit
 			}
 		}
+		if previous != nil && (previous.AuraType == 36 || eff.Aura == 36) {
+			aura.EffectMask |= previous.EffectMask
+			aura.Amounts, aura.BaseAmounts = previous.Amounts, previous.BaseAmounts
+			aura.RecalculateMask |= previous.RecalculateMask
+			if previous.AuraType == 36 && eff.Aura != 36 {
+				aura.AuraType, aura.MiscValue = previous.AuraType, previous.MiscValue
+			}
+		}
 		if mountedFlight {
 			aura.EffectMask |= mountEffectMask
 			aura.AuraType = spellAuraMounted
@@ -2906,7 +2916,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		if eff.Aura == spellAuraTrackStealthed {
 			targetSess.player.PlayerFieldBytes |= playerFieldByteTrackStealthed
 		}
-		if eff.Aura == 56 {
+		if eff.Aura == 36 || eff.Aura == 56 {
 			targetSess.refreshTransformDisplay(ctx)
 		}
 

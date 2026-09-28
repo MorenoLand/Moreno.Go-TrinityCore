@@ -345,7 +345,7 @@ func setAuraEffectPersistence(aura *activeAura, spell wotlk.Spell, effect wotlk.
 			continue
 		}
 		mask := uint8(1 << uint(index))
-		aura.EffectMask = mask
+		aura.EffectMask |= mask
 		aura.Amounts[index] = int32(amount)
 		aura.BaseAmounts[index] = candidate.BasePoints
 		if auraEffectCanBeRecalculated(candidate.Aura) {

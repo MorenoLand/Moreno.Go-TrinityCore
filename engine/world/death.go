@@ -910,29 +910,6 @@ func (s *session) sendResurrectRequest(casterGUID uint64, name string, spiritHea
 	_ = s.write(uint16(protocol.OpcodeSMSG_RESURRECT_REQUEST), packet.Bytes(), true)
 }
 
-func (s *session) requestSpiritHealerResurrection(casterGUID uint64, name string, mapID uint32, x, y, z float32) {
-	if s == nil || s.player == nil || !s.isDeadOrGhost() || s.resurrection != nil || s.server == nil || s.server.Data == nil {
-		return
-	}
-	spell, found, err := s.server.Data.Spell(17251)
-	if err != nil || !found {
-		s.debug("spirit healer spell lookup failed", "account", s.accountName, "spell", 17251, "error", err)
-		return
-	}
-	for _, effect := range spell.Effects {
-		if effect.Effect == spellEffectResurrectNew {
-			health := effect.CalcValueForLevel(spell, uint32(s.player.Level))
-			if health <= 0 {
-				return
-			}
-			mana := uint32(max(effect.MiscValue, 0))
-			s.setResurrectRequestData(casterGUID, mapID, x, y, z, uint32(health), mana)
-			s.sendResurrectRequest(casterGUID, name, true, true)
-			return
-		}
-	}
-}
-
 func boolByte(value bool) uint8 {
 	if value {
 		return 1

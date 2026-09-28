@@ -170,167 +170,171 @@ type playerSkill struct {
 }
 
 type playerState struct {
-	GUID                 uint64
-	Selection            uint64
-	PetGUID              uint64
-	PetNumber            uint32
-	Name                 string
-	Race                 uint8
-	Class                uint8
-	Gender               uint8
-	Skin                 uint8
-	Face                 uint8
-	HairStyle            uint8
-	HairColor            uint8
-	FacialStyle          uint8
-	BankBagSlots         uint8
-	RestState            uint8
-	Level                uint8
-	TotalPlayedTime      uint32
-	LevelPlayedTime      uint32
-	RestBonus            float32
-	LogoutTime           int64
-	LogoutResting        bool
-	StableSlots          uint8
-	TaxiPath             string
-	XP                   uint32
-	Money                uint32
-	PlayerFlags          uint32
-	GuildID              uint32
-	GuildRank            uint8
-	Map                  uint32
-	InstanceID           uint32
-	InstanceModeMask     uint32
-	X                    float32
-	Y                    float32
-	Z                    float32
-	Orientation          float32
-	LfgEntryPointMap     uint32
-	LfgEntryPointX       float32
-	LfgEntryPointY       float32
-	LfgEntryPointZ       float32
-	LfgEntryPointO       float32
-	ExtraFlags           uint32
-	AtLogin              uint32
-	Zone                 uint32
-	Health               uint32
-	MaxHealth            uint32
-	HealthLoaded         bool
-	repopOnLogin         bool
-	BaseMana             uint32
-	ItemHealthBonus      uint32
-	ItemManaBonus        uint32
-	Powers               [7]uint32
-	MaxPowers            [7]uint32
-	Cinematic            uint32
-	Movie                uint32
-	KnownCurrency        uint64
-	WatchedFaction       uint32
-	AmmoID               uint32
-	ChosenTitle          uint32
-	KnownTitles          [6]uint32
-	ActionBars           uint32
-	GrantableLevels      uint8
-	FishingSteps         uint8
-	PassOnGroupLoot      bool
-	Skills               []playerSkill
-	Spells               []learnedSpell
-	Actions              [144]uint32
-	Cooldowns            []spellCooldown
-	Equipment            string
-	SheathState          uint8
-	PVPFlags             uint8
-	StandFlags           uint8
-	AuraVision           uint8
-	TaxiMask             [taxiMaskSize]uint32
-	QuestLog             [playerQuestLogSlots]questLogEntry
-	MountDisplayID       uint32
-	TransformDisplayID   uint32
-	StandState           uint8
-	TotemSlots           [4]uint64
-	PlayerFieldBytes     uint32
-	SelfResSpell         uint32
-	ExploredZones        [playerExploredZonesCount]uint32
-	DuelArbiter          uint64
-	DuelTeam             uint32
-	UnitFlags            uint32
-	HomebindMap          uint32
-	HomebindZone         uint32
-	HomebindX            float32
-	HomebindY            float32
-	HomebindZ            float32
-	Reputations          []playerReputation
-	Talents              map[uint32]uint8
-	ResetTalentsCost     uint32
-	ResetTalentsTime     uint32
-	TalentGroupsCount    uint8
-	ActiveTalentGroup    uint8
-	QuestBonus           uint32
-	Glyphs               [2][6]uint16
-	GlyphSlots           [6]uint32
-	GlyphsEnabled        uint32
-	DailyQuests          [playerDailyQuestsCount]uint32
-	DungeonFinderQuests  map[uint32]struct{}
-	LastDailyQuestTime   int64
-	WeeklyQuests         map[uint32]struct{}
-	MonthlyQuests        map[uint32]struct{}
-	SeasonalQuests       map[uint32]map[uint32]struct{}
-	InventorySlots       [playerInventoryCount]uint64
-	Buyback              [12]*buybackSlot
-	Stats                [5]uint32
-	BaseStats            [5]uint32
-	MeleeCrit            float32
-	RangedCrit           float32
-	OffhandCrit          float32
-	SpellCrit            [7]float32
-	SpellDamagePositive  [7]int32
-	SpellDamageNegative  [7]int32
-	BlockPercentage      float32
-	DodgePercentage      float32
-	CanParry             bool
-	ParryPercentage      float32
-	Expertise            uint32
-	OffhandExpertise     uint32
-	Armor                uint32
-	Resistances          [7]uint32
-	Block                uint32
-	AttackPower          uint32
-	RangedAttackPower    uint32
-	MinDamage            float32
-	MaxDamage            float32
-	AttackTime           uint32
-	MinOffhandDamage     float32
-	MaxOffhandDamage     float32
-	OffhandAttackTime    uint32
-	MinRangedDamage      float32
-	MaxRangedDamage      float32
-	RangedAttackTime     uint32
-	CombatRatings        [25]uint32
-	SpellPower           uint32
-	BaseSpellPower       uint32
-	SpellPenetration     uint32
-	CombatReach          float32
-	AmmoDPS              float32
-	DungeonDifficulty    uint8
-	RaidDifficulty       uint8
-	VehicleGUID          uint64
-	VehicleSeat          int8
-	TransportGUID        uint64
-	TransportX           float32
-	TransportY           float32
-	TransportZ           float32
-	TransportO           float32
-	TransportSeat        int8
-	ArenaPoints          uint32
-	ArenaTeamInfo        [21]uint32
-	TotalHonorPoints     uint32
-	TodayHonorPoints     uint32
-	YesterdayHonorPoints uint32
-	TotalKills           uint32
-	TodayKills           uint16
-	YesterdayKills       uint16
-	DrunkenState         uint16
-	FakeInebriation      uint32
+	GUID                            uint64
+	Selection                       uint64
+	PetGUID                         uint64
+	PetNumber                       uint32
+	Name                            string
+	Race                            uint8
+	Class                           uint8
+	Gender                          uint8
+	Skin                            uint8
+	Face                            uint8
+	HairStyle                       uint8
+	HairColor                       uint8
+	FacialStyle                     uint8
+	BankBagSlots                    uint8
+	RestState                       uint8
+	Level                           uint8
+	TotalPlayedTime                 uint32
+	LevelPlayedTime                 uint32
+	RestBonus                       float32
+	LogoutTime                      int64
+	LogoutResting                   bool
+	StableSlots                     uint8
+	TaxiPath                        string
+	XP                              uint32
+	Money                           uint32
+	PlayerFlags                     uint32
+	GuildID                         uint32
+	GuildRank                       uint8
+	Map                             uint32
+	InstanceID                      uint32
+	InstanceModeMask                uint32
+	X                               float32
+	Y                               float32
+	Z                               float32
+	Orientation                     float32
+	LfgEntryPointMap                uint32
+	LfgEntryPointX                  float32
+	LfgEntryPointY                  float32
+	LfgEntryPointZ                  float32
+	LfgEntryPointO                  float32
+	ExtraFlags                      uint32
+	AtLogin                         uint32
+	Zone                            uint32
+	Health                          uint32
+	MaxHealth                       uint32
+	HealthLoaded                    bool
+	repopOnLogin                    bool
+	BaseMana                        uint32
+	ItemHealthBonus                 uint32
+	ItemManaBonus                   uint32
+	Powers                          [7]uint32
+	MaxPowers                       [7]uint32
+	Cinematic                       uint32
+	Movie                           uint32
+	KnownCurrency                   uint64
+	WatchedFaction                  uint32
+	AmmoID                          uint32
+	ChosenTitle                     uint32
+	KnownTitles                     [6]uint32
+	ActionBars                      uint32
+	GrantableLevels                 uint8
+	FishingSteps                    uint8
+	PassOnGroupLoot                 bool
+	Skills                          []playerSkill
+	Spells                          []learnedSpell
+	Actions                         [144]uint32
+	Cooldowns                       []spellCooldown
+	Equipment                       string
+	SheathState                     uint8
+	PVPFlags                        uint8
+	StandFlags                      uint8
+	AuraVision                      uint8
+	TaxiMask                        [taxiMaskSize]uint32
+	QuestLog                        [playerQuestLogSlots]questLogEntry
+	MountDisplayID                  uint32
+	TransformDisplayID              uint32
+	ShapeshiftForm                  uint8
+	StandState                      uint8
+	TotemSlots                      [4]uint64
+	PlayerFieldBytes                uint32
+	SelfResSpell                    uint32
+	ExploredZones                   [playerExploredZonesCount]uint32
+	DuelArbiter                     uint64
+	DuelTeam                        uint32
+	UnitFlags                       uint32
+	HomebindMap                     uint32
+	HomebindZone                    uint32
+	HomebindX                       float32
+	HomebindY                       float32
+	HomebindZ                       float32
+	Reputations                     []playerReputation
+	Talents                         map[uint32]uint8
+	ResetTalentsCost                uint32
+	ResetTalentsTime                uint32
+	TalentGroupsCount               uint8
+	ActiveTalentGroup               uint8
+	QuestBonus                      uint32
+	Glyphs                          [2][6]uint16
+	GlyphSlots                      [6]uint32
+	GlyphsEnabled                   uint32
+	DailyQuests                     [playerDailyQuestsCount]uint32
+	DungeonFinderQuests             map[uint32]struct{}
+	LastDailyQuestTime              int64
+	WeeklyQuests                    map[uint32]struct{}
+	MonthlyQuests                   map[uint32]struct{}
+	SeasonalQuests                  map[uint32]map[uint32]struct{}
+	InventorySlots                  [playerInventoryCount]uint64
+	Buyback                         [12]*buybackSlot
+	Stats                           [5]uint32
+	BaseStats                       [5]uint32
+	MeleeCrit                       float32
+	RangedCrit                      float32
+	OffhandCrit                     float32
+	SpellCrit                       [7]float32
+	SpellDamagePositive             [7]int32
+	SpellDamageNegative             [7]int32
+	BlockPercentage                 float32
+	DodgePercentage                 float32
+	CanParry                        bool
+	ParryPercentage                 float32
+	Expertise                       uint32
+	OffhandExpertise                uint32
+	Armor                           uint32
+	Resistances                     [7]uint32
+	Block                           uint32
+	AttackPower                     uint32
+	RangedAttackPower               uint32
+	MinDamage                       float32
+	MaxDamage                       float32
+	AttackTime                      uint32
+	MinOffhandDamage                float32
+	MaxOffhandDamage                float32
+	OffhandAttackTime               uint32
+	MinRangedDamage                 float32
+	MaxRangedDamage                 float32
+	RangedAttackTime                uint32
+	ShapeshiftBaseAttackTime        uint32
+	ShapeshiftBaseOffhandAttackTime uint32
+	ShapeshiftBaseRangedAttackTime  uint32
+	CombatRatings                   [25]uint32
+	SpellPower                      uint32
+	BaseSpellPower                  uint32
+	SpellPenetration                uint32
+	CombatReach                     float32
+	AmmoDPS                         float32
+	DungeonDifficulty               uint8
+	RaidDifficulty                  uint8
+	VehicleGUID                     uint64
+	VehicleSeat                     int8
+	TransportGUID                   uint64
+	TransportX                      float32
+	TransportY                      float32
+	TransportZ                      float32
+	TransportO                      float32
+	TransportSeat                   int8
+	ArenaPoints                     uint32
+	ArenaTeamInfo                   [21]uint32
+	TotalHonorPoints                uint32
+	TodayHonorPoints                uint32
+	YesterdayHonorPoints            uint32
+	TotalKills                      uint32
+	TodayKills                      uint16
+	YesterdayKills                  uint16
+	DrunkenState                    uint16
+	FakeInebriation                 uint32
 }
 
 type playerReputation struct {
@@ -625,27 +629,41 @@ func (s *session) loadArenaTeamInfo(ctx context.Context, state *playerState) {
 }
 
 func (s *session) loadTransformDisplay(ctx context.Context, state *playerState) {
-	if s == nil || state == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+	if s == nil || state == nil {
 		return
 	}
-	for _, aura := range s.loadedAuras() {
+	var data *wotlk.Store
+	if s.server != nil {
+		data = s.server.Data
+	}
+	auras := s.loadedAuras()
+	formDisplayID := uint32(0)
+	form := uint8(0)
+	var formSpellID uint32
+	for _, aura := range auras {
+		if aura != nil && aura.AuraType == 36 && aura.MiscValue > 0 && aura.MiscValue <= 255 {
+			form, formSpellID = uint8(aura.MiscValue), aura.SpellID
+			break
+		}
+	}
+	formDisplayID = updatePlayerShapeshiftForm(state, data, form, formSpellID)
+	for _, aura := range auras {
 		if aura == nil || aura.AuraType != 56 {
 			continue
 		}
 		displayID := specialTransformDisplay(state, aura.SpellID)
+		if displayID == 0 && aura.MiscValue > 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			var dbDisplayID int64
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 16358) FROM creature_template WHERE entry = ?", aura.MiscValue).Scan(&dbDisplayID); err == nil && dbDisplayID > 0 {
+				displayID = uint32(dbDisplayID)
+			}
+		}
 		if displayID != 0 {
 			state.TransformDisplayID = displayID
 			return
 		}
-		if aura.MiscValue <= 0 {
-			continue
-		}
-		var dbDisplayID int64
-		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 16358) FROM creature_template WHERE entry = ?", aura.MiscValue).Scan(&dbDisplayID); err == nil && dbDisplayID > 0 {
-			state.TransformDisplayID = uint32(dbDisplayID)
-		}
-		return
 	}
+	state.TransformDisplayID = formDisplayID
 }
 
 func (s *session) loadMountDisplay(ctx context.Context, state *playerState) {
@@ -1997,6 +2015,9 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 		state.MaxPowers[6] = 1000
 	} else {
 		state.MaxPowers[0] = totalMana
+		if state.Class == 11 {
+			state.MaxPowers[1], state.MaxPowers[3] = 1000, 100
+		}
 		if state.Powers[0] > totalMana || (state.XP == 0 && state.Level == 1) || state.Powers[0] == 0 {
 			state.Powers[0] = totalMana
 		}
@@ -2970,7 +2991,7 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 		lvl = 80
 	}
 	values[unitFieldLevel] = uint32(lvl)
-	powerType := classPowerType(state.Class)
+	powerType := playerPowerType(&state)
 	race := state.Race
 	if race < 1 {
 		race = 1
@@ -3027,7 +3048,7 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	if s.Config.GameType == 4 || s.Config.GameType == 6 {
 		pvpFlags |= 0x01
 	}
-	values[unitFieldBytes2] = uint32(state.SheathState) | uint32(pvpFlags)<<8
+	values[unitFieldBytes2] = uint32(state.SheathState) | uint32(pvpFlags)<<8 | uint32(state.ShapeshiftForm)<<24
 	if recipient != nil {
 		if bytes2, faction, override := s.resolvePlayerGroupFactionFields(state, *recipient, values[unitFieldBytes2], partyMember, targetSelf); override {
 			values[unitFieldBytes2], values[unitFieldFaction] = bytes2, faction

@@ -201,13 +201,12 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			s.gossipClosed = true
 		} else if item.Action == 6 { // GOSSIP_OPTION_SPIRITHEALER
 			if s.isDeadOrGhost() && objectUint32OrZero(creature, "NPCFlags")&npcFlagSpiritHealer != 0 {
-				x, xOK := objectFloat32Field(creature, "X")
-				y, yOK := objectFloat32Field(creature, "Y")
-				z, zOK := objectFloat32Field(creature, "Z")
-				name, _ := creature.Fields["Name"].(string)
-				if xOK && yOK && zOK {
-					s.requestSpiritHealerResurrection(guid, name, s.player.Map, x, y, z)
+				confirm := protocol.NewBuffer(8)
+				confirm.WriteU64(guid)
+				if err := s.write(uint16(protocol.OpcodeSMSG_SPIRIT_HEALER_CONFIRM), confirm.Bytes(), true); err != nil {
+					return false
 				}
+				s.gossipClosed = true
 			}
 		} else if item.Action == 4 { // GOSSIP_OPTION_TAXIVENDOR
 			s.sendTaxiMenu(ctx, guid)

@@ -357,7 +357,7 @@ func replayPartyMemberStats(ctx context.Context, recorder *protocoltrace.Recorde
 
 func partyMemberStatsReplayState(ctx context.Context, requester, target *session) protocol.PartyMemberStatsFull {
 	tp := target.player
-	powerType := classPowerType(tp.Class)
+	powerType := playerPowerType(tp)
 	flags := groupUpdateFlagStatus | groupUpdateFlagCurHP | groupUpdateFlagMaxHP | groupUpdateFlagCurPower | groupUpdateFlagMaxPower | groupUpdateFlagLevel | groupUpdateFlagZone | groupUpdateFlagPosition | groupUpdateFlagAuras | groupUpdateFlagPetName | groupUpdateFlagPetModel | groupUpdateFlagPetAuras
 	if powerType != 0 {
 		flags |= groupUpdateFlagPowerType

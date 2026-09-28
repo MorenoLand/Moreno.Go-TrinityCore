@@ -57,7 +57,8 @@ func (s *session) luaPlayer() *scripting.Object {
 		return nil
 	}
 	state := s.player
-	fields := map[string]any{"Name": state.Name, "GUID": state.GUID, "GUIDLow": uint32(state.GUID), "MapId": state.Map, "InstanceId": state.InstanceID, "Level": state.Level, "Race": state.Race, "Class": state.Class, "Gender": state.Gender, "Team": teamForRace(state.Race), "IsGM": s.security > 0, "InWorld": true, "X": state.X, "Y": state.Y, "Z": state.Z, "Orientation": state.Orientation, "Zone": state.Zone, "Health": state.Health, "MaxHealth": state.MaxHealth, "Power": state.Powers[0], "MaxPower": state.MaxPowers[0], "PowerType": classPowerType(state.Class), "InCombat": s.attackTarget != 0 || state.UnitFlags&unitFlagInCombat != 0}
+	powerType := playerPowerType(state)
+	fields := map[string]any{"Name": state.Name, "GUID": state.GUID, "GUIDLow": uint32(state.GUID), "MapId": state.Map, "InstanceId": state.InstanceID, "Level": state.Level, "Race": state.Race, "Class": state.Class, "Gender": state.Gender, "Team": teamForRace(state.Race), "IsGM": s.security > 0, "InWorld": true, "X": state.X, "Y": state.Y, "Z": state.Z, "Orientation": state.Orientation, "Zone": state.Zone, "Health": state.Health, "MaxHealth": state.MaxHealth, "Power": state.Powers[powerType], "MaxPower": state.MaxPowers[powerType], "PowerType": powerType, "InCombat": s.attackTarget != 0 || state.UnitFlags&unitFlagInCombat != 0}
 	methods := map[string]scripting.ObjectMethod{}
 	methods["GetName"] = luaNoArgs(func() any { return state.Name })
 	methods["GetGUID"] = luaNoArgs(func() any { return state.GUID })
@@ -71,7 +72,7 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["GetClass"] = luaNoArgs(func() any { return state.Class })
 	methods["GetGender"] = luaNoArgs(func() any { return state.Gender })
 	methods["GetDbcLocale"] = luaNoArgs(func() any { return uint32(0) })
-	methods["GetPowerType"] = luaNoArgs(func() any { return classPowerType(state.Class) })
+	methods["GetPowerType"] = luaNoArgs(func() any { return playerPowerType(state) })
 	methods["GetCoinage"] = luaNoArgs(func() any { return state.Money })
 	methods["GetGuildId"] = luaNoArgs(func() any { return state.GuildID })
 	methods["GetTeam"] = luaNoArgs(func() any { return teamForRace(state.Race) })

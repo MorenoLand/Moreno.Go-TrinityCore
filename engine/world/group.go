@@ -1836,7 +1836,7 @@ func (s *session) handleRequestPartyMemberStats(ctx context.Context, payload []b
 	}
 
 	tp := targetSess.player
-	powerType := classPowerType(tp.Class)
+	powerType := playerPowerType(tp)
 	mask := groupUpdateFlagStatus | groupUpdateFlagCurHP | groupUpdateFlagMaxHP |
 		groupUpdateFlagCurPower | groupUpdateFlagMaxPower |
 		groupUpdateFlagLevel | groupUpdateFlagZone | groupUpdateFlagPosition |
