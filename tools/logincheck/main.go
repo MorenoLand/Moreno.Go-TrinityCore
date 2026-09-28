@@ -6378,8 +6378,8 @@ func runRealCharacterLoginReplay(workDir, gameDataDir string, guid, peerGUID uin
 			return err
 		}
 	}
-	var raceID, classID, cinematicBefore uint32
-	if err := stores.Characters.DB.QueryRowContext(ctx, "SELECT race, class, COALESCE(cinematic, 0) FROM characters WHERE guid = ?", guid).Scan(&raceID, &classID, &cinematicBefore); err != nil {
+	var raceID, classID, cinematicBefore, savedMapID, savedInstanceID uint32
+	if err := stores.Characters.DB.QueryRowContext(ctx, "SELECT race, class, COALESCE(cinematic, 0), map, instance_id FROM characters WHERE guid = ?", guid).Scan(&raceID, &classID, &cinematicBefore, &savedMapID, &savedInstanceID); err != nil {
 		server.Stop()
 		return fmt.Errorf("read replay character cinematic state: %w", err)
 	}
@@ -6491,12 +6491,21 @@ func runRealCharacterLoginReplay(workDir, gameDataDir string, guid, peerGUID uin
 			deltaBefore, deltaErr = normalizeRestState(deltaBefore, after, restStateBefore, restStateAfter, restBonusAfter)
 		}
 	}
-	if replayDungeonLogin {
+	automaticInstanceLogin := false
+	instanceLoginMapID := dungeonLoginMapID
+	if !replayDungeonLogin && peerGUID == 0 && savedInstanceID == 0 && stores.World.DB != nil {
+		var templateCount int
+		if err := stores.World.DB.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM instance_template WHERE map = ?", savedMapID).Scan(&templateCount); err == nil && templateCount > 0 {
+			automaticInstanceLogin = true
+			instanceLoginMapID = savedMapID
+		}
+	}
+	if replayDungeonLogin || automaticInstanceLogin {
 		if deltaErr == nil {
 			deltaErr = validateCharacterStateDeltaOptions(deltaBefore, after, petFeedSpell != 0, false, false, true)
 		}
 		if deltaErr == nil {
-			deltaErr = validateDungeonLoginInstanceBinding(context.Background(), stores.Characters.DB, guid, dungeonLoginMapID, deltaBefore, after)
+			deltaErr = validateDungeonLoginInstanceBinding(context.Background(), stores.Characters.DB, guid, instanceLoginMapID, deltaBefore, after)
 		}
 	} else if questRewardTwiceID != 0 {
 		if deltaErr == nil {
