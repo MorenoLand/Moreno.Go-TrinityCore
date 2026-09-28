@@ -4054,6 +4054,7 @@ type activeChannelState struct {
 	CastID     uint8
 	SpellID    uint32
 	TargetGUID uint64
+	TargetKey  creatureAuraKey
 	Spell      wotlk.Spell
 	DurationMs uint32
 	Remaining  time.Duration
@@ -4113,6 +4114,7 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 		CastID:     castID,
 		SpellID:    spellID,
 		TargetGUID: targetGUID,
+		TargetKey:  creatureAuraKeyForPlayer(*s.player, targetGUID),
 		Spell:      spell,
 		DurationMs: uint32(durationMs),
 		Remaining:  time.Duration(durationMs) * time.Millisecond,
@@ -4188,7 +4190,10 @@ func (s *session) interruptCurrentChannel() {
 				target.expirePlayerAura(channel.SpellID)
 			}
 		} else {
-			key := creatureAuraKeyForPlayer(*s.player, channel.TargetGUID)
+			key := channel.TargetKey
+			if key.GUID == 0 {
+				key = creatureAuraKeyForPlayer(*s.player, channel.TargetGUID)
+			}
 			s.server.auraMu.Lock()
 			_, hasAura := s.server.activeCreatureAuras[key][channel.SpellID]
 			s.server.auraMu.Unlock()
