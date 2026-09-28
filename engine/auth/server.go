@@ -56,23 +56,27 @@ type Server struct {
 	WrongPassBanType   bool
 	WrongPassLogging   bool
 	StrictVersionCheck bool
+	totpMasterKey      [crypto.AESKeySize]byte
+	hasTotpMasterKey   bool
+	totpMasterKeyError error
 	ipLocations        *iplocation.Store
 	TraceRecorder      *protocoltrace.Recorder
 }
 
 type account struct {
-	ID           uint32
-	Login        string
-	Locked       bool
-	LockCountry  string
-	LastIP       string
-	FailedLogins uint32
-	Security     uint8
-	Banned       bool
-	PermanentBan bool
-	TotpSecret   []byte
-	Salt         [crypto.SRP6SaltLength]byte
-	Verifier     [crypto.SRP6VerifierLength]byte
+	ID             uint32
+	Login          string
+	Locked         bool
+	LockCountry    string
+	LastIP         string
+	FailedLogins   uint32
+	Security       uint8
+	Banned         bool
+	PermanentBan   bool
+	TotpConfigured bool
+	TotpSecret     []byte
+	Salt           [crypto.SRP6SaltLength]byte
+	Verifier       [crypto.SRP6VerifierLength]byte
 }
 
 type buildInfo struct {
@@ -120,6 +124,7 @@ const (
 	statusProof
 	statusReconnectProof
 	statusAuthed
+	statusClosed byte = 0xff
 )
 
 func NewServer(store *database.Store, logger *slog.Logger, realmID uint32, settings ...config.Config) *Server {
@@ -132,6 +137,9 @@ func NewServer(store *database.Store, logger *slog.Logger, realmID uint32, setti
 		server.WrongPassBanType = settings[0].WrongPassBanType
 		server.WrongPassLogging = settings[0].WrongPassLogging
 		server.StrictVersionCheck = settings[0].StrictVersionCheck
+		if err := server.initializeTOTPSecrets(context.Background(), settings[0].TotpMasterSecret, settings[0].TotpOldMasterSecret); err != nil {
+			server.totpMasterKeyError = err
+		}
 		if settings[0].IPLocationFile != "" {
 			locations, err := iplocation.Load(settings[0].IPLocationFile)
 			if err != nil {
@@ -150,8 +158,49 @@ func NewServer(store *database.Store, logger *slog.Logger, realmID uint32, setti
 	return server
 }
 
+func (s *Server) StartupError() error { return s.totpMasterKeyError }
+
+func parseTOTPMasterSecret(value string) ([crypto.AESKeySize]byte, error) {
+	var key [crypto.AESKeySize]byte
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return key, nil
+	}
+	if strings.HasPrefix(strings.ToLower(value), "0x") {
+		return key, errors.New("TOTP master secret must be hexadecimal without a 0x prefix")
+	}
+	if len(value)%2 != 0 {
+		value = "0" + value
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		return key, errors.New("TOTP master secret must be hexadecimal")
+	}
+	if len(decoded) > len(key) {
+		decoded = decoded[len(decoded)-len(key):]
+	}
+	copy(key[len(key)-len(decoded):], decoded)
+	return key, nil
+}
+
+func (s *Server) decryptTOTPSecret(secret []byte) ([]byte, error) {
+	result := append([]byte(nil), secret...)
+	if s == nil || !s.hasTotpMasterKey || len(result) == 0 {
+		return result, nil
+	}
+	if err := crypto.DecryptWithTrailingIVAndTag(&result, s.totpMasterKey); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
+	if s != nil && s.totpMasterKeyError != nil {
+		_ = writePacket(conn, []byte{logonChallenge, 0, wowDBBusy})
+		s.debug("authentication server rejected invalid TOTP master secret", "error", s.totpMasterKeyError)
+		return
+	}
 	closed := make(chan struct{})
 	go func() {
 		select {
@@ -237,6 +286,7 @@ func (s *session) handleLogonChallenge(ctx context.Context) error {
 	if s.status != statusChallenge {
 		return errors.New("unexpected logon challenge")
 	}
+	s.status = statusClosed
 	build, login, osName, locale, err := readChallenge(s.conn)
 	if err != nil {
 		return err
@@ -274,6 +324,17 @@ func (s *session) handleLogonChallenge(ctx context.Context) error {
 		}
 		return writePacket(s.conn, []byte{logonChallenge, 0, result})
 	}
+	if s.server.hasTotpMasterKey && s.account.TotpConfigured {
+		totp, err := s.server.decryptTOTPSecret(s.account.TotpSecret)
+		if err != nil {
+			s.debug("logon rejected", "account", s.account.Login, "reason", "invalid stored TOTP ciphertext")
+			if writeErr := writePacket(s.conn, []byte{logonChallenge, 0, wowDBBusy}); writeErr != nil {
+				return writeErr
+			}
+			return errors.New("invalid stored TOTP secret ciphertext")
+		}
+		s.account.TotpSecret = totp
+	}
 	info, err := loadBuildInfo(ctx, s.server.Store, s.build)
 	if err != nil {
 		return err
@@ -299,7 +360,7 @@ func (s *session) handleLogonChallenge(ctx context.Context) error {
 	packet.Write(modulus[:])
 	packet.Write(s.account.Salt[:])
 	packet.Write(versionChallenge[:])
-	if len(s.account.TotpSecret) != 0 {
+	if s.account.TotpConfigured {
 		s.totpRequired = true
 		packet.WriteU8(4)
 		packet.WriteU8(1)
@@ -314,6 +375,7 @@ func (s *session) handleLogonProof(ctx context.Context) error {
 	if s.status != statusProof || s.srp == nil {
 		return errors.New("unexpected logon proof")
 	}
+	s.status = statusClosed
 	data := make([]byte, 74)
 	if _, err := io.ReadFull(s.conn, data); err != nil {
 		return err
@@ -335,12 +397,12 @@ func (s *session) handleLogonProof(ctx context.Context) error {
 		if !s.totpRequired || parseErr != nil || !crypto.ValidateTOTP(s.account.TotpSecret, uint32(token), time.Now()) {
 			s.debug("logon proof rejected", "account", s.account.Login, "reason", "invalid totp")
 			_ = writePacket(s.conn, []byte{logonProof, wowUnknownAccount, 0, 0})
-			return errors.New("invalid authentication token")
+			return nil
 		}
 	} else if s.totpRequired {
 		s.debug("logon proof rejected", "account", s.account.Login, "reason", "missing totp")
 		_ = writePacket(s.conn, []byte{logonProof, wowUnknownAccount, 0, 0})
-		return errors.New("missing authentication token")
+		return nil
 	}
 	key, ok, err := s.srp.VerifyChallengeResponse(A, clientM)
 	if err != nil {
@@ -350,12 +412,12 @@ func (s *session) handleLogonProof(ctx context.Context) error {
 		s.debug("logon proof rejected", "account", s.account.Login, "reason", "invalid srp6 proof")
 		_ = writePacket(s.conn, []byte{logonProof, wowUnknownAccount, 0, 0})
 		s.recordFailedLogin(ctx)
-		return errors.New("invalid SRP6 proof")
+		return nil
 	}
 	if !s.verifyVersionProof(A[:], data[52:72], false) {
 		s.debug("logon proof rejected", "account", s.account.Login, "reason", "invalid version proof")
 		_ = writePacket(s.conn, []byte{logonProof, wowVersionInvalid})
-		return errors.New("invalid version proof")
+		return nil
 	}
 	s.sessionKey = key
 	if err := updateAuthenticatedAccount(ctx, s.server.Store, s.account.Login, s.sessionKey[:], s.remoteIP, s.locale, s.os); err != nil {
@@ -407,6 +469,7 @@ func (s *session) handleReconnectChallenge(ctx context.Context) error {
 	if s.status != statusChallenge {
 		return errors.New("unexpected reconnect challenge")
 	}
+	s.status = statusClosed
 	build, login, osName, locale, err := readChallenge(s.conn)
 	if err != nil {
 		return err
@@ -457,6 +520,7 @@ func (s *session) handleReconnectProof(ctx context.Context) error {
 	if s.status != statusReconnectProof {
 		return errors.New("unexpected reconnect proof")
 	}
+	s.status = statusClosed
 	data := make([]byte, 57)
 	if _, err := io.ReadFull(s.conn, data); err != nil {
 		return err
@@ -477,7 +541,7 @@ func (s *session) handleReconnectProof(ctx context.Context) error {
 	if !s.verifyVersionProof(r1[:], data[36:56], true) {
 		s.debug("reconnect proof rejected", "account", s.account.Login, "reason", "invalid version proof")
 		_ = writePacket(s.conn, []byte{reconnectProof, wowVersionInvalid})
-		return errors.New("invalid reconnect version proof")
+		return nil
 	}
 	if err := updateAuthenticatedAccount(ctx, s.server.Store, s.account.Login, s.sessionKey[:], s.remoteIP, s.locale, s.os); err != nil {
 		return err
@@ -514,7 +578,7 @@ func (s *session) handleRealmList(ctx context.Context) error {
 	count := 0
 	for _, r := range realms {
 		build, exists := builds[r.Build]
-		compatible := (s.postBC && r.Build == s.build) || (!s.postBC && r.Build <= preBCMaxBuild)
+		compatible := realmBuildCompatible(s.postBC, s.build, r.Build, exists)
 		if !compatible && !exists {
 			continue
 		}
@@ -577,6 +641,13 @@ func (s *session) handleRealmList(ctx context.Context) error {
 	return writePacket(s.conn, header.Bytes())
 }
 
+func realmBuildCompatible(postBC bool, clientBuild, realmBuild uint32, buildInfoAvailable bool) bool {
+	if postBC {
+		return realmBuild == clientBuild
+	}
+	return !(realmBuild <= preBCMaxBuild && buildInfoAvailable)
+}
+
 func loadAccount(ctx context.Context, store *database.Store, login, remoteIP string) (*account, error) {
 	row, err := store.QueryRowStatement(ctx, "LOGIN_SEL_LOGONCHALLENGE", login)
 	if err != nil {
@@ -597,6 +668,7 @@ func loadAccount(ctx context.Context, store *database.Store, login, remoteIP str
 	result.Banned = banned != 0
 	result.PermanentBan = permanent != 0
 	result.Security = uint8(security)
+	result.TotpConfigured = totp != nil
 	result.TotpSecret = totp
 	result.Login = strings.ToUpper(result.Login)
 	if len(salt) != crypto.SRP6SaltLength || len(verifier) != crypto.SRP6VerifierLength {

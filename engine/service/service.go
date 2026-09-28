@@ -41,6 +41,9 @@ func RunCombined(ctx context.Context, c config.Config, logger *slog.Logger) erro
 	}
 	defer stores.Close()
 	authServer := auth.NewServer(stores.Auth, logger, c.RealmID, c)
+	if err := authServer.StartupError(); err != nil {
+		return fmt.Errorf("authserver initialization: %w", err)
+	}
 	worldServer := world.NewServer(stores, logger, c.RealmID, c)
 	traceRecorder, err := configureProtocolTrace(c.ProtocolTracePath)
 	if err != nil {
@@ -83,6 +86,9 @@ func RunSingle(ctx context.Context, c config.Config, kind Kind, logger *slog.Log
 	defer cancel()
 	if kind == Auth {
 		server := auth.NewServer(stores.Auth, logger, c.RealmID, c)
+		if err := server.StartupError(); err != nil {
+			return fmt.Errorf("authserver initialization: %w", err)
+		}
 		traceRecorder, err := configureProtocolTrace(c.ProtocolTracePath)
 		if err != nil {
 			return err
