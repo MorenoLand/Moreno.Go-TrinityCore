@@ -2788,6 +2788,20 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 			}
 		}
 	}
+	unarmedValue, fistWeaponsIndex := uint16(0), -1
+	for index, skill := range skills {
+		if skill.Skill == 162 {
+			unarmedValue = skill.Value
+		}
+		if skill.Skill == 473 {
+			fistWeaponsIndex = index
+		}
+	}
+	if fistWeaponsIndex >= 0 {
+		skills[fistWeaponsIndex].Step = 0
+		skills[fistWeaponsIndex].Value = unarmedValue
+		skills[fistWeaponsIndex].Max = uint16(state.Level) * 5
+	}
 	state.Skills = skills
 	return nil
 }
