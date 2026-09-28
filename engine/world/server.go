@@ -41,6 +41,7 @@ const (
 	authUnknownAccount  byte   = 21
 	authFailed          byte   = 13
 	authBanned          byte   = 28
+	authUnavailable     byte   = 16
 	loginServerNotFound byte   = 26
 )
 
@@ -60,6 +61,7 @@ type Server struct {
 	worldTimeStartedAt        time.Time
 	TraceRecorder             *protocoltrace.Recorder
 	RealmID                   uint32
+	allowedSecurityLevel      uint8
 	Config                    config.Config
 	clientCacheVersion        uint32
 	Features                  *Features
@@ -411,6 +413,9 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 func (s *Server) Initialize(ctx context.Context) error {
 	s.warnMissingGameData()
 	s.clearOnlineState(ctx)
+	if err := s.loadPlayerSecurityLimit(ctx); err != nil {
+		return err
+	}
 	if err := s.initializeCharacterGUIDs(ctx); err != nil {
 		return err
 	}
@@ -428,6 +433,25 @@ func (s *Server) Initialize(ctx context.Context) error {
 	s.loadVehicleAccessories(ctx)
 	s.loadContinentTransports(ctx)
 	go s.runWorldTick(ctx)
+	return nil
+}
+
+func (s *Server) loadPlayerSecurityLimit(ctx context.Context) error {
+	if s == nil || s.AuthStore == nil || s.AuthStore.DB == nil {
+		return nil
+	}
+	var level uint8
+	err := s.AuthStore.DB.QueryRowContext(ctx, "SELECT allowedSecurityLevel FROM realmlist WHERE id = ?", s.RealmID).Scan(&level)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if level >= 4 {
+		level = 0
+	}
+	s.allowedSecurityLevel = level
 	return nil
 }
 
@@ -3128,6 +3152,11 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	if banned, err := accountBanned(ctx, s.server.AuthStore, account.ID); err != nil || banned {
 		s.debug("world authentication rejected", "account", debugAccount, "reason", "account ban")
 		_ = s.write(opcodeAuthResponse, []byte{authBanned}, true)
+		return false
+	}
+	if s.server.allowedSecurityLevel > 0 && account.Security < s.server.allowedSecurityLevel {
+		s.debug("world authentication rejected", "account", debugAccount, "reason", "security level below realm limit", "security", account.Security, "required", s.server.allowedSecurityLevel)
+		_ = s.write(opcodeAuthResponse, []byte{authUnavailable}, true)
 		return false
 	}
 	account.MuteTime = normalizeLoginMuteTime(ctx, s.server.AuthStore.DB, account.ID, account.MuteTime)
