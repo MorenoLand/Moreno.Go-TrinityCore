@@ -137,6 +137,13 @@ func (s *session) sendPlayerUpdate() {
 		fields[playerVisibleItemStart+slot*2] = itemID
 		fields[playerVisibleItemStart+slot*2+1] = enchant
 	}
+	s.sendPlayerValuesUpdate(fields)
+}
+
+func (s *session) sendPlayerValuesUpdate(fields map[int]uint32) {
+	if s == nil || s.server == nil || s.player == nil || len(fields) == 0 {
+		return
+	}
 	packet, err := s.server.buildPlayerValuesUpdateForTarget(s.playerGUID, fields, true)
 	if err != nil || packet == nil {
 		return
@@ -452,11 +459,13 @@ func (s *session) handleCmdCheat(ctx context.Context, args []string) bool {
 	if enabled {
 		explored = ^uint32(0)
 	}
+	fields := make(map[int]uint32, len(s.player.ExploredZones))
 	for index := range s.player.ExploredZones {
 		s.player.ExploredZones[index] = explored
+		fields[playerExploredZonesStart+index] = explored
 	}
 	s.persistExploredZones(ctx)
-	s.sendPlayerUpdate()
+	s.sendPlayerValuesUpdate(fields)
 	if enabled {
 		s.sendSysMessage("All areas explored.")
 	} else {

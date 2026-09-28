@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -1251,16 +1253,16 @@ func (s *Server) creditHonorableKill(killer, victim *session) {
 	killer.creditPlayerKillQuest(context.Background())
 }
 
-// exploreZone mirrors Player::UpdateZone exploration (Player.cpp:6565): set
+// exploreArea mirrors Player::CheckAreaExploreAndOutdoor (Player.cpp:6537): set
 // the AreaTable AreaBit in the PLAYER_EXPLORED_ZONES bitfield (persisted to
 // characters.exploredZones), push the changed field to the client, and
-// complete every EXPLORE_AREA criteria whose WorldMapOverlay covers the zone
+// complete every EXPLORE_AREA criteria whose WorldMapOverlay covers the area
 // (AchievementMgr.cpp:1881 match semantics).
-func (s *session) exploreZone(ctx context.Context, zoneID uint32) {
-	if s.player == nil || s.server == nil || s.server.Data == nil || zoneID == 0 {
+func (s *session) exploreArea(ctx context.Context, areaID uint32) {
+	if s.player == nil || s.server == nil || s.server.Data == nil || areaID == 0 || s.player.Health == 0 || s.player.PlayerFlags&playerFlagGhost != 0 || s.player.TaxiPath != "" {
 		return
 	}
-	areaBit, explorationLevel, found, err := s.server.Data.AreaTableInfo(zoneID)
+	areaBit, explorationLevel, found, err := s.server.Data.AreaTableInfo(areaID)
 	if err != nil || !found || areaBit < 0 {
 		return
 	}
@@ -1275,12 +1277,12 @@ func (s *session) exploreZone(ctx context.Context, zoneID uint32) {
 	}
 	s.player.ExploredZones[offset] |= mask
 	s.persistExploredZones(ctx)
+	s.sendPlayerValuesUpdate(map[int]uint32{playerExploredZonesStart + int(offset): s.player.ExploredZones[offset]})
 
-	// Push the changed explored-zones field to the client.
 	s.server.loadAchievementIndex()
 	achievementIndex.mu.RLock()
-	criteriaIDs := make([]uint32, len(achievementIndex.exploreByZone[zoneID]))
-	copy(criteriaIDs, achievementIndex.exploreByZone[zoneID])
+	criteriaIDs := make([]uint32, len(achievementIndex.exploreByZone[areaID]))
+	copy(criteriaIDs, achievementIndex.exploreByZone[areaID])
 	achievementIndex.mu.RUnlock()
 
 	if s.earnedAchievements == nil {
@@ -1324,11 +1326,11 @@ func (s *session) exploreZone(ctx context.Context, zoneID uint32) {
 			s.grantXP(ctx, xp)
 		}
 		packet := protocol.NewBuffer(8)
-		packet.WriteU32(zoneID)
+		packet.WriteU32(areaID)
 		packet.WriteU32(xp)
 		_ = s.write(uint16(protocol.OpcodeSMSG_EXPLORATION_EXPERIENCE), packet.Bytes(), true)
 	}
-	s.debug("zone explored", "account", s.accountName, "zone", zoneID, "criteria", len(criteriaIDs))
+	s.debug("area explored", "account", s.accountName, "area", areaID, "criteria", len(criteriaIDs))
 }
 
 func (s *session) calculateExplorationXP(ctx context.Context, explorationLevel int32) uint32 {
@@ -1358,61 +1360,46 @@ func (s *session) calculateExplorationXP(ctx context.Context, explorationLevel i
 	return uint32(float64(baseXP) * s.server.Config.XPRateExplore)
 }
 
-// persistExploredZones writes the explored bitfield as hex to characters.
+func serializeExploredZones(values [playerExploredZonesCount]uint32) string {
+	parts := make([]string, len(values))
+	for i, value := range values {
+		parts[i] = strconv.FormatUint(uint64(value), 10)
+	}
+	return strings.Join(parts, " ") + " "
+}
+
+// persistExploredZones writes the explored bitfield in TrinityCore's decimal-list format.
 func (s *session) persistExploredZones(ctx context.Context) {
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return
 	}
-	blob := make([]byte, playerExploredZonesCount*4)
-	for i, value := range s.player.ExploredZones {
-		blob[i*4] = byte(value)
-		blob[i*4+1] = byte(value >> 8)
-		blob[i*4+2] = byte(value >> 16)
-		blob[i*4+3] = byte(value >> 24)
-	}
-	const hexDigits = "0123456789abcdef"
-	hex := make([]byte, len(blob)*2)
-	for i, b := range blob {
-		hex[i*2] = hexDigits[b>>4]
-		hex[i*2+1] = hexDigits[b&0x0F]
-	}
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
-		"UPDATE characters SET exploredZones = ? WHERE guid = ?", string(hex), s.playerGUID)
+		"UPDATE characters SET exploredZones = ? WHERE guid = ?", serializeExploredZones(s.player.ExploredZones), s.playerGUID)
 }
 
-// loadExploredZones reads the hex blob back into the bitfield at login.
+// loadExploredZones reads the TrinityCore decimal-list bitfield at login.
 func (s *session) loadExploredZones(ctx context.Context) {
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.player == nil {
 		return
 	}
-	var hex string
+	var serialized string
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
-		"SELECT COALESCE(exploredZones, '') FROM characters WHERE guid = ?", s.playerGUID).Scan(&hex); err != nil {
+		"SELECT COALESCE(exploredZones, '') FROM characters WHERE guid = ?", s.playerGUID).Scan(&serialized); err != nil {
 		return
 	}
-	if len(hex) == 0 {
+	if serialized == "" {
 		return
 	}
-	for i := 0; i < playerExploredZonesCount && (i*2+1) < len(hex); i++ {
-		hi := hexDigitValue(hex[i*2])
-		lo := hexDigitValue(hex[i*2+1])
-		if hi < 0 || lo < 0 {
-			return // corrupt blob: keep zero state
+	for i, field := range strings.Fields(serialized) {
+		if i >= playerExploredZonesCount {
+			return
 		}
-		s.player.ExploredZones[i] = uint32(hi)<<4 | uint32(lo)
+		value, err := strconv.ParseUint(field, 10, 32)
+		if err != nil {
+			return
+		}
+		s.player.ExploredZones[i] = uint32(value)
 	}
-}
-
-func hexDigitValue(c byte) int {
-	switch {
-	case c >= '0' && c <= '9':
-		return int(c - '0')
-	case c >= 'a' && c <= 'f':
-		return int(c-'a') + 10
-	case c >= 'A' && c <= 'F':
-		return int(c-'A') + 10
-	}
-	return -1
 }
 
 // creditBattlegroundWin mirrors the reference WIN_BG criteria credit at

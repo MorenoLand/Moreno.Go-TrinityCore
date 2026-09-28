@@ -346,10 +346,10 @@ func (s *session) updateZoneAndArea(ctx context.Context, force bool) {
 		}
 		s.server.ensureZoneWeather(ctx, s.player.Zone, s)
 		s.updateLocalChannels(s.player.Zone)
-		s.exploreZone(ctx, s.player.Zone)
 		s.sendLoadedGroup()
 		_ = s.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), buildInitWorldStates(*s.player, areaID, s.server.Config.ArenaSeasonID, s.server.Config.ArenaSeasonInProgress), true)
 	}
+	s.exploreArea(ctx, areaID)
 	if oldZone != s.player.Zone || oldArea != areaID {
 		s.triggerPlayerEvent(ctx, scripting.PlayerEventUpdateZone, s.luaPlayer(), s.player.Zone, areaID)
 	}
