@@ -80,6 +80,10 @@ func (s *session) resolveWorldportInstance(ctx context.Context, state playerStat
 		active := s.hasActiveWorldportInstance(state.Map, state.InstanceID)
 		if savedMap == int64(state.Map) && ((characterBound && characterInstanceID == int64(state.InstanceID)) || active) {
 			selection.InstanceID, selection.Difficulty = state.InstanceID, uint32(savedDifficulty)
+			selection.GroupPermanent, err = s.groupInstancePermanent(ctx, selection)
+			if err != nil {
+				return selection, false, err
+			}
 			return selection, true, nil
 		}
 		if errors.Is(err, sql.ErrNoRows) && active {
@@ -141,6 +145,26 @@ func (s *session) resolveWorldportInstance(ctx context.Context, state playerStat
 		selection.BindPlayer = true
 	}
 	return selection, true, nil
+}
+
+func (s *session) groupInstancePermanent(ctx context.Context, selection worldportInstanceSelection) (bool, error) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || selection.InstanceID == 0 {
+		return false, nil
+	}
+	group := s.server.findGroupByID(s.groupID)
+	if group == nil || group.DBID == 0 {
+		return false, nil
+	}
+	var permanent int64
+	err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT gi.permanent FROM group_instance AS gi JOIN instance AS i ON i.id = gi.instance
+		WHERE gi.guid = ? AND i.id = ? AND i.map = ? AND i.difficulty = ? LIMIT 1`, group.DBID, selection.InstanceID, selection.MapID, selection.Difficulty).Scan(&permanent)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return permanent != 0, nil
 }
 
 func (s *Server) reserveWorldportInstanceID(ctx context.Context, avoid uint32) (uint32, error) {
