@@ -2685,7 +2685,18 @@ func (s *session) handlePlayerLogout() bool {
 }
 
 func (s *session) completeLogout(ctx context.Context) error {
+	return s.completeLogoutWithPacket(ctx, true)
+}
+
+func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComplete bool) error {
 	if !s.playerLoaded {
+		s.clearActiveAuras()
+		s.logoutAt = time.Time{}
+		s.logoutFlagsApplied = false
+		if s.accountID != 0 && !s.superseded && s.server != nil && s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
+			_, err := s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET online = 0 WHERE id = ?", s.accountID)
+			return err
+		}
 		return nil
 	}
 	s.worldReady.Store(false)
@@ -2707,6 +2718,7 @@ func (s *session) completeLogout(ctx context.Context) error {
 	if s.server != nil {
 		s.server.removeSessionFromGroup(s)
 		s.server.removeSessionChannels(s)
+		s.server.broadcastFriendStatus(s.playerGUID, friendsResultOffline, 0, 0, 0)
 	}
 	if s.player != nil && s.player.PetGUID != 0 {
 		s.unsummonPet(ctx, petSaveAsCurrent)
@@ -2730,8 +2742,10 @@ func (s *session) completeLogout(ctx context.Context) error {
 			firstErr = err
 		}
 	}
-	if err := s.write(uint16(protocol.OpcodeSMSG_LOGOUT_COMPLETE), nil, true); err != nil {
-		return err
+	if sendLogoutComplete {
+		if err := s.write(uint16(protocol.OpcodeSMSG_LOGOUT_COMPLETE), nil, true); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	s.playerLoaded = false
 	s.player = nil

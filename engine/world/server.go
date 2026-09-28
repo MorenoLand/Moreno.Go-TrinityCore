@@ -3473,37 +3473,11 @@ func (s *session) debug(message string, args ...any) {
 
 func (s *session) logout() {
 	ctx := context.Background()
-	s.stopSpellLifecycle()
-	s.stopTimedAchievements()
-	if s.trade != nil {
-		s.handleCancelTrade(ctx)
-	}
 	if s.duelPartner != 0 {
 		s.endDuel(false, 0, false)
 	}
-	if s.server != nil {
-		s.server.removeSessionChannels(s)
-	}
-	s.releaseActiveLoot()
-	if s.playerLoaded {
-		s.triggerLogout(ctx)
-		if s.player != nil && s.player.PetGUID != 0 {
-			s.unsummonPet(ctx, petSaveAsCurrent)
-		}
-		if err := s.savePlayerState(ctx, 0, true); err != nil {
-			s.debug("player position save failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
-			_ = s.savePlayerPosition(ctx)
-		}
-		if !s.superseded {
-			_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ACCOUNT_ONLINE", s.accountID)
-		}
-		if s.server != nil {
-			s.server.broadcastFriendStatus(s.playerGUID, friendsResultOffline, 0, 0, 0)
-		}
-	}
-	s.clearActiveAuras()
-	if s.accountID != 0 && !s.superseded {
-		_, _ = s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET online = 0 WHERE id = ?", s.accountID)
+	if err := s.completeLogoutWithPacket(ctx, false); err != nil {
+		s.debug("player disconnect cleanup failed", "account", s.accountName, "error", err)
 	}
 }
 
