@@ -502,6 +502,25 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 97), true) // SPELL_FAILED_OUT_OF_RANGE = 97
 					return true
 				}
+			} else if rangeEntry, ok, _ := s.server.Data.SpellRange(spell.RangeIndex); ok {
+				// DBC-driven range check (TC Spell::CheckRange)
+				harmful := isHarmfulSpell(spell)
+				maxRange := rangeEntry.MaxFriendly
+				minRange := rangeEntry.MinFriendly
+				if harmful {
+					maxRange = rangeEntry.MaxHostile
+					minRange = rangeEntry.MinHostile
+				}
+				if maxRange > 0 && dist > float64(maxRange) {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 97), true) // SPELL_FAILED_OUT_OF_RANGE = 97
+					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "out of range", "dist", dist, "max", maxRange)
+					return true
+				}
+				if minRange > 0 && dist < float64(minRange) {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 128), true) // SPELL_FAILED_TOO_CLOSE = 128
+					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "too close", "dist", dist, "min", minRange)
+					return true
+				}
 			}
 
 			// Positional and facing checks (TrinityCore Spell::CheckCast, Spell.cpp:5200-5300)
