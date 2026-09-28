@@ -1160,17 +1160,9 @@ func (s *session) handleItemTextQuery(ctx context.Context, payload []byte) bool 
 	var text string
 	var found bool
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT text FROM item_text WHERE id = (SELECT itemTextId FROM item_instance WHERE guid = ?) LIMIT 1", itemGUID).Scan(&text)
-		if err == nil {
-			found = true
-		} else {
-			var count int
-			_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM item_instance WHERE guid = ?", itemGUID).Scan(&count)
-			if count > 0 {
-				found = true
-				text = ""
-			}
-		}
+		err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(ii.text, '') FROM character_inventory AS ci
+			JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = ? AND ci.item = ? LIMIT 1`, s.playerGUID, itemGUID).Scan(&text)
+		found = err == nil
 	}
 
 	buf := protocol.NewBuffer(len(text) + 16)
