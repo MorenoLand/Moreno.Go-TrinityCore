@@ -497,15 +497,8 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 			state.InstanceID = 0
 		}
 	}
-	if state.ChosenTitle != 0 {
-		field := state.ChosenTitle / 32
-		bit := uint32(1) << (state.ChosenTitle % 32)
-		if int(field) >= len(state.KnownTitles) || state.KnownTitles[field]&bit == 0 {
-			state.ChosenTitle = 0
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET chosenTitle = 0 WHERE guid = ?", state.GUID)
-		}
-	}
 	s.loadRewardedQuestState(ctx, &state)
+	s.validateChosenTitle(ctx, &state)
 	s.loadArenaTeamInfo(ctx, &state)
 	_ = s.loadFishingSteps(ctx, &state)
 	s.applyOfflineRestBonus(&state)
@@ -586,6 +579,21 @@ func (s *session) loadRewardedQuestState(ctx context.Context, state *playerState
 				}
 			}
 		}
+	}
+}
+
+func (s *session) validateChosenTitle(ctx context.Context, state *playerState) {
+	if s == nil || state == nil || state.ChosenTitle == 0 {
+		return
+	}
+	field := state.ChosenTitle / 32
+	bit := uint32(1) << (state.ChosenTitle % 32)
+	if int(field) < len(state.KnownTitles) && state.KnownTitles[field]&bit != 0 {
+		return
+	}
+	state.ChosenTitle = 0
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET chosenTitle = 0 WHERE guid = ?", state.GUID)
 	}
 }
 
