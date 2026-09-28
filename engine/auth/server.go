@@ -92,6 +92,8 @@ type realm struct {
 	ID                   uint32
 	Name                 string
 	Address              string
+	LocalAddress         string
+	LocalSubnetMask      string
 	Port                 uint16
 	Icon                 uint8
 	Flags                uint32
@@ -249,7 +251,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if traced != nil {
 				traced.end()
 			}
-			return
+			continue
 		}
 		if traced != nil {
 			traced.end()
@@ -384,26 +386,6 @@ func (s *session) handleLogonProof(ctx context.Context) error {
 	var clientM [20]byte
 	copy(A[:], data[:32])
 	copy(clientM[:], data[32:52])
-	if data[73]&0x04 != 0 {
-		size := []byte{0}
-		if _, err := io.ReadFull(s.conn, size); err != nil {
-			return err
-		}
-		tokenData := make([]byte, size[0])
-		if _, err := io.ReadFull(s.conn, tokenData); err != nil {
-			return err
-		}
-		token, parseErr := strconv.ParseUint(strings.TrimSpace(string(tokenData)), 10, 32)
-		if !s.totpRequired || parseErr != nil || !crypto.ValidateTOTP(s.account.TotpSecret, uint32(token), time.Now()) {
-			s.debug("logon proof rejected", "account", s.account.Login, "reason", "invalid totp")
-			_ = writePacket(s.conn, []byte{logonProof, wowUnknownAccount, 0, 0})
-			return nil
-		}
-	} else if s.totpRequired {
-		s.debug("logon proof rejected", "account", s.account.Login, "reason", "missing totp")
-		_ = writePacket(s.conn, []byte{logonProof, wowUnknownAccount, 0, 0})
-		return nil
-	}
 	key, ok, err := s.srp.VerifyChallengeResponse(A, clientM)
 	if err != nil {
 		return err
@@ -414,23 +396,52 @@ func (s *session) handleLogonProof(ctx context.Context) error {
 		s.recordFailedLogin(ctx)
 		return nil
 	}
+	s.sessionKey = key
+	tokenSuccess := false
+	sentToken := data[73]&0x04 != 0
+	if sentToken && s.totpRequired {
+		size := []byte{0}
+		if _, err := io.ReadFull(s.conn, size); err != nil {
+			return err
+		}
+		tokenData := make([]byte, size[0])
+		if _, err := io.ReadFull(s.conn, tokenData); err != nil {
+			return err
+		}
+		tokenSuccess = crypto.ValidateTOTP(s.account.TotpSecret, uint32(atoi(string(tokenData))), time.Now())
+	} else if !sentToken && !s.totpRequired {
+		tokenSuccess = true
+	}
+	if !tokenSuccess {
+		s.debug("logon proof rejected", "account", s.account.Login, "reason", "invalid totp")
+		_ = writePacket(s.conn, []byte{logonProof, wowUnknownAccount, 0, 0})
+		return nil
+	}
 	if !s.verifyVersionProof(A[:], data[52:72], false) {
 		s.debug("logon proof rejected", "account", s.account.Login, "reason", "invalid version proof")
 		_ = writePacket(s.conn, []byte{logonProof, wowVersionInvalid})
 		return nil
 	}
-	s.sessionKey = key
 	if err := updateAuthenticatedAccount(ctx, s.server.Store, s.account.Login, s.sessionKey[:], s.remoteIP, s.locale, s.os); err != nil {
 		return err
 	}
 	m2 := crypto.SessionVerifier(A, clientM, s.sessionKey)
-	packet := protocol.NewBuffer(32)
-	packet.WriteU8(logonProof)
-	packet.WriteU8(wowSuccess)
-	packet.Write(m2[:])
-	packet.WriteU32(0x00800000)
-	packet.WriteU32(0)
-	packet.WriteU16(0)
+	var packet *protocol.Buffer
+	if s.postBC {
+		packet = protocol.NewBuffer(32)
+		packet.WriteU8(logonProof)
+		packet.WriteU8(wowSuccess)
+		packet.Write(m2[:])
+		packet.WriteU32(0x00800000)
+		packet.WriteU32(0)
+		packet.WriteU16(0)
+	} else {
+		packet = protocol.NewBuffer(26)
+		packet.WriteU8(logonProof)
+		packet.WriteU8(wowSuccess)
+		packet.Write(m2[:])
+		packet.WriteU32(0)
+	}
 	if err := writePacket(s.conn, packet.Bytes()); err != nil {
 		return err
 	}
@@ -543,9 +554,6 @@ func (s *session) handleReconnectProof(ctx context.Context) error {
 		_ = writePacket(s.conn, []byte{reconnectProof, wowVersionInvalid})
 		return nil
 	}
-	if err := updateAuthenticatedAccount(ctx, s.server.Store, s.account.Login, s.sessionKey[:], s.remoteIP, s.locale, s.os); err != nil {
-		return err
-	}
 	if err := writePacket(s.conn, []byte{reconnectProof, wowSuccess, 0, 0}); err != nil {
 		return err
 	}
@@ -562,7 +570,7 @@ func (s *session) handleRealmList(ctx context.Context) error {
 	if _, err := io.ReadFull(s.conn, padding); err != nil {
 		return err
 	}
-	realms, err := loadRealms(ctx, s.server.Store, s.server.RealmAddress)
+	realms, err := loadRealms(ctx, s.server.Store)
 	if err != nil {
 		return err
 	}
@@ -597,7 +605,11 @@ func (s *session) handleRealmList(ctx context.Context) error {
 		if r.AllowedSecurityLevel > s.account.Security {
 			lock = 1
 		}
-		address := net.JoinHostPort(r.Address, strconv.Itoa(int(r.Port)))
+		address := s.server.RealmAddress
+		if address == "" {
+			address = realmAddressForClient(r, s.remoteIP)
+		}
+		address = net.JoinHostPort(address, strconv.Itoa(int(r.Port)))
 		payload.WriteU8(r.Icon)
 		if s.postBC {
 			payload.WriteU8(lock)
@@ -775,8 +787,8 @@ func loadBuilds(ctx context.Context, store *database.Store) (map[uint32]buildInf
 	return result, rows.Err()
 }
 
-func loadRealms(ctx context.Context, store *database.Store, advertisedAddress string) ([]realm, error) {
-	rows, err := store.DB.QueryContext(ctx, "SELECT id, name, address, port, icon, flag, timezone, allowedSecurityLevel, population, gamebuild FROM realmlist ORDER BY id")
+func loadRealms(ctx context.Context, store *database.Store) ([]realm, error) {
+	rows, err := store.DB.QueryContext(ctx, "SELECT id, name, address, localAddress, localSubnetMask, port, icon, flag, timezone, allowedSecurityLevel, population, gamebuild FROM realmlist WHERE flag <> 3 ORDER BY name")
 	if err != nil {
 		return nil, err
 	}
@@ -785,18 +797,42 @@ func loadRealms(ctx context.Context, store *database.Store, advertisedAddress st
 	for rows.Next() {
 		var r realm
 		var population sql.NullFloat64
-		if err := rows.Scan(&r.ID, &r.Name, &r.Address, &r.Port, &r.Icon, &r.Flags, &r.Timezone, &r.AllowedSecurityLevel, &population, &r.Build); err != nil {
+		if err := rows.Scan(&r.ID, &r.Name, &r.Address, &r.LocalAddress, &r.LocalSubnetMask, &r.Port, &r.Icon, &r.Flags, &r.Timezone, &r.AllowedSecurityLevel, &population, &r.Build); err != nil {
 			return nil, err
 		}
 		if population.Valid {
 			r.Population = float32(population.Float64)
 		}
-		if advertisedAddress != "" {
-			r.Address = advertisedAddress
-		}
 		result = append(result, r)
 	}
 	return result, rows.Err()
+}
+
+func realmAddressForClient(r realm, clientIP string) string {
+	client := net.ParseIP(clientIP)
+	local := net.ParseIP(r.LocalAddress)
+	external := net.ParseIP(r.Address)
+	if client != nil && client.IsLoopback() {
+		if (local != nil && local.IsLoopback()) || (external != nil && external.IsLoopback()) {
+			return clientIP
+		}
+		if r.LocalAddress != "" {
+			return r.LocalAddress
+		}
+		return r.Address
+	}
+	if client != nil && local != nil {
+		if client4 := client.To4(); client4 != nil {
+			if local4 := local.To4(); local4 != nil {
+				if mask := net.IPMask(net.ParseIP(r.LocalSubnetMask).To4()); mask != nil {
+					if client4.Mask(mask).Equal(local4.Mask(mask)) {
+						return r.LocalAddress
+					}
+				}
+			}
+		}
+	}
+	return r.Address
 }
 
 func loadCharacterCounts(ctx context.Context, store *database.Store, accountID uint32) (map[uint32]int64, error) {
@@ -834,7 +870,7 @@ func readChallenge(conn net.Conn) (uint32, string, string, uint8, error) {
 		return 0, "", "", 0, err
 	}
 	size := binary.LittleEndian.Uint16(prefix[1:])
-	if size < 30 || size > 46 {
+	if size < 30 || size > 47 {
 		return 0, "", "", 0, errors.New("invalid logon challenge size")
 	}
 	body := make([]byte, size)
@@ -852,11 +888,33 @@ func readChallenge(conn net.Conn) (uint32, string, string, uint8, error) {
 }
 
 func reverseCode(value string) string {
+	value = strings.TrimRight(value, "\x00")
 	runes := []rune(value)
 	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
 		runes[i], runes[j] = runes[j], runes[i]
 	}
-	return strings.TrimRight(string(runes), "\x00")
+	return string(runes)
+}
+
+func atoi(s string) int {
+	i := 0
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r' || s[i] == '\f' || s[i] == '\v') {
+		i++
+	}
+	neg := false
+	if i < len(s) && (s[i] == '+' || s[i] == '-') {
+		neg = s[i] == '-'
+		i++
+	}
+	n := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		n = n*10 + int(s[i]-'0')
+		i++
+	}
+	if neg {
+		n = -n
+	}
+	return n
 }
 
 func localeID(value string) uint8 {

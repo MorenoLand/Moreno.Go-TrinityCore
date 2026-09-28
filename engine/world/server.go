@@ -3164,9 +3164,6 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	}
 	account.MuteTime = normalizeLoginMuteTime(ctx, s.server.AuthStore.DB, account.ID, account.MuteTime)
 	s.server.kickDuplicateAccountSessions(account.ID, s)
-	if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_ONLINE", account.ID); err != nil {
-		return false
-	}
 	if _, err := s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET last_ip = ? WHERE id = ?", remoteAddress(s.conn), account.ID); err != nil {
 		return false
 	}
@@ -3455,16 +3452,16 @@ func loadAccount(ctx context.Context, store *database.Store, username string, re
 	var result account
 	var locked int64
 	var expansion sql.NullInt64
-	query := "SELECT id, session_key_auth, last_ip, locked, lock_country, os, mutetime, expansion FROM account WHERE username = ? LIMIT 1"
+	query := "SELECT id, session_key_auth, last_ip, locked, lock_country, os, mutetime, expansion FROM account WHERE username = ? AND session_key_auth IS NOT NULL LIMIT 1"
 	if store.Backend == database.BackendSQLite {
-		query = "SELECT id, session_key_auth, last_ip, locked, lock_country, os, mutetime, expansion FROM account WHERE UPPER(username) = UPPER(?) LIMIT 1"
+		query = "SELECT id, session_key_auth, last_ip, locked, lock_country, os, mutetime, expansion FROM account WHERE UPPER(username) = UPPER(?) AND session_key_auth IS NOT NULL LIMIT 1"
 	}
 	var muteTime sql.NullInt64
 	err := store.DB.QueryRowContext(ctx, query, username).Scan(&result.ID, &result.SessionKey, &result.LastIP, &locked, &result.LockCountry, &result.OS, &muteTime, &expansion)
 	if err != nil {
-		fallbackQuery := "SELECT id, session_key_auth, last_ip, locked, lock_country, os FROM account WHERE username = ? LIMIT 1"
+		fallbackQuery := "SELECT id, session_key_auth, last_ip, locked, lock_country, os FROM account WHERE username = ? AND session_key_auth IS NOT NULL LIMIT 1"
 		if store.Backend == database.BackendSQLite {
-			fallbackQuery = "SELECT id, session_key_auth, last_ip, locked, lock_country, os FROM account WHERE UPPER(username) = UPPER(?) LIMIT 1"
+			fallbackQuery = "SELECT id, session_key_auth, last_ip, locked, lock_country, os FROM account WHERE UPPER(username) = UPPER(?) AND session_key_auth IS NOT NULL LIMIT 1"
 		}
 		err = store.DB.QueryRowContext(ctx, fallbackQuery, username).Scan(&result.ID, &result.SessionKey, &result.LastIP, &locked, &result.LockCountry, &result.OS)
 		if errors.Is(err, sql.ErrNoRows) {
