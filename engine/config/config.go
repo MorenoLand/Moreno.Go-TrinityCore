@@ -14,6 +14,7 @@ type Config struct {
 	Backend                                 string
 	DataDir                                 string
 	GameDataDir                             string
+	IPLocationFile                          string
 	SchemaDir                               string
 	UpdatesEnableDatabases                  uint32
 	UpdatesAutoSetup                        bool
@@ -421,6 +422,8 @@ func (c *Config) set(key, value string) error {
 		c.DataDir = value
 	case "GameDataDir":
 		c.GameDataDir = value
+	case "IPLocationFile":
+		c.IPLocationFile = value
 	case "SchemaDir":
 		c.SchemaDir = value
 	case "Updates.EnableDatabases":

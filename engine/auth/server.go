@@ -55,6 +55,7 @@ type Server struct {
 	WrongPassBanType   bool
 	WrongPassLogging   bool
 	StrictVersionCheck bool
+	ipLocations        []ipLocationRange
 	TraceRecorder      *protocoltrace.Recorder
 }
 
@@ -130,6 +131,16 @@ func NewServer(store *database.Store, logger *slog.Logger, realmID uint32, setti
 		server.WrongPassBanType = settings[0].WrongPassBanType
 		server.WrongPassLogging = settings[0].WrongPassLogging
 		server.StrictVersionCheck = settings[0].StrictVersionCheck
+		if settings[0].IPLocationFile != "" {
+			locations, err := loadIPLocationFile(settings[0].IPLocationFile)
+			if err != nil {
+				if logger != nil {
+					logger.Error("IP location file load failed", "path", settings[0].IPLocationFile, "error", err)
+				}
+			} else {
+				server.ipLocations = locations
+			}
+		}
 	}
 	if address == "" && store.Backend == database.BackendSQLite {
 		address = "127.0.0.1"
@@ -248,6 +259,11 @@ func (s *session) handleLogonChallenge(ctx context.Context) error {
 	if s.account.Locked && s.account.LastIP != s.remoteIP {
 		s.debug("logon rejected", "account", s.login, "reason", "ip lock")
 		return writePacket(s.conn, []byte{logonChallenge, 0, wowLockedEnforced})
+	}
+	country := s.server.countryForIP(s.remoteIP)
+	if countryLockMismatch(s.account.Locked, s.account.LockCountry, country) {
+		s.debug("logon rejected", "account", s.login, "reason", "country lock", "country", country)
+		return writePacket(s.conn, []byte{logonChallenge, 0, wowUnlockableLock})
 	}
 	if s.account.Banned {
 		s.debug("logon rejected", "account", s.login, "reason", "account ban", "permanent", s.account.PermanentBan)

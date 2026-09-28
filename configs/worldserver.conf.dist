@@ -5,6 +5,7 @@
 
 Database.Backend = "sqlite"
 GameDataDir = "data"
+IPLocationFile = ""
 SchemaDir = "sql"
 AuthDatabaseFile = "auth.db"
 CharactersDatabaseFile = "characters.db"
