@@ -2587,6 +2587,19 @@ func (s *session) canFreeMoveForLogout(ignoreLogoutLock bool) bool {
 	return !s.rooted && s.player.UnitFlags&unitFlagStunned == 0
 }
 
+func playerLogoutDecision(inCombat, resting, inFlight, instantPermission, falling, dueling bool) (uint32, bool) {
+	instant := (resting && !inCombat) || inFlight || instantPermission
+	reason := uint32(0)
+	if inCombat && !resting {
+		reason = 1
+	} else if falling {
+		reason = 3
+	} else if dueling {
+		reason = 2
+	}
+	return reason, instant
+}
+
 func (s *session) handleLogoutRequest(ctx context.Context) bool {
 	if !s.playerLoaded {
 		return true
@@ -2603,23 +2616,19 @@ func (s *session) handleLogoutRequest(ctx context.Context) bool {
 			instantLogoutPermission = false
 		}
 	}
-	reason := uint32(0)
-	if inCombat && !resting {
-		reason = 1 // ERR_LOGOUT_IN_COMBAT
-	} else if s.isFalling {
-		reason = 3 // ERR_LOGOUT_FAILED_FALLING
-	} else if s.duelPartner != 0 || s.hasAura(9454) {
-		reason = 2 // ERR_LOGOUT_FAILED_DUEL
-	}
+	reason, instant := playerLogoutDecision(inCombat, resting, s.inFlight, instantLogoutPermission, s.isFalling, s.duelPartner != 0 || s.hasAura(9454))
 	if reason != 0 {
 		s.logoutAt = time.Time{}
 		response := protocol.NewBuffer(5)
 		response.WriteU32(reason)
-		response.WriteU8(0)
+		if instant {
+			response.WriteU8(1)
+		} else {
+			response.WriteU8(0)
+		}
 		_ = s.write(uint16(protocol.OpcodeSMSG_LOGOUT_RESPONSE), response.Bytes(), true)
 		return true
 	}
-	instant := (resting && !inCombat) || instantLogoutPermission || s.inFlight
 	response := protocol.NewBuffer(5)
 	response.WriteU32(0) // reason 0 = OK
 	if instant {
