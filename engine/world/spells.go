@@ -774,6 +774,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				continue
 			}
 			switch eff.Effect {
+			case 1: // SPELL_EFFECT_INSTAKILL
+				damageEffectSeen = true
+				for _, effectTarget := range hitTargets {
+					if effectTarget != 0 {
+						s.executeSpellInstantKill(effCtx, effectTarget, spellID)
+					}
+				}
 			case 2, 17, 31, 58, 87: // Damage effects (School damage, Weapon damage, etc.)
 				damageEffectSeen = true
 				damage := uint32(eff.BasePoints + 1)
@@ -1099,7 +1106,30 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 	s.executeDirectSpellDamage(ctx, targetGUID, spellID, damage, schoolMask)
 }
 
+func (s *session) executeSpellInstantKill(ctx context.Context, targetGUID uint64, spellID uint32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	target, ok := s.getCombatTarget(ctx, targetGUID)
+	if !ok || target.Health == 0 {
+		return
+	}
+	packet := protocol.NewBuffer(20)
+	packet.WriteU64(s.playerGUID)
+	packet.WriteU64(targetGUID)
+	packet.WriteU32(spellID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLINSTAKILLLOG), packet.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToInstance(target.Map, target.InstanceID, uint16(protocol.OpcodeSMSG_SPELLINSTAKILLLOG), packet.Bytes(), s)
+	}
+	s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, target.Health, 1, true)
+}
+
 func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint64, spellID, damage uint32, schoolMask uint8) {
+	s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false)
+}
+
+func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetGUID uint64, spellID, damage uint32, schoolMask uint8, instantKill bool) {
 	if ctx == nil || ctx.Err() != nil {
 		ctx = context.Background()
 	}
@@ -1116,7 +1146,7 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 		return
 	}
 	isHit := true
-	if targetGUID != s.playerGUID {
+	if targetGUID != s.playerGUID && !instantKill {
 		isHit = s.rollSpellHit(target.Level, isPlayerVictim)
 	}
 	hitInfo := uint32(0)
@@ -1135,7 +1165,7 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 				spellKnown = true
 			}
 		}
-		if spellKnown && spellID != 31117 && spellID != 64085 {
+		if !instantKill && spellKnown && spellID != 31117 && spellID != 64085 {
 			crit = s.rollSpellCrit(target.GUID, schoolMask)
 		}
 		if crit {
@@ -1153,12 +1183,15 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 			hitInfo = 0x02 // SPELL_HIT_TYPE_CRIT
 		}
 
-		if schoolMask > 1 && s.player != nil && s.player.Level > 0 {
+		if !instantKill && schoolMask > 1 && s.player != nil && s.player.Level > 0 {
 			resIdx := schoolMaskToResistanceIndex(schoolMask)
 			victimRes := target.Resistances[resIdx]
 			resisted, damage = calcMagicSpellResistance(damage, schoolMask, victimRes, s.player.Level, target.Level, s.player.SpellPenetration)
 		}
 
+		if instantKill {
+			damage, hitInfo, resisted, absorbed = target.Health, 0, 0, 0
+		}
 		if isPlayerVictim {
 			if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
 				// Reference BE_SPELL_TARGET (28) and TIMED 6: being the
@@ -1167,16 +1200,18 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 				playerSess.updateAchievementCriteria(criteriaTypeBeSpellTarget, spellID, 1)
 				playerSess.updateAchievementCriteria(criteriaTypeBeSpellTarget2, spellID, 1)
 				playerSess.startTimedAchievement(timedTypeSpellTarget, spellID)
-				if playerSess.isImmuneToDamage(uint32(schoolMask)) {
+				if !instantKill && playerSess.isImmuneToDamage(uint32(schoolMask)) {
 					damage = 0
 				}
 				isCrit := (hitInfo & 0x02) != 0 // SPELL_HIT_TYPE_CRIT
-				playerSess.applyResilienceToDamage(true, &damage, isCrit, CombatRatingCritTakenSpell)
-				if damage > 0 {
+				if !instantKill {
+					playerSess.applyResilienceToDamage(true, &damage, isCrit, CombatRatingCritTakenSpell)
+				}
+				if !instantKill && damage > 0 {
 					absorbed, damage = playerSess.applyAbsorptionShields(damage, schoolMask)
 				}
 			}
-		} else if s.server != nil && damage > 0 {
+		} else if !instantKill && s.server != nil && damage > 0 {
 			absorbed, damage = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage, schoolMask)
 		}
 	}
@@ -1415,7 +1450,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			continue
 		}
 		hasExplicitEffects = true
-		if eff.Effect == 2 { // SPELL_EFFECT_SCHOOL_DAMAGE
+		if eff.Effect == 1 { // SPELL_EFFECT_INSTAKILL
+			s.executeSpellInstantKill(ctx, targetGUID, spellID)
+		} else if eff.Effect == 2 { // SPELL_EFFECT_SCHOOL_DAMAGE
 			baseDmg := uint32(eff.BasePoints + 1)
 			if baseDmg == 0 {
 				if spellID == ProcSpellFieryWeapon {
@@ -1974,7 +2011,7 @@ func isHarmfulSpell(spell wotlk.Spell) bool {
 		if eff.Effect == 0 {
 			continue
 		}
-		if eff.Effect == 2 || eff.Effect == 87 || eff.Effect == 108 || eff.Effect == 17 {
+		if eff.Effect == 1 || eff.Effect == 2 || eff.Effect == 87 || eff.Effect == 108 || eff.Effect == 17 {
 			return true
 		}
 		if eff.Effect == 6 && isHarmfulAura(eff.Aura) {
