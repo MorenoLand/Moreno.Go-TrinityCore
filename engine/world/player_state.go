@@ -457,6 +457,9 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 				if err := qRows.Scan(&questID, &status, &explored, &timer, &mob1, &mob2, &mob3, &mob4, &item1, &item2, &item3, &item4, &item5, &item6, &playerCount); err != nil {
 					continue
 				}
+				if questID <= 0 || questID > int64(^uint32(0)) || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || !characterQuestTemplateExists(ctx, s.server.WorldStore.DB, uint32(questID)) {
+					continue
+				}
 				if status == 0 {
 					continue
 				}
@@ -536,6 +539,14 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	s.restoreLoadedCorpseState(ctx, &state)
 	s.player = &state
 	return state, nil
+}
+
+func characterQuestTemplateExists(ctx context.Context, db *sql.DB, questID uint32) bool {
+	if db == nil || questID == 0 {
+		return false
+	}
+	var found uint32
+	return db.QueryRowContext(ctx, "SELECT 1 FROM quest_template WHERE ID = ?", questID).Scan(&found) == nil
 }
 
 func (s *session) loadRewardedQuestState(ctx context.Context, state *playerState) {
