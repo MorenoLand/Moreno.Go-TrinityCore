@@ -6353,11 +6353,11 @@ func runRealCharacterLoginReplay(workDir, gameDataDir string, guid, peerGUID uin
 			_, _ = stores.Characters.DB.ExecContext(context.Background(), "DELETE FROM character_pet WHERE id = ? AND owner = ?", replayCritterPetID, guid)
 		}()
 	}
-	var explorationXPBefore int64
+	var explorationXPBefore, restStateBefore int64
 	if peerGUID == 0 {
-		if err := stores.Characters.DB.QueryRowContext(ctx, "SELECT xp FROM characters WHERE guid = ?", guid).Scan(&explorationXPBefore); err != nil {
+		if err := stores.Characters.DB.QueryRowContext(ctx, "SELECT xp, restState FROM characters WHERE guid = ?", guid).Scan(&explorationXPBefore, &restStateBefore); err != nil {
 			server.Stop()
-			return fmt.Errorf("read replay character XP before login: %w", err)
+			return fmt.Errorf("read replay character XP/rest state before login: %w", err)
 		}
 	}
 	before, err := snapshotCharacterState(stores.Characters.DB, stores.World.DB, stores.Auth.DB, guid)
@@ -6435,10 +6435,11 @@ func runRealCharacterLoginReplay(workDir, gameDataDir string, guid, peerGUID uin
 	cancel()
 	server.Stop()
 	after, snapshotErr := snapshotCharacterState(stores.Characters.DB, stores.World.DB, stores.Auth.DB, guid)
-	var explorationXPAfter int64
+	var explorationXPAfter, restStateAfter int64
+	var restBonusAfter float64
 	if peerGUID == 0 {
-		if err := stores.Characters.DB.QueryRowContext(context.Background(), "SELECT xp FROM characters WHERE guid = ?", guid).Scan(&explorationXPAfter); err != nil {
-			return fmt.Errorf("read replay character XP after login: %w", err)
+		if err := stores.Characters.DB.QueryRowContext(context.Background(), "SELECT xp, restState, rest_bonus FROM characters WHERE guid = ?", guid).Scan(&explorationXPAfter, &restStateAfter, &restBonusAfter); err != nil {
+			return fmt.Errorf("read replay character XP/rest state after login: %w", err)
 		}
 	}
 	var peerAfter map[string]characterTableSnapshot
@@ -6486,6 +6487,9 @@ func runRealCharacterLoginReplay(workDir, gameDataDir string, guid, peerGUID uin
 	deltaBefore := before
 	if peerGUID == 0 {
 		deltaBefore, deltaErr = normalizeExplorationXPDelta(before, after, trace, explorationXPBefore, explorationXPAfter)
+		if deltaErr == nil {
+			deltaBefore, deltaErr = normalizeRestState(deltaBefore, after, restStateBefore, restStateAfter, restBonusAfter)
+		}
 	}
 	if replayDungeonLogin {
 		if deltaErr == nil {
@@ -6922,6 +6926,37 @@ func normalizeExplorationXPDelta(before, after map[string]characterTableSnapshot
 		columns[column] = value
 	}
 	columns["xp"] = afterCharacter.Columns["xp"]
+	beforeCharacter.Columns = columns
+	beforeCharacter.Digest = afterCharacter.Digest
+	normalized["characters"] = beforeCharacter
+	return normalized, nil
+}
+
+func normalizeRestState(before, after map[string]characterTableSnapshot, beforeRestState, afterRestState int64, restBonusAfter float64) (map[string]characterTableSnapshot, error) {
+	if beforeRestState == afterRestState {
+		return before, nil
+	}
+	expectedRestState := int64(2)
+	if restBonusAfter > 0 {
+		expectedRestState = 1
+	}
+	if (beforeRestState != 0 && beforeRestState != 2) || afterRestState != expectedRestState {
+		return nil, fmt.Errorf("unexpected login rest-state transition %d->%d", beforeRestState, afterRestState)
+	}
+	beforeCharacter, beforeOK := before["characters"]
+	afterCharacter, afterOK := after["characters"]
+	if !beforeOK || !afterOK || beforeCharacter.Rows != afterCharacter.Rows || beforeCharacter.Columns["guid"] != afterCharacter.Columns["guid"] {
+		return nil, fmt.Errorf("default rest-state initialization accompanied by character row change")
+	}
+	normalized := make(map[string]characterTableSnapshot, len(before))
+	for table, snapshot := range before {
+		normalized[table] = snapshot
+	}
+	columns := make(map[string]string, len(beforeCharacter.Columns))
+	for column, value := range beforeCharacter.Columns {
+		columns[column] = value
+	}
+	columns["restState"] = afterCharacter.Columns["restState"]
 	beforeCharacter.Columns = columns
 	beforeCharacter.Digest = afterCharacter.Digest
 	normalized["characters"] = beforeCharacter
