@@ -353,7 +353,7 @@ func (s *session) handleCmdGM(args []string) {
 	case "off":
 		if s.player != nil {
 			s.player.PlayerFlags &= ^playerFlagGM
-			s.player.ExtraFlags &= ^(playerExtraGMOn | playerExtraGMChat)
+			s.player.ExtraFlags &= ^(playerExtraGMOn | playerExtraGMInvisible | playerExtraGMChat)
 			s.gmChat = false
 			s.updateWorldReadyGM()
 			s.persistExtraFlags()
