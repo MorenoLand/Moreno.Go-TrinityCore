@@ -4181,6 +4181,22 @@ func (s *session) interruptCurrentChannel() {
 	channel.Stopped = true
 	s.castMu.Unlock()
 
+	s.expirePlayerAura(channel.SpellID)
+	if s.server != nil && s.player != nil && channel.TargetGUID != 0 {
+		if target := s.server.findSessionByGUID(channel.TargetGUID); target != nil {
+			if target != s {
+				target.expirePlayerAura(channel.SpellID)
+			}
+		} else {
+			key := creatureAuraKeyForPlayer(*s.player, channel.TargetGUID)
+			s.server.auraMu.Lock()
+			_, hasAura := s.server.activeCreatureAuras[key][channel.SpellID]
+			s.server.auraMu.Unlock()
+			if hasAura {
+				s.server.removeCreatureAura(key, channel.SpellID)
+			}
+		}
+	}
 	s.sendChannelUpdate(0)
 }
 
