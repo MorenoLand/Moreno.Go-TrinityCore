@@ -3924,6 +3924,23 @@ type itemUpdateState struct {
 	CreatePlayedTime uint32
 }
 
+func parseItemSpellCharges(raw string, defaults [5]int32) [5]uint32 {
+	var charges [5]uint32
+	for i, value := range defaults {
+		charges[i] = uint32(value)
+	}
+	fields := strings.Fields(raw)
+	if len(fields) != len(charges) {
+		return charges
+	}
+	for i, field := range fields {
+		if value, err := strconv.ParseInt(field, 10, 32); err == nil {
+			charges[i] = uint32(int32(value))
+		}
+	}
+	return charges
+}
+
 func buildItemCreateBlockForLocationWithDurability(fullGUID uint64, itemEntry, count uint32, ownerGUID, containedGUID uint64, containerSlots uint32, contents map[uint32]uint64, curDurability, maxDurability uint32) []byte {
 	return buildItemCreateBlockForLocationWithState(fullGUID, itemEntry, count, ownerGUID, containedGUID, containerSlots, contents, itemUpdateState{Durability: curDurability, MaxDurability: maxDurability})
 }
@@ -4218,6 +4235,7 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 	}
 	type itemTemplateState struct {
 		ContainerSlots, MaxDurability, ItemLevel, Quality, InventoryType, RandomSuffix uint32
+		SpellCharges                                                                   [5]int32
 	}
 	itemTemplateInfo := func(entry int64) itemTemplateState {
 		result := itemTemplateState{}
@@ -4225,12 +4243,14 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 			return result
 		}
 		var slots, maxD, itemLevel, quality, inventoryType, randomSuffix int64
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(ContainerSlots, 0), COALESCE(MaxDurability, 0), COALESCE(ItemLevel, 0), COALESCE(Quality, 0), COALESCE(InventoryType, 0), COALESCE(RandomSuffix, 0) FROM item_template WHERE entry = ?", entry).Scan(&slots, &maxD, &itemLevel, &quality, &inventoryType, &randomSuffix)
+		var charge1, charge2, charge3, charge4, charge5 int64
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(ContainerSlots, 0), COALESCE(MaxDurability, 0), COALESCE(ItemLevel, 0), COALESCE(Quality, 0), COALESCE(InventoryType, 0), COALESCE(RandomSuffix, 0), COALESCE(spellcharges_1, 0), COALESCE(spellcharges_2, 0), COALESCE(spellcharges_3, 0), COALESCE(spellcharges_4, 0), COALESCE(spellcharges_5, 0) FROM item_template WHERE entry = ?", entry).Scan(&slots, &maxD, &itemLevel, &quality, &inventoryType, &randomSuffix, &charge1, &charge2, &charge3, &charge4, &charge5)
 		if slots > 36 {
 			slots = 36
 		}
 		result.ContainerSlots, result.MaxDurability = uint32(slots), uint32(maxD)
 		result.ItemLevel, result.Quality, result.InventoryType, result.RandomSuffix = uint32(itemLevel), uint32(quality), uint32(inventoryType), uint32(randomSuffix)
+		result.SpellCharges = [5]int32{int32(charge1), int32(charge2), int32(charge3), int32(charge4), int32(charge5)}
 		return result
 	}
 	itemSuffixFactor := func(template itemTemplateState) uint32 {
@@ -4282,7 +4302,7 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 		}
 		template := itemTemplateInfo(itemEntry)
 		cSlots, maxD := template.ContainerSlots, template.MaxDurability
-		itemState := itemUpdateState{MaxDurability: maxD, DurabilityLoaded: fullState}
+		itemState := itemUpdateState{SpellCharges: parseItemSpellCharges(item.charges, template.SpellCharges), MaxDurability: maxD, DurabilityLoaded: fullState}
 		if fullState {
 			if item.creatorGUID > 0 {
 				itemState.CreatorGUID = uint64(item.creatorGUID)
@@ -4298,7 +4318,6 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 			itemState.RandomPropertyID = uint32(int32(item.randomPropertyID))
 			itemState.CreatePlayedTime = toUint32(item.playedTime)
 			itemState.Durability = toUint32(item.durability)
-			parseItemFields(item.charges, itemState.SpellCharges[:])
 			parseItemFields(item.enchantments, itemState.Enchantments[:])
 			for enchantSlot := 0; enchantSlot < 12; enchantSlot++ {
 				enchantID := itemState.Enchantments[enchantSlot*3]
