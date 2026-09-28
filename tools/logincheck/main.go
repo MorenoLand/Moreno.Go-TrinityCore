@@ -6891,10 +6891,36 @@ func validateCharacterStateDelta(before, after map[string]characterTableSnapshot
 }
 
 func normalizeExplorationXPDelta(before, after map[string]characterTableSnapshot, trace protocoltrace.Trace, beforeXP, afterXP int64) (map[string]characterTableSnapshot, error) {
-	var packetXP uint64
-	packets := 0
+	var explorationXP, loggedXP uint64
+	explorationPackets, loggedPackets := 0, 0
 	for _, event := range trace.Events {
-		if event.Direction != "server_to_client" || event.Opcode != 504 {
+		if event.Direction != "server_to_client" {
+			continue
+		}
+		if event.Opcode == 464 {
+			payload, err := trace.Payload(event)
+			if err != nil {
+				return nil, fmt.Errorf("decode logged XP packet: %w", err)
+			}
+			if len(payload) < 13 {
+				return nil, fmt.Errorf("logged XP packet size=%d, want at least 13", len(payload))
+			}
+			victimGUID := uint64(payload[0]) | uint64(payload[1])<<8 | uint64(payload[2])<<16 | uint64(payload[3])<<24 | uint64(payload[4])<<32 | uint64(payload[5])<<40 | uint64(payload[6])<<48 | uint64(payload[7])<<56
+			if victimGUID != 0 || payload[12] != 1 {
+				continue
+			}
+			if len(payload) < 14 {
+				return nil, fmt.Errorf("non-kill logged XP packet size=%d, want at least 14", len(payload))
+			}
+			amount := uint64(payload[8]) | uint64(payload[9])<<8 | uint64(payload[10])<<16 | uint64(payload[11])<<24
+			if loggedXP > ^uint64(0)-amount {
+				return nil, fmt.Errorf("logged XP packet total overflow")
+			}
+			loggedXP += amount
+			loggedPackets++
+			continue
+		}
+		if event.Opcode != 504 {
 			continue
 		}
 		payload, err := trace.Payload(event)
@@ -6906,14 +6932,17 @@ func normalizeExplorationXPDelta(before, after map[string]characterTableSnapshot
 		}
 		areaID := uint32(payload[0]) | uint32(payload[1])<<8 | uint32(payload[2])<<16 | uint32(payload[3])<<24
 		amount := uint64(payload[4]) | uint64(payload[5])<<8 | uint64(payload[6])<<16 | uint64(payload[7])<<24
-		if areaID == 0 || packetXP > ^uint64(0)-amount {
+		if areaID == 0 || explorationXP > ^uint64(0)-amount {
 			return nil, fmt.Errorf("invalid exploration-experience packet area=%d xp=%d", areaID, amount)
 		}
-		packetXP += amount
-		packets++
+		explorationXP += amount
+		explorationPackets++
 	}
-	if packets == 0 || packetXP == 0 {
+	if explorationPackets == 0 || explorationXP == 0 {
 		return before, nil
+	}
+	if loggedPackets == 0 || loggedXP < explorationXP {
+		return nil, fmt.Errorf("exploration XP total=%d has no matching SMSG_LOG_XPGAIN total (logged=%d packets=%d)", explorationXP, loggedXP, loggedPackets)
 	}
 	beforeCharacter, beforeOK := before["characters"]
 	afterCharacter, afterOK := after["characters"]
@@ -6923,8 +6952,8 @@ func normalizeExplorationXPDelta(before, after map[string]characterTableSnapshot
 	if beforeCharacter.Columns["level"] != afterCharacter.Columns["level"] {
 		return nil, fmt.Errorf("exploration XP packet accompanied by level change")
 	}
-	if beforeXP < 0 || afterXP < beforeXP || uint64(afterXP-beforeXP) != packetXP {
-		return nil, fmt.Errorf("exploration XP packet total=%d does not match character XP delta=%d", packetXP, afterXP-beforeXP)
+	if beforeXP < 0 || afterXP < beforeXP || uint64(afterXP-beforeXP) != loggedXP {
+		return nil, fmt.Errorf("SMSG_LOG_XPGAIN total=%d does not match character XP delta=%d", loggedXP, afterXP-beforeXP)
 	}
 	normalized := make(map[string]characterTableSnapshot, len(before))
 	for table, snapshot := range before {
