@@ -247,6 +247,8 @@ type session struct {
 	fatigueTimer                 int32
 	lastFatigueTick              time.Time
 	lastRegenTick                time.Time
+	lastRestBonusUpdate          time.Time
+	innTriggerID                 uint32
 	lastCastTime                 time.Time
 	lastCombatTime               time.Time
 	contestedPVPEnd              time.Time
@@ -758,6 +760,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updateContestedPvP(now)
 			s.updatePvPFlags(now)
 			s.updatePlayerRegeneration(ctx, now)
+			s.updateRestedBonuses(ctx, now)
 			s.processCreatureRespawns(ctx, now)
 			s.updatePlayerDeathTimers(ctx, now)
 			s.updatePendingInstanceBinds(ctx, diff)

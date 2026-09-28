@@ -1050,9 +1050,8 @@ func (s *session) applyZoneState(ctx context.Context, state *playerState, zoneID
 			state.PlayerFlags |= playerFlagPVPTimer
 		}
 	}
-	if zone.Flags&wotlk.AreaFlagCapital != 0 && (!hostile || sanctuary) {
-		state.PlayerFlags |= playerFlagResting
-	}
+	resting := playerRestingInZoneArea(uint8(team), zone.Flags, area.Flags, hostile, sanctuary) || s.inTavernResting()
+	s.setRestingFlag(state, resting)
 	return state.PVPFlags != oldFlags || state.PlayerFlags != oldPlayerFlags
 }
 

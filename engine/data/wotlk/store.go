@@ -294,12 +294,14 @@ func (m MapEntry) IsBattleArena() bool {
 }
 
 const (
-	AreaFlagSlaveCapital uint32 = 0x00000008 // AREA_FLAG_SLAVE_CAPITAL (DBCEnums.h:250)
-	AreaFlagArena        uint32 = 0x00000080
-	AreaFlagCapital      uint32 = 0x00000100
-	AreaFlagSanctuary    uint32 = 0x00000800
-	AreaFlagWintergrasp  uint32 = 0x01000000
-	AreaFlagWintergrasp2 uint32 = 0x08000000 // AREA_FLAG_WINTERGRASP_2 (DBCEnums.h:274)
+	AreaFlagSlaveCapital     uint32 = 0x00000008 // AREA_FLAG_SLAVE_CAPITAL (DBCEnums.h:250)
+	AreaFlagArena            uint32 = 0x00000080
+	AreaFlagCapital          uint32 = 0x00000100
+	AreaFlagSanctuary        uint32 = 0x00000800
+	AreaFlagRestZoneHorde    uint32 = 0x00400000
+	AreaFlagRestZoneAlliance uint32 = 0x00800000
+	AreaFlagWintergrasp      uint32 = 0x01000000
+	AreaFlagWintergrasp2     uint32 = 0x08000000 // AREA_FLAG_WINTERGRASP_2 (DBCEnums.h:274)
 )
 
 func NewStore(dir string) *Store {

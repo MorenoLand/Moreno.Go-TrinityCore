@@ -71,6 +71,7 @@ type Config struct {
 	XPRateQuest                             float64
 	XPRateExplore                           float64
 	XPRateBattlegroundKill                  float64
+	RestInGameRate                          float64
 	RestOfflineInTavernOrCityRate           float64
 	RestOfflineInWildernessRate             float64
 	DisableFatigue                          int
@@ -182,6 +183,7 @@ func Default() Config {
 	c.StartingGuildID = 1
 	c.RestOfflineInTavernOrCityRate = 1
 	c.RestOfflineInWildernessRate = 1
+	c.RestInGameRate = 1
 	c.FocusRate = 1
 	c.MaxGroupXPDistance = 74
 	c.XPRateKill = 1
@@ -544,6 +546,8 @@ func (c *Config) set(key, value string) error {
 		return setBool(&c.PlayerSaveStatsSaveOnlyOnLogout, key, value)
 	case "DisableFatigue":
 		return setInt(&c.DisableFatigue, key, value)
+	case "Rate.Rest.InGame":
+		return setFloat64(&c.RestInGameRate, key, value)
 	case "Rate.Rest.Offline.InTavernOrCity":
 		return setFloat64(&c.RestOfflineInTavernOrCityRate, key, value)
 	case "Rate.Rest.Offline.InWilderness":
