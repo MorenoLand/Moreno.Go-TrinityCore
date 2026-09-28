@@ -263,6 +263,9 @@ func (s *Server) FlushWeeklyArenaPoints(ctx context.Context) (totalGranted uint3
 		// Update online session if present
 		if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil {
 			sess.player.ArenaPoints = newPoints
+			if newPoints > 0 {
+				sess.addKnownCurrency(sess.player, itemArenaPointsID)
+			}
 			sess.sendPlayerUpdate()
 		}
 	}

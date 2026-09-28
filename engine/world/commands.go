@@ -62,6 +62,8 @@ func (s *session) sendPlayerUpdate() {
 		unitFieldPlayerBytes3:             uint32(s.player.Gender) | uint32(uint8(s.player.DrunkenState))<<8,
 		playerFieldFakeInebriation:        s.player.FakeInebriation,
 		unitFieldChosenTitle:              s.player.ChosenTitle,
+		unitFieldKnownCurrencies:          uint32(s.player.KnownCurrency),
+		unitFieldKnownCurrencies + 1:      uint32(s.player.KnownCurrency >> 32),
 		unitFieldSummon:                   uint32(s.player.PetGUID),
 		unitFieldSummon + 1:               uint32(s.player.PetGUID >> 32),
 		playerFieldDuelArbiter:            uint32(s.player.DuelArbiter),

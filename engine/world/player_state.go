@@ -1391,17 +1391,21 @@ func (s *session) loadInventorySlots(ctx context.Context, state *playerState) {
 	if s == nil || state == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return
 	}
-	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT bag, slot, item FROM character_inventory WHERE guid = ? ORDER BY bag, slot", state.GUID)
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.bag, ci.slot, ci.item, COALESCE(ii.itemEntry, 0)
+		FROM character_inventory AS ci LEFT JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = ? ORDER BY ci.bag, ci.slot`, state.GUID)
 	if err != nil {
 		return
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var bag, slot, item int64
-		if rows.Scan(&bag, &slot, &item) != nil || bag != 0 || slot < 0 || slot >= playerInventoryCount || item <= 0 {
+		var bag, slot, item, entry int64
+		if rows.Scan(&bag, &slot, &item, &entry) != nil || bag != 0 || slot < 0 || slot >= playerInventoryCount || item <= 0 {
 			continue
 		}
 		state.InventorySlots[slot] = uint64(item) | (uint64(0x4000) << 48)
+		if slot >= currencyTokenSlotStart && slot < currencyTokenSlotEnd {
+			s.addKnownCurrency(state, uint32(entry))
+		}
 	}
 }
 
@@ -2634,6 +2638,12 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(arenaPoints, 0), COALESCE(totalHonorPoints, 0), COALESCE(todayHonorPoints, 0), COALESCE(yesterdayHonorPoints, 0), COALESCE(totalKills, 0), COALESCE(todayKills, 0), COALESCE(yesterdayKills, 0) FROM characters WHERE guid = ?", state.GUID).Scan(&arenaPts, &totalHonor, &todayHonor, &yesterdayHonor, &totalKills, &todayKills, &yesterdayKills)
 		state.ArenaPoints = uint32(arenaPts)
 		state.TotalHonorPoints = uint32(totalHonor)
+		if state.ArenaPoints != 0 {
+			s.addKnownCurrency(state, itemArenaPointsID)
+		}
+		if state.TotalHonorPoints != 0 {
+			s.addKnownCurrency(state, itemHonorPointsID)
+		}
 		state.TodayHonorPoints = uint32(todayHonor)
 		state.YesterdayHonorPoints = uint32(yesterdayHonor)
 		state.TotalKills = uint32(totalKills)
@@ -4177,6 +4187,10 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 	}
 	items := make([]inventoryItem, 0)
 	bagItems := make(map[int64]uint64)
+	knownCurrenciesBefore := uint64(0)
+	if s.player != nil {
+		knownCurrenciesBefore = s.player.KnownCurrency
+	}
 	for rows.Next() {
 		var item inventoryItem
 		var scanErr error
@@ -4199,6 +4213,13 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
+	}
+	if mode != inventoryUpdateDurationsOnly && s.player != nil {
+		for _, item := range items {
+			if item.bag == 0 && item.slot >= currencyTokenSlotStart && item.slot < currencyTokenSlotEnd {
+				s.addKnownCurrency(s.player, uint32(item.itemEntry))
+			}
+		}
 	}
 	contents := make(map[int64]map[uint32]uint64)
 	for _, item := range items {
@@ -4318,6 +4339,10 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 	}
 	updates := protocol.NewUpdateData()
 	fields := make(map[int]uint32)
+	if s.player != nil && s.player.KnownCurrency != knownCurrenciesBefore {
+		fields[unitFieldKnownCurrencies] = uint32(s.player.KnownCurrency)
+		fields[unitFieldKnownCurrencies+1] = uint32(s.player.KnownCurrency >> 32)
+	}
 	slotItems := make(map[int]uint64)
 	type enchantDurationUpdate struct {
 		itemGUID uint64

@@ -1284,6 +1284,12 @@ func (s *session) handleItemRefund(ctx context.Context, payload []byte) bool {
 	s.player.Money += uint32(paidMoney)
 	s.player.TotalHonorPoints += extendedCost.HonorPoints
 	s.player.ArenaPoints += extendedCost.ArenaPoints
+	if s.player.TotalHonorPoints > 0 {
+		s.addKnownCurrency(s.player, itemHonorPointsID)
+	}
+	if s.player.ArenaPoints > 0 {
+		s.addKnownCurrency(s.player, itemArenaPointsID)
+	}
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ?, arenaPoints = ?, totalHonorPoints = ? WHERE guid = ?", s.player.Money, s.player.ArenaPoints, s.player.TotalHonorPoints, s.playerGUID)
 	}
