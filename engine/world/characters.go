@@ -2669,6 +2669,7 @@ func (s *session) handleLogoutCancel() bool {
 		return true
 	}
 	s.logoutAt = time.Time{}
+	ackErr := s.write(uint16(protocol.OpcodeSMSG_LOGOUT_CANCEL_ACK), nil, true)
 
 	// Reference MiscHandler.cpp:471-483:
 	// SetRooted(false), SetStandState(UNIT_STAND_STATE_STAND), RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED)
@@ -2681,7 +2682,7 @@ func (s *session) handleLogoutCancel() bool {
 	s.logoutFlagsApplied = false
 
 	s.debug("player logout cancelled", "account", s.accountName)
-	return s.write(uint16(protocol.OpcodeSMSG_LOGOUT_CANCEL_ACK), nil, true) == nil
+	return ackErr == nil
 }
 
 // handlePlayerLogout mirrors WorldSession::HandlePlayerLogoutOpcode, whose body
