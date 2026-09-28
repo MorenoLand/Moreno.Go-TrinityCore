@@ -566,11 +566,22 @@ func (s *session) grantXPWithVictimGroup(ctx context.Context, amount uint32, vic
 		grantPetXP()
 		return
 	}
+	restedBonus := uint32(0)
+	if victimGUID != 0 {
+		if s.player.RestBonus > 0 {
+			restedBonus = uint32(s.player.RestBonus)
+			if restedBonus > amount {
+				restedBonus = amount
+			}
+		}
+		s.setRestBonus(s.player, s.player.RestBonus-float32(restedBonus))
+	}
+	totalXP := amount + restedBonus
 
 	// SMSG_LOG_XPGAIN (0x1D0): victimGUID (8), totalXP (4), type (1), [baseXP (4), groupRate (4)], rafBonus (1)
 	xpLog := protocol.NewBuffer(22)
 	xpLog.WriteU64(victimGUID)
-	xpLog.WriteU32(amount)
+	xpLog.WriteU32(totalXP)
 	if victimGUID != 0 {
 		xpLog.WriteU8(0)       // 0 = kill XP
 		xpLog.WriteU32(amount) // base XP
@@ -581,7 +592,7 @@ func (s *session) grantXPWithVictimGroup(ctx context.Context, amount uint32, vic
 	xpLog.WriteU8(0) // recruit-a-friend flag
 	_ = s.write(uint16(protocol.OpcodeSMSG_LOG_XPGAIN), xpLog.Bytes(), true)
 
-	s.player.XP += amount
+	s.player.XP += totalXP
 	for s.player.Level < maxPlayerLevel {
 		needed := s.server.xpForLevel(ctx, uint32(s.player.Level))
 		if needed == 0 || s.player.XP < needed {

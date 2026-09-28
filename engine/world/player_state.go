@@ -1776,8 +1776,14 @@ func (s *session) updateOfflineItemLoadState(ctx context.Context, state *playerS
 	return changed
 }
 
-func (s *session) applyOfflineRestBonus(state *playerState) {
-	if state == nil || state.LogoutTime <= 0 || time.Now().Unix() <= state.LogoutTime || state.Level == 0 || int(state.Level) >= len(xpCurve) {
+const (
+	restStateRested       uint8 = 1
+	restStateNotRafLinked uint8 = 2
+	restStateRafLinked    uint8 = 6
+)
+
+func (s *session) setRestBonus(state *playerState, bonus float32) {
+	if state == nil {
 		return
 	}
 	maxLevel := uint8(80)
@@ -1785,27 +1791,48 @@ func (s *session) applyOfflineRestBonus(state *playerState) {
 		maxLevel = uint8(s.server.Config.MaxPlayerLevel)
 	}
 	if state.Level >= maxLevel {
-		state.RestBonus = 0
+		bonus = 0
+	}
+	if bonus < 0 {
+		bonus = 0
+	}
+	maxRestBonus := float32(playerNextLevelXP(state.Level)) * 1.5 / 2
+	if bonus > maxRestBonus {
+		bonus = maxRestBonus
+	}
+	state.RestBonus = bonus
+	if state.RestState != restStateRafLinked {
+		if bonus > 10 {
+			state.RestState = restStateRested
+		} else if bonus <= 1 {
+			state.RestState = restStateNotRafLinked
+		}
+	}
+}
+
+func (s *session) applyOfflineRestBonus(state *playerState) {
+	if state == nil {
 		return
 	}
 	elapsed := time.Now().Unix() - state.LogoutTime
-	wildernessRate, tavernRate := float32(1), float32(1)
-	if s != nil && s.server != nil {
-		wildernessRate = float32(s.server.Config.RestOfflineInWildernessRate)
-		tavernRate = float32(s.server.Config.RestOfflineInTavernOrCityRate)
+	maxLevel := uint8(80)
+	if s != nil && s.server != nil && s.server.Config.MaxPlayerLevel > 0 && s.server.Config.MaxPlayerLevel < 256 {
+		maxLevel = uint8(s.server.Config.MaxPlayerLevel)
 	}
-	bubble := float32(0.031) * wildernessRate
-	if state.LogoutResting {
-		bubble = float32(0.125) * tavernRate
+	if state.LogoutTime > 0 && elapsed > 0 && state.Level > 0 && int(state.Level) < len(xpCurve) && state.Level < maxLevel {
+		wildernessRate, tavernRate := float32(1), float32(1)
+		if s != nil && s.server != nil {
+			wildernessRate = float32(s.server.Config.RestOfflineInWildernessRate)
+			tavernRate = float32(s.server.Config.RestOfflineInTavernOrCityRate)
+		}
+		bubble := float32(0.031) * wildernessRate
+		if state.LogoutResting {
+			bubble = float32(0.125) * tavernRate
+		}
+		nextLevelXP := float32(playerNextLevelXP(state.Level))
+		state.RestBonus += float32(elapsed) * (nextLevelXP / 72000) * bubble
 	}
-	nextLevelXP := float32(playerNextLevelXP(state.Level))
-	state.RestBonus += float32(elapsed) * (nextLevelXP / 72000) * bubble
-	maxRestBonus := nextLevelXP * 1.5 / 2
-	if state.RestBonus < 0 {
-		state.RestBonus = 0
-	} else if state.RestBonus > maxRestBonus {
-		state.RestBonus = maxRestBonus
-	}
+	s.setRestBonus(state, state.RestBonus)
 }
 
 func (s *session) loadFishingSteps(ctx context.Context, state *playerState) error {

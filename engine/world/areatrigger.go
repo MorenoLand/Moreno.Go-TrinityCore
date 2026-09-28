@@ -66,7 +66,7 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 	// Reference: MiscHandler.cpp:686-695 (sObjectMgr->IsTavernAreaTrigger)
 	var tavernID uint32
 	if err := wdb.QueryRowContext(ctx, "SELECT id FROM areatrigger_tavern WHERE id = ?", triggerID).Scan(&tavernID); err == nil && tavernID != 0 {
-		s.player.ExtraFlags |= 0x00000001 // PLAYER_FLAGS_RESTING
+		s.player.PlayerFlags |= playerFlagResting
 		s.sendPlayerUpdate()
 		return true
 	}
