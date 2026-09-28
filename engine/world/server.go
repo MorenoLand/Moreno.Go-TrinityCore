@@ -24,6 +24,7 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/crypto"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/iplocation"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/version"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -63,6 +64,7 @@ type Server struct {
 	clientCacheVersion        uint32
 	Features                  *Features
 	Data                      *wotlk.Store
+	ipLocations               *iplocation.Store
 	sessionsMu                sync.RWMutex
 	sessions                  map[*session]struct{}
 	objectsMu                 sync.RWMutex
@@ -387,6 +389,16 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 		c = settings[0]
 	}
 	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), hiddenGameObjects: make(map[uint64]struct{}), dynamicGameObjects: make(map[uint64]*dynamicGameObjectState), dynamicSpellObjects: make(map[uint64]*dynamicSpellObjectState), wsgState: make(map[uint32]*wsgBattlegroundState), abState: make(map[uint32]*abBattlegroundState), eotsState: make(map[uint32]*eotsBattlegroundState), avState: make(map[uint32]*avBattlegroundState), saState: make(map[uint32]*saBattlegroundState), icState: make(map[uint32]*icBattlegroundState), activeTotems: make(map[uint64][4]*activeTotem), creatureAuras: make(map[creatureAuraKey]map[uint32]struct{}), activeCreatureAuras: make(map[creatureAuraKey]map[uint32]*activeAura), channels: make(map[string]*worldChannel), groups: make(map[uint64]*groupState), instanceCreatureMotion: make(map[instanceAdmissionKey]map[uint64]*creatureMotion), creatureRespawns: make(map[uint32]creatureRespawn), transports: make(map[uint32]*continentTransport), creatureLoot: make(map[lootObjectKey]*activeLootState), creatureLootOwners: make(map[lootObjectKey]lootOwnerState), creatureStatsCache: make(map[uint32]creatureStats), groupRolls: make(map[lootRollKey]*activeGroupRoll), wardenCheckMgr: newWardenCheckMgr(), vehicleKits: make(map[uint64]*VehicleKit), vehicleSeatAddons: make(map[uint32]*VehicleSeatAddon), vehicleAccessories: make(map[uint32][]VehicleAccessory), terrainTiles: make(map[uint64][]terrainSpawn), terrainTileKnown: make(map[uint64]bool), terrainModels: make(map[string]*terrainModel)}
+	if c.IPLocationFile != "" {
+		locations, err := iplocation.Load(c.IPLocationFile)
+		if err != nil {
+			if logger != nil {
+				logger.Error("IP location file load failed", "path", c.IPLocationFile, "error", err)
+			}
+		} else {
+			server.ipLocations = locations
+		}
+	}
 	server.Features.LFG.SetDungeonValidator(func(id uint32) bool {
 		dungeon, found, err := server.Data.LFGDungeon(id)
 		return err == nil && found && wotlk.IsSupportedLFGType(dungeon.TypeID)
@@ -3071,29 +3083,24 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		_ = s.write(opcodeAuthResponse, []byte{authUnknownAccount}, false)
 		return false
 	}
-	if s.server.Config.WardenEnabled && !wardenOSAllowed(account.OS) {
-		s.debug("world authentication rejected", "account", debugAccount, "reason", "invalid client OS", "os", account.OS)
-		_ = s.write(opcodeAuthResponse, []byte{authReject}, false)
+	_, _ = s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_LAST_ATTEMPT_IP", remoteAddress(s.conn), accountName)
+	if len(account.SessionKey) != crypto.SRP6SessionKeyLength {
+		s.debug("world authentication rejected", "account", debugAccount, "reason", "invalid session key length")
+		_ = s.write(opcodeAuthResponse, []byte{authFailed}, false)
+		return false
+	}
+	s.crypt, err = crypto.NewAuthCrypt(account.SessionKey)
+	if err != nil {
 		return false
 	}
 	if realmID != s.server.RealmID {
 		s.debug("world authentication rejected", "account", debugAccount, "reason", "realm mismatch", "realm", realmID)
-		_ = s.write(opcodeAuthResponse, []byte{loginServerNotFound}, false)
+		_ = s.write(opcodeAuthResponse, []byte{loginServerNotFound}, true)
 		return false
 	}
-	if banned, err := accountBanned(ctx, s.server.AuthStore, account.ID); err != nil || banned {
-		s.debug("world authentication rejected", "account", debugAccount, "reason", "account ban")
-		_ = s.write(opcodeAuthResponse, []byte{authBanned}, false)
-		return false
-	}
-	if account.Locked && account.LastIP != remoteAddress(s.conn) {
-		s.debug("world authentication rejected", "account", debugAccount, "reason", "ip lock")
-		_ = s.write(opcodeAuthResponse, []byte{authFailed}, false)
-		return false
-	}
-	if len(account.SessionKey) != crypto.SRP6SessionKeyLength {
-		s.debug("world authentication rejected", "account", debugAccount, "reason", "invalid session key length")
-		_ = s.write(opcodeAuthResponse, []byte{authFailed}, false)
+	if s.server.Config.WardenEnabled && !wardenOSAllowed(account.OS) {
+		s.debug("world authentication rejected", "account", debugAccount, "reason", "invalid client OS", "os", account.OS)
+		_ = s.write(opcodeAuthResponse, []byte{authReject}, true)
 		return false
 	}
 	h := sha1.New()
@@ -3104,7 +3111,23 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	_, _ = h.Write(account.SessionKey)
 	if subtle.ConstantTimeCompare(h.Sum(nil), digestBytes) != 1 {
 		s.debug("world authentication rejected", "account", debugAccount, "reason", "invalid session digest")
-		_ = s.write(opcodeAuthResponse, []byte{authFailed}, false)
+		_ = s.write(opcodeAuthResponse, []byte{authFailed}, true)
+		return false
+	}
+	if account.Locked && account.LastIP != remoteAddress(s.conn) {
+		s.debug("world authentication rejected", "account", debugAccount, "reason", "ip lock")
+		_ = s.write(opcodeAuthResponse, []byte{authFailed}, true)
+		return false
+	}
+	country := s.server.ipLocations.Country(remoteAddress(s.conn))
+	if iplocation.CountryLockMismatch(account.Locked, account.LockCountry, country) {
+		s.debug("world authentication rejected", "account", debugAccount, "reason", "country lock", "country", country)
+		_ = s.write(opcodeAuthResponse, []byte{authFailed}, true)
+		return false
+	}
+	if banned, err := accountBanned(ctx, s.server.AuthStore, account.ID); err != nil || banned {
+		s.debug("world authentication rejected", "account", debugAccount, "reason", "account ban")
+		_ = s.write(opcodeAuthResponse, []byte{authBanned}, true)
 		return false
 	}
 	account.MuteTime = normalizeLoginMuteTime(ctx, s.server.AuthStore.DB, account.ID, account.MuteTime)
@@ -3113,10 +3136,6 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	if _, err := s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET last_ip = ? WHERE id = ?", remoteAddress(s.conn), account.ID); err != nil {
-		return false
-	}
-	s.crypt, err = crypto.NewAuthCrypt(account.SessionKey)
-	if err != nil {
 		return false
 	}
 	s.authed = true

@@ -20,6 +20,7 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/crypto"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/iplocation"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocoltrace"
 )
@@ -55,7 +56,7 @@ type Server struct {
 	WrongPassBanType   bool
 	WrongPassLogging   bool
 	StrictVersionCheck bool
-	ipLocations        []ipLocationRange
+	ipLocations        *iplocation.Store
 	TraceRecorder      *protocoltrace.Recorder
 }
 
@@ -132,7 +133,7 @@ func NewServer(store *database.Store, logger *slog.Logger, realmID uint32, setti
 		server.WrongPassLogging = settings[0].WrongPassLogging
 		server.StrictVersionCheck = settings[0].StrictVersionCheck
 		if settings[0].IPLocationFile != "" {
-			locations, err := loadIPLocationFile(settings[0].IPLocationFile)
+			locations, err := iplocation.Load(settings[0].IPLocationFile)
 			if err != nil {
 				if logger != nil {
 					logger.Error("IP location file load failed", "path", settings[0].IPLocationFile, "error", err)
@@ -260,8 +261,8 @@ func (s *session) handleLogonChallenge(ctx context.Context) error {
 		s.debug("logon rejected", "account", s.login, "reason", "ip lock")
 		return writePacket(s.conn, []byte{logonChallenge, 0, wowLockedEnforced})
 	}
-	country := s.server.countryForIP(s.remoteIP)
-	if countryLockMismatch(s.account.Locked, s.account.LockCountry, country) {
+	country := s.server.ipLocations.Country(s.remoteIP)
+	if iplocation.CountryLockMismatch(s.account.Locked, s.account.LockCountry, country) {
 		s.debug("logon rejected", "account", s.login, "reason", "country lock", "country", country)
 		return writePacket(s.conn, []byte{logonChallenge, 0, wowUnlockableLock})
 	}
