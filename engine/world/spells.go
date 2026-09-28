@@ -1903,6 +1903,7 @@ type activeAura struct {
 	EffectMask                 uint8
 	CasterGUID                 uint64
 	TargetGUID                 uint64
+	ChannelTargetGUID          uint64
 	TargetKey                  creatureAuraKey
 	ItemGUID                   uint64
 	SchoolMask                 uint32
@@ -2653,6 +2654,10 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	if s.player == nil {
 		return
 	}
+	channelTargetGUID := uint64(0)
+	if eff.Aura == 23 && eff.TriggerSpell != 0 {
+		channelTargetGUID = s.channelTargetForSpell(spell.ID)
+	}
 	if ctx == nil || ctx.Err() != nil {
 		ctx = context.Background()
 	}
@@ -2750,6 +2755,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			EffectMask:         spellEffectMask(spell, eff),
 			CasterGUID:         s.playerGUID,
 			TargetGUID:         targetGUID,
+			ChannelTargetGUID:  channelTargetGUID,
 			SchoolMask:         schoolMask,
 			MiscValue:          eff.MiscValue,
 			Amount:             amount,
@@ -3036,13 +3042,7 @@ func (ts *session) schedulePlayerPeriodicTickLocked(aura *activeAura, periodMs u
 
 func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 	if aura.AuraType == 23 && aura.TriggerSpell != 0 {
-		targetGUID := aura.TargetGUID
-		ts.castMu.Lock()
-		if channel := ts.activeChannel; channel != nil && channel.SpellID == aura.SpellID && channel.TargetGUID != 0 {
-			targetGUID = channel.TargetGUID
-		}
-		ts.castMu.Unlock()
-		ts.castSpellDirect(context.Background(), aura.TriggerSpell, targetGUID)
+		ts.castSpellDirect(context.Background(), aura.TriggerSpell, ts.periodicTriggerTarget(aura))
 		return
 	}
 	ts.playerStateMu.Lock()
@@ -3153,6 +3153,31 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 		ts.adjustSpellPower(context.Background(), aura.TargetGUID, aura.MiscValue, int64(aura.Amount))
 	}
+}
+
+func (s *session) channelTargetForSpell(spellID uint32) uint64 {
+	if s == nil {
+		return 0
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	if channel := s.activeChannel; channel != nil && !channel.Stopped && channel.SpellID == spellID {
+		return channel.TargetGUID
+	}
+	return 0
+}
+
+func (s *session) periodicTriggerTarget(aura *activeAura) uint64 {
+	if aura == nil {
+		return 0
+	}
+	if aura.ChannelTargetGUID != 0 {
+		return aura.ChannelTargetGUID
+	}
+	if targetGUID := s.channelTargetForSpell(aura.SpellID); targetGUID != 0 {
+		return targetGUID
+	}
+	return aura.TargetGUID
 }
 
 func (ts *session) expirePlayerAura(spellID uint32) {
