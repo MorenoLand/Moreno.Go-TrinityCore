@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"flag"
@@ -67,6 +68,9 @@ func main() {
 	replayInstanceID := flag.Uint("replay-instance-id", 0, "instance ID used with --replay-instance-map")
 	replayStatsMinLevel := flag.Uint("replay-stats-min-level", 0, "save and verify source character_stats output for characters at or above this level")
 	replayPlayerStartMessage := flag.Bool("replay-player-start-message", false, "verify the source PlayerStart.String first-login packet order")
+	replayLogout := flag.Bool("replay-logout", false, "replay logout countdown completion and verify saved online state")
+	replayLogoutCancel := flag.Bool("replay-logout-cancel", false, "replay logout countdown cancellation and disconnect persistence")
+	replaySwitchGUID := flag.Uint64("replay-switch-guid", 0, "after logout, switch to a second same-account character on the same connection")
 	replayQuestRewardTwiceID := flag.Uint("replay-quest-reward-twice", 0, "replay a one-time quest reward followed by a duplicate turn-in")
 	replaySharedQuestDetailsID := flag.Uint("replay-shared-quest-details", 0, "verify shared-quest details precede active-pet spells during login")
 	replaySharedQuestSenderGUID := flag.Uint64("replay-shared-quest-sender", 0, "distinct existing character GUID that shared the quest")
@@ -88,6 +92,19 @@ func main() {
 		dungeonLoginReplayRequested := *replayDungeonLogin
 		instanceReplayRequested := *replayInstanceMap != 0 || *replayInstanceID != 0
 		startMessageRequested := *replayPlayerStartMessage
+		logoutReplayRequested := *replayLogout || *replayLogoutCancel || *replaySwitchGUID != 0
+		logoutReplayMode := uint8(0)
+		if *replaySwitchGUID != 0 && (*replayLogout || *replayLogoutCancel) {
+			fail("use --replay-switch-guid without --replay-logout or --replay-logout-cancel")
+		} else if *replayLogout && *replayLogoutCancel {
+			fail("choose either --replay-logout or --replay-logout-cancel")
+		} else if *replaySwitchGUID != 0 {
+			logoutReplayMode = 3
+		} else if *replayLogout {
+			logoutReplayMode = 1
+		} else if *replayLogoutCancel {
+			logoutReplayMode = 2
+		}
 		questRewardReplayRequested := *replayQuestRewardTwiceID != 0
 		sharedQuestDetailsRequested := *replaySharedQuestDetailsID != 0
 		if sharedQuestDetailsRequested != (*replaySharedQuestSenderGUID != 0) {
@@ -101,7 +118,7 @@ func main() {
 			}
 		}
 		postLoginReplayCount := petReplayCount
-		for _, requested := range []bool{lfgReplayRequested, farTeleportReplayRequested, nearTeleportReplayRequested, dungeonLoginReplayRequested, instanceReplayRequested, statsReplayRequested, startMessageRequested, questRewardReplayRequested, sharedQuestDetailsRequested, petCritterReplayRequested} {
+		for _, requested := range []bool{lfgReplayRequested, farTeleportReplayRequested, nearTeleportReplayRequested, dungeonLoginReplayRequested, instanceReplayRequested, statsReplayRequested, startMessageRequested, logoutReplayRequested, questRewardReplayRequested, sharedQuestDetailsRequested, petCritterReplayRequested} {
 			if requested {
 				postLoginReplayCount++
 			}
@@ -112,7 +129,7 @@ func main() {
 		if *replayPeerGUID != 0 && postLoginReplayCount != 0 {
 			fail("paired login replay cannot be combined with a post-login replay scenario")
 		}
-		if err := runRealCharacterLoginReplay(*replayWork, *gameDataDir, *replayGUID, *replayPeerGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem, uint32(*replayLFGDungeon), uint32(*replayInstanceMap), uint32(*replayInstanceID), uint32(*replayStatsMinLevel), startMessageRequested, uint32(*replayQuestRewardTwiceID), petCritterReplayRequested, farTeleportReplayRequested, nearTeleportReplayRequested, dungeonLoginReplayRequested, uint32(*replaySharedQuestDetailsID), *replaySharedQuestSenderGUID); err != nil {
+		if err := runRealCharacterLoginReplay(*replayWork, *gameDataDir, *replayGUID, *replayPeerGUID, *replayTrace, uint32(*replayPetCooldownSpell), uint32(*replayPetPowerSpell), uint32(*replayPetXPAward), uint32(*replayPetAuraSourceSpell), uint32(*replayPetFocusAuraSpell), uint32(*replayPetFeedSpell), *replayPetFeedItem, uint32(*replayLFGDungeon), uint32(*replayInstanceMap), uint32(*replayInstanceID), uint32(*replayStatsMinLevel), startMessageRequested, uint32(*replayQuestRewardTwiceID), petCritterReplayRequested, farTeleportReplayRequested, nearTeleportReplayRequested, dungeonLoginReplayRequested, uint32(*replaySharedQuestDetailsID), *replaySharedQuestSenderGUID, logoutReplayMode, *replaySwitchGUID); err != nil {
 			fail(err.Error())
 		}
 		return
@@ -6091,7 +6108,62 @@ func pairedLoginTrace(trace protocoltrace.Trace, playerGUID uint64) (protocoltra
 	return filtered, nil
 }
 
-func runRealCharacterLoginReplay(workDir, gameDataDir string, guid, peerGUID uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64, lfgDungeonID, instanceEntryMapID, instanceEntryID, statsMinLevel uint32, replayPlayerStartMessage bool, questRewardTwiceID uint32, replayPetCritter, replayFarTeleport, replayNearTeleport, replayDungeonLogin bool, sharedQuestDetailsQuestID uint32, sharedQuestDetailsSenderGUID uint64) error {
+func splitLogoutSwitchTrace(trace protocoltrace.Trace, firstGUID, secondGUID uint64) (protocoltrace.Trace, protocoltrace.Trace, error) {
+	first, second := protocoltrace.Trace{Header: trace.Header}, protocoltrace.Trace{Header: trace.Header}
+	activeSecond := false
+	firstLogin, secondLogin := false, false
+	for _, event := range trace.Events {
+		if event.Direction == protocoltrace.ClientToServer && event.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) {
+			payload, err := trace.Payload(event)
+			if err != nil {
+				return protocoltrace.Trace{}, protocoltrace.Trace{}, err
+			}
+			if len(payload) != 8 {
+				return protocoltrace.Trace{}, protocoltrace.Trace{}, fmt.Errorf("character-switch login payload size=%d, want 8", len(payload))
+			}
+			loginGUID := binary.LittleEndian.Uint64(payload)
+			switch loginGUID {
+			case firstGUID:
+				activeSecond = false
+				firstLogin = true
+			case secondGUID:
+				activeSecond = true
+				secondLogin = true
+			default:
+				return protocoltrace.Trace{}, protocoltrace.Trace{}, fmt.Errorf("unexpected character-switch login GUID %d", loginGUID)
+			}
+		} else if strings.HasPrefix(event.State, "character-switch") {
+			activeSecond = true
+		}
+		if activeSecond {
+			second.Events = append(second.Events, event)
+		} else {
+			first.Events = append(first.Events, event)
+		}
+	}
+	if !firstLogin || !secondLogin {
+		return protocoltrace.Trace{}, protocoltrace.Trace{}, fmt.Errorf("character-switch trace logins first=%t second=%t", firstLogin, secondLogin)
+	}
+	return first, second, nil
+}
+
+func logoutLoginRequestIndex(trace protocoltrace.Trace, guid uint64) (int, error) {
+	for index, event := range trace.Events {
+		if event.Direction != protocoltrace.ClientToServer || event.Opcode != uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) {
+			continue
+		}
+		payload, err := trace.Payload(event)
+		if err != nil {
+			return -1, err
+		}
+		if len(payload) == 8 && binary.LittleEndian.Uint64(payload) == guid {
+			return index, nil
+		}
+	}
+	return -1, fmt.Errorf("logout replay trace has no player-login request for %d", guid)
+}
+
+func runRealCharacterLoginReplay(workDir, gameDataDir string, guid, peerGUID uint64, tracePath string, petCooldownSpell, petPowerSpell, petXPAward, petAuraSourceSpell, petFocusAuraSpell, petFeedSpell uint32, petFoodGUID uint64, lfgDungeonID, instanceEntryMapID, instanceEntryID, statsMinLevel uint32, replayPlayerStartMessage bool, questRewardTwiceID uint32, replayPetCritter, replayFarTeleport, replayNearTeleport, replayDungeonLogin bool, sharedQuestDetailsQuestID uint32, sharedQuestDetailsSenderGUID uint64, logoutReplayMode uint8, logoutSwitchGUID uint64) error {
 	workDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return err
@@ -6365,6 +6437,20 @@ func runRealCharacterLoginReplay(workDir, gameDataDir string, guid, peerGUID uin
 		server.Stop()
 		return err
 	}
+	var switchBefore map[string]characterTableSnapshot
+	var switchXPBefore, switchRestStateBefore int64
+	var switchRaceID, switchClassID, switchCinematicBefore uint32
+	if logoutSwitchGUID != 0 {
+		if err := stores.Characters.DB.QueryRowContext(ctx, "SELECT xp, restState, race, class, COALESCE(cinematic, 0) FROM characters WHERE guid = ?", logoutSwitchGUID).Scan(&switchXPBefore, &switchRestStateBefore, &switchRaceID, &switchClassID, &switchCinematicBefore); err != nil {
+			server.Stop()
+			return fmt.Errorf("read same-session switch character state before login: %w", err)
+		}
+		switchBefore, err = snapshotCharacterState(stores.Characters.DB, stores.World.DB, stores.Auth.DB, logoutSwitchGUID)
+		if err != nil {
+			server.Stop()
+			return err
+		}
+	}
 	petBefore, err := snapshotActivePetLoginState(ctx, stores.Characters.DB, guid)
 	if err != nil {
 		server.Stop()
@@ -6420,16 +6506,30 @@ func runRealCharacterLoginReplay(workDir, gameDataDir string, guid, peerGUID uin
 		trace, replayErr = world.ReplayCharacterFarTeleport(ctx, server, guid, farTeleportMap, farTeleportPosition[0], farTeleportPosition[1], farTeleportPosition[2], farTeleportPosition[3])
 	} else if instanceEntryID != 0 {
 		trace, replayErr = world.ReplayCharacterInstanceEntry(ctx, server, guid, instanceEntryMapID, instanceEntryID)
+	} else if logoutReplayMode == 3 {
+		trace, replayErr = world.ReplayCharacterSwitch(ctx, server, guid, logoutSwitchGUID)
+	} else if logoutReplayMode != 0 {
+		trace, replayErr = world.ReplayCharacterLogout(ctx, server, guid, logoutReplayMode == 2)
 	} else {
 		trace, replayErr = world.ReplayCharacterLogin(ctx, server, guid)
 	}
+	firstLoginTrace := trace
+	var switchLoginTrace protocoltrace.Trace
+	if replayErr == nil && logoutSwitchGUID != 0 {
+		firstLoginTrace, switchLoginTrace, replayErr = splitLogoutSwitchTrace(trace, guid, logoutSwitchGUID)
+	}
 	if replayErr == nil {
 		taxiTrace := trace
-		if peerGUID != 0 {
+		if logoutSwitchGUID != 0 {
+			taxiTrace = firstLoginTrace
+		} else if peerGUID != 0 {
 			taxiTrace, replayErr = pairedLoginTrace(trace, guid)
 		}
 		if replayErr == nil {
 			_, replayErr = validateTaxiNodeStatusPayloads(ctx, taxiTrace, stores.Characters.DB, stores.World.DB, server.Data, guid, cfg.VisibilityDistanceContinents)
+		}
+		if replayErr == nil && logoutSwitchGUID != 0 {
+			_, replayErr = validateTaxiNodeStatusPayloads(ctx, switchLoginTrace, stores.Characters.DB, stores.World.DB, server.Data, logoutSwitchGUID, cfg.VisibilityDistanceContinents)
 		}
 	}
 	cancel()
@@ -6440,6 +6540,18 @@ func runRealCharacterLoginReplay(workDir, gameDataDir string, guid, peerGUID uin
 	if peerGUID == 0 {
 		if err := stores.Characters.DB.QueryRowContext(context.Background(), "SELECT xp, restState, rest_bonus FROM characters WHERE guid = ?", guid).Scan(&explorationXPAfter, &restStateAfter, &restBonusAfter); err != nil {
 			return fmt.Errorf("read replay character XP/rest state after login: %w", err)
+		}
+	}
+	var switchAfter map[string]characterTableSnapshot
+	var switchXPAfter, switchRestStateAfter int64
+	var switchRestBonusAfter float64
+	var switchCinematicAfter uint32
+	if logoutSwitchGUID != 0 {
+		switchAfter, snapshotErr = snapshotCharacterState(stores.Characters.DB, stores.World.DB, stores.Auth.DB, logoutSwitchGUID)
+		if snapshotErr == nil {
+			if err := stores.Characters.DB.QueryRowContext(context.Background(), "SELECT xp, restState, rest_bonus, COALESCE(cinematic, 0) FROM characters WHERE guid = ?", logoutSwitchGUID).Scan(&switchXPAfter, &switchRestStateAfter, &switchRestBonusAfter, &switchCinematicAfter); err != nil {
+				return fmt.Errorf("read same-session switch character state after logout: %w", err)
+			}
 		}
 	}
 	var peerAfter map[string]characterTableSnapshot
@@ -6486,7 +6598,7 @@ func runRealCharacterLoginReplay(workDir, gameDataDir string, guid, peerGUID uin
 	var deltaErr error
 	deltaBefore := before
 	if peerGUID == 0 {
-		deltaBefore, deltaErr = normalizeExplorationXPDelta(before, after, trace, explorationXPBefore, explorationXPAfter)
+		deltaBefore, deltaErr = normalizeExplorationXPDelta(before, after, firstLoginTrace, explorationXPBefore, explorationXPAfter)
 		if deltaErr == nil {
 			deltaBefore, deltaErr = normalizeRestState(deltaBefore, after, restStateBefore, restStateAfter, restBonusAfter)
 		}
@@ -6523,16 +6635,31 @@ func runRealCharacterLoginReplay(workDir, gameDataDir string, guid, peerGUID uin
 	if deltaErr != nil {
 		return fmt.Errorf("real-character state delta mismatch (trace saved): %w", deltaErr)
 	}
+	if logoutSwitchGUID != 0 {
+		switchDeltaBefore, err := normalizeExplorationXPDelta(switchBefore, switchAfter, switchLoginTrace, switchXPBefore, switchXPAfter)
+		if err == nil {
+			switchDeltaBefore, err = normalizeRestState(switchDeltaBefore, switchAfter, switchRestStateBefore, switchRestStateAfter, switchRestBonusAfter)
+		}
+		if err == nil {
+			err = validateCharacterStateDelta(switchDeltaBefore, switchAfter, false)
+		}
+		if err != nil {
+			return fmt.Errorf("second same-session character state delta mismatch (trace saved): %w", err)
+		}
+		if err := checkLoginCinematic(switchLoginTrace, sourceLoginCinematicID(server.Data, switchRaceID, switchClassID), switchCinematicBefore, switchCinematicAfter); err != nil {
+			return fmt.Errorf("second same-session character cinematic check failed: %w", err)
+		}
+	}
 	if peerGUID == 0 {
 		var cinematicAfter uint32
 		if err := stores.Characters.DB.QueryRowContext(context.Background(), "SELECT COALESCE(cinematic, 0) FROM characters WHERE guid = ?", guid).Scan(&cinematicAfter); err != nil {
 			return fmt.Errorf("read replayed character cinematic state: %w", err)
 		}
-		if err := checkLoginCinematic(trace, expectedCinematic, cinematicBefore, cinematicAfter); err != nil {
+		if err := checkLoginCinematic(firstLoginTrace, expectedCinematic, cinematicBefore, cinematicAfter); err != nil {
 			return err
 		}
 		if replayPlayerStartMessage {
-			if err := checkLoginPlayerStartMessage(trace, guid, cfg.PlayerStartString, cinematicBefore == 0); err != nil {
+			if err := checkLoginPlayerStartMessage(firstLoginTrace, guid, cfg.PlayerStartString, cinematicBefore == 0); err != nil {
 				return err
 			}
 		}
@@ -6573,13 +6700,28 @@ func runRealCharacterLoginReplay(workDir, gameDataDir string, guid, peerGUID uin
 		}
 	}
 	wantLogins := 1
-	if peerGUID != 0 {
+	if peerGUID != 0 || logoutSwitchGUID != 0 {
 		wantLogins = 2
 	}
 	if len(loginStarts) != wantLogins {
 		return fmt.Errorf("real-character login replay captured %d player-login requests, want %d", len(loginStarts), wantLogins)
 	}
-	if peerGUID == 0 {
+	if logoutSwitchGUID != 0 {
+		firstLoginIndex, err := logoutLoginRequestIndex(firstLoginTrace, guid)
+		if err != nil {
+			return err
+		}
+		secondLoginIndex, err := logoutLoginRequestIndex(switchLoginTrace, logoutSwitchGUID)
+		if err != nil {
+			return err
+		}
+		if err := checkLogin(firstLoginTrace, firstLoginIndex); err != nil {
+			return fmt.Errorf("first character login packet replay failed: %w", err)
+		}
+		if err := checkLogin(switchLoginTrace, secondLoginIndex); err != nil {
+			return fmt.Errorf("same-session switched character login packet replay failed: %w", err)
+		}
+	} else if peerGUID == 0 {
 		if err := checkLogin(trace, loginStarts[0]); err != nil {
 			return fmt.Errorf("real-character login packet replay failed at event %d: %w", loginStarts[0], err)
 		}
