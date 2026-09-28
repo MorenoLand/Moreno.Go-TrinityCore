@@ -434,10 +434,6 @@ func (s *session) handleReconnectChallenge(ctx context.Context) error {
 	loaded.Banned = banned != 0
 	loaded.PermanentBan = permanent != 0
 	loaded.Security = uint8(security)
-	if loaded.Banned {
-		s.debug("reconnect rejected", "account", login, "reason", "account ban")
-		return writePacket(s.conn, []byte{reconnectChallenge, wowBanned})
-	}
 	if len(sessionKey) != crypto.SRP6SessionKeyLength {
 		s.debug("reconnect rejected", "account", login, "reason", "missing session key")
 		return writePacket(s.conn, []byte{reconnectChallenge, wowUnknownAccount})
