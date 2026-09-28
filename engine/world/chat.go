@@ -332,7 +332,7 @@ func languageSkill(language uint32) (uint16, bool) {
 
 func (s *session) hasLanguageSkill(skill uint16) bool {
 	for _, value := range s.player.Skills {
-		if value.Skill == skill && value.Value > 0 {
+		if value.Skill == skill {
 			return true
 		}
 	}
