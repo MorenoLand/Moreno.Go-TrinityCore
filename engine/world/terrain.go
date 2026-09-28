@@ -319,10 +319,11 @@ func (s *session) updateZoneAndArea(ctx context.Context, force bool) {
 		return
 	}
 	now := time.Now()
+	zoneID, areaID := s.server.zoneAndAreaID(s.player.Map, s.player.X, s.player.Y, s.player.Z, s.player.Zone)
+	s.exploreArea(ctx, areaID)
 	if !force && !s.lastZoneUpdate.IsZero() && now.Sub(s.lastZoneUpdate) < time.Second {
 		return
 	}
-	zoneID, areaID := s.server.zoneAndAreaID(s.player.Map, s.player.X, s.player.Y, s.player.Z, s.player.Zone)
 	oldZone, oldArea, oldMap := s.player.Zone, s.areaID, s.player.Map
 	s.player.Zone, s.areaID, s.lastZoneUpdate = zoneID, areaID, now
 	stateChanged := false
@@ -349,7 +350,6 @@ func (s *session) updateZoneAndArea(ctx context.Context, force bool) {
 		s.sendLoadedGroup()
 		_ = s.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), buildInitWorldStates(*s.player, areaID, s.server.Config.ArenaSeasonID, s.server.Config.ArenaSeasonInProgress), true)
 	}
-	s.exploreArea(ctx, areaID)
 	if oldZone != s.player.Zone || oldArea != areaID {
 		s.triggerPlayerEvent(ctx, scripting.PlayerEventUpdateZone, s.luaPlayer(), s.player.Zone, areaID)
 	}
