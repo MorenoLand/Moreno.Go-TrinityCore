@@ -28,8 +28,6 @@ func MergeReputationFlags(defaultFlags, databaseFlags uint8, totalStanding int32
 	}
 	if databaseFlags&factionFlagInactive != 0 && flags&(factionFlagInvisibleForced|factionFlagHidden) == 0 && flags&factionFlagVisible != 0 {
 		flags |= factionFlagInactive
-	} else if databaseFlags&factionFlagInactive == 0 && flags&factionFlagVisible != 0 {
-		flags &^= factionFlagInactive
 	}
 	rank := reputationRank(int64(totalStanding))
 	canChangeWar := flags&(factionFlagInvisibleForced|factionFlagHidden) == 0
