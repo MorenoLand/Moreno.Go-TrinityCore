@@ -1259,6 +1259,12 @@ func (s *session) handleSpiritHealerActivate(ctx context.Context, payload []byte
 	if !s.canInteractWithNPC(ctx, guid, uint64(npcFlagSpiritService)) {
 		return true
 	}
+	corpse, hasCorpse := s.loadCorpse(ctx)
+	var corpseGrave wotlk.WorldSafeLoc
+	corpseGraveFound := false
+	if hasCorpse {
+		corpseGrave, corpseGraveFound = s.server.closestGraveyard(ctx, corpse.X, corpse.Y, corpse.Z, corpse.MapID, s.player.Zone, playerTeam(s.player.Race))
+	}
 	s.resurrectPlayer(ctx, 0.5)
 	s.durabilityLossAll(ctx, 0.25, true)
 	if s.player.Level > 10 {
@@ -1272,6 +1278,12 @@ func (s *session) handleSpiritHealerActivate(ctx context.Context, payload []byte
 		s.applyAuraWithDuration(15007, uint32(durationMinutes)*60*1000)
 	}
 	s.spawnCorpseBones(ctx)
+	if corpseGraveFound {
+		ghostGrave, ghostGraveFound := s.server.closestGraveyard(ctx, s.player.X, s.player.Y, s.player.Z, s.player.Map, s.player.Zone, playerTeam(s.player.Race))
+		if !ghostGraveFound || corpseGrave.ID != ghostGrave.ID {
+			s.teleportTo(corpseGrave.MapID, corpseGrave.X, corpseGrave.Y, corpseGrave.Z, s.player.Orientation)
+		}
+	}
 	return true
 }
 

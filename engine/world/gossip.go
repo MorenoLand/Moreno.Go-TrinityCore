@@ -200,10 +200,6 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			s.sendVendorList(ctx, guid)
 			s.gossipClosed = true
 		} else if item.Action == 6 { // GOSSIP_OPTION_SPIRITHEALER
-			if err := s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true); err != nil {
-				return false
-			}
-			s.gossipClosed = true
 			if s.isDeadOrGhost() && objectUint32OrZero(creature, "NPCFlags")&npcFlagSpiritHealer != 0 {
 				x, xOK := objectFloat32Field(creature, "X")
 				y, yOK := objectFloat32Field(creature, "Y")
