@@ -48,7 +48,8 @@ const (
 	spellFailedEquippedItemClassMainhand uint8 = 30 // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
 	spellFailedEquippedItemClassOffhand  uint8 = 31 // SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND (SharedDefines.h:1013)
 	spellFailedNotInFront                uint8 = 61 // SPELL_FAILED_NOT_INFRONT (SharedDefines.h:1042)
-	spellFailedBadTargets                uint8 = 12 // SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992)
+	spellFailedBadTargets                uint8 = 12  // SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992)
+	spellFailedTargetIsPlayer            uint8 = 117 // SPELL_FAILED_TARGET_IS_PLAYER (SharedDefines.h:1099)
 	spellFailedAffectingCombat           uint8 = 1
 	spellFailedFoodLowLevel              uint8 = 35
 	spellFailedNoPet                     uint8 = 84
@@ -611,6 +612,16 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		targetGUID = target.UnitGUID
 	} else if s.selection != 0 {
 		targetGUID = s.selection
+	}
+
+	// Target creature-type gate (SpellInfo::CheckTarget, SpellInfo.cpp:1728):
+	// sits ahead of the aura-state/aura-spell gates in C++ CheckTarget order.
+	// Only checked when a unit target exists, like C++ m_targets.GetUnitTarget().
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if failReason := s.checkTargetCreatureType(ctx, spell, targetGUID); failReason != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target creature type mismatch", "failReason", failReason)
+		return true
 	}
 
 	// Target aura spell requirements (SpellInfo::CheckTarget, SpellInfo.cpp:1769-1772):

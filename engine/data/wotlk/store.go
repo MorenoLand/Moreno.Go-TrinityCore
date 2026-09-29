@@ -61,6 +61,7 @@ type Race struct {
 	FactionID          uint32
 	MaleDisplayID      uint32
 	FemaleDisplayID    uint32
+	CreatureType       uint32 // ChrRaces.dbc field 8 = CreatureType (DBCStructure.h:425)
 	ResSicknessSpellID uint32
 	CinematicSequence  uint32
 	Alliance           uint32
@@ -162,6 +163,7 @@ func (effect SpellEffect) CalcValueRangeForLevel(spell Spell, casterLevel uint32
 
 type Spell struct {
 	ID                     uint32
+	Category               uint32 // Spell.dbc field 1 = Category (DBCStructure.h:1391)
 	AreaGroupID            int32
 	DispelType             uint32 // Spell.dbc field 2 = DispelType (DBCStructure.h:1394)
 	Mechanic               uint32 // Spell.dbc field 3 = Mechanic (DBCStructure.h:1395)
@@ -530,6 +532,7 @@ func (s *Store) Race(id uint32) (Race, bool, error) {
 	}
 	cinematic, _ := record.Uint32(12)
 	resSickness, _ := record.Uint32(9)
+	creatureType, _ := record.Uint32(8)
 	alliance, err := record.Uint32(13)
 	if err != nil {
 		return Race{}, false, err
@@ -538,7 +541,7 @@ func (s *Store) Race(id uint32) (Race, bool, error) {
 	if err != nil {
 		return Race{}, false, err
 	}
-	return Race{ID: id, Flags: flags, FactionID: factionID, MaleDisplayID: maleDisplayID, FemaleDisplayID: femaleDisplayID, ResSicknessSpellID: resSickness, CinematicSequence: cinematic, Alliance: alliance, RequiredExpansion: requiredExpansion}, true, nil
+	return Race{ID: id, Flags: flags, FactionID: factionID, MaleDisplayID: maleDisplayID, FemaleDisplayID: femaleDisplayID, CreatureType: creatureType, ResSicknessSpellID: resSickness, CinematicSequence: cinematic, Alliance: alliance, RequiredExpansion: requiredExpansion}, true, nil
 }
 
 func (s *Store) ValidateAppearance(race, class, gender, hairID, hairColor, faceID, facialHair, skinColor uint8) (bool, bool, error) {
@@ -779,6 +782,7 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		field int
 		dest  *uint32
 	}{
+		{1, &spell.Category},   // Spell.dbc field 1 = Category (DBCStructure.h:1391)
 		{2, &spell.DispelType}, // Spell.dbc field 2 = DispelType (DBCStructure.h:1394)
 		{3, &spell.Mechanic},   // Spell.dbc field 3 = Mechanic (DBCStructure.h:1395)
 		{4, &spell.Attributes},
