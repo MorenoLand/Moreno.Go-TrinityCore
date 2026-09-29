@@ -581,12 +581,12 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	}
 	// Caster aura state requirements (Spell::CheckCast caster-state block, Spell.cpp:5298-5304):
 	// client-initiated casts only — triggered casts go through castSpellDirect, not this path.
-	if spell.CasterAuraState != 0 && !s.hasAuraState(spell.CasterAuraState) {
+	if spell.CasterAuraState != 0 && !s.hasAuraState(spell.CasterAuraState, spell) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAuraState), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "required caster aura state missing", "state", spell.CasterAuraState)
 		return true
 	}
-	if spell.ExcludeCasterAuraState != 0 && s.hasAuraState(spell.ExcludeCasterAuraState) {
+	if spell.ExcludeCasterAuraState != 0 && s.hasAuraState(spell.ExcludeCasterAuraState, spell) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAuraState), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded caster aura state present", "state", spell.ExcludeCasterAuraState)
 		return true
@@ -729,12 +729,12 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// C++ skips these for vehicle casters and charmer-owned targets; Go has
 	// neither concept, so the check always applies here.
 	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
-	if spell.TargetAuraState != 0 && targetGUID != 0 && !s.targetHasAuraState(ctx, targetGUID, spell.TargetAuraState) {
+	if spell.TargetAuraState != 0 && targetGUID != 0 && !s.targetHasAuraState(ctx, targetGUID, spell.TargetAuraState, spell) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "required target aura state missing", "state", spell.TargetAuraState)
 		return true
 	}
-	if spell.ExcludeTargetAuraState != 0 && targetGUID != 0 && s.targetHasAuraState(ctx, targetGUID, spell.ExcludeTargetAuraState) {
+	if spell.ExcludeTargetAuraState != 0 && targetGUID != 0 && s.targetHasAuraState(ctx, targetGUID, spell.ExcludeTargetAuraState, spell) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded target aura state present", "state", spell.ExcludeTargetAuraState)
 		return true

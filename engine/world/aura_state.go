@@ -41,6 +41,12 @@ const (
 	spellFamilyRogue   = 8
 )
 
+// spellAuraAbilityIgnoreAuraState is SPELL_AURA_ABILITY_IGNORE_AURASTATE
+// (SpellAuraDefines.h:342): a caster-side aura effect that makes
+// Unit::HasAuraState succeed for spells its affect mask covers
+// (Unit.cpp:5946-5954).
+const spellAuraAbilityIgnoreAuraState = 262
+
 func spellAuraState(spell wotlk.Spell) uint32 {
 	// Seals (SpellInfo.cpp:1971; classifier takes nil — the seal branch
 	// never resolves the first-rank chain).
@@ -150,11 +156,15 @@ func (s *session) unitAuraStateMask() uint32 {
 // casting unit itself, used by the caster-state block of Spell::CheckCast
 // (Spell.cpp:5298-5308). Per-caster states are only visible from auras
 // applied by this caster (Unit.cpp:5957-5965). The
-// SPELL_AURA_ABILITY_IGNORE_AURASTATE bypass has no Go aura plumbing yet
-// (noted gap, not a stub).
-func (s *session) hasAuraState(state uint32) bool {
+// SPELL_AURA_ABILITY_IGNORE_AURASTATE bypass runs first, like C++
+// (Unit.cpp:5946-5954): a matching caster aura makes every state query
+// succeed, including the Exclude (Not) terms.
+func (s *session) hasAuraState(state uint32, spell wotlk.Spell) bool {
 	if state == auraStateNone || s.player == nil {
 		return false
+	}
+	if s.casterIgnoresAuraState(spell) {
+		return true
 	}
 	if uint32(1)<<(state-1)&perCasterAuraStateMask != 0 {
 		for _, aura := range s.loadedAuras() {
@@ -175,13 +185,20 @@ func (s *session) hasAuraState(state uint32) bool {
 // their session's aura set; creature targets consult the server creature aura
 // maps (same read pattern as targetHasAura). Per-caster states need an aura
 // from the casting session; the creatureAuras presence map carries no caster
-// GUID, so those only match through activeCreatureAuras (noted gap).
-func (s *session) targetHasAuraState(ctx context.Context, targetGUID uint64, state uint32) bool {
+// GUID, so those only match through activeCreatureAuras (noted gap). The
+// SPELL_AURA_ABILITY_IGNORE_AURASTATE bypass reads the caster's own auras
+// (Unit.cpp:5946-5954), so it runs before the target-kind dispatch below.
+func (s *session) targetHasAuraState(ctx context.Context, targetGUID uint64, state uint32, spell wotlk.Spell) bool {
 	if state == auraStateNone || targetGUID == 0 {
 		return false
 	}
+	// The bypass reads the caster's auras, not the target's (Unit.cpp:5952),
+	// so it applies on every target kind.
+	if s.casterIgnoresAuraState(spell) {
+		return true
+	}
 	if s.player != nil && targetGUID == s.playerGUID {
-		return s.hasAuraState(state)
+		return s.hasAuraState(state, spell)
 	}
 	bit := uint32(1) << (state - 1)
 	perCaster := bit&perCasterAuraStateMask != 0
@@ -236,4 +253,45 @@ func (s *session) targetHasAuraState(ctx context.Context, targetGUID uint64, sta
 		mask |= bit
 	}
 	return mask&bit != 0
+}
+
+// casterIgnoresAuraState reports whether the casting session carries an aura
+// effect of type SPELL_AURA_ABILITY_IGNORE_AURASTATE whose spell affects the
+// spell being cast, mirroring the bypass term at the top of
+// Unit::HasAuraState (Unit.cpp:5946-5954) via HasAuraTypeWithAffectMask
+// (Unit.cpp:4689-4696).
+func (s *session) casterIgnoresAuraState(spell wotlk.Spell) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	data := s.server.Data
+	return auraStateBypassApplies(s.loadedAuras(), func(spellID uint32) (wotlk.Spell, bool) {
+		granting, found, err := data.Spell(spellID)
+		return granting, err == nil && found
+	}, spell)
+}
+
+// auraStateBypassApplies is the data-free core of casterIgnoresAuraState: true
+// when any live aura grants a 262 effect (masked in by EffectMask, the
+// per-effect merge accumulator) whose spell-family affect mask covers the
+// spell being cast (AuraEffect::IsAffectedOnSpell, SpellAuraEffects.cpp:848).
+func auraStateBypassApplies(auras []*activeAura, grantingSpell func(uint32) (wotlk.Spell, bool), spell wotlk.Spell) bool {
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, ok := grantingSpell(aura.SpellID)
+		if !ok {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if effect.Aura != spellAuraAbilityIgnoreAuraState || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+				return true
+			}
+		}
+	}
+	return false
 }
