@@ -1311,6 +1311,56 @@ func (s *Server) isHostileFaction(creatureFaction uint32, player playerPos) bool
 	return isHostileFactionFallback(creatureFaction, player.Race)
 }
 
+// isFriendlyFaction mirrors the friendly half of the isHostileFaction
+// lookup: a reputation rank of friendly (4) or better when the player has a
+// standing row for the creature's faction, else the faction-template friend
+// lists and friend/faction-group cross terms. Neutral factions are neither
+// friendly nor hostile.
+func (s *Server) isFriendlyFaction(creatureFaction uint32, player playerPos) bool {
+	if s.Data != nil && player.FactionTemplate != 0 {
+		creatureTemplate, creatureFound, creatureErr := s.Data.FactionTemplate(creatureFaction)
+		playerTemplate, playerFound, playerErr := s.Data.FactionTemplate(player.FactionTemplate)
+		if creatureErr == nil && playerErr == nil && creatureFound && playerFound {
+			if reputation, found, err := s.Data.Reputation(creatureTemplate.Faction, player.Race, player.Class); err == nil && found && reputation.ReputationList >= 0 {
+				standing := int64(reputation.BaseStanding)
+				if saved, ok := player.Reputations[creatureTemplate.Faction]; ok {
+					standing = int64(totalReputationStanding(saved))
+				}
+				return reputationRank(standing) >= 4
+			}
+			for _, friend := range creatureTemplate.Friends {
+				if friend != 0 && friend == playerTemplate.Faction {
+					return true
+				}
+			}
+			for _, friend := range playerTemplate.Friends {
+				if friend != 0 && friend == creatureTemplate.Faction {
+					return true
+				}
+			}
+			if creatureTemplate.FriendGroup&playerTemplate.FactionGroup != 0 || creatureTemplate.FactionGroup&playerTemplate.FriendGroup != 0 || playerTemplate.FriendGroup&creatureTemplate.FactionGroup != 0 || playerTemplate.FactionGroup&creatureTemplate.FriendGroup != 0 {
+				return true
+			}
+		}
+	}
+	return isFriendlyFactionFallback(creatureFaction, player.Race)
+}
+
+func isFriendlyFactionFallback(creatureFaction uint32, playerRace uint8) bool {
+	switch creatureFaction {
+	case 14, 16, 17, 38, 48, 91, 100, 101, 102, 103, 104, 105, 106, 117, 168, 188, 189, 214, 254:
+		return false
+	}
+	isAlliance := isAllianceRace(playerRace)
+	switch creatureFaction {
+	case 1, 3, 4, 11, 12, 55, 57, 72, 115:
+		return isAlliance
+	case 2, 5, 6, 8, 10, 29, 67, 68, 76, 116:
+		return !isAlliance
+	}
+	return false
+}
+
 func isHostileFactionFallback(creatureFaction uint32, playerRace uint8) bool {
 	if creatureFaction == 0 || creatureFaction == 35 || creatureFaction == 7 || creatureFaction == 8 || creatureFaction == 114 || creatureFaction == 120 || creatureFaction == 534 {
 		return false

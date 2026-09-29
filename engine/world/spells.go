@@ -1165,7 +1165,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// SpellInfo::CheckExplicitTarget (Spell.cpp:5365, SpellInfo.cpp:1799),
 	// which applies the Unit::IsValidAttackTarget/IsValidAssistTarget flag
 	// gates (Object.cpp:2972/3127/2991/3134, bundled in spellTargetUnitBlocked)
-	// and fails the cast with SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992).
+	// and the hostility/faction gates (Object.cpp "can't attack friendly
+	// targets" / "can't assist non-friendly targets", plus the PARTY/RAID
+	// membership terms, via explicitTargetFactionBlocked), failing the cast
+	// with SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992).
 	// Self is exempt: IsValidAssistTarget returns true for self (Object.cpp:3092).
 	explicitUnitGUID := uint64(0)
 	if isSelfCastOnly(spell) {
@@ -1178,10 +1181,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		hitTargets = append(hitTargets, s.playerGUID)
 	}
 	if explicitUnitGUID != 0 && explicitUnitGUID != s.playerGUID {
-		if tgt, ok := s.getCombatTarget(ctx, explicitUnitGUID); ok && spellTargetUnitBlocked(spell, tgt.UnitFlags, tgt.FlagsExtra) {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
-			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "explicit target blocked")
-			return
+		if tgt, ok := s.getCombatTarget(ctx, explicitUnitGUID); ok {
+			if spellTargetUnitBlocked(spell, tgt.UnitFlags, tgt.FlagsExtra) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
+				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "explicit target blocked")
+				return
+			}
+			// SpellInfo.cpp:1799-1816: the ENEMY/ALLY/PARTY/RAID explicit
+			// masks carry the hostility/faction gates.
+			if s.explicitTargetFactionBlocked(spellExplicitUnitTargetMask(spell), explicitUnitGUID, tgt) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
+				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "explicit target faction mismatch")
+				return
+			}
 		}
 		hitTargets = append(hitTargets, explicitUnitGUID)
 	}
