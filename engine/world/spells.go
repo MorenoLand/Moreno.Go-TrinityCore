@@ -3724,6 +3724,75 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 
 		previous := targetSess.activeAuras[spell.ID]
+		if existing := previous; existing != nil && !existing.Stopped {
+			// Unit::_TryStackingOrRefreshingExistingAura (Unit.cpp:3326) ->
+			// Aura::ModStackAmount(+1) (SpellAuras.cpp:1030): a re-cast merges
+			// into the existing aura instead of replacing it — one more stack,
+			// clamped to the spell's stack amount (1 when the spell is not
+			// stackable). The +1 refresh always resets the charge count to the
+			// spell's max charges and the duration to the new cast's duration
+			// (DoSpellEffectHit, Spell.cpp:2899-2910). Go holds one aura per
+			// spell ID, so the C++ caster-GUID match is vacuous.
+			maxStack := int32(spell.StackAmount)
+			if maxStack == 0 {
+				maxStack = 1
+			}
+			cur := int32(existing.StackCount)
+			if cur == 0 {
+				cur = 1
+			}
+			if cur++; cur > maxStack {
+				cur = maxStack
+			}
+			stackCount := uint8(cur)
+			existing.StackCount = stackCount
+			existing.RemainingCharges = uint8(spell.ProcCharges)
+			existing.DurationMs = durationMs
+			existing.RemainingMs = durationMs
+			existing.DurationUpdatedAt = time.Now()
+			// Aura::RefreshTimers(resetPeriodicTimer): the expiry timer always
+			// restarts; the periodic timer only for non-stackable auras
+			// (resetPeriodicTimer = StackAmount < 2, Spell.cpp:2857 — Go has
+			// no TRIGGERED_DONT_RESET_PERIODIC_TIMER flag on this path).
+			resetPeriodic := spell.StackAmount < 2
+			if existing.Timer != nil {
+				existing.Timer.Stop()
+				existing.Timer = nil
+			}
+			if resetPeriodic {
+				if existing.TickTimer != nil {
+					existing.TickTimer.Stop()
+					existing.TickTimer = nil
+				}
+				existing.PeriodMs = periodMs
+			}
+			slot, effectMask, charges := existing.Slot, existing.EffectMask, existing.RemainingCharges
+			targetSess.castMu.Unlock()
+			if resetPeriodic && periodMs > 0 {
+				targetSess.schedulePlayerPeriodicTick(existing, periodMs)
+			}
+			if durationMs > 0 && durationMs < 18000000 {
+				targetSess.castMu.Lock()
+				existing.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() {
+					targetSess.expirePlayerAura(spell.ID)
+				})
+				targetSess.castMu.Unlock()
+			}
+			// Charges ride the stack-count field of the aura update
+			// (player_auras.go), same convention as the fresh-apply path.
+			wireStack := stackCount
+			if !mountedFlight && eff.Aura != spellAuraMounted && spell.StackAmount == 0 && spell.ProcCharges > 0 {
+				wireStack = charges
+			}
+			wireMaxDuration, wireDuration := auraWireDurations(spell, durationMs, durationMs)
+			updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, s.playerGUID, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, s.player.Level, wireStack, effectMask)
+			_ = targetSess.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
+			if s.server != nil {
+				s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, targetSess)
+			}
+			targetSess.sendPlayerUpdate()
+			return
+		}
 		if existing := previous; existing != nil {
 			existing.Stopped = true
 			if existing.Timer != nil {
@@ -3948,6 +4017,60 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	}
 	if s.server.activeCreatureAuras[targetKey] == nil {
 		s.server.activeCreatureAuras[targetKey] = make(map[uint32]*activeAura)
+	}
+	if existing, exists := s.server.activeCreatureAuras[targetKey][spell.ID]; exists && existing != nil && !existing.Stopped {
+		// Same ModStackAmount(+1) merge as the player path above
+		// (Unit.cpp:3326, SpellAuras.cpp:1030).
+		maxStack := int32(spell.StackAmount)
+		if maxStack == 0 {
+			maxStack = 1
+		}
+		cur := int32(existing.StackCount)
+		if cur == 0 {
+			cur = 1
+		}
+		if cur++; cur > maxStack {
+			cur = maxStack
+		}
+		stackCount := uint8(cur)
+		existing.StackCount = stackCount
+		existing.RemainingCharges = uint8(spell.ProcCharges)
+		existing.DurationMs = durationMs
+		existing.RemainingMs = durationMs
+		existing.DurationUpdatedAt = time.Now()
+		resetPeriodic := spell.StackAmount < 2
+		if existing.Timer != nil {
+			existing.Timer.Stop()
+			existing.Timer = nil
+		}
+		if resetPeriodic {
+			if existing.TickTimer != nil {
+				existing.TickTimer.Stop()
+				existing.TickTimer = nil
+			}
+			existing.PeriodMs = periodMs
+		}
+		slot, effectMask := existing.Slot, existing.EffectMask
+		s.server.auraMu.Unlock()
+		if resetPeriodic && periodMs > 0 {
+			s.scheduleCreaturePeriodicTick(existing, periodMs)
+		}
+		if durationMs > 0 && durationMs < 18000000 {
+			s.server.auraMu.Lock()
+			existing.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() {
+				s.expireCreatureAura(targetKey, spell.ID, slot)
+			})
+			s.server.auraMu.Unlock()
+		}
+		wireStack := stackCount
+		if spell.StackAmount == 0 && spell.ProcCharges > 0 {
+			wireStack = uint8(spell.ProcCharges)
+		}
+		wireMaxDuration, wireDuration := auraWireDurations(spell, durationMs, durationMs)
+		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, s.playerGUID, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, s.player.Level, wireStack, effectMask)
+		_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, s)
+		return
 	}
 	if existing, exists := s.server.activeCreatureAuras[targetKey][spell.ID]; exists && existing != nil {
 		existing.Stopped = true
