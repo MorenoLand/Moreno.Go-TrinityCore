@@ -850,7 +850,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		}
 	}
 	// Spell::prepare (Spell.cpp:3175-3189): stealth breaks at cast start.
-	if spell.Attributes&spellAttr1NotBreakStealth == 0 {
+	if spell.AttributesEx&spellAttr1NotBreakStealth == 0 {
 		s.removeAurasWithInterruptFlags(auraInterruptFlagCast)
 		if isHarmfulSpell(spell) {
 			s.removeAurasWithInterruptFlags(auraInterruptFlagSpellAttack)
