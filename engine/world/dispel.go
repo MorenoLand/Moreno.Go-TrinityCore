@@ -620,6 +620,127 @@ func (s *session) handleEffectDispel(ctx context.Context, targetGUID uint64, spe
 	}
 }
 
+// stolenBuff carries a successfully stolen buff from the roll loop to the
+// stealer-side apply: the candidate plus the victim aura's remaining
+// duration and charge count captured before the steal decrement (C++ reads
+// aura->GetDuration()/GetCharges() before mutating, Unit.cpp:3999/4032).
+type stolenBuff struct {
+	candidate   dispelCandidate
+	remainingMs uint32
+	charges     uint8
+	stealCharge bool
+}
+
+// stealVictimState reads the victim aura's current remaining duration and
+// charge count; degrades to the candidate's recorded duration when the aura
+// is gone.
+func (s *session) stealVictimState(targetSess *session, targetGUID uint64, isTargetPlayer bool, cand dispelCandidate) (uint32, uint8) {
+	if isTargetPlayer && targetSess != nil {
+		targetSess.castMu.Lock()
+		defer targetSess.castMu.Unlock()
+		if aura := targetSess.activeAuras[cand.SpellID]; aura != nil && !aura.Stopped {
+			advanceAuraDuration(aura, time.Now())
+			return aura.RemainingMs, aura.RemainingCharges
+		}
+		return cand.DurationMs, 0
+	}
+	if s.server != nil && s.player != nil {
+		key := creatureAuraKeyForPlayer(*s.player, targetGUID)
+		s.server.auraMu.Lock()
+		defer s.server.auraMu.Unlock()
+		if aura := s.server.activeCreatureAuras[key][cand.SpellID]; aura != nil && !aura.Stopped {
+			return aura.RemainingMs, aura.RemainingCharges
+		}
+	}
+	return cand.DurationMs, 0
+}
+
+// mergeStolenAura mirrors the stealer-side merge in
+// Unit::RemoveAurasDueToSpellBySteal (Unit.cpp:4002-4010): when the stealer
+// already holds the stolen spell, the steal merges into it — one charge
+// (Aura::ModCharges(+1), clamped to the spell's max charges) or one stack
+// (Aura::ModStackAmount(+1), clamped to the spell's stack amount) — and the
+// duration is reset to the capped stolen duration, instead of the aura being
+// re-applied fresh. Reports whether a merge happened. Go holds one aura per
+// spell ID, so the C++ caster-GUID match is vacuous.
+func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, stealCharge bool, dur uint32) bool {
+	s.castMu.Lock()
+	existing := s.activeAuras[spellID]
+	if existing == nil || existing.Stopped {
+		s.castMu.Unlock()
+		return false
+	}
+	if stealCharge {
+		// Aura::ModCharges(+1, SpellAuras.cpp:964): increments while the
+		// aura uses charges, clamped to CalcMaxCharges (the spell's proc
+		// charges; SPELLMOD_CHARGES has no Go infra).
+		if existing.RemainingCharges > 0 || stSpell.ProcCharges > 0 {
+			charges := int32(existing.RemainingCharges) + 1
+			if max := int32(stSpell.ProcCharges); max > 0 && charges > max {
+				charges = max
+			}
+			existing.RemainingCharges = uint8(charges)
+		}
+	} else {
+		// Aura::ModStackAmount(+1, SpellAuras.cpp:1030): clamped to the
+		// spell's stack amount (1 when the spell is not stackable); an
+		// increase refreshes the charge count — the SetDuration below
+		// replaces the timer refresh.
+		maxStack := int32(existing.StackAmount)
+		if maxStack == 0 {
+			maxStack = 1
+		}
+		cur := int32(existing.StackCount)
+		if cur == 0 {
+			cur = 1
+		}
+		increased := cur < maxStack
+		if cur++; cur > maxStack {
+			cur = maxStack
+		}
+		existing.StackCount = uint8(cur)
+		if increased {
+			existing.RemainingCharges = uint8(stSpell.ProcCharges)
+		}
+	}
+	// oldAura->SetDuration(int32(dur)), Unit.cpp:4009.
+	existing.DurationMs = dur
+	existing.RemainingMs = dur
+	existing.DurationUpdatedAt = time.Now()
+	slot, positive := existing.Slot, existing.Positive
+	var count uint8
+	if stealCharge {
+		count = existing.RemainingCharges
+	} else {
+		count = existing.StackCount
+		if count == 0 {
+			count = 1
+		}
+	}
+	s.castMu.Unlock()
+	// Charges ride the stack-count field of the aura update
+	// (player_auras.go).
+	s.sendAuraUpdateWithStack(slot, spellID, false, positive, dur, dur, count)
+	return true
+}
+
+// setAuraCharges fixes the stolen aura's charge count after the fresh apply
+// (C++ SetLoadedState charges arg, Unit.cpp:4032) and pushes the corrected
+// count to the client when it changed.
+func (s *session) setAuraCharges(spellID uint32, charges uint8) {
+	s.castMu.Lock()
+	aura := s.activeAuras[spellID]
+	if aura == nil || aura.Stopped || aura.RemainingCharges == charges {
+		s.castMu.Unlock()
+		return
+	}
+	aura.RemainingCharges = charges
+	slot, positive := aura.Slot, aura.Positive
+	maxDuration, remaining := aura.DurationMs, aura.RemainingMs
+	s.castMu.Unlock()
+	s.sendAuraUpdateWithStack(slot, spellID, false, positive, maxDuration, remaining, charges)
+}
+
 // handleEffectSpellsteal processes SPELL_EFFECT_STEAL_BENEFICIAL_BUFF (126).
 // Mirrors TrinityCore Spell::EffectStealBeneficialBuff (SpellEffects.cpp:5150-5251).
 func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
@@ -661,32 +782,52 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 	}
 
 	var successList []uint32
-	var stolenCandidates []dispelCandidate
+	var stolen []stolenBuff
 	var failList []uint32
 
 	for count := 0; count < maxDispelled && len(stealable) > 0; count++ {
 		idx := rand.IntN(len(stealable))
 		cand := stealable[idx]
-		stealable[idx] = stealable[len(stealable)-1]
-		stealable = stealable[:len(stealable)-1]
 
 		roll := rand.IntN(100)
 		if int32(roll) < cand.Chance {
 			successList = append(successList, cand.SpellID)
-			stolenCandidates = append(stolenCandidates, cand)
+			// C++ reads the victim aura's duration/charges before mutating
+			// it (Unit.cpp:3999/4032).
+			stealCharge := false
+			if s.server != nil && s.server.Data != nil {
+				if sp, found, _ := s.server.Data.Spell(cand.SpellID); found {
+					stealCharge = sp.AttributesEx7&spellAttr7DispelCharges != 0
+				}
+			}
+			remaining, charges := s.stealVictimState(targetSess, targetGUID, isTargetPlayer, cand)
+			stolen = append(stolen, stolenBuff{candidate: cand, remainingMs: remaining, charges: charges, stealCharge: stealCharge})
+			// C++ RemoveAurasDueToSpellBySteal (Unit.cpp:4046-4049): a
+			// successful steal removes one charge
+			// (SPELL_ATTR7_DISPEL_CHARGES) or one stack
+			// (Aura::ModStackAmount(-1)) from the victim aura — the aura
+			// survives while charges/stacks remain and stays in the roll
+			// list like the C++ DecrementCharge loop.
+			fullyRemoved := true
 			if isTargetPlayer {
-				targetSess.expirePlayerAura(cand.SpellID)
+				fullyRemoved = targetSess.dispelPlayerAuraCharge(cand.SpellID)
 			} else {
-				s.expireCreatureAura(creatureAuraKeyForPlayer(*s.player, targetGUID), cand.SpellID, cand.Slot)
+				fullyRemoved = s.dispelCreatureAuraCharge(creatureAuraKeyForPlayer(*s.player, targetGUID), cand.SpellID, cand.Slot)
+			}
+			if fullyRemoved {
+				stealable[idx] = stealable[len(stealable)-1]
+				stealable = stealable[:len(stealable)-1]
 			}
 		} else {
 			failList = append(failList, cand.SpellID)
 		}
 	}
 
-	// Apply stolen buffs to caster (capped at 2 minutes / 120000ms per TC)
-	for _, cand := range stolenCandidates {
-		dur := cand.DurationMs
+	// Apply stolen buffs to the stealer (duration capped at 2 minutes /
+	// 120000ms per TC, Unit.cpp:3999).
+	for _, st := range stolen {
+		cand := st.candidate
+		dur := st.remainingMs
 		if dur == 0 || dur > 120000 {
 			dur = 120000
 		}
@@ -696,12 +837,22 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 				stSpell = loaded
 			}
 		}
+		if s.mergeStolenAura(cand.SpellID, stSpell, st.stealCharge, dur) {
+			continue
+		}
 		eff := wotlk.SpellEffect{
 			Effect:     6,
 			Aura:       cand.AuraType,
 			BasePoints: int32(cand.Amount) - 1,
 		}
 		s.applyAuraToTarget(ctx, s.playerGUID, stSpell, eff, dur, cand.PeriodMs, cand.Amount, cand.SchoolMask)
+		// C++ SetLoadedState charges arg (Unit.cpp:4032): 1 for
+		// ATTR7_DISPEL_CHARGES auras, the victim's charge count otherwise.
+		wantCharges := st.charges
+		if st.stealCharge {
+			wantCharges = 1
+		}
+		s.setAuraCharges(cand.SpellID, wantCharges)
 	}
 
 	if len(failList) > 0 {
