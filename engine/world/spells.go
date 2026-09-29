@@ -28,8 +28,8 @@ const (
 	spellInterruptFlagMovement uint32 = 0x01 // SPELL_INTERRUPT_FLAG_MOVEMENT (SpellDefines.h:30)
 
 	spellAttr1NotBreakStealth uint32 = 0x00000020 // SPELL_ATTR1_NOT_BREAK_STEALTH (SharedDefines.h:454)
-	spellAttr1NoThreat       uint32 = 0x00000400 // SPELL_ATTR1_NO_THREAT (SharedDefines.h:459) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
-	spellAttr3NoInitialAggro uint32 = 0x00020000 // SPELL_ATTR3_NO_INITIAL_AGGRO (SharedDefines.h:540) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7)
+	spellAttr1NoThreat        uint32 = 0x00000400 // SPELL_ATTR1_NO_THREAT (SharedDefines.h:459) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
+	spellAttr3NoInitialAggro  uint32 = 0x00020000 // SPELL_ATTR3_NO_INITIAL_AGGRO (SharedDefines.h:540) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7)
 
 	spellAttr0Ability                     uint32 = 0x00000010 // SPELL_ATTR0_ABILITY (SharedDefines.h:416)
 	spellAttr0ReqAmmo                     uint32 = 0x00000002 // SPELL_ATTR0_REQ_AMMO (SharedDefines.h:413)
