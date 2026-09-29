@@ -164,8 +164,12 @@ func BuildSpellGoWithPower(casterGUID, casterUnitGUID uint64, castID uint8, spel
 	return packet.Bytes()
 }
 
-func BuildSpellFailure(castID uint8, spellID uint32, result uint8) []byte {
-	packet := NewBuffer(6)
+// BuildSpellFailure builds the SMSG_SPELL_FAILURE / SMSG_SPELL_FAILED_OTHER
+// payload (Spell::SendInterrupted, Spell.cpp:4624): packed caster GUID,
+// cast count, spell id, result. Both opcodes carry the same payload.
+func BuildSpellFailure(casterGUID uint64, castID uint8, spellID uint32, result uint8) []byte {
+	packet := NewBuffer(16)
+	packet.WritePackedGUID(casterGUID)
 	packet.WriteU8(castID)
 	packet.WriteU32(spellID)
 	packet.WriteU8(result)

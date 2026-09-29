@@ -1988,6 +1988,18 @@ func spellCastIgnoreReason(spell wotlk.Spell, found, learned bool) string {
 	return "unavailable"
 }
 
+// sendInterrupted mirrors C++ Spell::SendInterrupted (Spell.cpp:4624): after
+// the caster receives its own SMSG_CAST_FAILED, SMSG_SPELL_FAILURE and
+// SMSG_SPELL_FAILED_OTHER are broadcast to the set with the packed caster GUID.
+func (s *session) sendInterrupted(castID uint8, spellID uint32, result uint8) {
+	if s.server == nil || s.player == nil {
+		return
+	}
+	payload := protocol.BuildSpellFailure(s.playerGUID, castID, spellID, result)
+	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_FAILURE), payload, s)
+	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_FAILED_OTHER), payload, s)
+}
+
 func (s *session) interruptCurrentCast() {
 	s.castMu.Lock()
 	if s.activeCast != nil {
@@ -2004,6 +2016,7 @@ func (s *session) interruptCurrentCast() {
 		s.castMu.Unlock()
 
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedInterrupted), true)
+		s.sendInterrupted(castID, spellID, spellFailedInterrupted)
 		return
 	}
 	s.castMu.Unlock()
