@@ -1038,6 +1038,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
+	// Spell::SelectImplicitTargetDestTargets (Spell.cpp:1433) and
+	// Spell::SelectImplicitDestDestTargets (Spell.cpp:1464): resolve the
+	// spell destination from target-relative / dest-relative implicit
+	// targets once, before the area selection and persistent-area read
+	// sites below consume it.
+	target = s.resolveImplicitSpellDestination(ctx, spell, target)
+
 	hitTargets := make([]uint64, 0, 1)
 	if isSelfCastOnly(spell) {
 		hitTargets = append(hitTargets, s.playerGUID)
