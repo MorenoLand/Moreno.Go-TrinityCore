@@ -252,6 +252,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if traced != nil {
 				traced.end()
 			}
+			discardPending(state.conn)
 			continue
 		}
 		if traced != nil {
@@ -863,6 +864,22 @@ func writePacket(conn net.Conn, data []byte) error {
 		data = data[n:]
 	}
 	return nil
+}
+
+func discardPending(conn net.Conn) {
+	if conn == nil {
+		return
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond)); err != nil {
+		return
+	}
+	defer conn.SetReadDeadline(time.Time{})
+	var buf [512]byte
+	for {
+		if _, err := conn.Read(buf[:]); err != nil {
+			return
+		}
+	}
 }
 
 func readChallenge(conn net.Conn) (uint32, string, string, uint8, error) {
