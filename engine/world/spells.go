@@ -75,6 +75,10 @@ const (
 	spellFailedRequiresSpellFocus        uint8 = 102 // SPELL_FAILED_REQUIRES_SPELL_FOCUS (SharedDefines.h:1084)
 	spellFailedTotemCategory             uint8 = 130 // SPELL_FAILED_TOTEM_CATEGORY (SharedDefines.h:1112)
 	spellFailedTotems                    uint8 = 131 // SPELL_FAILED_TOTEMS (SharedDefines.h:1113)
+	spellFailedLowLevel                  uint8 = 48  // SPELL_FAILED_LOWLEVEL (SharedDefines.h:1030)
+	spellFailedNotKnown                  uint8 = 63  // SPELL_FAILED_NOT_KNOWN (SharedDefines.h:1045)
+
+	spellImplicitTargetUnitPet uint32 = 5 // TARGET_UNIT_PET (SharedDefines.h:1446)
 
 	itemClassWeapon = 2
 	itemClassArmor  = 4
@@ -91,6 +95,7 @@ const (
 	spellEffectCreateItem                    = 24
 	spellEffectCreateItem2                   = 70
 	spellEffectLearnSpell                    = 36
+	spellEffectLearnPetSpell                 = 57 // SPELL_EFFECT_LEARN_PET_SPELL (SharedDefines.h:868)
 	spellEffectResurrect                     = 18
 	spellEffectReputation                    = 103
 	spellEffectQuestComplete                 = 16
@@ -607,6 +612,15 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			return true
 		}
 	}
+	// Learn-spell pet gates (Spell::CheckCast per-effect block,
+	// Spell.cpp:5570-5618): LEARN_SPELL on TargetA == TARGET_UNIT_PET and
+	// LEARN_PET_SPELL require the caster's pet and reject when the learn
+	// spell's own SpellLevel exceeds the pet's level.
+	if failure := s.checkLearnSpellCast(ctx, spell, target); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "learn spell pet validation", "failure", failure)
+		return true
+	}
 	cost := s.calculateSpellPowerCost(spell)
 	pType := spell.PowerType
 	// Spell::CheckPower (Spell.cpp:6665-6670) checks rune costs when
@@ -955,6 +969,58 @@ func (s *session) validateSpellRange(ctx context.Context, spellID uint32, spell 
 	}
 	if minRange > 0 && dist < float64(minRange) {
 		return 128 // SPELL_FAILED_TOO_CLOSE
+	}
+	return 0
+}
+
+// checkLearnSpellCast mirrors the per-effect pet gates in Spell::CheckCast
+// (Spell.cpp:5570-5618): SPELL_EFFECT_LEARN_SPELL (36) with TargetA ==
+// TARGET_UNIT_PET (5) requires the caster's active pet and rejects with
+// SPELL_FAILED_LOWLEVEL (48) when the learn spell's own SpellLevel exceeds
+// the pet's level; SPELL_EFFECT_LEARN_PET_SPELL (57) requires the unit target
+// to be the caster's own pet when a unit target is present. The
+// caster-must-be-player terms are vacuous here — client casts always come from
+// a player session. Returns the SPELL_FAILED_* result code, 0 on success.
+func (s *session) checkLearnSpellCast(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	for _, effect := range spell.Effects {
+		switch effect.Effect {
+		case spellEffectLearnSpell:
+			if effect.ImplicitTargetA != spellImplicitTargetUnitPet {
+				continue
+			}
+		case spellEffectLearnPetSpell:
+			if target.Flags&protocol.SpellTargetFlagUnitWireMask == 0 || target.UnitGUID == 0 {
+				continue // C++ only gates when a unit target is present (Spell.cpp:5599)
+			}
+			if s.petNumberForGUID(target.UnitGUID) == 0 {
+				return spellFailedBadTargets
+			}
+		default:
+			continue
+		}
+		petID := s.activePetNumber()
+		if petID == 0 {
+			return spellFailedNoPet
+		}
+		if _, found, err := s.server.Data.Spell(effect.TriggerSpell); err != nil || !found {
+			return spellFailedNotKnown
+		}
+		if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+			return 0
+		}
+		var petLevel int64
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT level FROM character_pet WHERE owner = ? AND id = ?", s.playerGUID, petID).Scan(&petLevel); err != nil {
+			return 0 // data anomaly: active pet without a row — no gate instead of a false reject
+		}
+		if petLevel < 0 {
+			petLevel = 0
+		}
+		if spell.SpellLevel > uint32(petLevel) {
+			return spellFailedLowLevel
+		}
 	}
 	return 0
 }
