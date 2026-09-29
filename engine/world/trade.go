@@ -117,6 +117,15 @@ func (s *session) handleInitiateTrade(ctx context.Context, payload []byte) bool 
 		_ = s.sendTradeStatus(tradeStatusTargetDead, 0, 0, 0, 0)
 		return true
 	}
+	// Reference: WorldSession::HandleInitiateTradeOpcode (TradeHandler.cpp:670-675):
+	// the target ignoring the initiator answers TRADE_STATUS_IGNORE_YOU. C++
+	// checks this after the dead/stunned/logout guards and before the faction
+	// term; Go conservatively skips the stunned/logout/in-flight guards (no
+	// model), so the check lands between the dead check and the faction check.
+	if s.server.chatIgnoredBy(targetSess.playerGUID, s.playerGUID) {
+		_ = s.sendTradeStatus(tradeStatusIgnoreYou, 0, 0, 0, 0)
+		return true
+	}
 	// Reference: WorldSession::HandleInitiateTradeOpcode (TradeHandler.cpp:677-684):
 	// cross-faction trade is refused with TRADE_STATUS_WRONG_FACTION unless
 	// CONFIG_ALLOW_TWO_SIDE_TRADE ("AllowTwoSide.Trade", default false) is set
