@@ -3757,6 +3757,21 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			stackCount := uint8(cur)
 			existing.StackCount = stackCount
 			existing.RemainingCharges = uint8(spell.ProcCharges)
+			// Unit::_TryStackingOrRefreshingExistingAura basepoint update
+			// (Unit.cpp:3360-3372): a re-cast overwrites the aura's per-effect
+			// basepoints with the new cast's values, and the live amounts are
+			// recalculated from them (Aura::SetStackAmount, SpellAuras.cpp:1008).
+			// Go has no stack-scaled amount recalc, so the amounts follow the
+			// new cast directly; the stack-scaled multiplier half stays unmodeled.
+			for index, candidate := range spell.Effects {
+				if candidate != eff {
+					continue
+				}
+				existing.BaseAmounts[index] = eff.BasePoints
+				existing.Amounts[index] = int32(amount)
+				existing.Amount = amount
+				break
+			}
 			existing.DurationMs = durationMs
 			existing.RemainingMs = durationMs
 			existing.DurationUpdatedAt = time.Now()
@@ -4052,6 +4067,17 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		stackCount := uint8(cur)
 		existing.StackCount = stackCount
 		existing.RemainingCharges = uint8(spell.ProcCharges)
+		// Creature-side mirror of the player merge's basepoint update
+		// (Unit.cpp:3360-3372, Aura::SetStackAmount, SpellAuras.cpp:1008).
+		for index, candidate := range spell.Effects {
+			if candidate != eff {
+				continue
+			}
+			existing.BaseAmounts[index] = eff.BasePoints
+			existing.Amounts[index] = int32(amount)
+			existing.Amount = amount
+			break
+		}
 		existing.DurationMs = durationMs
 		existing.RemainingMs = durationMs
 		existing.DurationUpdatedAt = time.Now()
