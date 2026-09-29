@@ -65,6 +65,32 @@ func (s *session) getRangedHitPct() float64 {
 	return rating / ratingPerPct
 }
 
+// getMeleeCritFromAgility returns the melee crit percentage contributed by Agility.
+// Mirrors TrinityCore Player::GetMeleeCritFromAgility (Player.cpp:5432):
+// crit = critBase + GetStat(STAT_AGILITY)*critRatio, *100, using the
+// gtChanceToMeleeCritBase (index = class-1) and gtChanceToMeleeCrit
+// (index = (class-1)*100 + level-1, level clamped to 100) tables.
+func (s *session) getMeleeCritFromAgility() float64 {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	classID := uint32(s.player.Class)
+	level := uint32(s.player.Level)
+	if level > 100 {
+		level = 100
+	}
+	base, found, err := s.server.Data.GtChanceToMeleeCritBase(classID)
+	if err != nil || !found {
+		return 0
+	}
+	ratio, found, err := s.server.Data.GtChanceToMeleeCrit(classID, level)
+	if err != nil || !found {
+		return 0
+	}
+	agi := float64(s.player.Stats[1]) // STAT_AGILITY = 1
+	return (float64(base) + agi*float64(ratio)) * 100.0
+}
+
 // getMeleeCritPct returns the bonus melee crit percentage from Agility and gear rating.
 // Mirrors TrinityCore Player::GetMeleeCritFromAgility and Player::GetRatingBonusValue(CR_CRIT_MELEE).
 func (s *session) getMeleeCritPct() float64 {
@@ -77,15 +103,7 @@ func (s *session) getMeleeCritPct() float64 {
 	}
 
 	// 1. Agility contribution
-	critPct := 0.0
-	agi := float64(s.player.Stats[1])
-	if agi > 0 {
-		agiPerPct := 62.5 * (lvl / 80.0)
-		if s.player.Class == 3 || s.player.Class == 4 || s.player.Class == 11 { // Hunter, Rogue, Druid
-			agiPerPct = 83.333333 * (lvl / 80.0)
-		}
-		critPct += agi / agiPerPct
-	}
+	critPct := s.getMeleeCritFromAgility()
 
 	// 2. Melee Crit Rating (CR_CRIT_MELEE = 8): 45.905987 rating per 1.0% crit at level 80
 	rating := float64(s.player.CombatRatings[CombatRatingCritMelee])
