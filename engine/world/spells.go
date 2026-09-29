@@ -740,6 +740,17 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// Flying-target gate (SpellInfo::CheckTarget, SpellInfo.cpp:1745-1747):
+	// an explicit unit target in flight rejects the cast with
+	// SPELL_FAILED_BAD_TARGETS unless the spell carries
+	// SPELL_ATTR0_CU_ALLOW_INFLIGHT_TARGET. Only checked when a unit target
+	// exists, like the sibling gates above.
+	if s.explicitTargetFlyingBlocked(spell, targetGUID) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target in flight", "target", targetGUID)
+		return true
+	}
+
 	// Auto-repeat toggle: if already repeating this spell on this target, toggle it off (TC SpellHandler.cpp:420-430)
 	if isAutoRepeat && s.autoRepeatSpell == spellID && s.autoRepeatTarget == targetGUID {
 		s.autoRepeatSpell = 0

@@ -11,6 +11,12 @@ const (
 	// Mirrors TrinityCore SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET (SpellInfo.h:469).
 	SpellCustomAttrReqCasterBehindTarget uint32 = 0x00020000
 
+	// SpellCustomAttrAllowInflightTarget exempts a spell from the flying-target
+	// rejection in SpellInfo::CheckTarget (SpellInfo.cpp:1745-1747).
+	// Mirrors TrinityCore SPELL_ATTR0_CU_ALLOW_INFLIGHT_TARGET (SpellInfo.h:196),
+	// read from AttributesCu via Server.getSpellCustomAttr.
+	SpellCustomAttrAllowInflightTarget uint32 = 0x00040000
+
 	// SpellFacingFlagInfront requires target to be within caster's 120° frontal cone (2*pi/3).
 	// Mirrors TrinityCore SPELL_FACING_FLAG_INFRONT (DBCStructure.h:1409, Spell.dbc field 19).
 	SpellFacingFlagInfront uint32 = 0x0001

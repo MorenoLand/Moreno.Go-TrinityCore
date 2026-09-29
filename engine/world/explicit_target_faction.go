@@ -120,3 +120,34 @@ func (s *session) explicitTargetGMBlocked(explicitUnitGUID uint64) bool {
 	flags := targetSess.player.ExtraFlags
 	return flags&playerExtraGMInvisible != 0 || flags&playerExtraGMOn != 0
 }
+
+// explicitTargetFlyingBlocked mirrors the flying-target gate in
+// SpellInfo::CheckTarget (SpellInfo.cpp:1745-1747) for the explicit unit
+// path: a unit target with UNIT_STATE_IN_FLIGHT rejects the cast with
+// SPELL_FAILED_BAD_TARGETS unless the spell carries
+// SPELL_ATTR0_CU_ALLOW_INFLIGHT_TARGET (AttributesCu, SpellInfo.h:196/422,
+// mirrored via Server.getSpellCustomAttr). C++ runs this gate in CheckCast
+// on the explicit unit target (Spell.cpp:197-201); implicit area/cone/chain
+// selection skips CheckTarget entirely (AddUnitTarget with checkIfValid
+// false, Spell.cpp:1217/1303 and SelectImplicitChainTargets), so the gate
+// applies only here. Go's only in-flight units are players on taxi paths
+// (session.inFlight, taxi.go:544; isInFlight mirrors Unit::IsInFlight,
+// taxi.go:560); creatures never carry the state. Returns true when the cast
+// must fail.
+func (s *session) explicitTargetFlyingBlocked(spell wotlk.Spell, explicitUnitGUID uint64) bool {
+	if s == nil || explicitUnitGUID == 0 {
+		return false
+	}
+	if s.server != nil && s.server.getSpellCustomAttr(spell.ID)&SpellCustomAttrAllowInflightTarget != 0 {
+		return false
+	}
+	if s.player != nil && explicitUnitGUID == s.playerGUID {
+		return s.inFlight
+	}
+	if s.server != nil {
+		if targetSess := s.server.findSessionByGUID(explicitUnitGUID); targetSess != nil {
+			return targetSess.inFlight
+		}
+	}
+	return false
+}
