@@ -10,6 +10,7 @@ const (
 	spellAuraReflectSpells       uint32 = 63  // SPELL_AURA_REFLECT_SPELLS (SpellAuraDefines.h:93)
 	spellAuraReflectSpellsSchool uint32 = 64  // SPELL_AURA_REFLECT_SPELLS_SCHOOL (SpellAuraDefines.h:94)
 	spellAuraModMaxAffectedTargets uint32 = 277 // SPELL_AURA_MOD_MAX_AFFECTED_TARGETS (SpellAuraDefines.h:357)
+	spellAuraModIgnoreShapeshift  uint32 = 275 // SPELL_AURA_MOD_IGNORE_SHAPESHIFT (SpellAuraDefines.h:355)
 )
 
 // isImmuneToDamage determines whether the player is immune to damage of the given schoolMask.

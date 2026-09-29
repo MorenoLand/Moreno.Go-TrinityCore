@@ -170,3 +170,82 @@ func shapeshiftFormDisplayID(data *wotlk.Store, state *playerState, form uint8, 
 	}
 	return shape.CreatureDisplayIDs[1]
 }
+// checkShapeshiftCast mirrors SpellInfo::CheckShapeshift (SpellInfo.cpp:1455):
+// validates the caster's current shapeshift form against the spell's
+// ShapeshiftMask (C++ Stances) / ShapeshiftExclude (C++ StancesNot) DBC fields.
+// Returns 0 on success, or a SPELL_FAILED_* cast result otherwise.
+func (s *session) checkShapeshiftCast(spell wotlk.Spell) uint8 {
+	stances := uint64(spell.ShapeshiftMask[0]) | uint64(spell.ShapeshiftMask[1])<<32
+	stancesNot := uint64(spell.ShapeshiftExclude[0]) | uint64(spell.ShapeshiftExclude[1])<<32
+	var form uint64
+	if s.player != nil {
+		form = uint64(s.player.ShapeshiftForm)
+	}
+	var stanceMask uint64
+	if form > 0 && form <= 64 {
+		stanceMask = uint64(1) << (form - 1)
+	}
+	if stanceMask&stancesNot != 0 {
+		return spellFailedNotShapeshift
+	}
+	if stanceMask&stances != 0 {
+		return 0
+	}
+	actAsShifted := false
+	shapeKnown := false
+	var shapeFlags uint32
+	if form > 0 {
+		shape, found, err := s.server.Data.ShapeshiftForm(uint32(form))
+		if err != nil || !found {
+			return 0
+		}
+		shapeKnown = true
+		shapeFlags = shape.Flags
+		actAsShifted = shapeFlags&1 == 0
+	}
+	if actAsShifted {
+		if spell.Attributes&spellAttr0NotShapeshift != 0 {
+			return spellFailedNotShapeshift
+		}
+		if stances != 0 {
+			return spellFailedOnlyShapeshift
+		}
+	} else {
+		if spell.AttributesEx1&spellAttr2NotNeedShapeshift == 0 && stances != 0 {
+			return spellFailedOnlyShapeshift
+		}
+	}
+	if shapeKnown && shapeFlags&0x400 != 0 {
+		if stanceMask&stances == 0 {
+			return spellFailedOnlyShapeshift
+		}
+	}
+	return 0
+}
+
+// hasIgnoreShapeshiftAura mirrors the Spell::CheckCast gate at Spell.cpp:5250-5260:
+// the shapeshift check is skipped when any SPELL_AURA_MOD_IGNORE_SHAPESHIFT aura
+// effect is affected on the spell (AuraEffect::IsAffectedOnSpell).
+func (s *session) hasIgnoreShapeshiftAura(spell wotlk.Spell) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.AuraType != spellAuraModIgnoreShapeshift {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if effect.Aura != spellAuraModIgnoreShapeshift || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+				return true
+			}
+		}
+	}
+	return false
+}

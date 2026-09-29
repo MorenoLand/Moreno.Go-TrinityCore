@@ -31,6 +31,8 @@ const (
 
 	spellAttr0Ability                     uint32 = 0x00000010 // SPELL_ATTR0_ABILITY (SharedDefines.h:416)
 	spellAttr0UnaffectedByInvulnerability uint32 = 0x20000000 // SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY (SharedDefines.h:441)
+	spellAttr0NotShapeshift                uint32 = 0x00010000 // SPELL_ATTR0_NOT_SHAPESHIFT (SharedDefines.h:428)
+	spellAttr2NotNeedShapeshift            uint32 = 0x00080000 // SPELL_ATTR2_NOT_NEED_SHAPESHIFT (SharedDefines.h:505) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr1CantBeReflected             uint32 = 0x00000080 // SPELL_ATTR1_CANT_BE_REFLECTED (SharedDefines.h:456)
 
 	spellDamageClassMagic uint32 = 1 // SPELL_DAMAGE_CLASS_MAGIC (SharedDefines.h:1580)
@@ -55,6 +57,8 @@ const (
 	spellFailedFleeing                   uint8 = 34  // SPELL_FAILED_FLEEING (SharedDefines.h:1016)
 	spellFailedCasterAuraState           uint8 = 22  // SPELL_FAILED_CASTER_AURASTATE (SharedDefines.h:1004)
 	spellFailedTargetAuraState           uint8 = 111 // SPELL_FAILED_TARGET_AURASTATE (SharedDefines.h:1093)
+	spellFailedNotShapeshift             uint8 = 68  // SPELL_FAILED_NOT_SHAPESHIFT (SharedDefines.h:1050)
+	spellFailedOnlyShapeshift            uint8 = 94  // SPELL_FAILED_ONLY_SHAPESHIFT (SharedDefines.h:1076)
 
 	itemClassWeapon = 2
 	itemClassArmor  = 4
@@ -481,6 +485,17 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedSilenced), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "silenced")
 		return true
+	}
+	// Shapeshift/stance requirements (SpellInfo::CheckShapeshift, SpellInfo.cpp:1455;
+	// gated in Spell::CheckCast at Spell.cpp:5247-5275, before the caster-state block):
+	// client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	// The GetTalentSpellCost talent-learn exception has no Go equivalent (noted gap).
+	if !s.hasIgnoreShapeshiftAura(spell) {
+		if shapeResult := s.checkShapeshiftCast(spell); shapeResult != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, shapeResult), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "shapeshift requirement not met", "result", shapeResult)
+			return true
+		}
 	}
 	// Caster aura spell requirements (Spell::CheckCast caster-state block, Spell.cpp:5305-5308):
 	// client-initiated casts only — triggered casts go through castSpellDirect, not this path.
