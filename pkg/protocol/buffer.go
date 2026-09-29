@@ -76,10 +76,16 @@ func (b *Buffer) WriteF32(value float32)    { b.WriteU32(math.Float32bits(value)
 func (b *Buffer) WriteF64(value float64)    { b.WriteU64(math.Float64bits(value)) }
 func (b *Buffer) WriteCString(value string) { b.Write([]byte(value)); b.WriteU8(0) }
 func (b *Buffer) WriteString(value string)  { b.Write([]byte(value)) }
-func (b *Buffer) WritePackedTime(value time.Time) {
+
+// PackTime encodes a time into the client's packed 4-byte time format
+// (ByteBuffer::AppendPackedTime, src/server/shared/Packets/ByteBuffer.cpp:132).
+func PackTime(value time.Time) uint32 {
 	value = value.Local()
-	packed := uint32(value.Year()-2000)<<24 | uint32(value.Month()-1)<<20 | uint32(value.Day()-1)<<14 | uint32(value.Weekday())<<11 | uint32(value.Hour())<<6 | uint32(value.Minute())
-	b.WriteU32(packed)
+	return uint32(value.Year()-2000)<<24 | uint32(value.Month()-1)<<20 | uint32(value.Day()-1)<<14 | uint32(value.Weekday())<<11 | uint32(value.Hour())<<6 | uint32(value.Minute())
+}
+
+func (b *Buffer) WritePackedTime(value time.Time) {
+	b.WriteU32(PackTime(value))
 }
 
 func (b *Buffer) WritePackedGUID(value uint64) {

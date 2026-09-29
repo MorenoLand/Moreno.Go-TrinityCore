@@ -432,7 +432,11 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		var invoiceMailID int64
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&invoiceMailID)
 		pendingSubj := fmt.Sprintf("%d:0:%d:%d:%d", itemEntry, auctionSalePending, auctionID, itemCount)
-		pendingBody := fmt.Sprintf("%X:%d:%d:%d:%d:%d:%d", s.playerGUID, buyout, buyout, deposit, consignment, mailDelay, 0)
+		// C++ AuctionHouseMgr::SendAuctionSalePendingMail (AuctionHouseMgr.cpp:199,203):
+		// the trailing eta field is timePacker.read<uint32>() after
+		// AppendPackedTime(now + CONFIG_MAIL_DELIVERY_DELAY).
+		pendingEta := protocol.PackTime(time.Unix(now+mailDelay, 0))
+		pendingBody := fmt.Sprintf("%X:%d:%d:%d:%d:%d:%d", s.playerGUID, buyout, buyout, deposit, consignment, mailDelay, pendingEta)
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, ?, 0, ?, ?, 0, 0, 4)",
 			// C++ Mail.cpp:203-204: auction mail without items and money expires after CONFIG_MAIL_DELIVERY_DELAY;
 			// the moneyDelay/eta body fields come from AuctionHouseMgr::SendAuctionSalePendingMail
@@ -735,7 +739,11 @@ func (s *session) expireAuctions(ctx context.Context) {
 			var invoiceMailID int64
 			_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&invoiceMailID)
 			pendingSubj := fmt.Sprintf("%d:0:%d:%d:%d", a.itemTmpl, auctionSalePending, a.id, a.count)
-			pendingBody := fmt.Sprintf("%X:%d:%d:%d:%d:%d:%d", a.bidder, a.lastBid, a.buyout, a.deposit, consignment, mailDelay, 0)
+			// C++ AuctionHouseMgr::SendAuctionSalePendingMail (AuctionHouseMgr.cpp:199,203):
+			// the trailing eta field is timePacker.read<uint32>() after
+			// AppendPackedTime(now + CONFIG_MAIL_DELIVERY_DELAY).
+			pendingEta := protocol.PackTime(time.Unix(now+mailDelay, 0))
+			pendingBody := fmt.Sprintf("%X:%d:%d:%d:%d:%d:%d", a.bidder, a.lastBid, a.buyout, a.deposit, consignment, mailDelay, pendingEta)
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, ?, 0, ?, ?, 0, 0, 4)",
 				// C++ Mail.cpp:203-204: auction mail without items and money expires after CONFIG_MAIL_DELIVERY_DELAY;
 				// the moneyDelay/eta body fields come from AuctionHouseMgr::SendAuctionSalePendingMail
