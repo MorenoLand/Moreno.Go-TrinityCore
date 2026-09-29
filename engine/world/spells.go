@@ -1064,13 +1064,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	friendlyAreaSpell := isFriendlyAreaSpell(spell)
 	friendlyNearbySpell := isFriendlyNearbySpell(spell)
 	entryNearbySpell := isEntryNearbySpell(spell)
+	entryAreaSpell := isEntryAreaSpell(spell)
 	friendlyConeSpell := isFriendlyConeSpell(spell)
 	friendlyLastTargetAreaSpell := isFriendlyLastTargetAreaSpell(spell)
 	friendlyTargetAreaRaidClassSpell := isFriendlyTargetAreaRaidClassSpell(spell)
-	// List-producing friendly selections skip the single-target immune gate
+	// List-producing friendly/entry selections skip the single-target immune gate
 	// and chain-jump expansion the same way area spells do (Spell.cpp:1227
-	// area/cone selection never calls SelectImplicitChainTargets).
-	friendlyListSpell := friendlyAreaSpell || friendlyConeSpell || friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell
+	// area selection never calls SelectImplicitChainTargets).
+	friendlyListSpell := friendlyAreaSpell || friendlyConeSpell || friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell || entryAreaSpell
 	if areaSpell {
 		hitTargets = s.spellAreaEnemyTargets(ctx, spell, target)
 	} else if friendlyAreaSpell {
@@ -1103,6 +1104,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no entry target")
 			return
 		}
+	} else if entryAreaSpell {
+		// Spell::SelectImplicitAreaTargets (Spell.cpp:1227):
+		// TARGET_UNIT_SRC_AREA_ENTRY (7) / TARGET_UNIT_DEST_AREA_ENTRY (8)
+		// — every unit in the area matching the entry conditions becomes a
+		// target; an empty area never fails the cast.
+		hitTargets = s.spellEntryAreaTargets(ctx, spell, spellID, target)
 	} else if friendlyConeSpell {
 		// Spell::SelectImplicitConeTargets (Spell.cpp:1176): friendly
 		// ALLY/ENTRY cone targets (59/60).
