@@ -175,6 +175,8 @@ type Spell struct {
 	RequiresSpellFocus    uint32 // Spell.dbc field 18 = RequiresSpellFocus (DBCStructure.h:1408)
 	CasterAuraState       uint32 // Spell.dbc field 20 = CasterAuraState (DBCStructure.h:1410)
 	TargetAuraState       uint32 // Spell.dbc field 21 = TargetAuraState (DBCStructure.h:1411)
+	ProcTypeMask          uint32 // Spell.dbc field 34 = ProcTypeMask (DBCStructure.h:1424)
+	ProcChance            uint32 // Spell.dbc field 35 = ProcChance (DBCStructure.h:1425)
 	SchoolMask            uint32
 	Targets               uint32
 	FacingCasterFlags     uint32 // Spell.dbc field 19 = FacingCasterFlags (DBCStructure.h:1409)
@@ -790,6 +792,8 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{18, &spell.RequiresSpellFocus},  // Spell.dbc field 18 = RequiresSpellFocus (DBCStructure.h:1408)
 		{20, &spell.CasterAuraState},     // Spell.dbc field 20 = CasterAuraState (DBCStructure.h:1410)
 		{21, &spell.TargetAuraState},     // Spell.dbc field 21 = TargetAuraState (DBCStructure.h:1411)
+		{34, &spell.ProcTypeMask},        // Spell.dbc field 34 = ProcTypeMask (DBCStructure.h:1424)
+		{35, &spell.ProcChance},          // Spell.dbc field 35 = ProcChance (DBCStructure.h:1425)
 		{31, &spell.InterruptFlags},     // DBCStructure.h:1421
 		{32, &spell.AuraInterruptFlags}, // DBCStructure.h:1422
 		{33, &spell.ChannelInterrupt},
