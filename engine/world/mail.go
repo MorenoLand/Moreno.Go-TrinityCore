@@ -224,7 +224,7 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 	}
 	// Load attached items per drained mail.
 	for i := range mails {
-		iRows, iErr := db.QueryContext(ctx, `SELECT mi.item_guid, mi.item_template, COALESCE(ii.count, 1), COALESCE(ii.durability, 0), COALESCE(ii.enchantments, ''), COALESCE(ii.randomPropertyId, 0), COALESCE(ii.charges, '')
+		iRows, iErr := db.QueryContext(ctx, `SELECT mi.item_guid, ii.itemEntry, COALESCE(ii.count, 1), COALESCE(ii.durability, 0), COALESCE(ii.enchantments, ''), COALESCE(ii.randomPropertyId, 0), COALESCE(ii.charges, '')
 			FROM mail_items AS mi
 			LEFT JOIN item_instance AS ii ON ii.guid = mi.item_guid
 			WHERE mi.mail_id = ?`, mails[i].ID)
@@ -443,7 +443,7 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 		}
 		s.despawnItem(att.ItemGUID)
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", receiverGUID, att.ItemGUID)
-		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, item_template, receiver) VALUES (?, ?, ?, ?)", nextMailID, att.ItemGUID, itemEntry, receiverGUID)
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, receiver) VALUES (?, ?, ?)", nextMailID, att.ItemGUID, receiverGUID)
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(uint32(nextMailID), mailSend, mailOk, 0, 0, 0), true)
 	_ = s.sendInventoryItems(ctx)
@@ -503,7 +503,7 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 	}
 	var itemEntry, itemCount, senderGUID, cod int64
 	var subject string
-	err = cdb.QueryRowContext(ctx, `SELECT m.sender, m.subject, m.cod, i.item_template, COALESCE(ii.count, 1)
+	err = cdb.QueryRowContext(ctx, `SELECT m.sender, m.subject, m.cod, ii.itemEntry, COALESCE(ii.count, 1)
 		FROM mail_items AS i
 		JOIN mail AS m ON m.id = i.mail_id
 		JOIN item_instance AS ii ON ii.guid = i.item_guid
