@@ -138,6 +138,33 @@ func (s *session) getDodgeFromAgility(state *playerState) (diminishing, nondimin
 	return diminishing, nondiminishing
 }
 
+// getSpellCritFromIntellect returns the spell crit percentage contributed by Intellect.
+// Mirrors TrinityCore Player::GetSpellCritFromIntellect (Player.cpp:5502):
+// crit = critBase + GetStat(STAT_INTELLECT)*critRatio, *100, using the
+// gtChanceToSpellCritBase (index = class-1) and gtChanceToSpellCrit
+// (index = (class-1)*100 + level-1, level clamped to 100) tables; missing
+// entries return 0 like the C++ nullptr check.
+func (s *session) getSpellCritFromIntellect(state *playerState) float64 {
+	if s == nil || s.server == nil || s.server.Data == nil || state == nil {
+		return 0
+	}
+	classID := uint32(state.Class)
+	level := uint32(state.Level)
+	if level > 100 {
+		level = 100
+	}
+	base, found, err := s.server.Data.GtChanceToSpellCritBase(classID)
+	if err != nil || !found {
+		return 0
+	}
+	ratio, found, err := s.server.Data.GtChanceToSpellCrit(classID, level)
+	if err != nil || !found {
+		return 0
+	}
+	intellect := float64(state.Stats[3]) // STAT_INTELLECT = 3
+	return (float64(base) + intellect*float64(ratio)) * 100.0
+}
+
 // getMeleeCritPct returns the bonus melee crit percentage from Agility and gear rating.
 // Mirrors TrinityCore Player::GetMeleeCritFromAgility and Player::GetRatingBonusValue(CR_CRIT_MELEE).
 func (s *session) getMeleeCritPct() float64 {

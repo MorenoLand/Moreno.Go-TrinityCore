@@ -2192,18 +2192,25 @@ func (s *session) calculatePlayerCritFields(state *playerState, level uint8) {
 	}
 	meleeBase, meleeBaseOK := gt("gtChanceToMeleeCritBase", classIndex)
 	meleeRatio, meleeRatioOK := gt("gtChanceToMeleeCrit", classIndex*100+int(level)-1)
-	spellBase, spellBaseOK := gt("gtChanceToSpellCritBase", classIndex)
-	spellRatio, spellRatioOK := gt("gtChanceToSpellCrit", classIndex*100+int(level)-1)
 	if meleeBaseOK && meleeRatioOK {
 		base := (meleeBase + float32(state.Stats[1])*meleeRatio) * 100
 		state.MeleeCrit = base + ratingBonus(8)
 		state.RangedCrit = base + ratingBonus(9)
 		state.OffhandCrit = state.MeleeCrit
 	}
-	if spellBaseOK && spellRatioOK {
-		for school := 1; school < len(state.SpellCrit); school++ {
-			state.SpellCrit[school] = (spellBase+float32(state.Stats[3])*spellRatio)*100 + ratingBonus(10)
+	// Mirrors TrinityCore Player::UpdateSpellCritChance (StatSystem.cpp:819):
+	// school 0 (SPELL_SCHOOL_NORMAL) is zeroed; other schools sum the
+	// intellect contribution, the CR_CRIT_SPELL rating bonus, and the
+	// SPELL_AURA_MOD_SPELL_CRIT_CHANCE / MOD_CRIT_PCT / misc-mask
+	// MOD_SPELL_CRIT_CHANCE_SCHOOL aura terms — Go has no such aura
+	// plumbing yet, so those terms contribute 0 (noted gap, not a stub).
+	intellectCrit := float32(s.getSpellCritFromIntellect(state))
+	for school := 0; school < len(state.SpellCrit); school++ {
+		if school == 0 {
+			state.SpellCrit[school] = 0
+			continue
 		}
+		state.SpellCrit[school] = intellectCrit + ratingBonus(10) // CR_CRIT_SPELL
 	}
 	defenseSkill := uint32(0)
 	for _, skill := range state.Skills {
