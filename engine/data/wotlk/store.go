@@ -192,6 +192,8 @@ type Spell struct {
 	Totem               [2]uint32 // Spell.dbc fields 50-51 = Totem (DBCStructure.h:1441)
 	PowerType             uint32
 	ManaCost              uint32
+	ManaCostPerLevel      uint32 // Spell.dbc field 43 = ManaCostPerLevel (DBCStructure.h:1434)
+	ManaPerSecondPerLevel   uint32 // Spell.dbc field 45 = ManaPerSecondPerLevel (DBCStructure.h:1436)
 	ManaCostPct           uint32
 	RangeIndex            uint32
 	InterruptFlags        uint32
@@ -783,6 +785,8 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{51, &spell.Totem[1]}, // Spell.dbc field 51 = Totem[1] (DBCStructure.h:1441)
 		{41, &spell.PowerType},
 		{42, &spell.ManaCost},
+		{43, &spell.ManaCostPerLevel}, // Spell.dbc field 43 = ManaCostPerLevel (DBCStructure.h:1434)
+		{45, &spell.ManaPerSecondPerLevel}, // Spell.dbc field 45 = ManaPerSecondPerLevel (DBCStructure.h:1436)
 		{204, &spell.ManaCostPct}, // Spell.dbc field 204 = ManaCostPct (DBCStructure.h:1476)
 		{46, &spell.RangeIndex},
 		{5, &spell.AttributesEx},        // Spell.dbc field 5 = AttributesEx (DBCStructure.h:1397)
