@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"math/rand/v2"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -197,6 +198,12 @@ func (s *session) getDispellableAuraListForPlayer(targetSess *session, dispelMas
 			continue
 		}
 
+		// Auras whose dispel removes individual charges only appear in the
+		// dispel list while they still have charges (Unit.cpp:4622-4625).
+		if found && sp.AttributesEx7&spellAttr7DispelCharges != 0 && aura.RemainingCharges == 0 {
+			continue
+		}
+
 		dispelType := aura.DispelType
 		if dispelType == 0 && found {
 			dispelType = sp.DispelType
@@ -264,6 +271,12 @@ func (s *session) getDispellableAuraListForCreature(creatureGUID uint64, dispelM
 			sp, found, _ = s.server.Data.Spell(spellID)
 		}
 		if found && sp.Attributes&spellAttributePassive != 0 {
+			continue
+		}
+
+		// Auras whose dispel removes individual charges only appear in the
+		// dispel list while they still have charges (Unit.cpp:4622-4625).
+		if found && sp.AttributesEx7&spellAttr7DispelCharges != 0 && aura.RemainingCharges == 0 {
 			continue
 		}
 
@@ -374,6 +387,85 @@ func isVampiricTouchSpell(spellID uint32) bool {
 
 // handleEffectDispel processes SPELL_EFFECT_DISPEL (38).
 // Mirrors TrinityCore Spell::EffectDispel (SpellEffects.cpp:2429-2531).
+// dispelPlayerAuraCharge mirrors Unit::RemoveAurasDueToSpellByDispel
+// (Unit.cpp:3938-3950) for auras carrying SPELL_ATTR7_DISPEL_CHARGES: a
+// successful dispel removes one charge (Aura::ModCharges, SpellAuras.cpp:964)
+// and the aura survives until its last charge is gone. Returns true when the
+// aura was fully removed.
+func (ts *session) dispelPlayerAuraCharge(spellID uint32) bool {
+	ts.castMu.Lock()
+	aura := ts.activeAuras[spellID]
+	dispelCharges := false
+	if aura != nil && !aura.Stopped {
+		if ts.server != nil && ts.server.Data != nil {
+			if sp, found, _ := ts.server.Data.Spell(spellID); found {
+				dispelCharges = sp.AttributesEx7&spellAttr7DispelCharges != 0
+			}
+		}
+		if dispelCharges && aura.RemainingCharges > 1 {
+			aura.RemainingCharges--
+			advanceAuraDuration(aura, time.Now())
+		}
+	}
+	var slot uint8
+	var positive bool
+	var maxDuration, remaining uint32
+	var charges uint8
+	if aura != nil {
+		slot, positive = aura.Slot, aura.Positive
+		maxDuration, remaining, charges = aura.DurationMs, aura.RemainingMs, aura.RemainingCharges
+	}
+	ts.castMu.Unlock()
+
+	if aura == nil || !dispelCharges || charges <= 1 {
+		ts.expirePlayerAura(spellID)
+		return true
+	}
+	// Charges ride the stack-count field of the aura update (player_auras.go).
+	ts.sendAuraUpdateWithStack(slot, spellID, false, positive, maxDuration, remaining, charges)
+	return false
+}
+
+// dispelCreatureAuraCharge is the creature-aura counterpart of
+// dispelPlayerAuraCharge: SPELL_ATTR7_DISPEL_CHARGES auras lose one charge per
+// successful dispel and survive until the last charge is gone. Returns true
+// when the aura was fully removed.
+func (s *session) dispelCreatureAuraCharge(key creatureAuraKey, spellID uint32, slot uint8) bool {
+	if s.server == nil {
+		return true
+	}
+	s.server.auraMu.Lock()
+	var aura *activeAura
+	if s.server.activeCreatureAuras != nil {
+		aura = s.server.activeCreatureAuras[key][spellID]
+	}
+	dispelCharges := false
+	if aura != nil && !aura.Stopped {
+		if s.server.Data != nil {
+			if sp, found, _ := s.server.Data.Spell(spellID); found {
+				dispelCharges = sp.AttributesEx7&spellAttr7DispelCharges != 0
+			}
+		}
+		if dispelCharges && aura.RemainingCharges > 1 {
+			aura.RemainingCharges--
+		}
+	}
+	var positive bool
+	var charges uint8
+	if aura != nil {
+		positive, charges = aura.Positive, aura.RemainingCharges
+	}
+	s.server.auraMu.Unlock()
+
+	if aura == nil || !dispelCharges || charges <= 1 {
+		s.expireCreatureAura(key, spellID, slot)
+		return true
+	}
+	updatePkt := protocol.BuildAuraUpdateWithStack(key.GUID, s.playerGUID, slot, spellID, false, positive, 0, 0, 1, charges)
+	s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, nil)
+	return false
+}
+
 func (s *session) handleEffectDispel(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
 	if s.player == nil {
 		return
@@ -413,17 +505,22 @@ func (s *session) handleEffectDispel(ctx context.Context, targetGUID uint64, spe
 	for count := 0; count < maxDispelled && len(candidates) > 0; count++ {
 		idx := rand.IntN(len(candidates))
 		cand := candidates[idx]
-		candidates[idx] = candidates[len(candidates)-1]
-		candidates = candidates[:len(candidates)-1]
 
 		roll := rand.IntN(100)
 		if int32(roll) < cand.Chance {
 			// Dispel success
 			successList = append(successList, cand.SpellID)
+			// Charge auras stay in the roll list until their last charge is
+			// gone (Spell::EffectDispel DecrementCharge loop, SpellEffects.cpp:2458).
+			fullyRemoved := true
 			if isTargetPlayer {
-				targetSess.expirePlayerAura(cand.SpellID)
+				fullyRemoved = targetSess.dispelPlayerAuraCharge(cand.SpellID)
 			} else {
-				s.expireCreatureAura(creatureAuraKeyForPlayer(*s.player, targetGUID), cand.SpellID, cand.Slot)
+				fullyRemoved = s.dispelCreatureAuraCharge(creatureAuraKeyForPlayer(*s.player, targetGUID), cand.SpellID, cand.Slot)
+			}
+			if fullyRemoved {
+				candidates[idx] = candidates[len(candidates)-1]
+				candidates = candidates[:len(candidates)-1]
 			}
 
 			// Devour Magic self-heal (SpellEffects.cpp:2520-2530)
