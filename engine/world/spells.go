@@ -36,6 +36,7 @@ const (
 	spellAttr0Tradespell                  uint32 = 0x00000020 // SPELL_ATTR0_TRADESPELL (SharedDefines.h:417)
 	spellAttr3NoDoneBonus                 uint32 = 0x20000000 // SPELL_ATTR3_NO_DONE_BONUS (SharedDefines.h:552) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 	spellAttr3TreatAsPeriodic             uint32 = 0x02000000 // SPELL_ATTR3_TREAT_AS_PERIODIC (SharedDefines.h:548) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
+	spellAttr3StackForDiffCasters         uint32 = 0x00000080 // SPELL_ATTR3_STACK_FOR_DIFF_CASTERS (SharedDefines.h:530) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 	spellAttr7NoPushbackOnDamage          uint32 = 0x00000040 // SPELL_ATTR7_NO_PUSHBACK_ON_DAMAGE (SharedDefines.h:677) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr7DispelCharges               uint32 = 0x00000400 // SPELL_ATTR7_DISPEL_CHARGES (SharedDefines.h:681) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr6AssistIgnoreImmuneFlag      uint32 = 0x00000008 // SPELL_ATTR6_ASSIST_IGNORE_IMMUNE_FLAG (SharedDefines.h:637) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
@@ -3745,21 +3746,42 @@ type rankPurgeTarget struct {
 	slot    uint8
 }
 
+// Periodic aura types exempted from the different-caster rank-chain purge
+// (Aura::CanStackWith, SpellAuras.cpp:1955-1976).
+const (
+	spellAuraPeriodicDamage                = 3   // SPELL_AURA_PERIODIC_DAMAGE (SpellAuraDefines.h:83)
+	spellAuraPeriodicHeal                  = 8   // SPELL_AURA_PERIODIC_HEAL (SpellAuraDefines.h:88)
+	spellAuraObsModHealth                  = 20  // SPELL_AURA_OBS_MOD_HEALTH (SpellAuraDefines.h:100)
+	spellAuraObsModPower                   = 21  // SPELL_AURA_OBS_MOD_POWER (SpellAuraDefines.h:101)
+	spellAuraPeriodicTriggerSpell          = 23  // SPELL_AURA_PERIODIC_TRIGGER_SPELL (SpellAuraDefines.h:103)
+	spellAuraPeriodicEnergize              = 24  // SPELL_AURA_PERIODIC_ENERGIZE (SpellAuraDefines.h:104)
+	spellAuraPeriodicLeech                 = 53  // SPELL_AURA_PERIODIC_LEECH (SpellAuraDefines.h:133)
+	spellAuraPeriodicManaLeech             = 64  // SPELL_AURA_PERIODIC_MANA_LEECH (SpellAuraDefines.h:144)
+	spellAuraPowerBurn                     = 162 // SPELL_AURA_POWER_BURN (SpellAuraDefines.h:242)
+	spellAuraPeriodicDummy                 = 226 // SPELL_AURA_PERIODIC_DUMMY (SpellAuraDefines.h:306)
+	spellAuraPeriodicTriggerSpellWithValue = 227 // SPELL_AURA_PERIODIC_TRIGGER_SPELL_WITH_VALUE (SpellAuraDefines.h:307)
+)
+
 // rankChainNoStackPurge mirrors the rank-chain term of
 // Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640-3671) via
-// Aura::CanStackWith (SpellAuras.cpp:1994-2004): a fresh aura application
+// Aura::CanStackWith (SpellAuras.cpp:1880-2007): a fresh aura application
 // removes the target's existing auras that share its spell rank chain under
-// a different spell ID when the caster matches. Only the same-caster slice
-// is modeled — C++ lets different-caster periodic auras of one chain stack
-// (SpellAuras.cpp:1955-1976), so a blanket purge would over-remove.
-// Honored: the spell-family gate (SpellAuras.cpp:1934), the trigger-spell
-// mutual exclusion (SpellAuras.cpp:1901-1906), and the enchant-proc item
-// edge (SpellAuras.cpp:1998-2000, degrade-open without the CU attr).
-// Passive new spells skip the purge (the IsPassiveStackableWithRanks
-// early-out shape, Unit.cpp:3643; Go holds no passive aura instances).
-// IsMultiSlotAura (SpellAuras.cpp:1148) and CONTROL_VEHICLE are vacuous in
-// Go. Spell-group stack rules and the IsHighestExclusiveAura direction need
-// group-rule data Go does not load — standing gap, under-purges only.
+// a different spell ID. Both caster cases are modeled: same-caster pairs
+// always purge (SpellAuras.cpp:2004); different-caster pairs purge unless
+// C++ lets them stack — the channeled exemption, the
+// SPELL_ATTR3_STACK_FOR_DIFF_CASTERS read, and the periodic-aura-type
+// exemption (SpellAuras.cpp:1943-1976) — so two players' Corruption ranks on
+// one mob coexist while a single player's re-cast at a different rank
+// replaces the old one.
+// Honored in both directions: the trigger-spell mutual exclusion
+// (SpellAuras.cpp:1901-1906), the spell-family gate (SpellAuras.cpp:1934),
+// and the enchant-proc item edge (SpellAuras.cpp:1998-2000, degrade-open
+// without the CU attr). Passive new spells skip the purge (the
+// IsPassiveStackableWithRanks early-out shape, Unit.cpp:3643; Go holds no
+// passive aura instances). IsMultiSlotAura (SpellAuras.cpp:1148) and
+// CONTROL_VEHICLE are vacuous in Go. Spell-group stack rules and the
+// IsHighestExclusiveAura direction need group-rule data Go does not load —
+// standing gap, under-purges only.
 // Returns the auras to remove; the caller removes them after unlocking.
 func (s *Server) rankChainNoStackPurge(newSpell wotlk.Spell, newCasterGUID, newItemGUID uint64, existing map[uint32]*activeAura) []rankPurgeTarget {
 	if s == nil || s.Data == nil {
@@ -3774,9 +3796,6 @@ func (s *Server) rankChainNoStackPurge(newSpell wotlk.Spell, newCasterGUID, newI
 		if id == newSpell.ID || aura == nil || aura.Stopped {
 			continue
 		}
-		if aura.CasterGUID != newCasterGUID {
-			continue
-		}
 		if s.spellFirstRank(id) != newFirst {
 			continue
 		}
@@ -3784,11 +3803,22 @@ func (s *Server) rankChainNoStackPurge(newSpell wotlk.Spell, newCasterGUID, newI
 		if err != nil || !found {
 			continue
 		}
+		if auraTriggersSpell(newSpell, id) || auraTriggersSpell(exSpell, newSpell.ID) {
+			continue
+		}
 		if exSpell.SpellFamilyName != newSpell.SpellFamilyName {
 			continue
 		}
-		if auraTriggersSpell(newSpell, id) || auraTriggersSpell(exSpell, newSpell.ID) {
-			continue
+		if aura.CasterGUID != newCasterGUID {
+			if newSpell.AttributesEx3&spellAttr3StackForDiffCasters != 0 {
+				continue
+			}
+			if isChanneledSpell(exSpell) {
+				continue
+			}
+			if rankChainPeriodicStacksForDiffCasters(newSpell, exSpell) {
+				continue
+			}
 		}
 		if newItemGUID != 0 && aura.ItemGUID != 0 && newItemGUID != aura.ItemGUID {
 			continue
@@ -3796,6 +3826,40 @@ func (s *Server) rankChainNoStackPurge(newSpell wotlk.Spell, newCasterGUID, newI
 		purge = append(purge, rankPurgeTarget{spellID: id, slot: aura.Slot})
 	}
 	return purge
+}
+
+// rankChainPeriodicStacksForDiffCasters mirrors the periodic-aura exemption
+// in Aura::CanStackWith (SpellAuras.cpp:1955-1976): DOT/HOT-style auras of
+// one rank chain from different casters stack. Effects are index-aligned
+// exactly like C++ (the area gate reads Effects[i] on both spells); a
+// periodic type targeting an area on either side (Replenishment-style)
+// keeps the purge. isAreaAuraTarget was verified index-identical to
+// SpellImplicitTargetInfo::IsArea from the C++ implicit-target table
+// (SpellInfo.cpp:218-341). PERIODIC_DAMAGE_PERCENT (89) is deliberately
+// absent — C++ lists only PERIODIC_DAMAGE (3).
+func rankChainPeriodicStacksForDiffCasters(newSpell, exSpell wotlk.Spell) bool {
+	for i, eff := range newSpell.Effects {
+		switch eff.Aura {
+		case spellAuraPeriodicDamage, spellAuraPeriodicDummy, spellAuraPeriodicHeal,
+			spellAuraPeriodicTriggerSpell, spellAuraPeriodicEnergize,
+			spellAuraPeriodicManaLeech, spellAuraPeriodicLeech,
+			spellAuraPowerBurn, spellAuraObsModPower, spellAuraObsModHealth,
+			spellAuraPeriodicTriggerSpellWithValue:
+		default:
+			continue
+		}
+		if isAreaAuraTarget(eff.ImplicitTargetA) || isAreaAuraTarget(eff.ImplicitTargetB) {
+			continue
+		}
+		if i < len(exSpell.Effects) {
+			ex := exSpell.Effects[i]
+			if isAreaAuraTarget(ex.ImplicitTargetA) || isAreaAuraTarget(ex.ImplicitTargetB) {
+				continue
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}) {
