@@ -5053,11 +5053,16 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// the spell-specific exclusivity gates (SpellAuras.cpp:1914-1921),
 		// and the EXCLUSIVE_HIGHEST comparisons (Unit.cpp:13991) — plus
 		// the _AddAura single-target dance (Unit.cpp:3397-3420) for
-		// single-target auras.
-		purgeIDs := s.server.rankChainNoStackPurge(spell, s.playerGUID, aura.ItemGUID, targetSess.activeAuras)
-		purgeIDs = append(purgeIDs, s.server.spellGroupNoStackPurge(spell, s.playerGUID, targetSess.activeAuras)...)
-		purgeIDs = append(purgeIDs, s.server.spellSpecificNoStackPurge(spell, s.playerGUID, targetSess.activeAuras)...)
-		purgeIDs = append(purgeIDs, s.server.singleTargetNoStackPurge(spell, s.playerGUID, targetSess.activeAuras)...)
+		// single-target auras. The purge keys on the new aura's caster
+		// (the same-caster terms compare against it), which is the
+		// casterGUID param — not the casting session — because the steal
+		// and dynamic-object paths create the aura with a foreign caster
+		// (Unit::RemoveAurasDueToSpellBySteal, Unit.cpp:4020:
+		// createInfo.SetCasterGUID(aura->GetCasterGUID())).
+		purgeIDs := s.server.rankChainNoStackPurge(spell, casterGUID, aura.ItemGUID, targetSess.activeAuras)
+		purgeIDs = append(purgeIDs, s.server.spellGroupNoStackPurge(spell, casterGUID, targetSess.activeAuras)...)
+		purgeIDs = append(purgeIDs, s.server.spellSpecificNoStackPurge(spell, casterGUID, targetSess.activeAuras)...)
+		purgeIDs = append(purgeIDs, s.server.singleTargetNoStackPurge(spell, casterGUID, targetSess.activeAuras)...)
 		purgeIDs = append(purgeIDs, highest.purge...)
 		targetSess.castMu.Unlock()
 		for _, purgeID := range purgeIDs {
@@ -5323,11 +5328,14 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// exclusive terms (SpellAuras.cpp:1924-1932), the spell-specific
 	// exclusivity gates (SpellAuras.cpp:1914-1921), and the EXCLUSIVE_HIGHEST
 	// comparisons (Unit.cpp:13991) — plus the _AddAura single-target dance
-	// (Unit.cpp:3397-3420) for single-target auras.
-	purge := s.server.rankChainNoStackPurge(spell, s.playerGUID, aura.ItemGUID, s.server.activeCreatureAuras[targetKey])
-	purge = append(purge, s.server.spellGroupNoStackPurge(spell, s.playerGUID, s.server.activeCreatureAuras[targetKey])...)
-	purge = append(purge, s.server.spellSpecificNoStackPurge(spell, s.playerGUID, s.server.activeCreatureAuras[targetKey])...)
-	purge = append(purge, s.server.singleTargetNoStackPurge(spell, s.playerGUID, s.server.activeCreatureAuras[targetKey])...)
+	// (Unit.cpp:3397-3420) for single-target auras. The purge keys on the
+	// new aura's caster — the casterGUID param — because the
+	// dynamic-object path creates the aura with the object's caster
+	// (Unit.cpp:4020 shape).
+	purge := s.server.rankChainNoStackPurge(spell, casterGUID, aura.ItemGUID, s.server.activeCreatureAuras[targetKey])
+	purge = append(purge, s.server.spellGroupNoStackPurge(spell, casterGUID, s.server.activeCreatureAuras[targetKey])...)
+	purge = append(purge, s.server.spellSpecificNoStackPurge(spell, casterGUID, s.server.activeCreatureAuras[targetKey])...)
+	purge = append(purge, s.server.singleTargetNoStackPurge(spell, casterGUID, s.server.activeCreatureAuras[targetKey])...)
 	purge = append(purge, highest.purge...)
 	s.server.auraMu.Unlock()
 	for _, p := range purge {
