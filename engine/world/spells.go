@@ -53,6 +53,7 @@ const (
 	spellFailedCharmed                   uint8 = 24  // SPELL_FAILED_CHARMED (SharedDefines.h:1006)
 	spellFailedConfused                  uint8 = 26  // SPELL_FAILED_CONFUSED (SharedDefines.h:1008)
 	spellFailedFleeing                   uint8 = 34  // SPELL_FAILED_FLEEING (SharedDefines.h:1016)
+	spellFailedCasterAuraState           uint8 = 22  // SPELL_FAILED_CASTER_AURASTATE (SharedDefines.h:1004)
 
 	itemClassWeapon = 2
 	itemClassArmor  = 4
@@ -478,6 +479,18 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if s.hasAuraType(18) && (spell.SchoolMask > 1 || spell.SchoolMask == 0) && spell.PreventionType != spellPreventionTypePacify {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedSilenced), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "silenced")
+		return true
+	}
+	// Caster aura spell requirements (Spell::CheckCast caster-state block, Spell.cpp:5305-5308):
+	// client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if spell.CasterAuraSpell != 0 && !s.hasAura(spell.CasterAuraSpell) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAuraState), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "required caster aura missing", "aura", spell.CasterAuraSpell)
+		return true
+	}
+	if spell.ExcludeCasterAuraSpell != 0 && s.hasAura(spell.ExcludeCasterAuraSpell) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAuraState), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded caster aura present", "aura", spell.ExcludeCasterAuraSpell)
 		return true
 	}
 	if s.isGCDActive(spell) {
