@@ -58,6 +58,7 @@ const (
 	spellEffectLearnSpell                    = 36
 	spellEffectResurrect                     = 18
 	spellEffectReputation                    = 103
+	spellEffectQuestComplete                 = 16
 	spellAuraMounted                         = 78
 	spellAuraModParryPercent                 = 47
 	spellAuraConfuse                         = 5
@@ -1047,6 +1048,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectReputation: // 103: SPELL_EFFECT_REPUTATION
 				if eff.MiscValue != 0 {
 					s.giveReputation(effCtx, uint32(eff.MiscValue), eff.BasePoints+1)
+				}
+			case spellEffectQuestComplete: // 16: SPELL_EFFECT_QUEST_COMPLETE
+				if eff.MiscValue != 0 {
+					s.completeQuest(effCtx, uint32(eff.MiscValue))
 				}
 			default:
 				s.debug("unhandled spell effect", "spell", spellID, "effect", eff.Effect, "index", effectIndex)
