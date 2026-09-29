@@ -824,7 +824,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					if spellInfo.SchoolMask != 0 {
 						schoolMask = uint8(spellInfo.SchoolMask)
 					}
-					damage, hasDBCSpell = creatureSpellDamage(spellInfo)
+					damage, hasDBCSpell = creatureSpellDamage(s, spellInfo, motion.Level, false)
 				}
 			}
 			if !hasDBCSpell {
@@ -1158,7 +1158,59 @@ func canCreatureStartAttack(motion *creatureMotion, target playerPos, distance, 
 	return motion != nil && (motion.CanFly || math.Abs(float64(target.Z-motion.Z)) <= 3.0) && distance <= attackDistance
 }
 
-func creatureSpellDamage(spell wotlk.Spell) (uint32, bool) {
+// npcEffectCanScale mirrors the canEffectScale switches in
+// SpellEffectInfo::CalcValue (SpellInfo.cpp:466-504): the effect type or the
+// applied aura must be one whose value scales with the NPC caster's level.
+func npcEffectCanScale(effect wotlk.SpellEffect) bool {
+	switch effect.Effect {
+	case 2, 3, 8, 9, 10, 58, 62, 77, 121, 141, 142, 148:
+		// SPELL_EFFECT_SCHOOL_DAMAGE, DUMMY, POWER_DRAIN, HEALTH_LEECH,
+		// HEAL, WEAPON_DAMAGE, POWER_BURN, SCRIPT_EFFECT,
+		// NORMALIZED_WEAPON_DMG, FORCE_CAST_WITH_VALUE,
+		// TRIGGER_SPELL_WITH_VALUE, TRIGGER_MISSILE_SPELL_WITH_VALUE
+		return true
+	}
+	switch effect.Aura {
+	case 3, 4, 8, 15, 43, 53, 64, 69, 227:
+		// SPELL_AURA_PERIODIC_DAMAGE, DUMMY, PERIODIC_HEAL, DAMAGE_SHIELD,
+		// PROC_TRIGGER_DAMAGE, PERIODIC_LEECH, PERIODIC_MANA_LEECH,
+		// SCHOOL_ABSORB, PERIODIC_TRIGGER_SPELL_WITH_VALUE
+		return true
+	}
+	return false
+}
+
+// npcEffectValueScale mirrors the level-scaling term of
+// SpellEffectInfo::CalcValue (SpellInfo.cpp:459-511): for a cast by a unit
+// not controlled by a player, when the spell's SpellLevel is nonzero and
+// differs from the caster's level, the effect carries no per-level points,
+// the spell has SPELL_ATTR0_LEVEL_DAMAGE_CALCULATION, and the effect is
+// scale-capable, the value is multiplied by
+// GtNPCManaCostScaler[casterLevel-1] / GtNPCManaCostScaler[spellLevel-1].
+// Returns 1.0 when any gate fails or a DBC lookup misses (C++ requires both
+// lookups to succeed before scaling).
+func (s *Server) npcEffectValueScale(spell wotlk.Spell, effect wotlk.SpellEffect, casterLevel uint32, controlledByPlayer bool) float64 {
+	if controlledByPlayer || casterLevel == 0 || spell.SpellLevel == 0 || spell.SpellLevel == casterLevel || effect.RealPointsPerLevel != 0 {
+		return 1
+	}
+	if spell.Attributes&spellAttr0LevelDamageCalculation == 0 {
+		return 1
+	}
+	if !npcEffectCanScale(effect) {
+		return 1
+	}
+	if s == nil || s.Data == nil {
+		return 1
+	}
+	spellScaler, okSpell, _ := s.Data.GtNPCManaCostScaler(spell.SpellLevel)
+	casterScaler, okCaster, _ := s.Data.GtNPCManaCostScaler(casterLevel)
+	if !okSpell || !okCaster || spellScaler == 0 {
+		return 1
+	}
+	return float64(casterScaler) / float64(spellScaler)
+}
+
+func creatureSpellDamage(s *Server, spell wotlk.Spell, casterLevel uint32, controlledByPlayer bool) (uint32, bool) {
 	var damage uint32
 	found := false
 	for _, effect := range spell.Effects {
@@ -1167,7 +1219,11 @@ func creatureSpellDamage(spell wotlk.Spell) (uint32, bool) {
 			found = true
 			value := effect.BasePoints + 1
 			if value > 0 {
-				damage += uint32(value)
+				scale := float64(1)
+				if s != nil {
+					scale = s.npcEffectValueScale(spell, effect, casterLevel, controlledByPlayer)
+				}
+				damage += uint32(float64(value) * scale)
 			}
 		}
 	}

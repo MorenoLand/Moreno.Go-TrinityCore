@@ -57,8 +57,9 @@ const (
 
 	spellDamageClassMagic uint32 = 1 // SPELL_DAMAGE_CLASS_MAGIC (SharedDefines.h:1580)
 
-	spellAttr0StopAttackTarget    uint32 = 0x00100000 // SPELL_ATTR0_STOP_ATTACK_TARGET (SharedDefines.h:432)
-	spellAttr0DisabledWhileActive uint32 = 0x02000000 // SPELL_ATTR0_DISABLED_WHILE_ACTIVE (SharedDefines.h:437)
+	spellAttr0StopAttackTarget       uint32 = 0x00100000 // SPELL_ATTR0_STOP_ATTACK_TARGET (SharedDefines.h:432)
+	spellAttr0DisabledWhileActive    uint32 = 0x02000000 // SPELL_ATTR0_DISABLED_WHILE_ACTIVE (SharedDefines.h:437)
+	spellAttr0LevelDamageCalculation uint32 = 0x00080000 // SPELL_ATTR0_LEVEL_DAMAGE_CALCULATION (SharedDefines.h:431)
 
 	spellFailedEquippedItemClass         uint8 = 29  // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
 	spellFailedEquippedItemClassMainhand uint8 = 30  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
@@ -5714,7 +5715,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 	case 23: // SPELL_AURA_PERIODIC_TRIGGER_SPELL
 		if aura.TriggerSpell != 0 && s.server != nil && s.server.Data != nil {
 			if trigger, found, err := s.server.Data.Spell(aura.TriggerSpell); err == nil && found {
-				if damage, ok := creatureSpellDamage(trigger); ok && damage > 0 {
+				controlledByPlayer := aura.CasterGUID == s.playerGUID
+				if !controlledByPlayer && s.server != nil {
+					controlledByPlayer = s.server.findSessionByGUID(aura.CasterGUID) != nil
+				}
+				if damage, ok := creatureSpellDamage(s.server, trigger, uint32(aura.CasterLevel), controlledByPlayer); ok && damage > 0 {
 					// C++ HandlePeriodicTriggerSpellAuraTick casts via
 					// CastSpellExtraArgs(AuraEffect) = TRIGGERED_FULL_MASK, so
 					// TRIGGERED_DISALLOW_PROC_EVENTS applies here too.

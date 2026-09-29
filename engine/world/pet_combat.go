@@ -550,7 +550,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	}
 	nearbyPacket := protocol.BuildSpellGo(motion.GUID, motion.GUID, castCount, spell.ID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, stamp, hitTargets, nil, target)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
-	damage, hasDamage := creatureSpellDamage(spell)
+	damage, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true)
 	handledEffect := false
 	if hasDamage {
 		schoolMask := uint8(spell.SchoolMask)
