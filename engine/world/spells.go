@@ -1747,6 +1747,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleEffectHealthLeech(effCtx, spellID, hitTargets, effectIndex, eff)
 			case spellEffectPowerDrain: // 8: SPELL_EFFECT_POWER_DRAIN
 				amount := eff.BasePoints + 1
+				// SpellEffects.cpp:1277-1282: the drain amount is direct
+				// damage for the caster's SpellDamageBonusDone before the
+				// drain, so the caster's spell power scales it. Go models
+				// the spellpower term of SpellDamageBonusDone (see
+				// executeSpellDamage); the damage-taken side has no Go
+				// infra.
+				if s.player != nil && s.player.SpellPower > 0 {
+					amount += int32(math.Round(float64(s.player.SpellPower) * s.spellBonusMultiplier(spellID, effectIndex, false)))
+				}
 				for _, effectTarget := range hitTargets {
 					// SpellEffects.cpp:1301: the caster regains the drained
 					// power scaled by the effect value multiplier, never
@@ -2440,6 +2449,37 @@ func effectValueMultiplied(value uint32, amplitude float32) uint32 {
 	return uint32(int32(float64(value) * float64(amplitude)))
 }
 
+// drainManaResilienceReduction mirrors the resilience term in
+// Spell::EffectPowerDrain and Spell::EffectPowerBurn
+// (SpellEffects.cpp:1285-1287): mana drains are reduced by the target's
+// spell crit damage reduction, i.e. the min(resiliencePct*2.2, 33.0)%
+// slice of getResilienceStats. C++'s GetCombatRatingDamageReduction
+// returns 0 for non-players, and Go's creature motions carry no combat
+// ratings, so the term only fires on player targets.
+func drainManaResilienceReduction(target *session, amount uint32) uint32 {
+	if target == nil || target.player == nil || amount == 0 {
+		return 0
+	}
+	if int(CombatRatingCritTakenSpell) >= len(target.player.CombatRatings) {
+		return 0
+	}
+	rating := target.player.CombatRatings[CombatRatingCritTakenSpell]
+	if rating == 0 || target.player.Level == 0 {
+		return 0
+	}
+	_, critDmgRed, _ := getResilienceStats(target.player.Level, rating)
+	if critDmgRed <= 0 {
+		return 0
+	}
+	// Unit::GetCombatRatingDamageReduction = CalculatePct(damage, pct),
+	// which truncates for uint32.
+	reduction := uint32(float64(amount) * float64(critDmgRed) / 100.0)
+	if reduction >= amount {
+		return amount
+	}
+	return reduction
+}
+
 func (s *session) applySpellPowerBurn(ctx context.Context, targetGUID uint64, powerType int32, amount int32, spellID uint32) uint32 {
 	if s == nil || s.player == nil || powerType < 0 || powerType >= 7 || amount <= 0 {
 		return 0
@@ -2460,6 +2500,17 @@ func (s *session) applySpellPowerBurn(ctx context.Context, targetGUID uint64, po
 		if burn > cap {
 			burn = cap
 		}
+	}
+	if burn <= 0 {
+		return 0
+	}
+	// SpellEffects.cpp:1285-1287 (EffectPowerDrain) and the matching
+	// EffectPowerBurn term: resilience reduces mana drains by the
+	// target's spell crit damage reduction (added in 2.4). This is the
+	// crit-damage slice only — not the flat resilience damage reduction
+	// that applyResilienceToDamage applies to real damage.
+	if powerType == 0 { // POWER_MANA
+		burn -= int64(drainManaResilienceReduction(target, uint32(burn)))
 	}
 	if burn <= 0 {
 		return 0
