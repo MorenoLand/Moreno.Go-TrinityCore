@@ -441,6 +441,28 @@ func isVampiricTouchSpell(spellID uint32) bool {
 
 // handleEffectDispel processes SPELL_EFFECT_DISPEL (38).
 // Mirrors TrinityCore Spell::EffectDispel (SpellEffects.cpp:2429-2531).
+// rescaleAuraAmountsByStack mirrors the Aura::SetStackAmount recalc
+// (SpellAuras.cpp:1008) on the ModStackAmount stack-change paths: Go's aura
+// amounts are linear in the stack count (a fresh apply carries one stack's
+// amount; the 4c8b0e4 merge unit scales by the live count), so a surviving
+// stack change rescales every effect amount by newCount/oldCount — the
+// CalculateAmount x new-count term (SpellAuraEffects.cpp:537). The ratio is
+// exact because the stored amounts are the base amount times oldCount.
+// Charge changes never rescale (Aura::ModCharges has no recalc).
+func rescaleAuraAmountsByStack(aura *activeAura, oldCount, newCount uint32) {
+	if aura == nil || oldCount == 0 || newCount == 0 || oldCount == newCount {
+		return
+	}
+	rescale := func(v int64) int64 { return v * int64(newCount) / int64(oldCount) }
+	aura.Amount = uint32(rescale(int64(aura.Amount)))
+	for index := range aura.Amounts {
+		if aura.EffectMask&(1<<uint(index)) == 0 {
+			continue
+		}
+		aura.Amounts[index] = int32(rescale(int64(aura.Amounts[index])))
+	}
+}
+
 // dispelPlayerAuraCharge mirrors Unit::RemoveAurasDueToSpellByDispel
 // (Unit.cpp:3938-3950): a successful dispel removes one charge
 // (Aura::ModCharges, SpellAuras.cpp:964) from auras carrying
@@ -467,7 +489,9 @@ func (ts *session) dispelPlayerAuraCharge(spellID uint32) bool {
 		} else if aura.StackCount > 1 {
 			// Aura::ModStackAmount(-1): the aura loses one stack and
 			// survives while stacks remain; no timer refresh on decrement.
+			oldCount := uint32(aura.StackCount)
 			aura.StackCount--
+			rescaleAuraAmountsByStack(aura, oldCount, uint32(aura.StackCount))
 			advanceAuraDuration(aura, time.Now())
 		}
 	}
@@ -525,7 +549,9 @@ func (s *session) dispelCreatureAuraCharge(key creatureAuraKey, spellID uint32, 
 				aura.RemainingCharges--
 			}
 		} else if aura.StackCount > 1 {
+			oldCount := uint32(aura.StackCount)
 			aura.StackCount--
+			rescaleAuraAmountsByStack(aura, oldCount, uint32(aura.StackCount))
 		}
 	}
 	var positive bool
@@ -748,11 +774,16 @@ func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, stealChar
 		if cur == 0 {
 			cur = 1
 		}
+		oldCount := uint32(cur)
 		increased := cur < maxStack
 		if cur++; cur > maxStack {
 			cur = maxStack
 		}
 		existing.StackCount = uint8(cur)
+		// SetStackAmount recalc (SpellAuras.cpp:1008) on the increase: the
+		// stolen stack must scale the amounts up, or a later decrement
+		// would divide amounts that were never multiplied.
+		rescaleAuraAmountsByStack(existing, oldCount, uint32(cur))
 		if increased {
 			existing.RemainingCharges = uint8(stSpell.ProcCharges)
 		}
