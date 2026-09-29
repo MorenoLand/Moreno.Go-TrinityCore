@@ -654,6 +654,54 @@ func (s *session) castInProgress() bool {
 	return s.activeChannel != nil && !s.activeChannel.Stopped
 }
 
+// validateSpellRange checks DBC range (plus the Auto Shot / Shoot special
+// cases) against current caster/target positions. Returns 0 on success or a
+// SPELL_FAILED_* code. C++ authority: Spell::CheckRange via Spell::CheckCast.
+func (s *session) validateSpellRange(ctx context.Context, spellID uint32, spell wotlk.Spell, targetGUID uint64) uint8 {
+	tgt, ok := s.getCombatTarget(ctx, targetGUID)
+	if !ok {
+		return 0
+	}
+	pReach := float32(1.5)
+	if s.player.CombatReach > 0 {
+		pReach = s.player.CombatReach
+	}
+	dist := distance3D(s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z)
+	if spellID == 75 { // Auto Shot
+		if dist < calcMeleeRange(pReach, tgt.CombatReach) {
+			return 128 // SPELL_FAILED_TOO_CLOSE
+		}
+		if dist > 35.0 {
+			return 97 // SPELL_FAILED_OUT_OF_RANGE
+		}
+		return 0
+	}
+	if spellID == 5019 { // Shoot
+		if dist > 30.0 {
+			return 97 // SPELL_FAILED_OUT_OF_RANGE
+		}
+		return 0
+	}
+	rangeEntry, ok, _ := s.server.Data.SpellRange(spell.RangeIndex)
+	if !ok {
+		return 0
+	}
+	harmful := isHarmfulSpell(spell)
+	maxRange := rangeEntry.MaxFriendly
+	minRange := rangeEntry.MinFriendly
+	if harmful {
+		maxRange = rangeEntry.MaxHostile
+		minRange = rangeEntry.MinHostile
+	}
+	if maxRange > 0 && dist > float64(maxRange) {
+		return 97 // SPELL_FAILED_OUT_OF_RANGE
+	}
+	if minRange > 0 && dist < float64(minRange) {
+		return 128 // SPELL_FAILED_TOO_CLOSE
+	}
+	return 0
+}
+
 func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData) {
 	if s.player == nil {
 		return
@@ -697,6 +745,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if pType < 7 && cost > 0 && s.player.Powers[pType] < cost {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 85), true) // SPELL_FAILED_NO_POWER = 85
 		return
+	}
+
+	// Spell::_cast revalidates CheckCast at completion: the target may have
+	// moved during the cast bar.
+	if target.UnitGUID != 0 {
+		if failCode := s.validateSpellRange(ctx, spellID, spell, target.UnitGUID); failCode != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failCode), true)
+			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "range", "code", failCode)
+			return
+		}
 	}
 
 	hitTargets := make([]uint64, 0, 1)
