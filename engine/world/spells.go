@@ -181,6 +181,27 @@ func isAreaEnemyTargetType(target uint32) bool {
 	}
 }
 
+// spellEffectTargetsUnit mirrors SpellEffectInfo::GetUsedTargetObjectType()
+// (the static _data table, SpellInfo.cpp:610-614) reporting true when the
+// effect's used target object type is TARGET_OBJECT_TYPE_UNIT (SpellInfo.h:103).
+// Spell::prepare (Spell.cpp:3178-3188) removes AURA_INTERRUPT_FLAG_SPELL_ATTACK
+// auras when the breaking-stealth spell has any unit-typed effect.
+func spellEffectTargetsUnit(effect uint32) bool {
+	switch effect {
+	case 1, 2, 6, 7, 8, 9, 10, 11, 16, 17, 19, 20, 21, 22, 23, 24, 25, 26,
+		30, 31, 34, 35, 36, 37, 38, 39, 40, 41, 44, 45, 46, 47, 48, 49,
+		51, 52, 55, 57, 58, 59, 60, 62, 63, 65, 66, 67, 68, 70, 71, 73,
+		74, 75, 78, 79, 80, 82, 84, 90, 91, 92, 93, 94, 95, 96, 97, 98,
+		100, 102, 103, 108, 110, 111, 112, 114, 115, 117, 118, 119, 120,
+		121, 123, 124, 125, 126, 128, 129, 130, 131, 132, 133, 134, 136,
+		137, 138, 139, 140, 141, 142, 143, 146, 147, 150, 153, 154, 155,
+		157, 159, 160, 161, 162, 163, 164:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) []uint64 {
 	if s == nil || s.player == nil || s.server == nil || !isAreaEnemySpell(spell) || s.server.Data == nil {
 		return nil
@@ -852,8 +873,11 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// Spell::prepare (Spell.cpp:3175-3189): stealth breaks at cast start.
 	if spell.AttributesEx&spellAttr1NotBreakStealth == 0 {
 		s.removeAurasWithInterruptFlags(auraInterruptFlagCast)
-		if isHarmfulSpell(spell) {
-			s.removeAurasWithInterruptFlags(auraInterruptFlagSpellAttack)
+		for _, eff := range spell.Effects {
+			if spellEffectTargetsUnit(eff.Effect) {
+				s.removeAurasWithInterruptFlags(auraInterruptFlagSpellAttack)
+				break
+			}
 		}
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_START), protocol.BuildSpellStart(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagStart, castTime, target), true); err != nil {
