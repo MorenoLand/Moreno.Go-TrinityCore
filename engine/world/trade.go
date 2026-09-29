@@ -222,6 +222,8 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 	bag := payload[1]
 	slot := payload[2]
 	if tradeSlot >= tradeSlotCount {
+		// Invalid trade slot: C++ answers TRADE_STATUS_TRADE_CANCELED (TradeHandler.cpp:749-755).
+		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0)
 		return true
 	}
 	cdb := s.server.CharactersStore.DB
@@ -231,6 +233,9 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 	var itemGUID int64
 	err := cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ? LIMIT 1", s.playerGUID, bag, slot).Scan(&itemGUID)
 	if err != nil || itemGUID == 0 {
+		// Missing item (cheating, can't fail with correct client operations): C++ answers
+		// TRADE_STATUS_TRADE_CANCELED (TradeHandler.cpp:760-765).
+		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0)
 		return true
 	}
 	if tradeHasItem(s.trade.Items, uint64(itemGUID)) {
