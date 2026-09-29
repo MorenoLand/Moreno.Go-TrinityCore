@@ -201,6 +201,17 @@ func (s *session) handleSetTradeGold(ctx context.Context, payload []byte) bool {
 	return true
 }
 
+// tradeHasItem answers whether the trade window already holds the given item
+// GUID, matching TradeData::HasItem (TradeData.cpp:33) scanning all slots.
+func tradeHasItem(items map[uint8]tradeSlotItem, itemGUID uint64) bool {
+	for _, it := range items {
+		if it.ItemGUID == itemGUID {
+			return true
+		}
+	}
+	return false
+}
+
 // handleSetTradeItem processes CMSG_SET_TRADE_ITEM (0x11D).
 // Reference: WorldSession::HandleSetTradeItemOpcode (TradeHandler.cpp:723).
 func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
@@ -220,6 +231,11 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 	var itemGUID int64
 	err := cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ? LIMIT 1", s.playerGUID, bag, slot).Scan(&itemGUID)
 	if err != nil || itemGUID == 0 {
+		return true
+	}
+	if tradeHasItem(s.trade.Items, uint64(itemGUID)) {
+		// Prevent placing a single item into multiple trade slots (cheating attempt).
+		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0)
 		return true
 	}
 	var itemEntry, count, flags int64
