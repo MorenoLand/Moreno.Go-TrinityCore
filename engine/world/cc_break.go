@@ -9,7 +9,7 @@ const (
 	auraInterruptFlagTurning      uint32 = 0x00000010 // removed by turning
 	auraInterruptFlagJump         uint32 = 0x00000020 // removed by jumping
 	auraInterruptFlagNotMounted   uint32 = 0x00000040 // removed by dismounting
-	auraInterruptFlagNotSeated    uint32 = 0x00000080 // removed by standing up
+	auraInterruptFlagNotSeated    uint32 = 0x00040000 // removed by standing up (AURA_INTERRUPT_FLAG_NOT_SEATED, SpellDefines.h:65)
 	auraInterruptFlagChangeMap    uint32 = 0x00000100 // removed by changing map
 	auraInterruptFlagEnterCombat  uint32 = 0x00000400 // removed on entering combat
 	auraInterruptFlagDirectDamage uint32 = 0x00001000 // removed only by direct damage

@@ -3958,6 +3958,338 @@ func (s *Server) spellGroupNoStackPurge(newSpell wotlk.Spell, newCasterGUID uint
 	return purge
 }
 
+// SpellSpecificType values (SpellInfo.h:149-174) for the
+// SpellInfo::GetSpellSpecific classifier (_LoadSpellSpecific,
+// SpellInfo.cpp:2041-2235).
+const (
+	spellSpecificNormal              = 0
+	spellSpecificSeal                = 1
+	spellSpecificAura                = 3
+	spellSpecificSting               = 4
+	spellSpecificCurse               = 5
+	spellSpecificAspect              = 6
+	spellSpecificTracker             = 7
+	spellSpecificWarlockArmor        = 8
+	spellSpecificMageArmor           = 9
+	spellSpecificElementalShield     = 10
+	spellSpecificMagePolymorph       = 11
+	spellSpecificJudgement           = 13
+	spellSpecificWarlockCorruption   = 17
+	spellSpecificFood                = 19
+	spellSpecificDrink               = 20
+	spellSpecificFoodAndDrink        = 21
+	spellSpecificPresence            = 22
+	spellSpecificCharm               = 23
+	spellSpecificScroll              = 24
+	spellSpecificMageArcaneBrillance = 25
+	spellSpecificWarriorEnrage       = 26
+	spellSpecificPriestDivineSpirit  = 27
+	spellSpecificHand                = 28
+)
+
+// Spell family names and aura/effect IDs consumed by the SpellSpecific
+// classifier (SharedDefines.h:3581-3596, SpellAuraDefines.h, SpellDefines.h:65).
+const (
+	spellFamilyGeneric     = 0
+	spellFamilyMage        = 3
+	spellFamilyPriest      = 6
+	spellFamilyHunter      = 9
+	spellFamilyPaladin     = 10
+	spellFamilyShaman      = 11
+	spellFamilyDeathKnight = 15
+
+	spellAuraModPossess     = 2
+	spellAuraTrackCreatures = 44
+	spellAuraTrackResources = 45
+	spellAuraModRegen       = 84
+	spellAuraModPowerRegen  = 85
+	spellAuraModPossessPet  = 128
+	spellAuraAoeCharm       = 177
+
+	spellEffectApplyAura           = 6
+	spellEffectPersistentAreaAura  = 27
+	spellEffectApplyAreaAuraParty  = 35
+	spellEffectApplyAreaAuraRaid   = 65
+	spellEffectApplyAreaAuraPet    = 119
+	spellEffectApplyAreaAuraFriend = 128
+	spellEffectApplyAreaAuraEnemy  = 129
+	spellEffectApplyAreaAuraOwner  = 143
+)
+
+// spellEffectIsAuraEffect mirrors SpellEffectInfo::IsAura (SpellInfo.cpp:370-373)
+// via IsUnitOwnedAuraEffect (SpellAuras.cpp:273): an APPLY_AURA-family effect
+// carrying a real aura type.
+func spellEffectIsAuraEffect(eff wotlk.SpellEffect) bool {
+	if eff.Aura == 0 {
+		return false
+	}
+	switch eff.Effect {
+	case spellEffectApplyAura, spellEffectPersistentAreaAura,
+		spellEffectApplyAreaAuraParty, spellEffectApplyAreaAuraRaid,
+		spellEffectApplyAreaAuraPet, spellEffectApplyAreaAuraFriend,
+		spellEffectApplyAreaAuraEnemy, spellEffectApplyAreaAuraOwner:
+		return true
+	default:
+		return false
+	}
+}
+
+// spellHasAura mirrors SpellInfo::HasAura (SpellInfo.cpp:890-896).
+func spellHasAura(spell wotlk.Spell, aura uint32) bool {
+	for _, eff := range spell.Effects {
+		if eff.Aura == aura && spellEffectIsAuraEffect(eff) {
+			return true
+		}
+	}
+	return false
+}
+
+// spellSpecific mirrors SpellInfo::_LoadSpellSpecific (SpellInfo.cpp:2041-2235):
+// the per-spell exclusivity classifier consumed by the spell-specific stack
+// gates (SpellInfo.cpp:1398-1449) and by _LoadAuraState's seal term
+// (SpellInfo.cpp:1971). firstRank resolves GetFirstRankSpell()->Id for the
+// scroll branch (nil degrades to the spell's own ID, like a missing chain
+// entry); the seal branch never touches it, so spellAuraState can pass nil.
+func spellSpecific(spell wotlk.Spell, firstRank func(uint32) uint32) uint8 {
+	switch spell.SpellFamilyName {
+	case spellFamilyGeneric:
+		// Food / Drinks (mostly)
+		if spell.AuraInterruptFlags&auraInterruptFlagNotSeated != 0 {
+			food, drink := false, false
+			for _, eff := range spell.Effects {
+				if !spellEffectIsAuraEffect(eff) {
+					continue
+				}
+				switch eff.Aura {
+				// Food
+				case spellAuraModRegen, spellAuraObsModHealth:
+					food = true
+				// Drink
+				case spellAuraModPowerRegen, spellAuraObsModPower:
+					drink = true
+				}
+			}
+			switch {
+			case food && drink:
+				return spellSpecificFoodAndDrink
+			case food:
+				return spellSpecificFood
+			case drink:
+				return spellSpecificDrink
+			}
+		} else {
+			if firstRank != nil {
+				switch firstRank(spell.ID) {
+				case 8118, // Strength
+					8099, // Stamina
+					8112, // Spirit
+					8096, // Intellect
+					8115, // Agility
+					8091: // Armor
+					return spellSpecificScroll
+				}
+			}
+			switch spell.ID {
+			case 12880, // Enrage (Enrage)
+				14201,
+				14202,
+				14203,
+				14204,
+				57518, // Enrage (Wrecking Crew)
+				57519,
+				57520,
+				57521,
+				57522,
+				57514, // Enrage (Imp. Defensive Stance)
+				57516:
+				return spellSpecificWarriorEnrage
+			}
+		}
+	case spellFamilyMage:
+		// family flags 18(Molten), 25(Frost/Ice), 28(Mage)
+		if spell.SpellFamilyFlags[0]&0x12040000 != 0 {
+			return spellSpecificMageArmor
+		}
+		// Arcane brillance and Arcane intelect (normal check fails because of flags difference)
+		if spell.SpellFamilyFlags[0]&0x400 != 0 {
+			return spellSpecificMageArcaneBrillance
+		}
+		if spell.SpellFamilyFlags[0]&0x1000000 != 0 && spell.Effects[0].Aura == spellAuraConfuse {
+			return spellSpecificMagePolymorph
+		}
+	case spellFamilyWarrior:
+		if spell.ID == 12292 { // Death Wish
+			return spellSpecificWarriorEnrage
+		}
+	case spellFamilyWarlock:
+		// only warlock curses have this
+		if spell.DispelType == DispelCurse {
+			return spellSpecificCurse
+		}
+		// Warlock (Demon Armor | Demon Skin | Fel Armor)
+		if spell.SpellFamilyFlags[1]&0x20000020 != 0 || spell.SpellFamilyFlags[2]&0x00000010 != 0 {
+			return spellSpecificWarlockArmor
+		}
+		// seed of corruption and corruption
+		if spell.SpellFamilyFlags[1]&0x10 != 0 || spell.SpellFamilyFlags[0]&0x2 != 0 {
+			return spellSpecificWarlockCorruption
+		}
+	case spellFamilyPriest:
+		// Divine Spirit and Prayer of Spirit
+		if spell.SpellFamilyFlags[0]&0x20 != 0 {
+			return spellSpecificPriestDivineSpirit
+		}
+	case spellFamilyHunter:
+		// only hunter stings have this
+		if spell.DispelType == DispelPoison {
+			return spellSpecificSting
+		}
+		// only hunter aspects have this (but not all aspects in hunter family)
+		if spell.SpellFamilyFlags[0]&0x00380000 != 0 || spell.SpellFamilyFlags[1]&0x00440000 != 0 || spell.SpellFamilyFlags[2]&0x00001010 != 0 {
+			return spellSpecificAspect
+		}
+	case spellFamilyPaladin:
+		// Collection of all the seal family flags. No other paladin spell has any of those.
+		if spell.SpellFamilyFlags[1]&0x26000C00 != 0 || spell.SpellFamilyFlags[0]&0x0A000000 != 0 {
+			return spellSpecificSeal
+		}
+		if spell.SpellFamilyFlags[0]&0x00002190 != 0 {
+			return spellSpecificHand
+		}
+		// Judgement of Wisdom, Judgement of Light, Judgement of Justice
+		switch spell.ID {
+		case 20184, 20185, 20186:
+			return spellSpecificJudgement
+		}
+		// only paladin auras have this (for palaldin class family)
+		if spell.SpellFamilyFlags[2]&0x00000020 != 0 {
+			return spellSpecificAura
+		}
+	case spellFamilyShaman:
+		// family flags 10 (Lightning), 42 (Earth), 37 (Water), proc shield from T2 8 pieces bonus
+		if spell.SpellFamilyFlags[1]&0x420 != 0 || spell.SpellFamilyFlags[0]&0x00000400 != 0 || spell.ID == 23552 {
+			return spellSpecificElementalShield
+		}
+	case spellFamilyDeathKnight:
+		if spell.ID == 48266 || spell.ID == 48263 || spell.ID == 48265 {
+			return spellSpecificPresence
+		}
+	}
+	for _, eff := range spell.Effects {
+		if eff.Effect == spellEffectApplyAura {
+			switch eff.Aura {
+			case spellAuraCharm, spellAuraModPossessPet, spellAuraModPossess, spellAuraAoeCharm:
+				return spellSpecificCharm
+			case spellAuraTrackCreatures:
+				/// @workaround For non-stacking tracking spells (We need generic solution)
+				if spell.ID == 30645 { // Gas Cloud Tracking
+					return spellSpecificNormal
+				}
+				return spellSpecificTracker
+			case spellAuraTrackResources, spellAuraTrackStealthed:
+				return spellSpecificTracker
+			}
+		}
+	}
+	return spellSpecificNormal
+}
+
+// isAuraExclusiveBySpecificWith mirrors SpellInfo::IsAuraExclusiveBySpecificWith
+// (SpellInfo.cpp:1398-1429).
+func isAuraExclusiveBySpecificWith(spec1, spec2 uint8) bool {
+	switch spec1 {
+	case spellSpecificTracker,
+		spellSpecificWarlockArmor,
+		spellSpecificMageArmor,
+		spellSpecificElementalShield,
+		spellSpecificMagePolymorph,
+		spellSpecificPresence,
+		spellSpecificCharm,
+		spellSpecificScroll,
+		spellSpecificWarriorEnrage,
+		spellSpecificMageArcaneBrillance,
+		spellSpecificPriestDivineSpirit:
+		return spec1 == spec2
+	case spellSpecificFood:
+		return spec2 == spellSpecificFood || spec2 == spellSpecificFoodAndDrink
+	case spellSpecificDrink:
+		return spec2 == spellSpecificDrink || spec2 == spellSpecificFoodAndDrink
+	case spellSpecificFoodAndDrink:
+		return spec2 == spellSpecificFood || spec2 == spellSpecificDrink || spec2 == spellSpecificFoodAndDrink
+	default:
+		return false
+	}
+}
+
+// isAuraExclusiveBySpecificPerCasterWith mirrors
+// SpellInfo::IsAuraExclusiveBySpecificPerCasterWith (SpellInfo.cpp:1431-1449).
+func isAuraExclusiveBySpecificPerCasterWith(spec1, spec2 uint8) bool {
+	switch spec1 {
+	case spellSpecificSeal,
+		spellSpecificHand,
+		spellSpecificAura,
+		spellSpecificSting,
+		spellSpecificCurse,
+		spellSpecificAspect,
+		spellSpecificJudgement,
+		spellSpecificWarlockCorruption:
+		return spec1 == spec2
+	default:
+		return false
+	}
+}
+
+// spellSpecificNoStackPurge mirrors the "check spell specific stack rules" term
+// of Aura::CanStackWith (SpellAuras.cpp:1914-1921) inside
+// Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640-3671): a fresh aura purges
+// existing auras whose SpellSpecific classification is exclusive with the new
+// spell's, or — with the same caster — whose per-caster specific matches. The
+// track-resources config term (SpellAuras.cpp:1914) precedes the specific gates
+// and is honored with the CONFIG_ALLOW_TRACK_BOTH_RESOURCES default (true);
+// Go has no such config, so the default shape is modeled. The trigger-spell
+// mutual exclusion (SpellAuras.cpp:1901-1906) is honored like the companion
+// purge functions. Passive new spells skip the purge (the
+// IsPassiveStackableWithRanks early-out shape, Unit.cpp:3643; Go holds no
+// passive aura instances). Returns the auras to remove; the caller removes
+// them after unlocking.
+func (s *Server) spellSpecificNoStackPurge(newSpell wotlk.Spell, newCasterGUID uint64, existing map[uint32]*activeAura) []rankPurgeTarget {
+	if s == nil || s.Data == nil {
+		return nil
+	}
+	if newSpell.Attributes&spellAttributePassive != 0 {
+		return nil
+	}
+	newSpec := spellSpecific(newSpell, s.spellFirstRank)
+	if newSpec == spellSpecificNormal {
+		return nil
+	}
+	var purge []rankPurgeTarget
+	for id, aura := range existing {
+		if id == newSpell.ID || aura == nil || aura.Stopped {
+			continue
+		}
+		exSpell, found, err := s.Data.Spell(id)
+		if err != nil || !found {
+			continue
+		}
+		if auraTriggersSpell(newSpell, id) || auraTriggersSpell(exSpell, newSpell.ID) {
+			continue
+		}
+		// TRACK_RESOURCES pairs stack (SpellAuras.cpp:1914, default true).
+		if spellHasAura(newSpell, spellAuraTrackResources) && spellHasAura(exSpell, spellAuraTrackResources) {
+			continue
+		}
+		exSpec := spellSpecific(exSpell, s.spellFirstRank)
+		sameCaster := aura.CasterGUID == newCasterGUID
+		if !isAuraExclusiveBySpecificWith(newSpec, exSpec) &&
+			!(sameCaster && isAuraExclusiveBySpecificPerCasterWith(newSpec, exSpec)) {
+			continue
+		}
+		purge = append(purge, rankPurgeTarget{spellID: id, slot: aura.Slot})
+	}
+	return purge
+}
+
 // spellEffectIsAreaAura mirrors SpellEffectInfo::IsAreaAuraEffect
 // (SpellInfo.cpp:385-395): the APPLY_AREA_AURA_* effect family
 // (SharedDefines.h:846/876/930/939/940/954).
@@ -4384,10 +4716,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640): the fresh
 		// aura purges auras of other spells it can't stack with — the
 		// rank-chain term (Aura::CanStackWith, SpellAuras.cpp:1994-2004),
-		// the spell-group exclusive terms (SpellAuras.cpp:1924-1932), and
-		// the EXCLUSIVE_HIGHEST comparisons (Unit.cpp:13991).
+		// the spell-group exclusive terms (SpellAuras.cpp:1924-1932),
+		// the spell-specific exclusivity gates (SpellAuras.cpp:1914-1921),
+		// and the EXCLUSIVE_HIGHEST comparisons (Unit.cpp:13991).
 		purgeIDs := s.server.rankChainNoStackPurge(spell, s.playerGUID, aura.ItemGUID, targetSess.activeAuras)
 		purgeIDs = append(purgeIDs, s.server.spellGroupNoStackPurge(spell, s.playerGUID, targetSess.activeAuras)...)
+		purgeIDs = append(purgeIDs, s.server.spellSpecificNoStackPurge(spell, s.playerGUID, targetSess.activeAuras)...)
 		purgeIDs = append(purgeIDs, highest.purge...)
 		targetSess.castMu.Unlock()
 		for _, purgeID := range purgeIDs {
@@ -4639,10 +4973,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640): the fresh aura
 	// purges auras of other spells it can't stack with — the rank-chain
 	// term (Aura::CanStackWith, SpellAuras.cpp:1994-2004), the spell-group
-	// exclusive terms (SpellAuras.cpp:1924-1932), and the EXCLUSIVE_HIGHEST
+	// exclusive terms (SpellAuras.cpp:1924-1932), the spell-specific
+	// exclusivity gates (SpellAuras.cpp:1914-1921), and the EXCLUSIVE_HIGHEST
 	// comparisons (Unit.cpp:13991).
 	purge := s.server.rankChainNoStackPurge(spell, s.playerGUID, aura.ItemGUID, s.server.activeCreatureAuras[targetKey])
 	purge = append(purge, s.server.spellGroupNoStackPurge(spell, s.playerGUID, s.server.activeCreatureAuras[targetKey])...)
+	purge = append(purge, s.server.spellSpecificNoStackPurge(spell, s.playerGUID, s.server.activeCreatureAuras[targetKey])...)
 	purge = append(purge, highest.purge...)
 	s.server.auraMu.Unlock()
 	for _, p := range purge {
