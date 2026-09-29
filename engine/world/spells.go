@@ -3715,6 +3715,89 @@ func refreshAuraEffectBasepoints(existing *activeAura, spell wotlk.Spell, eff wo
 // castMerged tracks, for one cast, the target GUIDs whose existing aura
 // already ran the re-apply merge; a nil map means the caller applies a
 // single aura effect per spell and keeps the old always-merge behavior.
+
+// spellFirstRank mirrors SpellInfo::GetFirstRankSpell (SpellInfo.cpp:3323)
+// via the spell_ranks world table, cached by petAuraStackGroups. A spell
+// with no rank row is its own first rank.
+func (s *Server) spellFirstRank(spellID uint32) uint32 {
+	if s == nil {
+		return spellID
+	}
+	if first, ok := s.petAuraStackGroups().firstRank[spellID]; ok {
+		return first
+	}
+	return spellID
+}
+
+func auraTriggersSpell(spell wotlk.Spell, target uint32) bool {
+	for _, eff := range spell.Effects {
+		if eff.TriggerSpell == target {
+			return true
+		}
+	}
+	return false
+}
+
+// rankPurgeTarget is one aura the rank-chain no-stack purge selected for
+// removal; the caller removes them after unlocking.
+type rankPurgeTarget struct {
+	spellID uint32
+	slot    uint8
+}
+
+// rankChainNoStackPurge mirrors the rank-chain term of
+// Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640-3671) via
+// Aura::CanStackWith (SpellAuras.cpp:1994-2004): a fresh aura application
+// removes the target's existing auras that share its spell rank chain under
+// a different spell ID when the caster matches. Only the same-caster slice
+// is modeled — C++ lets different-caster periodic auras of one chain stack
+// (SpellAuras.cpp:1955-1976), so a blanket purge would over-remove.
+// Honored: the spell-family gate (SpellAuras.cpp:1934), the trigger-spell
+// mutual exclusion (SpellAuras.cpp:1901-1906), and the enchant-proc item
+// edge (SpellAuras.cpp:1998-2000, degrade-open without the CU attr).
+// Passive new spells skip the purge (the IsPassiveStackableWithRanks
+// early-out shape, Unit.cpp:3643; Go holds no passive aura instances).
+// IsMultiSlotAura (SpellAuras.cpp:1148) and CONTROL_VEHICLE are vacuous in
+// Go. Spell-group stack rules and the IsHighestExclusiveAura direction need
+// group-rule data Go does not load — standing gap, under-purges only.
+// Returns the auras to remove; the caller removes them after unlocking.
+func (s *Server) rankChainNoStackPurge(newSpell wotlk.Spell, newCasterGUID, newItemGUID uint64, existing map[uint32]*activeAura) []rankPurgeTarget {
+	if s == nil || s.Data == nil {
+		return nil
+	}
+	if newSpell.Attributes&spellAttributePassive != 0 {
+		return nil
+	}
+	newFirst := s.spellFirstRank(newSpell.ID)
+	var purge []rankPurgeTarget
+	for id, aura := range existing {
+		if id == newSpell.ID || aura == nil || aura.Stopped {
+			continue
+		}
+		if aura.CasterGUID != newCasterGUID {
+			continue
+		}
+		if s.spellFirstRank(id) != newFirst {
+			continue
+		}
+		exSpell, found, err := s.Data.Spell(id)
+		if err != nil || !found {
+			continue
+		}
+		if exSpell.SpellFamilyName != newSpell.SpellFamilyName {
+			continue
+		}
+		if auraTriggersSpell(newSpell, id) || auraTriggersSpell(exSpell, newSpell.ID) {
+			continue
+		}
+		if newItemGUID != 0 && aura.ItemGUID != 0 && newItemGUID != aura.ItemGUID {
+			continue
+		}
+		purge = append(purge, rankPurgeTarget{spellID: id, slot: aura.Slot})
+	}
+	return purge
+}
+
 func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}) {
 	if s.player == nil {
 		return
@@ -3996,7 +4079,14 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			}
 		}
 		targetSess.activeAuras[spell.ID] = aura
+		// Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640): the fresh
+		// aura purges same-caster auras of its rank chain it can't stack
+		// with (Aura::CanStackWith, SpellAuras.cpp:1994-2004).
+		purgeIDs := s.server.rankChainNoStackPurge(spell, s.playerGUID, aura.ItemGUID, targetSess.activeAuras)
 		targetSess.castMu.Unlock()
+		for _, purgeID := range purgeIDs {
+			targetSess.expirePlayerAura(purgeID.spellID)
+		}
 		if eff.Aura == spellAuraModParryPercent {
 			targetSess.updatePlayerParryPercentage(targetSess.player, targetSess.player.Level)
 		}
@@ -4228,7 +4318,14 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		RemainingCharges:  uint8(spell.ProcCharges),
 	}
 	s.server.activeCreatureAuras[targetKey][spell.ID] = aura
+	// Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640): the fresh aura
+	// purges same-caster auras of its rank chain it can't stack with
+	// (Aura::CanStackWith, SpellAuras.cpp:1994-2004).
+	purge := s.server.rankChainNoStackPurge(spell, s.playerGUID, aura.ItemGUID, s.server.activeCreatureAuras[targetKey])
 	s.server.auraMu.Unlock()
+	for _, p := range purge {
+		s.expireCreatureAura(targetKey, p.spellID, p.slot)
+	}
 	if eff.Aura == spellAuraCharm {
 		spells, reactState, commandState, controlled := s.server.charmCreature(ctx, targetKey, s.playerGUID, s.player.Race)
 		if controlled {
