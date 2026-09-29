@@ -2747,7 +2747,7 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 			firstErr = err
 		}
 	}
-	if !s.superseded {
+	if !sendLogoutComplete && !s.superseded {
 		if _, err := s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET online = 0 WHERE id = ?", s.accountID); err != nil && firstErr == nil {
 			firstErr = err
 		}
