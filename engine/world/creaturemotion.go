@@ -1066,7 +1066,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		} else if aggroDist > 45.0 {
 			aggroDist = 45.0
 		}
-		if !isCreaturePassive(motion) && s.isHostileFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) {
+		if !isCreaturePassive(motion) && s.isAttackableFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) {
 			s.debug("creature aggro", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "player_guid", p.GUID, "player_zone", p.Sess.player.Zone)
 			motion.InCombat = true
 			if motion.ThreatMgr == nil {
@@ -1318,11 +1318,45 @@ func (s *Server) isHostileFaction(creatureFaction uint32, player playerPos) bool
 	return isHostileFactionFallback(creatureFaction, player.Race)
 }
 
+// isAttackableFaction extends isHostileFaction with the at-war term of the
+// PvC attack path. A player-owned unit treats a reputation faction's units as
+// hostile exactly when the player is at war with that faction
+// (WorldObject::GetReactionTo, Object.cpp:2776-2785 — "if faction has
+// reputation, hostile state depends only from AtWar state"), and
+// WorldObject::IsValidAttackTarget refuses the PvC/CvP attack outright when
+// the player is not at war with the creature's faction (Object.cpp:3036-
+// 3053), which is what Creature::CanCreatureAttack evaluates for aggro
+// (Creature.cpp:2560-2565). The reverse direction — the creature's own
+// reaction to the player — only clamps the rank down to neutral when at war
+// (Object.cpp:2817-2823), which never flips a rank<=HOSTILE verdict, so the
+// questgiver/taxi checks that use the creature's reaction keep the plain
+// isHostileFaction (Player.cpp:17159, TaxiHandler.cpp:46).
+func (s *Server) isAttackableFaction(creatureFaction uint32, player playerPos) bool {
+	if s.isHostileFaction(creatureFaction, player) {
+		return true
+	}
+	if s.Data == nil || player.FactionTemplate == 0 {
+		return false
+	}
+	creatureTemplate, found, err := s.Data.FactionTemplate(creatureFaction)
+	if err != nil || !found {
+		return false
+	}
+	reputation, found, err := s.Data.Reputation(creatureTemplate.Faction, player.Race, player.Class)
+	if err != nil || !found || reputation.ReputationList < 0 {
+		return false
+	}
+	saved, ok := player.Reputations[creatureTemplate.Faction]
+	return ok && saved.Flags&factionFlagAtWar != 0
+}
+
 // isFriendlyFaction mirrors the friendly half of the isHostileFaction
 // lookup: a reputation rank of friendly (4) or better when the player has a
-// standing row for the creature's faction, else the faction-template friend
-// lists and friend/faction-group cross terms. Neutral factions are neither
-// friendly nor hostile.
+// standing row for the creature's faction and is not at war with it, else the
+// faction-template friend lists and friend/faction-group cross terms. Neutral
+// factions are neither friendly nor hostile. At war the player's own reaction
+// is hostile regardless of standing (Object.cpp:2776-2785), so the reputation
+// branch reports not friendly.
 func (s *Server) isFriendlyFaction(creatureFaction uint32, player playerPos) bool {
 	if s.Data != nil && player.FactionTemplate != 0 {
 		creatureTemplate, creatureFound, creatureErr := s.Data.FactionTemplate(creatureFaction)
@@ -1332,6 +1366,13 @@ func (s *Server) isFriendlyFaction(creatureFaction uint32, player playerPos) boo
 				standing := int64(reputation.BaseStanding)
 				if saved, ok := player.Reputations[creatureTemplate.Faction]; ok {
 					standing = int64(totalReputationStanding(saved))
+					// At-war term of the player-side reaction
+					// (WorldObject::GetReactionTo, Object.cpp:2776-2785): at war
+					// with the faction the player is hostile to its units
+					// regardless of standing, so never friendly.
+					if saved.Flags&factionFlagAtWar != 0 {
+						return false
+					}
 				}
 				return reputationRank(standing) >= 4
 			}

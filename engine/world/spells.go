@@ -251,7 +251,7 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 	targets := make([]uint64, 0)
 	seen := make(map[uint64]struct{})
 	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, faction, unitFlags, flagsExtra, health uint32) {
-		if mapID != player.Map || instanceID != player.InstanceID || health == 0 || spellTargetUnitBlocked(spell, unitFlags, flagsExtra, false) || distance3D(x, y, z, centerX, centerY, centerZ) > float64(radius) || !s.server.isHostileFaction(faction, player) {
+		if mapID != player.Map || instanceID != player.InstanceID || health == 0 || spellTargetUnitBlocked(spell, unitFlags, flagsExtra, false) || distance3D(x, y, z, centerX, centerY, centerZ) > float64(radius) || !s.server.isAttackableFaction(faction, player) {
 			return
 		}
 		if cone && !hasInArc(s.player.Orientation, s.player.X, s.player.Y, x, y, math.Pi/2) {
