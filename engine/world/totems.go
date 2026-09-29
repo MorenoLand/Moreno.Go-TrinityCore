@@ -238,6 +238,19 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 	resp.WriteU32(def.SpellID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_TOTEM_CREATED), resp.Bytes(), true)
 
+	totemX, totemY, totemZ := s.player.X, s.player.Y, s.player.Z
+	if s.server != nil && s.server.Data != nil {
+		if spell, ok, err := s.server.Data.Spell(spellID); err == nil && ok {
+			if targetType, radiusIndex, found := totemSpellDestTarget(spell); found {
+				combatReach := s.player.CombatReach
+				if combatReach <= 0 {
+					combatReach = 1.5
+				}
+				totemX, totemY, totemZ = resolveCasterDestPosition(s.server.Data, targetType, radiusIndex, uint32(s.player.Level), s.player.X, s.player.Y, s.player.Z, s.player.Orientation, combatReach)
+			}
+		}
+	}
+
 	totem := &activeTotem{
 		SlotID:     slot,
 		SpellID:    def.SpellID,
@@ -246,9 +259,9 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 		OwnerGUID:  s.playerGUID,
 		Map:        s.player.Map,
 		InstanceID: s.player.InstanceID,
-		X:          s.player.X,
-		Y:          s.player.Y,
-		Z:          s.player.Z,
+		X:          totemX,
+		Y:          totemY,
+		Z:          totemZ,
 		DurationMs: def.DurationMs,
 		BuffSpell:  def.BuffSpell,
 		CreatedAt:  time.Now(),
@@ -271,9 +284,9 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 			GUID:       totemGUID,
 			Map:        s.player.Map,
 			InstanceID: s.player.InstanceID,
-			X:          s.player.X,
-			Y:          s.player.Y,
-			Z:          s.player.Z,
+			X:          totemX,
+			Y:          totemY,
+			Z:          totemZ,
 			Health:     100,
 			MaxHealth:  100,
 		}
