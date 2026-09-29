@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -31,6 +32,10 @@ const (
 // TrinityCore MAX_AUCTION_ITEMS (AuctionHouseMgr.h:34): 160 item slots per
 // CMSG_AUCTION_SELL_ITEM (4x 36-slot bags + 16-slot backpack).
 const maxAuctionItems uint32 = 160
+
+// TrinityCore MAX_GETALL_RETURN (AuctionHouseMgr.h:35): cap on auctions
+// returned by a CMSG_AUCTION_LIST_ITEMS getAll scan.
+const maxGetAllReturn uint32 = 55000
 
 // auctionOutBid mirrors AuctionEntry::GetAuctionOutBid
 // (AuctionHouseMgr.cpp:879-884): the minimum outbid increment is 5% of the
@@ -177,7 +182,6 @@ func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bo
 	if reader.Remaining() >= 1 {
 		getAll, _ = reader.ReadU8()
 	}
-	_ = getAll
 
 	cdb := s.server.CharactersStore.DB
 	wdb := s.server.WorldStore.DB
@@ -185,8 +189,42 @@ func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bo
 		return true
 	}
 
+	now := time.Now().Unix()
+	cfg := s.server.Config
+
+	// C++ HandleAuctionListItems -> AuctionHouseObject::BuildListAuctionItems
+	// (AuctionHouseMgr.cpp:701-740): a getAll request scans the whole house,
+	// capped at MAX_GETALL_RETURN, skipping expired auctions and auctions
+	// whose item is gone; the scan is throttled per player by
+	// Auction.GetAllScanDelay (0 disables the branch, like C++ ignoring getAll
+	// when CONFIG_AUCTION_GETALL_DELAY == 0).
+	if getAll != 0 && cfg.AuctionGetAllDelay != 0 {
+		s.server.auctionGetAllMu.Lock()
+		throttleTime, found := s.server.auctionGetAllThrottle[s.playerGUID]
+		if !found || throttleTime <= now {
+			s.server.auctionGetAllThrottle[s.playerGUID] = now + int64(cfg.AuctionGetAllDelay)
+			s.server.auctionGetAllMu.Unlock()
+			auctions := scanAuctionRows(ctx, cdb, `SELECT ah.id, ah.itemguid, ah.item_template, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, ii.count
+				FROM auctionhouse AS ah
+				INNER JOIN item_instance AS ii ON ii.guid = ah.itemguid
+				WHERE ah.time > ?
+				ORDER BY ah.id LIMIT ?`, now, maxGetAllReturn)
+			packet := protocol.NewBuffer(12 + len(auctions)*120)
+			packet.WriteU32(uint32(len(auctions)))
+			for _, a := range auctions {
+				writeAuctionInfo(packet, a)
+			}
+			packet.WriteU32(uint32(len(auctions)))
+			packet.WriteU32(uint32(cfg.AuctionSearchDelay))
+			_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_LIST_RESULT), packet.Bytes(), true)
+			s.debug("auction list items getall sent", "account", s.accountName, "count", len(auctions))
+			return true
+		}
+		s.server.auctionGetAllMu.Unlock()
+	}
+
 	whereClauses := []string{"ah.time > ?"}
-	args := []interface{}{time.Now().Unix()}
+	args := []interface{}{now}
 
 	if searchedName != "" {
 		whereClauses = append(whereClauses, "UPPER(it.name) LIKE UPPER(?)")
@@ -270,8 +308,8 @@ func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bo
 	for _, a := range auctions {
 		writeAuctionInfo(packet, a)
 	}
-	packet.WriteU32(uint32(totalCount)) // Total count
-	packet.WriteU32(300)                // Delay
+	packet.WriteU32(uint32(totalCount))             // Total count
+	packet.WriteU32(uint32(cfg.AuctionSearchDelay)) // Auction.SearchDelay
 	_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_LIST_RESULT), packet.Bytes(), true)
 	s.debug("auction list items sent", "account", s.accountName, "count", len(auctions), "total", totalCount)
 	return true
@@ -1087,6 +1125,36 @@ func (s *session) sendMailNotify(receiverGUID uint64) {
 			targetSess.sendNewMailNotification(context.Background())
 		}
 	}
+}
+
+// scanAuctionRows runs an auctionhouse row query and converts the rows to
+// auctionRecord values, skipping rows that fail to scan.
+func scanAuctionRows(ctx context.Context, db *sql.DB, query string, args ...interface{}) []auctionRecord {
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var auctions []auctionRecord
+	for rows.Next() {
+		var id, iGuid, iTmpl, owner, buyout, expTime, bidder, lastBid, startBid, deposit, count int64
+		if err := rows.Scan(&id, &iGuid, &iTmpl, &owner, &buyout, &expTime, &bidder, &lastBid, &startBid, &deposit, &count); err == nil {
+			auctions = append(auctions, auctionRecord{
+				ID:         uint32(id),
+				ItemGUID:   uint64(iGuid),
+				ItemEntry:  uint32(iTmpl),
+				ItemCount:  uint32(count),
+				Owner:      uint64(owner),
+				Buyout:     uint32(buyout),
+				ExpireTime: expTime,
+				Bidder:     uint64(bidder),
+				Bid:        uint32(lastBid),
+				StartBid:   uint32(startBid),
+				Deposit:    uint32(deposit),
+			})
+		}
+	}
+	return auctions
 }
 
 func writeAuctionInfo(buf *protocol.Buffer, a auctionRecord) {

@@ -76,6 +76,8 @@ type Config struct {
 	XPRateBattlegroundKill                  float64
 	AuctionTimeRate                         float64
 	AuctionDepositRate                      float64
+	AuctionGetAllDelay                      int
+	AuctionSearchDelay                      int
 	RestInGameRate                          float64
 	RestOfflineInTavernOrCityRate           float64
 	RestOfflineInWildernessRate             float64
@@ -202,6 +204,8 @@ func Default() Config {
 	c.XPRateBattlegroundKill = 1
 	c.AuctionTimeRate = 1
 	c.AuctionDepositRate = 1
+	c.AuctionGetAllDelay = 900
+	c.AuctionSearchDelay = 300
 	c.AccountInstancesPerHour = 5
 	return c
 }
@@ -231,6 +235,9 @@ func Load(path string) (Config, error) {
 	if err := s.Err(); err != nil {
 		return c, err
 	}
+	if c.AuctionSearchDelay < 100 || c.AuctionSearchDelay > 10000 {
+		c.AuctionSearchDelay = 300
+	}
 	return c, nil
 }
 
@@ -254,6 +261,8 @@ func (c *Config) ApplyEnv() {
 	values["MORENOCORE_RATE_XP_BATTLEGROUND_KILL"] = "Rate.XP.BattlegroundKill"
 	values["MORENOCORE_RATE_AUCTION_TIME"] = "Rate.Auction.Time"
 	values["MORENOCORE_RATE_AUCTION_DEPOSIT"] = "Rate.Auction.Deposit"
+	values["MORENOCORE_AUCTION_GETALL_SCAN_DELAY"] = "Auction.GetAllScanDelay"
+	values["MORENOCORE_AUCTION_SEARCH_DELAY"] = "Auction.SearchDelay"
 	values["MORENOCORE_ADDON_CHANNEL"] = "AddonChannel"
 	values["MORENOCORE_SERVER_LOGIN_INFO"] = "Server.LoginInfo"
 	values["MORENOCORE_MAX_PLAYER_LEVEL"] = "MaxPlayerLevel"
@@ -293,6 +302,9 @@ func (c *Config) ApplyEnv() {
 	}
 	if value, ok := os.LookupEnv("MORENOCORE_WEATHER_ENABLED"); ok {
 		_ = c.set("Weather.Enabled", value)
+	}
+	if c.AuctionSearchDelay < 100 || c.AuctionSearchDelay > 10000 {
+		c.AuctionSearchDelay = 300
 	}
 	if value, ok := os.LookupEnv("MORENOCORE_WEATHER_CHANGE_INTERVAL"); ok {
 		_ = c.set("Weather.ChangeInterval", value)
@@ -592,6 +604,10 @@ func (c *Config) set(key, value string) error {
 		return setFloat64(&c.AuctionTimeRate, key, value)
 	case "Rate.Auction.Deposit":
 		return setFloat64(&c.AuctionDepositRate, key, value)
+	case "Auction.GetAllScanDelay":
+		return setInt(&c.AuctionGetAllDelay, key, value)
+	case "Auction.SearchDelay":
+		return setInt(&c.AuctionSearchDelay, key, value)
 	case "Visibility.Distance.Continents":
 		return setFloat64(&c.VisibilityDistanceContinents, key, value)
 	case "Instance.IgnoreRaid":
