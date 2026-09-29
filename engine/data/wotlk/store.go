@@ -1224,6 +1224,26 @@ func (s *Store) Emote(id uint32) (Emote, bool, error) {
 	return emote, true, nil
 }
 
+func (s *Store) GtCombatRating(ratingID uint32, level uint32) (float32, bool, error) {
+	if level == 0 || level > 100 {
+		return 0, true, nil
+	}
+	file, err := s.File("gtCombatRatings")
+	if err != nil {
+		return 0, false, err
+	}
+	index := ratingID*100 + (level - 1)
+	record, ok := file.Find(index)
+	if !ok {
+		return 0, false, nil
+	}
+	val, err := record.Float32(0)
+	if err != nil {
+		return 0, false, err
+	}
+	return val, true, nil
+}
+
 func (s *Store) SpellRange(id uint32) (SpellRangeEntry, bool, error) {
 	file, err := s.File("SpellRange")
 	if err != nil {
