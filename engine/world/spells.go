@@ -1050,6 +1050,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 	areaSpell := isAreaEnemySpell(spell)
 	friendlyAreaSpell := isFriendlyAreaSpell(spell)
+	friendlyNearbySpell := isFriendlyNearbySpell(spell)
+	friendlyConeSpell := isFriendlyConeSpell(spell)
+	friendlyLastTargetAreaSpell := isFriendlyLastTargetAreaSpell(spell)
+	friendlyTargetAreaRaidClassSpell := isFriendlyTargetAreaRaidClassSpell(spell)
+	// List-producing friendly selections skip the single-target immune gate
+	// and chain-jump expansion the same way area spells do (Spell.cpp:1227
+	// area/cone selection never calls SelectImplicitChainTargets).
+	friendlyListSpell := friendlyAreaSpell || friendlyConeSpell || friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell
 	if areaSpell {
 		hitTargets = s.spellAreaEnemyTargets(ctx, spell, target)
 	} else if friendlyAreaSpell {
@@ -1057,6 +1065,26 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// PARTY/ALLY/RAID area targets (20/30/31/33/34/56) replace the
 		// hit-target list the same way enemy area targets do.
 		hitTargets = s.spellFriendlyAreaTargets(ctx, spell, target)
+	} else if friendlyNearbySpell {
+		// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036): the single
+		// nearest PARTY/ALLY/RAID unit (3/4/58) becomes the target.
+		if nearby, ok := s.spellFriendlyNearbyTarget(ctx, spell, target); ok {
+			hitTargets = []uint64{nearby}
+		} else {
+			// Spell.cpp:1111: no target found ->
+			// SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993).
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 11), true)
+			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no nearby target")
+			return
+		}
+	} else if friendlyConeSpell {
+		// Spell::SelectImplicitConeTargets (Spell.cpp:1176): friendly
+		// ALLY/ENTRY cone targets (59/60).
+		hitTargets = s.spellFriendlyConeTargets(ctx, spell, target)
+	} else if friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell {
+		// Spell::SelectImplicitAreaTargets (Spell.cpp:1227) with LAST (37)
+		// or TARGET (61) reference: area around the last/explicit target.
+		hitTargets = s.spellFriendlyRefCenteredAreaTargets(ctx, spell, target, hitTargets)
 	}
 	s.spawnPersistentAreaAura(ctx, spell, target)
 	targetGUID := uint64(0)
@@ -1126,7 +1154,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			}
 		}
-	} else if !areaSpell && !friendlyAreaSpell && targetGUID != 0 && targetGUID != s.playerGUID && !isHarmfulSpell(spell) {
+	} else if !areaSpell && !friendlyListSpell && targetGUID != 0 && targetGUID != s.playerGUID && !isHarmfulSpell(spell) {
 		var targetSess *session
 		if s.server != nil {
 			targetSess = s.server.findSessionByGUID(targetGUID)
@@ -1142,7 +1170,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// chainJumpIndex records each target's jump order (0 = primary) so the
 	// per-jump EffectChainAmplitude falloff can be applied at effect time.
 	chainJumpIndex := make(map[uint64]int)
-	if !areaSpell && !friendlyAreaSpell && targetGUID != 0 {
+	if !areaSpell && !friendlyListSpell && targetGUID != 0 {
 		if jumps, isChainHeal := chainSpellJumps(spell); jumps > 0 {
 			for i, extraGUID := range s.spellSearchChainTargets(ctx, spell, targetGUID, jumps, isChainHeal) {
 				hitTargets = append(hitTargets, extraGUID)

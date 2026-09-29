@@ -75,42 +75,15 @@ func friendlyAreaDestCentered(targetType uint32) bool {
 	return targetType == implicitTargetDestAreaAlly || targetType == implicitTargetDestAreaParty
 }
 
-// friendlyGroupSnapshot copies the caster's group membership under the group
-// lock: subgroup of the caster and the GUIDs sharing it (party), plus every
-// member GUID (raid). Mirrors Player::IsInSameGroupWith (Player.cpp:2536:
-// same group AND same subgroup) and Player::IsInSameRaidWith (Player.cpp:2543:
-// same group).
+// friendlyGroupSnapshot copies the caster's group membership: subgroup of the
+// caster and the GUIDs sharing it (party), plus every member GUID (raid).
+// Mirrors Player::IsInSameGroupWith (Player.cpp:2536: same group AND same
+// subgroup) and Player::IsInSameRaidWith (Player.cpp:2543: same group).
 func (s *session) friendlyGroupSnapshot() (subGroup uint8, party, raid map[uint64]struct{}, inGroup bool) {
-	if s == nil || s.server == nil || s.groupID == 0 {
+	if s == nil {
 		return 0, nil, nil, false
 	}
-	s.server.groupsMu.RLock()
-	g := s.server.groups[s.groupID]
-	if g == nil {
-		s.server.groupsMu.RUnlock()
-		return 0, nil, nil, false
-	}
-	members := append([]groupMember(nil), g.Members...)
-	s.server.groupsMu.RUnlock()
-	for _, m := range members {
-		if m.GUID == s.playerGUID {
-			subGroup = m.SubGroup
-			inGroup = true
-			break
-		}
-	}
-	if !inGroup {
-		return 0, nil, nil, false
-	}
-	party = make(map[uint64]struct{}, len(members))
-	raid = make(map[uint64]struct{}, len(members))
-	for _, m := range members {
-		raid[m.GUID] = struct{}{}
-		if m.SubGroup == subGroup {
-			party[m.GUID] = struct{}{}
-		}
-	}
-	return subGroup, party, raid, true
+	return groupMembershipSnapshot(s.server, s.groupID, s.playerGUID)
 }
 
 // spellFriendlyAreaTargets ports Spell::SelectImplicitAreaTargets
