@@ -1001,6 +1001,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
+	// Spell::SelectImplicitChainTargets (Spell.cpp:1582): chain spells
+	// (EffectChainTarget > 1) jump from the primary target to nearby units;
+	// chainJumpIndex records each target's jump order (0 = primary) so the
+	// per-jump EffectChainAmplitude falloff can be applied at effect time.
+	chainJumpIndex := make(map[uint64]int)
+	if !areaSpell && targetGUID != 0 {
+		if jumps, isChainHeal := chainSpellJumps(spell); jumps > 0 {
+			for i, extraGUID := range s.spellSearchChainTargets(ctx, spell, targetGUID, jumps, isChainHeal) {
+				hitTargets = append(hitTargets, extraGUID)
+				chainJumpIndex[extraGUID] = i + 1
+			}
+		}
+	}
+
 	castTimeStamp := uint32(time.Now().UnixMilli())
 	castFlags := spellCastFlagGo
 	var remainingPower *uint32
@@ -1136,13 +1150,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				damage := uint32(eff.BasePoints + 1)
 				for _, effectTarget := range hitTargets {
 					if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
-						s.executeSpellDamage(effCtx, effectTarget, spellID, damage, effectIndex)
+						s.executeSpellDamage(effCtx, effectTarget, spellID, chainScaledAmount(damage, eff, chainJumpIndex[effectTarget]), effectIndex)
 					}
 				}
 			case 10, 136, 105: // Heal effects
 				heal := uint32(eff.BasePoints + 1)
 				for _, effectTarget := range hitTargets {
-					s.executeSpellHeal(effCtx, effectTarget, spellID, heal, effectIndex)
+					s.executeSpellHeal(effCtx, effectTarget, spellID, chainScaledAmount(heal, eff, chainJumpIndex[effectTarget]), effectIndex)
 				}
 			case spellEffectEnergize:
 				amount := eff.BasePoints + 1
