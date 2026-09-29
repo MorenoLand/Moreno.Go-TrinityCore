@@ -36,6 +36,7 @@ const (
 	spellAttr1CantBeReflected             uint32 = 0x00000080 // SPELL_ATTR1_CANT_BE_REFLECTED (SharedDefines.h:456)
 	spellAttr2CanTargetDead              uint32 = 0x00000001 // SPELL_ATTR2_CAN_TARGET_DEAD (SharedDefines.h:486) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr2AutorepeatFlag             uint32 = 0x00000020 // SPELL_ATTR2_AUTOREPEAT_FLAG (SharedDefines.h:491) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
+	spellAttr2NotResetAutoActions       uint32 = 0x00020000 // SPELL_ATTR2_NOT_RESET_AUTO_ACTIONS (SharedDefines.h:503) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 
 	targetFlagCorpseEnemy uint32 = 0x00000200 // TARGET_FLAG_CORPSE_ENEMY (SpellInfo.h:57)
 	targetFlagUnitDead    uint32 = 0x00000400 // TARGET_FLAG_UNIT_DEAD (SpellInfo.h:58)
@@ -480,7 +481,13 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast ignored", "account", s.accountName, "spell", spellID, "reason", spellCastIgnoreReason(spell, found, learned))
 		return true
 	}
-	if s.castInProgress() {
+	// Spell::prepare server-side gate (Spell.cpp:3082-3087) via
+	// Unit::IsNonMeleeSpellCast(false, true, true, isAutoshoot)
+	// (Unit.cpp:3182-3210): only a cast-bar cast blocks a new client-initiated
+	// cast; channeled and autorepeat casts never trigger
+	// SPELL_FAILED_SPELL_IN_PROGRESS — the new cast breaks them instead
+	// (Unit::SetCurrentCastSpell, Unit.cpp:3064).
+	if s.genericCastInProgress() && !s.autoShotNonBlockingCast(spellID) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 105), true) // SPELL_FAILED_SPELL_IN_PROGRESS = 105
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "another spell cast is in progress")
 		return true
@@ -769,9 +776,28 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	// Interrupt any existing spell cast (TC: Unit::InterruptNonMeleeSpells)
-	s.interruptCurrentCast()
-	s.interruptCurrentChannel()
+	// Unit::SetCurrentCastSpell (Unit.cpp:3064-3090): registering the new cast
+	// breaks the other containers. A generic cast breaks the active channel
+	// ("generic spells always break channeled not delayed spells") and any
+	// autorepeat that is not Auto Shot — wand Shoot breaks on a new cast
+	// while Auto Shot persists through casts, matching in-game behavior. A
+	// channeled cast breaks the channel it replaces plus non-Auto-Shot
+	// autorepeat; a new wand Shoot (5019) breaks the channel. A new Auto Shot
+	// (75) breaks nothing ("only Auto Shoot does not break anything"). Go has
+	// no DELAYED channel state, so the C++ withDelayed=false terms are
+	// vacuous; C++ sends no packet for these server-side breaks. The gate
+	// above already rejected while a cast-bar cast runs, so
+	// interruptCurrentCast is the same-container break (SetCurrentCastSpell's
+	// InterruptSpell(CSpellType, false)) and a no-op except in the Auto-Shot
+	// exception path, which is skipped here.
+	if spellID != 75 {
+		s.interruptCurrentCast()
+		s.interruptCurrentChannel()
+	}
+	if s.autoRepeatSpell != 0 && s.autoRepeatSpell != 75 {
+		s.autoRepeatSpell = 0
+		s.autoRepeatTarget = 0
+	}
 	s.procCastAuras()
 
 	s.lastCastTime = time.Now()
@@ -828,15 +854,42 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	return true
 }
 
-func (s *session) castInProgress() bool {
+// genericCastInProgress mirrors the Spell::prepare server-side gate
+// (Spell.cpp:3082-3087) via Unit::IsNonMeleeSpellCast(false, true, true,
+// isAutoshoot) (Unit.cpp:3182-3210): only a non-finished cast-bar
+// (CURRENT_GENERIC_SPELL) cast blocks a new client-initiated cast.
+// Channeled casts (skipChanneled=true) and autorepeat casts
+// (skipAutorepeat=true) never trigger SPELL_FAILED_SPELL_IN_PROGRESS — the
+// new cast breaks them on registration instead (Unit::SetCurrentCastSpell,
+// Unit.cpp:3064). Go arms activeCast only for castTime > 0, so instant casts
+// can't be in progress here, matching C++'s skipInstant outcome by
+// construction; Go has no DELAYED (missile in flight) state, so that term is
+// vacuous. Triggered casts never reach this gate (castSpellDirect), matching
+// TRIGGERED_IGNORE_CAST_IN_PROGRESS; C++'s m_cast_count term is exactly the
+// client-initiated indicator (SpellHandler.cpp:445).
+func (s *session) genericCastInProgress() bool {
 	s.castMu.Lock()
 	defer s.castMu.Unlock()
-	// Spell::prepare (Spell.cpp:3073-3078) rejects via IsNonMeleeSpellCast,
-	// which covers channeled casts as well as the cast bar.
-	if s.activeCast != nil && !s.activeCast.Cancelled {
-		return true
+	return s.activeCast != nil && !s.activeCast.Cancelled
+}
+
+// autoShotNonBlockingCast is the C++ isAutoshoot exception in
+// Unit::IsNonMeleeSpellCast (Unit.cpp:3192-3195): a new Auto Shot (75) cast
+// is not blocked by an in-progress cast-bar cast carrying
+// SPELL_ATTR2_NOT_RESET_AUTO_ACTIONS, and on registration it breaks nothing
+// ("only Auto Shoot does not break anything", Unit::SetCurrentCastSpell,
+// Unit.cpp:3112-3125).
+func (s *session) autoShotNonBlockingCast(spellID uint32) bool {
+	if spellID != 75 {
+		return false
 	}
-	return s.activeChannel != nil && !s.activeChannel.Stopped
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	if s.activeCast == nil || s.activeCast.Cancelled {
+		return false
+	}
+	cur, found, _ := s.server.Data.Spell(s.activeCast.SpellID)
+	return found && cur.AttributesEx1&spellAttr2NotResetAutoActions != 0
 }
 
 // validateSpellRange checks DBC range (plus the Auto Shot / Shoot special
