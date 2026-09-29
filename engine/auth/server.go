@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha1"
@@ -882,13 +883,16 @@ func readChallenge(conn net.Conn) (uint32, string, string, uint8, error) {
 	}
 	build := uint32(binary.LittleEndian.Uint16(body[7:9]))
 	login := string(body[30 : 30+body[29]])
-	osName := reverseCode(string(body[13:17]))
+	osField := body[13:17]
+	if i := bytes.IndexByte(osField, 0); i >= 0 {
+		osField = osField[:i]
+	}
+	osName := reverseCode(string(osField))
 	locale := localeID(reverseCode(string(body[17:21])))
 	return build, login, osName, locale, nil
 }
 
 func reverseCode(value string) string {
-	value = strings.TrimRight(value, "\x00")
 	runes := []rune(value)
 	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
 		runes[i], runes[j] = runes[j], runes[i]
@@ -918,7 +922,7 @@ func atoi(s string) int {
 }
 
 func localeID(value string) uint8 {
-	for i, code := range []string{"enUS", "koKR", "frFR", "deDE", "zhCN", "zhTW", "esES", "esMX", "ruRU", "ptBR", "itIT"} {
+	for i, code := range []string{"enUS", "koKR", "frFR", "deDE", "zhCN", "zhTW", "esES", "esMX", "ruRU"} {
 		if value == code {
 			return uint8(i)
 		}
