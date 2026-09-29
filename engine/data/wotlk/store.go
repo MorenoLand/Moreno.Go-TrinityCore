@@ -1088,6 +1088,25 @@ func (s *Store) SpellDifficulty(id uint32, difficulty uint32) (uint32, bool, err
 	return spellID, true, nil
 }
 
+func (s *Store) SpellCategory(id uint32) (uint32, bool, error) {
+	if id == 0 {
+		return 0, true, nil
+	}
+	file, err := s.File("SpellCategory")
+	if err != nil {
+		return 0, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return 0, false, nil
+	}
+	flags, err := record.Uint32(1)
+	if err != nil {
+		return 0, false, err
+	}
+	return flags, true, nil
+}
+
 func (s *Store) SpellRange(id uint32) (SpellRangeEntry, bool, error) {
 	file, err := s.File("SpellRange")
 	if err != nil {
