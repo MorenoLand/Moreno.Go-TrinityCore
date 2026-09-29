@@ -41,10 +41,6 @@ const (
 	spellFamilyRogue   = 8
 )
 
-// spellAuraState mirrors SpellInfo::_LoadAuraState (SpellInfo.cpp:1966-2032):
-// the aura state a unit gains while an aura of this spell is applied on it.
-// Gap (not a stub): Sting loses AURA_STATE_FAERIE_FIRE (Go has no spell
-// category field for the category-1133 check).
 func spellAuraState(spell wotlk.Spell) uint32 {
 	// Seals (SpellInfo.cpp:1971; classifier takes nil — the seal branch
 	// never resolves the first-rank chain).
@@ -58,6 +54,10 @@ func spellAuraState(spell wotlk.Spell) uint32 {
 	}
 	// Faerie Fire (druid versions)
 	if spell.SpellFamilyName == spellFamilyDruid && spell.SpellFamilyFlags[0]&0x400 != 0 {
+		return auraStateFaerieFire
+	}
+	// Sting (hunter's pet ability, SpellInfo.cpp:1986-1988)
+	if spell.Category == 1133 {
 		return auraStateFaerieFire
 	}
 	// Victorious
