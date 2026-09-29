@@ -1008,6 +1008,36 @@ func (s *Store) SpellCastTime(id uint32) (int32, bool, error) {
 	return base, true, nil
 }
 
+type SpellRuneCost struct {
+	ID         uint32
+	RuneCost   [3]uint32
+	RunicPower uint32
+}
+
+func (s *Store) SpellRuneCost(id uint32) (SpellRuneCost, bool, error) {
+	if id == 0 {
+		return SpellRuneCost{}, true, nil
+	}
+	file, err := s.File("SpellRuneCost")
+	if err != nil {
+		return SpellRuneCost{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return SpellRuneCost{}, false, nil
+	}
+	cost := SpellRuneCost{ID: id}
+	for i := 0; i < 3; i++ {
+		if cost.RuneCost[i], err = record.Uint32(1 + i); err != nil {
+			return SpellRuneCost{}, false, err
+		}
+	}
+	if cost.RunicPower, err = record.Uint32(4); err != nil {
+		return SpellRuneCost{}, false, err
+	}
+	return cost, true, nil
+}
+
 func (s *Store) SpellRange(id uint32) (SpellRangeEntry, bool, error) {
 	file, err := s.File("SpellRange")
 	if err != nil {
