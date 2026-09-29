@@ -305,6 +305,7 @@ type session struct {
 	summonExpire                 time.Time
 	summonerGUID                 uint64
 	activeChannel                *activeChannelState
+	runes                        *dkRuneState
 	castMu                       sync.Mutex
 	schoolLockouts               map[uint32]int64
 	gcdEnd                       int64 // Unix millisecond timestamp when Global Cooldown expires

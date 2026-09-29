@@ -226,33 +226,14 @@ func ResolveDeathKnightRuneTypes(initial [6]uint8, spells []wotlk.Spell) [6]uint
 }
 
 func (s *session) sendResyncRunes() error {
-	if s.player == nil || s.player.Class != 6 {
+	if s.player == nil || s.player.Class != classDeathKnight {
 		return nil
 	}
-	runeTypes := [6]uint8{0, 0, 1, 1, 2, 2}
-	spells := append([]learnedSpell(nil), s.player.Spells...)
-	sort.Slice(spells, func(i, j int) bool { return spells[i].ID < spells[j].ID })
-	passiveSpells := make([]wotlk.Spell, 0)
-	if s.server != nil && s.server.Data != nil {
-		for _, learned := range spells {
-			if !learned.Active || learned.Disabled {
-				continue
-			}
-			spell, found, err := s.server.Data.Spell(learned.ID)
-			if err != nil || !found || spell.Attributes&spellAttributePassive == 0 {
-				continue
-			}
-			passiveSpells = append(passiveSpells, spell)
-		}
+	if s.runes == nil {
+		s.initRunes()
 	}
-	runeTypes = ResolveDeathKnightRuneTypes(runeTypes, passiveSpells)
-	buf := protocol.NewBuffer(16)
-	buf.WriteU32(6)
-	for _, runeType := range runeTypes {
-		buf.WriteU8(runeType)
-		buf.WriteU8(255)
-	}
-	return s.write(uint16(protocol.OpcodeSMSG_RESYNC_RUNES), buf.Bytes(), true)
+	s.sendRuneCooldownUpdate()
+	return nil
 }
 
 // handleLearnTalent processes CMSG_LEARN_TALENT (0x251).

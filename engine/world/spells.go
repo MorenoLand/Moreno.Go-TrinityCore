@@ -573,6 +573,15 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	}
 	cost := s.calculateSpellPowerCost(spell)
 	pType := spell.PowerType
+	// Spell::CheckPower (Spell.cpp:6665-6670) checks rune costs when
+	// PowerType == POWER_RUNE; RuneCostID (Spell.dbc field 226) was loaded
+	// in store.go but never read in world/ — the earlier "wired" claim was
+	// an overclaim. Genuine logic now: Spell::CheckRuneCost parity.
+	if spell.PowerType == 5 && !s.checkRuneCost(spell, time.Now().UnixMilli()) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 85), true) // SPELL_FAILED_NO_POWER = 85
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "runes on cooldown")
+		return true
+	}
 	if cost > 0 && pType < 7 && s.player.Powers[pType] < cost {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 85), true) // SPELL_FAILED_NO_POWER = 85
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not enough power", "power", s.player.Powers[pType], "cost", cost)
@@ -893,6 +902,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 85), true) // SPELL_FAILED_NO_POWER = 85
 		return
 	}
+	// Spell::_cast re-runs CheckCast at completion; runes spent mid-cast
+	// must fail the cast too (Spell::CheckPower rune check, Spell.cpp:6665).
+	if spell.PowerType == 5 && !s.checkRuneCost(spell, time.Now().UnixMilli()) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 85), true) // SPELL_FAILED_NO_POWER = 85
+		return
+	}
 
 	// Spell::_cast revalidates CheckCast at completion: the target may have
 	// moved during the cast bar.
@@ -1062,6 +1077,22 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 	s.takeSpellReagents(ctx, spell)
+
+	// Spell::TakePower (Spell.cpp:4838-4844) spends runes for POWER_RUNE
+	// spells via TakeRunePower. didHit mirrors C++ (false only when the
+	// primary target missed; chain jumps appended to hitTargets above
+	// must not flip it).
+	didHit := true
+	for _, miss := range missStatus {
+		if miss.TargetGUID == targetGUID {
+			didHit = false
+			break
+		}
+	}
+	if spell.PowerType == 5 {
+		s.takeRunePower(ctx, spell, didHit, time.Now().UnixMilli())
+		s.sendRuneCooldownUpdate()
+	}
 
 	// Spell::_cast (Spell.cpp:3462-3470) calls SendSpellCooldown() before
 	// HandleLaunchPhase() and SendSpellGo(): the cooldown packet must reach
