@@ -1329,6 +1329,7 @@ const (
 	equipErrUniqueCantBeWrapped     = 47
 	equipErrBagsCantBeWrapped       = 48
 	equipErrInvFull                 = 50
+	equipErrTooMuchGold             = 77
 	equipErrCantEquipRank           = 63
 	equipErrVendorMissingTurnins    = 68
 	equipErrNotEnoughHonorPoints    = 69

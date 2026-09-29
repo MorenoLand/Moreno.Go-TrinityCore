@@ -39,6 +39,9 @@ const (
 	equipErrMailBoundItem uint32 = 72
 )
 
+// Reference: Player.cpp:179 (uint32 const MAX_MONEY_AMOUNT = int32 max)
+const maxMoneyAmount uint32 = 2147483647
+
 type mailEntryRecord struct {
 	ID           uint32
 	MessageType  uint8
@@ -468,17 +471,33 @@ func (s *session) handleMailTakeMoney(ctx context.Context, payload []byte) bool 
 	if cdb == nil {
 		return true
 	}
-	var money int64
-	err = cdb.QueryRowContext(ctx, "SELECT money FROM mail WHERE id = ? AND receiver = ? LIMIT 1", mailID, s.playerGUID).Scan(&money)
-	if err != nil || money <= 0 {
+	var money, deliverTime int64
+	err = cdb.QueryRowContext(ctx, "SELECT money, deliver_time FROM mail WHERE id = ? AND receiver = ? LIMIT 1", mailID, s.playerGUID).Scan(&money, &deliverTime)
+	if err != nil || deliverTime > time.Now().Unix() {
+		// C++ answers (MAIL_MONEY_TAKEN, MAIL_ERR_INTERNAL_ERROR) for missing or
+		// deleted mail and for mail not yet delivered (MailHandler.cpp:513-517);
+		// GetMail is player-scoped, already mirrored by the receiver = ? filter.
+		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailMoneyTaken, mailErrInternalError, 0, 0, 0), true)
 		return true
 	}
-	s.player.Money += uint32(money)
-	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
-	_, _ = cdb.ExecContext(ctx, "UPDATE mail SET money = 0 WHERE id = ?", mailID)
+	// Player::ModifyMoney refuses a gain that would exceed MAX_MONEY_AMOUNT
+	// (Player.cpp:22821-22841; MAX_MONEY_AMOUNT = INT32_MAX, Player.cpp:179);
+	// HandleMailTakeMoney then answers (MAIL_MONEY_TAKEN, MAIL_ERR_EQUIP_ERROR,
+	// EQUIP_ERR_TOO_MUCH_GOLD) (MailHandler.cpp:519-523).
+	if money > 0 && s.player.Money >= maxMoneyAmount-uint32(money) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailMoneyTaken, mailErrEquipError, uint32(equipErrTooMuchGold), 0, 0), true)
+		return true
+	}
+	// Player::ModifyMoney(0) is a no-op that returns true, so a mail carrying
+	// no money still answers MAIL_OK (Player.cpp:22823; MailHandler.cpp:524-527).
+	if money > 0 {
+		s.player.Money += uint32(money)
+		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+		_, _ = cdb.ExecContext(ctx, "UPDATE mail SET money = 0 WHERE id = ?", mailID)
+		s.sendPlayerMoneyUpdate()
+		s.sendPlayerUpdate()
+	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailMoneyTaken, mailOk, 0, 0, 0), true)
-	s.sendPlayerMoneyUpdate()
-	s.sendPlayerUpdate()
 	s.debug("mail money collected", "account", s.accountName, "mail_id", mailID, "money", money)
 	return true
 }
