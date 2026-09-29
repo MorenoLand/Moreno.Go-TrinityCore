@@ -16,17 +16,28 @@ const (
 	auctionPlaceBid uint32 = 2
 )
 
-// TrinityCore AuctionError enum (AuctionHouseMgr.h:32)
+// TrinityCore AuctionError enum (AuctionHouseMgr.h:37)
 const (
 	errAuctionOK                uint32 = 0
 	errAuctionInventory         uint32 = 1
-	errAuctionItemNotFound      uint32 = 2
+	errAuctionDatabaseError     uint32 = 2
 	errAuctionNotEnoughMoney    uint32 = 3
-	errAuctionDatabaseError     uint32 = 4
+	errAuctionItemNotFound      uint32 = 4
 	errAuctionBidIncrement      uint32 = 7
 	errAuctionCantBidOwn        uint32 = 10
 	errAuctionRestrictedAccount uint32 = 13
 )
+
+// auctionOutBid mirrors AuctionEntry::GetAuctionOutBid
+// (AuctionHouseMgr.cpp:879-884): the minimum outbid increment is 5% of the
+// current bid, at least 1 copper.
+func auctionOutBid(bid uint32) uint32 {
+	outbid := bid * 5 / 100
+	if outbid == 0 {
+		outbid = 1
+	}
+	return outbid
+}
 
 // TrinityCore MailAuctionAnswers enum (AuctionHouseMgr.h:57)
 const (
@@ -308,9 +319,6 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 	}
 	reader := protocol.NewReader(payload)
 	auctioneer, _ := reader.ReadU64()
-	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
-		return true
-	}
 	auctionID, err := reader.ReadU32()
 	if err != nil {
 		return false
@@ -319,57 +327,64 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 	if err != nil {
 		return false
 	}
+	// C++ HandleAuctionPlaceBid (AuctionHouseHandler.cpp:436): cheater guard,
+	// silently dropped.
+	if auctionID == 0 || price == 0 {
+		return true
+	}
+	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
+		return true
+	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
 	}
-	var itemGUID, itemEntry, ownerGUID, buyout, bidderGUID, lastBid, deposit, startBid, itemCount int64
-	err = cdb.QueryRowContext(ctx, `SELECT ah.itemguid, ah.item_template, ah.itemowner, ah.buyoutprice, ah.buyguid, ah.lastbid, ah.deposit, ah.startbid, COALESCE(ii.count, 1)
+	var itemGUID, itemEntry, ownerGUID, buyout, bidderGUID, lastBid, deposit, startBid, itemCount, houseID int64
+	err = cdb.QueryRowContext(ctx, `SELECT ah.itemguid, ah.item_template, ah.itemowner, ah.buyoutprice, ah.buyguid, ah.lastbid, ah.deposit, ah.startbid, COALESCE(ii.count, 1), ah.houseid
 		FROM auctionhouse AS ah
 		LEFT JOIN item_instance AS ii ON ii.guid = ah.itemguid
-		WHERE ah.id = ? LIMIT 1`, auctionID).Scan(&itemGUID, &itemEntry, &ownerGUID, &buyout, &bidderGUID, &lastBid, &deposit, &startBid, &itemCount)
+		WHERE ah.id = ? LIMIT 1`, auctionID).Scan(&itemGUID, &itemEntry, &ownerGUID, &buyout, &bidderGUID, &lastBid, &deposit, &startBid, &itemCount, &houseID)
 	if err != nil {
-		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(auctionID, auctionPlaceBid, errAuctionDatabaseError), true)
+		// C++ answers ERR_AUCTION_BID_OWN with a zero auction id when the
+		// auction is missing (AuctionHouseHandler.cpp:459).
+		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(0, auctionPlaceBid, errAuctionCantBidOwn), true)
 		return true
 	}
 
 	// Player cannot bid on their own auction
 	if ownerGUID == int64(s.playerGUID) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(auctionID, auctionPlaceBid, errAuctionCantBidOwn), true)
+		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(0, auctionPlaceBid, errAuctionCantBidOwn), true)
 		return true
 	}
 
-	// Price cannot be lower than start bid
-	if price < uint32(startBid) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(auctionID, auctionPlaceBid, errAuctionBidIncrement), true)
-		return true
-	}
-
-	// Min increment check if not buyout
-	isBuyout := buyout > 0 && price >= uint32(buyout)
-	if !isBuyout && lastBid > 0 {
-		minOutBid := uint32(lastBid) * 5 / 100
-		if minOutBid == 0 {
-			minOutBid = 1
-		}
-		if price < uint32(lastBid)+minOutBid {
-			_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(auctionID, auctionPlaceBid, errAuctionBidIncrement), true)
+	// C++ HandleAuctionPlaceBid (AuctionHouseHandler.cpp:462-470): the
+	// owner's offline characters on the same account cannot bid either.
+	if s.server.findSessionByGUID(uint64(ownerGUID)) == nil {
+		var ownerAccount uint32
+		if qerr := cdb.QueryRowContext(ctx, "SELECT account FROM characters WHERE guid = ?", ownerGUID).Scan(&ownerAccount); qerr == nil && ownerAccount == s.accountID {
+			_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(0, auctionPlaceBid, errAuctionCantBidOwn), true)
 			return true
 		}
 	}
 
-	// Required money check (if previous bidder, only pay difference)
-	priceToDeduct := price
-	if bidderGUID == int64(s.playerGUID) && uint32(lastBid) < price {
-		priceToDeduct = price - uint32(lastBid)
-	}
-
-	if s.player.Money < priceToDeduct {
-		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(auctionID, auctionPlaceBid, errAuctionNotEnoughMoney), true)
+	// C++ HandleAuctionPlaceBid (AuctionHouseHandler.cpp:473): cheating,
+	// silently dropped.
+	if price <= uint32(lastBid) || price < uint32(startBid) {
 		return true
 	}
-	s.player.Money -= priceToDeduct
-	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+
+	// Min increment check if not buyout (C++ AuctionHouseHandler.cpp:476-482),
+	// silently dropped — the client tests it.
+	isBuyout := buyout > 0 && price >= uint32(buyout)
+	if !isBuyout && price < uint32(lastBid)+auctionOutBid(uint32(lastBid)) {
+		return true
+	}
+
+	// C++ HandleAuctionPlaceBid (AuctionHouseHandler.cpp:484-489): the money
+	// check is on the full price and is silently dropped — the client tests it.
+	if s.player.Money < price {
+		return true
+	}
 
 	now := time.Now().Unix()
 	// C++ AuctionHouseMgr::SendAuctionSuccessfulMail (AuctionHouseMgr.cpp:230) passes
@@ -381,6 +396,16 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 	s.setAchievementCriteria(criteriaTypeHighestAuctionBid, 0, price)
 	if isBuyout {
 		// Buyout success!
+		// C++ HandleAuctionPlaceBid (AuctionHouseHandler.cpp:522-526): the
+		// buyer pays the buyout, or only the buyout-minus-bid difference when
+		// topping up their own bid.
+		if bidderGUID == int64(s.playerGUID) {
+			s.player.Money -= uint32(buyout) - uint32(lastBid)
+		} else {
+			s.player.Money -= uint32(buyout)
+		}
+		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+
 		s.updateAchievementCriteria(criteriaTypeWonAuctions, 0, 1)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM auctionhouse WHERE id = ?", auctionID)
 
@@ -402,7 +427,11 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 4)",
 				refundMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, bidderGUID, outbidSubj, now+30*86400, now, lastBid)
 			s.sendMailNotify(uint64(bidderGUID))
-			s.notifyAuctionBidder(uint64(bidderGUID), 1, auctionID, uint32(buyout), 0, uint32(itemEntry))
+			// C++ SendAuctionOutbiddedMail (AuctionHouseMgr.cpp:263-280): the
+			// notification carries the auction house id, the NEW bidder's
+			// guid, the new price, and the outbid increment of the OLD bid
+			// (evaluated before auction->bid is updated).
+			s.notifyAuctionBidder(uint64(bidderGUID), uint64(s.playerGUID), uint32(houseID), auctionID, uint32(buyout), auctionOutBid(uint32(lastBid)), uint32(itemEntry))
 		}
 
 		// 2. Send won mail with item to buyer (immediate delivery)
@@ -415,7 +444,6 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, item_template, receiver) VALUES (?, ?, ?, ?)", nextMailID, itemGUID, itemEntry, s.playerGUID)
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, itemGUID)
 		s.sendMailNotify(uint64(s.playerGUID))
-		s.sendAuctionBidderNotification(1, auctionID, s.playerGUID, uint32(buyout), 0, uint32(itemEntry))
 
 		// 3. Send profit mail to seller (delayed by MailDeliveryDelay, default 1 hour)
 		var sellerMailID int64
@@ -448,6 +476,15 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(auctionID, auctionPlaceBid, errAuctionOK), true)
 	} else {
 		// Normal Bid / Outbid previous bidder
+		// C++ HandleAuctionPlaceBid (AuctionHouseHandler.cpp:505-511): a
+		// bidder raising their own bid pays only the difference.
+		if bidderGUID == int64(s.playerGUID) {
+			s.player.Money -= price - uint32(lastBid)
+		} else {
+			s.player.Money -= price
+		}
+		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+
 		if bidderGUID != 0 && lastBid > 0 && bidderGUID != int64(s.playerGUID) {
 			// Refund previous bidder via mail
 			var refundMailID int64
@@ -456,11 +493,11 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 4)",
 				refundMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, bidderGUID, outbidSubj, now+30*86400, now, lastBid)
 			s.sendMailNotify(uint64(bidderGUID))
-			minOutBid := price * 5 / 100
-			if minOutBid == 0 {
-				minOutBid = 1
-			}
-			s.notifyAuctionBidder(uint64(bidderGUID), 1, auctionID, price, minOutBid, uint32(itemEntry))
+			// C++ SendAuctionOutbiddedMail (AuctionHouseMgr.cpp:263-280): the
+			// notification carries the auction house id, the NEW bidder's
+			// guid, the new price, and the outbid increment of the OLD bid
+			// (evaluated before auction->bid is updated).
+			s.notifyAuctionBidder(uint64(bidderGUID), uint64(s.playerGUID), uint32(houseID), auctionID, price, auctionOutBid(uint32(lastBid)), uint32(itemEntry))
 		}
 		_, _ = cdb.ExecContext(ctx, "UPDATE auctionhouse SET buyguid = ?, lastbid = ? WHERE id = ?", s.playerGUID, price, auctionID)
 		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(auctionID, auctionPlaceBid, errAuctionOK), true)
@@ -672,7 +709,6 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 4)",
 			bidderMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, bidderGUID, bidderSubj, now+30*86400, now, lastBid)
 		s.sendMailNotify(uint64(bidderGUID))
-		s.notifyAuctionBidder(uint64(bidderGUID), 1, auctionID, 0, 0, uint32(itemEntry))
 	}
 
 	_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(auctionID, auctionCancel, errAuctionOK), true)
@@ -722,7 +758,6 @@ func (s *session) expireAuctions(ctx context.Context) {
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, item_template, receiver) VALUES (?, ?, ?, ?)", wonMailID, a.itemGUID, a.itemTmpl, a.bidder)
 			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", a.bidder, a.itemGUID)
 			s.sendMailNotify(uint64(a.bidder))
-			s.notifyAuctionBidder(uint64(a.bidder), uint32(a.houseID), uint32(a.id), uint32(a.lastBid), 0, uint32(a.itemTmpl))
 
 			// 2. Profit mail to seller (delayed by MailDeliveryDelay, default 1 hour)
 			var sellerMailID int64
@@ -798,13 +833,13 @@ func (s *session) sendAuctionOwnerNotification(auctionID, bid uint32, bidderGUID
 	_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_OWNER_NOTIFICATION), buf.Bytes(), true)
 }
 
-func (s *session) notifyAuctionBidder(bidderGUID uint64, location, auctionID, bidSum, diff, itemEntry uint32) {
+func (s *session) notifyAuctionBidder(recipientGUID, newBidderGUID uint64, location, auctionID, bidSum, diff, itemEntry uint32) {
 	if s.server == nil {
 		return
 	}
-	targetSess := s.server.findSessionByGUID(bidderGUID)
+	targetSess := s.server.findSessionByGUID(recipientGUID)
 	if targetSess != nil {
-		targetSess.sendAuctionBidderNotification(location, auctionID, bidderGUID, bidSum, diff, itemEntry)
+		targetSess.sendAuctionBidderNotification(location, auctionID, newBidderGUID, bidSum, diff, itemEntry)
 	}
 }
 
