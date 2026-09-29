@@ -221,7 +221,7 @@ func isMissingAuraTableError(err error) bool {
 }
 
 func (s *session) canSavePlayerAura(ownerGUID uint64, aura *activeAura, spell wotlk.Spell) (bool, error) {
-	if aura == nil || aura.EffectMask == 0 || spell.Attributes&spellAttributePassive != 0 || spell.AttributesEx1&(spellAttr1Channeled1|spellAttr1Channeled2) != 0 {
+	if aura == nil || aura.EffectMask == 0 || spell.Attributes&spellAttributePassive != 0 || isChanneledSpell(spell) {
 		return false, nil
 	}
 	if s.server.getSpellCustomAttr(spell.ID)&0x00400000 != 0 {

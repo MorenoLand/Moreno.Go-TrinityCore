@@ -91,7 +91,7 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 			if spellErr != nil || !found {
 				continue
 			}
-			if spell.Attributes&spellAttributePassive != 0 || spell.AttributesEx1&(spellAttr1Channeled1|spellAttr1Channeled2) != 0 {
+			if spell.Attributes&spellAttributePassive != 0 || isChanneledSpell(spell) {
 				continue
 			}
 			loadedSpell, hasLoadedSpell = spell, true
