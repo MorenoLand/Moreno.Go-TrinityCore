@@ -1107,6 +1107,40 @@ func (s *Store) SpellCategory(id uint32) (uint32, bool, error) {
 	return flags, true, nil
 }
 
+type LockEntry struct {
+	ID    uint32
+	Type  [8]uint32
+	Index [8]uint32
+	Skill [8]uint32
+}
+
+func (s *Store) Lock(id uint32) (LockEntry, bool, error) {
+	if id == 0 {
+		return LockEntry{}, true, nil
+	}
+	file, err := s.File("Lock")
+	if err != nil {
+		return LockEntry{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return LockEntry{}, false, nil
+	}
+	entry := LockEntry{ID: id}
+	for i := 0; i < 8; i++ {
+		if entry.Type[i], err = record.Uint32(1 + i); err != nil {
+			return LockEntry{}, false, err
+		}
+		if entry.Index[i], err = record.Uint32(9 + i); err != nil {
+			return LockEntry{}, false, err
+		}
+		if entry.Skill[i], err = record.Uint32(17 + i); err != nil {
+			return LockEntry{}, false, err
+		}
+	}
+	return entry, true, nil
+}
+
 func (s *Store) SpellRange(id uint32) (SpellRangeEntry, bool, error) {
 	file, err := s.File("SpellRange")
 	if err != nil {
