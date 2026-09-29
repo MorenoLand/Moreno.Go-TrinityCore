@@ -780,6 +780,16 @@ func buildSendMailResult(mailID, action, result, equipError, attachID, count uin
 	return buf.Bytes()
 }
 
+// mailCreateTextItemRefused mirrors the guard in
+// WorldSession::HandleMailCreateTextItem (MailHandler.cpp:573): the copy is
+// refused with (MAIL_MADE_PERMANENT, MAIL_ERR_INTERNAL_ERROR) when the mail
+// is missing, has no body and no template, is not yet delivered, or was
+// already copied. Go deletes mail rows outright, so MAIL_STATE_DELETED
+// collapses into the missing case.
+func mailCreateTextItemRefused(missing bool, body string, mailTemplateId uint32, deliverTime, now int64, checked uint32) bool {
+	return missing || (body == "" && mailTemplateId == 0) || deliverTime > now || (checked&4) != 0 // MAIL_CHECK_MASK_COPIED = 4
+}
+
 // handleMailCreateTextItem processes CMSG_MAIL_CREATE_TEXT_ITEM (0x24A).
 // Reference: WorldSession::HandleMailCreateTextItem (MailHandler.cpp:565).
 func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) bool {
@@ -819,7 +829,19 @@ func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) 
 		}
 
 		var body string
-		_ = cdb.QueryRowContext(ctx, "SELECT body FROM mail WHERE id = ?", mailID).Scan(&body)
+		var mailTemplateId uint32
+		var deliverTime int64
+		var checked uint32
+		// Reference: MailHandler.cpp:573 — the mail is player-scoped
+		// (WorldSession::GetMail), and the missing/empty/undelivered/already-
+		// copied terms refuse with (MAIL_MADE_PERMANENT,
+		// MAIL_ERR_INTERNAL_ERROR) before any item is created.
+		now := time.Now().Unix()
+		mailErr := cdb.QueryRowContext(ctx, "SELECT COALESCE(body, ''), mailTemplateId, deliver_time, checked FROM mail WHERE id = ? AND receiver = ?", mailID, s.playerGUID).Scan(&body, &mailTemplateId, &deliverTime, &checked)
+		if mailCreateTextItemRefused(mailErr != nil, body, mailTemplateId, deliverTime, now, checked) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailMadePermanent, mailErrInternalError, 0, 0, 0), true)
+			return true
+		}
 
 		var nextGUID uint64
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextGUID)
