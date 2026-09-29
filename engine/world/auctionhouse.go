@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -192,6 +193,13 @@ func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bo
 
 	now := time.Now().Unix()
 	cfg := s.server.Config
+
+	// C++ HandleAuctionListItems (AuctionHouseHandler.cpp:794-797): the
+	// searched name is converted with Utf8toWStr before any list work; an
+	// invalid UTF-8 name aborts the handler silently (no result packet).
+	if !utf8.ValidString(searchedName) {
+		return true
+	}
 
 	// C++ HandleAuctionListItems -> AuctionHouseObject::BuildListAuctionItems
 	// (AuctionHouseMgr.cpp:701-740): a getAll request scans the whole house,
