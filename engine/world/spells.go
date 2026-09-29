@@ -22,7 +22,10 @@ const (
 	spellAttr3MainHand     uint32 = 0x00000400 // SPELL_ATTR3_MAIN_HAND: Require main hand weapon (SharedDefines.h:533)
 	spellAttr3ReqOffhand   uint32 = 0x01000000 // SPELL_ATTR3_REQ_OFFHAND: Require offhand weapon (SharedDefines.h:547)
 	spellAttr3ReqWand      uint32 = 0x00400000 // SPELL_ATTR3_REQ_WAND: Requires equipped Wand (SharedDefines.h:545)
-	spellAttr5HideDuration uint32 = 0x00000400 // SPELL_ATTR5_HIDE_DURATION (SharedDefines.h:607)
+	spellAttr5HideDuration          uint32 = 0x00000400 // SPELL_ATTR5_HIDE_DURATION (SharedDefines.h:607)
+	spellAttr5CanChannelWhenMoving  uint32 = 0x00000001 // SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING (SharedDefines.h:597)
+
+	spellInterruptFlagMovement uint32 = 0x01 // SPELL_INTERRUPT_FLAG_MOVEMENT (SpellDefines.h:30)
 
 	spellFailedEquippedItemClass         uint8 = 29 // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
 	spellFailedEquippedItemClassMainhand uint8 = 30 // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
@@ -584,6 +587,15 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 
 	s.lastCastTime = time.Now()
 	castTime := s.calculateSpellCastTime(spell)
+	// Spell::prepare (Spell.cpp:3139-3149): channeled spells and spells with
+	// cast time cannot start while moving, unless the channel allows movement.
+	if (isChanneledSpell(spell) || castTime > 0) && s.isMoving && spell.InterruptFlags&spellInterruptFlagMovement != 0 {
+		if castTime > 0 || spell.AttributesEx5&spellAttr5CanChannelWhenMoving == 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedMoving), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "casting while moving")
+			return true
+		}
+	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_START), protocol.BuildSpellStart(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagStart, castTime, target), true); err != nil {
 		return false
 	}

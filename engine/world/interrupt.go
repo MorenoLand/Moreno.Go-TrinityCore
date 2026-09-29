@@ -15,6 +15,7 @@ const (
 	spellPreventionTypeSilence    = 1    // SPELL_PREVENTION_TYPE_SILENCE (SharedDefines.h:1134)
 	spellPreventionTypePacify     = 2    // SPELL_PREVENTION_TYPE_PACIFY (SharedDefines.h:1135)
 	spellFailedInterrupted        = 40   // SPELL_FAILED_INTERRUPTED (SharedDefines.h:1023)
+	spellFailedMoving             = 51   // SPELL_FAILED_MOVING (SharedDefines.h:1033)
 )
 
 // isInterruptSpell identifies primary interrupt spells that abort active casts and lock spell schools.
