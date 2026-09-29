@@ -271,8 +271,24 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	bid, _ := reader.ReadU32()
 	buyout, _ := reader.ReadU32()
 	etime, _ := reader.ReadU32() // minutes
-	if etime == 0 {
-		etime = 1440 // 24 hours
+	// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:154-155): a zero
+	// bid or zero duration is silently dropped.
+	if bid == 0 || etime == 0 {
+		return true
+	}
+	// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:157-162): a bid or
+	// buyout above MAX_MONEY_AMOUNT answers ERR_AUCTION_DATABASE_ERROR.
+	if bid > maxMoneyAmount || buyout > maxMoneyAmount {
+		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(0, auctionSellItem, errAuctionDatabaseError), true)
+		return true
+	}
+	// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:175-184): the client
+	// duration is in minutes; only 12/24/48 hours are accepted, anything else
+	// is silently dropped.
+	switch etime {
+	case 720, 1440, 2880:
+	default:
+		return true
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
