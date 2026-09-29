@@ -785,6 +785,17 @@ func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) 
 	return true
 }
 
+// mailReturnNeedItemDelay mirrors the needItemDelay term of
+// MailDraft::SendReturnToSender (Mail.cpp:158-184): the returned mail takes
+// CONFIG_MAIL_DELIVERY_DELAY when it carries items and the original sender
+// sits on a different account than the returning player (sender_acc !=
+// rc_account). rc_account is only read from the character cache while the
+// original sender is offline, so an online original sender (rc_account == 0)
+// always takes the delay.
+func mailReturnNeedItemDelay(hasItems, senderOnline bool, returnerAccount, senderAccount uint32) bool {
+	return hasItems && (senderOnline || returnerAccount != senderAccount)
+}
+
 // handleMailReturnToSender processes CMSG_MAIL_RETURN_TO_SENDER (0x248).
 // Reference: WorldSession::HandleMailReturnToSender (MailHandler.cpp:351).
 func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) bool {
@@ -819,9 +830,9 @@ func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) 
 
 		// Only return normal mail if the original sender exists
 		if messageType == 0 && senderGUID > 0 {
-			var origSenderExists int64
-			_ = cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE guid = ? LIMIT 1", senderGUID).Scan(&origSenderExists)
-			if origSenderExists == 0 {
+			var origSenderGUID, origSenderAccount int64
+			_ = cdb.QueryRowContext(ctx, "SELECT guid, account FROM characters WHERE guid = ? LIMIT 1", senderGUID).Scan(&origSenderGUID, &origSenderAccount)
+			if origSenderGUID == 0 {
 				// Sender character no longer exists; delete mail and attached items
 				_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid IN (SELECT item_guid FROM mail_items WHERE mail_id = ?)", mailID)
 				_, _ = cdb.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ?", mailID)
@@ -835,7 +846,23 @@ func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) 
 			_, _ = cdb.ExecContext(ctx, "UPDATE mail_items SET receiver = ? WHERE mail_id = ?", senderGUID, mailID)
 
 			now := time.Now().Unix()
-			expireTime := now + 30*86400 // 30 days
+			// C++ MailDraft::SendReturnToSender (Mail.cpp:158-184) applies the
+			// CONFIG_MAIL_DELIVERY_DELAY term ("MailDeliveryDelay", worldserver.conf
+			// default 3600s) to the new deliver_time when the returned mail carries
+			// items and the original sender sits on a different account than the
+			// returning player (needItemDelay = sender_acc != rc_account). rc_account
+			// is only read from the character cache when the original sender is
+			// offline, so an online original sender (rc_account == 0) always takes
+			// the delay. expire_time stays anchored on deliver_time (Mail.cpp:200).
+			deliverTime := now
+			var itemCount int64
+			_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM mail_items WHERE mail_id = ?", mailID).Scan(&itemCount)
+			if mailReturnNeedItemDelay(itemCount > 0,
+				s.server != nil && s.server.findSessionByGUID(uint64(senderGUID)) != nil,
+				s.accountID, uint32(origSenderAccount)) && s.server != nil {
+				deliverTime = now + int64(s.server.Config.MailDeliveryDelay)
+			}
+			expireTime := deliverTime + 30*86400 // 30 days
 			// C++ rebuilds the mail via MailDraft::SendReturnToSender; the draft
 			// never carries COD (Mail.h:124/127 init m_COD(0), no AddCOD on this
 			// path), so the returned mail's COD is cleared. checked = 2 is
@@ -848,7 +875,7 @@ func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) 
 				deliver_time = ?,
 				expire_time = ?,
 				cod = 0
-				WHERE id = ?`, senderGUID, receiverGUID, now, expireTime, mailID)
+				WHERE id = ?`, senderGUID, receiverGUID, deliverTime, expireTime, mailID)
 
 			s.sendMailNotify(uint64(senderGUID))
 		} else {
