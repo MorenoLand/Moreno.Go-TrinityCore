@@ -501,14 +501,19 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 	if cdb == nil {
 		return true
 	}
-	var itemEntry, itemCount, senderGUID, cod int64
+	var itemEntry, itemCount, senderGUID, cod, deliverTime int64
 	var subject string
-	err = cdb.QueryRowContext(ctx, `SELECT m.sender, m.subject, m.cod, ii.itemEntry, COALESCE(ii.count, 1)
+	err = cdb.QueryRowContext(ctx, `SELECT m.sender, m.subject, m.cod, m.deliver_time, ii.itemEntry, COALESCE(ii.count, 1)
 		FROM mail_items AS i
 		JOIN mail AS m ON m.id = i.mail_id
 		JOIN item_instance AS ii ON ii.guid = i.item_guid
-		WHERE i.mail_id = ? AND i.item_guid = ? LIMIT 1`, mailID, attachID).Scan(&senderGUID, &subject, &cod, &itemEntry, &itemCount)
-	if err != nil || itemEntry == 0 {
+		WHERE i.mail_id = ? AND i.item_guid = ? AND m.receiver = ? LIMIT 1`, mailID, attachID, s.playerGUID).Scan(&senderGUID, &subject, &cod, &deliverTime, &itemEntry, &itemCount)
+	if err != nil || itemEntry == 0 || deliverTime > time.Now().Unix() {
+		// C++ answers (MAIL_ITEM_TAKEN, MAIL_ERR_INTERNAL_ERROR) for missing mail,
+		// mail not owned by the player, undelivered mail, and the attachId cheat
+		// check ("verify that the mail has the item to avoid cheaters taking COD
+		// items without paying", MailHandler.cpp:415-428).
+		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailItemTaken, mailErrInternalError, 0, 0, 0), true)
 		return true
 	}
 	if itemCount <= 0 {
@@ -528,7 +533,8 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	// If mail has COD, charge player and send payment mail to sender (TC: MailDraft::SendMailTo with MAIL_CHECK_MASK_COD_PAYMENT)
+	// C++ sends the COD payment as a MailDraft with the original subject and
+	// MAIL_CHECK_MASK_COD_PAYMENT (0x08) checked (MailHandler.cpp:481; Mail.h:50).
 	if cod > 0 {
 		s.player.Money -= uint32(cod)
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
@@ -540,10 +546,9 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 		if nextMailID <= 0 {
 			nextMailID = 1
 		}
-		codSubject := "COD Payment: " + subject
 		_, _ = cdb.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
-			VALUES (?, 0, 41, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 0x04)`,
-			nextMailID, s.playerGUID, senderGUID, codSubject, now+30*86400, now, cod)
+			VALUES (?, 0, 41, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 0x08)`,
+			nextMailID, s.playerGUID, senderGUID, subject, now+30*86400, now, cod)
 		s.sendMailNotify(uint64(senderGUID))
 		s.sendPlayerMoneyUpdate()
 	}
