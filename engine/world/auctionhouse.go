@@ -675,22 +675,37 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 		return true
 	}
 
-	// TrinityCore: If auction has an active bidder, seller must pay the auction cut (5%)
+	// C++ HandleAuctionRemoveItem (AuctionHouseHandler.cpp:575-633): the
+	// auctioned item must be in the item map — a missing item answers
+	// ERR_AUCTION_DATABASE_ERROR with auction id 0 and the auction is kept.
+	var itemProbe int
+	if err := cdb.QueryRowContext(ctx, "SELECT 1 FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemProbe); err != nil {
+		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(0, auctionCancel, errAuctionDatabaseError), true)
+		return true
+	}
+
+	now := time.Now().Unix()
+
+	// C++ HandleAuctionRemoveItem (AuctionHouseHandler.cpp:599-610): with an
+	// active bidder the seller pays the 5% auction cut; insufficient money
+	// silently aborts the cancel — no command result is sent, and the
+	// bidder-refund mail goes out before the cut is taken.
 	if bidderGUID > 0 && lastBid > 0 {
 		auctionCut := uint32(lastBid) * 5 / 100
 		if s.player.Money < auctionCut {
-			_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(auctionID, auctionCancel, errAuctionNotEnoughMoney), true)
 			return true
 		}
+		var bidderMailID int64
+		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&bidderMailID)
+		bidderSubj := fmt.Sprintf("%d:0:%d:%d:%d", itemEntry, auctionCancelledToBidder, auctionID, itemCount)
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 4)",
+			bidderMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, bidderGUID, bidderSubj, now+30*86400, now, lastBid)
+		s.sendMailNotify(uint64(bidderGUID))
 		s.player.Money -= auctionCut
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 		s.sendPlayerMoneyUpdate()
 		s.sendPlayerUpdate()
 	}
-
-	_, _ = cdb.ExecContext(ctx, "DELETE FROM auctionhouse WHERE id = ?", auctionID)
-
-	now := time.Now().Unix()
 
 	// Mail item back to owner
 	var nextMailID int64
@@ -701,15 +716,7 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, item_template, receiver) VALUES (?, ?, ?, ?)", nextMailID, itemGUID, itemEntry, ownerGUID)
 	s.sendMailNotify(uint64(ownerGUID))
 
-	// Refund active bidder via mail (TC: SendAuctionCancelledToBidderMail)
-	if bidderGUID > 0 && lastBid > 0 {
-		var bidderMailID int64
-		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&bidderMailID)
-		bidderSubj := fmt.Sprintf("%d:0:%d:%d:%d", itemEntry, auctionCancelledToBidder, auctionID, itemCount)
-		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 4)",
-			bidderMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, bidderGUID, bidderSubj, now+30*86400, now, lastBid)
-		s.sendMailNotify(uint64(bidderGUID))
-	}
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM auctionhouse WHERE id = ?", auctionID)
 
 	_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(auctionID, auctionCancel, errAuctionOK), true)
 	return true
