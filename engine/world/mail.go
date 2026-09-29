@@ -779,8 +779,16 @@ func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) 
 
 		var senderGUID, receiverGUID int64
 		var messageType int
-		err := cdb.QueryRowContext(ctx, "SELECT sender, receiver, messageType FROM mail WHERE id = ? AND receiver = ? LIMIT 1", mailID, s.playerGUID).Scan(&senderGUID, &receiverGUID, &messageType)
+		var deliverTime int64
+		err := cdb.QueryRowContext(ctx, "SELECT sender, receiver, messageType, deliver_time FROM mail WHERE id = ? AND receiver = ? LIMIT 1", mailID, s.playerGUID).Scan(&senderGUID, &receiverGUID, &messageType, &deliverTime)
 		if err != nil {
+			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailReturnedToSender, mailErrInternalError, 0, 0, 0), true)
+			return true
+		}
+
+		// C++ refuses to return mail that has not been delivered yet
+		// (MailHandler.cpp:355: m->deliver_time > GameTime::GetGameTime()).
+		if deliverTime > time.Now().Unix() {
 			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailReturnedToSender, mailErrInternalError, 0, 0, 0), true)
 			return true
 		}
@@ -804,13 +812,18 @@ func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) 
 
 			now := time.Now().Unix()
 			expireTime := now + 30*86400 // 30 days
+			// C++ rebuilds the mail via MailDraft::SendReturnToSender; the draft
+			// never carries COD (Mail.h:124/127 init m_COD(0), no AddCOD on this
+			// path), so the returned mail's COD is cleared. checked = 2 is
+			// MAIL_CHECK_MASK_RETURNED (Mail.h:48).
 			_, _ = cdb.ExecContext(ctx, `UPDATE mail SET
 				receiver = ?,
 				sender = ?,
 				messageType = 0,
 				checked = 2,
 				deliver_time = ?,
-				expire_time = ?
+				expire_time = ?,
+				cod = 0
 				WHERE id = ?`, senderGUID, receiverGUID, now, expireTime, mailID)
 
 			s.sendMailNotify(uint64(senderGUID))
