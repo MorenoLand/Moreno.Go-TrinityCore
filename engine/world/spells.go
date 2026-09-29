@@ -24,6 +24,7 @@ const (
 	spellAttr3ReqWand              uint32 = 0x00400000 // SPELL_ATTR3_REQ_WAND: Requires equipped Wand (SharedDefines.h:545)
 	spellAttr5HideDuration         uint32 = 0x00000400 // SPELL_ATTR5_HIDE_DURATION (SharedDefines.h:607)
 	spellAttr5CanChannelWhenMoving uint32 = 0x00000001 // SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING (SharedDefines.h:597)
+	spellAttr5SingleTarget         uint32 = 0x00000020 // SPELL_ATTR5_SINGLE_TARGET_SPELL (SharedDefines.h:602)
 
 	spellInterruptFlagMovement uint32 = 0x01 // SPELL_INTERRUPT_FLAG_MOVEMENT (SpellDefines.h:30)
 
@@ -3830,6 +3831,68 @@ func (s *Server) rankChainNoStackPurge(newSpell wotlk.Spell, newCasterGUID, newI
 	return purge
 }
 
+// spellIsSingleTarget mirrors SpellInfo::IsSingleTarget
+// (SpellInfo.cpp:1380-1395): the SPELL_ATTR5_SINGLE_TARGET_SPELL flag, or
+// the JUDGEMENT spell-specific. The nil firstRank resolver is safe — the
+// classifier guards it, and the judgement branch is ID-based.
+func spellIsSingleTarget(spell wotlk.Spell) bool {
+	if spell.AttributesEx5&spellAttr5SingleTarget != 0 {
+		return true
+	}
+	return spellSpecific(spell, nil) == spellSpecificJudgement
+}
+
+// isSingleTargetWith mirrors Aura::IsSingleTargetWith
+// (SpellAuras.cpp:1187-1208): same rank chain, or both spells sharing the
+// JUDGEMENT / MAGE_POLYMORPH spell-specific.
+func (s *Server) isSingleTargetWith(newSpell, exSpell wotlk.Spell) bool {
+	if s.spellFirstRank(newSpell.ID) == s.spellFirstRank(exSpell.ID) {
+		return true
+	}
+	newSpec := spellSpecific(newSpell, s.spellFirstRank)
+	switch newSpec {
+	case spellSpecificJudgement, spellSpecificMagePolymorph:
+		return spellSpecific(exSpell, s.spellFirstRank) == newSpec
+	}
+	return false
+}
+
+// singleTargetNoStackPurge mirrors the single-target registration dance in
+// Unit::_AddAura (Unit.cpp:3397-3420) with Aura::IsSingleTargetWith
+// (SpellAuras.cpp:1187-1208): a fresh single-target aura (SpellInfo::
+// IsSingleTarget, SpellInfo.cpp:1380-1395) removes the caster's other
+// single-target auras that are single-target with it — same-rank-chain
+// pairs, or a second judgement / polymorph from the same caster. The
+// trigger-spell mutual exclusion the _RemoveNoStackAurasDueToAura purges
+// honor does not exist in the C++ dance, so it is not applied here. C++
+// dances the caster's cross-target single-cast list; Go has no such list,
+// so this covers the same-target case (re-judging / re-sheeping the same
+// unit) and the cross-target remainder stays open. Returns the auras to
+// remove; the caller removes them after unlocking.
+func (s *Server) singleTargetNoStackPurge(newSpell wotlk.Spell, newCasterGUID uint64, existing map[uint32]*activeAura) []rankPurgeTarget {
+	if s == nil || s.Data == nil || !spellIsSingleTarget(newSpell) {
+		return nil
+	}
+	var purge []rankPurgeTarget
+	for id, aura := range existing {
+		if id == newSpell.ID || aura == nil || aura.Stopped {
+			continue
+		}
+		if aura.CasterGUID != newCasterGUID {
+			continue
+		}
+		exSpell, found, err := s.Data.Spell(id)
+		if err != nil || !found || !spellIsSingleTarget(exSpell) {
+			continue
+		}
+		if !s.isSingleTargetWith(newSpell, exSpell) {
+			continue
+		}
+		purge = append(purge, rankPurgeTarget{spellID: id, slot: aura.Slot})
+	}
+	return purge
+}
+
 // rankChainPeriodicStacksForDiffCasters mirrors the periodic-aura exemption
 // in Aura::CanStackWith (SpellAuras.cpp:1955-1976): DOT/HOT-style auras of
 // one rank chain from different casters stack. Effects are index-aligned
@@ -4718,10 +4781,13 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// rank-chain term (Aura::CanStackWith, SpellAuras.cpp:1994-2004),
 		// the spell-group exclusive terms (SpellAuras.cpp:1924-1932),
 		// the spell-specific exclusivity gates (SpellAuras.cpp:1914-1921),
-		// and the EXCLUSIVE_HIGHEST comparisons (Unit.cpp:13991).
+		// and the EXCLUSIVE_HIGHEST comparisons (Unit.cpp:13991) — plus
+		// the _AddAura single-target dance (Unit.cpp:3397-3420) for
+		// single-target auras.
 		purgeIDs := s.server.rankChainNoStackPurge(spell, s.playerGUID, aura.ItemGUID, targetSess.activeAuras)
 		purgeIDs = append(purgeIDs, s.server.spellGroupNoStackPurge(spell, s.playerGUID, targetSess.activeAuras)...)
 		purgeIDs = append(purgeIDs, s.server.spellSpecificNoStackPurge(spell, s.playerGUID, targetSess.activeAuras)...)
+		purgeIDs = append(purgeIDs, s.server.singleTargetNoStackPurge(spell, s.playerGUID, targetSess.activeAuras)...)
 		purgeIDs = append(purgeIDs, highest.purge...)
 		targetSess.castMu.Unlock()
 		for _, purgeID := range purgeIDs {
@@ -4975,10 +5041,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// term (Aura::CanStackWith, SpellAuras.cpp:1994-2004), the spell-group
 	// exclusive terms (SpellAuras.cpp:1924-1932), the spell-specific
 	// exclusivity gates (SpellAuras.cpp:1914-1921), and the EXCLUSIVE_HIGHEST
-	// comparisons (Unit.cpp:13991).
+	// comparisons (Unit.cpp:13991) — plus the _AddAura single-target dance
+	// (Unit.cpp:3397-3420) for single-target auras.
 	purge := s.server.rankChainNoStackPurge(spell, s.playerGUID, aura.ItemGUID, s.server.activeCreatureAuras[targetKey])
 	purge = append(purge, s.server.spellGroupNoStackPurge(spell, s.playerGUID, s.server.activeCreatureAuras[targetKey])...)
 	purge = append(purge, s.server.spellSpecificNoStackPurge(spell, s.playerGUID, s.server.activeCreatureAuras[targetKey])...)
+	purge = append(purge, s.server.singleTargetNoStackPurge(spell, s.playerGUID, s.server.activeCreatureAuras[targetKey])...)
 	purge = append(purge, highest.purge...)
 	s.server.auraMu.Unlock()
 	for _, p := range purge {
