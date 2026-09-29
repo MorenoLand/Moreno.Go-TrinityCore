@@ -1073,13 +1073,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	entryNearbySpell := isEntryNearbySpell(spell)
 	goNearbyEntrySpell := isGONearbyEntrySpell(spell)
 	entryAreaSpell := isEntryAreaSpell(spell)
+	goAreaSpell := isGOAreaSpell(spell)
+	goConeSpell := isGOConeSpell(spell)
 	friendlyConeSpell := isFriendlyConeSpell(spell)
 	friendlyLastTargetAreaSpell := isFriendlyLastTargetAreaSpell(spell)
 	friendlyTargetAreaRaidClassSpell := isFriendlyTargetAreaRaidClassSpell(spell)
 	// List-producing friendly/entry selections skip the single-target immune gate
 	// and chain-jump expansion the same way area spells do (Spell.cpp:1227
 	// area selection never calls SelectImplicitChainTargets).
-	friendlyListSpell := friendlyAreaSpell || friendlyConeSpell || friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell || entryAreaSpell
+	friendlyListSpell := friendlyAreaSpell || friendlyConeSpell || friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell || entryAreaSpell || goAreaSpell || goConeSpell
 	if areaSpell {
 		hitTargets = s.spellAreaEnemyTargets(ctx, spell, target)
 	} else if friendlyAreaSpell {
@@ -1137,6 +1139,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// Spell::SelectImplicitConeTargets (Spell.cpp:1176): friendly
 		// ALLY/ENTRY cone targets (59/60).
 		hitTargets = s.spellFriendlyConeTargets(ctx, spell, target)
+	} else if goAreaSpell {
+		// Spell::SelectImplicitAreaTargets (Spell.cpp:1227):
+		// TARGET_GAMEOBJECT_SRC_AREA (51) / TARGET_GAMEOBJECT_DEST_AREA
+		// (52) — every gameobject in the area becomes a target; an empty
+		// area never fails the cast. The GO guids flow through hitTargets
+		// like C++'s AddGOTarget list; Go has no gameobject-effect
+		// consumer downstream.
+		hitTargets = s.spellGOAreaTargets(ctx, spell, spellID, target)
+	} else if goConeSpell {
+		// Spell::SelectImplicitConeTargets (Spell.cpp:1176):
+		// TARGET_GAMEOBJECT_CONE (108) — every gameobject in the caster's
+		// front cone becomes a target; an empty cone never fails the cast.
+		hitTargets = s.spellGOConeTargets(ctx, spell, spellID)
 	} else if friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell {
 		// Spell::SelectImplicitAreaTargets (Spell.cpp:1227) with LAST (37)
 		// or TARGET (61) reference: area around the last/explicit target.
