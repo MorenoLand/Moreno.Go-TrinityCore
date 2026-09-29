@@ -544,7 +544,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	if spell.RequiresSpellFocus != 0 && !s.spellFocusFound(ctx, spell) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedRequiresSpellFocus), true)
+		s.sendCastFailed(ctx, castID, spell, spellFailedRequiresSpellFocus)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "no spell focus object in range", "focus", spell.RequiresSpellFocus)
 		return true
 	}
@@ -616,7 +616,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	if !s.hasSpellReagents(ctx, spell) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 100), true) // SPELL_FAILED_REAGENTS = 100
+		s.sendCastFailed(ctx, castID, spell, 100) // SPELL_FAILED_REAGENTS = 100
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "missing reagents")
 		return true
 	}
@@ -625,13 +625,13 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// run right after the reagent check, matching C++ CheckCast relative order.
 	// Client-initiated casts only — triggered casts go through castSpellDirect.
 	if failReason := s.checkSpellTotemRequirements(ctx, spell); failReason != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
+		s.sendCastFailed(ctx, castID, spell, failReason)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "totem requirements not met", "failReason", failReason)
 		return true
 	}
 
 	if failReason, ok := s.checkSpellEquippedItemRequirements(ctx, spell); !ok {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
+		s.sendCastFailed(ctx, castID, spell, failReason)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "equipped item requirements not met", "failReason", failReason)
 		return true
 	}
@@ -768,10 +768,10 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			// 3. Caster facing target requirement:
 			// If spell has SPELL_FACING_FLAG_INFRONT (0x1) from Spell.dbc field 19 (or Auto Shot / Shoot Wand):
 			// Target must be within caster's 120° frontal cone (2*pi/3).
-			// Returns SPELL_FAILED_UNIT_NOT_INFRONT = 81 ("Target needs to be in front of you.").
+			// Returns SPELL_FAILED_UNIT_NOT_INFRONT = 134 ("Target needs to be in front of you.").
 			if (spell.FacingCasterFlags&SpellFacingFlagInfront != 0) || spellID == 75 || spellID == 5019 {
 				if !hasInArc(s.player.Orientation, s.player.X, s.player.Y, tgt.X, tgt.Y, 2.0*math.Pi/3.0) {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 81), true) // SPELL_FAILED_UNIT_NOT_INFRONT = 81
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedUnitNotInFront), true)
 					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target not in front")
 					return true
 				}
