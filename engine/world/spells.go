@@ -29,6 +29,8 @@ const (
 
 	spellAttr1NotBreakStealth uint32 = 0x00000020 // SPELL_ATTR1_NOT_BREAK_STEALTH (SharedDefines.h:454)
 
+	spellAttr0StopAttackTarget uint32 = 0x00100000 // SPELL_ATTR0_STOP_ATTACK_TARGET (SharedDefines.h:432)
+
 	spellFailedEquippedItemClass         uint8 = 29 // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
 	spellFailedEquippedItemClassMainhand uint8 = 30 // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
 	spellFailedEquippedItemClassOffhand  uint8 = 31 // SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND (SharedDefines.h:1013)
@@ -1174,6 +1176,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 
 	applyEffects(ctx)
+	s.stopAttackOnSpellFinish(spell)
+}
+
+// stopAttackOnSpellFinish stops the caster's auto-attack for spells carrying
+// SPELL_ATTR0_STOP_ATTACK_TARGET.
+// C++ authority: Spell::finish (Spell.cpp:3978-3983) calls AttackStop().
+func (s *session) stopAttackOnSpellFinish(spell wotlk.Spell) {
+	if spell.Attributes&spellAttr0StopAttackTarget == 0 {
+		return
+	}
+	victim := s.attackTarget
+	s.attackTarget = 0
+	if s.autoRepeatSpell != 0 {
+		s.autoRepeatSpell = 0
+		s.autoRepeatTarget = 0
+		buf := protocol.NewBuffer(9)
+		buf.WritePackedGUID(s.playerGUID)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
+	}
+	_ = s.sendAttackStop(victim, false)
+	s.debug("attack stopped by spell", "account", s.accountName, "spell", spell.ID)
 }
 
 func (s *session) spawnPersistentAreaAura(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) {
