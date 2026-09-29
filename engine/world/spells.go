@@ -3689,13 +3689,25 @@ func (s *session) refreshTransformDisplay(ctx context.Context) {
 // _TryStackingOrRefreshingExistingAura basepoint update (Unit.cpp:3360-3372):
 // the re-cast's basepoints and computed amount replace this effect's slots.
 func refreshAuraEffectBasepoints(existing *activeAura, spell wotlk.Spell, eff wotlk.SpellEffect, amount uint32) {
+	// Aura::SetStackAmount (SpellAuras.cpp:1008) recalculates every effect's
+	// amount from the new basepoints via AuraEffect::CalculateAmount, whose
+	// final term is amount *= GetBase()->GetStackAmount()
+	// (SpellAuraEffects.cpp:537) — unconditional, all aura types. The merge
+	// path carries the new cast's amount directly (the CalculateAmount
+	// pre-stack value), so the stack multiplier lands here; a zero
+	// StackCount reads as one stack, the codebase's existing convention.
+	stacks := int32(existing.StackCount)
+	if stacks < 1 {
+		stacks = 1
+	}
 	for index, candidate := range spell.Effects {
 		if candidate != eff {
 			continue
 		}
 		existing.BaseAmounts[index] = eff.BasePoints
-		existing.Amounts[index] = int32(amount)
-		existing.Amount = amount
+		scaled := int32(amount) * stacks
+		existing.Amounts[index] = scaled
+		existing.Amount = uint32(scaled)
 		break
 	}
 }
