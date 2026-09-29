@@ -4619,6 +4619,7 @@ type activeChannelState struct {
 	Pushbacks  int
 	Timer      *time.Timer
 	TickTimer  *time.Timer
+	DrainTimer *time.Timer
 	Stopped    bool
 }
 
@@ -4702,6 +4703,11 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 	if period > 0 && period <= uint32(durationMs) {
 		channel.TickTimer = time.AfterFunc(time.Duration(period)*time.Millisecond, func() { s.channelTick() })
 	}
+	// SpellAuras.cpp:436: an aura with ManaPerSecond or ManaPerSecondPerLevel
+	// drains the caster every second.
+	if spell.ManaPerSecond != 0 || spell.ManaPerSecondPerLevel != 0 {
+		channel.DrainTimer = time.AfterFunc(time.Second, func() { s.channelDrainTick() })
+	}
 	s.debug("channel started", "account", s.accountName, "spell", spellID, "duration_ms", durationMs, "period_ms", period)
 }
 
@@ -4719,6 +4725,9 @@ func (s *session) finishChannel() {
 	}
 	if channel.TickTimer != nil {
 		channel.TickTimer.Stop()
+	}
+	if channel.DrainTimer != nil {
+		channel.DrainTimer.Stop()
 	}
 	channel.Stopped = true
 	spellID := channel.SpellID
@@ -4743,6 +4752,9 @@ func (s *session) interruptCurrentChannel() {
 	}
 	if channel.TickTimer != nil {
 		channel.TickTimer.Stop()
+	}
+	if channel.DrainTimer != nil {
+		channel.DrainTimer.Stop()
 	}
 	channel.Stopped = true
 	s.castMu.Unlock()
@@ -4818,6 +4830,53 @@ func (s *session) channelTick() {
 		channel.TickTimer = time.AfterFunc(next, func() { s.channelTick() })
 		s.castMu.Unlock()
 		return
+	}
+	s.castMu.Unlock()
+}
+
+// channelDrainTick applies one second of the channeled spell's mana drain and
+// re-arms while the channel lives. Mirrors Aura::Update (SpellAuras.cpp:844):
+// manaPerSecond = ManaPerSecond + ManaPerSecondPerLevel * caster level;
+// POWER_HEALTH drains health (needs strictly more than the drain), other
+// powers need at least the drain, and a shortfall removes the aura (ends the
+// channel here).
+func (s *session) channelDrainTick() {
+	s.castMu.Lock()
+	channel := s.activeChannel
+	if channel == nil || channel.Stopped {
+		s.castMu.Unlock()
+		return
+	}
+	spell := channel.Spell
+	s.castMu.Unlock()
+
+	if s.player == nil {
+		return
+	}
+	manaPerSecond := spell.ManaPerSecond + spell.ManaPerSecondPerLevel*uint32(s.player.Level)
+	if manaPerSecond > 0 {
+		if spell.PowerType == 0xFFFFFFFE { // POWER_HEALTH = -2 in C++
+			if s.player.Health > manaPerSecond {
+				s.player.Health -= manaPerSecond
+				s.sendPlayerUpdate()
+			} else {
+				s.interruptCurrentChannel()
+				return
+			}
+		} else if spell.PowerType < 7 {
+			if s.player.Powers[spell.PowerType] >= manaPerSecond {
+				s.adjustSpellPower(context.Background(), s.playerGUID, int32(spell.PowerType), -int64(manaPerSecond))
+			} else {
+				s.interruptCurrentChannel()
+				return
+			}
+		}
+	}
+
+	s.castMu.Lock()
+	channel = s.activeChannel
+	if channel != nil && !channel.Stopped {
+		channel.DrainTimer = time.AfterFunc(time.Second, func() { s.channelDrainTick() })
 	}
 	s.castMu.Unlock()
 }
