@@ -1236,6 +1236,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 			time.AfterFunc(time.Duration(timeDelayMs)*time.Millisecond, func() {
 				applyEffects(context.Background())
+				s.stopAttackOnSpellFinish(spell)
 			})
 			return
 		}
