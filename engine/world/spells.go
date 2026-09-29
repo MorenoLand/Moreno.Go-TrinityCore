@@ -789,6 +789,37 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 	s.takeSpellReagents(ctx, spell)
+
+	// Spell::_cast (Spell.cpp:3462-3470) calls SendSpellCooldown() before
+	// HandleLaunchPhase() and SendSpellGo(): the cooldown packet must reach
+	// the client before SMSG_SPELL_GO.
+	categoryID, categoryRecoveryTime, categoryErr := s.spellCooldownCategory(spellID)
+	if categoryErr != nil {
+		s.debug("spell cooldown category lookup failed", "spell", spellID, "error", categoryErr)
+		categoryID, categoryRecoveryTime = 0, 0
+	}
+	now := time.Now()
+	categoryEnd := now.Unix()
+	if categoryRecoveryTime > 0 {
+		categoryEnd = now.Add(time.Duration(categoryRecoveryTime) * time.Millisecond).Unix()
+	}
+	applyCooldown := len(hitTargets) > 0 && !isFishingSpell(spellID)
+	if applyCooldown && (spell.RecoveryTime > 0 || categoryRecoveryTime > 0) {
+		cooldownEnd := categoryEnd
+		if spell.RecoveryTime > 0 {
+			cooldownEnd = now.Add(time.Duration(spell.RecoveryTime) * time.Millisecond).Unix()
+		}
+		s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: spellID, Category: categoryID, End: cooldownEnd, CategoryEnd: categoryEnd})
+	}
+	if applyCooldown && spell.RecoveryTime > 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spellID, spell.RecoveryTime), true)
+	}
+	if applyCooldown && spellID == 8690 {
+		cooldownEnd := now.Add(15 * time.Minute).Unix() // 15 min cooldown
+		s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: spellID, Item: 6948, Category: categoryID, End: cooldownEnd, CategoryEnd: categoryEnd})
+		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spellID, 900000), true)
+	}
+
 	goPacket := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, missStatus, target, remainingPower)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true)
 	if s.server != nil {
@@ -802,7 +833,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 
 	if len(hitTargets) == 0 {
-		// Spell missed, do not trigger channel, cooldown, or effects
+		// Spell missed, do not trigger channel or effects
 		return
 	}
 
@@ -814,31 +845,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	s.updateAchievementCriteria(criteriaTypeCastSpell, spellID, 1)
 	s.updateAchievementCriteria(criteriaTypeCastSpell2, spellID, 1)
 	s.startTimedAchievement(timedTypeSpellCast, spellID)
-	categoryID, categoryRecoveryTime, categoryErr := s.spellCooldownCategory(spellID)
-	if categoryErr != nil {
-		s.debug("spell cooldown category lookup failed", "spell", spellID, "error", categoryErr)
-		categoryID, categoryRecoveryTime = 0, 0
-	}
-	now := time.Now()
-	categoryEnd := now.Unix()
-	if categoryRecoveryTime > 0 {
-		categoryEnd = now.Add(time.Duration(categoryRecoveryTime) * time.Millisecond).Unix()
-	}
-	if spell.RecoveryTime > 0 || categoryRecoveryTime > 0 {
-		cooldownEnd := categoryEnd
-		if spell.RecoveryTime > 0 {
-			cooldownEnd = now.Add(time.Duration(spell.RecoveryTime) * time.Millisecond).Unix()
-		}
-		s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: spellID, Category: categoryID, End: cooldownEnd, CategoryEnd: categoryEnd})
-		if spell.RecoveryTime > 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spellID, spell.RecoveryTime), true)
-		}
-	}
-	if spellID == 8690 {
-		cooldownEnd := now.Add(15 * time.Minute).Unix() // 15 min cooldown
-		s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: spellID, Item: 6948, Category: categoryID, End: cooldownEnd, CategoryEnd: categoryEnd})
-		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spellID, 900000), true)
-	}
 
 	// Reference SpellEffects.cpp:3858-3874: Spell 7266 (Duel)
 	if spellID == 7266 && targetGUID != 0 && targetGUID != s.playerGUID && s.server != nil {
