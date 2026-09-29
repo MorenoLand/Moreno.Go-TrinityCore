@@ -100,6 +100,7 @@ type SpellEffect struct {
 	Mechanic           uint32
 	Aura               uint32
 	AuraPeriod         uint32
+	Amplitude          float32
 	ImplicitTargetA    uint32
 	ImplicitTargetB    uint32
 	RadiusIndex        uint32
@@ -854,6 +855,10 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		if err != nil {
 			return Spell{}, false, err
 		}
+		amplitude, err := record.Float32(101 + i)
+		if err != nil {
+			return Spell{}, false, err
+		}
 		triggerSpell, err := record.Uint32(116 + i)
 		if err != nil {
 			return Spell{}, false, err
@@ -870,7 +875,7 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		if err != nil {
 			return Spell{}, false, err
 		}
-		spell.Effects[i] = SpellEffect{Effect: effect, BasePoints: basePoints, DieSides: dieSides, RealPointsPerLevel: realPointsPerLevel, Mechanic: effectMechanic, Aura: aura, AuraPeriod: auraPeriod, ImplicitTargetA: implicitTargetA, ImplicitTargetB: implicitTargetB, RadiusIndex: radiusIndex, MiscValue: miscValue, MiscValueB: miscValueB, TriggerSpell: triggerSpell, ChainTargets: chainTargets, ItemType: itemType, PointsPerCombo: pointsPerCombo}
+		spell.Effects[i] = SpellEffect{Effect: effect, BasePoints: basePoints, DieSides: dieSides, RealPointsPerLevel: realPointsPerLevel, Mechanic: effectMechanic, Aura: aura, AuraPeriod: auraPeriod, Amplitude: amplitude, ImplicitTargetA: implicitTargetA, ImplicitTargetB: implicitTargetB, RadiusIndex: radiusIndex, MiscValue: miscValue, MiscValueB: miscValueB, TriggerSpell: triggerSpell, ChainTargets: chainTargets, ItemType: itemType, PointsPerCombo: pointsPerCombo}
 	}
 	for i := range spell.Reagent {
 		reagent, err := record.Int32(52 + i) // Reagent, DBCStructure.h:1441 (52-59)
