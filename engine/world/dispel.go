@@ -446,7 +446,7 @@ func (s *session) handleEffectDispel(ctx context.Context, targetGUID uint64, spe
 				if backlashDamage == 0 {
 					backlashDamage = 1800
 				}
-				s.executeSpellDamage(ctx, s.playerGUID, 31117, backlashDamage)
+				s.executeSpellDamage(ctx, s.playerGUID, 31117, backlashDamage, 0)
 
 				silenceSpell := wotlk.Spell{
 					ID:         31117,
@@ -466,7 +466,7 @@ func (s *session) handleEffectDispel(ctx context.Context, targetGUID uint64, spe
 				if backlashDamage == 0 {
 					backlashDamage = 680
 				}
-				s.executeSpellDamage(ctx, s.playerGUID, 64085, backlashDamage)
+				s.executeSpellDamage(ctx, s.playerGUID, 64085, backlashDamage, 0)
 			}
 		} else {
 			// Dispel resisted / failed

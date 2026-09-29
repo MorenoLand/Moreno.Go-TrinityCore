@@ -1081,13 +1081,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				damage := uint32(eff.BasePoints + 1)
 				for _, effectTarget := range hitTargets {
 					if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
-						s.executeSpellDamage(effCtx, effectTarget, spellID, damage)
+						s.executeSpellDamage(effCtx, effectTarget, spellID, damage, effectIndex)
 					}
 				}
 			case 10, 136, 105: // Heal effects
 				heal := uint32(eff.BasePoints + 1)
 				for _, effectTarget := range hitTargets {
-					s.executeSpellHeal(effCtx, effectTarget, spellID, heal)
+					s.executeSpellHeal(effCtx, effectTarget, spellID, heal, effectIndex)
 				}
 			case spellEffectEnergize:
 				amount := eff.BasePoints + 1
@@ -1098,7 +1098,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				amount := eff.BasePoints + 1
 				for _, effectTarget := range hitTargets {
 					if burned := s.applySpellPowerBurn(effCtx, effectTarget, eff.MiscValue, amount, spellID); burned > 0 {
-						s.executeSpellDamage(effCtx, effectTarget, spellID, burned)
+						s.executeSpellDamage(effCtx, effectTarget, spellID, burned, effectIndex)
 					}
 				}
 			case spellEffectParry:
@@ -1251,7 +1251,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.completeQuest(effCtx, uint32(eff.MiscValue))
 				}
 			case spellEffectHealthLeech: // 9: SPELL_EFFECT_HEALTH_LEECH
-				s.handleEffectHealthLeech(effCtx, spellID, hitTargets, eff)
+				s.handleEffectHealthLeech(effCtx, spellID, hitTargets, effectIndex, eff)
 			case spellEffectPowerDrain: // 8: SPELL_EFFECT_POWER_DRAIN
 				amount := eff.BasePoints + 1
 				for _, effectTarget := range hitTargets {
@@ -1412,20 +1412,20 @@ func (s *session) spawnPersistentAreaAura(ctx context.Context, spell wotlk.Spell
 	s.server.spawnDynamicSpellObject(object, time.Duration(durationMs)*time.Millisecond)
 }
 
-func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spellID, damage uint32) {
-	if ctx == nil || ctx.Err() != nil {
-		ctx = context.Background()
-	}
-	target, ok := s.getCombatTarget(ctx, targetGUID)
-	if !ok || target.Health == 0 {
-		return
-	}
-
-	// Apply Spell Power bonus (TrinityCore Unit::SpellDamageBonusDone)
-	if s.player != nil && s.player.SpellPower > 0 {
-		coeff := 0.857 // standard 3.0s cast (~85.7%)
-		if s.server != nil && s.server.Data != nil {
-			if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+// spellBonusMultiplier mirrors the coefficient selection in TrinityCore
+// Unit::SpellDamageBonusDone (Unit.cpp:6685) and Unit::SpellHealingBonusDone
+// (Unit.cpp:7562): SpellEffectInfo::BonusMultiplier = Spell.dbc
+// EffectBonusCoefficient (fields 229-231). A negative DBC value falls back to
+// the default (Cast Time / 3.5) coefficient, x1.88 for healing.
+func (s *session) spellBonusMultiplier(spellID uint32, effIndex int, heal bool) float64 {
+	mult := 0.857 // standard 3.0s cast (~85.7%)
+	if s.server != nil && s.server.Data != nil {
+		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			coeff := -1.0
+			if effIndex >= 0 && effIndex < len(spell.Effects) {
+				coeff = float64(spell.Effects[effIndex].BonusCoefficient)
+			}
+			if coeff < 0 {
 				if spell.CastingTimeIndex > 0 {
 					if ct, ok, _ := s.server.Data.SpellCastTime(spell.CastingTimeIndex); ok && ct > 0 {
 						coeff = float64(ct) / 3500.0
@@ -1436,9 +1436,28 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 				} else {
 					coeff = 1.5 / 3.5 // instant cast coefficient ~0.4286
 				}
+				if heal {
+					coeff *= 1.88
+				}
 			}
+			mult = coeff
 		}
-		damage += uint32(math.Round(float64(s.player.SpellPower) * coeff))
+	}
+	return mult
+}
+
+func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spellID, damage uint32, effIndex int) {
+	if ctx == nil || ctx.Err() != nil {
+		ctx = context.Background()
+	}
+	target, ok := s.getCombatTarget(ctx, targetGUID)
+	if !ok || target.Health == 0 {
+		return
+	}
+
+	// Apply Spell Power bonus (TrinityCore Unit::SpellDamageBonusDone)
+	if s.player != nil && s.player.SpellPower > 0 {
+		damage += uint32(math.Round(float64(s.player.SpellPower) * s.spellBonusMultiplier(spellID, effIndex, false)))
 	}
 
 	// Use the school mask from the Spell DBC (field 17). Fallback to physical (1).
@@ -1791,7 +1810,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	}
 
 	hasExplicitEffects := false
-	for _, eff := range spell.Effects {
+	for effectIndex, eff := range spell.Effects {
 		if eff.Effect == 0 && eff.Aura == 0 {
 			continue
 		}
@@ -1820,12 +1839,12 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			if healAmount == 0 && spellID == ProcSpellCrusader {
 				healAmount = 100
 			}
-			s.executeSpellHeal(ctx, targetGUID, spellID, healAmount)
+			s.executeSpellHeal(ctx, targetGUID, spellID, healAmount, effectIndex)
 		} else if eff.Effect == spellEffectEnergize {
 			s.applySpellEnergize(ctx, targetGUID, eff.MiscValue, eff.BasePoints+1)
 		} else if eff.Effect == spellEffectPowerBurn {
 			if burned := s.applySpellPowerBurn(ctx, targetGUID, eff.MiscValue, eff.BasePoints+1, spellID); burned > 0 {
-				s.executeSpellDamage(ctx, targetGUID, spellID, burned)
+				s.executeSpellDamage(ctx, targetGUID, spellID, burned, effectIndex)
 			}
 		} else if eff.Effect == spellEffectTriggerSpell {
 			if eff.TriggerSpell != 0 && eff.TriggerSpell != spellID {
@@ -2030,11 +2049,11 @@ func (s *session) executeSpellMaxHealthHeal(ctx context.Context, targetGUID uint
 		return
 	}
 	if creature, ok := s.getCombatTarget(ctx, targetGUID); ok && creature.Health > 0 {
-		s.executeSpellHeal(ctx, targetGUID, spellID, creature.MaxHealth)
+		s.executeSpellHeal(ctx, targetGUID, spellID, creature.MaxHealth, 0)
 	}
 }
 
-func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spellID, heal uint32) {
+func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spellID, heal uint32, effIndex int) {
 	if s.player == nil {
 		return
 	}
@@ -2056,22 +2075,7 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 
 	// Apply Spell Power bonus to healing (TrinityCore Unit::SpellHealingBonusDone)
 	if s.player != nil && s.player.SpellPower > 0 {
-		coeff := 0.857
-		if s.server.Data != nil {
-			if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
-				if spell.CastingTimeIndex > 0 {
-					if ct, ok, _ := s.server.Data.SpellCastTime(spell.CastingTimeIndex); ok && ct > 0 {
-						coeff = float64(ct) / 3500.0
-						if coeff > 1.0 {
-							coeff = 1.0
-						}
-					}
-				} else {
-					coeff = 1.5 / 3.5
-				}
-			}
-		}
-		heal += uint32(math.Round(float64(s.player.SpellPower) * coeff))
+		heal += uint32(math.Round(float64(s.player.SpellPower) * s.spellBonusMultiplier(spellID, effIndex, true)))
 	}
 
 	// Roll healing critical strike (TrinityCore: 150% healing on crit, modified by metagem)
@@ -3790,7 +3794,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		if aura.TriggerSpell != 0 && s.server != nil && s.server.Data != nil {
 			if trigger, found, err := s.server.Data.Spell(aura.TriggerSpell); err == nil && found {
 				if damage, ok := creatureSpellDamage(trigger); ok && damage > 0 {
-					s.executeSpellDamage(ctx, aura.TargetGUID, aura.TriggerSpell, damage)
+					s.executeSpellDamage(ctx, aura.TargetGUID, aura.TriggerSpell, damage, 0)
 				}
 			}
 		}
@@ -4653,7 +4657,7 @@ func (s *session) channelTick() {
 	s.castMu.Unlock()
 
 	ctx := context.Background()
-	for _, effect := range spell.Effects {
+	for effectIndex, effect := range spell.Effects {
 		if effect.Effect == 0 || effect.Effect == 6 && effect.Aura == 23 {
 			continue
 		}
@@ -4664,13 +4668,13 @@ func (s *session) channelTick() {
 		switch effect.Effect {
 		case 2, 87, 108, 17: // damage effects tick on the target
 			if targetGUID != 0 && targetGUID != s.playerGUID {
-				s.executeSpellDamage(ctx, targetGUID, spell.ID, amount)
+				s.executeSpellDamage(ctx, targetGUID, spell.ID, amount, effectIndex)
 			}
 		case 6, 10, 136, 105: // auras and heals tick on the target or caster
 			if targetGUID != 0 && targetGUID != s.playerGUID {
-				s.executeSpellDamage(ctx, targetGUID, spell.ID, amount)
+				s.executeSpellDamage(ctx, targetGUID, spell.ID, amount, effectIndex)
 			} else {
-				s.executeSpellHeal(ctx, s.playerGUID, spell.ID, amount)
+				s.executeSpellHeal(ctx, s.playerGUID, spell.ID, amount, effectIndex)
 			}
 		}
 	}
@@ -5037,7 +5041,7 @@ func (s *session) handleEffectResurrect(ctx context.Context, targetGUID uint64, 
 }
 
 
-func (s *session) handleEffectHealthLeech(ctx context.Context, spellID uint32, hitTargets []uint64, eff wotlk.SpellEffect) {
+func (s *session) handleEffectHealthLeech(ctx context.Context, spellID uint32, hitTargets []uint64, effIndex int, eff wotlk.SpellEffect) {
 	if s.playerGUID == 0 {
 		return
 	}
@@ -5050,7 +5054,7 @@ func (s *session) handleEffectHealthLeech(ctx context.Context, spellID uint32, h
 		if target == 0 || target == s.playerGUID {
 			continue
 		}
-		s.executeSpellDamage(ctx, target, spellID, damageAmount)
-		s.executeSpellHeal(ctx, s.playerGUID, spellID, damageAmount)
+		s.executeSpellDamage(ctx, target, spellID, damageAmount, effIndex)
+		s.executeSpellHeal(ctx, s.playerGUID, spellID, damageAmount, effIndex)
 	}
 }
