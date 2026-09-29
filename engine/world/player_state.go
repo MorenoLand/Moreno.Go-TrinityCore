@@ -4667,6 +4667,31 @@ func (s *session) handleAlterAppearance(ctx context.Context, payload []byte) boo
 		s.player.Skin = uint8(skinColor)
 	}
 
+	// Player::GetBarberShopCost (Player.cpp:24716): the barber charges by
+	// gtBarberShopCostBase.dbc at the player's level; a missing row is
+	// unaffordable (C++ returns 0xFFFFFFFF there, which then fails
+	// HasEnoughMoney).
+	cost := uint32(0xFFFFFFFF)
+	if s.server != nil && s.server.Data != nil {
+		if base, found, _ := s.server.Data.GtBarberShopCostBase(uint32(s.player.Level)); found {
+			cost = barberShopCost(s.player.HairStyle, s.player.HairColor, s.player.FacialStyle, s.player.Skin,
+				uint8(hair), uint8(color), uint8(facialHair), uint8(skinColor), base)
+		}
+	}
+
+	// WorldSession::HandleAlterAppearance (CharacterHandler.cpp:1314-1328):
+	// without enough money the change is refused and nothing is applied.
+	if s.player.Money < cost {
+		res := protocol.NewBuffer(4)
+		res.WriteU32(1) // BARBER_SHOP_RESULT_NO_MONEY (WorldSession.h:259)
+		_ = s.write(uint16(protocol.OpcodeSMSG_BARBER_SHOP_RESULT), res.Bytes(), true)
+		return true
+	}
+	s.player.Money -= cost
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+	}
+
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET hairStyle = ?, hairColor = ?, facialStyle = ?, skin = ? WHERE guid = ?",
 			s.player.HairStyle, s.player.HairColor, s.player.FacialStyle, s.player.Skin, s.playerGUID)
@@ -4676,8 +4701,34 @@ func (s *session) handleAlterAppearance(ctx context.Context, payload []byte) boo
 	res.WriteU32(0) // BARBER_SHOP_RESULT_SUCCESS
 	_ = s.write(uint16(protocol.OpcodeSMSG_BARBER_SHOP_RESULT), res.Bytes(), true)
 	s.updateAchievementCriteria(criteriaTypeVisitBarberShop, 0, 1)
-	s.updateAchievementCriteria(criteriaTypeGoldSpentAtBarber, 0, 1)
+	s.updateAchievementCriteria(criteriaTypeGoldSpentAtBarber, 0, cost)
 	s.sendPlayerUpdate()
 	s.debug("alter appearance applied", "account", s.accountName, "hair", hair, "color", color)
 	return true
+}
+
+// barberShopCost mirrors Player::GetBarberShopCost (Player.cpp:24716-24748):
+// full base price on a hairstyle change, half base on a hair-color change
+// (only when the hairstyle is unchanged), three quarters on facial-hair or
+// skin changes; no change at all costs nothing. newSkinID == 0 means the
+// client sent no skin entry (the C++ null newSkin), so the skin term is
+// skipped.
+func barberShopCost(curHair, curColor, curFacial, curSkin, newHair, newColor, newFacial, newSkinID uint8, base float32) uint32 {
+	if curHair == newHair && curColor == newColor && curFacial == newFacial && (newSkinID == 0 || newSkinID == curSkin) {
+		return 0
+	}
+	cost := float32(0)
+	if curHair != newHair {
+		cost += base
+	}
+	if curColor != newColor && curHair == newHair {
+		cost += base * 0.5
+	}
+	if curFacial != newFacial {
+		cost += base * 0.75
+	}
+	if newSkinID != 0 && curSkin != newSkinID {
+		cost += base * 0.75
+	}
+	return uint32(cost)
 }
