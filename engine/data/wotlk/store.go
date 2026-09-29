@@ -110,6 +110,8 @@ type SpellEffect struct {
 	ChainTargets       uint32
 	ItemType           uint32
 	PointsPerCombo     float32
+	ChainAmplitude     float32 // Spell.dbc fields 216-218 = EffectChainAmplitude (DBCStructure.h:1486)
+	BonusCoefficient   float32 // Spell.dbc fields 229-231 = EffectBonusCoefficient (DBCStructure.h:1492)
 }
 
 func (effect SpellEffect) CalcValue() int32 {
@@ -207,6 +209,8 @@ type Spell struct {
 	MaxTargetLevel        uint32 // Spell.dbc field 207 = MaxTargetLevel (DBCStructure.h:1479)
 	MaxTargets            uint32 // Spell.dbc field 212 = MaxTargets (DBCStructure.h:1483)
 	DefenseType           uint32 // Spell.dbc field 213 = DefenseType (DBCStructure.h:1484)
+	RuneCostID            uint32 // Spell.dbc field 226 = RuneCostID (DBCStructure.h:1490)
+	RequiredTotemCategory [2]uint32 // Spell.dbc fields 222-223 = RequiredTotemCategoryID (DBCStructure.h:1487)
 	StartRecoveryCategory uint32 // Spell.dbc field 210 = StartRecoveryCategory (DBCStructure.h:1480)
 	StartRecoveryTime     uint32 // Spell.dbc field 211 = StartRecoveryTime (DBCStructure.h:1481)
 	EquippedItemClass     int32  // Spell.dbc field 68 = EquippedItemClass (DBCStructure.h:1443), -1 = any
@@ -822,6 +826,9 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{207, &spell.MaxTargetLevel},        // Spell.dbc field 207 = MaxTargetLevel (DBCStructure.h:1479)
 		{212, &spell.MaxTargets},            // Spell.dbc field 212 = MaxTargets (DBCStructure.h:1483)
 		{213, &spell.DefenseType},           // Spell.dbc field 213 = DefenseType (DBCStructure.h:1484)
+		{226, &spell.RuneCostID},            // Spell.dbc field 226 = RuneCostID (DBCStructure.h:1490)
+		{222, &spell.RequiredTotemCategory[0]}, // Spell.dbc field 222 = RequiredTotemCategoryID[0] (DBCStructure.h:1487)
+		{223, &spell.RequiredTotemCategory[1]}, // Spell.dbc field 223 = RequiredTotemCategoryID[1] (DBCStructure.h:1487)
 		{205, &spell.StartRecoveryCategory}, // Spell.dbc field 205 = StartRecoveryCategory
 		{206, &spell.StartRecoveryTime},     // Spell.dbc field 206 = StartRecoveryTime
 	}
@@ -914,7 +921,15 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		if err != nil {
 			return Spell{}, false, err
 		}
-		spell.Effects[i] = SpellEffect{Effect: effect, BasePoints: basePoints, DieSides: dieSides, RealPointsPerLevel: realPointsPerLevel, Mechanic: effectMechanic, Aura: aura, AuraPeriod: auraPeriod, Amplitude: amplitude, ImplicitTargetA: implicitTargetA, ImplicitTargetB: implicitTargetB, RadiusIndex: radiusIndex, MiscValue: miscValue, MiscValueB: miscValueB, TriggerSpell: triggerSpell, ChainTargets: chainTargets, ItemType: itemType, PointsPerCombo: pointsPerCombo}
+		chainAmplitude, err := record.Float32(216 + i) // EffectChainAmplitude (DBCStructure.h:1486)
+		if err != nil {
+			return Spell{}, false, err
+		}
+		bonusCoefficient, err := record.Float32(229 + i) // EffectBonusCoefficient (DBCStructure.h:1492)
+		if err != nil {
+			return Spell{}, false, err
+		}
+		spell.Effects[i] = SpellEffect{Effect: effect, BasePoints: basePoints, DieSides: dieSides, RealPointsPerLevel: realPointsPerLevel, Mechanic: effectMechanic, Aura: aura, AuraPeriod: auraPeriod, Amplitude: amplitude, ImplicitTargetA: implicitTargetA, ImplicitTargetB: implicitTargetB, RadiusIndex: radiusIndex, MiscValue: miscValue, MiscValueB: miscValueB, TriggerSpell: triggerSpell, ChainTargets: chainTargets, ItemType: itemType, PointsPerCombo: pointsPerCombo, ChainAmplitude: chainAmplitude, BonusCoefficient: bonusCoefficient}
 	}
 	for i := range spell.Reagent {
 		reagent, err := record.Int32(52 + i) // Reagent, DBCStructure.h:1441 (52-59)
