@@ -54,6 +54,7 @@ const (
 	spellFailedConfused                  uint8 = 26  // SPELL_FAILED_CONFUSED (SharedDefines.h:1008)
 	spellFailedFleeing                   uint8 = 34  // SPELL_FAILED_FLEEING (SharedDefines.h:1016)
 	spellFailedCasterAuraState           uint8 = 22  // SPELL_FAILED_CASTER_AURASTATE (SharedDefines.h:1004)
+	spellFailedTargetAuraState           uint8 = 111 // SPELL_FAILED_TARGET_AURASTATE (SharedDefines.h:1093)
 
 	itemClassWeapon = 2
 	itemClassArmor  = 4
@@ -563,6 +564,20 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		targetGUID = target.UnitGUID
 	} else if s.selection != 0 {
 		targetGUID = s.selection
+	}
+
+	// Target aura spell requirements (SpellInfo::CheckTarget, SpellInfo.cpp:1769-1772):
+	// only checked when a unit target exists, like C++ m_targets.GetUnitTarget().
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if spell.TargetAuraSpell != 0 && targetGUID != 0 && !s.targetHasAura(ctx, targetGUID, spell.TargetAuraSpell) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "required target aura missing", "aura", spell.TargetAuraSpell)
+		return true
+	}
+	if spell.ExcludeTargetAuraSpell != 0 && targetGUID != 0 && s.targetHasAura(ctx, targetGUID, spell.ExcludeTargetAuraSpell) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded target aura present", "aura", spell.ExcludeTargetAuraSpell)
+		return true
 	}
 
 	// Auto-repeat toggle: if already repeating this spell on this target, toggle it off (TC SpellHandler.cpp:420-430)
@@ -3046,6 +3061,36 @@ func (s *session) hasAura(spellID uint32) bool {
 	}
 	_, ok := s.auras[spellID]
 	return ok
+}
+
+// targetHasAura reports whether the unit named by targetGUID currently has aura
+// auraSpell, for the target-side aura-spell requirement (SpellInfo::CheckTarget,
+// SpellInfo.cpp:1769-1772). Player targets resolve to their session's aura set;
+// creature targets consult the server creature aura maps.
+func (s *session) targetHasAura(ctx context.Context, targetGUID uint64, auraSpell uint32) bool {
+	if auraSpell == 0 || targetGUID == 0 {
+		return false
+	}
+	if s.player != nil && targetGUID == s.playerGUID {
+		return s.hasAura(auraSpell)
+	}
+	if s.server != nil {
+		if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil {
+			return targetSess.hasAura(auraSpell)
+		}
+		target, ok := s.getCombatTarget(ctx, targetGUID)
+		if ok {
+			key := creatureAuraKeyForTarget(target)
+			s.server.auraMu.Lock()
+			defer s.server.auraMu.Unlock()
+			if _, found := s.server.creatureAuras[key][auraSpell]; found {
+				return true
+			}
+			_, found := s.server.activeCreatureAuras[key][auraSpell]
+			return found
+		}
+	}
+	return false
 }
 
 func (s *session) clearOtherMountedAuras(spellID uint32) {

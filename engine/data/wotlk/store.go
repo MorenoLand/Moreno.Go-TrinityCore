@@ -185,6 +185,7 @@ type Spell struct {
 	CasterAuraSpell         uint32 // Spell.dbc field 24 = CasterAuraSpell (DBCStructure.h:1414)
 	TargetAuraSpell         uint32 // Spell.dbc field 25 = TargetAuraSpell (DBCStructure.h:1415)
 	ExcludeCasterAuraSpell  uint32 // Spell.dbc field 26 = ExcludeCasterAuraSpell (DBCStructure.h:1416)
+	ExcludeTargetAuraSpell  uint32 // Spell.dbc field 27 = ExcludeTargetAuraSpell (DBCStructure.h:1417)
 	CategoryRecoveryTime    uint32 // Spell.dbc field 30 = CategoryRecoveryTime (DBCStructure.h:1420)
 	SchoolMask            uint32
 	Targets               uint32
@@ -817,6 +818,7 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{24, &spell.CasterAuraSpell},      // Spell.dbc field 24 = CasterAuraSpell (DBCStructure.h:1414)
 		{25, &spell.TargetAuraSpell},      // Spell.dbc field 25 = TargetAuraSpell (DBCStructure.h:1415)
 		{26, &spell.ExcludeCasterAuraSpell}, // Spell.dbc field 26 = ExcludeCasterAuraSpell (DBCStructure.h:1416)
+		{27, &spell.ExcludeTargetAuraSpell}, // Spell.dbc field 27 = ExcludeTargetAuraSpell (DBCStructure.h:1417)
 		{30, &spell.CategoryRecoveryTime}, // Spell.dbc field 30 = CategoryRecoveryTime (DBCStructure.h:1420)
 		{31, &spell.InterruptFlags},     // DBCStructure.h:1421
 		{32, &spell.AuraInterruptFlags}, // DBCStructure.h:1422
