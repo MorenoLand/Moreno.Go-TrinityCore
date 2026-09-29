@@ -178,6 +178,7 @@ type Spell struct {
 	ProcTypeMask          uint32 // Spell.dbc field 34 = ProcTypeMask (DBCStructure.h:1424)
 	ProcChance            uint32 // Spell.dbc field 35 = ProcChance (DBCStructure.h:1425)
 	ManaPerSecond         uint32 // Spell.dbc field 44 = ManaPerSecond (DBCStructure.h:1435)
+	TargetCreatureType      uint32 // Spell.dbc field 17 = TargetCreatureType (DBCStructure.h:1407)
 	SchoolMask            uint32
 	Targets               uint32
 	FacingCasterFlags     uint32 // Spell.dbc field 19 = FacingCasterFlags (DBCStructure.h:1409)
@@ -796,6 +797,7 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{34, &spell.ProcTypeMask},        // Spell.dbc field 34 = ProcTypeMask (DBCStructure.h:1424)
 		{35, &spell.ProcChance},          // Spell.dbc field 35 = ProcChance (DBCStructure.h:1425)
 		{44, &spell.ManaPerSecond},       // Spell.dbc field 44 = ManaPerSecond (DBCStructure.h:1435)
+		{17, &spell.TargetCreatureType},  // Spell.dbc field 17 = TargetCreatureType (DBCStructure.h:1407)
 		{31, &spell.InterruptFlags},     // DBCStructure.h:1421
 		{32, &spell.AuraInterruptFlags}, // DBCStructure.h:1422
 		{33, &spell.ChannelInterrupt},
