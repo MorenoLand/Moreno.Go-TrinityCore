@@ -1679,7 +1679,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					} else if effectTarget != 0 && effectTarget != s.playerGUID && isHarmfulSpell(spell) {
 						auraTarget = effectTarget
 					}
-					s.applyAuraToTarget(effCtx, auraTarget, spell, eff, durationMs, periodMs, amount, schoolMask, castMerged)
+					s.applyAuraToTarget(effCtx, auraTarget, spell, eff, durationMs, periodMs, amount, schoolMask, castMerged, false)
 				}
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
 				s.applySelfResurrectEffect(spell)
@@ -2407,7 +2407,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			if schoolMask == 0 {
 				schoolMask = 1
 			}
-			s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged)
+			s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false)
 		} else if eff.Effect == 10 { // SPELL_EFFECT_HEAL
 			healAmount := uint32(eff.BasePoints + 1)
 			if healAmount == 0 && spellID == ProcSpellCrusader {
@@ -2433,7 +2433,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 
 	if !hasExplicitEffects {
 		eff := wotlk.SpellEffect{Effect: 6, Aura: 4}
-		s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, 0, 0, 1, nil)
+		s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, 0, 0, 1, nil, false)
 	}
 }
 
@@ -3393,6 +3393,9 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 		if existing.TickTimer != nil {
 			existing.TickTimer.Stop()
 		}
+		// Aura::UnregisterSingleTarget (SpellAuras.cpp:1210): the replaced
+		// aura leaves the caster's single-cast list.
+		s.server.unregisterSingleCastAura(existing)
 	}
 	var auraInterruptFlags uint32
 	var auraType uint32
@@ -3497,7 +3500,18 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 		})
 	}
 	s.activeAuras[spellID] = aura
+	// Unit::_AddAura single-target dance (Unit.cpp:3397-3420), like the
+	// applyAuraToTarget fresh-apply paths.
+	var scPurge []singleCastEntry
+	if s.server != nil && s.server.Data != nil {
+		if sp, found, _ := s.server.Data.Spell(spellID); found && spellIsSingleTarget(sp) {
+			scPurge = s.server.registerSingleCastAura(sp, aura)
+		}
+	}
 	s.castMu.Unlock()
+	for _, e := range scPurge {
+		s.expireSingleCastEntry(e)
+	}
 
 	if s.activeAuraHasEffect(aura, spellAuraModParryPercent) {
 		s.updatePlayerParryPercentage(s.player, s.player.Level)
@@ -3575,6 +3589,7 @@ func (s *session) removeAura(spellID uint32) {
 				aura.DRGroup = DiminishingNone
 			}
 			delete(s.activeAuras, spellID)
+			s.server.unregisterSingleCastAura(aura)
 		}
 	}
 	s.castMu.Unlock()
@@ -3942,6 +3957,163 @@ func (s *Server) singleTargetNoStackPurge(newSpell wotlk.Spell, newCasterGUID ui
 		purge = append(purge, rankPurgeTarget{spellID: id, slot: aura.Slot})
 	}
 	return purge
+}
+
+// singleCastEntry is one single-target aura registered on its caster,
+// mirroring an element of Unit::m_scAuras (Unit.h:1287-1288). The aura
+// pointer identifies the exact instance: removals verify it before expiring,
+// so a re-created aura with the same spell ID is never touched.
+type singleCastEntry struct {
+	aura *activeAura
+}
+
+// sameSingleCastTarget reports whether two registry entries live on the same
+// target: creature entries compare the full aura key, player entries the
+// target GUID.
+func sameSingleCastTarget(a, b *activeAura) bool {
+	if a.TargetKey.GUID != 0 || b.TargetKey.GUID != 0 {
+		return a.TargetKey == b.TargetKey
+	}
+	return a.TargetGUID == b.TargetGUID
+}
+
+// singleCastDanceLocked implements the single-target registration dance from
+// Unit::_AddAura (Unit.cpp:3397-3420): when register is non-nil the fresh
+// single-target aura is recorded on its caster's single-cast list
+// (Unit::m_scAuras), replacing any entry for the same target+spell. Either
+// way it returns the caster's other registered auras that are single-target
+// with the new spell (Aura::IsSingleTargetWith, SpellAuras.cpp:1187-1208) on
+// a different target — the cross-target dance. Same-target entries are left
+// alone: that case is owned by singleTargetNoStackPurge. The caller must hold
+// no aura locks; it removes the returned entries after unlocking via
+// expireSingleCastEntry. Caller holds s.singleCastMu.
+func (s *Server) singleCastDanceLocked(spell wotlk.Spell, register *activeAura, casterGUID uint64, exclude *activeAura) []singleCastEntry {
+	var kept []singleCastEntry
+	var purge []singleCastEntry
+	for _, e := range s.singleCastAuras[casterGUID] {
+		if e.aura == nil || e.aura == register || e.aura == exclude {
+			continue
+		}
+		if register != nil && sameSingleCastTarget(e.aura, register) {
+			// Same target: the new registration replaces a same-spell
+			// entry; a different-spell entry stays registered and is
+			// removed by the same-target purge (unregister cleans up).
+			if e.aura.SpellID == register.SpellID {
+				continue
+			}
+			kept = append(kept, e)
+			continue
+		}
+		if s.Data == nil {
+			kept = append(kept, e)
+			continue
+		}
+		exSpell, found, err := s.Data.Spell(e.aura.SpellID)
+		if err != nil || !found || !s.isSingleTargetWith(spell, exSpell) {
+			kept = append(kept, e)
+			continue
+		}
+		purge = append(purge, e)
+	}
+	if register != nil {
+		kept = append(kept, singleCastEntry{aura: register})
+	}
+	if len(kept) == 0 {
+		delete(s.singleCastAuras, casterGUID)
+	} else {
+		s.singleCastAuras[casterGUID] = kept
+	}
+	return purge
+}
+
+// registerSingleCastAura mirrors the registration half of Unit::_AddAura's
+// dance (Unit.cpp:3397-3420): a fresh single-target aura
+// (SpellInfo::IsSingleTarget, SpellInfo.cpp:1380-1395) is recorded on its
+// caster's single-cast list, and the caster's other single-target-with auras
+// on other targets are returned for removal. C++ gates on a non-null caster;
+// a zero caster GUID degrades to no registration.
+func (s *Server) registerSingleCastAura(spell wotlk.Spell, aura *activeAura) []singleCastEntry {
+	if s == nil || aura == nil || aura.CasterGUID == 0 {
+		return nil
+	}
+	s.singleCastMu.Lock()
+	defer s.singleCastMu.Unlock()
+	if s.singleCastAuras == nil {
+		s.singleCastAuras = make(map[uint64][]singleCastEntry)
+	}
+	return s.singleCastDanceLocked(spell, aura, aura.CasterGUID, nil)
+}
+
+// crossTargetSingleCastPurge runs only the purge half of the dance for a
+// caster without registering anything, excluding one aura instance. Used by
+// the spell-steal create path (below).
+func (s *Server) crossTargetSingleCastPurge(casterGUID uint64, spell wotlk.Spell, exclude *activeAura) []singleCastEntry {
+	if s == nil || casterGUID == 0 {
+		return nil
+	}
+	s.singleCastMu.Lock()
+	defer s.singleCastMu.Unlock()
+	return s.singleCastDanceLocked(spell, nil, casterGUID, exclude)
+}
+
+// unregisterSingleCastAura mirrors Aura::UnregisterSingleTarget
+// (SpellAuras.cpp:1210-1216): a removed aura leaves its caster's single-cast
+// list. No-op when the aura was never registered (DB-loaded auras,
+// steal-created auras, non-single-target spells).
+func (s *Server) unregisterSingleCastAura(aura *activeAura) {
+	if s == nil || aura == nil || aura.CasterGUID == 0 {
+		return
+	}
+	s.singleCastMu.Lock()
+	defer s.singleCastMu.Unlock()
+	entries := s.singleCastAuras[aura.CasterGUID]
+	for i, e := range entries {
+		if e.aura == aura {
+			entries[i] = entries[len(entries)-1]
+			entries = entries[:len(entries)-1]
+			break
+		}
+	}
+	if len(entries) == 0 {
+		delete(s.singleCastAuras, aura.CasterGUID)
+	} else {
+		s.singleCastAuras[aura.CasterGUID] = entries
+	}
+}
+
+// expireSingleCastEntry removes a cross-target dance purge entry, but only
+// when the registered aura instance is still the live one — mirroring the
+// (*itr) != aura pointer check in Unit::_AddAura's dance loop
+// (Unit.cpp:3409-3419). A re-created aura with the same spell ID is a
+// different pointer and is never touched.
+func (s *session) expireSingleCastEntry(e singleCastEntry) {
+	if s == nil || s.server == nil || e.aura == nil {
+		return
+	}
+	aura := e.aura
+	if aura.TargetKey.GUID != 0 {
+		key := aura.TargetKey
+		s.server.auraMu.Lock()
+		cur := s.server.activeCreatureAuras[key][aura.SpellID]
+		s.server.auraMu.Unlock()
+		if cur == aura {
+			s.expireCreatureAura(key, aura.SpellID, aura.Slot)
+		}
+		return
+	}
+	if aura.TargetGUID == 0 {
+		return
+	}
+	ts := s.server.findSessionByGUID(aura.TargetGUID)
+	if ts == nil {
+		return
+	}
+	ts.castMu.Lock()
+	cur := ts.activeAuras[aura.SpellID]
+	ts.castMu.Unlock()
+	if cur == aura {
+		ts.expirePlayerAura(aura.SpellID)
+	}
 }
 
 // rankChainPeriodicStacksForDiffCasters mirrors the periodic-aura exemption
@@ -4535,7 +4707,7 @@ func isExistingAreaAuraOfTarget(aura *activeAura, exSpell wotlk.Spell, targetGUI
 	return false
 }
 
-func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}) {
+func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}, skipSingleCastReg bool) {
 	if s.player == nil {
 		return
 	}
@@ -4827,6 +4999,14 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			}
 		}
 		targetSess.activeAuras[spell.ID] = aura
+		// Unit::_AddAura single-target dance (Unit.cpp:3397-3420): a fresh
+		// single-target aura registers on its caster's single-cast list and
+		// purges the caster's other single-target-with auras on other
+		// targets. Steal-created auras skip registration (Unit.cpp:4028).
+		var scPurge []singleCastEntry
+		if !skipSingleCastReg && spellIsSingleTarget(spell) {
+			scPurge = s.server.registerSingleCastAura(spell, aura)
+		}
 		// Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640): the fresh
 		// aura purges auras of other spells it can't stack with — the
 		// rank-chain term (Aura::CanStackWith, SpellAuras.cpp:1994-2004),
@@ -4843,6 +5023,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		targetSess.castMu.Unlock()
 		for _, purgeID := range purgeIDs {
 			targetSess.expirePlayerAura(purgeID.spellID)
+		}
+		for _, e := range scPurge {
+			s.expireSingleCastEntry(e)
 		}
 		if eff.Aura == spellAuraModParryPercent {
 			targetSess.updatePlayerParryPercentage(targetSess.player, targetSess.player.Level)
@@ -5087,6 +5270,14 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		RemainingCharges:  uint8(spell.ProcCharges),
 	}
 	s.server.activeCreatureAuras[targetKey][spell.ID] = aura
+	// Unit::_AddAura single-target dance (Unit.cpp:3397-3420): a fresh
+	// single-target aura registers on its caster's single-cast list and
+	// purges the caster's other single-target-with auras on other targets.
+	// Steal-created auras skip registration (Unit.cpp:4028).
+	var scPurge []singleCastEntry
+	if !skipSingleCastReg && spellIsSingleTarget(spell) {
+		scPurge = s.server.registerSingleCastAura(spell, aura)
+	}
 	// Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640): the fresh aura
 	// purges auras of other spells it can't stack with — the rank-chain
 	// term (Aura::CanStackWith, SpellAuras.cpp:1994-2004), the spell-group
@@ -5102,6 +5293,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	s.server.auraMu.Unlock()
 	for _, p := range purge {
 		s.expireCreatureAura(targetKey, p.spellID, p.slot)
+	}
+	for _, e := range scPurge {
+		s.expireSingleCastEntry(e)
 	}
 	if eff.Aura == spellAuraCharm {
 		spells, reactState, commandState, controlled := s.server.charmCreature(ctx, targetKey, s.playerGUID, s.player.Race)
@@ -5321,6 +5515,7 @@ func (ts *session) expirePlayerAura(spellID uint32) {
 				aura.TickTimer.Stop()
 			}
 			delete(ts.activeAuras, spellID)
+			ts.server.unregisterSingleCastAura(aura)
 		}
 	}
 	ts.castMu.Unlock()
@@ -5529,6 +5724,7 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 					aura.TickTimer.Stop()
 				}
 				delete(auras, spellID)
+				s.server.unregisterSingleCastAura(aura)
 			}
 		}
 	}
@@ -5572,6 +5768,7 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 					aura.TickTimer.Stop()
 				}
 				delete(auras, spellID)
+				s.unregisterSingleCastAura(aura)
 			}
 		}
 	}

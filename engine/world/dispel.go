@@ -663,7 +663,7 @@ func (s *session) handleEffectDispel(ctx context.Context, targetGUID uint64, spe
 					Effect: 6,  // SPELL_EFFECT_APPLY_AURA
 					Aura:   18, // SPELL_AURA_MOD_SILENCE
 				}
-				s.applyAuraToTarget(ctx, s.playerGUID, silenceSpell, silenceEff, 5000, 0, 0, 32, nil)
+				s.applyAuraToTarget(ctx, s.playerGUID, silenceSpell, silenceEff, 5000, 0, 0, 32, nil, false)
 			}
 
 			// Vampiric Touch: deals 2 * tick damage (cand.Amount * 2) to the dispeller (spell 64085).
@@ -703,36 +703,41 @@ func (s *session) handleEffectDispel(ctx context.Context, targetGUID uint64, spe
 // stolenBuff carries a successfully stolen buff from the roll loop to the
 // stealer-side apply: the candidate plus the victim aura's remaining
 // duration and charge count captured before the steal decrement (C++ reads
-// aura->GetDuration()/GetCharges() before mutating, Unit.cpp:3999/4032).
+// aura->GetDuration()/GetCharges() before mutating, Unit.cpp:3999/4032),
+// plus the victim aura's caster GUID and instance pointer for the
+// single-target steal dance (Unit.cpp:4015-4042).
 type stolenBuff struct {
-	candidate   dispelCandidate
-	remainingMs uint32
-	charges     uint8
-	stealCharge bool
+	candidate        dispelCandidate
+	remainingMs      uint32
+	charges          uint8
+	stealCharge      bool
+	victimCasterGUID uint64
+	victimAura       *activeAura
 }
 
 // stealVictimState reads the victim aura's current remaining duration and
 // charge count; degrades to the candidate's recorded duration when the aura
-// is gone.
-func (s *session) stealVictimState(targetSess *session, targetGUID uint64, isTargetPlayer bool, cand dispelCandidate) (uint32, uint8) {
+// is gone. Also returns the aura's caster GUID and instance pointer for the
+// single-target steal dance.
+func (s *session) stealVictimState(targetSess *session, targetGUID uint64, isTargetPlayer bool, cand dispelCandidate) (uint32, uint8, uint64, *activeAura) {
 	if isTargetPlayer && targetSess != nil {
 		targetSess.castMu.Lock()
 		defer targetSess.castMu.Unlock()
 		if aura := targetSess.activeAuras[cand.SpellID]; aura != nil && !aura.Stopped {
 			advanceAuraDuration(aura, time.Now())
-			return aura.RemainingMs, aura.RemainingCharges
+			return aura.RemainingMs, aura.RemainingCharges, aura.CasterGUID, aura
 		}
-		return cand.DurationMs, 0
+		return cand.DurationMs, 0, 0, nil
 	}
 	if s.server != nil && s.player != nil {
 		key := creatureAuraKeyForPlayer(*s.player, targetGUID)
 		s.server.auraMu.Lock()
 		defer s.server.auraMu.Unlock()
 		if aura := s.server.activeCreatureAuras[key][cand.SpellID]; aura != nil && !aura.Stopped {
-			return aura.RemainingMs, aura.RemainingCharges
+			return aura.RemainingMs, aura.RemainingCharges, aura.CasterGUID, aura
 		}
 	}
-	return cand.DurationMs, 0
+	return cand.DurationMs, 0, 0, nil
 }
 
 // mergeStolenAura mirrors the stealer-side merge in
@@ -875,8 +880,8 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 					stealCharge = sp.AttributesEx7&spellAttr7DispelCharges != 0
 				}
 			}
-			remaining, charges := s.stealVictimState(targetSess, targetGUID, isTargetPlayer, cand)
-			stolen = append(stolen, stolenBuff{candidate: cand, remainingMs: remaining, charges: charges, stealCharge: stealCharge})
+			remaining, charges, victimCasterGUID, victimAura := s.stealVictimState(targetSess, targetGUID, isTargetPlayer, cand)
+			stolen = append(stolen, stolenBuff{candidate: cand, remainingMs: remaining, charges: charges, stealCharge: stealCharge, victimCasterGUID: victimCasterGUID, victimAura: victimAura})
 			// C++ RemoveAurasDueToSpellBySteal (Unit.cpp:4046-4049): a
 			// successful steal removes one charge
 			// (SPELL_ATTR7_DISPEL_CHARGES) or one stack
@@ -915,12 +920,27 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 		if s.mergeStolenAura(cand.SpellID, stSpell, st.stealCharge, dur) {
 			continue
 		}
+		// Unit::RemoveAurasDueToSpellBySteal single-target dance
+		// (Unit.cpp:4015-4042): the _AddAura dance runs on the stolen aura
+		// with the ORIGINAL caster, purging that caster's other
+		// single-target-with auras — but the created aura itself must not
+		// stay single-target, "so stealer won't loose it on recast". The
+		// victim aura was already unregistered from the original caster's
+		// list before the dance in C++; here it is excluded by pointer when
+		// it survived the steal decrement (a fully removed victim aura
+		// unregistered itself on expiry). The stolen aura is created with
+		// single-target registration skipped.
+		if spellIsSingleTarget(stSpell) && st.victimCasterGUID != 0 {
+			for _, e := range s.server.crossTargetSingleCastPurge(st.victimCasterGUID, stSpell, st.victimAura) {
+				s.expireSingleCastEntry(e)
+			}
+		}
 		eff := wotlk.SpellEffect{
 			Effect:     6,
 			Aura:       cand.AuraType,
 			BasePoints: int32(cand.Amount) - 1,
 		}
-		s.applyAuraToTarget(ctx, s.playerGUID, stSpell, eff, dur, cand.PeriodMs, cand.Amount, cand.SchoolMask, nil)
+		s.applyAuraToTarget(ctx, s.playerGUID, stSpell, eff, dur, cand.PeriodMs, cand.Amount, cand.SchoolMask, nil, true)
 		// C++ SetLoadedState charges arg (Unit.cpp:4032): 1 for
 		// ATTR7_DISPEL_CHARGES auras, the victim's charge count otherwise.
 		wantCharges := st.charges
