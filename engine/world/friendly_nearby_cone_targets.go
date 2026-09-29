@@ -176,8 +176,8 @@ func (s *session) friendlyScanCandidates(ctx context.Context, cx, cy, radius flo
 // not combat-disabled, non-hostile. GM exclusion, visibility and vehicle terms
 // have no Go infra (same noted gap as the area path), and totem units are not
 // tracked in Go (TARGET_CHECK_* all reject totems in C++).
-func (s *session) friendlyAssistOK(c friendlyCandidate, caster playerPos, allyOf func(faction uint32) bool) bool {
-	if c.mapID != caster.Map || c.instanceID != caster.InstanceID || c.health == 0 || creatureCombatDisabled(c.unitFlags, c.flagsExtra) {
+func (s *session) friendlyAssistOK(spell wotlk.Spell, c friendlyCandidate, caster playerPos, allyOf func(faction uint32) bool) bool {
+	if c.mapID != caster.Map || c.instanceID != caster.InstanceID || c.health == 0 || spellTargetUnitBlocked(spell, c.unitFlags, c.flagsExtra) {
 		return false
 	}
 	if c.isPlayer {
@@ -357,7 +357,7 @@ func (s *session) spellFriendlyNearbyTarget(ctx context.Context, spell wotlk.Spe
 	bestGUID := uint64(0)
 	bestDist := maxRange
 	s.friendlyScanCandidates(ctx, s.player.X, s.player.Y, float32(maxRange), func(c friendlyCandidate) {
-		if !s.friendlyAssistOK(c, caster, allyOf) {
+		if !s.friendlyAssistOK(spell, c, caster, allyOf) {
 			return
 		}
 		_, wantAlly := checks[friendlyCheckAlly]
@@ -419,7 +419,7 @@ func (s *session) spellFriendlyConeTargets(ctx context.Context, spell wotlk.Spel
 	targets := make([]uint64, 0)
 	seen := make(map[uint64]struct{})
 	s.friendlyScanCandidates(ctx, s.player.X, s.player.Y, radius, func(c friendlyCandidate) {
-		if c.guid == 0 || c.mapID != caster.Map || c.instanceID != caster.InstanceID || c.health == 0 || creatureCombatDisabled(c.unitFlags, c.flagsExtra) {
+		if c.guid == 0 || c.mapID != caster.Map || c.instanceID != caster.InstanceID || c.health == 0 || spellTargetUnitBlocked(spell, c.unitFlags, c.flagsExtra) {
 			return
 		}
 		dx, dy := float64(c.x-s.player.X), float64(c.y-s.player.Y)
@@ -433,7 +433,7 @@ func (s *session) spellFriendlyConeTargets(ctx context.Context, spell wotlk.Spel
 		_, wantEntry := checks[friendlyCheckEntry]
 		pass := wantEntry
 		if !pass && wantAlly {
-			pass = s.friendlyAssistOK(c, caster, allyOf)
+			pass = s.friendlyAssistOK(spell, c, caster, allyOf)
 		}
 		if !pass {
 			return
@@ -523,7 +523,7 @@ func (s *session) spellFriendlyRefCenteredAreaTargets(ctx context.Context, spell
 			if c.guid == 0 || c.mapID != caster.Map || c.instanceID != caster.InstanceID {
 				return
 			}
-			if !s.friendlyAssistOK(c, caster, allyOf) {
+			if !s.friendlyAssistOK(spell, c, caster, allyOf) {
 				return
 			}
 			switch sel.check {

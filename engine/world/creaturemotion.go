@@ -1180,6 +1180,34 @@ func creatureCombatDisabled(unitFlags, flagsExtra uint32) bool {
 	return unitFlags&(0x00000002|0x02000000|0x00000100) != 0 || flagsExtra&(0x00000080|0x00002000) != 0
 }
 
+// spellTargetUnitBlocked mirrors creatureCombatDisabled for spell target
+// selection with the two ATTR6 bypasses (SharedDefines.h:637/658). C++ gates
+// exactly two of the bundled terms inside
+// Unit::IsValidAttackTarget/IsValidAssistTarget (Object.cpp:2972/3127/2991/3134),
+// which is where implicit selection reaches them (Spell.cpp:8341/8345; the
+// SpellInfo.cpp:1723 CheckTarget line is commented out, so CheckTarget
+// itself never rejects these flags):
+//   - UNIT_FLAG_NOT_SELECTABLE (0x02000000) is skipped when the spell carries
+//     SPELL_ATTR6_CAN_TARGET_UNTARGETABLE (0x01000000).
+//   - UNIT_FLAG_IMMUNE_TO_PC (0x100) is skipped for positive spells carrying
+//     SPELL_ATTR6_ASSIST_IGNORE_IMMUNE_FLAG (0x8); negative spells always
+//     reject. (The IsImmuneToNPC half has no Go rejection to bypass, and the
+//     PvC type_flags assist gate at Object.cpp:3179 has no Go infra), and
+//     the remaining terms (NON_ATTACKABLE, TRIGGER, NO_COMBAT) have no ATTR6
+//     bypass in C++ and always reject.
+func spellTargetUnitBlocked(spell wotlk.Spell, unitFlags, flagsExtra uint32) bool {
+	if unitFlags&0x00000002 != 0 || flagsExtra&(0x00000080|0x00002000) != 0 {
+		return true
+	}
+	if unitFlags&0x02000000 != 0 && spell.AttributesEx6&spellAttr6CanTargetUntargetable == 0 {
+		return true
+	}
+	if unitFlags&0x00000100 != 0 && (isHarmfulSpell(spell) || spell.AttributesEx6&spellAttr6AssistIgnoreImmuneFlag == 0) {
+		return true
+	}
+	return false
+}
+
 func playerReputationMap(values []playerReputation) map[uint32]playerReputation {
 	if len(values) == 0 {
 		return nil

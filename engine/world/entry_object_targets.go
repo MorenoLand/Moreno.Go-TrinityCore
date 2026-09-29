@@ -325,7 +325,7 @@ func (s *session) spellEntryNearbyDestPosition(ctx context.Context, spell wotlk.
 			if c.health == 0 && !allowDead {
 				return
 			}
-			if creatureCombatDisabled(c.unitFlags, c.flagsExtra) {
+			if spellTargetUnitBlocked(spell, c.unitFlags, c.flagsExtra) {
 				return
 			}
 			spawnLow := uint32(0)

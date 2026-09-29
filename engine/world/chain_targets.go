@@ -86,7 +86,7 @@ func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell
 	if isBouncingFar {
 		searchRadius *= float32(jumps)
 	}
-	candidates := s.chainCandidates(ctx, primary, searchRadius, isChainHeal, primaryTargetGUID)
+	candidates := s.chainCandidates(ctx, spell, primary, searchRadius, isChainHeal, primaryTargetGUID)
 	if !isBouncingFar {
 		// Spell.cpp:1931-1940: non-bouncing chains only jump in front of the caster
 		kept := candidates[:0]
@@ -141,7 +141,7 @@ func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell
 // TARGET_CHECK_ENEMY ~= Unit::IsValidAttackTarget, TARGET_CHECK_ALLY ~=
 // Unit::IsValidAssistTarget. Range uses the C++ cylinder test
 // (IsWithinDist2d + |dz| <= range).
-func (s *session) chainCandidates(ctx context.Context, primary combatTarget, radius float32, isChainHeal bool, excludeGUID uint64) []chainCandidate {
+func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primary combatTarget, radius float32, isChainHeal bool, excludeGUID uint64) []chainCandidate {
 	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	candidates := make([]chainCandidate, 0, 16)
 	seen := make(map[uint64]struct{})
@@ -152,7 +152,7 @@ func (s *session) chainCandidates(ctx context.Context, primary combatTarget, rad
 		if mapID != primary.Map || instanceID != primary.InstanceID || health == 0 {
 			return
 		}
-		if creatureCombatDisabled(unitFlags, flagsExtra) {
+		if spellTargetUnitBlocked(spell, unitFlags, flagsExtra) {
 			return
 		}
 		dx, dy := float64(x-primary.X), float64(y-primary.Y)
