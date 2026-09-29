@@ -1,102 +1,88 @@
 package world
 
 import (
-	"math"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
 
-// isOffGCDSpell identifies spells that ignore and bypass the Global Cooldown (GCD).
-// Mirrors TrinityCore SpellHistory::HasGlobalCooldown (SpellHistory.cpp:60-90).
-func (s *session) isOffGCDSpell(spell wotlk.Spell) bool {
-	// Auto-repeat spells never trigger or obey GCD
-	if spell.ID == 75 || spell.ID == 5019 || (spell.AttributesEx1&0x20 != 0) {
-		return true
-	}
+// C++ owners: CanHaveGlobalCooldown (Spell.cpp:8215-8222),
+// Spell::TriggerGlobalCooldown (Spell.cpp:8232-8261),
+// Spell::CancelGlobalCooldown (Spell.cpp:8264-8277),
+// SpellHistory::HasGlobalCooldown/AddGlobalCooldown/CancelGlobalCooldown
+// (SpellHistory.cpp:585-600), GCDLimits (Spell.cpp:8209-8213),
+// SpellDmgClass (SharedDefines.h:1574-1582).
 
-	// Primary off-GCD abilities in WoW 3.3.5:
-	switch spell.ID {
-	// Interrupts
-	case 1766, // Kick (Rogue)
-		6552,  // Pummel (Warrior)
-		2139,  // Counterspell (Mage)
-		72,    // Shield Bash (Warrior)
-		57994, // Wind Shear (Shaman)
-		47528, // Mind Freeze (Death Knight)
-		19244: // Spell Lock (Warlock Felhunter)
-		return true
+const (
+	// enum GCDLimits { MIN_GCD = 1000, MAX_GCD = 1500 } (Spell.cpp:8209-8213).
+	gcdMinMs = int64(1000)
+	gcdMaxMs = int64(1500)
+	// Only this StartRecoveryCategory with this StartRecoveryTime gets
+	// haste scaling (Spell.cpp:8249-8258).
+	gcdHasteRecoveryCategory = uint32(133)
+	gcdHasteRecoveryTime     = uint32(1500)
+)
 
-	// Defensive cooldowns
-	case 22812, // Barkskin (Druid)
-		61336, // Survival Instincts (Druid)
-		19263, // Deterrence (Hunter)
-		48707: // Anti-Magic Shell (Death Knight)
-		return true
-
-	// Instant offensive/utility cooldowns
-	case 11958, // Cold Snap (Mage)
-		12043, // Presence of Mind (Mage)
-		16188, // Nature's Swiftness (Shaman)
-		17116, // Nature's Swiftness (Druid)
-		20572, // Blood Fury (Orc racial)
-		26297, // Berserking (Troll racial)
-		36554: // Shadowstep (Rogue)
-		return true
-	}
-
-	// In DBC: if StartRecoveryCategory is explicitly 0, spell is off-GCD
-	if spell.StartRecoveryCategory == 0 && spell.StartRecoveryTime == 0 && spell.ID != 0 {
-		return true
-	}
-
-	return false
-}
-
-// getGCDDuration resolves the duration of the Global Cooldown in milliseconds for this player.
-// Base GCD is 1500ms for casters (reduced by spell haste to 1000ms minimum floor)
-// and 1000ms flat for Rogues.
-// Mirrors TrinityCore SpellHistory::TriggerGlobalCooldown (SpellHistory.cpp:95-120).
-func (s *session) getGCDDuration(spell wotlk.Spell) int64 {
-	base := int64(1500)
-	if spell.StartRecoveryTime > 0 {
-		base = int64(spell.StartRecoveryTime)
-	}
-
-	// Rogues have a 1.0s base GCD
-	if s.player != nil && s.player.Class == 4 {
-		return 1000
-	}
-
-	// Casters: 1500ms reduced by spell haste down to 1000ms minimum floor
-	hastePct := s.getSpellHastePct()
-	if hastePct > 0 {
-		hasted := float64(base) / (1.0 + hastePct/100.0)
-		base = int64(math.Round(hasted))
-		if base < 1000 {
-			base = 1000
-		}
-	}
-	return base
-}
-
-// triggerGlobalCooldown initiates the Global Cooldown on the session.
+// triggerGlobalCooldown mirrors Spell::TriggerGlobalCooldown.
+// C++ keys the cooldown by StartRecoveryCategory (AddGlobalCooldown), so the
+// session stores per-category expiry times instead of a single GCD slot.
 func (s *session) triggerGlobalCooldown(spell wotlk.Spell) {
-	if s.isOffGCDSpell(spell) {
+	// CanHaveGlobalCooldown is vacuous in Go: only player sessions cast.
+	// CHEAT_COOLDOWN and SPELLMOD_GLOBAL_COOLDOWN have no Go infra (noted gaps).
+	if spell.StartRecoveryCategory == 0 {
 		return
 	}
-	gcdDuration := s.getGCDDuration(spell)
+
+	gcd := int64(spell.StartRecoveryTime)
+
+	// Apply haste rating (Spell.cpp:8249-8258): only category 133 / 1500ms
+	// spells, excluding melee and ranged damage classes and REQ_AMMO/ABILITY
+	// spells. C++ truncates (int32(float(gcd) * UNIT_MOD_CAST_SPEED)) then
+	// clamps to [MIN_GCD, MAX_GCD] via RoundToInterval (Util.h:84-87).
+	if spell.StartRecoveryCategory == gcdHasteRecoveryCategory &&
+		spell.StartRecoveryTime == gcdHasteRecoveryTime &&
+		spell.DefenseType != 2 && spell.DefenseType != 3 && // SPELL_DAMAGE_CLASS_MELEE / RANGED
+		spell.Attributes&spellAttr0ReqAmmo == 0 &&
+		spell.Attributes&spellAttr0Ability == 0 {
+		speed := 1.0 / (1.0 + s.getSpellHastePct()/100.0) // UNIT_MOD_CAST_SPEED
+		gcd = int64(float64(gcd) * speed)
+		if gcd < gcdMinMs {
+			gcd = gcdMinMs
+		}
+		if gcd > gcdMaxMs {
+			gcd = gcdMaxMs
+		}
+	}
+
+	if gcd == 0 {
+		return
+	}
 	s.castMu.Lock()
-	s.gcdEnd = time.Now().UnixMilli() + gcdDuration
+	if s.gcdCooldowns == nil {
+		s.gcdCooldowns = make(map[uint32]int64)
+	}
+	s.gcdCooldowns[spell.StartRecoveryCategory] = time.Now().UnixMilli() + gcd
 	s.castMu.Unlock()
 }
 
-// isGCDActive checks whether the Global Cooldown is currently active and blocks the given spell.
+// isGCDActive mirrors Spell::HasGlobalCooldown (SpellHistory::HasGlobalCooldown):
+// the lookup is keyed by the spell's own StartRecoveryCategory.
 func (s *session) isGCDActive(spell wotlk.Spell) bool {
-	if s.isOffGCDSpell(spell) {
-		return false
-	}
 	s.castMu.Lock()
 	defer s.castMu.Unlock()
-	return s.gcdEnd > time.Now().UnixMilli()
+	end, ok := s.gcdCooldowns[spell.StartRecoveryCategory]
+	return ok && end > time.Now().UnixMilli()
+}
+
+// cancelGlobalCooldown mirrors Spell::CancelGlobalCooldown (Spell.cpp:8264-8277):
+// clearing the category entry of the spell whose cast was interrupted, only
+// when the interrupted spell actually triggered a GCD (StartRecoveryTime != 0).
+func (s *session) cancelGlobalCooldown(spellID uint32) {
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found || spell.StartRecoveryTime == 0 || spell.StartRecoveryCategory == 0 {
+		return
+	}
+	s.castMu.Lock()
+	delete(s.gcdCooldowns, spell.StartRecoveryCategory)
+	s.castMu.Unlock()
 }

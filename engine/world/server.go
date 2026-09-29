@@ -309,7 +309,7 @@ type session struct {
 	runes                        *dkRuneState
 	castMu                       sync.Mutex
 	schoolLockouts               map[uint32]int64
-	gcdEnd                       int64 // Unix millisecond timestamp when Global Cooldown expires
+	gcdCooldowns                 map[uint32]int64 // per-category Global Cooldown expiry Unix-ms (SpellHistory::_globalCooldowns)
 	pendingBindInstanceID        uint64
 	pendingBindMapID             uint32
 	pendingBindDiff              uint32

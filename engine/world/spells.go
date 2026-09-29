@@ -30,16 +30,16 @@ const (
 	spellAttr1NotBreakStealth uint32 = 0x00000020 // SPELL_ATTR1_NOT_BREAK_STEALTH (SharedDefines.h:454)
 
 	spellAttr0Ability                     uint32 = 0x00000010 // SPELL_ATTR0_ABILITY (SharedDefines.h:416)
-	spellAttr0ReqAmmo                      uint32 = 0x00000002 // SPELL_ATTR0_REQ_AMMO (SharedDefines.h:413)
-	spellAttr0Tradespell                    uint32 = 0x00000020 // SPELL_ATTR0_TRADESPELL (SharedDefines.h:417)
-	spellAttr3NoDoneBonus                   uint32 = 0x20000000 // SPELL_ATTR3_NO_DONE_BONUS (SharedDefines.h:552) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
+	spellAttr0ReqAmmo                     uint32 = 0x00000002 // SPELL_ATTR0_REQ_AMMO (SharedDefines.h:413)
+	spellAttr0Tradespell                  uint32 = 0x00000020 // SPELL_ATTR0_TRADESPELL (SharedDefines.h:417)
+	spellAttr3NoDoneBonus                 uint32 = 0x20000000 // SPELL_ATTR3_NO_DONE_BONUS (SharedDefines.h:552) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 	spellAttr0UnaffectedByInvulnerability uint32 = 0x20000000 // SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY (SharedDefines.h:441)
-	spellAttr0NotShapeshift                uint32 = 0x00010000 // SPELL_ATTR0_NOT_SHAPESHIFT (SharedDefines.h:428)
-	spellAttr2NotNeedShapeshift            uint32 = 0x00080000 // SPELL_ATTR2_NOT_NEED_SHAPESHIFT (SharedDefines.h:505) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
+	spellAttr0NotShapeshift               uint32 = 0x00010000 // SPELL_ATTR0_NOT_SHAPESHIFT (SharedDefines.h:428)
+	spellAttr2NotNeedShapeshift           uint32 = 0x00080000 // SPELL_ATTR2_NOT_NEED_SHAPESHIFT (SharedDefines.h:505) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr1CantBeReflected             uint32 = 0x00000080 // SPELL_ATTR1_CANT_BE_REFLECTED (SharedDefines.h:456)
-	spellAttr2CanTargetDead              uint32 = 0x00000001 // SPELL_ATTR2_CAN_TARGET_DEAD (SharedDefines.h:486) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
-	spellAttr2AutorepeatFlag             uint32 = 0x00000020 // SPELL_ATTR2_AUTOREPEAT_FLAG (SharedDefines.h:491) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
-	spellAttr2NotResetAutoActions       uint32 = 0x00020000 // SPELL_ATTR2_NOT_RESET_AUTO_ACTIONS (SharedDefines.h:503) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
+	spellAttr2CanTargetDead               uint32 = 0x00000001 // SPELL_ATTR2_CAN_TARGET_DEAD (SharedDefines.h:486) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
+	spellAttr2AutorepeatFlag              uint32 = 0x00000020 // SPELL_ATTR2_AUTOREPEAT_FLAG (SharedDefines.h:491) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
+	spellAttr2NotResetAutoActions         uint32 = 0x00020000 // SPELL_ATTR2_NOT_RESET_AUTO_ACTIONS (SharedDefines.h:503) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 
 	targetFlagCorpseEnemy uint32 = 0x00000200 // TARGET_FLAG_CORPSE_ENEMY (SpellInfo.h:57)
 	targetFlagUnitDead    uint32 = 0x00000400 // TARGET_FLAG_UNIT_DEAD (SpellInfo.h:58)
@@ -47,12 +47,13 @@ const (
 
 	spellDamageClassMagic uint32 = 1 // SPELL_DAMAGE_CLASS_MAGIC (SharedDefines.h:1580)
 
-	spellAttr0StopAttackTarget uint32 = 0x00100000 // SPELL_ATTR0_STOP_ATTACK_TARGET (SharedDefines.h:432)
+	spellAttr0StopAttackTarget    uint32 = 0x00100000 // SPELL_ATTR0_STOP_ATTACK_TARGET (SharedDefines.h:432)
+	spellAttr0DisabledWhileActive uint32 = 0x02000000 // SPELL_ATTR0_DISABLED_WHILE_ACTIVE (SharedDefines.h:437)
 
-	spellFailedEquippedItemClass         uint8 = 29 // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
-	spellFailedEquippedItemClassMainhand uint8 = 30 // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
-	spellFailedEquippedItemClassOffhand  uint8 = 31 // SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND (SharedDefines.h:1013)
-	spellFailedNotInFront                uint8 = 61 // SPELL_FAILED_NOT_INFRONT (SharedDefines.h:1042)
+	spellFailedEquippedItemClass         uint8 = 29  // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
+	spellFailedEquippedItemClassMainhand uint8 = 30  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
+	spellFailedEquippedItemClassOffhand  uint8 = 31  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND (SharedDefines.h:1013)
+	spellFailedNotInFront                uint8 = 61  // SPELL_FAILED_NOT_INFRONT (SharedDefines.h:1042)
 	spellFailedBadTargets                uint8 = 12  // SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992)
 	spellFailedTargetIsPlayer            uint8 = 117 // SPELL_FAILED_TARGET_IS_PLAYER (SharedDefines.h:1099)
 	spellFailedAffectingCombat           uint8 = 1
@@ -60,6 +61,7 @@ const (
 	spellFailedNoPet                     uint8 = 84
 	spellFailedWrongPetFood              uint8 = 135
 	spellFailedNotReady                  uint8 = 67  // SPELL_FAILED_NOT_READY (SharedDefines.h:1049)
+	spellFailedDontReport                uint8 = 27  // SPELL_FAILED_DONT_REPORT (SharedDefines.h:1009)
 	spellFailedSilenced                  uint8 = 104 // SPELL_FAILED_SILENCED (SharedDefines.h:1086)
 	spellFailedCasterDead                uint8 = 23  // SPELL_FAILED_CASTER_DEAD (SharedDefines.h:1003)
 	spellFailedNotFishable               uint8 = 58  // SPELL_FAILED_NOT_FISHABLE (SharedDefines.h:1040)
@@ -547,7 +549,13 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	if s.isGCDActive(spell) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
+		// Spell::CheckCast (Spell.cpp:5227-5228): DISABLED_WHILE_ACTIVE spells
+		// report DONT_REPORT instead of NOT_READY on GCD.
+		reason := spellFailedNotReady
+		if spell.Attributes&spellAttr0DisabledWhileActive != 0 {
+			reason = spellFailedDontReport
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, reason), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "global cooldown active")
 		return true
 	}
@@ -2455,8 +2463,8 @@ func (s *session) interruptCurrentCast() {
 		s.activeCast = nil
 		// Spell::cancel (Spell.cpp:3210-3225) calls CancelGlobalCooldown() when
 		// cancelled in SPELL_STATE_PREPARING.
-		s.gcdEnd = 0
 		s.castMu.Unlock()
+		s.cancelGlobalCooldown(spellID)
 
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedInterrupted), true)
 		s.sendInterrupted(castID, spellID, spellFailedInterrupted)
