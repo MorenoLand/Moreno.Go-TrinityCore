@@ -1193,11 +1193,18 @@ func creatureCombatDisabled(unitFlags, flagsExtra uint32) bool {
 //     SPELL_ATTR6_ASSIST_IGNORE_IMMUNE_FLAG (0x8); negative spells always
 //     reject. (The IsImmuneToNPC half has no Go rejection to bypass, and the
 //     PvC type_flags assist gate at Object.cpp:3179 has no Go infra), and
-//     the remaining terms (NON_ATTACKABLE, TRIGGER, NO_COMBAT) have no ATTR6
-//     bypass in C++ and always reject.
-func spellTargetUnitBlocked(spell wotlk.Spell, unitFlags, flagsExtra uint32) bool {
-	if unitFlags&0x00000002 != 0 || flagsExtra&(0x00000080|0x00002000) != 0 {
-		return true
+//
+// the remaining terms (NON_ATTACKABLE, TRIGGER, NO_COMBAT) have no ATTR6
+// bypass in C++.
+// assist selects the IsValidAssistTarget shape: the NON_ATTACKABLE /
+// CREATURE_FLAG_EXTRA_TRIGGER / CREATURE_FLAG_EXTRA_NO_COMBAT bundle only
+// rejects negative spells there (Object.cpp:3131), while IsValidAttackTarget
+// always rejects it (Object.cpp:2980).
+func spellTargetUnitBlocked(spell wotlk.Spell, unitFlags, flagsExtra uint32, assist bool) bool {
+	if !assist || isHarmfulSpell(spell) {
+		if unitFlags&0x00000002 != 0 || flagsExtra&(0x00000080|0x00002000) != 0 {
+			return true
+		}
 	}
 	if unitFlags&0x02000000 != 0 && spell.AttributesEx6&spellAttr6CanTargetUntargetable == 0 {
 		return true

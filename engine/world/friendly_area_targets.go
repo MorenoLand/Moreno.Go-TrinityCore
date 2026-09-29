@@ -165,7 +165,7 @@ func (s *session) spellFriendlyAreaTargets(ctx context.Context, spell wotlk.Spel
 	targets := make([]uint64, 0)
 	seen := make(map[uint64]struct{})
 	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, unitFlags, flagsExtra, health uint32, ally, party, raid bool) {
-		if guid == 0 || mapID != caster.Map || instanceID != caster.InstanceID || health == 0 || spellTargetUnitBlocked(spell, unitFlags, flagsExtra) {
+		if guid == 0 || mapID != caster.Map || instanceID != caster.InstanceID || health == 0 || spellTargetUnitBlocked(spell, unitFlags, flagsExtra, true) {
 			return
 		}
 		dx, dy := float64(x-centerX), float64(y-centerY)

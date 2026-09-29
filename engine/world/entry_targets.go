@@ -166,7 +166,7 @@ func (s *session) spellEntryNearbyTarget(ctx context.Context, spell wotlk.Spell,
 		if c.health == 0 && !allowDead {
 			return
 		}
-		if spellTargetUnitBlocked(spell, c.unitFlags, c.flagsExtra) {
+		if spellTargetUnitBlocked(spell, c.unitFlags, c.flagsExtra, false) {
 			return
 		}
 		spawnLow := uint32(0)

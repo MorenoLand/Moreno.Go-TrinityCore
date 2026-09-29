@@ -133,7 +133,7 @@ func (s *session) spellEntryAreaTargets(ctx context.Context, spell wotlk.Spell, 
 		if c.health == 0 && !allowDead {
 			return
 		}
-		if spellTargetUnitBlocked(spell, c.unitFlags, c.flagsExtra) {
+		if spellTargetUnitBlocked(spell, c.unitFlags, c.flagsExtra, false) {
 			return
 		}
 		dx, dy := float64(c.x-centerX), float64(c.y-centerY)

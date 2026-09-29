@@ -152,7 +152,7 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 		if mapID != primary.Map || instanceID != primary.InstanceID || health == 0 {
 			return
 		}
-		if spellTargetUnitBlocked(spell, unitFlags, flagsExtra) {
+		if spellTargetUnitBlocked(spell, unitFlags, flagsExtra, isChainHeal) {
 			return
 		}
 		dx, dy := float64(x-primary.X), float64(y-primary.Y)

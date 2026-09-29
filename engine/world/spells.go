@@ -248,7 +248,7 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 	targets := make([]uint64, 0)
 	seen := make(map[uint64]struct{})
 	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, faction, unitFlags, flagsExtra, health uint32) {
-		if mapID != player.Map || instanceID != player.InstanceID || health == 0 || spellTargetUnitBlocked(spell, unitFlags, flagsExtra) || distance3D(x, y, z, centerX, centerY, centerZ) > float64(radius) || !s.server.isHostileFaction(faction, player) {
+		if mapID != player.Map || instanceID != player.InstanceID || health == 0 || spellTargetUnitBlocked(spell, unitFlags, flagsExtra, false) || distance3D(x, y, z, centerX, centerY, centerZ) > float64(radius) || !s.server.isHostileFaction(faction, player) {
 			return
 		}
 		if cone && !hasInArc(s.player.Orientation, s.player.X, s.player.Y, x, y, math.Pi/2) {
@@ -1165,7 +1165,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// Spell::CheckCast routes the explicit unit target through
 	// SpellInfo::CheckExplicitTarget (Spell.cpp:5365, SpellInfo.cpp:1799),
 	// which applies the Unit::IsValidAttackTarget/IsValidAssistTarget flag
-	// gates (Object.cpp:2972/3127/2991/3134, bundled in spellTargetUnitBlocked)
+	// gates (Object.cpp:2972/3127/2991/3134, bundled in spellTargetUnitBlocked;
+	// the NON_ATTACKABLE/TRIGGER/NO_COMBAT bundle always rejects on the
+	// attack path but only for negative spells on the assist path,
+	// Object.cpp:2980/3131)
 	// and the hostility/faction gates (Object.cpp "can't attack friendly
 	// targets" / "can't assist non-friendly targets", plus the PARTY/RAID
 	// membership terms, via explicitTargetFactionBlocked), failing the cast
@@ -1186,14 +1189,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 	if explicitUnitGUID != 0 && explicitUnitGUID != s.playerGUID {
 		if tgt, ok := s.getCombatTarget(ctx, explicitUnitGUID); ok {
-			if spellTargetUnitBlocked(spell, tgt.UnitFlags, tgt.FlagsExtra) {
+			// SpellInfo.cpp:1799-1816: the ENEMY explicit mask runs the
+			// Unit::IsValidAttackTarget flag gates (bundle always rejects,
+			// Object.cpp:2980) and the ALLY/PARTY/RAID masks run the
+			// WorldObject::IsValidAssistTarget gates (bundle only for
+			// negative spells, Object.cpp:3131).
+			explicitMask := spellExplicitUnitTargetMask(spell)
+			assist := explicitMask&(targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid) != 0
+			if spellTargetUnitBlocked(spell, tgt.UnitFlags, tgt.FlagsExtra, assist) {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
 				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "explicit target blocked")
 				return
 			}
 			// SpellInfo.cpp:1799-1816: the ENEMY/ALLY/PARTY/RAID explicit
 			// masks carry the hostility/faction gates.
-			if s.explicitTargetFactionBlocked(spellExplicitUnitTargetMask(spell), explicitUnitGUID, tgt) {
+			if s.explicitTargetFactionBlocked(explicitMask, explicitUnitGUID, tgt) {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
 				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "explicit target faction mismatch")
 				return

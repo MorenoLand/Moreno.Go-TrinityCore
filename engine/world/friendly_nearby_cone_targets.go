@@ -177,7 +177,7 @@ func (s *session) friendlyScanCandidates(ctx context.Context, cx, cy, radius flo
 // have no Go infra (same noted gap as the area path), and totem units are not
 // tracked in Go (TARGET_CHECK_* all reject totems in C++).
 func (s *session) friendlyAssistOK(spell wotlk.Spell, c friendlyCandidate, caster playerPos, allyOf func(faction uint32) bool) bool {
-	if c.mapID != caster.Map || c.instanceID != caster.InstanceID || c.health == 0 || spellTargetUnitBlocked(spell, c.unitFlags, c.flagsExtra) {
+	if c.mapID != caster.Map || c.instanceID != caster.InstanceID || c.health == 0 || spellTargetUnitBlocked(spell, c.unitFlags, c.flagsExtra, true) {
 		return false
 	}
 	if c.isPlayer {
@@ -419,7 +419,7 @@ func (s *session) spellFriendlyConeTargets(ctx context.Context, spell wotlk.Spel
 	targets := make([]uint64, 0)
 	seen := make(map[uint64]struct{})
 	s.friendlyScanCandidates(ctx, s.player.X, s.player.Y, radius, func(c friendlyCandidate) {
-		if c.guid == 0 || c.mapID != caster.Map || c.instanceID != caster.InstanceID || c.health == 0 || spellTargetUnitBlocked(spell, c.unitFlags, c.flagsExtra) {
+		if c.guid == 0 || c.mapID != caster.Map || c.instanceID != caster.InstanceID || c.health == 0 || spellTargetUnitBlocked(spell, c.unitFlags, c.flagsExtra, true) {
 			return
 		}
 		dx, dy := float64(c.x-s.player.X), float64(c.y-s.player.Y)
