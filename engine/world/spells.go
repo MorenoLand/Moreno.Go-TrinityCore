@@ -4537,18 +4537,19 @@ func isAuraExclusiveBySpecificPerCasterWith(spec1, spec2 uint8) bool {
 }
 
 // spellSpecificNoStackPurge mirrors the "check spell specific stack rules" term
-// of Aura::CanStackWith (SpellAuras.cpp:1914-1921) inside
+// of Aura::CanStackWith (SpellAuras.cpp:1912-1921) inside
 // Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640-3671): a fresh aura purges
 // existing auras whose SpellSpecific classification is exclusive with the new
 // spell's, or — with the same caster — whose per-caster specific matches. The
-// track-resources config term (SpellAuras.cpp:1914) precedes the specific gates
-// and is honored with the CONFIG_ALLOW_TRACK_BOTH_RESOURCES default (true);
-// Go has no such config, so the default shape is modeled. The trigger-spell
-// mutual exclusion (SpellAuras.cpp:1901-1906) is honored like the companion
-// purge functions. Passive new spells skip the purge (the
-// IsPassiveStackableWithRanks early-out shape, Unit.cpp:3643; Go holds no
-// passive aura instances). Returns the auras to remove; the caller removes
-// them after unlocking.
+// TRACK_RESOURCES config term (SpellAuras.cpp:1912-1916) precedes the specific
+// gates: when both auras carry SPELL_AURA_TRACK_RESOURCES they stack only if
+// AllowTrackBothResources is set (C++ CONFIG_ALLOW_TRACK_BOTH_RESOURCES,
+// worldserver.conf default false); otherwise the existing tracking aura is
+// purged. The trigger-spell mutual exclusion (SpellAuras.cpp:1901-1906) is
+// honored like the companion purge functions. Passive new spells skip the
+// purge (the IsPassiveStackableWithRanks early-out shape, Unit.cpp:3643; Go
+// holds no passive aura instances). Returns the auras to remove; the caller
+// removes them after unlocking.
 func (s *Server) spellSpecificNoStackPurge(newSpell wotlk.Spell, newCasterGUID uint64, existing map[uint32]*activeAura) []rankPurgeTarget {
 	if s == nil || s.Data == nil {
 		return nil
@@ -4556,11 +4557,30 @@ func (s *Server) spellSpecificNoStackPurge(newSpell wotlk.Spell, newCasterGUID u
 	if newSpell.Attributes&spellAttributePassive != 0 {
 		return nil
 	}
+	var purge []rankPurgeTarget
+	// The config term applies regardless of classification, so it runs before
+	// the spellSpecificNormal early return below.
+	if !s.Config.AllowTrackBothResources && spellHasAura(newSpell, spellAuraTrackResources) {
+		for id, aura := range existing {
+			if id == newSpell.ID || aura == nil || aura.Stopped {
+				continue
+			}
+			exSpell, found, err := s.Data.Spell(id)
+			if err != nil || !found {
+				continue
+			}
+			if auraTriggersSpell(newSpell, id) || auraTriggersSpell(exSpell, newSpell.ID) {
+				continue
+			}
+			if spellHasAura(exSpell, spellAuraTrackResources) {
+				purge = append(purge, rankPurgeTarget{spellID: id, slot: aura.Slot})
+			}
+		}
+	}
 	newSpec := spellSpecific(newSpell, s.spellFirstRank)
 	if newSpec == spellSpecificNormal {
-		return nil
+		return purge
 	}
-	var purge []rankPurgeTarget
 	for id, aura := range existing {
 		if id == newSpell.ID || aura == nil || aura.Stopped {
 			continue
@@ -4572,7 +4592,8 @@ func (s *Server) spellSpecificNoStackPurge(newSpell wotlk.Spell, newCasterGUID u
 		if auraTriggersSpell(newSpell, id) || auraTriggersSpell(exSpell, newSpell.ID) {
 			continue
 		}
-		// TRACK_RESOURCES pairs stack (SpellAuras.cpp:1914, default true).
+		// Tracking pairs were already decided by the config term above; C++
+		// never evaluates the specific gates for them (SpellAuras.cpp:1916).
 		if spellHasAura(newSpell, spellAuraTrackResources) && spellHasAura(exSpell, spellAuraTrackResources) {
 			continue
 		}
