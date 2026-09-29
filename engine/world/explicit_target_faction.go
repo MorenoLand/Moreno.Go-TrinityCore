@@ -16,6 +16,14 @@ const (
 	targetFlagUnitAlly  uint32 = 0x100
 )
 
+// UNIT_FIELD_BYTES_2 PvP-flag byte values (UnitDefines.h:103-106); Go's
+// playerState.PVPFlags mirrors the byte exactly.
+const (
+	pvpFlagPvP       uint8 = 0x01 // UNIT_BYTE2_FLAG_PVP
+	pvpFlagFFA       uint8 = 0x04 // UNIT_BYTE2_FLAG_FFA_PVP
+	pvpFlagSanctuary uint8 = 0x08 // UNIT_BYTE2_FLAG_SANCTUARY
+)
+
 // spellExplicitUnitTargetMask mirrors the unit-target half of
 // SpellImplicitTargetInfo::GetExplicitTargetMask (SpellInfo.cpp:134-210).
 // Per effect and per TargetA/TargetB, unit targets with TARGET reference
@@ -64,30 +72,91 @@ func (s *session) explicitTargetFactionBlocked(mask uint32, explicitUnitGUID uin
 	}
 	targetSess := s.server.findSessionByGUID(explicitUnitGUID)
 	friendly, hostile := false, false
+	duelHostile := false
 	if targetSess != nil && targetSess.player != nil {
-		// PvP: same alliance counts friendly, opposite hostile. C++ refines
-		// this with PvP flags, FFA, duels and sanctuary - no Go model for
-		// those terms.
-		friendly = targetSess.playerAlliance() == s.playerAlliance()
-		hostile = !friendly
+		// Duel opponents are hostile even across the same faction
+		// (WorldObject::GetReactionTo, Object.cpp:2744-2746: "duel - always
+		// hostile to opponent"). Go's DuelTeam is the in-progress marker,
+		// set after the accept countdown like DUEL_STATE_IN_PROGRESS
+		// (Player.cpp:20791-20796).
+		duelHostile = s.duelPartner != 0 && s.duelPartner == targetSess.playerGUID &&
+			s.player.DuelTeam != 0 && targetSess.player.DuelTeam != 0
+		friendly = !duelHostile && targetSess.playerAlliance() == s.playerAlliance()
+		hostile = duelHostile || !friendly
 	} else {
 		caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 		friendly = s.server.isFriendlyFaction(tgt.Faction, caster)
 		hostile = !friendly && s.server.isHostileFaction(tgt.Faction, caster)
 	}
-	if mask&targetFlagUnitEnemy != 0 && !friendly {
+	if mask&targetFlagUnitEnemy != 0 && !friendly && !s.explicitTargetAttackPvPBlocked(targetSess, duelHostile) {
 		return false
 	}
-	if mask&targetFlagUnitAlly != 0 && !hostile {
+	if mask&targetFlagUnitAlly != 0 && !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) {
 		return false
 	}
-	if mask&targetFlagUnitParty != 0 && !hostile && s.sameGroupAs(targetSess, false) {
+	if mask&targetFlagUnitParty != 0 && !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) && s.sameGroupAs(targetSess, false) {
 		return false
 	}
-	if mask&targetFlagUnitRaid != 0 && !hostile && s.sameGroupAs(targetSess, true) {
+	if mask&targetFlagUnitRaid != 0 && !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) && s.sameGroupAs(targetSess, true) {
 		return false
 	}
 	return true
+}
+
+// explicitTargetAttackPvPBlocked mirrors the player-vs-player tail of
+// WorldObject::IsValidAttackTarget (Object.cpp:3045-3080) behind the
+// explicit TARGET_FLAG_UNIT_ENEMY check: a duel opponent in progress is
+// attackable, sanctuary on either side blocks, otherwise the target must be
+// PvP-flagged or both sides in FFA. The UNIT_BYTE2_FLAG_UNK1 fallback term
+// is dead in C++ (the flag is never set), so a non-flagged non-FFA target
+// blocks the cast. Creature targets degrade to the faction verdict - every
+// term here is player-only in C++. Returns true when the cast must fail.
+func (s *session) explicitTargetAttackPvPBlocked(targetSess *session, duelHostile bool) bool {
+	if targetSess == nil || targetSess.player == nil {
+		return false
+	}
+	if duelHostile {
+		return false
+	}
+	attackerFlags := s.player.PVPFlags
+	targetFlags := targetSess.player.PVPFlags
+	if attackerFlags&pvpFlagSanctuary != 0 || targetFlags&pvpFlagSanctuary != 0 {
+		return true
+	}
+	if targetFlags&pvpFlagPvP != 0 {
+		return false
+	}
+	if attackerFlags&pvpFlagFFA != 0 && targetFlags&pvpFlagFFA != 0 {
+		return false
+	}
+	return true
+}
+
+// explicitTargetAssistPvPBlocked mirrors the player-vs-player PvP terms of
+// WorldObject::IsValidAssistTarget (Object.cpp:3160-3171) behind the
+// explicit TARGET_FLAG_UNIT_ALLY/PARTY/RAID checks: a player mid-duel with
+// someone else cannot be assisted, a player in an FFA zone cannot be
+// assisted from outside one, and a PvP-flagged player outside sanctuary
+// cannot be assisted from inside one. Self is exempt from the duel term
+// (C++ compares the caster's and target's players). Creature targets
+// degrade to the faction verdict - every term here is player-only in C++.
+// Returns true when the cast must fail.
+func (s *session) explicitTargetAssistPvPBlocked(targetSess *session) bool {
+	if targetSess == nil || targetSess.player == nil || targetSess == s {
+		return false
+	}
+	if targetSess.duelPartner != 0 {
+		return true
+	}
+	targetFlags := targetSess.player.PVPFlags
+	attackerFlags := s.player.PVPFlags
+	if targetFlags&pvpFlagFFA != 0 && attackerFlags&pvpFlagFFA == 0 {
+		return true
+	}
+	if targetFlags&pvpFlagPvP != 0 && attackerFlags&pvpFlagSanctuary != 0 && targetFlags&pvpFlagSanctuary == 0 {
+		return true
+	}
+	return false
 }
 
 // sameGroupAs is the player-player half of Unit::IsInPartyWith/
