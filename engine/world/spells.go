@@ -35,6 +35,8 @@ const (
 	spellAttr0ReqAmmo                     uint32 = 0x00000002 // SPELL_ATTR0_REQ_AMMO (SharedDefines.h:413)
 	spellAttr0Tradespell                  uint32 = 0x00000020 // SPELL_ATTR0_TRADESPELL (SharedDefines.h:417)
 	spellAttr3NoDoneBonus                 uint32 = 0x20000000 // SPELL_ATTR3_NO_DONE_BONUS (SharedDefines.h:552) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
+	spellAttr3TreatAsPeriodic             uint32 = 0x02000000 // SPELL_ATTR3_TREAT_AS_PERIODIC (SharedDefines.h:548) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
+	spellAttr7NoPushbackOnDamage          uint32 = 0x00000040 // SPELL_ATTR7_NO_PUSHBACK_ON_DAMAGE (SharedDefines.h:677) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr0UnaffectedByInvulnerability uint32 = 0x20000000 // SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY (SharedDefines.h:441)
 	spellAttr0NotShapeshift               uint32 = 0x00010000 // SPELL_ATTR0_NOT_SHAPESHIFT (SharedDefines.h:428)
 	spellAttr2NotNeedShapeshift           uint32 = 0x00080000 // SPELL_ATTR2_NOT_NEED_SHAPESHIFT (SharedDefines.h:505) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
@@ -1915,6 +1917,26 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 	s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false)
 }
 
+// spellDamagePushesBack mirrors the pushback half of Unit::DealDamage
+// (Unit.cpp:937): damage dealt by a spell carrying
+// SPELL_ATTR7_NO_PUSHBACK_ON_DAMAGE or SPELL_ATTR3_TREAT_AS_PERIODIC never
+// delays the victim's cast or channel, and self-inflicted damage never
+// pushes back (C++ victim != attacker). A spell that fails to load degrades
+// to pushback, like the C++ null-spellProto path.
+func (s *session) spellDamagePushesBack(spellID uint32, victimGUID uint64) bool {
+	if victimGUID == s.playerGUID {
+		return false
+	}
+	if s.server == nil || s.server.Data == nil {
+		return true
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		return true
+	}
+	return spell.AttributesEx3&spellAttr3TreatAsPeriodic == 0 && spell.AttributesEx7&spellAttr7NoPushbackOnDamage == 0
+}
+
 func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetGUID uint64, spellID, damage uint32, schoolMask uint8, instantKill bool) {
 	if ctx == nil || ctx.Err() != nil {
 		ctx = context.Background()
@@ -2054,8 +2076,10 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				}
 			} else if damage > 0 {
 				playerSess.player.Health -= damage
-				playerSess.delayCurrentCast()
-				playerSess.delayCurrentChannel()
+				if s.spellDamagePushesBack(spellID, playerSess.playerGUID) {
+					playerSess.delayCurrentCast()
+					playerSess.delayCurrentChannel()
+				}
 				playerSess.procDamageAuras(true, damage)
 				playerSess.sendPlayerUpdate()
 			}
