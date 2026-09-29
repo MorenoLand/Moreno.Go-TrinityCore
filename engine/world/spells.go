@@ -66,6 +66,8 @@ const (
 	spellFailedNotShapeshift             uint8 = 68  // SPELL_FAILED_NOT_SHAPESHIFT (SharedDefines.h:1050)
 	spellFailedOnlyShapeshift            uint8 = 94  // SPELL_FAILED_ONLY_SHAPESHIFT (SharedDefines.h:1076)
 	spellFailedRequiresSpellFocus        uint8 = 102 // SPELL_FAILED_REQUIRES_SPELL_FOCUS (SharedDefines.h:1084)
+	spellFailedTotemCategory             uint8 = 130 // SPELL_FAILED_TOTEM_CATEGORY (SharedDefines.h:1112)
+	spellFailedTotems                    uint8 = 131 // SPELL_FAILED_TOTEMS (SharedDefines.h:1113)
 
 	itemClassWeapon = 2
 	itemClassArmor  = 4
@@ -597,6 +599,15 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if !s.hasSpellReagents(ctx, spell) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 100), true) // SPELL_FAILED_REAGENTS = 100
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "missing reagents")
+		return true
+	}
+
+	// Totem item/category requirements (Spell::CheckCast, Spell.cpp:6823-6856):
+	// run right after the reagent check, matching C++ CheckCast relative order.
+	// Client-initiated casts only — triggered casts go through castSpellDirect.
+	if failReason := s.checkSpellTotemRequirements(ctx, spell); failReason != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "totem requirements not met", "failReason", failReason)
 		return true
 	}
 
