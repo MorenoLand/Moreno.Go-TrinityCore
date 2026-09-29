@@ -173,19 +173,24 @@ func spellHasDestFamilyTarget(spell wotlk.Spell) bool {
 
 // resolveImplicitSpellDestination mirrors the destination half of
 // Spell::SelectSpellTargets (Spell.cpp:758-794) for the target-dest and
-// dest-dest families: it starts from the client-supplied destination
-// (falling back to the caster position, like CheckDst in Spell.cpp:6523)
-// and applies the per-effect resolutions in effect order — target-dest
-// replaces the destination with the unit-target-derived position
-// (Spell.cpp:1433), dest-dest offsets the current destination (Spell.cpp:
-// 1464). The result is written back into target with the dest-location
-// flag so the area-selection and persistent-area read sites consume it
-// through their existing client-dest branches. It runs once at cast time;
-// the dynamic-aura tick path reuses those read sites with an already
-// resolved destination and must not re-apply the offsets.
-func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) protocol.SpellTargetData {
-	if s == nil || s.player == nil || s.server == nil || (!spellHasDestFamilyTarget(spell) && !spellHasTrajTarget(spell) && !spellHasChannelDestTarget(spell)) {
-		return target
+// dest-dest families, the 89 traj destination, the 76/106 channel
+// destinations, and TARGET_DEST_NEARBY_ENTRY (46, the DEST half of
+// Spell::SelectImplicitNearbyTargets, Spell.cpp:1036): it starts from the
+// client-supplied destination (falling back to the caster position, like
+// CheckDst in Spell.cpp:6523) and applies the per-effect resolutions in
+// effect order — target-dest replaces the destination with the
+// unit-target-derived position (Spell.cpp:1433), dest-dest offsets the
+// current destination (Spell.cpp:1464), 46 sets it to the nearest
+// entry-matched object's position. The result is written back into target
+// with the dest-location flag so the area-selection and persistent-area read
+// sites consume it through their existing client-dest branches. It runs once
+// at cast time; the dynamic-aura tick path reuses those read sites with an
+// already resolved destination and must not re-apply the offsets. ok is
+// false when a 46 effect finds no object, which fails the cast with
+// SPELL_FAILED_BAD_IMPLICIT_TARGETS (Spell.cpp:1111).
+func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData) (protocol.SpellTargetData, bool) {
+	if s == nil || s.player == nil || s.server == nil || (!spellHasDestFamilyTarget(spell) && !spellHasTrajTarget(spell) && !spellHasChannelDestTarget(spell) && !spellHasDestNearbyEntryTarget(spell)) {
+		return target, true
 	}
 	x, y, z := s.player.X, s.player.Y, s.player.Z
 	if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
@@ -234,10 +239,21 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 				if nx, ny, nz, ok := s.channelDestForSpell(ctx, spell); ok {
 					x, y, z = nx, ny, nz
 				}
+			case targetType == implicitTargetDestNearbyEntry:
+				// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036):
+				// TARGET_DEST_NEARBY_ENTRY (46) — the destination becomes the
+				// nearest entry-matched object's position; no match fails the
+				// cast (Spell.cpp:1111), and without conditions a
+				// RequiresSpellFocus spell uses the focus object's position.
+				if nx, ny, nz, ok := s.spellEntryNearbyDestPosition(ctx, spell, spellID); ok {
+					x, y, z = nx, ny, nz
+				} else {
+					return target, false
+				}
 			}
 		}
 	}
 	target.Flags |= protocol.SpellTargetFlagDestLocation
 	target.Destination = protocol.SpellTargetLocation{X: x, Y: y, Z: z}
-	return target
+	return target, true
 }

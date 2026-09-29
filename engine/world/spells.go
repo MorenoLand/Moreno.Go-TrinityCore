@@ -1048,7 +1048,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// spell destination from target-relative / dest-relative implicit
 	// targets once, before the area selection and persistent-area read
 	// sites below consume it.
-	target = s.resolveImplicitSpellDestination(ctx, spell, target)
+	target, destOK := s.resolveImplicitSpellDestination(ctx, spell, spellID, target)
+	if !destOK {
+		// Spell.cpp:1111: no nearby entry object found ->
+		// SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993).
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 11), true)
+		s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no nearby entry object")
+		return
+	}
 
 	hitTargets := make([]uint64, 0, 1)
 	if isSelfCastOnly(spell) {
@@ -1064,6 +1071,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	friendlyAreaSpell := isFriendlyAreaSpell(spell)
 	friendlyNearbySpell := isFriendlyNearbySpell(spell)
 	entryNearbySpell := isEntryNearbySpell(spell)
+	goNearbyEntrySpell := isGONearbyEntrySpell(spell)
 	entryAreaSpell := isEntryAreaSpell(spell)
 	friendlyConeSpell := isFriendlyConeSpell(spell)
 	friendlyLastTargetAreaSpell := isFriendlyLastTargetAreaSpell(spell)
@@ -1110,6 +1118,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// — every unit in the area matching the entry conditions becomes a
 		// target; an empty area never fails the cast.
 		hitTargets = s.spellEntryAreaTargets(ctx, spell, spellID, target)
+	} else if goNearbyEntrySpell {
+		// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036):
+		// TARGET_GAMEOBJECT_NEARBY_ENTRY (40) — the single nearest
+		// entry-matched gameobject becomes the target; no match fails the
+		// cast. The GO guid flows through hitTargets like C++'s AddGOTarget
+		// list; Go has no gameobject-effect consumer downstream.
+		if nearby, ok := s.spellEntryNearbyGOTarget(ctx, spell, spellID); ok {
+			hitTargets = []uint64{nearby}
+		} else {
+			// Spell.cpp:1111: no target found ->
+			// SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993).
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 11), true)
+			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no nearby gameobject target")
+			return
+		}
 	} else if friendlyConeSpell {
 		// Spell::SelectImplicitConeTargets (Spell.cpp:1176): friendly
 		// ALLY/ENTRY cone targets (59/60).

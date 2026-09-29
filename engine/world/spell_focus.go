@@ -6,9 +6,14 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
 
-func (s *session) spellFocusFound(ctx context.Context, spell wotlk.Spell) bool {
-	if spell.RequiresSpellFocus == 0 {
-		return true
+// spellFocusObject returns the first spell-focus gameobject matching the
+// spell's RequiresSpellFocus within range, mirroring Spell::SearchSpellFocus
+// (Spell.cpp:1987) + GameObjectFocusCheck (GridNotifiers.h:663): runtime
+// dynamic spawns first, then static rows, template data0 = focus id and
+// data1 = range.
+func (s *session) spellFocusObject(ctx context.Context, spell wotlk.Spell) (guid uint64, x, y, z float32, ok bool) {
+	if s == nil || s.player == nil || s.server == nil || spell.RequiresSpellFocus == 0 {
+		return 0, 0, 0, 0, false
 	}
 	player := s.player
 	visibility := float64(s.server.Config.VisibilityDistanceContinents)
@@ -24,11 +29,11 @@ func (s *session) spellFocusFound(ctx context.Context, spell wotlk.Spell) bool {
 			continue
 		}
 		if distance3D(player.X, player.Y, player.Z, dyn.X, dyn.Y, dyn.Z) <= float64(dist) {
-			return true
+			return dyn.GUID, dyn.X, dyn.Y, dyn.Z, true
 		}
 	}
 	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
-		return false
+		return 0, 0, 0, 0, false
 	}
 	goArgs := make([]any, 0, 4)
 	eventClause := gameEventSpawnClause("geg.eventEntry", s.server.activeEventList(ctx), &goArgs)
@@ -43,26 +48,35 @@ func (s *session) spellFocusFound(ctx context.Context, spell wotlk.Spell) bool {
 	args := append([]any{player.Map, float64(player.X) - visibility, float64(player.X) + visibility, float64(player.Y) - visibility, float64(player.Y) + visibility}, goArgs...)
 	rows, err := s.server.WorldStore.DB.QueryContext(ctx, query, args...)
 	if err != nil {
-		return false
+		return 0, 0, 0, 0, false
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var guid, entry int64
+		var low, entry int64
 		var x, y, z, focusID, dist float64
-		if err := rows.Scan(&guid, &entry, &x, &y, &z, &focusID, &dist); err != nil {
+		if err := rows.Scan(&low, &entry, &x, &y, &z, &focusID, &dist); err != nil {
 			continue
 		}
 		if uint32(focusID) != spell.RequiresSpellFocus {
 			continue
 		}
-		if s.server.isGameObjectHiddenInInstance(player.Map, player.InstanceID, gameObjectGUID(uint32(guid), uint32(entry))) {
+		rawGUID := gameObjectGUID(uint32(low), uint32(entry))
+		if s.server.isGameObjectHiddenInInstance(player.Map, player.InstanceID, rawGUID) {
 			continue
 		}
 		if distance3D(player.X, player.Y, player.Z, float32(x), float32(y), float32(z)) <= dist {
-			return true
+			return rawGUID, float32(x), float32(y), float32(z), true
 		}
 	}
-	return false
+	return 0, 0, 0, 0, false
+}
+
+func (s *session) spellFocusFound(ctx context.Context, spell wotlk.Spell) bool {
+	if spell.RequiresSpellFocus == 0 {
+		return true
+	}
+	_, _, _, _, ok := s.spellFocusObject(ctx, spell)
+	return ok
 }
 
 func (s *session) spellFocusTemplateData(ctx context.Context, entry uint32) (uint32, float32, bool) {
