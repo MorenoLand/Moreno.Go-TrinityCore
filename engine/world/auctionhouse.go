@@ -744,6 +744,16 @@ func (s *session) handleAuctionListOwnerItems(ctx context.Context, payload []byt
 		return true
 	}
 	s.expireAuctions(ctx)
+	// C++ HandleAuctionListOwnerItems (AuctionHouseHandler.cpp:708-727):
+	// the auctioneer GUID comes first in the packet and the NPC interact
+	// check runs before anything else.
+	if len(payload) < 8 {
+		return true
+	}
+	auctioneer, _ := protocol.NewReader(payload).ReadU64()
+	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
+		return true
+	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
@@ -799,15 +809,25 @@ func (s *session) handleAuctionListBidderItems(ctx context.Context, payload []by
 	var outbidIDs []uint32
 	if len(payload) >= 16 {
 		r := protocol.NewReader(payload)
-		_, _ = r.ReadU64() // auctioneer
-		_, _ = r.ReadU32() // listFrom
+		auctioneer, _ := r.ReadU64()
+		_, _ = r.ReadU32() // listFrom, unused
 		outbiddedCount, _ := r.ReadU32()
-		for i := uint32(0); i < outbiddedCount && r.Remaining() >= 4; i++ {
+		// C++ HandleAuctionListBidderItems (AuctionHouseHandler.cpp:659-663):
+		// a bad packet size zeroes the outbidded count instead of trusting it.
+		if uint64(outbiddedCount)*4 != uint64(len(payload)-16) {
+			outbiddedCount = 0
+		}
+		if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
+			return true
+		}
+		for i := uint32(0); i < outbiddedCount; i++ {
 			id, err := r.ReadU32()
 			if err == nil && id > 0 {
 				outbidIDs = append(outbidIDs, id)
 			}
 		}
+	} else {
+		return true
 	}
 
 	now := time.Now().Unix()
