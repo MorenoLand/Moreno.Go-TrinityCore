@@ -803,7 +803,23 @@ func (s *session) expireAuctions(ctx context.Context) {
 				}
 			}
 		} else {
-			// Expired with no bids: return item to owner (deposit forfeited)
+			// Expired with no bids: return item to owner (deposit forfeited).
+			// C++ SendAuctionExpiredMail (AuctionHouseMgr.cpp:235-260): a missing
+			// auctioned item returns silently — no mail is sent (the auction row,
+			// already deleted above, is still cleared in C++ via DeleteFromDB).
+			var itemProbe int
+			if err := cdb.QueryRowContext(ctx, "SELECT 1 FROM item_instance WHERE guid = ? LIMIT 1", a.itemGUID).Scan(&itemProbe); err != nil {
+				continue
+			}
+			// C++ :242-257: the item goes back by mail only when the owner is
+			// connected or has an account; otherwise the item row is deleted.
+			// (The auction-bot IsBotChar term has no Go model.)
+			var ownerProbe int
+			if s.server.findSessionByGUID(uint64(a.owner)) == nil &&
+				cdb.QueryRowContext(ctx, "SELECT 1 FROM characters WHERE guid = ? LIMIT 1", a.owner).Scan(&ownerProbe) != nil {
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", a.itemGUID)
+				continue
+			}
 			var expMailID int64
 			_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&expMailID)
 			expSubj := fmt.Sprintf("%d:0:%d:%d:%d", a.itemTmpl, auctionExpired, a.id, a.count)
