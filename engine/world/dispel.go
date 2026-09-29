@@ -26,6 +26,7 @@ const (
 	DispelAllMask uint32 = (1 << DispelMagic) | (1 << DispelCurse) | (1 << DispelDisease) | (1 << DispelPoison)
 
 	spellFailedNothingToDispel uint8 = 86 // SPELL_FAILED_NOTHING_TO_DISPEL (SharedDefines.h:1068)
+	spellFailedNothingToSteal  uint8 = 87 // SPELL_FAILED_NOTHING_TO_STEAL (SharedDefines.h:1069)
 
 	spellAuraModDispelResist uint32 = 235   // SPELL_AURA_MOD_DISPEL_RESIST (SpellAuraDefines.h:315)
 	spellUnholyBlight        uint32 = 50536 // DK Unholy Blight aura preventing disease dispel (Unit.cpp:4591)
@@ -308,6 +309,59 @@ func (s *session) getDispellableAuraListForCreature(creatureGUID uint64, dispelM
 		})
 	}
 	return candidates
+}
+
+// stealableAuraList builds the Spell::EffectStealBeneficialBuff (SpellEffects.cpp:5172)
+// steal candidate list from the dispel-mask candidate list: positive auras only,
+// skipping auras whose spell carries SPELL_ATTR4_NOT_STEALABLE. Passive auras are
+// already excluded by the dispel helpers (the spellAttributePassive gate).
+func (s *session) stealableAuraList(targetSess *session, targetGUID uint64, isTargetPlayer bool, dispelMask uint32) []dispelCandidate {
+	var candidates []dispelCandidate
+	if isTargetPlayer {
+		candidates = s.getDispellableAuraListForPlayer(targetSess, dispelMask)
+	} else {
+		candidates = s.getDispellableAuraListForCreature(targetGUID, dispelMask)
+	}
+
+	var stealable []dispelCandidate
+	for _, c := range candidates {
+		if !c.Positive {
+			continue
+		}
+		if s.server != nil && s.server.Data != nil {
+			if sp, found, _ := s.server.Data.Spell(c.SpellID); found && sp.AttributesEx4&spellAttr4NotStealable != 0 {
+				continue
+			}
+		}
+		stealable = append(stealable, c)
+	}
+	return stealable
+}
+
+// checkStealPreCast mirrors TrinityCore Spell::CheckCast (Spell.cpp:5957-5984) for
+// SPELL_EFFECT_STEAL_BENEFICIAL_BUFF (126): no unit target or self target fails with
+// SPELL_FAILED_BAD_TARGETS; a target carrying no stealable aura under the same skip
+// list as EffectStealBeneficialBuff fails with SPELL_FAILED_NOTHING_TO_STEAL.
+func (s *session) checkStealPreCast(spell wotlk.Spell, targetGUID uint64) uint8 {
+	for _, eff := range spell.Effects {
+		if eff.Effect != 126 { // SPELL_EFFECT_STEAL_BENEFICIAL_BUFF
+			continue
+		}
+		if targetGUID == 0 || targetGUID == s.playerGUID {
+			return spellFailedBadTargets
+		}
+		dispelMask := getDispelMask(uint32(eff.MiscValue))
+
+		var targetSess *session
+		if s.server != nil {
+			targetSess = s.server.findSessionByGUID(targetGUID)
+		}
+		isTargetPlayer := (targetSess != nil && targetSess.player != nil)
+		if len(s.stealableAuraList(targetSess, targetGUID, isTargetPlayer, dispelMask)) == 0 {
+			return spellFailedNothingToSteal
+		}
+	}
+	return 0
 }
 
 // checkDispelPreCast mirrors TrinityCore Spell::CheckCast (Spell.cpp:5520-5565).
@@ -756,30 +810,11 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 		targetSess = s.server.findSessionByGUID(targetGUID)
 	}
 
-	var candidates []dispelCandidate
 	isTargetPlayer := (targetSess != nil && targetSess.player != nil)
-	if isTargetPlayer {
-		candidates = s.getDispellableAuraListForPlayer(targetSess, dispelMask)
-	} else {
-		candidates = s.getDispellableAuraListForCreature(targetGUID, dispelMask)
-	}
-
-	// Spellsteal only steals beneficial buffs from non-friendly targets
-	// (SpellEffects.cpp:5172), skipping passive auras (already excluded by
-	// the dispel helpers) and auras whose spell carries
-	// SPELL_ATTR4_NOT_STEALABLE.
-	var stealable []dispelCandidate
-	for _, c := range candidates {
-		if !c.Positive {
-			continue
-		}
-		if s.server != nil && s.server.Data != nil {
-			if sp, found, _ := s.server.Data.Spell(c.SpellID); found && sp.AttributesEx4&spellAttr4NotStealable != 0 {
-				continue
-			}
-		}
-		stealable = append(stealable, c)
-	}
+	// Spellsteal only steals beneficial buffs (SpellEffects.cpp:5172); the
+	// helper skips passive auras (already excluded by the dispel helpers) and
+	// auras whose spell carries SPELL_ATTR4_NOT_STEALABLE.
+	stealable := s.stealableAuraList(targetSess, targetGUID, isTargetPlayer, dispelMask)
 
 	if len(stealable) == 0 {
 		return
