@@ -91,6 +91,53 @@ func (s *session) getMeleeCritFromAgility() float64 {
 	return (float64(base) + agi*float64(ratio)) * 100.0
 }
 
+// dodgeBaseByClass and critToDodgeByClass are the per-class tables from
+// Player::GetDodgeFromAgility (Player.cpp:5451-5482). The 12th slot is the
+// unused class index (C++ MAX_CLASSES=12, SharedDefines.h:143).
+var dodgeBaseByClass = [...]float64{
+	0.036640, 0.034943, -0.040873, 0.020957, 0.034178, 0.036640,
+	0.021080, 0.036587, 0.024211, 0, 0.056097, 0,
+}
+var critToDodgeByClass = [...]float64{
+	0.85 / 1.15, 1 / 1.15, 1.11 / 1.15, 2 / 1.15, 1 / 1.15, 0.85 / 1.15,
+	1.60 / 1.15, 1 / 1.15, 0.97 / 1.15, 0, 2 / 1.15, 0,
+}
+
+// getDodgeFromAgility returns the diminishing (gear agility) and
+// non-diminishing (base) dodge percentage contributions from Agility.
+// Mirrors TrinityCore Player::GetDodgeFromAgility (Player.cpp:5449):
+// dodgeRatio = GtChanceToMeleeCrit at (class-1)*100 + level-1 with level
+// clamped to GT_MAX_LEVEL; base_agility = GetCreateStat(STAT_AGILITY) *
+// GetPctModifierValue(UNIT_MOD_STAT_START + STAT_AGILITY, BASE_PCT).
+// Go stores the create stats in BaseStats (same player_levelstats source as
+// C++ GetCreateStat); Go has no aura pct-modifier group
+// (C++ m_auraPctModifiersGroup, Unit.cpp:9290), and the C++ BASE_PCT
+// multiplier initializes to 1.0, changing only under specific stat auras
+// (SpellAuraEffects.cpp:3436), so base_agility = BaseStats[1].
+func (s *session) getDodgeFromAgility(state *playerState) (diminishing, nondiminishing float64) {
+	if s == nil || s.server == nil || s.server.Data == nil || state == nil {
+		return 0, 0
+	}
+	classID := uint32(state.Class)
+	level := uint32(state.Level)
+	if level > 100 {
+		level = 100
+	}
+	if classID == 0 || classID > 12 {
+		return 0, 0
+	}
+	ratio, found, err := s.server.Data.GtChanceToMeleeCrit(classID, level)
+	if err != nil || !found {
+		return 0, 0
+	}
+	baseAgility := float64(state.BaseStats[1])
+	bonusAgility := float64(state.Stats[1]) - baseAgility
+	idx := classID - 1
+	diminishing = 100.0 * bonusAgility * float64(ratio) * critToDodgeByClass[idx]
+	nondiminishing = 100.0 * (dodgeBaseByClass[idx] + baseAgility*float64(ratio)*critToDodgeByClass[idx])
+	return diminishing, nondiminishing
+}
+
 // getMeleeCritPct returns the bonus melee crit percentage from Agility and gear rating.
 // Mirrors TrinityCore Player::GetMeleeCritFromAgility and Player::GetRatingBonusValue(CR_CRIT_MELEE).
 func (s *session) getMeleeCritPct() float64 {

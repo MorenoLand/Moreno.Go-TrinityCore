@@ -2213,21 +2213,18 @@ func (s *session) calculatePlayerCritFields(state *playerState, level uint8) {
 		}
 	}
 	maxSkill := uint32(level) * 5
-	dodgeBase := [...]float32{0.036640, 0.034943, -0.040873, 0.020957, 0.034178, 0.036640, 0.021080, 0.036587, 0.024211, 0, 0.056097}
-	critToDodge := [...]float32{0.85 / 1.15, 1 / 1.15, 1.11 / 1.15, 2 / 1.15, 1 / 1.15, 0.85 / 1.15, 1.60 / 1.15, 1 / 1.15, 0.97 / 1.15, 0, 2 / 1.15}
 	dodgeCap := [...]float32{88.129021, 88.129021, 145.560408, 145.560408, 150.375940, 88.129021, 145.560408, 150.375940, 150.375940, 0, 116.890707}
-	dodgeRatio := meleeRatio
-	if meleeBaseOK && meleeRatioOK && classIndex < len(dodgeCap) && dodgeCap[classIndex] > 0 {
-		baseAgility := float32(state.BaseStats[1])
-		bonusAgility := float32(state.Stats[1]) - baseAgility
-		diminishing := 100*bonusAgility*dodgeRatio*critToDodge[classIndex] + ratingBonus(int(CombatRatingDefenseSkill))*0.04 + ratingBonus(int(CombatRatingDodge))
-		nondiminishing := 100 * (dodgeBase[classIndex] + baseAgility*dodgeRatio*critToDodge[classIndex])
+
+	if meleeRatioOK && classIndex >= 0 && classIndex < len(dodgeCap) && dodgeCap[classIndex] > 0 {
+		diminishing, nondiminishing := s.getDodgeFromAgility(state)
+		diminishing += float64(ratingBonus(int(CombatRatingDefenseSkill)))*0.04 + float64(ratingBonus(int(CombatRatingDodge)))
 		if defenseSkill > maxSkill {
-			nondiminishing += float32(defenseSkill-maxSkill) * 0.04
+			nondiminishing += float64(defenseSkill-maxSkill) * 0.04
 		} else {
-			nondiminishing -= float32(maxSkill-defenseSkill) * 0.04
+			nondiminishing -= float64(maxSkill-defenseSkill) * 0.04
 		}
-		state.DodgePercentage = dodgeCap[classIndex]*diminishing/(diminishing+dodgeCap[classIndex]*[...]float32{0.956, 0.956, 0.988, 0.988, 0.983, 0.956, 0.988, 0.983, 0.983, 0, 0.972}[classIndex]) + nondiminishing
+		k := float64([...]float32{0.956, 0.956, 0.988, 0.988, 0.983, 0.956, 0.988, 0.983, 0.983, 0, 0.972}[classIndex])
+		state.DodgePercentage = float32(float64(dodgeCap[classIndex])*diminishing/(diminishing+float64(dodgeCap[classIndex])*k) + nondiminishing)
 		if state.DodgePercentage < 0 {
 			state.DodgePercentage = 0
 		}
