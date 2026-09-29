@@ -1691,7 +1691,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					} else if effectTarget != 0 && effectTarget != s.playerGUID && isHarmfulSpell(spell) {
 						auraTarget = effectTarget
 					}
-					s.applyAuraToTarget(effCtx, auraTarget, spell, eff, durationMs, periodMs, amount, schoolMask, castMerged, false)
+					s.applyAuraToTarget(effCtx, auraTarget, spell, eff, durationMs, periodMs, amount, schoolMask, castMerged, false, s.playerGUID)
 				}
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
 				s.applySelfResurrectEffect(spell)
@@ -2419,7 +2419,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			if schoolMask == 0 {
 				schoolMask = 1
 			}
-			s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false)
+			s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false, s.playerGUID)
 		} else if eff.Effect == 10 { // SPELL_EFFECT_HEAL
 			healAmount := uint32(eff.BasePoints + 1)
 			if healAmount == 0 && spellID == ProcSpellCrusader {
@@ -2445,7 +2445,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 
 	if !hasExplicitEffects {
 		eff := wotlk.SpellEffect{Effect: 6, Aura: 4}
-		s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, 0, 0, 1, nil, false)
+		s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, 0, 0, 1, nil, false, s.playerGUID)
 	}
 }
 
@@ -4740,7 +4740,13 @@ func isExistingAreaAuraOfTarget(aura *activeAura, exSpell wotlk.Spell, targetGUI
 	return false
 }
 
-func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}, skipSingleCastReg bool) {
+// applyAuraToTarget applies one aura effect to a player target. casterGUID is
+// the aura's caster: normally the casting session's player, but the
+// spellsteal path passes the victim aura's original caster
+// (Unit::RemoveAurasDueToSpellBySteal, Unit.cpp:4020:
+// createInfo.SetCasterGUID(aura->GetCasterGUID())) — the no-stack purge's
+// same-caster terms and the wire caster field key on it, not on the stealer.
+func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}, skipSingleCastReg bool, casterGUID uint64) {
 	if s.player == nil {
 		return
 	}
@@ -4907,7 +4913,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				wireStack = charges
 			}
 			wireMaxDuration, wireDuration := auraWireDurations(spell, durationMs, durationMs)
-			updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, s.playerGUID, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, s.player.Level, wireStack, effectMask)
+			updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, casterGUID, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, s.player.Level, wireStack, effectMask)
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 			if s.server != nil {
 				s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, targetSess)
@@ -4964,7 +4970,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			Mechanic:           spell.Mechanic,
 			AuraType:           eff.Aura,
 			EffectMask:         spellEffectMask(spell, eff),
-			CasterGUID:         s.playerGUID,
+			CasterGUID:         casterGUID,
 			TargetGUID:         targetGUID,
 			ChannelTargetGUID:  channelTargetGUID,
 			SchoolMask:         schoolMask,
