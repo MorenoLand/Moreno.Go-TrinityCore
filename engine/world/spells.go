@@ -623,7 +623,12 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 func (s *session) castInProgress() bool {
 	s.castMu.Lock()
 	defer s.castMu.Unlock()
-	return s.activeCast != nil && !s.activeCast.Cancelled
+	// Spell::prepare (Spell.cpp:3073-3078) rejects via IsNonMeleeSpellCast,
+	// which covers channeled casts as well as the cast bar.
+	if s.activeCast != nil && !s.activeCast.Cancelled {
+		return true
+	}
+	return s.activeChannel != nil && !s.activeChannel.Stopped
 }
 
 func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData) {
