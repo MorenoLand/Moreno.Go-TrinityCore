@@ -43,6 +43,36 @@ func auctionOutBid(bid uint32) uint32 {
 	return outbid
 }
 
+// auctionDeposit ports AuctionHouseMgr::GetAuctionDeposit
+// (AuctionHouseMgr.cpp:89-118). The C++ multiplier is DepositRate*0.03 from
+// AuctionHouse.dbc; that DBC data is absent on this VM, so the neutral-house
+// effective multiplier 0.05 is kept (the DepositRate term stays blocked on
+// DBC data, not the rate config).
+func auctionDeposit(sellPrice int64, timeHr, count uint32, depositRate float64) uint32 {
+	const depositMultiplier = 0.05
+	rate := float32(depositRate)
+	// C++ GetAuctionDeposit (AuctionHouseMgr.cpp:94): no vendor sell price
+	// answers the minimum deposit. AH_MINIMUM_DEPOSIT = 100
+	// (AuctionHouseMgr.cpp:42).
+	if sellPrice <= 0 {
+		return uint32(100 * rate)
+	}
+	deposit := uint32(float32(sellPrice) * depositMultiplier * rate)
+	remainderBase := float32(sellPrice)*depositMultiplier*rate - float32(deposit)
+	deposit *= timeHr * count
+	i := count
+	for i > 0 && remainderBase*float32(i) != float32(uint32(remainderBase*float32(i))) {
+		i--
+	}
+	if i > 0 {
+		deposit += uint32(remainderBase * float32(i) * float32(timeHr))
+	}
+	if minDeposit := uint32(100 * rate); deposit < minDeposit {
+		return minDeposit
+	}
+	return deposit
+}
+
 // auctionCharExists mirrors the C++ (player || accId) receiver-exists gates
 // (SendAuctionSuccessfulMail AuctionHouseMgr.cpp:230, SendAuctionWonMail :164,
 // SendAuctionSalePendingMail :199, SendAuctionExpiredMail :242): a connected
@@ -389,23 +419,16 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 		return sellFail(errAuctionDatabaseError)
 	}
 
-	// Calculate deposit: TrinityCore GetAuctionDeposit formula
-	// 5% of vendor SellPrice per 12 hours * finalCount, minimum 1 silver (100 copper)
 	var sellPrice int64
 	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(SellPrice, 0) FROM item_template WHERE entry = ?", itemEntry).Scan(&sellPrice)
 	}
+	// C++ HandleAuctionSellItem passes etime in seconds to GetAuctionDeposit
+	// (AuctionHouseHandler.cpp:257); C++ timeHr is (((time/60)/60)/12), and
+	// Go's etime is in minutes, so (etime/60)/12 evaluates identically on the
+	// 720/1440/2880 minutes the switch above accepts.
 	timeHr := (etime / 60) / 12
-	if timeHr == 0 {
-		timeHr = 1
-	}
-	deposit := uint32(100) // 1 silver base deposit
-	if sellPrice > 0 {
-		calc := uint32(float64(sellPrice) * 0.05 * float64(timeHr) * float64(finalCount))
-		if calc > deposit {
-			deposit = calc
-		}
-	}
+	deposit := auctionDeposit(sellPrice, timeHr, finalCount, s.server.Config.AuctionDepositRate)
 
 	if s.player.Money < deposit {
 		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(0, auctionSellItem, errAuctionNotEnoughMoney), true)
@@ -442,7 +465,11 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	}
 	s.adjustQuestItemCount(ctx, uint32(itemEntry), finalCount, false)
 	now := time.Now().Unix()
-	expire := now + int64(etime*60)
+	// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:254): auctionTime =
+	// uint32(etime_seconds * Rate.Auction.Time); the auction's expire time is
+	// the current time plus that scaled duration. Go's etime is in minutes.
+	auctionTime := uint32(float32(etime*60) * float32(s.server.Config.AuctionTimeRate))
+	expire := now + int64(auctionTime)
 	var nextID int64
 	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM auctionhouse").Scan(&nextID)
 	if nextID <= 0 {

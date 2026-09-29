@@ -74,6 +74,8 @@ type Config struct {
 	XPRateQuest                             float64
 	XPRateExplore                           float64
 	XPRateBattlegroundKill                  float64
+	AuctionTimeRate                         float64
+	AuctionDepositRate                      float64
 	RestInGameRate                          float64
 	RestOfflineInTavernOrCityRate           float64
 	RestOfflineInWildernessRate             float64
@@ -198,6 +200,8 @@ func Default() Config {
 	c.XPRateQuest = 1
 	c.XPRateExplore = 1
 	c.XPRateBattlegroundKill = 1
+	c.AuctionTimeRate = 1
+	c.AuctionDepositRate = 1
 	c.AccountInstancesPerHour = 5
 	return c
 }
@@ -248,6 +252,8 @@ func (c *Config) ApplyEnv() {
 	values["MORENOCORE_RATE_XP_QUEST"] = "Rate.XP.Quest"
 	values["MORENOCORE_RATE_XP_EXPLORE"] = "Rate.XP.Explore"
 	values["MORENOCORE_RATE_XP_BATTLEGROUND_KILL"] = "Rate.XP.BattlegroundKill"
+	values["MORENOCORE_RATE_AUCTION_TIME"] = "Rate.Auction.Time"
+	values["MORENOCORE_RATE_AUCTION_DEPOSIT"] = "Rate.Auction.Deposit"
 	values["MORENOCORE_ADDON_CHANNEL"] = "AddonChannel"
 	values["MORENOCORE_SERVER_LOGIN_INFO"] = "Server.LoginInfo"
 	values["MORENOCORE_MAX_PLAYER_LEVEL"] = "MaxPlayerLevel"
@@ -582,6 +588,10 @@ func (c *Config) set(key, value string) error {
 		return setFloat64(&c.XPRateExplore, key, value)
 	case "Rate.XP.BattlegroundKill":
 		return setFloat64(&c.XPRateBattlegroundKill, key, value)
+	case "Rate.Auction.Time":
+		return setFloat64(&c.AuctionTimeRate, key, value)
+	case "Rate.Auction.Deposit":
+		return setFloat64(&c.AuctionDepositRate, key, value)
 	case "Visibility.Distance.Continents":
 		return setFloat64(&c.VisibilityDistanceContinents, key, value)
 	case "Instance.IgnoreRaid":
