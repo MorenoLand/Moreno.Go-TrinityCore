@@ -226,6 +226,7 @@ type Spell struct {
 	Reagent                [8]int32  // Spell.dbc fields 52-59 = Reagent (DBCStructure.h:1441)
 	ReagentCount           [8]uint32 // Spell.dbc fields 60-67 = ReagentCount (DBCStructure.h:1442)
 	Speed                  float32
+	SpellVisual            [2]uint32 // Spell.dbc fields 131-132 = SpellVisualID (DBCStructure.h:1464)
 	Effects                [3]SpellEffect
 }
 
@@ -844,6 +845,8 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{223, &spell.RequiredTotemCategory[1]}, // Spell.dbc field 223 = RequiredTotemCategoryID[1] (DBCStructure.h:1487)
 		{205, &spell.StartRecoveryCategory},    // Spell.dbc field 205 = StartRecoveryCategory
 		{206, &spell.StartRecoveryTime},        // Spell.dbc field 206 = StartRecoveryTime
+		{131, &spell.SpellVisual[0]},           // Spell.dbc field 131 = SpellVisualID[0] (DBCStructure.h:1464)
+		{132, &spell.SpellVisual[1]},           // Spell.dbc field 132 = SpellVisualID[1] (DBCStructure.h:1464)
 	}
 	for _, value := range values {
 		if *value.dest, err = record.Uint32(value.field); err != nil {

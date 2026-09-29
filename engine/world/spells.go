@@ -35,6 +35,7 @@ const (
 	spellAttr2NotNeedShapeshift            uint32 = 0x00080000 // SPELL_ATTR2_NOT_NEED_SHAPESHIFT (SharedDefines.h:505) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr1CantBeReflected             uint32 = 0x00000080 // SPELL_ATTR1_CANT_BE_REFLECTED (SharedDefines.h:456)
 	spellAttr2CanTargetDead              uint32 = 0x00000001 // SPELL_ATTR2_CAN_TARGET_DEAD (SharedDefines.h:486) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
+	spellAttr2AutorepeatFlag             uint32 = 0x00000020 // SPELL_ATTR2_AUTOREPEAT_FLAG (SharedDefines.h:491) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 
 	targetFlagCorpseEnemy uint32 = 0x00000200 // TARGET_FLAG_CORPSE_ENEMY (SpellInfo.h:57)
 	targetFlagUnitDead    uint32 = 0x00000400 // TARGET_FLAG_UNIT_DEAD (SpellInfo.h:58)
@@ -1902,10 +1903,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		spell.Effects[0].BasePoints = *basePoint0 - 1
 	}
 
-	castID := uint8(1)
-	if firstLogin {
-		castID = 0
-	}
+	castID := uint8(0) // C++ m_cast_count stays 0 for triggered casts (Spell.cpp:602; set nonzero only for client-initiated casts, Player.cpp:8251)
 	now := time.Now()
 	castTimeStamp := uint32(now.UnixMilli())
 	if firstLogin {
@@ -1917,27 +1915,42 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		spellTargetFlags = protocol.SpellTargetFlagUnit
 	}
 	spellTarget := protocol.SpellTargetData{Flags: spellTargetFlags, UnitGUID: targetGUID}
+	// Cast flags mirror Spell::SendSpellGo for a triggered player cast
+	// (Spell.cpp:4283-4330): PENDING for triggered non-auto-repeat casts with
+	// cast count 0 (Spell.cpp:4292), POWER_LEFT_SELF + remaining power for
+	// non-health powers (Spell.cpp:4297), NO_GCD when the spell has no start
+	// recovery time (Spell.cpp:4325). RUNE_LIST never applies to triggered
+	// casts (FULL_MASK carries TRIGGERED_IGNORE_POWER_AND_REAGENT_COST).
+	// AMMO (Spell.cpp:4295) is skipped: Go has no ammo display data, and the
+	// flag without the 8-byte Ammo block would corrupt the packet.
 	castFlags := uint32(spellCastFlagGo)
-	var remainingPower *uint32
-	if firstLogin {
+	if spell.AttributesEx1&spellAttr2AutorepeatFlag == 0 {
 		castFlags |= spellCastFlagPending
-		if spell.PowerType < 7 {
-			castFlags |= protocol.SpellCastFlagPowerLeftSelf
-			power := s.player.Powers[spell.PowerType]
-			remainingPower = &power
-		}
-		if spell.StartRecoveryTime == 0 {
-			castFlags |= protocol.SpellCastFlagNoGCD
-		}
 	}
-	goPkt := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, nil, spellTarget, remainingPower)
-	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
-	if s.server != nil {
-		nearbyPacket := goPkt
-		if firstLogin && castFlags&protocol.SpellCastFlagPowerLeftSelf != 0 {
-			nearbyPacket = protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, castTimeStamp, hitTargets, nil, spellTarget)
+	var remainingPower *uint32
+	if spell.PowerType != 0xFFFFFFFE /* POWER_HEALTH = -2 in C++ */ && int(spell.PowerType) < len(s.player.Powers) {
+		castFlags |= protocol.SpellCastFlagPowerLeftSelf
+		power := s.player.Powers[spell.PowerType]
+		remainingPower = &power
+	}
+	if spell.StartRecoveryTime == 0 {
+		castFlags |= protocol.SpellCastFlagNoGCD
+	}
+	// Spell::IsNeedSendToClient (Spell.cpp:7543): triggered casts only send
+	// SMSG_SPELL_GO when the spell has a visual, is channeled, or has speed.
+	if spell.SpellVisual[0] != 0 || spell.SpellVisual[1] != 0 || isChanneledSpell(spell) || spell.Speed > 0 {
+		goPkt := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, nil, spellTarget, remainingPower)
+		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
+		if s.server != nil {
+			// C++ sends the caster a self-only packet carrying POWER_LEFT_SELF
+			// and re-broadcasts to the set with the flag (and power) stripped
+			// (Spell.cpp:4353-4366).
+			nearbyPacket := goPkt
+			if castFlags&protocol.SpellCastFlagPowerLeftSelf != 0 {
+				nearbyPacket = protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, castTimeStamp, hitTargets, nil, spellTarget)
+			}
+			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 		}
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 	}
 
 	durationMs := uint32(0)
