@@ -3760,11 +3760,18 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			existing.DurationMs = durationMs
 			existing.RemainingMs = durationMs
 			existing.DurationUpdatedAt = time.Now()
-			// Aura::RefreshTimers(resetPeriodicTimer): the expiry timer always
-			// restarts; the periodic timer only for non-stackable auras
-			// (resetPeriodicTimer = StackAmount < 2, Spell.cpp:2857 — Go has
-			// no TRIGGERED_DONT_RESET_PERIODIC_TIMER flag on this path).
-			resetPeriodic := spell.StackAmount < 2
+			// Aura::RefreshTimers(resetPeriodicTimer) (Spell.cpp:2854):
+			// resetPeriodicTimer = StackAmount < 2 &&
+			// !(triggeredCastFlags & TRIGGERED_DONT_RESET_PERIODIC_TIMER).
+			// Every C++ triggered cast carries the bit — TRIGGERED_FULL_MASK
+			// (0x0007FFFF) includes TRIGGERED_DONT_RESET_PERIODIC_TIMER
+			// (0x00020000, SpellDefines.h:151) — so a triggered re-cast of a
+			// non-stackable aura keeps the periodic tick countdown alive
+			// (AuraEffect::CalculatePeriodic, SpellAuraEffects.cpp:631). The
+			// triggered-cast funnel bumps triggeredNoProcEvents, so the
+			// counter doubles as the FULL_MASK marker here; the
+			// client-initiated path never sets it.
+			resetPeriodic := spell.StackAmount < 2 && s.triggeredNoProcEvents == 0
 			if existing.Timer != nil {
 				existing.Timer.Stop()
 				existing.Timer = nil
@@ -4048,7 +4055,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		existing.DurationMs = durationMs
 		existing.RemainingMs = durationMs
 		existing.DurationUpdatedAt = time.Now()
-		resetPeriodic := spell.StackAmount < 2
+		// Creature-side mirror of the player merge above: a triggered re-cast
+		// keeps the periodic tick countdown (Spell.cpp:2854 —
+		// TRIGGERED_DONT_RESET_PERIODIC_TIMER rides TRIGGERED_FULL_MASK on
+		// the Go triggered-cast funnel too).
+		resetPeriodic := spell.StackAmount < 2 && s.triggeredNoProcEvents == 0
 		if existing.Timer != nil {
 			existing.Timer.Stop()
 			existing.Timer = nil
