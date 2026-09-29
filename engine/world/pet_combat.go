@@ -451,7 +451,11 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		damage = calcArmorReducedDamage(float64(targetArmor), uint8(motion.Level), damage)
 	}
 
-	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isTargetPlayer, false, false, false, true)
+	victimDodgeBP := int32(-1)
+	if isTargetPlayer && targetSess != nil && targetSess.player != nil {
+		victimDodgeBP = int32(math.Round(float64(targetSess.player.DodgePercentage) * 100))
+	}
+	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isTargetPlayer, false, false, false, true, 0, 0, 0, 0, victimDodgeBP)
 	switch outcome {
 	case protocol.MeleeHitMiss, protocol.MeleeHitDodge, protocol.MeleeHitParry, protocol.MeleeHitEvade, protocol.MeleeHitImmune:
 		damage = 0

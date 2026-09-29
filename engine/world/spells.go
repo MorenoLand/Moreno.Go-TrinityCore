@@ -98,6 +98,9 @@ const (
 	spellEffectPowerDrain                    = 8
 	spellAuraMounted                         = 78
 	spellAuraModParryPercent                 = 47
+	spellAuraModSpellCritChance              = 57  // SPELL_AURA_MOD_SPELL_CRIT_CHANCE (SpellAuraDefines.h:137)
+	spellAuraModSpellCritChanceSchool        = 71  // SPELL_AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL (SpellAuraDefines.h:151)
+	spellAuraModCritPct                      = 290 // SPELL_AURA_MOD_CRIT_PCT (SpellAuraDefines.h:370)
 	spellAuraConfuse                         = 5
 	spellAuraCharm                           = 6
 	spellAuraFear                            = 7

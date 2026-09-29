@@ -192,7 +192,9 @@ func (s *session) getMeleeCritPct() float64 {
 }
 
 // getRangedCritPct returns the bonus ranged crit percentage from Agility and gear rating.
-// Mirrors TrinityCore Player::GetRangedCritFromAgility and Player::GetRatingBonusValue(CR_CRIT_RANGED).
+// Mirrors TrinityCore Player::UpdateAllCritPercentages (StatSystem.cpp:668):
+// RANGED_CRIT_PERCENTAGE's PCT_MOD is set to GetMeleeCritFromAgility() — the
+// same Gt-table value as melee crit, not a separate agility ratio.
 func (s *session) getRangedCritPct() float64 {
 	if s == nil || s.player == nil {
 		return 0
@@ -202,13 +204,8 @@ func (s *session) getRangedCritPct() float64 {
 		lvl = 80
 	}
 
-	// 1. Agility contribution for ranged
-	critPct := 0.0
-	agi := float64(s.player.Stats[1])
-	if agi > 0 {
-		agiPerPct := 83.333333 * (lvl / 80.0)
-		critPct += agi / agiPerPct
-	}
+	// 1. Agility contribution for ranged: same Gt-table value as melee crit
+	critPct := s.getMeleeCritFromAgility()
 
 	// 2. Ranged Crit Rating (CR_CRIT_RANGED = 9): 45.905987 rating per 1.0% crit at level 80
 	rating := float64(s.player.CombatRatings[CombatRatingCritRanged])

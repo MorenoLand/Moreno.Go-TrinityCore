@@ -293,12 +293,16 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	canParry := target.Level >= 10 || isPlayerVictim
 	canDodge := true
 	var critReductionBP int32
+	victimDodgeBP := int32(-1)
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil && vicSess.player != nil {
 			canBlock = vicSess.player.Block > 0
 			critChanceBP := int32(500)
 			vicSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenMelee, &critChanceBP)
 			critReductionBP = 500 - critChanceBP
+			// Gt-based dodge (Unit::GetUnitDodgeChance reads the victim's
+			// PLAYER_DODGE_PERCENTAGE, Unit.cpp:2667).
+			victimDodgeBP = int32(math.Round(float64(vicSess.player.DodgePercentage) * 100))
 		}
 	}
 
@@ -318,7 +322,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		hitBonusBP := int32(math.Round(s.getMeleeHitPct() * 100))
 		critBonusBP := int32(math.Round(s.getMeleeCritPct() * 100))
 		expertiseBP := int32(math.Round(s.getExpertiseDodgeParryReductionPct() * 100))
-		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP)
+		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP)
 	}
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
@@ -592,12 +596,14 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	canBlock := false
 	canDodge := true
 	var critReductionBP int32
+	victimDodgeBP := int32(-1)
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil && vicSess.player != nil {
 			canBlock = vicSess.player.Block > 0
 			critChanceBP := int32(500)
 			vicSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenRanged, &critChanceBP)
 			critReductionBP = 500 - critChanceBP
+			victimDodgeBP = int32(math.Round(float64(vicSess.player.DodgePercentage) * 100))
 		}
 	}
 	attackerInFront := hasInArc(target.Orientation, target.X, target.Y, s.player.X, s.player.Y, math.Pi)
@@ -610,7 +616,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	hitBonusBP := int32(math.Round(s.getRangedHitPct() * 100))
 	critBonusBP := int32(math.Round(s.getRangedCritPct() * 100))
 	expertiseBP := int32(math.Round(s.getExpertiseDodgeParryReductionPct() * 100))
-	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP)
+	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP)
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
 			if vicSess.isImmuneToDamage(1) {
@@ -1289,6 +1295,13 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 	if len(modifiers) > 3 {
 		expertiseBP = modifiers[3]
 	}
+	// Optional 5th modifier: the victim's Gt-based dodge percentage in basis
+	// points (PLAYER_DODGE_PERCENTAGE). Present only when the victim is a
+	// player whose derived stats are known; -1 keeps the legacy fallback.
+	victimDodgeBP := int32(-1)
+	if len(modifiers) > 4 {
+		victimDodgeBP = modifiers[4]
+	}
 
 	leveldif := int32(victimLevel) - int32(attackerLevel)
 
@@ -1327,12 +1340,21 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 		missChance = 0
 	}
 
-	// 2. Dodge chance: base 5% (500/10000)
+	// 2. Dodge chance: TrinityCore Unit::GetUnitDodgeChance (Unit.cpp:2657).
+	// For player victims the chance is the victim's Gt-based, diminished
+	// PLAYER_DODGE_PERCENTAGE (Player::GetDodgeFromAgility, Player.cpp:5449)
+	// plus 0.04% per point of defense-skill difference against the attacker
+	// (5 skill per level = 20 basis points per level).
 	dodgeChance := int32(0)
 	if canDodge && (isPlayerVictim || victimLevel >= 10) {
-		dodgeChance = 500
-		if leveldif > 0 {
-			dodgeChance += leveldif * 10
+		if isPlayerVictim && victimDodgeBP >= 0 {
+			dodgeChance = victimDodgeBP
+			dodgeChance += leveldif * 20
+		} else {
+			dodgeChance = 500
+			if leveldif > 0 {
+				dodgeChance += leveldif * 10
+			}
 		}
 		if expertiseBP > 0 {
 			dodgeChance -= expertiseBP

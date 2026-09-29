@@ -164,29 +164,40 @@ func (s *session) calculateSpellCastTime(spell wotlk.Spell) uint32 {
 }
 
 // calculateSpellCritChance resolves the probability [0.0, 1.0] of a spell critical strike.
-// Incorporates base class crit, Intellect bonus, Spell Crit Rating, and defender Resilience.
-// Mirrors TrinityCore Player::GetSpellCritChance (Player.cpp:8400-8480).
+// Mirrors TrinityCore Player::UpdateSpellCritChance (StatSystem.cpp:819):
+// school 0 (SPELL_SCHOOL_NORMAL) is zeroed; other schools sum the Gt-table
+// Intellect contribution (Player::GetSpellCritFromIntellect, Player.cpp:5502),
+// SPELL_AURA_MOD_SPELL_CRIT_CHANCE (57) and SPELL_AURA_MOD_CRIT_PCT (290),
+// the school-masked SPELL_AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL (71) term, and the
+// CR_CRIT_SPELL rating bonus.
 func (s *session) calculateSpellCritChance(targetGUID uint64, schoolMask uint8) float64 {
 	if s == nil || s.player == nil {
 		return 0.05
 	}
 
-	// 1. Base crit: 5.0%
-	critPct := 5.0
+	// Physical schools never crit via spell crit.
+	if schoolMask == 1 {
+		return 0
+	}
+
+	// 1. Intellect contribution from the Gt tables (includes the class base
+	// crit from gtChanceToSpellCritBase.dbc): crit = critBase +
+	// GetStat(STAT_INTELLECT)*critRatio, *100.
+	critPct := s.getSpellCritFromIntellect(s.player)
+
+	// 2. Flat aura bonuses.
+	critPct += float64(s.playerAuraModifier(spellAuraModSpellCritChance))
+	critPct += float64(s.playerAuraModifier(spellAuraModCritPct))
+
+	// 3. School-specific aura bonus (Unit.cpp:4937: effect MiscValue & school mask).
+	critPct += float64(s.playerAuraModifierByMiscMask(spellAuraModSpellCritChanceSchool, int32(schoolMask)))
 
 	lvl := float64(s.player.Level)
 	if lvl <= 0 {
 		lvl = 80
 	}
 
-	// 2. Intellect contribution: ~1.0% crit per 166.6667 intellect at level 80 (gtChanceToSpellCrit.dbc)
-	intStat := float64(s.player.Stats[3]) // StatIndex 3 = Intellect
-	intPerPct := 166.6667 * (lvl / 80.0)
-	if intPerPct > 0 {
-		critPct += intStat / intPerPct
-	}
-
-	// 3. Spell Crit Rating (CR_CRIT_SPELL = 10): 45.905987 rating per 1.0% crit at level 80
+	// 4. Spell Crit Rating (CR_CRIT_SPELL = 10): 45.905987 rating per 1.0% crit at level 80
 	rating := float64(s.player.CombatRatings[CombatRatingCritSpell])
 	if rating > 0 {
 		ratingPerPct := 45.905987 * (lvl / 80.0)
@@ -196,7 +207,7 @@ func (s *session) calculateSpellCritChance(targetGUID uint64, schoolMask uint8) 
 		critPct += rating / ratingPerPct
 	}
 
-	// 4. Defender resilience reduction (in PvP)
+	// 5. Defender resilience reduction (in PvP)
 	if targetGUID != 0 && targetGUID != s.playerGUID && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(targetGUID); vicSess != nil {
 			critBP := int32(math.Round(critPct * 100))
@@ -213,6 +224,36 @@ func (s *session) calculateSpellCritChance(targetGUID uint64, schoolMask uint8) 
 	}
 
 	return critPct / 100.0
+}
+
+// playerAuraModifierByMiscMask sums the active amounts of auras of the given
+// type whose MiscValue overlaps miscMask.
+// Mirrors TrinityCore Unit::GetTotalAuraModifierByMiscMask (Unit.cpp:4937):
+// (effect MiscValue & miscMask) != 0.
+func (s *session) playerAuraModifierByMiscMask(auraType uint32, miscMask int32) float32 {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	var total float32
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 || effect.Aura != auraType {
+				continue
+			}
+			if effect.MiscValue&miscMask == 0 {
+				continue
+			}
+			total += float32(aura.Amounts[index])
+		}
+	}
+	return total
 }
 
 // rollSpellCrit rolls whether the spell achieves a critical strike.
