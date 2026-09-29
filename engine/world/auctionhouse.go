@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -618,6 +619,9 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM auctionhouse WHERE id = ?", auctionID)
+		// C++ AuctionEntry::DeleteFromDB (AuctionHouseMgr.cpp:890-896):
+		// the auction's bidder rows die with it.
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM auctionbidders WHERE id = ?", auctionID)
 
 		// Consignment cut (5%) and profit (bid + deposit - cut)
 		consignment := uint32(buyout) * 5 / 100
@@ -731,6 +735,15 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 			s.notifyAuctionBidder(uint64(bidderGUID), uint64(s.playerGUID), uint32(houseID), auctionID, price, auctionOutBid(uint32(lastBid)), uint32(itemEntry))
 		}
 		_, _ = cdb.ExecContext(ctx, "UPDATE auctionhouse SET buyguid = ?, lastbid = ? WHERE id = ?", s.playerGUID, price, auctionID)
+		// C++ HandleAuctionPlaceBid (AuctionHouseHandler.cpp:526-535): the
+		// bidder joins the auction's bidder set once, persisted in
+		// auctionbidders; the IGNORE insert is the no-op-if-present guard
+		// for the in-memory set check.
+		insertIgnore := "INSERT OR IGNORE"
+		if s.server.CharactersStore.Backend != database.BackendSQLite {
+			insertIgnore = "INSERT IGNORE"
+		}
+		_, _ = cdb.ExecContext(ctx, insertIgnore+" INTO auctionbidders (id, bidderguid) VALUES (?, ?)", auctionID, s.playerGUID)
 		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(auctionID, auctionPlaceBid, errAuctionOK), true)
 	}
 	s.sendPlayerMoneyUpdate()
@@ -831,10 +844,14 @@ func (s *session) handleAuctionListBidderItems(ctx context.Context, payload []by
 	}
 
 	now := time.Now().Unix()
+	// C++ AuctionHouseObject::BuildListBidderItems (AuctionHouseMgr.cpp:671-
+	// 680): the bidder list covers every auction the player has bid on (the
+	// auctionbidders set), not just ones where they are the current top
+	// bidder.
 	rows, err := cdb.QueryContext(ctx, `SELECT ah.id, ah.itemguid, ah.item_template, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, COALESCE(ii.count, 1)
 		FROM auctionhouse AS ah
 		LEFT JOIN item_instance AS ii ON ii.guid = ah.itemguid
-		WHERE ah.buyguid = ? AND ah.time > ?`, s.playerGUID, now)
+		WHERE ah.id IN (SELECT id FROM auctionbidders WHERE bidderguid = ?) AND ah.time > ?`, s.playerGUID, now)
 	if err != nil {
 		return true
 	}
@@ -968,6 +985,9 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 	s.sendMailNotify(uint64(ownerGUID))
 
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM auctionhouse WHERE id = ?", auctionID)
+	// C++ AuctionEntry::DeleteFromDB (AuctionHouseMgr.cpp:890-896):
+	// the auction's bidder rows die with it.
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM auctionbidders WHERE id = ?", auctionID)
 
 	_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(auctionID, auctionCancel, errAuctionOK), true)
 	return true
@@ -1001,6 +1021,9 @@ func (s *session) expireAuctions(ctx context.Context) {
 
 	for _, a := range expired {
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM auctionhouse WHERE id = ?", a.id)
+		// C++ AuctionEntry::DeleteFromDB (AuctionHouseMgr.cpp:890-896):
+		// the auction's bidder rows die with it.
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM auctionbidders WHERE id = ?", a.id)
 		if a.bidder > 0 && a.lastBid > 0 {
 			// Won by bidder. C++ AuctionHouseObject::Update (AuctionHouseMgr.cpp:649-657)
 			// sends SendAuctionSuccessfulMail first, then SendAuctionWonMail — the
