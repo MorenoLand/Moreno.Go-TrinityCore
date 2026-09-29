@@ -581,13 +581,16 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	s.interruptCurrentCast()
 	s.interruptCurrentChannel()
 	s.procCastAuras()
-	s.triggerGlobalCooldown(spell)
 
 	s.lastCastTime = time.Now()
 	castTime := s.calculateSpellCastTime(spell)
 	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_START), protocol.BuildSpellStart(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagStart, castTime, target), true); err != nil {
 		return false
 	}
+
+	// Spell::prepare (Spell.cpp:3188-3193) sends SMSG_SPELL_START before
+	// TriggerGlobalCooldown.
+	s.triggerGlobalCooldown(spell)
 
 	if castTime > 0 {
 		s.castMu.Lock()
@@ -1995,6 +1998,9 @@ func (s *session) interruptCurrentCast() {
 		castID := s.activeCast.CastID
 		spellID := s.activeCast.SpellID
 		s.activeCast = nil
+		// Spell::cancel (Spell.cpp:3210-3225) calls CancelGlobalCooldown() when
+		// cancelled in SPELL_STATE_PREPARING.
+		s.gcdEnd = 0
 		s.castMu.Unlock()
 
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedInterrupted), true)
