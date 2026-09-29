@@ -755,6 +755,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "range", "code", failCode)
 			return
 		}
+		// CheckCast also revalidates line of sight at completion.
+		if tgt, ok := s.getCombatTarget(ctx, target.UnitGUID); ok && s.server != nil {
+			if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 47), true) // SPELL_FAILED_LINE_OF_SIGHT = 47
+				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "line of sight")
+				return
+			}
+		}
 	}
 
 	hitTargets := make([]uint64, 0, 1)
