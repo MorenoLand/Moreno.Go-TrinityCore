@@ -740,18 +740,36 @@ func (s *session) stealVictimState(targetSess *session, targetGUID uint64, isTar
 	return cand.DurationMs, 0, 0, nil
 }
 
+// stolenAuraMergesInto reports whether the stealer-side merge of
+// Unit::RemoveAurasDueToSpellBySteal (Unit.cpp:4002) applies: C++ merges only
+// via unitStealer->GetAura(aura->GetId(), aura->GetCasterGUID()), so both the
+// spell ID and the victim aura's original caster GUID must match the
+// stealer's existing aura. A zero victim caster degrades to the stealing
+// player (the same fallback the fresh-apply path uses); a zero existing
+// caster never matches. Go holds one aura per spell ID, so on a miss the
+// steal falls through to the fresh apply, which replaces the slot — the
+// C++ rank-chain term (SpellAuras.cpp:1988-2004) never lets the same spell
+// stack with itself anyway.
+func stolenAuraMergesInto(existing *activeAura, victimCasterGUID, playerGUID uint64) bool {
+	mergeCaster := victimCasterGUID
+	if mergeCaster == 0 {
+		mergeCaster = playerGUID
+	}
+	return existing != nil && !existing.Stopped && existing.CasterGUID == mergeCaster
+}
+
 // mergeStolenAura mirrors the stealer-side merge in
 // Unit::RemoveAurasDueToSpellBySteal (Unit.cpp:4002-4010): when the stealer
-// already holds the stolen spell, the steal merges into it — one charge
-// (Aura::ModCharges(+1), clamped to the spell's max charges) or one stack
-// (Aura::ModStackAmount(+1), clamped to the spell's stack amount) — and the
-// duration is reset to the capped stolen duration, instead of the aura being
-// re-applied fresh. Reports whether a merge happened. Go holds one aura per
-// spell ID, so the C++ caster-GUID match is vacuous.
-func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, stealCharge bool, dur uint32) bool {
+// already holds the stolen spell from the same original caster, the steal
+// merges into it — one charge (Aura::ModCharges(+1), clamped to the spell's
+// max charges) or one stack (Aura::ModStackAmount(+1), clamped to the
+// spell's stack amount) — and the duration is reset to the capped stolen
+// duration, instead of the aura being re-applied fresh. Reports whether a
+// merge happened.
+func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, stealCharge bool, dur uint32, victimCasterGUID uint64) bool {
 	s.castMu.Lock()
 	existing := s.activeAuras[spellID]
-	if existing == nil || existing.Stopped {
+	if !stolenAuraMergesInto(existing, victimCasterGUID, s.playerGUID) {
 		s.castMu.Unlock()
 		return false
 	}
@@ -917,7 +935,7 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 				stSpell = loaded
 			}
 		}
-		if s.mergeStolenAura(cand.SpellID, stSpell, st.stealCharge, dur) {
+		if s.mergeStolenAura(cand.SpellID, stSpell, st.stealCharge, dur, st.victimCasterGUID) {
 			continue
 		}
 		// Unit::RemoveAurasDueToSpellBySteal single-target dance
