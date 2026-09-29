@@ -30,6 +30,9 @@ const (
 	spellAttr1NotBreakStealth uint32 = 0x00000020 // SPELL_ATTR1_NOT_BREAK_STEALTH (SharedDefines.h:454)
 
 	spellAttr0Ability                     uint32 = 0x00000010 // SPELL_ATTR0_ABILITY (SharedDefines.h:416)
+	spellAttr0ReqAmmo                      uint32 = 0x00000002 // SPELL_ATTR0_REQ_AMMO (SharedDefines.h:413)
+	spellAttr0Tradespell                    uint32 = 0x00000020 // SPELL_ATTR0_TRADESPELL (SharedDefines.h:417)
+	spellAttr3NoDoneBonus                   uint32 = 0x20000000 // SPELL_ATTR3_NO_DONE_BONUS (SharedDefines.h:552) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 	spellAttr0UnaffectedByInvulnerability uint32 = 0x20000000 // SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY (SharedDefines.h:441)
 	spellAttr0NotShapeshift                uint32 = 0x00010000 // SPELL_ATTR0_NOT_SHAPESHIFT (SharedDefines.h:428)
 	spellAttr2NotNeedShapeshift            uint32 = 0x00080000 // SPELL_ATTR2_NOT_NEED_SHAPESHIFT (SharedDefines.h:505) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)

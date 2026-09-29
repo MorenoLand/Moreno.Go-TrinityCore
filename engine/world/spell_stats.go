@@ -119,30 +119,48 @@ func (s *session) rollSpellHit(targetLevel uint8, isTargetPlayer bool) bool {
 	return rand.Float64() < chance
 }
 
-// calculateSpellCastTime resolves the cast time in milliseconds, modified by spell haste.
-// Mirrors TrinityCore Player::CalculateCastTime (Player.cpp:8800-8830):
-// castTime = baseCastTime / (1.0 + hastePct / 100.0)
+// calculateSpellCastTime mirrors TrinityCore SpellInfo::CalcCastTime
+// (SpellInfo.cpp:3091) plus WorldObject::ModSpellCastTime (Object.cpp:2448):
+// the SpellCastTimes.dbc base is multiplied by the cast-speed modifier
+// (UNIT_MOD_CAST_SPEED = 1/(1+hastePct/100), fed by CR_HASTE_SPELL rating
+// via Player::ApplyCastTimePercentMod — Player.cpp:5621), then non-auto-repeat
+// ranged spells with ATTR0_REQ_AMMO gain +500ms (SpellInfo.cpp:3102).
+// Haste skips ATTR0_ABILITY / ATTR0_TRADESPELL / ATTR3_NO_DONE_BONUS spells
+// and, for players, spells with no spell family name (Object.cpp:2462-2468).
+// Noted gaps (not stubs): SPELLMOD_CASTING_TIME has no spellmod infra in Go;
+// CanInstantCast (SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK amount >= 1000,
+// SpellAuraEffects.cpp:3904) has no cast-speed aura infra; the ranged-attack-speed
+// branch (m_modAttackSpeedPct[RANGED_ATTACK], Object.cpp:2470) has no Go
+// ranged-haste infra, so that branch is a no-op here.
 func (s *session) calculateSpellCastTime(spell wotlk.Spell) uint32 {
-	baseCastTime := uint32(0)
+	baseCastTime := int32(0)
 	if s.server != nil && s.server.Data != nil && spell.CastingTimeIndex > 0 {
 		if value, ok, err := s.server.Data.SpellCastTime(spell.CastingTimeIndex); err == nil && ok && value > 0 {
-			baseCastTime = uint32(value)
+			baseCastTime = int32(value)
 		}
 	}
-	if baseCastTime == 0 || s.player == nil {
-		return baseCastTime
+	if baseCastTime == 0 {
+		return 0
 	}
-
-	hastePct := s.getSpellHastePct()
-	if hastePct <= 0 {
-		return baseCastTime
+	castTime := baseCastTime
+	reqAmmo := spell.Attributes&spellAttr0ReqAmmo != 0 && spell.AttributesEx1&spellAttr2AutorepeatFlag == 0
+	switch {
+	case s.player != nil && spell.Attributes&(spellAttr0Ability|spellAttr0Tradespell|spellAttr3NoDoneBonus) == 0 && spell.SpellFamilyName != 0:
+		if hastePct := s.getSpellHastePct(); hastePct > 0 {
+			castTime = int32(float64(castTime) / (1.0 + hastePct/100.0))
+		}
+	case reqAmmo:
+		// Ranged-attack-speed branch (Object.cpp:2470) — no Go ranged-haste infra, no-op.
+	case len(spell.SpellVisual) > 0 && spell.SpellVisual[0] == 3881 && s.hasAura(67556):
+		castTime = 500 // cooking with Chef Hat (Object.cpp:2471)
 	}
-
-	hastedTime := float64(baseCastTime) / (1.0 + hastePct/100.0)
-	if hastedTime < 0 {
-		hastedTime = 0
+	if reqAmmo {
+		castTime += 500
 	}
-	return uint32(math.Round(hastedTime))
+	if castTime < 0 {
+		return 0
+	}
+	return uint32(castTime)
 }
 
 // calculateSpellCritChance resolves the probability [0.0, 1.0] of a spell critical strike.
