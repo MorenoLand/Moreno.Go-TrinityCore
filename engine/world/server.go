@@ -963,21 +963,22 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 
 		// 1. Health regeneration (out of combat)
 		if !inCombat && p.Health < p.MaxHealth {
-			spirit := p.Stats[4]
-			gain := uint32(max(1, int(spirit)/2))
-			if gain < uint32(p.MaxHealth/25) {
-				gain = uint32(p.MaxHealth / 25)
+			// Player::RegenerateHealth (Player.cpp:2236-2249): addValue =
+			// OCTRegenHPPerSpirit() * HealthIncreaseRate, with the low-level
+			// multiplier on the default rate of 1.0 (Go has no RATE_HEALTH
+			// config). The polymorphed case, regen-percent/regen-flat aura
+			// terms, regen-during-combat, and sitting 1.5x terms are
+			// unmodeled (no Go read sites).
+			gain := uint32(s.octRegenHPPerSpirit(uint32(p.Class), uint32(p.Level), float64(p.Stats[4])) * octRegenLowLevelMultiplier(p.Level))
+			if gain > 0 {
+				if p.Health+gain >= p.MaxHealth {
+					p.Health = p.MaxHealth
+				} else {
+					p.Health += gain
+				}
+				fields[unitFieldHealth] = p.Health
+				changed = true
 			}
-			if gain < 2 {
-				gain = 2
-			}
-			if p.Health+gain >= p.MaxHealth {
-				p.Health = p.MaxHealth
-			} else {
-				p.Health += gain
-			}
-			fields[unitFieldHealth] = p.Health
-			changed = true
 		}
 
 		// 2. Power regeneration
@@ -1016,16 +1017,16 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 			if p.Powers[0] < p.MaxPowers[0] {
 				// Outside 5-second rule
 				if now.Sub(sess.lastCastTime) >= 5*time.Second {
-					spirit := p.Stats[4]
-					intellect := p.Stats[3]
-					gain := uint32(max(5, int(spirit)/2+int(intellect)/10))
-					if p.Powers[0]+gain >= p.MaxPowers[0] {
-						p.Powers[0] = p.MaxPowers[0]
-					} else {
-						p.Powers[0] += gain
+					gain := s.manaRegenTickGain(uint32(p.Class), p.Level, p.Stats[3], p.Stats[4])
+					if gain > 0 {
+						if p.Powers[0]+gain >= p.MaxPowers[0] {
+							p.Powers[0] = p.MaxPowers[0]
+						} else {
+							p.Powers[0] += gain
+						}
+						fields[unitFieldPower1] = p.Powers[0]
+						changed = true
 					}
-					fields[unitFieldPower1] = p.Powers[0]
-					changed = true
 				}
 			}
 		}
