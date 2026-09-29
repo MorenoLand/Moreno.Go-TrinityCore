@@ -4768,3 +4768,4 @@ func (s *session) handleEffectResurrect(ctx context.Context, targetGUID uint64, 
 	targetSess.setResurrectRequestData(s.playerGUID, 0, 0, 0, 0, health, mana)
 	targetSess.sendResurrectRequest(s.playerGUID, "", false, false)
 }
+
