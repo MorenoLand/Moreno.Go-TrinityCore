@@ -59,6 +59,7 @@ const (
 	spellEffectResurrect                     = 18
 	spellEffectReputation                    = 103
 	spellEffectQuestComplete                 = 16
+	spellEffectHealthLeech                   = 9
 	spellAuraMounted                         = 78
 	spellAuraModParryPercent                 = 47
 	spellAuraConfuse                         = 5
@@ -1053,6 +1054,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if eff.MiscValue != 0 {
 					s.completeQuest(effCtx, uint32(eff.MiscValue))
 				}
+			case spellEffectHealthLeech: // 9: SPELL_EFFECT_HEALTH_LEECH
+				s.handleEffectHealthLeech(effCtx, spellID, hitTargets, eff)
 			default:
 				s.debug("unhandled spell effect", "spell", spellID, "effect", eff.Effect, "index", effectIndex)
 			}
@@ -4769,3 +4772,21 @@ func (s *session) handleEffectResurrect(ctx context.Context, targetGUID uint64, 
 	targetSess.sendResurrectRequest(s.playerGUID, "", false, false)
 }
 
+
+func (s *session) handleEffectHealthLeech(ctx context.Context, spellID uint32, hitTargets []uint64, eff wotlk.SpellEffect) {
+	if s.playerGUID == 0 {
+		return
+	}
+	amount := eff.BasePoints + 1
+	if amount < 0 {
+		return
+	}
+	damageAmount := uint32(amount)
+	for _, target := range hitTargets {
+		if target == 0 || target == s.playerGUID {
+			continue
+		}
+		s.executeSpellDamage(ctx, target, spellID, damageAmount)
+		s.executeSpellHeal(ctx, s.playerGUID, spellID, damageAmount)
+	}
+}
