@@ -2131,3 +2131,30 @@ func (s *Store) WorldMapOverlayAreas(id uint32) ([4]uint32, bool, error) {
 	}
 	return areas, true, nil
 }
+
+// gtMaxRating mirrors GT_MAX_RATING (DBCStructure.h:778).
+const gtMaxRating = 32
+
+// GtOCTClassCombatRatingScalar mirrors Player::GetRatingMultiplier
+// (Player.cpp:5518-5532): the class-specific combat rating coefficient from
+// gtOCTClassCombatRatingScalar.dbc. The DBC rows start at 1 while the
+// CombatRating enum starts at 0, so cr+1.
+func (s *Store) GtOCTClassCombatRatingScalar(classID uint32, cr uint32) (float32, bool, error) {
+	if classID == 0 {
+		return 0, false, nil
+	}
+	file, err := s.File("gtOCTClassCombatRatingScalar")
+	if err != nil {
+		return 0, false, err
+	}
+	index := (classID-1)*gtMaxRating + cr + 1
+	record, ok := file.Find(index)
+	if !ok {
+		return 0, false, nil
+	}
+	val, err := record.Float32(0)
+	if err != nil {
+		return 0, false, err
+	}
+	return val, true, nil
+}
