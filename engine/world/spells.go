@@ -34,6 +34,11 @@ const (
 	spellAttr0NotShapeshift                uint32 = 0x00010000 // SPELL_ATTR0_NOT_SHAPESHIFT (SharedDefines.h:428)
 	spellAttr2NotNeedShapeshift            uint32 = 0x00080000 // SPELL_ATTR2_NOT_NEED_SHAPESHIFT (SharedDefines.h:505) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr1CantBeReflected             uint32 = 0x00000080 // SPELL_ATTR1_CANT_BE_REFLECTED (SharedDefines.h:456)
+	spellAttr2CanTargetDead              uint32 = 0x00000001 // SPELL_ATTR2_CAN_TARGET_DEAD (SharedDefines.h:486) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
+
+	targetFlagCorpseEnemy uint32 = 0x00000200 // TARGET_FLAG_CORPSE_ENEMY (SpellInfo.h:57)
+	targetFlagUnitDead    uint32 = 0x00000400 // TARGET_FLAG_UNIT_DEAD (SpellInfo.h:58)
+	targetFlagCorpseAlly  uint32 = 0x00008000 // TARGET_FLAG_CORPSE_ALLY (SpellInfo.h:63)
 
 	spellDamageClassMagic uint32 = 1 // SPELL_DAMAGE_CLASS_MAGIC (SharedDefines.h:1580)
 
@@ -904,8 +909,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "line of sight")
 				return
 			}
-			// Unit targets that died during the cast bar fail, unless the
-			// spell can resurrect (SPELL_FAILED_TARGETS_DEAD = 109).
+			// Unit targets that died during the cast bar fail with
+			// SPELL_FAILED_TARGETS_DEAD (SpellInfo::CheckTarget, SpellInfo.cpp:1715)
+			// unless the spell allows dead targets (SpellInfo::IsAllowingDeadTarget,
+			// SpellInfo.cpp:1177) or can resurrect.
 			if tgt.Health == 0 && target.UnitGUID != s.playerGUID {
 				canResurrect := false
 				for _, effect := range spell.Effects {
@@ -914,7 +921,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						break
 					}
 				}
-				if !canResurrect {
+				if !canResurrect && !spellAllowsDeadTarget(spell) {
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 109), true)
 					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target dead")
 					return
@@ -4617,6 +4624,13 @@ type activeChannelState struct {
 
 func isChanneledSpell(spell wotlk.Spell) bool {
 	return spell.AttributesEx&(spellAttr1Channeled1|spellAttr1Channeled2) != 0
+}
+
+// spellAllowsDeadTarget mirrors SpellInfo::IsAllowingDeadTarget (SpellInfo.cpp:1177):
+// ATTR2_CAN_TARGET_DEAD or a corpse/dead-unit bit in the DBC Targets mask (Spell.dbc field 16).
+func spellAllowsDeadTarget(spell wotlk.Spell) bool {
+	return spell.AttributesEx1&spellAttr2CanTargetDead != 0 ||
+		spell.Targets&(targetFlagCorpseEnemy|targetFlagUnitDead|targetFlagCorpseAlly) != 0
 }
 
 // sendChannelUpdate mirrors Spell::SendChannelUpdate: packed caster GUID plus
