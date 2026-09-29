@@ -418,7 +418,8 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		succSubj := fmt.Sprintf("%d:0:%d:%d:%d", itemEntry, auctionSuccessful, auctionID, itemCount)
 		succBody := fmt.Sprintf("%X:%d:%d:%d:%d", s.playerGUID, buyout, buyout, deposit, consignment)
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, ?, 0, ?, ?, ?, 0, 4)",
-			sellerMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, ownerGUID, succSubj, succBody, now+30*86400, now+3600, profit)
+			// C++ Mail.cpp:197,215: expire_time = deliver_time + expire_delay (30d: money but no items/COD -> else branch)
+			sellerMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, ownerGUID, succSubj, succBody, now+3600+30*86400, now+3600, profit)
 
 		// 4. Send auction invoice / sale pending notice mail to seller (immediate delivery, expires in 1 hour)
 		var invoiceMailID int64
@@ -714,7 +715,8 @@ func (s *session) expireAuctions(ctx context.Context) {
 			succSubj := fmt.Sprintf("%d:0:%d:%d:%d", a.itemTmpl, auctionSuccessful, a.id, a.count)
 			succBody := fmt.Sprintf("%X:%d:%d:%d:%d", a.bidder, a.lastBid, a.buyout, a.deposit, consignment)
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, ?, 0, ?, ?, ?, 0, 4)",
-				sellerMailID, mailAuctionType, mailStationeryAuction, a.houseID, a.owner, succSubj, succBody, now+30*86400, now+3600, profit)
+				// C++ Mail.cpp:197,215: expire_time = deliver_time + expire_delay (30d: money but no items/COD -> else branch)
+				sellerMailID, mailAuctionType, mailStationeryAuction, a.houseID, a.owner, succSubj, succBody, now+3600+30*86400, now+3600, profit)
 
 			// 3. Invoice mail to seller (immediate)
 			var invoiceMailID int64
