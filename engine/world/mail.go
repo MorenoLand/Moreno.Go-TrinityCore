@@ -140,8 +140,41 @@ func (s *Server) updateMailDeliveries(ctx context.Context, now int64) {
 	}
 }
 
+// canOpenMailBox mirrors WorldSession::CanOpenMailBox (MailHandler.cpp:36-53).
+// A mailbox GUID equal to the player's own GUID is only accepted with
+// RBAC_PERM_COMMAND_MAILBOX (id 777, the .mailbox command path); a gameobject
+// GUID (HighGuid 0xF110) or a creature GUID (unit 0xF130, pet 0xF140, vehicle
+// 0xF150 — the IsAnyTypeCreature set) is accepted without proximity checks,
+// since Go has no gameobject/NPC interaction model on these paths (noted gap:
+// the C++ GetGameObjectIfCanInteractWith / GetNPCIfCanInteractWith mailbox-
+// type terms are not verifiable); any other GUID type is refused, matching
+// the C++ else branch.
+func (s *session) canOpenMailBox(ctx context.Context, mailboxGUID uint64) bool {
+	if mailboxGUID == s.playerGUID {
+		granted := false
+		if s.server != nil && s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
+			g, permErr := accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionCommandMailbox)
+			granted = permErr == nil && g
+		}
+		return granted
+	}
+	switch uint16(mailboxGUID >> 48) {
+	case 0xF110, 0xF130, 0xF140, 0xF150:
+		return true
+	}
+	return false
+}
+
 func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return true
+	}
+	if len(payload) < 8 {
+		return true
+	}
+	reader := protocol.NewReader(payload)
+	mailboxGUID, _ := reader.ReadU64()
+	if !s.canOpenMailBox(ctx, mailboxGUID) {
 		return true
 	}
 	s.expireOldMails(ctx)
@@ -367,7 +400,10 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	reader := protocol.NewReader(payload)
-	_, _ = reader.ReadU64() // mailbox GUID
+	mailboxGUID, _ := reader.ReadU64()
+	if !s.canOpenMailBox(ctx, mailboxGUID) {
+		return true
+	}
 	targetName, err := reader.ReadCString()
 	if err != nil || targetName == "" {
 		return false
@@ -526,7 +562,10 @@ func (s *session) handleMailTakeMoney(ctx context.Context, payload []byte) bool 
 		return true
 	}
 	reader := protocol.NewReader(payload)
-	_, _ = reader.ReadU64()
+	mailboxGUID, _ := reader.ReadU64()
+	if !s.canOpenMailBox(ctx, mailboxGUID) {
+		return true
+	}
 	mailID, err := reader.ReadU32()
 	if err != nil {
 		return false
@@ -571,7 +610,10 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	reader := protocol.NewReader(payload)
-	_, _ = reader.ReadU64()
+	mailboxGUID, _ := reader.ReadU64()
+	if !s.canOpenMailBox(ctx, mailboxGUID) {
+		return true
+	}
 	mailID, err := reader.ReadU32()
 	if err != nil {
 		return false
@@ -658,7 +700,10 @@ func (s *session) handleMailDelete(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	reader := protocol.NewReader(payload)
-	_, _ = reader.ReadU64()
+	mailboxGUID, _ := reader.ReadU64()
+	if !s.canOpenMailBox(ctx, mailboxGUID) {
+		return true
+	}
 	mailID, err := reader.ReadU32()
 	if err != nil {
 		return false
@@ -685,7 +730,10 @@ func (s *session) handleMailMarkAsRead(ctx context.Context, payload []byte) bool
 		return true
 	}
 	reader := protocol.NewReader(payload)
-	_, _ = reader.ReadU64()
+	mailboxGUID, _ := reader.ReadU64()
+	if !s.canOpenMailBox(ctx, mailboxGUID) {
+		return true
+	}
 	mailID, err := reader.ReadU32()
 	if err != nil {
 		return false
@@ -818,7 +866,10 @@ func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) 
 		return true
 	}
 	r := protocol.NewReader(payload)
-	_, _ = r.ReadU64() // mailbox GUID
+	mailboxGUID, _ := r.ReadU64()
+	if !s.canOpenMailBox(ctx, mailboxGUID) {
+		return true
+	}
 	mailID, _ := r.ReadU32()
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
@@ -906,7 +957,10 @@ func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) 
 		return true
 	}
 	r := protocol.NewReader(payload)
-	_, _ = r.ReadU64() // mailbox GUID
+	mailboxGUID, _ := r.ReadU64()
+	if !s.canOpenMailBox(ctx, mailboxGUID) {
+		return true
+	}
 	mailID, err := r.ReadU32()
 	if err != nil {
 		return false
