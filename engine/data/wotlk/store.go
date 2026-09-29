@@ -1301,6 +1301,61 @@ func (s *Store) GtChanceToSpellCrit(classID uint32, level uint32) (float32, bool
 	return s.gtCritRatio("gtChanceToSpellCrit", classID, level)
 }
 
+func (s *Store) gtScalar(name string, index uint32) (float32, bool, error) {
+	file, err := s.File(name)
+	if err != nil {
+		return 0, false, err
+	}
+	record, ok := file.Find(index)
+	if !ok {
+		return 0, false, nil
+	}
+	val, err := record.Float32(0)
+	if err != nil {
+		return 0, false, err
+	}
+	return val, true, nil
+}
+
+func (s *Store) GtBarberShopCostBase(level uint32) (float32, bool, error) {
+	if level == 0 {
+		return 0, false, nil
+	}
+	if level > gtMaxLevel {
+		level = gtMaxLevel
+	}
+	return s.gtScalar("gtBarberShopCostBase", level-1)
+}
+
+func (s *Store) GtNPCManaCostScaler(level uint32) (float32, bool, error) {
+	if level == 0 {
+		return 0, false, nil
+	}
+	return s.gtScalar("gtNPCManaCostScaler", level-1)
+}
+
+func (s *Store) gtRegenRatio(name string, classID uint32, level uint32) (float32, bool, error) {
+	if classID == 0 || level == 0 {
+		return 0, false, nil
+	}
+	if level > gtMaxLevel {
+		level = gtMaxLevel
+	}
+	return s.gtScalar(name, (classID-1)*gtMaxLevel+(level-1))
+}
+
+func (s *Store) GtOCTRegenHP(classID uint32, level uint32) (float32, bool, error) {
+	return s.gtRegenRatio("gtOCTRegenHP", classID, level)
+}
+
+func (s *Store) GtRegenHPPerSpt(classID uint32, level uint32) (float32, bool, error) {
+	return s.gtRegenRatio("gtRegenHPPerSpt", classID, level)
+}
+
+func (s *Store) GtRegenMPPerSpt(classID uint32, level uint32) (float32, bool, error) {
+	return s.gtRegenRatio("gtRegenMPPerSpt", classID, level)
+}
+
 func (s *Store) SpellRange(id uint32) (SpellRangeEntry, bool, error) {
 	file, err := s.File("SpellRange")
 	if err != nil {
