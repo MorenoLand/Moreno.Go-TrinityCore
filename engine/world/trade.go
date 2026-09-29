@@ -117,12 +117,25 @@ func (s *session) handleInitiateTrade(ctx context.Context, payload []byte) bool 
 		_ = s.sendTradeStatus(tradeStatusTargetDead, 0, 0, 0, 0)
 		return true
 	}
+	// Reference: WorldSession::HandleInitiateTradeOpcode (TradeHandler.cpp:677-684):
+	// cross-faction trade is refused with TRADE_STATUS_WRONG_FACTION unless
+	// CONFIG_ALLOW_TWO_SIDE_TRADE ("AllowTwoSide.Trade", default false) is set
+	// or the session holds RBAC_PERM_ALLOW_TWO_SIDE_TRADE (id 51). C++ checks
+	// this before the distance term. Go previously hard-blocked cross-faction
+	// trade unconditionally.
+	if s.player.Race != 0 && targetSess.player.Race != 0 && teamForRace(s.player.Race) != teamForRace(targetSess.player.Race) {
+		twoSide := s.server.Config.AllowTwoSideTrade
+		if !twoSide {
+			granted, permErr := accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionAllowTwoSideTrade)
+			twoSide = permErr == nil && granted
+		}
+		if !twoSide {
+			_ = s.sendTradeStatus(tradeStatusWrongFaction, 0, 0, 0, 0)
+			return true
+		}
+	}
 	if targetSess.player.Map != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, targetSess.player.X, targetSess.player.Y, targetSess.player.Z) > tradeDistance {
 		_ = s.sendTradeStatus(tradeStatusTargetTooFar, 0, 0, 0, 0)
-		return true
-	}
-	if s.player.Race != 0 && targetSess.player.Race != 0 && teamForRace(s.player.Race) != teamForRace(targetSess.player.Race) {
-		_ = s.sendTradeStatus(tradeStatusWrongFaction, 0, 0, 0, 0)
 		return true
 	}
 

@@ -29,6 +29,9 @@ const permissionTwoSideWhoList uint32 = 28
 
 const permissionWhoSeeAllSecurityLevels uint32 = 35
 
+// permissionAllowTwoSideTrade mirrors rbac::RBAC_PERM_ALLOW_TWO_SIDE_TRADE (RBAC.h:104).
+const permissionAllowTwoSideTrade uint32 = 51
+
 const permissionRestoreSavedGMState uint32 = 39
 
 // permissionOpcodeWorldTeleport mirrors rbac::RBAC_PERM_OPCODE_WORLD_TELEPORT (RBAC.h:95).
