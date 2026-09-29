@@ -170,6 +170,8 @@ type Spell struct {
 	AttributesEx3         uint32 // Spell.dbc field 7 = AttributesExC (DBCStructure.h:1399)
 	AttributesEx4         uint32 // Spell.dbc field 8 = AttributesExD (DBCStructure.h:1402)
 	AttributesEx5         uint32 // Spell.dbc field 9 = AttributesExE (DBCStructure.h:1403)
+	ShapeshiftMask        [2]uint32 // Spell.dbc fields 12-13 = ShapeshiftMask (DBCStructure.h:1404)
+	ShapeshiftExclude     [2]uint32 // Spell.dbc fields 14-15 = ShapeshiftExclude (DBCStructure.h:1405)
 	SchoolMask            uint32
 	Targets               uint32
 	FacingCasterFlags     uint32 // Spell.dbc field 19 = FacingCasterFlags (DBCStructure.h:1409)
@@ -778,6 +780,10 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{7, &spell.AttributesEx3},       // Spell.dbc field 7 = AttributesExC (DBCStructure.h:1399)
 		{8, &spell.AttributesEx4},       // Spell.dbc field 8 = AttributesExD (DBCStructure.h:1402)
 		{9, &spell.AttributesEx5},       // Spell.dbc field 9 = AttributesExE (DBCStructure.h:1403)
+		{12, &spell.ShapeshiftMask[0]},   // Spell.dbc field 12 = ShapeshiftMask[0] (DBCStructure.h:1404)
+		{13, &spell.ShapeshiftMask[1]},   // Spell.dbc field 13 = ShapeshiftMask[1] (DBCStructure.h:1404)
+		{14, &spell.ShapeshiftExclude[0]}, // Spell.dbc field 14 = ShapeshiftExclude[0] (DBCStructure.h:1405)
+		{15, &spell.ShapeshiftExclude[1]}, // Spell.dbc field 15 = ShapeshiftExclude[1] (DBCStructure.h:1405)
 		{31, &spell.InterruptFlags},     // DBCStructure.h:1421
 		{32, &spell.AuraInterruptFlags}, // DBCStructure.h:1422
 		{33, &spell.ChannelInterrupt},
