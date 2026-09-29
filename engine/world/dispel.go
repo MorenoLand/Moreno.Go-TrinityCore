@@ -764,12 +764,21 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 		candidates = s.getDispellableAuraListForCreature(targetGUID, dispelMask)
 	}
 
-	// Spellsteal only steals beneficial buffs from non-friendly targets (SpellEffects.cpp:5172)
+	// Spellsteal only steals beneficial buffs from non-friendly targets
+	// (SpellEffects.cpp:5172), skipping passive auras (already excluded by
+	// the dispel helpers) and auras whose spell carries
+	// SPELL_ATTR4_NOT_STEALABLE.
 	var stealable []dispelCandidate
 	for _, c := range candidates {
-		if c.Positive {
-			stealable = append(stealable, c)
+		if !c.Positive {
+			continue
 		}
+		if s.server != nil && s.server.Data != nil {
+			if sp, found, _ := s.server.Data.Spell(c.SpellID); found && sp.AttributesEx4&spellAttr4NotStealable != 0 {
+				continue
+			}
+		}
+		stealable = append(stealable, c)
 	}
 
 	if len(stealable) == 0 {
