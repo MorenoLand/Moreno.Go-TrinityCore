@@ -372,6 +372,11 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 
 	now := time.Now().Unix()
+	// C++ AuctionHouseMgr::SendAuctionSuccessfulMail (AuctionHouseMgr.cpp:230) passes
+	// CONFIG_MAIL_DELIVERY_DELAY as the successful-mail deliver_delay, and
+	// SendAuctionSalePendingMail (AuctionHouseMgr.cpp:199,203) reads the same config
+	// for the invoice body/timePacker fields (worldserver.conf "MailDeliveryDelay", default 3600).
+	mailDelay := int64(s.server.Config.MailDeliveryDelay)
 
 	s.setAchievementCriteria(criteriaTypeHighestAuctionBid, 0, price)
 	if isBuyout {
@@ -412,22 +417,27 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		s.sendMailNotify(uint64(s.playerGUID))
 		s.sendAuctionBidderNotification(1, auctionID, s.playerGUID, uint32(buyout), 0, uint32(itemEntry))
 
-		// 3. Send profit mail to seller (delayed by 1 hour)
+		// 3. Send profit mail to seller (delayed by MailDeliveryDelay, default 1 hour)
 		var sellerMailID int64
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&sellerMailID)
 		succSubj := fmt.Sprintf("%d:0:%d:%d:%d", itemEntry, auctionSuccessful, auctionID, itemCount)
 		succBody := fmt.Sprintf("%X:%d:%d:%d:%d", s.playerGUID, buyout, buyout, deposit, consignment)
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, ?, 0, ?, ?, ?, 0, 4)",
-			// C++ Mail.cpp:197,215: expire_time = deliver_time + expire_delay (30d: money but no items/COD -> else branch)
-			sellerMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, ownerGUID, succSubj, succBody, now+3600+30*86400, now+3600, profit)
+			// C++ Mail.cpp:197,215: expire_time = deliver_time + expire_delay (30d: money but no items/COD -> else branch);
+			// deliver_delay comes from AuctionHouseMgr::SendAuctionSuccessfulMail (AuctionHouseMgr.cpp:230),
+			// which passes CONFIG_MAIL_DELIVERY_DELAY ("MailDeliveryDelay", default 3600).
+			sellerMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, ownerGUID, succSubj, succBody, now+mailDelay+30*86400, now+mailDelay, profit)
 
-		// 4. Send auction invoice / sale pending notice mail to seller (immediate delivery, expires in 1 hour)
+		// 4. Send auction invoice / sale pending notice mail to seller (immediate delivery, expires in MailDeliveryDelay)
 		var invoiceMailID int64
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&invoiceMailID)
 		pendingSubj := fmt.Sprintf("%d:0:%d:%d:%d", itemEntry, auctionSalePending, auctionID, itemCount)
-		pendingBody := fmt.Sprintf("%X:%d:%d:%d:%d:%d:%d", s.playerGUID, buyout, buyout, deposit, consignment, 3600, 0)
+		pendingBody := fmt.Sprintf("%X:%d:%d:%d:%d:%d:%d", s.playerGUID, buyout, buyout, deposit, consignment, mailDelay, 0)
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, ?, 0, ?, ?, 0, 0, 4)",
-			invoiceMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, ownerGUID, pendingSubj, pendingBody, now+3600, now)
+			// C++ Mail.cpp:203-204: auction mail without items and money expires after CONFIG_MAIL_DELIVERY_DELAY;
+			// the moneyDelay/eta body fields come from AuctionHouseMgr::SendAuctionSalePendingMail
+			// (AuctionHouseMgr.cpp:199,203), same config.
+			invoiceMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, ownerGUID, pendingSubj, pendingBody, now+mailDelay, now)
 		s.sendMailNotify(uint64(ownerGUID))
 		s.notifyAuctionOwner(uint64(ownerGUID), auctionID, uint32(buyout), s.playerGUID, uint32(itemEntry))
 
@@ -671,6 +681,7 @@ func (s *session) expireAuctions(ctx context.Context) {
 	}
 	cdb := s.server.CharactersStore.DB
 	now := time.Now().Unix()
+	mailDelay := int64(s.server.Config.MailDeliveryDelay)
 	rows, err := cdb.QueryContext(ctx, `SELECT ah.id, ah.houseid, ah.itemguid, ah.item_template, COALESCE(ii.count, 1), ah.itemowner, ah.buyoutprice, ah.buyguid, ah.lastbid, ah.deposit
 		FROM auctionhouse AS ah
 		LEFT JOIN item_instance AS ii ON ii.guid = ah.itemguid
@@ -709,22 +720,27 @@ func (s *session) expireAuctions(ctx context.Context) {
 			s.sendMailNotify(uint64(a.bidder))
 			s.notifyAuctionBidder(uint64(a.bidder), uint32(a.houseID), uint32(a.id), uint32(a.lastBid), 0, uint32(a.itemTmpl))
 
-			// 2. Profit mail to seller (delayed by 1 hour)
+			// 2. Profit mail to seller (delayed by MailDeliveryDelay, default 1 hour)
 			var sellerMailID int64
 			_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&sellerMailID)
 			succSubj := fmt.Sprintf("%d:0:%d:%d:%d", a.itemTmpl, auctionSuccessful, a.id, a.count)
 			succBody := fmt.Sprintf("%X:%d:%d:%d:%d", a.bidder, a.lastBid, a.buyout, a.deposit, consignment)
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, ?, 0, ?, ?, ?, 0, 4)",
-				// C++ Mail.cpp:197,215: expire_time = deliver_time + expire_delay (30d: money but no items/COD -> else branch)
-				sellerMailID, mailAuctionType, mailStationeryAuction, a.houseID, a.owner, succSubj, succBody, now+3600+30*86400, now+3600, profit)
+				// C++ Mail.cpp:197,215: expire_time = deliver_time + expire_delay (30d: money but no items/COD -> else branch);
+				// deliver_delay comes from AuctionHouseMgr::SendAuctionSuccessfulMail (AuctionHouseMgr.cpp:230),
+				// which passes CONFIG_MAIL_DELIVERY_DELAY ("MailDeliveryDelay", default 3600).
+				sellerMailID, mailAuctionType, mailStationeryAuction, a.houseID, a.owner, succSubj, succBody, now+mailDelay+30*86400, now+mailDelay, profit)
 
 			// 3. Invoice mail to seller (immediate)
 			var invoiceMailID int64
 			_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&invoiceMailID)
 			pendingSubj := fmt.Sprintf("%d:0:%d:%d:%d", a.itemTmpl, auctionSalePending, a.id, a.count)
-			pendingBody := fmt.Sprintf("%X:%d:%d:%d:%d:%d:%d", a.bidder, a.lastBid, a.buyout, a.deposit, consignment, 3600, 0)
+			pendingBody := fmt.Sprintf("%X:%d:%d:%d:%d:%d:%d", a.bidder, a.lastBid, a.buyout, a.deposit, consignment, mailDelay, 0)
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, ?, 0, ?, ?, 0, 0, 4)",
-				invoiceMailID, mailAuctionType, mailStationeryAuction, a.houseID, a.owner, pendingSubj, pendingBody, now+3600, now)
+				// C++ Mail.cpp:203-204: auction mail without items and money expires after CONFIG_MAIL_DELIVERY_DELAY;
+				// the moneyDelay/eta body fields come from AuctionHouseMgr::SendAuctionSalePendingMail
+				// (AuctionHouseMgr.cpp:199,203), same config.
+				invoiceMailID, mailAuctionType, mailStationeryAuction, a.houseID, a.owner, pendingSubj, pendingBody, now+mailDelay, now)
 			s.sendMailNotify(uint64(a.owner))
 			s.notifyAuctionOwner(uint64(a.owner), uint32(a.id), uint32(a.lastBid), uint64(a.bidder), uint32(a.itemTmpl))
 			if s.server != nil {
