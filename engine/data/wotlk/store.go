@@ -177,6 +177,7 @@ type Spell struct {
 	RecoveryTime          uint32
 	ProcCharges           uint32 // Spell.dbc field 36 = ProcCharges (DBCStructure.h:1426)
 	StackAmount           uint32 // Spell.dbc field 49 = CumulativeAura (DBCStructure.h:1440)
+	Totem               [2]uint32 // Spell.dbc fields 50-51 = Totem (DBCStructure.h:1441)
 	PowerType             uint32
 	ManaCost              uint32
 	ManaCostPct           uint32
@@ -766,6 +767,8 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{29, &spell.RecoveryTime},
 		{36, &spell.ProcCharges},
 		{49, &spell.StackAmount},
+		{50, &spell.Totem[0]}, // Spell.dbc field 50 = Totem[0] (DBCStructure.h:1441)
+		{51, &spell.Totem[1]}, // Spell.dbc field 51 = Totem[1] (DBCStructure.h:1441)
 		{41, &spell.PowerType},
 		{42, &spell.ManaCost},
 		{204, &spell.ManaCostPct}, // Spell.dbc field 204 = ManaCostPct (DBCStructure.h:1476)
