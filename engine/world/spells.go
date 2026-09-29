@@ -1547,6 +1547,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		if len(missStatus) > 0 && !isReflected {
 			return
 		}
+		// Per-(cast, target) first-merge marker for the aura re-apply path
+		// (Spell.cpp:2842): only the first aura effect per target runs the
+		// ModStackAmount(+1) merge, later effects only refresh their amounts.
+		castMerged := make(map[uint64]struct{})
 		interruptHandled := false
 		damageEffectSeen := false
 		for effectIndex, eff := range spell.Effects {
@@ -1671,7 +1675,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					} else if effectTarget != 0 && effectTarget != s.playerGUID && isHarmfulSpell(spell) {
 						auraTarget = effectTarget
 					}
-					s.applyAuraToTarget(effCtx, auraTarget, spell, eff, durationMs, periodMs, amount, schoolMask)
+					s.applyAuraToTarget(effCtx, auraTarget, spell, eff, durationMs, periodMs, amount, schoolMask, castMerged)
 				}
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
 				s.applySelfResurrectEffect(spell)
@@ -2357,6 +2361,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	}
 
 	hasExplicitEffects := false
+	// Per-(cast, target) first-merge marker for the aura re-apply path
+	// (Spell.cpp:2842): only the first aura effect per target runs the
+	// ModStackAmount(+1) merge, later effects only refresh their amounts.
+	castMerged := make(map[uint64]struct{})
 	for effectIndex, eff := range spell.Effects {
 		if eff.Effect == 0 && eff.Aura == 0 {
 			continue
@@ -2380,7 +2388,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			if schoolMask == 0 {
 				schoolMask = 1
 			}
-			s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, eff.AuraPeriod, amount, schoolMask)
+			s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged)
 		} else if eff.Effect == 10 { // SPELL_EFFECT_HEAL
 			healAmount := uint32(eff.BasePoints + 1)
 			if healAmount == 0 && spellID == ProcSpellCrusader {
@@ -2406,7 +2414,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 
 	if !hasExplicitEffects {
 		eff := wotlk.SpellEffect{Effect: 6, Aura: 4}
-		s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, 0, 0, 1)
+		s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, 0, 0, 1, nil)
 	}
 }
 
@@ -3662,7 +3670,25 @@ func (s *session) refreshTransformDisplay(ctx context.Context) {
 	s.loadTransformDisplay(ctx, s.player)
 }
 
-func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, durationMs, periodMs, amount, schoolMask uint32) {
+// refreshAuraEffectBasepoints mirrors the per-effect half of the
+// _TryStackingOrRefreshingExistingAura basepoint update (Unit.cpp:3360-3372):
+// the re-cast's basepoints and computed amount replace this effect's slots.
+func refreshAuraEffectBasepoints(existing *activeAura, spell wotlk.Spell, eff wotlk.SpellEffect, amount uint32) {
+	for index, candidate := range spell.Effects {
+		if candidate != eff {
+			continue
+		}
+		existing.BaseAmounts[index] = eff.BasePoints
+		existing.Amounts[index] = int32(amount)
+		existing.Amount = amount
+		break
+	}
+}
+
+// castMerged tracks, for one cast, the target GUIDs whose existing aura
+// already ran the re-apply merge; a nil map means the caller applies a
+// single aura effect per spell and keeps the old always-merge behavior.
+func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}) {
 	if s.player == nil {
 		return
 	}
@@ -3735,6 +3761,26 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 
 		previous := targetSess.activeAuras[spell.ID]
 		if existing := previous; existing != nil && !existing.Stopped {
+			// Spell::DoSpellEffectHit (Spell.cpp:2842): only the first aura
+			// effect per (cast, target) runs the merge — the first hit sets
+			// hitInfo.HitAura and later effects only AddStaticApplication.
+			// Go's per-effect sweep would otherwise run the ModStackAmount(+1)
+			// merge once per aura effect, so a re-cast of a stackable
+			// multi-effect aura would reach max stacks N× too fast. Later
+			// effects only refresh this effect's basepoints/amounts.
+			firstMerge := true
+			if castMerged != nil {
+				if _, ok := castMerged[targetGUID]; ok {
+					firstMerge = false
+				} else {
+					castMerged[targetGUID] = struct{}{}
+				}
+			}
+			if !firstMerge {
+				refreshAuraEffectBasepoints(existing, spell, eff, amount)
+				targetSess.castMu.Unlock()
+				return
+			}
 			// Unit::_TryStackingOrRefreshingExistingAura (Unit.cpp:3326) ->
 			// Aura::ModStackAmount(+1) (SpellAuras.cpp:1030): a re-cast merges
 			// into the existing aura instead of replacing it — one more stack,
@@ -3763,15 +3809,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			// recalculated from them (Aura::SetStackAmount, SpellAuras.cpp:1008).
 			// Go has no stack-scaled amount recalc, so the amounts follow the
 			// new cast directly; the stack-scaled multiplier half stays unmodeled.
-			for index, candidate := range spell.Effects {
-				if candidate != eff {
-					continue
-				}
-				existing.BaseAmounts[index] = eff.BasePoints
-				existing.Amounts[index] = int32(amount)
-				existing.Amount = amount
-				break
-			}
+			refreshAuraEffectBasepoints(existing, spell, eff, amount)
 			existing.DurationMs = durationMs
 			existing.RemainingMs = durationMs
 			existing.DurationUpdatedAt = time.Now()
@@ -4052,7 +4090,23 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	}
 	if existing, exists := s.server.activeCreatureAuras[targetKey][spell.ID]; exists && existing != nil && !existing.Stopped {
 		// Same ModStackAmount(+1) merge as the player path above
-		// (Unit.cpp:3326, SpellAuras.cpp:1030).
+		// (Unit.cpp:3326, SpellAuras.cpp:1030). Per Spell::DoSpellEffectHit
+		// (Spell.cpp:2842) only the first aura effect per (cast, target)
+		// merges — castMerged carries the first-merge marker, later effects
+		// only refresh this effect's basepoints/amounts.
+		firstMerge := true
+		if castMerged != nil {
+			if _, ok := castMerged[targetGUID]; ok {
+				firstMerge = false
+			} else {
+				castMerged[targetGUID] = struct{}{}
+			}
+		}
+		if !firstMerge {
+			refreshAuraEffectBasepoints(existing, spell, eff, amount)
+			s.server.auraMu.Unlock()
+			return
+		}
 		maxStack := int32(spell.StackAmount)
 		if maxStack == 0 {
 			maxStack = 1
@@ -4069,15 +4123,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		existing.RemainingCharges = uint8(spell.ProcCharges)
 		// Creature-side mirror of the player merge's basepoint update
 		// (Unit.cpp:3360-3372, Aura::SetStackAmount, SpellAuras.cpp:1008).
-		for index, candidate := range spell.Effects {
-			if candidate != eff {
-				continue
-			}
-			existing.BaseAmounts[index] = eff.BasePoints
-			existing.Amounts[index] = int32(amount)
-			existing.Amount = amount
-			break
-		}
+		refreshAuraEffectBasepoints(existing, spell, eff, amount)
 		existing.DurationMs = durationMs
 		existing.RemainingMs = durationMs
 		existing.DurationUpdatedAt = time.Now()

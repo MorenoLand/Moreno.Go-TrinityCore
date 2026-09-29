@@ -637,7 +637,7 @@ func (s *session) handleEffectDispel(ctx context.Context, targetGUID uint64, spe
 					Effect: 6,  // SPELL_EFFECT_APPLY_AURA
 					Aura:   18, // SPELL_AURA_MOD_SILENCE
 				}
-				s.applyAuraToTarget(ctx, s.playerGUID, silenceSpell, silenceEff, 5000, 0, 0, 32)
+				s.applyAuraToTarget(ctx, s.playerGUID, silenceSpell, silenceEff, 5000, 0, 0, 32, nil)
 			}
 
 			// Vampiric Touch: deals 2 * tick damage (cand.Amount * 2) to the dispeller (spell 64085).
@@ -889,7 +889,7 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 			Aura:       cand.AuraType,
 			BasePoints: int32(cand.Amount) - 1,
 		}
-		s.applyAuraToTarget(ctx, s.playerGUID, stSpell, eff, dur, cand.PeriodMs, cand.Amount, cand.SchoolMask)
+		s.applyAuraToTarget(ctx, s.playerGUID, stSpell, eff, dur, cand.PeriodMs, cand.Amount, cand.SchoolMask, nil)
 		// C++ SetLoadedState charges arg (Unit.cpp:4032): 1 for
 		// ATTR7_DISPEL_CHARGES auras, the victim's charge count otherwise.
 		wantCharges := st.charges
