@@ -28,6 +28,10 @@ const (
 	errAuctionRestrictedAccount uint32 = 13
 )
 
+// TrinityCore MAX_AUCTION_ITEMS (AuctionHouseMgr.h:34): 160 item slots per
+// CMSG_AUCTION_SELL_ITEM (4x 36-slot bags + 16-slot backpack).
+const maxAuctionItems uint32 = 160
+
 // auctionOutBid mirrors AuctionEntry::GetAuctionOutBid
 // (AuctionHouseMgr.cpp:879-884): the minimum outbid increment is 5% of the
 // current bid, at least 1 copper.
@@ -253,20 +257,37 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 		return true
 	}
 	itemCount, err := reader.ReadU32()
-	if err != nil || itemCount == 0 {
-		return false
-	}
-	rawItemGUID, err := reader.ReadU64()
 	if err != nil {
 		return false
 	}
-	itemGUID := int64(rawItemGUID & 0xFFFFFFFF)
-	if itemGUID == 0 {
-		itemGUID = int64(rawItemGUID)
+	// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:132-138): more than
+	// MAX_AUCTION_ITEMS answers ERR_AUCTION_DATABASE_ERROR with auction id 0.
+	if itemCount > maxAuctionItems {
+		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(0, auctionSellItem, errAuctionDatabaseError), true)
+		return true
 	}
-	stackCount, err := reader.ReadU32()
-	if err != nil {
-		return false
+	itemGUIDs := make([]int64, 0, itemCount)
+	stackCounts := make([]uint32, 0, itemCount)
+	for i := uint32(0); i < itemCount; i++ {
+		rawItemGUID, rerr := reader.ReadU64()
+		if rerr != nil {
+			return false
+		}
+		itemGUID := int64(rawItemGUID & 0xFFFFFFFF)
+		if itemGUID == 0 {
+			itemGUID = int64(rawItemGUID)
+		}
+		stackCount, rerr := reader.ReadU32()
+		if rerr != nil {
+			return false
+		}
+		// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:144-150): a zero
+		// guid, a zero count, or a count above 1000 is silently dropped.
+		if itemGUID == 0 || stackCount == 0 || stackCount > 1000 {
+			return true
+		}
+		itemGUIDs = append(itemGUIDs, itemGUID)
+		stackCounts = append(stackCounts, stackCount)
 	}
 	bid, _ := reader.ReadU32()
 	buyout, _ := reader.ReadU32()
@@ -294,15 +315,82 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	if cdb == nil {
 		return true
 	}
-	var itemEntry int64
-	err = cdb.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ? AND owner_guid = ? LIMIT 1", itemGUID, s.playerGUID).Scan(&itemEntry)
-	if err != nil {
-		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(0, auctionSellItem, errAuctionItemNotFound), true)
+	sellFail := func(result uint32) bool {
+		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(0, auctionSellItem, result), true)
 		return true
+	}
+	var itemEntry int64
+	var finalCount uint32
+	itemCounts := make([]int64, len(itemGUIDs))
+	for j, itemGUID := range itemGUIDs {
+		var entry, have, flags, duration int64
+		qerr := cdb.QueryRowContext(ctx, "SELECT itemEntry, count, flags, duration FROM item_instance WHERE guid = ? AND owner_guid = ? LIMIT 1", itemGUID, s.playerGUID).Scan(&entry, &have, &flags, &duration)
+		// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:199-204): a
+		// missing item answers ERR_AUCTION_ITEM_NOT_FOUND with auction id 0.
+		if qerr != nil {
+			return sellFail(errAuctionItemNotFound)
+		}
+		if j == 0 {
+			itemEntry = entry
+		}
+		var listed int
+		// sAuctionMgr->GetAItem (AuctionHouseHandler.cpp:207): an item that is
+		// already on auction cannot be listed again.
+		alreadyListed := cdb.QueryRowContext(ctx, "SELECT 1 FROM auctionhouse WHERE itemguid = ? LIMIT 1", itemGUID).Scan(&listed) == nil
+		// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:207-212): an
+		// already-listed item, a soulbound item (the representable slice of
+		// Item::CanBeTraded — Go has no loot/bag/enchant state), a temporary
+		// item, a short stack, or a mixed entry all answer
+		// ERR_AUCTION_DATABASE_ERROR with auction id 0.
+		if alreadyListed || flags&1 != 0 || duration != 0 || have < int64(stackCounts[j]) || entry != itemEntry {
+			return sellFail(errAuctionDatabaseError)
+		}
+		itemCounts[j] = have
+		finalCount += stackCounts[j]
+	}
+	// item->GetTemplate()->HasFlag(ITEM_FLAG_CONJURED)
+	// (AuctionHouseHandler.cpp:208, ITEM_FLAG_CONJURED = 0x2,
+	// ItemTemplate.h:153): all listed items share one entry, so one template
+	// lookup covers the loop.
+	var tmplFlags int64
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(Flags, 0) FROM item_template WHERE entry = ?", itemEntry).Scan(&tmplFlags)
+	}
+	if tmplFlags&2 != 0 {
+		return sellFail(errAuctionDatabaseError)
+	}
+	// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:218-222): a zero
+	// total count answers ERR_AUCTION_DATABASE_ERROR.
+	if finalCount == 0 {
+		return sellFail(errAuctionDatabaseError)
+	}
+	// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:225-234): listing the
+	// same item guid twice is a cheat attempt and answers
+	// ERR_AUCTION_DATABASE_ERROR.
+	seenGUID := make(map[int64]struct{}, len(itemGUIDs))
+	for _, itemGUID := range itemGUIDs {
+		if _, dup := seenGUID[itemGUID]; dup {
+			return sellFail(errAuctionDatabaseError)
+		}
+		seenGUID[itemGUID] = struct{}{}
+	}
+	// Item::GetMaxStackCount (Item.h:119) via
+	// ItemTemplate::GetMaxStackSize (ItemTemplate.h:686-689): a stackable of
+	// 2147483647 or <= 0 means effectively uncapped.
+	var stackable int64 = 1
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(stackable, 1) FROM item_template WHERE entry = ?", itemEntry).Scan(&stackable)
+	}
+	maxStack := stackable
+	if stackable == 2147483647 || stackable <= 0 {
+		maxStack = 0x7FFFFFFF - 1
+	}
+	if maxStack < int64(finalCount) {
+		return sellFail(errAuctionDatabaseError)
 	}
 
 	// Calculate deposit: TrinityCore GetAuctionDeposit formula
-	// 5% of vendor SellPrice per 12 hours * stackCount, minimum 1 silver (100 copper)
+	// 5% of vendor SellPrice per 12 hours * finalCount, minimum 1 silver (100 copper)
 	var sellPrice int64
 	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(SellPrice, 0) FROM item_template WHERE entry = ?", itemEntry).Scan(&sellPrice)
@@ -313,7 +401,7 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	}
 	deposit := uint32(100) // 1 silver base deposit
 	if sellPrice > 0 {
-		calc := uint32(float64(sellPrice) * 0.05 * float64(timeHr) * float64(stackCount))
+		calc := uint32(float64(sellPrice) * 0.05 * float64(timeHr) * float64(finalCount))
 		if calc > deposit {
 			deposit = calc
 		}
@@ -325,9 +413,34 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	}
 	s.player.Money -= deposit
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
-	_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, itemGUID)
-	s.adjustQuestItemCount(ctx, uint32(itemEntry), stackCount, false)
-	s.despawnItem(uint64(itemGUID))
+	auctionItemGUID := itemGUIDs[0]
+	// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:296-341): a single
+	// item sold whole is moved onto the auction; otherwise the stacks are
+	// cloned into one merged item (AuctionHouseHandler.cpp:343-425).
+	if itemCount != 1 || itemCounts[0] != int64(stackCounts[0]) {
+		var newGUID int64
+		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&newGUID)
+		if newGUID <= 0 {
+			return sellFail(errAuctionDatabaseError)
+		}
+		if _, err = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count) VALUES (?, ?, ?, ?)", newGUID, itemEntry, s.playerGUID, finalCount); err != nil {
+			return sellFail(errAuctionDatabaseError)
+		}
+		for j, itemGUID := range itemGUIDs {
+			if itemCounts[j] == int64(stackCounts[j]) {
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, itemGUID)
+				s.despawnItem(uint64(itemGUID))
+			} else {
+				_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", stackCounts[j], itemGUID)
+			}
+		}
+		auctionItemGUID = newGUID
+	} else {
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, auctionItemGUID)
+		s.despawnItem(uint64(auctionItemGUID))
+	}
+	s.adjustQuestItemCount(ctx, uint32(itemEntry), finalCount, false)
 	now := time.Now().Unix()
 	expire := now + int64(etime*60)
 	var nextID int64
@@ -336,7 +449,7 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 		nextID = 1
 	}
 	_, _ = cdb.ExecContext(ctx, `INSERT INTO auctionhouse (id, houseid, itemguid, item_template, itemCount, itemowner, buyoutprice, time, buyguid, lastbid, startbid, deposit)
-		VALUES (?, 1, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`, nextID, itemGUID, itemEntry, stackCount, s.playerGUID, buyout, expire, bid, deposit)
+		VALUES (?, 1, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`, nextID, auctionItemGUID, itemEntry, finalCount, s.playerGUID, buyout, expire, bid, deposit)
 	s.updateAchievementCriteria(criteriaTypeCreateAuction, 0, 1)
 	_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(uint32(nextID), auctionSellItem, errAuctionOK), true)
 	_ = s.sendInventoryItems(ctx)
