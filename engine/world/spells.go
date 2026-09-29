@@ -1161,14 +1161,29 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 
 	hitTargets := make([]uint64, 0, 1)
+	// Spell::CheckCast routes the explicit unit target through
+	// SpellInfo::CheckExplicitTarget (Spell.cpp:5365, SpellInfo.cpp:1799),
+	// which applies the Unit::IsValidAttackTarget/IsValidAssistTarget flag
+	// gates (Object.cpp:2972/3127/2991/3134, bundled in spellTargetUnitBlocked)
+	// and fails the cast with SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992).
+	// Self is exempt: IsValidAssistTarget returns true for self (Object.cpp:3092).
+	explicitUnitGUID := uint64(0)
 	if isSelfCastOnly(spell) {
 		hitTargets = append(hitTargets, s.playerGUID)
 	} else if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
-		hitTargets = append(hitTargets, target.UnitGUID)
+		explicitUnitGUID = target.UnitGUID
 	} else if s.selection != 0 {
-		hitTargets = append(hitTargets, s.selection)
+		explicitUnitGUID = s.selection
 	} else if !isHarmfulSpell(spell) {
 		hitTargets = append(hitTargets, s.playerGUID)
+	}
+	if explicitUnitGUID != 0 && explicitUnitGUID != s.playerGUID {
+		if tgt, ok := s.getCombatTarget(ctx, explicitUnitGUID); ok && spellTargetUnitBlocked(spell, tgt.UnitFlags, tgt.FlagsExtra) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
+			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "explicit target blocked")
+			return
+		}
+		hitTargets = append(hitTargets, explicitUnitGUID)
 	}
 	areaSpell := isAreaEnemySpell(spell)
 	friendlyAreaSpell := isFriendlyAreaSpell(spell)
