@@ -388,10 +388,13 @@ func isVampiricTouchSpell(spellID uint32) bool {
 // handleEffectDispel processes SPELL_EFFECT_DISPEL (38).
 // Mirrors TrinityCore Spell::EffectDispel (SpellEffects.cpp:2429-2531).
 // dispelPlayerAuraCharge mirrors Unit::RemoveAurasDueToSpellByDispel
-// (Unit.cpp:3938-3950) for auras carrying SPELL_ATTR7_DISPEL_CHARGES: a
-// successful dispel removes one charge (Aura::ModCharges, SpellAuras.cpp:964)
-// and the aura survives until its last charge is gone. Returns true when the
-// aura was fully removed.
+// (Unit.cpp:3938-3950): a successful dispel removes one charge
+// (Aura::ModCharges, SpellAuras.cpp:964) from auras carrying
+// SPELL_ATTR7_DISPEL_CHARGES, or one stack (Aura::ModStackAmount,
+// SpellAuras.cpp:1030) otherwise; the aura survives until its last
+// charge/stack is gone. Returns true when the aura was fully removed.
+// Go has no AuraScript infra, so the OnDispel/AfterDispel hooks and the
+// script-mutable DispelInfo charge count are vacuous (one per success).
 func (ts *session) dispelPlayerAuraCharge(spellID uint32) bool {
 	ts.castMu.Lock()
 	aura := ts.activeAuras[spellID]
@@ -402,34 +405,51 @@ func (ts *session) dispelPlayerAuraCharge(spellID uint32) bool {
 				dispelCharges = sp.AttributesEx7&spellAttr7DispelCharges != 0
 			}
 		}
-		if dispelCharges && aura.RemainingCharges > 1 {
-			aura.RemainingCharges--
+		if dispelCharges {
+			if aura.RemainingCharges > 1 {
+				aura.RemainingCharges--
+				advanceAuraDuration(aura, time.Now())
+			}
+		} else if aura.StackCount > 1 {
+			// Aura::ModStackAmount(-1): the aura loses one stack and
+			// survives while stacks remain; no timer refresh on decrement.
+			aura.StackCount--
 			advanceAuraDuration(aura, time.Now())
 		}
 	}
 	var slot uint8
 	var positive bool
-	var maxDuration, remaining uint32
-	var charges uint8
+	var maxDuration, remaining, count uint32
 	if aura != nil {
 		slot, positive = aura.Slot, aura.Positive
-		maxDuration, remaining, charges = aura.DurationMs, aura.RemainingMs, aura.RemainingCharges
+		maxDuration, remaining = aura.DurationMs, aura.RemainingMs
+		if dispelCharges {
+			count = uint32(aura.RemainingCharges)
+		} else {
+			count = uint32(aura.StackCount)
+		}
 	}
 	ts.castMu.Unlock()
 
-	if aura == nil || !dispelCharges || charges <= 1 {
+	if aura == nil {
+		return true
+	}
+	// A zero StackCount reads as a single stack (the auraUpdateRecords wire
+	// default), so ModStackAmount(-1) on it removes the aura.
+	if count <= 1 {
 		ts.expirePlayerAura(spellID)
 		return true
 	}
 	// Charges ride the stack-count field of the aura update (player_auras.go).
-	ts.sendAuraUpdateWithStack(slot, spellID, false, positive, maxDuration, remaining, charges)
+	ts.sendAuraUpdateWithStack(slot, spellID, false, positive, maxDuration, remaining, uint8(count))
 	return false
 }
 
 // dispelCreatureAuraCharge is the creature-aura counterpart of
-// dispelPlayerAuraCharge: SPELL_ATTR7_DISPEL_CHARGES auras lose one charge per
-// successful dispel and survive until the last charge is gone. Returns true
-// when the aura was fully removed.
+// dispelPlayerAuraCharge: auras lose one charge (SPELL_ATTR7_DISPEL_CHARGES)
+// or one stack (Aura::ModStackAmount, SpellAuras.cpp:1030) per successful
+// dispel and survive until the last charge/stack is gone. Returns true when
+// the aura was fully removed.
 func (s *session) dispelCreatureAuraCharge(key creatureAuraKey, spellID uint32, slot uint8) bool {
 	if s.server == nil {
 		return true
@@ -446,22 +466,31 @@ func (s *session) dispelCreatureAuraCharge(key creatureAuraKey, spellID uint32, 
 				dispelCharges = sp.AttributesEx7&spellAttr7DispelCharges != 0
 			}
 		}
-		if dispelCharges && aura.RemainingCharges > 1 {
-			aura.RemainingCharges--
+		if dispelCharges {
+			if aura.RemainingCharges > 1 {
+				aura.RemainingCharges--
+			}
+		} else if aura.StackCount > 1 {
+			aura.StackCount--
 		}
 	}
 	var positive bool
-	var charges uint8
+	var count uint32
 	if aura != nil {
-		positive, charges = aura.Positive, aura.RemainingCharges
+		positive = aura.Positive
+		if dispelCharges {
+			count = uint32(aura.RemainingCharges)
+		} else {
+			count = uint32(aura.StackCount)
+		}
 	}
 	s.server.auraMu.Unlock()
 
-	if aura == nil || !dispelCharges || charges <= 1 {
+	if aura == nil || count <= 1 {
 		s.expireCreatureAura(key, spellID, slot)
 		return true
 	}
-	updatePkt := protocol.BuildAuraUpdateWithStack(key.GUID, s.playerGUID, slot, spellID, false, positive, 0, 0, 1, charges)
+	updatePkt := protocol.BuildAuraUpdateWithStack(key.GUID, s.playerGUID, slot, spellID, false, positive, 0, 0, 1, uint8(count))
 	s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, nil)
 	return false
 }
