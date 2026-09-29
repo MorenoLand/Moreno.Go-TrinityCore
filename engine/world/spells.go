@@ -3780,8 +3780,9 @@ const (
 // without the CU attr). Passive new spells skip the purge (the
 // IsPassiveStackableWithRanks early-out shape, Unit.cpp:3643; Go holds no
 // passive aura instances). IsMultiSlotAura (SpellAuras.cpp:1148) and
-// CONTROL_VEHICLE are vacuous in Go. Spell-group stack rules and the
-// IsHighestExclusiveAura direction need group-rule data Go does not load —
+// CONTROL_VEHICLE are vacuous in Go. Spell-group stack rules are handled by
+// the companion spellGroupNoStackPurge (rules EXCLUSIVE and
+// EXCLUSIVE_FROM_SAME_CASTER); the IsHighestExclusiveAura direction is a
 // standing gap, under-purges only.
 // Returns the auras to remove; the caller removes them after unlocking.
 func (s *Server) rankChainNoStackPurge(newSpell wotlk.Spell, newCasterGUID, newItemGUID uint64, existing map[uint32]*activeAura) []rankPurgeTarget {
@@ -3861,6 +3862,101 @@ func rankChainPeriodicStacksForDiffCasters(newSpell, exSpell wotlk.Spell) bool {
 		return true
 	}
 	return false
+}
+
+// Spell group stack rules (SpellMgr.h:326-334).
+const (
+	spellGroupStackRuleDefault             = 0 // SPELL_GROUP_STACK_RULE_DEFAULT
+	spellGroupStackRuleExclusive           = 1 // SPELL_GROUP_STACK_RULE_EXCLUSIVE
+	spellGroupStackRuleExclusiveSameCaster = 2 // SPELL_GROUP_STACK_RULE_EXCLUSIVE_FROM_SAME_CASTER
+	spellGroupStackRuleExclusiveSameEffect = 3 // SPELL_GROUP_STACK_RULE_EXCLUSIVE_SAME_EFFECT
+	spellGroupStackRuleExclusiveHighest    = 4 // SPELL_GROUP_STACK_RULE_EXCLUSIVE_HIGHEST
+)
+
+// spellGroupStackRule mirrors SpellMgr::CheckSpellGroupStackRules
+// (SpellMgr.cpp:438-488): group membership is read by first-rank spell ID
+// (the petAuraStackCache spellGroups map is already expanded and
+// first-rank-keyed), groups that overlap on both spells only through a
+// shared nested subgroup are excluded, and the lowest group ID carrying a
+// non-default rule wins.
+func (s *Server) spellGroupStackRule(first1, first2 uint32) uint8 {
+	cache := s.petAuraStackGroups()
+	g1, ok1 := cache.spellGroups[first1]
+	g2, ok2 := cache.spellGroups[first2]
+	if !ok1 || !ok2 {
+		return spellGroupStackRuleDefault
+	}
+	var common []uint32
+	for g := range g1 {
+		if _, ok := g2[g]; !ok {
+			continue
+		}
+		excluded := false
+		for _, sub := range cache.groupSubgroups[g] {
+			_, in1 := g1[sub]
+			_, in2 := g2[sub]
+			if in1 && in2 {
+				excluded = true
+				break
+			}
+		}
+		if !excluded {
+			common = append(common, g)
+		}
+	}
+	sort.Slice(common, func(i, j int) bool { return common[i] < common[j] })
+	for _, g := range common {
+		if rule := cache.groupRules[g]; rule != spellGroupStackRuleDefault {
+			return rule
+		}
+	}
+	return spellGroupStackRuleDefault
+}
+
+// spellGroupNoStackPurge mirrors the CheckSpellGroupStackRules terms of
+// Aura::CanStackWith (SpellAuras.cpp:1924-1942) inside
+// Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640-3671): a fresh aura
+// purges existing auras whose first-rank spell shares an EXCLUSIVE group
+// with the new spell, or an EXCLUSIVE_FROM_SAME_CASTER group when the
+// caster matches. The trigger-spell mutual exclusion (SpellAuras.cpp:
+// 1901-1906) is honored — a triggered/triggering pair stacks, so it never
+// purges. Rule EXCLUSIVE_SAME_EFFECT falls through to break in C++ (no
+// purge), and rule EXCLUSIVE_HIGHEST needs the IsHighestExclusiveAura port
+// (both directions) — a bigger unit, still a standing gap; skipping it
+// only under-purges.
+// Returns the auras to remove; the caller removes them after unlocking.
+func (s *Server) spellGroupNoStackPurge(newSpell wotlk.Spell, newCasterGUID uint64, existing map[uint32]*activeAura) []rankPurgeTarget {
+	if s == nil || s.Data == nil {
+		return nil
+	}
+	if newSpell.Attributes&spellAttributePassive != 0 {
+		return nil
+	}
+	newFirst := s.spellFirstRank(newSpell.ID)
+	var purge []rankPurgeTarget
+	for id, aura := range existing {
+		if id == newSpell.ID || aura == nil || aura.Stopped {
+			continue
+		}
+		switch s.spellGroupStackRule(newFirst, s.spellFirstRank(id)) {
+		case spellGroupStackRuleExclusive:
+		case spellGroupStackRuleExclusiveSameCaster:
+			if aura.CasterGUID != newCasterGUID {
+				continue
+			}
+		default:
+			continue
+		}
+		exSpell, found, err := s.Data.Spell(id)
+		if err != nil || !found {
+			continue
+		}
+		if auraTriggersSpell(newSpell, id) || auraTriggersSpell(exSpell, newSpell.ID) {
+			continue
+		}
+		purge = append(purge, rankPurgeTarget{spellID: id, slot: aura.Slot})
+	}
+	return purge
 }
 
 func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}) {
@@ -4145,9 +4241,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		targetSess.activeAuras[spell.ID] = aura
 		// Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640): the fresh
-		// aura purges same-caster auras of its rank chain it can't stack
-		// with (Aura::CanStackWith, SpellAuras.cpp:1994-2004).
+		// aura purges auras of other spells it can't stack with — the
+		// rank-chain term (Aura::CanStackWith, SpellAuras.cpp:1994-2004)
+		// plus the spell-group exclusive terms (SpellAuras.cpp:1924-1932).
 		purgeIDs := s.server.rankChainNoStackPurge(spell, s.playerGUID, aura.ItemGUID, targetSess.activeAuras)
+		purgeIDs = append(purgeIDs, s.server.spellGroupNoStackPurge(spell, s.playerGUID, targetSess.activeAuras)...)
 		targetSess.castMu.Unlock()
 		for _, purgeID := range purgeIDs {
 			targetSess.expirePlayerAura(purgeID.spellID)
@@ -4384,9 +4482,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	}
 	s.server.activeCreatureAuras[targetKey][spell.ID] = aura
 	// Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640): the fresh aura
-	// purges same-caster auras of its rank chain it can't stack with
-	// (Aura::CanStackWith, SpellAuras.cpp:1994-2004).
+	// purges auras of other spells it can't stack with — the rank-chain
+	// term (Aura::CanStackWith, SpellAuras.cpp:1994-2004) plus the
+	// spell-group exclusive terms (SpellAuras.cpp:1924-1932).
 	purge := s.server.rankChainNoStackPurge(spell, s.playerGUID, aura.ItemGUID, s.server.activeCreatureAuras[targetKey])
+	purge = append(purge, s.server.spellGroupNoStackPurge(spell, s.playerGUID, s.server.activeCreatureAuras[targetKey])...)
 	s.server.auraMu.Unlock()
 	for _, p := range purge {
 		s.expireCreatureAura(targetKey, p.spellID, p.slot)

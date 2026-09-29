@@ -42,8 +42,11 @@ type petAuraStackKey struct {
 }
 
 type petAuraStackCache struct {
-	groupBySpell map[petAuraStackKey]uint32
-	firstRank    map[uint32]uint32
+	groupBySpell   map[petAuraStackKey]uint32
+	firstRank      map[uint32]uint32
+	groupRules     map[uint32]uint8
+	spellGroups    map[uint32]map[uint32]struct{}
+	groupSubgroups map[uint32][]uint32
 }
 
 func ResolvePetFocusRegen(rate float64, modifiers []PetFocusModifier) int32 {
@@ -112,7 +115,8 @@ func (s *Server) petAuraStackGroups() *petAuraStackCache {
 	if s.petAuraStackCache != nil {
 		return s.petAuraStackCache
 	}
-	cache := &petAuraStackCache{groupBySpell: make(map[petAuraStackKey]uint32), firstRank: make(map[uint32]uint32)}
+	cache := &petAuraStackCache{groupBySpell: make(map[petAuraStackKey]uint32), firstRank: make(map[uint32]uint32),
+		groupRules: make(map[uint32]uint8), spellGroups: make(map[uint32]map[uint32]struct{}), groupSubgroups: make(map[uint32][]uint32)}
 	if s.WorldStore == nil || s.WorldStore.DB == nil || s.Data == nil {
 		s.petAuraStackCache = cache
 		return cache
@@ -141,6 +145,57 @@ func (s *Server) petAuraStackGroups() *petAuraStackCache {
 		}
 	}
 	_ = groupRows.Close()
+	// Spell group stack rules and expanded membership, mirroring
+	// SpellMgr::LoadSpellGroups (SpellMgr.cpp:1286-1362: nested groups
+	// expand into the flat spell->groups map) and
+	// SpellMgr::LoadSpellGroupStackRules (SpellMgr.cpp:1365-1415:
+	// SELECT group_id, stack_rule FROM spell_group_stack_rules).
+	// Membership is keyed by first-rank spell ID, exactly like
+	// CheckSpellGroupStackRules (SpellMgr.cpp:441-442), which looks
+	// groups up via GetFirstRankSpell()->Id.
+	var expandGroup func(groupID uint32, visited, spellIDs map[uint32]struct{})
+	expandGroup = func(groupID uint32, visited, spellIDs map[uint32]struct{}) {
+		if _, found := visited[groupID]; found {
+			return
+		}
+		visited[groupID] = struct{}{}
+		for _, member := range groupMembers[groupID] {
+			if member < 0 {
+				expandGroup(uint32(-member), visited, spellIDs)
+			} else if member <= int64(^uint32(0)) {
+				spellIDs[uint32(member)] = struct{}{}
+			}
+		}
+	}
+	for groupID, members := range groupMembers {
+		spellIDs := make(map[uint32]struct{})
+		expandGroup(groupID, make(map[uint32]struct{}), spellIDs)
+		for spellID := range spellIDs {
+			if first, ok := cache.firstRank[spellID]; ok {
+				spellID = first
+			}
+			if cache.spellGroups[spellID] == nil {
+				cache.spellGroups[spellID] = make(map[uint32]struct{})
+			}
+			cache.spellGroups[spellID][groupID] = struct{}{}
+		}
+		for _, member := range members {
+			if member < 0 {
+				cache.groupSubgroups[groupID] = append(cache.groupSubgroups[groupID], uint32(-member))
+			}
+		}
+	}
+	stackRuleRows, stackRuleErr := s.WorldStore.DB.QueryContext(context.Background(), "SELECT group_id, stack_rule FROM spell_group_stack_rules")
+	if stackRuleErr == nil {
+		for stackRuleRows.Next() {
+			var groupID uint32
+			var stackRule uint8
+			if stackRuleRows.Scan(&groupID, &stackRule) == nil && stackRule < 5 {
+				cache.groupRules[groupID] = stackRule
+			}
+		}
+		_ = stackRuleRows.Close()
+	}
 	ruleRows, err := s.WorldStore.DB.QueryContext(context.Background(), "SELECT group_id FROM spell_group_stack_rules WHERE stack_rule = 3 ORDER BY group_id")
 	if err != nil {
 		s.petAuraStackCache = cache
