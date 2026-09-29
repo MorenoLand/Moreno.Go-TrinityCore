@@ -62,6 +62,7 @@ const (
 	spellFailedEquippedItemClassOffhand  uint8 = 31  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND (SharedDefines.h:1013)
 	spellFailedNotInFront                uint8 = 61  // SPELL_FAILED_NOT_INFRONT (SharedDefines.h:1042)
 	spellFailedBadTargets                uint8 = 12  // SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992)
+	spellFailedBmOrInvisGod              uint8 = 159 // SPELL_FAILED_BM_OR_INVISGOD (SharedDefines.h:1141)
 	spellFailedTargetIsPlayer            uint8 = 117 // SPELL_FAILED_TARGET_IS_PLAYER (SharedDefines.h:1099)
 	spellFailedAffectingCombat           uint8 = 1
 	spellFailedFoodLowLevel              uint8 = 35
@@ -1168,7 +1169,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// and the hostility/faction gates (Object.cpp "can't attack friendly
 	// targets" / "can't assist non-friendly targets", plus the PARTY/RAID
 	// membership terms, via explicitTargetFactionBlocked), failing the cast
-	// with SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992).
+	// with SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992). The
+	// SpellInfo::CheckTarget GM/invisibility gate (SpellInfo.cpp:1736-1743,
+	// explicitTargetGMBlocked) fails the cast with
+	// SPELL_FAILED_BM_OR_INVISGOD (SharedDefines.h:1141).
 	// Self is exempt: IsValidAssistTarget returns true for self (Object.cpp:3092).
 	explicitUnitGUID := uint64(0)
 	if isSelfCastOnly(spell) {
@@ -1192,6 +1196,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if s.explicitTargetFactionBlocked(spellExplicitUnitTargetMask(spell), explicitUnitGUID, tgt) {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
 				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "explicit target faction mismatch")
+				return
+			}
+			// SpellInfo.cpp:1736-1743: GM-invisible or GM-mode player targets
+			// reject the cast with SPELL_FAILED_BM_OR_INVISGOD; self is
+			// exempt (this block only runs when explicitUnitGUID != s.playerGUID).
+			if s.explicitTargetGMBlocked(explicitUnitGUID) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBmOrInvisGod), true)
+				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "explicit target GM/invisible")
 				return
 			}
 		}

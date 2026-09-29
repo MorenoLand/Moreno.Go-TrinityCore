@@ -100,3 +100,23 @@ func (s *session) sameGroupAs(targetSess *session, raid bool) bool {
 	g := s.server.findGroupByID(s.groupID)
 	return g != nil && g.IsRaid == raid
 }
+
+// explicitTargetGMBlocked mirrors the GM/invisibility gate in
+// SpellInfo::CheckTarget (SpellInfo.cpp:1736-1743) for the explicit unit
+// path: a player target that is GM-invisible (Unit::IsVisible false) or in
+// GM mode (Player::IsGameMaster) rejects the cast with
+// SPELL_FAILED_BM_OR_INVISGOD. C++ guards this with unitTarget != caster
+// (self is exempt), GetTypeId() == TYPEID_PLAYER (creatures are never
+// checked), and (caster->GetAffectingPlayer() || !IsPositive()) - the
+// GetAffectingPlayer term is always true in Go since the caster is always
+// the player session, so player casters gate positive spells too, like
+// C++. Lookup failure degrades to the old accept path. Returns true when
+// the cast must fail.
+func (s *session) explicitTargetGMBlocked(explicitUnitGUID uint64) bool {
+	targetSess := s.server.findSessionByGUID(explicitUnitGUID)
+	if targetSess == nil || targetSess.player == nil {
+		return false
+	}
+	flags := targetSess.player.ExtraFlags
+	return flags&playerExtraGMInvisible != 0 || flags&playerExtraGMOn != 0
+}
