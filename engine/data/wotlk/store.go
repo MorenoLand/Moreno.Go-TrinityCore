@@ -204,6 +204,9 @@ type Spell struct {
 	MaxLevel              uint32
 	BaseLevel             uint32
 	PreventionType        uint32 // Spell.dbc field 214 = PreventionType (DBCStructure.h:1484)
+	MaxTargetLevel        uint32 // Spell.dbc field 207 = MaxTargetLevel (DBCStructure.h:1479)
+	MaxTargets            uint32 // Spell.dbc field 212 = MaxTargets (DBCStructure.h:1483)
+	DefenseType           uint32 // Spell.dbc field 213 = DefenseType (DBCStructure.h:1484)
 	StartRecoveryCategory uint32 // Spell.dbc field 210 = StartRecoveryCategory (DBCStructure.h:1480)
 	StartRecoveryTime     uint32 // Spell.dbc field 211 = StartRecoveryTime (DBCStructure.h:1481)
 	EquippedItemClass     int32  // Spell.dbc field 68 = EquippedItemClass (DBCStructure.h:1443), -1 = any
@@ -816,6 +819,9 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{37, &spell.MaxLevel},
 		{38, &spell.BaseLevel},
 		{214, &spell.PreventionType},        // Spell.dbc field 214 = PreventionType (DBCStructure.h:1484)
+		{207, &spell.MaxTargetLevel},        // Spell.dbc field 207 = MaxTargetLevel (DBCStructure.h:1479)
+		{212, &spell.MaxTargets},            // Spell.dbc field 212 = MaxTargets (DBCStructure.h:1483)
+		{213, &spell.DefenseType},           // Spell.dbc field 213 = DefenseType (DBCStructure.h:1484)
 		{205, &spell.StartRecoveryCategory}, // Spell.dbc field 205 = StartRecoveryCategory
 		{206, &spell.StartRecoveryTime},     // Spell.dbc field 206 = StartRecoveryTime
 	}
