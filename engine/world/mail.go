@@ -790,6 +790,18 @@ func mailCreateTextItemRefused(missing bool, body string, mailTemplateId uint32,
 	return missing || (body == "" && mailTemplateId == 0) || deliverTime > now || (checked&4) != 0 // MAIL_CHECK_MASK_COPIED = 4
 }
 
+// mailCreateTextItemCreator mirrors the creator term of
+// WorldSession::HandleMailCreateTextItem (MailHandler.cpp:589-590): the body
+// item's ITEM_FIELD_CREATOR is set to the mail's sender only for MAIL_NORMAL
+// mails (Mail.h:37, MAIL_NORMAL = 0); auction, creature, gameobject and
+// calendar mails leave it unset.
+func mailCreateTextItemCreator(messageType uint32, mailSender uint64) uint64 {
+	if messageType == 0 {
+		return mailSender
+	}
+	return 0
+}
+
 // handleMailCreateTextItem processes CMSG_MAIL_CREATE_TEXT_ITEM (0x24A).
 // Reference: WorldSession::HandleMailCreateTextItem (MailHandler.cpp:565).
 func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) bool {
@@ -832,12 +844,16 @@ func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) 
 		var mailTemplateId uint32
 		var deliverTime int64
 		var checked uint32
+		var mailSender uint64
+		var messageType uint32
 		// Reference: MailHandler.cpp:573 — the mail is player-scoped
 		// (WorldSession::GetMail), and the missing/empty/undelivered/already-
 		// copied terms refuse with (MAIL_MADE_PERMANENT,
-		// MAIL_ERR_INTERNAL_ERROR) before any item is created.
+		// MAIL_ERR_INTERNAL_ERROR) before any item is created. MailHandler.
+		// cpp:589-590 additionally reads messageType and sender for the
+		// body item's creator term.
 		now := time.Now().Unix()
-		mailErr := cdb.QueryRowContext(ctx, "SELECT COALESCE(body, ''), mailTemplateId, deliver_time, checked FROM mail WHERE id = ? AND receiver = ?", mailID, s.playerGUID).Scan(&body, &mailTemplateId, &deliverTime, &checked)
+		mailErr := cdb.QueryRowContext(ctx, "SELECT COALESCE(body, ''), mailTemplateId, deliver_time, checked, sender, messageType FROM mail WHERE id = ? AND receiver = ?", mailID, s.playerGUID).Scan(&body, &mailTemplateId, &deliverTime, &checked, &mailSender, &messageType)
 		if mailCreateTextItemRefused(mailErr != nil, body, mailTemplateId, deliverTime, now, checked) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailMadePermanent, mailErrInternalError, 0, 0, 0), true)
 			return true
@@ -849,7 +865,8 @@ func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) 
 			nextGUID = uint64(time.Now().UnixNano())
 		}
 		const mailBodyItemTemplate uint32 = 8383 // Plain Letter
-		_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, 1, 0, '', 1, '', 0, 0, 0, ?)", nextGUID, mailBodyItemTemplate, s.playerGUID, body)
+		creator := mailCreateTextItemCreator(messageType, mailSender)
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, ?, 1, 0, '', 1, '', 0, 0, 0, ?)", nextGUID, mailBodyItemTemplate, s.playerGUID, creator, body)
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextGUID)
 		_, _ = cdb.ExecContext(ctx, "UPDATE mail SET checked = checked | 4 WHERE id = ?", mailID) // MAIL_CHECK_MASK_COPIED = 4
 		_ = s.sendItemCreate(nextGUID, mailBodyItemTemplate, 1, 0, freeSlot)
