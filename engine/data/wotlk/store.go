@@ -110,6 +110,7 @@ type SpellEffect struct {
 	ChainTargets       uint32
 	ItemType           uint32
 	PointsPerCombo     float32
+	SpellClassMask     [3]uint32 // Spell.dbc fields 122-130 = EffectSpellClassMask (DBCStructure.h:1473)
 	ChainAmplitude     float32 // Spell.dbc fields 216-218 = EffectChainAmplitude (DBCStructure.h:1486)
 	BonusCoefficient   float32 // Spell.dbc fields 229-231 = EffectBonusCoefficient (DBCStructure.h:1492)
 }
@@ -929,7 +930,14 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		if err != nil {
 			return Spell{}, false, err
 		}
-		spell.Effects[i] = SpellEffect{Effect: effect, BasePoints: basePoints, DieSides: dieSides, RealPointsPerLevel: realPointsPerLevel, Mechanic: effectMechanic, Aura: aura, AuraPeriod: auraPeriod, Amplitude: amplitude, ImplicitTargetA: implicitTargetA, ImplicitTargetB: implicitTargetB, RadiusIndex: radiusIndex, MiscValue: miscValue, MiscValueB: miscValueB, TriggerSpell: triggerSpell, ChainTargets: chainTargets, ItemType: itemType, PointsPerCombo: pointsPerCombo, ChainAmplitude: chainAmplitude, BonusCoefficient: bonusCoefficient}
+		var spellClassMask [3]uint32 // EffectSpellClassMask (DBCStructure.h:1473), fields 122-130
+		for j := range spellClassMask {
+			spellClassMask[j], err = record.Uint32(122 + 3*i + j)
+			if err != nil {
+				return Spell{}, false, err
+			}
+		}
+		spell.Effects[i] = SpellEffect{Effect: effect, BasePoints: basePoints, DieSides: dieSides, RealPointsPerLevel: realPointsPerLevel, Mechanic: effectMechanic, Aura: aura, AuraPeriod: auraPeriod, Amplitude: amplitude, ImplicitTargetA: implicitTargetA, ImplicitTargetB: implicitTargetB, RadiusIndex: radiusIndex, MiscValue: miscValue, MiscValueB: miscValueB, TriggerSpell: triggerSpell, ChainTargets: chainTargets, ItemType: itemType, PointsPerCombo: pointsPerCombo, SpellClassMask: spellClassMask, ChainAmplitude: chainAmplitude, BonusCoefficient: bonusCoefficient}
 	}
 	for i := range spell.Reagent {
 		reagent, err := record.Int32(52 + i) // Reagent, DBCStructure.h:1441 (52-59)

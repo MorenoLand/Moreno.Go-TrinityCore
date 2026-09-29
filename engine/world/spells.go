@@ -246,7 +246,73 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 			}
 		}
 	}
+	if maxTargets := spell.MaxTargets; maxTargets > 0 {
+		// Spell.cpp:1207,1293 — cap the area/cone target list to MaxAffectedTargets
+		// plus SPELL_AURA_MOD_MAX_AFFECTED_TARGETS aura modifiers, then
+		// Trinity::Containers::RandomResize (Containers.h:77) keeps exactly that
+		// many targets chosen uniformly at random; shuffle + truncate draws the
+		// same uniform subset.
+		maxTargets += uint32(s.totalAuraModifierByAffectMask(spellAuraModMaxAffectedTargets, spell))
+		if uint32(len(targets)) > maxTargets {
+			rand.Shuffle(len(targets), func(a, b int) { targets[a], targets[b] = targets[b], targets[a] })
+			targets = targets[:maxTargets]
+		}
+	}
 	return targets
+}
+
+// spellAffectedBySpellFamilyMask mirrors SpellInfo::IsAffected (SpellInfo.cpp:1305)
+// as invoked by AuraEffect::IsAffectedOnSpell (SpellAuraEffects.cpp:848): the aura
+// spell's SpellFamilyName and the aura effect's SpellClassMask must match the spell.
+func spellAffectedBySpellFamilyMask(auraFamilyName uint32, auraFamilyFlags [3]uint32, spell wotlk.Spell) bool {
+	if auraFamilyName == 0 {
+		return true
+	}
+	if auraFamilyName != spell.SpellFamilyName {
+		return false
+	}
+	if auraFamilyFlags != [3]uint32{} {
+		if auraFamilyFlags[0]&spell.SpellFamilyFlags[0] == 0 && auraFamilyFlags[1]&spell.SpellFamilyFlags[1] == 0 && auraFamilyFlags[2]&spell.SpellFamilyFlags[2] == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// totalAuraModifierByAffectMask mirrors Unit::GetTotalAuraModifierByAffectMask
+// (Unit.cpp:5017): sums aura amounts of the given type only from aura effects
+// whose spell affects the given spell via the spell-family affect mask.
+func (s *session) totalAuraModifierByAffectMask(auraType uint32, spell wotlk.Spell) int32 {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	var total int32
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.AuraType != auraType {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if effect.Aura != auraType || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount == 0 {
+				amount = int32(aura.Amount)
+			}
+			if amount == 0 {
+				amount = effect.BasePoints + 1
+			}
+			total += amount
+		}
+	}
+	return total
 }
 
 func (s *session) calculateSpellPowerCost(spell wotlk.Spell) uint32 {
