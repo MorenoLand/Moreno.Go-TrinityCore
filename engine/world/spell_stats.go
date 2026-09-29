@@ -145,7 +145,7 @@ func (s *session) calculateSpellCastTime(spell wotlk.Spell) uint32 {
 	castTime := baseCastTime
 	reqAmmo := spell.Attributes&spellAttr0ReqAmmo != 0 && spell.AttributesEx1&spellAttr2AutorepeatFlag == 0
 	switch {
-	case s.player != nil && spell.Attributes&(spellAttr0Ability|spellAttr0Tradespell|spellAttr3NoDoneBonus) == 0 && spell.SpellFamilyName != 0:
+	case s.player != nil && spell.Attributes&(spellAttr0Ability|spellAttr0Tradespell) == 0 && spell.AttributesEx3&spellAttr3NoDoneBonus == 0 && spell.SpellFamilyName != 0:
 		if hastePct := s.getSpellHastePct(); hastePct > 0 {
 			castTime = int32(float64(castTime) / (1.0 + hastePct/100.0))
 		}
