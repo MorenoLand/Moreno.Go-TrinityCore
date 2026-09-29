@@ -644,7 +644,11 @@ func (s *session) handleRealmList(ctx context.Context) error {
 	}
 	header := protocol.NewBuffer(payload.Len() + 8)
 	header.WriteU8(realmList)
-	header.WriteU16(uint16(payload.Len() + 6))
+	sizeLen := 6
+	if !s.postBC {
+		sizeLen = 8
+	}
+	header.WriteU16(uint16(payload.Len() + sizeLen))
 	header.WriteU32(0)
 	if s.postBC {
 		header.WriteU16(uint16(count))
