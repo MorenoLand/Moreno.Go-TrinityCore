@@ -316,6 +316,17 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 	return true
 }
 
+// mailSendNeedItemDelay mirrors the needItemDelay term of WorldSession::HandleSendMail
+// (MailHandler.cpp:264-276): the sent mail takes CONFIG_MAIL_DELIVERY_DELAY when it
+// carries attachments and the receiver's character sits on a different account than
+// the sender (needItemDelay = GetAccountId() != receiverAccountId, where
+// receiverAccountId is the character-cache AccountId — the receiver's session account
+// when online). The online-quirk of SendReturnToSender does not apply here: the cache
+// is read unconditionally, so the comparison is the plain account inequality.
+func mailSendNeedItemDelay(hasItems bool, senderAccount, receiverAccount uint32) bool {
+	return hasItems && senderAccount != receiverAccount
+}
+
 func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 20 {
 		return true
@@ -373,8 +384,8 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrCannotSendToSelf, 0, 0, 0), true)
 		return true
 	}
-	var receiverRace int64
-	_ = cdb.QueryRowContext(ctx, "SELECT race FROM characters WHERE guid = ?", receiverGUID).Scan(&receiverRace)
+	var receiverRace, receiverAccount int64
+	_ = cdb.QueryRowContext(ctx, "SELECT race, account FROM characters WHERE guid = ?", receiverGUID).Scan(&receiverRace, &receiverAccount)
 	if s.player.Race != 0 && receiverRace != 0 && teamForRace(s.player.Race) != teamForRace(uint8(receiverRace)) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrNotYourTeam, 0, 0, 0), true)
 		return true
@@ -415,7 +426,18 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	s.player.Money -= totalRequired
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	now := time.Now().Unix()
-	expire := now + 30*86400
+	// TrinityCore HandleSendMail (MailHandler.cpp:264-276) takes deliver_delay =
+	// CONFIG_MAIL_DELIVERY_DELAY when the mail carries attachments to a character on
+	// another account; MailDraft::SendMailTo (Mail.cpp:197) then sets
+	// deliver_time = now + deliver_delay. Item-less and same-account mails deliver
+	// immediately.
+	deliverTime := now
+	if s.server != nil && mailSendNeedItemDelay(len(attachments) > 0, s.accountID, uint32(receiverAccount)) {
+		deliverTime = now + int64(s.server.Config.MailDeliveryDelay)
+	}
+	// MailDraft::SendMailTo (Mail.cpp:203) anchors expire_time on deliver_time, not
+	// on now (30-day default here; MAIL_NORMAL send path).
+	expire := deliverTime + 30*86400
 	hasItems := 0
 	if len(attachments) > 0 {
 		hasItems = 1
@@ -433,7 +455,7 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	}
 	_, err = cdb.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
 		VALUES (?, 0, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		nextMailID, stationery, s.playerGUID, receiverGUID, subject, body, hasItems, expire, now, money, cod, checked)
+		nextMailID, stationery, s.playerGUID, receiverGUID, subject, body, hasItems, expire, deliverTime, money, cod, checked)
 	if err != nil {
 		return true
 	}
