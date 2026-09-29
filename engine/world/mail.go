@@ -651,10 +651,14 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 			return true
 		}
 	}
-	// Find free inventory slot (backpack slots 23..38 or equipped bags 19..22)
+	// Reference: MailHandler.cpp:440-441 — the CanStoreItem guard answers the
+	// CanTakeMoreSimilarItems max-count term (EQUIP_ERR_CANT_CARRY_MORE_OF_THIS)
+	// before the inventory-space term (EQUIP_ERR_INVENTORY_FULL).
+	templateFound, maxCount := s.mailItemTemplateMaxCount(ctx, uint32(itemEntry))
+	ownedCount := s.mailOwnedItemCount(ctx, uint32(itemEntry))
 	freeBagKey, freeClientBag, freeSlot, ok := s.findFreeInventorySlot(ctx, s.playerGUID)
-	if !ok {
-		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailItemTaken, mailErrEquipError, uint32(equipErrInvFull), 0, 0), true)
+	if equipErr := mailStoreEquipError(templateFound, maxCount, ownedCount, uint32(itemCount), ok); equipErr != equipErrOk {
+		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailItemTaken, mailErrEquipError, uint32(equipErr), 0, 0), true)
 		return true
 	}
 
@@ -859,6 +863,59 @@ func mailCreateTextItemCreator(messageType uint32, mailSender uint64) uint64 {
 	return 0
 }
 
+// mailStoreEquipError mirrors the CanTakeMoreSimilarItems term of
+// Player::CanStoreItem (Player.cpp:10734-10745), the guard both mail take-item
+// and mail create-text-item answer with (MailHandler.cpp:440-441, :604-605):
+// the max-count term answers EQUIP_ERR_CANT_CARRY_MORE_OF_THIS (ItemDefines.h:43,
+// = 17) before any space search, and only then does a missing free slot answer
+// EQUIP_ERR_INVENTORY_FULL (= 50). A missing template also answers
+// CANT_CARRY_MORE_OF_THIS (Player.cpp:10711). maxCount <= 0 is uncapped
+// (ItemTemplate.h:628); the ItemLimitCategory sub-term needs DBC data absent
+// from this server, so it is not modeled.
+func mailStoreEquipError(templateFound bool, maxCount int64, ownedCount, incomingCount uint32, hasFreeSlot bool) uint32 {
+	if !templateFound {
+		return uint32(equipErrCantCarryMoreOfThis)
+	}
+	if maxCount > 0 && maxCount != 2147483647 && uint64(ownedCount)+uint64(incomingCount) > uint64(maxCount) {
+		return uint32(equipErrCantCarryMoreOfThis)
+	}
+	if !hasFreeSlot {
+		return uint32(equipErrInvFull)
+	}
+	return uint32(equipErrOk)
+}
+
+// mailItemTemplateMaxCount reads the item_template maxcount term the
+// CanTakeMoreSimilarItems guard needs; found=false mirrors C++'s null
+// ItemTemplate (Player.cpp:10707-10713).
+func (s *session) mailItemTemplateMaxCount(ctx context.Context, itemEntry uint32) (bool, int64) {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false, 0
+	}
+	var maxCount int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(maxcount, 0) FROM item_template WHERE entry = ?", itemEntry).Scan(&maxCount); err != nil {
+		return false, 0
+	}
+	return true, maxCount
+}
+
+// mailOwnedItemCount mirrors Player::GetItemCount(entry, true, skipItem)
+// (Player.cpp:9914-9953) for the take/create-mail guard: the skipItem term is
+// vacuous because the item is still a mail attachment, not yet in inventory,
+// and socketed-gem counting is not modeled.
+func (s *session) mailOwnedItemCount(ctx context.Context, itemEntry uint32) uint32 {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0
+	}
+	var total int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory AS ci
+		JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ii.itemEntry = ?`, s.playerGUID, itemEntry).Scan(&total); err != nil || total < 0 {
+		return 0
+	}
+	return uint32(total)
+}
+
 // handleMailCreateTextItem processes CMSG_MAIL_CREATE_TEXT_ITEM (0x24A).
 // Reference: WorldSession::HandleMailCreateTextItem (MailHandler.cpp:565).
 func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) bool {
@@ -875,28 +932,16 @@ func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
 
-		// Check for free slot in backpack (slots 23..38)
-		usedSlots := make(map[uint8]bool)
-		rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0", s.playerGUID)
-		if err == nil {
-			for rows.Next() {
-				var sl int64
-				if rows.Scan(&sl) == nil {
-					usedSlots[uint8(sl)] = true
-				}
-			}
-			rows.Close()
-		}
-		freeSlot := uint8(0xFF)
-		for sl := uint8(23); sl <= 38; sl++ {
-			if !usedSlots[sl] {
-				freeSlot = sl
-				break
-			}
-		}
-		if freeSlot == 0xFF {
-			// Inventory full error (MAIL_ERR_EQUIP_ERROR)
-			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailMadePermanent, mailErrEquipError, uint32(equipErrInvFull), 0, 0), true)
+		// Reference: MailHandler.cpp:604 — CanStoreItem(NULL_BAG, NULL_SLOT)
+		// searches the backpack and all equipped bags (not the backpack only),
+		// and answers the CanTakeMoreSimilarItems max-count term before the
+		// inventory-space term.
+		const mailBodyItemTemplate uint32 = 8383 // Plain Letter
+		templateFound, maxCount := s.mailItemTemplateMaxCount(ctx, mailBodyItemTemplate)
+		ownedCount := s.mailOwnedItemCount(ctx, mailBodyItemTemplate)
+		freeBagKey, freeClientBag, freeSlot, slotOK := s.findFreeInventorySlot(ctx, s.playerGUID)
+		if equipErr := mailStoreEquipError(templateFound, maxCount, ownedCount, 1, slotOK); equipErr != equipErrOk {
+			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailMadePermanent, mailErrEquipError, uint32(equipErr), 0, 0), true)
 			return true
 		}
 
@@ -924,12 +969,11 @@ func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) 
 		if nextGUID == 0 {
 			nextGUID = uint64(time.Now().UnixNano())
 		}
-		const mailBodyItemTemplate uint32 = 8383 // Plain Letter
 		creator := mailCreateTextItemCreator(messageType, mailSender)
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, ?, 1, 0, '', 1, '', 0, 0, 0, ?)", nextGUID, mailBodyItemTemplate, s.playerGUID, creator, body)
-		_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextGUID)
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, freeBagKey, freeSlot, nextGUID)
 		_, _ = cdb.ExecContext(ctx, "UPDATE mail SET checked = checked | 4 WHERE id = ?", mailID) // MAIL_CHECK_MASK_COPIED = 4
-		_ = s.sendItemCreate(nextGUID, mailBodyItemTemplate, 1, 0, freeSlot)
+		_ = s.sendItemCreate(nextGUID, mailBodyItemTemplate, 1, freeClientBag, freeSlot)
 		_ = s.sendInventoryItems(ctx)
 		s.sendPlayerUpdate()
 	}

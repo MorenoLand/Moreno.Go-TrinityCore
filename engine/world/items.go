@@ -1314,6 +1314,7 @@ const (
 	equipErrNonemptyBagOverOtherBag = 5
 	equipErrCantEquipWithTwohanded  = 13
 	equipErrCantDualWield           = 14
+	equipErrCantCarryMoreOfThis     = 17
 	equipErrItemDoesntGoIntoBag     = 15
 	equipErrItemCantBeEquipped      = 20
 	equipErrItemsCantBeSwapped      = 21
