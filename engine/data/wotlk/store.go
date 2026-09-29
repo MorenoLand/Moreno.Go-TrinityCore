@@ -1192,6 +1192,38 @@ func (s *Store) CharTitle(id uint32) (CharTitle, bool, error) {
 	return title, true, nil
 }
 
+type Emote struct {
+	ID                uint32
+	EmoteFlags        uint32
+	EmoteSpecProc     uint32
+	EmoteSpecProcParam uint32
+}
+
+func (s *Store) Emote(id uint32) (Emote, bool, error) {
+	if id == 0 {
+		return Emote{}, true, nil
+	}
+	file, err := s.File("Emotes")
+	if err != nil {
+		return Emote{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return Emote{}, false, nil
+	}
+	emote := Emote{ID: id}
+	if emote.EmoteFlags, err = record.Uint32(3); err != nil {
+		return Emote{}, false, err
+	}
+	if emote.EmoteSpecProc, err = record.Uint32(4); err != nil {
+		return Emote{}, false, err
+	}
+	if emote.EmoteSpecProcParam, err = record.Uint32(5); err != nil {
+		return Emote{}, false, err
+	}
+	return emote, true, nil
+}
+
 func (s *Store) SpellRange(id uint32) (SpellRangeEntry, bool, error) {
 	file, err := s.File("SpellRange")
 	if err != nil {
