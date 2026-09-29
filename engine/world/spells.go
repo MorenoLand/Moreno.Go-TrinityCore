@@ -1048,6 +1048,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if eff.MiscValue != 0 {
 					s.giveReputation(effCtx, uint32(eff.MiscValue), eff.BasePoints+1)
 				}
+			default:
+				s.debug("unhandled spell effect", "spell", spellID, "effect", eff.Effect, "index", effectIndex)
 			}
 		}
 		if s.server != nil && isHarmfulSpell(spell) && !damageEffectSeen {
