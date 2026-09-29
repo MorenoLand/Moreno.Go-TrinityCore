@@ -1586,8 +1586,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectPowerBurn:
 				amount := eff.BasePoints + 1
 				for _, effectTarget := range hitTargets {
+					// SpellEffects.cpp:1383: the drained power is dealt as
+					// damage scaled by the effect value multiplier.
 					if burned := s.applySpellPowerBurn(effCtx, effectTarget, eff.MiscValue, amount, spellID); burned > 0 {
-						s.executeSpellDamage(effCtx, effectTarget, spellID, burned, effectIndex)
+						s.executeSpellDamage(effCtx, effectTarget, spellID, effectValueMultiplied(burned, eff.Amplitude), effectIndex)
 					}
 				}
 			case spellEffectParry:
@@ -1744,8 +1746,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectPowerDrain: // 8: SPELL_EFFECT_POWER_DRAIN
 				amount := eff.BasePoints + 1
 				for _, effectTarget := range hitTargets {
+					// SpellEffects.cpp:1301: the caster regains the drained
+					// power scaled by the effect value multiplier, never
+					// from a self drain.
 					if drained := s.applySpellPowerBurn(effCtx, effectTarget, eff.MiscValue, amount, spellID); drained > 0 {
-						s.applySpellEnergize(effCtx, s.playerGUID, eff.MiscValue, int32(drained))
+						if effectTarget != s.playerGUID {
+							s.applySpellEnergize(effCtx, s.playerGUID, eff.MiscValue, int32(effectValueMultiplied(drained, eff.Amplitude)))
+						}
 					}
 				}
 			default:
@@ -2399,7 +2406,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			s.applySpellEnergize(ctx, targetGUID, eff.MiscValue, eff.BasePoints+1)
 		} else if eff.Effect == spellEffectPowerBurn {
 			if burned := s.applySpellPowerBurn(ctx, targetGUID, eff.MiscValue, eff.BasePoints+1, spellID); burned > 0 {
-				s.executeSpellDamage(ctx, targetGUID, spellID, burned, effectIndex)
+				s.executeSpellDamage(ctx, targetGUID, spellID, effectValueMultiplied(burned, eff.Amplitude), effectIndex)
 			}
 		} else if eff.Effect == spellEffectTriggerSpell {
 			if eff.TriggerSpell != 0 && eff.TriggerSpell != spellID {
@@ -2420,6 +2427,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 
 func (s *session) applySpellEnergize(ctx context.Context, targetGUID uint64, powerType int32, amount int32) {
 	s.adjustSpellPower(ctx, targetGUID, powerType, int64(amount))
+}
+
+// effectValueMultiplied applies the effect's value multiplier
+// (Spell.dbc EffectAmplitude, SpellInfo.cpp:344) the way
+// SpellEffectInfo::CalcValueMultiplier does: raw multiplication, no
+// zero default. The SPELLMOD_VALUE_MULTIPLIER term has no Go infra.
+func effectValueMultiplied(value uint32, amplitude float32) uint32 {
+	return uint32(int32(float64(value) * float64(amplitude)))
 }
 
 func (s *session) applySpellPowerBurn(ctx context.Context, targetGUID uint64, powerType int32, amount int32, spellID uint32) uint32 {
@@ -5910,6 +5925,8 @@ func (s *session) handleEffectHealthLeech(ctx context.Context, spellID uint32, h
 			continue
 		}
 		s.executeSpellDamage(ctx, target, spellID, damageAmount, effIndex)
-		s.executeSpellHeal(ctx, s.playerGUID, spellID, damageAmount, effIndex)
+		// SpellEffects.cpp:1530: the leech heal is the dealt damage scaled
+		// by the effect value multiplier.
+		s.executeSpellHeal(ctx, s.playerGUID, spellID, effectValueMultiplied(damageAmount, eff.Amplitude), effIndex)
 	}
 }
