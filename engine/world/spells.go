@@ -1063,6 +1063,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	areaSpell := isAreaEnemySpell(spell)
 	friendlyAreaSpell := isFriendlyAreaSpell(spell)
 	friendlyNearbySpell := isFriendlyNearbySpell(spell)
+	entryNearbySpell := isEntryNearbySpell(spell)
 	friendlyConeSpell := isFriendlyConeSpell(spell)
 	friendlyLastTargetAreaSpell := isFriendlyLastTargetAreaSpell(spell)
 	friendlyTargetAreaRaidClassSpell := isFriendlyTargetAreaRaidClassSpell(spell)
@@ -1087,6 +1088,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993).
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 11), true)
 			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no nearby target")
+			return
+		}
+	} else if entryNearbySpell {
+		// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036):
+		// TARGET_UNIT_NEARBY_ENTRY (38) — the single nearest entry-matched
+		// unit becomes the target; no match fails the cast.
+		if nearby, ok := s.spellEntryNearbyTarget(ctx, spell, spellID); ok {
+			hitTargets = []uint64{nearby}
+		} else {
+			// Spell.cpp:1111: no target found ->
+			// SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993).
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 11), true)
+			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no entry target")
 			return
 		}
 	} else if friendlyConeSpell {

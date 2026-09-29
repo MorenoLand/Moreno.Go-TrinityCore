@@ -134,6 +134,33 @@ type conditionRow struct {
 
 const conditionSourceGossipMenuOption = 15
 
+const conditionSourceSpellImplicitTarget = 13 // CONDITION_SOURCE_TYPE_SPELL_IMPLICIT_TARGET (ConditionMgr.h:136)
+
+// loadImplicitTargetConditions fetches the `conditions` rows attached to a
+// spell's implicit targets (SourceEntry = spell id, SourceGroup = effect
+// mask). TARGET_CHECK_ENTRY targets (7/8/38/40/46/60) resolve their entry
+// filter from these rows; a missing table or query error degrades to no
+// rows, matching C++ behavior with no ImplicitTargetConditions.
+func (s *session) loadImplicitTargetConditions(ctx context.Context, spellID uint32, effectMask uint32) []conditionRow {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || effectMask == 0 {
+		return nil
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT ElseGroup, ConditionTypeOrReference, ConditionTarget, ConditionValue1, ConditionValue2, ConditionValue3, NegativeCondition FROM conditions WHERE SourceTypeOrReferenceId = ? AND SourceEntry = ? AND (SourceGroup & ?) <> 0 ORDER BY ElseGroup", conditionSourceSpellImplicitTarget, spellID, effectMask)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	result := make([]conditionRow, 0, 2)
+	for rows.Next() {
+		var row conditionRow
+		if err := rows.Scan(&row.ElseGroup, &row.ConditionType, &row.ConditionTarget, &row.Value1, &row.Value2, &row.Value3, &row.Negative); err != nil {
+			return nil
+		}
+		result = append(result, row)
+	}
+	return result
+}
+
 // loadGossipOptionConditions fetches conditions attached to a gossip menu
 // option (SourceType 15: SourceGroup = MenuID, SourceEntry = OptionID).
 func (s *session) loadGossipOptionConditions(ctx context.Context, menuID, optionID uint32) ([]conditionRow, error) {

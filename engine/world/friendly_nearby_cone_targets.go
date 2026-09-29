@@ -110,6 +110,7 @@ type friendlyCandidate struct {
 	class      uint8  // players only; 0 = unknown (creatures)
 	isPlayer   bool
 	ownerGUID  uint64 // creatures: charmer/owner resolution (Unit.cpp:12126)
+	entry      uint32 // creatures: template entry (0 for players)
 }
 
 // friendlyScanCandidates visits every plausible unit once: motion creatures,
@@ -137,7 +138,7 @@ func (s *session) friendlyScanCandidates(ctx context.Context, cx, cy, radius flo
 		}
 		visit(friendlyCandidate{guid: motion.GUID, mapID: motion.Map, instanceID: motion.InstanceID,
 			x: motion.X, y: motion.Y, z: motion.Z, unitFlags: motion.UnitFlags, flagsExtra: motion.FlagsExtra,
-			health: motion.Health, faction: motion.Faction, ownerGUID: owner})
+			health: motion.Health, faction: motion.Faction, ownerGUID: owner, entry: motion.Entry})
 	}
 	s.server.sessionsMu.RLock()
 	for targetSession := range s.server.sessions {
@@ -162,7 +163,7 @@ func (s *session) friendlyScanCandidates(ctx context.Context, cx, cy, radius flo
 					if _, hasMotion := motionGUIDs[guid]; !hasMotion {
 						visit(friendlyCandidate{guid: guid, mapID: uint32(rowMap), instanceID: instanceID,
 							x: float32(x), y: float32(y), z: float32(z), unitFlags: uint32(unitFlags),
-							flagsExtra: uint32(flagsExtra), health: uint32(health), faction: uint32(faction)})
+							flagsExtra: uint32(flagsExtra), health: uint32(health), faction: uint32(faction), entry: uint32(entry)})
 					}
 				}
 			}
