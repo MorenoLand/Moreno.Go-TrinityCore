@@ -1740,8 +1740,11 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo), true)
 
-	// Trigger spell cast/hit procs (TrinityCore Unit::ProcDamageAndSpellFor)
-	s.procSpellCastAndHitEffects(ctx, target, spellID)
+	// Trigger spell cast/hit procs (TrinityCore Unit::ProcDamageAndSpellFor);
+	// suppressed for triggered casts (TRIGGERED_DISALLOW_PROC_EVENTS parity).
+	if s.triggeredNoProcEvents == 0 {
+		s.procSpellCastAndHitEffects(ctx, target, spellID)
+	}
 
 	s.lastCombatTime = time.Now()
 	if s.player != nil && s.player.UnitFlags&unitFlagInCombat == 0 {
@@ -1875,6 +1878,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	if ctx == nil {
 		ctx = context.Background()
 	}
+
+	// Triggered casts map to C++ Unit::CastSpell(..., triggered=true), which sets
+	// TRIGGERED_FULL_MASK including TRIGGERED_DISALLOW_PROC_EVENTS
+	// (SpellDefines.h:155). C++ suppresses the attacker's own proc rolls for such
+	// spells (Unit::TriggerAurasProcOnEvent, Unit.cpp:10424, Spell::IsProcDisabled).
+	s.triggeredNoProcEvents++
+	defer func() { s.triggeredNoProcEvents-- }()
 
 	var spell wotlk.Spell
 	found := false
@@ -3974,7 +3984,12 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		if aura.TriggerSpell != 0 && s.server != nil && s.server.Data != nil {
 			if trigger, found, err := s.server.Data.Spell(aura.TriggerSpell); err == nil && found {
 				if damage, ok := creatureSpellDamage(trigger); ok && damage > 0 {
+					// C++ HandlePeriodicTriggerSpellAuraTick casts via
+					// CastSpellExtraArgs(AuraEffect) = TRIGGERED_FULL_MASK, so
+					// TRIGGERED_DISALLOW_PROC_EVENTS applies here too.
+					s.triggeredNoProcEvents++
 					s.executeSpellDamage(ctx, aura.TargetGUID, aura.TriggerSpell, damage, 0)
+					s.triggeredNoProcEvents--
 				}
 			}
 		}

@@ -329,9 +329,13 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 		if s.server != nil {
 			nearbyMobs := s.server.totemCreatureTargets(totem, float64(def.Radius))
 			dmg := uint32(75)
+			// C++ Totem::Update casts the pulse via CastSpell(..., true) =
+			// TRIGGERED_FULL_MASK (Totem.cpp:115), so DISALLOW_PROC_EVENTS applies.
+			s.triggeredNoProcEvents++
 			for _, m := range nearbyMobs {
 				s.executeSpellDamage(ctx, m.GUID, def.PulseSpell, dmg, 0)
 			}
+			s.triggeredNoProcEvents--
 		}
 
 	case TotemPulseSingleTarget:
@@ -348,7 +352,9 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 
 			if nearest != nil {
 				dmg := uint32(60)
+				s.triggeredNoProcEvents++
 				s.executeSpellDamage(ctx, nearest.GUID, def.PulseSpell, dmg, 0)
+				s.triggeredNoProcEvents--
 			}
 		}
 

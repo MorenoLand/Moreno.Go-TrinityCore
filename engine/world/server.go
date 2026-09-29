@@ -278,6 +278,7 @@ type session struct {
 	trade                        *playerTradeState
 	diminishing                  [DiminishingMax]diminishingReturn
 	procICD                      map[uint32]time.Time
+	triggeredNoProcEvents        int
 	guildInvitedID               uint32
 	guildInviterGUID             uint64
 	groupID                      uint64 // GUID of the group this player is in (0 = no group)
