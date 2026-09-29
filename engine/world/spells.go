@@ -19,11 +19,11 @@ const (
 	spellCastFlagGo       uint32 = 0x00000100
 	spellCastFlagPending  uint32 = 0x00000001
 
-	spellAttr3MainHand     uint32 = 0x00000400 // SPELL_ATTR3_MAIN_HAND: Require main hand weapon (SharedDefines.h:533)
-	spellAttr3ReqOffhand   uint32 = 0x01000000 // SPELL_ATTR3_REQ_OFFHAND: Require offhand weapon (SharedDefines.h:547)
-	spellAttr3ReqWand      uint32 = 0x00400000 // SPELL_ATTR3_REQ_WAND: Requires equipped Wand (SharedDefines.h:545)
-	spellAttr5HideDuration          uint32 = 0x00000400 // SPELL_ATTR5_HIDE_DURATION (SharedDefines.h:607)
-	spellAttr5CanChannelWhenMoving  uint32 = 0x00000001 // SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING (SharedDefines.h:597)
+	spellAttr3MainHand             uint32 = 0x00000400 // SPELL_ATTR3_MAIN_HAND: Require main hand weapon (SharedDefines.h:533)
+	spellAttr3ReqOffhand           uint32 = 0x01000000 // SPELL_ATTR3_REQ_OFFHAND: Require offhand weapon (SharedDefines.h:547)
+	spellAttr3ReqWand              uint32 = 0x00400000 // SPELL_ATTR3_REQ_WAND: Requires equipped Wand (SharedDefines.h:545)
+	spellAttr5HideDuration         uint32 = 0x00000400 // SPELL_ATTR5_HIDE_DURATION (SharedDefines.h:607)
+	spellAttr5CanChannelWhenMoving uint32 = 0x00000001 // SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING (SharedDefines.h:597)
 
 	spellInterruptFlagMovement uint32 = 0x01 // SPELL_INTERRUPT_FLAG_MOVEMENT (SpellDefines.h:30)
 
@@ -494,6 +494,18 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded caster aura present", "aura", spell.ExcludeCasterAuraSpell)
 		return true
 	}
+	// Caster aura state requirements (Spell::CheckCast caster-state block, Spell.cpp:5298-5304):
+	// client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if spell.CasterAuraState != 0 && !s.hasAuraState(spell.CasterAuraState) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAuraState), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "required caster aura state missing", "state", spell.CasterAuraState)
+		return true
+	}
+	if spell.ExcludeCasterAuraState != 0 && s.hasAuraState(spell.ExcludeCasterAuraState) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAuraState), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded caster aura state present", "state", spell.ExcludeCasterAuraState)
+		return true
+	}
 	if s.isGCDActive(spell) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "global cooldown active")
@@ -577,6 +589,21 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if spell.ExcludeTargetAuraSpell != 0 && targetGUID != 0 && s.targetHasAura(ctx, targetGUID, spell.ExcludeTargetAuraSpell) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded target aura present", "aura", spell.ExcludeTargetAuraSpell)
+		return true
+	}
+	// Target aura state requirements (SpellInfo::CheckTarget, SpellInfo.cpp:1760-1766):
+	// only checked when a unit target exists, like C++ m_targets.GetUnitTarget().
+	// C++ skips these for vehicle casters and charmer-owned targets; Go has
+	// neither concept, so the check always applies here.
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if spell.TargetAuraState != 0 && targetGUID != 0 && !s.targetHasAuraState(ctx, targetGUID, spell.TargetAuraState) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "required target aura state missing", "state", spell.TargetAuraState)
+		return true
+	}
+	if spell.ExcludeTargetAuraState != 0 && targetGUID != 0 && s.targetHasAuraState(ctx, targetGUID, spell.ExcludeTargetAuraState) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded target aura state present", "state", spell.ExcludeTargetAuraState)
 		return true
 	}
 
@@ -5097,7 +5124,6 @@ func (s *session) handleEffectResurrect(ctx context.Context, targetGUID uint64, 
 	targetSess.setResurrectRequestData(s.playerGUID, 0, 0, 0, 0, health, mana)
 	targetSess.sendResurrectRequest(s.playerGUID, "", false, false)
 }
-
 
 func (s *session) handleEffectHealthLeech(ctx context.Context, spellID uint32, hitTargets []uint64, effIndex int, eff wotlk.SpellEffect) {
 	if s.playerGUID == 0 {

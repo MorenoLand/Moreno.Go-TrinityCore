@@ -111,8 +111,8 @@ type SpellEffect struct {
 	ItemType           uint32
 	PointsPerCombo     float32
 	SpellClassMask     [3]uint32 // Spell.dbc fields 122-130 = EffectSpellClassMask (DBCStructure.h:1473)
-	ChainAmplitude     float32 // Spell.dbc fields 216-218 = EffectChainAmplitude (DBCStructure.h:1486)
-	BonusCoefficient   float32 // Spell.dbc fields 229-231 = EffectBonusCoefficient (DBCStructure.h:1492)
+	ChainAmplitude     float32   // Spell.dbc fields 216-218 = EffectChainAmplitude (DBCStructure.h:1486)
+	BonusCoefficient   float32   // Spell.dbc fields 229-231 = EffectBonusCoefficient (DBCStructure.h:1492)
 }
 
 func (effect SpellEffect) CalcValue() int32 {
@@ -161,68 +161,70 @@ func (effect SpellEffect) CalcValueRangeForLevel(spell Spell, casterLevel uint32
 }
 
 type Spell struct {
-	ID                    uint32
-	AreaGroupID           int32
-	DispelType            uint32 // Spell.dbc field 2 = DispelType (DBCStructure.h:1394)
-	Mechanic              uint32 // Spell.dbc field 3 = Mechanic (DBCStructure.h:1395)
-	Attributes            uint32
-	SpellFamilyName       uint32
-	SpellFamilyFlags      [3]uint32
-	AttributesEx          uint32 // Spell.dbc field 5 = AttributesEx (DBCStructure.h:1397)
-	AttributesEx1         uint32 // Spell.dbc field 6 = AttributesExB (DBCStructure.h:1398)
-	AttributesEx3         uint32 // Spell.dbc field 7 = AttributesExC (DBCStructure.h:1399)
-	AttributesEx4         uint32 // Spell.dbc field 8 = AttributesExD (DBCStructure.h:1402)
-	AttributesEx5         uint32 // Spell.dbc field 9 = AttributesExE (DBCStructure.h:1403)
-	ShapeshiftMask        [2]uint32 // Spell.dbc fields 12-13 = ShapeshiftMask (DBCStructure.h:1404)
-	ShapeshiftExclude     [2]uint32 // Spell.dbc fields 14-15 = ShapeshiftExclude (DBCStructure.h:1405)
-	RequiresSpellFocus    uint32 // Spell.dbc field 18 = RequiresSpellFocus (DBCStructure.h:1408)
-	CasterAuraState       uint32 // Spell.dbc field 20 = CasterAuraState (DBCStructure.h:1410)
-	TargetAuraState       uint32 // Spell.dbc field 21 = TargetAuraState (DBCStructure.h:1411)
-	ProcTypeMask          uint32 // Spell.dbc field 34 = ProcTypeMask (DBCStructure.h:1424)
-	ProcChance            uint32 // Spell.dbc field 35 = ProcChance (DBCStructure.h:1425)
-	ManaPerSecond         uint32 // Spell.dbc field 44 = ManaPerSecond (DBCStructure.h:1435)
-	TargetCreatureType      uint32 // Spell.dbc field 17 = TargetCreatureType (DBCStructure.h:1407)
-	CasterAuraSpell         uint32 // Spell.dbc field 24 = CasterAuraSpell (DBCStructure.h:1414)
-	TargetAuraSpell         uint32 // Spell.dbc field 25 = TargetAuraSpell (DBCStructure.h:1415)
-	ExcludeCasterAuraSpell  uint32 // Spell.dbc field 26 = ExcludeCasterAuraSpell (DBCStructure.h:1416)
-	ExcludeTargetAuraSpell  uint32 // Spell.dbc field 27 = ExcludeTargetAuraSpell (DBCStructure.h:1417)
-	CategoryRecoveryTime    uint32 // Spell.dbc field 30 = CategoryRecoveryTime (DBCStructure.h:1420)
-	SchoolMask            uint32
-	Targets               uint32
-	FacingCasterFlags     uint32 // Spell.dbc field 19 = FacingCasterFlags (DBCStructure.h:1409)
-	CastingTimeIndex      uint32
-	RecoveryTime          uint32
-	ProcCharges           uint32 // Spell.dbc field 36 = ProcCharges (DBCStructure.h:1426)
-	StackAmount           uint32 // Spell.dbc field 49 = CumulativeAura (DBCStructure.h:1440)
-	Totem               [2]uint32 // Spell.dbc fields 50-51 = Totem (DBCStructure.h:1441)
-	PowerType             uint32
-	ManaCost              uint32
-	ManaCostPerLevel      uint32 // Spell.dbc field 43 = ManaCostPerLevel (DBCStructure.h:1434)
-	ManaPerSecondPerLevel   uint32 // Spell.dbc field 45 = ManaPerSecondPerLevel (DBCStructure.h:1436)
-	ManaCostPct           uint32
-	RangeIndex            uint32
-	InterruptFlags        uint32
-	AuraInterruptFlags    uint32
-	ChannelInterrupt      uint32
-	DurationIndex         uint32
-	SpellLevel            uint32
-	MaxLevel              uint32
-	BaseLevel             uint32
-	PreventionType        uint32 // Spell.dbc field 214 = PreventionType (DBCStructure.h:1484)
-	MaxTargetLevel        uint32 // Spell.dbc field 207 = MaxTargetLevel (DBCStructure.h:1479)
-	MaxTargets            uint32 // Spell.dbc field 212 = MaxTargets (DBCStructure.h:1483)
-	DefenseType           uint32 // Spell.dbc field 213 = DefenseType (DBCStructure.h:1484)
-	RuneCostID            uint32 // Spell.dbc field 226 = RuneCostID (DBCStructure.h:1490)
-	RequiredTotemCategory [2]uint32 // Spell.dbc fields 222-223 = RequiredTotemCategoryID (DBCStructure.h:1487)
-	StartRecoveryCategory uint32 // Spell.dbc field 210 = StartRecoveryCategory (DBCStructure.h:1480)
-	StartRecoveryTime     uint32 // Spell.dbc field 211 = StartRecoveryTime (DBCStructure.h:1481)
-	EquippedItemClass     int32  // Spell.dbc field 68 = EquippedItemClass (DBCStructure.h:1443), -1 = any
-	EquippedItemSubClass  uint32 // Spell.dbc field 69 = EquippedItemSubclass (DBCStructure.h:1444)
-	EquippedItemInvTypes  uint32 // Spell.dbc field 70 = EquippedItemInvTypes (DBCStructure.h:1445)
-	Reagent               [8]int32  // Spell.dbc fields 52-59 = Reagent (DBCStructure.h:1441)
-	ReagentCount          [8]uint32 // Spell.dbc fields 60-67 = ReagentCount (DBCStructure.h:1442)
-	Speed                 float32
-	Effects               [3]SpellEffect
+	ID                     uint32
+	AreaGroupID            int32
+	DispelType             uint32 // Spell.dbc field 2 = DispelType (DBCStructure.h:1394)
+	Mechanic               uint32 // Spell.dbc field 3 = Mechanic (DBCStructure.h:1395)
+	Attributes             uint32
+	SpellFamilyName        uint32
+	SpellFamilyFlags       [3]uint32
+	AttributesEx           uint32    // Spell.dbc field 5 = AttributesEx (DBCStructure.h:1397)
+	AttributesEx1          uint32    // Spell.dbc field 6 = AttributesExB (DBCStructure.h:1398)
+	AttributesEx3          uint32    // Spell.dbc field 7 = AttributesExC (DBCStructure.h:1399)
+	AttributesEx4          uint32    // Spell.dbc field 8 = AttributesExD (DBCStructure.h:1402)
+	AttributesEx5          uint32    // Spell.dbc field 9 = AttributesExE (DBCStructure.h:1403)
+	ShapeshiftMask         [2]uint32 // Spell.dbc fields 12-13 = ShapeshiftMask (DBCStructure.h:1404)
+	ShapeshiftExclude      [2]uint32 // Spell.dbc fields 14-15 = ShapeshiftExclude (DBCStructure.h:1405)
+	RequiresSpellFocus     uint32    // Spell.dbc field 18 = RequiresSpellFocus (DBCStructure.h:1408)
+	CasterAuraState        uint32    // Spell.dbc field 20 = CasterAuraState (DBCStructure.h:1410)
+	TargetAuraState        uint32    // Spell.dbc field 21 = TargetAuraState (DBCStructure.h:1411)
+	ExcludeCasterAuraState uint32    // Spell.dbc field 22 = ExcludeCasterAuraState (DBCStructure.h:1412)
+	ExcludeTargetAuraState uint32    // Spell.dbc field 23 = ExcludeTargetAuraState (DBCStructure.h:1413)
+	ProcTypeMask           uint32    // Spell.dbc field 34 = ProcTypeMask (DBCStructure.h:1424)
+	ProcChance             uint32    // Spell.dbc field 35 = ProcChance (DBCStructure.h:1425)
+	ManaPerSecond          uint32    // Spell.dbc field 44 = ManaPerSecond (DBCStructure.h:1435)
+	TargetCreatureType     uint32    // Spell.dbc field 17 = TargetCreatureType (DBCStructure.h:1407)
+	CasterAuraSpell        uint32    // Spell.dbc field 24 = CasterAuraSpell (DBCStructure.h:1414)
+	TargetAuraSpell        uint32    // Spell.dbc field 25 = TargetAuraSpell (DBCStructure.h:1415)
+	ExcludeCasterAuraSpell uint32    // Spell.dbc field 26 = ExcludeCasterAuraSpell (DBCStructure.h:1416)
+	ExcludeTargetAuraSpell uint32    // Spell.dbc field 27 = ExcludeTargetAuraSpell (DBCStructure.h:1417)
+	CategoryRecoveryTime   uint32    // Spell.dbc field 30 = CategoryRecoveryTime (DBCStructure.h:1420)
+	SchoolMask             uint32
+	Targets                uint32
+	FacingCasterFlags      uint32 // Spell.dbc field 19 = FacingCasterFlags (DBCStructure.h:1409)
+	CastingTimeIndex       uint32
+	RecoveryTime           uint32
+	ProcCharges            uint32    // Spell.dbc field 36 = ProcCharges (DBCStructure.h:1426)
+	StackAmount            uint32    // Spell.dbc field 49 = CumulativeAura (DBCStructure.h:1440)
+	Totem                  [2]uint32 // Spell.dbc fields 50-51 = Totem (DBCStructure.h:1441)
+	PowerType              uint32
+	ManaCost               uint32
+	ManaCostPerLevel       uint32 // Spell.dbc field 43 = ManaCostPerLevel (DBCStructure.h:1434)
+	ManaPerSecondPerLevel  uint32 // Spell.dbc field 45 = ManaPerSecondPerLevel (DBCStructure.h:1436)
+	ManaCostPct            uint32
+	RangeIndex             uint32
+	InterruptFlags         uint32
+	AuraInterruptFlags     uint32
+	ChannelInterrupt       uint32
+	DurationIndex          uint32
+	SpellLevel             uint32
+	MaxLevel               uint32
+	BaseLevel              uint32
+	PreventionType         uint32    // Spell.dbc field 214 = PreventionType (DBCStructure.h:1484)
+	MaxTargetLevel         uint32    // Spell.dbc field 207 = MaxTargetLevel (DBCStructure.h:1479)
+	MaxTargets             uint32    // Spell.dbc field 212 = MaxTargets (DBCStructure.h:1483)
+	DefenseType            uint32    // Spell.dbc field 213 = DefenseType (DBCStructure.h:1484)
+	RuneCostID             uint32    // Spell.dbc field 226 = RuneCostID (DBCStructure.h:1490)
+	RequiredTotemCategory  [2]uint32 // Spell.dbc fields 222-223 = RequiredTotemCategoryID (DBCStructure.h:1487)
+	StartRecoveryCategory  uint32    // Spell.dbc field 210 = StartRecoveryCategory (DBCStructure.h:1480)
+	StartRecoveryTime      uint32    // Spell.dbc field 211 = StartRecoveryTime (DBCStructure.h:1481)
+	EquippedItemClass      int32     // Spell.dbc field 68 = EquippedItemClass (DBCStructure.h:1443), -1 = any
+	EquippedItemSubClass   uint32    // Spell.dbc field 69 = EquippedItemSubclass (DBCStructure.h:1444)
+	EquippedItemInvTypes   uint32    // Spell.dbc field 70 = EquippedItemInvTypes (DBCStructure.h:1445)
+	Reagent                [8]int32  // Spell.dbc fields 52-59 = Reagent (DBCStructure.h:1441)
+	ReagentCount           [8]uint32 // Spell.dbc fields 60-67 = ReagentCount (DBCStructure.h:1442)
+	Speed                  float32
+	Effects                [3]SpellEffect
 }
 
 type SpellRangeEntry struct {
@@ -795,47 +797,49 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{51, &spell.Totem[1]}, // Spell.dbc field 51 = Totem[1] (DBCStructure.h:1441)
 		{41, &spell.PowerType},
 		{42, &spell.ManaCost},
-		{43, &spell.ManaCostPerLevel}, // Spell.dbc field 43 = ManaCostPerLevel (DBCStructure.h:1434)
+		{43, &spell.ManaCostPerLevel},      // Spell.dbc field 43 = ManaCostPerLevel (DBCStructure.h:1434)
 		{45, &spell.ManaPerSecondPerLevel}, // Spell.dbc field 45 = ManaPerSecondPerLevel (DBCStructure.h:1436)
-		{204, &spell.ManaCostPct}, // Spell.dbc field 204 = ManaCostPct (DBCStructure.h:1476)
+		{204, &spell.ManaCostPct},          // Spell.dbc field 204 = ManaCostPct (DBCStructure.h:1476)
 		{46, &spell.RangeIndex},
-		{5, &spell.AttributesEx},        // Spell.dbc field 5 = AttributesEx (DBCStructure.h:1397)
-		{6, &spell.AttributesEx1},       // Spell.dbc field 6 = AttributesExB (DBCStructure.h:1398)
-		{7, &spell.AttributesEx3},       // Spell.dbc field 7 = AttributesExC (DBCStructure.h:1399)
-		{8, &spell.AttributesEx4},       // Spell.dbc field 8 = AttributesExD (DBCStructure.h:1402)
-		{9, &spell.AttributesEx5},       // Spell.dbc field 9 = AttributesExE (DBCStructure.h:1403)
-		{12, &spell.ShapeshiftMask[0]},   // Spell.dbc field 12 = ShapeshiftMask[0] (DBCStructure.h:1404)
-		{13, &spell.ShapeshiftMask[1]},   // Spell.dbc field 13 = ShapeshiftMask[1] (DBCStructure.h:1404)
-		{14, &spell.ShapeshiftExclude[0]}, // Spell.dbc field 14 = ShapeshiftExclude[0] (DBCStructure.h:1405)
-		{15, &spell.ShapeshiftExclude[1]}, // Spell.dbc field 15 = ShapeshiftExclude[1] (DBCStructure.h:1405)
-		{18, &spell.RequiresSpellFocus},  // Spell.dbc field 18 = RequiresSpellFocus (DBCStructure.h:1408)
-		{20, &spell.CasterAuraState},     // Spell.dbc field 20 = CasterAuraState (DBCStructure.h:1410)
-		{21, &spell.TargetAuraState},     // Spell.dbc field 21 = TargetAuraState (DBCStructure.h:1411)
-		{34, &spell.ProcTypeMask},        // Spell.dbc field 34 = ProcTypeMask (DBCStructure.h:1424)
-		{35, &spell.ProcChance},          // Spell.dbc field 35 = ProcChance (DBCStructure.h:1425)
-		{44, &spell.ManaPerSecond},       // Spell.dbc field 44 = ManaPerSecond (DBCStructure.h:1435)
-		{17, &spell.TargetCreatureType},  // Spell.dbc field 17 = TargetCreatureType (DBCStructure.h:1407)
-		{24, &spell.CasterAuraSpell},      // Spell.dbc field 24 = CasterAuraSpell (DBCStructure.h:1414)
-		{25, &spell.TargetAuraSpell},      // Spell.dbc field 25 = TargetAuraSpell (DBCStructure.h:1415)
+		{5, &spell.AttributesEx},            // Spell.dbc field 5 = AttributesEx (DBCStructure.h:1397)
+		{6, &spell.AttributesEx1},           // Spell.dbc field 6 = AttributesExB (DBCStructure.h:1398)
+		{7, &spell.AttributesEx3},           // Spell.dbc field 7 = AttributesExC (DBCStructure.h:1399)
+		{8, &spell.AttributesEx4},           // Spell.dbc field 8 = AttributesExD (DBCStructure.h:1402)
+		{9, &spell.AttributesEx5},           // Spell.dbc field 9 = AttributesExE (DBCStructure.h:1403)
+		{12, &spell.ShapeshiftMask[0]},      // Spell.dbc field 12 = ShapeshiftMask[0] (DBCStructure.h:1404)
+		{13, &spell.ShapeshiftMask[1]},      // Spell.dbc field 13 = ShapeshiftMask[1] (DBCStructure.h:1404)
+		{14, &spell.ShapeshiftExclude[0]},   // Spell.dbc field 14 = ShapeshiftExclude[0] (DBCStructure.h:1405)
+		{15, &spell.ShapeshiftExclude[1]},   // Spell.dbc field 15 = ShapeshiftExclude[1] (DBCStructure.h:1405)
+		{18, &spell.RequiresSpellFocus},     // Spell.dbc field 18 = RequiresSpellFocus (DBCStructure.h:1408)
+		{20, &spell.CasterAuraState},        // Spell.dbc field 20 = CasterAuraState (DBCStructure.h:1410)
+		{21, &spell.TargetAuraState},        // Spell.dbc field 21 = TargetAuraState (DBCStructure.h:1411)
+		{22, &spell.ExcludeCasterAuraState}, // Spell.dbc field 22 = ExcludeCasterAuraState (DBCStructure.h:1412)
+		{23, &spell.ExcludeTargetAuraState}, // Spell.dbc field 23 = ExcludeTargetAuraState (DBCStructure.h:1413)
+		{34, &spell.ProcTypeMask},           // Spell.dbc field 34 = ProcTypeMask (DBCStructure.h:1424)
+		{35, &spell.ProcChance},             // Spell.dbc field 35 = ProcChance (DBCStructure.h:1425)
+		{44, &spell.ManaPerSecond},          // Spell.dbc field 44 = ManaPerSecond (DBCStructure.h:1435)
+		{17, &spell.TargetCreatureType},     // Spell.dbc field 17 = TargetCreatureType (DBCStructure.h:1407)
+		{24, &spell.CasterAuraSpell},        // Spell.dbc field 24 = CasterAuraSpell (DBCStructure.h:1414)
+		{25, &spell.TargetAuraSpell},        // Spell.dbc field 25 = TargetAuraSpell (DBCStructure.h:1415)
 		{26, &spell.ExcludeCasterAuraSpell}, // Spell.dbc field 26 = ExcludeCasterAuraSpell (DBCStructure.h:1416)
 		{27, &spell.ExcludeTargetAuraSpell}, // Spell.dbc field 27 = ExcludeTargetAuraSpell (DBCStructure.h:1417)
-		{30, &spell.CategoryRecoveryTime}, // Spell.dbc field 30 = CategoryRecoveryTime (DBCStructure.h:1420)
-		{31, &spell.InterruptFlags},     // DBCStructure.h:1421
-		{32, &spell.AuraInterruptFlags}, // DBCStructure.h:1422
+		{30, &spell.CategoryRecoveryTime},   // Spell.dbc field 30 = CategoryRecoveryTime (DBCStructure.h:1420)
+		{31, &spell.InterruptFlags},         // DBCStructure.h:1421
+		{32, &spell.AuraInterruptFlags},     // DBCStructure.h:1422
 		{33, &spell.ChannelInterrupt},
 		{40, &spell.DurationIndex},
 		{39, &spell.SpellLevel},
 		{37, &spell.MaxLevel},
 		{38, &spell.BaseLevel},
-		{214, &spell.PreventionType},        // Spell.dbc field 214 = PreventionType (DBCStructure.h:1484)
-		{207, &spell.MaxTargetLevel},        // Spell.dbc field 207 = MaxTargetLevel (DBCStructure.h:1479)
-		{212, &spell.MaxTargets},            // Spell.dbc field 212 = MaxTargets (DBCStructure.h:1483)
-		{213, &spell.DefenseType},           // Spell.dbc field 213 = DefenseType (DBCStructure.h:1484)
-		{226, &spell.RuneCostID},            // Spell.dbc field 226 = RuneCostID (DBCStructure.h:1490)
+		{214, &spell.PreventionType},           // Spell.dbc field 214 = PreventionType (DBCStructure.h:1484)
+		{207, &spell.MaxTargetLevel},           // Spell.dbc field 207 = MaxTargetLevel (DBCStructure.h:1479)
+		{212, &spell.MaxTargets},               // Spell.dbc field 212 = MaxTargets (DBCStructure.h:1483)
+		{213, &spell.DefenseType},              // Spell.dbc field 213 = DefenseType (DBCStructure.h:1484)
+		{226, &spell.RuneCostID},               // Spell.dbc field 226 = RuneCostID (DBCStructure.h:1490)
 		{222, &spell.RequiredTotemCategory[0]}, // Spell.dbc field 222 = RequiredTotemCategoryID[0] (DBCStructure.h:1487)
 		{223, &spell.RequiredTotemCategory[1]}, // Spell.dbc field 223 = RequiredTotemCategoryID[1] (DBCStructure.h:1487)
-		{205, &spell.StartRecoveryCategory}, // Spell.dbc field 205 = StartRecoveryCategory
-		{206, &spell.StartRecoveryTime},     // Spell.dbc field 206 = StartRecoveryTime
+		{205, &spell.StartRecoveryCategory},    // Spell.dbc field 205 = StartRecoveryCategory
+		{206, &spell.StartRecoveryTime},        // Spell.dbc field 206 = StartRecoveryTime
 	}
 	for _, value := range values {
 		if *value.dest, err = record.Uint32(value.field); err != nil {
@@ -1051,7 +1055,7 @@ func (s *Store) SpellRuneCost(id uint32) (SpellRuneCost, bool, error) {
 }
 
 type TotemCategory struct {
-	ID               uint32
+	ID                uint32
 	TotemCategoryType uint32
 	TotemCategoryMask uint32
 }
@@ -1205,9 +1209,9 @@ func (s *Store) CharTitle(id uint32) (CharTitle, bool, error) {
 }
 
 type Emote struct {
-	ID                uint32
-	EmoteFlags        uint32
-	EmoteSpecProc     uint32
+	ID                 uint32
+	EmoteFlags         uint32
+	EmoteSpecProc      uint32
 	EmoteSpecProcParam uint32
 }
 
