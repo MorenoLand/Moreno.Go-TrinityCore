@@ -25,7 +25,10 @@ func buildAddonInfoResponse(payload []byte) []byte {
 				if readErr == nil && len(decoded) <= int(uncompressedSize) {
 					decodedReader := protocol.NewReader(decoded)
 					count, countErr := decodedReader.ReadU32()
-					if countErr == nil && count <= maxSecureAddons {
+					if countErr == nil {
+						if count > maxSecureAddons {
+							count = maxSecureAddons
+						}
 						for i := uint32(0); i < count; i++ {
 							if _, err := decodedReader.ReadCString(); err != nil {
 								break

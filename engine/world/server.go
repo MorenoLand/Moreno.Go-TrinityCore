@@ -69,6 +69,7 @@ type Server struct {
 	ipLocations               *iplocation.Store
 	sessionsMu                sync.RWMutex
 	sessions                  map[*session]struct{}
+	closed                    atomic.Bool
 	objectsMu                 sync.RWMutex
 	characterGUIDMu           sync.Mutex
 	characterGUIDNext         uint64
@@ -544,6 +545,7 @@ func (s *Server) Stop() {
 	if s == nil {
 		return
 	}
+	s.closed.Store(true)
 	s.stopOnce.Do(func() {
 		if s.Features != nil && s.Features.Scripts != nil {
 			_, _ = s.Features.Scripts.TriggerServerEvent(context.Background(), 15)
@@ -3120,6 +3122,11 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
+	if s.server.closed.Load() {
+		s.debug("world authentication rejected", "account", debugAccount, "reason", "world closed")
+		_ = s.write(opcodeAuthResponse, []byte{authReject}, true)
+		return false
+	}
 	if realmID != s.server.RealmID {
 		s.debug("world authentication rejected", "account", debugAccount, "reason", "realm mismatch", "realm", realmID)
 		_ = s.write(opcodeAuthResponse, []byte{loginServerNotFound}, true)
@@ -3191,15 +3198,6 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionWhoSeeAllSecurityLevels, "error", err)
 	}
 	s.accountExpansion = account.Expansion
-	if s.server.Config.Expansion > 0 && s.accountExpansion > uint8(s.server.Config.Expansion) {
-		s.accountExpansion = uint8(s.server.Config.Expansion)
-	}
-	if s.accountExpansion == 0 && s.server.Config.Expansion > 0 {
-		s.accountExpansion = uint8(s.server.Config.Expansion)
-	}
-	if s.accountExpansion == 0 {
-		s.accountExpansion = 2 // default to WotLK
-	}
 	s.debug("world authentication accepted", "account", accountName, "build", build, "expansion", s.accountExpansion, "gm_chat", s.gmChat, "two_side_chat", s.twoSideChat, "remote", remoteAddress(s.conn))
 	s.loadTutorials(ctx)
 
