@@ -1244,6 +1244,63 @@ func (s *Store) GtCombatRating(ratingID uint32, level uint32) (float32, bool, er
 	return val, true, nil
 }
 
+const gtMaxLevel = 100
+
+func (s *Store) gtCritRatio(name string, classID uint32, level uint32) (float32, bool, error) {
+	if classID == 0 || level == 0 || level > gtMaxLevel {
+		return 0, true, nil
+	}
+	file, err := s.File(name)
+	if err != nil {
+		return 0, false, err
+	}
+	index := (classID-1)*gtMaxLevel + (level - 1)
+	record, ok := file.Find(index)
+	if !ok {
+		return 0, false, nil
+	}
+	val, err := record.Float32(0)
+	if err != nil {
+		return 0, false, err
+	}
+	return val, true, nil
+}
+
+func (s *Store) gtCritBase(name string, classID uint32) (float32, bool, error) {
+	if classID == 0 {
+		return 0, false, nil
+	}
+	file, err := s.File(name)
+	if err != nil {
+		return 0, false, err
+	}
+	record, ok := file.Find(classID - 1)
+	if !ok {
+		return 0, false, nil
+	}
+	val, err := record.Float32(0)
+	if err != nil {
+		return 0, false, err
+	}
+	return val, true, nil
+}
+
+func (s *Store) GtChanceToMeleeCritBase(classID uint32) (float32, bool, error) {
+	return s.gtCritBase("gtChanceToMeleeCritBase", classID)
+}
+
+func (s *Store) GtChanceToMeleeCrit(classID uint32, level uint32) (float32, bool, error) {
+	return s.gtCritRatio("gtChanceToMeleeCrit", classID, level)
+}
+
+func (s *Store) GtChanceToSpellCritBase(classID uint32) (float32, bool, error) {
+	return s.gtCritBase("gtChanceToSpellCritBase", classID)
+}
+
+func (s *Store) GtChanceToSpellCrit(classID uint32, level uint32) (float32, bool, error) {
+	return s.gtCritRatio("gtChanceToSpellCrit", classID, level)
+}
+
 func (s *Store) SpellRange(id uint32) (SpellRangeEntry, bool, error) {
 	file, err := s.File("SpellRange")
 	if err != nil {
