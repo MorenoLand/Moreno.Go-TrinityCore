@@ -60,6 +60,7 @@ const (
 	spellEffectReputation                    = 103
 	spellEffectQuestComplete                 = 16
 	spellEffectHealthLeech                   = 9
+	spellEffectPowerDrain                    = 8
 	spellAuraMounted                         = 78
 	spellAuraModParryPercent                 = 47
 	spellAuraConfuse                         = 5
@@ -1056,6 +1057,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case spellEffectHealthLeech: // 9: SPELL_EFFECT_HEALTH_LEECH
 				s.handleEffectHealthLeech(effCtx, spellID, hitTargets, eff)
+			case spellEffectPowerDrain: // 8: SPELL_EFFECT_POWER_DRAIN
+				amount := eff.BasePoints + 1
+				for _, effectTarget := range hitTargets {
+					if drained := s.applySpellPowerBurn(effCtx, effectTarget, eff.MiscValue, amount, spellID); drained > 0 {
+						s.applySpellEnergize(effCtx, s.playerGUID, eff.MiscValue, int32(drained))
+					}
+				}
 			default:
 				s.debug("unhandled spell effect", "spell", spellID, "effect", eff.Effect, "index", effectIndex)
 			}
