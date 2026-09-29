@@ -129,6 +129,25 @@ func RollPPMChance(ppm float64, weaponSpeedMs uint32) bool {
 	return rand.Float64() < chance
 }
 
+// procChanceDefault resolves the proc roll chance for a triggered proc spell.
+// Mirrors TrinityCore SpellMgr::LoadSpellProc (SpellMgr.cpp:1597): a proc entry
+// with no explicit Chance and no ProcsPerMinute falls back to the proc spell's
+// Spell.dbc ProcChance (field 35). Go's per-item chances stand in for the
+// spell_proc table rows, so they win when set; the DBC field is the default.
+func (s *session) procChanceDefault(procSpellID uint32, configuredChance float64) float64 {
+	if configuredChance > 0 {
+		return configuredChance
+	}
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	spell, ok, err := s.server.Data.Spell(procSpellID)
+	if err != nil || !ok {
+		return 0
+	}
+	return float64(spell.ProcChance) / 100.0
+}
+
 // isProcOnCooldown checks whether an internal cooldown (ICD) is active for the given proc ID.
 func (s *session) isProcOnCooldown(procID uint32) bool {
 	if s == nil || s.procICD == nil {
@@ -259,19 +278,19 @@ func (s *session) procWeaponEnchantments(ctx context.Context, target combatTarge
 			s.castSpellDirect(ctx, ProcSpellFieryWeapon, target.GUID)
 		}
 	case EnchantIDInstantPois:
-		if rand.Float64() < 0.20 {
+		if rand.Float64() < s.procChanceDefault(ProcSpellInstantPois, 0.20) {
 			s.castSpellDirect(ctx, ProcSpellInstantPois, target.GUID)
 		}
 	case EnchantIDDeadlyPois:
-		if rand.Float64() < 0.30 {
+		if rand.Float64() < s.procChanceDefault(ProcSpellDeadlyPois, 0.30) {
 			s.castSpellDirect(ctx, ProcSpellDeadlyPois, target.GUID)
 		}
 	case EnchantIDWoundPois:
-		if rand.Float64() < 0.50 {
+		if rand.Float64() < s.procChanceDefault(ProcSpellWoundPois, 0.50) {
 			s.castSpellDirect(ctx, ProcSpellWoundPois, target.GUID)
 		}
 	case EnchantIDCrippling:
-		if rand.Float64() < 0.50 {
+		if rand.Float64() < s.procChanceDefault(ProcSpellCrippling, 0.50) {
 			s.castSpellDirect(ctx, ProcSpellCrippling, target.GUID)
 		}
 	}
@@ -303,7 +322,7 @@ func (s *session) procItemAndTrinketEffects(ctx context.Context, target combatTa
 		switch itemID {
 		case ItemDeathbringersWillNorm:
 			// 35% chance on attack, 45s ICD
-			if !s.isProcOnCooldown(ProcSpellDBWAgilityNorm) && rand.Float64() < 0.35 {
+			if !s.isProcOnCooldown(ProcSpellDBWAgilityNorm) && rand.Float64() < s.procChanceDefault(ProcSpellDBWAgilityNorm, 0.35) {
 				// Pick one of the 3 forms: Agi (71485), Str (71487), AP (71484)
 				forms := []uint32{ProcSpellDBWAgilityNorm, ProcSpellDBWStrengthNorm, ProcSpellDBWAPNorm}
 				chosen := forms[rand.Intn(len(forms))]
@@ -313,7 +332,7 @@ func (s *session) procItemAndTrinketEffects(ctx context.Context, target combatTa
 
 		case ItemDeathbringersWillHero:
 			// 35% chance on attack, 45s ICD
-			if !s.isProcOnCooldown(ProcSpellDBWAgilityHero) && rand.Float64() < 0.35 {
+			if !s.isProcOnCooldown(ProcSpellDBWAgilityHero) && rand.Float64() < s.procChanceDefault(ProcSpellDBWAgilityHero, 0.35) {
 				forms := []uint32{ProcSpellDBWAgilityHero, ProcSpellDBWStrengthHero, ProcSpellDBWAPHero}
 				chosen := forms[rand.Intn(len(forms))]
 				s.castSpellDirect(ctx, chosen, s.playerGUID)
@@ -322,49 +341,49 @@ func (s *session) procItemAndTrinketEffects(ctx context.Context, target combatTa
 
 		case ItemWhisperingFangedSkullNorm:
 			// 35% chance on attack, 45s ICD
-			if !s.isProcOnCooldown(ProcSpellWFSNorm) && rand.Float64() < 0.35 {
+			if !s.isProcOnCooldown(ProcSpellWFSNorm) && rand.Float64() < s.procChanceDefault(ProcSpellWFSNorm, 0.35) {
 				s.castSpellDirect(ctx, ProcSpellWFSNorm, s.playerGUID)
 				s.triggerProcCooldown(ProcSpellWFSNorm, 45*time.Second)
 			}
 
 		case ItemWhisperingFangedSkullHero:
-			if !s.isProcOnCooldown(ProcSpellWFSHero) && rand.Float64() < 0.35 {
+			if !s.isProcOnCooldown(ProcSpellWFSHero) && rand.Float64() < s.procChanceDefault(ProcSpellWFSHero, 0.35) {
 				s.castSpellDirect(ctx, ProcSpellWFSHero, s.playerGUID)
 				s.triggerProcCooldown(ProcSpellWFSHero, 45*time.Second)
 			}
 
 		case ItemDeathsChoiceNormA, ItemDeathsChoiceNormH:
-			if !s.isProcOnCooldown(ProcSpellDeathsChoiceNorm) && rand.Float64() < 0.35 {
+			if !s.isProcOnCooldown(ProcSpellDeathsChoiceNorm) && rand.Float64() < s.procChanceDefault(ProcSpellDeathsChoiceNorm, 0.35) {
 				s.castSpellDirect(ctx, ProcSpellDeathsChoiceNorm, s.playerGUID)
 				s.triggerProcCooldown(ProcSpellDeathsChoiceNorm, 45*time.Second)
 			}
 
 		case ItemDeathsChoiceHeroA, ItemDeathsChoiceHeroH:
-			if !s.isProcOnCooldown(ProcSpellDeathsChoiceHero) && rand.Float64() < 0.35 {
+			if !s.isProcOnCooldown(ProcSpellDeathsChoiceHero) && rand.Float64() < s.procChanceDefault(ProcSpellDeathsChoiceHero, 0.35) {
 				s.castSpellDirect(ctx, ProcSpellDeathsChoiceHero, s.playerGUID)
 				s.triggerProcCooldown(ProcSpellDeathsChoiceHero, 45*time.Second)
 			}
 
 		case ItemDMCGStrength:
-			if !s.isProcOnCooldown(ProcSpellDMCGStrength) && rand.Float64() < 0.35 {
+			if !s.isProcOnCooldown(ProcSpellDMCGStrength) && rand.Float64() < s.procChanceDefault(ProcSpellDMCGStrength, 0.35) {
 				s.castSpellDirect(ctx, ProcSpellDMCGStrength, s.playerGUID)
 				s.triggerProcCooldown(ProcSpellDMCGStrength, 45*time.Second)
 			}
 
 		case ItemDMCGAgility:
-			if !s.isProcOnCooldown(ProcSpellDMCGAgility) && rand.Float64() < 0.35 {
+			if !s.isProcOnCooldown(ProcSpellDMCGAgility) && rand.Float64() < s.procChanceDefault(ProcSpellDMCGAgility, 0.35) {
 				s.castSpellDirect(ctx, ProcSpellDMCGAgility, s.playerGUID)
 				s.triggerProcCooldown(ProcSpellDMCGAgility, 45*time.Second)
 			}
 
 		case ItemMjolnirRunestone:
-			if !s.isProcOnCooldown(ProcSpellMjolnirRunestone) && rand.Float64() < 0.15 {
+			if !s.isProcOnCooldown(ProcSpellMjolnirRunestone) && rand.Float64() < s.procChanceDefault(ProcSpellMjolnirRunestone, 0.15) {
 				s.castSpellDirect(ctx, ProcSpellMjolnirRunestone, s.playerGUID)
 				s.triggerProcCooldown(ProcSpellMjolnirRunestone, 45*time.Second)
 			}
 
 		case ItemAshenBandMight277, ItemAshenBandMight268:
-			if !s.isProcOnCooldown(ProcSpellAshenBandMight) && rand.Float64() < 0.30 {
+			if !s.isProcOnCooldown(ProcSpellAshenBandMight) && rand.Float64() < s.procChanceDefault(ProcSpellAshenBandMight, 0.30) {
 				s.castSpellDirect(ctx, ProcSpellAshenBandMight, s.playerGUID)
 				s.triggerProcCooldown(ProcSpellAshenBandMight, 60*time.Second)
 			}
@@ -389,14 +408,14 @@ func (s *session) procSpellCastAndHitEffects(ctx context.Context, target combatT
 		switch itemID {
 		case ItemSundialOfTheExiled:
 			// 10% chance on damaging spell, 45s ICD
-			if !s.isProcOnCooldown(ProcSpellSundialOfTheExiled) && rand.Float64() < 0.10 {
+			if !s.isProcOnCooldown(ProcSpellSundialOfTheExiled) && rand.Float64() < s.procChanceDefault(ProcSpellSundialOfTheExiled, 0.10) {
 				s.castSpellDirect(ctx, ProcSpellSundialOfTheExiled, s.playerGUID)
 				s.triggerProcCooldown(ProcSpellSundialOfTheExiled, 45*time.Second)
 			}
 
 		case ItemAshenBandDestruction277, ItemAshenBandDestruction268:
 			// 10% chance on spell cast, 60s ICD
-			if !s.isProcOnCooldown(ProcSpellAshenBandDestruction) && rand.Float64() < 0.10 {
+			if !s.isProcOnCooldown(ProcSpellAshenBandDestruction) && rand.Float64() < s.procChanceDefault(ProcSpellAshenBandDestruction, 0.10) {
 				s.castSpellDirect(ctx, ProcSpellAshenBandDestruction, s.playerGUID)
 				s.triggerProcCooldown(ProcSpellAshenBandDestruction, 60*time.Second)
 			}
