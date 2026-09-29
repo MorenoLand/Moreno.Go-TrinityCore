@@ -1943,13 +1943,13 @@ func (s *session) spellBonusMultiplier(spellID uint32, effIndex int, heal bool) 
 	return mult
 }
 
-func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spellID, damage uint32, effIndex int) {
+func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spellID, damage uint32, effIndex int) uint32 {
 	if ctx == nil || ctx.Err() != nil {
 		ctx = context.Background()
 	}
 	target, ok := s.getCombatTarget(ctx, targetGUID)
 	if !ok || target.Health == 0 {
-		return
+		return 0
 	}
 
 	// Apply Spell Power bonus (TrinityCore Unit::SpellDamageBonusDone)
@@ -1965,7 +1965,7 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 		}
 	}
 
-	s.executeDirectSpellDamage(ctx, targetGUID, spellID, damage, schoolMask)
+	return s.executeDirectSpellDamage(ctx, targetGUID, spellID, damage, schoolMask)
 }
 
 func (s *session) executeSpellInstantKill(ctx context.Context, targetGUID uint64, spellID uint32) {
@@ -1987,8 +1987,8 @@ func (s *session) executeSpellInstantKill(ctx context.Context, targetGUID uint64
 	s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, target.Health, 1, true)
 }
 
-func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint64, spellID, damage uint32, schoolMask uint8) {
-	s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false)
+func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint64, spellID, damage uint32, schoolMask uint8) uint32 {
+	return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false)
 }
 
 // spellDamagePushesBack mirrors the pushback half of Unit::DealDamage
@@ -2011,13 +2011,13 @@ func (s *session) spellDamagePushesBack(spellID uint32, victimGUID uint64) bool 
 	return spell.AttributesEx3&spellAttr3TreatAsPeriodic == 0 && spell.AttributesEx7&spellAttr7NoPushbackOnDamage == 0
 }
 
-func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetGUID uint64, spellID, damage uint32, schoolMask uint8, instantKill bool) {
+func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetGUID uint64, spellID, damage uint32, schoolMask uint8, instantKill bool) uint32 {
 	if ctx == nil || ctx.Err() != nil {
 		ctx = context.Background()
 	}
 	target, ok := s.getCombatTarget(ctx, targetGUID)
 	if !ok || target.Health == 0 {
-		return
+		return 0
 	}
 
 	isPlayerVictim := s.server != nil && s.server.findSessionByGUID(target.GUID) != nil
@@ -2025,7 +2025,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		hitInfo := uint32(0x01) // SPELL_HIT_TYPE_MISS
 		damage = 0
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, 0, schoolMask, 0, 0, hitInfo), true)
-		return
+		return 0
 	}
 	isHit := true
 	if targetGUID != s.playerGUID && !instantKill {
@@ -2157,7 +2157,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				playerSess.procDamageAuras(true, damage)
 				playerSess.sendPlayerUpdate()
 			}
-			return
+			return damage
 		}
 	}
 
@@ -2223,6 +2223,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
 		s.server.triggerPetDefensive(s.player.Map, s.player.InstanceID, s.playerGUID, targetGUID)
 	}
+	return damage
 }
 
 // castSpellDirect triggers an immediate, instant cast of a spell without cast time or resource cost.
@@ -6097,9 +6098,17 @@ func (s *session) handleEffectHealthLeech(ctx context.Context, spellID uint32, h
 		if target == 0 || target == s.playerGUID {
 			continue
 		}
-		s.executeSpellDamage(ctx, target, spellID, damageAmount, effIndex)
-		// SpellEffects.cpp:1530: the leech heal is the dealt damage scaled
-		// by the effect value multiplier.
-		s.executeSpellHeal(ctx, s.playerGUID, spellID, effectValueMultiplied(damageAmount, eff.Amplitude), effIndex)
+		// SpellEffects.cpp:1548 (-GetHealthGain(-damage)): the leech heal is the
+		// damage the target actually lost — post-absorb, overkill excluded —
+		// scaled by the effect value multiplier, not the rolled damage.
+		healthBefore := uint32(0)
+		if tgt, ok := s.getCombatTarget(ctx, target); ok {
+			healthBefore = tgt.Health
+		}
+		dealt := s.executeSpellDamage(ctx, target, spellID, damageAmount, effIndex)
+		if dealt > healthBefore {
+			dealt = healthBefore
+		}
+		s.executeSpellHeal(ctx, s.playerGUID, spellID, effectValueMultiplied(dealt, eff.Amplitude), effIndex)
 	}
 }
