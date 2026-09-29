@@ -648,6 +648,17 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 		if targetSess.auraSlots == nil {
 			targetSess.auraSlots = make(map[uint32]uint8)
 		}
+		// Unit::IsHighestExclusiveAura (Unit.cpp:13991): a fresh aura whose
+		// effect is strictly lower than an existing EXCLUSIVE_HIGHEST peer
+		// is never applied (SpellAuras.cpp:696, addUnit=false; Unit.cpp:3648
+		// removes it before the no-stack purge). Evaluated before the
+		// same-spell replacement below so a suppressed pet cast keeps the
+		// existing aura.
+		highest := s.server.exclusiveHighestVerdict(spell, effect, amount, targetGUID, targetSess.activeAuras)
+		if highest.suppressed {
+			targetSess.castMu.Unlock()
+			return false
+		}
 		if previous := targetSess.activeAuras[spell.ID]; previous != nil {
 			previous.Stopped = true
 			if previous.Timer != nil {
@@ -671,7 +682,23 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 		if spellIsSingleTarget(spell) {
 			scPurge = s.server.registerSingleCastAura(spell, aura)
 		}
+		// Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640): pet casts run
+		// the same no-stack purge as player casts — the rank-chain term
+		// (Aura::CanStackWith, SpellAuras.cpp:1994-2004), the spell-group
+		// exclusive terms (SpellAuras.cpp:1924-1932), the spell-specific
+		// exclusivity gates (SpellAuras.cpp:1914-1921), the EXCLUSIVE_HIGHEST
+		// comparisons (Unit.cpp:13991), and the _AddAura single-target
+		// dance (Unit.cpp:3397-3420) — keyed by the casting creature's
+		// GUID, not the owner's.
+		purgeIDs := s.server.rankChainNoStackPurge(spell, caster.GUID, aura.ItemGUID, targetSess.activeAuras)
+		purgeIDs = append(purgeIDs, s.server.spellGroupNoStackPurge(spell, caster.GUID, targetSess.activeAuras)...)
+		purgeIDs = append(purgeIDs, s.server.spellSpecificNoStackPurge(spell, caster.GUID, targetSess.activeAuras)...)
+		purgeIDs = append(purgeIDs, s.server.singleTargetNoStackPurge(spell, caster.GUID, targetSess.activeAuras)...)
+		purgeIDs = append(purgeIDs, highest.purge...)
 		targetSess.castMu.Unlock()
+		for _, purgeID := range purgeIDs {
+			targetSess.expirePlayerAura(purgeID.spellID)
+		}
 		for _, e := range scPurge {
 			s.expireSingleCastEntry(e)
 		}
@@ -705,6 +732,15 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	if s.server.creatureAuras[targetKey] == nil {
 		s.server.creatureAuras[targetKey] = make(map[uint32]struct{})
 	}
+	// Unit::IsHighestExclusiveAura (Unit.cpp:13991): a fresh aura whose
+	// effect is strictly lower than an existing EXCLUSIVE_HIGHEST peer
+	// is never applied (SpellAuras.cpp:696, addUnit=false; Unit.cpp:3648
+	// removes it before the no-stack purge).
+	highest := s.server.exclusiveHighestVerdict(spell, effect, amount, targetGUID, s.server.activeCreatureAuras[targetKey])
+	if highest.suppressed {
+		s.server.auraMu.Unlock()
+		return false
+	}
 	slot := uint8(len(s.server.activeCreatureAuras[targetKey]))
 	aura := &activeAura{SpellID: spell.ID, DispelType: spell.DispelType, Mechanic: spell.Mechanic, AuraType: effect.Aura, EffectMask: effectMask, RecalculateMask: recalculateMask, CasterGUID: caster.GUID, TargetGUID: targetGUID, TargetKey: targetKey, SchoolMask: spell.SchoolMask, MiscValue: effect.MiscValue, Amount: uint32(amount), Amounts: amounts, BaseAmounts: baseAmounts, DurationMs: durationMs, PeriodMs: periodMs, RemainingMs: durationMs, Slot: slot, Positive: positive, CasterLevel: uint8(casterLevel(caster)), AuraInterruptFlags: spell.AuraInterruptFlags, TriggerSpell: effect.TriggerSpell, StackAmount: spell.StackAmount, HideDuration: spell.AttributesEx5&spellAttr5HideDuration != 0, StackCount: 1, OwnerPetAura: source.SpellID != 0, OwnerPetAuraSourceSpell: source.SpellID, OwnerPetAuraSourceEffect: source.EffectIndex, OwnerPetAuraSourceDamage: sourceDamage, OwnerPetAuraRemoveOnChange: removeOnChange}
 	s.server.activeCreatureAuras[targetKey][spell.ID] = aura
@@ -714,7 +750,23 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	if spellIsSingleTarget(spell) {
 		scPurge = s.server.registerSingleCastAura(spell, aura)
 	}
+	// Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640): pet casts run
+	// the same no-stack purge as player casts — the rank-chain term
+	// (Aura::CanStackWith, SpellAuras.cpp:1994-2004), the spell-group
+	// exclusive terms (SpellAuras.cpp:1924-1932), the spell-specific
+	// exclusivity gates (SpellAuras.cpp:1914-1921), the EXCLUSIVE_HIGHEST
+	// comparisons (Unit.cpp:13991), and the _AddAura single-target
+	// dance (Unit.cpp:3397-3420) — keyed by the casting creature's
+	// GUID, not the owner's.
+	purge := s.server.rankChainNoStackPurge(spell, caster.GUID, aura.ItemGUID, s.server.activeCreatureAuras[targetKey])
+	purge = append(purge, s.server.spellGroupNoStackPurge(spell, caster.GUID, s.server.activeCreatureAuras[targetKey])...)
+	purge = append(purge, s.server.spellSpecificNoStackPurge(spell, caster.GUID, s.server.activeCreatureAuras[targetKey])...)
+	purge = append(purge, s.server.singleTargetNoStackPurge(spell, caster.GUID, s.server.activeCreatureAuras[targetKey])...)
+	purge = append(purge, highest.purge...)
 	s.server.auraMu.Unlock()
+	for _, p := range purge {
+		s.expireCreatureAura(targetKey, p.spellID, p.slot)
+	}
 	for _, e := range scPurge {
 		s.expireSingleCastEntry(e)
 	}
