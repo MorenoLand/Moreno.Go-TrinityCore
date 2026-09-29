@@ -149,6 +149,20 @@ func (s *session) hasAuraInLock(spellID uint32) bool {
 	return false
 }
 
+// spellCanBeReflected mirrors Spell::prepare's m_canReflect computation
+// (Spell.cpp:622): only spells of the magic damage class (Spell.dbc field
+// 213, DefenseType) that are not abilities, passives, invulnerability-piercing
+// or flagged unreflectable can be reflected.
+func spellCanBeReflected(spell wotlk.Spell) bool {
+	if spell.DefenseType != spellDamageClassMagic {
+		return false
+	}
+	if spell.Attributes&(spellAttr0Ability|spellAttr0UnaffectedByInvulnerability|spellAttributePassive) != 0 {
+		return false
+	}
+	return spell.AttributesEx&spellAttr1CantBeReflected == 0
+}
+
 // checkSpellReflection checks if the incoming harmful spell is reflected by the target.
 // If reflected, the reflection aura is consumed and returns true.
 // Mirrors TrinityCore Unit::CheckSpellReflection (Unit.cpp:8230-8350).
@@ -159,6 +173,10 @@ func (s *session) checkSpellReflection(spell wotlk.Spell) bool {
 
 	// Can only reflect harmful non-channeled spells
 	if !isHarmfulSpell(spell) || isChanneledSpell(spell) {
+		return false
+	}
+
+	if !spellCanBeReflected(spell) {
 		return false
 	}
 
