@@ -1281,9 +1281,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 
 	// Reference Spell::handle_immediate: channeled spells begin their timed
-	// channel lifecycle after the cast completes.
+	// channel lifecycle after the cast completes. The resolved destination is
+	// recorded with the channel (C++ channeledSpell->m_targets dest), so
+	// spells triggered during the channel can resolve TARGET_DEST_CHANNEL_TARGET.
 	if isChanneledSpell(spell) {
-		s.startChannel(castID, spellID, spell, targetGUID)
+		hasDest := target.Flags&protocol.SpellTargetFlagDestLocation != 0
+		s.startChannel(castID, spellID, spell, targetGUID, hasDest, target.Destination.X, target.Destination.Y, target.Destination.Z)
 	}
 	s.updateAchievementCriteria(criteriaTypeCastSpell, spellID, 1)
 	s.updateAchievementCriteria(criteriaTypeCastSpell2, spellID, 1)
@@ -2029,6 +2032,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		spellTargetFlags = protocol.SpellTargetFlagUnit
 	}
 	spellTarget := protocol.SpellTargetData{Flags: spellTargetFlags, UnitGUID: targetGUID}
+	// Spell::SelectImplicitChannelTargets (Spell.cpp:980-1032): a triggered
+	// spell with channel-dest implicit targets (76/106) resolves its
+	// destination from the currently channeled spell, so the SMSG_SPELL_GO
+	// spell-target block and dest-consuming read sites see it. Nothing is
+	// resolved when no channel is live (the C++ null gate).
+	if x, y, z, ok := s.channelDestForSpell(ctx, spell); ok {
+		spellTarget.Flags |= protocol.SpellTargetFlagDestLocation
+		spellTarget.Destination = protocol.SpellTargetLocation{X: x, Y: y, Z: z}
+	}
 	// Cast flags mirror Spell::SendSpellGo for a triggered player cast
 	// (Spell.cpp:4283-4330): PENDING for triggered non-auto-repeat casts with
 	// cast count 0 (Spell.cpp:4292), POWER_LEFT_SELF + remaining power for
@@ -4832,6 +4844,14 @@ type activeChannelState struct {
 	TickTimer  *time.Timer
 	DrainTimer *time.Timer
 	Stopped    bool
+	// HasDest/DestX/DestY/DestZ record the channeled spell's destination
+	// (C++ SpellCastTargets::HasDst on the channeled Spell::m_targets).
+	// Spell::SelectImplicitChannelTargets reads it for
+	// TARGET_DEST_CHANNEL_TARGET (Spell.cpp:1010).
+	HasDest bool
+	DestX   float32
+	DestY   float32
+	DestZ   float32
 }
 
 func isChanneledSpell(spell wotlk.Spell) bool {
@@ -4858,8 +4878,11 @@ func (s *session) sendChannelUpdate(remainingMs uint32) {
 }
 
 // startChannel begins the channeled phase of a finished cast: broadcast the
-// channel start, schedule periodic ticks, and arm completion.
-func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, targetGUID uint64) {
+// channel start, schedule periodic ticks, and arm completion. hasDest/dest*
+// record the cast's destination (SpellCastTargets::HasDst analog) so
+// SelectImplicitChannelTargets parity (Spell.cpp:1010) can resolve
+// TARGET_DEST_CHANNEL_TARGET for spells triggered during the channel.
+func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, targetGUID uint64, hasDest bool, destX, destY, destZ float32) {
 	if s.player == nil || s.server.Data == nil {
 		return
 	}
@@ -4895,6 +4918,10 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 		DurationMs: uint32(durationMs),
 		Remaining:  time.Duration(durationMs) * time.Millisecond,
 		PeriodMs:   period,
+		HasDest:    hasDest,
+		DestX:      destX,
+		DestY:      destY,
+		DestZ:      destZ,
 	}
 	s.castMu.Lock()
 	s.activeChannel = channel

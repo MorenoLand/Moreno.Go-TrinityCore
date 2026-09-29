@@ -184,7 +184,7 @@ func spellHasDestFamilyTarget(spell wotlk.Spell) bool {
 // the dynamic-aura tick path reuses those read sites with an already
 // resolved destination and must not re-apply the offsets.
 func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) protocol.SpellTargetData {
-	if s == nil || s.player == nil || s.server == nil || (!spellHasDestFamilyTarget(spell) && !spellHasTrajTarget(spell)) {
+	if s == nil || s.player == nil || s.server == nil || (!spellHasDestFamilyTarget(spell) && !spellHasTrajTarget(spell) && !spellHasChannelDestTarget(spell)) {
 		return target
 	}
 	x, y, z := s.player.X, s.player.Y, s.player.Z
@@ -222,6 +222,16 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 				// collision along the ballistic trajectory. CheckDst is
 				// the caster-position fallback already applied above.
 				if nx, ny, nz, changed := s.resolveTrajDestination(ctx, spell, eff, target, x, y, z); changed {
+					x, y, z = nx, ny, nz
+				}
+			case targetType == implicitTargetDestChannelTarget || targetType == implicitTargetDestChannelCaster:
+				// Spell::SelectImplicitChannelTargets (Spell.cpp:980-1032):
+				// resolve the destination from the live channel. The
+				// client-cast path breaks any prior channel at cast start
+				// (mirroring C++ SetCurrentCastSpell in Spell::prepare, which
+				// runs before SelectSpellTargets in _cast), so the C++ null
+				// gate means nothing resolves here in practice.
+				if nx, ny, nz, ok := s.channelDestForSpell(ctx, spell); ok {
 					x, y, z = nx, ny, nz
 				}
 			}
