@@ -340,10 +340,13 @@ func mailSenderStationery(isGameMaster bool) uint32 {
 }
 
 // mailSendExpireDelay mirrors the default expiry branch of MailDraft::SendMailTo
-// (Mail.cpp:211-215): non-COD mail expires 90 days out when the sender is a game
-// master, 30 days otherwise. pSender is always the online sender here, so the C++
-// null check can never trip.
-func mailSendExpireDelay(isGameMaster bool) int64 {
+// (Mail.cpp:211-215): COD mail expires 3 days out; non-COD mail expires 90 days out
+// when the sender is a game master, 30 days otherwise. pSender is always the online
+// sender here, so the C++ null check can never trip.
+func mailSendExpireDelay(isGameMaster bool, cod uint32) int64 {
+	if cod > 0 {
+		return 3 * 86400
+	}
 	if isGameMaster {
 		return 90 * 86400
 	}
@@ -467,7 +470,7 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	stationery = mailSenderStationery(isGameMaster)
 	// MailDraft::SendMailTo (Mail.cpp:203) anchors expire_time on deliver_time, not
 	// on now (MAIL_NORMAL send path).
-	expire := deliverTime + mailSendExpireDelay(isGameMaster)
+	expire := deliverTime + mailSendExpireDelay(isGameMaster, cod)
 	hasItems := 0
 	if len(attachments) > 0 {
 		hasItems = 1
