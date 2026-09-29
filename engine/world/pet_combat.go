@@ -741,6 +741,21 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 		s.server.auraMu.Unlock()
 		return false
 	}
+	// Same-spell replacement (Unit::_TryStackingOrRefreshingExistingAura,
+	// Unit.cpp:3326): the old aura instance is removed before the new one is
+	// inserted — expireCreatureAura matches by spell ID, so a stale duration
+	// timer would delete the replacement early, and a stale tick timer would
+	// keep firing the orphaned struct. Mirrors the player-target branch above.
+	if previous := s.server.activeCreatureAuras[targetKey][spell.ID]; previous != nil {
+		previous.Stopped = true
+		if previous.Timer != nil {
+			previous.Timer.Stop()
+		}
+		if previous.TickTimer != nil {
+			previous.TickTimer.Stop()
+		}
+		s.server.unregisterSingleCastAura(previous)
+	}
 	slot := uint8(len(s.server.activeCreatureAuras[targetKey]))
 	aura := &activeAura{SpellID: spell.ID, DispelType: spell.DispelType, Mechanic: spell.Mechanic, AuraType: effect.Aura, EffectMask: effectMask, RecalculateMask: recalculateMask, CasterGUID: caster.GUID, TargetGUID: targetGUID, TargetKey: targetKey, SchoolMask: spell.SchoolMask, MiscValue: effect.MiscValue, Amount: uint32(amount), Amounts: amounts, BaseAmounts: baseAmounts, DurationMs: durationMs, PeriodMs: periodMs, RemainingMs: durationMs, Slot: slot, Positive: positive, CasterLevel: uint8(casterLevel(caster)), AuraInterruptFlags: spell.AuraInterruptFlags, TriggerSpell: effect.TriggerSpell, StackAmount: spell.StackAmount, HideDuration: spell.AttributesEx5&spellAttr5HideDuration != 0, StackCount: 1, OwnerPetAura: source.SpellID != 0, OwnerPetAuraSourceSpell: source.SpellID, OwnerPetAuraSourceEffect: source.EffectIndex, OwnerPetAuraSourceDamage: sourceDamage, OwnerPetAuraRemoveOnChange: removeOnChange}
 	s.server.activeCreatureAuras[targetKey][spell.ID] = aura
