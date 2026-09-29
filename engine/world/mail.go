@@ -147,6 +147,15 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 	s.expireOldMails(ctx)
 	db := s.server.CharactersStore.DB
 	now := time.Now().Unix()
+	// Reference: MailPackets.cpp:153-164 (MailListResult::AddMail) — TotalNumRecords
+	// counts every delivered, non-deleted mail, while the Mails vector caps at 50.
+	// The row query below limits to the first 50, so the total comes from a separate
+	// count with the same filters; on count failure the packet is skipped (the
+	// C++ side never fails this read, so a best-effort skip beats a wrong total).
+	var totalMails int64
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM mail WHERE receiver = ? AND deliver_time <= ? AND expire_time > ?`, s.playerGUID, now, now).Scan(&totalMails); err != nil {
+		return true
+	}
 	rows, err := db.QueryContext(ctx, `SELECT id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, expire_time, deliver_time, money, cod, checked
 		FROM mail WHERE receiver = ? AND deliver_time <= ? AND expire_time > ? ORDER BY id DESC LIMIT 50`, s.playerGUID, now, now)
 	if err != nil {
@@ -265,8 +274,8 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 	}
 	// Build SMSG_MAIL_LIST_RESULT (0x23B)
 	packet := protocol.NewBuffer(512)
-	packet.WriteU32(uint32(len(mails))) // TotalNumRecords
-	packet.WriteU8(uint8(len(mails)))   // Mails.size()
+	packet.WriteU32(uint32(totalMails)) // TotalNumRecords: all delivered mails, not the capped vector
+	packet.WriteU8(uint8(len(mails)))   // Mails.size(): capped at 50 by the row query
 	for _, m := range mails {
 		daysLeft := float32(m.ExpireTime-now) / 86400.0
 		if daysLeft < 0 {
