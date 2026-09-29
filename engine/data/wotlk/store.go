@@ -1141,6 +1141,25 @@ func (s *Store) Lock(id uint32) (LockEntry, bool, error) {
 	return entry, true, nil
 }
 
+func (s *Store) MailTemplate(id uint32) (string, bool, error) {
+	if id == 0 {
+		return "", true, nil
+	}
+	file, err := s.File("MailTemplate")
+	if err != nil {
+		return "", false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return "", false, nil
+	}
+	body, err := record.String(18)
+	if err != nil {
+		return "", false, err
+	}
+	return body, true, nil
+}
+
 func (s *Store) SpellRange(id uint32) (SpellRangeEntry, bool, error) {
 	file, err := s.File("SpellRange")
 	if err != nil {
