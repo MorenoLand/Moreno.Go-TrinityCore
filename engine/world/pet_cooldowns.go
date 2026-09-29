@@ -132,7 +132,7 @@ func (s *session) recordPetSpellCooldown(motion *creatureMotion, spell wotlk.Spe
 	if s == nil || s.server == nil || motion == nil {
 		return
 	}
-	categoryID, categoryRecovery, _ := s.spellCooldownCategory(spell.ID)
+	categoryID, categoryRecovery := spell.Category, spell.CategoryRecoveryTime
 	cooldownEnd, categoryEnd, hasCooldown := ResolvePetCooldownEnds(now, spell.RecoveryTime, categoryRecovery)
 	if !hasCooldown {
 		s.server.motionMu.Lock()

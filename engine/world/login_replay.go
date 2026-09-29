@@ -1245,11 +1245,11 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 			session.logout()
 			return recorder.Snapshot(), errors.New("pet cooldown replay spell cannot target the current pet")
 		}
-		categoryID, _, categoryErr := session.spellCooldownCategory(petCooldownSpell)
-		if categoryErr != nil || categoryID == 0 {
+		if spell.Category == 0 {
 			session.logout()
 			return recorder.Snapshot(), errors.New("pet cooldown replay spell has no DBC category")
 		}
+		categoryID := spell.Category
 		server.motionMu.Lock()
 		categoryEnd := motion.SpellCategoryCooldowns[categoryID]
 		server.motionMu.Unlock()

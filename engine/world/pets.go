@@ -1983,12 +1983,12 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	now := time.Now()
-	categoryID, _, categoryErr := s.spellCooldownCategory(spellID)
+	categoryID := spell.Category
 	s.server.motionMu.Lock()
 	prunePetSpellCooldowns(motion, now)
 	spellCooldownEnd := motion.SpellCooldowns[spellID]
 	categoryEnd := time.Time{}
-	if categoryErr == nil && categoryID != 0 {
+	if categoryID != 0 {
 		categoryEnd = motion.SpellCategoryCooldowns[categoryID]
 	}
 	s.server.motionMu.Unlock()

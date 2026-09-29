@@ -574,7 +574,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			return true
 		}
 	}
-	if categoryID, _, categoryErr := s.spellCooldownCategory(spellID); categoryErr == nil && categoryID != 0 {
+	if categoryID := spell.Category; categoryID != 0 {
 		for _, cooldown := range s.player.Cooldowns {
 			if cooldown.Category == categoryID && cooldown.End > nowUnix && cooldown.CategoryEnd > nowUnix {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
@@ -1298,11 +1298,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// Spell::_cast (Spell.cpp:3462-3470) calls SendSpellCooldown() before
 	// HandleLaunchPhase() and SendSpellGo(): the cooldown packet must reach
 	// the client before SMSG_SPELL_GO.
-	categoryID, categoryRecoveryTime, categoryErr := s.spellCooldownCategory(spellID)
-	if categoryErr != nil {
-		s.debug("spell cooldown category lookup failed", "spell", spellID, "error", categoryErr)
-		categoryID, categoryRecoveryTime = 0, 0
-	}
+	categoryID, categoryRecoveryTime := spell.Category, spell.CategoryRecoveryTime
 	now := time.Now()
 	categoryEnd := now.Unix()
 	if categoryRecoveryTime > 0 {
@@ -4382,29 +4378,6 @@ func buildCastFailed(castID uint8, spellID uint32, result uint8) []byte {
 	buf.WriteU32(spellID)
 	buf.WriteU8(result)
 	return buf.Bytes()
-}
-
-func (s *session) spellCooldownCategory(spellID uint32) (uint32, uint32, error) {
-	if s == nil || s.server == nil || s.server.Data == nil {
-		return 0, 0, fmt.Errorf("spell cooldown data store is unavailable")
-	}
-	file, err := s.server.Data.File("Spell")
-	if err != nil {
-		return 0, 0, fmt.Errorf("load Spell.dbc cooldown data: %w", err)
-	}
-	record, found := file.Find(spellID)
-	if !found {
-		return 0, 0, fmt.Errorf("spell %d is missing from Spell.dbc", spellID)
-	}
-	category, err := record.Uint32(1)
-	if err != nil {
-		return 0, 0, fmt.Errorf("read Spell.dbc category for spell %d: %w", spellID, err)
-	}
-	categoryRecoveryTime, err := record.Uint32(30)
-	if err != nil {
-		return 0, 0, fmt.Errorf("read Spell.dbc category recovery time for spell %d: %w", spellID, err)
-	}
-	return category, categoryRecoveryTime, nil
 }
 
 func (s *session) savePlayerSpellCooldowns(ctx context.Context, tx *sql.Tx, state *playerState) error {
