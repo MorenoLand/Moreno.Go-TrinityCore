@@ -3782,8 +3782,8 @@ const (
 // passive aura instances). IsMultiSlotAura (SpellAuras.cpp:1148) and
 // CONTROL_VEHICLE are vacuous in Go. Spell-group stack rules are handled by
 // the companion spellGroupNoStackPurge (rules EXCLUSIVE and
-// EXCLUSIVE_FROM_SAME_CASTER); the IsHighestExclusiveAura direction is a
-// standing gap, under-purges only.
+// EXCLUSIVE_FROM_SAME_CASTER) and exclusiveHighestVerdict (rule
+// EXCLUSIVE_HIGHEST, both directions).
 // Returns the auras to remove; the caller removes them after unlocking.
 func (s *Server) rankChainNoStackPurge(newSpell wotlk.Spell, newCasterGUID, newItemGUID uint64, existing map[uint32]*activeAura) []rankPurgeTarget {
 	if s == nil || s.Data == nil {
@@ -3921,9 +3921,8 @@ func (s *Server) spellGroupStackRule(first1, first2 uint32) uint8 {
 // caster matches. The trigger-spell mutual exclusion (SpellAuras.cpp:
 // 1901-1906) is honored — a triggered/triggering pair stacks, so it never
 // purges. Rule EXCLUSIVE_SAME_EFFECT falls through to break in C++ (no
-// purge), and rule EXCLUSIVE_HIGHEST needs the IsHighestExclusiveAura port
-// (both directions) — a bigger unit, still a standing gap; skipping it
-// only under-purges.
+// purge); rule EXCLUSIVE_HIGHEST is handled by the companion
+// exclusiveHighestVerdict (the IsHighestExclusiveAura port, Unit.cpp:13991).
 // Returns the auras to remove; the caller removes them after unlocking.
 func (s *Server) spellGroupNoStackPurge(newSpell wotlk.Spell, newCasterGUID uint64, existing map[uint32]*activeAura) []rankPurgeTarget {
 	if s == nil || s.Data == nil {
@@ -3957,6 +3956,137 @@ func (s *Server) spellGroupNoStackPurge(newSpell wotlk.Spell, newCasterGUID uint
 		purge = append(purge, rankPurgeTarget{spellID: id, slot: aura.Slot})
 	}
 	return purge
+}
+
+// spellEffectIsAreaAura mirrors SpellEffectInfo::IsAreaAuraEffect
+// (SpellInfo.cpp:385-395): the APPLY_AREA_AURA_* effect family
+// (SharedDefines.h:846/876/930/939/940/954).
+func spellEffectIsAreaAura(effect uint32) bool {
+	switch effect {
+	case 35, 65, 119, 128, 129, 143:
+		return true
+	default:
+		return false
+	}
+}
+
+// newSpellAuraEffectMask is the bit mask of the spell effects the aura
+// sweep routes to applyAuraToTarget (eff.Effect == 6 || eff.Aura != 0) —
+// the Go counterpart of the new aura's create-time effect mask used by the
+// IsHighestExclusiveAuraEffect tie-break (Unit.cpp:14001).
+func newSpellAuraEffectMask(spell wotlk.Spell) uint8 {
+	var mask uint8
+	for index, eff := range spell.Effects {
+		if index >= 8 {
+			break
+		}
+		if eff.Effect == 6 || eff.Aura != 0 {
+			mask |= 1 << uint(index)
+		}
+	}
+	return mask
+}
+
+func popcount8(v uint8) int {
+	n := 0
+	for v != 0 {
+		n += int(v & 1)
+		v >>= 1
+	}
+	return n
+}
+
+// exclusiveHighestVerdict mirrors Unit::IsHighestExclusiveAura and
+// IsHighestExclusiveAuraEffect (Unit.cpp:13991-14036) for pairs whose
+// CheckSpellGroupStackRules verdict is SPELL_GROUP_STACK_RULE_EXCLUSIVE_HIGHEST
+// (SpellMgr.cpp:438-488, rule 4): for the new effect, every existing aura
+// effect of the same aura type on the target is compared by absolute amount,
+// with the effect-mask bit-count difference as the tie-break. A strictly
+// higher new effect purges the existing aura — except an area aura owned by
+// the target itself, which C++ never removes (SpellAuras.cpp:696,
+// "no removing of area auras from the original owner, as that completely
+// cancels them"); a strictly lower new effect suppresses the whole new aura
+// (Unit.cpp:3648 / SpellAuras.cpp:696, addUnit=false); an exact tie purges
+// the existing aura via the CanStackWith rule-4 term (SpellAuras.cpp:1928,
+// "existing aura is lower/equal"), honoring the trigger-spell mutual
+// exclusion (SpellAuras.cpp:1901-1906) like the companion purge functions.
+// Purges already collected stay applied when a later comparison suppresses
+// the new aura, matching C++'s immediate removals before its early return.
+type exclusiveHighestVerdict struct {
+	purge      []rankPurgeTarget
+	suppressed bool
+}
+
+func (s *Server) exclusiveHighestVerdict(newSpell wotlk.Spell, eff wotlk.SpellEffect, newAmount int32, targetGUID uint64, existing map[uint32]*activeAura) exclusiveHighestVerdict {
+	var out exclusiveHighestVerdict
+	if s == nil || s.Data == nil {
+		return out
+	}
+	if newSpell.Attributes&spellAttributePassive != 0 {
+		return out
+	}
+	newFirst := s.spellFirstRank(newSpell.ID)
+	newMask := newSpellAuraEffectMask(newSpell)
+	newBits := popcount8(newMask)
+	newAbs := absAuraAmount(newAmount)
+	for id, aura := range existing {
+		if id == newSpell.ID || aura == nil || aura.Stopped {
+			continue
+		}
+		if s.spellGroupStackRule(newFirst, s.spellFirstRank(id)) != spellGroupStackRuleExclusiveHighest {
+			continue
+		}
+		exSpell, found, err := s.Data.Spell(id)
+		if err != nil || !found {
+			continue
+		}
+		for index, exEff := range exSpell.Effects {
+			if index >= 8 || exEff.Aura != eff.Aura {
+				continue
+			}
+			if aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			diff := newAbs - absAuraAmount(aura.Amounts[index])
+			if diff == 0 {
+				diff = int64(newBits) - int64(popcount8(aura.EffectMask))
+			}
+			switch {
+			case diff < 0:
+				out.suppressed = true
+				return out
+			case diff > 0:
+				if isExistingAreaAuraOfTarget(aura, exSpell, targetGUID) {
+					continue
+				}
+				out.purge = append(out.purge, rankPurgeTarget{spellID: id, slot: aura.Slot})
+			default:
+				if auraTriggersSpell(newSpell, id) || auraTriggersSpell(exSpell, newSpell.ID) {
+					continue
+				}
+				out.purge = append(out.purge, rankPurgeTarget{spellID: id, slot: aura.Slot})
+			}
+		}
+	}
+	return out
+}
+
+// isExistingAreaAuraOfTarget reports the SpellAuras.cpp:696 area-aura guard:
+// the existing aura carries an applied area-aura effect and its owner
+// (the caster) is the target itself.
+func isExistingAreaAuraOfTarget(aura *activeAura, exSpell wotlk.Spell, targetGUID uint64) bool {
+	if aura == nil || aura.CasterGUID != targetGUID {
+		return false
+	}
+	for index, exEff := range exSpell.Effects {
+		if index >= 8 {
+			break
+		}
+		if aura.EffectMask&(1<<uint(index)) != 0 && spellEffectIsAreaAura(exEff.Effect) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}) {
@@ -4148,6 +4278,17 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			}
 		}
 
+		// Unit::IsHighestExclusiveAura (Unit.cpp:13991): a fresh aura whose
+		// effect is strictly lower than an existing EXCLUSIVE_HIGHEST peer
+		// is never applied (SpellAuras.cpp:696, addUnit=false; Unit.cpp:3648
+		// removes it before the no-stack purge). The strictly-higher purges
+		// are applied below with the other no-stack purges.
+		highest := s.server.exclusiveHighestVerdict(spell, eff, int32(amount), targetGUID, targetSess.activeAuras)
+		if highest.suppressed {
+			targetSess.castMu.Unlock()
+			return
+		}
+
 		targetSess.auras[spell.ID] = struct{}{}
 		slot, ok := targetSess.auraSlots[spell.ID]
 		if !ok {
@@ -4242,10 +4383,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		targetSess.activeAuras[spell.ID] = aura
 		// Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640): the fresh
 		// aura purges auras of other spells it can't stack with — the
-		// rank-chain term (Aura::CanStackWith, SpellAuras.cpp:1994-2004)
-		// plus the spell-group exclusive terms (SpellAuras.cpp:1924-1932).
+		// rank-chain term (Aura::CanStackWith, SpellAuras.cpp:1994-2004),
+		// the spell-group exclusive terms (SpellAuras.cpp:1924-1932), and
+		// the EXCLUSIVE_HIGHEST comparisons (Unit.cpp:13991).
 		purgeIDs := s.server.rankChainNoStackPurge(spell, s.playerGUID, aura.ItemGUID, targetSess.activeAuras)
 		purgeIDs = append(purgeIDs, s.server.spellGroupNoStackPurge(spell, s.playerGUID, targetSess.activeAuras)...)
+		purgeIDs = append(purgeIDs, highest.purge...)
 		targetSess.castMu.Unlock()
 		for _, purgeID := range purgeIDs {
 			targetSess.expirePlayerAura(purgeID.spellID)
@@ -4454,6 +4597,18 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			existing.TickTimer.Stop()
 		}
 	}
+
+	// Unit::IsHighestExclusiveAura (Unit.cpp:13991): a fresh aura whose
+	// effect is strictly lower than an existing EXCLUSIVE_HIGHEST peer
+	// is never applied (SpellAuras.cpp:696, addUnit=false; Unit.cpp:3648
+	// removes it before the no-stack purge). The strictly-higher purges
+	// are applied below with the other no-stack purges.
+	highest := s.server.exclusiveHighestVerdict(spell, eff, int32(amount), targetGUID, s.server.activeCreatureAuras[targetKey])
+	if highest.suppressed {
+		s.server.auraMu.Unlock()
+		return
+	}
+
 	slot := uint8(len(s.server.activeCreatureAuras[targetKey]) % 64)
 	aura := &activeAura{
 		SpellID:           spell.ID,
@@ -4483,10 +4638,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	s.server.activeCreatureAuras[targetKey][spell.ID] = aura
 	// Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640): the fresh aura
 	// purges auras of other spells it can't stack with — the rank-chain
-	// term (Aura::CanStackWith, SpellAuras.cpp:1994-2004) plus the
-	// spell-group exclusive terms (SpellAuras.cpp:1924-1932).
+	// term (Aura::CanStackWith, SpellAuras.cpp:1994-2004), the spell-group
+	// exclusive terms (SpellAuras.cpp:1924-1932), and the EXCLUSIVE_HIGHEST
+	// comparisons (Unit.cpp:13991).
 	purge := s.server.rankChainNoStackPurge(spell, s.playerGUID, aura.ItemGUID, s.server.activeCreatureAuras[targetKey])
 	purge = append(purge, s.server.spellGroupNoStackPurge(spell, s.playerGUID, s.server.activeCreatureAuras[targetKey])...)
+	purge = append(purge, highest.purge...)
 	s.server.auraMu.Unlock()
 	for _, p := range purge {
 		s.expireCreatureAura(targetKey, p.spellID, p.slot)
