@@ -585,9 +585,21 @@ func (s *Server) addSession(value *session) {
 }
 
 func (s *Server) removeSession(session *session) {
+	wasQueued := session.inQueue
 	s.sessionsMu.Lock()
 	delete(s.sessions, session)
+	if wasQueued {
+		for i, queued := range s.queuedSessions {
+			if queued == session {
+				s.queuedSessions = append(s.queuedSessions[:i], s.queuedSessions[i+1:]...)
+				break
+			}
+		}
+	}
 	s.sessionsMu.Unlock()
+	if !wasQueued {
+		s.promoteQueuedPlayers()
+	}
 }
 
 func (s *Server) broadcastMovement(opcode uint16, payload []byte, info movementInfo, source *session) {

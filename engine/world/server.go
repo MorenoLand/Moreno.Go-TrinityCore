@@ -42,6 +42,7 @@ const (
 	authFailed          byte   = 13
 	authBanned          byte   = 28
 	authUnavailable     byte   = 16
+	authWaitQueue       byte   = 27
 	loginServerNotFound byte   = 26
 )
 
@@ -69,6 +70,8 @@ type Server struct {
 	ipLocations               *iplocation.Store
 	sessionsMu                sync.RWMutex
 	sessions                  map[*session]struct{}
+	queuedSessions            []*session
+	playerLimit               uint32
 	closed                    atomic.Bool
 	objectsMu                 sync.RWMutex
 	characterGUIDMu           sync.Mutex
@@ -184,6 +187,8 @@ type session struct {
 	playerGUID                   uint64
 	playerLoading                bool
 	playerLoaded                 bool
+	inQueue                      bool
+	pendingAddonInfo             []byte
 	worldReady                   atomic.Bool
 	worldInstance                atomic.Uint64
 	worldReadyGM                 atomic.Bool
@@ -393,7 +398,7 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 	if len(settings) != 0 {
 		c = settings[0]
 	}
-	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), hiddenGameObjects: make(map[uint64]struct{}), dynamicGameObjects: make(map[uint64]*dynamicGameObjectState), dynamicSpellObjects: make(map[uint64]*dynamicSpellObjectState), wsgState: make(map[uint32]*wsgBattlegroundState), abState: make(map[uint32]*abBattlegroundState), eotsState: make(map[uint32]*eotsBattlegroundState), avState: make(map[uint32]*avBattlegroundState), saState: make(map[uint32]*saBattlegroundState), icState: make(map[uint32]*icBattlegroundState), activeTotems: make(map[uint64][4]*activeTotem), creatureAuras: make(map[creatureAuraKey]map[uint32]struct{}), activeCreatureAuras: make(map[creatureAuraKey]map[uint32]*activeAura), channels: make(map[string]*worldChannel), groups: make(map[uint64]*groupState), instanceCreatureMotion: make(map[instanceAdmissionKey]map[uint64]*creatureMotion), creatureRespawns: make(map[uint32]creatureRespawn), transports: make(map[uint32]*continentTransport), creatureLoot: make(map[lootObjectKey]*activeLootState), creatureLootOwners: make(map[lootObjectKey]lootOwnerState), creatureStatsCache: make(map[uint32]creatureStats), groupRolls: make(map[lootRollKey]*activeGroupRoll), wardenCheckMgr: newWardenCheckMgr(), vehicleKits: make(map[uint64]*VehicleKit), vehicleSeatAddons: make(map[uint32]*VehicleSeatAddon), vehicleAccessories: make(map[uint32][]VehicleAccessory), terrainTiles: make(map[uint64][]terrainSpawn), terrainTileKnown: make(map[uint64]bool), terrainModels: make(map[string]*terrainModel)}
+	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), playerLimit: c.PlayerLimit, hiddenGameObjects: make(map[uint64]struct{}), dynamicGameObjects: make(map[uint64]*dynamicGameObjectState), dynamicSpellObjects: make(map[uint64]*dynamicSpellObjectState), wsgState: make(map[uint32]*wsgBattlegroundState), abState: make(map[uint32]*abBattlegroundState), eotsState: make(map[uint32]*eotsBattlegroundState), avState: make(map[uint32]*avBattlegroundState), saState: make(map[uint32]*saBattlegroundState), icState: make(map[uint32]*icBattlegroundState), activeTotems: make(map[uint64][4]*activeTotem), creatureAuras: make(map[creatureAuraKey]map[uint32]struct{}), activeCreatureAuras: make(map[creatureAuraKey]map[uint32]*activeAura), channels: make(map[string]*worldChannel), groups: make(map[uint64]*groupState), instanceCreatureMotion: make(map[instanceAdmissionKey]map[uint64]*creatureMotion), creatureRespawns: make(map[uint32]creatureRespawn), transports: make(map[uint32]*continentTransport), creatureLoot: make(map[lootObjectKey]*activeLootState), creatureLootOwners: make(map[lootObjectKey]lootOwnerState), creatureStatsCache: make(map[uint32]creatureStats), groupRolls: make(map[lootRollKey]*activeGroupRoll), wardenCheckMgr: newWardenCheckMgr(), vehicleKits: make(map[uint64]*VehicleKit), vehicleSeatAddons: make(map[uint32]*VehicleSeatAddon), vehicleAccessories: make(map[uint32][]VehicleAccessory), terrainTiles: make(map[uint64][]terrainSpawn), terrainTileKnown: make(map[uint64]bool), terrainModels: make(map[string]*terrainModel)}
 	if c.IPLocationFile != "" {
 		locations, err := iplocation.Load(c.IPLocationFile)
 		if err != nil {
@@ -3200,20 +3205,29 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	s.accountExpansion = account.Expansion
 	s.debug("world authentication accepted", "account", accountName, "build", build, "expansion", s.accountExpansion, "gm_chat", s.gmChat, "two_side_chat", s.twoSideChat, "remote", remoteAddress(s.conn))
 	s.loadTutorials(ctx)
+	s.pendingAddonInfo = append([]byte(nil), b.Bytes()[b.Position():]...)
 
-	// SMSG_AUTH_RESPONSE: 11-byte short form for AUTH_OK (TrinityCore AuthHandler.cpp)
+	if s.server.checkQueue(s, ctx, account) {
+		return true
+	}
+	return s.initializeSession(ctx, account)
+}
+
+func (s *session) initializeSession(ctx context.Context, account *account) bool {
+	s.inQueue = false
 	authBuf := protocol.NewBuffer(11)
 	authBuf.WriteU8(authOK)
-	authBuf.WriteU32(0)                 // BillingTimeRemaining
-	authBuf.WriteU8(0)                  // BillingPlanFlags
-	authBuf.WriteU32(0)                 // BillingTimeRested
-	authBuf.WriteU8(s.accountExpansion) // 0 Vanilla, 1 TBC, 2 WotLK
+	authBuf.WriteU32(0)
+	authBuf.WriteU8(0)
+	authBuf.WriteU32(0)
+	authBuf.WriteU8(s.accountExpansion)
 	if err := s.write(opcodeAuthResponse, authBuf.Bytes(), true); err != nil {
 		return false
 	}
-	if err := s.write(uint16(protocol.OpcodeSMSG_ADDON_INFO), buildAddonInfoResponse(b.Bytes()[b.Position():]), true); err != nil {
+	if err := s.write(uint16(protocol.OpcodeSMSG_ADDON_INFO), buildAddonInfoResponse(s.pendingAddonInfo), true); err != nil {
 		return false
 	}
+	s.pendingAddonInfo = nil
 	cacheVersion := protocol.NewBuffer(4)
 	cacheVersion.WriteU32(s.server.clientCacheVersion)
 	if err := s.write(uint16(protocol.OpcodeSMSG_CLIENTCACHE_VERSION), cacheVersion.Bytes(), true); err != nil {
@@ -3222,16 +3236,78 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	if err := s.write(uint16(protocol.OpcodeSMSG_TUTORIAL_FLAGS), buildTutorialFlags(s.tutorials), true); err != nil {
 		return false
 	}
-
 	if s.server.Config.WardenEnabled && len(account.SessionKey) == crypto.SRP6SessionKeyLength {
 		w, err := newWardenSession(s, account.SessionKey)
 		if err != nil {
-			s.server.Logger.Error("failed to initialize warden for session", "account", accountName, "error", err)
+			s.server.Logger.Error("failed to initialize warden for session", "account", s.accountName, "error", err)
 		} else {
 			s.warden = w
 		}
 	}
 	return true
+}
+
+func (s *Server) checkQueue(sess *session, ctx context.Context, account *account) bool {
+	if s.playerLimit == 0 {
+		return false
+	}
+	s.sessionsMu.RLock()
+	activeCount := 0
+	for current := range s.sessions {
+		if current.authed && !current.inQueue {
+			activeCount++
+		}
+	}
+	s.sessionsMu.RUnlock()
+	if uint32(activeCount) < s.playerLimit {
+		return false
+	}
+	skipQueue, err := accountHasPermission(ctx, s.AuthStore.DB, account.ID, s.RealmID, account.Security, permissionSkipQueue)
+	if err != nil {
+		sess.debug("queue permission lookup failed", "account", account.ID, "error", err)
+	} else if skipQueue {
+		return false
+	}
+	s.sessionsMu.Lock()
+	sess.inQueue = true
+	s.queuedSessions = append(s.queuedSessions, sess)
+	pos := uint32(len(s.queuedSessions))
+	s.sessionsMu.Unlock()
+	sess.debug("player queued", "account", account.ID, "position", pos)
+	buf := protocol.NewBuffer(6)
+	buf.WriteU8(authWaitQueue)
+	buf.WriteU32(pos)
+	buf.WriteU8(0)
+	_ = sess.write(opcodeAuthResponse, buf.Bytes(), true)
+	return true
+}
+
+func (s *Server) promoteQueuedPlayers() {
+	s.sessionsMu.Lock()
+	if len(s.queuedSessions) == 0 {
+		s.sessionsMu.Unlock()
+		return
+	}
+	activeCount := 0
+	for current := range s.sessions {
+		if current.authed && !current.inQueue {
+			activeCount++
+		}
+	}
+	if s.playerLimit > 0 && uint32(activeCount) >= s.playerLimit {
+		s.sessionsMu.Unlock()
+		return
+	}
+	promoted := s.queuedSessions[0]
+	s.queuedSessions = s.queuedSessions[1:]
+	s.sessionsMu.Unlock()
+	promoted.debug("player promoted from queue", "account", promoted.accountID)
+	account, err := loadAccount(context.Background(), s.AuthStore, promoted.accountName, s.RealmID)
+	if err != nil || account == nil {
+		promoted.debug("queue promotion failed: account not found", "account", promoted.accountName)
+		return
+	}
+	promoted.initializeSession(context.Background(), account)
 }
 
 func wardenOSAllowed(osName string) bool { return osName == "Win" || osName == "OSX" }

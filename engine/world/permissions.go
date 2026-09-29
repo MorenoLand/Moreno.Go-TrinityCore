@@ -9,6 +9,9 @@ const permissionCommandGMChat uint32 = 372
 
 const permissionInstantLogout uint32 = 1
 
+// permissionSkipQueue mirrors rbac::RBAC_PERM_SKIP_QUEUE (RBAC.h:55).
+const permissionSkipQueue uint32 = 2
+
 const permissionSkipCheckDisableMap uint32 = 20
 
 // permissionSkipCheckOverSpeedPing mirrors rbac::RBAC_PERM_SKIP_CHECK_OVERSPEED_PING (RBAC.h).
