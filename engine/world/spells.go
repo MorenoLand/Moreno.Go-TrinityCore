@@ -468,10 +468,15 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	if clientCastFlags&0x02 != 0 {
-		if _, err = reader.ReadF32(); err != nil {
+		// SpellCastTargets m_elevation / m_speed (HandleClientCastFlags,
+		// SpellHandler.cpp:30): projectile data consumed by
+		// SelectImplicitTrajTargets (Spell.cpp:1626). The optional
+		// embedded movement block C++ reads next has no Go consumer —
+		// movement arrives via the standalone movement opcodes.
+		if target.TrajElevation, err = reader.ReadF32(); err != nil {
 			return false
 		}
-		if _, err = reader.ReadF32(); err != nil {
+		if target.TrajSpeed, err = reader.ReadF32(); err != nil {
 			return false
 		}
 	}

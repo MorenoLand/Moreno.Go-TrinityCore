@@ -63,6 +63,13 @@ type SpellTargetData struct {
 	Source       SpellTargetLocation
 	Destination  SpellTargetLocation
 	StringTarget string
+	// TrajElevation and TrajSpeed carry the SpellCastTargets m_elevation /
+	// m_speed fields set from the cast packet's projectile data
+	// (HandleClientCastFlags, SpellHandler.cpp:30: castFlags & 0x02).
+	// SelectImplicitTrajTargets (Spell.cpp:1626) early-returns when speed
+	// is 0; they are transport fields only and never hit the wire.
+	TrajElevation float32
+	TrajSpeed     float32
 }
 
 type SpellMissStatus struct {
