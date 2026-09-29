@@ -659,6 +659,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
+	// Spell::_cast (Spell.cpp:3335) re-runs CheckCast(false) when the cast timer
+	// finishes; power drained mid-cast must fail the cast, not clamp to zero.
+	pType := spell.PowerType
+	cost := s.calculateSpellPowerCost(spell)
+	if pType < 7 && cost > 0 && s.player.Powers[pType] < cost {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 85), true) // SPELL_FAILED_NO_POWER = 85
+		return
+	}
+
 	hitTargets := make([]uint64, 0, 1)
 	if isSelfCastOnly(spell) {
 		hitTargets = append(hitTargets, s.playerGUID)
@@ -753,7 +762,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 
 	castTimeStamp := uint32(time.Now().UnixMilli())
-	pType := spell.PowerType
 	castFlags := spellCastFlagGo
 	var remainingPower *uint32
 	if pType < 7 {
@@ -761,13 +769,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		power := s.player.Powers[pType]
 		remainingPower = &power
 	}
-	cost := s.calculateSpellPowerCost(spell)
 	if pType < 7 && cost > 0 {
-		if s.player.Powers[pType] >= cost {
-			s.player.Powers[pType] -= cost
-		} else {
-			s.player.Powers[pType] = 0
-		}
+		// Re-validation above guarantees sufficient power; C++ TakePower deducts.
+		s.player.Powers[pType] -= cost
 		powerPacket := protocol.NewBuffer(13)
 		powerPacket.WritePackedGUID(s.playerGUID)
 		powerPacket.WriteU8(uint8(pType))
