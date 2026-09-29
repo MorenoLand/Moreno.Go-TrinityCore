@@ -577,6 +577,13 @@ func (s *session) handleMailDelete(ctx context.Context, payload []byte) bool {
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb != nil {
+		// Reference: MailHandler.cpp:329-349 — delete shouldn't show up for
+		// COD mails; refuse with MAIL_ERR_INTERNAL_ERROR instead of deleting.
+		var cod int64
+		if err := cdb.QueryRowContext(ctx, "SELECT COALESCE(cod, 0) FROM mail WHERE id = ? AND receiver = ? LIMIT 1", mailID, s.playerGUID).Scan(&cod); err == nil && cod > 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailDeleted, mailErrInternalError, 0, 0, 0), true)
+			return true
+		}
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM mail WHERE id = ? AND receiver = ?", mailID, s.playerGUID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ?", mailID)
 	}
