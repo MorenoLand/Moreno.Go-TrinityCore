@@ -1049,8 +1049,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		hitTargets = append(hitTargets, s.playerGUID)
 	}
 	areaSpell := isAreaEnemySpell(spell)
+	friendlyAreaSpell := isFriendlyAreaSpell(spell)
 	if areaSpell {
 		hitTargets = s.spellAreaEnemyTargets(ctx, spell, target)
+	} else if friendlyAreaSpell {
+		// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): friendly
+		// PARTY/ALLY/RAID area targets (20/30/31/33/34/56) replace the
+		// hit-target list the same way enemy area targets do.
+		hitTargets = s.spellFriendlyAreaTargets(ctx, spell, target)
 	}
 	s.spawnPersistentAreaAura(ctx, spell, target)
 	targetGUID := uint64(0)
@@ -1120,7 +1126,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			}
 		}
-	} else if !areaSpell && targetGUID != 0 && targetGUID != s.playerGUID && !isHarmfulSpell(spell) {
+	} else if !areaSpell && !friendlyAreaSpell && targetGUID != 0 && targetGUID != s.playerGUID && !isHarmfulSpell(spell) {
 		var targetSess *session
 		if s.server != nil {
 			targetSess = s.server.findSessionByGUID(targetGUID)
@@ -1136,7 +1142,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// chainJumpIndex records each target's jump order (0 = primary) so the
 	// per-jump EffectChainAmplitude falloff can be applied at effect time.
 	chainJumpIndex := make(map[uint64]int)
-	if !areaSpell && targetGUID != 0 {
+	if !areaSpell && !friendlyAreaSpell && targetGUID != 0 {
 		if jumps, isChainHeal := chainSpellJumps(spell); jumps > 0 {
 			for i, extraGUID := range s.spellSearchChainTargets(ctx, spell, targetGUID, jumps, isChainHeal) {
 				hitTargets = append(hitTargets, extraGUID)
