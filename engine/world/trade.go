@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -90,6 +91,17 @@ func (s *session) handleInitiateTrade(ctx context.Context, payload []byte) bool 
 	}
 	if s.player.MaxHealth > 0 && s.player.Health == 0 {
 		_ = s.sendTradeStatus(tradeStatusYouDead, 0, 0, 0, 0)
+		return true
+	}
+	// Reference: WorldSession::HandleInitiateTradeOpcode (TradeHandler.cpp:624-631):
+	// level below CONFIG_TRADE_LEVEL_REQ ("LevelReq.Trade", default 1) ->
+	// notification + TRADE_STATUS_CLOSE_WINDOW before the target is even looked up.
+	if uint32(s.player.Level) < s.server.Config.TradeLevelReq {
+		// Notification text is not source-verifiable here: C++ sends
+		// GetTrinityString(LANG_TRADE_REQ) (entry 6609) and the trinity_string
+		// content lives in the DB import, not in this repo.
+		s.sendNotification(fmt.Sprintf("You must be at least level %d to initiate a trade.", s.server.Config.TradeLevelReq))
+		_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, 0, 0, 0)
 		return true
 	}
 	targetSess := s.server.findSessionByGUID(targetGUID)
