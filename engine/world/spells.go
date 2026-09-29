@@ -2045,6 +2045,29 @@ func (s *session) interruptCurrentCast() {
 	s.castMu.Unlock()
 }
 
+// interruptSpellsOnMovement breaks the active cast and channel when the
+// player starts moving, for spells carrying SPELL_INTERRUPT_FLAG_MOVEMENT.
+// C++ authority: Unit::InterruptNonMeleeSpells via the movement interrupt
+// mask (Unit.cpp).
+func (s *session) interruptSpellsOnMovement() {
+	if s == nil {
+		return
+	}
+	s.castMu.Lock()
+	cast := s.activeCast
+	channel := s.activeChannel
+	castBreaks := cast != nil && !cast.Cancelled && cast.InterruptFlg&spellInterruptFlagMovement != 0
+	channelBreaks := channel != nil && !channel.Stopped && channel.Spell.InterruptFlags&spellInterruptFlagMovement != 0
+	s.castMu.Unlock()
+
+	if castBreaks {
+		s.interruptCurrentCast()
+	}
+	if channelBreaks {
+		s.interruptCurrentChannel()
+	}
+}
+
 func (s *session) stopSpellLifecycle() {
 	if s == nil {
 		return

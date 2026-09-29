@@ -194,6 +194,10 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	info.Flags = sanitizeMovementFlags(info.Flags)
 	isMove := info.Flags&(movementForward|movementBackward|movementStrafeLeft|movementStrafeRight|movementFalling) != 0
 	s.isMoving = isMove
+	if isMove {
+		// Break casts/channels with SPELL_INTERRUPT_FLAG_MOVEMENT.
+		s.interruptSpellsOnMovement()
+	}
 	if isMove && s.rooted {
 		s.debug("movement rejected", "account", s.accountName, "reason", "rooted", "opcode", opcode)
 		return true
