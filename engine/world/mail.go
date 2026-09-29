@@ -327,6 +327,29 @@ func mailSendNeedItemDelay(hasItems bool, senderAccount, receiverAccount uint32)
 	return hasItems && senderAccount != receiverAccount
 }
 
+// mailSenderStationery mirrors MailSender(Player*) (Mail.cpp:72): the sender's GM
+// status decides the stationery written to the DB — MAIL_STATIONERY_GM (61, Mail.h:59)
+// for game masters, MAIL_STATIONERY_DEFAULT (41, Mail.h:58) otherwise. The client-
+// supplied stationery ID is never stored by the C++ handler (MailHandler.cpp:264-276
+// never reads mailInfo.StationeryID except for logging).
+func mailSenderStationery(isGameMaster bool) uint32 {
+	if isGameMaster {
+		return 61
+	}
+	return 41
+}
+
+// mailSendExpireDelay mirrors the default expiry branch of MailDraft::SendMailTo
+// (Mail.cpp:211-215): non-COD mail expires 90 days out when the sender is a game
+// master, 30 days otherwise. pSender is always the online sender here, so the C++
+// null check can never trip.
+func mailSendExpireDelay(isGameMaster bool) int64 {
+	if isGameMaster {
+		return 90 * 86400
+	}
+	return 30 * 86400
+}
+
 func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 20 {
 		return true
@@ -435,9 +458,16 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	if s.server != nil && mailSendNeedItemDelay(len(attachments) > 0, s.accountID, uint32(receiverAccount)) {
 		deliverTime = now + int64(s.server.Config.MailDeliveryDelay)
 	}
+	// TrinityCore MailSender(Player*) (Mail.cpp:72): a game-master sender stamps
+	// MAIL_STATIONERY_GM instead of the client-supplied stationery, and
+	// MailDraft::SendMailTo (Mail.cpp:214) gives GM-sent mail a 90-day expire
+	// delay instead of 30 days. Player::IsGameMaster() (Player.h:959) is exactly
+	// the PLAYER_EXTRA_GM_ON extra flag.
+	isGameMaster := s.player.ExtraFlags&playerExtraGMOn != 0
+	stationery = mailSenderStationery(isGameMaster)
 	// MailDraft::SendMailTo (Mail.cpp:203) anchors expire_time on deliver_time, not
-	// on now (30-day default here; MAIL_NORMAL send path).
-	expire := deliverTime + 30*86400
+	// on now (MAIL_NORMAL send path).
+	expire := deliverTime + mailSendExpireDelay(isGameMaster)
 	hasItems := 0
 	if len(attachments) > 0 {
 		hasItems = 1
