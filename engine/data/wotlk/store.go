@@ -1038,6 +1038,34 @@ func (s *Store) SpellRuneCost(id uint32) (SpellRuneCost, bool, error) {
 	return cost, true, nil
 }
 
+type TotemCategory struct {
+	ID               uint32
+	TotemCategoryType uint32
+	TotemCategoryMask uint32
+}
+
+func (s *Store) TotemCategory(id uint32) (TotemCategory, bool, error) {
+	if id == 0 {
+		return TotemCategory{}, true, nil
+	}
+	file, err := s.File("TotemCategory")
+	if err != nil {
+		return TotemCategory{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return TotemCategory{}, false, nil
+	}
+	category := TotemCategory{ID: id}
+	if category.TotemCategoryType, err = record.Uint32(18); err != nil {
+		return TotemCategory{}, false, err
+	}
+	if category.TotemCategoryMask, err = record.Uint32(19); err != nil {
+		return TotemCategory{}, false, err
+	}
+	return category, true, nil
+}
+
 func (s *Store) SpellRange(id uint32) (SpellRangeEntry, bool, error) {
 	file, err := s.File("SpellRange")
 	if err != nil {
