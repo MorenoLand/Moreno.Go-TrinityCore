@@ -55,6 +55,8 @@ const (
 	spellEffectHealMaxHealth                 = 67
 	spellEffectCreateItem                    = 24
 	spellEffectCreateItem2                   = 70
+	spellEffectLearnSpell                    = 36
+	spellEffectResurrect                     = 18
 	spellAuraMounted                         = 78
 	spellAuraModParryPercent                 = 47
 	spellAuraConfuse                         = 5
@@ -1035,6 +1037,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff)
 			case spellEffectCreateItem2: // 70: SPELL_EFFECT_CREATE_ITEM_2
 				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff)
+			case spellEffectLearnSpell: // 36: SPELL_EFFECT_LEARN_SPELL
+				if eff.TriggerSpell != 0 {
+					s.learnSpell(effCtx, eff.TriggerSpell)
+				}
+			case spellEffectResurrect: // 18: SPELL_EFFECT_RESURRECT
+				s.handleEffectResurrect(effCtx, targetGUID, spell, eff)
 			}
 		}
 		if s.server != nil && isHarmfulSpell(spell) && !damageEffectSeen {
@@ -4715,4 +4723,36 @@ func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64,
 	if _, err := s.storeOrStackItem(ctx, playerGUID, eff.ItemType, uint32(count)); err != nil {
 		return
 	}
+}
+
+func (s *session) handleEffectResurrect(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
+	if targetGUID == 0 || s.server == nil {
+		return
+	}
+	targetSess := s.server.findSessionByGUID(targetGUID)
+	if targetSess == nil || targetSess.player == nil {
+		return
+	}
+	if targetSess.player.Health > 0 {
+		return
+	}
+	if targetSess.resurrection != nil {
+		return
+	}
+	healthPct := eff.BasePoints + 1
+	if healthPct < 1 {
+		healthPct = 1
+	}
+	if healthPct > 100 {
+		healthPct = 100
+	}
+	maxHealth := targetSess.player.MaxHealth
+	if maxHealth == 0 {
+		maxHealth = 1
+	}
+	health := uint32(int64(maxHealth) * int64(healthPct) / 100)
+	maxMana := targetSess.player.MaxPowers[0]
+	mana := uint32(int64(maxMana) * int64(healthPct) / 100)
+	targetSess.setResurrectRequestData(s.playerGUID, 0, 0, 0, 0, health, mana)
+	targetSess.sendResurrectRequest(s.playerGUID, "", false, false)
 }
