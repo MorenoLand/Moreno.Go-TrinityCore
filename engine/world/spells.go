@@ -28,6 +28,8 @@ const (
 	spellInterruptFlagMovement uint32 = 0x01 // SPELL_INTERRUPT_FLAG_MOVEMENT (SpellDefines.h:30)
 
 	spellAttr1NotBreakStealth uint32 = 0x00000020 // SPELL_ATTR1_NOT_BREAK_STEALTH (SharedDefines.h:454)
+	spellAttr1NoThreat       uint32 = 0x00000400 // SPELL_ATTR1_NO_THREAT (SharedDefines.h:459) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
+	spellAttr3NoInitialAggro uint32 = 0x00020000 // SPELL_ATTR3_NO_INITIAL_AGGRO (SharedDefines.h:540) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7)
 
 	spellAttr0Ability                     uint32 = 0x00000010 // SPELL_ATTR0_ABILITY (SharedDefines.h:416)
 	spellAttr0ReqAmmo                     uint32 = 0x00000002 // SPELL_ATTR0_REQ_AMMO (SharedDefines.h:413)
@@ -101,6 +103,9 @@ const (
 	spellEffectQuestComplete                 = 16
 	spellEffectHealthLeech                   = 9
 	spellEffectPowerDrain                    = 8
+	spellEffectHealMechanical                = 75  // SPELL_EFFECT_HEAL_MECHANICAL (SharedDefines.h:886)
+	spellEffectHealPct                       = 136 // SPELL_EFFECT_HEAL_PCT (SharedDefines.h:947)
+	spellEffectEnergizePct                   = 137 // SPELL_EFFECT_ENERGIZE_PCT (SharedDefines.h:948)
 	spellAuraMounted                         = 78
 	spellAuraModParryPercent                 = 47
 	spellAuraModSpellCritChance              = 57  // SPELL_AURA_MOD_SPELL_CRIT_CHANCE (SpellAuraDefines.h:137)
@@ -1404,6 +1409,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		return
 	}
 
+	// Spell::_handle_immediate_phase (Spell.cpp:3718): initial spell threat
+	// (HandleThreatSpells, Spell.cpp:5096) lands before any effect handling.
+	s.handleSpellInitialThreat(ctx, spell, hitTargets)
+
 	// Reference Spell::handle_immediate: channeled spells begin their timed
 	// channel lifecycle after the cast completes. The resolved destination is
 	// recorded with the channel (C++ channeledSpell->m_targets dest), so
@@ -2202,6 +2211,11 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 		}
 	}
+
+	// Spell::_handle_immediate_phase (Spell.cpp:3718): initial spell threat
+	// (HandleThreatSpells, Spell.cpp:5096) applies to triggered casts too,
+	// before any effect handling.
+	s.handleSpellInitialThreat(ctx, spell, hitTargets)
 
 	durationMs := uint32(0)
 	if s.server != nil && s.server.Data != nil && spell.DurationIndex > 0 {
