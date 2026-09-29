@@ -105,6 +105,7 @@ type SpellEffect struct {
 	MiscValue          int32
 	MiscValueB         int32
 	TriggerSpell       uint32
+	ItemType           uint32
 }
 
 func (effect SpellEffect) CalcValue() int32 {
@@ -850,7 +851,11 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		if err != nil {
 			return Spell{}, false, err
 		}
-		spell.Effects[i] = SpellEffect{Effect: effect, BasePoints: basePoints, DieSides: dieSides, RealPointsPerLevel: realPointsPerLevel, Aura: aura, AuraPeriod: auraPeriod, ImplicitTargetA: implicitTargetA, ImplicitTargetB: implicitTargetB, RadiusIndex: radiusIndex, MiscValue: miscValue, MiscValueB: miscValueB, TriggerSpell: triggerSpell}
+		itemType, err := record.Uint32(107 + i)
+		if err != nil {
+			return Spell{}, false, err
+		}
+		spell.Effects[i] = SpellEffect{Effect: effect, BasePoints: basePoints, DieSides: dieSides, RealPointsPerLevel: realPointsPerLevel, Aura: aura, AuraPeriod: auraPeriod, ImplicitTargetA: implicitTargetA, ImplicitTargetB: implicitTargetB, RadiusIndex: radiusIndex, MiscValue: miscValue, MiscValueB: miscValueB, TriggerSpell: triggerSpell, ItemType: itemType}
 	}
 	for i := range spell.Reagent {
 		reagent, err := record.Int32(52 + i) // Reagent, DBCStructure.h:1441 (52-59)

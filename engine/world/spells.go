@@ -53,6 +53,8 @@ const (
 	spellEffectThreat                        = 63
 	spellEffectTriggerSpell                  = 64
 	spellEffectHealMaxHealth                 = 67
+	spellEffectCreateItem                    = 24
+	spellEffectCreateItem2                   = 70
 	spellAuraMounted                         = 78
 	spellAuraModParryPercent                 = 47
 	spellAuraConfuse                         = 5
@@ -1029,6 +1031,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectInterruptCast: // 68: SPELL_EFFECT_INTERRUPT_CAST
 				s.handleEffectInterruptCast(effCtx, targetGUID, spell, eff)
 				interruptHandled = true
+			case spellEffectCreateItem: // 24: SPELL_EFFECT_CREATE_ITEM
+				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff)
+			case spellEffectCreateItem2: // 70: SPELL_EFFECT_CREATE_ITEM_2
+				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff)
 			}
 		}
 		if s.server != nil && isHarmfulSpell(spell) && !damageEffectSeen {
@@ -4689,4 +4695,24 @@ func (s *session) checkSpellEquippedItemRequirements(ctx context.Context, spell 
 	}
 
 	return 0, true
+}
+
+func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
+	if eff.ItemType == 0 {
+		return
+	}
+	playerGUID := targetGUID
+	if playerGUID == 0 {
+		playerGUID = s.playerGUID
+	}
+	if playerGUID == 0 {
+		return
+	}
+	count := int32(eff.BasePoints + 1)
+	if count < 1 {
+		count = 1
+	}
+	if _, err := s.storeOrStackItem(ctx, playerGUID, eff.ItemType, uint32(count)); err != nil {
+		return
+	}
 }
