@@ -14,6 +14,7 @@ const (
 	auraInterruptFlagEnterCombat  uint32 = 0x00000400 // removed on entering combat
 	auraInterruptFlagDirectDamage uint32 = 0x00001000 // removed only by direct damage
 	auraInterruptFlagLanding      uint32 = 0x02000000 // removed on landing
+	auraInterruptFlagSpellAttack  uint32 = 0x00002000 // AURA_INTERRUPT_FLAG_SPELL_ATTACK (SpellDefines.h:60)
 )
 
 // getSpellAuraInterruptFlags returns the aura interrupt bitmask from Spell.dbc with

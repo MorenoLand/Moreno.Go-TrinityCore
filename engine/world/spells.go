@@ -27,6 +27,8 @@ const (
 
 	spellInterruptFlagMovement uint32 = 0x01 // SPELL_INTERRUPT_FLAG_MOVEMENT (SpellDefines.h:30)
 
+	spellAttr1NotBreakStealth uint32 = 0x00000020 // SPELL_ATTR1_NOT_BREAK_STEALTH (SharedDefines.h:454)
+
 	spellFailedEquippedItemClass         uint8 = 29 // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
 	spellFailedEquippedItemClassMainhand uint8 = 30 // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
 	spellFailedEquippedItemClassOffhand  uint8 = 31 // SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND (SharedDefines.h:1013)
@@ -594,6 +596,13 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedMoving), true)
 			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "casting while moving")
 			return true
+		}
+	}
+	// Spell::prepare (Spell.cpp:3175-3189): stealth breaks at cast start.
+	if spell.Attributes&spellAttr1NotBreakStealth == 0 {
+		s.removeAurasWithInterruptFlags(auraInterruptFlagCast)
+		if isHarmfulSpell(spell) {
+			s.removeAurasWithInterruptFlags(auraInterruptFlagSpellAttack)
 		}
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_START), protocol.BuildSpellStart(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagStart, castTime, target), true); err != nil {
