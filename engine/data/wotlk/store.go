@@ -1160,6 +1160,38 @@ func (s *Store) MailTemplate(id uint32) (string, bool, error) {
 	return body, true, nil
 }
 
+type CharTitle struct {
+	ID     uint32
+	Name   string
+	Name1  string
+	MaskID uint32
+}
+
+func (s *Store) CharTitle(id uint32) (CharTitle, bool, error) {
+	if id == 0 {
+		return CharTitle{}, true, nil
+	}
+	file, err := s.File("CharTitles")
+	if err != nil {
+		return CharTitle{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return CharTitle{}, false, nil
+	}
+	title := CharTitle{ID: id}
+	if title.Name, err = record.String(2); err != nil {
+		return CharTitle{}, false, err
+	}
+	if title.Name1, err = record.String(19); err != nil {
+		return CharTitle{}, false, err
+	}
+	if title.MaskID, err = record.Uint32(36); err != nil {
+		return CharTitle{}, false, err
+	}
+	return title, true, nil
+}
+
 func (s *Store) SpellRange(id uint32) (SpellRangeEntry, bool, error) {
 	file, err := s.File("SpellRange")
 	if err != nil {
