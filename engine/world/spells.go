@@ -1103,18 +1103,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				hitTargets = nil
 				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: missInfo}}
 			} else if isBinarySpell(spell) {
-				resIndex := schoolMaskToResistanceIndex(uint8(spell.SchoolMask))
-				victimRes := uint32(0)
-				if targetSess != nil && targetSess.player != nil && resIndex < 7 {
-					victimRes = targetSess.player.Resistances[resIndex]
-				} else if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok && resIndex < 7 {
-					victimRes = tgt.Resistances[resIndex]
+				var resistances [7]uint32
+				if targetSess != nil && targetSess.player != nil {
+					resistances = targetSess.player.Resistances
+				} else if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+					resistances = tgt.Resistances
 				}
 				pen := uint32(0)
 				if s.player != nil {
 					pen = s.player.SpellPenetration
 				}
-				if checkBinarySpellResist(victimRes, pen, s.player.Level, targetLevel) {
+				chaosBolt := spell.SpellFamilyName == spellFamilyWarlock && spell.SpellIconID == 3178
+				if checkBinarySpellResist(resistances, uint8(spell.SchoolMask), pen, s.player.Level, targetLevel, chaosBolt) {
 					hitTargets = nil
 					missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissResist}}
 				}
@@ -1764,9 +1764,13 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		}
 
 		if !instantKill && schoolMask > 1 && s.player != nil && s.player.Level > 0 {
-			resIdx := schoolMaskToResistanceIndex(schoolMask)
-			victimRes := target.Resistances[resIdx]
-			resisted, damage = calcMagicSpellResistance(damage, schoolMask, victimRes, s.player.Level, target.Level, s.player.SpellPenetration)
+			chaosBolt := false
+			if s.server != nil && s.server.Data != nil {
+				if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
+					chaosBolt = sp.SpellFamilyName == spellFamilyWarlock && sp.SpellIconID == 3178
+				}
+			}
+			resisted, damage = calcMagicSpellResistance(damage, schoolMask, target.Resistances, s.player.Level, target.Level, !isPlayerVictim, chaosBolt, s.player.SpellPenetration)
 		}
 
 		if instantKill {
@@ -2696,8 +2700,14 @@ func magicSpellHitResult(casterLevel, victimLevel uint8, isPlayerVictim bool, bo
 // but applies harmful magic debuffs or crowd control that can be fully resisted).
 // Mirrors TrinityCore SpellInfo::IsBinary (SpellInfo.cpp:3200).
 func isBinarySpell(spell wotlk.Spell) bool {
+	// Evaluate on the stripped mask: C++ removes the physical bit at load when
+	// magic schools are present (SpellMgr.cpp: CU_SCHOOLMASK_NORMAL_WITH_MAGIC).
+	schoolMask := spell.SchoolMask
+	if schoolMask&0x7E != 0 {
+		schoolMask &^= 1
+	}
 	// Physical (1) and Holy (2) spells are never resisted by magic resistance
-	if spell.SchoolMask == 0 || spell.SchoolMask&1 != 0 || spell.SchoolMask&2 != 0 {
+	if schoolMask == 0 || schoolMask&1 != 0 || schoolMask&2 != 0 {
 		return false
 	}
 	if !isHarmfulSpell(spell) {
@@ -2712,11 +2722,40 @@ func isBinarySpell(spell wotlk.Spell) bool {
 	return true
 }
 
-// checkBinarySpellResist calculates whether a binary spell is fully resisted by the victim.
-// Effective resistance is reduced by caster spell penetration (level difference resistance cannot be penetrated).
-// Mirrors TrinityCore Unit::CalculateAverageResistReduction & Unit::MagicSpellHitResult (Unit.cpp:1721-1775).
-func checkBinarySpellResist(victimResistance, casterPenetration uint32, casterLevel, victimLevel uint8) bool {
-	effectiveRes := victimResistance
+// minResistanceForMask mirrors Unit::GetResistance(SpellSchoolMask)
+// (Unit.cpp:13581): the minimum resistance across the schools in the mask.
+// The physical bit is stripped when magic schools are present, mirroring the
+// load-time SchoolMask normalization (SpellMgr.cpp:
+// SPELL_ATTR0_CU_SCHOOLMASK_NORMAL_WITH_MAGIC).
+func minResistanceForMask(resistances [7]uint32, schoolMask uint8) uint32 {
+	if schoolMask&0x7E != 0 {
+		schoolMask &^= 1
+	}
+	best := uint32(0)
+	found := false
+	for i := uint8(0); i < 7; i++ {
+		if schoolMask&(1<<i) != 0 && (!found || resistances[i] < best) {
+			best = resistances[i]
+			found = true
+		}
+	}
+	if !found {
+		return ^uint32(0)
+	}
+	return best
+}
+
+// averageResistReduction mirrors Unit::CalculateAverageResistReduction
+// (Unit.cpp:1777): template resistance reduced by spell penetration; holy
+// template resistance and Chaos Bolt (warlock, icon 3178) template resistance
+// are ignored; the level-based term (+5 per level the victim out-levels the
+// caster, impenetrable) is skipped for binary spells.
+func averageResistReduction(resistances [7]uint32, schoolMask uint8, casterPenetration uint32, casterLevel, victimLevel uint8, binary, chaosBolt bool) float64 {
+	templateRes := minResistanceForMask(resistances, schoolMask)
+	if schoolMask&2 != 0 || chaosBolt {
+		templateRes = 0
+	}
+	effectiveRes := templateRes
 	if casterPenetration >= effectiveRes {
 		effectiveRes = 0
 	} else {
@@ -2724,25 +2763,27 @@ func checkBinarySpellResist(victimResistance, casterPenetration uint32, casterLe
 	}
 
 	res := float64(effectiveRes)
-	// Level-based resistance: 5 resistance per level difference if victim is higher level (cannot be penetrated)
-	if victimLevel > casterLevel {
+	if !binary && victimLevel > casterLevel {
 		res += float64(victimLevel-casterLevel) * 5.0
-	}
-	if res <= 0 {
-		return false
 	}
 
 	const bossLevel = 83
 	const bossResistanceConstant = 510.0
 	resConstant := float64(victimLevel) * 5.0
-	if victimLevel >= bossLevel {
+	if victimLevel == bossLevel {
 		resConstant = bossResistanceConstant
 	}
-	if resConstant < 5.0 {
-		resConstant = 5.0
+	if res <= 0 {
+		return 0
 	}
+	return res / (res + resConstant)
+}
 
-	averageResist := res / (res + resConstant)
+// checkBinarySpellResist rolls the full resist for a binary spell, with the
+// average resist reduction as the resist chance. Mirrors the binary branch of
+// WorldObject::MagicSpellHitResult (Object.cpp:2585-2592).
+func checkBinarySpellResist(resistances [7]uint32, schoolMask uint8, casterPenetration uint32, casterLevel, victimLevel uint8, chaosBolt bool) bool {
+	averageResist := averageResistReduction(resistances, schoolMask, casterPenetration, casterLevel, victimLevel, true, chaosBolt)
 	if averageResist <= 0.0 {
 		return false
 	}
@@ -2776,14 +2817,18 @@ func schoolMaskToResistanceIndex(schoolMask uint8) uint8 {
 	}
 }
 
-// calcMagicSpellResistance computes magic damage resisted based on target resistance, caster penetration, and levels,
-// matching TrinityCore Unit::CalculateAverageResistReduction and Unit::CalcSpellResistance (Unit.cpp:1721-1775).
-func calcMagicSpellResistance(damage uint32, schoolMask uint8, victimResistance uint32, casterLevel, victimLevel uint8, casterPenetration ...uint32) (resisted uint32, remainingDamage uint32) {
-	if damage == 0 || schoolMask == 0 || schoolMask&1 != 0 {
+// calcMagicSpellResistance mirrors Unit::CalcSpellResistedDamage
+// (Unit.cpp:1704): the discrete 0%-100% partial-resist roll in 10% steps,
+// truncated like the C++ uint32 cast, with a fall-through roll resolving to
+// full resist (clamped by the caller like DamageInfo::ResistDamage,
+// Unit.cpp:208). Holy can only be partially resisted by creatures (the
+// level-based term; template holy resistance is ignored); non-magical
+// schools are never resisted.
+func calcMagicSpellResistance(damage uint32, schoolMask uint8, resistances [7]uint32, casterLevel, victimLevel uint8, victimIsCreature, chaosBolt bool, casterPenetration ...uint32) (resisted uint32, remainingDamage uint32) {
+	if damage == 0 || schoolMask == 0 || schoolMask&0x7E == 0 {
 		return 0, damage
 	}
-	if schoolMask&2 != 0 {
-		// Holy damage cannot be resisted in WotLK
+	if schoolMask&2 != 0 && !victimIsCreature {
 		return 0, damage
 	}
 
@@ -2792,35 +2837,9 @@ func calcMagicSpellResistance(damage uint32, schoolMask uint8, victimResistance 
 		pen = casterPenetration[0]
 	}
 
-	effectiveRes := victimResistance
-	if pen >= effectiveRes {
-		effectiveRes = 0
-	} else {
-		effectiveRes -= pen
-	}
-
-	res := float64(effectiveRes)
-	// Level-based resistance: 5 resistance per level difference if victim is higher level (cannot be penetrated)
-	if victimLevel > casterLevel {
-		res += float64(victimLevel-casterLevel) * 5.0
-	}
-
-	const bossLevel = 83
-	const bossResistanceConstant = 510.0
-	resConstant := float64(victimLevel) * 5.0
-	if victimLevel >= bossLevel {
-		resConstant = bossResistanceConstant
-	}
-	if resConstant < 5.0 {
-		resConstant = 5.0
-	}
-
-	averageResist := res / (res + resConstant)
+	averageResist := averageResistReduction(resistances, schoolMask, pen, casterLevel, victimLevel, false, chaosBolt)
 	if averageResist <= 0.0 {
 		return 0, damage
-	}
-	if averageResist > 1.0 {
-		averageResist = 1.0
 	}
 
 	var discreteProb [11]float64
@@ -2839,7 +2858,7 @@ func calcMagicSpellResistance(damage uint32, schoolMask uint8, victimResistance 
 
 	roll := rand.Float64()
 	probSum := 0.0
-	step := 0
+	step := 11
 	for i := 0; i < 11; i++ {
 		probSum += discreteProb[i]
 		if roll < probSum {
@@ -2848,8 +2867,7 @@ func calcMagicSpellResistance(damage uint32, schoolMask uint8, victimResistance 
 		}
 	}
 
-	resPercent := float64(step) * 0.1
-	resisted = uint32(math.Round(float64(damage) * resPercent))
+	resisted = damage * uint32(step) / 10
 	if resisted > damage {
 		resisted = damage
 	}
@@ -3761,15 +3779,13 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
 			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, dmg)
 		} else if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
-			resIdx := schoolMaskToResistanceIndex(uint8(aura.SchoolMask))
-			vRes := ts.player.Resistances[resIdx]
 			pen := uint32(0)
 			if ts.server != nil {
 				if cs := ts.server.findSessionByGUID(aura.CasterGUID); cs != nil && cs.player != nil {
 					pen = cs.player.SpellPenetration
 				}
 			}
-			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), vRes, aura.CasterLevel, ts.player.Level, pen)
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, aura.CasterLevel, ts.player.Level, false, false, pen)
 		}
 		if aura.CasterGUID != aura.TargetGUID {
 			ts.applyResilienceToDamage(true, &dmg, false, CombatRatingCritTakenSpell)
@@ -3954,15 +3970,13 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		if aura.SchoolMask&1 != 0 && target.Armor > 0 {
 			dmg = calcArmorReducedDamage(float64(target.Armor), aura.CasterLevel, dmg)
 		} else if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
-			resIdx := schoolMaskToResistanceIndex(uint8(aura.SchoolMask))
-			vRes := target.Resistances[resIdx]
 			pen := uint32(0)
 			if s.server != nil {
 				if cs := s.server.findSessionByGUID(aura.CasterGUID); cs != nil && cs.player != nil {
 					pen = cs.player.SpellPenetration
 				}
 			}
-			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), vRes, aura.CasterLevel, target.Level, pen)
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), target.Resistances, aura.CasterLevel, target.Level, true, false, pen)
 		}
 		if dmg < 1 && resisted == 0 {
 			dmg = 1

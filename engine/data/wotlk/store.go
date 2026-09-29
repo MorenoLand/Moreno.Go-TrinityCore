@@ -170,6 +170,7 @@ type Spell struct {
 	Attributes             uint32
 	SpellFamilyName        uint32
 	SpellFamilyFlags       [3]uint32
+	SpellIconID            uint32 // Spell.dbc field 133 = SpellIconID (DBCStructure.h:1465)
 	AttributesEx           uint32    // Spell.dbc field 5 = AttributesEx (DBCStructure.h:1397)
 	AttributesEx1          uint32    // Spell.dbc field 6 = AttributesExB (DBCStructure.h:1398)
 	AttributesEx3          uint32    // Spell.dbc field 7 = AttributesExC (DBCStructure.h:1399)
@@ -791,6 +792,7 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{209, &spell.SpellFamilyFlags[0]},
 		{210, &spell.SpellFamilyFlags[1]},
 		{211, &spell.SpellFamilyFlags[2]},
+		{133, &spell.SpellIconID}, // Spell.dbc field 133 = SpellIconID (DBCStructure.h:1465)
 		{225, &spell.SchoolMask}, // Spell.dbc field 225 = SchoolMask (DBCStructure.h:1492)
 		{16, &spell.Targets},
 		{19, &spell.FacingCasterFlags}, // Spell.dbc field 19 = FacingCasterFlags (DBCStructure.h:1409)

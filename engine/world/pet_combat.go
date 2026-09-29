@@ -769,8 +769,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		}
 	}
 	if damage > 0 && schoolMask > 1 {
-		resistance := target.Resistances[schoolMaskToResistanceIndex(schoolMask)]
-		resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistance, uint8(maxUint32(caster.Level, 1)), target.Level)
+		resisted, damage = calcMagicSpellResistance(damage, schoolMask, target.Resistances, uint8(maxUint32(caster.Level, 1)), target.Level, !isPlayerVictim, false)
 	}
 	if isPlayerVictim {
 		if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil {
