@@ -762,6 +762,22 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "line of sight")
 				return
 			}
+			// Unit targets that died during the cast bar fail, unless the
+			// spell can resurrect (SPELL_FAILED_TARGETS_DEAD = 109).
+			if tgt.Health == 0 && target.UnitGUID != s.playerGUID {
+				canResurrect := false
+				for _, effect := range spell.Effects {
+					if effect.Effect == spellEffectResurrectNew {
+						canResurrect = true
+						break
+					}
+				}
+				if !canResurrect {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 109), true)
+					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target dead")
+					return
+				}
+			}
 		}
 	}
 
