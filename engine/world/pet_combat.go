@@ -429,7 +429,7 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 			attackTime = 2 * time.Second
 		}
 		if motion.LastAttack.IsZero() || now.Sub(motion.LastAttack) >= attackTime {
-			s.executePetMeleeAttack(ctx, motion, targetGUID, isTargetPlayer, targetSess, targetHealth, targetArmor, targetLevel, now)
+			s.executePetMeleeAttack(ctx, motion, owner.Sess, targetGUID, isTargetPlayer, targetSess, targetHealth, targetArmor, targetLevel, now)
 			motion.LastAttack = now
 		}
 
@@ -441,7 +441,9 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 }
 
 // executePetMeleeAttack conducts the pet's physical swing on the target.
-func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMotion, targetGUID uint64, isTargetPlayer bool, targetSess *session, targetHealth, targetArmor uint32, targetLevel uint8, now time.Time) {
+// owner is the pet owner's session (from the pet tick's owner lookup); it
+// runs the full death chain on a creature kill.
+func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMotion, owner *session, targetGUID uint64, isTargetPlayer bool, targetSess *session, targetHealth, targetArmor uint32, targetLevel uint8, now time.Time) {
 	damage := uint32(float64(motion.MinDamage) + rand.Float64()*float64(motion.MaxDamage-motion.MinDamage))
 	if damage < 1 {
 		damage = 1
@@ -489,30 +491,61 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		}
 	} else {
 		s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, nil)
+		var killedTarget combatTarget
+		var killed bool
+		var killX, killY, killZ float32
 		s.motionMu.Lock()
 		cMotion := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, targetGUID)
-		var killedMotion *creatureMotion
 		if cMotion != nil {
 			if damage >= cMotion.Health {
+				// Snapshot the pre-kill target for the death chain, like the
+				// player swing path's getCombatTarget-before-damage.
+				killedTarget = combatTarget{
+					GUID:       cMotion.GUID,
+					Map:        cMotion.Map,
+					InstanceID: cMotion.InstanceID,
+					X:          cMotion.X,
+					Y:          cMotion.Y,
+					Z:          cMotion.Z,
+					Health:     cMotion.Health,
+					MaxHealth:  cMotion.MaxHealth,
+					Level:      uint8(cMotion.Level),
+				}
+				killX, killY, killZ = cMotion.X, cMotion.Y, cMotion.Z
 				cMotion.Health = 0
+				cMotion.DynamicFlags |= unitDynFlagLootable
 				cMotion.InCombat = false
+				cMotion.TargetGUID = 0
 				cMotion.Moving = false
+				if cMotion.ThreatMgr != nil {
+					cMotion.ThreatMgr.ClearThreat()
+				}
 				s.broadcastCreatureValuesUpdateInInstance(cMotion.Map, cMotion.InstanceID, targetGUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: 1})
-				killedMotion = cMotion
+				killed = true
 			} else {
 				cMotion.Health -= damage
 				s.broadcastCreatureValuesUpdateInInstance(cMotion.Map, cMotion.InstanceID, targetGUID, map[int]uint32{unitFieldHealth: cMotion.Health})
 			}
 		}
 		s.motionMu.Unlock()
-		if killedMotion != nil {
+		if killed {
 			// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): pet attacker → pet arm
 			// + branch arm double dispatch (Unit.cpp pet arm + 11385-11387),
-			// fired after the lock (Lua handlers may re-enter the motion
-			// map). The full death chain (XP/loot/respawn, event 4) does not
-			// run on this path — pre-existing gap, noted in the checkpoint.
-			s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(killedMotion))
-			s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(killedMotion))
+			// fired after the lootable flag, ahead of event 4 — all inside
+			// the full death chain below (XP/loot/respawn/event 4), matching
+			// the pet-spell kill path and C++ Unit::Kill.
+			s.stopCreatureMotionInInstance(motion.Map, motion.InstanceID, targetGUID, killX, killY, killZ)
+			s.broadcastThreatClearInInstance(motion.Map, motion.InstanceID, targetGUID)
+			if owner != nil && owner.player != nil {
+				owner.onCreatureKilled(ctx, killedTarget, motion)
+			} else if victim := s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); victim != nil {
+				// Owner session gone mid-tick: the full chain needs the
+				// owner's session, so keep the pre-existing minimal
+				// registration (health zero + lootable flag broadcast above)
+				// and the event-3 double dispatch.
+				s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(victim))
+				s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(victim))
+			}
 		}
 	}
 }
