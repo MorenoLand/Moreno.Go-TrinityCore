@@ -815,6 +815,26 @@ func spellDamageProcTypeMask(spell wotlk.Spell) uint32 {
 	}
 }
 
+// spellHealProcTypeMask mirrors the done-side half of the
+// DoDamageAndTriggers type-mask fallback (Spell.cpp:2458-2492) for the heal
+// path: a direct heal runs with m_healing > 0, so the spell is positive by
+// construction and magic damage-class spells (Spell.dbc field 213) use
+// DONE_SPELL_MAGIC_DMG_CLASS_POS while none-class spells use
+// DONE_SPELL_NONE_DMG_CLASS_POS. Spell::prepareDataForTriggerSystem
+// (Spell.cpp:1999-2036) fills the flags for melee/ranged/wand spells before
+// the fallback runs, so those damage classes never reach this branch for
+// heals; fail closed.
+func spellHealProcTypeMask(spell wotlk.Spell) uint32 {
+	switch spell.DefenseType {
+	case spellDamageClassMagic:
+		return procFlagDoneSpellMagicDmgClassPos
+	case spellDamageClassNone:
+		return procFlagDoneSpellNoneDmgClassPos
+	default:
+		return procFlagNone
+	}
+}
+
 // spellDamageProcHitMask mirrors the hit-mask derivation for spell damage
 // events (DamageInfo ctor from SpellNonMeleeDamage, Unit.cpp:183-192):
 // miss, immunity, and full resist map to their bits, crits to the critical
@@ -870,6 +890,57 @@ func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint6
 		spellTypeMask:  procSpellTypeDamage,
 		spellPhaseMask: procSpellPhaseHit,
 		hitMask:        spellDamageProcHitMask(isHit, immune, fullyResisted, crit, absorbed),
+		triggered:      s.triggeredNoProcEvents > 0,
+		eventSpell:     &spellCopy,
+	})
+}
+
+// procSpellHealAuraTriggers evaluates real aura procs on the done side of a
+// direct heal: the heal arm of Unit::ProcDamageAndSpellFor via
+// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2493-2513, 2581-2586).
+// The event mirrors C++ exactly: the spell type is PROC_SPELL_TYPE_HEAL with
+// PROC_SPELL_PHASE_HIT, crits carry PROC_HIT_CRITICAL and other heals
+// PROC_HIT_NORMAL (Spell.cpp:2497-2507), and the type mask comes from the
+// heal positivity fallback. Spells with SPELL_ATTR3_CANT_TRIGGER_PROC never
+// reach the loop (Spell.cpp:2440), and a zero heal takes C++'s no-damage
+// arm (PROC_SPELL_TYPE_NO_DMG_HEAL, Spell.cpp:2563-2579), not the heal arm.
+// The event carries the casting spell and the triggered state
+// (Spell::IsTriggered, Spell.cpp:7501-7504) so the
+// CanSpellTriggerProcOnEvent mana-cost, spell-family, and triggered-cast
+// gates engage exactly. The trigger spell targets the heal target.
+func (s *session) procSpellHealAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, heal uint32, crit bool) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	if heal == 0 {
+		return
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		return
+	}
+	if spell.AttributesEx3&spellAttr3CantTriggerProc != 0 {
+		return
+	}
+	typeMask := spellHealProcTypeMask(spell)
+	if typeMask == procFlagNone {
+		return
+	}
+	schoolMask := spell.SchoolMask
+	if schoolMask == 0 {
+		schoolMask = 1
+	}
+	hitMask := uint32(procHitNormal)
+	if crit {
+		hitMask = procHitCritical
+	}
+	spellCopy := spell
+	s.procAuraTriggerLoop(ctx, targetGUID, procEventInfo{
+		typeMask:       typeMask,
+		schoolMask:     schoolMask,
+		spellTypeMask:  procSpellTypeHeal,
+		spellPhaseMask: procSpellPhaseHit,
+		hitMask:        hitMask,
 		triggered:      s.triggeredNoProcEvents > 0,
 		eventSpell:     &spellCopy,
 	})

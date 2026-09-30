@@ -2998,6 +2998,9 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 	if targetGUID == 0 {
 		targetGUID = s.playerGUID
 	}
+	// The C++ heal proc arm keys off m_healing > 0 (Spell.cpp:2496), the
+	// pre-spell-power amount; capture it before the bonuses below mutate heal.
+	rawHeal := heal
 
 	targetSess := s
 	if targetGUID != s.playerGUID && s.server != nil {
@@ -3053,6 +3056,12 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 	if s.server != nil && effectiveHeal > 0 {
 		s.server.distributeHealingThreat(ctx, s.playerGUID, targetGUID, effectiveHeal)
 	}
+
+	// Real aura procs on the done side of a direct heal (TrinityCore
+	// Unit::ProcDamageAndSpellFor via Spell::TargetInfo::DoDamageAndTriggers,
+	// Spell.cpp:2493-2513, 2581-2586): C++ applies the heal (HealBySpell) and
+	// forwards the assist threat before the trigger pass, so this runs last.
+	s.procSpellHealAuraTriggers(ctx, targetGUID, spellID, rawHeal, isCrit)
 }
 
 func buildSpellNonMeleeDamageLog(targetGUID, attackerGUID uint64, spellID, damage, overkill uint32, schoolMask uint8, extra ...uint32) []byte {
