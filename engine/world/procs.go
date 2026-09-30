@@ -1721,9 +1721,6 @@ func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uin
 			if eff.Effect == 0 || !isProcTriggerAuraType(eff.Aura) {
 				continue
 			}
-			if eff.Aura == spellAuraProcTriggerDamage {
-				continue
-			}
 			if !s.checkEffectProc(aura, eff, ev) {
 				continue
 			}
@@ -1746,6 +1743,14 @@ func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uin
 		}
 		for _, i := range eligible {
 			eff := &auraSpell.Effects[i]
+			if eff.Aura == spellAuraProcTriggerDamage {
+				// AuraEffect::HandleProcTriggerDamageAuraProc
+				// (SpellAuraEffects.cpp:5738-5762) deals the effect's own
+				// amount as direct spell damage — no triggered spell to
+				// look up, no hit or crit roll.
+				s.procTriggerDamageAuraProc(ctx, aura, auraSpell, i, triggerTargetGUID)
+				continue
+			}
 			if eff.TriggerSpell == 0 {
 				// C++ HandleProcTriggerSpellAuraProc warns and returns when
 				// the effect carries no triggered spell (SpellAuraEffects.cpp:5654-5661).
@@ -1764,4 +1769,26 @@ func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uin
 			}
 		}
 	}
+}
+
+// procTriggerDamageAuraProc mirrors
+// AuraEffect::HandleProcTriggerDamageAuraProc
+// (SpellAuraEffects.cpp:5738-5762): a SPELL_AURA_PROC_TRIGGER_DAMAGE (43)
+// effect deals its own amount as direct spell damage of the aura spell's
+// school on the proc target. The C++ arm goes straight from
+// SpellDamageBonusDone into CalculateSpellDamageTaken, the damage mods, and
+// the non-melee damage log — never a hit roll, never a crit roll — which the
+// NoCrit pipeline leg reproduces; DealSpellDamage's kill and proc aftermath
+// flows through the same shared path. The C++ IsImmunedToDamage /
+// SendTickImmune pre-check has no Go creature model; player-victim immunity
+// is enforced inside the damage pipeline.
+func (s *session) procTriggerDamageAuraProc(ctx context.Context, aura *activeAura, auraSpell wotlk.Spell, effIndex int, triggerTargetGUID uint64) {
+	if aura == nil {
+		return
+	}
+	basePoint := aura.Amount
+	if effIndex >= 0 && effIndex < len(aura.Amounts) && aura.Amounts[effIndex] > 0 {
+		basePoint = uint32(aura.Amounts[effIndex])
+	}
+	s.executeSpellDamageNoCrit(ctx, triggerTargetGUID, auraSpell.ID, basePoint, effIndex)
 }
