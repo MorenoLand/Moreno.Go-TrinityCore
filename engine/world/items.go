@@ -2828,12 +2828,12 @@ func (s *session) handleEquipmentSetUse(ctx context.Context, payload []byte) boo
 		if err != nil {
 			break
 		}
-		srcbag, err := r.ReadU8()
-		if err != nil {
+		// srcbag/srcslot are still read for protocol framing but the item is
+		// located by GUID, not by the client's coordinates (CharacterHandler.cpp:1574).
+		if _, err := r.ReadU8(); err != nil {
 			break
 		}
-		srcslot, err := r.ReadU8()
-		if err != nil {
+		if _, err := r.ReadU8(); err != nil {
 			break
 		}
 		// Slots set to "ignored" (raw value 1) must not be unequipped (CharacterHandler.cpp:1569).
@@ -2849,10 +2849,10 @@ func (s *session) handleEquipmentSetUse(ctx context.Context, payload []byte) boo
 			s.equipmentSetUnequipSlot(ctx, i)
 			continue
 		}
-		// If item is in bags, swap to equipment slot
-		if srcbag != 0 || srcslot >= uint8(equipmentSlotEnd) {
-			_ = s.handleSwapItem(ctx, []byte{0, uint8(i), srcbag, srcslot})
-		}
+		// C++ ignores srcbag/srcslot: the item is located by GUID across the
+		// whole inventory (GetItemByGuid) and swapped from its actual position
+		// (CharacterHandler.cpp:1574-1595).
+		s.equipmentSetSwapToSlot(ctx, i, itemGuid)
 	}
 
 	// Send SMSG_EQUIPMENT_SET_USE_RESULT (0x4D6) with 0 = success
@@ -2860,6 +2860,61 @@ func (s *session) handleEquipmentSetUse(ctx context.Context, payload []byte) boo
 	buf.WriteU8(0) // 0 = ERR_EQUIPMENT_SET_USE_SUCCESS
 	_ = s.write(uint16(protocol.OpcodeSMSG_EQUIPMENT_SET_USE_RESULT), buf.Bytes(), true)
 	return true
+}
+
+// equipmentSetSwapToSlot moves the set piece named by the packed GUID into
+// equipment slot (WorldSession::HandleEquipmentSetUse,
+// CharacterHandler.cpp:1574-1595: Item* item = _player->GetItemByGuid
+// (itemGuid) — the client's srcbag/srcslot are not used; an unknown GUID
+// takes the unequip arm; an item already at dstpos is skipped; otherwise
+// CanEquipItem then SwapItem(item->GetPos(), dstpos)).
+func (s *session) equipmentSetSwapToSlot(ctx context.Context, slot uint32, itemGuid uint64) {
+	db := s.server.CharactersStore.DB
+	if db == nil {
+		return
+	}
+	counter := int64(itemGuid & 0xFFFFFFFF)
+	var bagKey, itemSlot int64
+	if err := db.QueryRowContext(ctx, "SELECT bag, slot FROM character_inventory WHERE guid = ? AND item = ? LIMIT 1", s.playerGUID, counter).Scan(&bagKey, &itemSlot); err != nil {
+		// Unknown GUID (C++ GetItemByGuid returns null): the unequip arm
+		// (CharacterHandler.cpp:1576-1593).
+		s.equipmentSetUnequipSlot(ctx, slot)
+		return
+	}
+	if bagKey == 0 && uint32(itemSlot) == slot {
+		return
+	}
+	bagByte, ok := s.equipmentSetBagByte(ctx, bagKey)
+	if !ok {
+		return
+	}
+	// CanEquipItem(i, dstpos) is approximated by handleSwapItem's
+	// isSlotValidForItem gate; SwapItem maps onto the coordinate swap.
+	_ = s.handleSwapItem(ctx, []byte{0, uint8(slot), bagByte, uint8(itemSlot)})
+}
+
+// equipmentSetBagByte maps a character_inventory bag key (0 for the main
+// inventory, otherwise the container's item GUID) back to the packet-style
+// bag byte that handleSwapItem's inventoryBagKey translation expects.
+func (s *session) equipmentSetBagByte(ctx context.Context, bagKey int64) (uint8, bool) {
+	if bagKey == 0 {
+		return 0, true
+	}
+	db := s.server.CharactersStore.DB
+	if db == nil {
+		return 0, false
+	}
+	var slot int64
+	if err := db.QueryRowContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0 AND item = ? LIMIT 1", s.playerGUID, bagKey).Scan(&slot); err != nil {
+		return 0, false
+	}
+	switch {
+	case slot >= 19 && slot <= 22:
+		return uint8(slot - 18), true
+	case slot >= 67 && slot <= 73:
+		return uint8(slot - 62), true
+	}
+	return 0, false
 }
 
 // equipmentSetUnequipSlot moves the item worn in equipment slot into the
