@@ -2424,6 +2424,11 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 	// a failed move, so the trailing sendGuildBankList below is gated on
 	// guildMoveItem's moved flag (GuildHandler.cpp:306-335).
 	movedItems := false
+	// Guild::_SendBankContentUpdate (Guild.cpp:2797-2823): a bank->bank
+	// move across tabs emits a second list message for the src tab, after
+	// the dest-tab message. Track that extra tab here.
+	var extraListTab uint8
+	sendExtraList := false
 	if bankOnly != 0 {
 		bankTab, err = r.ReadU8()
 		if err != nil {
@@ -2468,6 +2473,10 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 		outcome, moved := s.guildMoveItem(ctx, guildID, source, &destination, false, bankItemCount)
 		movedItems = moved
 		if moved && bankTab != bankTab1 {
+			// Cross-tab: the src tab gets its own list message after the
+			// dest-tab one (Guild.cpp:2812-2823).
+			sendExtraList = true
+			extraListTab = bankTab1
 			s.logGuildBankEvent(ctx, guildID, bankTab1, guildBankLogMoveItem, s.playerGUID, outcome.Source.Entry, outcome.Count, bankTab)
 			if outcome.Swapped {
 				s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogMoveItem, s.playerGUID, outcome.Destination.Entry, outcome.Destination.Count, bankTab1)
@@ -2580,7 +2589,12 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 		}
 	}
 	if movedItems {
+		// The dest-tab message precedes the src-tab one on cross-tab
+		// moves (Guild.cpp:2812-2823).
 		s.sendGuildBankList(ctx, bankerGUID, bankTab, false)
+		if sendExtraList {
+			s.sendGuildBankList(ctx, bankerGUID, extraListTab, false)
+		}
 	}
 	return true
 }
