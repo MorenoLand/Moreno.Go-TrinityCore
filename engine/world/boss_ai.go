@@ -506,4 +506,11 @@ func init() {
 	// Moroes (Karazhan) — fight logic in
 	// lua_scripts/karazhan/boss_moroes.lua.
 	RegisterLuaBoss("boss_moroes", 15687)
+	// Midnight (Karazhan) — fight logic in
+	// lua_scripts/karazhan/boss_midnight.lua.
+	RegisterLuaBoss("boss_midnight", 16151)
+	// Attumen the Huntsman, unmounted (15550) and mounted (16152) —
+	// fight logic in lua_scripts/karazhan/boss_midnight.lua.
+	RegisterLuaBoss("boss_attumen", 15550)
+	RegisterLuaBoss("boss_attumen", 16152)
 }
