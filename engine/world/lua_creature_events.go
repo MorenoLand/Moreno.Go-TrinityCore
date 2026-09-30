@@ -65,9 +65,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 // per-event extra arguments appended after the creature. Never fires when
 // the scripting runtime is disabled or the creature is gone; Lua errors are
 // logged by the runtime, never propagated. Returns true when any handler
-// returns a truthy value, matching Eluna's CallAllFunctionsBool OR-semantics
-// (lua_toboolean), so START_HOOK_WITH_RETVAL call sites can veto the default
-// action; no bindings or a disabled runtime behaves like C++'s RETVAL=false.
+// returns boolean true, matching Eluna's CallAllFunctionsBool
+// (lua_isboolean-checked) OR-semantics, so START_HOOK_WITH_RETVAL call
+// sites can veto the default action; no bindings or a disabled runtime
+// behaves like C++'s RETVAL=false.
 func (s *Server) fireCreatureLuaEvent(ctx context.Context, motion *creatureMotion, event int, extra ...any) bool {
 	if s == nil || motion == nil || s.Features == nil || s.Features.Scripts == nil {
 		return false
@@ -83,17 +84,15 @@ func (s *Server) fireCreatureLuaEvent(ctx context.Context, motion *creatureMotio
 	return luaHookVeto(results)
 }
 
-// luaHookVeto ORs handler return values with Lua truthiness (everything but
-// false and nil counts), the Go model of Eluna's CallAllFunctionsBool.
+// luaHookVeto ORs handler return values the way Eluna's CallAllFunctionsBool
+// does: only an actual boolean true flips the result (HookHelpers.h checks
+// lua_isboolean before lua_toboolean), so a handler returning 1, "yes" or an
+// object does not veto.
 func luaHookVeto(results []any) bool {
 	for _, r := range results {
-		if r == nil {
-			continue
+		if b, ok := r.(bool); ok && b {
+			return true
 		}
-		if b, ok := r.(bool); ok && !b {
-			continue
-		}
-		return true
 	}
 	return false
 }
