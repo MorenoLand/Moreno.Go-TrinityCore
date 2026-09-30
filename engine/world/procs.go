@@ -1612,8 +1612,10 @@ func (s *session) checkEffectProc(aura *activeAura, eff *wotlk.SpellEffect, ev p
 // procAuraTriggerLoop runs one aura-proc pass over the player's active auras:
 // each aura with a generated spell_proc entry runs the
 // CanSpellTriggerProcOnEvent gate against the event; on pass, the chance roll
-// fires the aura effect's trigger spell on triggerTargetGUID
-// (AuraEffect::HandleProcTriggerSpellAuraProc, SpellAuraEffects.cpp:5654-5713).
+// fires each eligible aura effect's trigger spell on triggerTargetGUID
+// (Aura::TriggerProcOnEvent, SpellAuras.cpp:2192-2212, calls
+// AuraEffect::HandleProc per effect in the proc effect mask,
+// SpellAuraEffects.cpp:1010-1043).
 func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uint64, ev procEventInfo) {
 	if s == nil || s.player == nil || len(s.activeAuras) == 0 {
 		return
@@ -1636,8 +1638,11 @@ func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uin
 		if !canSpellTriggerProcOnEvent(entry, ev) {
 			continue
 		}
-		var triggerSpell uint32
-		var withValue bool
+		// C++ GetProcEffectMask/TriggerProcOnEvent (SpellAuras.cpp:2045-2129,
+		// 2192-2212): the proc effect mask can hold several effects and every
+		// one fires its own trigger spell — collect all eligible effects,
+		// don't stop at the first.
+		eligible := make([]int, 0, len(auraSpell.Effects))
 		for i := range auraSpell.Effects {
 			eff := &auraSpell.Effects[i]
 			if eff.Effect == 0 || !isProcTriggerAuraType(eff.Aura) {
@@ -1649,11 +1654,9 @@ func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uin
 			if !s.checkEffectProc(aura, eff, ev) {
 				continue
 			}
-			triggerSpell = eff.TriggerSpell
-			withValue = eff.Aura == spellAuraProcTriggerSpellWithValue
-			break
+			eligible = append(eligible, i)
 		}
-		if triggerSpell == 0 {
+		if len(eligible) == 0 {
 			continue
 		}
 		if !s.rollAuraProcChance(entry, auraSpell) {
@@ -1665,10 +1668,24 @@ func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uin
 				s.removeAura(aura.SpellID)
 			}
 		}
-		if withValue {
-			s.castSpellDirectWithBasePoint(ctx, triggerSpell, triggerTargetGUID, aura.Amount)
-		} else {
-			s.castSpellDirect(ctx, triggerSpell, triggerTargetGUID)
+		for _, i := range eligible {
+			eff := &auraSpell.Effects[i]
+			if eff.TriggerSpell == 0 {
+				// C++ HandleProcTriggerSpellAuraProc warns and returns when
+				// the effect carries no triggered spell (SpellAuraEffects.cpp:5654-5661).
+				continue
+			}
+			if eff.Aura == spellAuraProcTriggerSpellWithValue {
+				// HandleProcTriggerSpellWithValueAuraProc passes the
+				// triggering effect's own amount (SpellAuraEffects.cpp:5726-5728).
+				basePoint := aura.Amount
+				if i < len(aura.Amounts) && aura.Amounts[i] > 0 {
+					basePoint = uint32(aura.Amounts[i])
+				}
+				s.castSpellDirectWithBasePoint(ctx, eff.TriggerSpell, triggerTargetGUID, basePoint)
+			} else {
+				s.castSpellDirect(ctx, eff.TriggerSpell, triggerTargetGUID)
+			}
 		}
 	}
 }
