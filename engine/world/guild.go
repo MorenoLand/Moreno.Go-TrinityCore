@@ -167,6 +167,7 @@ const (
 	guildWithdrawSlotUnlimited       uint32 = 0xFFFFFFFF
 	guildEquipErrItemCantStack       uint8  = 19
 	guildEquipErrCantDropSoulbound   uint8  = 24
+	guildEquipErrDontOwnThatItem     uint8  = 32
 	guildEquipErrBankFull            uint8  = 51
 	guildEquipErrItemDoesntGoIntoBag uint8  = 15
 	bagFamilyMaskKeys                uint32 = 0x00000100 // BAG_FAMILY_MASK_KEYS (ItemTemplate.h:240)
@@ -3375,6 +3376,28 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 	if destination != nil && destination.Bank {
 		placements, storeErr = s.guildBankMovePlan(ctx, tx, uint64(guildID), destination.Tab, destination.Slot, sourceLoc, source, moveCount, maxStack, full)
 	} else {
+		// Item::IsBindedNotWith (Item.cpp:1039-1051) runs inside
+		// Player::CanStoreItem (Player.cpp:10714-10720) before destination
+		// planning, so a soulbound bank item is rejected on the withdraw
+		// path. Bank items load with ObjectGuid::Empty owner (Guild.cpp:399;
+		// Go deposits set owner_guid = 0), so a soulbound bank item is never
+		// owned by the withdrawing player — the BOP-tradeable allowed-looter
+		// exemption has no Go model. Guild::_DoItemsMove gates the equip
+		// error on sendError (Guild.cpp:2736): the split path (Guild.cpp:2709)
+		// and the swap fallback (Guild.cpp:2729) pass true and emit, while
+		// the non-split merge attempt (Guild.cpp:2714) passes false and is
+		// silent.
+		if sourceLoc.Bank && source.Flags&itemInstanceFlagSoulbound != 0 {
+			emit := requestedCount != 0 && requestedCount != source.Count
+			if destination != nil && !autoStore && destExists && full {
+				emit = true
+			}
+			if emit {
+				return rollback(guildEquipErrDontOwnThatItem, source.GUID)
+			}
+			_ = tx.Rollback()
+			return guildMoveOutcome{}, false
+		}
 		// Player::CanStoreItem (Player.cpp:10731-10742) runs the
 		// CanTakeMoreSimilarItems unique/max-count cap before any
 		// destination planning. Guild::_DoItemsMove runs the store with
