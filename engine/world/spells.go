@@ -43,6 +43,7 @@ const (
 	spellAttr7DispelCharges               uint32 = 0x00000400 // SPELL_ATTR7_DISPEL_CHARGES (SharedDefines.h:681) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr6AssistIgnoreImmuneFlag      uint32 = 0x00000008 // SPELL_ATTR6_ASSIST_IGNORE_IMMUNE_FLAG (SharedDefines.h:637) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6CanTargetUntargetable       uint32 = 0x01000000 // SPELL_ATTR6_CAN_TARGET_UNTARGETABLE (SharedDefines.h:658) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
+	spellAttr6DontConsumeProcCharges      uint32 = 0x00000020 // SPELL_ATTR6_DONT_CONSUME_PROC_CHARGES (SharedDefines.h:639) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr4NotStealable                uint32 = 0x00000040 // SPELL_ATTR4_NOT_STEALABLE (SharedDefines.h:566) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4FixedDamage                 uint32 = 0x00000100 // SPELL_ATTR4_FIXED_DAMAGE (SharedDefines.h:568) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr0UnaffectedByInvulnerability uint32 = 0x20000000 // SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY (SharedDefines.h:441)

@@ -1485,6 +1485,14 @@ func rangedAutoProcHitState(outcome protocol.MeleeHitOutcome, absorbed, blocked,
 	return hitInfo, targetState
 }
 
+// procEventKeepsProcCharges mirrors the SPELL_ATTR6_DONT_CONSUME_PROC_CHARGES
+// arm of Aura::PrepareProcToTrigger (SpellAuras.cpp:2032): when the event's
+// triggering spell carries the attribute, the aura's proc charges survive
+// the proc. Events without a spell (melee swings) always consume.
+func procEventKeepsProcCharges(ev procEventInfo) bool {
+	return ev.eventSpell != nil && ev.eventSpell.AttributesEx6&spellAttr6DontConsumeProcCharges != 0
+}
+
 // rollAuraProcChance mirrors Aura::CalcProcChance (SpellAuras.cpp:2164-2190)
 // for generated entries: DBC ProcChance, the SPELLMOD_CHANCE_OF_SUCCESS
 // modifier, and the over-60 level reduction. Generated entries never carry
@@ -1722,7 +1730,10 @@ func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uin
 		if !s.rollAuraProcChance(entry, auraSpell) {
 			continue
 		}
-		if entry.Charges > 0 {
+		// C++ PrepareProcToTrigger (SpellAuras.cpp:2032): a charge is taken
+		// only when the triggering spell is absent (melee swings carry no
+		// spell info) or lacks SPELL_ATTR6_DONT_CONSUME_PROC_CHARGES.
+		if entry.Charges > 0 && !procEventKeepsProcCharges(ev) {
 			aura.RemainingCharges--
 			if aura.RemainingCharges == 0 {
 				s.removeAura(aura.SpellID)
