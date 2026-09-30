@@ -678,4 +678,19 @@ func init() {
 	// instead of on the lever, and the UpdateAI casting gates and the
 	// threat model have no bridges.
 	RegisterLuaBoss("boss_chromaggus", 14020)
+	// Victor Nefarius (Blackwing Lair, eighth boss) — fight logic in
+	// lua_scripts/blackwinglair/boss_nefarian.lua. The drakonid
+	// summons, the Nefarian summon, the bone-construct transform, the
+	// UBRS-only SetData/path/gameobject arms, the threat-reset arm and
+	// the MovementInform zone-in-combat arm have no bridges; the
+	// encounter-state bookkeeping is blocked on the instance-script
+	// model.
+	RegisterLuaBoss("boss_victor_nefarius", 10162)
+	// Nefarian (Blackwing Lair, eighth boss) — fight logic in
+	// lua_scripts/blackwinglair/boss_nefarian.lua. The UpdateAI
+	// casting gates, the sub-20% bone-construct respawn loop and the
+	// MovementInform arm have no bridges (no UNIT_STATE, no summon
+	// model, no movement model); only the Talk arm of phase 3 is
+	// modeled.
+	RegisterLuaBoss("boss_nefarian", 11583)
 }
