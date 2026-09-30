@@ -591,6 +591,19 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 		motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
 		motion.Moving = false
 		motion.Evading = false
+		// HomeMovementGenerator<Creature>::DoFinalize (HomeMovementGenerator.cpp:151)
+		// fires AI()->JustReachedHome() when the home move completes, including
+		// the instant case where the creature is already at home (the spline
+		// finalizes immediately, so movementInform fires). Eluna::
+		// JustReachedHome (CreatureHooks.cpp:220) is START_HOOK_WITH_RETVAL
+		// (CREATURE_EVENT_ON_REACH_HOME, 24; args (event, creature)); the veto
+		// gates only ScriptedAI::JustReachedHome, which no ScriptedAI subclass
+		// overrides — BossAI::_JustReachedHome is me->setActive(false) and
+		// Go's native boss AIs carry no ReachedHome model — so the return is
+		// discarded as a provable no-op, matching the JustDied/SpellHit
+		// rulings. Health was already restored to max at evade start, matching
+		// DoFinalize's SetSpawnHealth ahead of the hook.
+		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
 	}
 }
 
@@ -1091,6 +1104,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		motion.Moving = false
 		motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
 		motion.WaitUntil = motion.MoveEnds
+		// Home-move completion: HomeMovementGenerator<Creature>::DoFinalize
+		// (HomeMovementGenerator.cpp:151) calls AI()->JustReachedHome() when
+		// the spline finalizes after evade — Eluna::JustReachedHome
+		// (CreatureHooks.cpp:220), CREATURE_EVENT_ON_REACH_HOME (24), args
+		// (event, creature). Same provable no-op veto ruling as the instant
+		// arm above: the veto gates ScriptedAI::JustReachedHome, which only
+		// BossAI overrides (me->setActive(false), unmodeled in Go), so the
+		// return is discarded.
+		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
 		return
 	}
 
