@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -106,6 +107,9 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 	if specialFlags&4 != 0 {
 		if canTake, _ := s.canTakeQuest(ctx, questID); canTake {
 			s.addQuestToPlayer(ctx, questID)
+			// Eluna CREATURE_EVENT_ON_QUEST_ACCEPT (event 31), fired from
+			// Player::AddQuestAndCheckCompletion (Player.cpp:15119 region).
+			s.fireCreatureQuestHook(ctx, guid, scripting.CreatureEventOnQuestAccept, s.luaQuest(ctx, questID))
 		}
 	}
 
@@ -143,6 +147,10 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 		return s.sendGossipComplete()
 	}
 	s.addQuestToPlayer(ctx, questID)
+	// Eluna CREATURE_EVENT_ON_QUEST_ACCEPT (event 31), fired from
+	// Player::AddQuestAndCheckCompletion after the auto-complete check
+	// (Player.cpp:15105-15122).
+	s.fireCreatureQuestHook(ctx, guid, scripting.CreatureEventOnQuestAccept, s.luaQuest(ctx, questID))
 	s.debug("quest accepted", "account", s.accountName, "quest", questID)
 
 	// Refresh questgiver overhead status (Player::AddQuestAndCheckCompletion)

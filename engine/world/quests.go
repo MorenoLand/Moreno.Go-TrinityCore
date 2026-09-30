@@ -8,6 +8,7 @@ import (
 	"math"
 	"strconv"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -217,6 +218,10 @@ func (s *session) handleQuestgiverStatusQuery(ctx context.Context, payload []byt
 	}
 	status := uint8(questDialogNone)
 	if entry != 0 {
+		// Eluna CREATURE_EVENT_ON_DIALOG_STATUS (event 35), fired from
+		// Player::GetQuestDialogStatus before the AI/relation checks
+		// (Player.cpp:16290-16296).
+		s.fireCreatureQuestHook(ctx, guid, scripting.CreatureEventOnDialogStatus)
 		if st, err := s.questDialogStatus(ctx, entry); err == nil {
 			status = st
 		}
@@ -809,6 +814,11 @@ func (s *session) sendQuestgiverStatusMultiple(ctx context.Context) bool {
 		if questgiver.faction != 0 && s.server.isHostileFaction(questgiver.faction, player) {
 			continue
 		}
+		// Eluna CREATURE_EVENT_ON_DIALOG_STATUS (event 35), fired per
+		// creature questgiver in the multiple-status sweep
+		// (Player.cpp:17160-17176). Gameobject GUIDs are skipped by the
+		// hook's TYPEID_UNIT gate.
+		s.fireCreatureQuestHook(ctx, questgiver.guid, scripting.CreatureEventOnDialogStatus)
 		status, statusErr := s.questDialogStatusFromRelations(ctx, questgiver.entry, questgiver.enderTable, questgiver.starterTable)
 		if statusErr != nil {
 			continue

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -126,6 +127,10 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 		s.debug("quest reward commit failed", "account", s.accountName, "quest", questID, "error", err)
 		return false
 	}
+	// Eluna CREATURE_EVENT_ON_QUEST_REWARD (event 34), fired from the
+	// reward-completion switch arm after the grant (QuestHandler.cpp:330-335);
+	// the reward-choice index rides as the opt argument.
+	s.fireCreatureQuestHook(ctx, giverGUID, scripting.CreatureEventOnQuestReward, s.luaQuest(ctx, questID), reward)
 	for slot := range s.player.QuestLog {
 		if s.player.QuestLog[slot].QuestID == questID {
 			s.player.QuestLog[slot] = questLogEntry{}

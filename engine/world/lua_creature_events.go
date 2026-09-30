@@ -78,3 +78,71 @@ func (s *Server) fireCreatureLuaEvent(ctx context.Context, motion *creatureMotio
 	args = append(args, extra...)
 	_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, event, args...)
 }
+
+// luaQuest builds the Eluna Quest userdata surface used as the quest
+// argument of the quest hooks. It mirrors the RegisterQuestEvent quest
+// object in engine/scripting/globals.go (ID/Name/Title/Level/MinLevel/Flags
+// plus the GetId/GetLevel/GetMinLevel/GetFlags/HasFlag/IsDaily/IsRepeatable
+// methods); a missing quest_template row yields a bare ID-only object so
+// the hook still fires with the correct argument count.
+func (s *session) luaQuest(ctx context.Context, questID uint32) *scripting.Object {
+	var id, level, minLevel, flags int64
+	var title string
+	if s != nil && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT ID, COALESCE(LogTitle, ''), COALESCE(QuestLevel, 0), COALESCE(MinLevel, 0), COALESCE(Flags, 0) FROM quest_template WHERE ID = ?`, questID).Scan(&id, &title, &level, &minLevel, &flags)
+	}
+	if id == 0 {
+		id = int64(questID)
+	}
+	methods := map[string]scripting.ObjectMethod{}
+	methods["GetId"] = luaNoArgs(func() any { return uint32(id) })
+	methods["GetLevel"] = luaNoArgs(func() any { return uint32(level) })
+	methods["GetMinLevel"] = luaNoArgs(func() any { return uint32(minLevel) })
+	methods["GetFlags"] = luaNoArgs(func() any { return uint32(flags) })
+	methods["HasFlag"] = func(_ context.Context, args []any) ([]any, error) {
+		var flag uint32
+		if len(args) > 0 {
+			if n, ok := args[0].(uint32); ok {
+				flag = n
+			}
+		}
+		return []any{uint32(flags)&flag != 0}, nil
+	}
+	methods["IsDaily"] = luaNoArgs(func() any { return uint32(flags)&0x1000 != 0 })
+	methods["IsRepeatable"] = luaNoArgs(func() any { return uint32(flags)&0x9000 != 0 })
+	return &scripting.Object{Type: "Quest", Fields: map[string]any{
+		"ID": uint32(id), "Name": title, "Title": title,
+		"Level": uint32(level), "MinLevel": uint32(minLevel), "Flags": uint32(flags),
+	}, Methods: methods}
+}
+
+// fireCreatureQuestHook dispatches an Eluna RegisterCreatureEvent quest hook
+// for the creature questgiver: ON_QUEST_ACCEPT (31), ON_QUEST_REWARD (34) and
+// ON_DIALOG_STATUS (35). C++ fires these only from the TYPEID_UNIT arms
+// (Player.cpp:15119, QuestHandler.cpp:332, Player.cpp:16293); gameobject and
+// item givers route to the GameObjectEvents and ItemQuestEvents families, so
+// non-creature GUIDs are skipped here. Unlike the combat hooks, the quest
+// hooks push the player first — Eluna argument order is (event, player,
+// creature, quest[, opt]) per CreatureHooks.cpp. The return values of these
+// hooks are discarded by every C++ call site, so Go discards them too.
+// Reference: Eluna::OnQuestAccept / OnQuestReward / GetDialogStatus.
+func (s *session) fireCreatureQuestHook(ctx context.Context, giverGUID uint64, event int, extra ...any) {
+	if s == nil || s.server == nil || uint16(giverGUID>>48) != 0xF130 {
+		return
+	}
+	if s.server.Features == nil || s.server.Features.Scripts == nil {
+		return
+	}
+	motion := s.findCreatureMotion(giverGUID)
+	if motion == nil {
+		return
+	}
+	creature := s.server.luaMotionCreature(motion)
+	if creature == nil {
+		return
+	}
+	args := make([]any, 0, len(extra)+3)
+	args = append(args, event, s.luaPlayer(), creature)
+	args = append(args, extra...)
+	_, _ = s.server.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, event, args...)
+}
