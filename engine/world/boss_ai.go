@@ -616,4 +616,11 @@ func init() {
 	// npc_vilebranch_speaker trash AIs from the same C++ file register
 	// their own creature events in the Lua file and are not bosses.
 	RegisterLuaBoss("boss_mandokir", 11382)
+	// High Priestess Mar'li (Zul'Gurub, main boss) — fight logic in
+	// lua_scripts/zulgurub/boss_marli.lua. The npc_spawn_of_marli trash
+	// AI from the same C++ file registers its own creature events in the
+	// Lua file and is not a boss; the gob_spider_egg gameobject script
+	// and the spell_hatch_spiders SpellScript have no Lua bridge and are
+	// not registered.
+	RegisterLuaBoss("boss_marli", 14510)
 }
