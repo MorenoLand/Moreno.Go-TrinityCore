@@ -131,6 +131,41 @@ func clearAcceptTradeMode(my, partner *session) {
 	}
 }
 
+// tradeSpellStillCastable mirrors the deferred-spell guard block in
+// HandleAcceptTradeOpcode (TradeHandler.cpp:364-392): the stored spell ID
+// must resolve to a spell entry (sSpellMgr->GetSpellInfo), the trade
+// target's non-traded slot item must still be present (his_trade->GetItem
+// (TRADE_SLOT_NONTRADED) for the acceptor's spell; my_trade's for the
+// partner's — caller passes the target session accordingly), and a stored
+// cast-item GUID must still resolve in the caster's inventory (TradeData::
+// GetSpellCastItem = GetItemByGuid(_spellCastItem)). Go has no Spell object,
+// so the CheckCast(true) re-validation itself is not representable.
+func (caster *session) tradeSpellStillCastable(ctx context.Context, target *session) bool {
+	if caster.trade == nil || target.trade == nil {
+		return false
+	}
+	if caster.server == nil || caster.server.Data == nil {
+		return false
+	}
+	if _, found, err := caster.server.Data.Spell(caster.trade.SpellID); err != nil || !found {
+		return false
+	}
+	if _, ok := target.trade.Items[tradeSlotNonTraded]; !ok {
+		return false
+	}
+	if castItemGUID := caster.trade.SpellCastItemGUID; castItemGUID != 0 {
+		cdb := caster.server.CharactersStore.DB
+		if cdb == nil {
+			return false
+		}
+		var one int64
+		if err := cdb.QueryRowContext(ctx, "SELECT 1 FROM character_inventory WHERE guid = ? AND item = ? LIMIT 1", caster.playerGUID, castItemGUID).Scan(&one); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 // sendTradeStatus sends SMSG_TRADE_STATUS (0x120) with matching TrinityCore structure.
 // Reference: WorldSession::SendTradeStatus (TradeHandler.cpp:34).
 func (s *session) sendTradeStatus(status uint32, traderGUID uint64, result uint32, isTargetResult uint8, itemLimitCategory uint32) error {
@@ -493,6 +528,26 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 		// Both accepted -> enter the accept process (TradeHandler.cpp:356-357)
 		// before executing: flags both trades and locks the traded items.
 		setAcceptTradeMode(s, partner)
+
+		// Deferred-spell accept-time re-validation (TradeHandler.cpp:364-438:
+		// "not accept if spell can't be cast now (cheating)"). A stored spell
+		// whose entry, target item, or cast item can no longer be resolved
+		// leaves the accept process (clearAcceptTradeMode both overloads)
+		// and is cleared (SetSpell(0)) in C++ order; the accept aborts and
+		// the window stays open. The CheckCast(true) + SendCastResult spell
+		// object validation and the my_spell/his_spell prepare at execute
+		// have no Go model (no Spell object) and are noted below.
+		if s.trade.SpellID != 0 && !s.tradeSpellStillCastable(ctx, partner) {
+			clearAcceptTradeMode(s, partner)
+			s.setTradeSpell(0, 0)
+			return true
+		}
+		if partner.trade.SpellID != 0 && !partner.tradeSpellStillCastable(ctx, s) {
+			clearAcceptTradeMode(s, partner)
+			partner.setTradeSpell(0, 0)
+			return true
+		}
+
 		s.completeTrade(ctx, partner)
 	}
 	return true
