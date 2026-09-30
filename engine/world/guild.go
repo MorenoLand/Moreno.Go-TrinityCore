@@ -30,6 +30,7 @@ const (
 	guildEventDemotion         uint8  = 1
 	guildEventJoined           uint8  = 3
 	guildEventLeft             uint8  = 4
+	guildEventRemoved          uint8  = 5
 	guildEventRankUpdated      uint8  = 10
 	guildEventRankDeleted      uint8  = 11
 	guildEventSignedOn         uint8  = 12
@@ -1152,16 +1153,38 @@ func (s *session) handleGuildRemove(ctx context.Context, payload []byte) bool {
 
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_member WHERE guid = ? AND guildid = ?", targetGUID, guildID)
 
+	// Guild::HandleRemoveMember (Guild.cpp:1582-1584): DeleteMember runs
+	// first — the member is erased from the roster and, when the removed
+	// player is online, player->SetInGuild(0) + player->SetRank(0). Clear
+	// the removed session's guild state before the broadcast so it is
+	// excluded from it, the same way C++ erases the member before
+	// _BroadcastEvent (Guild.cpp:1589, BroadcastPacket iterates only the
+	// remaining members).
+	if targetSess := s.server.findSessionByGUID(uint64(targetGUID)); targetSess != nil &&
+		targetSess.player != nil && targetSess.player.GuildID == uint32(guildID) {
+		targetSess.player.GuildID = 0
+		targetSess.player.GuildRank = 0
+		targetSess.sendPlayerUpdate()
+	}
+
 	// Guild::HandleRemoveMember (Guild.cpp:1587):
 	// _LogEvent(GUILD_EVENT_LOG_UNINVITE_PLAYER, player, member)
 	s.logGuildEvent(ctx, uint32(guildID), guildEventLogUninvitePlayer, s.playerGUID, uint64(targetGUID), 0)
 
-	eventBuf := protocol.NewBuffer(128)
-	eventBuf.WriteU8(5) // GE_REMOVED
-	eventBuf.WriteU8(2)
-	eventBuf.WriteCString(removee)
-	eventBuf.WriteCString(s.player.Name)
-	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), eventBuf.Bytes(), true)
+	// Guild::HandleRemoveMember (Guild.cpp:1589):
+	// _BroadcastEvent(GE_REMOVED, ObjectGuid::Empty, name, player->GetName())
+	// reaches every online guild member via BroadcastPacket, not just the
+	// remover; GuildEvent::Write appends no guid for this type
+	// (GuildPackets.cpp:130).
+	event := guildEventPayload(guildEventRemoved, 0, removee, s.player.Name)
+	s.server.sessionsMu.RLock()
+	for target := range s.server.sessions {
+		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != uint32(guildID) {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
+	}
+	s.server.sessionsMu.RUnlock()
 
 	return s.handleGuildRoster(ctx)
 }
