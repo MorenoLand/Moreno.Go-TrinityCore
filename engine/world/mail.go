@@ -336,7 +336,9 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 		msgBuf.WriteF32(daysLeft)
 		msgBuf.WriteU32(m.MailTemplate)
 		msgBuf.WriteString(m.Subject)
+		msgBuf.WriteU8(0) // C++ ByteBuffer << std::string_view appends the NUL (ByteBuffer.h:212-217)
 		msgBuf.WriteString(m.Body)
+		msgBuf.WriteU8(0)
 		msgBuf.WriteU8(uint8(len(m.Items)))
 		for pos, it := range m.Items {
 			msgBuf.WriteU8(uint8(pos))
