@@ -454,6 +454,16 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget) {
 	guid := uint32(target.GUID & 0x00FFFFFF)
 	now := time.Now()
 
+	// Eluna CREATURE_EVENT_ON_DIED (4), with the event-23 On_Reset pre-fire
+	// (Eluna::JustDied, CreatureHooks.cpp:143-152). The motion is already
+	// at Health 0 with the lootable flag set by every kill path, matching
+	// C++ firing after death registration (Unit.cpp:11391).
+	if s.server != nil {
+		if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
+			s.fireCreatureDied(ctx, motion)
+		}
+	}
+
 	// XP with the reference gray/zero-difference curve.
 	mobLevel := uint32(target.Level)
 	if mobLevel == 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
@@ -767,8 +777,10 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 		}
 		if respawn.Entry != 0 {
 			rawGUID := creatureWorldGUID(respawn.GUID, respawn.Entry)
+			var motion *creatureMotion
 			s.motionMu.Lock()
-			if motion := s.findCreatureMotionLocked(respawn.Map, 0, rawGUID); motion != nil {
+			if m := s.findCreatureMotionLocked(respawn.Map, 0, rawGUID); m != nil {
+				motion = m
 				motion.Health = respawn.Health
 				motion.MaxHealth = respawn.Health
 				motion.X, motion.Y, motion.Z = respawn.X, respawn.Y, respawn.Z
@@ -777,6 +789,11 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 			s.motionMu.Unlock()
 			s.clearLootState(respawn.Map, 0, rawGUID)
 			s.broadcastCreatureValuesUpdateInInstance(respawn.Map, 0, rawGUID, map[int]uint32{unitFieldHealth: respawn.Health, unitFieldDynamicFlags: 0})
+			// Eluna CREATURE_EVENT_ON_SPAWN (5), with the event-23 On_Reset
+			// pre-fire (Eluna::JustRespawned, CreatureHooks.cpp:210-216).
+			if motion != nil {
+				s.fireCreatureSpawned(ctx, motion)
+			}
 		}
 	}
 	for _, item := range instanceDue {
@@ -792,6 +809,11 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 		s.motionMu.Unlock()
 		s.clearLootState(item.key.MapID, item.key.InstanceID, creatureWorldGUID(respawn.GUID, respawn.Entry))
 		if motion != nil {
+			// Eluna CREATURE_EVENT_ON_SPAWN (5), with the event-23 On_Reset
+			// pre-fire (Eluna::JustRespawned, CreatureHooks.cpp:210-216) —
+			// ahead of the native boss reset, matching ElunaCreatureAI::
+			// JustAppeared calling sEluna before ScriptedAI::JustAppeared.
+			s.fireCreatureSpawned(ctx, motion)
 			if motion.BossAI != nil {
 				motion.BossAI.OnReset(ctx, s, motion)
 			}

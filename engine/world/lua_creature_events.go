@@ -215,6 +215,70 @@ func (s *Server) fireCreatureMoveInLOS(ctx context.Context, motion *creatureMoti
 	return luaHookVeto(results) || luaHookVeto(uniqueResults)
 }
 
+// fireCreatureDied dispatches Eluna CREATURE_EVENT_ON_DIED (4) for a
+// creature killed through the session kill funnel. C++
+// (Eluna::JustDied, CreatureHooks.cpp:143-152, reached from
+// ElunaCreatureAI::JustDied, ElunaCreatureAI.h:108-113) calls On_Reset
+// first — CREATURE_EVENT_ON_RESET (23) is a void hook (START_HOOK at
+// CreatureHooks.cpp:277-282), so its returns are discarded — then fires
+// ON_DIED with (event, creature, killer). Both binding families fire,
+// entry then unique, matching SetupStack's merged call list
+// (HookHelpers.h:37-39). The boolean veto gates only
+// ScriptedAI::JustDied: the empty CreatureAI base for plain creatures and
+// BossAI::_JustDied (summon despawn + instance DONE) for bosses — Go has
+// no summon-tracking model to gate and instance encounter clearing already
+// runs unconditionally in the kill paths, so the veto is a provable no-op
+// like the SpellHit ruling and is discarded. The killer is the session's
+// luaPlayer: every Go kill path (melee, spell, pet) funnels through
+// session.onCreatureKilled; C++ would push the pet unit on pet kills, a
+// nuance Go's funnel has no model for.
+func (s *session) fireCreatureDied(ctx context.Context, motion *creatureMotion) {
+	if s == nil || motion == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
+		return
+	}
+	sv := s.server
+	creature := sv.luaMotionCreature(motion)
+	if creature == nil {
+		return
+	}
+	resetArgs := []any{scripting.CreatureEventOnReset, creature}
+	_, _ = sv.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnReset, resetArgs...)
+	_, _ = sv.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnReset, resetArgs...)
+	diedArgs := []any{scripting.CreatureEventOnDied, creature, s.luaPlayer()}
+	_, _ = sv.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnDied, diedArgs...)
+	_, _ = sv.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnDied, diedArgs...)
+}
+
+// fireCreatureSpawned dispatches Eluna CREATURE_EVENT_ON_SPAWN (5) when a
+// respawn timer restores a creature. C++ (Eluna::JustRespawned,
+// CreatureHooks.cpp:210-216, reached in Trinity from
+// ElunaCreatureAI::JustAppeared, ElunaCreatureAI.h:169-175, which the
+// creature grid-update drives via m_triggerJustAppeared, Creature.
+// cpp:699-704) calls On_Reset first — CREATURE_EVENT_ON_RESET (23) is a
+// void hook (START_HOOK at CreatureHooks.cpp:277-282), returns discarded —
+// then fires ON_SPAWN with (event, creature). Both binding families fire,
+// entry then unique, matching SetupStack's merged call list
+// (HookHelpers.h:37-39). The boolean veto gates only
+// CreatureAI::JustAppeared's TempSummon follow-on-spawn terms (CreatureAI.
+// cpp:189-205) — Go has no TempSummon model, so it is a provable no-op and
+// is discarded. Go fires this only on the respawn path; C++ also fires it
+// on first grid activation of a fresh spawn, which has no Go fire site.
+func (s *Server) fireCreatureSpawned(ctx context.Context, motion *creatureMotion) {
+	if s == nil || motion == nil || s.Features == nil || s.Features.Scripts == nil {
+		return
+	}
+	creature := s.luaMotionCreature(motion)
+	if creature == nil {
+		return
+	}
+	resetArgs := []any{scripting.CreatureEventOnReset, creature}
+	_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnReset, resetArgs...)
+	_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnReset, resetArgs...)
+	spawnArgs := []any{scripting.CreatureEventOnSpawn, creature}
+	_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnSpawn, spawnArgs...)
+	_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnSpawn, spawnArgs...)
+}
+
 // luaQuest builds the Eluna Quest userdata surface used as the quest
 // argument of the quest hooks. It mirrors the GetQuest global's quest
 // object in engine/scripting/globals.go (ID/Name/Title/Level/MinLevel/Flags
