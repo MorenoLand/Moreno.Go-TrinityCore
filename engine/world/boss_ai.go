@@ -707,4 +707,9 @@ func init() {
 	// gates have no bridge (no UNIT_STATE model); the encounter-state
 	// bookkeeping is blocked on the instance-script model.
 	RegisterLuaBoss("boss_magmadar", 11982)
+	// Gehennas (Molten Core, third boss) — fight logic in
+	// lua_scripts/moltencore/boss_gehennas.lua. The UpdateAI casting
+	// gates have no bridge (no UNIT_STATE model); the encounter-state
+	// bookkeeping is blocked on the instance-script model.
+	RegisterLuaBoss("boss_gehennas", 12259)
 }
