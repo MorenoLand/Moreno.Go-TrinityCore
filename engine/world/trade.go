@@ -166,6 +166,73 @@ func (caster *session) tradeSpellStillCastable(ctx context.Context, target *sess
 	return true
 }
 
+// applyDeferredTradeEnchant mirrors the my_spell/his_spell->prepare at trade
+// execute (TradeHandler.cpp:524-526) for the representable slice:
+// SPELL_EFFECT_ENCHANT_ITEM (Spell::EffectEnchantItemPerm, SpellEffects.
+// cpp:2704) writes the effect's MiscValue enchant ID into the target item's
+// PERM_ENCHANTMENT_SLOT (ItemDefines.h:146: slot 0, index 0 of the 36-int
+// enchantments column; duration/charges triplets zeroed like
+// Item::SetEnchantment(slot, id, 0, 0, caster)). The spell target is the
+// other party's non-traded slot item (SpellCastTargets::Update,
+// Spell.cpp:470-474: the trade-item target resolves from the trader's
+// TradeData), so the caller passes the target session the same way as
+// tradeSpellStillCastable. The enchant entry is validated against the DBC
+// (sSpellItemEnchantmentStore.LookupEntry). Stat application for an equipped
+// target is covered by the syncEquipmentCache calls later in completeTrade,
+// which read the perm slot from the column.
+func (caster *session) applyDeferredTradeEnchant(ctx context.Context, target *session) {
+	if caster.trade == nil || target.trade == nil || caster.trade.SpellID == 0 {
+		return
+	}
+	if caster.server == nil || caster.server.Data == nil {
+		return
+	}
+	item, ok := target.trade.Items[tradeSlotNonTraded]
+	if !ok {
+		return
+	}
+	spell, found, err := caster.server.Data.Spell(caster.trade.SpellID)
+	if err != nil || !found {
+		return
+	}
+	var enchantID uint32
+	for _, eff := range spell.Effects {
+		if eff.Effect == 53 && eff.MiscValue > 0 { // SPELL_EFFECT_ENCHANT_ITEM
+			enchantID = uint32(eff.MiscValue)
+			break
+		}
+	}
+	if enchantID == 0 {
+		return
+	}
+	if _, ok, err := caster.server.Data.SpellItemEnchantment(enchantID); err != nil || !ok {
+		return
+	}
+	cdb := caster.server.CharactersStore.DB
+	if cdb == nil {
+		return
+	}
+	var encStr sql.NullString
+	if err := cdb.QueryRowContext(ctx, "SELECT enchantments FROM item_instance WHERE guid = ? LIMIT 1", item.ItemGUID).Scan(&encStr); err != nil {
+		return
+	}
+	fields := strings.Fields(encStr.String)
+	var enchants [36]uint32
+	for i := 0; i < len(fields) && i < 36; i++ {
+		if val, err := strconv.ParseUint(fields[i], 10, 32); err == nil {
+			enchants[i] = uint32(val)
+		}
+	}
+	enchants[0] = enchantID
+	enchants[1] = 0
+	enchants[2] = 0
+	encParts := make([]string, 36)
+	for i := 0; i < 36; i++ {
+		encParts[i] = strconv.FormatUint(uint64(enchants[i]), 10)
+	}
+	_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET enchantments = ? WHERE guid = ?", strings.Join(encParts, " "), item.ItemGUID)
+}
+
 // sendTradeStatus sends SMSG_TRADE_STATUS (0x120) with matching TrinityCore structure.
 // Reference: WorldSession::SendTradeStatus (TradeHandler.cpp:34).
 func (s *session) sendTradeStatus(status uint32, traderGUID uint64, result uint32, isTargetResult uint8, itemLimitCategory uint32) error {
@@ -535,8 +602,9 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 		// leaves the accept process (clearAcceptTradeMode both overloads)
 		// and is cleared (SetSpell(0)) in C++ order; the accept aborts and
 		// the window stays open. The CheckCast(true) + SendCastResult spell
-		// object validation and the my_spell/his_spell prepare at execute
-		// have no Go model (no Spell object) and are noted below.
+		// object validation has no Go model (no Spell object); the
+		// my_spell/his_spell prepare at execute is modeled by
+		// applyDeferredTradeEnchant for the SPELL_EFFECT_ENCHANT_ITEM slice.
 		if s.trade.SpellID != 0 && !s.tradeSpellStillCastable(ctx, partner) {
 			clearAcceptTradeMode(s, partner)
 			s.setTradeSpell(0, 0)
@@ -712,6 +780,12 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 			s.adjustQuestItemCount(ctx, it.ItemEntry, it.StackCount, true)
 		}
 	}
+
+	// Deferred-spell prepare at execute (TradeHandler.cpp:524-526): each
+	// side's deferred spell is applied to the other side's non-traded slot
+	// item now that the inventory move is done, before the trade completes.
+	s.applyDeferredTradeEnchant(ctx, partner)
+	partner.applyDeferredTradeEnchant(ctx, s)
 
 	_ = s.sendTradeStatus(tradeStatusTradeComplete, 0, 0, 0, 0)
 	_ = partner.sendTradeStatus(tradeStatusTradeComplete, 0, 0, 0, 0)
