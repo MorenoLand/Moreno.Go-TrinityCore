@@ -557,6 +557,13 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		}
 		s.server.motionMu.Unlock()
 
+		// Deferred Eluna summon hooks queued by boss OnDamageTaken (e.g.
+		// VanCleef's 50% summon arm): the fire must run after the unlock
+		// since Lua handler methods lock motionMu on demand.
+		if motion != nil {
+			s.server.drainBossSummonHooks(ctx, motion, motion.BossAI)
+		}
+
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth: newHealth,
 		})
@@ -832,6 +839,13 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			}
 		}
 		s.server.motionMu.Unlock()
+
+		// Deferred Eluna summon hooks queued by boss OnDamageTaken (e.g.
+		// VanCleef's 50% summon arm): the fire must run after the unlock
+		// since Lua handler methods lock motionMu on demand.
+		if motion != nil {
+			s.server.drainBossSummonHooks(ctx, motion, motion.BossAI)
+		}
 
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth: newHealth,

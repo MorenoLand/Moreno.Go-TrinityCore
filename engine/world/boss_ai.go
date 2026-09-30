@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -60,6 +61,11 @@ type vancleefAI struct {
 	health33     bool
 	health25     bool
 	summons      []uint64
+	// pendingSummonHooks accumulates summons spawned by the 50% arm while the
+	// damage path holds motionMu; their Eluna hook fires after the caller's
+	// unlock via firePendingSummonHooks (Lua handler methods lock motionMu
+	// on demand, so the fire must never run under it).
+	pendingSummonHooks []*creatureMotion
 }
 
 func newVanCleefAI(m *creatureMotion) BossAI {
@@ -72,7 +78,31 @@ func (ai *vancleefAI) OnReset(ctx context.Context, s *Server, m *creatureMotion)
 	ai.health50 = false
 	ai.health33 = false
 	ai.health25 = false
-	ai.despawnSummons(s, m.Map, m.InstanceID)
+	ai.despawnSummons(ctx, s, m)
+}
+
+// firePendingSummonHooks dispatches Eluna CREATURE_EVENT_ON_JUST_SUMMONED_CREATURE
+// (19) for the summons queued by the 50% arm. Call only after the damage path
+// releases motionMu. The boolean veto gates only the empty ScriptedAI::
+// JustSummoned base (see fireCreatureSummoned), so it is discarded.
+func (ai *vancleefAI) firePendingSummonHooks(ctx context.Context, s *Server, m *creatureMotion) {
+	if len(ai.pendingSummonHooks) == 0 {
+		return
+	}
+	pending := ai.pendingSummonHooks
+	ai.pendingSummonHooks = nil
+	for _, summon := range pending {
+		s.fireCreatureSummoned(ctx, m, scripting.CreatureEventOnJustSummonedCreature, summon)
+	}
+}
+
+// drainBossSummonHooks fires deferred Eluna summon hooks queued by a boss AI's
+// damage handling. Only vancleefAI queues today; the rest are no-ops. Call
+// after the damage path releases motionMu.
+func (s *Server) drainBossSummonHooks(ctx context.Context, owner *creatureMotion, ai BossAI) {
+	if vc, ok := ai.(*vancleefAI); ok {
+		vc.firePendingSummonHooks(ctx, s, owner)
+	}
 }
 
 func (ai *vancleefAI) OnAggro(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
@@ -101,7 +131,14 @@ func (ai *vancleefAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureM
 		s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Edwin VanCleef", 2, 0)
 		s.castCreatureSpell(ctx, m, 5200, m.GUID) // SPELL_VANCLEEFS_ALLIES
 
-		// Spawn 2 Blackguards (Entry 636) near VanCleef
+		// Spawn 2 Blackguards (Entry 636) near VanCleef. The damage paths
+		// (combat.go, spells.go) hold s.motionMu across OnDamageTaken, so
+		// this arm uses the caller-held lock and must not relock it. The
+		// Eluna CREATURE_EVENT_ON_JUST_SUMMONED_CREATURE (19) fire is
+		// deferred to firePendingSummonHooks after the caller's unlock —
+		// TempSummon::InitSummon (TemporarySummon.cpp:229-244) fires
+		// Eluna::JustSummoned (CreatureHooks.cpp:165-171, args
+		// (event, creature, summon)) once the summon exists.
 		for i := 0; i < 2; i++ {
 			bgGUID := uint64(0xF130000000000000) | uint64(636)<<24 | uint64(rand.Intn(90000)+10000)
 			offset := float32((i+1)*2) - 3.0
@@ -128,10 +165,9 @@ func (ai *vancleefAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureM
 			}
 			bgMotion.ThreatMgr = NewThreatManager(bgGUID)
 			bgMotion.ThreatMgr.AddThreat(m.TargetGUID, 100, true)
-			s.motionMu.Lock()
 			s.motionMapLocked(m.Map, m.InstanceID)[bgGUID] = bgMotion
-			s.motionMu.Unlock()
 			ai.summons = append(ai.summons, bgGUID)
+			ai.pendingSummonHooks = append(ai.pendingSummonHooks, bgMotion)
 			s.broadcastMonsterMoveInInstance(m.Map, m.InstanceID, bgGUID, bgMotion.X, bgMotion.Y, bgMotion.Z, bgMotion.X, bgMotion.Y, bgMotion.Z, 0, false)
 		}
 	}
@@ -163,16 +199,32 @@ func (ai *vancleefAI) OnEvade(ctx context.Context, s *Server, m *creatureMotion)
 func (ai *vancleefAI) OnUpdate(ctx context.Context, s *Server, m *creatureMotion, diff time.Duration, players []playerPos, now time.Time) {
 }
 
-func (ai *vancleefAI) despawnSummons(s *Server, mapID, instanceID uint32) {
-	if s == nil {
+func (ai *vancleefAI) despawnSummons(ctx context.Context, s *Server, owner *creatureMotion) {
+	if s == nil || owner == nil {
 		return
 	}
 	s.motionMu.Lock()
-	defer s.motionMu.Unlock()
+	motions := s.motionMapLocked(owner.Map, owner.InstanceID)
+	var despawned []*creatureMotion
 	for _, guid := range ai.summons {
-		delete(s.motionMapLocked(mapID, instanceID), guid)
+		if m, ok := motions[guid]; ok {
+			despawned = append(despawned, m)
+		}
+		delete(motions, guid)
 	}
 	ai.summons = nil
+	s.motionMu.Unlock()
+	// Eluna::SummonedCreatureDespawn (CreatureHooks.cpp:174-181),
+	// CREATURE_EVENT_ON_SUMMONED_CREATURE_DESPAWN (20), args
+	// (event, creature, summon), is fired by TempSummon::UnSummon
+	// (TemporarySummon.cpp:274-284) before the summon leaves the world;
+	// Go fires per summon after the unlock since the Lua handlers' object
+	// methods lock motionMu on demand. The boolean veto gates only the
+	// empty ScriptedAI::SummonedCreatureDespawn base, so it is discarded
+	// (see fireCreatureSummoned).
+	for _, m := range despawned {
+		s.fireCreatureSummoned(ctx, owner, scripting.CreatureEventOnSummonedCreatureDespawn, m)
+	}
 }
 
 // -------------------------------------------------------------
