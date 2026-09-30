@@ -593,4 +593,8 @@ func init() {
 	// lua_scripts/zulgurub/boss_gahzranka.lua. The fished-up summon has
 	// no C++ CreatureScript in boss_gahzranka.cpp and is not registered.
 	RegisterLuaBoss("boss_gahzranka", 15114)
+	// Gri'lek of the Iron Blade (Zul'Gurub, Edge of Madness) — fight
+	// logic in lua_scripts/zulgurub/boss_grilek.lua. The brazier summon
+	// has no C++ CreatureScript in boss_grilek.cpp and is not registered.
+	RegisterLuaBoss("boss_grilek", 15082)
 }
