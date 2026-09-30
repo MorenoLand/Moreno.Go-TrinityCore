@@ -249,10 +249,11 @@ func (s *session) spellModAffectsSpell(modSpellID uint32, mask [3]uint32, op uin
 	return spellAffectedBySpellFamilyMask(affectSpell.SpellFamilyName, mask, spell)
 }
 
-// applySpellMod mirrors Player::ApplySpellMod (Player.cpp:21309-21370): it
-// folds the registered flat and pct modifiers affecting spell into basevalue
-// as (basevalue + totalFlat) * totalMul. Mods from charge-using auras take
-// the charged-mod slot (highest Priority wins in C++; wotlk.Spell has no
+// applySpellMod mirrors the int32 instantiation of Player::ApplySpellMod
+// (Player.cpp:21309-21370): it folds the registered flat and pct modifiers
+// affecting spell into basevalue as (basevalue + totalFlat) * totalMul,
+// truncated back to int32. Mods from charge-using auras take the
+// charged-mod slot (highest Priority wins in C++; wotlk.Spell has no
 // Priority field, so the first one wins — noted). Go has no cast Spell
 // object, so the m_spellModTakingSpell redirect and the ApplyModToSpell
 // charge-drop registration have no model (standing gaps); the nil-spell
@@ -266,6 +267,33 @@ func (s *session) applySpellMod(spell wotlk.Spell, op uint8, basevalue int32) in
 	if spell.AttributesEx3&spellAttr3NoDoneBonus != 0 {
 		return basevalue
 	}
+	totalFlat, totalMul := s.spellModTotals(spell, op, basevalue >= 10000)
+	return int32(float64(basevalue+totalFlat) * totalMul)
+}
+
+// applySpellModFloat mirrors the float instantiation of
+// Player::ApplySpellMod (Player.cpp:21309-21370): the base value stays in
+// the float domain through the whole computation, matching basevalue =
+// T(float(basevalue + totalflat) * totalmul) with T=float — fractional
+// chances (proc chance rolls) are never truncated through int32.
+func (s *session) applySpellModFloat(spell wotlk.Spell, op uint8, basevalue float64) float64 {
+	if s == nil || s.server == nil || s.server.Data == nil || op >= spellModOpCount {
+		return basevalue
+	}
+	// SpellInfo::IsAffectedBySpellMods (SpellInfo.cpp:1319).
+	if spell.AttributesEx3&spellAttr3NoDoneBonus != 0 {
+		return basevalue
+	}
+	totalFlat, totalMul := s.spellModTotals(spell, op, basevalue >= 10000)
+	return (basevalue + float64(totalFlat)) * totalMul
+}
+
+// spellModTotals runs the modifier fold of Player::ApplySpellMod
+// (Player.cpp:21309-21370) shared by both instantiations, returning the
+// folded flat total and pct multiplier. instantBaseOK is the
+// basevalue >= T(10000) instant-cast guard, evaluated in the caller's
+// domain as in the C++ template.
+func (s *session) spellModTotals(spell wotlk.Spell, op uint8, instantBaseOK bool) (int32, float64) {
 	type candidate struct {
 		modType     uint8
 		value       int32
@@ -292,7 +320,7 @@ func (s *session) applySpellMod(spell wotlk.Spell, op uint8, basevalue int32) in
 			return
 		}
 		// PCT branch (Player.cpp:21324-21344).
-		if op == spellModCastingTime && c.value <= -100 && basevalue >= 10000 {
+		if op == spellModCastingTime && c.value <= -100 && instantBaseOK {
 			return
 		}
 		if op == spellModCriticalChance || op == spellModGlobalCooldown {
@@ -316,5 +344,5 @@ func (s *session) applySpellMod(spell wotlk.Spell, op uint8, basevalue int32) in
 	if charged != nil {
 		apply(charged)
 	}
-	return int32(float64(basevalue+totalFlat) * totalMul)
+	return totalFlat, totalMul
 }

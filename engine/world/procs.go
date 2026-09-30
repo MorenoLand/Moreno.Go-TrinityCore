@@ -1500,7 +1500,7 @@ func procEventKeepsProcCharges(ev procEventInfo) bool {
 func (s *session) rollAuraProcChance(entry spellProcEntry, auraSpell wotlk.Spell) bool {
 	chance := float64(entry.Chance)
 	if s != nil {
-		chance = float64(s.applySpellMod(auraSpell, spellModChanceOfSuccess, int32(chance)))
+		chance = s.applySpellModFloat(auraSpell, spellModChanceOfSuccess, chance)
 		if entry.AttributesMask&procAttrReduceProc60 != 0 && s.player != nil && s.player.Level > 60 {
 			chance = math.Max(0, (1-float64(s.player.Level-60)/30)*chance)
 		}
