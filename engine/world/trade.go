@@ -230,6 +230,13 @@ func (caster *session) applyDeferredTradeEnchant(ctx context.Context, target *se
 		case 53: // SPELL_EFFECT_ENCHANT_ITEM
 			writes = append(writes, slotWrite{slot: 0, enchant: enchantID})
 		case 54: // SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY
+			// Rockbiter Weapon (SpellEffects.cpp:2843-2871): C++ enchants the
+			// caster's own weapons via triggered spells and returns without
+			// touching the item target, so a deferred Rockbiter writes
+			// nothing to the trade item.
+			if spell.SpellFamilyName == spellFamilyShaman && spell.SpellFamilyFlags[0]&0x400000 != 0 {
+				continue
+			}
 			writes = append(writes, slotWrite{slot: 1, enchant: enchantID, duration: tempTradeEnchantDurationMs(spell)})
 		case 156: // SPELL_EFFECT_ENCHANT_ITEM_PRISMATIC
 			for _, e := range entry.Effects {
