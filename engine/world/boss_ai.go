@@ -529,4 +529,10 @@ func init() {
 	// lua_scripts/karazhan/boss_shade_of_aran.lua (water elemental
 	// 17167 AI "npc_aran_elemental" in the same file).
 	RegisterLuaBoss("boss_shade_of_aran", 16524)
+	// Terestian Illhoof (Karazhan) — fight logic in
+	// lua_scripts/karazhan/boss_terestian_illhoof.lua (Kil'rek 17229 AI
+	// "npc_kilrek" and fiendish imp 17267 AI "npc_fiendish_imp" in the
+	// same file; demon chains 17248 and fiendish portal 17265 have no
+	// Lua-modelable hooks).
+	RegisterLuaBoss("boss_terestian_illhoof", 15688)
 }
