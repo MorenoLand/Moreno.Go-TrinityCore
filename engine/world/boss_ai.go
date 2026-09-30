@@ -647,4 +647,10 @@ func init() {
 	// SpellScript from the same C++ file have no Lua bridges and are
 	// not registered; the phase-two DoAction trigger has no bridge.
 	RegisterLuaBoss("boss_razorgore", 12435)
+	// Vaelastrasz the Corrupt (Blackwing Lair, second boss) — fight
+	// logic in lua_scripts/blackwinglair/boss_vaelastrasz.lua. The
+	// spell_vael_burning_adrenaline AuraScript from the same C++ file
+	// has no Lua bridge and is not registered; the pre-combat speech
+	// machine runs through the gossip hooks in the same file.
+	RegisterLuaBoss("boss_vaelastrasz", 13020)
 }
