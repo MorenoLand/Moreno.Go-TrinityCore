@@ -516,4 +516,7 @@ func init() {
 	// Netherspite (Karazhan) — fight logic in
 	// lua_scripts/karazhan/boss_netherspite.lua.
 	RegisterLuaBoss("boss_netherspite", 15689)
+	// The Curator (Karazhan) — fight logic in
+	// lua_scripts/karazhan/boss_curator.lua.
+	RegisterLuaBoss("boss_curator", 15691)
 }
