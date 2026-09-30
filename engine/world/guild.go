@@ -2419,12 +2419,15 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 			return true
 		}
 
-		// Permissions check
-		if !s.checkGuildBankRights(ctx, guildID, bankTab, false) || !s.checkGuildBankRights(ctx, guildID, bankTab1, false) {
-			s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildPermissions)
-			return true
-		}
+		// Permissions check — BankMoveItemData::HasStoreRights (Guild.cpp:855-862)
+		// and HasWithdrawRights (Guild.cpp:864-877) both skip the rights check
+		// when the item is swapped within the same bank tab, so the upfront
+		// check applies only to cross-tab moves.
 		if bankTab != bankTab1 {
+			if !s.checkGuildBankRights(ctx, guildID, bankTab, false) || !s.checkGuildBankRights(ctx, guildID, bankTab1, false) {
+				s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildPermissions)
+				return true
+			}
 			if !s.checkGuildBankRights(ctx, guildID, bankTab1, true) {
 				s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildPermissions)
 				return true
