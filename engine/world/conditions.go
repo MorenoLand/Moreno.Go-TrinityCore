@@ -538,11 +538,77 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 			excludeGUID = creatureGUID
 		}
 		return s.nearestCreatureEntryInRange(uint32(row.Value1), float32(row.Value2), ox, oy, oz, excludeGUID, row.Value3 == 0), nil
-	case 31: // CONDITION_OBJECT_ENTRY_GUID (TypeID 3 unit, entry match)
-		if row.Value1 != 3 {
+	case 31: // CONDITION_OBJECT_ENTRY_GUID (ConditionMgr.cpp:358-380: type id
+		// must match, then the entry matches unless Value2 is 0, then the
+		// spawn id matches when Value3 is set)
+		// C++ IsValid rejects the row at load for dangling template/data
+		// references (2113-2160); mirror those as fail-closed. The condition
+		// object is the ConditionTarget endpoint (ConditionMgr.cpp:130-138):
+		// target 0 is the player (TYPEID_PLAYER = 4, ObjectGuid.h:38 — Player
+		// never sets OBJECT_FIELD_ENTRY, so its entry reads 0), target 1 the
+		// gossip/vendor creature (TYPEID_UNIT = 3) resolved through the
+		// motion registry; anything else or an unresolvable target fails
+		// closed, matching the C++ null-target arm. The creature's spawn id
+		// is the low 24 bits of its motion key: the spawn DB guid for world
+		// creatures (creatureWorldGUID, creatures.go:376), the pet number
+		// for pets (makePetGUID, pets.go:108) — exactly C++ GetSpawnId()
+		// (Creature.h:87; Pet.cpp sets m_spawnId = guidlow). Go serves no
+		// gameobject condition object, so TYPEID_GAMEOBJECT (5) rows fail
+		// the type check, C++-exact in these contexts (the gameobject-data
+		// IsValid arm stays unmodeled for the same reason).
+		if s == nil || s.player == nil {
 			return false, nil
 		}
-		return row.Value2 == 0 || uint32(row.Value2) == creatureEntry, nil
+		if uint32(row.Value1) == 3 { // TYPEID_UNIT
+			if row.Value2 != 0 || row.Value3 != 0 {
+				if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+					return false, nil
+				}
+				if row.Value2 != 0 {
+					var templateExists int
+					if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM creature_template WHERE entry = ?", uint32(row.Value2)).Scan(&templateExists); err != nil {
+						return false, nil
+					}
+				}
+				if row.Value3 != 0 {
+					var dataEntry uint32
+					if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", uint32(row.Value3)).Scan(&dataEntry); err != nil {
+						return false, nil
+					}
+					if row.Value2 != 0 && dataEntry != uint32(row.Value2) {
+						return false, nil
+					}
+				}
+			}
+		}
+		var typeID, entry, spawnID uint32
+		switch row.ConditionTarget {
+		case 0:
+			typeID = 4 // TYPEID_PLAYER (ObjectGuid.h:38)
+		case 1:
+			if s.server == nil || creatureGUID == 0 {
+				return false, nil
+			}
+			s.server.motionMu.Lock()
+			motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, creatureGUID)
+			s.server.motionMu.Unlock()
+			if motion == nil {
+				return false, nil
+			}
+			typeID = 3 // TYPEID_UNIT (ObjectGuid.h:37)
+			entry = motion.Entry
+			spawnID = uint32(motion.GUID & 0xFFFFFF)
+		default:
+			return false, nil
+		}
+		if typeID != uint32(row.Value1) {
+			return false, nil
+		}
+		meets := row.Value2 == 0 || entry == uint32(row.Value2)
+		if row.Value3 != 0 && typeID == 3 { // TYPEID_UNIT; other type ids ignore Value3 (default arm)
+			meets = meets && spawnID == uint32(row.Value3)
+		}
+		return meets, nil
 	case 32: // CONDITION_TYPE_MASK (ConditionMgr.cpp:381-385: object->isType(ConditionValue1))
 		// The condition object is the ConditionTarget entry of the target list
 		// (Condition::Meets, ConditionMgr.cpp:130-138); a missing target fails
