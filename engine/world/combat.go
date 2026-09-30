@@ -936,6 +936,8 @@ type creatureStats struct {
 	Level           uint32
 	Health          uint32
 	MaxHealth       uint32
+	Mana            uint32
+	UnitClass       uint32
 	Armor           uint32
 	Resistances     [7]uint32
 	MinDamage       float32
@@ -991,7 +993,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	}
 
 	var maxlevel, unitClass, exp, baseAttackTime, unitFlags, flagsExtra, flight int64
-	var healthMod, armorMod, damageMod float64
+	var healthMod, manaMod, armorMod, damageMod float64
 
 	row := s.WorldStore.DB.QueryRowContext(ctx, `SELECT 
 		COALESCE(maxlevel, 1), 
@@ -999,13 +1001,14 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		COALESCE(exp, 0), 
 		COALESCE(BaseAttackTime, 2000), 
 		COALESCE(HealthModifier, 1.0), 
+		COALESCE(ManaModifier, 1.0),
 		COALESCE(ArmorModifier, 1.0), 
 		COALESCE(DamageModifier, 1.0),
 		COALESCE(ct.unit_flags, 0),
 		COALESCE(ct.flags_extra, 0),
 		COALESCE(ctm.Flight, 0)
 		FROM creature_template ct LEFT JOIN creature_template_movement ctm ON ctm.CreatureId = ct.entry WHERE ct.entry = ?`, entry)
-	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &flight); err != nil {
+	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &flight); err != nil {
 		return stats
 	}
 	if reactState, known := s.loadCreatureReaction(ctx, entry); known {
@@ -1033,6 +1036,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	}
 
 	stats.Level = uint32(maxlevel)
+	stats.UnitClass = uint32(unitClass)
 	stats.AttackTime = uint32(baseAttackTime)
 	stats.UnitFlags = uint32(unitFlags)
 	stats.FlagsExtra = uint32(flagsExtra)
@@ -1051,13 +1055,16 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	stats.MaxDamage = float32(maxlevel) * 1.25 * attSpeed
 
 	// Query creature_classlevelstats
-	var basehp0, basehp1, basehp2, basearmor int64
+	var basehp0, basehp1, basehp2, basearmor, basemana int64
 	var dmgBase, dmgExp1, dmgExp2 float64
 	err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT 
-		basehp0, basehp1, basehp2, basearmor, damage_base, damage_exp1, damage_exp2 
+		basehp0, basehp1, basehp2, basearmor, basemana, damage_base, damage_exp1, damage_exp2 
 		FROM creature_classlevelstats WHERE level = ? AND class = ?`, maxlevel, unitClass).
-		Scan(&basehp0, &basehp1, &basehp2, &basearmor, &dmgBase, &dmgExp1, &dmgExp2)
+		Scan(&basehp0, &basehp1, &basehp2, &basearmor, &basemana, &dmgBase, &dmgExp1, &dmgExp2)
 	if err == nil {
+		if basemana > 0 && manaMod > 0 {
+			stats.Mana = uint32(math.Ceil(float64(basemana) * manaMod))
+		}
 		var selectedHP int64
 		var selectedDmg float64
 		switch {

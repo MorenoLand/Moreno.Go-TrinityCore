@@ -274,6 +274,12 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			ReactState:      st.ReactState,
 			ReactStateKnown: st.ReactStateKnown,
 		}
+		if st.UnitClass == 2 || st.UnitClass == 8 {
+			motion.MaxPowers[0] = st.Mana
+			motion.Powers[0] = st.Mana
+			motion.MaxMana = st.Mana
+			motion.Mana = st.Mana
+		}
 		if walkSpeed <= 0 {
 			motion.Speed = creatureBaseWalkSpeed
 		}
