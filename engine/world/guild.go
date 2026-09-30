@@ -2870,6 +2870,52 @@ func (s *session) guildPlayerMoveSlots(ctx context.Context, q guildMoveQueryer, 
 	return slots, 0
 }
 
+// guildPlayerSimilarItemCap mirrors the MaxCount term of
+// Player::CanTakeMoreSimilarItems (Player.cpp:10404-10459) as invoked from
+// Player::CanStoreItem (Player.cpp:10731-10742) before any destination
+// planning: withdrawing more of an entry than the MaxCount headroom allows
+// stores only the headroom; zero headroom fails the whole move with
+// EQUIP_ERR_CANT_CARRY_MORE_OF_THIS (ItemDefines.h:43, = 17) instead of
+// planning. The count is character-inventory-wide (GetItemCount with
+// inBankAlso=true, Player.cpp:9914), so it is a bag-agnostic sum over
+// character_inventory; the source item lives in the guild bank, not
+// character_inventory, so no skip-GUID exclusion is needed (C++ skips
+// pItem, the bank item). Socketed-gem counts (Player.cpp:9924-9930) have no
+// Go model. The ItemLimitCategory sub-term (Player.cpp:10440-10457) needs
+// ItemLimitCategory.dbc, absent from this server, so it is not modeled.
+func (s *session) guildPlayerSimilarItemCap(ctx context.Context, q guildMoveQueryer, playerGUID uint64, entry, count uint32) (uint32, uint8) {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return count, 0
+	}
+	var maxCount, limitCategory int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(MaxCount, 0), COALESCE(ItemLimitCategory, 0) FROM item_template WHERE entry = ?`, entry).Scan(&maxCount, &limitCategory); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// C++ answers EQUIP_ERR_CANT_CARRY_MORE_OF_THIS for a missing
+			// template (Player.cpp:10406-10411).
+			return 0, equipErrCantCarryMoreOfThis
+		}
+		// A transport error is deferred to the planner's own template
+		// query rather than failing the move here.
+		return count, 0
+	}
+	_ = limitCategory // ItemLimitCategory.dbc absent; sub-term not modeled (see above).
+	if maxCount <= 0 || maxCount == 2147483647 {
+		return count, 0
+	}
+	var owned int64
+	if err := q.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ?`, playerGUID, entry).Scan(&owned); err != nil {
+		return count, 0
+	}
+	headroom := maxCount - owned
+	if headroom <= 0 {
+		return 0, equipErrCantCarryMoreOfThis
+	}
+	if uint64(count) > uint64(headroom) {
+		return uint32(headroom), 0
+	}
+	return count, 0
+}
+
 func (s *session) guildPlayerMovePlan(ctx context.Context, q guildMoveQueryer, playerGUID uint64, entry, count, maxStack uint32, target *guildMoveLocation) ([]guildMovePlacement, uint8) {
 	slots, errCode := s.guildPlayerMoveSlots(ctx, q, playerGUID, entry)
 	if errCode != 0 {
@@ -3200,6 +3246,23 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 	if destination != nil && destination.Bank {
 		placements, storeErr = s.guildBankMovePlan(ctx, tx, uint64(guildID), destination.Tab, destination.Slot, sourceLoc, source, moveCount, maxStack, full)
 	} else {
+		// Player::CanStoreItem (Player.cpp:10731-10742) runs the
+		// CanTakeMoreSimilarItems unique/max-count cap before any
+		// destination planning. Guild::_DoItemsMove runs the store with
+		// sendError=false on this path (Guild.cpp:2714), so a zero-headroom
+		// failure is silent — no command result, no equip error.
+		capped, capErr := s.guildPlayerSimilarItemCap(ctx, tx, s.playerGUID, source.Entry, moveCount)
+		if capErr != 0 {
+			_ = tx.Rollback()
+			return guildMoveOutcome{}, false
+		}
+		if capped < moveCount {
+			// Partial store: the source keeps the remainder (Go split
+			// semantics). C++ truncates the detached bank item to the
+			// stored count instead (Player::_StoreItem, Player.cpp:11290),
+			// destroying the excess — a data-loss edge not replicated.
+			moveCount, full = capped, false
+		}
 		var target *guildMoveLocation
 		if destination != nil && !autoStore {
 			target = destination
