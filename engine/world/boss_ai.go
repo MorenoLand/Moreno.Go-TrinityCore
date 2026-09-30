@@ -535,4 +535,16 @@ func init() {
 	// same file; demon chains 17248 and fiendish portal 17265 have no
 	// Lua-modelable hooks).
 	RegisterLuaBoss("boss_terestian_illhoof", 15688)
+	// Opera Event (Karazhan) — fight logic in
+	// lua_scripts/karazhan/bosses_opera.lua (Tito 17548 AI "npc_tito" in
+	// the same file; cyclone 18412 and grandmother 17603 have no
+	// Lua-modelable hooks).
+	RegisterLuaBoss("boss_dorothee", 17535)
+	RegisterLuaBoss("boss_strawman", 17543)
+	RegisterLuaBoss("boss_tinhead", 17547)
+	RegisterLuaBoss("boss_roar", 17546)
+	RegisterLuaBoss("boss_crone", 18168)
+	RegisterLuaBoss("boss_bigbadwolf", 17521)
+	RegisterLuaBoss("boss_julianne", 17534)
+	RegisterLuaBoss("boss_romulo", 17533)
 }
