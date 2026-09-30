@@ -137,6 +137,16 @@ const (
 	guildEquipErrItemDoesntGoIntoBag uint8  = 15
 )
 
+// Guild event log types mirroring TrinityCore Guild.h:200-205.
+const (
+	guildEventLogInvitePlayer   uint8 = 1
+	guildEventLogJoinGuild      uint8 = 2
+	guildEventLogPromotePlayer  uint8 = 3
+	guildEventLogDemotePlayer   uint8 = 4
+	guildEventLogUninvitePlayer uint8 = 5
+	guildEventLogLeaveGuild     uint8 = 6
+)
+
 // GUILD_BANK_MONEY_LIMIT mirroring TrinityCore Guild.h:60.
 const guildBankMoneyLimit uint64 = 0x7FFFFFFFFFFFF
 
@@ -1136,10 +1146,78 @@ func (s *Server) getGuildName(ctx context.Context, guildID uint32) string {
 }
 
 // handleGuildEventLogQuery processes MSG_GUILD_EVENT_LOG_QUERY (0x3FF).
-// Reference: WorldSession::HandleGuildEventLogQueryOpcode (GuildHandler.cpp:111).
+// Reference: WorldSession::HandleGuildEventLogQueryOpcode (GuildHandler.cpp:230:
+// no guild -> no packet) -> Guild::SendEventLog (Guild.cpp:1803) ->
+// EventLogEntry::WritePacket (Guild.cpp:187).
 func (s *session) handleGuildEventLogQuery(ctx context.Context, payload []byte) bool {
-	buf := protocol.NewBuffer(1)
-	buf.WriteU8(0) // count = 0 entries
+	cdb := s.server.CharactersStore.DB
+	var guildID int64
+	if s.player != nil {
+		guildID = int64(s.player.GuildID)
+	}
+	if cdb == nil || guildID == 0 {
+		return true
+	}
+
+	// Guild::SendEventLog iterates the in-memory LogHolder, which is ordered
+	// oldest-first (Guild.h: "The first element is the oldest entry": DB rows
+	// are loaded ORDER BY TimeStamp DESC, LogGuid DESC then emplace_front'd,
+	// and new events are emplace_back'd), so the packet lists oldest entries
+	// first. LIMIT 100 mirrors GUILD_EVENTLOG_MAX_RECORDS
+	// (SharedDefines.h:3248), the in-memory cap per guild.
+	rows, err := cdb.QueryContext(ctx, "SELECT EventType, PlayerGuid1, PlayerGuid2, NewRank, TimeStamp FROM guild_eventlog WHERE guildid = ? ORDER BY TimeStamp ASC, LogGuid ASC LIMIT 100", guildID)
+	if err != nil {
+		return true
+	}
+
+	type eventLogRecord struct {
+		eventType       uint8
+		playerGUID      uint64
+		otherGUID       uint64
+		rankID          uint8
+		transactionDate uint32
+	}
+	var entries []eventLogRecord
+	now := uint32(time.Now().Unix())
+
+	// Player GUIDs are stored as counters (ObjectGuid::LowType); writing the
+	// counter as the raw u64 is exact since player high bits are 0x0000.
+	for rows.Next() {
+		var et uint8
+		var pGuid1, pGuid2 uint32
+		var rankID uint8
+		var ts uint64
+		if err := rows.Scan(&et, &pGuid1, &pGuid2, &rankID, &ts); err == nil {
+			entries = append(entries, eventLogRecord{
+				eventType:       et,
+				playerGUID:      uint64(pGuid1),
+				otherGUID:       uint64(pGuid2),
+				rankID:          rankID,
+				transactionDate: now - uint32(ts),
+			})
+		}
+	}
+	rows.Close()
+
+	buf := protocol.NewBuffer(1 + len(entries)*23)
+	buf.WriteU8(uint8(len(entries)))
+
+	// GuildEventLogQueryResults::Write (GuildPackets.cpp:145): per entry
+	// TransactionType u8, PlayerGUID u64, OtherGUID u64 only when the type is
+	// not JOIN_GUILD or LEAVE_GUILD, RankID u8 only for PROMOTE/DEMOTE, then
+	// TransactionDate u32 as the plain now - ts wrap.
+	for _, e := range entries {
+		buf.WriteU8(e.eventType)
+		buf.WriteU64(e.playerGUID)
+		if e.eventType != guildEventLogJoinGuild && e.eventType != guildEventLogLeaveGuild {
+			buf.WriteU64(e.otherGUID)
+		}
+		if e.eventType == guildEventLogPromotePlayer || e.eventType == guildEventLogDemotePlayer {
+			buf.WriteU8(e.rankID)
+		}
+		buf.WriteU32(e.transactionDate)
+	}
+
 	_ = s.write(uint16(protocol.OpcodeMSG_GUILD_EVENT_LOG_QUERY), buf.Bytes(), true)
 	return true
 }
