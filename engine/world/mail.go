@@ -500,6 +500,13 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrEquipError, equipErrMailBoundItem, 0, 0), true)
 			return true
 		}
+		// Reference: MailHandler.cpp:218-222 — a non-empty bag cannot be
+		// mailed (Item::IsNotEmptyBag, Item.cpp:298): answer (MAIL_SEND,
+		// MAIL_ERR_EQUIP_ERROR, EQUIP_ERR_CAN_ONLY_DO_WITH_EMPTY_BAGS = 31).
+		if s.mailAttachmentIsNonemptyBag(ctx, att.ItemGUID) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrEquipError, equipErrCanOnlyDoWithEmptyBags, 0, 0), true)
+			return true
+		}
 	}
 	postageFee := uint32(30)
 	if len(attachments) > 0 {
@@ -891,6 +898,20 @@ func mailCreateTextItemCreator(messageType uint32, mailSender uint64) uint64 {
 // CANT_CARRY_MORE_OF_THIS (Player.cpp:10711). maxCount <= 0 is uncapped
 // (ItemTemplate.h:628); the ItemLimitCategory sub-term needs DBC data absent
 // from this server, so it is not modeled.
+// mailAttachmentIsNonemptyBag mirrors Item::IsNotEmptyBag (Item.cpp:298):
+// true when the item is a bag (template ContainerSlots > 0) and holds any
+// items. MailHandler.cpp:218 refuses such items as mail attachments.
+func (s *session) mailAttachmentIsNonemptyBag(ctx context.Context, itemGUID uint64) bool {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	var slots int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(ContainerSlots, 0) FROM item_template WHERE entry = (SELECT itemEntry FROM item_instance WHERE guid = ?)`, itemGUID).Scan(&slots); err != nil || slots <= 0 {
+		return false
+	}
+	return !s.isBagEmpty(ctx, int64(itemGUID))
+}
+
 func mailStoreEquipError(templateFound bool, maxCount int64, ownedCount, incomingCount uint32, hasFreeSlot bool) uint32 {
 	if !templateFound {
 		return uint32(equipErrCantCarryMoreOfThis)
