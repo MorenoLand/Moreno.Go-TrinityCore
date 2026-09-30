@@ -641,4 +641,10 @@ func init() {
 	// lua_scripts/zulgurub/boss_wushoolay.lua. The brazier summon has no
 	// bearer (no summon model) — she is assumed already spawned.
 	RegisterLuaBoss("boss_wushoolay", 15085)
+	// Razorgore the Untamed (Blackwing Lair, first boss) — fight logic
+	// in lua_scripts/blackwinglair/boss_razorgore.lua. The
+	// go_orb_of_domination GameObjectScript and the spell_egg_event
+	// SpellScript from the same C++ file have no Lua bridges and are
+	// not registered; the phase-two DoAction trigger has no bridge.
+	RegisterLuaBoss("boss_razorgore", 12435)
 }
