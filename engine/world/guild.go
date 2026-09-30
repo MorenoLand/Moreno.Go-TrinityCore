@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
@@ -2011,6 +2012,18 @@ func (s *session) sendGuildBankList(ctx context.Context, bankerGUID uint64, tabI
 		return true
 	}
 
+	payload, ok := buildGuildBankListPayload(ctx, cdb, uint32(guildID), bankMoney, tabID, fullUpdate,
+		s.guildBankWithdrawalsRemaining(ctx, guildID, tabID))
+	if !ok {
+		return true
+	}
+	return s.write(uint16(protocol.OpcodeSMSG_GUILD_BANK_LIST), payload, true) == nil
+}
+
+// buildGuildBankListPayload assembles the SMSG_GUILD_BANK_LIST body shared by
+// the session-targeted sender and the guild-wide broadcast; the caller
+// supplies the recipient-specific WithdrawalsRemaining.
+func buildGuildBankListPayload(ctx context.Context, cdb *sql.DB, guildID uint32, bankMoney int64, tabID uint8, fullUpdate bool, withdrawalsRemaining int32) ([]byte, bool) {
 	var tabs []guildBankTabInfo
 	rows, err := cdb.QueryContext(ctx, "SELECT TabId, TabName, TabIcon, COALESCE(TabText, '') FROM guild_bank_tab WHERE guildid = ? ORDER BY TabId", guildID)
 	if err == nil {
@@ -2052,7 +2065,7 @@ func (s *session) sendGuildBankList(ctx context.Context, bankerGUID uint64, tabI
 	buf := protocol.NewBuffer(256 + len(tabs)*64 + len(items)*32)
 	buf.WriteU64(uint64(bankMoney))
 	buf.WriteU8(tabID)
-	buf.WriteI32(s.guildBankWithdrawalsRemaining(ctx, guildID, tabID))
+	buf.WriteI32(withdrawalsRemaining)
 	if fullUpdate {
 		buf.WriteU8(1)
 	} else {
@@ -2081,7 +2094,68 @@ func (s *session) sendGuildBankList(ctx context.Context, bankerGUID uint64, tabI
 		}
 	}
 
-	return s.write(uint16(protocol.OpcodeSMSG_GUILD_BANK_LIST), buf.Bytes(), true) == nil
+	return buf.Bytes(), true
+}
+
+// broadcastGuildBankList mirrors Guild::_SendBankList with a null session
+// (Guild.cpp:2826, 2922-2941): the post-move content update goes to every
+// online guild member holding GUILD_BANK_RIGHT_VIEW_TAB on the tab. The
+// packet is built once and only the per-member WithdrawalsRemaining field
+// (bytes 9-12: after the 8-byte money and 1-byte tab) is rewritten per
+// recipient, as in C++.
+func (s *session) broadcastGuildBankList(ctx context.Context, guildID uint32, tabID uint8, fullUpdate bool) {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || guildID == 0 {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	var bankMoney int64
+	if err := cdb.QueryRowContext(ctx, "SELECT BankMoney FROM guild WHERE guildid = ?", guildID).Scan(&bankMoney); err != nil {
+		return
+	}
+	s.server.sessionsMu.RLock()
+	targets := make([]*session, 0, len(s.server.sessions))
+	for target := range s.server.sessions {
+		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != guildID {
+			continue
+		}
+		targets = append(targets, target)
+	}
+	s.server.sessionsMu.RUnlock()
+	var payload []byte
+	for _, target := range targets {
+		if !guildBankHasTabView(ctx, cdb, guildID, target.playerGUID, tabID) {
+			continue
+		}
+		if payload == nil {
+			p, ok := buildGuildBankListPayload(ctx, cdb, guildID, bankMoney, tabID, fullUpdate, 0)
+			if !ok {
+				return
+			}
+			payload = p
+		}
+		frame := make([]byte, len(payload))
+		copy(frame, payload)
+		binary.LittleEndian.PutUint32(frame[9:13], uint32(guildBankWithdrawalsRemainingFor(ctx, cdb, int64(guildID), tabID, target.playerGUID)))
+		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_BANK_LIST), frame, true)
+	}
+}
+
+// guildBankHasTabView mirrors the GUILD_BANK_RIGHT_VIEW_TAB (0x01) term of
+// Guild::_MemberHasTabRights (Guild.cpp:2626-2636); the guildmaster (rank 0)
+// holds all rights.
+func guildBankHasTabView(ctx context.Context, q guildMoveQueryer, guildID uint32, playerGUID uint64, tabID uint8) bool {
+	var rank int64
+	if err := q.QueryRowContext(ctx, "SELECT rank FROM guild_member WHERE guid = ? AND guildid = ?", playerGUID, guildID).Scan(&rank); err != nil {
+		return false
+	}
+	if rank == 0 {
+		return true
+	}
+	var gbright int64
+	if err := q.QueryRowContext(ctx, "SELECT gbright FROM guild_bank_right WHERE guildid = ? AND TabId = ? AND rid = ?", guildID, tabID, rank).Scan(&gbright); err != nil {
+		return false
+	}
+	return gbright&0x01 != 0
 }
 
 func (s *session) logGuildBankEvent(ctx context.Context, guildID uint32, tabID uint8, eventType uint8, playerGUID uint64, itemOrMoney uint32, stackCount uint32, destTabID uint8) {
@@ -2202,12 +2276,15 @@ type guildWithdrawExecutor interface {
 // (-1); other ranks report the tab's daily slot allowance minus today's
 // withdrawals when the rank may view the tab, floored at 0.
 func (s *session) guildBankWithdrawalsRemaining(ctx context.Context, guildID int64, tabID uint8) int32 {
-	cdb := s.server.CharactersStore.DB
-	if cdb == nil {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return 0
 	}
+	return guildBankWithdrawalsRemainingFor(ctx, s.server.CharactersStore.DB, guildID, tabID, s.playerGUID)
+}
+
+func guildBankWithdrawalsRemainingFor(ctx context.Context, cdb *sql.DB, guildID int64, tabID uint8, playerGUID uint64) int32 {
 	var rank int64
-	if err := cdb.QueryRowContext(ctx, "SELECT rank FROM guild_member WHERE guid = ? AND guildid = ?", s.playerGUID, guildID).Scan(&rank); err != nil {
+	if err := cdb.QueryRowContext(ctx, "SELECT rank FROM guild_member WHERE guid = ? AND guildid = ?", playerGUID, guildID).Scan(&rank); err != nil {
 		return 0
 	}
 	if rank == 0 {
@@ -2219,7 +2296,7 @@ func (s *session) guildBankWithdrawalsRemaining(ctx context.Context, guildID int
 	}
 	tabCol := fmt.Sprintf("tab%d", tabID)
 	var withdrawn uint32
-	_ = cdb.QueryRowContext(ctx, "SELECT "+tabCol+" FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&withdrawn)
+	_ = cdb.QueryRowContext(ctx, "SELECT "+tabCol+" FROM guild_member_withdraw WHERE guid = ?", playerGUID).Scan(&withdrawn)
 	if remaining := int32(uint32(slotPerDay) - withdrawn); remaining > 0 {
 		return remaining
 	}
@@ -2590,10 +2667,12 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 	}
 	if movedItems {
 		// The dest-tab message precedes the src-tab one on cross-tab
-		// moves (Guild.cpp:2812-2823).
-		s.sendGuildBankList(ctx, bankerGUID, bankTab, false)
+		// moves (Guild.cpp:2812-2823). Guild::_SendBankContentUpdate
+		// (Guild.cpp:2794-2826) fans the refresh out to every online
+		// member with VIEW_TAB on the tab, not just the acting session.
+		s.broadcastGuildBankList(ctx, guildID, bankTab, false)
 		if sendExtraList {
-			s.sendGuildBankList(ctx, bankerGUID, extraListTab, false)
+			s.broadcastGuildBankList(ctx, guildID, extraListTab, false)
 		}
 	}
 	return true
