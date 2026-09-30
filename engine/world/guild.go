@@ -3399,7 +3399,7 @@ func (s *session) handleGuildBankDepositMoney(ctx context.Context, payload []byt
 	s.logGuildBankEvent(ctx, uint32(guildID), 0, guildBankLogDepositMoney, s.playerGUID, amount, 0, 0)
 	s.broadcastGuildBankMoneySet(uint32(guildID), bankMoney+int64(amount))
 
-	return s.sendGuildBankList(ctx, bankerGUID, 0, false)
+	return true
 }
 
 // handleGuildBankWithdrawMoney processes CMSG_GUILD_BANK_WITHDRAW_MONEY (0x3ED).
@@ -3461,7 +3461,7 @@ func (s *session) handleGuildBankWithdrawMoney(ctx context.Context, payload []by
 	s.logGuildBankEvent(ctx, uint32(guildID), 0, guildBankLogWithdrawMoney, s.playerGUID, amount, 0, 0)
 	s.broadcastGuildBankMoneySet(uint32(guildID), bankMoney-int64(amount))
 
-	return s.sendGuildBankList(ctx, bankerGUID, 0, false)
+	return true
 }
 
 // handleGuildBankLogQuery processes MSG_GUILD_BANK_LOG_QUERY (0x3EE).
