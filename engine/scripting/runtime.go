@@ -31,7 +31,10 @@ const (
 
 // Eluna CreatureEvents contract for RegisterCreatureEvent /
 // RegisterUniqueCreatureEvent. The world engine fires these through
-// TriggerCreatureEvent; scripts use the raw event numbers.
+// TriggerCreatureEvent; scripts use the raw event numbers. Numbering is the
+// TrinityCore LuaEngine numbering (LuaEngine/GlobalMethods.h CreatureEvents,
+// hooks fired in LuaEngine/CreatureHooks.cpp): 11, 16-18, 25, 28-29, 32-33
+// are UNUSED in C++ and carry no Go constant.
 const (
 	CreatureEventOnEnterCombat             = 1
 	CreatureEventOnLeaveCombat             = 2
@@ -43,14 +46,24 @@ const (
 	CreatureEventOnReceiveEmote            = 8
 	CreatureEventOnDamageTaken             = 9
 	CreatureEventOnPreCombat               = 10
-	CreatureEventOnMoveInLOS               = 11
-	CreatureEventOnSpellCast               = 12
-	CreatureEventOnSpellHit                = 13
-	CreatureEventOnSpellHitTarget          = 14
-	CreatureEventOnJustSummoned            = 15
-	CreatureEventOnSummonedCreatureDespawn = 16
-	CreatureEventOnSummonedCreatureDied    = 17
-	CreatureEventOnCharmed                 = 22
+	CreatureEventOnOwnerAttacked           = 12
+	CreatureEventOnOwnerAttackedAt         = 13
+	CreatureEventOnHitBySpell              = 14
+	CreatureEventOnSpellHitTarget          = 15
+	CreatureEventOnJustSummonedCreature    = 19
+	CreatureEventOnSummonedCreatureDespawn = 20
+	CreatureEventOnSummonedCreatureDied    = 21
+	CreatureEventOnSummoned                = 22
+	CreatureEventOnReset                   = 23
+	CreatureEventOnReachHome               = 24
+	CreatureEventOnCorpseRemoved           = 26
+	CreatureEventOnMoveInLOS               = 27
+	CreatureEventOnDummyEffect             = 30
+	CreatureEventOnQuestAccept             = 31
+	CreatureEventOnQuestReward             = 34
+	CreatureEventOnDialogStatus            = 35
+	CreatureEventOnAdd                     = 36
+	CreatureEventOnRemove                  = 37
 )
 
 type Hook struct {
