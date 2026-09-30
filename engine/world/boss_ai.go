@@ -525,4 +525,8 @@ func init() {
 	// Prince Malchezaar (Karazhan) — fight logic in
 	// lua_scripts/karazhan/boss_prince_malchezaar.lua.
 	RegisterLuaBoss("boss_malchezaar", 15690)
+	// Shade of Aran (Karazhan) — fight logic in
+	// lua_scripts/karazhan/boss_shade_of_aran.lua (water elemental
+	// 17167 AI "npc_aran_elemental" in the same file).
+	RegisterLuaBoss("boss_shade_of_aran", 16524)
 }
