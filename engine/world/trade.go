@@ -316,15 +316,22 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 		return true
 	}
 	partner := s.trade.Partner
+
+	// Set before the checks so each failure can properly undo it, in C++ order
+	// (TradeHandler.cpp:266-268).
+	s.trade.Accepted = true
+
+	// Accept-time distance check, in C++ position (TradeHandler.cpp:270-277):
+	// the acceptor alone is answered TARGET_TO_FAR, their accept is undone
+	// with a BACK_TO_TRADE notice to themselves (TradeData::SetAccepted(false)
+	// with forTrader=false -> the owner's session), and the trade window stays
+	// open — the partner is not notified and neither side tears down.
 	if partner.player == nil || s.player.Map != partner.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, partner.player.X, partner.player.Y, partner.player.Z) > tradeDistance {
 		_ = s.sendTradeStatus(tradeStatusTargetTooFar, 0, 0, 0, 0)
-		_ = partner.sendTradeStatus(tradeStatusTargetTooFar, 0, 0, 0, 0)
-		s.trade = nil
-		partner.trade = nil
+		s.trade.Accepted = false
+		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
 		return true
 	}
-
-	s.trade.Accepted = true
 
 	// Accept-time money guards, in C++ order (TradeHandler.cpp:278-306): each
 	// failure un-accepts the failing side with a BACK_TO_TRADE notice to the
