@@ -663,4 +663,8 @@ func init() {
 	// lua_scripts/blackwinglair/boss_firemaw.lua. The wingbuffet
 	// threat-cut arm has no bridge (no threat model).
 	RegisterLuaBoss("boss_firemaw", 11983)
+	// Ebonroc (Blackwing Lair, fifth boss) — fight logic in
+	// lua_scripts/blackwinglair/boss_ebonroc.lua. The wingbuffet
+	// threat-cut arm has no bridge (no threat model).
+	RegisterLuaBoss("boss_ebonroc", 14601)
 }
