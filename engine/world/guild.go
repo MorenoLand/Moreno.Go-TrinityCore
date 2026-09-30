@@ -1951,9 +1951,15 @@ func (s *session) handleGuildBankQueryTab(ctx context.Context, payload []byte) b
 	if err != nil {
 		return false
 	}
-	fullUpdate := uint8(0)
+	// The FullUpdate flag exists in the client packet (GuildPackets.h:415)
+	// but is deliberately ignored below: WorldSession::HandleGuildBankQueryTab
+	// (GuildHandler.cpp:276) passes `true` to SendBankTabData unconditionally
+	// (the "HACK" comment there — the client doesn't query the full tab
+	// content if it already received a bank list in this session).
 	if len(payload) >= 10 {
-		fullUpdate, _ = r.ReadU8()
+		if _, err = r.ReadU8(); err != nil {
+			return false
+		}
 	}
 
 	// Reference: WorldSession::HandleGuildBankQueryTab (GuildHandler.cpp:276):
@@ -1962,7 +1968,30 @@ func (s *session) handleGuildBankQueryTab(ctx context.Context, payload []byte) b
 		return true
 	}
 
-	return s.sendGuildBankList(ctx, bankerGUID, tabID, fullUpdate != 0)
+	// Reference: Guild::SendBankTabData (Guild.cpp:1837-1841) and
+	// Guild::_SendBankContent (Guild.cpp:2780-2786): an unpurchased tab id
+	// is silently ignored, and the tab content is sent only to members
+	// holding GUILD_BANK_RIGHT_VIEW_TAB (0x01) on the tab. A player with no
+	// guild gets nothing at all (WorldSession::HandleGuildBankQueryTab,
+	// GuildHandler.cpp:276-282, only calls into the guild object when
+	// GetGuild() is non-null); DB errors fail closed the same way.
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return true
+	}
+	cdb := s.server.CharactersStore.DB
+	var guildID int64
+	if err := cdb.QueryRowContext(ctx, "SELECT guildid FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&guildID); err != nil || guildID == 0 {
+		return true
+	}
+	var purchasedTabs int64
+	if err := cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM guild_bank_tab WHERE guildid = ?", guildID).Scan(&purchasedTabs); err != nil {
+		return true
+	}
+	if int64(tabID) >= purchasedTabs || !s.checkGuildBankRights(ctx, uint32(guildID), tabID, false) {
+		return true
+	}
+
+	return s.sendGuildBankList(ctx, bankerGUID, tabID, true)
 }
 
 func (s *session) sendGuildBankList(ctx context.Context, bankerGUID uint64, tabID uint8, fullUpdate bool) bool {
