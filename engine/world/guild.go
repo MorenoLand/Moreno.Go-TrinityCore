@@ -2153,6 +2153,63 @@ func (s *session) checkAndConsumeGuildBankMoneyWithdraw(ctx context.Context, gui
 	return true
 }
 
+// guildBankWithdrawMoneyForRepair mirrors Guild::HandleMemberWithdrawMoney
+// (Guild.cpp:1724) with repair=true: the repair cost is drawn from the guild
+// bank and consumes the member's daily money-withdraw allowance, but no money
+// is credited to the player, and the bank event is logged as
+// GUILD_BANK_LOG_REPAIR_MONEY (6). On any failure it returns false and the
+// caller leaves the item unrepaired (Player::DurabilityRepair,
+// Player.cpp:5084 — no personal-money fallback when the guild bank is used).
+func (s *session) guildBankWithdrawMoneyForRepair(ctx context.Context, guildID uint32, amount uint32) bool {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return false
+	}
+	// Guild.cpp:1727: clamp to the player money cap before every check.
+	if amount > maxMoneyAmount {
+		amount = maxMoneyAmount
+	}
+	cdb := s.server.CharactersStore.DB
+	var bankMoney int64
+	if err := cdb.QueryRowContext(ctx, "SELECT BankMoney FROM guild WHERE guildid = ?", guildID).Scan(&bankMoney); err != nil || uint64(bankMoney) < uint64(amount) {
+		return false
+	}
+	var rank uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT rank FROM guild_member WHERE guid = ? AND guildid = ?", s.playerGUID, guildID).Scan(&rank); err != nil {
+		return false
+	}
+	// Guild::_GetMemberRemainingMoney (Guild.cpp:2600): the guildmaster rank is
+	// unlimited; other ranks need GR_RIGHT_WITHDRAW_REPAIR|GR_RIGHT_WITHDRAW_GOLD
+	// and a positive (per-day allowance - today's withdrawals) difference.
+	if rank != 0 {
+		var rights uint32
+		if err := cdb.QueryRowContext(ctx, "SELECT rights FROM guild_rank WHERE guildid = ? AND rid = ?", guildID, rank).Scan(&rights); err != nil || rights&(guildRightWithdrawRepair|guildRightWithdrawGold) == 0 {
+			return false
+		}
+		var perDay, withdrawn uint32
+		_ = cdb.QueryRowContext(ctx, "SELECT BankMoneyPerDay FROM guild_rank WHERE guildid = ? AND rid = ?", guildID, rank).Scan(&perDay)
+		_ = cdb.QueryRowContext(ctx, "SELECT money FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&withdrawn)
+		// Same allowance form as checkAndConsumeGuildBankMoneyWithdraw:
+		// withdrawn+amount > perDay denies; C++ _GetMemberRemainingMoney
+		// (Guild.cpp:2600) clamps non-positive remainders to 0.
+		if withdrawn+amount > perDay {
+			return false
+		}
+		var exists int
+		_ = cdb.QueryRowContext(ctx, "SELECT 1 FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&exists)
+		if exists == 0 {
+			_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_member_withdraw (guid, tab0, tab1, tab2, tab3, tab4, tab5, money) VALUES (?, 0, 0, 0, 0, 0, 0, 0)", s.playerGUID)
+		}
+		// Guild.cpp:1755: the repair arm still consumes the daily allowance.
+		_, _ = cdb.ExecContext(ctx, "UPDATE guild_member_withdraw SET money = money + ? WHERE guid = ?", amount, s.playerGUID)
+	}
+	// Guild.cpp:1749-1758: no money is credited to the player; the bank is
+	// debited and a REPAIR_MONEY event is logged.
+	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET BankMoney = BankMoney - ? WHERE guildid = ?", amount, guildID)
+	s.logGuildBankEvent(ctx, guildID, 0, guildBankLogRepairMoney, s.playerGUID, amount, 0, 0)
+	s.broadcastGuildBankMoneySet(guildID, bankMoney-int64(amount))
+	return true
+}
+
 // handleGuildBankSwapItems processes CMSG_GUILD_BANK_SWAP_ITEMS (0x3E9).
 // Reference: WorldSession::HandleGuildBankSwapItems (GuildHandler.cpp:320).
 func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) bool {

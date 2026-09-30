@@ -2215,7 +2215,7 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	_, _ = r.ReadU64() // npcGUID
 	itemGUID, _ := r.ReadU64()
-	_, _ = r.ReadU8() // guildBank
+	guildBank, _ := r.ReadU8()
 
 	if s.server == nil || s.server.CharactersStore == nil {
 		return true
@@ -2257,9 +2257,20 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 		maxDurability := getMaxDurability(itemEntry)
 		if maxDurability > durability {
 			cost := (maxDurability - durability) * 10
-			if s.player.Money >= cost {
+			repaired := false
+			if guildBank != 0 {
+				// Player::DurabilityRepair (Player.cpp:5084): guild-bank
+				// repairs draw from the guild bank; failure leaves the item
+				// unrepaired — no personal-money fallback.
+				if s.player.GuildID != 0 && s.guildBankWithdrawMoneyForRepair(ctx, s.player.GuildID, cost) {
+					repaired = true
+				}
+			} else if s.player.Money >= cost {
 				s.player.Money -= cost
 				_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+				repaired = true
+			}
+			if repaired {
 				_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET durability = ? WHERE guid = ?", maxDurability, rawGUID)
 				_ = s.sendInventoryItems(ctx)
 				s.sendPlayerUpdate()
@@ -2303,7 +2314,24 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 			}
 
 			if len(toRepair) > 0 {
-				if s.player.Money >= totalCost {
+				if guildBank != 0 {
+					// Player::DurabilityRepairAll -> Player::DurabilityRepair
+					// (Player.cpp:5084): each item draws from the guild bank
+					// independently; items the guild cannot cover stay damaged.
+					repaired := false
+					if s.player.GuildID != 0 {
+						for _, item := range toRepair {
+							if s.guildBankWithdrawMoneyForRepair(ctx, s.player.GuildID, item.cost) {
+								_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET durability = ? WHERE guid = ?", item.maxD, item.guid)
+								repaired = true
+							}
+						}
+					}
+					if repaired {
+						_ = s.sendInventoryItems(ctx)
+						s.sendPlayerUpdate()
+					}
+				} else if s.player.Money >= totalCost {
 					s.player.Money -= totalCost
 					_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 					for _, item := range toRepair {
