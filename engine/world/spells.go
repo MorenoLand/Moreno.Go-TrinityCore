@@ -62,6 +62,7 @@ const (
 	spellAttr0StopAttackTarget       uint32 = 0x00100000 // SPELL_ATTR0_STOP_ATTACK_TARGET (SharedDefines.h:432)
 	spellAttr0DisabledWhileActive    uint32 = 0x02000000 // SPELL_ATTR0_DISABLED_WHILE_ACTIVE (SharedDefines.h:437)
 	spellAttr0LevelDamageCalculation uint32 = 0x00080000 // SPELL_ATTR0_LEVEL_DAMAGE_CALCULATION (SharedDefines.h:431)
+	spellAttr0Negative1              uint32 = 0x04000000 // SPELL_ATTR0_NEGATIVE_1 (SharedDefines.h:438) — forces the spell to be treated as negative
 
 	spellFailedEquippedItemClass         uint8 = 29  // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
 	spellFailedEquippedItemClassMainhand uint8 = 30  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
@@ -3061,17 +3062,35 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 	// Unit::ProcDamageAndSpellFor via Spell::TargetInfo::DoDamageAndTriggers,
 	// Spell.cpp:2493-2513, 2581-2586): C++ applies the heal (HealBySpell) and
 	// forwards the assist threat before the trigger pass, so this runs last.
-	s.procSpellHealAuraTriggers(ctx, targetGUID, spellID, rawHeal, isCrit)
+	// A zero heal does not take the heal arm: C++'s no-damage arm
+	// (Spell.cpp:2563-2579) runs the trigger pass with
+	// PROC_SPELL_TYPE_NO_DMG_HEAL instead, on both sides.
+	if rawHeal > 0 {
+		s.procSpellHealAuraTriggers(ctx, targetGUID, spellID, rawHeal, isCrit)
 
-	// Real aura procs on the taken side of a direct heal (TrinityCore
-	// Unit::ProcDamageAndSpellFor via Spell::TargetInfo::DoDamageAndTriggers,
-	// Spell.cpp:2462-2473, 2581-2586): the heal target's
-	// TAKEN_SPELL_*_DMG_CLASS_POS auras gate against the taken-side
-	// positivity-fallback mask. Runs on the target's session so its own auras
-	// gate; on a self-heal this is the caster session, matching C++ where
-	// ProcDamageAndSpellFor's done and taken passes iterate the same aura
-	// list. The trigger spell targets the healer.
-	targetSess.procSpellHealTakenAuraTriggers(ctx, s.playerGUID, spellID, rawHeal, isCrit)
+		// Real aura procs on the taken side of a direct heal (TrinityCore
+		// Unit::ProcDamageAndSpellFor via Spell::TargetInfo::DoDamageAndTriggers,
+		// Spell.cpp:2462-2473, 2581-2586): the heal target's
+		// TAKEN_SPELL_*_DMG_CLASS_POS auras gate against the taken-side
+		// positivity-fallback mask. Runs on the target's session so its own auras
+		// gate; on a self-heal this is the caster session, matching C++ where
+		// ProcDamageAndSpellFor's done and taken passes iterate the same aura
+		// list. The trigger spell targets the healer.
+		targetSess.procSpellHealTakenAuraTriggers(ctx, s.playerGUID, spellID, rawHeal, isCrit)
+	} else {
+		// No-damage arm (Spell.cpp:2563-2579, 2581-2586): done side first,
+		// then the taken side on the target's session, matching the
+		// ProcSkillsAndAuras ordering.
+		s.procSpellNoDmgHealAuraTriggers(ctx, targetGUID, spellID, effIndex)
+		targetSess.procSpellNoDmgHealTakenAuraTriggers(ctx, s.playerGUID, spellID, effIndex)
+
+		// Item combat spells also fire on the no-damage arm for melee/ranged
+		// damage-class spells (Spell.cpp:2589-2596); heal spells are magic
+		// class and fail the gate, matching C++.
+		if s.triggeredNoProcEvents == 0 && s.spellHitMayFireItemProcs(spellID) {
+			s.procSpellCastAndHitEffects(ctx, combatTarget{GUID: targetGUID}, spellID)
+		}
+	}
 }
 
 func buildSpellNonMeleeDamageLog(targetGUID, attackerGUID uint64, spellID, damage, overkill uint32, schoolMask uint8, extra ...uint32) []byte {
