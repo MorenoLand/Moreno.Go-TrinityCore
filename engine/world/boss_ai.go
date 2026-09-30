@@ -503,4 +503,7 @@ func init() {
 	// Maiden of Virtue (Karazhan) — fight logic in
 	// lua_scripts/karazhan/boss_maiden_of_virtue.lua.
 	RegisterLuaBoss("boss_maiden_of_virtue", 16457)
+	// Moroes (Karazhan) — fight logic in
+	// lua_scripts/karazhan/boss_moroes.lua.
+	RegisterLuaBoss("boss_moroes", 15687)
 }
