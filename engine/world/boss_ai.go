@@ -461,10 +461,46 @@ func (s *Server) castCreatureSpell(ctx context.Context, m *creatureMotion, spell
 	}
 }
 
+// -------------------------------------------------------------
+// Lua-driven bosses (fight logic in lua_scripts/, e.g. Karazhan).
+// Reference: boss scripts under src/server/scripts/ ported to Lua.
+// -------------------------------------------------------------
+// luaBossAI is the no-op BossAI slot for bosses whose encounter logic lives
+// in a Lua script. The Lua creature-event hooks (enter combat, leave combat,
+// target died, died, reset) drive the fight; this shim exists so the engine
+// treats the creature as a boss — instance-encounter admission locks on
+// aggro (beginInstanceEncounter) and clears on evade/death, mirroring the
+// C++ BossAI constructor's instance binding (e.g. DATA_MAIDEN_OF_VIRTUE).
+// Register one entry per Lua-ported boss via RegisterLuaBoss.
+type luaBossAI struct{}
+
+func newLuaBossAI(m *creatureMotion) BossAI { return &luaBossAI{} }
+
+func (ai *luaBossAI) OnReset(ctx context.Context, s *Server, m *creatureMotion) {}
+func (ai *luaBossAI) OnAggro(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
+}
+func (ai *luaBossAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage uint32) {
+}
+func (ai *luaBossAI) OnKillPlayer(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
+}
+func (ai *luaBossAI) OnEvade(ctx context.Context, s *Server, m *creatureMotion) {}
+func (ai *luaBossAI) OnUpdate(ctx context.Context, s *Server, m *creatureMotion, diff time.Duration, players []playerPos, now time.Time) {
+}
+
+// RegisterLuaBoss marks a creature entry as a Lua-scripted boss: its BossAI
+// slot carries the no-op luaBossAI so engine boss handling (instance
+// encounter admission) applies, while the Lua script drives the fight.
+func RegisterLuaBoss(scriptName string, entry uint32) {
+	RegisterBossAI(scriptName, entry, newLuaBossAI)
+}
+
 func init() {
 	RegisterBossAI("boss_vancleef", 639, newVanCleefAI)
 	RegisterBossAI("boss_mr_smite", 646, newMrSmiteAI)
 	RegisterBossAI("boss_rhahkzor", 644, newRhahkZorAI)
 	RegisterBossAI("boss_taragaman", 11520, newTaragamanAI)
 	RegisterBossAI("boss_kresh", 3653, newKreshAI)
+	// Maiden of Virtue (Karazhan) — fight logic in
+	// lua_scripts/karazhan/boss_maiden_of_virtue.lua.
+	RegisterLuaBoss("boss_maiden_of_virtue", 16457)
 }

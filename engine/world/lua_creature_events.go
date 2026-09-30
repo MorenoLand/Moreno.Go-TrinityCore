@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 )
@@ -51,13 +52,66 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{inCombat}, nil
 	}
+	// CastSpell(target, spellId[, triggered]) casts a creature spell through
+	// the server's creature cast path (SMSG_SPELL_GO broadcast, the same path
+	// the Go BossAI implementations use). Eluna argument order. The target
+	// may be a creature/player object, a raw GUID, or nil — nil falls back to
+	// the creature's current victim and is a no-op when it has none.
+	methods["CastSpell"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("CastSpell requires a target and a spell id")
+		}
+		spellID, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			s.motionMu.Lock()
+			targetGUID = motion.TargetGUID
+			s.motionMu.Unlock()
+		}
+		if targetGUID == 0 {
+			return nil, nil
+		}
+		s.castCreatureSpell(ctx, motion, spellID, targetGUID)
+		return nil, nil
+	}
+	// Talk(textId) mirrors the C++ CreatureAI::Talk(textId) used by boss
+	// scripts: it plays the creature_text row for (entry, textId) through the
+	// same broadcastCreatureTalk path the Go BossAI implementations use.
+	methods["Talk"] = func(ctx context.Context, args []any) ([]any, error) {
+		textID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.broadcastCreatureTalk(ctx, motion.Map, motion.GUID, motion.Entry, motion.Name, uint8(textID), 0)
+		return nil, nil
+	}
 	return &scripting.Object{Type: "Creature", Fields: map[string]any{
 		"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry,
 		"Map": state.Map, "MapId": state.Map,
 		"X": state.X, "Y": state.Y, "Z": state.Z,
 		"Health": state.Health, "MaxHealth": state.MaxHealth, "Level": state.Level,
-		"InWorld": true,
+		"InstanceId": motion.InstanceID,
+		"InWorld":    true,
 	}, Methods: methods}
+}
+
+// luaObjectGUID resolves a Lua-passed target to a GUID: a creature/player
+// object contributes its GUID field, a bare number is taken as the GUID,
+// anything else (including nil) yields 0.
+func luaObjectGUID(value any) uint64 {
+	if obj, ok := value.(*scripting.Object); ok && obj != nil {
+		if guid, ok := obj.Fields["GUID"].(uint64); ok {
+			return guid
+		}
+		return 0
+	}
+	if guid, err := luaUint64(value); err == nil {
+		return guid
+	}
+	return 0
 }
 
 // fireCreatureLuaEvent dispatches an Eluna RegisterCreatureEvent hook for the
