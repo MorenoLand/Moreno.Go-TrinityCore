@@ -2515,11 +2515,15 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 		}
 
 		if autoStore || toSlot != 0 {
-			// Bank -> Player Inventory (Withdraw)
-			if !s.checkGuildBankRights(ctx, guildID, bankTab, false) {
-				s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildPermissions)
-				return true
-			}
+			// Bank -> Player Inventory (Withdraw). Guild::_MoveItems step 3
+			// (Guild.cpp:2683-2690) needs no dest rights check here —
+			// PlayerMoveItemData inherits the base HasStoreRights
+			// (Guild.h:550), which returns true — and step 4's source-tab
+			// gate is the withdraw-slots check
+			// (BankMoveItemData::HasWithdrawRights, Guild.cpp:864-876),
+			// enforced silently by guildMoveItem's consumeWithdraw below.
+			// C++ is silent on this path, so no upfront rights block or
+			// command-result feedback exists here.
 			source := guildMoveLocation{Bank: true, Tab: bankTab, Slot: bankSlot}
 			autoTarget := autoStore || containerSlot == 0xFF && containerItemSlot == 0xFF
 			var destination *guildMoveLocation
@@ -2542,12 +2546,12 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 				s.sendPlayerUpdate()
 			}
 		} else {
-			// Player Inventory -> Bank (Deposit)
-			if !s.checkGuildBankRights(ctx, guildID, bankTab, true) {
-				s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildPermissions)
-				return true
-			}
-
+			// Player Inventory -> Bank (Deposit). The dest-tab
+			// DEPOSIT_ITEM gate (Guild::_MoveItems step 3,
+			// BankMoveItemData::HasStoreRights, Guild.cpp:855-862) lives
+			// inside guildMoveItem and fails silently, C++-exact; no
+			// upfront rights block or command-result feedback exists on
+			// this path.
 			bagKey, ok := s.inventoryBagKey(ctx, containerSlot)
 			if !ok {
 				return true
@@ -3089,6 +3093,17 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 		return rollback(guildEquipErrCantDropSoulbound, source.GUID)
 	}
 	maxStack := s.guildMoveMaxStack(ctx, source.Entry)
+	// Guild::_MoveItems step 3 (Guild.cpp:2683-2690) runs before step 4's
+	// withdraw-slot check and before any store planning: the deposit arm
+	// (player -> bank) needs GUILD_BANK_RIGHT_DEPOSIT_ITEM
+	// (VIEW_TAB|PUT_ITEM, Guild.h:181) on the dest tab
+	// (BankMoveItemData::HasStoreRights, Guild.cpp:855-862; pOther is the
+	// player, so the same-tab skip does not apply). Silent on failure —
+	// HandleGuildBankSwapItems emits no command result on this path.
+	if destination != nil && destination.Bank && !sourceLoc.Bank && !s.checkGuildBankRights(ctx, guildID, destination.Tab, true) {
+		_ = tx.Rollback()
+		return guildMoveOutcome{}, false
+	}
 	var destItem guildMoveItem
 	destExists := false
 	if destination != nil && !autoStore {
@@ -3123,9 +3138,10 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 		placements, storeErr = s.guildPlayerMovePlan(ctx, tx, s.playerGUID, source.Entry, moveCount, maxStack, target)
 	}
 	if storeErr != 0 && destination != nil && destExists && full {
-		if destination.Bank && !sourceLoc.Bank && !s.checkGuildBankRights(ctx, guildID, destination.Tab, false) {
-			return rollback(equipErrItemsCantBeSwapped, source.GUID)
-		}
+		// The deposit-swap step-3 DEPOSIT_ITEM gate already ran above; the
+		// swap-arm opposite-direction rights are the silent withdraw-slots
+		// check (BankMoveItemData::HasWithdrawRights, Guild.cpp:864-876),
+		// enforced by consumeWithdraw(true) below.
 		// Guild::_MoveItems step 3 (Guild.cpp:2683-2690): a cross-tab bank
 		// swap needs GUILD_BANK_RIGHT_DEPOSIT_ITEM (VIEW_TAB|PUT_ITEM,
 		// Guild.h:181) on the dest tab
