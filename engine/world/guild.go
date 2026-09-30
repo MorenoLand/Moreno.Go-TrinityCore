@@ -30,6 +30,7 @@ const (
 	guildEventLeft            uint8  = 4
 	guildEventSignedOn        uint8  = 12
 	guildEventSignedOff       uint8  = 13
+	guildEventBankMoneySet    uint8  = 17
 	guildRightViewOfficerNote uint32 = 0x00004000
 )
 
@@ -130,6 +131,9 @@ const (
 	guildEquipErrBankFull            uint8 = 51
 	guildEquipErrItemDoesntGoIntoBag uint8 = 15
 )
+
+// GUILD_BANK_MONEY_LIMIT mirroring TrinityCore Guild.h:60.
+const guildBankMoneyLimit uint64 = 0x7FFFFFFFFFFFF
 
 func (s *session) sendGuildCommandResult(cmdType uint32, param string, errCode uint32) {
 	buf := protocol.NewBuffer(12 + len(param))
@@ -260,6 +264,26 @@ func (s *session) broadcastGuildMemberLogin() {
 	defer s.server.sessionsMu.RUnlock()
 	for target := range s.server.sessions {
 		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != s.player.GuildID {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
+	}
+}
+
+// broadcastGuildBankMoneySet mirrors Guild::HandleMemberDepositMoney /
+// HandleMemberWithdrawMoney (Guild.cpp:1719/1757): GE_BANK_MONEY_SET is
+// broadcast to every guild member with the new bank money as a %016llX hex
+// string, so clients refresh the bank money display.
+func (s *session) broadcastGuildBankMoneySet(guildID uint32, newBankMoney int64) {
+	if s == nil || s.server == nil {
+		return
+	}
+
+	event := guildEventPayload(guildEventBankMoneySet, 0, fmt.Sprintf("%016X", uint64(newBankMoney)))
+	s.server.sessionsMu.RLock()
+	defer s.server.sessionsMu.RUnlock()
+	for target := range s.server.sessions {
+		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != guildID {
 			continue
 		}
 		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
@@ -2418,9 +2442,18 @@ func (s *session) handleGuildBankDepositMoney(ctx context.Context, payload []byt
 	if cdb == nil {
 		return true
 	}
-	var guildID int64
-	err = cdb.QueryRowContext(ctx, "SELECT guildid FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&guildID)
+	var guildID, bankMoney int64
+	err = cdb.QueryRowContext(ctx, `SELECT g.guildid, g.BankMoney FROM guild_member gm
+		JOIN guild g ON g.guildid = gm.guildid
+		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &bankMoney)
 	if err != nil || guildID == 0 {
+		return true
+	}
+
+	// Guild::HandleMemberDepositMoney (Guild.cpp:1699): refuse deposits that
+	// would overflow the bank money cap.
+	if bankMoney > 0 && uint64(bankMoney) > guildBankMoneyLimit-uint64(amount) {
+		s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildBankFull)
 		return true
 	}
 
@@ -2429,6 +2462,7 @@ func (s *session) handleGuildBankDepositMoney(ctx context.Context, payload []byt
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET BankMoney = BankMoney + ? WHERE guildid = ?", amount, guildID)
 	s.logGuildBankEvent(ctx, uint32(guildID), 0, guildBankLogDepositMoney, s.playerGUID, amount, 0, 0)
+	s.broadcastGuildBankMoneySet(uint32(guildID), bankMoney+int64(amount))
 
 	return s.sendGuildBankList(ctx, bankerGUID, 0, false)
 }
@@ -2449,6 +2483,12 @@ func (s *session) handleGuildBankWithdrawMoney(ctx context.Context, payload []by
 		return true
 	}
 
+	// Guild::HandleMemberWithdrawMoney (Guild.cpp:1727): clamp to the
+	// player money cap before every downstream check.
+	if amount > maxMoneyAmount {
+		amount = maxMoneyAmount
+	}
+
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
@@ -2458,6 +2498,14 @@ func (s *session) handleGuildBankWithdrawMoney(ctx context.Context, payload []by
 		JOIN guild g ON g.guildid = gm.guildid
 		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &bankMoney)
 	if err != nil || guildID == 0 || uint64(bankMoney) < uint64(amount) {
+		return true
+	}
+
+	// Player::ModifyMoney (Player.cpp:22832): a withdraw that would push the
+	// player past MAX_MONEY_AMOUNT fails before the bank or the daily limit
+	// is touched.
+	if s.player.Money > maxMoneyAmount-amount {
+		s.sendEquipError(equipErrTooMuchGold, 0)
 		return true
 	}
 
@@ -2471,6 +2519,7 @@ func (s *session) handleGuildBankWithdrawMoney(ctx context.Context, payload []by
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET BankMoney = BankMoney - ? WHERE guildid = ?", amount, guildID)
 	s.logGuildBankEvent(ctx, uint32(guildID), 0, guildBankLogWithdrawMoney, s.playerGUID, amount, 0, 0)
+	s.broadcastGuildBankMoneySet(uint32(guildID), bankMoney-int64(amount))
 
 	return s.sendGuildBankList(ctx, bankerGUID, 0, false)
 }
