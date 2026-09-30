@@ -43,11 +43,12 @@ const (
 )
 
 type tradeSlotItem struct {
-	ItemGUID   uint64
-	ItemEntry  uint32
-	DisplayID  uint32
-	StackCount uint32
-	EnchantID  uint32
+	ItemGUID        uint64
+	ItemEntry       uint32
+	DisplayID       uint32
+	StackCount      uint32
+	EnchantID       uint32
+	GiftCreatorGUID uint64
 }
 
 type playerTradeState struct {
@@ -244,8 +245,9 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	var itemEntry, count, flags int64
+	var giftCreatorGUID uint64
 	var encStr sql.NullString
-	_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count, flags, enchantments FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemEntry, &count, &flags, &encStr)
+	_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count, flags, giftCreatorGuid, enchantments FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemEntry, &count, &flags, &giftCreatorGUID, &encStr)
 	if tradeSlot < tradeSlotTradedCount && (flags&1 != 0) {
 		// Soulbound items cannot be placed in traded slots
 		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0)
@@ -267,11 +269,12 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 		displayID = uint32(disp)
 	}
 	s.trade.Items[tradeSlot] = tradeSlotItem{
-		ItemGUID:   uint64(itemGUID),
-		ItemEntry:  uint32(itemEntry),
-		DisplayID:  displayID,
-		StackCount: uint32(count),
-		EnchantID:  enchantID,
+		ItemGUID:        uint64(itemGUID),
+		ItemEntry:       uint32(itemEntry),
+		DisplayID:       displayID,
+		StackCount:      uint32(count),
+		EnchantID:       enchantID,
+		GiftCreatorGUID: giftCreatorGUID,
 	}
 	if s.trade.Accepted {
 		s.trade.Accepted = false
@@ -543,13 +546,17 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 	for slot := uint8(0); slot < tradeSlotTradedCount; slot++ {
 		if it, ok := s.trade.Items[slot]; ok {
 			targetLoc := partnerSlots[sTransferSlots[slot]]
-			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", partner.playerGUID, it.ItemGUID)
+			// Execute trade: C++ stamps the giver's GUID as ITEM_FIELD_GIFTCREATOR
+			// on each traded item (TradeHandler.cpp:483).
+			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ?, giftCreatorGuid = ? WHERE guid = ?", partner.playerGUID, s.playerGUID, it.ItemGUID)
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", partner.playerGUID, targetLoc.bagKey, targetLoc.slot, it.ItemGUID)
 			partner.adjustQuestItemCount(ctx, it.ItemEntry, it.StackCount, true)
 		}
 		if it, ok := partner.trade.Items[slot]; ok {
 			targetLoc := sSlots[partnerTransferSlots[slot]]
-			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, it.ItemGUID)
+			// Execute trade: C++ stamps the giver's GUID as ITEM_FIELD_GIFTCREATOR
+			// on each traded item (TradeHandler.cpp:488).
+			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ?, giftCreatorGuid = ? WHERE guid = ?", s.playerGUID, partner.playerGUID, it.ItemGUID)
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, targetLoc.bagKey, targetLoc.slot, it.ItemGUID)
 			s.adjustQuestItemCount(ctx, it.ItemEntry, it.StackCount, true)
 		}
@@ -633,9 +640,9 @@ func (s *session) sendTradeStatusExtended(traderData bool) {
 			buf.WriteU32(it.ItemEntry)
 			buf.WriteU32(it.DisplayID)
 			buf.WriteU32(it.StackCount)
-			buf.WriteU32(0)            // wrapped
-			buf.WriteU64(0)            // giftCreator
-			buf.WriteU32(it.EnchantID) // permEnchant
+			buf.WriteU32(0)                  // wrapped
+			buf.WriteU64(it.GiftCreatorGUID) // giftCreator (SendUpdateTrade, TradeHandler.cpp:98)
+			buf.WriteU32(it.EnchantID)       // permEnchant
 			for j := 0; j < 3; j++ {
 				buf.WriteU32(0) // gem sockets
 			}
