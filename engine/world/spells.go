@@ -89,6 +89,7 @@ const (
 	spellFailedTotems                    uint8 = 131 // SPELL_FAILED_TOTEMS (SharedDefines.h:1113)
 	spellFailedLowLevel                  uint8 = 48  // SPELL_FAILED_LOWLEVEL (SharedDefines.h:1030)
 	spellFailedNotKnown                  uint8 = 63  // SPELL_FAILED_NOT_KNOWN (SharedDefines.h:1045)
+	spellFailedItemEnchantTradeWindow    uint8 = 182 // SPELL_FAILED_ITEM_ENCHANT_TRADE_WINDOW (SharedDefines.h:1164)
 
 	spellImplicitTargetUnitPet uint32 = 5 // TARGET_UNIT_PET (SharedDefines.h:1446)
 
@@ -934,12 +935,12 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				return
 			}
 			s.castMu.Unlock()
-			s.finishSpellCast(context.Background(), castID, spellID, spell, target)
+			s.finishSpellCast(context.Background(), castID, spellID, spell, target, 0)
 		})
 		s.activeCast = castState
 		s.castMu.Unlock()
 	} else {
-		s.finishSpellCast(context.Background(), castID, spellID, spell, target)
+		s.finishSpellCast(context.Background(), castID, spellID, spell, target, 0)
 	}
 
 	s.debug("spell cast accepted", "account", s.accountName, "spell", spellID, "cast_id", castID, "cast_time", castTime, "cost", cost)
@@ -1084,7 +1085,7 @@ func (s *session) checkLearnSpellCast(ctx context.Context, spell wotlk.Spell, ta
 	return 0
 }
 
-func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData) {
+func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, castItemGUID uint64) {
 	if s.player == nil {
 		return
 	}
@@ -1169,6 +1170,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			}
 		}
+	}
+
+	// Spell::CheckCast trade-slot gate (Spell.cpp:6167-6171): a spell cast
+	// from an item (enchanting vellum via CMSG_USE_ITEM) cannot target the
+	// trade window's non-traded slot — SPELL_FAILED_ITEM_ENCHANT_TRADE_WINDOW —
+	// and is never deferred into the trade data. The gate runs before the
+	// deferral below, matching _cast order (CheckCast(false) precedes the
+	// TARGET_FLAG_TRADE_ITEM deferral, Spell.cpp:3335-3372); it is not gated
+	// on trade state because C++ checks m_CastItem before the NOT_TRADING
+	// terms. Book casts (CMSG_CAST_SPELL) always pass 0 here (Spell.cpp:584:
+	// m_CastItem is set only by CastItemUseSpell), so only item casts trip it.
+	if target.Flags&protocol.SpellTargetFlagTradeItem != 0 && castItemGUID != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedItemEnchantTradeWindow), true)
+		s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "item enchant trade window")
+		return
 	}
 
 	// Spell::_cast (Spell.cpp:3357-3372): a cast-bar-completed spell targeting
@@ -6085,7 +6101,7 @@ func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
 					Flags:    protocol.SpellTargetFlagUnitWireMask,
 					UnitGUID: targetUnit,
 				}
-				s.finishSpellCast(ctx, 0, click.spellID, spell, targetData)
+				s.finishSpellCast(ctx, 0, click.spellID, spell, targetData, 0)
 			}
 		}
 	}

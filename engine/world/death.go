@@ -1059,7 +1059,7 @@ func (s *session) handleSelfRes(ctx context.Context) bool {
 		s.debug("self resurrect spell lookup failed", "account", s.accountName, "spell", spellID, "found", found, "error", err)
 		return true
 	}
-	s.finishSpellCast(ctx, 0, spellID, spell, protocol.SpellTargetData{})
+	s.finishSpellCast(ctx, 0, spellID, spell, protocol.SpellTargetData{}, 0)
 	return true
 }
 

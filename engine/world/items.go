@@ -1447,10 +1447,10 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
 					s.updateAchievementCriteria(criteriaTypeUseItem, uint32(itemEntry), 1)
 					s.startTimedAchievement(timedTypeItem, uint32(itemEntry))
-					s.finishSpellCast(context.Background(), castCount, spellID, spell, target)
+					s.finishSpellCast(context.Background(), castCount, spellID, spell, target, rawItemGUID)
 				})
 			} else {
-				s.finishSpellCast(ctx, castCount, spellID, spell, target)
+				s.finishSpellCast(ctx, castCount, spellID, spell, target, rawItemGUID)
 			}
 		}
 	}

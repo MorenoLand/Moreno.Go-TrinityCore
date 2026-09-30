@@ -139,8 +139,21 @@ func clearAcceptTradeMode(my, partner *session) {
 // (TRADE_SLOT_NONTRADED) for the acceptor's spell; my_trade's for the
 // partner's — caller passes the target session accordingly), and a stored
 // cast-item GUID must still resolve in the caster's inventory (TradeData::
-// GetSpellCastItem = GetItemByGuid(_spellCastItem)). Go has no Spell object,
-// so the CheckCast(true) re-validation itself is not representable.
+// GetSpellCastItem = GetItemByGuid(_spellCastItem)). The CheckCast(true)
+// re-validation that follows the guard block (TradeHandler.cpp:380-401) is
+// a provable no-op for every representable deferred spell: under
+// TRIGGERED_FULL_MASK the death, cooldown, GCD, battleground, shapeshift,
+// aura-state, vehicle, power/reagent, caster-aura and dispel gates are all
+// skipped (Spell.cpp:5174-5555, SpellDefines.h:134-153); the strict-only
+// gates add nothing fireable for enchant spells; CheckExplicitTarget passes
+// trivially (enchant ExplicitTargetMask = 0, SpellInfo.cpp:1782-1797); and
+// the trade-slot check's only fireable term (m_CastItem ->
+// SPELL_FAILED_ITEM_ENCHANT_TRADE_WINDOW, Spell.cpp:6167-6171) is
+// unreachable at accept because CheckCast(false) already rejected any
+// cast-item trade enchant at cast time — so a deferred spell always has a
+// null cast item here, the slot sentinel is always TRADE_SLOT_NONTRADED
+// (SetTradeItemTarget/Update, Spell.cpp:337-344/460-474), and the
+// ITEM_ALREADY_ENCHANTED term is gated on !IsTriggered().
 func (caster *session) tradeSpellStillCastable(ctx context.Context, target *session) bool {
 	if caster.trade == nil || target.trade == nil {
 		return false
