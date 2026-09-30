@@ -256,7 +256,7 @@ func (s *session) meetQuestConditions(ctx context.Context, questID uint32) (bool
 }
 
 func (s *session) evalQuestCondition(ctx context.Context, row conditionRow) (bool, error) {
-	ok, err := s.evalCondition(ctx, row, 0)
+	ok, err := s.evalCondition(ctx, row, 0, 0)
 	if err != nil {
 		return false, err
 	}
@@ -268,7 +268,7 @@ func (s *session) evalQuestCondition(ctx context.Context, row conditionRow) (boo
 
 func isImplementedConditionType(condType int64) bool {
 	switch condType {
-	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 31, 32, 36, 37, 38, 39, 40, 42, 43, 44, 46, 47, 48, 49, 50:
+	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 31, 32, 35, 36, 37, 38, 39, 40, 42, 43, 44, 46, 47, 48, 49, 50:
 		return true
 	default:
 		return false
@@ -292,7 +292,7 @@ func drunkenStateByValue(value uint16) uint32 {
 
 // meetGossipOptionConditions evaluates the ElseGroup clause set; empty sets
 // pass (no conditions attached).
-func (s *session) meetGossipOptionConditions(ctx context.Context, menuID, optionID uint32, creatureEntry uint32) (bool, error) {
+func (s *session) meetGossipOptionConditions(ctx context.Context, menuID, optionID uint32, creatureEntry uint32, creatureGUID uint64) (bool, error) {
 	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return true, nil
 	}
@@ -310,7 +310,7 @@ func (s *session) meetGossipOptionConditions(ctx context.Context, menuID, option
 	for _, group := range groups {
 		met := true
 		for _, row := range group {
-			ok, err := s.evalCondition(ctx, row, creatureEntry)
+			ok, err := s.evalCondition(ctx, row, creatureEntry, creatureGUID)
 			if err != nil {
 				return false, err
 			}
@@ -329,7 +329,7 @@ func (s *session) meetGossipOptionConditions(ctx context.Context, menuID, option
 	return false, nil
 }
 
-func (s *session) meetVendorItemConditions(ctx context.Context, creatureEntry, itemEntry uint32) (bool, error) {
+func (s *session) meetVendorItemConditions(ctx context.Context, creatureEntry, itemEntry uint32, vendorGUID uint64) (bool, error) {
 	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return true, nil
 	}
@@ -362,7 +362,7 @@ func (s *session) meetVendorItemConditions(ctx context.Context, creatureEntry, i
 	for _, group := range groups {
 		met := true
 		for _, row := range group {
-			ok, err := s.evalCondition(ctx, row, creatureEntry)
+			ok, err := s.evalCondition(ctx, row, creatureEntry, vendorGUID)
 			if err != nil {
 				return false, err
 			}
@@ -384,7 +384,7 @@ func (s *session) meetVendorItemConditions(ctx context.Context, creatureEntry, i
 // evalCondition mirrors Condition::Meets for the types the gossip option
 // data actually uses; unimplemented types report not-met so hidden options
 // stay hidden, matching conservative TC behavior.
-func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureEntry uint32) (bool, error) {
+func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureEntry uint32, creatureGUID uint64) (bool, error) {
 	cdb := func() *sql.DB {
 		if s.server.CharactersStore == nil {
 			return nil
@@ -534,6 +534,26 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 			return false, nil
 		}
 		return uint16(row.Value1)&objectType != 0, nil
+	case 35: // CONDITION_DISTANCE_TO (ConditionMgr.cpp:432-437:
+		// condMeets = CompareValues(ComparisionType(Value3),
+		// object->GetDistance(toObject), float(Value2)), with toObject the
+		// ConditionValue1 target). C++ IsValid rejects the row at load when
+		// Value1 >= max targets, Value1 == ConditionTarget, or Value3 >=
+		// COMP_TYPE_MAX (2223-2238); mirror that as fail-closed. A missing
+		// target leaves condMeets false, like the C++ null arm.
+		if row.Value1 < 0 || row.Value1 > 1 || row.Value1 == row.ConditionTarget ||
+			row.Value3 < 0 || row.Value3 >= 6 {
+			return false, nil
+		}
+		ox, oy, oz, ok := s.conditionTargetPos(row.ConditionTarget, creatureGUID)
+		if !ok {
+			return false, nil
+		}
+		tx, ty, tz, ok := s.conditionTargetPos(row.Value1, creatureGUID)
+		if !ok {
+			return false, nil
+		}
+		return compareValuesFloat(row.Value3, float32(distance3D(ox, oy, oz, tx, ty, tz)), float32(row.Value2)), nil
 	case 17: // CONDITION_ACHIEVEMENT
 		return true, nil
 	case 18: // CONDITION_TITLE
@@ -614,6 +634,55 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 		return s.player.ExtraFlags&playerExtraGMOn != 0, nil
 	default:
 		return false, nil
+	}
+}
+
+// conditionTargetPos resolves a ConditionTarget index to a world position.
+// Target 0 is the player in every context evalCondition serves; target 1 is
+// the gossip/vendor creature, resolved through the creature motion registry
+// by instance GUID. Any other target — or one whose position is unavailable
+// — fails closed, matching the C++ null-target arm of CONDITION_DISTANCE_TO
+// (ConditionMgr.cpp:432-437: toObject null leaves condMeets false).
+func (s *session) conditionTargetPos(target int64, creatureGUID uint64) (x, y, z float32, ok bool) {
+	if s == nil || s.player == nil {
+		return 0, 0, 0, false
+	}
+	switch target {
+	case 0:
+		return s.player.X, s.player.Y, s.player.Z, true
+	case 1:
+		if s.server == nil || creatureGUID == 0 {
+			return 0, 0, 0, false
+		}
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, creatureGUID)
+		s.server.motionMu.Unlock()
+		if motion == nil {
+			return 0, 0, 0, false
+		}
+		return motion.X, motion.Y, motion.Z, true
+	default:
+		return 0, 0, 0, false
+	}
+}
+
+// compareValuesFloat ports the float instantiation of TrinityCore
+// CompareValues (Util.h:516), used by CONDITION_DISTANCE_TO against
+// WorldObject::GetDistance and float(Value2).
+func compareValuesFloat(compType int64, a, b float32) bool {
+	switch compType {
+	case 0:
+		return a == b
+	case 1:
+		return a > b
+	case 2:
+		return a < b
+	case 3:
+		return a >= b
+	case 4:
+		return a <= b
+	default:
+		return false
 	}
 }
 

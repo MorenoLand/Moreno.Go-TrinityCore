@@ -296,12 +296,12 @@ func (s *session) prepareCreatureGossip(ctx context.Context, guid uint64, entry,
 	} else if err != sql.ErrNoRows && !missingTable(err) {
 		return nil, err
 	}
-	options, err := s.loadCreatureGossipOptions(ctx, menuID, npcFlags, entry)
+	options, err := s.loadCreatureGossipOptions(ctx, menuID, npcFlags, entry, guid)
 	if err != nil {
 		return nil, err
 	}
 	if len(options) == 0 && menuID != 0 {
-		options, err = s.loadCreatureGossipOptions(ctx, 0, npcFlags, entry)
+		options, err = s.loadCreatureGossipOptions(ctx, 0, npcFlags, entry, guid)
 		if err != nil {
 			return nil, err
 		}
@@ -327,7 +327,7 @@ type loadedGossipOption struct {
 	Item gossipMenuItem
 }
 
-func (s *session) loadCreatureGossipOptions(ctx context.Context, menuID, npcFlags, creatureEntry uint32) ([]loadedGossipOption, error) {
+func (s *session) loadCreatureGossipOptions(ctx context.Context, menuID, npcFlags, creatureEntry uint32, creatureGUID uint64) ([]loadedGossipOption, error) {
 	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT gmo.OptionID, gmo.OptionIcon,
 		COALESCE(NULLIF(gmo.OptionText, ''), bt.Text, ''),
 		gmo.OptionType, gmo.OptionNpcFlag, gmo.ActionMenuID, gmo.ActionPoiID, gmo.BoxCoded, gmo.BoxMoney,
@@ -361,7 +361,7 @@ func (s *session) loadCreatureGossipOptions(ctx context.Context, menuID, npcFlag
 		}
 		// ConditionMgr gate (SourceType 14): seasonal/event/class/race/
 		// quest-chain options stay hidden until their conditions pass.
-		meets, err := s.meetGossipOptionConditions(ctx, menuID, uint32(id), creatureEntry)
+		meets, err := s.meetGossipOptionConditions(ctx, menuID, uint32(id), creatureEntry, creatureGUID)
 		if err != nil {
 			return nil, err
 		}

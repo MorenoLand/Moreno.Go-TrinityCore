@@ -189,7 +189,7 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 				buyPrice = 0
 			}
 		}
-		if meets, err := s.meetVendorItemConditions(ctx, creatureEntry, uint32(item)); err != nil || !meets {
+		if meets, err := s.meetVendorItemConditions(ctx, creatureEntry, uint32(item), vendorGUID); err != nil || !meets {
 			continue
 		}
 		if buyPrice > 0 {
@@ -288,7 +288,7 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 		return true
 	}
 	vendorEntry := uint32((vendorGUID >> 24) & 0xFFFFFF)
-	if meets, err := s.meetVendorItemConditions(ctx, vendorEntry, itemEntry); err != nil || !meets {
+	if meets, err := s.meetVendorItemConditions(ctx, vendorEntry, itemEntry, vendorGUID); err != nil || !meets {
 		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrCantFindItem), true)
 		return true
 	}
