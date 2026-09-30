@@ -44,6 +44,7 @@ const (
 	spellAttr6AssistIgnoreImmuneFlag      uint32 = 0x00000008 // SPELL_ATTR6_ASSIST_IGNORE_IMMUNE_FLAG (SharedDefines.h:637) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6CanTargetUntargetable       uint32 = 0x01000000 // SPELL_ATTR6_CAN_TARGET_UNTARGETABLE (SharedDefines.h:658) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr4NotStealable                uint32 = 0x00000040 // SPELL_ATTR4_NOT_STEALABLE (SharedDefines.h:566) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
+	spellAttr4FixedDamage                 uint32 = 0x00000100 // SPELL_ATTR4_FIXED_DAMAGE (SharedDefines.h:568) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr0UnaffectedByInvulnerability uint32 = 0x20000000 // SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY (SharedDefines.h:441)
 	spellAttr0NotShapeshift               uint32 = 0x00010000 // SPELL_ATTR0_NOT_SHAPESHIFT (SharedDefines.h:428)
 	spellAttr2NotNeedShapeshift           uint32 = 0x00080000 // SPELL_ATTR2_NOT_NEED_SHAPESHIFT (SharedDefines.h:505) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
@@ -100,51 +101,55 @@ const (
 	itemSubclassArmorBuckler = 5
 	itemSubclassArmorShield  = 6
 
-	spellEffectEnergize                      = 30
-	spellEffectParry                         = 22
-	spellEffectPowerBurn                     = 62
-	spellEffectThreat                        = 63
-	spellEffectTriggerSpell                  = 64
-	spellEffectHealMaxHealth                 = 67
-	spellEffectCreateItem                    = 24
-	spellEffectCreateItem2                   = 70
-	spellEffectLearnSpell                    = 36
-	spellEffectLearnPetSpell                 = 57 // SPELL_EFFECT_LEARN_PET_SPELL (SharedDefines.h:868)
-	spellEffectResurrect                     = 18
-	spellEffectReputation                    = 103
-	spellEffectQuestComplete                 = 16
-	spellEffectHealthLeech                   = 9
-	spellEffectPowerDrain                    = 8
-	spellEffectHealMechanical                = 75  // SPELL_EFFECT_HEAL_MECHANICAL (SharedDefines.h:886)
-	spellEffectHealPct                       = 136 // SPELL_EFFECT_HEAL_PCT (SharedDefines.h:947)
-	spellEffectEnergizePct                   = 137 // SPELL_EFFECT_ENERGIZE_PCT (SharedDefines.h:948)
-	spellAuraMounted                         = 78
-	spellAuraModParryPercent                 = 47
-	spellAuraModSpellCritChance              = 57  // SPELL_AURA_MOD_SPELL_CRIT_CHANCE (SpellAuraDefines.h:137)
-	spellAuraModSpellCritChanceSchool        = 71  // SPELL_AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL (SpellAuraDefines.h:151)
-	spellAuraModCritPct                      = 290 // SPELL_AURA_MOD_CRIT_PCT (SpellAuraDefines.h:370)
-	spellAuraConfuse                         = 5
-	spellAuraCharm                           = 6
-	spellAuraFear                            = 7
-	spellAuraStun                            = 12
-	spellAuraRoot                            = 26
-	spellAuraStealth                         = 16
-	spellAuraInvisibility                    = 18
-	spellAuraStealthDetect                   = 17
-	spellAuraInvisibilityDetect              = 19
-	spellAuraStealthLevel                    = 154
-	spellAuraTrackStealthed                  = 151
-	spellAuraConvertRune                     = 249
-	spellAuraDamagePercentDone               = 79
-	spellAuraAttackPowerPercent              = 166
-	spellAuraRangedAttackPowerPercent        = 167
-	spellAuraCastingSpeedNotStack            = 65
-	spellAuraHasteSpells                     = 216
-	spellAuraFakeInebriation                 = 304
-	unitStandFlagCreep                       = 0x02
-	playerAuraVisionStealth                  = 0x20
-	playerAuraVisionInvis                    = 0x40
-	playerFieldByteTrackStealthed     uint32 = 0x00000002
+	spellEffectEnergize                           = 30
+	spellEffectParry                              = 22
+	spellEffectPowerBurn                          = 62
+	spellEffectThreat                             = 63
+	spellEffectTriggerSpell                       = 64
+	spellEffectHealMaxHealth                      = 67
+	spellEffectCreateItem                         = 24
+	spellEffectCreateItem2                        = 70
+	spellEffectLearnSpell                         = 36
+	spellEffectLearnPetSpell                      = 57 // SPELL_EFFECT_LEARN_PET_SPELL (SharedDefines.h:868)
+	spellEffectResurrect                          = 18
+	spellEffectReputation                         = 103
+	spellEffectQuestComplete                      = 16
+	spellEffectHealthLeech                        = 9
+	spellEffectPowerDrain                         = 8
+	spellEffectHealMechanical                     = 75  // SPELL_EFFECT_HEAL_MECHANICAL (SharedDefines.h:886)
+	spellEffectHealPct                            = 136 // SPELL_EFFECT_HEAL_PCT (SharedDefines.h:947)
+	spellEffectEnergizePct                        = 137 // SPELL_EFFECT_ENERGIZE_PCT (SharedDefines.h:948)
+	spellAuraMounted                              = 78
+	spellAuraModParryPercent                      = 47
+	spellAuraModSpellCritChance                   = 57  // SPELL_AURA_MOD_SPELL_CRIT_CHANCE (SpellAuraDefines.h:137)
+	spellAuraModSpellCritChanceSchool             = 71  // SPELL_AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL (SpellAuraDefines.h:151)
+	spellAuraModCritPct                           = 290 // SPELL_AURA_MOD_CRIT_PCT (SpellAuraDefines.h:370)
+	spellAuraConfuse                              = 5
+	spellAuraCharm                                = 6
+	spellAuraFear                                 = 7
+	spellAuraStun                                 = 12
+	spellAuraRoot                                 = 26
+	spellAuraStealth                              = 16
+	spellAuraInvisibility                         = 18
+	spellAuraStealthDetect                        = 17
+	spellAuraInvisibilityDetect                   = 19
+	spellAuraStealthLevel                         = 154
+	spellAuraTrackStealthed                       = 151
+	spellAuraConvertRune                          = 249
+	spellAuraDamagePercentDone                    = 79
+	spellAuraModDamagePercentTaken                = 87  // SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN (SpellAuraDefines.h:167)
+	spellAuraModMechanicDamageTakenPercent        = 255 // SPELL_AURA_MOD_MECHANIC_DAMAGE_TAKEN_PERCENT (SpellAuraDefines.h:335)
+	spellAuraModIgnoreTargetResist                = 269 // SPELL_AURA_MOD_IGNORE_TARGET_RESIST (SpellAuraDefines.h:349)
+	spellAuraModDamageFromCaster                  = 271 // SPELL_AURA_MOD_DAMAGE_FROM_CASTER (SpellAuraDefines.h:351)
+	spellAuraAttackPowerPercent                   = 166
+	spellAuraRangedAttackPowerPercent             = 167
+	spellAuraCastingSpeedNotStack                 = 65
+	spellAuraHasteSpells                          = 216
+	spellAuraFakeInebriation                      = 304
+	unitStandFlagCreep                            = 0x02
+	playerAuraVisionStealth                       = 0x20
+	playerAuraVisionInvis                         = 0x40
+	playerFieldByteTrackStealthed          uint32 = 0x00000002
 )
 
 // isSelfCastOnly checks if all active spell effects target the caster unit.
@@ -2065,6 +2070,97 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 	return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false)
 }
 
+// spellMechanicMask mirrors TrinityCore SpellInfo::GetAllEffectsMechanicMask
+// (SpellInfo.cpp:1893): the spell-level Mechanic plus each active effect's
+// Mechanic, ORed as 1 << mechanic.
+func spellMechanicMask(spell wotlk.Spell) uint32 {
+	var mask uint32
+	if spell.Mechanic != 0 {
+		mask |= 1 << spell.Mechanic
+	}
+	for _, effect := range spell.Effects {
+		if effect.Effect != 0 && effect.Mechanic != 0 {
+			mask |= 1 << effect.Mechanic
+		}
+	}
+	return mask
+}
+
+// damageFromCasterMultiplier mirrors the SPELL_AURA_MOD_DAMAGE_FROM_CASTER
+// arm of TrinityCore Unit::SpellDamageBonusTaken (Unit.cpp:7094): the
+// victim's auras of that type multiply damage only when the aura's caster
+// matches this caster and the aura spell affects the damage spell
+// (AuraEffect::IsAffectedOnSpell).
+func damageFromCasterMultiplier(victim, caster *session, spell wotlk.Spell) float32 {
+	if victim == nil || caster == nil || victim.server == nil || victim.server.Data == nil {
+		return 1
+	}
+	multiplier := float32(1)
+	for _, aura := range victim.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 || aura.CasterGUID != caster.playerGUID {
+			continue
+		}
+		auraSpell, found, err := victim.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || effect.Aura != spellAuraModDamageFromCaster || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount == 0 {
+				amount = int32(aura.Amount)
+			}
+			if amount == 0 {
+				amount = effect.BasePoints + 1
+			}
+			multiplier *= 1 + float32(amount)/100
+		}
+	}
+	return multiplier
+}
+
+// spellDamageBonusTaken mirrors TrinityCore Unit::SpellDamageBonusTaken
+// (Unit.cpp:7052): the victim-side percent multiplier on direct spell
+// damage. The DIRECT_DAMAGE (melee) early-out has no reachable arm on this
+// Go path — only spell damage arrives here. The mechanic-mask term and the
+// MOD_DAMAGE_PERCENT_TAKEN term read the victim's auras; the fixed-damage
+// exclusion (SPELL_ATTR4_FIXED_DAMAGE) skips all but the mechanic term; the
+// Sanctified Wrath bypass eats the victim's reduction through the caster's
+// MOD_IGNORE_TARGET_RESIST auras. Terms with no Go model: the Cheat Death
+// dummy-aura arm (SpellIconID 2109, needs victim melee-crit-damage
+// reduction) and the npcbot BotMgr::GetBotDamageTakenMod arm. A nil victim
+// session fails open, preserving prior behavior.
+func spellDamageBonusTaken(damage uint32, spell wotlk.Spell, schoolMask uint32, victim, caster *session) uint32 {
+	if victim == nil {
+		return damage
+	}
+	takenTotalMod := float32(1)
+	if mechanicMask := spellMechanicMask(spell); mechanicMask != 0 {
+		takenTotalMod *= ResolveAuraPercentMultiplier(victim.auraTypeModifiersByMiscMask(spellAuraModMechanicDamageTakenPercent, mechanicMask))
+	}
+	if spell.AttributesEx4&spellAttr4FixedDamage == 0 {
+		takenTotalMod *= ResolveAuraPercentMultiplier(victim.auraTypeModifiersByMiscMask(spellAuraModDamagePercentTaken, schoolMask))
+		takenTotalMod *= damageFromCasterMultiplier(victim, caster, spell)
+	}
+	if caster != nil && takenTotalMod < 1 {
+		damageReduction := float32(1) - takenTotalMod
+		for _, amount := range caster.auraTypeModifiersByMiscMask(spellAuraModIgnoreTargetResist, schoolMask) {
+			damageReduction *= 1 - float32(amount)/100
+		}
+		takenTotalMod = 1 - damageReduction
+	}
+	result := float64(damage) * float64(takenTotalMod)
+	if result < 0 {
+		result = 0
+	}
+	return uint32(result)
+}
+
 // spellDamagePushesBack mirrors the pushback half of Unit::DealDamage
 // (Unit.cpp:937): damage dealt by a spell carrying
 // SPELL_ATTR7_NO_PUSHBACK_ON_DAMAGE or SPELL_ATTR3_TREAT_AS_PERIODIC never
@@ -2162,6 +2258,15 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				playerSess.startTimedAchievement(timedTypeSpellTarget, spellID)
 				if !instantKill && playerSess.isImmuneToDamage(uint32(schoolMask)) {
 					damage = 0
+				}
+				// Victim-side damage-taken multiplier (TrinityCore
+				// Unit::SpellDamageBonusTaken, Unit.cpp:7052), applied
+				// before resilience/absorption like the C++
+				// EffectSchoolDMG ordering (SpellEffects.cpp:785).
+				if !instantKill && damage > 0 && s.server != nil && s.server.Data != nil {
+					if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+						damage = spellDamageBonusTaken(damage, spell, uint32(schoolMask), playerSess, s)
+					}
 				}
 				isCrit := (hitInfo & 0x02) != 0 // SPELL_HIT_TYPE_CRIT
 				if !instantKill {
