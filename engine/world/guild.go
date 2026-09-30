@@ -633,8 +633,32 @@ func (s *session) handleGuildLeave(ctx context.Context) bool {
 	if cdb == nil {
 		return true
 	}
-	var guildID int64
-	_ = cdb.QueryRowContext(ctx, "SELECT guildid FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&guildID)
+	var guildID, leaderGUID int64
+	var guildName string
+	_ = cdb.QueryRowContext(ctx, `SELECT g.guildid, g.leaderguid, g.name FROM guild g
+		JOIN guild_member gm ON gm.guildid = g.guildid
+		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &leaderGUID, &guildName)
+	// Guild::HandleLeaveMember (Guild.cpp:1529): the leader cannot leave while
+	// other members remain; a lone leader disbands the guild instead of leaving.
+	if guildID != 0 && uint64(leaderGUID) == s.playerGUID {
+		var members int64
+		_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM guild_member WHERE guildid = ?", guildID).Scan(&members)
+		if members > 1 {
+			// SendCommandResult(session, GUILD_COMMAND_QUIT, ERR_GUILD_LEADER_LEAVE)
+			s.sendGuildCommandResult(guildCmdQuit, "", errGuildLeaderLeave)
+			return true
+		}
+		execGuildDisband(ctx, cdb, guildID)
+		s.player.GuildID = 0
+		s.player.GuildRank = 0
+		s.sendPlayerUpdate()
+		eventBuf := protocol.NewBuffer(32)
+		eventBuf.WriteU8(8) // GE_DISBANDED
+		eventBuf.WriteU8(0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), eventBuf.Bytes(), true)
+		s.debug("guild disbanded on leader leave", "guild_id", guildID)
+		return true
+	}
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_member WHERE guid = ?", s.playerGUID)
 	s.player.GuildID = 0
 	s.player.GuildRank = 0
@@ -648,6 +672,8 @@ func (s *session) handleGuildLeave(ctx context.Context) bool {
 	eventBuf.WriteCString(s.player.Name)
 	eventBuf.WriteU64(s.playerGUID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), eventBuf.Bytes(), true)
+	// SendCommandResult(session, GUILD_COMMAND_QUIT, ERR_GUILD_COMMAND_SUCCESS, m_name)
+	s.sendGuildCommandResult(guildCmdQuit, guildName, errGuildCommandSuccess)
 	return true
 }
 
@@ -931,6 +957,19 @@ func (s *session) handleGuildRemove(ctx context.Context, payload []byte) bool {
 	return s.handleGuildRoster(ctx)
 }
 
+// execGuildDisband deletes every row belonging to a guild, mirroring the
+// table deletions in Guild::Disband (Guild.cpp:1139).
+func execGuildDisband(ctx context.Context, cdb *sql.DB, guildID int64) {
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild WHERE guildid = ?", guildID)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_member WHERE guildid = ?", guildID)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_rank WHERE guildid = ?", guildID)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_tab WHERE guildid = ?", guildID)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_item WHERE guildid = ?", guildID)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_eventlog WHERE guildid = ?", guildID)
+	// Guild::Disband (Guild.cpp:1183): CHAR_DEL_GUILD_EVENTLOGS
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_eventlog WHERE guildid = ?", guildID)
+}
+
 // handleGuildDisband processes CMSG_GUILD_DISBAND (0x08F).
 // Reference: WorldSession::HandleGuildDelete (GuildHandler.cpp:121).
 func (s *session) handleGuildDisband(ctx context.Context) bool {
@@ -950,14 +989,7 @@ func (s *session) handleGuildDisband(ctx context.Context) bool {
 		return true
 	}
 
-	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild WHERE guildid = ?", guildID)
-	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_member WHERE guildid = ?", guildID)
-	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_rank WHERE guildid = ?", guildID)
-	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_tab WHERE guildid = ?", guildID)
-	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_item WHERE guildid = ?", guildID)
-	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_eventlog WHERE guildid = ?", guildID)
-	// Guild::Disband (Guild.cpp:1183): CHAR_DEL_GUILD_EVENTLOGS
-	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_eventlog WHERE guildid = ?", guildID)
+	execGuildDisband(ctx, cdb, guildID)
 
 	eventBuf := protocol.NewBuffer(32)
 	eventBuf.WriteU8(8) // GE_DISBANDED
