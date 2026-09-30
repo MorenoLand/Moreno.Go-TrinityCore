@@ -1407,24 +1407,75 @@ func (s *session) procSpellHealTakenAuraTriggers(ctx context.Context, healerGUID
 }
 
 // meleeOutcomeProcHitMask mirrors the DamageInfo constructor's hit-mask
-// derivation for melee outcomes (Unit.cpp:155-179): block, crushing, and
-// glancing blows count as normal hits; only crits set the critical bit.
-func meleeOutcomeProcHitMask(outcome protocol.MeleeHitOutcome) uint32 {
+// derivation (Unit.cpp:130-180): the victim-state arms (immune, full
+// block), the absorb bits from HitInfo, the block bit from the blocked
+// amount, and the damageNullified suppression of the normal/critical bit
+// when the damage was fully absorbed, fully resisted, immuned, or fully
+// blocked. Block, crushing, and glancing blows count as normal hits; only
+// crits set the critical bit. MeleeHitImmune is a Go-side outcome for the
+// immune early-return (CalculateMeleeDamage leaves HitOutCome at
+// MELEE_HIT_EVADE, Unit.cpp:1178/1213-1220), so it carries the evade bit
+// alongside immune, exactly as the C++ ctor does.
+func meleeOutcomeProcHitMask(outcome protocol.MeleeHitOutcome, hitInfo uint32, targetState uint8, blocked uint32) uint32 {
+	hitMask := procHitNone
+	switch targetState {
+	case protocol.VictimStateIsImmune:
+		hitMask |= procHitImmune
+	case protocol.VictimStateBlocks:
+		hitMask |= procHitFullBlock
+	}
+	if hitInfo&(protocol.HitInfoPartialAbsorb|protocol.HitInfoFullAbsorb) != 0 {
+		hitMask |= procHitAbsorb
+	}
+	if hitInfo&protocol.HitInfoFullResist != 0 {
+		hitMask |= procHitFullResist
+	}
+	if blocked > 0 {
+		hitMask |= procHitBlock
+	}
+	damageNullified := hitInfo&(protocol.HitInfoFullAbsorb|protocol.HitInfoFullResist) != 0 ||
+		hitMask&(procHitImmune|procHitFullBlock) != 0
 	switch outcome {
 	case protocol.MeleeHitMiss:
-		return procHitMiss
+		hitMask |= procHitMiss
 	case protocol.MeleeHitDodge:
-		return procHitDodge
+		hitMask |= procHitDodge
 	case protocol.MeleeHitParry:
-		return procHitParry
-	case protocol.MeleeHitEvade:
-		return procHitEvade
+		hitMask |= procHitParry
+	case protocol.MeleeHitEvade, protocol.MeleeHitImmune:
+		hitMask |= procHitEvade
 	case protocol.MeleeHitCrit:
-		return procHitCritical
+		if !damageNullified {
+			hitMask |= procHitCritical
+		}
 	case protocol.MeleeHitNormal, protocol.MeleeHitBlock, protocol.MeleeHitGlancing, protocol.MeleeHitCrushing:
-		return procHitNormal
+		if !damageNullified {
+			hitMask |= procHitNormal
+		}
 	}
-	return procHitNone
+	return hitMask
+}
+
+// rangedAutoProcHitState derives the DamageInfo-style mask inputs for a
+// ranged auto attack from the values the ranged path tracks. Absorb bits
+// come from the absorbed amount (full absorb when nothing of the damage
+// remains, the same absorbed > 0 && damage == 0 determination the spell
+// path uses); the immune outcome maps to the immune target state. The
+// ranged path rolls melee-style outcomes, so by the established convention
+// the mask mirrors the DamageInfo melee ctor (Unit.cpp:130-180).
+func rangedAutoProcHitState(outcome protocol.MeleeHitOutcome, absorbed, blocked, damage uint32) (uint32, uint8) {
+	var hitInfo uint32
+	if absorbed > 0 {
+		hitInfo |= protocol.HitInfoPartialAbsorb
+		if damage == 0 {
+			hitInfo |= protocol.HitInfoFullAbsorb
+		}
+	}
+	targetState := uint8(protocol.VictimStateHit)
+	if outcome == protocol.MeleeHitImmune {
+		targetState = protocol.VictimStateIsImmune
+	}
+	return hitInfo, targetState
 }
 
 // rollAuraProcChance mirrors Aura::CalcProcChance (SpellAuras.cpp:2164-2190)
@@ -1445,7 +1496,7 @@ func (s *session) rollAuraProcChance(entry spellProcEntry, auraSpell wotlk.Spell
 // procAuraTriggers evaluates real aura procs on a melee hit: the done-side
 // half of Unit::ProcDamageAndSpellFor's aura loop (Unit.cpp:10355-10380 via
 // TriggerAurasProcOnEvent). The trigger spell targets the victim.
-func (s *session) procAuraTriggers(ctx context.Context, target combatTarget, attType protocol.WeaponAttackType, outcome protocol.MeleeHitOutcome, damage uint32) {
+func (s *session) procAuraTriggers(ctx context.Context, target combatTarget, attType protocol.WeaponAttackType, outcome protocol.MeleeHitOutcome, hitInfo uint32, targetState uint8, blocked, damage uint32) {
 	typeMask := procFlagDoneMeleeAutoAttack | procFlagDoneMainhandAttack
 	if attType == protocol.OffAttack {
 		typeMask = procFlagDoneMeleeAutoAttack | procFlagDoneOffhandAttack
@@ -1455,7 +1506,7 @@ func (s *session) procAuraTriggers(ctx context.Context, target combatTarget, att
 		schoolMask:     spellSchoolMaskNormal,
 		spellTypeMask:  procSpellTypeNone,
 		spellPhaseMask: procSpellPhaseNone,
-		hitMask:        meleeOutcomeProcHitMask(outcome),
+		hitMask:        meleeOutcomeProcHitMask(outcome, hitInfo, targetState, blocked),
 		actorGUID:      s.playerGUID,
 		damage:         damage,
 	})
@@ -1467,13 +1518,13 @@ func (s *session) procAuraTriggers(ctx context.Context, target combatTarget, att
 // BASE_ATTACK and OFF_ATTACK, with no mainhand/offhand arm on the victim
 // side; Unit.cpp:10385-10448 TriggerAurasProcOnEvent). The trigger spell
 // targets the attacker.
-func (s *session) procVictimAuraTriggers(ctx context.Context, attackerGUID uint64, outcome protocol.MeleeHitOutcome, damage uint32) {
+func (s *session) procVictimAuraTriggers(ctx context.Context, attackerGUID uint64, outcome protocol.MeleeHitOutcome, hitInfo uint32, targetState uint8, blocked, damage uint32) {
 	s.procAuraTriggerLoop(ctx, attackerGUID, procEventInfo{
 		typeMask:       procFlagTakenMeleeAutoAttack,
 		schoolMask:     spellSchoolMaskNormal,
 		spellTypeMask:  procSpellTypeNone,
 		spellPhaseMask: procSpellPhaseNone,
-		hitMask:        meleeOutcomeProcHitMask(outcome),
+		hitMask:        meleeOutcomeProcHitMask(outcome, hitInfo, targetState, blocked),
 		actorGUID:      attackerGUID,
 		damage:         damage,
 	})
@@ -1488,9 +1539,9 @@ func (s *session) procVictimAuraTriggers(ctx context.Context, attackerGUID uint6
 // Spell.cpp:7501-7504), so the CanSpellTriggerProcOnEvent mana-cost,
 // spell-family, and triggered-cast gates engage exactly; the ranged path rolls
 // melee-style outcomes, so the hit mask mirrors the DamageInfo melee ctor
-// (Unit.cpp:155-179). Spells with SPELL_ATTR3_CANT_TRIGGER_PROC never reach
+// (Unit.cpp:130-180). Spells with SPELL_ATTR3_CANT_TRIGGER_PROC never reach
 // the loop (Spell.cpp:2441). The trigger spell targets the victim.
-func (s *session) procRangedAutoAttackAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, outcome protocol.MeleeHitOutcome, damage uint32) {
+func (s *session) procRangedAutoAttackAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, outcome protocol.MeleeHitOutcome, absorbed, blocked, damage uint32) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -1506,12 +1557,13 @@ func (s *session) procRangedAutoAttackAuraTriggers(ctx context.Context, targetGU
 		schoolMask = 1
 	}
 	spellCopy := spell
+	hitInfo, targetState := rangedAutoProcHitState(outcome, absorbed, blocked, damage)
 	s.procAuraTriggerLoop(ctx, targetGUID, procEventInfo{
 		typeMask:       spellDamageProcTypeMask(spell),
 		schoolMask:     schoolMask,
 		spellTypeMask:  procSpellTypeDamage,
 		spellPhaseMask: procSpellPhaseHit,
-		hitMask:        meleeOutcomeProcHitMask(outcome),
+		hitMask:        meleeOutcomeProcHitMask(outcome, hitInfo, targetState, blocked),
 		triggered:      s.triggeredNoProcEvents > 0,
 		eventSpell:     &spellCopy,
 		actorGUID:      s.playerGUID,
@@ -1526,7 +1578,7 @@ func (s *session) procRangedAutoAttackAuraTriggers(ctx context.Context, targetGU
 // PROC_FLAG_TAKEN_DAMAGE, Spell.cpp:2545). The event carries the auto-shot
 // spell's school mask, matching the damage event's school on both sides of
 // DoDamageAndTriggers. The trigger spell targets the attacker.
-func (s *session) procRangedVictimAuraTriggers(ctx context.Context, attackerGUID uint64, spellID uint32, outcome protocol.MeleeHitOutcome, damage uint32) {
+func (s *session) procRangedVictimAuraTriggers(ctx context.Context, attackerGUID uint64, spellID uint32, outcome protocol.MeleeHitOutcome, absorbed, blocked, damage uint32) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -1538,12 +1590,13 @@ func (s *session) procRangedVictimAuraTriggers(ctx context.Context, attackerGUID
 	if schoolMask == 0 {
 		schoolMask = 1
 	}
+	hitInfo, targetState := rangedAutoProcHitState(outcome, absorbed, blocked, damage)
 	s.procAuraTriggerLoop(ctx, attackerGUID, procEventInfo{
 		typeMask:       procFlagTakenRangedAutoAttack | procFlagTakenDamage,
 		schoolMask:     schoolMask,
 		spellTypeMask:  procSpellTypeNone,
 		spellPhaseMask: procSpellPhaseNone,
-		hitMask:        meleeOutcomeProcHitMask(outcome),
+		hitMask:        meleeOutcomeProcHitMask(outcome, hitInfo, targetState, blocked),
 		actorGUID:      attackerGUID,
 		damage:         damage,
 	})

@@ -438,7 +438,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	// Trigger weapon enchantment and trinket procs on hit (TrinityCore Unit::ProcDamageAndSpellFor)
 	s.procWeaponEnchantments(ctx, target, attType, outcome)
 	s.procItemAndTrinketEffects(ctx, target, attType, outcome)
-	s.procAuraTriggers(ctx, target, attType, outcome, damage)
+	s.procAuraTriggers(ctx, target, attType, outcome, hitInfo, targetState, blocked, damage)
 
 	if s.server != nil {
 		s.server.triggerPetDefensive(s.player.Map, s.player.InstanceID, s.playerGUID, target.GUID)
@@ -455,7 +455,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			// Unit.cpp:1194-1198 — ProcVictim = PROC_FLAG_TAKEN_MELEE_AUTO_ATTACK),
 			// before the victim-side damage application, mirroring C++ proc
 			// ordering; the trigger spell targets the attacker.
-			playerSess.procVictimAuraTriggers(ctx, s.playerGUID, outcome, damage)
+			playerSess.procVictimAuraTriggers(ctx, s.playerGUID, outcome, hitInfo, targetState, blocked, damage)
 			if damage > 0 {
 				if damage >= playerSess.player.Health {
 					if s.duelPartner == target.GUID && s.player.DuelTeam != 0 {
@@ -730,7 +730,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	// Spell::TargetInfo::DoDamageAndTriggers, Spell.cpp:2427-2540 — the
 	// auto-shot/wand arm of Spell::prepareDataForTriggerSystem,
 	// Spell.cpp:2018-2034); the trigger spell targets the victim.
-	s.procRangedAutoAttackAuraTriggers(ctx, target.GUID, spellID, outcome, damage)
+	s.procRangedAutoAttackAuraTriggers(ctx, target.GUID, spellID, outcome, absorbed, blocked, damage)
 
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil && vicSess.player != nil {
@@ -743,7 +743,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			// PROC_FLAG_TAKEN_RANGED_AUTO_ATTACK), before the victim-side
 			// damage application, mirroring the melee ordering; the trigger
 			// spell targets the attacker.
-			vicSess.procRangedVictimAuraTriggers(ctx, s.playerGUID, spellID, outcome, damage)
+			vicSess.procRangedVictimAuraTriggers(ctx, s.playerGUID, spellID, outcome, absorbed, blocked, damage)
 			if damage > 0 {
 				s.server.updateArenaDamageScore(s, damage)
 				if damage >= vicSess.player.Health {
