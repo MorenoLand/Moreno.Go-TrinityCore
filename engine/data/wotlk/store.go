@@ -33,6 +33,9 @@ type Store struct {
 	liquidAuraOnce   sync.Once
 	liquidAuraSpells map[uint32]struct{}
 	liquidAuraErr    error
+
+	positivityMu sync.RWMutex
+	positivity   map[uint32]uint32
 }
 
 func CalculateCollisionHeight(mounted bool, objectScale, mountHeight, modelScale, collisionHeight, displayScale float32) float32 {
@@ -778,17 +781,34 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 	if err != nil || !ok {
 		return Spell{}, false, err
 	}
-	// Positivity is computed once per load, mirroring
-	// SpellInfo::_InitializeSpellPositivity; visiting is the shared cycle
-	// guard (the C++ visited set).
-	visiting := map[[2]uint32]bool{}
-	initializeSpellPositivity(&spell, func(triggerID uint32) (Spell, bool) {
-		triggered, ok, err := s.spell(triggerID)
-		if err != nil || !ok {
-			return Spell{}, false
+	// Positivity is computed once per spell and memoized, mirroring the
+	// SpellInfo constructor running _InitializeSpellPositivity at load
+	// (SpellInfo.cpp:3848-3886); the value is a pure function of DBC data,
+	// so the cache is behavior-identical to recomputing. The lock is not
+	// held across the computation: the trigger arm's s.spell lookup takes
+	// s.mu internally.
+	s.positivityMu.RLock()
+	cu, cached := s.positivity[id]
+	s.positivityMu.RUnlock()
+	if !cached {
+		visiting := map[[2]uint32]bool{}
+		initializeSpellPositivity(&spell, func(triggerID uint32) (Spell, bool) {
+			triggered, ok, err := s.spell(triggerID)
+			if err != nil || !ok {
+				return Spell{}, false
+			}
+			return triggered, true
+		}, visiting)
+		cu = spell.AttributesCu
+		s.positivityMu.Lock()
+		if s.positivity == nil {
+			s.positivity = make(map[uint32]uint32)
 		}
-		return triggered, true
-	}, visiting)
+		s.positivity[id] = cu
+		s.positivityMu.Unlock()
+	} else {
+		spell.AttributesCu = cu
+	}
 	return spell, true, nil
 }
 

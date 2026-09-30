@@ -7,8 +7,8 @@ package wotlk
 // custom attributes (src/server/game/Spells/SpellInfo.h:190-203).
 // SpellInfo::IsPositiveEffect (SpellInfo.cpp:1213-1222) then reads them;
 // the no-damage proc arm (Spell.cpp:2447-2457) sweeps that read over the
-// effect mask. Go computes the bits in Store.Spell so every consumer sees
-// the load-time value.
+// effect mask. Go computes the bits once per spell in Store.Spell and
+// memoizes them in the Store, so every consumer sees the load-time value.
 //
 // Modeled: empty slots, passive spells, SPELL_ATTR0_NEGATIVE_1, the
 // whole-spell pre-scan (heal/learn/skill-step/heal-pct positive;
