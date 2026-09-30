@@ -606,4 +606,9 @@ func init() {
 	// OnlyOnceAreaTriggerScript in boss_hakkar.cpp has no Lua
 	// area-trigger bridge and is not registered.
 	RegisterLuaBoss("boss_hakkar", 14834)
+	// Jin'do the Hexxer (Zul'Gurub, optional boss) — fight logic in
+	// lua_scripts/zulgurub/boss_jindo.lua. The npc_healing_ward and
+	// npc_shade_of_jindo trash AIs from the same C++ file register
+	// their own creature events in the Lua file and are not bosses.
+	RegisterLuaBoss("boss_jindo", 11380)
 }
