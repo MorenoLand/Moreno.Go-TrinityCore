@@ -2452,27 +2452,10 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 			return true
 		}
 
-		// Permissions check — Guild::_MoveItems (Guild.cpp:2683-2690):
-		// the destination's BankMoveItemData::HasStoreRights
-		// (Guild.cpp:855-862) demands GUILD_BANK_RIGHT_DEPOSIT_ITEM
-		// (VIEW_TAB|PUT_ITEM, Guild.h:177-181) on the dest tab, and the
-		// source's HasWithdrawRights (Guild.cpp:864-877) demands only
-		// _GetMemberRemainingSlots(source tab) != 0 — view is implied
-		// inside that slot check (Guild.cpp:2586-2596); no PUT_ITEM arm
-		// exists on the source tab. The same-tab rights skip was fixed
-		// above (Guild.cpp:855-857, 866-867), so this applies only to
-		// cross-tab moves.
-		if bankTab != bankTab1 {
-			if !s.checkGuildBankRights(ctx, guildID, bankTab, true) {
-				s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildPermissions)
-				return true
-			}
-			if s.guildBankWithdrawalsRemaining(ctx, int64(guildID), bankTab1) == 0 {
-				s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildPermissions)
-				return true
-			}
-		}
-
+		// The _MoveItems rights checks (dest DEPOSIT_ITEM, source withdraw
+		// slots — Guild::_MoveItems steps 3-4, Guild.cpp:2683-2690) live
+		// inside guildMoveItem and fail silently, C++-exact; no upfront
+		// rights block or error feedback exists on this path.
 		source := guildMoveLocation{Bank: true, Tab: bankTab1, Slot: bankSlot1}
 		destination := guildMoveLocation{Bank: true, Tab: bankTab, Slot: bankSlot}
 		outcome, moved := s.guildMoveItem(ctx, guildID, source, &destination, false, bankItemCount)
@@ -3143,6 +3126,15 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 		if destination.Bank && !sourceLoc.Bank && !s.checkGuildBankRights(ctx, guildID, destination.Tab, false) {
 			return rollback(equipErrItemsCantBeSwapped, source.GUID)
 		}
+		// Guild::_MoveItems step 3 (Guild.cpp:2683-2690): a cross-tab bank
+		// swap needs GUILD_BANK_RIGHT_DEPOSIT_ITEM (VIEW_TAB|PUT_ITEM,
+		// Guild.h:181) on the dest tab
+		// (BankMoveItemData::HasStoreRights, Guild.cpp:855-862; the
+		// same-tab skip lives there too). Silent on failure — C++ returns
+		// with no feedback on this path.
+		if destination.Bank && sourceLoc.Bank && sourceLoc.Tab != destination.Tab && !s.checkGuildBankRights(ctx, guildID, destination.Tab, true) {
+			return rollback(0, source.GUID)
+		}
 		if swapErr := s.guildMoveCanSwap(ctx, sourceLoc, *destination, source, destItem); swapErr != 0 {
 			return rollback(swapErr, source.GUID)
 		}
@@ -3175,6 +3167,16 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 	}
 	if storeErr != 0 {
 		return rollback(storeErr, source.GUID)
+	}
+	// Guild::_MoveItems step 3 (Guild.cpp:2683-2690) runs before step 4's
+	// withdraw-slot check: a cross-tab bank move needs
+	// GUILD_BANK_RIGHT_DEPOSIT_ITEM (VIEW_TAB|PUT_ITEM, Guild.h:181) on the
+	// dest tab (BankMoveItemData::HasStoreRights, Guild.cpp:855-862; the
+	// same-tab skip lives there too). Silent on failure — C++ returns with
+	// no feedback on this path.
+	if destination != nil && destination.Bank && sourceLoc.Bank && sourceLoc.Tab != destination.Tab && !s.checkGuildBankRights(ctx, guildID, destination.Tab, true) {
+		_ = tx.Rollback()
+		return guildMoveOutcome{}, false
 	}
 	if !consumeWithdraw(false) {
 		_ = tx.Rollback()
