@@ -148,6 +148,11 @@ const (
 
 	playerObjectTypeMask   uint16 = 0x0001 | typeMaskUnit | typeMaskPlayer
 	creatureObjectTypeMask uint16 = 0x0001 | typeMaskUnit
+
+	// MAX_PET_TYPE from the PetType enum (PetDefines.h:29-34): SUMMON_PET 0,
+	// HUNTER_PET 1, MAX_PET_TYPE 4. CONDITION_PET_TYPE rows whose Value1 mask
+	// reaches bit 4 are skipped at load (ConditionMgr.cpp:2355-2362).
+	maxPetType uint8 = 4
 )
 
 // loadImplicitTargetConditions fetches the `conditions` rows attached to a
@@ -269,7 +274,7 @@ func (s *session) evalQuestCondition(ctx context.Context, row conditionRow) (boo
 
 func isImplementedConditionType(condType int64) bool {
 	switch condType {
-	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 42, 43, 44, 46, 47, 48, 49, 50:
+	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 42, 43, 44, 45, 46, 47, 48, 49, 50:
 		return true
 	default:
 		return false
@@ -622,6 +627,19 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 		return false, nil
 	case 44: // CONDITION_CHARMED
 		return s.hasAuraType(spellAuraCharm), nil
+	case 45: // CONDITION_PET_TYPE (ConditionMgr.cpp:527-533: (1 << pet->getPetType()) & ConditionValue1)
+		if row.Value1 >= 1<<maxPetType { // C++ skips such rows at load; fail closed
+			return false, nil
+		}
+		unit, ok := s.conditionTargetUnit(row.ConditionTarget, creatureGUID)
+		if !ok || !unit.isPlayer { // object->ToPlayer() null arm
+			return false, nil
+		}
+		petType, ok := s.activePetType()
+		if !ok { // player->GetPet() null arm
+			return false, nil
+		}
+		return (int64(1)<<petType)&row.Value1 != 0, nil
 	case 46: // CONDITION_TAXI
 		return s.inFlight, nil
 	case 47: // CONDITION_QUESTSTATE (1 none, 2 complete, 8 in progress, 32 failed, 64 rewarded)
@@ -750,6 +768,24 @@ func (s *session) conditionTargetUnit(target int64, creatureGUID uint64) (condit
 	default:
 		return conditionUnit{}, false
 	}
+}
+
+// activePetType resolves the player's current pet to its PetType (the
+// character_pet.PetType value Go stores on the pet motion at register time),
+// the Pet::getPetType() source for CONDITION_PET_TYPE
+// (ConditionMgr.cpp:527-533). A dismissed pet (PetGUID 0) or one whose motion
+// is gone fails closed, matching the C++ GetPet() null arm.
+func (s *session) activePetType() (uint8, bool) {
+	if s == nil || s.player == nil || s.server == nil || s.player.PetGUID == 0 {
+		return 0, false
+	}
+	s.server.motionMu.Lock()
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, s.player.PetGUID)
+	s.server.motionMu.Unlock()
+	if motion == nil || motion.PetID == 0 {
+		return 0, false
+	}
+	return motion.PetType, true
 }
 
 // charmerOrOwnerOrSelfGUID ports the identity resolution inside
