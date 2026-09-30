@@ -168,6 +168,7 @@ type Spell struct {
 	DispelType             uint32 // Spell.dbc field 2 = DispelType (DBCStructure.h:1394)
 	Mechanic               uint32 // Spell.dbc field 3 = Mechanic (DBCStructure.h:1395)
 	Attributes             uint32
+	AttributesCu           uint32 // computed, not DBC: SPELL_ATTR0_CU_NEGATIVE_EFF* bits (SpellInfo.h:190-203), filled by initializeSpellPositivity
 	SpellFamilyName        uint32
 	SpellFamilyFlags       [3]uint32
 	SpellIconID            uint32    // Spell.dbc field 133 = SpellIconID (DBCStructure.h:1465)
@@ -773,6 +774,28 @@ func (s *Store) CharStartOutfit(race, class, gender uint8) ([]uint32, error) {
 }
 
 func (s *Store) Spell(id uint32) (Spell, bool, error) {
+	spell, ok, err := s.spell(id)
+	if err != nil || !ok {
+		return Spell{}, false, err
+	}
+	// Positivity is computed once per load, mirroring
+	// SpellInfo::_InitializeSpellPositivity; visiting is the shared cycle
+	// guard (the C++ visited set).
+	visiting := map[[2]uint32]bool{}
+	initializeSpellPositivity(&spell, func(triggerID uint32) (Spell, bool) {
+		triggered, ok, err := s.spell(triggerID)
+		if err != nil || !ok {
+			return Spell{}, false
+		}
+		return triggered, true
+	}, visiting)
+	return spell, true, nil
+}
+
+// spell parses one Spell.dbc record without positivity initialization; the
+// trigger arm evaluates triggered spells per-effect with the shared
+// visiting set, exactly like _isPositiveEffectImpl's recursion.
+func (s *Store) spell(id uint32) (Spell, bool, error) {
 	file, err := s.File("Spell")
 	if err != nil {
 		return Spell{}, false, err

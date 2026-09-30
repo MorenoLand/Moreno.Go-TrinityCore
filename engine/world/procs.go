@@ -897,31 +897,12 @@ func spellHealTakenProcTypeMask(spell wotlk.Spell) uint32 {
 // spellNoDmgHealPositive mirrors the per-effect positivity fallback for the
 // no-damage arm (Spell.cpp:2447-2457): with zero healing the positivity is
 // not assumed from m_healing but read from IsPositiveEffect over the effects
-// in the mask. _isPositiveEffectImpl (SpellInfo.cpp:3388-3390) reports an
-// unused effect slot as positive, so empty slots never flip the sweep;
-// _isPositiveEffectImpl (SpellInfo.cpp:3501-3505, 3571-3577) reports
-// SPELL_EFFECT_HEAL/HEAL_PCT/HEAL_MAX_HEALTH/HEAL_MECHANICAL as positive; the
-// one DBC-visible exception is SPELL_ATTR0_NEGATIVE_1, which forces the whole
-// spell negative (SpellInfo.cpp:3397-3398). The custom CU_NEGATIVE_EFF bits
-// (computed at C++ load time from spell_custom_attr / triggered-spell
-// recursion) have no Go model; non-heal, non-empty effect types fail closed
-// here.
+// in the mask. The CU_NEGATIVE_EFF bits (SpellInfo.h:190-192) are computed
+// at spell load from the DBC-visible arms of _isPositiveEffectImpl
+// (SpellInfo.cpp:3385-3847) in wotlk.initializeSpellPositivity, so this is
+// the Go SpellInfo::IsPositiveEffect read (SpellInfo.cpp:1213-1222).
 func spellNoDmgHealPositive(spell wotlk.Spell, effIndex int) bool {
-	if effIndex < 0 || effIndex >= len(spell.Effects) {
-		return false
-	}
-	if spell.Effects[effIndex].Effect == 0 {
-		return true
-	}
-	switch spell.Effects[effIndex].Effect {
-	case 10, // SPELL_EFFECT_HEAL
-		spellEffectHealMaxHealth,
-		spellEffectHealMechanical,
-		spellEffectHealPct:
-		return spell.Attributes&spellAttr0Negative1 == 0
-	default:
-		return false
-	}
+	return spell.IsPositiveEffect(effIndex)
 }
 
 // spellNoDmgHealProcTypeMask mirrors the done-side half of the
@@ -1085,9 +1066,8 @@ func spellHasHealEffect(spell wotlk.Spell) bool {
 // sweep over IsPositiveEffect. Used on both the damage path (zero incoming
 // damage) and the heal path (zero healing) — C++ runs one shared fallback
 // in Spell::TargetInfo::DoDamageAndTriggers, never the triggering effect
-// alone. The custom SPELL_ATTR0_CU_NEGATIVE_EFF* bits (computed at C++ load
-// time from spell_custom_attr / triggered-spell recursion) have no Go model,
-// and non-heal, non-empty effect types fail closed in spellNoDmgHealPositive.
+// alone. The per-effect read is spellNoDmgHealPositive above, backed by the
+// CU_NEGATIVE_EFF bits computed at spell load.
 func spellDamageNoDmgPositive(spell wotlk.Spell) bool {
 	for i := range spell.Effects {
 		if !spellNoDmgHealPositive(spell, i) {
