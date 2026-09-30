@@ -127,8 +127,9 @@ func (s *session) rollSpellHit(targetLevel uint8, isTargetPlayer bool) bool {
 // ranged spells with ATTR0_REQ_AMMO gain +500ms (SpellInfo.cpp:3102).
 // Haste skips ATTR0_ABILITY / ATTR0_TRADESPELL / ATTR3_NO_DONE_BONUS spells
 // and, for players, spells with no spell family name (Object.cpp:2462-2468).
-// Noted gaps (not stubs): SPELLMOD_CASTING_TIME has no spellmod infra in Go;
-// CanInstantCast (SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK amount >= 1000,
+// Player spell mods (SPELLMOD_CASTING_TIME) apply to the base before the
+// haste multiplier (Object.cpp:2455, ahead of Object.cpp:2462).
+// Noted gaps (not stubs): CanInstantCast (SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK amount >= 1000,
 // SpellAuraEffects.cpp:3904) has no cast-speed aura infra; the ranged-attack-speed
 // branch (m_modAttackSpeedPct[RANGED_ATTACK], Object.cpp:2470) has no Go
 // ranged-haste infra, so that branch is a no-op here.
@@ -142,7 +143,7 @@ func (s *session) calculateSpellCastTime(spell wotlk.Spell) uint32 {
 	if baseCastTime == 0 {
 		return 0
 	}
-	castTime := baseCastTime
+	castTime := s.applySpellMod(spell, spellModCastingTime, baseCastTime)
 	reqAmmo := spell.Attributes&spellAttr0ReqAmmo != 0 && spell.AttributesEx1&spellAttr2AutorepeatFlag == 0
 	switch {
 	case s.player != nil && spell.Attributes&(spellAttr0Ability|spellAttr0Tradespell) == 0 && spell.AttributesEx3&spellAttr3NoDoneBonus == 0 && spell.SpellFamilyName != 0:

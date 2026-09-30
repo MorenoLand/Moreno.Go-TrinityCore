@@ -224,6 +224,7 @@ type session struct {
 	auras                        map[uint32]struct{}
 	auraSlots                    map[uint32]uint8
 	activeAuras                  map[uint32]*activeAura
+	spellMods                    [spellModOpCount][]*spellModifier // Player::m_spellMods, guarded by castMu
 	ownerPetAuraMu               sync.Mutex
 	ownerPetAuraSources          map[ownerPetAuraKey]ownerPetAuraSource
 	ownerPetAuraSourcesLoaded    bool

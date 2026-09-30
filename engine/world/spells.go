@@ -3655,6 +3655,10 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 		}
 	}
 	s.castMu.Unlock()
+	// AuraEffect::ApplySpellMod on re-apply (SpellAuraEffects.cpp:755): the
+	// replaced aura's modifiers leave before the new aura's register.
+	s.dropSpellMods(spellID)
+	s.addSpellMods(aura)
 	for _, e := range scPurge {
 		s.expireSingleCastEntry(e)
 	}
@@ -3740,6 +3744,7 @@ func (s *session) removeAura(spellID uint32) {
 	}
 	s.castMu.Unlock()
 	if removedEffectMask != 0 {
+		s.dropSpellMods(spellID)
 		s.removeOwnerPetAuraEffects(context.Background(), spellID, removedEffectMask)
 	}
 	s.removeOwnerPetAurasForSpell(context.Background(), spellID)
@@ -5030,6 +5035,10 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			}
 			slot, effectMask, charges := existing.Slot, existing.EffectMask, existing.RemainingCharges
 			targetSess.castMu.Unlock()
+			// AuraEffect::ChangeAmount -> CalculateSpellMod
+			// (SpellAuraEffects.cpp:657-683): the merged aura's refreshed
+			// amounts update the registered modifier values, no re-register.
+			targetSess.refreshSpellModValues(existing)
 			if resetPeriodic && periodMs > 0 {
 				targetSess.schedulePlayerPeriodicTick(existing, periodMs)
 			}
@@ -5199,6 +5208,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		purgeIDs = append(purgeIDs, s.server.singleTargetNoStackPurge(spell, casterGUID, targetSess.activeAuras)...)
 		purgeIDs = append(purgeIDs, highest.purge...)
 		targetSess.castMu.Unlock()
+		// AuraEffect::ApplySpellMod on fresh apply / replace
+		// (SpellAuraEffects.cpp:755): the replaced aura's modifiers leave
+		// before the new aura's register.
+		targetSess.dropSpellMods(spell.ID)
+		targetSess.addSpellMods(aura)
 		for _, purgeID := range purgeIDs {
 			targetSess.expirePlayerAura(purgeID.spellID)
 		}
@@ -5711,6 +5725,7 @@ func (ts *session) expirePlayerAura(spellID uint32) {
 		}
 	}
 	ts.castMu.Unlock()
+	ts.dropSpellMods(spellID)
 	ts.removeAura(spellID)
 }
 
