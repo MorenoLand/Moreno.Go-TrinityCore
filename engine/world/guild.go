@@ -638,9 +638,14 @@ func (s *session) handleGuildLeave(ctx context.Context) bool {
 	_ = cdb.QueryRowContext(ctx, `SELECT g.guildid, g.leaderguid, g.name FROM guild g
 		JOIN guild_member gm ON gm.guildid = g.guildid
 		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &leaderGUID, &guildName)
+	// WorldSession::HandleGuildLeaveOpcode (GuildHandler.cpp:113): with no
+	// guild the handler never calls Guild::HandleLeaveMember — silent no-op.
+	if guildID == 0 {
+		return true
+	}
 	// Guild::HandleLeaveMember (Guild.cpp:1529): the leader cannot leave while
 	// other members remain; a lone leader disbands the guild instead of leaving.
-	if guildID != 0 && uint64(leaderGUID) == s.playerGUID {
+	if uint64(leaderGUID) == s.playerGUID {
 		var members int64
 		_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM guild_member WHERE guildid = ?", guildID).Scan(&members)
 		if members > 1 {
