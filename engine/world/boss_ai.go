@@ -653,4 +653,10 @@ func init() {
 	// has no Lua bridge and is not registered; the pre-combat speech
 	// machine runs through the gossip hooks in the same file.
 	RegisterLuaBoss("boss_vaelastrasz", 13020)
+	// Broodlord Lashlayer (Blackwing Lair, third boss) — fight logic
+	// in lua_scripts/blackwinglair/boss_broodlord_lashlayer.lua. The
+	// go_suppression_device GameObjectScript from the same C++ file
+	// has no Lua bridge and is not registered; the leash-check evade
+	// arm and the threat-cut arm have no bridges.
+	RegisterLuaBoss("boss_broodlord", 12017)
 }
