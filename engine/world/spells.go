@@ -3062,6 +3062,16 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 	// Spell.cpp:2493-2513, 2581-2586): C++ applies the heal (HealBySpell) and
 	// forwards the assist threat before the trigger pass, so this runs last.
 	s.procSpellHealAuraTriggers(ctx, targetGUID, spellID, rawHeal, isCrit)
+
+	// Real aura procs on the taken side of a direct heal (TrinityCore
+	// Unit::ProcDamageAndSpellFor via Spell::TargetInfo::DoDamageAndTriggers,
+	// Spell.cpp:2462-2473, 2581-2586): the heal target's
+	// TAKEN_SPELL_*_DMG_CLASS_POS auras gate against the taken-side
+	// positivity-fallback mask. Runs on the target's session so its own auras
+	// gate; on a self-heal this is the caster session, matching C++ where
+	// ProcDamageAndSpellFor's done and taken passes iterate the same aura
+	// list. The trigger spell targets the healer.
+	targetSess.procSpellHealTakenAuraTriggers(ctx, s.playerGUID, spellID, rawHeal, isCrit)
 }
 
 func buildSpellNonMeleeDamageLog(targetGUID, attackerGUID uint64, spellID, damage, overkill uint32, schoolMask uint8, extra ...uint32) []byte {
