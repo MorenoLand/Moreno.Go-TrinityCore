@@ -462,6 +462,13 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 						playerSess.sendPlayerUpdate()
 						s.server.creditHonorableKill(s, playerSess)
 						playerSess.killPlayer(ctx)
+						// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
+						// pet arm — attacker is the player (player = attacker
+						// itself), so only the attacker's live pet gets
+						// KilledUnit(victim) (Unit.cpp:11324-11335).
+						if pet := s.livePetMotion(); pet != nil {
+							s.server.fireCreatureTargetDied(ctx, pet, playerSess.luaPlayer())
+						}
 					}
 					_ = s.sendAttackStop(target.GUID, true)
 					s.attackTarget = 0
@@ -521,7 +528,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.GUID)
 		_ = s.sendAttackStop(target.GUID, true)
 		s.attackTarget = 0
-		s.onCreatureKilled(ctx, target)
+		s.onCreatureKilled(ctx, target, nil)
 		s.debug("target slain by auto-attack", "account", s.accountName, "guid", target.GUID)
 	} else {
 		newHealth := target.Health - damage
@@ -728,6 +735,13 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 						s.server.creditHonorableKill(s, vicSess)
 					}
 					vicSess.killPlayer(ctx)
+					// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
+					// pet arm — attacker is the player, so only the
+					// attacker's live pet gets KilledUnit(victim)
+					// (Unit.cpp:11324-11335).
+					if pet := s.livePetMotion(); pet != nil {
+						s.server.fireCreatureTargetDied(ctx, pet, vicSess.luaPlayer())
+					}
 					s.server.handleWGPlayerDeath(vicSess, s)
 					s.autoRepeatSpell = 0
 					s.autoRepeatTarget = 0
@@ -789,7 +803,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		buf := protocol.NewBuffer(9)
 		buf.WritePackedGUID(s.playerGUID)
 		_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
-		s.onCreatureKilled(ctx, target)
+		s.onCreatureKilled(ctx, target, nil)
 		s.debug("target slain", "account", s.accountName, "guid", target.GUID)
 	} else {
 		if !isPlayerVictim && s.server != nil && s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, target.GUID) {

@@ -249,6 +249,45 @@ func (s *session) fireCreatureDied(ctx context.Context, motion *creatureMotion) 
 	_, _ = sv.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnDied, diedArgs...)
 }
 
+// fireCreatureTargetDied dispatches Eluna CREATURE_EVENT_ON_TARGET_DIED (3)
+// when a creature kills another unit. C++ (Eluna::KilledUnit,
+// CreatureHooks.cpp:156-163, reached via ElunaCreatureAI::KilledUnit,
+// ElunaCreatureAI.h:117-121, from Unit::Kill, Unit.cpp:11324-11391) passes
+// (event, creature, victim). Both binding families fire — entry handlers
+// first, then the unique handlers for this creature's GUID/instance —
+// matching SetupStack's merged call list (HookHelpers.h:37-39). The boolean
+// veto gates only ScriptedAI::KilledUnit, whose sole implementation is the
+// empty CreatureAI base (CreatureAI.h:133), a provable no-op like the
+// SpellHit/JustDied rulings, so Go discards it.
+func (s *Server) fireCreatureTargetDied(ctx context.Context, killer *creatureMotion, victim *scripting.Object) {
+	if s == nil || killer == nil || victim == nil || s.Features == nil || s.Features.Scripts == nil {
+		return
+	}
+	creature := s.luaMotionCreature(killer)
+	if creature == nil {
+		return
+	}
+	args := []any{scripting.CreatureEventOnTargetDied, creature, victim}
+	_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, killer.Entry, scripting.CreatureEventOnTargetDied, args...)
+	_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, killer.GUID, killer.InstanceID, scripting.CreatureEventOnTargetDied, args...)
+}
+
+// livePetMotion returns the session's active pet motion when it is alive.
+// C++ Unit::Kill's pet arm (Unit.cpp:11324-11335) notifies the killer's pet
+// — player->GetPet() gated on alive, controlled (hunter/summon pet,
+// Pet.h:53) and AI-enabled; Go pets are always player-bound motions driven
+// by the pet tick, so a live motion found by PetGUID satisfies the gate.
+func (s *session) livePetMotion() *creatureMotion {
+	if s == nil || s.server == nil || s.player == nil || s.player.PetGUID == 0 {
+		return nil
+	}
+	motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, s.player.PetGUID)
+	if motion == nil || motion.Health == 0 {
+		return nil
+	}
+	return motion
+}
+
 // fireCreatureSpawned dispatches Eluna CREATURE_EVENT_ON_SPAWN (5) when a
 // respawn timer restores a creature. C++ (Eluna::JustRespawned,
 // CreatureHooks.cpp:210-216, reached in Trinity from

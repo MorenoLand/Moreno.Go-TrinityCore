@@ -2220,6 +2220,13 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 						s.server.creditHonorableKill(s, playerSess)
 					}
 					playerSess.killPlayer(ctx)
+					// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
+					// pet arm — attacker is the player, so only the
+					// attacker's live pet gets KilledUnit(victim)
+					// (Unit.cpp:11324-11335).
+					if pet := s.livePetMotion(); pet != nil {
+						s.server.fireCreatureTargetDied(ctx, pet, playerSess.luaPlayer())
+					}
 					s.server.handleWGPlayerDeath(playerSess, s)
 				}
 			} else if damage > 0 {
@@ -2273,7 +2280,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.GUID)
 		_ = s.sendAttackStop(target.GUID, true)
 		s.attackTarget = 0
-		s.onCreatureKilled(ctx, target)
+		s.onCreatureKilled(ctx, target, nil)
 		s.debug("target slain by spell", "account", s.accountName, "spell", spellID, "guid", target.GUID)
 	} else {
 		newHealth := target.Health - damage
@@ -5598,6 +5605,17 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 				ts.player.Health = 0
 				ts.sendPlayerUpdate()
 				ts.killPlayer(context.Background())
+				// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill pet
+				// arm — the periodic tick's attacker is the aura caster (a
+				// player in Go's model), so only the caster's live pet gets
+				// KilledUnit(victim) (Unit.cpp:11324-11335).
+				if ts.server != nil {
+					if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
+						if pet := casterSess.livePetMotion(); pet != nil {
+							ts.server.fireCreatureTargetDied(context.Background(), pet, ts.luaPlayer())
+						}
+					}
+				}
 			}
 			ts.clearActiveAuras()
 		} else {
@@ -5815,7 +5833,16 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			}
 			_ = s.sendAttackStop(target.GUID, true)
 			s.attackTarget = 0
-			s.onCreatureKilled(ctx, target)
+			// Eluna CREATURE_EVENT_ON_TARGET_DIED (3) attacker: the periodic
+			// tick's killer is the aura caster — a pet motion when the DoT
+			// came from a pet (pet_combat.go), else the player (nil).
+			var killer *creatureMotion
+			if s.server != nil && aura.CasterGUID != 0 && (s.player == nil || aura.CasterGUID != s.playerGUID) {
+				if pm := s.server.findCreatureMotion(target.Map, target.InstanceID, aura.CasterGUID); pm != nil && pm.Health > 0 {
+					killer = pm
+				}
+			}
+			s.onCreatureKilled(ctx, target, killer)
 			return false
 		} else {
 			newHealth := targetHealth - dmg

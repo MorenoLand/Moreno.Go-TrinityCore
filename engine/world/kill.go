@@ -446,7 +446,9 @@ func (s *session) rewardCreatureKillXP(ctx context.Context, target combatTarget,
 
 // onCreatureKilled runs the full death chain for a melee kill: XP and
 // level-ups, lootable corpse flag, respawn scheduling and quest credit.
-func (s *session) onCreatureKilled(ctx context.Context, target combatTarget) {
+// killer is the killing creature motion, or nil when the attacker is the
+// player session s itself.
+func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, killer *creatureMotion) {
 	if s.player == nil {
 		return
 	}
@@ -460,6 +462,26 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget) {
 	// C++ firing after death registration (Unit.cpp:11391).
 	if s.server != nil {
 		if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
+			// Eluna CREATURE_EVENT_ON_TARGET_DIED (3), both Unit::Kill arms,
+			// ahead of ai->JustDied (event 4): the pet arm precedes the
+			// branch arm in C++ (Unit.cpp:11324-11335 before 11385-11387)
+			// but observes no flag-dependent state, so both fire here.
+			victim := s.server.luaMotionCreature(motion)
+			if killer != nil {
+				if killer.OwnerGUID != 0 {
+					// Pet attacker: the pet arm fires for the owner's pet —
+					// the killer itself — on top of the branch arm, i.e.
+					// C++'s double pet->AI()->KilledUnit(victim) dispatch.
+					s.server.fireCreatureTargetDied(ctx, killer, victim)
+				}
+				// Branch arm: attacker->AI()->KilledUnit(victim), after the
+				// lootable flag the caller already set (Unit.cpp:11385-11387).
+				s.server.fireCreatureTargetDied(ctx, killer, victim)
+			} else if pet := s.livePetMotion(); pet != nil {
+				// Player attacker: only the pet arm fires (Unit::Kill pet
+				// arm — player = attacker itself).
+				s.server.fireCreatureTargetDied(ctx, pet, victim)
+			}
 			s.fireCreatureDied(ctx, motion)
 		}
 	}

@@ -477,6 +477,12 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			targetSess.player.Health = 0
 			targetSess.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((motion.GUID>>24)&0xFFFFFF), 1)
 			targetSess.killPlayer(ctx)
+			// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): the attacker is the
+			// pet — C++ Unit::Kill fires the pet arm (the owner's pet is the
+			// attacker itself) AND the player-victim branch arm, i.e. two
+			// dispatches with the pet (Unit.cpp pet arm + 11359-11361).
+			s.fireCreatureTargetDied(ctx, motion, targetSess.luaPlayer())
+			s.fireCreatureTargetDied(ctx, motion, targetSess.luaPlayer())
 		} else {
 			targetSess.player.Health -= damage
 			targetSess.sendPlayerUpdate()
@@ -485,18 +491,29 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, nil)
 		s.motionMu.Lock()
 		cMotion := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, targetGUID)
+		var killedMotion *creatureMotion
 		if cMotion != nil {
 			if damage >= cMotion.Health {
 				cMotion.Health = 0
 				cMotion.InCombat = false
 				cMotion.Moving = false
 				s.broadcastCreatureValuesUpdateInInstance(cMotion.Map, cMotion.InstanceID, targetGUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: 1})
+				killedMotion = cMotion
 			} else {
 				cMotion.Health -= damage
 				s.broadcastCreatureValuesUpdateInInstance(cMotion.Map, cMotion.InstanceID, targetGUID, map[int]uint32{unitFieldHealth: cMotion.Health})
 			}
 		}
 		s.motionMu.Unlock()
+		if killedMotion != nil {
+			// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): pet attacker → pet arm
+			// + branch arm double dispatch (Unit.cpp pet arm + 11385-11387),
+			// fired after the lock (Lua handlers may re-enter the motion
+			// map). The full death chain (XP/loot/respawn, event 4) does not
+			// run on this path — pre-existing gap, noted in the checkpoint.
+			s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(killedMotion))
+			s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(killedMotion))
+		}
 	}
 }
 
@@ -886,6 +903,12 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			victim.player.Health = 0
 			victim.sendPlayerUpdate()
 			victim.killPlayer(ctx)
+			// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): the attacker is the
+			// pet — C++ Unit::Kill fires the pet arm (the owner's pet is the
+			// attacker itself) AND the player-victim branch arm, i.e. two
+			// dispatches with the pet (Unit.cpp pet arm + 11359-11361).
+			s.server.fireCreatureTargetDied(ctx, caster, victim.luaPlayer())
+			s.server.fireCreatureTargetDied(ctx, caster, victim.luaPlayer())
 		} else {
 			victim.player.Health -= damage
 			victim.sendPlayerUpdate()
@@ -918,7 +941,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	if targetMotion.Health == 0 {
 		s.server.stopCreatureMotionInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, targetMotion.X, targetMotion.Y, targetMotion.Z)
 		s.server.broadcastCreatureValuesUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: 1})
-		s.onCreatureKilled(ctx, target)
+		s.onCreatureKilled(ctx, target, caster)
 	} else {
 		s.server.broadcastCreatureValuesUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, map[int]uint32{unitFieldHealth: targetMotion.Health})
 		s.server.triggerCreatureAggro(ctx, targetMotion.GUID, caster.OwnerGUID)

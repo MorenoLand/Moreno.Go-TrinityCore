@@ -887,6 +887,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					target.IsDead = true
 					target.Sess.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((motion.GUID>>24)&0xFFFFFF), 1)
 					target.Sess.killPlayer(ctx)
+					// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
+					// player-victim branch — attacker is a wild creature (no
+					// owner player, so no pet arm):
+					// attacker->AI()->KilledUnit(victim) (Unit.cpp:11359-11361).
+					s.fireCreatureTargetDied(ctx, motion, target.Sess.luaPlayer())
 					if motion.BossAI != nil {
 						motion.BossAI.OnKillPlayer(ctx, s, motion, target.GUID)
 					}
