@@ -897,17 +897,21 @@ func spellHealTakenProcTypeMask(spell wotlk.Spell) uint32 {
 // spellNoDmgHealPositive mirrors the per-effect positivity fallback for the
 // no-damage arm (Spell.cpp:2447-2457): with zero healing the positivity is
 // not assumed from m_healing but read from IsPositiveEffect over the effects
-// in the mask. executeSpellHeal is only reached by heal effect types, and
+// in the mask. _isPositiveEffectImpl (SpellInfo.cpp:3388-3390) reports an
+// unused effect slot as positive, so empty slots never flip the sweep;
 // _isPositiveEffectImpl (SpellInfo.cpp:3501-3505, 3571-3577) reports
 // SPELL_EFFECT_HEAL/HEAL_PCT/HEAL_MAX_HEALTH/HEAL_MECHANICAL as positive; the
 // one DBC-visible exception is SPELL_ATTR0_NEGATIVE_1, which forces the whole
 // spell negative (SpellInfo.cpp:3397-3398). The custom CU_NEGATIVE_EFF bits
 // (computed at C++ load time from spell_custom_attr / triggered-spell
-// recursion) and the full EffectMask sweep over sibling effects have no Go
-// model; non-heal effect types fail closed here.
+// recursion) have no Go model; non-heal, non-empty effect types fail closed
+// here.
 func spellNoDmgHealPositive(spell wotlk.Spell, effIndex int) bool {
 	if effIndex < 0 || effIndex >= len(spell.Effects) {
 		return false
+	}
+	if spell.Effects[effIndex].Effect == 0 {
+		return true
 	}
 	switch spell.Effects[effIndex].Effect {
 	case 10, // SPELL_EFFECT_HEAL
@@ -970,16 +974,18 @@ func spellNoDmgHealTakenProcTypeMask(spell wotlk.Spell, positive bool) uint32 {
 // Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2563-2579, 2581-2586).
 // The event carries PROC_SPELL_TYPE_NO_DMG_HEAL ("other spells",
 // SpellMgr.h:206) with PROC_SPELL_PHASE_HIT; the type mask comes from the
-// per-effect positivity fallback rather than the heal arm's assumed POS.
-// Heals always land in Go's model, so the hit mask is PROC_HIT_NORMAL —
-// matching C++ createProcHitMask (Unit.cpp:10224-10234) for a landed hit
-// with zero damage (MissCondition == SPELL_MISS_NONE, no block/absorb/crit
-// bits). Spells with SPELL_ATTR3_CANT_TRIGGER_PROC never reach the loop
-// (Spell.cpp:2441). The event carries the casting spell and the triggered
-// state (Spell::IsTriggered, Spell.cpp:7501-7504) so the
+// per-effect positivity fallback (Spell.cpp:2447-2457) swept over every
+// spell effect — a negative sibling effect flips the arm to the NEG flags,
+// exactly as C++ sweeps the full EffectMask rather than the triggering
+// effect alone. Heals always land in Go's model, so the hit mask is
+// PROC_HIT_NORMAL — matching C++ createProcHitMask (Unit.cpp:10224-10234)
+// for a landed hit with zero damage (MissCondition == SPELL_MISS_NONE, no
+// block/absorb/crit bits). Spells with SPELL_ATTR3_CANT_TRIGGER_PROC never
+// reach the loop (Spell.cpp:2441). The event carries the casting spell and
+// the triggered state (Spell::IsTriggered, Spell.cpp:7501-7504) so the
 // CanSpellTriggerProcOnEvent mana-cost, spell-family, and triggered-cast
 // gates engage exactly. The trigger spell targets the spell target.
-func (s *session) procSpellNoDmgHealAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, effIndex int) {
+func (s *session) procSpellNoDmgHealAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -990,7 +996,7 @@ func (s *session) procSpellNoDmgHealAuraTriggers(ctx context.Context, targetGUID
 	if spell.AttributesEx3&spellAttr3CantTriggerProc != 0 {
 		return
 	}
-	typeMask := spellNoDmgHealProcTypeMask(spell, spellNoDmgHealPositive(spell, effIndex))
+	typeMask := spellNoDmgHealProcTypeMask(spell, spellDamageNoDmgPositive(spell))
 	if typeMask == procFlagNone {
 		return
 	}
@@ -1016,11 +1022,13 @@ func (s *session) procSpellNoDmgHealAuraTriggers(ctx context.Context, targetGUID
 // (Spell.cpp:2462-2473, 2563-2579, 2581-2586). The event mirrors the
 // done-side no-damage event exactly (PROC_SPELL_TYPE_NO_DMG_HEAL,
 // PROC_SPELL_PHASE_HIT, PROC_HIT_NORMAL, the casting spell, and the
-// triggered state) but the type mask is the taken-side positivity fallback,
-// so the target's TAKEN_SPELL_*_DMG_CLASS_POS/NEG auras gate against it.
-// Runs on the target's session so its own auras gate; the trigger spell
-// targets the caster.
-func (s *session) procSpellNoDmgHealTakenAuraTriggers(ctx context.Context, casterGUID uint64, spellID uint32, effIndex int) {
+// triggered state) and the type mask shares the done side's full-effect
+// positivity sweep — C++ computes one positive value for both the
+// procAttacker and procVictim flags — so the target's
+// TAKEN_SPELL_*_DMG_CLASS_POS/NEG auras gate against it. Runs on the
+// target's session so its own auras gate; the trigger spell targets the
+// caster.
+func (s *session) procSpellNoDmgHealTakenAuraTriggers(ctx context.Context, casterGUID uint64, spellID uint32) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -1031,7 +1039,7 @@ func (s *session) procSpellNoDmgHealTakenAuraTriggers(ctx context.Context, caste
 	if spell.AttributesEx3&spellAttr3CantTriggerProc != 0 {
 		return
 	}
-	typeMask := spellNoDmgHealTakenProcTypeMask(spell, spellNoDmgHealPositive(spell, effIndex))
+	typeMask := spellNoDmgHealTakenProcTypeMask(spell, spellDamageNoDmgPositive(spell))
 	if typeMask == procFlagNone {
 		return
 	}
@@ -1072,12 +1080,14 @@ func spellHasHealEffect(spell wotlk.Spell) bool {
 }
 
 // spellDamageNoDmgPositive folds the per-effect positivity fallback
-// (Spell.cpp:2447-2457) over every spell effect for the damage path's
-// no-damage arm: a single negative effect flips the arm negative, matching
-// C++'s EffectMask sweep over IsPositiveEffect. The custom
-// SPELL_ATTR0_CU_NEGATIVE_EFF* bits (computed at C++ load time from
-// spell_custom_attr / triggered-spell recursion) have no Go model, and
-// non-heal effect types fail closed in spellNoDmgHealPositive.
+// (Spell.cpp:2447-2457) over every spell effect for the no-damage arm: a
+// single negative effect flips the arm negative, matching C++'s EffectMask
+// sweep over IsPositiveEffect. Used on both the damage path (zero incoming
+// damage) and the heal path (zero healing) — C++ runs one shared fallback
+// in Spell::TargetInfo::DoDamageAndTriggers, never the triggering effect
+// alone. The custom SPELL_ATTR0_CU_NEGATIVE_EFF* bits (computed at C++ load
+// time from spell_custom_attr / triggered-spell recursion) have no Go model,
+// and non-heal, non-empty effect types fail closed in spellNoDmgHealPositive.
 func spellDamageNoDmgPositive(spell wotlk.Spell) bool {
 	for i := range spell.Effects {
 		if !spellNoDmgHealPositive(spell, i) {

@@ -3120,8 +3120,8 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 		// No-damage arm (Spell.cpp:2563-2579, 2581-2586): done side first,
 		// then the taken side on the target's session, matching the
 		// ProcSkillsAndAuras ordering.
-		s.procSpellNoDmgHealAuraTriggers(ctx, targetGUID, spellID, effIndex)
-		targetSess.procSpellNoDmgHealTakenAuraTriggers(ctx, s.playerGUID, spellID, effIndex)
+		s.procSpellNoDmgHealAuraTriggers(ctx, targetGUID, spellID)
+		targetSess.procSpellNoDmgHealTakenAuraTriggers(ctx, s.playerGUID, spellID)
 
 		// Item combat spells also fire on the no-damage arm for melee/ranged
 		// damage-class spells (Spell.cpp:2589-2596); heal spells are magic
