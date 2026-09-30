@@ -2013,7 +2013,7 @@ func (s *session) sendGuildBankList(ctx context.Context, bankerGUID uint64, tabI
 	}
 
 	payload, ok := buildGuildBankListPayload(ctx, cdb, uint32(guildID), bankMoney, tabID, fullUpdate,
-		s.guildBankWithdrawalsRemaining(ctx, guildID, tabID))
+		s.guildBankWithdrawalsRemaining(ctx, guildID, tabID), nil)
 	if !ok {
 		return true
 	}
@@ -2022,8 +2022,12 @@ func (s *session) sendGuildBankList(ctx context.Context, bankerGUID uint64, tabI
 
 // buildGuildBankListPayload assembles the SMSG_GUILD_BANK_LIST body shared by
 // the session-targeted sender and the guild-wide broadcast; the caller
-// supplies the recipient-specific WithdrawalsRemaining.
-func buildGuildBankListPayload(ctx context.Context, cdb *sql.DB, guildID uint32, bankMoney int64, tabID uint8, fullUpdate bool, withdrawalsRemaining int32) ([]byte, bool) {
+// supplies the recipient-specific WithdrawalsRemaining. Guild::_SendBankList
+// (Guild.cpp:2844-2904): on a full update the list carries every occupied
+// slot (empties skipped); on a partial update (sendAllSlots=false) it
+// carries exactly the given slots, emptied ones as ItemID=0, and nothing
+// at all when no slots are given.
+func buildGuildBankListPayload(ctx context.Context, cdb *sql.DB, guildID uint32, bankMoney int64, tabID uint8, fullUpdate bool, withdrawalsRemaining int32, slots []uint8) ([]byte, bool) {
 	var tabs []guildBankTabInfo
 	rows, err := cdb.QueryContext(ctx, "SELECT TabId, TabName, TabIcon, COALESCE(TabText, '') FROM guild_bank_tab WHERE guildid = ? ORDER BY TabId", guildID)
 	if err == nil {
@@ -2080,9 +2084,16 @@ func buildGuildBankListPayload(ctx context.Context, cdb *sql.DB, guildID uint32,
 		}
 	}
 
-	buf.WriteU8(uint8(len(items)))
+	itemBySlot := make(map[uint8]guildBankSlotItem, len(items))
 	for _, it := range items {
-		buf.WriteU8(it.Slot)
+		itemBySlot[it.Slot] = it
+	}
+	// The per-item trailer matches GuildBankItemInfo (GuildPackets.cpp):
+	// Flags, RandomPropertiesID, Count, EnchantmentID, Charges and the
+	// socket-enchant list are only present when ItemID != 0; an emptied
+	// slot is sent as Slot + ItemID=0 only.
+	writeBankItem := func(slot uint8, it guildBankSlotItem) {
+		buf.WriteU8(slot)
 		buf.WriteU32(it.Entry)
 		if it.Entry != 0 {
 			buf.WriteI32(0) // Flags
@@ -2093,6 +2104,19 @@ func buildGuildBankListPayload(ctx context.Context, cdb *sql.DB, guildID uint32,
 			buf.WriteU8(0)  // SocketEnchant count
 		}
 	}
+	if fullUpdate {
+		buf.WriteU8(uint8(len(items)))
+		for _, it := range items {
+			writeBankItem(it.Slot, it)
+		}
+	} else if slots != nil {
+		buf.WriteU8(uint8(len(slots)))
+		for _, slot := range slots {
+			writeBankItem(slot, itemBySlot[slot])
+		}
+	} else {
+		buf.WriteU8(0)
+	}
 
 	return buf.Bytes(), true
 }
@@ -2102,8 +2126,10 @@ func buildGuildBankListPayload(ctx context.Context, cdb *sql.DB, guildID uint32,
 // online guild member holding GUILD_BANK_RIGHT_VIEW_TAB on the tab. The
 // packet is built once and only the per-member WithdrawalsRemaining field
 // (bytes 9-12: after the 8-byte money and 1-byte tab) is rewritten per
-// recipient, as in C++.
-func (s *session) broadcastGuildBankList(ctx context.Context, guildID uint32, tabID uint8, fullUpdate bool) {
+// recipient, as in C++. The list is partial (fullUpdate=false): it carries
+// exactly the given changed slots, emptied ones as ItemID=0
+// (Guild::_SendBankContentUpdate, Guild.cpp:2794-2826).
+func (s *session) broadcastGuildBankList(ctx context.Context, guildID uint32, tabID uint8, fullUpdate bool, slots []uint8) {
 	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || guildID == 0 {
 		return
 	}
@@ -2127,7 +2153,7 @@ func (s *session) broadcastGuildBankList(ctx context.Context, guildID uint32, ta
 			continue
 		}
 		if payload == nil {
-			p, ok := buildGuildBankListPayload(ctx, cdb, guildID, bankMoney, tabID, fullUpdate, 0)
+			p, ok := buildGuildBankListPayload(ctx, cdb, guildID, bankMoney, tabID, fullUpdate, 0, slots)
 			if !ok {
 				return
 			}
@@ -2506,6 +2532,12 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 	// the dest-tab message. Track that extra tab here.
 	var extraListTab uint8
 	sendExtraList := false
+	// The trailing content-update lists are partial: each carries exactly
+	// the changed bank slots (emptied ones as ItemID=0), in ascending
+	// slot order like C++'s SlotIds set (Guild::_SendBankContentUpdate,
+	// Guild.cpp:2794-2826; _SendBankList, Guild.cpp:2888-2904).
+	var contentSlots []uint8
+	var extraContentSlots []uint8
 	if bankOnly != 0 {
 		bankTab, err = r.ReadU8()
 		if err != nil {
@@ -2549,11 +2581,25 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 		destination := guildMoveLocation{Bank: true, Tab: bankTab, Slot: bankSlot}
 		outcome, moved := s.guildMoveItem(ctx, guildID, source, &destination, false, bankItemCount)
 		movedItems = moved
+		if moved {
+			// Same tab: one message for the src tab carries the src and
+			// dest slots; cross-tab: the dest-tab message carries only
+			// the dest slot, the src tab gets its own message below.
+			if bankTab == bankTab1 && bankSlot1 != bankSlot {
+				contentSlots = []uint8{bankSlot1, bankSlot}
+				if bankSlot1 > bankSlot {
+					contentSlots[0], contentSlots[1] = contentSlots[1], contentSlots[0]
+				}
+			} else {
+				contentSlots = []uint8{bankSlot}
+			}
+		}
 		if moved && bankTab != bankTab1 {
 			// Cross-tab: the src tab gets its own list message after the
 			// dest-tab one (Guild.cpp:2812-2823).
 			sendExtraList = true
 			extraListTab = bankTab1
+			extraContentSlots = []uint8{bankSlot1}
 			s.logGuildBankEvent(ctx, guildID, bankTab1, guildBankLogMoveItem, s.playerGUID, outcome.Source.Entry, outcome.Count, bankTab)
 			if outcome.Swapped {
 				s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogMoveItem, s.playerGUID, outcome.Destination.Entry, outcome.Destination.Count, bankTab1)
@@ -2633,6 +2679,8 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 			outcome, moved := s.guildMoveItem(ctx, guildID, source, destination, autoTarget, splitCount)
 			movedItems = moved
 			if moved {
+				// B->C: only the emptied/reduced src bank slot changes.
+				contentSlots = []uint8{bankSlot}
 				s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogWithdrawItem, s.playerGUID, outcome.Source.Entry, outcome.Count, 0)
 				if outcome.Swapped {
 					s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogDepositItem, s.playerGUID, outcome.Destination.Entry, outcome.Destination.Count, 0)
@@ -2656,6 +2704,8 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 			outcome, moved := s.guildMoveItem(ctx, guildID, source, &destination, false, splitCount)
 			movedItems = moved
 			if moved {
+				// C->B: only the dest bank slot changes.
+				contentSlots = []uint8{bankSlot}
 				s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogDepositItem, s.playerGUID, outcome.Source.Entry, outcome.Count, 0)
 				if outcome.Swapped {
 					s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogWithdrawItem, s.playerGUID, outcome.Destination.Entry, outcome.Destination.Count, 0)
@@ -2670,9 +2720,9 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 		// moves (Guild.cpp:2812-2823). Guild::_SendBankContentUpdate
 		// (Guild.cpp:2794-2826) fans the refresh out to every online
 		// member with VIEW_TAB on the tab, not just the acting session.
-		s.broadcastGuildBankList(ctx, guildID, bankTab, false)
+		s.broadcastGuildBankList(ctx, guildID, bankTab, false, contentSlots)
 		if sendExtraList {
-			s.broadcastGuildBankList(ctx, guildID, extraListTab, false)
+			s.broadcastGuildBankList(ctx, guildID, extraListTab, false, extraContentSlots)
 		}
 	}
 	return true
