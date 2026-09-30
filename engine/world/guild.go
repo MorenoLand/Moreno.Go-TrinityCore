@@ -26,6 +26,8 @@ type guildMemberInfo struct {
 }
 
 const (
+	guildEventPromotion        uint8  = 0
+	guildEventDemotion         uint8  = 1
 	guildEventJoined           uint8  = 3
 	guildEventLeft             uint8  = 4
 	guildEventSignedOn         uint8  = 12
@@ -41,6 +43,8 @@ const (
 	guildRightViewOfficerNote  uint32 = 0x00004000
 	guildRightInvite           uint32 = 0x00000050
 	guildRightRemove           uint32 = 0x00000060
+	guildRightPromote          uint32 = 0x000000C0
+	guildRightDemote           uint32 = 0x00000140
 	guildRightWithdrawRepair   uint32 = 0x00040000
 	guildRightWithdrawGold     uint32 = 0x00080000
 )
@@ -865,7 +869,8 @@ func (s *session) handleGuildInfo(ctx context.Context) bool {
 }
 
 // handleGuildPromote processes CMSG_GUILD_PROMOTE (0x08B).
-// Reference: WorldSession::HandleGuildPromoteOpcode (GuildHandler.cpp:95).
+// Reference: Guild::HandleUpdateMemberRank (Guild.cpp:1595-1651, demote=false),
+// WorldSession::HandleGuildPromoteOpcode (GuildHandler.cpp:95).
 func (s *session) handleGuildPromote(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 2 {
 		return true
@@ -880,21 +885,44 @@ func (s *session) handleGuildPromote(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// WorldSession::HandleGuildPromoteOpcode (GuildHandler.cpp:95-101):
+	// guildless player -> HandleUpdateMemberRank never reached, silent no-op.
 	var guildID, myRank int64
 	err = cdb.QueryRowContext(ctx, "SELECT guildid, rank FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&guildID, &myRank)
 	if err != nil || guildID == 0 {
 		return true
 	}
 
+	// Guild::HandleUpdateMemberRank (Guild.cpp:1598-1600): the rights gate is
+	// checked FIRST, via the exact _HasRankRight form (Guild.cpp:2388);
+	// denial sends PROMOTE + PERMISSIONS with an empty param (Guild.h:627).
+	if s.guildRankRightsMasked(ctx, guildRightPromote) == grRightEmpty {
+		s.sendGuildCommandResult(guildCmdPromote, "", errGuildPermissions)
+		return true
+	}
+
+	// The promoted player must be a member of the guild (Guild.cpp:1601);
+	// a miss is fully silent.
 	var targetGUID, targetRank int64
-	err = cdb.QueryRowContext(ctx, `SELECT gm.guid, gm.rank FROM guild_member gm
+	var memberName string
+	err = cdb.QueryRowContext(ctx, `SELECT gm.guid, gm.rank, c.name FROM guild_member gm
 		JOIN characters c ON c.guid = gm.guid
-		WHERE gm.guildid = ? AND UPPER(c.name) = UPPER(?) LIMIT 1`, guildID, targetName).Scan(&targetGUID, &targetRank)
+		WHERE gm.guildid = ? AND UPPER(c.name) = UPPER(?) LIMIT 1`, guildID, targetName).Scan(&targetGUID, &targetRank, &memberName)
 	if err != nil || targetGUID == 0 {
 		return true
 	}
 
-	if targetRank <= myRank+1 || targetRank <= 1 {
+	// Player cannot promote himself (Guild.cpp:1604-1609).
+	if uint64(targetGUID) == s.playerGUID {
+		s.sendGuildCommandResult(guildCmdPromote, "", errGuildNameInvalid)
+		return true
+	}
+
+	// Allow to promote only to lower rank than member's rank
+	// (Guild.cpp:1630-1637: Member::IsRankNotLower(rankId+1), i.e.
+	// m_rankId <= rankId+1, -> ERR_GUILD_RANK_TOO_HIGH_S with the name).
+	if targetRank <= myRank+1 {
+		s.sendGuildCommandResult(guildCmdPromote, memberName, errGuildRankTooHighS)
 		return true
 	}
 
@@ -905,18 +933,26 @@ func (s *session) handleGuildPromote(ctx context.Context, payload []byte) bool {
 	// _LogEvent(GUILD_EVENT_LOG_PROMOTE_PLAYER, player, member, newRankId)
 	s.logGuildEvent(ctx, uint32(guildID), guildEventLogPromotePlayer, s.playerGUID, uint64(targetGUID), uint8(newRank))
 
-	eventBuf := protocol.NewBuffer(128)
-	eventBuf.WriteU8(0) // GE_PROMOTION
-	eventBuf.WriteU8(2)
-	eventBuf.WriteCString(s.player.Name)
-	eventBuf.WriteCString(targetName)
-	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), eventBuf.Bytes(), true)
-
-	return s.handleGuildRoster(ctx)
+	// _BroadcastEvent(GE_PROMOTION, ObjectGuid::Empty, playerName, memberName,
+	// rankName) (Guild.cpp:1645): 3 string params to every online guild member;
+	// GuildEvent::Write appends no guid for this type (GuildPackets.cpp:130).
+	var rankName string
+	_ = cdb.QueryRowContext(ctx, "SELECT name FROM guild_rank WHERE guildid = ? AND rid = ? LIMIT 1", guildID, newRank).Scan(&rankName)
+	event := guildEventPayload(guildEventPromotion, 0, s.player.Name, memberName, rankName)
+	s.server.sessionsMu.RLock()
+	for target := range s.server.sessions {
+		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != uint32(guildID) {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
+	}
+	s.server.sessionsMu.RUnlock()
+	return true
 }
 
 // handleGuildDemote processes CMSG_GUILD_DEMOTE (0x08C).
-// Reference: WorldSession::HandleGuildDemoteOpcode (GuildHandler.cpp:104).
+// Reference: Guild::HandleUpdateMemberRank (Guild.cpp:1595-1651, demote=true),
+// WorldSession::HandleGuildDemoteOpcode (GuildHandler.cpp:104).
 func (s *session) handleGuildDemote(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 2 {
 		return true
@@ -931,24 +967,54 @@ func (s *session) handleGuildDemote(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// WorldSession::HandleGuildDemoteOpcode (GuildHandler.cpp:104-109):
+	// guildless player -> HandleUpdateMemberRank never reached, silent no-op.
 	var guildID, myRank int64
 	err = cdb.QueryRowContext(ctx, "SELECT guildid, rank FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&guildID, &myRank)
 	if err != nil || guildID == 0 {
 		return true
 	}
 
+	// Guild::HandleUpdateMemberRank (Guild.cpp:1598-1600): the rights gate is
+	// checked FIRST, via the exact _HasRankRight form (Guild.cpp:2388);
+	// denial sends DEMOTE + PERMISSIONS with an empty param (Guild.h:627).
+	if s.guildRankRightsMasked(ctx, guildRightDemote) == grRightEmpty {
+		s.sendGuildCommandResult(guildCmdDemote, "", errGuildPermissions)
+		return true
+	}
+
+	// The demoted player must be a member of the guild (Guild.cpp:1601);
+	// a miss is fully silent.
 	var targetGUID, targetRank int64
-	err = cdb.QueryRowContext(ctx, `SELECT gm.guid, gm.rank FROM guild_member gm
+	var memberName string
+	err = cdb.QueryRowContext(ctx, `SELECT gm.guid, gm.rank, c.name FROM guild_member gm
 		JOIN characters c ON c.guid = gm.guid
-		WHERE gm.guildid = ? AND UPPER(c.name) = UPPER(?) LIMIT 1`, guildID, targetName).Scan(&targetGUID, &targetRank)
+		WHERE gm.guildid = ? AND UPPER(c.name) = UPPER(?) LIMIT 1`, guildID, targetName).Scan(&targetGUID, &targetRank, &memberName)
 	if err != nil || targetGUID == 0 {
 		return true
 	}
 
+	// Player cannot demote himself (Guild.cpp:1604-1609).
+	if uint64(targetGUID) == s.playerGUID {
+		s.sendGuildCommandResult(guildCmdDemote, "", errGuildNameInvalid)
+		return true
+	}
+
+	// Player can demote only lower rank members
+	// (Guild.cpp:1616-1622: Member::IsRankNotLower(rankId), i.e.
+	// m_rankId <= rankId, -> ERR_GUILD_RANK_TOO_HIGH_S with the name).
+	if targetRank <= myRank {
+		s.sendGuildCommandResult(guildCmdDemote, memberName, errGuildRankTooHighS)
+		return true
+	}
+
+	// Lowest rank cannot be demoted
+	// (Guild.cpp:1624-1629: GetRankId() >= _GetLowestRankId() ->
+	// ERR_GUILD_RANK_TOO_LOW_S with the name).
 	var maxRank int64 = 4
 	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(rid), 4) FROM guild_rank WHERE guildid = ?", guildID).Scan(&maxRank)
-
-	if targetRank <= myRank || targetRank >= maxRank {
+	if targetRank >= maxRank {
+		s.sendGuildCommandResult(guildCmdDemote, memberName, errGuildRankTooLowS)
 		return true
 	}
 
@@ -959,14 +1025,21 @@ func (s *session) handleGuildDemote(ctx context.Context, payload []byte) bool {
 	// _LogEvent(GUILD_EVENT_LOG_DEMOTE_PLAYER, player, member, newRankId)
 	s.logGuildEvent(ctx, uint32(guildID), guildEventLogDemotePlayer, s.playerGUID, uint64(targetGUID), uint8(newRank))
 
-	eventBuf := protocol.NewBuffer(128)
-	eventBuf.WriteU8(1) // GE_DEMOTION
-	eventBuf.WriteU8(2)
-	eventBuf.WriteCString(s.player.Name)
-	eventBuf.WriteCString(targetName)
-	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), eventBuf.Bytes(), true)
-
-	return s.handleGuildRoster(ctx)
+	// _BroadcastEvent(GE_DEMOTION, ObjectGuid::Empty, playerName, memberName,
+	// rankName) (Guild.cpp:1645): 3 string params to every online guild member;
+	// GuildEvent::Write appends no guid for this type (GuildPackets.cpp:130).
+	var rankName string
+	_ = cdb.QueryRowContext(ctx, "SELECT name FROM guild_rank WHERE guildid = ? AND rid = ? LIMIT 1", guildID, newRank).Scan(&rankName)
+	event := guildEventPayload(guildEventDemotion, 0, s.player.Name, memberName, rankName)
+	s.server.sessionsMu.RLock()
+	for target := range s.server.sessions {
+		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != uint32(guildID) {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
+	}
+	s.server.sessionsMu.RUnlock()
+	return true
 }
 
 // handleGuildLeader processes CMSG_GUILD_LEADER (0x090).
