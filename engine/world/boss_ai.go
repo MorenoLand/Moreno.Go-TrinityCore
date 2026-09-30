@@ -558,4 +558,11 @@ func init() {
 	// Nalorakk (Zul'Aman) — fight logic in
 	// lua_scripts/zulaman/boss_nalorakk.lua.
 	RegisterLuaBoss("boss_nalorakk", 23576)
+	// Jan'alai (Zul'Aman) — fight logic in
+	// lua_scripts/zulaman/boss_janalai.lua (fire bomb 23920 AI
+	// "npc_janalai_firebomb", dragonhawk hatchling 23598 AI
+	// "npc_janalai_hatchling", and egg 23817 AI "npc_janalai_egg" in
+	// the same file; hatcher 23818 AI "npc_janalai_hatcher" has no
+	// Lua-modelable hooks and is not registered).
+	RegisterLuaBoss("boss_janalai", 23578)
 }
