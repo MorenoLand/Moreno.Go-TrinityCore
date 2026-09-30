@@ -326,6 +326,34 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 
 	s.trade.Accepted = true
 
+	// Accept-time money guards, in C++ order (TradeHandler.cpp:278-306): each
+	// failure un-accepts the failing side with a BACK_TO_TRADE notice to the
+	// other party and keeps the trade window open.
+	if s.player.Money < s.trade.Money {
+		_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrNotEnoughMoney, 0, 0)
+		s.trade.Accepted = false
+		_ = partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+		return true
+	}
+	if partner.trade != nil && partner.player.Money < partner.trade.Money {
+		_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrNotEnoughMoney, 0, 0)
+		partner.trade.Accepted = false
+		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+		return true
+	}
+	if partner.trade != nil && s.player.Money >= maxMoneyAmount-partner.trade.Money {
+		_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrTooMuchGold, 0, 0)
+		s.trade.Accepted = false
+		_ = partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+		return true
+	}
+	if partner.trade != nil && partner.player.Money >= maxMoneyAmount-s.trade.Money {
+		_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrTooMuchGold, 0, 0)
+		partner.trade.Accepted = false
+		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+		return true
+	}
+
 	// Inform partner
 	_ = partner.sendTradeStatus(tradeStatusTradeAccept, 0, 0, 0, 0)
 

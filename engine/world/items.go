@@ -1320,6 +1320,7 @@ const (
 	equipErrItemsCantBeSwapped      = 21
 	equipErrSlotIsEmpty             = 22
 	equipErrItemNotFound            = 23
+	equipErrNotEnoughMoney          = 29
 	equipErrCanOnlyDoWithEmptyBags  = 31
 	equipErrYouAreDead              = 38
 	equipErrCantDoRightNow          = 39
