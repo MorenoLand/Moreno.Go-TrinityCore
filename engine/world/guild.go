@@ -115,6 +115,16 @@ const (
 	errGuildItemNotFound      uint32 = 29
 )
 
+// Guild emblem errors mirroring TrinityCore Guild.h:209-216 (GuildEmblemError).
+const (
+	guildEmblemSuccess        uint32 = 0 // ERR_GUILDEMBLEM_SUCCESS
+	guildEmblemInvalidColors  uint32 = 1 // ERR_GUILDEMBLEM_INVALID_TABARD_COLORS (client-side only; never sent)
+	guildEmblemNoGuild        uint32 = 2 // ERR_GUILDEMBLEM_NOGUILD
+	guildEmblemNotGuildMaster uint32 = 3 // ERR_GUILDEMBLEM_NOTGUILDMASTER
+	guildEmblemNotEnoughMoney uint32 = 4 // ERR_GUILDEMBLEM_NOTENOUGHMONEY
+	guildEmblemInvalidVendor  uint32 = 5 // ERR_GUILDEMBLEM_INVALIDVENDOR
+)
+
 // Guild bank event log types mirroring TrinityCore Guild.h:185-196.
 const (
 	guildBankLogDepositItem   uint8 = 1
@@ -343,13 +353,20 @@ func (s *session) handleGuildQuery(ctx context.Context, payload []byte) bool {
 	if err != nil || guildID == 0 {
 		return false
 	}
+	return s.sendGuildQueryResponse(ctx, guildID)
+}
+
+// sendGuildQueryResponse mirrors Guild::HandleQuery (Guild.cpp:1279): the
+// SMSG_GUILD_QUERY_RESPONSE with name, emblem fields, ranks and rank count.
+// HandleSetEmblem calls it right after a successful emblem save (Guild.cpp:1357).
+func (s *session) sendGuildQueryResponse(ctx context.Context, guildID uint32) bool {
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
 	}
 	var name string
 	var emblemStyle, emblemColor, borderStyle, borderColor, bgColor int64
-	err = cdb.QueryRowContext(ctx, "SELECT name, EmblemStyle, EmblemColor, BorderStyle, BorderColor, BackgroundColor FROM guild WHERE guildid = ? LIMIT 1", guildID).Scan(&name, &emblemStyle, &emblemColor, &borderStyle, &borderColor, &bgColor)
+	err := cdb.QueryRowContext(ctx, "SELECT name, EmblemStyle, EmblemColor, BorderStyle, BorderColor, BackgroundColor FROM guild WHERE guildid = ? LIMIT 1", guildID).Scan(&name, &emblemStyle, &emblemColor, &borderStyle, &borderColor, &bgColor)
 	if err != nil {
 		return true
 	}
@@ -3554,7 +3571,11 @@ func (s *session) handleTabardVendorActivate(ctx context.Context, payload []byte
 }
 
 // handleSaveGuildEmblem processes MSG_SAVE_GUILD_EMBLEM (0x1FB).
-// Reference: WorldSession::HandleSaveGuildEmblemOpcode (GuildHandler.cpp:205).
+// Reference: WorldSession::HandleSaveGuildEmblemOpcode (GuildHandler.cpp:205)
+// and Guild::HandleSetEmblem (Guild.cpp:1341): guildless -> ERR_GUILDEMBLEM_NOGUILD,
+// non-leader -> ERR_GUILDEMBLEM_NOTGUILDMASTER, insufficient money ->
+// ERR_GUILDEMBLEM_NOTENOUGHMONEY; on success the emblem is saved,
+// ERR_GUILDEMBLEM_SUCCESS is sent, and HandleQuery follows (Guild.cpp:1357).
 func (s *session) handleSaveGuildEmblem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 28 {
 		return true
@@ -3576,31 +3597,38 @@ func (s *session) handleSaveGuildEmblem(ctx context.Context, payload []byte) boo
 	err := cdb.QueryRowContext(ctx, `SELECT g.guildid, g.leaderguid FROM guild g
 		JOIN guild_member gm ON gm.guildid = g.guildid
 		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &leaderGUID)
-	if err != nil || guildID == 0 || uint64(leaderGUID) != s.playerGUID {
+	if err != nil || guildID == 0 {
+		s.sendSaveGuildEmblemResult(guildEmblemNoGuild)
+		return true
+	}
+	if uint64(leaderGUID) != s.playerGUID {
+		s.sendSaveGuildEmblemResult(guildEmblemNotGuildMaster)
 		return true
 	}
 
-	const tabardCost = 100000 // 10 gold
-	if s.player.Money < tabardCost {
+	const emblemPrice = 100000 // EMBLEM_PRICE = 10 * GOLD (Guild.cpp:43)
+	if s.player.Money < emblemPrice {
+		s.sendSaveGuildEmblemResult(guildEmblemNotEnoughMoney)
 		return true
 	}
 
-	s.player.Money -= tabardCost
+	s.player.Money -= emblemPrice
 	s.sendPlayerMoneyUpdate()
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET EmblemStyle = ?, EmblemColor = ?, BorderStyle = ?, BorderColor = ?, BackgroundColor = ? WHERE guildid = ?",
 		style, color, bStyle, bColor, bgColor, guildID)
 
-	res := protocol.NewBuffer(4)
-	res.WriteU32(0) // ERR_GUILDEMBLEM_SUCCESS
-	_ = s.write(uint16(protocol.OpcodeMSG_SAVE_GUILD_EMBLEM), res.Bytes(), true)
-
-	// GE_TABARDCHANGE = 9
-	eventBuf := protocol.NewBuffer(8)
-	eventBuf.WriteU8(9)
-	eventBuf.WriteU8(0)
-	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), eventBuf.Bytes(), true)
+	s.sendSaveGuildEmblemResult(guildEmblemSuccess)
+	s.sendGuildQueryResponse(ctx, uint32(guildID))
 	return true
+}
+
+// sendSaveGuildEmblemResult mirrors Guild::SendSaveEmblemResult (Guild.cpp:117):
+// PlayerSaveGuildEmblem::Write (GuildPackets.cpp:454) emits int32(Error).
+func (s *session) sendSaveGuildEmblemResult(errCode uint32) {
+	buf := protocol.NewBuffer(4)
+	buf.WriteI32(int32(errCode))
+	_ = s.write(uint16(protocol.OpcodeMSG_SAVE_GUILD_EMBLEM), buf.Bytes(), true)
 }
 
 const CHARTER_DISPLAY_ID = 16161
