@@ -25,6 +25,12 @@ const (
 	CalendarRankCreator   = 2
 )
 
+// Calendar flag bits matching TrinityCore 3.3.5 CalendarFlags (CalendarMgr.h:37-45).
+const (
+	calendarFlagGuildEvent     = 0x400
+	calendarFlagWithoutInvites = 0x040
+)
+
 // Calendar send type constants.
 const (
 	CalendarSendTypeGet    = 0
@@ -132,7 +138,7 @@ func (s *session) handleCalendarGetCalendar(ctx context.Context, payload []byte)
 
 		// 1. Invites for the player
 		invRows, err := cdb.QueryContext(ctx,
-			`SELECT i.event, i.id, i.sender, i.status, i.rank, COALESCE(e.flags, 0)
+			`SELECT i.event, i.id, i.sender, i.status, i.rank, COALESCE(e.creator, i.sender), COALESCE(e.flags, 0)
 			 FROM calendar_invites i
 			 LEFT JOIN calendar_events e ON e.id = i.event
 			 WHERE i.invitee = ?`,
@@ -142,8 +148,9 @@ func (s *session) handleCalendarGetCalendar(ctx context.Context, payload []byte)
 			for invRows.Next() {
 				var inv calInvite
 				var flags uint32
-				if err := invRows.Scan(&inv.eventID, &inv.inviteID, &inv.inviter, &inv.status, &inv.moderator, &flags); err == nil {
-					if (flags & 0x01) != 0 { // CALENDAR_FLAG_GUILD_EVENT
+				var senderGUID uint64
+				if err := invRows.Scan(&inv.eventID, &inv.inviteID, &senderGUID, &inv.status, &inv.moderator, &inv.inviter, &flags); err == nil {
+					if (flags & calendarFlagGuildEvent) != 0 {
 						inv.inviteType = 1
 					}
 					invites = append(invites, inv)
@@ -325,21 +332,24 @@ func (s *session) handleCalendarGetEvent(ctx context.Context, payload []byte) bo
 		}
 		eventType = uint8(evType32)
 
-		if (flags & 0x01) != 0 { // Guild event
-			guildID = s.player.GuildID
+		if (flags&(calendarFlagGuildEvent|calendarFlagWithoutInvites)) != 0 && creator != 0 {
+			_ = cdb.QueryRowContext(ctx,
+				"SELECT COALESCE(guildid, 0) FROM guild_member WHERE guid = ?", creator).Scan(&guildID)
 		}
 
 		invRows, err := cdb.QueryContext(ctx,
-			`SELECT i.invitee, i.id, i.status, i.rank, i.statustime, i.text, COALESCE(c.level, 1)
+			`SELECT i.invitee, i.id, i.status, i.rank, i.statustime, i.text, COALESCE(c.level, 1), COALESCE(gm.guildid, 0)
 			 FROM calendar_invites i
 			 LEFT JOIN characters c ON c.guid = i.invitee
+			 LEFT JOIN guild_member gm ON gm.guid = i.invitee
 			 WHERE i.event = ?`, eventID)
 		if err == nil {
 			defer invRows.Close()
 			for invRows.Next() {
 				var inv eventInvitee
-				if err := invRows.Scan(&inv.invitee, &inv.id, &inv.status, &inv.rank, &inv.statusTime, &inv.text, &inv.level); err == nil {
-					if guildID > 0 {
+				var inviteeGuildID uint32
+				if err := invRows.Scan(&inv.invitee, &inv.id, &inv.status, &inv.rank, &inv.statusTime, &inv.text, &inv.level, &inviteeGuildID); err == nil {
+					if (flags&calendarFlagGuildEvent) != 0 && guildID == inviteeGuildID {
 						inv.inviteType = 1
 					}
 					invites = append(invites, inv)
@@ -759,8 +769,9 @@ func (s *session) handleCalendarEventInvite(ctx context.Context, payload []byte)
 			var evFlags, evType uint32
 			var evDungeon int32
 			var evTime uint32
-			_ = cdb.QueryRowContext(ctx, "SELECT title, flags, type, dungeon, eventtime FROM calendar_events WHERE id = ?", eventID).
-				Scan(&evTitle, &evFlags, &evType, &evDungeon, &evTime)
+			var evCreator uint64
+			_ = cdb.QueryRowContext(ctx, "SELECT title, flags, type, dungeon, eventtime, creator FROM calendar_events WHERE id = ?", eventID).
+				Scan(&evTitle, &evFlags, &evType, &evDungeon, &evTime, &evCreator)
 
 			alertBuf := protocol.NewBuffer(64 + len(evTitle))
 			alertBuf.WriteU64(eventID)
@@ -772,7 +783,7 @@ func (s *session) handleCalendarEventInvite(ctx context.Context, payload []byte)
 			alertBuf.WriteU64(nextInviteID)
 			alertBuf.WriteU8(CalendarStatusInvited)
 			alertBuf.WriteU8(CalendarRankPlayer)
-			alertBuf.WritePackedGUID(s.playerGUID)
+			alertBuf.WritePackedGUID(evCreator)
 			alertBuf.WritePackedGUID(s.playerGUID)
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertBuf.Bytes(), true)
 		}
