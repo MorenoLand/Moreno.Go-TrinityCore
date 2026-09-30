@@ -255,7 +255,7 @@ func (s *session) evalQuestCondition(ctx context.Context, row conditionRow) (boo
 
 func isImplementedConditionType(condType int64) bool {
 	switch condType {
-	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 31, 36, 37, 38, 40, 42, 43, 44, 46, 47, 48, 49, 50:
+	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 31, 36, 37, 38, 39, 40, 42, 43, 44, 46, 47, 48, 49, 50:
 		return true
 	default:
 		return false
@@ -515,6 +515,8 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 			return false, nil
 		}
 		return compareValues(int(row.Value2), int64(s.player.Health*100/s.player.MaxHealth), row.Value1), nil
+	case 39: // CONDITION_REALM_ACHIEVEMENT
+		return s.realmAchievementCompleted(ctx, uint32(row.Value1)), nil
 	case 40: // CONDITION_IN_WATER
 		return s.isSwimming, nil
 	case 42: // CONDITION_STAND_STATE

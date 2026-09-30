@@ -35,6 +35,13 @@ import (
 const CriteriaTypeCount = 124
 const achievementFlagHidden uint32 = 0x00000002
 
+// AchievementFlags per DBCEnums.h: only realm-first achievements can be
+// realm-completed (AchievementGlobalMgr::LoadCompletedAchievements).
+const (
+	achievementFlagRealmFirstReach = 0x00000100
+	achievementFlagRealmFirstKill  = 0x00000200
+)
+
 // Achievement criteria types (0..123) matching TrinityCore 3.3.5 and Achievement_Criteria.dbc.
 const (
 	criteriaTypeKillCreature            = 0   // ACHIEVEMENT_CRITERIA_TYPE_KILL_CREATURE
@@ -616,6 +623,35 @@ func (s *session) hiddenAchievement(achievementID uint32) bool {
 	entry, found := achievementIndex.achieveByID[achievementID]
 	achievementIndex.mu.RUnlock()
 	return found && entry.Flags&achievementFlagHidden != 0
+}
+
+// realmAchievementCompleted mirrors the CONDITION_REALM_ACHIEVEMENT arm of
+// ConditionMgr::IsFitToRequirements (ConditionMgr.cpp) via
+// AchievementGlobalMgr::IsRealmCompleted and LoadCompletedAchievements
+// (AchievementMgr.cpp:2277-2289, 2545-2587): the achievement DBC entry must
+// exist and carry ACHIEVEMENT_FLAG_REALM_FIRST_REACH or
+// ACHIEVEMENT_FLAG_REALM_FIRST_KILL, and at least one character on the realm
+// must hold a character_achievement row for it.
+func (s *session) realmAchievementCompleted(ctx context.Context, achievementID uint32) bool {
+	if s == nil || s.server == nil {
+		return false
+	}
+	s.server.loadAchievementIndex()
+	achievementIndex.mu.RLock()
+	entry, found := achievementIndex.achieveByID[achievementID]
+	achievementIndex.mu.RUnlock()
+	if !found || entry.Flags&(achievementFlagRealmFirstReach|achievementFlagRealmFirstKill) == 0 {
+		return false
+	}
+	cdb := s.server.CharactersStore
+	if cdb == nil || cdb.DB == nil {
+		return false
+	}
+	var n int64
+	if err := cdb.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM character_achievement WHERE achievement = ?", achievementID).Scan(&n); err != nil {
+		return false
+	}
+	return n > 0
 }
 
 // sendAllAchievementData mirrors AchievementMgr::SendAllAchievementData:
