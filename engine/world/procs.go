@@ -142,6 +142,23 @@ func (s *session) spellHitMayFireItemProcs(spellID uint32) bool {
 	return true
 }
 
+// spellHitCanTriggerItemProcs mirrors the canTrigger gate on item combat
+// spells (Player::CastItemCombatSpell, Player.cpp:8109): the item-spell
+// table is only evaluated when the hit mask intersects
+// PROC_HIT_NORMAL | PROC_HIT_CRITICAL | PROC_HIT_ABSORB. A missed spell
+// carries PROC_HIT_MISS (createProcHitMask, Unit.cpp:10179), an immune
+// target PROC_HIT_IMMUNE (Spell.cpp:2581), and a fully resisted hit
+// PROC_HIT_FULL_RESIST — none of which intersect, so no item procs fire.
+// A fully absorbed hit still carries PROC_HIT_ABSORB and fires, so a
+// nonzero absorb keeps the gate open. The same default hit mask applies
+// inside SpellMgr::CanSpellTriggerProcOnEvent (SpellMgr.cpp:562-576).
+func spellHitCanTriggerItemProcs(isHit, immune, fullyResisted bool, absorbed uint32) bool {
+	if !isHit || immune || (fullyResisted && absorbed == 0) {
+		return false
+	}
+	return true
+}
+
 // RollPPMChance rolls whether a weapon proc occurs based on Procs Per Minute (PPM)
 // and weapon attack speed in milliseconds.
 // Formula: chance = (weaponSpeedMs * PPM) / 60000.0

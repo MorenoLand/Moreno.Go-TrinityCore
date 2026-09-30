@@ -2204,6 +2204,8 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	hitInfo := uint32(0)
 	resisted := uint32(0)
 	absorbed := uint32(0)
+	fullyResisted := false
+	immune := false
 
 	if !isHit {
 		hitInfo = 0x01 // SPELL_HIT_TYPE_MISS
@@ -2243,6 +2245,12 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				}
 			}
 			resisted, damage = calcMagicSpellResistance(damage, schoolMask, target.Resistances, s.player.Level, target.Level, !isPlayerVictim, chaosBolt, s.player.SpellPenetration)
+			if resisted > 0 && damage == 0 {
+				// PROC_HIT_FULL_RESIST (createProcHitMask, Unit.cpp:10179):
+				// captured here, before immunity/absorption/taken
+				// multipliers can zero the damage for other reasons.
+				fullyResisted = true
+			}
 		}
 
 		if instantKill {
@@ -2258,6 +2266,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				playerSess.startTimedAchievement(timedTypeSpellTarget, spellID)
 				if !instantKill && playerSess.isImmuneToDamage(uint32(schoolMask)) {
 					damage = 0
+					immune = true
 				}
 				// Victim-side damage-taken multiplier (TrinityCore
 				// Unit::SpellDamageBonusTaken, Unit.cpp:7052), applied
@@ -2294,8 +2303,13 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// suppressed for triggered casts (TRIGGERED_DISALLOW_PROC_EVENTS parity).
 	// Item combat spells fire on spell hits only for melee/ranged
 	// damage-class spells (Spell.cpp:2588-2596); magic-damage-class spells
-	// never qualify.
-	if s.triggeredNoProcEvents == 0 && s.spellHitMayFireItemProcs(spellID) {
+	// never qualify. They also require a landed, non-immune, non-fully-
+	// resisted hit: C++ evaluates the item-spell table only when canTrigger
+	// holds (Player.cpp:8109), and a miss (PROC_HIT_MISS), immunity
+	// (PROC_HIT_IMMUNE), or full resist (PROC_HIT_FULL_RESIST) never
+	// intersects the default hit mask.
+	if s.triggeredNoProcEvents == 0 && s.spellHitMayFireItemProcs(spellID) &&
+		spellHitCanTriggerItemProcs(isHit, immune, fullyResisted, absorbed) {
 		s.procSpellCastAndHitEffects(ctx, target, spellID)
 	}
 
