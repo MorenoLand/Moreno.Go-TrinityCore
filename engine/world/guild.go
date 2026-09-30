@@ -690,18 +690,11 @@ func (s *session) handleGuildAccept(ctx context.Context) bool {
 }
 
 func (s *session) handleGuildDecline(ctx context.Context) bool {
-	if s.guildInviterGUID != 0 && s.server != nil && s.player != nil {
-		inviterSess := s.server.findSessionByGUID(s.guildInviterGUID)
-		if inviterSess != nil && inviterSess.worldReady.Load() {
-			eventBuf := protocol.NewBuffer(64)
-			eventBuf.WriteU8(2) // GE_DECLINED
-			eventBuf.WriteU8(1)
-			eventBuf.WriteCString(s.player.Name)
-			_ = inviterSess.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), eventBuf.Bytes(), true)
-		}
-	}
 	s.guildInvitedID = 0
 	s.guildInviterGUID = 0
+	if s.player != nil {
+		s.player.GuildID = 0
+	}
 	return true
 }
 
