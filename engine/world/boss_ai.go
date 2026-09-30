@@ -519,4 +519,7 @@ func init() {
 	// The Curator (Karazhan) — fight logic in
 	// lua_scripts/karazhan/boss_curator.lua.
 	RegisterLuaBoss("boss_curator", 15691)
+	// Nightbane (Karazhan) — fight logic in
+	// lua_scripts/karazhan/boss_nightbane.lua.
+	RegisterLuaBoss("boss_nightbane", 17225)
 }
