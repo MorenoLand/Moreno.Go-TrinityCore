@@ -35,6 +35,7 @@ const (
 	guildEventMotd             uint8  = 2
 	grRightEmpty               uint32 = 0x00000040
 	guildRightSetMOTD          uint32 = 0x00001040
+	guildRightModifyGuildInfo  uint32 = 0x00010040
 	guildRightViewOfficerNote  uint32 = 0x00004000
 	guildRightInvite           uint32 = 0x00000050
 	guildRightWithdrawRepair   uint32 = 0x00040000
@@ -1272,7 +1273,8 @@ func (s *session) handleGuildSetOfficerNote(ctx context.Context, payload []byte)
 }
 
 // handleGuildInfoText processes CMSG_GUILD_INFO_TEXT (0x2FC).
-// Reference: WorldSession::HandleGuildUpdateInfoText (GuildHandler.cpp:197).
+// Reference: WorldSession::HandleGuildUpdateInfoText (GuildHandler.cpp:197) ->
+// Guild::HandleSetInfo (Guild.cpp:1324).
 func (s *session) handleGuildInfoText(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
@@ -1289,11 +1291,26 @@ func (s *session) handleGuildInfoText(ctx context.Context, payload []byte) bool 
 	}
 
 	var guildID int64
-	err = cdb.QueryRowContext(ctx, "SELECT guildid FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&guildID)
-	if err != nil || guildID == 0 {
+	var curInfo string
+	var rights uint32
+	if err := cdb.QueryRowContext(ctx, `SELECT gm.guildid, g.info, gr.rights FROM guild_member AS gm
+		JOIN guild AS g ON g.guildid = gm.guildid
+		JOIN guild_rank AS gr ON gr.guildid = gm.guildid AND gr.rid = gm.rank
+		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &curInfo, &rights); err != nil || guildID == 0 {
 		return true
 	}
 
+	// Guild::HandleSetInfo (Guild.cpp:1326): unchanged info is a silent
+	// no-op — no DB write.
+	if curInfo == infoText {
+		return true
+	}
+	// The setter must hold GR_RIGHT_MODIFY_GUILD_INFO (Guild.cpp:1330), via
+	// the exact _HasRankRight form (Guild.cpp:2388); unlike the MOTD arm,
+	// denial is fully silent — HandleSetInfo sends no command result.
+	if rights&guildRightModifyGuildInfo == grRightEmpty {
+		return true
+	}
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET info = ? WHERE guildid = ?", infoText, guildID)
 	return true
 }
