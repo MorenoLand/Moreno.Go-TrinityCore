@@ -2235,6 +2235,19 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		}
 	}
 
+	// Eluna CREATURE_EVENT_ON_DAMAGE_TAKEN (9): fires before damage apply;
+	// handlers may rewrite damage via the second return (Unit::DealDamage,
+	// Unit.cpp:697-702). Fired after the damage log, matching C++ sending
+	// the log before DealDamage (Spell.cpp:2542). Skipped when damage,
+	// absorb and resist are all zero, matching the C++ DealDamage early
+	// return (Unit.cpp:1513). Player victims return above; the motion
+	// lookup nil-guards anything else.
+	if s.server != nil && (damage > 0 || absorbed > 0 || resisted > 0) {
+		if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, target.GUID); motion != nil {
+			damage = s.server.fireCreatureDamageTaken(ctx, motion, s.luaPlayer(), damage)
+		}
+	}
+
 	if damage >= target.Health {
 		// Target dies
 		s.server.motionMu.Lock()
@@ -5752,6 +5765,26 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if s.server != nil {
 			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
+		}
+
+		// Eluna CREATURE_EVENT_ON_DAMAGE_TAKEN (9): fires before damage
+		// apply; handlers may rewrite damage via the second return
+		// (Unit::DealDamage, Unit.cpp:697-702). Fired after the periodic
+		// aura log, matching C++ sending the log before DealDamage
+		// (SpellAuraEffects.cpp:5222-5224). The tick floors damage at 1
+		// above, so the C++ all-zero DealDamage skip never applies here.
+		if s.server != nil {
+			var attacker *scripting.Object
+			if aura.CasterGUID == s.playerGUID {
+				attacker = s.luaPlayer()
+			} else if cs := s.server.findSessionByGUID(aura.CasterGUID); cs != nil {
+				attacker = cs.luaPlayer()
+			}
+			if attacker != nil {
+				if motion := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); motion != nil {
+					dmg = s.server.fireCreatureDamageTaken(ctx, motion, attacker, dmg)
+				}
+			}
 		}
 
 		if dmg >= targetHealth {

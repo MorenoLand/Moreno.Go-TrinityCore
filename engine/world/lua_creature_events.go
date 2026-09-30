@@ -97,6 +97,48 @@ func luaHookVeto(results []any) bool {
 	return false
 }
 
+// fireCreatureDamageTaken dispatches Eluna CREATURE_EVENT_ON_DAMAGE_TAKEN (9)
+// for the creature before damage is applied. C++ (Eluna::DamageTaken,
+// CreatureHooks.cpp:114-141, fired from Unit::DealDamage, Unit.cpp:697-702)
+// passes (event, creature, attacker, damage); each handler may return a
+// boolean veto and, as the second return, a replacement damage. The boolean
+// gates only the empty ScriptedAI::DamageTaken base (UnitAI.h, the sole
+// implementation), a provable no-op like the SpellHit ruling, so Go consumes
+// only the damage rewrite. A numeric second return rewrites damage AND the
+// argument the next handler sees (the damageIndex/ReplaceArgument loop); the
+// final damage is the last numeric rewrite. Non-numeric, negative, or >
+// MaxUint32 returns are ignored, mirroring lua_isnumber and
+// CHECKVAL<uint32>'s range errors (LuaEngine.cpp:770-788); fractional values
+// truncate toward zero like C++'s static_cast<unsigned int>. Both binding
+// families fire: entry handlers first, then the unique handlers for this
+// creature's GUID/instance, matching SetupStack's merged call list
+// (HookHelpers.h:37-39) with the rewritten damage threaded through both
+// passes. Returns the damage to apply.
+func (s *Server) fireCreatureDamageTaken(ctx context.Context, motion *creatureMotion, attacker *scripting.Object, damage uint32) uint32 {
+	if s == nil || motion == nil || s.Features == nil || s.Features.Scripts == nil {
+		return damage
+	}
+	creature := s.luaMotionCreature(motion)
+	if creature == nil {
+		return damage
+	}
+	args := []any{scripting.CreatureEventOnDamageTaken, creature, attacker, damage}
+	// The rewritten damage is threaded through the update closure, so the
+	// per-handler return pairs need no post-processing.
+	update := func(returns []any) {
+		if len(returns) < 2 {
+			return
+		}
+		if n, ok := returns[1].(float64); ok && n >= 0 && n <= 4294967295 {
+			damage = uint32(n)
+			args[3] = damage
+		}
+	}
+	_, _ = s.Features.Scripts.TriggerCreatureEvent2Updated(ctx, motion.Entry, scripting.CreatureEventOnDamageTaken, args, update)
+	_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent2Updated(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnDamageTaken, args, update)
+	return damage
+}
+
 // luaQuest builds the Eluna Quest userdata surface used as the quest
 // argument of the quest hooks. It mirrors the GetQuest global's quest
 // object in engine/scripting/globals.go (ID/Name/Title/Level/MinLevel/Flags

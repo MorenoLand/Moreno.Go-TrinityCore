@@ -484,6 +484,18 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		return
 	}
 
+	// Eluna CREATURE_EVENT_ON_DAMAGE_TAKEN (9): fires before damage apply;
+	// handlers may rewrite damage via the second return (Unit::DealDamage,
+	// Unit.cpp:697-702). The damage==0 miss/dodge arm above already
+	// returned, matching C++ skipping DealDamage when damage, absorb and
+	// resist are all zero (Unit.cpp:1513); Go has no creature melee absorb
+	// model, so the remaining zero-damage cases are exactly the skipped ones.
+	if s.server != nil {
+		if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, target.GUID); motion != nil {
+			damage = s.server.fireCreatureDamageTaken(ctx, motion, s.luaPlayer(), damage)
+		}
+	}
+
 	if damage >= target.Health {
 		// Target dies
 		s.server.motionMu.Lock()
@@ -732,6 +744,21 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			}
 		}
 		return
+	}
+
+	// Eluna CREATURE_EVENT_ON_DAMAGE_TAKEN (9): fires before damage apply;
+	// handlers may rewrite damage via the second return (Unit::DealDamage,
+	// Unit.cpp:697-702). Fired after the damage log, matching C++ sending
+	// the log before DealDamage (Spell.cpp:2542). Skipped when damage and
+	// absorb are both zero, matching C++ skipping DealDamage when damage,
+	// absorb and resist are all zero (Unit.cpp:1513); the ranged path has
+	// no resist model, so the remaining zero-damage cases are the skipped
+	// ones. Player victims return above; the motion lookup nil-guards
+	// anything else.
+	if s.server != nil && (damage > 0 || absorbed > 0) {
+		if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, target.GUID); motion != nil {
+			damage = s.server.fireCreatureDamageTaken(ctx, motion, s.luaPlayer(), damage)
+		}
 	}
 
 	if damage >= target.Health {

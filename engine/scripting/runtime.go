@@ -228,12 +228,36 @@ func (r *Runtime) Hooks() []Hook {
 }
 
 func (r *Runtime) Trigger(ctx context.Context, kind string, event int, args ...any) ([]any, error) {
+	pairs, err := r.triggerN(ctx, kind, event, 1, args...)
+	result := make([]any, 0, len(pairs))
+	for _, pair := range pairs {
+		if len(pair) > 0 {
+			result = append(result, pair[0])
+		}
+	}
+	return result, err
+}
+
+// triggerN is the shared hook dispatcher behind Trigger. It captures
+// nresults return values per handler so Eluna hooks whose C++ call sites
+// consume a second return (CallOneFunction(n, args, 2)) can read it. Each
+// inner slice holds one handler's returns in order; handlers returning
+// fewer values leave the trailing slots nil, mirroring Lua's own padding.
+// When update is non-nil it runs after each handler's returns are captured
+// and may mutate args, so subsequent handlers see the updated arguments —
+// the Go model of Eluna's ReplaceArgument chaining (e.g. DamageTaken's
+// damageIndex rewrite).
+func (r *Runtime) triggerN(ctx context.Context, kind string, event int, nresults int, args ...any) ([][]any, error) {
+	return r.triggerNUpdated(ctx, kind, event, nresults, args, nil)
+}
+
+func (r *Runtime) triggerNUpdated(ctx context.Context, kind string, event int, nresults int, args []any, update func(returns []any)) ([][]any, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.state == nil {
 		return nil, nil
 	}
-	result := make([]any, 0)
+	result := make([][]any, 0)
 	initial := append([]registeredHook(nil), r.hooks...)
 	initialIDs := make(map[int]struct{}, len(initial))
 	for _, hook := range initial {
@@ -259,7 +283,7 @@ func (r *Runtime) Trigger(ctx context.Context, kind string, event int, args ...a
 				return result, err
 			}
 		}
-		if err := r.state.ProtectedCall(len(args), 1, 0); err != nil {
+		if err := r.state.ProtectedCall(len(args), nresults, 0); err != nil {
 			if r.config.Logger != nil {
 				r.config.Logger.Error("lua hook failed", "kind", kind, "event", event, "error", err)
 			}
@@ -270,8 +294,14 @@ func (r *Runtime) Trigger(ctx context.Context, kind string, event int, args ...a
 			}
 			continue
 		}
-		if r.state.Top() != 0 {
-			result = append(result, luaValue(r.state, -1))
+		vals := make([]any, nresults)
+		for i := nresults - 1; i >= 0 && r.state.Top() > 0; i-- {
+			vals[i] = luaValue(r.state, -1)
+			r.state.Pop(1)
+		}
+		result = append(result, vals)
+		if update != nil {
+			update(vals)
 		}
 		if !remove {
 			if _, cancelled := r.cancelled[hook.id]; !cancelled {
@@ -300,6 +330,36 @@ func (r *Runtime) TriggerPlayerEvent(ctx context.Context, event int, args ...any
 // RegisterCreatureEvent(entry, event, fn) for the given creature entry.
 func (r *Runtime) TriggerCreatureEvent(ctx context.Context, entry uint32, event int, args ...any) ([]any, error) {
 	return r.Trigger(ctx, "creature:"+strconv.FormatUint(uint64(entry), 10), event, args...)
+}
+
+// TriggerCreatureEvent2 fires hooks registered with
+// RegisterCreatureEvent(entry, event, fn) for the given creature entry,
+// capturing two return values per handler. It exists for Eluna hooks whose
+// C++ call sites consume a second return via CallOneFunction(n, args, 2):
+// CREATURE_EVENT_ON_DAMAGE_TAKEN (9) rewrites damage, and
+// CREATURE_EVENT_ON_CORPSE_REMOVED (26) rewrites respawnDelay. Each inner
+// slice is [firstReturn, secondReturn] in handler call order.
+func (r *Runtime) TriggerCreatureEvent2(ctx context.Context, entry uint32, event int, args ...any) ([][]any, error) {
+	return r.triggerN(ctx, "creature:"+strconv.FormatUint(uint64(entry), 10), event, 2, args...)
+}
+
+// TriggerCreatureEvent2Updated is TriggerCreatureEvent2 with per-handler
+// argument chaining: after each handler's returns are captured, update may
+// mutate args for the subsequent handlers, mirroring Eluna's
+// ReplaceArgument. Used by CREATURE_EVENT_ON_DAMAGE_TAKEN (9), whose C++
+// loop rewrites the damage argument each handler sees.
+func (r *Runtime) TriggerCreatureEvent2Updated(ctx context.Context, entry uint32, event int, args []any, update func(returns []any)) ([][]any, error) {
+	return r.triggerNUpdated(ctx, "creature:"+strconv.FormatUint(uint64(entry), 10), event, 2, args, update)
+}
+
+// TriggerUniqueCreatureEvent2Updated is the two-return, chained-argument
+// variant of TriggerUniqueCreatureEvent. Eluna creature hooks consume both
+// the entry bindings and the unique bindings (SetupStack merges
+// CreatureEventBindings then CreatureUniqueBindings), so callers run the
+// entry pass first and then this pass, threading the same args/update
+// through both to mirror ReplaceArgument chaining across families.
+func (r *Runtime) TriggerUniqueCreatureEvent2Updated(ctx context.Context, guid uint64, instanceID uint32, event int, args []any, update func(returns []any)) ([][]any, error) {
+	return r.triggerNUpdated(ctx, "creature_unique:"+strconv.FormatUint(guid, 10)+":"+strconv.FormatUint(uint64(instanceID), 10), event, 2, args, update)
 }
 
 // TriggerUniqueCreatureEvent fires hooks registered with
