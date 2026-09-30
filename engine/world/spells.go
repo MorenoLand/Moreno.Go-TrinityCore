@@ -113,6 +113,7 @@ const (
 	spellEffectCreateItem2                        = 70
 	spellEffectLearnSpell                         = 36
 	spellEffectLearnPetSpell                      = 57 // SPELL_EFFECT_LEARN_PET_SPELL (SharedDefines.h:868)
+	spellEffectAddExtraAttacks                    = 19 // SPELL_EFFECT_ADD_EXTRA_ATTACKS (SharedDefines.h:830)
 	spellEffectResurrect                          = 18
 	spellEffectReputation                         = 103
 	spellEffectQuestComplete                      = 16
@@ -1689,6 +1690,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						s.castSpellDirect(effCtx, eff.TriggerSpell, effectTarget)
 					}
 				}
+			case spellEffectAddExtraAttacks: // 19: SPELL_EFFECT_ADD_EXTRA_ATTACKS
+				// Spell::EffectAddExtraAttacks (SpellEffects.cpp:4301-4314)
+				// banks the effect's damage as pending extra swings on the
+				// effect's unit target when none are pending. The known
+				// extra-attack spells resolve that target to the caster
+				// (TARGET_UNIT_CASTER), and Go's player-centric combat models
+				// the counter on the caster session only.
+				amount := uint32(eff.BasePoints + 1)
+				for _, effectTarget := range hitTargets {
+					if effectTarget == s.playerGUID && s.grantExtraAttacks(amount) {
+						s.sendExtraAttacksLog(spellID, effectIndex, amount)
+					}
+				}
 			case 3:
 				s.addOwnerPetAuraSource(effCtx, spellID, uint8(effectIndex))
 			case spellEffectThreat:
@@ -1914,6 +1928,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 			time.AfterFunc(time.Duration(timeDelayMs)*time.Millisecond, func() {
 				applyEffects(context.Background())
+				s.consumeExtraAttacks(context.Background(), spellExtraAttackVictim(target, explicitUnitGUID))
 				s.stopAttackOnSpellFinish(spell)
 			})
 			return
@@ -1921,6 +1936,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 
 	applyEffects(ctx)
+	// Spell::_handle_finish_phase (Spell.cpp:3753-3761): a finished cast
+	// whose spell carries SPELL_EFFECT_ADD_EXTRA_ATTACKS spends the
+	// caster's pending extra attacks as extra base-attack swings against
+	// the cast's original unit target.
+	s.consumeExtraAttacks(ctx, spellExtraAttackVictim(target, explicitUnitGUID))
 	s.stopAttackOnSpellFinish(spell)
 }
 
@@ -1942,6 +1962,87 @@ func (s *session) stopAttackOnSpellFinish(spell wotlk.Spell) {
 	}
 	_ = s.sendAttackStop(victim, false)
 	s.debug("attack stopped by spell", "account", s.accountName, "spell", spell.ID)
+}
+
+// spellExtraAttackVictim resolves the original unit target of a finished
+// cast for the _handle_finish_phase extra-attacks arm (Spell.cpp:3755-3760 —
+// m_targets.GetOrigUnitTargetGUID()). The parsed explicitUnitGUID already
+// carries the packet-or-selection fallback for non-self casts; the
+// self-cast branch skips that parse, so fall back to the packet's unit
+// target there.
+func spellExtraAttackVictim(target protocol.SpellTargetData, explicitUnitGUID uint64) uint64 {
+	if explicitUnitGUID != 0 {
+		return explicitUnitGUID
+	}
+	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 {
+		return target.UnitGUID
+	}
+	return 0
+}
+
+// grantExtraAttacks mirrors the counter arm of Spell::EffectAddExtraAttacks
+// (SpellEffects.cpp:4301-4314): a live target with no pending extra attacks
+// banks the effect's damage as extra base-attack swings. It reports whether
+// the counter was set — C++ skips the log execute when attacks are already
+// pending.
+func (s *session) grantExtraAttacks(count uint32) bool {
+	if s == nil || s.player == nil || s.isDeadOrGhost() || s.extraAttacks != 0 || count == 0 {
+		return false
+	}
+	s.extraAttacks = count
+	return true
+}
+
+// sendExtraAttacksLog mirrors Spell::ExecuteLogEffectExtraAttacks
+// (Spell.cpp:4566-4571) as flushed by SendLogExecute (Spell.cpp:4523-4552):
+// SMSG_SPELLLOGEXECUTE carrying the effect id, the target, and the banked
+// attack count.
+func (s *session) sendExtraAttacksLog(spellID uint32, effectIndex int, count uint32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	log := protocol.NewBuffer(32)
+	log.WritePackedGUID(s.playerGUID)
+	log.WriteU32(spellID)
+	log.WriteU32(1)
+	log.WriteU32(spellEffectAddExtraAttacks)
+	log.WritePackedGUID(s.playerGUID)
+	log.WriteU32(count)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
+	}
+	_ = effectIndex
+}
+
+// consumeExtraAttacks mirrors Spell::_handle_finish_phase plus
+// Unit::HandleProcExtraAttackFor (Spell.cpp:3753-3761, Unit.cpp:2180-2187):
+// pending extra attacks become extra base-attack swings against the cast's
+// original unit target, one decrement per swing (so the CheckEffectProc
+// extra-attacks arm still sees the pending counter during those swings,
+// blocking recursive extra-attack procs exactly like C++). A dead or
+// unresolvable target burns the counter with no swings, matching the C++
+// null-victim arm. Extra swings never reset the regular swing timer — the
+// C++ extra=true arm skips the CURRENT_MELEE_SPELL cast and touches no
+// timer — so lastSwing is preserved across them.
+func (s *session) consumeExtraAttacks(ctx context.Context, targetGUID uint64) {
+	if s == nil || s.player == nil || s.extraAttacks == 0 {
+		return
+	}
+	defer func() { s.extraAttacks = 0 }()
+	if targetGUID == 0 {
+		return
+	}
+	for s.extraAttacks > 0 {
+		target, ok := s.getCombatTarget(ctx, targetGUID)
+		if !ok || target.Health == 0 {
+			break
+		}
+		savedSwing := s.lastSwing
+		s.executeMeleeSwing(ctx, target, protocol.BaseAttack)
+		s.lastSwing = savedSwing
+		s.extraAttacks--
+	}
 }
 
 func (s *session) spawnPersistentAreaAura(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) {
