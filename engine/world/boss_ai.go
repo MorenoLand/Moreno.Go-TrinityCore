@@ -572,4 +572,10 @@ func init() {
 	// trigger has no C++ script and the
 	// spell_hexlord_unstable_affliction AuraScript is not modeled).
 	RegisterLuaBoss("boss_hexlord_malacrass", 24239)
+	// Zul'jin (Zul'Aman) — fight logic in
+	// lua_scripts/zulaman/boss_zuljin.lua (feather vortex 24136 AI
+	// "npc_zuljin_vortex" in the same file; the four animal spirits and
+	// the column of fire have no C++ CreatureScript in boss_zuljin.cpp
+	// and are not registered).
+	RegisterLuaBoss("boss_zuljin", 23863)
 }
