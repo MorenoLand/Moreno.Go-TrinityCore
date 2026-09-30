@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -2582,8 +2583,31 @@ const (
 	equipmentSlotEnd     uint32 = 19
 )
 
+// equipmentSetNextGUID is the server-global equipment-set GUID counter,
+// mirroring ObjectMgr::_equipmentSetGuid (ObjectMgr.cpp:7356), seeded from
+// MAX(setguid)+1 on first use.
+var equipmentSetNextGUID uint64 = 1
+
+func newEquipmentSetGUID() uint64 {
+	return atomic.AddUint64(&equipmentSetNextGUID, 1) - 1
+}
+
+func reserveEquipmentSetGUID(id uint64) {
+	for {
+		next := atomic.LoadUint64(&equipmentSetNextGUID)
+		if next > id {
+			return
+		}
+		if atomic.CompareAndSwapUint64(&equipmentSetNextGUID, next, id+1) {
+			return
+		}
+	}
+}
+
 // handleEquipmentSetSave processes CMSG_EQUIPMENT_SET_SAVE (0x4BD).
-// Reference: WorldSession::HandleEquipmentSetSave (CharacterHandler.cpp:1492).
+// Reference: WorldSession::HandleEquipmentSetSave (CharacterHandler.cpp:1492),
+// Player::SetEquipmentSet (Player.cpp:25995), ObjectMgr::GenerateEquipmentSetGuid
+// (ObjectMgr.cpp:7356).
 func (s *session) handleEquipmentSetSave(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return false
@@ -2606,7 +2630,7 @@ func (s *session) handleEquipmentSetSave(ctx context.Context, payload []byte) bo
 		return false
 	}
 
-	var items [19]uint64
+	var sentItems [19]uint64
 	var ignoreMask uint32
 	for i := uint32(0); i < equipmentSlotEnd; i++ {
 		itemGuid, err := r.ReadPackedGUID()
@@ -2617,29 +2641,79 @@ func (s *session) handleEquipmentSetSave(ctx context.Context, payload []byte) bo
 			ignoreMask |= 1 << i
 			continue
 		}
-		items[i] = itemGuid
+		sentItems[i] = itemGuid
 	}
 
-	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		cdb := s.server.CharactersStore.DB
-		placeholders := strings.Repeat("?, ", 24) + "?"
-		cols := "guid, setguid, setindex, name, iconname, ignore_mask"
-		for i := 0; i < 19; i++ {
-			cols += fmt.Sprintf(", item%d", i)
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return true
+	}
+	cdb := s.server.CharactersStore.DB
+
+	// Cheat check from HandleEquipmentSetSave: a slot is only saved when the
+	// referenced item is actually equipped there
+	// (_player->GetItemByPos(INVENTORY_SLOT_BAG_0, i) GUID match); anything
+	// else is dropped, leaving the slot empty like C++'s continue.
+	equipped := make(map[uint32]uint64, equipmentSlotEnd)
+	if rows, err := cdb.QueryContext(ctx, "SELECT slot, item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot < ?", s.playerGUID, equipmentSlotEnd); err == nil {
+		for rows.Next() {
+			var slot uint32
+			var item uint64
+			if err := rows.Scan(&slot, &item); err == nil {
+				equipped[slot] = item
+			}
 		}
-		args := []any{s.playerGUID, setGuid, index, name, iconName, ignoreMask}
-		for i := 0; i < 19; i++ {
-			args = append(args, items[i])
-		}
-		query := fmt.Sprintf("REPLACE INTO character_equipmentsets (%s) VALUES (%s)", cols, placeholders)
-		_, _ = cdb.ExecContext(ctx, query, args...)
+		rows.Close()
 	}
 
-	// Send SMSG_EQUIPMENT_SET_SAVED (0x137)
-	savedBuf := protocol.NewBuffer(16)
-	savedBuf.WriteU32(index)
-	savedBuf.WritePackedGUID(setGuid)
-	_ = s.write(uint16(protocol.OpcodeSMSG_EQUIPMENT_SET_SAVED), savedBuf.Bytes(), true)
+	var items [19]uint64
+	for i := uint32(0); i < equipmentSlotEnd; i++ {
+		if sentItems[i] == 0 {
+			continue
+		}
+		if eq, ok := equipped[i]; ok && eq == sentItems[i]&0xFFFFFFFF {
+			items[i] = sentItems[i] & 0xFFFFFFFF
+		}
+	}
+
+	// Player::SetEquipmentSet semantics: a nonzero GUID must name an existing
+	// set of this player, otherwise the save is refused; a zero GUID means a
+	// new set, whose GUID the server generates (GenerateEquipmentSetGuid) and
+	// reports back in SMSG_EQUIPMENT_SET_SAVED. Updates send no packet.
+	isNew := setGuid == 0
+	if isNew {
+		var maxGUID uint64
+		if err := cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(setguid), 0) FROM character_equipmentsets").Scan(&maxGUID); err == nil {
+			reserveEquipmentSetGUID(maxGUID)
+		}
+		setGuid = newEquipmentSetGUID()
+	} else {
+		var exists bool
+		// A nonzero GUID must name an existing set of this player; C++
+		// logs an error and drops the save otherwise (no disconnect).
+		if err := cdb.QueryRowContext(ctx, "SELECT 1 FROM character_equipmentsets WHERE guid = ? AND setguid = ?", s.playerGUID, setGuid).Scan(&exists); err != nil {
+			return true
+		}
+	}
+
+	placeholders := strings.Repeat("?, ", 24) + "?"
+	cols := "guid, setguid, setindex, name, iconname, ignore_mask"
+	for i := 0; i < 19; i++ {
+		cols += fmt.Sprintf(", item%d", i)
+	}
+	args := []any{s.playerGUID, setGuid, index, name, iconName, ignoreMask}
+	for i := 0; i < 19; i++ {
+		args = append(args, items[i])
+	}
+	query := fmt.Sprintf("REPLACE INTO character_equipmentsets (%s) VALUES (%s)", cols, placeholders)
+	_, _ = cdb.ExecContext(ctx, query, args...)
+
+	if isNew {
+		// Send SMSG_EQUIPMENT_SET_SAVED (0x137) with the server-generated GUID
+		savedBuf := protocol.NewBuffer(16)
+		savedBuf.WriteU32(index)
+		savedBuf.WritePackedGUID(setGuid)
+		_ = s.write(uint16(protocol.OpcodeSMSG_EQUIPMENT_SET_SAVED), savedBuf.Bytes(), true)
+	}
 	return true
 }
 
