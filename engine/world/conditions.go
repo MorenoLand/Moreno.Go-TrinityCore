@@ -268,7 +268,7 @@ func (s *session) evalQuestCondition(ctx context.Context, row conditionRow) (boo
 
 func isImplementedConditionType(condType int64) bool {
 	switch condType {
-	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 31, 32, 35, 36, 37, 38, 39, 40, 42, 43, 44, 46, 47, 48, 49, 50:
+	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 31, 32, 33, 35, 36, 37, 38, 39, 40, 42, 43, 44, 46, 47, 48, 49, 50:
 		return true
 	default:
 		return false
@@ -534,6 +534,25 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 			return false, nil
 		}
 		return uint16(row.Value1)&objectType != 0, nil
+	case 33: // CONDITION_RELATION_TO (ConditionMgr.cpp:386-420)
+		// C++ IsValid rejects the row at load when Value1 >= max targets,
+		// Value1 == ConditionTarget, or Value2 >= RELATION_MAX (2185-2202);
+		// mirror that as fail-closed. Go serves targets {0,1} like the
+		// 32/35 units, and a missing target (or a non-unit one) leaves
+		// condMeets false, like the C++ null/ToUnit arms.
+		if row.Value1 < 0 || row.Value1 > 1 || row.Value1 == row.ConditionTarget ||
+			row.Value2 < 0 || row.Value2 > 5 {
+			return false, nil
+		}
+		u1, ok := s.conditionTargetUnit(row.ConditionTarget, creatureGUID)
+		if !ok {
+			return false, nil
+		}
+		u2, ok := s.conditionTargetUnit(row.Value1, creatureGUID)
+		if !ok {
+			return false, nil
+		}
+		return s.relationToMeets(ctx, u1, u2, uint32(row.Value2)), nil
 	case 35: // CONDITION_DISTANCE_TO (ConditionMgr.cpp:432-437:
 		// condMeets = CompareValues(ComparisionType(Value3),
 		// object->GetDistance(toObject), float(Value2)), with toObject the
@@ -663,6 +682,118 @@ func (s *session) conditionTargetPos(target int64, creatureGUID uint64) (x, y, z
 		return motion.X, motion.Y, motion.Z, true
 	default:
 		return 0, 0, 0, false
+	}
+}
+
+// conditionUnit is the Go rendering of a Unit endpoint of a condition
+// target, for the arms that need ToUnit() on both object and toObject
+// (CONDITION_RELATION_TO, ConditionMgr.cpp:386-420). Target 0 is the player;
+// target 1 is the gossip/vendor creature, resolved through the creature
+// motion registry by instance GUID like conditionTargetPos. Anything else —
+// or an unresolvable target — fails closed, matching the C++ null-target arm.
+type conditionUnit struct {
+	isPlayer    bool
+	guid        uint64
+	ownerGUID   uint64 // UNIT_FIELD_SUMMONEDBY; players never carry one (Unit.h:1147)
+	charmed     bool
+	charmerGUID uint64
+	faction     uint32 // faction template id; creatures only
+	entry       uint32 // creature entry; 0 for the player
+	vehicleBase uint64 // player.VehicleGUID; creatures have no Go vehicle model
+}
+
+func (s *session) conditionTargetUnit(target int64, creatureGUID uint64) (conditionUnit, bool) {
+	if s == nil || s.player == nil {
+		return conditionUnit{}, false
+	}
+	switch target {
+	case 0:
+		return conditionUnit{isPlayer: true, guid: s.playerGUID, vehicleBase: s.player.VehicleGUID}, true
+	case 1:
+		if s.server == nil || creatureGUID == 0 {
+			return conditionUnit{}, false
+		}
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, creatureGUID)
+		s.server.motionMu.Unlock()
+		if motion == nil {
+			return conditionUnit{}, false
+		}
+		return conditionUnit{
+			guid:        creatureGUID,
+			ownerGUID:   motion.OwnerGUID,
+			charmed:     motion.Charmed,
+			charmerGUID: motion.CharmerGUID,
+			faction:     motion.Faction,
+			entry:       motion.Entry,
+		}, true
+	default:
+		return conditionUnit{}, false
+	}
+}
+
+// charmerOrOwnerOrSelfGUID ports the identity resolution inside
+// Unit::IsInPartyWith/IsInRaidWith via WorldObject::GetCharmerOrOwnerOrSelf
+// (Object.cpp:2218-2225) and Unit::GetCharmerOrOwner (Unit.h:1175:
+// IsCharmed() ? GetCharmer() : GetOwner(), else self). The C++ null-charmer
+// fallback to self is not distinguished: a set charmer GUID resolves to the
+// charmer, which is the live player session in every context evalCondition
+// serves.
+func charmerOrOwnerOrSelfGUID(u conditionUnit) uint64 {
+	if u.charmed && u.charmerGUID != 0 {
+		return u.charmerGUID
+	}
+	if !u.charmed && u.ownerGUID != 0 {
+		return u.ownerGUID
+	}
+	return u.guid
+}
+
+// relationToMeets ports the CONDITION_RELATION_TO arms
+// (ConditionMgr.cpp:386-420) over the two resolved unit endpoints.
+func (s *session) relationToMeets(ctx context.Context, u1, u2 conditionUnit, relation uint32) bool {
+	switch relation {
+	case 0: // RELATION_SELF: unit == toUnit
+		return u1.isPlayer == u2.isPlayer && u1.guid == u2.guid
+	case 1, 2: // RELATION_IN_PARTY / RELATION_IN_RAID_OR_PARTY
+		// (Unit.cpp:12126-12153, 12155-12182): charmer/owner-or-self identity
+		// first — a player's pet is in party/raid with the player — then the
+		// TREAT_AS_RAID_UNIT cross arm. The raw this == unit check is subsumed
+		// by the identity arm. The player-player group arms
+		// (IsInSameGroupWith/IsInSameRaidWith) and the same-faction creature
+		// arm cannot fire here — Go's condition targets are always player (0)
+		// versus creature (1) — and the npcbot arms have no Go model.
+		if charmerOrOwnerOrSelfGUID(u1) == charmerOrOwnerOrSelfGUID(u2) {
+			return true
+		}
+		var creature conditionUnit
+		switch {
+		case !u1.isPlayer:
+			creature = u1
+		case !u2.isPlayer:
+			creature = u2
+		default:
+			return false
+		}
+		if s.server == nil || s.server.WorldStore == nil {
+			return false
+		}
+		var typeFlags int64
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(type_flags, 0) FROM creature_template WHERE entry = ?", creature.entry).Scan(&typeFlags)
+		return typeFlags&0x04000000 != 0 // CREATURE_TYPE_FLAG_TREAT_AS_RAID_UNIT (SharedDefines.h:2755)
+	case 3: // RELATION_OWNED_BY: unit->GetOwnerGUID() == toUnit->GetGUID()
+		return u1.ownerGUID != 0 && u1.ownerGUID == u2.guid
+	case 4: // RELATION_PASSENGER_OF: unit->IsOnVehicle(toUnit)
+		// (Unit.cpp:12074-12077: m_vehicle && m_vehicle == vehicle->GetVehicleKit();
+		// the kit belongs to the vehicle base, which Go tracks as the
+		// player's vehicle GUID)
+		return u1.vehicleBase != 0 && u1.vehicleBase == u2.guid
+	case 5: // RELATION_CREATED_BY: unit->GetCreatorGUID() == toUnit->GetGUID()
+		// (Unit.h:1149: UNIT_FIELD_CREATEDBY; no Go model — players never
+		// carry one and creature creators are untracked)
+		return false
+	default:
+		return false
 	}
 }
 
