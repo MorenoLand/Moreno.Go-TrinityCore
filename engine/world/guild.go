@@ -33,6 +33,7 @@ const (
 	guildEventBankTabPurchased uint8  = 15
 	guildEventBankMoneySet     uint8  = 17
 	guildRightViewOfficerNote  uint32 = 0x00004000
+	guildRightInvite           uint32 = 0x00000050
 	guildRightWithdrawRepair   uint32 = 0x00040000
 	guildRightWithdrawGold     uint32 = 0x00080000
 )
@@ -572,15 +573,47 @@ func (s *session) handleGuildInvite(ctx context.Context, payload []byte) bool {
 	if err != nil || guildID == 0 {
 		return true
 	}
+	// Guild::HandleInviteMember (Guild.cpp:1464): the invitee must be a known
+	// (online) player, otherwise SendCommandResult(INVITE,
+	// ERR_GUILD_PLAYER_NOT_FOUND_S, name).
 	var targetGUID int64
 	err = cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE UPPER(name) = UPPER(?) LIMIT 1", targetName).Scan(&targetGUID)
-	if err != nil || targetGUID == 0 {
-		return true
-	}
 	targetSess := s.server.findSessionByGUID(uint64(targetGUID))
-	if targetSess == nil || targetSess.player == nil {
+	if err != nil || targetGUID == 0 || targetSess == nil || targetSess.player == nil {
+		s.sendGuildCommandResult(guildCmdInvite, targetName, errGuildPlayerNotFoundS)
 		return true
 	}
+	// Do not show invitations from ignored players (Guild.cpp:1473).
+	if s.server.chatIgnoredBy(uint64(targetGUID), s.playerGUID) {
+		return true
+	}
+	// CONFIG_ALLOW_TWO_SIDE_INTERACTION_GUILD (default false, Guild.cpp:1476).
+	if !s.server.Config.AllowTwoSideInteractionGuild &&
+		teamForRace(s.player.Race) != teamForRace(targetSess.player.Race) {
+		s.sendGuildCommandResult(guildCmdInvite, targetName, errGuildNotAllied)
+		return true
+	}
+	// Invited player cannot be in another guild (Guild.cpp:1481).
+	if targetSess.player.GuildID != 0 {
+		s.sendGuildCommandResult(guildCmdInvite, targetName, errAlreadyInGuildS)
+		return true
+	}
+	// Invited player cannot be invited (Guild.cpp:1487).
+	if targetSess.guildInvitedID != 0 {
+		s.sendGuildCommandResult(guildCmdInvite, targetName, errAlreadyInvitedToGuildS)
+		return true
+	}
+	// Inviting player must have rights to invite (Guild.cpp:1493).
+	var rights uint32
+	if err := cdb.QueryRowContext(ctx, `SELECT gr.rights FROM guild_member AS gm
+		JOIN guild_rank AS gr ON gr.guildid = gm.guildid AND gr.rid = gm.rank
+		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&rights); err != nil || rights&guildRightInvite == 0 {
+		s.sendGuildCommandResult(guildCmdInvite, "", errGuildPermissions)
+		return true
+	}
+	// Success result is sent before the invite packet (Guild.cpp:1498).
+	s.sendGuildCommandResult(guildCmdInvite, targetName, errGuildCommandSuccess)
+
 	targetSess.guildInvitedID = uint32(guildID)
 	targetSess.guildInviterGUID = s.playerGUID
 
@@ -617,6 +650,22 @@ func (s *session) handleGuildAccept(ctx context.Context) bool {
 	var exists int
 	if err := cdb.QueryRowContext(ctx, "SELECT 1 FROM guild WHERE guildid = ? LIMIT 1", guildID).Scan(&exists); err != nil || exists == 0 {
 		return true
+	}
+	// Guild::HandleAcceptMember (Guild.cpp:1520-1522): the accept is a silent
+	// no-op when the acceptor's team differs from the leader's team unless
+	// CONFIG_ALLOW_TWO_SIDE_INTERACTION_GUILD is set; the pending invitation
+	// stays set. CharacterCache::GetCharacterTeamByGuid returns 0 for an
+	// unknown guid (CharacterCache.cpp:224-229) and teamForRace defaults to 0
+	// the same way.
+	if !s.server.Config.AllowTwoSideInteractionGuild {
+		var leaderGUID int64
+		var leaderRace uint8
+		if err := cdb.QueryRowContext(ctx, "SELECT leaderguid FROM guild WHERE guildid = ? LIMIT 1", guildID).Scan(&leaderGUID); err == nil {
+			_ = cdb.QueryRowContext(ctx, "SELECT race FROM characters WHERE guid = ? LIMIT 1", leaderGUID).Scan(&leaderRace)
+		}
+		if teamForRace(s.player.Race) != teamForRace(leaderRace) {
+			return true
+		}
 	}
 	s.guildInvitedID = 0
 	s.guildInviterGUID = 0
