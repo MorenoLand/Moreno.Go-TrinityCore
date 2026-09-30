@@ -597,4 +597,8 @@ func init() {
 	// logic in lua_scripts/zulgurub/boss_grilek.lua. The brazier summon
 	// has no C++ CreatureScript in boss_grilek.cpp and is not registered.
 	RegisterLuaBoss("boss_grilek", 15082)
+	// Hazza'rah (Zul'Gurub, Edge of Madness) — fight logic in
+	// lua_scripts/zulgurub/boss_hazzarah.lua. The brazier summon has no
+	// C++ CreatureScript in boss_hazzarah.cpp and is not registered.
+	RegisterLuaBoss("boss_hazzarah", 15083)
 }
