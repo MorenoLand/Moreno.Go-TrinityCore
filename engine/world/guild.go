@@ -40,6 +40,7 @@ const (
 	guildRightEOffNote         uint32 = 0x00008040
 	guildRightViewOfficerNote  uint32 = 0x00004000
 	guildRightInvite           uint32 = 0x00000050
+	guildRightRemove           uint32 = 0x00000060
 	guildRightWithdrawRepair   uint32 = 0x00040000
 	guildRightWithdrawGold     uint32 = 0x00080000
 )
@@ -1032,7 +1033,17 @@ func (s *session) handleGuildRemove(ctx context.Context, payload []byte) bool {
 
 	var guildID, myRank int64
 	err = cdb.QueryRowContext(ctx, "SELECT guildid, rank FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&guildID, &myRank)
+	// WorldSession::HandleGuildRemoveOpcode (GuildHandler.cpp:51): with no
+	// guild HandleRemoveMember is never reached — silent no-op.
 	if err != nil || guildID == 0 {
+		return true
+	}
+
+	// Guild::HandleRemoveMember (Guild.cpp:1564): the remover must hold
+	// GR_RIGHT_REMOVE (Guild.h:88, 0x60), checked before the member lookup;
+	// denial sends GUILD_COMMAND_REMOVE + ERR_GUILD_PERMISSIONS, no name.
+	if s.guildRankRightsMasked(ctx, guildRightRemove) == grRightEmpty {
+		s.sendGuildCommandResult(guildCmdRemove, "", errGuildPermissions)
 		return true
 	}
 
@@ -1040,17 +1051,28 @@ func (s *session) handleGuildRemove(ctx context.Context, payload []byte) bool {
 	err = cdb.QueryRowContext(ctx, `SELECT gm.guid, gm.rank FROM guild_member gm
 		JOIN characters c ON c.guid = gm.guid
 		WHERE gm.guildid = ? AND UPPER(c.name) = UPPER(?) LIMIT 1`, guildID, removee).Scan(&targetGUID, &targetRank)
+	// GetMember miss is silent — no command result (Guild.cpp:1567).
 	if err != nil || targetGUID == 0 {
 		return true
 	}
 
+	// Guild masters cannot be removed (Guild.cpp:1570).
+	if targetRank == 0 {
+		s.sendGuildCommandResult(guildCmdRemove, "", errGuildLeaderLeave)
+		return true
+	}
+
+	// Do not allow removing a player of the same rank or higher
+	// (Member::IsRankNotLower, Guild.h:324) — memberMe null also fails
+	// (Guild.cpp:1578); both send ERR_GUILD_RANK_TOO_HIGH_S with the name.
 	if targetRank <= myRank {
+		s.sendGuildCommandResult(guildCmdRemove, removee, errGuildRankTooHighS)
 		return true
 	}
 
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_member WHERE guid = ? AND guildid = ?", targetGUID, guildID)
 
-	// Guild::HandleRemoveMember (Guild.cpp:1588):
+	// Guild::HandleRemoveMember (Guild.cpp:1587):
 	// _LogEvent(GUILD_EVENT_LOG_UNINVITE_PLAYER, player, member)
 	s.logGuildEvent(ctx, uint32(guildID), guildEventLogUninvitePlayer, s.playerGUID, uint64(targetGUID), 0)
 
