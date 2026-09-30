@@ -30,6 +30,8 @@ const (
 	guildEventDemotion         uint8  = 1
 	guildEventJoined           uint8  = 3
 	guildEventLeft             uint8  = 4
+	guildEventRankUpdated      uint8  = 10
+	guildEventRankDeleted      uint8  = 11
 	guildEventSignedOn         uint8  = 12
 	guildEventSignedOff        uint8  = 13
 	guildEventBankTabPurchased uint8  = 15
@@ -47,6 +49,11 @@ const (
 	guildRightDemote           uint32 = 0x00000140
 	guildRightWithdrawRepair   uint32 = 0x00040000
 	guildRightWithdrawGold     uint32 = 0x00080000
+	guildRightGChatListen      uint32 = 0x00000041
+	guildRightGChatSpeak       uint32 = 0x00000042
+	guildRightAll              uint32 = 0x001DF1FF
+	guildRanksMaxCount         int    = 10
+	guildRanksMinCount         int    = 5
 )
 
 func guildEventPayload(eventType uint8, guid uint64, params ...string) []byte {
@@ -937,7 +944,7 @@ func (s *session) handleGuildPromote(ctx context.Context, payload []byte) bool {
 	// rankName) (Guild.cpp:1645): 3 string params to every online guild member;
 	// GuildEvent::Write appends no guid for this type (GuildPackets.cpp:130).
 	var rankName string
-	_ = cdb.QueryRowContext(ctx, "SELECT name FROM guild_rank WHERE guildid = ? AND rid = ? LIMIT 1", guildID, newRank).Scan(&rankName)
+	_ = cdb.QueryRowContext(ctx, "SELECT rname FROM guild_rank WHERE guildid = ? AND rid = ? LIMIT 1", guildID, newRank).Scan(&rankName)
 	event := guildEventPayload(guildEventPromotion, 0, s.player.Name, memberName, rankName)
 	s.server.sessionsMu.RLock()
 	for target := range s.server.sessions {
@@ -1029,7 +1036,7 @@ func (s *session) handleGuildDemote(ctx context.Context, payload []byte) bool {
 	// rankName) (Guild.cpp:1645): 3 string params to every online guild member;
 	// GuildEvent::Write appends no guid for this type (GuildPackets.cpp:130).
 	var rankName string
-	_ = cdb.QueryRowContext(ctx, "SELECT name FROM guild_rank WHERE guildid = ? AND rid = ? LIMIT 1", guildID, newRank).Scan(&rankName)
+	_ = cdb.QueryRowContext(ctx, "SELECT rname FROM guild_rank WHERE guildid = ? AND rid = ? LIMIT 1", guildID, newRank).Scan(&rankName)
 	event := guildEventPayload(guildEventDemotion, 0, s.player.Name, memberName, rankName)
 	s.server.sessionsMu.RLock()
 	for target := range s.server.sessions {
@@ -1202,7 +1209,8 @@ func (s *session) handleGuildDisband(ctx context.Context) bool {
 }
 
 // handleGuildAddRank processes CMSG_GUILD_ADD_RANK (0x232).
-// Reference: WorldSession::HandleGuildAddRankOpcode (GuildHandler.cpp:181).
+// Reference: WorldSession::HandleGuildAddRankOpcode (GuildHandler.cpp:181),
+// Guild::HandleAddNewRank (Guild.cpp:1649-1658).
 func (s *session) handleGuildAddRank(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 2 {
 		return true
@@ -1221,26 +1229,52 @@ func (s *session) handleGuildAddRank(ctx context.Context, payload []byte) bool {
 	err = cdb.QueryRowContext(ctx, `SELECT g.guildid, g.leaderguid FROM guild g
 		JOIN guild_member gm ON gm.guildid = g.guildid
 		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &leaderGUID)
-	if err != nil || guildID == 0 || uint64(leaderGUID) != s.playerGUID {
+	if err != nil || guildID == 0 {
 		return true
 	}
 
-	var maxRid sql.NullInt64
-	_ = cdb.QueryRowContext(ctx, "SELECT MAX(rid) FROM guild_rank WHERE guildid = ?", guildID).Scan(&maxRid)
-	newRid := 0
-	if maxRid.Valid {
-		newRid = int(maxRid.Int64) + 1
-	}
-	if newRid > 9 {
+	// Guild::HandleAddNewRank (Guild.cpp:1651-1654): size >=
+	// GUILD_RANKS_MAX_COUNT (10) -> silent return; only the leader can add
+	// a rank, and a non-leader is fully silent (no command result).
+	var rankCount int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM guild_rank WHERE guildid = ?", guildID).Scan(&rankCount)
+	if rankCount >= int64(guildRanksMaxCount) || uint64(leaderGUID) != s.playerGUID {
 		return true
 	}
 
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_rank (guildid, rid, rname, rights, BankMoneyPerDay) VALUES (?, ?, ?, 0x00000040, 0)", guildID, newRid, rankName)
-	return s.handleGuildRoster(ctx)
+	// Guild::_CreateRank (Guild.cpp:2447-2468): newRankId = _GetRanksSize();
+	// the default rights are GR_RIGHT_GCHATLISTEN | GR_RIGHT_GCHATSPEAK
+	// (0x43), and CreateMissingTabsIfNeeded inserts empty bank-right rows
+	// for the new rank on every purchased tab (Guild.cpp:276-297).
+	newRid := rankCount
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_rank (guildid, rid, rname, rights, BankMoneyPerDay) VALUES (?, ?, ?, ?, 0)",
+		guildID, newRid, rankName, guildRightGChatListen|guildRightGChatSpeak)
+	var purchasedTabs int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM guild_bank_tab WHERE guildid = ?", guildID).Scan(&purchasedTabs)
+	for tab := int64(0); tab < purchasedTabs; tab++ {
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_bank_right (guildid, TabId, rid, gbright, SlotPerDay) VALUES (?, ?, ?, 0, 0)",
+			guildID, tab, newRid)
+	}
+
+	// _BroadcastEvent(GE_RANK_UPDATED, ObjectGuid::Empty, newRankId, name,
+	// newSize) (Guild.cpp:1657): 3 string params to every online guild
+	// member; C++ sends no roster here.
+	event := guildEventPayload(guildEventRankUpdated, 0, fmt.Sprintf("%d", newRid), rankName, fmt.Sprintf("%d", newRid+1))
+	s.server.sessionsMu.RLock()
+	for target := range s.server.sessions {
+		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != uint32(guildID) {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
+	}
+	s.server.sessionsMu.RUnlock()
+	return true
 }
 
 // handleGuildDelRank processes CMSG_GUILD_DEL_RANK (0x233).
-// Reference: WorldSession::HandleGuildDeleteRank (GuildHandler.cpp:189).
+// Reference: WorldSession::HandleGuildDeleteRank (GuildHandler.cpp:189),
+// Guild::HandleRemoveLowestRank (Guild.cpp:1660-1663) and
+// Guild::HandleRemoveRank (Guild.cpp:1669-1691).
 func (s *session) handleGuildDelRank(ctx context.Context) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
@@ -1254,25 +1288,49 @@ func (s *session) handleGuildDelRank(ctx context.Context) bool {
 	err := cdb.QueryRowContext(ctx, `SELECT g.guildid, g.leaderguid FROM guild g
 		JOIN guild_member gm ON gm.guildid = g.guildid
 		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &leaderGUID)
-	if err != nil || guildID == 0 || uint64(leaderGUID) != s.playerGUID {
+	if err != nil || guildID == 0 {
 		return true
 	}
 
-	var maxRid sql.NullInt64
-	_ = cdb.QueryRowContext(ctx, "SELECT MAX(rid) FROM guild_rank WHERE guildid = ?", guildID).Scan(&maxRid)
-	if !maxRid.Valid || maxRid.Int64 <= 1 {
+	// Guild::HandleRemoveRank (Guild.cpp:1671-1673): cannot remove a rank if
+	// the total count is at the client minimum (GUILD_RANKS_MIN_COUNT = 5),
+	// or if the actor is not the leader — all fully silent.
+	var rankCount int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM guild_rank WHERE guildid = ?", guildID).Scan(&rankCount)
+	if rankCount <= int64(guildRanksMinCount) || uint64(leaderGUID) != s.playerGUID {
 		return true
 	}
 
-	lowestRank := maxRid.Int64
-	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_rank WHERE guildid = ? AND rid = ?", guildID, lowestRank)
-	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member SET rank = ? WHERE guildid = ? AND rank = ?", lowestRank-1, guildID, lowestRank)
+	// CHAR_DEL_GUILD_BANK_RIGHTS_FOR_RANK ("DELETE FROM guild_bank_right
+	// WHERE guildid = ? AND rid = ?") + CHAR_DEL_GUILD_LOWEST_RANK
+	// ("DELETE FROM guild_rank WHERE guildid = ? AND rid >= ?",
+	// CharacterDatabase.cpp:179/191). Members are NOT reassigned — the
+	// client blocks deleting a rank that still has members.
+	lowestRank := rankCount - 1
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_right WHERE guildid = ? AND rid = ?", guildID, lowestRank)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_rank WHERE guildid = ? AND rid >= ?", guildID, lowestRank)
 
-	return s.handleGuildRoster(ctx)
+	// _BroadcastEvent(GE_RANK_DELETED, ObjectGuid::Empty, newSize)
+	// (Guild.cpp:1690): 1 string param to every online guild member; C++
+	// sends no roster here.
+	event := guildEventPayload(guildEventRankDeleted, 0, fmt.Sprintf("%d", lowestRank))
+	s.server.sessionsMu.RLock()
+	for target := range s.server.sessions {
+		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != uint32(guildID) {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
+	}
+	s.server.sessionsMu.RUnlock()
+	return true
 }
 
 // handleGuildRank processes CMSG_GUILD_RANK (0x231).
-// Reference: WorldSession::HandleGuildSetRankPermissions (GuildHandler.cpp:166).
+// Reference: WorldSession::HandleGuildSetRankPermissions (GuildHandler.cpp:166),
+// Guild::HandleSetRankInfo (Guild.cpp:1414-1431), GuildSetRankPermissions::Read
+// (GuildPackets.cpp:181-193: RankID u32, Flags u32, RankName cstr,
+// WithdrawGoldLimit u32, then GUILD_BANK_MAX_TABS x (TabFlags u8,
+// TabWithdrawItemLimit u32)).
 func (s *session) handleGuildRank(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
@@ -1291,6 +1349,20 @@ func (s *session) handleGuildRank(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	goldLimit, _ := r.ReadU32()
+	tabFlags := make([]uint8, guildBankMaxTabs)
+	tabLimits := make([]uint32, guildBankMaxTabs)
+	for i := range tabFlags {
+		f, ferr := r.ReadU8()
+		if ferr != nil {
+			return false
+		}
+		tabFlags[i] = f
+		l, lerr := r.ReadU32()
+		if lerr != nil {
+			return false
+		}
+		tabLimits[i] = l
+	}
 
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
@@ -1301,12 +1373,64 @@ func (s *session) handleGuildRank(ctx context.Context, payload []byte) bool {
 	err = cdb.QueryRowContext(ctx, `SELECT g.guildid, g.leaderguid FROM guild g
 		JOIN guild_member gm ON gm.guildid = g.guildid
 		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &leaderGUID)
-	if err != nil || guildID == 0 || uint64(leaderGUID) != s.playerGUID {
+	if err != nil || guildID == 0 {
 		return true
 	}
 
-	_, _ = cdb.ExecContext(ctx, "UPDATE guild_rank SET rname = ?, rights = ?, BankMoneyPerDay = ? WHERE guildid = ? AND rid = ?", rankName, rights, goldLimit, guildID, rankID)
-	return s.handleGuildRoster(ctx)
+	// Guild::HandleSetRankInfo (Guild.cpp:1416-1417): only the leader can
+	// modify ranks; denial sends GUILD_COMMAND_CHANGE_RANK (16) +
+	// ERR_GUILD_PERMISSIONS — unlike add/remove, this one is NOT silent.
+	if uint64(leaderGUID) != s.playerGUID {
+		s.sendGuildCommandResult(guildCmdChangeRank, "", errGuildPermissions)
+		return true
+	}
+
+	// RankInfo::SetRights (Guild.cpp:315-318): rank 0 (guildmaster) keeps
+	// GR_RIGHT_ALL no matter what the packet carries.
+	if rankID == 0 {
+		rights = guildRightAll
+	}
+	res, execErr := cdb.ExecContext(ctx, "UPDATE guild_rank SET rname = ?, rights = ?, BankMoneyPerDay = ? WHERE guildid = ? AND rid = ?",
+		rankName, rights, goldLimit, guildID, rankID)
+	if execErr != nil {
+		return true
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return true // GetRankInfo miss -> silent (Guild.cpp:1418)
+	}
+
+	// Guild::_SetRankBankTabRightsAndSlots (Guild.cpp:2541-2548): only tabs
+	// below the purchased count are written; CHAR_INS_GUILD_BANK_RIGHT is an
+	// upsert; rank 0 forces the guildmaster values (Guild.cpp:351-352).
+	var purchasedTabs int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM guild_bank_tab WHERE guildid = ?", guildID).Scan(&purchasedTabs)
+	for tab := int64(0); tab < purchasedTabs && tab < int64(guildBankMaxTabs); tab++ {
+		gbright := uint32(tabFlags[tab])
+		slots := tabLimits[tab]
+		if rankID == 0 {
+			gbright = uint32(guildBankRightFull)
+			slots = guildWithdrawSlotUnlimited
+		}
+		_, _ = cdb.ExecContext(ctx, `INSERT INTO guild_bank_right (guildid, TabId, rid, gbright, SlotPerDay) VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(guildid, TabId, rid) DO UPDATE SET gbright = excluded.gbright, SlotPerDay = excluded.SlotPerDay`,
+			guildID, tab, rankID, gbright, slots)
+	}
+
+	// _BroadcastEvent(GE_RANK_UPDATED, ObjectGuid::Empty, rankId, name, size)
+	// (Guild.cpp:1428): 3 string params to every online guild member; C++
+	// sends no roster here.
+	var rankCount int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM guild_rank WHERE guildid = ?", guildID).Scan(&rankCount)
+	event := guildEventPayload(guildEventRankUpdated, 0, fmt.Sprintf("%d", rankID), rankName, fmt.Sprintf("%d", rankCount))
+	s.server.sessionsMu.RLock()
+	for target := range s.server.sessions {
+		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != uint32(guildID) {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
+	}
+	s.server.sessionsMu.RUnlock()
+	return true
 }
 
 // handleGuildSetPublicNote processes CMSG_GUILD_SET_PUBLIC_NOTE (0x234).
