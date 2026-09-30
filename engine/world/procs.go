@@ -660,12 +660,16 @@ func (s *session) spellProcEntryFor(auraSpellID uint32) (entry spellProcEntry, a
 		return entry, auraSpell, false
 	}
 	hasTrigger := false
+	hasTriggerSpellOrDamage := false
 	for i := range spell.Effects {
 		eff := &spell.Effects[i]
 		if eff.Effect == 0 || !isProcTriggerAuraType(eff.Aura) {
 			continue
 		}
 		hasTrigger = true
+		if eff.Aura == spellAuraProcTriggerSpell || eff.Aura == spellAuraProcTriggerDamage {
+			hasTriggerSpellOrDamage = true
+		}
 		for k := 0; k < 3; k++ {
 			entry.SpellFamilyMask[k] |= eff.SpellClassMask[k]
 		}
@@ -684,9 +688,12 @@ func (s *session) spellProcEntryFor(auraSpellID uint32) (entry spellProcEntry, a
 	if spell.ProcTypeMask&procFlagKill != 0 {
 		entry.AttributesMask |= procAttrReqExpOrHonor
 	}
-	// LoadSpellProc's taken-flag fallback (SpellMgr.cpp:1788-1798): proc
+	// LoadSpellProc's taken-flag fallback (SpellMgr.cpp:1783-1797): proc
 	// trigger auras on taken-flagged spells proc from triggered hits anyway.
-	if spell.ProcTypeMask&procTakenHitProcFlagMask != 0 {
+	// C++ applies this only to SPELL_AURA_PROC_TRIGGER_SPELL (42) and
+	// SPELL_AURA_PROC_TRIGGER_DAMAGE (43) — never to dummy (4) or
+	// proc-trigger-spell-with-value (231).
+	if hasTriggerSpellOrDamage && spell.ProcTypeMask&procTakenHitProcFlagMask != 0 {
 		entry.AttributesMask |= procAttrTriggeredCanProc
 	}
 	return entry, spell, true
