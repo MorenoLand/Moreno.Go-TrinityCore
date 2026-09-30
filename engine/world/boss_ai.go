@@ -623,4 +623,9 @@ func init() {
 	// and the spell_hatch_spiders SpellScript have no Lua bridge and are
 	// not registered.
 	RegisterLuaBoss("boss_marli", 14510)
+	// Renataki of the Thousand Blades (Zul'Gurub, Edge of Madness) —
+	// fight logic in lua_scripts/zulgurub/boss_renataki.lua. The
+	// brazier summon has no C++ CreatureScript in boss_renataki.cpp
+	// and is not registered.
+	RegisterLuaBoss("boss_renataki", 15084)
 }
