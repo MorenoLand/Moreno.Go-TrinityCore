@@ -354,6 +354,39 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 		return true
 	}
 
+	// Accept-time item re-validation, in C++ order (TradeHandler.cpp:307-348):
+	// every traded-slot item of both parties is re-checked with
+	// Item::CanBeTraded(false, true) before the partner is notified. The only
+	// representable term in Go's DB model is the soulbound flag (flags&1) —
+	// BoP-tradeable state, non-empty bags, loot generation, CanUnequipItem,
+	// loot GUIDs and enchant binding have no Go model, and the his-items
+	// IsBindedNotWith branch is commented out in C++ too. A soulbound item
+	// that reached a traded slot fails CanBeTraded, so the acceptor is
+	// answered TRADE_STATUS_TRADE_CANCELED and the handler returns, leaving
+	// the accepted state untouched exactly like C++. The CLOSE_WINDOW +
+	// EQUIP_ERR_CANNOT_TRADE_THAT IsBindedNotWith branch is unreachable here:
+	// with no BoP-tradeable model any soulbound item already fails the
+	// CanBeTraded check first, and a non-soulbound item never binds.
+	if cdb := s.server.CharactersStore.DB; cdb != nil {
+		for _, tr := range []*playerTradeState{s.trade, partner.trade} {
+			if tr == nil {
+				continue
+			}
+			for slot := uint8(0); slot < tradeSlotTradedCount; slot++ {
+				it, ok := tr.Items[slot]
+				if !ok {
+					continue
+				}
+				var flags int64
+				_ = cdb.QueryRowContext(ctx, "SELECT flags FROM item_instance WHERE guid = ? LIMIT 1", it.ItemGUID).Scan(&flags)
+				if flags&1 != 0 {
+					_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0)
+					return true
+				}
+			}
+		}
+	}
+
 	// Inform partner
 	_ = partner.sendTradeStatus(tradeStatusTradeAccept, 0, 0, 0, 0)
 
