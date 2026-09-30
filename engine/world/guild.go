@@ -1925,6 +1925,13 @@ func (s *session) handleGuildBankerActivate(ctx context.Context, payload []byte)
 		fullUpdate, _ = r.ReadU8()
 	}
 
+	// Reference: WorldSession::HandleGuildBankActivate (GuildHandler.cpp:
+	// 256-258): no interactable guild-bank gameobject -> silent return,
+	// before the guild check.
+	if !s.canInteractWithGameObject(ctx, bankerGUID, gameObjectTypeGuildBank) {
+		return true
+	}
+
 	return s.sendGuildBankList(ctx, bankerGUID, 0, fullUpdate != 0)
 }
 
@@ -1946,6 +1953,12 @@ func (s *session) handleGuildBankQueryTab(ctx context.Context, payload []byte) b
 	fullUpdate := uint8(0)
 	if len(payload) >= 10 {
 		fullUpdate, _ = r.ReadU8()
+	}
+
+	// Reference: WorldSession::HandleGuildBankQueryTab (GuildHandler.cpp:276):
+	// tab data is sent only when the banker gameobject is interactable.
+	if !s.canInteractWithGameObject(ctx, bankerGUID, gameObjectTypeGuildBank) {
+		return true
 	}
 
 	return s.sendGuildBankList(ctx, bankerGUID, tabID, fullUpdate != 0)
@@ -2320,6 +2333,12 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 	bankerGUID, err := r.ReadU64()
 	if err != nil {
 		return false
+	}
+	// Reference: WorldSession::HandleGuildBankSwapItems (GuildHandler.cpp:
+	// 307-308): no interactable guild-bank gameobject -> silent return,
+	// before the guild lookup.
+	if !s.canInteractWithGameObject(ctx, bankerGUID, gameObjectTypeGuildBank) {
+		return true
 	}
 	bankOnly, err := r.ReadU8()
 	if err != nil {
@@ -3150,6 +3169,12 @@ func (s *session) handleGuildBankBuyTab(ctx context.Context, payload []byte) boo
 		return false
 	}
 
+	// Reference: WorldSession::HandleGuildBankBuyTab (GuildHandler.cpp:344):
+	// the banker-interact gate runs before the guild lookup.
+	if !s.canInteractWithGameObject(ctx, bankerGUID, gameObjectTypeGuildBank) {
+		return true
+	}
+
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
@@ -3241,6 +3266,12 @@ func (s *session) handleGuildBankUpdateTab(ctx context.Context, payload []byte) 
 		return false
 	}
 
+	// Reference: WorldSession::HandleGuildBankUpdateTab (GuildHandler.cpp:
+	// 354-355): the banker-interact gate runs before the guild lookup.
+	if !s.canInteractWithGameObject(ctx, bankerGUID, gameObjectTypeGuildBank) {
+		return true
+	}
+
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
@@ -3268,7 +3299,15 @@ func (s *session) handleGuildBankDepositMoney(ctx context.Context, payload []byt
 		return false
 	}
 	amount, err := r.ReadU32()
-	if err != nil || amount == 0 || s.player.Money < amount {
+	if err != nil {
+		return false
+	}
+	// Reference: WorldSession::HandleGuildBankDepositMoney (GuildHandler.cpp:
+	// 289-290): the banker-interact gate runs before the money checks.
+	if !s.canInteractWithGameObject(ctx, bankerGUID, gameObjectTypeGuildBank) {
+		return true
+	}
+	if amount == 0 || s.player.Money < amount {
 		return true
 	}
 
@@ -3314,6 +3353,11 @@ func (s *session) handleGuildBankWithdrawMoney(ctx context.Context, payload []by
 	}
 	amount, err := r.ReadU32()
 	if err != nil || amount == 0 {
+		return true
+	}
+	// Reference: WorldSession::HandleGuildBankWithdrawMoney (GuildHandler.cpp:
+	// 300): the packet.Money check runs first, then the banker-interact gate.
+	if !s.canInteractWithGameObject(ctx, bankerGUID, gameObjectTypeGuildBank) {
 		return true
 	}
 
