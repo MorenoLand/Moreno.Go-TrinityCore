@@ -659,4 +659,8 @@ func init() {
 	// has no Lua bridge and is not registered; the leash-check evade
 	// arm and the threat-cut arm have no bridges.
 	RegisterLuaBoss("boss_broodlord", 12017)
+	// Firemaw (Blackwing Lair, fourth boss) — fight logic in
+	// lua_scripts/blackwinglair/boss_firemaw.lua. The wingbuffet
+	// threat-cut arm has no bridge (no threat model).
+	RegisterLuaBoss("boss_firemaw", 11983)
 }
