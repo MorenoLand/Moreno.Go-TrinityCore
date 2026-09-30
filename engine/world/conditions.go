@@ -153,6 +153,22 @@ const (
 	// HUNTER_PET 1, MAX_PET_TYPE 4. CONDITION_PET_TYPE rows whose Value1 mask
 	// reaches bit 4 are skipped at load (ConditionMgr.cpp:2355-2362).
 	maxPetType uint8 = 4
+
+	// UnitState bits from the UnitState enum (Unit.h:212-244). Only the
+	// bits carried by UNIT_STATE_ALL_STATE_SUPPORTED pass the
+	// CONDITION_UNIT_STATE IsValid arm (ConditionMgr.cpp:2297-2304); rows
+	// with no supported bit are skipped at load, mirrored as fail-closed.
+	unitStateDied              uint32 = 0x00000001
+	unitStateMeleeAttacking    uint32 = 0x00000002
+	unitStateCharmed           uint32 = 0x00000004
+	unitStateStunned           uint32 = 0x00000008
+	unitStateFleeing           uint32 = 0x00000080
+	unitStateInFlight          uint32 = 0x00000100
+	unitStateRoot              uint32 = 0x00000400
+	unitStateConfused          uint32 = 0x00000800
+	unitStateCasting           uint32 = 0x00008000
+	unitStateMove              uint32 = 0x00100000
+	unitStateAllStateSupported uint32 = 0x0037FFFF
 )
 
 // loadImplicitTargetConditions fetches the `conditions` rows attached to a
@@ -274,7 +290,7 @@ func (s *session) evalQuestCondition(ctx context.Context, row conditionRow) (boo
 
 func isImplementedConditionType(condType int64) bool {
 	switch condType {
-	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 42, 43, 44, 45, 46, 47, 48, 49, 50:
+	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 42, 43, 44, 45, 46, 47, 48, 49, 50:
 		return true
 	default:
 		return false
@@ -490,6 +506,78 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 		return s.player != nil && uint32(row.Value1)&1 != 0, nil
 	case 20: // CONDITION_GENDER
 		return s.player != nil && uint32(row.Value1) == uint32(s.player.Gender), nil
+	case 21: // CONDITION_UNIT_STATE (ConditionMgr.cpp:477-482:
+		// condMeets = object->ToUnit() && unit->HasUnitState(ConditionValue1),
+		// the UnitState enum at Unit.h:212-244. C++ IsValid skips the row at
+		// load when no bit of Value1 is in UNIT_STATE_ALL_STATE_SUPPORTED
+		// (ConditionMgr.cpp:2297-2304); mirror that as fail-closed. The
+		// object resolves via conditionTargetUnit (the ToUnit arm);
+		// an unresolvable target fails closed.
+		if uint32(row.Value1)&unitStateAllStateSupported == 0 {
+			return false, nil
+		}
+		unit, ok := s.conditionTargetUnit(row.ConditionTarget, creatureGUID)
+		if !ok {
+			return false, nil
+		}
+		var state uint32
+		if unit.isPlayer {
+			// UNIT_STATE_MELEE_ATTACKING is set when the unit attacks
+			// (Unit.cpp:5693/5723); Go's live source is the session attack
+			// target.
+			if s.attackTarget != 0 {
+				state |= unitStateMeleeAttacking
+			}
+			if s.hasAuraType(spellAuraCharm) { // same source as CONDITION_CHARMED (44)
+				state |= unitStateCharmed
+			}
+			if s.hasAuraType(spellAuraModStun) { // SpellAuraEffects HandleAuraModStun arm
+				state |= unitStateStunned
+			}
+			if s.hasAuraType(spellAuraModFear) { // SpellAuraEffects HandleAuraModFear arm
+				state |= unitStateFleeing
+			}
+			if s.inFlight { // same source as CONDITION_TAXI (46)
+				state |= unitStateInFlight
+			}
+			if s.rooted { // UNIT_STATE_ROOT
+				state |= unitStateRoot
+			}
+			if s.hasAuraType(spellAuraModConfuse) { // SpellAuraEffects HandleAuraModConfuse arm
+				state |= unitStateConfused
+			}
+			if s.activeCast != nil { // UNIT_STATE_CASTING
+				state |= unitStateCasting
+			}
+			if s.isMoving { // UNIT_STATE_MOVE
+				state |= unitStateMove
+			}
+			// Deliberately unset: DIED (no feign-death aura type in Go),
+			// ATTACK_PLAYER (contested-PvP only, Player.cpp:20731-20744; no
+			// Go contested-PvP model), DISTRACTED/ISOLATED/POSSESSED and the
+			// movement-generator states (ROAMING/CHASE/FOCUSING/FOLLOW/
+			// CHARGING/JUMPING/ROTATING/EVADE and the *_MOVE arms — no Go
+			// movement-generator state model).
+		} else {
+			if s.server == nil || creatureGUID == 0 {
+				return false, nil
+			}
+			s.server.motionMu.Lock()
+			motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, creatureGUID)
+			s.server.motionMu.Unlock()
+			if motion == nil {
+				return false, nil
+			}
+			if motion.TargetGUID != 0 {
+				state |= unitStateMeleeAttacking
+			}
+			if motion.Charmed {
+				state |= unitStateCharmed
+			}
+			// No Go aura model on creature motions and no contested-PvP
+			// model; the remaining states stay unset (documented above).
+		}
+		return state&uint32(row.Value1) != 0, nil
 	case 22: // CONDITION_MAPID
 		return s.player != nil && uint32(row.Value1) == s.player.Map, nil
 	case 23: // CONDITION_AREAID
