@@ -49,6 +49,7 @@ type tradeSlotItem struct {
 	StackCount      uint32
 	EnchantID       uint32
 	GiftCreatorGUID uint64
+	CreatorGUID     uint64
 }
 
 type playerTradeState struct {
@@ -245,9 +246,9 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	var itemEntry, count, flags int64
-	var giftCreatorGUID uint64
+	var giftCreatorGUID, creatorGUID uint64
 	var encStr sql.NullString
-	_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count, flags, giftCreatorGuid, enchantments FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemEntry, &count, &flags, &giftCreatorGUID, &encStr)
+	_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count, flags, giftCreatorGuid, creatorGuid, enchantments FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemEntry, &count, &flags, &giftCreatorGUID, &creatorGUID, &encStr)
 	if tradeSlot < tradeSlotTradedCount && (flags&1 != 0) {
 		// Soulbound items cannot be placed in traded slots
 		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0)
@@ -275,6 +276,7 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 		StackCount:      uint32(count),
 		EnchantID:       enchantID,
 		GiftCreatorGUID: giftCreatorGUID,
+		CreatorGUID:     creatorGUID,
 	}
 	if s.trade.Accepted {
 		s.trade.Accepted = false
@@ -646,13 +648,13 @@ func (s *session) sendTradeStatusExtended(traderData bool) {
 			for j := 0; j < 3; j++ {
 				buf.WriteU32(0) // gem sockets
 			}
-			buf.WriteU64(0) // creator
-			buf.WriteU32(0) // charges
-			buf.WriteU32(0) // randomPropId
-			buf.WriteU32(0) // suffixFactor
-			buf.WriteU32(0) // lockId
-			buf.WriteU32(0) // maxDurability
-			buf.WriteU32(0) // durability
+			buf.WriteU64(it.CreatorGUID) // creator (SendUpdateTrade, TradeHandler.cpp:101)
+			buf.WriteU32(0)              // charges
+			buf.WriteU32(0)              // randomPropId
+			buf.WriteU32(0)              // suffixFactor
+			buf.WriteU32(0)              // lockId
+			buf.WriteU32(0)              // maxDurability
+			buf.WriteU32(0)              // durability
 		} else {
 			for j := 0; j < 18; j++ {
 				buf.WriteU32(0)
