@@ -706,6 +706,8 @@ type procEventInfo struct {
 	xpOrHonorTarget bool
 	triggered       bool
 	eventSpell      *wotlk.Spell
+	actorGUID       uint64
+	damage          uint32
 }
 
 // canSpellTriggerProcOnEvent mirrors SpellMgr::CanSpellTriggerProcOnEvent
@@ -998,6 +1000,7 @@ func (s *session) procSpellNoDmgHealAuraTriggers(ctx context.Context, targetGUID
 		hitMask:        procHitNormal,
 		triggered:      s.triggeredNoProcEvents > 0,
 		eventSpell:     &spellCopy,
+		actorGUID:      s.playerGUID,
 	})
 }
 
@@ -1038,6 +1041,7 @@ func (s *session) procSpellNoDmgHealTakenAuraTriggers(ctx context.Context, caste
 		hitMask:        procHitNormal,
 		triggered:      s.triggeredNoProcEvents > 0,
 		eventSpell:     &spellCopy,
+		actorGUID:      casterGUID,
 	})
 }
 
@@ -1131,6 +1135,7 @@ func (s *session) procSpellDamageNoDmgAuraTriggers(ctx context.Context, targetGU
 		hitMask:        spellDamageProcHitMask(isHit, immune, false, false, false, 0),
 		triggered:      s.triggeredNoProcEvents > 0,
 		eventSpell:     &spellCopy,
+		actorGUID:      s.playerGUID,
 	})
 }
 
@@ -1181,6 +1186,7 @@ func (s *session) procSpellDamageNoDmgTakenAuraTriggers(ctx context.Context, cas
 		hitMask:        spellDamageProcHitMask(isHit, immune, false, false, false, 0),
 		triggered:      casterTriggered,
 		eventSpell:     &spellCopy,
+		actorGUID:      casterGUID,
 	})
 }
 
@@ -1222,7 +1228,7 @@ func spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit bool,
 // spell-family, and triggered-cast gates engage exactly. Spells with
 // SPELL_ATTR3_CANT_TRIGGER_PROC never reach the loop (Spell.cpp:2441).
 // The trigger spell targets the victim.
-func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, isHit, immune, fullyResisted, fullAbsorb, crit bool, absorbed uint32) {
+func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, isHit, immune, fullyResisted, fullAbsorb, crit bool, absorbed, damage uint32) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -1246,6 +1252,8 @@ func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint6
 		hitMask:        spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit, absorbed),
 		triggered:      s.triggeredNoProcEvents > 0,
 		eventSpell:     &spellCopy,
+		actorGUID:      s.playerGUID,
+		damage:         damage,
 	})
 }
 
@@ -1262,7 +1270,7 @@ func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint6
 // own auras gate; the trigger spell targets the caster (Unit.cpp:10413). The
 // triggered state comes from the caster's cast, not the victim's session,
 // matching Spell::IsTriggered on the shared spell.
-func (s *session) procSpellHitTakenAuraTriggers(ctx context.Context, casterGUID uint64, spellID uint32, isHit, immune, fullyResisted, fullAbsorb, crit bool, absorbed uint32, casterTriggered bool) {
+func (s *session) procSpellHitTakenAuraTriggers(ctx context.Context, casterGUID uint64, spellID uint32, isHit, immune, fullyResisted, fullAbsorb, crit bool, absorbed, damage uint32, casterTriggered bool) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -1290,6 +1298,8 @@ func (s *session) procSpellHitTakenAuraTriggers(ctx context.Context, casterGUID 
 		hitMask:        spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit, absorbed),
 		triggered:      casterTriggered,
 		eventSpell:     &spellCopy,
+		actorGUID:      casterGUID,
+		damage:         damage,
 	})
 }
 
@@ -1341,6 +1351,7 @@ func (s *session) procSpellHealAuraTriggers(ctx context.Context, targetGUID uint
 		hitMask:        hitMask,
 		triggered:      s.triggeredNoProcEvents > 0,
 		eventSpell:     &spellCopy,
+		actorGUID:      s.playerGUID,
 	})
 }
 
@@ -1391,6 +1402,7 @@ func (s *session) procSpellHealTakenAuraTriggers(ctx context.Context, healerGUID
 		hitMask:        hitMask,
 		triggered:      s.triggeredNoProcEvents > 0,
 		eventSpell:     &spellCopy,
+		actorGUID:      healerGUID,
 	})
 }
 
@@ -1433,7 +1445,7 @@ func (s *session) rollAuraProcChance(entry spellProcEntry, auraSpell wotlk.Spell
 // procAuraTriggers evaluates real aura procs on a melee hit: the done-side
 // half of Unit::ProcDamageAndSpellFor's aura loop (Unit.cpp:10355-10380 via
 // TriggerAurasProcOnEvent). The trigger spell targets the victim.
-func (s *session) procAuraTriggers(ctx context.Context, target combatTarget, attType protocol.WeaponAttackType, outcome protocol.MeleeHitOutcome) {
+func (s *session) procAuraTriggers(ctx context.Context, target combatTarget, attType protocol.WeaponAttackType, outcome protocol.MeleeHitOutcome, damage uint32) {
 	typeMask := procFlagDoneMeleeAutoAttack | procFlagDoneMainhandAttack
 	if attType == protocol.OffAttack {
 		typeMask = procFlagDoneMeleeAutoAttack | procFlagDoneOffhandAttack
@@ -1444,6 +1456,8 @@ func (s *session) procAuraTriggers(ctx context.Context, target combatTarget, att
 		spellTypeMask:  procSpellTypeNone,
 		spellPhaseMask: procSpellPhaseNone,
 		hitMask:        meleeOutcomeProcHitMask(outcome),
+		actorGUID:      s.playerGUID,
+		damage:         damage,
 	})
 }
 
@@ -1453,13 +1467,15 @@ func (s *session) procAuraTriggers(ctx context.Context, target combatTarget, att
 // BASE_ATTACK and OFF_ATTACK, with no mainhand/offhand arm on the victim
 // side; Unit.cpp:10385-10448 TriggerAurasProcOnEvent). The trigger spell
 // targets the attacker.
-func (s *session) procVictimAuraTriggers(ctx context.Context, attackerGUID uint64, outcome protocol.MeleeHitOutcome) {
+func (s *session) procVictimAuraTriggers(ctx context.Context, attackerGUID uint64, outcome protocol.MeleeHitOutcome, damage uint32) {
 	s.procAuraTriggerLoop(ctx, attackerGUID, procEventInfo{
 		typeMask:       procFlagTakenMeleeAutoAttack,
 		schoolMask:     spellSchoolMaskNormal,
 		spellTypeMask:  procSpellTypeNone,
 		spellPhaseMask: procSpellPhaseNone,
 		hitMask:        meleeOutcomeProcHitMask(outcome),
+		actorGUID:      attackerGUID,
+		damage:         damage,
 	})
 }
 
@@ -1474,7 +1490,7 @@ func (s *session) procVictimAuraTriggers(ctx context.Context, attackerGUID uint6
 // melee-style outcomes, so the hit mask mirrors the DamageInfo melee ctor
 // (Unit.cpp:155-179). Spells with SPELL_ATTR3_CANT_TRIGGER_PROC never reach
 // the loop (Spell.cpp:2441). The trigger spell targets the victim.
-func (s *session) procRangedAutoAttackAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, outcome protocol.MeleeHitOutcome) {
+func (s *session) procRangedAutoAttackAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, outcome protocol.MeleeHitOutcome, damage uint32) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -1498,6 +1514,8 @@ func (s *session) procRangedAutoAttackAuraTriggers(ctx context.Context, targetGU
 		hitMask:        meleeOutcomeProcHitMask(outcome),
 		triggered:      s.triggeredNoProcEvents > 0,
 		eventSpell:     &spellCopy,
+		actorGUID:      s.playerGUID,
+		damage:         damage,
 	})
 }
 
@@ -1508,7 +1526,7 @@ func (s *session) procRangedAutoAttackAuraTriggers(ctx context.Context, targetGU
 // PROC_FLAG_TAKEN_DAMAGE, Spell.cpp:2545). The event carries the auto-shot
 // spell's school mask, matching the damage event's school on both sides of
 // DoDamageAndTriggers. The trigger spell targets the attacker.
-func (s *session) procRangedVictimAuraTriggers(ctx context.Context, attackerGUID uint64, spellID uint32, outcome protocol.MeleeHitOutcome) {
+func (s *session) procRangedVictimAuraTriggers(ctx context.Context, attackerGUID uint64, spellID uint32, outcome protocol.MeleeHitOutcome, damage uint32) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -1526,7 +1544,69 @@ func (s *session) procRangedVictimAuraTriggers(ctx context.Context, attackerGUID
 		spellTypeMask:  procSpellTypeNone,
 		spellPhaseMask: procSpellPhaseNone,
 		hitMask:        meleeOutcomeProcHitMask(outcome),
+		actorGUID:      attackerGUID,
+		damage:         damage,
 	})
+}
+
+// checkEffectProc mirrors AuraEffect::CheckEffectProc
+// (SpellAuraEffects.cpp:933-999): per-effect conditions that must hold for
+// the effect to join the proc effect mask. AuraScript check handlers have no
+// Go model and are treated as passing. The extra-attacks arm of
+// PROC_TRIGGER_SPELL/WITH_VALUE needs the target's m_extraAttacks counter,
+// which the Go player does not model, so that arm is unmodeled.
+func (s *session) checkEffectProc(aura *activeAura, eff *wotlk.SpellEffect, ev procEventInfo) bool {
+	if aura == nil || eff == nil {
+		return false
+	}
+	switch eff.Aura {
+	case spellAuraModConfuse, spellAuraModFear, spellAuraModStun, spellAuraModRoot, spellAuraTransform:
+		// CC auras only proc on damaging events; the aura's own damage at
+		// apply time (duration untouched) never breaks it.
+		if ev.damage == 0 {
+			return false
+		}
+		if ev.eventSpell != nil && ev.eventSpell.ID == aura.SpellID && aura.RemainingMs == aura.DurationMs {
+			return false
+		}
+	case spellAuraMechanicImmunity, spellAuraModMechanicResistance:
+		// compare mechanic
+		if ev.eventSpell == nil || int32(ev.eventSpell.Mechanic) != eff.MiscValue {
+			return false
+		}
+	case spellAuraCastingSpeedNotStack:
+		// skip melee hits and instant cast spells
+		if ev.eventSpell == nil {
+			return false
+		}
+		castTime := int32(0)
+		if s != nil && s.server != nil && s.server.Data != nil {
+			if ct, _, err := s.server.Data.SpellCastTime(ev.eventSpell.ID); err == nil {
+				castTime = ct
+			}
+		}
+		if castTime == 0 {
+			return false
+		}
+	case spellAuraModDamageFromCaster:
+		// Compare casters
+		if aura.CasterGUID != ev.actorGUID {
+			return false
+		}
+	case spellAuraModPowerCostSchool, spellAuraModPowerCostSchoolPct:
+		// Skip melee hits and spells with wrong school or zero cost
+		if ev.eventSpell == nil || (ev.eventSpell.ManaCost == 0 && ev.eventSpell.ManaCostPct == 0) ||
+			ev.eventSpell.SchoolMask&uint32(eff.MiscValue) == 0 {
+			return false
+		}
+	case spellAuraReflectSpellsSchool:
+		// Skip melee hits and spells with wrong school
+		if ev.eventSpell == nil || ev.eventSpell.SchoolMask&uint32(eff.MiscValue) == 0 {
+			return false
+		}
+	default:
+	}
+	return true
 }
 
 // procAuraTriggerLoop runs one aura-proc pass over the player's active auras:
@@ -1564,6 +1644,9 @@ func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uin
 				continue
 			}
 			if eff.Aura == spellAuraProcTriggerDamage {
+				continue
+			}
+			if !s.checkEffectProc(aura, eff, ev) {
 				continue
 			}
 			triggerSpell = eff.TriggerSpell

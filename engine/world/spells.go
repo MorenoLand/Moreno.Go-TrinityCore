@@ -150,6 +150,15 @@ const (
 	spellAuraCastingSpeedNotStack                 = 65
 	spellAuraHasteSpells                          = 216
 	spellAuraFakeInebriation                      = 304
+	spellAuraTransform                            = 56  // SPELL_AURA_TRANSFORM (SpellAuraDefines.h:136)
+	spellAuraMechanicImmunity                     = 77  // SPELL_AURA_MECHANIC_IMMUNITY (SpellAuraDefines.h:157)
+	spellAuraModMechanicResistance                = 117 // SPELL_AURA_MOD_MECHANIC_RESISTANCE (SpellAuraDefines.h:197)
+	spellAuraModPowerCostSchoolPct                = 72  // SPELL_AURA_MOD_POWER_COST_SCHOOL_PCT (SpellAuraDefines.h:152)
+	spellAuraModPowerCostSchool                   = 73  // SPELL_AURA_MOD_POWER_COST_SCHOOL (SpellAuraDefines.h:153)
+	spellAuraModConfuse                           = 5   // SPELL_AURA_MOD_CONFUSE (SpellAuraDefines.h:85)
+	spellAuraModFear                              = 7   // SPELL_AURA_MOD_FEAR (SpellAuraDefines.h:87)
+	spellAuraModStun                              = 12  // SPELL_AURA_MOD_STUN (SpellAuraDefines.h:92)
+	spellAuraModRoot                              = 26  // SPELL_AURA_MOD_ROOT (SpellAuraDefines.h:106)
 	unitStandFlagCreep                            = 0x02
 	playerAuraVisionStealth                       = 0x20
 	playerAuraVisionInvis                         = 0x40
@@ -2365,7 +2374,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// not a call-site skip. A zero incoming damage takes the no-damage arm
 	// (PROC_SPELL_TYPE_NO_DMG_HEAL, Spell.cpp:2563-2579), not the damage arm.
 	if hadIncomingDamage {
-		s.procSpellHitAuraTriggers(ctx, targetGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit, absorbed)
+		s.procSpellHitAuraTriggers(ctx, targetGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit, absorbed, damage)
 		// Taken-side aura procs on the victim's own auras (TrinityCore
 		// Unit::TriggerAurasProcOnEvent, Unit.cpp:10413-10418): the done
 		// side runs first, matching the ProcSkillsAndAuras ordering
@@ -2375,7 +2384,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		// taken passes iterate the same aura list.
 		if s.server != nil {
 			if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
-				playerSess.procSpellHitTakenAuraTriggers(ctx, s.playerGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit, absorbed, s.triggeredNoProcEvents > 0)
+				playerSess.procSpellHitTakenAuraTriggers(ctx, s.playerGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit, absorbed, damage, s.triggeredNoProcEvents > 0)
 			}
 		}
 	} else {
