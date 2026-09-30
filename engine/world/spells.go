@@ -2527,7 +2527,15 @@ func (s *session) applySpellPowerBurn(ctx context.Context, targetGUID uint64, po
 		return 0
 	}
 	target := s.spellPowerTarget(targetGUID)
-	if target == nil || target.player == nil || target.player.Health == 0 || playerPowerType(target.player) != uint8(powerType) {
+	if target == nil {
+		// SpellEffects.cpp:1265-1282 (EffectPowerDrain) and :1352-1369
+		// (EffectPowerBurn): the power terms fire on any alive unit whose
+		// power type matches, not only players. Creature motions carry a
+		// power model (Powers/MaxPowers/PowerType); motions without
+		// populated max powers stay a no-op via the maximum != 0 gate.
+		return s.applySpellPowerBurnToCreature(targetGUID, powerType, amount, spellID)
+	}
+	if target.player == nil || target.player.Health == 0 || playerPowerType(target.player) != uint8(powerType) {
 		return 0
 	}
 	maximum := target.player.MaxPowers[uint32(powerType)]
@@ -2564,6 +2572,52 @@ func (s *session) applySpellPowerBurn(ctx context.Context, targetGUID uint64, po
 		return 0
 	}
 	target.adjustSpellPower(ctx, targetGUID, powerType, -burn)
+	return uint32(burn)
+}
+
+// applySpellPowerBurnToCreature mirrors the creature-target arm of
+// Spell::EffectPowerDrain/EffectPowerBurn: an alive unit whose power type
+// matches loses up to burn power, and the drained amount is returned for
+// the caster-gain (drain) or damage (burn) follow-ons. The Mana Burn 8129
+// target/caster cap runs against the motion's max powers; the resilience
+// term is dead here because C++'s GetCombatRatingDamageReduction returns
+// 0 for non-players (see drainManaResilienceReduction).
+func (s *session) applySpellPowerBurnToCreature(targetGUID uint64, powerType int32, amount int32, spellID uint32) uint32 {
+	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 {
+		return 0
+	}
+	index := uint32(powerType)
+	s.server.motionMu.Lock()
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
+	if motion == nil || motion.Health == 0 || motion.PowerType != index || motion.MaxPowers[index] == 0 {
+		s.server.motionMu.Unlock()
+		return 0
+	}
+	burn := int64(amount)
+	if spellID == 8129 { // Mana Burn: burn x% of target's mana, capped at 2x% of caster's
+		burn = int64(motion.MaxPowers[index]) * burn / 100
+		cap := int64(s.player.MaxPowers[index]) * int64(amount) * 2 / 100
+		if burn > cap {
+			burn = cap
+		}
+	}
+	if burn > int64(motion.Powers[index]) {
+		burn = int64(motion.Powers[index])
+	}
+	if burn <= 0 {
+		s.server.motionMu.Unlock()
+		return 0
+	}
+	next := motion.Powers[index] - uint32(burn)
+	motion.Powers[index] = next
+	if index == 0 {
+		motion.Mana = next
+	} else if index == 4 {
+		motion.Happiness = next
+	}
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	s.server.motionMu.Unlock()
+	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldPower1 + int(index): next})
 	return uint32(burn)
 }
 
