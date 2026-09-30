@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 )
 
@@ -268,7 +269,7 @@ func (s *session) evalQuestCondition(ctx context.Context, row conditionRow) (boo
 
 func isImplementedConditionType(condType int64) bool {
 	switch condType {
-	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 31, 32, 33, 35, 36, 37, 38, 39, 40, 42, 43, 44, 46, 47, 48, 49, 50:
+	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 42, 43, 44, 46, 47, 48, 49, 50:
 		return true
 	default:
 		return false
@@ -553,6 +554,25 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 			return false, nil
 		}
 		return s.relationToMeets(ctx, u1, u2, uint32(row.Value2)), nil
+	case 34: // CONDITION_REACTION_TO (ConditionMgr.cpp:421-430:
+		// condMeets = ((1 << unit->GetReactionTo(toUnit)) & ConditionValue2)
+		// != 0, unit the ConditionTarget endpoint and toUnit the Value1
+		// endpoint. C++ IsValid rejects the row at load when Value1 >= max
+		// targets, Value1 == ConditionTarget, or Value2 == 0 (2204-2222);
+		// mirror that as fail-closed. A missing target or a non-unit
+		// endpoint leaves condMeets false, like the C++ null/ToUnit arms.
+		if row.Value1 < 0 || row.Value1 > 1 || row.Value1 == row.ConditionTarget || row.Value2 == 0 {
+			return false, nil
+		}
+		u1, ok := s.conditionTargetUnit(row.ConditionTarget, creatureGUID)
+		if !ok {
+			return false, nil
+		}
+		u2, ok := s.conditionTargetUnit(row.Value1, creatureGUID)
+		if !ok {
+			return false, nil
+		}
+		return (uint64(1)<<s.reactionRankTo(u1, u2))&uint64(row.Value2) != 0, nil
 	case 35: // CONDITION_DISTANCE_TO (ConditionMgr.cpp:432-437:
 		// condMeets = CompareValues(ComparisionType(Value3),
 		// object->GetDistance(toObject), float(Value2)), with toObject the
@@ -795,6 +815,176 @@ func (s *session) relationToMeets(ctx context.Context, u1, u2 conditionUnit, rel
 	default:
 		return false
 	}
+}
+
+// reactionRankTo ports WorldObject::GetReactionTo (Object.cpp:2708-2793)
+// for the player/creature endpoint pairs Go condition contexts serve,
+// returning the full ReputationRank (SharedDefines.h:209-220: HATED 0,
+// HOSTILE 1, UNFRIENDLY 2, NEUTRAL 3, FRIENDLY 4, HONORED 5, REVERED 6,
+// EXALTED 7). Self and charmer/owner-or-self identity are always friendly;
+// the forced-reputation arm (SPELL_AURA_FORCE_REACTION) has no Go model;
+// the duel/group/FFA_PVP player-controlled arms and the
+// UNIT_FLAG2_IGNORE_REPUTATION check cannot fire here — endpoints are
+// always player (0) versus creature (1), and Go models no creature FFA or
+// ignore-reputation state.
+func (s *session) reactionRankTo(u, toUnit conditionUnit) uint32 {
+	if charmerOrOwnerOrSelfGUID(u) == charmerOrOwnerOrSelfGUID(toUnit) {
+		return 4 // REP_FRIENDLY
+	}
+	var creature conditionUnit
+	switch {
+	case !u.isPlayer:
+		creature = u
+	case !toUnit.isPlayer:
+		creature = toUnit
+	default:
+		return 4 // REP_FRIENDLY
+	}
+	player := playerPos{
+		Race:        s.player.Race,
+		Class:       s.player.Class,
+		Reputations: playerReputationMap(s.player.Reputations),
+		Sess:        s,
+	}
+	if s.server != nil {
+		player.FactionTemplate = s.server.raceFaction(s.player.Race)
+	}
+	if u.isPlayer {
+		return s.playerToCreatureRank(player, creature.faction)
+	}
+	return s.creatureToPlayerRank(creature.faction, player)
+}
+
+// playerToCreatureRank ports the player->creature arms of
+// WorldObject::GetReactionTo (Object.cpp:2737-2790): the reputation branch
+// is hostile only when at war (else friendly), contested guards are hostile
+// to contested-PvP players, and non-reputation factions fall through to the
+// faction-template terms.
+func (s *session) playerToCreatureRank(player playerPos, creatureFaction uint32) uint32 {
+	tpl, found := s.factionTemplateEntry(creatureFaction)
+	if !found {
+		return s.fallbackReactionRank(creatureFaction, player.Race)
+	}
+	if tpl.Flags&0x00001000 != 0 && player.Sess != nil && player.Sess.contestedPvPActive(time.Now()) { // FACTION_TEMPLATE_FLAG_CONTESTED_GUARD (DBCEnums.h:320)
+		return 1 // REP_HOSTILE
+	}
+	if rep, ok, err := s.server.Data.Reputation(tpl.Faction, player.Race, player.Class); err == nil && ok && rep.ReputationList >= 0 {
+		if saved, has := player.Reputations[tpl.Faction]; has && saved.Flags&factionFlagAtWar != 0 {
+			return 1 // REP_HOSTILE
+		}
+		return 4 // REP_FRIENDLY
+	}
+	return s.factionTemplateCommonRank(tpl, player.FactionTemplate)
+}
+
+// creatureToPlayerRank ports the creature->player direction, which is the
+// GetFactionReactionTo tail (Object.cpp:2795-2842): the CvP arm reads the
+// player's actual standing rank and clamps it down to neutral at war, the
+// contested-guard arm fires before the template terms, and the common
+// faction check decides hostile/friendly/neutral.
+func (s *session) creatureToPlayerRank(creatureFaction uint32, player playerPos) uint32 {
+	tpl, found := s.factionTemplateEntry(creatureFaction)
+	if !found {
+		return 3 // REP_NEUTRAL — null faction template entry (Object.cpp:2797-2799)
+	}
+	if tpl.Flags&0x00001000 != 0 && player.Sess != nil && player.Sess.contestedPvPActive(time.Now()) { // FACTION_TEMPLATE_FLAG_CONTESTED_GUARD (DBCEnums.h:320)
+		return 1 // REP_HOSTILE
+	}
+	if rep, ok, err := s.server.Data.Reputation(tpl.Faction, player.Race, player.Class); err == nil && ok && rep.ReputationList >= 0 {
+		standing := int64(rep.BaseStanding)
+		atWar := false
+		if saved, has := player.Reputations[tpl.Faction]; has {
+			standing = int64(totalReputationStanding(saved))
+			atWar = saved.Flags&factionFlagAtWar != 0
+		}
+		rank := reputationRank(standing)
+		if atWar && rank > 3 {
+			rank = 3 // CvP clamp: std::min(REP_NEUTRAL, repRank) (Object.cpp:2821-2822)
+		}
+		return rank
+	}
+	return s.factionTemplateCommonRank(tpl, player.FactionTemplate)
+}
+
+// factionTemplateEntry looks up a FactionTemplate row, failing closed to the
+// fallback path when the data store is unavailable.
+func (s *session) factionTemplateEntry(faction uint32) (wotlk.FactionTemplate, bool) {
+	if s.server == nil || s.server.Data == nil || faction == 0 {
+		return wotlk.FactionTemplate{}, false
+	}
+	tpl, found, err := s.server.Data.FactionTemplate(faction)
+	if err != nil || !found {
+		return wotlk.FactionTemplate{}, false
+	}
+	return tpl, true
+}
+
+// factionTemplateCommonRank ports the common faction based check tail of
+// WorldObject::GetFactionReactionTo (Object.cpp:2826-2842) using
+// FactionTemplateEntry::IsHostileTo/IsFriendlyTo (DBCStructure.h:697-722).
+func (s *session) factionTemplateCommonRank(creatureTpl wotlk.FactionTemplate, playerFaction uint32) uint32 {
+	playerTpl, found := s.factionTemplateEntry(playerFaction)
+	if !found {
+		return s.fallbackReactionRank(creatureTpl.ID, 0)
+	}
+	if factionTemplateHostileTo(creatureTpl, playerTpl) {
+		return 1 // REP_HOSTILE
+	}
+	if factionTemplateFriendlyTo(creatureTpl, playerTpl) || factionTemplateFriendlyTo(playerTpl, creatureTpl) {
+		return 4 // REP_FRIENDLY
+	}
+	if creatureTpl.Flags&0x00002000 != 0 { // FACTION_TEMPLATE_FLAG_HOSTILE_BY_DEFAULT (DBCEnums.h:321)
+		return 1 // REP_HOSTILE
+	}
+	return 3 // REP_NEUTRAL
+}
+
+// factionTemplateHostileTo ports FactionTemplateEntry::IsHostileTo
+// (DBCStructure.h:710-722).
+func factionTemplateHostileTo(a, b wotlk.FactionTemplate) bool {
+	if b.Faction != 0 {
+		for _, enemy := range a.Enemies {
+			if enemy != 0 && enemy == b.Faction {
+				return true
+			}
+		}
+		for _, friend := range a.Friends {
+			if friend != 0 && friend == b.Faction {
+				return false
+			}
+		}
+	}
+	return a.EnemyGroup&b.FactionGroup != 0
+}
+
+// factionTemplateFriendlyTo ports FactionTemplateEntry::IsFriendlyTo
+// (DBCStructure.h:697-709).
+func factionTemplateFriendlyTo(a, b wotlk.FactionTemplate) bool {
+	if b.Faction != 0 {
+		for _, enemy := range a.Enemies {
+			if enemy != 0 && enemy == b.Faction {
+				return false
+			}
+		}
+		for _, friend := range a.Friends {
+			if friend != 0 && friend == b.Faction {
+				return true
+			}
+		}
+	}
+	return a.FriendGroup&b.FactionGroup != 0 || a.FactionGroup&b.FriendGroup != 0
+}
+
+// fallbackReactionRank degrades the rank to the same fallback terms the
+// hostile/friendly faction helpers use when DBC data is unavailable.
+func (s *session) fallbackReactionRank(creatureFaction uint32, playerRace uint8) uint32 {
+	if s.server != nil && s.server.isHostileFaction(creatureFaction, playerPos{Race: playerRace}) {
+		return 1 // REP_HOSTILE
+	}
+	if isFriendlyFactionFallback(creatureFaction, playerRace) {
+		return 4 // REP_FRIENDLY
+	}
+	return 3 // REP_NEUTRAL
 }
 
 // compareValuesFloat ports the float instantiation of TrinityCore
