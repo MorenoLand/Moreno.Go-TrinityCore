@@ -1379,7 +1379,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 
 	// Auto-repeat ranged spells (e.g. Auto Shot, Shoot Wand) (TC: CURRENT_AUTOREPEAT_SPELL)
-	if (spell.AttributesEx1&0x20 != 0) || spellID == 75 || spellID == 5019 {
+	if (spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0) || spellID == 75 || spellID == 5019 {
 		s.autoRepeatSpell = spellID
 		s.autoRepeatTarget = targetGUID
 		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {

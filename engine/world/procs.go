@@ -558,7 +558,14 @@ const (
 	spellAttr2TriggeredCanTriggerProc  uint32 = 0x40000000
 	spellAttr3TriggeredCanTriggerProc2 uint32 = 0x00000200
 	spellAttr3CantTriggerProc          uint32 = 0x00010000
+	spellAttr2AutoRepeatFlag           uint32 = 0x00000020 // SharedDefines.h:491
 )
+
+// ITEM_SUBCLASS_WEAPON_WAND (ItemTemplate.h:368); itemClassWeapon = 2 lives
+// in spells.go. C++ builds EquippedItemSubClassMask straight from the DBC
+// field (SpellInfo.cpp:843), so the wand check is a bit test on the raw
+// field value.
+const itemSubclassWeaponWand = 19
 
 // Proc spell type and phase (SpellMgr.h:224-238).
 const (
@@ -775,23 +782,35 @@ func eventSpellCanTriggerProc(spell *wotlk.Spell) bool {
 
 // spellDamageProcTypeMask mirrors Spell::prepareDataForTriggerSystem
 // (Spell.cpp:1999-2055): melee damage-class spells use their class flag plus
-// the mainhand bit, ranged damage-class spells their class flag; every other
+// the mainhand bit; ranged damage-class spells with SPELL_ATTR2_AUTOREPEAT_FLAG
+// (Auto Shot, spell 75) use DONE_RANGED_AUTO_ATTACK, other ranged spells their
+// class flag; wand auto attacks (Shoot, spell 5019 — weapon class, wand
+// subclass mask bit, AUTOREPEAT_FLAG) use DONE_RANGED_AUTO_ATTACK; every other
 // spell on the damage path is negative, magic class or none class per its
-// DmgClass (Spell.dbc field 213). The ranged auto-shot
-// (SPELL_ATTR2_AUTOREPEAT_FLAG -> DONE_RANGED_AUTO_ATTACK) and wand branches
-// have no model on the Go direct-spell-damage path.
-func spellDamageProcTypeMask(defenseType uint32) uint32 {
-	switch defenseType {
+// DmgClass (Spell.dbc field 213).
+func spellDamageProcTypeMask(spell wotlk.Spell) uint32 {
+	switch spell.DefenseType {
 	case spellDamageClassMelee:
 		// Spell::prepareDataForTriggerSystem ORs the mainhand/offhand bit
 		// (Spell.cpp:2009-2012); the direct-spell-damage path always uses
 		// the base attack type, so the mainhand bit applies.
 		return procFlagDoneSpellMeleeDmgClass | procFlagDoneMainhandAttack
 	case spellDamageClassRanged:
+		// Spell.cpp:2018-2023 — auto attack.
+		if spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0 {
+			return procFlagDoneRangedAutoAttack
+		}
 		return procFlagDoneSpellRangedDmgClass
-	case spellDamageClassMagic:
-		return procFlagDoneSpellMagicDmgClassNeg
 	default:
+		// Spell.cpp:2026-2034 — wands auto attack.
+		if spell.EquippedItemClass == itemClassWeapon &&
+			spell.EquippedItemSubClass&(1<<itemSubclassWeaponWand) != 0 &&
+			spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0 {
+			return procFlagDoneRangedAutoAttack
+		}
+		if spell.DefenseType == spellDamageClassMagic {
+			return procFlagDoneSpellMagicDmgClassNeg
+		}
 		return procFlagDoneSpellNoneDmgClassNeg
 	}
 }
@@ -846,7 +865,7 @@ func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint6
 	}
 	spellCopy := spell
 	s.procAuraTriggerLoop(ctx, targetGUID, procEventInfo{
-		typeMask:       spellDamageProcTypeMask(spell.DefenseType),
+		typeMask:       spellDamageProcTypeMask(spell),
 		schoolMask:     schoolMask,
 		spellTypeMask:  procSpellTypeDamage,
 		spellPhaseMask: procSpellPhaseHit,
@@ -919,6 +938,72 @@ func (s *session) procVictimAuraTriggers(ctx context.Context, attackerGUID uint6
 	s.procAuraTriggerLoop(ctx, attackerGUID, procEventInfo{
 		typeMask:       procFlagTakenMeleeAutoAttack,
 		schoolMask:     spellSchoolMaskNormal,
+		spellTypeMask:  procSpellTypeNone,
+		spellPhaseMask: procSpellPhaseNone,
+		hitMask:        meleeOutcomeProcHitMask(outcome),
+	})
+}
+
+// procRangedAutoAttackAuraTriggers evaluates real aura procs on the done side
+// of a ranged auto attack (Auto Shot / Shoot): the spell-damage arm of
+// Unit::ProcDamageAndSpellFor via Spell::TargetInfo::DoDamageAndTriggers
+// (Spell.cpp:2427-2540) with m_procAttacker = DONE_RANGED_AUTO_ATTACK from
+// Spell::prepareDataForTriggerSystem (Spell.cpp:2018-2034). The event carries
+// the auto-shot spell and the triggered state (Spell::IsTriggered,
+// Spell.cpp:7501-7504), so the CanSpellTriggerProcOnEvent mana-cost,
+// spell-family, and triggered-cast gates engage exactly; the ranged path rolls
+// melee-style outcomes, so the hit mask mirrors the DamageInfo melee ctor
+// (Unit.cpp:155-179). Spells with SPELL_ATTR3_CANT_TRIGGER_PROC never reach
+// the loop (Spell.cpp:2441). The trigger spell targets the victim.
+func (s *session) procRangedAutoAttackAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, outcome protocol.MeleeHitOutcome) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		return
+	}
+	if spell.AttributesEx3&spellAttr3CantTriggerProc != 0 {
+		return
+	}
+	schoolMask := spell.SchoolMask
+	if schoolMask == 0 {
+		schoolMask = 1
+	}
+	spellCopy := spell
+	s.procAuraTriggerLoop(ctx, targetGUID, procEventInfo{
+		typeMask:       spellDamageProcTypeMask(spell),
+		schoolMask:     schoolMask,
+		spellTypeMask:  procSpellTypeDamage,
+		spellPhaseMask: procSpellPhaseHit,
+		hitMask:        meleeOutcomeProcHitMask(outcome),
+		triggered:      s.triggeredNoProcEvents > 0,
+		eventSpell:     &spellCopy,
+	})
+}
+
+// procRangedVictimAuraTriggers evaluates real aura procs on the taken side of
+// a ranged auto attack (Spell.cpp:2020/2032 — ProcVictim =
+// PROC_FLAG_TAKEN_RANGED_AUTO_ATTACK, with no mainhand/offhand arm on the
+// victim side; the damage arm of DoDamageAndTriggers ORs
+// PROC_FLAG_TAKEN_DAMAGE, Spell.cpp:2545). The event carries the auto-shot
+// spell's school mask, matching the damage event's school on both sides of
+// DoDamageAndTriggers. The trigger spell targets the attacker.
+func (s *session) procRangedVictimAuraTriggers(ctx context.Context, attackerGUID uint64, spellID uint32, outcome protocol.MeleeHitOutcome) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		return
+	}
+	schoolMask := spell.SchoolMask
+	if schoolMask == 0 {
+		schoolMask = 1
+	}
+	s.procAuraTriggerLoop(ctx, attackerGUID, procEventInfo{
+		typeMask:       procFlagTakenRangedAutoAttack | procFlagTakenDamage,
+		schoolMask:     schoolMask,
 		spellTypeMask:  procSpellTypeNone,
 		spellPhaseMask: procSpellPhaseNone,
 		hitMask:        meleeOutcomeProcHitMask(outcome),

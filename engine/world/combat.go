@@ -726,12 +726,24 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	}
 	s.lastCombatTime = now
 
+	// Ranged auto-attack aura procs on the done side (TrinityCore
+	// Spell::TargetInfo::DoDamageAndTriggers, Spell.cpp:2427-2540 — the
+	// auto-shot/wand arm of Spell::prepareDataForTriggerSystem,
+	// Spell.cpp:2018-2034); the trigger spell targets the victim.
+	s.procRangedAutoAttackAuraTriggers(ctx, target.GUID, spellID, outcome)
+
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil && vicSess.player != nil {
 			if vicSess.player.UnitFlags&unitFlagInCombat == 0 {
 				vicSess.player.UnitFlags |= unitFlagInCombat
 			}
 			vicSess.lastCombatTime = now
+			// Victim-side aura procs on the ranged auto-attack event
+			// (TrinityCore Spell.cpp:2020/2032 — ProcVictim =
+			// PROC_FLAG_TAKEN_RANGED_AUTO_ATTACK), before the victim-side
+			// damage application, mirroring the melee ordering; the trigger
+			// spell targets the attacker.
+			vicSess.procRangedVictimAuraTriggers(ctx, s.playerGUID, spellID, outcome)
 			if damage > 0 {
 				s.server.updateArenaDamageScore(s, damage)
 				if damage >= vicSess.player.Health {
