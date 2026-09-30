@@ -57,6 +57,38 @@ type playerTradeState struct {
 	Money    uint32
 	Items    map[uint8]tradeSlotItem
 	Accepted bool
+	// Deferred-spell trade state (TradeData::_spell/_spellCastItem/
+	// _acceptProccess, TradeData.h): an enchant cast on the trade window's
+	// non-traded slot is stored here and applied when the trade executes.
+	SpellID           uint32
+	SpellCastItemGUID uint64
+	InAcceptProcess   bool
+}
+
+// setTradeSpell mirrors TradeData::SetSpell (TradeData.cpp:80-94): no-op when
+// the stored spell is unchanged; otherwise stores the spell, un-accepts both
+// sides, and pushes the extended trade update to both clients (Update(true)
+// + Update(false)).
+func (s *session) setTradeSpell(spellID uint32, castItemGUID uint64) {
+	if s.trade == nil {
+		return
+	}
+	if s.trade.SpellID == spellID && s.trade.SpellCastItemGUID == castItemGUID {
+		return
+	}
+	s.trade.SpellID = spellID
+	s.trade.SpellCastItemGUID = castItemGUID
+	if s.trade.Accepted {
+		s.trade.Accepted = false
+		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+	}
+	if s.trade.Partner != nil && s.trade.Partner.trade != nil {
+		if s.trade.Partner.trade.Accepted {
+			s.trade.Partner.trade.Accepted = false
+			_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+		}
+		s.notifyTradeUpdate()
+	}
 }
 
 // sendTradeStatus sends SMSG_TRADE_STATUS (0x120) with matching TrinityCore structure.
@@ -278,6 +310,14 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 		GiftCreatorGUID: giftCreatorGUID,
 		CreatorGUID:     creatorGUID,
 	}
+	// TradeData::SetItem spell clearing (TradeData.cpp:72-77): changing the
+	// non-traded slot removes a possible spell the trader applied to it;
+	// changing any slot removes a possible spell the player applied (the
+	// reagent may have moved).
+	if tradeSlot == tradeSlotNonTraded && s.trade.Partner != nil {
+		s.trade.Partner.setTradeSpell(0, 0)
+	}
+	s.setTradeSpell(0, 0)
 	if s.trade.Accepted {
 		s.trade.Accepted = false
 		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
@@ -300,6 +340,13 @@ func (s *session) handleClearTradeItem(ctx context.Context, payload []byte) bool
 	}
 	tradeSlot := payload[0]
 	delete(s.trade.Items, tradeSlot)
+	// HandleClearTradeItemOpcode routes through TradeData::SetItem(slot,
+	// nullptr) (TradeHandler.cpp:778-792), so the same spell clearing as
+	// handleSetTradeItem applies (TradeData.cpp:72-77).
+	if tradeSlot == tradeSlotNonTraded && s.trade.Partner != nil {
+		s.trade.Partner.setTradeSpell(0, 0)
+	}
+	s.setTradeSpell(0, 0)
 	if s.trade.Accepted {
 		s.trade.Accepted = false
 		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
@@ -635,7 +682,7 @@ func (s *session) sendTradeStatusExtended(traderData bool) {
 	buf.WriteU32(tradeSlotCount) // tradeSlotCount
 	buf.WriteU32(tradeSlotCount) // tradeSlotCount
 	buf.WriteU32(data.Money)
-	buf.WriteU32(0) // spell
+	buf.WriteU32(data.SpellID) // spell (TradeData::GetSpell, TradeHandler.cpp:85)
 	for i := uint8(0); i < tradeSlotCount; i++ {
 		buf.WriteU8(i)
 		if it, ok := data.Items[i]; ok {
