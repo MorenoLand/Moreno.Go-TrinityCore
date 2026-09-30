@@ -9,7 +9,7 @@ import (
 const (
 	implicitTargetGONearbyEntry   uint32 = 40 // TARGET_GAMEOBJECT_NEARBY_ENTRY (SharedDefines.h:1476)
 	implicitTargetDestNearbyEntry uint32 = 46 // TARGET_DEST_NEARBY_ENTRY (SharedDefines.h:1482)
-	typeIDGameObject              = 5  // TYPEID_GAMEOBJECT (ObjectGuid.h:39)
+	typeIDGameObject                     = 5  // TYPEID_GAMEOBJECT (ObjectGuid.h:39)
 )
 
 // isGONearbyEntrySpell reports spells carrying TARGET_GAMEOBJECT_NEARBY_ENTRY
@@ -163,16 +163,16 @@ type nearbyGameObject struct {
 	x, y, z  float32
 }
 
-// scanNearbyGameObjects visits runtime and static gameobjects in the caster's
-// instance within the x/y box of radius, skipping hidden ones — the Go
-// equivalent of the gameobject container scan in SearchTargets
+// scanNearbyGameObjectsAt visits runtime and static gameobjects in the given
+// map/instance within the x/y box of radius around (x, y), skipping hidden
+// ones — the Go equivalent of the gameobject container scan in SearchTargets
 // (Spell.cpp:1844) for TARGET_OBJECT_TYPE_GOBJ (GetSearcherTypeMask,
-// Spell.cpp:1809).
-func (s *session) scanNearbyGameObjects(ctx context.Context, radius float32, visit func(nearbyGameObject)) {
-	if s == nil || s.player == nil || s.server == nil {
+// Spell.cpp:1809), parameterized by search origin so non-player origins
+// (e.g. condition targets) can use the same container semantics.
+func (s *session) scanNearbyGameObjectsAt(ctx context.Context, mapID, instanceID uint32, x, y, radius float32, visit func(nearbyGameObject)) {
+	if s == nil || s.server == nil {
 		return
 	}
-	mapID, instanceID := s.player.Map, s.player.InstanceID
 	seen := make(map[uint64]struct{})
 	for _, dyn := range s.server.gameObjectStatesInInstance(mapID, instanceID) {
 		if dyn.Hidden {
@@ -194,7 +194,7 @@ func (s *session) scanNearbyGameObjects(ctx context.Context, radius float32, vis
 		AND g.position_y BETWEEN ? AND ?
 		AND (g.spawnMask = 0 OR (g.spawnMask & 1) <> 0)
 		AND ` + eventClause
-	args := append([]any{mapID, float64(s.player.X - radius), float64(s.player.X + radius), float64(s.player.Y - radius), float64(s.player.Y + radius)}, goArgs...)
+	args := append([]any{mapID, float64(x - radius), float64(x + radius), float64(y - radius), float64(y + radius)}, goArgs...)
 	rows, err := s.server.WorldStore.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return
@@ -215,6 +215,14 @@ func (s *session) scanNearbyGameObjects(ctx context.Context, radius float32, vis
 		}
 		visit(nearbyGameObject{guid: guid, entry: uint32(entry), spawnLow: uint32(low), x: float32(x), y: float32(y), z: float32(z)})
 	}
+}
+
+// scanNearbyGameObjects is the caster-centered form of scanNearbyGameObjectsAt.
+func (s *session) scanNearbyGameObjects(ctx context.Context, radius float32, visit func(nearbyGameObject)) {
+	if s == nil || s.player == nil {
+		return
+	}
+	s.scanNearbyGameObjectsAt(ctx, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, radius, visit)
 }
 
 // spellEntryNearbyGOTarget ports the GOBJ half of

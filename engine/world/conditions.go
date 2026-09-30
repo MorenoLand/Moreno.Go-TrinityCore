@@ -290,7 +290,7 @@ func (s *session) evalQuestCondition(ctx context.Context, row conditionRow) (boo
 
 func isImplementedConditionType(condType int64) bool {
 	switch condType {
-	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 42, 43, 44, 45, 46, 47, 48, 49, 50:
+	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 42, 43, 44, 45, 46, 47, 48, 49, 50:
 		return true
 	default:
 		return false
@@ -626,6 +626,25 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 			excludeGUID = creatureGUID
 		}
 		return s.nearestCreatureEntryInRange(uint32(row.Value1), float32(row.Value2), ox, oy, oz, excludeGUID, row.Value3 == 0), nil
+	case 30: // CONDITION_NEAR_GAMEOBJECT (ConditionMgr.cpp:353-356:
+		// condMeets = object->FindNearestGameObject(ConditionValue1,
+		// (float)ConditionValue2) != nullptr, spawnedOnly defaulting to
+		// true). C++ IsValid rejects the row at load when the gameobject
+		// template is missing (2104-2111); mirror that as fail-closed. The
+		// search origin resolves via conditionTargetPos; an unavailable
+		// position fails closed, like the C++ null arm.
+		if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+			return false, nil
+		}
+		var goTemplateExists int
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM gameobject_template WHERE entry = ?", uint32(row.Value1)).Scan(&goTemplateExists); err != nil {
+			return false, nil
+		}
+		ox, oy, oz, ok := s.conditionTargetPos(row.ConditionTarget, creatureGUID)
+		if !ok {
+			return false, nil
+		}
+		return s.nearestGameObjectEntryInRange(ctx, uint32(row.Value1), float32(row.Value2), ox, oy, oz), nil
 	case 31: // CONDITION_OBJECT_ENTRY_GUID (ConditionMgr.cpp:358-380: type id
 		// must match, then the entry matches unless Value2 is 0, then the
 		// spawn id matches when Value3 is set)
@@ -903,6 +922,37 @@ func (s *session) nearestCreatureEntryInRange(entry uint32, radius float32, x, y
 		return true
 	}
 	return false
+}
+
+// nearestGameObjectEntryInRange ports WorldObject::FindNearestGameObject
+// (Object.cpp:2158-2166) with the NearestGameObjectEntryInObjectRangeCheck
+// terms (GridNotifiers.h:736-760): same map and instance, matching entry,
+// the spawned-only arm (spawnedOnly defaults to true at the condition call
+// site), and 3D distance within radius (C++ IsWithinDistInMap). The checker's
+// grid sweep is Go's runtime-plus-static container scan: registry entries
+// are spawned by construction (despawned runtime gameobjects are deleted
+// from the registry, hidden ones skipped by the scan), while static DB rows
+// have no respawn-state model and are treated as in-grid, matching the
+// spell-target scan's semantics. The checker's GUID self-exclusion is
+// vacuous here — the search origin is always the player or a gossip/vendor
+// creature while gameobject GUIDs carry the 0xF110 high part, so they can
+// never collide. Phase masks have no Go model (same as condition 29).
+// Reports whether any gameobject qualifies.
+func (s *session) nearestGameObjectEntryInRange(ctx context.Context, entry uint32, radius float32, x, y, z float32) bool {
+	if s == nil || s.player == nil || s.server == nil {
+		return false
+	}
+	found := false
+	s.scanNearbyGameObjectsAt(ctx, s.player.Map, s.player.InstanceID, x, y, radius, func(g nearbyGameObject) {
+		if found || g.entry != entry {
+			return
+		}
+		if distance3D(x, y, z, g.x, g.y, g.z) > float64(radius) {
+			return
+		}
+		found = true
+	})
+	return found
 }
 
 // conditionTargetPos resolves a ConditionTarget index to a world position.
