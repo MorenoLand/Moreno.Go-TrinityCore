@@ -2187,7 +2187,10 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 
 	// Trigger spell cast/hit procs (TrinityCore Unit::ProcDamageAndSpellFor);
 	// suppressed for triggered casts (TRIGGERED_DISALLOW_PROC_EVENTS parity).
-	if s.triggeredNoProcEvents == 0 {
+	// Item combat spells fire on spell hits only for melee/ranged
+	// damage-class spells (Spell.cpp:2588-2596); magic-damage-class spells
+	// never qualify.
+	if s.triggeredNoProcEvents == 0 && s.spellHitMayFireItemProcs(spellID) {
 		s.procSpellCastAndHitEffects(ctx, target, spellID)
 	}
 

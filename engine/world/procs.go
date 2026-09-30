@@ -111,6 +111,37 @@ const (
 	ItemReignOfTheDeadHero = 47188
 )
 
+// spellAttr4CantTriggerItemSpells is SPELL_ATTR4_CANT_TRIGGER_ITEM_SPELLS
+// (SharedDefines.h:583); ATTR4 is Go's AttributesEx4 (Spell.dbc field 8).
+const spellAttr4CantTriggerItemSpells uint32 = 0x00800000
+
+// spellHitMayFireItemProcs mirrors the spell-hit gate on item combat spells
+// (Spell.cpp:2588-2596): on spell hits they fire only for melee/ranged
+// damage-class spells without SPELL_ATTR0_STOP_ATTACK_TARGET or
+// SPELL_ATTR4_CANT_TRIGGER_ITEM_SPELLS. The fork loads DmgClass from
+// Spell.dbc field 213 (SpellInfo.cpp:856), which Go parses as
+// Spell.DefenseType. Unresolvable DBC data fails open, preserving the
+// previous behavior.
+func (s *session) spellHitMayFireItemProcs(spellID uint32) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return true
+	}
+	spell, ok, err := s.server.Data.Spell(spellID)
+	if err != nil || !ok {
+		return true
+	}
+	if spell.DefenseType != spellDamageClassMelee && spell.DefenseType != spellDamageClassRanged {
+		return false
+	}
+	if spell.Attributes&spellAttr0StopAttackTarget != 0 {
+		return false
+	}
+	if spell.AttributesEx4&spellAttr4CantTriggerItemSpells != 0 {
+		return false
+	}
+	return true
+}
+
 // RollPPMChance rolls whether a weapon proc occurs based on Procs Per Minute (PPM)
 // and weapon attack speed in milliseconds.
 // Formula: chance = (weaponSpeedMs * PPM) / 60000.0
