@@ -565,4 +565,11 @@ func init() {
 	// the same file; hatcher 23818 AI "npc_janalai_hatcher" has no
 	// Lua-modelable hooks and is not registered).
 	RegisterLuaBoss("boss_janalai", 23578)
+	// Hex Lord Malacrass (Zul'Aman) — fight logic in
+	// lua_scripts/zulaman/boss_hexlord.lua (the eight add AIs — Thurg,
+	// Alyson Antille, Slither, Lord Raadan, Gazakroth, Fenstalker,
+	// Darkheart, Koragg — in the same file; the 23920 siphon-soul
+	// trigger has no C++ script and the
+	// spell_hexlord_unstable_affliction AuraScript is not modeled).
+	RegisterLuaBoss("boss_hexlord_malacrass", 24239)
 }
