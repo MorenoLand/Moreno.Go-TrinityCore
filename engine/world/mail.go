@@ -1124,20 +1124,28 @@ func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) 
 				s.accountID, uint32(origSenderAccount)) && s.server != nil {
 				deliverTime = now + int64(s.server.Config.MailDeliveryDelay)
 			}
-			expireTime := deliverTime + 30*86400 // 30 days
+			expireTime := deliverTime + mailSendExpireDelay(s.player.ExtraFlags&playerExtraGMOn != 0, 0)
 			// C++ rebuilds the mail via MailDraft::SendReturnToSender; the draft
 			// never carries COD (Mail.h:124/127 init m_COD(0), no AddCOD on this
-			// path), so the returned mail's COD is cleared. checked = 2 is
+			// path), so the returned mail's COD is cleared and the 3-day COD
+			// expire arm (Mail.cpp:197) is dead here. The draft sender is the
+			// returning player (always the online session), whose GM status
+			// (Player::IsGameMaster = PLAYER_EXTRA_GM_ON, Player.h:959) selects
+			// the 90-day expire arm, 30 days otherwise. The
+			// MailSender(MAIL_NORMAL, sender_guid) constructor (Mail.h:85) stamps
+			// MAIL_STATIONERY_DEFAULT unconditionally — the MailSender(Player*)
+			// GM-stationery arm never fires on this path. checked = 2 is
 			// MAIL_CHECK_MASK_RETURNED (Mail.h:48).
 			_, _ = cdb.ExecContext(ctx, `UPDATE mail SET
 				receiver = ?,
 				sender = ?,
 				messageType = 0,
+				stationery = ?,
 				checked = 2,
 				deliver_time = ?,
 				expire_time = ?,
 				cod = 0
-				WHERE id = ?`, senderGUID, receiverGUID, deliverTime, expireTime, mailID)
+				WHERE id = ?`, senderGUID, receiverGUID, mailSenderStationery(false), deliverTime, expireTime, mailID)
 
 			s.sendMailNotify(uint64(senderGUID))
 		} else {
