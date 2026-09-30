@@ -673,6 +673,18 @@ func (s *Server) scheduleCreatureRespawn(ctx context.Context, guid, health uint3
 	var entry, mapID int64
 	var x, y, z float64
 	_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT id, map, position_x, position_y, position_z FROM creature WHERE guid = ?", guid).Scan(&entry, &mapID, &x, &y, &z)
+	// Eluna CREATURE_EVENT_ON_CORPSE_REMOVED (26): C++ fires it from
+	// Creature::RemoveCorpse (Creature.cpp:393/429) and applies the rewrite as
+	// m_respawnTime = max(now + respawnDelay, m_respawnTime) — the hook can
+	// only extend the respawn timer, never shorten it. Go has no separate
+	// corpse-removal phase; the respawn delay is consumed here, so the hook
+	// fires with the spawntimesecs delay and only an extension takes effect.
+	if motion := s.findCreatureMotion(uint32(mapID), 0, creatureWorldGUID(guid, uint32(entry))); motion != nil {
+		delay := uint32(seconds)
+		if rewritten := s.fireCreatureCorpseRemoved(ctx, motion, delay); rewritten > delay {
+			seconds = int64(rewritten)
+		}
+	}
 	s.motionMu.Lock()
 	if s.creatureRespawns == nil {
 		s.creatureRespawns = make(map[uint32]creatureRespawn)
@@ -697,6 +709,15 @@ func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target com
 	_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT id, map, position_x, position_y, position_z FROM creature WHERE guid = ?", guid).Scan(&spawnEntry, &mapID, &x, &y, &z)
 	if spawnEntry <= 0 {
 		spawnEntry = int64(entry)
+	}
+	// Eluna CREATURE_EVENT_ON_CORPSE_REMOVED (26), instance path: same
+	// extend-only rewrite semantics as the world path above
+	// (Creature::RemoveCorpse, Creature.cpp:393/429).
+	if motion := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
+		delay := uint32(seconds)
+		if rewritten := s.fireCreatureCorpseRemoved(ctx, motion, delay); rewritten > delay {
+			seconds = int64(rewritten)
+		}
 	}
 	key := instanceAdmissionKey{MapID: target.Map, InstanceID: target.InstanceID}
 	s.motionMu.Lock()

@@ -139,6 +139,49 @@ func (s *Server) fireCreatureDamageTaken(ctx context.Context, motion *creatureMo
 	return damage
 }
 
+// fireCreatureCorpseRemoved dispatches Eluna CREATURE_EVENT_ON_CORPSE_REMOVED
+// (26) with the pending respawn delay. C++ (Eluna::CorpseRemoved,
+// CreatureHooks.cpp:236-265, fired from Creature::RemoveCorpse via
+// ai->CorpseRemoved, Creature.cpp:393/429) passes (event, creature,
+// respawnDelay); each handler may return a boolean veto and, as the second
+// return, a replacement delay. The boolean gates only ScriptedAI::
+// CorpseRemoved, which has no override — the sole implementation is the empty
+// CreatureAI base (CreatureAI.h:190), a provable no-op like the SpellHit
+// ruling, so Go consumes only the delay rewrite. A numeric second return
+// rewrites the delay AND the argument the next handler sees (the
+// respawnDelayIndex/ReplaceArgument loop); the final delay is the last
+// numeric rewrite. Non-numeric, negative, or > MaxUint32 returns are ignored,
+// mirroring lua_isnumber and CHECKVAL<uint32>'s range errors
+// (LuaEngine.cpp:770-788); fractional values truncate toward zero like C++'s
+// static_cast<unsigned int>. Both binding families fire: entry handlers
+// first, then the unique handlers for this creature's GUID/instance, matching
+// SetupStack's merged call list (HookHelpers.h:37-39) with the rewritten delay
+// threaded through both passes. Returns the delay to use.
+func (s *Server) fireCreatureCorpseRemoved(ctx context.Context, motion *creatureMotion, delay uint32) uint32 {
+	if s == nil || motion == nil || s.Features == nil || s.Features.Scripts == nil {
+		return delay
+	}
+	creature := s.luaMotionCreature(motion)
+	if creature == nil {
+		return delay
+	}
+	args := []any{scripting.CreatureEventOnCorpseRemoved, creature, delay}
+	// The rewritten delay is threaded through the update closure, so the
+	// per-handler return pairs need no post-processing.
+	update := func(returns []any) {
+		if len(returns) < 2 {
+			return
+		}
+		if n, ok := returns[1].(float64); ok && n >= 0 && n <= 4294967295 {
+			delay = uint32(n)
+			args[2] = delay
+		}
+	}
+	_, _ = s.Features.Scripts.TriggerCreatureEvent2Updated(ctx, motion.Entry, scripting.CreatureEventOnCorpseRemoved, args, update)
+	_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent2Updated(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnCorpseRemoved, args, update)
+	return delay
+}
+
 // luaQuest builds the Eluna Quest userdata surface used as the quest
 // argument of the quest hooks. It mirrors the GetQuest global's quest
 // object in engine/scripting/globals.go (ID/Name/Title/Level/MinLevel/Flags
