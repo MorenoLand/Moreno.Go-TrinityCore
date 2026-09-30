@@ -522,4 +522,7 @@ func init() {
 	// Nightbane (Karazhan) — fight logic in
 	// lua_scripts/karazhan/boss_nightbane.lua.
 	RegisterLuaBoss("boss_nightbane", 17225)
+	// Prince Malchezaar (Karazhan) — fight logic in
+	// lua_scripts/karazhan/boss_prince_malchezaar.lua.
+	RegisterLuaBoss("boss_malchezaar", 15690)
 }
