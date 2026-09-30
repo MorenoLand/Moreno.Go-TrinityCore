@@ -306,9 +306,15 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 		}
 	}
 	// Build SMSG_MAIL_LIST_RESULT (0x23B)
-	packet := protocol.NewBuffer(512)
-	packet.WriteU32(uint32(totalMails)) // TotalNumRecords: all delivered mails, not the capped vector
-	packet.WriteU8(uint8(len(mails)))   // Mails.size(): capped at 50 by the row query
+	// Reference: MailPackets.cpp:153-164 (MailListResult::AddMail) —
+	// TotalNumRecords counts every delivered mail, but entries stop being
+	// appended once 50 mails are in the vector or the accumulated packet
+	// size reaches int16 max (32767); the _maxPacketSizeReached latch means
+	// no later mail is ever appended, and Write() reports the appended
+	// vector size, not the iterated count.
+	const maxMailListPacketSize = 32767
+	packetLen := 5 // U32 total + U8 count header already accounted
+	var entries [][]byte
 	for _, m := range mails {
 		daysLeft := float32(m.ExpireTime-now) / 86400.0
 		if daysLeft < 0 {
@@ -350,11 +356,22 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 			msgBuf.WriteU8(1) // Unlocked
 		}
 		entryBytes := msgBuf.Bytes()
+		entrySize := 2 + len(entryBytes) // U16 length prefix + entry, the C++ GetPacketSize() shape
+		if packetLen+entrySize >= maxMailListPacketSize {
+			break // the int16-max latch: no further mail is appended
+		}
+		packetLen += entrySize
+		entries = append(entries, entryBytes)
+	}
+	packet := protocol.NewBuffer(512)
+	packet.WriteU32(uint32(totalMails)) // TotalNumRecords: all delivered mails, not the appended vector
+	packet.WriteU8(uint8(len(entries))) // Mails.size(): the appended vector, like C++ Write()
+	for _, entryBytes := range entries {
 		packet.WriteU16(uint16(len(entryBytes)))
 		packet.Write(entryBytes)
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_MAIL_LIST_RESULT), packet.Bytes(), true)
-	s.debug("mail list sent", "account", s.accountName, "mails", len(mails))
+	s.debug("mail list sent", "account", s.accountName, "mails", len(entries))
 	return true
 }
 
