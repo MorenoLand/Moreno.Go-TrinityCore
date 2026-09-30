@@ -589,4 +589,8 @@ func init() {
 	// "npc_batrider" in the same file; the bloodseeker bat 11368 has no
 	// C++ CreatureScript in boss_jeklik.cpp and is not registered).
 	RegisterLuaBoss("boss_jeklik", 14517)
+	// Gahz'ranka (Zul'Gurub) — fight logic in
+	// lua_scripts/zulgurub/boss_gahzranka.lua. The fished-up summon has
+	// no C++ CreatureScript in boss_gahzranka.cpp and is not registered.
+	RegisterLuaBoss("boss_gahzranka", 15114)
 }
