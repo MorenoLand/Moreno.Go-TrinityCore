@@ -3151,7 +3151,8 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 		}
 		if !consumeWithdraw(true) {
 			_ = tx.Rollback()
-			s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildWithdrawLimit)
+			// Guild::_MoveItems steps 3-4 return silently on rights failure; C++
+			// never emits ERR_GUILD_WITHDRAW_LIMIT on this path.
 			return guildMoveOutcome{}, false
 		}
 		if err := guildSwapMoveItems(ctx, tx, uint64(guildID), s.playerGUID, sourceLoc, *destination, source, destItem); err != nil {
@@ -3177,7 +3178,8 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 	}
 	if !consumeWithdraw(false) {
 		_ = tx.Rollback()
-		s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildWithdrawLimit)
+		// Guild::_MoveItems steps 3-4 return silently on rights failure; C++
+		// never emits ERR_GUILD_WITHDRAW_LIMIT on this path.
 		return guildMoveOutcome{}, false
 	}
 	if err := s.guildApplyMovePlan(ctx, tx, uint64(guildID), s.playerGUID, sourceLoc, source, moveCount, full, placements); err != nil {
