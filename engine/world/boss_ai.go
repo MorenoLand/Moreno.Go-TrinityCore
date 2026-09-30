@@ -667,4 +667,8 @@ func init() {
 	// lua_scripts/blackwinglair/boss_ebonroc.lua. The wingbuffet
 	// threat-cut arm has no bridge (no threat model).
 	RegisterLuaBoss("boss_ebonroc", 14601)
+	// Flamegor (Blackwing Lair, sixth boss) — fight logic in
+	// lua_scripts/blackwinglair/boss_flamegor.lua. The wingbuffet
+	// threat-cut arm has no bridge (no threat model).
+	RegisterLuaBoss("boss_flamegor", 11981)
 }
