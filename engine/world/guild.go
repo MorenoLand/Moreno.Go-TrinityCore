@@ -3657,7 +3657,27 @@ func (s *session) handleSetGuildBankText(ctx context.Context, payload []byte) bo
 	if cdb != nil {
 		var guildID int64
 		if err := cdb.QueryRowContext(ctx, "SELECT guildid FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&guildID); err == nil && guildID > 0 {
-			_, _ = cdb.ExecContext(ctx, "UPDATE guild_bank_tab SET TabText = ? WHERE guildid = ? AND TabId = ?", tabText, guildID, tabID)
+			// Reference: Guild::SetBankTabText (Guild.cpp:2379-2383):
+			// SetText persists the text, then SendText(this, nullptr)
+			// broadcasts the GuildBankTextQueryResult (MSG_QUERY_GUILD_BANK_TEXT,
+			// tab + text, no guid) to all online guild members. A GetBankTab
+			// miss writes nothing and broadcasts nothing.
+			if res, execErr := cdb.ExecContext(ctx, "UPDATE guild_bank_tab SET TabText = ? WHERE guildid = ? AND TabId = ?", tabText, guildID, tabID); execErr == nil {
+				if n, _ := res.RowsAffected(); n > 0 {
+					buf := protocol.NewBuffer(64 + len(tabText))
+					buf.WriteU8(tabID)
+					buf.WriteCString(tabText)
+					event := buf.Bytes()
+					s.server.sessionsMu.RLock()
+					for target := range s.server.sessions {
+						if !target.worldReady.Load() || target.player == nil || target.player.GuildID != uint32(guildID) {
+							continue
+						}
+						_ = target.write(uint16(protocol.OpcodeMSG_QUERY_GUILD_BANK_TEXT), event, true)
+					}
+					s.server.sessionsMu.RUnlock()
+				}
+			}
 		}
 	}
 	return true
