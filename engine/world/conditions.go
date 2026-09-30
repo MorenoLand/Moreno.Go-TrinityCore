@@ -136,6 +136,19 @@ const conditionSourceGossipMenuOption = 15
 
 const conditionSourceSpellImplicitTarget = 13 // CONDITION_SOURCE_TYPE_SPELL_IMPLICIT_TARGET (ConditionMgr.h:136)
 
+// Object type bits from the C++ TypeMask enum (ObjectGuid.h:48-56).
+// isType (Object.h:91) tests (mask & m_objectType) != 0 with the mask
+// truncated to uint16. m_objectType accumulates OBJECT (Object.cpp:71) |
+// UNIT (Unit.cpp:311) plus PLAYER (Player.cpp:186), so a player tests as
+// 0x0019 and a creature as 0x0009 (matching creatureTypeMask).
+const (
+	typeMaskUnit   uint16 = 0x0008
+	typeMaskPlayer uint16 = 0x0010
+
+	playerObjectTypeMask   uint16 = 0x0001 | typeMaskUnit | typeMaskPlayer
+	creatureObjectTypeMask uint16 = 0x0001 | typeMaskUnit
+)
+
 // loadImplicitTargetConditions fetches the `conditions` rows attached to a
 // spell's implicit targets (SourceEntry = spell id, SourceGroup = effect
 // mask). TARGET_CHECK_ENTRY targets (7/8/38/40/46/60) resolve their entry
@@ -255,7 +268,7 @@ func (s *session) evalQuestCondition(ctx context.Context, row conditionRow) (boo
 
 func isImplementedConditionType(condType int64) bool {
 	switch condType {
-	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 31, 36, 37, 38, 39, 40, 42, 43, 44, 46, 47, 48, 49, 50:
+	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 31, 32, 36, 37, 38, 39, 40, 42, 43, 44, 46, 47, 48, 49, 50:
 		return true
 	default:
 		return false
@@ -501,6 +514,26 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 			return false, nil
 		}
 		return row.Value2 == 0 || uint32(row.Value2) == creatureEntry, nil
+	case 32: // CONDITION_TYPE_MASK (ConditionMgr.cpp:381-385: object->isType(ConditionValue1))
+		// The condition object is the ConditionTarget entry of the target list
+		// (Condition::Meets, ConditionMgr.cpp:130-138); a missing target fails
+		// closed. Target 0 is the player in every context evalCondition serves
+		// (quest conditions: Player.cpp:15906/16337; gossip: Player.cpp:14392
+		// and 14722 pass the player first); target 1 is the gossip/vendor
+		// creature when one is involved, absent otherwise.
+		var objectType uint16
+		switch row.ConditionTarget {
+		case 0:
+			objectType = playerObjectTypeMask
+		case 1:
+			if creatureEntry == 0 {
+				return false, nil
+			}
+			objectType = creatureObjectTypeMask
+		default:
+			return false, nil
+		}
+		return uint16(row.Value1)&objectType != 0, nil
 	case 17: // CONDITION_ACHIEVEMENT
 		return true, nil
 	case 18: // CONDITION_TITLE
