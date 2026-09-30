@@ -513,4 +513,7 @@ func init() {
 	// fight logic in lua_scripts/karazhan/boss_midnight.lua.
 	RegisterLuaBoss("boss_attumen", 15550)
 	RegisterLuaBoss("boss_attumen", 16152)
+	// Netherspite (Karazhan) — fight logic in
+	// lua_scripts/karazhan/boss_netherspite.lua.
+	RegisterLuaBoss("boss_netherspite", 15689)
 }
