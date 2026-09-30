@@ -637,4 +637,8 @@ func init() {
 	// lua_scripts/zulgurub/boss_venoxis.lua. The parasitic serpent 14884
 	// has no C++ CreatureScript in boss_venoxis.cpp and is not registered.
 	RegisterLuaBoss("boss_venoxis", 14507)
+	// Wushoolay the Storm Witch (Zul'Gurub, Edge of Madness) — fight logic in
+	// lua_scripts/zulgurub/boss_wushoolay.lua. The brazier summon has no
+	// bearer (no summon model) — she is assumed already spawned.
+	RegisterLuaBoss("boss_wushoolay", 15085)
 }
