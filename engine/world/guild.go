@@ -599,11 +599,25 @@ func (s *session) handleGuildAccept(ctx context.Context) bool {
 	if !s.playerLoaded || s.player == nil || s.guildInvitedID == 0 {
 		return true
 	}
+	// WorldSession::HandleGuildAcceptOpcode (GuildHandler.cpp:60-64): the
+	// handler only reaches Guild::HandleAcceptMember when the player is not
+	// already in a guild — accepting while guilded is a silent no-op and the
+	// pending invitation stays set.
+	if s.player.GuildID != 0 {
+		return true
+	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
 	}
 	guildID := s.guildInvitedID
+	// sGuildMgr->GetGuildById(GetPlayer()->GetGuildIdInvited()) returning null
+	// (the guild was disbanded while the invitation was pending) is a silent
+	// no-op; Go must not create a member row for a dead guild.
+	var exists int
+	if err := cdb.QueryRowContext(ctx, "SELECT 1 FROM guild WHERE guildid = ? LIMIT 1", guildID).Scan(&exists); err != nil || exists == 0 {
+		return true
+	}
 	s.guildInvitedID = 0
 	s.guildInviterGUID = 0
 	_, _ = cdb.ExecContext(ctx, "REPLACE INTO guild_member (guildid, guid, rank, pnote, offnote) VALUES (?, ?, 4, '', '')", guildID, s.playerGUID)
