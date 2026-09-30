@@ -2417,6 +2417,11 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 		return true
 	}
 	var bankTab uint8
+	// Guild::_MoveItems sends _SendBankContentUpdate only on the success
+	// path (Guild.cpp:2683-2733); the handler emits no bank-list refresh on
+	// a failed move, so the trailing sendGuildBankList below is gated on
+	// guildMoveItem's moved flag (GuildHandler.cpp:306-335).
+	movedItems := false
 	if bankOnly != 0 {
 		bankTab, err = r.ReadU8()
 		if err != nil {
@@ -2459,6 +2464,7 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 		source := guildMoveLocation{Bank: true, Tab: bankTab1, Slot: bankSlot1}
 		destination := guildMoveLocation{Bank: true, Tab: bankTab, Slot: bankSlot}
 		outcome, moved := s.guildMoveItem(ctx, guildID, source, &destination, false, bankItemCount)
+		movedItems = moved
 		if moved && bankTab != bankTab1 {
 			s.logGuildBankEvent(ctx, guildID, bankTab1, guildBankLogMoveItem, s.playerGUID, outcome.Source.Entry, outcome.Count, bankTab)
 			if outcome.Swapped {
@@ -2537,6 +2543,7 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 				destination = &guildMoveLocation{}
 			}
 			outcome, moved := s.guildMoveItem(ctx, guildID, source, destination, autoTarget, splitCount)
+			movedItems = moved
 			if moved {
 				s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogWithdrawItem, s.playerGUID, outcome.Source.Entry, outcome.Count, 0)
 				if outcome.Swapped {
@@ -2559,6 +2566,7 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 			source := guildMoveLocation{Bag: bagKey, Slot: containerItemSlot}
 			destination := guildMoveLocation{Bank: true, Tab: bankTab, Slot: bankSlot}
 			outcome, moved := s.guildMoveItem(ctx, guildID, source, &destination, false, splitCount)
+			movedItems = moved
 			if moved {
 				s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogDepositItem, s.playerGUID, outcome.Source.Entry, outcome.Count, 0)
 				if outcome.Swapped {
@@ -2569,7 +2577,9 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 			}
 		}
 	}
-	s.sendGuildBankList(ctx, bankerGUID, bankTab, false)
+	if movedItems {
+		s.sendGuildBankList(ctx, bankerGUID, bankTab, false)
+	}
 	return true
 }
 
