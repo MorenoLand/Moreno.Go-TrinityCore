@@ -729,11 +729,18 @@ func (s *session) findFreeSlotsForTrade(ctx context.Context, count int) ([]trade
 
 	// 1. Check backpack (bag = 0, slots 23..38)
 	usedBackpack := make(map[uint8]bool)
-	rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0", s.playerGUID)
+	// Items locked in the trade are about to leave this inventory: skip
+	// them in the occupancy scan (Player::CanStoreItems skips IsInTrade
+	// items when building the fit model, Player.cpp:11157).
+	locked := s.trade != nil && len(s.trade.InTradeItems) > 0
+	rows, err := cdb.QueryContext(ctx, "SELECT slot, item FROM character_inventory WHERE guid = ? AND bag = 0", s.playerGUID)
 	if err == nil {
 		for rows.Next() {
-			var sl int64
-			if rows.Scan(&sl) == nil {
+			var sl, it int64
+			if rows.Scan(&sl, &it) == nil {
+				if locked && s.trade.InTradeItems[uint64(it)] {
+					continue
+				}
 				usedBackpack[uint8(sl)] = true
 			}
 		}
@@ -756,11 +763,14 @@ func (s *session) findFreeSlotsForTrade(ctx context.Context, count int) ([]trade
 			continue
 		}
 		usedBagSlots := make(map[uint8]bool)
-		bRows, bErr := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = ?", s.playerGUID, eb.guid)
+		bRows, bErr := cdb.QueryContext(ctx, "SELECT slot, item FROM character_inventory WHERE guid = ? AND bag = ?", s.playerGUID, eb.guid)
 		if bErr == nil {
 			for bRows.Next() {
-				var bsl int64
-				if bRows.Scan(&bsl) == nil {
+				var bsl, bit int64
+				if bRows.Scan(&bsl, &bit) == nil {
+					if locked && s.trade.InTradeItems[uint64(bit)] {
+						continue
+					}
 					usedBagSlots[uint8(bsl)] = true
 				}
 			}
