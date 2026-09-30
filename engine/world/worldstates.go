@@ -1,5 +1,77 @@
 package world
 
+import "context"
+
+// loadWorldStates ports World::LoadWorldStates (World.cpp:3498-3519): the
+// server-wide worldstate map is hydrated from the `worldstates` character
+// table at startup; a missing or empty table degrades to an empty map,
+// matching the C++ "Loaded 0 world states" arm.
+func (s *Server) loadWorldStates(ctx context.Context) {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return
+	}
+	rows, err := s.CharactersStore.DB.QueryContext(ctx, "SELECT entry, value FROM worldstates")
+	if err != nil {
+		if s.Logger != nil {
+			s.Logger.Warn("failed to load world states", "error", err)
+		}
+		return
+	}
+	defer rows.Close()
+	loaded := make(map[uint32]uint64)
+	for rows.Next() {
+		var entry uint32
+		var value uint32
+		if err := rows.Scan(&entry, &value); err != nil {
+			continue
+		}
+		loaded[entry] = uint64(value)
+	}
+	s.worldstatesMu.Lock()
+	s.worldstates = loaded
+	s.worldstatesMu.Unlock()
+}
+
+// getWorldState ports World::getWorldState (World.cpp:3563-3568): an
+// unknown index reads as 0.
+func (s *Server) getWorldState(index uint32) uint64 {
+	if s == nil {
+		return 0
+	}
+	s.worldstatesMu.RLock()
+	defer s.worldstatesMu.RUnlock()
+	return s.worldstates[index]
+}
+
+// setWorldState ports World::setWorldState (World.cpp:3533-3560): the write
+// is skipped when the value is unchanged, otherwise the `worldstates` row is
+// updated or inserted and the in-memory map follows; the DB write is done
+// under the lock so concurrent writers cannot double-insert a new index.
+// Like the C++ setUInt32 calls, the persisted value is truncated to 32 bits.
+func (s *Server) setWorldState(ctx context.Context, index uint32, value uint64) {
+	if s == nil {
+		return
+	}
+	s.worldstatesMu.Lock()
+	defer s.worldstatesMu.Unlock()
+	if current, ok := s.worldstates[index]; ok && current == value {
+		return
+	}
+	_, exists := s.worldstates[index]
+	if s.worldstates == nil {
+		s.worldstates = make(map[uint32]uint64)
+	}
+	s.worldstates[index] = value
+	if s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return
+	}
+	if exists {
+		_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_UPD_WORLDSTATE", uint32(value), index)
+	} else {
+		_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_INS_WORLDSTATE", index, uint32(value))
+	}
+}
+
 func initialZoneWorldStates(zone uint32) [][2]int32 {
 	switch zone {
 	case 139:

@@ -255,7 +255,7 @@ func (s *session) evalQuestCondition(ctx context.Context, row conditionRow) (boo
 
 func isImplementedConditionType(condType int64) bool {
 	switch condType {
-	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 31, 36, 37, 38, 39, 40, 42, 43, 44, 46, 47, 48, 49, 50:
+	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 31, 36, 37, 38, 39, 40, 42, 43, 44, 46, 47, 48, 49, 50:
 		return true
 	default:
 		return false
@@ -447,6 +447,8 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 			return false, nil
 		}
 		return drunkenStateByValue(s.player.DrunkenState) >= uint32(row.Value1), nil
+	case 11: // CONDITION_WORLD_STATE (ConditionMgr.cpp:456-460)
+		return uint64(row.Value2) == s.server.getWorldState(uint32(row.Value1)), nil
 	case 12: // CONDITION_ACTIVE_EVENT
 		active := s.server.cachedActiveGameEvents(ctx)
 		_, ok := active[row.Value1]
