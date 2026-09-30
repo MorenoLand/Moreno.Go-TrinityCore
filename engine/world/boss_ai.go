@@ -555,4 +555,7 @@ func init() {
 	// lua_scripts/zulaman/boss_halazzi.lua (spirit lynx 24143 AI
 	// "npc_halazzi_lynx" in the same file).
 	RegisterLuaBoss("boss_halazzi", 23577)
+	// Nalorakk (Zul'Aman) — fight logic in
+	// lua_scripts/zulaman/boss_nalorakk.lua.
+	RegisterLuaBoss("boss_nalorakk", 23576)
 }
