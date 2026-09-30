@@ -1171,6 +1171,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
+	// Spell::_cast (Spell.cpp:3357-3372): a cast-bar-completed spell targeting
+	// the trade window's non-traded slot is deferred into the trade data while
+	// the trade is not in its accept process — the spell fires when the trade
+	// executes (TradeHandler.cpp:364-438). m_CastItem is null for CMSG_CAST_SPELL
+	// book casts (Spell.cpp:584, set only by CastItemUseSpell / UpdatePointers),
+	// so the stored cast-item GUID is 0. The deferred activeCast cleanup at the
+	// top of this function mirrors cleanupSpell(SPELL_FAILED_DONT_REPORT)'s
+	// silent drop; nothing is sent to the client here.
+	if target.Flags&protocol.SpellTargetFlagTradeItem != 0 && s.trade != nil && !s.trade.InAcceptProcess {
+		s.setTradeSpell(spellID, 0)
+		s.debug("spell cast deferred to trade", "account", s.accountName, "spell", spellID)
+		return
+	}
+
 	// Spell::SelectImplicitTargetDestTargets (Spell.cpp:1433) and
 	// Spell::SelectImplicitDestDestTargets (Spell.cpp:1464): resolve the
 	// spell destination from target-relative / dest-relative implicit
