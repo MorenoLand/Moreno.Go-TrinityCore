@@ -815,6 +815,40 @@ func spellDamageProcTypeMask(spell wotlk.Spell) uint32 {
 	}
 }
 
+// spellDamageTakenProcTypeMask mirrors the victim-side half of
+// Spell::prepareDataForTriggerSystem (Spell.cpp:2006-2035) for the damage
+// path: melee damage-class spells pre-fill TAKEN_SPELL_MELEE_DMG_CLASS (no
+// mainhand/offhand arm on the victim side — Spell.cpp:2012 fills only
+// procAttacker), ranged AUTOREPEAT_FLAG and wand auto attacks pre-fill
+// TAKEN_RANGED_AUTO_ATTACK, other ranged spells TAKEN_SPELL_RANGED_DMG_CLASS,
+// and magic/none-class spells fall through to the DoDamageAndTriggers
+// positivity fallback (Spell.cpp:2447-2492), negative on the damage arm. The
+// damage arm's procVictim |= PROC_FLAG_TAKEN_DAMAGE (Spell.cpp:2545) is ORed
+// at the call site, gated on non-immunity — the immune branch bypasses it.
+func spellDamageTakenProcTypeMask(spell wotlk.Spell) uint32 {
+	switch spell.DefenseType {
+	case spellDamageClassMelee:
+		return procFlagTakenSpellMeleeDmgClass
+	case spellDamageClassRanged:
+		// Spell.cpp:2018-2023 — auto attack.
+		if spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0 {
+			return procFlagTakenRangedAutoAttack
+		}
+		return procFlagTakenSpellRangedDmgClass
+	default:
+		// Spell.cpp:2026-2034 — wands auto attack.
+		if spell.EquippedItemClass == itemClassWeapon &&
+			spell.EquippedItemSubClass&(1<<itemSubclassWeaponWand) != 0 &&
+			spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0 {
+			return procFlagTakenRangedAutoAttack
+		}
+		if spell.DefenseType == spellDamageClassMagic {
+			return procFlagTakenSpellMagicDmgClassNeg
+		}
+		return procFlagTakenSpellNoneDmgClassNeg
+	}
+}
+
 // spellHealProcTypeMask mirrors the done-side half of the
 // DoDamageAndTriggers type-mask fallback (Spell.cpp:2458-2492) for the heal
 // path: a direct heal runs with m_healing > 0, so the spell is positive by
@@ -1026,6 +1060,22 @@ func spellHasHealEffect(spell wotlk.Spell) bool {
 	return false
 }
 
+// spellDamageNoDmgPositive folds the per-effect positivity fallback
+// (Spell.cpp:2447-2457) over every spell effect for the damage path's
+// no-damage arm: a single negative effect flips the arm negative, matching
+// C++'s EffectMask sweep over IsPositiveEffect. The custom
+// SPELL_ATTR0_CU_NEGATIVE_EFF* bits (computed at C++ load time from
+// spell_custom_attr / triggered-spell recursion) have no Go model, and
+// non-heal effect types fail closed in spellNoDmgHealPositive.
+func spellDamageNoDmgPositive(spell wotlk.Spell) bool {
+	for i := range spell.Effects {
+		if !spellNoDmgHealPositive(spell, i) {
+			return false
+		}
+	}
+	return true
+}
+
 // procSpellDamageNoDmgAuraTriggers evaluates real aura procs on the done
 // side of a spell whose incoming damage is zero and which has no healing
 // effects: the no-damage arm of Unit::ProcDamageAndSpellFor via
@@ -1064,14 +1114,7 @@ func (s *session) procSpellDamageNoDmgAuraTriggers(ctx context.Context, targetGU
 	if spellHasHealEffect(spell) {
 		return
 	}
-	positive := true
-	for i := range spell.Effects {
-		if !spellNoDmgHealPositive(spell, i) {
-			positive = false
-			break
-		}
-	}
-	typeMask := spellNoDmgHealProcTypeMask(spell, positive)
+	typeMask := spellNoDmgHealProcTypeMask(spell, spellDamageNoDmgPositive(spell))
 	if typeMask == procFlagNone {
 		return
 	}
@@ -1087,6 +1130,56 @@ func (s *session) procSpellDamageNoDmgAuraTriggers(ctx context.Context, targetGU
 		spellPhaseMask: procSpellPhaseHit,
 		hitMask:        spellDamageProcHitMask(isHit, immune, false, false, false, 0),
 		triggered:      s.triggeredNoProcEvents > 0,
+		eventSpell:     &spellCopy,
+	})
+}
+
+// procSpellDamageNoDmgTakenAuraTriggers evaluates real aura procs on the
+// taken side of a spell whose incoming damage is zero and which has no
+// healing effects: the victim-side half of the no-damage arm of
+// Unit::ProcDamageAndSpellFor via Spell::TargetInfo::DoDamageAndTriggers
+// (Spell.cpp:2563-2579, 2581-2586; Unit::TriggerAurasProcOnEvent,
+// Unit.cpp:10385-10418). The event mirrors the done-side no-damage event
+// (PROC_SPELL_TYPE_NO_DMG_HEAL, PROC_SPELL_PHASE_HIT, the casting spell, the
+// miss/immune/shared hit mask) but the type mask is the taken-side
+// positivity fallback; the no-damage arm never ORs PROC_FLAG_TAKEN_DAMAGE
+// into procVictim (Spell.cpp:2545 sits inside the damage arm only). Spells
+// with heal effects fire nothing on the damage side — the heal path owns
+// their trigger decision, matching C++ where hasHealing suppresses the arm.
+// Runs on the victim's session so its own auras gate; the trigger spell
+// targets the caster (Unit.cpp:10413). The triggered state comes from the
+// caster's cast, not the victim's session, matching Spell::IsTriggered on
+// the shared spell.
+func (s *session) procSpellDamageNoDmgTakenAuraTriggers(ctx context.Context, casterGUID uint64, spellID uint32, isHit, immune, casterTriggered bool) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		return
+	}
+	if spell.AttributesEx3&spellAttr3CantTriggerProc != 0 {
+		return
+	}
+	if spellHasHealEffect(spell) {
+		return
+	}
+	typeMask := spellNoDmgHealTakenProcTypeMask(spell, spellDamageNoDmgPositive(spell))
+	if typeMask == procFlagNone {
+		return
+	}
+	schoolMask := spell.SchoolMask
+	if schoolMask == 0 {
+		schoolMask = 1
+	}
+	spellCopy := spell
+	s.procAuraTriggerLoop(ctx, casterGUID, procEventInfo{
+		typeMask:       typeMask,
+		schoolMask:     schoolMask,
+		spellTypeMask:  procSpellTypeNoDmgHeal,
+		spellPhaseMask: procSpellPhaseHit,
+		hitMask:        spellDamageProcHitMask(isHit, immune, false, false, false, 0),
+		triggered:      casterTriggered,
 		eventSpell:     &spellCopy,
 	})
 }
@@ -1152,6 +1245,50 @@ func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint6
 		spellPhaseMask: procSpellPhaseHit,
 		hitMask:        spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit, absorbed),
 		triggered:      s.triggeredNoProcEvents > 0,
+		eventSpell:     &spellCopy,
+	})
+}
+
+// procSpellHitTakenAuraTriggers evaluates real aura procs on the taken side
+// of a spell damage hit: the victim-side half of Unit::ProcDamageAndSpellFor
+// via Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2427-2540, 2581-2586;
+// Unit::TriggerAurasProcOnEvent, Unit.cpp:10385-10418). The event mirrors
+// the done-side damage event (PROC_SPELL_TYPE_DAMAGE, PROC_SPELL_PHASE_HIT,
+// the casting spell, the same hit mask) but the type mask is the victim-side
+// pre-fill/fallback, and the damage arm ORs PROC_FLAG_TAKEN_DAMAGE into
+// procVictim (Spell.cpp:2545) — skipped on the immune arm, whose branch
+// bypasses the TAKEN_DAMAGE OR. Spells with SPELL_ATTR3_CANT_TRIGGER_PROC
+// never reach the loop (Spell.cpp:2441). Runs on the victim's session so its
+// own auras gate; the trigger spell targets the caster (Unit.cpp:10413). The
+// triggered state comes from the caster's cast, not the victim's session,
+// matching Spell::IsTriggered on the shared spell.
+func (s *session) procSpellHitTakenAuraTriggers(ctx context.Context, casterGUID uint64, spellID uint32, isHit, immune, fullyResisted, fullAbsorb, crit bool, absorbed uint32, casterTriggered bool) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		return
+	}
+	if spell.AttributesEx3&spellAttr3CantTriggerProc != 0 {
+		return
+	}
+	typeMask := spellDamageTakenProcTypeMask(spell)
+	if !immune {
+		typeMask |= procFlagTakenDamage
+	}
+	schoolMask := spell.SchoolMask
+	if schoolMask == 0 {
+		schoolMask = 1
+	}
+	spellCopy := spell
+	s.procAuraTriggerLoop(ctx, casterGUID, procEventInfo{
+		typeMask:       typeMask,
+		schoolMask:     schoolMask,
+		spellTypeMask:  procSpellTypeDamage,
+		spellPhaseMask: procSpellPhaseHit,
+		hitMask:        spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit, absorbed),
+		triggered:      casterTriggered,
 		eventSpell:     &spellCopy,
 	})
 }

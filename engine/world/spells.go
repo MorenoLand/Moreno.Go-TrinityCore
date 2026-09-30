@@ -2366,8 +2366,27 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// (PROC_SPELL_TYPE_NO_DMG_HEAL, Spell.cpp:2563-2579), not the damage arm.
 	if hadIncomingDamage {
 		s.procSpellHitAuraTriggers(ctx, targetGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit, absorbed)
+		// Taken-side aura procs on the victim's own auras (TrinityCore
+		// Unit::TriggerAurasProcOnEvent, Unit.cpp:10413-10418): the done
+		// side runs first, matching the ProcSkillsAndAuras ordering
+		// (Unit.cpp:5355-5366). Creature victims have no aura plumbing in
+		// Go, so only online players run the taken pass; on a self-cast
+		// both passes share the session, matching C++ where the done and
+		// taken passes iterate the same aura list.
+		if s.server != nil {
+			if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
+				playerSess.procSpellHitTakenAuraTriggers(ctx, s.playerGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit, absorbed, s.triggeredNoProcEvents > 0)
+			}
+		}
 	} else {
 		s.procSpellDamageNoDmgAuraTriggers(ctx, targetGUID, spellID, isHit, immune)
+		// Taken-side no-damage pass on the victim's session, after the
+		// done side, matching the ProcSkillsAndAuras ordering.
+		if s.server != nil {
+			if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
+				playerSess.procSpellDamageNoDmgTakenAuraTriggers(ctx, s.playerGUID, spellID, isHit, immune, s.triggeredNoProcEvents > 0)
+			}
+		}
 	}
 
 	s.lastCombatTime = time.Now()
