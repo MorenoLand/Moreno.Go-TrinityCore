@@ -611,4 +611,9 @@ func init() {
 	// npc_shade_of_jindo trash AIs from the same C++ file register
 	// their own creature events in the Lua file and are not bosses.
 	RegisterLuaBoss("boss_jindo", 11380)
+	// Bloodlord Mandokir (Zul'Gurub, optional boss) — fight logic in
+	// lua_scripts/zulgurub/boss_mandokir.lua. The npc_ohgan and
+	// npc_vilebranch_speaker trash AIs from the same C++ file register
+	// their own creature events in the Lua file and are not bosses.
+	RegisterLuaBoss("boss_mandokir", 11382)
 }
