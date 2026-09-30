@@ -3449,8 +3449,15 @@ func (s *session) handleGuildBankWithdrawMoney(ctx context.Context, payload []by
 		return true
 	}
 
+	// Guild::HandleMemberWithdrawMoney (Guild.cpp:1729-1736): the bank-short,
+	// member-miss and daily-limit arms all return false silently — the session
+	// handler (GuildHandler.cpp:295-303) ignores the return value, so no
+	// command result is ever sent. ERR_GUILD_WITHDRAW_LIMIT (25) is defined
+	// (Guild.h:145) but never emitted by the C++ server. The player-cap arm
+	// above keeps its equip error: Player::ModifyMoney (Player.cpp:22821)
+	// sends EQUIP_ERR_TOO_MUCH_GOLD before returning false (default
+	// sendError=true).
 	if !s.checkAndConsumeGuildBankMoneyWithdraw(ctx, uint32(guildID), amount) {
-		s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildWithdrawLimit)
 		return true
 	}
 
