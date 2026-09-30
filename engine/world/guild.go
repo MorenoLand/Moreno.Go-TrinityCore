@@ -2419,16 +2419,22 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 			return true
 		}
 
-		// Permissions check — BankMoveItemData::HasStoreRights (Guild.cpp:855-862)
-		// and HasWithdrawRights (Guild.cpp:864-877) both skip the rights check
-		// when the item is swapped within the same bank tab, so the upfront
-		// check applies only to cross-tab moves.
+		// Permissions check — Guild::_MoveItems (Guild.cpp:2683-2690):
+		// the destination's BankMoveItemData::HasStoreRights
+		// (Guild.cpp:855-862) demands GUILD_BANK_RIGHT_DEPOSIT_ITEM
+		// (VIEW_TAB|PUT_ITEM, Guild.h:177-181) on the dest tab, and the
+		// source's HasWithdrawRights (Guild.cpp:864-877) demands only
+		// _GetMemberRemainingSlots(source tab) != 0 — view is implied
+		// inside that slot check (Guild.cpp:2586-2596); no PUT_ITEM arm
+		// exists on the source tab. The same-tab rights skip was fixed
+		// above (Guild.cpp:855-857, 866-867), so this applies only to
+		// cross-tab moves.
 		if bankTab != bankTab1 {
-			if !s.checkGuildBankRights(ctx, guildID, bankTab, false) || !s.checkGuildBankRights(ctx, guildID, bankTab1, false) {
+			if !s.checkGuildBankRights(ctx, guildID, bankTab, true) {
 				s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildPermissions)
 				return true
 			}
-			if !s.checkGuildBankRights(ctx, guildID, bankTab1, true) {
+			if s.guildBankWithdrawalsRemaining(ctx, int64(guildID), bankTab1) == 0 {
 				s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildPermissions)
 				return true
 			}
