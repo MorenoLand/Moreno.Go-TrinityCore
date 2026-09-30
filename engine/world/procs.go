@@ -1453,13 +1453,28 @@ func meleeOutcomeProcHitMask(outcome protocol.MeleeHitOutcome, hitInfo uint32, t
 	return hitMask
 }
 
+// rangedAutoProcHitMask derives the proc hit mask for a ranged auto attack.
+// C++ routes ranged auto-shot through the spell arm, not the melee DamageInfo
+// ctor: Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2527-2531) sets
+// hitMask = PROC_HIT_IMMUNE outright on damage immunity, and createProcHitMask
+// (Unit.cpp:10206-10209) maps SPELL_MISS_IMMUNE/IMMUNE2 to PROC_HIT_IMMUNE
+// alone — the evade bit that accompanies melee immunity (the C++ melee
+// early-return leaves HitOutCome at MELEE_HIT_EVADE) never appears. All other
+// outcomes follow the melee ctor via meleeOutcomeProcHitMask.
+func rangedAutoProcHitMask(outcome protocol.MeleeHitOutcome, hitInfo uint32, targetState uint8, blocked uint32) uint32 {
+	if outcome == protocol.MeleeHitImmune {
+		return procHitImmune
+	}
+	return meleeOutcomeProcHitMask(outcome, hitInfo, targetState, blocked)
+}
+
 // rangedAutoProcHitState derives the DamageInfo-style mask inputs for a
 // ranged auto attack from the values the ranged path tracks. Absorb bits
 // come from the absorbed amount (full absorb when nothing of the damage
 // remains, the same absorbed > 0 && damage == 0 determination the spell
 // path uses); the immune outcome maps to the immune target state. The
-// ranged path rolls melee-style outcomes, so by the established convention
-// the mask mirrors the DamageInfo melee ctor (Unit.cpp:130-180).
+// ranged path rolls melee-style outcomes; the mask itself is derived by
+// rangedAutoProcHitMask (spell-arm semantics) rather than the melee ctor.
 func rangedAutoProcHitState(outcome protocol.MeleeHitOutcome, absorbed, blocked, damage uint32) (uint32, uint8) {
 	var hitInfo uint32
 	if absorbed > 0 {
@@ -1542,10 +1557,10 @@ func (s *session) procVictimAuraTriggers(ctx context.Context, attackerGUID uint6
 // Spell::prepareDataForTriggerSystem (Spell.cpp:2018-2034). The event carries
 // the auto-shot spell and the triggered state (Spell::IsTriggered,
 // Spell.cpp:7501-7504), so the CanSpellTriggerProcOnEvent mana-cost,
-// spell-family, and triggered-cast gates engage exactly; the ranged path rolls
-// melee-style outcomes, so the hit mask mirrors the DamageInfo melee ctor
-// (Unit.cpp:130-180). Spells with SPELL_ATTR3_CANT_TRIGGER_PROC never reach
-// the loop (Spell.cpp:2441). The trigger spell targets the victim.
+// spell-family, and triggered-cast gates engage exactly; the hit mask follows
+// the spell arm via rangedAutoProcHitMask (IMMUNE alone on immunity, never
+// the melee ctor's evade bit). Spells with SPELL_ATTR3_CANT_TRIGGER_PROC never
+// reach the loop (Spell.cpp:2441). The trigger spell targets the victim.
 func (s *session) procRangedAutoAttackAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, outcome protocol.MeleeHitOutcome, absorbed, blocked, damage uint32) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
@@ -1568,7 +1583,7 @@ func (s *session) procRangedAutoAttackAuraTriggers(ctx context.Context, targetGU
 		schoolMask:     schoolMask,
 		spellTypeMask:  procSpellTypeDamage,
 		spellPhaseMask: procSpellPhaseHit,
-		hitMask:        meleeOutcomeProcHitMask(outcome, hitInfo, targetState, blocked),
+		hitMask:        rangedAutoProcHitMask(outcome, hitInfo, targetState, blocked),
 		triggered:      s.triggeredNoProcEvents > 0,
 		eventSpell:     &spellCopy,
 		actorGUID:      s.playerGUID,
@@ -1601,7 +1616,7 @@ func (s *session) procRangedVictimAuraTriggers(ctx context.Context, attackerGUID
 		schoolMask:     schoolMask,
 		spellTypeMask:  procSpellTypeNone,
 		spellPhaseMask: procSpellPhaseNone,
-		hitMask:        meleeOutcomeProcHitMask(outcome, hitInfo, targetState, blocked),
+		hitMask:        rangedAutoProcHitMask(outcome, hitInfo, targetState, blocked),
 		actorGUID:      attackerGUID,
 		damage:         damage,
 	})
