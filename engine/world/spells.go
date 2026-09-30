@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -1590,6 +1591,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	applyEffects := func(effCtx context.Context) {
 		if len(missStatus) > 0 && !isReflected {
 			return
+		}
+		// Eluna::SpellHit (CREATURE_EVENT_ON_HIT_BY_SPELL, event 14) fires
+		// once per spell hit on a creature target: Spell.cpp:2626
+		// (Spell::UnitTargetInfo::DoTargetSpellHit) calls CreatureAI::
+		// SpellHit when _spellHitTarget->ToCreature(). A missed spell never
+		// fires (_spellHitTarget is null when the spell misses in
+		// DoSpellHitOnUnit), matching the miss guard above. Eluna argument
+		// order is (event, creature, caster, spellid). ElunaCreatureAI::
+		// SpellHit's truthy return vetoes only ScriptedAI::SpellHit, which
+		// is empty (the CreatureAI.h:143 base is the only implementation),
+		// so the return is discarded the way the enter-combat hook's is.
+		// The caster is always the player session here: Go has no
+		// creature-caster spell path, so the ON_SPELL_HIT_TARGET (event 15)
+		// gate (caster TYPEID_UNIT with AI enabled) has no fire site.
+		for _, effectTarget := range hitTargets {
+			if uint16(effectTarget>>48) != 0xF130 {
+				continue
+			}
+			if motion := s.findCreatureMotion(effectTarget); motion != nil {
+				s.server.fireCreatureLuaEvent(effCtx, motion, scripting.CreatureEventOnHitBySpell, s.luaPlayer(), spellID)
+			}
 		}
 		// Per-(cast, target) first-merge marker for the aura re-apply path
 		// (Spell.cpp:2842): only the first aura effect per target runs the

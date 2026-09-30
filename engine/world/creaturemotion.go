@@ -538,15 +538,16 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 		return
 	}
 	wasInCombat := motion.InCombat
-	// Eluna::EnterEvadeMode calls On_Reset first (CREATURE_EVENT_ON_RESET,
-	// event 23 — a void hook, return discarded), then fires
-	// CREATURE_EVENT_ON_LEAVE_COMBAT (event 2) ahead of
+	// Eluna CREATURE_EVENT_ON_LEAVE_COMBAT (event 2) fires ahead of
 	// ScriptedAI::EnterEvadeMode(). A Lua handler returning boolean true
 	// vetoes the whole base evade — threat clear, move home, and reset are
 	// all skipped, so the creature keeps its combat state. No motion lock
-	// is held on this path, so the hooks run inline.
+	// is held on this path, so the hook runs inline. Eluna::On_Reset
+	// (CREATURE_EVENT_ON_RESET, event 23) is defined in CreatureHooks.cpp
+	// but never fired anywhere in the C++ game code
+	// (CreatureAI::EnterEvadeMode calls CreatureAI::Reset(), a different
+	// function), so Go fires no event-23 hook here either.
 	if wasInCombat {
-		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReset)
 		if s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnLeaveCombat) {
 			return
 		}
