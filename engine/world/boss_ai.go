@@ -633,4 +633,8 @@ func init() {
 	// npc_zealot_zath add AIs from the same C++ file register their own
 	// creature events in the Lua file and are not bosses.
 	RegisterLuaBoss("boss_thekal", 14509)
+	// High Priest Venoxis (Zul'Gurub, main boss) — fight logic in
+	// lua_scripts/zulgurub/boss_venoxis.lua. The parasitic serpent 14884
+	// has no C++ CreatureScript in boss_venoxis.cpp and is not registered.
+	RegisterLuaBoss("boss_venoxis", 14507)
 }
