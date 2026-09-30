@@ -2894,7 +2894,35 @@ func (s *session) guildPlayerMovePlan(ctx context.Context, q guildMoveQueryer, p
 			return nil, guildEquipErrItemDoesntGoIntoBag
 		}
 	}
+	// Player::CanStoreItem auto-store (NULL_BAG/NULL_SLOT, Player.cpp:10701)
+	// search order. guildPlayerMoveSlots already dropped bags whose family
+	// rejects the item, so a non-empty specialized group implies a bag-family
+	// item. Merge phase: backpack, then specialized bags, then plain bags
+	// (Player.cpp:10945-11024, minus the keyring/currency ranges). Free-slot
+	// phase: for family items specialized bags come before the backpack,
+	// otherwise the backpack comes first (Player.cpp:11027-11120).
+	var backpack, specialized, plain []guildPlayerMoveSlot
 	for _, slot := range slots {
+		switch {
+		case slot.Location.Bag == 0:
+			backpack = append(backpack, slot)
+		case slot.Family != 0:
+			specialized = append(specialized, slot)
+		default:
+			plain = append(plain, slot)
+		}
+	}
+	mergeOrder := make([]guildPlayerMoveSlot, 0, len(slots))
+	mergeOrder = append(mergeOrder, backpack...)
+	mergeOrder = append(mergeOrder, specialized...)
+	mergeOrder = append(mergeOrder, plain...)
+	freeOrder := make([]guildPlayerMoveSlot, 0, len(slots))
+	if len(specialized) > 0 {
+		freeOrder = append(freeOrder, specialized...)
+	}
+	freeOrder = append(freeOrder, backpack...)
+	freeOrder = append(freeOrder, plain...)
+	for _, slot := range mergeOrder {
 		if remaining == 0 {
 			break
 		}
@@ -2908,7 +2936,7 @@ func (s *session) guildPlayerMovePlan(ctx context.Context, q guildMoveQueryer, p
 		}
 		add(slot, slot.Item.GUID, n)
 	}
-	for _, slot := range slots {
+	for _, slot := range freeOrder {
 		if remaining == 0 {
 			break
 		}
