@@ -671,4 +671,11 @@ func init() {
 	// lua_scripts/blackwinglair/boss_flamegor.lua. The wingbuffet
 	// threat-cut arm has no bridge (no threat model).
 	RegisterLuaBoss("boss_flamegor", 11981)
+	// Chromaggus (Blackwing Lair, seventh boss) — fight logic in
+	// lua_scripts/blackwinglair/boss_chromaggus.lua. The
+	// go_chromaggus_lever GameObjectScript from the same C++ file has
+	// no Lua bridge and is not registered; the fight starts on pull
+	// instead of on the lever, and the UpdateAI casting gates and the
+	// threat model have no bridges.
+	RegisterLuaBoss("boss_chromaggus", 14020)
 }
