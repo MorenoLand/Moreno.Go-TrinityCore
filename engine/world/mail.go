@@ -414,6 +414,20 @@ func mailSendExpireDelay(isGameMaster bool, cod uint32) int64 {
 	return 30 * 86400
 }
 
+// mailSenderCharacterExists is the offline half of the take-item COD "check player
+// existence" gate (MailHandler.cpp:474-477: else-if arm reading
+// sCharacterCache->GetCharacterAccountIdByGuid). The online half is a
+// findSessionByGUID lookup at the call site; a deleted character fails both, so the
+// COD payment mail is never drafted for one while the COD charge still applies.
+func (s *session) mailSenderCharacterExists(ctx context.Context, senderGUID uint64) bool {
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return false
+	}
+	var one int
+	return cdb.QueryRowContext(ctx, "SELECT 1 FROM characters WHERE guid = ? LIMIT 1", senderGUID).Scan(&one) == nil
+}
+
 func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 20 {
 		return true
@@ -688,23 +702,29 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	// C++ sends the COD payment as a MailDraft with the original subject and
-	// MAIL_CHECK_MASK_COD_PAYMENT (0x08) checked (MailHandler.cpp:481; Mail.h:50).
+	// C++ drafts the COD payment mail only when the original sender still exists
+	// (online session, or a characters-table row — the "check player existence"
+	// gate on receiver || sender_accId, MailHandler.cpp:478-483); the COD
+	// charge and the COD zeroing below fire unconditionally. The
+	// RBAC_PERM_LOG_GM_TRADE log branch has no Go model (no GM-log sink —
+	// standing unrepresentable ruling).
 	if cod > 0 {
 		s.player.Money -= uint32(cod)
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 		_, _ = cdb.ExecContext(ctx, "UPDATE mail SET cod = 0 WHERE id = ?", mailID)
 
-		now := time.Now().Unix()
-		var nextMailID int64
-		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&nextMailID)
-		if nextMailID <= 0 {
-			nextMailID = 1
+		if s.server.findSessionByGUID(uint64(senderGUID)) != nil || s.mailSenderCharacterExists(ctx, uint64(senderGUID)) {
+			now := time.Now().Unix()
+			var nextMailID int64
+			_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&nextMailID)
+			if nextMailID <= 0 {
+				nextMailID = 1
+			}
+			_, _ = cdb.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
+				VALUES (?, 0, 41, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 0x08)`,
+				nextMailID, s.playerGUID, senderGUID, subject, now+30*86400, now, cod)
+			s.sendMailNotify(uint64(senderGUID))
 		}
-		_, _ = cdb.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
-			VALUES (?, 0, 41, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 0x08)`,
-			nextMailID, s.playerGUID, senderGUID, subject, now+30*86400, now, cod)
-		s.sendMailNotify(uint64(senderGUID))
 		s.sendPlayerMoneyUpdate()
 	}
 
