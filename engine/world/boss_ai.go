@@ -719,4 +719,11 @@ func init() {
 	// npc_firesworn AI in the same C++ file is not registered (its
 	// creature entry is DB-side, unverifiable from the C++ tree).
 	RegisterLuaBoss("boss_garr", 12057)
+	// Shazzrah (Molten Core, fifth boss) — fight logic in
+	// lua_scripts/moltencore/boss_shazzrah.lua. The UpdateAI casting
+	// gates have no bridge (no UNIT_STATE model); the encounter-state
+	// bookkeeping is blocked on the instance-script model; the Gate
+	// threat-reset and teleport SpellScript arms have no bridges (no
+	// threat model, no SpellScript model).
+	RegisterLuaBoss("boss_shazzrah", 12264)
 }
