@@ -697,5 +697,14 @@ func init() {
 	// lua_scripts/moltencore/boss_lucifron.lua. The UpdateAI casting
 	// gates have no bridge (no UNIT_STATE model); the encounter-state
 	// bookkeeping is blocked on the instance-script model.
+	// Lucifron (Molten Core, first boss) — fight logic in
+	// lua_scripts/moltencore/boss_lucifron.lua. The UpdateAI casting
+	// gates have no bridge (no UNIT_STATE model); the encounter-state
+	// bookkeeping is blocked on the instance-script model.
 	RegisterLuaBoss("boss_lucifron", 12118)
+	// Magmadar (Molten Core, second boss) — fight logic in
+	// lua_scripts/moltencore/boss_magmadar.lua. The UpdateAI casting
+	// gates have no bridge (no UNIT_STATE model); the encounter-state
+	// bookkeeping is blocked on the instance-script model.
+	RegisterLuaBoss("boss_magmadar", 11982)
 }
