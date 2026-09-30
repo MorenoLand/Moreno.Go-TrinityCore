@@ -571,6 +571,9 @@ func (s *session) handleGuildInvite(ctx context.Context, payload []byte) bool {
 	invBuf.WriteCString(s.player.Name)
 	invBuf.WriteCString(guildName)
 	_ = targetSess.write(uint16(protocol.OpcodeSMSG_GUILD_INVITE), invBuf.Bytes(), true)
+	// Guild::HandleInviteMember (Guild.cpp:1507):
+	// _LogEvent(GUILD_EVENT_LOG_INVITE_PLAYER, inviter, invitee)
+	s.logGuildEvent(ctx, uint32(guildID), guildEventLogInvitePlayer, s.playerGUID, uint64(targetGUID), 0)
 	s.debug("guild invite sent", "from", s.player.Name, "to", targetName, "guild", guildName)
 	return true
 }
@@ -590,6 +593,10 @@ func (s *session) handleGuildAccept(ctx context.Context) bool {
 	s.player.GuildID = guildID
 	s.player.GuildRank = 4
 	s.sendPlayerUpdate()
+
+	// Guild::AddMember (Guild.cpp:2268):
+	// _LogEvent(GUILD_EVENT_LOG_JOIN_GUILD, lowguid)
+	s.logGuildEvent(ctx, guildID, guildEventLogJoinGuild, s.playerGUID, 0, 0)
 
 	// Broadcast join event
 	eventBuf := protocol.NewBuffer(64)
@@ -626,10 +633,15 @@ func (s *session) handleGuildLeave(ctx context.Context) bool {
 	if cdb == nil {
 		return true
 	}
+	var guildID int64
+	_ = cdb.QueryRowContext(ctx, "SELECT guildid FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&guildID)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_member WHERE guid = ?", s.playerGUID)
 	s.player.GuildID = 0
 	s.player.GuildRank = 0
 	s.sendPlayerUpdate()
+	// Guild::HandleLeaveMember (Guild.cpp:1552):
+	// _LogEvent(GUILD_EVENT_LOG_LEAVE_GUILD, player)
+	s.logGuildEvent(ctx, uint32(guildID), guildEventLogLeaveGuild, s.playerGUID, 0, 0)
 	eventBuf := protocol.NewBuffer(64)
 	eventBuf.WriteU8(4) // GE_LEFT
 	eventBuf.WriteU8(1)
@@ -755,6 +767,10 @@ func (s *session) handleGuildPromote(ctx context.Context, payload []byte) bool {
 	newRank := targetRank - 1
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member SET rank = ? WHERE guid = ? AND guildid = ?", newRank, targetGUID, guildID)
 
+	// Guild::HandleUpdateMemberRank (Guild.cpp:1644):
+	// _LogEvent(GUILD_EVENT_LOG_PROMOTE_PLAYER, player, member, newRankId)
+	s.logGuildEvent(ctx, uint32(guildID), guildEventLogPromotePlayer, s.playerGUID, uint64(targetGUID), uint8(newRank))
+
 	eventBuf := protocol.NewBuffer(128)
 	eventBuf.WriteU8(0) // GE_PROMOTION
 	eventBuf.WriteU8(2)
@@ -804,6 +820,10 @@ func (s *session) handleGuildDemote(ctx context.Context, payload []byte) bool {
 
 	newRank := targetRank + 1
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member SET rank = ? WHERE guid = ? AND guildid = ?", newRank, targetGUID, guildID)
+
+	// Guild::HandleUpdateMemberRank (Guild.cpp:1644):
+	// _LogEvent(GUILD_EVENT_LOG_DEMOTE_PLAYER, player, member, newRankId)
+	s.logGuildEvent(ctx, uint32(guildID), guildEventLogDemotePlayer, s.playerGUID, uint64(targetGUID), uint8(newRank))
 
 	eventBuf := protocol.NewBuffer(128)
 	eventBuf.WriteU8(1) // GE_DEMOTION
@@ -897,6 +917,10 @@ func (s *session) handleGuildRemove(ctx context.Context, payload []byte) bool {
 
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_member WHERE guid = ? AND guildid = ?", targetGUID, guildID)
 
+	// Guild::HandleRemoveMember (Guild.cpp:1588):
+	// _LogEvent(GUILD_EVENT_LOG_UNINVITE_PLAYER, player, member)
+	s.logGuildEvent(ctx, uint32(guildID), guildEventLogUninvitePlayer, s.playerGUID, uint64(targetGUID), 0)
+
 	eventBuf := protocol.NewBuffer(128)
 	eventBuf.WriteU8(5) // GE_REMOVED
 	eventBuf.WriteU8(2)
@@ -932,6 +956,8 @@ func (s *session) handleGuildDisband(ctx context.Context) bool {
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_tab WHERE guildid = ?", guildID)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_item WHERE guildid = ?", guildID)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_eventlog WHERE guildid = ?", guildID)
+	// Guild::Disband (Guild.cpp:1183): CHAR_DEL_GUILD_EVENTLOGS
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_eventlog WHERE guildid = ?", guildID)
 
 	eventBuf := protocol.NewBuffer(32)
 	eventBuf.WriteU8(8) // GE_DISBANDED
@@ -1516,6 +1542,48 @@ func (s *session) logGuildBankEvent(ctx context.Context, guildID uint32, tabID u
 		if len(logGuids) > 25 {
 			for _, lg := range logGuids[25:] {
 				_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_eventlog WHERE guildid = ? AND TabId = ? AND LogGuid = ?", guildID, dbTabID, lg)
+			}
+		}
+	}
+}
+
+// logGuildEvent mirrors Guild::_LogEvent (Guild.cpp:2639) plus
+// LogHolder<EventLogEntry>::AddEvent (Guild.cpp:141-152): it appends a row to
+// guild_eventlog, keeping at most GUILD_EVENTLOG_MAX_RECORDS (100,
+// SharedDefines.h:3248) newest rows per guild. C++ wraps the per-guild
+// LogGuid modulo 100 and deletes the replaced row; Go uses ever-increasing
+// LogGuids (same convention as logGuildBankEvent) — the query path orders by
+// TimeStamp, LogGuid, which reproduces the in-memory oldest-first list, and
+// the wire packet never carries LogGuid.
+func (s *session) logGuildEvent(ctx context.Context, guildID uint32, eventType uint8, playerGUID1, playerGUID2 uint64, newRank uint8) {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || guildID == 0 {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+
+	var maxLogGuid uint32
+	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(LogGuid), 0) FROM guild_eventlog WHERE guildid = ?", guildID).Scan(&maxLogGuid)
+	nextLogGuid := maxLogGuid + 1
+	now := uint32(time.Now().Unix())
+
+	_, _ = cdb.ExecContext(ctx, `INSERT INTO guild_eventlog (guildid, LogGuid, EventType, PlayerGuid1, PlayerGuid2, NewRank, TimeStamp)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		guildID, nextLogGuid, eventType, uint32(playerGUID1), uint32(playerGUID2), newRank, now)
+
+	// Keep up to 100 logs per guild
+	rows, err := cdb.QueryContext(ctx, "SELECT LogGuid FROM guild_eventlog WHERE guildid = ? ORDER BY TimeStamp DESC, LogGuid DESC", guildID)
+	if err == nil {
+		var logGuids []uint32
+		for rows.Next() {
+			var lg uint32
+			if err := rows.Scan(&lg); err == nil {
+				logGuids = append(logGuids, lg)
+			}
+		}
+		rows.Close()
+		if len(logGuids) > 100 {
+			for _, lg := range logGuids[100:] {
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_eventlog WHERE guildid = ? AND LogGuid = ?", guildID, lg)
 			}
 		}
 	}
