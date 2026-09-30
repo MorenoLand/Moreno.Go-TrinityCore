@@ -693,4 +693,9 @@ func init() {
 	// model, no movement model); only the Talk arm of phase 3 is
 	// modeled.
 	RegisterLuaBoss("boss_nefarian", 11583)
+	// Lucifron (Molten Core, first boss) — fight logic in
+	// lua_scripts/moltencore/boss_lucifron.lua. The UpdateAI casting
+	// gates have no bridge (no UNIT_STATE model); the encounter-state
+	// bookkeeping is blocked on the instance-script model.
+	RegisterLuaBoss("boss_lucifron", 12118)
 }
