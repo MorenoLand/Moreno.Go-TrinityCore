@@ -1109,6 +1109,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		}
 		if !isCreaturePassive(motion) && s.isAttackableFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) {
 			s.debug("creature aggro", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "player_guid", p.GUID, "player_zone", p.Sess.player.Zone)
+			// Eluna CREATURE_EVENT_ON_MOVE_IN_LOS (27): a boolean true vetoes
+			// the default aggro engage, mirroring ElunaCreatureAI::
+			// MoveInLineOfSight's `if (!sEluna->MoveInLineOfSight(me, who))
+			// ScriptedAI::MoveInLineOfSight(who)`.
+			if s.fireCreatureMoveInLOS(ctx, motion, p.Sess) {
+				continue
+			}
 			motion.InCombat = true
 			if motion.ThreatMgr == nil {
 				motion.ThreatMgr = NewThreatManager(motion.GUID)

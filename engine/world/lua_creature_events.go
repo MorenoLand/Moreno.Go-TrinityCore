@@ -182,6 +182,39 @@ func (s *Server) fireCreatureCorpseRemoved(ctx context.Context, motion *creature
 	return delay
 }
 
+// fireCreatureMoveInLOS dispatches Eluna CREATURE_EVENT_ON_MOVE_IN_LOS (27)
+// when the creature is about to aggro a player it has sighted. C++
+// (Eluna::MoveInLineOfSight, CreatureHooks.cpp:268-274, reached from
+// ElunaCreatureAI::MoveInLineOfSight, ElunaCreatureAI.h:212-216, which the
+// grid relocation worker drives via CreatureUnitRelocationWorker,
+// GridNotifiers.cpp:129-141, whenever a detectable unit relocates into the
+// creature's sight range) passes (event, creature, unit) through
+// CallAllFunctionsBool: a boolean true from any handler vetoes the "normal
+// action", which for ElunaCreatureAI is ScriptedAI::MoveInLineOfSight — the
+// default aggro engage. Go's fire site is the per-tick aggro scan's engage
+// branch (stepCreatureMotion): the hook fires where the default aggro would
+// happen, and a veto skips exactly that engage, mirroring C++'s
+// `if (!sEluna->MoveInLineOfSight(me, who)) ScriptedAI::MoveInLineOfSight
+// (who)`. Both binding families fire — entry handlers first, then the
+// unique handlers for this creature's GUID/instance — matching SetupStack's
+// merged call list (HookHelpers.h:37-39); the veto ORs across both passes
+// like CallAllFunctionsBool. No handlers or a disabled runtime behaves like
+// C++'s RETVAL=false default. Returns true when the aggro must be skipped.
+func (s *Server) fireCreatureMoveInLOS(ctx context.Context, motion *creatureMotion, sess *session) bool {
+	if s == nil || motion == nil || sess == nil || s.Features == nil || s.Features.Scripts == nil {
+		return false
+	}
+	creature := s.luaMotionCreature(motion)
+	who := sess.luaPlayer()
+	if creature == nil || who == nil {
+		return false
+	}
+	args := []any{scripting.CreatureEventOnMoveInLOS, creature, who}
+	results, _ := s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnMoveInLOS, args...)
+	uniqueResults, _ := s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnMoveInLOS, args...)
+	return luaHookVeto(results) || luaHookVeto(uniqueResults)
+}
+
 // luaQuest builds the Eluna Quest userdata surface used as the quest
 // argument of the quest hooks. It mirrors the GetQuest global's quest
 // object in engine/scripting/globals.go (ID/Name/Title/Level/MinLevel/Flags
