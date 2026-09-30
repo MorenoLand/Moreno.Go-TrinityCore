@@ -547,4 +547,8 @@ func init() {
 	RegisterLuaBoss("boss_bigbadwolf", 17521)
 	RegisterLuaBoss("boss_julianne", 17534)
 	RegisterLuaBoss("boss_romulo", 17533)
+	// Aki'lzon (Zul'Aman) — fight logic in
+	// lua_scripts/zulaman/boss_akilzon.lua (soaring eagle 24858 AI
+	// "npc_akilzon_eagle" in the same file).
+	RegisterLuaBoss("boss_akilzon", 23574)
 }
