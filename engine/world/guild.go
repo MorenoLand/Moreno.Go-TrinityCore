@@ -38,6 +38,7 @@ const (
 	guildEventSignedOn         uint8  = 12
 	guildEventSignedOff        uint8  = 13
 	guildEventBankTabPurchased uint8  = 15
+	guildEventBankTabUpdated   uint8  = 16
 	guildEventBankMoneySet     uint8  = 17
 	guildEventMotd             uint8  = 2
 	grRightEmpty               uint32 = 0x00000040
@@ -3291,7 +3292,23 @@ func (s *session) handleGuildBankUpdateTab(ctx context.Context, payload []byte) 
 
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild_bank_tab SET TabName = ?, TabIcon = ? WHERE guildid = ? AND TabId = ?", name, icon, guildID, tabID)
 
-	return s.sendGuildBankList(ctx, bankerGUID, tabID, true)
+	// Reference: Guild::HandleSetBankTabInfo (Guild.cpp:1384-1396):
+	// SetInfo followed by _BroadcastEvent(GE_BANK_TAB_UPDATED (16),
+	// Empty, to_string(tabId), tab->GetName(), tab->GetIcon()) to all
+	// online members (no guid appended for this type per
+	// GuildPackets.cpp:130). The Go-invented trailing re-send of the
+	// bank list to the actor is dropped.
+	event := guildEventPayload(guildEventBankTabUpdated, 0, fmt.Sprintf("%d", tabID), name, icon)
+	s.server.sessionsMu.RLock()
+	for target := range s.server.sessions {
+		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != uint32(guildID) {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
+	}
+	s.server.sessionsMu.RUnlock()
+
+	return true
 }
 
 // handleGuildBankDepositMoney processes CMSG_GUILD_BANK_DEPOSIT_MONEY (0x3EC).
