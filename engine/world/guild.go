@@ -1370,7 +1370,7 @@ func (s *session) sendGuildBankList(ctx context.Context, bankerGUID uint64, tabI
 	buf := protocol.NewBuffer(256 + len(tabs)*64 + len(items)*32)
 	buf.WriteU64(uint64(bankMoney))
 	buf.WriteU8(tabID)
-	buf.WriteI32(1000000) // WithdrawalsRemaining
+	buf.WriteI32(s.guildBankWithdrawalsRemaining(ctx, guildID, tabID))
 	if fullUpdate {
 		buf.WriteU8(1)
 	} else {
@@ -1471,6 +1471,35 @@ func (s *session) checkGuildBankRights(ctx context.Context, guildID uint32, tabI
 type guildWithdrawExecutor interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+// guildBankWithdrawalsRemaining mirrors Guild::_GetMemberRemainingSlots
+// (Guild.cpp:2586): the guildmaster reports (int32)GUILD_WITHDRAW_SLOT_UNLIMITED
+// (-1); other ranks report the tab's daily slot allowance minus today's
+// withdrawals when the rank may view the tab, floored at 0.
+func (s *session) guildBankWithdrawalsRemaining(ctx context.Context, guildID int64, tabID uint8) int32 {
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return 0
+	}
+	var rank int64
+	if err := cdb.QueryRowContext(ctx, "SELECT rank FROM guild_member WHERE guid = ? AND guildid = ?", s.playerGUID, guildID).Scan(&rank); err != nil {
+		return 0
+	}
+	if rank == 0 {
+		return -1
+	}
+	var gbright, slotPerDay int64
+	if err := cdb.QueryRowContext(ctx, "SELECT gbright, SlotPerDay FROM guild_bank_right WHERE guildid = ? AND TabId = ? AND rid = ?", guildID, tabID, rank).Scan(&gbright, &slotPerDay); err != nil || gbright&0x01 == 0 {
+		return 0
+	}
+	tabCol := fmt.Sprintf("tab%d", tabID)
+	var withdrawn uint32
+	_ = cdb.QueryRowContext(ctx, "SELECT "+tabCol+" FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&withdrawn)
+	if remaining := int32(uint32(slotPerDay) - withdrawn); remaining > 0 {
+		return remaining
+	}
+	return 0
 }
 
 func guildConsumeBankWithdraw(ctx context.Context, q guildWithdrawExecutor, playerGUID uint64, guildID uint32, tabID uint8) bool {
