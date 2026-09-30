@@ -2275,6 +2275,13 @@ func (s *session) checkAndConsumeGuildBankMoneyWithdraw(ctx context.Context, gui
 	if rank == 0 {
 		return true
 	}
+	// Guild::_GetMemberRemainingMoney (Guild.cpp:2600): non-guildmaster
+	// ranks need GR_RIGHT_WITHDRAW_REPAIR|GR_RIGHT_WITHDRAW_GOLD before the
+	// daily allowance is even consulted.
+	var rights uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT rights FROM guild_rank WHERE guildid = ? AND rid = ?", guildID, rank).Scan(&rights); err != nil || rights&(guildRightWithdrawRepair|guildRightWithdrawGold) == 0 {
+		return false
+	}
 	var bankMoneyPerDay uint32
 	err = cdb.QueryRowContext(ctx, "SELECT BankMoneyPerDay FROM guild_rank WHERE guildid = ? AND rid = ?", guildID, rank).Scan(&bankMoneyPerDay)
 	if err != nil || bankMoneyPerDay == 0 {
