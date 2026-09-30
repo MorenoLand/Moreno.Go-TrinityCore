@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"database/sql"
 	"strconv"
 	"strings"
 	"time"
@@ -1158,6 +1159,159 @@ func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) 
 
 	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailReturnedToSender, mailOk, 0, 0, 0), true)
 	return true
+}
+
+// deleteCharacterReturnMails runs the mail return-to-sender sweep of the
+// character-delete path before the character's rows are wiped.
+// Reference: Player::DeleteFromDB CHAR_DELETE_REMOVE arm (Player.cpp:4253-4332):
+// CHAR_SEL_CHAR_COD_ITEM_MAIL selects the receiver's mails with items and COD,
+// each old row is deleted (CHAR_DEL_MAIL_BY_ID), non-MAIL_NORMAL mails are
+// dropped with their attachments, and MAIL_NORMAL mails are rebuilt via
+// MailDraft::SendReturnToSender (Mail.cpp:141-186) with checked =
+// MAIL_CHECK_MASK_RETURNED, stationery MAIL_STATIONERY_DEFAULT, COD cleared,
+// and a CONFIG_MAIL_DELIVERY_DELAY deliver delay when items ride along and the
+// sender sits on another account (an online sender always takes the delay).
+// When the original sender no longer exists the draft's items are destroyed
+// and no mail is sent. Every mail left over is wiped afterwards (CHAR_DEL_MAIL
+// / CHAR_DEL_MAIL_ITEMS, Player.cpp:4457-4463).
+func (s *session) deleteCharacterReturnMails(ctx context.Context, tx *sql.Tx, guid uint64, accountID uint32) error {
+	rows, err := tx.QueryContext(ctx, `SELECT id, messageType, mailTemplateId, sender, subject, body, money FROM mail WHERE receiver = ? AND has_items <> 0 AND cod <> 0`, guid)
+	if err != nil {
+		return err
+	}
+	type doomedMail struct {
+		id          uint64
+		messageType uint32
+		templateID  uint32
+		sender      uint64
+		subject     string
+		body        string
+		money       uint32
+	}
+	var mails []doomedMail
+	for rows.Next() {
+		var m doomedMail
+		if err := rows.Scan(&m.id, &m.messageType, &m.templateID, &m.sender, &m.subject, &m.body, &m.money); err != nil {
+			rows.Close()
+			return err
+		}
+		mails = append(mails, m)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	loadMailItemGUIDs := func(mailID uint64) ([]uint64, error) {
+		itemRows, err := tx.QueryContext(ctx, "SELECT item_guid FROM mail_items WHERE mail_id = ?", mailID)
+		if err != nil {
+			return nil, err
+		}
+		var guids []uint64
+		for itemRows.Next() {
+			var itemGUID uint64
+			if err := itemRows.Scan(&itemGUID); err != nil {
+				itemRows.Close()
+				return nil, err
+			}
+			guids = append(guids, itemGUID)
+		}
+		itemRows.Close()
+		return guids, itemRows.Err()
+	}
+
+	now := time.Now().Unix()
+	for _, m := range mails {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM mail WHERE id = ?", m.id); err != nil {
+			return err
+		}
+		itemGUIDs, err := loadMailItemGUIDs(m.id)
+		if err != nil {
+			return err
+		}
+		if m.messageType != 0 {
+			if len(itemGUIDs) > 0 {
+				if _, err := tx.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ?", m.id); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+
+		var receiverAccount uint32
+		receiverOnline := s.server != nil && s.server.findSessionByGUID(m.sender) != nil
+		if !receiverOnline {
+			err := tx.QueryRowContext(ctx, "SELECT account FROM characters WHERE guid = ? LIMIT 1", m.sender).Scan(&receiverAccount)
+			if err == sql.ErrNoRows {
+				for _, itemGUID := range itemGUIDs {
+					if _, err := tx.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID); err != nil {
+						return err
+					}
+				}
+				if _, err := tx.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ?", m.id); err != nil {
+					return err
+				}
+				continue
+			}
+			if err != nil {
+				return err
+			}
+		}
+
+		deliverTime := now
+		if s.server != nil && mailReturnNeedItemDelay(len(itemGUIDs) > 0, receiverOnline, accountID, receiverAccount) {
+			deliverTime = now + int64(s.server.Config.MailDeliveryDelay)
+		}
+		gmSender := false
+		if s.server != nil {
+			if senderSess := s.server.findSessionByGUID(guid); senderSess != nil && senderSess.player != nil && senderSess.player.ExtraFlags&playerExtraGMOn != 0 {
+				gmSender = true
+			}
+		}
+		expireTime := deliverTime + mailSendExpireDelay(gmSender, 0)
+
+		var nextMailID int64
+		if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&nextMailID); err != nil {
+			return err
+		}
+		if nextMailID <= 0 {
+			nextMailID = 1
+		}
+		hasItems := 0
+		if len(itemGUIDs) > 0 {
+			hasItems = 1
+		}
+		// C++ rebuilds the row through MailDraft::SendMailTo: MAIL_NORMAL,
+		// MAIL_STATIONERY_DEFAULT, the template id carried over, subject/body
+		// reloaded from the template draft when mailTemplateId is set. Go has
+		// no mail-template text model, so the original subject/body are kept
+		// (the same standing choice as the expiry sweep's return path).
+		if _, err := tx.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
+			VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 2)`,
+			nextMailID, mailSenderStationery(false), m.templateID, guid, m.sender, m.subject, m.body, hasItems, expireTime, deliverTime, m.money); err != nil {
+			return err
+		}
+		for _, itemGUID := range itemGUIDs {
+			if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", m.sender, itemGUID); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, receiver) VALUES (?, ?, ?)", nextMailID, itemGUID, m.sender); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ?", m.id); err != nil {
+			return err
+		}
+		s.sendMailNotify(m.sender)
+	}
+
+	if _, err := tx.ExecContext(ctx, "DELETE FROM mail WHERE receiver = ?", guid); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM mail_items WHERE receiver = ?", guid); err != nil {
+		return err
+	}
+	return nil
 }
 
 // expireOldMails sweeps expired mails in characters DB.

@@ -408,6 +408,13 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	defer tx.Rollback()
+	// Player::DeleteFromDB CHAR_DELETE_REMOVE (Player.cpp:4253): the deleted
+	// character's COD mails carrying items are returned to their senders
+	// before any owned-state rows are wiped, so the re-homed items survive
+	// the item_instance-by-owner cleanup below.
+	if err := s.deleteCharacterReturnMails(ctx, tx, guid, accountID); err != nil {
+		return false
+	}
 	if err := deleteCharacterOwnedState(ctx, tx, guid); err != nil {
 		return false
 	}
