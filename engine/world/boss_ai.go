@@ -601,4 +601,9 @@ func init() {
 	// lua_scripts/zulgurub/boss_hazzarah.lua. The brazier summon has no
 	// C++ CreatureScript in boss_hazzarah.cpp and is not registered.
 	RegisterLuaBoss("boss_hazzarah", 15083)
+	// Hakkar the Soulflayer (Zul'Gurub, end boss) — fight logic in
+	// lua_scripts/zulgurub/boss_hakkar.lua. The at_zulgurub_entrance
+	// OnlyOnceAreaTriggerScript in boss_hakkar.cpp has no Lua
+	// area-trigger bridge and is not registered.
+	RegisterLuaBoss("boss_hakkar", 14834)
 }
