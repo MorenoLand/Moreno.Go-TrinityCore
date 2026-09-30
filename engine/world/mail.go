@@ -1168,7 +1168,7 @@ func (s *session) expireOldMails(ctx context.Context) {
 	}
 	cdb := s.server.CharactersStore.DB
 	now := time.Now().Unix()
-	rows, err := cdb.QueryContext(ctx, `SELECT id, messageType, sender, receiver, has_items, checked FROM mail WHERE expire_time <= ?`, now)
+	rows, err := cdb.QueryContext(ctx, `SELECT id, messageType, sender, receiver, has_items, checked FROM mail WHERE expire_time < ?`, now)
 	if err != nil {
 		return
 	}
@@ -1185,6 +1185,11 @@ func (s *session) expireOldMails(ctx context.Context) {
 	rows.Close()
 
 	for _, em := range expired {
+		// ObjectMgr.cpp:6295: the serverUp sweep never touches mails of
+		// connected receivers; Go's sweep always runs while the server is up.
+		if s.server.findSessionByGUID(uint64(em.receiver)) != nil {
+			continue
+		}
 		if em.hasItems > 0 {
 			// If not normal player mail, or already returned / COD payment, delete attached items and mail
 			if em.msgType != 0 || (em.checked&(2|0x08)) != 0 {
@@ -1192,27 +1197,22 @@ func (s *session) expireOldMails(ctx context.Context) {
 				_, _ = cdb.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ?", em.id)
 				_, _ = cdb.ExecContext(ctx, "DELETE FROM mail WHERE id = ?", em.id)
 			} else {
-				// Return mail to sender
-				var senderExists int64
-				_ = cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE guid = ? LIMIT 1", em.sender).Scan(&senderExists)
-				if senderExists == 0 {
-					_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid IN (SELECT item_guid FROM mail_items WHERE mail_id = ?)", em.id)
-					_, _ = cdb.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ?", em.id)
-					_, _ = cdb.ExecContext(ctx, "DELETE FROM mail WHERE id = ?", em.id)
-				} else {
-					_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid IN (SELECT item_guid FROM mail_items WHERE mail_id = ?)", em.sender, em.id)
-					_, _ = cdb.ExecContext(ctx, "UPDATE mail_items SET receiver = ? WHERE mail_id = ?", em.sender, em.id)
-					expireTime := now + 30*86400
-					_, _ = cdb.ExecContext(ctx, `UPDATE mail SET
-						receiver = ?,
-						sender = ?,
-						messageType = 0,
-						checked = 2,
-						deliver_time = ?,
-						expire_time = ?
-						WHERE id = ?`, em.sender, em.receiver, now, expireTime, em.id)
-					s.sendMailNotify(uint64(em.sender))
-				}
+				// Return mail to sender. C++ has no sender-existence gate here:
+				// the row is returned unconditionally and, once checked carries
+				// MAIL_CHECK_MASK_RETURNED, the next sweep deletes it.
+				_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid IN (SELECT item_guid FROM mail_items WHERE mail_id = ?)", em.sender, em.id)
+				_, _ = cdb.ExecContext(ctx, "UPDATE mail_items SET receiver = ? WHERE mail_id = ?", em.sender, em.id)
+				expireTime := now + 30*86400
+				_, _ = cdb.ExecContext(ctx, `UPDATE mail SET
+					receiver = ?,
+					sender = ?,
+					messageType = 0,
+					cod = 0,
+					checked = 2,
+					deliver_time = ?,
+					expire_time = ?
+					WHERE id = ?`, em.sender, em.receiver, now, expireTime, em.id)
+				s.sendMailNotify(uint64(em.sender))
 			}
 		} else {
 			// No items attached, delete expired mail
