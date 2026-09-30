@@ -2262,7 +2262,14 @@ func guildConsumeBankWithdraw(ctx context.Context, q guildWithdrawExecutor, play
 	return true
 }
 
-func (s *session) checkAndConsumeGuildBankMoneyWithdraw(ctx context.Context, guildID uint32, amount uint32) bool {
+// checkGuildBankMoneyWithdraw mirrors the silent pre-transfer validation of
+// Guild::HandleMemberWithdrawMoney (Guild.cpp:1724-1746): member-miss, the
+// withdraw-rights gate and the daily allowance check
+// (Guild::_GetMemberRemainingMoney, Guild.cpp:2600). It performs no writes;
+// the allowance is consumed only after the player money cap
+// (Player::ModifyMoney, Player.cpp:22821) has passed, so a cap failure never
+// eats into the daily allowance.
+func (s *session) checkGuildBankMoneyWithdraw(ctx context.Context, guildID uint32, amount uint32) bool {
 	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return false
 	}
@@ -2288,19 +2295,38 @@ func (s *session) checkAndConsumeGuildBankMoneyWithdraw(ctx context.Context, gui
 		return false
 	}
 	if bankMoneyPerDay != 0xFFFFFFFF {
-		var exists int
-		_ = cdb.QueryRowContext(ctx, "SELECT 1 FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&exists)
-		if exists == 0 {
-			_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_member_withdraw (guid, tab0, tab1, tab2, tab3, tab4, tab5, money) VALUES (?, 0, 0, 0, 0, 0, 0, 0)", s.playerGUID)
-		}
 		var currentWithdrawn uint32
 		_ = cdb.QueryRowContext(ctx, "SELECT money FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&currentWithdrawn)
 		if currentWithdrawn+amount > bankMoneyPerDay {
 			return false
 		}
-		_, _ = cdb.ExecContext(ctx, "UPDATE guild_member_withdraw SET money = money + ? WHERE guid = ?", amount, s.playerGUID)
 	}
 	return true
+}
+
+// consumeGuildBankMoneyWithdraw mirrors Guild::Member::UpdateBankWithdrawValue
+// (Guild.cpp:669) for the money column: once the transfer is approved it
+// records the withdrawn amount against the member's daily allowance. The
+// guildmaster and unlimited (0xFFFFFFFF) ranks have no allowance to track.
+func (s *session) consumeGuildBankMoneyWithdraw(ctx context.Context, guildID uint32, amount uint32) {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	var rank uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT rank FROM guild_member WHERE guid = ? AND guildid = ?", s.playerGUID, guildID).Scan(&rank); err != nil || rank == 0 {
+		return
+	}
+	var bankMoneyPerDay uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT BankMoneyPerDay FROM guild_rank WHERE guildid = ? AND rid = ?", guildID, rank).Scan(&bankMoneyPerDay); err != nil || bankMoneyPerDay == 0xFFFFFFFF {
+		return
+	}
+	var exists int
+	_ = cdb.QueryRowContext(ctx, "SELECT 1 FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&exists)
+	if exists == 0 {
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_member_withdraw (guid, tab0, tab1, tab2, tab3, tab4, tab5, money) VALUES (?, 0, 0, 0, 0, 0, 0, 0)", s.playerGUID)
+	}
+	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member_withdraw SET money = money + ? WHERE guid = ?", amount, s.playerGUID)
 }
 
 // guildBankWithdrawMoneyForRepair mirrors Guild::HandleMemberWithdrawMoney
@@ -2338,7 +2364,7 @@ func (s *session) guildBankWithdrawMoneyForRepair(ctx context.Context, guildID u
 		var perDay, withdrawn uint32
 		_ = cdb.QueryRowContext(ctx, "SELECT BankMoneyPerDay FROM guild_rank WHERE guildid = ? AND rid = ?", guildID, rank).Scan(&perDay)
 		_ = cdb.QueryRowContext(ctx, "SELECT money FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&withdrawn)
-		// Same allowance form as checkAndConsumeGuildBankMoneyWithdraw:
+		// Same allowance form as checkGuildBankMoneyWithdraw:
 		// withdrawn+amount > perDay denies; C++ _GetMemberRemainingMoney
 		// (Guild.cpp:2600) clamps non-positive remainders to 0.
 		if withdrawn+amount > perDay {
@@ -3448,25 +3474,27 @@ func (s *session) handleGuildBankWithdrawMoney(ctx context.Context, payload []by
 		return true
 	}
 
-	// Player::ModifyMoney (Player.cpp:22832): a withdraw that would push the
-	// player past MAX_MONEY_AMOUNT fails before the bank or the daily limit
-	// is touched.
+	// Guild::HandleMemberWithdrawMoney (Guild.cpp:1729-1736): the member-miss
+	// and daily-limit arms all return false silently — the session handler
+	// (GuildHandler.cpp:295-303) ignores the return value, so no command
+	// result is ever sent. ERR_GUILD_WITHDRAW_LIMIT (25) is defined
+	// (Guild.h:145) but never emitted by the C++ server.
+	if !s.checkGuildBankMoneyWithdraw(ctx, uint32(guildID), amount) {
+		return true
+	}
+
+	// Player::ModifyMoney (Player.cpp:22821): a withdraw that would push the
+	// player past MAX_MONEY_AMOUNT fails with EQUIP_ERR_TOO_MUCH_GOLD — only
+	// after the daily-limit check above has passed, matching the C++ order
+	// (HandleMemberWithdrawMoney checks the limit silently first, then calls
+	// ModifyMoney), and the daily allowance is consumed only on the success
+	// path.
 	if s.player.Money > maxMoneyAmount-amount {
 		s.sendEquipError(equipErrTooMuchGold, 0)
 		return true
 	}
 
-	// Guild::HandleMemberWithdrawMoney (Guild.cpp:1729-1736): the bank-short,
-	// member-miss and daily-limit arms all return false silently — the session
-	// handler (GuildHandler.cpp:295-303) ignores the return value, so no
-	// command result is ever sent. ERR_GUILD_WITHDRAW_LIMIT (25) is defined
-	// (Guild.h:145) but never emitted by the C++ server. The player-cap arm
-	// above keeps its equip error: Player::ModifyMoney (Player.cpp:22821)
-	// sends EQUIP_ERR_TOO_MUCH_GOLD before returning false (default
-	// sendError=true).
-	if !s.checkAndConsumeGuildBankMoneyWithdraw(ctx, uint32(guildID), amount) {
-		return true
-	}
+	s.consumeGuildBankMoneyWithdraw(ctx, uint32(guildID), amount)
 
 	s.player.Money += amount
 	s.sendPlayerMoneyUpdate()
