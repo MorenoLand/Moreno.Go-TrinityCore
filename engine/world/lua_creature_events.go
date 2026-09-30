@@ -64,19 +64,38 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 // creature's entry. Eluna argument order: (event, creature, ...) with the
 // per-event extra arguments appended after the creature. Never fires when
 // the scripting runtime is disabled or the creature is gone; Lua errors are
-// logged by the runtime, never propagated.
-func (s *Server) fireCreatureLuaEvent(ctx context.Context, motion *creatureMotion, event int, extra ...any) {
+// logged by the runtime, never propagated. Returns true when any handler
+// returns a truthy value, matching Eluna's CallAllFunctionsBool OR-semantics
+// (lua_toboolean), so START_HOOK_WITH_RETVAL call sites can veto the default
+// action; no bindings or a disabled runtime behaves like C++'s RETVAL=false.
+func (s *Server) fireCreatureLuaEvent(ctx context.Context, motion *creatureMotion, event int, extra ...any) bool {
 	if s == nil || motion == nil || s.Features == nil || s.Features.Scripts == nil {
-		return
+		return false
 	}
 	creature := s.luaMotionCreature(motion)
 	if creature == nil {
-		return
+		return false
 	}
 	args := make([]any, 0, len(extra)+2)
 	args = append(args, event, creature)
 	args = append(args, extra...)
-	_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, event, args...)
+	results, _ := s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, event, args...)
+	return luaHookVeto(results)
+}
+
+// luaHookVeto ORs handler return values with Lua truthiness (everything but
+// false and nil counts), the Go model of Eluna's CallAllFunctionsBool.
+func luaHookVeto(results []any) bool {
+	for _, r := range results {
+		if r == nil {
+			continue
+		}
+		if b, ok := r.(bool); ok && !b {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // luaQuest builds the Eluna Quest userdata surface used as the quest

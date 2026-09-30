@@ -538,6 +538,15 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 		return
 	}
 	wasInCombat := motion.InCombat
+	// Eluna CREATURE_EVENT_ON_LEAVE_COMBAT (event 2) fires before any evade
+	// work, mirroring ElunaCreatureAI::EnterEvadeMode where the hook runs
+	// ahead of ScriptedAI::EnterEvadeMode(). A Lua handler returning true
+	// vetoes the whole base evade — threat clear, move home, and reset are
+	// all skipped, so the creature keeps its combat state. No motion lock
+	// is held on this path, so the hook runs inline.
+	if wasInCombat && s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnLeaveCombat) {
+		return
+	}
 	if motion.ThreatMgr != nil {
 		motion.ThreatMgr.ClearThreat()
 	}
@@ -577,12 +586,6 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 		motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
 		motion.Moving = false
 		motion.Evading = false
-	}
-	// Eluna CREATURE_EVENT_ON_LEAVE_COMBAT (event 2), fired when the
-	// creature leaves combat via evade, mirroring Creature::EnterEvadeMode.
-	// No motion lock is held on this path, so the hook runs inline.
-	if wasInCombat {
-		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnLeaveCombat)
 	}
 }
 
