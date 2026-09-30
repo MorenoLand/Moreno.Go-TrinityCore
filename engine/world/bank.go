@@ -239,6 +239,21 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 		isBank = isBankBagCount > 0
 	}
 
+	// Bank -> inventory auto-store hits CanStoreItem's IsNotEmptyBag term
+	// (Player.cpp:11088, EQUIP_ERR_NONEMPTY_BAG_OVER_OTHER_BAG); the
+	// inventory -> bank path reaches the same item through
+	// CanStoreItem_InInventorySlots (Player.cpp:10654,
+	// EQUIP_ERR_CAN_ONLY_DO_WITH_EMPTY_BAGS). Both fire before any
+	// free-slot scan, so they are checked before the branch bodies.
+	if s.itemIsNonemptyBag(ctx, uint64(itemGUID)) {
+		if isBank {
+			s.sendEquipError(equipErrNonemptyBagOverOtherBag, uint64(itemGUID))
+		} else {
+			s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(itemGUID))
+		}
+		return true
+	}
+
 	if isBank {
 		// Move from bank to backpack (slots 23..38), or into equipped bags (19..22)
 		occupied := make(map[uint8]bool)
