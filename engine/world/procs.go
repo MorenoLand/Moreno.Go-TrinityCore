@@ -546,6 +546,20 @@ const (
 	procReqSpellPhaseProcFlagMask = procSpellProcFlagMask & procDoneHitProcFlagMask
 )
 
+// autoAttackProcFlagMask (SpellMgr.h:156): auto-attack events are exempt
+// from the triggered-cast suppression in CanSpellTriggerProcOnEvent.
+const autoAttackProcFlagMask = procFlagDoneMeleeAutoAttack | procFlagTakenMeleeAutoAttack |
+	procFlagDoneRangedAutoAttack | procFlagTakenRangedAutoAttack
+
+// Triggered-cast attributes (SharedDefines.h:516/532/539). ATTR2 is Go's
+// AttributesEx1 (Spell.dbc field 6); ATTR3 is Go's AttributesEx3
+// (Spell.dbc field 7).
+const (
+	spellAttr2TriggeredCanTriggerProc  uint32 = 0x40000000
+	spellAttr3TriggeredCanTriggerProc2 uint32 = 0x00000200
+	spellAttr3CantTriggerProc          uint32 = 0x00010000
+)
+
 // Proc spell type and phase (SpellMgr.h:224-238).
 const (
 	procSpellTypeNone      uint32 = 0x0000000
@@ -672,8 +686,10 @@ func (s *session) spellProcEntryFor(auraSpellID uint32) (entry spellProcEntry, a
 }
 
 // procEventInfo carries the CanSpellTriggerProcOnEvent inputs (SpellMgr.cpp:502).
-// The melee path fills the masks; spell-driven paths would additionally fill
-// eventSpell and triggered.
+// The melee paths fill the masks only; spell-driven paths additionally fill
+// eventSpell (the casting spell) and triggered (Spell::IsTriggered,
+// Spell.cpp:7501-7504) so the mana-cost, spell-family, and triggered-cast
+// gates engage exactly.
 type procEventInfo struct {
 	typeMask        uint32
 	schoolMask      uint32
@@ -704,7 +720,15 @@ func canSpellTriggerProcOnEvent(entry spellProcEntry, ev procEventInfo) bool {
 	if ev.typeMask&(procFlagKilled|procFlagKill|procFlagDeath) != 0 {
 		return true
 	}
-	if entry.AttributesMask&procAttrTriggeredCanProc == 0 && ev.triggered {
+	// Triggered-cast suppression (SpellMgr.cpp:526-539): a triggered event
+	// spell cannot proc an entry unless the entry allows it
+	// (PROC_ATTR_TRIGGERED_CAN_PROC), the event is an auto-attack
+	// (AUTO_ATTACK_PROC_FLAG_MASK, SpellMgr.h:156), or the triggered spell
+	// itself carries SPELL_ATTR2_TRIGGERED_CAN_TRIGGER_PROC
+	// (SharedDefines.h:516) or SPELL_ATTR3_TRIGGERED_CAN_TRIGGER_PROC_2
+	// (SharedDefines.h:532).
+	if entry.AttributesMask&procAttrTriggeredCanProc == 0 && ev.typeMask&autoAttackProcFlagMask == 0 &&
+		ev.eventSpell != nil && ev.triggered && !eventSpellCanTriggerProc(ev.eventSpell) {
 		return false
 	}
 	if entry.SchoolMask != 0 && ev.schoolMask&entry.SchoolMask == 0 {
@@ -737,6 +761,99 @@ func canSpellTriggerProcOnEvent(entry spellProcEntry, ev procEventInfo) bool {
 		}
 	}
 	return true
+}
+
+// eventSpellCanTriggerProc mirrors the SpellInfo attribute arm of the
+// triggered-cast suppression (SpellMgr.cpp:531-535): a triggered spell
+// carrying SPELL_ATTR2_TRIGGERED_CAN_TRIGGER_PROC or
+// SPELL_ATTR3_TRIGGERED_CAN_TRIGGER_PROC_2 may proc other auras.
+func eventSpellCanTriggerProc(spell *wotlk.Spell) bool {
+	return spell != nil &&
+		(spell.AttributesEx1&spellAttr2TriggeredCanTriggerProc != 0 ||
+			spell.AttributesEx3&spellAttr3TriggeredCanTriggerProc2 != 0)
+}
+
+// spellDamageProcTypeMask mirrors Spell::prepareDataForTriggerSystem
+// (Spell.cpp:1999-2055): melee damage-class spells use their class flag plus
+// the mainhand bit, ranged damage-class spells their class flag; every other
+// spell on the damage path is negative, magic class or none class per its
+// DmgClass (Spell.dbc field 213). The ranged auto-shot
+// (SPELL_ATTR2_AUTOREPEAT_FLAG -> DONE_RANGED_AUTO_ATTACK) and wand branches
+// have no model on the Go direct-spell-damage path.
+func spellDamageProcTypeMask(defenseType uint32) uint32 {
+	switch defenseType {
+	case spellDamageClassMelee:
+		// Spell::prepareDataForTriggerSystem ORs the mainhand/offhand bit
+		// (Spell.cpp:2009-2012); the direct-spell-damage path always uses
+		// the base attack type, so the mainhand bit applies.
+		return procFlagDoneSpellMeleeDmgClass | procFlagDoneMainhandAttack
+	case spellDamageClassRanged:
+		return procFlagDoneSpellRangedDmgClass
+	case spellDamageClassMagic:
+		return procFlagDoneSpellMagicDmgClassNeg
+	default:
+		return procFlagDoneSpellNoneDmgClassNeg
+	}
+}
+
+// spellDamageProcHitMask mirrors the hit-mask derivation for spell damage
+// events (DamageInfo ctor from SpellNonMeleeDamage, Unit.cpp:183-192):
+// miss, immunity, and full resist map to their bits, crits to the critical
+// bit, everything else to normal, with the absorb bit ORed in whenever any
+// damage was absorbed.
+func spellDamageProcHitMask(isHit, immune, fullyResisted, crit bool, absorbed uint32) uint32 {
+	var hitMask uint32
+	switch {
+	case !isHit:
+		hitMask = procHitMiss
+	case immune:
+		hitMask = procHitImmune
+	case fullyResisted:
+		hitMask = procHitFullResist
+	case crit:
+		hitMask = procHitCritical
+	default:
+		hitMask = procHitNormal
+	}
+	if absorbed > 0 {
+		hitMask |= procHitAbsorb
+	}
+	return hitMask
+}
+
+// procSpellHitAuraTriggers evaluates real aura procs on the done side of a
+// spell damage hit: the spell-damage arm of Unit::ProcDamageAndSpellFor via
+// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2427-2540). The event
+// carries the casting spell and the triggered state (Spell::IsTriggered,
+// Spell.cpp:7501-7504), so the CanSpellTriggerProcOnEvent mana-cost,
+// spell-family, and triggered-cast gates engage exactly. Spells with
+// SPELL_ATTR3_CANT_TRIGGER_PROC never reach the loop (Spell.cpp:2441).
+// The trigger spell targets the victim.
+func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, isHit, immune, fullyResisted, crit bool, absorbed uint32) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		return
+	}
+	if spell.AttributesEx3&spellAttr3CantTriggerProc != 0 {
+		return
+	}
+	schoolMask := spell.SchoolMask
+	if schoolMask == 0 {
+		schoolMask = 1
+	}
+	spellCopy := spell
+	s.procAuraTriggerLoop(ctx, targetGUID, procEventInfo{
+		typeMask:       spellDamageProcTypeMask(spell.DefenseType),
+		schoolMask:     schoolMask,
+		spellTypeMask:  procSpellTypeDamage,
+		spellPhaseMask: procSpellPhaseHit,
+		hitMask:        spellDamageProcHitMask(isHit, immune, fullyResisted, crit, absorbed),
+		triggered:      s.triggeredNoProcEvents > 0,
+		eventSpell:     &spellCopy,
+	})
 }
 
 // meleeOutcomeProcHitMask mirrors the DamageInfo constructor's hit-mask

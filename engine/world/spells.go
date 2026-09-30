@@ -2235,6 +2235,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		return 0
 	}
 	isHit := true
+	crit := false
 	if targetGUID != s.playerGUID && !instantKill {
 		isHit = s.rollSpellHit(target.Level, isPlayerVictim)
 	}
@@ -2249,7 +2250,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		damage = 0
 	} else {
 		// Spell crit roll (fixed damage backlash spells do not crit, per TrinityCore SPELL_ATTR4_FIXED_DAMAGE)
-		crit := false
+		crit = false
 		spellKnown := false
 		if s.server != nil && s.server.Data != nil {
 			if _, found, err := s.server.Data.Spell(spellID); err == nil && found {
@@ -2349,6 +2350,14 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		spellHitCanTriggerItemProcs(isHit, immune, fullyResisted, absorbed) {
 		s.procSpellCastAndHitEffects(ctx, target, spellID)
 	}
+
+	// Real aura procs on the spell-hit event (TrinityCore
+	// Unit::ProcDamageAndSpellFor via Spell::TargetInfo::DoDamageAndTriggers,
+	// Spell.cpp:2427-2540): the event carries the casting spell and the
+	// triggered state so the CanSpellTriggerProcOnEvent eventSpell/triggered
+	// gates engage; the triggered-cast suppression is the gate's own job,
+	// not a call-site skip.
+	s.procSpellHitAuraTriggers(ctx, targetGUID, spellID, isHit, immune, fullyResisted, crit, absorbed)
 
 	s.lastCombatTime = time.Now()
 	if s.player != nil && s.player.UnitFlags&unitFlagInCombat == 0 {
