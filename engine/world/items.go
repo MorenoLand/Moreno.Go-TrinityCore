@@ -2821,6 +2821,8 @@ func (s *session) handleEquipmentSetUse(ctx context.Context, payload []byte) boo
 	}
 	r := protocol.NewReader(payload)
 
+	inCombat := s.player.UnitFlags&unitFlagInCombat != 0
+
 	for i := uint32(0); i < equipmentSlotEnd; i++ {
 		itemGuid, err := r.ReadPackedGUID()
 		if err != nil {
@@ -2834,7 +2836,17 @@ func (s *session) handleEquipmentSetUse(ctx context.Context, payload []byte) boo
 		if err != nil {
 			break
 		}
-		if itemGuid == 1 || itemGuid == 0 {
+		// Slots set to "ignored" (raw value 1) must not be unequipped (CharacterHandler.cpp:1569).
+		if itemGuid == 1 {
+			continue
+		}
+		// Only weapons may be swapped in combat (CharacterHandler.cpp:1572).
+		if inCombat && i != uint32(equipSlotMainhand) && i != uint32(equipSlotOffhand) && i != uint32(equipSlotRanged) {
+			continue
+		}
+		if itemGuid == 0 {
+			// Empty slot: unequip the worn item into the bags (CharacterHandler.cpp:1576-1593).
+			s.equipmentSetUnequipSlot(ctx, i)
 			continue
 		}
 		// If item is in bags, swap to equipment slot
@@ -2848,4 +2860,30 @@ func (s *session) handleEquipmentSetUse(ctx context.Context, payload []byte) boo
 	buf.WriteU8(0) // 0 = ERR_EQUIPMENT_SET_USE_SUCCESS
 	_ = s.write(uint16(protocol.OpcodeSMSG_EQUIPMENT_SET_USE_RESULT), buf.Bytes(), true)
 	return true
+}
+
+// equipmentSetUnequipSlot moves the item worn in equipment slot into the
+// backpack (WorldSession::HandleEquipmentSetUse, CharacterHandler.cpp:1576-
+// 1593: CanStoreItem NULL_BAG/NULL_SLOT, then CanUnequipItem(dstpos) — always
+// OK for equipment slots since bags cannot be equipped — then RemoveItem +
+// StoreItem; a full inventory sends the equip error).
+func (s *session) equipmentSetUnequipSlot(ctx context.Context, slot uint32) {
+	db := s.server.CharactersStore.DB
+	if db == nil {
+		return
+	}
+	var itemGUID int64
+	_ = db.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? LIMIT 1", s.playerGUID, slot).Scan(&itemGUID)
+	if itemGUID == 0 {
+		return
+	}
+	freeSlot, ok := s.findFreeBackpackSlot(ctx)
+	if !ok {
+		s.sendEquipError(equipErrInvFull, uint64(itemGUID))
+		return
+	}
+	_, _ = db.ExecContext(ctx, "UPDATE character_inventory SET bag = 0, slot = ? WHERE guid = ? AND item = ?", freeSlot, s.playerGUID, itemGUID)
+	s.syncEquipmentCache(ctx)
+	_ = s.sendInventoryItems(ctx)
+	s.sendPlayerUpdate()
 }
