@@ -578,4 +578,10 @@ func init() {
 	// the column of fire have no C++ CreatureScript in boss_zuljin.cpp
 	// and are not registered).
 	RegisterLuaBoss("boss_zuljin", 23863)
+	// Arlokk (Zul'Gurub) — fight logic in
+	// lua_scripts/zulgurub/boss_arlokk.lua (zulian prowler 15101 AI
+	// "npc_zulian_prowler" in the same file; the panther trigger 15091
+	// has no C++ script and the go_gong_of_bethekk AI has no
+	// Lua-modelable hooks — neither is registered).
+	RegisterLuaBoss("boss_arlokk", 14515)
 }
