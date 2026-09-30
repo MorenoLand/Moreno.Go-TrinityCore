@@ -3267,7 +3267,14 @@ func (s *session) handleGuildBankUpdateTab(ctx context.Context, payload []byte) 
 	}
 
 	// Reference: WorldSession::HandleGuildBankUpdateTab (GuildHandler.cpp:
-	// 354-355): the banker-interact gate runs before the guild lookup.
+	// 354): an empty Name or Icon skips the whole handler, before the
+	// banker-interact gate.
+	if name == "" || icon == "" {
+		return true
+	}
+
+	// Reference: WorldSession::HandleGuildBankUpdateTab (GuildHandler.cpp:
+	// 355): the banker-interact gate runs before the guild lookup.
 	if !s.canInteractWithGameObject(ctx, bankerGUID, gameObjectTypeGuildBank) {
 		return true
 	}
