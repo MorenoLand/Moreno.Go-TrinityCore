@@ -2,11 +2,13 @@ package world
 
 import (
 	"context"
+	"math"
 	"math/rand"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	protocol "github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -480,6 +482,369 @@ func (s *session) procSpellCastAndHitEffects(ctx context.Context, target combatT
 				s.castSpellDirect(ctx, ProcSpellReignOfTheDeadHero, s.playerGUID)
 				s.triggerProcCooldown(ProcSpellReignOfTheDeadHero, 2*time.Second)
 			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Aura proc pipeline (Aura::GetProcEffectMask / SpellMgr::CanSpellTriggerProcOnEvent)
+// ---------------------------------------------------------------------------
+
+// Proc event type flags (SpellMgr.h:114-186). Go's Spell.ProcTypeMask is
+// Spell.dbc field 34, which C++ loads as SpellInfo::ProcFlags
+// (SpellInfo.cpp:822).
+const (
+	procFlagNone                       uint32 = 0x00000000
+	procFlagKilled                     uint32 = 0x00000001
+	procFlagKill                       uint32 = 0x00000002
+	procFlagDoneMeleeAutoAttack        uint32 = 0x00000004
+	procFlagTakenMeleeAutoAttack       uint32 = 0x00000008
+	procFlagDoneSpellMeleeDmgClass     uint32 = 0x00000010
+	procFlagTakenSpellMeleeDmgClass    uint32 = 0x00000020
+	procFlagDoneRangedAutoAttack       uint32 = 0x00000040
+	procFlagTakenRangedAutoAttack      uint32 = 0x00000080
+	procFlagDoneSpellRangedDmgClass    uint32 = 0x00000100
+	procFlagTakenSpellRangedDmgClass   uint32 = 0x00000200
+	procFlagDoneSpellNoneDmgClassPos   uint32 = 0x00000400
+	procFlagTakenSpellNoneDmgClassPos  uint32 = 0x00000800
+	procFlagDoneSpellNoneDmgClassNeg   uint32 = 0x00001000
+	procFlagTakenSpellNoneDmgClassNeg  uint32 = 0x00002000
+	procFlagDoneSpellMagicDmgClassPos  uint32 = 0x00004000
+	procFlagTakenSpellMagicDmgClassPos uint32 = 0x00008000
+	procFlagDoneSpellMagicDmgClassNeg  uint32 = 0x00010000
+	procFlagTakenSpellMagicDmgClassNeg uint32 = 0x00020000
+	procFlagDonePeriodic               uint32 = 0x00040000
+	procFlagTakenPeriodic              uint32 = 0x00080000
+	procFlagTakenDamage                uint32 = 0x00100000
+	procFlagDoneTrapActivation         uint32 = 0x00200000
+	procFlagDoneMainhandAttack         uint32 = 0x00400000
+	procFlagDoneOffhandAttack          uint32 = 0x00800000
+	procFlagDeath                      uint32 = 0x01000000
+)
+
+// Proc flag masks (SpellMgr.h:188-216).
+const (
+	procSpellProcFlagMask = procFlagDoneSpellMeleeDmgClass | procFlagTakenSpellMeleeDmgClass |
+		procFlagDoneRangedAutoAttack | procFlagTakenRangedAutoAttack |
+		procFlagDoneSpellRangedDmgClass | procFlagTakenSpellRangedDmgClass |
+		procFlagDoneSpellNoneDmgClassPos | procFlagTakenSpellNoneDmgClassPos |
+		procFlagDoneSpellNoneDmgClassNeg | procFlagTakenSpellNoneDmgClassNeg |
+		procFlagDoneSpellMagicDmgClassPos | procFlagTakenSpellMagicDmgClassPos |
+		procFlagDoneSpellMagicDmgClassNeg | procFlagTakenSpellMagicDmgClassNeg |
+		procFlagDonePeriodic | procFlagTakenPeriodic | procFlagDoneTrapActivation
+	procDoneHitProcFlagMask = procFlagDoneMeleeAutoAttack | procFlagDoneRangedAutoAttack |
+		procFlagDoneSpellMeleeDmgClass | procFlagDoneSpellRangedDmgClass |
+		procFlagDoneSpellNoneDmgClassPos | procFlagDoneSpellNoneDmgClassNeg |
+		procFlagDoneSpellMagicDmgClassPos | procFlagDoneSpellMagicDmgClassNeg |
+		procFlagDonePeriodic | procFlagDoneTrapActivation |
+		procFlagDoneMainhandAttack | procFlagDoneOffhandAttack
+	procTakenHitProcFlagMask = procFlagTakenMeleeAutoAttack | procFlagTakenRangedAutoAttack |
+		procFlagTakenSpellMeleeDmgClass | procFlagTakenSpellRangedDmgClass |
+		procFlagTakenSpellNoneDmgClassPos | procFlagTakenSpellNoneDmgClassNeg |
+		procFlagTakenSpellMagicDmgClassPos | procFlagTakenSpellMagicDmgClassNeg |
+		procFlagTakenPeriodic | procFlagTakenDamage
+	procReqSpellPhaseProcFlagMask = procSpellProcFlagMask & procDoneHitProcFlagMask
+)
+
+// Proc spell type and phase (SpellMgr.h:224-238).
+const (
+	procSpellTypeNone      uint32 = 0x0000000
+	procSpellTypeDamage    uint32 = 0x0000001
+	procSpellTypeHeal      uint32 = 0x0000002
+	procSpellTypeNoDmgHeal uint32 = 0x0000004
+	procSpellTypeMaskAll   uint32 = 0x0000007
+	procSpellPhaseNone     uint32 = 0x0000000
+	procSpellPhaseCast     uint32 = 0x0000001
+	procSpellPhaseHit      uint32 = 0x0000002
+	procSpellPhaseFinish   uint32 = 0x0000004
+)
+
+// Proc hit results (SpellMgr.h:240-258).
+const (
+	procHitNone       uint32 = 0x0000000
+	procHitNormal     uint32 = 0x0000001
+	procHitCritical   uint32 = 0x0000002
+	procHitMiss       uint32 = 0x0000004
+	procHitFullResist uint32 = 0x0000008
+	procHitDodge      uint32 = 0x0000010
+	procHitParry      uint32 = 0x0000020
+	procHitBlock      uint32 = 0x0000040
+	procHitEvade      uint32 = 0x0000080
+	procHitImmune     uint32 = 0x0000100
+	procHitDeflect    uint32 = 0x0000200
+	procHitAbsorb     uint32 = 0x0000400
+	procHitReflect    uint32 = 0x0000800
+	procHitInterrupt  uint32 = 0x0001000
+	procHitFullBlock  uint32 = 0x0002000
+)
+
+// Proc attributes (SpellMgr.h:260-268).
+const (
+	procAttrReqExpOrHonor        uint32 = 0x0000001
+	procAttrTriggeredCanProc     uint32 = 0x0000002
+	procAttrReqManaCost          uint32 = 0x0000004
+	procAttrReqSpellmod          uint32 = 0x0000008
+	procAttrReduceProc60         uint32 = 0x0000080
+	procAttrCantProcFromItemCast uint32 = 0x0000100
+)
+
+// Proc-trigger aura types (SpellAuraDefines.h:84/122/123/311).
+const (
+	spellAuraProcTriggerSpell          = 42
+	spellAuraProcTriggerDamage         = 43
+	spellAuraProcTriggerSpellWithValue = 231
+)
+
+// isProcTriggerAuraType mirrors the LoadSpellProc trigger-aura subset whose
+// C++ HandleProc arm fires a spell or damage (SpellMgr.cpp:1686-1729,
+// SpellAuraEffects.cpp:1010-1043): dummy, proc-trigger-spell,
+// proc-trigger-damage, and proc-trigger-spell-with-value. The remaining
+// isTriggerAura types (reflect, stealth-break, charge-drop auras) have no Go
+// HandleProc arm yet.
+func isProcTriggerAuraType(auraType uint32) bool {
+	switch auraType {
+	case spellAuraDummy, spellAuraProcTriggerSpell, spellAuraProcTriggerDamage, spellAuraProcTriggerSpellWithValue:
+		return true
+	}
+	return false
+}
+
+// spellProcEntry mirrors SpellProcEntry (SpellMgr.h:270-284) for the
+// generated-default branch of SpellMgr::LoadSpellProc (SpellMgr.cpp:1816-1869).
+// This server has no spell_proc DB table, so every aura spell carrying DBC
+// ProcFlags (Spell.dbc field 34) plus a proc-trigger aura effect gets the
+// generated entry, exactly as C++ does when the table holds no row for it.
+type spellProcEntry struct {
+	SchoolMask      uint32
+	SpellFamilyName uint32
+	SpellFamilyMask [3]uint32
+	ProcFlags       uint32
+	SpellTypeMask   uint32
+	SpellPhaseMask  uint32
+	HitMask         uint32
+	AttributesMask  uint32
+	Chance          uint32
+	Charges         uint32
+}
+
+// spellProcEntryFor builds the generated spell_proc entry for an aura spell.
+// Returns the entry and the DBC spell; ok is false when the spell has no DBC
+// ProcFlags or no proc-trigger aura effect (SpellMgr.cpp:1755-1814).
+func (s *session) spellProcEntryFor(auraSpellID uint32) (entry spellProcEntry, auraSpell wotlk.Spell, ok bool) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return entry, auraSpell, false
+	}
+	spell, found, err := s.server.Data.Spell(auraSpellID)
+	if err != nil || !found || spell.ProcTypeMask == 0 {
+		return entry, auraSpell, false
+	}
+	hasTrigger := false
+	for i := range spell.Effects {
+		eff := &spell.Effects[i]
+		if eff.Effect == 0 || !isProcTriggerAuraType(eff.Aura) {
+			continue
+		}
+		hasTrigger = true
+		for k := 0; k < 3; k++ {
+			entry.SpellFamilyMask[k] |= eff.SpellClassMask[k]
+		}
+	}
+	if !hasTrigger {
+		return entry, auraSpell, false
+	}
+	entry.ProcFlags = spell.ProcTypeMask
+	if entry.SpellFamilyMask != [3]uint32{} {
+		entry.SpellFamilyName = spell.SpellFamilyName
+	}
+	entry.SpellTypeMask = procSpellTypeMaskAll
+	entry.SpellPhaseMask = procSpellPhaseHit
+	entry.Chance = spell.ProcChance
+	entry.Charges = spell.ProcCharges
+	if spell.ProcTypeMask&procFlagKill != 0 {
+		entry.AttributesMask |= procAttrReqExpOrHonor
+	}
+	// LoadSpellProc's taken-flag fallback (SpellMgr.cpp:1788-1798): proc
+	// trigger auras on taken-flagged spells proc from triggered hits anyway.
+	if spell.ProcTypeMask&procTakenHitProcFlagMask != 0 {
+		entry.AttributesMask |= procAttrTriggeredCanProc
+	}
+	return entry, spell, true
+}
+
+// procEventInfo carries the CanSpellTriggerProcOnEvent inputs (SpellMgr.cpp:502).
+// The melee path fills the masks; spell-driven paths would additionally fill
+// eventSpell and triggered.
+type procEventInfo struct {
+	typeMask        uint32
+	schoolMask      uint32
+	spellTypeMask   uint32
+	spellPhaseMask  uint32
+	hitMask         uint32
+	xpOrHonorTarget bool
+	triggered       bool
+	eventSpell      *wotlk.Spell
+}
+
+// canSpellTriggerProcOnEvent mirrors SpellMgr::CanSpellTriggerProcOnEvent
+// (SpellMgr.cpp:502-583): the entry's ProcFlags must intersect the event's
+// type mask, then the attribute, school, spell-family, spell-type,
+// spell-phase, and hit-mask gates apply in C++ order.
+func canSpellTriggerProcOnEvent(entry spellProcEntry, ev procEventInfo) bool {
+	if ev.typeMask&entry.ProcFlags == 0 {
+		return false
+	}
+	if entry.AttributesMask&procAttrReqExpOrHonor != 0 && !ev.xpOrHonorTarget {
+		return false
+	}
+	if entry.AttributesMask&procAttrReqManaCost != 0 && ev.eventSpell != nil {
+		if ev.eventSpell.ManaCost == 0 && ev.eventSpell.ManaCostPct == 0 {
+			return false
+		}
+	}
+	if ev.typeMask&(procFlagKilled|procFlagKill|procFlagDeath) != 0 {
+		return true
+	}
+	if entry.AttributesMask&procAttrTriggeredCanProc == 0 && ev.triggered {
+		return false
+	}
+	if entry.SchoolMask != 0 && ev.schoolMask&entry.SchoolMask == 0 {
+		return false
+	}
+	if ev.typeMask&procSpellProcFlagMask != 0 {
+		if ev.eventSpell != nil && !spellAffectedBySpellFamilyMask(entry.SpellFamilyName, entry.SpellFamilyMask, *ev.eventSpell) {
+			return false
+		}
+		if entry.SpellTypeMask != 0 && ev.spellTypeMask&entry.SpellTypeMask == 0 {
+			return false
+		}
+	}
+	if ev.typeMask&procReqSpellPhaseProcFlagMask != 0 {
+		if ev.spellPhaseMask&entry.SpellPhaseMask == 0 {
+			return false
+		}
+	}
+	if ev.typeMask&procTakenHitProcFlagMask != 0 || (ev.typeMask&procDoneHitProcFlagMask != 0 && ev.spellPhaseMask&procSpellPhaseCast == 0) {
+		hitMask := entry.HitMask
+		if hitMask == 0 {
+			if ev.typeMask&procTakenHitProcFlagMask != 0 {
+				hitMask = procHitNormal | procHitCritical
+			} else {
+				hitMask = procHitNormal | procHitCritical | procHitAbsorb
+			}
+		}
+		if ev.hitMask&hitMask == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// meleeOutcomeProcHitMask mirrors the DamageInfo constructor's hit-mask
+// derivation for melee outcomes (Unit.cpp:155-179): block, crushing, and
+// glancing blows count as normal hits; only crits set the critical bit.
+func meleeOutcomeProcHitMask(outcome protocol.MeleeHitOutcome) uint32 {
+	switch outcome {
+	case protocol.MeleeHitMiss:
+		return procHitMiss
+	case protocol.MeleeHitDodge:
+		return procHitDodge
+	case protocol.MeleeHitParry:
+		return procHitParry
+	case protocol.MeleeHitEvade:
+		return procHitEvade
+	case protocol.MeleeHitCrit:
+		return procHitCritical
+	case protocol.MeleeHitNormal, protocol.MeleeHitBlock, protocol.MeleeHitGlancing, protocol.MeleeHitCrushing:
+		return procHitNormal
+	}
+	return procHitNone
+}
+
+// rollAuraProcChance mirrors Aura::CalcProcChance (SpellAuras.cpp:2164-2190)
+// for generated entries: DBC ProcChance, the SPELLMOD_CHANCE_OF_SUCCESS
+// modifier, and the over-60 level reduction. Generated entries never carry
+// ProcsPerMinute, so the PPM arm is vacuous.
+func (s *session) rollAuraProcChance(entry spellProcEntry, auraSpell wotlk.Spell) bool {
+	chance := float64(entry.Chance)
+	if s != nil {
+		chance = float64(s.applySpellMod(auraSpell, spellModChanceOfSuccess, int32(chance)))
+		if entry.AttributesMask&procAttrReduceProc60 != 0 && s.player != nil && s.player.Level > 60 {
+			chance = math.Max(0, (1-float64(s.player.Level-60)/30)*chance)
+		}
+	}
+	return rand.Float64()*100 < chance
+}
+
+// procAuraTriggers evaluates real aura procs on a melee hit: the done-side
+// half of Unit::ProcDamageAndSpellFor's aura loop (Unit.cpp:10355-10380 via
+// TriggerAurasProcOnEvent). Each active player aura with a generated
+// spell_proc entry runs the CanSpellTriggerProcOnEvent gate against the melee
+// event; on pass, the chance roll fires the aura effect's trigger spell on
+// the victim (AuraEffect::HandleProcTriggerSpellAuraProc,
+// SpellAuraEffects.cpp:5654-5713).
+func (s *session) procAuraTriggers(ctx context.Context, target combatTarget, attType protocol.WeaponAttackType, outcome protocol.MeleeHitOutcome) {
+	if s == nil || s.player == nil || len(s.activeAuras) == 0 {
+		return
+	}
+	typeMask := procFlagDoneMeleeAutoAttack | procFlagDoneMainhandAttack
+	if attType == protocol.OffAttack {
+		typeMask = procFlagDoneMeleeAutoAttack | procFlagDoneOffhandAttack
+	}
+	ev := procEventInfo{
+		typeMask:       typeMask,
+		schoolMask:     spellSchoolMaskNormal,
+		spellTypeMask:  procSpellTypeNone,
+		spellPhaseMask: procSpellPhaseNone,
+		hitMask:        meleeOutcomeProcHitMask(outcome),
+	}
+	auras := make([]*activeAura, 0, len(s.activeAuras))
+	for _, aura := range s.activeAuras {
+		auras = append(auras, aura)
+	}
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		entry, auraSpell, ok := s.spellProcEntryFor(aura.SpellID)
+		if !ok {
+			continue
+		}
+		if entry.Charges > 0 && aura.RemainingCharges == 0 {
+			continue
+		}
+		if !canSpellTriggerProcOnEvent(entry, ev) {
+			continue
+		}
+		var triggerSpell uint32
+		var withValue bool
+		for i := range auraSpell.Effects {
+			eff := &auraSpell.Effects[i]
+			if eff.Effect == 0 || !isProcTriggerAuraType(eff.Aura) {
+				continue
+			}
+			if eff.Aura == spellAuraProcTriggerDamage {
+				continue
+			}
+			triggerSpell = eff.TriggerSpell
+			withValue = eff.Aura == spellAuraProcTriggerSpellWithValue
+			break
+		}
+		if triggerSpell == 0 {
+			continue
+		}
+		if !s.rollAuraProcChance(entry, auraSpell) {
+			continue
+		}
+		if entry.Charges > 0 {
+			aura.RemainingCharges--
+			if aura.RemainingCharges == 0 {
+				s.removeAura(aura.SpellID)
+			}
+		}
+		if withValue {
+			s.castSpellDirectWithBasePoint(ctx, triggerSpell, target.GUID, aura.Amount)
+		} else {
+			s.castSpellDirect(ctx, triggerSpell, target.GUID)
 		}
 	}
 }
