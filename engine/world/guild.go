@@ -26,12 +26,13 @@ type guildMemberInfo struct {
 }
 
 const (
-	guildEventJoined          uint8  = 3
-	guildEventLeft            uint8  = 4
-	guildEventSignedOn        uint8  = 12
-	guildEventSignedOff       uint8  = 13
-	guildEventBankMoneySet    uint8  = 17
-	guildRightViewOfficerNote uint32 = 0x00004000
+	guildEventJoined           uint8  = 3
+	guildEventLeft             uint8  = 4
+	guildEventSignedOn         uint8  = 12
+	guildEventSignedOff        uint8  = 13
+	guildEventBankTabPurchased uint8  = 15
+	guildEventBankMoneySet     uint8  = 17
+	guildRightViewOfficerNote  uint32 = 0x00004000
 )
 
 func guildEventPayload(eventType uint8, guid uint64, params ...string) []byte {
@@ -123,13 +124,15 @@ const (
 	guildBankLogMoveItem2     uint8 = 7
 	guildBankLogBuySlot       uint8 = 9
 
-	guildBankMaxTabs                 uint8 = 6
-	guildBankMaxSlots                uint8 = 98
-	guildBankMoneyLogsTab            uint8 = 100
-	guildEquipErrItemCantStack       uint8 = 19
-	guildEquipErrCantDropSoulbound   uint8 = 24
-	guildEquipErrBankFull            uint8 = 51
-	guildEquipErrItemDoesntGoIntoBag uint8 = 15
+	guildBankMaxTabs                 uint8  = 6
+	guildBankMaxSlots                uint8  = 98
+	guildBankMoneyLogsTab            uint8  = 100
+	guildBankRightFull               uint8  = 0xFF
+	guildWithdrawSlotUnlimited       uint32 = 0xFFFFFFFF
+	guildEquipErrItemCantStack       uint8  = 19
+	guildEquipErrCantDropSoulbound   uint8  = 24
+	guildEquipErrBankFull            uint8  = 51
+	guildEquipErrItemDoesntGoIntoBag uint8  = 15
 )
 
 // GUILD_BANK_MONEY_LIMIT mirroring TrinityCore Guild.h:60.
@@ -249,6 +252,26 @@ func (s *session) broadcastGuildMemberLogout() {
 	defer s.server.sessionsMu.RUnlock()
 	for target := range s.server.sessions {
 		if target == s || !target.worldReady.Load() || target.player == nil || target.player.GuildID != s.player.GuildID {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
+	}
+}
+
+// broadcastGuildBankTabPurchased mirrors Guild::HandleBuyBankTab
+// (Guild.cpp:1460): GE_BANK_TAB_PURCHASED is broadcast to every guild
+// member. The packet carries no GUID for this event type
+// (GuildPackets.cpp:130-140), so the payload is just the event byte.
+func (s *session) broadcastGuildBankTabPurchased(guildID uint32) {
+	if s == nil || s.server == nil {
+		return
+	}
+
+	event := guildEventPayload(guildEventBankTabPurchased, 0)
+	s.server.sessionsMu.RLock()
+	defer s.server.sessionsMu.RUnlock()
+	for target := range s.server.sessions {
+		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != guildID {
 			continue
 		}
 		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
@@ -1122,8 +1145,16 @@ func (s *session) handleGuildEventLogQuery(ctx context.Context, payload []byte) 
 // handleGuildPermissions processes MSG_GUILD_PERMISSIONS (0x3FD).
 // Reference: WorldSession::HandleGuildPermissions (GuildHandler.cpp:89).
 func (s *session) handleGuildPermissions(ctx context.Context, payload []byte) bool {
+	s.sendGuildPermissions(ctx)
+	return true
+}
+
+// sendGuildPermissions mirrors Guild::SendPermissions (Guild.cpp:1854). It
+// is also re-sent after a bank tab purchase (Guild.cpp:1461) to force the
+// client to update permissions.
+func (s *session) sendGuildPermissions(ctx context.Context) {
 	if !s.playerLoaded || s.player == nil {
-		return true
+		return
 	}
 	var rankID, rights, goldLimit int64
 	rankID = 0
@@ -1148,7 +1179,6 @@ func (s *session) handleGuildPermissions(ctx context.Context, payload []byte) bo
 		buf.WriteU32(1000)       // slot limit
 	}
 	_ = s.write(uint16(protocol.OpcodeMSG_GUILD_PERMISSIONS), buf.Bytes(), true)
-	return true
 }
 
 // handleInspectArenaTeams processes MSG_INSPECT_ARENA_TEAMS (0x377).
@@ -2368,6 +2398,15 @@ func (s *session) handleGuildBankBuyTab(ctx context.Context, payload []byte) boo
 	if int(tabID) >= len(guildBankTabPrices) {
 		return true
 	}
+	// Reference: Guild::HandleBuyBankTab (Guild.cpp:1434-1460): only the
+	// next unpurchased tab may be bought, and never past the tab cap.
+	var purchasedTabs int64
+	if err := cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM guild_bank_tab WHERE guildid = ?", guildID).Scan(&purchasedTabs); err != nil {
+		return true
+	}
+	if purchasedTabs >= int64(guildBankMaxTabs) || int64(tabID) != purchasedTabs {
+		return true
+	}
 	cost := guildBankTabPrices[tabID]
 	if s.player.Money < cost {
 		return true
@@ -2378,7 +2417,37 @@ func (s *session) handleGuildBankBuyTab(ctx context.Context, payload []byte) boo
 	_, _ = cdb.ExecContext(ctx, "INSERT OR IGNORE INTO guild_bank_tab (guildid, TabId, TabName, TabIcon, TabText) VALUES (?, ?, ?, 'INV_Misc_Bag_08', '')",
 		guildID, tabID, "Tab "+string(rune('1'+tabID)))
 
-	s.logGuildBankEvent(ctx, uint32(guildID), tabID, guildBankLogBuySlot, s.playerGUID, 0, 0, 0)
+	// Reference: Guild::_CreateNewBankTab (Guild.cpp:2404-2425) via
+	// RankInfo::CreateMissingTabsIfNeeded (Guild.cpp:276-300): every rank
+	// gains a rights row for the new tab — full/unlimited for the
+	// guildmaster rank, empty for all others.
+	var rankIDs []uint32
+	if rankRows, err := cdb.QueryContext(ctx, "SELECT rid FROM guild_rank WHERE guildid = ?", guildID); err == nil {
+		for rankRows.Next() {
+			var rid uint32
+			if err := rankRows.Scan(&rid); err == nil {
+				rankIDs = append(rankIDs, rid)
+			}
+		}
+		rankRows.Close()
+	}
+	for _, rid := range rankIDs {
+		rights := uint8(0)
+		slots := uint32(0)
+		if rid == 0 {
+			rights = guildBankRightFull
+			slots = guildWithdrawSlotUnlimited
+		}
+		_, _ = cdb.ExecContext(ctx, "INSERT OR IGNORE INTO guild_bank_right (guildid, TabId, rid, gbright, SlotPerDay) VALUES (?, ?, ?, ?, ?)",
+			guildID, tabID, rid, rights, slots)
+	}
+
+	// Reference: Guild::HandleBuyBankTab (Guild.cpp:1460-1461): broadcast
+	// GE_BANK_TAB_PURCHASED to the guild, then re-send permissions to the
+	// buyer to force the client to update them.
+	s.broadcastGuildBankTabPurchased(uint32(guildID))
+	s.sendGuildPermissions(ctx)
+
 	s.sendPlayerUpdate()
 	return s.sendGuildBankList(ctx, bankerGUID, tabID, true)
 }
