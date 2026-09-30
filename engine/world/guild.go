@@ -36,6 +36,8 @@ const (
 	grRightEmpty               uint32 = 0x00000040
 	guildRightSetMOTD          uint32 = 0x00001040
 	guildRightModifyGuildInfo  uint32 = 0x00010040
+	guildRightEPNote           uint32 = 0x00002040
+	guildRightEOffNote         uint32 = 0x00008040
 	guildRightViewOfficerNote  uint32 = 0x00004000
 	guildRightInvite           uint32 = 0x00000050
 	guildRightWithdrawRepair   uint32 = 0x00040000
@@ -1214,6 +1216,24 @@ func (s *session) handleGuildRank(ctx context.Context, payload []byte) bool {
 
 // handleGuildSetPublicNote processes CMSG_GUILD_SET_PUBLIC_NOTE (0x234).
 // Reference: WorldSession::HandleGuildSetPublicNoteOpcode (GuildHandler.cpp:146).
+// guildRankRightsMasked returns the setter's guild-rank rights masked with
+// right, via the exact Guild::_HasRankRight form (Guild.cpp:2388: denied
+// iff (rights & right) == GR_RIGHT_EMPTY). A missing rank row masks to
+// GR_RIGHT_EMPTY (denied), matching the GetMember-null arm of _HasRankRight
+// callers.
+func (s *session) guildRankRightsMasked(ctx context.Context, right uint32) uint32 {
+	var rights uint32
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return grRightEmpty
+	}
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT gr.rights FROM guild_member AS gm
+		JOIN guild_rank AS gr ON gr.guildid = gm.guildid AND gr.rid = gm.rank
+		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&rights); err != nil {
+		return grRightEmpty
+	}
+	return rights & right
+}
+
 func (s *session) handleGuildSetPublicNote(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 2 {
 		return true
@@ -1236,10 +1256,27 @@ func (s *session) handleGuildSetPublicNote(ctx context.Context, payload []byte) 
 		return true
 	}
 
-	_, _ = cdb.ExecContext(ctx, `UPDATE guild_member SET pnote = ?
-		WHERE guildid = ? AND guid = (SELECT guid FROM characters WHERE UPPER(name) = UPPER(?) LIMIT 1)`, note, guildID, targetName)
+	// Guild::HandleSetMemberNote (Guild.cpp:1398): the setter must hold
+	// GR_RIGHT_EPNOTE / GR_RIGHT_EOFFNOTE (Guild.h:92/94) — rights are
+	// checked before the member lookup, via the exact _HasRankRight form
+	// (Guild.cpp:2388); denial sends GUILD_COMMAND_PUBLIC_NOTE + PERMISSIONS
+	// (Guild.cpp:1401), even for officer notes.
+	// Guild.cpp:1401: public note = officer=false -> GR_RIGHT_EPNOTE.
+	if s.guildRankRightsMasked(ctx, guildRightEPNote) == grRightEmpty {
+		s.sendGuildCommandResult(guildCmdPublicNote, "", errGuildPermissions)
+		return true
+	}
 
-	return s.handleGuildRoster(ctx)
+	// Guild.cpp:1403: else if (Member* member = GetMember(name)) — the note
+	// is set only when the target is a guild member; C++ then re-sends the
+	// roster to the setter (HandleRoster). The rows-affected check mirrors
+	// the GetMember null gate.
+	res, _ := cdb.ExecContext(ctx, `UPDATE guild_member SET pnote = ?
+		WHERE guildid = ? AND guid = (SELECT guid FROM characters WHERE UPPER(name) = UPPER(?) LIMIT 1)`, note, guildID, targetName)
+	if n, _ := res.RowsAffected(); n > 0 {
+		return s.handleGuildRoster(ctx)
+	}
+	return true
 }
 
 // handleGuildSetOfficerNote processes CMSG_GUILD_SET_OFFICER_NOTE (0x235).
@@ -1266,10 +1303,19 @@ func (s *session) handleGuildSetOfficerNote(ctx context.Context, payload []byte)
 		return true
 	}
 
-	_, _ = cdb.ExecContext(ctx, `UPDATE guild_member SET offnote = ?
-		WHERE guildid = ? AND guid = (SELECT guid FROM characters WHERE UPPER(name) = UPPER(?) LIMIT 1)`, note, guildID, targetName)
+	// Guild.cpp:1398: officer=true -> GR_RIGHT_EOFFNOTE; denial carries
+	// GUILD_COMMAND_PUBLIC_NOTE (Guild.cpp:1401), not a separate command.
+	if s.guildRankRightsMasked(ctx, guildRightEOffNote) == grRightEmpty {
+		s.sendGuildCommandResult(guildCmdPublicNote, "", errGuildPermissions)
+		return true
+	}
 
-	return s.handleGuildRoster(ctx)
+	res, _ := cdb.ExecContext(ctx, `UPDATE guild_member SET offnote = ?
+		WHERE guildid = ? AND guid = (SELECT guid FROM characters WHERE UPPER(name) = UPPER(?) LIMIT 1)`, note, guildID, targetName)
+	if n, _ := res.RowsAffected(); n > 0 {
+		return s.handleGuildRoster(ctx)
+	}
+	return true
 }
 
 // handleGuildInfoText processes CMSG_GUILD_INFO_TEXT (0x2FC).
