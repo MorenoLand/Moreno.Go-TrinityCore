@@ -717,7 +717,9 @@ func (s *session) handleGuildAccept(ctx context.Context) bool {
 	}
 	s.server.sessionsMu.RUnlock()
 
-	return s.handleGuildRoster(ctx)
+	// Guild::HandleAcceptMember (Guild.cpp:1518) sends no roster — the
+	// client re-requests it via CMSG_GUILD_ROSTER.
+	return true
 }
 
 func (s *session) handleGuildDecline(ctx context.Context) bool {
@@ -1136,7 +1138,9 @@ func (s *session) handleGuildLeader(ctx context.Context, payload []byte) bool {
 	}
 	s.server.sessionsMu.RUnlock()
 
-	return s.handleGuildRoster(ctx)
+	// Guild::HandleSetLeader (Guild.cpp:1363) sends no roster — the client
+	// re-requests it via CMSG_GUILD_ROSTER.
+	return true
 }
 
 // handleGuildRemove processes CMSG_GUILD_REMOVE (0x08E).
@@ -1229,7 +1233,9 @@ func (s *session) handleGuildRemove(ctx context.Context, payload []byte) bool {
 	}
 	s.server.sessionsMu.RUnlock()
 
-	return s.handleGuildRoster(ctx)
+	// Guild::HandleRemoveMember (Guild.cpp:1564) sends no roster — the
+	// client re-requests it via CMSG_GUILD_ROSTER.
+	return true
 }
 
 // execGuildDisband deletes every row belonging to a guild, mirroring the
