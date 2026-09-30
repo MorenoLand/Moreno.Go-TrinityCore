@@ -1282,6 +1282,22 @@ func (s *session) handleGuildDisband(ctx context.Context) bool {
 
 	execGuildDisband(ctx, cdb, guildID)
 
+	// Guild::Disband (Guild.cpp:1149-1154): DeleteMember(trans, guid, true)
+	// runs for every member — an online member's player->SetInGuild(0) and
+	// player->SetRank(0) clear its guild state. Go only deleted the DB rows;
+	// clear every online member's session guild state here, after the
+	// GE_DISBANDED broadcast above so all members still receive it.
+	s.server.sessionsMu.RLock()
+	for target := range s.server.sessions {
+		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != uint32(guildID) {
+			continue
+		}
+		target.player.GuildID = 0
+		target.player.GuildRank = 0
+		target.sendPlayerUpdate()
+	}
+	s.server.sessionsMu.RUnlock()
+
 	s.debug("guild disbanded", "guild_id", guildID)
 	return true
 }
