@@ -33,6 +33,8 @@ const (
 	guildEventBankTabPurchased uint8  = 15
 	guildEventBankMoneySet     uint8  = 17
 	guildRightViewOfficerNote  uint32 = 0x00004000
+	guildRightWithdrawRepair   uint32 = 0x00040000
+	guildRightWithdrawGold     uint32 = 0x00080000
 )
 
 func guildEventPayload(eventType uint8, guid uint64, params ...string) []byte {
@@ -2717,40 +2719,52 @@ func (s *session) handleGuildBankLogQuery(ctx context.Context, payload []byte) b
 
 // handleGuildBankMoneyWithdrawn processes MSG_GUILD_BANK_MONEY_WITHDRAWN (0x3FE).
 // Reference: WorldSession::HandleGuildBankMoneyWithdrawn (GuildHandler.cpp:238).
+// handleGuildBankMoneyWithdrawn processes MSG_GUILD_BANK_MONEY_WITHDRAWN.
+// Reference: WorldSession::HandleGuildBankMoneyWithdrawn (GuildHandler.cpp:238)
+// via Guild::SendMoneyInfo -> Guild::_GetMemberRemainingMoney (Guild.cpp).
+// The guildmaster reports (int32)GUILD_WITHDRAW_MONEY_UNLIMITED (-1); other
+// ranks report their daily money allowance minus today's withdrawals only
+// when the rank holds GR_RIGHT_WITHDRAW_REPAIR or GR_RIGHT_WITHDRAW_GOLD,
+// and only when the (uint32 wraparound then int32) difference is > 0.
 func (s *session) handleGuildBankMoneyWithdrawn(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	remaining := int32(0)
-	cdb := s.server.CharactersStore.DB
-	if cdb != nil && s.player.GuildID != 0 {
-		var rank uint32
-		if err := cdb.QueryRowContext(ctx, "SELECT rank FROM guild_member WHERE guid = ? AND guildid = ?", s.playerGUID, s.player.GuildID).Scan(&rank); err == nil {
-			if rank == 0 {
-				var bankMoney int64
-				_ = cdb.QueryRowContext(ctx, "SELECT BankMoney FROM guild WHERE guildid = ?", s.player.GuildID).Scan(&bankMoney)
-				remaining = int32(bankMoney)
-			} else {
-				var bankMoneyPerDay uint32
-				_ = cdb.QueryRowContext(ctx, "SELECT BankMoneyPerDay FROM guild_rank WHERE guildid = ? AND rid = ?", s.player.GuildID, rank).Scan(&bankMoneyPerDay)
-				if bankMoneyPerDay == 0xFFFFFFFF {
-					var bankMoney int64
-					_ = cdb.QueryRowContext(ctx, "SELECT BankMoney FROM guild WHERE guildid = ?", s.player.GuildID).Scan(&bankMoney)
-					remaining = int32(bankMoney)
-				} else if bankMoneyPerDay > 0 {
-					var withdrawn uint32
-					_ = cdb.QueryRowContext(ctx, "SELECT money FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&withdrawn)
-					if bankMoneyPerDay > withdrawn {
-						remaining = int32(bankMoneyPerDay - withdrawn)
-					}
-				}
-			}
-		}
-	}
 	buf := protocol.NewBuffer(8)
-	buf.WriteI32(remaining)
+	buf.WriteI32(s.guildBankMoneyRemaining(ctx))
 	_ = s.write(uint16(protocol.OpcodeMSG_GUILD_BANK_MONEY_WITHDRAWN), buf.Bytes(), true)
 	return true
+}
+
+// guildBankMoneyRemaining mirrors Guild::_GetMemberRemainingMoney
+// (Guild.cpp): the guildmaster reports (int32)GUILD_WITHDRAW_MONEY_UNLIMITED
+// (-1); other ranks report their daily money allowance minus today's
+// withdrawals only when the rank holds GR_RIGHT_WITHDRAW_REPAIR or
+// GR_RIGHT_WITHDRAW_GOLD, and only when the (uint32 wraparound then int32)
+// difference is > 0 — otherwise 0.
+func (s *session) guildBankMoneyRemaining(ctx context.Context) int32 {
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil || s.player.GuildID == 0 {
+		return 0
+	}
+	var rank uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT rank FROM guild_member WHERE guid = ? AND guildid = ?", s.playerGUID, s.player.GuildID).Scan(&rank); err != nil {
+		return 0
+	}
+	if rank == 0 {
+		return -1
+	}
+	var rights uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT rights FROM guild_rank WHERE guildid = ? AND rid = ?", s.player.GuildID, rank).Scan(&rights); err != nil || rights&(guildRightWithdrawRepair|guildRightWithdrawGold) == 0 {
+		return 0
+	}
+	var perDay, withdrawn uint32
+	_ = cdb.QueryRowContext(ctx, "SELECT BankMoneyPerDay FROM guild_rank WHERE guildid = ? AND rid = ?", s.player.GuildID, rank).Scan(&perDay)
+	_ = cdb.QueryRowContext(ctx, "SELECT money FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&withdrawn)
+	if r := int32(perDay - withdrawn); r > 0 {
+		return r
+	}
+	return 0
 }
 
 // handleQueryGuildBankText processes MSG_QUERY_GUILD_BANK_TEXT (0x40A).
