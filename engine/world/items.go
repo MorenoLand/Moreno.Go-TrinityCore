@@ -353,6 +353,17 @@ func (s *session) isBagEmpty(ctx context.Context, bagItemGUID int64) bool {
 	return count == 0
 }
 
+func (s *session) itemIsBag(ctx context.Context, itemGUID uint64) bool {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	var slots int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(ContainerSlots, 0) FROM item_template WHERE entry = (SELECT itemEntry FROM item_instance WHERE guid = ?)`, itemGUID).Scan(&slots); err != nil || slots <= 0 {
+		return false
+	}
+	return true
+}
+
 func (s *session) swapInventoryCoordinates(ctx context.Context, itemA, bagA, slotA, itemB, bagB, slotB int64) {
 	db := s.server.CharactersStore.DB
 	if db == nil {
@@ -855,18 +866,22 @@ func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
 		}
 	}
 
-	// Bag move checks: moving or un-equipping a bag requires it to be empty
-	if srcBagKey == 0 && ((srcSlot >= invSlotBagStart && srcSlot < invSlotBagEnd) || (srcSlot >= 67 && srcSlot <= 73)) && srcItemGUID != 0 {
-		if !s.isBagEmpty(ctx, srcItemGUID) {
-			s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(srcItemGUID))
-			return true
-		}
+	// Bag-lift checks (Player::CanUnequipItem, Player.cpp:11626): a non-empty bag
+	// may leave its bag slot only when the C++ swap term holds — dst is a bag
+	// position, or the item at dst is an empty bag (Player.cpp:13170); the
+	// destination side is symmetric (Player.cpp:13207). The !IsBagPos(src) arm
+	// is folded away: these branches only run for bag positions.
+	srcIsBagPos := srcBagKey == 0 && ((srcSlot >= invSlotBagStart && srcSlot < invSlotBagEnd) || (srcSlot >= 67 && srcSlot <= 73))
+	dstIsBagPos := dstBagKey == 0 && ((dstSlot >= invSlotBagStart && dstSlot < invSlotBagEnd) || (dstSlot >= 67 && dstSlot <= 73))
+	dstIsEmptyBag := dstItemGUID != 0 && s.itemIsBag(ctx, uint64(dstItemGUID)) && s.isBagEmpty(ctx, dstItemGUID)
+	srcIsEmptyBag := srcItemGUID != 0 && s.itemIsBag(ctx, uint64(srcItemGUID)) && s.isBagEmpty(ctx, srcItemGUID)
+	if srcIsBagPos && srcItemGUID != 0 && !dstIsBagPos && !dstIsEmptyBag && s.itemIsNonemptyBag(ctx, uint64(srcItemGUID)) {
+		s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(srcItemGUID))
+		return true
 	}
-	if dstBagKey == 0 && ((dstSlot >= invSlotBagStart && dstSlot < invSlotBagEnd) || (dstSlot >= 67 && dstSlot <= 73)) && dstItemGUID != 0 {
-		if !s.isBagEmpty(ctx, dstItemGUID) {
-			s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(dstItemGUID))
-			return true
-		}
+	if dstIsBagPos && dstItemGUID != 0 && !srcIsBagPos && !srcIsEmptyBag && s.itemIsNonemptyBag(ctx, uint64(dstItemGUID)) {
+		s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(dstItemGUID))
+		return true
 	}
 
 	// Moving a non-empty bag into a specific slot that is not a bag position
