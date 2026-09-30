@@ -451,6 +451,11 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 				playerSess.player.UnitFlags |= unitFlagInCombat
 			}
 			playerSess.lastCombatTime = time.Now()
+			// Victim-side aura procs on the melee event (TrinityCore
+			// Unit.cpp:1194-1198 — ProcVictim = PROC_FLAG_TAKEN_MELEE_AUTO_ATTACK),
+			// before the victim-side damage application, mirroring C++ proc
+			// ordering; the trigger spell targets the attacker.
+			playerSess.procVictimAuraTriggers(ctx, s.playerGUID, outcome)
 			if damage > 0 {
 				if damage >= playerSess.player.Health {
 					if s.duelPartner == target.GUID && s.player.DuelTeam != 0 {

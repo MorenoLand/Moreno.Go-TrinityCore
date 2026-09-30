@@ -777,25 +777,45 @@ func (s *session) rollAuraProcChance(entry spellProcEntry, auraSpell wotlk.Spell
 
 // procAuraTriggers evaluates real aura procs on a melee hit: the done-side
 // half of Unit::ProcDamageAndSpellFor's aura loop (Unit.cpp:10355-10380 via
-// TriggerAurasProcOnEvent). Each active player aura with a generated
-// spell_proc entry runs the CanSpellTriggerProcOnEvent gate against the melee
-// event; on pass, the chance roll fires the aura effect's trigger spell on
-// the victim (AuraEffect::HandleProcTriggerSpellAuraProc,
-// SpellAuraEffects.cpp:5654-5713).
+// TriggerAurasProcOnEvent). The trigger spell targets the victim.
 func (s *session) procAuraTriggers(ctx context.Context, target combatTarget, attType protocol.WeaponAttackType, outcome protocol.MeleeHitOutcome) {
-	if s == nil || s.player == nil || len(s.activeAuras) == 0 {
-		return
-	}
 	typeMask := procFlagDoneMeleeAutoAttack | procFlagDoneMainhandAttack
 	if attType == protocol.OffAttack {
 		typeMask = procFlagDoneMeleeAutoAttack | procFlagDoneOffhandAttack
 	}
-	ev := procEventInfo{
+	s.procAuraTriggerLoop(ctx, target.GUID, procEventInfo{
 		typeMask:       typeMask,
 		schoolMask:     spellSchoolMaskNormal,
 		spellTypeMask:  procSpellTypeNone,
 		spellPhaseMask: procSpellPhaseNone,
 		hitMask:        meleeOutcomeProcHitMask(outcome),
+	})
+}
+
+// procVictimAuraTriggers evaluates real aura procs on the taken side of a
+// melee hit: the victim-side half of Unit::ProcDamageAndSpellFor's aura loop
+// (Unit.cpp:1194-1198 — ProcVictim = PROC_FLAG_TAKEN_MELEE_AUTO_ATTACK for
+// BASE_ATTACK and OFF_ATTACK, with no mainhand/offhand arm on the victim
+// side; Unit.cpp:10385-10448 TriggerAurasProcOnEvent). The trigger spell
+// targets the attacker.
+func (s *session) procVictimAuraTriggers(ctx context.Context, attackerGUID uint64, outcome protocol.MeleeHitOutcome) {
+	s.procAuraTriggerLoop(ctx, attackerGUID, procEventInfo{
+		typeMask:       procFlagTakenMeleeAutoAttack,
+		schoolMask:     spellSchoolMaskNormal,
+		spellTypeMask:  procSpellTypeNone,
+		spellPhaseMask: procSpellPhaseNone,
+		hitMask:        meleeOutcomeProcHitMask(outcome),
+	})
+}
+
+// procAuraTriggerLoop runs one aura-proc pass over the player's active auras:
+// each aura with a generated spell_proc entry runs the
+// CanSpellTriggerProcOnEvent gate against the event; on pass, the chance roll
+// fires the aura effect's trigger spell on triggerTargetGUID
+// (AuraEffect::HandleProcTriggerSpellAuraProc, SpellAuraEffects.cpp:5654-5713).
+func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uint64, ev procEventInfo) {
+	if s == nil || s.player == nil || len(s.activeAuras) == 0 {
+		return
 	}
 	auras := make([]*activeAura, 0, len(s.activeAuras))
 	for _, aura := range s.activeAuras {
@@ -842,9 +862,9 @@ func (s *session) procAuraTriggers(ctx context.Context, target combatTarget, att
 			}
 		}
 		if withValue {
-			s.castSpellDirectWithBasePoint(ctx, triggerSpell, target.GUID, aura.Amount)
+			s.castSpellDirectWithBasePoint(ctx, triggerSpell, triggerTargetGUID, aura.Amount)
 		} else {
-			s.castSpellDirect(ctx, triggerSpell, target.GUID)
+			s.castSpellDirect(ctx, triggerSpell, triggerTargetGUID)
 		}
 	}
 }
