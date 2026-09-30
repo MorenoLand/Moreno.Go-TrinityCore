@@ -31,6 +31,7 @@ const (
 	guildEventJoined           uint8  = 3
 	guildEventLeft             uint8  = 4
 	guildEventRemoved          uint8  = 5
+	guildEventDisbanded        uint8  = 8
 	guildEventRankUpdated      uint8  = 10
 	guildEventRankDeleted      uint8  = 11
 	guildEventSignedOn         uint8  = 12
@@ -751,10 +752,12 @@ func (s *session) handleGuildLeave(ctx context.Context) bool {
 		s.player.GuildID = 0
 		s.player.GuildRank = 0
 		s.sendPlayerUpdate()
-		eventBuf := protocol.NewBuffer(32)
-		eventBuf.WriteU8(8) // GE_DISBANDED
-		eventBuf.WriteU8(0)
-		_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), eventBuf.Bytes(), true)
+		// Guild::Disband (Guild.cpp:1146) _BroadcastEvent(GE_DISBANDED,
+		// ObjectGuid::Empty) reaches all online members before the member
+		// rows are deleted, so the lone leader receives it; no command
+		// result is sent on this path (Guild.cpp:1540). The packet bytes
+		// are unchanged ([8, 0], no guid appended per GuildPackets.cpp:130).
+		_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), guildEventPayload(guildEventDisbanded, 0), true)
 		s.debug("guild disbanded on leader leave", "guild_id", guildID)
 		return true
 	}
@@ -765,12 +768,25 @@ func (s *session) handleGuildLeave(ctx context.Context) bool {
 	// Guild::HandleLeaveMember (Guild.cpp:1552):
 	// _LogEvent(GUILD_EVENT_LOG_LEAVE_GUILD, player)
 	s.logGuildEvent(ctx, uint32(guildID), guildEventLogLeaveGuild, s.playerGUID, 0, 0)
-	eventBuf := protocol.NewBuffer(64)
-	eventBuf.WriteU8(4) // GE_LEFT
-	eventBuf.WriteU8(1)
-	eventBuf.WriteCString(s.player.Name)
-	eventBuf.WriteU64(s.playerGUID)
-	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), eventBuf.Bytes(), true)
+	// Guild::HandleLeaveMember (Guild.cpp:1553):
+	// _BroadcastEvent(GE_LEFT, player->GetGUID(), player->GetName()) reaches
+	// every online guild member via BroadcastPacket, not just the leaver;
+	// DeleteMember (Guild.cpp:2321-2328) erases the member and clears the
+	// online player's guild state BEFORE the broadcast, so the leaver never
+	// receives it — the leaver's already-cleared GuildID excludes it here,
+	// the same erase-before-broadcast shape. The packet bytes are unchanged
+	// ([4, 1, name, guid], guid appended for this type per
+	// GuildPackets.cpp:130). The leaver receives only the command result
+	// below, exactly as in C++.
+	event := guildEventPayload(guildEventLeft, s.playerGUID, s.player.Name)
+	s.server.sessionsMu.RLock()
+	for target := range s.server.sessions {
+		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != uint32(guildID) {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
+	}
+	s.server.sessionsMu.RUnlock()
 	// SendCommandResult(session, GUILD_COMMAND_QUIT, ERR_GUILD_COMMAND_SUCCESS, m_name)
 	s.sendGuildCommandResult(guildCmdQuit, guildName, errGuildCommandSuccess)
 	return true
