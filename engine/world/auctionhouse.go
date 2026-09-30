@@ -264,8 +264,21 @@ func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bo
 		args = append(args, quality)
 	}
 	if usable != 0 {
+		// C++ Player::CanUseItem (Player.cpp:11943-11951): after the level
+		// check the faction Flags2 term and the class/race mask terms gate
+		// usability. FlagsExtra is the item_template Flags2 column.
 		whereClauses = append(whereClauses, "it.RequiredLevel <= ?")
 		args = append(args, s.player.Level)
+		whereClauses = append(whereClauses, "(it.AllowableClass & ?) != 0")
+		args = append(args, playerCreateMask(s.player.Class))
+		whereClauses = append(whereClauses, "(it.AllowableRace & ?) != 0")
+		args = append(args, playerCreateMask(s.player.Race))
+		switch playerTeam(s.player.Race) {
+		case teamHorde:
+			whereClauses = append(whereClauses, "(it.FlagsExtra & 2) = 0")
+		case teamAlliance:
+			whereClauses = append(whereClauses, "(it.FlagsExtra & 1) = 0")
+		}
 	}
 
 	whereSQL := strings.Join(whereClauses, " AND ")
