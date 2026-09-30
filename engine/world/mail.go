@@ -503,7 +503,7 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 		// Reference: MailHandler.cpp:218-222 — a non-empty bag cannot be
 		// mailed (Item::IsNotEmptyBag, Item.cpp:298): answer (MAIL_SEND,
 		// MAIL_ERR_EQUIP_ERROR, EQUIP_ERR_CAN_ONLY_DO_WITH_EMPTY_BAGS = 31).
-		if s.mailAttachmentIsNonemptyBag(ctx, att.ItemGUID) {
+		if s.itemIsNonemptyBag(ctx, att.ItemGUID) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrEquipError, equipErrCanOnlyDoWithEmptyBags, 0, 0), true)
 			return true
 		}
@@ -898,10 +898,11 @@ func mailCreateTextItemCreator(messageType uint32, mailSender uint64) uint64 {
 // CANT_CARRY_MORE_OF_THIS (Player.cpp:10711). maxCount <= 0 is uncapped
 // (ItemTemplate.h:628); the ItemLimitCategory sub-term needs DBC data absent
 // from this server, so it is not modeled.
-// mailAttachmentIsNonemptyBag mirrors Item::IsNotEmptyBag (Item.cpp:298):
+// itemIsNonemptyBag mirrors Item::IsNotEmptyBag (Item.cpp:298):
 // true when the item is a bag (template ContainerSlots > 0) and holds any
-// items. MailHandler.cpp:218 refuses such items as mail attachments.
-func (s *session) mailAttachmentIsNonemptyBag(ctx context.Context, itemGUID uint64) bool {
+// items. MailHandler.cpp:218 refuses such items as mail attachments;
+// Player.cpp:10518 refuses moving them into non-bag positions.
+func (s *session) itemIsNonemptyBag(ctx context.Context, itemGUID uint64) bool {
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return false
 	}

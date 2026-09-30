@@ -869,6 +869,20 @@ func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
 		}
 	}
 
+	// Moving a non-empty bag into a specific slot that is not a bag position
+	// is rejected (Player::CanStoreItem_InSpecificSlot, Player.cpp:10518);
+	// the same code guards the in-bag path (Player::CanStoreItem_InBag),
+	// where the destination can never be a bag position. The full-swap case
+	// checks both move directions in C++ order (src->dst, then dst->src).
+	if srcItemGUID != 0 && !(dstBagKey == 0 && ((dstSlot >= invSlotBagStart && dstSlot < invSlotBagEnd) || (dstSlot >= 67 && dstSlot <= 73))) && s.itemIsNonemptyBag(ctx, uint64(srcItemGUID)) {
+		s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(srcItemGUID))
+		return true
+	}
+	if dstItemGUID != 0 && !(srcBagKey == 0 && ((srcSlot >= invSlotBagStart && srcSlot < invSlotBagEnd) || (srcSlot >= 67 && srcSlot <= 73))) && s.itemIsNonemptyBag(ctx, uint64(dstItemGUID)) {
+		s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(dstItemGUID))
+		return true
+	}
+
 	// Equipping a bag into bag slot (19..22 or 67..73)
 	if dstBagKey == 0 && ((dstSlot >= invSlotBagStart && dstSlot < invSlotBagEnd) || (dstSlot >= 67 && dstSlot <= 73)) && srcItemGUID != 0 {
 		var itemEntry int64
