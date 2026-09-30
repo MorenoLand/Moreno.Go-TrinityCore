@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -347,7 +348,7 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		mapID, instanceID = playerSess.player.Map, playerSess.player.InstanceID
 	}
 	s.motionMu.Lock()
-	defer s.motionMu.Unlock()
+	enteredCombat := false
 	guid := uint32(creatureGUID & 0x00FFFFFF)
 	entry := uint32((creatureGUID >> 24) & 0x00FFFFFF)
 	stdKey := creatureWorldGUID(guid, entry)
@@ -406,9 +407,11 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 	}
 	if motion != nil && motion.Health > 0 {
 		if isCreaturePassive(motion) {
+			s.motionMu.Unlock()
 			return
 		}
 		if motion.Evading {
+			s.motionMu.Unlock()
 			return
 		}
 		if motion.ThreatMgr == nil {
@@ -419,6 +422,7 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		}
 		motion.ThreatMgr.AddThreat(playerGUID, 100.0, true)
 		if !motion.InCombat {
+			enteredCombat = true
 			s.broadcastAIReactionInInstance(motion.Map, motion.InstanceID, creatureGUID, 2)
 			startPkt := buildAttackStart(creatureGUID, playerGUID)
 			if playerSess != nil {
@@ -437,6 +441,22 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
 		motion.InCombat = true
 		motion.Moving = false
+	}
+	// The Lua enter-combat hook must run outside the motion lock: hook
+	// handlers call back into creature methods that take it themselves.
+	// Reference: Eluna CREATURE_EVENT_ON_ENTER_COMBAT (event 1), fired when
+	// the creature freshly enters combat, mirroring the OnAggro above.
+	fireMotion := motion
+	firePlayerGUID := playerGUID
+	s.motionMu.Unlock()
+	if enteredCombat && fireMotion != nil {
+		var target any
+		if playerSess != nil {
+			target = playerSess.luaPlayer()
+		} else if found := s.findPlayer(firePlayerGUID); found != nil {
+			target = found
+		}
+		s.fireCreatureLuaEvent(ctx, fireMotion, scripting.CreatureEventOnEnterCombat, target)
 	}
 }
 
@@ -517,6 +537,7 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 		motion.Moving = false
 		return
 	}
+	wasInCombat := motion.InCombat
 	if motion.ThreatMgr != nil {
 		motion.ThreatMgr.ClearThreat()
 	}
@@ -556,6 +577,12 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 		motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
 		motion.Moving = false
 		motion.Evading = false
+	}
+	// Eluna CREATURE_EVENT_ON_LEAVE_COMBAT (event 2), fired when the
+	// creature leaves combat via evade, mirroring Creature::EnterEvadeMode.
+	// No motion lock is held on this path, so the hook runs inline.
+	if wasInCombat {
+		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnLeaveCombat)
 	}
 }
 

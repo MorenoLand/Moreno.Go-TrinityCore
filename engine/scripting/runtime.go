@@ -29,6 +29,30 @@ const (
 	MapEventOnPlayerEnter = 21
 )
 
+// Eluna CreatureEvents contract for RegisterCreatureEvent /
+// RegisterUniqueCreatureEvent. The world engine fires these through
+// TriggerCreatureEvent; scripts use the raw event numbers.
+const (
+	CreatureEventOnEnterCombat             = 1
+	CreatureEventOnLeaveCombat             = 2
+	CreatureEventOnTargetDied              = 3
+	CreatureEventOnDied                    = 4
+	CreatureEventOnSpawn                   = 5
+	CreatureEventOnReachWP                 = 6
+	CreatureEventOnAIUpdate                = 7
+	CreatureEventOnReceiveEmote            = 8
+	CreatureEventOnDamageTaken             = 9
+	CreatureEventOnPreCombat               = 10
+	CreatureEventOnMoveInLOS               = 11
+	CreatureEventOnSpellCast               = 12
+	CreatureEventOnSpellHit                = 13
+	CreatureEventOnSpellHitTarget          = 14
+	CreatureEventOnJustSummoned            = 15
+	CreatureEventOnSummonedCreatureDespawn = 16
+	CreatureEventOnSummonedCreatureDied    = 17
+	CreatureEventOnCharmed                 = 22
+)
+
 type Hook struct {
 	Kind  string
 	Event int
@@ -257,6 +281,18 @@ func (r *Runtime) Trigger(ctx context.Context, kind string, event int, args ...a
 
 func (r *Runtime) TriggerPlayerEvent(ctx context.Context, event int, args ...any) ([]any, error) {
 	return r.Trigger(ctx, "player", event, args...)
+}
+
+// TriggerCreatureEvent fires hooks registered with
+// RegisterCreatureEvent(entry, event, fn) for the given creature entry.
+func (r *Runtime) TriggerCreatureEvent(ctx context.Context, entry uint32, event int, args ...any) ([]any, error) {
+	return r.Trigger(ctx, "creature:"+strconv.FormatUint(uint64(entry), 10), event, args...)
+}
+
+// TriggerUniqueCreatureEvent fires hooks registered with
+// RegisterUniqueCreatureEvent(guid, instanceID, event, fn).
+func (r *Runtime) TriggerUniqueCreatureEvent(ctx context.Context, guid uint64, instanceID uint32, event int, args ...any) ([]any, error) {
+	return r.Trigger(ctx, "creature_unique:"+strconv.FormatUint(guid, 10)+":"+strconv.FormatUint(uint64(instanceID), 10), event, args...)
 }
 
 func (r *Runtime) TriggerMapEvent(ctx context.Context, mapID uint32, event int, args ...any) ([]any, error) {
