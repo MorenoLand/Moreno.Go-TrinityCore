@@ -3314,7 +3314,16 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 		return guildMoveOutcome{Source: source, Destination: destItem, SourceLoc: sourceLoc, DestLoc: *destination, Count: moveCount, Swapped: true}, true
 	}
 	if storeErr != 0 {
-		return rollback(storeErr, source.GUID)
+		// Guild::_DoItemsMove (Guild.cpp:2736) takes a sendError flag: the
+		// non-split merge attempt (Guild.cpp:2714) passes false, so a store
+		// failure is silent — no equip error packet. The split path
+		// (Guild.cpp:2709) and the swap fallback (Guild.cpp:2729) pass true
+		// and do emit the equip error.
+		if requestedCount != 0 && requestedCount != source.Count {
+			return rollback(storeErr, source.GUID)
+		}
+		_ = tx.Rollback()
+		return guildMoveOutcome{}, false
 	}
 	// Guild::_MoveItems step 3 (Guild.cpp:2683-2690) runs before step 4's
 	// withdraw-slot check: a cross-tab bank move needs
