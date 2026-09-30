@@ -2223,6 +2223,11 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	if ctx == nil || ctx.Err() != nil {
 		ctx = context.Background()
 	}
+	// DoDamageAndTriggers keys the damage arm off the incoming damage
+	// (if (spell->m_damage > 0) hasDamage = true, Spell.cpp:2519): damage
+	// later reduced to zero by absorb/resist stays on the damage arm; only
+	// a zero incoming damage takes the no-damage arm (Spell.cpp:2563-2579).
+	hadIncomingDamage := damage > 0
 	target, ok := s.getCombatTarget(ctx, targetGUID)
 	if !ok || target.Health == 0 {
 		return 0
@@ -2354,11 +2359,16 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 
 	// Real aura procs on the spell-hit event (TrinityCore
 	// Unit::ProcDamageAndSpellFor via Spell::TargetInfo::DoDamageAndTriggers,
-	// Spell.cpp:2427-2540): the event carries the casting spell and the
+	// Spell.cpp:2427-2579): the event carries the casting spell and the
 	// triggered state so the CanSpellTriggerProcOnEvent eventSpell/triggered
 	// gates engage; the triggered-cast suppression is the gate's own job,
-	// not a call-site skip.
-	s.procSpellHitAuraTriggers(ctx, targetGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit, absorbed)
+	// not a call-site skip. A zero incoming damage takes the no-damage arm
+	// (PROC_SPELL_TYPE_NO_DMG_HEAL, Spell.cpp:2563-2579), not the damage arm.
+	if hadIncomingDamage {
+		s.procSpellHitAuraTriggers(ctx, targetGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit, absorbed)
+	} else {
+		s.procSpellDamageNoDmgAuraTriggers(ctx, targetGUID, spellID, isHit, immune)
+	}
 
 	s.lastCombatTime = time.Now()
 	if s.player != nil && s.player.UnitFlags&unitFlagInCombat == 0 {

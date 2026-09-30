@@ -1007,6 +1007,90 @@ func (s *session) procSpellNoDmgHealTakenAuraTriggers(ctx context.Context, caste
 	})
 }
 
+// spellHasHealEffect reports whether any of the spell's effects is a heal
+// effect type (SPELL_EFFECT_HEAL/HEAL_PCT/HEAL_MAX_HEALTH/HEAL_MECHANICAL,
+// SpellInfo.cpp:3501-3505, 3571-3577). DoDamageAndTriggers keys hasHealing
+// off spell->m_healing; in Go the heal path (executeSpellHeal) owns the
+// trigger decision for any spell carrying heal effects, so the damage path
+// takes the no-damage arm only for spells without them.
+func spellHasHealEffect(spell wotlk.Spell) bool {
+	for i := range spell.Effects {
+		switch spell.Effects[i].Effect {
+		case 10, // SPELL_EFFECT_HEAL
+			spellEffectHealMaxHealth,
+			spellEffectHealMechanical,
+			spellEffectHealPct:
+			return true
+		}
+	}
+	return false
+}
+
+// procSpellDamageNoDmgAuraTriggers evaluates real aura procs on the done
+// side of a spell whose incoming damage is zero and which has no healing
+// effects: the no-damage arm of Unit::ProcDamageAndSpellFor via
+// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2563-2579, 2581-2586).
+// C++ keys the arm off the incoming damage (if (spell->m_damage > 0)
+// hasDamage = true, Spell.cpp:2519) — damage later reduced to zero by
+// absorb or resist stays on the damage arm — and keys the type mask off
+// the per-effect positivity fallback (Spell.cpp:2447-2457), not the damage
+// arm's assumed NEG. The event carries PROC_SPELL_TYPE_NO_DMG_HEAL
+// (SpellMgr.h:206) with PROC_SPELL_PHASE_HIT; the hit mask is
+// PROC_HIT_NORMAL for a landed hit — the arm builds a fresh
+// SpellNonMeleeDamage (HitInfo 0, absorb 0, no block), so createProcHitMask
+// (Unit.cpp:10179-10234) emits neither the crit bit (fresh HitInfo carries
+// no SPELL_HIT_TYPE_CRIT) nor the absorb/full-absorb bits — and the miss
+// and immune arms are shared with the damage path. A full resist is
+// unreachable here (calcMagicSpellResistance early-outs on zero damage),
+// as is absorption (the absorption guards require damage > 0). Spells with
+// heal effects fire nothing on the damage side: the heal path owns their
+// trigger decision, matching C++ where hasHealing suppresses the arm.
+// Spells with SPELL_ATTR3_CANT_TRIGGER_PROC never reach the loop
+// (Spell.cpp:2441). The event carries the casting spell and the triggered
+// state (Spell::IsTriggered, Spell.cpp:7501-7504) so the
+// CanSpellTriggerProcOnEvent mana-cost, spell-family, and triggered-cast
+// gates engage exactly. The trigger spell targets the victim.
+func (s *session) procSpellDamageNoDmgAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, isHit, immune bool) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		return
+	}
+	if spell.AttributesEx3&spellAttr3CantTriggerProc != 0 {
+		return
+	}
+	if spellHasHealEffect(spell) {
+		return
+	}
+	positive := true
+	for i := range spell.Effects {
+		if !spellNoDmgHealPositive(spell, i) {
+			positive = false
+			break
+		}
+	}
+	typeMask := spellNoDmgHealProcTypeMask(spell, positive)
+	if typeMask == procFlagNone {
+		return
+	}
+	schoolMask := spell.SchoolMask
+	if schoolMask == 0 {
+		schoolMask = 1
+	}
+	spellCopy := spell
+	s.procAuraTriggerLoop(ctx, targetGUID, procEventInfo{
+		typeMask:       typeMask,
+		schoolMask:     schoolMask,
+		spellTypeMask:  procSpellTypeNoDmgHeal,
+		spellPhaseMask: procSpellPhaseHit,
+		hitMask:        spellDamageProcHitMask(isHit, immune, false, false, false, 0),
+		triggered:      s.triggeredNoProcEvents > 0,
+		eventSpell:     &spellCopy,
+	})
+}
+
 // spellDamageProcHitMask mirrors the hit-mask derivation for spell damage
 // events (DamageInfo ctor from SpellNonMeleeDamage, Unit.cpp:183-192;
 // createProcHitMask, Unit.cpp:10179-10247): miss, immunity, and full resist
