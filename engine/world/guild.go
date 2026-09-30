@@ -1667,7 +1667,7 @@ func (s *session) handleGuildEventLogQuery(ctx context.Context, payload []byte) 
 }
 
 // handleGuildPermissions processes MSG_GUILD_PERMISSIONS (0x3FD).
-// Reference: WorldSession::HandleGuildPermissions (GuildHandler.cpp:89).
+// Reference: WorldSession::HandleGuildPermissionsQuery (GuildHandler.cpp:244).
 func (s *session) handleGuildPermissions(ctx context.Context, payload []byte) bool {
 	s.sendGuildPermissions(ctx)
 	return true
@@ -1680,27 +1680,40 @@ func (s *session) sendGuildPermissions(ctx context.Context) {
 	if !s.playerLoaded || s.player == nil {
 		return
 	}
-	var rankID, rights, goldLimit int64
-	rankID = 0
-	rights = 0xFFFFFFFF
-	goldLimit = 1000000
-
-	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		cdb := s.server.CharactersStore.DB
-		_ = cdb.QueryRowContext(ctx, `SELECT gr.rid, gr.rights, gr.BankMoneyPerDay
-			FROM guild_member gm
-			JOIN guild_rank gr ON gr.guildid = gm.guildid AND gr.rid = gm.rank
-			WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&rankID, &rights, &goldLimit)
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
 	}
+	cdb := s.server.CharactersStore.DB
+	// C++ GetMember miss -> silent return, no packet (Guild.cpp:1856).
+	var guildID, rankID, rights, goldLimit int64
+	if err := cdb.QueryRowContext(ctx, `SELECT gm.guildid, gr.rid, gr.rights, gr.BankMoneyPerDay
+		FROM guild_member gm
+		JOIN guild_rank gr ON gr.guildid = gm.guildid AND gr.rid = gm.rank
+		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &rankID, &rights, &goldLimit); err != nil {
+		return
+	}
+	var numTabs int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM guild_bank_tab WHERE guildid = ?", guildID).Scan(&numTabs)
 
-	buf := protocol.NewBuffer(16 + 6*8)
+	buf := protocol.NewBuffer(20 + int(guildBankMaxTabs)*8)
 	buf.WriteU32(uint32(rankID))
 	buf.WriteU32(uint32(rights))
 	buf.WriteU32(uint32(goldLimit))
-	buf.WriteU8(6) // 6 tabs
-	for i := 0; i < 6; i++ {
-		buf.WriteU32(0xFFFFFFFF) // full rights
-		buf.WriteU32(1000)       // slot limit
+	buf.WriteU8(uint8(numTabs))
+	for tab := uint8(0); tab < guildBankMaxTabs; tab++ {
+		// C++ _GetRankBankTabRights (Guild.cpp:2579): rights for all six tabs,
+		// missing row -> 0; C++ _GetMemberRemainingSlots (Guild.cpp:2586):
+		// guildmaster -> unlimited, no view right -> 0, else
+		// slotsPerDay - withdrawn clamped at 0 (unbought tabs give 0).
+		var tabFlags int64
+		_ = cdb.QueryRowContext(ctx, `SELECT gbright FROM guild_bank_right
+			WHERE guildid = ? AND TabId = ? AND rid = ? LIMIT 1`, guildID, tab, rankID).Scan(&tabFlags)
+		var withdrawItemLimit int32
+		if rankID == 0 || tab < uint8(numTabs) {
+			withdrawItemLimit = s.guildBankWithdrawalsRemaining(ctx, guildID, tab)
+		}
+		buf.WriteI32(int32(tabFlags))
+		buf.WriteI32(withdrawItemLimit)
 	}
 	_ = s.write(uint16(protocol.OpcodeMSG_GUILD_PERMISSIONS), buf.Bytes(), true)
 }
