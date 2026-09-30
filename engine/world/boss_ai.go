@@ -712,4 +712,11 @@ func init() {
 	// gates have no bridge (no UNIT_STATE model); the encounter-state
 	// bookkeeping is blocked on the instance-script model.
 	RegisterLuaBoss("boss_gehennas", 12259)
+	// Garr (Molten Core, fourth boss) — fight logic in
+	// lua_scripts/moltencore/boss_garr.lua. The UpdateAI casting
+	// gates have no bridge (no UNIT_STATE model); the encounter-state
+	// bookkeeping is blocked on the instance-script model; the
+	// npc_firesworn AI in the same C++ file is not registered (its
+	// creature entry is DB-side, unverifiable from the C++ tree).
+	RegisterLuaBoss("boss_garr", 12057)
 }
