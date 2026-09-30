@@ -168,6 +168,8 @@ const (
 	guildEquipErrCantDropSoulbound   uint8  = 24
 	guildEquipErrBankFull            uint8  = 51
 	guildEquipErrItemDoesntGoIntoBag uint8  = 15
+	bagFamilyMaskKeys                uint32 = 0x00000100 // BAG_FAMILY_MASK_KEYS (ItemTemplate.h:240)
+	bagFamilyMaskCurrencyTokens      uint32 = 0x00002000 // BAG_FAMILY_MASK_CURRENCY_TOKENS (ItemTemplate.h:254)
 )
 
 // Guild event log types mirroring TrinityCore Guild.h:200-205.
@@ -2801,10 +2803,17 @@ func (s *session) guildPlayerMoveSlots(ctx context.Context, q guildMoveQueryer, 
 		return nil, equipErrItemDoesntGoIntoBag
 	}
 	type container struct {
-		key, slots int64
-		family     uint32
+		key, first, slots int64
+		family            uint32
 	}
-	containers := []container{{key: 0, slots: int64(bagSlotEnd - bagSlotStart + 1)}}
+	containers := []container{
+		{key: 0, first: int64(bagSlotStart), slots: int64(bagSlotEnd - bagSlotStart + 1)},
+		// C++ auto-store searches the keyring and currencytoken ranges first
+		// (Player.cpp:10947); the family masks gate them to keys and currency
+		// tokens (CanStoreItem_InSpecificSlot, Player.cpp:10524-10529).
+		{key: 0, first: int64(invSlotKeyringStart), slots: int64(invSlotKeyringEnd - invSlotKeyringStart), family: bagFamilyMaskKeys},
+		{key: 0, first: int64(currencyTokenSlotStart), slots: int64(currencyTokenSlotEnd - currencyTokenSlotStart), family: bagFamilyMaskCurrencyTokens},
+	}
 	for _, bag := range s.getEquippedBags(ctx, playerGUID) {
 		var family int64
 		if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(t.BagFamily, 0) FROM item_instance ii
@@ -2815,8 +2824,8 @@ func (s *session) guildPlayerMoveSlots(ctx context.Context, q guildMoveQueryer, 
 	}
 	rows, err := q.QueryContext(ctx, `SELECT ci.bag, ci.slot, ci.item, ii.itemEntry, ii.count, ii.flags
 		FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item
-		WHERE ci.guid = ? AND ((ci.bag = 0 AND ci.slot >= ? AND ci.slot <= ?) OR ci.bag IN
-		(SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= 19 AND slot <= 22))`, playerGUID, bagSlotStart, bagSlotEnd, playerGUID)
+		WHERE ci.guid = ? AND ((ci.bag = 0 AND ci.slot >= ? AND ci.slot <= ?) OR (ci.bag = 0 AND ci.slot >= ? AND ci.slot < ?) OR (ci.bag = 0 AND ci.slot >= ? AND ci.slot < ?) OR ci.bag IN
+		(SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= 19 AND slot <= 22))`, playerGUID, bagSlotStart, bagSlotEnd, invSlotKeyringStart, invSlotKeyringEnd, currencyTokenSlotStart, currencyTokenSlotEnd, playerGUID)
 	if err != nil {
 		return nil, equipErrInvFull
 	}
@@ -2834,12 +2843,8 @@ func (s *session) guildPlayerMoveSlots(ctx context.Context, q guildMoveQueryer, 
 	}
 	rows.Close()
 	slots := make([]guildPlayerMoveSlot, 0, 16)
-	for index, bag := range containers {
-		first, limit := int64(0), bag.slots
-		if index == 0 {
-			first, limit = int64(bagSlotStart), int64(bagSlotEnd+1)
-		}
-		for slot := first; slot < limit; slot++ {
+	for _, bag := range containers {
+		for slot := bag.first; slot < bag.first+bag.slots; slot++ {
 			it, occupied := items[key{bag: bag.key, slot: slot}]
 			loc := guildMoveLocation{Bag: bag.key, Slot: uint8(slot)}
 			if !guildBagAccepts(uint32(itemFamily), bag.family) {
@@ -2895,15 +2900,23 @@ func (s *session) guildPlayerMovePlan(ctx context.Context, q guildMoveQueryer, p
 		}
 	}
 	// Player::CanStoreItem auto-store (NULL_BAG/NULL_SLOT, Player.cpp:10701)
-	// search order. guildPlayerMoveSlots already dropped bags whose family
-	// rejects the item, so a non-empty specialized group implies a bag-family
-	// item. Merge phase: backpack, then specialized bags, then plain bags
-	// (Player.cpp:10945-11024, minus the keyring/currency ranges). Free-slot
-	// phase: for family items specialized bags come before the backpack,
-	// otherwise the backpack comes first (Player.cpp:11027-11120).
-	var backpack, specialized, plain []guildPlayerMoveSlot
+	// search order. guildPlayerMoveSlots already dropped containers whose
+	// family rejects the item, so a non-empty keyring/currency/specialized
+	// group implies a bag-family item; the family gating makes the merge pass
+	// over the keyring/currency ranges equivalent to C++ (a same-entry merge
+	// target there can only be a key or currency token). Merge phase:
+	// keyring + currencytoken ranges, then backpack, then specialized bags,
+	// then plain bags (Player.cpp:10945-11024). Free-slot phase: for family
+	// items the dedicated range (keyring for keys, currencytoken for currency
+	// tokens) comes first, then specialized bags, then the backpack, then
+	// plain bags; otherwise the backpack comes first (Player.cpp:11027-11120).
+	var keyring, currency, backpack, specialized, plain []guildPlayerMoveSlot
 	for _, slot := range slots {
 		switch {
+		case slot.Location.Bag == 0 && slot.Location.Slot >= invSlotKeyringStart && slot.Location.Slot < invSlotKeyringEnd:
+			keyring = append(keyring, slot)
+		case slot.Location.Bag == 0 && slot.Location.Slot >= currencyTokenSlotStart && slot.Location.Slot < currencyTokenSlotEnd:
+			currency = append(currency, slot)
 		case slot.Location.Bag == 0:
 			backpack = append(backpack, slot)
 		case slot.Family != 0:
@@ -2913,11 +2926,15 @@ func (s *session) guildPlayerMovePlan(ctx context.Context, q guildMoveQueryer, p
 		}
 	}
 	mergeOrder := make([]guildPlayerMoveSlot, 0, len(slots))
+	mergeOrder = append(mergeOrder, keyring...)
+	mergeOrder = append(mergeOrder, currency...)
 	mergeOrder = append(mergeOrder, backpack...)
 	mergeOrder = append(mergeOrder, specialized...)
 	mergeOrder = append(mergeOrder, plain...)
 	freeOrder := make([]guildPlayerMoveSlot, 0, len(slots))
-	if len(specialized) > 0 {
+	if len(keyring)+len(currency)+len(specialized) > 0 {
+		freeOrder = append(freeOrder, keyring...)
+		freeOrder = append(freeOrder, currency...)
 		freeOrder = append(freeOrder, specialized...)
 	}
 	freeOrder = append(freeOrder, backpack...)
