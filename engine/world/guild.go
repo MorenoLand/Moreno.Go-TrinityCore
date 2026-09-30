@@ -31,6 +31,7 @@ const (
 	guildEventJoined           uint8  = 3
 	guildEventLeft             uint8  = 4
 	guildEventRemoved          uint8  = 5
+	guildEventLeaderChanged    uint8  = 7
 	guildEventDisbanded        uint8  = 8
 	guildEventRankUpdated      uint8  = 10
 	guildEventRankDeleted      uint8  = 11
@@ -197,7 +198,7 @@ func (s *session) sendGuildLoginInfo(ctx context.Context) {
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT motd FROM guild WHERE guildid = ? LIMIT 1", s.player.GuildID).Scan(&motd); err != nil {
 		return
 	}
-	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), guildEventPayload(2, 0, motd), true)
+	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), guildEventPayload(guildEventMotd, 0, motd), true)
 	s.sendGuildBankTabsInfo(ctx)
 	_ = s.handleGuildRoster(ctx)
 	s.broadcastGuildMemberLogin()
@@ -700,13 +701,21 @@ func (s *session) handleGuildAccept(ctx context.Context) bool {
 	// _LogEvent(GUILD_EVENT_LOG_JOIN_GUILD, lowguid)
 	s.logGuildEvent(ctx, guildID, guildEventLogJoinGuild, s.playerGUID, 0, 0)
 
-	// Broadcast join event
-	eventBuf := protocol.NewBuffer(64)
-	eventBuf.WriteU8(3) // GE_JOINED
-	eventBuf.WriteU8(1) // Param count
-	eventBuf.WriteCString(s.player.Name)
-	eventBuf.WriteU64(s.playerGUID)
-	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), eventBuf.Bytes(), true)
+	// Guild::AddMember (Guild.cpp:2269): _BroadcastEvent(GE_JOINED, guid, name)
+	// reaches every online guild member via BroadcastPacket, including the
+	// newly added member — the acceptor's GuildID was set above, so the
+	// sessions loop below includes it. The packet bytes are unchanged
+	// ([3, 1, name, guid], guid appended for this type per
+	// GuildPackets.cpp:130).
+	event := guildEventPayload(guildEventJoined, s.playerGUID, s.player.Name)
+	s.server.sessionsMu.RLock()
+	for target := range s.server.sessions {
+		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != uint32(guildID) {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
+	}
+	s.server.sessionsMu.RUnlock()
 
 	return s.handleGuildRoster(ctx)
 }
@@ -1086,14 +1095,22 @@ func (s *session) handleGuildLeader(ctx context.Context, payload []byte) bool {
 	err = cdb.QueryRowContext(ctx, `SELECT g.guildid, g.leaderguid FROM guild g
 		JOIN guild_member gm ON gm.guildid = g.guildid
 		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &leaderGUID)
-	if err != nil || guildID == 0 || uint64(leaderGUID) != s.playerGUID {
+	if err != nil || guildID == 0 {
+		return true
+	}
+	// Guild::HandleSetLeader (Guild.cpp:1367): only the leader can assign a
+	// new leader; a guilded non-leader gets GUILD_COMMAND_CHANGE_LEADER +
+	// ERR_GUILD_PERMISSIONS instead of the silent return the Go arm had.
+	if uint64(leaderGUID) != s.playerGUID {
+		s.sendGuildCommandResult(guildCmdChangeLeader, "", errGuildPermissions)
 		return true
 	}
 
 	var newLeaderGUID int64
-	err = cdb.QueryRowContext(ctx, `SELECT gm.guid FROM guild_member gm
+	var newLeaderName string
+	err = cdb.QueryRowContext(ctx, `SELECT gm.guid, c.name FROM guild_member gm
 		JOIN characters c ON c.guid = gm.guid
-		WHERE gm.guildid = ? AND UPPER(c.name) = UPPER(?) LIMIT 1`, guildID, newMasterName).Scan(&newLeaderGUID)
+		WHERE gm.guildid = ? AND UPPER(c.name) = UPPER(?) LIMIT 1`, guildID, newMasterName).Scan(&newLeaderGUID, &newLeaderName)
 	if err != nil || newLeaderGUID == 0 || uint64(newLeaderGUID) == s.playerGUID {
 		return true
 	}
@@ -1102,12 +1119,22 @@ func (s *session) handleGuildLeader(ctx context.Context, payload []byte) bool {
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member SET rank = 1 WHERE guid = ? AND guildid = ?", s.playerGUID, guildID)
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member SET rank = 0 WHERE guid = ? AND guildid = ?", newLeaderGUID, guildID)
 
-	eventBuf := protocol.NewBuffer(128)
-	eventBuf.WriteU8(7) // GE_LEADER_CHANGED
-	eventBuf.WriteU8(2)
-	eventBuf.WriteCString(s.player.Name)
-	eventBuf.WriteCString(newMasterName)
-	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), eventBuf.Bytes(), true)
+	// Guild::HandleSetLeader (Guild.cpp:1379):
+	// _BroadcastEvent(GE_LEADER_CHANGED, ObjectGuid::Empty, player->GetName(),
+	// pNewLeader->GetName()) reaches every online guild member via
+	// BroadcastPacket, not just the actor; the packet bytes are unchanged
+	// ([7, 2, oldName, newName], no guid for this type per
+	// GuildPackets.cpp:130). The new leader's DB-stored name is used, as in
+	// C++ (GetMember's actual name, not the client packet's).
+	event := guildEventPayload(guildEventLeaderChanged, 0, s.player.Name, newLeaderName)
+	s.server.sessionsMu.RLock()
+	for target := range s.server.sessions {
+		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != uint32(guildID) {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
+	}
+	s.server.sessionsMu.RUnlock()
 
 	return s.handleGuildRoster(ctx)
 }
@@ -1237,12 +1264,24 @@ func (s *session) handleGuildDisband(ctx context.Context) bool {
 		return true
 	}
 
+	// Guild::Disband (Guild.cpp:1146): _BroadcastEvent(GE_DISBANDED,
+	// ObjectGuid::Empty) reaches all online members via BroadcastPacket
+	// BEFORE the member rows are deleted — the lone-leader arm in
+	// handleGuildLeave is the only disband path where the actor must be
+	// excluded. The packet bytes are unchanged ([8, 0], no guid for this
+	// type per GuildPackets.cpp:130).
+	event := guildEventPayload(guildEventDisbanded, 0)
+	s.server.sessionsMu.RLock()
+	for target := range s.server.sessions {
+		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != uint32(guildID) {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
+	}
+	s.server.sessionsMu.RUnlock()
+
 	execGuildDisband(ctx, cdb, guildID)
 
-	eventBuf := protocol.NewBuffer(32)
-	eventBuf.WriteU8(8) // GE_DISBANDED
-	eventBuf.WriteU8(0)
-	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), eventBuf.Bytes(), true)
 	s.debug("guild disbanded", "guild_id", guildID)
 	return true
 }
