@@ -137,10 +137,13 @@ const (
 	spellAuraTrackStealthed                       = 151
 	spellAuraConvertRune                          = 249
 	spellAuraDamagePercentDone                    = 79
-	spellAuraModDamagePercentTaken                = 87  // SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN (SpellAuraDefines.h:167)
-	spellAuraModMechanicDamageTakenPercent        = 255 // SPELL_AURA_MOD_MECHANIC_DAMAGE_TAKEN_PERCENT (SpellAuraDefines.h:335)
-	spellAuraModIgnoreTargetResist                = 269 // SPELL_AURA_MOD_IGNORE_TARGET_RESIST (SpellAuraDefines.h:349)
-	spellAuraModDamageFromCaster                  = 271 // SPELL_AURA_MOD_DAMAGE_FROM_CASTER (SpellAuraDefines.h:351)
+	spellAuraModDamagePercentTaken                = 87   // SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN (SpellAuraDefines.h:167)
+	spellAuraModMechanicDamageTakenPercent        = 255  // SPELL_AURA_MOD_MECHANIC_DAMAGE_TAKEN_PERCENT (SpellAuraDefines.h:335)
+	spellAuraModIgnoreTargetResist                = 269  // SPELL_AURA_MOD_IGNORE_TARGET_RESIST (SpellAuraDefines.h:349)
+	spellAuraModDamageFromCaster                  = 271  // SPELL_AURA_MOD_DAMAGE_FROM_CASTER (SpellAuraDefines.h:351)
+	spellAuraDummy                                = 4    // SPELL_AURA_DUMMY (SpellAuraDefines.h:84)
+	spellIconCheatDeath                           = 2109 // Cheat Death dummy aura (Unit.cpp:7078)
+	spellSchoolMaskNormal                         = 1    // SPELL_SCHOOL_MASK_NORMAL (SharedDefines.h:324)
 	spellAuraAttackPowerPercent                   = 166
 	spellAuraRangedAttackPowerPercent             = 167
 	spellAuraCastingSpeedNotStack                 = 65
@@ -2131,10 +2134,9 @@ func damageFromCasterMultiplier(victim, caster *session, spell wotlk.Spell) floa
 // MOD_DAMAGE_PERCENT_TAKEN term read the victim's auras; the fixed-damage
 // exclusion (SPELL_ATTR4_FIXED_DAMAGE) skips all but the mechanic term; the
 // Sanctified Wrath bypass eats the victim's reduction through the caster's
-// MOD_IGNORE_TARGET_RESIST auras. Terms with no Go model: the Cheat Death
-// dummy-aura arm (SpellIconID 2109, needs victim melee-crit-damage
-// reduction) and the npcbot BotMgr::GetBotDamageTakenMod arm. A nil victim
-// session fails open, preserving prior behavior.
+// MOD_IGNORE_TARGET_RESIST auras. Terms with no Go model: the npcbot
+// BotMgr::GetBotDamageTakenMod arm. A nil victim session fails open,
+// preserving prior behavior.
 func spellDamageBonusTaken(damage uint32, spell wotlk.Spell, schoolMask uint32, victim, caster *session) uint32 {
 	if victim == nil {
 		return damage
@@ -2142,6 +2144,41 @@ func spellDamageBonusTaken(damage uint32, spell wotlk.Spell, schoolMask uint32, 
 	takenTotalMod := float32(1)
 	if mechanicMask := spellMechanicMask(spell); mechanicMask != 0 {
 		takenTotalMod *= ResolveAuraPercentMultiplier(victim.auraTypeModifiersByMiscMask(spellAuraModMechanicDamageTakenPercent, mechanicMask))
+	}
+	// Cheat Death dummy-aura arm (Unit.cpp:7075-7089): a SPELL_AURA_DUMMY
+	// effect of a spell carrying SpellIconID 2109 whose effect MiscValue
+	// covers the normal school reduces damage taken by AddPct (Util.h:72)
+	// of the less-negative of -GetMeleeCritDamageReduction(400) and the
+	// effect's amount. GetMeleeCritDamageReduction (Unit.h:970) is
+	// CalculatePct(400, min(CR_CRIT_TAKEN_MELEE bonus*2.2, 33.0)) — the
+	// same capped percent getResilienceStats returns as critDamageReduction,
+	// and CalculatePct(400, pct) truncates to 4*pct as a whole number.
+	if victim.player != nil && victim.server != nil && victim.server.Data != nil {
+		_, critDmgRed, _ := getResilienceStats(victim.player.Level, victim.player.CombatRatings[CombatRatingCritTakenMelee])
+		mod := -float32(uint32(4 * critDmgRed))
+		for _, aura := range victim.loadedAuras() {
+			if aura == nil || aura.Stopped {
+				continue
+			}
+			cheatSpell, found, err := victim.server.Data.Spell(aura.SpellID)
+			if err != nil || !found || cheatSpell.SpellIconID != spellIconCheatDeath {
+				continue
+			}
+			for index, effect := range cheatSpell.Effects {
+				if effect.Aura != spellAuraDummy || aura.EffectMask&(1<<uint(index)) == 0 || effect.MiscValue&spellSchoolMaskNormal == 0 {
+					continue
+				}
+				amount := aura.Amounts[index]
+				if amount == 0 {
+					amount = int32(aura.Amount)
+				}
+				pct := mod
+				if a := float32(amount); a > pct {
+					pct = a
+				}
+				takenTotalMod += takenTotalMod * pct / 100
+			}
+		}
 	}
 	if spell.AttributesEx4&spellAttr4FixedDamage == 0 {
 		takenTotalMod *= ResolveAuraPercentMultiplier(victim.auraTypeModifiersByMiscMask(spellAuraModDamagePercentTaken, schoolMask))
