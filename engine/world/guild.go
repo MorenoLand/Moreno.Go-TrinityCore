@@ -32,6 +32,9 @@ const (
 	guildEventSignedOff        uint8  = 13
 	guildEventBankTabPurchased uint8  = 15
 	guildEventBankMoneySet     uint8  = 17
+	guildEventMotd             uint8  = 2
+	grRightEmpty               uint32 = 0x00000040
+	guildRightSetMOTD          uint32 = 0x00001040
 	guildRightViewOfficerNote  uint32 = 0x00004000
 	guildRightInvite           uint32 = 0x00000050
 	guildRightWithdrawRepair   uint32 = 0x00040000
@@ -603,11 +606,13 @@ func (s *session) handleGuildInvite(ctx context.Context, payload []byte) bool {
 		s.sendGuildCommandResult(guildCmdInvite, targetName, errAlreadyInvitedToGuildS)
 		return true
 	}
-	// Inviting player must have rights to invite (Guild.cpp:1493).
+	// Inviting player must have rights to invite (Guild.cpp:1493), via the
+	// exact _HasRankRight form (Guild.cpp:2388): denied iff the masked
+	// rights equal GR_RIGHT_EMPTY.
 	var rights uint32
 	if err := cdb.QueryRowContext(ctx, `SELECT gr.rights FROM guild_member AS gm
 		JOIN guild_rank AS gr ON gr.guildid = gm.guildid AND gr.rid = gm.rank
-		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&rights); err != nil || rights&guildRightInvite == 0 {
+		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&rights); err != nil || rights&guildRightInvite == grRightEmpty {
 		s.sendGuildCommandResult(guildCmdInvite, "", errGuildPermissions)
 		return true
 	}
@@ -769,17 +774,38 @@ func (s *session) handleGuildMotd(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	var guildID int64
-	err = cdb.QueryRowContext(ctx, "SELECT guildid FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&guildID)
-	if err != nil || guildID == 0 {
+	var curMotd string
+	var rights uint32
+	if err := cdb.QueryRowContext(ctx, `SELECT gm.guildid, g.motd, gr.rights FROM guild_member AS gm
+		JOIN guild AS g ON g.guildid = gm.guildid
+		JOIN guild_rank AS gr ON gr.guildid = gm.guildid AND gr.rid = gm.rank
+		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &curMotd, &rights); err != nil || guildID == 0 {
+		return true
+	}
+	// Guild::HandleSetMOTD (Guild.cpp:1301): an unchanged motd is a silent
+	// no-op — no DB write, no broadcast.
+	if curMotd == motd {
+		return true
+	}
+	// The setter must hold GR_RIGHT_SETMOTD (Guild.cpp:1307), via the exact
+	// _HasRankRight form (Guild.cpp:2388); denial sends EDIT_MOTD + PERMISSIONS.
+	if rights&guildRightSetMOTD == grRightEmpty {
+		s.sendGuildCommandResult(guildCmdEditMotd, "", errGuildPermissions)
 		return true
 	}
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET motd = ? WHERE guildid = ?", motd, guildID)
 
-	eventBuf := protocol.NewBuffer(128)
-	eventBuf.WriteU8(5) // GE_MOTD
-	eventBuf.WriteU8(1)
-	eventBuf.WriteCString(motd)
-	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), eventBuf.Bytes(), true)
+	// _BroadcastEvent(GE_MOTD, ObjectGuid::Empty, motd) (Guild.cpp:1320):
+	// type 2 with one string param, reaching every online guild member.
+	event := guildEventPayload(guildEventMotd, 0, motd)
+	s.server.sessionsMu.RLock()
+	for target := range s.server.sessions {
+		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != uint32(guildID) {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
+	}
+	s.server.sessionsMu.RUnlock()
 	return true
 }
 
