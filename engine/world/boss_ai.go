@@ -628,4 +628,9 @@ func init() {
 	// brazier summon has no C++ CreatureScript in boss_renataki.cpp
 	// and is not registered.
 	RegisterLuaBoss("boss_renataki", 15084)
+	// High Priest Thekal (Zul'Gurub, main boss) — fight logic in
+	// lua_scripts/zulgurub/boss_thekal.lua. The npc_zealot_lorkhan and
+	// npc_zealot_zath add AIs from the same C++ file register their own
+	// creature events in the Lua file and are not bosses.
+	RegisterLuaBoss("boss_thekal", 14509)
 }
