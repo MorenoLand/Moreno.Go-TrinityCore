@@ -2499,6 +2499,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	if s.triggeredNoProcEvents == 0 && s.spellHitMayFireItemProcs(spellID) &&
 		spellHitCanTriggerItemProcs(isHit, immune, fullyResisted, absorbed) {
 		s.procSpellCastAndHitEffects(ctx, target, spellID)
+		s.procWeaponEnchantProcsFromSpellHit(ctx, target, !(damage >= target.Health && target.Health > 0))
 	}
 
 	// Real aura procs on the spell-hit event (TrinityCore
@@ -3262,6 +3263,8 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 		// class and fail the gate, matching C++.
 		if s.triggeredNoProcEvents == 0 && s.spellHitMayFireItemProcs(spellID) {
 			s.procSpellCastAndHitEffects(ctx, combatTarget{GUID: targetGUID}, spellID)
+			alive := targetSess != nil && targetSess.player != nil && targetSess.player.Health > 0
+			s.procWeaponEnchantProcsFromSpellHit(ctx, combatTarget{GUID: targetGUID}, alive)
 		}
 	}
 }

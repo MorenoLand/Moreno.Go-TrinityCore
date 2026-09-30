@@ -155,6 +155,9 @@ type Server struct {
 	spellCustomAttrMu         sync.RWMutex
 	spellCustomAttrLoaded     bool
 	spellCustomAttr           map[uint32]uint32
+	enchantProcAttrMu         sync.RWMutex
+	enchantProcAttrLoaded     bool
+	enchantProcAttrs          map[uint32]uint32
 	itemTemplateMu            sync.RWMutex
 	itemTemplates             map[uint32]itemTemplateClassInfo
 	terrainMu                 sync.Mutex

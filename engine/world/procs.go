@@ -26,6 +26,62 @@ const (
 	EnchantIDWoundPois   = 3734
 )
 
+// enchantProcAttrWhiteHit is ENCHANT_PROC_ATTR_WHITE_HIT (SpellMgr.h:270):
+// the enchant shall only proc off white hits, never from abilities/spells.
+const enchantProcAttrWhiteHit uint32 = 0x00000001
+
+// getEnchantProcAttr returns the spell_enchant_proc_data AttributesMask for an
+// enchant ID, mirroring SpellMgr::LoadSpellEnchantProcData (SpellMgr.cpp:2080).
+// A missing table or query error degrades to an empty map, matching C++'s
+// load-empty behavior; ok is false when no row exists.
+func (s *Server) getEnchantProcAttr(enchantID uint32) (uint32, bool) {
+	if s == nil {
+		return 0, false
+	}
+	s.enchantProcAttrMu.RLock()
+	if s.enchantProcAttrLoaded {
+		attr, ok := s.enchantProcAttrs[enchantID]
+		s.enchantProcAttrMu.RUnlock()
+		return attr, ok
+	}
+	s.enchantProcAttrMu.RUnlock()
+
+	s.enchantProcAttrMu.Lock()
+	defer s.enchantProcAttrMu.Unlock()
+	if s.enchantProcAttrLoaded {
+		attr, ok := s.enchantProcAttrs[enchantID]
+		return attr, ok
+	}
+	s.enchantProcAttrs = make(map[uint32]uint32)
+	s.enchantProcAttrLoaded = true
+	if s.WorldStore != nil && s.WorldStore.DB != nil {
+		rows, err := s.WorldStore.DB.Query(`SELECT EnchantID, AttributesMask FROM spell_enchant_proc_data`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var entry, attr uint32
+				if err := rows.Scan(&entry, &attr); err == nil && entry > 0 {
+					s.enchantProcAttrs[entry] = attr
+				}
+			}
+		}
+	}
+	attr, ok := s.enchantProcAttrs[enchantID]
+	return attr, ok
+}
+
+// enchantProcWhiteHitOnly reports whether the enchant's spell_enchant_proc_data
+// row flags ENCHANT_PROC_ATTR_WHITE_HIT (SpellMgr.h:270). C++ applies the arm
+// only when a row exists (Player.cpp:8180: entry && ...), so a missing row
+// fails open.
+func (s *session) enchantProcWhiteHitOnly(enchantID uint32) bool {
+	if s == nil || s.server == nil {
+		return false
+	}
+	attr, ok := s.server.getEnchantProcAttr(enchantID)
+	return ok && attr&enchantProcAttrWhiteHit != 0
+}
+
 // Proc spell IDs triggered by weapon enchantments, trinkets, and talents
 const (
 	ProcSpellFieryWeapon = 13897 // Fiery Weapon damage
@@ -300,7 +356,13 @@ func (s *session) procWeaponEnchantments(ctx context.Context, target combatTarge
 	if encID == 0 {
 		return
 	}
+	s.fireWeaponEnchantProc(ctx, target, encID, attTime)
+}
 
+// fireWeaponEnchantProc evaluates the PPM/chance roll for one weapon enchant ID
+// and casts the proc spell. Shared by the white-hit path and the spell-driven
+// path (which pre-applies the ENCHANT_PROC_ATTR_WHITE_HIT gate).
+func (s *session) fireWeaponEnchantProc(ctx context.Context, target combatTarget, encID uint32, attTime uint32) {
 	switch encID {
 	case EnchantIDBerserking:
 		if RollPPMChance(1.0, attTime) {
@@ -344,6 +406,29 @@ func (s *session) procWeaponEnchantments(ctx context.Context, target combatTarge
 			s.castSpellDirect(ctx, ProcSpellCrippling, target.GUID)
 		}
 	}
+}
+
+// procWeaponEnchantProcsFromSpellHit mirrors the spell-driven arm of
+// Player::CastItemCombatSpell (Spell.cpp:2588-2596): melee/ranged
+// damage-class spell hits evaluate weapon combat-spell enchants too, but an
+// enchant flagged ENCHANT_PROC_ATTR_WHITE_HIT in spell_enchant_proc_data
+// never fires from a spell hit (Player.cpp:8180). Go's spell pipeline carries
+// no per-spell attack type (C++ Spell::m_attackType), so the mainhand slot
+// drives the lookup, matching the common BASE_ATTACK case; offhand-driven
+// instant strikes (Shiv) keep their white-hit-path procs only.
+func (s *session) procWeaponEnchantProcsFromSpellHit(ctx context.Context, target combatTarget, targetAlive bool) {
+	if s == nil || s.player == nil || !targetAlive || target.GUID == 0 || target.GUID == s.playerGUID {
+		return
+	}
+	attTime := s.player.AttackTime
+	if attTime == 0 {
+		attTime = 2000
+	}
+	encID := s.getEquipmentEnchant(uint8(15)) // equipSlotMainHand
+	if encID == 0 || s.enchantProcWhiteHitOnly(encID) {
+		return
+	}
+	s.fireWeaponEnchantProc(ctx, target, encID, attTime)
 }
 
 // procItemAndTrinketEffects evaluates and triggers equipped trinkets and rings on melee/ranged attacks.
