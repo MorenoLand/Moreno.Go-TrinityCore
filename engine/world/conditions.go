@@ -274,7 +274,7 @@ func (s *session) evalQuestCondition(ctx context.Context, row conditionRow) (boo
 
 func isImplementedConditionType(condType int64) bool {
 	switch condType {
-	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 42, 43, 44, 45, 46, 47, 48, 49, 50:
+	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 42, 43, 44, 45, 46, 47, 48, 49, 50:
 		return true
 	default:
 		return false
@@ -515,6 +515,29 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 		status, _ := s.characterQuestStatus(ctx, uint32(row.Value1))
 		rewarded := count("SELECT COUNT(1) FROM character_queststatus_rewarded WHERE guid = ? AND quest = ?", s.playerGUID, row.Value1)
 		return status == questStatusComplete && rewarded == 0, nil
+	case 29: // CONDITION_NEAR_CREATURE (ConditionMgr.cpp:348-351:
+		// condMeets = object->FindNearestCreature(ConditionValue1,
+		// (float)ConditionValue2, bool(!ConditionValue3)) != nullptr. C++
+		// IsValid rejects the row at load when the creature template is
+		// missing (2095-2103); mirror that as fail-closed. The search
+		// origin resolves via conditionTargetPos; an unavailable position
+		// fails closed, like the C++ null arm.
+		if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+			return false, nil
+		}
+		var templateExists int
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM creature_template WHERE entry = ?", uint32(row.Value1)).Scan(&templateExists); err != nil {
+			return false, nil
+		}
+		ox, oy, oz, ok := s.conditionTargetPos(row.ConditionTarget, creatureGUID)
+		if !ok {
+			return false, nil
+		}
+		excludeGUID := s.playerGUID
+		if row.ConditionTarget == 1 {
+			excludeGUID = creatureGUID
+		}
+		return s.nearestCreatureEntryInRange(uint32(row.Value1), float32(row.Value2), ox, oy, oz, excludeGUID, row.Value3 == 0), nil
 	case 31: // CONDITION_OBJECT_ENTRY_GUID (TypeID 3 unit, entry match)
 		if row.Value1 != 3 {
 			return false, nil
@@ -692,6 +715,40 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 	default:
 		return false, nil
 	}
+}
+
+// nearestCreatureEntryInRange ports WorldObject::FindNearestCreature
+// (Object.cpp:2149-2156) with the
+// NearestCreatureEntryWithLiveStateInObjectRangeCheck terms
+// (GridNotifiers.h:1329-1353): same map and instance, matching entry, the
+// alive arm against the Go death model (Health > 0 is C++ ALIVE; Health ==
+// 0 while still registered is the lingering JUST_DIED/CORPSE corpse, the
+// registry prune being C++ DEAD removal), the search origin excluded by
+// GUID, and 3D distance within radius (C++ IsWithinDistInMap). Reports
+// whether any creature qualifies.
+func (s *session) nearestCreatureEntryInRange(entry uint32, radius float32, x, y, z float32, excludeGUID uint64, alive bool) bool {
+	if s == nil || s.server == nil || s.player == nil {
+		return false
+	}
+	srv := s.server
+	srv.motionMu.Lock()
+	defer srv.motionMu.Unlock()
+	for _, motion := range srv.motionMapLocked(s.player.Map, s.player.InstanceID) {
+		if motion == nil || motion.Map != s.player.Map || motion.InstanceID != s.player.InstanceID {
+			continue
+		}
+		if motion.Entry != entry || motion.GUID == excludeGUID {
+			continue
+		}
+		if (motion.Health > 0) != alive {
+			continue
+		}
+		if distance3D(x, y, z, motion.X, motion.Y, motion.Z) > float64(radius) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // conditionTargetPos resolves a ConditionTarget index to a world position.
