@@ -1008,11 +1008,14 @@ func (s *session) procSpellNoDmgHealTakenAuraTriggers(ctx context.Context, caste
 }
 
 // spellDamageProcHitMask mirrors the hit-mask derivation for spell damage
-// events (DamageInfo ctor from SpellNonMeleeDamage, Unit.cpp:183-192):
-// miss, immunity, and full resist map to their bits, crits to the critical
-// bit, everything else to normal, with the absorb bit ORed in whenever any
-// damage was absorbed.
-func spellDamageProcHitMask(isHit, immune, fullyResisted, crit bool, absorbed uint32) uint32 {
+// events (DamageInfo ctor from SpellNonMeleeDamage, Unit.cpp:183-192;
+// createProcHitMask, Unit.cpp:10179-10247): miss, immunity, and full resist
+// map to their bits, crits to the critical bit, everything else to normal,
+// with the absorb bit ORed in whenever any damage was absorbed. A full
+// absorb (damage - absorb == 0 -> HITINFO_FULL_ABSORB, Unit.cpp:1128)
+// nullifies the hit: the normal/critical bit is suppressed while the
+// absorb bit is kept (createProcHitMask's damageNullified arm).
+func spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit bool, absorbed uint32) uint32 {
 	var hitMask uint32
 	switch {
 	case !isHit:
@@ -1021,6 +1024,8 @@ func spellDamageProcHitMask(isHit, immune, fullyResisted, crit bool, absorbed ui
 		hitMask = procHitImmune
 	case fullyResisted:
 		hitMask = procHitFullResist
+	case fullAbsorb:
+		hitMask = procHitNone
 	case crit:
 		hitMask = procHitCritical
 	default:
@@ -1040,7 +1045,7 @@ func spellDamageProcHitMask(isHit, immune, fullyResisted, crit bool, absorbed ui
 // spell-family, and triggered-cast gates engage exactly. Spells with
 // SPELL_ATTR3_CANT_TRIGGER_PROC never reach the loop (Spell.cpp:2441).
 // The trigger spell targets the victim.
-func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, isHit, immune, fullyResisted, crit bool, absorbed uint32) {
+func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, isHit, immune, fullyResisted, fullAbsorb, crit bool, absorbed uint32) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -1061,7 +1066,7 @@ func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint6
 		schoolMask:     schoolMask,
 		spellTypeMask:  procSpellTypeDamage,
 		spellPhaseMask: procSpellPhaseHit,
-		hitMask:        spellDamageProcHitMask(isHit, immune, fullyResisted, crit, absorbed),
+		hitMask:        spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit, absorbed),
 		triggered:      s.triggeredNoProcEvents > 0,
 		eventSpell:     &spellCopy,
 	})

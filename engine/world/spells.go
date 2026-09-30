@@ -2358,7 +2358,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// triggered state so the CanSpellTriggerProcOnEvent eventSpell/triggered
 	// gates engage; the triggered-cast suppression is the gate's own job,
 	// not a call-site skip.
-	s.procSpellHitAuraTriggers(ctx, targetGUID, spellID, isHit, immune, fullyResisted, crit, absorbed)
+	s.procSpellHitAuraTriggers(ctx, targetGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit, absorbed)
 
 	s.lastCombatTime = time.Now()
 	if s.player != nil && s.player.UnitFlags&unitFlagInCombat == 0 {
