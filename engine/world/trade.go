@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -167,19 +168,34 @@ func (caster *session) tradeSpellStillCastable(ctx context.Context, target *sess
 }
 
 // applyDeferredTradeEnchant mirrors the my_spell/his_spell->prepare at trade
-// execute (TradeHandler.cpp:524-526) for the representable slice:
-// SPELL_EFFECT_ENCHANT_ITEM (Spell::EffectEnchantItemPerm, SpellEffects.
+// execute (TradeHandler.cpp:524-526) for the representable slices:
+// SPELL_EFFECT_ENCHANT_ITEM (53, Spell::EffectEnchantItemPerm, SpellEffects.
 // cpp:2704) writes the effect's MiscValue enchant ID into the target item's
 // PERM_ENCHANTMENT_SLOT (ItemDefines.h:146: slot 0, index 0 of the 36-int
 // enchantments column; duration/charges triplets zeroed like
-// Item::SetEnchantment(slot, id, 0, 0, caster)). The spell target is the
+// Item::SetEnchantment(slot, id, 0, 0, caster));
+// SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY (54, Spell::EffectEnchantItemTmp,
+// SpellEffects.cpp:2832: enchant_id = Effects[effIndex].MiscValue,
+// sSpellItemEnchantmentStore.LookupEntry, Item::SetEnchantment(TEMP_
+// ENCHANTMENT_SLOT, enchant_id, duration * 1000, 0, casterGUID)) writes into
+// TEMP_ENCHANTMENT_SLOT (ItemDefines.h:147: slot 1, index 3 of the column)
+// with the C++ duration selection (SpellEffects.cpp:2913-2945) in
+// milliseconds; SPELL_EFFECT_ENCHANT_ITEM_PRISMATIC (156,
+// Spell::EffectEnchantItemPrismatic, SpellEffects.cpp:2768:
+// Item::SetEnchantment(PRISMATIC_ENCHANTMENT_SLOT, enchantId, 0, 0, caster))
+// writes into PRISMATIC_ENCHANTMENT_SLOT (ItemDefines.h:152: slot 6, index
+// 18), only when the enchant entry carries an ITEM_ENCHANTMENT_TYPE_
+// PRISMATIC_SOCKET (=8, DBCEnums.h) effect (SpellEffects.cpp:2788-2804).
+// Both handlers carry the "item can be in trade slot and have owner diff.
+// from caster" comment (SpellEffects.cpp:2908/2843), so the trade-window
+// flow is evidenced for 54 and 156, not just 53. The spell target is the
 // other party's non-traded slot item (SpellCastTargets::Update,
 // Spell.cpp:470-474: the trade-item target resolves from the trader's
 // TradeData), so the caller passes the target session the same way as
-// tradeSpellStillCastable. The enchant entry is validated against the DBC
+// tradeSpellStillCastable. Each enchant entry is validated against the DBC
 // (sSpellItemEnchantmentStore.LookupEntry). Stat application for an equipped
 // target is covered by the syncEquipmentCache calls later in completeTrade,
-// which read the perm slot from the column.
+// which read the enchantment column.
 func (caster *session) applyDeferredTradeEnchant(ctx context.Context, target *session) {
 	if caster.trade == nil || target.trade == nil || caster.trade.SpellID == 0 {
 		return
@@ -195,17 +211,36 @@ func (caster *session) applyDeferredTradeEnchant(ctx context.Context, target *se
 	if err != nil || !found {
 		return
 	}
-	var enchantID uint32
+	type slotWrite struct {
+		slot     uint32
+		enchant  uint32
+		duration uint32
+	}
+	var writes []slotWrite
 	for _, eff := range spell.Effects {
-		if eff.Effect == 53 && eff.MiscValue > 0 { // SPELL_EFFECT_ENCHANT_ITEM
-			enchantID = uint32(eff.MiscValue)
-			break
+		if eff.MiscValue <= 0 {
+			continue
+		}
+		enchantID := uint32(eff.MiscValue)
+		entry, ok, err := caster.server.Data.SpellItemEnchantment(enchantID)
+		if err != nil || !ok {
+			continue
+		}
+		switch eff.Effect {
+		case 53: // SPELL_EFFECT_ENCHANT_ITEM
+			writes = append(writes, slotWrite{slot: 0, enchant: enchantID})
+		case 54: // SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY
+			writes = append(writes, slotWrite{slot: 1, enchant: enchantID, duration: tempTradeEnchantDurationMs(spell)})
+		case 156: // SPELL_EFFECT_ENCHANT_ITEM_PRISMATIC
+			for _, e := range entry.Effects {
+				if e == 8 { // ITEM_ENCHANTMENT_TYPE_PRISMATIC_SOCKET
+					writes = append(writes, slotWrite{slot: 6, enchant: enchantID})
+					break
+				}
+			}
 		}
 	}
-	if enchantID == 0 {
-		return
-	}
-	if _, ok, err := caster.server.Data.SpellItemEnchantment(enchantID); err != nil || !ok {
+	if len(writes) == 0 {
 		return
 	}
 	cdb := caster.server.CharactersStore.DB
@@ -223,14 +258,50 @@ func (caster *session) applyDeferredTradeEnchant(ctx context.Context, target *se
 			enchants[i] = uint32(val)
 		}
 	}
-	enchants[0] = enchantID
-	enchants[1] = 0
-	enchants[2] = 0
+	for _, w := range writes {
+		base := w.slot * 3
+		enchants[base] = w.enchant
+		enchants[base+1] = w.duration
+		enchants[base+2] = 0
+	}
 	encParts := make([]string, 36)
 	for i := 0; i < 36; i++ {
 		encParts[i] = strconv.FormatUint(uint64(enchants[i]), 10)
 	}
 	_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET enchantments = ? WHERE guid = ?", strings.Join(encParts, " "), item.ItemGUID)
+}
+
+// tempTradeEnchantDurationMs mirrors the duration selection in
+// Spell::EffectEnchantItemTmp (SpellEffects.cpp:2913-2945), converted to
+// milliseconds the way C++ passes duration * 1000 to Item::SetEnchantment.
+// The shaman Rockbiter special-case (SpellFamilyName == SHAMAN and
+// SpellFamilyFlags[0] & 0x400000) has no model here: it enchants the
+// caster's own equipped weapons via triggered spells and returns without
+// touching the item target, so a deferred Rockbiter never writes to the
+// trade item in C++ either.
+func tempTradeEnchantDurationMs(spell wotlk.Spell) uint32 {
+	var seconds uint32
+	switch {
+	case spell.ID == 38615:
+		seconds = 1800
+	case spell.SpellFamilyName == spellFamilyRogue:
+		seconds = 3600
+	case spell.SpellFamilyName == spellFamilyShaman:
+		seconds = 1800
+	case spell.SpellVisual[0] == 215:
+		seconds = 1800
+	case spell.SpellVisual[0] == 563 && spell.ID != 64401:
+		seconds = 600
+	case spell.SpellVisual[0] == 0:
+		seconds = 1800
+	case spell.ID == 29702:
+		seconds = 300
+	case spell.ID == 37360:
+		seconds = 300
+	default:
+		seconds = 3600
+	}
+	return seconds * 1000
 }
 
 // sendTradeStatus sends SMSG_TRADE_STATUS (0x120) with matching TrinityCore structure.
