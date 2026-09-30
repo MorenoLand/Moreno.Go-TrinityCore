@@ -255,11 +255,26 @@ func (s *session) evalQuestCondition(ctx context.Context, row conditionRow) (boo
 
 func isImplementedConditionType(condType int64) bool {
 	switch condType {
-	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 31, 36, 37, 38, 42, 43, 47, 50:
+	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 31, 36, 37, 38, 40, 42, 43, 44, 46, 47, 48, 49, 50:
 		return true
 	default:
 		return false
 	}
+}
+
+// drunkenStateByValue ports Player::GetDrunkenstateByValue (Player.cpp:988-997)
+// and the DrunkenState enum (Player.h:323-326): 0 sober, 1 tipsy, 2 drunk, 3 smashed.
+func drunkenStateByValue(value uint16) uint32 {
+	if value >= 90 {
+		return 3
+	}
+	if value >= 50 {
+		return 2
+	}
+	if value > 0 {
+		return 1
+	}
+	return 0
 }
 
 // meetGossipOptionConditions evaluates the ElseGroup clause set; empty sets
@@ -427,6 +442,11 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 	case 9: // CONDITION_QUESTTAKEN
 		status, _ := s.characterQuestStatus(ctx, uint32(row.Value1))
 		return status == questStatusIncomplete || status == questStatusComplete, nil
+	case 10: // CONDITION_DRUNKENSTATE
+		if s.player == nil {
+			return false, nil
+		}
+		return drunkenStateByValue(s.player.DrunkenState) >= uint32(row.Value1), nil
 	case 12: // CONDITION_ACTIVE_EVENT
 		active := s.server.cachedActiveGameEvents(ctx)
 		_, ok := active[row.Value1]
@@ -495,6 +515,8 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 			return false, nil
 		}
 		return compareValues(int(row.Value2), int64(s.player.Health*100/s.player.MaxHealth), row.Value1), nil
+	case 40: // CONDITION_IN_WATER
+		return s.isSwimming, nil
 	case 42: // CONDITION_STAND_STATE
 		if s.player == nil {
 			return false, nil
@@ -502,6 +524,10 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 		return (row.Value1 == 0 && int64(s.player.StandState) == row.Value2) || (row.Value1 == 1 && row.Value2 == 0 && s.player.StandState == 0), nil
 	case 43: // CONDITION_DAILY_QUEST_DONE
 		return false, nil
+	case 44: // CONDITION_CHARMED
+		return s.hasAuraType(spellAuraCharm), nil
+	case 46: // CONDITION_TAXI
+		return s.inFlight, nil
 	case 47: // CONDITION_QUESTSTATE (1 none, 2 complete, 8 in progress, 32 failed, 64 rewarded)
 		status, _ := s.characterQuestStatus(ctx, uint32(row.Value1))
 		var bit uint32
@@ -519,8 +545,36 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 			return uint32(row.Value2)&64 != 0, nil
 		}
 		return uint32(row.Value2)&bit != 0, nil
+	case 48: // CONDITION_QUEST_OBJECTIVE_PROGRESS
+		if s.player == nil {
+			return false, nil
+		}
+		for slot := 0; slot < playerQuestLogSlots; slot++ {
+			entry := s.player.QuestLog[slot]
+			if entry.QuestID != uint32(row.Value1) {
+				continue
+			}
+			counter := row.Value2
+			if counter < 0 || counter >= int64(len(entry.Counters)) {
+				return false, nil
+			}
+			return entry.Counters[counter] == uint16(row.Value3), nil
+		}
+		return false, nil
+	case 49: // CONDITION_DIFFICULTY_ID
+		if s.player == nil {
+			return false, nil
+		}
+		difficulty, _ := s.loginInstanceDifficulty(ctx, *s.player)
+		return difficulty == uint32(row.Value1), nil
 	case 50: // CONDITION_GAMEMASTER
-		return true, nil
+		if s.player == nil {
+			return false, nil
+		}
+		if row.Value1 == 1 {
+			return s.security >= 1, nil
+		}
+		return s.player.ExtraFlags&playerExtraGMOn != 0, nil
 	default:
 		return false, nil
 	}
