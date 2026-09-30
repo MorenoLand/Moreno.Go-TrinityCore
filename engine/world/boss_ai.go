@@ -584,4 +584,9 @@ func init() {
 	// has no C++ script and the go_gong_of_bethekk AI has no
 	// Lua-modelable hooks — neither is registered).
 	RegisterLuaBoss("boss_arlokk", 14515)
+	// High Priestess Jeklik (Zul'Gurub) — fight logic in
+	// lua_scripts/zulgurub/boss_jeklik.lua (frenzied bat 14965 AI
+	// "npc_batrider" in the same file; the bloodseeker bat 11368 has no
+	// C++ CreatureScript in boss_jeklik.cpp and is not registered).
+	RegisterLuaBoss("boss_jeklik", 14517)
 }
