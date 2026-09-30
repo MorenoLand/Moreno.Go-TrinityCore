@@ -80,16 +80,17 @@ func (s *Server) fireCreatureLuaEvent(ctx context.Context, motion *creatureMotio
 }
 
 // luaQuest builds the Eluna Quest userdata surface used as the quest
-// argument of the quest hooks. It mirrors the RegisterQuestEvent quest
+// argument of the quest hooks. It mirrors the GetQuest global's quest
 // object in engine/scripting/globals.go (ID/Name/Title/Level/MinLevel/Flags
-// plus the GetId/GetLevel/GetMinLevel/GetFlags/HasFlag/IsDaily/IsRepeatable
-// methods); a missing quest_template row yields a bare ID-only object so
-// the hook still fires with the correct argument count.
+// plus the GetId/GetLevel/GetMinLevel/GetFlags/GetNextQuestId/GetPrevQuestId/
+// GetType/HasFlag/IsDaily/IsRepeatable methods); a missing quest_template
+// row yields a bare ID-only object so the hook still fires with the correct
+// argument count (the GetQuest global pushes nil instead).
 func (s *session) luaQuest(ctx context.Context, questID uint32) *scripting.Object {
-	var id, level, minLevel, flags int64
+	var id, level, minLevel, flags, nextID, prevID, questType int64
 	var title string
 	if s != nil && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT ID, COALESCE(LogTitle, ''), COALESCE(QuestLevel, 0), COALESCE(MinLevel, 0), COALESCE(Flags, 0) FROM quest_template WHERE ID = ?`, questID).Scan(&id, &title, &level, &minLevel, &flags)
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT ID, COALESCE(LogTitle, ''), COALESCE(QuestLevel, 0), COALESCE(MinLevel, 0), COALESCE(Flags, 0), COALESCE(RewardNextQuest, 0), COALESCE(PrevQuestId, 0), COALESCE(Type, 0) FROM quest_template WHERE ID = ?`, questID).Scan(&id, &title, &level, &minLevel, &flags, &nextID, &prevID, &questType)
 	}
 	if id == 0 {
 		id = int64(questID)
@@ -99,6 +100,9 @@ func (s *session) luaQuest(ctx context.Context, questID uint32) *scripting.Objec
 	methods["GetLevel"] = luaNoArgs(func() any { return uint32(level) })
 	methods["GetMinLevel"] = luaNoArgs(func() any { return uint32(minLevel) })
 	methods["GetFlags"] = luaNoArgs(func() any { return uint32(flags) })
+	methods["GetNextQuestId"] = luaNoArgs(func() any { return int32(nextID) })
+	methods["GetPrevQuestId"] = luaNoArgs(func() any { return int32(prevID) })
+	methods["GetType"] = luaNoArgs(func() any { return uint32(questType) })
 	methods["HasFlag"] = func(_ context.Context, args []any) ([]any, error) {
 		var flag uint32
 		if len(args) > 0 {
