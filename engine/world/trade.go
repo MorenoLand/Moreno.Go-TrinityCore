@@ -62,7 +62,14 @@ type playerTradeState struct {
 	// non-traded slot is stored here and applied when the trade executes.
 	SpellID           uint32
 	SpellCastItemGUID uint64
-	InAcceptProcess   bool
+	// InAcceptProcess mirrors TradeData::_acceptProccess (TradeData.h:60-62):
+	// true while both sides have accepted and the trade is executing.
+	// InTradeItems mirrors Item::mb_in_trade (Item.h:107-108, 215) for the
+	// traded items snapshotted at setAcceptTradeMode: while set, inventory-
+	// counting paths must skip these items (Player::HasItemCount,
+	// Player::DestroyItemCount, Player::CanStoreItems skip IsInTrade items).
+	InAcceptProcess bool
+	InTradeItems    map[uint64]bool
 }
 
 // setTradeSpell mirrors TradeData::SetSpell (TradeData.cpp:80-94): no-op when
@@ -88,6 +95,39 @@ func (s *session) setTradeSpell(spellID uint32, castItemGUID uint64) {
 			_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
 		}
 		s.notifyTradeUpdate()
+	}
+}
+
+// setAcceptTradeMode mirrors the static setAcceptTradeMode
+// (TradeHandler.cpp:209-233): both trades enter the accept process
+// (TradeData::SetInAcceptProcess(true)) and the six traded items of each
+// side are snapshotted and flagged in-trade (Item::SetInTrade).
+func setAcceptTradeMode(my, partner *session) {
+	for _, st := range []*session{my, partner} {
+		if st == nil || st.trade == nil {
+			continue
+		}
+		st.trade.InAcceptProcess = true
+		st.trade.InTradeItems = make(map[uint64]bool)
+		for slot := uint8(0); slot < tradeSlotTradedCount; slot++ {
+			if it, ok := st.trade.Items[slot]; ok && it.ItemGUID != 0 {
+				st.trade.InTradeItems[it.ItemGUID] = true
+			}
+		}
+	}
+}
+
+// clearAcceptTradeMode mirrors the two clearAcceptTradeMode overloads
+// (TradeHandler.cpp:234-248): both trades leave the accept process
+// (TradeData::SetInAcceptProcess(false)) and the in-trade item flags are
+// cleared (Item::SetInTrade(false)).
+func clearAcceptTradeMode(my, partner *session) {
+	for _, st := range []*session{my, partner} {
+		if st == nil || st.trade == nil {
+			continue
+		}
+		st.trade.InAcceptProcess = false
+		st.trade.InTradeItems = nil
 	}
 }
 
@@ -450,7 +490,9 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 	_ = partner.sendTradeStatus(tradeStatusTradeAccept, 0, 0, 0, 0)
 
 	if partner.trade != nil && partner.trade.Accepted {
-		// Both accepted -> execute trade
+		// Both accepted -> enter the accept process (TradeHandler.cpp:356-357)
+		// before executing: flags both trades and locks the traded items.
+		setAcceptTradeMode(s, partner)
 		s.completeTrade(ctx, partner)
 	}
 	return true
@@ -528,6 +570,7 @@ func (s *session) findFreeSlotsForTrade(ctx context.Context, count int) ([]trade
 func (s *session) completeTrade(ctx context.Context, partner *session) {
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
+		clearAcceptTradeMode(s, partner)
 		return
 	}
 
@@ -548,6 +591,9 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 	partnerSlots, ok1 := partner.findFreeSlotsForTrade(ctx, len(sTradedItems))
 	sSlots, ok2 := s.findFreeSlotsForTrade(ctx, len(partnerTradedItems))
 	if !ok1 || !ok2 {
+		// Fit failure: leave the accept process (TradeHandler.cpp:451/465)
+		// before answering CLOSE_WINDOW, in C++ order.
+		clearAcceptTradeMode(s, partner)
 		// EQUIP_ERR_BAG_FULL = 1
 		if !ok1 {
 			_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 0, 0)
@@ -562,6 +608,7 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 	}
 
 	if s.player.Money < s.trade.Money || partner.player.Money < partner.trade.Money {
+		clearAcceptTradeMode(s, partner)
 		_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, 0, 0, 0)
 		_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, 0, 0, 0)
 		s.trade = nil
@@ -623,6 +670,9 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 	s.sendPlayerUpdate()
 	partner.sendPlayerUpdate()
 
+	// Cleanup: leave the accept process (TradeHandler.cpp:529) before the
+	// trade state is torn down.
+	clearAcceptTradeMode(s, partner)
 	s.trade = nil
 	partner.trade = nil
 	s.debug("trade completed successfully", "player1", s.accountName, "player2", partner.accountName)
