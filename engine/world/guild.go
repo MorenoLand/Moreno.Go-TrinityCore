@@ -2638,11 +2638,21 @@ func (s *session) handleGuildBankLogQuery(ctx context.Context, payload []byte) b
 	if s.player != nil {
 		guildID = int64(s.player.GuildID)
 	}
-	if cdb == nil || guildID == 0 || tabID > guildBankMaxTabs {
-		buf := protocol.NewBuffer(2)
-		buf.WriteU8(tabID)
-		buf.WriteU8(0) // 0 entries
-		return s.write(uint16(protocol.OpcodeMSG_GUILD_BANK_LOG_QUERY), buf.Bytes(), true) == nil
+	// Guild::SendBankLog (Guild.cpp:1817) only answers when tabId <
+	// _GetPurchasedTabsSize() or tabId == GUILD_BANK_MAX_TABS (money log);
+	// anything else gets no packet at all, and HandleGuildBankLogQuery only
+	// reaches SendBankLog when the player is in a guild.
+	if tabID > guildBankMaxTabs {
+		return true
+	}
+	if cdb == nil || guildID == 0 {
+		return true
+	}
+	if tabID != guildBankMaxTabs {
+		var purchasedTabs int64
+		if err := cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM guild_bank_tab WHERE guildid = ?", guildID).Scan(&purchasedTabs); err != nil || int64(tabID) >= purchasedTabs {
+			return true
+		}
 	}
 
 	dbTabID := tabID
@@ -2650,12 +2660,13 @@ func (s *session) handleGuildBankLogQuery(ctx context.Context, payload []byte) b
 		dbTabID = guildBankMoneyLogsTab
 	}
 
-	rows, err := cdb.QueryContext(ctx, "SELECT EventType, PlayerGuid, ItemOrMoney, ItemStackCount, DestTabId, TimeStamp FROM guild_bank_eventlog WHERE guildid = ? AND TabId = ? ORDER BY TimeStamp DESC, LogGuid DESC LIMIT 25", guildID, dbTabID)
+	// C++ iterates the in-memory LogHolder, which is ordered oldest-first
+	// (Guild.h: "The first element is the oldest entry": DB rows are loaded
+	// ORDER BY TimeStamp DESC, LogGuid DESC then emplace_front'd, and new
+	// events are emplace_back'd), so the packet lists oldest entries first.
+	rows, err := cdb.QueryContext(ctx, "SELECT EventType, PlayerGuid, ItemOrMoney, ItemStackCount, DestTabId, TimeStamp FROM guild_bank_eventlog WHERE guildid = ? AND TabId = ? ORDER BY TimeStamp ASC, LogGuid ASC LIMIT 25", guildID, dbTabID)
 	if err != nil {
-		buf := protocol.NewBuffer(2)
-		buf.WriteU8(tabID)
-		buf.WriteU8(0)
-		return s.write(uint16(protocol.OpcodeMSG_GUILD_BANK_LOG_QUERY), buf.Bytes(), true) == nil
+		return true
 	}
 
 	type logRecord struct {
@@ -2677,17 +2688,13 @@ func (s *session) handleGuildBankLogQuery(ctx context.Context, payload []byte) b
 		var dt uint8
 		var ts uint32
 		if err := rows.Scan(&et, &pGuid, &iom, &cnt, &dt, &ts); err == nil {
-			toff := uint32(0)
-			if now > ts {
-				toff = now - ts
-			}
 			entries = append(entries, logRecord{
 				eventType:      et,
 				playerGUID:     uint64(pGuid),
 				itemOrMoney:    iom,
 				itemStackCount: cnt,
 				destTabID:      dt,
-				timeOffset:     toff,
+				timeOffset:     now - ts,
 			})
 		}
 	}
