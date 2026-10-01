@@ -1701,4 +1701,23 @@ func init() {
 	// bridge; no SAY_LEGOSO_* line fires (no talk bridge);
 	// ACTION_LEGOSO_SIRONAS_KILLED has no DoAction bridge.
 	RegisterLuaBoss("npc_demolitionist_legoso", 17982)
+	// npc_aged_dying_ancient_kodo (Desolace zone script):
+	// SpellHit arm only — hit by SPELL_KODO_KOMBO_ITEM 18153
+	// -> if entry is 4700/4701/4702 and neither the caster has
+	// 18172 nor the kodo has 18377: triggered self-cast 18172
+	// on the caster (player-side CastSpell bridge, brutallus
+	// precedent) + triggered self-cast 18377 on the kodo
+	// (C++-exact); entries 4700/4701/4702 verifiable from the
+	// C++ DyingKodo enum — see
+	// lua_scripts/kalimdor/npc_aged_dying_ancient_kodo.lua.
+	// The UpdateEntry/CombatStop/faction/movement/follow/
+	// flag mutation half of the 18153 arm has no entry-update
+	// / faction / movement / flag bridges; the 18362 gossip-
+	// aura arm awaits flag / movement / despawn bridges; the
+	// Smeed-proximity MoveInLineOfSight latch awaits a
+	// proximity-detection bridge; OnGossipHello awaits the
+	// gossip bridge — documented only.
+	RegisterLuaBoss("npc_aged_dying_ancient_kodo", 4700)
+	RegisterLuaBoss("npc_aged_dying_ancient_kodo", 4701)
+	RegisterLuaBoss("npc_aged_dying_ancient_kodo", 4702)
 }
