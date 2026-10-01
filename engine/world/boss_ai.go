@@ -785,4 +785,15 @@ func init() {
 	// flame add AIs are not registered (ScriptName bindings are DB-side); the
 	// volcanic summon/volcano adds have no summon model.
 	RegisterLuaBoss("boss_supremus", 22898)
+	// RegisterLuaBoss wires lua_scripts/blacktemple/boss_shade_of_akama.lua.
+	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
+	// encounter-state bookkeeping is blocked on the instance-script model
+	// (DATA_SHADE_OF_AKAMA/DATA_AKAMA_SHADE lookups, SetBossState DONE);
+	// the chase-complete phase-two gate has no MovementInform bridge, so the
+	// threat 41602 arm and the phase-one immune/non-selectable/emotestate
+	// arms have no bridge; the channeler/sorcerer/defender/rogue/
+	// elementalist/spiritbinder/broken companion AIs are not registered
+	// (ScriptName bindings are DB-side) and have no summon model; the shade
+	// soul-channel AuraScripts have no AuraScript bridge.
+	RegisterLuaBoss("boss_shade_of_akama", 22841)
 }
