@@ -1291,4 +1291,15 @@ func init() {
 	// lua_scripts/theslavepens/npc_frozen_core.lua.
 	RegisterLuaBoss("boss_ahune", 25740)
 	RegisterLuaBoss("npc_frozen_core", 25865)
+	// Hungarfen (The Underbog): foul-spores once-guard at <=20%
+	// health, the acid-geyser target casts, and the mushroom-
+	// summon timer kept as bookkeeping only (no summon bridge).
+	// Underbog mushroom (17990): the Reset triggered self casts
+	// via the engine-fired OnSpawn event, and the grow/shrink
+	// timer machine (the RemoveAurasDueToSpell shrink arm has no
+	// aura-removal bridge). Fight logic in
+	// lua_scripts/theunderbog/boss_hungarfen.lua and
+	// lua_scripts/theunderbog/npc_underbog_mushroom.lua.
+	RegisterLuaBoss("boss_hungarfen", 17770)
+	RegisterLuaBoss("npc_underbog_mushroom", 17990)
 }
