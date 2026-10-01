@@ -2376,5 +2376,22 @@ func init() {
 	// priestess_delrissa.cpp's m_auiAddEntries names 24559 //Warlord
 	// Salaris (boss_felblood_kaelthas precedent).
 	RegisterLuaBoss("boss_warlord_salaris", 24559)
+	// boss_garaxxas: ScriptedAI (via the file's lackey-common base)
+	// aimed-shot 44271 6s loop + shoot 15620 2.5s loop + concussive-
+	// shot 27634 8s loop + multi-shot 31942 10s loop (DoCastVictim,
+	// GetVictim nil-guarded; C++ fires them only outside ATTACK_
+	// DISTANCE, but no distance model exists on the Lua surface, so the
+	// loops fire regardless of range) + sub-25%-HP healing-potion
+	// 15503 self-cast latch (OnDamageTaken(9), per-guid one-shot, reset
+	// per engagement). The wing-clip 44286 machine (ATTACK_DISTANCE
+	// gate), the freezing-trap 44136 machine (ATTACK_DISTANCE gate +
+	// gameobject lookup — no bridges), the sliver-pet NPC 24552 summon
+	// (no summon bridge), and the common-AI threat ring / death-count /
+	// KilledUnit forward / AcquireGUIDs / Delrissa-respawn /
+	// ResetThreatList arms unmodeled (no GUID-list / instance / threat
+	// bridges). Entry 24555 verifiable from the C++ sources: boss_
+	// priestess_delrissa.cpp's m_auiAddEntries names 24555 //Garaxxas
+	// (boss_felblood_kaelthas precedent).
+	RegisterLuaBoss("boss_garaxxas", 24555)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
