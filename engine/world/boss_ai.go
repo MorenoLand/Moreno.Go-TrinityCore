@@ -2792,4 +2792,26 @@ func init() {
 	// summon and EscortAI movement bridges that do not exist; see
 	// lua_scripts/kalimdor/boss_captain_skarloc.lua.
 	RegisterLuaBoss("boss_captain_skarloc", 17862)
+
+	// boss_epoch_hunter (Epoch Hunter, entry 18096 — C++-verified via
+	// old_hillsbrad.cpp:174's ENTRY_EPOCH constant plus its Thrall-escort
+	// SummonCreature call (:615); the creature_template ScriptName
+	// binding stays DB-side; not GUID-bound in instance_old_hillsbrad.cpp
+	// — gossip-summoned): the self-contained in-combat legs (engage Talk
+	// SAY_AGGRO (1); KilledUnit Talk SAY_SLAY (2) no TYPEID gate; death
+	// Talk SAY_DEATH (4); Sand Breath 31914 on the victim non-triggered
+	// init {8s,16s} -> {10s,20s} + unconditional Talk SAY_BREATH (3);
+	// Impending Death 31916 on the victim non-triggered init {25s,30s}
+	// -> 25000 + rand32() % 5000; Wing Buffet 31475 on a random alive
+	// player in the instance (nefarian convention) non-triggered init
+	// 35s -> 25000 + rand32() % 10000; Magic Disruption Aura 33834 self
+	// non-triggered init 40s -> 15s) on C++-verbatim timers; melee
+	// engine-driven. The JustDied TYPE_THRALL_EVENT/TYPE_THRALL_PART4
+	// instance leg has no instance-data bridge; Sand Breath's
+	// InterruptNonMeleeSpells arm has no spell-interrupt bridge (maiden
+	// precedent); SAY_ENTER 0 is declared but never Talked in C++; the
+	// SD%Complete: 60 missing pre-event spawns and uncoordinated escort
+	// speech need summon and EscortAI bridges that do not exist; see
+	// lua_scripts/kalimdor/boss_epoch_hunter.lua.
+	RegisterLuaBoss("boss_epoch_hunter", 18096)
 }
