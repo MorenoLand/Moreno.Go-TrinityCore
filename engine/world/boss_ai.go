@@ -1247,4 +1247,13 @@ func init() {
 	// stays unregistered. Fight logic in
 	// lua_scripts/steamvault/boss_warlord_kalithresh.lua.
 	RegisterLuaBoss("boss_warlord_kalithresh", 17798)
+	// Mennu the Betrayer (The Slave Pens): tainted stoneskin
+	// totem (self, 30s, HealthBelowPct(100) gate), tainted
+	// earthgrab totem (self, 20s one-shot), corrupted nova
+	// totem (self, 60s one-shot), Mennu's healing ward (self,
+	// 14-25s), lightning bolt (triggered DoCastVictim, 14-19s
+	// init then 14-25s); the _Reset/_JustDied instance arms
+	// stay blocked on the instance-script model. Fight logic
+	// in lua_scripts/theslavepens/boss_mennu_the_betrayer.lua.
+	RegisterLuaBoss("boss_mennu_the_betrayer", 17941)
 }
