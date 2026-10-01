@@ -1266,4 +1266,14 @@ func init() {
 	// instance-script model. Fight logic in
 	// lua_scripts/theslavepens/boss_rokmar_the_crackler.lua.
 	RegisterLuaBoss("boss_rokmar_the_crackler", 17991)
+	// Quagmirran (The Slave Pens): acid spray (DoCastAOE
+	// self-cast, 25s then 20-25s), cleave (triggered
+	// DoCastVictim, 9s then 18-34s), uppercut (random alive
+	// player in 10 yd excluding the victim, 20s then 22s),
+	// poison bolt volley (DoCast(me), 31s then 24s); no Talk
+	// lines and no KilledUnit body in C++, so no event 3; the
+	// _Reset/_JustDied instance arms stay blocked on the
+	// instance-script model. Fight logic in
+	// lua_scripts/theslavepens/boss_quagmirran.lua.
+	RegisterLuaBoss("boss_quagmirran", 17942)
 }
