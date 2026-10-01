@@ -1523,4 +1523,13 @@ func init() {
 	// botanica/boss_warp_splinter.lua. instance_the_
 	// botanica.cpp stays blocked on the instance-script model.
 	RegisterLuaBoss("boss_warp_splinter", 17977)
+
+	// The Botanica (Tempest Keep) boss roster 4/5:
+	// boss_thorngrin_the_tender (17978): sacrifice / hellfire /
+	// enrage boss with 50%/20% HP talk latches; the heroic
+	// hellfire schedule and the UNIT_STATE_CASTING gates have
+	// no difficulty / cast-state bridges — see lua_scripts/
+	// botanica/boss_thorngrin_the_tender.lua. instance_the_
+	// botanica.cpp stays blocked on the instance-script model.
+	RegisterLuaBoss("boss_thorngrin_the_tender", 17978)
 }
