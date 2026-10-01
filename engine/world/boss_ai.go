@@ -900,4 +900,41 @@ func init() {
 	RegisterLuaBoss("boss_high_nethermancer_zerevor", 22950)
 	RegisterLuaBoss("boss_lady_malande", 22951)
 	RegisterLuaBoss("boss_veras_darkshadow", 22952)
+	// Illidan Stormrage (Black Temple) — fight logic in
+	// lua_scripts/blacktemple/boss_illidan.lua.
+	// Illidan (22917) runs the phase-1 schedule, the 25min berserk
+	// and the taunt cycle on pull (the intro arms have no
+	// gossip/instance bridges); the health-based transitions arm
+	// the minions weave (90%, fires empty — no summon bridge), the
+	// air-phase timer chain (65%, positions unmodeled — no movement
+	// bridge; the both-flames-dead finalize arm has no bearer, so
+	// the pillar loop repeats), the demon-form cycle (60s one-shot
+	// in the phase-3/4 schedule, 72s cancel, 15s demon spells) and
+	// the phase-4 shadow-prison/maiev sequence (30%); lethal damage
+	// is rewritten to health-1 with the demon-cancel or the death
+	// outro arm (C++-exact). Akama (23089) runs the healing-potion
+	// loop and the lethal-damage rewrite; the intro/minions/outro
+	// chains have no gossip/movement/DoAction bridges. Flame of
+	// Azzinoth (22997) runs the engage/charge/flame-blast cycle —
+	// the JustDied ACTION_FLAME_DEAD relay to illidan has no
+	// cross-creature bridge. Maiev (23197) runs cage-trap/shadow-
+	// strike/throw-dagger/taunt with the down-arm (health-1 +
+	// 40409, once-guard never reset — no AuraScript bridge); the
+	// appear/outro chains have no summon/DoAction bridges. Blade of
+	// Azzinoth (22996), the db target (23070) and the generic fire
+	// entries (23069/23259/23336) get their Reset self-casts. The
+	// parasitic shadowfiend (23498) and illidari elite (23226) AIs
+	// have no modelable arm without engine bridges; the shadow
+	// demon and cage-trap-trigger AIs have no entry constants in
+	// the C++ tree (ScriptName binds DB-side); the twenty-two
+	// spell/aura scripts have no script bridges.
+	RegisterLuaBoss("boss_illidan_stormrage", 22917)
+	RegisterLuaBoss("npc_akama_illidan", 23089)
+	RegisterLuaBoss("npc_flame_of_azzinoth", 22997)
+	RegisterLuaBoss("npc_illidan_db_target", 23070)
+	RegisterLuaBoss("npc_maiev", 23197)
+	RegisterLuaBoss("npc_blade_of_azzinoth", 22996)
+	RegisterLuaBoss("npc_illidan_generic_fire", 23069)
+	RegisterLuaBoss("npc_illidan_generic_fire", 23259)
+	RegisterLuaBoss("npc_illidan_generic_fire", 23336)
 }
