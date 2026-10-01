@@ -2952,4 +2952,31 @@ func init() {
 	// PortalWaves wave pump needs summon + instance-data bridges that
 	// do not exist (standing).
 	RegisterLuaBoss("the_black_morass", 15608)
+
+	// boss_epoch (Chrono-Lord Epoch, entry 26532 — C++-verified via
+	// npc_arthas.cpp:59's NPC_EPOCH constant plus :1329's
+	// instance->instance->SummonCreature(NPC_EPOCH, ...) in the
+	// RP3_EVENT_EPOCH_SPAWN leg of the arthas RP3 chain (summon strength);
+	// BossAI's ctor leg DATA_EPOCH is culling_of_stratholme.h:118; the
+	// creature_template ScriptName binding stays DB-side): the
+	// self-contained in-combat legs only — engage arms the three timers
+	// at their C++ ScheduleEvent cooldowns (no Talk in C++
+	// JustEngagedWith); Wounding Strike 52771 on the victim (jeklik
+	// GetVictim + CastSpell convention, {4s,6s} -> {12s,18s}); Curse of
+	// Exertion 52772 on a random alive player within 100m (nil target ->
+	// no cast, {10s,17s} -> 9.3s); Time Warp Talk SAY_TIME_WARP (2) +
+	// self-cast 52766 + self-cast dummy 52736 (DoCastAOE resolves to
+	// self-cast — kazrogal/illidan precedent, 25s -> 25s); KilledUnit Talk
+	// SAY_SLAY (3) gated on the victim being a player (C++'s TYPEID_PLAYER
+	// leg — terestian_illhoof convention); death is cancel only (C++
+	// JustDied calls _JustDied(), instance bookkeeping blocked,
+	// standing); melee engine-driven. The InitializeAI loot-mode leg
+	// (GetBossState(DATA_EPOCH) == DONE -> RemoveLootMode) has no
+	// instance-data bridge, the heroic-only Time Stop 58848 arm has no
+	// difficulty bridge (standing heroic-unmodeled case), and the
+	// EVENT_TIME_STEP charge machine (SpellHitTarget pushes dummy-hit
+	// GUIDs, triggered 52737 charges every 500ms) has no SpellHitTarget /
+	// ObjectAccessor bridge (SpellHit-15-never-fires standing queue) —
+	// documented in lua_scripts/kalimdor/boss_epoch.lua, not wired.
+	RegisterLuaBoss("boss_epoch", 26532)
 }
