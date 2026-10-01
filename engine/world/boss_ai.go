@@ -749,4 +749,13 @@ func init() {
 	// HasAura bridge); the npc_core_rager add AI is not registered (no
 	// entry constant in the C++ tree, DB-side ScriptName binding).
 	RegisterLuaBoss("boss_golemagg", 11988)
+	// RegisterLuaBoss wires lua_scripts/moltencore/boss_majordomo_executus.lua.
+	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
+	// encounter-state bookkeeping is blocked on the instance-script model;
+	// the defeat/outro arms (defeat trigger, faction change, teleport,
+	// Ragnaros summon, gossip flags, DoAction) have no bridges — only the
+	// combat timers, slay/aggro Talk lines, the teleport-victim exclusion,
+	// the sub-50% triggered Aegis of Ragnaros, and the gossip-select Talk
+	// arms are modeled.
+	RegisterLuaBoss("boss_majordomo", 12018)
 }
