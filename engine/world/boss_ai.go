@@ -726,4 +726,12 @@ func init() {
 	// threat-reset and teleport SpellScript arms have no bridges (no
 	// threat model, no SpellScript model).
 	RegisterLuaBoss("boss_shazzrah", 12264)
+	// Baron Geddon (Molten Core, sixth boss) — fight logic in
+	// lua_scripts/moltencore/boss_baron_geddon.lua. The UpdateAI casting
+	// gates have no bridge (no UNIT_STATE model); the encounter-state
+	// bookkeeping is blocked on the instance-script model; the
+	// armageddon InterruptNonMeleeSpells arm has no bridge; the
+	// spell_baron_geddon_inferno AuraScript has no bridge (no AuraScript
+	// model).
+	RegisterLuaBoss("boss_baron_geddon", 12056)
 }
