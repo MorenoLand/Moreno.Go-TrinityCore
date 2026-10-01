@@ -2018,5 +2018,18 @@ func init() {
 	// HANDOFTHAURISSAN 17492 sits on SelectTarget(Random) — no bridge;
 	// JustDied moira arm needs the instance-script model.
 	RegisterLuaBoss("boss_emperor_dagran_thaurissan", 9019)
+	// boss_magmus / boss_magmusAI (Blackrock Depths, Iron Hall; ScriptedAI
+	// combat scheduler via GetBlackrockDepthsAI — fieryburst 13900
+	// victim-cast 5s->6s; DamageTaken 50% one-shot phase-two latch
+	// (moroes convention) -> warstomp 24375 victim-cast 0s->8s; melee
+	// engine-driven). Entry 9938 verifiable from the C++ sources:
+	// instance_blackrock_depths.cpp names NPC_MAGMUS at 9938 (BRD
+	// instance creatures enum, line 44) — see
+	// lua_scripts/eastern_kingdoms/boss_magmus.lua. JustEngagedWith
+	// instance->SetData(TYPE_IRON_HALL, IN_PROGRESS) and the JustDied
+	// throne-door/DONE arms need the instance-script model (unmodeled);
+	// the sibling npc_ironhand_guardian is instance-arm-gated plus
+	// DoCastAOE — documented-only.
+	RegisterLuaBoss("boss_magmus", 9938)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
