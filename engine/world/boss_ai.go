@@ -2610,4 +2610,16 @@ func init() {
 	// _JustReachedHome/_JustDied instance legs and the GetInstanceAI
 	// leg have no bridges; see lua_scripts/kalimdor/boss_kelris.lua.
 	RegisterLuaBoss("boss_kelris", 4832)
+
+	// boss_aku_mai (Aku'mai, entry 4829 — below kalecgos: BFDCreatureIds
+	// names no Aku'mai entry and the instance OnCreatureCreate cases only
+	// Kelris/Lorgus; registered on the DB ScriptName tie plus wowhead
+	// npc=4829 corroboration, jeklik precedent): Poison Cloud 3815 on the
+	// victim (5-9s init / 25-50s repeat, jeklik GetVictim + CastSpell
+	// convention, non-triggered) and the sub-30% one-shot DamageTaken
+	// enrage — triggered self-cast Frenzied Rage 3490 on projected health
+	// (jeklik pre-damage subtraction, C++-exact); melee engine-driven.
+	// The BossAI _Reset/_JustDied instance legs and the GetInstanceAI leg
+	// have no bridges; see lua_scripts/kalimdor/boss_aku_mai.lua.
+	RegisterLuaBoss("boss_aku_mai", 4829)
 }
