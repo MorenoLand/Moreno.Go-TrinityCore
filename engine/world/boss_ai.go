@@ -1473,4 +1473,14 @@ func init() {
 	// cross-creature / data-set bridges — see lua_scripts/
 	// arcatraz/boss_dalliah_the_doomsayer.lua.
 	RegisterLuaBoss("boss_dalliah_the_doomsayer", 20885)
+
+	// boss_wrath_scryer_soccothrates (20886): felfire shock /
+	// knock away boss; the MoveInLineOfSight prefight
+	// machine, the Dalliah cross-creature arms (ME_FIRST,
+	// the 25% taunt, the JustDied SetData relay) and the
+	// SetData / EVENT_DALLIAH_DEATH machine have no
+	// LoS / instance-data / cross-creature / data-set
+	// bridges — see lua_scripts/arcatraz/
+	// boss_wrath_scryer_soccothrates.lua.
+	RegisterLuaBoss("boss_wrath_scryer_soccothrates", 20886)
 }
