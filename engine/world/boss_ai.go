@@ -3072,4 +3072,21 @@ func init() {
 	// have no spawn / instance-data bridges — documented in
 	// lua_scripts/kalimdor/boss_meathook.lua, not wired.
 	RegisterLuaBoss("boss_meathook", 26529)
+	// Onyxia: combat arms ported (entry 10184, NPC_ONYXIA GUID-bound
+	// in instance_onyxias_lair.cpp OnCreatureCreate —
+	// onyxias_lair.h:62; OnyxiaScriptName "instance_onyxias_lair",
+	// map 249) — the four phase-1 timer arms (Flame Breath
+	// DoCastVictim; Tail Sweep DoCastAOE self-cast; Cleave DoCastVictim;
+	// Wing Buffet DoCastVictim) and the engage aggro Talk / ungated
+	// KilledUnit Talk verified present in the port; the
+	// HealthBelowPct(65)/HealthBelowPct(40) phase transitions, the
+	// whole phase-2 flight machine (MoveData[8], MoveTakeoff/MovePoint,
+	// SetCanFly/SetDisableGravity, SpellHit redirect, Deep Breath /
+	// Movement / Fireball events), the phase-3 landing (Bellowing Roar
+	// + floor-eruption GO search), the whelp/lair-guard summons, and
+	// the BossAI instance/achievement/timed-achievement legs have no
+	// movement / MotionMaster / summon / GO-enumeration / SpellHit /
+	// instance-data / achievement bridges — documented in
+	// lua_scripts/kalimdor/boss_onyxia.lua, not wired.
+	RegisterLuaBoss("boss_onyxia", 10184)
 }
