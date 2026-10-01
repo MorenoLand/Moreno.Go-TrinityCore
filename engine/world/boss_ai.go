@@ -3003,4 +3003,34 @@ func init() {
 	// documented in lua_scripts/kalimdor/npc_arthas_stratholme.lua, not
 	// wired.
 	RegisterLuaBoss("npc_arthas_stratholme", 26499)
+
+	// boss_infinite_corruptor (Infinite Corruptor, entry 32273 —
+	// C++-verified via instance_culling_of_stratholme.cpp:62's
+	// NPC_INFINITE_CORRUPTOR constant plus :791's
+	// instance->SummonCreature(NPC_INFINITE_CORRUPTOR, CorruptorPos) in
+	// SpawnInfiniteCorruptor (summon strength; the :787 heroic-only
+	// spawn gate is a spawn-side leg, the creature_template ScriptName
+	// binding stays DB-side); BossAI's ctor leg DATA_INFINITE_CORRUPTOR
+	// is culling_of_stratholme.h:120): the self-contained in-combat
+	// legs only — engage arms the two timers at their C++ ScheduleEvent
+	// cooldowns with Talk SAY_AGGRO (0); Corrupting Blight 60588 on a
+	// random alive player within 60m (nefarian convention, nil target
+	// -> no cast, re-arm unconditional like C++, 7s -> 15s); Void
+	// Strike 60590 on the victim (jeklik GetVictim + CastSpell
+	// convention, 5s -> 5s); death is Talk SAY_DEATH (1) + cancel
+	// (C++ JustDied calls _JustDied() plus guardian/rift cleanup,
+	// blocked standing); melee engine-driven. The Reset
+	// DoCastAOE channel leg (60422 "implicitly targets the Guardian"),
+	// the SpellHitTarget(60422) guardian self-cast(60451) machine
+	// (SpellHit-15-never-fires standing queue), the JustDied
+	// FindNearestCreature(32281 guardian / 28409 time rift) cleanup,
+	// the EnterEvadeMode REACT_PASSIVE gate, the MovementInform point
+	// DespawnOrUnsummon + SetBossState FAIL, and the DoAction(-ACTION_
+	// CORRUPTOR_LEAVE) SAY_FAIL(2) + MovePoint-to-rift chain
+	// (culling_of_stratholme.h:150; instance caller
+	// instance_culling_of_stratholme.cpp:495) have no channel /
+	// SpellHit / nearby-creature / movement / DoAction / react-state /
+	// instance-data bridges — documented in
+	// lua_scripts/kalimdor/boss_infinite_corruptor.lua, not wired.
+	RegisterLuaBoss("boss_infinite_corruptor", 32273)
 }
