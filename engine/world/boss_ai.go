@@ -1794,4 +1794,29 @@ func init() {
 	// undercity — no invented registration. Undercity closes the
 	// EK zone set.
 	RegisterLuaBoss("npc_highborne_lamenter", 21628)
+	// npc_torturer_lecraft (Dragonblight zone script): the
+	// JustEngagedWith schedule + UpdateAI combat rotation —
+	// hemorrhage (DoCastVictim 30478, 5-8s engage / 12-168s
+	// re-arm) + kidney shot (DoCastVictim 30621, 12-15s
+	// engage / 20-26s re-arm) + Talk(SAY_AGGRO 0) on the
+	// 1s-pump pattern; the SpellHit text-counter machine has no
+	// SpellHit bridge (fizzule precedent) — documented only.
+	// Entry 27394 verifiable from the C++ TorturerLeCraft enum
+	// — see lua_scripts/northrend/npc_torturer_lecraft.lua.
+	// npc_commander_eligor_dawnbringer (Naxxramas-wings talk
+	// cinematic: MovePoint + MovementInform image-change chain +
+	// GetCreatureListWithEntryInGrid/FindNearestCreature target
+	// store + SetEntry/SetDisplayId image swap + audience
+	// facing) awaits the movement / world-search / entry-update
+	// / cross-creature-facing bridges — documented only.
+	// spell_q12096_q12092_dummy + spell_q12096_q12092_bark
+	// (Strengthen the Ancients SpellScripts) have no SpellScript
+	// bridge anywhere in the model (blasted_lands / gordunni
+	// precedents) — documented only. npc_wyrmrest_defender
+	// (VehicleAI low-hp warn arm + SpellHit / gossip / charm
+	// arms) has no verifiable NPC_ entry constant in the C++
+	// sources and sits behind the VehicleAI / SpellHit / gossip
+	// / flag bridges — documented only. Dragonblight is the
+	// third Northrend zone (dalaran, borean_tundra closed).
+	RegisterLuaBoss("npc_torturer_lecraft", 27394)
 }
