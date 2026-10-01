@@ -13,11 +13,15 @@
 -- convention); the two modeled arms are triggered self-casts.
 -- Fight shape (C++-exact for the modeled arms): OnSpellHit(14)
 -- by SPELL_KODO_KOMBO_ITEM 18153 -> if the entry is one of the
--- three kodo entries and neither the caster has SPELL_KODO_
--- KOMBO_PLAYER_BUFF 18172 nor the kodo has SPELL_KODO_KOMBO_
--- DESPAWN_BUFF 18377: triggered self-cast 18172 on the caster
+-- three kodo entries and the caster lacks SPELL_KODO_KOMBO_
+-- PLAYER_BUFF 18172: triggered self-cast 18172 on the caster
 -- (player-side CastSpell bridge — modeled as caster:AddAura,
 -- brutallus precedent) + triggered self-cast 18377 on the kodo.
+-- The C++ also gates on the kodo not having SPELL_KODO_KOMBO_
+-- DESPAWN_BUFF 18377, but the motion creature proxy has no
+-- HasAura bridge (aura bridges exist on the session player
+-- proxy only), so the kodo-side gate is dropped — documented
+-- below.
 -- Deliberate deviations (documented here): the 18153 arm's
 -- mutation half — UpdateEntry(NPC_TAMED_KODO 11627), CombatStop,
 -- SetFaction(FRIENDLY), SetSpeedRate(run 0.6f), EngagementOver,
@@ -56,10 +60,11 @@ local function kodoSpellHit(_, creature, caster, spellId)
         and entry ~= NPC_ANCIENT_KODO then
         return
     end
-    if caster:HasAura(SPELL_KODO_KOMBO_PLAYER_BUFF)
-        or creature:HasAura(SPELL_KODO_KOMBO_DESPAWN_BUFF) then
+    if caster:HasAura(SPELL_KODO_KOMBO_PLAYER_BUFF) then
         return
     end
+    -- The C++ kodo-side gate (!me->HasAura(SPELL_KODO_KOMBO_
+    -- DESPAWN_BUFF)) has no motion-proxy bridge — unmodeled.
     caster:AddAura(SPELL_KODO_KOMBO_PLAYER_BUFF)
     creature:CastSpell(creature, SPELL_KODO_KOMBO_DESPAWN_BUFF, true)
 end
