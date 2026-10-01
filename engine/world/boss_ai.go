@@ -769,4 +769,11 @@ func init() {
 	// the npc_son_of_flame add AI is not registered (no entry constant in
 	// the C++ tree, DB-side ScriptName binding).
 	RegisterLuaBoss("boss_ragnaros", 11502)
+	// RegisterLuaBoss wires lua_scripts/blacktemple/boss_warlord_najentus.lua.
+	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
+	// encounter-state bookkeeping is blocked on the instance-script model; the
+	// impaling-spine GO summon (185584) and the spine-removal gossip arm have
+	// no bridges (the GO handler needs the instance-creature lookup); the
+	// needle-spine targeting SpellScript filter has no SpellScript bridge.
+	RegisterLuaBoss("boss_najentus", 22887)
 }
