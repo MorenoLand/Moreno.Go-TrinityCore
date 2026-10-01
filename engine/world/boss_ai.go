@@ -2246,5 +2246,23 @@ func init() {
 	// C++ sources: blackwing_lair.h:54 names NPC_VAELASTRAZ = 13020
 	// (boss_urok_doomhowl precedent).
 	RegisterLuaBoss("boss_vaelastrasz", 13020)
+	// lua_scripts/eastern_kingdoms/boss_felblood_kaelthas.lua.
+	// Phase-one machine: fireball 44189 victim-cast 1ms init ->
+	// 2s500ms loop; phoenix Talk(SAY_SUMMON_PHOENIX=5) + self-cast
+	// 44194 12s init -> 45s loop. 50%-HP latch via OnDamageTaken(9)
+	// (gyth convention): Talk(SAY_GRAVITY_LAPSE_1=2) + phase-one
+	// timers cancelled (C++ phase gating stops their execution in
+	// PHASE_TWO). Lethal-damage latch: Talk(SAY_DEATH=8) + outro
+	// self-cast chain 48348/48349/48350/48350/3617. Flame-strike and
+	// shock-barrier/pyroblast arms unmodeled (SelectTarget / heroic
+	// gates — no bridges); phase-two gravity-lapse machinery
+	// unmodeled (teleport/SpellHitTarget/summon bridges absent);
+	// npc_felblood_kaelthas_phoenix class unmodeled (summon/instance/
+	// zone-in-combat bridges absent); flame-strike AuraScript not
+	// modeled. Script name is the stringified AI type (ScriptMgr.h:
+	// 1234, RegisterCreatureAIWithFactory). Entry 24664 verifiable
+	// from the C++ sources: magisters_terrace.h:50 names
+	// BOSS_KAELTHAS_SUNSTRIDER = 24664 (boss_vaelastrasz precedent).
+	RegisterLuaBoss("boss_felblood_kaelthas", 24664)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
