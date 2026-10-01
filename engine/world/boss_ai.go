@@ -2031,5 +2031,15 @@ func init() {
 	// the sibling npc_ironhand_guardian is instance-arm-gated plus
 	// DoCastAOE — documented-only.
 	RegisterLuaBoss("boss_magmus", 9938)
+	// boss_moira_bronzebeard / boss_moira_bronzebeardAI (Blackrock
+	// Depths, Lyceum; ScriptedAI combat scheduler via GetBlackrockDepthsAI
+	// — mindblast 10947 victim-cast 16s->14s, shadowwordpain 10894
+	// victim-cast 2s->18s, smite 10934 victim-cast 8s->10s; melee
+	// engine-driven). Entry 8929 verifiable from the C++ sources:
+	// instance_blackrock_depths.cpp names NPC_MOIRA at 8929 (BRD
+	// instance creatures enum, line 45) — see
+	// lua_scripts/eastern_kingdoms/boss_moira_bronzebeard.lua. The C++
+	// EVENT_HEAL arm is commented out ("not used atm") and left out.
+	RegisterLuaBoss("boss_moira_bronzebeard", 8929)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
