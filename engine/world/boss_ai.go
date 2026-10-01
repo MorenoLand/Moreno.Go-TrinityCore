@@ -1219,4 +1219,14 @@ func init() {
 	// lua_scripts/serpentshrinecavern/boss_lurker_below.lua.
 	RegisterLuaBoss("boss_the_lurker_below", 21217)
 	RegisterLuaBoss("npc_coilfang_ambusher", 21865)
+	// Hydromancer Thespia + Coilfang Water Elemental (The Steamvault):
+	// lightning cloud (random player <=30yd, 15s then 15-25s; the
+	// Heroic second cast has no difficulty bridge), lung burst
+	// (random player <=40yd, 7s then 7-12s), enveloping winds
+	// (random player <=35yd, 9s then 10-15s; Heroic second cast
+	// unmodeled); the elemental self-casts water bolt volley
+	// (34449), 3-6s init then 7-12s. Fight logic in
+	// lua_scripts/steamvault/boss_hydromancer_thespia.lua.
+	RegisterLuaBoss("boss_hydromancer_thespia", 17797)
+	RegisterLuaBoss("npc_coilfang_waterelemental", 17917)
 }
