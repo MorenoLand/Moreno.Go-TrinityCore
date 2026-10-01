@@ -2318,5 +2318,19 @@ func init() {
 	// sources: boss_priestess_delrissa.cpp's m_auiAddEntries names
 	// 24554 //Eramas Brightblaze (boss_felblood_kaelthas precedent).
 	RegisterLuaBoss("boss_eramas_brightblaze", 24554)
+	// boss_kagani_nightstrike: ScriptedAI (via the file's lackey-common
+	// base) gouge 12540 5.5s loop + kick 27613 7s loop + eviscerate
+	// 27611 6s->4s loop (DoCastVictim, GetVictim nil-guarded) +
+	// sub-25%-HP healing-potion 15503 self-cast latch (OnDamageTaken(9),
+	// per-guid one-shot, reset per engagement). The vanish 44290
+	// machine (SelectTarget + ResetThreatList/AddThreat — no bridges)
+	// and its InVanish backstab 15657 / kidney-shot 27615 leg
+	// unmodeled; common-AI threat ring / death-count / KilledUnit
+	// forward / AcquireGUIDs / Delrissa-respawn / ResetThreatList arms
+	// unmodeled (no GUID-list / instance / threat bridges). Entry
+	// 24557 verifiable from the C++ sources: boss_priestess_
+	// delrissa.cpp's m_auiAddEntries names 24557 //Kagani Nightstrike
+	// (boss_felblood_kaelthas precedent).
+	RegisterLuaBoss("boss_kagani_nightstrike", 24557)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
