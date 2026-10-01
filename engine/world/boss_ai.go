@@ -2570,4 +2570,14 @@ func init() {
 	// entry-verifiability check, ramstein strength).
 	RegisterLuaBoss("boss_archaedas", 2748)
 	RegisterLuaBoss("npc_stonekeepers", 4857)
+	// Ironaya (7228, Uldaman) runs Arcing Smash (8374, 3s init /
+	// 13s re-arm, DoCast(me) -> self CastSpell) plus the one-shot
+	// <50% Knockaway (10101, DoCastVictim triggered -> GetVictim +
+	// CastSpell) and <25% W-Stomp (11876, self-cast) arms via a
+	// 1s health check (kalecgos precedent). The Knockaway threat-
+	// reset leg and the ActivateIronaya instance choreography have
+	// no bridges; the latches clear on combat end/reset.
+	// Entry C++-verified via instance_uldaman.cpp OnCreatureCreate
+	// (case 7228: // Ironaya).
+	RegisterLuaBoss("boss_ironaya", 7228)
 }
