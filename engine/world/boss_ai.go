@@ -742,4 +742,11 @@ func init() {
 	// npc_flamewaker_priest add AI is not registered (no entry constant in
 	// the C++ tree, DB-side ScriptName binding).
 	RegisterLuaBoss("boss_sulfuron", 12098)
+	// RegisterLuaBoss wires lua_scripts/moltencore/boss_golemagg.lua.
+	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
+	// encounter-state bookkeeping is blocked on the instance-script model; the
+	// HasAura(SPELL_ENRAGE) once-guard is kept as per-GUID Lua state (no
+	// HasAura bridge); the npc_core_rager add AI is not registered (no
+	// entry constant in the C++ tree, DB-side ScriptName binding).
+	RegisterLuaBoss("boss_golemagg", 11988)
 }
