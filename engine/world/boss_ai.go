@@ -1229,4 +1229,13 @@ func init() {
 	// lua_scripts/steamvault/boss_hydromancer_thespia.lua.
 	RegisterLuaBoss("boss_hydromancer_thespia", 17797)
 	RegisterLuaBoss("npc_coilfang_waterelemental", 17917)
+	// Mekgineer Steamrigger (The Steamvault): super shrink ray
+	// (victim, 20s), saw blade (random non-victim player with
+	// victim fallback, 15s), electrified net (victim, 10s),
+	// SAY_MECHANICS at the 75/50/25 thresholds (the mechanic
+	// summons are summon-blocked); the npc_steamrigger_mechanic
+	// AI is entirely instance-gated and stays unregistered.
+	// Fight logic in
+	// lua_scripts/steamvault/boss_mekgineer_steamrigger.lua.
+	RegisterLuaBoss("boss_mekgineer_steamrigger", 17796)
 }
