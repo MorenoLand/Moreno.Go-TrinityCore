@@ -1664,4 +1664,21 @@ func init() {
 	RegisterLuaBoss("npc_enraged_spirit", 21061)
 	RegisterLuaBoss("npc_enraged_spirit", 21060)
 	RegisterLuaBoss("npc_enraged_spirit", 21059)
+	// npc_sironas (Bloodmyst Isle zone script): combat rotation
+	// only — uppercut (10966, 15s init then 10-12s), immolate
+	// (12742, 10s init then 15-20s), curse of blood (8282, 5s
+	// init then 20-25s), all non-triggered DoCastVictim
+	// (C++-exact); entry 17678 verifiable from the C++
+	// EndingTheirWorldMisc enum — see
+	// lua_scripts/kalimdor/npc_sironas.lua. The JustDied
+	// cross-creature legoso DoAction cascade and the
+	// sironas-channel DoAction arms have no cross-creature /
+	// DoAction bridges; the Reset display-id arm and the
+	// JustDied scale reset have no display / scale bridges —
+	// documented only; npc_webbed_creature (no-summon /
+	// quest-credit bridges, unverifiable entry) and
+	// npc_demolitionist_legoso (no-escort / quest-accept /
+	// summon / movement / gameobject bridges) are
+	// documented-only.
+	RegisterLuaBoss("npc_sironas", 17678)
 }
