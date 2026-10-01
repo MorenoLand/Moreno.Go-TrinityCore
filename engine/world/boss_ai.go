@@ -1995,5 +1995,16 @@ func init() {
 	// verifiable from the C++ sources: BattlegroundAV.h names "Vanndar
 	// Stormpike" at 11948 — see lua_scripts/eastern_kingdoms/boss_vanndar.lua.
 	RegisterLuaBoss("boss_vanndar", 11948)
+	// npc_phalanx (Blackrock Depths; ScriptedAI combat scheduler —
+	// thunderclap 8732 victim-cast 12s->10s, fireballvolley 22425
+	// victim-cast 15s gated on HealthBelowPct(51) (GetHealthPct on the
+	// motion object via the generic-field path in scripting/object.go),
+	// mightyblow 14099 victim-cast 15s->10s) — maiden convention
+	// (CreateLuaEvent timers; GetVictim for DoCastVictim; no
+	// UNIT_STATE_CASTING gate; melee engine-driven). Entry 9502
+	// verifiable from the C++ sources: instance_blackrock_depths.cpp
+	// names NPC_PHALANX at 9502 (DATA_PHALANX = 11 in
+	// blackrock_depths.h) — see lua_scripts/eastern_kingdoms/npc_phalanx.lua.
+	RegisterLuaBoss("npc_phalanx", 9502)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
