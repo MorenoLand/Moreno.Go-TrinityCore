@@ -2393,5 +2393,19 @@ func init() {
 	// priestess_delrissa.cpp's m_auiAddEntries names 24555 //Garaxxas
 	// (boss_felblood_kaelthas precedent).
 	RegisterLuaBoss("boss_garaxxas", 24555)
+	// boss_apoko: ScriptedAI (via the file's lackey-common base)
+	// totem machine DoCast(me, RAND(27621, 44257, 15786)) 2000ms init ->
+	// Totem_Amount*2000 loop (C++-exact escalation) + war-stomp 46026
+	// 10s self-cast loop + frost-shock 21401 7s DoCastVictim loop +
+	// lesser-healing-wave 44256 5s self-cast loop + sub-25%-HP
+	// healing-potion 15503 self-cast latch (OnDamageTaken(9), per-guid
+	// one-shot, reset per engagement). The purge 27626 machine gates on
+	// SelectTarget(Random, 0) (no bridge), and the common-AI threat
+	// ring / death-count / KilledUnit forward / AcquireGUIDs /
+	// Delrissa-respawn / ResetThreatList arms unmodeled (no GUID-list /
+	// instance / threat bridges). Entry 24553 verifiable from the C++
+	// sources: boss_priestess_delrissa.cpp's m_auiAddEntries names
+	// 24553 //Apoko (boss_felblood_kaelthas precedent).
+	RegisterLuaBoss("boss_apoko", 24553)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
