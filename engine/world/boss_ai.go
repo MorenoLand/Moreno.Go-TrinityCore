@@ -1423,4 +1423,31 @@ func init() {
 	// lua_scripts/hellfireramparts/
 	// boss_omor_the_unscarred.lua.
 	RegisterLuaBoss("boss_omor_the_unscarred", 17308)
+
+	// boss_vazruden_the_herald (17307): the herald's whole
+	// phase machine is movement/summon-blocked — only the
+	// SAY_INTRO engage arm is registered; the adds (Nazan
+	// 17536, Vazruden 17537) and the hellfire sentry (17517)
+	// carry the combat arms — see lua_scripts/
+	// hellfireramparts/boss_vazruden_the_herald.lua.
+	RegisterLuaBoss("boss_vazruden_the_herald", 17307)
+
+	// boss_nazan (17536): fireball / cone-of-fire boss; the
+	// flight waypoints, gravity/walk arms, early-land
+	// condition, heroic bellowing roar and liquid-fire
+	// summon have no bridges — see lua_scripts/
+	// hellfireramparts/boss_nazan.lua.
+	RegisterLuaBoss("boss_nazan", 17536)
+
+	// boss_vazruden (17537): revenge / wipe-yell boss; the
+	// heroic revenge variant and the DisappearAndDie arm
+	// have no bridges — see lua_scripts/hellfireramparts/
+	// boss_vazruden.lua.
+	RegisterLuaBoss("boss_vazruden", 17537)
+
+	// npc_hellfire_sentry (17517): kidney-shot trash; the
+	// JustDied -> herald SentryDownBy relay has no
+	// cross-creature bridge — see lua_scripts/
+	// hellfireramparts/npc_hellfire_sentry.lua.
+	RegisterLuaBoss("npc_hellfire_sentry", 17517)
 }
