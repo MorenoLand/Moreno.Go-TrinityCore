@@ -1736,4 +1736,23 @@ func init() {
 	// bridges; npc_giant_spotlight (5-min despawn sweep) awaits
 	// the world-search / despawn bridges — documented only.
 	RegisterLuaBoss("npc_omen", 15467)
+	// boss_twilight_corrupter (Duskwood zone script): combat
+	// rotation only — soul corruption (25805, 15s init then
+	// 15-19s; DoCastAOE = DoCast(nullptr, spell) self-cast,
+	// C++-exact) + creature of nightmare (25806, 30s init then
+	// 45s, random target degraded to victim — no target-selection
+	// bridge), all non-triggered (C++-exact); JustEngagedWith
+	// Talk(YELL_TWILIGHT_CORRUPTOR_AGGRO 1); KilledUnit
+	// kill-counter (victim:GetTypeId() == 4, C++-exact):
+	// Talk(YELL_TWILIGHT_CORRUPTOR_KILL 2) per player kill, self-
+	// cast level-up (24312) at 3 kills then reset (the triggered
+	// flag has no distinct bridge); entry 15625 verifiable from
+	// the C++ TwilightCorrupter enum — see
+	// lua_scripts/eastern_kingdoms/boss_twilight_corrupter.lua.
+	// The UNIT_STATE_CASTING pump-skip has no state bridge; the
+	// kill-yell's victim targeting has no bridge; at_twilight_
+	// grove (quest-8735 area-trigger summon) awaits the area-
+	// trigger / quest-status / world-search / summon bridges —
+	// documented only.
+	RegisterLuaBoss("boss_twilight_corrupter", 15625)
 }
