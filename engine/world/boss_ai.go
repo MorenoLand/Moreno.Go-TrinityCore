@@ -1170,4 +1170,21 @@ func init() {
 	// lua_scripts/serpentshrinecavern/boss_lady_vashj.lua.
 	RegisterLuaBoss("boss_lady_vashj", 21212)
 	RegisterLuaBoss("npc_tainted_elemental", 22009)
+
+	// Leotheras the Blind (21215) — whirlwind / chaos blast /
+	// nightelf-demon form switching / berserk / 15% final form.
+	// The banish pre-phase, CheckBanish poll, channeler summons,
+	// inner-demon summons, demon-copy summon, display/item/threat/
+	// movement arms are unmodeled. Demon Form (21875) runs chaos
+	// blast with the range-gated re-arm; Greyheart Spellbinder
+	// (21806) runs mind blast ({3s,8s} then {10s,15s}) — the
+	// earthshock caster scan has no bridge. Inner Demon (21857)
+	// runs soul link 1s / demonic alignment upkeep / shadow bolt
+	// 10s — the victim binding and damage immunity are unmodeled.
+	// Fight logic in
+	// lua_scripts/serpentshrinecavern/boss_leotheras_the_blind.lua.
+	RegisterLuaBoss("boss_leotheras_the_blind", 21215)
+	RegisterLuaBoss("boss_leotheras_the_blind_demonform", 21875)
+	RegisterLuaBoss("npc_greyheart_spellbinder", 21806)
+	RegisterLuaBoss("npc_inner_demon", 21857)
 }
