@@ -855,4 +855,18 @@ func init() {
 	// Reliquary combat trigger (Black Temple) — invulnerability
 	// hook in lua_scripts/blacktemple/boss_reliquary_of_souls.lua.
 	RegisterLuaBoss("npc_reliquary_combat_trigger", 23417)
+	// Mother Shahraz (Black Temple) — fight logic in
+	// lua_scripts/blacktemple/boss_mother_shahraz.lua.
+	// The enrage (10%, triggered 40867), taunt and fatal-attraction
+	// arms are modeled; the encounter-state bookkeeping is blocked
+	// on the instance-script model (DATA_MOTHER_SHAHRAZ); the
+	// fatal-attraction SPELLVALUE_MAX_TARGETS=3 clamp and the
+	// teleport target filter have no bridge (the 40869 target
+	// filter SpellScript has no SpellScript bridge); the
+	// 40863/40865/40866/40862 beam-trigger arms and the 40867
+	// random-beam periodic arm have no AuraScript bridge; the
+	// saber lash aura script (40816) has no bridge; the EnterEvadeMode
+	// _DespawnAtEvade arm has no despawn bridge (evade-side cleanup
+	// is engine-side).
+	RegisterLuaBoss("boss_mother_shahraz", 22947)
 }
