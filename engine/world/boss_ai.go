@@ -2181,5 +2181,24 @@ func init() {
 	// Entry 10339 verifiable from the C++ sources: blackrock_spire.h
 	// names NPC_GYTH at 10339 (BRS creatures enum).
 	RegisterLuaBoss("boss_gyth", 10339)
+	// lua_scripts/eastern_kingdoms/boss_rend_blackhand.lua.
+	// Whirlwind 13736 self-cast 13s init -> 13s loop; cleave 15284
+	// victim-cast 15s init -> 10s loop; mortal-strike 16856 victim-cast
+	// 17s init -> 14s loop (urand ranges use the lower bound, halycon
+	// convention). SPELL_FRENZY 8269 / SPELL_KNOCKDOWN 13360 are
+	// enum-only in C++ (never cast), omitted by design. The whole
+	// pre-fight gyth event chain (Nefarius FindNearestCreature,
+	// portcullis gameobject, MovePath, NearTeleportTo, SummonCreature
+	// of Gyth, area-trigger SetData) is documented-only — no bridges
+	// on the Lua surface (the_beast / gyth precedent); wave tables are
+	// commented out in C++ and the EVENT_WAVE_1..6 bodies are no-ops.
+	// JustDied's SetData(1, 2) on Nefarius unmodeled (creature-list
+	// precedent); IsSummonedBy's SetImmuneToPC(false) + DoZoneInCombat
+	// has no spawn bridge (emberseer precedent); MovementInform
+	// despawn gates on MotionMaster/DespawnOrUnsummon. Reset _Reset /
+	// JustDied _JustDied covered by the cancel on 2/4/23. Entry 10429
+	// verifiable from the C++ sources: blackrock_spire.h:70 names
+	// NPC_WARCHIEF_REND_BLACKHAND = 10429.
+	RegisterLuaBoss("boss_rend_blackhand", 10429)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
