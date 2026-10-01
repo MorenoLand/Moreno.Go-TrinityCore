@@ -1952,5 +1952,22 @@ func init() {
 	// names "Captain Balinda Stonehearth" at 11949 — see
 	// lua_scripts/eastern_kingdoms/boss_balinda.lua.
 	RegisterLuaBoss("boss_balinda", 11949)
+	// boss_drekthar (Alterac Valley) — the 5-event combat scheduler
+	// (whirlwind 15589 victim-cast {1,20}s->{8,18}s, whirlwind2 13736
+	// victim-cast {1,20}s->{7,25}s, knockdown 19128 victim-cast
+	// 12s->{10,15}s, frenzy 8269 victim-cast 6s->{20,30}s, random-yell
+	// Talk(3) {20,30}s->{20,30}s) plus the aggro Talk(0) and the
+	// JustAppeared Talk(2) respawn yell (no JustAppeared bridge —
+	// carried on OnSpawn(5), storm_cloud convention) — maiden
+	// convention (CreateLuaEvent timers; GetVictim for DoCastVictim;
+	// no UNIT_STATE_CASTING gate). The CheckInRoom home leash arm
+	// (home-position 2D distance > 50yd -> EnterEvadeMode + Talk(1))
+	// has no HomePosition bridge — documented only; evade still re-arms
+	// through OnReset(23). SPELL_SWEEPING_STRIKES 18765 /
+	// SPELL_CLEAVE 20677 / SPELL_WINDFURY 35886 / SPELL_STORMPIKE 51876
+	// are declared but unused by this AI. Entry 11946 verifiable from
+	// the C++ sources: BattlegroundAV.h names "Drek'Thar" at 11946 —
+	// see lua_scripts/eastern_kingdoms/boss_drekthar.lua.
+	RegisterLuaBoss("boss_drekthar", 11946)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
