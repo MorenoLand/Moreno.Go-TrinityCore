@@ -2908,4 +2908,25 @@ func init() {
 	// declared but never cast by UpdateAI; SAY_ENTER 0 is never Talked
 	// in C++.
 	RegisterLuaBoss("boss_chrono_lord_deja", 17879)
+
+	// boss_temporus (Temporus, entry 17880 — C++-verified via
+	// the_black_morass.h:61's NPC_TEMPORUS constant plus
+	// instance_the_black_morass.cpp:62's RiftWaves wave-4 portal boss
+	// summon with a 140s NextPortalTime; the creature_template ScriptName
+	// binding stays DB-side): the self-contained in-combat legs only —
+	// engage Talk SAY_AGGRO (1) + arm the three timers at their C++
+	// ScheduleEvent cooldowns; Haste 31458, Mortal Wound 31464 and Wing
+	// Buffet 31475 self-cast; KilledUnit Talk SAY_SLAY (3) with no
+	// TYPEID gate (C++ talks unconditionally here, like deja, unlike
+	// aeonus); death Talk SAY_DEATH (4); melee engine-driven. The
+	// MoveInLineOfSight Time Keeper leg (SAY_BANISH (2) + full-health
+	// one-shot of NPC_TIME_KEEPER 17918 within 20yd) has no
+	// nearby-creature enumeration bridge, the JustDied
+	// instance->SetData(TYPE_RIFT, SPECIAL) leg has no instance-data
+	// bridge (standing), and the heroic-only Spell Reflection 38592 arm
+	// (C++ marks it "//Not Implemented (Heroic mod)") has no difficulty
+	// bridge — documented in lua_scripts/kalimdor/boss_temporus.lua, not
+	// wired. H_SPELL_WING_BUFFET 38593 is declared but never cast by
+	// UpdateAI; SAY_ENTER 0 is never Talked in C++.
+	RegisterLuaBoss("boss_temporus", 17880)
 }
