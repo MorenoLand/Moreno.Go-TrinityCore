@@ -1465,4 +1465,12 @@ func init() {
 	// early-return gates have no cast-state bridge — see
 	// lua_scripts/arcatraz/boss_zereketh_the_unbound.lua.
 	RegisterLuaBoss("boss_zereketh_the_unbound", 20870)
+
+	// boss_dalliah_the_doomsayer (20885): gift of the
+	// doomsayer / whirlwind / heal boss; the Soccothrates
+	// cross-creature arms and the out-of-combat
+	// EVENT_SOCCOTHRATES_DEATH machine have no
+	// cross-creature / data-set bridges — see lua_scripts/
+	// arcatraz/boss_dalliah_the_doomsayer.lua.
+	RegisterLuaBoss("boss_dalliah_the_doomsayer", 20885)
 }
