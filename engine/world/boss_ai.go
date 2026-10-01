@@ -2679,4 +2679,24 @@ func init() {
 	// DATA_RAGEWINTERCHILLEVENT Reset/engage/death instance legs have no
 	// bridges; see lua_scripts/kalimdor/boss_rage_winterchill.lua.
 	RegisterLuaBoss("boss_rage_winterchill", 17767)
+
+	// boss_anetheron (Anetheron, entry 17808 — C++-verified via hyjal.h
+	// HYCreaturesIds "Bosses summoned after every 8 waves" enum plus
+	// instance_hyjal.cpp's OnCreatureCreate GUID-capture case (:119) and
+	// the DATA_ANETHERON GetGuidData leg (:155), ramstein strength; the
+	// creature_template ScriptName binding stays DB-side): the
+	// self-contained in-combat legs (Carrion Swarm 31306 on a random alive
+	// player within 100 init 45s -> {45s,60s} + Talk SAY_SWARM; Sleep
+	// 31298 self-cast-on-target x3 random players within 100 init 60s ->
+	// 60s + Talk SAY_SLEEP; Vampiric Aura 38196 self triggered init 5s ->
+	// {10s,20s}; Inferno 31299 on a random alive player within 100 init
+	// 45s -> 45s + Talk SAY_INFERNO; engage Talk SAY_ONAGGRO, KilledUnit
+	// (player-gated) Talk SAY_ONSLAY, death Talk SAY_ONDEATH) on
+	// C++-verbatim timers; melee engine-driven. The IsEvent EscortAI
+	// escort machine and DATA_ANETHERONEVENT Reset/engage/death instance
+	// legs have no bridges; npc_towering_infernal is unregistered (zero
+	// C++ entry evidence, gelihast precedent) and the vampiric-aura
+	// AuraScript proc has no AuraScript-handler bridge; see
+	// lua_scripts/kalimdor/boss_anetheron.lua.
+	RegisterLuaBoss("boss_anetheron", 17808)
 }
