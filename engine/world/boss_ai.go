@@ -1187,4 +1187,18 @@ func init() {
 	RegisterLuaBoss("boss_leotheras_the_blind_demonform", 21875)
 	RegisterLuaBoss("npc_greyheart_spellbinder", 21806)
 	RegisterLuaBoss("npc_inner_demon", 21857)
+
+	// Morogrim Tidewalker (21213) — tidal wave 10s/20s,
+	// earthquake 40s/10s two-stage (Talk + Talk(EMOTE) on the
+	// summon stage), watery grave 30s in phase 1 (talks only),
+	// watery globules 0/25s in phase 2 (Talk(EMOTE) only) on the
+	// once-guarded <25% switch. The murloc (21920) summons, the
+	// waterfall teleport, the watery-grave/globule target picks
+	// and the player-side triggered casts are unmodeled. Water
+	// Globule (21913) runs the 5-yd check -> explosion 37871 +
+	// despawn; the LOS aggro machine and flag/faction arms are
+	// unmodeled. Fight logic in
+	// lua_scripts/serpentshrinecavern/boss_morogrim_tidewalker.lua.
+	RegisterLuaBoss("boss_morogrim_tidewalker", 21213)
+	RegisterLuaBoss("npc_water_globule", 21913)
 }
