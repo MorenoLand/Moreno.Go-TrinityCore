@@ -2482,4 +2482,25 @@ func init() {
 	// chapter2.cpp's own ScarletCourierEnum (line 336) names
 	// NPC_SCARLET_COURIER = 29076.
 	RegisterLuaBoss("npc_scarlet_courier", 29076)
+	// boss_mr_smite (Deadmines, boss_mr_smite.cpp — ScriptedAI via
+	// GetDeadminesAI; the first unit of the Deadmines block): the combat
+	// machine (Trash 3391 self-cast {5,9}s->{6,15.5}s, Smite Slam 6435
+	// victim-cast 9s->11s, both with the bCheckChances 15%-skip gate)
+	// plus the phase-transition latch (stomp 6432 + Talk(2) at the 66%
+	// crossing, stomp + Talk(3) at the 33% crossing — balinda
+	// DamageTaken-latch convention: the OnDamageTaken(9) handler fires
+	// with a fresh live-motion creature object, so (health - damage) is
+	// the genuine post-hit percent) in lua_scripts/eastern_kingdoms/
+	// boss_mr_smite.lua — maiden convention (CreateLuaEvent timers;
+	// GetVictim for DoCastVictim; no UNIT_STATE_CASTING gate). The
+	// !uiIsMoving ability-halt leg (SetCombatMovement/AttackStop/
+	// InterruptNonMeleeSpells/REACT_PASSIVE) has no bridges, so the
+	// timers keep firing through crossings (documented deviation).
+	// The phase/equip event machine (instance chest DATA_SMITE_CHEST /
+	// GO 144111 via ObjectAccessor, MotionMaster MovePoint, equip-swap
+	// 5191/5196/7230, stand-state, MoveChase) and Reset's equipment/
+	// stand-state/react-state/NoCallAssistance arms are documented-only.
+	// Entry 646 verifiable from the C++ sources: deadmines.h's own
+	// DMCreaturesIds enum names NPC_MR_SMITE = 646.
+	RegisterLuaBoss("boss_mr_smite", 646)
 }
