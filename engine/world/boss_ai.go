@@ -2455,4 +2455,18 @@ func init() {
 	RegisterLuaBoss("npc_unworthy_initiate", 29565)
 	RegisterLuaBoss("npc_unworthy_initiate", 29566)
 	RegisterLuaBoss("npc_unworthy_initiate", 29567)
+	// npc_koltira_deathweaver (The Scarlet Enclave, Bloody Breakout
+	// quest-12727 intro): OnQuestAccept(12727) -> 500ms Talk(0) ->
+	// 5s Talk(1) intro legs + OnGossipHello 13425 event-menu arm
+	// (event-gossip state only settable by the stranded MovementInform
+	// chain) are ported in lua_scripts/eastern_kingdoms/
+	// npc_koltira_deathweaver.lua; the MoveJump/MovePoint intro legs,
+	// the MovementInform-triggered wave/valroth/outro machine,
+	// EVENT_CHECK_PLAYER, summon groups and all flag/stand-state/
+	// aura bridges are documented-only (no MotionMaster/
+	// MovementInform/summon/despawn/quest-status bridges). Entry
+	// 28912 verifiable from the C++ sources: chapter2.cpp's own
+	// BloodyBreakout enum (line 90) names NPC_KOLTIRA = 28912
+	// (boss_felblood_kaelthas precedent).
+	RegisterLuaBoss("npc_koltira_deathweaver", 28912)
 }
