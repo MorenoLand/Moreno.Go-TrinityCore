@@ -2097,5 +2097,15 @@ func init() {
 	// names NPC_OVERLORD_WYRMTHALAK at 9568 (BRS creatures enum) —
 	// see lua_scripts/eastern_kingdoms/boss_overlord_wyrmthalak.lua.
 	RegisterLuaBoss("boss_overlord_wyrmthalak", 9568)
+	// boss_shadow_hunter_voshgajin / boss_shadowvoshAI (Blackrock
+	// Spire, entrance encounter; BossAI combat scheduler via
+	// GetBlackrockSpireAI — curseofblood 24673 2s->45s, cleave 20691
+	// 14s->7s, both victim-cast; melee engine-driven; hex unmodeled —
+	// no SelectTarget bridge; Reset's ice-armor self-cast is commented
+	// out in C++ and omitted by design).
+	// Entry 9236 verifiable from the C++ sources: blackrock_spire.h
+	// names NPC_SHADOW_HUNTER_VOSHGAJIN at 9236 (BRS creatures enum) —
+	// see lua_scripts/eastern_kingdoms/boss_shadow_hunter_voshgajin.lua.
+	RegisterLuaBoss("boss_shadow_hunter_voshgajin", 9236)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
