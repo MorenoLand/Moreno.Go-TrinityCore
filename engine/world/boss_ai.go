@@ -970,4 +970,22 @@ func init() {
 	// chain has no instance-creature/cross-creature/flag/movement
 	// bridges.
 	RegisterLuaBoss("boss_brutallus", 24882)
+	// Felmyst (Sunwell Plateau) — fight logic in
+	// lua_scripts/sunwellplateau/boss_felmyst.lua.
+	// Felmyst (25038) runs the pull auras, the
+	// cleave/corrosion/gas-nova/encapsulate ground-phase schedule,
+	// the berserk chain (10min, then every 10s, C++-exact), the
+	// unguarded kill Talk, the death Talk and timer cleanup; the
+	// flight phase, DamageTaken invulnerability, FOG_INFORM SpellHit
+	// summon, vapor-trail despawn summon and JustAppeared Talk arms
+	// have no movement/summon/kill/spawn bridges, and the
+	// SetBossState arms are blocked on the instance-script model.
+	RegisterLuaBoss("boss_felmyst", 25038)
+	// Vapor trail (25267) runs its constructor triggered self-cast
+	// of trail trigger 45399; the flag/combat-reach arms have no
+	// bridges. The vapor (25265) has no bridgeable AI arms (flag/
+	// speed/target-selection only) and the Blazing Dead (25268)
+	// has no C++ AI class, so neither is registered yet — entries
+	// verified in sunwell_plateau.h for future registration.
+	RegisterLuaBoss("npc_felmyst_trail", 25267)
 }
