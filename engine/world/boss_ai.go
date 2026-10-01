@@ -1366,4 +1366,28 @@ func init() {
 	// Fight logic in lua_scripts/hellfirecitadel/boss_the_
 	// maker.lua.
 	RegisterLuaBoss("boss_the_maker", 17381)
+
+	// boss_grand_warlock_nethekurse (16807): death coil and
+	// shadow fissure on random players (nil picks cast
+	// nothing; re-arms fire regardless — C++-exact), the
+	// below-20%-health flip to the dark-spin + shadow-cleave
+	// phase (cleave timer decrements only in the phase-2
+	// branch — C++-exact bookkeeping); Talk on pull
+	// (SAY_AGGRO, 4), an ungated kill line (SAY_SLAY, 5) and
+	// death (SAY_DIE, 6). The intro/peon SetData machine
+	// (SAY_INTRO/PEON_ATTACKED/PEON_DIES/TAUNT) has no
+	// instance/cross-creature/flag bridges — the Initialize()
+	// schedule lands on OnEnterCombat (broggok precedent);
+	// heroic 30741/35953 unmodeled (thespia precedent).
+	// npc_fel_orc_convert (17083): hemorrhage on a 3s/15s
+	// EventMap rhythm; the SetData peon relays have no
+	// cross-creature bridge.
+	// npc_lesser_shadow_fissure documented only (all four AI
+	// overrides empty — ahune bunny empty-skeleton
+	// precedent).
+	// Fight logic in lua_scripts/shatteredhalls/boss_nethe
+	// kurse.lua and lua_scripts/shatteredhalls/npc_fel_orc_
+	// convert.lua.
+	RegisterLuaBoss("boss_grand_warlock_nethekurse", 16807)
+	RegisterLuaBoss("npc_fel_orc_convert", 17083)
 }
