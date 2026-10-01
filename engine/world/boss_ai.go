@@ -1394,4 +1394,9 @@ func init() {
 	// Fight logic in
 	// lua_scripts/shatteredhalls/boss_warbringer_omrogg.lua.
 	RegisterLuaBoss("boss_warbringer_omrogg", 16809)
+
+	// Fight logic in
+	// lua_scripts/shatteredhalls/boss_warchief_kargath_
+	// bladefist.lua.
+	RegisterLuaBoss("boss_warchief_kargath_bladefist", 16808)
 }
