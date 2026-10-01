@@ -1256,4 +1256,14 @@ func init() {
 	// stay blocked on the instance-script model. Fight logic
 	// in lua_scripts/theslavepens/boss_mennu_the_betrayer.lua.
 	RegisterLuaBoss("boss_mennu_the_betrayer", 17941)
+	// Rokmar the Crackler (The Slave Pens): grievous wound
+	// (triggered DoCastVictim, 10s then 20-30s), ensnaring
+	// moss (DoCastAOE self-cast, 20s then 20-30s), water spit
+	// (DoCastAOE self-cast, 14s then 14-18s), frenzy self-cast
+	// once-guarded on HealthBelowPct(10); no Talk lines and no
+	// KilledUnit body in C++, so no event 3; the _Reset/
+	// _JustDied instance arms stay blocked on the
+	// instance-script model. Fight logic in
+	// lua_scripts/theslavepens/boss_rokmar_the_crackler.lua.
+	RegisterLuaBoss("boss_rokmar_the_crackler", 17991)
 }
