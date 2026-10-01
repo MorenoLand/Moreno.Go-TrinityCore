@@ -2546,4 +2546,28 @@ func init() {
 	// C++ sources: scarlet_monastery.h's own SMCreatureIds enum names
 	// NPC_HEADLESS_HORSEMAN = 23682.
 	RegisterLuaBoss("boss_headless_horseman", 23682)
+	// Archaedas (2748, Uldaman) runs the Ground Tremor (6524)
+	// schedule (60s init, 45s re-arm, DoCastVictim -> GetVictim +
+	// CastSpell). The awaken sequence (SpellHit 10347 Talk/yell +
+	// 4s waking-up timer + AttackStart on the instance's GUID 0),
+	// the 10s wall-minion SetData(DATA_MINIONS) pump, the <66%/
+	// <33% guardian/vault-walker awaken arms, the JustDied
+	// SetData(DATA_ANCIENT_DOOR, DONE)/SetData(DATA_MINIONS,
+	// SPECIAL) legs and the Reset freeze-aura/flag/faction legs
+	// are instance-model/SpellHit-15/flag/faction-blocked; the
+	// KilledUnit Talk is queued (no CreatureEvent id). The stone
+	// keepers (4857) run their JustDied triggered self-cast of
+	// Self Destruct 9874 (headless_horseman/omen onDied self-cast
+	// precedent); their faction/flag/root and DATA_STONE_KEEPERS
+	// legs are documented-only. The archaedas minions
+	// (7309/7077/7076/10120) have no bridgeable AI arms (state
+	// legs + SpellHit-15 awaken + engine-driven melee) and the
+	// Altar of Archaedas GO script is entry-unverifiable (no GO
+	// entry named in the C++ sources) — documented in the .lua
+	// header. Entries C++-verified via instance_uldaman.cpp's
+	// OnCreatureCreate name-comments feeding the GUID vectors the
+	// boss's GetGuidData(0/1-4/5-10) arms consume (kalecgos
+	// entry-verifiability check, ramstein strength).
+	RegisterLuaBoss("boss_archaedas", 2748)
+	RegisterLuaBoss("npc_stonekeepers", 4857)
 }
