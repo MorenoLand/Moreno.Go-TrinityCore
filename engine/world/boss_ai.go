@@ -2119,6 +2119,18 @@ func init() {
 	// Entry 10430 verifiable from the C++ sources: blackrock_spire.h
 	// names NPC_THE_BEAST at 10430 (BRS creatures enum) — see
 	// lua_scripts/eastern_kingdoms/boss_the_beast.lua.
+	// Warmaster Voone: 6-event combat scheduler; see
+	// lua_scripts/eastern_kingdoms/boss_warmaster_voone.lua.
+	// C++-exact: EVENT_PUMMEL (15615, one-shot 32s) re-arms
+	// EVENT_MORTAL_STRIKE at 16s rather than itself; mortal-strike
+	// otherwise loops 10s (12s init), snap-kick 6s loop (8s init),
+	// cleave 12s loop (14s init), uppercut 14s loop (20s init),
+	// throw-axe 8s loop (1s init) — all DoCastVictim (maiden
+	// convention). No UNIT_STATE_CASTING model in Go; Reset
+	// _Reset / JustDied _JustDied covered by the cancel on 2/4/23.
+	// Entry 9237 verifiable from the C++ sources: blackrock_spire.h
+	// names NPC_WARMASTER_VOONE at 9237 (BRS creatures enum).
+	RegisterLuaBoss("boss_warmaster_voone", 9237)
 	RegisterLuaBoss("boss_the_beast", 10430)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
