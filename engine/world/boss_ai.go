@@ -2503,4 +2503,21 @@ func init() {
 	// Entry 646 verifiable from the C++ sources: deadmines.h's own
 	// DMCreaturesIds enum names NPC_MR_SMITE = 646.
 	RegisterLuaBoss("boss_mr_smite", 646)
+
+	// boss_vancleef (Deadmines): JustEngagedWith's Talk(SAY_AGGRO) ->
+	// creature:Talk(0) on OnEnterCombat; KilledUnit's TYPEID_PLAYER-gated
+	// Talk(SAY_KILL) -> OnTargetDied(3) with victim:IsPlayer(); DamageTaken
+	// health latches on OnDamageTaken(9): 50% -> Talk(SAY_SUMMON) +
+	// DoCastSelf(SPELL_VANCLEEFS_ALLIES 5200) ~ CastSpell(self, 5200) (the
+	// summon leg can't materialize — no summon bridge, documented
+	// deviation), 66% -> Talk(SAY_ONE), 33% -> Talk(SAY_TWO), 25% ->
+	// Talk(SAY_THREE) (C++-exact: 50% in its own if, 25/33/66 in an
+	// else-if chain; per-guid one-shot latches). Reset's DoCastSelf(674/
+	// 12787) are stranded halves (no single faithful trigger — C++ Reset
+	// also runs at spawn Initialize), SummonBlackguards()' DoSummon(
+	// NPC_BLACKGUARD 636 x2) and EnterEvadeMode's summons.DespawnAll() are
+	// documented-only (no summon bridge — dark-rider precedent).
+	// Entry 639 verifiable from the C++ sources: deadmines.h's own
+	// DMCreaturesIds enum names NPC_VANCLEEF = 639.
+	RegisterLuaBoss("boss_vancleef", 639)
 }
