@@ -2229,5 +2229,22 @@ func init() {
 	// verifiable from the C++ sources: blackrock_spire.h:64 names
 	// NPC_UROK_DOOMHOWL = 10584 (gizrul / rend_blackhand precedent).
 	RegisterLuaBoss("boss_urok_doomhowl", 10584)
+	// lua_scripts/eastern_kingdoms/boss_vaelastrasz.lua.
+	// Combat entry self-cast essence-of-the-red 23513 + SetHealth(30%
+	// of max); cleave 19983 victim-cast 10s init -> 15s loop;
+	// flamebreath 23461 victim-cast 15s init -> 8s loop (urand lower
+	// bound); firenova 23462 victim-cast 20s init -> 15s loop;
+	// burning-adrenaline tank 18173 victim-cast 45s init -> 45s loop.
+	// 15%-HP Talk(SAY_HALFLIFE=3) one-shot latch via OnDamageTaken(9)
+	// (gyth convention); KilledUnit 20% Talk(SAY_KILLTARGET=4) via
+	// OnTargetDied(3) (Eluna::KilledUnit mapping). The gossip
+	// pre-fight (EVENT_SPEECH_1..4 chain, SAY_LINE1..3, faction
+	// change, AttackStart) has no creature-gossip bridge; tailswipe
+	// is commented out in C++; the burning-adrenaline caster arm
+	// gates on SelectTarget (no bridge); the burning-adrenaline
+	// AuraScript is not modeled. Entry 13020 verifiable from the
+	// C++ sources: blackwing_lair.h:54 names NPC_VAELASTRAZ = 13020
+	// (boss_urok_doomhowl precedent).
+	RegisterLuaBoss("boss_vaelastrasz", 13020)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
