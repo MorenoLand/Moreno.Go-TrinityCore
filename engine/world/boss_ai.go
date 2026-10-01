@@ -2078,5 +2078,14 @@ func init() {
 	// Reset() _Reset() / JustDied _JustDied() are internal BossAI
 	// machinery covered by the cancel/re-arm on combat events.
 	RegisterLuaBoss("boss_highlord_omokk", 9196)
+	// boss_mother_smolderweb / boss_mothersmolderwebAI (Blackrock
+	// Spire, Caverns of Abomination; BossAI combat scheduler via
+	// GetBlackrockSpireAI — crystalize 16104 self-cast 20s->15s,
+	// mothersmilk 16468 self-cast 10s->5s, lethal-hit self-cast
+	// summon 16103 (DoCast(me, 16103, true)); melee engine-driven).
+	// Entry 10596 verifiable from the C++ sources: blackrock_spire.h
+	// names NPC_MOTHER_SMOLDERWEB at 10596 (BRS creatures enum) —
+	// see lua_scripts/eastern_kingdoms/boss_mother_smolderweb.lua.
+	RegisterLuaBoss("boss_mother_smolderweb", 10596)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
