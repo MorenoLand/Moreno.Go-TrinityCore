@@ -2437,4 +2437,22 @@ func init() {
 	// (boss_felblood_kaelthas precedent).
 	RegisterLuaBoss("npc_kalecgos", 24844)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
+	// npc_unworthy_initiate (The Scarlet Enclave, Acherus DK intro):
+	// the class's PHASE_ATTACKING combat machine (icy touch 52372 /
+	// plague strike 52373 / blood strike 52374 / death coil 52375
+	// DoCastVictim loops) is ported in lua_scripts/eastern_kingdoms/
+	// npc_unworthy_initiate.lua; the whole pre-combat phase state
+	// machine (anchor GUID-passing, soul-prison gossip EventStart,
+	// MovePoint/MovementInform leg, faction/react-state AttackStart
+	// leg) is documented-only — no MotionMaster/MovementInform/
+	// gameobject-gossip/faction bridges (selin_fireheart / razorgore
+	// precedents). All five entries verifiable from the C++ sources:
+	// chapter1.cpp's own acherus_unworthy_initiate[5] array (lines
+	// 89-96) names 29519, 29520, 29565, 29566, 29567
+	// (boss_felblood_kaelthas precedent).
+	RegisterLuaBoss("npc_unworthy_initiate", 29519)
+	RegisterLuaBoss("npc_unworthy_initiate", 29520)
+	RegisterLuaBoss("npc_unworthy_initiate", 29565)
+	RegisterLuaBoss("npc_unworthy_initiate", 29566)
+	RegisterLuaBoss("npc_unworthy_initiate", 29567)
 }
