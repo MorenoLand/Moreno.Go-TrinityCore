@@ -734,4 +734,12 @@ func init() {
 	// spell_baron_geddon_inferno AuraScript has no bridge (no AuraScript
 	// model).
 	RegisterLuaBoss("boss_baron_geddon", 12056)
+	// RegisterLuaBoss wires lua_scripts/moltencore/boss_sulfuron_harbinger.lua.
+	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
+	// encounter-state bookkeeping is blocked on the instance-script model; the
+	// inspire random-friendly-missing-buff arm has no bridge (no
+	// friendly-creature lookup) — only the self-cast is kept; the
+	// npc_flamewaker_priest add AI is not registered (no entry constant in
+	// the C++ tree, DB-side ScriptName binding).
+	RegisterLuaBoss("boss_sulfuron", 12098)
 }
