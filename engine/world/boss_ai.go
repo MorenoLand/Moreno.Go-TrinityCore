@@ -2277,5 +2277,18 @@ func init() {
 	// verifiable from the C++ sources: magisters_terrace.h names
 	// BOSS_SELIN_FIREHEART = 24723 (boss_felblood_kaelthas precedent).
 	RegisterLuaBoss("boss_selin_fireheart", 24723)
+	// boss_vexallus: BossAI combat entry + 15%-interval energy-discharge
+	// latch (85/70/55/40/25%: Talk(SAY_ENERGY), Talk(EMOTE_DISCHARGE_
+	// ENERGY), self-cast SPELL_SUMMON_PURE_ENERGY 44322) + 10%-HP overload
+	// enrage (cancel timers, EVENT_OVERLOAD 1200ms -> 2s DoCastVictim
+	// 44353 loop) + KilledUnit Talk(SAY_KILL). Chain-lightning /
+	// arcane-shock event arms unmodeled (SelectTarget — no bridge);
+	// JustSummoned MoveFollow unmodeled (SelectTarget — no bridge);
+	// npc_pure_energy class unmodeled (entry not C++-verifiable —
+	// no .lua written, queued for TDB entry evidence; stub-free
+	// precedent). Entry 24744 verifiable from the C++ sources:
+	// magisters_terrace.h names BOSS_VEXALLUS = 24744
+	// (boss_felblood_kaelthas precedent).
+	RegisterLuaBoss("boss_vexallus", 24744)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
