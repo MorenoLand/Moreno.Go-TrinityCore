@@ -1354,4 +1354,16 @@ func init() {
 	// channeler.lua.
 	RegisterLuaBoss("boss_kelidan_the_breaker", 17377)
 	RegisterLuaBoss("npc_shadowmoon_channeler", 17653)
+
+	// boss_the_maker (17381): acid spray and knockdown victim
+	// casts plus exploding breaker on a random player within 30
+	// yd and domination on a random player (nil picks cast
+	// nothing; re-arms fire regardless — C++-exact); Talk on
+	// pull (SAY_AGGRO), a player-type-gated kill line
+	// (SAY_KILL, 3-arg handler convention) and death (SAY_DIE).
+	// The BossAI ctor DATA_THE_MAKER bookkeeping has no
+	// instance-script bridge (timer bookkeeping exact).
+	// Fight logic in lua_scripts/hellfirecitadel/boss_the_
+	// maker.lua.
+	RegisterLuaBoss("boss_the_maker", 17381)
 }
