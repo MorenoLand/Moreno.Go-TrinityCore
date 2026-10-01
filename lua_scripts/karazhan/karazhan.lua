@@ -1,0 +1,41 @@
+-- Karazhan zone file — Lua port of
+-- src/server/scripts/EasternKingdoms/Karazhan/karazhan.cpp
+-- (karazhan.h). Entries: npc_barnes 16812 (wowhead npc=16812/barnes),
+-- npc_image_of_medivh 17651 (wowhead cata npc=17651/image-of-medivh);
+-- the TDB creature_template ScriptName bindings are DB-side (no TDB in
+-- this workspace). Deliberately unported (documented only — neither
+-- script has a bridgeable core):
+-- * npc_barnes (16812, EscortAI): the whole script is escort-machine
+--   driven — waypoint 0 tuxedo + stage door, waypoint 4 spotlight
+--   summon + SetEscortPaused dialogue machine (TalkCount 0..3 per
+--   Oz/Hood/RAJ tables), waypoint 8 performance-ready, waypoint 9
+--   PrepareEncounter summons + curtains, plus a 15s raid-wipe evade
+--   poll. The Go engine has no escort bridge (no waypoints /
+--   SetEscortPaused / Start) — the dialogue timers, spotlight
+--   (19525) and encounter summons (17535/17546/17547/17543/17603/
+--   17534) have no movement / summon bridges, and every arm is
+--   instance-script gated (DATA_MOROES DONE, DATA_OPERA_PERFORMANCE
+--   state, DATA_OPERA_OZ_DEATHCOUNT, DATA_GO_STAGEDOORLEFT /
+--   DATA_GO_CURTAINS GO use) — no instance-script bridge. The gossip
+--   arms (OnGossipHello menu 8970/8975/8978, OnGossipSelect start
+--   event / GM event override) are registered gossip-event content
+--   in the engine, but the hello gate and every select arm are
+--   instance/escort-driven, so registering them would be a stub —
+--   not registered (firesworn convention). Awaits escort and
+--   instance-script bridges.
+-- * npc_image_of_medivh (17651, ScriptedAI dialogue machine): the
+--   entire event starts from Reset's MovePoint(1) and MovementInform
+--   (no movement bridge), then runs a 15-step yell machine driven by
+--   cross-creature relays to Arcanagos (17652) — summon (no summon
+--   bridge), cross-creature Yell / DoCast(conflagration blast 30977)
+--   / CastSpell(fire ball 30967) / KillSelf / MovePoint (no
+--   cross-creature bridge), fire-timer cross-fire for steps 7..12,
+--   SetDisableGravity / setActive / SetFarVisible / SetSpeedRate /
+--   InterruptNonMeleeSpells arms (no bridges), and the step-14 quest
+--   9645 completion pass over instance players. No movement, summon,
+--   cross-creature or instance-script bridge — the dialogue machine
+--   cannot be started — not registered (firesworn convention).
+-- * Berthold (SPELL_TELEPORT 39567) and npc_arcane_protector /
+--   npc_mana_feeder / bosses_opera content are untouched by this
+--   file (arcane protector and mana feeder live in their own files).
+-- Eluna creature events: none registered from this file.

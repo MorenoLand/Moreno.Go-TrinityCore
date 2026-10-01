@@ -547,6 +547,13 @@ func init() {
 	RegisterLuaBoss("boss_bigbadwolf", 17521)
 	RegisterLuaBoss("boss_julianne", 17534)
 	RegisterLuaBoss("boss_romulo", 17533)
+	// Mana Feeder (Karazhan) — fight logic in
+	// lua_scripts/karazhan/npc_mana_feeder.lua (the C++ Reset self-cast;
+	// the school immunities have no bridge).
+	RegisterLuaBoss("npc_mana_feeder", 16491)
+	// Arcane Protector (Karazhan) — fight logic in
+	// lua_scripts/karazhan/npc_arcane_protector.lua.
+	RegisterLuaBoss("npc_arcane_protector", 16504)
 	// Aki'lzon (Zul'Aman) — fight logic in
 	// lua_scripts/zulaman/boss_akilzon.lua (soaring eagle 24858 AI
 	// "npc_akilzon_eagle" in the same file).
