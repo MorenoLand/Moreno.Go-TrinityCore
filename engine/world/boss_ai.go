@@ -1589,4 +1589,27 @@ func init() {
 	RegisterLuaBoss("npc_nether_drake", 21817)
 	RegisterLuaBoss("npc_nether_drake", 21820)
 	RegisterLuaBoss("npc_nether_drake", 21823)
+	// npc_nagrand_banner (Nagrand zone script, third in the
+	// Outland zone set per outland_script_loader.cpp order):
+	// the five combat variants of the single CreatureScript
+	// (the C++ GetAI switches on creature entry) — 17146 Kil
+	// Sorrow spellbinder (arcane missiles + chains of ice),
+	// 17147 Kil Sorrow cultist (mind sear), 17148 Kil Sorrow
+	// deathsworn (50% bloodthirst latch), 18391 Giselda the
+	// crone (65% transform latch), 18064 Warmaul shaman
+	// (scorching totem + frost shock + 50% healing-wave
+	// latch) — all entries verifiable from the C++ sources;
+	// see lua_scripts/outland/npc_nagrand_banner.lua. The
+	// spellbinder's victim-cast interrupt and 15% flee latches,
+	// the base AI's SpellHit bannered latch (17138 Warmaul
+	// reaver — no-op model), the maghar/kurenai captive
+	// EscortAIs and condition_nagrand_banner have no
+	// cast-state / flee / SpellHit / escort / quest-accept /
+	// summon / movement / ConditionScript bridges —
+	// documented only.
+	RegisterLuaBoss("npc_nagrand_banner", 17146)
+	RegisterLuaBoss("npc_nagrand_banner", 17147)
+	RegisterLuaBoss("npc_nagrand_banner", 17148)
+	RegisterLuaBoss("npc_nagrand_banner", 18391)
+	RegisterLuaBoss("npc_nagrand_banner", 18064)
 }
