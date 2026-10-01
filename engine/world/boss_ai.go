@@ -1238,4 +1238,13 @@ func init() {
 	// Fight logic in
 	// lua_scripts/steamvault/boss_mekgineer_steamrigger.lua.
 	RegisterLuaBoss("boss_mekgineer_steamrigger", 17796)
+	// Warlord Kalithresh (The Steamvault): spell reflection
+	// (self, 10s then 15-25s), impale (random player, nil pick
+	// casts nothing, 7-14s init then 7.5-12.5s); the rage arm
+	// is FindNearestCreature(17954)+cross-creature gated and
+	// kept as timer bookkeeping only; the npc_naga_distiller
+	// AI is entirely flag/cross-creature/instance gated and
+	// stays unregistered. Fight logic in
+	// lua_scripts/steamvault/boss_warlord_kalithresh.lua.
+	RegisterLuaBoss("boss_warlord_kalithresh", 17798)
 }
