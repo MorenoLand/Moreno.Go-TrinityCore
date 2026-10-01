@@ -1450,4 +1450,13 @@ func init() {
 	// cross-creature bridge — see lua_scripts/
 	// hellfireramparts/npc_hellfire_sentry.lua.
 	RegisterLuaBoss("npc_hellfire_sentry", 17517)
+
+	// npc_millhouse_manastorm (20977): the Arcatraz zone
+	// script; the pre-combat intro machine runs on a
+	// spawn-started pump and the combat arms on an
+	// enter-combat pump — see lua_scripts/arcatraz/
+	// npc_millhouse_manastorm.lua. npc_warden_mellichar
+	// (20904) is documented there but not registered: its
+	// whole event machine is instance/summon driven.
+	RegisterLuaBoss("npc_millhouse_manastorm", 20977)
 }
