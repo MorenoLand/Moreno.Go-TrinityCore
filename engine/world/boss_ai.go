@@ -2066,5 +2066,17 @@ func init() {
 	// SummonCreature(NPC_GIZRUL_THE_SLAVENER = 10268, timed 5min) — no
 	// SummonCreature bridge (phoenix / flamelash precedent).
 	RegisterLuaBoss("boss_halycon", 10220)
+	// boss_highlord_omokk / boss_highlordomokkAI (Blackrock Spire, Hall
+	// of Blackhand; BossAI combat scheduler via GetBlackrockSpireAI —
+	// frenzy 8269 victim-cast 20s->1min, knock-away 10101 victim-cast
+	// 18s->12s; melee engine-driven). Entry 9196 verifiable from the C++
+	// sources: blackrock_spire.h names NPC_HIGHLORD_OMOKK at 9196 (BRS
+	// creatures enum) — see
+	// lua_scripts/eastern_kingdoms/boss_highlord_omokk.lua.
+	// GetBlackrockSpireAI is a GetInstanceAI retrieval wrapper
+	// (blackrock_spire.h:129-132); the AI has no instance arms —
+	// Reset() _Reset() / JustDied _JustDied() are internal BossAI
+	// machinery covered by the cancel/re-arm on combat events.
+	RegisterLuaBoss("boss_highlord_omokk", 9196)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
