@@ -1,0 +1,24 @@
+-- Sunwell Plateau zone file — Lua port of
+-- src/server/scripts/EasternKingdoms/SunwellPlateau/sunwell_plateau.cpp
+-- (sunwell_plateau.h). This file is a placeholder in C++: SDName
+-- "Sunwell_Plateau", SD%Complete: 0, SDComment "Placeholder,
+-- Epilogue after Kil'jaeden, Captain Selana Gossips"; its ContentData
+-- lists npc_prophet_velen and npc_captain_selana but defines NO
+-- CreatureAI classes and AddSC_sunwell_plateau() is empty — there are
+-- no RegisterSunwellPlateauCreatureAI calls, so there is no verifiable
+-- entry+ScriptName binding for any creature and nothing is registered
+-- here. Deliberately unported (documented only):
+-- * npc_prophet_velen (epilogue after Kil'jaeden): no AI class in the
+--   C++ sources. The PROPHET_SAY1..8 (-1580099..-1580106) and
+--   LIADRIN_SAY1..3 (-1580107..-1580109) text IDs are legacy
+--   script-texts IDs, DB-side, with no C++ Talk arms driving them —
+--   unmodeled.
+-- * npc_captain_selana (gossip): no AI class in the C++ sources; the
+--   CS_GOSSIP1..4 defines are unused in an empty AddSC — no gossip
+--   bridge content to port, unmodeled.
+-- * NPC_PROPHET = 26246 (sunwell_plateau.h, "Outro") and
+--   NPC_THE_CORE_OF_ENTROPIUS = 26262 ("Used in the ending
+--   cinematic?") are header-only constants with no C++ ScriptName —
+--   not registered (firesworn convention); they await an outro
+--   cinematic model (no movement/instance-script bridges).
+-- Eluna creature events: none registered from this file.
