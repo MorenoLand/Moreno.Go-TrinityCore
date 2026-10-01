@@ -1048,4 +1048,39 @@ func init() {
 	// DisappearAndDie and the REACT/AttackStart arms have no
 	// despawn/react/instance-player/movement bridges.
 	RegisterLuaBoss("npc_blackhole", 25879)
+	// Kil'jaeden (25315) runs the C++ Timer[10] scheduler as a
+	// 100ms Lua pump: soul flay 45442+47106, legion lightning
+	// 45664, fire bloom 45641, shadow spike 46680 (+30s wait),
+	// flame dart 45737, darkness 46605/45657 (+9s wait), with the
+	// C++-exact 85/55/25% phase transitions and the shield-orb /
+	// orbs-empower timer dynamics (summons and the kalecgos
+	// cross-creature arms skipped). The speech chain's kalecgos/
+	// anveena rows, the SetBossState/DoZoneInCombat arms and the
+	// armageddon-target summons have no cross-creature/instance-
+	// script/summon bridges.
+	RegisterLuaBoss("boss_kiljaeden", 25315)
+	// Hand of the Deceiver (25588) runs its shadow-bolt-volley
+	// 45770 schedule, the 20% shadow-infusion 45772 upkeep and the
+	// out-of-combat shadow-channeling 46757 upkeep. The felfire-
+	// portal summon, the controller death-count relay and the
+	// SetBossState arms have no summon/cross-creature/instance-
+	// script bridges — registered for its own verifiable AI arms
+	// (felmyst-trail convention).
+	RegisterLuaBoss("npc_hand_of_the_deceiver", 25588)
+	// Volatile Felfire Fiend (25598) casts felfire fission 45779
+	// (triggered) on lethal damage and runs the 2s-primed 3yd
+	// proximity detonation; the KillSelf and AddThreat arms have
+	// no kill/threat bridges.
+	RegisterLuaBoss("npc_volatile_felfire_fiend", 25598)
+	// Armageddon Target (25735) runs its Reset visual chain:
+	// triggered 45911, 9s -> triggered 45914, 5s -> triggered
+	// 45909. The DespawnOrUnsummon arm has no despawn bridge.
+	RegisterLuaBoss("npc_armageddon", 25735)
+	// Sinister Reflection (25708) runs the C++-exact per-victim-
+	// class spell rotations (druid/hunter/mage/warlock/warrior/
+	// paladin/priest/shaman/rogue). The summon-side setup and the
+	// SetCanDualWield arms have no summon/dual-wield bridges.
+	// Note the C++ ScriptName typo "npc_sinster_reflection" is
+	// preserved 1:1.
+	RegisterLuaBoss("npc_sinster_reflection", 25708)
 }
