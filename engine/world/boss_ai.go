@@ -2622,4 +2622,20 @@ func init() {
 	// The BossAI _Reset/_JustDied instance legs and the GetInstanceAI leg
 	// have no bridges; see lua_scripts/kalimdor/boss_aku_mai.lua.
 	RegisterLuaBoss("boss_aku_mai", 4829)
+
+	// npc_jaina_proudmoore (Jaina, entry 17772) and npc_thrall (Thrall,
+	// entry 17852 — C++-verified via hyjal.h HYCreaturesIds plus
+	// instance_hyjal.cpp's OnCreatureCreate GUID-capture arms and the
+	// matching DATA_JAINAPROUDMOORE/DATA_THRALL GetGuidData legs,
+	// ramstein strength): the hyjalAI constructor spell tables (Blizzard
+	// 31266 + Pyroblast 31263 random-player + Summon Elementals 31264
+	// self for Jaina; Chain Lightning 31330 victim + Summon Dire Wolf
+	// 31331 random-player for Thrall), non-triggered casts on the
+	// constructor-rolled fixed cooldowns (C++-exact — urand evaluated
+	// once at construction), engage Talk ATTACKED and death Talk DEATH;
+	// melee engine-driven. The hyjalAI wave machine (StartEvent/Retreat/
+	// IsDummy escort choreography) and all gossip arms (instance-data
+	// gates) have no bridges; see lua_scripts/kalimdor/hyjal.lua.
+	RegisterLuaBoss("npc_jaina_proudmoore", 17772)
+	RegisterLuaBoss("npc_thrall", 17852)
 }
