@@ -1969,5 +1969,19 @@ func init() {
 	// the C++ sources: BattlegroundAV.h names "Drek'Thar" at 11946 —
 	// see lua_scripts/eastern_kingdoms/boss_drekthar.lua.
 	RegisterLuaBoss("boss_drekthar", 11946)
+	// boss_galvangar (Alterac Valley) — the 5-event combat scheduler
+	// (cleave 15284 victim-cast {1,9}s->{10,16}s, frightening shout
+	// 19134 victim-cast {2,19}s->{10,15}s, whirlwind1 15589 victim-cast
+	// {1,13}s->{6,10}s, whirlwind2 13736 victim-cast {5,20}s->{10,25}s,
+	// mortal strike 16856 victim-cast {5,20}s->{10,30}s) plus the aggro
+	// Talk(0) — maiden convention (CreateLuaEvent timers; GetVictim
+	// for DoCastVictim; no UNIT_STATE_CASTING gate). The CheckInRoom
+	// home leash arm (home-position 2D distance > 50yd -> EnterEvadeMode
+	// + Talk(1)) and the BG-driven DoAction(ACTION_BUFF_YELL=-30001) ->
+	// Talk(2) arm have no Lua bridges — documented only; evade still
+	// re-arms through OnReset(23). Entry 11947 verifiable from the C++
+	// sources: BattlegroundAV.h names "Captain Galvangar" at 11947 —
+	// see lua_scripts/eastern_kingdoms/boss_galvangar.lua.
+	RegisterLuaBoss("boss_galvangar", 11947)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
