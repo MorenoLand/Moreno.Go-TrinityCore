@@ -1556,4 +1556,15 @@ func init() {
 	// boss_alar.lua. instance_the_eye.cpp stays blocked on the
 	// instance-script model.
 	RegisterLuaBoss("boss_alar", 19514)
+	// boss_high_astromancer_solarian (18805): the bridgeable
+	// Phase 1 arms — the blinding-light latch, the two wrath
+	// timers, the arcane-missiles arm — plus the 20% health
+	// phase-4 latch into fear / void-bolt arms; the Phase 2/3
+	// portal machine (teleports, spotlight/agent/priest
+	// summons, visibility/flag arms), the wrath AuraScript,
+	// and the npc_solarium_priest AI have no
+	// movement/summon/visibility/display/AuraScript/cross-
+	// creature bridges — see lua_scripts/the_eye/
+	// boss_high_astromancer_solarian.lua.
+	RegisterLuaBoss("boss_high_astromancer_solarian", 18805)
 }
