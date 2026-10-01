@@ -776,4 +776,13 @@ func init() {
 	// no bridges (the GO handler needs the instance-creature lookup); the
 	// needle-spine targeting SpellScript filter has no SpellScript bridge.
 	RegisterLuaBoss("boss_najentus", 22887)
+	// RegisterLuaBoss wires lua_scripts/blacktemple/boss_supremus.lua.
+	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
+	// encounter-state bookkeeping is blocked on the instance-script model; the
+	// ResetThreatList/AddThreat arms have no threat bridge (the hateful strike
+	// target pick is approximated by the highest-health melee-range player);
+	// the ApplySpellImmune taunt arms have no bridge; the volcano and molten
+	// flame add AIs are not registered (ScriptName bindings are DB-side); the
+	// volcanic summon/volcano adds have no summon model.
+	RegisterLuaBoss("boss_supremus", 22898)
 }
