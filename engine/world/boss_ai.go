@@ -937,4 +937,26 @@ func init() {
 	RegisterLuaBoss("npc_illidan_generic_fire", 23069)
 	RegisterLuaBoss("npc_illidan_generic_fire", 23259)
 	RegisterLuaBoss("npc_illidan_generic_fire", 23336)
+	// Kalecgos (Sunwell Plateau) — fight logic in
+	// lua_scripts/sunwellplateau/boss_kalecgos.lua.
+	// Kalecgos (24850) runs the six-arm pull schedule (arcane buffet
+	// with the 20% Talk, frost breath, tail lash, wild magic, spectral
+	// blast), the 1s check timer with the enrage and banish arms, the
+	// lethal-damage-to-0 rewrite and the 50% kill Talk; the human
+	// summon, the sathrovarr banish cross-check and the ACTION_START_
+	// OUTRO relay have no cross-creature/summon bridges, and the outro
+	// movement chain has no movement/faction bridge. Kalecgos human
+	// (24891) runs revitalize/heroic strike with the 75%/50%/10% say-
+	// phase Talks and the death Talk; the sathrovarr-only damage-source
+	// arm has no instance-creature bridge. Sathrovarr (24892) runs the
+	// shadowbolt/corruption-strike Talk+schedule arms, the spectral-
+	// realm-aura-filtered agony curse pick, the enrage/banish check
+	// timer, the lethal-damage-to-0 rewrite, the kill Talk and the
+	// tap-check SpellHit arm (kill-caster skipped — no kill bridge);
+	// its kalecgos enrage/banish/outro relays have no cross-creature
+	// bridge. The spectral-rift GO script and the five
+	// spell/aura scripts have no script bridges.
+	RegisterLuaBoss("boss_kalecgos", 24850)
+	RegisterLuaBoss("boss_kalecgos_human", 24891)
+	RegisterLuaBoss("boss_sathrovarr", 24892)
 }
