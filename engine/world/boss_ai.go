@@ -758,4 +758,15 @@ func init() {
 	// the sub-50% triggered Aegis of Ragnaros, and the gossip-select Talk
 	// arms are modeled.
 	RegisterLuaBoss("boss_majordomo", 12018)
+	// RegisterLuaBoss wires lua_scripts/moltencore/boss_ragnaros.lua.
+	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
+	// encounter-state bookkeeping (DATA_RAGNAROS_ADDS) and the
+	// intro/majordomo-kill arms are blocked on the instance-script model;
+	// the intro, submerge and emerge react/emote/flag/faction/attack arms
+	// have no bridges; no summon model — the 8 sons of flame never spawn,
+	// so the >8-adds early-emerge arm is unmodeled (emerge on the 90s
+	// timer only); the magma blast IsWithinMeleeRange gate has no bridge;
+	// the npc_son_of_flame add AI is not registered (no entry constant in
+	// the C++ tree, DB-side ScriptName binding).
+	RegisterLuaBoss("boss_ragnaros", 11502)
 }
