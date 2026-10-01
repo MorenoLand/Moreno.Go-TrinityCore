@@ -1646,4 +1646,22 @@ func init() {
 	RegisterLuaBoss("npc_illidari_spawn", 22075)
 	RegisterLuaBoss("npc_illidari_spawn", 22074)
 	RegisterLuaBoss("npc_illidari_spawn", 19797)
+	// npc_enraged_spirit (Shadowmoon Valley zone script): one
+	// CreatureScript AI class serving four entries with a
+	// per-entry timer switch in JustEngagedWith/UpdateAI —
+	// 21050 earth (fiery boulder), 21061 fire (fel fireball),
+	// 21060 air (chain lightning / hurricane alternation),
+	// 21059 water (stormbolt); all entries verifiable from the
+	// C++ sources (the Enraged_Dpirits enum) — see
+	// lua_scripts/outland/npc_enraged_spirit.lua. The JustDied
+	// soul-spawn arm has no summon bridge and the totem
+	// credit arm sits behind no world-search / faction /
+	// movement / quest-credit bridges — documented only;
+	// spell_unlocking_zuluheds_chains (SpellScript) and
+	// npc_shadowmoon_tuber_node (unverifiable entry, SetData /
+	// SpellHit arms) are documented-only.
+	RegisterLuaBoss("npc_enraged_spirit", 21050)
+	RegisterLuaBoss("npc_enraged_spirit", 21061)
+	RegisterLuaBoss("npc_enraged_spirit", 21060)
+	RegisterLuaBoss("npc_enraged_spirit", 21059)
 }
