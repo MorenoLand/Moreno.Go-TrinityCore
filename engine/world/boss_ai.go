@@ -2771,4 +2771,25 @@ func init() {
 	// gelihast precedent) with their bridgeable arms documented in the
 	// header; see lua_scripts/kalimdor/boss_archimonde.lua.
 	RegisterLuaBoss("boss_archimonde", 17968)
+
+	// boss_captain_skarloc (Captain Skarloc, entry 17862 — C++-verified
+	// via old_hillsbrad.cpp:151's ENTRY_SCARLOC constant (C++ spelling
+	// "SCARLOC") plus its Thrall-escort SummonCreature call (:263); the
+	// creature_template ScriptName binding stays DB-side): the
+	// self-contained in-combat legs (engage Talk SAY_TAUNT1 (1) +
+	// SAY_TAUNT2 (2); KilledUnit Talk SAY_SLAY (3) no TYPEID gate; death
+	// Talk SAY_DEATH (4); Holy Light 29427 self non-triggered init
+	// {20s,30s} -> 30s; Cleanse 29380 self non-triggered init 10s -> 10s;
+	// Hammer of Justice 13005 on the victim (jeklik GetVictim + CastSpell
+	// convention) non-triggered init {20s,35s} -> 60s; Holy Shield 31904
+	// self non-triggered init 240s -> 240s; Devotion Aura 8258 self
+	// non-triggered init 3s -> {45s,55s}) on C++-verbatim timers; melee
+	// engine-driven. The JustDied TYPE_THRALL_EVENT/TYPE_THRALL_PART1
+	// instance leg has no instance-data bridge; SPELL_CONSECRATION's
+	// C++ cast is commented out (no observable behavior to port);
+	// SAY_ENTER 0 is declared but never Talked in C++; the SD%Complete:
+	// 75 missing adds, spawn waypoints, and pre-combat Thrall speech need
+	// summon and EscortAI movement bridges that do not exist; see
+	// lua_scripts/kalimdor/boss_captain_skarloc.lua.
+	RegisterLuaBoss("boss_captain_skarloc", 17862)
 }
