@@ -1681,4 +1681,24 @@ func init() {
 	// summon / movement / gameobject bridges) are
 	// documented-only.
 	RegisterLuaBoss("npc_sironas", 17678)
+	// npc_demolitionist_legoso (Bloodmyst Isle zone script):
+	// combat rotation only — frost shock (8056, 1s init then
+	// 10-15s, DelayEvents(1s)), searing totem (38116, 15s init
+	// then 110-130s, DelayEvents(1s)), strength of earth totem
+	// (31633, 20s init then 110-130s, DelayEvents(1s)),
+	// healing surge (8004, 5s init, strict self-health <85% ->
+	// 10s re-arm else 2s re-arm, no DelayEvents), all
+	// non-triggered (C++-exact); entry 17982 verifiable from
+	// the C++ EndingTheirWorldMisc enum — see
+	// lua_scripts/kalimdor/npc_demolitionist_legoso.lua. The
+	// 40-phase escort event machine (quest 9759 start,
+	// waypoint kneel/plant/detonate choreography,
+	// draenei-explosives gameobjects, sironas-meeting
+	// phases, post-slay quest credit) and the escort-player
+	// healing-surge arm await the escort / quest-accept /
+	// summon / movement / gameobject bridges — documented
+	// only; the Reset SetCanDualWield arm has no dual-wield
+	// bridge; no SAY_LEGOSO_* line fires (no talk bridge);
+	// ACTION_LEGOSO_SIRONAS_KILLED has no DoAction bridge.
+	RegisterLuaBoss("npc_demolitionist_legoso", 17982)
 }
