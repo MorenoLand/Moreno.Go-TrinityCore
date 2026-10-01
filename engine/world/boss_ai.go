@@ -2006,5 +2006,17 @@ func init() {
 	// names NPC_PHALANX at 9502 (DATA_PHALANX = 11 in
 	// blackrock_depths.h) — see lua_scripts/eastern_kingdoms/npc_phalanx.lua.
 	RegisterLuaBoss("npc_phalanx", 9502)
+	// boss_emperor_dagran_thaurissan / boss_draganthaurissanAI (Blackrock
+	// Depths; ScriptedAI combat scheduler via GetBlackrockDepthsAI —
+	// avatarofflame 15636 victim-cast 25s->18s, aggro Talk(0), player-kill
+	// Talk(1) on CREATURE_EVENT_ON_TARGET_DIED) — maiden convention
+	// (CreateLuaEvent timers; GetVictim for DoCastVictim; melee
+	// engine-driven). Entry 9019 verifiable from the C++ sources:
+	// instance_blackrock_depths.cpp names NPC_EMPEROR at 9019 (BRD
+	// instance creatures enum, line 35) — see
+	// lua_scripts/eastern_kingdoms/boss_emperor_dagran_thaurissan.lua.
+	// HANDOFTHAURISSAN 17492 sits on SelectTarget(Random) — no bridge;
+	// JustDied moira arm needs the instance-script model.
+	RegisterLuaBoss("boss_emperor_dagran_thaurissan", 9019)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
