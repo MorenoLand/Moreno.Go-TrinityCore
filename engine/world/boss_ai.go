@@ -2290,5 +2290,22 @@ func init() {
 	// magisters_terrace.h names BOSS_VEXALLUS = 24744
 	// (boss_felblood_kaelthas precedent).
 	RegisterLuaBoss("boss_vexallus", 24744)
+	// boss_priestess_delrissa: ScriptedAI combat entry Talk(SAY_AGGRO) +
+	// self-cast flash-heal 17843 15s loop + renew 44174 10s->5s loop +
+	// shield 44291 2s->7.5s loop + dispel-magic 27609 7.5s->12s loop +
+	// KilledUnit player-gated PlayerDeath[PlayersKilled] talk (ids
+	// 5..9, counter capped at 4, reset per engagement) + JustDied
+	// Talk(SAY_DEATH). SW_PAIN 14032 machine unmodeled (SelectTarget —
+	// no bridge); lackey summon/resummon + instance boss-state arms
+	// unmodeled (no summon/instance bridges); the file's eight lackey
+	// CreatureScript classes (kagani_nightstrike 24557, ellris_
+	// duskhallow 24558, eramas_brightblaze 24554, yazzai 24561,
+	// warlord_salaris 24559, garaxxas 24555, apoko 24553, zelfan
+	// 24556) queued for later runs — their victim-cast loops are
+	// bridgeable but ride on the instance + lackey-GUID + SelectTarget
+	// bridges. Entry 24560 verifiable from the C++ sources:
+	// magisters_terrace.h names BOSS_PRIESTESS_DELRISSA = 24560
+	// (boss_felblood_kaelthas precedent).
+	RegisterLuaBoss("boss_priestess_delrissa", 24560)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
