@@ -1983,5 +1983,17 @@ func init() {
 	// sources: BattlegroundAV.h names "Captain Galvangar" at 11947 —
 	// see lua_scripts/eastern_kingdoms/boss_galvangar.lua.
 	RegisterLuaBoss("boss_galvangar", 11947)
+	// boss_vanndar (Alterac Valley; TaskScheduler combat pump —
+	// avatar 19135 victim-cast 3s->{15,20}s, thunderclap 15588
+	// victim-cast 4s->{5,15}s, stormbolt 20685 victim-cast 6s->
+	// {10,25}s, random-yell Talk(2) {20,30}s->{20,30}s) plus the aggro
+	// Talk(0) — maiden convention (CreateLuaEvent timers; GetVictim
+	// for DoCastVictim; no UNIT_STATE_CASTING gate). The 5s home leash
+	// arm (home-position 2D distance > 50yd -> EnterEvadeMode +
+	// Talk(1)) has no Lua bridge — documented only; evade still re-arms
+	// through OnReset(23). YELL_SPELL=3 declared but unused. Entry 11948
+	// verifiable from the C++ sources: BattlegroundAV.h names "Vanndar
+	// Stormpike" at 11948 — see lua_scripts/eastern_kingdoms/boss_vanndar.lua.
+	RegisterLuaBoss("boss_vanndar", 11948)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
