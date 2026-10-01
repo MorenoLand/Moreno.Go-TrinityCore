@@ -2407,5 +2407,20 @@ func init() {
 	// sources: boss_priestess_delrissa.cpp's m_auiAddEntries names
 	// 24553 //Apoko (boss_felblood_kaelthas precedent).
 	RegisterLuaBoss("boss_apoko", 24553)
+	// boss_zelfan: ScriptedAI (via the file's lackey-common base)
+	// goblin-dragon-gun 44272 20s init -> 10s DoCastVictim loop +
+	// rocket-launch 44137 7s init -> 9s DoCastVictim loop + fel-iron-
+	// bomb 46024 15s init -> 15s DoCastVictim loop (victim nil-guarded,
+	// incarcerator convention) + high-explosive-sheep 44276 10s init ->
+	// 65s self-cast loop + sub-25%-HP healing-potion 15503 self-cast
+	// latch (OnDamageTaken(9), per-guid one-shot, reset per engagement).
+	// The recombobulate 44274 machine rings over m_auiLackeyGUIDs via
+	// ObjectAccessor with an IsPolymorphed gate (no GUID-list bridge),
+	// and the common-AI threat ring / death-count / KilledUnit forward /
+	// AcquireGUIDs / Delrissa-respawn / ResetThreatList arms unmodeled
+	// (no GUID-list / instance / threat bridges). Entry 24556 verifiable
+	// from the C++ sources: boss_priestess_delrissa.cpp's m_auiAddEntries
+	// names 24556 //Zelfan (boss_felblood_kaelthas precedent).
+	RegisterLuaBoss("boss_zelfan", 24556)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
