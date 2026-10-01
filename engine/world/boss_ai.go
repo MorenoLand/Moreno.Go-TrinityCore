@@ -1612,4 +1612,20 @@ func init() {
 	RegisterLuaBoss("npc_nagrand_banner", 17148)
 	RegisterLuaBoss("npc_nagrand_banner", 18391)
 	RegisterLuaBoss("npc_nagrand_banner", 18064)
+	// npc_phase_hunter (Netherstorm zone script, fourth in the
+	// Outland zone set per outland_script_loader.cpp order):
+	// one CreatureScript AI class serving both entries — 18879
+	// phase hunter (materialize one-shot + mana burn on random
+	// mana-holder) and 19595 drained phase hunter (same AI —
+	// the C++ GetAI has no per-entry switch); both entries
+	// verifiable from the C++ sources — see lua_scripts/
+	// outland/npc_phase_hunter.lua. The phase-slip aura/root
+	// arm, the quest-10190 Weak emote latch and the Drained
+	// entry-transform arm have no aura-state / entry-update /
+	// quest bridges — documented only; npc_commander_
+	// dawnforge + at_commander_dawnforge are documented-only
+	// (summon / movement / stand-state / AreaTrigger /
+	// quest-credit bridges missing).
+	RegisterLuaBoss("npc_phase_hunter", 18879)
+	RegisterLuaBoss("npc_phase_hunter", 19595)
 }
