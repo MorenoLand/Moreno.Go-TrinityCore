@@ -1302,4 +1302,14 @@ func init() {
 	// lua_scripts/theunderbog/npc_underbog_mushroom.lua.
 	RegisterLuaBoss("boss_hungarfen", 17770)
 	RegisterLuaBoss("npc_underbog_mushroom", 17990)
+
+	// boss_the_black_stalker (17882): levitate (the followup
+	// LevitatedTarget/LevitatedTarget_Timer/InAir machine needs
+	// an ObjectAccessor/cross-creature bridge, bookkeeping only),
+	// chain lightning, and static charge target casts; the
+	// heroic-only spore-strider summon and the 60-yd evade arm
+	// have no difficulty/home-position bridges (bookkeeping only).
+	// Fight logic in lua_scripts/theunderbog/boss_the_black_
+	// stalker.lua.
+	RegisterLuaBoss("boss_the_black_stalker", 17882)
 }
