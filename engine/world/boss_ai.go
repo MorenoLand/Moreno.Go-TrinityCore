@@ -2361,5 +2361,20 @@ func init() {
 	// priestess_delrissa.cpp's m_auiAddEntries names 24561 //Yazzaj
 	// (boss_felblood_kaelthas precedent).
 	RegisterLuaBoss("boss_yazzai", 24561)
+	// boss_warlord_salaris: ScriptedAI (via the file's lackey-common base)
+	// battle-shout 27578 one-shot self-cast on JustEngagedWith (fired in
+	// OnEnterCombat) + disarm 27581 6s loop + hamstring 27584 4.5s loop +
+	// mortal-strike 44268 8s->4.5s loop (C++-exact re-arm) + piercing-howl
+	// 23600 10s loop + frightening-shout 19134 18s loop (DoCastVictim,
+	// GetVictim nil-guarded) + sub-25%-HP healing-potion 15503 self-cast
+	// latch (OnDamageTaken(9), per-guid one-shot, reset per engagement).
+	// The intercept 27577 machine (combat-manager melee-range loop +
+	// SelectTarget-gated — no bridges) and the common-AI threat ring /
+	// death-count / KilledUnit forward / AcquireGUIDs / Delrissa-respawn /
+	// ResetThreatList arms unmodeled (no GUID-list / instance / threat
+	// bridges). Entry 24559 verifiable from the C++ sources: boss_
+	// priestess_delrissa.cpp's m_auiAddEntries names 24559 //Warlord
+	// Salaris (boss_felblood_kaelthas precedent).
+	RegisterLuaBoss("boss_warlord_salaris", 24559)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
