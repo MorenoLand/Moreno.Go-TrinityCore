@@ -1201,4 +1201,22 @@ func init() {
 	// lua_scripts/serpentshrinecavern/boss_morogrim_tidewalker.lua.
 	RegisterLuaBoss("boss_morogrim_tidewalker", 21213)
 	RegisterLuaBoss("npc_water_globule", 21913)
+
+	// The Lurker Below (21217): spout (45s) -> Talk(EMOTE_SPOUT)
+	// + 20s rotation; whirl (18s, 20s post-spout); geyser
+	// ({15s,20s}, non-victim pick w/ victim fallback, triggered
+	// 37478); waterbolt (triggered 37138 when no player in melee
+	// range); 120s -> submerge (non-triggered 37550), 60s ->
+	// emerge (triggered 20568) + spout in 3s. The fishing/GO
+	// pre-phase, the 9x ambusher/guardian summons, the rotating
+	// arc-spout machine, the LOS aggro and the instance-side
+	// encounter bookkeeping are unmodeled (no
+	// instance/GO/summon/movement/LOS/arc/evade bridges). The
+	// Coilfang Ambusher (21865): multishot (triggered 37790 on
+	// victim) + shoot bow (triggered 37770 on a random player;
+	// the 1100 BP0 arg has no bridge), 1500ms GCD arms. Fight
+	// logic in
+	// lua_scripts/serpentshrinecavern/boss_lurker_below.lua.
+	RegisterLuaBoss("boss_the_lurker_below", 21217)
+	RegisterLuaBoss("npc_coilfang_ambusher", 21865)
 }
