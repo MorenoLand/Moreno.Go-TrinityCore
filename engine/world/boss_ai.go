@@ -1720,4 +1720,20 @@ func init() {
 	RegisterLuaBoss("npc_aged_dying_ancient_kodo", 4700)
 	RegisterLuaBoss("npc_aged_dying_ancient_kodo", 4701)
 	RegisterLuaBoss("npc_aged_dying_ancient_kodo", 4702)
+	// npc_omen (Moonglade zone script): combat rotation only —
+	// cleave (15284, 3-5s init then 8-10s) + starfall (26540,
+	// 8-10s init then 14-16s, random target degraded to victim —
+	// no target-selection bridge), all non-triggered (C++-exact);
+	// JustDied non-triggered self-cast of summon-spotlight
+	// (26392); SpellHit by Elune's Candle (26374) reschedules the
+	// starfall timer to 14-16s (the aura-strip half has no
+	// creature-aura bridge); entry 15467 verifiable from the C++
+	// Omen enum — see lua_scripts/kalimdor/npc_omen.lua. The
+	// constructor's SetImmuneToPC/MovePoint + MovementInform
+	// point-1 immunity drop await the immune / movement /
+	// world-search bridges; npc_clintar_spirit (quest-10965
+	// escort machine) awaits the escort / quest / talk / summon
+	// bridges; npc_giant_spotlight (5-min despawn sweep) awaits
+	// the world-search / despawn bridges — documented only.
+	RegisterLuaBoss("npc_omen", 15467)
 }
