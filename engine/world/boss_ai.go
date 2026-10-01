@@ -2422,5 +2422,19 @@ func init() {
 	// from the C++ sources: boss_priestess_delrissa.cpp's m_auiAddEntries
 	// names 24556 //Zelfan (boss_felblood_kaelthas precedent).
 	RegisterLuaBoss("boss_zelfan", 24556)
+	// npc_kalecgos (Magister's Terrace zone script): the five-item
+	// OnGossipHello/OnGossipSelect chain ("Who are you?" menu 12498 ->
+	// 12500/12502/12606/12607/12608, C++-exact item texts/senders/actions;
+	// gossip bridge per the nefarian precedent). No combat arms. The
+	// PrepareQuestMenu leg (IsQuestGiver-gated) awaits the quest-menu
+	// bridge; the MovementInform(POINT_ID_PREPARE_LANDING) landing leg +
+	// the EVENT_KALECGOS_LANDING arm (DoCastAOE 44762 + SetObjectScale
+	// 0.6f + 1s re-arm) + the EVENT_KALECGOS_TRANSFORM cast triplet
+	// (triggered self-cast 46307 / 24085 / 44670) + UpdateEntry(24848)
+	// are documented-only (no MovementInform/MotionMaster/entry-update
+	// bridges). Entry 24844 verifiable from the C++ sources:
+	// magisters_terrace.h:64 names NPC_KALECGOS = 24844
+	// (boss_felblood_kaelthas precedent).
+	RegisterLuaBoss("npc_kalecgos", 24844)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
