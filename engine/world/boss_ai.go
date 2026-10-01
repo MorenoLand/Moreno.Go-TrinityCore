@@ -1938,5 +1938,19 @@ func init() {
 	RegisterLuaBoss("npc_av_marshal_or_warmaster", 14773)
 	RegisterLuaBoss("npc_av_marshal_or_warmaster", 14776)
 	RegisterLuaBoss("npc_av_marshal_or_warmaster", 14777)
+	// boss_balinda (Alterac Valley) — the combat event machine (arcane
+	// explosion 46608 victim-cast {5,15}s, cone of cold 38384 victim-cast
+	// 8s->{10,20}s, fireball 46988 victim-cast 1s->{5,9}s, frostbolt 46987
+	// victim-cast 4s->{4,12}s) plus the aggro Talk(0) and the DamageTaken
+	// 40% one-shot iceblock latch (46604) — maiden/moroes convention
+	// (CreateLuaEvent timers; GetVictim for DoCastVictim; no
+	// UNIT_STATE_CASTING gate). The water elemental summon arm, the
+	// JustSummoned AttackStart/faction arms, the home-leash CHECK_RESET
+	// arm (no HomePosition bridge), and the BG-driven
+	// DoAction(ACTION_BUFF_YELL) arm have no Lua bridges — documented
+	// only. Entry 11949 verifiable from the C++ sources: BattlegroundAV.h
+	// names "Captain Balinda Stonehearth" at 11949 — see
+	// lua_scripts/eastern_kingdoms/boss_balinda.lua.
+	RegisterLuaBoss("boss_balinda", 11949)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
