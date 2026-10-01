@@ -2053,5 +2053,18 @@ func init() {
 	// the AI has no instance arms — Reset() _Reset() and JustDied()
 	// _JustDied() are covered by the cancel/re-arm on combat events.
 	RegisterLuaBoss("boss_drakkisath", 10363)
+	// boss_halycon / boss_halyconAI (Blackrock Spire, Hall of Blackhand;
+	// BossAI combat scheduler via GetBlackrockSpireAI — rend 13738
+	// victim-cast 17s->8s, thrash 3391 self-cast one-shot 10s (C++-exact:
+	// no re-arm), Talk(EMOTE_DEATH = 0) on OnDied; melee engine-driven).
+	// Entry 10220 verifiable from the C++ sources: blackrock_spire.h
+	// names NPC_HALYCON at 10220 (BRS creatures enum) — see
+	// lua_scripts/eastern_kingdoms/boss_halycon.lua. GetBlackrockSpireAI
+	// is a GetInstanceAI retrieval wrapper (blackrock_spire.h:129-132);
+	// the AI has no instance arms — Reset() _Reset() / Initialize() are
+	// covered by the cancel/re-arm on combat events. Unmodeled: JustDied
+	// SummonCreature(NPC_GIZRUL_THE_SLAVENER = 10268, timed 5min) — no
+	// SummonCreature bridge (phoenix / flamelash precedent).
+	RegisterLuaBoss("boss_halycon", 10220)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
