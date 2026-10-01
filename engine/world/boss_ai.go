@@ -1312,4 +1312,24 @@ func init() {
 	// Fight logic in lua_scripts/theunderbog/boss_the_black_
 	// stalker.lua.
 	RegisterLuaBoss("boss_the_black_stalker", 17882)
+
+	// boss_broggok (17380): slime spray and poison bolt victim
+	// casts plus the poison cloud self-cast; the C++ event
+	// schedule fires only from the unbridgeable ACTION_ACTIVATE_
+	// BROGGOK DoAction (lever gossip -> prisoner waves ->
+	// ActivateCell), so the activate schedule (10s/7s/5s) is
+	// applied at OnEnterCombat, the only engagement hook this
+	// model has. The whole activate/prepare/reset DoAction
+	// machine (flag/react/immune flips, DoZoneInCombat, summon
+	// arms) and the instance lever/GO choreography have no
+	// instance/GO/summon/flag/react/zone bridges (bookkeeping
+	// only). The prisoner adds (17398 nascent fel orc, 17429
+	// fel orc neophyte) cast concussion blow/stomp and
+	// charge/frenzy on their own ScheduleEvents schedules.
+	// Fight logic in lua_scripts/hellfirecitadel/boss_broggok.
+	// lua, lua_scripts/hellfirecitadel/npc_nascent_fel_orc.lua,
+	// and lua_scripts/hellfirecitadel/npc_fel_orc_neophyte.lua.
+	RegisterLuaBoss("boss_broggok", 17380)
+	RegisterLuaBoss("npc_nascent_fel_orc", 17398)
+	RegisterLuaBoss("npc_fel_orc_neophyte", 17429)
 }
