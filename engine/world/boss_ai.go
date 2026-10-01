@@ -2596,4 +2596,18 @@ func init() {
 	// blackfathom_deeps.lua.
 	RegisterLuaBoss("npc_blackfathom_deeps_event", 4825)
 	RegisterLuaBoss("npc_blackfathom_deeps_event", 4978)
+
+	// boss_kelris (Twilight Lord Kelris, entry 4832 — C++-verified via
+	// blackfathom_deeps.h BFDCreatureIds plus instance_blackfathom_deeps.
+	// cpp's OnCreatureCreate twilightLordKelrisGUID arm, ramstein
+	// strength): Mind Blast 15587 on the victim (2-5s init / 7-9s repeat,
+	// jeklik GetVictim + CastSpell convention, non-triggered) and Sleep
+	// 8399 on a random alive player (9-12s init / 15-20s repeat, janalai
+	// randomPlayerInRange convention, non-triggered, Talk SAY_SLEEP);
+	// aggro Talk SAY_AGGRO plus RemoveAura of the 8734 channeling aura
+	// (Reset casts it on self — C++ Reset/JustReachedHome legs), death
+	// Talk SAY_DEATH; melee engine-driven. The BossAI _Reset/
+	// _JustReachedHome/_JustDied instance legs and the GetInstanceAI
+	// leg have no bridges; see lua_scripts/kalimdor/boss_kelris.lua.
+	RegisterLuaBoss("boss_kelris", 4832)
 }
