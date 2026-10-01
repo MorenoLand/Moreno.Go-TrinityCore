@@ -1543,4 +1543,17 @@ func init() {
 	// instance_the_botanica.cpp stays blocked on the
 	// instance-script model.
 	RegisterLuaBoss("boss_commander_sarannis", 17976)
+
+	// The Eye (Tempest Keep) — first boss in the set per
+	// outland_script_loader.cpp order: boss_alar (19514):
+	// two-phase phoenix — phase-1 platform cycle with a 20%
+	// flame-quills branch, a lethal-hit DamageTaken latch into
+	// the 5s WE_DIE -> WE_REVIVE phase-2 sequence, and phase-2
+	// charge / melt armor / dive-bomb chain / berserk arms;
+	// the platform/dive MovePoints, ember and flame-patch
+	// summons, and the flame-quills AuraScript have no movement
+	// / summon / AuraScript bridges — see lua_scripts/the_eye/
+	// boss_alar.lua. instance_the_eye.cpp stays blocked on the
+	// instance-script model.
+	RegisterLuaBoss("boss_alar", 19514)
 }
