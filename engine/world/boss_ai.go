@@ -796,4 +796,21 @@ func init() {
 	// (ScriptName bindings are DB-side) and have no summon model; the shade
 	// soul-channel AuraScripts have no AuraScript bridge.
 	RegisterLuaBoss("boss_shade_of_akama", 22841)
+	// RegisterLuaBoss wires lua_scripts/blacktemple/boss_teron_gorefiend.lua.
+	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
+	// encounter-state bookkeeping is blocked on the instance-script model
+	// (DATA_TERON_GOREFIEND/DATA_TERON_GOREFIEND_INTRO, SetBossState); the
+	// intro arms (area trigger ACTION_START_INTRO, Talk(SAY_INTRO),
+	// NON_ATTACKABLE/NOT_SELECTABLE/REACT_PASSIVE flags, 20s
+	// EVENT_FINISH_INTRO) have no area-trigger or flag bridges — the fight
+	// starts on pull; the doom blossom summon (23123), the shadow of death
+	// summon arms and the EnterEvadeMode summons.DespawnAll/_DespawnAtEvade
+	// arms have no summon/despawn model; the shadow of death remove
+	// (41999) cast's effect lives in the unmodeled SpellScript; the doom
+	// blossom and shadowy construct AIs are not registered (ScriptName
+	// bindings are DB-side) and the construct's instance-creature lookup,
+	// ResetThreatList/AddThreat and ApplySpellImmune arms have no bridges;
+	// the shadow of death / spiritual vengeance AuraScripts have no
+	// AuraScript bridge.
+	RegisterLuaBoss("boss_teron_gorefiend", 22871)
 }
