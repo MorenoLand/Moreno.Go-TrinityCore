@@ -1914,5 +1914,29 @@ func init() {
 	// dragonblight, grizzly_hills, howling_fjord, icecrown,
 	// sholazar_basin, storm_peaks, wintergrasp closed); the
 	// Northrend zone set is now CLOSED.
+	// npc_av_marshal_or_warmaster (Alterac Valley zone script) — the first
+	// unit of the Eastern Kingdoms pass (eastern_kingdoms_script_loader.cpp
+	// order: AddSC_alterac_valley; boss_balinda follows). The combat event
+	// machine (charge 22911 victim-cast, cleave 40504 victim-cast, demoral-
+	// izing shout 23511 self-cast, whirlwind 13736 self-cast, enrage 8599
+	// self-cast) plus the per-entry one-shot aura self-cast from the C++
+	// _auraPairs table (14762->45828 / 14763->45829 / 14765->45830 /
+	// 14764->45831 / 14773->45822 / 14776->45823 / 14777->45824 /
+	// 14772->45826) — maiden-of-virtue convention (CreateLuaEvent timers;
+	// GetVictim for DoCastVictim; no UNIT_STATE_CASTING gate). C++ quirk:
+	// the charge arm reschedules undefined EVENT_CHARGE (would not compile
+	// upstream) — the port re-arms the charge chain at the stated {10,25}s.
+	// EVENT_CHECK_RESET (home leash) has no HomePosition bridge —
+	// documented-only. All eight entries are verifiable from the file's own
+	// Creatures enum — see lua_scripts/eastern_kingdoms/
+	// npc_av_marshal_or_warmaster.lua.
+	RegisterLuaBoss("npc_av_marshal_or_warmaster", 14762)
+	RegisterLuaBoss("npc_av_marshal_or_warmaster", 14763)
+	RegisterLuaBoss("npc_av_marshal_or_warmaster", 14764)
+	RegisterLuaBoss("npc_av_marshal_or_warmaster", 14765)
+	RegisterLuaBoss("npc_av_marshal_or_warmaster", 14772)
+	RegisterLuaBoss("npc_av_marshal_or_warmaster", 14773)
+	RegisterLuaBoss("npc_av_marshal_or_warmaster", 14776)
+	RegisterLuaBoss("npc_av_marshal_or_warmaster", 14777)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
