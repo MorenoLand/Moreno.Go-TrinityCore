@@ -2741,4 +2741,34 @@ func init() {
 	// C++ entry evidence, gelihast precedent) and its bridgeable arms are
 	// documented in the header; see lua_scripts/kalimdor/boss_azgalor.lua.
 	RegisterLuaBoss("boss_azgalor", 17842)
+
+	// boss_archimonde (Archimonde, entry 17968 — C++-verified via hyjal.h
+	// HYCreaturesIds "Bosses summoned after every 8 waves" enum (:82) plus
+	// instance_hyjal.cpp's OnCreatureCreate GUID-capture case (:128) and
+	// the DATA_ARCHIMONDE GetGuidData leg (:158), ramstein strength; the
+	// creature_template ScriptName binding stays DB-side): the
+	// self-contained in-combat legs (pre-combat triggered Drain World
+	// Tree 39140 self-cast on OnSpawn(5) — ACTION_CHANNEL_WORLD_TREE;
+	// Fear 31970 self non-triggered init 42s -> 42s; Air Burst 32014 on
+	// a random alive player excluding the victim (C++ position 1 "not on
+	// tank" has no threat-list bridge) + Talk SAY_AIR_BURST (3) init 30s
+	// -> {25s,40s}; Grip of the Legion 31972 on an unbounded random
+	// alive player init {5s,25s} -> {5s,25s}; Finger of Death 31984 with
+	// the C++ 5-yard melee check (no player in range -> cast on a random
+	// alive player, re-arm 1s; else re-arm 5s) init 15s; Hand of Death
+	// 35354 self non-triggered init 10min -> 2s; soul-charge state machine
+	// as Lua counters per C++ class bucket (priest/paladin/warlock -> red,
+	// mage/rogue/warrior -> yellow, druid/shaman/hunter -> green), unleash
+	// urand(0,2) DoCastVictim with the C++ no-aura no-re-arm rule;
+	// DamageTaken 10% leg: Talk SAY_ENRAGE (5) + triggered Protection of
+	// Elune 38528 self-cast; engage Talk SAY_AGGRO (1), KilledUnit Talk
+	// SAY_SLAY (4), death Talk SAY_DEATH (6)) on C++-verbatim timers;
+	// melee engine-driven. The Doomfire summon choreography, distance
+	// check on DATA_CHANNEL_TARGET, wisp phase, instance DATA_ARCHIMONDE
+	// legs, and the drain-dummy SpellScript have no bridges; the three
+	// add scripts (npc_doomfire / npc_doomfire_targetting /
+	// npc_ancient_wisp) are unregistered (zero C++ entry evidence,
+	// gelihast precedent) with their bridgeable arms documented in the
+	// header; see lua_scripts/kalimdor/boss_archimonde.lua.
+	RegisterLuaBoss("boss_archimonde", 17968)
 }
