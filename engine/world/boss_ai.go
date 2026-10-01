@@ -1408,4 +1408,11 @@ func init() {
 	// have no bridges — see lua_scripts/shatteredhalls/
 	// boss_shattered_executioner.lua.
 	RegisterLuaBoss("boss_shattered_executioner", 17301)
+
+	// boss_watchkeeper_gargolmar (17306): mortal wound /
+	// surge / retaliation / heal-yell boss; the
+	// MoveInLineOfSight SAY_TAUNT arm has no LoS-aggro
+	// bridge — see lua_scripts/hellfireramparts/
+	// boss_watchkeeper_gargolmar.lua.
+	RegisterLuaBoss("boss_watchkeeper_gargolmar", 17306)
 }
