@@ -1628,4 +1628,22 @@ func init() {
 	// quest-credit bridges missing).
 	RegisterLuaBoss("npc_phase_hunter", 18879)
 	RegisterLuaBoss("npc_phase_hunter", 19595)
+	// npc_illidari_spawn (Shadowmoon Valley zone script): one
+	// CreatureScript AI class serving three entries with a
+	// per-entry cast switch in UpdateAI — 22075 Illidari Soldier
+	// (spellbreaker), 22074 Illidari Mind Breaker (focused bursts
+	// on a random player + psychic scream + mind blast), 19797
+	// Illidari Highlord (curse of flames + flamestrike); all
+	// entries verifiable from the C++ sources (UpdateAI
+	// GetEntry() branches + the wave-spawn table) — see
+	// lua_scripts/outland/npc_illidari_spawn.lua. The JustDied
+	// DespawnOrUnsummon and the LordIllidan LiveCounter() call
+	// have no despawn / cross-creature bridges — documented
+	// only; the Torloth cinematic machine, the Illidan event
+	// controller, the infernal summon pair, the mature/enslaved
+	// drake quest arms and the wilda escort all sit behind
+	// no-summon / movement / SpellHit / quest / escort bridges.
+	RegisterLuaBoss("npc_illidari_spawn", 22075)
+	RegisterLuaBoss("npc_illidari_spawn", 22074)
+	RegisterLuaBoss("npc_illidari_spawn", 19797)
 }
