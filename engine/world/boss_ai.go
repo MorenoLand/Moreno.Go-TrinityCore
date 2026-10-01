@@ -3057,4 +3057,19 @@ func init() {
 	// casting bridges — documented in
 	// lua_scripts/kalimdor/boss_mal_ganis.lua, not wired.
 	RegisterLuaBoss("boss_mal_ganis", 26533)
+	// Meathook: combat arms ported (entry 26529, NPC_MEATHOOK
+	// summon-bound in the instance_culling_of_stratholme.cpp:553
+	// WAVE_MEATHOOK wave-machine leg — not GUID-bound in
+	// OnCreatureCreate, like salramm/aeonus) — the three timer arms
+	// (Constricting Chains with the C++ negative-dist minimum-range
+	// filter: random player >= 20yd else random player < 100m
+	// excluding the victim else the victim; Disease Expulsion
+	// self-cast AoE; Frenzy self-cast) and the engage / player-gated
+	// KilledUnit slay Talk / death Talk verified present in the
+	// port; InitializeAI's Talk(SAY_SPAWN) and the
+	// GetBossState(DATA_MEATHOOK) == DONE loot-mode leg plus the
+	// BossAI instance legs and JustDied SetData(DATA_NOTIFY_DEATH)
+	// have no spawn / instance-data bridges — documented in
+	// lua_scripts/kalimdor/boss_meathook.lua, not wired.
+	RegisterLuaBoss("boss_meathook", 26529)
 }
