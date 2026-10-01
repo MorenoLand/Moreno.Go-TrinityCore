@@ -1399,4 +1399,13 @@ func init() {
 	// lua_scripts/shatteredhalls/boss_warchief_kargath_
 	// bladefist.lua.
 	RegisterLuaBoss("boss_warchief_kargath_bladefist", 16808)
+
+	// boss_shattered_executioner (17301, NPC_SHATTERED_
+	// EXECUTIONER): cleave-only BossAI; the zone-file
+	// area-trigger and the two script hooks stay
+	// unregistered (no area-trigger/AuraScript/SpellScript
+	// bridges); the loot-mode/immune/quest/SetData arms
+	// have no bridges — see lua_scripts/shatteredhalls/
+	// boss_shattered_executioner.lua.
+	RegisterLuaBoss("boss_shattered_executioner", 17301)
 }
