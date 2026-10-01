@@ -3089,4 +3089,16 @@ func init() {
 	// instance-data / achievement bridges — documented in
 	// lua_scripts/kalimdor/boss_onyxia.lua, not wired.
 	RegisterLuaBoss("boss_onyxia", 10184)
+
+	// boss_tuten_kash: Razorfen Downs, entry 7355 (razorfen_downs.h
+	// RFDCreatureIds NPC_TUTEN_KASH — kalecgos passes; Tuten Kash
+	// summon-event block). BossAI(creature, DATA_TUTEN_KASH)
+	// (DATA_TUTEN_KASH = 0 of RFDDataTypes, "instance_razorfen_downs"
+	// gate) — the instance-side BossAI legs have no bridge
+	// (standing). Ported arms in lua_scripts/kalimdor/boss_tuten_kash.lua:
+	// Reset self-buff refresh (Thrash 8876 / Virulent Poison 12254
+	// under HasAura guards), Web Spray 12252 (random player in 100y,
+	// recast-if-no-aura gate, {6s,8s}), Curse of Tuten'kash 12255
+	// (self-cast, {15s,25s}); UNIT_STATE_CASTING gates unmodeled.
+	RegisterLuaBoss("boss_tuten_kash", 7355)
 }
