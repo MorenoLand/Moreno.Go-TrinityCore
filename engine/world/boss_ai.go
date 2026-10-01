@@ -1819,4 +1819,29 @@ func init() {
 	// / flag bridges — documented only. Dragonblight is the
 	// third Northrend zone (dalaran, borean_tundra closed).
 	RegisterLuaBoss("npc_torturer_lecraft", 27394)
+	// npc_apothecary_hanes (Howling Fjord zone script): the
+	// UpdateAI health arm — below 75% health the 10s PotTimer
+	// ticks -> triggered self-cast SPELL_HEALING_POTION 17534
+	// (armPump on OnSpawn(5), timer re-arm on OnLeaveCombat(2) /
+	// OnReset(23), cancel on OnDied(4); the arm is not
+	// combat-gated in C++, so it rides the always-on 1s pump —
+	// underbog_mushroom precedent). The escort cinematic
+	// (OnQuestAccept quest-11241 launch, waypoint 1-40 Talk /
+	// emote chain, DoCastAOE 42685 burn crates, GroupEventHappens
+	// credit) sits behind the quest-accept / escort / movement /
+	// emote / faction / quest bridges — documented only. Entry
+	// 23784 verifiable from the C++ Entries enum — see
+	// lua_scripts/northrend/npc_apothecary_hanes.lua.
+	// npc_daegarn (gladiator quest-11300 event + 40s idle Talk
+	// loop) has no NPC_ entry constant in the C++ sources —
+	// minigob precedent, no registration. npc_mindless_
+	// abomination (EVENT_CHECK_CHARMED despawn arm) awaits the
+	// charm-check / despawn bridges; spell_mindless_abomination_
+	// explosion_fx_master has no SpellScript bridge;
+	// npc_riven_widow_cocoon (JustDied player-killer summon /
+	// kill-credit machine) has no killer-player / cast-on-me
+	// path — all documented only. Howling Fjord is the fourth
+	// Northrend zone (dalaran, borean_tundra, dragonblight,
+	// grizzly_hills closed).
+	RegisterLuaBoss("npc_apothecary_hanes", 23784)
 }
