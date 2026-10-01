@@ -1567,4 +1567,26 @@ func init() {
 	// creature bridges — see lua_scripts/the_eye/
 	// boss_high_astromancer_solarian.lua.
 	RegisterLuaBoss("boss_high_astromancer_solarian", 18805)
+	// boss_doomlordkazzak and boss_doomwalker: the C++ files
+	// carry no NPC_ entry constants anywhere in the sources —
+	// the entries are DB-side only — so both are documented-
+	// only, unregistered (void_reaver precedent); see
+	// hidden_files/CHECKPOINT.md.
+	// npc_nether_drake (Blade's Edge Mountains zone script,
+	// first unit after the world-boss set per
+	// outland_script_loader.cpp order — AddSC_blades_edge_
+	// mountains precedes AddSC_boss_doomlordkazzak): the
+	// bridgeable combat arms — intangible presence /
+	// mana burn / arcane blast timers — over the five
+	// ENTRY_* drake entries (20021 whelp, 21821 proto,
+	// 21817 adolescent, 21820 mature, 21823 nihil), all
+	// verifiable from the C++ sources; the SpellHit phase-
+	// modulator transform has no entry-update/flag/evade/
+	// movement bridges, so the IsNihil speech machine never
+	// runs — see lua_scripts/outland/npc_nether_drake.lua.
+	RegisterLuaBoss("npc_nether_drake", 20021)
+	RegisterLuaBoss("npc_nether_drake", 21821)
+	RegisterLuaBoss("npc_nether_drake", 21817)
+	RegisterLuaBoss("npc_nether_drake", 21820)
+	RegisterLuaBoss("npc_nether_drake", 21823)
 }
