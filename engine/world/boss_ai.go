@@ -1774,4 +1774,24 @@ func init() {
 	// faction / world-search / despawn / quest bridges —
 	// documented only.
 	RegisterLuaBoss("npc_marzon_silent_blade", 1755)
+	// npc_highborne_lamenter (Undercity zone script): the UpdateAI
+	// EventCast one-shot arm — non-triggered self-cast of SPELL_
+	// HIGHBORNE_AURA 37090 at 17.5s via the engine-fired OnSpawn
+	// event (C++-exact timing); the 10s EventMove arm (disable-
+	// gravity + MonsterMoveWithSpeed toward z=-55.50) awaits the
+	// movement bridge — documented only. Entry 21628 verifiable
+	// from the C++ Sylvanas enum — see lua_scripts/eastern_
+	// kingdoms/npc_highborne_lamenter.lua. npc_lady_sylvanas_
+	// windrunner (combat rotation bridgeable in principle via the
+	// omen 1s-pump pattern — summon-skeleton 59711 / black-arrow
+	// 59712 / shoot 59710 / multi-shot 59713 victim casts + fade
+	// 20672 / fade-blink 29211 self casts — but no verifiable
+	// entry in the C++ sources; the lament / ribbon / sunsorrow
+	// machines await the quest-reward / sound / summon / world-
+	// search / cross-creature-Talk bridges) joins the TDB-dump
+	// entry-evidence queue — documented only. npc_parqual_
+	// fintallas is header-named but never registered by AddSC_
+	// undercity — no invented registration. Undercity closes the
+	// EK zone set.
+	RegisterLuaBoss("npc_highborne_lamenter", 21628)
 }
