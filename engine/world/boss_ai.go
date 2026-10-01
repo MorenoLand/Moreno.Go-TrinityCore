@@ -2837,4 +2837,29 @@ func init() {
 	// barrel script is documented, not registered — see
 	// lua_scripts/kalimdor/boss_lieutenant_drake.lua.
 	RegisterLuaBoss("boss_lieutenant_drake", 17848)
+
+	// npc_thrall_old_hillsbrad (Thrall, entry 17876 — C++-verified via
+	// old_hillsbrad.h:35's THRALL_ENTRY constant plus
+	// instance_old_hillsbrad.cpp:108's OnCreatureCreate case (ThrallGUID
+	// capture); the creature_template ScriptName binding stays DB-side):
+	// the self-contained in-combat legs only (legoso combat-rotation-only
+	// precedent) — engage Talk SAY_TH_RANDOM_AGGRO (13); 1s pump for the
+	// UpdateAI LowHp latch (Talk SAY_TH_RANDOM_LOW_HP (11) at <20% hp,
+	// cleared on Reset); KilledUnit Talk SAY_TH_RANDOM_KILL (14), no
+	// TYPEID gate; death Talk SAY_TH_RANDOM_DIE (12) unless killer == me;
+	// melee engine-driven. The entire EscortAI waypoint/summon/mount
+	// machine (24 waypoint cases, C++-verbatim in the .lua header), all
+	// gossip legs (Thrall's start/skarloc/tarren chains, Taretha's epoch
+	// chain, Erozion's bomb-grant/teleport), the JustSummoned
+	// AttackStart leg, and the instance SetData(TYPE_THRALL_EVENT/PART*)
+	// legs have no movement / summon-with-position / gossip / inventory /
+	// instance-data bridges — documented in
+	// lua_scripts/kalimdor/old_hillsbrad.lua, not wired. npc_erozion
+	// (gossip-only) and npc_taretha (EscortAI, zero bridgeable arms) are
+	// documented-only, not registered — see the .lua header; both entries
+	// (TARETHA_ENTRY 18887 via old_hillsbrad.h:36 +
+	// instance_old_hillsbrad.cpp:111; EROZION_ENTRY 18723 via this cpp's
+	// ThrallOldHillsbrad enum + the waypoint-106 summon) are
+	// C++-verifiable.
+	RegisterLuaBoss("npc_thrall_old_hillsbrad", 17876)
 }
