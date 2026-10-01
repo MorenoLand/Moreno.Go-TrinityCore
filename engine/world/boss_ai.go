@@ -1495,4 +1495,13 @@ func init() {
 	// but not registered: its C++ AI is a no-op. Arcatraz
 	// boss roster 4/4 COMPLETE.
 	RegisterLuaBoss("boss_harbinger_skyriss", 20912)
+
+	// The Botanica (Tempest Keep) boss roster 1/5:
+	// boss_high_botanist_freywinn (17975): seedling / tree-form
+	// boss; the summon-frayer arms, the tree-form aura /
+	// movement / cast-state arms have no summon / aura /
+	// movement / cast-state bridges — see lua_scripts/
+	// botanica/boss_high_botanist_freywinn.lua. instance_the_
+	// botanica.cpp stays blocked on the instance-script model.
+	RegisterLuaBoss("boss_high_botanist_freywinn", 17975)
 }
