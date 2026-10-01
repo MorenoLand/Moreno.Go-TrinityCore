@@ -1150,4 +1150,12 @@ func init() {
 	RegisterLuaBoss("boss_fathomguard_sharkkis", 21966)
 	RegisterLuaBoss("boss_fathomguard_tidalvess", 21965)
 	RegisterLuaBoss("boss_fathomguard_caribdis", 21964)
+
+	// Hydross the Unstable (21216) — dual-form (clean/corrupted)
+	// switch on 2.5s position poll vs (-239.439,-363.481)/18yd,
+	// escalating mark stacks (15s), water tomb 7s / vile sludge
+	// 7s->15s, enrage 10min->60s. Display/immunity/threat/summon
+	// arms are unmodeled. Fight logic in
+	// lua_scripts/serpentshrinecavern/boss_hydross_the_unstable.lua.
+	RegisterLuaBoss("boss_hydross_the_unstable", 21216)
 }
