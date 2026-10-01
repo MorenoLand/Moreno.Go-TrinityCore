@@ -1,0 +1,129 @@
+-- Storm Cloud (Zul'Drak) --
+-- Lua port of src/server/scripts/Northrend/zone_zuldrak.cpp
+-- (npc_storm_cloudAI — Reset()/JustAppeared() arm only).
+-- Zone-script unit per northrend_script_loader.cpp order
+-- (wintergrasp done; zuldrak: npc_drakuru_shackles, npc_
+-- captured_rageclaw, npc_released_offspring_harkoa, npc_
+-- crusade_recruit, go_scourge_enclosure, npc_alchemist_
+-- finklestein, go_finklesteins_cauldron, spell_random_
+-- ingredient_aura, spell_random_ingredient, spell_pot_check,
+-- spell_fetch_ingredient_aura, the four scourge_disguise
+-- SpellScripts documented-only, npc_storm_cloud ported).
+-- Entry (file's own StormCloud enum, verifiable from the C++
+-- sources): 29939 (STORM_COULD — the file's own spelling). The
+-- creature_template ScriptName binding is DB-side (no TDB in
+-- this workspace).
+-- Eluna creature events: 5 OnSpawn, 23 OnReset.
+-- Ported arm (C++ Reset() / JustAppeared()): CastSpell(me,
+-- STORM_VISUAL 55708, true) — the triggered non-targeted
+-- self-cast — creature:CastSpell(creature, spell, true) is the
+-- vaelastrasz self-cast convention; the triggered flag is
+-- accepted but not threaded by the binding (gruul reverberation
+-- precedent — documented deviation, same as every other
+-- triggered port). The cloud never engages, so OnReset(23)
+-- re-arms the same Reset fragment (C++ Reset semantics —
+-- mushroom precedent); no timers, no per-GUID state (the
+-- blessed_banner shape — no Talk arm on this one).
+-- Unmodeled: the SpellHit arm (spell 55516 GYMERS_GRAB: unit-
+-- caster gate -> vehicle-kit seat-count gate -> me->CastSpell(
+-- caster, RIDE_VEHICLE 43671, true) + me->CastSpell(caster,
+-- HEALING_WINDS 55549, true)) has no SpellHit / vehicle /
+-- passenger bridges (fizzule / wintergrasp vehicle_teleporter
+-- precedent) — documented-only.
+-- npc_drakuru_shackles — the Reset arm (SetFlag NOT_SELECTABLE,
+-- GetClosePoint + SummonCreature NPC_RAGECLAW 29686, SetFacing
+-- ToObject pair) sits behind the flag / summon / facing bridges;
+-- the SpellHit(55083 UNLOCK_SHACKLE) machine (player-caster +
+-- quest-12861 INCOMPLETE gates -> DoCast(rageclaw, 55223)
+-- triggered + setDeathState(DEAD) + KilledMonster + RemoveAura
+-- (54990) + DespawnOrUnsummon) behind the SpellHit / quest /
+-- kill-credit / despawn bridges — documented-only. 29686 +
+-- 12861 + 54990/55009/55083/55223 verifiable.
+-- npc_captured_rageclaw — the Reset arm (SetFaction(FACTION_
+-- FRIENDLY) + triggered self-cast 54990) is bridgeable in
+-- principle (entry 29686 verifiable from the file's own enum),
+-- but the release machine (SpellHit 55223: RemoveAura(55009) +
+-- SetStandState(STAND) + SetFaction(template) + DoCast(me,
+-- 55085) + Talk(0) + MoveRandom(10) + DespawnOrUnsummon(10s))
+-- has no SpellHit / faction / stand-state / movement / despawn
+-- bridges, so the Reset arm was deferred rather than ported as
+-- a stranded half (a permanently-chained NPC is worse than no
+-- registration); MoveInLineOfSight overridden empty —
+-- documented-only. 55085 verifiable.
+-- npc_released_offspring_harkoa — the Reset arm (GetClosePoint
+-- + MovePoint(0)) and the MovementInform despawn arm sit behind
+-- the movement / despawn bridges — documented-only.
+-- npc_crusade_recruit — the UpdateAI event machine (EVENT_
+-- RECRUIT_1: RemoveFlag gossip + Talk(0) + 3s->RECRUIT_2;
+-- EVENT_RECRUIT_2: SetWalk + MovePoint 10yd forward + Despawn
+-- OrUnsummon(5s)) and the OnGossipSelect arm (schedule 100ms +
+-- CloseGossip + CastSpell(player, 50633) + SetFacingToObject)
+-- sit behind the gossip / flag / cross-creature-Talk /
+-- movement / despawn bridges — documented-only. 50633/12509
+-- verifiable.
+-- go_scourge_enclosure (GameObjectAI) — the OnGossipHello arm
+-- (UseDoorOrButton + quest-12916 INCOMPLETE gate -> FindNearest
+-- Creature(29928, 20yd) -> KilledMonsterCredit + dummy CastSpell
+-- (dummy, 55529) + DespawnOrUnsummon(4s)) sits behind the GO /
+-- quest / world-search / kill-credit / despawn bridges —
+-- documented-only. 12916/29928/55529 verifiable.
+-- npc_alchemist_finklestein — the whole machine (EVENT_TURN_TO
+-- _POT 15-26s SetFacingTo(6.230825) + EMOTE_STATE_USE_STANDING
+-- _NO_SHEATHE -> EVENT_TURN_BACK 11s SetFacingTo(4.886922) +
+-- EMOTE_STATE_NONE -> 25-41s->TURN_TO_POT; EVENT_EASY_123 /
+-- MEDIUM_4 / MEDIUM_5 / HARD_6: player GUID lookup -> Talk(say,
+-- player) + DoCast(player, 51015/51154/51157) + ++try; SetData
+-- (1,1) try-gated dispatch; OnGossipSelect: CloseGossip +
+-- DoCast(player, 51216) + _playerGUID stash + try=1 + schedule
+-- EVENT_EASY_123 100ms) sits behind the emote / facing /
+-- cross-creature-Talk / player-cast / gossip bridges; entry
+-- 28205 verifiable — documented-only.
+-- go_finklesteins_cauldron (GameObjectAI) — OnGossipHello:
+-- player->CastSpell(player, SPELL_POT_CHECK 51046) behind the
+-- GO / player-self-cast bridges — documented-only.
+-- spell_random_ingredient_aura — AuraScript periodic (51015->
+-- 51134 / 51154->51105 / 51157->51107 self-casts): no
+-- AuraScript bridge (blasted_lands / gordunni precedents) —
+-- documented-only.
+-- spell_random_ingredient — SpellScript (hit-player urand 0-10
+-- / 11-15 / 16-20 -> closest 28205 25yd CastSpell(player,
+-- FetchIngredients[ingredient][0]) + Talk(say, player)): no
+-- SpellScript / world-search bridges — documented-only.
+-- spell_pot_check — SpellScript (21-slot Have/Fetch aura scan
+-- -> SPELL_THROW_INGREDIENT 51025 + Have-aura / item-count
+-- gates -> DestroyItemCount / SetData(1,1) ingredient-advance
+-- vs RemoveItems + RemoveAura(51216) + Talk(4, player) ruin
+-- path; hard-tier completion -> quest-12541 INCOMPLETE gate ->
+-- RemoveAura(51216) + CastSpell(player, 51111)): no SpellScript
+-- / quest bridges — documented-only. The full FetchIngredients
+-- table (21 ingredients: 51018-51104 fetch/have pairs, item
+-- ids 38336-38398, SAY 5-25) and 51015/51154/51157 + 51134/
+-- 51105/51107 + 51046 + 51025 + 51111 + 51216 + 12541
+-- verifiable.
+-- spell_fetch_ingredient_aura — AuraScript OnRemove (expire +
+-- HasAura(51216) + closest 28205 100yd -> RemoveAura(51216) +
+-- Talk(4, target)): no AuraScript bridge — documented-only.
+-- spell_scourge_disguise / spell_scourge_disguise_instability /
+-- spell_scourge_disguise_expiring / spell_drop_disguise —
+-- AuraScript/SpellScript (51966 transform apply/remove ->
+-- 51971 instability periodic with irand(30,240)s calc + 52010
+-- expiring -> whisper TEXT_DISGUISE_WARNING 28891; 54089 hit-
+-- unit -> 52010): no AuraScript / SpellScript bridges —
+-- documented-only. 51966/51971/52010/54089/28891 verifiable.
+-- npc_storm_cloud — SpellHit(55516) vehicle arm (see Unmodeled
+-- above) behind the SpellHit / vehicle bridges; entries
+-- 55549/55516/43671 + 55708 + 29939 verifiable.
+
+local SPELL_STORM_VISUAL = 55708
+
+local STORM_CLOUD_ENTRY = 29939
+
+-- C++ Reset()/JustAppeared() arm: triggered non-targeted
+-- self-cast of the storm visual — one-shot per spawn / reset,
+-- no timers, no per-GUID state.
+local function onSpawnOrReset(_, creature)
+    creature:CastSpell(creature, SPELL_STORM_VISUAL, true)
+end
+
+RegisterCreatureEvent(STORM_CLOUD_ENTRY, 5, onSpawnOrReset)
+RegisterCreatureEvent(STORM_CLOUD_ENTRY, 23, onSpawnOrReset)

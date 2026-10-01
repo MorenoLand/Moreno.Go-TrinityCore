@@ -1881,4 +1881,38 @@ func init() {
 	// borean_tundra, dragonblight, grizzly_hills, howling_fjord
 	// closed).
 	RegisterLuaBoss("npc_blessed_banner", 30891)
+	// npc_storm_cloud (Zul'Drak zone script): the Reset() /
+	// JustAppeared() arm — triggered self-cast STORM_VISUAL
+	// 55708 (vaelastrasz self-cast convention; the triggered
+	// flag is accepted but not threaded — gruul reverberation
+	// precedent) — armed on OnSpawn(5) / OnReset(23); the cloud
+	// never engages, so no timers and no per-GUID state. The
+	// SpellHit(55516 GYMERS_GRAB) vehicle arm (kit seat-count
+	// gate -> RIDE_VEHICLE 43671 + HEALING_WINDS 55549 on the
+	// caster) has no SpellHit / vehicle / passenger bridges.
+	// npc_drakuru_shackles (Reset summon/facing arms + the
+	// SpellHit 55083 quest-12861 machine) has no flag / summon /
+	// facing / SpellHit / quest / kill-credit / despawn bridges;
+	// npc_captured_rageclaw (the SpellHit 55223 release machine
+	// with faction / stand-state / MoveRandom / despawn arms) —
+	// the Reset self-cast 54990 arm was deferred as a stranded
+	// half rather than ported; npc_released_offspring_harkoa
+	// (MovePoint + MovementInform despawn), npc_crusade_recruit
+	// (RECRUIT_1/2 event machine + OnGossipSelect player-cast),
+	// go_scourge_enclosure (GO gossip quest-12916 credit machine),
+	// npc_alchemist_finklestein (the facing/emote loop +
+	// ingredient Talk/cast machine + gossip), go_finklesteins_
+	// cauldron (gossip 51046 self-cast), and the five
+	// SpellScript/AuraScript loaders (spell_random_ingredient_
+	// aura, spell_random_ingredient, spell_pot_check,
+	// spell_fetch_ingredient_aura, the four scourge_disguise
+	// scripts) have no SpellScript / AuraScript / gossip /
+	// quest / world-search bridges — all documented only. Entry
+	// 29939 verifiable from the C++ StormCloud enum — see
+	// lua_scripts/northrend/npc_storm_cloud.lua. Zul'Drak is
+	// the last enabled Northrend zone (dalaran, borean_tundra,
+	// dragonblight, grizzly_hills, howling_fjord, icecrown,
+	// sholazar_basin, storm_peaks, wintergrasp closed); the
+	// Northrend zone set is now CLOSED.
+	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
