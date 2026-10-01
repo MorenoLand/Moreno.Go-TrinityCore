@@ -831,4 +831,28 @@ func init() {
 	// SpellScript bridge; the EnterEvadeMode _DespawnAtEvade arm has no
 	// despawn bridge (evade-side cleanup is engine-side).
 	RegisterLuaBoss("boss_gurtogg_bloodboil", 22948)
+	// Reliquary of Souls (Black Temple) — fight logic in
+	// lua_scripts/blacktemple/boss_reliquary_of_souls.lua.
+	// The reliquary models only the ACTION_START_COMBAT arm (10s
+	// submerge visual + summon-essence cast, phase pinned at
+	// suffering); the essence-death phase advances, the
+	// HandleSpirits world-trigger scheduling and the enslaved-soul
+	// DoAction(ACTION_KILL_SELF) propagation have no
+	// instance/DoAction bridge, and the trigger's MoveInLineOfSight
+	// start is modeled as pull; the three essence boss AIs are not
+	// registered (no essence entry constants in the C++ tree —
+	// ScriptName bindings are DB-side); the enslaved-soul
+	// REACT/DoZoneInCombat arms and the 500ms KillSelf arm have no
+	// bridges (no react/zone-combat/despawn model); the combat
+	// trigger's sight arm has no bridge and it is unkillable
+	// (damage rewritten to 0, C++-exact); the aura_of_desire,
+	// submerge and spite AuraScripts and the frenzy SpellScript
+	// have no script bridges.
+	RegisterLuaBoss("boss_reliquary_of_souls", 22856)
+	// Enslaved Soul (Black Temple) — fight logic in
+	// lua_scripts/blacktemple/boss_reliquary_of_souls.lua.
+	RegisterLuaBoss("npc_enslaved_soul", 23469)
+	// Reliquary combat trigger (Black Temple) — invulnerability
+	// hook in lua_scripts/blacktemple/boss_reliquary_of_souls.lua.
+	RegisterLuaBoss("npc_reliquary_combat_trigger", 23417)
 }
