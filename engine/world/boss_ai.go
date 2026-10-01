@@ -2979,4 +2979,28 @@ func init() {
 	// ObjectAccessor bridge (SpellHit-15-never-fires standing queue) —
 	// documented in lua_scripts/kalimdor/boss_epoch.lua, not wired.
 	RegisterLuaBoss("boss_epoch", 26532)
+
+	// npc_arthas_stratholme (Arthas, entry 26499 — C++-verified via
+	// culling_of_stratholme.h:161's NPC_ARTHAS constant plus
+	// instance_culling_of_stratholme.cpp:529's SummonCreature and :619's
+	// OnCreatureCreate case; the creature_template ScriptName binding
+	// stays DB-side): the self-contained in-combat legs only (legoso
+	// combat-rotation-only precedent) — 1s engage pump for UpdateAICombat
+	// (Holy Light 52444 self-cast below 40% hp, no C++ cooldown;
+	// Exorcism 52445 on an unbounded random alive player every 7-14s
+	// (nefarian convention), nil target retries next tick); KilledUnit
+	// Talk LINE_SLAY_ZOMBIE (39) gated on the victim being NPC_RISEN_
+	// ZOMBIE 27737 (event 3, nalorakk DISCOVERY); death is cancel only
+	// (C++ JustDied is instance SetData(DATA_ARTHAS_DIED) + despawn,
+	// blocked standing); melee engine-driven. The whole 5-RP
+	// spline-chain / MovementInform / event-map escort machine, the
+	// AdvanceToState snapback/react-state/gossip-flag legs, the gossip
+	// AdvanceDungeon legs, the CanAIAttack 30yd leash, the JustAppeared
+	// Devotion Aura self-buff, npc_stratholme_rp_dummy (MovementInform
+	// forwarding, zero bridgeable arms), and spell_stratholme_crusader_
+	// strike (SpellScript check handler, standing blocked queue) have no
+	// movement / summon / gossip / instance-data / SpellHit bridges —
+	// documented in lua_scripts/kalimdor/npc_arthas_stratholme.lua, not
+	// wired.
+	RegisterLuaBoss("npc_arthas_stratholme", 26499)
 }
