@@ -869,4 +869,35 @@ func init() {
 	// _DespawnAtEvade arm has no despawn bridge (evade-side cleanup
 	// is engine-side).
 	RegisterLuaBoss("boss_mother_shahraz", 22947)
+	// Illidari Council (Black Temple) — fight logic in
+	// lua_scripts/blacktemple/boss_illidari_council.lua.
+	// The controller (23426) arms the equivalency cycle and the
+	// 15min berserk one-shot; the member casts, the Talk arms on
+	// other members and the JustDied quiet-suicide relay have no
+	// cross-creature bridge; the SetBossState(DONE) and
+	// SendEncounterUnit arms are blocked on the instance-script
+	// model. Gathios (22949) runs the bless/consecration/hammer/
+	// judgement/aura cycle — the bless friendly-target scan has
+	// no friendly enumeration bridge, so the cast is skipped and
+	// only the cycle kept; the hammer picks a random alive player
+	// 10-40 yd excluding the victim (C++-exact selector).
+	// Zerevor (22950) runs flamestrike/blizzard/arcane-explosion
+	// with the 5s gate and a one-time dampen magic cast — the
+	// recurring dampen arm has no bearer (its AuraScript DoAction
+	// has no bridge), and the arcane-bolt filler has no
+	// spell-attack bridge. Malande (22951) runs circle of
+	// healing/reflective shield/divine wrath — the HealReceived
+	// shared-rule arm has no heal hook bridge and the empowered-
+	// smite filler has no spell-attack bridge. Veras (22952) runs
+	// the vanish+deadly-strike cycle — the CanSeeAlways arm has no
+	// bridge. All members get the lethal-damage rewrite
+	// (health-1, C++-exact) and Talk(SAY_COUNCIL_SLAY/DEATH).
+	// The npc_veras_vanish_effect AI is not registered (no entry
+	// constant in the C++ tree — ScriptName binds DB-side); the
+	// ten spell/aura scripts have no script bridges.
+	RegisterLuaBoss("boss_illidari_council", 23426)
+	RegisterLuaBoss("boss_gathios_the_shatterer", 22949)
+	RegisterLuaBoss("boss_high_nethermancer_zerevor", 22950)
+	RegisterLuaBoss("boss_lady_malande", 22951)
+	RegisterLuaBoss("boss_veras_darkshadow", 22952)
 }
