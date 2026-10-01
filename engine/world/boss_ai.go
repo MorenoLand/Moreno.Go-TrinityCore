@@ -1513,4 +1513,14 @@ func init() {
 	// instance_the_botanica.cpp stays blocked on the
 	// instance-script model.
 	RegisterLuaBoss("boss_laj", 17980)
+
+	// The Botanica (Tempest Keep) boss roster 3/5:
+	// boss_warp_splinter (17977): war-stomp / arcane-volley /
+	// summon-treants boss; the six SummonTreants summon casts
+	// have no summon bridge, the treant (19949) heal/follow AI
+	// has no movement / cross-creature / cast-bp0 / suicide
+	// bridges and is documented only — see lua_scripts/
+	// botanica/boss_warp_splinter.lua. instance_the_
+	// botanica.cpp stays blocked on the instance-script model.
+	RegisterLuaBoss("boss_warp_splinter", 17977)
 }
