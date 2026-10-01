@@ -2638,4 +2638,29 @@ func init() {
 	// gates) have no bridges; see lua_scripts/kalimdor/hyjal.lua.
 	RegisterLuaBoss("npc_jaina_proudmoore", 17772)
 	RegisterLuaBoss("npc_thrall", 17852)
+
+	// hyjal_trash (Battle for Mount Hyjal trash — C++-verified entries via
+	// hyjal.h HYCreaturesIds "Trash Mobs summoned in waves" enum; the
+	// creature_template ScriptName binding stays DB-side): the
+	// self-contained in-combat spell legs (giant infernal 17908 Flame Buffet
+	// 31724 + one-shot Immolation 37059; abomination 17898 Disease Cloud
+	// 31607 refresh + Knockdown 31610; ghoul 17895 Frenzy 31540;
+	// necromancer 17899 Shadow Bolt 31627; banshee 17905 Curse 31651 +
+	// Wail 38183 + Anti-Magic Shell 31662; crypt fiend 17897 Web 28991;
+	// gargoyle 17906 Gargoyle Strike 31664; frost wyrm 17907 Frost Breath
+	// 31688; fel stalker 17916 Mana Burn 31729) on C++-verbatim timers.
+	// The EscortAI wave/overrun escort machine, waypoint AddThreat legs,
+	// instance DATA_RAIDDAMAGE/DATA_TRASH legs, flag/model/gravity/summon
+	// arms, and necromancer KilledUnit skeleton spawns have no bridges;
+	// see lua_scripts/kalimdor/hyjal_trash.lua. npc_alliance_rifleman is
+	// NOT registered — no C++ entry evidence (gelihast precedent).
+	RegisterLuaBoss("npc_giant_infernal", 17908)
+	RegisterLuaBoss("npc_abomination", 17898)
+	RegisterLuaBoss("npc_ghoul", 17895)
+	RegisterLuaBoss("npc_necromancer", 17899)
+	RegisterLuaBoss("npc_banshee", 17905)
+	RegisterLuaBoss("npc_crypt_fiend", 17897)
+	RegisterLuaBoss("npc_gargoyle", 17906)
+	RegisterLuaBoss("npc_frost_wyrm", 17907)
+	RegisterLuaBoss("npc_fel_stalker", 17916)
 }
