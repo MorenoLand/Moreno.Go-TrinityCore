@@ -1137,4 +1137,17 @@ func init() {
 	RegisterLuaBoss("boss_magtheridon", 17257)
 	RegisterLuaBoss("npc_hellfire_channeler", 17256)
 	RegisterLuaBoss("npc_magtheridon_room", 17516)
+	// Fathom-Lord Karathress (21214) runs cataclysmic bolt /
+	// sear nova / enrage / blessing of the tides; the three
+	// Fathom-Guards run their C++ timers: Sharkkis (21966)
+	// leeching throw / multishot / beast within, Tidalvess
+	// (21965) windfury + frost shock / spitfire / poison
+	// cleansing / earthbind totems, Caribdis (21964) water bolt
+	// volley / tidal surge / heal. Instance/summon/cross-creature
+	// arms are unmodeled. Fight logic in
+	// lua_scripts/serpentshrinecavern/boss_fathomlord_karathress.lua.
+	RegisterLuaBoss("boss_fathomlord_karathress", 21214)
+	RegisterLuaBoss("boss_fathomguard_sharkkis", 21966)
+	RegisterLuaBoss("boss_fathomguard_tidalvess", 21965)
+	RegisterLuaBoss("boss_fathomguard_caribdis", 21964)
 }
