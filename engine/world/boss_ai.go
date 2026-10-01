@@ -1755,4 +1755,23 @@ func init() {
 	// trigger / quest-status / world-search / summon bridges —
 	// documented only.
 	RegisterLuaBoss("boss_twilight_corrupter", 15625)
+	// npc_marzon_silent_blade (Stormwind City zone script): aggro
+	// yell only — Talk(SAY_MARZON_2 1) on OnEnterCombat (C++-
+	// exact); the summoner-AttackStart gate (IsSummon /
+	// GetSummonerUnit) awaits the summon bridge; EnterEvadeMode's
+	// DisappearAndDie pair awaits the despawn bridge; Reset's
+	// RestoreFaction awaits the faction bridge; MovementInform's
+	// cross-AI escort-phase latch awaits the movement bridge;
+	// entry 1755 verifiable from the C++ LordGregorLescovar enum
+	// — see lua_scripts/eastern_kingdoms/npc_marzon_silent_
+	// blade.lua. npc_tyrion (quest-434 OnQuestAccept escort start
+	// on the 8856 spybot) awaits the quest-accept / world-search /
+	// escort bridges; npc_tyrion_spybot (escort Talk chains +
+	// UpdateEntry(7779)) awaits the escort / world-search /
+	// cross-creature-Talk / entry-update / despawn bridges;
+	// npc_lord_gregor_lescovar (escort + Marzon summon + traitor
+	// faction flip + guard despawn) awaits the escort / summon /
+	// faction / world-search / despawn / quest bridges —
+	// documented only.
+	RegisterLuaBoss("npc_marzon_silent_blade", 1755)
 }
