@@ -1415,4 +1415,12 @@ func init() {
 	// bridge — see lua_scripts/hellfireramparts/
 	// boss_watchkeeper_gargolmar.lua.
 	RegisterLuaBoss("boss_watchkeeper_gargolmar", 17306)
+
+	// boss_omor_the_unscarred (17308): orbital strike /
+	// shadow whip / treacherous aura / demonic shield /
+	// fiendish-hound summon boss; the summon, whip-pullback
+	// and movement-flag arms have no bridges — see
+	// lua_scripts/hellfireramparts/
+	// boss_omor_the_unscarred.lua.
+	RegisterLuaBoss("boss_omor_the_unscarred", 17308)
 }
