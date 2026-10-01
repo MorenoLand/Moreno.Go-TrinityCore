@@ -2520,4 +2520,30 @@ func init() {
 	// Entry 639 verifiable from the C++ sources: deadmines.h's own
 	// DMCreaturesIds enum names NPC_VANCLEEF = 639.
 	RegisterLuaBoss("boss_vancleef", 639)
+
+	// boss_headless_horseman (Scarlet Monastery): JustEngagedWith's
+	// EVENT_HORSEMAN_CLEAVE -> CreateLuaEvent timer armed on OnEnterCombat
+	// (1), cancelled on 2/4/23 (13s init, Repeat(6s, 12s) DoCastVictim
+	// SPELL_HEADLESS_HORSEMAN_CLEAVE 42587 ~ GetVictim + CastSpell);
+	// KilledUnit's TYPEID_PLAYER-gated Talk(SAY_KILL_PLAYER 5) ->
+	// OnTargetDied(3) with victim:IsPlayer(); JustDied's DoCastSelf(
+	// SPELL_HEADLESS_HORSEMAN_BURNING_COSMETIC 42971) + Talk(SAY_DEATH 4)
+	// -> OnDied(4). The DamageTaken cheat-death phase latch (damage = 0
+	// + StartPhase) is documented-only: its headless-phase machine (head
+	// reposition/send/return spells 42410/42399/42401, cross-creature
+	// DoActions, MovementInform flight path) has no bridges, so porting
+	// the negation alone would make the boss unkillable; the cleave
+	// therefore runs the phase-1 cadence flat (C++ re-arms at 16s/9s in
+	// phases 2/3, unmodeled). EVENT_RANDOM_LAUGH has no sound bridge
+	// (DoPlaySoundToSet); EVENT_CONFLAGRATE has no random-target bridge;
+	// EVENT_SUMMON_PUMPKIN is phase-pinned with no summon bridge; the
+	// instance GetCreature/SetData legs (DATA_HORSEMAN_HEAD,
+	// DATA_HORSEMAN_EVENT_STATE), MotionMaster/MovementInform legs,
+	// Reset/JustAppeared self-casts (stranded halves), and the
+	// head/pumpkin/flame-bunny/sir-thomas/GO scripts (driven by
+	// SpellScript/AuraScript/SpellHit/DoAction arms with no bridges) are
+	// documented-only in the .lua header. Entry 23682 verifiable from the
+	// C++ sources: scarlet_monastery.h's own SMCreatureIds enum names
+	// NPC_HEADLESS_HORSEMAN = 23682.
+	RegisterLuaBoss("boss_headless_horseman", 23682)
 }
