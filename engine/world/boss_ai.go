@@ -1005,4 +1005,47 @@ func init() {
 	// summon-blocked — registered for its own verifiable AI arms
 	// (felmyst-trail convention).
 	RegisterLuaBoss("npc_shadow_image", 25214)
+	// Muru (25741) / Entropius (25840): Muru runs the engage
+	// triggered periodic self-casts (open portal 45994, darkness
+	// 45998, negative energy 46009), the 10s one-shot blood-elves
+	// summon script/periodic casts, the 10min non-triggered enrage,
+	// and the lethal-damage rewrite (health-1, PHASE_TWO transition,
+	// triggered 46177 open-all-portals, 6s-delayed triggered 46217
+	// summon-entropius). Entropius runs the reset triggered
+	// cosmetic-spawn 46223, the 2s one-shot triggered negative-
+	// energy 46284 and the 15s-repeat triggered darkness 46269 +
+	// blackhole 46282 schedule. The muru RemoveAllAuras/NOT_
+	// SELECTABLE flag arms, the cross-creature enrage/evade/death
+	// relays, the entropius DoResetPortals grid scan and
+	// JustSummoned dark-fiend/darkness arms, and the SetBossState
+	// arms have no aura/flag/cross-creature/creature-enumeration/
+	// summon/kill/instance-script bridges.
+	RegisterLuaBoss("boss_muru", 25741)
+	RegisterLuaBoss("boss_entropius", 25840)
+	// Muru Portal Target (25770) runs its SpellHit arms (event 14):
+	// 46177 open-all-portals -> triggered 45977 open-portal +
+	// triggered 46205 transform-visual-missile; 45976 open-portal-2
+	// -> triggered 45977 + 6s-delayed triggered 45978 summon-void-
+	// sentinel-summoner. The void-spawn summon event and the actual
+	// creature summons are summon-blocked — registered for its own
+	// verifiable AI arms (felmyst-trail convention).
+	RegisterLuaBoss("npc_muru_portal", 25770)
+	// Dark Fiend (25744) runs its constructor triggered self-cast
+	// of darkfiend skin 45934; the 2s/3s react/target/proximity
+	// scheduler arms and the dispel OnRemove arm have no react/
+	// flag/cross-creature/movement/kill/despawn/AuraScript bridges
+	// — registered for its own verifiable AI arm (felmyst-trail
+	// convention).
+	RegisterLuaBoss("npc_dark_fiend", 25744)
+	// Void Sentinel (25772) runs the engage triggered shadow-pulse-
+	// periodic 46086 self-cast plus the 45s-repeat non-triggered
+	// void-blast 46161 on the victim; its death 6x void-spawn
+	// summon arm is summon-blocked.
+	RegisterLuaBoss("npc_void_sentinel", 25772)
+	// Darkness / Black Hole (25879) runs its Reset visual chain:
+	// non-triggered 46242 self-cast, then 1s -> 46247, 1.2s ->
+	// 46242, 2s -> 46228 + 46235, then the chain ends. The 15s
+	// DisappearAndDie and the REACT/AttackStart arms have no
+	// despawn/react/instance-player/movement bridges.
+	RegisterLuaBoss("npc_blackhole", 25879)
 }
