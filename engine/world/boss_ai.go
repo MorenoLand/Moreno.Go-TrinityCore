@@ -1483,4 +1483,16 @@ func init() {
 	// bridges — see lua_scripts/arcatraz/
 	// boss_wrath_scryer_soccothrates.lua.
 	RegisterLuaBoss("boss_wrath_scryer_soccothrates", 20886)
+
+	// boss_harbinger_skyriss (20912): intro machine / image
+	// splits / mind rend / fear / domination boss; the
+	// wardens-shield / mellichar-kill intro arms, the DoSplit
+	// illusion summons, the heroic mana-burn arm and the
+	// cast-state gates have no instance / cross-creature /
+	// summon / difficulty / cast-state bridges — see
+	// lua_scripts/arcatraz/boss_harbinger_skyriss.lua. The
+	// illusion AI (entries 21466/21467) is documented there
+	// but not registered: its C++ AI is a no-op. Arcatraz
+	// boss roster 4/4 COMPLETE.
+	RegisterLuaBoss("boss_harbinger_skyriss", 20912)
 }
