@@ -1276,4 +1276,19 @@ func init() {
 	// instance-script model. Fight logic in
 	// lua_scripts/theslavepens/boss_quagmirran.lua.
 	RegisterLuaBoss("boss_quagmirran", 17942)
+	// Ahune (The Slave Pens, Midsummer event): the 4ms
+	// initial-emerge self casts (stand, spanky hands, shield,
+	// fired on engage) plus the 3s synch-health timer kept as
+	// bookkeeping only (cross-creature gated, no bridge); the
+	// whole retreat/emerge phase machine is cross-creature/
+	// summon/GO driven and unreachable, documented only.
+	// Frozen core (25865): the ctor Initialize self casts via
+	// the engine-fired OnSpawn event, and the JustDied self
+	// casts (the cross-creature Kill arm stays blocked). The
+	// bunny/flamecaller/ice-stone/SpellScript-AuraScript arms
+	// stay unregistered. Fight logic in
+	// lua_scripts/theslavepens/boss_ahune.lua and
+	// lua_scripts/theslavepens/npc_frozen_core.lua.
+	RegisterLuaBoss("boss_ahune", 25740)
+	RegisterLuaBoss("npc_frozen_core", 25865)
 }
