@@ -2883,4 +2883,29 @@ func init() {
 	// and H_SPELL_SAND_BREATH 39049 are declared in the C++ enum but
 	// never used by UpdateAI; SAY_ENTER 0 is never Talked in C++.
 	RegisterLuaBoss("boss_aeonus", 17881)
+
+	// boss_chrono_lord_deja (Chrono Lord Deja, entry 17879 — C++-verified
+	// via the_black_morass.h:60's NPC_CRONO_LORD_DEJA constant (C++
+	// spells the constant "CRONO" while the script name spells it
+	// "chrono") plus instance_the_black_morass.cpp:60's RiftWaves second
+	// wave portal boss summon; the creature_template ScriptName binding
+	// stays DB-side): the self-contained in-combat legs only — engage
+	// Talk SAY_AGGRO (1) + arm the three timers at their C++
+	// ScheduleEvent cooldowns; Arcane Blast 31457 on the victim (jeklik
+	// GetVictim + CastSpell convention); Time Lapse Talk SAY_BANISH (2)
+	// + self-cast 31467; Arcane Discharge 31472 on an unbounded random
+	// alive player (nil target -> no cast, nefarian convention);
+	// KilledUnit Talk SAY_SLAY (3) with no TYPEID gate (C++ talks
+	// unconditionally here, unlike aeonus); death Talk SAY_DEATH (4);
+	// melee engine-driven. The MoveInLineOfSight Time Keeper leg
+	// (SAY_BANISH (2) + full-health one-shot of NPC_TIME_KEEPER 17918
+	// within 20yd) has no nearby-creature enumeration bridge, the
+	// JustDied instance->SetData(TYPE_RIFT, SPECIAL) leg has no
+	// instance-data bridge (standing), and the heroic-only Attraction
+	// 38540 arm has no difficulty bridge — documented in
+	// lua_scripts/kalimdor/boss_chrono_lord_deja.lua, not wired.
+	// H_SPELL_ARCANE_BLAST 38538 / H_SPELL_ARCANE_DISCHARGE 38539 are
+	// declared but never cast by UpdateAI; SAY_ENTER 0 is never Talked
+	// in C++.
+	RegisterLuaBoss("boss_chrono_lord_deja", 17879)
 }
