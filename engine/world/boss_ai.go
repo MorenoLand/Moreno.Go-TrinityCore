@@ -1390,4 +1390,8 @@ func init() {
 	// convert.lua.
 	RegisterLuaBoss("boss_grand_warlock_nethekurse", 16807)
 	RegisterLuaBoss("npc_fel_orc_convert", 17083)
+
+	// Fight logic in
+	// lua_scripts/shatteredhalls/boss_warbringer_omrogg.lua.
+	RegisterLuaBoss("boss_warbringer_omrogg", 16809)
 }
