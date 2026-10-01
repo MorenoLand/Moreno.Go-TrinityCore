@@ -1158,4 +1158,16 @@ func init() {
 	// arms are unmodeled. Fight logic in
 	// lua_scripts/serpentshrinecavern/boss_hydross_the_unstable.lua.
 	RegisterLuaBoss("boss_hydross_the_unstable", 21216)
+
+	// Lady Vashj (21212) — shock blast / static charge / entangle
+	// + shoot-or-multishot melee-range arm in phase 1, Talk on the
+	// once-guarded <70% phase-2 switch, forked lightning in phase 2.
+	// Teleport, shield-channel/enchanted/tainted/Coilfang summons,
+	// the DATA_CANSTARTPHASE3 poll and the intro machine are
+	// unmodeled. Tainted Elemental (22009) runs poison bolt
+	// {5s,10s} + 30s despawn; the JustDied death relay is
+	// unmodeled. Fight logic in
+	// lua_scripts/serpentshrinecavern/boss_lady_vashj.lua.
+	RegisterLuaBoss("boss_lady_vashj", 21212)
+	RegisterLuaBoss("npc_tainted_elemental", 22009)
 }
