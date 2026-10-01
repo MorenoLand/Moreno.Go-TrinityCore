@@ -2862,4 +2862,25 @@ func init() {
 	// ThrallOldHillsbrad enum + the waypoint-106 summon) are
 	// C++-verifiable.
 	RegisterLuaBoss("npc_thrall_old_hillsbrad", 17876)
+
+	// boss_aeonus (Aeonus, entry 17881 — C++-verified via
+	// the_black_morass.h:62's NPC_AEONUS constant plus
+	// instance_the_black_morass.cpp:64's RiftWaves summon and :306's
+	// GetEntry() == NPC_AEONUS medivh-threat check; the creature_template
+	// ScriptName binding stays DB-side): the self-contained in-combat
+	// legs only — engage Talk SAY_AGGRO (1) + arm the three timers at
+	// their C++ ScheduleEvent cooldowns; Sand Breath 31473 and Time Stop
+	// 31422 on the victim (jeklik GetVictim + CastSpell convention);
+	// Frenzy Talk EMOTE_FRENZY (5) + self-cast Enrage 37605; KilledUnit
+	// Talk SAY_SLAY (3) gated on the victim being a player (C++'s
+	// TYPEID_PLAYER leg — terestian_illhoof convention); death Talk
+	// SAY_DEATH (4); melee engine-driven. The MoveInLineOfSight Time
+	// Keeper leg (SAY_BANISH (2) + full-health one-shot of NPC_TIME_KEEPER
+	// 17918 within 20yd) has no nearby-creature enumeration bridge, and
+	// the JustDied instance->SetData(TYPE_RIFT/TYPE_MEDIVH, DONE) legs
+	// have no instance-data bridge (standing) — documented in
+	// lua_scripts/kalimdor/boss_aeonus.lua, not wired. SPELL_CLEAVE 40504
+	// and H_SPELL_SAND_BREATH 39049 are declared in the C++ enum but
+	// never used by UpdateAI; SAY_ENTER 0 is never Talked in C++.
+	RegisterLuaBoss("boss_aeonus", 17881)
 }
