@@ -1332,4 +1332,26 @@ func init() {
 	RegisterLuaBoss("boss_broggok", 17380)
 	RegisterLuaBoss("npc_nascent_fel_orc", 17398)
 	RegisterLuaBoss("npc_fel_orc_neophyte", 17429)
+
+	// boss_kelidan_the_breaker (17377): shadow bolt volley and
+	// corruption self-casts plus the burning-nova -> fire-nova
+	// machine (the C++ Firenova early return is C++-exact: nothing
+	// else fires in the 5s window); Talk on pull/nova/death and a
+	// C++-exact 50% kill line. The whole channeler summon/
+	// activation machine (SummonChannelers, ChannelerEngaged/
+	// ChannelerDied/GetChanneled), the Reset passive/
+	// non-attackable/immune arms and the pre-combat evocation arm
+	// have no summon/cross-creature/flag/react/immune/unit-state
+	// bridges; heroic teleport, heroic spell ids and the
+	// burning-nova AddAura have no difficulty/teleport/aura
+	// bridges (timer bookkeeping exact). The add
+	// npc_shadowmoon_channeler (17653) casts mark of shadow on a
+	// random player and shadow bolt on the victim; its pre-combat
+	// GetChanneled channeling machine and its Kelidan relays are
+	// cross-creature gated (bookkeeping only).
+	// Fight logic in lua_scripts/hellfirecitadel/boss_kelidan_the_
+	// breaker.lua and lua_scripts/hellfirecitadel/npc_shadowmoon_
+	// channeler.lua.
+	RegisterLuaBoss("boss_kelidan_the_breaker", 17377)
+	RegisterLuaBoss("npc_shadowmoon_channeler", 17653)
 }
