@@ -3033,4 +3033,13 @@ func init() {
 	// instance-data bridges — documented in
 	// lua_scripts/kalimdor/boss_infinite_corruptor.lua, not wired.
 	RegisterLuaBoss("boss_infinite_corruptor", 32273)
+	// Salramm the Fleshcrafter: combat arms ported (entry 26530, NPC_SALRAMM
+	// summon-bound at instance_culling_of_stratholme.cpp:557) — timers/Talk
+	// engage-death arms verified present in the port; InitializeAI spawn
+	// Talk + loot-mode leg, heroic-only Curse of Twisted Flesh, BossAI
+	// instance legs, JustDied SetData(DATA_NOTIFY_DEATH), and the
+	// spell_salramm_steal_flesh AuraScript periodic have no spawn /
+	// difficulty / instance-data / AuraScript bridges — documented in
+	// lua_scripts/kalimdor/boss_salramm.lua, not wired.
+	RegisterLuaBoss("boss_salramm", 26530)
 }
