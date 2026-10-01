@@ -2814,4 +2814,27 @@ func init() {
 	// speech need summon and EscortAI bridges that do not exist; see
 	// lua_scripts/kalimdor/boss_epoch_hunter.lua.
 	RegisterLuaBoss("boss_epoch_hunter", 18096)
+
+	// boss_lieutenant_drake (Lieutenant Drake, entry 17848 — C++-verified
+	// via instance_old_hillsbrad.cpp:39's DRAKE_ENTRY constant plus its
+	// SetData-driven SummonCreature call (:149) after the fifth barrel
+	// gossip; the creature_template ScriptName binding stays DB-side; not
+	// GUID-bound in instance_old_hillsbrad.cpp — gossip-summoned): the
+	// self-contained in-combat legs (engage Talk SAY_AGGRO (1); KilledUnit
+	// Talk SAY_SLAY (2) no TYPEID gate; death Talk SAY_DEATH (5);
+	// Whirlwind 31909 on the victim non-triggered init 20s -> 20000 +
+	// rand32() % 5000; Frightening Shout 33789 on the victim
+	// non-triggered init 30s -> 25000 + rand32() % 10000 + Talk
+	// SAY_SHOUT (4); Mortal Strike 31911 on the victim non-triggered
+	// init 45s -> 20000 + rand32() % 10000 + Talk SAY_MORTAL (3)) on
+	// C++-verbatim timers; melee engine-driven. The CanPatrol/wpId
+	// MovePoint patrol machine (@todo make this work in C++; 19 waypoints
+	// C++-verbatim in the .lua header) has no movement bridge;
+	// ExplodingShout_Timer's 25000 init is never expired by UpdateAI (no
+	// observable behavior); SAY_ENTER 0 is declared but never Talked in
+	// C++; go_barrel_old_hillsbrad's OnGossipHello SetData(IN_PROGRESS)
+	// legs have no instance-data or gameobject-gossip bridge, so the
+	// barrel script is documented, not registered — see
+	// lua_scripts/kalimdor/boss_lieutenant_drake.lua.
+	RegisterLuaBoss("boss_lieutenant_drake", 17848)
 }
