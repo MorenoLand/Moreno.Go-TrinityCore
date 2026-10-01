@@ -2307,5 +2307,16 @@ func init() {
 	// magisters_terrace.h names BOSS_PRIESTESS_DELRISSA = 24560
 	// (boss_felblood_kaelthas precedent).
 	RegisterLuaBoss("boss_priestess_delrissa", 24560)
+	// boss_eramas_brightblaze: ScriptedAI (via the file's lackey-common
+	// base) knockdown 11428 6s loop + snap-kick 46182 4.5s loop
+	// (DoCastVictim, GetVictim nil-guarded) + sub-25%-HP healing-potion
+	// 15503 self-cast latch (OnDamageTaken(9), per-guid one-shot, reset
+	// per engagement). Common-AI JustEngagedWith threat ring, JustDied
+	// death-count, KilledUnit forward, AcquireGUIDs, Delrissa-respawn
+	// Reset, and ResetThreatList machine unmodeled (no GUID-list /
+	// instance / threat bridges). Entry 24554 verifiable from the C++
+	// sources: boss_priestess_delrissa.cpp's m_auiAddEntries names
+	// 24554 //Eramas Brightblaze (boss_felblood_kaelthas precedent).
+	RegisterLuaBoss("boss_eramas_brightblaze", 24554)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
