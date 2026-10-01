@@ -2719,4 +2719,26 @@ func init() {
 	// SpellScript target filter and AuraScript periodic handler have no
 	// script bridges; see lua_scripts/kalimdor/boss_kazrogal.lua.
 	RegisterLuaBoss("boss_kazrogal", 17888)
+
+	// boss_azgalor (Azgalor, entry 17842 — C++-verified via hyjal.h
+	// HYCreaturesIds "Bosses summoned after every 8 waves" enum (:81) plus
+	// instance_hyjal.cpp's OnCreatureCreate GUID-capture case (:126) and
+	// the DATA_AZGALOR GetGuidData leg (:157), ramstein strength; the
+	// creature_template ScriptName binding stays DB-side): the
+	// self-contained in-combat legs (Rain of Fire 31340 on a random alive
+	// player within 30 init 20s -> {20s,35s}; Doom 31347 on a random alive
+	// player within 100 excluding the victim (C++ position 1 "never on
+	// tank" has no threat-list bridge) init 50s -> {45s,50s}; Howl of
+	// Azgalor 31344 self non-triggered init 30s -> 30s; Cleave 31345 on
+	// victim init 10s -> {10s,15s}; Berserk 26662 triggered self one-shot
+	// at 600s; engage Talk SAY_ONAGGRO (3), KilledUnit Talk SAY_ONSLAY
+	// (1) with no TYPEID gate, death Talk SAY_ONDEATH (0); SAY_DOOM (2)
+	// is marked "Not used?" in C++ and has no Talk arm) on C++-verbatim
+	// timers; melee engine-driven. The IsEvent EscortAI escort machine
+	// (8 C++-verbatim waypoints, WaypointReached(7) AddThreat on the
+	// DATA_THRALL GUID) and DATA_AZGALOREVENT Reset/engage/death instance
+	// legs have no bridges; npc_lesser_doomguard is unregistered (zero
+	// C++ entry evidence, gelihast precedent) and its bridgeable arms are
+	// documented in the header; see lua_scripts/kalimdor/boss_azgalor.lua.
+	RegisterLuaBoss("boss_azgalor", 17842)
 }
