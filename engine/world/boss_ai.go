@@ -2166,5 +2166,20 @@ func init() {
 	// Entry 10316 verifiable from the C++ sources: blackrock_spire.h
 	// names NPC_BLACKHAND_INCARCERATOR at 10316 (BRS creatures enum).
 	RegisterLuaBoss("npc_blackhand_incarcerator", 10316)
+	// Gyth (Rend Blackhand's mount): 4-event combat scheduler; see
+	// lua_scripts/eastern_kingdoms/boss_gyth.lua.
+	// Corrosive-acid 16359 / freeze 16350 / flamebreath 16390 self-cast
+	// 8s init -> 10s loop; knock-away 10101 victim-cast 12s init ->
+	// 14s loop (urand ranges use the lower bound, halycon convention).
+	// 5%-HP latch -> self-cast summon-rend 16328 via OnDamageTaken(9)
+	// (mother_smolderweb latch convention; the RemoveAura(16167)
+	// arm has no bridge). Pre-fight event (portcullis, Nefarius
+	// SetData, MovePath) is documented-only — no gameobject /
+	// creature-list / MotionMaster bridges; Reset/JustDied instance
+	// arms unmodeled. No UNIT_STATE_CASTING model in Go; Reset
+	// _Reset / JustDied _JustDied covered by the cancel on 2/4/23.
+	// Entry 10339 verifiable from the C++ sources: blackrock_spire.h
+	// names NPC_GYTH at 10339 (BRS creatures enum).
+	RegisterLuaBoss("boss_gyth", 10339)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
