@@ -1126,4 +1126,15 @@ func init() {
 	// the SpellHitTarget knockback arms are unmodeled (event 15
 	// never fires in the Go engine).
 	RegisterLuaBoss("boss_gruul", 19044)
+	// Magtheridon (17257) runs the break-free / cleave / blast
+	// nova / blaze / quake / berserk arms plus the 30% collapse
+	// chain; the channeler-driven phase machine is cross-creature
+	// blocked so the fight starts on pull. Hellfire Channeler
+	// (17256) runs shadow-bolt-volley / fear / abyssal; its
+	// magtheridon DoAction relay is unmodeled. Magtheridon Room
+	// (17516) runs the debris visual/damage chain. Fight logic in
+	// lua_scripts/hellfirecitadel/boss_magtheridon.lua.
+	RegisterLuaBoss("boss_magtheridon", 17257)
+	RegisterLuaBoss("npc_hellfire_channeler", 17256)
+	RegisterLuaBoss("npc_magtheridon_room", 17516)
 }
