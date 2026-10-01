@@ -2699,4 +2699,24 @@ func init() {
 	// AuraScript proc has no AuraScript-handler bridge; see
 	// lua_scripts/kalimdor/boss_anetheron.lua.
 	RegisterLuaBoss("boss_anetheron", 17808)
+
+	// boss_kazrogal (Kazrogal, entry 17888 — C++-verified via hyjal.h
+	// HYCreaturesIds "Bosses summoned after every 8 waves" enum (:80) plus
+	// instance_hyjal.cpp's OnCreatureCreate GUID-capture case (:122) and
+	// the DATA_KAZROGAL GetGuidData leg (:156), ramstein strength; the
+	// creature_template ScriptName binding stays DB-side): the
+	// self-contained in-combat legs (Cleave 31436 self non-triggered init
+	// 5s -> {6s,21s}; War Stomp 31480 self non-triggered init 15s -> 60s;
+	// Mark 31447 non-triggered self-cast init 45s, re-armed on the
+	// C++-verbatim decreasing MarkTimerBase 45000 -> 40000 -> ... floor
+	// 5500, Talk SAY_MARK on each expiry; engage Talk SAY_ONAGGRO,
+	// KilledUnit Talk SAY_ONSLAY (no TYPEID gate in C++), no death Talk —
+	// DoPlaySoundToSet(11018) has no sound bridge) on C++-verbatim
+	// timers; melee engine-driven. The IsEvent EscortAI escort machine
+	// (8 C++-verbatim waypoints, WaypointReached(7) AddThreat on the
+	// DATA_THRALL GUID) and DATA_KAZROGALEVENT Reset/engage/death
+	// instance legs have no bridges; the spell_mark_of_kazrogal
+	// SpellScript target filter and AuraScript periodic handler have no
+	// script bridges; see lua_scripts/kalimdor/boss_kazrogal.lua.
+	RegisterLuaBoss("boss_kazrogal", 17888)
 }
