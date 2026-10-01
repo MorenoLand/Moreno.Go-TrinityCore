@@ -2215,5 +2215,19 @@ func init() {
 	// (halycon's summon bridge was unbridgeable, but the entry itself
 	// is C++-verifiable so the port is registered).
 	RegisterLuaBoss("boss_gizrul_the_slavener", 10268)
+	// lua_scripts/eastern_kingdoms/boss_urok_doomhowl.lua.
+	// Rend 16509 victim-cast 17s init -> 8s loop; strike 15580
+	// victim-cast 10s init -> 8s loop. Talk(SAY_AGGRO) fires on
+	// combat entry (creature:Talk bridged; maiden-of-virtue
+	// precedent). The C++ file schedules the spell ids as event
+	// ids directly (EVENT_* constants never scheduled) — the
+	// port keys timers "rend"/"strike" with EventMap cancel-on-
+	// re-schedule semantics. SPELL_INTIMIDATING_ROAR 16508 is
+	// enum-only in C++ (never cast), omitted by design. No
+	// UNIT_STATE_CASTING model in Go; Reset _Reset / JustDied
+	// _JustDied covered by the cancel on 2/4/23. Entry 10584
+	// verifiable from the C++ sources: blackrock_spire.h:64 names
+	// NPC_UROK_DOOMHOWL = 10584 (gizrul / rend_blackhand precedent).
+	RegisterLuaBoss("boss_urok_doomhowl", 10584)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
