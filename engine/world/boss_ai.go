@@ -2107,5 +2107,18 @@ func init() {
 	// names NPC_SHADOW_HUNTER_VOSHGAJIN at 9236 (BRS creatures enum) —
 	// see lua_scripts/eastern_kingdoms/boss_shadow_hunter_voshgajin.lua.
 	RegisterLuaBoss("boss_shadow_hunter_voshgajin", 9236)
+	// boss_the_beast / boss_the_beast (Blackrock Spire, arena encounter;
+	// BossAI combat scheduler via GetBlackrockSpireAI — flamebreak 16785
+	// 12s->10s, terrifyingroar 14100 23s->20s, fireball 16788 8s->8s..21s,
+	// fireblast 16144 5s->5s..8s, all victim-cast; melee engine-driven;
+	// immolate + berserkercharge unmodeled — no SelectTarget bridge;
+	// SetData beast-room/reached arms + both area triggers + SpellHit
+	// skinning arm unmodeled — no area-trigger/instance/MotionMaster/
+	// SpellHit bridges; Reset _Reset / JustDied _JustDied covered by the
+	// cancel on 2/4/23).
+	// Entry 10430 verifiable from the C++ sources: blackrock_spire.h
+	// names NPC_THE_BEAST at 10430 (BRS creatures enum) — see
+	// lua_scripts/eastern_kingdoms/boss_the_beast.lua.
+	RegisterLuaBoss("boss_the_beast", 10430)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
