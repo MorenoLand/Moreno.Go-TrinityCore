@@ -2200,5 +2200,20 @@ func init() {
 	// verifiable from the C++ sources: blackrock_spire.h:70 names
 	// NPC_WARCHIEF_REND_BLACKHAND = 10429.
 	RegisterLuaBoss("boss_rend_blackhand", 10429)
+	// lua_scripts/eastern_kingdoms/boss_gizrul_the_slavener.lua.
+	// Fatal-bite 16495 victim-cast 17s init -> 8s loop; infected-bite
+	// 16128 is a one-shot self-cast at 10s — the C++ handler never
+	// re-arms it, it schedules EVENT_FATAL_BITE (8s) instead, so the
+	// port overwrites the live fatal-bite timer (EventMap semantics —
+	// voone pummel precedent). SPELL_FRENZY 8269 is enum-only in C++
+	// (never cast), omitted by design. IsSummonedBy's MovePath
+	// (GIZRUL_PATH 402450) is documented-only — no MotionMaster
+	// bridge (the_beast precedent). No UNIT_STATE_CASTING model in
+	// Go; Reset _Reset / JustDied _JustDied covered by the cancel on
+	// 2/4/23. Entry 10268 verifiable from the C++ sources:
+	// blackrock_spire.h:66 names NPC_GIZRUL_THE_SLAVENER = 10268
+	// (halycon's summon bridge was unbridgeable, but the entry itself
+	// is C++-verifiable so the port is registered).
+	RegisterLuaBoss("boss_gizrul_the_slavener", 10268)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
