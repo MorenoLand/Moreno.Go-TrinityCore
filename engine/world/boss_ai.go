@@ -988,4 +988,21 @@ func init() {
 	// has no C++ AI class, so neither is registered yet — entries
 	// verified in sunwell_plateau.h for future registration.
 	RegisterLuaBoss("npc_felmyst_trail", 25267)
+	// Eredar Twins (25165/25166) run their pull schedules (shadow
+	// blades/shadow nova/confounding blow for Sacrolash; conflagration/
+	// flame sear/pyrogenics/blaze for Alythess), the 6min enrage
+	// one-shots, the 25% kill Talks and timer cleanup. The sister-death
+	// detection (cross-creature instance lookup), the SpellHitTarget
+	// touched-spell chaining, the shadow-image summons and the
+	// SetBossState arms have no cross-creature/SpellHitTarget/summon/
+	// instance-script bridges.
+	RegisterLuaBoss("boss_sacrolash", 25165)
+	RegisterLuaBoss("boss_alythess", 25166)
+	// Shadow Image (25214) runs its constructor triggered self-cast of
+	// image visual 45263 plus the shadow-fury/dark-strike schedule; the
+	// NOT_SELECTABLE flag and 15s KillSelf arms have no flag/kill
+	// bridges, and its sacrolash-side DoSpawnCreature summon is
+	// summon-blocked — registered for its own verifiable AI arms
+	// (felmyst-trail convention).
+	RegisterLuaBoss("npc_shadow_image", 25214)
 }
