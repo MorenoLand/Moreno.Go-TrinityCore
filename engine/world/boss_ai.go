@@ -2663,4 +2663,20 @@ func init() {
 	RegisterLuaBoss("npc_gargoyle", 17906)
 	RegisterLuaBoss("npc_frost_wyrm", 17907)
 	RegisterLuaBoss("npc_fel_stalker", 17916)
+
+	// boss_rage_winterchill (Rage Winterchill, entry 17767 — C++-verified
+	// via hyjal.h HYCreaturesIds "Bosses summoned after every 8 waves"
+	// enum plus instance_hyjal.cpp's OnCreatureCreate GUID-capture case,
+	// ramstein strength; the creature_template ScriptName binding stays
+	// DB-side): the self-contained in-combat legs (Frost Armor 31256 self
+	// init 37s -> {40s,60s}; Death and Decay 31258 victim init 45s ->
+	// {60s,80s} + Talk SAY_DECAY; Frost Nova 31250 victim init 15s ->
+	// {30s,45s} + Talk SAY_NOVA; Icebolt 31249 on a random alive player
+	// within 40 init 10s -> {11s,31s}; engage Talk SAY_ONAGGRO, KilledUnit
+	// Talk SAY_ONSLAY, death Talk SAY_ONDEATH) on C++-verbatim timers;
+	// melee engine-driven. The IsEvent EscortAI escort machine (8
+	// waypoints, waypoint-7 AddThreat on the instance Jaina GUID) and the
+	// DATA_RAGEWINTERCHILLEVENT Reset/engage/death instance legs have no
+	// bridges; see lua_scripts/kalimdor/boss_rage_winterchill.lua.
+	RegisterLuaBoss("boss_rage_winterchill", 17767)
 }
