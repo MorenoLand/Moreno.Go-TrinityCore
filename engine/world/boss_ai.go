@@ -2346,5 +2346,20 @@ func init() {
 	// priestess_delrissa.cpp's m_auiAddEntries names 24558
 	// //Elris Duskhallow (boss_felblood_kaelthas precedent).
 	RegisterLuaBoss("boss_ellris_duskhallow", 24558)
+	// boss_yazzai: ScriptedAI (via the file's lackey-common base)
+	// frostbolt 15043 3s->8s loop + cone-of-cold 38384 10s loop +
+	// ice-lance 46194 12s loop (DoCastVictim, GetVictim nil-guarded) +
+	// sub-35%-HP ice-block 27619 self-cast one-shot latch + sub-25%-HP
+	// healing-potion 15503 self-cast latch (both OnDamageTaken(9),
+	// per-guid one-shot, reset per engagement). The polymorph 13323 /
+	// blizzard 44178 machines (SelectTarget-gated — no bridge) and the
+	// blink 14514 machine (combat-manager melee-range loop — no
+	// bridge) unmodeled; common-AI threat ring / death-count /
+	// KilledUnit forward / AcquireGUIDs / Delrissa-respawn /
+	// ResetThreatList arms unmodeled (no GUID-list / instance / threat
+	// bridges). Entry 24561 verifiable from the C++ sources: boss_
+	// priestess_delrissa.cpp's m_auiAddEntries names 24561 //Yazzaj
+	// (boss_felblood_kaelthas precedent).
+	RegisterLuaBoss("boss_yazzai", 24561)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
