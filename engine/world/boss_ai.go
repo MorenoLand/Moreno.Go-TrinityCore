@@ -1524,7 +1524,7 @@ func init() {
 	// botanica.cpp stays blocked on the instance-script model.
 	RegisterLuaBoss("boss_warp_splinter", 17977)
 
-	// The Botanica (Tempest Keep) boss roster 4/5:
+	// The Botanica (Tempest Keep):
 	// boss_thorngrin_the_tender (17978): sacrifice / hellfire /
 	// enrage boss with 50%/20% HP talk latches; the heroic
 	// hellfire schedule and the UNIT_STATE_CASTING gates have
@@ -1532,4 +1532,15 @@ func init() {
 	// botanica/boss_thorngrin_the_tender.lua. instance_the_
 	// botanica.cpp stays blocked on the instance-script model.
 	RegisterLuaBoss("boss_thorngrin_the_tender", 17978)
+
+	// The Botanica (Tempest Keep) boss roster 5/5 COMPLETE:
+	// boss_commander_sarannis (17976): arcane resonance /
+	// arcane devastation boss with a 50% HP summon-talk latch;
+	// the SPELL_SUMMON_REINFORCEMENTS summons have no summon
+	// bridge and the spell_commander_sarannis_summon_
+	// reinforcements SpellScript has no SpellScript bridge —
+	// see lua_scripts/botanica/boss_commander_sarannis.lua.
+	// instance_the_botanica.cpp stays blocked on the
+	// instance-script model.
+	RegisterLuaBoss("boss_commander_sarannis", 17976)
 }
