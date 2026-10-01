@@ -2087,5 +2087,15 @@ func init() {
 	// names NPC_MOTHER_SMOLDERWEB at 10596 (BRS creatures enum) —
 	// see lua_scripts/eastern_kingdoms/boss_mother_smolderweb.lua.
 	RegisterLuaBoss("boss_mother_smolderweb", 10596)
+	// boss_overlord_wyrmthalak / boss_overlordwyrmthalakAI (Blackrock
+	// Spire, Hall of Blackhand; BossAI combat scheduler via
+	// GetBlackrockSpireAI — blastwave 11130 20s->20s, shout 23511
+	// 2s->10s, cleave 20691 6s->7s, knockaway 20686 12s->14s, all
+	// victim-cast; melee engine-driven; 51%-HP add-summon latch
+	// unmodeled — no SelectTarget/SummonCreature bridges).
+	// Entry 9568 verifiable from the C++ sources: blackrock_spire.h
+	// names NPC_OVERLORD_WYRMTHALAK at 9568 (BRS creatures enum) —
+	// see lua_scripts/eastern_kingdoms/boss_overlord_wyrmthalak.lua.
+	RegisterLuaBoss("boss_overlord_wyrmthalak", 9568)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
