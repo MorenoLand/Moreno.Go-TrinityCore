@@ -959,4 +959,15 @@ func init() {
 	RegisterLuaBoss("boss_kalecgos", 24850)
 	RegisterLuaBoss("boss_kalecgos_human", 24891)
 	RegisterLuaBoss("boss_sathrovarr", 24892)
+	// Brutallus (Sunwell Plateau) — fight logic in
+	// lua_scripts/sunwellplateau/boss_brutallus.lua.
+	// Brutallus (24882) runs the pull Talk, the meteor-slash/stomp
+	// (stomp Talk)/burn/berserk schedule, the unguarded kill Talk,
+	// the death Talk and the Reset dual-wield arm; the burn target
+	// self-cast is modeled as AddAura (no player-side CastSpell
+	// bridge); the Felmyst summon and SetBossState arms have no
+	// summon/instance-script bridges, and the Madrigosa intro
+	// chain has no instance-creature/cross-creature/flag/movement
+	// bridges.
+	RegisterLuaBoss("boss_brutallus", 24882)
 }
