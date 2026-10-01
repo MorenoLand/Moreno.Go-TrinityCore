@@ -2143,5 +2143,28 @@ func init() {
 	// names NPC_QUARTERMASTER_ZIGRIS at 9736 (BRS creatures enum).
 	RegisterLuaBoss("quartermaster_zigris", 9736)
 	RegisterLuaBoss("boss_the_beast", 10430)
+	// Pyroguard Emberseer: 3-event combat scheduler; see
+	// lua_scripts/eastern_kingdoms/boss_pyroguard_emberseer.lua.
+	// Fireshield 13376 self-cast 3s loop, firenova 23462 self-cast
+	// 6s loop, flamebuffet 23341 self-cast 3s->14s loop. The whole
+	// pre-fight event (immunes, altar player-check, incarceerator
+	// grid loop, freeze/growing stacks, SpellHit arms) is
+	// documented-only: no instance / SpellHit / SelectTarget bridges.
+	// EVENT_PYROBLAST 17274 is a random-target cast (no SelectTarget
+	// bridge) — unmodeled. No UNIT_STATE_CASTING model in Go; Reset
+	// _Reset / JustDied _JustDied covered by the cancel on 2/4/23.
+	// Entry 9816 verifiable from the C++ sources: blackrock_spire.h
+	// names NPC_PYROGAURD_EMBERSEER at 9816 (BRS creatures enum).
+	RegisterLuaBoss("boss_pyroguard_emberseer", 9816)
+	// Blackhand Incarcerator: 1-event combat scheduler; see
+	// lua_scripts/eastern_kingdoms/npc_blackhand_incarcerator.lua.
+	// Strike 15580 victim-cast 8s init -> 14s loop (urand ranges use
+	// the lower bound, halycon convention). EVENT_ENCAGE 16045 is a
+	// random-target cast (no SelectTarget bridge) — unmodeled;
+	// JustAppeared/JustReachedHome spawn/evade arms and the
+	// JustEngagedWith DoZoneInCombat grid loop have no bridges.
+	// Entry 10316 verifiable from the C++ sources: blackrock_spire.h
+	// names NPC_BLACKHAND_INCARCERATOR at 10316 (BRS creatures enum).
+	RegisterLuaBoss("npc_blackhand_incarcerator", 10316)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
