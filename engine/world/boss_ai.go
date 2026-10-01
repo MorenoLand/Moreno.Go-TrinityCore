@@ -1459,4 +1459,10 @@ func init() {
 	// (20904) is documented there but not registered: its
 	// whole event machine is instance/summon driven.
 	RegisterLuaBoss("npc_millhouse_manastorm", 20977)
+
+	// boss_zereketh_the_unbound (20870): void zone / shadow
+	// nova / seed of corruption boss; the UNIT_STATE_CASTING
+	// early-return gates have no cast-state bridge — see
+	// lua_scripts/arcatraz/boss_zereketh_the_unbound.lua.
+	RegisterLuaBoss("boss_zereketh_the_unbound", 20870)
 }
