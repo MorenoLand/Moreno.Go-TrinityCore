@@ -1090,4 +1090,35 @@ func init() {
 	// Note the C++ ScriptName typo "npc_sinster_reflection" is
 	// preserved 1:1.
 	RegisterLuaBoss("npc_sinster_reflection", 25708)
+
+	// lua_scripts/gruulslair/boss_high_king_maulgar.lua (boss_high_
+	// king_maulgar + the four ogre councillors, first boss of
+	// Gruul's Lair; gruuls_lair.h DATA_MAULGAR = 0).
+	// High King Maulgar (18831) runs the C++-exact phase-1 timer
+	// set (arcing smash / whirlwind / mighty blow) and the <50%
+	// phase-2 machine: Talk(SAY_ENRAGE) + triggered self-cast
+	// dual wield 29651 + the charging and roar arms (initial 0s).
+	// The virtual-item-slot zeroing arms have no item-display
+	// bridge; the charging AttackStart victim-switch arm has no
+	// bridge; the instance/SetBossState/DoZoneInCombat arms are
+	// blocked on the instance-script model.
+	RegisterLuaBoss("boss_high_king_maulgar", 18831)
+	// Krosh Firehand (18832) runs the fireball 2s floor (the
+	// within-30-yd gate has no distance bridge), the spell-shield
+	// arm and blast wave 60s (random alive player — the
+	// threat-list/15-yd picks have no bridges; the
+	// InterruptNonMeleeSpells arms have no interrupt bridge).
+	RegisterLuaBoss("boss_krosh_firehand", 18832)
+	// Olm the Summoner (18834) runs dark decay / summon WFH
+	// 33131 / death coil. The AttackStart MoveChase/threat arm has
+	// no movement/threat bridges; the WFH summon effect is
+	// engine-side (no AI class in the C++ file).
+	RegisterLuaBoss("boss_olm_the_summoner", 18834)
+	// Kiggler the Crazed (18835) runs the C++-exact
+	// DoCastVictim arms: greater polymorph / lightning bolt /
+	// arcane shock / arcane explosion.
+	RegisterLuaBoss("boss_kiggler_the_crazed", 18835)
+	// Blindeye the Seer (18836) runs the three self-cast healing
+	// arms: greater PW shield / heal / prayer of healing.
+	RegisterLuaBoss("boss_blindeye_the_seer", 18836)
 }
