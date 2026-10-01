@@ -813,4 +813,22 @@ func init() {
 	// the shadow of death / spiritual vengeance AuraScripts have no
 	// AuraScript bridge.
 	RegisterLuaBoss("boss_teron_gorefiend", 22871)
+	// RegisterLuaBoss wires lua_scripts/blacktemple/boss_gurtogg_bloodboil.lua.
+	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
+	// encounter-state bookkeeping is blocked on the instance-script model
+	// (DATA_GURTOGG_BLOODBOIL); the GetThreat/ModifyThreatByPercent/AddThreat
+	// and AttackStart(oldTarget) victim-restore arms have no threat bridge
+	// (the fel rage GUID is followed via per-GUID Lua state); the
+	// ApplySpellImmune taunt/attack-me arms and the bewildering-strike
+	// CanAIAttack gate have no bridges; the fel acid breath combat-reach
+	// pick is approximated at 10 yd (no combat-reach bridge); the player
+	// self-casts 40617/40603 have no player-side CastSpell bridge and are
+	// applied via AddAura (their whole effect is the aura); the berserk and
+	// death DoPlaySoundToSet arms have no sound bridge; the npc_fel_geyser
+	// add AI is not registered (ScriptName bindings are DB-side, no entry
+	// constant in the C++ tree) and its summons have no summon model; the
+	// bloodboil/insignificance target-filter SpellScripts have no
+	// SpellScript bridge; the EnterEvadeMode _DespawnAtEvade arm has no
+	// despawn bridge (evade-side cleanup is engine-side).
+	RegisterLuaBoss("boss_gurtogg_bloodboil", 22948)
 }
