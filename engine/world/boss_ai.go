@@ -2264,5 +2264,18 @@ func init() {
 	// from the C++ sources: magisters_terrace.h:50 names
 	// BOSS_KAELTHAS_SUNSTRIDER = 24664 (boss_vaelastrasz precedent).
 	RegisterLuaBoss("boss_felblood_kaelthas", 24664)
+	// boss_selin_fireheart (Magister's Terrace): combat-entry
+	// Talk(SAY_AGGRO) + fel-explosion self-cast 44314 2100ms->2s loop
+	// (DoCastAOE = DoCast(nullptr) self-cast convention); KilledUnit
+	// Talk(SAY_KILL=3) on OnTargetDied(3) with the C++ TYPEID_PLAYER
+	// gate bridged by victim:GetObjectType() == "Player"; JustDied
+	// Talk(SAY_DEATH=4) on OnDied(4). Sub-10%-mana drain machine
+	// unmodeled (no creature GetPower bridge, no SelectTarget/
+	// FindNearestCreature/MotionMaster/MovementInform bridges);
+	// npc_fel_crystal class unmodeled (JustDied needs the instance
+	// bridge — no .lua written, stub-free precedent). Entry 24723
+	// verifiable from the C++ sources: magisters_terrace.h names
+	// BOSS_SELIN_FIREHEART = 24723 (boss_felblood_kaelthas precedent).
+	RegisterLuaBoss("boss_selin_fireheart", 24723)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
