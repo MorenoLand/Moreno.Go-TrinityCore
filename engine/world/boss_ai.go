@@ -3042,4 +3042,19 @@ func init() {
 	// difficulty / instance-data / AuraScript bridges — documented in
 	// lua_scripts/kalimdor/boss_salramm.lua, not wired.
 	RegisterLuaBoss("boss_salramm", 26530)
+	// Mal'Ganis: combat arms ported (entry 26533, NPC_MALGANIS
+	// summon-bound at npc_arthas.cpp:698 / :1122 — :698 is the
+	// RP5_MALGANIS_POS real-fight summon, :1122 the RP2 intro summon)
+	// — the four timer arms (Carrion Swarm / Mind Blast / Vampiric
+	// Touch / Sleep with the no-sleep-aura target filter), the
+	// 30%/15% one-shot health yells, and the player-gated KilledUnit
+	// slay Talk verified present in the port; the GetAI
+	// MALGANIS_IN_PROGRESS / NullCreatureAI instance-progress gate,
+	// BossAI instance legs, the DamageTaken lethal-clamp + _defeated
+	// fake-death outro machine (PermBindAllPlayers), JustReachedHome
+	// DespawnOrUnsummon, and the casting-state gates have no
+	// instance-progress / DamageTaken / PermBind / evade / despawn /
+	// casting bridges — documented in
+	// lua_scripts/kalimdor/boss_mal_ganis.lua, not wired.
+	RegisterLuaBoss("boss_mal_ganis", 26533)
 }
