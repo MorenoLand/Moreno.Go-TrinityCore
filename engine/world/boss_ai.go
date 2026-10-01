@@ -2332,5 +2332,19 @@ func init() {
 	// delrissa.cpp's m_auiAddEntries names 24557 //Kagani Nightstrike
 	// (boss_felblood_kaelthas precedent).
 	RegisterLuaBoss("boss_kagani_nightstrike", 24557)
+	// boss_ellris_duskhallow: ScriptedAI (via the file's lackey-common
+	// base) immolate 44267 6s loop + shadow-bolt 12471 3s->5s loop
+	// (DoCastVictim, GetVictim nil-guarded) + sub-25%-HP healing-potion
+	// 15503 self-cast latch (OnDamageTaken(9), per-guid one-shot, reset
+	// per engagement). The imp summon 44163 (JustEngagedWith self-cast
+	// — no summon bridge) and the seed-of-corruption 44141 / curse-of-
+	// agony 14875 / fear 38595 machines (SelectTarget-gated — no
+	// bridge) unmodeled; common-AI threat ring / death-count /
+	// KilledUnit forward / AcquireGUIDs / Delrissa-respawn /
+	// ResetThreatList arms unmodeled (no GUID-list / instance / threat
+	// bridges). Entry 24558 verifiable from the C++ sources: boss_
+	// priestess_delrissa.cpp's m_auiAddEntries names 24558
+	// //Elris Duskhallow (boss_felblood_kaelthas precedent).
+	RegisterLuaBoss("boss_ellris_duskhallow", 24558)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
