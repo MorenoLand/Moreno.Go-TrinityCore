@@ -1121,4 +1121,9 @@ func init() {
 	// Blindeye the Seer (18836) runs the three self-cast healing
 	// arms: greater PW shield / heal / prayer of healing.
 	RegisterLuaBoss("boss_blindeye_the_seer", 18836)
+	// Gruul the Dragonkiller (19044) runs the growth / cave-in /
+	// ground-slam+shatter / hurtful-strike / reverberation arms;
+	// the SpellHitTarget knockback arms are unmodeled (event 15
+	// never fires in the Go engine).
+	RegisterLuaBoss("boss_gruul", 19044)
 }
