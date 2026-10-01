@@ -2131,6 +2131,17 @@ func init() {
 	// Entry 9237 verifiable from the C++ sources: blackrock_spire.h
 	// names NPC_WARMASTER_VOONE at 9237 (BRS creatures enum).
 	RegisterLuaBoss("boss_warmaster_voone", 9237)
+	// Quartermaster Zigris: 2-event combat scheduler; see
+	// lua_scripts/eastern_kingdoms/boss_quartermaster_zigris.lua.
+	// Shoot 16496 1s->500ms loop, stun-bomb 16497 16s->14s loop —
+	// both DoCastVictim (maiden convention). SPELL_HEALING_POTION
+	// 15504 + SPELL_HOOKEDNET 15609 are enum-only in C++ (never
+	// cast), omitted by design. No UNIT_STATE_CASTING model in Go;
+	// Reset _Reset / JustDied _JustDied covered by the cancel on
+	// 2/4/23.
+	// Entry 9736 verifiable from the C++ sources: blackrock_spire.h
+	// names NPC_QUARTERMASTER_ZIGRIS at 9736 (BRS creatures enum).
+	RegisterLuaBoss("quartermaster_zigris", 9736)
 	RegisterLuaBoss("boss_the_beast", 10430)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
