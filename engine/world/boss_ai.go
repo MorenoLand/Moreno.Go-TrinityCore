@@ -1504,4 +1504,13 @@ func init() {
 	// botanica/boss_high_botanist_freywinn.lua. instance_the_
 	// botanica.cpp stays blocked on the instance-script model.
 	RegisterLuaBoss("boss_high_botanist_freywinn", 17975)
+
+	// The Botanica (Tempest Keep) boss roster 2/5:
+	// boss_laj (17980): teleport / allergic-reaction boss; the
+	// TRIGGERED summon lasher/flayer casts have no summon bridge
+	// and the DoTransform display/immune arms have no display /
+	// immune bridges — see lua_scripts/botanica/boss_laj.lua.
+	// instance_the_botanica.cpp stays blocked on the
+	// instance-script model.
+	RegisterLuaBoss("boss_laj", 17980)
 }
