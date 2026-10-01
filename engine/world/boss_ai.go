@@ -2041,5 +2041,17 @@ func init() {
 	// lua_scripts/eastern_kingdoms/boss_moira_bronzebeard.lua. The C++
 	// EVENT_HEAL arm is commented out ("not used atm") and left out.
 	RegisterLuaBoss("boss_moira_bronzebeard", 8929)
+	// boss_drakkisath / boss_drakkisathAI (Blackrock Spire, Hall of
+	// Blackhand; BossAI combat scheduler via GetBlackrockSpireAI —
+	// firenova 23462 victim-cast 6s->10s, cleave 20691 victim-cast
+	// 8s->8s, confligration 16805 victim-cast 15s->18s, thunderclap
+	// 15548 victim-cast 17s->20s; melee engine-driven). Entry 10363
+	// verifiable from the C++ sources: blackrock_spire.h names
+	// NPC_GENERAL_DRAKKISATH at 10363 (BRS creatures enum) — see
+	// lua_scripts/eastern_kingdoms/boss_drakkisath.lua. GetBlackrockSpireAI
+	// is a GetInstanceAI retrieval wrapper (blackrock_spire.h:129-132);
+	// the AI has no instance arms — Reset() _Reset() and JustDied()
+	// _JustDied() are covered by the cancel/re-arm on combat events.
+	RegisterLuaBoss("boss_drakkisath", 10363)
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 }
