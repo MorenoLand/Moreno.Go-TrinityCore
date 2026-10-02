@@ -3219,6 +3219,22 @@ func init() {
 	// no AuraScript bridge — all documented in the lua file, not wired.
 	RegisterLuaBoss("boss_moorabi", 29305)
 
+	// boss_drakkari_colossus: Gundrak dungeon boss script, entry 29307
+	// (gundrak.h NPC_DRAKKARI_COLOSSUS — kalecgos pass; the
+	// RegisterCreatureAIWithFactory(GetGundrakAI) ScriptName binding
+	// is instance-shimmed, the creature_template binding DB-side).
+	// BossAI. Ported arm in lua_scripts/northrend/boss_drakkari_colossus.lua:
+	// EVENT_MIGHTY_BLOW — DoCastVictim(Mighty Blow 54719), Reset-scheduled
+	// 10-30s init, rescheduled 5-15s (the only bridgeable arm of the slice).
+	// The DamageTaken phase machine (HealthBelowPct 50/5 — no health-pct
+	// bridge) sits behind the absent DoAction bridge, and the freeze/unfreeze
+	// action legs behind SetImmuneToPC / SetReactState / motion-master /
+	// aura-removal bridges; boss_drakkari_elemental and npc_living_mojo are
+	// entry-unverifiable (no host-entry constants in the C++ sources — joins
+	// the bridgeable-but-entry-blocked queue) — all documented in the lua
+	// file, not wired.
+	RegisterLuaBoss("boss_drakkari_colossus", 29307)
+
 	// npc_slad_ran_constrictor: Gundrak script, entry 29713
 	// (boss_slad_ran.cpp CREATURE_CONSTRICTORS — kalecgos pass).
 	// ScriptedAI. Ported arm: Grip of Slad'ran 55093 on the victim
