@@ -4592,4 +4592,26 @@ func init() {
 	// victim 50761 — no timer-event / cast / target-selection /
 	// threat bridges; Talk(3) rides the SHOCK_OF_SORROW machine).
 	RegisterLuaBoss("boss_maiden_of_grief", 27975)
+
+	// Krystallus (27977), Halls of Stone —
+	// lua_scripts/northrend/boss_krystallus.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
+	// (event 1; the BossAI::JustEngagedWith passthrough and the
+	// five ScheduleEvent legs have no bridges); KilledUnit
+	// player-gated Talk(SAY_KILL 1) (event 3 — razuvious
+	// player-gated variant precedent, twentieth player-gated
+	// variant ported); JustDied Talk(SAY_DEATH 2) (event 4;
+	// _JustDied passthrough has no bridge).
+	// Documented-only: Reset (_Reset()); the UpdateAI event
+	// machine (BOULDER_TOSS random-target 50843; GROUND_SPIKE
+	// heroic-only random-target 59750; GROUND_SLAM self 50827 +
+	// SHATTER 10s chain; STOMP self 48131; SHATTER self 50810 —
+	// no timer-event / cast / target-selection bridges; enum
+	// Yells SAY_SHATTER = 3 is declared but never Talk()ed in
+	// C++); spell_krystallus_shatter (RemoveAurasDueToSpell
+	// STONED 50812 + triggered SHATTER_EFFECT 50811) and
+	// spell_krystallus_shatter_effect (radius-scaled hit damage)
+	// — no SpellScript bridge; both join the
+	// no-SpellScript-bridge queue.
+	RegisterLuaBoss("boss_krystallus", 27977)
 }
