@@ -4208,4 +4208,33 @@ func init() {
 	// DespawnOrUnsummon(19s), UpdateAI pulse timer 3s DoCast(
 	// SPELL_UNSTABLE_SPHERE_PULSE 50757) — no bridges).
 	RegisterLuaBoss("boss_drakos", 27654)
+
+	// Mage-Lord Urom (27655), The Oculus —
+	// lua_scripts/northrend/boss_urom.lua.
+	// Ported arms (C++-exact): KilledUnit Talk(SAY_PLAYER_KILL 7)
+	// C++-GATED on TYPEID_PLAYER (the nalorakk / kelthuzad
+	// player-gate variant — ninth ported variant overall, sixth
+	// identical to nalorakk / kelthuzad / gothik / thaddius /
+	// keristrasza); JustDied Talk(SAY_DEATH 6) (_JustDied
+	// bookkeeping has no bridge — tharon_ja precedent; the
+	// DoCastSelf(SPELL_DEATH_SPELL) leg has no cast bridge).
+	// Documented-only: JustEngagedWith / StartAttack Talk arms —
+	// _platform-state-gated (Talk(SAY_SUMMON_1..3) on the first
+	// three engages, Talk(SAY_AGGRO) only on the fourth engage
+	// when _platform > 2); porting either unconditionally would be
+	// C++-inexact — no _platform-state / summon / cast bridges;
+	// Reset (SetControlled / SetDisableGravity / SetReactState /
+	// DoCastSelf SPELL_EVOCATE 51602 / _Reset()); EnterEvadeMode
+	// (center-gated, no evade / teleport / motion bridges);
+	// AttackStart (z-gated DoStartNoMovement); the UpdateAI
+	// teleport event machine (no timer-event / random-target /
+	// cast / teleport / react-state / gravity bridges);
+	// DamageTaken _isInCenter-gated NearTeleportTo; SpellHit
+	// SPELL_SUMMON_MENAGERIE x3 (SetHomePosition + LeaveCombat +
+	// Evocate — joins the SpellHit-15-never-fires queue);
+	// spell_urom_frostbomb AuraScript joins the
+	// no-AuraScript-bridge queue (keristrasza precedent); the
+	// instance OnCreatureCreate SetPhaseMask leg has no instance
+	// bridge.
+	RegisterLuaBoss("boss_urom", 27655)
 }
