@@ -5781,3 +5781,32 @@ func init() {
 	// header. Thirteenth group of the "// Icecrown Citadel" block.
 	RegisterLuaBoss("boss_the_lich_king", 36597)
 }
+
+func init() {
+	// Baltharus the Warborn (39751) — Lua port of
+	// src/server/scripts/Northrend/ChamberOfAspects/RubySanctum/boss_baltharus_the_warborn.cpp
+	// (368 lines; 2 CreatureScripts (boss_baltharus_the_warborn (BossAI,
+	// DATA_BALTHARUS_THE_WARBORN = 1) + npc_baltharus_the_warborn_clone
+	// (BossAI, DATA_BALTHARUS_CLONE = 3)); all registered from inside
+	// AddSC_boss_baltharus_the_warborn(); loader decl 190 / call 385 per
+	// northrend_script_loader.cpp — the THIRD group of the
+	// "// Ruby Sanctum" block. Entry-verifiable: ruby_sanctum.h
+	// NPC_BALTHARUS_THE_WARBORN = 39751 (line 67),
+	// instance_ruby_sanctum.cpp creatureData binds NPC_BALTHARUS_THE_WARBORN
+	// (line 49); ScriptName bindings are DB-side as usual.
+	// Ported arms in
+	// lua_scripts/northrend/boss_baltharus_the_warborn.lua:
+	// boss_baltharus_the_warborn JustEngagedWith Talk(SAY_AGGRO 1)
+	// (event 1, the auriaya precedent); JustDied Talk(SAY_DEATH 4)
+	// (event 4, the sjonnir precedent); KilledUnit Talk(SAY_KILL 2) gated
+	// on victim->GetTypeId() == TYPEID_PLAYER (event 3, the razuvious
+	// player-gated variant precedent). No other bridgeable arm in the
+	// file: DoAction Talk(SAY_CLONE 3) has no-DoAction bridge; the
+	// EVENT_INTRO_TALK Talk(SAY_BALTHARUS_INTRO 0) has no-timer-bridge;
+	// the JustDied _JustDied() instance leg and the cross-AI
+	// xerestrasza->AI()->DoAction(ACTION_BALTHARUS_DEATH) leg have no
+	// bridges; npc_baltharus_the_warborn_clone (39899) has zero Talk
+	// lines (NOT registered) — documented in the lua header. Third group
+	// of the "// Ruby Sanctum" block.
+	RegisterLuaBoss("boss_baltharus_the_warborn", 39751)
+}
