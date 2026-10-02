@@ -3605,4 +3605,35 @@ func init() {
 	// achievement_oh_novos (no achievement-criteria bridge — snakes
 	// precedent — + cross-AI GetData absent).
 	RegisterLuaBoss("boss_novos", 26631)
+
+	// boss_king_dred: Drak'Tharon Keep dungeon boss script, entry 27483
+	// (drak_tharon_keep.h NPC_KING_DRED — kalecgos pass; the
+	// GetDrakTharonKeepAI ScriptName binding is instance-shimmed, the
+	// creature_template binding DB-side). BossAI. King Dred has no
+	// SAY/yell enum in C++ — no Talk arms exist. Ported arms in
+	// lua_scripts/northrend/boss_king_dred.lua: EVENT_GRIEVOUS_BITE
+	// DoCastVictim(48920) 20s init, 20s repeat, EVENT_MANGLING_SLASH
+	// DoCastVictim(48873) 18500ms init, 18500ms repeat,
+	// EVENT_PIERCING_SLASH DoCastVictim(48878) 15s init, 15s repeat
+	// (the JustEngagedWith schedules are independent — none of the
+	// unmodeled events gate them). JustDied is only _JustDied()
+	// (instance bookkeeping, no bridge) — nothing wired. Documented
+	// in the lua file, not wired: EVENT_BELLOWING_ROAR DoCastAOE(22686)
+	// 33s and EVENT_FEARSOME_ROAR DoCastAOE(48849) 10-20s (no DoCastAOE
+	// bridge — terestian/shazzrah precedent), EVENT_RAPTOR_CALL
+	// (SummonCreature RAND(NPC_DRAKKARI_GUTRIPPER 26641 /
+	// NPC_DRAKKARI_SCYTHECLAW 26628) rides the absent summon STRAND —
+	// the only bridgeable leg is the no-op dummy DoCastVictim(59416),
+	// whose payload is the unbridged summon, so the timer is not
+	// armed), the UpdateAI casting-skip (no unit-state bridge),
+	// DoAction(ACTION_RAPTOR_KILLED)/GetData(DATA_RAPTORS_KILLED) (no
+	// DoAction/GetData bridges), npc_drakkari_gutripper (26641) /
+	// npc_drakkari_scytheclaw (26628) entry-verifiable — zero
+	// registration: spawned only by the unbridged summon; GutRip 49710
+	// and Rend 13738 rotation arms stay port-pattern-ready; JustDied
+	// cross-AI DoAction legs behind instance GetGuidData +
+	// ObjectAccessor + DoAction bridges, and
+	// achievement_king_dred (no achievement-criteria bridge — snakes
+	// precedent — + cross-AI GetData absent).
+	RegisterLuaBoss("boss_king_dred", 27483)
 }
