@@ -4763,4 +4763,42 @@ func init() {
 	// spell_vehicle_throw_passenger — no SpellScript bridge;
 	// all five join the no-SpellScript-bridge queue.
 	RegisterLuaBoss("boss_flame_leviathan", 33113)
+
+	// Ignis the Furnace Master (33118), Ulduar —
+	// lua_scripts/northrend/boss_ignis.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
+	// (event 1; the BossAI::JustEngagedWith passthrough, the six
+	// ScheduleEvent legs and the DoStartTimedAchievement leg have
+	// no bridges — the auriaya engage-port precedent);
+	// KilledUnit player-gated Talk(SAY_SLAY 4) (event 3 — the
+	// razuvious player-gated variant precedent); JustDied
+	// Talk(SAY_DEATH 6) (event 4; the _JustDied() passthrough has
+	// no bridge — the sjonnir JustDied-Talk precedent).
+	// Documented-only: Reset / Initialize (vehicle passenger
+	// removal + DoStopTimedAchievement — no bridges);
+	// GetData(DATA_SHATTERED 29252926) — no GetData bridge
+	// (consumer: achievement_ignis_shattered below); JustSummoned
+	// (NPC_IRON_CONSTRUCT faction / react-state / flag / immune
+	// / root legs — no bridges); DoAction(ACTION_REMOVE_BUFF
+	// 20 — RemoveAuraFromStack + GameTime <5s shattered window
+	// — no bridges); the UpdateAI event machine (EVENT_JET
+	// Talk(EMOTE_JETS 7); EVENT_SLAG_POT Talk(SAY_SLAG_POT 2) +
+	// GRAB_POT / CHANGE_POT / END_POT vehicle chain; EVENT_SCORCH
+	// Talk(SAY_SCORCH 3) + SummonCreature(NPC_GROUND_SCORCH
+	// 33221); EVENT_CONSTRUCT Talk(SAY_SUMMON 1) + DoSummon;
+	// EVENT_BERSERK Talk(SAY_BERSERK 5) — no timer-event / cast
+	// / summon / target-selection / vehicle bridges; all
+	// timer-leg yells ride the unbridgeable event machine);
+	// npc_iron_construct (33121 local enum — entry-verifiable
+	// but bridge-blocked: DamageTaken shatter leg + HEAT /
+	// MOLTEN / BRITTLE / IsInWater machine; no Talk arms — no
+	// registration); npc_scorch_ground (33221 local enum —
+	// entry-verifiable but bridge-blocked: MoveInLineOfSight /
+	// AddAura(SPELL_HEAT 65667) machine; no Talk arms — no
+	// registration); spell_ignis_slag_pot (62717) — no
+	// AuraScript bridge; joins the no-AuraScript-bridge queue;
+	// achievement_ignis_shattered (GetData-based OnCheck — no
+	// GetData / achievement bridges; joins the
+	// unmodeled-achievement queue).
+	RegisterLuaBoss("boss_ignis", 33118)
 }
