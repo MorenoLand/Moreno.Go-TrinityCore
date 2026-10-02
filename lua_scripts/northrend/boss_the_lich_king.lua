@@ -1,0 +1,144 @@
+-- The Lich King (Icecrown Citadel) — Lua port of
+-- src/server/scripts/Northrend/IcecrownCitadel/boss_the_lich_king.cpp
+-- (2899 lines incl. license; 10 CreatureScripts
+-- (boss_the_lich_king (BossAI, DATA_THE_LICH_KING = 12),
+-- npc_tirion_fordring_tft (ScriptedAI),
+-- npc_shambling_horror_icc (ScriptedAI), npc_raging_spirit
+-- (ScriptedAI), npc_valkyr_shadowguard (ScriptedAI),
+-- npc_strangulate_vehicle (ScriptedAI), npc_terenas_menethil
+-- (ScriptedAI), npc_spirit_warden (ScriptedAI), npc_spirit_bomb
+-- (CreatureAI), npc_broken_frostmourne (CreatureAI)) + 31
+-- SpellScript/AuraScript legs (spell_the_lich_king_infest;
+-- spell_the_lich_king_necrotic_plague;
+-- spell_the_lich_king_necrotic_plague_jump +
+-- spell_the_lich_king_necrotic_plague_jump_aura (pair);
+-- spell_the_lich_king_shadow_trap_visual;
+-- spell_the_lich_king_shadow_trap_periodic; spell_the_lich_king_quake;
+-- spell_the_lich_king_ice_burst_target_search;
+-- spell_the_lich_king_raging_spirit; spell_the_lich_king_defile;
+-- spell_the_lich_king_summon_into_air;
+-- spell_the_lich_king_soul_reaper;
+-- spell_the_lich_king_valkyr_target_search;
+-- spell_the_lich_king_cast_back_to_caster;
+-- spell_the_lich_king_life_siphon; spell_the_lich_king_vile_spirits;
+-- spell_the_lich_king_vile_spirits_visual;
+-- spell_the_lich_king_vile_spirit_move_target_search;
+-- spell_the_lich_king_vile_spirit_damage_target_search;
+-- spell_the_lich_king_harvest_soul;
+-- spell_the_lich_king_lights_favor; spell_the_lich_king_soul_rip;
+-- spell_the_lich_king_restore_soul; spell_the_lich_king_dark_hunger;
+-- spell_the_lich_king_in_frostmourne_room;
+-- spell_the_lich_king_summon_spirit_bomb;
+-- spell_the_lich_king_trigger_vile_spirit; spell_the_lich_king_jump;
+-- spell_the_lich_king_jump_remove_aura; spell_the_lich_king_play_movie;
+-- spell_the_lich_king_harvest_souls_teleport) + 1 generic
+-- RegisterSpellScriptWithArgs spell_trigger_spell_from_caster leg
+-- ("spell_the_lich_king_mass_resurrection", SPELL_MASS_RESURRECTION_REAL)
+-- + 2 AchievementCriteriaScripts (achievement_been_waiting_long_time,
+-- achievement_neck_deep_in_vile); all registered from inside
+-- AddSC_boss_the_lich_king(); loader decl 183 / call 378 per
+-- northrend_script_loader.cpp — the THIRTEENTH group of the
+-- "// Icecrown Citadel" block in AddNorthrendScripts(), immediately
+-- after AddSC_boss_sindragosa() (call 377) — verified from the loader
+-- this run; the checkpoint sequence (sindragosa -> the_lich_king) is
+-- followed).
+-- Entry: 36597 The Lich King (icecrown_citadel.h NPC_THE_LICH_KING,
+-- line 314; instance_icecrown_citadel.cpp OnCreatureCreate binds case
+-- NPC_THE_LICH_KING, line 314) — entry-verifiable, registration
+-- proceeds (the nexus_commanders kalecgos precedent); the
+-- RegisterIcecrownCitadelCreatureAI ScriptName bindings are DB-side
+-- as usual.
+-- Sole-source verified: whole-server-tree grep for
+-- "AddSC_boss_the_lich_king" hits boss_the_lich_king.cpp only (+ the
+-- loader decl/call lines); this clone carries no sql/ tree, so
+-- ScriptName bindings are DB-side by construction. No lich_king lua
+-- existed.
+-- Eluna creature events: 1 OnEnterCombat, 3 OnKill, 4 OnDied.
+-- Ported arms (C++-exact for all modeled arms):
+-- boss_the_lich_king KilledUnit — Talk(SAY_LK_KILL 10) gated on
+-- victim->GetTypeId() == TYPEID_PLAYER (event 3 — the razuvious
+-- player-gated variant precedent; the !me->IsInEvadeMode() and
+-- !events.IsInPhase(PHASE_OUTRO) legs have no bridges).
+-- DOCUMENTED-ONLY (in this header; only entry 36597 registered):
+-- boss_the_lich_king DoAction — Talk(SAY_LK_INTRO_1 0) rides
+-- ACTION_START_ENCOUNTER; Talk(SAY_LK_FROSTMOURNE_ESCAPE 8, non-heroic)
+-- rides ACTION_TELEPORT_BACK (no-DoAction bridge; the krick
+-- ACTION_OUTRO precedent).
+-- boss_the_lich_king SpellHit — Talk(SAY_LK_FROSTMOURNE_KILL 9) on
+-- SPELL_HARVESTED_SOUL (event 15 never fires; the anub_arak
+-- precedent).
+-- boss_the_lich_king MovementInform — Talk(SAY_LK_REMORSELESS_WINTER
+-- 4) on POINT_CENTER_1 / POINT_CENTER_2; tirion->AI()->
+-- Talk(SAY_TIRION_OUTRO_2) is cross-AI Talk on POINT_LK_OUTRO_2 (no
+-- MovementInform bridge; no cross-AI-Talk bridge).
+-- boss_the_lich_king UpdateAI scheduler Talk legs — Talk(SAY_LK_INTRO_2
+-- 1) (EVENT_INTRO_TALK_1); Talk(SAY_LK_INTRO_3 2)
+-- (EVENT_INTRO_CAST_FREEZE); Talk(EMOTE_NECROTIC_PLAGUE_WARNING 13,
+-- target) (EVENT_NECROTIC_PLAGUE); Talk(EMOTE_DEFILE_WARNING 12)
+-- (EVENT_DEFILE); Talk(SAY_LK_HARVEST_SOUL 7) (EVENT_HARVEST_SOUL,
+-- EVENT_HARVEST_SOULS); Talk(SAY_LK_QUAKE 5) (EVENT_QUAKE,
+-- EVENT_QUAKE_2); Talk(SAY_LK_SUMMON_VALKYR 6) (EVENT_SUMMON_VALKYR);
+-- Talk(SAY_LK_OUTRO_1..8 14..21) (EVENT_OUTRO_TALK_1..8);
+-- Talk(SAY_LK_BERSERK 11) (EVENT_BERSERK) — all timer-driven
+-- (no-timer-bridge; the boss_toravon precedent); the intro/outro
+-- movement machines, DoCast summon legs, phase SetPhase legs, and the
+-- JustDied SPELL_PLAY_MOVIE / MoveFall / light-override legs ride
+-- bridges that do not exist.
+-- npc_tirion_fordring_tft (NPC_HIGHLORD_TIRION_FORDRING_LK 38995) —
+-- NOT registered: Talk(SAY_TIRION_INTRO_1 0) rides DoAction
+-- ACTION_CONTINUE_INTRO (no-DoAction bridge); Talk(SAY_TIRION_INTRO_2
+-- 1) (EVENT_INTRO_TALK_1) and Talk(SAY_TIRION_OUTRO_1 2)
+-- (EVENT_OUTRO_TALK_1) are scheduler-driven (no-timer-bridge); the
+-- OnGossipSelect intro kick, MovementInform, and SpellHit legs have no
+-- bridges (the bronjahm npc_corrupted_soul_fragment precedent).
+-- npc_terenas_menethil (NPC_TERENAS_MENETHIL_FROSTMOURNE 36823,
+-- NPC_TERENAS_MENETHIL_FROSTMOURNE_H 39217) — NOT registered:
+-- Talk(SAY_TERENAS_INTRO_1..3 0..2) (EVENT_FROSTMOURNE_TALK_1..3,
+-- DoAction ACTION_FROSTMOURNE_INTRO scheduler) and
+-- Talk(SAY_TERENAS_OUTRO_1..2 0..1) (EVENT_OUTRO_TERENAS_TALK_1..2,
+-- IsSummonedBy scheduler) — no-DoAction + no-timer bridges.
+-- npc_shambling_horror_icc / npc_raging_spirit /
+-- npc_valkyr_shadowguard / npc_strangulate_vehicle /
+-- npc_spirit_warden / npc_spirit_bomb / npc_broken_frostmourne — zero
+-- Talk lines — NOT registered (the bronjahm
+-- npc_corrupted_soul_fragment precedent); the raging_spirit and
+-- spirit_warden JustDied legs and the valkyr / strangulate / bomb /
+-- frostmourne UpdateAI machines ride unbridged legs.
+-- The 31 spell/aura legs + the generic spell_trigger_spell_from_caster
+-- with-args leg join the no-SpellScript-bridge / no-AuraScript-bridge
+-- queues (the boss_moragg optic-link precedent);
+-- achievement_been_waiting_long_time and
+-- achievement_neck_deep_in_vile join the no-achievement-criteria-bridge
+-- queue (the lana'thel achievement precedent).
+-- All 33 Talk() calls in the file accounted for (33 = SAY_LK_KILL 10
+-- (1, PORTED — the only bridgeable arm) + SAY_LK_INTRO_1 0 (1,
+-- DoAction) + SAY_LK_FROSTMOURNE_ESCAPE 8 (1, DoAction) +
+-- SAY_LK_FROSTMOURNE_KILL 9 (1, SpellHit) + SAY_LK_REMORSELESS_WINTER 4
+-- (2, MovementInform) + SAY_TIRION_OUTRO_2 (1, cross-AI MovementInform)
+-- + SAY_LK_INTRO_2 1 (1, scheduler) + SAY_LK_INTRO_3 2 (1,
+-- scheduler) + EMOTE_NECROTIC_PLAGUE_WARNING 13 (1, scheduler) +
+-- EMOTE_DEFILE_WARNING 12 (1, scheduler) + SAY_LK_HARVEST_SOUL 7 (2,
+-- scheduler) + SAY_LK_QUAKE 5 (2, scheduler) + SAY_LK_SUMMON_VALKYR 6
+-- (1, scheduler) + SAY_LK_OUTRO_1..8 14..21 (8, scheduler) +
+-- SAY_LK_BERSERK 11 (1, scheduler) + SAY_TIRION_INTRO_1 0 (1, tirion
+-- DoAction) + SAY_TIRION_INTRO_2 1 (1, tirion scheduler) +
+-- SAY_TIRION_OUTRO_1 2 (1, tirion scheduler) + SAY_TERENAS_INTRO_1..3
+-- 0..2 (3, terenas scheduler) + SAY_TERENAS_OUTRO_1..2 0..1 (2,
+-- terenas scheduler)).
+
+local ENTRY_THE_LICH_KING = 36597
+
+local SAY_LK_KILL = 10
+
+-- C++ boss_the_lich_king::KilledUnit:
+-- if (victim->GetTypeId() == TYPEID_PLAYER &&
+--     !me->IsInEvadeMode() && !events.IsInPhase(PHASE_OUTRO))
+--     Talk(SAY_LK_KILL) — the razuvious player-gated variant precedent
+-- (the evade and phase legs have no bridges).
+local function lichKingKilledUnit(event, creature, victim)
+    if victim:GetObjectType() == "Player" then
+        creature:Talk(SAY_LK_KILL)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_THE_LICH_KING, 3, lichKingKilledUnit)

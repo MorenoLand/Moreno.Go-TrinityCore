@@ -5735,3 +5735,49 @@ func init() {
 	// block.
 	RegisterLuaBoss("boss_sindragosa", 36853)
 }
+
+func init() {
+	// The Lich King (36597) — Lua port of
+	// src/server/scripts/Northrend/IcecrownCitadel/boss_the_lich_king.cpp
+	// (2899 lines; 10 CreatureScripts (boss_the_lich_king (BossAI,
+	// DATA_THE_LICH_KING = 12) + npc_tirion_fordring_tft +
+	// npc_shambling_horror_icc + npc_raging_spirit +
+	// npc_valkyr_shadowguard + npc_strangulate_vehicle +
+	// npc_terenas_menethil + npc_spirit_warden + npc_spirit_bomb +
+	// npc_broken_frostmourne) + 31 SpellScript/AuraScript legs + 1
+	// generic spell_trigger_spell_from_caster with-args leg +
+	// achievement_been_waiting_long_time / achievement_neck_deep_in_vile;
+	// all registered from inside AddSC_boss_the_lich_king(); loader decl
+	// 183 / call 378 per northrend_script_loader.cpp — the THIRTEENTH
+	// group of the "// Icecrown Citadel" block. Entry-verifiable:
+	// icecrown_citadel.h NPC_THE_LICH_KING = 36597 (line 314),
+	// instance_icecrown_citadel.cpp OnCreatureCreate binds case
+	// NPC_THE_LICH_KING (line 314); RegisterIcecrownCitadelCreatureAI
+	// ScriptName bindings are DB-side as usual.
+	// Ported arms in
+	// lua_scripts/northrend/boss_the_lich_king.lua:
+	// boss_the_lich_king KilledUnit Talk(SAY_LK_KILL 10) gated on
+	// victim->GetTypeId() == TYPEID_PLAYER (event 3, the razuvious
+	// player-gated variant precedent; the !me->IsInEvadeMode() and
+	// !events.IsInPhase(PHASE_OUTRO) legs have no bridges). No other
+	// bridgeable arm in the file: DoAction Talk(SAY_LK_INTRO_1 0 /
+	// SAY_LK_FROSTMOURNE_ESCAPE 8) has no-DoAction bridge; SpellHit
+	// Talk(SAY_LK_FROSTMOURNE_KILL 9) is event 15 (never fires);
+	// MovementInform Talk(SAY_LK_REMORSELESS_WINTER 4 ×2) and the
+	// cross-AI tirion->AI()->Talk(SAY_TIRION_OUTRO_2) have no
+	// MovementInform / cross-AI-Talk bridges; all scheduler Talk legs
+	// (SAY_LK_INTRO_2 1 / SAY_LK_INTRO_3 2 / EMOTE_NECROTIC_PLAGUE_WARNING
+	// 13 / EMOTE_DEFILE_WARNING 12 / SAY_LK_HARVEST_SOUL 7 ×2 /
+	// SAY_LK_QUAKE 5 ×2 / SAY_LK_SUMMON_VALKYR 6 / SAY_LK_OUTRO_1..8
+	// 14..21 / SAY_LK_BERSERK 11) have no-timer-bridge (the boss_toravon
+	// precedent); npc_tirion_fordring_tft (38995) Talk legs ride DoAction
+	// / scheduler (no bridges); npc_terenas_menethil (36823/39217) Talk
+	// legs are scheduler-driven (no bridges); the 7 remaining NPC AIs
+	// have zero Talk lines (NOT registered, the bronjahm
+	// npc_corrupted_soul_fragment precedent); the 31 spell/aura legs +
+	// the with-args trigger leg join the no-SpellScript-bridge /
+	// no-AuraScript-bridge queues and the 2 achievements the
+	// no-achievement-criteria-bridge queue — documented in the lua
+	// header. Thirteenth group of the "// Icecrown Citadel" block.
+	RegisterLuaBoss("boss_the_lich_king", 36597)
+}
