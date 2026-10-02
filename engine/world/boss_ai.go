@@ -3256,6 +3256,22 @@ func init() {
 	// achievement-criteria bridge — snakes precedent).
 	RegisterLuaBoss("boss_gal_darah", 29306)
 
+	// boss_eck: Gundrak dungeon boss script, entry 29932
+	// (gundrak.h NPC_ECK_THE_FEROCIOUS — kalecgos pass; the
+	// RegisterCreatureAIWithFactory(GetGundrakAI) ScriptName binding
+	// is instance-shimmed, the creature_template binding DB-side).
+	// BossAI. Ported arms in lua_scripts/northrend/boss_eck.lua:
+	// JustEngagedWith-scheduled EVENT_BITE (DoCastVictim 55813, 5s
+	// init, 8-12s repeat), EVENT_SPIT (DoCastVictim 55814, 10s init,
+	// 6-14s repeat), EVENT_BERSERK (DoCastSelf 55816, 60-90s init,
+	// single fire). Documented in the lua file, not wired: the ctor
+	// Talk(EMOTE_SPAWN 0) (no faithful Lua trigger — event 5 fires
+	// respawn-path only, phase_hunter precedent), the DamageTaken
+	// HealthBelowPctDamaged(20) early-berserk leg (no health-pct
+	// bridge — doomwalker precedent), and EVENT_SPRING (random-target
+	// SelectTarget bridge absent — cairne/kazzak precedent).
+	RegisterLuaBoss("boss_eck", 29932)
+
 	// npc_slad_ran_constrictor: Gundrak script, entry 29713
 	// (boss_slad_ran.cpp CREATURE_CONSTRICTORS — kalecgos pass).
 	// ScriptedAI. Ported arm: Grip of Slad'ran 55093 on the victim
