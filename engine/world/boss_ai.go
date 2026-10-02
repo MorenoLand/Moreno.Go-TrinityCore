@@ -3113,4 +3113,18 @@ func init() {
 	// instance-data bridge — documented in the lua file, not wired.
 	RegisterLuaBoss("npc_tomb_creature", 7349)
 	RegisterLuaBoss("npc_tomb_creature", 7351)
+
+	// boss_zum_rah: Zul'Farrak, entry 7271 (zulfarrak.h ZFEntries
+	// ENTRY_ZUM_RAH — kalecgos passes). BossAI(creature, DATA_ZUM_RAH)
+	// (DATA_ZUM_RAH = 0 of ZFDataTypes, "instance_zulfarrak" gate) —
+	// the instance-side BossAI legs have no bridge (standing).
+	// Ported arms in lua_scripts/kalimdor/boss_zum_rah.lua: engage
+	// Talk(0), Shadow Bolt 12739 (victim, 1s init, 4s repeat),
+	// Shadowbolt Volley 15245 (random player in instance, 10s init,
+	// 9s repeat), Talk(2) on KilledUnit, DamageTaken HP machine
+	// (Talk(1) + one-shot Ward of Zum'rah 11086 self-cast at 80%/40%,
+	// one-shot Healing Wave 12491 self-cast at 30%). Reset's
+	// SetFaction(FACTION_FRIENDLY) and JustDied's SetData(DONE) have
+	// no bridges — documented in the lua file, not wired.
+	RegisterLuaBoss("boss_zum_rah", 7271)
 }
