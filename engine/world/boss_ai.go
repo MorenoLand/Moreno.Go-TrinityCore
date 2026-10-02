@@ -3377,6 +3377,40 @@ func init() {
 	// "Missing AI for Twisted Visages", so there is nothing to port.
 	RegisterLuaBoss("boss_volazj", 29311)
 
+	// boss_jedoga_shadowseeker: Ahn'kahet dungeon boss script, entry 29310
+	// (ahnkahet.h NPC_JEDOGA_SHADOWSEEKER — kalecgos pass; the
+	// RegisterAhnKahetCreatureAI ScriptName binding is
+	// instance-shimmed, the creature_template binding DB-side).
+	// BossAI. Ported arms in lua_scripts/northrend/
+	// boss_jedoga_shadowseeker.lua: JustEngagedWith Talk(SAY_AGGRO 0),
+	// KilledUnit Talk(SAY_SLAY 3) player-gated, JustDied Talk(SAY_DEATH
+	// 4). Documented in the lua file, not wired: the entire
+	// phase-gated machinery — events.SetPhase/IsInPhase (PHASE_INTRO /
+	// PHASE_ONE / PHASE_TWO / PHASE_THREE; no phase bridge — gal_darah
+	// / moorabi precedent) — so the combat rotation is not emulated
+	// (EVENT_CYCLONE_STRIKE DoCastSelf 56855 3s->15-30s, ungated
+	// timers would over-cast during the unbridged intro and phase-two
+	// flying sacrifice sequence; EVENT_LIGHTNING_BOLT 56891 /
+	// EVENT_THUNDERSHOCK 56926 also need the absent random-target
+	// SelectTarget bridge — cairne/kazzak precedent), the DamageTaken
+	// 55% PHASE_TWO flip (no health-pct bridge — doomwalker
+	// precedent), the phase-two movement/volunteer/sacrifice machine
+	// (summon STRAND + motion-master + flag + interrupt + cross-AI
+	// DoAction bridges absent), DoAction(ACTION_SACRIFICE) /
+	// DoCastAOE(Sacrifice Beam 56150) (no DoAction bridge —
+	// drakkari_colossus precedent; no DoCastAOE bridge), JustSummoned
+	// / SummonedCreatureDies / EnterEvadeMode / MovementInform /
+	// GetData(DATA_VOLUNTEER_WORK) legs, npc_twilight_volunteer (30385
+	// entry-verifiable — ahnkahet.h, zero registration: whole AI rides
+	// instance + cross-AI DoAction + movement + despawn bridges —
+	// entry-verifiable-but-bridge-blocked queue), spell_random_
+	// lightning_visual_effect (no SpellScript binding bridge — razelikh
+	// precedent), and achievement_volunteer_work (no achievement-
+	// criteria bridge — snakes precedent). The Ahn'kahet dungeon boss
+	// roster closes with this unit (elder_nadox 29309, taldaram 29308,
+	// amanitar 30258, volazj 29311, jedoga 29310).
+	RegisterLuaBoss("boss_jedoga_shadowseeker", 29310)
+
 	// npc_slad_ran_constrictor: Gundrak script, entry 29713
 	// (boss_slad_ran.cpp CREATURE_CONSTRICTORS — kalecgos pass).
 	// ScriptedAI. Ported arm: Grip of Slad'ran 55093 on the victim
