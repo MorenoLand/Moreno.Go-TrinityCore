@@ -5054,4 +5054,24 @@ func init() {
 	// are bridge-blocked — documented in the lua header.
 	RegisterLuaBoss("boss_yogg_saron", 33134)
 	RegisterLuaBoss("boss_yogg_saron", 33288)
+	// Algalon the Observer (Ulduar) — boss_algalon_the_observer.cpp,
+	// AddSC_boss_algalon_the_observer() (loader decl 123 / call 318) — the
+	// FOURTEENTH group of the "// Ulduar" block, the last Ulduar boss group
+	// (boss_yogg_saron -> boss_algalon_the_observer; next call is
+	// AddSC_instance_ulduar()). Bridgeable arms: KilledUnit player-gated
+	// Talk(SAY_ALGALON_KILL 20) (event 3 — the razuvious player-gated
+	// variant precedent — the thirty-fifth player-gated variant ported),
+	// with the C++ _hasYelled 1s rate limit modeled as an os.time()
+	// per-guid deadline (1s resolution); DamageTaken phase-two
+	// Talk(SAY_ALGALON_PHASE_TWO 11) gated on HealthBelowPctDamaged(20) +
+	// the _phaseTwo latch (event 9 — the moroes threshold+latch precedent).
+	// JustEngagedWith is _firstPull-gated (START_TIMER on first pull vs
+	// AGGRO later — no flag bridge, no single C++-exact yell), the 2.5%
+	// _fightWon damage=0 rides the unbridgeable outro machine, the intro /
+	// big-bang / cosmic-smash / collapsing-star / ascend / outro / despawn
+	// timer Talks, Brann's DoAction/MovementInform/timer Talks
+	// (NPC_BRANN_BRONZBEARD_ALG 34064), the collapsing-star _dying
+	// damage=0 (no Talk arm), the ten spell scripts and the GO script are
+	// bridge-blocked — documented in the lua header.
+	RegisterLuaBoss("boss_algalon_the_observer", 32871)
 }
