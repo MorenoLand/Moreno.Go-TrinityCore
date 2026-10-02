@@ -4237,4 +4237,26 @@ func init() {
 	// instance OnCreatureCreate SetPhaseMask leg has no instance
 	// bridge.
 	RegisterLuaBoss("boss_urom", 27655)
+	// Varos Cloudstrider (27447), The Oculus —
+	// lua_scripts/northrend/boss_varos.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
+	// (the BossAI::JustEngagedWith instance-bookkeeping leg has no
+	// bridge — tharon_ja precedent); JustDied Talk(SAY_DEATH 3)
+	// (_JustDied bookkeeping has no bridge — tharon_ja precedent;
+	// the DoCast(me, SPELL_DEATH_SPELL, true) leg has no cast
+	// bridge — the urom precedent).
+	// Documented-only: InitializeAI DoCast(SPELL_CENTRIFUGE_SHIELD
+	// 50053) gated on GetBossState(DATA_DRAKOS) != DONE; Reset
+	// (events.ScheduleEvent EVENT_AMPLIFY_MAGIC / EVENT_ENERGIZE_
+	// CORES_VISUAL / EVENT_CALL_AZURE); the UpdateAI energize-
+	// cores / azure-captain / amplify-magic event machine (no
+	// timer-event / cast / random-target bridges); npc_azure_ring_
+	// captain entry-unverifiable (no C++-evidenced entry — joins
+	// the entry-unverifiable queue; SpellHitTarget leg joins the
+	// SpellHit-15-never-fires queue; DoAction / MovementInform /
+	// instance legs have no bridges); spell_varos_centrifuge_
+	// shield joins the no-AuraScript-bridge queue; spell_varos_
+	// energize_core_area_enemy / _entry join the
+	// no-SpellScript-bridge queue.
+	RegisterLuaBoss("boss_varos", 27447)
 }
