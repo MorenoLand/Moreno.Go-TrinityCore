@@ -5333,4 +5333,16 @@ func init() {
 	// rimefang_icy_blast) and at_tyrannus_event_starter are
 	// bridge-blocked — documented in the lua header.
 	RegisterLuaBoss("boss_tyrannus", 36658)
+	// Frostsworn General (Halls of Reflection) — bridgeable Talk arms
+	// ported from halls_of_reflection.cpp; see
+	// lua_scripts/northrend/npc_frostsworn_general.lua.
+	// All other zone-script creatures in the file carry zero bridgeable
+	// arms (gauntlet/escape trash expose only scheduler-schedule legs;
+	// the intro/escape/uther/lich-king Talk machines ride instance
+	// SetData/DoAction/timer legs with no instance-script, timer, or
+	// sound bridges), so only 36723 is registered (the bronjahm
+	// npc_corrupted_soul_fragment precedent); the five area triggers and
+	// four spell scripts are bridge-blocked — documented in the lua
+	// header.
+	RegisterLuaBoss("npc_frostsworn_general", 36723)
 }
