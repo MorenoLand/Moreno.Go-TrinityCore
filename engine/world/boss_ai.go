@@ -3450,6 +3450,48 @@ func init() {
 	// snakes precedent + instance model absent).
 	RegisterLuaBoss("boss_krik_thir", 28684)
 
+	// boss_hadronox: Azjol-Nerub dungeon boss script, entry 28921
+	// (azjol_nerub.h NPC_HADRONOX — kalecgos pass; the
+	// GetAzjolNerubAI ScriptName binding is instance-shimmed, the
+	// creature_template binding DB-side). BossAI. Ported arm in
+	// lua_scripts/northrend/boss_hadronox.lua: EVENT_PIERCE_ARMOR
+	// DoCastVictim(Pierce Armor 53418) randtime(4s,7s) init, 10-15s
+	// repeat (the JustEngagedWith arms are independent schedulers —
+	// none of the unmodeled events gate this one). Documented in the
+	// lua file, not wired: the whole pre-fight/step movement machine
+	// (InitializeAI/SetStep react-state, SetHomePosition, MotionMaster
+	// MovePoint — motion-master bridge absent), SummonCrusherPack
+	// (summon STRAND + cross-AI SetData/DoAction absent), the
+	// final-step MovementInform door-webbing (DoCastAOE 53177/53185 —
+	// terestian/shazzrah precedent + motion-master), GetData/SetGUID
+	// cross-AI, the CanAIAttack home-distance leash, the setActive leg,
+	// EVENT_LEECH_POISON DoCastAOE(53030), EVENT_ACID_CLOUD
+	// DoCast(53400) (random-target SelectTarget — cairne/kazzak
+	// precedent), EVENT_WEB_GRAB DoCastAOE(57731), EVENT_PLAYER_CHECK
+	// + the DoAction machine (ACTION_CRUSHER_ENGAGED instance
+	// SetBossState + packs 2/3; ACTION_HADRONOX_MOVE — no DoAction
+	// bridge, drakkari_colossus precedent; instance model absent),
+	// EnterEvadeMode (trigger aura-scan, _DespawnAtEvade,
+	// summons.DespawnAll — terestian precedent, ObjectAccessor _anubar
+	// despawn), the UpdateAI casting-skip, DamageTaken NPC safeguard
+	// (no DamageTaken hook — npc_unkor_the_ruthless precedent — +
+	// health-pct — doomwalker precedent), JustSummoned summons.Summon,
+	// npc_anub_ar_crusher (28922 entry-verifiable — zero registration:
+	// the whole npc_hadronox_crusherPackAI passive pack machine is
+	// unbridged, and wiring the Talk(SAY_AGGRO 1)/EVENT_SMASH(53318)
+	// arms without the REACT_PASSIVE model fails the C++-exact bar —
+	// amanitar mushrooms precedent; frenzy behind the DamageTaken +
+	// health-pct bridges; JustDied DoAction behind the DoAction
+	// bridge), the crusher-pack champion/crypt-fiend/necromancer and
+	// foe champion/crypt-fiend/necromancer NPCs (entries unverifiable
+	// from C++ — bridgeable-but-entry-blocked queue; rotation arms
+	// port-pattern-ready), the three periodic-summon AuraScripts, the
+	// leeching-poison AuraScript and the web-doors SpellScript (no
+	// binding bridge — razelikh precedent), and
+	// achievement_hadronox_denied (no achievement-criteria bridge —
+	// snakes precedent + cross-AI GetData absent).
+	RegisterLuaBoss("boss_hadronox", 28921)
+
 	// npc_slad_ran_constrictor: Gundrak script, entry 29713
 	// (boss_slad_ran.cpp CREATURE_CONSTRICTORS — kalecgos pass).
 	// ScriptedAI. Ported arm: Grip of Slad'ran 55093 on the victim
