@@ -5228,4 +5228,20 @@ func init() {
 	// achievement_dehydration GetData check are bridge-blocked —
 	// documented in the lua header.
 	RegisterLuaBoss("boss_ichoron", 29313)
+	// AddSC_boss_xevozz: Xevozz (Violet Hold) — ported arms
+	// (lua_scripts/northrend/boss_xevozz.lua): JustEngagedWith
+	// unconditional Talk(SAY_AGGRO 0) (event 1 — the auriaya
+	// engage-port precedent), KilledUnit player-gated Talk(SAY_SLAY 1)
+	// (event 3 — the razuvious player-gated variant precedent),
+	// JustDied unconditional Talk(SAY_DEATH 2) (event 4 — the sjonnir
+	// JustDied-Talk precedent). The SAY_SPAWN / SAY_CHARGED enum
+	// entries are never Talk()ed (dead enum text); Talk(SAY_SUMMON_
+	// ENERGY) rides the SpellHit leg (no SpellHit bridge) and
+	// Talk(SAY_REPEAT_SUMMON) rides the ScheduleTasks summon leg (no
+	// timer bridge); npc_ethereal_sphere (29271) is DoAction-only and
+	// not registered; the ScheduleTasks machine, the JustReachedHome /
+	// JustSummoned / sphere-ScheduledTasks machines, the Reset self-
+	// casts and the spell_xevozz_summon_players SpellScript hook are
+	// bridge-blocked — documented in the lua header.
+	RegisterLuaBoss("boss_xevozz", 29266)
 }
