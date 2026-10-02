@@ -5400,4 +5400,35 @@ func init() {
 	// no-AuraScript-bridge queue — documented in the lua header.
 	// First group of the "// Icecrown Citadel" block.
 	RegisterLuaBoss("boss_lord_marrowgar", 36612)
+
+	// Lady Deathwhisper (Icecrown Citadel) — bridgeable Talk arms
+	// ported from boss_lady_deathwhisper.cpp; see
+	// lua_scripts/northrend/boss_lady_deathwhisper.lua.
+	// boss_lady_deathwhisper: JustEngagedWith Talk(SAY_AGGRO 7)
+	// (event 1, the auriaya engage-port precedent);
+	// KilledUnit Talk(SAY_KILL 14) victim->GetTypeId() ==
+	// TYPEID_PLAYER gated (event 3, the razuvious player-gated
+	// variant precedent — THIRTEENTH ported variant, ELEVENTH
+	// identical to
+	// nalorakk/kelthuzad/gothik/thaddius/garfrost/krick/tyrannus/falric/marwyn/marrowgar);
+	// JustDied Talk(SAY_DEATH 16) (event 4, the sjonnir
+	// JustDied-Talk precedent). npc_darnavan: JustEngagedWith
+	// Talk(SAY_DARNAVAN_AGGRO 0) (event 1) registered for both
+	// raid-mode entries 38472 / 38485. No other bridgeable arm in
+	// the file: the intro DoAction/scheduler machine
+	// (Talk(SAY_INTRO_1 0 .. SAY_INTRO_7 6) — no-DoAction bridge /
+	// no-timer-bridge), the berserk/dominate-mind/dark-empowerment
+	// timer legs (no-timer-bridge), the phase-transition
+	// Talk(SAY_PHASE_2 8) + Talk(EMOTE_PHASE_2 9) mana-pct gate (no
+	// health-pct bridge), the cross-AI Talk(SAY_ANIMATE_DEAD 13)
+	// and darnavan->AI()->Talk(SAY_DARNAVAN_RESCUED 1) legs (no
+	// bridge), the four spell scripts (no-AuraScript-bridge /
+	// no-SpellScript-bridge queues), the cult adds / vengeful
+	// shades (zero own Talk, not registered) and the
+	// at_lady_deathwhisper_entrance trigger (unbridged-area-trigger
+	// queue) are bridge-blocked — documented in the lua header.
+	// Second group of the "// Icecrown Citadel" block.
+	RegisterLuaBoss("boss_lady_deathwhisper", 36855)
+	RegisterLuaBoss("npc_darnavan", 38472)
+	RegisterLuaBoss("npc_darnavan", 38485)
 }
