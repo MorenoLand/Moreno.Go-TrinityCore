@@ -4572,4 +4572,24 @@ func init() {
 	// / achievement bridges; joins the unmodeled-achievement
 	// queue).
 	RegisterLuaBoss("boss_volkhan", 28587)
+
+	// Maiden of Grief (27975), Halls of Stone —
+	// lua_scripts/northrend/boss_maiden_of_grief.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
+	// (event 1; the BossAI::JustEngagedWith passthrough and the
+	// DoStartTimedAchievement(ACHIEV_GOOD_GRIEF_START_EVENT 20383)
+	// leg have no bridges); KilledUnit player-gated Talk(SAY_SLAY 1)
+	// (event 3 — razuvious player-gated variant precedent,
+	// nineteenth player-gated variant ported); JustDied
+	// Talk(SAY_DEATH 2) (event 4; _JustDied passthrough has no
+	// bridge).
+	// Documented-only: Reset / Initialize (the four ScheduleEvent
+	// legs + _Reset() + DoStopTimedAchievement — no timer /
+	// achievement bridges); the UpdateAI event machine
+	// (PARTING_SORROW random-target 59723; STORM_OF_GRIEF
+	// DoCastVictim 50752; SHOCK_OF_SORROW threat reset + Talk(3)
+	// SAY_STUN + DoCastAOE 50760; PILLAR_OF_WOE random-target /
+	// victim 50761 — no timer-event / cast / target-selection /
+	// threat bridges; Talk(3) rides the SHOCK_OF_SORROW machine).
+	RegisterLuaBoss("boss_maiden_of_grief", 27975)
 }
