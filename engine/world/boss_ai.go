@@ -4447,4 +4447,36 @@ func init() {
 	RegisterLuaBoss("npc_tenebron", 30452)
 	RegisterLuaBoss("npc_shadron", 30451)
 	RegisterLuaBoss("npc_vesperon", 30449)
+
+	// General Bjarngrim (28586), Halls of Lightning —
+	// lua_scripts/northrend/boss_bjarngrim.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
+	// (event 1; the CallForHelp(30.0f) lieutenant-fetch leg and
+	// instance->SetBossState(DATA_BJARNGRIM, IN_PROGRESS) have no
+	// bridges); KilledUnit unconditional Talk(SAY_SLAY 4)
+	// (event 3 — anubrekhan unconditional variant precedent);
+	// JustDied Talk(SAY_DEATH 5) (event 4; the
+	// SetBossState(DATA_BJARNGRIM, DONE) leg has no instance
+	// bridge).
+	// Documented-only: npc_stormforged_lieutenant (29240 — entry
+	// verifiable from the local enum, the acolyte precedent — but no
+	// Talk arms anywhere: JustEngagedWith is instance-gated
+	// AttackStart, UpdateAI is cast-gated (ARC_WELD 59085 /
+	// RENEW_STEEL_N 52774) — no instance / cast / timer bridges —
+	// no registration); boss_bjarngrim Reset / Initialize
+	// (canBuff AddAura TEMPORARY_ELECTRICAL_CHARGE 52092; the
+	// unassigned-GUID lieutenant respawn loop; stance-reset +
+	// DoCast(DEFENSIVE_STANCE 53790); SetEquipmentSlots 37871 /
+	// 35642; SetBossState NOT_STARTED — no aura / cast /
+	// equipment / instance bridges); EnterEvadeMode (canBuff flag —
+	// no bridge); DoRemoveStanceAura (no aura-removal bridge);
+	// UpdateAI (the stance-change machine — Talk(SAY_DEFENSIVE_STANCE
+	// 1 / SAY_BATTLE_STANCE 2 / SAY_BERSEKER_STANCE 3) +
+	// Talk(EMOTE 6 / 7 / 8) riding a no-timer-event machine, and
+	// the stance-switched DoCastSelf / DoCastVictim timer events
+	// (SPELL_REFLECTION 36096 / KNOCK_AWAY 52029 / PUMMEL 12555 /
+	// IRONFORM 52022; INTERCEPT 58769 / WHIRLWIND 52027 /
+	// CLEAVE 15284; MORTAL_STRIKE 16856 / SLAM 52026) — no
+	// timer-event / cast bridges).
+	RegisterLuaBoss("boss_bjarngrim", 28586)
 }
