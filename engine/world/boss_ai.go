@@ -4184,4 +4184,28 @@ func init() {
 	// bridge; achievement_intense_cold (OnCheck _intenseColdList)
 	// joins the no-achievement-bridge queue.
 	RegisterLuaBoss("boss_keristrasza", 26723)
+
+	// Drakos the Interrogator (27654), The Oculus —
+	// lua_scripts/northrend/boss_drakos.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
+	// (the BossAI::JustEngagedWith instance-bookkeeping leg has no
+	// bridge — tharon_ja precedent; the three events.ScheduleEvent
+	// legs have no timer-event bridge); KilledUnit Talk(SAY_KILL 1)
+	// C++-UNCONDITIONAL (the anubrekhan unconditional variant —
+	// second unconditional, the eighth ported variant overall);
+	// JustDied Talk(SAY_DEATH 2) (_JustDied bookkeeping has no
+	// bridge; the instance->DoStartTimedAchievement(ACHIEV_TIMED_
+	// START_EVENT 18153) leg has no achievement bridge —
+	// kelthuzad/thaddius precedent).
+	// Documented-only: Reset Initialize + _Reset() (no timer-event /
+	// instance bridges); the UpdateAI event machine —
+	// EVENT_BOMB_SUMMON SummonCreature(NPC_UNSTABLE_SPHERE 28166)
+	// 2s, EVENT_MAGIC_PULL DoCast(SPELL_MAGIC_PULL 51336) 15s,
+	// EVENT_STOMP Talk(SAY_STOMP 4)+DoCast(SPELL_THUNDERING_STOMP
+	// 50774) 15s (no timer-event/cast/summon bridges);
+	// npc_unstable_sphere entry-unverifiable (28166, local-enum-
+	// only) — no registration (Reset self-auras + MoveRandom +
+	// DespawnOrUnsummon(19s), UpdateAI pulse timer 3s DoCast(
+	// SPELL_UNSTABLE_SPHERE_PULSE 50757) — no bridges).
+	RegisterLuaBoss("boss_drakos", 27654)
 }
