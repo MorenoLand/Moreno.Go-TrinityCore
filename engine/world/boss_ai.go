@@ -5838,3 +5838,33 @@ func init() {
 	// lua header. Fourth group of the "// Ruby Sanctum" block.
 	RegisterLuaBoss("boss_saviana_ragefire", 39747)
 }
+
+func init() {
+	// General Zarithrian (39746) — Lua port of
+	// src/server/scripts/Northrend/ChamberOfAspects/RubySanctum/boss_general_zarithrian.cpp
+	// (2 CreatureScripts: boss_general_zarithrian (BossAI, DATA_GENERAL_ZARITHRIAN = 1)
+	// + npc_onyx_flamecaller (ScriptedAI, NPC_ONYX_FLAMECALLER = 39814, zero Talk —
+	// not registered, the bronjahm precedent)); both registered from inside
+	// AddSC_boss_general_zarithrian(); loader decl 192 / call 387 per
+	// northrend_script_loader.cpp — the FIFTH group of the
+	// "// Ruby Sanctum" block. Entry-verifiable: ruby_sanctum.h
+	// NPC_GENERAL_ZARITHRIAN = 39746 (line 72), DATA_GENERAL_ZARITHRIAN = 1
+	// (line 32); instance_ruby_sanctum.cpp creatureData binds
+	// NPC_GENERAL_ZARITHRIAN -> DATA_GENERAL_ZARITHRIAN (line 52); ScriptName
+	// bindings are DB-side as usual.
+	// Ported arms in lua_scripts/northrend/boss_general_zarithrian.lua:
+	// boss_general_zarithrian JustEngagedWith Talk(SAY_AGGRO 0) (event 1,
+	// the auriaya precedent); KilledUnit Talk(SAY_KILL 1) gated on
+	// victim->GetTypeId() == TYPEID_PLAYER (event 3, the razuvious
+	// player-gated variant precedent); JustDied Talk(SAY_DEATH 3)
+	// (event 4, the sjonnir precedent). No other bridgeable arm in the
+	// file: UpdateAI Talk(SAY_ADDS 2) rides EVENT_SUMMON_ADDS
+	// (no-timer-bridge); the Reset/CanAIAttack instance-state legs (no
+	// instance-script bridge); the JustSummoned add-registration and
+	// EnterEvadeMode summons.DespawnAll()/_DespawnAtEvade() legs (no
+	// summon-registry / evade-model bridges); the DoCastSelf/DoCastVictim
+	// legs (no-cast bridge); npc_onyx_flamecaller zero Talk (not
+	// registered) — all documented in the lua header. Fifth group of
+	// the "// Ruby Sanctum" block.
+	RegisterLuaBoss("boss_general_zarithrian", 39746)
+}
