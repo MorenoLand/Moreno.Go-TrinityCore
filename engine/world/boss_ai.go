@@ -5244,4 +5244,13 @@ func init() {
 	// casts and the spell_xevozz_summon_players SpellScript hook are
 	// bridge-blocked — documented in the lua header.
 	RegisterLuaBoss("boss_xevozz", 29266)
+
+	// Zuramat the Obliterator (Violet Hold) — bridgeable Talk arms
+	// ported from boss_zuramat.cpp; see lua_scripts/northrend/
+	// boss_zuramat.lua. SAY_SPAWN / SAY_SHIELD / SAY_WHISPER are dead
+	// enum text (never Talk()ed); the JustReachedHome instance->SetData
+	// leg, the ScheduleTasks machine, the SummonedCreatureDies/Despawn
+	// + npc_void_sentry DoAction machine and the achievement_void_dance
+	// GetData check are bridge-blocked — documented in the lua header.
+	RegisterLuaBoss("boss_zuramat", 29314)
 }
