@@ -6059,4 +6059,19 @@ func init() {
 	// no-timer / no-cast / no-random-target / no-summon /
 	// no-motion / no-instance bridges — documented-only.
 	RegisterLuaBoss("boss_grandmaster_vorpil", 18732)
+	// boss_illidan.lua — ported bridgeable arm: boss_illidan_stormrageAI::KilledUnit
+	// Talk(SAY_ILLIDAN_KILL 1) gated on victim->GetTypeId() == TYPEID_PLAYER —
+	// the razuvious player-gated precedent (event 3). The rest — intro/combat/
+	// air-phase/demon-form/phase-4/outro timer Talks (ENRAGE/DUPLICITY/UNCONVINCED/
+	// PREPARED/EYE_BLAST/MORPH/SHADOW_PRISON/CONFRONT_MAIEV/FRENZY/TAUNT/DEFEATED),
+	// the DoAction SAY_ILLIDAN_MINION Talk (no-action bridge), the no-Talk
+	// JustEngagedWith/JustDied (no-instance bridge), the phase-transition
+	// DamageTaken legs, the npc_akama_illidan gossip/MovementInform/timer Talks
+	// (no-gossip / no-motion / no-timer bridges — NOT registered), the zero-Talk
+	// companion AIs (parasitic_shadowfiend / blade_of_azzinoth / flame_of_azzinoth /
+	// illidan_db_target / shadow_demon / cage_trap_trigger / illidari_elite /
+	// illidan_generic_fire — NOT registered), the npc_maiev DamageTaken/DoAction/
+	// timer Talks (damage-gated / no-action / no-timer — NOT registered), and the
+	// 21 SpellScriptLoaders (no-SpellScript / no-AuraScript bridges) — documented-only.
+	RegisterLuaBoss("boss_illidan", 22917)
 }
