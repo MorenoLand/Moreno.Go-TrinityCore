@@ -3526,6 +3526,39 @@ func init() {
 	// SpellScript/AuraScript binding bridge — razelikh precedent).
 	RegisterLuaBoss("boss_anub_arak", 29120)
 
+	// boss_trollgore: Drak'Tharon Keep dungeon boss script, entry 26630
+	// (drak_tharon_keep.h NPC_TROLLGORE — kalecgos pass; the
+	// GetDrakTharonKeepAI ScriptName binding is instance-shimmed, the
+	// creature_template binding DB-side). BossAI. Ported arms in
+	// lua_scripts/northrend/boss_trollgore.lua: JustEngagedWith
+	// Talk(SAY_AGGRO 0) (event 1; the EVENT_CONSUME/EVENT_CORPSE_EXPLODE
+	// schedules ride the absent DoCastAOE bridge — terestian/shazzrah
+	// precedent — and EVENT_SPAWN rides the absent instance GetGuidData +
+	// ObjectAccessor cross-AI bridges), EVENT_CRUSH DoCastVictim(49639)
+	// randtime(1s,5s) init, 10-15s repeat, EVENT_INFECTED_WOUND
+	// DoCastVictim(49637) randtime(10s,60s) init, 25-35s repeat (the
+	// JustEngagedWith schedules are independent — none of the unmodeled
+	// events gate these two), KilledUnit Talk(SAY_KILL 1) player-gated
+	// (event 3 — nalorakk precedent), JustDied Talk(SAY_DEATH 4)
+	// (event 4; _JustDied instance bookkeeping has no bridge).
+	// Documented in the lua file, not wired: EVENT_CONSUME Talk(2) +
+	// DoCastAOE(49380) and EVENT_CORPSE_EXPLODE Talk(3) + DoCastAOE(49555)
+	// (no DoCastAOE bridge), EVENT_SPAWN invader-summoner trigger casts
+	// (instance model absent), the _consumptionJunction latch (aura-stack
+	// 49381/59805 — no aura-stack bridge), GetData(DATA_CONSUMPTION_
+	// JUNCTION) cross-AI (its only caller is achievement_consumption_
+	// junction — no achievement-criteria bridge, snakes precedent +
+	// cross-AI GetData absent), JustSummoned MovePoint choreography
+	// (motion-master + summon STRAND bridges absent), the UpdateAI
+	// casting-skip, npc_drakkari_invader (27709/27753/27754 entry-verifiable
+	// — zero registration: Dismount/SetImmuneToAll + DoCastAOE(49405)
+	// behind motion + DoCastAOE bridges), spell_trollgore_consume
+	// (49380/59803) + spell_trollgore_invader_taunt (49405) + spell_
+	// trollgore_corpse_explode (49555/59807) (no SpellScript/AuraScript
+	// binding bridge — razelikh precedent), and
+	// achievement_consumption_junction.
+	RegisterLuaBoss("boss_trollgore", 26630)
+
 	// npc_slad_ran_constrictor: Gundrak script, entry 29713
 	// (boss_slad_ran.cpp CREATURE_CONSTRICTORS — kalecgos pass).
 	// ScriptedAI. Ported arm: Grip of Slad'ran 55093 on the victim
