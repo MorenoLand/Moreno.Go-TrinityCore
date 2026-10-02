@@ -5547,4 +5547,40 @@ func init() {
 	// the no-AuraScript-bridge queue — documented in the lua
 	// header. Seventh group of the "// Icecrown Citadel" block.
 	RegisterLuaBoss("boss_professor_putricide", 36678)
+
+	// Blood Prince Council (Icecrown Citadel) — bridgeable Talk arms
+	// ported from boss_blood_prince_council.cpp; see
+	// lua_scripts/northrend/boss_blood_prince_council.lua.
+	// boss_prince_keleseth_icc (37972, NPC_PRINCE_KELESETH),
+	// boss_prince_taldaram_icc (37973, NPC_PRINCE_TALDARAM),
+	// boss_prince_valanar_icc (37970, NPC_PRINCE_VALANAR) — the three
+	// share the BloodPrincesBossAI base: KilledUnit Talk(kill text)
+	// victim->GetTypeId() == TYPEID_PLAYER gated, entry-switched
+	// (event 3, the razuvious player-gated variant precedent);
+	// JustDied Talk(death text) entry-switched (event 4, the sjonnir
+	// JustDied-Talk precedent). No other bridgeable arm in the file:
+	// Talk(SelectInvocationSay()) rides ACTION_CAST_INVOCATION
+	// (no-DoAction bridge); the controller's EVENT_INVOCATION_OF_BLOOD
+	// Talk(textId) is cross-AI Talk on a scheduler leg (no bridge);
+	// keleseth Talk(EMOTE_KELESETH_BERSERK / SAY_KELESETH_SPECIAL),
+	// taldaram Talk(EMOTE_TALDARAM_FLAME / EMOTE_TALDARAM_BERSERK /
+	// SAY_TALDARAM_SPECIAL), valanar Talk(SAY_VALANAR_BERSERK /
+	// SAY_VALANAR_SPECIAL / EMOTE_VALANAR_SHOCK_VORTEX) ride
+	// scheduler legs (no-timer-bridge). boss_blood_council_controller
+	// has zero own Talk lines — not registered (the bronjahm
+	// npc_corrupted_soul_fragment precedent); npc_blood_queen_lana_thel
+	// Talk(SAY_INTRO_1) rides the ACTION_START_INTRO DoAction leg
+	// (no-DoAction bridge) and Talk(SAY_INTRO_2) the EVENT_INTRO_1
+	// scheduler leg (no-timer-bridge) — not registered;
+	// npc_ball_of_flame / npc_kinetic_bomb / npc_dark_nucleus have
+	// zero Talk lines — not registered. The 6 spell scripts join the
+	// no-SpellScript-bridge queue, the 5 aura scripts the
+	// no-AuraScript-bridge queue, and
+	// at_blood_prince_council_start_intro the no-AreaTrigger bridge
+	// queue (the boss_anubrekhan at_anubrekhan_entrance precedent) —
+	// documented in the lua header. Eighth group of the
+	// "// Icecrown Citadel" block.
+	RegisterLuaBoss("boss_prince_keleseth_icc", 37972)
+	RegisterLuaBoss("boss_prince_taldaram_icc", 37973)
+	RegisterLuaBoss("boss_prince_valanar_icc", 37970)
 }
