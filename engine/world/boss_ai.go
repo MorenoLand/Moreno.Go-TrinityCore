@@ -3921,4 +3921,40 @@ func init() {
 	// SpellScript/AuraScript queue.
 	RegisterLuaBoss("boss_twin_valkyr", 34497)
 	RegisterLuaBoss("boss_twin_valkyr", 34496)
+	// Northrend Beasts (Trial of the Crusader) — fight logic in
+	// lua_scripts/northrend/boss_northrend_beasts.lua. PORTED: boss_gormok
+	// (34796) EVENT_IMPALE (DoCastVictim 66331, 10s/10s) and
+	// EVENT_STAGGERING_STOMP (DoCastVictim 66330, 15s/22s); no phase args
+	// on gormok's ScheduleTasks — C++ runs them whenever UpdateVictim()
+	// holds. DOCUMENTED-BLOCKED: gormok's intro machine (MovementInform ->
+	// EVENT_ENGAGE — no hook; DoUseDoorOrButton/immune/react/summon-STRAND
+	// legs unbridged), EVENT_THROW (vehicle passengers — no vehicle
+	// bridge), PassengerBoarded RISING_ANGER, JustDied/EnterEvadeMode
+	// (instance model), DoCastSelf SPELL_TANKING_GORMOK (SERVERSIDE, rides
+	// the intro machine); npc_snobold_vassal (34800) — whole vehicle mount
+	// machine (no vehicle/SetGUID bridges) + instance DATA_SNOBOLD_COUNT +
+	// EVENT_FIRE_BOMB (random-target — cairne/kazzak precedent);
+	// npc_beasts_combat_stalker (36549) — Reset/DoAction legs (cross-AI
+	// DoAction, no bridge), EVENT_BERSERK 26662 (instance model + no
+	// difficulty bridge — kelidan precedent); boss_dreadscale (34799) /
+	// boss_acidmaw (35144) — the jormungar submerge/phase machine: submerge
+	// / emerge (motion/flag/react/aura/display bridges absent), EVENT_BITE
+	// DoCastVictim (phase-gated behind the unbridged machine — jedoga
+	// over-cast bar), EVENT_SPEW / EVENT_SWEEP (DoCastAOE —
+	// terestian/shazzrah precedent), EVENT_SLIME_POOL (summon STRAND
+	// absent), EVENT_SPRAY (random-target), EVENT_SUMMON_ACIDMAW (summon
+	// STRAND), JustDied/DoAction ACTION_ENRAGE (instance model + cross-AI
+	// DoAction); npc_jormungars_slime_pool / npc_fire_bomb
+	// (entry-unverifiable, summoned by spell — entry DB-side; self-cast
+	// legs port-pattern-ready but entry-blocked); boss_icehowl (34797) —
+	// the whole charge machine (MoveJump/MoveCharge/MovementInform hooks,
+	// random charge target, instance DATA_FURIOUS_CHARGE) +
+	// PHASE_COMBAT-gated rotation (EVENT_FEROCIOUS_BUTT DoCastVictim /
+	// EVENT_WHIRL DoCastSelf port-pattern-ready in isolation but
+	// suspended/rescheduled around the unbridged charge — jedoga bar) +
+	// EVENT_ARCTIC_BREATH (random-target) + DoAction ENRAGE/TRAMPLE_FAIL
+	// (gated via spell_icehowl_trample — no SpellScript binding bridge);
+	// the twelve spell scripts — no SpellScript/AuraScript binding bridge
+	// (razelikh precedent); join the SpellScript/AuraScript queue.
+	RegisterLuaBoss("boss_gormok", 34796)
 }
