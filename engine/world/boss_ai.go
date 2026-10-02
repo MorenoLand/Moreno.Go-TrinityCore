@@ -4350,4 +4350,42 @@ func init() {
 	// == NPC_HOVER_DISK_MELEE gate — no achievement bridge, joins the
 	// unmodeled-achievement queue).
 	RegisterLuaBoss("boss_malygos", 28859)
+
+	// Sartharion (28860), Obsidian Sanctum —
+	// lua_scripts/northrend/boss_sartharion.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_SARTHARION_AGGRO 0)
+	// (the BossAI::JustEngagedWith bookkeeping (setActive /
+	// CheckRequiredBosses / SetBossState IN_PROGRESS), DoZoneInCombat, the
+	// FetchDragons machine (drake power-aura casts 61248 / 58105 / 61251,
+	// SPELL_WILL_OF_SARTHARION 61254, loot-mode ladder, drake init
+	// MovePoints, UNIT_FLAG_NON_ATTACKABLE legs) and the nine-event
+	// ScheduleEvent calls have no bridges — tharon_ja / malygos
+	// BossAI-bookkeeping precedent); KilledUnit player-gated
+	// Talk(SAY_SARTHARION_SLAY 8) (event 3 — razuvious player-gated
+	// variant precedent); JustDied Talk(SAY_SARTHARION_DEATH 6) (the
+	// _JustDied bookkeeping has no bridge; the three drake DisappearAndDie
+	// legs via instance->GetGuidData(DATA_TENEBRON / DATA_SHADRON /
+	// DATA_VESPERON) have no instance bridge).
+	// Documented-only: Reset / Initialize (DrakeRespawn — instance
+	// boss-state-gated drake respawn + MoveTargetedHome + flag legs — no
+	// instance / motion bridges; SetBossState(DATA_PORTAL_OPEN,
+	// NOT_STARTED) — no instance bridge); JustReachedHome (_Reset()
+	// bookkeeping — no bridge); AddDrakeLootMode (loot-mode ladder — no
+	// loot-mode bridge); FetchDragons / CallDragon (entry-switched
+	// Talk(SAY_SARTHARION_CALL_TENEBRON 3 / CALL_SHADRON 4 / CALL_VESPERON 5)
+	// + AddAura power-of legs + MovePoint legs — no timer-event / cast /
+	// motion bridges); GetData TWILIGHT_ACHIEVEMENTS (drakeCount — no
+	// achievement bridge, joins the unmodeled-achievement queue);
+	// CastLavaStrikeOnTarget (fire-cyclone grid search + random-cyclone
+	// CastSpell(SPELL_LAVA_STRIKE 57571) — no creature-search / cast
+	// bridges); the UpdateAI nine-event machine (hard enrage SPELL_PYROBUFFET
+	// 56916; flame tsunami WHISPER_LAVA_CHURN 9 + NPC_FLAME_TSUNAMI 30616
+	// summon waves; flame breath Talk(SAY_BREATH 2) + SPELL_FLAME_BREATH
+	// 56908; tail lash SPELL_TAIL_LASH 56910; cleave SPELL_CLEAVE 56909;
+	// lava strike + urand SAY_SARTHARION_SPECIAL 7; call-dragon legs) +
+	// the 35%-health SPELL_BERSERK 61632 leg (Talk SAY_SARTHARION_BERSERK 1,
+	// gated on the three drake boss states) + the 10%-health soft-enrage
+	// lava-strike cadence shift — no timer-event / cast / health / instance
+	// bridges.
+	RegisterLuaBoss("boss_sartharion", 28860)
 }
