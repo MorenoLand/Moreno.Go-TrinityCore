@@ -5465,4 +5465,30 @@ func init() {
 	// the no-achievement bridge queue — documented in the lua
 	// header. Fourth group of the "// Icecrown Citadel" block.
 	RegisterLuaBoss("boss_deathbringer_saurfang", 37813)
+
+	// Festergut (Icecrown Citadel) — bridgeable Talk arms ported
+	// from boss_festergut.cpp; see
+	// lua_scripts/northrend/boss_festergut.lua.
+	// boss_festergut: JustEngagedWith Talk(SAY_AGGRO 1) (event 1,
+	// the auriaya engage-port precedent); KilledUnit Talk(SAY_KILL
+	// 7) victim->GetTypeId() == TYPEID_PLAYER gated (event 3, the
+	// razuvious player-gated variant precedent — FIFTEENTH ported
+	// variant, THIRTEENTH identical to
+	// nalorakk/kelthuzad/gothik/thaddius/garfrost/krick/tyrannus/falric/marwyn/marrowgar/deathwhisper/saurfang);
+	// JustDied Talk(SAY_DEATH 9) (event 4, the sjonnir JustDied-Talk
+	// precedent). No other bridgeable arm in the file:
+	// Talk(SAY_PUNGENT_BLIGHT 4) / Talk(EMOTE_WARN_PUNGENT_BLIGHT
+	// 5) / Talk(EMOTE_GAS_SPORE 2) / Talk(EMOTE_WARN_GAS_SPORE 3)
+	// / Talk(SAY_BERSERK 8) ride scheduler legs (no-timer-bridge);
+	// Talk(EMOTE_PUNGENT_BLIGHT 6) rides the pungent-blight
+	// SpellScript and Talk(SAY_STINKY_DEAD 0) rides the stinky
+	// cross-AI JustDied leg (no-SpellScript / no cross-AI-Talk
+	// bridge). npc_stinky_icc has zero own Talk lines — not
+	// registered (the bronjahm npc_corrupted_soul_fragment
+	// precedent). The 2 spell scripts join the
+	// no-SpellScript-bridge queue, the 1 aura script the
+	// no-AuraScript-bridge queue, and achievement_flu_shot_shortage
+	// the no-achievement bridge queue — documented in the lua
+	// header. Fifth group of the "// Icecrown Citadel" block.
+	RegisterLuaBoss("boss_festergut", 36626)
 }
