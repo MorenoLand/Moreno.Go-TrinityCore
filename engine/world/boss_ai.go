@@ -5669,4 +5669,34 @@ func init() {
 	RegisterLuaBoss("npc_captain_brandon", 37123)
 	RegisterLuaBoss("npc_captain_grondel", 37124)
 	RegisterLuaBoss("npc_captain_rupert", 37125)
+
+	// npc_the_lich_king_controller: Icecrown Citadel script, entry 16980
+	// (icecrown_citadel.h NPC_THE_LICH_KING_VALITHRIA — kalecgos pass; the
+	// RegisterIcecrownCitadelCreatureAI ScriptName binding is
+	// instance-shimmed, the creature_template binding DB-side).
+	// ScriptedAI. Ported arms in
+	// lua_scripts/northrend/boss_valithria_dreamwalker.lua:
+	// JustEngagedWith Talk(SAY_LICH_KING_INTRO 0) (event 1, the auriaya
+	// engage-port precedent). No other bridgeable arm in the file:
+	// boss_valithria_dreamwalker (36789) exposes zero bridgeable arms
+	// (NOT registered) — Talk(SAY_VALITHRIA_SUCCESS 7 /
+	// SAY_VALITHRIA_75_PERCENT 2) ride HealReceived legs (no
+	// HealReceived bridge); Talk(SAY_VALITHRIA_25_PERCENT 3 /
+	// SAY_VALITHRIA_DEATH 4) ride DamageTaken legs (no DamageTaken
+	// bridge — she never actually dies, damage is negated); Talk
+	// (SAY_VALITHRIA_ENTER_COMBAT 0 / SAY_VALITHRIA_BERSERK 6 /
+	// SAY_VALITHRIA_DREAM_PORTAL 1) ride scheduler legs (no-timer-bridge;
+	// the EVENT_INTRO_TALK leg is scheduled from DoAction
+	// ACTION_ENTER_COMBAT — no-DoAction bridge);
+	// SAY_VALITHRIA_PLAYER_DEATH 5 is declared but never referenced by a
+	// Talk() call (dead text evidence); the lich king controller's Reset
+	// scheduler / JustSummoned / UpdateAI summoner machine legs have no
+	// bridges; npc_green_dragon_combat_trigger / npc_risen_archmage /
+	// npc_blazing_skeleton / npc_suppresser / npc_blistering_zombie /
+	// npc_gluttonous_abomination / npc_dream_portal / npc_dream_cloud
+	// have zero Talk lines (NOT registered); the 9 spell scripts join
+	// the no-SpellScript-bridge queue and achievement_portal_jockey the
+	// no-achievement-criteria queue — documented in the lua header.
+	// Eleventh group of the "// Icecrown Citadel" block.
+	RegisterLuaBoss("npc_the_lich_king_controller", 16980)
 }
