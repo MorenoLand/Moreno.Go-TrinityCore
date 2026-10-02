@@ -5431,4 +5431,38 @@ func init() {
 	RegisterLuaBoss("boss_lady_deathwhisper", 36855)
 	RegisterLuaBoss("npc_darnavan", 38472)
 	RegisterLuaBoss("npc_darnavan", 38485)
+
+	// Deathbringer Saurfang (Icecrown Citadel) — bridgeable Talk
+	// arms ported from boss_deathbringer_saurfang.cpp; see
+	// lua_scripts/northrend/boss_deathbringer_saurfang.lua.
+	// boss_deathbringer_saurfang: JustEngagedWith Talk(SAY_AGGRO 7)
+	// (event 1, the auriaya engage-port precedent);
+	// KilledUnit Talk(SAY_KILL 10) victim->GetTypeId() ==
+	// TYPEID_PLAYER gated (event 3, the razuvious player-gated
+	// variant precedent — FOURTEENTH ported variant, TWELFTH
+	// identical to
+	// nalorakk/kelthuzad/gothik/thaddius/garfrost/krick/tyrannus/falric/marwyn/marrowgar/deathwhisper).
+	// No other bridgeable arm in the file: Talk(SAY_FRENZY 11)
+	// rides a DamageTaken HealthBelowPct(31) gate (no health-pct
+	// bridge), Talk(SAY_DEATH 13) rides the DamageTaken FightWonValue
+	// health gate (JustDied is empty — the sjonnir JustDied-Talk
+	// precedent does not apply), Talk(SAY_MARK_OF_THE_FALLEN_CHAMPION
+	// 8) rides a SpellHitTarget switch (no-SpellHit-bridge queue),
+	// the intro Talk (SAY_INTRO_ALLIANCE_2/3/6/7,
+	// SAY_INTRO_HORDE_2/4/9) rides the scheduler machine
+	// (no-timer-bridge; DoAction legs have no-DoAction bridge), and
+	// Talk(SAY_BLOOD_BEASTS 9) / Talk(SAY_BERSERK 12) /
+	// Talk(EMOTE_SCENT_OF_BLOOD 14) ride scheduler legs
+	// (no-timer-bridge). npc_high_overlord_saurfang_icc and
+	// npc_muradin_bronzebeard_icc expose Talk only on
+	// DoAction/scheduler/movement legs (no-DoAction /
+	// no-timer-bridge / no-motion bridges; gossip entry is
+	// instance-model-blocked) and npc_saurfang_event has zero Talk
+	// lines — not registered (the bronjahm
+	// npc_corrupted_soul_fragment precedent). The 9 spell scripts
+	// join the no-SpellScript-bridge queue, the 3 aura scripts the
+	// no-AuraScript-bridge queue, and achievement_ive_gone_and_made_a_mess
+	// the no-achievement bridge queue — documented in the lua
+	// header. Fourth group of the "// Icecrown Citadel" block.
+	RegisterLuaBoss("boss_deathbringer_saurfang", 37813)
 }
