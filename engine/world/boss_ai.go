@@ -4503,4 +4503,35 @@ func init() {
 	// SpellScript bridge, joins the no-SpellScript-bridge
 	// queue).
 	RegisterLuaBoss("boss_loken", 28923)
+
+	// Ionar (28546), Halls of Lightning —
+	// lua_scripts/northrend/boss_ionar.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
+	// (event 1; instance->SetBossState(DATA_IONAR, IN_PROGRESS)
+	// has no instance bridge); KilledUnit player-gated
+	// Talk(SAY_SLAY 2) (event 3 — razuvious player-gated variant
+	// precedent, seventeenth player-gated variant ported);
+	// JustDied Talk(SAY_DEATH 3) (event 4;
+	// lSparkList.DespawnAll() and SetBossState(DATA_IONAR, DONE)
+	// have no bridges).
+	// Documented-only: Reset / Initialize (flag/timer/visibility
+	// legs — no bridges); SpellHit SPELL_DISPERSE 52770 split
+	// machine (spark summons, visibility, flags, motion — no
+	// bridges); CallBackSparks (no ObjectAccessor / motion
+	// bridges); DamageTaken invisible-damage-0 (no DamageTaken
+	// bridge); JustSummoned / SummonedCreatureDespawn (no
+	// summon-list / cast / target-selection / motion bridges);
+	// UpdateAI split machine (no timer / visibility / flag /
+	// cast / motion bridges); timer casts (STATIC_OVERLOAD 52658
+	// random-target; BALL_LIGHTNING 52780 victim — no timer-event
+	// / cast / target-selection bridges); disperse health check
+	// with Talk(SAY_SPLIT 1) riding the unmodeled machine; and
+	// npc_spark_of_ionar (NPC_SPARK_OF_IONAR 28926, local enum —
+	// no Talk arms anywhere, entry-verifiable but
+	// bridge-blocked: REACT_PASSIVE, MovementInform point
+	// machine, DamageTaken damage-0, UpdateAI boss-state/distance
+	// despawn machine — no react / motion / DamageTaken / timer
+	// / instance bridges; the stormforged_lieutenant
+	// no-bridgeable-arms precedent, no registration).
+	RegisterLuaBoss("boss_ionar", 28546)
 }
