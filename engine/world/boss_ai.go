@@ -4901,4 +4901,43 @@ func init() {
 	// GetData-based OnCheck — no GetData / achievement
 	// bridges; both join the unmodeled-achievement queue).
 	RegisterLuaBoss("boss_general_vezax", 33271)
+
+	// Assembly of Iron (Steelbreaker 32867 / Runemaster Molgeim
+	// 32927 / Stormcaller Brundir 32857), Ulduar —
+	// lua_scripts/northrend/boss_assembly_of_iron.lua.
+	// Ported arms (C++-exact): JustEngagedWith
+	// Talk(SAY_AGGRO 0) (event 1; the BossAI::JustEngagedWith
+	// passthrough, SetPhase / ScheduleEvent / DoCast
+	// SPELL_HIGH_VOLTAGE 61890 legs have no bridges — the
+	// auriaya engage-port precedent); KilledUnit player-gated
+	// Talk(SAY_SLAY 1) (event 3 — the razuvious player-gated
+	// variant precedent — the twenty-sixth / twenty-seventh /
+	// twenty-eighth player-gated variants ported); JustDied
+	// Talk(SAY_DEATH 3/4) (event 4; the _JustDied() passthrough,
+	// the instance GetBossState DONE check, the DONE branch
+	// (Talk SAY_ENCOUNTER_DEFEATED + DoCastAOE
+	// SPELL_KILL_CREDIT 65195), the SetLootRecipient leg and
+	// the supercharge DoAction cascade have no bridges — the
+	// sjonnir JustDied-Talk precedent).
+	// Documented-only: Reset / Initialize (all three — no
+	// bridges); DoAction(ACTION_SUPERCHARGE / ACTION_ADD_CHARGE
+	// — no DoAction bridge); GetData(DATA_PHASE_3 — no GetData
+	// bridge); the three UpdateAI event machines (fusion punch
+	// / static disruption / overwhelming power / rune of power
+	// / shield of runes / rune of death / rune of summoning /
+	// chain lightning / overload / lightning whirl / lightning
+	// tendrils flight machine / berserk — no timer-event /
+	// cast / summon / phase / movement / hover bridges; all
+	// timer-leg yells ride the unbridgeable event machine);
+	// the three spell scripts (spell_shield_of_runes /
+	// spell_assembly_meltdown / spell_assembly_rune_of_
+	// summoning — no AuraScript / SpellScript bridges; all
+	// three join the no-AuraScript / no-SpellScript-bridge
+	// queues); the achievement
+	// (achievement_assembly_i_choose_you — GetData-based
+	// OnCheck — no GetData / achievement bridges; joins the
+	// unmodeled-achievement queue).
+	RegisterLuaBoss("boss_steelbreaker", 32867)
+	RegisterLuaBoss("boss_runemaster_molgeim", 32927)
+	RegisterLuaBoss("boss_stormcaller_brundir", 32857)
 }
