@@ -3294,6 +3294,35 @@ func init() {
 	// precedent; EVENT_SPRINT 56354 arm port-pattern-ready).
 	RegisterLuaBoss("boss_elder_nadox", 29309)
 
+	// boss_prince_taldaram: Ahn'kahet dungeon boss script, entry 29308
+	// (ahnkahet.h NPC_PRINCE_TALDARAM — kalecgos pass; the
+	// GetAhnKahetAI ScriptName binding is instance-shimmed, the
+	// creature_template binding DB-side). Sole-source verified:
+	// "boss_prince_taldaram" (the creature-script registration name)
+	// is registered only from boss_prince_taldaram.cpp — the ICC hit
+	// boss_blood_prince_council.cpp is a distinct script,
+	// boss_prince_taldaram_icc, and does not collide.
+	// BossAI. Ported arms in lua_scripts/northrend/boss_prince_taldaram.lua:
+	// JustEngagedWith Talk(SAY_AGGRO 2); EVENT_BLOODTHIRST (DoCastSelf
+	// 55968, 10s init, 10s repeat); EVENT_CONJURE_FLAME_SPHERES
+	// (DoCast(victim) 55931, 5s init, 15s repeat); KilledUnit
+	// Talk(SAY_SLAY 3) player-gated; JustDied Talk(SAY_DEATH 4).
+	// Documented in the lua file, not wired: EVENT_VANISH plus the
+	// vanish/feed machine (threat-list gate absent, random-target
+	// SelectTarget bridge absent — cairne/kazzak precedent), the
+	// DamageTaken embrace-damage latch (no damage hook — unkor
+	// precedent; no difficulty bridge — kelidan precedent), the
+	// vanish-evade check (threat + evade bridges absent), the
+	// Reset/CheckSpheres/RemovePrison legs + ctor SetDisableGravity
+	// (instance-script model absent — standing blocker), the flame
+	// sphere NPC (30106/31686/31687 entry-verifiable but core arms
+	// behind the absent SetGUID/ObjectAccessor/motion-master/despawn
+	// bridges — terestian precedent), go_prince_taldaram_sphere (no
+	// GameObjectAI binding bridge — go_crystal_prison precedent),
+	// and both SpellScripts (no SpellScript binding bridge — razelikh
+	// precedent).
+	RegisterLuaBoss("boss_prince_taldaram", 29308)
+
 	// npc_slad_ran_constrictor: Gundrak script, entry 29713
 	// (boss_slad_ran.cpp CREATURE_CONSTRICTORS — kalecgos pass).
 	// ScriptedAI. Ported arm: Grip of Slad'ran 55093 on the victim
