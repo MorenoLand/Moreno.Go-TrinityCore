@@ -3154,4 +3154,26 @@ func init() {
 	// SPELL_GOBLIN_LAND_MINE / SPELL_WEEGLIS_BARREL are dead C++
 	// legs — documented in the lua file, not wired.
 	RegisterLuaBoss("npc_weegli_blastfuse", 7607)
+
+	// npc_qiraj_war_spawn: Silithus zone script, entries 15414
+	// (Qiraji Wasp), 15422 (Qiraji Tank), 15423 (Kaldorei Infantry),
+	// 15424 (Anubisath Conqueror) (zone_silithus.cpp enum
+	// AnachronosTheAncient — kalecgos passes for all four).
+	// ScriptedAI (not BossAI). Ported arms in
+	// lua_scripts/kalimdor/npc_qiraj_war_spawn.lua: Poison Cloud
+	// 28528 + Summon Poison Cloud 24319 (self, 38500ms init, 300s
+	// repeat), Frost Debuff 35871 (self, 58s init, 300s repeat),
+	// Fire Explosion 42075 (self, 80950ms init, 300s repeat) — all
+	// qiraji-side entries only (entry-gated as in C++); Stoned
+	// Channel visual 15533 (self, 100s init, 2s repeat) for all four
+	// entries — the C++ RemoveAllAttackers/AttackStop preamble has
+	// no bridge, documented deviation in the lua file. The
+	// FindNearestCreature target-acquisition machine, the
+	// Caelestrasz-gated Stoned 33652 arm, and JustDied's
+	// DespawnOrUnsummon + trigger LiveCounter have no bridges —
+	// documented in the lua file, not wired.
+	RegisterLuaBoss("npc_qiraj_war_spawn", 15414)
+	RegisterLuaBoss("npc_qiraj_war_spawn", 15422)
+	RegisterLuaBoss("npc_qiraj_war_spawn", 15423)
+	RegisterLuaBoss("npc_qiraj_war_spawn", 15424)
 }
