@@ -5016,4 +5016,23 @@ func init() {
 	RegisterLuaBoss("boss_freya", 32915)
 	RegisterLuaBoss("boss_freya", 32914)
 	RegisterLuaBoss("boss_freya", 32913)
+
+	// boss_thorim.lua (lua_scripts/northrend/boss_thorim.lua):
+	// 32865 Thorim (boss_thorim — ulduar.h NPC_THORIM line 79;
+	// AddSC_boss_thorim(), loader decl 121 / call 316 — the
+	// TWELFTH group of the "// Ulduar" block in
+	// AddNorthrendScripts()).
+	// JustEngagedWith Talk(SAY_AGGRO_1 0) (event 1; the
+	// auriaya engage-port precedent); KilledUnit player-gated
+	// Talk(SAY_SLAY 4) (event 3 — the razuvious precedent —
+	// the thirty-fourth player-gated variant ported).
+	// Talk(SAY_DEATH 7) lives in FinishEncounter() (called
+	// from the event machine, not from JustDied) — event 4
+	// deliberately not registered. Timer Talks, the pre-phase
+	// DamageTaken SAY_JUMPDOWN arm (phase + instance-state
+	// condition), cross-creature Talk(SAY_SPECIAL),
+	// DoAction/SpellHit Talks, the ten spell scripts, the
+	// condition script and the three achievements are
+	// bridge-blocked — documented in the lua header.
+	RegisterLuaBoss("boss_thorim", 32865)
 }
