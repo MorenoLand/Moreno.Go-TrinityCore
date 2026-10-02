@@ -3981,4 +3981,20 @@ func init() {
 	// achievement bridge), at_anubrekhan_entrance (no area-trigger
 	// bridge).
 	RegisterLuaBoss("boss_anubrekhan", 15956)
+
+	// Razuvious (16061, Naxxramas) — lua_scripts/northrend/boss_razuvious.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0) +
+	// EVENT_STRIKE DoCastVictim(Unbalancing Strike 26613) 21s/6s;
+	// KilledUnit Talk(SAY_SLAY 1) gated on player or entry-16803
+	// (nalorakk precedent); JustDied Talk(SAY_DEATH 3). Unmodeled:
+	// SpellHit SAY_TAUNTED (SpellHit never fires in Lua), JustDied
+	// DoCastAOE(Hopeless 29125) (no DoCastAOE bridge), EVENT_ATTACK
+	// MoveChase (no motion bridge), EVENT_SHOUT DoCastAOE(29107) (no
+	// DoCastAOE bridge), EVENT_KNIFE SelectTarget(Random) (cairne/kazzak
+	// precedent), InitializeAI/JustReachedHome SummonCreatureGroup (no
+	// summon bridge), npc_dk_understudy (16803, entry-verifiable —
+	// LoadEquipment/emotestate/cross-AI DoZoneInCombat/DESPAWN/
+	// blood-strike 61696 arms have no bridge: no equipment, instance,
+	// cross-AI, despawn, or charm-possession bridge).
+	RegisterLuaBoss("boss_razuvious", 16061)
 }
