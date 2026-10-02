@@ -3176,4 +3176,39 @@ func init() {
 	RegisterLuaBoss("npc_qiraj_war_spawn", 15422)
 	RegisterLuaBoss("npc_qiraj_war_spawn", 15423)
 	RegisterLuaBoss("npc_qiraj_war_spawn", 15424)
+
+	// boss_slad_ran: Gundrak dungeon boss script, entry 29304
+	// (gundrak.h NPC_SLAD_RAN — kalecgos pass), plus the summoned
+	// adds 29713 (Slad'ran Constrictor) and 29680 (Slad'ran Viper)
+	// (boss_slad_ran.cpp enum Creatures — kalecgos passes).
+	// BossAI. Ported arms in lua_scripts/northrend/boss_slad_ran.lua:
+	// JustEngagedWith Talk(SAY_AGGRO 0); Poison Nova 55081 (victim,
+	// 10s init, 15s repeat) + Talk(EMOTE_NOVA 5) on the same tick;
+	// Powerful Bite 48287 (victim, 3s init, 10s repeat); Venom Bolt
+	// 54970 (victim, 15s init, 10s repeat); KilledUnit Talk(SAY_SLAY
+	// 1) player-gated (event 3, nalorakk precedent); JustDied
+	// Talk(EMOTE_ACTIVATE_ALTAR 6) + Talk(SAY_DEATH 2). The DamageTaken
+	// phase machine (HealthBelowPct 30/25 — no health-pct bridge, and
+	// the SummonCreature snake/constrictor waves sit behind the summon
+	// STRAND), JustSummoned's MovePoint choreography, the
+	// SetGUID/WasWrapped cross-AI wrap latch, and
+	// achievement_snakes_whyd_it_have_to_be_snakes (no
+	// achievement-criteria bridge) are documented in the lua file,
+	// not wired.
+	RegisterLuaBoss("boss_slad_ran", 29304)
+
+	// npc_slad_ran_constrictor: Gundrak script, entry 29713
+	// (boss_slad_ran.cpp CREATURE_CONSTRICTORS — kalecgos pass).
+	// ScriptedAI. Ported arm: Grip of Slad'ran 55093 on the victim
+	// (2s init, 3-6s repeat). The 5-stack -> Snake Wrap 55126 victim
+	// self-cast -> boss SetGUID latch -> DespawnOrUnsummon machine has
+	// no bridges (aura-stack read, RemoveAurasDueToSpell, victim
+	// CastSpell, cross-AI SetGUID, despawn) — documented in the lua
+	// file, not wired.
+	RegisterLuaBoss("npc_slad_ran_constrictor", 29713)
+
+	// npc_slad_ran_viper: Gundrak script, entry 29680
+	// (boss_slad_ran.cpp CREATURE_SNAKE — kalecgos pass). ScriptedAI.
+	// Ported arm: Venomous Bite 54987 (victim, 2s init, 10s repeat).
+	RegisterLuaBoss("npc_slad_ran_viper", 29680)
 }
