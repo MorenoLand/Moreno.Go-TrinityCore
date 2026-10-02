@@ -5281,4 +5281,21 @@ func init() {
 	// achievement_three_faced are bridge-blocked — documented in the
 	// lua header.
 	RegisterLuaBoss("boss_devourer_of_souls", 36502)
+
+	// Forgemaster Garfrost (Pit of Saron) — bridgeable Talk arms ported
+	// from boss_forgemaster_garfrost.cpp; see
+	// lua_scripts/northrend/boss_forgemaster_garfrost.lua.
+	// DamageTaken phase-change Talk legs (no health-pct bridge), the
+	// forge-jump MovementInform machine (no motion / equipment bridges),
+	// the SpellHitTarget _permafrostStack / GetData leg
+	// (no-SpellHit-bridge / no-GetData-bridge), the
+	// instance->GetGuidData(DATA_TYRANNUS) tyrannus->AI()->Talk leg (no
+	// instance bridge), the scheduler machine + SelectTarget(Random, 0)
+	// UpdateAI legs including Talk(SAY_THROW_SARONITE 5, target) and
+	// Talk(SAY_CAST_DEEP_FREEZE 6, target) (no-timer-bridge /
+	// no-random-target-SelectTarget), the spell_garfrost_permafrost
+	// SpellScript (no-SpellScript-bridge) and
+	// achievement_doesnt_go_to_eleven (unmodeled-achievement) are
+	// bridge-blocked — documented in the lua header.
+	RegisterLuaBoss("boss_forgemaster_garfrost", 36494)
 }
