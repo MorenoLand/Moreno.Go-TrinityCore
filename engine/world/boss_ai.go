@@ -3411,6 +3411,45 @@ func init() {
 	// amanitar 30258, volazj 29311, jedoga 29310).
 	RegisterLuaBoss("boss_jedoga_shadowseeker", 29310)
 
+	// boss_krik_thir: Azjol-Nerub dungeon boss script, entry 28684
+	// (azjol_nerub.h NPC_KRIKTHIR — kalecgos pass; the
+	// GetAzjolNerubAI ScriptName binding is instance-shimmed, the
+	// creature_template binding DB-side). BossAI. Ported arms in
+	// lua_scripts/northrend/boss_krik_thir.lua: EVENT_MIND_FLAY
+	// DoCastVictim(Mind Flay 52586) randtime(1s,3s) init, 9-11s repeat
+	// (the JustEngagedWith schedule is port-pattern-ready; the passive
+	// engage legs themselves are unbridged), KilledUnit Talk(SAY_SLAY
+	// 1) player-gated, JustDied Talk(SAY_DEATH 2) (summons.clear +
+	// _JustDied instance bookkeeping has no bridge). Documented in the
+	// lua file, not wired: the passive pre-fight model
+	// (SetReactState(REACT_PASSIVE) — drakkari_colossus precedent;
+	// JustAppeared -> SummonAdds() with instance GetBossState gate +
+	// SummonCreatureGroup(1..3) — summon STRAND absent), the
+	// MoveInLineOfSight passive-engage leg, EVENT_SEND_GROUP
+	// DoCastAOE(52343) 70s repeat, EVENT_SWARM DoCastAOE(52440) +
+	// Talk(SAY_SWARM 3) 5s (no DoCastAOE bridge — terestian/shazzrah
+	// precedent), EVENT_FRENZY (HealthBelowPct(10) — doomwalker
+	// precedent — + DoCastSelf 28747 + DoCastAOE 52592), the whole
+	// DoAction machine (no DoAction bridge — drakkari_colossus
+	// precedent: gatewatcher-greet prefight Talk, watcher-died
+	// bookkeeping, watcher/pet engaged, pet evade), EnterEvadeMode
+	// (summons.DespawnAll — terestian precedent), SpellHit/SpellHitTarget
+	// (event 15 never fires — standing), npc_watcher_gashra/narjil/
+	// silthik (28730/28729/28731 entry-verifiable — azjol_nerub.h —
+	// zero registration: the npc_gatewatcher_petAI passive + group-aggro
+	// + cross-AI DoAction + instance model is unbridged; their
+	// enrage/infected-bite/blinding-webs/poison-spray rotation arms are
+	// port-pattern-ready, web-wrap behind the random-target SelectTarget
+	// bridge — entry-verifiable-but-bridge-blocked queue), the anub'ar
+	// warrior/skirmisher/shadowcaster, skittering swarmer/infector and
+	// gatewatcher web-wrap NPCs (entries unverifiable from C++ — the
+	// adds come from DB-side summon-group data, no NPC constants —
+	// bridgeable-but-entry-blocked queue), the three SpellScripts (no
+	// binding bridge — razelikh precedent), and
+	// achievement_watch_him_die (no achievement-criteria bridge —
+	// snakes precedent + instance model absent).
+	RegisterLuaBoss("boss_krik_thir", 28684)
+
 	// npc_slad_ran_constrictor: Gundrak script, entry 29713
 	// (boss_slad_ran.cpp CREATURE_CONSTRICTORS — kalecgos pass).
 	// ScriptedAI. Ported arm: Grip of Slad'ran 55093 on the victim
