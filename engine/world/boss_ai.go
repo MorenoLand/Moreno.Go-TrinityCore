@@ -3636,4 +3636,41 @@ func init() {
 	// achievement_king_dred (no achievement-criteria bridge — snakes
 	// precedent — + cross-AI GetData absent).
 	RegisterLuaBoss("boss_king_dred", 27483)
+
+	// boss_tharon_ja: Drak'Tharon Keep dungeon boss script, entry 26632
+	// (drak_tharon_keep.h NPC_THARON_JA — kalecgos pass; the
+	// GetDrakTharonKeepAI ScriptName binding is instance-shimmed, the
+	// creature_template binding DB-side). BossAI. Ported arms in
+	// lua_scripts/northrend/boss_tharon_ja.lua: JustEngagedWith
+	// Talk(SAY_AGGRO 0) (event 1; BossAI::JustEngagedWith leg is
+	// instance bookkeeping, no bridge), KilledUnit Talk(SAY_KILL 1)
+	// player-gated (event 3 — nalorakk precedent), JustDied
+	// Talk(SAY_DEATH 4) (event 4; _JustDied instance bookkeeping has
+	// no bridge). No timers are scheduled: every C++ scheduled arm is
+	// phase-gated by the unbridged phase machine (GOING_FLESH /
+	// GOING_SKELETAL call events.Reset() — ungated emulation would
+	// over-cast vs C++, jedoga precedent; anub_arak EVENT_POUND
+	// precedent). Documented in the lua file, not wired: the whole
+	// phase machine (EVENT_DECAY_FLESH DoCastAOE(49356) 20s ->
+	// EVENT_GOING_FLESH +6s (Talk SAY_FLESH + SetDisplayId(MODEL_FLESH
+	// 27073) + DoCastAOE(GIFT 52509) + DoCast-self FLESH_VISUAL 52582 /
+	// DUMMY 49551 + events.Reset + phase-2 schedule) ->
+	// EVENT_RETURN_FLESH DoCastAOE(53463) 20s -> EVENT_GOING_SKELETAL
+	// +6s (Talk SAY_SKELETON + RestoreDisplayId + DoCastAOE(CLEAR_GIFT
+	// 53242) + events.Reset + phase-1 re-arm) — the meaningful legs
+	// are DoCastAOE (no bridge — terestian/shazzrah precedent) +
+	// SetDisplayId/RestoreDisplayId (no display bridge); genuinely-
+	// bridgeable bar (king_dred RAPTOR_CALL) not met, chain not armed;
+	// phase-1 rotation (EVENT_CURSE_OF_LIFE 49527 1s->10-15s,
+	// EVENT_RAIN_OF_FIRE 49518 14-18s, EVENT_SHADOW_VOLLEY 49528
+	// 8-10s — bridged in isolation via moroes precedent but
+	// phase-gated) and phase-2 rotation (EVENT_LIGHTNING_BREATH 49537,
+	// EVENT_EYE_BEAM 49544 — both random-target SelectTarget absent,
+	// cairne/kazzak precedent — EVENT_POISON_CLOUD DoCastAOE 49548);
+	// Reset's _Reset() + RestoreDisplayId; JustDied's DoCastAOE(
+	// CLEAR_GIFT 53242 / ACHIEVEMENT_CHECK 61863); the UpdateAI
+	// casting-skip (no unit-state bridge); spell_tharon_ja_clear_gift_
+	// of_tharon_ja (53242 SpellScript — no SpellScript binding bridge,
+	// razelikh precedent). Drak'Tharon Keep block CLOSED.
+	RegisterLuaBoss("boss_tharon_ja", 26632)
 }
