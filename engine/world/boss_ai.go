@@ -5810,3 +5810,31 @@ func init() {
 	// of the "// Ruby Sanctum" block.
 	RegisterLuaBoss("boss_baltharus_the_warborn", 39751)
 }
+
+func init() {
+	// Saviana Ragefire (39747) — Lua port of
+	// src/server/scripts/Northrend/ChamberOfAspects/RubySanctum/boss_saviana_ragefire.cpp
+	// (1 CreatureScript (boss_saviana_ragefire (BossAI, DATA_SAVIANA_RAGEFIRE = 2))
+	// + 2 SpellScriptLoaders (spell_saviana_conflagration_init 74452 /
+	// spell_saviana_conflagration_throwback 74455)); all registered from inside
+	// AddSC_boss_saviana_ragefire(); loader decl 191 / call 386 per
+	// northrend_script_loader.cpp — the FOURTH group of the
+	// "// Ruby Sanctum" block. Entry-verifiable: ruby_sanctum.h
+	// NPC_SAVIANA_RAGEFIRE = 39747 (line 77), DATA_SAVIANA_RAGEFIRE = 2
+	// (line 33); instance_ruby_sanctum.cpp creatureData binds
+	// NPC_SAVIANA_RAGEFIRE -> DATA_SAVIANA_RAGEFIRE (line 53); ScriptName
+	// bindings are DB-side as usual.
+	// Ported arms in lua_scripts/northrend/boss_saviana_ragefire.lua:
+	// boss_saviana_ragefire JustEngagedWith Talk(SAY_AGGRO 0) (event 1,
+	// the auriaya precedent); KilledUnit Talk(SAY_KILL 3) gated on
+	// victim->GetTypeId() == TYPEID_PLAYER (event 3, the razuvious
+	// player-gated variant precedent). No other bridgeable arm in the
+	// file: JustDied _JustDied() + DoPlaySoundToSet(SOUND_ID_DEATH 17531)
+	// (no instance-script / play-sound bridges, zero Talk); MovementInform
+	// Talk(SAY_CONFLAGRATION 1) rides POINT_FLIGHT (no-movement-inform
+	// bridge); UpdateAI Talk(EMOTE_ENRAGED 2) rides EVENT_ENRAGE
+	// (no-timer-bridge); the two SpellScripts (no-SpellScript bridge);
+	// the EnterEvadeMode _DespawnAtEvade() leg — all documented in the
+	// lua header. Fourth group of the "// Ruby Sanctum" block.
+	RegisterLuaBoss("boss_saviana_ragefire", 39747)
+}
