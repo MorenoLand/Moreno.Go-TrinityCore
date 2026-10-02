@@ -3235,6 +3235,27 @@ func init() {
 	// file, not wired.
 	RegisterLuaBoss("boss_drakkari_colossus", 29307)
 
+	// boss_gal_darah: Gundrak dungeon boss script, entry 29306
+	// (gundrak.h NPC_GAL_DARAH — kalecgos pass; the
+	// RegisterCreatureAIWithFactory(GetGundrakAI) ScriptName binding
+	// is instance-shimmed, the creature_template binding DB-side).
+	// BossAI. Ported arms in lua_scripts/northrend/boss_gal_darah.lua:
+	// JustEngagedWith Talk(SAY_AGGRO 0); KilledUnit Talk(SAY_SLAY 1)
+	// player-gated (event 3 — nalorakk precedent); JustDied
+	// Talk(SAY_DEATH 2) + DoCastSelf(Clear Puncture 60022, triggered).
+	// The whole combat rotation is phase-gated through
+	// events.SetPhase/IsInPhase (no phase bridge — moorabi precedent)
+	// and the phase flips are driven by unbridged arms, so
+	// EVENT_PUNCTURE / EVENT_WHIRLING_SLASH / EVENT_ENRAGE /
+	// EVENT_STOMP / EVENT_STAMPEDE / EVENT_IMPALING_CHARGE /
+	// EVENT_TRANSFORM are documented in the lua file, not wired
+	// (plus: no DoCastAOE bridge, no random-target SelectTarget
+	// bridge, no SpellScript binding bridge for the three SpellScripts,
+	// no cross-AI SetGUID/GetData bridges, no aura-removal bridge,
+	// no despawn bridge; achievement_share_the_love has no
+	// achievement-criteria bridge — snakes precedent).
+	RegisterLuaBoss("boss_gal_darah", 29306)
+
 	// npc_slad_ran_constrictor: Gundrak script, entry 29713
 	// (boss_slad_ran.cpp CREATURE_CONSTRICTORS — kalecgos pass).
 	// ScriptedAI. Ported arm: Grip of Slad'ran 55093 on the victim
