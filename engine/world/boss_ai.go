@@ -5491,4 +5491,34 @@ func init() {
 	// the no-achievement bridge queue — documented in the lua
 	// header. Fifth group of the "// Icecrown Citadel" block.
 	RegisterLuaBoss("boss_festergut", 36626)
+
+	// Rotface (Icecrown Citadel) — bridgeable Talk arms ported
+	// from boss_rotface.cpp; see
+	// lua_scripts/northrend/boss_rotface.lua.
+	// boss_rotface: JustEngagedWith Talk(SAY_AGGRO 1) (event 1,
+	// the auriaya engage-port precedent); KilledUnit Talk(SAY_KILL
+	// 6) victim->GetTypeId() == TYPEID_PLAYER gated (event 3, the
+	// razuvious player-gated variant precedent — SIXTEENTH ported
+	// variant, FOURTEENTH identical to
+	// nalorakk/kelthuzad/gothik/thaddius/garfrost/krick/tyrannus/falric/marwyn/marrowgar/deathwhisper/saurfang/festergut);
+	// JustDied Talk(SAY_DEATH 8) (event 4, the sjonnir JustDied-Talk
+	// precedent). No other bridgeable arm in the file:
+	// Talk(SAY_SLIME_SPRAY 3) rides the SPELL_SLIME_SPRAY case of
+	// the SpellHitTarget switch (no-SpellHit-bridge);
+	// Talk(EMOTE_SLIME_SPRAY 2) rides the EVENT_SLIME_SPRAY
+	// scheduler leg (no-timer-bridge); Talk(SAY_PRECIOUS_DIES 0)
+	// rides npc_precious_icc JustDied as cross-AI Talk (no bridge);
+	// Talk(EMOTE_PRECIOUS_ZOMBIES 0) rides its EVENT_SUMMON_ZOMBIES
+	// scheduler leg (no-timer-bridge); npc_precious_icc has zero
+	// bridgeable arms — not registered (the bronjahm
+	// npc_corrupted_soul_fragment precedent); npc_little_ooze /
+	// npc_big_ooze have zero Talk lines — not registered. The 10
+	// spell scripts (Talk(EMOTE_MUTATED_INFECTION 9),
+	// Talk(EMOTE_UNSTABLE_2..4) / Talk(EMOTE_UNSTABLE_EXPLOSION),
+	// rotface->AI()->Talk(SAY_UNSTABLE_EXPLOSION 5)) join the
+	// no-SpellScript-bridge queue and
+	// spell_rotface_mutated_infection_aura the no-AuraScript-bridge
+	// queue — documented in the lua header. Sixth group of the
+	// "// Icecrown Citadel" block.
+	RegisterLuaBoss("boss_rotface", 36627)
 }
