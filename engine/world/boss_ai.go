@@ -6026,4 +6026,25 @@ func init() {
 	// / no-cast / no-random-target / no-heroic-mode bridges —
 	// documented-only. SAY_HELP = 2 is unused in the file.
 	RegisterLuaBoss("boss_ambassador_hellmaw", 18731)
+	// boss_blackheart_the_inciter (Shadow Labyrinth, Outland dungeon
+	// pass): the bridgeable Talk arms — JustEngagedWith Talk(SAY_AGGRO
+	// 1) (event 1, the auriaya precedent; the ScheduleEvent legs ride
+	// the no-timer bridge), KilledUnit Talk(SAY_SLAY 2) player-gated
+	// (event 3, the razuvious precedent), JustDied Talk(SAY_DEATH 4)
+	// (event 4, the sjonnir precedent; the _JustDied() instance leg
+	// rides the no-instance bridge). Entry 18667 NPC_BLACKHEART from
+	// shadow_labyrinth.h (line 44; the .cpp file itself carries zero
+	// NPC_ constants — the ambassador_hellmaw precedent); ScriptName
+	// bindings are DB-side as usual — see
+	// lua_scripts/outland/boss_blackheart_the_inciter.lua. The
+	// charm-count SetData machine, the whole UpdateAI timer machine
+	// (incite-chaos threat reset / charge / war-stomp casts), the
+	// mc_dummy NullCreatureAI (NPC_BLACKHEART_DUMMY1..5 = 19300-19304
+	// — zero Talk arms), BlackheartCharmedPlayerAI, and the
+	// spell_blackheart_incite_chaos SpellScript ride no-timer /
+	// no-cast / no-random-target / no-summon / no-threat /
+	// no-charmed-player / no-instance / no-SpellScript bridges —
+	// documented-only. SAY_INTRO 0 / SAY_HELP 3 / SAY2_* 5-9 are
+	// never called in the file.
+	RegisterLuaBoss("boss_blackheart_the_inciter", 18667)
 }
