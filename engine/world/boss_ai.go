@@ -3785,4 +3785,45 @@ func init() {
 	// (escort queue precedent); joins the bridgeable-but-entry-blocked
 	// queue. Trial of the Champion block stays OPEN.
 	RegisterLuaBoss("boss_black_knight", 35451)
+	// boss_anubarak_trial: Trial of the Crusader dungeon boss script,
+	// entry 34564 (trial_of_the_crusader.h NPC_ANUBARAK — kalecgos
+	// pass). lua_scripts/northrend/boss_anubarak_trial.lua:
+	// JustEngagedWith Talk(SAY_AGGRO 1) (event 1; the
+	// BossAI::JustEngagedWith instance-bookkeeping leg has no bridge —
+	// tharon_ja precedent); KilledUnit Talk(SAY_KILL_PLAYER 7)
+	// player-gated (event 3, who->GetTypeId()==TYPEID_PLAYER — nalorakk
+	// precedent); JustDied Talk(SAY_DEATH 8) (event 4; _JustDied instance
+	// bookkeeping has no bridge — tharon_ja precedent); EVENT_BERSERK —
+	// DoCastSelf(Berserk 26662), 600s after combat start,
+	// phase-independent, fires once (phase_hunter self-cast precedent);
+	// scheduler cancelled on 2/4/23 (gargolmar precedent); melee
+	// engine-driven. npc_swarm_scarab (34605): JustDied DoCast(killer,
+	// Traitor King 68186) killer-gated (event 4; maiden_of_virtue
+	// target-cast precedent) — no boss_ai.go entry needed (terestian
+	// precedent: npc entries register in the lua file only). Trial of
+	// the Champion block now CLOSED; Trial of the Crusader block OPEN.
+	// Unmodeled (no bridges — documented in the lua header, not wired):
+	// boss MoveInLineOfSight Talk(SAY_INTRO 0) (no hook); JustReachedHome
+	// SetBossState(FAIL) + 10x scarab summons (instance model + summon
+	// STRAND absent); JustSummoned burrow/spike legs (display / react /
+	// random-target SelectTarget bridges absent); JustEngagedWith flag /
+	// DoAction / summon legs; EVENT_FREEZE_SLASH (66012, 15s) and
+	// EVENT_PENETRATING_COLD (66013, 20s) — bridged in isolation but
+	// PHASE_MELEE-gated behind the unbridged submerge machine (tharon_ja
+	// bar); EVENT_SUMMON_NERUBIAN (66332, 45s), EVENT_NERUBIAN_SHADOW_STRIKE
+	// (heroic), EVENT_SUBMERGE/EMERGE/PURSUING_SPIKE (66169)/SUMMON_SCARAB/
+	// SUMMON_FROST_SPHERE — phase machine + flag / summon / ObjectAccessor /
+	// cross-AI bridges absent; phase-3 leg (HealthBelowPct(30) + DoCastAOE
+	// Leeching Swarm 66118 — no health-pct / DoCastAOE bridges); JustDied
+	// grid despawn (no despawn bridge); npc_swarm_scarab Reset / DoAction /
+	// determination-timer legs (instance-gated, jedoga bar);
+	// npc_nerubian_burrower (34607) — zero registration (Reset self-casts
+	// + DoZoneInCombat + cross-AI ride the unbridged summon gate;
+	// ACTION_SHADOW_STRIKE random-target; submerge timer behind health-pct
+	// + flag / aura bridges); npc_anubarak_spike (34660) and npc_frost_sphere
+	// (34606) — zero registration, entry-verifiable-but-bridge-blocked
+	// (DamageTaken hook / motion / threat / react / display bridges absent);
+	// spell_pursuing_spikes, spell_impale, spell_anubarak_leeching_swarm —
+	// no SpellScript / AuraScript binding bridge (razelikh precedent).
+	RegisterLuaBoss("boss_anubarak_trial", 34564)
 }
