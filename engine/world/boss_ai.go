@@ -5973,4 +5973,19 @@ func init() {
 	RegisterLuaBoss("boss_lethon", 14888)
 	RegisterLuaBoss("boss_emeriss", 14889)
 	RegisterLuaBoss("boss_taerar", 14890)
+	// npc_guard_generic (World guard script): the JustEngagedWith arm —
+	// Talk(SAY_GUARD_SIL_AGGRO 0, who) gated in C++ on
+	// me->GetEntry() == NPC_CENARION_HOLD_INFANTRY (15184) — the
+	// event-1 auriaya precedent; the player target flattens through the
+	// moroes precedent (Lua Talk takes no target); the GuardAI
+	// _combatScheduler melee/spell legs have no-timer / no-cast
+	// bridges. Entry-verifiable: 15184 from the file's own GuardMisc
+	// enum; ScriptName bindings are DB-side as usual — see
+	// lua_scripts/world/npc_guard.lua. The Reset 10-minute buff
+	// machine, the Stormwind/Orgrimmar ReceiveEmote reply legs, and the
+	// whole npc_guard_shattrath_faction banish machine
+	// (NPC_ALDOR_VINDICATOR 18549 — 36642/36671 + 39533/36643 cast
+	// chains, zero Talk) sit behind the timer / cast / emote bridges —
+	// documented only.
+	RegisterLuaBoss("npc_guard_generic", 15184)
 }
