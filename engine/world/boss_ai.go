@@ -3492,6 +3492,40 @@ func init() {
 	// snakes precedent + cross-AI GetData absent).
 	RegisterLuaBoss("boss_hadronox", 28921)
 
+	// boss_anub_arak: Azjol-Nerub dungeon boss script, entry 29120
+	// (azjol_nerub.h NPC_ANUBARAK — kalecgos pass; the
+	// GetAzjolNerubAI ScriptName binding is instance-shimmed, the
+	// creature_template binding DB-side). BossAI. Ported arms in
+	// lua_scripts/northrend/boss_anub_arak.lua: JustEngagedWith
+	// Talk(SAY_AGGRO 0) (event 1; the door/timed-achievement/phase/
+	// world-trigger summon legs are documented-only), KilledUnit
+	// Talk(SAY_SLAY 1) player-gated (event 3 — nalorakk precedent),
+	// JustDied Talk(SAY_DEATH 2) (event 4; _JustDied instance
+	// bookkeeping has no bridge). Documented in the lua file, not
+	// wired: the Reset flag/achievement legs, the whole
+	// phase-gated combat rotation (EVENT_POUND 59433, EVENT_LEECHING_
+	// SWARM 53467, EVENT_CARRION_BEETLES 53520 — no phase bridge,
+	// gal_darah/moorabi precedent; swarm/beetles also need the
+	// absent DoCastAOE bridge, terestian/shazzrah precedent),
+	// EVENT_IMPALE (cross-AI SetGUID(GUID_TYPE_IMPALE) absent),
+	// EVENT_SUBMERGE (no health-pct bridge — doomwalker precedent —
+	// + no DamageTaken hook, npc_unkor_the_ruthless precedent),
+	// EVENT_DARTER/ASSASSIN/GUARDIAN/VENOMANCER pet waves
+	// (world-trigger grid-scan + cross-AI + summon bridges absent),
+	// the SetGUID/DoAction machine (no DoAction bridge —
+	// drakkari_colossus precedent), EnterEvadeMode (summons.
+	// DespawnAll + _DespawnAtEvade — terestian precedent), the
+	// SpellHit(SPELL_SUBMERGE 53421) payload (event 15 never fires —
+	// standing), the DamageTaken submerge gate/damage-null legs, the
+	// UpdateAI casting-skip, the darter/assassin/guardian/venomancer/
+	// impale-target NPCs (entries unverifiable from C++ — pets come
+	// from DB-side summon-spell data — bridgeable-but-entry-blocked
+	// queue; guardian sunder-armor / venomancer poison-bolt / assassin
+	// backstab rotation arms port-pattern-ready), and
+	// spell_anubarak_pound / spell_anubarak_carrion_beetles (no
+	// SpellScript/AuraScript binding bridge — razelikh precedent).
+	RegisterLuaBoss("boss_anub_arak", 29120)
+
 	// npc_slad_ran_constrictor: Gundrak script, entry 29713
 	// (boss_slad_ran.cpp CREATURE_CONSTRICTORS — kalecgos pass).
 	// ScriptedAI. Ported arm: Grip of Slad'ran 55093 on the victim
