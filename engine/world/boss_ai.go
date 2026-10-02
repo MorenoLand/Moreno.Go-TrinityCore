@@ -4989,4 +4989,31 @@ func init() {
 	// DoAction legs and both spell scripts are bridge-blocked
 	// — documented in the lua header.
 	RegisterLuaBoss("boss_hodir", 32845)
+
+	// boss_freya.lua (lua_scripts/northrend/boss_freya.lua):
+	// 32906 Freya + elders 32915 / 32914 / 32913 (boss_freya,
+	// boss_elder_brightleaf / boss_elder_ironbranch /
+	// boss_elder_stonebark — ulduar.h NPC_FREYA line 80,
+	// NPC_BRIGHTLEAF line 137, NPC_STONEBARK line 138,
+	// NPC_IRONBRANCH line 136; AddSC_boss_freya(), loader
+	// decl 120 / call 316 — the ELEVENTH group of the
+	// "// Ulduar" block in AddNorthrendScripts()).
+	// Freya: KilledUnit player-gated Talk(SAY_SLAY 2)
+	// (event 3); DamageTaken lethal -> Talk(SAY_DEATH 3) +
+	// damage=0 rewrite (event 9; the manual JustDied(who)
+	// call's only bridgeable arm is the death Talk, inlined
+	// C++-exact — the hodir precedent applies verbatim).
+	// Elders (identical): JustEngagedWith Talk(SAY_ELDER_AGGRO
+	// 0) gated by !HasAura(62467 DRAINED_OF_POWER) (event 1);
+	// KilledUnit player-gated Talk(SAY_ELDER_SLAY 1) (event 3);
+	// JustDied Talk(SAY_ELDER_DEATH 2) (event 4).
+	// Freya's JustEngagedWith aggro Talk choice (SAY_AGGRO 0
+	// vs SAY_AGGRO_WITH_ELDER 1), timer event machine yells,
+	// wave/summon NPC scripts, two spell scripts and the four
+	// achievement scripts are bridge-blocked — documented in
+	// the lua header.
+	RegisterLuaBoss("boss_freya", 32906)
+	RegisterLuaBoss("boss_freya", 32915)
+	RegisterLuaBoss("boss_freya", 32914)
+	RegisterLuaBoss("boss_freya", 32913)
 }
