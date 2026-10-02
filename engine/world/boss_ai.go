@@ -5938,3 +5938,39 @@ func init() {
 	RegisterLuaBoss("boss_halion", 39863)
 	RegisterLuaBoss("boss_twilight_halion", 40142)
 }
+
+func init() {
+	// Emerald Dragons (14887 Ysondre / 14888 Lethon / 14889 Emeriss / 14890
+	// Taerar) — Lua port of
+	// src/server/scripts/World/boss_emerald_dragons.cpp
+	// (4 CreatureScripts: boss_ysondre / boss_lethon / boss_emeriss /
+	// boss_taerar (WorldBossAI over the shared emerald_dragonAI base) +
+	// npc_dream_fog (ScriptedAI, zero Talk — not registered) +
+	// npc_spirit_shade (PassiveAI, zero Talk — not registered) +
+	// 2 SpellScriptLoaders (spell_dream_fog_sleep, spell_mark_of_nature —
+	// no-SpellScript bridge — not registered)); all registered from inside
+	// AddSC_emerald_dragons() (line 808); loader decl 23 / call 44 per
+	// world_script_loader.cpp — the group immediately after
+	// AddSC_areatrigger_scripts() (call 43) in AddWorldScripts().
+	// Entry-verifiable: the file's own EmeraldDragonNPC enum
+	// (DRAGON_YSONDRE 14887 / DRAGON_LETHON 14888 / DRAGON_EMERISS 14889 /
+	// DRAGON_TAERAR 14890); ScriptName bindings are DB-side as usual.
+	// Ported arms in lua_scripts/world/boss_emerald_dragons.lua (new world/
+	// dir mirroring the C++ src/server/scripts/World layout):
+	// boss_ysondre JustEngagedWith Talk(SAY_YSONDRE_AGGRO 0) (event 1, the
+	// auriaya precedent); boss_lethon JustEngagedWith
+	// Talk(SAY_LETHON_AGGRO 0); boss_emeriss JustEngagedWith
+	// Talk(SAY_EMERISS_AGGRO 0); boss_taerar JustEngagedWith
+	// Talk(SAY_TAERAR_AGGRO 0) (the WorldBossAI legs have no bridges).
+	// No other bridgeable arm in the file: the four DamageTaken
+	// Talk(SAY_*_SUMMON_DRUIDS / DRAW_SPIRIT / CAST_CORRUPTION /
+	// SUMMON_SHADES 1) arms have no-DamageTaken bridge; emerald_dragonAI
+	// KilledUnit / emeriss KilledUnit player-gated casts (zero Talk) have
+	// no-cast bridge; the Reset self-cast MARK_OF_NATURE_AURA is not a Talk
+	// arm; timers / flags / react-state / movement / SpellHitTarget /
+	// SpellScript legs have no bridges.
+	RegisterLuaBoss("boss_ysondre", 14887)
+	RegisterLuaBoss("boss_lethon", 14888)
+	RegisterLuaBoss("boss_emeriss", 14889)
+	RegisterLuaBoss("boss_taerar", 14890)
+}
