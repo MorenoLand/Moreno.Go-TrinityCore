@@ -4940,4 +4940,42 @@ func init() {
 	RegisterLuaBoss("boss_steelbreaker", 32867)
 	RegisterLuaBoss("boss_runemaster_molgeim", 32927)
 	RegisterLuaBoss("boss_stormcaller_brundir", 32857)
+
+	// Kologarn (32930), Ulduar —
+	// lua_scripts/northrend/boss_kologarn.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO
+	// 0) (event 1; the six ScheduleEvent legs, the vehicle-kit
+	// DoZoneInCombat arms leg and the BossAI::JustEngagedWith
+	// passthrough have no bridges — the auriaya engage-port
+	// precedent); KilledUnit player-gated Talk(SAY_SLAY 1)
+	// (event 3 — the razuvious player-gated variant precedent
+	// — the twenty-ninth player-gated variant ported);
+	// JustDied Talk(SAY_DEATH 6) (event 4; the DoCast
+	// SPELL_KOLOGARN_PACIFY 63726 leg, the MoveTargetedHome
+	// leg, the SetFlag(NOT_SELECTABLE) leg, the
+	// SetCorpseDelay(604800) leg and the _JustDied()
+	// passthrough have no bridges — the sjonnir JustDied-Talk
+	// precedent).
+	// Documented-only: Reset / PassengerBoarded
+	// (Talk(SAY_LEFT_ARM_GONE 2) / Talk(SAY_RIGHT_ARM_GONE 3)
+	// + SPELL_ARM_DEAD_DAMAGE 63629 / rubble-stalker casts /
+	// EVENT_STONE_SHOUT / CRITERIA_DISARMED legs — no
+	// PassengerBoarded bridge); JustSummoned (focused-eyebeam
+	// visuals, REACT_PASSIVE, MoveChase(eyebeamTarget) — no
+	// bridges); the UpdateAI event machine (melee check /
+	// sweep / smash / stone shout / berserk Talk(SAY_BERSERK
+	// 7) / arm respawns / stone grip Talk(SAY_GRAB_PLAYER 5)
+	// + Talk(EMOTE_STONE_GRIP 8) / focused eyebeam — no
+	// timer-event / cast / vehicle / summon bridges); the
+	// eight spell scripts (spell_ulduar_rubble_summon /
+	// spell_ulduar_stone_grip_cast_target /
+	// spell_ulduar_cancel_stone_grip /
+	// spell_ulduar_squeezed_lifeless — no SpellScript
+	// bridges; spell_ulduar_stone_grip_absorb /
+	// spell_ulduar_stone_grip — no AuraScript bridges;
+	// spell_kologarn_stone_shout /
+	// spell_kologarn_summon_focused_eyebeam — no SpellScript
+	// bridges; all eight join the no-SpellScript /
+	// no-AuraScript-bridge queues).
+	RegisterLuaBoss("boss_kologarn", 32930)
 }
