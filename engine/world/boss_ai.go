@@ -3673,4 +3673,56 @@ func init() {
 	// of_tharon_ja (53242 SpellScript — no SpellScript binding bridge,
 	// razelikh precedent). Drak'Tharon Keep block CLOSED.
 	RegisterLuaBoss("boss_tharon_ja", 26632)
+
+	// boss_eadric: Trial of the Champion dungeon boss script, entry
+	// 35119 (trial_of_the_champion.h NPC_EADRIC — kalecgos pass; the
+	// GetTrialOfTheChampionAI ScriptName binding is instance-shimmed,
+	// the creature_template binding DB-side). ScriptedAI. Ported arms
+	// in lua_scripts/northrend/boss_eadric.lua: uiVenganceTimer —
+	// DoCastSelf(Vengeance 66865) (creature:CastSpell(creature, spell)
+	// — phase_hunter / apothecary_hanes precedent), 10s init, 10s
+	// repeat, scheduled on OnEnterCombat(1), cancelled on 2/4/23
+	// (gargolmar precedent); melee engine-driven. No Talk arms exist
+	// in C++ (the Yells enum is commented out). Documented in the lua
+	// file, not wired: constructor react-state / NON_ATTACKABLE flag
+	// (drakkari_colossus precedent), DamageTaken evade+FACTION_
+	// FRIENDLY+bDone latch (no DamageTaken hook — npc_unkor_the_
+	// ruthless precedent), MovementInform POINT_MOTION_TYPE ->
+	// instance SetBossState(BOSS_ARGENT_CHALLENGE_E, DONE) +
+	// DisappearAndDie (instance model absent + no despawn bridge),
+	// bDone-reset MovePoint(0, 746.87, 665.87, 411.75) (no motion
+	// bridge), uiHammerJusticeTimer (SelectTarget(Random,0,250,true)
+	// -> Hammer of Justice 66863 + Hammer of the Righteous 66867,
+	// 25s — random-target SelectTarget bridge absent, cairne/kazzak
+	// precedent), uiRadianceTimer (DoCastAOE 66935, 16s — no
+	// DoCastAOE bridge, terestian/shazzrah precedent). boss_paletress
+	// (34928 NPC_PALETRESS — kalecgos pass): zero registration —
+	// constructor / Reset (RemoveAllAuras + ObjectAccessor::GetCreature
+	// (MemoryGUID) RemoveFromWorld) / SetData(1) RemoveAura(SHIELD
+	// 66515) / DamageTaken / MovementInform / Holy Fire 66538 9-12s +
+	// Smite 66536 5-7s (random-target SelectTarget absent) / shield-
+	// gated Renew 66537 machine (aura + cross-AI ObjectAccessor
+	// bridges absent) / 25% one-shot (health-pct bridge absent —
+	// doomwalker precedent — + DoCastAOE triplet (Holy Nova 66546 /
+	// Summon Memory 66545 / Confess 66680) — terestian/shazzrah
+	// precedent; the Shield 66515 self-cast leg rides the unbridged
+	// gate — jedoga precedent) / JustSummoned MemoryGUID latch
+	// (summon STRAND absent) — every combat arm rides an absent
+	// bridge. npc_memory: ENTRY UNVERIFIABLE (no NPC constant in C++
+	// — the memory creatures materialize via DB-side summon spells
+	// SPELL_MEMORY_* — belnistrasz/willix precedent): joins the
+	// bridgeable-but-entry-blocked queue (Waking Nightmare 66552
+	// 7s/7s self-cast port-pattern-ready; Old Wounds 66620 /
+	// Shadows Past 66619 behind the random-target bridge; JustDied
+	// cross-AI SetData(1,0) — no cross-AI SetData bridge).
+	// npc_argent_soldier: ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED (35309
+	// NPC_ARGENT_LIGHWIELDER / 35305 NPC_ARGENT_MONK / 35307
+	// NPC_PRIESTESS — kalecgos pass): joins the
+	// entry-verifiable-but-bridge-blocked queue — whole AI is the
+	// EscortAI waypoint machine (escort queue precedent) + JustDied's
+	// instance SetData(DATA_ARGENT_SOLDIER_DEFEATED,+1) (instance
+	// model absent). spell_eadric_radiance / spell_paletress_summon_
+	// memory: no SpellScript binding bridge (razelikh precedent).
+	// C++ SD%Complete 50 % note carried.
+	RegisterLuaBoss("boss_eadric", 35119)
 }
