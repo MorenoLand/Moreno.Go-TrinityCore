@@ -5106,4 +5106,28 @@ func init() {
 	// arms — all bridge-blocked, documented in the lua header.
 	RegisterLuaBoss("boss_skarvald_the_constructor", 24200)
 	RegisterLuaBoss("boss_dalronn_the_controller", 24201)
+	// Ingvar the Plunderer (Utgarde Keep) — boss_ingvar_the_plunderer.cpp,
+	// AddSC_boss_ingvar_the_plunderer() (loader decl 128 / call 323) — the
+	// THIRD group of the "// Utgarde Keep - Utgarde Keep" block
+	// (boss_skarvald_dalronn -> boss_ingvar_the_plunderer).
+	// Bridgeable arms: JustEngagedWith Talk(SAY_AGGRO 0) (event 1, human
+	// entry only — the PHASE_EVENT/PHASE_UNDEAD early return is modeled
+	// with the engaged latch, the auriaya engage-port precedent),
+	// DamageTaken feign-death Talk(SAY_DEATH 2) (event 9, human entry only
+	// — the feignDead latch mirrors the PHASE_HUMAN -> PHASE_EVENT
+	// transition, the moroes threshold+latch precedent), JustDied
+	// Talk(SAY_DEATH 2) unconditional (event 4, both entries — the sjonnir
+	// JustDied-Talk precedent), KilledUnit player-gated Talk(SAY_SLAY 1)
+	// (event 3, both entries — the razuvious player-gated variant
+	// precedent). The undead entry 23980 is registered because phase-2
+	// kills and the real death yell fire on it. The
+	// EVENT_JUST_TRANSFORMED aggro yell + all spell-cast timer arms, the
+	// feign-death damage=0 rewrite, DoAction(ACTION_START_PHASE_2),
+	// npc_annhylde_the_caller (MovementInform YELL_RESURRECT /
+	// instance-GuidData / cross-creature resurrect machine),
+	// npc_ingvar_throw_dummy (no Talk arms) and the two spell scripts
+	// (SpellScript / AuraScript) are bridge-blocked — documented in the
+	// lua header.
+	RegisterLuaBoss("boss_ingvar_the_plunderer", 23954)
+	RegisterLuaBoss("boss_ingvar_the_plunderer", 23980)
 }
