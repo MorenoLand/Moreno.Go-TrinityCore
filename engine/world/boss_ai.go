@@ -6005,4 +6005,25 @@ func init() {
 	// npc_ethereal_apprentice, and npc_yor are zero-Talk — not
 	// registered.
 	RegisterLuaBoss("boss_nexusprince_shaffar", 18344)
+	// boss_ambassador_hellmaw (Shadow Labyrinth, Outland dungeon
+	// pass): the bridgeable Talk arms — JustEngagedWith Talk(SAY_AGGRO
+	// 1) (event 1, the auriaya precedent; the SetBossState IN_PROGRESS
+	// leg rides the no-instance bridge), KilledUnit Talk(SAY_SLAY 3)
+	// player-gated (event 3, the razuvious precedent), JustDied
+	// Talk(SAY_DEATH 4) (event 4, the sjonnir precedent; the
+	// SetBossState DONE leg rides the no-instance bridge). Entry
+	// 18731 NPC_AMBASSADOR_HELLMAW from shadow_labyrinth.h (the
+	// .cpp file itself carries zero NPC_ constants — the NPC_ANZU-in-
+	// sethekk_halls.h precedent); ScriptName bindings are DB-side as
+	// usual — see
+	// lua_scripts/outland/boss_ambassador_hellmaw.lua. The
+	// DoAction-driven DoIntro Talk(SAY_INTRO 0) is called from
+	// instance_shadow_labyrinth.cpp:137 (no InstanceScript dispatch /
+	// no-escort bridges — documented-only); the Reset ScheduleEvent
+	// legs + DoAction BANISH leg ride no-timer / no-instance /
+	// no-cast bridges; the UpdateEscortAI machine (corrosive acid /
+	// fear / heroic-only berserk casts, banish evade) rides no-timer
+	// / no-cast / no-random-target / no-heroic-mode bridges —
+	// documented-only. SAY_HELP = 2 is unused in the file.
+	RegisterLuaBoss("boss_ambassador_hellmaw", 18731)
 }
