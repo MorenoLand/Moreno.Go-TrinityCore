@@ -4479,4 +4479,28 @@ func init() {
 	// CLEAVE 15284; MORTAL_STRIKE 16856 / SLAM 52026) — no
 	// timer-event / cast bridges).
 	RegisterLuaBoss("boss_bjarngrim", 28586)
+
+	// Loken (28923), Halls of Lightning —
+	// lua_scripts/northrend/boss_loken.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 2)
+	// (event 1; BossAI bookkeeping passthrough, SetPhase,
+	// ScheduleEvent legs, and DoStartTimedAchievement(20384)
+	// have no bridges); KilledUnit player-gated Talk(SAY_SLAY 4)
+	// (event 3 — razuvious player-gated variant precedent);
+	// JustDied Talk(SAY_DEATH 8) (event 4; _JustDied passthrough
+	// and DoRemoveAurasDueToSpellOnPlayers(59414) have no
+	// bridges).
+	// Documented-only: Reset / Initialize (timed-achievement
+	// stop, no bridge); MoveInLineOfSight intro Talk(0) (no
+	// MoveInLineOfSight bridge); EVENT_INTRO_DIALOGUE Talk(1)
+	// (no timer bridge); the UpdateAI timer machine
+	// (ARC_LIGHTNING 52921; LIGHTNING_NOVA 52960 with Talk(3) +
+	// Talk(EMOTE 9); PULSING_SHOCKWAVE 52961 + aura 59414 —
+	// no timer-event / cast / target-selection bridges);
+	// DamageTaken health-pct Talk arms (5 / 6 / 7) (no
+	// DamageTaken bridge); spell_loken_pulsing_shockwave
+	// (distance-scaled CalculateDamage SpellScript — no
+	// SpellScript bridge, joins the no-SpellScript-bridge
+	// queue).
+	RegisterLuaBoss("boss_loken", 28923)
 }
