@@ -5317,4 +5317,20 @@ func init() {
 	// SAY_ICK_CHASE_1 spell-driven Talk) are bridge-blocked — documented
 	// in the lua header.
 	RegisterLuaBoss("boss_krick", 36477)
+	// Scourgelord Tyrannus (Pit of Saron) — bridgeable Talk arms ported
+	// from boss_scourgelord_tyrannus.cpp; see
+	// lua_scripts/northrend/boss_scourgelord_tyrannus.lua.
+	// boss_rimefang (36661 Rimefang) carries zero own Talk lines (whole
+	// patrol / icy-blast / hoarfrost machine is scheduler-driven with no
+	// bridges), so 36661 is NOT registered (the bronjahm
+	// npc_corrupted_soul_fragment precedent). The tyrannus DoAction
+	// intro machine (Talk(SAY_TYRANNUS_INTRO_1 6) + EVENT_INTRO_1..3 /
+	// EVENT_COMBAT_START legs) has no-DoAction / no-timer bridges, and
+	// the UpdateAI combat machine's Talk legs (SAY_DARK_MIGHT_1/2,
+	// SAY_MARK_RIMEFANG_1/2) ride timer legs (no-timer-bridge; the
+	// boss_toravon precedent). player_overlord_brandAI plus the three
+	// spell scripts (overlord_brand, mark_of_rimefang,
+	// rimefang_icy_blast) and at_tyrannus_event_starter are
+	// bridge-blocked — documented in the lua header.
+	RegisterLuaBoss("boss_tyrannus", 36658)
 }
