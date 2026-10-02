@@ -3101,4 +3101,16 @@ func init() {
 	// recast-if-no-aura gate, {6s,8s}), Curse of Tuten'kash 12255
 	// (self-cast, {15s,25s}); UNIT_STATE_CASTING gates unmodeled.
 	RegisterLuaBoss("boss_tuten_kash", 7355)
+
+	// npc_tomb_creature: Razorfen Downs, entries 7349 (Tomb Fiend) and
+	// 7351 (Tomb Reaver) (razorfen_downs.h RFDCreatureIds — kalecgos
+	// passes; used in the Tuten Kash summon event). ScriptedAI (not
+	// BossAI). Ported arms in lua_scripts/kalimdor/npc_tomb_creature.lua:
+	// Reset entry-conditional self-buff refresh (Poison Proc 3616 for
+	// Tomb Fiend / Virulent Poison Proc 12254 for Tomb Reaver, each
+	// under its C++ HasAura guard), Web 745 ({5s,8s} init, {7s,16s}
+	// repeat unconditional). JustDied SetData(DATA_WAVE, entry) has no
+	// instance-data bridge — documented in the lua file, not wired.
+	RegisterLuaBoss("npc_tomb_creature", 7349)
+	RegisterLuaBoss("npc_tomb_creature", 7351)
 }
