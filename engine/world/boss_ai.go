@@ -3826,4 +3826,55 @@ func init() {
 	// spell_pursuing_spikes, spell_impale, spell_anubarak_leeching_swarm —
 	// no SpellScript / AuraScript binding bridge (razelikh precedent).
 	RegisterLuaBoss("boss_anubarak_trial", 34564)
+	// boss_lord_jaraxxus: Trial of the Crusader dungeon boss script,
+	// entry 34780 (trial_of_the_crusader.h NPC_JARAXXUS — kalecgos
+	// pass; instance_trial_of_the_crusader.cpp binds NPC_JARAXXUS ->
+	// DATA_JARAXXUS with a CircleBoundary).
+	// lua_scripts/northrend/boss_lord_jaraxxus.lua: JustEngagedWith
+	// Talk(SAY_AGGRO 1) (event 1; the BossAI::JustEngagedWith
+	// instance-bookkeeping leg has no bridge — tharon_ja precedent);
+	// KilledUnit Talk(SAY_KILL_PLAYER 9) player-gated (event 3,
+	// who->GetTypeId()==TYPEID_PLAYER — nalorakk precedent); JustDied
+	// Talk(SAY_DEATH 10) (event 4; _JustDied instance bookkeeping has no
+	// bridge — tharon_ja precedent); EVENT_FEL_FIREBALL —
+	// DoCastVictim(Fel Fireball 66532), 6s init, urand(11s,13s) repeat
+	// (moroes precedent; no submerge/phase gate — UpdateAI runs combat
+	// events whenever UpdateVictim() holds); EVENT_NETHER_POWER —
+	// DoCastSelf(Nether Power 66228), 22s init, 42s repeat
+	// (phase_hunter self-cast precedent; C++'s triggered +
+	// SPELLVALUE_AURA_STACK RAID_MODE(5,10) args have no bridge);
+	// EVENT_ENRAGE — Talk(SAY_BERSERK 11) + DoCastSelf(Berserk 64238),
+	// 10min, fires once (anubarak berserk precedent); timers cancelled
+	// on 2/4/23 (gargolmar precedent); melee engine-driven.
+	// npc_mistress_of_pain (34826 — Summons enum kalecgos pass):
+	// JustEngagedWith EVENT_SHIVAN_SLASH — DoCastVictim(Shivan Slash
+	// 66378), 4s init, urand(3s,10s) repeat (moroes precedent) — no
+	// boss_ai.go entry needed (terestian precedent: npc entries register
+	// in the lua file only). Trial of the Crusader block stays OPEN.
+	// Unmodeled (no bridges — documented in the lua header, not wired):
+	// the whole intro machine (Reset instance-state legs, EVENT_INTRO
+	// MoveAlongSplineChain + DoCastSelf 66327, EVENT_TAUNT_GNOME
+	// Talk(SAY_INTRO 0), EVENT_KILL_GNOME DoCastSelf 67888,
+	// MovementInform SPLINE_CHAIN SetFacingToObject, EVENT_CHANGE_
+	// ORIENTATION SetFacingTo, EVENT_START_COMBAT SetImmuneToPC /
+	// SetReactState / DoZoneInCombat, DoAction ACTION_JARAXXUS_ENGAGE,
+	// EnterEvadeMode SetBossState + DespawnOrUnsummon — instance model +
+	// motion / react / immune / zone / despawn bridges absent);
+	// EVENT_FEL_LIGHTNING (66528, 17s, random-target — no SelectTarget
+	// bridge, cairne/kazzak precedent); EVENT_INCINERATE_FLESH (66237,
+	// 14s, random-target + emote/yell); EVENT_LEGION_FLAME (66197, 20s,
+	// random-target); EVENT_SUMMON_NETHER_PORTAL (66269, 20s) and
+	// EVENT_SUMMON_INFERNAL_ERUPTION (66258, 1min20s) — summon STRAND
+	// absent; npc_legion_flame (34784) / npc_infernal_volcano (34813) /
+	// npc_fel_infernal (34815) / npc_nether_portal (34825) — zero
+	// registration, entry-verifiable-but-bridge-blocked (Reset legs ride
+	// the instance gate or the unbridged summon gate — jedoga / burrower
+	// precedents; react / flag / random-target / difficulty bridges
+	// absent); npc_mistress_of_pain Reset / JustDied instance SetData
+	// legs (instance model absent), EVENT_SPINNING_SPIKE (66283,
+	// random-target), EVENT_MISTRESS_KISS (66336, heroic — no difficulty
+	// bridge, kelidan precedent); spell_mistress_kiss, spell_mistress_
+	// kiss_area, spell_fel_streak_visual — no SpellScript / AuraScript
+	// binding bridge (razelikh precedent).
+	RegisterLuaBoss("boss_lord_jaraxxus", 34780)
 }
