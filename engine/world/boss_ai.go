@@ -5035,4 +5035,23 @@ func init() {
 	// condition script and the three achievements are
 	// bridge-blocked — documented in the lua header.
 	RegisterLuaBoss("boss_thorim", 32865)
+
+	// boss_yogg_saron.lua (lua_scripts/northrend/boss_yogg_saron.lua):
+	// 33134 Sara + 33288 Yogg-Saron (boss_sara / boss_yogg_saron —
+	// ulduar.h NPC_SARA line 197 / NPC_YOGG_SARON line 82;
+	// AddSC_boss_yogg_saron(), loader decl 122 / call 317 — the
+	// THIRTEENTH group of the "// Ulduar" block in
+	// AddNorthrendScripts()).
+	// JustEngagedWith Talk(SAY_SARA_AGGRO 2) (event 1; the
+	// auriaya engage-port precedent); JustDied
+	// Talk(SAY_YOGG_SARON_DEATH 6) (event 4 — the sjonnir
+	// JustDied-Talk precedent). Sara's player-gated
+	// Talk(SAY_SARA_KILL 5) carries an additional
+	// !IsInEvadeMode() gate with no Lua bridge — event 3
+	// deliberately not registered. Voice/brain/tentacle/
+	// keeper/illusion creatures, the observation-ring gossip
+	// Talks, timer Talks and all thirty-three spell scripts
+	// are bridge-blocked — documented in the lua header.
+	RegisterLuaBoss("boss_yogg_saron", 33134)
+	RegisterLuaBoss("boss_yogg_saron", 33288)
 }
