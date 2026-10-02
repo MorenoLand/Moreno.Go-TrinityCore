@@ -4151,4 +4151,37 @@ func init() {
 	// GetData(DATA_CHAOS_THEORY)) joins the no-achievement-bridge
 	// queue (kelthuzad/thaddius precedent).
 	RegisterLuaBoss("boss_anomalus", 26763)
+
+	// Keristrasza (26723), The Nexus —
+	// lua_scripts/northrend/boss_keristrasza.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0) (the
+	// DoCastAOE(SPELL_INTENSE_COLD 48094) leg has no DoCastAOE bridge
+	// — nexus_commanders EVENT_FRIGHTENING_SHOUT precedent; the
+	// BossAI::JustEngagedWith instance-bookkeeping leg has no bridge
+	// — tharon_ja precedent; the three events.ScheduleEvent legs have
+	// no timer-event bridge); KilledUnit Talk(SAY_SLAY 1) player-gated
+	// (nalorakk/kelthuzad variant — seventh ported variant, fifth
+	// identical to nalorakk/kelthuzad/gothik/thaddius); JustDied
+	// Talk(SAY_DEATH 3) (_JustDied bookkeeping has no bridge).
+	// Documented-only: Reset Initialize + RemoveFlag(UNIT_FLAG_
+	// STUNNED) + RemovePrison(CheckContainmentSpheres()) + _Reset()
+	// (no instance/GO-state/flag bridges — containment-sphere prison
+	// machine documented-only); DamageTaken HealthBelowPctDamaged(25)
+	// -> Talk(SAY_ENRAGE 2)+Talk(SAY_FRENZY 5)+DoCast(SPELL_ENRAGE
+	// 8599) one-shot latch (no health-pct bridge); the UpdateAI event
+	// machine — EVENT_CRYSTAL_FIRE_BREATH DoCastVictim(CRYSTALFIRE_
+	// BREATH 48096) 14s, EVENT_CRYSTAL_CHAINS_CRYSTALLIZE DoCast(me,
+	// TAIL_SWEEP 50155) 5s (DUNGEON_MODE init 30s/11s), EVENT_TAIL_
+	// SWEEP Talk(SAY_CRYSTAL_NOVA 4)+heroic DoCast(CRYSTALLIZE 48179)/
+	// normal SelectTarget(Random)->DoCast(CRYSTAL_CHAINS 50997)
+	// DUNGEON_MODE(30s,11s) repeat (no timer-event/random-target/
+	// cast bridges); SetGUID(DATA_INTENSE_COLD) _intenseColdList leg
+	// (no SetGUID/GetData bridge). containment_sphere
+	// (GameObjectScript OnGossipHello — cross-AI CheckContainment
+	// Spheres + RemovePrison) joins the instance-model-blocked gossip
+	// queue; spell_intense_cold (AuraScript HandlePeriodicTick stack>=2
+	// -> caster-AI SetGUID(DATA_INTENSE_COLD)) has no AuraScript
+	// bridge; achievement_intense_cold (OnCheck _intenseColdList)
+	// joins the no-achievement-bridge queue.
+	RegisterLuaBoss("boss_keristrasza", 26723)
 }
