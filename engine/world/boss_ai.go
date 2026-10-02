@@ -4614,4 +4614,35 @@ func init() {
 	// — no SpellScript bridge; both join the
 	// no-SpellScript-bridge queue.
 	RegisterLuaBoss("boss_krystallus", 27977)
+
+	// Sjonnir the Ironshaper (27978), Halls of Stone —
+	// lua_scripts/northrend/boss_sjonnir.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
+	// (event 1; the CheckRequiredBosses / EnterEvadeMode gate,
+	// the BossAI::JustEngagedWith passthrough and the six
+	// ScheduleEvent legs have no bridges); KilledUnit
+	// player-gated Talk(SAY_SLAY 1) (event 3 — razuvious
+	// player-gated variant precedent, twenty-first player-gated
+	// variant ported); JustDied Talk(SAY_DEATH 2) (event 4;
+	// _JustDied passthrough has no bridge).
+	// Documented-only: Reset / Initialize (_Reset() +
+	// abuseTheOoze = 0); DoAction(ACTION_OOZE_DEAD 1) /
+	// GetData(DATA_ABUSE_THE_OOZE 2) (no DoAction / GetData
+	// bridges; consumer: achievement_abuse_the_ooze below); the
+	// UpdateAI event machine (CHAIN_LIGHTNING random-target
+	// 50830; LIGHTNING_SHIELD self 50831; STATIC_CHARGE
+	// DoCastVictim 50834; LIGHTNING_RING self 51849; SUMMON
+	// health-tier pipe summons 27982/27979/27981/27980 30s;
+	// FRENZY triggered 28747 — no timer-event / cast /
+	// target-selection / health-pct / summon bridges);
+	// npc_malformed_ooze (27981 local enum; no Talk arms — the
+	// 10s/3s merge machine has no proximity / summon / despawn /
+	// timer bridges; npc_spark_of_ionar no-bridgeable-arms
+	// precedent — no registration); npc_iron_sludge (28165 local
+	// enum; no Talk arms — JustDied DoAction leg has no
+	// ObjectAccessor / GetGuidData / DoAction bridges; no
+	// registration); achievement_abuse_the_ooze (GetData >= 5 —
+	// no GetData / achievement bridges; joins the
+	// unmodeled-achievement queue).
+	RegisterLuaBoss("boss_sjonnir", 27978)
 }
