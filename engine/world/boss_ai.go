@@ -5988,4 +5988,21 @@ func init() {
 	// chains, zero Talk) sit behind the timer / cast / emote bridges —
 	// documented only.
 	RegisterLuaBoss("npc_guard_generic", 15184)
+	// boss_nexusprince_shaffar (Mana Tombs, Outland dungeon pass): the
+	// bridgeable Talk arms — JustEngagedWith Talk(SAY_AGGRO 1) (event 1,
+	// the auriaya precedent), KilledUnit Talk(SAY_SLAY 2) player-gated
+	// (event 3, the razuvious precedent), JustDied Talk(SAY_DEAD 4)
+	// (event 4, the sjonnir precedent). Entry 18344 NPC_SHAFFAR from the
+	// file's own Creatures enum; ScriptName bindings are DB-side as usual
+	// — see lua_scripts/outland/boss_nexusprince_shaffar.lua. The
+	// one-shot 100-unit MoveInLineOfSight SAY_INTRO Talk has the
+	// maladaar event-27 fire-site mismatch (documented-only); the Reset
+	// three-beacon summon legs, the JustSummoned beacon-visual /
+	// random-target AttackStart legs, and the whole ExecuteEvent machine
+	// (urand-gated SAY_SUMMON, blink/frostbolt/frostnova beacon casts)
+	// sit behind the no-summon / no-cast / no-timer / no-random-target
+	// bridges (documented-only). npc_ethereal_beacon (18431),
+	// npc_ethereal_apprentice, and npc_yor are zero-Talk — not
+	// registered.
+	RegisterLuaBoss("boss_nexusprince_shaffar", 18344)
 }
