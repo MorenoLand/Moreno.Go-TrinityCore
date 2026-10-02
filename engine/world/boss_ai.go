@@ -5264,4 +5264,21 @@ func init() {
 	// achievement_bronjahm_soul_power are bridge-blocked — documented
 	// in the lua header.
 	RegisterLuaBoss("boss_bronjahm", 36497)
+
+	// Devourer of Souls (Forge of Souls) — bridgeable Talk arms ported
+	// from boss_devourer_of_souls.cpp; see
+	// lua_scripts/northrend/boss_devourer_of_souls.lua.
+	// Talk(MIRRORED_SOUL / UNLEASHED_SOULS / WAILING_SOULS emotes) rides
+	// scheduler event legs (no-timer-bridge); KilledUnit Talk is
+	// display-ID gated (no display-ID bridge); the JustDied outro
+	// summon loop and the summon->AI()->Talk(SAY_JAINA_OUTRO /
+	// SAY_SYLVANAS_OUTRO) legs are instance-driven Talk on other
+	// creatures (no bridge); the crucible SummonCreature guard, the
+	// scheduler machine (PHANTOM_BLAST / MIRRORED_SOUL / WELL_OF_SOULS
+	// / UNLEASHED_SOULS face-flip / WAILING_SOULS beam sweep), the
+	// SpellHitTarget / GetData(DATA_THREE_FACED) legs, the three
+	// mirrored-soul SpellScript / AuraScript hooks and
+	// achievement_three_faced are bridge-blocked — documented in the
+	// lua header.
+	RegisterLuaBoss("boss_devourer_of_souls", 36502)
 }
