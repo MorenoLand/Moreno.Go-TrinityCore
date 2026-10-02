@@ -3997,4 +3997,28 @@ func init() {
 	// blood-strike 61696 arms have no bridge: no equipment, instance,
 	// cross-AI, despawn, or charm-possession bridge).
 	RegisterLuaBoss("boss_razuvious", 16061)
+
+	// Kel'Thuzad (15990, Naxxramas) — lua_scripts/northrend/boss_kelthuzad.lua.
+	// Ported arms (C++-exact): KilledUnit Talk(SAY_SLAY 8) gated on player
+	// (nalorakk precedent); JustDied Talk(SAY_DEATH 9) (tharon_ja
+	// precedent). Unmodeled: SpellHit CHAINS_DUMMY Talk (SpellHit never
+	// fires in Lua), EVENT_SKELETON/BANSHEE/ABOMINATION summons (no
+	// summon bridge), EVENT_DESPAWN_MINIONS despawn + SAY_AGGRO (Talk not
+	// ported orphaned — vortex precedent), EVENT_PHASE_TWO (no phase
+	// bridge), EVENT_FROSTBOLT_VOLLEY / EVENT_CHAINS DoCastAOE (no
+	// DoCastAOE bridge), EVENT_SHADOW_FISSURE / EVENT_DETONATE_MANA /
+	// EVENT_FROST_BLAST SelectTarget(Random) (cairne/kazzak precedent),
+	// transition reply/summon legs (instance model / no summon bridge),
+	// phase-three 45%-health leg (no health-pct bridge), frostbolt
+	// filler (phase-gated), DamageTaken zeroing (no phase bridge), Reset /
+	// EnterEvadeMode / ACTION_BEGIN_ENCOUNTER (instance model),
+	// GetAIForCharmedPlayer (no charmed-player AI bridge),
+	// npc_kelthuzad_skeleton/banshee/abomination/guardian
+	// (entry-unverifiable from C++ evidence — no registration; abomination
+	// DoCastVictim(MORTAL_WOUND 28467) and guardian DoCastVictim(
+	// BLOOD_TAP 28470) join the bridgeable-but-entry-blocked queue),
+	// spell_kelthuzad_chains/detonate_mana/frost_blast (no AuraScript
+	// binding bridge), at_kelthuzad_center (no area-trigger bridge),
+	// achievement_just_cant_get_enough (no achievement bridge).
+	RegisterLuaBoss("boss_kelthuzad", 15990)
 }
