@@ -1,0 +1,155 @@
+-- Malygos (Eye of Eternity) — Lua port of
+-- src/server/scripts/Northrend/Nexus/EyeOfEternity/boss_malygos.cpp
+-- (boss_malygos (CreatureScript) via
+-- GetEyeOfEternityAI<boss_malygosAI> (BossAI, DATA_MALYGOS_EVENT);
+-- npc_portal_eoe / npc_power_spark / npc_melee_hover_disk /
+-- npc_caster_hover_disk / npc_nexus_lord / npc_scion_of_eternity /
+-- npc_arcane_overload / npc_wyrmrest_skytalon / npc_static_field
+-- (CreatureScripts); spell_malygos_portal_beam / spell_malygos_-
+-- random_portal / spell_malygos_arcane_storm / spell_malygos_-
+-- vortex_dummy / spell_malygos_vortex_visual / spell_arcane_-
+-- overload / spell_nexus_lord_align_disk_aggro /
+-- spell_scion_of_eternity_arcane_barrage /
+-- spell_malygos_destroy_platform_channel /
+-- spell_alexstrasza_bunny_destroy_platform_boom_visual /
+-- spell_alexstrasza_bunny_destroy_platform_event /
+-- spell_wyrmrest_skytalon_summon_red_dragon_buddy /
+-- spell_wyrmrest_skytalon_ride_red_dragon_buddy_trigger /
+-- spell_malygos_surge_of_power_warning_selector_25 /
+-- spell_malygos_surge_of_power_25 / spell_alexstrasza_gift_beam /
+-- spell_alexstrasza_gift_beam_visual (SpellScriptLoaders ->
+-- SpellScript / AuraScript); achievement_denyin_the_scion
+-- (AchievementCriteriaScript); all registered from inside
+-- AddSC_boss_malygos(); loader decl 91 / call 286 per
+-- northrend_script_loader.cpp — the FIRST group of the
+-- "// The Nexus: Eye of Eternity" block in AddNorthrendScripts(),
+-- immediately after AddSC_oculus() (decl 89 / call 284), under
+-- the "// The Nexus: Eye of Eternity" marker; the call after it
+-- is AddSC_instance_eye_of_eternity() (decl 92 / call 287) —
+-- loader order confirmed this run; the checkpoint sequence
+-- (oculus -> boss_malygos) is followed).
+-- Entry: 28859 Malygos (eye_of_eternity.h NPC_MALYGOS, line 43;
+-- DATA_MALYGOS_EVENT = 0, line 29;
+-- instance_eye_of_eternity.cpp OnCreatureCreate binds case
+-- NPC_MALYGOS (line 134) — entry-verifiable, registration
+-- proceeds (the nexus_commanders kalecgos precedent); the
+-- CreatureScript ScriptName binding is DB-side as usual.
+-- Sole-source verified: whole-server-tree grep for each of the
+-- 28 script names hits boss_malygos.cpp (+ the loader decl/call
+-- lines for AddSC_boss_malygos) only; zero sql/ hits. No malygos
+-- lua existed.
+-- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4
+-- OnDied. No timers in the ported arms; melee is engine-driven
+-- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
+-- Ported arms (C++-exact for all modeled arms):
+-- JustEngagedWith — Talk(SAY_START_P_ONE 1) (event 1; the
+-- setActive / CheckRequiredBosses / EnterEvadeMode /
+-- SetBossState / DoCast SPELL_BERSERK / DoStartTimedAchievement
+-- legs have no bridges — the tharon_ja BossAI-bookkeeping
+-- precedent; no cast bridge for the berserk aura).
+-- KilledUnit — C++-GATED on who->GetTypeId() == TYPEID_PLAYER,
+-- then Talk(SAY_KILLED_PLAYER_P_ONE 3 / P_TWO 8 / P_THREE 15)
+-- selected by the AI's internal _phase (PHASE_ONE / PHASE_TWO /
+-- PHASE_THREE) with a 5s kill-spam filter — DOCUMENTED-ONLY:
+-- the phase-select has no bridge (no phase model in Lua), so no
+-- faithful port exists.
+-- JustDied — Talk(SAY_DEATH 17) (event 4; the _JustDied
+-- bookkeeping has no bridge — tharon_ja precedent; the
+-- GetGuidData DATA_GIFT_BOX_BUNNY_GUID -> SummonGameObject
+-- GO_HEART_OF_MAGIC legs, the NPC_ALEXSTRASZA 32295 summon,
+-- and the 5s DespawnOrUnsummon have no instance / summon /
+-- despawn bridges — documented-only).
+-- Unmodeled (no bridges — documented, not wired):
+-- Reset / Initialize (gravity / immunity / flags / flight-speed
+-- legs, SetPhase(PHASE_NOT_STARTED), REACT_PASSIVE,
+-- SetBossState NOT_STARTED) — no instance / phase /
+-- react-state bridges. DoAction (the ~60-action event/phase
+-- machine: ACTION_LAND_ENCOUNTER_START, platform-destroy
+-- intro, vortex legs, surge-of-power legs, respawn handling —
+-- all gated on MotionMaster / instance GUIDs / timed events) —
+-- no DoAction / motion / instance bridges. MovementInform
+-- (POINT_LAND_P_ONE / vortex takeoff-land / cyclic movement
+-- points) — no motion bridge. DamageTaken (surge-of-power and
+-- destroy-platform health gates, immune flag flips) — no
+-- health / timer-event bridges. UpdateAI (phase-one arcane
+-- event machine, vortex handling, power-spark handling,
+-- phase-three disk/scion machine) — no timer-event / cast /
+-- phase bridges. SpellHit (SPELL_POWER_SPARK_MALYGOS Talk
+-- SAY_BUFF_SPARK 14 + despawn the spark; SPELL_MALYGOS_BERSERK
+-- Talk EMOTE_HIT_BERSERKER_TIMER) — no SpellHit / cast
+-- bridges (joins the SpellHit-15-never-fires queue).
+-- MoveInLineOfSight (power-spark proximity -> cast
+-- SPELL_POWER_SPARK_MALYGOS) — no LOS bridge.
+-- npc_portal_eoe (NPC_PORTAL_TRIGGER 30118) — SpellHit
+-- SPELL_PORTAL_OPENED -> phase-one-gated DoCast
+-- SPELL_SUMMON_POWER_PARK; UpdateAI aura maintenance —
+-- no SpellHit / cast / aura bridges. npc_power_spark
+-- (NPC_POWER_SPARK 30084) — UpdateAI despawn-when-reached,
+-- JustDied casts SPELL_POWER_SPARK_DEATH — no motion / cast
+-- bridges. npc_melee_hover_disk (NPC_HOVER_DISK_MELEE 30234) /
+-- npc_caster_hover_disk (NPC_HOVER_DISK_CASTER 30248) —
+-- VehicleAI: PassengerBoarded (player enters -> welcome /
+-- special-attack / take-off event machine; UNIT-type passenger
+-- -> SPELL_TELEPORT_VISUAL_ONLY), MovementInform gravity
+-- legs — no vehicle / passenger / motion bridges.
+-- npc_nexus_lord (NPC_HOVER disk adds' lord) — DoAction ->
+-- EVENT_NUKE_DUMMY / EVENT_ARCANE_SHOCK / EVENT_HASTE_BUFF
+-- event machine (DoCast SPELL_ARCANE_SHOCK / haste, nuke the
+-- disk the player rides) — no timer-event / cast bridges.
+-- npc_scion_of_eternity (NPC_SURGE_OF_POWER 30334) —
+-- IsSummonedBy schedules EVENT_ARCANE_BARRAGE (target-list
+-- arcane barrage machine), JustDied increments Malygos
+-- DATA_SUMMON_DEATHS — no timer-event / instance /
+-- target-selection bridges. npc_arcane_overload
+-- (NPC_ARCANE_OVERLOAD 30282) — IsSummonedBy ->
+-- SetGUID DATA_LAST_OVERLOAD_GUID; DoAction phase-gated
+-- DespawnOrUnsummon; SpellHit SPELL_ARCANE_BOMB_TRIGGER ->
+-- SPELL_ARCANE_BOMB_KNOCKBACK_DAMAGE + SPELL_ARCANE_OVERLOAD_1
+-- — no summon / despawn / SpellHit bridges. npc_wyrmrest_-
+-- skytalon (NPC_WYRMREST_SKYTALON 30161) — VehicleAI phase-three
+-- disk machine: IsSummonedBy -> MovePoint cycle; SpellHit
+-- shock-lance legs; PassengerBoarded player machine — no
+-- vehicle / motion / passenger bridges. npc_static_field
+-- (NPC_VORTEX_TRIGGER 30090) — periodic trigger — no bridge.
+-- The 17 spell scripts (SpellScript / AuraScript handlers:
+-- portal beam relocating, random portal target selection,
+-- arcane storm target filters, vortex dummy destination
+-- selection, vortex visual periodic, arcane overload
+-- immunity-window application, nexus-lord align-disk aggro
+-- transfer, scion arcane-barrage target-count scaling,
+-- destroy-platform channel aura removal, alexstrasza bunny
+-- platform boom visual + event, wyrmrest skytalon red-dragon
+-- buddy summon + ride trigger, surge-of-power 25 warning
+-- target selection + the surge itself, alexstrasza gift beam
+-- + gift beam visual) — no SpellScript bridge (the varos
+-- precedents) and no AuraScript bridge (the keristrasza
+-- precedent); all 17 join the standing queues.
+-- achievement_denyin_the_scion — OnCheck: player's vehicle
+-- base entry == NPC_HOVER_DISK_MELEE (30234) — no achievement
+-- bridge (the kelthuzad / thaddius precedent); joins the
+-- unmodeled-achievement queue.
+
+local ENTRY_MALYGOS = 28859
+
+local SAY_START_P_ONE = 1
+local SAY_DEATH = 17
+
+-- C++ JustEngagedWith: me->setActive(true) +
+-- instance->CheckRequiredBosses gate +
+-- instance->SetBossState(IN_PROGRESS) + Talk(SAY_START_P_ONE)
+-- + DoCast(SPELL_BERSERK) + DoStartTimedAchievement — only the
+-- Talk arm is bridgeable.
+local function malygosEnterCombat(event, creature, target)
+    creature:Talk(SAY_START_P_ONE)
+end
+
+-- C++ JustDied: _JustDied() + Talk(SAY_DEATH) + gift-box-bunny
+-- GUID -> SummonGameObject(HEART_OF_MAGIC) + SummonCreature
+-- NPC_ALEXSTRASZA + 5s DespawnOrUnsummon — only the Talk arm
+-- is bridgeable.
+local function malygosDied(event, creature, killer)
+    creature:Talk(SAY_DEATH)
+end
+
+RegisterCreatureEvent(ENTRY_MALYGOS, 1, malygosEnterCombat)
+RegisterCreatureEvent(ENTRY_MALYGOS, 4, malygosDied)

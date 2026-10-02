@@ -4292,4 +4292,62 @@ func init() {
 	// 2046) join the unmodeled-achievement queue (no
 	// achievement bridge — the kelthuzad / thaddius precedent).
 	RegisterLuaBoss("boss_eregos", 27656)
+
+	// Malygos (28859), Eye of Eternity —
+	// lua_scripts/northrend/boss_malygos.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_START_P_ONE 1)
+	// (the setActive / CheckRequiredBosses / EnterEvadeMode /
+	// SetBossState / DoCast SPELL_BERSERK / DoStartTimedAchievement
+	// legs have no bridges — the tharon_ja BossAI-bookkeeping
+	// precedent); JustDied Talk(SAY_DEATH 17) (the _JustDied
+	// bookkeeping has no bridge; the gift-box-bunny GUID ->
+	// SummonGameObject GO_HEART_OF_MAGIC legs, the NPC_ALEXSTRASZA
+	// 32295 summon, and the 5s DespawnOrUnsummon have no instance /
+	// summon / despawn bridges — tharon_ja precedent).
+	// Documented-only: KilledUnit (player-gated Talk(SAY_KILLED_PLAYER_P_ONE 3 /
+	// P_TWO 8 / P_THREE 15) selected by the AI's internal _phase with a 5s
+	// kill-spam filter — no phase bridge, so no faithful port);
+	// Reset / Initialize (gravity / immunity / flags / flight-speed legs,
+	// SetPhase(PHASE_NOT_STARTED), REACT_PASSIVE, SetBossState NOT_STARTED —
+	// no instance / phase / react-state bridges); the ~60-action DoAction
+	// machine (land-encounter start, platform-destroy intro, vortex legs,
+	// surge-of-power legs, respawn handling — gated on MotionMaster /
+	// instance GUIDs / timed events — no DoAction / motion / instance
+	// bridges); MovementInform (vortex takeoff-land / cyclic movement
+	// points — no motion bridge); DamageTaken (surge-of-power and
+	// destroy-platform health gates, immune flag flips — no health /
+	// timer-event bridges); the UpdateAI arcane / vortex / power-spark /
+	// phase-three disk machines (no timer-event / cast / phase bridges);
+	// SpellHit (SPELL_POWER_SPARK_MALYGOS -> Talk SAY_BUFF_SPARK 14 +
+	// despawn the spark; SPELL_MALYGOS_BERSERK -> Talk
+	// EMOTE_HIT_BERSERKER_TIMER — no SpellHit / cast bridges, joins the
+	// SpellHit-15-never-fires queue); MoveInLineOfSight (power-spark
+	// proximity cast — no LOS bridge); npc_portal_eoe (NPC_PORTAL_TRIGGER
+	// 30118 — SpellHit / aura-maintenance UpdateAI — no SpellHit / cast /
+	// aura bridges); npc_power_spark (NPC_POWER_SPARK 30084 — despawn-when-
+	// reached UpdateAI, JustDied cast — no motion / cast bridges);
+	// npc_melee_hover_disk (30234) / npc_caster_hover_disk (30248) —
+	// VehicleAI PassengerBoarded / MovementInform machines (no vehicle /
+	// passenger / motion bridges); npc_nexus_lord (DoAction ->
+	// EVENT_NUKE_DUMMY / EVENT_ARCANE_SHOCK / EVENT_HASTE_BUFF machine —
+	// no timer-event / cast bridges); npc_scion_of_eternity (NPC_SURGE_OF_
+	// POWER 30334 — EVENT_ARCANE_BARRAGE machine, JustDied increments
+	// DATA_SUMMON_DEATHS — no timer-event / instance / target-selection
+	// bridges); npc_arcane_overload (NPC_ARCANE_OVERLOAD 30282 — SetGUID
+	// DATA_LAST_OVERLOAD_GUID / phase-gated DespawnOrUnsummon / SpellHit
+	// SPELL_ARCANE_BOMB_TRIGGER legs — no summon / despawn / SpellHit
+	// bridges); npc_wyrmrest_skytalon (NPC_WYRMREST_SKYTALON 30161 —
+	// VehicleAI phase-three disk machine — no vehicle / motion /
+	// passenger bridges); npc_static_field (NPC_VORTEX_TRIGGER 30090 —
+	// no bridge); the 17 SpellScript / AuraScript handlers (portal beam,
+	// random portal, arcane storm, vortex dummy, vortex visual, arcane
+	// overload, nexus-lord align-disk aggro, scion arcane barrage,
+	// destroy-platform channel, alexstrasza bunny boom visual + event,
+	// wyrmrest skytalon buddy summon + ride trigger, surge-of-power 25
+	// warning selector + surge, alexstrasza gift beam + gift beam
+	// visual — no SpellScript bridge / no AuraScript bridge, join the
+	// standing queues); achievement_denyin_the_scion (vehicle-base entry
+	// == NPC_HOVER_DISK_MELEE gate — no achievement bridge, joins the
+	// unmodeled-achievement queue).
+	RegisterLuaBoss("boss_malygos", 28859)
 }
