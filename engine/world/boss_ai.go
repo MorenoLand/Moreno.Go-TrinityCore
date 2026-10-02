@@ -4388,4 +4388,63 @@ func init() {
 	// lava-strike cadence shift — no timer-event / cast / health / instance
 	// bridges.
 	RegisterLuaBoss("boss_sartharion", 28860)
+
+	// Tenebron (30452), Shadron (30451), Vesperon (30449), Obsidian
+	// Sanctum drake mini-bosses — lua_scripts/northrend/obsidian_sanctum.lua
+	// (dummy_dragonAI base shared across the three drakes).
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
+	// (the DoZoneInCombat and the ScheduleEvent(EVENT_SHADOW_FISSURE
+	// / EVENT_SHADOW_BREATH) legs have no bridges — the tharon_ja /
+	// malygos precedents); KilledUnit player-gated Talk(SAY_SLAY 1)
+	// (event 3 — razuvious player-gated variant precedent);
+	// JustDied Talk(SAY_DEATH 2) (the _canLoot / SetLootRecipient
+	// leg, the entry-switched power-aura removals (61248 / 58105 /
+	// 61251) via RemoveAurasDueToSpell +
+	// DoRemoveAurasDueToSpellOnPlayers, the acolyte KillSelf legs
+	// (FindNearestCreature 31218 / 31219), the SetBossState
+	// (DATA_TENEBRON / SHADRON / VESPERON, DONE) legs, and the
+	// Twilight Revenge DoCast (60639) on Sartharion via instance
+	// GUID fetch have no bridges — no aura / instance / cast /
+	// creature-search bridges).
+	// Documented-only: dummy_dragonAI Reset / SetData(DATA_CAN_LOOT) /
+	// MovementInform (the waypoint machine, POINT_ID_INIT 100 /
+	// POINT_ID_LAND 200 — no motion / instance / target-selection
+	// bridges); OpenPortal (portal grid search GO_TWILIGHT_PORTAL
+	// 193988 50.0f; Tenebron egg summons 30882 / 31204; Shadron /
+	// Vesperon acolyte summons 31218 / 31219; Talk(WHISPER_OPEN_PORTAL
+	// 6 / WHISPER_OPENED_PORTAL 7); portal SetRespawnTime 30000 — no
+	// summon / cast / creature-search / GO-respawn bridges);
+	// ExecuteEvent EVENT_SHADOW_FISSURE (random-target
+	// SPELL_SHADOW_FISSURE 57579 — no target-selection / cast
+	// bridges) / EVENT_SHADOW_BREATH (Talk(SAY_BREATH 3) +
+	// DoCastVictim(SPELL_SHADOW_BREATH 57570) — no cast bridge); the
+	// UpdateAI EVENT_FREE_MOVEMENT machine (no motion bridge);
+	// npc_tenebron Reset / JustEngagedWith (+EVENT_HATCH_EGGS 30s) /
+	// UpdateAI (no timer bridges); npc_shadron Reset (aura strips
+	// 57948 / 57835 + SetBossState(DATA_PORTAL_OPEN, NOT_STARTED))
+	// / JustEngagedWith (+EVENT_ACOLYTE_SHADRON 1min) / UpdateAI
+	// (instance-gated OpenPortal + SetBossState(IN_PROGRESS) — no
+	// timer / instance bridges); npc_vesperon Reset / JustEngagedWith
+	// (+EVENT_ACOLYTE_VESPERON 1min) / UpdateAI (instance-gated
+	// OpenPortal + DoCastVictim(SPELL_TWILIGHT_TORMENT_VESP 57948)
+	// — no timer / instance / cast bridges);
+	// npc_acolyte_of_shadron (31218) / npc_acolyte_of_vesperon
+	// (31219): Reset / JustDied / UpdateAI melee — all aura / cast /
+	// instance-gated, no Talk arms — no registration;
+	// npc_twilight_eggs (30882 / 31204): SpawnWhelps (whelp summons
+	// 30890 / 31214) / JustSummoned / UpdateAI — no summon /
+	// timer / aura bridges — no registration;
+	// npc_flame_tsunami (30616): aura / cast / creature-search legs
+	// (57494 / 57491 / 60430, lava blaze 30643) — no bridges — no
+	// registration; npc_twilight_fissure: entry UNVERIFIABLE from C++
+	// (no local NPC enum — joins the entry-unverifiable queue) and
+	// aura / cast-gated arms regardless — no registration;
+	// npc_twilight_whelp: aura / timer / cast-gated arms
+	// (60708) — no bridges — no registration;
+	// achievement_twilight_assist / duo / zone
+	// (GetData(TWILIGHT_ACHIEVEMENTS) >= 1 / >= 2 / == 3 — no
+	// achievement bridge, join the unmodeled-achievement queue).
+	RegisterLuaBoss("npc_tenebron", 30452)
+	RegisterLuaBoss("npc_shadron", 30451)
+	RegisterLuaBoss("npc_vesperon", 30449)
 }
