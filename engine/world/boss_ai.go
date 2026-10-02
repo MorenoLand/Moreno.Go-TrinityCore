@@ -3323,6 +3323,31 @@ func init() {
 	// precedent).
 	RegisterLuaBoss("boss_prince_taldaram", 29308)
 
+	// boss_amanitar: Ahn'kahet dungeon boss script, entry 30258
+	// (ahnkahet.h NPC_AMANITAR — kalecgos pass; the
+	// RegisterAhnKahetCreatureAI ScriptName binding is
+	// instance-shimmed, the creature_template binding DB-side).
+	// BossAI. Ported arm in lua_scripts/northrend/boss_amanitar.lua:
+	// EVENT_BASH — DoCastVictim(Bash 57094), JustEngagedWith-scheduled
+	// 10-14s init, rescheduled 7-12s (the only bridgeable arm of the
+	// slice). Documented in the lua file, not wired: EVENT_MINI
+	// (random-target SelectTarget bridge absent — cairne/kazzak
+	// precedent — plus no DoCastAOE bridge — terestian/shazzrah
+	// precedent), EVENT_ROOT / EVENT_BOLT (random-target SelectTarget
+	// bridge absent), EVENT_SPAWN and the EVENT_RESPAWN deque machine
+	// (summon STRAND absent — standing), JustSummoned /
+	// SummonedCreatureDies bookkeeping (summon / cross-AI bridges
+	// absent), EnterEvadeMode (no despawn bridge — terestian
+	// precedent; instance-script model absent), JustDied (instance
+	// bookkeeping + DoCastAOE(57283) + instance remove-auras legs
+	// unbridged), npc_amanitar_mushrooms (30391 / 30435 entry-verifiable
+	// but Reset passive/display bridges + MoveInLineOfSight
+	// aura-removal / DoCastAOE / scale / despawn bridges + JustDied
+	// DoCastAOE all absent — entry-verifiable-but-bridge-blocked queue),
+	// and spell_amanitar_potent_fungus (no AuraScript binding bridge —
+	// razelikh precedent).
+	RegisterLuaBoss("boss_amanitar", 30258)
+
 	// npc_slad_ran_constrictor: Gundrak script, entry 29713
 	// (boss_slad_ran.cpp CREATURE_CONSTRICTORS — kalecgos pass).
 	// ScriptedAI. Ported arm: Grip of Slad'ran 55093 on the victim
