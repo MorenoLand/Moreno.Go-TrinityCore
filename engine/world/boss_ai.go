@@ -5156,4 +5156,17 @@ func init() {
 	// SpellScriptLoader hooks are bridge-blocked — documented in the lua
 	// header.
 	RegisterLuaBoss("boss_palehoof", 26687)
+	// AddSC_boss_skadi: Skadi the Ruthless (Utgarde Pinnacle) — ported
+	// arms (lua_scripts/northrend/boss_skadi.lua): KilledUnit
+	// player-gated Talk(SAY_KILL 1) (event 3 — the razuvious
+	// player-gated variant precedent), JustDied unconditional
+	// Talk(SAY_DEATH 3) (event 4 — the sjonnir JustDied-Talk precedent).
+	// Talk(SAY_AGGRO 0) rides DoAction(ACTION_START_ENCOUNTER) (event 1
+	// deliberately not registered), the SAY_DRAKE_BREATH /
+	// SAY_DRAKE_DEATH Talks, the whole flying-phase / harpoon / vehicle
+	// DoAction machine, the grauf spline-chain emotes (no MovementInform
+	// bridge), the ymirjar trash spell timers, the SpellScript /
+	// AuraScript hooks, the achievement GetData check and the area
+	// trigger are bridge-blocked — documented in the lua header.
+	RegisterLuaBoss("boss_skadi", 26693)
 }
