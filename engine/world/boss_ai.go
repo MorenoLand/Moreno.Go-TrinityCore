@@ -5583,4 +5583,38 @@ func init() {
 	RegisterLuaBoss("boss_prince_keleseth_icc", 37972)
 	RegisterLuaBoss("boss_prince_taldaram_icc", 37973)
 	RegisterLuaBoss("boss_prince_valanar_icc", 37970)
+
+	// boss_blood_queen_lana_thel: Icecrown Citadel boss script,
+	// entry 37955 (icecrown_citadel.h NPC_BLOOD_QUEEN_LANA_THEL —
+	// kalecgos pass; the RegisterIcecrownCitadelCreatureAI
+	// ScriptName binding is instance-shimmed, the
+	// creature_template binding DB-side). BossAI. Ported arms in
+	// lua_scripts/northrend/boss_blood_queen_lana_thel.lua:
+	// JustEngagedWith Talk(SAY_AGGRO 0) (event 1, the auriaya
+	// engage-port precedent), KilledUnit Talk(SAY_KILL 8)
+	// victim->GetTypeId() == TYPEID_PLAYER gated (event 3, the
+	// razuvious player-gated variant precedent; identical to
+	// nalorakk / kelthuzad / gothik / thaddius / garfrost / krick /
+	// tyrannus / falric / marwyn / marrowgar / deathwhisper /
+	// saurfang / festergut / rotface / putricide), JustDied Talk(SAY_DEATH 11) (event 4, the sjonnir
+	// JustDied-Talk precedent). No other bridgeable arm in the
+	// file: Talk(SAY_WIPE 9) rides JustReachedHome with the
+	// unbridged instance->SetBossState(FAIL) leg (no event-24 port
+	// precedent); Talk(SAY_AIR_PHASE 7) rides the POINT_AIR
+	// MovementInform leg (no MovementInform bridge);
+	// Talk(EMOTE_BERSERK_RAID 12 / SAY_BERSERK 10) rides
+	// EVENT_BERSERK, Talk(SAY_VAMPIRIC_BITE 1) rides
+	// EVENT_VAMPIRIC_BITE, Talk(SAY_PACT_OF_THE_DARKFALLEN 6) rides
+	// EVENT_PACT_OF_THE_DARKFALLEN,
+	// Talk(EMOTE_SWARMING_SHADOWS 5 / SAY_SWARMING_SHADOWS 4)
+	// rides EVENT_SWARMING_SHADOWS (no-timer-bridge). The
+	// frenzied-bloodthirst AuraScript's cross-AI
+	// bloodQueen->AI()->Talk(EMOTE_BLOODTHIRST 3) /
+	// Talk(SAY_MIND_CONTROL 2) have no bridge. The 5 spell scripts,
+	// the remaining 2 aura scripts, and the 2
+	// AchievementCriteriaScripts join the no-SpellScript-bridge /
+	// no-AuraScript-bridge / no-achievement-criteria-bridge queues —
+	// documented in the lua header. Ninth group of the
+	// "// Icecrown Citadel" block.
+	RegisterLuaBoss("boss_blood_queen_lana_thel", 37955)
 }
