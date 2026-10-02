@@ -5130,4 +5130,20 @@ func init() {
 	// lua header.
 	RegisterLuaBoss("boss_ingvar_the_plunderer", 23954)
 	RegisterLuaBoss("boss_ingvar_the_plunderer", 23980)
+	// Svala Sorrowgrave (Utgarde Pinnacle) — boss_svala.cpp,
+	// AddSC_boss_svala() (loader decl 132 / call 327) — the FIRST group of
+	// the "// Utgarde Keep - Utgarde Pinnacle" block (utgarde_keep ->
+	// boss_svala).
+	// Bridgeable arms: JustEngagedWith unconditional Talk(SAY_AGGRO 2)
+	// (event 1 — the auriaya engage-port precedent), KilledUnit
+	// player-gated Talk(SAY_SLAY 3) (event 3 — the razuvious player-gated
+	// variant precedent), JustDied unconditional Talk(SAY_DEATH 4)
+	// (event 4 — the sjonnir JustDied-Talk precedent). The whole intro
+	// Talk machine (EVENT_INTRO_* timers, cross-creature Arthas talks),
+	// the EVENT_RITUAL_PREPARATION Talk(SAY_SACRIFICE_PLAYER), the phase
+	// transitions, spectator / ritual-channeler / scourge-hulk machines
+	// (no Talk arms), the spell_paralyze_pinnacle SpellScript and the
+	// achievement_incredible_hulk GetData check are bridge-blocked —
+	// documented in the lua header.
+	RegisterLuaBoss("boss_svala", 26668)
 }
