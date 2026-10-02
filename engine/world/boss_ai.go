@@ -4978,4 +4978,15 @@ func init() {
 	// bridges; all eight join the no-SpellScript /
 	// no-AuraScript-bridge queues).
 	RegisterLuaBoss("boss_kologarn", 32930)
+	// Hodir (Ulduar) — fight logic in
+	// lua_scripts/northrend/boss_hodir.lua. Ported arms:
+	// JustEngagedWith Talk(SAY_AGGRO 0) (event 1), KilledUnit
+	// player-gated Talk(SAY_SLAY 1) (event 3), DamageTaken
+	// lethal -> Talk(SAY_DEATH 4) + damage=0 rewrite (event 9).
+	// Timer-event Talks (flash freeze / stalactite /
+	// hard-mode-failed / berserk), the DamageTaken companion
+	// legs (faction flip, despawn, kill credit), helper-NPC
+	// DoAction legs and both spell scripts are bridge-blocked
+	// — documented in the lua header.
+	RegisterLuaBoss("boss_hodir", 32845)
 }
