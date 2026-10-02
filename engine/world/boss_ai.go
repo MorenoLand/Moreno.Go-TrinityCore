@@ -1819,6 +1819,35 @@ func init() {
 	// / flag bridges — documented only. Dragonblight is the
 	// third Northrend zone (dalaran, borean_tundra closed).
 	RegisterLuaBoss("npc_torturer_lecraft", 27394)
+	// npc_emily (Grizzly Hills zone script): the JustEngagedWith arm —
+	// Talk(SAY_RANDOMAGGRO 4, no target) — the event-1 auriaya
+	// precedent (EscortAI base, but the arm is a bare self-Talk);
+	// the WaypointReached escort cinematic Talk chain (SAY_WORGHAGGRO1
+	// 0 / SAY_WORGRAGGRO3 2 / SAY_VICTORY2 6 / SAY_VICTORY3 7 /
+	// SAY_VICTORY4 8 / SAY_QUEST_COMPLETE 12) + SummonCreature /
+	// DoCast / vehicle / faction / MovePoint legs await the escort /
+	// summon / cast / movement / faction bridges; OnQuestAccept
+	// SAY_QUEST_ACCEPT 11 awaits the quest-accept bridge. Entry
+	// 26588 verifiable from the C++ Floppy enum — see
+	// lua_scripts/northrend/npc_emily.lua. npc_mrfloppy
+	// (JustEngagedWith cross-creature Emily Talk only — no
+	// cross-creature Talk bridge), npc_outhouse_bunny
+	// (SpellHit 48382 emote/cast arms — no SpellHit bridge),
+	// npc_tallhorn_stag + npc_amberpine_woodsman (Talk-free
+	// emote-state machine), npc_wounded_skirmisher (SpellHit
+	// 48812 Talk(SAY_RANDOM) + 48813 — no SpellHit bridge),
+	// npc_venture_co_straggler (EVENT_STRAGGLER_2 timer Talk(SAY_SEO)
+	// + MovePoint chain — no-timer bridge; SpellHit 49075 —
+	// no SpellHit bridge), npc_lake_frog (EVENT_LAKEFROG_2/5
+	// timer Talk SAY_MAIDEN_0/1 — no-timer bridge; ReceiveEmote /
+	// gossip arms — no bridges), npc_rocket_propelled_warhead
+	// (VehicleAI PassengerBoarded/DoAction — no bridges), and the
+	// six spell loaders (spell_shredder_delivery,
+	// spell_infected_worgen_bite, spell_vehicle_warhead_fuse,
+	// spell_warhead_detonate, spell_z_check, spell_warhead_fuse —
+	// all SpellScript/AuraScript, no SpellScript bridge) are
+	// documented only.
+	RegisterLuaBoss("npc_emily", 26588)
 	// npc_apothecary_hanes (Howling Fjord zone script): the
 	// UpdateAI health arm — below 75% health the 10s PotTimer
 	// ticks -> triggered self-cast SPELL_HEALING_POTION 17534
