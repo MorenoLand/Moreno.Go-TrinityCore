@@ -4534,4 +4534,42 @@ func init() {
 	// / instance bridges; the stormforged_lieutenant
 	// no-bridgeable-arms precedent, no registration).
 	RegisterLuaBoss("boss_ionar", 28546)
+
+	// Volkhan (28587), Halls of Lightning —
+	// lua_scripts/northrend/boss_volkhan.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
+	// (event 1; SetPhase / ScheduleEvent legs and the
+	// BossAI::JustEngagedWith passthrough have no bridges);
+	// KilledUnit player-gated Talk(SAY_SLAY 3) (event 3 —
+	// razuvious player-gated variant precedent, eighteenth
+	// player-gated variant ported); JustDied Talk(SAY_DEATH 4)
+	// (event 4; DespawnGolem ObjectAccessor / summon-list leg
+	// and _JustDied passthrough have no bridges).
+	// Documented-only: Reset / Initialize (flag/timer/phase
+	// clears + _Reset + DespawnGolem + forge schedule — no
+	// bridges); AttackStart (threat / motion — no bridges);
+	// DespawnGolem / ShatterGolem (no ObjectAccessor /
+	// summon-list / cast bridges); JustSummoned (no
+	// summon-list / cast / motion / target-selection bridges);
+	// MovementInform (no motion bridge); GetData
+	// DATA_SHATTER_RESISTANT (no GetData bridge — the
+	// achievement consumer); the UpdateAI timer machine
+	// (Talk(2) SAY_STOMP / Talk(6) EMOTE_SHATTER arms ride the
+	// SHATTERING_STOMP machine; Talk(5) EMOTE_TO_ANVIL rides
+	// the forge summon-phase machine; Talk(1) SAY_FORGE rides
+	// the health-check machine — no timer-event / cast /
+	// motion / target-selection bridges); and
+	// npc_molten_golem (NPC_MOLTEN_GOLEM 28695, local enum —
+	// no Talk arms anywhere, entry-verifiable but
+	// bridge-blocked: Reset timers, AttackStart, DamageTaken
+	// brittle-golem transform (UpdateEntry 28681), SpellHit
+	// SPELL_SHATTER despawn, UpdateAI BLAST_WAVE /
+	// IMMOLATION_STRIKE machine — no DamageTaken / SpellHit /
+	// timer-event / cast / motion bridges; the
+	// stormforged_lieutenant no-bridgeable-arms precedent, no
+	// registration); and achievement_shatter_resistant
+	// (GetData(DATA_SHATTER_RESISTANT 2042) < 5 — no GetData
+	// / achievement bridges; joins the unmodeled-achievement
+	// queue).
+	RegisterLuaBoss("boss_volkhan", 28587)
 }
