@@ -5074,4 +5074,18 @@ func init() {
 	// damage=0 (no Talk arm), the ten spell scripts and the GO script are
 	// bridge-blocked — documented in the lua header.
 	RegisterLuaBoss("boss_algalon_the_observer", 32871)
+	// Prince Keleseth (Utgarde Keep) — boss_keleseth.cpp,
+	// AddSC_boss_keleseth() (loader decl 126 / call 321) — the FIRST group
+	// of the "// Utgarde Keep - Utgarde Keep" block (instance_ulduar ->
+	// boss_keleseth; next call is AddSC_boss_skarvald_dalronn()).
+	// Bridgeable arms: JustEngagedWith unconditional Talk(SAY_START_COMBAT
+	// 1) (event 1 — the auriaya engage-port precedent; the runemage /
+	// strategist guard AttackStart leg has no bridge), JustDied
+	// Talk(SAY_DEATH 5) (event 4 — the sjonnir JustDied-Talk precedent).
+	// The EVENT_SUMMON_SKELETONS / EVENT_FROST_TOMB timer Talks, the
+	// targeted frost-tomb emote, npc_frost_tomb / npc_vrykul_skeleton (no
+	// Talk arms), the spell_frost_tomb AuraScript and the
+	// achievement_on_the_rocks GetData check are bridge-blocked —
+	// documented in the lua header.
+	RegisterLuaBoss("boss_keleseth", 23953)
 }
