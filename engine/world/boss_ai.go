@@ -5521,4 +5521,30 @@ func init() {
 	// queue — documented in the lua header. Sixth group of the
 	// "// Icecrown Citadel" block.
 	RegisterLuaBoss("boss_rotface", 36627)
+
+	// Professor Putricide (Icecrown Citadel) — bridgeable Talk arms
+	// ported from boss_professor_putricide.cpp; see
+	// lua_scripts/northrend/boss_professor_putricide.lua.
+	// boss_professor_putricide: JustEngagedWith Talk(SAY_AGGRO 4)
+	// (event 1, the auriaya engage-port precedent); KilledUnit
+	// Talk(SAY_KILL 11) victim->GetTypeId() == TYPEID_PLAYER gated
+	// (event 3, the razuvious player-gated variant precedent —
+	// SEVENTEENTH ported variant, FIFTEENTH identical to
+	// nalorakk/kelthuzad/gothik/thaddius/garfrost/krick/tyrannus/falric/marwyn/marrowgar/deathwhisper/saurfang/festergut/rotface);
+	// JustDied Talk(SAY_DEATH 13) (event 4, the sjonnir
+	// JustDied-Talk precedent). No other bridgeable arm in the
+	// file: Talk(SAY_BERSERK 12) / Talk(EMOTE_UNSTABLE_EXPERIMENT 5)
+	// / Talk(EMOTE_MALLEABLE_GOO 9) ×2 / Talk(EMOTE_CHOKING_GAS_BOMB
+	// 10) / Talk(SAY_FESTERGUT_DEATH 1) / Talk(SAY_ROTFACE_DEATH 3)
+	// / Talk(SAY_TRANSFORM_1 7) / Talk(SAY_TRANSFORM_2 8) ride
+	// scheduler legs (no-timer-bridge); Talk(SAY_FESTERGUT_GASEOUS_BLIGHT
+	// 0) / Talk(SAY_ROTFACE_OOZE_FLOOD 2) /
+	// Talk(SAY_PHASE_TRANSITION_HEROIC 6) ride DoAction legs
+	// (no-DoAction bridge). npc_volatile_ooze / npc_gas_cloud have
+	// zero Talk lines — not registered (the bronjahm
+	// npc_corrupted_soul_fragment precedent). The 20 spell scripts
+	// join the no-SpellScript-bridge queue and the 5 aura scripts
+	// the no-AuraScript-bridge queue — documented in the lua
+	// header. Seventh group of the "// Icecrown Citadel" block.
+	RegisterLuaBoss("boss_professor_putricide", 36678)
 }
