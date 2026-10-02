@@ -4106,4 +4106,21 @@ func init() {
 	RegisterLuaBoss("boss_thaddius", 15928)
 	RegisterLuaBoss("npc_stalagg", 15929)
 	RegisterLuaBoss("npc_feugen", 15930)
+
+	// Commander Stoutbeard (26796), Commander Kolurg (26798), The
+	// Nexus — lua_scripts/northrend/boss_nexus_commanders.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0) +
+	// DoCastSelf(BATTLE_SHOUT 31403) + EVENT_WHIRLWIND schedule
+	// (6s/8s init); EVENT_WHIRLWIND DoCastSelf(WHIRLWIND 38618)
+	// 19500ms/25s repeat; KilledUnit Talk(SAY_KILL 1) player-gated
+	// (nalorakk variant); JustDied Talk(SAY_DEATH 2) (_JustDied
+	// bookkeeping has no bridge). Documented-only: JustEngagedWith
+	// RemoveAurasDueToSpell(FROZEN_PRISON 47543) (no aura-removal
+	// bridge), EVENT_CHARGE_COMMANDER SelectTarget(Random)->DoCast(
+	// CHARGE 60067) (no random-target SelectTarget bridge),
+	// EVENT_FRIGHTENING_SHOUT DoCastAOE(19134) (no DoCastAOE bridge).
+	// Single C++ script serves both faction-variant commanders
+	// (twin_valkyr shared-handler precedent).
+	RegisterLuaBoss("boss_nexus_commanders", 26796)
+	RegisterLuaBoss("boss_nexus_commanders", 26798)
 }
