@@ -4854,4 +4854,51 @@ func init() {
 	// — no GetData / achievement bridges; all three join the
 	// unmodeled-achievement queue).
 	RegisterLuaBoss("boss_xt002", 33293)
+
+	// General Vezax (33271), Ulduar —
+	// lua_scripts/northrend/boss_general_vezax.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
+	// (event 1; the BossAI::JustEngagedWith passthrough, the
+	// DoCast SPELL_AURA_OF_DESPAIR 62692 leg, the
+	// CheckShamanisticRage (shaman HasSpell 30823 ->
+	// SPELL_CORRUPTED_RAGE 68415) leg and the six ScheduleEvent
+	// legs have no bridges — the auriaya engage-port precedent);
+	// KilledUnit player-gated Talk(SAY_SLAY 1) (event 3 — the
+	// razuvious player-gated variant precedent — the
+	// twenty-fifth player-gated variant ported); JustDied
+	// Talk(SAY_DEATH 3) (event 4; the _JustDied() passthrough +
+	// DoRemoveAurasDueToSpellOnPlayers 62692 leg has no bridge —
+	// the sjonnir JustDied-Talk precedent).
+	// Documented-only: Reset / Initialize (_Reset() + flag
+	// init — no bridges); SpellHitTarget (SPELL_SHADOW_CRASH_
+	// HIT 62659 player leg -> shadowDodger = false — no
+	// SpellHit bridge); GetData(DATA_SHADOWDODGER 29962997 /
+	// DATA_SMELL_SARONITE 31813188 — no GetData bridge);
+	// DoAction(ACTION_VAPORS_DIE / ACTION_ANIMUS_DIE — no
+	// DoAction bridge); CheckShamanisticRage map-player scan —
+	// no bridge; the UpdateAI event machine
+	// (EVENT_SURGE_OF_DARKNESS Talk(EMOTE_SURGE_OF_DARKNESS 8)
+	// + Talk(SAY_SURGE_OF_DARKNESS 2) / EVENT_SARONITE_VAPORS
+	// hard-mode leg Talk(SAY_HARDMODE 5) + Talk(EMOTE_BARRIER
+	// 7) + SPELL_SARONITE_BARRIER 63364 / 63145 + hard-mode
+	// loot mode / EVENT_BERSERK Talk(SAY_BERSERK 4) — no
+	// timer-event / cast / summon / loot-mode bridges; all
+	// timer-leg yells ride the unbridgeable event machine);
+	// boss_saronite_animus (no entry enum in C++ — spell-
+	// summoned; entry-unverifiable — no registration; no Talk
+	// arms; DoAction(ACTION_ANIMUS_DIE) leg unbridgeable);
+	// npc_saronite_vapors (no entry enum in C++ — spell-
+	// summoned; entry-unverifiable — no registration;
+	// Talk(EMOTE_VAPORS 0) rides the unbridgeable constructor;
+	// DamageTaken / DoAction(ACTION_VAPORS_DIE) legs — no
+	// bridges); the three spell scripts
+	// (spell_general_vezax_mark_of_the_faceless /
+	// spell_general_vezax_mark_of_the_faceless_leech /
+	// spell_general_vezax_saronite_vapors — no SpellScript /
+	// AuraScript bridges; all three join the no-SpellScript /
+	// no-AuraScript-bridge queues); the two achievements
+	// (achievement_shadowdodger / achievement_smell_saronite —
+	// GetData-based OnCheck — no GetData / achievement
+	// bridges; both join the unmodeled-achievement queue).
+	RegisterLuaBoss("boss_general_vezax", 33271)
 }
