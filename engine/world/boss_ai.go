@@ -5868,3 +5868,44 @@ func init() {
 	// the "// Ruby Sanctum" block.
 	RegisterLuaBoss("boss_general_zarithrian", 39746)
 }
+
+func init() {
+	// Halion (39863) + Twilight Halion (40142) — Lua port of
+	// src/server/scripts/Northrend/ChamberOfAspects/RubySanctum/boss_halion.cpp
+	// (10 CreatureScripts: boss_halion (BossAI, DATA_HALION) +
+	// boss_twilight_halion (BossAI, DATA_TWILIGHT_HALION) +
+	// npc_halion_controller (ScriptedAI, NPC_HALION_CONTROLLER = 40146, zero
+	// Talk on its own unit — not registered, the bronjahm precedent) +
+	// npc_meteor_strike_flame / npc_meteor_strike_initial / npc_meteor_strike /
+	// npc_combustion_consumption / npc_orb_carrier / npc_living_inferno /
+	// npc_living_ember (ScriptedAI, zero Talk — not registered) +
+	// go_twilight_portal (GameObjectAI) + 17 SpellScriptLoaders
+	// (meteor_strike_marker, combustion_consumption x2, marks x2,
+	// combustion_consumption_periodic, damage_aoe_summon,
+	// twilight_realm_handlers x2, summon_exit_portals, twilight_phasing,
+	// twilight_cutter, clear_debuffs, spawn_living_embers, blazing_aura —
+	// no-SpellScript bridge)); all registered from inside AddSC_boss_halion()
+	// (line 1906); loader decl 193 / call 388 per northrend_script_loader.cpp —
+	// the SIXTH and FINAL group of the "// Ruby Sanctum" block, closing it.
+	// Entry-verifiable: ruby_sanctum.h NPC_HALION = 39863 (line 80),
+	// NPC_TWILIGHT_HALION = 40142 (line 81); instance_ruby_sanctum.cpp
+	// creatureData binds NPC_HALION -> DATA_HALION (line 54) and
+	// NPC_TWILIGHT_HALION -> DATA_TWILIGHT_HALION (line 55); ScriptName
+	// bindings are DB-side as usual.
+	// Ported arms in lua_scripts/northrend/boss_halion.lua:
+	// boss_halion JustEngagedWith Talk(SAY_AGGRO 2) (event 1, the auriaya
+	// precedent); boss_halion JustDied Talk(SAY_DEATH 5) (event 4, the
+	// sjonnir precedent); boss_twilight_halion KilledUnit Talk(SAY_KILL 6)
+	// gated on victim->GetTypeId() == TYPEID_PLAYER (event 3, the razuvious
+	// player-gated variant precedent — material halion has no KilledUnit arm).
+	// No other bridgeable arm in the file: DamageTaken Talk(SAY_PHASE_TWO 4 /
+	// SAY_PHASE_THREE 2) has no-DamageTaken bridge; SpellHit Talk(SAY_REGENERATE 0)
+	// rides the SpellHit-15-never-fires queue; UpdateAI Talk(SAY_METEOR_STRIKE 3)
+	// rides EVENT_METEOR_STRIKE (no-timer-bridge); the controller's cross-AI
+	// Talk(SAY_INTRO 1 / EMOTE_CORPOREALITY_TOT 4 / TIT 3 / POT 8 / PIP 9)
+	// and the orb machine's Talk(EMOTE_WARN_LASER 0 / SAY_SPHERE_PULSE 1)
+	// have no cross-AI-Talk bridge; SAY_BERSERK 7 is dead text. Sixth and
+	// final group of the "// Ruby Sanctum" block — Ruby Sanctum CLOSED (6/6).
+	RegisterLuaBoss("boss_halion", 39863)
+	RegisterLuaBoss("boss_twilight_halion", 40142)
+}
