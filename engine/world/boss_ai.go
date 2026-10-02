@@ -4070,4 +4070,40 @@ func init() {
 	// in Lua), spell_gothik_shadow_bolt_volley (no SpellScript binding
 	// bridge).
 	RegisterLuaBoss("boss_gothik", 16060)
+
+	// Thaddius (15928), Stalagg (15929), Feugen (15930), Naxxramas —
+	// lua_scripts/northrend/boss_thaddius.lua, npc_stalagg.lua,
+	// npc_feugen.lua.
+	// Ported arms (C++-exact): boss_thaddius KilledUnit
+	// Talk(SAY_SLAY 2) player-gated (nalorakk/kelthuzad/gothik
+	// variant) + JustDied Talk(SAY_DEATH 4) (event 4;
+	// _JustDied/setActive/cross-AI legs have no bridge); npc_stalagg
+	// JustEngagedWith Talk(SAY_STALAGG_AGGRO 0) (cross-AI DoAction +
+	// feugen AddThreat legs have no bridge) + UpdateAI
+	// DoCastSelf(POWER_SURGE 28134) 10s/urandms(25,30) + KilledUnit
+	// Talk(SAY_STALAGG_SLAY 1) player-gated; npc_feugen
+	// JustEngagedWith Talk(SAY_FEUGEN_AGGRO 0) (cross-AI + stalagg
+	// AddThreat legs have no bridge) + UpdateAI DoCastSelf(
+	// STATIC_FIELD 28135) 6s/6s + KilledUnit Talk(SAY_FEUGEN_SLAY 1)
+	// player-gated. SAY_AGGRO (1)/SAY_ELECT (3)/EMOTE_POLARITY_SHIFTED
+	// (6) ride unported legs (vortex — not ported orphaned).
+	// Unmodeled: the whole phase/cross-AI machine (InitializeAI phase
+	// legs, DoAction pet-aggro/death/revive/reset legs, Transition(),
+	// BeginResetEncounter, EVENT_REVIVE_*/EVENT_TRANSITION_*,
+	// EVENT_SHIFT DoCastAOE 28089 — no DoCastAOE bridge; EVENT_CHAIN
+	// DoCastVictim 28167 + EVENT_BERSERK DoCastSelf 27680 moroes/
+	// phase_hunter-ready in isolation but trigger-blocked behind the
+	// phase machine — gothik precedent; ball-lightning UpdateAI leg
+	// 28299; CanAIAttack/react-state/flag/immunity legs), the pets'
+	// feign-death DamageTaken machines + tesla-coil GO/beam machines
+	// (SpellHit never fires in Lua), feugen's magnetic-pull timer
+	// (the pull lives in spell_thaddius_magnetic_pull's OnCast — no
+	// SpellScript bridge), npc_tesla's DamageTaken zeroing (no damage
+	// bridge — entry 16218 has no registration), the three
+	// polarity/magnetic-pull SpellScripts (no SpellScript binding
+	// bridge), at_thaddius_entrance (no area-trigger bridge),
+	// achievement_thaddius_shocking (no achievement bridge).
+	RegisterLuaBoss("boss_thaddius", 15928)
+	RegisterLuaBoss("npc_stalagg", 15929)
+	RegisterLuaBoss("npc_feugen", 15930)
 }
