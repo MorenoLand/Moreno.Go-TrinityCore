@@ -5360,4 +5360,21 @@ func init() {
 	// DoZoneInCombat / instance SetBossState legs have no instance
 	// bridge — documented in the lua header.
 	RegisterLuaBoss("boss_falric", 38112)
+	// Marwyn (Halls of Reflection) — bridgeable Talk arms ported from
+	// boss_marwyn.cpp; see lua_scripts/northrend/boss_marwyn.lua.
+	// JustEngagedWith Talk(SAY_AGGRO 0) -> event 1 (the auriaya
+	// engage-port precedent); KilledUnit player-gated Talk(SAY_SLAY 1)
+	// -> event 3 (the razuvious player-gated variant precedent,
+	// eleventh ported variant, ninth identical); JustDied
+	// Talk(SAY_DEATH 2) -> event 4 (the sjonnir JustDied-Talk
+	// precedent). The UpdateAI EventMap machine (incl. timer-driven
+	// Talk(SAY_CORRUPTED_FLESH 3)) has no-timer /
+	// no-random-target-SelectTarget bridges (the boss_toravon
+	// precedent), the scheduler-schedule legs and the DoZoneInCombat /
+	// instance SetBossState legs have no bridge, and
+	// spell_marwyn_shared_suffering has no AuraScript bridge (the
+	// boss_moragg optic-link precedent) — documented in the lua
+	// header. Fourth and last group of the "// Halls of Reflection"
+	// block — the block CLOSES here.
+	RegisterLuaBoss("boss_marwyn", 38113)
 }
