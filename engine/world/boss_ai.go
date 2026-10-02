@@ -4801,4 +4801,57 @@ func init() {
 	// GetData / achievement bridges; joins the
 	// unmodeled-achievement queue).
 	RegisterLuaBoss("boss_ignis", 33118)
+
+	// XT-002 Deconstructor (33293), Ulduar —
+	// lua_scripts/northrend/boss_xt002.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
+	// (event 1; the BossAI::JustEngagedWith passthrough, the
+	// five ScheduleEvent legs and the DoStartTimedAchievement
+	// leg have no bridges — the auriaya engage-port precedent);
+	// KilledUnit player-gated Talk(SAY_SLAY 4) (event 3 — the
+	// razuvious player-gated variant precedent — the
+	// twenty-fourth player-gated variant ported); JustDied
+	// Talk(SAY_DEATH 6) (event 4; the _JustDied() passthrough +
+	// RemoveFlag NOT_SELECTABLE leg has no bridge — the sjonnir
+	// JustDied-Talk precedent).
+	// Documented-only: Reset / Initialize / EnterEvadeMode
+	// (DoStopTimedAchievement 21027 — no bridges);
+	// DoAction(ACTION_ENTER_HARD_MODE — no DoAction bridge);
+	// GetData(DATA_HARD_MODE / DATA_HEALTH_RECOVERED /
+	// DATA_GRAVITY_BOMB_CASUALTY — no GetData bridge);
+	// SetData(DATA_TRANSFERED_HEALTH health-transfer +
+	// DATA_GRAVITY_BOMB_CASUALTY — no SetData bridge);
+	// ExposeHeart / DisposeHeart (Talk(SAY_HEART_OPENED 1) /
+	// Talk(SAY_HEART_CLOSED 2) + Talk(EMOTE_HEART_CLOSED 9) —
+	// phase / react-state legs unbridgeable);
+	// PassengerBoarded Talk(EMOTE_SCRAPBOT 11) — no vehicle /
+	// PassengerBoarded bridge; the UpdateAI event machine
+	// (EVENT_SEARING_LIGHT / EVENT_GRAVITY_BOMB /
+	// EVENT_TYMPANIC_TANTRUM Talk(SAY_TYMPANIC_TANTRUM 3) +
+	// Talk(EMOTE_TYMPANIC_TANTRUM 10) / EVENT_PHASE_CHECK /
+	// EVENT_SUBMERGE Talk(EMOTE_HEART_OPENED 8) /
+	// EVENT_DISPOSE_HEART / EVENT_ENRAGE Talk(SAY_BERSERK 5) /
+	// EVENT_ENTER_HARD_MODE / EVENT_RESUME_ATTACK — no
+	// timer-event / cast / phase / react-state bridges; all
+	// timer-leg yells ride the unbridgeable event machine);
+	// npc_xt002_heart (NullCreatureAI — no Talk arms; no
+	// registration); npc_scrapbot / npc_pummeller / npc_boombot
+	// / npc_life_spark / npc_xt_void_zone (no Talk arms
+	// anywhere — scheduler / movement / vehicle / damage-taken
+	// legs — no registrations); the nine spell scripts
+	// (spell_xt002_searing_light_spawn_life_spark /
+	// spell_xt002_gravity_bomb_aura /
+	// spell_xt002_gravity_bomb_damage /
+	// spell_xt002_heart_overload_periodic /
+	// spell_xt002_energy_orb (Talk(SAY_SUMMON 7) rides the
+	// spell script) / spell_xt002_tympanic_tantrum /
+	// spell_xt002_submerged / spell_xt002_321_boombot_aura /
+	// spell_xt002_exposed_heart — no SpellScript / AuraScript
+	// bridges; all nine join the no-SpellScript /
+	// no-AuraScript-bridge queues); the three achievements
+	// (achievement_nerf_engineering / achievement_heartbreaker
+	// / achievement_nerf_gravity_bombs — GetData-based OnCheck
+	// — no GetData / achievement bridges; all three join the
+	// unmodeled-achievement queue).
+	RegisterLuaBoss("boss_xt002", 33293)
 }
