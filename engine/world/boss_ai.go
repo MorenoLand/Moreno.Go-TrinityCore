@@ -5169,4 +5169,17 @@ func init() {
 	// AuraScript hooks, the achievement GetData check and the area
 	// trigger are bridge-blocked — documented in the lua header.
 	RegisterLuaBoss("boss_skadi", 26693)
+	// AddSC_boss_ymiron: King Ymiron (Utgarde Pinnacle) — ported arms
+	// (lua_scripts/northrend/boss_ymiron.lua): JustEngagedWith
+	// unconditional Talk(SAY_AGGRO 0) (event 1 — the auriaya engage-port
+	// precedent), KilledUnit player-gated Talk(SAY_SLAY 1) (event 3 —
+	// the razuvious player-gated variant precedent), JustDied
+	// unconditional Talk(SAY_DEATH 2) (event 4 — the sjonnir
+	// JustDied-Talk precedent). The MovementInform POINT_BOAT summon
+	// Talks (SAY_SUMMON_BJORN/HALDOR/RANULF/TORGYN 3-6), the ancestor
+	// summon / channel / REACT_PASSIVE / EVENT_RESUME_COMBAT machine,
+	// the EVENT_* spell timer legs, the spell_dark_slash SpellScript
+	// OnHit hook and the achievement_kings_bane GetData check are
+	// bridge-blocked — documented in the lua header.
+	RegisterLuaBoss("boss_ymiron", 26861)
 }
