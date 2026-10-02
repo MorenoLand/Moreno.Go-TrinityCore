@@ -4259,4 +4259,37 @@ func init() {
 	// energize_core_area_enemy / _entry join the
 	// no-SpellScript-bridge queue.
 	RegisterLuaBoss("boss_varos", 27447)
+
+	// Ley-Guardian Eregos (27656), The Oculus —
+	// lua_scripts/northrend/boss_eregos.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 1)
+	// (the BossAI::JustEngagedWith instance-bookkeeping leg has
+	// no bridge — tharon_ja precedent; the drake-vehicle
+	// FindNearestCreature achievement-void legs have no
+	// creature-search bridge); KilledUnit Talk(SAY_KILL 3)
+	// C++-GATED on TYPEID_PLAYER (the nalorakk / kelthuzad
+	// player-gate variant — tenth ported variant overall,
+	// seventh identical to nalorakk / kelthuzad / gothik /
+	// thaddius / keristrasza / urom); JustDied Talk(SAY_DEATH 4)
+	// (_JustDied bookkeeping has no bridge — tharon_ja
+	// precedent).
+	// Documented-only: Reset (Initialize _phase / void
+	// booleans + _Reset() + DoAction); DoAction schedules the
+	// four PHASE_NORMAL events (no timer-event / phase bridge);
+	// the UpdateAI arcane event machine (EVENT_ARCANE_BARRAGE /
+	// EVENT_ARCANE_VOLLEY / EVENT_ENRAGED_ASSAULT / EVENT_SUMMON_
+	// LEY_WHELP — no timer-event / cast bridges); DamageTaken
+	// heroic+health-gated phase-shift machine (Talk SAY_SHIELD +
+	// DoCast SPELL_PLANAR_SHIFT 51162 + 6x SPELL_PLANAR_
+	// ANOMALIES 57959 — no bridges); JustSummoned /
+	// SummonedCreatureDespawn (NPC_PLANAR_ANOMALY 30879 —
+	// CombatStop / MoveRandom / SPELL_PLANAR_BLAST 57976 —
+	// no motion / cast bridges); spell_eregos_planar_shift
+	// joins the no-AuraScript-bridge queue (AfterEffectRemove
+	// -> DoAction(ACTION_SET_NORMAL_EVENTS)); achievement_gen_
+	// eregos_void x3 (achievement_ruby_void / _emerald_void /
+	// _amber_void — the drake-void achievements 2044 / 2045 /
+	// 2046) join the unmodeled-achievement queue (no
+	// achievement bridge — the kelthuzad / thaddius precedent).
+	RegisterLuaBoss("boss_eregos", 27656)
 }
