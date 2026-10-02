@@ -5699,4 +5699,39 @@ func init() {
 	// no-achievement-criteria queue — documented in the lua header.
 	// Eleventh group of the "// Icecrown Citadel" block.
 	RegisterLuaBoss("npc_the_lich_king_controller", 16980)
+
+	// boss_sindragosa: Icecrown Citadel script, entry 36853
+	// (icecrown_citadel.h NPC_SINDRAGOSA — the RegisterIcecrownCitadelCreatureAI
+	// ScriptName binding is instance-shimmed, the creature_template binding
+	// DB-side). BossAI. Ported arms in
+	// lua_scripts/northrend/boss_sindragosa.lua:
+	// JustEngagedWith Talk(SAY_AGGRO 0) (event 1, the auriaya
+	// engage-port precedent; the instance CheckRequiredBosses gate /
+	// evade / DoCastSpellOnPlayers LIGHT_S_HAMMER_TELEPORT / DoCastSelf
+	// aura / SetBossState / setActive / SetFarVisible / DoZoneInCombat
+	// legs have no bridges); KilledUnit Talk(SAY_KILL 8) gated on
+	// victim->GetTypeId() == TYPEID_PLAYER (event 3, the razuvious
+	// player-gated variant precedent); JustDied Talk(SAY_DEATH 10)
+	// (event 4, the sjonnir JustDied-Talk precedent; the heroic
+	// FROST_INFUSION_CREDIT DoCastAOE leg has no-cast bridge). No other
+	// bridgeable arm in the file: the scheduler Talk legs
+	// (EMOTE_BERSERK_RAID 11 / SAY_BERSERK 9 / SAY_UNCHAINED_MAGIC 1 /
+	// EMOTE_WARN_BLISTERING_COLD 2 / SAY_BLISTERING_COLD 3 /
+	// SAY_AIR_PHASE 5 / SAY_PHASE_2 6) have no-timer-bridge (the
+	// boss_toravon precedent); SAY_RESPITE_FOR_A_TORMENTED_SOUL 4 is
+	// declared but never referenced by a Talk() call (dead text
+	// evidence); the DoAction ACTION_START_FROSTWYRM intro machine has
+	// no-DoAction bridge; JustReachedHome SetBossState FAIL has no
+	// instance bridge (no event-24 port precedent);
+	// spell_sindragosa_ice_tomb_target HandleSindragosaTalk is cross-AI
+	// Talk(EMOTE_WARN_FROZEN_ORB 7) (no cross-AI-Talk bridge);
+	// npc_ice_tomb (36980) / npc_spinestalker (37534) /
+	// npc_rimefang_icc (37533) / npc_sindragosa_trash (37531/37532)
+	// have zero Talk lines (NOT registered); at_sindragosa_lair joins
+	// the no-AreaTrigger bridge queue, achievement_all_you_can_eat the
+	// no-achievement-criteria queue, and the spell/aura scripts the
+	// no-SpellScript-bridge / no-AuraScript-bridge queues — documented
+	// in the lua header. Twelfth group of the "// Icecrown Citadel"
+	// block.
+	RegisterLuaBoss("boss_sindragosa", 36853)
 }
