@@ -3272,6 +3272,28 @@ func init() {
 	// SelectTarget bridge absent — cairne/kazzak precedent).
 	RegisterLuaBoss("boss_eck", 29932)
 
+	// boss_elder_nadox: Ahn'kahet dungeon boss script, entry 29309
+	// (ahnkahet.h NPC_ELDER_NADOX — kalecgos pass; the
+	// GetAhnKahetAI ScriptName binding is instance-shimmed, the
+	// creature_template binding DB-side).
+	// BossAI. Ported arms in lua_scripts/northrend/boss_elder_nadox.lua:
+	// JustEngagedWith Talk(SAY_AGGRO 0); EVENT_SUMMON_SWARMER
+	// (DoCastSelf 56119 + 33% Talk(SAY_EGG_SAC 3), 10s init, 10s
+	// repeat); KilledUnit Talk(SAY_SLAY 1) player-gated; JustDied
+	// Talk(SAY_DEATH 2). Documented in the lua file, not wired:
+	// EVENT_PLAGUE (random-target SelectTarget bridge absent —
+	// cairne/kazzak precedent), the IsHeroic-gated EVENT_RAGE and
+	// EVENT_CHECK_ENRAGE (no difficulty bridge — kelidan breaker
+	// precedent), the HealthBelowPct(50) guardian-summon leg (no
+	// health-pct bridge — doomwalker precedent), the
+	// SummonedCreatureDies/GetData guardian latch (cross-AI bridges
+	// absent), spell_ahn_kahet_swarm (no SpellScript binding bridge
+	// — razelikh precedent), achievement_respect_your_elders (no
+	// achievement-criteria bridge — snakes precedent), and
+	// npc_ahnkahar_nerubian (entry unverifiable — belnistrasz/willix
+	// precedent; EVENT_SPRINT 56354 arm port-pattern-ready).
+	RegisterLuaBoss("boss_elder_nadox", 29309)
+
 	// npc_slad_ran_constrictor: Gundrak script, entry 29713
 	// (boss_slad_ran.cpp CREATURE_CONSTRICTORS — kalecgos pass).
 	// ScriptedAI. Ported arm: Grip of Slad'ran 55093 on the victim
