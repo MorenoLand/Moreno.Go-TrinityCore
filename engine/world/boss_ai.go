@@ -3348,6 +3348,35 @@ func init() {
 	// razelikh precedent).
 	RegisterLuaBoss("boss_amanitar", 30258)
 
+	// boss_volazj: Ahn'kahet dungeon boss script, entry 29311
+	// (ahnkahet.h NPC_HERALD_VOLAZJ — kalecgos pass; the
+	// RegisterAhnKahetCreatureAI ScriptName binding is
+	// instance-shimmed, the creature_template binding DB-side).
+	// BossAI. Ported arms in lua_scripts/northrend/boss_herald_volazj.lua:
+	// JustEngagedWith Talk(SAY_AGGRO 0), EVENT_MIND_FLAY —
+	// DoCastVictim(Mind Flay 57941, 8s init, 20s repeat),
+	// EVENT_SHADOW_BOLT_VOLLEY — DoCastVictim(Shadow Bolt Volley
+	// 57942, 5s init, 5s repeat — task.Repeat() no-arg = same
+	// duration, TaskScheduler.h:485), KilledUnit Talk(SAY_SLAY 1)
+	// player-gated, JustDied Talk(SAY_DEATH 2). Documented in the
+	// lua file, not wired: the JustEngagedWith / Reset
+	// DoStart/StopTimedAchievement(20382) legs (instance-script
+	// model absent — standing blocker), EVENT_SHIVER (random-target
+	// SelectTarget bridge absent — cairne/kazzak precedent),
+	// DamageTaken NOT_SELECTABLE damage-null + 66%/33%
+	// health-crossing Insanity machine (no health-pct bridge —
+	// doomwalker precedent; no interrupt bridge), SpellHitTarget(
+	// 57496) insanity machinery — event 15 never fires plus absent
+	// summon-STRAND / victim-CastSpell / phase-mask / flag bridges
+	// — Reset SetPhaseMask + ResetPlayersPhaseMask legs (phase-mask
+	// / aura-removal bridges absent — aeranas precedent),
+	// SummonedCreatureDespawn visage phase roll-back machine
+	// (summon STRAND + cross-AI bridges absent), UpdateAI insanity
+	// wait-state (rides the unbridged arms), and the Twisted Visage
+	// (30625 entry-verifiable from ahnkahet.h) — the C++ file notes
+	// "Missing AI for Twisted Visages", so there is nothing to port.
+	RegisterLuaBoss("boss_volazj", 29311)
+
 	// npc_slad_ran_constrictor: Gundrak script, entry 29713
 	// (boss_slad_ran.cpp CREATURE_CONSTRICTORS — kalecgos pass).
 	// ScriptedAI. Ported arm: Grip of Slad'ran 55093 on the victim
