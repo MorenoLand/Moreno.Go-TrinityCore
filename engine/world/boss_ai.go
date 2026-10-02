@@ -5377,4 +5377,27 @@ func init() {
 	// header. Fourth and last group of the "// Halls of Reflection"
 	// block — the block CLOSES here.
 	RegisterLuaBoss("boss_marwyn", 38113)
+	// Lord Marrowgar (Icecrown Citadel) — bridgeable Talk arms ported
+	// from boss_lord_marrowgar.cpp; see
+	// lua_scripts/northrend/boss_lord_marrowgar.lua.
+	// JustEngagedWith Talk(SAY_AGGRO 1) -> event 1 (the auriaya
+	// engage-port precedent); KilledUnit player-gated Talk(SAY_KILL 4)
+	// -> event 3 (the razuvious player-gated variant precedent,
+	// twelfth ported variant, tenth identical); JustDied
+	// Talk(SAY_DEATH 5) -> event 4 (the sjonnir JustDied-Talk
+	// precedent). npc_coldflame (36672) and npc_bone_spike (36619)
+	// expose zero own Talk lines — not registered (the bronjahm
+	// npc_corrupted_soul_fragment precedent). The UpdateAI EventMap
+	// machine (incl. timer-driven Talk(EMOTE_BONE_STORM 7),
+	// Talk(SAY_BONE_STORM 2) and Talk(SAY_BERSERK 6)) has no-timer /
+	// no-random-target-SelectTarget / no-cast / no-motion /
+	// no-health-pct bridges (the boss_toravon precedent); the
+	// Talk(SAY_ENTER_ZONE 0) leg rides DoAction with no bridge, its
+	// at_lord_marrowgar_entrance trigger joins the unbridged
+	// area-trigger queue, Talk(SAY_BONESPIKE 3) rides the
+	// no-SpellScript-bridge queue with the other five spell scripts,
+	// and spell_marrowgar_coldflame_damage rides the
+	// no-AuraScript-bridge queue — documented in the lua header.
+	// First group of the "// Icecrown Citadel" block.
+	RegisterLuaBoss("boss_lord_marrowgar", 36612)
 }
