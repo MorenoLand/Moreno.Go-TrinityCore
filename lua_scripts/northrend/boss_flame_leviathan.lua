@@ -1,0 +1,135 @@
+-- Flame Leviathan (Ulduar) — Lua port of
+-- src/server/scripts/Northrend/Ulduar/Ulduar/boss_flame_leviathan.cpp
+-- (boss_flame_leviathan (CreatureScript) via
+-- RegisterUlduarCreatureAI<boss_flame_leviathan> (BossAI),
+-- BOSS_LEVIATHAN = 0 — registered from inside
+-- AddSC_boss_flame_leviathan(); loader decl 111 / call 306 per
+-- northrend_script_loader.cpp — the SECOND group of the "//
+-- Ulduar" block in AddNorthrendScripts(), immediately after
+-- AddSC_boss_auriaya() (decl 110 / call 305); the call after it
+-- is AddSC_boss_ignis() (decl 112 / call 307) — loader order
+-- confirmed this run; the checkpoint sequence (boss_auriaya ->
+-- boss_flame_leviathan) is followed).
+-- Entry: 33113 Flame Leviathan (ulduar.h NPC_FLAME_LEVIATHAN,
+-- line 111 — entry-verifiable, registration proceeds (the
+-- nexus_commanders / malygos / sartharion kalecgos precedent);
+-- the CreatureScript ScriptName binding is DB-side as usual.
+-- Sole-source verified: whole-server-tree grep for
+-- "boss_flame_leviathan" hits boss_flame_leviathan.cpp (+ the
+-- loader decl/call lines for AddSC_boss_flame_leviathan) only;
+-- whole-tree grep for "npc_mechanolift", "npc_colossus",
+-- "npc_brann_bronzebeard_ulduar_intro", "achievement_shutout",
+-- "achievement_orbit_uary", "spell_overload_circuit" and
+-- "spell_pursue" hits boss_flame_leviathan.cpp only; zero sql/
+-- hits for all. No flame_leviathan lua existed.
+-- Eluna creature events: 4 OnDied. No KilledUnit talk in C++
+-- (no event 3 arms exist — the only boss so far without a slay
+-- line). The aggro talk is conditional (ActiveTower), not
+-- ported — see below.
+-- Ported arms (C++-exact for all modeled arms):
+-- JustDied — Talk(SAY_DEATH 2) (event 4; the _JustDied()
+-- passthrough has no bridge, and the flag/dynflag/npcflag
+-- comment legs are DB cosmetics — the sjonnir JustDied-Talk
+-- precedent).
+-- DOCUMENTED-ONLY (in this header; no registration beyond entry
+-- 33113):
+-- Reset / Initialize / InitializeAI (flag/stealth/react-state
+-- setup) — no bridges.
+-- JustEngagedWith — BossAI::JustEngagedWith passthrough + react
+-- state / ScheduleEvent legs (no bridges); ActiveTower() picks
+-- the aggro talk CONDITIONALLY on tower state: ActiveTowers
+-- false -> Talk(SAY_AGGRO 0); true + any tower up ->
+-- Talk(SAY_HARDMODE 4); true + all towers down ->
+-- Talk(SAY_TOWER_NONE 5) — the ActiveTowers / towerOfStorms /
+-- towerOfLife / towerOfFlames / towerOfFrost state is
+-- tower-destruction driven (DoAction 1-4 / go_ulduar_tower
+-- legs) with no SetData / DoAction / vehicle bridge; porting
+-- Talk(SAY_AGGRO) unconditionally on event 1 would mis-port
+-- the hardmode legs (the malygos phase-select conditional
+-- variant precedent — conditional talks with no bridge are
+-- documented, not registered).
+-- SpellHit (SPELL_START_THE_ENGINE 62975 vehicle accessory
+-- install; SPELL_ELECTROSHOCK interrupt; SPELL_OVERLOAD_CIRCUIT
+-- 62326 ++Shutdown) — no vehicle / cast / aura-stack bridges.
+-- GetData(DATA_SHUTOUT / DATA_UNBROKEN / DATA_ORBIT_ACHIEVEMENTS)
+-- / SetData(DATA_UNBROKEN) / DoAction(1..4 tower-destruction
+-- loot-mode stripping) — no GetData / SetData / DoAction
+-- bridges.
+-- UpdateAI event machine — EVENT_PURSUE Talk(SAY_TARGET 3) +
+-- DoCast(SPELL_PURSUED) (target picked in the spell script);
+-- EVENT_MISSILE / EVENT_VENT / EVENT_SPEED / EVENT_SUMMON
+-- (DoSummonFlyer NPC_MECHANOLIFT 33214 legs) / EVENT_SHUTDOWN
+-- Talk(SAY_OVERLOAD 11) + Talk(EMOTE_OVERLOAD 13) +
+-- SPELL_SYSTEMS_SHUTDOWN; EVENT_REPAIR Talk(EMOTE_REPAIR 14);
+-- EVENT_THORIM_S_HAMMER Talk(SAY_TOWER_STORM 9);
+-- EVENT_MIMIRON_S_INFERNO Talk(SAY_TOWER_FLAME 7);
+-- EVENT_HODIR_S_FURY Talk(SAY_TOWER_FROST 6);
+-- EVENT_FREYA_S_WARD Talk(SAY_TOWER_NATURE 8) — no timer-event /
+-- cast / summon / target-selection bridges; all timer-leg yells
+-- ride the unbridgeable event machine.
+-- SpellHitTarget (SPELL_PURSUED: _pursueTarget GUID + vehicle
+-- seat walk -> Talk(EMOTE_PURSUE 12, passenger)) — no vehicle
+-- bridge.
+-- boss_flame_leviathan_seat (NPC_SEAT 33114, local enum —
+-- entry-verifiable but bridge-blocked; PassengerBoarded ->
+-- leviathan->AI()->Talk(SAY_PLAYER_RIDING 10) — no vehicle /
+-- cross-AI Talk bridge; the npc_spark_of_ionar
+-- no-bridgeable-arms precedent — no registration).
+-- boss_flame_leviathan_defense_turret (ulduar.h
+-- NPC_LEVIATHAN_DEFENSE_TURRET 33142 — entry-verifiable but
+-- bridge-blocked; player-gated SmartAI engage legs only, no Talk
+-- arms anywhere — no registration); boss_flame_leviathan_
+-- defense_cannon (no Talk arms anywhere — Reset / spellclick
+-- vehicle legs, no bridges; no registration).
+-- boss_flame_leviathan_overload_device (NPC_OVERLOAD_CONTROL_
+-- DEVICE 33143, ulduar.h — entry-verifiable but bridge-blocked;
+-- spellclick / aura / damage-to-leviathan legs, no Talk arms —
+-- no registration); boss_flame_leviathan_safety_container
+-- (NPC_CONTAINER 33218 local enum; JustDied has no Talk arms —
+-- no registration).
+-- npc_mechanolift (NPC_MECHANOLIFT 33214 local enum —
+-- entry-verifiable but bridge-blocked; JustDied / liquid-summon
+-- legs, no Talk arms — no registration); npc_pool_of_tar
+-- (NPC_LIQUID 33189 local enum; aura-application legs, no Talk
+-- arms — no registration); npc_colossus (NPC_ULDUAR_COLOSSUS
+-- 33237, ulduar.h — entry-verifiable but bridge-blocked;
+-- JustDied has no Talk arms — no registration).
+-- npc_thorims_hammer (NPC_THORIM_BEACON 33365 / NPC_THORIM_
+-- TARGET_BEACON 33364 local enums); npc_mimirons_inferno
+-- (NPC_MIMIRON_BEACON 33370 / NPC_MIMIRON_TARGET_BEACON 33369);
+-- npc_hodirs_fury (NPC_HODIR_BEACON 33212 / NPC_HODIR_TARGET_
+-- BEACON 33108); npc_freyas_ward (NPC_FREYA_BEACON 33367 /
+-- NPC_FREYA_TARGET_BEACON 33366); npc_freya_ward_summon —
+-- all timer / summon / spellclick legs, no Talk arms anywhere —
+-- no registrations.
+-- npc_brann_bronzebeard_ulduar_intro (gossip leg at line 1217 —
+-- no gossip model; no Talk arms — no registration);
+-- npc_lorekeeper (the line-1286 Talk call is commented out in
+-- C++ — dead code; no registration); go_ulduar_tower
+-- (GameObjectScript — no GO bridge; no registration).
+-- achievement_three_car_garage_demolisher / chopper / siege,
+-- achievement_shutout, achievement_unbroken,
+-- achievement_orbital_bombardment, achievement_orbital_
+-- devastation, achievement_nuked_from_orbit,
+-- achievement_orbit_uary — GetData / vehicle / orbit-state based
+-- OnCheck legs — no GetData / achievement bridges; all nine
+-- join the unmodeled-achievement queue.
+-- spell_overload_circuit (62326) / spell_tar_blaze — AuraScript
+-- bridges absent; both join the no-AuraScript-bridge queue.
+-- spell_load_into_catapult / spell_auto_repair (EMOTE_REPAIR
+-- TextEmote leg rides the spell script) / spell_systems_shutdown
+-- / spell_pursue (FlameLeviathanPursuedTargetSelector) /
+-- spell_vehicle_throw_passenger — no SpellScript bridge; all
+-- five join the no-SpellScript-bridge queue.
+
+local ENTRY_FLAME_LEVIATHAN = 33113
+
+local SAY_DEATH = 2
+
+-- C++ JustDied: _JustDied() + flag/dynflag cosmetics + Talk
+-- (SAY_DEATH) — only the Talk arm is bridgeable.
+local function flameLeviathanDied(event, creature, killer)
+    creature:Talk(SAY_DEATH)
+end
+
+RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 4, flameLeviathanDied)
