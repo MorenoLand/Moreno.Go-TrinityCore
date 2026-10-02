@@ -6047,4 +6047,16 @@ func init() {
 	// documented-only. SAY_INTRO 0 / SAY_HELP 3 / SAY2_* 5-9 are
 	// never called in the file.
 	RegisterLuaBoss("boss_blackheart_the_inciter", 18667)
+	// boss_grandmaster_vorpil.lua — ported bridgeable arms: the
+	// SayHelp one-shot riding the EVENT_SUMMON_TRAVELER timer
+	// machine, the void-portal + void-traveler SummonCreature legs,
+	// the MoveInLineOfSight SAY_INTRO one-shot (event-27 fire-site
+	// mismatch), the whole UpdateAI timer machine (shadowbolt
+	// volley / heroic-only banish / draw-shadows player teleports /
+	// traveler summon + 20%-health enrage), and the zero-Talk
+	// npc_voidtraveler follow/sacrifice machine (NPC_VOID_TRAVELER
+	// 19226 NOT registered — shaffar-beacon precedent) ride
+	// no-timer / no-cast / no-random-target / no-summon /
+	// no-motion / no-instance bridges — documented-only.
+	RegisterLuaBoss("boss_grandmaster_vorpil", 18732)
 }
