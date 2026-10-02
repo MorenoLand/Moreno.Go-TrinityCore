@@ -4042,4 +4042,32 @@ func init() {
 	// registration; ctor DoCastSelf(INFECTED_WOUND 29307) joins the
 	// bridgeable-but-entry-blocked queue).
 	RegisterLuaBoss("boss_gluth", 15932)
+
+	// Gothik the Harvester (16060, Naxxramas) — lua_scripts/northrend/boss_gothik.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_INTRO_1 0)
+	// (event 1; BossAI bookkeeping has no bridge — tharon_ja precedent);
+	// EVENT_INTRO_2/3/4 Talk(SAY_INTRO_2/3/4 1/2/3) one-shot at
+	// 4s/9s/14s from combat start (no phase mask, like C++);
+	// KilledUnit Talk(SAY_KILL 6) player-gated (nalorakk/kelthuzad
+	// variant); JustDied Talk(SAY_DEATH 5) (event 4; instance/GO legs
+	// have no bridge). SAY_PHASE_TWO (4) + EMOTE_PHASE_TWO (7) +
+	// EMOTE_GATE_OPENED (8) ride unported legs (vortex — not ported
+	// orphaned). Unmodeled: EVENT_SUMMON waves10/waves25 + CGUID_TRIGGER
+	// 127618 spawn layout (no summon bridge + difficulty gate), the
+	// gate machine (DoAction OPEN_GATE — no instance/summon/cross-AI
+	// bridges), EVENT_PHASE_TWO / EVENT_TELEPORT / EVENT_HARVEST
+	// (DoCastAOE 28026/28025/28679 — no DoCastAOE bridge), EVENT_BOLT
+	// DoCastVictim(SHADOW_BOLT 29317) 2s (moroes-ready in isolation but
+	// its scheduling legs are the unbridged phase machine —
+	// documented-only), DamageTaken phase-one zeroing (no phase bridge),
+	// EnterEvadeMode NearTeleportTo (no motion bridge), the living/dead-
+	// side check + FindEligibleTarget (no side/visibility/threat bridges),
+	// the seven minion scripts (entries 16124-16150 local-enum-only —
+	// entry-unverifiable, no registration; their DoCastAOE timers behind
+	// the DoCastAOE bridge; spectralrider's Unholy Frenzy priority cast
+	// + drain-life DoCastVictim 27994 moroes-ready but entry-blocked),
+	// npc_gothik_trigger's SpellHit anchor machine (SpellHit never fires
+	// in Lua), spell_gothik_shadow_bolt_volley (no SpellScript binding
+	// bridge).
+	RegisterLuaBoss("boss_gothik", 16060)
 }
