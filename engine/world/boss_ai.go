@@ -3957,4 +3957,28 @@ func init() {
 	// the twelve spell scripts — no SpellScript/AuraScript binding bridge
 	// (razelikh precedent); join the SpellScript/AuraScript queue.
 	RegisterLuaBoss("boss_gormok", 34796)
+	// Anub'Rekhan (Naxxramas) — fight logic in
+	// lua_scripts/northrend/boss_anubrekhan.lua. PORTED: boss_anubrekhan
+	// (15956) JustEngagedWith Talk(SAY_AGGRO 0) (BossAI bookkeeping,
+	// summons.DoZoneInCombat, SetPhase have no bridge — tharon_ja
+	// precedent); KilledUnit Talk(SAY_SLAY 2) C++-unconditional (the
+	// player-gated corpse-scarab cast has no summon bridge); EVENT_LOCUST
+	// Talk(EMOTE_LOCUST 3) + DoCastSelf(Locust Swarm 28785), init
+	// randtime(1m40s,2m), repeat 1m30s (phase_hunter self-cast precedent;
+	// the PHASE_SWARM/NORMAL gating only affects the unmodeled
+	// impale/scarabs arms — documented-only); EVENT_BERSERK DoCastSelf
+	// (Berserk 27680, triggered), 10min init, reschedules 10min.
+	// DOCUMENTED-BLOCKED: intro/summon machine (InitializeAI, Reset
+	// guardCorpses.clear, JustReachedHome SummonGuards — summon STRAND
+	// absent; Is25ManRaid legs — no difficulty bridge, kelidan
+	// precedent; EVENT_SPAWN_GUARD SummonCreatureGroup), JustSummoned
+	// EMOTE_SPAWN Talk + SummonedCreatureDies/Despawn guardCorpses
+	// bookkeeping (summon/cross-AI bridges absent; NPC_CRYPT_GUARD 16573
+	// joins the entry-verifiable-but-bridge-blocked queue),
+	// EVENT_IMPALE (random-target SelectTarget — cairne/kazzak precedent;
+	// anti-chain leg noted), EVENT_SCARABS (corpse summon — summon
+	// bridges absent), JustDied DoStartTimedAchievement(9891) (no
+	// achievement bridge), at_anubrekhan_entrance (no area-trigger
+	// bridge).
+	RegisterLuaBoss("boss_anubrekhan", 15956)
 }
