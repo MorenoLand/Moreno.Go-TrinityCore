@@ -3877,4 +3877,48 @@ func init() {
 	// kiss_area, spell_fel_streak_visual — no SpellScript / AuraScript
 	// binding bridge (razelikh precedent).
 	RegisterLuaBoss("boss_lord_jaraxxus", 34780)
+	// boss_twin_valkyr: Trial of the Crusader dungeon boss script,
+	// entries 34497 Fjola Lightbane (trial_of_the_crusader.h
+	// NPC_FJOLA_LIGHTBANE — kalecgos pass;
+	// instance_trial_of_the_crusader.cpp binds NPC_FJOLA_LIGHTBANE ->
+	// DATA_FJOLA_LIGHTBANE with a CircleBoundary) and 34496 Eydis
+	// Darkbane (NPC_EYDIS_DARKBANE — kalecgos pass; bound to
+	// DATA_EYDIS_DARKBANE the same way).
+	// lua_scripts/northrend/boss_twin_valkyr.lua: JustEngagedWith
+	// Talk(SAY_AGGRO 0) + DoCastSelf(Surge 65766/65768) (event 1; the
+	// BossAI::JustEngagedWith instance-bookkeeping leg, DoZoneInCombat,
+	// cross-AI sister AddAura/Empathy, SetCombatPulseDelay/setActive have
+	// no bridge — tharon_ja precedent); KilledUnit Talk(SAY_KILL_PLAYER
+	// 6) player-gated (event 3, who->GetTypeId()==TYPEID_PLAYER —
+	// nalorakk precedent); JustDied Talk(SAY_DEATH 8) (event 4; _JustDied
+	// instance bookkeeping has no bridge — tharon_ja precedent);
+	// EVENT_TWIN_SPIKE — DoCastVictim(Light Twin Spike 66075 / Dark Twin
+	// Spike 66069), 20s init, 20s repeat (moroes precedent).
+	// Whole intro/positioning machine unmodeled: JustAppeared
+	// PHASE_EVENT leg (no phase bridge), EVENT_START_MOVE
+	// MoveAlongSplineChain (no motion bridge), MovementInform
+	// SPLINE_CHAIN -> immune/react/door legs (no MovementInform bridge),
+	// Reset SetReactState/passive + ModifyAuraState + summons.DespawnAll +
+	// DoStopTimedAchievement (no react/aura-state/despawn/achievement
+	// bridges), JustReachedHome SetBossState(FAIL) + HandleRemoveAuras +
+	// DespawnOrUnsummon + DoUseDoorOrButton(DATA_MAIN_GATE) (instance
+	// model + no despawn/door bridges); EVENT_SPECIAL_ABILITY stage
+	// machine (no cross-AI DoAction bridge); DoAction ACTION_VORTEX
+	// (DoCastAOE — terestian/shazzrah precedent) and ACTION_PACT
+	// (cross-AI DoAction; self-cast shield/pact legs port-pattern-ready in
+	// isolation but DoAction-gated — documented-only); EVENT_TOUCH
+	// (heroic; random-target aura-filtered SelectTarget — cairne/kazzak
+	// precedent); EVENT_BERSERK 64238 + Talk(SAY_BERSERK 7) (IsHeroic() ?
+	// 6min : 8min timer — no difficulty bridge, kelidan precedent).
+	// npc_essence_of_twin (34567/34568, entry-unverifiable, gossip),
+	// npc_unleashed_dark (34628) / npc_unleashed_light (34630,
+	// entry-unverifiable; SelectNearestPlayer/DoCastAOE/despawn/motion
+	// legs unbridged), npc_bullet_controller (34743,
+	// entry-unverifiable; DoCastAOE bridge absent) — zero registration,
+	// documented-only. spell_bullet_controller, spell_powering_up,
+	// spell_valkyr_essences, spell_power_of_the_twins — no SpellScript /
+	// AuraScript binding bridge (razelikh precedent); join the
+	// SpellScript/AuraScript queue.
+	RegisterLuaBoss("boss_twin_valkyr", 34497)
+	RegisterLuaBoss("boss_twin_valkyr", 34496)
 }
