@@ -5298,4 +5298,23 @@ func init() {
 	// achievement_doesnt_go_to_eleven (unmodeled-achievement) are
 	// bridge-blocked — documented in the lua header.
 	RegisterLuaBoss("boss_forgemaster_garfrost", 36494)
+
+	// Krick (Pit of Saron) — bridgeable Talk arms ported from
+	// boss_krickandick.cpp; see
+	// lua_scripts/northrend/boss_krickandick.lua.
+	// boss_ick (36476 Ick) carries no bridgeable own arms — its
+	// JustEngagedWith krick->AI()->Talk(SAY_KRICK_AGGRO) leg is
+	// instance-driven Talk on another creature's AI (no instance bridge)
+	// and its UpdateAI Talk legs (SAY_KRICK_BARRAGE_1/2,
+	// SAY_KRICK_POISON_NOVA, SAY_ICK_POISON_NOVA, SAY_KRICK_CHASE) ride
+	// scheduler event legs (no-timer-bridge), so 36476 is NOT registered
+	// (the bronjahm npc_corrupted_soul_fragment precedent). The krick
+	// MovementInform outro-flip, the EVENT_OUTRO_1..13 outro machine
+	// (timer-driven SAY_KRICK_OUTRO_3/5/8 plus instance-driven Jaina /
+	// Sylvanas / Tyrannus Talk legs), the DoAction threat store/reset
+	// and ACTION_OUTRO legs, the krick random-target casts, and the six
+	// SpellScript / AuraScript hooks (incl. spell_krick_pursuit's
+	// SAY_ICK_CHASE_1 spell-driven Talk) are bridge-blocked — documented
+	// in the lua header.
+	RegisterLuaBoss("boss_krick", 36477)
 }
