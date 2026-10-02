@@ -4123,4 +4123,32 @@ func init() {
 	// (twin_valkyr shared-handler precedent).
 	RegisterLuaBoss("boss_nexus_commanders", 26796)
 	RegisterLuaBoss("boss_nexus_commanders", 26798)
+
+	// Anomalus (26763), The Nexus —
+	// lua_scripts/northrend/boss_anomalus.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
+	// (instance->SetBossState(DATA_ANOMALUS, IN_PROGRESS) leg has no
+	// instance bridge — tharon_ja precedent); JustDied Talk(SAY_DEATH
+	// 1) (SetBossState(DONE) leg has no instance bridge).
+	// Documented-only: Reset Initialize + SetBossState(NOT_STARTED)
+	// (no instance bridge), GetData(DATA_CHAOS_THEORY) cross-AI leg
+	// (no GetData bridge), SummonedCreatureDies chaosTheory=false leg
+	// (no summon bridge), the UpdateAI home-position >60 evade hack
+	// (no position bridge), the RIFT_SHIELD HasAura + GUID-lookup +
+	// RemoveAurasDueToSpell machine (no aura/GUID bridges), the Phase
+	// 0 + HealthBelowPct(50) shield+Talk(SAY_SHIELD 3)+SummonCreature(
+	// CHAOTIC_RIFT 26918 entry-unverifiable local-enum-only)+AttackStart
+	// +Talk(SAY_RIFT 2) machine (no health-pct/summon/random-target/
+	// cross-AI bridges), uiSparkTimer SelectTarget(Random,0)->DoCast(
+	// SPARK 47751/57062) 5s/5s (no random-target SelectTarget bridge).
+	// npc_chaotic_rift (26918 local-enum-only, gothik-minions
+	// precedent — entry-unverifiable) gets no registration: its burst
+	// timer (DoCast 47688/47737 via instance GetGuidData(DATA_ANOMALUS)
+	// + HasAura(RIFT_SHIELD) cross-creature check) and crazed-mana-
+	// wraith summon timer (NPC_CRAZED_MANA_WRAITH 26746 also
+	// local-enum-only entry-unverifiable) have no instance/
+	// random-target/summon bridges. achievement_chaos_theory (OnCheck
+	// GetData(DATA_CHAOS_THEORY)) joins the no-achievement-bridge
+	// queue (kelthuzad/thaddius precedent).
+	RegisterLuaBoss("boss_anomalus", 26763)
 }
