@@ -3573,4 +3573,36 @@ func init() {
 	// (boss_slad_ran.cpp CREATURE_SNAKE — kalecgos pass). ScriptedAI.
 	// Ported arm: Venomous Bite 54987 (victim, 2s init, 10s repeat).
 	RegisterLuaBoss("npc_slad_ran_viper", 29680)
+
+	// boss_novos: Drak'Tharon Keep dungeon boss script, entry 26631
+	// (drak_tharon_keep.h NPC_NOVOS — kalecgos pass; the
+	// GetDrakTharonKeepAI ScriptName binding is instance-shimmed, the
+	// creature_template binding DB-side). BossAI. Ported arms in
+	// lua_scripts/northrend/boss_novos.lua: JustEngagedWith
+	// Talk(SAY_AGGRO 0) (event 1; the SetCrystalsStatus/
+	// SetSummonerStatus/SetBubbled legs ride the absent instance
+	// GetGuidData + ObjectAccessor cross-AI + flag/GO-state bridges —
+	// instance model absent, standing), KilledUnit Talk(SAY_KILL 1)
+	// player-gated (event 3 — nalorakk precedent), JustDied
+	// Talk(SAY_DEATH 2) (event 4; _JustDied instance bookkeeping has
+	// no bridge). No timers are scheduled: every C++ scheduled arm
+	// rides an absent bridge — EVENT_ATTACK (random-target
+	// SelectTarget — cairne/kazzak precedent) and EVENT_SUMMON_MINIONS
+	// (ungated emulation would over-cast — jedoga precedent) both fire
+	// only after the unbridged DoAction(ACTION_CRYSTAL_HANDLER_DIED)
+	// machine (drak_tharon_keep.h:52) clears the bubble. Documented in
+	// the lua file, not wired: AttackStart DoStartNoMovement (no
+	// movement bridge), the _bubbled UpdateAI gate + the casting-skip
+	// (no unit-state bridge), the CrystalHandlerDied machine incl.
+	// Talk(SAY_ARCANE_FIELD 4) (no DoAction bridge — drakkari_colossus
+	// precedent — + cross-AI SetData absent), the MoveInLineOfSight
+	// _ohNovos latch (no grid/MoveInLineOfSight bridge), GetData(
+	// DATA_NOVOS_ACHIEV), JustSummoned (summon STRAND absent),
+	// npc_crystal_channel_target (26712 entry-verifiable — zero
+	// registration: cross-AI AI()->SetData activation + MovePath
+	// bridges absent), spell_novos_summon_minions (59910 — no
+	// SpellScript binding bridge — razelikh precedent), and
+	// achievement_oh_novos (no achievement-criteria bridge — snakes
+	// precedent — + cross-AI GetData absent).
+	RegisterLuaBoss("boss_novos", 26631)
 }
