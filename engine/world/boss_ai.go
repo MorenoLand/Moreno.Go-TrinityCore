@@ -5617,4 +5617,56 @@ func init() {
 	// documented in the lua header. Ninth group of the
 	// "// Icecrown Citadel" block.
 	RegisterLuaBoss("boss_blood_queen_lana_thel", 37955)
+
+	// boss_sister_svalna: Icecrown Citadel boss script, entry 37126
+	// (icecrown_citadel.h NPC_SISTER_SVALNA — kalecgos pass; the
+	// RegisterIcecrownCitadelCreatureAI ScriptName binding is
+	// instance-shimmed, the creature_template binding DB-side).
+	// BossAI. Ported arms in
+	// lua_scripts/northrend/boss_sister_svalna.lua: KilledUnit
+	// Talk(SAY_SVALNA_KILL 4) victim->GetTypeId() == TYPEID_PLAYER
+	// gated plus Talk(SAY_SVALNA_KILL_CAPTAIN 1) when the victim is
+	// a creature with a captain entry (37122–37125) (event 3, the
+	// razuvious player-gated variant precedent plus
+	// victim:GetEntry()), JustDied Talk(SAY_SVALNA_DEATH 6)
+	// (event 4, the sjonnir JustDied-Talk precedent). No other
+	// bridgeable arm in the file: the JustEngagedWith
+	// crok->AI()->Talk(SAY_CROK_COMBAT_SVALNA 5) is cross-AI Talk
+	// (no bridge); Talk(SAY_SVALNA_CAPTAIN_DEATH 5) rides the
+	// ACTION_CAPTAIN_DIES DoAction leg (no-DoAction bridge);
+	// Talk(EMOTE_SVALNA_BROKEN_SHIELD 8) rides the SPELL_HURL_SPEAR
+	// SpellHit arm (event 15 never fires); Talk(EMOTE_SVALNA_IMPALE
+	// 7) rides the SpellHitTarget leg (no bridge);
+	// Talk(SAY_SVALNA_EVENT_START 0 / SAY_SVALNA_RESURRECT_CAPTAINS
+	// 2 / SAY_SVALNA_AGGRO 3) ride scheduler legs (no-timer-bridge).
+	// npc_crok_scourgebane (EscortAI) joins the escort queue (NOT
+	// registered); npc_frostwing_ymirjar_vrykul and
+	// npc_impaling_spear have zero Talk lines (NOT registered); the
+	// 3 spell scripts join the no-SpellScript-bridge queue and
+	// at_icc_start_frostwing_gauntlet the no-AreaTrigger queue —
+	// documented in the lua header. Tenth group of the
+	// "// Icecrown Citadel" block.
+	RegisterLuaBoss("boss_sister_svalna", 37126)
+
+	// npc_captain_arnath / npc_captain_brandon / npc_captain_grondel /
+	// npc_captain_rupert: Icecrown Citadel Frostwing Halls gauntlet
+	// scripts, entries 37122–37125 (icecrown_citadel.h
+	// NPC_CAPTAIN_ARNATH..RUPERT — kalecgos pass; bindings
+	// instance-shimmed / DB-side). Shared npc_argent_captainAI
+	// (ScriptedAI) base; one lua file for the 4 entries, per the
+	// boss_blood_prince_council 3-entries-1-file precedent. Ported
+	// arm in lua_scripts/northrend/npc_argent_captains.lua:
+	// KilledUnit Talk(SAY_CAPTAIN_KILL 2) victim->GetTypeId() ==
+	// TYPEID_PLAYER gated (event 3, the razuvious player-gated
+	// variant precedent). The stateful JustDied arms
+	// (Talk(SAY_CAPTAIN_DEATH 0) / Talk(SAY_CAPTAIN_SECOND_DEATH 3)
+	// on the per-AI _firstDeath flag, reset by the unbridged
+	// ACTION_RESET_EVENT DoAction leg) have no per-creature-state
+	// port precedent and are documented; Talk(SAY_CAPTAIN_RESURRECTED
+	// 1) rides the SPELL_REVIVE_CHAMPION SpellHit arm (event 15
+	// never fires). Tenth group of the "// Icecrown Citadel" block.
+	RegisterLuaBoss("npc_captain_arnath", 37122)
+	RegisterLuaBoss("npc_captain_brandon", 37123)
+	RegisterLuaBoss("npc_captain_grondel", 37124)
+	RegisterLuaBoss("npc_captain_rupert", 37125)
 }
