@@ -3127,4 +3127,31 @@ func init() {
 	// SetFaction(FACTION_FRIENDLY) and JustDied's SetData(DONE) have
 	// no bridges — documented in the lua file, not wired.
 	RegisterLuaBoss("boss_zum_rah", 7271)
+
+	// npc_sergeant_bly: Zul'Farrak zone script, entry 7604 (zulfarrak.h
+	// ZFEntries ENTRY_BLY — kalecgos passes). ScriptedAI (not BossAI).
+	// Ported arms in lua_scripts/kalimdor/npc_sergeant_bly.lua: Shield
+	// Bash 11972 (victim, 5s init, 15s repeat) and Revenge 12170
+	// (victim, 8s init, 10s repeat), both unconditional (the C++ casts
+	// Revenge unconditionally despite its dodge/parry/block code
+	// comment — the port mirrors the code). Reset's
+	// SetFaction(FACTION_FRIENDLY), the postGossipStep pyramid machine
+	// (instance GUID-lookup + cross-creature DoAction + SetFaction +
+	// AttackStart), and the EVENT_PYRAMID-gated gossip arms have no
+	// bridges — documented in the lua file, not wired.
+	RegisterLuaBoss("npc_sergeant_bly", 7604)
+
+	// npc_weegli_blastfuse: Zul'Farrak zone script, entry 7607
+	// (zulfarrak.h ZFEntries ENTRY_WEEGLI — kalecgos passes).
+	// ScriptedAI (not BossAI). Ported arms in
+	// lua_scripts/kalimdor/npc_weegli_blastfuse.lua: Bomb 8858 (victim,
+	// 10s init, 10s repeat, unconditional). AttackStartCaster, the
+	// Shoot 6660 / SetSheath arms gated on isAttackReady +
+	// IsWithinMeleeRange (no bridge — magtheridon precedent), the
+	// MovementInform pyramid legs (no instance SetData/GetData
+	// bridges), DestroyDoor's SetFaction + MovePoint legs, and the
+	// pyramid-gated gossip arms have no bridges; LandMine_Timer and
+	// SPELL_GOBLIN_LAND_MINE / SPELL_WEEGLIS_BARREL are dead C++
+	// legs — documented in the lua file, not wired.
+	RegisterLuaBoss("npc_weegli_blastfuse", 7607)
 }
