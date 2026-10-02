@@ -3197,6 +3197,28 @@ func init() {
 	// not wired.
 	RegisterLuaBoss("boss_slad_ran", 29304)
 
+	// boss_moorabi: Gundrak dungeon boss script, entry 29305
+	// (boss_moorabi.cpp enum NPC_MOORABI — kalecgos pass; the
+	// RegisterCreatureAIWithFactory(GetGundrakAI) ScriptName binding
+	// is instance-shimmed, the creature_template binding DB-side).
+	// BossAI. Ported arms in lua_scripts/northrend/boss_moorabi.lua:
+	// JustEngagedWith Talk(SAY_AGGRO 0) + DoCastSelf(Mojo Frenzy
+	// 55163, triggered); EVENT_TRANFORMATION (12s, single-fire):
+	// Talk(EMOTE_BEGIN_TRANSFORM 5) + Talk(SAY_TRANSFORM 3) +
+	// DoCastSelf(Transformation 55098) +
+	// DoCastSelf(Summon Phantom Transform 55097, triggered) — no
+	// reschedule, matching the C++ SpellHit(55098) cancel leg;
+	// KilledUnit Talk(SAY_SLAY 1) player-gated (event 3 — nalorakk
+	// precedent); JustDied Talk(EMOTE_ACTIVATE_ALTAR 7) +
+	// Talk(SAY_DEATH 2). The three DoCastAOE combat arms (Ground
+	// Tremor/Quake, Numbing Shout/Roar, Determined Stab/Gore) have no
+	// DoCastAOE bridge, the PHASE_INTRO EVENT_PHANTOM has no phase
+	// bridge, EnterEvadeMode has no despawn bridge, SpellHit/GetData
+	// have no cross-AI bridges, achievement_less_rabi has no
+	// achievement-criteria bridge, and spell_moorabi_mojo_frenzy has
+	// no AuraScript bridge — all documented in the lua file, not wired.
+	RegisterLuaBoss("boss_moorabi", 29305)
+
 	// npc_slad_ran_constrictor: Gundrak script, entry 29713
 	// (boss_slad_ran.cpp CREATURE_CONSTRICTORS — kalecgos pass).
 	// ScriptedAI. Ported arm: Grip of Slad'ran 55093 on the victim
