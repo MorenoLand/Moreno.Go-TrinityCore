@@ -5146,4 +5146,14 @@ func init() {
 	// achievement_incredible_hulk GetData check are bridge-blocked —
 	// documented in the lua header.
 	RegisterLuaBoss("boss_svala", 26668)
+	// AddSC_boss_palehoof: Gortok Palehoof (Utgarde Pinnacle) — ported arms
+	// (lua_scripts/northrend/boss_palehoof.lua): JustEngagedWith
+	// unconditional Talk(SAY_AGGRO 0) (event 1 — the auriaya engage-port
+	// precedent), KilledUnit player-gated Talk(SAY_SLAY 1) (event 3 — the
+	// razuvious player-gated variant precedent). The
+	// JustDied DoPlaySoundToSet(13467) has no Talk; the orb / awaken-spell /
+	// miniboss timer machines, the ACTION_* DoAction legs and the
+	// SpellScriptLoader hooks are bridge-blocked — documented in the lua
+	// header.
+	RegisterLuaBoss("boss_palehoof", 26687)
 }
