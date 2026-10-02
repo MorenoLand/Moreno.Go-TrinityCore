@@ -4645,4 +4645,57 @@ func init() {
 	// no GetData / achievement bridges; joins the
 	// unmodeled-achievement queue).
 	RegisterLuaBoss("boss_sjonnir", 27978)
+
+	// Auriaya (33515), Ulduar —
+	// lua_scripts/northrend/boss_auriaya.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
+	// (event 1; the BossAI::JustEngagedWith passthrough, the
+	// SendEncounterUnit engage leg and the five ScheduleEvent
+	// legs have no bridges); KilledUnit player-gated +
+	// roll_chance_i(50) Talk(SAY_SLAY 1) (event 3 — razuvious
+	// player-gated variant precedent plus the chance gate:
+	// math.random(1, 100) <= 50; first chance-gated slay variant
+	// ported, twenty-second player-gated variant ported).
+	// Documented-only: Reset / Initialize (_Reset() +
+	// _crazyCatLady / _nineLives flags + HandleCats(true) —
+	// no bridges); DoAction(ACTION_CRAZY_CAT_LADY 0 /
+	// ACTION_DEFENDER_DIED 1) / GetData(DATA_NINE_LIVES 30763077
+	// / DATA_CRAZY_CAT_LADY 30063007) — no DoAction / GetData
+	// bridges; JustDied (DoPlaySoundToSet 15476 +
+	// SendEncounterUnit disengage + HandleCats(false) grid
+	// despawn — no Talk arms, no bridges; event 4 not
+	// registered); the UpdateAI event machine (EVENT_SONIC_SCREECH
+	// 64422 DoCastVictim 22-30s; EVENT_TERRIFYING_SCREECH
+	// Talk(EMOTE_FEAR 3) + DoCastSelf 64386 + EVENT_BLAST 36-45s;
+	// EVENT_BLAST DoCastAOE 64389; EVENT_SUMMON_DEFENDER
+	// Talk(EMOTE_DEFENDER 4) + DoCastSelf 64448 +
+	// EVENT_ACTIVATE_DEFENDER 2s; EVENT_ACTIVATE_DEFENDER
+	// DoCastSelf 64449; EVENT_SWARNING_GUARDIAN random-target
+	// DoCast 64396 25-45s; EVENT_BERSERK DoCastSelf 47008 +
+	// Talk(SAY_BERSERK 2) 10min — no timer-event / cast /
+	// target-selection bridges; EMOTE_FEAR / EMOTE_DEFENDER /
+	// SAY_BERSERK ride the unbridgeable event machine);
+	// npc_sanctum_sentry (34014 local enum — entry-verifiable but
+	// bridge-blocked, no Talk arms; Reset self-cast 64369 and the
+	// EVENT_RIP / EVENT_SAVAGE_POUNCE machine have no bridges;
+	// JustDied DoAction(ACTION_CRAZY_CAT_LADY) has no
+	// ObjectAccessor / DoAction bridges; npc_spark_of_ionar
+	// no-bridgeable-arms precedent — no registration);
+	// npc_feral_defender (no creature entry in C++ evidence, no
+	// Talk arms — the respawn/feign-death machinery has no
+	// bridges; no registration); npc_swarming_guardian (no entry
+	// in C++ evidence, no Talk arms; no registration);
+	// npc_seeping_essence_stalker (no entry in C++ evidence, no
+	// Talk arms; no registration);
+	// spell_auriaya_strenght_of_the_pack (64381), spell_auriaya_
+	// sentinel_blast (64392 / 64679), spell_auriaya_agro_creator
+	// (63709), spell_auriaya_feral_essence_removal (64456),
+	// spell_auriaya_feral_rush (64496 / 64674) — no SpellScript
+	// bridge; all five join the no-SpellScript-bridge queue;
+	// spell_auriaya_random_agro_periodic (61906) — no AuraScript
+	// bridge; joins the no-AuraScript-bridge queue;
+	// achievement_nine_lives / achievement_crazy_cat_lady
+	// (GetData-based OnCheck — no GetData / achievement bridges;
+	// both join the unmodeled-achievement queue).
+	RegisterLuaBoss("boss_auriaya", 33515)
 }
