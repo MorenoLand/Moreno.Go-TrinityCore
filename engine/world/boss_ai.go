@@ -5088,4 +5088,22 @@ func init() {
 	// achievement_on_the_rocks GetData check are bridge-blocked —
 	// documented in the lua header.
 	RegisterLuaBoss("boss_keleseth", 23953)
+	// Skarvald the Constructor and Dalronn the Controller (Utgarde Keep)
+	// — boss_skarvald_dalronn.cpp, AddSC_boss_skarvald_dalronn() (loader
+	// decl 127 / call 322) — the SECOND group of the "// Utgarde Keep -
+	// Utgarde Keep" block (boss_keleseth -> boss_skarvald_dalronn).
+	// Bridgeable arms: Skarvald JustEngagedWith Talk(SAY_AGGRO 0)
+	// (event 1 — the auriaya engage-port precedent), both bosses'
+	// KilledUnit player-gated Talk(SAY_KILL 3) (event 3 — the razuvious
+	// player-gated variant precedent); the !IsInGhostForm gates are
+	// satisfied structurally (ghost entries 27390 / 27389 not registered,
+	// no bridgeable arms). Dalronn's aggro Talk rides the 5s
+	// EVENT_DELAYED_AGGRO_SAY timer (event 1 deliberately NOT registered
+	// — an immediate yell would deviate from C++), the
+	// JustDied died-first/death split is instance-GuidData /
+	// cross-creature-gated, the EVENT_DEATH_RESPONSE response Talk is
+	// DoAction/timer-gated, and the enrage/spell-cast legs carry no Talk
+	// arms — all bridge-blocked, documented in the lua header.
+	RegisterLuaBoss("boss_skarvald_the_constructor", 24200)
+	RegisterLuaBoss("boss_dalronn_the_controller", 24201)
 }
