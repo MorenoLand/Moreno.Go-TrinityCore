@@ -4021,4 +4021,25 @@ func init() {
 	// binding bridge), at_kelthuzad_center (no area-trigger bridge),
 	// achievement_just_cant_get_enough (no achievement bridge).
 	RegisterLuaBoss("boss_kelthuzad", 15990)
+
+	// Gluth (15932, Naxxramas) — lua_scripts/northrend/boss_gluth.lua.
+	// Ported arms (C++-exact): EVENT_WOUND DoCastVictim(MORTAL_WOUND
+	// 54378) 10s/10s (moroes precedent); EVENT_ENRAGE Talk(EMOTE_ENRAGE
+	// 2) + DoCastSelf(ENRAGE 28371) randtime(16s,22s)/randtime(16s,22s)
+	// (phase_hunter self-cast precedent); EVENT_BERSERK Talk(
+	// EMOTE_BERSERKER 4) + DoCastSelf(BERSERK 26662) 8min/5min. The
+	// STATE_GLUTH_EATING deferral arms (3s/5s/4s repeats) have no state
+	// bridge — documented in the lua. Unmodeled: Reset react-state/
+	// speed legs (no bridges), SummonedCreatureDies despawn (no summon
+	// bridge), EVENT_DECIMATE DoCastAOE 28374 + 20x multi-search
+	// machine (no DoCastAOE bridge), EVENT_SUMMON creature groups (no
+	// summon bridge + difficulty gate), zombie single/multi search +
+	// kill legs + DoAction DECIMATE_EVENT + MovementInform (no summon/
+	// cross-AI / react-state / motion bridges), EMOTE_DECIMATE/SPOTS_ONE/
+	// DEVOURS_ALL Talks (vortex — not ported orphaned), spell_gluth_decimate
+	// + spell_gluth_zombiechow_search (no SpellScript binding bridge),
+	// npc_zombie_chow (entry-unverifiable from C++ evidence — no
+	// registration; ctor DoCastSelf(INFECTED_WOUND 29307) joins the
+	// bridgeable-but-entry-blocked queue).
+	RegisterLuaBoss("boss_gluth", 15932)
 }
