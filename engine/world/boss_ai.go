@@ -5253,4 +5253,15 @@ func init() {
 	// + npc_void_sentry DoAction machine and the achievement_void_dance
 	// GetData check are bridge-blocked — documented in the lua header.
 	RegisterLuaBoss("boss_zuramat", 29314)
+
+	// Bronjahm (Forge of Souls) — bridgeable Talk arms ported from
+	// boss_bronjahm.cpp; see lua_scripts/northrend/boss_bronjahm.lua.
+	// Talk(SAY_CORRUPT_SOUL) / Talk(SAY_SOUL_STORM) ride scheduler
+	// event legs (no-timer-bridge); the Reset / DamageTaken phase
+	// machine, JustSummoned soul-fragment handling,
+	// GetData(DATA_SOUL_POWER), the npc_corrupted_soul_fragment
+	// machine, the four SpellScript / AuraScript hooks and
+	// achievement_bronjahm_soul_power are bridge-blocked — documented
+	// in the lua header.
+	RegisterLuaBoss("boss_bronjahm", 36497)
 }
