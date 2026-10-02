@@ -3725,4 +3725,64 @@ func init() {
 	// memory: no SpellScript binding bridge (razelikh precedent).
 	// C++ SD%Complete 50 % note carried.
 	RegisterLuaBoss("boss_eadric", 35119)
+
+	// boss_black_knight: Trial of the Champion dungeon boss script,
+	// entry 35451 (trial_of_the_champion.h NPC_BLACK_KNIGHT — kalecgos
+	// pass; the GetTrialOfTheChampionAI ScriptName binding is
+	// instance-shimmed, the creature_template binding DB-side).
+	// ScriptedAI. Ported arms in lua_scripts/northrend/
+	// boss_black_knight.lua: uiIcyTouchTimer — DoCastVictim(Icy Touch
+	// 67718) (creature:CastSpell(nil, spell) — moroes precedent),
+	// urand(5000,9000) init, urand(5000,7000) repeat;
+	// uiPlagueStrikeTimer — DoCastVictim(SPELL_ICY_TOUCH 67718)
+	// (C++ names the timer Plague Strike but casts Icy Touch —
+	// replicated C++-exact), urand(10000,13000) init,
+	// urand(12000,15000) repeat; uiObliterateTimer — DoCastVictim
+	// (Obliterate 67725), urand(17000,19000) init, repeat; all scheduled
+	// on OnEnterCombat(1), cancelled on 2/4/23 (gargolmar precedent) —
+	// the three arms fire identically in PHASE_UNDEAD and PHASE_SKELETON
+	// and are independent of the unbridged DamageTaken resurrect machine
+	// (boss_eadric precedent). JustDied: DoCastSelf(Kill Credit 68663)
+	// on event 4 (the instance->SetBossState(BOSS_BLACK_KNIGHT, DONE) leg
+	// has no bridge — instance model absent, standing); melee
+	// engine-driven. No Talk arms exist in C++ (no Say enum — "missing
+	// yells" in the SD%Complete 80 % note). Documented in the lua file,
+	// not wired: DamageTaken (damage > health && uiPhase <=
+	// PHASE_SKELETON -> damage = 0 + SetHealth(0) + ROOT/STUNNED +
+	// summons.DespawnAll() + SetDisplayId(29846/21300) +
+	// bEventInProgress — no DamageTaken hook, npc_unkor_the_ruthless
+	// precedent); the bEventInProgress resurrect machine
+	// (SetFullHealth + DoCastSelf(Black Knight Res 67693, true) +
+	// uiPhase++ + ClearUnitState, gated on the unbridged DamageTaken leg
+	// — jedoga bar); uiDeathRespiteTimer (PHASE_UNDEAD: SelectTarget
+	// (Random,0,100,true) -> Death's Respite 67745, urand(15000,16000) —
+	// random-target SelectTarget absent, cairne/kazzak precedent);
+	// PHASE_SKELETON legs — phase never arrives (bSummonArmy one-shot
+	// ROOT/STUNNED + DoCastSelf(Army of the Dead 67761) — no unit-state
+	// bridge — + DeathArmyCheckTimer ClearUnitState; Desecration 67778
+	// urand(15000,16000) behind the random-target bridge; Ghoul Explode
+	// 67751 8s self-cast phase-gated — jedoga bar); PHASE_GHOST legs —
+	// phase never arrives (Death's Bite 67808 urand(2000,4000) — no
+	// DoCastAOE bridge, terestian/shazzrah precedent; Marked for Death
+	// 67882 urand(5000,7000) behind the random-target bridge); Reset's
+	// summons.DespawnAll() + SetDisplayId(native) + ClearUnitState (no
+	// summon / display / unit-state bridges); JustSummoned's
+	// summons.Summon + cross-AI AttackStart (summon STRAND absent,
+	// standing); melee's !HasUnitState(ROOT) && !HealthBelowPct(1) gate
+	// (no unit-state bridge + no health-pct bridge, doomwalker
+	// precedent — melee plays engine-driven unconditionally here).
+	// npc_risen_ghoul: ENTRY UNVERIFIABLE (no NPC constant in C++ — the
+	// ghouls materialize via the DB-side SPELL_ARMY_DEAD 67761 summon
+	// effect — belnistrasz/willix precedent): zero registration; joins
+	// the bridgeable-but-entry-blocked queue (port-pattern-ready:
+	// uiAttackTimer SelectTarget(Random,1,100,true) -> DoCast(Leap
+	// 67749), 3500 repeat — random-target bridge absent).
+	// npc_black_knight_skeletal_gryphon: ENTRY UNVERIFIABLE (no NPC
+	// constant ties the script name to an entry in C++ — the
+	// creature_template binding is DB-side): zero registration; whole AI
+	// is the EscortAI machine (constructor Start(false,true) +
+	// EscortAI::UpdateAI) — escort / motion-master bridges absent
+	// (escort queue precedent); joins the bridgeable-but-entry-blocked
+	// queue. Trial of the Champion block stays OPEN.
+	RegisterLuaBoss("boss_black_knight", 35451)
 }
