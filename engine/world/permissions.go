@@ -578,3 +578,72 @@ const permissionCommandLearnAllRecipes uint32 = 428
 
 // permissionCommandUnlearn mirrors rbac::RBAC_PERM_COMMAND_UNLEARN (RBAC.h:297).
 const permissionCommandUnlearn uint32 = 429
+
+// permissionCommandLookup mirrors rbac::RBAC_PERM_COMMAND_LOOKUP (RBAC.h:310).
+const permissionCommandLookup uint32 = 442
+
+// permissionCommandLookupArea mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_AREA (RBAC.h:311).
+const permissionCommandLookupArea uint32 = 443
+
+// permissionCommandLookupCreature mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_CREATURE (RBAC.h:312).
+const permissionCommandLookupCreature uint32 = 444
+
+// permissionCommandLookupEvent mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_EVENT (RBAC.h:313).
+const permissionCommandLookupEvent uint32 = 445
+
+// permissionCommandLookupFaction mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_FACTION (RBAC.h:314).
+const permissionCommandLookupFaction uint32 = 446
+
+// permissionCommandLookupItem mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_ITEM (RBAC.h:315).
+const permissionCommandLookupItem uint32 = 447
+
+// permissionCommandLookupItemSet mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_ITEMSET (RBAC.h:316).
+const permissionCommandLookupItemSet uint32 = 448
+
+// permissionCommandLookupObject mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_OBJECT (RBAC.h:317).
+const permissionCommandLookupObject uint32 = 449
+
+// permissionCommandLookupQuest mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_QUEST (RBAC.h:318).
+const permissionCommandLookupQuest uint32 = 450
+
+// permissionCommandLookupPlayer mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_PLAYER (RBAC.h:319).
+const permissionCommandLookupPlayer uint32 = 451
+
+// permissionCommandLookupPlayerIP mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_PLAYER_IP (RBAC.h:320).
+const permissionCommandLookupPlayerIP uint32 = 452
+
+// permissionCommandLookupPlayerAccount mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_PLAYER_ACCOUNT (RBAC.h:321).
+const permissionCommandLookupPlayerAccount uint32 = 453
+
+// permissionCommandLookupPlayerEmail mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_PLAYER_EMAIL (RBAC.h:322).
+const permissionCommandLookupPlayerEmail uint32 = 454
+
+// permissionCommandLookupSkill mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_SKILL (RBAC.h:323).
+const permissionCommandLookupSkill uint32 = 455
+
+// permissionCommandLookupSpell mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_SPELL (RBAC.h:324).
+const permissionCommandLookupSpell uint32 = 456
+
+// permissionCommandLookupSpellID mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_SPELL_ID (RBAC.h:325).
+const permissionCommandLookupSpellID uint32 = 457
+
+// permissionCommandLookupTaxinode mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_TAXINODE (RBAC.h:326).
+const permissionCommandLookupTaxinode uint32 = 458
+
+// permissionCommandLookupTele mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_TELE (RBAC.h:327).
+const permissionCommandLookupTele uint32 = 459
+
+// permissionCommandLookupTitle mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_TITLE (RBAC.h:328).
+const permissionCommandLookupTitle uint32 = 460
+
+// permissionCommandLookupMap mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_MAP (RBAC.h:329).
+const permissionCommandLookupMap uint32 = 461
+
+// permissionCommandLookupMapID mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_MAP_ID (RBAC.h:741).
+const permissionCommandLookupMapID uint32 = 875
+
+// permissionCommandLookupItemID mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_ITEM_ID (RBAC.h:742).
+const permissionCommandLookupItemID uint32 = 876
+
+// permissionCommandLookupQuestID mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_QUEST_ID (RBAC.h:743).
+const permissionCommandLookupQuestID uint32 = 877

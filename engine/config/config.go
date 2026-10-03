@@ -97,6 +97,7 @@ type Config struct {
 	GMVisibleState                          int
 	GMInWhoListLevel                        int
 	GMLevelInGmList                         int
+	MaxResultsLookupCommands                uint32
 	StartingGuildEnable                     bool
 	StartingGuildID                         uint32
 	ChatFloodMessageCount                   uint32
@@ -195,6 +196,7 @@ func defaultConfig() (c Config) {
 func Default() Config {
 	c := defaultConfig()
 	c.GMInWhoListLevel = 3
+	c.MaxResultsLookupCommands = 50
 	c.StartingGuildID = 1
 	c.RestOfflineInTavernOrCityRate = 1
 	c.RestOfflineInWildernessRate = 1
@@ -253,6 +255,7 @@ func (c *Config) ApplyEnv() {
 	values["MORENOCORE_GM_VISIBLE"] = "GM.Visible"
 	values["MORENOCORE_GM_IN_WHO_LIST_LEVEL"] = "GM.InWhoList.Level"
 	values["MORENOCORE_GM_IN_GMLIST_LEVEL"] = "GM.InGMList.Level"
+	values["MORENOCORE_MAX_RESULTS_LOOKUP_COMMANDS"] = "MaxResultsLookupCommands"
 	values["MORENOCORE_STARTING_GUILD_ENABLE"] = "StartingGuild.Enable"
 	values["MORENOCORE_STARTING_GUILD_ID"] = "StartingGuild.GuildID"
 	values["MORENOCORE_GAME_TYPE"] = "GameType"
@@ -642,6 +645,8 @@ func (c *Config) set(key, value string) error {
 		return setInt(&c.GMInWhoListLevel, key, value)
 	case "GM.InGMList.Level":
 		return setInt(&c.GMLevelInGmList, key, value)
+	case "MaxResultsLookupCommands":
+		return setUint32(&c.MaxResultsLookupCommands, key, value)
 	case "StartingGuild.Enable":
 		return setBool(&c.StartingGuildEnable, key, value)
 	case "StartingGuild.GuildID":

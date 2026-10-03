@@ -2089,99 +2089,6 @@ func (s *session) castArmBlocked(ctx context.Context, permissionID uint32, reaso
 	s.sendSysMessage(reason)
 }
 
-func (s *session) handleCmdLookup(ctx context.Context, args []string) {
-	if len(args) < 2 {
-		s.sendSysMessage("Syntax: .lookup item|spell|creature|tele|quest <name>")
-		return
-	}
-	sub := strings.ToLower(args[0])
-	query := "%" + strings.Join(args[1:], " ") + "%"
-	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
-		s.sendSysMessage("Database not available.")
-		return
-	}
-	switch sub {
-	case "item":
-		rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT entry, name FROM item_template WHERE name LIKE ? LIMIT 10", query)
-		if err != nil {
-			s.sendSysMessage(fmt.Sprintf("Lookup failed: %v", err))
-			return
-		}
-		defer rows.Close()
-		count := 0
-		for rows.Next() {
-			var id uint32
-			var name string
-			if err := rows.Scan(&id, &name); err == nil {
-				s.sendSysMessage(fmt.Sprintf("Item %d: %s", id, name))
-				count++
-			}
-		}
-		if count == 0 {
-			s.sendSysMessage("No items found.")
-		}
-	case "creature", "npc":
-		rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT entry, name FROM creature_template WHERE name LIKE ? LIMIT 10", query)
-		if err != nil {
-			s.sendSysMessage(fmt.Sprintf("Lookup failed: %v", err))
-			return
-		}
-		defer rows.Close()
-		count := 0
-		for rows.Next() {
-			var id uint32
-			var name string
-			if err := rows.Scan(&id, &name); err == nil {
-				s.sendSysMessage(fmt.Sprintf("Creature %d: %s", id, name))
-				count++
-			}
-		}
-		if count == 0 {
-			s.sendSysMessage("No creatures found.")
-		}
-	case "tele":
-		rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT id, name FROM game_tele WHERE name LIKE ? LIMIT 10", query)
-		if err != nil {
-			s.sendSysMessage(fmt.Sprintf("Lookup failed: %v", err))
-			return
-		}
-		defer rows.Close()
-		count := 0
-		for rows.Next() {
-			var id uint32
-			var name string
-			if err := rows.Scan(&id, &name); err == nil {
-				s.sendSysMessage(fmt.Sprintf("Teleport %d: %s", id, name))
-				count++
-			}
-		}
-		if count == 0 {
-			s.sendSysMessage("No teleport locations found.")
-		}
-	case "quest":
-		rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT ID, LogTitle FROM quest_template WHERE LogTitle LIKE ? LIMIT 10", query)
-		if err != nil {
-			s.sendSysMessage(fmt.Sprintf("Lookup failed: %v", err))
-			return
-		}
-		defer rows.Close()
-		count := 0
-		for rows.Next() {
-			var id uint32
-			var title string
-			if err := rows.Scan(&id, &title); err == nil {
-				s.sendSysMessage(fmt.Sprintf("Quest %d: %s", id, title))
-				count++
-			}
-		}
-		if count == 0 {
-			s.sendSysMessage("No quests found.")
-		}
-	default:
-		s.sendSysMessage(fmt.Sprintf("Unknown lookup type: %s", sub))
-	}
-}
-
 func (s *session) handleCmdServer(ctx context.Context, args []string) {
 	if len(args) == 0 || strings.ToLower(args[0]) == "info" {
 		s.server.sessionsMu.RLock()
@@ -6421,7 +6328,6 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("modify", func(ctx context.Context, args []string) bool { s.handleCmdModify(ctx, args); return true }, []string{"hp", "health", "mana", "power", "speed", "run", "fly", "scale", "money", "gold", "level"}, map[string]string{"mod": "modify"})
 	root.add("additem", func(ctx context.Context, args []string) bool { s.handleCmdAddItem(ctx, args); return true }, nil, map[string]string{"item": "additem"})
 	root.add("cast", func(ctx context.Context, args []string) bool { s.handleCmdCast(ctx, args); return true }, nil, nil)
-	root.add("lookup", func(ctx context.Context, args []string) bool { s.handleCmdLookup(ctx, args); return true }, []string{"item", "spell", "creature", "npc", "tele", "quest"}, nil)
 	root.add("server", func(ctx context.Context, args []string) bool { s.handleCmdServer(ctx, args); return true }, []string{"info", "motd", "restart", "shutdown"}, nil)
 	root.add("character", func(ctx context.Context, args []string) bool { s.handleCmdCharacter(ctx, args); return true }, []string{"customize", "changefaction", "changerace", "changeaccount", "deleted", "erase", "level", "rename", "reputation", "titles"}, map[string]string{"char": "character"})
 	root.add("levelup", func(ctx context.Context, args []string) bool { s.handleCmdLevelup(ctx, args); return true }, nil, nil)
@@ -6444,6 +6350,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("honor", func(ctx context.Context, args []string) bool { s.handleCmdHonor(ctx, args); return true }, []string{"add", "update"}, nil)
 	root.add("instance", func(ctx context.Context, args []string) bool { s.handleCmdInstance(ctx, args); return true }, []string{"listbinds", "unbind", "stats", "savedata", "setbossstate", "getbossstate"}, nil)
 	root.add("learn", func(ctx context.Context, args []string) bool { s.handleCmdLearn(ctx, args); return true }, []string{"all", "my"}, nil)
+	root.add("lookup", func(ctx context.Context, args []string) bool { s.handleCmdLookup(ctx, args); return true }, []string{"area", "creature", "event", "faction", "item", "object", "quest", "player", "skill", "spell", "taxinode", "tele", "title", "map"}, nil)
 	root.add("unlearn", func(ctx context.Context, args []string) bool { s.handleCmdUnLearn(ctx, args); return true }, nil, nil)
 	root.add("revive", func(ctx context.Context, args []string) bool { s.handleCmdRevive(ctx, args); return true }, nil, map[string]string{"res": "revive", "rev": "revive"})
 	root.add("dismount", func(ctx context.Context, args []string) bool { s.handleCmdDismount(ctx); return true }, nil, nil)
