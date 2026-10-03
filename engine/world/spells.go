@@ -3451,13 +3451,20 @@ func (s *session) stopSpellLifecycle() {
 	s.castMu.Unlock()
 }
 
+// handleCancelCast mirrors WorldSession::HandleCancelCastOpcode
+// (SpellHandler.cpp:449-453) -> Unit::InterruptNonMeleeSpells(false, SpellID,
+// false) (Unit.cpp:3212-3222) -> Spell::cancel (Spell.cpp:3210-3254) for the
+// SPELL_STATE_PREPARING leg: the cancel only lands when the active cast is the
+// spell the client named, the interrupted spell's global cooldown is refunded
+// (CancelGlobalCooldown), and both the caster result and the set-wide
+// interrupted broadcast go out (SendCastResult + SendInterrupted).
 func (s *session) handleCancelCast(payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	castID, _ := reader.ReadU8()
 	spellID, _ := reader.ReadU32()
 
 	s.castMu.Lock()
-	if s.activeCast != nil {
+	if s.activeCast != nil && s.activeCast.SpellID == spellID {
 		if s.activeCast.Timer != nil {
 			s.activeCast.Timer.Stop()
 		}
@@ -3467,14 +3474,42 @@ func (s *session) handleCancelCast(payload []byte) bool {
 		s.activeCast = nil
 		s.castMu.Unlock()
 
+		s.cancelGlobalCooldown(curSpellID)
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(curCastID, curSpellID, spellFailedInterrupted), true)
+		s.sendInterrupted(curCastID, curSpellID, spellFailedInterrupted)
 		return true
 	}
 	s.castMu.Unlock()
 
+	// No active cast (or a different spell is casting): C++ sends nothing, but
+	// the cast-failed result still goes out so a client stuck on a cast bar
+	// for this spell id can clear it.
 	_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedInterrupted), true)
 	return true
 }
+
+// Spell::cancel parity (Spell.cpp:3210-3254): the PREPARING leg above is now
+// exact via handleCancelCast / interruptCurrentCast; the remaining legs are
+// covered or intentionally absent.
+//   - SPELL_STATE_DELAYED: Go has no DELAYED (missile in flight) state, so the
+//     "interrupted if not delayed" term has nothing to match.
+//   - m_autoRepeat = false: Go auto-repeat lives on the session
+//     (autoRepeatSpell/autoRepeatTarget, cleared with SMSG_CANCEL_AUTO_REPEAT
+//     in combat.go), not on a per-cast Spell object; there is no flag to clear
+//     here.
+//   - SPELL_STATE_CASTING (channeled): covered by interruptCurrentChannel,
+//     which stops the timers, expires the channel aura on caster and target
+//     (the RemoveOwnedAura(AURA_REMOVE_BY_CANCEL) mirror) and sends
+//     SMSG_CHANNEL_UPDATE 0. The m_appliedMods.clear() term has no bridge: Go
+//     has no per-cast Spell object to hold applied mods (standing gap noted in
+//     spellmod.go). A CMSG_CANCEL_CAST naming a channeled spell id also
+//     interrupts the channel in C++ (InterruptNonMeleeSpells always checks
+//     CURRENT_CHANNELED_SPELL); Go only interrupts channels on
+//     CMSG_CANCEL_CHANNELLING, which is the opcode the client actually sends.
+//   - originalCaster RemoveDynObject/RemoveGameObject: Go has no gameobject
+//     casters; every cast is a player session.
+//   - the finish(false) tail: subsumed — activeCast is already nilled inline
+//     and finishSpellCast early-returns on Cancelled, so no state lingers.
 
 func (s *session) handleCancelChanneling(payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
