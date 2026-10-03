@@ -2565,6 +2565,8 @@ func (s *session) handleComplain(ctx context.Context, payload []byte) bool {
 const (
 	logoutDelay       = 20 * time.Second
 	playerFlagResting = uint32(0x00000020)
+	unitFlagSilenced  = uint32(0x00002000)
+	unitFlagPacified  = uint32(0x00020000)
 	unitFlagStunned   = uint32(0x00040000)
 	unitFlagConfused  = uint32(0x00400000)
 	unitFlagFleeing   = uint32(0x00800000)

@@ -34,36 +34,42 @@ const (
 	spellAttr1DismissPet      uint32 = 0x00000001 // SPELL_ATTR1_DISMISS_PET (SharedDefines.h:449) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr3NoInitialAggro  uint32 = 0x00020000 // SPELL_ATTR3_NO_INITIAL_AGGRO (SharedDefines.h:540) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7)
 
-	spellAttr0Ability                     uint32 = 0x00000010 // SPELL_ATTR0_ABILITY (SharedDefines.h:416)
-	spellAttr0ReqAmmo                     uint32 = 0x00000002 // SPELL_ATTR0_REQ_AMMO (SharedDefines.h:413)
-	spellAttr0Tradespell                  uint32 = 0x00000020 // SPELL_ATTR0_TRADESPELL (SharedDefines.h:417)
-	spellAttr3NoDoneBonus                 uint32 = 0x20000000 // SPELL_ATTR3_NO_DONE_BONUS (SharedDefines.h:552) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
-	spellAttr3TreatAsPeriodic             uint32 = 0x02000000 // SPELL_ATTR3_TREAT_AS_PERIODIC (SharedDefines.h:548) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
-	spellAttr3StackForDiffCasters         uint32 = 0x00000080 // SPELL_ATTR3_STACK_FOR_DIFF_CASTERS (SharedDefines.h:530) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
-	spellAttr7NoPushbackOnDamage          uint32 = 0x00000040 // SPELL_ATTR7_NO_PUSHBACK_ON_DAMAGE (SharedDefines.h:677) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
-	spellAttr7DispelCharges               uint32 = 0x00000400 // SPELL_ATTR7_DISPEL_CHARGES (SharedDefines.h:681) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
-	spellAttr6AssistIgnoreImmuneFlag      uint32 = 0x00000008 // SPELL_ATTR6_ASSIST_IGNORE_IMMUNE_FLAG (SharedDefines.h:637) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
-	spellAttr6CanTargetUntargetable       uint32 = 0x01000000 // SPELL_ATTR6_CAN_TARGET_UNTARGETABLE (SharedDefines.h:658) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
-	spellAttr6DontConsumeProcCharges      uint32 = 0x00000020 // SPELL_ATTR6_DONT_CONSUME_PROC_CHARGES (SharedDefines.h:639) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
-	spellAttr6NotInRaidInstance           uint32 = 0x00000800 // SPELL_ATTR6_NOT_IN_RAID_INSTANCE (SharedDefines.h:645) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
-	spellAttr4NotStealable                uint32 = 0x00000040 // SPELL_ATTR4_NOT_STEALABLE (SharedDefines.h:566) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
-	spellAttr4FixedDamage                 uint32 = 0x00000100 // SPELL_ATTR4_FIXED_DAMAGE (SharedDefines.h:568) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
-	spellAttr4NotUsableInArena            uint32 = 0x00010000 // SPELL_ATTR4_NOT_USABLE_IN_ARENA (SharedDefines.h:576) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
-	spellAttr4UsableInArena               uint32 = 0x00020000 // SPELL_ATTR4_USABLE_IN_ARENA (SharedDefines.h:577) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
-	spellAttr3Battleground                uint32 = 0x00000800 // SPELL_ATTR3_BATTLEGROUND (SharedDefines.h:534) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
-	spellAttr4TreatAsDelayed              uint32 = 0x00000010 // SPELL_ATTR4_UNK4 "Treat as delayed spell" (SharedDefines.h:564) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
-	spellAttr4ProcOnlyOnCaster            uint32 = 0x00000002 // SPELL_ATTR4_PROC_ONLY_ON_CASTER (SharedDefines.h:561) "Only proc on self-cast" — ATTR4 is Go's AttributesEx4
-	spellAttr4CastOnlyInOutland           uint32 = 0x04000000 // SPELL_ATTR4_CAST_ONLY_IN_OUTLAND (SharedDefines.h:586) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
-	targetUnitCaster                      uint32 = 1          // TARGET_UNIT_CASTER (SharedDefines.h:1442)
-	spellAttr0UnaffectedByInvulnerability uint32 = 0x20000000 // SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY (SharedDefines.h:441)
-	spellAttr0NotShapeshift               uint32 = 0x00010000 // SPELL_ATTR0_NOT_SHAPESHIFT (SharedDefines.h:428)
-	spellAttr2NotNeedShapeshift           uint32 = 0x00080000 // SPELL_ATTR2_NOT_NEED_SHAPESHIFT (SharedDefines.h:505) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
-	spellAttr1CantBeReflected             uint32 = 0x00000080 // SPELL_ATTR1_CANT_BE_REFLECTED (SharedDefines.h:456)
-	spellAttr1ReqComboPoints1             uint32 = 0x00100000 // SPELL_ATTR1_REQ_COMBO_POINTS1 (SharedDefines.h:469) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
-	spellAttr1ReqComboPoints2             uint32 = 0x00400000 // SPELL_ATTR1_REQ_COMBO_POINTS2 (SharedDefines.h:471) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
-	spellAttr2CanTargetDead               uint32 = 0x00000001 // SPELL_ATTR2_CAN_TARGET_DEAD (SharedDefines.h:486) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
-	spellAttr2AutorepeatFlag              uint32 = 0x00000020 // SPELL_ATTR2_AUTOREPEAT_FLAG (SharedDefines.h:491) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
-	spellAttr2NotResetAutoActions         uint32 = 0x00020000 // SPELL_ATTR2_NOT_RESET_AUTO_ACTIONS (SharedDefines.h:503) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
+	spellAttr0Ability                      uint32 = 0x00000010 // SPELL_ATTR0_ABILITY (SharedDefines.h:416)
+	spellAttr0ReqAmmo                      uint32 = 0x00000002 // SPELL_ATTR0_REQ_AMMO (SharedDefines.h:413)
+	spellAttr0Tradespell                   uint32 = 0x00000020 // SPELL_ATTR0_TRADESPELL (SharedDefines.h:417)
+	spellAttr3NoDoneBonus                  uint32 = 0x20000000 // SPELL_ATTR3_NO_DONE_BONUS (SharedDefines.h:552) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
+	spellAttr3TreatAsPeriodic              uint32 = 0x02000000 // SPELL_ATTR3_TREAT_AS_PERIODIC (SharedDefines.h:548) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
+	spellAttr3StackForDiffCasters          uint32 = 0x00000080 // SPELL_ATTR3_STACK_FOR_DIFF_CASTERS (SharedDefines.h:530) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
+	spellAttr7NoPushbackOnDamage           uint32 = 0x00000040 // SPELL_ATTR7_NO_PUSHBACK_ON_DAMAGE (SharedDefines.h:677) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
+	spellAttr7DispelCharges                uint32 = 0x00000400 // SPELL_ATTR7_DISPEL_CHARGES (SharedDefines.h:681) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
+	spellAttr6AssistIgnoreImmuneFlag       uint32 = 0x00000008 // SPELL_ATTR6_ASSIST_IGNORE_IMMUNE_FLAG (SharedDefines.h:637) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
+	spellAttr6CanTargetUntargetable        uint32 = 0x01000000 // SPELL_ATTR6_CAN_TARGET_UNTARGETABLE (SharedDefines.h:658) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
+	spellAttr6DontConsumeProcCharges       uint32 = 0x00000020 // SPELL_ATTR6_DONT_CONSUME_PROC_CHARGES (SharedDefines.h:639) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
+	spellAttr6NotInRaidInstance            uint32 = 0x00000800 // SPELL_ATTR6_NOT_IN_RAID_INSTANCE (SharedDefines.h:645) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
+	spellAttr4NotStealable                 uint32 = 0x00000040 // SPELL_ATTR4_NOT_STEALABLE (SharedDefines.h:566) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
+	spellAttr4FixedDamage                  uint32 = 0x00000100 // SPELL_ATTR4_FIXED_DAMAGE (SharedDefines.h:568) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
+	spellAttr4NotUsableInArena             uint32 = 0x00010000 // SPELL_ATTR4_NOT_USABLE_IN_ARENA (SharedDefines.h:576) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
+	spellAttr4UsableInArena                uint32 = 0x00020000 // SPELL_ATTR4_USABLE_IN_ARENA (SharedDefines.h:577) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
+	spellAttr3Battleground                 uint32 = 0x00000800 // SPELL_ATTR3_BATTLEGROUND (SharedDefines.h:534) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
+	spellAttr4TreatAsDelayed               uint32 = 0x00000010 // SPELL_ATTR4_UNK4 "Treat as delayed spell" (SharedDefines.h:564) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
+	spellAttr4ProcOnlyOnCaster             uint32 = 0x00000002 // SPELL_ATTR4_PROC_ONLY_ON_CASTER (SharedDefines.h:561) "Only proc on self-cast" — ATTR4 is Go's AttributesEx4
+	spellAttr4CastOnlyInOutland            uint32 = 0x04000000 // SPELL_ATTR4_CAST_ONLY_IN_OUTLAND (SharedDefines.h:586) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
+	targetUnitCaster                       uint32 = 1          // TARGET_UNIT_CASTER (SharedDefines.h:1442)
+	spellAttr0UnaffectedByInvulnerability  uint32 = 0x20000000 // SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY (SharedDefines.h:441)
+	spellAttr0NotShapeshift                uint32 = 0x00010000 // SPELL_ATTR0_NOT_SHAPESHIFT (SharedDefines.h:428)
+	spellAttr2NotNeedShapeshift            uint32 = 0x00080000 // SPELL_ATTR2_NOT_NEED_SHAPESHIFT (SharedDefines.h:505) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
+	spellAttr1CantBeReflected              uint32 = 0x00000080 // SPELL_ATTR1_CANT_BE_REFLECTED (SharedDefines.h:456)
+	spellAttr1ReqComboPoints1              uint32 = 0x00100000 // SPELL_ATTR1_REQ_COMBO_POINTS1 (SharedDefines.h:469) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
+	spellAttr1ReqComboPoints2              uint32 = 0x00400000 // SPELL_ATTR1_REQ_COMBO_POINTS2 (SharedDefines.h:471) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
+	spellAttr2CanTargetDead                uint32 = 0x00000001 // SPELL_ATTR2_CAN_TARGET_DEAD (SharedDefines.h:486) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
+	spellAttr2AutorepeatFlag               uint32 = 0x00000020 // SPELL_ATTR2_AUTOREPEAT_FLAG (SharedDefines.h:491) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
+	spellAttr2NotResetAutoActions          uint32 = 0x00020000 // SPELL_ATTR2_NOT_RESET_AUTO_ACTIONS (SharedDefines.h:503) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
+	spellAttr5UsableWhileStunned           uint32 = 0x00000008 // SPELL_ATTR5_USABLE_WHILE_STUNNED (SharedDefines.h:600) — ATTR5 is Go's AttributesEx5 (Spell.dbc field 9 = AttributesExE)
+	spellAttr5UsableWhileFeared            uint32 = 0x00020000 // SPELL_ATTR5_USABLE_WHILE_FEARED (SharedDefines.h:614) — ATTR5 is Go's AttributesEx5
+	spellAttr5UsableWhileConfused          uint32 = 0x00040000 // SPELL_ATTR5_USABLE_WHILE_CONFUSED (SharedDefines.h:615) — ATTR5 is Go's AttributesEx5
+	spellAttr6IgnoreCasterAuras            uint32 = 0x00000004 // SPELL_ATTR6_IGNORE_CASTER_AURAS (SharedDefines.h:636) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
+	spellAttr1DispelAurasOnImmunity        uint32 = 0x00008000 // SPELL_ATTR1_DISPEL_AURAS_ON_IMMUNITY (SharedDefines.h:464) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
+	spellAttr2UnaffectedByAuraSchoolImmune uint32 = 0x04000000 // SPELL_ATTR2_UNAFFECTED_BY_AURA_SCHOOL_IMMUNE (SharedDefines.h:512) — ATTR2 is Go's AttributesEx1
 
 	targetFlagCorpseEnemy uint32 = 0x00000200 // TARGET_FLAG_CORPSE_ENEMY (SpellInfo.h:57)
 	targetFlagUnitDead    uint32 = 0x00000400 // TARGET_FLAG_UNIT_DEAD (SpellInfo.h:58)
@@ -98,6 +104,9 @@ const (
 	spellFailedCharmed                   uint8 = 24  // SPELL_FAILED_CHARMED (SharedDefines.h:1006)
 	spellFailedConfused                  uint8 = 26  // SPELL_FAILED_CONFUSED (SharedDefines.h:1008)
 	spellFailedFleeing                   uint8 = 34  // SPELL_FAILED_FLEEING (SharedDefines.h:1016)
+	spellFailedStunned                   uint8 = 108 // SPELL_FAILED_STUNNED (SharedDefines.h:1090)
+	spellFailedPacified                  uint8 = 98  // SPELL_FAILED_PACIFIED (SharedDefines.h:1080)
+	spellFailedPreventedByMechanic       uint8 = 147 // SPELL_FAILED_PREVENTED_BY_MECHANIC (SharedDefines.h:1129)
 	spellFailedCasterAuraState           uint8 = 22  // SPELL_FAILED_CASTER_AURASTATE (SharedDefines.h:1004)
 	spellFailedTargetAuraState           uint8 = 111 // SPELL_FAILED_TARGET_AURASTATE (SharedDefines.h:1093)
 	spellFailedSummonPending             uint8 = 183 // SPELL_FAILED_SUMMON_PENDING (SharedDefines.h:1165)
@@ -297,6 +306,14 @@ const (
 	spellAuraModConfuse                            = 5   // SPELL_AURA_MOD_CONFUSE (SpellAuraDefines.h:85)
 	spellAuraModFear                               = 7   // SPELL_AURA_MOD_FEAR (SpellAuraDefines.h:87)
 	spellAuraModStun                               = 12  // SPELL_AURA_MOD_STUN (SpellAuraDefines.h:92)
+	spellAuraStrangulate                           = 298 // SPELL_AURA_STRANGULATE (SpellAuraDefines.h:378)
+	spellAuraModSilence                            = 27  // SPELL_AURA_MOD_SILENCE (SpellAuraDefines.h:107)
+	spellAuraModPacify                             = 25  // SPELL_AURA_MOD_PACIFY (SpellAuraDefines.h:105)
+	spellAuraModPacifySilence                      = 60  // SPELL_AURA_MOD_PACIFY_SILENCE (SpellAuraDefines.h:140)
+	spellAuraStateImmunity                         = 38  // SPELL_AURA_STATE_IMMUNITY (SpellAuraDefines.h:118)
+	spellAuraDispelImmunity                        = 41  // SPELL_AURA_DISPEL_IMMUNITY (SpellAuraDefines.h:121)
+	spellAuraModImmuneAuraApplySchool              = 267 // SPELL_AURA_MOD_IMMUNE_AURA_APPLY_SCHOOL (SpellAuraDefines.h:347)
+	spellAuraMechanicImmunityMask                  = 147 // SPELL_AURA_MECHANIC_IMMUNITY_MASK (SpellAuraDefines.h:227)
 	spellAuraModRoot                               = 26  // SPELL_AURA_MOD_ROOT (SpellAuraDefines.h:106)
 	unitStandFlagCreep                             = 0x02
 	playerAuraVisionStealth                        = 0x20
@@ -754,6 +771,25 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if spell.RequiresSpellFocus != 0 && !s.spellFocusFound(ctx, spell) {
 		s.sendCastFailed(ctx, castID, spell, spellFailedRequiresSpellFocus)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "no spell focus object in range", "focus", spell.RequiresSpellFocus)
+		return true
+	}
+	// Caster-aura gate (Spell::CheckCasterAuras, Spell.cpp:6257-6389; called
+	// from Spell::CheckCast at Spell.cpp:5509): the caster's UNIT_FIELD_FLAGS
+	// CC state blocks the cast unless the spell is immune to caster auras
+	// (ATTR6), is usable while in that CC state (ATTR5 mechanic-mask check),
+	// or cancels the preventing aura effects. A set mechanic converts the
+	// result to SPELL_FAILED_PREVENTED_BY_MECHANIC with the mechanic as the
+	// extended packet param (WriteCastResultInfo, Spell.cpp:4102-4107).
+	// Client-initiated casts only — triggered casts go through
+	// castSpellDirect, not this path. C++ relative order places this right
+	// after the spell-focus check (Spell.cpp:5476-5509).
+	if result, mechanic := s.checkCasterAuras(spell); result != 0 {
+		payload := buildCastFailed(castID, spellID, result)
+		if result == spellFailedPreventedByMechanic {
+			payload = buildCastFailedParams(castID, spellID, result, mechanic)
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), payload, true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "caster aura state", "failure", result, "mechanic", mechanic)
 		return true
 	}
 	if s.isGCDActive(spell) {
@@ -3062,6 +3098,318 @@ func (s *session) checkComboPointsCast(spell wotlk.Spell, target protocol.SpellT
 		return spellFailedNoComboPoints
 	}
 	return 0
+}
+
+// immuneToMovementImpairmentAndLossControlMask mirrors
+// IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK
+// (SharedDefines.h:1393-1401), used by spellAllowedMechanicMask for the
+// hardcoded SPELL_AURA_MECHANIC_IMMUNITY spell-id carve-outs.
+const immuneToMovementImpairmentAndLossControlMask uint32 = (1 << 1) | (1 << 2) | (1 << 5) | (1 << 7) | (1 << 10) | (1 << 11) | (1 << 12) | (1 << 13) | (1 << 14) | (1 << 17) | (1 << 18) | (1 << 20) | (1 << 23) | (1 << 24) | (1 << 27) | (1 << 30)
+
+// spellAllowedMechanicMask mirrors SpellInfo::GetAllowedMechanicMask
+// (SpellInfo.cpp:3047-3049): the spell's own SPELL_AURA_MECHANIC_IMMUNITY
+// (77) effects — including the hardcoded spell-id carve-outs
+// (SpellInfo.cpp:2734-2758) — plus the SPELL_ATTR5_USABLE_WHILE_* bits
+// (SpellInfo.cpp:2822-2856). The SPELL_AURA_MECHANIC_IMMUNITY_MASK (147)
+// hardcoded spell-id table (SpellInfo.cpp:2592-2808) has no Go bridge yet —
+// a documented gap; its entries are boss spells the client path never casts.
+func spellAllowedMechanicMask(spell wotlk.Spell) uint32 {
+	var mask uint32
+	for _, eff := range spell.Effects {
+		if eff.Effect != spellEffectApplyAura || eff.Aura != spellAuraMechanicImmunity {
+			continue
+		}
+		switch spell.ID {
+		case 42292, 59752: // PvP trinket, Every Man for Himself
+			mask |= immuneToMovementImpairmentAndLossControlMask
+		case 34471, 19574, 53490: // The Beast Within, Bestial Wrath, Bullheaded
+			mask |= immuneToMovementImpairmentAndLossControlMask
+		case 54508: // Demonic Empowerment
+			mask |= (1 << 11) | (1 << 7) | (1 << 12) // MECHANIC_SNARE | MECHANIC_ROOT | MECHANIC_STUN
+		default:
+			if eff.MiscValue >= 1 {
+				mask |= 1 << uint32(eff.MiscValue)
+			}
+		}
+	}
+	if spell.AttributesEx5&spellAttr5UsableWhileStunned != 0 {
+		switch spell.ID {
+		case 22812, 47585: // Barkskin, Dispersion
+			mask |= (1 << 12) | (1 << 13) | (1 << 14) | (1 << 10) // MECHANIC_STUN | MECHANIC_FREEZE | MECHANIC_KNOCKOUT | MECHANIC_SLEEP
+		case 49039: // Lichborne, don't allow normal stuns
+		default:
+			mask |= 1 << 12 // MECHANIC_STUN
+		}
+	}
+	if spell.AttributesEx5&spellAttr5UsableWhileConfused != 0 {
+		mask |= 1 << 2 // MECHANIC_DISORIENTED
+	}
+	if spell.AttributesEx5&spellAttr5UsableWhileFeared != 0 {
+		switch spell.ID {
+		case 22812, 47585: // Barkskin, Dispersion
+			mask |= (1 << 5) | (1 << 24) // MECHANIC_FEAR | MECHANIC_HORROR
+		default:
+			mask |= 1 << 5 // MECHANIC_FEAR
+		}
+	}
+	return mask
+}
+
+// spellCancelsAuraEffect mirrors SpellInfo::SpellCancelsAuraEffect
+// (SpellInfo.cpp:3001-3044, "based on client Spell_C::CancelsAuraEffect"): a
+// DISPEL_AURAS_ON_IMMUNITY spell cancels a preapplied aura effect when one of
+// its APPLY_AURA immunity effects covers it. Go's wotlk.Spell.DispelType is
+// the bridge for C++ SpellInfo::Dispel (SpellInfo.cpp:789).
+func spellCancelsAuraEffect(spell, auraSpell wotlk.Spell, auraEffIndex int) bool {
+	if spell.AttributesEx&spellAttr1DispelAurasOnImmunity == 0 {
+		return false
+	}
+	if auraSpell.Attributes&spellAttr0UnaffectedByInvulnerability != 0 {
+		return false
+	}
+	if auraEffIndex < 0 || auraEffIndex >= len(auraSpell.Effects) {
+		return false
+	}
+	for _, eff := range spell.Effects {
+		if eff.Effect != spellEffectApplyAura {
+			continue
+		}
+		miscValue := uint32(eff.MiscValue)
+		switch eff.Aura {
+		case spellAuraStateImmunity:
+			if miscValue != auraSpell.Effects[auraEffIndex].Aura {
+				continue
+			}
+		case spellAuraSchoolImmunity, spellAuraModImmuneAuraApplySchool:
+			if auraSpell.AttributesEx1&spellAttr2UnaffectedByAuraSchoolImmune != 0 || auraSpell.SchoolMask&miscValue == 0 {
+				continue
+			}
+		case spellAuraDispelImmunity:
+			if miscValue != auraSpell.DispelType {
+				continue
+			}
+		case spellAuraMechanicImmunity:
+			if miscValue != auraSpell.Mechanic {
+				if miscValue != auraSpell.Effects[auraEffIndex].Mechanic {
+					continue
+				}
+			}
+		default:
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// casterAuraEffectRef is one caster aura effect flattened per effect index,
+// the self-caster view that Unit::GetAuraEffectsByType feeds the
+// CheckCasterAuras helpers (Spell.cpp:6257+).
+type casterAuraEffectRef struct {
+	spellID  uint32
+	effIndex int
+}
+
+// casterAuraEffectsByType collects the caster's own aura effects of the given
+// type from activeAuras under castMu (the dispel.go locking pattern),
+// resolving per-effect aura types from the spell row like
+// targetAuraEffectsByType. Stopped auras are skipped; unresolvable spell
+// rows fall back to the aura's single AuraType, matching the grouped model.
+func (s *session) casterAuraEffectsByType(auraType uint32) []casterAuraEffectRef {
+	if s == nil || s.player == nil {
+		return nil
+	}
+	s.castMu.Lock()
+	auras := make(map[uint32]*activeAura, len(s.activeAuras))
+	for id, aura := range s.activeAuras {
+		auras[id] = aura
+	}
+	s.castMu.Unlock()
+	var out []casterAuraEffectRef
+	for id, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		for i := 0; i < 3; i++ {
+			if aura.EffectMask&(1<<uint(i)) == 0 {
+				continue
+			}
+			t := aura.AuraType
+			if sp, found, _ := s.server.Data.Spell(id); found && i < len(sp.Effects) {
+				t = sp.Effects[i].Aura
+			}
+			if t != auraType {
+				continue
+			}
+			out = append(out, casterAuraEffectRef{spellID: id, effIndex: i})
+		}
+	}
+	return out
+}
+
+// checkSpellCancelsAuraEffect mirrors Spell::CheckSpellCancelsAuraEffect
+// (Spell.cpp:6391-6415): every caster aura effect of auraType must be
+// cancelled by the casting spell — an empty effect list passes outright. On
+// the first non-cancelled effect *mechanic takes the effect's mechanic, else
+// the aura's spell mechanic (Spell.cpp:6406-6410); unresolvable spell rows
+// are permissive (terrain.go convention).
+func (s *session) checkSpellCancelsAuraEffect(spell wotlk.Spell, auraType uint32, mechanic *uint32) bool {
+	effects := s.casterAuraEffectsByType(auraType)
+	if len(effects) == 0 {
+		return true
+	}
+	for _, ref := range effects {
+		auraSpell, found, _ := s.server.Data.Spell(ref.spellID)
+		if !found {
+			continue
+		}
+		if spellCancelsAuraEffect(spell, auraSpell, ref.effIndex) {
+			continue
+		}
+		if mechanic != nil {
+			*mechanic = auraSpell.Effects[ref.effIndex].Mechanic
+			if *mechanic == 0 {
+				*mechanic = auraSpell.Mechanic
+			}
+		}
+		return false
+	}
+	return true
+}
+
+// checkCasterAurasMechanic mirrors the mechanicCheck lambda of
+// Spell::CheckCasterAuras (Spell.cpp:6294-6334): a usable-while-CC spell is
+// still blocked by CC aura effects whose whole-spell mechanic mask
+// (GetAllEffectsMechanicMask, via spellMechanicMask) falls outside the
+// casting spell's allowed mask. The first blocker wins; its mechanic (effect
+// mechanic, else the aura's spell mechanic) feeds the packet param. The aura
+// type maps to the failure code (the C++ ABORT() default is unreachable).
+func (s *session) checkCasterAurasMechanic(spell wotlk.Spell, allowedMask, auraType uint32) (uint8, uint32) {
+	var failure uint8
+	switch auraType {
+	case spellAuraModStun:
+		failure = spellFailedStunned
+	case spellAuraModFear:
+		failure = spellFailedFleeing
+	case spellAuraModConfuse:
+		failure = spellFailedConfused
+	default:
+		return 0, 0
+	}
+	for _, ref := range s.casterAuraEffectsByType(auraType) {
+		auraSpell, found, _ := s.server.Data.Spell(ref.spellID)
+		if !found {
+			continue
+		}
+		mechanicMask := spellMechanicMask(auraSpell)
+		if mechanicMask == 0 || mechanicMask&allowedMask != 0 {
+			continue
+		}
+		mechanic := auraSpell.Effects[ref.effIndex].Mechanic
+		if mechanic == 0 {
+			mechanic = auraSpell.Mechanic
+		}
+		return failure, mechanic
+	}
+	return 0, 0
+}
+
+// hasAuraMechanic reports whether any of the caster's live auras carries one
+// of the mechanics in mask (Unit::HasAuraWithMechanic, Unit.cpp).
+func (s *session) hasAuraMechanic(mask uint32) bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	s.castMu.Lock()
+	auras := make(map[uint32]*activeAura, len(s.activeAuras))
+	for id, aura := range s.activeAuras {
+		auras[id] = aura
+	}
+	s.castMu.Unlock()
+	for id, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		if sp, found, _ := s.server.Data.Spell(id); found && spellMechanicMask(sp)&mask != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// checkCasterAuras mirrors Spell::CheckCasterAuras (Spell.cpp:6257-6389),
+// called from Spell::CheckCast (Spell.cpp:5509): spells immune to caster
+// auras (ATTR6_IGNORE_CASTER_AURAS) pass outright; otherwise the caster's
+// UNIT_FIELD_FLAGS state gates the cast — the ATTR5 usable-while-CC spells
+// run the mechanic-mask check (with the Glyph of Pain Suppression carve-out:
+// spell 33206 loses usable-while-stunned without aura 63248), and all other
+// CC states require the spell to cancel the preventing aura effects.
+// Returns the failure result and, when set, the mechanic id — a set mechanic
+// converts the result to SPELL_FAILED_PREVENTED_BY_MECHANIC, which carries
+// the mechanic as the extended packet param (WriteCastResultInfo,
+// Spell.cpp:4102-4107).
+//
+// Client-path bridges: the session player is always the unit caster, so the
+// ToUnit-null and original-caster arms are vacuous; the commented-out
+// charmer block (Spell.cpp:6281-6291) has no Go model; the
+// TRIGGERED_IGNORE_CASTER_AURAS gate is structural (handleCastSpell serves
+// CMSG_CAST_SPELL only). The fleeing/confused arms are shadowed on this path:
+// handleCastSpell's early pre-gate already rejects confused/fleeing casters,
+// so the usable-while-feared/confused refinements never apply here — a
+// pre-existing divergence, not introduced by this unit.
+func (s *session) checkCasterAuras(spell wotlk.Spell) (uint8, uint32) {
+	if spell.AttributesEx6&spellAttr6IgnoreCasterAuras != 0 {
+		return 0, 0
+	}
+	usableWhileStunned := spell.AttributesEx5&spellAttr5UsableWhileStunned != 0
+	usableWhileFeared := spell.AttributesEx5&spellAttr5UsableWhileFeared != 0
+	usableWhileConfused := spell.AttributesEx5&spellAttr5UsableWhileConfused != 0
+	if spell.ID == 33206 && !s.hasAura(63248) { // Pain Suppression without Glyph of Pain Suppression
+		usableWhileStunned = false
+	}
+	allowedMask := spellAllowedMechanicMask(spell)
+	var result uint8
+	var mechanic uint32
+	switch flags := s.player.UnitFlags; {
+	case flags&unitFlagStunned != 0:
+		if usableWhileStunned {
+			result, mechanic = s.checkCasterAurasMechanic(spell, allowedMask, spellAuraModStun)
+		} else if !(s.checkSpellCancelsAuraEffect(spell, spellAuraModStun, &mechanic) &&
+			s.checkSpellCancelsAuraEffect(spell, spellAuraStrangulate, &mechanic)) {
+			result = spellFailedStunned
+		} else if spell.Mechanic&29 != 0 && s.hasAuraMechanic(1<<18) {
+			// Immune-shield arm (Spell.cpp:6327-6329): C++ ANDs the mechanic
+			// enum value itself against MECHANIC_IMMUNE_SHIELD (29); a banish
+			// mechanic on the caster re-fails the cast.
+			result = spellFailedStunned
+		}
+	case flags&unitFlagSilenced != 0 && spell.PreventionType == spellPreventionTypeSilence:
+		if !(s.checkSpellCancelsAuraEffect(spell, spellAuraModSilence, &mechanic) &&
+			s.checkSpellCancelsAuraEffect(spell, spellAuraModPacifySilence, &mechanic)) {
+			result = spellFailedSilenced
+		}
+	case flags&unitFlagPacified != 0 && spell.PreventionType == spellPreventionTypePacify:
+		if !(s.checkSpellCancelsAuraEffect(spell, spellAuraModPacify, &mechanic) &&
+			s.checkSpellCancelsAuraEffect(spell, spellAuraModPacifySilence, &mechanic)) {
+			result = spellFailedPacified
+		}
+	case flags&unitFlagFleeing != 0:
+		if usableWhileFeared {
+			result, mechanic = s.checkCasterAurasMechanic(spell, allowedMask, spellAuraModFear)
+		} else if !s.checkSpellCancelsAuraEffect(spell, spellAuraModFear, &mechanic) {
+			result = spellFailedFleeing
+		}
+	case flags&unitFlagConfused != 0:
+		if usableWhileConfused {
+			result, mechanic = s.checkCasterAurasMechanic(spell, allowedMask, spellAuraModConfuse)
+		} else if !s.checkSpellCancelsAuraEffect(spell, spellAuraModConfuse, &mechanic) {
+			result = spellFailedConfused
+		}
+	}
+	if result != 0 && mechanic != 0 {
+		return spellFailedPreventedByMechanic, mechanic
+	}
+	return result, mechanic
 }
 
 // checkAuraBouncedCast mirrors the AURA_BOUNCED recheck at the end of the

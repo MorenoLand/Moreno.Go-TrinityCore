@@ -5,12 +5,12 @@ import (
 )
 
 const (
-	spellAuraSchoolImmunity      uint32 = 2  // SPELL_AURA_SCHOOL_IMMUNITY (SpellAuraDefines.h:32)
-	spellAuraDamageImmunity      uint32 = 4  // SPELL_AURA_DAMAGE_IMMUNITY (SpellAuraDefines.h:34)
-	spellAuraReflectSpells       uint32 = 63  // SPELL_AURA_REFLECT_SPELLS (SpellAuraDefines.h:93)
-	spellAuraReflectSpellsSchool uint32 = 64  // SPELL_AURA_REFLECT_SPELLS_SCHOOL (SpellAuraDefines.h:94)
+	spellAuraSchoolImmunity        uint32 = 39  // SPELL_AURA_SCHOOL_IMMUNITY (SpellAuraDefines.h:119) — was mislabeled as 2 (SPELL_AURA_MOD_POSSESS); corrected 2026-10-03 during the CheckCasterAuras audit
+	spellAuraDamageImmunity        uint32 = 4   // SPELL_AURA_DAMAGE_IMMUNITY (SpellAuraDefines.h:34)
+	spellAuraReflectSpells         uint32 = 63  // SPELL_AURA_REFLECT_SPELLS (SpellAuraDefines.h:93)
+	spellAuraReflectSpellsSchool   uint32 = 64  // SPELL_AURA_REFLECT_SPELLS_SCHOOL (SpellAuraDefines.h:94)
 	spellAuraModMaxAffectedTargets uint32 = 277 // SPELL_AURA_MOD_MAX_AFFECTED_TARGETS (SpellAuraDefines.h:357)
-	spellAuraModIgnoreShapeshift  uint32 = 275 // SPELL_AURA_MOD_IGNORE_SHAPESHIFT (SpellAuraDefines.h:355)
+	spellAuraModIgnoreShapeshift   uint32 = 275 // SPELL_AURA_MOD_IGNORE_SHAPESHIFT (SpellAuraDefines.h:355)
 )
 
 // isImmuneToDamage determines whether the player is immune to damage of the given schoolMask.
@@ -49,7 +49,7 @@ func (s *session) isImmuneToDamage(schoolMask uint32) bool {
 		}
 	}
 
-	// 3. Aura effect check: SPELL_AURA_DAMAGE_IMMUNITY (4) and SPELL_AURA_SCHOOL_IMMUNITY (2)
+	// 3. Aura effect check: SPELL_AURA_DAMAGE_IMMUNITY (4) and SPELL_AURA_SCHOOL_IMMUNITY (39)
 	for _, aura := range s.activeAuras {
 		if aura == nil {
 			continue
