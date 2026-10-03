@@ -123,6 +123,18 @@ const permissionCommandDisableRemoveSpell uint32 = 365
 // permissionCommandDisableRemoveVMap mirrors rbac::RBAC_PERM_COMMAND_DISABLE_REMOVE_VMAP (RBAC.h:237).
 const permissionCommandDisableRemoveVMap uint32 = 366
 
+// permissionCommandEventInfo mirrors rbac::RBAC_PERM_COMMAND_EVENT_INFO (RBAC.h:239).
+const permissionCommandEventInfo uint32 = 367
+
+// permissionCommandEventActivelist mirrors rbac::RBAC_PERM_COMMAND_EVENT_ACTIVELIST (RBAC.h:240).
+const permissionCommandEventActivelist uint32 = 368
+
+// permissionCommandEventStart mirrors rbac::RBAC_PERM_COMMAND_EVENT_START (RBAC.h:241).
+const permissionCommandEventStart uint32 = 369
+
+// permissionCommandEventStop mirrors rbac::RBAC_PERM_COMMAND_EVENT_STOP (RBAC.h:242).
+const permissionCommandEventStop uint32 = 370
+
 // permissionOpcodeWhois mirrors rbac::RBAC_PERM_OPCODE_WHOIS (RBAC.h:96).
 const permissionOpcodeWhois uint32 = 43
 

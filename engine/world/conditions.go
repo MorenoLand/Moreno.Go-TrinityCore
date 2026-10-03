@@ -121,6 +121,47 @@ func (s *Server) cachedActiveGameHolidays(ctx context.Context) map[int64]struct{
 	return refreshedHolidays
 }
 
+// gameEventFull extends gameEvent with the description column so the event
+// command arms can render the GameEventDataMap the way cs_event.cpp does
+// (GameEventData.description plus the schedule columns). isValid mirrors
+// GameEventData::isValid (GameEventMgr.h:77): length > 0 || state > GAMEEVENT_NORMAL.
+type gameEventFull struct {
+	gameEvent
+	Description string
+}
+
+// isValid mirrors GameEventData::isValid.
+func (e gameEventFull) isValid() bool {
+	return e.Length > 0 || e.WorldEvent > gameEventStateNormal
+}
+
+// loadGameEventDataMap loads the full `game_event` rows (eventEntry to
+// GameEventData) the way GameEventMgr::LoadFromDB does; the world_event column
+// is the GameEventState stored in GameEventData.state.
+func (s *Server) loadGameEventDataMap(ctx context.Context) map[int64]gameEventFull {
+	data := make(map[int64]gameEventFull)
+	if s.WorldStore == nil || s.WorldStore.DB == nil {
+		return data
+	}
+	query := "SELECT eventEntry, COALESCE(UNIX_TIMESTAMP(start_time), 0), COALESCE(UNIX_TIMESTAMP(end_time), 0), occurence, length, holiday, world_event, description FROM game_event"
+	if s.WorldStore.Backend == database.BackendSQLite {
+		query = "SELECT eventEntry, CAST(strftime('%s', start_time) AS INTEGER), CAST(strftime('%s', end_time) AS INTEGER), occurence, length, holiday, world_event, description FROM game_event"
+	}
+	rows, err := s.WorldStore.DB.QueryContext(ctx, query)
+	if err != nil {
+		return data
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var event gameEventFull
+		if err := rows.Scan(&event.Entry, &event.Start, &event.End, &event.Occurrence, &event.Length, &event.Holiday, &event.WorldEvent, &event.Description); err != nil {
+			continue
+		}
+		data[event.Entry] = event
+	}
+	return data
+}
+
 // conditionRow is one `conditions` row; rows sharing an ElseGroup are AND'ed
 // while distinct ElseGroups OR together, exactly like ConditionMgr.
 type conditionRow struct {

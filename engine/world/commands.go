@@ -4115,6 +4115,198 @@ func (s *session) handleDisableRemove(ctx context.Context, info *disableCommandT
 	s.sendSysMessage(fmt.Sprintf("Remove Disabled %s (Id: %d)", info.label, entry))
 }
 
+// handleCmdEvent mirrors event_commandscript::GetCommands (cs_event.cpp:42-64):
+// the "event" root with the activelist/start/stop/info arms, each gated on
+// the matching RBAC_PERM_COMMAND_EVENT_* permission (RBAC.h:239-242, all
+// Console::Yes). The Trinity parser prefix-matches arm names; the same
+// first-match rule applies here (C++ table order: activelist, start, stop,
+// info).
+func (s *session) handleCmdEvent(ctx context.Context, args []string) {
+	const syntax = "Syntax: .event activelist|start|stop|info [eventId]"
+	if len(args) < 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	arms := []struct {
+		name string
+		perm uint32
+	}{
+		{"activelist", permissionCommandEventActivelist},
+		{"start", permissionCommandEventStart},
+		{"stop", permissionCommandEventStop},
+		{"info", permissionCommandEventInfo},
+	}
+	lower := strings.ToLower(args[0])
+	arm := ""
+	var perm uint32
+	for _, a := range arms {
+		if strings.HasPrefix(a.name, lower) {
+			arm = a.name
+			perm = a.perm
+			break
+		}
+	}
+	if arm == "" {
+		s.sendSysMessage(syntax)
+		return
+	}
+	if !s.commandAllowed(ctx, perm) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	switch arm {
+	case "activelist":
+		s.handleEventActiveList(ctx)
+	case "info":
+		s.handleEventInfo(ctx, args[1:])
+	case "start":
+		s.handleEventStart(ctx, args[1:])
+	case "stop":
+		s.handleEventStop(ctx, args[1:])
+	}
+}
+
+// handleEventActiveList mirrors HandleEventActiveListCommand
+// (cs_event.cpp:66-88): one line per active event, ascending by event id
+// (std::set<uint16> order), then "No event found." when the list is empty
+// (LANG_NOEVENTFOUND, 584). The console-vs-chat branch (LANG 1103 vs 583)
+// is moot here: Go commands always run in a session, so the plain line
+// is emitted.
+func (s *session) handleEventActiveList(ctx context.Context) {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	data := s.server.loadGameEventDataMap(ctx)
+	active := s.server.cachedActiveGameEvents(ctx)
+	ids := make([]int64, 0, len(active))
+	for id := range active {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	for _, id := range ids {
+		desc := ""
+		if ev, ok := data[id]; ok {
+			desc = ev.Description
+		}
+		s.sendSysMessage(fmt.Sprintf("%d %s Active", id, desc))
+	}
+	if len(ids) == 0 {
+		s.sendSysMessage("No event found.")
+	}
+}
+
+// handleEventInfo mirrors HandleEventInfoCommand (cs_event.cpp:90-123): the
+// event is looked up by id (isValid-gated, else LANG_EVENT_NOT_EXIST 585),
+// then the description, active marker, start/end timestamps, occurrence,
+// length and the next state-change time are printed (LANG_EVENT_INFO, 586).
+// The active marker comes from the same GAMEEVENT_NORMAL-only snapshot the
+// Go tree already computes; world-event rows (world_event != 0) report their
+// schedule columns but their state-driven active flag has no Go model.
+func (s *session) handleEventInfo(ctx context.Context, args []string) {
+	const syntax = "Syntax: .event info <eventId>"
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	if len(args) < 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	id, err := parseGameEventID(args[0])
+	if err != nil {
+		s.sendSysMessage(syntax)
+		return
+	}
+	data := s.server.loadGameEventDataMap(ctx)
+	ev, ok := data[id]
+	if !ok || !ev.isValid() {
+		s.sendSysMessage(fmt.Sprintf("Event %d does not exist.", id))
+		return
+	}
+	_, isActive := s.server.cachedActiveGameEvents(ctx)[id]
+	activeStr := ""
+	if isActive {
+		activeStr = "Active"
+	}
+	now := time.Now().Unix()
+	delay := gameEventNextCheck(ev, now)
+	nextStr := "-"
+	if delay < 86400 && now+delay >= ev.Start && now+delay < ev.End {
+		nextStr = timeToTimestampStr(time.Unix(now+delay, 0))
+	}
+	s.sendSysMessage(fmt.Sprintf("Event %d: %s %s", id, ev.Description, activeStr))
+	s.sendSysMessage(fmt.Sprintf("Start: %s", timeToTimestampStr(time.Unix(ev.Start, 0))))
+	s.sendSysMessage(fmt.Sprintf("End: %s", timeToTimestampStr(time.Unix(ev.End, 0))))
+	s.sendSysMessage(fmt.Sprintf("Occurence: %s", secsToTimeStringFull(uint64(ev.Occurrence)*60)))
+	s.sendSysMessage(fmt.Sprintf("Length: %s", secsToTimeStringFull(uint64(ev.Length)*60)))
+	s.sendSysMessage(fmt.Sprintf("Next: %s", nextStr))
+}
+
+// handleEventStart mirrors HandleEventStartCommand (cs_event.cpp:125-152)
+// up to the point it becomes unbridgeable: the id checks (LANG 585/587)
+// run against the real game_event rows, but GameEventMgr::StartEvent itself
+// (AddActiveEvent + ApplyNewEvent spawn toggles + world-state writes +
+// start/end overwrite + DB condition saves) has no Go model — the Go tree
+// only computes the schedule snapshot, so forcing an event on would apply
+// nothing and the arm stays documented-blocked rather than a stub.
+func (s *session) handleEventStart(ctx context.Context, args []string) {
+	const syntax = "Syntax: .event start <eventId>"
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	if len(args) < 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	id, err := parseGameEventID(args[0])
+	if err != nil {
+		s.sendSysMessage(syntax)
+		return
+	}
+	data := s.server.loadGameEventDataMap(ctx)
+	ev, ok := data[id]
+	if !ok || id < 1 || !ev.isValid() {
+		s.sendSysMessage(fmt.Sprintf("Event %d does not exist.", id))
+		return
+	}
+	if _, isActive := s.server.cachedActiveGameEvents(ctx)[id]; isActive {
+		s.sendSysMessage(fmt.Sprintf("Event %d is already active.", id))
+		return
+	}
+	s.sendSysMessage("event start is not supported: GameEventMgr start/apply machinery is unported.")
+}
+
+// handleEventStop mirrors HandleEventStopCommand (cs_event.cpp:154-182)
+// the same way: the id checks (LANG 585/588) run against the real rows,
+// but GameEventMgr::StopEvent (RemoveActiveEvent + UnApplyEvent +
+// world-state cleanup + forced-state DB reset) has no Go model, so the arm
+// stays documented-blocked rather than a stub.
+func (s *session) handleEventStop(ctx context.Context, args []string) {
+	const syntax = "Syntax: .event stop <eventId>"
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	if len(args) < 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	id, err := parseGameEventID(args[0])
+	if err != nil {
+		s.sendSysMessage(syntax)
+		return
+	}
+	data := s.server.loadGameEventDataMap(ctx)
+	ev, ok := data[id]
+	if !ok || id < 1 || !ev.isValid() {
+		s.sendSysMessage(fmt.Sprintf("Event %d does not exist.", id))
+		return
+	}
+	if _, isActive := s.server.cachedActiveGameEvents(ctx)[id]; !isActive {
+		s.sendSysMessage(fmt.Sprintf("Event %d is not active.", id))
+		return
+	}
+	s.sendSysMessage("event stop is not supported: GameEventMgr stop/unapply machinery is unported.")
+}
+
 func (s *session) handleCmdNPC(ctx context.Context, args []string) {
 	if len(args) == 0 {
 		s.sendSysMessage("Syntax: .npc add <entry> | .npc info | .npc say <text> | .npc yell <text>")
@@ -4363,6 +4555,103 @@ func secsToTimeStringShort(timeInSecs uint64) string {
 		b.WriteByte('s')
 	}
 	return b.String()
+}
+
+// secsToTimeStringFull mirrors secsToTimeString(secs, TimeFormat::FullText)
+// (Util.cpp:97): "1 Day 2 Hours 3 Minutes 4 Seconds.", omitting zero units
+// except a bare 0, which renders "0 Second.". cs_event.cpp calls it with the
+// default FullText format for the event occurrence and length lines.
+func secsToTimeStringFull(timeInSecs uint64) string {
+	secs := timeInSecs % 60
+	minutes := timeInSecs % 3600 / 60
+	hours := timeInSecs % 86400 / 3600
+	days := timeInSecs / 86400
+	var b strings.Builder
+	if days > 0 {
+		b.WriteString(strconv.FormatUint(days, 10))
+		if days == 1 {
+			b.WriteString(" Day ")
+		} else {
+			b.WriteString(" Days ")
+		}
+	}
+	if hours > 0 {
+		b.WriteString(strconv.FormatUint(hours, 10))
+		if hours <= 1 {
+			b.WriteString(" Hour ")
+		} else {
+			b.WriteString(" Hours ")
+		}
+	}
+	if minutes > 0 {
+		b.WriteString(strconv.FormatUint(minutes, 10))
+		if minutes == 1 {
+			b.WriteString(" Minute ")
+		} else {
+			b.WriteString(" Minutes ")
+		}
+	}
+	if secs > 0 || (days == 0 && hours == 0 && minutes == 0) {
+		b.WriteString(strconv.FormatUint(secs, 10))
+		if secs <= 1 {
+			b.WriteString(" Second.")
+		} else {
+			b.WriteString(" Seconds.")
+		}
+	}
+	return b.String()
+}
+
+// timeToTimestampStr mirrors TimeToTimestampStr (Util.cpp:272):
+// "YYYY-MM-DD_HH-MM-SS" in local time.
+func timeToTimestampStr(t time.Time) string {
+	return t.Local().Format("2006-01-02_15-04-05")
+}
+
+// gameEventNextCheck mirrors GameEventMgr::NextCheck (GameEventMgr.cpp:81-114)
+// for GAMEEVENT_NORMAL rows: the delay until the next state change of the
+// event, capped at max_ge_check_delay (1 day, GameEventMgr.h:31). The
+// world-event state branches (NEXTPHASE/FINISHED/CONDITIONS) have no Go
+// model; the normal-row schedule math applies to every row.
+func gameEventNextCheck(ev gameEventFull, now int64) int64 {
+	const maxGeCheckDelay = 86400
+	if now > ev.End {
+		return maxGeCheckDelay
+	}
+	if ev.Start > now {
+		return ev.Start - now
+	}
+	occurrence := ev.Occurrence * 60
+	length := ev.Length * 60
+	if occurrence <= 0 {
+		return maxGeCheckDelay
+	}
+	elapsed := (now - ev.Start) % occurrence
+	var delay int64
+	if elapsed < length {
+		delay = length - elapsed
+	} else {
+		delay = occurrence - elapsed
+	}
+	if ev.End < now+delay {
+		return ev.End - now
+	}
+	return delay
+}
+
+// parseGameEventID mirrors the Variant<Hyperlink<gameevent>, uint16> arm
+// parameter (cs_event.cpp): a bare event number, or an |Hgameevent:id|h link.
+func parseGameEventID(arg string) (int64, error) {
+	t := strings.TrimSpace(arg)
+	if i := strings.Index(t, "Hgameevent:"); i >= 0 {
+		t = t[i+len("Hgameevent:"):]
+		j := 0
+		for j < len(t) && t[j] >= '0' && t[j] <= '9' {
+			j++
+		}
+		t = t[:j]
+	}
+	return strconv.ParseInt(t, 10, 16)
 }
 
 // cAtoi mirrors C's atoi (cs_ban.cpp gates durations with !atoi(durationStr)):
@@ -5319,6 +5608,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("bf", func(ctx context.Context, args []string) bool { s.handleCmdBF(ctx, args); return true }, []string{"start", "stop", "switch", "timer", "enable"}, nil)
 	root.add("deserter", func(ctx context.Context, args []string) bool { s.handleCmdDeserter(ctx, args); return true }, []string{"instance", "bg"}, nil)
 	root.add("disable", func(ctx context.Context, args []string) bool { s.handleCmdDisable(ctx, args); return true }, []string{"add", "remove"}, nil)
+	root.add("event", func(ctx context.Context, args []string) bool { s.handleCmdEvent(ctx, args); return true }, []string{"activelist", "start", "stop", "info"}, nil)
 	root.add("npc", func(ctx context.Context, args []string) bool { s.handleCmdNPC(ctx, args); return true }, []string{"info", "say", "yell"}, nil)
 	root.add("gobject", func(ctx context.Context, args []string) bool { s.handleCmdGObject(ctx, args); return true }, nil, map[string]string{"gob": "gobject"})
 	root.add("revive", func(ctx context.Context, args []string) bool { s.handleCmdRevive(ctx, args); return true }, nil, map[string]string{"res": "revive", "rev": "revive"})
