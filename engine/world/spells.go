@@ -108,6 +108,11 @@ const (
 	itemSubclassArmorBuckler = 5
 	itemSubclassArmorShield  = 6
 
+	// ITEM_SUBCLASS_MASK_WEAPON_RANGED (ItemTemplate.h:372): bow/gun/
+	// crossbow/thrown subclasses; the EquippedItemSubClass DBC field is
+	// already a mask (SpellInfo.cpp:843), so this tests the raw field value.
+	itemSubclassMaskWeaponRanged uint32 = (1 << 2) | (1 << 3) | (1 << 18) | (1 << 16)
+
 	spellEffectEnergize                           = 30
 	spellEffectParry                              = 22
 	spellEffectPowerBurn                          = 62
@@ -2038,7 +2043,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	//   - The triggered-cast Volley-tick exemption (SPELLFAMILY_HUNTER +
 	//     IsTargetingArea) is moot: finishSpellCast only serves
 	//     player-initiated casts, so Volley's non-triggered initial cast
-	//     consumes once at launch, matching C++.
+	//     consumes here at launch; the second ammo comes from the
+	//     handle_immediate tail leg bridged after the finish-phase legs
+	//     below (Spell.cpp:3620-3622).
 	//   - TakeAmmo's wand / broken-ranged / thrown-weapon legs have no Go
 	//     bridge: no ranged-slot or thrown-weapon model (wands never carry
 	//     REQ_AMMO, so the wand leg is vacuous under this gate).
@@ -2539,6 +2546,26 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// the cast's original unit target.
 	s.consumeExtraAttacks(ctx, spellExtraAttackVictim(target, explicitUnitGUID))
 	s.procSpellFinishAuraTriggers(ctx, spell)
+
+	// Spell::handle_immediate tail (Spell.cpp:3616-3625):
+	//   - TakeCastItem: no Go bridge — Go has no item spell-charge model;
+	//     consumables are decremented at cast start in handleUseItem and
+	//     the spell-charge decrement / expendable-destroy is unmodeled
+	//     (standing gap, noted at the delayed-branch call above).
+	//   - Volley ammo: IsRangedWeaponSpell() && IsChanneled() -> TakeAmmo().
+	//     This is a second ammo on top of the HandleLaunchPhase REQ_AMMO
+	//     consumption bridged at SendSpellGo above (C++ consumes once at
+	//     launch and once here for the initial Volley cast).
+	//   - finish(true) runs only when m_spellState != SPELL_STATE_CASTING:
+	//     channeled spells skip it (Go's startChannel path) and the
+	//     non-channeled completion below is the finish(true) Go model.
+	// Delta: C++ also fires the tail TakeAmmo for triggered channeled
+	// ranged casts (the per-tick Volley casts have no triggered exemption
+	// on this leg); Go has no per-tick triggered casts (channelTick
+	// applies tick damage directly), so ticks consume no ammo.
+	if isChanneledSpell(spell) && isRangedWeaponSpell(spell) {
+		s.consumeRangedAmmo(ctx)
+	}
 	s.stopAttackOnSpellFinish(spell)
 
 	// Spell::finish(true) parity (Spell.cpp:3886-3985): two legs have no Go
@@ -7802,6 +7829,16 @@ type activeChannelState struct {
 
 func isChanneledSpell(spell wotlk.Spell) bool {
 	return spell.AttributesEx&(spellAttr1Channeled1|spellAttr1Channeled2) != 0
+}
+
+// isRangedWeaponSpell mirrors SpellInfo::IsRangedWeaponSpell
+// (SpellInfo.cpp:1249-1254): the hunter-family arm (minus the 53352
+// flag-1 carve-out), the ranged-subclass mask on the raw DBC
+// EquippedItemSubClass field, or SPELL_ATTR0_REQ_AMMO.
+func isRangedWeaponSpell(spell wotlk.Spell) bool {
+	return (spell.SpellFamilyName == spellFamilyHunter && spell.SpellFamilyFlags[1]&0x10000000 == 0) ||
+		spell.EquippedItemSubClass&itemSubclassMaskWeaponRanged != 0 ||
+		spell.Attributes&spellAttr0ReqAmmo != 0
 }
 
 // spellAllowsDeadTarget mirrors SpellInfo::IsAllowingDeadTarget (SpellInfo.cpp:1177):
