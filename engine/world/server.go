@@ -344,6 +344,10 @@ type activeCastState struct {
 	CastTimeMs   uint32
 	Pushbacks    int
 	InterruptFlg uint32
+	// HitTriggers is the PrepareTriggersExecutedOnHit snapshot (Spell.cpp:8176):
+	// ADD_TARGET_TRIGGER auras present on the caster at cast completion, for
+	// the on-hit trigger consumer.
+	HitTriggers []spellHitTrigger
 }
 
 func (s *Server) playerSessionForGUID(guid uint64) *session {

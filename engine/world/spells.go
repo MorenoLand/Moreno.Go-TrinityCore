@@ -1192,6 +1192,67 @@ func (s *session) spellDiminishingBounced(spell wotlk.Spell, targetGUID uint64) 
 	return false
 }
 
+// spellHitTrigger mirrors Spell::TriggerOnHitEntry (Spell.h): a
+// SPELL_AURA_ADD_TARGET_TRIGGER snapshot taken at cast completion.
+type spellHitTrigger struct {
+	TriggerSpellID       uint32
+	TriggeredByAuraSpell uint32
+	Chance               int32
+}
+
+// prepareHitTriggerSpells mirrors Spell::PrepareTriggersExecutedOnHit
+// (Spell.cpp:8176-8206): it snapshots the caster's SPELL_AURA_ADD_TARGET_TRIGGER
+// aura effects present at cast completion, so triggered auras gained mid-cast
+// cannot affect the caster and proc chance uses the combo-point-independent
+// base amount. The snapshot is stored on the completed cast for the on-hit
+// trigger consumer.
+func (s *session) prepareHitTriggerSpells(spell wotlk.Spell) []spellHitTrigger {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return nil
+	}
+	var triggers []spellHitTrigger
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if effect.Aura != spellAuraAddTargetTrigger || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			// AuraEffect::IsAffectedOnSpell (SpellAuraEffects.cpp:848).
+			if !spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+				continue
+			}
+			if effect.TriggerSpell == 0 {
+				continue
+			}
+			if _, found, err := s.server.Data.Spell(effect.TriggerSpell); err != nil || !found {
+				continue
+			}
+			// Proc chance is stored in the effect amount; C++ runs it
+			// through Unit::CalculateSpellDamage (done mods) before
+			// multiplying by the stack amount. Go has no CalculateSpellDamage
+			// bridge for aura proc chances, so the base amount is used
+			// directly (documented delta).
+			chance := aura.BaseAmounts[index]
+			if chance == 0 {
+				chance = effect.BasePoints + 1
+			}
+			chance *= int32(aura.StackAmount)
+			triggers = append(triggers, spellHitTrigger{
+				TriggerSpellID:       effect.TriggerSpell,
+				TriggeredByAuraSpell: aura.SpellID,
+				Chance:               chance,
+			})
+		}
+	}
+	return triggers
+}
+
 func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, castItemGUID uint64) {
 	if s.player == nil {
 		return
@@ -1329,6 +1390,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedAuraBounced), true)
 		s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "diminishing returns bounce")
 		return
+	}
+
+	// Spell::_cast (Spell.cpp:3430): PrepareTriggersExecutedOnHit snapshots
+	// the caster's SPELL_AURA_ADD_TARGET_TRIGGER auras after the completion
+	// rechecks and before target selection. The on-hit consumer
+	// (Spell::DoTriggersOnSpellHit, Spell.cpp:2913 — per-hit trigger cast
+	// with the CanExecuteTriggersOnHit effMask gate and the no-duration aura
+	// duration copy) has no Go bridge yet; the snapshot is stored on the
+	// completed cast for it.
+	if completedCast != nil {
+		completedCast.HitTriggers = s.prepareHitTriggerSpells(spell)
 	}
 
 	// Spell::SelectImplicitTargetDestTargets (Spell.cpp:1433) and

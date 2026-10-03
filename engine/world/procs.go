@@ -701,6 +701,10 @@ const (
 	spellAuraProcTriggerSpellWithValue = 231
 )
 
+// spellAuraAddTargetTrigger mirrors SPELL_AURA_ADD_TARGET_TRIGGER
+// (SpellAuraDefines.h:189).
+const spellAuraAddTargetTrigger = 109
+
 // isProcTriggerAuraType mirrors the LoadSpellProc trigger-aura subset whose
 // C++ HandleProc arm fires a spell or damage (SpellMgr.cpp:1686-1729,
 // SpellAuraEffects.cpp:1010-1043): dummy, proc-trigger-spell,
