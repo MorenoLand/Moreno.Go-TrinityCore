@@ -130,6 +130,8 @@ const (
 	spellFailedCantBeCharmed             uint8 = 13  // SPELL_FAILED_CANT_BE_CHARMED (SharedDefines.h:995)
 	spellFailedHighLevel                 uint8 = 36  // SPELL_FAILED_HIGHLEVEL (SharedDefines.h:1018)
 	spellFailedTargetIsPlayerControlled  uint8 = 118 // SPELL_FAILED_TARGET_IS_PLAYER_CONTROLLED (SharedDefines.h:1100)
+	spellFailedNoMountsAllowed           uint8 = 83  // SPELL_FAILED_NO_MOUNTS_ALLOWED (SharedDefines.h:1065)
+	spellFailedOnlyAboveWater            uint8 = 88  // SPELL_FAILED_ONLY_ABOVEWATER (SharedDefines.h:1070)
 
 	areaFlagNoFlyZone uint32 = 0x20000000 // AREA_FLAG_NO_FLY_ZONE (DBCEnums.h:275) — AreaTableEntry.Flags bit tested by AreaTableEntry::IsFlyable (DBCStructure.h:209)
 
@@ -1303,6 +1305,19 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if failure := s.checkCharmCast(spell, target); failure != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "charm/possess validation", "failure", failure)
+		return true
+	}
+
+	// Mounted-aura gate (Spell::CheckCast ApplyAuraName switch,
+	// Spell.cpp:6088-6114): SPELL_AURA_MOUNTED fails with
+	// SPELL_FAILED_ONLY_ABOVEWATER for a flying mount started in water, with
+	// SPELL_FAILED_NO_MOUNTS_ALLOWED in a dungeon that disallows mounts, and
+	// with SPELL_FAILED_DONT_REPORT while shapeshifted into a
+	// disallowed-mount form. C++ relative order places the MOUNTED leg after
+	// the charm legs in the ApplyAuraName switch.
+	if failure := s.checkMountedCast(ctx, spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "mounted validation", "failure", failure)
 		return true
 	}
 
@@ -2581,6 +2596,73 @@ func (s *session) checkCharmCast(spell wotlk.Spell, target protocol.SpellTargetD
 	for _, eff := range spell.Effects {
 		if value := eff.CalcValueForLevel(spell, uint32(s.player.Level)); value != 0 && int32(motion.Level) > value {
 			return spellFailedHighLevel
+		}
+	}
+	return 0
+}
+
+// checkMountedCast mirrors the SPELL_AURA_MOUNTED leg of the CheckCast
+// ApplyAuraName switch (Spell.cpp:6088-6114).
+//
+//   - unitCaster null → SPELL_FAILED_BAD_TARGETS: vacuous (the session is
+//     always a player unit).
+//   - in-water flying mount → SPELL_FAILED_ONLY_ABOVEWATER: s.isSwimming is
+//     the IsInWater bridge (movement.go) and spellHasAura(spell,
+//     spellAuraMountedFlightSpeed) is SpellInfo::HasAura(207, spells.go:7415).
+//   - dungeon mountability: allowMount = !IsDungeon() || IsBattlegroundOrArena()
+//     with the instance_template.allowMount row overriding
+//     (sObjectMgr::GetInstanceTemplate, ObjectMgr.cpp); the session is always
+//     a player, so !allowMount && spell.AreaGroupID == 0 →
+//     SPELL_FAILED_NO_MOUNTS_ALLOWED. Missing map entry, missing row, or a
+//     query error is permissive (terrain.go convention), matching the C++
+//     null-template pass that leaves the computed value standing.
+//   - IsInDisallowedMountForm → SPELL_FAILED_DONT_REPORT: a live shapeshift
+//     form whose SpellShapeshiftForm.dbc flags lack 0x1 rejects
+//     (Unit.cpp:9170-9185); a missing form row rejects too. The
+//     transform-spell carve-out has no bridge (Go tracks no transform-spell
+//     state), and the native/display-ID arms are vacuous on the client path
+//     (Go never changes the player display ID for an aura). C++ also sends
+//     MountResult::Shapeshifted before the cast result; the Go protocol has
+//     no SMSG_MOUNT_RESULT opcode, so the DONT_REPORT cast result is the
+//     only feedback — documented, not stubbed.
+//
+// Returns the SPELL_FAILED_* result code, 0 on success. Neither failure
+// code carries extra WriteCastResultInfo params, so castFailedExtParams
+// needs no case (verified Spell.cpp:3974-4160).
+func (s *session) checkMountedCast(ctx context.Context, spell wotlk.Spell) uint8 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
+	matched := false
+	for _, eff := range spell.Effects {
+		if eff.Aura == spellAuraMounted {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return 0
+	}
+	if s.isSwimming && spellHasAura(spell, spellAuraMountedFlightSpeed) {
+		return spellFailedOnlyAboveWater
+	}
+	allowMount := true
+	if entry, found, err := s.server.Data.Map(s.player.Map); err == nil && found {
+		allowMount = !entry.IsDungeon() || teleIsBattlegroundOrArena(entry)
+	}
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var dbAllow int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT allowMount FROM instance_template WHERE map = ?", s.player.Map).Scan(&dbAllow); err == nil {
+			allowMount = dbAllow != 0
+		}
+	}
+	if !allowMount && spell.AreaGroupID == 0 {
+		return spellFailedNoMountsAllowed
+	}
+	if form := s.player.ShapeshiftForm; form != 0 {
+		shape, found, err := s.server.Data.ShapeshiftForm(uint32(form))
+		if err != nil || !found || shape.Flags&0x1 == 0 {
+			return spellFailedDontReport
 		}
 	}
 	return 0
