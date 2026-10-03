@@ -159,6 +159,8 @@ const (
 	spellEffectOpenLock        = 33  // SPELL_EFFECT_OPEN_LOCK (SharedDefines.h:844)
 	spellEffectResurrectPet    = 109 // SPELL_EFFECT_RESURRECT_PET (SharedDefines.h:920)
 	spellEffectSummon          = 28  // SPELL_EFFECT_SUMMON (SharedDefines.h:839)
+	spellEffectSummonPet       = 56  // SPELL_EFFECT_SUMMON_PET (SharedDefines.h:867)
+	spellEffectCreateTamedPet  = 153 // SPELL_EFFECT_CREATE_TAMED_PET (SharedDefines.h:964)
 
 	// Summon categories for the generic-summon CheckCast leg
 	// (Spell.cpp:5798-5817, SharedDefines.h:3296).
@@ -179,6 +181,23 @@ const (
 	creatureTypeFlagHerbSkinningSkill        uint32 = 0x00000100 // CREATURE_TYPE_FLAG_HERB_SKINNING_SKILL (SharedDefines.h:2737)
 	creatureTypeFlagMiningSkinningSkill      uint32 = 0x00000200 // CREATURE_TYPE_FLAG_MINING_SKINNING_SKILL (SharedDefines.h:2738)
 	creatureTypeFlagEngineeringSkinningSkill uint32 = 0x00008000 // CREATURE_TYPE_FLAG_ENGINEERING_SKINNING_SKILL (SharedDefines.h:2744)
+
+	// PetTameFailure reasons sent by the summon-pet CheckCast leg's stable
+	// block (Spell.cpp:5837-5873, SharedDefines.h:3561-3573).
+	petTameNoPetAvailable    uint8 = 7  // PETTAME_NOPETAVAILABLE
+	petTameDead              uint8 = 10 // PETTAME_DEAD
+	petTameCantControlExotic uint8 = 12 // PETTAME_CANTCONTROLEXOTIC
+
+	// Creature template gates for the summon-pet stable block's IsTameable
+	// check (CreatureData.h:230-237, SharedDefines.h:2661/2683/2729/2745).
+	creatureTypeBeast           int64 = 1          // CREATURE_TYPE_BEAST
+	creatureFamilyNone          int64 = 0          // CREATURE_FAMILY_NONE
+	creatureTypeFlagTameablePet int64 = 0x00000001 // CREATURE_TYPE_FLAG_TAMEABLE_PET
+	creatureTypeFlagExoticPet   int64 = 0x00010000 // CREATURE_TYPE_FLAG_EXOTIC_PET — IsExotic()
+
+	// Aura type for Player::CanTameExoticPets (Player.h:1826,
+	// SpellAuraDefines.h:226).
+	spellAuraAllowTamePetType uint32 = 146 // SPELL_AURA_ALLOW_TAME_PET_TYPE
 
 	skillSkinning    uint32 = 393 // SKILL_SKINNING (SharedDefines.h:2985)
 	skillHerbalism   uint32 = 182 // SKILL_HERBALISM (SharedDefines.h:2939)
@@ -961,6 +980,28 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if failure := s.checkSummonCast(spell); failure != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon validation", "failure", failure)
+		return true
+	}
+	// Create-tamed-pet gate (Spell::CheckCast per-effect block,
+	// Spell.cpp:5828-5836): a SPELL_EFFECT_CREATE_TAMED_PET effect fails
+	// with SPELL_FAILED_BAD_TARGETS when the unit target is not a player,
+	// and with SPELL_FAILED_ALREADY_HAVE_SUMMON when the targeted player
+	// already has a pet and the spell lacks SPELL_ATTR1_DISMISS_PET.
+	// C++ relative order places this right after the generic-summon leg.
+	if failure := s.checkCreateTamedPetCast(spell, target); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "create-tamed-pet validation", "failure", failure)
+		return true
+	}
+	// Summon-pet gate (Spell::CheckCast per-effect block, Spell.cpp:5837-5873):
+	// a SPELL_EFFECT_SUMMON_PET effect fails with SPELL_FAILED_DONT_REPORT
+	// when the caster's stable holds a dead or untameable hunter pet for the
+	// effect's MiscValue entry, or no pet at all when MiscValue is 0; the
+	// pet self-stun (32752) and charm arms have no Go bridge. C++ relative
+	// order places this right after the create-tamed-pet leg.
+	if failure := s.checkSummonPetCast(spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-pet validation", "failure", failure)
 		return true
 	}
 	cost := s.calculateSpellPowerCost(spell)
@@ -1924,6 +1965,180 @@ func (s *session) checkSummonCast(spell wotlk.Spell) uint8 {
 		}
 	}
 	return 0
+}
+
+// checkCreateTamedPetCast mirrors the SPELL_EFFECT_CREATE_TAMED_PET leg of
+// the CheckCast per-effect block (Spell.cpp:5828-5836): with a unit target,
+// the target must be a player (TYPEID_PLAYER) or the cast fails with
+// SPELL_FAILED_BAD_TARGETS; a targeted player that already has a pet fails
+// with SPELL_FAILED_ALREADY_HAVE_SUMMON unless the spell carries
+// SPELL_ATTR1_DISMISS_PET (0x1, SharedDefines.h:449). Self-targeted casts
+// resolve through findSessionByGUID, so the caster's own pet gates the
+// replacement the same way C++'s GetUnitTarget() returning the caster does.
+// Player targets are matched first (findSessionByGUID); a unit GUID that
+// resolves to a creature motion is not TYPEID_PLAYER. An unresolvable GUID
+// skips the gate — C++ gates only when GetUnitTarget() yields a unit, and
+// pets/guardians have no richer model. Returns the SPELL_FAILED_* result
+// code, 0 on success.
+func (s *session) checkCreateTamedPetCast(spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
+	hasTamed := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == spellEffectCreateTamedPet {
+			hasTamed = true
+			break
+		}
+	}
+	if !hasTamed {
+		return 0
+	}
+	if target.Flags&protocol.SpellTargetFlagUnitWireMask == 0 || target.UnitGUID == 0 {
+		return 0
+	}
+	if ts := s.server.findSessionByGUID(target.UnitGUID); ts != nil && ts.player != nil {
+		if spell.AttributesEx&spellAttr1DismissPet == 0 && ts.player.PetGUID != 0 {
+			return spellFailedAlreadyHaveSummon
+		}
+		return 0
+	}
+	if s.findCreatureMotion(target.UnitGUID) != nil {
+		return spellFailedBadTargets
+	}
+	return 0
+}
+
+// checkSummonPetCast mirrors the SPELL_EFFECT_SUMMON_PET leg of the CheckCast
+// per-effect block (Spell.cpp:5837-5873). The m_caster->ToUnit() null arm is
+// vacuous on the client-initiated path (the session is always a player
+// unit), and the non-player-caster ALREADY_HAVE_SUMMON arm with it —
+// creature casters never enter handleCastSpell. No bridge, documented:
+// (1) the strict-cast pet self-stun (pet->CastSpell(pet, 32752) so the
+// replaced pet does not attack the player) — creature motions carry no
+// aura/CC model; (2) the GetCharmedGUID() → SPELL_FAILED_ALREADY_HAVE_CHARM
+// arm — Go has no charm/possess model (commands_misc2.go).
+//
+// The GetPetStable() block bridges through character_pet: C++
+// Pet::GetLoadPetInfo(stable, MiscValue, 0, false) resolves the current pet
+// (slot 0) or the first unslotted pet (slot 100) whose entry matches
+// Effects[i].MiscValue — stabled pets are explicitly excluded ("only from
+// current or not stabled pets", Pet.cpp:125) — or, when MiscValue is 0, the
+// current pet else the first unslotted pet. A found hunter pet fails with
+// SPELL_FAILED_DONT_REPORT plus a SMSG_PET_TAME_FAILURE when it is dead
+// (PETTAME_DEAD) or its template is not tameable for this caster
+// (PETTAME_CANTCONTROLEXOTIC when tameable-with-exotic, else
+// PETTAME_NOPETAVAILABLE); no matching pet with MiscValue == 0 fails with
+// PETTAME_NOPETAVAILABLE — a present MiscValue is allowed to create new
+// pets. A nil CharactersStore skips the block, matching the
+// GetPetStable()-nil pass. Returns the SPELL_FAILED_* result code, 0 on
+// success.
+func (s *session) checkSummonPetCast(spell wotlk.Spell) uint8 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
+	hasSummonPet := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == spellEffectSummonPet {
+			hasSummonPet = true
+			break
+		}
+	}
+	if !hasSummonPet {
+		return 0
+	}
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0
+	}
+	cdb := s.server.CharactersStore.DB
+	for _, eff := range spell.Effects {
+		if eff.Effect != spellEffectSummonPet {
+			continue
+		}
+		misc := uint32(eff.MiscValue)
+		var petType, curHealth int64
+		var petEntry uint32
+		var found bool
+		if misc != 0 {
+			err := cdb.QueryRowContext(context.Background(),
+				"SELECT COALESCE(PetType, 0), COALESCE(curhealth, 0), entry FROM character_pet WHERE owner = ? AND entry = ? AND slot IN (0, 100) ORDER BY slot ASC, id ASC LIMIT 1",
+				s.playerGUID, misc).Scan(&petType, &curHealth, &petEntry)
+			found = err == nil
+		} else {
+			err := cdb.QueryRowContext(context.Background(),
+				"SELECT COALESCE(PetType, 0), COALESCE(curhealth, 0), entry FROM character_pet WHERE owner = ? AND slot IN (0, 100) ORDER BY slot ASC, id ASC LIMIT 1",
+				s.playerGUID).Scan(&petType, &curHealth, &petEntry)
+			found = err == nil
+		}
+		if !found {
+			if misc == 0 {
+				s.sendTameFailure(petTameNoPetAvailable)
+				return spellFailedDontReport
+			}
+			continue
+		}
+		if petType != int64(petTypeHunter) {
+			continue
+		}
+		if curHealth == 0 {
+			s.sendTameFailure(petTameDead)
+			return spellFailedDontReport
+		}
+		if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+			continue // unknown template data is permissive (terrain.go convention)
+		}
+		var cType, family, typeFlags int64
+		err := s.server.WorldStore.DB.QueryRowContext(context.Background(),
+			"SELECT COALESCE(type, 0), COALESCE(family, 0), COALESCE(type_flags, 0) FROM creature_template WHERE entry = ? LIMIT 1",
+			petEntry).Scan(&cType, &family, &typeFlags)
+		if err != nil {
+			continue // missing template row: unknown-data-is-permissive
+		}
+		tameable := creatureTameable(cType, family, typeFlags, s.canTameExoticPets())
+		if !tameable {
+			if creatureTameable(cType, family, typeFlags, true) {
+				s.sendTameFailure(petTameCantControlExotic)
+			} else {
+				s.sendTameFailure(petTameNoPetAvailable)
+			}
+			return spellFailedDontReport
+		}
+	}
+	return 0
+}
+
+// creatureTameable mirrors CreatureTemplate::IsTameable
+// (CreatureData.h:230-237): a beast with a set family and the tameable-pet
+// type flag; exotic pets need canTameExotic (Player::CanTameExoticPets,
+// Player.h:1826 — GM or SPELL_AURA_ALLOW_TAME_PET_TYPE).
+func creatureTameable(ctype, family, typeFlags int64, canTameExotic bool) bool {
+	if ctype != creatureTypeBeast || family == creatureFamilyNone || typeFlags&creatureTypeFlagTameablePet == 0 {
+		return false
+	}
+	return canTameExotic || typeFlags&creatureTypeFlagExoticPet == 0
+}
+
+// canTameExoticPets mirrors Player::CanTameExoticPets (Player.h:1826):
+// game-master state or an active SPELL_AURA_ALLOW_TAME_PET_TYPE aura.
+func (s *session) canTameExoticPets() bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	if s.player.ExtraFlags&playerExtraGMOn != 0 || s.player.PlayerFlags&playerFlagGM != 0 {
+		return true
+	}
+	return s.hasAuraType(spellAuraAllowTamePetType)
+}
+
+// sendTameFailure mirrors Player::SendTameFailure (Player.cpp:3084-3089):
+// SMSG_PET_TAME_FAILURE carrying the single-byte PetTameFailure reason.
+func (s *session) sendTameFailure(reason uint8) {
+	if s == nil {
+		return
+	}
+	buf := protocol.NewBuffer(1)
+	buf.WriteU8(reason)
+	_ = s.write(uint16(protocol.OpcodeSMSG_PET_TAME_FAILURE), buf.Bytes(), true)
 }
 
 // spellDiminishingBounced mirrors the diminishing-returns recheck leg of
