@@ -245,6 +245,42 @@ func (s *Server) triggerPetDefensive(mapID, instanceID uint32, ownerGUID, target
 	}
 }
 
+// triggerPetOwnerAttacked mirrors PetAI::OwnerAttacked (PetAI.cpp:292-312),
+// called from Spell::_cast (Spell.cpp:3293-3304): when a player casts a
+// harmful spell (DmgClass != SPELL_DAMAGE_CLASS_NONE, which is
+// spellEntry->DefenseType in this TrinityCore version, SpellInfo.cpp:856),
+// every controlled creature's AI is told the owner attacked the explicit unit
+// target. Passive pets ignore the call, and a pet with a live victim does
+// not disengage (PetAI::AttackStart's victim-alive guard); other pets start
+// attacking the target. Go pets are creature motions with OwnerGUID set, so
+// the motion-map scan replaces the m_Controlled loop; the DmgClass != NONE
+// gate keeps non-damaging spells such as Hunter's Mark from triggering the
+// pet (Spell.cpp:3301-3302).
+func (s *Server) triggerPetOwnerAttacked(mapID, instanceID uint32, ownerGUID, targetGUID uint64) {
+	if s == nil || ownerGUID == 0 || targetGUID == 0 || ownerGUID == targetGUID {
+		return
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	for _, m := range s.motionMapLocked(mapID, instanceID) {
+		if m.OwnerGUID != ownerGUID || m.Health == 0 {
+			continue
+		}
+		// PetAI::OwnerAttacked: passive pets don't do anything.
+		if m.PetReact == PetReactPassive {
+			continue
+		}
+		// PetAI::AttackStart: prevent the pet from disengaging from its
+		// current target.
+		if m.TargetGUID != 0 && m.InCombat {
+			continue
+		}
+		m.TargetGUID = targetGUID
+		m.InCombat = true
+		m.Moving = true
+	}
+}
+
 // updatePetMotion is the per-tick AI driver for active player pets.
 func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, players []playerPos, now time.Time) {
 	if s == nil || motion == nil || motion.OwnerGUID == 0 {

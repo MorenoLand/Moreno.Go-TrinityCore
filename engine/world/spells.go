@@ -31,6 +31,7 @@ const (
 
 	spellAttr1NotBreakStealth uint32 = 0x00000020 // SPELL_ATTR1_NOT_BREAK_STEALTH (SharedDefines.h:454)
 	spellAttr1NoThreat        uint32 = 0x00000400 // SPELL_ATTR1_NO_THREAT (SharedDefines.h:459) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
+	spellAttr1DismissPet      uint32 = 0x00000001 // SPELL_ATTR1_DISMISS_PET (SharedDefines.h:449) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr3NoInitialAggro  uint32 = 0x00020000 // SPELL_ATTR3_NO_INITIAL_AGGRO (SharedDefines.h:540) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7)
 
 	spellAttr0Ability                     uint32 = 0x00000010 // SPELL_ATTR0_ABILITY (SharedDefines.h:416)
@@ -1142,6 +1143,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
+	// Spell::_cast (Spell.cpp:3293-3304): as of 3.0.2 the caster's pets begin
+	// attacking the owner's target immediately when the owner casts a harmful
+	// spell. C++ runs this before the CheckCast revalidation below, so it
+	// fires even when the cast then fails; target.UnitGUID is the explicit
+	// unit target straight from the client packet (m_targets.GetUnitTarget()),
+	// before any target selection.
+	if spell.DefenseType != spellDamageClassNone && target.UnitGUID != 0 && target.UnitGUID != s.playerGUID && s.server != nil {
+		s.server.triggerPetOwnerAttacked(s.player.Map, s.player.InstanceID, s.playerGUID, target.UnitGUID)
+	}
+
 	// Spell::_cast (Spell.cpp:3335) re-runs CheckCast(false) when the cast timer
 	// finishes; power drained mid-cast must fail the cast, not clamp to zero.
 	pType := spell.PowerType
@@ -1517,6 +1528,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if spell.PowerType == 5 {
 		s.takeRunePower(ctx, spell, didHit, time.Now().UnixMilli())
 		s.sendRuneCooldownUpdate()
+	}
+
+	// Spell::_cast (Spell.cpp:3416-3420): SPELL_ATTR1_DISMISS_PET dismisses
+	// the caster's active pet at cast time, before the cooldown packet and
+	// SendSpellGo below — without this attribute, summoning spells fail when
+	// the caster already has a pet (SharedDefines.h:449).
+	if spell.AttributesEx&spellAttr1DismissPet != 0 {
+		s.unsummonPet(ctx, petSaveNotInSlot)
 	}
 
 	// Spell::_cast (Spell.cpp:3462-3470) calls SendSpellCooldown() before
