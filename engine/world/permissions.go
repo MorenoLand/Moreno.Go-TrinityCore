@@ -887,3 +887,90 @@ const permissionCommandMMapStats uint32 = 540
 
 // permissionCommandMMapTestArea mirrors rbac::RBAC_PERM_COMMAND_MMAP_TESTAREA (RBAC.h:409).
 const permissionCommandMMapTestArea uint32 = 541
+
+// permissionCommandMorph mirrors rbac::RBAC_PERM_COMMAND_MORPH (RBAC.h:410).
+const permissionCommandMorph uint32 = 542
+
+// permissionCommandDeMorph mirrors rbac::RBAC_PERM_COMMAND_DEMORPH (RBAC.h:411).
+const permissionCommandDeMorph uint32 = 543
+
+// permissionCommandModify mirrors rbac::RBAC_PERM_COMMAND_MODIFY (RBAC.h:412).
+const permissionCommandModify uint32 = 544
+
+// permissionCommandModifyArenaPoints mirrors rbac::RBAC_PERM_COMMAND_MODIFY_ARENAPOINTS (RBAC.h:413).
+const permissionCommandModifyArenaPoints uint32 = 545
+
+// permissionCommandModifyBit mirrors rbac::RBAC_PERM_COMMAND_MODIFY_BIT (RBAC.h:414).
+const permissionCommandModifyBit uint32 = 546
+
+// permissionCommandModifyDrunk mirrors rbac::RBAC_PERM_COMMAND_MODIFY_DRUNK (RBAC.h:415).
+const permissionCommandModifyDrunk uint32 = 547
+
+// permissionCommandModifyEnergy mirrors rbac::RBAC_PERM_COMMAND_MODIFY_ENERGY (RBAC.h:416).
+const permissionCommandModifyEnergy uint32 = 548
+
+// permissionCommandModifyFaction mirrors rbac::RBAC_PERM_COMMAND_MODIFY_FACTION (RBAC.h:417).
+const permissionCommandModifyFaction uint32 = 549
+
+// permissionCommandModifyGender mirrors rbac::RBAC_PERM_COMMAND_MODIFY_GENDER (RBAC.h:418).
+const permissionCommandModifyGender uint32 = 550
+
+// permissionCommandModifyHonor mirrors rbac::RBAC_PERM_COMMAND_MODIFY_HONOR (RBAC.h:419).
+const permissionCommandModifyHonor uint32 = 551
+
+// permissionCommandModifyHP mirrors rbac::RBAC_PERM_COMMAND_MODIFY_HP (RBAC.h:420).
+const permissionCommandModifyHP uint32 = 552
+
+// permissionCommandModifyMana mirrors rbac::RBAC_PERM_COMMAND_MODIFY_MANA (RBAC.h:421).
+const permissionCommandModifyMana uint32 = 553
+
+// permissionCommandModifyMoney mirrors rbac::RBAC_PERM_COMMAND_MODIFY_MONEY (RBAC.h:422).
+const permissionCommandModifyMoney uint32 = 554
+
+// permissionCommandModifyMount mirrors rbac::RBAC_PERM_COMMAND_MODIFY_MOUNT (RBAC.h:423).
+const permissionCommandModifyMount uint32 = 555
+
+// permissionCommandModifyPhase mirrors rbac::RBAC_PERM_COMMAND_MODIFY_PHASE (RBAC.h:424).
+const permissionCommandModifyPhase uint32 = 556
+
+// permissionCommandModifyRage mirrors rbac::RBAC_PERM_COMMAND_MODIFY_RAGE (RBAC.h:425).
+const permissionCommandModifyRage uint32 = 557
+
+// permissionCommandModifyReputation mirrors rbac::RBAC_PERM_COMMAND_MODIFY_REPUTATION (RBAC.h:426).
+const permissionCommandModifyReputation uint32 = 558
+
+// permissionCommandModifyRunicPower mirrors rbac::RBAC_PERM_COMMAND_MODIFY_RUNICPOWER (RBAC.h:427).
+const permissionCommandModifyRunicPower uint32 = 559
+
+// permissionCommandModifyScale mirrors rbac::RBAC_PERM_COMMAND_MODIFY_SCALE (RBAC.h:428).
+const permissionCommandModifyScale uint32 = 560
+
+// permissionCommandModifySpeed mirrors rbac::RBAC_PERM_COMMAND_MODIFY_SPEED (RBAC.h:429).
+const permissionCommandModifySpeed uint32 = 561
+
+// permissionCommandModifySpeedAll mirrors rbac::RBAC_PERM_COMMAND_MODIFY_SPEED_ALL (RBAC.h:430).
+const permissionCommandModifySpeedAll uint32 = 562
+
+// permissionCommandModifySpeedBackwalk mirrors rbac::RBAC_PERM_COMMAND_MODIFY_SPEED_BACKWALK (RBAC.h:431).
+const permissionCommandModifySpeedBackwalk uint32 = 563
+
+// permissionCommandModifySpeedFly mirrors rbac::RBAC_PERM_COMMAND_MODIFY_SPEED_FLY (RBAC.h:432).
+const permissionCommandModifySpeedFly uint32 = 564
+
+// permissionCommandModifySpeedWalk mirrors rbac::RBAC_PERM_COMMAND_MODIFY_SPEED_WALK (RBAC.h:433).
+const permissionCommandModifySpeedWalk uint32 = 565
+
+// permissionCommandModifySpeedSwim mirrors rbac::RBAC_PERM_COMMAND_MODIFY_SPEED_SWIM (RBAC.h:434).
+const permissionCommandModifySpeedSwim uint32 = 566
+
+// permissionCommandModifySpell mirrors rbac::RBAC_PERM_COMMAND_MODIFY_SPELL (RBAC.h:435).
+const permissionCommandModifySpell uint32 = 567
+
+// permissionCommandModifyStandState mirrors rbac::RBAC_PERM_COMMAND_MODIFY_STANDSTATE (RBAC.h:436).
+const permissionCommandModifyStandState uint32 = 568
+
+// permissionCommandModifyTalentPoints mirrors rbac::RBAC_PERM_COMMAND_MODIFY_TALENTPOINTS (RBAC.h:437).
+const permissionCommandModifyTalentPoints uint32 = 569
+
+// permissionCommandModifyXP mirrors rbac::RBAC_PERM_COMMAND_MODIFY_XP (RBAC.h:666).
+const permissionCommandModifyXP uint32 = 798

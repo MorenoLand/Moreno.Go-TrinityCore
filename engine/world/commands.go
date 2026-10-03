@@ -1869,111 +1869,6 @@ func (s *session) handleCmdGoBoss(ctx context.Context, args []string) {
 	s.sendSysMessage(fmt.Sprintf("Teleported to boss %s (%d), spawn %d.", boss.name, boss.entry, sp.guid))
 }
 
-func (s *session) handleCmdModify(ctx context.Context, args []string) {
-	if len(args) < 2 {
-		s.sendSysMessage("Syntax: .modify hp|mana|speed|fly|scale|money|level <val>")
-		return
-	}
-	sub := strings.ToLower(args[0])
-	valStr := args[1]
-	switch sub {
-	case "hp", "health":
-		val, err := strconv.ParseUint(valStr, 10, 32)
-		if err != nil {
-			s.sendSysMessage("Invalid value.")
-			return
-		}
-		if s.player != nil {
-			s.player.Health = uint32(val)
-			s.player.MaxHealth = uint32(val)
-			s.sendPlayerUpdate()
-		}
-		s.sendSysMessage(fmt.Sprintf("Health set to %d.", val))
-	case "mana", "power":
-		val, err := strconv.ParseUint(valStr, 10, 32)
-		if err != nil {
-			s.sendSysMessage("Invalid value.")
-			return
-		}
-		if s.player != nil {
-			s.player.Powers[0] = uint32(val)
-			s.player.MaxPowers[0] = uint32(val)
-			s.sendPlayerUpdate()
-		}
-		s.sendSysMessage(fmt.Sprintf("Mana set to %d.", val))
-	case "speed", "run":
-		val, err := strconv.ParseFloat(valStr, 32)
-		if err != nil || val <= 0 {
-			s.sendSysMessage("Invalid speed multiplier (e.g. 1.0, 2.5).")
-			return
-		}
-		speed := float32(val) * 7.0
-		buf := protocol.NewBuffer(17)
-		buf.WritePackedGUID(s.playerGUID)
-		buf.WriteU32(0)
-		buf.WriteU8(1)
-		buf.WriteF32(speed)
-		_ = s.write(uint16(protocol.OpcodeSMSG_FORCE_RUN_SPEED_CHANGE), buf.Bytes(), true)
-		s.sendSysMessage(fmt.Sprintf("Speed set to %.2fx (%.2f).", val, speed))
-	case "fly":
-		val, err := strconv.ParseFloat(valStr, 32)
-		if err != nil || val <= 0 {
-			s.sendSysMessage("Invalid flight speed multiplier.")
-			return
-		}
-		speed := float32(val) * 7.0
-		buf := protocol.NewBuffer(16)
-		buf.WritePackedGUID(s.playerGUID)
-		buf.WriteU32(0)
-		buf.WriteF32(speed)
-		_ = s.write(uint16(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE), buf.Bytes(), true)
-		s.sendSysMessage(fmt.Sprintf("Flight speed set to %.2fx (%.2f).", val, speed))
-	case "scale":
-		val, err := strconv.ParseFloat(valStr, 32)
-		if err != nil || val <= 0 {
-			s.sendSysMessage("Invalid scale value.")
-			return
-		}
-		s.scale = float32(val)
-		s.sendPlayerUpdate()
-		s.sendSysMessage(fmt.Sprintf("Scale set to %.2f.", val))
-	case "money", "gold":
-		val, err := strconv.ParseUint(valStr, 10, 32)
-		if err != nil {
-			s.sendSysMessage("Invalid money amount.")
-			return
-		}
-		amount := uint32(val)
-		if sub == "gold" {
-			amount *= 10000
-		}
-		if s.player != nil {
-			s.player.Money = amount
-			s.sendPlayerUpdate()
-		}
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", amount, s.playerGUID)
-		}
-		s.sendSysMessage(fmt.Sprintf("Money set to %d copper (%d gold).", amount, amount/10000))
-	case "level":
-		val, err := strconv.ParseUint(valStr, 10, 8)
-		if err != nil || val == 0 || val > 80 {
-			s.sendSysMessage("Invalid level (1-80).")
-			return
-		}
-		if s.player != nil {
-			s.player.Level = uint8(val)
-			s.sendPlayerUpdate()
-		}
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET level = ? WHERE guid = ?", val, s.playerGUID)
-		}
-		s.sendSysMessage(fmt.Sprintf("Level set to %d.", val))
-	default:
-		s.sendSysMessage(fmt.Sprintf("Unknown modify property: %s", sub))
-	}
-}
-
 func (s *session) handleCmdCast(ctx context.Context, args []string) {
 	if len(args) == 0 {
 		s.sendSysMessage("Syntax: .cast <spellId> [triggered]")
@@ -6249,7 +6144,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("cheat", func(ctx context.Context, args []string) bool { return s.handleCmdCheat(ctx, args) }, []string{"god", "casttime", "cooldown", "power", "waterwalk", "status", "taxi", "explore"}, nil)
 	root.add("tele", func(ctx context.Context, args []string) bool { s.handleCmdTele(ctx, args); return true }, nil, nil)
 	root.add("go", func(ctx context.Context, args []string) bool { s.handleCmdGo(ctx, args); return true }, []string{"creature", "gameobject", "graveyard", "grid", "taxinode", "areatrigger", "zonexy", "xyz", "ticket", "offset", "instance", "boss"}, nil)
-	root.add("modify", func(ctx context.Context, args []string) bool { s.handleCmdModify(ctx, args); return true }, []string{"hp", "health", "mana", "power", "speed", "run", "fly", "scale", "money", "gold", "level"}, map[string]string{"mod": "modify"})
+	root.add("modify", func(ctx context.Context, args []string) bool { s.handleCmdModify(ctx, args); return true }, []string{"hp", "mana", "energy", "rage", "runicpower", "money", "honor", "arenapoints", "xp", "drunk"}, map[string]string{"mod": "modify"})
 	root.add("additem", func(ctx context.Context, args []string) bool { s.handleCmdAddItem(ctx, args); return true }, []string{"set"}, map[string]string{"item": "additem"})
 	root.add("cast", func(ctx context.Context, args []string) bool { s.handleCmdCast(ctx, args); return true }, nil, nil)
 	root.add("server", func(ctx context.Context, args []string) bool { s.handleCmdServer(ctx, args); return true }, []string{"info", "motd", "restart", "shutdown"}, nil)
@@ -6339,6 +6234,8 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("wchange", func(ctx context.Context, args []string) bool { s.handleCmdChangeWeather(ctx, args); return true }, nil, nil)
 	root.add("mailbox", func(ctx context.Context, args []string) bool { s.handleCmdMailBox(ctx); return true }, nil, nil)
 	root.add("mmap", func(ctx context.Context, args []string) bool { s.handleCmdMMap(ctx, args); return true }, []string{"loadedtiles", "loc", "path", "stats", "testarea"}, nil)
+	root.add("morph", func(ctx context.Context, args []string) bool { s.handleCmdMorph(ctx, args); return true }, nil, nil)
+	root.add("demorph", func(ctx context.Context, args []string) bool { s.handleCmdDeMorph(ctx); return true }, nil, nil)
 	return root
 }
 
