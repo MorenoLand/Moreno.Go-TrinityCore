@@ -2625,6 +2625,178 @@ func (s *session) handleCmdArenaLookup(ctx context.Context, args []string) {
 	}
 }
 
+// handleCmdBF dispatches ".bf" (cs_bf.cpp, AddSC_bf_commandscript):
+// start|stop|switch|timer|enable, each gated by its RBAC_PERM_COMMAND_BF_*
+// permission (RBAC.h:172-176).
+func (s *session) handleCmdBF(ctx context.Context, args []string) {
+	if s.server == nil {
+		s.sendSysMessage("Unknown error.")
+		return
+	}
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .bf start|stop|switch|timer|enable <battleId> [time]")
+		return
+	}
+	sub := strings.ToLower(args[0])
+	rest := args[1:]
+	var perm uint32
+	switch sub {
+	case "start":
+		perm = permissionCommandBfStart
+	case "stop":
+		perm = permissionCommandBfStop
+	case "switch":
+		perm = permissionCommandBfSwitch
+	case "timer":
+		perm = permissionCommandBfTimer
+	case "enable":
+		perm = permissionCommandBfEnable
+	default:
+		s.sendSysMessage("Syntax: .bf start|stop|switch|timer|enable <battleId> [time]")
+		return
+	}
+	if !s.commandAllowed(ctx, perm) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	switch sub {
+	case "start":
+		s.handleCmdBFStart(ctx, rest)
+	case "stop":
+		s.handleCmdBFStop(ctx, rest)
+	case "switch":
+		s.handleCmdBFSwitch(ctx, rest)
+	case "timer":
+		s.handleCmdBFTimer(ctx, rest)
+	case "enable":
+		s.handleCmdBFEnable(ctx, rest)
+	}
+}
+
+// bfBattleID parses the <battleId> argument. It mirrors
+// BattlefieldMgr::GetBattlefieldByBattleId: WGBattleID (1,
+// BATTLEFIELD_BATTLEID_WG, Battlefield.h:34) is the only registered battle id,
+// so any other id fails the command exactly like the C++ null-battlefield
+// return-false path.
+func (s *session) bfBattleID(args []string, usage string) (uint32, bool) {
+	if len(args) < 1 {
+		s.sendSysMessage(usage)
+		return 0, false
+	}
+	id, err := strconv.ParseUint(args[0], 10, 32)
+	if err != nil || uint32(id) != WGBattleID {
+		s.sendSysMessage("Invalid battlefield ID.")
+		return 0, false
+	}
+	return uint32(id), true
+}
+
+// handleCmdBFStart processes ".bf start <battleId>" (cs_bf.cpp
+// HandleBattlefieldStart). Battlefield::StartBattle (Battlefield.cpp:316) is a
+// no-op when the battle is already active, so the native StartWGBattle is
+// skipped in that case; the defender team is preserved from current state.
+func (s *session) handleCmdBFStart(ctx context.Context, args []string) {
+	if _, ok := s.bfBattleID(args, "Syntax: .bf start <battleId>"); !ok {
+		return
+	}
+	wg := s.server.getOrCreateWGState()
+	wg.mu.Lock()
+	active := wg.IsActive
+	defender := wg.DefenderTeam
+	wg.mu.Unlock()
+	if !active {
+		s.server.StartWGBattle(defender)
+	}
+	s.server.sendGlobalGMMessage(ctx, "Wintergrasp (Command start used)")
+}
+
+// handleCmdBFStop processes ".bf stop <battleId>" (cs_bf.cpp
+// HandleBattlefieldEnd): EndBattle(true) — the defenders hold the fortress.
+func (s *session) handleCmdBFStop(ctx context.Context, args []string) {
+	if _, ok := s.bfBattleID(args, "Syntax: .bf stop <battleId>"); !ok {
+		return
+	}
+	s.server.EndWGBattle(true)
+	s.server.sendGlobalGMMessage(ctx, "Wintergrasp (Command stop used)")
+}
+
+// handleCmdBFSwitch processes ".bf switch <battleId>" (cs_bf.cpp
+// HandleBattlefieldSwitch): EndBattle(false) — the attackers breached the
+// vault and become the new defenders.
+func (s *session) handleCmdBFSwitch(ctx context.Context, args []string) {
+	if _, ok := s.bfBattleID(args, "Syntax: .bf switch <battleId>"); !ok {
+		return
+	}
+	s.server.EndWGBattle(false)
+	s.server.sendGlobalGMMessage(ctx, "Wintergrasp (Command switch used)")
+}
+
+// handleCmdBFTimer processes ".bf timer <battleId> <time>" (cs_bf.cpp
+// HandleBattlefieldTimer): SetTimer(time * IN_MILLISECONDS) then
+// SendInitWorldStatesToAll.
+func (s *session) handleCmdBFTimer(ctx context.Context, args []string) {
+	if _, ok := s.bfBattleID(args, "Syntax: .bf timer <battleId> <time>"); !ok {
+		return
+	}
+	if len(args) < 2 {
+		s.sendSysMessage("Syntax: .bf timer <battleId> <time>")
+		return
+	}
+	secs, err := strconv.ParseUint(args[1], 10, 32)
+	if err != nil {
+		s.sendSysMessage("Invalid time value.")
+		return
+	}
+	wg := s.server.getOrCreateWGState()
+	wg.mu.Lock()
+	wg.Timer = time.Duration(secs) * time.Second
+	wg.EndTime = time.Now().Add(wg.Timer)
+	wg.mu.Unlock()
+	s.server.broadcastWGInitWorldStates()
+	s.server.sendGlobalGMMessage(ctx, "Wintergrasp (Command timer used)")
+}
+
+// handleCmdBFEnable processes ".bf enable <battleId>" (cs_bf.cpp
+// HandleBattlefieldEnable): toggles Battlefield::m_IsEnabled
+// (ToggleBattlefield), mirrored on wgBattlegroundState.Enabled; the Update and
+// player-enter-zone paths consult it (BattlefieldMgr.cpp:100, 130).
+func (s *session) handleCmdBFEnable(ctx context.Context, args []string) {
+	if _, ok := s.bfBattleID(args, "Syntax: .bf enable <battleId>"); !ok {
+		return
+	}
+	wg := s.server.getOrCreateWGState()
+	wg.mu.Lock()
+	wg.Enabled = !wg.Enabled
+	enabled := wg.Enabled
+	wg.mu.Unlock()
+	if enabled {
+		s.server.sendGlobalGMMessage(ctx, "Wintergrasp is enabled")
+	} else {
+		s.server.sendGlobalGMMessage(ctx, "Wintergrasp is disabled")
+	}
+}
+
+// sendGlobalGMMessage mirrors ChatHandler::SendGlobalGMSysMessage /
+// World::SendGlobalGMMessage (Chat.cpp:138, World.cpp): the message goes to
+// every in-world session holding rbac::RBAC_PERM_RECEIVE_GLOBAL_GM_TEXTMESSAGE
+// (44), evaluated through the native RBAC grant path.
+func (s *Server) sendGlobalGMMessage(ctx context.Context, msg string) {
+	if s == nil {
+		return
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for sess := range s.sessions {
+		if sess == nil || !sess.worldReady.Load() || sess.player == nil {
+			continue
+		}
+		if !sess.commandAllowed(ctx, permissionReceiveGlobalGMTextMessage) {
+			continue
+		}
+		sess.sendSysMessage(msg)
+	}
+}
+
 func (s *session) handleCmdNPC(ctx context.Context, args []string) {
 	if len(args) == 0 {
 		s.sendSysMessage("Syntax: .npc add <entry> | .npc info | .npc say <text> | .npc yell <text>")
@@ -3824,6 +3996,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("baninfo", func(ctx context.Context, args []string) bool { s.handleCmdBanInfo(ctx, args); return true }, []string{"account", "character", "ip"}, nil)
 	root.add("banlist", func(ctx context.Context, args []string) bool { s.handleCmdBanList(ctx, args); return true }, []string{"account", "character", "ip"}, nil)
 	root.add("unban", func(ctx context.Context, args []string) bool { s.handleCmdUnBan(ctx, args); return true }, []string{"account", "character", "playeraccount", "ip"}, nil)
+	root.add("bf", func(ctx context.Context, args []string) bool { s.handleCmdBF(ctx, args); return true }, []string{"start", "stop", "switch", "timer", "enable"}, nil)
 	root.add("npc", func(ctx context.Context, args []string) bool { s.handleCmdNPC(ctx, args); return true }, []string{"info", "say", "yell"}, nil)
 	root.add("gobject", func(ctx context.Context, args []string) bool { s.handleCmdGObject(ctx, args); return true }, nil, map[string]string{"gob": "gobject"})
 	root.add("revive", func(ctx context.Context, args []string) bool { s.handleCmdRevive(ctx, args); return true }, nil, map[string]string{"res": "revive", "rev": "revive"})

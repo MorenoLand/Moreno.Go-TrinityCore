@@ -108,6 +108,24 @@ const permissionCommandUnBanIP uint32 = 255
 // permissionCommandUnBanPlayerAccount mirrors rbac::RBAC_PERM_COMMAND_UNBAN_PLAYERACCOUNT (RBAC.h:170).
 const permissionCommandUnBanPlayerAccount uint32 = 256
 
+// permissionCommandBfStart mirrors rbac::RBAC_PERM_COMMAND_BF_START (RBAC.h:172).
+const permissionCommandBfStart uint32 = 258
+
+// permissionCommandBfStop mirrors rbac::RBAC_PERM_COMMAND_BF_STOP (RBAC.h:173).
+const permissionCommandBfStop uint32 = 259
+
+// permissionCommandBfSwitch mirrors rbac::RBAC_PERM_COMMAND_BF_SWITCH (RBAC.h:174).
+const permissionCommandBfSwitch uint32 = 260
+
+// permissionCommandBfTimer mirrors rbac::RBAC_PERM_COMMAND_BF_TIMER (RBAC.h:175).
+const permissionCommandBfTimer uint32 = 261
+
+// permissionCommandBfEnable mirrors rbac::RBAC_PERM_COMMAND_BF_ENABLE (RBAC.h:176).
+const permissionCommandBfEnable uint32 = 262
+
+// permissionReceiveGlobalGMTextMessage mirrors rbac::RBAC_PERM_RECEIVE_GLOBAL_GM_TEXTMESSAGE (RBAC.h:97).
+const permissionReceiveGlobalGMTextMessage uint32 = 44
+
 func accountHasPermission(ctx context.Context, db *sql.DB, accountID, realmID uint32, security uint8, permissionID uint32) (bool, error) {
 	granted := make(map[uint32]struct{})
 	denied := make(map[uint32]struct{})

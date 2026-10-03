@@ -14,6 +14,10 @@ const (
 	WGMapID  uint32 = 571  // Northrend
 	WGZoneID uint32 = 4197 // Wintergrasp zone
 
+	// WGBattleID mirrors BATTLEFIELD_BATTLEID_WG (Battlefield.h:34); the only
+	// battlefield battle id registered with BattlefieldMgr.
+	WGBattleID uint32 = 1
+
 	// Durations
 	WGBattleDuration        = 30 * time.Minute  // 30 minutes war
 	WGNoWarDuration         = 150 * time.Minute // 2.5 hours peace
@@ -225,6 +229,10 @@ type wgBattlegroundState struct {
 	Timer         time.Duration
 	TotalDuration time.Duration
 	EndTime       time.Time
+	// Enabled mirrors Battlefield::m_IsEnabled (Battlefield.cpp:42, default
+	// true); toggled by the .bf enable command (cs_bf.cpp
+	// HandleBattlefieldEnable / ToggleBattlefield).
+	Enabled bool
 
 	Workshops         [WGMaxWorkshops]wgWorkshopState
 	Towers            [WGMaxTowers]wgTowerState
@@ -784,9 +792,15 @@ func (s *Server) UpdateWGTenacity() {
 }
 
 // TickWG processes periodic Wintergrasp timer countdown and state transitions.
+// Reference: BattlefieldMgr::Update (BattlefieldMgr.cpp:155-164) — disabled
+// battlefields are skipped entirely.
 func (s *Server) TickWG(delta time.Duration) {
 	wg := s.getOrCreateWGState()
 	wg.mu.Lock()
+	if !wg.Enabled {
+		wg.mu.Unlock()
+		return
+	}
 	if wg.Timer > delta {
 		wg.Timer -= delta
 		wg.mu.Unlock()
@@ -868,6 +882,12 @@ func (s *Server) handleWGPlayerEnter(sess *session) {
 	}
 	wg := s.getOrCreateWGState()
 	wg.mu.Lock()
+	// Mirror BattlefieldMgr::HandlePlayerEnterZone (BattlefieldMgr.cpp:100):
+	// players do not join a disabled battlefield.
+	if !wg.Enabled {
+		wg.mu.Unlock()
+		return
+	}
 
 	playerTeam := teamForRace(sess.player.Race)
 	wg.PlayersInWar[sess.playerGUID] = playerTeam
@@ -978,6 +998,7 @@ func (s *Server) getOrCreateWGState() *wgBattlegroundState {
 			Timer:             WGNoWarDuration,
 			TotalDuration:     WGNoWarDuration,
 			EndTime:           time.Now().Add(WGNoWarDuration),
+			Enabled:           true,
 			Winner:            -1,
 			PlayersInWar:      make(map[uint64]uint32),
 			PlayerRanks:       make(map[uint64]uint32),
