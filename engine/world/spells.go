@@ -133,6 +133,7 @@ const (
 	spellFailedNoMountsAllowed           uint8 = 83  // SPELL_FAILED_NO_MOUNTS_ALLOWED (SharedDefines.h:1065)
 	spellFailedOnlyAboveWater            uint8 = 88  // SPELL_FAILED_ONLY_ABOVEWATER (SharedDefines.h:1070)
 	spellFailedTargetFriendly            uint8 = 115 // SPELL_FAILED_TARGET_FRIENDLY (SharedDefines.h:1097)
+	spellFailedNotHere                   uint8 = 60  // SPELL_FAILED_NOT_HERE (SharedDefines.h:1042)
 
 	areaFlagNoFlyZone uint32 = 0x20000000 // AREA_FLAG_NO_FLY_ZONE (DBCEnums.h:275) — AreaTableEntry.Flags bit tested by AreaTableEntry::IsFlyable (DBCStructure.h:209)
 
@@ -255,6 +256,8 @@ const (
 	spellAuraModSpellCritChanceSchool              = 71  // SPELL_AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL (SpellAuraDefines.h:151)
 	spellAuraModCritPct                            = 290 // SPELL_AURA_MOD_CRIT_PCT (SpellAuraDefines.h:370)
 	spellAuraRangedAttackPowerAttackerBonus        = 127 // SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS (SpellAuraDefines.h:207)
+	spellAuraFly                                   = 201 // SPELL_AURA_FLY (SpellAuraDefines.h:281)
+	spellAuraModIncreaseMountedFlightSpeed         = 207 // SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED (SpellAuraDefines.h:287)
 	spellAuraConfuse                               = 5
 	spellAuraCharm                                 = 6
 	spellAuraFear                                  = 7
@@ -1332,6 +1335,20 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if failure := s.checkRangedAttackPowerAttackerBonusCast(spell, target); failure != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "ranged-attack-power-attacker-bonus validation", "failure", failure)
+		return true
+	}
+
+	// Flying-mount gate (Spell::CheckCast ApplyAuraName switch,
+	// Spell.cpp:6122-6135): an aura-201/aura-207 effect fails with
+	// SPELL_FAILED_NOT_HERE in a no-fly zone, or while the zone's
+	// battlefield (Wintergrasp) is active. Dead and ghost casters always
+	// pass — the C++ comment ("allow always ghost flight spells") is the
+	// IsAlive() arm. C++ relative order places this leg immediately after
+	// the RANGED_ATTACK_POWER_ATTACKER_BONUS leg in the ApplyAuraName
+	// switch.
+	if failure := s.checkFlyCast(spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "fly validation", "failure", failure)
 		return true
 	}
 
@@ -2734,6 +2751,57 @@ func (s *session) checkRangedAttackPowerAttackerBonusCast(spell wotlk.Spell, tar
 	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	if s.server.isFriendlyFaction(motion.Faction, caster) {
 		return spellFailedTargetFriendly
+	}
+	return 0
+}
+
+// wgCanFlyIn mirrors Battlefield::CanFlyIn (Battlefield.h:338): flight is
+// forbidden while the battlefield is active.
+func (wg *wgBattlegroundState) wgCanFlyIn() bool {
+	if wg == nil {
+		return true
+	}
+	wg.mu.Lock()
+	defer wg.mu.Unlock()
+	return !wg.IsActive
+}
+
+// checkFlyCast mirrors the SPELL_AURA_FLY /
+// SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED leg of the CheckCast
+// ApplyAuraName switch (Spell.cpp:6122-6135): a live player mounting a
+// flying mount (or raising mounted flight speed) fails with
+// SPELL_FAILED_NOT_HERE when the caster's area is flagged
+// AREA_FLAG_NO_FLY_ZONE, or when the zone's battlefield is active
+// (sBattlefieldMgr->GetBattlefieldToZoneId + Battlefield::CanFlyIn).
+//
+// The m_originalCaster arms are vacuous on the client path (the session is
+// always the player caster), except IsAlive: dead and ghost casters skip
+// the gate entirely — the C++ comment ("allow always ghost flight spells")
+// is the IsAlive() arm. The missing-area arm is permissive: C++ runs the
+// no-fly and battlefield tests only inside the LookupEntry success arm,
+// so a missing AreaTable row skips both gates (terrain.go convention).
+func (s *session) checkFlyCast(spell wotlk.Spell) uint8 {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	if !spellHasAura(spell, spellAuraFly) && !spellHasAura(spell, spellAuraModIncreaseMountedFlightSpeed) {
+		return 0
+	}
+	if s.isDeadOrGhost() {
+		return 0
+	}
+	area, found, areaErr := s.server.Data.Area(s.areaID)
+	if areaErr != nil || !found {
+		return 0
+	}
+	if area.Flags&areaFlagNoFlyZone != 0 {
+		return spellFailedNotHere
+	}
+	s.server.wgMu.RLock()
+	wg := s.server.wgState
+	s.server.wgMu.RUnlock()
+	if wg != nil && wg.ZoneID == s.player.Zone && !wg.wgCanFlyIn() {
+		return spellFailedNotHere
 	}
 	return 0
 }
