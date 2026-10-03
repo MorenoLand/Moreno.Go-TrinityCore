@@ -98,6 +98,9 @@ const (
 	spellFailedFleeing                   uint8 = 34  // SPELL_FAILED_FLEEING (SharedDefines.h:1016)
 	spellFailedCasterAuraState           uint8 = 22  // SPELL_FAILED_CASTER_AURASTATE (SharedDefines.h:1004)
 	spellFailedTargetAuraState           uint8 = 111 // SPELL_FAILED_TARGET_AURASTATE (SharedDefines.h:1093)
+	spellFailedSummonPending             uint8 = 183 // SPELL_FAILED_SUMMON_PENDING (SharedDefines.h:1165)
+	spellFailedTargetNotInInstance       uint8 = 137 // SPELL_FAILED_TARGET_NOT_IN_INSTANCE (SharedDefines.h:1119)
+	spellFailedTargetLockedToRaidInst    uint8 = 169 // SPELL_FAILED_TARGET_LOCKED_TO_RAID_INSTANCE (SharedDefines.h:1151)
 	spellFailedNotShapeshift             uint8 = 68  // SPELL_FAILED_NOT_SHAPESHIFT (SharedDefines.h:1050)
 	spellFailedOnlyShapeshift            uint8 = 94  // SPELL_FAILED_ONLY_SHAPESHIFT (SharedDefines.h:1076)
 	spellFailedRequiresSpellFocus        uint8 = 102 // SPELL_FAILED_REQUIRES_SPELL_FOCUS (SharedDefines.h:1084)
@@ -161,6 +164,7 @@ const (
 	spellEffectSummon          = 28  // SPELL_EFFECT_SUMMON (SharedDefines.h:839)
 	spellEffectSummonPet       = 56  // SPELL_EFFECT_SUMMON_PET (SharedDefines.h:867)
 	spellEffectCreateTamedPet  = 153 // SPELL_EFFECT_CREATE_TAMED_PET (SharedDefines.h:964)
+	spellEffectSummonPlayer    = 85  // SPELL_EFFECT_SUMMON_PLAYER (SharedDefines.h:896)
 
 	// Summon categories for the generic-summon CheckCast leg
 	// (Spell.cpp:5798-5817, SharedDefines.h:3296).
@@ -173,6 +177,11 @@ const (
 	implicitTargetGameObjectItemTarget uint32 = 26 // TARGET_GAMEOBJECT_ITEM_TARGET
 
 	spellDisarmTrap uint32 = 1842 // Disarm Trap — exempt from the battleground-object gate on traps (Spell.cpp:5754)
+
+	// spellSummonReferAFriend is the refer-a-friend summon spell id carved out
+	// of the same-raid gate in the SPELL_EFFECT_SUMMON_PLAYER leg
+	// (Spell.cpp:5903, "refer-a-friend spell").
+	spellSummonReferAFriend uint32 = 48955
 
 	// Creature template type_flags for the skinning CheckCast leg
 	// (Spell.cpp:5707-5724, CreatureData.h:213-222, SharedDefines.h).
@@ -1002,6 +1011,17 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if failure := s.checkSummonPetCast(spell); failure != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-pet validation", "failure", failure)
+		return true
+	}
+	// Summon-player gate (Spell::CheckCast per-effect block,
+	// Spell.cpp:5892-5928): a SPELL_EFFECT_SUMMON_PLAYER effect (ritual of
+	// summoning style) fails with SPELL_FAILED_BAD_TARGETS when the caster's
+	// selected target is not another player in the same group (except spell
+	// 48955), and the dungeon leg applies when the caster stands in a
+	// dungeon. C++ relative order places this right after the summon-pet leg.
+	if failure := s.checkSummonPlayerCast(ctx, spell, spellID); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-player validation", "failure", failure)
 		return true
 	}
 	cost := s.calculateSpellPowerCost(spell)
@@ -2105,6 +2125,106 @@ func (s *session) checkSummonPetCast(spell wotlk.Spell) uint8 {
 		}
 	}
 	return 0
+}
+
+// checkSummonPlayerCast mirrors the SPELL_EFFECT_SUMMON_PLAYER leg of the
+// CheckCast per-effect block (Spell.cpp:5892-5928, effect id 85).
+func (s *session) checkSummonPlayerCast(ctx context.Context, spell wotlk.Spell, spellID uint32) uint8 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
+	matched := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == spellEffectSummonPlayer {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return 0
+	}
+	// The caster-TYPEID_PLAYER arm is vacuous on the client-initiated path
+	// (the session is always a player).
+	//
+	// The summon targets the caster's *selected* target, not the wire spell
+	// target: Player::GetTarget() is mirrored by the CMSG_SET_SELECTION
+	// tracked selection (chat.go).
+	if s.selection == 0 {
+		return spellFailedBadTargets
+	}
+	// ObjectAccessor::FindPlayer resolves players only; findSessionByGUID
+	// likewise matches player GUIDs alone, so a creature selection (or an
+	// offline/unknown GUID) lands here as BAD_TARGETS, and self-selection
+	// is rejected like C++.
+	target := s.server.findSessionByGUID(s.selection)
+	if target == nil || target.player == nil || target == s {
+		return spellFailedBadTargets
+	}
+	// Spell 48955 (refer-a-friend summon) skips the same-group gate;
+	// Player::IsInSameRaidWith is "same group" (Player.cpp:2543-2546).
+	if spellID != spellSummonReferAFriend && !s.inSameGroupAs(target) {
+		return spellFailedBadTargets
+	}
+	// Player::HasSummonPending has no Go model — no pending-summon state is
+	// tracked anywhere — so the SPELL_FAILED_SUMMON_PENDING arm has no
+	// bridge (documented; never stubbed).
+	//
+	// Dungeon leg: the caster's map DBC entry must be a dungeon before the
+	// raid-bind / instance-template / access-requirement arms apply. C++
+	// dereferences the MapStore entry unconditionally; a missing Go entry is
+	// permissive per the unknown-data convention (terrain.go).
+	mapEntry, found, err := s.server.Data.Map(s.player.Map)
+	if err != nil || !found || !mapEntry.IsDungeon() {
+		return 0
+	}
+	difficulty := s.player.DungeonDifficulty
+	if mapEntry.IsRaid() {
+		difficulty = s.player.RaidDifficulty
+		// Raid-lock arm: both sides bound to this map+difficulty, the
+		// target's bind permanent, and different instance ids. The binds
+		// come from character_instance/instance (instanceBindsForCharacter),
+		// the Go equivalent of the BoundInstancesMap arms.
+		if targetBind := findInstanceBind(s.instanceBindsForCharacter(ctx, target.playerGUID), mapEntry.ID, difficulty); targetBind != nil {
+			if casterBind := findInstanceBind(s.instanceBindsForCharacter(ctx, s.playerGUID), mapEntry.ID, difficulty); casterBind != nil {
+				if targetBind.permanent && targetBind.instanceID != casterBind.instanceID {
+					return spellFailedTargetLockedToRaidInst
+				}
+			}
+		}
+	}
+	// sObjectMgr::GetInstanceTemplate(mapId) — the instance_template world
+	// row must exist for the dungeon.
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return 0
+	}
+	var tmplMap int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT map FROM instance_template WHERE map = ?", mapEntry.ID).Scan(&tmplMap); err != nil {
+		return spellFailedTargetNotInInstance
+	}
+	// Player::Satisfy(GetAccessRequirement(mapId, difficulty)) — the
+	// level/item/quest access-requirement model has no Go bridge (documented;
+	// never stubbed).
+	return 0
+}
+
+// inSameGroupAs mirrors Player::IsInSameRaidWith (Player.cpp:2543-2546):
+// the two sessions share a live non-zero group.
+func (s *session) inSameGroupAs(other *session) bool {
+	if s == nil || other == nil {
+		return false
+	}
+	return s.groupID != 0 && s.groupID == other.groupID
+}
+
+// findInstanceBind returns the bind row for the given map and difficulty, or
+// nil — the Go equivalent of Player::GetBoundInstance(map, difficulty).
+func findInstanceBind(binds []instanceBindRow, mapID uint32, difficulty uint8) *instanceBindRow {
+	for i := range binds {
+		if binds[i].mapID == mapID && binds[i].difficulty == difficulty {
+			return &binds[i]
+		}
+	}
+	return nil
 }
 
 // creatureTameable mirrors CreatureTemplate::IsTameable
