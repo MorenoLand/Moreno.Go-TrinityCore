@@ -113,6 +113,7 @@ const (
 	spellFailedNotInArena                uint8 = 151 // SPELL_FAILED_NOT_IN_ARENA (SharedDefines.h:1133)
 	spellFailedIncorrectArea             uint8 = 39  // SPELL_FAILED_INCORRECT_AREA (SharedDefines.h:1021)
 	spellFailedRequiresArea              uint8 = 101 // SPELL_FAILED_REQUIRES_AREA (SharedDefines.h:1083)
+	spellFailedUniqueGlyph               uint8 = 176 // SPELL_FAILED_UNIQUE_GLYPH (SharedDefines.h:1158)
 	spellFailedNotInRaidInstance         uint8 = 167 // SPELL_FAILED_NOT_IN_RAID_INSTANCE (SharedDefines.h:1149)
 
 	areaFlagNoFlyZone uint32 = 0x20000000 // AREA_FLAG_NO_FLY_ZONE (DBCEnums.h:275) — AreaTableEntry.Flags bit tested by AreaTableEntry::IsFlyable (DBCStructure.h:209)
@@ -833,6 +834,14 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "learn spell pet validation", "failure", failure)
 		return true
 	}
+	// Apply-glyph duplicate gate (Spell::CheckCast per-effect block,
+	// Spell.cpp:5618-5627): socketing a glyph already active in the current
+	// talent spec fails with SPELL_FAILED_UNIQUE_GLYPH.
+	if failure := s.checkGlyphCast(spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "duplicate glyph", "failure", failure)
+		return true
+	}
 	cost := s.calculateSpellPowerCost(spell)
 	pType := spell.PowerType
 	// Spell::CheckPower (Spell.cpp:6665-6670) checks rune costs when
@@ -1274,6 +1283,37 @@ func (s *session) checkLearnSpellCast(ctx context.Context, spell wotlk.Spell, ta
 		}
 		if spell.SpellLevel > uint32(petLevel) {
 			return spellFailedLowLevel
+		}
+	}
+	return 0
+}
+
+// checkGlyphCast mirrors the SPELL_EFFECT_APPLY_GLYPH leg of the CheckCast
+// per-effect switch (Spell.cpp:5618-5627): a glyph spell rejects with
+// SPELL_FAILED_UNIQUE_GLYPH when the player already has the glyph. C++
+// tests HasAura(gp->SpellID); Go sockets glyphs as glyph-property ids in
+// player.Glyphs and never applies the aura model, but the glyph spell aura
+// is unique per glyph (EffectApplyGlyph casts gp->SpellID on apply,
+// SpellEffects.cpp:4075), so a matching active-spec slot is the same
+// predicate. The caster-must-be-player term is vacuous — client casts always
+// come from a player session. Returns the SPELL_FAILED_* result code, 0 on
+// success.
+func (s *session) checkGlyphCast(spell wotlk.Spell) uint8 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	spec := s.player.ActiveTalentGroup
+	if spec >= 2 {
+		spec = 0
+	}
+	for _, eff := range spell.Effects {
+		if eff.Effect != 74 || eff.MiscValue == 0 { // SPELL_EFFECT_APPLY_GLYPH
+			continue
+		}
+		for slot := 0; slot < 6; slot++ {
+			if s.player.Glyphs[spec][slot] == uint16(eff.MiscValue) {
+				return spellFailedUniqueGlyph
+			}
 		}
 	}
 	return 0
