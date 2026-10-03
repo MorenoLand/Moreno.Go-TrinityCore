@@ -123,6 +123,24 @@ const permissionCommandBfTimer uint32 = 261
 // permissionCommandBfEnable mirrors rbac::RBAC_PERM_COMMAND_BF_ENABLE (RBAC.h:176).
 const permissionCommandBfEnable uint32 = 262
 
+// permissionCommandCast mirrors rbac::RBAC_PERM_COMMAND_CAST (RBAC.h:181).
+const permissionCommandCast uint32 = 267
+
+// permissionCommandCastBack mirrors rbac::RBAC_PERM_COMMAND_CAST_BACK (RBAC.h:182).
+const permissionCommandCastBack uint32 = 268
+
+// permissionCommandCastDist mirrors rbac::RBAC_PERM_COMMAND_CAST_DIST (RBAC.h:183).
+const permissionCommandCastDist uint32 = 269
+
+// permissionCommandCastSelf mirrors rbac::RBAC_PERM_COMMAND_CAST_SELF (RBAC.h:184).
+const permissionCommandCastSelf uint32 = 270
+
+// permissionCommandCastTarget mirrors rbac::RBAC_PERM_COMMAND_CAST_TARGET (RBAC.h:185).
+const permissionCommandCastTarget uint32 = 271
+
+// permissionCommandCastDest mirrors rbac::RBAC_PERM_COMMAND_CAST_DEST (RBAC.h:186).
+const permissionCommandCastDest uint32 = 272
+
 // permissionReceiveGlobalGMTextMessage mirrors rbac::RBAC_PERM_RECEIVE_GLOBAL_GM_TEXTMESSAGE (RBAC.h:97).
 const permissionReceiveGlobalGMTextMessage uint32 = 44
 

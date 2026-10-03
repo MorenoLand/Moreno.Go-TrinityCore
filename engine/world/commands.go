@@ -336,7 +336,7 @@ func (s *session) handleCmdHelp(args []string) {
 	s.sendSysMessage(".modify hp|mana|speed|fly|scale|money|level <val>")
 	s.sendSysMessage(".additem <itemId> [count] - Add item to inventory")
 	s.sendSysMessage(".learn <spellId> | .unlearn <spellId> - Manage spells")
-	s.sendSysMessage(".cast <spellId> - Cast a spell")
+	s.sendSysMessage(".cast <spellId> [triggered] - Cast a spell at the selected unit")
 	s.sendSysMessage(".cheat explore on|off - Toggle explored areas")
 	s.sendSysMessage(".lookup item|spell|creature|tele|quest <name>")
 	s.sendSysMessage(".server info|motd - Server status and info")
@@ -909,7 +909,34 @@ func (s *session) handleCmdUnlearn(ctx context.Context, args []string) {
 
 func (s *session) handleCmdCast(ctx context.Context, args []string) {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .cast <spellId>")
+		s.sendSysMessage("Syntax: .cast <spellId> [triggered]")
+		return
+	}
+	// cast_commandscript (cs_cast.cpp) sub-arms. Only the bare arm has a Go
+	// cast pipeline; the rest ride unbuilt bridges and are documented, not
+	// stubbed: back/self/target need a creature/other-unit-as-caster command
+	// bridge, dist/dest need a dest-target command cast entry (Go castSpell
+	// paths are unit-target only).
+	switch strings.ToLower(args[0]) {
+	case "back":
+		s.castArmBlocked(ctx, permissionCommandCastBack, "cast back is not supported: selected-creature-as-caster has no command bridge.")
+		return
+	case "dist":
+		s.castArmBlocked(ctx, permissionCommandCastDist, "cast dist is not supported: destination-target casts have no command entry.")
+		return
+	case "self":
+		s.castArmBlocked(ctx, permissionCommandCastSelf, "cast self is not supported: selected-unit-as-caster has no command bridge.")
+		return
+	case "target":
+		s.castArmBlocked(ctx, permissionCommandCastTarget, "cast target is not supported: no creature victim model and no creature-as-caster bridge.")
+		return
+	case "dest":
+		s.castArmBlocked(ctx, permissionCommandCastDest, "cast dest is not supported: destination-target casts have no command entry.")
+		return
+	}
+	// Bare arm: HandleCastCommand — player casts at the selected unit.
+	if !s.commandAllowed(ctx, permissionCommandCast) {
+		s.sendNotification("You do not have permission to use that command.")
 		return
 	}
 	spellID, err := strconv.ParseUint(args[0], 10, 32)
@@ -922,15 +949,37 @@ func (s *session) handleCmdCast(ctx context.Context, args []string) {
 		return
 	}
 	if _, found, err := s.server.Data.Spell(uint32(spellID)); err != nil || !found {
-		s.sendSysMessage("Unknown spell ID.")
+		s.sendSysMessage("There is no such spell.")
 		return
 	}
-	targetGUID := s.selection
-	if targetGUID == 0 {
-		targetGUID = s.playerGUID
+	// SpellMgr::IsSpellValid has no Go model; DBC-loaded spells are assumed
+	// structurally valid, so the LANG_COMMAND_SPELL_BROKEN branch is unreachable.
+	if s.selection == 0 {
+		s.sendSysMessage("Select a character or creature.")
+		return
 	}
-	s.castSpellDirect(ctx, uint32(spellID), targetGUID)
-	s.sendSysMessage(fmt.Sprintf("Casting spell %d.", spellID))
+	// GetTriggerFlags mirror: the optional flag must be a prefix of
+	// "triggered" (e.g. "trig"); anything else fails the command. Go's
+	// command cast pipeline only models triggered-cast semantics
+	// (TRIGGERED_FULL_MASK: no cast time, power, or proc rolls), so the
+	// TRIGGERED_NONE normal-cast path is a documented fidelity gap — the
+	// flag is accepted but changes nothing.
+	if len(args) > 1 && !strings.HasPrefix("triggered", strings.ToLower(args[1])) {
+		s.sendSysMessage("Syntax: .cast <spellId> [triggered]")
+		return
+	}
+	s.castSpellDirect(ctx, uint32(spellID), s.selection)
+}
+
+// castArmBlocked gates a blocked cast sub-arm on its RBAC permission (mirroring
+// the ChatCommandTable permission check, which runs before the handler body)
+// and reports the missing bridge honestly instead of stubbing the arm.
+func (s *session) castArmBlocked(ctx context.Context, permissionID uint32, reason string) {
+	if !s.commandAllowed(ctx, permissionID) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	s.sendSysMessage(reason)
 }
 
 func (s *session) handleCmdLookup(ctx context.Context, args []string) {
