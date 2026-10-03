@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/crypto"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -335,7 +337,7 @@ func (s *session) handleCmdHelp(args []string) {
 	s.sendSysMessage(".lookup item|spell|creature|tele|quest <name>")
 	s.sendSysMessage(".server info|motd - Server status and info")
 	s.sendSysMessage(".character level|rename|customize|changefaction|changerace")
-	s.sendSysMessage(".account set gmlevel|password")
+	s.sendSysMessage(".account addon|email|password|lock ... | .account set gmlevel|addon|password|sec ...")
 }
 
 func (s *session) handleCmdGM(args []string) {
@@ -1077,34 +1079,488 @@ func (s *session) handleCmdCharacter(ctx context.Context, args []string) {
 	}
 }
 
+// upperOnlyLatin mirrors TrinityCore Utf8ToUpperOnlyLatin: only ASCII
+// a-z are uppercased, everything else is passed through unchanged.
+// Reference: AccountMgr::CreateAccount / HandleAccountSetPasswordCommand
+// (AccountMgr.cpp, cs_account.cpp).
+func upperOnlyLatin(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r >= 'a' && r <= 'z' {
+			r -= 'a' - 'A'
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func (s *session) authDB() *sql.DB {
+	if s.server == nil || s.server.AuthStore == nil {
+		return nil
+	}
+	return s.server.AuthStore.DB
+}
+
+// accountIDByName mirrors AccountMgr::GetId: resolves an account name to
+// its id, or 0 when the account does not exist.
+func (s *session) accountIDByName(ctx context.Context, name string) uint32 {
+	db := s.authDB()
+	if db == nil {
+		return 0
+	}
+	var id uint32
+	if err := db.QueryRowContext(ctx, "SELECT id FROM account WHERE UPPER(username) = UPPER(?)", upperOnlyLatin(name)).Scan(&id); err != nil {
+		return 0
+	}
+	return id
+}
+
+// accountNameByID mirrors AccountMgr::GetName.
+func (s *session) accountNameByID(ctx context.Context, id uint32) string {
+	db := s.authDB()
+	if db == nil {
+		return ""
+	}
+	var name string
+	if err := db.QueryRowContext(ctx, "SELECT username FROM account WHERE id = ?", id).Scan(&name); err != nil {
+		return ""
+	}
+	return name
+}
+
+// accountSecurityLevel mirrors AccountMgr::GetSecurity: highest access row
+// for this realm (or realm -1, the all-realms row) wins.
+func (s *session) accountSecurityLevel(ctx context.Context, id uint32) uint8 {
+	db := s.authDB()
+	if db == nil {
+		return 0
+	}
+	var level uint8
+	if err := db.QueryRowContext(ctx,
+		"SELECT COALESCE(MAX(SecurityLevel), 0) FROM account_access WHERE AccountID = ? AND (RealmID = ? OR RealmID = -1)",
+		id, s.server.RealmID).Scan(&level); err != nil {
+		return 0
+	}
+	return level
+}
+
+// canModifyAccount mirrors the HasLowerSecurityAccount guard used by the
+// .account set commands: the target must have strictly lower security than
+// the handler (which also rejects self-application).
+func (s *session) canModifyAccount(ctx context.Context, targetID uint32) bool {
+	if s.accountSecurityLevel(ctx, targetID) >= s.security {
+		s.sendSysMessage("Your security level is too low.")
+		return false
+	}
+	return true
+}
+
+// checkAccountPassword mirrors AccountMgr::CheckPassword: the SRP6 verifier
+// stored for the account must validate against the supplied password.
+func (s *session) checkAccountPassword(ctx context.Context, accountID uint32, password string) bool {
+	name := s.accountNameByID(ctx, accountID)
+	if name == "" {
+		return false
+	}
+	db := s.authDB()
+	if db == nil {
+		return false
+	}
+	var salt, verifier []byte
+	if err := db.QueryRowContext(ctx, "SELECT salt, verifier FROM account WHERE id = ?", accountID).Scan(&salt, &verifier); err != nil {
+		return false
+	}
+	if len(salt) != crypto.SRP6SaltLength || len(verifier) != crypto.SRP6VerifierLength {
+		return false
+	}
+	var saltArr [crypto.SRP6SaltLength]byte
+	var verifierArr [crypto.SRP6VerifierLength]byte
+	copy(saltArr[:], salt)
+	copy(verifierArr[:], verifier)
+	return crypto.CheckLogin(upperOnlyLatin(name), upperOnlyLatin(password), saltArr, verifierArr)
+}
+
+// changeAccountPassword mirrors AccountMgr::ChangePassword: stores a fresh
+// SRP6 salt/verifier pair for the account. Returns "" on success, otherwise
+// the message to send.
+func (s *session) changeAccountPassword(ctx context.Context, accountID uint32, newPassword string) string {
+	name := s.accountNameByID(ctx, accountID)
+	if name == "" {
+		return "Account does not exist."
+	}
+	if len([]rune(newPassword)) > 16 { // MAX_PASS_STR (AccountMgr.h)
+		return "Password too long."
+	}
+	salt, verifier, err := crypto.MakeRegistrationData(upperOnlyLatin(name), upperOnlyLatin(newPassword))
+	if err != nil {
+		return "Could not change password."
+	}
+	if _, err := s.authDB().ExecContext(ctx, "UPDATE account SET salt = ?, verifier = ? WHERE id = ?", salt[:], verifier[:], accountID); err != nil {
+		return "Could not change password."
+	}
+	return ""
+}
+
+// changeAccountEmail mirrors AccountMgr::ChangeEmail / ChangeRegEmail:
+// writes the email or registration email column. Returns "" on success.
+func (s *session) changeAccountEmail(ctx context.Context, accountID uint32, newEmail string, regMail bool) string {
+	if s.accountNameByID(ctx, accountID) == "" {
+		return "Account does not exist."
+	}
+	if len([]rune(newEmail)) > 64 { // MAX_EMAIL_STR (AccountMgr.h)
+		return "Email too long."
+	}
+	column := "email"
+	if regMail {
+		column = "reg_mail"
+	}
+	if _, err := s.authDB().ExecContext(ctx, "UPDATE account SET "+column+" = ? WHERE id = ?", upperOnlyLatin(newEmail), accountID); err != nil {
+		return "Could not change email."
+	}
+	return ""
+}
+
+// remoteIP returns the session's remote address without the port, like
+// WorldSession::GetRemoteAddress.
+func (s *session) remoteIP() string {
+	if s.conn == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(s.conn.RemoteAddr().String())
+	if err != nil {
+		return s.conn.RemoteAddr().String()
+	}
+	return host
+}
+
 func (s *session) handleCmdAccount(ctx context.Context, args []string) {
-	if len(args) < 2 {
-		s.sendSysMessage("Syntax: .account set gmlevel <account> <level> | .account set password <account> <pass>")
+	if len(args) == 0 {
+		// HandleAccountCommand (cs_account.cpp:564): bare ".account" shows
+		// the session security level and the account's own email address.
+		s.sendSysMessage(fmt.Sprintf("Your account security level: %d.", s.security))
+		if db := s.authDB(); db != nil {
+			var email string
+			if err := db.QueryRowContext(ctx, "SELECT email FROM account WHERE id = ?", s.accountID).Scan(&email); err == nil && email != "" {
+				s.sendSysMessage(fmt.Sprintf("Email: %s", email))
+			}
+		}
 		return
 	}
-	if strings.ToLower(args[0]) == "set" && len(args) >= 4 {
-		action := strings.ToLower(args[1])
-		targetAcct := args[2]
-		val := args[3]
-		switch action {
-		case "gmlevel", "sec":
-			sec, err := strconv.ParseUint(val, 10, 8)
-			if err != nil {
-				s.sendSysMessage("Invalid security level (0-3).")
+	switch strings.ToLower(args[0]) {
+	case "set":
+		s.handleCmdAccountSet(ctx, args[1:])
+	case "addon":
+		s.handleCmdAccountAddon(ctx, args[1:])
+	case "email":
+		s.handleCmdAccountEmail(ctx, args[1:])
+	case "password":
+		s.handleCmdAccountPassword(ctx, args[1:])
+	case "lock":
+		s.handleCmdAccountLock(ctx, args[1:])
+	default:
+		s.sendSysMessage("Syntax: .account [addon <expansion>|email <old> <password> <new> <confirm>|password <old> <new> <confirm>|lock <ip|country> <on|off>|set ...]")
+	}
+}
+
+// handleCmdAccountSet dispatches the ".account set" subgroup
+// (cs_account.cpp accountSetCommandTable).
+func (s *session) handleCmdAccountSet(ctx context.Context, args []string) {
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .account set gmlevel|seclevel|addon|password|sec <account> ...")
+		return
+	}
+	switch strings.ToLower(args[0]) {
+	case "gmlevel", "sec", "seclevel":
+		s.handleCmdAccountSetSecLevel(ctx, args[1:])
+	case "addon":
+		s.handleCmdAccountSetAddon(ctx, args[1:])
+	case "password":
+		s.handleCmdAccountSetPassword(ctx, args[1:])
+	default:
+		if len(args) >= 2 && strings.ToLower(args[0]) == "sec" {
+			switch strings.ToLower(args[1]) {
+			case "email", "regmail":
+				s.handleCmdAccountSetSecEmail(ctx, "sec "+strings.ToLower(args[1]), args[2:])
 				return
 			}
-			if s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
-				_, err = s.server.AuthStore.DB.ExecContext(ctx,
-					"INSERT INTO account_access (AccountID, SecurityLevel, RealmID) VALUES ((SELECT id FROM account WHERE username = ?), ?, ?) ON CONFLICT(AccountID, RealmID) DO UPDATE SET SecurityLevel = ?",
-					targetAcct, sec, s.server.RealmID, sec)
-				if err != nil {
-					_, _ = s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account_access SET SecurityLevel = ? WHERE AccountID = (SELECT id FROM account WHERE username = ?)", sec, targetAcct)
-				}
-			}
-			s.sendSysMessage(fmt.Sprintf("Security level for %s set to %d.", targetAcct, sec))
-		default:
-			s.sendSysMessage("Syntax: .account set gmlevel <account> <level>")
 		}
+		s.sendSysMessage("Syntax: .account set gmlevel|seclevel|addon|password|sec <account> ...")
+	}
+}
+
+// handleCmdAccountSetSecLevel extends the native ".account set gmlevel"
+// with the HasLowerSecurityAccount guard from
+// HandleAccountSetSecLevelCommand (cs_account.cpp:657).
+func (s *session) handleCmdAccountSetSecLevel(ctx context.Context, args []string) {
+	if len(args) < 2 {
+		s.sendSysMessage("Syntax: .account set gmlevel <account> <level>")
+		return
+	}
+	targetAcct := args[0]
+	val := args[1]
+	sec, err := strconv.ParseUint(val, 10, 8)
+	if err != nil || sec >= 4 { // SEC_CONSOLE = 4; HandleAccountSetSecLevelCommand rejects >= SEC_CONSOLE
+		s.sendSysMessage("Invalid security level (0-3).")
+		return
+	}
+	targetID := s.accountIDByName(ctx, targetAcct)
+	if targetID == 0 {
+		s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", targetAcct))
+		return
+	}
+	// can set security level only for target with less security and to less
+	// security than we have (also restricts setting our own security).
+	if !s.canModifyAccount(ctx, targetID) || uint8(sec) >= s.security {
+		if uint8(sec) >= s.security {
+			s.sendSysMessage("Your security level is too low.")
+		}
+		return
+	}
+	if s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
+		_, err = s.server.AuthStore.DB.ExecContext(ctx,
+			"INSERT INTO account_access (AccountID, SecurityLevel, RealmID) VALUES ((SELECT id FROM account WHERE UPPER(username) = UPPER(?)), ?, ?) ON CONFLICT(AccountID, RealmID) DO UPDATE SET SecurityLevel = ?",
+			targetAcct, sec, s.server.RealmID, sec)
+		if err != nil {
+			_, _ = s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account_access SET SecurityLevel = ? WHERE AccountID = (SELECT id FROM account WHERE UPPER(username) = UPPER(?))", sec, targetAcct)
+		}
+	}
+	s.sendSysMessage(fmt.Sprintf("Security level for %s set to %d.", targetAcct, sec))
+}
+
+// handleCmdAccountSetAddon mirrors HandleAccountSetAddonCommand
+// (cs_account.cpp:604): ".account set addon [<account>] <expansion>".
+func (s *session) handleCmdAccountSetAddon(ctx context.Context, args []string) {
+	var targetID uint32
+	var targetName string
+	var expansion uint8
+	switch len(args) {
+	case 1:
+		targetID = s.accountID
+		targetName = s.accountNameByID(ctx, targetID)
+		v, err := strconv.ParseUint(args[0], 10, 8)
+		if err != nil {
+			s.sendSysMessage("Syntax: .account set addon [<account>] <expansion>")
+			return
+		}
+		expansion = uint8(v)
+	case 2:
+		targetID = s.accountIDByName(ctx, args[0])
+		if targetID == 0 {
+			s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", args[0]))
+			return
+		}
+		targetName = args[0]
+		v, err := strconv.ParseUint(args[1], 10, 8)
+		if err != nil {
+			s.sendSysMessage("Syntax: .account set addon [<account>] <expansion>")
+			return
+		}
+		expansion = uint8(v)
+	default:
+		s.sendSysMessage("Syntax: .account set addon [<account>] <expansion>")
+		return
+	}
+	if targetID != s.accountID && !s.canModifyAccount(ctx, targetID) {
+		return
+	}
+	if s.server != nil && uint32(expansion) > s.server.Config.Expansion { // CONFIG_EXPANSION
+		s.sendSysMessage("Invalid expansion value.")
+		return
+	}
+	if db := s.authDB(); db != nil {
+		_, _ = db.ExecContext(ctx, "UPDATE account SET expansion = ? WHERE id = ?", expansion, targetID)
+	}
+	s.sendSysMessage(fmt.Sprintf("Expansion for account %s [%d] set to %d.", targetName, targetID, expansion))
+}
+
+// handleCmdAccountSetPassword mirrors HandleAccountSetPasswordCommand
+// (cs_account.cpp:747): ".account set password <account> <password> <confirm>".
+func (s *session) handleCmdAccountSetPassword(ctx context.Context, args []string) {
+	if len(args) < 3 {
+		s.sendSysMessage("Syntax: .account set password <account> <password> <confirm>")
+		return
+	}
+	targetID := s.accountIDByName(ctx, args[0])
+	if targetID == 0 {
+		s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", args[0]))
+		return
+	}
+	if !s.canModifyAccount(ctx, targetID) {
+		return
+	}
+	if args[1] != args[2] {
+		s.sendSysMessage("New passwords do not match.")
+		return
+	}
+	if msg := s.changeAccountPassword(ctx, targetID, args[1]); msg != "" {
+		s.sendSysMessage(msg)
+		return
+	}
+	s.sendSysMessage("Password changed.")
+}
+
+// handleCmdAccountSetSecEmail mirrors HandleAccountSetEmailCommand /
+// HandleAccountSetRegEmailCommand (cs_account.cpp:862/917):
+// ".account set sec email|regmail <account> <email> <confirm>".
+func (s *session) handleCmdAccountSetSecEmail(ctx context.Context, action string, args []string) {
+	if len(args) < 3 {
+		s.sendSysMessage("Syntax: .account set sec email|regmail <account> <email> <confirm>")
+		return
+	}
+	targetID := s.accountIDByName(ctx, args[0])
+	if targetID == 0 {
+		s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", args[0]))
+		return
+	}
+	if !s.canModifyAccount(ctx, targetID) {
+		return
+	}
+	if args[1] != args[2] {
+		s.sendSysMessage("New emails do not match.")
+		return
+	}
+	if msg := s.changeAccountEmail(ctx, targetID, args[1], strings.HasSuffix(action, "regmail")); msg != "" {
+		s.sendSysMessage(msg)
+		return
+	}
+	s.sendSysMessage("Email changed.")
+}
+
+// handleCmdAccountAddon mirrors HandleAccountAddonCommand (cs_account.cpp:217):
+// ".account addon <expansion>" sets the caller's own expansion level.
+func (s *session) handleCmdAccountAddon(ctx context.Context, args []string) {
+	if len(args) < 1 {
+		s.sendSysMessage("Syntax: .account addon <expansion>")
+		return
+	}
+	expansion, err := strconv.ParseUint(args[0], 10, 8)
+	if err != nil {
+		s.sendSysMessage("Syntax: .account addon <expansion>")
+		return
+	}
+	if s.server != nil && uint32(expansion) > s.server.Config.Expansion { // CONFIG_EXPANSION
+		s.sendSysMessage("Invalid expansion value.")
+		return
+	}
+	if db := s.authDB(); db != nil {
+		_, _ = db.ExecContext(ctx, "UPDATE account SET expansion = ? WHERE id = ?", uint8(expansion), s.accountID)
+	}
+	s.sendSysMessage(fmt.Sprintf("Expansion set to %d.", expansion))
+}
+
+// handleCmdAccountEmail mirrors HandleAccountEmailCommand (cs_account.cpp:430):
+// ".account email <oldEmail> <password> <newEmail> <confirmEmail>" changes
+// the caller's own email after verifying the old email and password.
+func (s *session) handleCmdAccountEmail(ctx context.Context, args []string) {
+	if len(args) < 4 {
+		s.sendSysMessage("Syntax: .account email <oldEmail> <password> <newEmail> <confirmEmail>")
+		return
+	}
+	oldEmail, password, email, emailConfirm := args[0], args[1], args[2], args[3]
+	db := s.authDB()
+	if db == nil {
+		return
+	}
+	var current string
+	if err := db.QueryRowContext(ctx, "SELECT email FROM account WHERE id = ?", s.accountID).Scan(&current); err != nil {
+		s.sendSysMessage("Could not change email.")
+		return
+	}
+	if upperOnlyLatin(current) != upperOnlyLatin(oldEmail) { // AccountMgr::CheckEmail
+		s.sendSysMessage("Wrong email.")
+		return
+	}
+	if !s.checkAccountPassword(ctx, s.accountID, password) {
+		s.sendSysMessage("Wrong old password.")
+		return
+	}
+	if upperOnlyLatin(email) == upperOnlyLatin(oldEmail) {
+		s.sendSysMessage("Old email is the new email.")
+		return
+	}
+	if email != emailConfirm {
+		s.sendSysMessage("New emails do not match.")
+		return
+	}
+	if msg := s.changeAccountEmail(ctx, s.accountID, email, false); msg != "" {
+		s.sendSysMessage(msg)
+		return
+	}
+	s.sendSysMessage("Email changed.")
+}
+
+// handleCmdAccountPassword mirrors HandleAccountPasswordCommand
+// (cs_account.cpp:499): ".account password <old> <new> <confirm>" changes
+// the caller's own password after verifying the old one. The optional
+// email-confirmation branch (CONFIG_ACC_PASSCHANGESEC) has no config
+// counterpart here, so it is treated as PW_NONE.
+func (s *session) handleCmdAccountPassword(ctx context.Context, args []string) {
+	if len(args) < 3 {
+		s.sendSysMessage("Syntax: .account password <oldPassword> <newPassword> <confirmPassword>")
+		return
+	}
+	oldPassword, newPassword, confirmPassword := args[0], args[1], args[2]
+	if !s.checkAccountPassword(ctx, s.accountID, oldPassword) {
+		s.sendSysMessage("Wrong old password.")
+		return
+	}
+	if newPassword != confirmPassword {
+		s.sendSysMessage("New passwords do not match.")
+		return
+	}
+	if msg := s.changeAccountPassword(ctx, s.accountID, newPassword); msg != "" {
+		s.sendSysMessage(msg)
+		return
+	}
+	s.sendSysMessage("Password changed.")
+}
+
+// handleCmdAccountLock mirrors HandleAccountLockIpCommand /
+// HandleAccountLockCountryCommand (cs_account.cpp:379/409):
+// ".account lock ip|country on|off".
+func (s *session) handleCmdAccountLock(ctx context.Context, args []string) {
+	if len(args) < 2 {
+		s.sendSysMessage("Syntax: .account lock ip|country on|off")
+		return
+	}
+	db := s.authDB()
+	if db == nil {
+		return
+	}
+	state := strings.ToLower(args[1]) == "on"
+	switch strings.ToLower(args[0]) {
+	case "ip":
+		var locked int
+		if state {
+			locked = 1
+		}
+		_, _ = db.ExecContext(ctx, "UPDATE account SET locked = ? WHERE id = ?", locked, s.accountID)
+		if state {
+			s.sendSysMessage("Account locked to your IP.")
+		} else {
+			s.sendSysMessage("Account unlocked.")
+		}
+	case "country":
+		country := "00"
+		if state {
+			country = ""
+			if s.server != nil && s.server.ipLocations != nil {
+				country = s.server.ipLocations.Country(s.remoteIP())
+			}
+			if country == "" {
+				s.sendSysMessage("No IP location information - account not locked.")
+				return
+			}
+		}
+		_, _ = db.ExecContext(ctx, "UPDATE account SET lock_country = ? WHERE id = ?", country, s.accountID)
+		if state {
+			s.sendSysMessage(fmt.Sprintf("Account locked to country %s.", country))
+		} else {
+			s.sendSysMessage("Account unlocked.")
+		}
+	default:
+		s.sendSysMessage("Syntax: .account lock ip|country on|off")
 	}
 }
 
@@ -1296,7 +1752,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("lookup", func(ctx context.Context, args []string) bool { s.handleCmdLookup(ctx, args); return true }, []string{"item", "spell", "creature", "npc", "tele", "quest"}, nil)
 	root.add("server", func(ctx context.Context, args []string) bool { s.handleCmdServer(ctx, args); return true }, []string{"info", "motd", "restart", "shutdown"}, nil)
 	root.add("character", func(ctx context.Context, args []string) bool { s.handleCmdCharacter(ctx, args); return true }, []string{"level", "rename", "customize", "changefaction", "changerace"}, map[string]string{"char": "character"})
-	root.add("account", func(ctx context.Context, args []string) bool { s.handleCmdAccount(ctx, args); return true }, []string{"set", "password"}, map[string]string{"acct": "account"})
+	root.add("account", func(ctx context.Context, args []string) bool { s.handleCmdAccount(ctx, args); return true }, []string{"set", "password", "addon", "email", "lock"}, map[string]string{"acct": "account"})
 	root.add("npc", func(ctx context.Context, args []string) bool { s.handleCmdNPC(ctx, args); return true }, []string{"info", "say", "yell"}, nil)
 	root.add("gobject", func(ctx context.Context, args []string) bool { s.handleCmdGObject(ctx, args); return true }, nil, map[string]string{"gob": "gobject"})
 	root.add("revive", func(ctx context.Context, args []string) bool { s.handleCmdRevive(ctx, args); return true }, nil, map[string]string{"res": "revive", "rev": "revive"})
