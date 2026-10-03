@@ -2796,6 +2796,1010 @@ func (n *commandNode) resolve(tokens []string) (*commandNode, commandTokens, int
 	return node, rewritten, consumed, nil, nodeDepth
 }
 
+// ---- ban_commandscript (cs_ban.cpp) ----
+
+// Ban modes mirror BanMode (SharedDefines.h:3487): BAN_ACCOUNT,
+// BAN_CHARACTER, BAN_IP.
+const (
+	banModeAccount = iota
+	banModeCharacter
+	banModeIP
+)
+
+// banResult mirrors BanReturn (SharedDefines.h:3493): BAN_SUCCESS,
+// BAN_SYNTAX_ERROR, BAN_NOTFOUND, BAN_EXISTS.
+type banResult int
+
+const (
+	banSuccess banResult = iota
+	banSyntaxError
+	banNotFound
+	banExists
+)
+
+// timeStringToSecs mirrors TimeStringToSecs (Util.cpp): parses duration
+// strings like "1d2h30m"; returns 0 on bad format.
+func timeStringToSecs(timestring string) uint32 {
+	var secs, buffer uint32
+	for i := 0; i < len(timestring); i++ {
+		c := timestring[i]
+		if c >= '0' && c <= '9' {
+			buffer *= 10
+			buffer += uint32(c - '0')
+			continue
+		}
+		var multiplier uint32
+		switch c {
+		case 'd':
+			multiplier = 86400 // DAY
+		case 'h':
+			multiplier = 3600 // HOUR
+		case 'm':
+			multiplier = 60 // MINUTE
+		case 's':
+			multiplier = 1
+		default:
+			return 0 // bad format
+		}
+		buffer *= multiplier
+		secs += buffer
+		buffer = 0
+	}
+	return secs
+}
+
+// secsToTimeStringShort mirrors secsToTimeString(secs,
+// TimeFormat::ShortText) (Util.cpp): "1d2h3m4s", omitting zero units.
+func secsToTimeStringShort(timeInSecs uint64) string {
+	secs := timeInSecs % 60
+	minutes := timeInSecs % 3600 / 60
+	hours := timeInSecs % 86400 / 3600
+	days := timeInSecs / 86400
+	var b strings.Builder
+	if days > 0 {
+		b.WriteString(strconv.FormatUint(days, 10))
+		b.WriteByte('d')
+	}
+	if hours > 0 {
+		b.WriteString(strconv.FormatUint(hours, 10))
+		b.WriteByte('h')
+	}
+	if minutes > 0 {
+		b.WriteString(strconv.FormatUint(minutes, 10))
+		b.WriteByte('m')
+	}
+	if secs > 0 || (days == 0 && hours == 0 && minutes == 0) {
+		b.WriteString(strconv.FormatUint(secs, 10))
+		b.WriteByte('s')
+	}
+	return b.String()
+}
+
+// cAtoi mirrors C's atoi (cs_ban.cpp gates durations with !atoi(durationStr)):
+// skips leading whitespace, takes an optional sign and the digit run,
+// returns 0 when no digits are present.
+func cAtoi(s string) int {
+	i := 0
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\v' || s[i] == '\f' || s[i] == '\r') {
+		i++
+	}
+	neg := false
+	if i < len(s) && (s[i] == '+' || s[i] == '-') {
+		neg = s[i] == '-'
+		i++
+	}
+	n, digits := 0, 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		n = n*10 + int(s[i]-'0')
+		digits++
+		i++
+	}
+	if digits == 0 {
+		return 0
+	}
+	if neg {
+		return -n
+	}
+	return n
+}
+
+// isBanIPAddress mirrors the IsIPAddress argument check of the .ban ip /
+// .baninfo ip / .unban ip handlers (documented deviation: net.ParseIP also
+// accepts IPv6, which the C++ IPv4-only check rejects).
+func isBanIPAddress(s string) bool {
+	return net.ParseIP(strings.TrimSpace(s)) != nil
+}
+
+// banAuthorName mirrors ChatHandler::GetSession()->GetPlayerName() with the
+// "Server" fallback (cs_ban.cpp HandleBanHelper).
+func (s *session) banAuthorName() string {
+	if s.player != nil && s.player.Name != "" {
+		return s.player.Name
+	}
+	return "Server"
+}
+
+// sessionForPlayerName mirrors ObjectAccessor::FindConnectedPlayerByName for
+// the ban command paths: the online session whose player has the name.
+func (s *session) sessionForPlayerName(name string) *session {
+	if s.server == nil {
+		return nil
+	}
+	s.server.sessionsMu.RLock()
+	defer s.server.sessionsMu.RUnlock()
+	for sess := range s.server.sessions {
+		if sess != nil && sess.player != nil && sess.player.Name == name {
+			return sess
+		}
+	}
+	return nil
+}
+
+// kickSession disconnects one session (WorldSession::KickPlayer equivalent
+// used by the account-delete path).
+func (s *session) kickSession(target *session) {
+	if s.server == nil || target == nil {
+		return
+	}
+	s.server.sessionsMu.Lock()
+	delete(s.server.sessions, target)
+	s.server.sessionsMu.Unlock()
+	if target.conn != nil {
+		_ = target.conn.Close()
+	}
+}
+
+// kickAccountSessions mirrors the World::BanAccount kick loop
+// (World.cpp:2866-2871): disconnects every session of the account except
+// the author's own session.
+func (s *session) kickAccountSessions(accountID uint32, author string) {
+	if s.server == nil {
+		return
+	}
+	var victims []*session
+	s.server.sessionsMu.RLock()
+	for sess := range s.server.sessions {
+		if sess == nil || sess.accountID != accountID {
+			continue
+		}
+		name := ""
+		if sess.player != nil {
+			name = sess.player.Name
+		}
+		if name == author {
+			continue
+		}
+		victims = append(victims, sess)
+	}
+	s.server.sessionsMu.RUnlock()
+	for _, v := range victims {
+		s.kickSession(v)
+	}
+}
+
+// worldBanAccount mirrors World::BanAccount (World.cpp:2785): refuses an
+// already-banned account, inserts the ban rows, and kicks affected sessions
+// (for IP, every session on that IP). An IP ban succeeds even when nobody is
+// affected yet.
+func (s *session) worldBanAccount(ctx context.Context, mode int, nameOrIP, durationStr, reason, author string) banResult {
+	if s.server == nil || s.server.AuthStore == nil || s.server.CharactersStore == nil {
+		return banSyntaxError
+	}
+	auth := s.server.AuthStore
+	durationSecs := timeStringToSecs(durationStr)
+	// AccountMgr::IsBannedAccount (AccountMgr.cpp): prevent banning an
+	// already banned account.
+	if mode == banModeAccount {
+		var id uint32
+		var uname string
+		if row, err := auth.QueryRowStatement(ctx, "LOGIN_SEL_ACCOUNT_BANNED_BY_USERNAME", nameOrIP); err == nil {
+			if err := row.Scan(&id, &uname); err == nil {
+				return banExists
+			}
+		}
+	}
+	var accounts []uint32
+	if mode == banModeIP {
+		// LOGIN_SEL_ACCOUNT_BY_IP: accounts to kick; the IP row is
+		// inserted even when the list is empty.
+		rows, err := auth.QueryStatement(ctx, "LOGIN_SEL_ACCOUNT_BY_IP", nameOrIP)
+		if err != nil {
+			return banSyntaxError
+		}
+		for rows.Next() {
+			var id uint32
+			var uname string
+			if err := rows.Scan(&id, &uname); err != nil {
+				rows.Close()
+				return banSyntaxError
+			}
+			accounts = append(accounts, id)
+		}
+		rows.Close()
+		// LOGIN_INS_IP_BANNED.
+		if _, err := auth.ExecStatement(ctx, "LOGIN_INS_IP_BANNED", nameOrIP, durationSecs, author, reason); err != nil {
+			return banSyntaxError
+		}
+	} else {
+		var id uint32
+		var err error
+		if mode == banModeAccount {
+			// LOGIN_SEL_ACCOUNT_ID_BY_NAME.
+			row, qerr := auth.QueryRowStatement(ctx, "LOGIN_SEL_ACCOUNT_ID_BY_NAME", nameOrIP)
+			if qerr == nil {
+				err = row.Scan(&id)
+			} else {
+				err = qerr
+			}
+		} else {
+			// CHAR_SEL_ACCOUNT_BY_NAME.
+			row, qerr := s.server.CharactersStore.QueryRowStatement(ctx, "CHAR_SEL_ACCOUNT_BY_NAME", nameOrIP)
+			if qerr == nil {
+				err = row.Scan(&id)
+			} else {
+				err = qerr
+			}
+		}
+		if err != nil || id == 0 {
+			return banNotFound // Nobody to ban
+		}
+		accounts = []uint32{id}
+		tx, err := auth.DB.BeginTx(ctx, nil)
+		if err != nil {
+			return banSyntaxError
+		}
+		for _, account := range accounts {
+			// LOGIN_UPD_ACCOUNT_NOT_BANNED: make sure there is only one
+			// active ban.
+			if _, err := auth.ExecStatementTx(ctx, tx, "LOGIN_UPD_ACCOUNT_NOT_BANNED", account); err != nil {
+				tx.Rollback()
+				return banSyntaxError
+			}
+			// LOGIN_INS_ACCOUNT_BANNED.
+			if _, err := auth.ExecStatementTx(ctx, tx, "LOGIN_INS_ACCOUNT_BANNED", account, durationSecs, author, reason); err != nil {
+				tx.Rollback()
+				return banSyntaxError
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return banSyntaxError
+		}
+	}
+	// Disconnect all affected players (for IP it can be several).
+	for _, account := range accounts {
+		s.kickAccountSessions(account, author)
+	}
+	return banSuccess
+}
+
+// worldBanCharacter mirrors World::BanCharacter (World.cpp:2907): bans the
+// character by name, kicking it when online.
+func (s *session) worldBanCharacter(ctx context.Context, name, durationStr, reason, author string) banResult {
+	if s.server == nil || s.server.CharactersStore == nil {
+		return banSyntaxError
+	}
+	chars := s.server.CharactersStore
+	durationSecs := timeStringToSecs(durationStr)
+	// ObjectAccessor::FindConnectedPlayerByName, else the character cache.
+	var guid uint64
+	online := s.sessionForPlayerName(name)
+	if online != nil {
+		guid = online.playerGUID
+	} else {
+		// sCharacterCache->GetCharacterGuidByName.
+		if err := chars.DB.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ?", name).Scan(&guid); err != nil || guid == 0 {
+			return banNotFound // Nobody to ban
+		}
+	}
+	// Use transaction in order to ensure the order of the queries.
+	tx, err := chars.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return banSyntaxError
+	}
+	// CHAR_UPD_CHARACTER_BAN + CHAR_INS_CHARACTER_BAN.
+	if _, err := chars.ExecStatementTx(ctx, tx, "CHAR_UPD_CHARACTER_BAN", guid); err != nil {
+		tx.Rollback()
+		return banSyntaxError
+	}
+	if _, err := chars.ExecStatementTx(ctx, tx, "CHAR_INS_CHARACTER_BAN", guid, durationSecs, author, reason); err != nil {
+		tx.Rollback()
+		return banSyntaxError
+	}
+	if err := tx.Commit(); err != nil {
+		return banSyntaxError
+	}
+	if online != nil {
+		s.kickSession(online)
+	}
+	return banSuccess
+}
+
+// worldRemoveBanAccount mirrors World::RemoveBanAccount (World.cpp:2878).
+func (s *session) worldRemoveBanAccount(ctx context.Context, mode int, nameOrIP string) bool {
+	if s.server == nil || s.server.AuthStore == nil || s.server.CharactersStore == nil {
+		return false
+	}
+	auth := s.server.AuthStore
+	if mode == banModeIP {
+		// LOGIN_DEL_IP_NOT_BANNED.
+		_, _ = auth.ExecStatement(ctx, "LOGIN_DEL_IP_NOT_BANNED", nameOrIP)
+		return true
+	}
+	var account uint32
+	if mode == banModeAccount {
+		// AccountMgr::GetId.
+		row, err := auth.QueryRowStatement(ctx, "LOGIN_SEL_ACCOUNT_ID_BY_NAME", nameOrIP)
+		if err != nil || row.Scan(&account) != nil {
+			return false
+		}
+	} else {
+		// sCharacterCache->GetCharacterAccountIdByName.
+		row, err := s.server.CharactersStore.QueryRowStatement(ctx, "CHAR_SEL_ACCOUNT_BY_NAME", nameOrIP)
+		if err != nil || row.Scan(&account) != nil {
+			return false
+		}
+	}
+	if account == 0 {
+		return false
+	}
+	// LOGIN_UPD_ACCOUNT_NOT_BANNED.
+	_, _ = auth.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_NOT_BANNED", account)
+	return true
+}
+
+// worldRemoveBanCharacter mirrors World::RemoveBanCharacter (World.cpp:2947).
+func (s *session) worldRemoveBanCharacter(ctx context.Context, name string) bool {
+	if s.server == nil || s.server.CharactersStore == nil {
+		return false
+	}
+	chars := s.server.CharactersStore
+	var guid uint64
+	if online := s.sessionForPlayerName(name); online != nil {
+		guid = online.playerGUID
+	} else {
+		if err := chars.DB.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ?", name).Scan(&guid); err != nil || guid == 0 {
+			return false
+		}
+	}
+	// CHAR_UPD_CHARACTER_BAN.
+	_, _ = chars.ExecStatement(ctx, "CHAR_UPD_CHARACTER_BAN", guid)
+	return true
+}
+
+// handleCmdBan dispatches ".ban account|character|playeraccount|ip"
+// (cs_ban.cpp banCommandTable), gating each arm on its RBAC permission.
+func (s *session) handleCmdBan(ctx context.Context, args []string) {
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .ban account|character|playeraccount|ip ...")
+		return
+	}
+	sub := strings.ToLower(args[0])
+	rest := args[1:]
+	var perm uint32
+	switch sub {
+	case "account":
+		perm = permissionCommandBanAccount
+	case "character":
+		perm = permissionCommandBanCharacter
+	case "playeraccount":
+		perm = permissionCommandBanPlayerAccount
+	case "ip":
+		perm = permissionCommandBanIP
+	default:
+		s.sendSysMessage("Syntax: .ban account|character|playeraccount|ip ...")
+		return
+	}
+	if !s.commandAllowed(ctx, perm) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	switch sub {
+	case "account":
+		s.handleBanHelper(ctx, banModeAccount, rest)
+	case "character":
+		s.handleCmdBanCharacter(ctx, rest)
+	case "playeraccount":
+		s.handleBanHelper(ctx, banModeCharacter, rest)
+	case "ip":
+		s.handleBanHelper(ctx, banModeIP, rest)
+	}
+}
+
+// handleBanHelper mirrors HandleBanHelper (cs_ban.cpp:183): parses
+// "<name|ip> <duration> <reason...>", validates per mode, and applies
+// World::BanAccount, reporting BAN_SUCCESS / BAN_NOTFOUND / BAN_EXISTS.
+func (s *session) handleBanHelper(ctx context.Context, mode int, args []string) {
+	syntax := "Syntax: .ban account|playeraccount <name> <duration> <reason>"
+	if mode == banModeIP {
+		syntax = "Syntax: .ban ip <ip> <duration> <reason>"
+	}
+	if len(args) < 3 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	nameOrIP := args[0]
+	durationStr := args[1]
+	reason := strings.Join(args[2:], " ")
+	// C++: if (!durationStr || !atoi(durationStr)) return false.
+	if cAtoi(durationStr) == 0 || reason == "" {
+		s.sendSysMessage(syntax)
+		return
+	}
+	switch mode {
+	case banModeAccount:
+		nameOrIP = upperOnlyLatin(nameOrIP)
+	case banModeCharacter:
+		if nameOrIP == "" || !utf8.ValidString(nameOrIP) {
+			// LANG_PLAYER_NOT_FOUND (499).
+			s.sendSysMessage("Player not found.")
+			return
+		}
+		nameOrIP = normalizePlayerName(nameOrIP)
+	case banModeIP:
+		if !isBanIPAddress(nameOrIP) {
+			return // C++ returns false silently
+		}
+	}
+	author := s.banAuthorName()
+	switch s.worldBanAccount(ctx, mode, nameOrIP, durationStr, reason, author) {
+	case banSuccess:
+		// The CONFIG_SHOW_BAN_IN_WORLD branch (SendWorldText with
+		// LANG_BAN_ACCOUNT_YOUBANNEDMESSAGE_WORLD 11006 /
+		// LANG_BAN_ACCOUNT_YOUPERMBANNEDMESSAGE_WORLD 11007) is not
+		// wired: no SendWorldText/SendGlobalText broadcast bridge exists
+		// in Go (same gap as the world_chat audit), so the handler-only
+		// message is always emitted.
+		if cAtoi(durationStr) > 0 {
+			// LANG_BAN_YOUBANNED (408).
+			s.sendSysMessage(fmt.Sprintf("You have banned %s for %s, reason: %s.", nameOrIP, secsToTimeStringShort(uint64(timeStringToSecs(durationStr))), reason))
+		} else {
+			// LANG_BAN_YOUPERMBANNED (409).
+			s.sendSysMessage(fmt.Sprintf("You have permanently banned %s, reason: %s.", nameOrIP, reason))
+		}
+	case banSyntaxError:
+		s.sendSysMessage(syntax)
+	case banNotFound:
+		// LANG_BAN_NOTFOUND (410).
+		kind := "account"
+		if mode == banModeCharacter {
+			kind = "character"
+		} else if mode == banModeIP {
+			kind = "ip"
+		}
+		s.sendSysMessage(fmt.Sprintf("%s %s not found.", kind, nameOrIP))
+	case banExists:
+		// LANG_BAN_EXISTS (1188).
+		s.sendSysMessage("Account is already banned.")
+	}
+}
+
+// handleCmdBanCharacter processes ".ban character <name> <duration> <reason>"
+// (cs_ban.cpp HandleBanCharacterCommand).
+func (s *session) handleCmdBanCharacter(ctx context.Context, args []string) {
+	if len(args) < 3 {
+		s.sendSysMessage("Syntax: .ban character <name> <duration> <reason>")
+		return
+	}
+	name := args[0]
+	durationStr := args[1]
+	reason := strings.Join(args[2:], " ")
+	if cAtoi(durationStr) == 0 || reason == "" {
+		s.sendSysMessage("Syntax: .ban character <name> <duration> <reason>")
+		return
+	}
+	if name == "" || !utf8.ValidString(name) {
+		// LANG_PLAYER_NOT_FOUND (499).
+		s.sendSysMessage("Player not found.")
+		return
+	}
+	name = normalizePlayerName(name)
+	author := s.banAuthorName()
+	switch s.worldBanCharacter(ctx, name, durationStr, reason, author) {
+	case banSuccess:
+		// CONFIG_SHOW_BAN_IN_WORLD branch not wired (see handleBanHelper).
+		if cAtoi(durationStr) > 0 {
+			// LANG_BAN_YOUBANNED (408).
+			s.sendSysMessage(fmt.Sprintf("You have banned %s for %s, reason: %s.", name, secsToTimeStringShort(uint64(timeStringToSecs(durationStr))), reason))
+		} else {
+			// LANG_BAN_YOUPERMBANNED (409).
+			s.sendSysMessage(fmt.Sprintf("You have permanently banned %s, reason: %s.", name, reason))
+		}
+	case banNotFound:
+		// LANG_BAN_NOTFOUND (410).
+		s.sendSysMessage(fmt.Sprintf("character %s not found.", name))
+	default:
+		s.sendSysMessage("Syntax: .ban character <name> <duration> <reason>")
+	}
+}
+
+// handleCmdBanInfo dispatches ".baninfo account|character|ip"
+// (cs_ban.cpp baninfoCommandTable).
+func (s *session) handleCmdBanInfo(ctx context.Context, args []string) {
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .baninfo account|character|ip ...")
+		return
+	}
+	sub := strings.ToLower(args[0])
+	rest := args[1:]
+	var perm uint32
+	switch sub {
+	case "account":
+		perm = permissionCommandBanInfoAccount
+	case "character":
+		perm = permissionCommandBanInfoCharacter
+	case "ip":
+		perm = permissionCommandBanInfoIP
+	default:
+		s.sendSysMessage("Syntax: .baninfo account|character|ip ...")
+		return
+	}
+	if !s.commandAllowed(ctx, perm) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	switch sub {
+	case "account":
+		s.handleCmdBanInfoAccount(ctx, rest)
+	case "character":
+		s.handleCmdBanInfoCharacter(ctx, rest)
+	case "ip":
+		s.handleCmdBanInfoIP(ctx, rest)
+	}
+}
+
+// banHistoryEntry is one row of account_banned / character_banned for the
+// baninfo history output.
+type banHistoryEntry struct {
+	bandate  int64
+	duration uint64 // unbandate-bandate; 0 = permanent
+	active   bool
+	unban    int64
+	reason   string
+	by       string
+}
+
+// sendBanHistory mirrors the HandleBanInfoHelper / character-info row loop
+// (cs_ban.cpp): LANG_BANINFO_BANHISTORY (417) header followed by one
+// LANG_BANINFO_HISTORYENTRY (418) line per row. bandateFmt matches the C++
+// source: FROM_UNIXTIME ("2006-01-02 15:04:05") for accounts,
+// TimeToTimestampStr ("2006-01-02_15-04-05") for characters.
+func (s *session) sendBanHistory(name string, entries []banHistoryEntry, bandateFmt string) {
+	// LANG_BANINFO_BANHISTORY (417).
+	s.sendSysMessage(fmt.Sprintf("Ban history for %s:", name))
+	now := timeNow()
+	for _, e := range entries {
+		active := e.active && (e.duration == 0 || e.unban >= now)
+		banTime := secsToTimeStringShort(e.duration)
+		if e.duration == 0 {
+			// LANG_BANINFO_INFINITE (419).
+			banTime = "Infinite"
+		}
+		yesNo := "No" // LANG_NO (422)
+		if active {
+			yesNo = "Yes" // LANG_YES (421)
+		}
+		// LANG_BANINFO_HISTORYENTRY (418).
+		s.sendSysMessage(fmt.Sprintf("%s | %s | active: %s | %s | by %s",
+			time.Unix(e.bandate, 0).Format(bandateFmt), banTime, yesNo, e.reason, e.by))
+	}
+}
+
+// collectBanHistory reads the ban rows for scanBanHistory.
+func collectBanHistory(rows *sql.Rows) ([]banHistoryEntry, error) {
+	var entries []banHistoryEntry
+	for rows.Next() {
+		var e banHistoryEntry
+		var active int
+		if err := rows.Scan(&e.bandate, &e.duration, &active, &e.unban, &e.reason, &e.by); err != nil {
+			return nil, err
+		}
+		e.active = active != 0
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
+}
+
+// handleCmdBanInfoAccount processes ".baninfo account <name>"
+// (cs_ban.cpp HandleBanInfoAccountCommand / HandleBanInfoHelper).
+func (s *session) handleCmdBanInfoAccount(ctx context.Context, args []string) {
+	if s.server == nil || s.server.AuthStore == nil {
+		return
+	}
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .baninfo account <name>")
+		return
+	}
+	// C++ takes the whole remainder as the account name.
+	accountName := upperOnlyLatin(strings.Join(args, " "))
+	var accountID uint32
+	row, err := s.server.AuthStore.QueryRowStatement(ctx, "LOGIN_SEL_ACCOUNT_ID_BY_NAME", accountName)
+	if err != nil || row.Scan(&accountID) != nil || accountID == 0 {
+		// LANG_ACCOUNT_NOT_EXIST (413).
+		s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", accountName))
+		return
+	}
+	// C++ raw query: SELECT FROM_UNIXTIME(bandate), unbandate-bandate,
+	// active, unbandate, banreason, bannedby FROM account_banned
+	// WHERE id = ? ORDER BY bandate ASC (FROM_UNIXTIME is MySQL-only; the
+	// timestamp is formatted in Go as local time instead).
+	rows, err := s.server.AuthStore.DB.QueryContext(ctx, "SELECT bandate, unbandate-bandate, active, unbandate, banreason, bannedby FROM account_banned WHERE id = ? ORDER BY bandate ASC", accountID)
+	if err != nil {
+		return
+	}
+	entries, err := collectBanHistory(rows)
+	rows.Close()
+	if err != nil {
+		return
+	}
+	if len(entries) == 0 {
+		// LANG_BANINFO_NOACCOUNTBAN (416).
+		s.sendSysMessage(fmt.Sprintf("No ban history for account %s.", accountName))
+		return
+	}
+	s.sendBanHistory(accountName, entries, "2006-01-02 15:04:05")
+}
+
+// handleCmdBanInfoCharacter processes ".baninfo character <name>"
+// (cs_ban.cpp HandleBanInfoCharacterCommand).
+func (s *session) handleCmdBanInfoCharacter(ctx context.Context, args []string) {
+	if s.server == nil || s.server.CharactersStore == nil {
+		return
+	}
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .baninfo character <name>")
+		return
+	}
+	name := args[0]
+	if name == "" || !utf8.ValidString(name) {
+		// LANG_BANINFO_NOCHARACTER (414).
+		s.sendSysMessage("Character not found.")
+		return
+	}
+	name = normalizePlayerName(name)
+	var guid uint64
+	if online := s.sessionForPlayerName(name); online != nil {
+		// ObjectAccessor::FindPlayerByName.
+		guid = online.playerGUID
+	} else {
+		// sCharacterCache->GetCharacterGuidByName.
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ?", name).Scan(&guid); err != nil || guid == 0 {
+			// LANG_BANINFO_NOCHARACTER (414).
+			s.sendSysMessage("Character not found.")
+			return
+		}
+	}
+	// CHAR_SEL_BANINFO.
+	rows, err := s.server.CharactersStore.QueryStatement(ctx, "CHAR_SEL_BANINFO", guid)
+	if err != nil {
+		return
+	}
+	entries, err := collectBanHistory(rows)
+	rows.Close()
+	if err != nil {
+		return
+	}
+	if len(entries) == 0 {
+		// LANG_CHAR_NOT_BANNED (1136).
+		s.sendSysMessage(fmt.Sprintf("%s is not banned.", name))
+		return
+	}
+	s.sendBanHistory(name, entries, "2006-01-02_15-04-05")
+}
+
+// handleCmdBanInfoIP processes ".baninfo ip <ip>"
+// (cs_ban.cpp HandleBanInfoIPCommand).
+func (s *session) handleCmdBanInfoIP(ctx context.Context, args []string) {
+	if s.server == nil || s.server.AuthStore == nil {
+		return
+	}
+	if len(args) == 0 || !isBanIPAddress(args[0]) {
+		return // C++ returns false silently
+	}
+	ip := args[0]
+	// C++ raw query: SELECT ip, FROM_UNIXTIME(bandate),
+	// FROM_UNIXTIME(unbandate), unbandate-UNIX_TIMESTAMP(), banreason,
+	// bannedby, unbandate-bandate FROM ip_banned WHERE ip = ?.
+	var bandate, unbandate int64
+	var reason, by string
+	err := s.server.AuthStore.DB.QueryRowContext(ctx, "SELECT bandate, unbandate, banreason, bannedby FROM ip_banned WHERE ip = ?", ip).Scan(&bandate, &unbandate, &reason, &by)
+	if err != nil {
+		// LANG_BANINFO_NOIP (415).
+		s.sendSysMessage("IP address is not banned.")
+		return
+	}
+	permanent := unbandate == bandate
+	unbanStr := "Never"   // LANG_BANINFO_NEVER (420)
+	banTime := "Infinite" // LANG_BANINFO_INFINITE (419)
+	if !permanent {
+		unbanStr = time.Unix(unbandate, 0).Format("2006-01-02 15:04:05")
+		remaining := unbandate - timeNow()
+		if remaining < 0 {
+			remaining = 0
+		}
+		banTime = secsToTimeStringShort(uint64(remaining))
+	}
+	// LANG_BANINFO_IPENTRY (423).
+	s.sendSysMessage(fmt.Sprintf("%s | banned: %s | unban: %s | duration: %s | %s | by %s",
+		ip, time.Unix(bandate, 0).Format("2006-01-02 15:04:05"), unbanStr, banTime, reason, by))
+}
+
+// handleCmdBanList dispatches ".banlist account|character|ip [filter]"
+// (cs_ban.cpp banlistCommandTable). The Go command path is always a
+// session, so only the C++ GetSession() short-output branches are ported
+// (same treatment as the arena lookup port).
+func (s *session) handleCmdBanList(ctx context.Context, args []string) {
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .banlist account|character|ip [filter]")
+		return
+	}
+	sub := strings.ToLower(args[0])
+	rest := args[1:]
+	var perm uint32
+	switch sub {
+	case "account":
+		perm = permissionCommandBanListAccount
+	case "character":
+		perm = permissionCommandBanListCharacter
+	case "ip":
+		perm = permissionCommandBanListIP
+	default:
+		s.sendSysMessage("Syntax: .banlist account|character|ip [filter]")
+		return
+	}
+	if !s.commandAllowed(ctx, perm) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	switch sub {
+	case "account":
+		s.handleCmdBanListAccount(ctx, rest)
+	case "character":
+		s.handleCmdBanListCharacter(ctx, rest)
+	case "ip":
+		s.handleCmdBanListIP(ctx, rest)
+	}
+}
+
+// handleCmdBanListAccount processes ".banlist account [filter]"
+// (cs_ban.cpp HandleBanListAccountCommand).
+func (s *session) handleCmdBanListAccount(ctx context.Context, args []string) {
+	if s.server == nil || s.server.AuthStore == nil {
+		return
+	}
+	auth := s.server.AuthStore
+	// LOGIN_DEL_EXPIRED_IP_BANS runs at the top of the handler.
+	_, _ = auth.ExecStatement(ctx, "LOGIN_DEL_EXPIRED_IP_BANS")
+	var filter string
+	if len(args) > 0 {
+		filter = args[0]
+	}
+	var rows *sql.Rows
+	var err error
+	if filter == "" {
+		// LOGIN_SEL_ACCOUNT_BANNED_ALL.
+		rows, err = auth.QueryStatement(ctx, "LOGIN_SEL_ACCOUNT_BANNED_ALL")
+	} else {
+		// LOGIN_SEL_ACCOUNT_BANNED_BY_FILTER.
+		rows, err = auth.QueryStatement(ctx, "LOGIN_SEL_ACCOUNT_BANNED_BY_FILTER", filter)
+	}
+	if err != nil {
+		return
+	}
+	var ids []uint32
+	for rows.Next() {
+		var id uint32
+		var uname string
+		if err := rows.Scan(&id, &uname); err != nil {
+			rows.Close()
+			return
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if len(ids) == 0 {
+		// LANG_BANLIST_NOACCOUNT (425).
+		s.sendSysMessage("No banned accounts found.")
+		return
+	}
+	// LANG_BANLIST_MATCHINGACCOUNT (428).
+	s.sendSysMessage("Matching banned accounts:")
+	for _, id := range ids {
+		var uname string
+		if err := auth.DB.QueryRowContext(ctx, "SELECT account.username FROM account, account_banned WHERE account_banned.id = ? AND account_banned.id = account.id", id).Scan(&uname); err == nil {
+			s.sendSysMessage(uname)
+		}
+	}
+}
+
+// handleCmdBanListCharacter processes ".banlist character <filter>"
+// (cs_ban.cpp HandleBanListCharacterCommand).
+func (s *session) handleCmdBanListCharacter(ctx context.Context, args []string) {
+	if s.server == nil || s.server.CharactersStore == nil {
+		return
+	}
+	chars := s.server.CharactersStore
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .banlist character <filter>")
+		return
+	}
+	// CHAR_SEL_GUID_BY_NAME_FILTER.
+	rows, err := chars.QueryStatement(ctx, "CHAR_SEL_GUID_BY_NAME_FILTER", args[0])
+	if err != nil {
+		return
+	}
+	var guids []uint64
+	for rows.Next() {
+		var guid uint64
+		var name string
+		if err := rows.Scan(&guid, &name); err != nil {
+			rows.Close()
+			return
+		}
+		guids = append(guids, guid)
+	}
+	rows.Close()
+	if len(guids) == 0 {
+		// LANG_BANLIST_NOCHARACTER (426).
+		s.sendSysMessage("No banned characters found.")
+		return
+	}
+	// LANG_BANLIST_MATCHINGCHARACTER (1131).
+	s.sendSysMessage("Matching banned characters:")
+	for _, guid := range guids {
+		// CHAR_SEL_BANNED_NAME.
+		row, err := chars.QueryRowStatement(ctx, "CHAR_SEL_BANNED_NAME", guid)
+		if err != nil {
+			continue
+		}
+		var name string
+		if err := row.Scan(&name); err == nil {
+			s.sendSysMessage(name)
+		}
+	}
+}
+
+// handleCmdBanListIP processes ".banlist ip [filter]"
+// (cs_ban.cpp HandleBanListIPCommand).
+func (s *session) handleCmdBanListIP(ctx context.Context, args []string) {
+	if s.server == nil || s.server.AuthStore == nil {
+		return
+	}
+	auth := s.server.AuthStore
+	// LOGIN_DEL_EXPIRED_IP_BANS runs at the top of the handler.
+	_, _ = auth.ExecStatement(ctx, "LOGIN_DEL_EXPIRED_IP_BANS")
+	var filter string
+	if len(args) > 0 {
+		filter = args[0]
+	}
+	var rows *sql.Rows
+	var err error
+	if filter == "" {
+		// LOGIN_SEL_IP_BANNED_ALL.
+		rows, err = auth.QueryStatement(ctx, "LOGIN_SEL_IP_BANNED_ALL")
+	} else {
+		// LOGIN_SEL_IP_BANNED_BY_IP.
+		rows, err = auth.QueryStatement(ctx, "LOGIN_SEL_IP_BANNED_BY_IP", filter)
+	}
+	if err != nil {
+		return
+	}
+	var ips []string
+	for rows.Next() {
+		var ip string
+		var bandate, unbandate int64
+		var by, reason string
+		if err := rows.Scan(&ip, &bandate, &unbandate, &by, &reason); err != nil {
+			rows.Close()
+			return
+		}
+		ips = append(ips, ip)
+	}
+	rows.Close()
+	if len(ips) == 0 {
+		// LANG_BANLIST_NOIP (424).
+		s.sendSysMessage("No banned IPs found.")
+		return
+	}
+	// LANG_BANLIST_MATCHINGIP (427).
+	s.sendSysMessage("Matching banned IPs:")
+	for _, ip := range ips {
+		s.sendSysMessage(ip)
+	}
+}
+
+// handleCmdUnBan dispatches ".unban account|character|playeraccount|ip"
+// (cs_ban.cpp unbanCommandTable).
+func (s *session) handleCmdUnBan(ctx context.Context, args []string) {
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .unban account|character|playeraccount|ip ...")
+		return
+	}
+	sub := strings.ToLower(args[0])
+	rest := args[1:]
+	var perm uint32
+	switch sub {
+	case "account":
+		perm = permissionCommandUnBanAccount
+	case "character":
+		perm = permissionCommandUnBanCharacter
+	case "playeraccount":
+		perm = permissionCommandUnBanPlayerAccount
+	case "ip":
+		perm = permissionCommandUnBanIP
+	default:
+		s.sendSysMessage("Syntax: .unban account|character|playeraccount|ip ...")
+		return
+	}
+	if !s.commandAllowed(ctx, perm) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	switch sub {
+	case "account":
+		s.handleUnBanHelper(ctx, banModeAccount, rest)
+	case "character":
+		s.handleCmdUnBanCharacter(ctx, rest)
+	case "playeraccount":
+		s.handleUnBanHelper(ctx, banModeCharacter, rest)
+	case "ip":
+		s.handleUnBanHelper(ctx, banModeIP, rest)
+	}
+}
+
+// handleUnBanHelper mirrors HandleUnBanHelper (cs_ban.cpp:683).
+func (s *session) handleUnBanHelper(ctx context.Context, mode int, args []string) {
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .unban account|playeraccount|ip <name|ip>")
+		return
+	}
+	nameOrIP := args[0]
+	switch mode {
+	case banModeAccount:
+		nameOrIP = upperOnlyLatin(nameOrIP)
+	case banModeCharacter:
+		if nameOrIP == "" || !utf8.ValidString(nameOrIP) {
+			// LANG_PLAYER_NOT_FOUND (499).
+			s.sendSysMessage("Player not found.")
+			return
+		}
+		nameOrIP = normalizePlayerName(nameOrIP)
+	case banModeIP:
+		if !isBanIPAddress(nameOrIP) {
+			return // C++ returns false silently
+		}
+	}
+	// World::RemoveBanAccount (World.cpp:2878).
+	if s.worldRemoveBanAccount(ctx, mode, nameOrIP) {
+		// LANG_UNBAN_UNBANNED (411).
+		s.sendSysMessage(fmt.Sprintf("%s has been unbanned.", nameOrIP))
+	} else {
+		// LANG_UNBAN_ERROR (412).
+		s.sendSysMessage(fmt.Sprintf("Failed to unban %s.", nameOrIP))
+	}
+}
+
+// handleCmdUnBanCharacter processes ".unban character <name>"
+// (cs_ban.cpp HandleUnBanCharacterCommand).
+func (s *session) handleCmdUnBanCharacter(ctx context.Context, args []string) {
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .unban character <name>")
+		return
+	}
+	name := args[0]
+	if name == "" || !utf8.ValidString(name) {
+		// LANG_PLAYER_NOT_FOUND (499).
+		s.sendSysMessage("Player not found.")
+		return
+	}
+	name = normalizePlayerName(name)
+	// World::RemoveBanCharacter (World.cpp:2947); no success message in C++.
+	if !s.worldRemoveBanCharacter(ctx, name) {
+		// LANG_PLAYER_NOT_FOUND (499).
+		s.sendSysMessage("Player not found.")
+		return
+	}
+}
+
 // buildCommandTree assembles the command hierarchy with the canonical
 // TrinityCore names; aliases mark non-prefix spellings.
 func (s *session) buildCommandTree() *commandNode {
@@ -2816,6 +3820,10 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("account", func(ctx context.Context, args []string) bool { s.handleCmdAccount(ctx, args); return true }, []string{"set", "password", "addon", "email", "lock"}, map[string]string{"acct": "account"})
 	root.add("achievement", func(ctx context.Context, args []string) bool { s.handleCmdAchievement(ctx, args); return true }, []string{"add"}, nil)
 	root.add("arena", func(ctx context.Context, args []string) bool { s.handleCmdArena(ctx, args); return true }, []string{"create", "disband", "rename", "captain", "info", "lookup"}, nil)
+	root.add("ban", func(ctx context.Context, args []string) bool { s.handleCmdBan(ctx, args); return true }, []string{"account", "character", "playeraccount", "ip"}, nil)
+	root.add("baninfo", func(ctx context.Context, args []string) bool { s.handleCmdBanInfo(ctx, args); return true }, []string{"account", "character", "ip"}, nil)
+	root.add("banlist", func(ctx context.Context, args []string) bool { s.handleCmdBanList(ctx, args); return true }, []string{"account", "character", "ip"}, nil)
+	root.add("unban", func(ctx context.Context, args []string) bool { s.handleCmdUnBan(ctx, args); return true }, []string{"account", "character", "playeraccount", "ip"}, nil)
 	root.add("npc", func(ctx context.Context, args []string) bool { s.handleCmdNPC(ctx, args); return true }, []string{"info", "say", "yell"}, nil)
 	root.add("gobject", func(ctx context.Context, args []string) bool { s.handleCmdGObject(ctx, args); return true }, nil, map[string]string{"gob": "gobject"})
 	root.add("revive", func(ctx context.Context, args []string) bool { s.handleCmdRevive(ctx, args); return true }, nil, map[string]string{"res": "revive", "rev": "revive"})

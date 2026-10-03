@@ -66,6 +66,48 @@ const permissionCommandArenaLookup uint32 = 237
 // permissionCommandArenaRename mirrors rbac::RBAC_PERM_COMMAND_ARENA_RENAME (RBAC.h:152).
 const permissionCommandArenaRename uint32 = 238
 
+// permissionCommandBanAccount mirrors rbac::RBAC_PERM_COMMAND_BAN_ACCOUNT (RBAC.h:154).
+const permissionCommandBanAccount uint32 = 240
+
+// permissionCommandBanCharacter mirrors rbac::RBAC_PERM_COMMAND_BAN_CHARACTER (RBAC.h:155).
+const permissionCommandBanCharacter uint32 = 241
+
+// permissionCommandBanIP mirrors rbac::RBAC_PERM_COMMAND_BAN_IP (RBAC.h:156).
+const permissionCommandBanIP uint32 = 242
+
+// permissionCommandBanPlayerAccount mirrors rbac::RBAC_PERM_COMMAND_BAN_PLAYERACCOUNT (RBAC.h:157).
+const permissionCommandBanPlayerAccount uint32 = 243
+
+// permissionCommandBanInfoAccount mirrors rbac::RBAC_PERM_COMMAND_BANINFO_ACCOUNT (RBAC.h:159).
+const permissionCommandBanInfoAccount uint32 = 245
+
+// permissionCommandBanInfoCharacter mirrors rbac::RBAC_PERM_COMMAND_BANINFO_CHARACTER (RBAC.h:160).
+const permissionCommandBanInfoCharacter uint32 = 246
+
+// permissionCommandBanInfoIP mirrors rbac::RBAC_PERM_COMMAND_BANINFO_IP (RBAC.h:161).
+const permissionCommandBanInfoIP uint32 = 247
+
+// permissionCommandBanListAccount mirrors rbac::RBAC_PERM_COMMAND_BANLIST_ACCOUNT (RBAC.h:163).
+const permissionCommandBanListAccount uint32 = 249
+
+// permissionCommandBanListCharacter mirrors rbac::RBAC_PERM_COMMAND_BANLIST_CHARACTER (RBAC.h:164).
+const permissionCommandBanListCharacter uint32 = 250
+
+// permissionCommandBanListIP mirrors rbac::RBAC_PERM_COMMAND_BANLIST_IP (RBAC.h:165).
+const permissionCommandBanListIP uint32 = 251
+
+// permissionCommandUnBanAccount mirrors rbac::RBAC_PERM_COMMAND_UNBAN_ACCOUNT (RBAC.h:167).
+const permissionCommandUnBanAccount uint32 = 253
+
+// permissionCommandUnBanCharacter mirrors rbac::RBAC_PERM_COMMAND_UNBAN_CHARACTER (RBAC.h:168).
+const permissionCommandUnBanCharacter uint32 = 254
+
+// permissionCommandUnBanIP mirrors rbac::RBAC_PERM_COMMAND_UNBAN_IP (RBAC.h:169).
+const permissionCommandUnBanIP uint32 = 255
+
+// permissionCommandUnBanPlayerAccount mirrors rbac::RBAC_PERM_COMMAND_UNBAN_PLAYERACCOUNT (RBAC.h:170).
+const permissionCommandUnBanPlayerAccount uint32 = 256
+
 func accountHasPermission(ctx context.Context, db *sql.DB, accountID, realmID uint32, security uint8, permissionID uint32) (bool, error) {
 	granted := make(map[uint32]struct{})
 	denied := make(map[uint32]struct{})
