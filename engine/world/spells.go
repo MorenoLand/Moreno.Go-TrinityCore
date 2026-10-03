@@ -1521,6 +1521,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if s.player == nil {
 		return
 	}
+	// Spell::_cast (Spell.cpp:3323): the cast holds the spellmod taking
+	// window for its whole execution; the deferred end mirrors the _cast
+	// tail and failure exits (Spell.cpp:3418, 3519).
+	s.beginSpellModTaking()
+	defer s.endSpellModTaking()
 	var completedCast *activeCastState
 	s.castMu.Lock()
 	if s.activeCast != nil && s.activeCast.CastID == castID && s.activeCast.SpellID == spellID {
@@ -2475,6 +2480,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				timeDelayMs = 4000
 			}
 			time.AfterFunc(time.Duration(timeDelayMs)*time.Millisecond, func() {
+				// Spell::handle_delayed (Spell.cpp:3640): the delayed phase
+				// holds the taking window around target processing; the
+				// deferred end mirrors the tail (Spell.cpp:3697).
+				s.beginSpellModTaking()
+				defer s.endSpellModTaking()
 				applyEffects(context.Background())
 				s.consumeExtraAttacks(context.Background(), spellExtraAttackVictim(target, explicitUnitGUID))
 				s.procSpellFinishAuraTriggers(context.Background(), spell)
@@ -2486,8 +2496,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			//     re-resolve or fail the cast when a target vanished
 			//     mid-flight (no pointer model).
 			//   - SetSpellModTakingSpell(true/false) around the delayed
-			//     ticks: the standing spellmod taking-spell gap
-			//     (spellmod.go).
+			//     ticks (Spell.cpp:3640/3697): bridged — the arrival closure
+			//     opens its own taking context (spellmod.go); it starts
+			//     fresh rather than inheriting the _cast registrations
+			//     because Go has no single cast object spanning the phases
+			//     (C++ keeps Spell::m_appliedMods for the Spell's whole
+			//     lifetime). Noted delta.
 			//   - Per-target TimeDelay waves: C++ staggers multi-target
 			//     landings by distance (single_missile when HasDst(),
 			//     else per-target t_offset waves with next_time
@@ -3401,6 +3415,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	if s == nil || s.player == nil || spellID == 0 {
 		return
 	}
+	// C++ Unit::CastSpell(id, true) runs Spell::cast, whose re-entrant
+	// wrapper (Spell.cpp:3266-3280) pushes a fresh taking spell for the
+	// nested cast and restores the outer one after; the context stack
+	// reproduces that, so triggered casts register their mods on their
+	// own context.
+	s.beginSpellModTaking()
+	defer s.endSpellModTaking()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -7328,9 +7349,9 @@ func buildSpellCooldown(playerGUID uint64, spellID uint32, cooldownDurationMs ui
 // C++ gate is modOwner->GetCommandStatus(CHEAT_COOLDOWN) with
 // m_originalCaster non-null, both vacuous here: finishSpellCast always
 // runs on the casting player session. The SetSpellModTakingSpell(this,
-// false) preceding it and SetExecutedCurrently(false) following it have
-// no Go model (Go has no cast Spell object on the session; standing
-// spellmod gap, spellmod.go).
+// false) preceding it is covered by finishSpellCast's deferred
+// endSpellModTaking (the _cast tail window, spellmod.go);
+// SetExecutedCurrently(false) has no Go model (no cast Spell object).
 func (s *session) resetCastCooldownCheat(spellID uint32) {
 	if s == nil || s.player == nil || s.player.ActiveCheats&cheatCooldown == 0 {
 		return

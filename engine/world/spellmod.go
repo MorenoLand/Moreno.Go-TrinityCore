@@ -72,6 +72,94 @@ type spellModFrame struct {
 	payload []byte
 }
 
+// spellModTakingContext mirrors one activation of Player::m_spellModTakingSpell
+// (Player.cpp:21436-21445): the taking cast's registry of "used" auras
+// (Spell::m_appliedMods, Spell.h:527), populated by Player::ApplyModToSpell
+// (Player.cpp:21415-21426). Go has no cast Spell object, so the taking spell
+// is a session-scoped stack of contexts: Spell::cast (Spell.cpp:3266-3280)
+// pushes a fresh taking spell for a nested (triggered) cast and restores the
+// outer one when it returns, which the stack reproduces — a nested cast
+// registers its mods on its own context, never the outer one.
+type spellModTakingContext struct {
+	applied map[*activeAura]struct{}
+}
+
+// beginSpellModTaking mirrors the SetSpellModTakingSpell(spell, true) legs:
+// Spell::_cast head (Spell.cpp:3323), Spell::handle_delayed head (3640), and
+// the event-processor delayed branch (7616) which sets it around
+// handle_immediate. Each activation gets a fresh registry; nested casts
+// push their own (Spell::cast, Spell.cpp:3266-3280).
+func (s *session) beginSpellModTaking() {
+	if s == nil {
+		return
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	s.spellModTaking = append(s.spellModTaking, &spellModTakingContext{applied: make(map[*activeAura]struct{})})
+}
+
+// endSpellModTaking mirrors the SetSpellModTakingSpell(spell, false) legs:
+// the _cast tail and failure exits (Spell.cpp:3418, 3519), the
+// handle_delayed tail (3697), and the event-processor branch tail (7621).
+// Pops the innermost context; a no-op with an empty stack (the C++
+// mismatched-spell remove is a no-op too).
+func (s *session) endSpellModTaking() {
+	if s == nil {
+		return
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	if len(s.spellModTaking) == 0 {
+		return
+	}
+	s.spellModTaking = s.spellModTaking[:len(s.spellModTaking)-1]
+}
+
+// spellModTakingCurrent returns the innermost taking context, or nil when no
+// cast holds the taking window — the Go model of the m_spellModTakingSpell
+// redirect at the top of Player::ApplySpellMod (Player.cpp:21349-21350).
+func (s *session) spellModTakingCurrent() *spellModTakingContext {
+	if s == nil {
+		return nil
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	if len(s.spellModTaking) == 0 {
+		return nil
+	}
+	return s.spellModTaking[len(s.spellModTaking)-1]
+}
+
+// spellModTakingApplied reports whether the taking cast already registered
+// the aura — Player::HasSpellModApplied (Player.cpp:21429-21434) against the
+// taking spell's m_appliedMods.
+func (s *session) spellModTakingApplied(taking *spellModTakingContext, owner *activeAura) bool {
+	if s == nil || taking == nil || owner == nil {
+		return false
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	_, ok := taking.applied[owner]
+	return ok
+}
+
+// registerSpellModApplied mirrors Player::ApplyModToSpell
+// (Player.cpp:21415-21426): the taking cast registers the mod's owner aura
+// (charge-using auras only while they still hold charges — "don't do
+// anything with no charges"); the proc system and IsAffectedBySpellmod read
+// the registry back.
+func (s *session) registerSpellModApplied(taking *spellModTakingContext, owner *activeAura, usesCharges bool) {
+	if s == nil || taking == nil || owner == nil {
+		return
+	}
+	if usesCharges && owner.RemainingCharges == 0 {
+		return
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	taking.applied[owner] = struct{}{}
+}
+
 // spellModEffectValue resolves the modifier amount with the same fallback
 // chain Go uses for aura effect amounts (totalAuraModifierByAffectMask).
 func spellModEffectValue(aura *activeAura, index int, effect wotlk.SpellEffect) int32 {
@@ -230,9 +318,10 @@ func (s *session) refreshSpellModValues(aura *activeAura) {
 }
 
 // spellModAffectsSpell mirrors Player::IsAffectedBySpellmod
-// (Player.cpp:21278-21306). The charge-drop / m_appliedMods terms need a cast
-// Spell object, which Go has no model for (standing gap); the attribute-gated
-// terms are C++-exact.
+// (Player.cpp:21278-21306). The attribute-gated terms are C++-exact; the
+// charge leg (Player.cpp:21294 — a charge-using aura at 0 charges applies
+// only if the taking cast already registered it) is folded by the caller,
+// which owns the taking context.
 func (s *session) spellModAffectsSpell(modSpellID uint32, mask [3]uint32, op uint8, spell wotlk.Spell) bool {
 	if op == spellModDuration {
 		if dur, ok, err := s.server.Data.SpellDuration(spell.DurationIndex, 1); err == nil && ok && dur == -1 {
@@ -254,11 +343,14 @@ func (s *session) spellModAffectsSpell(modSpellID uint32, mask [3]uint32, op uin
 // affecting spell into basevalue as (basevalue + totalFlat) * totalMul,
 // truncated back to int32. Mods from charge-using auras take the
 // charged-mod slot (highest Priority wins in C++; wotlk.Spell has no
-// Priority field, so the first one wins — noted). Go has no cast Spell
-// object, so the m_spellModTakingSpell redirect and the ApplyModToSpell
-// charge-drop registration have no model (standing gaps); the nil-spell
-// semantics are C++-exact: the HasSpellModApplied-gated PCT terms for
-// SPELLMOD_CRITICAL_CHANCE / SPELLMOD_GLOBAL_COOLDOWN never apply.
+// Priority field, so the first one wins — noted). The taking-spell redirect
+// (Player.cpp:21349-21350) is modeled by spellModTakingCurrent: when a cast
+// holds the taking window, applied mods register on its context
+// (ApplyModToSpell, Player.cpp:21415-21426). The nil-spell semantics are
+// C++-exact outside the window; inside it, the HasSpellModApplied-gated PCT
+// terms for SPELLMOD_CRITICAL_CHANCE / SPELLMOD_GLOBAL_COOLDOWN stay skipped
+// (Surge of Light / Backdraft ordering needs the per-mod application order,
+// a follow-up unit).
 func (s *session) applySpellMod(spell wotlk.Spell, op uint8, basevalue int32) int32 {
 	if s == nil || s.server == nil || s.server.Data == nil || op >= spellModOpCount {
 		return basevalue
@@ -300,6 +392,7 @@ func (s *session) spellModTotals(spell wotlk.Spell, op uint8, instantBaseOK bool
 		mask        [3]uint32
 		spellID     uint32
 		usesCharges bool
+		owner       *activeAura
 	}
 	s.castMu.Lock()
 	cands := make([]candidate, 0, len(s.spellMods[op]))
@@ -307,9 +400,14 @@ func (s *session) spellModTotals(spell wotlk.Spell, op uint8, instantBaseOK bool
 		if m == nil || m.owner == nil || m.owner.Stopped {
 			continue
 		}
-		cands = append(cands, candidate{m.modType, m.value, m.mask, m.spellID, m.usesCharges})
+		cands = append(cands, candidate{m.modType, m.value, m.mask, m.spellID, m.usesCharges, m.owner})
 	}
 	s.castMu.Unlock()
+
+	// The taking window is the Go model of the spell!=nullptr context in
+	// Player::ApplySpellMod (Player.cpp:21349-21350): outside a cast the
+	// fold runs with nil-spell semantics.
+	taking := s.spellModTakingCurrent()
 
 	var totalMul float64 = 1.0
 	var totalFlat int32
@@ -317,19 +415,36 @@ func (s *session) spellModTotals(spell wotlk.Spell, op uint8, instantBaseOK bool
 	apply := func(c *candidate) {
 		if c.modType == uint8(spellAuraAddFlatModifier) {
 			totalFlat += c.value
-			return
+		} else {
+			// PCT branch (Player.cpp:21324-21344).
+			if op == spellModCastingTime && c.value <= -100 && instantBaseOK {
+				return
+			}
+			if op == spellModCriticalChance || op == spellModGlobalCooldown {
+				return
+			}
+			totalMul += float64(c.value) / 100.0
 		}
-		// PCT branch (Player.cpp:21324-21344).
-		if op == spellModCastingTime && c.value <= -100 && instantBaseOK {
-			return
+		// Player::ApplyModToSpell (Player.cpp:21415-21426) runs at the end
+		// of the per-mod fold: the taking cast registers the mod's owner
+		// aura so later legs of the same cast (and the proc system) see it
+		// as used. Charge-using auras register only while they still hold
+		// charges.
+		if taking != nil {
+			s.registerSpellModApplied(taking, c.owner, c.usesCharges)
 		}
-		if op == spellModCriticalChance || op == spellModGlobalCooldown {
-			return
-		}
-		totalMul += float64(c.value) / 100.0
 	}
 	for i := range cands {
 		c := &cands[i]
+		// Player::IsAffectedBySpellmod charge leg (Player.cpp:21294): a mod
+		// whose aura uses charges applies to a taking cast only while the
+		// aura still holds charges, unless this cast already registered it
+		// above — the first mod leg of the cast keeps the bonus even if
+		// the charge drops mid-cast.
+		if taking != nil && c.usesCharges && c.owner != nil && c.owner.RemainingCharges == 0 &&
+			!s.spellModTakingApplied(taking, c.owner) {
+			continue
+		}
 		if !s.spellModAffectsSpell(c.spellID, c.mask, op, spell) {
 			continue
 		}
