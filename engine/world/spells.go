@@ -114,6 +114,9 @@ const (
 	spellFailedCasterAuraState           uint8 = 22  // SPELL_FAILED_CASTER_AURASTATE (SharedDefines.h:1004)
 	spellFailedTargetAuraState           uint8 = 111 // SPELL_FAILED_TARGET_AURASTATE (SharedDefines.h:1093)
 	spellFailedCantBeDisenchanted        uint8 = 14  // SPELL_FAILED_CANT_BE_DISENCHANTED (SharedDefines.h:996)
+	spellFailedCantBeMilled              uint8 = 16  // SPELL_FAILED_CANT_BE_MILLED (SharedDefines.h:998)
+	spellFailedCantBeProspected          uint8 = 17  // SPELL_FAILED_CANT_BE_PROSPECTED (SharedDefines.h:999)
+	spellFailedNeedMoreItems             uint8 = 55  // SPELL_FAILED_NEED_MORE_ITEMS (SharedDefines.h:1037)
 	spellFailedLowCastlevel              uint8 = 49  // SPELL_FAILED_LOW_CASTLEVEL (SharedDefines.h:1031)
 	spellFailedSummonPending             uint8 = 183 // SPELL_FAILED_SUMMON_PENDING (SharedDefines.h:1165)
 	spellFailedTargetNotInInstance       uint8 = 137 // SPELL_FAILED_TARGET_NOT_IN_INSTANCE (SharedDefines.h:1119)
@@ -243,6 +246,8 @@ const (
 	spellEffectEnchantItemTemporary = 54  // SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY (SharedDefines.h:865)
 	spellEffectEnchantItemPrismatic = 156 // SPELL_EFFECT_ENCHANT_ITEM_PRISMATIC (SharedDefines.h:967)
 	spellEffectDisenchant           = 99  // SPELL_EFFECT_DISENCHANT (SharedDefines.h:910)
+	spellEffectProspecting          = 127 // SPELL_EFFECT_PROSPECTING (SharedDefines.h:938)
+	spellEffectMilling              = 158 // SPELL_EFFECT_MILLING (SharedDefines.h:969)
 
 	// Summon categories for the generic-summon CheckCast leg
 	// (Spell.cpp:5798-5817, SharedDefines.h:3296).
@@ -286,15 +291,16 @@ const (
 	// SpellAuraDefines.h:226).
 	spellAuraAllowTamePetType uint32 = 146 // SPELL_AURA_ALLOW_TAME_PET_TYPE
 
-	skillSkinning    uint32 = 393 // SKILL_SKINNING (SharedDefines.h:2985)
-	skillHerbalism   uint32 = 182 // SKILL_HERBALISM (SharedDefines.h:2939)
-	skillMining      uint32 = 186 // SKILL_MINING (SharedDefines.h:2943)
-	skillEngineering uint32 = 202 // SKILL_ENGINEERING (SharedDefines.h:2947)
-	skillFishing     uint32 = 356 // SKILL_FISHING (SharedDefines.h:2981)
-	skillLockpicking uint32 = 633 // SKILL_LOCKPICKING (SharedDefines.h:2999)
-	skillInscription uint32 = 773 // SKILL_INSCRIPTION (SharedDefines.h:3026)
-	skillEnchanting  uint32 = 333 // SKILL_ENCHANTING (SharedDefines.h:2978)
-	skillNone        uint32 = 0   // SKILL_NONE (SharedDefines.h:2888)
+	skillSkinning      uint32 = 393 // SKILL_SKINNING (SharedDefines.h:2985)
+	skillHerbalism     uint32 = 182 // SKILL_HERBALISM (SharedDefines.h:2939)
+	skillMining        uint32 = 186 // SKILL_MINING (SharedDefines.h:2943)
+	skillEngineering   uint32 = 202 // SKILL_ENGINEERING (SharedDefines.h:2947)
+	skillFishing       uint32 = 356 // SKILL_FISHING (SharedDefines.h:2981)
+	skillLockpicking   uint32 = 633 // SKILL_LOCKPICKING (SharedDefines.h:2999)
+	skillInscription   uint32 = 773 // SKILL_INSCRIPTION (SharedDefines.h:3026)
+	skillEnchanting    uint32 = 333 // SKILL_ENCHANTING (SharedDefines.h:2978)
+	skillJewelcrafting uint32 = 755 // SKILL_JEWELCRAFTING (SharedDefines.h:3009)
+	skillNone          uint32 = 0   // SKILL_NONE (SharedDefines.h:2888)
 
 	// Lock.dbc key types (SharedDefines.h:2628-2630) and lock types with a
 	// gathering skill (SharedDefines.h:2635-2654) for the CanOpenLock bridge.
@@ -1252,6 +1258,24 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if failReason := s.checkSpellDisenchantCast(ctx, spell, target); failReason != 0 {
 		s.sendCastFailed(ctx, castID, spell, failReason)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "disenchant requirements not met", "failReason", failReason)
+		return true
+	}
+
+	// PROSPECTING / MILLING arms of the Spell::CheckItems special-effects
+	// loop (Spell.cpp:7054-7098): run right after the DISENCHANT arm,
+	// matching C++ CheckItems relative order (DISENCHANT 7025 →
+	// PROSPECTING 7054 → MILLING 7076).
+	// Client-initiated casts only — triggered casts go through castSpellDirect.
+	if failReason, needMoreEntry := s.checkSpellProspectMillingCast(ctx, spell, target); failReason != 0 {
+		if failReason == spellFailedNeedMoreItems {
+			// WriteCastResultInfo (Spell.cpp:4114-4123): param1 = item
+			// entry, param2 = 5 — carried at the wire because
+			// castFailedExtParams resolves only from the spell record.
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(castID, spell.ID, failReason, needMoreEntry, 5), true)
+		} else {
+			s.sendCastFailed(ctx, castID, spell, failReason)
+		}
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "prospecting/milling requirements not met", "failReason", failReason)
 		return true
 	}
 
@@ -11433,7 +11457,10 @@ func (s *session) tradeItemTargetCast(target protocol.SpellTargetData) bool {
 // arms need: item/required level (the exploit-fix level gate,
 // Spell.cpp:6939), the socket colors (the prismatic-socket gate,
 // Spell.cpp:6958-6965) and the item-spell id/trigger pairs (the usable-item
-// scan, Spell.cpp:6943-6952).
+// scan, Spell.cpp:6943-6952), plus the DISENCHANT columns (Spell.cpp:7032-7046)
+// and the PROSPECTING / MILLING columns: the item flags (the prospectable /
+// millable test, Spell.cpp:7057/7082) and the required skill rank (the
+// jewelcrafting / inscription test, Spell.cpp:7062-7063/7087-7088).
 type itemStoreTemplateInfo struct {
 	Stackable               uint32
 	LimitCategory           uint32
@@ -11443,6 +11470,8 @@ type itemStoreTemplateInfo struct {
 	Quality                 uint32
 	RequiredDisenchantSkill uint32
 	DisenchantID            uint32
+	Flags                   uint32
+	RequiredSkillRank       uint32
 	SocketColors            [3]uint32
 	SpellIDs                [5]uint32
 	SpellTriggers           [5]uint32
@@ -11469,7 +11498,7 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 		return itemStoreTemplateInfo{}, false
 	}
 	var stackable, limitCategory, itemLevel, requiredLevel uint32
-	var class, quality, disenchantID uint32
+	var class, quality, disenchantID, flags, requiredSkillRank uint32
 	// RequiredDisenchantSkill defaults to -1 in the world item_template
 	// table; scan signed so the negative value survives, then convert to
 	// uint32 exactly like the C++ loader does (ItemTemplate.h), so the
@@ -11481,6 +11510,7 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 		COALESCE(ItemLevel, 0), COALESCE(RequiredLevel, 0),
 		COALESCE(class, 0), COALESCE(Quality, 0),
 		COALESCE(RequiredDisenchantSkill, -1), COALESCE(DisenchantID, 0),
+		COALESCE(Flags, 0), COALESCE(RequiredSkillRank, 0),
 		COALESCE(SocketColor_1, 0), COALESCE(SocketColor_2, 0), COALESCE(SocketColor_3, 0),
 		COALESCE(spellid_1, 0), COALESCE(spelltrigger_1, 0),
 		COALESCE(spellid_2, 0), COALESCE(spelltrigger_2, 0),
@@ -11490,6 +11520,7 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 		FROM item_template WHERE entry = ? LIMIT 1`, entry).Scan(
 		&stackable, &limitCategory, &itemLevel, &requiredLevel,
 		&class, &quality, &requiredDisenchantSkill, &disenchantID,
+		&flags, &requiredSkillRank,
 		&socketColors[0], &socketColors[1], &socketColors[2],
 		&spellIDs[0], &spellTriggers[0],
 		&spellIDs[1], &spellTriggers[1],
@@ -11503,6 +11534,7 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 		ItemLevel: itemLevel, RequiredLevel: requiredLevel,
 		Class: class, Quality: quality,
 		RequiredDisenchantSkill: uint32(requiredDisenchantSkill), DisenchantID: disenchantID,
+		Flags: flags, RequiredSkillRank: requiredSkillRank,
 		SocketColors: socketColors, SpellIDs: spellIDs, SpellTriggers: spellTriggers}
 	s.itemStoreTemplateMu.Lock()
 	if s.itemStoreTemplates == nil {
@@ -11692,7 +11724,8 @@ type enchantItemTarget struct {
 }
 
 // resolveEnchantItemTarget mirrors SpellCastTargets::Update (Spell.cpp:462-478)
-// for the enchant arms: TARGET_FLAG_ITEM resolves through the player's own
+// for the item-target CheckItems arms (enchant, disenchant, prospecting,
+// milling): TARGET_FLAG_ITEM resolves through the player's own
 // inventory (the Player::GetItemByGuid arm, Player.cpp:9994-10024);
 // TARGET_FLAG_TRADE_ITEM carries the trade slot index rather than a GUID and
 // only TRADE_SLOT_NONTRADED (TradeData.h:27) resolves, to the partner's item.
@@ -11955,6 +11988,112 @@ func (s *session) checkSpellDisenchantCast(ctx context.Context, spell wotlk.Spel
 		}
 	}
 	return 0
+}
+
+// checkSpellProspectMillingCast mirrors the SPELL_EFFECT_PROSPECTING and
+// SPELL_EFFECT_MILLING arms of the Spell::CheckItems special-effects loop
+// (Spell.cpp:7054-7074 and 7076-7098). The two arms differ only in the
+// item flag (IS_PROSPECTABLE vs IS_MILLABLE), the tested skill
+// (SKILL_JEWELCRAFTING vs SKILL_INSCRIPTION), the loot template
+// (prospecting_loot_template vs milling_loot_template) and the
+// "cannot" failure code, so they share one bridge. Returns the
+// SpellCastResult failure code (0 when the arm passes) and, when the
+// result is SPELL_FAILED_NEED_MORE_ITEMS (55), the target item entry —
+// the WriteCastResultInfo extended payload (Spell.cpp:4114-4123:
+// param1 = item entry, param2 = 5) is carried by the wire because
+// castFailedExtParams resolves only from the spell record.
+// Client-initiated casts only — triggered casts go through castSpellDirect.
+func (s *session) checkSpellProspectMillingCast(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) (uint8, uint32) {
+	for i := 0; i < len(spell.Effects); i++ {
+		eff := spell.Effects[i].Effect
+		if eff != spellEffectProspecting && eff != spellEffectMilling {
+			continue
+		}
+		cantFail := spellFailedCantBeProspected
+		itemFlag := itemFlagIsProspectable
+		skill := skillJewelcrafting
+		if eff == spellEffectMilling {
+			cantFail = spellFailedCantBeMilled
+			itemFlag = itemFlagIsMillable
+			skill = skillInscription
+		}
+		t, resolved := s.resolveEnchantItemTarget(ctx, target)
+		if !resolved {
+			return cantFail, 0
+		}
+		// A missing template row is a data gap, not a client fault:
+		// the DISENCHANT arm fails the miss outright (Spell.cpp:7032-7034)
+		// and the flag test below cannot run without it.
+		info, ok := s.server.getItemStoreTemplateInfo(ctx, t.entry)
+		if !ok {
+			return cantFail, 0
+		}
+		// Ensure the item is a prospectable ore / millable herb
+		// (Spell.cpp:7057/7082).
+		if info.Flags&itemFlag == 0 {
+			return cantFail, 0
+		}
+		// Prevent prospecting/milling in trade slot (Spell.cpp:7060/7085).
+		if !t.ownedByCaster {
+			return cantFail, 0
+		}
+		// Check for enough skill in jewelcrafting/inscription
+		// (Spell.cpp:7062-7063/7087-7088).
+		if skillValue := playerSkillTotalValue(s.player, skill); skillValue < 0 || info.RequiredSkillRank > uint32(skillValue) {
+			return spellFailedLowCastlevel, 0
+		}
+		// Five of the target stack are consumed (Spell.cpp:7066-7072/7091-7097).
+		if s.itemInstanceCount(ctx, t.instanceGUID) < 5 {
+			return spellFailedNeedMoreItems, t.entry
+		}
+		// Needs a prospecting/milling loot entry (Spell.cpp:7074/7098).
+		if !hasItemLootTemplateEntry(ctx, s.server, eff, t.entry) {
+			return cantFail, 0
+		}
+	}
+	return 0, 0
+}
+
+// hasItemLootTemplateEntry mirrors LootStore::HaveLootFor for the
+// prospecting/milling CheckItems arms (Spell.cpp:7074/7098): the world DB
+// table holds at least one row for the item entry. C++ HaveLootFor is
+// false when nothing is loaded, so a missing table or query error is a
+// miss, not a pass.
+func hasItemLootTemplateEntry(ctx context.Context, server *Server, effect uint32, entry uint32) bool {
+	if server == nil || server.WorldStore == nil || server.WorldStore.DB == nil || entry == 0 {
+		return false
+	}
+	table := ""
+	switch effect {
+	case spellEffectProspecting:
+		table = "prospecting_loot_template"
+	case spellEffectMilling:
+		table = "milling_loot_template"
+	default:
+		return false
+	}
+	var found int
+	if err := server.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM "+table+" WHERE Entry = ? LIMIT 1", entry).Scan(&found); err != nil {
+		return false
+	}
+	return found == 1
+}
+
+// itemInstanceCount reads the count of a single item stack instance
+// (Item::GetCount, the m_itemData count) for the prospecting/milling
+// CheckItems arms (Spell.cpp:7066/7091).
+func (s *session) itemInstanceCount(ctx context.Context, instanceGUID uint64) uint32 {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil ||
+		s.server.CharactersStore.DB == nil || instanceGUID == 0 {
+		return 0
+	}
+	var count uint32
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		`SELECT COALESCE(count, 1) FROM item_instance WHERE guid = ? LIMIT 1`,
+		int64(instanceGUID)).Scan(&count); err != nil {
+		return 0
+	}
+	return count
 }
 
 // checkSpellEquippedItemRequirements validates equipped weapon and armor requirements for spells before cast execution.

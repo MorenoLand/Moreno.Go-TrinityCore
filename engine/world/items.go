@@ -17,6 +17,8 @@ import (
 
 const (
 	itemFlagUniqueEquippable uint32 = 0x00080000
+	itemFlagIsProspectable   uint32 = 0x00040000 // ITEM_FLAG_IS_PROSPECTABLE (ItemTemplate.h:170)
+	itemFlagIsMillable       uint32 = 0x20000000 // ITEM_FLAG_IS_MILLABLE (ItemTemplate.h:181)
 	itemClassQuiver          uint32 = 11
 	defaultMaxPlayerLevel    uint32 = 80
 	itemBagFamilyKeys        uint32 = 0x00000100
