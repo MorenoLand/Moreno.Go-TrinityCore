@@ -1793,6 +1793,37 @@ func (s *Store) SpellMaxDuration(id uint32) (int32, bool, error) {
 	return maxDuration, true, nil
 }
 
+// SpellDurationBase mirrors SpellInfo::GetDuration (SpellInfo.cpp:3077-3082):
+// the raw Duration column of SpellDuration.dbc (DBCStructure.h format "niii"),
+// absolute value, no per-level scaling. Spell::handle_immediate (Spell.cpp:3572)
+// seeds the channeled phase from this raw value — "First mod_duration then
+// haste" — before spellmod and haste legs apply; the level-scaled
+// SpellDuration accessor is the aura-duration path, not this one.
+func (s *Store) SpellDurationBase(id uint32) (int32, bool, error) {
+	if id == 0 {
+		return 0, true, nil
+	}
+	file, err := s.File("SpellDuration")
+	if err != nil {
+		return 0, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return 0, false, nil
+	}
+	base, err := record.Int32(1)
+	if err != nil {
+		return 0, false, err
+	}
+	if base < 0 {
+		if base == -1 {
+			return -1, true, nil // -1 infinite
+		}
+		base = -base
+	}
+	return base, true, nil
+}
+
 func (s *Store) SpellRadius(id, level uint32) (float32, bool, error) {
 	if id == 0 {
 		return 0, true, nil

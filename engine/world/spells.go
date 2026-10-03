@@ -2164,6 +2164,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.consumeExtraAttacks(context.Background(), spellExtraAttackVictim(target, explicitUnitGUID))
 				s.stopAttackOnSpellFinish(spell)
 			})
+			// Spell::handle_delayed (Spell.cpp:3629) no-bridge legs, noted:
+			//   - UpdatePointers() fail -> finish(false): targets are
+			//     resolved at cast start; the arrival closure does not
+			//     re-resolve or fail the cast when a target vanished
+			//     mid-flight (no pointer model).
+			//   - SetSpellModTakingSpell(true/false) around the delayed
+			//     ticks: the standing spellmod taking-spell gap
+			//     (spellmod.go).
+			//   - Per-target TimeDelay waves: C++ staggers multi-target
+			//     landings by distance (single_missile when HasDst(),
+			//     else per-target t_offset waves with next_time
+			//     rescheduling); Go fires one timer on the explicit
+			//     target's travel time and lands all targets together.
+			//   - m_UniqueGOTargetInfo recheck: Go has no gameobject/corpse/
+			//     item target containers (unit targets only).
+			// The m_immediateHandled leg is parity: applyEffects (the
+			// HIT-mode phase) runs at missile arrival in the deferred
+			// closure, matching _handle_immediate_phase on the first
+			// handle_delayed tick; handleSpellInitialThreat ran at cast
+			// start like HandleThreatSpells at the _cast/_handle_immediate
+			// head.
 			// Spell::_cast (Spell.cpp:3502-3511): the spell_linked_spell tail
 			// runs at _cast end on both branches — linked triggers fire at
 			// cast completion, not at missile arrival.
@@ -2173,6 +2194,22 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 
 	applyEffects(ctx)
+	// Spell::handle_immediate (Spell.cpp:3568) no-bridge legs, noted:
+	//   - PrepareTargetProcessing()/FinishTargetProcessing(): Go has no
+	//     target container model; hitTargets were resolved at cast start.
+	//   - DoProcessTargetContainer(m_UniqueGOTargetInfo/m_UniqueCorpseTargetInfo/
+	//     m_UniqueItemInfo): Go processes unit targets only.
+	//   - TakeAmmo() for IsRangedWeaponSpell && IsChanneled (Volley):
+	//     Go consumes ammo only for the Spell 75 auto-ranged attack
+	//     (combat.go).
+	// Spell::_handle_finish_phase (Spell.cpp:3738) no-bridge legs, noted:
+	//   - m_needComboPoints -> ClearComboPoints, and AddComboPoints with the
+	//     RETAIN_COMBO_POINTS removal: Go has no combo-point model at all.
+	//   - ProcSkillsAndAuras(..., PROC_SPELL_PHASE_FINISH, m_hitMask): the
+	//     on-finish proc firing (and the m_hitMask PROC_HIT_NORMAL vs
+	//     target-container split in handle_immediate) has no Go bridge;
+	//     the DoTriggersOnSpellHit consumer is pending per the
+	//     PrepareTriggersExecutedOnHit snapshot.
 	// Spell::_handle_finish_phase (Spell.cpp:3753-3761): a finished cast
 	// whose spell carries SPELL_EFFECT_ADD_EXTRA_ATTACKS spends the
 	// caster's pending extra attacks as extra base-attack swings against
@@ -7404,12 +7441,24 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 		return
 	}
 	var durationMs int32 = 0
-	if value, ok, err := s.server.Data.SpellDuration(spell.DurationIndex, uint32(s.player.Level)); err == nil && ok {
+	if value, ok, err := s.server.Data.SpellDurationBase(spell.DurationIndex); err == nil && ok {
 		durationMs = value
 	}
-	if durationMs <= 0 {
-		return // instant or infinite channels have no timed lifecycle here
+	if durationMs == -1 {
+		// Spell::handle_immediate (Spell.cpp:3582-3583): infinite channels
+		// (GetDuration() == -1) SendChannelStart(-1) and enter
+		// SPELL_STATE_CASTING until interrupted — no completion timer. Go
+		// has no infinite-channel state; the cast falls through without
+		// starting one (no channel bar, no per-tick drain). Noted, not bridged.
+		return
 	}
+	if durationMs <= 0 {
+		return // instant channels have no timed lifecycle here
+	}
+	// Spell::handle_immediate (Spell.cpp:3577-3585): "First mod_duration
+	// then haste - see Missile Barrage" — SPELLMOD_DURATION folds flat/pct
+	// duration mods (talents, glyphs) before the haste compression.
+	durationMs = s.applySpellMod(spell, spellModDuration, durationMs)
 	period := uint32(0)
 	for _, effect := range spell.Effects {
 		if effect.Effect != 0 && effect.AuraPeriod > period {
@@ -7418,8 +7467,21 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 	}
 
 	// In WotLK 3.3.5, channeled spells scale with spell haste: duration and tick interval are compressed
-	// Mirrors TrinityCore Spell::Prepare (Spell.cpp:650-700):
+	// Mirrors Unit::ModSpellDurationTime via Spell::handle_immediate (Spell.cpp:3580-3585):
+	// the modded duration compresses by (1 + haste), matching the C++ order (mod first, then haste).
 	hastePct := s.getSpellHastePct()
+	if hastePct > 0 {
+		durationMs = int32(math.Round(float64(durationMs) / (1.0 + hastePct/100.0)))
+		if period > 0 {
+			period = uint32(math.Round(float64(period) / (1.0 + hastePct/100.0)))
+		}
+	}
+	// Spell::handle_immediate (Spell.cpp:3588-3591): channeled spells with
+	// nonzero duration take SPELL_STATE_CASTING and AddInterruptMask
+	// (ChannelInterruptFlags). Go has no interrupt-mask model: movement
+	// cancels the active channel unconditionally (movement.go), so channels
+	// that C++ would let move (IsMoveAllowedChannel) are also stopped here.
+	// Noted, not bridged.
 	if hastePct > 0 {
 		durationMs = int32(math.Round(float64(durationMs) / (1.0 + hastePct/100.0)))
 		if period > 0 {
