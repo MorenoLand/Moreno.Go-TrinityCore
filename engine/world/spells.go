@@ -119,6 +119,7 @@ const (
 	spellFailedLowCastLevel              uint8 = 49  // SPELL_FAILED_LOW_CASTLEVEL (SharedDefines.h:1031)
 	spellFailedTargetNotLooted           uint8 = 121 // SPELL_FAILED_TARGET_NOT_LOOTED (SharedDefines.h:1103)
 	spellFailedTargetUnskinnable         uint8 = 126 // SPELL_FAILED_TARGET_UNSKINNABLE (SharedDefines.h:1108)
+	spellFailedTryAgain                  uint8 = 132 // SPELL_FAILED_TRY_AGAIN (SharedDefines.h:1114)
 
 	areaFlagNoFlyZone uint32 = 0x20000000 // AREA_FLAG_NO_FLY_ZONE (DBCEnums.h:275) — AreaTableEntry.Flags bit tested by AreaTableEntry::IsFlyable (DBCStructure.h:209)
 
@@ -153,6 +154,14 @@ const (
 	spellEffectPowerDrain      = 8
 	spellEffectCharge          = 96 // SPELL_EFFECT_CHARGE (SharedDefines.h:907)
 	spellEffectSkinning        = 95 // SPELL_EFFECT_SKINNING (SharedDefines.h:906)
+	spellEffectOpenLock        = 33 // SPELL_EFFECT_OPEN_LOCK (SharedDefines.h:844)
+
+	// Implicit targets for the open-lock CheckCast leg (Spell.cpp:5725-5791,
+	// SharedDefines.h:1459-1462).
+	implicitTargetGameObjectTarget     uint32 = 23 // TARGET_GAMEOBJECT_TARGET
+	implicitTargetGameObjectItemTarget uint32 = 26 // TARGET_GAMEOBJECT_ITEM_TARGET
+
+	spellDisarmTrap uint32 = 1842 // Disarm Trap — exempt from the battleground-object gate on traps (Spell.cpp:5754)
 
 	// Creature template type_flags for the skinning CheckCast leg
 	// (Spell.cpp:5707-5724, CreatureData.h:213-222, SharedDefines.h).
@@ -162,10 +171,29 @@ const (
 	creatureTypeFlagMiningSkinningSkill      uint32 = 0x00000200 // CREATURE_TYPE_FLAG_MINING_SKINNING_SKILL (SharedDefines.h:2738)
 	creatureTypeFlagEngineeringSkinningSkill uint32 = 0x00008000 // CREATURE_TYPE_FLAG_ENGINEERING_SKINNING_SKILL (SharedDefines.h:2744)
 
-	skillSkinning                          uint32 = 393 // SKILL_SKINNING (SharedDefines.h:2985)
-	skillHerbalism                         uint32 = 182 // SKILL_HERBALISM (SharedDefines.h:2939)
-	skillMining                            uint32 = 186 // SKILL_MINING (SharedDefines.h:2943)
-	skillEngineering                       uint32 = 202 // SKILL_ENGINEERING (SharedDefines.h:2947)
+	skillSkinning    uint32 = 393 // SKILL_SKINNING (SharedDefines.h:2985)
+	skillHerbalism   uint32 = 182 // SKILL_HERBALISM (SharedDefines.h:2939)
+	skillMining      uint32 = 186 // SKILL_MINING (SharedDefines.h:2943)
+	skillEngineering uint32 = 202 // SKILL_ENGINEERING (SharedDefines.h:2947)
+	skillFishing     uint32 = 356 // SKILL_FISHING (SharedDefines.h:2981)
+	skillLockpicking uint32 = 633 // SKILL_LOCKPICKING (SharedDefines.h:2999)
+	skillInscription uint32 = 773 // SKILL_INSCRIPTION (SharedDefines.h:3026)
+	skillNone        uint32 = 0   // SKILL_NONE (SharedDefines.h:2888)
+
+	// Lock.dbc key types (SharedDefines.h:2628-2630) and lock types with a
+	// gathering skill (SharedDefines.h:2635-2654) for the CanOpenLock bridge.
+	lockKeyItem         uint32 = 1  // LOCK_KEY_ITEM
+	lockKeySkill        uint32 = 2  // LOCK_KEY_SKILL
+	lockKeySpell        uint32 = 3  // LOCK_KEY_SPELL
+	lockTypePicklock    uint32 = 1  // LOCKTYPE_PICKLOCK
+	lockTypeHerbalism   uint32 = 2  // LOCKTYPE_HERBALISM
+	lockTypeMining      uint32 = 3  // LOCKTYPE_MINING
+	lockTypeFishing     uint32 = 19 // LOCKTYPE_FISHING
+	lockTypeInscription uint32 = 20 // LOCKTYPE_INSCRIPTION
+
+	// GetConfigMaxSkillValue at the level-80 cap: 300 + (80-60)*75/10
+	// (World.h:641) — the orange-lockpick fail-chance ceiling.
+	configMaxSkillValue                    int32  = 450
 	spellEffectHealMechanical                     = 75  // SPELL_EFFECT_HEAL_MECHANICAL (SharedDefines.h:886)
 	spellEffectHealPct                            = 136 // SPELL_EFFECT_HEAL_PCT (SharedDefines.h:947)
 	spellEffectEnergizePct                        = 137 // SPELL_EFFECT_ENERGIZE_PCT (SharedDefines.h:948)
@@ -894,6 +922,18 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "skinning validation", "failure", failure)
 		return true
 	}
+	// Open-lock gate (Spell::CheckCast per-effect block, Spell.cpp:5725-5791):
+	// a SPELL_EFFECT_OPEN_LOCK effect with a gameobject or gameobject-item
+	// implicit target fails with SPELL_FAILED_BAD_TARGETS when the target is
+	// missing or not openable, SPELL_FAILED_LOW_CASTLEVEL when the caster's
+	// lock skill is too low, and SPELL_FAILED_TRY_AGAIN on the
+	// orange-lockpick fail chance. C++ relative order places this right after
+	// the skinning leg.
+	if failure := s.checkOpenLockCast(spell, target); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "open-lock validation", "failure", failure)
+		return true
+	}
 	cost := s.calculateSpellPowerCost(spell)
 	pType := spell.PowerType
 	// Spell::CheckPower (Spell.cpp:6665-6670) checks rune costs when
@@ -1559,6 +1599,243 @@ func (s *session) checkSkinningCast(spell wotlk.Spell, target protocol.SpellTarg
 	}
 	if reqValue > skillValue {
 		return spellFailedLowCastLevel
+	}
+	return 0
+}
+
+// skillByLockType mirrors SkillByLockType (SharedDefines.h:3044): lock types
+// without a gathering skill (disarm trap, open, treasure, slow open, ...)
+// map to SKILL_NONE.
+func skillByLockType(lockType uint32) uint32 {
+	switch lockType {
+	case lockTypePicklock:
+		return skillLockpicking
+	case lockTypeHerbalism:
+		return skillHerbalism
+	case lockTypeMining:
+		return skillMining
+	case lockTypeFishing:
+		return skillFishing
+	case lockTypeInscription:
+		return skillInscription
+	default:
+		return skillNone
+	}
+}
+
+// goLockDataIndex mirrors GameObjectTemplate::GetLockId
+// (GameObjectData.h:464-484): the lockId lives in data1 for doors and
+// buttons, data4 for fishing holes, and data0 for every other lockable type.
+func goLockDataIndex(goType uint32) int {
+	switch goType {
+	case uint32(GameObjectTypeDoor), uint32(GameObjectTypeButton):
+		return 1
+	case uint32(GameObjectTypeFishingHole):
+		return 4
+	default:
+		return 0
+	}
+}
+
+// inventoryItemEntryByGUID resolves a wire item GUID (raw or 0x4000-high form)
+// to its item_template entry through the owner's character_inventory rows.
+func (s *session) inventoryItemEntryByGUID(itemGUID uint64) (uint32, bool) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || itemGUID == 0 {
+		return 0, false
+	}
+	var entry int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(context.Background(),
+		"SELECT ii.itemEntry FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ci.item = ? LIMIT 1",
+		s.playerGUID, int64(itemGUID&0xFFFFFFFFFFFF)).Scan(&entry); err != nil || entry <= 0 {
+		return 0, false
+	}
+	return uint32(entry), true
+}
+
+// itemLockIDByEntry reads item_template.lockid for an item entry; unknown
+// entries report no lock.
+func itemLockIDByEntry(s *session, entry uint32) uint32 {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || entry == 0 {
+		return 0
+	}
+	var lockID int64
+	if err := s.server.WorldStore.DB.QueryRowContext(context.Background(),
+		"SELECT COALESCE(lockid, 0) FROM item_template WHERE entry = ? LIMIT 1", entry).Scan(&lockID); err != nil {
+		return 0
+	}
+	return uint32(lockID)
+}
+
+// checkOpenLockCast mirrors the SPELL_EFFECT_OPEN_LOCK leg of the CheckCast
+// per-effect block (Spell.cpp:5725-5791): an effect-33 cast whose implicit
+// target is TARGET_GAMEOBJECT_TARGET (23) or TARGET_GAMEOBJECT_ITEM_TARGET
+// (26) needs a GO target (or an openable item target), a resolvable lock,
+// and — for skill-keyed locks — the caster's lock skill
+// (SkillByLockType, SharedDefines.h:3044) at the lock's required value; the
+// orange-lockpick fail chance can still reject with SPELL_FAILED_TRY_AGAIN.
+// The m_caster->GetTypeId() != TYPEID_PLAYER arm is vacuous on the client
+// path (handleCastSpell only serves player sessions). Item::IsLocked (the
+// ITEM_FIELD_FLAG_UNLOCKED check) has no Go model — Go never unlocks items,
+// so any item carrying a LockID is treated as locked. The battleground-object
+// gate (Spell.cpp:5754-5758, CanUseBattlegroundObject) has no Go bridge and
+// is skipped. The m_selfContainer recheck arm of the fail chance is moot —
+// Go runs CheckCast once per client cast, which is the initial check C++
+// gates the chance on. The LOCK_KEY_ITEM match arm (Spell.cpp:7809) never
+// fires here: m_CastItem is nil on the client path (handleCastSpell passes
+// no cast item; skeleton-key item casts go through CMSG_USE_ITEM, which
+// never runs the CheckCast gates), though the arm still sets reqKey. The
+// cast-spell skill bonus (Spell.cpp:7840-7842, skeleton keys) applies to
+// item-target spells via the effect's CalcValue.
+func (s *session) checkOpenLockCast(spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
+	var eff *wotlk.SpellEffect
+	isItemTarget := false
+	for i := range spell.Effects {
+		e := &spell.Effects[i]
+		if e.Effect != spellEffectOpenLock {
+			continue
+		}
+		switch e.ImplicitTargetA {
+		case implicitTargetGameObjectTarget:
+		case implicitTargetGameObjectItemTarget:
+			isItemTarget = true
+		default:
+			continue
+		}
+		eff = e
+		break
+	}
+	if eff == nil {
+		return 0
+	}
+	// GO wire target (Spell.cpp:5733-5735): TARGET_FLAG_GAMEOBJECT flows
+	// through UnitGUID in ReadSpellTargetData; the 0xF110 high part marks
+	// gameobjects (gameObjectGUID, gameobjects.go:376).
+	var goGUID uint64
+	if target.Flags&protocol.SpellTargetFlagGameObject != 0 && target.UnitGUID != 0 && uint16(target.UnitGUID>>48) == 0xF110 {
+		goGUID = target.UnitGUID
+	}
+	if !isItemTarget && goGUID == 0 {
+		return spellFailedBadTargets
+	}
+	// pTempItem (Spell.cpp:5737-5744): the trade-window item by slot (the
+	// wire "item GUID" on TARGET_FLAG_TRADE_ITEM casts is the trade slot
+	// index, tradeSlotCount = 7, trade.go:40) or the caster's inventory item
+	// by wire GUID. The trade item only feeds the openable-item gate below;
+	// like C++ (m_targets.GetItemTarget resolves inventory items only) the
+	// lock-id arm reads inventory items alone.
+	var tempItemLockID uint32
+	haveTempItem := false
+	var invItemLockID uint32
+	haveInvItem := false
+	if target.Flags&protocol.SpellTargetFlagTradeItem != 0 {
+		if slot := uint8(target.ItemGUID); s.trade != nil && s.trade.Partner != nil && s.trade.Partner.trade != nil && slot < tradeSlotCount {
+			if it, ok := s.trade.Partner.trade.Items[slot]; ok && it.ItemEntry != 0 {
+				tempItemLockID, haveTempItem = itemLockIDByEntry(s, it.ItemEntry), true
+			}
+		}
+	} else if target.Flags&protocol.SpellTargetFlagItem != 0 && target.ItemGUID != 0 {
+		if entry, ok := s.inventoryItemEntryByGUID(target.ItemGUID); ok {
+			tempItemLockID, haveTempItem = itemLockIDByEntry(s, entry), true
+			invItemLockID, haveInvItem = tempItemLockID, true
+		}
+	}
+	// Openable-item gate (Spell.cpp:5749-5752): with TARGET_GAMEOBJECT_ITEM_TARGET
+	// and no GO target the item must exist, carry a LockID, and be locked.
+	if isItemTarget && goGUID == 0 && (!haveTempItem || tempItemLockID == 0) {
+		return spellFailedBadTargets
+	}
+	// GO template data for the lock-id arm. The wire GO GUID packs the entry
+	// above the low guid (gameObjectGUID). A missing template row is
+	// permissive (terrain.go convention).
+	var goLockID uint32
+	goKnown := false
+	if goGUID != 0 && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		entry := uint32((goGUID >> 24) & 0xFFFFFF)
+		var goType int64
+		var data [5]int64
+		if err := s.server.WorldStore.DB.QueryRowContext(context.Background(),
+			"SELECT type, COALESCE(data0, 0), COALESCE(data1, 0), COALESCE(data2, 0), COALESCE(data3, 0), COALESCE(data4, 0) FROM gameobject_template WHERE entry = ? LIMIT 1",
+			entry).Scan(&goType, &data[0], &data[1], &data[2], &data[3], &data[4]); err == nil {
+			goKnown = true
+			goLockID = uint32(data[goLockDataIndex(uint32(goType))])
+		}
+	}
+	// lockId (Spell.cpp:5760-5771): the GO's lock, else the inventory item's
+	// LockID. A GO with no lock is not openable.
+	var lockID uint32
+	switch {
+	case goGUID != 0:
+		if !goKnown {
+			return 0
+		}
+		if lockID = goLockID; lockID == 0 {
+			return spellFailedBadTargets
+		}
+	case haveInvItem:
+		lockID = invItemLockID
+	}
+	// CanOpenLock (Spell.cpp:7793-7866).
+	if lockID != 0 {
+		lock, found, err := s.server.Data.Lock(lockID)
+		if err != nil || !found {
+			return 0 // unknown Lock.dbc data is permissive
+		}
+		skillID := skillNone
+		var reqSkillValue, skillValue int32
+		reqKey := false
+		castOK := false
+		for j := 0; j < 8 && !castOK; j++ {
+			switch lock.Type[j] {
+			case lockKeyItem:
+				// m_CastItem is nil on the client path, so no entry can
+				// match; reqKey still sets (Spell.cpp:7809-7813).
+				reqKey = true
+			case lockKeySkill:
+				reqKey = true
+				// wrong locktype, skip (Spell.cpp:7821-7822)
+				if uint32(eff.MiscValue) != lock.Index[j] {
+					continue
+				}
+				skillID = skillByLockType(lock.Index[j])
+				if skillID != skillNone {
+					reqSkillValue = int32(lock.Skill[j])
+					// The npcbot arm (Spell.cpp:7836-7839) is vacuous — no
+					// creature casters on the client path.
+					skillValue = playerSkillTotalValue(s.player, skillID)
+					// Skill bonus from the cast spell (Spell.cpp:7840-7842,
+					// mostly item spells) on item-target casts.
+					if eff.ImplicitTargetA == implicitTargetGameObjectItemTarget || eff.ImplicitTargetB == implicitTargetGameObjectItemTarget {
+						skillValue += eff.CalcValue()
+					}
+					if skillValue < reqSkillValue {
+						return spellFailedLowCastLevel
+					}
+				}
+				castOK = true
+			case lockKeySpell:
+				if spell.ID == lock.Index[j] {
+					castOK = true
+				}
+				reqKey = true
+			}
+		}
+		if !castOK && reqKey {
+			return spellFailedBadTargets
+		}
+		// Fail chance for lockpicking attempts (Spell.cpp:5780-5788):
+		// canFailAtMax only for SKILL_LOCKPICKING; irand(skillValue-25,
+		// skillValue+37) inclusive both ends is a width-63 roll.
+		if skillID != skillNone {
+			canFailAtMax := skillID == skillLockpicking
+			if canFailAtMax || skillValue < configMaxSkillValue {
+				if reqSkillValue > skillValue-25+int32(rand.IntN(63)) {
+					return spellFailedTryAgain
+				}
+			}
+		}
 	}
 	return 0
 }
