@@ -12,6 +12,7 @@ const (
 	gmTicketStatusDefault         uint32 = 10
 	gmTicketStatusHasText         uint32 = 6
 	gmTicketResponseCreateSuccess uint32 = 1
+	gmTicketResponseCreateError   uint32 = 2
 	gmTicketResponseUpdateSuccess uint32 = 1
 	gmTicketResponseDeleted       uint32 = 9
 )
@@ -70,6 +71,15 @@ func (s *session) handleGMTicketCreate(ctx context.Context, payload []byte) bool
 	message, _ := r.ReadCString()
 	needResponse, _ := r.ReadU32()
 	needMoreHelpBool, _ := r.ReadU8()
+
+	// The GM ticket system can be toggled with `.ticket togglesystem`
+	// (cs_ticket.cpp HandleToggleGMTicketSystem); disabled means no new
+	// tickets are accepted.
+	if s.server != nil && !s.server.ticketsEnabled.Load() {
+		buf := protocol.NewBuffer(4)
+		buf.WriteU32(gmTicketResponseCreateError)
+		return s.write(uint16(protocol.OpcodeSMSG_GMTICKET_CREATE), buf.Bytes(), true) == nil
+	}
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil && s.player != nil {
 		cdb := s.server.CharactersStore.DB

@@ -1209,6 +1209,63 @@ const permissionCommandServerRestartForce uint32 = 840
 // permissionCommandServerDebug mirrors rbac::RBAC_PERM_COMMAND_SERVER_DEBUG (RBAC.h:738).
 const permissionCommandServerDebug uint32 = 872
 
+// permissionCommandTicket mirrors rbac::RBAC_PERM_COMMAND_TICKET (RBAC.h:610).
+const permissionCommandTicket uint32 = 742
+
+// permissionCommandTicketAssign mirrors rbac::RBAC_PERM_COMMAND_TICKET_ASSIGN (RBAC.h:611).
+const permissionCommandTicketAssign uint32 = 743
+
+// permissionCommandTicketClose mirrors rbac::RBAC_PERM_COMMAND_TICKET_CLOSE (RBAC.h:612).
+const permissionCommandTicketClose uint32 = 744
+
+// permissionCommandTicketClosedlist mirrors rbac::RBAC_PERM_COMMAND_TICKET_CLOSEDLIST (RBAC.h:613).
+const permissionCommandTicketClosedlist uint32 = 745
+
+// permissionCommandTicketComment mirrors rbac::RBAC_PERM_COMMAND_TICKET_COMMENT (RBAC.h:614).
+const permissionCommandTicketComment uint32 = 746
+
+// permissionCommandTicketComplete mirrors rbac::RBAC_PERM_COMMAND_TICKET_COMPLETE (RBAC.h:615).
+const permissionCommandTicketComplete uint32 = 747
+
+// permissionCommandTicketDelete mirrors rbac::RBAC_PERM_COMMAND_TICKET_DELETE (RBAC.h:616).
+const permissionCommandTicketDelete uint32 = 748
+
+// permissionCommandTicketEscalate mirrors rbac::RBAC_PERM_COMMAND_TICKET_ESCALATE (RBAC.h:617).
+const permissionCommandTicketEscalate uint32 = 749
+
+// permissionCommandTicketEscalatedlist mirrors rbac::RBAC_PERM_COMMAND_TICKET_ESCALATEDLIST (RBAC.h:618).
+const permissionCommandTicketEscalatedlist uint32 = 750
+
+// permissionCommandTicketList mirrors rbac::RBAC_PERM_COMMAND_TICKET_LIST (RBAC.h:619).
+const permissionCommandTicketList uint32 = 751
+
+// permissionCommandTicketOnlinelist mirrors rbac::RBAC_PERM_COMMAND_TICKET_ONLINELIST (RBAC.h:620).
+const permissionCommandTicketOnlinelist uint32 = 752
+
+// permissionCommandTicketReset mirrors rbac::RBAC_PERM_COMMAND_TICKET_RESET (RBAC.h:621).
+const permissionCommandTicketReset uint32 = 753
+
+// permissionCommandTicketResponse mirrors rbac::RBAC_PERM_COMMAND_TICKET_RESPONSE (RBAC.h:622).
+const permissionCommandTicketResponse uint32 = 754
+
+// permissionCommandTicketResponseAppend mirrors rbac::RBAC_PERM_COMMAND_TICKET_RESPONSE_APPEND (RBAC.h:623).
+const permissionCommandTicketResponseAppend uint32 = 755
+
+// permissionCommandTicketResponseAppendln mirrors rbac::RBAC_PERM_COMMAND_TICKET_RESPONSE_APPENDLN (RBAC.h:624).
+const permissionCommandTicketResponseAppendln uint32 = 756
+
+// permissionCommandTicketTogglesystem mirrors rbac::RBAC_PERM_COMMAND_TICKET_TOGGLESYSTEM (RBAC.h:625).
+const permissionCommandTicketTogglesystem uint32 = 757
+
+// permissionCommandTicketUnassign mirrors rbac::RBAC_PERM_COMMAND_TICKET_UNASSIGN (RBAC.h:626).
+const permissionCommandTicketUnassign uint32 = 758
+
+// permissionCommandTicketViewid mirrors rbac::RBAC_PERM_COMMAND_TICKET_VIEWID (RBAC.h:627).
+const permissionCommandTicketViewid uint32 = 759
+
+// permissionCommandTicketViewname mirrors rbac::RBAC_PERM_COMMAND_TICKET_VIEWNAME (RBAC.h:628).
+const permissionCommandTicketViewname uint32 = 760
+
 // permissionCommandReload mirrors rbac::RBAC_PERM_COMMAND_RELOAD (RBAC.h).
 const permissionCommandReload uint32 = 607
 
