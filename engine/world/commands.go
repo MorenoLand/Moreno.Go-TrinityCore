@@ -6215,6 +6215,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("quest", func(ctx context.Context, args []string) bool { s.handleCmdQuest(ctx, args); return true }, []string{"add", "complete", "remove", "reward"}, nil)
 	root.add("pet", func(ctx context.Context, args []string) bool { s.handleCmdPet(ctx, args); return true }, []string{"create", "learn", "unlearn", "level"}, nil)
 	root.add("rbac", func(ctx context.Context, args []string) bool { s.handleCmdRBAC(ctx, args); return true }, []string{"account list", "account grant", "account deny", "account revoke", "list"}, nil)
+	root.add("reload", func(ctx context.Context, args []string) bool { s.handleCmdReload(ctx, args); return true }, []string{"all"}, nil)
 	return root
 }
 

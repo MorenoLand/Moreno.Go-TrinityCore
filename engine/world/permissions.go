@@ -1130,3 +1130,321 @@ const permissionCommandPetUnlearn uint32 = 482
 
 // permissionCommandPetLevel mirrors rbac::RBAC_PERM_COMMAND_PET_LEVEL (RBAC.h:705).
 const permissionCommandPetLevel uint32 = 838
+
+// permissionCommandReload mirrors rbac::RBAC_PERM_COMMAND_RELOAD (RBAC.h).
+const permissionCommandReload uint32 = 607
+
+// permissionCommandReloadAccessRequirement mirrors rbac::RBAC_PERM_COMMAND_RELOAD_ACCESS_REQUIREMENT (RBAC.h).
+const permissionCommandReloadAccessRequirement uint32 = 608
+
+// permissionCommandReloadAchievementCriteriaData mirrors rbac::RBAC_PERM_COMMAND_RELOAD_ACHIEVEMENT_CRITERIA_DATA (RBAC.h).
+const permissionCommandReloadAchievementCriteriaData uint32 = 609
+
+// permissionCommandReloadAchievementReward mirrors rbac::RBAC_PERM_COMMAND_RELOAD_ACHIEVEMENT_REWARD (RBAC.h).
+const permissionCommandReloadAchievementReward uint32 = 610
+
+// permissionCommandReloadAll mirrors rbac::RBAC_PERM_COMMAND_RELOAD_ALL (RBAC.h).
+const permissionCommandReloadAll uint32 = 611
+
+// permissionCommandReloadAllAchievement mirrors rbac::RBAC_PERM_COMMAND_RELOAD_ALL_ACHIEVEMENT (RBAC.h).
+const permissionCommandReloadAllAchievement uint32 = 612
+
+// permissionCommandReloadAllArea mirrors rbac::RBAC_PERM_COMMAND_RELOAD_ALL_AREA (RBAC.h).
+const permissionCommandReloadAllArea uint32 = 613
+
+// permissionCommandReloadBroadcastText mirrors rbac::RBAC_PERM_COMMAND_RELOAD_BROADCAST_TEXT (RBAC.h).
+const permissionCommandReloadBroadcastText uint32 = 614
+
+// permissionCommandReloadAllGossip mirrors rbac::RBAC_PERM_COMMAND_RELOAD_ALL_GOSSIP (RBAC.h).
+const permissionCommandReloadAllGossip uint32 = 615
+
+// permissionCommandReloadAllItem mirrors rbac::RBAC_PERM_COMMAND_RELOAD_ALL_ITEM (RBAC.h).
+const permissionCommandReloadAllItem uint32 = 616
+
+// permissionCommandReloadAllLocales mirrors rbac::RBAC_PERM_COMMAND_RELOAD_ALL_LOCALES (RBAC.h).
+const permissionCommandReloadAllLocales uint32 = 617
+
+// permissionCommandReloadAllLoot mirrors rbac::RBAC_PERM_COMMAND_RELOAD_ALL_LOOT (RBAC.h).
+const permissionCommandReloadAllLoot uint32 = 618
+
+// permissionCommandReloadAllNpc mirrors rbac::RBAC_PERM_COMMAND_RELOAD_ALL_NPC (RBAC.h).
+const permissionCommandReloadAllNpc uint32 = 619
+
+// permissionCommandReloadAllQuest mirrors rbac::RBAC_PERM_COMMAND_RELOAD_ALL_QUEST (RBAC.h).
+const permissionCommandReloadAllQuest uint32 = 620
+
+// permissionCommandReloadAllScripts mirrors rbac::RBAC_PERM_COMMAND_RELOAD_ALL_SCRIPTS (RBAC.h).
+const permissionCommandReloadAllScripts uint32 = 621
+
+// permissionCommandReloadAllSpell mirrors rbac::RBAC_PERM_COMMAND_RELOAD_ALL_SPELL (RBAC.h).
+const permissionCommandReloadAllSpell uint32 = 622
+
+// permissionCommandReloadAreatriggerInvolvedrelation mirrors rbac::RBAC_PERM_COMMAND_RELOAD_AREATRIGGER_INVOLVEDRELATION (RBAC.h).
+const permissionCommandReloadAreatriggerInvolvedrelation uint32 = 623
+
+// permissionCommandReloadAreatriggerTavern mirrors rbac::RBAC_PERM_COMMAND_RELOAD_AREATRIGGER_TAVERN (RBAC.h).
+const permissionCommandReloadAreatriggerTavern uint32 = 624
+
+// permissionCommandReloadAreatriggerTeleport mirrors rbac::RBAC_PERM_COMMAND_RELOAD_AREATRIGGER_TELEPORT (RBAC.h).
+const permissionCommandReloadAreatriggerTeleport uint32 = 625
+
+// permissionCommandReloadAuctions mirrors rbac::RBAC_PERM_COMMAND_RELOAD_AUCTIONS (RBAC.h).
+const permissionCommandReloadAuctions uint32 = 626
+
+// permissionCommandReloadAutobroadcast mirrors rbac::RBAC_PERM_COMMAND_RELOAD_AUTOBROADCAST (RBAC.h).
+const permissionCommandReloadAutobroadcast uint32 = 627
+
+// permissionCommandReloadConditions mirrors rbac::RBAC_PERM_COMMAND_RELOAD_CONDITIONS (RBAC.h).
+const permissionCommandReloadConditions uint32 = 629
+
+// permissionCommandReloadConfig mirrors rbac::RBAC_PERM_COMMAND_RELOAD_CONFIG (RBAC.h).
+const permissionCommandReloadConfig uint32 = 630
+
+// permissionCommandReloadBattlegroundTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_BATTLEGROUND_TEMPLATE (RBAC.h).
+const permissionCommandReloadBattlegroundTemplate uint32 = 631
+
+// permissionCommandReloadCreatureLinkedRespawn mirrors rbac::RBAC_PERM_COMMAND_RELOAD_CREATURE_LINKED_RESPAWN (RBAC.h).
+const permissionCommandReloadCreatureLinkedRespawn uint32 = 633
+
+// permissionCommandReloadCreatureLootTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_CREATURE_LOOT_TEMPLATE (RBAC.h).
+const permissionCommandReloadCreatureLootTemplate uint32 = 634
+
+// permissionCommandReloadCreatureOnkillReputation mirrors rbac::RBAC_PERM_COMMAND_RELOAD_CREATURE_ONKILL_REPUTATION (RBAC.h).
+const permissionCommandReloadCreatureOnkillReputation uint32 = 635
+
+// permissionCommandReloadCreatureQuestender mirrors rbac::RBAC_PERM_COMMAND_RELOAD_CREATURE_QUESTENDER (RBAC.h).
+const permissionCommandReloadCreatureQuestender uint32 = 636
+
+// permissionCommandReloadCreatureQueststarter mirrors rbac::RBAC_PERM_COMMAND_RELOAD_CREATURE_QUESTSTARTER (RBAC.h).
+const permissionCommandReloadCreatureQueststarter uint32 = 637
+
+// permissionCommandReloadCreatureSummonGroups mirrors rbac::RBAC_PERM_COMMAND_RELOAD_CREATURE_SUMMON_GROUPS (RBAC.h).
+const permissionCommandReloadCreatureSummonGroups uint32 = 638
+
+// permissionCommandReloadCreatureTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_CREATURE_TEMPLATE (RBAC.h).
+const permissionCommandReloadCreatureTemplate uint32 = 639
+
+// permissionCommandReloadCreatureText mirrors rbac::RBAC_PERM_COMMAND_RELOAD_CREATURE_TEXT (RBAC.h).
+const permissionCommandReloadCreatureText uint32 = 640
+
+// permissionCommandReloadDisables mirrors rbac::RBAC_PERM_COMMAND_RELOAD_DISABLES (RBAC.h).
+const permissionCommandReloadDisables uint32 = 641
+
+// permissionCommandReloadDisenchantLootTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_DISENCHANT_LOOT_TEMPLATE (RBAC.h).
+const permissionCommandReloadDisenchantLootTemplate uint32 = 642
+
+// permissionCommandReloadEventScripts mirrors rbac::RBAC_PERM_COMMAND_RELOAD_EVENT_SCRIPTS (RBAC.h).
+const permissionCommandReloadEventScripts uint32 = 643
+
+// permissionCommandReloadFishingLootTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_FISHING_LOOT_TEMPLATE (RBAC.h).
+const permissionCommandReloadFishingLootTemplate uint32 = 644
+
+// permissionCommandReloadGraveyardZone mirrors rbac::RBAC_PERM_COMMAND_RELOAD_GRAVEYARD_ZONE (RBAC.h).
+const permissionCommandReloadGraveyardZone uint32 = 645
+
+// permissionCommandReloadGameTele mirrors rbac::RBAC_PERM_COMMAND_RELOAD_GAME_TELE (RBAC.h).
+const permissionCommandReloadGameTele uint32 = 646
+
+// permissionCommandReloadGameobjectQuestender mirrors rbac::RBAC_PERM_COMMAND_RELOAD_GAMEOBJECT_QUESTENDER (RBAC.h).
+const permissionCommandReloadGameobjectQuestender uint32 = 647
+
+// permissionCommandReloadGameobjectQuestLootTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_GAMEOBJECT_QUEST_LOOT_TEMPLATE (RBAC.h).
+const permissionCommandReloadGameobjectQuestLootTemplate uint32 = 648
+
+// permissionCommandReloadGameobjectQueststarter mirrors rbac::RBAC_PERM_COMMAND_RELOAD_GAMEOBJECT_QUESTSTARTER (RBAC.h).
+const permissionCommandReloadGameobjectQueststarter uint32 = 649
+
+// permissionCommandReloadGmTickets mirrors rbac::RBAC_PERM_COMMAND_RELOAD_GM_TICKETS (RBAC.h).
+const permissionCommandReloadGmTickets uint32 = 650
+
+// permissionCommandReloadGossipMenu mirrors rbac::RBAC_PERM_COMMAND_RELOAD_GOSSIP_MENU (RBAC.h).
+const permissionCommandReloadGossipMenu uint32 = 651
+
+// permissionCommandReloadGossipMenuOption mirrors rbac::RBAC_PERM_COMMAND_RELOAD_GOSSIP_MENU_OPTION (RBAC.h).
+const permissionCommandReloadGossipMenuOption uint32 = 652
+
+// permissionCommandReloadItemEnchantmentTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_ITEM_ENCHANTMENT_TEMPLATE (RBAC.h).
+const permissionCommandReloadItemEnchantmentTemplate uint32 = 653
+
+// permissionCommandReloadItemLootTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_ITEM_LOOT_TEMPLATE (RBAC.h).
+const permissionCommandReloadItemLootTemplate uint32 = 654
+
+// permissionCommandReloadItemSetNames mirrors rbac::RBAC_PERM_COMMAND_RELOAD_ITEM_SET_NAMES (RBAC.h).
+const permissionCommandReloadItemSetNames uint32 = 655
+
+// permissionCommandReloadLfgDungeonRewards mirrors rbac::RBAC_PERM_COMMAND_RELOAD_LFG_DUNGEON_REWARDS (RBAC.h).
+const permissionCommandReloadLfgDungeonRewards uint32 = 656
+
+// permissionCommandReloadAchievementRewardLocale mirrors rbac::RBAC_PERM_COMMAND_RELOAD_ACHIEVEMENT_REWARD_LOCALE (RBAC.h).
+const permissionCommandReloadAchievementRewardLocale uint32 = 657
+
+// permissionCommandReloadCretureTemplateLocale mirrors rbac::RBAC_PERM_COMMAND_RELOAD_CRETURE_TEMPLATE_LOCALE (RBAC.h).
+const permissionCommandReloadCretureTemplateLocale uint32 = 658
+
+// permissionCommandReloadCretureTextLocale mirrors rbac::RBAC_PERM_COMMAND_RELOAD_CRETURE_TEXT_LOCALE (RBAC.h).
+const permissionCommandReloadCretureTextLocale uint32 = 659
+
+// permissionCommandReloadGameobjectTemplateLocale mirrors rbac::RBAC_PERM_COMMAND_RELOAD_GAMEOBJECT_TEMPLATE_LOCALE (RBAC.h).
+const permissionCommandReloadGameobjectTemplateLocale uint32 = 660
+
+// permissionCommandReloadGossipMenuOptionLocale mirrors rbac::RBAC_PERM_COMMAND_RELOAD_GOSSIP_MENU_OPTION_LOCALE (RBAC.h).
+const permissionCommandReloadGossipMenuOptionLocale uint32 = 661
+
+// permissionCommandReloadItemTemplateLocale mirrors rbac::RBAC_PERM_COMMAND_RELOAD_ITEM_TEMPLATE_LOCALE (RBAC.h).
+const permissionCommandReloadItemTemplateLocale uint32 = 662
+
+// permissionCommandReloadItemSetNameLocale mirrors rbac::RBAC_PERM_COMMAND_RELOAD_ITEM_SET_NAME_LOCALE (RBAC.h).
+const permissionCommandReloadItemSetNameLocale uint32 = 663
+
+// permissionCommandReloadNpcTextLocale mirrors rbac::RBAC_PERM_COMMAND_RELOAD_NPC_TEXT_LOCALE (RBAC.h).
+const permissionCommandReloadNpcTextLocale uint32 = 664
+
+// permissionCommandReloadPageTextLocale mirrors rbac::RBAC_PERM_COMMAND_RELOAD_PAGE_TEXT_LOCALE (RBAC.h).
+const permissionCommandReloadPageTextLocale uint32 = 665
+
+// permissionCommandReloadPointsOfInterestLocale mirrors rbac::RBAC_PERM_COMMAND_RELOAD_POINTS_OF_INTEREST_LOCALE (RBAC.h).
+const permissionCommandReloadPointsOfInterestLocale uint32 = 666
+
+// permissionCommandReloadQuestTemplateLocale mirrors rbac::RBAC_PERM_COMMAND_RELOAD_QUEST_TEMPLATE_LOCALE (RBAC.h).
+const permissionCommandReloadQuestTemplateLocale uint32 = 667
+
+// permissionCommandReloadMailLevelReward mirrors rbac::RBAC_PERM_COMMAND_RELOAD_MAIL_LEVEL_REWARD (RBAC.h).
+const permissionCommandReloadMailLevelReward uint32 = 668
+
+// permissionCommandReloadMailLootTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_MAIL_LOOT_TEMPLATE (RBAC.h).
+const permissionCommandReloadMailLootTemplate uint32 = 669
+
+// permissionCommandReloadMillingLootTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_MILLING_LOOT_TEMPLATE (RBAC.h).
+const permissionCommandReloadMillingLootTemplate uint32 = 670
+
+// permissionCommandReloadNpcSpellclickSpells mirrors rbac::RBAC_PERM_COMMAND_RELOAD_NPC_SPELLCLICK_SPELLS (RBAC.h).
+const permissionCommandReloadNpcSpellclickSpells uint32 = 671
+
+// permissionCommandReloadTrainer mirrors rbac::RBAC_PERM_COMMAND_RELOAD_TRAINER (RBAC.h).
+const permissionCommandReloadTrainer uint32 = 672
+
+// permissionCommandReloadNpcVendor mirrors rbac::RBAC_PERM_COMMAND_RELOAD_NPC_VENDOR (RBAC.h).
+const permissionCommandReloadNpcVendor uint32 = 673
+
+// permissionCommandReloadPageText mirrors rbac::RBAC_PERM_COMMAND_RELOAD_PAGE_TEXT (RBAC.h).
+const permissionCommandReloadPageText uint32 = 674
+
+// permissionCommandReloadPickpocketingLootTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_PICKPOCKETING_LOOT_TEMPLATE (RBAC.h).
+const permissionCommandReloadPickpocketingLootTemplate uint32 = 675
+
+// permissionCommandReloadPointsOfInterest mirrors rbac::RBAC_PERM_COMMAND_RELOAD_POINTS_OF_INTEREST (RBAC.h).
+const permissionCommandReloadPointsOfInterest uint32 = 676
+
+// permissionCommandReloadProspectingLootTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_PROSPECTING_LOOT_TEMPLATE (RBAC.h).
+const permissionCommandReloadProspectingLootTemplate uint32 = 677
+
+// permissionCommandReloadQuestPoi mirrors rbac::RBAC_PERM_COMMAND_RELOAD_QUEST_POI (RBAC.h).
+const permissionCommandReloadQuestPoi uint32 = 678
+
+// permissionCommandReloadQuestTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_QUEST_TEMPLATE (RBAC.h).
+const permissionCommandReloadQuestTemplate uint32 = 679
+
+// permissionCommandReloadRbac mirrors rbac::RBAC_PERM_COMMAND_RELOAD_RBAC (RBAC.h).
+const permissionCommandReloadRbac uint32 = 680
+
+// permissionCommandReloadReferenceLootTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_REFERENCE_LOOT_TEMPLATE (RBAC.h).
+const permissionCommandReloadReferenceLootTemplate uint32 = 681
+
+// permissionCommandReloadReservedName mirrors rbac::RBAC_PERM_COMMAND_RELOAD_RESERVED_NAME (RBAC.h).
+const permissionCommandReloadReservedName uint32 = 682
+
+// permissionCommandReloadReputationRewardRate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_REPUTATION_REWARD_RATE (RBAC.h).
+const permissionCommandReloadReputationRewardRate uint32 = 683
+
+// permissionCommandReloadSpilloverTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_SPILLOVER_TEMPLATE (RBAC.h).
+const permissionCommandReloadSpilloverTemplate uint32 = 684
+
+// permissionCommandReloadSkillDiscoveryTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_SKILL_DISCOVERY_TEMPLATE (RBAC.h).
+const permissionCommandReloadSkillDiscoveryTemplate uint32 = 685
+
+// permissionCommandReloadSkillExtraItemTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_SKILL_EXTRA_ITEM_TEMPLATE (RBAC.h).
+const permissionCommandReloadSkillExtraItemTemplate uint32 = 686
+
+// permissionCommandReloadSkillFishingBaseLevel mirrors rbac::RBAC_PERM_COMMAND_RELOAD_SKILL_FISHING_BASE_LEVEL (RBAC.h).
+const permissionCommandReloadSkillFishingBaseLevel uint32 = 687
+
+// permissionCommandReloadSkinningLootTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_SKINNING_LOOT_TEMPLATE (RBAC.h).
+const permissionCommandReloadSkinningLootTemplate uint32 = 688
+
+// permissionCommandReloadSmartScripts mirrors rbac::RBAC_PERM_COMMAND_RELOAD_SMART_SCRIPTS (RBAC.h).
+const permissionCommandReloadSmartScripts uint32 = 689
+
+// permissionCommandReloadSpellRequired mirrors rbac::RBAC_PERM_COMMAND_RELOAD_SPELL_REQUIRED (RBAC.h).
+const permissionCommandReloadSpellRequired uint32 = 690
+
+// permissionCommandReloadSpellArea mirrors rbac::RBAC_PERM_COMMAND_RELOAD_SPELL_AREA (RBAC.h).
+const permissionCommandReloadSpellArea uint32 = 691
+
+// permissionCommandReloadSpellBonusData mirrors rbac::RBAC_PERM_COMMAND_RELOAD_SPELL_BONUS_DATA (RBAC.h).
+const permissionCommandReloadSpellBonusData uint32 = 692
+
+// permissionCommandReloadSpellGroup mirrors rbac::RBAC_PERM_COMMAND_RELOAD_SPELL_GROUP (RBAC.h).
+const permissionCommandReloadSpellGroup uint32 = 693
+
+// permissionCommandReloadSpellLearnSpell mirrors rbac::RBAC_PERM_COMMAND_RELOAD_SPELL_LEARN_SPELL (RBAC.h).
+const permissionCommandReloadSpellLearnSpell uint32 = 694
+
+// permissionCommandReloadSpellLootTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_SPELL_LOOT_TEMPLATE (RBAC.h).
+const permissionCommandReloadSpellLootTemplate uint32 = 695
+
+// permissionCommandReloadSpellLinkedSpell mirrors rbac::RBAC_PERM_COMMAND_RELOAD_SPELL_LINKED_SPELL (RBAC.h).
+const permissionCommandReloadSpellLinkedSpell uint32 = 696
+
+// permissionCommandReloadSpellPetAuras mirrors rbac::RBAC_PERM_COMMAND_RELOAD_SPELL_PET_AURAS (RBAC.h).
+const permissionCommandReloadSpellPetAuras uint32 = 697
+
+// permissionCommandReloadSpellProc mirrors rbac::RBAC_PERM_COMMAND_RELOAD_SPELL_PROC (RBAC.h).
+const permissionCommandReloadSpellProc uint32 = 699
+
+// permissionCommandReloadSpellScripts mirrors rbac::RBAC_PERM_COMMAND_RELOAD_SPELL_SCRIPTS (RBAC.h).
+const permissionCommandReloadSpellScripts uint32 = 700
+
+// permissionCommandReloadSpellTargetPosition mirrors rbac::RBAC_PERM_COMMAND_RELOAD_SPELL_TARGET_POSITION (RBAC.h).
+const permissionCommandReloadSpellTargetPosition uint32 = 701
+
+// permissionCommandReloadSpellThreats mirrors rbac::RBAC_PERM_COMMAND_RELOAD_SPELL_THREATS (RBAC.h).
+const permissionCommandReloadSpellThreats uint32 = 702
+
+// permissionCommandReloadSpellGroupStackRules mirrors rbac::RBAC_PERM_COMMAND_RELOAD_SPELL_GROUP_STACK_RULES (RBAC.h).
+const permissionCommandReloadSpellGroupStackRules uint32 = 703
+
+// permissionCommandReloadTrinityString mirrors rbac::RBAC_PERM_COMMAND_RELOAD_TRINITY_STRING (RBAC.h).
+const permissionCommandReloadTrinityString uint32 = 704
+
+// permissionCommandReloadWaypointScripts mirrors rbac::RBAC_PERM_COMMAND_RELOAD_WAYPOINT_SCRIPTS (RBAC.h).
+const permissionCommandReloadWaypointScripts uint32 = 706
+
+// permissionCommandReloadWaypointData mirrors rbac::RBAC_PERM_COMMAND_RELOAD_WAYPOINT_DATA (RBAC.h).
+const permissionCommandReloadWaypointData uint32 = 707
+
+// permissionCommandReloadVehicleAccesory mirrors rbac::RBAC_PERM_COMMAND_RELOAD_VEHICLE_ACCESORY (RBAC.h).
+const permissionCommandReloadVehicleAccesory uint32 = 708
+
+// permissionCommandReloadVehicleTemplateAccessory mirrors rbac::RBAC_PERM_COMMAND_RELOAD_VEHICLE_TEMPLATE_ACCESSORY (RBAC.h).
+const permissionCommandReloadVehicleTemplateAccessory uint32 = 709
+
+// permissionCommandReloadCharacterTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_CHARACTER_TEMPLATE (RBAC.h).
+const permissionCommandReloadCharacterTemplate uint32 = 842
+
+// permissionCommandReloadQuestGreeting mirrors rbac::RBAC_PERM_COMMAND_RELOAD_QUEST_GREETING (RBAC.h).
+const permissionCommandReloadQuestGreeting uint32 = 843
+
+// permissionCommandReloadSceneTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_SCENE_TEMPLATE (RBAC.h).
+const permissionCommandReloadSceneTemplate uint32 = 850
+
+// permissionCommandReloadAreatriggerTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_AREATRIGGER_TEMPLATE (RBAC.h).
+const permissionCommandReloadAreatriggerTemplate uint32 = 851
+
+// permissionCommandReloadConversationTemplate mirrors rbac::RBAC_PERM_COMMAND_RELOAD_CONVERSATION_TEMPLATE (RBAC.h).
+const permissionCommandReloadConversationTemplate uint32 = 853
+
+// permissionCommandReloadQuestGreetingLocale mirrors rbac::RBAC_PERM_COMMAND_RELOAD_QUEST_GREETING_LOCALE (RBAC.h).
+const permissionCommandReloadQuestGreetingLocale uint32 = 867
+
+// permissionCommandReloadCreatureMovementOverride mirrors rbac::RBAC_PERM_COMMAND_RELOAD_CREATURE_MOVEMENT_OVERRIDE (RBAC.h).
+const permissionCommandReloadCreatureMovementOverride uint32 = 873
