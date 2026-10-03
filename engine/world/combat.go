@@ -578,6 +578,39 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	}
 }
 
+// consumeRangedAmmo mirrors Spell::TakeAmmo (Spell.cpp:4875): it destroys one
+// count of the equipped ammo (PLAYER_AMMO_ID) and reports whether ammo
+// remains afterwards. It no-ops (returning false) when no ammo is equipped;
+// callers own the out-of-ammo fallout. The wand / broken-ranged /
+// thrown-weapon legs have no Go bridge (no ranged-slot or thrown-weapon
+// model); the auto-repeat-specific fallout stays with the caller.
+func (s *session) consumeRangedAmmo(ctx context.Context) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return false
+	}
+	ammoEntry := s.player.AmmoID
+	if ammoEntry == 0 {
+		return false
+	}
+	var itemGUID, count int64
+	err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT ii.guid, ii.count FROM character_inventory ci JOIN item_instance ii ON ci.item = ii.guid WHERE ci.guid = ? AND ii.itemEntry = ? AND ii.count > 0 LIMIT 1", s.playerGUID, ammoEntry).Scan(&itemGUID, &count)
+	if err != nil {
+		return false
+	}
+	if count <= 1 {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ?", itemGUID)
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
+		s.adjustQuestItemCount(ctx, ammoEntry, 1, false)
+		s.player.AmmoID = 0
+		_ = s.calculatePlayerStats(ctx, s.player)
+		s.sendPlayerUpdate()
+		return false
+	}
+	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE item_instance SET count = count - 1 WHERE guid = ?", itemGUID)
+	s.adjustQuestItemCount(ctx, ammoEntry, 1, false)
+	return true
+}
+
 func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, spellID uint32) {
 	if s.player == nil || s.isDeadOrGhost() || target.Health == 0 {
 		return
@@ -586,29 +619,15 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	s.lastRangedSwing = now
 
 	// Consume ammo for hunter bow/gun/crossbow (Spell 75) (TC Spell::TakeAmmo)
-	if spellID == 75 && s.player.AmmoID > 0 && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		ammoEntry := s.player.AmmoID
-		var itemGUID, count int64
-		err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT ii.guid, ii.count FROM character_inventory ci JOIN item_instance ii ON ci.item = ii.guid WHERE ci.guid = ? AND ii.itemEntry = ? AND ii.count > 0 LIMIT 1", s.playerGUID, ammoEntry).Scan(&itemGUID, &count)
-		if err == nil {
-			if count <= 1 {
-				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ?", itemGUID)
-				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
-				s.adjustQuestItemCount(ctx, ammoEntry, 1, false)
-				s.player.AmmoID = 0
-				_ = s.calculatePlayerStats(ctx, s.player)
-				s.sendPlayerUpdate()
-				s.autoRepeatSpell = 0
-				s.autoRepeatTarget = 0
-				buf := protocol.NewBuffer(9)
-				buf.WritePackedGUID(s.playerGUID)
-				_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
-				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(1, spellID, 75), true) // SPELL_FAILED_NO_AMMO = 75
-			} else {
-				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE item_instance SET count = count - 1 WHERE guid = ?", itemGUID)
-				s.adjustQuestItemCount(ctx, ammoEntry, 1, false)
-			}
-		}
+	if spellID == 75 && s.player.AmmoID > 0 && !s.consumeRangedAmmo(ctx) {
+		// the last ammo was consumed: stop the auto-repeat; the next
+		// swing's CheckCast fails SPELL_FAILED_NO_AMMO
+		s.autoRepeatSpell = 0
+		s.autoRepeatTarget = 0
+		buf := protocol.NewBuffer(9)
+		buf.WritePackedGUID(s.playerGUID)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(1, spellID, 75), true) // SPELL_FAILED_NO_AMMO = 75
 	}
 
 	// Visual: broadcast SMSG_SPELL_GO (TC Spell::SendSpellGo)

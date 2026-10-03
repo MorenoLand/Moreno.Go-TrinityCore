@@ -705,6 +705,11 @@ const (
 // (SpellAuraDefines.h:189).
 const spellAuraAddTargetTrigger = 109
 
+// spellAuraAbilityConsumeNoAmmo mirrors SPELL_AURA_ABILITY_CONSUME_NO_AMMO
+// (SpellAuraDefines.h:354): HandleLaunchPhase (Spell.cpp:7705) skips
+// TakeAmmo for spells it affects.
+const spellAuraAbilityConsumeNoAmmo = 274
+
 // isProcTriggerAuraType mirrors the LoadSpellProc trigger-aura subset whose
 // C++ HandleProc arm fires a spell or damage (SpellMgr.cpp:1686-1729,
 // SpellAuraEffects.cpp:1010-1043): dummy, proc-trigger-spell,

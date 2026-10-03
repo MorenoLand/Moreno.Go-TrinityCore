@@ -1265,6 +1265,35 @@ func (s *session) prepareHitTriggerSpells(spell wotlk.Spell) []spellHitTrigger {
 	return triggers
 }
 
+// hasConsumeNoAmmoAura mirrors the HandleLaunchPhase ammo exemption
+// (Spell.cpp:7705): Player::HasAuraTypeWithAffectMask(
+// SPELL_AURA_ABILITY_CONSUME_NO_AMMO, spell) — the caster's aura effects of
+// that type whose family mask covers the cast spell suppress TakeAmmo.
+func (s *session) hasConsumeNoAmmoAura(spell wotlk.Spell) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if effect.Aura != spellAuraAbilityConsumeNoAmmo || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			// AuraEffect::IsAffectedOnSpell (SpellAuraEffects.cpp:848).
+			if spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, castItemGUID uint64, castItemEntry uint32) {
 	if s.player == nil {
 		return
@@ -1423,8 +1452,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	//     trade spell; Go resolves the trader's non-traded item directly in
 	//     applyDeferredTradeEnchant (trade.go), and client packets carry the
 	//     real item GUID, so there is no sentinel to rewrite.
-	//   - HandleLaunchPhase: the delayed leg is the projectile travel delay
-	//     before effect execution (the spell.Speed leg below).
+	//   - HandleLaunchPhase: the LAUNCH effect modes, launch-time combat
+	//     engage, and wand/thrown TakeAmmo legs have no Go bridge; the
+	//     ammo leg is bridged at SendSpellGo below, and the delayed leg
+	//     is the projectile travel delay before effect execution (the
+	//     spell.Speed leg further below).
 	//   - ReleaseSpellFocus: creature casters only; the caster here is always
 	//     a player (s.player == nil returns at the top).
 	//
@@ -1772,6 +1804,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		cooldownEnd := now.Add(15 * time.Minute).Unix() // 15 min cooldown
 		s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: spellID, Item: 6948, Category: categoryID, End: cooldownEnd, CategoryEnd: categoryEnd})
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spellID, 900000), true)
+	}
+
+	// Spell::HandleLaunchPhase (Spell.cpp:7685-7726) runs at launch, between
+	// SendSpellCooldown and SendSpellGo: the SPELL_EFFECT_HANDLE_LAUNCH /
+	// SPELL_EFFECT_HANDLE_LAUNCH_TARGET effect modes, the
+	// DoEffectOnLaunchTarget combat engage, and TakeAmmo for player
+	// SPELL_ATTR0_REQ_AMMO spells. Only the ammo leg has a Go bridge:
+	//   - LAUNCH / LAUNCH_TARGET modes have no Go equivalent; all effects
+	//     resolve at hit time in applyEffects.
+	//   - The launch-time SetInCombatWith engage is a timing delta: C++
+	//     puts the caster in combat when the missile launches; Go engages
+	//     (triggerCreatureAggro) when the effects hit.
+	//   - The triggered-cast Volley-tick exemption (SPELLFAMILY_HUNTER +
+	//     IsTargetingArea) is moot: finishSpellCast only serves
+	//     player-initiated casts, so Volley's non-triggered initial cast
+	//     consumes once at launch, matching C++.
+	//   - TakeAmmo's wand / broken-ranged / thrown-weapon legs have no Go
+	//     bridge: no ranged-slot or thrown-weapon model (wands never carry
+	//     REQ_AMMO, so the wand leg is vacuous under this gate).
+	if spell.Attributes&spellAttr0ReqAmmo != 0 && !s.hasConsumeNoAmmoAura(spell) {
+		s.consumeRangedAmmo(ctx)
 	}
 
 	goPacket := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, missStatus, target, remainingPower)
@@ -2190,6 +2243,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			//     target's travel time and lands all targets together.
 			//   - m_UniqueGOTargetInfo recheck: Go has no gameobject/corpse/
 			//     item target containers (unit targets only).
+			//   - handle_delayed's DoProcessTargetContainer(delayedTargets)
+			//     per-tick processing (PreprocessTarget, DoTargetSpellHit,
+			//     DoDamageAndTriggers): Go's applyEffects is the HIT-mode
+			//     phase for all resolved targets; the per-hit consumer
+			//     DoTriggersOnSpellHit (Spell.cpp:2913) — the
+			//     ADD_TARGET_TRIGGER snapshot casts (roll_chance_i gate,
+			//     triggered-spell duration propagation) and the spell_linked
+			//     (id + SPELL_LINK_HIT) remove/apply rows — has no Go bridge
+			//     yet (the snapshot exists; the consumer is pending).
 			// The m_immediateHandled leg is parity: applyEffects (the
 			// HIT-mode phase) runs at missile arrival in the deferred
 			// closure, matching _handle_immediate_phase on the first
@@ -2210,9 +2272,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	//     target container model; hitTargets were resolved at cast start.
 	//   - DoProcessTargetContainer(m_UniqueGOTargetInfo/m_UniqueCorpseTargetInfo/
 	//     m_UniqueItemInfo): Go processes unit targets only.
-	//   - TakeAmmo() for IsRangedWeaponSpell && IsChanneled (Volley):
-	//     Go consumes ammo only for the Spell 75 auto-ranged attack
-	//     (combat.go).
 	// Spell::_handle_finish_phase (Spell.cpp:3738) no-bridge legs, noted:
 	//   - m_needComboPoints -> ClearComboPoints, and AddComboPoints with the
 	//     RETAIN_COMBO_POINTS removal: Go has no combo-point model at all.
