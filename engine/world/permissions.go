@@ -454,8 +454,30 @@ func expandPermissions(seed map[uint32]struct{}, links map[uint32][]uint32) map[
 	return result
 }
 
-// permissionCommandGroup mirrors rbac::RBAC_PERM_COMMAND_GROUP (RBAC.h:340).
-const permissionCommandGroup uint32 = 472
+// permissionCommandGuild mirrors rbac::RBAC_PERM_COMMAND_GUILD (RBAC.h:269).
+const permissionCommandGuild uint32 = 401
+
+// permissionCommandGuildCreate mirrors rbac::RBAC_PERM_COMMAND_GUILD_CREATE (RBAC.h:270).
+const permissionCommandGuildCreate uint32 = 402
+
+// permissionCommandGuildDelete mirrors rbac::RBAC_PERM_COMMAND_GUILD_DELETE (RBAC.h:271).
+const permissionCommandGuildDelete uint32 = 403
+
+// permissionCommandGuildInvite mirrors rbac::RBAC_PERM_COMMAND_GUILD_INVITE (RBAC.h:272).
+const permissionCommandGuildInvite uint32 = 404
+
+// permissionCommandGuildUninvite mirrors rbac::RBAC_PERM_COMMAND_GUILD_UNINVITE (RBAC.h:273).
+const permissionCommandGuildUninvite uint32 = 405
+
+// permissionCommandGuildRank mirrors rbac::RBAC_PERM_COMMAND_GUILD_RANK (RBAC.h:274).
+const permissionCommandGuildRank uint32 = 406
+
+// permissionCommandGuildRename mirrors rbac::RBAC_PERM_COMMAND_GUILD_RENAME (RBAC.h:275).
+const permissionCommandGuildRename uint32 = 407
+
+// permissionCommandGuildInfo mirrors rbac::RBAC_PERM_COMMAND_GUILD_INFO (RBAC.h:662).
+const permissionCommandGuildInfo uint32 = 794
+
 
 // permissionCommandGroupLeader mirrors rbac::RBAC_PERM_COMMAND_GROUP_LEADER (RBAC.h:341).
 const permissionCommandGroupLeader uint32 = 473

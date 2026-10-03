@@ -1275,39 +1275,12 @@ func (s *session) handleGuildDisband(ctx context.Context) bool {
 		return true
 	}
 
-	// Guild::Disband (Guild.cpp:1146): _BroadcastEvent(GE_DISBANDED,
-	// ObjectGuid::Empty) reaches all online members via BroadcastPacket
-	// BEFORE the member rows are deleted — the lone-leader arm in
+	// Guild::Disband (Guild.cpp:1141-1190) via the shared GM helper: GE_DISBANDED
+	// reaches every online member first, the rows are deleted, then every
+	// online member's session guild state is cleared. The lone-leader arm in
 	// handleGuildLeave is the only disband path where the actor must be
-	// excluded. The packet bytes are unchanged ([8, 0], no guid for this
-	// type per GuildPackets.cpp:130).
-	event := guildEventPayload(guildEventDisbanded, 0)
-	s.server.sessionsMu.RLock()
-	for target := range s.server.sessions {
-		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != uint32(guildID) {
-			continue
-		}
-		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event, true)
-	}
-	s.server.sessionsMu.RUnlock()
-
-	execGuildDisband(ctx, cdb, guildID)
-
-	// Guild::Disband (Guild.cpp:1149-1154): DeleteMember(trans, guid, true)
-	// runs for every member — an online member's player->SetInGuild(0) and
-	// player->SetRank(0) clear its guild state. Go only deleted the DB rows;
-	// clear every online member's session guild state here, after the
-	// GE_DISBANDED broadcast above so all members still receive it.
-	s.server.sessionsMu.RLock()
-	for target := range s.server.sessions {
-		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != uint32(guildID) {
-			continue
-		}
-		target.player.GuildID = 0
-		target.player.GuildRank = 0
-		target.sendPlayerUpdate()
-	}
-	s.server.sessionsMu.RUnlock()
+	// excluded.
+	s.disbandGuildByID(ctx, uint32(guildID))
 
 	s.debug("guild disbanded", "guild_id", guildID)
 	return true
