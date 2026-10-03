@@ -707,3 +707,60 @@ const permissionCommandLookupItemID uint32 = 876
 
 // permissionCommandLookupQuestID mirrors rbac::RBAC_PERM_COMMAND_LOOKUP_QUEST_ID (RBAC.h:743).
 const permissionCommandLookupQuestID uint32 = 877
+
+// permissionCommandAddItem mirrors rbac::RBAC_PERM_COMMAND_ADDITEM (RBAC.h:356).
+const permissionCommandAddItem uint32 = 488
+
+// permissionCommandAddItemSet mirrors rbac::RBAC_PERM_COMMAND_ADDITEMSET (RBAC.h:357).
+const permissionCommandAddItemSet uint32 = 489
+
+// permissionCommandAppear mirrors rbac::RBAC_PERM_COMMAND_APPEAR (RBAC.h:358).
+const permissionCommandAppear uint32 = 490
+
+// permissionCommandAura mirrors rbac::RBAC_PERM_COMMAND_AURA (RBAC.h:359).
+const permissionCommandAura uint32 = 491
+
+// permissionCommandBank mirrors rbac::RBAC_PERM_COMMAND_BANK (RBAC.h:360).
+const permissionCommandBank uint32 = 492
+
+// permissionCommandBindSight mirrors rbac::RBAC_PERM_COMMAND_BINDSIGHT (RBAC.h:361).
+const permissionCommandBindSight uint32 = 493
+
+// permissionCommandCombatStop mirrors rbac::RBAC_PERM_COMMAND_COMBATSTOP (RBAC.h:362).
+const permissionCommandCombatStop uint32 = 494
+
+// permissionCommandComeToMe mirrors rbac::RBAC_PERM_COMMAND_COMETOME (RBAC.h:363).
+const permissionCommandComeToMe uint32 = 495
+
+// permissionCommandCommands mirrors rbac::RBAC_PERM_COMMAND_COMMANDS (RBAC.h:364).
+const permissionCommandCommands uint32 = 496
+
+// permissionCommandCooldown mirrors rbac::RBAC_PERM_COMMAND_COOLDOWN (RBAC.h:365).
+const permissionCommandCooldown uint32 = 497
+
+// permissionCommandDamage mirrors rbac::RBAC_PERM_COMMAND_DAMAGE (RBAC.h:366).
+const permissionCommandDamage uint32 = 498
+
+// permissionCommandDev mirrors rbac::RBAC_PERM_COMMAND_DEV (RBAC.h:367).
+const permissionCommandDev uint32 = 499
+
+// permissionCommandDie mirrors rbac::RBAC_PERM_COMMAND_DIE (RBAC.h:368).
+const permissionCommandDie uint32 = 500
+
+// permissionCommandDismount mirrors rbac::RBAC_PERM_COMMAND_DISMOUNT (RBAC.h:369).
+const permissionCommandDismount uint32 = 501
+
+// permissionCommandDistance mirrors rbac::RBAC_PERM_COMMAND_DISTANCE (RBAC.h:370).
+const permissionCommandDistance uint32 = 502
+
+// permissionCommandFlushArenaPoints mirrors rbac::RBAC_PERM_COMMAND_FLUSHARENAPOINTS (RBAC.h:371).
+const permissionCommandFlushArenaPoints uint32 = 503
+
+// permissionCommandFreeze mirrors rbac::RBAC_PERM_COMMAND_FREEZE (RBAC.h:372).
+const permissionCommandFreeze uint32 = 504
+
+// permissionCommandUnAura mirrors rbac::RBAC_PERM_COMMAND_UNAURA (RBAC.h:397).
+const permissionCommandUnAura uint32 = 529
+
+// permissionCommandUnBindSight mirrors rbac::RBAC_PERM_COMMAND_UNBINDSIGHT (RBAC.h:398).
+const permissionCommandUnBindSight uint32 = 530

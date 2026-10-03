@@ -1974,46 +1974,6 @@ func (s *session) handleCmdModify(ctx context.Context, args []string) {
 	}
 }
 
-func (s *session) handleCmdAddItem(ctx context.Context, args []string) {
-	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .additem <itemId> [count]")
-		return
-	}
-	itemID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
-		s.sendSysMessage("Invalid item ID.")
-		return
-	}
-	count := uint32(1)
-	if len(args) > 1 {
-		if c, err := strconv.ParseUint(args[1], 10, 32); err == nil && c > 0 {
-			count = uint32(c)
-		}
-	}
-	var itemName string
-	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT name FROM item_template WHERE entry = ?", itemID).Scan(&itemName)
-	}
-	if itemName == "" {
-		itemName = fmt.Sprintf("Item #%d", itemID)
-	}
-
-	res, err := s.storeOrStackItem(ctx, s.playerGUID, uint32(itemID), count)
-	if err != nil {
-		s.sendSysMessage("Inventory is full.")
-		return
-	}
-	_ = s.sendInventoryItems(ctx)
-	s.sendPlayerUpdate()
-	pushSlot := uint32(res.Slot)
-	if res.IsStack {
-		pushSlot = 0xFFFFFFFF
-	}
-	push := buildItemPushResult(s.playerGUID, res.ClientBag, pushSlot, uint32(itemID), count, res.InventoryCount, res.IsStack)
-	_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), push, true)
-	s.sendSysMessage(fmt.Sprintf("Added item %s [%d] x%d to inventory.", itemName, itemID, count))
-}
-
 func (s *session) handleCmdCast(ctx context.Context, args []string) {
 	if len(args) == 0 {
 		s.sendSysMessage("Syntax: .cast <spellId> [triggered]")
@@ -5084,20 +5044,6 @@ func (s *session) handleCmdRevive(ctx context.Context, args []string) {
 	s.sendSysMessage("You have been revived.")
 }
 
-func (s *session) handleCmdDismount(ctx context.Context) {
-	if s.player == nil {
-		return
-	}
-	for _, aura := range s.loadedAuras() {
-		if aura != nil && aura.AuraType == spellAuraMounted {
-			s.removeAura(aura.SpellID)
-		}
-	}
-	s.player.MountDisplayID = 0
-	s.sendPlayerUpdate()
-	s.sendSysMessage("You have dismounted.")
-}
-
 // persistExtraFlags writes extra_flags immediately so GM mode survives
 // restarts the way TrinityCore's SaveToDB round-trip does.
 func (s *session) persistExtraFlags() {
@@ -6326,7 +6272,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("tele", func(ctx context.Context, args []string) bool { s.handleCmdTele(ctx, args); return true }, nil, nil)
 	root.add("go", func(ctx context.Context, args []string) bool { s.handleCmdGo(ctx, args); return true }, []string{"creature", "gameobject", "graveyard", "grid", "taxinode", "areatrigger", "zonexy", "xyz", "ticket", "offset", "instance", "boss"}, nil)
 	root.add("modify", func(ctx context.Context, args []string) bool { s.handleCmdModify(ctx, args); return true }, []string{"hp", "health", "mana", "power", "speed", "run", "fly", "scale", "money", "gold", "level"}, map[string]string{"mod": "modify"})
-	root.add("additem", func(ctx context.Context, args []string) bool { s.handleCmdAddItem(ctx, args); return true }, nil, map[string]string{"item": "additem"})
+	root.add("additem", func(ctx context.Context, args []string) bool { s.handleCmdAddItem(ctx, args); return true }, []string{"set"}, map[string]string{"item": "additem"})
 	root.add("cast", func(ctx context.Context, args []string) bool { s.handleCmdCast(ctx, args); return true }, nil, nil)
 	root.add("server", func(ctx context.Context, args []string) bool { s.handleCmdServer(ctx, args); return true }, []string{"info", "motd", "restart", "shutdown"}, nil)
 	root.add("character", func(ctx context.Context, args []string) bool { s.handleCmdCharacter(ctx, args); return true }, []string{"customize", "changefaction", "changerace", "changeaccount", "deleted", "erase", "level", "rename", "reputation", "titles"}, map[string]string{"char": "character"})
@@ -6365,8 +6311,24 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("gmnotify", func(ctx context.Context, args []string) bool { s.handleCmdGMNotifyCommand(ctx, args); return true }, nil, nil)
 	root.add("whispers", func(ctx context.Context, args []string) bool { s.handleCmdWhispers(ctx, args); return true }, nil, nil)
 	root.add("unlearn", func(ctx context.Context, args []string) bool { s.handleCmdUnLearn(ctx, args); return true }, nil, nil)
+	root.add("appear", func(ctx context.Context, args []string) bool { s.handleCmdAppear(ctx, args); return true }, nil, nil)
+	root.add("aura", func(ctx context.Context, args []string) bool { s.handleCmdAura(ctx, args); return true }, nil, nil)
+	root.add("unaura", func(ctx context.Context, args []string) bool { s.handleCmdUnAura(ctx, args); return true }, nil, nil)
+	root.add("bank", func(ctx context.Context, args []string) bool { s.handleCmdBank(ctx, args); return true }, nil, nil)
+	root.add("bindsight", func(ctx context.Context, args []string) bool { s.handleCmdBindSight(ctx, args); return true }, nil, nil)
+	root.add("unbindsight", func(ctx context.Context, args []string) bool { s.handleCmdUnBindSight(ctx, args); return true }, nil, nil)
+	root.add("combatstop", func(ctx context.Context, args []string) bool { s.handleCmdCombatStop(ctx, args); return true }, nil, nil)
+	root.add("cometome", func(ctx context.Context, args []string) bool { s.handleCmdComeToMe(ctx, args); return true }, nil, nil)
+	root.add("commands", func(ctx context.Context, args []string) bool { s.handleCmdCommands(ctx, args); return true }, nil, nil)
+	root.add("cooldown", func(ctx context.Context, args []string) bool { s.handleCmdCooldown(ctx, args); return true }, nil, nil)
+	root.add("damage", func(ctx context.Context, args []string) bool { s.handleCmdDamage(ctx, args); return true }, nil, nil)
+	root.add("dev", func(ctx context.Context, args []string) bool { s.handleCmdDev(ctx, args); return true }, nil, nil)
+	root.add("die", func(ctx context.Context, args []string) bool { s.handleCmdDie(ctx, args); return true }, nil, nil)
+	root.add("distance", func(ctx context.Context, args []string) bool { s.handleCmdDistance(ctx, args); return true }, nil, nil)
+	root.add("flusharenapoints", func(ctx context.Context, args []string) bool { s.handleCmdFlushArenaPoints(ctx, args); return true }, nil, nil)
+	root.add("freeze", func(ctx context.Context, args []string) bool { s.handleCmdFreeze(ctx, args); return true }, nil, nil)
 	root.add("revive", func(ctx context.Context, args []string) bool { s.handleCmdRevive(ctx, args); return true }, nil, map[string]string{"res": "revive", "rev": "revive"})
-	root.add("dismount", func(ctx context.Context, args []string) bool { s.handleCmdDismount(ctx); return true }, nil, nil)
+	root.add("dismount", func(ctx context.Context, args []string) bool { s.handleCmdDismount(ctx, args); return true }, nil, nil)
 	root.add("save", func(ctx context.Context, args []string) bool { s.handleCmdSave(ctx); return true }, nil, map[string]string{"saveall": "save"})
 	return root
 }
