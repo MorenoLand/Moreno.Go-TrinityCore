@@ -61,6 +61,18 @@ const permissionCommandCheatTaxi uint32 = 298
 // permissionCommandCheatWaterwalk mirrors rbac::RBAC_PERM_COMMAND_CHEAT_WATERWALK (RBAC.h:213).
 const permissionCommandCheatWaterwalk uint32 = 299
 
+// permissionCommandDeserterBGAdd mirrors rbac::RBAC_PERM_COMMAND_DESERTER_BG_ADD (RBAC.h:216).
+const permissionCommandDeserterBGAdd uint32 = 343
+
+// permissionCommandDeserterBGRemove mirrors rbac::RBAC_PERM_COMMAND_DESERTER_BG_REMOVE (RBAC.h:217).
+const permissionCommandDeserterBGRemove uint32 = 344
+
+// permissionCommandDeserterInstanceAdd mirrors rbac::RBAC_PERM_COMMAND_DESERTER_INSTANCE_ADD (RBAC.h:219).
+const permissionCommandDeserterInstanceAdd uint32 = 346
+
+// permissionCommandDeserterInstanceRemove mirrors rbac::RBAC_PERM_COMMAND_DESERTER_INSTANCE_REMOVE (RBAC.h:220).
+const permissionCommandDeserterInstanceRemove uint32 = 347
+
 // permissionOpcodeWhois mirrors rbac::RBAC_PERM_OPCODE_WHOIS (RBAC.h:96).
 const permissionOpcodeWhois uint32 = 43
 

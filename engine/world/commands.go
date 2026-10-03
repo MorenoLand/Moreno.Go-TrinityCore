@@ -3790,6 +3790,107 @@ func (s *Server) sendGlobalGMMessage(ctx context.Context, msg string) {
 	}
 }
 
+// ---- deserter_commandscript (cs_deserter.cpp) ----
+
+// Deserter debuff spells (cs_deserter.cpp:32-35).
+const (
+	deserterSpellInstance = 71041 // LFG_SPELL_DUNGEON_DESERTER
+	deserterSpellBG       = 26013 // BG_SPELL_DESERTER
+)
+
+// handleCmdDeserter mirrors the deserter_commandscript nested tables
+// (cs_deserter.cpp:58-77): "deserter instance|bg add <time>" applies the
+// matching deserter aura with a custom duration (HandleDeserterAdd), and
+// "deserter instance|bg remove" drops it (HandleDeserterRemove).
+func (s *session) handleCmdDeserter(ctx context.Context, args []string) {
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .deserter instance|bg add|remove [time]")
+		return
+	}
+	group := strings.ToLower(args[0])
+	if len(args) < 2 {
+		s.sendSysMessage("Syntax: .deserter " + group + " add|remove [time]")
+		return
+	}
+	var perm uint32
+	var spellID uint32
+	var adding bool
+	var permAdd, permRemove uint32
+	// The Trinity parser prefix-matches command names at every nesting
+	// level; match the add/remove arm the same way here.
+	matchArm := func(token string) bool {
+		lower := strings.ToLower(token)
+		switch {
+		case strings.HasPrefix("add", lower):
+			perm = permAdd
+			adding = true
+			return true
+		case strings.HasPrefix("remove", lower):
+			perm = permRemove
+			return true
+		}
+		return false
+	}
+	switch group {
+	case "instance":
+		spellID = deserterSpellInstance
+		permAdd, permRemove = permissionCommandDeserterInstanceAdd, permissionCommandDeserterInstanceRemove
+	case "bg":
+		spellID = deserterSpellBG
+		permAdd, permRemove = permissionCommandDeserterBGAdd, permissionCommandDeserterBGRemove
+	default:
+		s.sendSysMessage("Syntax: .deserter instance|bg add|remove [time]")
+		return
+	}
+	if !matchArm(args[1]) {
+		s.sendSysMessage("Syntax: .deserter " + group + " add|remove [time]")
+		return
+	}
+	if !s.commandAllowed(ctx, perm) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	// ChatHandler::getSelectedPlayer: own player when nothing is targeted,
+	// otherwise the connected player matching the selection (null, i.e. no
+	// character, when the target is offline or not a player).
+	target := s
+	if s.selection != 0 {
+		if s.server == nil {
+			return
+		}
+		target = s.server.playerSessionForGUID(s.selection)
+		if target == nil {
+			s.sendSysMessage("No character selected.")
+			return
+		}
+	}
+	if adding {
+		if len(args) < 3 {
+			s.sendSysMessage("Syntax: .deserter " + group + " add <time>")
+			return
+		}
+		secs, err := strconv.ParseUint(args[2], 10, 32)
+		if err != nil || secs == 0 {
+			// LANG_BAD_VALUE: zero time, like the C++ !time check.
+			s.sendSysMessage("Incorrect value.")
+			return
+		}
+		// Player::AddAura returns null when the spell entry is missing, which
+		// the C++ handler reports as LANG_BAD_VALUE.
+		if s.server == nil || s.server.Data == nil {
+			return
+		}
+		if _, found, _ := s.server.Data.Spell(spellID); !found {
+			s.sendSysMessage("Incorrect value.")
+			return
+		}
+		// Aura::SetDuration(time * IN_MILLISECONDS).
+		target.applyAuraWithDuration(spellID, uint32(secs)*1000)
+		return
+	}
+	target.removeAura(spellID)
+}
+
 func (s *session) handleCmdNPC(ctx context.Context, args []string) {
 	if len(args) == 0 {
 		s.sendSysMessage("Syntax: .npc add <entry> | .npc info | .npc say <text> | .npc yell <text>")
@@ -4992,6 +5093,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("banlist", func(ctx context.Context, args []string) bool { s.handleCmdBanList(ctx, args); return true }, []string{"account", "character", "ip"}, nil)
 	root.add("unban", func(ctx context.Context, args []string) bool { s.handleCmdUnBan(ctx, args); return true }, []string{"account", "character", "playeraccount", "ip"}, nil)
 	root.add("bf", func(ctx context.Context, args []string) bool { s.handleCmdBF(ctx, args); return true }, []string{"start", "stop", "switch", "timer", "enable"}, nil)
+	root.add("deserter", func(ctx context.Context, args []string) bool { s.handleCmdDeserter(ctx, args); return true }, []string{"instance", "bg"}, nil)
 	root.add("npc", func(ctx context.Context, args []string) bool { s.handleCmdNPC(ctx, args); return true }, []string{"info", "say", "yell"}, nil)
 	root.add("gobject", func(ctx context.Context, args []string) bool { s.handleCmdGObject(ctx, args); return true }, nil, map[string]string{"gob": "gobject"})
 	root.add("revive", func(ctx context.Context, args []string) bool { s.handleCmdRevive(ctx, args); return true }, nil, map[string]string{"res": "revive", "rev": "revive"})
