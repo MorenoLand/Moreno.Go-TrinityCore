@@ -141,31 +141,33 @@ const (
 	// already a mask (SpellInfo.cpp:843), so this tests the raw field value.
 	itemSubclassMaskWeaponRanged uint32 = (1 << 2) | (1 << 3) | (1 << 18) | (1 << 16)
 
-	spellEffectEnergize        = 30
-	spellEffectParry           = 22
-	spellEffectPowerBurn       = 62
-	spellEffectThreat          = 63
-	spellEffectTriggerSpell    = 64
-	spellEffectHealMaxHealth   = 67
-	spellEffectCreateItem      = 24
-	spellEffectCreateItem2     = 70
-	spellEffectLearnSpell      = 36
-	spellEffectLearnPetSpell   = 57 // SPELL_EFFECT_LEARN_PET_SPELL (SharedDefines.h:868)
-	spellEffectAddExtraAttacks = 19 // SPELL_EFFECT_ADD_EXTRA_ATTACKS (SharedDefines.h:830)
-	spellEffectResurrect       = 18
-	spellEffectReputation      = 103
-	spellEffectQuestComplete   = 16
-	spellEffectHealthLeech     = 9
-	spellEffectPowerDrain      = 8
-	spellEffectCharge          = 96  // SPELL_EFFECT_CHARGE (SharedDefines.h:907)
-	spellEffectSkinning        = 95  // SPELL_EFFECT_SKINNING (SharedDefines.h:906)
-	spellEffectOpenLock        = 33  // SPELL_EFFECT_OPEN_LOCK (SharedDefines.h:844)
-	spellEffectResurrectPet    = 109 // SPELL_EFFECT_RESURRECT_PET (SharedDefines.h:920)
-	spellEffectSummon          = 28  // SPELL_EFFECT_SUMMON (SharedDefines.h:839)
-	spellEffectSummonPet       = 56  // SPELL_EFFECT_SUMMON_PET (SharedDefines.h:867)
-	spellEffectCreateTamedPet  = 153 // SPELL_EFFECT_CREATE_TAMED_PET (SharedDefines.h:964)
-	spellEffectSummonPlayer    = 85  // SPELL_EFFECT_SUMMON_PLAYER (SharedDefines.h:896)
-	spellEffectSummonRafFriend = 152 // SPELL_EFFECT_SUMMON_RAF_FRIEND (SharedDefines.h:963)
+	spellEffectEnergize                = 30
+	spellEffectParry                   = 22
+	spellEffectPowerBurn               = 62
+	spellEffectThreat                  = 63
+	spellEffectTriggerSpell            = 64
+	spellEffectHealMaxHealth           = 67
+	spellEffectCreateItem              = 24
+	spellEffectCreateItem2             = 70
+	spellEffectLearnSpell              = 36
+	spellEffectLearnPetSpell           = 57 // SPELL_EFFECT_LEARN_PET_SPELL (SharedDefines.h:868)
+	spellEffectAddExtraAttacks         = 19 // SPELL_EFFECT_ADD_EXTRA_ATTACKS (SharedDefines.h:830)
+	spellEffectResurrect               = 18
+	spellEffectReputation              = 103
+	spellEffectQuestComplete           = 16
+	spellEffectHealthLeech             = 9
+	spellEffectPowerDrain              = 8
+	spellEffectCharge                  = 96  // SPELL_EFFECT_CHARGE (SharedDefines.h:907)
+	spellEffectSkinning                = 95  // SPELL_EFFECT_SKINNING (SharedDefines.h:906)
+	spellEffectOpenLock                = 33  // SPELL_EFFECT_OPEN_LOCK (SharedDefines.h:844)
+	spellEffectResurrectPet            = 109 // SPELL_EFFECT_RESURRECT_PET (SharedDefines.h:920)
+	spellEffectSummon                  = 28  // SPELL_EFFECT_SUMMON (SharedDefines.h:839)
+	spellEffectSummonPet               = 56  // SPELL_EFFECT_SUMMON_PET (SharedDefines.h:867)
+	spellEffectCreateTamedPet          = 153 // SPELL_EFFECT_CREATE_TAMED_PET (SharedDefines.h:964)
+	spellEffectSummonPlayer            = 85  // SPELL_EFFECT_SUMMON_PLAYER (SharedDefines.h:896)
+	spellEffectSummonRafFriend         = 152 // SPELL_EFFECT_SUMMON_RAF_FRIEND (SharedDefines.h:963)
+	spellEffectLeap                    = 29  // SPELL_EFFECT_LEAP (SharedDefines.h:840)
+	spellEffectTeleportUnitsFaceCaster = 43  // SPELL_EFFECT_TELEPORT_UNITS_FACE_CASTER (SharedDefines.h:854)
 
 	// Summon categories for the generic-summon CheckCast leg
 	// (Spell.cpp:5798-5817, SharedDefines.h:3296).
@@ -1033,6 +1035,18 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if failure := s.checkSummonRafFriendCast(spell); failure != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-raf-friend validation", "failure", failure)
+		return true
+	}
+	// Leap / teleport-units-face-caster gate (Spell::CheckCast per-effect
+	// block, Spell.cpp:5945-5954): a SPELL_EFFECT_LEAP or
+	// SPELL_EFFECT_TELEPORT_UNITS_FACE_CASTER effect fails with
+	// SPELL_FAILED_TRY_AGAIN when the caster is in a battleground whose
+	// status is not STATUS_IN_PROGRESS ("Do not allow to cast it before
+	// BG starts"). C++ relative order places this right after the
+	// recruit-a-friend leg.
+	if failure := s.checkLeapCast(spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "leap/teleport-before-bg-start validation", "failure", failure)
 		return true
 	}
 	cost := s.calculateSpellPowerCost(spell)
@@ -2258,6 +2272,56 @@ func (s *session) checkSummonRafFriendCast(spell wotlk.Spell) uint8 {
 	// real (non-zero) account id, so an unlinked pair fails here.
 	if target.recruiterID != s.accountID && target.accountID != s.recruiterID {
 		return spellFailedBadTargets
+	}
+	return 0
+}
+
+// checkLeapCast mirrors the SPELL_EFFECT_LEAP /
+// SPELL_EFFECT_TELEPORT_UNITS_FACE_CASTER leg of the CheckCast
+// per-effect switch (Spell.cpp:5945-5954): "Do not allow to cast it
+// before BG starts." A caster in a battleground whose status is not
+// STATUS_IN_PROGRESS fails with SPELL_FAILED_TRY_AGAIN.
+//
+// The caster-TYPEID_PLAYER arm is vacuous on the client-initiated path
+// (the session is always a player). Player::GetBattleground bridges as
+// s.bgData.InstanceID != 0 (the Player.h:1906 InBattleground pattern);
+// bg->GetStatus() bridges as the matching s.bgQueues entry's Status.
+// Arena queue entries use the arena status scale
+// (ArenaStatusInProgress = battle active, battleground_arena.go), and
+// battleground entries the BG scale (STATUS_IN_PROGRESS = 3,
+// Battleground.h:181). A missing queue entry is permissive
+// (unknown-data-is-permissive, terrain.go convention) — C++ always has
+// a status on a live battleground.
+func (s *session) checkLeapCast(spell wotlk.Spell) uint8 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
+	matched := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == spellEffectLeap || eff.Effect == spellEffectTeleportUnitsFaceCaster {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return 0
+	}
+	if s.bgData.InstanceID == 0 {
+		return 0
+	}
+	for i := range s.bgQueues {
+		q := &s.bgQueues[i]
+		if !q.Active || q.InstanceID != s.bgData.InstanceID {
+			continue
+		}
+		inProgress := q.Status == 3 // STATUS_IN_PROGRESS (Battleground.h:181)
+		if q.IsArena {
+			inProgress = q.Status == ArenaStatusInProgress
+		}
+		if !inProgress {
+			return spellFailedTryAgain
+		}
+		return 0
 	}
 	return 0
 }
