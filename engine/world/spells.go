@@ -166,6 +166,7 @@ const (
 	spellEffectLearnSpell              = 36
 	spellEffectLearnPetSpell           = 57 // SPELL_EFFECT_LEARN_PET_SPELL (SharedDefines.h:868)
 	spellEffectAddExtraAttacks         = 19 // SPELL_EFFECT_ADD_EXTRA_ATTACKS (SharedDefines.h:830)
+	spellEffectAddComboPoints          = 80 // SPELL_EFFECT_ADD_COMBO_POINTS (SharedDefines.h:891)
 	spellEffectResurrect               = 18
 	spellEffectReputation              = 103
 	spellEffectQuestComplete           = 16
@@ -4327,6 +4328,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 
 	// Apply spell effects
+	// Spell::AddComboPointGain (Spell.h:515-522) per-cast bank: the
+	// ADD_COMBO_POINTS effects bank (target, gain) pairs during the HIT
+	// phase and _handle_finish_phase spends them after all targets are
+	// processed (Spell.cpp:3738-3752).
+	var comboGainTarget uint64
+	var comboGain int8
 	applyEffects := func(effCtx context.Context) {
 		if len(missStatus) > 0 && !isReflected {
 			return
@@ -4420,6 +4427,29 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				for _, effectTarget := range hitTargets {
 					if effectTarget == s.playerGUID && s.grantExtraAttacks(amount) {
 						s.sendExtraAttacksLog(spellID, effectIndex, amount)
+					}
+				}
+			case spellEffectAddComboPoints: // 80: SPELL_EFFECT_ADD_COMBO_POINTS
+				// Spell::EffectAddComboPoints (SpellEffects.cpp:3781-3789)
+				// banks the effect's damage as a per-cast combo-point gain
+				// (Spell::AddComboPointGain, Spell.h:515-522): the
+				// effectHandleMode gate is structural — this dispatch is the
+				// HIT_TARGET phase — and damage <= 0 gains nothing. Each
+				// hit unit target is a separate gain: a new target restarts
+				// the bank, the same target accumulates; the spend happens
+				// in _handle_finish_phase after all targets are processed.
+				gain := int8(eff.BasePoints + 1)
+				if gain > 0 {
+					for _, effectTarget := range hitTargets {
+						if effectTarget == 0 {
+							continue
+						}
+						if effectTarget != comboGainTarget {
+							comboGainTarget = effectTarget
+							comboGain = gain
+						} else {
+							comboGain += gain
+						}
 					}
 				}
 			case 3:
@@ -4728,9 +4758,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	//     target container model; hitTargets were resolved at cast start.
 	//   - DoProcessTargetContainer(m_UniqueGOTargetInfo/m_UniqueCorpseTargetInfo/
 	//     m_UniqueItemInfo): Go processes unit targets only.
+	// Spell::_handle_finish_phase (Spell.cpp:3738-3752): combo-point legs.
+	// A spell requiring combo points (m_needComboPoints, Spell.cpp:532 =
+	// SpellInfo::NeedsComboPoints) spends the banked points — before the
+	// gain lands, matching the C++ ClearComboPoints-then-AddComboPoints
+	// order. Item casts never take combo points (Spell.cpp:3097, the
+	// m_CastItem arm of the prepare-time reset); the triggered-cast arm
+	// of that reset is structural here — finishSpellCast serves only the
+	// client cast path, triggered casts go through
+	// castSpellDirectWithOverrides. The dodge/miss arm (Spell.cpp:2606:
+	// no take on dodge and miss) is structural too: applyEffects returns
+	// early for missed spells. The RETAIN_COMBO_POINTS aura removal
+	// (Spell.cpp:3747-3750) has no Go bridge — the Go aura model tracks
+	// no such aura type. The ABILITY_IGNORE_AURASTATE override
+	// (Spell.cpp:5286) has no bridge for the same reason.
+	if spellNeedsComboPoints(spell) && castItemGUID == 0 {
+		s.clearSessionComboPoints()
+	}
+	if comboGainTarget != 0 && comboGain > 0 {
+		s.addSessionComboPoints(comboGainTarget, comboGain)
+	}
 	// Spell::_handle_finish_phase (Spell.cpp:3738) no-bridge legs, noted:
-	//   - m_needComboPoints -> ClearComboPoints, and AddComboPoints with the
-	//     RETAIN_COMBO_POINTS removal: Go has no combo-point model at all.
 	//   - ProcSkillsAndAuras(..., PROC_SPELL_PHASE_FINISH, m_hitMask):
 	//     bridged as procSpellFinishAuraTriggers after the extra-attacks
 	//     leg, matching _handle_finish_phase order (Spell.cpp:3753-3777).
