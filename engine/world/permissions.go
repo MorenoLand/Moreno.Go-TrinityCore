@@ -519,3 +519,24 @@ const permissionCommandGroupMainTank uint32 = 863
 
 // permissionCommandGroupMainAssist mirrors rbac::RBAC_PERM_COMMAND_GROUP_MAINASSIST (RBAC.h:731).
 const permissionCommandGroupMainAssist uint32 = 864
+
+// permissionCommandInstance mirrors rbac::RBAC_PERM_COMMAND_INSTANCE (RBAC.h:280).
+const permissionCommandInstance uint32 = 412
+
+// permissionCommandInstanceListBinds mirrors rbac::RBAC_PERM_COMMAND_INSTANCE_LISTBINDS (RBAC.h:281).
+const permissionCommandInstanceListBinds uint32 = 413
+
+// permissionCommandInstanceUnbind mirrors rbac::RBAC_PERM_COMMAND_INSTANCE_UNBIND (RBAC.h:282).
+const permissionCommandInstanceUnbind uint32 = 414
+
+// permissionCommandInstanceStats mirrors rbac::RBAC_PERM_COMMAND_INSTANCE_STATS (RBAC.h:283).
+const permissionCommandInstanceStats uint32 = 415
+
+// permissionCommandInstanceSaveData mirrors rbac::RBAC_PERM_COMMAND_INSTANCE_SAVEDATA (RBAC.h:284).
+const permissionCommandInstanceSaveData uint32 = 416
+
+// permissionCommandInstanceSetBossState mirrors rbac::RBAC_PERM_COMMAND_INSTANCE_SET_BOSS_STATE (RBAC.h:663).
+const permissionCommandInstanceSetBossState uint32 = 795
+
+// permissionCommandInstanceGetBossState mirrors rbac::RBAC_PERM_COMMAND_INSTANCE_GET_BOSS_STATE (RBAC.h:664).
+const permissionCommandInstanceGetBossState uint32 = 796

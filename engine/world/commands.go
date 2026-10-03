@@ -6514,6 +6514,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("group", func(ctx context.Context, args []string) bool { s.handleCmdGroup(ctx, args); return true }, []string{"set", "leader", "disband", "remove", "join", "list", "summon"}, nil)
 	root.add("guild", func(ctx context.Context, args []string) bool { s.handleCmdGuild(ctx, args); return true }, []string{"create", "delete", "invite", "uninvite", "rank", "rename", "info"}, nil)
 	root.add("honor", func(ctx context.Context, args []string) bool { s.handleCmdHonor(ctx, args); return true }, []string{"add", "update"}, nil)
+	root.add("instance", func(ctx context.Context, args []string) bool { s.handleCmdInstance(ctx, args); return true }, []string{"listbinds", "unbind", "stats", "savedata", "setbossstate", "getbossstate"}, nil)
 	root.add("revive", func(ctx context.Context, args []string) bool { s.handleCmdRevive(ctx, args); return true }, nil, map[string]string{"res": "revive", "rev": "revive"})
 	root.add("dismount", func(ctx context.Context, args []string) bool { s.handleCmdDismount(ctx); return true }, nil, nil)
 	root.add("save", func(ctx context.Context, args []string) bool { s.handleCmdSave(ctx); return true }, nil, map[string]string{"saveall": "save"})
