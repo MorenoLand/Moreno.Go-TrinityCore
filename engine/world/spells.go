@@ -1942,6 +1942,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// the cast's original unit target.
 	s.consumeExtraAttacks(ctx, spellExtraAttackVictim(target, explicitUnitGUID))
 	s.stopAttackOnSpellFinish(spell)
+
+	// Spell::finish(true) parity (Spell.cpp:3886-3985): two legs have no Go
+	// bridge and are intentionally absent here.
+	//   - IsAutoActionResetSpell -> resetAttackTimer(BASE/OFF/RANGED): the
+	//     Go tree has no attack-timer model at all (melee swing timing is not
+	//     simulated), so there is nothing to reset.
+	//   - UpdatePotionCooldown (Player.cpp:22215): needs the last-used potion
+	//     item id (m_lastPotionId, set in Spell::SendSpellCooldown) and a
+	//     potion-cooldown event model; neither exists in Go.
+	// The remaining finish legs (interrupt-mask update, UNIT_STATE_CASTING
+	// clearing, puppet/statue unsummon, SPELL_ATTR0_STOP_ATTACK_TARGET) are
+	// either subsumed by the Cancelled/early returns above or covered by
+	// stopAttackOnSpellFinish; charm/puppet and statue-summon models do not
+	// exist in Go.
 }
 
 // stopAttackOnSpellFinish stops the caster's auto-attack for spells carrying
