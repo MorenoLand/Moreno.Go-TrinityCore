@@ -982,6 +982,14 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.activeCast = castState
 		s.castMu.Unlock()
 	} else {
+		// Spell::prepare (Spell.cpp:3062-3064) registers the cast on the
+		// caster's event queue (_spellEvent fired after CalculateTime(1ms));
+		// Go has no event-scheduler model, so instant casts land
+		// synchronously here and the cast-bar case is the single AfterFunc
+		// timer above. The observable delta is the ~1ms deferred update
+		// pass, which no consumer depends on (the commented-out
+		// !m_spellInfo->StartRecoveryTime forced-defer leg at
+		// Spell.cpp:3189-3193 stayed out of the tree for the same reason).
 		s.finishSpellCast(context.Background(), castID, spellID, spell, target, 0, 0)
 	}
 
