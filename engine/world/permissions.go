@@ -764,3 +764,108 @@ const permissionCommandUnAura uint32 = 529
 
 // permissionCommandUnBindSight mirrors rbac::RBAC_PERM_COMMAND_UNBINDSIGHT (RBAC.h:398).
 const permissionCommandUnBindSight uint32 = 530
+
+// permissionCommandGPS mirrors rbac::RBAC_PERM_COMMAND_GPS (RBAC.h:373).
+const permissionCommandGPS uint32 = 505
+
+// permissionCommandGUID mirrors rbac::RBAC_PERM_COMMAND_GUID (RBAC.h:374).
+const permissionCommandGUID uint32 = 506
+
+// permissionCommandHelp mirrors rbac::RBAC_PERM_COMMAND_HELP (RBAC.h:375).
+const permissionCommandHelp uint32 = 507
+
+// permissionCommandHideArea mirrors rbac::RBAC_PERM_COMMAND_HIDEAREA (RBAC.h:376).
+const permissionCommandHideArea uint32 = 508
+
+// permissionCommandItemMove mirrors rbac::RBAC_PERM_COMMAND_ITEMMOVE (RBAC.h:377).
+const permissionCommandItemMove uint32 = 509
+
+// permissionCommandKick mirrors rbac::RBAC_PERM_COMMAND_KICK (RBAC.h:378).
+const permissionCommandKick uint32 = 510
+
+// permissionCommandLinkGrave mirrors rbac::RBAC_PERM_COMMAND_LINKGRAVE (RBAC.h:379).
+const permissionCommandLinkGrave uint32 = 511
+
+// permissionCommandListFreeze mirrors rbac::RBAC_PERM_COMMAND_LISTFREEZE (RBAC.h:380).
+const permissionCommandListFreeze uint32 = 512
+
+// permissionCommandMaxSkill mirrors rbac::RBAC_PERM_COMMAND_MAXSKILL (RBAC.h:381).
+const permissionCommandMaxSkill uint32 = 513
+
+// permissionCommandMovegens mirrors rbac::RBAC_PERM_COMMAND_MOVEGENS (RBAC.h:382).
+const permissionCommandMovegens uint32 = 514
+
+// permissionCommandMute mirrors rbac::RBAC_PERM_COMMAND_MUTE (RBAC.h:383).
+const permissionCommandMute uint32 = 515
+
+// permissionCommandNearGrave mirrors rbac::RBAC_PERM_COMMAND_NEARGRAVE (RBAC.h:384).
+const permissionCommandNearGrave uint32 = 516
+
+// permissionCommandPInfo mirrors rbac::RBAC_PERM_COMMAND_PINFO (RBAC.h:385).
+const permissionCommandPInfo uint32 = 517
+
+// permissionCommandPlayAll mirrors rbac::RBAC_PERM_COMMAND_PLAYALL (RBAC.h:386).
+const permissionCommandPlayAll uint32 = 518
+
+// permissionCommandPossess mirrors rbac::RBAC_PERM_COMMAND_POSSESS (RBAC.h:387).
+const permissionCommandPossess uint32 = 519
+
+// permissionCommandRecall mirrors rbac::RBAC_PERM_COMMAND_RECALL (RBAC.h:388).
+const permissionCommandRecall uint32 = 520
+
+// permissionCommandRepairItems mirrors rbac::RBAC_PERM_COMMAND_REPAIRITEMS (RBAC.h:389).
+const permissionCommandRepairItems uint32 = 521
+
+// permissionCommandRespawn mirrors rbac::RBAC_PERM_COMMAND_RESPAWN (RBAC.h:390).
+const permissionCommandRespawn uint32 = 522
+
+// permissionCommandRevive mirrors rbac::RBAC_PERM_COMMAND_REVIVE (RBAC.h:391).
+const permissionCommandRevive uint32 = 523
+
+// permissionCommandSaveAll mirrors rbac::RBAC_PERM_COMMAND_SAVEALL (RBAC.h:392).
+const permissionCommandSaveAll uint32 = 524
+
+// permissionCommandSave mirrors rbac::RBAC_PERM_COMMAND_SAVE (RBAC.h:393).
+const permissionCommandSave uint32 = 525
+
+// permissionCommandSetSkill mirrors rbac::RBAC_PERM_COMMAND_SETSKILL (RBAC.h:394).
+const permissionCommandSetSkill uint32 = 526
+
+// permissionCommandShowArea mirrors rbac::RBAC_PERM_COMMAND_SHOWAREA (RBAC.h:395).
+const permissionCommandShowArea uint32 = 527
+
+// permissionCommandSummon mirrors rbac::RBAC_PERM_COMMAND_SUMMON (RBAC.h:396).
+const permissionCommandSummon uint32 = 528
+
+// permissionCommandUnFreeze mirrors rbac::RBAC_PERM_COMMAND_UNFREEZE (RBAC.h:399).
+const permissionCommandUnFreeze uint32 = 531
+
+// permissionCommandUnMute mirrors rbac::RBAC_PERM_COMMAND_UNMUTE (RBAC.h:400).
+const permissionCommandUnMute uint32 = 532
+
+// permissionCommandUnPossess mirrors rbac::RBAC_PERM_COMMAND_UNPOSSESS (RBAC.h:401).
+const permissionCommandUnPossess uint32 = 533
+
+// permissionCommandUnstuck mirrors rbac::RBAC_PERM_COMMAND_UNSTUCK (RBAC.h:402).
+const permissionCommandUnstuck uint32 = 534
+
+// permissionCommandChangeWeather mirrors rbac::RBAC_PERM_COMMAND_WCHANGE (RBAC.h:403).
+const permissionCommandChangeWeather uint32 = 535
+
+// permissionCommandMuteHistory mirrors rbac::RBAC_PERM_COMMAND_MUTEHISTORY (RBAC.h:500).
+const permissionCommandMuteHistory uint32 = 632
+
+// permissionCommandMailBox mirrors rbac::RBAC_PERM_COMMAND_MAILBOX (RBAC.h:645).
+const permissionCommandMailBox uint32 = 777
+
+// permissionCommandPvPstats mirrors rbac::RBAC_PERM_COMMAND_PVPSTATS (RBAC.h:665).
+const permissionCommandPvPstats uint32 = 797
+
+// permissionCommandsSaveWithoutDelay mirrors rbac::RBAC_PERM_COMMANDS_SAVE_WITHOUT_DELAY (RBAC.h:83).
+const permissionCommandsSaveWithoutDelay uint32 = 30
+
+// permissionCommandsUseUnstuckWithArgs mirrors rbac::RBAC_PERM_COMMANDS_USE_UNSTUCK_WITH_ARGS (RBAC.h:84).
+const permissionCommandsUseUnstuckWithArgs uint32 = 31
+
+// permissionResurrectWithFullHPS mirrors rbac::RBAC_PERM_RESURRECT_WITH_FULL_HPS (RBAC.h:91).
+const permissionResurrectWithFullHPS uint32 = 38
