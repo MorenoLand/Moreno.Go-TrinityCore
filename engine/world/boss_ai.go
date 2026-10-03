@@ -1556,6 +1556,35 @@ func init() {
 	// boss_alar.lua. instance_the_eye.cpp stays blocked on the
 	// instance-script model.
 	RegisterLuaBoss("boss_alar", 19514)
+	// boss_kaelthas (19622): only the two standalone Talk arms
+	// are bridgeable — KilledUnit SAY_SLAY and JustDied
+	// SAY_DEATH; the whole phase machine (DoAction chains,
+	// 7-weapon / phoenix summons, phase-5 transition MovePoints,
+	// gravity lapse SpellScript) has no instance / summon /
+	// movement / SpellScript bridges — see
+	// lua_scripts/the_eye/boss_kaelthas.lua. The four advisor
+	// scripts port the bridgeable arms: boss_thaladred_the_
+	// darkener (20064) — SAY_THALADRED_AGGRO + silence / rend /
+	// psychic-blow pump (gaze arm: no threat / targeted-Talk
+	// bridges); boss_lord_sanguinar (20060) — SAY_SANGUINAR_
+	// AGGRO + bellowing-roar pump; boss_grand_astromancer_
+	// capernian (20062) — SAY_CAPERNIAN_AGGRO + fireball /
+	// conflagration pump (arcane-explosion melee-range scan and
+	// MoveChase AttackStart: no threat-list / movement
+	// bridges); boss_master_engineer_telonicus (20063) —
+	// SAY_TELONICUS_AGGRO + bomb / remote-toy pump. The
+	// advisor fake-death / SPELL_RESSURECTION resurrection
+	// machine and the kael DoAction hooks have no display /
+	// stand / flag / cross-creature / instance bridges (death
+	// talks never fire in this model); npc_kael_flamestrike,
+	// npc_phoenix_tk, npc_phoenix_egg_tk sit behind the
+	// unmodeled summon machines; spell_kael_gravity_lapse has
+	// no SpellScript bridge.
+	RegisterLuaBoss("boss_kaelthas", 19622)
+	RegisterLuaBoss("boss_thaladred_the_darkener", 20064)
+	RegisterLuaBoss("boss_lord_sanguinar", 20060)
+	RegisterLuaBoss("boss_grand_astromancer_capernian", 20062)
+	RegisterLuaBoss("boss_master_engineer_telonicus", 20063)
 	// boss_high_astromancer_solarian (18805): the bridgeable
 	// Phase 1 arms — the blinding-light latch, the two wrath
 	// timers, the arcane-missiles arm — plus the 20% health
