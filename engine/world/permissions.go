@@ -1080,6 +1080,21 @@ const permissionCommandNPCDespawnGroup uint32 = 857
 // permissionCommandNPCShowLoot mirrors rbac::RBAC_PERM_COMMAND_NPC_SHOWLOOT (RBAC.h:732).
 const permissionCommandNPCShowLoot uint32 = 865
 
+// permissionCommandQuest mirrors rbac::RBAC_PERM_COMMAND_QUEST (RBAC.h:470).
+const permissionCommandQuest uint32 = 602
+
+// permissionCommandQuestAdd mirrors rbac::RBAC_PERM_COMMAND_QUEST_ADD (RBAC.h:471).
+const permissionCommandQuestAdd uint32 = 603
+
+// permissionCommandQuestComplete mirrors rbac::RBAC_PERM_COMMAND_QUEST_COMPLETE (RBAC.h:472).
+const permissionCommandQuestComplete uint32 = 604
+
+// permissionCommandQuestRemove mirrors rbac::RBAC_PERM_COMMAND_QUEST_REMOVE (RBAC.h:473).
+const permissionCommandQuestRemove uint32 = 605
+
+// permissionCommandQuestReward mirrors rbac::RBAC_PERM_COMMAND_QUEST_REWARD (RBAC.h:474).
+const permissionCommandQuestReward uint32 = 606
+
 // permissionCommandPet mirrors rbac::RBAC_PERM_COMMAND_PET (RBAC.h:347).
 const permissionCommandPet uint32 = 479
 
