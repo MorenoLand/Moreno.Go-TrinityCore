@@ -1229,6 +1229,16 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// ENCHANT_ITEM_TEMPORARY arm of the Spell::CheckItems special-effects
+	// loop (Spell.cpp:6996-7011): runs right after the ENCHANT_ITEM /
+	// ENCHANT_ITEM_PRISMATIC arm, matching C++ CheckItems relative order.
+	// Client-initiated casts only — triggered casts go through castSpellDirect.
+	if failReason := s.checkSpellEnchantItemTemporaryCast(ctx, spell, target); failReason != 0 {
+		s.sendCastFailed(ctx, castID, spell, failReason)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "temporary-enchant requirements not met", "failReason", failReason)
+		return true
+	}
+
 	if failReason, ok := s.checkSpellEquippedItemRequirements(ctx, spell); !ok {
 		s.sendCastFailed(ctx, castID, spell, failReason)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "equipped item requirements not met", "failReason", failReason)
@@ -11820,6 +11830,48 @@ func (s *session) checkSpellEnchantItemCast(ctx context.Context, spell wotlk.Spe
 				return spellFailedNotTradeable
 			}
 		}
+	}
+	return 0
+}
+
+// checkSpellEnchantItemTemporaryCast mirrors the
+// SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY arm of the Spell::CheckItems
+// special-effects loop (Spell.cpp:6996-7011). Returns the SpellCastResult
+// failure code, or 0 when the arm passes. Client-initiated casts only —
+// triggered casts go through castSpellDirect.
+func (s *session) checkSpellEnchantItemTemporaryCast(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+	for i := 0; i < len(spell.Effects); i++ {
+		eff := spell.Effects[i]
+		if eff.Effect != spellEffectEnchantItemTemporary {
+			continue
+		}
+		t, resolved := s.resolveEnchantItemTarget(ctx, target)
+		if !resolved {
+			return spellFailedItemNotFound
+		}
+		// Not allow enchant in trade slot for some enchant type
+		// (Spell.cpp:7000-7008).
+		if !t.ownedByCaster {
+			// sSpellItemEnchantmentStore.LookupEntry(Effects[i].MiscValue);
+			// a missing entry only fails inside the trade-slot arm, matching C++.
+			var enchantEntry wotlk.SpellItemEnchantmentEntry
+			hasEnchantEntry := false
+			if eff.MiscValue > 0 && s.server.Data != nil {
+				if e, found, err := s.server.Data.SpellItemEnchantment(uint32(eff.MiscValue)); err == nil && found {
+					enchantEntry, hasEnchantEntry = e, true
+				}
+			}
+			if !hasEnchantEntry {
+				return spellFailedError
+			}
+			if enchantEntry.Flags&enchantFlagCanSoulbound != 0 {
+				return spellFailedNotTradeable
+			}
+		}
+		// The item-level restriction arm (Spell.cpp:7010-7011, the m_CastItem ×
+		// MaxLevel LOWLEVEL/HIGHLEVEL gates) is structural: handleCastSpell
+		// never carries a cast item (item casts run through handleUseItem,
+		// which runs no CheckCast gates).
 	}
 	return 0
 }
