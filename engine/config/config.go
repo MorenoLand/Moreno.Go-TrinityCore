@@ -95,6 +95,7 @@ type Config struct {
 	GMLoginState                            int
 	GMVisibleState                          int
 	GMInWhoListLevel                        int
+	GMLevelInGmList                         int
 	StartingGuildEnable                     bool
 	StartingGuildID                         uint32
 	ChatFloodMessageCount                   uint32
@@ -187,7 +188,7 @@ func defaultConfig() (c Config) {
 		c.NPCBots.DamagePhysicalMultiplier = 1
 		c.NPCBots.DamageSpellMultiplier = 1
 	}()
-	return Config{Backend: "sqlite", DataDir: ".", GameDataDir: "data", SchemaDir: "sql", UpdatesEnableDatabases: 7, UpdatesAutoSetup: true, UpdatesRedundancy: true, UpdatesArchivedRedundancy: false, UpdatesAllowRehash: true, UpdatesCleanDeadReferencesMaxCount: 3, AuthDatabaseFile: "auth.db", WrongPassBanTime: 600, CharactersDatabaseFile: "characters.db", WorldDatabaseFile: "world.db", RealmServerPort: 3724, WorldServerPort: 8085, RealmID: 1, LogsDir: "logs", Motd: "Welcome to a Trinity Core server.", ClientCacheVersion: 0, LuaEnabled: true, LuaScriptPath: "lua_scripts", CharacterCreatingDisabled: 0, CharacterCreatingDisabledRaceMask: 0, CharacterCreatingDisabledClassMask: 0, CharactersPerAccount: 50, CharactersPerRealm: 10, DeathKnightsPerRealm: 1, CharacterCreatingMinLevelForDeathKnight: 55, Expansion: 2, MaxPlayerLevel: 80, StartPlayerLevel: 1, StartPlayerMoney: 10000, GameType: 0, AllFlightPaths: false, AlwaysMaxSkillForLevel: true, DisableFatigue: 4, VisibilityDistanceContinents: 100, SoloLFGEnable: true, SoloLFGAnnounce: true, GMLoginState: 2, GMVisibleState: 2, ChatFloodMessageCount: 10, ChatFloodMessageDelay: 1, ChatFloodMuteTime: 10, ChatChannelLevelReq: 1, ChatWhisperLevelReq: 1, ChatEmoteLevelReq: 1, ChatSayLevelReq: 1, ChatYellLevelReq: 1, TradeLevelReq: 1, AllowTwoSideTrade: false, MaxOverSpeedPings: 2, MinPetitionSigns: 9, DeathCorpseReclaimDelayPvE: true, DeathCorpseReclaimDelayPvP: true, DeathBonesWorld: true, DeathBonesBattleground: true, PlayerStartAllSpells: false, PlayerStartAllReputation: false, PlayerStartMapsExplored: false, ArenaSeasonID: 8, ArenaSeasonInProgress: true, PlayerLimit: 100, AllowTrackBothResources: false, MailDeliveryDelay: 3600, WardenEnabled: false, WardenNumInjectionChecks: 9, WardenNumLuaSandboxChecks: 1, WardenNumClientModChecks: 1, WardenClientResponseDelay: 600, WardenClientCheckHoldOff: 30, WardenClientCheckFailAction: 0, WardenBanDuration: 86400, NPCBots: NPCBotConfig{Enable: true, MaxBots: 9, MaxBotsPerClass: 0, BaseFollowDistance: 25, XPReduction: 0, HealTargetIconsMask: 0, TankTargetIconMask: 0, DPSTargetIconMask: 0, HealingMultiplier: 1, EnableDungeon: true, EnableRaid: true, EnableBG: true, EnableArena: true, EnableDungeonFinder: true, LimitDungeon: true, LimitRaid: true, Cost: 1000000, UpdateDelayBase: 0, OwnershipExpireTime: 0, PvP: true, EquipmentDisplayEnable: true, ShowCloak: true, ShowHelm: true, BlademasterEnable: false, ObsidianDestroyerEnable: false, ArchmageEnable: false, DreadlordEnable: false, SpellBreakerEnable: false, DarkRangerEnable: false, StatsLimitsEnable: false, StatLimitDodge: 95, StatLimitParry: 95, StatLimitBlock: 95, StatLimitCrit: 95}}
+	return Config{Backend: "sqlite", DataDir: ".", GameDataDir: "data", SchemaDir: "sql", UpdatesEnableDatabases: 7, UpdatesAutoSetup: true, UpdatesRedundancy: true, UpdatesArchivedRedundancy: false, UpdatesAllowRehash: true, UpdatesCleanDeadReferencesMaxCount: 3, AuthDatabaseFile: "auth.db", WrongPassBanTime: 600, CharactersDatabaseFile: "characters.db", WorldDatabaseFile: "world.db", RealmServerPort: 3724, WorldServerPort: 8085, RealmID: 1, LogsDir: "logs", Motd: "Welcome to a Trinity Core server.", ClientCacheVersion: 0, LuaEnabled: true, LuaScriptPath: "lua_scripts", CharacterCreatingDisabled: 0, CharacterCreatingDisabledRaceMask: 0, CharacterCreatingDisabledClassMask: 0, CharactersPerAccount: 50, CharactersPerRealm: 10, DeathKnightsPerRealm: 1, CharacterCreatingMinLevelForDeathKnight: 55, Expansion: 2, MaxPlayerLevel: 80, StartPlayerLevel: 1, StartPlayerMoney: 10000, GameType: 0, AllFlightPaths: false, AlwaysMaxSkillForLevel: true, DisableFatigue: 4, VisibilityDistanceContinents: 100, SoloLFGEnable: true, SoloLFGAnnounce: true, GMLoginState: 2, GMVisibleState: 2, GMLevelInGmList: 3, ChatFloodMessageCount: 10, ChatFloodMessageDelay: 1, ChatFloodMuteTime: 10, ChatChannelLevelReq: 1, ChatWhisperLevelReq: 1, ChatEmoteLevelReq: 1, ChatSayLevelReq: 1, ChatYellLevelReq: 1, TradeLevelReq: 1, AllowTwoSideTrade: false, MaxOverSpeedPings: 2, MinPetitionSigns: 9, DeathCorpseReclaimDelayPvE: true, DeathCorpseReclaimDelayPvP: true, DeathBonesWorld: true, DeathBonesBattleground: true, PlayerStartAllSpells: false, PlayerStartAllReputation: false, PlayerStartMapsExplored: false, ArenaSeasonID: 8, ArenaSeasonInProgress: true, PlayerLimit: 100, AllowTrackBothResources: false, MailDeliveryDelay: 3600, WardenEnabled: false, WardenNumInjectionChecks: 9, WardenNumLuaSandboxChecks: 1, WardenNumClientModChecks: 1, WardenClientResponseDelay: 600, WardenClientCheckHoldOff: 30, WardenClientCheckFailAction: 0, WardenBanDuration: 86400, NPCBots: NPCBotConfig{Enable: true, MaxBots: 9, MaxBotsPerClass: 0, BaseFollowDistance: 25, XPReduction: 0, HealTargetIconsMask: 0, TankTargetIconMask: 0, DPSTargetIconMask: 0, HealingMultiplier: 1, EnableDungeon: true, EnableRaid: true, EnableBG: true, EnableArena: true, EnableDungeonFinder: true, LimitDungeon: true, LimitRaid: true, Cost: 1000000, UpdateDelayBase: 0, OwnershipExpireTime: 0, PvP: true, EquipmentDisplayEnable: true, ShowCloak: true, ShowHelm: true, BlademasterEnable: false, ObsidianDestroyerEnable: false, ArchmageEnable: false, DreadlordEnable: false, SpellBreakerEnable: false, DarkRangerEnable: false, StatsLimitsEnable: false, StatLimitDodge: 95, StatLimitParry: 95, StatLimitBlock: 95, StatLimitCrit: 95}}
 }
 
 func Default() Config {
@@ -249,6 +250,7 @@ func (c *Config) ApplyEnv() {
 	values["MORENOCORE_TOTP_OLD_MASTER_SECRET"] = "TOTPOldMasterSecret"
 	values["MORENOCORE_GM_VISIBLE"] = "GM.Visible"
 	values["MORENOCORE_GM_IN_WHO_LIST_LEVEL"] = "GM.InWhoList.Level"
+	values["MORENOCORE_GM_IN_GMLIST_LEVEL"] = "GM.InGMList.Level"
 	values["MORENOCORE_STARTING_GUILD_ENABLE"] = "StartingGuild.Enable"
 	values["MORENOCORE_STARTING_GUILD_ID"] = "StartingGuild.GuildID"
 	values["MORENOCORE_GAME_TYPE"] = "GameType"
@@ -633,6 +635,8 @@ func (c *Config) set(key, value string) error {
 		return setInt(&c.GMVisibleState, key, value)
 	case "GM.InWhoList.Level":
 		return setInt(&c.GMInWhoListLevel, key, value)
+	case "GM.InGMList.Level":
+		return setInt(&c.GMLevelInGmList, key, value)
 	case "StartingGuild.Enable":
 		return setBool(&c.StartingGuildEnable, key, value)
 	case "StartingGuild.GuildID":

@@ -330,7 +330,7 @@ func (s *session) executeCommand(ctx context.Context, line string) bool {
 
 func (s *session) handleCmdHelp(args []string) {
 	s.sendSysMessage("=== Available Commands ===")
-	s.sendSysMessage(".gm on|off|chat|fly|visible - Toggle GM modes")
+	s.sendSysMessage(".gm on|off|chat|fly|visible|ingame|list - Toggle GM modes")
 	s.sendSysMessage(".tele <name> - Teleport to location")
 	s.sendSysMessage(".go xyz <x> <y> <z> [map] - Teleport to coordinates")
 	s.sendSysMessage(".modify hp|mana|speed|fly|scale|money|level <val>")
@@ -344,99 +344,312 @@ func (s *session) handleCmdHelp(args []string) {
 	s.sendSysMessage(".account addon|email|password|lock ... | .account set gmlevel|addon|password|sec ...")
 }
 
-func (s *session) handleCmdGM(args []string) {
+// gmVisualAura is the VISUAL_AURA spell id applied while GM-invisible
+// (cs_gm.cpp:189, HandleGMVisibleCommand).
+const gmVisualAura uint32 = 37800
+
+// handleCmdGM dispatches the ".gm" arms (cs_gm.cpp gm_commandscript,
+// FOURTEENTH Commands file): chat, fly, ingame, list, visible, on, off —
+// each RBAC-gated per the C++ ChatCommandTable.
+func (s *session) handleCmdGM(ctx context.Context, args []string) {
 	if len(args) == 0 {
-		if s.player != nil && s.player.PlayerFlags&0x00000008 != 0 {
-			s.sendSysMessage("GM mode is ON")
+		s.sendSysMessage("Syntax: .gm on|off|chat [on|off]|fly [on|off]|visible [on|off]|ingame|list")
+		return
+	}
+	switch sub := strings.ToLower(args[0]); sub {
+	case "on":
+		s.handleCmdGMOn(ctx)
+	case "off":
+		s.handleCmdGMOff(ctx)
+	case "chat":
+		s.handleCmdGMChat(ctx, args[1:])
+	case "fly":
+		s.handleCmdGMFly(ctx, args[1:])
+	case "visible", "vis":
+		s.handleCmdGMVisible(ctx, args[1:])
+	case "ingame":
+		s.handleCmdGMInGame(ctx)
+	case "list":
+		s.handleCmdGMList(ctx)
+	default:
+		s.sendSysMessage("Syntax: .gm on|off|chat [on|off]|fly [on|off]|visible [on|off]|ingame|list")
+	}
+}
+
+// handleCmdGMOn mirrors HandleGMOnCommand (cs_gm.cpp:208).
+// Fidelity gap: Player::SetGameMaster(true) also sets FACTION_FRIENDLY,
+// UNIT_FLAG2_ALLOW_CHEAT_SPELLS, clears the FFA PvP byte flag, stops combat
+// with pets, forces PHASEMASK_ANYWHERE and the serverside GM visibility —
+// none of those engine effects have Go bridges; the flag changes are the
+// portable core and are stored for real.
+func (s *session) handleCmdGMOn(ctx context.Context) {
+	if !s.commandAllowed(ctx, permissionCommandGM) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	if s.player != nil {
+		s.player.ExtraFlags |= playerExtraGMOn
+		s.player.PlayerFlags |= playerFlagGM
+		s.updateWorldReadyGM()
+		s.persistExtraFlags()
+		s.sendPlayerUpdate()
+		s.refreshNearbyObjects(ctx)
+	}
+	// LANG_GM_ON (332).
+	s.sendNotification("GM mode is ON.")
+}
+
+// handleCmdGMOff mirrors HandleGMOffCommand (cs_gm.cpp:216).
+// Fidelity gap: same SetGameMaster engine-effect gap as the on arm
+// (faction/phase/FFA-PvP/pet-faction/combat restore unported).
+func (s *session) handleCmdGMOff(ctx context.Context) {
+	if !s.commandAllowed(ctx, permissionCommandGM) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	if s.player != nil {
+		s.player.ExtraFlags &^= playerExtraGMOn
+		s.player.PlayerFlags &^= playerFlagGM
+		s.updateWorldReadyGM()
+		s.persistExtraFlags()
+		s.sendPlayerUpdate()
+		s.refreshNearbyObjects(ctx)
+	}
+	// LANG_GM_OFF (333).
+	s.sendNotification("GM mode is OFF.")
+}
+
+// handleCmdGMChat mirrors HandleGMChatCommand (cs_gm.cpp:73).
+func (s *session) handleCmdGMChat(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandGMChat) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	if len(args) == 0 {
+		// No argument reports the current badge state; only players holding
+		// the staff-badge permission report ON.
+		if s.commandAllowed(ctx, permissionChatUseStaffBadge) && s.gmChat {
+			// LANG_GM_CHAT_ON (334).
+			s.sendNotification("GM chat is ON.")
 		} else {
-			s.sendSysMessage("GM mode is OFF")
+			// LANG_GM_CHAT_OFF (335).
+			s.sendNotification("GM chat is OFF.")
 		}
 		return
 	}
-	sub := strings.ToLower(args[0])
-	switch sub {
-	case "on":
-		if s.player != nil {
-			s.player.PlayerFlags |= playerFlagGM
-			s.player.ExtraFlags |= playerExtraGMOn | playerExtraGMChat
-			s.gmChat = true
-			s.updateWorldReadyGM()
-			s.persistExtraFlags()
-			s.sendPlayerUpdate()
-			s.refreshNearbyObjects(context.Background())
-		}
-		s.sendNotification("Game Master mode is ON")
-		s.sendSysMessage("GM mode is ON")
-	case "off":
-		if s.player != nil {
-			s.player.PlayerFlags &= ^playerFlagGM
-			s.player.ExtraFlags &= ^(playerExtraGMOn | playerExtraGMInvisible | playerExtraGMChat)
-			s.gmChat = false
-			s.updateWorldReadyGM()
-			s.persistExtraFlags()
-			s.sendPlayerUpdate()
-			s.refreshNearbyObjects(context.Background())
-		}
-		s.sendNotification("Game Master mode is OFF")
-		s.sendSysMessage("GM mode is OFF")
-	case "chat":
-		if len(args) > 1 && strings.ToLower(args[1]) == "off" {
-			s.gmChat = false
-			if s.player != nil {
-				s.player.ExtraFlags &= ^playerExtraGMChat
-				s.persistExtraFlags() // persist chat badge state across restarts
-			}
-			s.sendNotification("GM chat badge is OFF")
-			s.sendSysMessage("GM chat badge is OFF")
-		} else {
-			s.gmChat = true
-			if s.player != nil {
-				s.player.ExtraFlags |= playerExtraGMChat
-				s.persistExtraFlags() // persist chat badge state across restarts
-			}
-			s.sendNotification("GM chat badge is ON")
-			s.sendSysMessage("GM chat badge is ON")
-		}
-	case "fly":
-		enable := true
-		if len(args) > 1 && strings.ToLower(args[1]) == "off" {
-			enable = false
-		}
-		s.setFlyMode(enable)
-		name := ""
-		if s.player != nil {
-			name = s.player.Name
-		}
-		if enable {
-			s.sendSysMessage("Set fly mode on for " + name)
-		} else {
-			s.sendSysMessage("Set fly mode off for " + name)
-		}
-	case "visible", "vis":
-		if len(args) > 1 && strings.ToLower(args[1]) == "off" {
-			if s.player != nil {
-				s.player.ExtraFlags |= playerExtraGMInvisible | playerExtraGMOn
-				s.player.PlayerFlags |= playerFlagGM
-				s.updateWorldReadyGM()
-				s.persistExtraFlags()
-				s.sendPlayerUpdate()
-				s.refreshNearbyObjects(context.Background())
-			}
-			s.sendNotification("You are now invisible.")
-			s.sendSysMessage("GM visibility is OFF (Invisible)")
-		} else {
-			if s.player != nil {
-				s.player.ExtraFlags &= ^playerExtraGMInvisible
-				s.persistExtraFlags()
-				s.sendPlayerUpdate()
-				s.refreshNearbyObjects(context.Background())
-			}
-			s.sendNotification("You are now visible.")
-			s.sendSysMessage("GM visibility is ON")
-		}
-	default:
-		s.sendSysMessage("Syntax: .gm on|off|chat|fly|visible")
+	enable, ok := cheatArgBool(args[0])
+	if !ok {
+		s.sendSysMessage("Syntax: .gm chat [on|off]")
+		return
 	}
+	s.gmChat = enable
+	if s.player != nil {
+		if enable {
+			s.player.ExtraFlags |= playerExtraGMChat
+		} else {
+			s.player.ExtraFlags &^= playerExtraGMChat
+		}
+		s.persistExtraFlags()
+	}
+	if enable {
+		s.sendNotification("GM chat is ON.")
+	} else {
+		s.sendNotification("GM chat is OFF.")
+	}
+}
+
+// handleCmdGMFly mirrors HandleGMFlyCommand (cs_gm.cpp:107).
+// Fidelity gap: the C++ broadcasts the SMSG_MOVE_SET/UNSET_CAN_FLY packet
+// via SendMessageToSet; the Go setFlyMode writes to the target session only.
+func (s *session) handleCmdGMFly(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandGMFly) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	enable := true
+	if len(args) > 0 {
+		var ok bool
+		enable, ok = cheatArgBool(args[0])
+		if !ok {
+			s.sendSysMessage("Syntax: .gm fly [on|off]")
+			return
+		}
+	}
+	// getSelectedPlayer: own player when nothing is targeted; the C++ falls
+	// back to the handler's own player when the selection resolves null.
+	target := s
+	if s.selection != 0 && s.server != nil {
+		if ts := s.server.playerSessionForGUID(s.selection); ts != nil {
+			target = ts
+		}
+	}
+	name := ""
+	if target.player != nil {
+		name = target.player.Name
+	}
+	target.setFlyMode(enable)
+	// LANG_COMMAND_FLYMODE_STATUS (477); GetNameLink has no Go bridge, so the
+	// plain name is used (same convention as the character port).
+	state := "off"
+	if enable {
+		state = "on"
+	}
+	s.sendSysMessage(fmt.Sprintf("Fly mode %s for %s.", name, state))
+}
+
+// handleCmdGMVisible mirrors HandleGMVisibleCommand (cs_gm.cpp:185).
+// Fidelity gap: SetGMVisible's SetAcceptWhispers(false), channel
+// SetInvisible and the serverside-visibility values have no Go bridges; the
+// aura + flag changes are the portable core.
+func (s *session) handleCmdGMVisible(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandGMVisible) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	if s.player == nil {
+		return
+	}
+	if len(args) == 0 {
+		// LANG_YOU_ARE with LANG_VISIBLE/LANG_INVISIBLE; isGMVisible() is
+		// exactly the PLAYER_EXTRA_GM_INVISIBLE flag test (Player.h:967).
+		if s.player.ExtraFlags&playerExtraGMInvisible == 0 {
+			s.sendSysMessage("You are Visible.")
+		} else {
+			s.sendSysMessage("You are Invisible.")
+		}
+		return
+	}
+	visible, ok := cheatArgBool(args[0])
+	if !ok {
+		s.sendSysMessage("Syntax: .gm visible [on|off]")
+		return
+	}
+	if visible {
+		if s.hasAura(gmVisualAura) {
+			s.removeAura(gmVisualAura)
+		}
+		// Player::SetGMVisible(true): clear the invisible flag.
+		s.player.ExtraFlags &^= playerExtraGMInvisible
+		s.updateWorldReadyGM()
+		s.persistExtraFlags()
+		s.sendPlayerUpdate()
+		s.refreshNearbyObjects(ctx)
+		// LANG_INVISIBLE_VISIBLE (578).
+		s.sendNotification("You are now visible.")
+		return
+	}
+	// Player::SetGMVisible(false): aura + invisible flag + SetGameMaster(true)
+	// (SetGameMaster engine effects are the documented gm-on gap).
+	s.applyAuraWithDuration(gmVisualAura, 0) // AddAura: permanent
+	s.player.ExtraFlags |= playerExtraGMInvisible
+	s.player.ExtraFlags |= playerExtraGMOn
+	s.player.PlayerFlags |= playerFlagGM
+	s.updateWorldReadyGM()
+	s.persistExtraFlags()
+	s.sendPlayerUpdate()
+	s.refreshNearbyObjects(ctx)
+	// LANG_INVISIBLE_INVISIBLE (577).
+	s.sendNotification("You are now invisible.")
+}
+
+// handleCmdGMInGame mirrors HandleGMListIngameCommand (cs_gm.cpp:129): the
+// online-GM list for a session (the C++ console branch is moot — the Go
+// command path is always sessioned, same convention as the arena port).
+func (s *session) handleCmdGMInGame(ctx context.Context) {
+	if !s.commandAllowed(ctx, permissionCommandGMIngame) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	if s.server == nil {
+		return
+	}
+	type gmEntry struct {
+		name     string
+		security uint8
+	}
+	var list []gmEntry
+	s.server.sessionsMu.RLock()
+	defer s.server.sessionsMu.RUnlock()
+	for sess := range s.server.sessions {
+		if sess == nil || sess.player == nil {
+			continue
+		}
+		psec := sess.security
+		isGM := sess.player.ExtraFlags&playerExtraGMOn != 0 || sess.player.PlayerFlags&playerFlagGM != 0
+		if !isGM {
+			// RBAC_PERM_COMMANDS_APPEAR_IN_GM_LIST plus security at or below
+			// the GM.InGMList.Level config (World.cpp:1010, default
+			// SEC_ADMINISTRATOR=3).
+			if !sess.commandAllowed(ctx, permissionCommandsAppearInGMList) || int(psec) > s.server.Config.GMLevelInGmList {
+				continue
+			}
+		}
+		// Player::IsVisibleGloballyFor (Player.cpp:22599): GM-visible units
+		// are visible to everyone; invisible GMs show only to GM accounts
+		// holding at least the target's security level.
+		if sess.player.ExtraFlags&playerExtraGMInvisible != 0 && sess != s {
+			if s.security == 0 || psec > s.security {
+				continue
+			}
+		}
+		list = append(list, gmEntry{name: sess.player.Name, security: psec})
+	}
+	if len(list) == 0 {
+		// LANG_GMS_NOT_LOGGED (17).
+		s.sendSysMessage("There are no GMs currently logged in.")
+		return
+	}
+	// LANG_GMS_ON_SRV (16).
+	s.sendSysMessage("Currently logged in GMs:")
+	s.sendSysMessage("========================")
+	for _, e := range list {
+		s.sendSysMessage(fmt.Sprintf("|    %s GMLevel %d", e.name, e.security))
+	}
+	s.sendSysMessage("========================")
+}
+
+// handleCmdGMList mirrors HandleGMListFullCommand (cs_gm.cpp:161): the
+// database list of GM accounts (console branch moot — always sessioned).
+func (s *session) handleCmdGMList(ctx context.Context) {
+	if !s.commandAllowed(ctx, permissionCommandGMList) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	if s.server == nil || s.server.AuthStore == nil || s.server.AuthStore.DB == nil {
+		return
+	}
+	// LOGIN_SEL_GM_ACCOUNTS (LoginDatabase.cpp:89); SEC_MODERATOR=1.
+	rows, err := s.server.AuthStore.DB.QueryContext(ctx,
+		"SELECT a.username, aa.SecurityLevel FROM account a, account_access aa WHERE a.id = aa.AccountID AND aa.SecurityLevel >= ? AND (aa.RealmID = -1 OR aa.RealmID = ?)",
+		1, s.server.RealmID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	type gmAccount struct {
+		username string
+		security uint32
+	}
+	var accounts []gmAccount
+	for rows.Next() {
+		var a gmAccount
+		if err := rows.Scan(&a.username, &a.security); err != nil {
+			return
+		}
+		accounts = append(accounts, a)
+	}
+	if len(accounts) == 0 {
+		// LANG_GMLIST_EMPTY (599).
+		s.sendSysMessage("No GMs found.")
+		return
+	}
+	// LANG_GMLIST (597).
+	s.sendSysMessage("List of GMs:")
+	s.sendSysMessage("========================")
+	for _, a := range accounts {
+		s.sendSysMessage(fmt.Sprintf("|    %s GMLevel %d", a.username, a.security))
+	}
+	s.sendSysMessage("========================")
 }
 
 // Cheat flag bits mirroring the CHEAT_* enum (Player.h:822-829).
@@ -5584,7 +5797,7 @@ func (s *session) handleCmdUnBanCharacter(ctx context.Context, args []string) {
 func (s *session) buildCommandTree() *commandNode {
 	root := &commandNode{name: "", children: make(map[string]*commandNode)}
 	root.add("help", func(ctx context.Context, args []string) bool { s.handleCmdHelp(args); return true }, nil, map[string]string{"?": "help"})
-	root.add("gm", func(ctx context.Context, args []string) bool { s.handleCmdGM(args); return true }, []string{"on", "off", "chat", "fly", "visible"}, map[string]string{"vis": "visible"})
+	root.add("gm", func(ctx context.Context, args []string) bool { s.handleCmdGM(ctx, args); return true }, []string{"chat", "fly", "ingame", "list", "visible", "on", "off"}, map[string]string{"vis": "visible"})
 	root.add("cheat", func(ctx context.Context, args []string) bool { return s.handleCmdCheat(ctx, args) }, []string{"god", "casttime", "cooldown", "power", "waterwalk", "status", "taxi", "explore"}, nil)
 	root.add("tele", func(ctx context.Context, args []string) bool { s.handleCmdTele(ctx, args); return true }, nil, nil)
 	root.add("go", func(ctx context.Context, args []string) bool { s.handleCmdGo(ctx, args); return true }, nil, nil)

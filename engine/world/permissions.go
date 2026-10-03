@@ -7,6 +7,27 @@ import (
 
 const permissionCommandGMChat uint32 = 372
 
+// permissionCommandGM mirrors rbac::RBAC_PERM_COMMAND_GM (RBAC.h:243).
+const permissionCommandGM uint32 = 371
+
+// permissionCommandGMFly mirrors rbac::RBAC_PERM_COMMAND_GM_FLY (RBAC.h:245).
+const permissionCommandGMFly uint32 = 373
+
+// permissionCommandGMIngame mirrors rbac::RBAC_PERM_COMMAND_GM_INGAME (RBAC.h:246).
+const permissionCommandGMIngame uint32 = 374
+
+// permissionCommandGMList mirrors rbac::RBAC_PERM_COMMAND_GM_LIST (RBAC.h:247).
+const permissionCommandGMList uint32 = 375
+
+// permissionCommandGMVisible mirrors rbac::RBAC_PERM_COMMAND_GM_VISIBLE (RBAC.h:248).
+const permissionCommandGMVisible uint32 = 376
+
+// permissionCommandsAppearInGMList mirrors rbac::RBAC_PERM_COMMANDS_APPEAR_IN_GM_LIST (RBAC.h:87).
+const permissionCommandsAppearInGMList uint32 = 34
+
+// permissionChatUseStaffBadge mirrors rbac::RBAC_PERM_CHAT_USE_STAFF_BADGE (RBAC.h:90).
+const permissionChatUseStaffBadge uint32 = 37
+
 const permissionInstantLogout uint32 = 1
 
 // permissionSkipQueue mirrors rbac::RBAC_PERM_SKIP_QUEUE (RBAC.h:55).
