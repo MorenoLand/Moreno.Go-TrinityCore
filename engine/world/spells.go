@@ -116,6 +116,9 @@ const (
 	spellFailedUniqueGlyph               uint8 = 176 // SPELL_FAILED_UNIQUE_GLYPH (SharedDefines.h:1158)
 	spellFailedNotInRaidInstance         uint8 = 167 // SPELL_FAILED_NOT_IN_RAID_INSTANCE (SharedDefines.h:1149)
 	spellFailedRooted                    uint8 = 103 // SPELL_FAILED_ROOTED (SharedDefines.h:1085)
+	spellFailedLowCastLevel              uint8 = 49  // SPELL_FAILED_LOW_CASTLEVEL (SharedDefines.h:1031)
+	spellFailedTargetNotLooted           uint8 = 121 // SPELL_FAILED_TARGET_NOT_LOOTED (SharedDefines.h:1103)
+	spellFailedTargetUnskinnable         uint8 = 126 // SPELL_FAILED_TARGET_UNSKINNABLE (SharedDefines.h:1108)
 
 	areaFlagNoFlyZone uint32 = 0x20000000 // AREA_FLAG_NO_FLY_ZONE (DBCEnums.h:275) — AreaTableEntry.Flags bit tested by AreaTableEntry::IsFlyable (DBCStructure.h:209)
 
@@ -132,23 +135,37 @@ const (
 	// already a mask (SpellInfo.cpp:843), so this tests the raw field value.
 	itemSubclassMaskWeaponRanged uint32 = (1 << 2) | (1 << 3) | (1 << 18) | (1 << 16)
 
-	spellEffectEnergize                           = 30
-	spellEffectParry                              = 22
-	spellEffectPowerBurn                          = 62
-	spellEffectThreat                             = 63
-	spellEffectTriggerSpell                       = 64
-	spellEffectHealMaxHealth                      = 67
-	spellEffectCreateItem                         = 24
-	spellEffectCreateItem2                        = 70
-	spellEffectLearnSpell                         = 36
-	spellEffectLearnPetSpell                      = 57 // SPELL_EFFECT_LEARN_PET_SPELL (SharedDefines.h:868)
-	spellEffectAddExtraAttacks                    = 19 // SPELL_EFFECT_ADD_EXTRA_ATTACKS (SharedDefines.h:830)
-	spellEffectResurrect                          = 18
-	spellEffectReputation                         = 103
-	spellEffectQuestComplete                      = 16
-	spellEffectHealthLeech                        = 9
-	spellEffectPowerDrain                         = 8
-	spellEffectCharge                             = 96  // SPELL_EFFECT_CHARGE (SharedDefines.h:907)
+	spellEffectEnergize        = 30
+	spellEffectParry           = 22
+	spellEffectPowerBurn       = 62
+	spellEffectThreat          = 63
+	spellEffectTriggerSpell    = 64
+	spellEffectHealMaxHealth   = 67
+	spellEffectCreateItem      = 24
+	spellEffectCreateItem2     = 70
+	spellEffectLearnSpell      = 36
+	spellEffectLearnPetSpell   = 57 // SPELL_EFFECT_LEARN_PET_SPELL (SharedDefines.h:868)
+	spellEffectAddExtraAttacks = 19 // SPELL_EFFECT_ADD_EXTRA_ATTACKS (SharedDefines.h:830)
+	spellEffectResurrect       = 18
+	spellEffectReputation      = 103
+	spellEffectQuestComplete   = 16
+	spellEffectHealthLeech     = 9
+	spellEffectPowerDrain      = 8
+	spellEffectCharge          = 96 // SPELL_EFFECT_CHARGE (SharedDefines.h:907)
+	spellEffectSkinning        = 95 // SPELL_EFFECT_SKINNING (SharedDefines.h:906)
+
+	// Creature template type_flags for the skinning CheckCast leg
+	// (Spell.cpp:5707-5724, CreatureData.h:213-222, SharedDefines.h).
+	// creatureTypeCritter (CREATURE_TYPE_CRITTER, kill.go:15) already exists:
+	// critters skip the looted gate.
+	creatureTypeFlagHerbSkinningSkill        uint32 = 0x00000100 // CREATURE_TYPE_FLAG_HERB_SKINNING_SKILL (SharedDefines.h:2737)
+	creatureTypeFlagMiningSkinningSkill      uint32 = 0x00000200 // CREATURE_TYPE_FLAG_MINING_SKINNING_SKILL (SharedDefines.h:2738)
+	creatureTypeFlagEngineeringSkinningSkill uint32 = 0x00008000 // CREATURE_TYPE_FLAG_ENGINEERING_SKINNING_SKILL (SharedDefines.h:2744)
+
+	skillSkinning                          uint32 = 393 // SKILL_SKINNING (SharedDefines.h:2985)
+	skillHerbalism                         uint32 = 182 // SKILL_HERBALISM (SharedDefines.h:2939)
+	skillMining                            uint32 = 186 // SKILL_MINING (SharedDefines.h:2943)
+	skillEngineering                       uint32 = 202 // SKILL_ENGINEERING (SharedDefines.h:2947)
 	spellEffectHealMechanical                     = 75  // SPELL_EFFECT_HEAL_MECHANICAL (SharedDefines.h:886)
 	spellEffectHealPct                            = 136 // SPELL_EFFECT_HEAL_PCT (SharedDefines.h:947)
 	spellEffectEnergizePct                        = 137 // SPELL_EFFECT_ENERGIZE_PCT (SharedDefines.h:948)
@@ -865,6 +882,18 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "charge validation", "failure", failure)
 		return true
 	}
+	// Skinning gate (Spell::CheckCast per-effect block, Spell.cpp:5707-5724):
+	// a SPELL_EFFECT_SKINNING effect fails with SPELL_FAILED_BAD_TARGETS when
+	// the target is not a creature, SPELL_FAILED_TARGET_UNSKINNABLE when the
+	// corpse lacks the skinnable flag, SPELL_FAILED_TARGET_NOT_LOOTED when a
+	// non-critter corpse was not looted, and SPELL_FAILED_LOW_CASTLEVEL when
+	// the caster's loot skill is too low for the creature's level. C++
+	// relative order places this right after the charge leg.
+	if failure := s.checkSkinningCast(spell, target); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "skinning validation", "failure", failure)
+		return true
+	}
 	cost := s.calculateSpellPowerCost(spell)
 	pType := spell.PowerType
 	// Spell::CheckPower (Spell.cpp:6665-6670) checks rune costs when
@@ -1458,6 +1487,78 @@ func (s *session) checkChargeCast(spell wotlk.Spell, target protocol.SpellTarget
 	}
 	if spellNeedsExplicitUnitTarget(spell) && (target.Flags&protocol.SpellTargetFlagUnitWireMask == 0 || target.UnitGUID == 0) {
 		return spellFailedDontReport
+	}
+	return 0
+}
+
+// checkSkinningCast mirrors the SPELL_EFFECT_SKINNING leg of the CheckCast
+// per-effect block (Spell.cpp:5707-5724): the unit target must be a creature
+// (TYPEID_UNIT) carrying UNIT_FLAG_SKINNABLE, the corpse must have been looted
+// (Loot::isLooted — the Go Looted marker set when the loot window empties),
+// and the caster's profession skill must meet the level-derived requirement.
+// The m_caster->GetTypeId() != TYPEID_PLAYER arm is vacuous on the client
+// path (handleCastSpell only serves player sessions). GetRequiredLootSkill
+// (CreatureData.h:213-222) picks the skill from the creature template's
+// type_flags: herb/mining/engineering skinning flags map to their gathering
+// skills, otherwise SKILL_SKINNING. Player::GetSkillValue adds the temporary
+// bonus to the base value (Player.cpp:6240-6252). When the creature_template
+// row is missing the template-dependent arms are skipped, following the
+// unknown-data-is-permissive convention (terrain.go); that gap is documented
+// in the skill/looted legs below.
+func (s *session) checkSkinningCast(spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
+	hasSkinning := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == spellEffectSkinning {
+			hasSkinning = true
+			break
+		}
+	}
+	if !hasSkinning {
+		return 0
+	}
+	if target.Flags&protocol.SpellTargetFlagUnitWireMask == 0 || target.UnitGUID == 0 || uint16(target.UnitGUID>>48) != 0xF130 {
+		return spellFailedBadTargets
+	}
+	motion := s.findCreatureMotion(target.UnitGUID)
+	if motion == nil {
+		return spellFailedBadTargets
+	}
+	if motion.UnitFlags&unitFlagSkinnable == 0 { // UNIT_FLAG_SKINNABLE = 0x04000000 (UnitDefines.h:150)
+		return spellFailedTargetUnskinnable
+	}
+	wdb := s.server.WorldStore.DB
+	if wdb == nil {
+		return 0
+	}
+	var cType, typeFlags int64
+	if err := wdb.QueryRowContext(context.Background(), "SELECT COALESCE(type, 0), COALESCE(type_flags, 0) FROM creature_template WHERE entry = ? LIMIT 1", motion.Entry).Scan(&cType, &typeFlags); err != nil {
+		return 0
+	}
+	if cType != int64(creatureTypeCritter) && !motion.Looted {
+		return spellFailedTargetNotLooted
+	}
+	skillID := skillSkinning
+	switch {
+	case typeFlags&int64(creatureTypeFlagHerbSkinningSkill) != 0:
+		skillID = skillHerbalism
+	case typeFlags&int64(creatureTypeFlagMiningSkinningSkill) != 0:
+		skillID = skillMining
+	case typeFlags&int64(creatureTypeFlagEngineeringSkinningSkill) != 0:
+		skillID = skillEngineering
+	}
+	skillValue := playerSkillTotalValue(s.player, skillID)
+	targetLevel := int32(motion.Level)
+	var reqValue int32
+	if skillValue < 100 {
+		reqValue = (targetLevel - 10) * 10
+	} else {
+		reqValue = targetLevel * 5
+	}
+	if reqValue > skillValue {
+		return spellFailedLowCastLevel
 	}
 	return 0
 }

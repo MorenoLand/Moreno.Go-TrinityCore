@@ -706,6 +706,12 @@ func (s *session) clearCreatureLoot(loot *activeLootState) {
 		guid := uint32(loot.TargetGUID & 0x00FFFFFF)
 		creatureEntry := uint32((loot.TargetGUID >> 24) & 0x00FFFFFF)
 		stdGUID := creatureWorldGUID(guid, creatureEntry)
+		// Loot::isLooted (Loot.h:236) turns true when the corpse's loot fully
+		// empties: clearCreatureLoot only runs on empty-loot paths, so the
+		// motion flips to looted here (respawn clears it in kill.go).
+		if motion := s.server.findCreatureMotion(loot.MapID, loot.InstanceID, stdGUID); motion != nil {
+			motion.Looted = true
+		}
 		s.server.broadcastCreatureValuesUpdateInInstance(loot.MapID, loot.InstanceID, loot.TargetGUID, map[int]uint32{unitFieldDynamicFlags: 0})
 		s.server.broadcastCreatureValuesUpdateInInstance(loot.MapID, loot.InstanceID, stdGUID, map[int]uint32{unitFieldDynamicFlags: 0})
 	}

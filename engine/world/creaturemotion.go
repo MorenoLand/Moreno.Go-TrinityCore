@@ -113,6 +113,11 @@ type creatureMotion struct {
 	CharmFaction   uint32
 	CharmOwnerGUID uint64
 	PetCommand     uint8 // 0: stay, 1: follow, 2: attack
+
+	// Looted mirrors Loot::isLooted (Loot.h:236 — gold == 0 && unlootedCount
+	// == 0): set when the corpse's loot window fully empties, cleared on
+	// respawn. Consulted by the skinning CheckCast gate (spells.go).
+	Looted         bool
 	PetReact       uint8 // 0: passive, 1: defensive, 2: aggressive
 	AutocastSpells []uint32
 

@@ -807,6 +807,7 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 				motion.MaxHealth = respawn.Health
 				motion.X, motion.Y, motion.Z = respawn.X, respawn.Y, respawn.Z
 				motion.InCombat, motion.TargetGUID, motion.Moving = false, 0, false
+				motion.Looted = false
 			}
 			s.motionMu.Unlock()
 			s.clearLootState(respawn.Map, 0, rawGUID)
@@ -826,6 +827,7 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 			motion.Health, motion.MaxHealth, motion.DynamicFlags = respawn.Health, respawn.Health, 0
 			motion.X, motion.Y, motion.Z = respawn.X, respawn.Y, respawn.Z
 			motion.InCombat, motion.Evading, motion.TargetGUID, motion.Moving = false, false, 0, false
+			motion.Looted = false
 			motion.Refreshed = now
 		}
 		s.motionMu.Unlock()

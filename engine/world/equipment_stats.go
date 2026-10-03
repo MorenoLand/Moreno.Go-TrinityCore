@@ -366,3 +366,17 @@ func playerSkillValue(state *playerState, skillID uint32) uint32 {
 	}
 	return 0
 }
+
+// playerSkillTotalValue mirrors Player::GetSkillValue (Player.cpp:6240-6252):
+// base value plus the temporary bonus. skill.Bonus holds the PLAYER_SKILL_BONUS
+// field whose low part is SKILL_TEMP_BONUS (Player.cpp:124); Go never populates
+// temp skill bonuses, so the term currently contributes 0 — the formula stays
+// for fidelity with the C++ computation.
+func playerSkillTotalValue(state *playerState, skillID uint32) int32 {
+	for _, skill := range state.Skills {
+		if uint32(skill.Skill) == skillID {
+			return int32(skill.Value) + int32(int16(skill.Bonus))
+		}
+	}
+	return 0
+}
