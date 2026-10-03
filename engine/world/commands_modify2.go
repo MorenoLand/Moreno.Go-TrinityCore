@@ -181,6 +181,9 @@ func (s *session) handleModifyChunk2a(ctx context.Context, sub string, rest []st
 	case strings.HasPrefix("mount", sub):
 		s.handleModifyMount(ctx, rest)
 	default:
+		if s.handleModifyChunk2b(ctx, sub, rest) {
+			return true
+		}
 		return false
 	}
 	return true
