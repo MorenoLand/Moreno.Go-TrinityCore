@@ -689,6 +689,8 @@ func (s *Server) getPrevSpellInChain(spellID uint32) uint32 {
 		return s.prevSpellInChain[spellID]
 	}
 	s.prevSpellInChain = make(map[uint32]uint32)
+	s.nextSpellInChain = make(map[uint32]uint32)
+	s.firstSpellInChain = make(map[uint32]uint32)
 	s.spellChainLoaded = true
 	if s.WorldStore != nil && s.WorldStore.DB != nil {
 		rows, err := s.WorldStore.DB.Query(`SELECT r2.spell_id, r1.spell_id
@@ -700,11 +702,50 @@ func (s *Server) getPrevSpellInChain(spellID uint32) uint32 {
 				var higherSpell, prevSpell uint32
 				if err := rows.Scan(&higherSpell, &prevSpell); err == nil && higherSpell > 0 && prevSpell > 0 {
 					s.prevSpellInChain[higherSpell] = prevSpell
+					s.nextSpellInChain[prevSpell] = higherSpell
+				}
+			}
+		}
+		firstRows, err := s.WorldStore.DB.Query(`SELECT spell_id, first_spell_id FROM spell_ranks`)
+		if err == nil {
+			defer firstRows.Close()
+			for firstRows.Next() {
+				var spellID, firstID uint32
+				if err := firstRows.Scan(&spellID, &firstID); err == nil && spellID > 0 && firstID > 0 {
+					s.firstSpellInChain[spellID] = firstID
 				}
 			}
 		}
 	}
 	return s.prevSpellInChain[spellID]
+}
+
+// getNextSpellInChain mirrors SpellMgr::GetNextSpellInChain (SpellMgr.h):
+// the rank above spellID in its chain, 0 when there is none.
+func (s *Server) getNextSpellInChain(spellID uint32) uint32 {
+	if s == nil {
+		return 0
+	}
+	_ = s.getPrevSpellInChain(spellID) // ensures the chain maps are loaded
+	s.spellChainMu.RLock()
+	defer s.spellChainMu.RUnlock()
+	return s.nextSpellInChain[spellID]
+}
+
+// getFirstSpellInChain mirrors SpellMgr::GetFirstSpellInChain (SpellMgr.h):
+// the rank-1 spell of spellID's chain, or spellID itself when it has no
+// chain row.
+func (s *Server) getFirstSpellInChain(spellID uint32) uint32 {
+	if s == nil {
+		return 0
+	}
+	_ = s.getPrevSpellInChain(spellID) // ensures the chain maps are loaded
+	s.spellChainMu.RLock()
+	defer s.spellChainMu.RUnlock()
+	if first, ok := s.firstSpellInChain[spellID]; ok && first != 0 {
+		return first
+	}
+	return spellID
 }
 
 func (s *session) isTrainerValidForPlayer(tType, requirement uint32) bool {

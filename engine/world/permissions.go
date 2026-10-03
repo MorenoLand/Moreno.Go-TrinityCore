@@ -540,3 +540,41 @@ const permissionCommandInstanceSetBossState uint32 = 795
 
 // permissionCommandInstanceGetBossState mirrors rbac::RBAC_PERM_COMMAND_INSTANCE_GET_BOSS_STATE (RBAC.h:664).
 const permissionCommandInstanceGetBossState uint32 = 796
+
+// permissionCommandLearn mirrors rbac::RBAC_PERM_COMMAND_LEARN (RBAC.h:285).
+const permissionCommandLearn uint32 = 417
+
+// 418 previously used, do not reuse (RBAC.h:286).
+
+// permissionCommandLearnAllMy mirrors rbac::RBAC_PERM_COMMAND_LEARN_ALL_MY (RBAC.h:287).
+const permissionCommandLearnAllMy uint32 = 419
+
+// permissionCommandLearnAllMyClass mirrors rbac::RBAC_PERM_COMMAND_LEARN_ALL_MY_CLASS (RBAC.h:288).
+const permissionCommandLearnAllMyClass uint32 = 420
+
+// permissionCommandLearnMyPetTalents mirrors rbac::RBAC_PERM_COMMAND_LEARN_MY_PETTALENTS (RBAC.h:289).
+const permissionCommandLearnMyPetTalents uint32 = 421
+
+// permissionCommandLearnAllMySpells mirrors rbac::RBAC_PERM_COMMAND_LEARN_ALL_MY_SPELLS (RBAC.h:290).
+const permissionCommandLearnAllMySpells uint32 = 422
+
+// permissionCommandLearnAllTalents mirrors rbac::RBAC_PERM_COMMAND_LEARN_ALL_TALENTS (RBAC.h:291).
+const permissionCommandLearnAllTalents uint32 = 423
+
+// permissionCommandLearnAllGM mirrors rbac::RBAC_PERM_COMMAND_LEARN_ALL_GM (RBAC.h:292).
+const permissionCommandLearnAllGM uint32 = 424
+
+// permissionCommandLearnAllCrafts mirrors rbac::RBAC_PERM_COMMAND_LEARN_ALL_CRAFTS (RBAC.h:293).
+const permissionCommandLearnAllCrafts uint32 = 425
+
+// permissionCommandLearnAllDefault mirrors rbac::RBAC_PERM_COMMAND_LEARN_ALL_DEFAULT (RBAC.h:294).
+const permissionCommandLearnAllDefault uint32 = 426
+
+// permissionCommandLearnAllLang mirrors rbac::RBAC_PERM_COMMAND_LEARN_ALL_LANG (RBAC.h:295).
+const permissionCommandLearnAllLang uint32 = 427
+
+// permissionCommandLearnAllRecipes mirrors rbac::RBAC_PERM_COMMAND_LEARN_ALL_RECIPES (RBAC.h:296).
+const permissionCommandLearnAllRecipes uint32 = 428
+
+// permissionCommandUnlearn mirrors rbac::RBAC_PERM_COMMAND_UNLEARN (RBAC.h:297).
+const permissionCommandUnlearn uint32 = 429

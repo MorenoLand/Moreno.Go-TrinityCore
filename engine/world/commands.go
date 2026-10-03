@@ -2014,76 +2014,6 @@ func (s *session) handleCmdAddItem(ctx context.Context, args []string) {
 	s.sendSysMessage(fmt.Sprintf("Added item %s [%d] x%d to inventory.", itemName, itemID, count))
 }
 
-func (s *session) handleCmdLearn(ctx context.Context, args []string) {
-	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .learn <spellId> | .learn all")
-		return
-	}
-	if strings.ToLower(args[0]) == "all" {
-		s.sendSysMessage("Learned all class spells.")
-		return
-	}
-	spellID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
-		s.sendSysMessage("Invalid spell ID.")
-		return
-	}
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
-			"INSERT INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)",
-			s.playerGUID, spellID)
-	}
-	s.learnOwnerPetAuraSources(ctx, uint32(spellID))
-	pkt := protocol.NewBuffer(6)
-	pkt.WriteU32(uint32(spellID))
-	pkt.WriteU16(0)
-	_ = s.write(uint16(protocol.OpcodeSMSG_LEARNED_SPELL), pkt.Bytes(), true)
-	s.sendSysMessage(fmt.Sprintf("Learned spell %d.", spellID))
-}
-
-func (s *session) handleCmdUnlearn(ctx context.Context, args []string) {
-	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .unlearn <spellId|talents>")
-		return
-	}
-	// Reference Player::ResetTalents via .unlearn talents with the escalating
-	// gold cost curve; GMs reset for free like the reference command paths.
-	if strings.EqualFold(args[0], "talents") {
-		if s.player == nil {
-			return
-		}
-		free := s.player.ExtraFlags&playerExtraGMOn != 0
-		if !s.resetTalents(ctx, free) {
-			s.sendSysMessage("You do not have enough gold to reset your talents.")
-			return
-		}
-		if free {
-			s.sendSysMessage("Your talents have been reset (no cost).")
-		} else {
-			s.sendSysMessage(fmt.Sprintf("Your talents have been reset for %dg.", s.player.ResetTalentsCost/goldUnit))
-		}
-		return
-	}
-	spellID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
-		s.sendSysMessage("Invalid spell ID.")
-		return
-	}
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
-			"DELETE FROM character_spell WHERE guid = ? AND spell = ?",
-			s.playerGUID, spellID)
-	}
-	if s.hasAura(uint32(spellID)) {
-		s.removeAura(uint32(spellID))
-	}
-	s.removeOwnerPetAurasForSpell(ctx, uint32(spellID))
-	pkt := protocol.NewBuffer(4)
-	pkt.WriteU32(uint32(spellID))
-	_ = s.write(uint16(protocol.OpcodeSMSG_REMOVED_SPELL), pkt.Bytes(), true)
-	s.sendSysMessage(fmt.Sprintf("Unlearned spell %d.", spellID))
-}
-
 func (s *session) handleCmdCast(ctx context.Context, args []string) {
 	if len(args) == 0 {
 		s.sendSysMessage("Syntax: .cast <spellId> [triggered]")
@@ -6490,8 +6420,6 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("go", func(ctx context.Context, args []string) bool { s.handleCmdGo(ctx, args); return true }, []string{"creature", "gameobject", "graveyard", "grid", "taxinode", "areatrigger", "zonexy", "xyz", "ticket", "offset", "instance", "boss"}, nil)
 	root.add("modify", func(ctx context.Context, args []string) bool { s.handleCmdModify(ctx, args); return true }, []string{"hp", "health", "mana", "power", "speed", "run", "fly", "scale", "money", "gold", "level"}, map[string]string{"mod": "modify"})
 	root.add("additem", func(ctx context.Context, args []string) bool { s.handleCmdAddItem(ctx, args); return true }, nil, map[string]string{"item": "additem"})
-	root.add("learn", func(ctx context.Context, args []string) bool { s.handleCmdLearn(ctx, args); return true }, nil, nil)
-	root.add("unlearn", func(ctx context.Context, args []string) bool { s.handleCmdUnlearn(ctx, args); return true }, nil, nil)
 	root.add("cast", func(ctx context.Context, args []string) bool { s.handleCmdCast(ctx, args); return true }, nil, nil)
 	root.add("lookup", func(ctx context.Context, args []string) bool { s.handleCmdLookup(ctx, args); return true }, []string{"item", "spell", "creature", "npc", "tele", "quest"}, nil)
 	root.add("server", func(ctx context.Context, args []string) bool { s.handleCmdServer(ctx, args); return true }, []string{"info", "motd", "restart", "shutdown"}, nil)
@@ -6515,6 +6443,8 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("guild", func(ctx context.Context, args []string) bool { s.handleCmdGuild(ctx, args); return true }, []string{"create", "delete", "invite", "uninvite", "rank", "rename", "info"}, nil)
 	root.add("honor", func(ctx context.Context, args []string) bool { s.handleCmdHonor(ctx, args); return true }, []string{"add", "update"}, nil)
 	root.add("instance", func(ctx context.Context, args []string) bool { s.handleCmdInstance(ctx, args); return true }, []string{"listbinds", "unbind", "stats", "savedata", "setbossstate", "getbossstate"}, nil)
+	root.add("learn", func(ctx context.Context, args []string) bool { s.handleCmdLearn(ctx, args); return true }, []string{"all", "my"}, nil)
+	root.add("unlearn", func(ctx context.Context, args []string) bool { s.handleCmdUnLearn(ctx, args); return true }, nil, nil)
 	root.add("revive", func(ctx context.Context, args []string) bool { s.handleCmdRevive(ctx, args); return true }, nil, map[string]string{"res": "revive", "rev": "revive"})
 	root.add("dismount", func(ctx context.Context, args []string) bool { s.handleCmdDismount(ctx); return true }, nil, nil)
 	root.add("save", func(ctx context.Context, args []string) bool { s.handleCmdSave(ctx); return true }, nil, map[string]string{"saveall": "save"})
