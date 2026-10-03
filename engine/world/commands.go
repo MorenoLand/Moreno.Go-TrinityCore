@@ -6352,6 +6352,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("learn", func(ctx context.Context, args []string) bool { s.handleCmdLearn(ctx, args); return true }, []string{"all", "my"}, nil)
 	root.add("lookup", func(ctx context.Context, args []string) bool { s.handleCmdLookup(ctx, args); return true }, []string{"area", "creature", "event", "faction", "item", "object", "quest", "player", "skill", "spell", "taxinode", "tele", "title", "map"}, nil)
 	root.add("lfg", func(ctx context.Context, args []string) bool { s.handleCmdLFG(ctx, args); return true }, []string{"player", "group", "queue", "clean", "options"}, nil)
+	root.add("list", func(ctx context.Context, args []string) bool { s.handleCmdList(ctx, args); return true }, []string{"creature", "item", "object", "auras", "mail", "spawnpoints", "respawns"}, nil)
 	root.add("unlearn", func(ctx context.Context, args []string) bool { s.handleCmdUnLearn(ctx, args); return true }, nil, nil)
 	root.add("revive", func(ctx context.Context, args []string) bool { s.handleCmdRevive(ctx, args); return true }, nil, map[string]string{"res": "revive", "rev": "revive"})
 	root.add("dismount", func(ctx context.Context, args []string) bool { s.handleCmdDismount(ctx); return true }, nil, nil)

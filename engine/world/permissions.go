@@ -64,6 +64,12 @@ const permissionCommandGObjectSpawnGroup uint32 = 858
 // permissionCommandGObjectDespawnGroup mirrors rbac::RBAC_PERM_COMMAND_GOBJECT_DESPAWNGROUP (RBAC.h:726).
 const permissionCommandGObjectDespawnGroup uint32 = 859
 
+// permissionCommandListRespawns mirrors rbac::RBAC_PERM_COMMAND_LIST_RESPAWNS (RBAC.h:727).
+const permissionCommandListRespawns uint32 = 860
+
+// permissionCommandListSpawnpoints mirrors rbac::RBAC_PERM_COMMAND_LIST_SPAWNPOINTS (RBAC.h:733).
+const permissionCommandListSpawnpoints uint32 = 866
+
 // permissionCommandsAppearInGMList mirrors rbac::RBAC_PERM_COMMANDS_APPEAR_IN_GM_LIST (RBAC.h:87).
 const permissionCommandsAppearInGMList uint32 = 34
 
@@ -593,6 +599,21 @@ const permissionCommandLfgClean uint32 = 434
 
 // permissionCommandLfgOptions mirrors rbac::RBAC_PERM_COMMAND_LFG_OPTIONS (RBAC.h:303).
 const permissionCommandLfgOptions uint32 = 435
+
+// permissionCommandListCreature mirrors rbac::RBAC_PERM_COMMAND_LIST_CREATURE (RBAC.h:305).
+const permissionCommandListCreature uint32 = 437
+
+// permissionCommandListItem mirrors rbac::RBAC_PERM_COMMAND_LIST_ITEM (RBAC.h:306).
+const permissionCommandListItem uint32 = 438
+
+// permissionCommandListObject mirrors rbac::RBAC_PERM_COMMAND_LIST_OBJECT (RBAC.h:307).
+const permissionCommandListObject uint32 = 439
+
+// permissionCommandListAuras mirrors rbac::RBAC_PERM_COMMAND_LIST_AURAS (RBAC.h:308).
+const permissionCommandListAuras uint32 = 440
+
+// permissionCommandListMail mirrors rbac::RBAC_PERM_COMMAND_LIST_MAIL (RBAC.h:309).
+const permissionCommandListMail uint32 = 441
 
 // permissionCommandLookup mirrors rbac::RBAC_PERM_COMMAND_LOOKUP (RBAC.h:310).
 const permissionCommandLookup uint32 = 442
