@@ -1146,6 +1146,69 @@ const permissionCommandSendMessage uint32 = 486
 // permissionCommandSendMoney mirrors rbac::RBAC_PERM_COMMAND_SEND_MONEY (RBAC.h:355).
 const permissionCommandSendMoney uint32 = 487
 
+// permissionCommandServer mirrors rbac::RBAC_PERM_COMMAND_SERVER (RBAC.h:586).
+const permissionCommandServer uint32 = 718
+
+// permissionCommandServerCorpses mirrors rbac::RBAC_PERM_COMMAND_SERVER_CORPSES (RBAC.h:587).
+const permissionCommandServerCorpses uint32 = 719
+
+// permissionCommandServerExit mirrors rbac::RBAC_PERM_COMMAND_SERVER_EXIT (RBAC.h:588).
+const permissionCommandServerExit uint32 = 720
+
+// permissionCommandServerIdlerestart mirrors rbac::RBAC_PERM_COMMAND_SERVER_IDLERESTART (RBAC.h:589).
+const permissionCommandServerIdlerestart uint32 = 721
+
+// permissionCommandServerIdlerestartCancel mirrors rbac::RBAC_PERM_COMMAND_SERVER_IDLERESTART_CANCEL (RBAC.h:590).
+const permissionCommandServerIdlerestartCancel uint32 = 722
+
+// permissionCommandServerIdleshutdown mirrors rbac::RBAC_PERM_COMMAND_SERVER_IDLESHUTDOWN (RBAC.h:591).
+const permissionCommandServerIdleshutdown uint32 = 723
+
+// permissionCommandServerIdleshutdownCancel mirrors rbac::RBAC_PERM_COMMAND_SERVER_IDLESHUTDOWN_CANCEL (RBAC.h:592).
+const permissionCommandServerIdleshutdownCancel uint32 = 724
+
+// permissionCommandServerInfo mirrors rbac::RBAC_PERM_COMMAND_SERVER_INFO (RBAC.h:593).
+const permissionCommandServerInfo uint32 = 725
+
+// permissionCommandServerPlimit mirrors rbac::RBAC_PERM_COMMAND_SERVER_PLIMIT (RBAC.h:594).
+const permissionCommandServerPlimit uint32 = 726
+
+// permissionCommandServerRestart mirrors rbac::RBAC_PERM_COMMAND_SERVER_RESTART (RBAC.h:595).
+const permissionCommandServerRestart uint32 = 727
+
+// permissionCommandServerRestartCancel mirrors rbac::RBAC_PERM_COMMAND_SERVER_RESTART_CANCEL (RBAC.h:596).
+const permissionCommandServerRestartCancel uint32 = 728
+
+// permissionCommandServerSet mirrors rbac::RBAC_PERM_COMMAND_SERVER_SET (RBAC.h:597).
+const permissionCommandServerSet uint32 = 729
+
+// permissionCommandServerSetClosed mirrors rbac::RBAC_PERM_COMMAND_SERVER_SET_CLOSED (RBAC.h:598).
+const permissionCommandServerSetClosed uint32 = 730
+
+// permissionCommandServerSetLoglevel mirrors rbac::RBAC_PERM_COMMAND_SERVER_SET_LOGLEVEL (RBAC.h:600).
+const permissionCommandServerSetLoglevel uint32 = 732
+
+// permissionCommandServerSetMotd mirrors rbac::RBAC_PERM_COMMAND_SERVER_SET_MOTD (RBAC.h:601).
+const permissionCommandServerSetMotd uint32 = 733
+
+// permissionCommandServerShutdown mirrors rbac::RBAC_PERM_COMMAND_SERVER_SHUTDOWN (RBAC.h:602).
+const permissionCommandServerShutdown uint32 = 734
+
+// permissionCommandServerShutdownCancel mirrors rbac::RBAC_PERM_COMMAND_SERVER_SHUTDOWN_CANCEL (RBAC.h:603).
+const permissionCommandServerShutdownCancel uint32 = 735
+
+// permissionCommandServerMotd mirrors rbac::RBAC_PERM_COMMAND_SERVER_MOTD (RBAC.h:604).
+const permissionCommandServerMotd uint32 = 736
+
+// permissionCommandServerShutdownForce mirrors rbac::RBAC_PERM_COMMAND_SERVER_SHUTDOWN_FORCE (RBAC.h:706).
+const permissionCommandServerShutdownForce uint32 = 839
+
+// permissionCommandServerRestartForce mirrors rbac::RBAC_PERM_COMMAND_SERVER_RESTART_FORCE (RBAC.h:707).
+const permissionCommandServerRestartForce uint32 = 840
+
+// permissionCommandServerDebug mirrors rbac::RBAC_PERM_COMMAND_SERVER_DEBUG (RBAC.h:738).
+const permissionCommandServerDebug uint32 = 872
+
 // permissionCommandReload mirrors rbac::RBAC_PERM_COMMAND_RELOAD (RBAC.h).
 const permissionCommandReload uint32 = 607
 

@@ -1944,25 +1944,6 @@ func (s *session) castArmBlocked(ctx context.Context, permissionID uint32, reaso
 	s.sendSysMessage(reason)
 }
 
-func (s *session) handleCmdServer(ctx context.Context, args []string) {
-	if len(args) == 0 || strings.ToLower(args[0]) == "info" {
-		s.server.sessionsMu.RLock()
-		online := len(s.server.sessions)
-		s.server.sessionsMu.RUnlock()
-		s.sendSysMessage(fmt.Sprintf("Go-MorenoCore (WotLK 3.3.5a 12340) | Online players: %d | Realm ID: %d", online, s.server.RealmID))
-		return
-	}
-	sub := strings.ToLower(args[0])
-	switch sub {
-	case "motd":
-		s.sendSysMessage(fmt.Sprintf("MOTD: %s", s.server.Config.Motd))
-	case "restart", "shutdown":
-		s.sendSysMessage("Server restart/shutdown command issued.")
-	default:
-		s.sendSysMessage("Syntax: .server info|motd")
-	}
-}
-
 // handleCmdCharacter dispatches ".character customize|changefaction|changerace|
 // changeaccount|deleted|erase|level|rename|reputation|titles"
 // (cs_character.cpp characterCommandTable), gating each arm on its RBAC permission.
@@ -6123,7 +6104,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("modify", func(ctx context.Context, args []string) bool { s.handleCmdModify(ctx, args); return true }, []string{"hp", "mana", "energy", "rage", "runicpower", "money", "honor", "arenapoints", "xp", "drunk", "scale", "spell", "standstate", "mount", "gender", "bit", "faction", "phase", "speed", "talentpoints", "reputation"}, map[string]string{"mod": "modify"})
 	root.add("additem", func(ctx context.Context, args []string) bool { s.handleCmdAddItem(ctx, args); return true }, []string{"set"}, map[string]string{"item": "additem"})
 	root.add("cast", func(ctx context.Context, args []string) bool { s.handleCmdCast(ctx, args); return true }, nil, nil)
-	root.add("server", func(ctx context.Context, args []string) bool { s.handleCmdServer(ctx, args); return true }, []string{"info", "motd", "restart", "shutdown"}, nil)
+	root.add("server", func(ctx context.Context, args []string) bool { s.handleCmdServer(ctx, args); return true }, []string{"corpses", "debug", "exit", "idlerestart", "idleshutdown", "info", "motd", "plimit", "restart", "shutdown", "set"}, nil)
 	root.add("character", func(ctx context.Context, args []string) bool { s.handleCmdCharacter(ctx, args); return true }, []string{"customize", "changefaction", "changerace", "changeaccount", "deleted", "erase", "level", "rename", "reputation", "titles"}, map[string]string{"char": "character"})
 	root.add("levelup", func(ctx context.Context, args []string) bool { s.handleCmdLevelup(ctx, args); return true }, nil, nil)
 	root.add("pdump", func(ctx context.Context, args []string) bool { s.handleCmdPDump(ctx, args); return true }, []string{"copy", "load", "write"}, nil)
