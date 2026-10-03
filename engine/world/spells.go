@@ -944,6 +944,17 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	s.triggerGlobalCooldown(spell)
 
 	if castTime > 0 {
+		// Spell::update (Spell.cpp:3794-3880) drives the PREPARING cast-bar
+		// on the server tick (~50ms): each tick revalidates caster/target
+		// pointers (UpdatePointers, cancelling when the unit target is
+		// gone), checks the movement-interrupt leg, and counts the timer
+		// down to cast(!m_casttime). Go has no pointer model and no per-tick
+		// update loop, so the cast bar is a single timer and the rechecks
+		// move to completion: finishSpellCast revalidates power, runes,
+		// range, and line of sight, and movement interrupts land eagerly
+		// via interruptSpellsOnMovement (movement.go). A target removed
+		// mid-cast fails the range/LoS revalidation at completion rather
+		// than cancelling mid-bar.
 		s.castMu.Lock()
 		castState := &activeCastState{
 			CastID:       castID,
@@ -2225,11 +2236,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	//   - UpdatePotionCooldown (Player.cpp:22215): needs the last-used potion
 	//     item id (m_lastPotionId, set in Spell::SendSpellCooldown) and a
 	//     potion-cooldown event model; neither exists in Go.
-	// The remaining finish legs (interrupt-mask update, UNIT_STATE_CASTING
-	// clearing, puppet/statue unsummon, SPELL_ATTR0_STOP_ATTACK_TARGET) are
-	// either subsumed by the Cancelled/early returns above or covered by
-	// stopAttackOnSpellFinish; charm/puppet and statue-summon models do not
-	// exist in Go.
+	// The remaining finish legs have no Go bridge: UpdateInterruptMask
+	// (IsChanneled) and the UNIT_STATE_CASTING clear have no model (Go
+	// tracks cast/channel state in castMu, not unit states or interrupt
+	// masks); the possessed-puppet unsummon and creature ReleaseSpellFocus
+	// need charm/focus models Go does not have, and the statue unsummon
+	// needs creature casters, which Go never creates (every cast is a
+	// player session). SPELL_ATTR0_STOP_ATTACK_TARGET is covered by
+	// stopAttackOnSpellFinish.
 
 	// Spell::_cast (Spell.cpp:3502-3511): the spell_linked_spell tail runs
 	// after handle_immediate for immediate spells — positive ids are cast
@@ -3739,7 +3753,18 @@ func (s *session) interruptCurrentCast() {
 // interruptSpellsOnMovement breaks the active cast and channel when the
 // player starts moving, for spells carrying SPELL_INTERRUPT_FLAG_MOVEMENT.
 // C++ authority: Unit::InterruptNonMeleeSpells via the movement interrupt
-// mask (Unit.cpp).
+// mask (Unit.cpp), called from Spell::update's per-tick movement leg
+// (Spell.cpp:3814-3831). No-bridge legs from that leg, noted:
+//   - SPELL_EFFECT_STUCK spells are exempt while the caster is falling far;
+//     Go has no STUCK model and checks the flag alone.
+//   - IsNextMeleeSwingSpell / IsAutoRepeat / IsTriggered exclusions: Go
+//     casts are always player-session casts; triggered casts route through
+//     the same activeCastState, so they break on movement here where C++
+//     would let them continue. Auto-repeat lives on the session
+//     (autoRepeatSpell), not on a per-cast Spell object.
+//   - IsMoveAllowedChannel channeled exemption: covered at startChannel —
+//     Go breaks channels on movement unconditionally.
+//   - the charmer-is-creature trust hack: Go has no charmed-caster model.
 func (s *session) interruptSpellsOnMovement() {
 	if s == nil {
 		return
@@ -7482,12 +7507,6 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 	// cancels the active channel unconditionally (movement.go), so channels
 	// that C++ would let move (IsMoveAllowedChannel) are also stopped here.
 	// Noted, not bridged.
-	if hastePct > 0 {
-		durationMs = int32(math.Round(float64(durationMs) / (1.0 + hastePct/100.0)))
-		if period > 0 {
-			period = uint32(math.Round(float64(period) / (1.0 + hastePct/100.0)))
-		}
-	}
 	channel := &activeChannelState{
 		CastID:     castID,
 		SpellID:    spellID,
@@ -7529,6 +7548,10 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 }
 
 // finishChannel completes the channel: clear state and zero the bar.
+// Spell::update (Spell.cpp:3874-3876) fires the creature AI
+// OnSpellCastFinished(CHANNELING_COMPLETE) hook on natural completion;
+// Go has no creature casters and no creature AI, so there is no hook to
+// call here.
 func (s *session) finishChannel() {
 	s.castMu.Lock()
 	channel := s.activeChannel
@@ -7554,6 +7577,33 @@ func (s *session) finishChannel() {
 	s.debug("channel finished", "account", s.accountName, "spell", spellID)
 }
 
+// expireChannelAuras removes the caster-owned auras of the channel's spell
+// from the caster and the channel target: the Go mirror of the
+// RemoveOwnedAura(spellId, m_originalCasterGUID, 0, AURA_REMOVE_BY_CANCEL)
+// sweep Spell::update runs when a channeled spell ends early for lack of
+// alive targets (Spell.cpp:3856-3860).
+func (s *session) expireChannelAuras(channel *activeChannelState) {
+	s.expirePlayerAura(channel.SpellID)
+	if s.server != nil && s.player != nil && channel.TargetGUID != 0 {
+		if target := s.server.findSessionByGUID(channel.TargetGUID); target != nil {
+			if target != s {
+				target.expirePlayerAura(channel.SpellID)
+			}
+		} else {
+			key := channel.TargetKey
+			if key.GUID == 0 {
+				key = creatureAuraKeyForPlayer(*s.player, channel.TargetGUID)
+			}
+			s.server.auraMu.Lock()
+			_, hasAura := s.server.activeCreatureAuras[key][channel.SpellID]
+			s.server.auraMu.Unlock()
+			if hasAura {
+				s.server.removeCreatureAura(key, channel.SpellID)
+			}
+		}
+	}
+}
+
 // interruptCurrentChannel stops the active channel without the completion
 // path (movement, new cast, cancel).
 func (s *session) interruptCurrentChannel() {
@@ -7576,26 +7626,27 @@ func (s *session) interruptCurrentChannel() {
 	channel.Stopped = true
 	s.castMu.Unlock()
 
-	s.expirePlayerAura(channel.SpellID)
-	if s.server != nil && s.player != nil && channel.TargetGUID != 0 {
-		if target := s.server.findSessionByGUID(channel.TargetGUID); target != nil {
-			if target != s {
-				target.expirePlayerAura(channel.SpellID)
-			}
-		} else {
-			key := channel.TargetKey
-			if key.GUID == 0 {
-				key = creatureAuraKeyForPlayer(*s.player, channel.TargetGUID)
-			}
-			s.server.auraMu.Lock()
-			_, hasAura := s.server.activeCreatureAuras[key][channel.SpellID]
-			s.server.auraMu.Unlock()
-			if hasAura {
-				s.server.removeCreatureAura(key, channel.SpellID)
-			}
+	s.expireChannelAuras(channel)
+	s.sendChannelUpdate(0)
+}
+
+// channelTargetAlive answers Spell::update's UpdateChanneledTargetList
+// (Spell.cpp:3853): the channel's explicit unit target is still valid while
+// alive. Player targets use the live session (ghost included); creature
+// targets resolve through the combat-target pipeline, which returns
+// Health == 0 for dead creatures and ok == false for unresolvable GUIDs.
+// A zero target (dest-only channels) has no unit to recheck.
+func (s *session) channelTargetAlive(ctx context.Context, targetGUID uint64) bool {
+	if targetGUID == 0 {
+		return true
+	}
+	if s.server != nil {
+		if sess := s.server.findSessionByGUID(targetGUID); sess != nil && sess.player != nil {
+			return !sess.isDeadOrGhost()
 		}
 	}
-	s.sendChannelUpdate(0)
+	target, ok := s.getCombatTarget(ctx, targetGUID)
+	return ok && target.Health > 0
 }
 
 // channelTick applies one periodic effect tick of the channeled spell and
@@ -7614,6 +7665,18 @@ func (s *session) channelTick() {
 	s.castMu.Unlock()
 
 	ctx := context.Background()
+	// Spell::update (Spell.cpp:3851-3879): the SPELL_STATE_CASTING leg
+	// revalidates the channeled target list on every server tick; when no
+	// alive targets remain the channel ends immediately and the caster's
+	// applied auras are removed (AURA_REMOVE_BY_CANCEL), then the channel
+	// completes normally (SendChannelUpdate(0) + finish(), no cast-failure
+	// result and no interrupt broadcast). Go has no per-tick update loop,
+	// so the check rides the period tick instead of the 50ms server tick.
+	if targetGUID != 0 && !s.channelTargetAlive(ctx, targetGUID) {
+		s.expireChannelAuras(channel)
+		s.finishChannel()
+		return
+	}
 	for effectIndex, effect := range spell.Effects {
 		if effect.Effect == 0 || effect.Effect == 6 && effect.Aura == 23 {
 			continue
