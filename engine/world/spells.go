@@ -2506,10 +2506,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// Spell::_cast (Spell.cpp:3502-3511): the spell_linked_spell tail
 			// runs at _cast end on both branches — linked triggers fire at
 			// cast completion, not at missile arrival.
+			// Spell::_cast (Spell.cpp:3517-3523): the CHEAT_COOLDOWN leg
+			// clears the just-cast spell's own cooldown here, between the
+			// spell_linked tail and the proc leg below.
 			// Spell::_cast (Spell.cpp:3525-3545): the "Handle procs on cast"
 			// leg fires PROC_SPELL_PHASE_CAST right after the spell_linked
 			// tail, on both the delayed and immediate branches.
 			s.fireSpellLinkedTriggers(ctx, spellID, targetGUID)
+			s.resetCastCooldownCheat(spellID)
 			s.procSpellCastPhaseAuraTriggers(ctx, spell)
 			return
 		}
@@ -2558,12 +2562,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// after handle_immediate for immediate spells — positive ids are cast
 	// triggered on the unit target (or the caster when there is none),
 	// negative ids remove the caster's auras of -id.
+	// Spell::_cast (Spell.cpp:3517-3523): the CHEAT_COOLDOWN leg clears the
+	// just-cast spell's own cooldown here, between the spell_linked tail
+	// and the proc leg below.
 	// Spell::_cast (Spell.cpp:3525-3545): the "Handle procs on cast" leg
 	// fires PROC_SPELL_PHASE_CAST right after the spell_linked_spell tail,
 	// on both the delayed and immediate branches. The C++ m_originalCaster
 	// early-return gate is vacuous: finishSpellCast always runs on the
 	// casting player session, and Go has no creature casters.
 	s.fireSpellLinkedTriggers(ctx, spellID, targetGUID)
+	s.resetCastCooldownCheat(spellID)
 	s.procSpellCastPhaseAuraTriggers(ctx, spell)
 }
 
@@ -3545,11 +3553,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 
 	// Spell::_cast (Spell.cpp:3502-3511): a triggered cast (C++
 	// Unit::CastSpell(id, true)) runs the same _cast tail, so the
-	// spell_linked_spell list fires here too. The PHASE_CAST proc leg
-	// (Spell.cpp:3525-3545) runs on this tail as well; the
+	// spell_linked_spell list fires here too. The CHEAT_COOLDOWN leg
+	// (Spell.cpp:3517-3523) runs on this tail as well. The PHASE_CAST
+	// proc leg (Spell.cpp:3525-3545) runs on this tail as well; the
 	// CanSpellTriggerProcOnEvent gate suppresses events whose triggered
 	// flag bars proccing, mirroring C++.
 	s.fireSpellLinkedTriggers(ctx, spellID, targetGUID)
+	s.resetCastCooldownCheat(spellID)
 	s.procSpellCastPhaseAuraTriggers(ctx, spell)
 }
 
@@ -7279,6 +7289,44 @@ func buildSpellCooldown(playerGUID uint64, spellID uint32, cooldownDurationMs ui
 	buf.WriteU32(spellID)
 	buf.WriteU32(cooldownDurationMs)
 	return buf.Bytes()
+}
+
+// resetCastCooldownCheat mirrors SpellHistory::ResetCooldown(spellId, true)
+// fired from Spell::_cast's tail (Spell.cpp:3517-3523) when the caster holds
+// CHEAT_COOLDOWN (Player.h:827): the just-cast spell's own RecoveryTime
+// cooldown entry is erased and SMSG_CLEAR_COOLDOWN (spell id then caster
+// guid, SpellHistory.cpp:432-451) goes to the caster. Like C++ only the
+// spell's own cooldown storage entry is cleared — category cooldowns are
+// untouched (ResetCooldown erases _spellCooldowns[spellId] only). The
+// C++ gate is modOwner->GetCommandStatus(CHEAT_COOLDOWN) with
+// m_originalCaster non-null, both vacuous here: finishSpellCast always
+// runs on the casting player session. The SetSpellModTakingSpell(this,
+// false) preceding it and SetExecutedCurrently(false) following it have
+// no Go model (Go has no cast Spell object on the session; standing
+// spellmod gap, spellmod.go).
+func (s *session) resetCastCooldownCheat(spellID uint32) {
+	if s == nil || s.player == nil || s.player.ActiveCheats&cheatCooldown == 0 {
+		return
+	}
+	removed := false
+	s.playerStateMu.Lock()
+	kept := s.player.Cooldowns[:0]
+	for _, cd := range s.player.Cooldowns {
+		if cd.Spell == spellID {
+			removed = true
+			continue
+		}
+		kept = append(kept, cd)
+	}
+	s.player.Cooldowns = kept
+	s.playerStateMu.Unlock()
+	if !removed {
+		return
+	}
+	buf := protocol.NewBuffer(4 + 8)
+	buf.WriteU32(spellID)
+	buf.WriteU64(s.playerGUID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_CLEAR_COOLDOWN), buf.Bytes(), true)
 }
 
 // handleFarSight processes CMSG_FAR_SIGHT (0x27A).
