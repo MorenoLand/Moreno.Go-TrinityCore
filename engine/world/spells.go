@@ -1698,6 +1698,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	//     spell.Speed leg further below).
 	//   - ReleaseSpellFocus: creature casters only; the caster here is always
 	//     a player (s.player == nil returns at the top).
+	//   - TakePower/TakeReagents (Spell.cpp:3449-3457): the cost gate skips
+	//     both under TRIGGERED_IGNORE_POWER_AND_REAGENT_COST, but a
+	//     triggered cast whose item target is not owned by the caster still
+	//     takes reagents. finishSpellCast only serves non-triggered casts
+	//     (C++ TRIGGERED_NONE), so power (deducted below before SendSpellGo,
+	//     matching "Powers have to be taken before SendSpellGo") and
+	//     reagents (takeSpellReagents) always run here. Triggered casts never
+	//     enter finishSpellCast — the flag exemption is structural (see
+	//     castSpellDirectWithOverrides). The non-owned item-target arm has no
+	//     bridge: Go parses the wire item GUID but has no
+	//     m_targets.GetItemTarget() model in the cast flow (unit targets
+	//     only), so a triggered cast can never carry a non-owned item target.
 	//
 	// Spell::_cast (Spell.cpp:3438-3444): a player cast from an item
 	// (CMSG_USE_ITEM, m_CastItem) starts the item-use timed achievement and
