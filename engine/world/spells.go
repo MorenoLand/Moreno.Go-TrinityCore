@@ -111,6 +111,8 @@ const (
 	spellFailedLowLevel                  uint8 = 48  // SPELL_FAILED_LOWLEVEL (SharedDefines.h:1030)
 	spellFailedNotKnown                  uint8 = 63  // SPELL_FAILED_NOT_KNOWN (SharedDefines.h:1045)
 	spellFailedItemEnchantTradeWindow    uint8 = 182 // SPELL_FAILED_ITEM_ENCHANT_TRADE_WINDOW (SharedDefines.h:1164)
+	spellFailedNotTrading                uint8 = 71  // SPELL_FAILED_NOT_TRADING (SharedDefines.h:1053)
+	spellFailedItemAlreadyEnchanted      uint8 = 42  // SPELL_FAILED_ITEM_ALREADY_ENCHANTED (SharedDefines.h:1024)
 	spellFailedAuraBounced               uint8 = 9   // SPELL_FAILED_AURA_BOUNCED (SharedDefines.h:991)
 	spellFailedOnlyBattlegrounds         uint8 = 142 // SPELL_FAILED_ONLY_BATTLEGROUNDS (SharedDefines.h:1124)
 	spellFailedNotInArena                uint8 = 151 // SPELL_FAILED_NOT_IN_ARENA (SharedDefines.h:1133)
@@ -1362,6 +1364,22 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if failure := s.checkPeriodicManaLeechCast(spell, target); failure != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "periodic-mana-leech validation", "failure", failure)
+		return true
+	}
+
+	// Trade-slot gate (Spell::CheckCast, Spell.cpp:6164-6181): the last
+	// CheckCast block before the combo-point gate. A cast targeting the
+	// trade window fails with SPELL_FAILED_NOT_TRADING when no trade is
+	// open, with SPELL_FAILED_BAD_TARGETS when the wire item GUID is not
+	// the non-traded slot sentinel, and with
+	// SPELL_FAILED_ITEM_ALREADY_ENCHANTED when an enchant is already
+	// deferred into the trade. C++ relative order places this block after
+	// the per-effect loop's AURA_BOUNCED recheck (Spell.cpp:6155-6162, no
+	// Go bridge yet — see checkTradeSlotCast), so it wires after the
+	// periodic-mana-leech leg, the last bridged leg.
+	if failure := s.checkTradeSlotCast(target); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "trade-slot validation", "failure", failure)
 		return true
 	}
 
@@ -2867,6 +2885,45 @@ func (s *session) checkPeriodicManaLeechCast(spell wotlk.Spell, target protocol.
 	}
 	if targetPower != 0 { // POWER_MANA
 		return spellFailedBadTargets
+	}
+	return 0
+}
+
+// checkTradeSlotCast mirrors the trade-slot block of Spell::CheckCast
+// (Spell.cpp:6164-6181). The m_CastItem arm is vacuous on the
+// handleCastSpell path: book casts (CMSG_CAST_SPELL) never carry a cast
+// item (Spell.cpp:584 — m_CastItem is set only by CastItemUseSpell), and
+// the item-cast variant of the arm is already bridged at cast completion
+// in finishSpellCast (spells.go:3429), which is the only CheckCast-time
+// coverage item casts get (the CMSG_USE_ITEM path in items.go runs no
+// CheckCast gates). The caster-TYPEID_PLAYER arm is vacuous (the session
+// is always a player). Otherwise: no trade state (Player::GetTradeData)
+// → SPELL_FAILED_NOT_TRADING; a wire item GUID other than the non-traded
+// slot sentinel (TRADE_SLOT_NONTRADED = 6, TradeData.h:27 — the client
+// sends the slot index as the item target GUID until
+// UpdateTradeSlotItem rewrites it) → SPELL_FAILED_BAD_TARGETS; an
+// enchant already deferred into the trade (TradeData::GetSpell) →
+// SPELL_FAILED_ITEM_ALREADY_ENCHANTED. The !IsTriggered() guard is
+// structural: handleCastSpell serves only client-initiated casts
+// (server.go:1466) and triggered casts go through castSpellDirect, so
+// the enchant-pending arm always applies here. Neither failure code
+// carries extra WriteCastResultInfo params (verified
+// Spell.cpp:3974-4160), so castFailedExtParams needs no case.
+func (s *session) checkTradeSlotCast(target protocol.SpellTargetData) uint8 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	if target.Flags&protocol.SpellTargetFlagTradeItem == 0 {
+		return 0
+	}
+	if s.trade == nil {
+		return spellFailedNotTrading
+	}
+	if target.ItemGUID != uint64(tradeSlotNonTraded) {
+		return spellFailedBadTargets
+	}
+	if s.trade.SpellID != 0 {
+		return spellFailedItemAlreadyEnchanted
 	}
 	return 0
 }
