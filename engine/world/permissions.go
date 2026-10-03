@@ -45,6 +45,9 @@ const permissionOpcodeWhois uint32 = 43
 // permissionCommandMailbox mirrors rbac::RBAC_PERM_COMMAND_MAILBOX (RBAC.h:645).
 const permissionCommandMailbox uint32 = 777
 
+// permissionCommandAchievementAdd mirrors rbac::RBAC_PERM_COMMAND_ACHIEVEMENT_ADD (RBAC.h:145).
+const permissionCommandAchievementAdd uint32 = 231
+
 func accountHasPermission(ctx context.Context, db *sql.DB, accountID, realmID uint32, security uint8, permissionID uint32) (bool, error) {
 	granted := make(map[uint32]struct{})
 	denied := make(map[uint32]struct{})

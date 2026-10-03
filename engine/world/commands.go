@@ -2022,6 +2022,66 @@ func (s *session) handleCmdAccountSet2FA(ctx context.Context, args []string) {
 	s.sendSysMessage(fmt.Sprintf("2FA secret set for account %s.", args[0]))
 }
 
+// handleCmdAchievement processes ".achievement add" (cs_achievement.cpp,
+// AddSC_achievement_commandscript): HandleAchievementAddCommand grants the
+// given achievement to the selected player (the commander's own player when
+// nothing is targeted), mirroring Player::CompletedAchievement through
+// completeAchievement. Gated by RBAC_PERM_COMMAND_ACHIEVEMENT_ADD (231);
+// Console::No has no Go console path to suppress.
+func (s *session) handleCmdAchievement(ctx context.Context, args []string) {
+	if len(args) == 0 || !strings.EqualFold(args[0], "add") {
+		s.sendSysMessage("Syntax: .achievement add <achievementId>")
+		return
+	}
+	args = args[1:]
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .achievement add <achievementId>")
+		return
+	}
+	achievementID, err := strconv.ParseUint(args[0], 10, 32)
+	if err != nil {
+		s.sendSysMessage("Invalid achievement ID.")
+		return
+	}
+	allowed := s.security >= 1
+	if !allowed && s.server != nil && s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
+		hasPerm, permErr := accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionCommandAchievementAdd)
+		if permErr == nil && hasPerm {
+			allowed = true
+		}
+	}
+	if !allowed {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	// The Trinity ChatCommand parser resolves the AchievementEntry* argument
+	// against sAchievementStore before invoking the handler; an unknown id
+	// never reaches HandleAchievementAddCommand.
+	achievementIndex.mu.RLock()
+	_, found := achievementIndex.achieveByID[uint32(achievementID)]
+	achievementIndex.mu.RUnlock()
+	if !found {
+		s.sendSysMessage("Unknown achievement ID.")
+		return
+	}
+	// ChatHandler::getSelectedPlayer: own player when nothing is targeted,
+	// otherwise the connected player matching the selection (null, i.e. no
+	// character, when the target is offline or not a player).
+	target := s
+	if s.selection != 0 {
+		if s.server == nil {
+			return
+		}
+		target = s.server.playerSessionForGUID(s.selection)
+		if target == nil {
+			s.sendSysMessage("No character selected.")
+			return
+		}
+	}
+	target.completeAchievement(uint32(achievementID))
+	s.sendSysMessage(fmt.Sprintf("Achievement %d added.", achievementID))
+}
+
 func (s *session) handleCmdNPC(ctx context.Context, args []string) {
 	if len(args) == 0 {
 		s.sendSysMessage("Syntax: .npc add <entry> | .npc info | .npc say <text> | .npc yell <text>")
@@ -2211,6 +2271,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("server", func(ctx context.Context, args []string) bool { s.handleCmdServer(ctx, args); return true }, []string{"info", "motd", "restart", "shutdown"}, nil)
 	root.add("character", func(ctx context.Context, args []string) bool { s.handleCmdCharacter(ctx, args); return true }, []string{"level", "rename", "customize", "changefaction", "changerace"}, map[string]string{"char": "character"})
 	root.add("account", func(ctx context.Context, args []string) bool { s.handleCmdAccount(ctx, args); return true }, []string{"set", "password", "addon", "email", "lock"}, map[string]string{"acct": "account"})
+	root.add("achievement", func(ctx context.Context, args []string) bool { s.handleCmdAchievement(ctx, args); return true }, []string{"add"}, nil)
 	root.add("npc", func(ctx context.Context, args []string) bool { s.handleCmdNPC(ctx, args); return true }, []string{"info", "say", "yell"}, nil)
 	root.add("gobject", func(ctx context.Context, args []string) bool { s.handleCmdGObject(ctx, args); return true }, nil, map[string]string{"gob": "gobject"})
 	root.add("revive", func(ctx context.Context, args []string) bool { s.handleCmdRevive(ctx, args); return true }, nil, map[string]string{"res": "revive", "rev": "revive"})
