@@ -123,6 +123,7 @@ const (
 	spellFailedTargetNotLooted           uint8 = 121 // SPELL_FAILED_TARGET_NOT_LOOTED (SharedDefines.h:1103)
 	spellFailedTargetUnskinnable         uint8 = 126 // SPELL_FAILED_TARGET_UNSKINNABLE (SharedDefines.h:1108)
 	spellFailedTryAgain                  uint8 = 132 // SPELL_FAILED_TRY_AGAIN (SharedDefines.h:1114)
+	spellFailedNotInBattleground         uint8 = 166 // SPELL_FAILED_NOT_IN_BATTLEGROUND (SharedDefines.h:1148)
 	spellFailedAlreadyHaveSummon         uint8 = 7   // SPELL_FAILED_ALREADY_HAVE_SUMMON (SharedDefines.h:989)
 	spellFailedAlreadyHaveCharm          uint8 = 6   // SPELL_FAILED_ALREADY_HAVE_CHARM (SharedDefines.h:988) — charm model has no Go bridge, named for the summon gate comment
 
@@ -168,6 +169,10 @@ const (
 	spellEffectSummonRafFriend         = 152 // SPELL_EFFECT_SUMMON_RAF_FRIEND (SharedDefines.h:963)
 	spellEffectLeap                    = 29  // SPELL_EFFECT_LEAP (SharedDefines.h:840)
 	spellEffectTeleportUnitsFaceCaster = 43  // SPELL_EFFECT_TELEPORT_UNITS_FACE_CASTER (SharedDefines.h:854)
+	spellEffectJump                    = 41  // SPELL_EFFECT_JUMP (SharedDefines.h:852)
+	spellEffectJumpDest                = 42  // SPELL_EFFECT_JUMP_DEST (SharedDefines.h:853)
+	spellEffectLeapBack                = 138 // SPELL_EFFECT_LEAP_BACK (SharedDefines.h:949)
+	spellEffectTalentSpecSelect        = 162 // SPELL_EFFECT_TALENT_SPEC_SELECT (SharedDefines.h:973)
 
 	// Summon categories for the generic-summon CheckCast leg
 	// (Spell.cpp:5798-5817, SharedDefines.h:3296).
@@ -1257,6 +1262,27 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// Leap-back / jump gate: SPELL_EFFECT_LEAP_BACK (138),
+	// SPELL_EFFECT_JUMP (41) and SPELL_EFFECT_JUMP_DEST (42) fail with
+	// SPELL_FAILED_ROOTED when the caster is rooted (Spell::CheckCast,
+	// Spell.cpp:5986-6006). C++ relative order places these right after the
+	// steal leg.
+	if failure := s.checkLeapBackCast(spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "leap-back/jump while rooted", "failure", failure)
+		return true
+	}
+
+	// Talent spec select gate: SPELL_EFFECT_TALENT_SPEC_SELECT (162) fails
+	// with SPELL_FAILED_NOT_IN_BATTLEGROUND when the battleground has
+	// already started (Spell::CheckCast, Spell.cpp:6007-6013). C++ relative
+	// order places it right after the jump legs.
+	if failure := s.checkTalentSpecSelectCast(spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "talent spec change after bg started", "failure", failure)
+		return true
+	}
+
 	// Unit::SetCurrentCastSpell (Unit.cpp:3064-3090): registering the new cast
 	// breaks the other containers. A generic cast breaks the active channel
 	// ("generic spells always break channeled not delayed spells") and any
@@ -2320,6 +2346,82 @@ func (s *session) checkLeapCast(spell wotlk.Spell) uint8 {
 		}
 		if !inProgress {
 			return spellFailedTryAgain
+		}
+		return 0
+	}
+	return 0
+}
+
+// checkLeapBackCast mirrors the SPELL_EFFECT_LEAP_BACK / SPELL_EFFECT_JUMP /
+// SPELL_EFFECT_JUMP_DEST legs of the CheckCast per-effect switch
+// (Spell.cpp:5986-6006): a rooted caster fails with SPELL_FAILED_ROOTED.
+//
+// The m_caster->ToUnit() null arm is vacuous on the client-initiated path
+// (the session is always a player unit), and the LEAP_BACK
+// SPELL_FAILED_DONT_REPORT arm for non-player casters is vacuous for the
+// same reason — the caster is always a player here, so the JUMP/JUMP_DEST
+// and LEAP_BACK root gates are identical in Go.
+func (s *session) checkLeapBackCast(spell wotlk.Spell) uint8 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	matched := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == spellEffectLeapBack || eff.Effect == spellEffectJump || eff.Effect == spellEffectJumpDest {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return 0
+	}
+	if s.rooted { // UNIT_STATE_ROOT (conditions.go:584, same mirror as checkChargeCast)
+		return spellFailedRooted
+	}
+	return 0
+}
+
+// checkTalentSpecSelectCast mirrors the SPELL_EFFECT_TALENT_SPEC_SELECT leg
+// of the CheckCast per-effect switch (Spell.cpp:6007-6013): the spec cannot
+// be changed once the arena/battleground has started. A caster in a
+// battleground whose status is STATUS_IN_PROGRESS fails with
+// SPELL_FAILED_NOT_IN_BATTLEGROUND.
+//
+// The caster-TYPEID_PLAYER arm is vacuous on the client-initiated path
+// (the session is always a player). Player::GetBattleground bridges as
+// s.bgData.InstanceID != 0 and bg->GetStatus() as the matching s.bgQueues
+// entry's Status — the same bridge as checkLeapCast (arena entries use
+// ArenaStatusInProgress, battleground entries the BG scale). A missing
+// queue entry is permissive (unknown-data-is-permissive, terrain.go
+// convention) — C++ always has a status on a live battleground.
+func (s *session) checkTalentSpecSelectCast(spell wotlk.Spell) uint8 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
+	matched := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == spellEffectTalentSpecSelect {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return 0
+	}
+	if s.bgData.InstanceID == 0 {
+		return 0
+	}
+	for i := range s.bgQueues {
+		q := &s.bgQueues[i]
+		if !q.Active || q.InstanceID != s.bgData.InstanceID {
+			continue
+		}
+		inProgress := q.Status == 3 // STATUS_IN_PROGRESS (Battleground.h:181)
+		if q.IsArena {
+			inProgress = q.Status == ArenaStatusInProgress
+		}
+		if inProgress {
+			return spellFailedNotInBattleground
 		}
 		return 0
 	}
