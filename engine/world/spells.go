@@ -2506,7 +2506,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// Spell::_cast (Spell.cpp:3502-3511): the spell_linked_spell tail
 			// runs at _cast end on both branches — linked triggers fire at
 			// cast completion, not at missile arrival.
+			// Spell::_cast (Spell.cpp:3525-3545): the "Handle procs on cast"
+			// leg fires PROC_SPELL_PHASE_CAST right after the spell_linked
+			// tail, on both the delayed and immediate branches.
 			s.fireSpellLinkedTriggers(ctx, spellID, targetGUID)
+			s.procSpellCastPhaseAuraTriggers(ctx, spell)
 			return
 		}
 	}
@@ -2554,7 +2558,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// after handle_immediate for immediate spells — positive ids are cast
 	// triggered on the unit target (or the caster when there is none),
 	// negative ids remove the caster's auras of -id.
+	// Spell::_cast (Spell.cpp:3525-3545): the "Handle procs on cast" leg
+	// fires PROC_SPELL_PHASE_CAST right after the spell_linked_spell tail,
+	// on both the delayed and immediate branches. The C++ m_originalCaster
+	// early-return gate is vacuous: finishSpellCast always runs on the
+	// casting player session, and Go has no creature casters.
 	s.fireSpellLinkedTriggers(ctx, spellID, targetGUID)
+	s.procSpellCastPhaseAuraTriggers(ctx, spell)
 }
 
 // fireSpellLinkedTriggers applies the spell_linked_spell tail of
@@ -3535,8 +3545,12 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 
 	// Spell::_cast (Spell.cpp:3502-3511): a triggered cast (C++
 	// Unit::CastSpell(id, true)) runs the same _cast tail, so the
-	// spell_linked_spell list fires here too.
+	// spell_linked_spell list fires here too. The PHASE_CAST proc leg
+	// (Spell.cpp:3525-3545) runs on this tail as well; the
+	// CanSpellTriggerProcOnEvent gate suppresses events whose triggered
+	// flag bars proccing, mirroring C++.
 	s.fireSpellLinkedTriggers(ctx, spellID, targetGUID)
+	s.procSpellCastPhaseAuraTriggers(ctx, spell)
 }
 
 func (s *session) applySpellEnergize(ctx context.Context, targetGUID uint64, powerType int32, amount int32) {

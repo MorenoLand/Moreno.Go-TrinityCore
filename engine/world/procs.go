@@ -1052,6 +1052,54 @@ func (s *session) procSpellFinishAuraTriggers(ctx context.Context, spell wotlk.S
 	})
 }
 
+// procSpellCastPhaseAuraTriggers bridges the on-cast proc leg at the end of
+// Spell::_cast (Spell.cpp:3525-3545): after the spell_linked_spell tail and
+// SetExecutedCurrently(false), the original caster's auras evaluate one proc
+// event with PROC_SPELL_PHASE_CAST, PROC_SPELL_TYPE_MASK_ALL, and the
+// accumulated hit mask, ProcSkillsAndAuras(m_originalCaster, nullptr,
+// procAttacker, PROC_FLAG_NONE, ...). The type mask reuses
+// spellFinishPhaseProcTypeMask: C++ runs the same m_procAttacker fallback
+// (the prepareDataForTriggerSystem fill, else the magic/none positivity
+// split) at both _cast legs (Spell.cpp:3529-3542 vs 3764-3776). The hit mask
+// is PROC_HIT_NORMAL: C++ does `if (!(hitMask & PROC_HIT_CRITICAL)) hitMask
+// |= PROC_HIT_NORMAL` (Spell.cpp:3537-3538); Go has no cast-level m_hitMask
+// accumulator (per-target masks live inside executeSpellDamage), so the
+// event carries the value the C++ normalization lands on for any
+// non-critical cast — the same documented delta as the PHASE_FINISH bridge.
+// The m_originalCaster early-return gate is vacuous here (every cast runs on
+// a player session; Go has no creature casters), and the CreatureAI
+// OnSpellCastFinished hook has no bridge (no creature casters or AI). The
+// event's triggered state mirrors the other phases
+// (s.triggeredNoProcEvents), so triggered casts pass through the same
+// CanSpellTriggerProcOnEvent gate. Generated proc entries only carry
+// PROC_SPELL_PHASE_HIT (spellProcEntryFor, mirroring SpellMgr.cpp:1828) with
+// no spell_proc DB table — like a C++ build with no PHASE_CAST rows, the
+// event currently triggers nothing; the bridge is structural.
+func (s *session) procSpellCastPhaseAuraTriggers(ctx context.Context, spell wotlk.Spell) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	typeMask := spellFinishPhaseProcTypeMask(spell)
+	if typeMask == procFlagNone {
+		return
+	}
+	schoolMask := spell.SchoolMask
+	if schoolMask == 0 {
+		schoolMask = 1
+	}
+	spellCopy := spell
+	s.procAuraTriggerLoop(ctx, 0, procEventInfo{
+		typeMask:       typeMask,
+		schoolMask:     schoolMask,
+		spellTypeMask:  procSpellTypeMaskAll,
+		spellPhaseMask: procSpellPhaseCast,
+		hitMask:        procHitNormal,
+		triggered:      s.triggeredNoProcEvents > 0,
+		eventSpell:     &spellCopy,
+		actorGUID:      s.playerGUID,
+	})
+}
+
 // spellHealProcTypeMask mirrors the done-side half of the
 // DoDamageAndTriggers type-mask fallback (Spell.cpp:2458-2492) for the heal
 // path: a direct heal runs with m_healing > 0, so the spell is positive by
