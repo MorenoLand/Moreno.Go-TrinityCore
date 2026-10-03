@@ -115,6 +115,7 @@ const (
 	spellFailedRequiresArea              uint8 = 101 // SPELL_FAILED_REQUIRES_AREA (SharedDefines.h:1083)
 	spellFailedUniqueGlyph               uint8 = 176 // SPELL_FAILED_UNIQUE_GLYPH (SharedDefines.h:1158)
 	spellFailedNotInRaidInstance         uint8 = 167 // SPELL_FAILED_NOT_IN_RAID_INSTANCE (SharedDefines.h:1149)
+	spellFailedRooted                    uint8 = 103 // SPELL_FAILED_ROOTED (SharedDefines.h:1085)
 
 	areaFlagNoFlyZone uint32 = 0x20000000 // AREA_FLAG_NO_FLY_ZONE (DBCEnums.h:275) — AreaTableEntry.Flags bit tested by AreaTableEntry::IsFlyable (DBCStructure.h:209)
 
@@ -147,6 +148,7 @@ const (
 	spellEffectQuestComplete                      = 16
 	spellEffectHealthLeech                        = 9
 	spellEffectPowerDrain                         = 8
+	spellEffectCharge                             = 96  // SPELL_EFFECT_CHARGE (SharedDefines.h:907)
 	spellEffectHealMechanical                     = 75  // SPELL_EFFECT_HEAL_MECHANICAL (SharedDefines.h:886)
 	spellEffectHealPct                            = 136 // SPELL_EFFECT_HEAL_PCT (SharedDefines.h:947)
 	spellEffectEnergizePct                        = 137 // SPELL_EFFECT_ENERGIZE_PCT (SharedDefines.h:948)
@@ -853,6 +855,16 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "power burn/drain target power-type mismatch", "failure", failure)
 		return true
 	}
+	// Charge gate (Spell::CheckCast per-effect block, Spell.cpp:5661-5695):
+	// a SPELL_EFFECT_CHARGE effect fails with SPELL_FAILED_ROOTED when the
+	// caster is rooted, or SPELL_FAILED_DONT_REPORT when the spell needs an
+	// explicit unit target but carries none. C++ relative order places this
+	// right after the burn/drain leg.
+	if failure := s.checkChargeCast(spell, target); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "charge validation", "failure", failure)
+		return true
+	}
 	cost := s.calculateSpellPowerCost(spell)
 	pType := spell.PowerType
 	// Spell::CheckPower (Spell.cpp:6665-6670) checks rune costs when
@@ -1377,6 +1389,77 @@ func (s *session) unitTargetPowerType(guid uint64) (int32, bool) {
 		return 0, false
 	}
 	return int32(motion.PowerType), true
+}
+
+// spellNeedsExplicitUnitTarget mirrors SpellInfo::NeedsExplicitUnitTarget
+// (SpellInfo.cpp:1047-1050): (GetExplicitTargetMask() &
+// TARGET_FLAG_UNIT_MASK) != 0, with TARGET_FLAG_UNIT_MASK = 0x2 | 0x4 | 0x8
+// (SpellInfo.h:70). The PARTY (0x8) and RAID (0x4) bits come from
+// spellExplicitUnitTargetMask (targets 35/57, SpellInfo.cpp:226/265); the
+// plain-UNIT (0x2) bit comes from TARGET-reference-type entries whose check
+// type falls through to TARGET_FLAG_UNIT in
+// SpellImplicitTargetInfo::GetExplicitTargetMask (SpellInfo.cpp:134-210):
+// TARGET_CHECK_DEFAULT unit entries (25 TARGET_UNIT_TARGET_ANY) and dest
+// entries (63-71 TARGET_DEST_TARGET_ANY/front/.../left, 74/75
+// TARGET_DEST_TARGET_RANDOM/RADIUS), plus TARGET_CHECK_RAID_CLASS (61
+// TARGET_UNIT_TARGET_AREA_RAID_CLASS). All real SPELL_EFFECT_CHARGE spells
+// use target 6 (UNIT_ENEMY = 0x80) or 21 (UNIT_ALLY = 0x100), so the mask
+// test is vacuous for them — the helper stays for custom-spell fidelity.
+func spellNeedsExplicitUnitTarget(spell wotlk.Spell) bool {
+	if mask := spellExplicitUnitTargetMask(spell); mask&(targetFlagUnitParty|targetFlagUnitRaid) != 0 {
+		return true
+	}
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		for _, tgt := range [2]uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			switch tgt {
+			case 25, 61, 63, 64, 65, 66, 67, 68, 69, 70, 71, 74, 75:
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// checkChargeCast mirrors the SPELL_EFFECT_CHARGE leg of the CheckCast
+// per-effect switch (Spell.cpp:5661-5695). A charge effect rejects with
+// SPELL_FAILED_ROOTED when the caster is rooted, and with
+// SPELL_FAILED_DONT_REPORT when the spell needs an explicit unit target but
+// the cast carries none. Arms: the m_caster->ToUnit() null arm is vacuous
+// (client casts always come from a player session); the
+// TRIGGERED_IGNORE_CASTER_AURAS arm of the root check is vacuous on this
+// path (handleCastSpell serves client-initiated casts only; triggered casts
+// go through castSpellDirect). No bridge: the Warbringer script-override arm
+// (Spell.cpp:5667-5673 — Unit::IsScriptOverriden reads
+// SPELL_AURA_OVERRIDE_CLASS_SCRIPTS (112) aura effects with MiscValue 6953,
+// Unit.cpp:4764-4774; Go has no aura-112 model), the LoS arm
+// (IsWithinLOSInMap — no LoS/VMap model), and the path/range arm
+// (PathGenerator/dtNavMesh are unbuilt, commands_mmaps.go:34; the
+// ShortenPathUntilDist back-off has no consumer). Returns the
+// SPELL_FAILED_* result code, 0 on success.
+func (s *session) checkChargeCast(spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	hasCharge := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == spellEffectCharge {
+			hasCharge = true
+			break
+		}
+	}
+	if !hasCharge {
+		return 0
+	}
+	if s.rooted { // UNIT_STATE_ROOT (Spell.cpp:5675-5676; s.rooted is the UNIT_STATE_ROOT mirror, conditions.go:584)
+		return spellFailedRooted
+	}
+	if spellNeedsExplicitUnitTarget(spell) && (target.Flags&protocol.SpellTargetFlagUnitWireMask == 0 || target.UnitGUID == 0) {
+		return spellFailedDontReport
+	}
+	return 0
 }
 
 // spellDiminishingBounced mirrors the diminishing-returns recheck leg of
