@@ -47,6 +47,7 @@ const (
 	spellAttr6DontConsumeProcCharges      uint32 = 0x00000020 // SPELL_ATTR6_DONT_CONSUME_PROC_CHARGES (SharedDefines.h:639) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr4NotStealable                uint32 = 0x00000040 // SPELL_ATTR4_NOT_STEALABLE (SharedDefines.h:566) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4FixedDamage                 uint32 = 0x00000100 // SPELL_ATTR4_FIXED_DAMAGE (SharedDefines.h:568) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
+	spellAttr4TreatAsDelayed              uint32 = 0x00000010 // SPELL_ATTR4_UNK4 "Treat as delayed spell" (SharedDefines.h:564) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr0UnaffectedByInvulnerability uint32 = 0x20000000 // SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY (SharedDefines.h:441)
 	spellAttr0NotShapeshift               uint32 = 0x00010000 // SPELL_ATTR0_NOT_SHAPESHIFT (SharedDefines.h:428)
 	spellAttr2NotNeedShapeshift           uint32 = 0x00080000 // SPELL_ATTR2_NOT_NEED_SHAPESHIFT (SharedDefines.h:505) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
@@ -2123,9 +2124,24 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
-	// Reference Spell.cpp:2156-2169:
-	// If spell has projectile speed and target is not self, delay effect execution until missile arrival
-	if spell.Speed > 0 && targetGUID != 0 && targetGUID != s.playerGUID {
+	// Spell::_cast (Spell.cpp:3473-3494): the delayed-vs-immediate branch.
+	// (Speed > 0 && !channeled) || SPELL_ATTR4_UNK4 ("Treat as delayed
+	// spell", SharedDefines.h:564) takes the delayed path: TakeCastItem(),
+	// m_spellState = SPELL_STATE_DELAYED + SetDelayStart(0), and the
+	// UNIT_STATE_CASTING clear (unless another spell is being cast).
+	// Go has no bridge for those legs: TakeCastItem only decrements
+	// SpellCharges on the held cast item and Go has no item spell-charge
+	// model (consumables are decremented at cast start in handleUseItem);
+	// there is no SPELL_STATE machine or unit-state model. The observable
+	// part — deferring effect execution to missile arrival — is this
+	// branch (the pre-existing travel-delay code; Spell.cpp:2156-2169).
+	// A UNK4-only spell (Speed == 0) still takes the delayed path in C++,
+	// but SetDelayStart(0) with no travel speed means the delay timer
+	// fires on the next update tick — behaviorally identical to the
+	// immediate path, which is where it falls through here.
+	// CallScriptAfterCastHandlers is a no-op (no SpellScript bridge).
+	isDelayedBranch := (spell.Speed > 0 && !isChanneledSpell(spell)) || spell.AttributesEx4&spellAttr4TreatAsDelayed != 0
+	if isDelayedBranch && targetGUID != 0 && targetGUID != s.playerGUID && spell.Speed > 0 {
 		dist := float32(20.0) // default 20 yards if positions unknown
 		if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
 			dx := target.X - s.player.X
@@ -2148,6 +2164,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.consumeExtraAttacks(context.Background(), spellExtraAttackVictim(target, explicitUnitGUID))
 				s.stopAttackOnSpellFinish(spell)
 			})
+			// Spell::_cast (Spell.cpp:3502-3511): the spell_linked_spell tail
+			// runs at _cast end on both branches — linked triggers fire at
+			// cast completion, not at missile arrival.
+			s.fireSpellLinkedTriggers(ctx, spellID, targetGUID)
 			return
 		}
 	}
@@ -2173,6 +2193,61 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// either subsumed by the Cancelled/early returns above or covered by
 	// stopAttackOnSpellFinish; charm/puppet and statue-summon models do not
 	// exist in Go.
+
+	// Spell::_cast (Spell.cpp:3502-3511): the spell_linked_spell tail runs
+	// after handle_immediate for immediate spells — positive ids are cast
+	// triggered on the unit target (or the caster when there is none),
+	// negative ids remove the caster's auras of -id.
+	s.fireSpellLinkedTriggers(ctx, spellID, targetGUID)
+}
+
+// fireSpellLinkedTriggers applies the spell_linked_spell tail of
+// Spell::_cast (Spell.cpp:3502-3511): for the plain spell id,
+// sSpellMgr->GetSpellLinked returns the type-0 rows (SpellMgr::LoadSpellLinked
+// shifts nonzero types into trigger ± SPELL_LINKED_MAX_SPELLS keys,
+// SpellMgr.cpp:2167-2171 — those keys are consumed by the aura/hit hook
+// paths, SpellAuras.cpp:1337 and Spell.cpp:2950, not by _cast). Negative ids
+// remove the caster's auras of -id (Unit::RemoveAurasDueToSpell);
+// positive ids are cast triggered on the unit target, or the caster when
+// the cast has no unit target (m_targets.GetUnitTarget() ? ... : m_caster).
+// The table is read on demand per the Go tree's no-in-memory-store
+// convention; `reload spell_linked_spell` probes the same table.
+func (s *session) fireSpellLinkedTriggers(ctx context.Context, spellID uint32, targetGUID uint64) {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT spell_effect FROM spell_linked_spell WHERE spell_trigger = ? AND type = 0", int32(spellID))
+	if err != nil {
+		if !missingTable(err) {
+			s.debug("spell_linked_spell query failed", "spell", spellID, "err", err)
+		}
+		return
+	}
+	var effects []int32
+	for rows.Next() {
+		var effect int32
+		if err := rows.Scan(&effect); err == nil {
+			effects = append(effects, effect)
+		}
+	}
+	rows.Close()
+	for _, id := range effects {
+		if id < 0 {
+			// Unit::RemoveAurasDueToSpell(-id) on the caster: Go has no
+			// caster aura-removal machine (documented as the missing
+			// bridge in boss_ai.go), so the negative leg is noted here,
+			// not fired.
+			continue
+		}
+		if id == 0 {
+			continue
+		}
+		tgt := targetGUID
+		if tgt == 0 {
+			tgt = s.playerGUID
+		}
+		s.castSpellDirect(ctx, uint32(id), tgt)
+	}
 }
 
 // stopAttackOnSpellFinish stops the caster's auto-attack for spells carrying
@@ -3101,6 +3176,11 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		eff := wotlk.SpellEffect{Effect: 6, Aura: 4}
 		s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, 0, 0, 1, nil, false, s.playerGUID)
 	}
+
+	// Spell::_cast (Spell.cpp:3502-3511): a triggered cast (C++
+	// Unit::CastSpell(id, true)) runs the same _cast tail, so the
+	// spell_linked_spell list fires here too.
+	s.fireSpellLinkedTriggers(ctx, spellID, targetGUID)
 }
 
 func (s *session) applySpellEnergize(ctx context.Context, targetGUID uint64, powerType int32, amount int32) {
