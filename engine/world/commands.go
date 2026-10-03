@@ -2082,6 +2082,549 @@ func (s *session) handleCmdAchievement(ctx context.Context, args []string) {
 	s.sendSysMessage(fmt.Sprintf("Achievement %d added.", achievementID))
 }
 
+// commandAllowed mirrors the achievement-port permission gate
+// (handleCmdAchievement): security >= 1 grants the command, otherwise the
+// RBAC grant is consulted via accountHasPermission.
+func (s *session) commandAllowed(ctx context.Context, permissionID uint32) bool {
+	if s.security >= 1 {
+		return true
+	}
+	if s.server != nil && s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
+		if hasPerm, err := accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionID); err == nil && hasPerm {
+			return true
+		}
+	}
+	return false
+}
+
+// splitQuotedArgs re-splits command fields after the dispatcher tokenized the
+// raw line on whitespace, keeping "double-quoted segments" together (quotes
+// retained), so the Trinity ChatCommand QuotedString arguments survive the
+// dispatcher's strings.Fields tokenization.
+func splitQuotedArgs(args []string) []string {
+	line := strings.Join(args, " ")
+	var toks []string
+	var cur strings.Builder
+	inQuote := false
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		if c == '"' {
+			inQuote = !inQuote
+			cur.WriteByte(c)
+			continue
+		}
+		if c == ' ' && !inQuote {
+			if cur.Len() > 0 {
+				toks = append(toks, cur.String())
+				cur.Reset()
+			}
+			continue
+		}
+		cur.WriteByte(c)
+	}
+	if cur.Len() > 0 {
+		toks = append(toks, cur.String())
+	}
+	return toks
+}
+
+// unquoteCommandToken mirrors the Trinity ChatCommand QuotedString unwrap.
+func unquoteCommandToken(tok string) string {
+	if len(tok) >= 2 && strings.HasPrefix(tok, "\"") && strings.HasSuffix(tok, "\"") {
+		return tok[1 : len(tok)-1]
+	}
+	return tok
+}
+
+// normalizePlayerName mirrors TrinityCore normalizePlayerName: first letter
+// uppercase, the rest lowercase.
+func normalizePlayerName(name string) string {
+	if name == "" {
+		return name
+	}
+	r, size := utf8.DecodeRuneInString(name)
+	return strings.ToUpper(string(r)) + strings.ToLower(name[size:])
+}
+
+// parseArenaTeamType mirrors the Trinity ChatCommand enum parse for
+// ArenaTeamTypes (cs_arena.cpp HandleArenaCreateCommand): case-insensitive
+// prefix match against the EnumUtils titles ARENA_TEAM_2v2/3v3/5v5
+// (enuminfo_ArenaTeam.cpp:34-36). The numeric and short aliases are a
+// Go-side convenience; the C++ parser only accepts the constant-name
+// prefixes.
+func parseArenaTeamType(tok string) (uint32, bool) {
+	switch strings.ToLower(tok) {
+	case "2", "2v2":
+		return ArenaTeamType2v2, true
+	case "3", "3v3":
+		return ArenaTeamType3v3, true
+	case "5", "5v5":
+		return ArenaTeamType5v5, true
+	}
+	lower := strings.ToLower(tok)
+	matches := 0
+	var typ uint32
+	for name, t := range map[string]uint32{"arena_team_2v2": ArenaTeamType2v2, "arena_team_3v3": ArenaTeamType3v3, "arena_team_5v5": ArenaTeamType5v5} {
+		if strings.HasPrefix(name, lower) {
+			matches++
+			typ = t
+		}
+	}
+	if matches == 1 {
+		return typ, true
+	}
+	return 0, false
+}
+
+// resolveArenaCaptain mirrors the Trinity PlayerIdentifier parse used by the
+// arena command's Optional<PlayerIdentifier> arguments (ChatCommandTags.cpp
+// PlayerIdentifier::TryConsume): a numeric token is a character low GUID,
+// otherwise the token is normalized and looked up as a character name.
+func (s *session) resolveArenaCaptain(ctx context.Context, cdb *sql.DB, token string) (uint64, string, bool) {
+	if low, err := strconv.ParseUint(token, 10, 32); err == nil {
+		var name string
+		if err := cdb.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", low).Scan(&name); err != nil {
+			return 0, "", false
+		}
+		return uint64(low), name, true
+	}
+	var guid uint64
+	var name string
+	if err := cdb.QueryRowContext(ctx, "SELECT guid, name FROM characters WHERE name = ?", normalizePlayerName(token)).Scan(&guid, &name); err != nil {
+		return 0, "", false
+	}
+	return guid, name, true
+}
+
+// arenaTargetOrSelf mirrors PlayerIdentifier::FromTargetOrSelf for the arena
+// command: the selected online player when one is targeted, otherwise the
+// session's own player.
+func (s *session) arenaTargetOrSelf(ctx context.Context, cdb *sql.DB) (uint64, string, bool) {
+	if s.server != nil && s.selection != 0 {
+		if target := s.server.playerSessionForGUID(s.selection); target != nil && target.playerLoaded && target.player != nil {
+			return target.playerGUID, target.player.Name, true
+		}
+	}
+	if !s.playerLoaded || s.player == nil {
+		return 0, "", false
+	}
+	return s.playerGUID, s.player.Name, true
+}
+
+// arenaTeamIsFighting mirrors ArenaTeam::IsFighting (ArenaTeam.cpp): true
+// when any online member is currently on a battle-arena map.
+func (s *session) arenaTeamIsFighting(ctx context.Context, cdb *sql.DB, teamID uint32) bool {
+	rows, err := cdb.QueryContext(ctx, "SELECT guid FROM arena_team_member WHERE arenaTeamId = ?", teamID)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var guid uint64
+		if err := rows.Scan(&guid); err != nil {
+			continue
+		}
+		if s.server == nil {
+			continue
+		}
+		if sess := s.server.playerSessionForGUID(guid); sess != nil && sess.playerLoaded && sess.player != nil && s.server.Data != nil {
+			if mapEntry, found, err := s.server.Data.Map(sess.player.Map); err == nil && found && mapEntry.IsBattleArena() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// arenaCharactersDB returns the character database or nil, mirroring the
+// nil-checked cdb pattern used by the arena packet handlers.
+func (s *session) arenaCharactersDB() *sql.DB {
+	if s.server == nil || s.server.CharactersStore == nil {
+		return nil
+	}
+	return s.server.CharactersStore.DB
+}
+
+// handleCmdArena dispatches ".arena" (cs_arena.cpp,
+// AddSC_arena_commandscript): create|disband|rename|captain|info|lookup, each
+// gated by its RBAC_PERM_COMMAND_ARENA_* permission (RBAC.h:147-152).
+func (s *session) handleCmdArena(ctx context.Context, args []string) {
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .arena create|disband|rename|captain|info|lookup ...")
+		return
+	}
+	sub := strings.ToLower(args[0])
+	rest := args[1:]
+	var perm uint32
+	switch sub {
+	case "create":
+		perm = permissionCommandArenaCreate
+	case "disband":
+		perm = permissionCommandArenaDisband
+	case "rename":
+		perm = permissionCommandArenaRename
+	case "captain":
+		perm = permissionCommandArenaCaptain
+	case "info":
+		perm = permissionCommandArenaInfo
+	case "lookup":
+		perm = permissionCommandArenaLookup
+	default:
+		s.sendSysMessage("Syntax: .arena create|disband|rename|captain|info|lookup ...")
+		return
+	}
+	if !s.commandAllowed(ctx, perm) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	switch sub {
+	case "create":
+		s.handleCmdArenaCreate(ctx, rest)
+	case "disband":
+		s.handleCmdArenaDisband(ctx, rest)
+	case "rename":
+		s.handleCmdArenaRename(ctx, rest)
+	case "captain":
+		s.handleCmdArenaCaptain(ctx, rest)
+	case "info":
+		s.handleCmdArenaInfo(ctx, rest)
+	case "lookup":
+		s.handleCmdArenaLookup(ctx, rest)
+	}
+}
+
+// handleCmdArenaCreate processes ".arena create [<captain>] <name> <type>"
+// (cs_arena.cpp HandleArenaCreateCommand). The emblem values
+// (backgroundColor 4293102085, emblemStyle 101, emblemColor 4293253939,
+// borderStyle 4, borderColor 4284049911) are the C++-exact ArenaTeam::Create
+// call constants; the rating starts at the CONFIG_ARENA_START_RATING default
+// of 0 (World.cpp:1217).
+func (s *session) handleCmdArenaCreate(ctx context.Context, args []string) {
+	cdb := s.arenaCharactersDB()
+	if cdb == nil {
+		s.sendSysMessage("Unknown error.")
+		return
+	}
+	toks := splitQuotedArgs(args)
+	var captainGUID uint64
+	var captainName string
+	rest := toks
+	// Optional<PlayerIdentifier> captain: the first token is the captain only
+	// when it resolves to a character; otherwise it is the team name.
+	if len(toks) > 0 && !strings.HasPrefix(toks[0], "\"") && len(toks) >= 3 {
+		if guid, name, ok := s.resolveArenaCaptain(ctx, cdb, toks[0]); ok {
+			captainGUID, captainName = guid, name
+			rest = toks[1:]
+		}
+	}
+	if len(rest) < 2 {
+		s.sendSysMessage("Syntax: .arena create [<captain>] \"<name>\" <2|3|5>")
+		return
+	}
+	name := unquoteCommandToken(rest[0])
+	teamType, ok := parseArenaTeamType(rest[1])
+	if !ok {
+		s.sendSysMessage("Invalid arena team type. Use 2, 3 or 5.")
+		return
+	}
+	if captainGUID == 0 {
+		guid, name, ok := s.arenaTargetOrSelf(ctx, cdb)
+		if !ok {
+			s.sendSysMessage("No character selected.")
+			return
+		}
+		captainGUID, captainName = guid, name
+	}
+	if name == "" {
+		s.sendSysMessage("Syntax: .arena create [<captain>] \"<name>\" <2|3|5>")
+		return
+	}
+	// LANG_ARENA_ERROR_NAME_EXISTS (858).
+	var clash uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT arenaTeamId FROM arena_team WHERE name = ?", name).Scan(&clash); err == nil {
+		s.sendSysMessage(fmt.Sprintf("Arena team with name \"%s\" already exists.", name))
+		return
+	}
+	// sCharacterCache->GetCharacterArenaTeamIdByGuid(captain, type):
+	// LANG_ARENA_ERROR_SIZE (859).
+	var existingTeam uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT m.arenaTeamId FROM arena_team_member AS m JOIN arena_team AS t ON t.arenaTeamId = m.arenaTeamId WHERE m.guid = ? AND t.type = ?", captainGUID, teamType).Scan(&existingTeam); err == nil {
+		s.sendSysMessage(fmt.Sprintf("%s already has an arena team of the same type.", captainName))
+		return
+	}
+	// ArenaTeamMgr::GenerateArenaTeamId: NextArenaTeamId++.
+	var teamID uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(arenaTeamId), 0) + 1 FROM arena_team").Scan(&teamID); err != nil {
+		s.sendSysMessage("Unknown error.")
+		return
+	}
+	// ArenaTeam::Create + CHAR_INS_ARENA_TEAM.
+	if _, err := cdb.ExecContext(ctx, "INSERT INTO arena_team (arenaTeamId, name, captainGuid, type, rating, backgroundColor, emblemStyle, emblemColor, borderStyle, borderColor) VALUES (?, ?, ?, ?, 0, 4293102085, 101, 4293253939, 4, 4284049911)", teamID, name, captainGUID, teamType); err != nil {
+		s.sendSysMessage("Unknown error.")
+		return
+	}
+	// ArenaTeam::AddMember(captain): Player::RemovePetitionsAndSigns with the
+	// arena charter type, which equals the team type (SharedDefines.h:3790).
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition_sign WHERE playerguid = ? AND type = ?", captainGUID, teamType)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition_sign WHERE ownerguid = ? AND type = ?", captainGUID, teamType)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition WHERE ownerguid = ? AND type = ?", captainGUID, teamType)
+	// CHAR_INS_ARENA_TEAM_MEMBER; personal rating starts at the
+	// CONFIG_ARENA_START_PERSONAL_RATING default of 1000 (World.cpp:1218).
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO arena_team_member (arenaTeamId, guid, weekGames, weekWins, seasonGames, seasonWins, personalRating) VALUES (?, ?, 0, 0, 0, 0, 1000)", teamID, captainGUID)
+	// LANG_ARENA_CREATE (864).
+	s.sendSysMessage(fmt.Sprintf("Arena team \"%s\" created with id %d (type %dv%d, captain guid %d).", name, teamID, teamType, teamType, captainGUID))
+	s.debug("arena team created", "id", teamID, "name", name, "captain", captainName)
+}
+
+// handleCmdArenaDisband processes ".arena disband <teamId>"
+// (cs_arena.cpp HandleArenaDisbandCommand), mirroring the parameterless
+// ArenaTeam::Disband: per-member cleanup followed by CHAR_DEL_ARENA_TEAM and
+// CHAR_DEL_ARENA_TEAM_MEMBERS.
+func (s *session) handleCmdArenaDisband(ctx context.Context, args []string) {
+	if len(args) < 1 {
+		s.sendSysMessage("Syntax: .arena disband <teamId>")
+		return
+	}
+	id, err := strconv.ParseUint(args[0], 10, 32)
+	if err != nil {
+		s.sendSysMessage("Invalid team ID.")
+		return
+	}
+	cdb := s.arenaCharactersDB()
+	if cdb == nil {
+		s.sendSysMessage("Unknown error.")
+		return
+	}
+	teamID := uint32(id)
+	var name string
+	if err := cdb.QueryRowContext(ctx, "SELECT name FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&name); err != nil {
+		// LANG_ARENA_ERROR_NOT_FOUND (857).
+		s.sendSysMessage(fmt.Sprintf("Arena team with id %d not found.", teamID))
+		return
+	}
+	if s.arenaTeamIsFighting(ctx, cdb, teamID) {
+		// LANG_ARENA_ERROR_COMBAT (860).
+		s.sendSysMessage("Arena team is in combat.")
+		return
+	}
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team_member WHERE arenaTeamId = ?", teamID)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team WHERE arenaTeamId = ?", teamID)
+	// LANG_ARENA_DISBAND (865).
+	s.sendSysMessage(fmt.Sprintf("Arena team \"%s\" (id %d) disbanded.", name, teamID))
+	s.debug("arena team disbanded", "id", teamID, "name", name)
+}
+
+// handleCmdArenaRename processes ".arena rename <oldName> <newName>"
+// (cs_arena.cpp HandleArenaRenameCommand), mirroring ArenaTeam::SetName: the
+// rename fails (LANG_BAD_VALUE) when the name is unchanged, empty, or longer
+// than 24 characters. The reserved-name and charter-name validations have no
+// Go bridge and are documented as a gap.
+func (s *session) handleCmdArenaRename(ctx context.Context, args []string) {
+	toks := splitQuotedArgs(args)
+	if len(toks) < 2 {
+		s.sendSysMessage("Syntax: .arena rename \"<oldName>\" \"<newName>\"")
+		return
+	}
+	oldName, newName := unquoteCommandToken(toks[0]), unquoteCommandToken(toks[1])
+	cdb := s.arenaCharactersDB()
+	if cdb == nil {
+		s.sendSysMessage("Unknown error.")
+		return
+	}
+	var teamID uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT arenaTeamId FROM arena_team WHERE name = ?", oldName).Scan(&teamID); err != nil {
+		// LANG_ARENA_ERROR_NAME_NOT_FOUND (861).
+		s.sendSysMessage(fmt.Sprintf("Arena team with name \"%s\" not found.", oldName))
+		return
+	}
+	var clash uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT arenaTeamId FROM arena_team WHERE name = ?", newName).Scan(&clash); err == nil {
+		// LANG_ARENA_ERROR_NAME_EXISTS (858).
+		s.sendSysMessage(fmt.Sprintf("Arena team with name \"%s\" already exists.", newName))
+		return
+	}
+	if s.arenaTeamIsFighting(ctx, cdb, teamID) {
+		// LANG_ARENA_ERROR_COMBAT (860).
+		s.sendSysMessage("Arena team is in combat.")
+		return
+	}
+	if newName == "" || newName == oldName || len([]rune(newName)) > 24 {
+		s.sendSysMessage("Invalid value.")
+		return
+	}
+	if _, err := cdb.ExecContext(ctx, "UPDATE arena_team SET name = ? WHERE arenaTeamId = ?", newName, teamID); err != nil {
+		s.sendSysMessage("Invalid value.")
+		return
+	}
+	// LANG_ARENA_RENAME (866).
+	s.sendSysMessage(fmt.Sprintf("Arena team %d renamed from \"%s\" to \"%s\".", teamID, oldName, newName))
+	s.debug("arena team renamed", "id", teamID, "from", oldName, "to", newName)
+}
+
+// handleCmdArenaCaptain processes ".arena captain <teamId> [<player>]"
+// (cs_arena.cpp HandleArenaCaptainCommand), mirroring ArenaTeam::SetCaptain
+// (CHAR_UPD_ARENA_TEAM_CAPTAIN).
+func (s *session) handleCmdArenaCaptain(ctx context.Context, args []string) {
+	if len(args) < 1 {
+		s.sendSysMessage("Syntax: .arena captain <teamId> [<player>]")
+		return
+	}
+	id, err := strconv.ParseUint(args[0], 10, 32)
+	if err != nil {
+		s.sendSysMessage("Invalid team ID.")
+		return
+	}
+	cdb := s.arenaCharactersDB()
+	if cdb == nil {
+		s.sendSysMessage("Unknown error.")
+		return
+	}
+	teamID := uint32(id)
+	var teamName string
+	var captainGUID uint64
+	if err := cdb.QueryRowContext(ctx, "SELECT name, captainGuid FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&teamName, &captainGUID); err != nil {
+		// LANG_ARENA_ERROR_NOT_FOUND (857).
+		s.sendSysMessage(fmt.Sprintf("Arena team with id %d not found.", teamID))
+		return
+	}
+	if s.arenaTeamIsFighting(ctx, cdb, teamID) {
+		// LANG_ARENA_ERROR_COMBAT (860).
+		s.sendSysMessage("Arena team is in combat.")
+		return
+	}
+	var targetGUID uint64
+	var targetName string
+	if len(args) > 1 {
+		guid, name, ok := s.resolveArenaCaptain(ctx, cdb, args[1])
+		if !ok {
+			s.sendSysMessage("Character not found.")
+			return
+		}
+		targetGUID, targetName = guid, name
+	} else {
+		guid, name, ok := s.arenaTargetOrSelf(ctx, cdb)
+		if !ok {
+			s.sendSysMessage("No character selected.")
+			return
+		}
+		targetGUID, targetName = guid, name
+	}
+	var isMember uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", teamID, targetGUID).Scan(&isMember); err != nil || isMember == 0 {
+		// LANG_ARENA_ERROR_NOT_MEMBER (862).
+		s.sendSysMessage(fmt.Sprintf("%s is not a member of arena team \"%s\".", targetName, teamName))
+		return
+	}
+	if captainGUID == targetGUID {
+		// LANG_ARENA_ERROR_CAPTAIN (863).
+		s.sendSysMessage(fmt.Sprintf("%s is already the captain of arena team \"%s\".", targetName, teamName))
+		return
+	}
+	oldCaptainName := "<unknown>"
+	_ = cdb.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", captainGUID).Scan(&oldCaptainName)
+	if _, err := cdb.ExecContext(ctx, "UPDATE arena_team SET captainGuid = ? WHERE arenaTeamId = ?", targetGUID, teamID); err != nil {
+		s.sendSysMessage("Unknown error.")
+		return
+	}
+	// LANG_ARENA_CAPTAIN (867).
+	s.sendSysMessage(fmt.Sprintf("Arena team \"%s\" (id %d): captain changed from %s to %s.", teamName, teamID, oldCaptainName, targetName))
+	s.debug("arena team captain changed", "id", teamID, "from", oldCaptainName, "to", targetName)
+}
+
+// handleCmdArenaInfo processes ".arena info <teamId>"
+// (cs_arena.cpp HandleArenaInfoCommand): header plus one line per member,
+// with the "- Captain" marker on the captain's line.
+func (s *session) handleCmdArenaInfo(ctx context.Context, args []string) {
+	if len(args) < 1 {
+		s.sendSysMessage("Syntax: .arena info <teamId>")
+		return
+	}
+	id, err := strconv.ParseUint(args[0], 10, 32)
+	if err != nil {
+		s.sendSysMessage("Invalid team ID.")
+		return
+	}
+	cdb := s.arenaCharactersDB()
+	if cdb == nil {
+		s.sendSysMessage("Unknown error.")
+		return
+	}
+	teamID := uint32(id)
+	var name string
+	var rating uint32
+	var teamType uint32
+	var captainGUID uint64
+	if err := cdb.QueryRowContext(ctx, "SELECT name, rating, type, captainGuid FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&name, &rating, &teamType, &captainGUID); err != nil {
+		// LANG_ARENA_ERROR_NOT_FOUND (857).
+		s.sendSysMessage(fmt.Sprintf("Arena team with id %d not found.", teamID))
+		return
+	}
+	// LANG_ARENA_INFO_HEADER (868).
+	s.sendSysMessage(fmt.Sprintf("Arena team \"%s\" (id %d): rating %d, type %dv%d.", name, teamID, rating, teamType, teamType))
+	rows, err := cdb.QueryContext(ctx, "SELECT m.guid, COALESCE(c.name, ''), m.personalRating FROM arena_team_member AS m LEFT JOIN characters AS c ON c.guid = m.guid WHERE m.arenaTeamId = ?", teamID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var guid uint64
+		var memberName string
+		var personalRating uint16
+		if err := rows.Scan(&guid, &memberName, &personalRating); err != nil {
+			continue
+		}
+		captainMark := ""
+		if guid == captainGUID {
+			captainMark = " - Captain"
+		}
+		// LANG_ARENA_INFO_MEMBERS (869).
+		s.sendSysMessage(fmt.Sprintf("%s (%d): personal rating %d%s", memberName, guid, personalRating, captainMark))
+	}
+}
+
+// handleCmdArenaLookup processes ".arena lookup <name>"
+// (cs_arena.cpp HandleArenaLookupCommand): case-insensitive substring match
+// over all arena teams, like TrinityCore StringContainsStringI. The C++ loop
+// only emits rows when handler->GetSession() is set; the Go command path is
+// always a session, so rows are always emitted.
+func (s *session) handleCmdArenaLookup(ctx context.Context, args []string) {
+	needle := strings.Join(args, " ")
+	if strings.TrimSpace(needle) == "" {
+		s.sendSysMessage("Syntax: .arena lookup <name>")
+		return
+	}
+	cdb := s.arenaCharactersDB()
+	if cdb == nil {
+		s.sendSysMessage("Unknown error.")
+		return
+	}
+	rows, err := cdb.QueryContext(ctx, "SELECT arenaTeamId, name, type FROM arena_team")
+	if err != nil {
+		s.sendSysMessage("Unknown error.")
+		return
+	}
+	defer rows.Close()
+	found := false
+	lowerNeedle := strings.ToLower(needle)
+	for rows.Next() {
+		var teamID uint32
+		var name string
+		var teamType uint32
+		if err := rows.Scan(&teamID, &name, &teamType); err != nil {
+			continue
+		}
+		if strings.Contains(strings.ToLower(name), lowerNeedle) {
+			// LANG_ARENA_LOOKUP (870).
+			s.sendSysMessage(fmt.Sprintf("Arena team \"%s\" (id %d, type %dv%d).", name, teamID, teamType, teamType))
+			found = true
+		}
+	}
+	if !found {
+		// LANG_ARENA_ERROR_NAME_NOT_FOUND (861).
+		s.sendSysMessage(fmt.Sprintf("Arena team with name \"%s\" not found.", needle))
+	}
+}
+
 func (s *session) handleCmdNPC(ctx context.Context, args []string) {
 	if len(args) == 0 {
 		s.sendSysMessage("Syntax: .npc add <entry> | .npc info | .npc say <text> | .npc yell <text>")
@@ -2272,6 +2815,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("character", func(ctx context.Context, args []string) bool { s.handleCmdCharacter(ctx, args); return true }, []string{"level", "rename", "customize", "changefaction", "changerace"}, map[string]string{"char": "character"})
 	root.add("account", func(ctx context.Context, args []string) bool { s.handleCmdAccount(ctx, args); return true }, []string{"set", "password", "addon", "email", "lock"}, map[string]string{"acct": "account"})
 	root.add("achievement", func(ctx context.Context, args []string) bool { s.handleCmdAchievement(ctx, args); return true }, []string{"add"}, nil)
+	root.add("arena", func(ctx context.Context, args []string) bool { s.handleCmdArena(ctx, args); return true }, []string{"create", "disband", "rename", "captain", "info", "lookup"}, nil)
 	root.add("npc", func(ctx context.Context, args []string) bool { s.handleCmdNPC(ctx, args); return true }, []string{"info", "say", "yell"}, nil)
 	root.add("gobject", func(ctx context.Context, args []string) bool { s.handleCmdGObject(ctx, args); return true }, nil, map[string]string{"gob": "gobject"})
 	root.add("revive", func(ctx context.Context, args []string) bool { s.handleCmdRevive(ctx, args); return true }, nil, map[string]string{"res": "revive", "rev": "revive"})

@@ -48,6 +48,24 @@ const permissionCommandMailbox uint32 = 777
 // permissionCommandAchievementAdd mirrors rbac::RBAC_PERM_COMMAND_ACHIEVEMENT_ADD (RBAC.h:145).
 const permissionCommandAchievementAdd uint32 = 231
 
+// permissionCommandArenaCaptain mirrors rbac::RBAC_PERM_COMMAND_ARENA_CAPTAIN (RBAC.h:147).
+const permissionCommandArenaCaptain uint32 = 233
+
+// permissionCommandArenaCreate mirrors rbac::RBAC_PERM_COMMAND_ARENA_CREATE (RBAC.h:148).
+const permissionCommandArenaCreate uint32 = 234
+
+// permissionCommandArenaDisband mirrors rbac::RBAC_PERM_COMMAND_ARENA_DISBAND (RBAC.h:149).
+const permissionCommandArenaDisband uint32 = 235
+
+// permissionCommandArenaInfo mirrors rbac::RBAC_PERM_COMMAND_ARENA_INFO (RBAC.h:150).
+const permissionCommandArenaInfo uint32 = 236
+
+// permissionCommandArenaLookup mirrors rbac::RBAC_PERM_COMMAND_ARENA_LOOKUP (RBAC.h:151).
+const permissionCommandArenaLookup uint32 = 237
+
+// permissionCommandArenaRename mirrors rbac::RBAC_PERM_COMMAND_ARENA_RENAME (RBAC.h:152).
+const permissionCommandArenaRename uint32 = 238
+
 func accountHasPermission(ctx context.Context, db *sql.DB, accountID, realmID uint32, security uint8, permissionID uint32) (bool, error) {
 	granted := make(map[uint32]struct{})
 	denied := make(map[uint32]struct{})
