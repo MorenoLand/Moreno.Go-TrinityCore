@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 )
 
 const (
@@ -721,6 +722,42 @@ func (s *session) removeFromGroup(g *groupState, target *session) bool {
 	return true
 }
 
+// removeGroupMemberByGUID removes a member by guid, mirroring
+// Group::RemoveMember (Group.cpp:564): online members ride the normal
+// session detach path, offline members are dropped from the slot list.
+// CHAR_DEL_GROUP_MEMBER is the C++ _removeMember DB persist.
+func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, guid uint64) {
+	if sess := s.findSessionByGUID(guid); sess != nil {
+		sess.removeFromGroup(g, sess)
+		if s.CharactersStore != nil && s.CharactersStore.DB != nil {
+			_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER"), guid)
+		}
+		return
+	}
+	s.groupsMu.Lock()
+	idx := -1
+	for i, m := range g.Members {
+		if m.GUID == guid {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		s.groupsMu.Unlock()
+		return
+	}
+	g.Members = append(g.Members[:idx], g.Members[idx+1:]...)
+	if len(g.Members) <= 1 {
+		// Dissolve like Group::RemoveMember does for a 1-member group.
+		delete(s.groups, g.ID)
+	}
+	s.groupsMu.Unlock()
+	if s.CharactersStore != nil && s.CharactersStore.DB != nil {
+		_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER"), guid)
+	}
+	s.broadcastGroupList(g)
+}
+
 // handleGroupSetLeader processes CMSG_GROUP_SET_LEADER (0x078).
 // TrinityCore: WorldSession::HandleGroupSetLeaderOpcode.
 func (s *session) handleGroupSetLeader(_ context.Context, payload []byte) bool {
@@ -740,6 +777,17 @@ func (s *session) handleGroupSetLeader(_ context.Context, payload []byte) bool {
 		srv.groupsMu.Unlock()
 		return false
 	}
+	srv.groupsMu.Unlock()
+	return srv.setGroupLeader(g, guid)
+}
+
+// setGroupLeader changes the group leader, moving the new leader to the front
+// of the member list, and broadcasts SMSG_GROUP_SET_LEADER plus the refreshed
+// group list. The new leader must be a member (and, mirroring
+// Group::ChangeLeader in Group.cpp:752, online). The instance-binding rewrite
+// in ChangeLeader has no Go bridge.
+func (s *Server) setGroupLeader(g *groupState, guid uint64) bool {
+	s.groupsMu.Lock()
 	// Check target is a member
 	found := false
 	for _, m := range g.Members {
@@ -748,8 +796,10 @@ func (s *session) handleGroupSetLeader(_ context.Context, payload []byte) bool {
 			break
 		}
 	}
-	if !found {
-		srv.groupsMu.Unlock()
+	// ChangeLeader refuses offline players
+	newLeader := s.findSessionByGUID(guid)
+	if !found || newLeader == nil || newLeader.player == nil {
+		s.groupsMu.Unlock()
 		return false
 	}
 	g.LeaderGUID = guid
@@ -761,26 +811,52 @@ func (s *session) handleGroupSetLeader(_ context.Context, payload []byte) bool {
 			break
 		}
 	}
-	srv.groupsMu.Unlock()
+	s.groupsMu.Unlock()
 
 	// SMSG_GROUP_SET_LEADER: cstring name
-	newLeader := s.server.findSessionByGUID(guid)
-	name := ""
-	if newLeader != nil && newLeader.player != nil {
-		name = newLeader.player.Name
-	}
+	name := newLeader.player.Name
 	b := protocol.NewBuffer(len(name) + 1)
 	b.WriteCString(name)
 	pkt := b.Bytes()
-	srv.sessionsMu.RLock()
-	for sess := range srv.sessions {
+	s.sessionsMu.RLock()
+	for sess := range s.sessions {
 		if sess.groupID == g.ID {
 			_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_SET_LEADER), pkt, true)
 		}
 	}
-	srv.sessionsMu.RUnlock()
-	srv.broadcastGroupList(g)
+	s.sessionsMu.RUnlock()
+	s.broadcastGroupList(g)
 	return true
+}
+
+// disbandGroup dissolves the whole group: every online member session is
+// detached and notified, the persisted member/leader rows are removed, and
+// the in-memory group is dropped. Mirrors Group::Disband as used by
+// HandleGroupDisbandCommand (cs_group.cpp:246).
+func (s *Server) disbandGroup(ctx context.Context, g *groupState) {
+	s.groupsMu.Lock()
+	members := make([]uint64, len(g.Members))
+	for i, m := range g.Members {
+		members[i] = m.GUID
+	}
+	delete(s.groups, g.ID)
+	s.groupsMu.Unlock()
+	for _, guid := range members {
+		sess := s.findSessionByGUID(guid)
+		if sess == nil {
+			continue
+		}
+		sess.groupID = 0
+		_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_DESTROYED), nil, true)
+		empty := buildGroupList(s, &groupState{ID: g.ID, LeaderGUID: guid}, guid, 0)
+		_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), empty, true)
+	}
+	if s.CharactersStore != nil {
+		if s.CharactersStore.DB != nil {
+			_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER_ALL"), g.DBID)
+			_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP"), g.DBID)
+		}
+	}
 }
 
 // handleGroupDisband processes CMSG_GROUP_DISBAND (0x07B).

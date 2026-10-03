@@ -453,3 +453,36 @@ func expandPermissions(seed map[uint32]struct{}, links map[uint32][]uint32) map[
 	}
 	return result
 }
+
+// permissionCommandGroup mirrors rbac::RBAC_PERM_COMMAND_GROUP (RBAC.h:340).
+const permissionCommandGroup uint32 = 472
+
+// permissionCommandGroupLeader mirrors rbac::RBAC_PERM_COMMAND_GROUP_LEADER (RBAC.h:341).
+const permissionCommandGroupLeader uint32 = 473
+
+// permissionCommandGroupDisband mirrors rbac::RBAC_PERM_COMMAND_GROUP_DISBAND (RBAC.h:342).
+const permissionCommandGroupDisband uint32 = 474
+
+// permissionCommandGroupRemove mirrors rbac::RBAC_PERM_COMMAND_GROUP_REMOVE (RBAC.h:343).
+const permissionCommandGroupRemove uint32 = 475
+
+// permissionCommandGroupJoin mirrors rbac::RBAC_PERM_COMMAND_GROUP_JOIN (RBAC.h:344).
+const permissionCommandGroupJoin uint32 = 476
+
+// permissionCommandGroupList mirrors rbac::RBAC_PERM_COMMAND_GROUP_LIST (RBAC.h:345).
+const permissionCommandGroupList uint32 = 477
+
+// permissionCommandGroupSummon mirrors rbac::RBAC_PERM_COMMAND_GROUP_SUMMON (RBAC.h:346).
+const permissionCommandGroupSummon uint32 = 478
+
+// permissionCommandGroupSet mirrors rbac::RBAC_PERM_COMMAND_GROUP_SET (RBAC.h:728).
+const permissionCommandGroupSet uint32 = 861
+
+// permissionCommandGroupAssistant mirrors rbac::RBAC_PERM_COMMAND_GROUP_ASSISTANT (RBAC.h:729).
+const permissionCommandGroupAssistant uint32 = 862
+
+// permissionCommandGroupMainTank mirrors rbac::RBAC_PERM_COMMAND_GROUP_MAINTANK (RBAC.h:730).
+const permissionCommandGroupMainTank uint32 = 863
+
+// permissionCommandGroupMainAssist mirrors rbac::RBAC_PERM_COMMAND_GROUP_MAINASSIST (RBAC.h:731).
+const permissionCommandGroupMainAssist uint32 = 864
