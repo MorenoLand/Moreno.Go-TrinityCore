@@ -25,6 +25,45 @@ const permissionCommandGMVisible uint32 = 376
 // permissionCommandGO mirrors rbac::RBAC_PERM_COMMAND_GO (RBAC.h:249).
 const permissionCommandGO uint32 = 377
 
+// permissionCommandGObjectActivate mirrors rbac::RBAC_PERM_COMMAND_GOBJECT_ACTIVATE (RBAC.h:256).
+const permissionCommandGObjectActivate uint32 = 388
+
+// permissionCommandGObjectAdd mirrors rbac::RBAC_PERM_COMMAND_GOBJECT_ADD (RBAC.h:257).
+const permissionCommandGObjectAdd uint32 = 389
+
+// permissionCommandGObjectAddTemp mirrors rbac::RBAC_PERM_COMMAND_GOBJECT_ADD_TEMP (RBAC.h:258).
+const permissionCommandGObjectAddTemp uint32 = 390
+
+// permissionCommandGObjectDelete mirrors rbac::RBAC_PERM_COMMAND_GOBJECT_DELETE (RBAC.h:259).
+const permissionCommandGObjectDelete uint32 = 391
+
+// permissionCommandGObjectInfo mirrors rbac::RBAC_PERM_COMMAND_GOBJECT_INFO (RBAC.h:260).
+const permissionCommandGObjectInfo uint32 = 392
+
+// permissionCommandGObjectMove mirrors rbac::RBAC_PERM_COMMAND_GOBJECT_MOVE (RBAC.h:261).
+const permissionCommandGObjectMove uint32 = 393
+
+// permissionCommandGObjectNear mirrors rbac::RBAC_PERM_COMMAND_GOBJECT_NEAR (RBAC.h:262).
+const permissionCommandGObjectNear uint32 = 394
+
+// permissionCommandGObjectSetPhase mirrors rbac::RBAC_PERM_COMMAND_GOBJECT_SET_PHASE (RBAC.h:264).
+const permissionCommandGObjectSetPhase uint32 = 396
+
+// permissionCommandGObjectSetState mirrors rbac::RBAC_PERM_COMMAND_GOBJECT_SET_STATE (RBAC.h:265).
+const permissionCommandGObjectSetState uint32 = 397
+
+// permissionCommandGObjectTarget mirrors rbac::RBAC_PERM_COMMAND_GOBJECT_TARGET (RBAC.h:266).
+const permissionCommandGObjectTarget uint32 = 398
+
+// permissionCommandGObjectTurn mirrors rbac::RBAC_PERM_COMMAND_GOBJECT_TURN (RBAC.h:267).
+const permissionCommandGObjectTurn uint32 = 399
+
+// permissionCommandGObjectSpawnGroup mirrors rbac::RBAC_PERM_COMMAND_GOBJECT_SPAWNGROUP (RBAC.h:725).
+const permissionCommandGObjectSpawnGroup uint32 = 858
+
+// permissionCommandGObjectDespawnGroup mirrors rbac::RBAC_PERM_COMMAND_GOBJECT_DESPAWNGROUP (RBAC.h:726).
+const permissionCommandGObjectDespawnGroup uint32 = 859
+
 // permissionCommandsAppearInGMList mirrors rbac::RBAC_PERM_COMMANDS_APPEAR_IN_GM_LIST (RBAC.h:87).
 const permissionCommandsAppearInGMList uint32 = 34
 
