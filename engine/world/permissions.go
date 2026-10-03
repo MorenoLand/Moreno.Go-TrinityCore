@@ -1266,6 +1266,24 @@ const permissionCommandTicketViewid uint32 = 759
 // permissionCommandTicketViewname mirrors rbac::RBAC_PERM_COMMAND_TICKET_VIEWNAME (RBAC.h:628).
 const permissionCommandTicketViewname uint32 = 760
 
+// permissionCommandTitles mirrors rbac::RBAC_PERM_COMMAND_TITLES (RBAC.h:629).
+const permissionCommandTitles uint32 = 761
+
+// permissionCommandTitlesAdd mirrors rbac::RBAC_PERM_COMMAND_TITLES_ADD (RBAC.h:630).
+const permissionCommandTitlesAdd uint32 = 762
+
+// permissionCommandTitlesCurrent mirrors rbac::RBAC_PERM_COMMAND_TITLES_CURRENT (RBAC.h:631).
+const permissionCommandTitlesCurrent uint32 = 763
+
+// permissionCommandTitlesRemove mirrors rbac::RBAC_PERM_COMMAND_TITLES_REMOVE (RBAC.h:632).
+const permissionCommandTitlesRemove uint32 = 764
+
+// permissionCommandTitlesSet mirrors rbac::RBAC_PERM_COMMAND_TITLES_SET (RBAC.h:633).
+const permissionCommandTitlesSet uint32 = 765
+
+// permissionCommandTitlesSetMask mirrors rbac::RBAC_PERM_COMMAND_TITLES_SET_MASK (RBAC.h:634).
+const permissionCommandTitlesSetMask uint32 = 766
+
 // permissionCommandReload mirrors rbac::RBAC_PERM_COMMAND_RELOAD (RBAC.h).
 const permissionCommandReload uint32 = 607
 
