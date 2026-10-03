@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -10,9 +11,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/crypto"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -1258,8 +1262,16 @@ func (s *session) handleCmdAccount(ctx context.Context, args []string) {
 		s.handleCmdAccountPassword(ctx, args[1:])
 	case "lock":
 		s.handleCmdAccountLock(ctx, args[1:])
+	case "create":
+		s.handleCmdAccountCreate(ctx, args[1:])
+	case "delete":
+		s.handleCmdAccountDelete(ctx, args[1:])
+	case "onlinelist":
+		s.handleCmdAccountOnlineList(ctx)
+	case "2fa":
+		s.handleCmdAccount2FA(ctx, args[1:])
 	default:
-		s.sendSysMessage("Syntax: .account [addon <expansion>|email <old> <password> <new> <confirm>|password <old> <new> <confirm>|lock <ip|country> <on|off>|set ...]")
+		s.sendSysMessage("Syntax: .account [addon <expansion>|email <old> <password> <new> <confirm>|password <old> <new> <confirm>|lock <ip|country> <on|off>|2fa setup|2fa remove|create <account> <password> [<email>]|delete <account>|onlinelist|set ...]")
 	}
 }
 
@@ -1267,7 +1279,7 @@ func (s *session) handleCmdAccount(ctx context.Context, args []string) {
 // (cs_account.cpp accountSetCommandTable).
 func (s *session) handleCmdAccountSet(ctx context.Context, args []string) {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .account set gmlevel|seclevel|addon|password|sec <account> ...")
+		s.sendSysMessage("Syntax: .account set gmlevel|seclevel|addon|password|sec|2fa <account> ...")
 		return
 	}
 	switch strings.ToLower(args[0]) {
@@ -1277,6 +1289,8 @@ func (s *session) handleCmdAccountSet(ctx context.Context, args []string) {
 		s.handleCmdAccountSetAddon(ctx, args[1:])
 	case "password":
 		s.handleCmdAccountSetPassword(ctx, args[1:])
+	case "2fa":
+		s.handleCmdAccountSet2FA(ctx, args[1:])
 	default:
 		if len(args) >= 2 && strings.ToLower(args[0]) == "sec" {
 			switch strings.ToLower(args[1]) {
@@ -1285,7 +1299,7 @@ func (s *session) handleCmdAccountSet(ctx context.Context, args []string) {
 				return
 			}
 		}
-		s.sendSysMessage("Syntax: .account set gmlevel|seclevel|addon|password|sec <account> ...")
+		s.sendSysMessage("Syntax: .account set gmlevel|seclevel|addon|password|sec|2fa <account> ...")
 	}
 }
 
@@ -1562,6 +1576,450 @@ func (s *session) handleCmdAccountLock(ctx context.Context, args []string) {
 	default:
 		s.sendSysMessage("Syntax: .account lock ip|country on|off")
 	}
+}
+
+// accountOpResult mirrors TrinityCore's AccountOpResult (AccountMgr.h).
+type accountOpResult int
+
+const (
+	accountOpOK accountOpResult = iota
+	accountOpNameTooLong
+	accountOpPassTooLong
+	accountOpNameAlreadyExist
+	accountOpNameNotExist
+	accountOpDBInternalError
+)
+
+// handleCmdAccountCreate mirrors HandleAccountCreateCommand (cs_account.cpp:238):
+// ".account create <account> <password> [<email>]".
+func (s *session) handleCmdAccountCreate(ctx context.Context, args []string) {
+	if len(args) < 2 {
+		s.sendSysMessage("Syntax: .account create <account> <password> [<email>]")
+		return
+	}
+	accountName, password := args[0], args[1]
+	email := ""
+	if len(args) > 2 {
+		email = args[2]
+	}
+	if strings.Contains(accountName, "@") {
+		// LANG_ACCOUNT_USE_BNET_COMMANDS (cs_account.cpp:241)
+		s.sendSysMessage("Use battlenet account commands for battlenet accounts.")
+		return
+	}
+	switch s.createAccount(ctx, accountName, password, email) {
+	case accountOpOK:
+		s.sendSysMessage(fmt.Sprintf("Account %s created.", accountName))
+		s.debug("account created", "by", s.accountName, "ip", s.remoteIP(), "account", accountName)
+	case accountOpNameTooLong:
+		s.sendSysMessage("Account name too long.")
+	case accountOpPassTooLong:
+		s.sendSysMessage("Password too long.")
+	case accountOpNameAlreadyExist:
+		s.sendSysMessage("Account already exists.")
+	default:
+		s.sendSysMessage(fmt.Sprintf("Account %s was not created.", accountName))
+	}
+}
+
+// createAccount mirrors AccountMgr::CreateAccount (AccountMgr.cpp:45): utf8
+// length checks, upper-only-latin normalization, duplicate check, SRP6
+// registration data, and the LOGIN_INS_REALM_CHARACTERS_INIT seed row.
+func (s *session) createAccount(ctx context.Context, username, password, email string) accountOpResult {
+	if utf8.RuneCountInString(username) > 16 { // MAX_ACCOUNT_STR (AccountMgr.h)
+		return accountOpNameTooLong
+	}
+	if utf8.RuneCountInString(password) > 16 { // MAX_PASS_STR (AccountMgr.h)
+		return accountOpPassTooLong
+	}
+	username = upperOnlyLatin(username)
+	password = upperOnlyLatin(password)
+	email = upperOnlyLatin(email)
+	if s.accountIDByName(ctx, username) != 0 {
+		return accountOpNameAlreadyExist
+	}
+	salt, verifier, err := crypto.MakeRegistrationData(username, password)
+	if err != nil {
+		return accountOpDBInternalError
+	}
+	if s.server == nil || s.server.AuthStore == nil {
+		return accountOpDBInternalError
+	}
+	// LOGIN_INS_ACCOUNT: (username, salt, verifier, reg_mail, email); C++
+	// stores the email in both mail columns.
+	if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_INS_ACCOUNT", username, salt[:], verifier[:], email, email); err != nil {
+		return accountOpDBInternalError
+	}
+	if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_INS_REALM_CHARACTERS_INIT"); err != nil {
+		return accountOpDBInternalError
+	}
+	return accountOpOK
+}
+
+// handleCmdAccountDelete mirrors HandleAccountDeleteCommand (cs_account.cpp:286):
+// ".account delete <account>".
+func (s *session) handleCmdAccountDelete(ctx context.Context, args []string) {
+	if len(args) < 1 {
+		s.sendSysMessage("Syntax: .account delete <account>")
+		return
+	}
+	accountName := args[0]
+	targetID := s.accountIDByName(ctx, accountName)
+	if targetID == 0 {
+		s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", accountName))
+		return
+	}
+	// cs_account.cpp: commands can delete only accounts with lower security
+	// (this also rejects self-application); mirrors the canModifyAccount
+	// HasLowerSecurityAccount guard used by the set subgroup.
+	if !s.canModifyAccount(ctx, targetID) {
+		return
+	}
+	switch s.deleteAccount(ctx, targetID) {
+	case accountOpOK:
+		s.sendSysMessage(fmt.Sprintf("Account %s deleted.", accountName))
+	case accountOpNameNotExist:
+		s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", accountName))
+	default:
+		s.sendSysMessage(fmt.Sprintf("Account %s was not deleted.", accountName))
+	}
+}
+
+// deleteAccount mirrors AccountMgr::DeleteAccount (AccountMgr.cpp): kicks
+// online characters of the account, wipes each character (Player::DeleteFromDB
+// with updateRealmChars=false), clears the account-scoped character tables,
+// then deletes the account rows in a login-DB transaction.
+func (s *session) deleteAccount(ctx context.Context, accountID uint32) accountOpResult {
+	if s.server == nil || s.server.AuthStore == nil || s.server.CharactersStore == nil {
+		return accountOpDBInternalError
+	}
+	var one int
+	row, err := s.server.AuthStore.QueryRowStatement(ctx, "LOGIN_SEL_ACCOUNT_BY_ID", accountID)
+	if err != nil {
+		return accountOpDBInternalError
+	}
+	if err := row.Scan(&one); err != nil {
+		return accountOpNameNotExist
+	}
+	rows, err := s.server.CharactersStore.QueryStatement(ctx, "CHAR_SEL_CHARS_BY_ACCOUNT_ID", accountID)
+	if err != nil {
+		return accountOpDBInternalError
+	}
+	var guids []uint64
+	for rows.Next() {
+		var guid uint64
+		if err := rows.Scan(&guid); err != nil {
+			rows.Close()
+			return accountOpDBInternalError
+		}
+		guids = append(guids, guid)
+	}
+	rows.Close()
+	for _, guid := range guids {
+		// AccountMgr::DeleteAccount: kick the player if online, then
+		// Player::DeleteFromDB(guid, accountId, false) (no realmcharacters
+		// update - the account row goes away anyway).
+		if sess := s.server.playerSessionForGUID(guid); sess != nil {
+			sess.debug("session closed: account deleted", "account", sess.accountName)
+			s.server.sessionsMu.Lock()
+			delete(s.server.sessions, sess)
+			s.server.sessionsMu.Unlock()
+			if sess.conn != nil {
+				_ = sess.conn.Close()
+			}
+		}
+		tx, err := s.server.CharactersStore.DB.BeginTx(ctx, nil)
+		if err != nil {
+			return accountOpDBInternalError
+		}
+		if err := s.deleteCharacterReturnMails(ctx, tx, guid, accountID); err != nil {
+			tx.Rollback()
+			return accountOpDBInternalError
+		}
+		if err := deleteCharacterOwnedState(ctx, tx, guid); err != nil {
+			tx.Rollback()
+			return accountOpDBInternalError
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM characters WHERE guid = ?", guid); err != nil {
+			tx.Rollback()
+			return accountOpDBInternalError
+		}
+		if err := tx.Commit(); err != nil {
+			return accountOpDBInternalError
+		}
+	}
+	for _, stmt := range []string{"CHAR_DEL_TUTORIALS", "CHAR_DEL_ACCOUNT_DATA", "CHAR_DEL_CHARACTER_BAN"} {
+		if _, err := s.server.CharactersStore.ExecStatement(ctx, database.StatementID(stmt), accountID); err != nil {
+			return accountOpDBInternalError
+		}
+	}
+	tx, err := s.server.AuthStore.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return accountOpDBInternalError
+	}
+	for _, stmt := range []string{"LOGIN_DEL_ACCOUNT", "LOGIN_DEL_ACCOUNT_ACCESS", "LOGIN_DEL_REALM_CHARACTERS", "LOGIN_DEL_ACCOUNT_BANNED", "LOGIN_DEL_ACCOUNT_MUTED"} {
+		if _, err := s.server.AuthStore.ExecStatementTx(ctx, tx, database.StatementID(stmt), accountID); err != nil {
+			tx.Rollback()
+			return accountOpDBInternalError
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return accountOpDBInternalError
+	}
+	return accountOpOK
+}
+
+// handleCmdAccountOnlineList mirrors HandleAccountOnlineListCommand
+// (cs_account.cpp:333): ".account onlinelist".
+func (s *session) handleCmdAccountOnlineList(ctx context.Context) {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.AuthStore == nil {
+		return
+	}
+	rows, err := s.server.CharactersStore.QueryStatement(ctx, "CHAR_SEL_CHARACTER_ONLINE")
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	type onlineChar struct {
+		name    string
+		account uint32
+		mapID   uint16
+		zone    uint16
+	}
+	var online []onlineChar
+	for rows.Next() {
+		var c onlineChar
+		if err := rows.Scan(&c.name, &c.account, &c.mapID, &c.zone); err != nil {
+			return
+		}
+		online = append(online, c)
+	}
+	if len(online) == 0 {
+		s.sendSysMessage("No characters online.")
+		return
+	}
+	s.sendSysMessage("Account | Character | LastIP | Map | Zone | Expansion | GM")
+	for _, c := range online {
+		// LOGIN_SEL_ACCOUNT_INFO: username, last_ip, SecurityLevel, expansion.
+		var username, lastIP string
+		var security, expansion sql.NullInt64
+		infoRow, infoErr := s.server.AuthStore.QueryRowStatement(ctx, "LOGIN_SEL_ACCOUNT_INFO", c.account)
+		if infoErr != nil {
+			s.sendSysMessage(fmt.Sprintf("Error listing %s.", c.name))
+			continue
+		}
+		if err := infoRow.Scan(&username, &lastIP, &security, &expansion); err != nil {
+			s.sendSysMessage(fmt.Sprintf("Error listing %s.", c.name))
+			continue
+		}
+		s.sendSysMessage(fmt.Sprintf("%s | %s | %s | %d | %d | %d | %d",
+			username, c.name, lastIP, c.mapID, c.zone, expansion.Int64, security.Int64))
+	}
+}
+
+// totpSuggestions mirrors the static suggestions map in
+// HandleAccount2FASetupCommand (cs_account.cpp:119): per-account pending
+// 2FA secrets awaiting token confirmation.
+var (
+	totpSuggestionsMu sync.Mutex
+	totpSuggestions   = make(map[uint32][]byte)
+)
+
+// handleCmdAccount2FA dispatches ".account 2fa setup|remove".
+func (s *session) handleCmdAccount2FA(ctx context.Context, args []string) {
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .account 2fa setup [<token>] | .account 2fa remove [<token>]")
+		return
+	}
+	var token *uint32
+	if len(args) > 1 {
+		t, err := strconv.ParseUint(args[1], 10, 32)
+		if err != nil {
+			s.sendSysMessage("Invalid token.")
+			return
+		}
+		t32 := uint32(t)
+		token = &t32
+	}
+	switch strings.ToLower(args[0]) {
+	case "setup":
+		s.handleCmdAccount2FASetup(ctx, token)
+	case "remove":
+		s.handleCmdAccount2FARemove(ctx, token)
+	default:
+		s.sendSysMessage("Syntax: .account 2fa setup [<token>] | .account 2fa remove [<token>]")
+	}
+}
+
+// totpMasterKey mirrors sSecretMgr->GetSecret(SECRET_TOTP_MASTER_KEY) as used
+// by the C++ world server's 2FA commands: the world process reads its own
+// TOTPMasterSecret config, exactly like worldserver.conf's Secret.TOTPMasterKey.
+func (s *session) totpMasterKey() (key [16]byte, present bool) {
+	if s.server == nil {
+		return key, false
+	}
+	secret := strings.TrimSpace(s.server.Config.TotpMasterSecret)
+	if secret == "" {
+		return key, false
+	}
+	parsed, err := crypto.ParseMasterKey(secret)
+	if err != nil {
+		return key, false
+	}
+	return parsed, true
+}
+
+// handleCmdAccount2FASetup mirrors HandleAccount2FASetupCommand (cs_account.cpp:85).
+func (s *session) handleCmdAccount2FASetup(ctx context.Context, token *uint32) {
+	masterKey, masterPresent := s.totpMasterKey()
+	if s.server == nil || s.server.AuthStore == nil || !masterPresent {
+		s.sendSysMessage("2FA commands are not set up (no TOTP master secret configured).")
+		return
+	}
+	accountID := s.accountID
+	var existing []byte
+	totpRow, err := s.server.AuthStore.QueryRowStatement(ctx, "LOGIN_SEL_ACCOUNT_TOTP_SECRET", accountID)
+	if err != nil {
+		s.sendSysMessage("Unknown error.")
+		return
+	}
+	if err := totpRow.Scan(&existing); err != nil {
+		s.sendSysMessage("Unknown error.")
+		return
+	}
+	if len(existing) != 0 {
+		s.sendSysMessage("2FA is already set up on this account.")
+		return
+	}
+	totpSuggestionsMu.Lock()
+	secret, ok := totpSuggestions[accountID]
+	if !ok {
+		secret = make([]byte, 20) // TOTP::RECOMMENDED_SECRET_LENGTH (TOTP.h)
+		if _, err := rand.Read(secret); err != nil {
+			totpSuggestionsMu.Unlock()
+			s.sendSysMessage("Unknown error.")
+			return
+		}
+		totpSuggestions[accountID] = secret
+	}
+	totpSuggestionsMu.Unlock()
+	if ok && token != nil {
+		// Suggestion already existed and a token was supplied: validate it.
+		if crypto.ValidateTOTP(secret, *token, time.Now()) {
+			stored := append([]byte(nil), secret...)
+			if err := crypto.EncryptWithRandomIV(&stored, masterKey); err != nil {
+				s.sendSysMessage("Unknown error.")
+				return
+			}
+			if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_TOTP_SECRET", stored, accountID); err != nil {
+				s.sendSysMessage("Unknown error.")
+				return
+			}
+			totpSuggestionsMu.Lock()
+			delete(totpSuggestions, accountID)
+			totpSuggestionsMu.Unlock()
+			s.sendSysMessage("2FA setup complete.")
+			return
+		}
+		s.sendSysMessage("Invalid token.")
+	}
+	// New suggestion, or no token specified: output the TOTP parameters.
+	s.sendSysMessage(fmt.Sprintf("Suggested 2FA secret: %s", crypto.Base32Encode(secret)))
+}
+
+// handleCmdAccount2FARemove mirrors HandleAccount2FARemoveCommand (cs_account.cpp:149).
+func (s *session) handleCmdAccount2FARemove(ctx context.Context, token *uint32) {
+	masterKey, masterPresent := s.totpMasterKey()
+	if s.server == nil || s.server.AuthStore == nil || !masterPresent {
+		s.sendSysMessage("2FA commands are not set up (no TOTP master secret configured).")
+		return
+	}
+	accountID := s.accountID
+	var stored []byte
+	totpRow, err := s.server.AuthStore.QueryRowStatement(ctx, "LOGIN_SEL_ACCOUNT_TOTP_SECRET", accountID)
+	if err != nil {
+		s.sendSysMessage("Unknown error.")
+		return
+	}
+	if err := totpRow.Scan(&stored); err != nil {
+		s.sendSysMessage("Unknown error.")
+		return
+	}
+	if len(stored) == 0 {
+		s.sendSysMessage("2FA is not set up on this account.")
+		return
+	}
+	if token != nil {
+		secret := append([]byte(nil), stored...)
+		if err := crypto.DecryptWithTrailingIVAndTag(&secret, masterKey); err != nil {
+			s.debug("account 2fa remove: invalid ciphertext", "account", s.accountName)
+			s.sendSysMessage("Unknown error.")
+			return
+		}
+		if crypto.ValidateTOTP(secret, *token, time.Now()) {
+			if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_TOTP_SECRET", nil, accountID); err != nil {
+				s.sendSysMessage("Unknown error.")
+				return
+			}
+			s.sendSysMessage("2FA removed.")
+			return
+		}
+		s.sendSysMessage("Invalid token.")
+	}
+	s.sendSysMessage("You must supply your current token to remove 2FA.")
+}
+
+// handleCmdAccountSet2FA mirrors HandleAccountSet2FACommand (cs_account.cpp:798):
+// ".account set 2fa <account> <secret|off>".
+func (s *session) handleCmdAccountSet2FA(ctx context.Context, args []string) {
+	if len(args) < 2 {
+		s.sendSysMessage("Syntax: .account set 2fa <account> <secret|off>")
+		return
+	}
+	targetID := s.accountIDByName(ctx, args[0])
+	if targetID == 0 {
+		s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", args[0]))
+		return
+	}
+	// HandleAccountSet2FACommand uses the HasLowerSecurityAccount guard.
+	if !s.canModifyAccount(ctx, targetID) {
+		return
+	}
+	if s.server == nil || s.server.AuthStore == nil {
+		return
+	}
+	if args[1] == "off" {
+		if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_TOTP_SECRET", nil, targetID); err != nil {
+			s.sendSysMessage("Unknown error.")
+			return
+		}
+		s.sendSysMessage("2FA removed.")
+		return
+	}
+	masterKey, masterPresent := s.totpMasterKey()
+	if !masterPresent {
+		s.sendSysMessage("2FA commands are not set up (no TOTP master secret configured).")
+		return
+	}
+	decoded, err := crypto.Base32Decode(args[1])
+	if err != nil {
+		s.sendSysMessage("Invalid 2FA secret.")
+		return
+	}
+	if len(decoded)+crypto.AESIVSize+crypto.AESTagSize > 128 {
+		s.sendSysMessage("2FA secret too long.")
+		return
+	}
+	stored := append([]byte(nil), decoded...)
+	if err := crypto.EncryptWithRandomIV(&stored, masterKey); err != nil {
+		s.sendSysMessage("Unknown error.")
+		return
+	}
+	if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_TOTP_SECRET", stored, targetID); err != nil {
+		s.sendSysMessage("Unknown error.")
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("2FA secret set for account %s.", args[0]))
 }
 
 func (s *session) handleCmdNPC(ctx context.Context, args []string) {
