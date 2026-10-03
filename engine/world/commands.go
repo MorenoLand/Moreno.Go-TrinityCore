@@ -1094,42 +1094,717 @@ func (s *session) handleCmdServer(ctx context.Context, args []string) {
 	}
 }
 
+// handleCmdCharacter dispatches ".character customize|changefaction|changerace|
+// changeaccount|deleted|erase|level|rename|reputation|titles"
+// (cs_character.cpp characterCommandTable), gating each arm on its RBAC permission.
 func (s *session) handleCmdCharacter(ctx context.Context, args []string) {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .character level|rename|customize|changefaction|changerace")
+		s.sendSysMessage("Syntax: .character customize|changefaction|changerace|changeaccount|deleted|erase|level|rename|reputation|titles")
 		return
 	}
 	sub := strings.ToLower(args[0])
+	rest := args[1:]
+	var perm uint32
+	deletedNested := false
 	switch sub {
-	case "level":
-		if len(args) > 1 {
-			s.handleCmdModify(ctx, []string{"level", args[1]})
-		} else {
-			s.sendSysMessage("Syntax: .character level <1-80>")
-		}
-	case "rename":
-		if s.player != nil {
-			s.player.AtLogin |= 0x01
-		}
-		s.sendSysMessage("Rename flag set. Please relog to choose a new name.")
 	case "customize":
-		if s.player != nil {
-			s.player.AtLogin |= 0x08
-		}
-		s.sendSysMessage("Customize flag set. Please relog to customize appearance.")
+		perm = permissionCommandCharacterCustomize
 	case "changefaction":
-		if s.player != nil {
-			s.player.AtLogin |= 0x40
-		}
-		s.sendSysMessage("Change faction flag set. Please relog to change faction.")
+		perm = permissionCommandCharacterChangeFaction
 	case "changerace":
-		if s.player != nil {
-			s.player.AtLogin |= 0x80
-		}
-		s.sendSysMessage("Change race flag set. Please relog to change race.")
+		perm = permissionCommandCharacterChangeRace
+	case "changeaccount":
+		perm = permissionCommandCharacterChangeAccount
+	case "deleted":
+		deletedNested = true // permission resolved per nested arm in handleCharacterDeleted
+	case "erase":
+		perm = permissionCommandCharacterErase
+	case "level":
+		perm = permissionCommandCharacterLevel
+	case "rename":
+		perm = permissionCommandCharacterRename
+	case "reputation":
+		perm = permissionCommandCharacterReputation
+	case "titles":
+		perm = permissionCommandCharacterTitles
 	default:
-		s.sendSysMessage(fmt.Sprintf("Unknown character subcommand: %s", sub))
+		s.sendSysMessage("Syntax: .character customize|changefaction|changerace|changeaccount|deleted|erase|level|rename|reputation|titles")
+		return
 	}
+	if !deletedNested && !s.commandAllowed(ctx, perm) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	switch sub {
+	case "customize":
+		s.handleCharacterAtLoginFlag(ctx, rest, atLoginCustomize, "customize")
+	case "changefaction":
+		s.handleCharacterAtLoginFlag(ctx, rest, atLoginChangeFaction, "change faction")
+	case "changerace":
+		s.handleCharacterAtLoginFlag(ctx, rest, atLoginChangeRace, "change race")
+	case "changeaccount":
+		s.handleCharacterChangeAccount(ctx, rest)
+	case "deleted":
+		s.handleCharacterDeleted(ctx, rest)
+	case "erase":
+		s.handleCharacterErase(ctx, rest)
+	case "level":
+		s.handleCharacterLevel(ctx, rest)
+	case "rename":
+		s.handleCharacterRename(ctx, rest)
+	case "reputation":
+		s.handleCharacterReputation(ctx, rest)
+	case "titles":
+		s.characterArmBlocked(permissionCommandCharacterTitles,
+			"character titles needs the CharTitles DBC store: no title entries are loaded in Go")
+	}
+}
+
+// characterTarget mirrors the Trinity PlayerIdentifier resolve used by the
+// character command handlers: a connected session wins, otherwise the
+// character row supplies the guid. With no name the handler's own player is
+// used (the C++ FromTarget unit-selection has no command bridge, so
+// selection targeting is not modeled).
+type characterTarget struct {
+	name   string
+	guid   uint64
+	online *session
+}
+
+// resolveCharacterTarget consumes an optional leading character name and
+// returns the resolved target plus the remaining args. It reports false and
+// sends the C++ LANG_PLAYER_NOT_FOUND equivalent when the name resolves to
+// nothing.
+func (s *session) resolveCharacterTarget(ctx context.Context, args []string) (characterTarget, []string, bool) {
+	var t characterTarget
+	if len(args) == 0 {
+		if s.player == nil {
+			s.sendSysMessage("Player not found.")
+			return t, args, false
+		}
+		t.online = s
+		t.guid = s.playerGUID
+		t.name = s.player.Name
+		return t, args, true
+	}
+	name := normalizePlayerName(args[0])
+	t.name = name
+	if name == "" {
+		s.sendSysMessage("Player not found.")
+		return t, args, false
+	}
+	if online := s.sessionForPlayerName(name); online != nil {
+		t.online = online
+		t.guid = online.playerGUID
+		if online.player != nil {
+			t.name = online.player.Name
+		}
+		return t, args[1:], true
+	}
+	chars := s.server.CharactersStore
+	if chars == nil || chars.DB == nil {
+		s.sendSysMessage("Player not found.")
+		return t, args, false
+	}
+	if err := chars.DB.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ?", name).Scan(&t.guid); err != nil || t.guid == 0 {
+		s.sendSysMessage("Player not found.")
+		return t, args, false
+	}
+	return t, args[1:], true
+}
+
+// characterArmBlocked RBAC-gates a documented-only character arm and reports
+// the missing bridge honestly instead of stubbing the behavior.
+func (s *session) characterArmBlocked(perm uint32, reason string) {
+	s.sendSysMessage("Command recognized but not available: " + reason + ".")
+}
+
+// handleCharacterAtLoginFlag mirrors HandleCharacterCustomizeCommand,
+// HandleCharacterChangeFactionCommand and HandleCharacterChangeRaceCommand
+// (cs_character.cpp:394/418/442): online targets get the at-login flag set on
+// the live player, offline targets get CHAR_UPD_ADD_AT_LOGIN_FLAG.
+func (s *session) handleCharacterAtLoginFlag(ctx context.Context, args []string, flag uint64, what string) {
+	t, rest, ok := s.resolveCharacterTarget(ctx, args)
+	if !ok {
+		return
+	}
+	if len(rest) != 0 {
+		s.sendSysMessage("Syntax: .character " + strings.ReplaceAll(what, " ", "") + " [$player]")
+		return
+	}
+	if t.online != nil && t.online.player != nil {
+		t.online.player.AtLogin |= uint32(flag)
+		t.online.sendPlayerUpdate()
+		s.sendSysMessage(fmt.Sprintf("Set %s flag for %s. Please relog.", what, t.name))
+		return
+	}
+	chars := s.server.CharactersStore
+	if chars == nil {
+		return
+	}
+	_, _ = chars.ExecStatement(ctx, database.StatementID("CHAR_UPD_ADD_AT_LOGIN_FLAG"), uint16(flag), t.guid)
+	s.sendSysMessage(fmt.Sprintf("Set %s flag for %s (GUID: %d).", what, t.name, t.guid))
+}
+
+// handleCharacterLevel mirrors HandleLevelUpCommand (cs_character.cpp:740):
+// the level argument is a delta added to the current level, clamped to
+// 1..defaultMaxPlayerLevel (the C++ clamps to STRONG_MAX_LEVEL; the Go engine
+// models levels only up to defaultMaxPlayerLevel). Online targets are
+// leveled in place with XP reset; offline targets get CHAR_UPD_LEVEL.
+// InitTalentForLevel has no Go bridge: talents are left untouched.
+func (s *session) handleCharacterLevel(ctx context.Context, args []string) {
+	t, rest, ok := s.resolveCharacterTarget(ctx, args)
+	if !ok {
+		return
+	}
+	if len(rest) != 1 {
+		s.sendSysMessage("Syntax: .character level [$player] <level-delta>")
+		return
+	}
+	delta, err := strconv.ParseInt(rest[0], 10, 16)
+	if err != nil {
+		s.sendSysMessage("Syntax: .character level [$player] <level-delta>")
+		return
+	}
+	oldLevel := 0
+	if t.online != nil && t.online.player != nil {
+		oldLevel = int(t.online.player.Level)
+	} else {
+		chars := s.server.CharactersStore
+		if chars == nil || chars.DB == nil {
+			s.sendSysMessage("Player not found.")
+			return
+		}
+		var lvl uint8
+		if err := chars.DB.QueryRowContext(ctx, "SELECT level FROM characters WHERE guid = ?", t.guid).Scan(&lvl); err != nil {
+			s.sendSysMessage("Player not found.")
+			return
+		}
+		oldLevel = int(lvl)
+	}
+	newLevel := oldLevel + int(delta)
+	if newLevel < 1 {
+		newLevel = 1
+	}
+	if newLevel > int(defaultMaxPlayerLevel) {
+		newLevel = int(defaultMaxPlayerLevel)
+	}
+	if t.online != nil && t.online.player != nil {
+		t.online.player.Level = uint8(newLevel)
+		t.online.player.XP = 0
+		t.online.sendPlayerUpdate()
+		switch {
+		case oldLevel == newLevel:
+			s.sendSysMessage(fmt.Sprintf("Your level progress has been reset by %s.", t.name))
+		case oldLevel < newLevel:
+			s.sendSysMessage(fmt.Sprintf("%s leveled up to %d.", t.name, newLevel))
+		default:
+			s.sendSysMessage(fmt.Sprintf("%s leveled down to %d.", t.name, newLevel))
+		}
+	} else {
+		chars := s.server.CharactersStore
+		if chars == nil {
+			return
+		}
+		_, _ = chars.ExecStatement(ctx, database.StatementID("CHAR_UPD_LEVEL"), uint8(newLevel), t.guid)
+	}
+	s.sendSysMessage(fmt.Sprintf("Changed level of %s to %d.", t.name, newLevel))
+}
+
+// handleCharacterRename mirrors HandleCharacterRenameCommand
+// (cs_character.cpp:286): with a new name the character is renamed
+// immediately (online targets are kicked, like the C++ KickPlayer), without
+// one the AT_LOGIN_RENAME flag is set for the next login. The C++
+// ObjectMgr::CheckPlayerName rules and the reserved-name
+// RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RESERVEDNAME exemption have no Go
+// bridge: only name normalization and the duplicate-name DB check apply.
+func (s *session) handleCharacterRename(ctx context.Context, args []string) {
+	t, rest, ok := s.resolveCharacterTarget(ctx, args)
+	if !ok {
+		return
+	}
+	if s.characterTargetLowerSecurity(ctx, t) {
+		return // C++ HasLowerSecurity: silent fail
+	}
+	chars := s.server.CharactersStore
+	if chars == nil {
+		return
+	}
+	if len(rest) == 0 {
+		// At-login rename flag on the resolved target.
+		if t.online != nil && t.online.player != nil {
+			t.online.player.AtLogin |= uint32(atLoginRename)
+			t.online.sendPlayerUpdate()
+			s.sendSysMessage(fmt.Sprintf("Set rename flag for %s. Please relog to choose a new name.", t.name))
+			return
+		}
+		_, _ = chars.ExecStatement(ctx, database.StatementID("CHAR_UPD_ADD_AT_LOGIN_FLAG"), uint16(atLoginRename), t.guid)
+		s.sendSysMessage(fmt.Sprintf("Set rename flag for %s (GUID: %d).", t.name, t.guid))
+		return
+	}
+	newName := normalizePlayerName(rest[0])
+	if newName == "" {
+		s.sendSysMessage("Incorrect value.")
+		return
+	}
+	if row, err := chars.QueryRowStatement(ctx, database.StatementID("CHAR_SEL_CHECK_NAME"), newName); err == nil {
+		var one int
+		if row.Scan(&one) == nil {
+			s.sendSysMessage(fmt.Sprintf("Name %s is already in use.", newName))
+			return
+		}
+	}
+	_, _ = chars.ExecStatement(ctx, database.StatementID("CHAR_DEL_DECLINED_NAME"), t.guid)
+	if t.online != nil {
+		if t.online.player != nil {
+			t.online.player.Name = newName
+			t.online.sendPlayerUpdate()
+		}
+		s.kickSession(t.online)
+	} else {
+		_, _ = chars.ExecStatement(ctx, database.StatementID("CHAR_UPD_NAME_BY_GUID"), newName, t.guid)
+	}
+	// sCharacterCache->UpdateCharacterData has no Go character-cache bridge.
+	s.sendSysMessage(fmt.Sprintf("Renamed player %s to %s.", t.name, newName))
+}
+
+// characterTargetLowerSecurity mirrors ChatHandler::HasLowerSecurity for the
+// rename path: the command fails when the target's account outranks the
+// handler's security level.
+func (s *session) characterTargetLowerSecurity(ctx context.Context, t characterTarget) bool {
+	var accountID uint32
+	if t.online != nil {
+		accountID = t.online.accountID
+	} else if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT account FROM characters WHERE guid = ?", t.guid).Scan(&accountID)
+	}
+	return s.security < s.accountSecurityLevel(ctx, accountID)
+}
+
+// handleCharacterChangeAccount mirrors HandleCharacterChangeAccountCommand
+// (cs_character.cpp:466): the target is kicked, CHAR_UPD_ACCOUNT_BY_GUID
+// moves the row, and the destination account's character count is capped at
+// CONFIG_CHARACTERS_PER_REALM. The sCharacterCache account-id update has no
+// Go bridge: the row read above is the source of truth.
+func (s *session) handleCharacterChangeAccount(ctx context.Context, args []string) {
+	t, rest, ok := s.resolveCharacterTarget(ctx, args)
+	if !ok {
+		return
+	}
+	if len(rest) != 1 {
+		s.sendSysMessage("Syntax: .character changeaccount [$player] $account")
+		return
+	}
+	accountName := rest[0]
+	newAccountID := s.accountIDByName(ctx, accountName)
+	if newAccountID == 0 {
+		s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", accountName))
+		return
+	}
+	chars := s.server.CharactersStore
+	if chars == nil || chars.DB == nil {
+		return
+	}
+	var oldAccountID uint32
+	if err := chars.DB.QueryRowContext(ctx, "SELECT account FROM characters WHERE guid = ?", t.guid).Scan(&oldAccountID); err != nil {
+		s.sendSysMessage("Player not found.")
+		return
+	}
+	if newAccountID == oldAccountID {
+		return // C++: nothing to do
+	}
+	var charCount int
+	_ = chars.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM characters WHERE account = ?", newAccountID).Scan(&charCount)
+	if charCount >= int(s.server.Config.CharactersPerRealm) {
+		s.sendSysMessage(fmt.Sprintf("Account %s (%d) has too many characters.", accountName, newAccountID))
+		return
+	}
+	if t.online != nil {
+		s.kickSession(t.online)
+	}
+	_, _ = chars.ExecStatement(ctx, database.StatementID("CHAR_UPD_ACCOUNT_BY_GUID"), newAccountID, t.guid)
+	s.sendSysMessage(fmt.Sprintf("Changed ownership of player %s from account %d to account %s.", t.name, oldAccountID, accountName))
+}
+
+// handleCharacterReputation mirrors HandleCharacterReputationCommand
+// (cs_character.cpp:522) for connected targets: one line per known faction
+// with rank name and standing. FactionEntry localized names have no Go DBC
+// bridge, so the faction id is shown; offline targets are rejected exactly
+// like the C++ IsConnected check.
+func (s *session) handleCharacterReputation(ctx context.Context, args []string) {
+	t, rest, ok := s.resolveCharacterTarget(ctx, args)
+	if !ok {
+		return
+	}
+	if len(rest) != 0 {
+		s.sendSysMessage("Syntax: .character reputation [$player]")
+		return
+	}
+	if t.online == nil || t.online.player == nil {
+		s.sendSysMessage("Player not found.")
+		return
+	}
+	rankNames := [...]string{"Hated", "Hostile", "Unfriendly", "Neutral", "Friendly", "Honored", "Revered", "Exalted"}
+	for _, rep := range t.online.player.Reputations {
+		standing := int64(rep.Base) + int64(rep.Standing)
+		rank := reputationRank(standing)
+		line := fmt.Sprintf("%d - %s (%d)", rep.FactionID, rankNames[rank], standing)
+		if rep.Flags&factionFlagVisible != 0 {
+			line += " visible"
+		}
+		if rep.Flags&factionFlagAtWar != 0 {
+			line += " at war"
+		}
+		if rep.Flags&factionFlagPeaceForced != 0 {
+			line += " peace forced"
+		}
+		if rep.Flags&factionFlagHidden != 0 {
+			line += " hidden"
+		}
+		if rep.Flags&factionFlagInvisibleForced != 0 {
+			line += " invisible forced"
+		}
+		if rep.Flags&factionFlagInactive != 0 {
+			line += " inactive"
+		}
+		s.sendSysMessage(line)
+	}
+}
+
+// deletedCharacterInfo mirrors character_commandscript::DeletedInfo
+// (cs_character.cpp:89): deleteInfos_Account stores the numeric account id.
+type deletedCharacterInfo struct {
+	guid        uint64
+	name        string
+	accountID   uint32
+	accountName string
+	deleteDate  int64
+}
+
+// handleCharacterDeleted dispatches ".character deleted
+// delete|list|restore|old" (cs_character.cpp characterDeletedCommandTable),
+// gating each nested arm on its RBAC permission.
+func (s *session) handleCharacterDeleted(ctx context.Context, args []string) {
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .character deleted delete|list|restore|old ...")
+		return
+	}
+	sub := strings.ToLower(args[0])
+	rest := args[1:]
+	var perm uint32
+	switch sub {
+	case "delete":
+		perm = permissionCommandCharacterDeletedDelete
+	case "list":
+		perm = permissionCommandCharacterDeletedList
+	case "restore":
+		perm = permissionCommandCharacterDeletedRestore
+	case "old":
+		perm = permissionCommandCharacterDeletedOld
+	default:
+		s.sendSysMessage("Syntax: .character deleted delete|list|restore|old ...")
+		return
+	}
+	if !s.commandAllowed(ctx, perm) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	switch sub {
+	case "delete":
+		s.handleCharacterDeletedDelete(ctx, rest)
+	case "list":
+		s.handleCharacterDeletedList(ctx, rest)
+	case "restore":
+		s.handleCharacterDeletedRestore(ctx, rest)
+	case "old":
+		s.handleCharacterDeletedOld(ctx, rest)
+	}
+}
+
+// deletedCharacterInfoList mirrors GetDeletedCharacterInfoList
+// (cs_character.cpp:114): a numeric needle searches by guid, anything else by
+// normalized name, an empty needle lists every deleted character.
+func (s *session) deletedCharacterInfoList(ctx context.Context, needle string) []deletedCharacterInfo {
+	chars := s.server.CharactersStore
+	if chars == nil {
+		return nil
+	}
+	var rows *sql.Rows
+	var err error
+	switch {
+	case needle == "":
+		rows, err = chars.QueryStatement(ctx, database.StatementID("CHAR_SEL_CHAR_DEL_INFO"))
+	case isNumericString(needle):
+		rows, err = chars.QueryStatement(ctx, database.StatementID("CHAR_SEL_CHAR_DEL_INFO_BY_GUID"), needle)
+	default:
+		rows, err = chars.QueryStatement(ctx, database.StatementID("CHAR_SEL_CHAR_DEL_INFO_BY_NAME"), normalizePlayerName(needle))
+	}
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var found []deletedCharacterInfo
+	for rows.Next() {
+		var info deletedCharacterInfo
+		var deleteAccount string
+		if err := rows.Scan(&info.guid, &info.name, &deleteAccount, &info.deleteDate); err != nil {
+			continue
+		}
+		// deleteInfos_Account is stored numeric by CHAR_UPD_DELETE_INFO.
+		if id, convErr := strconv.ParseUint(deleteAccount, 10, 32); convErr == nil {
+			info.accountID = uint32(id)
+			info.accountName = s.accountNameByID(ctx, info.accountID)
+		}
+		found = append(found, info)
+	}
+	return found
+}
+
+// isNumericString mirrors TrinityCore isNumeric for the deleted-list needle.
+func isNumericString(str string) bool {
+	if str == "" {
+		return false
+	}
+	for i := 0; i < len(str); i++ {
+		if str[i] < '0' || str[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// sendDeletedCharacterList mirrors HandleCharacterDeletedListHelper
+// (cs_character.cpp:167): one line per deleted character.
+func (s *session) sendDeletedCharacterList(found []deletedCharacterInfo) {
+	s.sendSysMessage("==== Deleted characters ====")
+	for _, info := range found {
+		accountName := info.accountName
+		if accountName == "" {
+			accountName = "<Not existing>"
+		}
+		dateStr := time.Unix(info.deleteDate, 0).UTC().Format("2006-01-02 15:04:05")
+		s.sendSysMessage(fmt.Sprintf("%d - %s [%s (%d)] deleted %s", info.guid, info.name, accountName, info.accountID, dateStr))
+	}
+	s.sendSysMessage("===========================")
+}
+
+// handleCharacterDeletedList mirrors HandleCharacterDeletedListCommand
+// (cs_character.cpp:581).
+func (s *session) handleCharacterDeletedList(ctx context.Context, args []string) {
+	needle := ""
+	if len(args) > 0 {
+		needle = args[0]
+	}
+	found := s.deletedCharacterInfoList(ctx, needle)
+	if len(found) == 0 {
+		s.sendSysMessage("No deleted characters found.")
+		return
+	}
+	s.sendDeletedCharacterList(found)
+}
+
+// handleCharacterDeletedRestore mirrors HandleCharacterDeletedRestoreCommand
+// (cs_character.cpp:614): every match is restored unless a new name is given,
+// which requires exactly one match. The restore skips characters whose
+// account no longer exists, whose account is full (>= 10 characters, the C++
+// hardcoded cap), or whose name is taken by a live character.
+func (s *session) handleCharacterDeletedRestore(ctx context.Context, args []string) {
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .character deleted restore $needle [$newName [$newAccount]]")
+		return
+	}
+	needle := args[0]
+	found := s.deletedCharacterInfoList(ctx, needle)
+	if len(found) == 0 {
+		s.sendSysMessage("No deleted characters found.")
+		return
+	}
+	s.sendSysMessage("Restoring deleted characters:")
+	s.sendDeletedCharacterList(found)
+	if len(args) == 1 {
+		for _, info := range found {
+			s.restoreDeletedCharacter(ctx, info)
+		}
+		return
+	}
+	if len(found) != 1 {
+		s.sendSysMessage("Rename requires exactly one matching character.")
+		return
+	}
+	info := found[0]
+	info.name = normalizePlayerName(args[1])
+	if len(args) > 2 {
+		newAccountID := s.accountIDByName(ctx, args[2])
+		if newAccountID == 0 {
+			s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", args[2]))
+			return
+		}
+		info.accountID = newAccountID
+		info.accountName = args[2]
+	}
+	s.restoreDeletedCharacter(ctx, info)
+}
+
+// restoreDeletedCharacter mirrors HandleCharacterDeletedRestoreHelper
+// (cs_character.cpp:205).
+func (s *session) restoreDeletedCharacter(ctx context.Context, info deletedCharacterInfo) {
+	if info.accountName == "" {
+		s.sendSysMessage(fmt.Sprintf("Skipping %s (%d): account %d does not exist.", info.name, info.guid, info.accountID))
+		return
+	}
+	var charCount int
+	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM characters WHERE account = ?", info.accountID).Scan(&charCount)
+	if charCount >= 10 {
+		s.sendSysMessage(fmt.Sprintf("Skipping %s (%d): account %d is full.", info.name, info.guid, info.accountID))
+		return
+	}
+	var taken int
+	if row, err := s.server.CharactersStore.QueryRowStatement(ctx, database.StatementID("CHAR_SEL_CHECK_NAME"), info.name); err == nil && row.Scan(&taken) == nil {
+		s.sendSysMessage(fmt.Sprintf("Skipping %s (%d): name is taken by a live character.", info.name, info.guid))
+		return
+	}
+	_, _ = s.server.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_UPD_RESTORE_DELETE_INFO"), info.name, info.accountID, info.guid)
+	s.sendSysMessage(fmt.Sprintf("Restored %s (%d).", info.name, info.guid))
+}
+
+// handleCharacterDeletedDelete mirrors HandleCharacterDeletedDeleteCommand
+// (cs_character.cpp:672): every match is permanently wiped via the
+// Player::DeleteFromDB path (mail return sweep + owned-state cleanup).
+func (s *session) handleCharacterDeletedDelete(ctx context.Context, args []string) {
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .character deleted delete $needle")
+		return
+	}
+	found := s.deletedCharacterInfoList(ctx, args[0])
+	if len(found) == 0 {
+		s.sendSysMessage("No deleted characters found.")
+		return
+	}
+	s.sendSysMessage("Deleting characters:")
+	s.sendDeletedCharacterList(found)
+	for _, info := range found {
+		s.deleteCharacterFromDB(ctx, info.guid, 0)
+	}
+}
+
+// handleCharacterDeletedOld mirrors HandleCharacterDeletedOldCommand
+// (cs_character.cpp:706): permanently wipes characters deleted more than
+// $days ago. The C++ CONFIG_CHARDELETE_KEEP_DAYS config has no Go bridge,
+// so the days argument is required.
+func (s *session) handleCharacterDeletedOld(ctx context.Context, args []string) {
+	if len(args) != 1 {
+		s.sendSysMessage("Syntax: .character deleted old $days")
+		return
+	}
+	days, err := strconv.Atoi(args[0])
+	if err != nil || days <= 0 {
+		s.sendSysMessage("Syntax: .character deleted old $days")
+		return
+	}
+	cutoff := time.Now().Unix() - int64(days)*86400
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT guid FROM characters WHERE deleteDate IS NOT NULL AND deleteDate < ?", cutoff)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var guid uint64
+		if rows.Scan(&guid) != nil {
+			continue
+		}
+		s.deleteCharacterFromDB(ctx, guid, 0)
+	}
+	s.sendSysMessage(fmt.Sprintf("Deleted characters older than %d days.", days))
+}
+
+// deleteCharacterFromDB mirrors the Player::DeleteFromDB sweep used by the
+// erase and deleted-delete arms: COD mails return to senders, owned state is
+// wiped, then the character row goes away. The C++ realm-char-count update
+// (sWorld->UpdateRealmCharCount) has no Go bridge.
+func (s *session) deleteCharacterFromDB(ctx context.Context, guid uint64, accountID uint32) {
+	chars := s.server.CharactersStore
+	if chars == nil || chars.DB == nil {
+		return
+	}
+	tx, err := chars.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return
+	}
+	defer tx.Rollback()
+	if err := s.deleteCharacterReturnMails(ctx, tx, guid, accountID); err != nil {
+		return
+	}
+	if err := deleteCharacterOwnedState(ctx, tx, guid); err != nil {
+		return
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM characters WHERE guid = ?", guid); err != nil {
+		return
+	}
+	_ = tx.Commit()
+}
+
+// handleCharacterErase mirrors HandleCharacterEraseCommand
+// (cs_character.cpp:720): the character is kicked if online, then permanently
+// wiped via the Player::DeleteFromDB path.
+func (s *session) handleCharacterErase(ctx context.Context, args []string) {
+	t, rest, ok := s.resolveCharacterTarget(ctx, args)
+	if !ok {
+		return
+	}
+	if len(rest) != 0 {
+		s.sendSysMessage("Syntax: .character erase $player")
+		return
+	}
+	var accountID uint32
+	if t.online != nil {
+		accountID = t.online.accountID
+		s.kickSession(t.online)
+	} else {
+		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT account FROM characters WHERE guid = ?", t.guid).Scan(&accountID)
+	}
+	accountName := s.accountNameByID(ctx, accountID)
+	s.deleteCharacterFromDB(ctx, t.guid, accountID)
+	s.sendSysMessage(fmt.Sprintf("Deleted character %s (%d) of account %s (%d).", t.name, t.guid, accountName, accountID))
+}
+
+// handleCmdLevelup dispatches ".levelup" (cs_character.cpp commandTable), the
+// console-hidden alias of the character level arm gated on
+// RBAC_PERM_COMMAND_LEVELUP.
+func (s *session) handleCmdLevelup(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandLevelup) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	s.handleCharacterLevel(ctx, args)
+}
+
+// handleCmdPDump dispatches ".pdump copy|load|write" (cs_character.cpp
+// pdumpCommandTable). The PlayerDump writer/reader has no Go bridge, so each
+// arm is RBAC-gated and reports the missing bridge honestly.
+func (s *session) handleCmdPDump(ctx context.Context, args []string) {
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .pdump copy|load|write ...")
+		return
+	}
+	sub := strings.ToLower(args[0])
+	var perm uint32
+	switch sub {
+	case "copy":
+		perm = permissionCommandPDumpCopy
+	case "load":
+		perm = permissionCommandPDumpLoad
+	case "write":
+		perm = permissionCommandPDumpWrite
+	default:
+		s.sendSysMessage("Syntax: .pdump copy|load|write ...")
+		return
+	}
+	if !s.commandAllowed(ctx, perm) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	s.characterArmBlocked(perm,
+		"pdump "+sub+" needs the PlayerDump writer/reader: no dump serialization exists in Go")
 }
 
 // upperOnlyLatin mirrors TrinityCore Utf8ToUpperOnlyLatin: only ASCII
@@ -4037,7 +4712,9 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("cast", func(ctx context.Context, args []string) bool { s.handleCmdCast(ctx, args); return true }, nil, nil)
 	root.add("lookup", func(ctx context.Context, args []string) bool { s.handleCmdLookup(ctx, args); return true }, []string{"item", "spell", "creature", "npc", "tele", "quest"}, nil)
 	root.add("server", func(ctx context.Context, args []string) bool { s.handleCmdServer(ctx, args); return true }, []string{"info", "motd", "restart", "shutdown"}, nil)
-	root.add("character", func(ctx context.Context, args []string) bool { s.handleCmdCharacter(ctx, args); return true }, []string{"level", "rename", "customize", "changefaction", "changerace"}, map[string]string{"char": "character"})
+	root.add("character", func(ctx context.Context, args []string) bool { s.handleCmdCharacter(ctx, args); return true }, []string{"customize", "changefaction", "changerace", "changeaccount", "deleted", "erase", "level", "rename", "reputation", "titles"}, map[string]string{"char": "character"})
+	root.add("levelup", func(ctx context.Context, args []string) bool { s.handleCmdLevelup(ctx, args); return true }, nil, nil)
+	root.add("pdump", func(ctx context.Context, args []string) bool { s.handleCmdPDump(ctx, args); return true }, []string{"copy", "load", "write"}, nil)
 	root.add("account", func(ctx context.Context, args []string) bool { s.handleCmdAccount(ctx, args); return true }, []string{"set", "password", "addon", "email", "lock"}, map[string]string{"acct": "account"})
 	root.add("achievement", func(ctx context.Context, args []string) bool { s.handleCmdAchievement(ctx, args); return true }, []string{"add"}, nil)
 	root.add("arena", func(ctx context.Context, args []string) bool { s.handleCmdArena(ctx, args); return true }, []string{"create", "disband", "rename", "captain", "info", "lookup"}, nil)

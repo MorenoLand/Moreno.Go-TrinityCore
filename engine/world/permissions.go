@@ -141,6 +141,57 @@ const permissionCommandCastTarget uint32 = 271
 // permissionCommandCastDest mirrors rbac::RBAC_PERM_COMMAND_CAST_DEST (RBAC.h:186).
 const permissionCommandCastDest uint32 = 272
 
+// permissionCommandCharacterCustomize mirrors rbac::RBAC_PERM_COMMAND_CHARACTER_CUSTOMIZE (RBAC.h:188).
+const permissionCommandCharacterCustomize uint32 = 274
+
+// permissionCommandCharacterChangeFaction mirrors rbac::RBAC_PERM_COMMAND_CHARACTER_CHANGEFACTION (RBAC.h:189).
+const permissionCommandCharacterChangeFaction uint32 = 275
+
+// permissionCommandCharacterChangeRace mirrors rbac::RBAC_PERM_COMMAND_CHARACTER_CHANGERACE (RBAC.h:190).
+const permissionCommandCharacterChangeRace uint32 = 276
+
+// permissionCommandCharacterDeletedDelete mirrors rbac::RBAC_PERM_COMMAND_CHARACTER_DELETED_DELETE (RBAC.h:192).
+const permissionCommandCharacterDeletedDelete uint32 = 278
+
+// permissionCommandCharacterDeletedList mirrors rbac::RBAC_PERM_COMMAND_CHARACTER_DELETED_LIST (RBAC.h:193).
+const permissionCommandCharacterDeletedList uint32 = 279
+
+// permissionCommandCharacterDeletedRestore mirrors rbac::RBAC_PERM_COMMAND_CHARACTER_DELETED_RESTORE (RBAC.h:194).
+const permissionCommandCharacterDeletedRestore uint32 = 280
+
+// permissionCommandCharacterDeletedOld mirrors rbac::RBAC_PERM_COMMAND_CHARACTER_DELETED_OLD (RBAC.h:195).
+const permissionCommandCharacterDeletedOld uint32 = 281
+
+// permissionCommandCharacterErase mirrors rbac::RBAC_PERM_COMMAND_CHARACTER_ERASE (RBAC.h:196).
+const permissionCommandCharacterErase uint32 = 282
+
+// permissionCommandCharacterLevel mirrors rbac::RBAC_PERM_COMMAND_CHARACTER_LEVEL (RBAC.h:197).
+const permissionCommandCharacterLevel uint32 = 283
+
+// permissionCommandCharacterRename mirrors rbac::RBAC_PERM_COMMAND_CHARACTER_RENAME (RBAC.h:198).
+const permissionCommandCharacterRename uint32 = 284
+
+// permissionCommandCharacterReputation mirrors rbac::RBAC_PERM_COMMAND_CHARACTER_REPUTATION (RBAC.h:199).
+const permissionCommandCharacterReputation uint32 = 285
+
+// permissionCommandCharacterTitles mirrors rbac::RBAC_PERM_COMMAND_CHARACTER_TITLES (RBAC.h:200).
+const permissionCommandCharacterTitles uint32 = 286
+
+// permissionCommandLevelup mirrors rbac::RBAC_PERM_COMMAND_LEVELUP (RBAC.h:201).
+const permissionCommandLevelup uint32 = 287
+
+// permissionCommandPDumpLoad mirrors rbac::RBAC_PERM_COMMAND_PDUMP_LOAD (RBAC.h:203).
+const permissionCommandPDumpLoad uint32 = 289
+
+// permissionCommandPDumpWrite mirrors rbac::RBAC_PERM_COMMAND_PDUMP_WRITE (RBAC.h:204).
+const permissionCommandPDumpWrite uint32 = 290
+
+// permissionCommandCharacterChangeAccount mirrors rbac::RBAC_PERM_COMMAND_CHARACTER_CHANGEACCOUNT (RBAC.h:566).
+const permissionCommandCharacterChangeAccount uint32 = 698
+
+// permissionCommandPDumpCopy mirrors rbac::RBAC_PERM_COMMAND_PDUMP_COPY (RBAC.h:745).
+const permissionCommandPDumpCopy uint32 = 880
+
 // permissionReceiveGlobalGMTextMessage mirrors rbac::RBAC_PERM_RECEIVE_GLOBAL_GM_TEXTMESSAGE (RBAC.h:97).
 const permissionReceiveGlobalGMTextMessage uint32 = 44
 
