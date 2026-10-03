@@ -348,9 +348,8 @@ func (s *session) spellModAffectsSpell(modSpellID uint32, mask [3]uint32, op uin
 // holds the taking window, applied mods register on its context
 // (ApplyModToSpell, Player.cpp:21415-21426). The nil-spell semantics are
 // C++-exact outside the window; inside it, the HasSpellModApplied-gated PCT
-// terms for SPELLMOD_CRITICAL_CHANCE / SPELLMOD_GLOBAL_COOLDOWN stay skipped
-// (Surge of Light / Backdraft ordering needs the per-mod application order,
-// a follow-up unit).
+// terms for SPELLMOD_CRITICAL_CHANCE / SPELLMOD_GLOBAL_COOLDOWN engage
+// (Surge of Light / Backdraft per-mod application ordering).
 func (s *session) applySpellMod(spell wotlk.Spell, op uint8, basevalue int32) int32 {
 	if s == nil || s.server == nil || s.server.Data == nil || op >= spellModOpCount {
 		return basevalue
@@ -420,8 +419,19 @@ func (s *session) spellModTotals(spell wotlk.Spell, op uint8, instantBaseOK bool
 			if op == spellModCastingTime && c.value <= -100 && instantBaseOK {
 				return
 			}
-			if op == spellModCriticalChance || op == spellModGlobalCooldown {
-				return
+			// Player::ApplySpellMod PCT special cases (Player.cpp:21328-21337):
+			// HasSpellModApplied (Player.cpp:21429-21434) reads the taking
+			// cast's applied-mods registry — the live taking context here.
+			// A PCT critical-chance mod applies only when the same mod
+			// already registered on this cast (Surge of Light: an earlier
+			// leg of the cast, not a mid-cast proc); a PCT GCD mod likewise
+			// (Backdraft: only when its cast-time reduction leg applied
+			// first). With no taking window the nil-spell semantics give
+			// false, so the mods are skipped exactly as in C++ prepare-time.
+			if !s.spellModTakingApplied(taking, c.owner) {
+				if op == spellModCriticalChance || op == spellModGlobalCooldown {
+					return
+				}
 			}
 			totalMul += float64(c.value) / 100.0
 		}

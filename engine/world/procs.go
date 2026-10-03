@@ -1930,7 +1930,14 @@ func (s *session) checkEffectProc(aura *activeAura, eff *wotlk.SpellEffect, ev p
 // fires each eligible aura effect's trigger spell on triggerTargetGUID
 // (Aura::TriggerProcOnEvent, SpellAuras.cpp:2192-2212, calls
 // AuraEffect::HandleProc per effect in the proc effect mask,
-// SpellAuraEffects.cpp:1010-1043).
+// SpellAuraEffects.cpp:1010-1043). No bridge for the modOwner arm of
+// Unit::ProcDamageAndSpellFor (Unit.cpp:10395-10408): "needed for example
+// for Cobra Strikes, pet does the attack, but aura is on owner" — the
+// spell-mod owner's auras whose base sits in the proc spell's
+// m_appliedMods join the triggering set. Go pet attacks
+// (executePetMeleeAttack, pet_combat.go) never enter the proc system and
+// there is no GetSpellModOwner model, so the filter has no event to attach
+// to; it engages with pet proc events as a whole.
 func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uint64, ev procEventInfo) {
 	if s == nil || s.player == nil || len(s.activeAuras) == 0 {
 		return
@@ -1949,6 +1956,25 @@ func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uin
 		}
 		if entry.Charges > 0 && aura.RemainingCharges == 0 {
 			continue
+		}
+		// C++ Aura::GetProcEffectMask (SpellAuras.cpp:2082-2086): a
+		// charge-using aura with PROC_ATTR_REQ_SPELLMOD only procs when the
+		// triggering spell's applied-mods registry holds the aura. The Go
+		// registry is the innermost live taking context of the cast whose
+		// phase is firing this event (each Go cast opens its own context,
+		// matching the per-Spell m_appliedMods; nested triggered casts see
+		// their own). With no proc spell or no live window the check fails,
+		// matching an empty m_appliedMods. Documented delta: delayed-phase
+		// events run in the arrival closure's fresh registry, so a
+		// REQ_SPELLMOD aura whose mods were applied at cast time does not
+		// fire there — C++ keeps the same Spell object across the phases.
+		if entry.AttributesMask&procAttrReqSpellmod != 0 {
+			if ev.eventSpell == nil {
+				continue
+			}
+			if !s.spellModTakingApplied(s.spellModTakingCurrent(), aura) {
+				continue
+			}
 		}
 		if !canSpellTriggerProcOnEvent(entry, ev) {
 			continue
