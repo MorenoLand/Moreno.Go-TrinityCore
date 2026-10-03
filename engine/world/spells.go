@@ -47,6 +47,9 @@ const (
 	spellAttr6DontConsumeProcCharges      uint32 = 0x00000020 // SPELL_ATTR6_DONT_CONSUME_PROC_CHARGES (SharedDefines.h:639) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr4NotStealable                uint32 = 0x00000040 // SPELL_ATTR4_NOT_STEALABLE (SharedDefines.h:566) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4FixedDamage                 uint32 = 0x00000100 // SPELL_ATTR4_FIXED_DAMAGE (SharedDefines.h:568) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
+	spellAttr4NotUsableInArena            uint32 = 0x00010000 // SPELL_ATTR4_NOT_USABLE_IN_ARENA (SharedDefines.h:576) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
+	spellAttr4UsableInArena               uint32 = 0x00020000 // SPELL_ATTR4_USABLE_IN_ARENA (SharedDefines.h:577) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
+	spellAttr3Battleground                uint32 = 0x00000800 // SPELL_ATTR3_BATTLEGROUND (SharedDefines.h:534) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 	spellAttr4TreatAsDelayed              uint32 = 0x00000010 // SPELL_ATTR4_UNK4 "Treat as delayed spell" (SharedDefines.h:564) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4ProcOnlyOnCaster            uint32 = 0x00000002 // SPELL_ATTR4_PROC_ONLY_ON_CASTER (SharedDefines.h:561) "Only proc on self-cast" — ATTR4 is Go's AttributesEx4
 	targetUnitCaster                      uint32 = 1          // TARGET_UNIT_CASTER (SharedDefines.h:1442)
@@ -104,6 +107,8 @@ const (
 	spellFailedNotKnown                  uint8 = 63  // SPELL_FAILED_NOT_KNOWN (SharedDefines.h:1045)
 	spellFailedItemEnchantTradeWindow    uint8 = 182 // SPELL_FAILED_ITEM_ENCHANT_TRADE_WINDOW (SharedDefines.h:1164)
 	spellFailedAuraBounced               uint8 = 9   // SPELL_FAILED_AURA_BOUNCED (SharedDefines.h:991)
+	spellFailedOnlyBattlegrounds         uint8 = 142 // SPELL_FAILED_ONLY_BATTLEGROUNDS (SharedDefines.h:1124)
+	spellFailedNotInArena                uint8 = 151 // SPELL_FAILED_NOT_IN_ARENA (SharedDefines.h:1133)
 
 	spellImplicitTargetUnitPet uint32 = 5 // TARGET_UNIT_PET (SharedDefines.h:1446)
 
@@ -659,6 +664,35 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "category cooldown active", "category", categoryID)
 				return true
 			}
+		}
+	}
+	// CheckCast battleground gate (Spell::CheckCast, Spell.cpp:5433-5437): client-initiated
+	// casts only — this path is the client path; the TYPEID_PLAYER arm is vacuous
+	// (the session is always a player). Player::InBattleground is
+	// m_bgData.bgInstanceID != 0 (Player.h:1906), mirrored by s.bgData.InstanceID
+	// (character_battleground_data).
+	if spell.AttributesEx3&spellAttr3Battleground != 0 && s.bgData.InstanceID == 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOnlyBattlegrounds), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not in battleground")
+		return true
+	}
+	// CheckCast arena gate (Spell::CheckCast, Spell.cpp:5439-5447): spells flagged
+	// SPELL_ATTR4_NOT_USABLE_IN_ARENA, or with a recovery time over 10 minutes
+	// without SPELL_ATTR4_USABLE_IN_ARENA, cannot be cast in arenas.
+	// GetRecoveryTime is max(RecoveryTime, CategoryRecoveryTime)
+	// (SpellInfo.cpp:3149-3152); the 10-minute threshold is 10 * MINUTE * IN_MILLISECONDS.
+	// The arena test is the caster's Map.dbc entry being a battle arena
+	// (MapEntry.IsBattleArena, InstanceType = 4), looked up like sMapStore.
+	recoveryTime := spell.RecoveryTime
+	if spell.CategoryRecoveryTime > recoveryTime {
+		recoveryTime = spell.CategoryRecoveryTime
+	}
+	if spell.AttributesEx4&spellAttr4NotUsableInArena != 0 ||
+		(recoveryTime > 10*60*1000 && spell.AttributesEx4&spellAttr4UsableInArena == 0) {
+		if entry, found, err := s.server.Data.Map(s.player.Map); err == nil && found && entry.IsBattleArena() {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotInArena), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not usable in arena")
+			return true
 		}
 	}
 	// CheckCast mounted gate (Spell::CheckCast, Spell.cpp:5477-5488): client-initiated
