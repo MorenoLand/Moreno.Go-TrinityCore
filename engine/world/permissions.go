@@ -1095,6 +1095,27 @@ const permissionCommandQuestRemove uint32 = 605
 // permissionCommandQuestReward mirrors rbac::RBAC_PERM_COMMAND_QUEST_REWARD (RBAC.h:474).
 const permissionCommandQuestReward uint32 = 606
 
+// permissionCommandRBAC mirrors rbac::RBAC_PERM_COMMAND_RBAC (RBAC.h:114).
+const permissionCommandRBAC uint32 = 200
+
+// permissionCommandRBACAcc mirrors rbac::RBAC_PERM_COMMAND_RBAC_ACC (RBAC.h:115).
+const permissionCommandRBACAcc uint32 = 201
+
+// permissionCommandRBACAccPermList mirrors rbac::RBAC_PERM_COMMAND_RBAC_ACC_PERM_LIST (RBAC.h:116).
+const permissionCommandRBACAccPermList uint32 = 202
+
+// permissionCommandRBACAccPermGrant mirrors rbac::RBAC_PERM_COMMAND_RBAC_ACC_PERM_GRANT (RBAC.h:117).
+const permissionCommandRBACAccPermGrant uint32 = 203
+
+// permissionCommandRBACAccPermDeny mirrors rbac::RBAC_PERM_COMMAND_RBAC_ACC_PERM_DENY (RBAC.h:118).
+const permissionCommandRBACAccPermDeny uint32 = 204
+
+// permissionCommandRBACAccPermRevoke mirrors rbac::RBAC_PERM_COMMAND_RBAC_ACC_PERM_REVOKE (RBAC.h:119).
+const permissionCommandRBACAccPermRevoke uint32 = 205
+
+// permissionCommandRBACList mirrors rbac::RBAC_PERM_COMMAND_RBAC_LIST (RBAC.h:120).
+const permissionCommandRBACList uint32 = 206
+
 // permissionCommandPet mirrors rbac::RBAC_PERM_COMMAND_PET (RBAC.h:347).
 const permissionCommandPet uint32 = 479
 
