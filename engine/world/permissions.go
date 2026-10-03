@@ -1079,3 +1079,18 @@ const permissionCommandNPCDespawnGroup uint32 = 857
 
 // permissionCommandNPCShowLoot mirrors rbac::RBAC_PERM_COMMAND_NPC_SHOWLOOT (RBAC.h:732).
 const permissionCommandNPCShowLoot uint32 = 865
+
+// permissionCommandPet mirrors rbac::RBAC_PERM_COMMAND_PET (RBAC.h:347).
+const permissionCommandPet uint32 = 479
+
+// permissionCommandPetCreate mirrors rbac::RBAC_PERM_COMMAND_PET_CREATE (RBAC.h:348).
+const permissionCommandPetCreate uint32 = 480
+
+// permissionCommandPetLearn mirrors rbac::RBAC_PERM_COMMAND_PET_LEARN (RBAC.h:349).
+const permissionCommandPetLearn uint32 = 481
+
+// permissionCommandPetUnlearn mirrors rbac::RBAC_PERM_COMMAND_PET_UNLEARN (RBAC.h:350).
+const permissionCommandPetUnlearn uint32 = 482
+
+// permissionCommandPetLevel mirrors rbac::RBAC_PERM_COMMAND_PET_LEVEL (RBAC.h:705).
+const permissionCommandPetLevel uint32 = 838
