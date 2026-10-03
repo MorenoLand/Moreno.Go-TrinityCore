@@ -4907,30 +4907,6 @@ func (s *session) handleEventStop(ctx context.Context, args []string) {
 	s.sendSysMessage("event stop is not supported: GameEventMgr stop/unapply machinery is unported.")
 }
 
-func (s *session) handleCmdNPC(ctx context.Context, args []string) {
-	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .npc add <entry> | .npc info | .npc say <text> | .npc yell <text>")
-		return
-	}
-	sub := strings.ToLower(args[0])
-	switch sub {
-	case "info":
-		s.sendSysMessage(fmt.Sprintf("Target selection: %d", s.selection))
-	case "say":
-		if len(args) > 1 {
-			msg := strings.Join(args[1:], " ")
-			s.server.broadcastChat(s, nil, chatSay, 0, msg, "")
-		}
-	case "yell":
-		if len(args) > 1 {
-			msg := strings.Join(args[1:], " ")
-			s.server.broadcastChat(s, nil, chatYell, 0, msg, "")
-		}
-	default:
-		s.sendSysMessage(fmt.Sprintf("NPC command %s accepted.", sub))
-	}
-}
-
 // persistExtraFlags writes extra_flags immediately so GM mode survives
 // restarts the way TrinityCore's SaveToDB round-trip does.
 func (s *session) persistExtraFlags() {
@@ -6162,7 +6138,6 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("deserter", func(ctx context.Context, args []string) bool { s.handleCmdDeserter(ctx, args); return true }, []string{"instance", "bg"}, nil)
 	root.add("disable", func(ctx context.Context, args []string) bool { s.handleCmdDisable(ctx, args); return true }, []string{"add", "remove"}, nil)
 	root.add("event", func(ctx context.Context, args []string) bool { s.handleCmdEvent(ctx, args); return true }, []string{"activelist", "start", "stop", "info"}, nil)
-	root.add("npc", func(ctx context.Context, args []string) bool { s.handleCmdNPC(ctx, args); return true }, []string{"info", "say", "yell"}, nil)
 	root.add("gobject", func(ctx context.Context, args []string) bool { s.handleCmdGObject(ctx, args); return true }, []string{"activate", "delete", "info", "move", "near", "target", "turn", "spawngroup", "despawngroup", "add", "add temp", "set phase", "set state"}, map[string]string{"gob": "gobject"})
 	root.add("group", func(ctx context.Context, args []string) bool { s.handleCmdGroup(ctx, args); return true }, []string{"set", "leader", "disband", "remove", "join", "list", "summon"}, nil)
 	root.add("guild", func(ctx context.Context, args []string) bool { s.handleCmdGuild(ctx, args); return true }, []string{"create", "delete", "invite", "uninvite", "rank", "rename", "info"}, nil)
@@ -6236,6 +6211,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("mmap", func(ctx context.Context, args []string) bool { s.handleCmdMMap(ctx, args); return true }, []string{"loadedtiles", "loc", "path", "stats", "testarea"}, nil)
 	root.add("morph", func(ctx context.Context, args []string) bool { s.handleCmdMorph(ctx, args); return true }, nil, nil)
 	root.add("demorph", func(ctx context.Context, args []string) bool { s.handleCmdDeMorph(ctx); return true }, nil, nil)
+	root.add("npc", func(ctx context.Context, args []string) bool { s.handleCmdNPC(ctx, args); return true }, []string{"add", "move", "delete", "near"}, nil)
 	return root
 }
 

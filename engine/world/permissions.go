@@ -974,3 +974,108 @@ const permissionCommandModifyTalentPoints uint32 = 569
 
 // permissionCommandModifyXP mirrors rbac::RBAC_PERM_COMMAND_MODIFY_XP (RBAC.h:666).
 const permissionCommandModifyXP uint32 = 798
+
+// permissionCommandNPCAdd mirrors rbac::RBAC_PERM_COMMAND_NPC_ADD (RBAC.h:439).
+const permissionCommandNPCAdd uint32 = 571
+
+// permissionCommandNPCAddFormation mirrors rbac::RBAC_PERM_COMMAND_NPC_ADD_FORMATION (RBAC.h:440).
+const permissionCommandNPCAddFormation uint32 = 572
+
+// permissionCommandNPCAddItem mirrors rbac::RBAC_PERM_COMMAND_NPC_ADD_ITEM (RBAC.h:441).
+const permissionCommandNPCAddItem uint32 = 573
+
+// permissionCommandNPCAddMove mirrors rbac::RBAC_PERM_COMMAND_NPC_ADD_MOVE (RBAC.h:442).
+const permissionCommandNPCAddMove uint32 = 574
+
+// permissionCommandNPCAddTemp mirrors rbac::RBAC_PERM_COMMAND_NPC_ADD_TEMP (RBAC.h:443).
+const permissionCommandNPCAddTemp uint32 = 575
+
+// permissionCommandNPCDelete mirrors rbac::RBAC_PERM_COMMAND_NPC_DELETE (RBAC.h:444).
+const permissionCommandNPCDelete uint32 = 576
+
+// permissionCommandNPCDeleteItem mirrors rbac::RBAC_PERM_COMMAND_NPC_DELETE_ITEM (RBAC.h:445).
+const permissionCommandNPCDeleteItem uint32 = 577
+
+// permissionCommandNPCFollow mirrors rbac::RBAC_PERM_COMMAND_NPC_FOLLOW (RBAC.h:446).
+const permissionCommandNPCFollow uint32 = 578
+
+// permissionCommandNPCFollowStop mirrors rbac::RBAC_PERM_COMMAND_NPC_FOLLOW_STOP (RBAC.h:447).
+const permissionCommandNPCFollowStop uint32 = 579
+
+// permissionCommandNPCSet mirrors rbac::RBAC_PERM_COMMAND_NPC_SET (RBAC.h:448).
+const permissionCommandNPCSet uint32 = 580
+
+// permissionCommandNPCSetAllowMove mirrors rbac::RBAC_PERM_COMMAND_NPC_SET_ALLOWMOVE (RBAC.h:449).
+const permissionCommandNPCSetAllowMove uint32 = 581
+
+// permissionCommandNPCSetEntry mirrors rbac::RBAC_PERM_COMMAND_NPC_SET_ENTRY (RBAC.h:450).
+const permissionCommandNPCSetEntry uint32 = 582
+
+// permissionCommandNPCSetFactionID mirrors rbac::RBAC_PERM_COMMAND_NPC_SET_FACTIONID (RBAC.h:451).
+const permissionCommandNPCSetFactionID uint32 = 583
+
+// permissionCommandNPCSetFlag mirrors rbac::RBAC_PERM_COMMAND_NPC_SET_FLAG (RBAC.h:452).
+const permissionCommandNPCSetFlag uint32 = 584
+
+// permissionCommandNPCSetLevel mirrors rbac::RBAC_PERM_COMMAND_NPC_SET_LEVEL (RBAC.h:453).
+const permissionCommandNPCSetLevel uint32 = 585
+
+// permissionCommandNPCSetLink mirrors rbac::RBAC_PERM_COMMAND_NPC_SET_LINK (RBAC.h:454).
+const permissionCommandNPCSetLink uint32 = 586
+
+// permissionCommandNPCSetModel mirrors rbac::RBAC_PERM_COMMAND_NPC_SET_MODEL (RBAC.h:455).
+const permissionCommandNPCSetModel uint32 = 587
+
+// permissionCommandNPCSetMoveType mirrors rbac::RBAC_PERM_COMMAND_NPC_SET_MOVETYPE (RBAC.h:456).
+const permissionCommandNPCSetMoveType uint32 = 588
+
+// permissionCommandNPCSetPhase mirrors rbac::RBAC_PERM_COMMAND_NPC_SET_PHASE (RBAC.h:457).
+const permissionCommandNPCSetPhase uint32 = 589
+
+// permissionCommandNPCSetSpawnDist mirrors rbac::RBAC_PERM_COMMAND_NPC_SET_SPAWNDIST (RBAC.h:458).
+const permissionCommandNPCSetSpawnDist uint32 = 590
+
+// permissionCommandNPCSetSpawnTime mirrors rbac::RBAC_PERM_COMMAND_NPC_SET_SPAWNTIME (RBAC.h:459).
+const permissionCommandNPCSetSpawnTime uint32 = 591
+
+// permissionCommandNPCSetData mirrors rbac::RBAC_PERM_COMMAND_NPC_SET_DATA (RBAC.h:460).
+const permissionCommandNPCSetData uint32 = 592
+
+// permissionCommandNPCInfo mirrors rbac::RBAC_PERM_COMMAND_NPC_INFO (RBAC.h:461).
+const permissionCommandNPCInfo uint32 = 593
+
+// permissionCommandNPCNear mirrors rbac::RBAC_PERM_COMMAND_NPC_NEAR (RBAC.h:462).
+const permissionCommandNPCNear uint32 = 594
+
+// permissionCommandNPCMove mirrors rbac::RBAC_PERM_COMMAND_NPC_MOVE (RBAC.h:463).
+const permissionCommandNPCMove uint32 = 595
+
+// permissionCommandNPCPlayEmote mirrors rbac::RBAC_PERM_COMMAND_NPC_PLAYEMOTE (RBAC.h:464).
+const permissionCommandNPCPlayEmote uint32 = 596
+
+// permissionCommandNPCSay mirrors rbac::RBAC_PERM_COMMAND_NPC_SAY (RBAC.h:465).
+const permissionCommandNPCSay uint32 = 597
+
+// permissionCommandNPCTextEmote mirrors rbac::RBAC_PERM_COMMAND_NPC_TEXTEMOTE (RBAC.h:466).
+const permissionCommandNPCTextEmote uint32 = 598
+
+// permissionCommandNPCWhisper mirrors rbac::RBAC_PERM_COMMAND_NPC_WHISPER (RBAC.h:467).
+const permissionCommandNPCWhisper uint32 = 599
+
+// permissionCommandNPCYell mirrors rbac::RBAC_PERM_COMMAND_NPC_YELL (RBAC.h:468).
+const permissionCommandNPCYell uint32 = 600
+
+// permissionCommandNPCTame mirrors rbac::RBAC_PERM_COMMAND_NPC_TAME (RBAC.h:469).
+const permissionCommandNPCTame uint32 = 601
+
+// permissionCommandNPCEvade mirrors rbac::RBAC_PERM_COMMAND_NPC_EVADE (RBAC.h:704).
+const permissionCommandNPCEvade uint32 = 837
+
+// permissionCommandNPCSpawnGroup mirrors rbac::RBAC_PERM_COMMAND_NPC_SPAWNGROUP (RBAC.h:723).
+const permissionCommandNPCSpawnGroup uint32 = 856
+
+// permissionCommandNPCDespawnGroup mirrors rbac::RBAC_PERM_COMMAND_NPC_DESPAWNGROUP (RBAC.h:724).
+const permissionCommandNPCDespawnGroup uint32 = 857
+
+// permissionCommandNPCShowLoot mirrors rbac::RBAC_PERM_COMMAND_NPC_SHOWLOOT (RBAC.h:732).
+const permissionCommandNPCShowLoot uint32 = 865
