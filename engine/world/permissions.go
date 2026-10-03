@@ -1284,6 +1284,30 @@ const permissionCommandTitlesSet uint32 = 765
 // permissionCommandTitlesSetMask mirrors rbac::RBAC_PERM_COMMAND_TITLES_SET_MASK (RBAC.h:634).
 const permissionCommandTitlesSetMask uint32 = 766
 
+// permissionCommandWp mirrors rbac::RBAC_PERM_COMMAND_WP (RBAC.h:635).
+const permissionCommandWp uint32 = 767
+
+// permissionCommandWpAdd mirrors rbac::RBAC_PERM_COMMAND_WP_ADD (RBAC.h:636).
+const permissionCommandWpAdd uint32 = 768
+
+// permissionCommandWpEvent mirrors rbac::RBAC_PERM_COMMAND_WP_EVENT (RBAC.h:637).
+const permissionCommandWpEvent uint32 = 769
+
+// permissionCommandWpLoad mirrors rbac::RBAC_PERM_COMMAND_WP_LOAD (RBAC.h:638).
+const permissionCommandWpLoad uint32 = 770
+
+// permissionCommandWpModify mirrors rbac::RBAC_PERM_COMMAND_WP_MODIFY (RBAC.h:639).
+const permissionCommandWpModify uint32 = 771
+
+// permissionCommandWpUnload mirrors rbac::RBAC_PERM_COMMAND_WP_UNLOAD (RBAC.h:640).
+const permissionCommandWpUnload uint32 = 772
+
+// permissionCommandWpReload mirrors rbac::RBAC_PERM_COMMAND_WP_RELOAD (RBAC.h:641).
+const permissionCommandWpReload uint32 = 773
+
+// permissionCommandWpShow mirrors rbac::RBAC_PERM_COMMAND_WP_SHOW (RBAC.h:642).
+const permissionCommandWpShow uint32 = 774
+
 // permissionCommandReload mirrors rbac::RBAC_PERM_COMMAND_RELOAD (RBAC.h).
 const permissionCommandReload uint32 = 607
 
