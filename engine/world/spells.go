@@ -1352,6 +1352,19 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// Periodic mana-leech gate (Spell::CheckCast ApplyAuraName switch,
+	// Spell.cpp:6136-6147): an aura-64 (SPELL_AURA_PERIODIC_MANA_LEECH)
+	// non-area effect fails with SPELL_FAILED_BAD_IMPLICIT_TARGETS when
+	// the wire target carries no unit, and with
+	// SPELL_FAILED_BAD_TARGETS when the unit target does not use mana.
+	// C++ relative order places this leg immediately after the
+	// SPELL_AURA_FLY leg in the ApplyAuraName switch.
+	if failure := s.checkPeriodicManaLeechCast(spell, target); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "periodic-mana-leech validation", "failure", failure)
+		return true
+	}
+
 	// Unit::SetCurrentCastSpell (Unit.cpp:3064-3090): registering the new cast
 	// breaks the other containers. A generic cast breaks the active channel
 	// ("generic spells always break channeled not delayed spells") and any
@@ -2802,6 +2815,58 @@ func (s *session) checkFlyCast(spell wotlk.Spell) uint8 {
 	s.server.wgMu.RUnlock()
 	if wg != nil && wg.ZoneID == s.player.Zone && !wg.wgCanFlyIn() {
 		return spellFailedNotHere
+	}
+	return 0
+}
+
+// checkPeriodicManaLeechCast mirrors the SPELL_AURA_PERIODIC_MANA_LEECH
+// leg of the CheckCast ApplyAuraName switch (Spell.cpp:6136-6147): a
+// non-area mana-leech aura effect fails with
+// SPELL_FAILED_BAD_IMPLICIT_TARGETS when the wire target carries no unit,
+// and with SPELL_FAILED_BAD_TARGETS when the unit target's power type is not
+// POWER_MANA (0, SharedDefines.h:295). The IsTargetingArea skip bridges
+// SpellEffectInfo::IsTargetingArea (SpellInfo.cpp:380-383 — selection
+// category AREA or CONE) via the enemy/friendly area target-type lists plus
+// the friendly cone list. The caster-TYPEID_PLAYER arm is vacuous on the
+// client path (session always a player), and handleCastSpell passes no cast
+// item (verified at checkOpenLockCast — m_CastItem is always nil here), so
+// the mana gate always applies once the effect and unit target resolve.
+// Player targets read the shapeshift-aware playerPowerType (shapeshift.go);
+// creature targets read the motion PowerType — reusing unitTargetPowerType,
+// the same bridge as checkPowerBurnDrainCast. C++ gates only when
+// GetUnitTarget() yields a unit, so unresolvable GUIDs skip the power check
+// (pets have no power-type model). Returns the SPELL_FAILED_* result code, 0
+// on success. Neither result carries extra WriteCastResultInfo params, so
+// castFailedExtParams needs no case (verified Spell.cpp:3974-4160).
+func (s *session) checkPeriodicManaLeechCast(spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
+	matched := false
+	for _, eff := range spell.Effects {
+		if eff.Aura != spellAuraPeriodicManaLeech {
+			continue
+		}
+		if isAreaEnemyTargetType(eff.ImplicitTargetA) || isAreaEnemyTargetType(eff.ImplicitTargetB) ||
+			isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB) ||
+			isFriendlyConeTargetType(eff.ImplicitTargetA) || isFriendlyConeTargetType(eff.ImplicitTargetB) {
+			continue
+		}
+		matched = true
+		break
+	}
+	if !matched {
+		return 0
+	}
+	if target.Flags&protocol.SpellTargetFlagUnitWireMask == 0 || target.UnitGUID == 0 {
+		return spellFailedBadImplicitTargets
+	}
+	targetPower, ok := s.unitTargetPowerType(target.UnitGUID)
+	if !ok {
+		return 0
+	}
+	if targetPower != 0 { // POWER_MANA
+		return spellFailedBadTargets
 	}
 	return 0
 }
