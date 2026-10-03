@@ -12311,6 +12311,38 @@ func (s *session) itemInstanceCount(ctx context.Context, instanceGUID uint64) ui
 	return count
 }
 
+// isEquippedItemBroken reports whether the item equipped in the given equipment
+// slot is broken: Item::IsBroken (Item.h:105) = MAXDURABILITY > 0 && DURABILITY == 0.
+// Bridges the `item->IsBroken()` arm of the tail weapon block of
+// Spell::CheckItems (Spell.cpp:7216). Missing rows or query errors are
+// permissive (the terrain.go convention).
+func (s *session) isEquippedItemBroken(ctx context.Context, slot uint8) bool {
+	if s == nil || s.player == nil || s.server == nil {
+		return false
+	}
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return false
+	}
+	var durability, entry int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		`SELECT ii.durability, ii.itemEntry FROM character_inventory AS ci
+		 JOIN item_instance AS ii ON ii.guid = ci.item
+		 WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot = ? LIMIT 1`,
+		s.playerGUID, slot).Scan(&durability, &entry); err != nil || entry <= 0 {
+		return false
+	}
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	var maxDurability int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx,
+		"SELECT COALESCE(MaxDurability, 0) FROM item_template WHERE entry = ?",
+		entry).Scan(&maxDurability); err != nil {
+		return false
+	}
+	return maxDurability > 0 && durability == 0
+}
+
 // checkSpellEquippedItemRequirements validates equipped weapon and armor requirements for spells before cast execution.
 // References: TrinityCore Spell::CheckCast (Spell.cpp:6768-6775, 7206-7237) and Player::HasItemFitToSpellRequirements (Player.cpp:23916-23969).
 func (s *session) checkSpellEquippedItemRequirements(ctx context.Context, spell wotlk.Spell) (uint8, bool) {
@@ -12318,10 +12350,15 @@ func (s *session) checkSpellEquippedItemRequirements(ctx context.Context, spell 
 		return 0, true
 	}
 
-	// 1. Main hand weapon requirement (SPELL_ATTR3_MAIN_HAND)
+	// 1. Main hand weapon requirement (SPELL_ATTR3_MAIN_HAND).
+	// The tail weapon block of CheckItems (Spell.cpp:7206-7226) rejects a
+	// missing or broken main-hand weapon before the fit check.
 	if spell.AttributesEx3&spellAttr3MainHand != 0 {
 		mainHandEntry := s.getEquipmentItem(equipSlotMainhand)
 		if mainHandEntry == 0 {
+			return spellFailedEquippedItemClass, false
+		}
+		if s.isEquippedItemBroken(ctx, equipSlotMainhand) {
 			return spellFailedEquippedItemClass, false
 		}
 		if info, ok := s.getItemTemplateClassInfo(ctx, mainHandEntry); ok {
@@ -12331,10 +12368,14 @@ func (s *session) checkSpellEquippedItemRequirements(ctx context.Context, spell 
 		}
 	}
 
-	// 2. Offhand weapon requirement (SPELL_ATTR3_REQ_OFFHAND)
+	// 2. Offhand weapon requirement (SPELL_ATTR3_REQ_OFFHAND).
+	// Same tail-weapon-block broken check as the main hand (Spell.cpp:7228-7235).
 	if spell.AttributesEx3&spellAttr3ReqOffhand != 0 {
 		offHandEntry := s.getEquipmentItem(equipSlotOffhand)
 		if offHandEntry == 0 {
+			return spellFailedEquippedItemClass, false
+		}
+		if s.isEquippedItemBroken(ctx, equipSlotOffhand) {
 			return spellFailedEquippedItemClass, false
 		}
 		if info, ok := s.getItemTemplateClassInfo(ctx, offHandEntry); ok {
