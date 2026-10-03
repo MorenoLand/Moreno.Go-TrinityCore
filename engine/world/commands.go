@@ -6338,6 +6338,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("unstuck", func(ctx context.Context, args []string) bool { s.handleCmdUnstuck(ctx, args); return true }, nil, nil)
 	root.add("wchange", func(ctx context.Context, args []string) bool { s.handleCmdChangeWeather(ctx, args); return true }, nil, nil)
 	root.add("mailbox", func(ctx context.Context, args []string) bool { s.handleCmdMailBox(ctx); return true }, nil, nil)
+	root.add("mmap", func(ctx context.Context, args []string) bool { s.handleCmdMMap(ctx, args); return true }, []string{"loadedtiles", "loc", "path", "stats", "testarea"}, nil)
 	return root
 }
 

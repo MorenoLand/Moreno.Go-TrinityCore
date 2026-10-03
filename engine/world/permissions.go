@@ -869,3 +869,21 @@ const permissionCommandsUseUnstuckWithArgs uint32 = 31
 
 // permissionResurrectWithFullHPS mirrors rbac::RBAC_PERM_RESURRECT_WITH_FULL_HPS (RBAC.h:91).
 const permissionResurrectWithFullHPS uint32 = 38
+
+// permissionCommandMMap mirrors rbac::RBAC_PERM_COMMAND_MMAP (RBAC.h:404).
+const permissionCommandMMap uint32 = 536
+
+// permissionCommandMMapLoadedTiles mirrors rbac::RBAC_PERM_COMMAND_MMAP_LOADEDTILES (RBAC.h:405).
+const permissionCommandMMapLoadedTiles uint32 = 537
+
+// permissionCommandMMapLoc mirrors rbac::RBAC_PERM_COMMAND_MMAP_LOC (RBAC.h:406).
+const permissionCommandMMapLoc uint32 = 538
+
+// permissionCommandMMapPath mirrors rbac::RBAC_PERM_COMMAND_MMAP_PATH (RBAC.h:407).
+const permissionCommandMMapPath uint32 = 539
+
+// permissionCommandMMapStats mirrors rbac::RBAC_PERM_COMMAND_MMAP_STATS (RBAC.h:408).
+const permissionCommandMMapStats uint32 = 540
+
+// permissionCommandMMapTestArea mirrors rbac::RBAC_PERM_COMMAND_MMAP_TESTAREA (RBAC.h:409).
+const permissionCommandMMapTestArea uint32 = 541
