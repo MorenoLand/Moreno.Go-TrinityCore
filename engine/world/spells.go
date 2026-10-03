@@ -7,6 +7,8 @@ import (
 	"math"
 	"math/rand/v2"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -129,6 +131,10 @@ const (
 	spellFailedItemAlreadyEnchanted      uint8 = 42  // SPELL_FAILED_ITEM_ALREADY_ENCHANTED (SharedDefines.h:1024)
 	spellFailedItemNotFound              uint8 = 44  // SPELL_FAILED_ITEM_NOT_FOUND (SharedDefines.h:1026)
 	spellFailedTooManyOfItem             uint8 = 129 // SPELL_FAILED_TOO_MANY_OF_ITEM (SharedDefines.h:1111)
+	spellFailedError                     uint8 = 32  // SPELL_FAILED_ERROR (SharedDefines.h:1014)
+	spellFailedNotTradeable              uint8 = 70  // SPELL_FAILED_NOT_TRADEABLE (SharedDefines.h:1052)
+	spellFailedOnUseEnchant              uint8 = 170 // SPELL_FAILED_ON_USE_ENCHANT (SharedDefines.h:1152)
+	spellFailedMaxSockets                uint8 = 184 // SPELL_FAILED_MAX_SOCKETS (SharedDefines.h:1166)
 	spellFailedAuraBounced               uint8 = 9   // SPELL_FAILED_AURA_BOUNCED (SharedDefines.h:991)
 	spellFailedNoComboPoints             uint8 = 78  // SPELL_FAILED_NO_COMBO_POINTS (SharedDefines.h:1060)
 	spellFailedOnlyBattlegrounds         uint8 = 142 // SPELL_FAILED_ONLY_BATTLEGROUNDS (SharedDefines.h:1124)
@@ -169,6 +175,21 @@ const (
 	// ItemSubclassTradeGoods vellum subclasses (ItemTemplate.h:444-445).
 	itemSubclassArmorEnchantment  = 14
 	itemSubclassWeaponEnchantment = 15
+
+	// SpellItemEnchantment.dbc layout (Spell.cpp:6946-6972).
+	itemEnchantTypeUseSpell      = 7 // ITEM_ENCHANTMENT_TYPE_USE_SPELL (DBCEnums.h:362)
+	itemEnchantTypePrismaticSock = 8 // ITEM_ENCHANTMENT_TYPE_PRISMATIC_SOCKET (DBCEnums.h:363)
+	enchantFlagCanSoulbound      = 0x01
+	// ENCHANTMENT_CAN_SOULBOUND (DBCEnums.h:394): the EnchantmentSlotMask bit
+	// that blocks enchanting a trade-window item.
+	maxItemProtoSockets   = 3 // MAX_ITEM_PROTO_SOCKETS (ItemTemplate.h:596)
+	maxItemEnchantEffects = 3 // MAX_ITEM_ENCHANTMENT_EFFECTS
+	prismaticEnchantIdx   = 18
+	// item_instance.enchantments index of the PRISMATIC_ENCHANTMENT_SLOT
+	// (slot 6, ItemDefines.h:152) id: 3 ints per slot, slots 0-5 first.
+	itemSpellTriggerOnUse        = 0 // ITEM_SPELLTRIGGER_ON_USE (ItemTemplate.h:80)
+	itemSpellTriggerOnNoDelayUse = 5 // ITEM_SPELLTRIGGER_ON_NO_DELAY_USE (ItemTemplate.h:90)
+	maxItemProtoSpells           = 5 // MAX_ITEM_PROTO_SPELLS
 
 	// InventoryType values (ItemTemplate.h:274, 282-283) for the
 	// IsFitToSpellRequirements enchant-spell weapon carve-out (Item.cpp:824).
@@ -1194,6 +1215,17 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if failReason := s.checkSpellCreateItemCast(ctx, spell, target); failReason != 0 {
 		s.sendCastFailed(ctx, castID, spell, failReason)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "created-item requirements not met", "failReason", failReason)
+		return true
+	}
+
+	// ENCHANT_ITEM / ENCHANT_ITEM_PRISMATIC arm of the Spell::CheckItems
+	// special-effects loop (Spell.cpp:6917-6994): runs right after the
+	// CREATE_ITEM arm, matching C++ CheckItems relative order (CREATE_ITEM
+	// 6864 → ENCHANT_ITEM 6917, fallthrough to ENCHANT_ITEM_PRISMATIC 6935).
+	// Client-initiated casts only — triggered casts go through castSpellDirect.
+	if failReason := s.checkSpellEnchantItemCast(ctx, spell, target); failReason != 0 {
+		s.sendCastFailed(ctx, castID, spell, failReason)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "enchant requirements not met", "failReason", failReason)
 		return true
 	}
 
@@ -11371,10 +11403,19 @@ func (s *session) tradeItemTargetCast(target protocol.SpellTargetData) bool {
 // itemStoreTemplateInfo carries the item_template columns the CheckItems
 // CREATE_ITEM arm needs: the max stack size (for the createCount clamp,
 // Spell.cpp:6881) and the item-limit category (for the conjure carve-out,
-// Spell.cpp:6887).
+// Spell.cpp:6887) — plus the columns the ENCHANT_ITEM / ENCHANT_ITEM_PRISMATIC
+// arms need: item/required level (the exploit-fix level gate,
+// Spell.cpp:6939), the socket colors (the prismatic-socket gate,
+// Spell.cpp:6958-6965) and the item-spell id/trigger pairs (the usable-item
+// scan, Spell.cpp:6943-6952).
 type itemStoreTemplateInfo struct {
 	Stackable     uint32
 	LimitCategory uint32
+	ItemLevel     uint32
+	RequiredLevel uint32
+	SocketColors  [3]uint32
+	SpellIDs      [5]uint32
+	SpellTriggers [5]uint32
 }
 
 // getItemStoreTemplateInfo is a cached item_template lookup for the
@@ -11397,12 +11438,31 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
 		return itemStoreTemplateInfo{}, false
 	}
-	var stackable, limitCategory uint32
-	err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(stackable, 1), COALESCE(ItemLimitCategory, 0) FROM item_template WHERE entry = ? LIMIT 1", entry).Scan(&stackable, &limitCategory)
+	var stackable, limitCategory, itemLevel, requiredLevel uint32
+	var socketColors [3]uint32
+	var spellIDs, spellTriggers [5]uint32
+	err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(stackable, 1), COALESCE(ItemLimitCategory, 0),
+		COALESCE(ItemLevel, 0), COALESCE(RequiredLevel, 0),
+		COALESCE(SocketColor_1, 0), COALESCE(SocketColor_2, 0), COALESCE(SocketColor_3, 0),
+		COALESCE(spellid_1, 0), COALESCE(spelltrigger_1, 0),
+		COALESCE(spellid_2, 0), COALESCE(spelltrigger_2, 0),
+		COALESCE(spellid_3, 0), COALESCE(spelltrigger_3, 0),
+		COALESCE(spellid_4, 0), COALESCE(spelltrigger_4, 0),
+		COALESCE(spellid_5, 0), COALESCE(spelltrigger_5, 0)
+		FROM item_template WHERE entry = ? LIMIT 1`, entry).Scan(
+		&stackable, &limitCategory, &itemLevel, &requiredLevel,
+		&socketColors[0], &socketColors[1], &socketColors[2],
+		&spellIDs[0], &spellTriggers[0],
+		&spellIDs[1], &spellTriggers[1],
+		&spellIDs[2], &spellTriggers[2],
+		&spellIDs[3], &spellTriggers[3],
+		&spellIDs[4], &spellTriggers[4])
 	if err != nil {
 		return itemStoreTemplateInfo{}, false
 	}
-	info := itemStoreTemplateInfo{Stackable: stackable, LimitCategory: limitCategory}
+	info := itemStoreTemplateInfo{Stackable: stackable, LimitCategory: limitCategory,
+		ItemLevel: itemLevel, RequiredLevel: requiredLevel,
+		SocketColors: socketColors, SpellIDs: spellIDs, SpellTriggers: spellTriggers}
 	s.itemStoreTemplateMu.Lock()
 	if s.itemStoreTemplates == nil {
 		s.itemStoreTemplates = make(map[uint32]itemStoreTemplateInfo)
@@ -11574,6 +11634,191 @@ func (s *session) checkSpellCreateItemCast(ctx context.Context, spell wotlk.Spel
 				s.castSpellDirect(ctx, uint32(tableSpell), s.playerGUID)
 			}
 			return spellFailedDontReport
+		}
+	}
+	return 0
+}
+
+// enchantItemTarget carries the resolution of the wire item target for the
+// ENCHANT_ITEM / ENCHANT_ITEM_PRISMATIC CheckItems arms: the template entry,
+// the item_instance guid (for reading enchantments), and whether the caster
+// owns the item (Item::GetOwner() == player — trade-window targets resolve
+// to the partner's non-traded slot item, which the caster does not own).
+type enchantItemTarget struct {
+	entry         uint32
+	instanceGUID  uint64
+	ownedByCaster bool
+}
+
+// resolveEnchantItemTarget mirrors SpellCastTargets::Update (Spell.cpp:462-478)
+// for the enchant arms: TARGET_FLAG_ITEM resolves through the player's own
+// inventory (the Player::GetItemByGuid arm, Player.cpp:9994-10024);
+// TARGET_FLAG_TRADE_ITEM carries the trade slot index rather than a GUID and
+// only TRADE_SLOT_NONTRADED (TradeData.h:27) resolves, to the partner's item.
+func (s *session) resolveEnchantItemTarget(ctx context.Context, target protocol.SpellTargetData) (enchantItemTarget, bool) {
+	if target.ItemGUID == 0 {
+		return enchantItemTarget{}, false
+	}
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return enchantItemTarget{}, false
+	}
+	cdb := s.server.CharactersStore.DB
+	switch {
+	case target.Flags&protocol.SpellTargetFlagItem != 0:
+		var found int64
+		if err := cdb.QueryRowContext(ctx,
+			`SELECT ii.itemEntry FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ci.item = ?`,
+			s.playerGUID, int64(target.ItemGUID)).Scan(&found); err != nil {
+			return enchantItemTarget{}, false
+		}
+		return enchantItemTarget{entry: uint32(found), instanceGUID: target.ItemGUID, ownedByCaster: true}, true
+	case target.Flags&protocol.SpellTargetFlagTradeItem != 0:
+		if target.ItemGUID != tradeSlotNonTraded || s.trade == nil ||
+			s.trade.Partner == nil || s.trade.Partner.trade == nil {
+			return enchantItemTarget{}, false
+		}
+		slotItem, ok := s.trade.Partner.trade.Items[uint8(tradeSlotNonTraded)]
+		if !ok || slotItem.ItemEntry == 0 {
+			return enchantItemTarget{}, false
+		}
+		return enchantItemTarget{entry: slotItem.ItemEntry, instanceGUID: slotItem.ItemGUID, ownedByCaster: false}, true
+	}
+	return enchantItemTarget{}, false
+}
+
+// enchantTargetPrismaticID reads the item_instance enchantments column and
+// returns the PRISMATIC_ENCHANTMENT_SLOT (slot 6, ItemDefines.h:152)
+// enchantment id — the GetEnchantmentId(PRISMATIC_ENCHANTMENT_SLOT) test
+// (Spell.cpp:6964). The column holds 36 space-separated ints, 3 per slot
+// (id, duration, charges), so slot 6's id is index 18. An unreadable column
+// behaves as no prismatic enchantment (terrain.go convention).
+func (s *session) enchantTargetPrismaticID(ctx context.Context, instanceGUID uint64) uint32 {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil ||
+		s.server.CharactersStore.DB == nil || instanceGUID == 0 {
+		return 0
+	}
+	var raw string
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		`SELECT COALESCE(enchantments, '') FROM item_instance WHERE guid = ? LIMIT 1`,
+		int64(instanceGUID)).Scan(&raw); err != nil {
+		return 0
+	}
+	fields := strings.Fields(raw)
+	if len(fields) <= prismaticEnchantIdx {
+		return 0
+	}
+	if id, err := strconv.ParseUint(fields[prismaticEnchantIdx], 10, 32); err == nil {
+		return uint32(id)
+	}
+	return 0
+}
+
+// checkSpellEnchantItemCast mirrors the SPELL_EFFECT_ENCHANT_ITEM /
+// SPELL_EFFECT_ENCHANT_ITEM_PRISMATIC arm of the Spell::CheckItems
+// special-effects loop (Spell.cpp:6917-6994). Returns the SpellCastResult
+// failure code, or 0 when the arm passes. Client-initiated casts only —
+// triggered casts go through castSpellDirect.
+func (s *session) checkSpellEnchantItemCast(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+	for i := 0; i < len(spell.Effects); i++ {
+		eff := spell.Effects[i]
+		isEnchant := eff.Effect == spellEffectEnchantItem
+		isPrismatic := eff.Effect == spellEffectEnchantItemPrismatic
+		if !isEnchant && !isPrismatic {
+			continue
+		}
+		t, resolved := s.resolveEnchantItemTarget(ctx, target)
+		// The ENCHANT_ITEM vellum sub-arm (Spell.cpp:6918-6933): the scroll
+		// (Effects[i].ItemType) is only created when a vellum is the target.
+		if isEnchant && eff.ItemType != 0 && resolved {
+			if classInfo, ok := s.getItemTemplateClassInfo(ctx, t.entry); ok &&
+				classInfo.Class == itemClassTradeGoods &&
+				(classInfo.SubClass == itemSubclassArmorEnchantment ||
+					classInfo.SubClass == itemSubclassWeaponEnchantment) {
+				// cannot enchant vellum for other player (Spell.cpp:6921-6922)
+				if !t.ownedByCaster {
+					return spellFailedNotTradeable
+				}
+				// The m_CastItem NO_REAGENT_COST exploit guard
+				// (Spell.cpp:6924-6925) is structural: handleCastSpell never
+				// carries a cast item (item casts run through handleUseItem).
+				// Room for the created scroll (Spell.cpp:6926-6932).
+				if msg := s.canStoreNewItem(ctx, s.playerGUID, eff.ItemType, 1); msg != equipErrOk {
+					s.sendEquipError(msg, 0)
+					return spellFailedDontReport
+				}
+			}
+		}
+		// The shared ENCHANT_ITEM (fallthrough) / ENCHANT_ITEM_PRISMATIC arm
+		// (Spell.cpp:6934-6994).
+		if !resolved {
+			return spellFailedItemNotFound
+		}
+		// A missing template row is a data gap, not a client fault:
+		// unknown data is permissive (terrain.go convention).
+		info, ok := s.server.getItemStoreTemplateInfo(ctx, t.entry)
+		if !ok {
+			continue
+		}
+		// required level has to be checked also! Exploit fix (Spell.cpp:6939).
+		if info.ItemLevel < spell.BaseLevel ||
+			(info.RequiredLevel != 0 && info.RequiredLevel < spell.BaseLevel) {
+			return spellFailedLowLevel
+		}
+		// isItemUsable: any item spell with an on-use trigger
+		// (Spell.cpp:6941-6952).
+		isItemUsable := false
+		for k := 0; k < maxItemProtoSpells; k++ {
+			if info.SpellIDs[k] > 0 && (info.SpellTriggers[k] == itemSpellTriggerOnUse ||
+				info.SpellTriggers[k] == itemSpellTriggerOnNoDelayUse) {
+				isItemUsable = true
+				break
+			}
+		}
+		// sSpellItemEnchantmentStore.LookupEntry(Effects[i].MiscValue)
+		// (Spell.cpp:6954); a missing entry only fails inside the
+		// trade-slot arm below, matching C++.
+		var enchantEntry wotlk.SpellItemEnchantmentEntry
+		hasEnchantEntry := false
+		if eff.MiscValue > 0 && s.server.Data != nil {
+			if e, found, err := s.server.Data.SpellItemEnchantment(uint32(eff.MiscValue)); err == nil && found {
+				enchantEntry, hasEnchantEntry = e, true
+			}
+		}
+		if hasEnchantEntry {
+			for k := 0; k < maxItemEnchantEffects && k < len(enchantEntry.Effects); k++ {
+				switch enchantEntry.Effects[k] {
+				case itemEnchantTypeUseSpell:
+					// do not allow adding usable enchantments to items that
+					// have use effect already (Spell.cpp:6959-6962).
+					if isItemUsable {
+						return spellFailedOnUseEnchant
+					}
+				case itemEnchantTypePrismaticSock:
+					// ITEM_ENCHANTMENT_TYPE_PRISMATIC_SOCKET
+					// (Spell.cpp:6963-6968): the item already has all three
+					// sockets or already carries a prismatic enchantment.
+					numSockets := uint32(0)
+					for c := 0; c < maxItemProtoSockets && c < len(info.SocketColors); c++ {
+						if info.SocketColors[c] != 0 {
+							numSockets++
+						}
+					}
+					if numSockets == maxItemProtoSockets ||
+						s.enchantTargetPrismaticID(ctx, t.instanceGUID) != 0 {
+						return spellFailedMaxSockets
+					}
+				}
+			}
+		}
+		// Not allow enchant in trade slot for some enchant type
+		// (Spell.cpp:6970-6981).
+		if !t.ownedByCaster {
+			if !hasEnchantEntry {
+				return spellFailedError
+			}
+			if enchantEntry.Flags&enchantFlagCanSoulbound != 0 {
+				return spellFailedNotTradeable
+			}
 		}
 	}
 	return 0

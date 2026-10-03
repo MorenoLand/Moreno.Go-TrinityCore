@@ -1934,6 +1934,7 @@ type SpellItemEnchantmentEntry struct {
 	EffectPointsMin   [3]uint32
 	EffectArg         [3]uint32
 	ItemVisual        uint32
+	Flags             uint32
 	SrcItemID         uint32
 	ConditionID       uint32
 	RequiredSkillID   uint32
@@ -1980,6 +1981,10 @@ func (s *Store) SpellItemEnchantment(id uint32) (SpellItemEnchantmentEntry, bool
 		}
 	}
 	if entry.ItemVisual, err = record.Uint32(31); err != nil {
+		return SpellItemEnchantmentEntry{}, false, err
+	}
+	// Flags is DBC column 32 (DBCStructure.h:1549).
+	if entry.Flags, err = record.Uint32(32); err != nil {
 		return SpellItemEnchantmentEntry{}, false, err
 	}
 	if entry.SrcItemID, err = record.Uint32(33); err != nil {
