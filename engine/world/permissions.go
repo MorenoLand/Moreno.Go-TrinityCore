@@ -1131,6 +1131,21 @@ const permissionCommandPetUnlearn uint32 = 482
 // permissionCommandPetLevel mirrors rbac::RBAC_PERM_COMMAND_PET_LEVEL (RBAC.h:705).
 const permissionCommandPetLevel uint32 = 838
 
+// permissionCommandSend mirrors rbac::RBAC_PERM_COMMAND_SEND (RBAC.h:351).
+const permissionCommandSend uint32 = 483
+
+// permissionCommandSendItems mirrors rbac::RBAC_PERM_COMMAND_SEND_ITEMS (RBAC.h:352).
+const permissionCommandSendItems uint32 = 484
+
+// permissionCommandSendMail mirrors rbac::RBAC_PERM_COMMAND_SEND_MAIL (RBAC.h:353).
+const permissionCommandSendMail uint32 = 485
+
+// permissionCommandSendMessage mirrors rbac::RBAC_PERM_COMMAND_SEND_MESSAGE (RBAC.h:354).
+const permissionCommandSendMessage uint32 = 486
+
+// permissionCommandSendMoney mirrors rbac::RBAC_PERM_COMMAND_SEND_MONEY (RBAC.h:355).
+const permissionCommandSendMoney uint32 = 487
+
 // permissionCommandReload mirrors rbac::RBAC_PERM_COMMAND_RELOAD (RBAC.h).
 const permissionCommandReload uint32 = 607
 
