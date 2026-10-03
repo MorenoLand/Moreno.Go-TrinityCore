@@ -365,16 +365,20 @@ func (s *session) checkStealPreCast(spell wotlk.Spell, targetGUID uint64) uint8 
 }
 
 // checkDispelPreCast mirrors TrinityCore Spell::CheckCast (Spell.cpp:5520-5565).
-// Returns spellFailedNothingToDispel (86) if the spell only dispels and target has nothing to dispel.
+// Returns spellFailedNothingToDispel (86) if the spell only dispels and the
+// target has nothing to dispel. The !IsTriggered() arm is structural:
+// handleCastSpell serves client-initiated casts only; triggered casts go
+// through castSpellDirect.
 func (s *session) checkDispelPreCast(spell wotlk.Spell, targetGUID uint64) uint8 {
 	hasNonDispelEffect := false
-	hasAreaDispel := false
+	hasDispellableAura := false
 	dispelMask := uint32(0)
 
 	for _, eff := range spell.Effects {
-		if eff.Effect == 38 { // SPELL_EFFECT_DISPEL
-			if eff.ImplicitTargetA == 18 || eff.ImplicitTargetA == 24 || eff.ImplicitTargetA == 28 || eff.RadiusIndex > 0 {
-				hasAreaDispel = true
+		if eff.Effect == spellEffectDispel {
+			if eff.ImplicitTargetA == 18 || eff.ImplicitTargetA == 24 || eff.ImplicitTargetA == 28 || eff.RadiusIndex > 0 ||
+				spell.AttributesEx&spellAttr1MeleeCombatStart != 0 {
+				hasDispellableAura = true
 				break
 			}
 			dispelMask |= getDispelMask(uint32(eff.MiscValue))
@@ -384,7 +388,7 @@ func (s *session) checkDispelPreCast(spell wotlk.Spell, targetGUID uint64) uint8
 		}
 	}
 
-	if hasNonDispelEffect || hasAreaDispel || dispelMask == 0 {
+	if hasNonDispelEffect || hasDispellableAura || dispelMask == 0 {
 		return 0
 	}
 
@@ -395,6 +399,26 @@ func (s *session) checkDispelPreCast(spell wotlk.Spell, targetGUID uint64) uint8
 		targetGUID = s.playerGUID
 	} else if s.server != nil {
 		targetSess = s.server.findSessionByGUID(targetGUID)
+	}
+
+	// Hostile targets in sanctuary fail outright, except when the target is
+	// the caster's duel opponent (Spell.cpp:5539-5552). Player sanctuary is
+	// the UNIT_BYTE2_FLAG_SANCTUARY bridge (pvpFlagSanctuary, also used by the
+	// explicit-target PvP gates); creature targets carry no per-creature
+	// bytes2 model in Go, so only the caster side applies for them.
+	// Friendliness matches the dispel-list scan below: non-player targets
+	// other than the own pet count as hostile, like
+	// getDispellableAuraListForCreature does.
+	if !s.isFriendlyToTarget(targetGUID, targetSess) {
+		targetSanctuary := false
+		if targetSess != nil && targetSess.player != nil {
+			targetSanctuary = targetSess.player.PVPFlags&pvpFlagSanctuary != 0
+		}
+		if s.player.PVPFlags&pvpFlagSanctuary != 0 || targetSanctuary {
+			if s.duelPartner == 0 || s.duelPartner != targetGUID {
+				return spellFailedNothingToDispel
+			}
+		}
 	}
 
 	var candidates []dispelCandidate

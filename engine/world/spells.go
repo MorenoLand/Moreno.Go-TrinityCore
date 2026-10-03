@@ -29,10 +29,11 @@ const (
 
 	spellInterruptFlagMovement uint32 = 0x01 // SPELL_INTERRUPT_FLAG_MOVEMENT (SpellDefines.h:30)
 
-	spellAttr1NotBreakStealth uint32 = 0x00000020 // SPELL_ATTR1_NOT_BREAK_STEALTH (SharedDefines.h:454)
-	spellAttr1NoThreat        uint32 = 0x00000400 // SPELL_ATTR1_NO_THREAT (SharedDefines.h:459) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
-	spellAttr1DismissPet      uint32 = 0x00000001 // SPELL_ATTR1_DISMISS_PET (SharedDefines.h:449) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
-	spellAttr3NoInitialAggro  uint32 = 0x00020000 // SPELL_ATTR3_NO_INITIAL_AGGRO (SharedDefines.h:540) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7)
+	spellAttr1NotBreakStealth  uint32 = 0x00000020 // SPELL_ATTR1_NOT_BREAK_STEALTH (SharedDefines.h:454)
+	spellAttr1NoThreat         uint32 = 0x00000400 // SPELL_ATTR1_NO_THREAT (SharedDefines.h:459) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
+	spellAttr1DismissPet       uint32 = 0x00000001 // SPELL_ATTR1_DISMISS_PET (SharedDefines.h:449) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
+	spellAttr1MeleeCombatStart uint32 = 0x00000200 // SPELL_ATTR1_MELEE_COMBAT_START (SharedDefines.h:458) — caster begins auto-attack on cast
+	spellAttr3NoInitialAggro   uint32 = 0x00020000 // SPELL_ATTR3_NO_INITIAL_AGGRO (SharedDefines.h:540) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7)
 
 	spellAttr0Ability                      uint32 = 0x00000010 // SPELL_ATTR0_ABILITY (SharedDefines.h:416)
 	spellAttr0ReqAmmo                      uint32 = 0x00000002 // SPELL_ATTR0_REQ_AMMO (SharedDefines.h:413)
@@ -184,6 +185,7 @@ const (
 	spellEffectCharge                  = 96  // SPELL_EFFECT_CHARGE (SharedDefines.h:907)
 	spellEffectSkinning                = 95  // SPELL_EFFECT_SKINNING (SharedDefines.h:906)
 	spellEffectOpenLock                = 33  // SPELL_EFFECT_OPEN_LOCK (SharedDefines.h:844)
+	spellEffectDispel                  = 38  // SPELL_EFFECT_DISPEL (SharedDefines.h:849)
 	spellEffectResurrectPet            = 109 // SPELL_EFFECT_RESURRECT_PET (SharedDefines.h:920)
 	spellEffectSummon                  = 28  // SPELL_EFFECT_SUMMON (SharedDefines.h:839)
 	spellEffectSummonPet               = 56  // SPELL_EFFECT_SUMMON_PET (SharedDefines.h:867)
