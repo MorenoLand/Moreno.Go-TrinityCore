@@ -66,6 +66,7 @@ const (
 
 	spellAttr0StopAttackTarget       uint32 = 0x00100000 // SPELL_ATTR0_STOP_ATTACK_TARGET (SharedDefines.h:432)
 	spellAttr0DisabledWhileActive    uint32 = 0x02000000 // SPELL_ATTR0_DISABLED_WHILE_ACTIVE (SharedDefines.h:437)
+	spellAttr0CastableWhileMounted   uint32 = 0x01000000 // SPELL_ATTR0_CASTABLE_WHILE_MOUNTED (SharedDefines.h:436)
 	spellAttr0LevelDamageCalculation uint32 = 0x00080000 // SPELL_ATTR0_LEVEL_DAMAGE_CALCULATION (SharedDefines.h:431)
 	spellAttr0Negative1              uint32 = 0x04000000 // SPELL_ATTR0_NEGATIVE_1 (SharedDefines.h:438) — forces the spell to be treated as negative
 	spellAttr2Unk3                   uint32 = 0x00000008 // SPELL_ATTR2_UNK3 (SharedDefines.h:489) — "Ignore aura scaling"; GetAuraRankForLevel returns the cast rank — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
@@ -97,6 +98,8 @@ const (
 	spellFailedRequiresSpellFocus        uint8 = 102 // SPELL_FAILED_REQUIRES_SPELL_FOCUS (SharedDefines.h:1084)
 	spellFailedTotemCategory             uint8 = 130 // SPELL_FAILED_TOTEM_CATEGORY (SharedDefines.h:1112)
 	spellFailedTotems                    uint8 = 131 // SPELL_FAILED_TOTEMS (SharedDefines.h:1113)
+	spellFailedNotMounted                uint8 = 64  // SPELL_FAILED_NOT_MOUNTED (SharedDefines.h:1046)
+	spellFailedNotOnTaxi                 uint8 = 65  // SPELL_FAILED_NOT_ON_TAXI (SharedDefines.h:1047)
 	spellFailedLowLevel                  uint8 = 48  // SPELL_FAILED_LOWLEVEL (SharedDefines.h:1030)
 	spellFailedNotKnown                  uint8 = 63  // SPELL_FAILED_NOT_KNOWN (SharedDefines.h:1045)
 	spellFailedItemEnchantTradeWindow    uint8 = 182 // SPELL_FAILED_ITEM_ENCHANT_TRADE_WINDOW (SharedDefines.h:1164)
@@ -657,6 +660,23 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				return true
 			}
 		}
+	}
+	// CheckCast mounted gate (Spell::CheckCast, Spell.cpp:5477-5488): client-initiated
+	// casts only — triggered casts go through castSpellDirect, not this path
+	// (TRIGGERED_IGNORE_CASTER_MOUNTED_OR_ON_VEHICLE is never set for client casts).
+	// Unit::IsMounted is the UNIT_FLAG_MOUNT unit flag (Unit.h:932), mirrored by
+	// unitFlagMount (UNIT_FLAG_MOUNT = 0x08000000, UnitDefines.h:151); the
+	// !IsPassive() arm is vacuous here (passive spells return early above) and the
+	// TYPEID_PLAYER arm is vacuous (the session is always a player). IsInFlight is
+	// the UNIT_STATE_IN_FLIGHT mirror (s.isInFlight, taxi.go).
+	if s.player.UnitFlags&unitFlagMount != 0 && spell.Attributes&spellAttr0CastableWhileMounted == 0 {
+		reason := spellFailedNotMounted
+		if s.isInFlight() {
+			reason = spellFailedNotOnTaxi
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, reason), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "mounted cast blocked", "reason_code", reason)
+		return true
 	}
 	// Self-cast only spells (e.g. Demon Skin, Demon Armor, Ice Barrier) must always target the caster
 	if isSelfCastOnly(spell) {
