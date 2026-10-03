@@ -45,6 +45,7 @@ const (
 	spellAttr6AssistIgnoreImmuneFlag      uint32 = 0x00000008 // SPELL_ATTR6_ASSIST_IGNORE_IMMUNE_FLAG (SharedDefines.h:637) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6CanTargetUntargetable       uint32 = 0x01000000 // SPELL_ATTR6_CAN_TARGET_UNTARGETABLE (SharedDefines.h:658) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6DontConsumeProcCharges      uint32 = 0x00000020 // SPELL_ATTR6_DONT_CONSUME_PROC_CHARGES (SharedDefines.h:639) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
+	spellAttr6NotInRaidInstance           uint32 = 0x00000800 // SPELL_ATTR6_NOT_IN_RAID_INSTANCE (SharedDefines.h:645) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr4NotStealable                uint32 = 0x00000040 // SPELL_ATTR4_NOT_STEALABLE (SharedDefines.h:566) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4FixedDamage                 uint32 = 0x00000100 // SPELL_ATTR4_FIXED_DAMAGE (SharedDefines.h:568) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4NotUsableInArena            uint32 = 0x00010000 // SPELL_ATTR4_NOT_USABLE_IN_ARENA (SharedDefines.h:576) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
@@ -52,6 +53,7 @@ const (
 	spellAttr3Battleground                uint32 = 0x00000800 // SPELL_ATTR3_BATTLEGROUND (SharedDefines.h:534) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 	spellAttr4TreatAsDelayed              uint32 = 0x00000010 // SPELL_ATTR4_UNK4 "Treat as delayed spell" (SharedDefines.h:564) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4ProcOnlyOnCaster            uint32 = 0x00000002 // SPELL_ATTR4_PROC_ONLY_ON_CASTER (SharedDefines.h:561) "Only proc on self-cast" — ATTR4 is Go's AttributesEx4
+	spellAttr4CastOnlyInOutland           uint32 = 0x04000000 // SPELL_ATTR4_CAST_ONLY_IN_OUTLAND (SharedDefines.h:586) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	targetUnitCaster                      uint32 = 1          // TARGET_UNIT_CASTER (SharedDefines.h:1442)
 	spellAttr0UnaffectedByInvulnerability uint32 = 0x20000000 // SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY (SharedDefines.h:441)
 	spellAttr0NotShapeshift               uint32 = 0x00010000 // SPELL_ATTR0_NOT_SHAPESHIFT (SharedDefines.h:428)
@@ -109,6 +111,11 @@ const (
 	spellFailedAuraBounced               uint8 = 9   // SPELL_FAILED_AURA_BOUNCED (SharedDefines.h:991)
 	spellFailedOnlyBattlegrounds         uint8 = 142 // SPELL_FAILED_ONLY_BATTLEGROUNDS (SharedDefines.h:1124)
 	spellFailedNotInArena                uint8 = 151 // SPELL_FAILED_NOT_IN_ARENA (SharedDefines.h:1133)
+	spellFailedIncorrectArea             uint8 = 39  // SPELL_FAILED_INCORRECT_AREA (SharedDefines.h:1021)
+	spellFailedRequiresArea              uint8 = 101 // SPELL_FAILED_REQUIRES_AREA (SharedDefines.h:1083)
+	spellFailedNotInRaidInstance         uint8 = 167 // SPELL_FAILED_NOT_IN_RAID_INSTANCE (SharedDefines.h:1149)
+
+	areaFlagNoFlyZone uint32 = 0x20000000 // AREA_FLAG_NO_FLY_ZONE (DBCEnums.h:275) — AreaTableEntry.Flags bit tested by AreaTableEntry::IsFlyable (DBCStructure.h:209)
 
 	spellImplicitTargetUnitPet uint32 = 5 // TARGET_UNIT_PET (SharedDefines.h:1446)
 
@@ -694,6 +701,87 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not usable in arena")
 			return true
 		}
+	}
+	// CheckCast zone/location leg (Spell::CheckCast, Spell.cpp:5449-5460): the
+	// npcbot TYPEID_UNIT arm is vacuous (this is the client-initiated path)
+	// and game masters bypass the whole check (Player::IsGameMaster, chat.go
+	// isGM pattern). Zone/area are the session's tracked values
+	// (s.player.Zone / s.areaID, refreshed on movement and teleports), the Go
+	// model of Unit::GetZoneAndAreaId.
+	if (s.player.ExtraFlags&playerExtraGMOn) == 0 && (s.player.PlayerFlags&playerFlagGM) == 0 {
+		zoneID, areaID := s.player.Zone, s.areaID
+		// Area-group leg (SpellInfo::CheckLocation, SpellInfo.cpp:1508-1527):
+		// AreaGroupId > 0 requires zone or area membership, else
+		// SPELL_FAILED_INCORRECT_AREA. Unknown/missing group data keeps the
+		// existing bridge convention (terrain.go) and does not reject.
+		if spell.AreaGroupID > 0 {
+			if allowed, known, groupErr := s.server.Data.AreaGroupAllows(uint32(spell.AreaGroupID), zoneID, areaID); groupErr == nil && known && !allowed {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedIncorrectArea), true)
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "incorrect area group", "zone", zoneID, "area", areaID)
+				return true
+			}
+		}
+		// Raid-instance leg (SpellInfo::CheckLocation, SpellInfo.cpp:1552-1556):
+		// SPELL_ATTR6_NOT_IN_RAID_INSTANCE fails on raid maps — and when the
+		// map entry is missing, matching the C++ !mapEntry arm.
+		if spell.AttributesEx6&spellAttr6NotInRaidInstance != 0 {
+			if entry, found, err := s.server.Data.Map(s.player.Map); err != nil || !found || entry.IsRaid() {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotInRaidInstance), true)
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not usable in raid instance")
+				return true
+			}
+		}
+		// spell_area DB leg (SpellInfo::CheckLocation, SpellInfo.cpp:1558-1567):
+		// when the spell has spell_area rows, at least one must fit the
+		// player's zone/area (SpellArea::IsFitToRequirements), else
+		// SPELL_FAILED_INCORRECT_AREA.
+		if rules, hasRules := s.spellAreaRules(ctx, spellID); hasRules && !s.spellAreaRulesFit(ctx, rules, zoneID, areaID) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedIncorrectArea), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "incorrect area (spell_area)", "zone", zoneID, "area", areaID)
+			return true
+		}
+		// Battleground-spell special cases (SpellInfo::CheckLocation,
+		// SpellInfo.cpp:1569-1623). Player::InBattleground is
+		// m_bgData.bgInstanceID != 0 (Player.h:1906), mirrored by
+		// s.bgData.InstanceID; the player argument is never nil on this path.
+		inBattleground := s.bgData.InstanceID != 0
+		mapEntry, mapFound, mapErr := s.server.Data.Map(s.player.Map)
+		locationOK := true
+		switch spellID {
+		case 23333, 23335: // Warsong Gulch / Silverwing flag
+			locationOK = s.player.Map == 489 && inBattleground
+		case 34976: // Netherstorm flag
+			locationOK = s.player.Map == 566 && inBattleground
+		case 2584, 22011, 22012, 42792, 43681, 44535: // spirit heal / dropped-flag spells
+			locationOK = zoneID == WGZoneID || (mapErr == nil && mapFound && mapEntry.IsBattleground() && inBattleground)
+		case 44521: // Preparation
+			locationOK = mapErr == nil && mapFound && mapEntry.IsBattleground() && inBattleground
+			// STATUS_WAIT_JOIN refinement has no bridge: Go battleground
+			// queue entries never model WAIT_JOIN (they go 1 -> 3), unlike
+			// arena entries whose status syncs to the arena state.
+		case 32724, 32725, 35774, 35775: // arena team spells
+			locationOK = mapErr == nil && mapFound && mapEntry.IsBattleArena() && inBattleground
+		case 32727: // Arena Preparation
+			locationOK = false
+			if mapErr == nil && mapFound && mapEntry.IsBattleArena() && inBattleground {
+				for i := range s.bgQueues {
+					if q := &s.bgQueues[i]; q.Active && q.IsArena && q.InstanceID == s.bgData.InstanceID && q.Status == ArenaStatusWaitJoin {
+						locationOK = true
+						break
+					}
+				}
+			}
+		}
+		if !locationOK {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedRequiresArea), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "requires area", "zone", zoneID, "area", areaID)
+			return true
+		}
+		// SPELL_ATTR4_CAST_ONLY_IN_OUTLAND (SpellInfo.cpp:1529-1550): no bridge.
+		// The strict leg needs AreaTableEntry flyability AND
+		// Player::CanFlyInZone (Cold Weather Flying known-spell check via
+		// GetVirtualMapForMapAndZone); Go has no WorldMapArea store and no
+		// known-spell model for the flight check.
 	}
 	// CheckCast mounted gate (Spell::CheckCast, Spell.cpp:5477-5488): client-initiated
 	// casts only — triggered casts go through castSpellDirect, not this path
