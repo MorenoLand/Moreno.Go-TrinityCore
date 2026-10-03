@@ -1550,3 +1550,18 @@ const permissionCommandResetTalents uint32 = 716
 
 // permissionCommandResetAll mirrors rbac::RBAC_PERM_COMMAND_RESET_ALL (RBAC.h:585).
 const permissionCommandResetAll uint32 = 717
+
+// permissionCommandTele mirrors rbac::RBAC_PERM_COMMAND_TELE (RBAC.h:605).
+const permissionCommandTele uint32 = 737
+
+// permissionCommandTeleAdd mirrors rbac::RBAC_PERM_COMMAND_TELE_ADD (RBAC.h:606).
+const permissionCommandTeleAdd uint32 = 738
+
+// permissionCommandTeleDel mirrors rbac::RBAC_PERM_COMMAND_TELE_DEL (RBAC.h:607).
+const permissionCommandTeleDel uint32 = 739
+
+// permissionCommandTeleName mirrors rbac::RBAC_PERM_COMMAND_TELE_NAME (RBAC.h:608).
+const permissionCommandTeleName uint32 = 740
+
+// permissionCommandTeleGroup mirrors rbac::RBAC_PERM_COMMAND_TELE_GROUP (RBAC.h:609).
+const permissionCommandTeleGroup uint32 = 741

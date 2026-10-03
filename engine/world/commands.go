@@ -1113,34 +1113,6 @@ func (s *session) sendDestroyObject(guid uint64, onDeath bool) {
 	_ = s.write(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), buf.Bytes(), true)
 }
 
-func (s *session) handleCmdTele(ctx context.Context, args []string) {
-	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .tele <location_name>")
-		return
-	}
-	locName := strings.Join(args, " ")
-	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
-		s.sendSysMessage("Database not available.")
-		return
-	}
-	var mapID uint32
-	var x, y, z, ori float32
-	var foundName string
-	err := s.server.WorldStore.DB.QueryRowContext(ctx,
-		"SELECT map, position_x, position_y, position_z, orientation, name FROM game_tele WHERE name LIKE ? LIMIT 1",
-		"%"+locName+"%").Scan(&mapID, &x, &y, &z, &ori, &foundName)
-	if errors.Is(err, sql.ErrNoRows) {
-		s.sendSysMessage(fmt.Sprintf("Teleport location not found: %s", locName))
-		return
-	}
-	if err != nil {
-		s.sendSysMessage(fmt.Sprintf("Teleport lookup error: %v", err))
-		return
-	}
-	s.sendSysMessage(fmt.Sprintf("Teleporting to %s (%d, %.2f, %.2f, %.2f)...", foundName, mapID, x, y, z))
-	s.teleportTo(mapID, x, y, z, ori)
-}
-
 // goGridCenter and goSizeOfGrids mirror MapDefines.h (CENTER_GRID_ID = 64,
 // SIZE_OF_GRIDS = 533.33333f), used by HandleGoGridCommand (cs_go.cpp:205).
 const (
@@ -6099,7 +6071,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("help", func(ctx context.Context, args []string) bool { s.handleCmdHelp(args); return true }, nil, map[string]string{"?": "help"})
 	root.add("gm", func(ctx context.Context, args []string) bool { s.handleCmdGM(ctx, args); return true }, []string{"chat", "fly", "ingame", "list", "visible", "on", "off"}, map[string]string{"vis": "visible"})
 	root.add("cheat", func(ctx context.Context, args []string) bool { return s.handleCmdCheat(ctx, args) }, []string{"god", "casttime", "cooldown", "power", "waterwalk", "status", "taxi", "explore"}, nil)
-	root.add("tele", func(ctx context.Context, args []string) bool { s.handleCmdTele(ctx, args); return true }, nil, nil)
+	root.add("tele", func(ctx context.Context, args []string) bool { s.handleCmdTele(ctx, args); return true }, []string{"add", "del", "name", "group"}, nil)
 	root.add("go", func(ctx context.Context, args []string) bool { s.handleCmdGo(ctx, args); return true }, []string{"creature", "gameobject", "graveyard", "grid", "taxinode", "areatrigger", "zonexy", "xyz", "ticket", "offset", "instance", "boss"}, nil)
 	root.add("modify", func(ctx context.Context, args []string) bool { s.handleCmdModify(ctx, args); return true }, []string{"hp", "mana", "energy", "rage", "runicpower", "money", "honor", "arenapoints", "xp", "drunk", "scale", "spell", "standstate", "mount", "gender", "bit", "faction", "phase", "speed", "talentpoints", "reputation"}, map[string]string{"mod": "modify"})
 	root.add("additem", func(ctx context.Context, args []string) bool { s.handleCmdAddItem(ctx, args); return true }, []string{"set"}, map[string]string{"item": "additem"})
