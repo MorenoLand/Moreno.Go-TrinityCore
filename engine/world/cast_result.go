@@ -55,6 +55,15 @@ func (s *session) castFailedExtParams(ctx context.Context, spell wotlk.Spell, re
 		return []uint32{uint32(spell.EquippedItemClass), spell.EquippedItemSubClass}
 	case 100: // SPELL_FAILED_REAGENTS: first missing reagent item id
 		return []uint32{s.firstMissingSpellReagent(ctx, spell)}
+	case spellFailedTooManyOfItem:
+		// WriteCastResultInfo (Spell.cpp:4056-4064): the created item entry —
+		// the first non-zero effect ItemType when no explicit param is set.
+		for i := 0; i < len(spell.Effects); i++ {
+			if spell.Effects[i].ItemType != 0 {
+				return []uint32{spell.Effects[i].ItemType}
+			}
+		}
+		return []uint32{0}
 	}
 	return nil
 }

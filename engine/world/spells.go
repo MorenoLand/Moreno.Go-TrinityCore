@@ -127,6 +127,8 @@ const (
 	spellFailedItemGone                  uint8 = 43  // SPELL_FAILED_ITEM_GONE (SharedDefines.h:1025)
 	spellFailedNotTrading                uint8 = 71  // SPELL_FAILED_NOT_TRADING (SharedDefines.h:1053)
 	spellFailedItemAlreadyEnchanted      uint8 = 42  // SPELL_FAILED_ITEM_ALREADY_ENCHANTED (SharedDefines.h:1024)
+	spellFailedItemNotFound              uint8 = 44  // SPELL_FAILED_ITEM_NOT_FOUND (SharedDefines.h:1026)
+	spellFailedTooManyOfItem             uint8 = 129 // SPELL_FAILED_TOO_MANY_OF_ITEM (SharedDefines.h:1111)
 	spellFailedAuraBounced               uint8 = 9   // SPELL_FAILED_AURA_BOUNCED (SharedDefines.h:991)
 	spellFailedNoComboPoints             uint8 = 78  // SPELL_FAILED_NO_COMBO_POINTS (SharedDefines.h:1060)
 	spellFailedOnlyBattlegrounds         uint8 = 142 // SPELL_FAILED_ONLY_BATTLEGROUNDS (SharedDefines.h:1124)
@@ -1181,6 +1183,17 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if failReason := s.checkSpellTotemRequirements(ctx, spell); failReason != 0 {
 		s.sendCastFailed(ctx, castID, spell, failReason)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "totem requirements not met", "failReason", failReason)
+		return true
+	}
+
+	// CREATE_ITEM / CREATE_ITEM_2 arm of the Spell::CheckItems
+	// special-effects loop (Spell.cpp:6864-6905): runs right after the totem
+	// block, matching C++ CheckItems relative order (totem 6823-6856 →
+	// special effects 6858+). Client-initiated casts only — triggered casts
+	// go through castSpellDirect.
+	if failReason := s.checkSpellCreateItemCast(ctx, spell, target); failReason != 0 {
+		s.sendCastFailed(ctx, castID, spell, failReason)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "created-item requirements not met", "failReason", failReason)
 		return true
 	}
 
@@ -8448,6 +8461,11 @@ const (
 	spellFamilyShaman      = 11
 	spellFamilyDeathKnight = 15
 
+	// SpellFamilyFlags[0] bit marking mage conjure food/water/refreshment
+	// spells (the Spell.cpp:6892 SpellFamilyFlags[0] & 0x40000000 arm of the
+	// CREATE_ITEM check).
+	spellFamilyFlagConjureRefreshment = 0x40000000
+
 	spellAuraModPossess     = 2
 	spellAuraTrackCreatures = 44
 	spellAuraTrackResources = 45
@@ -11348,6 +11366,217 @@ func (s *session) tradeItemTargetCast(target protocol.SpellTargetData) bool {
 	}
 	slotItem, ok := s.trade.Partner.trade.Items[uint8(tradeSlotNonTraded)]
 	return ok && slotItem.ItemEntry != 0
+}
+
+// itemStoreTemplateInfo carries the item_template columns the CheckItems
+// CREATE_ITEM arm needs: the max stack size (for the createCount clamp,
+// Spell.cpp:6881) and the item-limit category (for the conjure carve-out,
+// Spell.cpp:6887).
+type itemStoreTemplateInfo struct {
+	Stackable     uint32
+	LimitCategory uint32
+}
+
+// getItemStoreTemplateInfo is a cached item_template lookup for the
+// CheckItems CREATE_ITEM arm, following the getItemTemplateClassInfo
+// pattern. Unknown entries are permissive only where C++ is (the template
+// miss itself fails with SPELL_FAILED_ITEM_NOT_FOUND).
+func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (itemStoreTemplateInfo, bool) {
+	if entry == 0 {
+		return itemStoreTemplateInfo{}, false
+	}
+	s.itemStoreTemplateMu.RLock()
+	if s.itemStoreTemplates != nil {
+		if info, ok := s.itemStoreTemplates[entry]; ok {
+			s.itemStoreTemplateMu.RUnlock()
+			return info, true
+		}
+	}
+	s.itemStoreTemplateMu.RUnlock()
+
+	if s.WorldStore == nil || s.WorldStore.DB == nil {
+		return itemStoreTemplateInfo{}, false
+	}
+	var stackable, limitCategory uint32
+	err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(stackable, 1), COALESCE(ItemLimitCategory, 0) FROM item_template WHERE entry = ? LIMIT 1", entry).Scan(&stackable, &limitCategory)
+	if err != nil {
+		return itemStoreTemplateInfo{}, false
+	}
+	info := itemStoreTemplateInfo{Stackable: stackable, LimitCategory: limitCategory}
+	s.itemStoreTemplateMu.Lock()
+	if s.itemStoreTemplates == nil {
+		s.itemStoreTemplates = make(map[uint32]itemStoreTemplateInfo)
+	}
+	s.itemStoreTemplates[entry] = info
+	s.itemStoreTemplateMu.Unlock()
+	return info, true
+}
+
+// freeInventorySpace counts the player's free inventory slots (backpack +
+// equipped bags), mirroring Player::GetFreeInventorySpace (Player.cpp) as
+// used by the CREATE_ITEM_2 arm (Spell.cpp:6872). Slot ranges mirror
+// freeInventorySlotForPlayer (items.go:1717).
+func (s *session) freeInventorySpace(ctx context.Context, playerGUID uint64) uint32 {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0
+	}
+	cdb := s.server.CharactersStore.DB
+	freeIn := func(bagKey int64, first, last int64) uint32 {
+		rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = ?", playerGUID, bagKey)
+		if err != nil {
+			return 0
+		}
+		defer rows.Close()
+		used := make(map[int64]struct{})
+		for rows.Next() {
+			var slot int64
+			if rows.Scan(&slot) == nil {
+				used[slot] = struct{}{}
+			}
+		}
+		var free uint32
+		for slot := first; slot <= last; slot++ {
+			if _, ok := used[slot]; !ok {
+				free++
+			}
+		}
+		return free
+	}
+	n := freeIn(0, int64(invSlotItemStart), int64(invSlotItemEnd-1))
+	for _, b := range s.getEquippedBags(ctx, playerGUID) {
+		if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+			continue
+		}
+		var slots int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(ContainerSlots, 0) FROM item_template WHERE entry = (SELECT itemEntry FROM item_instance WHERE guid = ?)`, b.guid).Scan(&slots); err != nil || slots <= 0 {
+			continue
+		}
+		last := int64(35)
+		if slots-1 < last {
+			last = slots - 1
+		}
+		n += freeIn(b.guid, 0, last)
+	}
+	return n
+}
+
+// ownedItemCount mirrors the count half of Player::HasItemCount
+// (Player.cpp:1079) over the character's inventory (bank excluded, the
+// conjure arm's default).
+func (s *session) ownedItemCount(ctx context.Context, playerGUID uint64, entry uint32) uint32 {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0
+	}
+	var total int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory AS ci
+		JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ii.itemEntry = ?`, playerGUID, entry).Scan(&total); err != nil || total < 0 {
+		return 0
+	}
+	return uint32(total)
+}
+
+// canStoreNewItem is a non-mutating probe of the inventory-space terms of
+// Player::CanStoreNewItem (Player.cpp) for the CheckItems CREATE_ITEM call
+// (NULL_BAG/NULL_SLOT): free space in existing partial stacks absorbs what
+// it can, the remainder needs free slots. Bag-family, soulbound and other
+// placement rules have no Go model; the probe answers the space question
+// the arm actually gates on.
+func (s *session) canStoreNewItem(ctx context.Context, playerGUID uint64, entry uint32, count uint32) uint8 {
+	info, ok := s.server.getItemStoreTemplateInfo(ctx, entry)
+	if !ok {
+		return equipErrItemNotFound
+	}
+	maxStack := info.Stackable
+	if maxStack < 1 {
+		maxStack = 1
+	}
+	remaining := count
+	if maxStack > 1 && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var space int64
+		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(? - ii.count), 0) FROM character_inventory AS ci
+			JOIN item_instance AS ii ON ii.guid = ci.item
+			WHERE ci.guid = ? AND ii.itemEntry = ? AND ii.count < ?`, maxStack, playerGUID, entry, maxStack).Scan(&space)
+		if space > 0 {
+			if uint64(remaining) <= uint64(space) {
+				return equipErrOk
+			}
+			remaining -= uint32(space)
+		}
+	}
+	if need := (remaining + maxStack - 1) / maxStack; s.freeInventorySpace(ctx, playerGUID) < need {
+		return equipErrInvFull
+	}
+	return equipErrOk
+}
+
+// checkSpellCreateItemCast mirrors the SPELL_EFFECT_CREATE_ITEM /
+// SPELL_EFFECT_CREATE_ITEM_2 arm of the Spell::CheckItems special-effects
+// loop (Spell.cpp:6864-6905). Returns the SpellCastResult failure code, or
+// 0 when the arm passes. Client-initiated casts only — triggered casts go
+// through castSpellDirect (the !IsTriggered() arm is structural).
+func (s *session) checkSpellCreateItemCast(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+	for i := 0; i < len(spell.Effects); i++ {
+		eff := spell.Effects[i]
+		if eff.Effect != spellEffectCreateItem && eff.Effect != spellEffectCreateItem2 {
+			continue
+		}
+		if eff.ItemType == 0 {
+			continue
+		}
+		// m_targets.GetUnitTarget() means explicit cast, otherwise the
+		// caster (Spell.cpp:6867); the gate applies only to player targets
+		// (TYPEID_PLAYER) — creature targets carry no inventory model.
+		ts := s
+		if target.UnitGUID != 0 && target.UnitGUID != s.playerGUID {
+			uts := s.server.findSessionByGUID(target.UnitGUID)
+			if uts == nil || uts.player == nil {
+				continue
+			}
+			ts = uts
+		}
+		// SPELL_EFFECT_CREATE_ITEM_2 picks its item from a pool, so the
+		// cast needs at least one free inventory slot up front
+		// (Spell.cpp:6871-6876).
+		if eff.Effect == spellEffectCreateItem2 && ts.freeInventorySpace(ctx, ts.playerGUID) == 0 {
+			s.sendEquipError(equipErrInvFull, 0) // player->SendEquipError (the caster)
+			return spellFailedDontReport
+		}
+		info, ok := s.server.getItemStoreTemplateInfo(ctx, eff.ItemType)
+		if !ok {
+			return spellFailedItemNotFound
+		}
+		// std::clamp(CalcValue(), 1, maxStackSize) (Spell.cpp:6881).
+		createCount := s.spellEffectCheckCastValue(spell, eff, i)
+		if createCount < 1 {
+			createCount = 1
+		}
+		if maxStack := int32(info.Stackable); maxStack > 0 && createCount > maxStack {
+			createCount = maxStack
+		}
+		if msg := ts.canStoreNewItem(ctx, ts.playerGUID, eff.ItemType, uint32(createCount)); msg != equipErrOk {
+			if info.LimitCategory == 0 {
+				s.sendEquipError(msg, 0)
+				return spellFailedDontReport
+			}
+			// Conjure Food/Water/Refreshment (Spell.cpp:6890-6902): mage
+			// conjure spells whose created item the target already owns
+			// summon the refreshment table (Effects[EFFECT_1]) instead of
+			// failing with TOO_MANY_OF_ITEM.
+			if spell.SpellFamilyName != spellFamilyMage || spell.SpellFamilyFlags[0]&spellFamilyFlagConjureRefreshment == 0 {
+				return spellFailedTooManyOfItem
+			}
+			if ts.ownedItemCount(ctx, ts.playerGUID, eff.ItemType) == 0 {
+				s.sendEquipError(msg, 0)
+				return spellFailedDontReport
+			}
+			if tableSpell := s.spellEffectCheckCastValue(spell, spell.Effects[1], 1); tableSpell > 0 {
+				s.castSpellDirect(ctx, uint32(tableSpell), s.playerGUID)
+			}
+			return spellFailedDontReport
+		}
+	}
+	return 0
 }
 
 // checkSpellEquippedItemRequirements validates equipped weapon and armor requirements for spells before cast execution.
