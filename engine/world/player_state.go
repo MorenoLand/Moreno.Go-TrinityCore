@@ -211,6 +211,7 @@ type playerState struct {
 	LfgEntryPointZ                  float32
 	LfgEntryPointO                  float32
 	ExtraFlags                      uint32
+	ActiveCheats                    uint32
 	AtLogin                         uint32
 	Zone                            uint32
 	Health                          uint32

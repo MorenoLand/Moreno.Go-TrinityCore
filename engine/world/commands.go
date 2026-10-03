@@ -337,7 +337,7 @@ func (s *session) handleCmdHelp(args []string) {
 	s.sendSysMessage(".additem <itemId> [count] - Add item to inventory")
 	s.sendSysMessage(".learn <spellId> | .unlearn <spellId> - Manage spells")
 	s.sendSysMessage(".cast <spellId> [triggered] - Cast a spell at the selected unit")
-	s.sendSysMessage(".cheat explore on|off - Toggle explored areas")
+	s.sendSysMessage(".cheat god|casttime|cooldown|power|waterwalk|status|taxi|explore - Toggle cheat flags")
 	s.sendSysMessage(".lookup item|spell|creature|tele|quest <name>")
 	s.sendSysMessage(".server info|motd - Server status and info")
 	s.sendSysMessage(".character level|rename|customize|changefaction|changerace")
@@ -439,33 +439,297 @@ func (s *session) handleCmdGM(args []string) {
 	}
 }
 
+// Cheat flag bits mirroring the CHEAT_* enum (Player.h:822-829).
+const (
+	cheatGod       uint32 = 0x01
+	cheatCasttime  uint32 = 0x02
+	cheatCooldown  uint32 = 0x04
+	cheatPower     uint32 = 0x08
+	cheatWaterwalk uint32 = 0x10
+)
+
+// cheatArgBool mirrors Trinity::StringTo<bool> (StringConvert.h:146-166):
+// 1/y/on/yes/true and 0/n/off/no/false, case-insensitive.
+func cheatArgBool(arg string) (bool, bool) {
+	switch strings.ToLower(arg) {
+	case "1", "y", "on", "yes", "true":
+		return true, true
+	case "0", "n", "off", "no", "false":
+		return false, true
+	}
+	return false, false
+}
+
+// cheatOnOff reports a cheat flag as the C++ "ON"/"OFF" words used by the
+// status command.
+func cheatOnOff(enabled bool) string {
+	if enabled {
+		return "ON"
+	}
+	return "OFF"
+}
+
+// handleCmdCheat mirrors cheat_commandscript::GetCommands (cs_cheat.cpp:44):
+// the "cheat" root with the god, casttime, cooldown, power, waterwalk,
+// status, taxi and explore arms, each gated on its RBAC_PERM_COMMAND_CHEAT_*
+// permission (RBAC.h:206-213, all Console::No).
 func (s *session) handleCmdCheat(ctx context.Context, args []string) bool {
-	if len(args) != 2 || strings.ToLower(args[0]) != "explore" {
-		s.sendSysMessage("Syntax: .cheat explore on|off")
-		return true
-	}
-	enabled := false
-	switch strings.ToLower(args[1]) {
-	case "on", "1", "true":
-		enabled = true
-	case "off", "0", "false":
-	default:
-		s.sendSysMessage("Syntax: .cheat explore on|off")
-		return true
-	}
-	allowed := false
-	if s.server != nil && s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
-		allowed, _ = accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionCommandCheatExplore)
-	}
-	if !allowed {
-		s.sendNotification("You do not have permission to use that command.")
-		return true
-	}
 	if s.player == nil {
 		return true
 	}
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .cheat god|casttime|cooldown|power|waterwalk|status|taxi|explore")
+		return true
+	}
+	switch strings.ToLower(args[0]) {
+	case "god":
+		s.handleCheatGod(ctx, args[1:])
+	case "casttime":
+		s.handleCheatCasttime(ctx, args[1:])
+	case "cooldown":
+		s.handleCheatCooldown(ctx, args[1:])
+	case "power":
+		s.handleCheatPower(ctx, args[1:])
+	case "waterwalk":
+		s.handleCheatWaterwalk(ctx, args[1:])
+	case "status":
+		s.handleCheatStatus(ctx)
+	case "taxi":
+		s.handleCheatTaxi(ctx, args[1:])
+	case "explore":
+		s.handleCheatExplore(ctx, args[1:])
+	default:
+		s.sendSysMessage("Syntax: .cheat god|casttime|cooldown|power|waterwalk|status|taxi|explore")
+	}
+	return true
+}
+
+// cheatToggle mirrors the Optional<bool> toggle arms of cs_cheat.cpp: an
+// explicit argument sets the flag, a missing argument flips the current
+// state (HandleGodModeCheatCommand et al.).
+func (s *session) cheatToggle(flag uint32, args []string) (bool, bool) {
+	enable := s.player.ActiveCheats&flag == 0
+	if len(args) > 0 {
+		v, ok := cheatArgBool(args[0])
+		if !ok {
+			return false, false
+		}
+		enable = v
+	}
+	if enable {
+		s.player.ActiveCheats |= flag
+	} else {
+		s.player.ActiveCheats &^= flag
+	}
+	return enable, true
+}
+
+// handleCheatGod mirrors HandleGodModeCheatCommand (cs_cheat.cpp:66).
+// Fidelity gap: the damage-path consumers of CHEAT_GOD (Unit.cpp:735,
+// SpellEffects.cpp:283, Player.cpp:25390) have no Go bridge, so the flag is
+// stored and reported by the status arm but damage is not negated yet.
+func (s *session) handleCheatGod(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandCheatGod) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	enable, ok := s.cheatToggle(cheatGod, args)
+	if !ok {
+		s.sendSysMessage("Syntax: .cheat god [on|off]")
+		return
+	}
+	if enable {
+		s.sendSysMessage("Godmode is ON. You won't take damage.")
+	} else {
+		s.sendSysMessage("Godmode is OFF. You can take damage.")
+	}
+}
+
+// handleCheatCasttime mirrors HandleCasttimeCheatCommand (cs_cheat.cpp:87).
+// Fidelity gap: the CHEAT_CASTTIME consumer (Spell.cpp:3127, cast-time
+// zeroing) has no Go bridge; the flag is stored and reported only.
+func (s *session) handleCheatCasttime(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandCheatCasttime) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	enable, ok := s.cheatToggle(cheatCasttime, args)
+	if !ok {
+		s.sendSysMessage("Syntax: .cheat casttime [on|off]")
+		return
+	}
+	if enable {
+		s.sendSysMessage("CastTime Cheat is ON. Your spells won't have a casttime.")
+	} else {
+		s.sendSysMessage("CastTime Cheat is OFF. Your spells will have a casttime.")
+	}
+}
+
+// handleCheatCooldown mirrors HandleCoolDownCheatCommand (cs_cheat.cpp:108).
+// Fidelity gap: the CHEAT_COOLDOWN consumers (Spell.cpp:3522/8241) have no
+// Go bridge (gcd.go notes CHEAT_COOLDOWN infra as unbuilt); the flag is
+// stored and reported only.
+func (s *session) handleCheatCooldown(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandCheatCooldown) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	enable, ok := s.cheatToggle(cheatCooldown, args)
+	if !ok {
+		s.sendSysMessage("Syntax: .cheat cooldown [on|off]")
+		return
+	}
+	if enable {
+		s.sendSysMessage("Cooldown Cheat is ON. You are not on the global cooldown.")
+	} else {
+		s.sendSysMessage("Cooldown Cheat is OFF. You are on the global cooldown.")
+	}
+}
+
+// handleCheatPower mirrors HandlePowerCheatCommand (cs_cheat.cpp:129).
+// Fidelity gap: the CHEAT_POWER consumer (Spell.cpp:4792, power-cost skip)
+// has no Go bridge; the flag is stored and reported only.
+func (s *session) handleCheatPower(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandCheatPower) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	enable, ok := s.cheatToggle(cheatPower, args)
+	if !ok {
+		s.sendSysMessage("Syntax: .cheat power [on|off]")
+		return
+	}
+	if enable {
+		s.sendSysMessage("Power Cheat is ON. You don't need mana/rage/energy to use spells.")
+	} else {
+		s.sendSysMessage("Power Cheat is OFF. You need mana/rage/energy to use spells.")
+	}
+}
+
+// handleCheatWaterwalk mirrors HandleWaterWalkCheatCommand (cs_cheat.cpp:185):
+// the CHEAT_WATERWALK bit plus the immediate forced movement (Player::
+// SetMovement(MOVE_WATER_WALK / MOVE_LAND_WALK)).
+func (s *session) handleCheatWaterwalk(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandCheatWaterwalk) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	enable, ok := s.cheatToggle(cheatWaterwalk, args)
+	if !ok {
+		s.sendSysMessage("Syntax: .cheat waterwalk [on|off]")
+		return
+	}
+	if enable {
+		s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK))
+		s.sendSysMessage("Waterwalking is ON. You can walk on water.")
+	} else {
+		s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_LAND_WALK))
+		s.sendSysMessage("Waterwalking is OFF. You can't walk on water.")
+	}
+}
+
+// handleCheatStatus mirrors HandleCheatStatusCommand (cs_cheat.cpp:150): the
+// LANG_COMMAND_CHEAT_STATUS (357) header plus one line per flag (358-362,
+// 364). The trinity_string English is inlined; Go has no lang-text helper
+// and the strings live in the world DB, not the repo.
+func (s *session) handleCheatStatus(ctx context.Context) {
+	if !s.commandAllowed(ctx, permissionCommandCheatStatus) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	s.sendSysMessage("Cheat status")
+	s.sendSysMessage(fmt.Sprintf("Godmode is %s.", cheatOnOff(s.player.ActiveCheats&cheatGod != 0)))
+	s.sendSysMessage(fmt.Sprintf("Cooldown cheat is %s.", cheatOnOff(s.player.ActiveCheats&cheatCooldown != 0)))
+	s.sendSysMessage(fmt.Sprintf("CastTime cheat is %s.", cheatOnOff(s.player.ActiveCheats&cheatCasttime != 0)))
+	s.sendSysMessage(fmt.Sprintf("Power cheat is %s.", cheatOnOff(s.player.ActiveCheats&cheatPower != 0)))
+	s.sendSysMessage(fmt.Sprintf("Waterwalk is %s.", cheatOnOff(s.player.ActiveCheats&cheatWaterwalk != 0)))
+	s.sendSysMessage(fmt.Sprintf("All taxi nodes enabled is %s.", cheatOnOff(s.isTaxiCheater())))
+}
+
+// handleCheatTaxi mirrors HandleTaxiCheatCommand (cs_cheat.cpp:210): the
+// target is the selected online player, else the handler's own player (the
+// C++ getSelectedPlayer null falls back to self), guarded by
+// HasLowerSecurity; the PLAYER_EXTRA_TAXICHEAT bit rides the existing
+// persistExtraFlags path.
+func (s *session) handleCheatTaxi(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandCheatTaxi) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	target := s
+	if s.selection != 0 && s.server != nil {
+		if ts := s.server.playerSessionForGUID(s.selection); ts != nil {
+			target = ts
+		}
+	}
+	if target != s && s.security < s.accountSecurityLevel(ctx, target.accountID) {
+		return // C++ HasLowerSecurity: silent fail
+	}
+	if target.player == nil {
+		return
+	}
+	enable := !target.isTaxiCheater()
+	if len(args) > 0 {
+		v, ok := cheatArgBool(args[0])
+		if !ok {
+			s.sendSysMessage("Syntax: .cheat taxi [on|off]")
+			return
+		}
+		enable = v
+	}
+	if enable {
+		target.player.ExtraFlags |= playerExtraTaxiCheat
+	} else {
+		target.player.ExtraFlags &^= playerExtraTaxiCheat
+	}
+	target.persistExtraFlags()
+	// ChatHandler::GetNameLink has no Go bridge; the plain name is used.
+	if enable {
+		s.sendSysMessage(fmt.Sprintf("You give taxis to %s.", target.player.Name))
+		if target != s {
+			target.sendSysMessage(fmt.Sprintf("%s adds all taxi nodes for you.", s.player.Name))
+		}
+	} else {
+		s.sendSysMessage(fmt.Sprintf("You remove taxis from %s.", target.player.Name))
+		if target != s {
+			target.sendSysMessage(fmt.Sprintf("%s removes all taxi nodes from you.", s.player.Name))
+		}
+	}
+}
+
+// handleCheatExplore mirrors HandleExploreCheatCommand (cs_cheat.cpp:238):
+// a selected online player is required (null -> LANG_NO_CHAR_SELECTED),
+// the bool is a required argument (not optional), and the
+// PLAYER_EXPLORED_ZONES flags land on the handler's own player exactly like
+// the C++ loop (a known upstream quirk: the messages name the target while
+// the flags apply to self).
+func (s *session) handleCheatExplore(ctx context.Context, args []string) {
+	syntax := "Syntax: .cheat explore on|off"
+	if len(args) != 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	reveal, ok := cheatArgBool(args[0])
+	if !ok {
+		s.sendSysMessage(syntax)
+		return
+	}
+	if !s.commandAllowed(ctx, permissionCommandCheatExplore) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	// ChatHandler::getSelectedPlayer: null when nothing is targeted or the
+	// target is offline; the C++ arm then fails with LANG_NO_CHAR_SELECTED.
+	var target *session
+	if s.selection != 0 && s.server != nil {
+		target = s.server.playerSessionForGUID(s.selection)
+	}
+	if target == nil || target.player == nil {
+		s.sendSysMessage("No character selected.")
+		return
+	}
 	explored := uint32(0)
-	if enabled {
+	if reveal {
 		explored = ^uint32(0)
 	}
 	fields := make(map[int]uint32, len(s.player.ExploredZones))
@@ -475,12 +739,17 @@ func (s *session) handleCmdCheat(ctx context.Context, args []string) bool {
 	}
 	s.persistExploredZones(ctx)
 	s.sendPlayerValuesUpdate(fields)
-	if enabled {
-		s.sendSysMessage("All areas explored.")
+	if reveal {
+		s.sendSysMessage(fmt.Sprintf("You give explore-all to %s.", target.player.Name))
+		if target != s {
+			target.sendSysMessage(fmt.Sprintf("%s gives you explore-all.", s.player.Name))
+		}
 	} else {
-		s.sendSysMessage("All areas unexplored.")
+		s.sendSysMessage(fmt.Sprintf("You give explore-nothing to %s.", target.player.Name))
+		if target != s {
+			target.sendSysMessage(fmt.Sprintf("%s gives you explore-nothing.", s.player.Name))
+		}
 	}
-	return true
 }
 
 func (s *session) sendNotification(msg string) {
@@ -4702,7 +4971,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root := &commandNode{name: "", children: make(map[string]*commandNode)}
 	root.add("help", func(ctx context.Context, args []string) bool { s.handleCmdHelp(args); return true }, nil, map[string]string{"?": "help"})
 	root.add("gm", func(ctx context.Context, args []string) bool { s.handleCmdGM(args); return true }, []string{"on", "off", "chat", "fly", "visible"}, map[string]string{"vis": "visible"})
-	root.add("cheat", func(ctx context.Context, args []string) bool { return s.handleCmdCheat(ctx, args) }, []string{"explore"}, nil)
+	root.add("cheat", func(ctx context.Context, args []string) bool { return s.handleCmdCheat(ctx, args) }, []string{"god", "casttime", "cooldown", "power", "waterwalk", "status", "taxi", "explore"}, nil)
 	root.add("tele", func(ctx context.Context, args []string) bool { s.handleCmdTele(ctx, args); return true }, nil, nil)
 	root.add("go", func(ctx context.Context, args []string) bool { s.handleCmdGo(ctx, args); return true }, nil, nil)
 	root.add("modify", func(ctx context.Context, args []string) bool { s.handleCmdModify(ctx, args); return true }, []string{"hp", "health", "mana", "power", "speed", "run", "fly", "scale", "money", "gold", "level"}, map[string]string{"mod": "modify"})

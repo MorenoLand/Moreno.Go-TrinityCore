@@ -37,7 +37,29 @@ const permissionRestoreSavedGMState uint32 = 39
 // permissionOpcodeWorldTeleport mirrors rbac::RBAC_PERM_OPCODE_WORLD_TELEPORT (RBAC.h:95).
 const permissionOpcodeWorldTeleport uint32 = 42
 
+// permissionCommandCheatCasttime mirrors rbac::RBAC_PERM_COMMAND_CHEAT_CASTTIME (RBAC.h:206).
+const permissionCommandCheatCasttime uint32 = 292
+
+// permissionCommandCheatCooldown mirrors rbac::RBAC_PERM_COMMAND_CHEAT_COOLDOWN (RBAC.h:207).
+const permissionCommandCheatCooldown uint32 = 293
+
+// permissionCommandCheatExplore mirrors rbac::RBAC_PERM_COMMAND_CHEAT_EXPLORE (RBAC.h:208).
 const permissionCommandCheatExplore uint32 = 294
+
+// permissionCommandCheatGod mirrors rbac::RBAC_PERM_COMMAND_CHEAT_GOD (RBAC.h:209).
+const permissionCommandCheatGod uint32 = 295
+
+// permissionCommandCheatPower mirrors rbac::RBAC_PERM_COMMAND_CHEAT_POWER (RBAC.h:210).
+const permissionCommandCheatPower uint32 = 296
+
+// permissionCommandCheatStatus mirrors rbac::RBAC_PERM_COMMAND_CHEAT_STATUS (RBAC.h:211).
+const permissionCommandCheatStatus uint32 = 297
+
+// permissionCommandCheatTaxi mirrors rbac::RBAC_PERM_COMMAND_CHEAT_TAXI (RBAC.h:212).
+const permissionCommandCheatTaxi uint32 = 298
+
+// permissionCommandCheatWaterwalk mirrors rbac::RBAC_PERM_COMMAND_CHEAT_WATERWALK (RBAC.h:213).
+const permissionCommandCheatWaterwalk uint32 = 299
 
 // permissionOpcodeWhois mirrors rbac::RBAC_PERM_OPCODE_WHOIS (RBAC.h:96).
 const permissionOpcodeWhois uint32 = 43
