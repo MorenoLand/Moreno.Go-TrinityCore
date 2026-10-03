@@ -123,6 +123,7 @@ const (
 	spellFailedLowLevel                  uint8 = 48  // SPELL_FAILED_LOWLEVEL (SharedDefines.h:1030)
 	spellFailedNotKnown                  uint8 = 63  // SPELL_FAILED_NOT_KNOWN (SharedDefines.h:1045)
 	spellFailedItemEnchantTradeWindow    uint8 = 182 // SPELL_FAILED_ITEM_ENCHANT_TRADE_WINDOW (SharedDefines.h:1164)
+	spellFailedItemGone                  uint8 = 43  // SPELL_FAILED_ITEM_GONE (SharedDefines.h:1025)
 	spellFailedNotTrading                uint8 = 71  // SPELL_FAILED_NOT_TRADING (SharedDefines.h:1053)
 	spellFailedItemAlreadyEnchanted      uint8 = 42  // SPELL_FAILED_ITEM_ALREADY_ENCHANTED (SharedDefines.h:1024)
 	spellFailedAuraBounced               uint8 = 9   // SPELL_FAILED_AURA_BOUNCED (SharedDefines.h:991)
@@ -156,9 +157,21 @@ const (
 
 	itemClassWeapon = 2
 	itemClassArmor  = 4
+	// ITEM_CLASS_TRADE_GOODS (ItemTemplate.h:303): vellum class for the
+	// IsFitToSpellRequirements enchant-spell carve-outs (Item.cpp:803-809).
+	itemClassTradeGoods = 7
 
 	itemSubclassArmorBuckler = 5
 	itemSubclassArmorShield  = 6
+	// ItemSubclassTradeGoods vellum subclasses (ItemTemplate.h:444-445).
+	itemSubclassArmorEnchantment  = 14
+	itemSubclassWeaponEnchantment = 15
+
+	// InventoryType values (ItemTemplate.h:274, 282-283) for the
+	// IsFitToSpellRequirements enchant-spell weapon carve-out (Item.cpp:824).
+	invTypeWeapon         = 13
+	invTypeWeaponMainhand = 21
+	invTypeWeaponOffhand  = 22
 
 	// ITEM_SUBCLASS_MASK_WEAPON_RANGED (ItemTemplate.h:372): bow/gun/
 	// crossbow/thrown subclasses; the EquippedItemSubClass DBC field is
@@ -198,6 +211,11 @@ const (
 	spellEffectJumpDest                = 42  // SPELL_EFFECT_JUMP_DEST (SharedDefines.h:853)
 	spellEffectLeapBack                = 138 // SPELL_EFFECT_LEAP_BACK (SharedDefines.h:949)
 	spellEffectTalentSpecSelect        = 162 // SPELL_EFFECT_TALENT_SPEC_SELECT (SharedDefines.h:973)
+	// Enchant effects for the IsFitToSpellRequirements isEnchantSpell test
+	// (Item.cpp:803: SPELL_EFFECT_ENCHANT_ITEM / _TEMPORARY / _PRISMATIC).
+	spellEffectEnchantItem          = 53  // SPELL_EFFECT_ENCHANT_ITEM (SharedDefines.h:864)
+	spellEffectEnchantItemTemporary = 54  // SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY (SharedDefines.h:865)
+	spellEffectEnchantItemPrismatic = 156 // SPELL_EFFECT_ENCHANT_ITEM_PRISMATIC (SharedDefines.h:967)
 
 	// Summon categories for the generic-summon CheckCast leg
 	// (Spell.cpp:5798-5817, SharedDefines.h:3296).
@@ -1123,6 +1141,17 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if cost > 0 && pType < 7 && s.player.Powers[pType] < cost {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 85), true) // SPELL_FAILED_NO_POWER = 85
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not enough power", "power", s.player.Powers[pType], "cost", cost)
+		return true
+	}
+	// Target-item arm of Spell::CheckItems (Spell.cpp:6748-6754): runs before
+	// the reagent check, matching C++ CheckItems relative order. An item
+	// target that no longer resolves fails with SPELL_FAILED_ITEM_GONE;
+	// one that does not fit the spell fails with
+	// SPELL_FAILED_EQUIPPED_ITEM_CLASS. Client-initiated casts only —
+	// triggered casts go through castSpellDirect.
+	if failReason := s.checkItemTargetCast(ctx, spell, target); failReason != 0 {
+		s.sendCastFailed(ctx, castID, spell, failReason)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "item target requirements not met", "failReason", failReason)
 		return true
 	}
 	if !s.hasSpellReagents(ctx, spell) {
@@ -8460,6 +8489,17 @@ func spellEffectIsUnitOwnedAuraEffect(eff wotlk.SpellEffect) bool {
 	}
 }
 
+// spellHasEffect mirrors SpellInfo::HasEffect (SpellInfo.cpp:887-893):
+// true when any spell effect carries the given effect id.
+func spellHasEffect(spell wotlk.Spell, effectID uint32) bool {
+	for _, eff := range spell.Effects {
+		if eff.Effect == effectID {
+			return true
+		}
+	}
+	return false
+}
+
 // spellHasAura mirrors SpellInfo::HasAura (SpellInfo.cpp:890-896).
 func spellHasAura(spell wotlk.Spell, aura uint32) bool {
 	for _, eff := range spell.Effects {
@@ -11172,7 +11212,17 @@ func (s *session) getItemTemplateClassInfo(ctx context.Context, entry uint32) (i
 // isItemFitToSpell verifies if an item's class, subclass, and inventory type satisfy the spell's requirements.
 // Reference: TrinityCore Item::IsFitToSpellRequirements (Item.cpp:799-832).
 func isItemFitToSpell(spell wotlk.Spell, class uint32, subclass uint32, invType uint32) bool {
+	// isEnchantSpell (Item.cpp:803): enchant spells accept vellum items for
+	// armor/weapon requirements and plain weapons for mainhand/offhand
+	// inventory-type requirements.
+	isEnchant := spellHasEffect(spell, spellEffectEnchantItem) ||
+		spellHasEffect(spell, spellEffectEnchantItemTemporary) ||
+		spellHasEffect(spell, spellEffectEnchantItemPrismatic)
 	if spell.EquippedItemClass >= 0 {
+		if isEnchant && ((spell.EquippedItemClass == itemClassArmor && class == itemClassTradeGoods && subclass == itemSubclassArmorEnchantment) ||
+			(spell.EquippedItemClass == itemClassWeapon && class == itemClassTradeGoods && subclass == itemSubclassWeaponEnchantment)) {
+			return true
+		}
 		if uint32(spell.EquippedItemClass) != class {
 			return false
 		}
@@ -11183,11 +11233,72 @@ func isItemFitToSpell(spell wotlk.Spell, class uint32, subclass uint32, invType 
 		}
 	}
 	if spell.EquippedItemInvTypes != 0 {
+		if isEnchant && invType == invTypeWeapon &&
+			(spell.EquippedItemInvTypes&(1<<invTypeWeaponMainhand) != 0 || spell.EquippedItemInvTypes&(1<<invTypeWeaponOffhand) != 0) {
+			return true
+		}
 		if (spell.EquippedItemInvTypes & (1 << invType)) == 0 {
 			return false
 		}
 	}
 	return true
+}
+
+// checkItemTargetCast mirrors the target-item arm of Spell::CheckItems
+// (Spell.cpp:6748-6754). Item-target resolution mirrors
+// SpellCastTargets::Update (Spell.cpp:462-478): TARGET_FLAG_ITEM resolves
+// through Player::GetItemByGuid (Player.cpp:9994-10024 — the player's
+// inventory, bank, and bags, mirrored by the character_inventory join);
+// TARGET_FLAG_TRADE_ITEM carries the trade slot index rather than a GUID,
+// and only TRADE_SLOT_NONTRADED (TradeSlots, TradeData.h:27) resolves —
+// "also prevents hacking slots" — to the partner's non-traded trade item
+// (TradeData::GetTraderData, Spell.cpp:471-474). An item GUID that resolves
+// to nothing fails with SPELL_FAILED_ITEM_GONE; an item whose template
+// does not fit the spell fails with SPELL_FAILED_EQUIPPED_ITEM_CLASS via
+// Item::IsFitToSpellRequirements (Item.cpp:799-832). Neither failure
+// carries extra WriteCastResultInfo params (Spell.cpp:3974-4160), so no
+// castFailedExtParams case is needed. Client-initiated casts only —
+// triggered casts go through castSpellDirect, not this path.
+func (s *session) checkItemTargetCast(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+	itemGUID := target.ItemGUID
+	if itemGUID == 0 {
+		return 0
+	}
+	var entry uint32
+	resolved := false
+	switch {
+	case target.Flags&protocol.SpellTargetFlagItem != 0:
+		if s != nil && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			var found int64
+			if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+				`SELECT ii.itemEntry FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ci.item = ?`,
+				s.playerGUID, int64(itemGUID)).Scan(&found); err == nil {
+				entry, resolved = uint32(found), true
+			}
+		}
+	case target.Flags&protocol.SpellTargetFlagTradeItem != 0:
+		// The wire "GUID" is the trade slot index; only the non-traded
+		// slot (6) resolves, anything else is ITEM_GONE.
+		if itemGUID == tradeSlotNonTraded && s != nil && s.trade != nil &&
+			s.trade.Partner != nil && s.trade.Partner.trade != nil {
+			if slotItem, ok := s.trade.Partner.trade.Items[uint8(tradeSlotNonTraded)]; ok && slotItem.ItemEntry != 0 {
+				entry, resolved = slotItem.ItemEntry, true
+			}
+		}
+	}
+	if !resolved {
+		return spellFailedItemGone
+	}
+	// A resolved item whose template row is missing is a data gap, not a
+	// client fault: unknown data is permissive (terrain.go convention).
+	data, err := s.loadItemQueryData(ctx, entry)
+	if err != nil {
+		return 0
+	}
+	if !isItemFitToSpell(spell, data.Class, data.SubClass, data.InventoryType) {
+		return spellFailedEquippedItemClass
+	}
+	return 0
 }
 
 // checkSpellEquippedItemRequirements validates equipped weapon and armor requirements for spells before cast execution.
