@@ -95,6 +95,7 @@ const (
 	spellFailedLowLevel                  uint8 = 48  // SPELL_FAILED_LOWLEVEL (SharedDefines.h:1030)
 	spellFailedNotKnown                  uint8 = 63  // SPELL_FAILED_NOT_KNOWN (SharedDefines.h:1045)
 	spellFailedItemEnchantTradeWindow    uint8 = 182 // SPELL_FAILED_ITEM_ENCHANT_TRADE_WINDOW (SharedDefines.h:1164)
+	spellFailedAuraBounced               uint8 = 9   // SPELL_FAILED_AURA_BOUNCED (SharedDefines.h:991)
 
 	spellImplicitTargetUnitPet uint32 = 5 // TARGET_UNIT_PET (SharedDefines.h:1446)
 
@@ -1107,6 +1108,90 @@ func (s *session) checkLearnSpellCast(ctx context.Context, spell wotlk.Spell, ta
 	return 0
 }
 
+// spellDiminishingBounced mirrors the diminishing-returns recheck leg of
+// Spell::_cast (Spell.cpp:3374-3400) and Unit::HasStrongerAuraWithDR
+// (Unit.cpp:4744-4762): after the cast bar completes, a crowd-control spell
+// whose DR-adjusted duration would land shorter than an already-active aura
+// of the same DR group on the target fails with SPELL_FAILED_AURA_BOUNCED.
+// Only player targets bridge the check: Go's diminishing state is
+// session-scoped, with no per-creature Unit::m_Diminishings bridge, so
+// creature targets skip the recheck (documented gap).
+func (s *session) spellDiminishingBounced(spell wotlk.Spell, targetGUID uint64) bool {
+	if s == nil || s.server == nil || s.server.Data == nil || targetGUID == 0 {
+		return false
+	}
+	ownedAura := false
+	for _, eff := range spell.Effects {
+		if spellEffectIsUnitOwnedAuraEffect(eff) {
+			ownedAura = true
+			break
+		}
+	}
+	if !ownedAura {
+		return false
+	}
+	// finishSpellCast serves player-initiated casts (m_triggeredByAuraSpell
+	// is null), so the non-triggered DR group applies; Go's
+	// getDiminishingReturnsGroup mirrors diminishingGroupCompute(false)
+	// (SpellInfo.cpp:2242) — the triggered variant differs only for the
+	// mechanic-STUN/ROOT fallbacks (SpellInfo.cpp:2424/2428).
+	group := getDiminishingReturnsGroup(spell.ID, spell.Mechanic)
+	if group == DiminishingNone {
+		return false
+	}
+	// DiminishingReturnsType gate (SpellInfo.cpp:2435-2449): DRTYPE_ALL
+	// groups recheck on every target, DRTYPE_PLAYER only on DR-affected
+	// targets (Unit::IsAffectedByDiminishingReturns, Unit.h:780) — a live
+	// session is always a player, so the gate passes for player targets.
+	if t := diminishingGroupType(group); t != diminishingTypeAll && t != diminishingTypePlayer {
+		return false
+	}
+	targetSess := s.server.findSessionByGUID(targetGUID)
+	if targetSess == nil || targetSess.player == nil {
+		return false
+	}
+	// SpellInfo::GetMaxDuration (SpellInfo.cpp:3084-3089): the DBC
+	// MaxDuration column; -1 (infinite) and 0 (no duration entry) never
+	// bounce (Unit.cpp:4757 requires newDuration > 0).
+	maxDuration, found, err := s.server.Data.SpellMaxDuration(spell.DurationIndex)
+	if err != nil || !found || maxDuration <= 0 {
+		return false
+	}
+	for _, aura := range targetSess.loadedAuras() {
+		if aura == nil {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if getDiminishingReturnsGroup(aura.SpellID, auraSpell.Mechanic) != group {
+			continue
+		}
+		// Aura::GetDuration is the live remaining duration
+		// (player_aura_save.go:305-318 pattern).
+		existing := aura.RemainingMs
+		if !aura.DurationUpdatedAt.IsZero() {
+			if elapsed := time.Since(aura.DurationUpdatedAt).Milliseconds(); elapsed > 0 {
+				if uint64(elapsed) < uint64(existing) {
+					existing -= uint32(elapsed)
+				} else {
+					existing = 0
+				}
+			}
+		}
+		// Unit::ApplyDiminishingToDuration (Unit.cpp:9036-9099) against the
+		// target's own DR level: the 10s PvP cap (caster is the player,
+		// target is DR-affected) then the level modifier. Run on the
+		// target session so its GetDiminishing level applies; the taunt
+		// special-case mods only apply to creature targets (Unit.cpp:9069).
+		if _, newDuration, ok := targetSess.applyDiminishingToDuration(spell.ID, spell.Mechanic, uint32(maxDuration), true); ok && newDuration > 0 && newDuration < existing {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, castItemGUID uint64) {
 	if s.player == nil {
 		return
@@ -1230,6 +1315,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if target.Flags&protocol.SpellTargetFlagTradeItem != 0 && s.trade != nil && !s.trade.InAcceptProcess {
 		s.setTradeSpell(spellID, 0)
 		s.debug("spell cast deferred to trade", "account", s.accountName, "spell", spellID)
+		return
+	}
+
+	// Spell::_cast (Spell.cpp:3374-3400): the diminishing-returns recheck
+	// runs again after the cast bar completes — a crowd-control spell whose
+	// DR-adjusted duration would land shorter than an already-active aura of
+	// the same DR group on the target bounces with SPELL_FAILED_AURA_BOUNCED
+	// (Unit::HasStrongerAuraWithDR, Unit.cpp:4744-4762). target.UnitGUID is
+	// the explicit unit target from the packet (m_targets.GetUnitTarget()),
+	// matching _cast order before SelectSpellTargets.
+	if target.UnitGUID != 0 && s.spellDiminishingBounced(spell, target.UnitGUID) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedAuraBounced), true)
+		s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "diminishing returns bounce")
 		return
 	}
 
@@ -4915,6 +5013,26 @@ func spellEffectIsAuraEffect(eff wotlk.SpellEffect) bool {
 		spellEffectApplyAreaAuraParty, spellEffectApplyAreaAuraRaid,
 		spellEffectApplyAreaAuraPet, spellEffectApplyAreaAuraFriend,
 		spellEffectApplyAreaAuraEnemy, spellEffectApplyAreaAuraOwner:
+		return true
+	default:
+		return false
+	}
+}
+
+// spellEffectIsUnitOwnedAuraEffect mirrors
+// SpellEffectInfo::IsUnitOwnedAuraEffect (SpellInfo.cpp:397-400): area-aura
+// effects (SpellEffectInfo::IsAreaAuraEffect, SpellInfo.cpp:385-395) or
+// SPELL_EFFECT_APPLY_AURA. It is the aura_effmask gate of the Spell::_cast
+// diminishing-returns recheck (Spell.cpp:3378-3381).
+func spellEffectIsUnitOwnedAuraEffect(eff wotlk.SpellEffect) bool {
+	switch eff.Effect {
+	case spellEffectApplyAreaAuraParty,
+		spellEffectApplyAreaAuraRaid,
+		spellEffectApplyAreaAuraFriend,
+		spellEffectApplyAreaAuraEnemy,
+		spellEffectApplyAreaAuraPet,
+		spellEffectApplyAreaAuraOwner,
+		spellEffectApplyAura:
 		return true
 	default:
 		return false

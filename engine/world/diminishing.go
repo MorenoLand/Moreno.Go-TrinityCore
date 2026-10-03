@@ -214,6 +214,36 @@ func isGroupDurationLimited(group DiminishingGroup) bool {
 	}
 }
 
+// diminishingReturnsType mirrors TrinityCore enum DiminishingReturnsType,
+// the DiminishReturnType computed per group in
+// SpellInfo::_LoadDiminishingReturns (SpellInfo.cpp:2435-2449).
+type diminishingReturnsType uint8
+
+const (
+	diminishingTypeNone diminishingReturnsType = iota
+	diminishingTypeAll
+	diminishingTypePlayer
+)
+
+// diminishingGroupType mirrors the diminishingTypeCompute lambda in
+// SpellInfo::_LoadDiminishingReturns (SpellInfo.cpp:2435-2449).
+func diminishingGroupType(group DiminishingGroup) diminishingReturnsType {
+	switch group {
+	case DiminishingTaunt,
+		DiminishingControlledStun,
+		DiminishingStun,
+		DiminishingOpeningStun,
+		DiminishingCyclone,
+		DiminishingCharge:
+		return diminishingTypeAll
+	case DiminishingLimitOnly,
+		DiminishingNone:
+		return diminishingTypeNone
+	default:
+		return diminishingTypePlayer
+	}
+}
+
 // getDiminishing returns the current diminishing level for a group.
 // Mirrors TrinityCore Unit::GetDiminishing (Unit.cpp:9012-9023).
 func (s *session) getDiminishing(group DiminishingGroup) DiminishingLevel {

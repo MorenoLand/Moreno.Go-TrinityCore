@@ -1770,6 +1770,29 @@ func (s *Store) SpellDuration(id uint32, level uint32) (int32, bool, error) {
 	return duration, true, nil
 }
 
+// SpellMaxDuration mirrors SpellInfo::GetMaxDuration (SpellInfo.cpp:3084-3089):
+// the MaxDuration column of SpellDuration.dbc (DBCStructure.h format "niii").
+// Unit::HasStrongerAuraWithDR (Unit.cpp:4744-4762) compares this raw column
+// value — not the level-scaled SpellDuration — against live aura durations.
+func (s *Store) SpellMaxDuration(id uint32) (int32, bool, error) {
+	if id == 0 {
+		return 0, true, nil
+	}
+	file, err := s.File("SpellDuration")
+	if err != nil {
+		return 0, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return 0, false, nil
+	}
+	maxDuration, err := record.Int32(3)
+	if err != nil {
+		return 0, false, err
+	}
+	return maxDuration, true, nil
+}
+
 func (s *Store) SpellRadius(id, level uint32) (float32, bool, error) {
 	if id == 0 {
 		return 0, true, nil
