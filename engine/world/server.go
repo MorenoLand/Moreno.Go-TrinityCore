@@ -173,13 +173,18 @@ type Server struct {
 }
 
 type session struct {
-	server                       *Server
-	conn                         net.Conn
-	authSeed                     [4]byte
-	crypt                        *crypto.AuthCrypt
-	authed                       bool
-	accountID                    uint32
-	accountName                  string
+	server      *Server
+	conn        net.Conn
+	authSeed    [4]byte
+	crypt       *crypto.AuthCrypt
+	authed      bool
+	accountID   uint32
+	accountName string
+	// recruiterID mirrors WorldSession::recruiterId (WorldSession.h:580) —
+	// the account.recruiter column the C++ auth handshake SELECTs into the
+	// session (WorldSocket.cpp:267). It feeds the
+	// SPELL_EFFECT_SUMMON_RAF_FRIEND CheckCast gate (Spell.cpp:5936-5941).
+	recruiterID                  uint32
 	security                     uint8
 	raidMapDifficulty            uint8
 	raidMapDifficultyInitialized bool
@@ -3206,6 +3211,11 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	s.authed = true
 	s.accountID = account.ID
 	s.accountName = accountName
+	// The C++ auth handshake SELECTs account.recruiter into the session
+	// (WorldSocket.cpp:267 → WorldSession.cpp:135). Error-tolerant: a
+	// missing column or failed query leaves the zero (no-recruiter) state,
+	// which the RAF check treats as no link, like C++'s default 0.
+	s.recruiterID = accountRecruiterID(ctx, s.server.AuthStore.DB, account.ID)
 	s.security = account.Security
 	s.muteTime = account.MuteTime
 	s.gmChat = false
@@ -3593,6 +3603,18 @@ func accountBanned(ctx context.Context, store *database.Store, id uint32) (bool,
 	var count int64
 	err := store.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM account_banned WHERE id = ? AND active = 1 AND (unbandate > ? OR unbandate = bandate)", id, timeNow()).Scan(&count)
 	return count != 0, err
+}
+
+// accountRecruiterID reads the account.recruiter column the C++ auth
+// handshake loads into every session (WorldSocket.cpp:267). Any error —
+// including a schema without the column — yields 0 (no recruiter), which
+// the recruit-a-friend summon gate reads as "no link".
+func accountRecruiterID(ctx context.Context, db *sql.DB, accountID uint32) uint32 {
+	var recruiter uint32
+	if err := db.QueryRowContext(ctx, "SELECT recruiter FROM account WHERE id = ?", accountID).Scan(&recruiter); err != nil {
+		return 0
+	}
+	return recruiter
 }
 
 func timeNow() int64 { return time.Now().Unix() }

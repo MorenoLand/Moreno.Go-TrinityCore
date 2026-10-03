@@ -165,6 +165,7 @@ const (
 	spellEffectSummonPet       = 56  // SPELL_EFFECT_SUMMON_PET (SharedDefines.h:867)
 	spellEffectCreateTamedPet  = 153 // SPELL_EFFECT_CREATE_TAMED_PET (SharedDefines.h:964)
 	spellEffectSummonPlayer    = 85  // SPELL_EFFECT_SUMMON_PLAYER (SharedDefines.h:896)
+	spellEffectSummonRafFriend = 152 // SPELL_EFFECT_SUMMON_RAF_FRIEND (SharedDefines.h:963)
 
 	// Summon categories for the generic-summon CheckCast leg
 	// (Spell.cpp:5798-5817, SharedDefines.h:3296).
@@ -1022,6 +1023,16 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if failure := s.checkSummonPlayerCast(ctx, spell, spellID); failure != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-player validation", "failure", failure)
+		return true
+	}
+	// Recruit-a-friend summon gate (Spell::CheckCast per-effect block,
+	// Spell.cpp:5929-5943): a SPELL_EFFECT_SUMMON_RAF_FRIEND effect fails
+	// with SPELL_FAILED_BAD_TARGETS unless the selected player is
+	// recruiter-linked to the caster in either direction. C++ relative
+	// order places this right after the summon-player leg.
+	if failure := s.checkSummonRafFriendCast(spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-raf-friend validation", "failure", failure)
 		return true
 	}
 	cost := s.calculateSpellPowerCost(spell)
@@ -2204,6 +2215,50 @@ func (s *session) checkSummonPlayerCast(ctx context.Context, spell wotlk.Spell, 
 	// Player::Satisfy(GetAccessRequirement(mapId, difficulty)) — the
 	// level/item/quest access-requirement model has no Go bridge (documented;
 	// never stubbed).
+	return 0
+}
+
+// checkSummonRafFriendCast mirrors the SPELL_EFFECT_SUMMON_RAF_FRIEND leg of
+// the Spell::CheckCast per-effect switch (Spell.cpp:5929-5943).
+func (s *session) checkSummonRafFriendCast(spell wotlk.Spell) uint8 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
+	matched := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == spellEffectSummonRafFriend {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return 0
+	}
+	// The caster-TYPEID_PLAYER arm is vacuous on the client-initiated path
+	// (the session is always a player).
+	//
+	// The summon targets the caster's selected player: Player::GetTarget()
+	// is the CMSG_SET_SELECTION tracked selection (chat.go), and
+	// Player::GetSelectedPlayer is ObjectAccessor::FindConnectedPlayer
+	// (Player.cpp:22866-22871) — the Go findSessionByGUID bridge likewise
+	// resolves online player sessions only, so a zero, creature, offline,
+	// or unknown selection lands here as BAD_TARGETS.
+	if s.selection == 0 {
+		return spellFailedBadTargets
+	}
+	target := s.server.findSessionByGUID(s.selection)
+	if target == nil || target.player == nil {
+		return spellFailedBadTargets
+	}
+	// The recruiter link holds in either direction:
+	// target->GetSession()->GetRecruiterId() == caster's account id, or
+	// target's account id == caster's recruiter id (WorldSession.h:580).
+	// recruiterID is populated from account.recruiter at auth
+	// (WorldSocket.cpp:267 bridge); a 0 recruiter id can never match a
+	// real (non-zero) account id, so an unlinked pair fails here.
+	if target.recruiterID != s.accountID && target.accountID != s.recruiterID {
+		return spellFailedBadTargets
+	}
 	return 0
 }
 
