@@ -136,6 +136,7 @@ const (
 	unitFlagSkinnable                      uint32 = 0x04000000
 	unitFlag2RegeneratePower               uint32 = 0x00000800
 	unitFlagInCombat                       uint32 = 0x00080000
+	unitFlagPreparation                    uint32 = 0x00000020 // UNIT_FLAG_PREPARATION (UnitDefines.h:129)
 )
 
 // questCompleteStateFlag sets the per-slot complete bit the client reads

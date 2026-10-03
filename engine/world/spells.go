@@ -68,6 +68,7 @@ const (
 	spellAttr5UsableWhileStunned           uint32 = 0x00000008 // SPELL_ATTR5_USABLE_WHILE_STUNNED (SharedDefines.h:600) — ATTR5 is Go's AttributesEx5 (Spell.dbc field 9 = AttributesExE)
 	spellAttr5UsableWhileFeared            uint32 = 0x00020000 // SPELL_ATTR5_USABLE_WHILE_FEARED (SharedDefines.h:614) — ATTR5 is Go's AttributesEx5
 	spellAttr5UsableWhileConfused          uint32 = 0x00040000 // SPELL_ATTR5_USABLE_WHILE_CONFUSED (SharedDefines.h:615) — ATTR5 is Go's AttributesEx5
+	spellAttr5NoReagentWhilePrep           uint32 = 0x00000002 // SPELL_ATTR5_NO_REAGENT_WHILE_PREP (SharedDefines.h:598) — ATTR5 is Go's AttributesEx5
 	spellAttr6IgnoreCasterAuras            uint32 = 0x00000004 // SPELL_ATTR6_IGNORE_CASTER_AURAS (SharedDefines.h:636) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr1DispelAurasOnImmunity        uint32 = 0x00008000 // SPELL_ATTR1_DISPEL_AURAS_ON_IMMUNITY (SharedDefines.h:464) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr2UnaffectedByAuraSchoolImmune uint32 = 0x04000000 // SPELL_ATTR2_UNAFFECTED_BY_AURA_SCHOOL_IMMUNE (SharedDefines.h:512) — ATTR2 is Go's AttributesEx1
@@ -1154,7 +1155,21 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "item target requirements not met", "failReason", failReason)
 		return true
 	}
-	if !s.hasSpellReagents(ctx, spell) {
+	// Reagent block of Spell::CheckItems (Spell.cpp:6765-6805): the
+	// TRIGGERED_IGNORE_POWER_AND_REAGENT_COST arm is structural (handleCastSpell
+	// serves CMSG_CAST_SPELL only; triggered casts go through castSpellDirect,
+	// which runs no reagent check), and the outer ITEM_FLAG_NO_REAGENT_COST
+	// guard always passes here because m_CastItem is always nil on this path
+	// (item casts run through handleUseItem, which runs no CheckCast gates).
+	// The remaining skip is Player::CanNoReagentCast — unless the target item
+	// is a trade item not owned by the caster, which forces the check anyway.
+	// The m_CastItem-is-reagent arms (Spell.cpp:6793-6805) have no bridge for
+	// the same reason. Client-initiated casts only.
+	checkReagents := !s.canNoReagentCast(spell)
+	if !checkReagents && s.tradeItemTargetCast(target) {
+		checkReagents = true
+	}
+	if checkReagents && !s.hasSpellReagents(ctx, spell) {
 		s.sendCastFailed(ctx, castID, spell, 100) // SPELL_FAILED_REAGENTS = 100
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "missing reagents")
 		return true
@@ -11299,6 +11314,40 @@ func (s *session) checkItemTargetCast(ctx context.Context, spell wotlk.Spell, ta
 		return spellFailedEquippedItemClass
 	}
 	return 0
+}
+
+// canNoReagentCast mirrors Player::CanNoReagentCast (Player.cpp:23971-23988):
+// spells carrying SPELL_ATTR5_NO_REAGENT_WHILE_PREP cost no reagents while
+// the caster has UNIT_FLAG_PREPARATION set (arena preparation). The second
+// C++ arm (spellInfo->SpellFamilyFlags & the PLAYER_NO_REAGENT_COST_1..3
+// update values) has no Go bridge: nothing applies SPELL_AURA_NO_REAGENT_USE
+// (256) to a player, so those fields are never set and the mask arm is dead.
+// Client-initiated casts only — triggered casts go through castSpellDirect,
+// which runs no reagent check at all.
+func (s *session) canNoReagentCast(spell wotlk.Spell) bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	return spell.AttributesEx5&spellAttr5NoReagentWhilePrep != 0 &&
+		s.player.UnitFlags&unitFlagPreparation != 0
+}
+
+// tradeItemTargetCast returns true when the wire target resolves to a trade
+// item that is not the caster's own — the Spell.cpp:6782-6785 arm of the
+// reagent block: a non-own traded item (in the trader's trade slot) forces
+// the reagent check even when Player::CanNoReagentCast would skip it. The
+// resolution mirrors checkItemTargetCast: TARGET_FLAG_TRADE_ITEM carries the
+// slot index and only TRADE_SLOT_NONTRADED (TradeData.h:27) resolves, to the
+// partner's item — never the caster's.
+func (s *session) tradeItemTargetCast(target protocol.SpellTargetData) bool {
+	if target.Flags&protocol.SpellTargetFlagTradeItem == 0 || target.ItemGUID != tradeSlotNonTraded {
+		return false
+	}
+	if s == nil || s.trade == nil || s.trade.Partner == nil || s.trade.Partner.trade == nil {
+		return false
+	}
+	slotItem, ok := s.trade.Partner.trade.Items[uint8(tradeSlotNonTraded)]
+	return ok && slotItem.ItemEntry != 0
 }
 
 // checkSpellEquippedItemRequirements validates equipped weapon and armor requirements for spells before cast execution.
