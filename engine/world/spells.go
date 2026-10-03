@@ -125,7 +125,11 @@ const (
 	spellFailedTryAgain                  uint8 = 132 // SPELL_FAILED_TRY_AGAIN (SharedDefines.h:1114)
 	spellFailedNotInBattleground         uint8 = 166 // SPELL_FAILED_NOT_IN_BATTLEGROUND (SharedDefines.h:1148)
 	spellFailedAlreadyHaveSummon         uint8 = 7   // SPELL_FAILED_ALREADY_HAVE_SUMMON (SharedDefines.h:989)
-	spellFailedAlreadyHaveCharm          uint8 = 6   // SPELL_FAILED_ALREADY_HAVE_CHARM (SharedDefines.h:988) — charm model has no Go bridge, named for the summon gate comment
+	spellFailedAlreadyHaveCharm          uint8 = 6   // SPELL_FAILED_ALREADY_HAVE_CHARM (SharedDefines.h:988) — caster-side charmed-unit tracking has no Go bridge, named for the charm gate comment
+	spellFailedBadImplicitTargets        uint8 = 11  // SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993)
+	spellFailedCantBeCharmed             uint8 = 13  // SPELL_FAILED_CANT_BE_CHARMED (SharedDefines.h:995)
+	spellFailedHighLevel                 uint8 = 36  // SPELL_FAILED_HIGHLEVEL (SharedDefines.h:1018)
+	spellFailedTargetIsPlayerControlled  uint8 = 118 // SPELL_FAILED_TARGET_IS_PLAYER_CONTROLLED (SharedDefines.h:1100)
 
 	areaFlagNoFlyZone uint32 = 0x20000000 // AREA_FLAG_NO_FLY_ZONE (DBCEnums.h:275) — AreaTableEntry.Flags bit tested by AreaTableEntry::IsFlyable (DBCStructure.h:209)
 
@@ -1283,6 +1287,25 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// Possess-pet / charm gates (Spell::CheckCast ApplyAuraName switch,
+	// Spell.cpp:6033-6087): SPELL_AURA_MOD_POSSESS_PET fails with
+	// SPELL_FAILED_NO_PET when the caster has no pet, and the
+	// SPELL_AURA_MOD_POSSESS / SPELL_AURA_MOD_CHARM / SPELL_AURA_AOE_CHARM
+	// legs fail with SPELL_FAILED_ALREADY_HAVE_SUMMON when the caster has
+	// a pet (non-AoE only) plus the wire unit target gates (vehicle,
+	// mounted, charmed, player-controlled, high-level). C++ relative order
+	// places the ApplyAuraName switch right after the per-effect switch.
+	if failure := s.checkPossessPetCast(spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "possess-pet validation", "failure", failure)
+		return true
+	}
+	if failure := s.checkCharmCast(spell, target); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "charm/possess validation", "failure", failure)
+		return true
+	}
+
 	// Unit::SetCurrentCastSpell (Unit.cpp:3064-3090): registering the new cast
 	// breaks the other containers. A generic cast breaks the active channel
 	// ("generic spells always break channeled not delayed spells") and any
@@ -2424,6 +2447,141 @@ func (s *session) checkTalentSpecSelectCast(spell wotlk.Spell) uint8 {
 			return spellFailedNotInBattleground
 		}
 		return 0
+	}
+	return 0
+}
+
+// checkPossessPetCast mirrors the SPELL_AURA_MOD_POSSESS_PET leg of the
+// CheckCast ApplyAuraName switch (Spell.cpp:6033-6043): a possess-pet spell
+// (Eyes of the Beast) fails with SPELL_FAILED_NO_PET when the caster has no
+// pet, and with SPELL_FAILED_CHARMED when the pet is itself charmed.
+//
+// The caster-TYPEID_PLAYER arm is vacuous on the client-initiated path (the
+// session is always a player). Player::GetPet bridges as livePetMotion()
+// (the GetGuardianPet()+IsAlive bridge from the resurrect-pet leg), and
+// pet->GetCharmerGUID() as the motion charm state (charmCreature,
+// creaturemotion.go) — Eyes of the Beast on a GM-charmed pet fails CHARMED,
+// matching C++. Returns the SPELL_FAILED_* result code, 0 on success.
+func (s *session) checkPossessPetCast(spell wotlk.Spell) uint8 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	matched := false
+	for _, eff := range spell.Effects {
+		if eff.Aura == spellAuraModPossessPet {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return 0
+	}
+	pet := s.livePetMotion()
+	if pet == nil {
+		return spellFailedNoPet
+	}
+	if pet.Charmed || pet.CharmerGUID != 0 {
+		return spellFailedCharmed
+	}
+	return 0
+}
+
+// checkCharmCast mirrors the SPELL_AURA_MOD_POSSESS / SPELL_AURA_MOD_CHARM /
+// SPELL_AURA_AOE_CHARM leg of the CheckCast ApplyAuraName switch
+// (Spell.cpp:6044-6087): caster-side charm-state gates plus the wire unit
+// target gates (vehicle, mounted, charmed, player-controlled, level).
+//
+// Caster side (session is always a player unit, so the unitCaster-null arm
+// and the m_originalCaster redirect are vacuous): unitCaster->GetCharmerGUID
+// has no bridge — Go players carry no charm state — and
+// unitCaster->GetCharmedGUID() has no bridge either (caster-side charmed-unit
+// tracking is absent; motion.CharmerGUID only marks the creature side), both
+// documented as no-bridge. unitCaster->GetPetGUID() bridges as
+// s.player.PetGUID for the MOD_CHARM/MOD_POSSESS (non-AoE)
+// SPELL_FAILED_ALREADY_HAVE_SUMMON arm, gated on
+// !SPELL_ATTR1_DISMISS_PET (spellAttr1DismissPet).
+//
+// Target side (GetUnitTarget() != null mirrors as a wire unit GUID):
+//   - TYPEID_UNIT && IsVehicle → SPELL_FAILED_BAD_IMPLICIT_TARGETS: Go
+//     motions have no vehicle-kit model — documented no-bridge.
+//   - IsMounted → SPELL_FAILED_CANT_BE_CHARMED: player targets via
+//     isPlayerMounted() (commands_misc.go), creature targets via
+//     UNIT_FLAG_MOUNT on the motion UnitFlags (Unit::IsMounted,
+//     Unit.h:932).
+//   - GetCharmerGUID → SPELL_FAILED_CHARMED: motion charm state
+//     (creaturemotion.go); player targets carry no charm model.
+//   - GetOwner() && owner TYPEID_PLAYER →
+//     SPELL_FAILED_TARGET_IS_PLAYER_CONTROLLED: motion.OwnerGUID resolving
+//     to an online player session (findSessionByGUID); player targets have
+//     no owner in Go, matching the C++ GetOwner()-null pass.
+//   - CalculateDamage(i) → SPELL_FAILED_HIGHLEVEL when value != 0 and the
+//     target level exceeds it: eff.CalcValueForLevel(spell, casterLevel)
+//     is the Go CalculateDamage bridge, player levels from
+//     ts.player.Level, creature levels from motion.Level. Unresolvable
+//     GUIDs skip the target gates, mirroring C++ gating only when
+//     GetUnitTarget() yields a unit.
+//
+// Returns the SPELL_FAILED_* result code, 0 on success. None of these
+// results carry extra WriteCastResultInfo params, so castFailedExtParams
+// needs no case (verified Spell.cpp:3974-4160).
+func (s *session) checkCharmCast(spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
+	matched, nonAoe := false, false
+	for _, eff := range spell.Effects {
+		switch eff.Aura {
+		case spellAuraModPossess:
+			matched, nonAoe = true, true
+		case spellAuraCharm: // SPELL_AURA_MOD_CHARM (SpellAuraDefines.h:86)
+			matched, nonAoe = true, true
+		case spellAuraAoeCharm:
+			matched = true
+		}
+	}
+	if !matched {
+		return 0
+	}
+	if nonAoe && spell.AttributesEx&spellAttr1DismissPet == 0 && s.player.PetGUID != 0 {
+		return spellFailedAlreadyHaveSummon
+	}
+	if target.Flags&protocol.SpellTargetFlagUnitWireMask == 0 || target.UnitGUID == 0 {
+		return 0
+	}
+	guid := target.UnitGUID
+	if ts := s.server.findSessionByGUID(guid); ts != nil && ts.player != nil {
+		// Player target: mounted and level gates bridge; charm and
+		// player-controlled arms are vacuous (no player charm or owner model).
+		if ts.isPlayerMounted() {
+			return spellFailedCantBeCharmed
+		}
+		for _, eff := range spell.Effects {
+			if value := eff.CalcValueForLevel(spell, uint32(s.player.Level)); value != 0 && int32(ts.player.Level) > value {
+				return spellFailedHighLevel
+			}
+		}
+		return 0
+	}
+	s.server.motionMu.Lock()
+	defer s.server.motionMu.Unlock()
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, guid)
+	if motion == nil {
+		return 0
+	}
+	// TYPEID_UNIT && IsVehicle arm: no vehicle-kit model on motions — no bridge.
+	if motion.UnitFlags&unitFlagMount != 0 { // UNIT_FLAG_MOUNT (UnitDefines.h:151)
+		return spellFailedCantBeCharmed
+	}
+	if motion.Charmed || motion.CharmerGUID != 0 {
+		return spellFailedCharmed
+	}
+	if motion.OwnerGUID != 0 && s.server.findSessionByGUID(motion.OwnerGUID) != nil {
+		return spellFailedTargetIsPlayerControlled
+	}
+	for _, eff := range spell.Effects {
+		if value := eff.CalcValueForLevel(spell, uint32(s.player.Level)); value != 0 && int32(motion.Level) > value {
+			return spellFailedHighLevel
+		}
 	}
 	return 0
 }
