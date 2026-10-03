@@ -120,6 +120,8 @@ const (
 	spellFailedTargetNotLooted           uint8 = 121 // SPELL_FAILED_TARGET_NOT_LOOTED (SharedDefines.h:1103)
 	spellFailedTargetUnskinnable         uint8 = 126 // SPELL_FAILED_TARGET_UNSKINNABLE (SharedDefines.h:1108)
 	spellFailedTryAgain                  uint8 = 132 // SPELL_FAILED_TRY_AGAIN (SharedDefines.h:1114)
+	spellFailedAlreadyHaveSummon         uint8 = 7   // SPELL_FAILED_ALREADY_HAVE_SUMMON (SharedDefines.h:989)
+	spellFailedAlreadyHaveCharm          uint8 = 6   // SPELL_FAILED_ALREADY_HAVE_CHARM (SharedDefines.h:988) — charm model has no Go bridge, named for the summon gate comment
 
 	areaFlagNoFlyZone uint32 = 0x20000000 // AREA_FLAG_NO_FLY_ZONE (DBCEnums.h:275) — AreaTableEntry.Flags bit tested by AreaTableEntry::IsFlyable (DBCStructure.h:209)
 
@@ -152,9 +154,16 @@ const (
 	spellEffectQuestComplete   = 16
 	spellEffectHealthLeech     = 9
 	spellEffectPowerDrain      = 8
-	spellEffectCharge          = 96 // SPELL_EFFECT_CHARGE (SharedDefines.h:907)
-	spellEffectSkinning        = 95 // SPELL_EFFECT_SKINNING (SharedDefines.h:906)
-	spellEffectOpenLock        = 33 // SPELL_EFFECT_OPEN_LOCK (SharedDefines.h:844)
+	spellEffectCharge          = 96  // SPELL_EFFECT_CHARGE (SharedDefines.h:907)
+	spellEffectSkinning        = 95  // SPELL_EFFECT_SKINNING (SharedDefines.h:906)
+	spellEffectOpenLock        = 33  // SPELL_EFFECT_OPEN_LOCK (SharedDefines.h:844)
+	spellEffectResurrectPet    = 109 // SPELL_EFFECT_RESURRECT_PET (SharedDefines.h:920)
+	spellEffectSummon          = 28  // SPELL_EFFECT_SUMMON (SharedDefines.h:839)
+
+	// Summon categories for the generic-summon CheckCast leg
+	// (Spell.cpp:5798-5817, SharedDefines.h:3296).
+	summonCategoryPet    = 2 // SUMMON_CATEGORY_PET
+	summonCategoryPuppet = 3 // SUMMON_CATEGORY_PUPPET — the charm arm has no Go bridge (see checkSummonCast)
 
 	// Implicit targets for the open-lock CheckCast leg (Spell.cpp:5725-5791,
 	// SharedDefines.h:1459-1462).
@@ -932,6 +941,26 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if failure := s.checkOpenLockCast(spell, target); failure != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "open-lock validation", "failure", failure)
+		return true
+	}
+	// Resurrect-pet gate (Spell::CheckCast per-effect block, Spell.cpp:5792-5801):
+	// a SPELL_EFFECT_RESURRECT_PET effect fails with
+	// SPELL_FAILED_ALREADY_HAVE_SUMMON when the caster's guardian pet is
+	// alive. C++ relative order places this right after the open-lock leg.
+	if failure := s.checkResurrectPetCast(spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "resurrect-pet validation", "failure", failure)
+		return true
+	}
+	// Generic-summon gate (Spell::CheckCast per-effect block, Spell.cpp:5802-5817):
+	// a SPELL_EFFECT_SUMMON effect whose SummonProperties Control is
+	// SUMMON_CATEGORY_PET fails with SPELL_FAILED_ALREADY_HAVE_SUMMON when
+	// the caster has a pet and the spell lacks SPELL_ATTR1_DISMISS_PET; the
+	// charm (puppet) arms have no Go bridge. C++ relative order places this
+	// right after the resurrect-pet leg.
+	if failure := s.checkSummonCast(spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon validation", "failure", failure)
 		return true
 	}
 	cost := s.calculateSpellPowerCost(spell)
@@ -1835,6 +1864,63 @@ func (s *session) checkOpenLockCast(spell wotlk.Spell, target protocol.SpellTarg
 					return spellFailedTryAgain
 				}
 			}
+		}
+	}
+	return 0
+}
+
+// checkResurrectPetCast mirrors the SPELL_EFFECT_RESURRECT_PET leg of the
+// CheckCast per-effect block (Spell.cpp:5792-5801): the cast fails with
+// SPELL_FAILED_ALREADY_HAVE_SUMMON when the caster's guardian pet is alive.
+// The !unitCaster → SPELL_FAILED_BAD_TARGETS arm is vacuous on the
+// client-initiated path (the session is always a player unit), and
+// livePetMotion is the Go bridge for GetGuardianPet()+IsAlive — the class pet
+// is a Guardian subclass in C++, so the hunter/warlock pet Revive Pet targets
+// is exactly this motion; other guardian kinds have no Go model.
+func (s *session) checkResurrectPetCast(spell wotlk.Spell) uint8 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
+	for _, eff := range spell.Effects {
+		if eff.Effect != spellEffectResurrectPet {
+			continue
+		}
+		if s.livePetMotion() != nil {
+			return spellFailedAlreadyHaveSummon
+		}
+	}
+	return 0
+}
+
+// checkSummonCast mirrors the SPELL_EFFECT_SUMMON (generic summon) leg of the
+// CheckCast per-effect block (Spell.cpp:5802-5817): with the effect's
+// SummonProperties.dbc Control read via Effects[i].MiscValueB, a
+// SUMMON_CATEGORY_PET summon fails with SPELL_FAILED_ALREADY_HAVE_SUMMON
+// when the caster already has a pet, unless the spell carries
+// SPELL_ATTR1_DISMISS_PET (0x1, SharedDefines.h:449 — the _cast dismissal at
+// spells.go:2763 then clears the pet instead). A missing properties entry
+// passes, matching C++'s `if (!SummonProperties) break`. The null-caster arm
+// is vacuous on the client-initiated path. No bridge: the
+// SUMMON_CATEGORY_PUPPET charm arm and the pet leg's fallthrough charm check
+// (Unit::GetCharmedGUID → SPELL_FAILED_ALREADY_HAVE_CHARM) — Go has no
+// charm/possess model (commands_misc2.go).
+func (s *session) checkSummonCast(spell wotlk.Spell) uint8 {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	for _, eff := range spell.Effects {
+		if eff.Effect != spellEffectSummon {
+			continue
+		}
+		props, found, err := s.server.Data.SummonProperties(uint32(eff.MiscValueB))
+		if err != nil || !found {
+			continue // missing DBC row or file: unknown-data-is-permissive (terrain.go convention)
+		}
+		if props.Control != summonCategoryPet {
+			continue // SUMMON_CATEGORY_PUPPET/others: charm arm has no bridge
+		}
+		if spell.AttributesEx&spellAttr1DismissPet == 0 && s.player.PetGUID != 0 {
+			return spellFailedAlreadyHaveSummon
 		}
 	}
 	return 0

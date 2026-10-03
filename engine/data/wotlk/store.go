@@ -1116,6 +1116,32 @@ type TotemCategory struct {
 	TotemCategoryMask uint32
 }
 
+// SummonProperties mirrors SummonPropertiesEntry (DBCStructure.h:1653-1662):
+// only Control is read in world/ (the CheckCast summon gate).
+type SummonProperties struct {
+	ID      uint32 // SummonProperties.dbc field 0 = ID (DBCStructure.h:1656)
+	Control uint32 // SummonProperties.dbc field 1 = Control (DBCStructure.h:1657)
+}
+
+func (s *Store) SummonProperties(id uint32) (SummonProperties, bool, error) {
+	if id == 0 {
+		return SummonProperties{}, false, nil
+	}
+	file, err := s.File("SummonProperties")
+	if err != nil {
+		return SummonProperties{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return SummonProperties{}, false, nil
+	}
+	props := SummonProperties{ID: id}
+	if props.Control, err = record.Uint32(1); err != nil {
+		return SummonProperties{}, false, err
+	}
+	return props, true, nil
+}
+
 func (s *Store) TotemCategory(id uint32) (TotemCategory, bool, error) {
 	if id == 0 {
 		return TotemCategory{}, true, nil
