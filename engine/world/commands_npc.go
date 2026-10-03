@@ -71,7 +71,7 @@ func (s *session) npcbotEntryBlocked(entry uint32, flagsExtra uint32, what strin
 // the "add" sub-table and the flat arms move/delete/near; the rest lands in
 // chunk 2.
 func (s *session) handleCmdNPC(ctx context.Context, args []string) {
-	const syntax = "Syntax: .npc add|move|delete|near"
+	const syntax = "Syntax: .npc add|set|move|delete|near|info|playemote|say|textemote|whisper|yell|tame|spawngroup|despawngroup|follow|evade|showloot"
 	if len(args) == 0 {
 		s.sendSysMessage(syntax)
 		return
@@ -90,10 +90,13 @@ func (s *session) handleCmdNPC(ctx context.Context, args []string) {
 	case strings.HasPrefix("move", sub):
 		s.handleNPCMove(ctx, rest)
 	case strings.HasPrefix("delete", sub):
-		s.handleNPCDelete(ctx, rest)
+		s.npcDeleteSub(ctx, rest)
 	case strings.HasPrefix("near", sub):
 		s.handleNPCNear(ctx, rest)
 	default:
+		if s.handleNPCChunk2(ctx, sub, rest) {
+			return
+		}
 		s.sendSysMessage(syntax)
 	}
 }

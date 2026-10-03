@@ -6211,7 +6211,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("mmap", func(ctx context.Context, args []string) bool { s.handleCmdMMap(ctx, args); return true }, []string{"loadedtiles", "loc", "path", "stats", "testarea"}, nil)
 	root.add("morph", func(ctx context.Context, args []string) bool { s.handleCmdMorph(ctx, args); return true }, nil, nil)
 	root.add("demorph", func(ctx context.Context, args []string) bool { s.handleCmdDeMorph(ctx); return true }, nil, nil)
-	root.add("npc", func(ctx context.Context, args []string) bool { s.handleCmdNPC(ctx, args); return true }, []string{"add", "move", "delete", "near"}, nil)
+	root.add("npc", func(ctx context.Context, args []string) bool { s.handleCmdNPC(ctx, args); return true }, []string{"add", "set", "move", "delete", "near", "info", "playemote", "say", "textemote", "whisper", "yell", "tame", "spawngroup", "despawngroup", "follow", "evade", "showloot"}, nil)
 	return root
 }
 
