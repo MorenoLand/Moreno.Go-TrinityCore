@@ -131,7 +131,7 @@ func (s *session) handleCmdDeMorph(ctx context.Context) {
 // covers hp, mana, energy, rage, runicpower, money, honor, arenapoints, xp
 // and drunk; the remaining arms land in chunk 2.
 func (s *session) handleCmdModify(ctx context.Context, args []string) {
-	const syntax = "Syntax: .modify hp|mana|energy|rage|runicpower|money|honor|arenapoints|xp|drunk|scale|spell|standstate|mount|gender|bit|faction|phase|speed|talentpoints <val>"
+	const syntax = "Syntax: .modify hp|mana|energy|rage|runicpower|money|honor|arenapoints|xp|drunk|scale|spell|standstate|mount|gender|bit|faction|phase|speed|talentpoints|reputation <val>"
 	if len(args) == 0 {
 		// Bare ".modify" matches the root node, whose own permission is 544.
 		if s.miscDeny(ctx, permissionCommandModify) {

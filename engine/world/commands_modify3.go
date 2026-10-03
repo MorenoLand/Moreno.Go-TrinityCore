@@ -9,7 +9,8 @@ import (
 
 // modify command port, chunk 2b: the modify arms gender (native) plus the
 // documented-blocked arms bit, faction, phase, the speed sub-table and
-// talentpoints (cs_modify.cpp). Chunk 2c will cover reputation.
+// talentpoints (cs_modify.cpp). Chunk 2c (commands_modify4.go) covers the
+// final arm, reputation, which closes cs_modify.cpp (23/23 arms).
 //
 //   - gender is native: playerState.Gender drives both the update-field
 //     builder (unitFieldBytes0) and the race display-id lookup, which is the
@@ -162,6 +163,7 @@ func (s *session) handleModifyTalentPoints(ctx context.Context) {
 }
 
 // handleModifyChunk2b extends the modify dispatcher with the chunk-2b arms.
+// The chunk-2c arm (reputation) chains off the default case.
 func (s *session) handleModifyChunk2b(ctx context.Context, sub string, rest []string) bool {
 	switch {
 	case strings.HasPrefix("gender", sub):
@@ -177,7 +179,7 @@ func (s *session) handleModifyChunk2b(ctx context.Context, sub string, rest []st
 	case strings.HasPrefix("talentpoints", sub):
 		s.handleModifyTalentPoints(ctx)
 	default:
-		return false
+		return s.handleModifyChunk2c(ctx, sub, rest)
 	}
 	return true
 }
