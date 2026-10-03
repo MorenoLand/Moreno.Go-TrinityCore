@@ -68,6 +68,8 @@ const (
 	spellAttr0DisabledWhileActive    uint32 = 0x02000000 // SPELL_ATTR0_DISABLED_WHILE_ACTIVE (SharedDefines.h:437)
 	spellAttr0LevelDamageCalculation uint32 = 0x00080000 // SPELL_ATTR0_LEVEL_DAMAGE_CALCULATION (SharedDefines.h:431)
 	spellAttr0Negative1              uint32 = 0x04000000 // SPELL_ATTR0_NEGATIVE_1 (SharedDefines.h:438) — forces the spell to be treated as negative
+	spellAttr2Unk3                   uint32 = 0x00000008 // SPELL_ATTR2_UNK3 (SharedDefines.h:489) — "Ignore aura scaling"; GetAuraRankForLevel returns the cast rank — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
+	spellAttr3DrainSoul              uint32 = 0x08000000 // SPELL_ATTR3_DRAIN_SOUL (SharedDefines.h:550) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 
 	spellFailedEquippedItemClass         uint8 = 29  // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
 	spellFailedEquippedItemClassMainhand uint8 = 30  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
@@ -1967,6 +1969,36 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
+	// Spell::prepare (Spell.cpp:3040-3056) fills m_auraScaleMask for
+	// player-cast, non-passive, SpellLevel-carrying, non-channeled,
+	// non-triggered buff spells; the AddUnitTarget min-level arm
+	// (Spell.cpp:2115-2150) and the SelectTargets removal leg
+	// (Spell.cpp:807-830) then drop targets failing the targetLevel+10 >=
+	// firstRank.SpellLevel check, failing the cast with
+	// SPELL_FAILED_LOWLEVEL when none remain. finishSpellCast only serves
+	// client-initiated casts — every Go triggered cast rides
+	// TRIGGERED_FULL_MASK, which carries TRIGGERED_IGNORE_AURA_SCALING
+	// (0x10) — so the triggered gate is structural here. The removal runs
+	// before TakePower/TakeReagents below, matching _cast order
+	// (SelectSpellTargets at Spell.cpp:3410 precedes TakePower at 3452).
+	var auraScaleDownranks map[uint64]wotlk.Spell
+	if s.server != nil && s.server.Data != nil {
+		if pristine, found, _ := s.server.Data.Spell(spellID); found {
+			if mask := spellAuraScaleMask(spell, pristine, true); mask != 0 {
+				var failed bool
+				hitTargets, auraScaleDownranks, failed = s.applyAuraScaling(ctx, spellID, spell, mask, hitTargets)
+				if failed {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedLowLevel), true) // SPELL_FAILED_LOWLEVEL = 48
+					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "aura scale min level")
+					return
+				}
+				if len(hitTargets) > 0 {
+					targetGUID = hitTargets[0]
+				}
+			}
+		}
+	}
+
 	castTimeStamp := uint32(time.Now().UnixMilli())
 	castFlags := spellCastFlagGo
 	var remainingPower *uint32
@@ -2236,45 +2268,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.executeSpellMaxHealthHeal(effCtx, effectTarget, spellID)
 				}
 			case 6, 27, 35: // Apply Aura
-				durationMs := uint32(0)
-				if spell.DurationIndex > 0 && s.server != nil && s.server.Data != nil {
-					if val, ok, err := s.server.Data.SpellDuration(spell.DurationIndex, uint32(s.player.Level)); err == nil && ok && val > 0 {
-						durationMs = uint32(val)
-					}
-				}
-				if durationMs == 0 && eff.AuraPeriod > 0 {
-					durationMs = eff.AuraPeriod * 5
-				}
-				periodMs := eff.AuraPeriod
-				if periodMs == 0 && (eff.Aura == 3 || eff.Aura == 8 || eff.Aura == 23 || eff.Aura == 24 || eff.Aura == 89) {
-					periodMs = 3000
-				}
-				amount := uint32(eff.BasePoints + 1)
-				if amount <= 1 && isAreaEnemySpell(spell) {
-					for _, areaEffect := range spell.Effects {
-						if areaEffect.Effect == 27 && areaEffect.BasePoints >= 0 {
-							amount = uint32(areaEffect.BasePoints + 1)
-							break
-						}
-					}
-				}
-				if amount == 0 {
-					if eff.Aura == 3 || eff.Aura == 23 || eff.Aura == 89 {
-						amount = uint32(10 + int(s.player.Level)*2)
-					} else if eff.Aura == 8 || eff.Aura == 20 {
-						amount = uint32(15 + int(s.player.Level)*3)
-					}
-				}
-				// Spell power bonus for periodic effects and absorption shields (TrinityCore Unit::SpellDamageBonusDone / SpellHealingBonusDone)
-				if s.player != nil && s.player.SpellPower > 0 {
-					if periodMs > 0 && (eff.Aura == 3 || eff.Aura == 23 || eff.Aura == 89 || eff.Aura == 8 || eff.Aura == 20) {
-						tickBonus := uint32(math.Round(float64(s.player.SpellPower) * (float64(periodMs) / 15000.0)))
-						amount += tickBonus
-					} else if eff.Aura == SpellAuraSchoolAbsorb || eff.Aura == SpellAuraManaShield || eff.Aura == SpellAuraMagicAbsorb {
-						shieldBonus := uint32(math.Round(float64(s.player.SpellPower) * 0.8068))
-						amount += shieldBonus
-					}
-				}
+				durationMs, periodMs, amount := s.auraEffectParams(spell, eff)
 				schoolMask := spell.SchoolMask
 				if schoolMask == 0 {
 					schoolMask = 1
@@ -2297,7 +2291,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					} else if effectTarget != 0 && effectTarget != s.playerGUID && isHarmfulSpell(spell) {
 						auraTarget = effectTarget
 					}
-					s.applyAuraToTarget(effCtx, auraTarget, spell, eff, durationMs, periodMs, amount, schoolMask, castMerged, false, s.playerGUID)
+					// Spell::PreprocessSpellHit scaleAura leg (Spell.cpp:2780-2795):
+					// a target that passed the aura-scale min-level check gets
+					// the aura from the rank-appropriate SpellInfo with that
+					// rank's basepoints (DoTargetSpellHit creates the aura from
+					// hitInfo.AuraSpellInfo, Spell.cpp:2858-2861).
+					effSpell, effEff := spell, eff
+					tgtDurationMs, tgtPeriodMs, tgtAmount := durationMs, periodMs, amount
+					if ds, ok := auraScaleDownranks[auraTarget]; ok {
+						effSpell = ds
+						if effectIndex < len(ds.Effects) {
+							effEff = ds.Effects[effectIndex]
+						}
+						tgtDurationMs, tgtPeriodMs, tgtAmount = s.auraEffectParams(effSpell, effEff)
+					}
+					s.applyAuraToTarget(effCtx, auraTarget, effSpell, effEff, tgtDurationMs, tgtPeriodMs, tgtAmount, schoolMask, castMerged, false, s.playerGUID)
 				}
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
 				s.applySelfResurrectEffect(spell)
@@ -5122,6 +5130,228 @@ func (s *Server) spellFirstRank(spellID uint32) uint32 {
 		return first
 	}
 	return spellID
+}
+
+// spellAuraScaleMask mirrors the "Fill aura scaling information" block in
+// Spell::prepare (Spell.cpp:3040-3056). It returns the bit mask of effect
+// indexes whose auras scale for low-level targets, or 0 when scaling does
+// not apply. The caster is always player-controlled here (the caster is a
+// player session), so the remaining gates are: the spell is non-passive,
+// carries a SpellLevel, is not channeled, and the cast is not triggered —
+// every Go triggered cast rides TRIGGERED_FULL_MASK (0x0007FFFF), which
+// includes TRIGGERED_IGNORE_AURA_SCALING (0x10, SpellDefines.h:138), while
+// finishSpellCast only serves client-initiated casts. A bit is set for each
+// positive SPELL_EFFECT_APPLY_AURA effect; the whole mask is dropped when
+// the cast's basepoints were taken from anywhere but the spell's own DBC
+// row (m_spellValue->EffectBasePoints[i] != m_spellInfo->Effects[i].BasePoints,
+// Spell.cpp:3051-3055).
+func spellAuraScaleMask(spell, pristine wotlk.Spell, pristineOK bool) uint8 {
+	if spell.Attributes&spellAttributePassive != 0 {
+		return 0
+	}
+	if spell.SpellLevel == 0 {
+		return 0
+	}
+	if isChanneledSpell(spell) {
+		return 0
+	}
+	var mask uint8
+	for i := range spell.Effects {
+		if spell.Effects[i].Effect != spellEffectApplyAura {
+			continue
+		}
+		if !spell.IsPositiveEffect(i) {
+			continue
+		}
+		mask |= 1 << uint(i)
+		if pristineOK && spell.Effects[i].BasePoints != pristine.Effects[i].BasePoints {
+			return 0
+		}
+	}
+	return mask
+}
+
+// auraScaleTargetLevel resolves a hit target's level for the aura-scaling
+// min-level check (Spell::AddUnitTarget, Spell.cpp:2123/2143); online
+// players and tracked creatures both resolve through getCombatTarget.
+func (s *session) auraScaleTargetLevel(ctx context.Context, targetGUID uint64) (uint8, bool) {
+	if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok && tgt.Level > 0 {
+		return tgt.Level, true
+	}
+	return 0, false
+}
+
+// spellAuraRankForLevel mirrors SpellInfo::GetAuraRankForLevel
+// (SpellInfo.cpp:3283-3319): it walks the spell_ranks chain downward from
+// the cast spell's rank and returns the highest rank whose SpellLevel fits
+// targetLevel+10. The cast spell itself is returned when no downrank
+// applies — the needRankSelection gate (no positive APPLY_AURA-family
+// effect), the passive/attribute gates (SPELL_ATTR0_NEGATIVE_1,
+// SPELL_ATTR2_UNK3 "Ignore aura scaling", SPELL_ATTR3_DRAIN_SOUL), a
+// missing rank row, or an effect-type mismatch between the ranks (the
+// PreprocessSpellHit sanity leg, Spell.cpp:2785-2794). ok is false only when
+// the spell data itself is unavailable.
+func (s *Server) spellAuraRankForLevel(spellID uint32, targetLevel uint8) (wotlk.Spell, bool) {
+	if s == nil || s.Data == nil {
+		return wotlk.Spell{}, false
+	}
+	cast, found, err := s.Data.Spell(spellID)
+	if err != nil || !found {
+		return wotlk.Spell{}, false
+	}
+	needRank := false
+	for i := range cast.Effects {
+		eff := cast.Effects[i].Effect
+		if cast.IsPositiveEffect(i) && (eff == spellEffectApplyAura || eff == spellEffectApplyAreaAuraParty || eff == spellEffectApplyAreaAuraRaid) {
+			needRank = true
+			break
+		}
+	}
+	if !needRank || cast.Attributes&spellAttributePassive != 0 ||
+		cast.Attributes&spellAttr0Negative1 != 0 ||
+		cast.AttributesEx1&spellAttr2Unk3 != 0 ||
+		cast.AttributesEx3&spellAttr3DrainSoul != 0 {
+		return cast, true
+	}
+	groups := s.petAuraStackGroups()
+	first := groups.firstRank[spellID]
+	if first == 0 {
+		first = spellID
+	}
+	var rank uint32
+	for r := uint32(1); r <= 64; r++ {
+		id, ok := groups.rankSpell[uint64(first)<<32|uint64(r)]
+		if !ok {
+			break
+		}
+		if id == spellID {
+			rank = r
+			break
+		}
+	}
+	if rank == 0 {
+		// No rank row: C++ tests the cast spell itself once, then gives up
+		// (nullptr), which the caller treats as the cast spell.
+		return cast, true
+	}
+	for r := rank; r >= 1; r-- {
+		id, ok := groups.rankSpell[uint64(first)<<32|uint64(r)]
+		if !ok {
+			continue
+		}
+		down, found, err := s.Data.Spell(id)
+		if err != nil || !found {
+			continue
+		}
+		if uint32(targetLevel)+10 < down.SpellLevel {
+			continue
+		}
+		for i := range cast.Effects {
+			if cast.Effects[i].Effect != down.Effects[i].Effect {
+				return cast, true
+			}
+		}
+		return down, true
+	}
+	return cast, true
+}
+
+// applyAuraScaling mirrors the AddUnitTarget ScaleAura arm
+// (Spell.cpp:2115-2150) and the SelectTargets removal leg
+// (Spell.cpp:807-830). For every hit target other than the caster whose
+// effect mask is exactly the aura-scale mask, the target passes the min
+// level check when targetLevel+10 reaches the first rank's SpellLevel;
+// failing targets are dropped from the hit list, and when every target is
+// dropped the cast fails with SPELL_FAILED_LOWLEVEL (Spell.cpp:827-830).
+// Targets whose level cannot be resolved are kept unscaled. Passing
+// lower-level targets are recorded in the returned map with their
+// downranked spell row — the PreprocessSpellHit scaleAura leg
+// (Spell.cpp:2780-2795) that applies the aura with the rank-appropriate
+// SpellInfo and basepoints.
+func (s *session) applyAuraScaling(ctx context.Context, spellID uint32, spell wotlk.Spell, mask uint8, hitTargets []uint64) ([]uint64, map[uint64]wotlk.Spell, bool) {
+	var targetMask uint8
+	for i := range spell.Effects {
+		if spell.Effects[i].Effect != 0 {
+			targetMask |= 1 << uint(i)
+		}
+	}
+	var firstLevel uint32
+	if s.server != nil {
+		if fr, found, _ := s.server.Data.Spell(s.server.spellFirstRank(spellID)); found {
+			firstLevel = fr.SpellLevel
+		}
+	}
+	downranks := make(map[uint64]wotlk.Spell)
+	kept := make([]uint64, 0, len(hitTargets))
+	for _, guid := range hitTargets {
+		if guid == 0 || guid == s.playerGUID || targetMask != mask {
+			kept = append(kept, guid)
+			continue
+		}
+		level, ok := s.auraScaleTargetLevel(ctx, guid)
+		if !ok || uint32(level)+10 < firstLevel {
+			continue
+		}
+		if s.server != nil {
+			if ds, ok := s.server.spellAuraRankForLevel(spellID, level); ok && ds.ID != spellID {
+				downranks[guid] = ds
+			}
+		}
+		kept = append(kept, guid)
+	}
+	if len(hitTargets) > 0 && len(kept) == 0 {
+		return nil, nil, true
+	}
+	return kept, downranks, false
+}
+
+// auraEffectParams computes the duration, period and base amount for one
+// APPLY_AURA-family effect application from the given spell row and effect;
+// the downranked-aura leg (Spell::PreprocessSpellHit scaleAura,
+// Spell.cpp:2780-2795, via hitInfo.AuraSpellInfo) evaluates these from the
+// rank-appropriate row instead of the cast spell's.
+func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (durationMs, periodMs, amount uint32) {
+	if spell.DurationIndex > 0 && s.server != nil && s.server.Data != nil && s.player != nil {
+		if val, ok, err := s.server.Data.SpellDuration(spell.DurationIndex, uint32(s.player.Level)); err == nil && ok && val > 0 {
+			durationMs = uint32(val)
+		}
+	}
+	if durationMs == 0 && eff.AuraPeriod > 0 {
+		durationMs = eff.AuraPeriod * 5
+	}
+	periodMs = eff.AuraPeriod
+	if periodMs == 0 && (eff.Aura == 3 || eff.Aura == 8 || eff.Aura == 23 || eff.Aura == 24 || eff.Aura == 89) {
+		periodMs = 3000
+	}
+	amount = uint32(eff.BasePoints + 1)
+	if amount <= 1 && isAreaEnemySpell(spell) {
+		for _, areaEffect := range spell.Effects {
+			if areaEffect.Effect == 27 && areaEffect.BasePoints >= 0 {
+				amount = uint32(areaEffect.BasePoints + 1)
+				break
+			}
+		}
+	}
+	if amount == 0 {
+		if s.player != nil {
+			if eff.Aura == 3 || eff.Aura == 23 || eff.Aura == 89 {
+				amount = uint32(10 + int(s.player.Level)*2)
+			} else if eff.Aura == 8 || eff.Aura == 20 {
+				amount = uint32(15 + int(s.player.Level)*3)
+			}
+		}
+	}
+	// Spell power bonus for periodic effects and absorption shields (TrinityCore Unit::SpellDamageBonusDone / SpellHealingBonusDone)
+	if s.player != nil && s.player.SpellPower > 0 {
+		if periodMs > 0 && (eff.Aura == 3 || eff.Aura == 23 || eff.Aura == 89 || eff.Aura == 8 || eff.Aura == 20) {
+			tickBonus := uint32(math.Round(float64(s.player.SpellPower) * (float64(periodMs) / 15000.0)))
+			amount += tickBonus
+		} else if eff.Aura == SpellAuraSchoolAbsorb || eff.Aura == SpellAuraManaShield || eff.Aura == SpellAuraMagicAbsorb {
+			shieldBonus := uint32(math.Round(float64(s.player.SpellPower) * 0.8068))
+			amount += shieldBonus
+		}
+	}
+	return durationMs, periodMs, amount
 }
 
 func auraTriggersSpell(spell wotlk.Spell, target uint32) bool {

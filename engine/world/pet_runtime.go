@@ -44,6 +44,7 @@ type petAuraStackKey struct {
 type petAuraStackCache struct {
 	groupBySpell   map[petAuraStackKey]uint32
 	firstRank      map[uint32]uint32
+	rankSpell      map[uint64]uint32
 	groupRules     map[uint32]uint8
 	spellGroups    map[uint32]map[uint32]struct{}
 	groupSubgroups map[uint32][]uint32
@@ -115,18 +116,20 @@ func (s *Server) petAuraStackGroups() *petAuraStackCache {
 	if s.petAuraStackCache != nil {
 		return s.petAuraStackCache
 	}
-	cache := &petAuraStackCache{groupBySpell: make(map[petAuraStackKey]uint32), firstRank: make(map[uint32]uint32),
+	cache := &petAuraStackCache{groupBySpell: make(map[petAuraStackKey]uint32), firstRank: make(map[uint32]uint32), rankSpell: make(map[uint64]uint32),
 		groupRules: make(map[uint32]uint8), spellGroups: make(map[uint32]map[uint32]struct{}), groupSubgroups: make(map[uint32][]uint32)}
 	if s.WorldStore == nil || s.WorldStore.DB == nil || s.Data == nil {
 		s.petAuraStackCache = cache
 		return cache
 	}
-	ranks, err := s.WorldStore.DB.QueryContext(context.Background(), "SELECT spell_id, first_spell_id FROM spell_ranks")
+	ranks, err := s.WorldStore.DB.QueryContext(context.Background(), "SELECT spell_id, first_spell_id, rank FROM spell_ranks")
 	if err == nil {
 		for ranks.Next() {
 			var spellID, firstRank uint32
-			if ranks.Scan(&spellID, &firstRank) == nil {
+			var rank uint32
+			if ranks.Scan(&spellID, &firstRank, &rank) == nil {
 				cache.firstRank[spellID] = firstRank
+				cache.rankSpell[uint64(firstRank)<<32|uint64(rank)] = spellID
 			}
 		}
 		_ = ranks.Close()
