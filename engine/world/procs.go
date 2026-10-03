@@ -952,6 +952,106 @@ func spellDamageTakenProcTypeMask(spell wotlk.Spell) uint32 {
 	}
 }
 
+// spellFinishPhaseProcTypeMask mirrors the procAttacker leg of
+// Spell::_handle_finish_phase (Spell.cpp:3764-3776): the finish-phase
+// ProcSkillsAndAuras call reuses the m_procAttacker fill from
+// Spell::prepareDataForTriggerSystem (Spell.cpp:1999-2056) and only falls
+// back to the magic/none positivity split when that fill left nothing.
+// The melee/ranged/wand auto-attack arms match spellDamageProcTypeMask's
+// reading of the fill; the hunter-trap arm (PROC_FLAG_DONE_TRAP_ACTIVATION
+// ORed with DONE_SPELL_MAGIC_DMG_CLASS_NEG, Spell.cpp:2040-2049) and the
+// Hellfire arm (PROC_FLAG_DONE_PERIODIC by assignment, Spell.cpp:2052-2057)
+// ride on top. Positivity is SpellInfo::IsPositive (SpellInfo.cpp:1205:
+// !SPELL_ATTR0_CU_NEGATIVE), which the fork defines as the OR of the three
+// CU_NEGATIVE_EFF bits (SpellInfo.h:203) — exactly the
+// spellDamageNoDmgPositive sweep over IsPositiveEffect.
+func spellFinishPhaseProcTypeMask(spell wotlk.Spell) uint32 {
+	switch spell.DefenseType {
+	case spellDamageClassMelee:
+		return procFlagDoneSpellMeleeDmgClass | procFlagDoneMainhandAttack
+	case spellDamageClassRanged:
+		// Spell.cpp:2018-2023 — auto attack.
+		if spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0 {
+			return procFlagDoneRangedAutoAttack
+		}
+		return procFlagDoneSpellRangedDmgClass
+	default:
+		// Spell.cpp:2026-2034 — wands auto attack.
+		if spell.EquippedItemClass == itemClassWeapon &&
+			spell.EquippedItemSubClass&(1<<itemSubclassWeaponWand) != 0 &&
+			spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0 {
+			return procFlagDoneRangedAutoAttack
+		}
+	}
+	if spell.SpellFamilyName == spellFamilyHunter &&
+		(spell.SpellFamilyFlags[0]&0x18 != 0 || spell.ID == 57879 ||
+			spell.SpellFamilyFlags[2]&0x00024000 != 0) {
+		return procFlagDoneTrapActivation | procFlagDoneSpellMagicDmgClassNeg
+	}
+	if spell.SpellFamilyName == spellFamilyWarlock && spell.SpellFamilyFlags[0]&0x00000040 != 0 {
+		return procFlagDonePeriodic
+	}
+	positive := spellDamageNoDmgPositive(spell)
+	if spell.DefenseType == spellDamageClassMagic {
+		if positive {
+			return procFlagDoneSpellMagicDmgClassPos
+		}
+		return procFlagDoneSpellMagicDmgClassNeg
+	}
+	if positive {
+		return procFlagDoneSpellNoneDmgClassPos
+	}
+	return procFlagDoneSpellNoneDmgClassNeg
+}
+
+// procSpellFinishAuraTriggers bridges the on-finish proc leg of
+// Spell::_handle_finish_phase (Spell.cpp:3764-3777): once every target is
+// processed, the original caster's auras evaluate one proc event with
+// PROC_SPELL_PHASE_FINISH, PROC_SPELL_TYPE_MASK_ALL, and the accumulated
+// hit mask, ProcSkillsAndAuras(m_originalCaster, nullptr, procAttacker,
+// PROC_FLAG_NONE, ...). C++ passes the action target as nullptr, so the
+// trigger target is null and triggered spells resolve their own implicit
+// targets — Go passes triggerTargetGUID 0, which castSpellDirect handles
+// the same way. The event's triggered state mirrors the hit path
+// (s.triggeredNoProcEvents), and the caster's own session runs the loop
+// (Go has no creature casters; m_originalCaster is the casting player).
+// Documented deltas: the hit mask is PROC_HIT_NORMAL. C++ ORs per-target
+// outcome masks into m_hitMask (Spell.cpp:2603) and defaults an empty
+// target container to PROC_HIT_NORMAL (Spell.cpp:3605); Go computes
+// per-target hit masks inside executeSpellDamage with no cast-level
+// accumulator, so the finish event carries the no-target default — the
+// value the C++ normalization lands on for any non-critical cast
+// (!(m_hitMask & PROC_HIT_CRITICAL) → |= PROC_HIT_NORMAL, Spell.cpp:3744).
+// The generated proc model (spellProcEntryFor, mirroring SpellMgr.cpp:1828)
+// only carries PROC_SPELL_PHASE_HIT, so like a C++ build with no
+// spell_proc DB rows bearing PHASE_FINISH, the event currently triggers
+// nothing — the bridge is structural, and any future PHASE_FINISH entry
+// fires through the real CanSpellTriggerProcOnEvent phase gate.
+func (s *session) procSpellFinishAuraTriggers(ctx context.Context, spell wotlk.Spell) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	typeMask := spellFinishPhaseProcTypeMask(spell)
+	if typeMask == procFlagNone {
+		return
+	}
+	schoolMask := spell.SchoolMask
+	if schoolMask == 0 {
+		schoolMask = 1
+	}
+	spellCopy := spell
+	s.procAuraTriggerLoop(ctx, 0, procEventInfo{
+		typeMask:       typeMask,
+		schoolMask:     schoolMask,
+		spellTypeMask:  procSpellTypeMaskAll,
+		spellPhaseMask: procSpellPhaseFinish,
+		hitMask:        procHitNormal,
+		triggered:      s.triggeredNoProcEvents > 0,
+		eventSpell:     &spellCopy,
+		actorGUID:      s.playerGUID,
+	})
+}
+
 // spellHealProcTypeMask mirrors the done-side half of the
 // DoDamageAndTriggers type-mask fallback (Spell.cpp:2458-2492) for the heal
 // path: a direct heal runs with m_healing > 0, so the spell is positive by

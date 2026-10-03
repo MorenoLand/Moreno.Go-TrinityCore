@@ -2376,6 +2376,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// applies every non-zero effect to every hit target. The snapshot
 		// and the linked-hit leg both fire from the same call even when the
 		// snapshot is empty, matching C++.
+		// The SpellScript OnHit/AfterHit legs around the same point
+		// (Spell.cpp:2377 CallScriptOnHitHandlers; Spell.cpp:2659/2682-2707
+		// CallScriptOnHitHandlers/CallScriptAfterHitHandlers in
+		// DoTargetSpellHit) are document-only: there is no SpellScript
+		// bridge (matching the no-SpellScript-bridge legs elsewhere), so
+		// these handlers have nothing to invoke.
 		if completedCast != nil {
 			var hitEffMask uint8
 			for effectIndex, eff := range spell.Effects {
@@ -2464,6 +2470,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			time.AfterFunc(time.Duration(timeDelayMs)*time.Millisecond, func() {
 				applyEffects(context.Background())
 				s.consumeExtraAttacks(context.Background(), spellExtraAttackVictim(target, explicitUnitGUID))
+				s.procSpellFinishAuraTriggers(context.Background(), spell)
 				s.stopAttackOnSpellFinish(spell)
 			})
 			// Spell::handle_delayed (Spell.cpp:3629) no-bridge legs, noted:
@@ -2513,16 +2520,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// Spell::_handle_finish_phase (Spell.cpp:3738) no-bridge legs, noted:
 	//   - m_needComboPoints -> ClearComboPoints, and AddComboPoints with the
 	//     RETAIN_COMBO_POINTS removal: Go has no combo-point model at all.
-	//   - ProcSkillsAndAuras(..., PROC_SPELL_PHASE_FINISH, m_hitMask): the
-	//     on-finish proc firing (and the m_hitMask PROC_HIT_NORMAL vs
-	//     target-container split in handle_immediate) has no Go bridge;
-	//     the DoTriggersOnSpellHit consumer is bridged separately as
+	//   - ProcSkillsAndAuras(..., PROC_SPELL_PHASE_FINISH, m_hitMask):
+	//     bridged as procSpellFinishAuraTriggers after the extra-attacks
+	//     leg, matching _handle_finish_phase order (Spell.cpp:3753-3777).
+	//     The DoTriggersOnSpellHit consumer is bridged separately as
 	//     fireHitTriggerSpells at the end of the effects loop.
 	// Spell::_handle_finish_phase (Spell.cpp:3753-3761): a finished cast
 	// whose spell carries SPELL_EFFECT_ADD_EXTRA_ATTACKS spends the
 	// caster's pending extra attacks as extra base-attack swings against
 	// the cast's original unit target.
 	s.consumeExtraAttacks(ctx, spellExtraAttackVictim(target, explicitUnitGUID))
+	s.procSpellFinishAuraTriggers(ctx, spell)
 	s.stopAttackOnSpellFinish(spell)
 
 	// Spell::finish(true) parity (Spell.cpp:3886-3985): two legs have no Go
