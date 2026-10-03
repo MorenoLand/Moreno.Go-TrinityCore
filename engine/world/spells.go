@@ -842,6 +842,17 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "duplicate glyph", "failure", failure)
 		return true
 	}
+	// Power burn/drain target gate (Spell::CheckCast per-effect block,
+	// Spell.cpp:5652-5660): a burn/drain effect fails with
+	// SPELL_FAILED_BAD_TARGETS when the unit target (not the caster) uses a
+	// power type other than the effect's MiscValue. C++ relative order places
+	// this right after the apply-glyph leg; the feed-pet leg runs earlier in
+	// Go — order only matters on simultaneous failures, documented.
+	if failure := s.checkPowerBurnDrainCast(spell, target); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "power burn/drain target power-type mismatch", "failure", failure)
+		return true
+	}
 	cost := s.calculateSpellPowerCost(spell)
 	pType := spell.PowerType
 	// Spell::CheckPower (Spell.cpp:6665-6670) checks rune costs when
@@ -1317,6 +1328,55 @@ func (s *session) checkGlyphCast(spell wotlk.Spell) uint8 {
 		}
 	}
 	return 0
+}
+
+// checkPowerBurnDrainCast mirrors the SPELL_EFFECT_POWER_BURN /
+// SPELL_EFFECT_POWER_DRAIN leg of the CheckCast per-effect switch
+// (Spell.cpp:5652-5660): a burn/drain effect rejects with
+// SPELL_FAILED_BAD_TARGETS when the caster is a player and the unit target
+// (which must differ from the caster) uses a different power type than the
+// effect's MiscValue. The caster-must-be-player term is vacuous — client casts
+// always come from a player session. Player targets read the shapeshift-aware
+// playerPowerType (shapeshift.go); creature targets read the motion PowerType.
+// C++ gates only when GetUnitTarget() yields a unit, so unresolvable GUIDs
+// (pets have no power-type model) skip the gate. Returns the SPELL_FAILED_*
+// result code, 0 on success.
+func (s *session) checkPowerBurnDrainCast(spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
+	if target.Flags&protocol.SpellTargetFlagUnitWireMask == 0 || target.UnitGUID == 0 || target.UnitGUID == s.playerGUID {
+		return 0 // no unit target, or the target-is-caster exemption (Spell.cpp:5656)
+	}
+	targetPower, ok := s.unitTargetPowerType(target.UnitGUID)
+	if !ok {
+		return 0
+	}
+	for _, eff := range spell.Effects {
+		if eff.Effect != spellEffectPowerBurn && eff.Effect != spellEffectPowerDrain {
+			continue
+		}
+		if targetPower != eff.MiscValue {
+			return spellFailedBadTargets
+		}
+	}
+	return 0
+}
+
+// unitTargetPowerType resolves the active power type of the unit behind guid:
+// playerPowerType for online player targets, the motion PowerType for
+// creatures. ok is false when the guid resolves to neither.
+func (s *session) unitTargetPowerType(guid uint64) (int32, bool) {
+	if ts := s.server.findSessionByGUID(guid); ts != nil && ts.player != nil {
+		return int32(playerPowerType(ts.player)), true
+	}
+	s.server.motionMu.Lock()
+	defer s.server.motionMu.Unlock()
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, guid)
+	if motion == nil {
+		return 0, false
+	}
+	return int32(motion.PowerType), true
 }
 
 // spellDiminishingBounced mirrors the diminishing-returns recheck leg of
