@@ -1367,6 +1367,18 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// Aura-bounced gate (Spell::CheckCast per-effect loop tail,
+	// Spell.cpp:6155-6162): a pure-aura non-area spell fails with
+	// SPELL_FAILED_AURA_BOUNCED when the unit target already carries a
+	// strictly more powerful same-type aura under an EXCLUSIVE_HIGHEST
+	// spell group. C++ relative order places this recheck after the
+	// ApplyAuraName switch and before the trade-slot block.
+	if failure := s.checkAuraBouncedCast(spell, target); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "aura-bounced validation", "failure", failure)
+		return true
+	}
+
 	// Trade-slot gate (Spell::CheckCast, Spell.cpp:6164-6181): the last
 	// CheckCast block before the combo-point gate. A cast targeting the
 	// trade window fails with SPELL_FAILED_NOT_TRADING when no trade is
@@ -1374,9 +1386,9 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// the non-traded slot sentinel, and with
 	// SPELL_FAILED_ITEM_ALREADY_ENCHANTED when an enchant is already
 	// deferred into the trade. C++ relative order places this block after
-	// the per-effect loop's AURA_BOUNCED recheck (Spell.cpp:6155-6162, no
-	// Go bridge yet — see checkTradeSlotCast), so it wires after the
-	// periodic-mana-leech leg, the last bridged leg.
+	// the per-effect loop's AURA_BOUNCED recheck (Spell.cpp:6155-6162, now
+	// bridged by checkAuraBouncedCast), so it wires after the
+	// aura-bounced leg.
 	if failure := s.checkTradeSlotCast(target); failure != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "trade-slot validation", "failure", failure)
@@ -2926,6 +2938,180 @@ func (s *session) checkTradeSlotCast(target protocol.SpellTargetData) uint8 {
 		return spellFailedItemAlreadyEnchanted
 	}
 	return 0
+}
+
+// checkAuraBouncedCast mirrors the AURA_BOUNCED recheck at the end of the
+// per-effect loop in Spell::CheckCast (Spell.cpp:6155-6162): for a spell
+// whose every effect is an aura effect — any non-aura effect sets
+// nonAuraEffectMask (Spell.cpp:6022-6027) and disables the recheck for the
+// whole spell — and which does not target an area
+// (SpellInfo::IsTargetingArea, SpellInfo.cpp:1039-1045), each aura effect
+// fails with SPELL_FAILED_AURA_BOUNCED when the unit target already
+// carries a strictly more powerful aura of the same aura type under an
+// EXCLUSIVE_HIGHEST spell-group stack rule
+// (Unit::IsHighestExclusiveAuraEffect, Unit.cpp:14001-14036, with
+// removeOtherAuraApplications=false at CheckCast). AURA_BOUNCED carries no
+// extra WriteCastResultInfo params, so castFailedExtParams needs no case
+// (verified Spell.cpp:3974-4160). Returns the SPELL_FAILED_* result code,
+// 0 on success.
+func (s *session) checkAuraBouncedCast(spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
+	var approximateMask, nonAuraMask uint8
+	for i, eff := range spell.Effects {
+		if i >= 8 {
+			break
+		}
+		switch {
+		case spellEffectIsAuraEffect(eff): // SpellEffectInfo::IsAura (SpellInfo.cpp:370-373)
+			approximateMask |= 1 << uint(i)
+		case eff.Effect != 0: // SpellEffectInfo::IsEffect (SpellInfo.cpp:360-363)
+			nonAuraMask |= 1 << uint(i)
+		}
+	}
+	if nonAuraMask != 0 {
+		return 0
+	}
+	if target.Flags&protocol.SpellTargetFlagUnitWireMask == 0 || target.UnitGUID == 0 {
+		return 0
+	}
+	if spellInfoTargetsArea(spell) {
+		return 0
+	}
+	for i, eff := range spell.Effects {
+		if i >= 8 {
+			break
+		}
+		if approximateMask&(1<<uint(i)) == 0 {
+			continue
+		}
+		if !s.isHighestExclusiveAuraEffect(spell, eff.Aura, s.spellEffectCheckCastValue(spell, eff, i), approximateMask, target.UnitGUID) {
+			return spellFailedAuraBounced
+		}
+	}
+	return 0
+}
+
+// spellInfoTargetsArea mirrors SpellInfo::IsTargetingArea
+// (SpellInfo.cpp:1039-1045): any non-NONE effect whose implicit target A
+// or B has AREA or CONE selection category, via the same target-type lists
+// the periodic-mana-leech leg uses for SpellEffectInfo::IsTargetingArea.
+func spellInfoTargetsArea(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		if isAreaEnemyTargetType(eff.ImplicitTargetA) || isAreaEnemyTargetType(eff.ImplicitTargetB) ||
+			isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB) ||
+			isFriendlyConeTargetType(eff.ImplicitTargetA) || isFriendlyConeTargetType(eff.ImplicitTargetB) {
+			return true
+		}
+	}
+	return false
+}
+
+// spellEffectCheckCastValue mirrors SpellEffectInfo::CalcValue
+// (SpellInfo.cpp:402-460) as called from CheckCast (Spell.cpp:6159):
+// m_spellValue->EffectBasePoints[i] is the DBC BasePoints on the client
+// path (no custom base points), so CalcValueForLevel covers the
+// base-points + caster-level scaling + die roll, and applySpellMod covers
+// Unit::ApplyEffectModifiers (SPELLMOD_ALL_EFFECTS then
+// SPELLMOD_EFFECT1+index). The combo-point term has no Go model
+// (documented); the LEVEL_DAMAGE_CALCULATION scaling arm needs a
+// non-player-controlled caster and is vacuous on the client path.
+func (s *session) spellEffectCheckCastValue(spell wotlk.Spell, eff wotlk.SpellEffect, index int) int32 {
+	value := eff.CalcValueForLevel(spell, uint32(s.player.Level))
+	value = s.applySpellMod(spell, spellModAllEffects, value)
+	value = s.applySpellMod(spell, spellModEffect1+uint8(index), value)
+	return value
+}
+
+// auraBounceCandidate is one existing aura effect on the bounce target,
+// flattened the way Unit::GetAuraEffectsByType feeds
+// IsHighestExclusiveAuraEffect: the per-effect amount and the base aura's
+// effect mask for the tie-break.
+type auraBounceCandidate struct {
+	spellID    uint32
+	amount     int32
+	effectMask uint8
+}
+
+// targetAuraEffectsByType collects the target unit's existing aura effects
+// of the given aura type: player targets (including self-casts) from the
+// session's activeAuras under its castMu, creature and pet targets from
+// the server's activeCreatureAuras under auraMu (the dispel.go locking
+// pattern). Per-effect aura types come from the aura's spell row, falling
+// back to the aura's single AuraType when the row is missing (the grouped
+// model documented in commands_list.go). Unresolvable GUIDs yield no
+// candidates — C++ only gates when GetUnitTarget() yields a unit.
+func (s *session) targetAuraEffectsByType(targetGUID uint64, auraType uint32) []auraBounceCandidate {
+	var auras map[uint32]*activeAura
+	if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		ts.castMu.Lock()
+		auras = make(map[uint32]*activeAura, len(ts.activeAuras))
+		for id, aura := range ts.activeAuras {
+			auras[id] = aura
+		}
+		ts.castMu.Unlock()
+	} else {
+		s.server.auraMu.Lock()
+		auras = s.server.activeCreatureAuras[creatureAuraKeyForPlayer(*s.player, targetGUID)]
+		s.server.auraMu.Unlock()
+	}
+	var out []auraBounceCandidate
+	for id, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		for i := 0; i < 3; i++ {
+			if aura.EffectMask&(1<<uint(i)) == 0 {
+				continue
+			}
+			t := aura.AuraType
+			if sp, found, _ := s.server.Data.Spell(id); found && i < len(sp.Effects) {
+				t = sp.Effects[i].Aura
+			}
+			if t != auraType {
+				continue
+			}
+			out = append(out, auraBounceCandidate{spellID: id, amount: aura.Amounts[i], effectMask: aura.EffectMask})
+		}
+	}
+	return out
+}
+
+// isHighestExclusiveAuraEffect mirrors Unit::IsHighestExclusiveAuraEffect
+// (Unit.cpp:14001-14036) with removeOtherAuraApplications=false, the
+// CheckCast call shape (Spell.cpp:6156-6160): the new aura effect is
+// "highest" unless an existing same-type aura effect on the target shares
+// an EXCLUSIVE_HIGHEST spell group with the new spell and is strictly
+// more powerful — absolute amount first, effect-mask bit count as the
+// tie-break. The diff>0 removal arms are dead at CheckCast (nothing is
+// removed there), so only the diff<0 bounced verdict is reported. Unlike
+// exclusiveHighestVerdict (the apply-path variant), same-spell auras are
+// not skipped — C++ compares them too.
+func (s *session) isHighestExclusiveAuraEffect(spell wotlk.Spell, auraType uint32, effectAmount int32, auraEffectMask uint8, targetGUID uint64) bool {
+	existing := s.targetAuraEffectsByType(targetGUID, auraType)
+	if len(existing) == 0 {
+		return true
+	}
+	newFirst := s.server.spellFirstRank(spell.ID)
+	newAbs := absAuraAmount(effectAmount)
+	newBits := int64(popcount8(auraEffectMask))
+	for _, e := range existing {
+		if s.server.spellGroupStackRule(newFirst, s.server.spellFirstRank(e.spellID)) != spellGroupStackRuleExclusiveHighest {
+			continue
+		}
+		diff := newAbs - absAuraAmount(e.amount)
+		if diff == 0 {
+			diff = newBits - int64(popcount8(e.effectMask))
+		}
+		if diff < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // inSameGroupAs mirrors Player::IsInSameRaidWith (Player.cpp:2543-2546):
