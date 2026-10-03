@@ -59,6 +59,8 @@ const (
 	spellAttr0NotShapeshift               uint32 = 0x00010000 // SPELL_ATTR0_NOT_SHAPESHIFT (SharedDefines.h:428)
 	spellAttr2NotNeedShapeshift           uint32 = 0x00080000 // SPELL_ATTR2_NOT_NEED_SHAPESHIFT (SharedDefines.h:505) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr1CantBeReflected             uint32 = 0x00000080 // SPELL_ATTR1_CANT_BE_REFLECTED (SharedDefines.h:456)
+	spellAttr1ReqComboPoints1             uint32 = 0x00100000 // SPELL_ATTR1_REQ_COMBO_POINTS1 (SharedDefines.h:469) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
+	spellAttr1ReqComboPoints2             uint32 = 0x00400000 // SPELL_ATTR1_REQ_COMBO_POINTS2 (SharedDefines.h:471) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr2CanTargetDead               uint32 = 0x00000001 // SPELL_ATTR2_CAN_TARGET_DEAD (SharedDefines.h:486) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr2AutorepeatFlag              uint32 = 0x00000020 // SPELL_ATTR2_AUTOREPEAT_FLAG (SharedDefines.h:491) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr2NotResetAutoActions         uint32 = 0x00020000 // SPELL_ATTR2_NOT_RESET_AUTO_ACTIONS (SharedDefines.h:503) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
@@ -114,6 +116,7 @@ const (
 	spellFailedNotTrading                uint8 = 71  // SPELL_FAILED_NOT_TRADING (SharedDefines.h:1053)
 	spellFailedItemAlreadyEnchanted      uint8 = 42  // SPELL_FAILED_ITEM_ALREADY_ENCHANTED (SharedDefines.h:1024)
 	spellFailedAuraBounced               uint8 = 9   // SPELL_FAILED_AURA_BOUNCED (SharedDefines.h:991)
+	spellFailedNoComboPoints             uint8 = 78  // SPELL_FAILED_NO_COMBO_POINTS (SharedDefines.h:1060)
 	spellFailedOnlyBattlegrounds         uint8 = 142 // SPELL_FAILED_ONLY_BATTLEGROUNDS (SharedDefines.h:1124)
 	spellFailedNotInArena                uint8 = 151 // SPELL_FAILED_NOT_IN_ARENA (SharedDefines.h:1133)
 	spellFailedIncorrectArea             uint8 = 39  // SPELL_FAILED_INCORRECT_AREA (SharedDefines.h:1021)
@@ -1392,6 +1395,19 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if failure := s.checkTradeSlotCast(target); failure != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "trade-slot validation", "failure", failure)
+		return true
+	}
+
+	// Combo-point gate (Spell::CheckCast, Spell.cpp:6186-6209): a spell
+	// requiring combo points (REQ_COMBO_POINTS1/2) fails with
+	// SPELL_FAILED_NO_COMBO_POINTS when none are banked — against the
+	// explicit unit target when the spell needs one, banked points
+	// otherwise. C++ relative order places this block after the trade-slot
+	// block (Spell.cpp:6164-6181, now bridged by checkTradeSlotCast), so it
+	// wires after the trade-slot leg.
+	if failure := s.checkComboPointsCast(spell, target); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "combo-point validation", "failure", failure)
 		return true
 	}
 
@@ -2936,6 +2952,113 @@ func (s *session) checkTradeSlotCast(target protocol.SpellTargetData) uint8 {
 	}
 	if s.trade.SpellID != 0 {
 		return spellFailedItemAlreadyEnchanted
+	}
+	return 0
+}
+
+// spellNeedsComboPoints mirrors SpellInfo::NeedsComboPoints
+// (SpellInfo.cpp:1234-1237): SPELL_ATTR1_REQ_COMBO_POINTS1 |
+// SPELL_ATTR1_REQ_COMBO_POINTS2 in AttributesEx (Spell.dbc field 5).
+func spellNeedsComboPoints(spell wotlk.Spell) bool {
+	return spell.AttributesEx&(spellAttr1ReqComboPoints1|spellAttr1ReqComboPoints2) != 0
+}
+
+// sessionComboPoints mirrors Unit::GetComboPoints (Unit.h:1579-1580).
+// The GUID overload returns points only when the queried GUID matches the
+// banked combo target; the no-arg overload (C++ GetComboPoints() with
+// who=nullptr) returns whatever is banked regardless of target. A zero
+// target GUID follows the null-who arm and returns the banked points.
+func (s *session) sessionComboPoints(targetGUID uint64) uint8 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	if targetGUID == 0 {
+		return s.comboPoints
+	}
+	if s.comboTargetGUID != targetGUID {
+		return 0
+	}
+	return s.comboPoints
+}
+
+// sendComboPointsUpdate mirrors the player arm of Unit::SendComboPoints
+// (Unit.cpp:10688-10697): SMSG_UPDATE_COMBO_POINTS (0x39D) carries the
+// packed combo-target GUID and the point count. The npcbot/pet
+// movingMe/owner arms are out of scope — the Go session is always the
+// player.
+func (s *session) sendComboPointsUpdate() {
+	if s == nil || s.player == nil {
+		return
+	}
+	packet := protocol.NewBuffer(packedGUIDSize(s.comboTargetGUID) + 1)
+	packet.WritePackedGUID(s.comboTargetGUID)
+	packet.WriteU8(s.comboPoints)
+	_ = s.write(uint16(protocol.OpcodeSMSG_UPDATE_COMBO_POINTS), packet.Bytes(), true)
+}
+
+// addSessionComboPoints mirrors Unit::AddComboPoints (Unit.cpp:10655-10673):
+// a new target resets the bank to count, the same target adds clamped to
+// 0-5, and the client is notified. The m_comboPointHolders list has no Go
+// bridge — Go keeps no reverse index from a creature GUID to the sessions
+// banking points on it, so the holder cleanup on target death stays open.
+func (s *session) addSessionComboPoints(targetGUID uint64, count int8) {
+	if s == nil || s.player == nil || count == 0 {
+		return
+	}
+	if targetGUID != 0 && targetGUID != s.comboTargetGUID {
+		s.comboTargetGUID = targetGUID
+		s.comboPoints = uint8(count)
+	} else {
+		total := int16(s.comboPoints) + int16(count)
+		if total > 5 {
+			total = 5
+		}
+		if total < 0 {
+			total = 0
+		}
+		s.comboPoints = uint8(total)
+	}
+	s.sendComboPointsUpdate()
+}
+
+// clearSessionComboPoints mirrors Unit::ClearComboPoints
+// (Unit.cpp:10674-10687): the bank empties and the client is notified. The
+// SPELL_AURA_RETAIN_COMBO_POINTS removal has no Go bridge — the Go aura
+// model tracks no retain-combo-points aura type.
+func (s *session) clearSessionComboPoints() {
+	if s == nil || s.player == nil || s.comboTargetGUID == 0 {
+		return
+	}
+	s.comboPoints = 0
+	s.sendComboPointsUpdate()
+	s.comboTargetGUID = 0
+}
+
+// checkComboPointsCast mirrors the combo-point gate of Spell::CheckCast
+// (Spell.cpp:6186-6209): a spell carrying REQ_COMBO_POINTS needs at least
+// one banked combo point — against the explicit unit target when the spell
+// needs one (SpellInfo::NeedsExplicitUnitTarget), banked points regardless
+// of target otherwise — or the cast fails with SPELL_FAILED_NO_COMBO_POINTS
+// (78). The m_caster->ToUnit() null arm is vacuous on the client path (the
+// session is always a player) and the npcbot creature arm is out of scope.
+// NO_COMBO_POINTS carries no extra WriteCastResultInfo params (verified
+// Spell.cpp:3974-4160), so castFailedExtParams needs no case. Returns the
+// SPELL_FAILED_* result code, 0 on success.
+func (s *session) checkComboPointsCast(spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	if !spellNeedsComboPoints(spell) {
+		return 0
+	}
+	var points uint8
+	if spellNeedsExplicitUnitTarget(spell) {
+		points = s.sessionComboPoints(target.UnitGUID)
+	} else {
+		points = s.sessionComboPoints(0)
+	}
+	if points == 0 {
+		return spellFailedNoComboPoints
 	}
 	return 0
 }
