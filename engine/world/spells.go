@@ -113,6 +113,8 @@ const (
 	spellFailedPreventedByMechanic       uint8 = 147 // SPELL_FAILED_PREVENTED_BY_MECHANIC (SharedDefines.h:1129)
 	spellFailedCasterAuraState           uint8 = 22  // SPELL_FAILED_CASTER_AURASTATE (SharedDefines.h:1004)
 	spellFailedTargetAuraState           uint8 = 111 // SPELL_FAILED_TARGET_AURASTATE (SharedDefines.h:1093)
+	spellFailedCantBeDisenchanted        uint8 = 14  // SPELL_FAILED_CANT_BE_DISENCHANTED (SharedDefines.h:996)
+	spellFailedLowCastlevel              uint8 = 49  // SPELL_FAILED_LOW_CASTLEVEL (SharedDefines.h:1031)
 	spellFailedSummonPending             uint8 = 183 // SPELL_FAILED_SUMMON_PENDING (SharedDefines.h:1165)
 	spellFailedTargetNotInInstance       uint8 = 137 // SPELL_FAILED_TARGET_NOT_IN_INSTANCE (SharedDefines.h:1119)
 	spellFailedTargetLockedToRaidInst    uint8 = 169 // SPELL_FAILED_TARGET_LOCKED_TO_RAID_INSTANCE (SharedDefines.h:1151)
@@ -240,6 +242,7 @@ const (
 	spellEffectEnchantItem          = 53  // SPELL_EFFECT_ENCHANT_ITEM (SharedDefines.h:864)
 	spellEffectEnchantItemTemporary = 54  // SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY (SharedDefines.h:865)
 	spellEffectEnchantItemPrismatic = 156 // SPELL_EFFECT_ENCHANT_ITEM_PRISMATIC (SharedDefines.h:967)
+	spellEffectDisenchant           = 99  // SPELL_EFFECT_DISENCHANT (SharedDefines.h:910)
 
 	// Summon categories for the generic-summon CheckCast leg
 	// (Spell.cpp:5798-5817, SharedDefines.h:3296).
@@ -290,6 +293,7 @@ const (
 	skillFishing     uint32 = 356 // SKILL_FISHING (SharedDefines.h:2981)
 	skillLockpicking uint32 = 633 // SKILL_LOCKPICKING (SharedDefines.h:2999)
 	skillInscription uint32 = 773 // SKILL_INSCRIPTION (SharedDefines.h:3026)
+	skillEnchanting  uint32 = 333 // SKILL_ENCHANTING (SharedDefines.h:2978)
 	skillNone        uint32 = 0   // SKILL_NONE (SharedDefines.h:2888)
 
 	// Lock.dbc key types (SharedDefines.h:2628-2630) and lock types with a
@@ -1236,6 +1240,18 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if failReason := s.checkSpellEnchantItemTemporaryCast(ctx, spell, target); failReason != 0 {
 		s.sendCastFailed(ctx, castID, spell, failReason)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "temporary-enchant requirements not met", "failReason", failReason)
+		return true
+	}
+
+	// DISENCHANT arm of the Spell::CheckItems special-effects loop
+	// (Spell.cpp:7025-7052): runs right after the ENCHANT_ITEM_TEMPORARY
+	// arm, matching C++ CheckItems relative order. The ENCHANT_HELD_ITEM
+	// arm (Spell.cpp:7022-7024) is a bare break — no CheckItems check — so
+	// nothing is bridged for it. Client-initiated casts only — triggered
+	// casts go through castSpellDirect.
+	if failReason := s.checkSpellDisenchantCast(ctx, spell, target); failReason != 0 {
+		s.sendCastFailed(ctx, castID, spell, failReason)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "disenchant requirements not met", "failReason", failReason)
 		return true
 	}
 
@@ -11419,13 +11435,17 @@ func (s *session) tradeItemTargetCast(target protocol.SpellTargetData) bool {
 // Spell.cpp:6958-6965) and the item-spell id/trigger pairs (the usable-item
 // scan, Spell.cpp:6943-6952).
 type itemStoreTemplateInfo struct {
-	Stackable     uint32
-	LimitCategory uint32
-	ItemLevel     uint32
-	RequiredLevel uint32
-	SocketColors  [3]uint32
-	SpellIDs      [5]uint32
-	SpellTriggers [5]uint32
+	Stackable               uint32
+	LimitCategory           uint32
+	ItemLevel               uint32
+	RequiredLevel           uint32
+	Class                   uint32
+	Quality                 uint32
+	RequiredDisenchantSkill uint32
+	DisenchantID            uint32
+	SocketColors            [3]uint32
+	SpellIDs                [5]uint32
+	SpellTriggers           [5]uint32
 }
 
 // getItemStoreTemplateInfo is a cached item_template lookup for the
@@ -11449,10 +11469,18 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 		return itemStoreTemplateInfo{}, false
 	}
 	var stackable, limitCategory, itemLevel, requiredLevel uint32
+	var class, quality, disenchantID uint32
+	// RequiredDisenchantSkill defaults to -1 in the world item_template
+	// table; scan signed so the negative value survives, then convert to
+	// uint32 exactly like the C++ loader does (ItemTemplate.h), so the
+	// uint32(-1) comparison in the DISENCHANT arm (Spell.cpp:7033) matches.
+	var requiredDisenchantSkill int32
 	var socketColors [3]uint32
 	var spellIDs, spellTriggers [5]uint32
 	err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(stackable, 1), COALESCE(ItemLimitCategory, 0),
 		COALESCE(ItemLevel, 0), COALESCE(RequiredLevel, 0),
+		COALESCE(class, 0), COALESCE(Quality, 0),
+		COALESCE(RequiredDisenchantSkill, -1), COALESCE(DisenchantID, 0),
 		COALESCE(SocketColor_1, 0), COALESCE(SocketColor_2, 0), COALESCE(SocketColor_3, 0),
 		COALESCE(spellid_1, 0), COALESCE(spelltrigger_1, 0),
 		COALESCE(spellid_2, 0), COALESCE(spelltrigger_2, 0),
@@ -11461,6 +11489,7 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 		COALESCE(spellid_5, 0), COALESCE(spelltrigger_5, 0)
 		FROM item_template WHERE entry = ? LIMIT 1`, entry).Scan(
 		&stackable, &limitCategory, &itemLevel, &requiredLevel,
+		&class, &quality, &requiredDisenchantSkill, &disenchantID,
 		&socketColors[0], &socketColors[1], &socketColors[2],
 		&spellIDs[0], &spellTriggers[0],
 		&spellIDs[1], &spellTriggers[1],
@@ -11472,6 +11501,8 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 	}
 	info := itemStoreTemplateInfo{Stackable: stackable, LimitCategory: limitCategory,
 		ItemLevel: itemLevel, RequiredLevel: requiredLevel,
+		Class: class, Quality: quality,
+		RequiredDisenchantSkill: uint32(requiredDisenchantSkill), DisenchantID: disenchantID,
 		SocketColors: socketColors, SpellIDs: spellIDs, SpellTriggers: spellTriggers}
 	s.itemStoreTemplateMu.Lock()
 	if s.itemStoreTemplates == nil {
@@ -11872,6 +11903,56 @@ func (s *session) checkSpellEnchantItemTemporaryCast(ctx context.Context, spell 
 		// MaxLevel LOWLEVEL/HIGHLEVEL gates) is structural: handleCastSpell
 		// never carries a cast item (item casts run through handleUseItem,
 		// which runs no CheckCast gates).
+	}
+	return 0
+}
+
+// checkSpellDisenchantCast mirrors the SPELL_EFFECT_DISENCHANT arm of the
+// Spell::CheckItems special-effects loop (Spell.cpp:7025-7052). Returns the
+// SpellCastResult failure code, or 0 when the arm passes.
+// Client-initiated casts only — triggered casts go through castSpellDirect.
+func (s *session) checkSpellDisenchantCast(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+	for i := 0; i < len(spell.Effects); i++ {
+		if spell.Effects[i].Effect != spellEffectDisenchant {
+			continue
+		}
+		t, resolved := s.resolveEnchantItemTarget(ctx, target)
+		if !resolved {
+			return spellFailedCantBeDisenchanted
+		}
+		// Prevent disenchanting in trade slot: a trade-window target resolves
+		// to the partner's non-traded slot item, whose owner is not the
+		// caster (Spell.cpp:7027-7030).
+		if !t.ownedByCaster {
+			return spellFailedCantBeDisenchanted
+		}
+		// Missing item_template row (Spell.cpp:7032-7034).
+		info, ok := s.server.getItemStoreTemplateInfo(ctx, t.entry)
+		if !ok {
+			return spellFailedCantBeDisenchanted
+		}
+		// 2.0.x addon: the item cannot be disenchanted at all
+		// (Spell.cpp:7036-7038, RequiredDisenchantSkill == uint32(-1)).
+		if info.RequiredDisenchantSkill == 0xFFFFFFFF {
+			return spellFailedCantBeDisenchanted
+		}
+		// 2.0.x addon: player enchanting level against the item's
+		// disenchanting requirement (Spell.cpp:7039-7040).
+		if skill := playerSkillTotalValue(s.player, skillEnchanting); skill < 0 || info.RequiredDisenchantSkill > uint32(skill) {
+			return spellFailedLowCastlevel
+		}
+		// Quality 2-4 only (Spell.cpp:7041-7042).
+		if info.Quality > 4 || info.Quality < 2 {
+			return spellFailedCantBeDisenchanted
+		}
+		// Weapon or armor class only (Spell.cpp:7043-7044).
+		if info.Class != itemClassWeapon && info.Class != itemClassArmor {
+			return spellFailedCantBeDisenchanted
+		}
+		// Needs a disenchant loot entry (Spell.cpp:7045-7046).
+		if info.DisenchantID == 0 {
+			return spellFailedCantBeDisenchanted
+		}
 	}
 	return 0
 }
