@@ -132,6 +132,7 @@ const (
 	spellFailedTargetIsPlayerControlled  uint8 = 118 // SPELL_FAILED_TARGET_IS_PLAYER_CONTROLLED (SharedDefines.h:1100)
 	spellFailedNoMountsAllowed           uint8 = 83  // SPELL_FAILED_NO_MOUNTS_ALLOWED (SharedDefines.h:1065)
 	spellFailedOnlyAboveWater            uint8 = 88  // SPELL_FAILED_ONLY_ABOVEWATER (SharedDefines.h:1070)
+	spellFailedTargetFriendly            uint8 = 115 // SPELL_FAILED_TARGET_FRIENDLY (SharedDefines.h:1097)
 
 	areaFlagNoFlyZone uint32 = 0x20000000 // AREA_FLAG_NO_FLY_ZONE (DBCEnums.h:275) — AreaTableEntry.Flags bit tested by AreaTableEntry::IsFlyable (DBCStructure.h:209)
 
@@ -244,53 +245,54 @@ const (
 
 	// GetConfigMaxSkillValue at the level-80 cap: 300 + (80-60)*75/10
 	// (World.h:641) — the orange-lockpick fail-chance ceiling.
-	configMaxSkillValue                    int32  = 450
-	spellEffectHealMechanical                     = 75  // SPELL_EFFECT_HEAL_MECHANICAL (SharedDefines.h:886)
-	spellEffectHealPct                            = 136 // SPELL_EFFECT_HEAL_PCT (SharedDefines.h:947)
-	spellEffectEnergizePct                        = 137 // SPELL_EFFECT_ENERGIZE_PCT (SharedDefines.h:948)
-	spellAuraMounted                              = 78
-	spellAuraModParryPercent                      = 47
-	spellAuraModSpellCritChance                   = 57  // SPELL_AURA_MOD_SPELL_CRIT_CHANCE (SpellAuraDefines.h:137)
-	spellAuraModSpellCritChanceSchool             = 71  // SPELL_AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL (SpellAuraDefines.h:151)
-	spellAuraModCritPct                           = 290 // SPELL_AURA_MOD_CRIT_PCT (SpellAuraDefines.h:370)
-	spellAuraConfuse                              = 5
-	spellAuraCharm                                = 6
-	spellAuraFear                                 = 7
-	spellAuraStun                                 = 12
-	spellAuraRoot                                 = 26
-	spellAuraStealth                              = 16
-	spellAuraInvisibility                         = 18
-	spellAuraStealthDetect                        = 17
-	spellAuraInvisibilityDetect                   = 19
-	spellAuraStealthLevel                         = 154
-	spellAuraTrackStealthed                       = 151
-	spellAuraConvertRune                          = 249
-	spellAuraDamagePercentDone                    = 79
-	spellAuraModDamagePercentTaken                = 87   // SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN (SpellAuraDefines.h:167)
-	spellAuraModMechanicDamageTakenPercent        = 255  // SPELL_AURA_MOD_MECHANIC_DAMAGE_TAKEN_PERCENT (SpellAuraDefines.h:335)
-	spellAuraModIgnoreTargetResist                = 269  // SPELL_AURA_MOD_IGNORE_TARGET_RESIST (SpellAuraDefines.h:349)
-	spellAuraModDamageFromCaster                  = 271  // SPELL_AURA_MOD_DAMAGE_FROM_CASTER (SpellAuraDefines.h:351)
-	spellAuraDummy                                = 4    // SPELL_AURA_DUMMY (SpellAuraDefines.h:84)
-	spellIconCheatDeath                           = 2109 // Cheat Death dummy aura (Unit.cpp:7078)
-	spellSchoolMaskNormal                         = 1    // SPELL_SCHOOL_MASK_NORMAL (SharedDefines.h:324)
-	spellAuraAttackPowerPercent                   = 166
-	spellAuraRangedAttackPowerPercent             = 167
-	spellAuraCastingSpeedNotStack                 = 65
-	spellAuraHasteSpells                          = 216
-	spellAuraFakeInebriation                      = 304
-	spellAuraTransform                            = 56  // SPELL_AURA_TRANSFORM (SpellAuraDefines.h:136)
-	spellAuraMechanicImmunity                     = 77  // SPELL_AURA_MECHANIC_IMMUNITY (SpellAuraDefines.h:157)
-	spellAuraModMechanicResistance                = 117 // SPELL_AURA_MOD_MECHANIC_RESISTANCE (SpellAuraDefines.h:197)
-	spellAuraModPowerCostSchoolPct                = 72  // SPELL_AURA_MOD_POWER_COST_SCHOOL_PCT (SpellAuraDefines.h:152)
-	spellAuraModPowerCostSchool                   = 73  // SPELL_AURA_MOD_POWER_COST_SCHOOL (SpellAuraDefines.h:153)
-	spellAuraModConfuse                           = 5   // SPELL_AURA_MOD_CONFUSE (SpellAuraDefines.h:85)
-	spellAuraModFear                              = 7   // SPELL_AURA_MOD_FEAR (SpellAuraDefines.h:87)
-	spellAuraModStun                              = 12  // SPELL_AURA_MOD_STUN (SpellAuraDefines.h:92)
-	spellAuraModRoot                              = 26  // SPELL_AURA_MOD_ROOT (SpellAuraDefines.h:106)
-	unitStandFlagCreep                            = 0x02
-	playerAuraVisionStealth                       = 0x20
-	playerAuraVisionInvis                         = 0x40
-	playerFieldByteTrackStealthed          uint32 = 0x00000002
+	configMaxSkillValue                     int32  = 450
+	spellEffectHealMechanical                      = 75  // SPELL_EFFECT_HEAL_MECHANICAL (SharedDefines.h:886)
+	spellEffectHealPct                             = 136 // SPELL_EFFECT_HEAL_PCT (SharedDefines.h:947)
+	spellEffectEnergizePct                         = 137 // SPELL_EFFECT_ENERGIZE_PCT (SharedDefines.h:948)
+	spellAuraMounted                               = 78
+	spellAuraModParryPercent                       = 47
+	spellAuraModSpellCritChance                    = 57  // SPELL_AURA_MOD_SPELL_CRIT_CHANCE (SpellAuraDefines.h:137)
+	spellAuraModSpellCritChanceSchool              = 71  // SPELL_AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL (SpellAuraDefines.h:151)
+	spellAuraModCritPct                            = 290 // SPELL_AURA_MOD_CRIT_PCT (SpellAuraDefines.h:370)
+	spellAuraRangedAttackPowerAttackerBonus        = 127 // SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS (SpellAuraDefines.h:207)
+	spellAuraConfuse                               = 5
+	spellAuraCharm                                 = 6
+	spellAuraFear                                  = 7
+	spellAuraStun                                  = 12
+	spellAuraRoot                                  = 26
+	spellAuraStealth                               = 16
+	spellAuraInvisibility                          = 18
+	spellAuraStealthDetect                         = 17
+	spellAuraInvisibilityDetect                    = 19
+	spellAuraStealthLevel                          = 154
+	spellAuraTrackStealthed                        = 151
+	spellAuraConvertRune                           = 249
+	spellAuraDamagePercentDone                     = 79
+	spellAuraModDamagePercentTaken                 = 87   // SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN (SpellAuraDefines.h:167)
+	spellAuraModMechanicDamageTakenPercent         = 255  // SPELL_AURA_MOD_MECHANIC_DAMAGE_TAKEN_PERCENT (SpellAuraDefines.h:335)
+	spellAuraModIgnoreTargetResist                 = 269  // SPELL_AURA_MOD_IGNORE_TARGET_RESIST (SpellAuraDefines.h:349)
+	spellAuraModDamageFromCaster                   = 271  // SPELL_AURA_MOD_DAMAGE_FROM_CASTER (SpellAuraDefines.h:351)
+	spellAuraDummy                                 = 4    // SPELL_AURA_DUMMY (SpellAuraDefines.h:84)
+	spellIconCheatDeath                            = 2109 // Cheat Death dummy aura (Unit.cpp:7078)
+	spellSchoolMaskNormal                          = 1    // SPELL_SCHOOL_MASK_NORMAL (SharedDefines.h:324)
+	spellAuraAttackPowerPercent                    = 166
+	spellAuraRangedAttackPowerPercent              = 167
+	spellAuraCastingSpeedNotStack                  = 65
+	spellAuraHasteSpells                           = 216
+	spellAuraFakeInebriation                       = 304
+	spellAuraTransform                             = 56  // SPELL_AURA_TRANSFORM (SpellAuraDefines.h:136)
+	spellAuraMechanicImmunity                      = 77  // SPELL_AURA_MECHANIC_IMMUNITY (SpellAuraDefines.h:157)
+	spellAuraModMechanicResistance                 = 117 // SPELL_AURA_MOD_MECHANIC_RESISTANCE (SpellAuraDefines.h:197)
+	spellAuraModPowerCostSchoolPct                 = 72  // SPELL_AURA_MOD_POWER_COST_SCHOOL_PCT (SpellAuraDefines.h:152)
+	spellAuraModPowerCostSchool                    = 73  // SPELL_AURA_MOD_POWER_COST_SCHOOL (SpellAuraDefines.h:153)
+	spellAuraModConfuse                            = 5   // SPELL_AURA_MOD_CONFUSE (SpellAuraDefines.h:85)
+	spellAuraModFear                               = 7   // SPELL_AURA_MOD_FEAR (SpellAuraDefines.h:87)
+	spellAuraModStun                               = 12  // SPELL_AURA_MOD_STUN (SpellAuraDefines.h:92)
+	spellAuraModRoot                               = 26  // SPELL_AURA_MOD_ROOT (SpellAuraDefines.h:106)
+	unitStandFlagCreep                             = 0x02
+	playerAuraVisionStealth                        = 0x20
+	playerAuraVisionInvis                          = 0x40
+	playerFieldByteTrackStealthed           uint32 = 0x00000002
 )
 
 // isSelfCastOnly checks if all active spell effects target the caster unit.
@@ -1318,6 +1320,18 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if failure := s.checkMountedCast(ctx, spell); failure != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "mounted validation", "failure", failure)
+		return true
+	}
+
+	// Ranged-attack-power-attacker-bonus gate (Spell::CheckCast ApplyAuraName
+	// switch, Spell.cpp:6112-6121): an aura-127 effect fails with
+	// SPELL_FAILED_BAD_IMPLICIT_TARGETS when the wire target carries no unit
+	// GUID, and with SPELL_FAILED_TARGET_FRIENDLY when the unit target is
+	// friendly to the caster. C++ relative order places this leg immediately
+	// after the SPELL_AURA_MOUNTED leg in the ApplyAuraName switch.
+	if failure := s.checkRangedAttackPowerAttackerBonusCast(spell, target); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "ranged-attack-power-attacker-bonus validation", "failure", failure)
 		return true
 	}
 
@@ -2664,6 +2678,62 @@ func (s *session) checkMountedCast(ctx context.Context, spell wotlk.Spell) uint8
 		if err != nil || !found || shape.Flags&0x1 == 0 {
 			return spellFailedDontReport
 		}
+	}
+	return 0
+}
+
+// checkRangedAttackPowerAttackerBonusCast mirrors the
+// SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS leg of the CheckCast
+// ApplyAuraName switch (Spell.cpp:6112-6121): no unit target →
+// SPELL_FAILED_BAD_IMPLICIT_TARGETS, a unit target friendly to the caster →
+// SPELL_FAILED_TARGET_FRIENDLY. The C++ comment ("can be cast at
+// non-friendly unit or own pet/charm") is narrower than the code —
+// IsFriendlyTo covers pet/charm too, so any friendly target is rejected.
+//
+//   - player targets: the session-level friendliness model
+//     (isFriendlyToTarget, dispel.go — team + duel-hostility + own-pet) is
+//     the Unit::IsFriendlyTo bridge; a self-target is always friendly.
+//   - creature targets: the faction-template friendliness model
+//     (explicit_target_faction.go:88) is the bridge.
+//   - unresolvable GUIDs skip the friendliness gate: C++ gates only when
+//     GetUnitTarget() yields a unit (pets have no faction model).
+//
+// Returns the SPELL_FAILED_* result code, 0 on success. TARGET_FRIENDLY
+// carries no extra WriteCastResultInfo params, so castFailedExtParams needs
+// no case (verified Spell.cpp:3974-4160).
+func (s *session) checkRangedAttackPowerAttackerBonusCast(spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
+	matched := false
+	for _, eff := range spell.Effects {
+		if eff.Aura == spellAuraRangedAttackPowerAttackerBonus {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return 0
+	}
+	if target.Flags&protocol.SpellTargetFlagUnitWireMask == 0 || target.UnitGUID == 0 {
+		return spellFailedBadImplicitTargets
+	}
+	guid := target.UnitGUID
+	if ts := s.server.findSessionByGUID(guid); ts != nil && ts.player != nil {
+		if s.isFriendlyToTarget(guid, ts) {
+			return spellFailedTargetFriendly
+		}
+		return 0
+	}
+	s.server.motionMu.Lock()
+	defer s.server.motionMu.Unlock()
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, guid)
+	if motion == nil {
+		return 0
+	}
+	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	if s.server.isFriendlyFaction(motion.Faction, caster) {
+		return spellFailedTargetFriendly
 	}
 	return 0
 }
