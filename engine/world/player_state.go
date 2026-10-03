@@ -39,6 +39,7 @@ const (
 	unitFieldCombatReach                          = 66
 	unitFieldDisplayID                            = 67
 	unitFieldNativeDisplayID                      = 68
+	unitFieldNPCEmoteState                        = 83 // UNIT_NPC_EMOTESTATE = OBJECT_END + 0x4D (UpdateFields.h:140)
 	unitFieldPlayerFlags                          = 150
 	unitFieldPlayerBytes                          = 153
 	unitFieldPlayerBytes2                         = 154
@@ -337,6 +338,7 @@ type playerState struct {
 	LastHonorUpdateTime             int64
 	DrunkenState                    uint16
 	FakeInebriation                 uint32
+	EmoteState                      uint32 // UNIT_NPC_EMOTESTATE mirror (cs_modify.cpp HandleModifyStandStateCommand)
 }
 
 type playerReputation struct {
@@ -3148,6 +3150,7 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	if state.MountDisplayID != 0 {
 		values[unitFieldMountDisplayID] = state.MountDisplayID
 	}
+	values[unitFieldNPCEmoteState] = state.EmoteState
 	values[unitFieldPlayerFlags] = state.PlayerFlags
 	values[unitFieldTarget] = uint32(state.Selection)
 	values[unitFieldTarget+1] = uint32(state.Selection >> 32)
