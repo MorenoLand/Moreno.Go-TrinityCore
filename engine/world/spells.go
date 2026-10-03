@@ -958,12 +958,12 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				return
 			}
 			s.castMu.Unlock()
-			s.finishSpellCast(context.Background(), castID, spellID, spell, target, 0)
+			s.finishSpellCast(context.Background(), castID, spellID, spell, target, 0, 0)
 		})
 		s.activeCast = castState
 		s.castMu.Unlock()
 	} else {
-		s.finishSpellCast(context.Background(), castID, spellID, spell, target, 0)
+		s.finishSpellCast(context.Background(), castID, spellID, spell, target, 0, 0)
 	}
 
 	s.debug("spell cast accepted", "account", s.accountName, "spell", spellID, "cast_id", castID, "cast_time", castTime, "cost", cost)
@@ -1253,7 +1253,7 @@ func (s *session) prepareHitTriggerSpells(spell wotlk.Spell) []spellHitTrigger {
 	return triggers
 }
 
-func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, castItemGUID uint64) {
+func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, castItemGUID uint64, castItemEntry uint32) {
 	if s.player == nil {
 		return
 	}
@@ -1401,6 +1401,34 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// completed cast for it.
 	if completedCast != nil {
 		completedCast.HitTriggers = s.prepareHitTriggerSpells(spell)
+	}
+
+	// Spell::_cast (Spell.cpp:3431-3470) remaining legs:
+	//   - CallScriptOnCastHandlers: no SpellScript bridge in Go, so there is
+	//     no consumer to call (no-op, like the other script legs).
+	//   - UpdateTradeSlotItem: the trade-slot sentinel (TRADE_SLOT_NONTRADED,
+	//     set server-side by SetTradeItemTarget) only exists for the deferred
+	//     trade spell; Go resolves the trader's non-traded item directly in
+	//     applyDeferredTradeEnchant (trade.go), and client packets carry the
+	//     real item GUID, so there is no sentinel to rewrite.
+	//   - HandleLaunchPhase: the delayed leg is the projectile travel delay
+	//     before effect execution (the spell.Speed leg below).
+	//   - ReleaseSpellFocus: creature casters only; the caster here is always
+	//     a player (s.player == nil returns at the top).
+	//
+	// Spell::_cast (Spell.cpp:3438-3444): a player cast from an item
+	// (CMSG_USE_ITEM, m_CastItem) starts the item-use timed achievement and
+	// updates ACHIEVEMENT_CRITERIA_TYPE_USE_ITEM with the cast item's entry,
+	// gated on TRIGGERED_IGNORE_CAST_ITEM not being set (SpellDefines.h:137
+	// — "Will not take away cast item or update related achievement
+	// criteria"). finishSpellCast's only non-zero cast-item callers are
+	// genuine CMSG_USE_ITEM casts (items.go), so castItemGUID != 0 is the Go
+	// model of that gate. m_CastItem is a held pointer in C++; the entry
+	// rides the call because consumables are decremented at cast start and
+	// the item_instance row may be gone by completion.
+	if castItemGUID != 0 && castItemEntry != 0 {
+		s.startTimedAchievement(timedTypeItem, castItemEntry)
+		s.updateAchievementCriteria(criteriaTypeUseItem, castItemEntry, 1)
 	}
 
 	// Spell::SelectImplicitTargetDestTargets (Spell.cpp:1433) and
@@ -6900,7 +6928,7 @@ func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
 					Flags:    protocol.SpellTargetFlagUnitWireMask,
 					UnitGUID: targetUnit,
 				}
-				s.finishSpellCast(ctx, 0, click.spellID, spell, targetData, 0)
+				s.finishSpellCast(ctx, 0, click.spellID, spell, targetData, 0, 0)
 			}
 		}
 	}
