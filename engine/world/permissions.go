@@ -1448,3 +1448,27 @@ const permissionCommandReloadQuestGreetingLocale uint32 = 867
 
 // permissionCommandReloadCreatureMovementOverride mirrors rbac::RBAC_PERM_COMMAND_RELOAD_CREATURE_MOVEMENT_OVERRIDE (RBAC.h).
 const permissionCommandReloadCreatureMovementOverride uint32 = 873
+
+// permissionCommandReset mirrors rbac::RBAC_PERM_COMMAND_RESET (RBAC.h:578).
+const permissionCommandReset uint32 = 710
+
+// permissionCommandResetAchievements mirrors rbac::RBAC_PERM_COMMAND_RESET_ACHIEVEMENTS (RBAC.h:579).
+const permissionCommandResetAchievements uint32 = 711
+
+// permissionCommandResetHonor mirrors rbac::RBAC_PERM_COMMAND_RESET_HONOR (RBAC.h:580).
+const permissionCommandResetHonor uint32 = 712
+
+// permissionCommandResetLevel mirrors rbac::RBAC_PERM_COMMAND_RESET_LEVEL (RBAC.h:581).
+const permissionCommandResetLevel uint32 = 713
+
+// permissionCommandResetSpells mirrors rbac::RBAC_PERM_COMMAND_RESET_SPELLS (RBAC.h:582).
+const permissionCommandResetSpells uint32 = 714
+
+// permissionCommandResetStats mirrors rbac::RBAC_PERM_COMMAND_RESET_STATS (RBAC.h:583).
+const permissionCommandResetStats uint32 = 715
+
+// permissionCommandResetTalents mirrors rbac::RBAC_PERM_COMMAND_RESET_TALENTS (RBAC.h:584).
+const permissionCommandResetTalents uint32 = 716
+
+// permissionCommandResetAll mirrors rbac::RBAC_PERM_COMMAND_RESET_ALL (RBAC.h:585).
+const permissionCommandResetAll uint32 = 717
