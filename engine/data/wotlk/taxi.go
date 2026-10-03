@@ -268,6 +268,19 @@ func (s *Store) TaxiPathPoints(pathID uint32) ([]TaxiSplinePoint, error) {
 	return result, nil
 }
 
+// TaxiNode returns the TaxiNodes.dbc record for a node id, mirroring
+// sTaxiNodesStore.LookupEntry (cs_go.cpp HandleGoTaxinodeCommand).
+func (s *Store) TaxiNode(id uint32) (TaxiNode, bool, error) {
+	network, err := s.taxiNetwork()
+	if err != nil {
+		return TaxiNode{}, false, err
+	}
+	if index, ok := network.byID[id]; ok {
+		return network.nodes[index], true, nil
+	}
+	return TaxiNode{}, false, nil
+}
+
 // TaxiNodeMount returns the mount display id serving the team at a node.
 func (s *Store) TaxiNodeMount(node uint32, teamAlliance bool) (uint32, error) {
 	network, err := s.taxiNetwork()

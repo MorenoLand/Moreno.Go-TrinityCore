@@ -22,6 +22,9 @@ const permissionCommandGMList uint32 = 375
 // permissionCommandGMVisible mirrors rbac::RBAC_PERM_COMMAND_GM_VISIBLE (RBAC.h:248).
 const permissionCommandGMVisible uint32 = 376
 
+// permissionCommandGO mirrors rbac::RBAC_PERM_COMMAND_GO (RBAC.h:249).
+const permissionCommandGO uint32 = 377
+
 // permissionCommandsAppearInGMList mirrors rbac::RBAC_PERM_COMMANDS_APPEAR_IN_GM_LIST (RBAC.h:87).
 const permissionCommandsAppearInGMList uint32 = 34
 
