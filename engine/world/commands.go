@@ -3891,6 +3891,230 @@ func (s *session) handleCmdDeserter(ctx context.Context, args []string) {
 	target.removeAura(spellID)
 }
 
+// ---- disable_commandscript (cs_disable.cpp) ----
+
+// DisableType values mirror the DisableType enum (DisableMgr.h:24-36).
+const (
+	disableTypeSpell               = 0
+	disableTypeQuest               = 1
+	disableTypeMap                 = 2
+	disableTypeBattleground        = 3
+	disableTypeAchievementCriteria = 4
+	disableTypeOutdoorPvP          = 5
+	disableTypeVMap                = 6
+	disableTypeMMap                = 7
+)
+
+// maxOutdoorPVPTypes mirrors MAX_OUTDOORPVP_TYPES (OutdoorPvP.h:28-36):
+// OUTDOOR_PVP_HP = 1 through OUTDOOR_PVP_EP = 6.
+const maxOutdoorPVPTypes = 7
+
+// disableCommandType mirrors one arm of the add/remove ChatCommandTables
+// (cs_disable.cpp:52-75): the DisableType, the label the handlers echo back
+// in their messages, and the matching add/remove RBAC grants (RBAC.h:221-237).
+type disableCommandType struct {
+	disableType uint8
+	label       string
+	permAdd     uint32
+	permRemove  uint32
+}
+
+// disableCommandTypes mirrors the arm names of the add/remove tables
+// (cs_disable.cpp:52-75) in table order.
+var disableCommandTypes = []disableCommandType{
+	{disableTypeSpell, "spell", permissionCommandDisableAddSpell, permissionCommandDisableRemoveSpell},
+	{disableTypeQuest, "quest", permissionCommandDisableAddQuest, permissionCommandDisableRemoveQuest},
+	{disableTypeMap, "map", permissionCommandDisableAddMap, permissionCommandDisableRemoveMap},
+	{disableTypeBattleground, "battleground", permissionCommandDisableAddBattleground, permissionCommandDisableRemoveBattleground},
+	{disableTypeAchievementCriteria, "achievement criteria", permissionCommandDisableAddAchievementCriteria, permissionCommandDisableRemoveAchievementCriteria},
+	{disableTypeOutdoorPvP, "outdoorpvp", permissionCommandDisableAddOutdoorPvP, permissionCommandDisableRemoveOutdoorPvP},
+	{disableTypeVMap, "vmap", permissionCommandDisableAddVMap, permissionCommandDisableRemoveVMap},
+	{disableTypeMMap, "mmap", permissionCommandDisableAddMMap, permissionCommandDisableRemoveMMap},
+}
+
+// handleCmdDisable mirrors disable_commandscript::GetCommands
+// (cs_disable.cpp:58-84): the "disable" root with the "add" and "remove"
+// groups, each arm named after its DisableType and gated on the matching
+// RBAC_PERM_COMMAND_DISABLE_* permission (RBAC.h:221-237, all Console::Yes).
+func (s *session) handleCmdDisable(ctx context.Context, args []string) {
+	const syntax = "Syntax: .disable add|remove <spell|quest|map|battleground|achievement_criteria|outdoorpvp|vmap|mmap> <entry> [flags] <comment>"
+	if len(args) < 2 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	// The Trinity parser prefix-matches command names at every nesting
+	// level; match the add/remove group and the type arm the same way here.
+	mode := ""
+	switch lower := strings.ToLower(args[0]); {
+	case strings.HasPrefix("add", lower):
+		mode = "add"
+	case strings.HasPrefix("remove", lower):
+		mode = "remove"
+	}
+	if mode == "" {
+		s.sendSysMessage(syntax)
+		return
+	}
+	var info *disableCommandType
+	lowerType := strings.ToLower(args[1])
+	for i := range disableCommandTypes {
+		// The "achievement criteria" arm is spelled "achievement_criteria"
+		// in the C++ command table.
+		name := strings.ReplaceAll(disableCommandTypes[i].label, " ", "_")
+		if strings.HasPrefix(name, lowerType) {
+			info = &disableCommandTypes[i]
+			break
+		}
+	}
+	if info == nil {
+		s.sendSysMessage(syntax)
+		return
+	}
+	perm := info.permRemove
+	if mode == "add" {
+		perm = info.permAdd
+	}
+	if !s.commandAllowed(ctx, perm) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	if mode == "add" {
+		s.handleDisableAdd(ctx, info, args[2:])
+	} else {
+		s.handleDisableRemove(ctx, info, args[2:])
+	}
+}
+
+// handleDisableAdd mirrors HandleAddDisables (cs_disable.cpp:93-217): the
+// entry is validated against the matching data store, duplicates are
+// rejected, and the row lands in the disables table (WORLD_INS_DISABLES).
+func (s *session) handleDisableAdd(ctx context.Context, info *disableCommandType, args []string) {
+	const syntax = "Syntax: .disable add <type> <entry> [flags] <comment>"
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	// C++: strtok(entry) missing or atoi == 0 -> return false.
+	if len(args) < 3 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	entry64, err := strconv.ParseUint(args[0], 10, 32)
+	if err != nil || entry64 == 0 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	entry := uint32(entry64)
+	// C++: uint8(atoi(flagsStr)); empty or garbage flags parse to 0.
+	flags64, _ := strconv.ParseUint(args[1], 10, 8)
+	comment := strings.Join(args[2:], " ")
+	switch info.disableType {
+	case disableTypeSpell:
+		// sSpellMgr->GetSpellInfo -> LANG_COMMAND_NOSPELLFOUND.
+		if s.server.Data == nil {
+			return
+		}
+		if _, found, _ := s.server.Data.Spell(entry); !found {
+			s.sendSysMessage("No spell found.")
+			return
+		}
+	case disableTypeQuest:
+		// sObjectMgr->GetQuestTemplate -> LANG_COMMAND_QUEST_NOTFOUND.
+		if !characterQuestTemplateExists(ctx, s.server.WorldStore.DB, entry) {
+			s.sendSysMessage(fmt.Sprintf("No quest template found for entry %d.", entry))
+			return
+		}
+	case disableTypeMap, disableTypeVMap, disableTypeMMap:
+		// sMapStore.LookupEntry -> LANG_COMMAND_NOMAPFOUND.
+		if s.server.Data == nil {
+			return
+		}
+		if _, found, _ := s.server.Data.Map(entry); !found {
+			s.sendSysMessage("No map found.")
+			return
+		}
+	case disableTypeBattleground:
+		// sBattlemasterListStore.LookupEntry ->
+		// LANG_COMMAND_NO_BATTLEGROUND_FOUND.
+		if s.server.Data == nil {
+			return
+		}
+		file, fileErr := s.server.Data.File("BattlemasterList")
+		if fileErr != nil {
+			return
+		}
+		if _, found := file.Find(entry); !found {
+			s.sendSysMessage("No battleground found.")
+			return
+		}
+	case disableTypeAchievementCriteria:
+		// sAchievementMgr->GetAchievementCriteria ->
+		// LANG_COMMAND_NO_ACHIEVEMENT_CRITERIA_FOUND.
+		s.server.loadAchievementIndex()
+		achievementIndex.mu.RLock()
+		_, found := achievementIndex.byID[entry]
+		achievementIndex.mu.RUnlock()
+		if !found {
+			s.sendSysMessage("No achievement criteria found.")
+			return
+		}
+	case disableTypeOutdoorPvP:
+		// entry > MAX_OUTDOORPVP_TYPES ->
+		// LANG_COMMAND_NO_OUTDOOR_PVP_FORUND.
+		if entry > maxOutdoorPVPTypes {
+			s.sendSysMessage(fmt.Sprintf("No outdoor PvP found for entry %d.", entry))
+			return
+		}
+	}
+	row, err := s.server.WorldStore.QueryRowStatement(ctx, database.StatementID("WORLD_SEL_DISABLES"), entry, info.disableType)
+	alreadyDisabled := false
+	if err == nil {
+		var existing uint32
+		alreadyDisabled = row.Scan(&existing) == nil
+	}
+	if alreadyDisabled {
+		s.sendSysMessage(fmt.Sprintf("This %s (Id: %d) is already disabled.", info.label, entry))
+		return
+	}
+	if _, err := s.server.WorldStore.ExecStatement(ctx, database.StatementID("WORLD_INS_DISABLES"), entry, info.disableType, uint16(flags64), comment); err != nil {
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("Add Disabled %s (Id: %d) for reason %s", info.label, entry, comment))
+}
+
+// handleDisableRemove mirrors HandleRemoveDisables (cs_disable.cpp:274-326):
+// the row is looked up in the disables table (WORLD_SEL_DISABLES) and
+// deleted (WORLD_DEL_DISABLES).
+func (s *session) handleDisableRemove(ctx context.Context, info *disableCommandType, args []string) {
+	const syntax = "Syntax: .disable remove <type> <entry>"
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	if len(args) == 0 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	entry64, err := strconv.ParseUint(args[0], 10, 32)
+	if err != nil || entry64 == 0 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	entry := uint32(entry64)
+	row, err := s.server.WorldStore.QueryRowStatement(ctx, database.StatementID("WORLD_SEL_DISABLES"), entry, info.disableType)
+	disabled := false
+	if err == nil {
+		var existing uint32
+		disabled = row.Scan(&existing) == nil
+	}
+	if !disabled {
+		s.sendSysMessage(fmt.Sprintf("This %s (Id: %d) is not disabled.", info.label, entry))
+		return
+	}
+	if _, err := s.server.WorldStore.ExecStatement(ctx, database.StatementID("WORLD_DEL_DISABLES"), entry, info.disableType); err != nil {
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("Remove Disabled %s (Id: %d)", info.label, entry))
+}
+
 func (s *session) handleCmdNPC(ctx context.Context, args []string) {
 	if len(args) == 0 {
 		s.sendSysMessage("Syntax: .npc add <entry> | .npc info | .npc say <text> | .npc yell <text>")
@@ -5094,6 +5318,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("unban", func(ctx context.Context, args []string) bool { s.handleCmdUnBan(ctx, args); return true }, []string{"account", "character", "playeraccount", "ip"}, nil)
 	root.add("bf", func(ctx context.Context, args []string) bool { s.handleCmdBF(ctx, args); return true }, []string{"start", "stop", "switch", "timer", "enable"}, nil)
 	root.add("deserter", func(ctx context.Context, args []string) bool { s.handleCmdDeserter(ctx, args); return true }, []string{"instance", "bg"}, nil)
+	root.add("disable", func(ctx context.Context, args []string) bool { s.handleCmdDisable(ctx, args); return true }, []string{"add", "remove"}, nil)
 	root.add("npc", func(ctx context.Context, args []string) bool { s.handleCmdNPC(ctx, args); return true }, []string{"info", "say", "yell"}, nil)
 	root.add("gobject", func(ctx context.Context, args []string) bool { s.handleCmdGObject(ctx, args); return true }, nil, map[string]string{"gob": "gobject"})
 	root.add("revive", func(ctx context.Context, args []string) bool { s.handleCmdRevive(ctx, args); return true }, nil, map[string]string{"res": "revive", "rev": "revive"})

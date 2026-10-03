@@ -73,6 +73,56 @@ const permissionCommandDeserterInstanceAdd uint32 = 346
 // permissionCommandDeserterInstanceRemove mirrors rbac::RBAC_PERM_COMMAND_DESERTER_INSTANCE_REMOVE (RBAC.h:220).
 const permissionCommandDeserterInstanceRemove uint32 = 347
 
+// permissionCommandDisableAddAchievementCriteria mirrors rbac::RBAC_PERM_COMMAND_DISABLE_ADD_ACHIEVEMENT_CRITERIA (RBAC.h:221).
+const permissionCommandDisableAddAchievementCriteria uint32 = 350
+
+// permissionCommandDisableAddBattleground mirrors rbac::RBAC_PERM_COMMAND_DISABLE_ADD_BATTLEGROUND (RBAC.h:222).
+const permissionCommandDisableAddBattleground uint32 = 351
+
+// permissionCommandDisableAddMap mirrors rbac::RBAC_PERM_COMMAND_DISABLE_ADD_MAP (RBAC.h:223).
+const permissionCommandDisableAddMap uint32 = 352
+
+// permissionCommandDisableAddMMap mirrors rbac::RBAC_PERM_COMMAND_DISABLE_ADD_MMAP (RBAC.h:224).
+const permissionCommandDisableAddMMap uint32 = 353
+
+// permissionCommandDisableAddOutdoorPvP mirrors rbac::RBAC_PERM_COMMAND_DISABLE_ADD_OUTDOORPVP (RBAC.h:225).
+const permissionCommandDisableAddOutdoorPvP uint32 = 354
+
+// permissionCommandDisableAddQuest mirrors rbac::RBAC_PERM_COMMAND_DISABLE_ADD_QUEST (RBAC.h:226).
+const permissionCommandDisableAddQuest uint32 = 355
+
+// permissionCommandDisableAddSpell mirrors rbac::RBAC_PERM_COMMAND_DISABLE_ADD_SPELL (RBAC.h:227).
+const permissionCommandDisableAddSpell uint32 = 356
+
+// permissionCommandDisableAddVMap mirrors rbac::RBAC_PERM_COMMAND_DISABLE_ADD_VMAP (RBAC.h:228).
+const permissionCommandDisableAddVMap uint32 = 357
+
+// 358 previously used, do not reuse.
+
+// permissionCommandDisableRemoveAchievementCriteria mirrors rbac::RBAC_PERM_COMMAND_DISABLE_REMOVE_ACHIEVEMENT_CRITERIA (RBAC.h:230).
+const permissionCommandDisableRemoveAchievementCriteria uint32 = 359
+
+// permissionCommandDisableRemoveBattleground mirrors rbac::RBAC_PERM_COMMAND_DISABLE_REMOVE_BATTLEGROUND (RBAC.h:231).
+const permissionCommandDisableRemoveBattleground uint32 = 360
+
+// permissionCommandDisableRemoveMap mirrors rbac::RBAC_PERM_COMMAND_DISABLE_REMOVE_MAP (RBAC.h:232).
+const permissionCommandDisableRemoveMap uint32 = 361
+
+// permissionCommandDisableRemoveMMap mirrors rbac::RBAC_PERM_COMMAND_DISABLE_REMOVE_MMAP (RBAC.h:233).
+const permissionCommandDisableRemoveMMap uint32 = 362
+
+// permissionCommandDisableRemoveOutdoorPvP mirrors rbac::RBAC_PERM_COMMAND_DISABLE_REMOVE_OUTDOORPVP (RBAC.h:234).
+const permissionCommandDisableRemoveOutdoorPvP uint32 = 363
+
+// permissionCommandDisableRemoveQuest mirrors rbac::RBAC_PERM_COMMAND_DISABLE_REMOVE_QUEST (RBAC.h:235).
+const permissionCommandDisableRemoveQuest uint32 = 364
+
+// permissionCommandDisableRemoveSpell mirrors rbac::RBAC_PERM_COMMAND_DISABLE_REMOVE_SPELL (RBAC.h:236).
+const permissionCommandDisableRemoveSpell uint32 = 365
+
+// permissionCommandDisableRemoveVMap mirrors rbac::RBAC_PERM_COMMAND_DISABLE_REMOVE_VMAP (RBAC.h:237).
+const permissionCommandDisableRemoveVMap uint32 = 366
+
 // permissionOpcodeWhois mirrors rbac::RBAC_PERM_OPCODE_WHOIS (RBAC.h:96).
 const permissionOpcodeWhois uint32 = 43
 
