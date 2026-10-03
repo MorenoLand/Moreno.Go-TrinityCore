@@ -89,81 +89,95 @@ const (
 	spellAttr2Unk3                   uint32 = 0x00000008 // SPELL_ATTR2_UNK3 (SharedDefines.h:489) — "Ignore aura scaling"; GetAuraRankForLevel returns the cast rank — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr3DrainSoul              uint32 = 0x08000000 // SPELL_ATTR3_DRAIN_SOUL (SharedDefines.h:550) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 
-	spellFailedEquippedItemClass         uint8 = 29  // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
-	spellFailedEquippedItemClassMainhand uint8 = 30  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
-	spellFailedEquippedItemClassOffhand  uint8 = 31  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND (SharedDefines.h:1013)
-	spellFailedNotInFront                uint8 = 61  // SPELL_FAILED_NOT_INFRONT (SharedDefines.h:1042)
-	spellFailedBadTargets                uint8 = 12  // SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992)
-	spellFailedBmOrInvisGod              uint8 = 159 // SPELL_FAILED_BM_OR_INVISGOD (SharedDefines.h:1141)
-	spellFailedTargetIsPlayer            uint8 = 117 // SPELL_FAILED_TARGET_IS_PLAYER (SharedDefines.h:1099)
-	spellFailedAffectingCombat           uint8 = 1
-	spellFailedFoodLowLevel              uint8 = 35
-	spellFailedNoPet                     uint8 = 84
-	spellFailedWrongPetFood              uint8 = 135
-	spellFailedNotReady                  uint8 = 67  // SPELL_FAILED_NOT_READY (SharedDefines.h:1049)
-	spellFailedDontReport                uint8 = 27  // SPELL_FAILED_DONT_REPORT (SharedDefines.h:1009)
-	spellFailedSilenced                  uint8 = 104 // SPELL_FAILED_SILENCED (SharedDefines.h:1086)
-	spellFailedCasterDead                uint8 = 23  // SPELL_FAILED_CASTER_DEAD (SharedDefines.h:1003)
-	spellFailedNotFishable               uint8 = 58  // SPELL_FAILED_NOT_FISHABLE (SharedDefines.h:1040)
-	spellFailedCharmed                   uint8 = 24  // SPELL_FAILED_CHARMED (SharedDefines.h:1006)
-	spellFailedConfused                  uint8 = 26  // SPELL_FAILED_CONFUSED (SharedDefines.h:1008)
-	spellFailedFleeing                   uint8 = 34  // SPELL_FAILED_FLEEING (SharedDefines.h:1016)
-	spellFailedStunned                   uint8 = 108 // SPELL_FAILED_STUNNED (SharedDefines.h:1090)
-	spellFailedPacified                  uint8 = 98  // SPELL_FAILED_PACIFIED (SharedDefines.h:1080)
-	spellFailedPreventedByMechanic       uint8 = 147 // SPELL_FAILED_PREVENTED_BY_MECHANIC (SharedDefines.h:1129)
-	spellFailedCasterAuraState           uint8 = 22  // SPELL_FAILED_CASTER_AURASTATE (SharedDefines.h:1004)
-	spellFailedTargetAuraState           uint8 = 111 // SPELL_FAILED_TARGET_AURASTATE (SharedDefines.h:1093)
-	spellFailedCantBeDisenchanted        uint8 = 14  // SPELL_FAILED_CANT_BE_DISENCHANTED (SharedDefines.h:996)
-	spellFailedCantBeMilled              uint8 = 16  // SPELL_FAILED_CANT_BE_MILLED (SharedDefines.h:998)
-	spellFailedCantBeProspected          uint8 = 17  // SPELL_FAILED_CANT_BE_PROSPECTED (SharedDefines.h:999)
-	spellFailedNeedMoreItems             uint8 = 55  // SPELL_FAILED_NEED_MORE_ITEMS (SharedDefines.h:1037)
-	spellFailedLowCastlevel              uint8 = 49  // SPELL_FAILED_LOW_CASTLEVEL (SharedDefines.h:1031)
-	spellFailedSummonPending             uint8 = 183 // SPELL_FAILED_SUMMON_PENDING (SharedDefines.h:1165)
-	spellFailedTargetNotInInstance       uint8 = 137 // SPELL_FAILED_TARGET_NOT_IN_INSTANCE (SharedDefines.h:1119)
-	spellFailedTargetLockedToRaidInst    uint8 = 169 // SPELL_FAILED_TARGET_LOCKED_TO_RAID_INSTANCE (SharedDefines.h:1151)
-	spellFailedNotShapeshift             uint8 = 68  // SPELL_FAILED_NOT_SHAPESHIFT (SharedDefines.h:1050)
-	spellFailedOnlyShapeshift            uint8 = 94  // SPELL_FAILED_ONLY_SHAPESHIFT (SharedDefines.h:1076)
-	spellFailedRequiresSpellFocus        uint8 = 102 // SPELL_FAILED_REQUIRES_SPELL_FOCUS (SharedDefines.h:1084)
-	spellFailedTotemCategory             uint8 = 130 // SPELL_FAILED_TOTEM_CATEGORY (SharedDefines.h:1112)
-	spellFailedTotems                    uint8 = 131 // SPELL_FAILED_TOTEMS (SharedDefines.h:1113)
-	spellFailedNotMounted                uint8 = 64  // SPELL_FAILED_NOT_MOUNTED (SharedDefines.h:1046)
-	spellFailedNotOnTaxi                 uint8 = 65  // SPELL_FAILED_NOT_ON_TAXI (SharedDefines.h:1047)
-	spellFailedLowLevel                  uint8 = 48  // SPELL_FAILED_LOWLEVEL (SharedDefines.h:1030)
-	spellFailedNotKnown                  uint8 = 63  // SPELL_FAILED_NOT_KNOWN (SharedDefines.h:1045)
-	spellFailedItemEnchantTradeWindow    uint8 = 182 // SPELL_FAILED_ITEM_ENCHANT_TRADE_WINDOW (SharedDefines.h:1164)
-	spellFailedItemGone                  uint8 = 43  // SPELL_FAILED_ITEM_GONE (SharedDefines.h:1025)
-	spellFailedNotTrading                uint8 = 71  // SPELL_FAILED_NOT_TRADING (SharedDefines.h:1053)
-	spellFailedItemAlreadyEnchanted      uint8 = 42  // SPELL_FAILED_ITEM_ALREADY_ENCHANTED (SharedDefines.h:1024)
-	spellFailedItemNotFound              uint8 = 44  // SPELL_FAILED_ITEM_NOT_FOUND (SharedDefines.h:1026)
-	spellFailedTooManyOfItem             uint8 = 129 // SPELL_FAILED_TOO_MANY_OF_ITEM (SharedDefines.h:1111)
-	spellFailedError                     uint8 = 32  // SPELL_FAILED_ERROR (SharedDefines.h:1014)
-	spellFailedNotTradeable              uint8 = 70  // SPELL_FAILED_NOT_TRADEABLE (SharedDefines.h:1052)
-	spellFailedOnUseEnchant              uint8 = 170 // SPELL_FAILED_ON_USE_ENCHANT (SharedDefines.h:1152)
-	spellFailedMaxSockets                uint8 = 184 // SPELL_FAILED_MAX_SOCKETS (SharedDefines.h:1166)
-	spellFailedAuraBounced               uint8 = 9   // SPELL_FAILED_AURA_BOUNCED (SharedDefines.h:991)
-	spellFailedNoComboPoints             uint8 = 78  // SPELL_FAILED_NO_COMBO_POINTS (SharedDefines.h:1060)
-	spellFailedOnlyBattlegrounds         uint8 = 142 // SPELL_FAILED_ONLY_BATTLEGROUNDS (SharedDefines.h:1124)
-	spellFailedNotInArena                uint8 = 151 // SPELL_FAILED_NOT_IN_ARENA (SharedDefines.h:1133)
-	spellFailedIncorrectArea             uint8 = 39  // SPELL_FAILED_INCORRECT_AREA (SharedDefines.h:1021)
-	spellFailedRequiresArea              uint8 = 101 // SPELL_FAILED_REQUIRES_AREA (SharedDefines.h:1083)
-	spellFailedUniqueGlyph               uint8 = 176 // SPELL_FAILED_UNIQUE_GLYPH (SharedDefines.h:1158)
-	spellFailedNotInRaidInstance         uint8 = 167 // SPELL_FAILED_NOT_IN_RAID_INSTANCE (SharedDefines.h:1149)
-	spellFailedRooted                    uint8 = 103 // SPELL_FAILED_ROOTED (SharedDefines.h:1085)
-	spellFailedLowCastLevel              uint8 = 49  // SPELL_FAILED_LOW_CASTLEVEL (SharedDefines.h:1031)
-	spellFailedTargetNotLooted           uint8 = 121 // SPELL_FAILED_TARGET_NOT_LOOTED (SharedDefines.h:1103)
-	spellFailedTargetUnskinnable         uint8 = 126 // SPELL_FAILED_TARGET_UNSKINNABLE (SharedDefines.h:1108)
-	spellFailedTryAgain                  uint8 = 132 // SPELL_FAILED_TRY_AGAIN (SharedDefines.h:1114)
-	spellFailedNotInBattleground         uint8 = 166 // SPELL_FAILED_NOT_IN_BATTLEGROUND (SharedDefines.h:1148)
-	spellFailedAlreadyHaveSummon         uint8 = 7   // SPELL_FAILED_ALREADY_HAVE_SUMMON (SharedDefines.h:989)
-	spellFailedAlreadyHaveCharm          uint8 = 6   // SPELL_FAILED_ALREADY_HAVE_CHARM (SharedDefines.h:988) — caster-side charmed-unit tracking has no Go bridge, named for the charm gate comment
-	spellFailedBadImplicitTargets        uint8 = 11  // SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993)
-	spellFailedCantBeCharmed             uint8 = 13  // SPELL_FAILED_CANT_BE_CHARMED (SharedDefines.h:995)
-	spellFailedHighLevel                 uint8 = 36  // SPELL_FAILED_HIGHLEVEL (SharedDefines.h:1018)
-	spellFailedTargetIsPlayerControlled  uint8 = 118 // SPELL_FAILED_TARGET_IS_PLAYER_CONTROLLED (SharedDefines.h:1100)
-	spellFailedNoMountsAllowed           uint8 = 83  // SPELL_FAILED_NO_MOUNTS_ALLOWED (SharedDefines.h:1065)
-	spellFailedOnlyAboveWater            uint8 = 88  // SPELL_FAILED_ONLY_ABOVEWATER (SharedDefines.h:1070)
-	spellFailedTargetFriendly            uint8 = 115 // SPELL_FAILED_TARGET_FRIENDLY (SharedDefines.h:1097)
-	spellFailedNotHere                   uint8 = 60  // SPELL_FAILED_NOT_HERE (SharedDefines.h:1042)
+	spellFailedEquippedItemClass         uint8  = 29  // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
+	spellFailedEquippedItemClassMainhand uint8  = 30  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
+	spellFailedEquippedItemClassOffhand  uint8  = 31  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND (SharedDefines.h:1013)
+	spellFailedNotInFront                uint8  = 61  // SPELL_FAILED_NOT_INFRONT (SharedDefines.h:1042)
+	spellFailedBadTargets                uint8  = 12  // SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992)
+	spellFailedBmOrInvisGod              uint8  = 159 // SPELL_FAILED_BM_OR_INVISGOD (SharedDefines.h:1141)
+	spellFailedTargetIsPlayer            uint8  = 117 // SPELL_FAILED_TARGET_IS_PLAYER (SharedDefines.h:1099)
+	spellFailedAffectingCombat           uint8  = 1
+	spellFailedFoodLowLevel              uint8  = 35
+	spellFailedNoPet                     uint8  = 84
+	spellFailedWrongPetFood              uint8  = 135
+	spellFailedNotReady                  uint8  = 67    // SPELL_FAILED_NOT_READY (SharedDefines.h:1049)
+	spellFailedDontReport                uint8  = 27    // SPELL_FAILED_DONT_REPORT (SharedDefines.h:1009)
+	spellFailedSilenced                  uint8  = 104   // SPELL_FAILED_SILENCED (SharedDefines.h:1086)
+	spellFailedCasterDead                uint8  = 23    // SPELL_FAILED_CASTER_DEAD (SharedDefines.h:1003)
+	spellFailedNotFishable               uint8  = 58    // SPELL_FAILED_NOT_FISHABLE (SharedDefines.h:1040)
+	spellFailedCharmed                   uint8  = 24    // SPELL_FAILED_CHARMED (SharedDefines.h:1006)
+	spellFailedConfused                  uint8  = 26    // SPELL_FAILED_CONFUSED (SharedDefines.h:1008)
+	spellFailedFleeing                   uint8  = 34    // SPELL_FAILED_FLEEING (SharedDefines.h:1016)
+	spellFailedStunned                   uint8  = 108   // SPELL_FAILED_STUNNED (SharedDefines.h:1090)
+	spellFailedPacified                  uint8  = 98    // SPELL_FAILED_PACIFIED (SharedDefines.h:1080)
+	spellFailedPreventedByMechanic       uint8  = 147   // SPELL_FAILED_PREVENTED_BY_MECHANIC (SharedDefines.h:1129)
+	spellFailedCasterAuraState           uint8  = 22    // SPELL_FAILED_CASTER_AURASTATE (SharedDefines.h:1004)
+	spellFailedTargetAuraState           uint8  = 111   // SPELL_FAILED_TARGET_AURASTATE (SharedDefines.h:1093)
+	spellFailedCantBeDisenchanted        uint8  = 14    // SPELL_FAILED_CANT_BE_DISENCHANTED (SharedDefines.h:996)
+	spellFailedCantBeMilled              uint8  = 16    // SPELL_FAILED_CANT_BE_MILLED (SharedDefines.h:998)
+	spellFailedCantBeProspected          uint8  = 17    // SPELL_FAILED_CANT_BE_PROSPECTED (SharedDefines.h:999)
+	spellFailedNeedMoreItems             uint8  = 55    // SPELL_FAILED_NEED_MORE_ITEMS (SharedDefines.h:1037)
+	spellFailedLowCastlevel              uint8  = 49    // SPELL_FAILED_LOW_CASTLEVEL (SharedDefines.h:1031)
+	spellFailedEquippedItem              uint8  = 28    // SPELL_FAILED_EQUIPPED_ITEM (SharedDefines.h:1010)
+	spellFailedNoAmmo                    uint8  = 75    // SPELL_FAILED_NO_AMMO (SharedDefines.h:1057)
+	spellFailedItemAtMaxCharges          uint8  = 179   // SPELL_FAILED_ITEM_AT_MAX_CHARGES (SharedDefines.h:1161)
+	spellEffectWeaponDamage                     = 58    // SPELL_EFFECT_WEAPON_DAMAGE (SharedDefines.h:869)
+	spellEffectWeaponDamageNoschool             = 17    // SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL (SharedDefines.h:828)
+	spellEffectCreateManaGem                    = 66    // SPELL_EFFECT_CREATE_MANA_GEM (SharedDefines.h:877)
+	itemSubclassWeaponThrown                    = 16    // ITEM_SUBCLASS_WEAPON_THROWN (ItemTemplate.h:365)
+	itemSubclassWeaponBow                       = 2     // ITEM_SUBCLASS_WEAPON_BOW (ItemTemplate.h:351)
+	itemSubclassWeaponGun                       = 3     // ITEM_SUBCLASS_WEAPON_GUN (ItemTemplate.h:352)
+	itemSubclassWeaponCrossbow                  = 18    // ITEM_SUBCLASS_WEAPON_CROSSBOW (ItemTemplate.h:367)
+	itemClassProjectile                  uint32 = 6     // ITEM_CLASS_PROJECTILE (ItemTemplate.h:302)
+	itemSubclassArrow                    uint32 = 2     // ITEM_SUBCLASS_ARROW (ItemTemplate.h:421)
+	itemSubclassBullet                   uint32 = 3     // ITEM_SUBCLASS_BULLET (ItemTemplate.h:422)
+	noAmmoAuraEntry                      uint32 = 46699 // Requires No Ammo (Spell.cpp:7152)
+	spellFailedSummonPending             uint8  = 183   // SPELL_FAILED_SUMMON_PENDING (SharedDefines.h:1165)
+	spellFailedTargetNotInInstance       uint8  = 137   // SPELL_FAILED_TARGET_NOT_IN_INSTANCE (SharedDefines.h:1119)
+	spellFailedTargetLockedToRaidInst    uint8  = 169   // SPELL_FAILED_TARGET_LOCKED_TO_RAID_INSTANCE (SharedDefines.h:1151)
+	spellFailedNotShapeshift             uint8  = 68    // SPELL_FAILED_NOT_SHAPESHIFT (SharedDefines.h:1050)
+	spellFailedOnlyShapeshift            uint8  = 94    // SPELL_FAILED_ONLY_SHAPESHIFT (SharedDefines.h:1076)
+	spellFailedRequiresSpellFocus        uint8  = 102   // SPELL_FAILED_REQUIRES_SPELL_FOCUS (SharedDefines.h:1084)
+	spellFailedTotemCategory             uint8  = 130   // SPELL_FAILED_TOTEM_CATEGORY (SharedDefines.h:1112)
+	spellFailedTotems                    uint8  = 131   // SPELL_FAILED_TOTEMS (SharedDefines.h:1113)
+	spellFailedNotMounted                uint8  = 64    // SPELL_FAILED_NOT_MOUNTED (SharedDefines.h:1046)
+	spellFailedNotOnTaxi                 uint8  = 65    // SPELL_FAILED_NOT_ON_TAXI (SharedDefines.h:1047)
+	spellFailedLowLevel                  uint8  = 48    // SPELL_FAILED_LOWLEVEL (SharedDefines.h:1030)
+	spellFailedNotKnown                  uint8  = 63    // SPELL_FAILED_NOT_KNOWN (SharedDefines.h:1045)
+	spellFailedItemEnchantTradeWindow    uint8  = 182   // SPELL_FAILED_ITEM_ENCHANT_TRADE_WINDOW (SharedDefines.h:1164)
+	spellFailedItemGone                  uint8  = 43    // SPELL_FAILED_ITEM_GONE (SharedDefines.h:1025)
+	spellFailedNotTrading                uint8  = 71    // SPELL_FAILED_NOT_TRADING (SharedDefines.h:1053)
+	spellFailedItemAlreadyEnchanted      uint8  = 42    // SPELL_FAILED_ITEM_ALREADY_ENCHANTED (SharedDefines.h:1024)
+	spellFailedItemNotFound              uint8  = 44    // SPELL_FAILED_ITEM_NOT_FOUND (SharedDefines.h:1026)
+	spellFailedTooManyOfItem             uint8  = 129   // SPELL_FAILED_TOO_MANY_OF_ITEM (SharedDefines.h:1111)
+	spellFailedError                     uint8  = 32    // SPELL_FAILED_ERROR (SharedDefines.h:1014)
+	spellFailedNotTradeable              uint8  = 70    // SPELL_FAILED_NOT_TRADEABLE (SharedDefines.h:1052)
+	spellFailedOnUseEnchant              uint8  = 170   // SPELL_FAILED_ON_USE_ENCHANT (SharedDefines.h:1152)
+	spellFailedMaxSockets                uint8  = 184   // SPELL_FAILED_MAX_SOCKETS (SharedDefines.h:1166)
+	spellFailedAuraBounced               uint8  = 9     // SPELL_FAILED_AURA_BOUNCED (SharedDefines.h:991)
+	spellFailedNoComboPoints             uint8  = 78    // SPELL_FAILED_NO_COMBO_POINTS (SharedDefines.h:1060)
+	spellFailedOnlyBattlegrounds         uint8  = 142   // SPELL_FAILED_ONLY_BATTLEGROUNDS (SharedDefines.h:1124)
+	spellFailedNotInArena                uint8  = 151   // SPELL_FAILED_NOT_IN_ARENA (SharedDefines.h:1133)
+	spellFailedIncorrectArea             uint8  = 39    // SPELL_FAILED_INCORRECT_AREA (SharedDefines.h:1021)
+	spellFailedRequiresArea              uint8  = 101   // SPELL_FAILED_REQUIRES_AREA (SharedDefines.h:1083)
+	spellFailedUniqueGlyph               uint8  = 176   // SPELL_FAILED_UNIQUE_GLYPH (SharedDefines.h:1158)
+	spellFailedNotInRaidInstance         uint8  = 167   // SPELL_FAILED_NOT_IN_RAID_INSTANCE (SharedDefines.h:1149)
+	spellFailedRooted                    uint8  = 103   // SPELL_FAILED_ROOTED (SharedDefines.h:1085)
+	spellFailedLowCastLevel              uint8  = 49    // SPELL_FAILED_LOW_CASTLEVEL (SharedDefines.h:1031)
+	spellFailedTargetNotLooted           uint8  = 121   // SPELL_FAILED_TARGET_NOT_LOOTED (SharedDefines.h:1103)
+	spellFailedTargetUnskinnable         uint8  = 126   // SPELL_FAILED_TARGET_UNSKINNABLE (SharedDefines.h:1108)
+	spellFailedTryAgain                  uint8  = 132   // SPELL_FAILED_TRY_AGAIN (SharedDefines.h:1114)
+	spellFailedNotInBattleground         uint8  = 166   // SPELL_FAILED_NOT_IN_BATTLEGROUND (SharedDefines.h:1148)
+	spellFailedAlreadyHaveSummon         uint8  = 7     // SPELL_FAILED_ALREADY_HAVE_SUMMON (SharedDefines.h:989)
+	spellFailedAlreadyHaveCharm          uint8  = 6     // SPELL_FAILED_ALREADY_HAVE_CHARM (SharedDefines.h:988) — caster-side charmed-unit tracking has no Go bridge, named for the charm gate comment
+	spellFailedBadImplicitTargets        uint8  = 11    // SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993)
+	spellFailedCantBeCharmed             uint8  = 13    // SPELL_FAILED_CANT_BE_CHARMED (SharedDefines.h:995)
+	spellFailedHighLevel                 uint8  = 36    // SPELL_FAILED_HIGHLEVEL (SharedDefines.h:1018)
+	spellFailedTargetIsPlayerControlled  uint8  = 118   // SPELL_FAILED_TARGET_IS_PLAYER_CONTROLLED (SharedDefines.h:1100)
+	spellFailedNoMountsAllowed           uint8  = 83    // SPELL_FAILED_NO_MOUNTS_ALLOWED (SharedDefines.h:1065)
+	spellFailedOnlyAboveWater            uint8  = 88    // SPELL_FAILED_ONLY_ABOVEWATER (SharedDefines.h:1070)
+	spellFailedTargetFriendly            uint8  = 115   // SPELL_FAILED_TARGET_FRIENDLY (SharedDefines.h:1097)
+	spellFailedNotHere                   uint8  = 60    // SPELL_FAILED_NOT_HERE (SharedDefines.h:1042)
 
 	areaFlagNoFlyZone uint32 = 0x20000000 // AREA_FLAG_NO_FLY_ZONE (DBCEnums.h:275) — AreaTableEntry.Flags bit tested by AreaTableEntry::IsFlyable (DBCStructure.h:209)
 
@@ -1276,6 +1290,24 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			s.sendCastFailed(ctx, castID, spell, failReason)
 		}
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "prospecting/milling requirements not met", "failReason", failReason)
+		return true
+	}
+
+	// SPELL_EFFECT_WEAPON_DAMAGE / SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL arm
+	// (Spell.cpp:7115-7183) and SPELL_EFFECT_CREATE_MANA_GEM arm
+	// (Spell.cpp:7185-7198) of the Spell::CheckItems special-effects loop:
+	// run right after the PROSPECTING / MILLING arms, matching C++ relative
+	// order (DISENCHANT 7025 → PROSPECTING 7054 → MILLING 7076 →
+	// WEAPON_DAMAGE 7115 → CREATE_MANA_GEM 7185).
+	// Client-initiated casts only — triggered casts go through castSpellDirect.
+	if failReason := s.checkSpellRangedWeaponCast(ctx, spell); failReason != 0 {
+		s.sendCastFailed(ctx, castID, spell, failReason)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "ranged weapon requirements not met", "failReason", failReason)
+		return true
+	}
+	if failReason := s.checkSpellCreateManaGemCast(ctx, spell); failReason != 0 {
+		s.sendCastFailed(ctx, castID, spell, failReason)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "mana gem at max charges", "failReason", failReason)
 		return true
 	}
 
@@ -11467,14 +11499,17 @@ type itemStoreTemplateInfo struct {
 	ItemLevel               uint32
 	RequiredLevel           uint32
 	Class                   uint32
+	SubClass                uint32
 	Quality                 uint32
 	RequiredDisenchantSkill uint32
 	DisenchantID            uint32
 	Flags                   uint32
 	RequiredSkillRank       uint32
+	MaxDurability           uint32
 	SocketColors            [3]uint32
 	SpellIDs                [5]uint32
 	SpellTriggers           [5]uint32
+	SpellCharges            [5]uint32
 }
 
 // getItemStoreTemplateInfo is a cached item_template lookup for the
@@ -11498,44 +11533,51 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 		return itemStoreTemplateInfo{}, false
 	}
 	var stackable, limitCategory, itemLevel, requiredLevel uint32
-	var class, quality, disenchantID, flags, requiredSkillRank uint32
+	var class, subclass, quality, disenchantID, flags, requiredSkillRank, maxDurability uint32
 	// RequiredDisenchantSkill defaults to -1 in the world item_template
 	// table; scan signed so the negative value survives, then convert to
 	// uint32 exactly like the C++ loader does (ItemTemplate.h), so the
 	// uint32(-1) comparison in the DISENCHANT arm (Spell.cpp:7033) matches.
 	var requiredDisenchantSkill int32
 	var socketColors [3]uint32
-	var spellIDs, spellTriggers [5]uint32
+	var spellIDs, spellTriggers, spellCharges [5]uint32
 	err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(stackable, 1), COALESCE(ItemLimitCategory, 0),
 		COALESCE(ItemLevel, 0), COALESCE(RequiredLevel, 0),
-		COALESCE(class, 0), COALESCE(Quality, 0),
+		COALESCE(class, 0), COALESCE(subclass, 0), COALESCE(Quality, 0),
 		COALESCE(RequiredDisenchantSkill, -1), COALESCE(DisenchantID, 0),
 		COALESCE(Flags, 0), COALESCE(RequiredSkillRank, 0),
+		COALESCE(MaxDurability, 0),
 		COALESCE(SocketColor_1, 0), COALESCE(SocketColor_2, 0), COALESCE(SocketColor_3, 0),
 		COALESCE(spellid_1, 0), COALESCE(spelltrigger_1, 0),
 		COALESCE(spellid_2, 0), COALESCE(spelltrigger_2, 0),
 		COALESCE(spellid_3, 0), COALESCE(spelltrigger_3, 0),
 		COALESCE(spellid_4, 0), COALESCE(spelltrigger_4, 0),
-		COALESCE(spellid_5, 0), COALESCE(spelltrigger_5, 0)
+		COALESCE(spellid_5, 0), COALESCE(spelltrigger_5, 0),
+		COALESCE(spellcharges_1, 0), COALESCE(spellcharges_2, 0),
+		COALESCE(spellcharges_3, 0), COALESCE(spellcharges_4, 0),
+		COALESCE(spellcharges_5, 0)
 		FROM item_template WHERE entry = ? LIMIT 1`, entry).Scan(
 		&stackable, &limitCategory, &itemLevel, &requiredLevel,
-		&class, &quality, &requiredDisenchantSkill, &disenchantID,
-		&flags, &requiredSkillRank,
+		&class, &subclass, &quality, &requiredDisenchantSkill, &disenchantID,
+		&flags, &requiredSkillRank, &maxDurability,
 		&socketColors[0], &socketColors[1], &socketColors[2],
 		&spellIDs[0], &spellTriggers[0],
 		&spellIDs[1], &spellTriggers[1],
 		&spellIDs[2], &spellTriggers[2],
 		&spellIDs[3], &spellTriggers[3],
-		&spellIDs[4], &spellTriggers[4])
+		&spellIDs[4], &spellTriggers[4],
+		&spellCharges[0], &spellCharges[1], &spellCharges[2],
+		&spellCharges[3], &spellCharges[4])
 	if err != nil {
 		return itemStoreTemplateInfo{}, false
 	}
 	info := itemStoreTemplateInfo{Stackable: stackable, LimitCategory: limitCategory,
 		ItemLevel: itemLevel, RequiredLevel: requiredLevel,
-		Class: class, Quality: quality,
+		Class: class, SubClass: subclass, Quality: quality,
 		RequiredDisenchantSkill: uint32(requiredDisenchantSkill), DisenchantID: disenchantID,
-		Flags: flags, RequiredSkillRank: requiredSkillRank,
-		SocketColors: socketColors, SpellIDs: spellIDs, SpellTriggers: spellTriggers}
+		Flags: flags, RequiredSkillRank: requiredSkillRank, MaxDurability: maxDurability,
+		SocketColors: socketColors, SpellIDs: spellIDs, SpellTriggers: spellTriggers,
+		SpellCharges: spellCharges}
 	s.itemStoreTemplateMu.Lock()
 	if s.itemStoreTemplates == nil {
 		s.itemStoreTemplates = make(map[uint32]itemStoreTemplateInfo)
@@ -12077,6 +12119,179 @@ func hasItemLootTemplateEntry(ctx context.Context, server *Server, effect uint32
 		return false
 	}
 	return found == 1
+}
+
+// spellIsRangedWeaponSpell mirrors SpellInfo::IsRangedWeaponSpell
+// (SpellInfo.cpp:1249-1254): hunter spells (except the 53352 carve-out), any
+// spell with a ranged-weapon subclass mask, or SPELL_ATTR0_REQ_AMMO spells.
+func spellIsRangedWeaponSpell(spell wotlk.Spell) bool {
+	return (spell.SpellFamilyName == uint32(spellFamilyHunter) && spell.SpellFamilyFlags[1]&0x10000000 == 0) ||
+		spell.EquippedItemSubClass&itemSubclassMaskWeaponRanged != 0 ||
+		spell.Attributes&spellAttr0ReqAmmo != 0
+}
+
+// spellAttackTypeRanged mirrors the RANGED_ATTACK outcome of
+// SpellInfo::GetAttackType (SpellInfo.cpp:1266-1286). SpellInfo.DmgClass is
+// loaded from Spell.dbc field 213 (SpellInfo.cpp:856), which is Go's
+// spell.DefenseType (spellDamageClassRanged = 3, SharedDefines.h:1582). Only
+// the RANGED outcome matters here — the MELEE OFF_ATTACK/BASE_ATTACK split
+// is not needed by the WEAPON_DAMAGE arm.
+func spellAttackTypeRanged(spell wotlk.Spell) bool {
+	if spell.DefenseType == spellDamageClassRanged {
+		return spellIsRangedWeaponSpell(spell)
+	}
+	if spell.DefenseType == spellDamageClassMelee {
+		return false
+	}
+	return spell.AttributesEx1&spellAttr2AutorepeatFlag != 0
+}
+
+// playerHasItemCount mirrors Player::HasItemCount (count >= 1): the total
+// stack count of the entry across the player's inventory.
+func (s *session) playerHasItemCount(ctx context.Context, entry uint32) bool {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return false
+	}
+	var owned int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory ci
+		JOIN item_instance ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ii.itemEntry = ?`, s.playerGUID, entry).Scan(&owned); err != nil {
+		return false
+	}
+	return owned > 0
+}
+
+// checkSpellRangedWeaponCast mirrors the SPELL_EFFECT_WEAPON_DAMAGE /
+// SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL arm of the Spell::CheckItems
+// special-effects loop (Spell.cpp:7115-7183). The arm only applies to
+// ranged-attack spells (SpellInfo::GetAttackType == RANGED_ATTACK,
+// Spell.cpp:7118-7119); non-ranged weapon-damage spells skip it entirely.
+func (s *session) checkSpellRangedWeaponCast(ctx context.Context, spell wotlk.Spell) uint8 {
+	hasWeaponDamage := false
+	for i := range spell.Effects {
+		if eff := spell.Effects[i].Effect; eff == spellEffectWeaponDamage || eff == spellEffectWeaponDamageNoschool {
+			hasWeaponDamage = true
+			break
+		}
+	}
+	if !hasWeaponDamage || !spellAttackTypeRanged(spell) {
+		return 0
+	}
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0
+	}
+	// Player::GetWeaponForAttack(RANGED_ATTACK) = the EQUIPMENT_SLOT_RANGED
+	// (17) item; missing or broken (Item::IsBroken: MaxDurability > 0 and
+	// Durability == 0, Item.h:105) fails SPELL_FAILED_EQUIPPED_ITEM.
+	var instanceGUID, itemEntry int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		`SELECT ii.guid, ii.itemEntry FROM character_inventory ci
+		JOIN item_instance ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot = ? LIMIT 1`,
+		s.playerGUID, int64(equipSlotRanged)).Scan(&instanceGUID, &itemEntry); err != nil || itemEntry <= 0 {
+		return spellFailedEquippedItem
+	}
+	weapon, ok := s.server.getItemStoreTemplateInfo(ctx, uint32(itemEntry))
+	if !ok {
+		return spellFailedEquippedItem
+	}
+	var durability int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		`SELECT COALESCE(durability, 0) FROM item_instance WHERE guid = ? LIMIT 1`,
+		instanceGUID).Scan(&durability); err == nil && weapon.MaxDurability > 0 && durability == 0 {
+		return spellFailedEquippedItem
+	}
+	switch weapon.SubClass {
+	case itemSubclassWeaponThrown:
+		// The thrown weapon itself is the ammo: Player::HasItemCount(item
+		// entry), Spell.cpp:7129-7133.
+		if !s.playerHasItemCount(ctx, uint32(itemEntry)) {
+			return spellFailedNoAmmo
+		}
+	case itemSubclassWeaponBow, itemSubclassWeaponGun, itemSubclassWeaponCrossbow:
+		// Spell.cpp:7134-7178. PLAYER_AMMO_ID is the Go session's AmmoID
+		// (player_state.go:232).
+		ammo := s.player.AmmoID
+		if ammo == 0 {
+			// Requires No Ammo: HasAura(46699) skips the remaining checks.
+			if s.playerHasAura(noAmmoAuraEntry) {
+				return 0
+			}
+			return spellFailedNoAmmo
+		}
+		ammoProto, ok := s.server.getItemStoreTemplateInfo(ctx, ammo)
+		if !ok || ammoProto.Class != itemClassProjectile {
+			return spellFailedNoAmmo
+		}
+		// Ammo/weapon subclass compatibility, Spell.cpp:7153-7171.
+		switch weapon.SubClass {
+		case itemSubclassWeaponBow, itemSubclassWeaponCrossbow:
+			if ammoProto.SubClass != itemSubclassArrow {
+				return spellFailedNoAmmo
+			}
+		case itemSubclassWeaponGun:
+			if ammoProto.SubClass != itemSubclassBullet {
+				return spellFailedNoAmmo
+			}
+		default:
+			return spellFailedNoAmmo
+		}
+		if !s.playerHasItemCount(ctx, ammo) {
+			// Player::SetUInt32Value(PLAYER_AMMO_ID, 0) on the empty-ammo
+			// leg, Spell.cpp:7174.
+			s.player.AmmoID = 0
+			return spellFailedNoAmmo
+		}
+	case itemSubclassWeaponWand:
+		// Wands need no ammo check, Spell.cpp:7179-7180.
+	}
+	return 0
+}
+
+// checkSpellCreateManaGemCast mirrors the SPELL_EFFECT_CREATE_MANA_GEM arm of
+// the Spell::CheckItems special-effects loop (Spell.cpp:7185-7198). A
+// template miss fails; a carried gem (Player::GetItemByEntry) whose stored
+// per-spell charges match the template's max charges in any charged spell
+// slot fails with SPELL_FAILED_ITEM_AT_MAX_CHARGES. Known approximation: the
+// Go item_instance charges column is initialized from the template defaults
+// and never decremented (no charged-spell discharge model), so a gem that is
+// in the inventory always reads as fully charged.
+func (s *session) checkSpellCreateManaGemCast(ctx context.Context, spell wotlk.Spell) uint8 {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0
+	}
+	for i := range spell.Effects {
+		if spell.Effects[i].Effect != spellEffectCreateManaGem {
+			continue
+		}
+		itemID := spell.Effects[i].ItemType
+		proto, ok := s.server.getItemStoreTemplateInfo(ctx, itemID)
+		if !ok {
+			return spellFailedItemAtMaxCharges
+		}
+		var chargesRaw sql.NullString
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+			`SELECT COALESCE(ii.charges, '') FROM character_inventory ci
+			JOIN item_instance ii ON ii.guid = ci.item
+			WHERE ci.guid = ? AND ii.itemEntry = ? LIMIT 1`,
+			s.playerGUID, itemID).Scan(&chargesRaw); err != nil || !chargesRaw.Valid {
+			continue
+		}
+		var defaults [5]int32
+		for x := 0; x < maxItemProtoSpells; x++ {
+			defaults[x] = int32(proto.SpellCharges[x])
+		}
+		// Item::GetSpellCharges(x) (Item.h:159): the per-spell instance
+		// charge compared against the template max, Spell.cpp:7192-7195.
+		instanceCharges := parseItemSpellCharges(chargesRaw.String, defaults)
+		for x := 0; x < maxItemProtoSpells; x++ {
+			if proto.SpellCharges[x] != 0 && instanceCharges[x] == proto.SpellCharges[x] {
+				return spellFailedItemAtMaxCharges
+			}
+		}
+	}
+	return 0
 }
 
 // itemInstanceCount reads the count of a single item stack instance
