@@ -70,6 +70,30 @@ const permissionCommandListRespawns uint32 = 860
 // permissionCommandListSpawnpoints mirrors rbac::RBAC_PERM_COMMAND_LIST_SPAWNPOINTS (RBAC.h:733).
 const permissionCommandListSpawnpoints uint32 = 866
 
+// permissionCommandAnnounce mirrors rbac::RBAC_PERM_COMMAND_ANNOUNCE (RBAC.h:330).
+const permissionCommandAnnounce uint32 = 462
+
+// permissionCommandChannelSetOwnership mirrors rbac::RBAC_PERM_COMMAND_CHANNEL_SET_OWNERSHIP (RBAC.h:333).
+const permissionCommandChannelSetOwnership uint32 = 465
+
+// permissionCommandGMAnnounce mirrors rbac::RBAC_PERM_COMMAND_GMANNOUNCE (RBAC.h:334).
+const permissionCommandGMAnnounce uint32 = 466
+
+// permissionCommandGMNameAnnounce mirrors rbac::RBAC_PERM_COMMAND_GMNAMEANNOUNCE (RBAC.h:335).
+const permissionCommandGMNameAnnounce uint32 = 467
+
+// permissionCommandGMNotify mirrors rbac::RBAC_PERM_COMMAND_GMNOTIFY (RBAC.h:336).
+const permissionCommandGMNotify uint32 = 468
+
+// permissionCommandNameAnnounce mirrors rbac::RBAC_PERM_COMMAND_NAMEANNOUNCE (RBAC.h:337).
+const permissionCommandNameAnnounce uint32 = 469
+
+// permissionCommandNotify mirrors rbac::RBAC_PERM_COMMAND_NOTIFY (RBAC.h:338).
+const permissionCommandNotify uint32 = 470
+
+// permissionCommandWhispers mirrors rbac::RBAC_PERM_COMMAND_WHISPERS (RBAC.h:339).
+const permissionCommandWhispers uint32 = 471
+
 // permissionCommandsAppearInGMList mirrors rbac::RBAC_PERM_COMMANDS_APPEAR_IN_GM_LIST (RBAC.h:87).
 const permissionCommandsAppearInGMList uint32 = 34
 

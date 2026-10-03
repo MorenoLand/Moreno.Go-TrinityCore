@@ -6353,6 +6353,17 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("lookup", func(ctx context.Context, args []string) bool { s.handleCmdLookup(ctx, args); return true }, []string{"area", "creature", "event", "faction", "item", "object", "quest", "player", "skill", "spell", "taxinode", "tele", "title", "map"}, nil)
 	root.add("lfg", func(ctx context.Context, args []string) bool { s.handleCmdLFG(ctx, args); return true }, []string{"player", "group", "queue", "clean", "options"}, nil)
 	root.add("list", func(ctx context.Context, args []string) bool { s.handleCmdList(ctx, args); return true }, []string{"creature", "item", "object", "auras", "mail", "spawnpoints", "respawns"}, nil)
+	root.add("channel", func(ctx context.Context, args []string) bool { s.handleCmdChannel(ctx, args); return true }, []string{"set ownership"}, nil)
+	root.add("nameannounce", func(ctx context.Context, args []string) bool { s.handleCmdNameAnnounceCommand(ctx, args); return true }, nil, nil)
+	root.add("gmnameannounce", func(ctx context.Context, args []string) bool {
+		s.handleCmdGMNameAnnounceCommand(ctx, args)
+		return true
+	}, nil, nil)
+	root.add("announce", func(ctx context.Context, args []string) bool { s.handleCmdAnnounceCommand(ctx, args); return true }, nil, nil)
+	root.add("gmannounce", func(ctx context.Context, args []string) bool { s.handleCmdGMAnnounceCommand(ctx, args); return true }, nil, nil)
+	root.add("notify", func(ctx context.Context, args []string) bool { s.handleCmdNotifyCommand(ctx, args); return true }, nil, nil)
+	root.add("gmnotify", func(ctx context.Context, args []string) bool { s.handleCmdGMNotifyCommand(ctx, args); return true }, nil, nil)
+	root.add("whispers", func(ctx context.Context, args []string) bool { s.handleCmdWhispers(ctx, args); return true }, nil, nil)
 	root.add("unlearn", func(ctx context.Context, args []string) bool { s.handleCmdUnLearn(ctx, args); return true }, nil, nil)
 	root.add("revive", func(ctx context.Context, args []string) bool { s.handleCmdRevive(ctx, args); return true }, nil, map[string]string{"res": "revive", "rev": "revive"})
 	root.add("dismount", func(ctx context.Context, args []string) bool { s.handleCmdDismount(ctx); return true }, nil, nil)
