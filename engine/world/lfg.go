@@ -2,7 +2,10 @@ package world
 
 import (
 	"context"
+	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -128,6 +131,7 @@ type LFGManager struct {
 	mu              sync.RWMutex
 	enabled         bool
 	solo            bool
+	options         uint32
 	queue           map[uint64]LFGQueueEntry
 	roleChecks      map[uint64]*LfgRoleCheck
 	proposals       map[uint32]*LFGProposal
@@ -138,6 +142,7 @@ type LFGManager struct {
 func NewLFGManager(enabled bool) *LFGManager {
 	return &LFGManager{
 		enabled:    enabled,
+		options:    1, // "DungeonFinder.OptionsMask" default (World.cpp:1436)
 		queue:      make(map[uint64]LFGQueueEntry),
 		roleChecks: make(map[uint64]*LfgRoleCheck),
 		proposals:  make(map[uint32]*LFGProposal),
@@ -1147,4 +1152,86 @@ func (s *session) sendLFGDungeonReward(dungeonID uint32) error {
 	packet.WriteU32(0) // xp
 	packet.WriteU8(0)  // reward count
 	return s.write(uint16(protocol.OpcodeSMSG_LFG_PLAYER_REWARD), packet.Bytes(), true)
+}
+
+// GetOptions mirrors LFGMgr::GetOptions (LFGMgr.h:340); the C++ default is 1
+// ("DungeonFinder.OptionsMask", World.cpp:1436).
+func (m *LFGManager) GetOptions() uint32 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.options
+}
+
+// SetOptions mirrors LFGMgr::SetOptions (LFGMgr.h:342).
+func (m *LFGManager) SetOptions(options uint32) {
+	m.mu.Lock()
+	m.options = options
+	m.mu.Unlock()
+}
+
+// Clean mirrors LFGMgr::Clean (LFGMgr.cpp): the C++ clears the queued-player
+// and group stores; the Go tree's whole LFG runtime state is the queue,
+// role checks and proposals maps, so all three are dropped.
+func (m *LFGManager) Clean() {
+	m.mu.Lock()
+	m.queue = make(map[uint64]LFGQueueEntry)
+	m.roleChecks = make(map[uint64]*LfgRoleCheck)
+	m.proposals = make(map[uint32]*LFGProposal)
+	m.nextProposalID = 0
+	m.mu.Unlock()
+}
+
+// DumpQueueInfo mirrors LFGMgr::DumpQueueInfo (LFGMgr.cpp) for the Go tree's
+// single queue model: the C++ keeps one LfgQueue per dungeon group and dumps
+// its player/group counts plus the compatible map; the Go manager keeps one
+// flat player queue and has no compatible-map store, so that section reports
+// size 0. (C++: "Number of Queues: %u\n" then LfgQueue::DumpQueueInfo's
+// "Queued Players: %u (in group: %u) Groups: %u\n" and DumpCompatibleInfo's
+// "Compatible Map size: %u\n" with the full detail listing.)
+func (m *LFGManager) DumpQueueInfo(full bool) string {
+	m.mu.RLock()
+	players := len(m.queue)
+	m.mu.RUnlock()
+
+	var sb strings.Builder
+	sb.WriteString("Number of Queues: 1\n")
+	fmt.Fprintf(&sb, "Queued Players: %d (in group: 0) Groups: 0\n", players)
+	sb.WriteString("Compatible Map size: 0\n")
+	_ = full
+	return sb.String()
+}
+
+// lfgStateString mirrors lfg::GetStateString (LFG.cpp:75): the English state
+// words are inlined from TDB enUS recall (no in-tree trinity_string seed).
+// Note the faithful quirk: LFG_STATE_BOOT has no case in the C++ switch and
+// falls through to LANG_LFG_ERROR ("Error").
+func lfgStateString(state uint8) string {
+	switch state {
+	case LFGStateNone:
+		return "None"
+	case LFGStateRoleCheck:
+		return "Role check"
+	case LFGStateQueued:
+		return "Queued"
+	case LFGStateProposal:
+		return "Proposal"
+	case LFGStateDungeon:
+		return "Dungeon"
+	case LFGStateFinishedDungeon:
+		return "Finished dungeon"
+	case LFGStateRaidBrowser:
+		return "Raid browser"
+	default:
+		return "Error"
+	}
+}
+
+// concatenateLFGDungeons mirrors lfg::ConcatenateDungeons (LFG.cpp:26): the
+// selected dungeon ids joined with ", " (the Go queue already sorts them).
+func concatenateLFGDungeons(dungeons []uint32) string {
+	parts := make([]string, 0, len(dungeons))
+	for _, d := range dungeons {
+		parts = append(parts, strconv.FormatUint(uint64(d), 10))
+	}
+	return strings.Join(parts, ", ")
 }

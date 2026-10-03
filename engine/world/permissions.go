@@ -579,6 +579,21 @@ const permissionCommandLearnAllRecipes uint32 = 428
 // permissionCommandUnlearn mirrors rbac::RBAC_PERM_COMMAND_UNLEARN (RBAC.h:297).
 const permissionCommandUnlearn uint32 = 429
 
+// permissionCommandLfgPlayer mirrors rbac::RBAC_PERM_COMMAND_LFG_PLAYER (RBAC.h:299).
+const permissionCommandLfgPlayer uint32 = 431
+
+// permissionCommandLfgGroup mirrors rbac::RBAC_PERM_COMMAND_LFG_GROUP (RBAC.h:300).
+const permissionCommandLfgGroup uint32 = 432
+
+// permissionCommandLfgQueue mirrors rbac::RBAC_PERM_COMMAND_LFG_QUEUE (RBAC.h:301).
+const permissionCommandLfgQueue uint32 = 433
+
+// permissionCommandLfgClean mirrors rbac::RBAC_PERM_COMMAND_LFG_CLEAN (RBAC.h:302).
+const permissionCommandLfgClean uint32 = 434
+
+// permissionCommandLfgOptions mirrors rbac::RBAC_PERM_COMMAND_LFG_OPTIONS (RBAC.h:303).
+const permissionCommandLfgOptions uint32 = 435
+
 // permissionCommandLookup mirrors rbac::RBAC_PERM_COMMAND_LOOKUP (RBAC.h:310).
 const permissionCommandLookup uint32 = 442
 
