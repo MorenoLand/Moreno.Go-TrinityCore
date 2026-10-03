@@ -334,6 +334,7 @@ type playerState struct {
 	TotalKills                      uint32
 	TodayKills                      uint16
 	YesterdayKills                  uint16
+	LastHonorUpdateTime             int64
 	DrunkenState                    uint16
 	FakeInebriation                 uint32
 }
@@ -2658,6 +2659,9 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 		state.TotalKills = uint32(totalKills)
 		state.TodayKills = uint16(todayKills)
 		state.YesterdayKills = uint16(yesterdayKills)
+		// Player::LoadFromDB (Player.cpp:17883): the honor rollover clock
+		// starts at the character's logout time.
+		state.LastHonorUpdateTime = state.LogoutTime
 	}
 	return nil
 }

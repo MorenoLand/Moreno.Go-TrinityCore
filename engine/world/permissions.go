@@ -478,6 +478,17 @@ const permissionCommandGuildRename uint32 = 407
 // permissionCommandGuildInfo mirrors rbac::RBAC_PERM_COMMAND_GUILD_INFO (RBAC.h:662).
 const permissionCommandGuildInfo uint32 = 794
 
+// permissionCommandHonor mirrors rbac::RBAC_PERM_COMMAND_HONOR (RBAC.h:276).
+const permissionCommandHonor uint32 = 408
+
+// permissionCommandHonorAdd mirrors rbac::RBAC_PERM_COMMAND_HONOR_ADD (RBAC.h:277).
+const permissionCommandHonorAdd uint32 = 409
+
+// permissionCommandHonorAddKill mirrors rbac::RBAC_PERM_COMMAND_HONOR_ADD_KILL (RBAC.h:278).
+const permissionCommandHonorAddKill uint32 = 410
+
+// permissionCommandHonorUpdate mirrors rbac::RBAC_PERM_COMMAND_HONOR_UPDATE (RBAC.h:279).
+const permissionCommandHonorUpdate uint32 = 411
 
 // permissionCommandGroupLeader mirrors rbac::RBAC_PERM_COMMAND_GROUP_LEADER (RBAC.h:341).
 const permissionCommandGroupLeader uint32 = 473

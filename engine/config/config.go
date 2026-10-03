@@ -70,6 +70,7 @@ type Config struct {
 	PlayerSaveStatsMinLevel                 uint32
 	PlayerSaveStatsSaveOnlyOnLogout         bool
 	FocusRate                               float64
+	RateHonor                               float64
 	MaxGroupXPDistance                      float64
 	XPRateKill                              float64
 	XPRateQuest                             float64
@@ -199,6 +200,7 @@ func Default() Config {
 	c.RestOfflineInWildernessRate = 1
 	c.RestInGameRate = 1
 	c.FocusRate = 1
+	c.RateHonor = 1
 	c.MaxGroupXPDistance = 74
 	c.XPRateKill = 1
 	c.XPRateQuest = 1
@@ -257,6 +259,7 @@ func (c *Config) ApplyEnv() {
 	values["MORENOCORE_RATE_REST_OFFLINE_IN_TAVERN_OR_CITY"] = "Rate.Rest.Offline.InTavernOrCity"
 	values["MORENOCORE_RATE_REST_OFFLINE_IN_WILDERNESS"] = "Rate.Rest.Offline.InWilderness"
 	values["MORENOCORE_RATE_FOCUS"] = "Rate.Focus"
+	values["MORENOCORE_RATE_HONOR"] = "Rate.Honor"
 	values["MORENOCORE_MAX_GROUP_XP_DISTANCE"] = "MaxGroupXPDistance"
 	values["MORENOCORE_RATE_XP_KILL"] = "Rate.XP.Kill"
 	values["MORENOCORE_RATE_XP_QUEST"] = "Rate.XP.Quest"
@@ -595,6 +598,8 @@ func (c *Config) set(key, value string) error {
 		return setFloat64(&c.RestOfflineInWildernessRate, key, value)
 	case "Rate.Focus":
 		return setFloat64(&c.FocusRate, key, value)
+	case "Rate.Honor":
+		return setFloat64(&c.RateHonor, key, value)
 	case "MaxGroupXPDistance":
 		return setFloat64(&c.MaxGroupXPDistance, key, value)
 	case "Rate.XP.Kill":
