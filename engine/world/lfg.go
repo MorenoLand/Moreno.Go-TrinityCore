@@ -129,7 +129,7 @@ type LFGProposal struct {
 
 type LFGManager struct {
 	mu              sync.RWMutex
-	enabled         bool
+	soloEnable      bool
 	solo            bool
 	options         uint32
 	queue           map[uint64]LFGQueueEntry
@@ -139,9 +139,9 @@ type LFGManager struct {
 	validateDungeon func(uint32) bool
 }
 
-func NewLFGManager(enabled bool) *LFGManager {
+func NewLFGManager(soloEnable bool) *LFGManager {
 	return &LFGManager{
-		enabled:    enabled,
+		soloEnable: soloEnable,
 		options:    1, // "DungeonFinder.OptionsMask" default (World.cpp:1436)
 		queue:      make(map[uint64]LFGQueueEntry),
 		roleChecks: make(map[uint64]*LfgRoleCheck),
@@ -158,15 +158,9 @@ func (m *LFGManager) SetDungeonValidator(validate func(uint32) bool) {
 func (m *LFGManager) OnLogin() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.enabled && !m.solo {
+	if m.soloEnable && !m.solo {
 		m.solo = true
 	}
-}
-
-func (m *LFGManager) Enabled() bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.enabled
 }
 
 func (m *LFGManager) Solo() bool {
@@ -192,7 +186,7 @@ func (m *LFGManager) RequiresFullGroup(players, groupSize int) bool {
 func (m *LFGManager) Join(guid uint64, roles uint8, dungeons []uint32, comment string) (uint32, LFGQueueEntry) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.enabled || len(dungeons) == 0 {
+	if len(dungeons) == 0 {
 		return LFGJoinNotMeetReqs, LFGQueueEntry{GUID: guid, Roles: roles, State: LFGStateNone}
 	}
 	roles &= LFGRoleTank | LFGRoleHealer | LFGRoleDamage
