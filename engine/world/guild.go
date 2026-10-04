@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -3575,6 +3577,30 @@ var guildBankTabPrices = []uint32{
 	5000 * 10000, // Tab 5: 5000 gold
 }
 
+// maxGuildBankTabTextLen mirrors MAX_GUILD_BANK_TAB_TEXT_LEN (Guild.cpp:41).
+const maxGuildBankTabTextLen = 500
+
+// truncateBankTabText mirrors utf8truncate(m_text, MAX_GUILD_BANK_TAB_TEXT_LEN)
+// in Guild::BankTab::SetText (Guild.cpp:450-459): the 500-unit limit is counted
+// in UTF-16 code units (wstr.resize), not bytes or runes, and invalid UTF-8
+// clears the text outright (utf8truncate's catch clears utf8str). The dangling
+// lead-surrogate case (a pair straddling exactly unit 500) throws in the C++
+// checked conversion, so it clears there too.
+func truncateBankTabText(text string) string {
+	if !utf8.ValidString(text) {
+		return ""
+	}
+	units := utf16.Encode([]rune(text))
+	if len(units) <= maxGuildBankTabTextLen {
+		return text
+	}
+	cut := units[:maxGuildBankTabTextLen]
+	if cut[len(cut)-1] >= 0xD800 && cut[len(cut)-1] <= 0xDBFF {
+		return ""
+	}
+	return string(utf16.Decode(cut))
+}
+
 // handleGuildBankBuyTab processes CMSG_GUILD_BANK_BUY_TAB (0x3EA).
 // Reference: WorldSession::HandleGuildBankBuyTab (GuildHandler.cpp:340).
 func (s *session) handleGuildBankBuyTab(ctx context.Context, payload []byte) bool {
@@ -3711,7 +3737,18 @@ func (s *session) handleGuildBankUpdateTab(ctx context.Context, payload []byte) 
 		return true
 	}
 
-	_, _ = cdb.ExecContext(ctx, "UPDATE guild_bank_tab SET TabName = ?, TabIcon = ? WHERE guildid = ? AND TabId = ?", name, icon, guildID, tabID)
+	// Reference: Guild::HandleSetBankTabInfo (Guild.cpp:1384-1396): a
+	// GetBankTab miss (unpurchased tab) logs an error and returns before the
+	// broadcast, so the UPDATE touching zero rows must not broadcast; C++
+	// broadcasts unconditionally once the tab exists (SetInfo no-ops the DB
+	// write when name+icon are unchanged but the event still fires).
+	res, execErr := cdb.ExecContext(ctx, "UPDATE guild_bank_tab SET TabName = ?, TabIcon = ? WHERE guildid = ? AND TabId = ?", name, icon, guildID, tabID)
+	if execErr != nil {
+		return true
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return true
+	}
 
 	// Reference: Guild::HandleSetBankTabInfo (Guild.cpp:1384-1396):
 	// SetInfo followed by _BroadcastEvent(GE_BANK_TAB_UPDATED (16),
@@ -4064,6 +4101,10 @@ func (s *session) handleSetGuildBankText(ctx context.Context, payload []byte) bo
 	if err != nil {
 		return false
 	}
+
+	// Reference: Guild::BankTab::SetText (Guild.cpp:450-459): utf8truncate
+	// to MAX_GUILD_BANK_TAB_TEXT_LEN before persisting and broadcasting.
+	tabText = truncateBankTabText(tabText)
 
 	cdb := s.server.CharactersStore.DB
 	if cdb != nil {
