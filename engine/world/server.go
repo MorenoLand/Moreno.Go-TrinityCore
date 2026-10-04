@@ -148,6 +148,7 @@ type Server struct {
 	groupRolls                map[lootRollKey]*activeGroupRoll
 	spiritWaveMu              sync.Mutex
 	lastSpiritWave            time.Time
+	lastCorpseExpiry          time.Time
 	spiritReviveQueue         map[uint64]uint64 // playerGUID -> spiritGuideGUID
 	creatureTextMgr           *creatureTextMgr
 	wardenCheckMgr            *wardenCheckMgr
@@ -831,6 +832,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updatePlayerDeathTimers(ctx, now)
 			s.updatePendingInstanceBinds(ctx, diff)
 			s.updateSpiritHealerResurrectWaves(ctx, now)
+			s.updateCorpseExpiry(ctx)
 			s.updatePlayerUnderwater(ctx, now)
 			s.updateWardenSessions(ctx, 100*time.Millisecond)
 		}

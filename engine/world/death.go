@@ -930,6 +930,71 @@ func (s *session) convertCorpseToBones(ctx context.Context, destroyVisible bool)
 	}
 }
 
+// corpseResurrectableExpiry is the Corpse::IsExpired horizon for
+// resurrectable corpses (Corpse.cpp:211 — m_time < t - 3 * DAY); expired
+// corpses are converted to bones by the periodic sweep.
+const corpseResurrectableExpiry = 72 * time.Hour
+
+// corpseExpirySweepInterval mirrors the WUPDATE_CORPSES timer
+// (World.cpp:2106 — "Erase corpses once every 20 minutes").
+const corpseExpirySweepInterval = 20 * time.Minute
+
+// expireOldCorpses mirrors Map::RemoveOldCorpses (Map.cpp:4681-4703): every
+// resurrectable corpse older than corpseResurrectableExpiry is converted to
+// bones. An online owner's visible corpse is despawned and replaced with
+// bones via spawnLoadedCorpseBones (the RemoveCorpse + ConvertCorpseToBones
+// arm); an offline owner's row is simply deleted — C++ bones are never
+// persisted either, so with no session to show them the delete is
+// outcome-equivalent. Returns the number of expired corpses handled.
+// No-bridge: the 60-minute bones expiry (Corpse.cpp:209, Map.cpp:4693-4701)
+// has no Go analog — Go bones are fire-and-forget client visuals with no
+// server-side state (no _corpseBones analog, no DB row), so nothing exists
+// to expire; clients clear them on map change/logout. The grid-loaded leg
+// (!IsRemovalGrid in ConvertCorpseToBones) likewise has no analog — Go has
+// no grid model and the packet broadcast is unconditional.
+func (s *Server) expireOldCorpses(ctx context.Context) int {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return 0
+	}
+	cutoff := time.Now().Unix() - int64(corpseResurrectableExpiry/time.Second)
+	rows, err := s.CharactersStore.DB.QueryContext(ctx, "SELECT guid FROM corpse WHERE corpseType <> ? AND time < ?", corpseTypeBones, cutoff)
+	if err != nil {
+		return 0
+	}
+	var guids []uint64
+	for rows.Next() {
+		var guid uint64
+		if err := rows.Scan(&guid); err == nil {
+			guids = append(guids, guid)
+		}
+	}
+	_ = rows.Close()
+	handled := 0
+	for _, guid := range guids {
+		if sess := s.findSessionByGUID(guid); sess != nil {
+			sess.spawnLoadedCorpseBones(ctx)
+		} else if _, err := s.CharactersStore.DB.ExecContext(ctx, "DELETE FROM corpse WHERE guid = ? AND corpseType <> ?", guid, corpseTypeBones); err != nil {
+			continue
+		}
+		handled++
+	}
+	return handled
+}
+
+// updateCorpseExpiry runs the corpse sweep from the world tick, mirroring
+// the WUPDATE_CORPSES arm in World::Update (World.cpp:2514-2522).
+func (s *Server) updateCorpseExpiry(ctx context.Context) {
+	if s == nil {
+		return
+	}
+	now := time.Now()
+	if !s.lastCorpseExpiry.IsZero() && now.Sub(s.lastCorpseExpiry) < corpseExpirySweepInterval {
+		return
+	}
+	s.lastCorpseExpiry = now
+	s.expireOldCorpses(ctx)
+}
+
 // resurrectPlayer mirrors Player::ResurrectPlayer for the core state: clear
 // the ghost flag and death timer, restore land walking and control, and point
 // the corpse map at an invalid map id. When restorePercent is positive the

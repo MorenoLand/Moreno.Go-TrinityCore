@@ -28,13 +28,14 @@ import (
 //     administrator/reset/negative) have no Go bridge — admission checks a
 //     head count, not an account security level.
 //   - `exit`: Server.Stop().
+//   - `corpses`: force the expired-corpse sweep (World::RemoveOldCorpses,
+//     cs_server.cpp:120-123 — the command forces the WUPDATE_CORPSES timer;
+//     Go runs the sweep synchronously and reports the count).
 //   - `debug`: partial — Go runtime/build info, world DB version, listen
 //     port; the C++ SSL/Boost/MySQL/CMake/VMAP/MMAP/DBC-locale legs have no
 //     Go equivalent.
 //
 // Documented-blocked arms (no bridge, honest message instead of a stub):
-//   - `corpses`: no RemoveOldCorpses sweep — corpse expiry is handled on the
-//     fly in the Go death path.
 //   - `shutdown` / `restart` / `idleshutdown` / `idlerestart` (and their
 //     cancel/force arms): no shutdown-timer machinery exists in the Go
 //     runtime (no delayed-shutdown broadcast, no cancel).
@@ -93,13 +94,19 @@ func (s *session) handleCmdServer(ctx context.Context, args []string) {
 }
 
 // handleServerCorpses mirrors HandleServerCorpsesCommand (cs_server.cpp:121):
-// documented-blocked, corpse expiry is handled on the fly in the Go death
-// path (death.go).
+// force the expired-corpse sweep now (World::RemoveOldCorpses) and report
+// the count. The automatic sweep also runs from the world tick every 20
+// minutes (WUPDATE_CORPSES, World.cpp:2106).
 func (s *session) handleServerCorpses(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandServerCorpses) {
 		return
 	}
-	s.sendSysMessage("Corpse cleanup is handled automatically by this server (no manual sweep).")
+	if s.server == nil {
+		return
+	}
+	s.server.lastCorpseExpiry = time.Now()
+	expired := s.server.expireOldCorpses(ctx)
+	s.sendSysMessage(fmt.Sprintf("Expired %d old corpse(s).", expired))
 }
 
 // handleServerDebug mirrors HandleServerDebugCommand (cs_server.cpp:126):
