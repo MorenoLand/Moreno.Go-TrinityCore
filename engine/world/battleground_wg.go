@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -55,29 +56,29 @@ const (
 	WGSpellBuildSiegeAllianceForce           uint32 = 56661
 	WGSpellBuildSiegeHordeForce              uint32 = 61408
 
-	// World States
+	// World States (SharedDefines.h WS_BATTLEFIELD_WG_* enum)
 	WGWorldStateActive         uint32 = 3801
-	WGWorldStateShowWorldState uint32 = 3801
-	WGWorldStateDefender       uint32 = 3803
-	WGWorldStateAttacker       uint32 = 3802
-	WGWorldStateDefendedA      uint32 = 3710
-	WGWorldStateDefendedH      uint32 = 3774
-	WGWorldStateAttackedA      uint32 = 3709
-	WGWorldStateAttackedH      uint32 = 3775
-	WGWorldStateVehicleH       uint32 = 3680
-	WGWorldStateMaxVehicleH    uint32 = 3681
-	WGWorldStateVehicleA       uint32 = 3490
-	WGWorldStateMaxVehicleA    uint32 = 3491
+	WGWorldStateShowWorldState uint32 = 3710
+	WGWorldStateDefender       uint32 = 3802
+	WGWorldStateAttacker       uint32 = 3803
+	WGWorldStateDefendedA      uint32 = 4025
+	WGWorldStateDefendedH      uint32 = 4024
+	WGWorldStateAttackedA      uint32 = 4023
+	WGWorldStateAttackedH      uint32 = 4022
+	WGWorldStateVehicleH       uint32 = 3490
+	WGWorldStateMaxVehicleH    uint32 = 3491
+	WGWorldStateVehicleA       uint32 = 3680
+	WGWorldStateMaxVehicleA    uint32 = 3681
 	WGWorldStateClock1         uint32 = 3781
 	WGWorldStateClock2         uint32 = 4354
 
 	// Workshop WorldStates
 	WGWorldStateWorkshopNW       uint32 = 3700 // Broken Temple
 	WGWorldStateWorkshopNE       uint32 = 3701 // Sunken Ring
-	WGWorldStateWorkshopSE       uint32 = 3702 // Eastspark
-	WGWorldStateWorkshopSW       uint32 = 3703 // Westspark
-	WGWorldStateWorkshopKeepWest uint32 = 3707
-	WGWorldStateWorkshopKeepEast uint32 = 3708
+	WGWorldStateWorkshopSE       uint32 = 3703 // Eastspark
+	WGWorldStateWorkshopSW       uint32 = 3702 // Westspark
+	WGWorldStateWorkshopKeepWest uint32 = 3698
+	WGWorldStateWorkshopKeepEast uint32 = 3699
 
 	// Workshop IDs
 	WGWorkshopSE       uint8 = 0
@@ -391,6 +392,10 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 	}
 
 	wg.IsActive = false
+	// OnBattleEnd reads the remaining battle timer before it is reset
+	// (DoCompleteOrIncrementAchievement(ACHIEVEMENTS_WIN_WG_TIMER_10) when
+	// !endByTimer && GetTimer() <= 10000); capture it here.
+	remainingBattleTime := wg.Timer
 	wg.Timer = WGNoWarDuration
 	wg.TotalDuration = WGNoWarDuration
 	wg.EndTime = time.Now().Add(WGNoWarDuration)
@@ -417,6 +422,12 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 		if pTeam == winningTeam {
 			sess.applyAura(WGSpellEssenceOfWintergrasp)
 			sess.applyAura(WGSpellVictoryReward)
+			if inWar {
+				sess.completeAchievement(WGAchievementWinWG)
+				if !endByTimer && remainingBattleTime <= 10*time.Second {
+					sess.completeAchievement(WGAchievementWinWGTimer10)
+				}
+			}
 			if pTeam == WGTeamAlliance {
 				sess.applyAura(WGSpellAllianceControlPhaseShift)
 				sess.removeAura(WGSpellHordeControlPhaseShift)
@@ -650,6 +661,16 @@ func (s *Server) DestroyWGBuilding(entry uint32) bool {
 					}
 					s.sessionsMu.RUnlock()
 
+					// Tower-destroy achievement credit to defenders in war.
+					for guid, team := range wg.PlayersInWar {
+						if team != wg.DefenderTeam {
+							continue
+						}
+						if sess := s.findSessionByGUID(guid); sess != nil {
+							sess.completeAchievement(WGAchievementTowerDestroy)
+						}
+					}
+
 					// Penalty: If all 3 south towers are destroyed, subtract 10 minutes from battle timer!
 					if wg.BrokenSouthTowers == 3 {
 						if wg.Timer > WGSouthTowerTimePenalty {
@@ -739,10 +760,12 @@ func (s *Server) UpdateWGTenacity() {
 
 	var newStack int32
 	if allyCount > 0 && hordeCount > 0 {
+		// C++ divides the integer counts FIRST (uint32 division), then casts
+		// to float: (float(hordePlayers / alliancePlayers) - 1) * 4.
 		if allyCount < hordeCount {
-			newStack = int32((float32(hordeCount)/float32(allyCount) - 1.0) * 4.0)
+			newStack = int32(float32(hordeCount/allyCount)-1.0) * 4
 		} else if hordeCount < allyCount {
-			newStack = int32((1.0 - float32(allyCount)/float32(hordeCount)) * 4.0)
+			newStack = int32((1.0 - float32(allyCount/hordeCount)) * 4.0)
 		}
 	}
 
@@ -958,7 +981,24 @@ func (s *Server) handleWGPlayerDeath(victimSess *session, killerSess *session) {
 		return
 	}
 
-	wg.HandlePromotion(s, killerSess.playerGUID, killerTeam)
+	// BattlefieldWG::HandlePromotion: every in-war player of the killer's
+	// team within 40 (2D) yards of the victim shares the promotion credit.
+	vx, vy := victimSess.player.X, victimSess.player.Y
+	for guid, team := range wg.PlayersInWar {
+		if team != killerTeam {
+			continue
+		}
+		sess := s.findSessionByGUID(guid)
+		if sess == nil || sess.player == nil || sess.player.Map != wg.MapID {
+			continue
+		}
+		dx := float64(sess.player.X - vx)
+		dy := float64(sess.player.Y - vy)
+		if math.Sqrt(dx*dx+dy*dy) > 40.0 {
+			continue
+		}
+		wg.HandlePromotion(s, guid, team)
+	}
 }
 
 // isWGGameObject identifies Wintergrasp interactible objects.
