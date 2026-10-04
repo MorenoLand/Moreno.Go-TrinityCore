@@ -2,6 +2,8 @@ package world
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -120,8 +122,23 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 	return true
 }
 
+// battlegroundAA mirrors BATTLEGROUND_AA (SharedDefines.h:3515 — BattlemasterList.dbc index 6, All Arenas).
+const battlegroundAA = uint32(6)
+
+// battlegroundDisabled mirrors DisableMgr::IsDisabledFor(DISABLE_TYPE_BATTLEGROUND, entry)
+// (DisableMgr.cpp:401-405): for battlegrounds, mere presence of the row in the disables table
+// disables it. Same shape as questDisabled (commands_quest.go:78).
+func (s *session) battlegroundDisabled(ctx context.Context, entry uint32) bool {
+	db := s.server.WorldStore.DB
+	if db == nil {
+		return false
+	}
+	var one int
+	return db.QueryRowContext(ctx, "SELECT 1 FROM disables WHERE sourceType = ? AND entry = ?", disableTypeBattleground, entry).Scan(&one) == nil
+}
+
 // handleBattlemasterJoinArena processes CMSG_BATTLEMASTER_JOIN_ARENA (0x358).
-// Reference: WorldSession::HandleBattlemasterJoinArena (BattleGroundHandler.cpp:166).
+// Reference: WorldSession::HandleBattlemasterJoinArena (BattleGroundHandler.cpp:610).
 func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 11 {
 		return true
@@ -142,9 +159,18 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 	case 2:
 		arenaType = 5
 	default:
-		if arenaSlot == 2 || arenaSlot == 3 || arenaSlot == 5 {
-			arenaType = arenaSlot
-		}
+		// BattleGroundHandler.cpp:646-647 — unknown arena slot: error log + silent return.
+		s.debug("unknown arena slot in join arena", "account", s.accountName, "slot", arenaSlot)
+		return true
+	}
+
+	// BattleGroundHandler.cpp:657-661 — DisableMgr::IsDisabledFor(DISABLE_TYPE_BATTLEGROUND, BATTLEGROUND_AA)
+	// → PSendSysMessage(LANG_ARENA_DISABLED) + return. The gate bridges the rejection; the message text itself
+	// (trinity_string 748) is not seeded anywhere in this repo (world.sql creates the table with zero rows),
+	// so no message is sent on the disabled arm — documented delta.
+	if s.battlegroundDisabled(ctx, battlegroundAA) {
+		s.debug("arena join rejected: battleground disabled", "account", s.accountName)
+		return true
 	}
 
 	// Duplicate-queue protection: player is already in this arena queue (C++ WorldSession::HandleBattlemasterJoinArena
@@ -166,9 +192,35 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 		return true
 	}
 
+	if isRated != 0 {
+		// BattleGroundHandler.cpp:714-722 — a rated queue requires a real arena team:
+		// GetArenaTeamId(arenaslot) + sArenaTeamMgr->GetArenaTeamById null →
+		// SendNotInArenaTeamPacket(arenatype) + return. The single JOIN covers both the
+		// missing-membership and the deleted-team cases (same query shape as
+		// commands.go:3902, the sCharacterCache->GetCharacterArenaTeamIdByGuid mirror).
+		if cdb := s.server.CharactersStore.DB; cdb != nil {
+			var teamID uint32
+			err := cdb.QueryRowContext(ctx, "SELECT m.arenaTeamId FROM arena_team_member AS m JOIN arena_team AS t ON t.arenaTeamId = m.arenaTeamId WHERE m.guid = ? AND t.type = ?", s.playerGUID, arenaType).Scan(&teamID)
+			if err != nil {
+				if !errors.Is(err, sql.ErrNoRows) {
+					return false
+				}
+				// WorldSession::SendNotInArenaTeamPacket (ArenaTeamHandler.cpp:414):
+				// SMSG_ARENA_ERROR (0x376), u32(0) + u8(type) — "You are not in a %uv%u arena team".
+				buf := protocol.NewBuffer(5)
+				buf.WriteU32(0)
+				buf.WriteU8(arenaType)
+				_ = s.write(uint16(protocol.OpcodeSMSG_ARENA_ERROR), buf.Bytes(), true)
+				s.debug("rated arena join rejected: no arena team", "account", s.accountName, "type", arenaType)
+				return true
+			}
+			s.debug("rated arena join", "account", s.accountName, "type", arenaType, "team", teamID)
+		}
+	}
+
 	s.bgQueues[slot] = bgQueueEntry{
 		Active:       true,
-		BgTypeID:     4, // BATTLEGROUND_AA (All Arenas)
+		BgTypeID:     battlegroundAA, // BATTLEGROUND_AA (All Arenas)
 		InstanceID:   0,
 		JoinTime:     time.Now(),
 		Status:       BGStatusWaitQueue,
