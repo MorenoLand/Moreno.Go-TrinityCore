@@ -5141,7 +5141,37 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				for _, effectTarget := range hitTargets {
 					if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
-						s.executeSpellDamage(effCtx, effectTarget, spellID, chainScaledAmount(damage, eff, chainJumpIndex[effectTarget]), effectIndex)
+						targetDamage := chainScaledAmount(damage, eff, chainJumpIndex[effectTarget])
+						// Spell::EffectSchoolDMG (SpellEffects.cpp:382-393): the
+						// Incinerate Rank 1 & 2 arm (Warlock family,
+						// SpellFamilyFlags[1] & 0x40, SpellIconID 2128) adds
+						// 25% (damage += damage / 4, integer) when the target
+						// carries Immolate. C++ checks AURA_STATE_CONFLAGRATE
+						// first "for speed" and then confirms with
+						// GetAuraEffect(SPELL_AURA_PERIODIC_DAMAGE,
+						// SPELLFAMILY_WARLOCK, 0x4, 0, 0) — a periodic-damage
+						// aura effect whose spell is Warlock-family with
+						// SpellFamilyFlags[0] & 0x4, no caster-GUID filter
+						// (Unit.cpp:4524). The fast-path check is an
+						// optimization: the unit-wide state bit it reads (the
+						// C++ call passes no spell/caster, so the per-caster
+						// targetHasAuraState is not the mirror here) is set
+						// exactly when an Immolate/Shadowflame aura is live,
+						// so the confirming lookup alone is the exact gate —
+						// a stale or missing state bit cannot change the
+						// conjunction's outcome. The bonus stays on the
+						// direct-bonus path (C++ leaves apply_direct_bonus
+						// true here, unlike the Conflagrate arm), so
+						// executeSpellDamage's SpellDamageBonusDone/Taken legs
+						// cover the modified damage. SCHOOL_DAMAGE (effect 2)
+						// only — the weapon-damage effects in this case route
+						// to different C++ handlers.
+						if eff.Effect == 2 && spell.SpellFamilyName == spellFamilyWarlock &&
+							spell.SpellFamilyFlags[1]&0x40 != 0 && spell.SpellIconID == 2128 &&
+							s.targetHasFamilyAuraEffect(effCtx, effectTarget, spellAuraPeriodicDamage, spellFamilyWarlock, 0x4) {
+							targetDamage += targetDamage / 4
+						}
+						s.executeSpellDamage(effCtx, effectTarget, spellID, targetDamage, effectIndex)
 					}
 				}
 			case 10, 136, 105: // Heal effects
@@ -7295,6 +7325,58 @@ func (s *session) swiftmendConsumedTick(ctx context.Context, targetGUID uint64) 
 		remove(best.SpellID)
 	}
 	return uint32(bestTick) * tickCount, true
+}
+
+// targetHasFamilyAuraEffect mirrors the confirming
+// GetAuraEffect(auraType, family, familyFlag1, 0, 0) lookup in the
+// EffectSchoolDMG family arms (SpellEffects.cpp, e.g. the Incinerate arm at
+// :382-393; Unit::GetAuraEffect, Unit.cpp:4524-4541): true when the target
+// carries a live aura effect of the given aura type whose spell belongs to
+// the given family and has the given SpellFamilyFlags[0] mask. No
+// caster-GUID filter — the Incinerate call passes 0 for casterGUID. The
+// three-way target resolution (self, other player session, creature aura
+// maps) follows the swiftmendConsumedTick scan pattern.
+func (s *session) targetHasFamilyAuraEffect(ctx context.Context, targetGUID uint64, auraType uint32, family uint32, familyFlags0 uint32) bool {
+	if s.server == nil || s.server.Data == nil {
+		return false
+	}
+	var auras []*activeAura
+	if targetGUID == 0 || targetGUID == s.playerGUID {
+		auras = s.loadedAuras()
+	} else if other := s.server.findSessionByGUID(targetGUID); other != nil && other.player != nil {
+		auras = other.loadedAuras()
+	} else if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
+		key := creatureAuraKeyForTarget(target)
+		s.server.auraMu.Lock()
+		for _, aura := range s.server.activeCreatureAuras[key] {
+			auras = append(auras, aura)
+		}
+		s.server.auraMu.Unlock()
+	} else {
+		return false
+	}
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if auraSpell.SpellFamilyName != family || auraSpell.SpellFamilyFlags[0]&familyFlags0 == 0 {
+			continue
+		}
+		for index, eff := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || index >= 8 || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellEffectIsAuraEffect(eff) || eff.Aura != auraType {
+				continue
+			}
+			return true
+		}
+	}
+	return false
 }
 
 func buildSpellNonMeleeDamageLog(targetGUID, attackerGUID uint64, spellID, damage, overkill uint32, schoolMask uint8, extra ...uint32) []byte {
