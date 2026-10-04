@@ -1303,6 +1303,19 @@ func (s *session) handleHearthAndResurrect(ctx context.Context) bool {
 	return true
 }
 
+// resSicknessSpellID mirrors the ChrRaces ResSicknessSpellID lookup in
+// Player::ResurrectPlayer (Player.cpp:4746): the race's own resurrection
+// sickness spell, falling back to 15007 when the race row is absent or
+// carries none.
+func (s *session) resSicknessSpellID(race uint8) uint32 {
+	if s != nil && s.server != nil && s.server.Data != nil {
+		if r, found, _ := s.server.Data.Race(uint32(race)); found && r.ResSicknessSpellID != 0 {
+			return r.ResSicknessSpellID
+		}
+	}
+	return 15007
+}
+
 // handleSpiritHealerActivate processes CMSG_SPIRIT_HEALER_ACTIVATE (0x21C).
 // Reference: WorldSession::HandleSpiritHealerActivateOpcode (MiscHandler.cpp:712)
 // and WorldSession::SendSpiritResurrect (NPCHandler.cpp:219).
@@ -1327,14 +1340,17 @@ func (s *session) handleSpiritHealerActivate(ctx context.Context, payload []byte
 	s.resurrectPlayer(ctx, 0.5)
 	s.durabilityLossAll(ctx, 0.25, true)
 	if s.player.Level > 10 {
-		// Characters level 1-10 have no sickness.
+		// Characters level 1-10 have no sickness (CONFIG_DEATH_SICKNESS_LEVEL
+		// default 11, Player.cpp:4748).
 		// Characters level 11-19 suffer 1 minute per level above 10 (1-9 minutes).
 		// Characters level 20+ suffer 10 minutes of sickness (TC Player::ResurrectPlayer:4740-4753).
+		// The spell is the race's own ResSicknessSpellID (Player.cpp:4746), not
+		// a hardcoded 15007.
 		durationMinutes := s.player.Level - 10
 		if durationMinutes > 10 {
 			durationMinutes = 10
 		}
-		s.applyAuraWithDuration(15007, uint32(durationMinutes)*60*1000)
+		s.applyAuraWithDuration(s.resSicknessSpellID(s.player.Race), uint32(durationMinutes)*60*1000)
 	}
 	s.spawnCorpseBones(ctx)
 	if corpseGraveFound {

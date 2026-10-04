@@ -232,11 +232,8 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 			}
 		}
 		fadesWhileOffline := false
-		resSicknessSpellID := uint32(15007)
+		resSicknessSpellID := s.resSicknessSpellID(state.Race)
 		if s.server.Data != nil {
-			if race, found, _ := s.server.Data.Race(uint32(state.Race)); found && race.ResSicknessSpellID != 0 {
-				resSicknessSpellID = race.ResSicknessSpellID
-			}
 			if spell, found, _ := s.server.Data.Spell(id); found {
 				fadesWhileOffline = spell.AttributesEx4&0x00000004 != 0 && id != resSicknessSpellID
 			}
