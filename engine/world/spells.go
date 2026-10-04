@@ -69,6 +69,7 @@ const (
 	spellAttr2NotNeedShapeshift            uint32 = 0x00080000 // SPELL_ATTR2_NOT_NEED_SHAPESHIFT (SharedDefines.h:505) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr1CantBeReflected              uint32 = 0x00000080 // SPELL_ATTR1_CANT_BE_REFLECTED (SharedDefines.h:456)
 	spellAttr1CantTargetSelf               uint32 = 0x00080000 // SPELL_ATTR1_CANT_TARGET_SELF (SharedDefines.h:468) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
+	spellAttr1CantTargetInCombat           uint32 = 0x00000100 // SPELL_ATTR1_CANT_TARGET_IN_COMBAT (SharedDefines.h:457) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr1ReqComboPoints1              uint32 = 0x00100000 // SPELL_ATTR1_REQ_COMBO_POINTS1 (SharedDefines.h:469) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr1ReqComboPoints2              uint32 = 0x00400000 // SPELL_ATTR1_REQ_COMBO_POINTS2 (SharedDefines.h:471) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr1DrainAllPower                uint32 = 0x00000002 // SPELL_ATTR1_DRAIN_ALL_POWER (SharedDefines.h:450) "Drain all power" — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
@@ -110,6 +111,7 @@ const (
 	spellFailedTargetIsPlayer            uint8  = 117 // SPELL_FAILED_TARGET_IS_PLAYER (SharedDefines.h:1099)
 	spellFailedTargetNoPockets           uint8  = 123 // SPELL_FAILED_TARGET_NO_POCKETS (SharedDefines.h:1105)
 	spellFailedTargetNotPlayer           uint8  = 122 // SPELL_FAILED_TARGET_NOT_PLAYER (SharedDefines.h:1104)
+	spellFailedTargetAffectingCombat     uint8  = 110 // SPELL_FAILED_TARGET_AFFECTING_COMBAT (SharedDefines.h:1092)
 	spellFailedAffectingCombat           uint8  = 1
 	spellFailedFoodLowLevel              uint8  = 35
 	spellFailedNoPet                     uint8  = 84
@@ -1656,6 +1658,31 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// Cannot-target-in-combat gate (SpellInfo::CheckTarget, SpellInfo.cpp:1650):
+	// a spell with SPELL_ATTR1_CANT_TARGET_IN_COMBAT rejects a target that is
+	// in combat with SPELL_FAILED_TARGET_AFFECTING_COMBAT. Creature-target
+	// combat rides motion.InCombat; player-target combat rides the target
+	// session's UnitFlags (unitTargetInCombat). The UNIT_FLAG_PET_IN_COMBAT
+	// half has no bridge: Go tracks no pet-in-combat flag on player units.
+	// The ONLY_TARGET_GHOSTS arm right below it (SpellInfo.cpp:1654-1662 —
+	// HasAttribute(SPELL_ATTR3_ONLY_TARGET_GHOSTS) !=
+	// unitTarget->HasAuraType(SPELL_AURA_GHOST) → SPELL_FAILED_TARGET_NOT_GHOST
+	// / SPELL_FAILED_BAD_TARGETS) is unbridged: target-side aura state is
+	// unmodeled, so the Go target cannot answer "is the target a ghost". The
+	// CANT_TARGET_TAPPED arm (SpellInfo.cpp:1667-1670 — inside the caster !=
+	// unitTarget / player-caster block: SPELL_ATTR2_CANT_TARGET_TAPPED +
+	// creature hasLootRecipient && !isTappedBy(caster) →
+	// SPELL_FAILED_CANT_CAST_ON_TAPPED) is unbridged: Go has no
+	// loot-recipient/tapped-by model on creatures. Checked when a unit target
+	// exists, ahead of the caster != unitTarget block, matching C++ relative
+	// order (1650 ahead of 1667/1669).
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && targetGUID != 0 && s.unitTargetInCombat(targetGUID) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAffectingCombat), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target in combat", "failReason", spellFailedTargetAffectingCombat)
+		return true
+	}
+
 	// Pickpocket target gate (SpellInfo::CheckTarget, SpellInfo.cpp:1669-1675):
 	// a spell with SPELL_ATTR0_CU_PICKPOCKET rejects player targets with
 	// SPELL_FAILED_BAD_TARGETS, and rejects creature targets whose creature-type
@@ -2374,6 +2401,32 @@ func (s *session) checkPowerBurnDrainCast(spell wotlk.Spell, target protocol.Spe
 		}
 	}
 	return 0
+}
+
+// unitTargetInCombat mirrors Unit::IsInCombat for the CheckTarget
+// CANT_TARGET_IN_COMBAT arm (SpellInfo.cpp:1650): the caster's own in-combat
+// state (attackTarget or UnitFlags), a target player's in-combat state, or a
+// target creature's motion.InCombat. Resolves nothing — returns false when
+// the guid maps to no unit. The UNIT_FLAG_PET_IN_COMBAT half of the C++ OR
+// has no Go model.
+func (s *session) unitTargetInCombat(guid uint64) bool {
+	if s.player != nil && guid == s.playerGUID {
+		return s.attackTarget != 0 || s.player.UnitFlags&unitFlagInCombat != 0
+	}
+	if s.server != nil {
+		if ts := s.server.findSessionByGUID(guid); ts != nil && ts.player != nil {
+			return ts.attackTarget != 0 || ts.player.UnitFlags&unitFlagInCombat != 0
+		}
+	}
+	if s.server != nil && s.player != nil {
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, guid)
+		s.server.motionMu.Unlock()
+		if motion != nil {
+			return motion.InCombat
+		}
+	}
+	return false
 }
 
 // unitTargetPowerType resolves the active power type of the unit behind guid:
