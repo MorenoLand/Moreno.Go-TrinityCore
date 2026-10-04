@@ -1150,6 +1150,22 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// DBC consts in data/wotlk/vehicle.go exist), so the arm always resolves
 	// to SPELL_CAST_OK. Documented no-bridge; the TRIGGERED_IGNORE_CASTED_WHILE_MOUNTED
 	// wrapper is vacuous for client casts (never set on this path).
+	// CheckCast conditions block (Spell::CheckCast, Spell.cpp:5337-5348):
+	// sConditionMgr->IsObjectMeetingNotGroupedConditions(
+	// CONDITION_SOURCE_TYPE_SPELL (17, ConditionMgr.h:140), spell id,
+	// ConditionSourceInfo(caster, object target)) — the per-spell database
+	// conditions on the cast itself (distinct from
+	// CONDITION_SOURCE_TYPE_SPELL_IMPLICIT_TARGET (13), which Go evaluates
+	// in the implicit-target scan). On failure the last-failed condition's
+	// ErrorType wins (SPELL_FAILED_CUSTOM_ERROR (172) also fills
+	// m_customError from ErrorTextId), else SPELL_FAILED_CASTER_AURASTATE
+	// (22) when there is no failed condition or no ConditionTarget, else
+	// SPELL_FAILED_BAD_TARGETS (12). Documented no-bridge: Go has no
+	// ConditionSourceInfo, no last-failed-condition tracking, and no
+	// NotGrouped evaluation — conditions.go models only source type 13 for
+	// the target scan. Revisit if spell-source condition evaluation lands.
+	// C++ relative order: right after the vehicle arm, ahead of the
+	// CheckExplicitTarget block (5353-5367).
 	// CheckCast pet-presence gate (Spell::CheckCast, Spell.cpp:5413-5431):
 	// any effect with TargetA == TARGET_UNIT_PET (5) requires the caster's
 	// guardian pet (Unit::GetGuardianPet); without one the cast fails with
