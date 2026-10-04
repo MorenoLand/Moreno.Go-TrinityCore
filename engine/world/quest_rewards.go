@@ -247,7 +247,7 @@ func buildQuestGiverRequestItems(view questRewardView, giverGUID uint64, emote u
 	}
 	packet.WriteU32(view.Detail.Flags)
 	packet.WriteU32(view.Detail.SuggestedGroupNum)
-	packet.WriteU32(0)
+	packet.WriteU32(view.Detail.RequiredMoney)
 	packet.WriteU32(uint32(len(view.RequiredItems)))
 	for _, item := range view.RequiredItems {
 		packet.WriteU32(item.ID)

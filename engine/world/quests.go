@@ -216,15 +216,18 @@ func (s *session) handleQuestgiverStatusQuery(ctx context.Context, payload []byt
 		rawGUID := guid & 0x00000000FFFFFFFF
 		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", rawGUID).Scan(&entry)
 	}
+	if entry == 0 {
+		// TrinityCore HandleQuestgiverStatusQueryOpcode (QuestHandler.cpp:41)
+		// sends no packet when the questgiver object does not exist.
+		return true
+	}
 	status := uint8(questDialogNone)
-	if entry != 0 {
-		// Eluna CREATURE_EVENT_ON_DIALOG_STATUS (event 35), fired from
-		// Player::GetQuestDialogStatus before the AI/relation checks
-		// (Player.cpp:16290-16296).
-		s.fireCreatureQuestHook(ctx, guid, scripting.CreatureEventOnDialogStatus)
-		if st, err := s.questDialogStatus(ctx, entry); err == nil {
-			status = st
-		}
+	// Eluna CREATURE_EVENT_ON_DIALOG_STATUS (event 35), fired from
+	// Player::GetQuestDialogStatus before the AI/relation checks
+	// (Player.cpp:16290-16296).
+	s.fireCreatureQuestHook(ctx, guid, scripting.CreatureEventOnDialogStatus)
+	if st, err := s.questDialogStatus(ctx, entry); err == nil {
+		status = st
 	}
 	packet := protocol.NewBuffer(9)
 	packet.WriteU64(guid)

@@ -20,6 +20,13 @@ const (
 	questAutoCompleteFlags = 0x00010000
 )
 
+// QuestFailedReason values for SMSG_QUESTGIVER_QUEST_INVALID (QuestDef.h:48).
+const (
+	questInvalidDontHaveReq = 0
+	questInvalidAlreadyDone = 7
+	questInvalidAlreadyOn   = 13
+)
+
 type questRewardItem struct {
 	ID        uint32
 	Quantity  uint32
@@ -39,6 +46,7 @@ type questDetailData struct {
 	Flags                 uint32
 	SuggestedGroupNum     uint32
 	RewardMoney           uint32
+	RequiredMoney         uint32
 	RewardXPDifficulty    uint32
 	RewardBonusMoney      uint32
 	RewardDisplaySpell    uint32
@@ -54,6 +62,15 @@ type questDetailData struct {
 	RewardFactionValue    [questRewardFactions]int32
 	RewardFactionOverride [questRewardFactions]int32
 	DescEmotes            [questDetailEmotes]questDescEmote
+}
+
+// sendQuestGiverQuestInvalid mirrors Player::SendCanTakeQuestResponse
+// (Player.cpp:17054): SMSG_QUESTGIVER_QUEST_INVALID carries only the
+// QuestFailedReason.
+func (s *session) sendQuestGiverQuestInvalid(reason uint32) bool {
+	packet := protocol.NewBuffer(4)
+	packet.WriteU32(reason)
+	return s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_QUEST_INVALID), packet.Bytes(), true) == nil
 }
 
 func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte) bool {
@@ -86,9 +103,26 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 	if creatureEntry == 0 || !s.creatureHasQuest(ctx, creatureEntry, questID) {
 		return s.sendGossipComplete()
 	}
+	// TrinityCore HandleQuestgiverQueryQuestOpcode (QuestHandler.cpp:233) gates the
+	// details on CanTakeQuest(quest, true): already-on, already-done, and failed
+	// requirement checks reply with SMSG_QUESTGIVER_QUEST_INVALID instead of the
+	// details, and the opcode never routes into the CompleteQuest path.
 	status, _ := s.characterQuestStatus(ctx, questID)
-	if status == questStatusComplete || status == questStatusIncomplete {
-		return s.handleQuestgiverCompleteQuest(ctx, payload)
+	if status != 0 {
+		return s.sendQuestGiverQuestInvalid(questInvalidAlreadyOn)
+	}
+	if s.isQuestRewarded(ctx, questID) {
+		return s.sendQuestGiverQuestInvalid(questInvalidAlreadyDone)
+	}
+	if canTake, err := s.canTakeQuest(ctx, questID); err != nil || !canTake {
+		if err != nil {
+			s.debug("quest details failed", "account", s.accountName, "quest", questID, "error", err)
+			return false
+		}
+		// Go's canTakeQuest does not report which Satisfy* check failed, so the
+		// generic INVALIDREASON_DONT_HAVE_REQ goes out where C++ sends the specific
+		// reason.
+		return s.sendQuestGiverQuestInvalid(questInvalidDontHaveReq)
 	}
 	data, err := s.loadQuestDetailData(ctx, questID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -105,12 +139,28 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 	var specialFlags int64
 	_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT SpecialFlags FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
 	if specialFlags&4 != 0 {
-		if canTake, _ := s.canTakeQuest(ctx, questID); canTake {
-			s.addQuestToPlayer(ctx, questID)
-			// Eluna CREATURE_EVENT_ON_QUEST_ACCEPT (event 31), fired from
-			// Player::AddQuestAndCheckCompletion (Player.cpp:15119 region).
-			s.fireCreatureQuestHook(ctx, guid, scripting.CreatureEventOnQuestAccept, s.luaQuest(ctx, questID))
+		s.addQuestToPlayer(ctx, questID)
+		// Eluna CREATURE_EVENT_ON_QUEST_ACCEPT (event 31), fired from
+		// Player::AddQuestAndCheckCompletion (Player.cpp:15119 region).
+		s.fireCreatureQuestHook(ctx, guid, scripting.CreatureEventOnQuestAccept, s.luaQuest(ctx, questID))
+	}
+
+	// TrinityCore HandleQuestgiverQueryQuestOpcode (QuestHandler.cpp:233): quests
+	// with QUEST_FLAGS_AUTOCOMPLETE send RequestItems (collapsing to OfferReward
+	// when no items are required and the quest is complete, as
+	// PlayerMenu::SendQuestGiverRequestItems does in GossipDef.cpp:471) instead
+	// of the details packet.
+	if data.Flags&questAutoCompleteFlags != 0 {
+		view, err := s.loadQuestRewardView(ctx, questID)
+		if err != nil {
+			s.debug("quest details failed", "account", s.accountName, "quest", questID, "error", err)
+			return false
 		}
+		canComplete := s.canCompleteQuest(ctx, questID)
+		if len(view.RequiredItems) == 0 && canComplete {
+			return s.sendQuestOfferReward(view, guid, true)
+		}
+		return s.sendQuestRequestItems(view, guid, canComplete, true)
 	}
 
 	return s.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), packet, true) == nil
@@ -447,6 +497,12 @@ func (s *session) loadQuestDetailData(ctx context.Context, questID uint32) (ques
 	}
 	data.ID, data.Title, data.Objectives, data.Details = questID, title.String, objectives.String, details.String
 	data.Flags, data.SuggestedGroupNum, data.RewardMoney, data.RewardXPDifficulty = uint32(flags), uint32(suggestedGroup), uint32(rewardMoney), uint32(rewardXP)
+	if rewardMoney < 0 {
+		// Negative RewardMoney is required money (Quest::GetRewOrReqMoney in
+		// QuestDef.cpp:286); the RequestItems packet carries it as a positive
+		// amount while the details/offer packets write the raw signed value.
+		data.RequiredMoney = uint32(-rewardMoney)
+	}
 	data.RewardBonusMoney, data.RewardDisplaySpell, data.RewardSpell, data.RewardHonor = uint32(rewardBonusMoney), uint32(rewardDisplaySpell), int32(rewardSpell), uint32(rewardHonor)
 	data.RewardKillHonor, data.RewardTitleID, data.RewardTalents, data.RewardArenaPoints = float32(rewardKillHonor), uint32(rewardTitle), uint32(rewardTalents), int32(rewardArenaPoints)
 	for index, itemID := range rewardIDs {
