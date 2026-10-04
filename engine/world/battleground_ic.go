@@ -488,6 +488,15 @@ func (s *Server) interactWithICBanner(ic *icBattlegroundState, nodeID uint8, tea
 		return
 	}
 
+	// If the node is already contested by this player's team: nothing to do.
+	// The 60s capture timer from the first click keeps running.
+	// Reference: BattlegroundIC::EventPlayerClickedOnFlag (BattlegroundIC.cpp:430-431) —
+	// nodePoint[i].faction holds the contesting team from the earlier click.
+	if (team == ICTeamAlliance && node.State == ICNodeStateConflictA) ||
+		(team == ICTeamHorde && node.State == ICNodeStateConflictH) {
+		return
+	}
+
 	// DEFENDING: If the node is currently contested by the enemy, the original controller reclaims it
 	if (team == ICTeamAlliance && node.State == ICNodeStateConflictH && node.Faction == ICTeamAlliance) ||
 		(team == ICTeamHorde && node.State == ICNodeStateConflictA && node.Faction == ICTeamHorde) {
