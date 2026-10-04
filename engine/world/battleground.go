@@ -89,6 +89,41 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 	joinAsGroup, _ := r.ReadU8()
 	_ = joinAsGroup
 
+	// sBattlemasterListStore.LookupEntry(bgTypeId_) (BattleGroundHandler.cpp:84-88):
+	// an invalid bgTypeId is answered with silence (error log on the C++ side).
+	if s.server == nil || s.server.Data == nil {
+		return true
+	}
+	file, fileErr := s.server.Data.File("BattlemasterList")
+	if fileErr != nil {
+		return true
+	}
+	if _, found := file.Find(bgTypeID); !found {
+		s.debug("invalid bgtype in battlemaster join", "account", s.accountName, "bg", bgTypeID)
+		return true
+	}
+
+	// BattleGroundHandler.cpp:90-94 — DisableMgr::IsDisabledFor(DISABLE_TYPE_BATTLEGROUND, bgTypeId)
+	// → PSendSysMessage(LANG_BG_DISABLED) + return. Gate bridged via the arena unit's
+	// battlegroundDisabled helper; the message text (trinity_string 747) is not seeded anywhere in
+	// this repo (world.sql creates the table with zero rows), so no message is sent on the disabled
+	// arm — same documented delta as the arena unit.
+	if s.battlegroundDisabled(ctx, bgTypeID) {
+		s.debug("battlemaster join rejected: battleground disabled", "account", s.accountName, "bg", bgTypeID)
+		return true
+	}
+
+	// BattleGroundHandler.cpp:131-137 — _player->IsDeserter() → BuildGroupJoinedBattlegroundPacket
+	// ERR_GROUP_JOIN_BATTLEGROUND_DESERTERS; the packet is int32(-2) only, slot-for-slot vs
+	// BattlegroundMgr::BuildGroupJoinedBattlegroundPacket:239-244 (the u64 arm fires only for
+	// ERR_BATTLEGROUND_JOIN_TIMED_OUT/JOIN_FAILED).
+	if s.hasAura(deserterSpellBG) {
+		buf := protocol.NewBuffer(4)
+		buf.WriteI32(groupJoinBattlegroundDeserters)
+		_ = s.write(uint16(protocol.OpcodeSMSG_GROUP_JOINED_BATTLEGROUND), buf.Bytes(), true)
+		return true
+	}
+
 	// Duplicate-queue protection: player is already in this queue (C++ WorldSession::HandleBattlemasterJoinOpcode
 	// — GetBattlegroundQueueIndex(bgQueueTypeId) < PLAYER_MAX_BATTLEGROUND_QUEUES → silent return).
 	for i := 0; i < len(s.bgQueues); i++ {
@@ -97,7 +132,8 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 		}
 	}
 
-	// Find free queue slot
+	// Check if has free queue slots (BattleGroundHandler.cpp:183-190 — HasFreeBattlegroundQueueId
+	// miss → ERR_BATTLEGROUND_TOO_MANY_QUEUES; the packet is int32(-4) only, no u64 arm).
 	slot := -1
 	for i := 0; i < len(s.bgQueues); i++ {
 		if !s.bgQueues[i].Active {
@@ -106,7 +142,15 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 		}
 	}
 	if slot == -1 {
-		return true // Queues full
+		buf := protocol.NewBuffer(4)
+		buf.WriteI32(groupJoinTooManyQueues)
+		_ = s.write(uint16(protocol.OpcodeSMSG_GROUP_JOINED_BATTLEGROUND), buf.Bytes(), true)
+		return true
+	}
+
+	// Freeze debuff (BattleGroundHandler.cpp:192-193 — HasAura(9454) → silent return).
+	if s.hasAura(freezeAuraSpellID) {
+		return true
 	}
 
 	s.bgQueues[slot] = bgQueueEntry{
@@ -239,6 +283,10 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 // (SharedDefines.h:3692 — "You cannot join the battleground yet because you or
 // one of your party members is flagged as a Deserter.").
 const groupJoinBattlegroundDeserters = int32(-2)
+
+// groupJoinTooManyQueues mirrors ERR_BATTLEGROUND_TOO_MANY_QUEUES
+// (SharedDefines.h:3694 — "You can only be queued for 2 battles at once").
+const groupJoinTooManyQueues = int32(-4)
 
 // handleBattlefieldPort processes CMSG_BATTLEFIELD_PORT (0x2D5).
 // Reference: WorldSession::HandleBattleFieldPortOpcode (BattleGroundHandler.cpp:357).
