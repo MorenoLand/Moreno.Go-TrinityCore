@@ -1936,9 +1936,10 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			// gauntlet). Documented no-bridge:
 			// DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, id, nullptr,
 			// SPELL_DISABLE_LOS) — Go has no DisableMgr model, so the
-			// disable leg is unmodeled. Documented delta: the
-			// completion-path LOS revalidation does not apply these
-			// attribute exemptions yet.
+			// disable leg is unmodeled. The completion-path LOS
+			// revalidation (finishSpellCast) applies these attribute
+			// exemptions, matching Spell::_cast's CheckCast re-run
+			// (Spell.cpp:3328).
 			if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 && spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 && s.server != nil {
 				if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedLineOfSight), true)
@@ -4827,12 +4828,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "range", "code", failCode)
 			return
 		}
-		// CheckCast also revalidates line of sight at completion.
+		// CheckCast also revalidates line of sight at completion; the
+		// completion re-run of CheckCast (Spell::_cast, Spell.cpp:3328)
+		// applies the same LoS-ignoring attribute exemptions as the
+		// initial gauntlet (Spell.cpp:5391-5401). The dead-target gate
+		// below (SpellInfo.cpp:1715) is not touched by those exemptions.
 		if tgt, ok := s.getCombatTarget(ctx, target.UnitGUID); ok && s.server != nil {
-			if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
-				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 47), true) // SPELL_FAILED_LINE_OF_SIGHT = 47
-				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "line of sight")
-				return
+			if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 && spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
+				if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 47), true) // SPELL_FAILED_LINE_OF_SIGHT = 47
+					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "line of sight")
+					return
+				}
 			}
 			// Unit targets that died during the cast bar fail with
 			// SPELL_FAILED_TARGETS_DEAD (SpellInfo::CheckTarget, SpellInfo.cpp:1715)
