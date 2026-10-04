@@ -3395,9 +3395,11 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 		placements, storeErr = s.guildPlayerMovePlan(ctx, tx, s.playerGUID, source.Entry, moveCount, maxStack, target)
 	}
 	if storeErr != 0 && destination != nil && destExists && full {
-		// The deposit-swap step-3 DEPOSIT_ITEM gate already ran above; the
-		// swap-arm opposite-direction rights are the silent withdraw-slots
-		// check (BankMoveItemData::HasWithdrawRights, Guild.cpp:864-876),
+		// Guild::_MoveItems step 3 (Guild.cpp:2683-2690) ran above for the
+		// player->bank direction; the cross-tab bank case is re-checked
+		// below, and the swap-arm opposite-direction rights are the
+		// silent withdraw-slots check
+		// (BankMoveItemData::HasWithdrawRights, Guild.cpp:864-876),
 		// enforced by consumeWithdraw(true) below.
 		// Guild::_MoveItems step 3 (Guild.cpp:2683-2690): a cross-tab bank
 		// swap needs GUILD_BANK_RIGHT_DEPOSIT_ITEM (VIEW_TAB|PUT_ITEM,
@@ -3406,6 +3408,17 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 		// same-tab skip lives there too). Silent on failure — C++ returns
 		// with no feedback on this path.
 		if destination.Bank && sourceLoc.Bank && sourceLoc.Tab != destination.Tab && !s.checkGuildBankRights(ctx, guildID, destination.Tab, true) {
+			return rollback(0, source.GUID)
+		}
+		// Guild::_MoveItems step 6.2.2 (Guild.cpp:2722-2729): the swap
+		// fallback checks the opposite direction too — the dest item is
+		// stored back in the source tab, so
+		// BankMoveItemData::HasStoreRights (Guild.cpp:855-862) needs
+		// GUILD_BANK_RIGHT_DEPOSIT_ITEM (VIEW_TAB|PUT_ITEM, Guild.h:181)
+		// on the src tab (skipped only for same-tab bank swaps, like
+		// step 3). Silent on failure — C++ returns with no feedback on
+		// this path.
+		if sourceLoc.Bank && (!destination.Bank || sourceLoc.Tab != destination.Tab) && !s.checkGuildBankRights(ctx, guildID, sourceLoc.Tab, true) {
 			return rollback(0, source.GUID)
 		}
 		if swapErr := s.guildMoveCanSwap(ctx, sourceLoc, *destination, source, destItem); swapErr != 0 {
@@ -4569,7 +4582,7 @@ func (s *session) handleSaveGuildEmblem(ctx context.Context, payload []byte) boo
 		return true
 	}
 	r := protocol.NewReader(payload)
-	_, _ = r.ReadU64() // vendor
+	vendorGUID, _ := r.ReadU64()
 	style, _ := r.ReadU32()
 	color, _ := r.ReadU32()
 	bStyle, _ := r.ReadU32()
@@ -4578,6 +4591,15 @@ func (s *session) handleSaveGuildEmblem(ctx context.Context, payload []byte) boo
 
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
+		return true
+	}
+
+	// WorldSession::HandleSaveGuildEmblemOpcode (GuildHandler.cpp:220-228):
+	// saving requires an interactable tabard-designer NPC
+	// (UNIT_NPC_FLAG_TABARDDESIGNER 0x80000); the gate runs before the
+	// guild check and reports ERR_GUILDEMBLEM_INVALIDVENDOR.
+	if !s.canInteractWithNPC(ctx, vendorGUID, 0x80000) {
+		s.sendSaveGuildEmblemResult(guildEmblemInvalidVendor)
 		return true
 	}
 
