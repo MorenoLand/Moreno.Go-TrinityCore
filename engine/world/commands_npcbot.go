@@ -9,11 +9,11 @@ import (
 )
 
 // This file wires the ".npcbot" command family
-// (src/server/game/AI/NpcBots/botcommands.cpp:97-125). The "add", "remove" and
-// "spawn" arms are converted; they give Recruit/AddBotFree/Add their first
-// real call sites. The remaining arms (move/delete/lookup/revive/
-// reloadconfig/command/info/hide/unhide/show/recall/kill/suicide/distance/
-// order) land in later units.
+// (src/server/game/AI/NpcBots/botcommands.cpp:97-125). The "add", "remove",
+// "spawn", "move" and "delete" arms are converted; they give Recruit/
+// AddBotFree/Add their first real call sites. The remaining arms (lookup/
+// revive/reloadconfig/command/info/hide/unhide/show/recall/kill/suicide/
+// distance/order) land in later units.
 //
 // The "add"/"remove" arms are selection-driven in C++ (owner->GetSelectedUnit()
 // must be a live uncontrolled/controlled npcbot creature). Go keeps no
@@ -45,7 +45,7 @@ const (
 
 // handleCmdNpcBot dispatches the "npcbot" root (botcommands.cpp:124-126).
 func (s *session) handleCmdNpcBot(ctx context.Context, args []string) {
-	const syntax = "Syntax: .npcbot add|remove|spawn"
+	const syntax = "Syntax: .npcbot add|remove|spawn|move|delete"
 	if len(args) == 0 {
 		s.sendSysMessage(syntax)
 		return
@@ -65,6 +65,10 @@ func (s *session) handleCmdNpcBot(ctx context.Context, args []string) {
 		s.handleNpcBotRemoveCommand(ctx)
 	case strings.HasPrefix("spawn", sub):
 		s.handleNpcBotSpawnCommand(ctx, rest)
+	case strings.HasPrefix("move", sub):
+		s.handleNpcBotMoveCommand(ctx, rest)
+	case strings.HasPrefix("delete", sub):
+		s.handleNpcBotDeleteCommand(ctx)
 	default:
 		s.sendSysMessage(syntax)
 	}
@@ -300,6 +304,168 @@ func (s *session) handleNpcBotSpawnCommand(ctx context.Context, args []string) {
 		return
 	}
 	s.sendSysMessage("NpcBot successfully spawned")
+}
+
+// handleNpcBotMoveCommand mirrors HandleNpcBotMoveCommand
+// (botcommands.cpp:908): relocates the npcbot's spawn point to the handler's
+// position, persisting the move with the same UPDATE creature statement
+// (position_x/y/z, orientation, map WHERE guid). The live legs (FindBot,
+// CreatureData spawn-point relocate, TeleportBot for free in-world bots) have
+// no Go bridge — Go keeps no live BotAI or creature-object model, so the DB
+// row IS the spawn point.
+func (s *session) handleNpcBotMoveCommand(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCBotMove) {
+		return
+	}
+	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
+		s.sendSysMessage("NpcBots is unavailable.")
+		return
+	}
+	mgr := s.server.Features.NPCBots
+	raw := strings.TrimSpace(strings.Join(args, " "))
+	// C++: handler->getSelectedCreature(); no args and no creature → the
+	// three usage lines. Go's selection holds the full GUID; 0xF130 is the
+	// creature HighGuid == GetSelectedCreature's Creature* return.
+	var selEntry uint32
+	if uint16(s.selection>>48) == 0xF130 {
+		selEntry = uint32((s.selection >> 24) & 0x00FFFFFF)
+	}
+	if raw == "" && selEntry == 0 {
+		s.sendSysMessage(".npcbot move")
+		s.sendSysMessage("Moves npcbot to your location")
+		s.sendSysMessage("Syntax: .npcbot move [#ID]")
+		return
+	}
+	// C++: extractKeyFromLink(args, "Hcreature_entry"); wrong link type or
+	// empty with no creature → silent false. A present key selects the args
+	// ID even when it is "0" (C++ then reports "does not exist").
+	var id uint32
+	hasKey := false
+	if raw != "" {
+		if key := extractNpcBotCreatureKey(raw); key != "" {
+			id, hasKey = uint32(cAtoi(key)), true
+		}
+		if !hasKey && selEntry == 0 {
+			return
+		}
+		if !hasKey {
+			id = selEntry
+		}
+	} else {
+		id = selEntry
+	}
+	flagsExtra, ok := s.npcTemplateGate(ctx, id)
+	if !ok {
+		s.sendSysMessage(fmt.Sprintf("creature id %d does not exist!", id))
+		return
+	}
+	if flagsExtra&npcBotSpawnFlagNPCBot == 0 {
+		s.sendSysMessage(fmt.Sprintf("creature id %d is not a npcbot!", id))
+		return
+	}
+	// C++: BotDataMgr::SelectNpcBotData(id) → "NpcBot %u is not spawned!".
+	if _, ok := mgr.Get(id); !ok {
+		s.sendSysMessage(fmt.Sprintf("NpcBot %d is not spawned!", id))
+		return
+	}
+	db := s.npcWorldDB()
+	if db == nil {
+		return
+	}
+	// C++: BotDataMgr::FindBot(id) → ASSERT + CreatureData lowguid. Go uses
+	// the world DB row the same way the spawn arm inserted it; a missing
+	// row takes the same "not spawned" exit C++ would never reach.
+	var guid uint32
+	if err := db.QueryRowContext(ctx, "SELECT guid FROM creature WHERE id = ? LIMIT 1", id).Scan(&guid); err != nil {
+		s.sendSysMessage(fmt.Sprintf("NpcBot %d is not spawned!", id))
+		return
+	}
+	// C++: WorldDatabase.PExecute("UPDATE creature SET position_x = %.3f,
+	// ... orientation = %.3f, map = %u WHERE guid = %u", ...).
+	p := s.player
+	if _, err := db.ExecContext(ctx,
+		"UPDATE creature SET position_x = ?, position_y = ?, position_z = ?, orientation = ?, map = ? WHERE guid = ?",
+		p.X, p.Y, p.Z, p.Orientation, p.Map, guid); err != nil {
+		s.debug("npcbot move failed", "account", s.accountName, "entry", id, "error", err)
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("NpcBot %d (guid %d) was moved", id, guid))
+}
+
+// handleNpcBotDeleteCommand mirrors HandleNpcBotDeleteCommand
+// (botcommands.cpp:860): deletes the selected npcbot's spawn from the world
+// and the DB. The bridgeable effects are RemoveBot(BOT_REMOVE_DISMISS) →
+// owner=0 (BotDataMgr::UpdateNpcBotData, botmgr.cpp:820), UnEquipAll → the
+// equips column zeroing (NpcBotUpdateEquips), Creature::DeleteFromDB(spawnId)
+// → DELETE FROM creature, and UpdateNpcBotData(NPCBOT_UPDATE_ERASE) →
+// NpcBotUpdateErase. The live legs (CombatStop, botAI Reset/canUpdate=false,
+// AddObjectToRemoveList, the receiver choice for the unequipped gear) have no
+// Go bridge — Go keeps no live BotAI, inventory, or remove-list model.
+func (s *session) handleNpcBotDeleteCommand(ctx context.Context) {
+	if s.miscDeny(ctx, permissionCommandNPCBotDelete) {
+		return
+	}
+	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
+		s.sendSysMessage("NpcBots is unavailable.")
+		return
+	}
+	mgr := s.server.Features.NPCBots
+	// C++: chr->GetSelectedUnit(); null → the two usage lines.
+	if s.selection == 0 {
+		s.sendSysMessage(".npcbot delete")
+		s.sendSysMessage("Deletes selected npcbot spawn from world and DB")
+		return
+	}
+	// C++: ToCreature() null or !IsNPCBot() → "No npcbot selected".
+	switch uint16(s.selection >> 48) {
+	case 0xF130, 0xF140, 0xF150: // unit/pet/vehicle: the IsAnyTypeCreature set (mail.go:157)
+	default:
+		s.sendSysMessage("No npcbot selected")
+		return
+	}
+	entry := uint32((s.selection >> 24) & 0x00FFFFFF)
+	flagsExtra, ok := s.npcTemplateGate(ctx, entry)
+	if !ok || flagsExtra&npcbotCreatureFlagMask == 0 {
+		s.sendSysMessage("No npcbot selected")
+		return
+	}
+	data, ok := mgr.Get(entry)
+	if !ok {
+		s.sendSysMessage("No npcbot selected")
+		return
+	}
+	// C++: !bot->GetBotAI()->UnEquipAll(receiver) → the unequip-failure
+	// line. The only bridgeable failure is the DB write; Go has no
+	// per-item unequip model, so every item always unequips.
+	if err := mgr.Update(ctx, entry, NpcBotUpdateEquips, [BotInventorySize]uint32{}); err != nil {
+		s.debug("npcbot delete unequip failed", "account", s.accountName, "entry", entry, "error", err)
+		s.sendSysMessage(fmt.Sprintf("%s is unable to unequip some gear. Please remove equips before deleting bot!", s.npcbotTemplateName(ctx, entry)))
+		return
+	}
+	// C++: botowner->GetBotMgr()->RemoveBot(bot->GetGUID(),
+	// BOT_REMOVE_DISMISS) — the persisted leg is the owner=0 update
+	// (botmgr.cpp:820), the same arm the remove command uses.
+	if data.Owner != 0 {
+		if err := mgr.Update(ctx, entry, NpcBotUpdateOwner, uint32(0)); err != nil {
+			s.debug("npcbot delete dismiss failed", "account", s.accountName, "entry", entry, "error", err)
+		}
+	}
+	// C++: Creature::DeleteFromDB(bot->GetSpawnId()).
+	db := s.npcWorldDB()
+	if db != nil {
+		var guid uint32
+		if err := db.QueryRowContext(ctx, "SELECT guid FROM creature WHERE id = ? LIMIT 1", entry).Scan(&guid); err == nil {
+			if _, err := db.ExecContext(ctx, "DELETE FROM creature WHERE guid = ?", guid); err != nil {
+				s.debug("npcbot delete spawn failed", "account", s.accountName, "entry", entry, "error", err)
+			}
+		}
+	}
+	// C++: BotDataMgr::UpdateNpcBotData(bot->GetEntry(), NPCBOT_UPDATE_ERASE).
+	if err := mgr.Update(ctx, entry, NpcBotUpdateErase, nil); err != nil {
+		s.debug("npcbot delete erase failed", "account", s.accountName, "entry", entry, "error", err)
+		return
+	}
+	s.sendSysMessage("Npcbot successfully deleted")
 }
 
 // extractNpcBotCreatureKey mirrors ChatHandler::extractKeyFromLink(text,
