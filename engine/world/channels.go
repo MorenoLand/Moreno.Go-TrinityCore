@@ -712,8 +712,11 @@ func (s *session) handleChannelPassword(ctx context.Context, payload []byte) boo
 
 // handleChannelSetOwner processes CMSG_CHANNEL_SET_OWNER (0x09D).
 // Reference: Channel::SetOwner(player, newname) -> Channel::SetOwner(guid, true):
-// the new owner gains moderator and owner flags, everyone sees a mode change
-// broadcast followed by the owner-changed broadcast.
+// owner-only senders (not just moderators), the target must be on the channel
+// (cross-team targets are reported as not found unless both sides hold
+// RBAC_PERM_TWO_SIDE_INTERACTION_CHANNEL), and the new owner gains moderator
+// and owner flags while everyone sees a mode change broadcast followed by
+// the owner-changed broadcast.
 func (s *session) handleChannelSetOwner(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) == 0 {
 		return true
@@ -733,9 +736,9 @@ func (s *session) handleChannelSetOwner(ctx context.Context, payload []byte) boo
 		_ = s.sendChannelNotify(channelNotMemberNotice, name, nil)
 		return true
 	}
-	if !ch.isModerator(s.playerGUID) {
+	if ch.Owner != s.playerGUID {
 		s.server.channelsMu.Unlock()
-		_ = s.sendChannelNotify(channelNotModeratorNotice, name, nil)
+		_ = s.sendChannelNotify(channelNotOwnerNotice, name, nil)
 		return true
 	}
 	target := ch.findMemberByName(targetName)
@@ -744,8 +747,12 @@ func (s *session) handleChannelSetOwner(ctx context.Context, payload []byte) boo
 		_ = s.sendChannelNotify(channelPlayerNotFoundNotice, name, &channelNotifyName{Name: targetName})
 		return true
 	}
-	if target == s {
+	// Reference: cross-team targets are reported as not found unless both
+	// sides hold RBAC_PERM_TWO_SIDE_INTERACTION_CHANNEL.
+	if playerTeam(s.player.Race) != playerTeam(target.player.Race) &&
+		!(s.twoSideChannelInteraction() && target.twoSideChannelInteraction()) {
 		s.server.channelsMu.Unlock()
+		_ = s.sendChannelNotify(channelPlayerNotFoundNotice, name, &channelNotifyName{Name: targetName})
 		return true
 	}
 	oldFlags := ch.memberFlags(target.playerGUID)
@@ -792,8 +799,10 @@ func (s *session) handleChannelOwner(ctx context.Context, payload []byte) bool {
 // channelSetMode implements Channel::SetMode for both the moderator family
 // (CMSG_CHANNEL_MODERATOR/UNMODERATOR) and the mute family
 // (CMSG_CHANNEL_MUTE/UNMUTE): moderator-only senders, target must be on the
-// channel, the owner cannot be demoted or muted by anyone else, and the change
-// is broadcast as a mode change with old and new member flags.
+// channel (cross-team targets are reported as not found unless both sides
+// hold RBAC_PERM_TWO_SIDE_INTERACTION_CHANNEL), the owner cannot be demoted
+// or muted by anyone else, and the change is broadcast as a mode change with
+// old and new member flags.
 func (s *session) channelSetMode(payload []byte, moderator, set bool) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) == 0 {
 		return true
@@ -825,6 +834,14 @@ func (s *session) channelSetMode(payload []byte, moderator, set bool) bool {
 	}
 	target := ch.findMemberByName(targetName)
 	if target == nil {
+		s.server.channelsMu.Unlock()
+		_ = s.sendChannelNotify(channelPlayerNotFoundNotice, name, &channelNotifyName{Name: targetName})
+		return true
+	}
+	// Reference: cross-team targets are reported as not found unless both
+	// sides hold RBAC_PERM_TWO_SIDE_INTERACTION_CHANNEL.
+	if playerTeam(s.player.Race) != playerTeam(target.player.Race) &&
+		!(s.twoSideChannelInteraction() && target.twoSideChannelInteraction()) {
 		s.server.channelsMu.Unlock()
 		_ = s.sendChannelNotify(channelPlayerNotFoundNotice, name, &channelNotifyName{Name: targetName})
 		return true
@@ -881,8 +898,10 @@ func (s *session) handleChannelUnmute(ctx context.Context, payload []byte) bool 
 
 // handleChannelInvite processes CMSG_CHANNEL_INVITE (0x0A3).
 // Reference: Channel::Invite - member guard, target lookup, banned target,
-// wrong faction, already-member, then the invite notice to the target and the
-// player-invited notice back to the inviter.
+// wrong faction (reported before the already-member check, and gated on
+// RBAC_PERM_TWO_SIDE_INTERACTION_CHANNEL for both sides), already-member,
+// then the invite notice to the target (skipped when the target ignored the
+// inviter) and the player-invited notice back to the inviter.
 func (s *session) handleChannelInvite(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) == 0 {
 		return true
@@ -928,18 +947,24 @@ func (s *session) handleChannelInvite(ctx context.Context, payload []byte) bool 
 		_ = s.sendChannelNotify(channelPlayerInviteBannedNot, name, &channelNotifyName{Name: targetName})
 		return true
 	}
-	if _, on := ch.Members[target]; on {
-		s.server.channelsMu.RUnlock()
-		_ = s.sendChannelNotify(channelAlreadyMemberNotice, name, &channelNotifyGUID{GUID: target.playerGUID})
-		return true
-	}
-	sameTeam := playerTeam(s.player.Race) == playerTeam(target.player.Race)
+	_, alreadyMember := ch.Members[target]
 	s.server.channelsMu.RUnlock()
-	if !sameTeam && !s.twoSideChannelInteraction() {
+	// Reference: the wrong-faction check runs before the already-member check
+	// and requires RBAC_PERM_TWO_SIDE_INTERACTION_CHANNEL on both sides.
+	if playerTeam(s.player.Race) != playerTeam(target.player.Race) &&
+		!(s.twoSideChannelInteraction() && target.twoSideChannelInteraction()) {
 		_ = s.sendChannelNotify(channelInviteWrongFactionNot, name, nil)
 		return true
 	}
-	_ = target.sendChannelNotify(channelInviteNotice, name, &channelNotifyGUID{GUID: s.playerGUID})
+	if alreadyMember {
+		_ = s.sendChannelNotify(channelAlreadyMemberNotice, name, &channelNotifyGUID{GUID: target.playerGUID})
+		return true
+	}
+	// Reference: the invite notice is withheld when the target ignored the
+	// inviter; the inviter still sees the player-invited notice.
+	if !s.server.chatIgnoredBy(target.playerGUID, s.playerGUID) {
+		_ = target.sendChannelNotify(channelInviteNotice, name, &channelNotifyGUID{GUID: s.playerGUID})
+	}
 	_ = s.sendChannelNotify(channelPlayerInvitedNotice, name, &channelNotifyName{Name: targetName})
 	return true
 }
