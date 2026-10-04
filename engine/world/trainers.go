@@ -22,7 +22,7 @@ type trainerSpellRecord struct {
 	ReqSpell3     uint32
 }
 
-const unitNPCFlagTrainer uint32 = 0x00000070
+const unitNPCFlagTrainer uint32 = 0x00000010 // C++ UNIT_NPC_FLAG_TRAINER (UnitDefines.h:190); HandleTrainerListOpcode/HandleTrainerBuySpellOpcode pass exactly this mask, not the 0x20/0x40 class/profession variants
 
 func (s *session) handleTrainerList(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
@@ -54,6 +54,10 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 		spawnGUID := uint32(trainerGUID & 0x00FFFFFF)
 		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&creatureEntry)
 	}
+
+	// C++ Trainer::SendSpells / Trainer::TeachSpell: MoneyCost is scaled by the
+	// reputation discount (int32(MoneyCost * reputationDiscount), truncation)
+	discount := s.vendorReputationPriceDiscount(ctx, creatureEntry)
 
 	var spells []trainerSpellRecord
 	greeting := "Hello! Ready for some training?"
@@ -121,11 +125,17 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 				continue
 			}
 			reqAbs := []uint32{raw.reqAb1, raw.reqAb2, raw.reqAb3}
-			serviceState := s.getTrainerSpellState(raw.spellID, raw.reqLevel, raw.reqSkill, raw.reqSkillValue, reqAbs)
+			serviceState := s.getTrainerSpellState(ctx, raw.spellID, raw.reqLevel, raw.reqSkill, raw.reqSkillValue, reqAbs)
+			var primaryProf uint32
+			if s.trainerSpellPrimaryProfessionFirstRank(raw.spellID) {
+				primaryProf = 1
+			}
 			spells = append(spells, trainerSpellRecord{
 				SpellID:       raw.spellID,
 				ServiceState:  serviceState,
-				Cost:          raw.moneyCost,
+				Cost:          uint32(float32(raw.moneyCost) * discount),
+				TalentCost:    0,
+				PrimaryProf:   primaryProf,
 				ReqLevel:      raw.reqLevel,
 				ReqSkill:      raw.reqSkill,
 				ReqSkillValue: raw.reqSkillValue,
@@ -170,11 +180,17 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 			if !s.isSpellFitByClassAndRace(raw.spellID) {
 				continue
 			}
-			serviceState := s.getTrainerSpellState(raw.spellID, raw.reqLevel, raw.reqSkill, raw.reqSkillValue, nil)
+			serviceState := s.getTrainerSpellState(ctx, raw.spellID, raw.reqLevel, raw.reqSkill, raw.reqSkillValue, nil)
+			var primaryProf uint32
+			if s.trainerSpellPrimaryProfessionFirstRank(raw.spellID) {
+				primaryProf = 1
+			}
 			spells = append(spells, trainerSpellRecord{
 				SpellID:       raw.spellID,
 				ServiceState:  serviceState,
-				Cost:          raw.moneyCost,
+				Cost:          uint32(float32(raw.moneyCost) * discount),
+				TalentCost:    0,
+				PrimaryProf:   primaryProf,
 				ReqLevel:      raw.reqLevel,
 				ReqSkill:      raw.reqSkill,
 				ReqSkillValue: raw.reqSkillValue,
@@ -240,11 +256,17 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 			}
 			trainerType = raw.tType
 			reqAbs := []uint32{raw.reqAb1, raw.reqAb2, raw.reqAb3}
-			serviceState := s.getTrainerSpellState(raw.spellID, raw.reqLevel, raw.reqSkill, raw.reqSkillValue, reqAbs)
+			serviceState := s.getTrainerSpellState(ctx, raw.spellID, raw.reqLevel, raw.reqSkill, raw.reqSkillValue, reqAbs)
+			var primaryProf uint32
+			if s.trainerSpellPrimaryProfessionFirstRank(raw.spellID) {
+				primaryProf = 1
+			}
 			spells = append(spells, trainerSpellRecord{
 				SpellID:       raw.spellID,
 				ServiceState:  serviceState,
-				Cost:          raw.moneyCost,
+				Cost:          uint32(float32(raw.moneyCost) * discount),
+				TalentCost:    0,
+				PrimaryProf:   primaryProf,
 				ReqLevel:      raw.reqLevel,
 				ReqSkill:      raw.reqSkill,
 				ReqSkillValue: raw.reqSkillValue,
@@ -292,7 +314,7 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		return false
 	}
 	if s.hasLearnedSpell(spellID) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 0), true) // AlreadyKnown = 0
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 2), true) // C++ FailReason: Known -> CanTeachSpell false -> NotEnoughSkill
 		return true
 	}
 	wdb := s.server.WorldStore.DB
@@ -325,8 +347,8 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 	if err == nil {
 		foundTrainer = true
 		if !s.isTrainerValidForPlayer(uint32(tType), uint32(tReq)) {
-			_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 2), true)
-			return true
+			s.debug("trainer not valid for player", "account", s.accountName, "trainer", trainerGUID, "type", tType, "req", tReq)
+			return true // C++ Trainer::TeachSpell returns silently here, no failure packet
 		}
 	}
 
@@ -370,10 +392,14 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 	}
 
 	if !foundSpell {
-		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 2), true)
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 0), true) // C++ FailReason::Unavailable
 		s.debug("trainer spell not found", "account", s.accountName, "trainer", trainerGUID, "entry", creatureEntry, "spell", spellID)
 		return true
 	}
+
+	// C++ Trainer::TeachSpell: the charged cost is the reputation-discounted cost
+	discount := s.vendorReputationPriceDiscount(ctx, creatureEntry)
+	moneyCost = int64(float32(uint32(moneyCost)) * discount)
 
 	// 3. Class & Race check
 	if !s.isSpellFitByClassAndRace(spellID) {
@@ -381,15 +407,23 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		return true
 	}
 
-	// 4. Validate TrainerSpellState (must be 0 / Available)
+	// 4. Validate TrainerSpellState (must be 0 / Available); any other state ->
+	// C++ FailReason::NotEnoughSkill (CanTeachSpell false), including Known
 	reqAbilities := []uint32{uint32(reqAb1), uint32(reqAb2), uint32(reqAb3)}
-	state := s.getTrainerSpellState(spellID, uint8(reqLevel), uint32(reqSkill), uint32(reqSkillValue), reqAbilities)
+	state := s.getTrainerSpellState(ctx, spellID, uint8(reqLevel), uint32(reqSkill), uint32(reqSkillValue), reqAbilities)
 	if state != 0 {
-		reason := uint32(2) // NotEnoughSkill = 2
-		if state == 2 {
-			reason = 0 // AlreadyKnown = 0
-		}
-		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, reason), true)
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 2), true)
+		return true
+	}
+
+	// 4b. Primary-profession cap (C++ Trainer::CanTeachSpell: LEARN_SPELL trigger that
+	// is a primary-profession first rank requires a free primary profession point)
+	maxPrimary := uint32(2)
+	if s.server != nil {
+		maxPrimary = s.server.Config.MaxPrimaryTradeSkill
+	}
+	if s.trainerSpellPrimaryProfessionFirstRank(spellID) && uint32(s.learnedPrimaryProfessionCount()) >= maxPrimary {
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 2), true)
 		return true
 	}
 
@@ -797,42 +831,167 @@ func (s *session) isSpellFitByClassAndRace(spellID uint32) bool {
 		if entry.ClassMask != 0 && classMask != 0 && (entry.ClassMask&classMask) == 0 {
 			continue
 		}
+		// skip wrong class and race skill saved in SkillRaceClassInfo.dbc (Player.cpp:23713)
+		if s.server != nil && s.server.Data != nil {
+			if _, found, err := s.server.Data.SkillRaceClassInfo(entry.SkillLine, s.player.Race, s.player.Class); err == nil && !found {
+				continue
+			}
+		}
 		return true
 	}
 	return false
 }
 
-func (s *session) getTrainerSpellState(spellID uint32, reqLevel uint8, reqSkill, reqSkillValue uint32, reqAbilities []uint32) uint8 {
+const spellEffectSkill = 118           // SPELL_EFFECT_SKILL (SharedDefines.h:929)
+const skillLineCategoryProfession = 11 // SKILL_CATEGORY_PROFESSION (SharedDefines.h:3085)
+
+// isPrimaryProfessionSkill mirrors SpellMgr::IsPrimaryProfessionSkill: the skill
+// line's category is SKILL_CATEGORY_PROFESSION.
+func (s *session) isPrimaryProfessionSkill(skillID uint32) bool {
+	if s.server == nil || s.server.Data == nil || skillID == 0 {
+		return false
+	}
+	cat, ok, err := s.server.Data.SkillLineCategory(skillID)
+	return err == nil && ok && cat == skillLineCategoryProfession
+}
+
+// isPrimaryProfessionFirstRank mirrors SpellInfo::IsPrimaryProfessionFirstRank:
+// the spell grants a primary profession skill and is rank 1, i.e. it has no
+// previous rank in its spell_ranks chain (SpellInfo::GetRank returns 1 exactly
+// when there is no chain entry).
+func (s *session) isPrimaryProfessionFirstRank(spellID uint32) bool {
+	if s.server == nil || s.server.Data == nil || spellID == 0 {
+		return false
+	}
+	sp, ok, err := s.server.Data.Spell(spellID)
+	if err != nil || !ok {
+		return false
+	}
+	primary := false
+	for _, eff := range sp.Effects {
+		if eff.Effect == spellEffectSkill && eff.MiscValue > 0 && s.isPrimaryProfessionSkill(uint32(eff.MiscValue)) {
+			primary = true
+			break
+		}
+	}
+	return primary && s.server.getPrevSpellInChain(spellID) == 0
+}
+
+// trainerSpellPrimaryProfessionFirstRank mirrors the primaryProfessionFirstRank
+// arm of Trainer::SendSpells: the teaching spell carries a
+// SPELL_EFFECT_LEARN_SPELL effect whose taught spell is a primary-profession
+// first rank (drives TrainerListSpell.PointCost[1]).
+func (s *session) trainerSpellPrimaryProfessionFirstRank(spellID uint32) bool {
+	if s.server == nil || s.server.Data == nil || spellID == 0 {
+		return false
+	}
+	sp, ok, err := s.server.Data.Spell(spellID)
+	if err != nil || !ok {
+		return false
+	}
+	for _, eff := range sp.Effects {
+		if eff.Effect == spellEffectLearnSpell && eff.TriggerSpell > 0 && s.isPrimaryProfessionFirstRank(eff.TriggerSpell) {
+			return true
+		}
+	}
+	return false
+}
+
+// learnedPrimaryProfessionCount counts the player's learned primary-profession
+// first-rank spells; free points = MaxPrimaryTradeSkill - this, the Go analog
+// of C++ PLAYER_CHARACTER_POINTS2 (which Go never decrements at runtime).
+func (s *session) learnedPrimaryProfessionCount() int {
+	if s.player == nil {
+		return 0
+	}
+	count := 0
+	for _, sp := range s.player.Spells {
+		if s.isPrimaryProfessionFirstRank(sp.ID) {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *session) getTrainerSpellState(ctx context.Context, spellID uint32, reqLevel uint8, reqSkill, reqSkillValue uint32, reqAbilities []uint32) uint8 {
 	if s.player == nil {
 		return 1 // Unavailable
 	}
 
-	// 1. Already known: Green (2)
+	// Already known
 	if s.hasLearnedSpell(spellID) {
-		return 2
+		return 2 // Known
 	}
 
-	// 2. Check previous rank in chain (TrinityCore: GetPrevSpellInChain)
-	if s.server != nil {
-		if prevSpell := s.server.getPrevSpellInChain(spellID); prevSpell > 0 && !s.hasLearnedSpell(prevSpell) {
-			return 1 // Unavailable
-		}
-	}
-
-	// 3. Check player level
-	if s.player.Level < reqLevel {
+	// Check race/class requirement (C++ Trainer::GetSpellState includes this arm)
+	if !s.isSpellFitByClassAndRace(spellID) {
 		return 1 // Unavailable
 	}
 
-	// 4. Check required skill
+	// Check skill requirement (C++ uses GetBaseSkillValue; Go's Value carries no
+	// bonus model, so the loaded value is the base value)
 	if reqSkill > 0 && s.getSkillValue(reqSkill) < reqSkillValue {
 		return 1 // Unavailable
 	}
 
-	// 5. Check required abilities
+	// Check required abilities
 	for _, reqAb := range reqAbilities {
 		if reqAb > 0 && !s.hasLearnedSpell(reqAb) {
 			return 1 // Unavailable
+		}
+	}
+
+	// Check level requirement
+	if s.player.Level < reqLevel {
+		return 1 // Unavailable
+	}
+
+	// Check ranks: for spells with a SPELL_EFFECT_LEARN_SPELL effect the chain is
+	// walked on the taught (trigger) spell, not on the teaching spell
+	hasLearnSpellEffect := false
+	knowsAllLearnedSpells := true
+	if s.server != nil && s.server.Data != nil {
+		if sp, ok, err := s.server.Data.Spell(spellID); err == nil && ok {
+			for _, eff := range sp.Effects {
+				if eff.Effect != spellEffectLearnSpell {
+					continue
+				}
+				hasLearnSpellEffect = true
+				if trig := eff.TriggerSpell; trig > 0 && !s.hasLearnedSpell(trig) {
+					knowsAllLearnedSpells = false
+				}
+				if prev := s.server.getPrevSpellInChain(eff.TriggerSpell); prev > 0 && !s.hasLearnedSpell(prev) {
+					return 1 // Unavailable
+				}
+			}
+		}
+	}
+	if !hasLearnSpellEffect {
+		if s.server != nil {
+			if prev := s.server.getPrevSpellInChain(spellID); prev > 0 && !s.hasLearnedSpell(prev) {
+				return 1 // Unavailable
+			}
+		}
+	} else if knowsAllLearnedSpells {
+		return 2 // Known
+	}
+
+	// Check additional spell requirement (C++ SpellMgr::GetSpellsRequiredForSpellBounds)
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT req_spell FROM spell_required_spell WHERE spell_id = ?", spellID)
+		if err == nil {
+			unavailable := false
+			for rows.Next() {
+				var req uint32
+				if scanErr := rows.Scan(&req); scanErr == nil && req > 0 && !s.hasLearnedSpell(req) {
+					unavailable = true
+					break
+				}
+			}
+			rows.Close()
+			if unavailable {
+				return 1 // Unavailable
+			}
 		}
 	}
 
