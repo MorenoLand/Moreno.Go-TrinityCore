@@ -35,6 +35,19 @@ func (s *session) handleBattlefieldList(ctx context.Context, payload []byte) boo
 	}
 	fromWhere, _ := r.ReadU8()
 
+	// sBattlemasterListStore.LookupEntry(bgTypeId) (BattleGroundHandler.cpp:347):
+	// an invalid bgTypeId is answered with silence.
+	if s.server == nil || s.server.Data == nil {
+		return true
+	}
+	file, fileErr := s.server.Data.File("BattlemasterList")
+	if fileErr != nil {
+		return true
+	}
+	if _, found := file.Find(bgTypeID); !found {
+		return true
+	}
+
 	return s.sendBattlefieldList(0, fromWhere, bgTypeID)
 }
 
