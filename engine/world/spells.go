@@ -5806,6 +5806,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				for _, effectTarget := range hitTargets {
 					s.energizeEffectTarget(effCtx, spell, spellID, eff, effectTarget)
 				}
+			case spellEffectEnergizePct:
+				// Spell::EffectEnergizePct (SpellEffects.cpp:1847-1873) — audited;
+				// the per-target legs ride energizePctEffectTarget. Already-covered
+				// legs: the effectHandleMode gate (1848-1849) is structural (this
+				// dispatch is the HIT_TARGET phase, the combo-point arm's
+				// convention); the null-caster arm (1851-1852) is vacuous (the
+				// caster is always the session player); the null-target and
+				// !IsAlive gates ride the target-resolution legs of
+				// energizePctEffectTarget and applySpellEnergize/adjustSpellPower
+				// below. Documented no-bridge: the Unit::EnergizeBySpell
+				// SendEnergizeSpellLog (SMSG_SPELLENERGIZELOG — no Go sender)
+				// and the ForwardThreatForAssistingMe damage/2 threat forward
+				// (Unit.cpp:6590-6596 — no energize-threat model), same as the
+				// spellEffectEnergize arm note.
+				for _, effectTarget := range hitTargets {
+					s.energizePctEffectTarget(effCtx, spell, eff, effectTarget)
+				}
 			case spellEffectPowerBurn:
 				amount := eff.BasePoints + 1
 				for _, effectTarget := range hitTargets {
@@ -7287,6 +7304,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// per-spell adjustments) ride energizeEffectTarget on the
 			// triggered path too.
 			s.energizeEffectTarget(ctx, spell, spellID, eff, targetGUID)
+		} else if eff.Effect == spellEffectEnergizePct {
+			// Spell::EffectEnergizePct per-target legs ride energizePctEffectTarget
+			// on the triggered path too.
+			s.energizePctEffectTarget(ctx, spell, eff, targetGUID)
 		} else if eff.Effect == spellEffectPowerBurn {
 			if burned := s.applySpellPowerBurn(ctx, targetGUID, eff.MiscValue, eff.BasePoints+1, spellID); burned > 0 {
 				s.executeSpellDamage(ctx, targetGUID, spellID, effectValueMultiplied(burned, eff.Amplitude), effectIndex)
@@ -7476,6 +7497,55 @@ func energizeCreateMana(target *session) uint32 {
 
 func (s *session) applySpellEnergize(ctx context.Context, targetGUID uint64, powerType int32, amount int32) {
 	s.adjustSpellPower(ctx, targetGUID, powerType, int64(amount))
+}
+
+// energizePctEffectTarget mirrors the per-target legs of
+// Spell::EffectEnergizePct (SpellEffects.cpp:1847-1873): the
+// power-type-mismatch gate and the pct-of-max-power gain. The
+// HIT_TARGET mode (1848-1849), null-caster (1851-1852), null-target,
+// and !IsAlive gates are covered by the resolution legs below and the
+// applySpellEnergize/adjustSpellPower gates; the power-range gate
+// (1857-1858) is checked up front and re-covered by adjustSpellPower.
+// The gain is CalculatePct(maxPower, damage) — the int64 arithmetic of
+// Util.h — over the target's max power; a zero max power yields no gain
+// (1866-1867), and a non-positive gain lands on adjustSpellPower's
+// delta==0 skip. The ModifyPower tail of Unit::EnergizeBySpell rides
+// applySpellEnergize.
+func (s *session) energizePctEffectTarget(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, effectTarget uint64) {
+	power := eff.MiscValue
+	if power < 0 || power >= 7 {
+		return
+	}
+	// SpellEffects.cpp:1863-1865: a player target whose current power type
+	// differs from the energized power gets nothing, unless the spell
+	// carries SPELL_ATTR7_CAN_RESTORE_SECONDARY_POWER. Unlike
+	// EffectEnergize there is no potion-family exception.
+	if tgt := s.spellPowerTarget(effectTarget); tgt != nil && tgt.player != nil &&
+		playerPowerType(tgt.player) != uint8(power) &&
+		spell.AttributesEx7&spellAttr7CanRestoreSecondaryPower == 0 {
+		return
+	}
+	var maxPower uint32
+	if target := s.spellPowerTarget(effectTarget); target != nil && target.player != nil {
+		if target.player.Health == 0 {
+			return
+		}
+		maxPower = target.player.MaxPowers[uint32(power)]
+	} else if s != nil && s.player != nil && s.server != nil && effectTarget != 0 && effectTarget != s.playerGUID {
+		s.server.motionMu.Lock()
+		if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, effectTarget); motion != nil && motion.PetID != 0 && motion.Health > 0 {
+			maxPower = motion.MaxPowers[uint32(power)]
+		}
+		s.server.motionMu.Unlock()
+	}
+	if maxPower == 0 {
+		return
+	}
+	gain := int32(int64(maxPower) * int64(eff.BasePoints+1) / 100)
+	if gain <= 0 {
+		return
+	}
+	s.applySpellEnergize(ctx, effectTarget, power, gain)
 }
 
 // effectValueMultiplied applies the effect's value multiplier
