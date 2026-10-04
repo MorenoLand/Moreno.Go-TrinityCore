@@ -1046,6 +1046,26 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "global cooldown active")
 		return true
 	}
+	// CheckCast allow-only-ability gate (Spell::CheckCast, Spell.cpp:5193-5195):
+	// SPELL_AURA_ALLOW_ONLY_ABILITY (Bladestorm, Killing Spree —
+	// AuraEffect::HandleAuraAllowOnlyAbility, SpellAuraEffects.cpp:2423-2441)
+	// sets PLAYER_FLAGS PLAYER_ALLOW_ONLY_ABILITY (0x00800000, Player.h:356)
+	// while the aura is up, and CheckCast lets only triggered casts through
+	// in that state — a client-initiated cast reports
+	// SPELL_FAILED_SPELL_IN_PROGRESS. The !IsPassive wrapper and the
+	// TYPEID_PLAYER arm are vacuous here (passive spells are rejected at the
+	// lookup above; this is the client-initiated path only), and the
+	// TRIGGERED_IGNORE_CASTER_AURASTATE suppression is structural — this path
+	// never carries triggered flags. C++ relative order: first arm inside the
+	// cooldown block, ahead of the SpellHistory::IsReady loop below.
+	// Delta: the aura-side setter has no Go bridge yet, so the flag is never
+	// set today and the gate is live but vacuous — it activates when the aura
+	// bridge lands.
+	if s.player.PlayerFlags&playerFlagAllowOnlyAbility != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 105), true) // SPELL_FAILED_SPELL_IN_PROGRESS = 105
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "allow-only-ability flag set")
+		return true
+	}
 	for _, cd := range s.player.Cooldowns {
 		if cd.Spell == spellID && cd.End > nowUnix {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
