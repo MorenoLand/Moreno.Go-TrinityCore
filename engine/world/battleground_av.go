@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -31,6 +32,11 @@ const (
 	AVRepCaptain        uint32 = 125 // BG_AV_REP_CAPTAIN
 	AVHonorKillsTower   uint32 = 3   // BG_AV_KILL_TOWER
 	AVRepTower          uint32 = 12  // BG_AV_REP_TOWER
+
+	// Captain buff spells mirroring BG_AV_BUFF (BattlegroundAV.h:1330-1334).
+	AVBuffArmor    uint32 = 21163 // AV_BUFF_ARMOR
+	AVBuffACaptain uint32 = 23693 // AV_BUFF_A_CAPTAIN: the buff the Alliance captain casts
+	AVBuffHCaptain uint32 = 22751 // AV_BUFF_H_CAPTAIN: the buff the Horde captain casts
 
 	// Teams
 	AVTeamNeutral  uint8 = 0
@@ -192,6 +198,7 @@ type avBattlegroundState struct {
 	HordeReinforcements    uint32
 	AllianceCaptainAlive   bool
 	HordeCaptainAlive      bool
+	CaptainBuffTimerMs     [2]int64 // == m_CaptainBuffTimer[2]: countdown-by-diff to the next team buff cast
 	Nodes                  [AVNodeMax]avNodeState
 	Mines                  [2]avMineState
 	CaptureDuration        time.Duration
@@ -820,8 +827,82 @@ func (s *Server) TickAVMines(av *avBattlegroundState, elapsedMs int64) {
 	}
 }
 
-// updateAVBattles ticks every live AV state, driving the mine reinforcement
-// tick and the mine neutral-reclaim timers. BattlegroundMgr::Update
+// tickAVCaptainBuffs mirrors the captain-buff arms of BattlegroundAV::PostUpdateImpl
+// (BattlegroundAV.cpp:367-388): while the captain lives, m_CaptainBuffTimer ticks
+// down; on expiry CastSpellOnTeam applies the captain buff to the whole team and the
+// timer rearms to 120000 + urand(0,4)*60000 ("2minutes (thats the duration of the
+// buff itself) + 0-4minutes"). C++ drives this from the per-BG Update on the
+// BattlegroundMgr 1s sweep; here it runs from updateAVBattles on the same 1s
+// cadence, ahead of the mine arms like the C++ arm order.
+func (s *Server) tickAVCaptainBuffs(av *avBattlegroundState, elapsedMs int64) {
+	if av == nil {
+		return
+	}
+	av.mu.Lock()
+	defer av.mu.Unlock()
+
+	if av.Winner >= 0 {
+		return
+	}
+
+	buffSpells := [2]uint32{AVBuffACaptain, AVBuffHCaptain}
+	for i := 0; i < 2; i++ {
+		alive := av.AllianceCaptainAlive
+		if i == 1 {
+			alive = av.HordeCaptainAlive
+		}
+		if !alive {
+			continue
+		}
+		if av.CaptainBuffTimerMs[i] > elapsedMs {
+			av.CaptainBuffTimerMs[i] -= elapsedMs
+			continue
+		}
+		s.applyAVTeamAura(av.MapID, uint32(i), buffSpells[i], 120000)
+		av.CaptainBuffTimerMs[i] = 120000 + int64(rand.Intn(5))*60000
+	}
+}
+
+// applyAVTeamAura applies an aura to every worldReady session on the AV map on the
+// given team (0 Alliance, 1 Horde): the Go analog of Battleground::CastSpellOnTeam's
+// per-team player loop (Battleground.cpp:619-624), using the same session selection
+// as rewardBGEndReputation.
+func (s *Server) applyAVTeamAura(mapID, team, spellID uint32, durationMs uint32) {
+	if s == nil {
+		return
+	}
+	s.sessionsMu.RLock()
+	var targets []*session
+	for sess := range s.sessions {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID && teamForRace(sess.player.Race) == team {
+			targets = append(targets, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range targets {
+		sess.applyAuraWithDuration(spellID, durationMs)
+	}
+}
+
+// handleAVPlayerLeave strips the AV armor/captain buffs when a player leaves the
+// battleground, mirroring BattlegroundAV::RemovePlayer (BattlegroundAV.cpp:497-504).
+func (s *Server) handleAVPlayerLeave(sess *session) {
+	if s == nil || sess == nil || sess.player == nil {
+		return
+	}
+	s.avMu.RLock()
+	av := s.avState[sess.player.Map]
+	s.avMu.RUnlock()
+	if av == nil {
+		return
+	}
+	sess.removeAura(AVBuffArmor)
+	sess.removeAura(AVBuffACaptain)
+	sess.removeAura(AVBuffHCaptain)
+}
+
+// updateAVBattles ticks every live AV state, driving the captain buff timers, the
+// mine reinforcement tick and the mine neutral-reclaim timers. BattlegroundMgr::Update
 // (BattlegroundMgr.cpp:94) sweeps all running instances with bg->Update(diff)
 // every BATTLEGROUND_OBJECTIVE_UPDATE_INTERVAL (BattlegroundMgr.h:38 = 1000ms);
 // the 1s gate here mirrors that cadence, like updateArenaBattles.
@@ -844,6 +925,7 @@ func (s *Server) updateAVBattles(now time.Time) {
 	}
 	s.avMu.RUnlock()
 	for _, av := range battles {
+		s.tickAVCaptainBuffs(av, elapsedMs)
 		s.TickAVMines(av, elapsedMs)
 	}
 }

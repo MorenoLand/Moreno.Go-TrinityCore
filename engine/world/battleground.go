@@ -679,6 +679,7 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte) bo
 		s.server.handleEOTSPlayerLeave(s)
 		s.server.handleSAPlayerLeave(s)
 		s.server.handleICPlayerLeave(s)
+		s.server.handleAVPlayerLeave(s)
 		s.server.handleArenaPlayerLeave(s)
 		s.server.handleWGPlayerLeave(s)
 	}
