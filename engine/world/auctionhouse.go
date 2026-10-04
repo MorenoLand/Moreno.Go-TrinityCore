@@ -142,6 +142,19 @@ func (s *session) handleAuctionHello(ctx context.Context, payload []byte) bool {
 	if !s.canInteractWithNPC(ctx, guid, uint64(unitNPCFlagAuctioneer)) {
 		return true
 	}
+	// C++ WorldSession::SendAuctionHello (AuctionHouseHandler.cpp:57-66):
+	// below CONFIG_AUCTION_LEVEL_REQ ("LevelReq.Auction", default 1,
+	// World.cpp:683) the LANG_AUCTION_REQ (6607) notification fires and the
+	// window never opens. (The faction->house-entry lookup and the
+	// feign-death strip have no Go model: the AH is house-agnostic.)
+	auctionLevelReq := uint32(1)
+	if s.server != nil {
+		auctionLevelReq = s.server.Config.AuctionLevelReq
+	}
+	if uint32(s.player.Level) < auctionLevelReq {
+		s.sendNotification(fmt.Sprintf("You must reach level %d to use the auction house.", auctionLevelReq))
+		return true
+	}
 	packet := protocol.NewBuffer(13)
 	packet.WriteU64(guid)
 	packet.WriteU32(defaultAuctionHouseID) // Neutral / Standard AH ID
