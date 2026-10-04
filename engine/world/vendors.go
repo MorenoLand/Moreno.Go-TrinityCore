@@ -213,7 +213,7 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 			ExtendedCost:  uint32(extCost),
 		})
 	}
-	packet := protocol.NewBuffer(8 + 1 + len(items)*32)
+	packet := protocol.NewBuffer(8 + 2 + len(items)*32)
 	packet.WriteU64(vendorGUID)
 	packet.WriteU8(uint8(len(items)))
 	for _, it := range items {
@@ -225,6 +225,11 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 		packet.WriteU32(it.MaxDurability)
 		packet.WriteU32(it.BuyCount)
 		packet.WriteU32(it.ExtendedCost)
+	}
+	if len(items) == 0 {
+		// C++ SendListInventory (ItemHandler.cpp:633-640, 695-699) appends a uint8 error
+		// code ("Vendor has no inventory") after a zero count
+		packet.WriteU8(0)
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_LIST_INVENTORY), packet.Bytes(), true)
 	s.debug("vendor list sent", "account", s.accountName, "vendor", vendorGUID, "items", len(items))
