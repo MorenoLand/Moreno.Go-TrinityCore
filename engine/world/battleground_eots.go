@@ -39,6 +39,30 @@ const (
 	EOTSWorldStateBasesAlliance     uint32 = 2752
 	EOTSWorldStateBasesHorde        uint32 = 2753
 	EOTSWorldStateFlagState         uint32 = 2757
+	EOTSWorldStateFlagStateAlliance uint32 = 2769
+	EOTSWorldStateFlagStateHorde    uint32 = 2770
+)
+
+// Flag lifecycle timings from BattlegroundEY.h / BattlegroundEY.cpp:
+// BG_EY_FLAG_RESPAWN_TIME = 8s drives both the post-capture respawn
+// (EventPlayerCapturedFlag) and the dropped-flag return
+// (EventPlayerDroppedFlag's m_FlagsTimer arm).
+const EOTSFlagRespawnTime = 8 * time.Second
+
+// PostUpdateImpl resource-tick cadence: BG_EY_FPOINTS_TICK_TIME = 2s
+// (BattlegroundEY.h:29).
+const eotsPointTickIntervalMs int64 = 2000
+
+// Honor-score tic threshold: BG_EY_NotEYWeekendHonorTicks = 260
+// (BattlegroundEY.h:220), the non-weekend Startup value; Go has no
+// BG-weekend model (established convention).
+const eotsNotWeekendHonorTics uint32 = 260
+
+// Per-team flag-state values broadcast on 2769/2770
+// (BG_EY_FLAG_STATE_*, BattlegroundEY.h:231-234).
+const (
+	eotsFlagStateWaitRespawn uint32 = 1
+	eotsFlagStateOnPlayer    uint32 = 2
 )
 
 var eotsTowerNames = [EOTSTowerMax]string{
@@ -108,7 +132,9 @@ type eotsBattlegroundState struct {
 	FlagDroppedGUID     uint64
 	FlagReturnTimer     *time.Timer
 	FlagRespawnTimer    *time.Timer
-	Winner              int8 // -1 = ongoing, 0 = Alliance, 1 = Horde
+	PointTickAccumMs    int64     // m_PointAddingTimer countdown (PostUpdateImpl arm)
+	HonorTicsAccum      [2]uint32 // m_HonorScoreTics per team (AddPoints arm)
+	Winner              int8      // -1 = ongoing, 0 = Alliance, 1 = Horde
 	CenterX             float32
 	CenterY             float32
 	CenterZ             float32
@@ -217,7 +243,16 @@ func (s *Server) handleEOTSGameObjectUse(ctx context.Context, sess *session, gui
 		}
 
 		sess.applyAura(EOTSSpellNetherstormFlag)
+		// Reference: BattlegroundEY::EventPlayerClickedOnFlag
+		// (BattlegroundEY.cpp:642) removes ENTER_PVP_COMBAT auras on pickup
+		// and flags the picker's team worldstate ON_PLAYER.
+		sess.removeAurasWithInterruptFlags(auraInterruptFlagEnterPvPCombat)
 		s.broadcastWorldState(eots.MapID, EOTSWorldStateFlagState, EOTSFlagStateCarried)
+		if team == 0 {
+			s.broadcastWorldState(eots.MapID, EOTSWorldStateFlagStateAlliance, eotsFlagStateOnPlayer)
+		} else {
+			s.broadcastWorldState(eots.MapID, EOTSWorldStateFlagStateHorde, eotsFlagStateOnPlayer)
+		}
 
 		teamName := "Alliance"
 		if team == 1 {
@@ -243,7 +278,15 @@ func (s *Server) handleEOTSGameObjectUse(ctx context.Context, sess *session, gui
 		eots.FlagState = EOTSFlagStateCarried
 		eots.FlagCarrierGUID = sess.playerGUID
 		sess.applyAura(EOTSSpellNetherstormFlag)
+		// Same EventPlayerClickedOnFlag arm as the center pickup:
+		// ENTER_PVP_COMBAT strip + picker's team flag-state.
+		sess.removeAurasWithInterruptFlags(auraInterruptFlagEnterPvPCombat)
 		s.broadcastWorldState(eots.MapID, EOTSWorldStateFlagState, EOTSFlagStateCarried)
+		if team == 0 {
+			s.broadcastWorldState(eots.MapID, EOTSWorldStateFlagStateAlliance, eotsFlagStateOnPlayer)
+		} else {
+			s.broadcastWorldState(eots.MapID, EOTSWorldStateFlagStateHorde, eotsFlagStateOnPlayer)
+		}
 
 		teamName := "Alliance"
 		if team == 1 {
@@ -310,6 +353,9 @@ func (s *Server) handleEOTSGameObjectUse(ctx context.Context, sess *session, gui
 func (s *Server) captureEOTSFlag(eots *eotsBattlegroundState, sess *session, team uint32) {
 	s.creditBGObjectiveCapture(sess.playerGUID, 0xFFFFFFFF) // flag capture objective
 	sess.removeAura(EOTSSpellNetherstormFlag)
+	// Reference: BattlegroundEY::EventPlayerCapturedFlag
+	// (BattlegroundEY.cpp:784) strips ENTER_PVP_COMBAT auras on capture too.
+	sess.removeAurasWithInterruptFlags(auraInterruptFlagEnterPvPCombat)
 	eots.FlagCarrierGUID = 0
 	eots.FlagState = EOTSFlagStateAtCenter
 
@@ -321,35 +367,23 @@ func (s *Server) captureEOTSFlag(eots *eotsBattlegroundState, sess *session, tea
 		towersHeld = 4
 	}
 
-	points := eotsFlagCapturePoints[towersHeld]
+	// Reference: EventPlayerCapturedFlag awards AddPoints(team,
+	// BG_EY_FlagPoints[m_TeamPointsCount-1]) when the team holds a tower.
+	s.addEOTSResources(eots, team, eotsFlagCapturePoints[towersHeld])
+
 	teamName := "Alliance"
-	if team == 0 {
-		eots.AllianceResources += points
-		if eots.AllianceResources >= eots.MaxResources {
-			eots.AllianceResources = eots.MaxResources
-			eots.Winner = 0
-			s.announceEOTSVictory(eots.MapID, 0)
-		}
-		s.broadcastWorldState(eots.MapID, EOTSWorldStateAllianceResources, eots.AllianceResources)
-	} else {
+	if team == 1 {
 		teamName = "Horde"
-		eots.HordeResources += points
-		if eots.HordeResources >= eots.MaxResources {
-			eots.HordeResources = eots.MaxResources
-			eots.Winner = 1
-			s.announceEOTSVictory(eots.MapID, 1)
-		}
-		s.broadcastWorldState(eots.MapID, EOTSWorldStateHordeResources, eots.HordeResources)
 	}
 
 	s.broadcastWorldState(eots.MapID, EOTSWorldStateFlagState, EOTSFlagStateAtCenter)
-	s.broadcastBattlegroundMessage(eots.MapID, fmt.Sprintf("%s captured the Netherstorm Flag for the %s (+%d resources)!", sess.player.Name, teamName, points))
+	s.broadcastBattlegroundMessage(eots.MapID, fmt.Sprintf("%s captured the Netherstorm Flag for the %s (+%d resources)!", sess.player.Name, teamName, eotsFlagCapturePoints[towersHeld]))
 
-	// Respawn central flag after 10 seconds
+	// Respawn central flag after BG_EY_FLAG_RESPAWN_TIME (8s)
 	if eots.FlagRespawnTimer != nil {
 		eots.FlagRespawnTimer.Stop()
 	}
-	eots.FlagRespawnTimer = time.AfterFunc(10*time.Second, func() {
+	eots.FlagRespawnTimer = time.AfterFunc(EOTSFlagRespawnTime, func() {
 		eots.mu.Lock()
 		defer eots.mu.Unlock()
 		if eots.FlagCenterGUID != 0 {
@@ -424,12 +458,17 @@ func (s *Server) dropEOTSFlag(eots *eotsBattlegroundState, sess *session) {
 	})
 
 	s.broadcastWorldState(eots.MapID, EOTSWorldStateFlagState, EOTSFlagStateDropped)
+	// Reference: BattlegroundEY::EventPlayerDroppedFlag (BattlegroundEY.cpp:607)
+	// resets both per-team flag-state worldstates to WAIT_RESPAWN.
+	s.broadcastWorldState(eots.MapID, EOTSWorldStateFlagStateAlliance, eotsFlagStateWaitRespawn)
+	s.broadcastWorldState(eots.MapID, EOTSWorldStateFlagStateHorde, eotsFlagStateWaitRespawn)
 	s.broadcastBattlegroundMessage(eots.MapID, fmt.Sprintf("The Netherstorm Flag was dropped by %s!", sess.player.Name))
 
 	if eots.FlagReturnTimer != nil {
 		eots.FlagReturnTimer.Stop()
 	}
-	eots.FlagReturnTimer = time.AfterFunc(15*time.Second, func() {
+	// Dropped-flag return also runs on BG_EY_FLAG_RESPAWN_TIME (8s).
+	eots.FlagReturnTimer = time.AfterFunc(EOTSFlagRespawnTime, func() {
 		eots.mu.Lock()
 		defer eots.mu.Unlock()
 		if eots.FlagState == EOTSFlagStateDropped {
@@ -497,7 +536,9 @@ func (s *Server) updateEOTSTowerWorldStates(eots *eotsBattlegroundState, towerID
 }
 
 // TickResources advances continuous resource generation for elapsed milliseconds.
-// Mirrors TrinityCore BattlegroundEY::Update (BattlegroundEY.cpp:110-150).
+// Mirrors TrinityCore BattlegroundEY::PostUpdateImpl (BattlegroundEY.cpp:80-92):
+// m_PointAddingTimer counts down by diff and the AddPoints arms fire every
+// BG_EY_FPOINTS_TICK_TIME (2s). Wired from the world tick via updateEOTSBattles.
 func (s *Server) TickEOTSResources(eots *eotsBattlegroundState, elapsedMs int64) {
 	if eots == nil {
 		return
@@ -509,36 +550,81 @@ func (s *Server) TickEOTSResources(eots *eotsBattlegroundState, elapsedMs int64)
 		return
 	}
 
-	// 1. Alliance accumulation (every 1000ms)
+	eots.PointTickAccumMs -= elapsedMs
+	if eots.PointTickAccumMs > 0 {
+		return
+	}
+	eots.PointTickAccumMs = eotsPointTickIntervalMs
+
 	if eots.AllianceTowersCount > 0 && eots.AllianceTowersCount <= 4 {
-		eots.AllianceAccumMs += elapsedMs
-		rate := eotsTowerTickPoints[eots.AllianceTowersCount]
-		for eots.AllianceAccumMs >= 1000 && eots.Winner < 0 {
-			eots.AllianceAccumMs -= 1000
-			eots.AllianceResources += rate
-			if eots.AllianceResources >= eots.MaxResources {
-				eots.AllianceResources = eots.MaxResources
-				eots.Winner = 0
-				s.announceEOTSVictory(eots.MapID, 0)
-			}
-			s.broadcastWorldState(eots.MapID, EOTSWorldStateAllianceResources, eots.AllianceResources)
-		}
+		s.addEOTSResources(eots, 0, eotsTowerTickPoints[eots.AllianceTowersCount])
+	}
+	if eots.HordeTowersCount > 0 && eots.HordeTowersCount <= 4 {
+		s.addEOTSResources(eots, 1, eotsTowerTickPoints[eots.HordeTowersCount])
+	}
+}
+
+// addEOTSResources mirrors BattlegroundEY::AddPoints (BattlegroundEY.cpp:144):
+// score add, honor-score tic banking against m_HonorTics (GetBonusHonorFromKill(1)
+// per team when the non-weekend 260-point threshold is reached), then the
+// UpdateTeamScore arm (1600 clamp, EndBattleground on reaching max, resource
+// worldstate). eots.mu is held by the caller.
+func (s *Server) addEOTSResources(eots *eotsBattlegroundState, team uint32, points uint32) {
+	var resources *uint32
+	var honorTics *uint32
+	var wsID uint32
+	if team == 0 {
+		resources = &eots.AllianceResources
+		honorTics = &eots.HonorTicsAccum[0]
+		wsID = EOTSWorldStateAllianceResources
+	} else {
+		resources = &eots.HordeResources
+		honorTics = &eots.HonorTicsAccum[1]
+		wsID = EOTSWorldStateHordeResources
 	}
 
-	// 2. Horde accumulation (every 1000ms)
-	if eots.HordeTowersCount > 0 && eots.HordeTowersCount <= 4 {
-		eots.HordeAccumMs += elapsedMs
-		rate := eotsTowerTickPoints[eots.HordeTowersCount]
-		for eots.HordeAccumMs >= 1000 && eots.Winner < 0 {
-			eots.HordeAccumMs -= 1000
-			eots.HordeResources += rate
-			if eots.HordeResources >= eots.MaxResources {
-				eots.HordeResources = eots.MaxResources
-				eots.Winner = 1
-				s.announceEOTSVictory(eots.MapID, 1)
-			}
-			s.broadcastWorldState(eots.MapID, EOTSWorldStateHordeResources, eots.HordeResources)
+	*resources += points
+	*honorTics += points
+	if *honorTics >= eotsNotWeekendHonorTics {
+		*honorTics -= eotsNotWeekendHonorTics
+		s.rewardBGEndHonor(eots.MapID, team, 1)
+	}
+
+	if *resources >= eots.MaxResources {
+		*resources = eots.MaxResources
+		if eots.Winner < 0 {
+			eots.Winner = int8(team)
+			s.announceEOTSVictory(eots.MapID, team)
 		}
+	}
+	s.broadcastWorldState(eots.MapID, wsID, *resources)
+}
+
+// updateEOTSBattles ticks every live EotS state, driving the resource point tick
+// (BattlegroundEY::PostUpdateImpl's m_PointAddingTimer arm). BattlegroundMgr::Update
+// (BattlegroundMgr.cpp:94) sweeps all running instances with bg->Update(diff)
+// every BATTLEGROUND_OBJECTIVE_UPDATE_INTERVAL (BattlegroundMgr.h:38 = 1000ms);
+// the 1s gate here mirrors that cadence, like updateArenaBattles/updateAVBattles.
+func (s *Server) updateEOTSBattles(now time.Time) {
+	if s == nil {
+		return
+	}
+	if !s.eotsTickLast.IsZero() && now.Sub(s.eotsTickLast) < time.Second {
+		return
+	}
+	var elapsedMs int64 = 1000
+	if !s.eotsTickLast.IsZero() {
+		elapsedMs = now.Sub(s.eotsTickLast).Milliseconds()
+	}
+	s.eotsTickLast = now
+	s.eotsMu.RLock()
+	battles := make([]*eotsBattlegroundState, 0, len(s.eotsState))
+	for _, eots := range s.eotsState {
+		battles = append(battles, eots)
+	}
+	s.eotsMu.RUnlock()
+	for _, eots := range battles {
+		s.TickEOTSResources(eots, elapsedMs)
 	}
 }
 

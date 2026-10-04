@@ -112,6 +112,7 @@ type Server struct {
 	arenaState                map[uint32]*arenaBattlegroundState
 	arenaTickLast             time.Time
 	avTickLast                time.Time
+	eotsTickLast              time.Time
 	wgMu                      sync.RWMutex
 	wgState                   *wgBattlegroundState
 	totemMu                   sync.RWMutex
@@ -851,6 +852,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updatePlayerUnderwater(ctx, now)
 			s.updateArenaBattles(now)
 			s.updateAVBattles(now)
+			s.updateEOTSBattles(now)
 			s.updateWardenSessions(ctx, 100*time.Millisecond)
 		}
 	}
