@@ -99,7 +99,7 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 		BgTypeID:   bgTypeID,
 		InstanceID: instanceID,
 		JoinTime:   time.Now(),
-		Status:     1, // STATUS_WAIT_QUEUE
+		Status:     BGStatusWaitQueue,
 	}
 
 	s.sendBattlefieldStatus(uint8(slot))
@@ -158,7 +158,7 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 		BgTypeID:     4, // BATTLEGROUND_AA (All Arenas)
 		InstanceID:   0,
 		JoinTime:     time.Now(),
-		Status:       1, // STATUS_WAIT_QUEUE
+		Status:       BGStatusWaitQueue,
 		ArenaType:    arenaType,
 		IsArena:      true,
 		IsRated:      isRated != 0,
@@ -245,7 +245,7 @@ func (s *session) sendBattlefieldStatus(slot uint8) {
 		return
 	}
 	entry := s.bgQueues[slot]
-	if !entry.Active || entry.Status == 0 {
+	if !entry.Active || entry.Status == BGStatusNone {
 		buf := protocol.NewBuffer(12)
 		buf.WriteU32(uint32(slot))
 		buf.WriteU64(0)
@@ -273,15 +273,15 @@ func (s *session) sendBattlefieldStatus(slot uint8) {
 	}
 	buf.WriteU32(entry.Status) // STATUS_WAIT_QUEUE = 1
 	switch entry.Status {
-	case 1: // wait queue
+	case BGStatusWaitQueue:
 		buf.WriteU32(120000) // average wait time ms
 		timeInQueue := uint32(time.Since(entry.JoinTime).Milliseconds())
 		buf.WriteU32(timeInQueue)
-	case 2: // wait join
+	case BGStatusWaitJoin:
 		buf.WriteU32(entry.MapID)
 		buf.WriteU64(0)
 		buf.WriteU32(120000) // time to remove
-	case 3: // in progress
+	case BGStatusInProgress:
 		buf.WriteU32(entry.MapID)
 		buf.WriteU64(0)
 		buf.WriteU32(0) // time to auto leave
@@ -307,7 +307,7 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 		if s.bgQueues[index].Active {
 			continue
 		}
-		s.bgQueues[index] = bgQueueEntry{Active: true, BgTypeID: bgTypeID, InstanceID: s.bgData.InstanceID, Status: 3, ArenaType: arenaType, IsArena: isArena, MapID: state.Map, StartTime: time.Now(), ArenaFaction: uint8(s.bgData.Team)}
+		s.bgQueues[index] = bgQueueEntry{Active: true, BgTypeID: bgTypeID, InstanceID: s.bgData.InstanceID, Status: BGStatusInProgress, ArenaType: arenaType, IsArena: isArena, MapID: state.Map, StartTime: time.Now(), ArenaFaction: uint8(s.bgData.Team)}
 		return
 	}
 }
@@ -428,7 +428,7 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte) bo
 	for slot := 0; slot < len(s.bgQueues); slot++ {
 		if s.bgQueues[slot].Active {
 			s.bgQueues[slot].Active = false
-			s.bgQueues[slot].Status = 0 // STATUS_NONE
+			s.bgQueues[slot].Status = BGStatusNone
 			s.sendBattlefieldStatus(uint8(slot))
 		}
 	}

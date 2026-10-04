@@ -44,6 +44,14 @@ const (
 	ArenaStatusInProgress uint32 = 2 // Battle active
 	ArenaStatusWaitLeave  uint32 = 3 // Finished, waiting for auto-leave
 
+	// BattlegroundStatus wire values (Battleground.h:176); written into
+	// bgQueueEntry.Status which sendBattlefieldStatus puts on the wire verbatim
+	BGStatusNone       uint32 = 0
+	BGStatusWaitQueue  uint32 = 1
+	BGStatusWaitJoin   uint32 = 2
+	BGStatusInProgress uint32 = 3
+	BGStatusWaitLeave  uint32 = 4
+
 	// Spells
 	SpellArenaPreparation  uint32 = 32727
 	SpellAllianceGoldFlag  uint32 = 32724
@@ -124,6 +132,20 @@ const (
 	ArenaGORV_Pulley1    uint32 = 192389
 	ArenaGORV_Pulley2    uint32 = 192390
 )
+
+// bgStatusForArena maps the Go arena lifecycle status to the client-visible
+// BattlegroundStatus wire value: a player inside an arena (warmup or battle)
+// is STATUS_IN_PROGRESS in C++ terms, finished is STATUS_WAIT_LEAVE.
+func bgStatusForArena(status uint32) uint32 {
+	switch status {
+	case ArenaStatusWaitJoin, ArenaStatusInProgress:
+		return BGStatusInProgress
+	case ArenaStatusWaitLeave:
+		return BGStatusWaitLeave
+	default:
+		return BGStatusNone
+	}
+}
 
 // IsArenaMap returns true if the specified map ID is an arena map.
 func IsArenaMap(mapID uint32) bool {
@@ -388,7 +410,7 @@ func (s *Server) addPlayerToArena(sess *session, arenaTeam uint8, arena *arenaBa
 	// Set queue entry state
 	for i := 0; i < len(sess.bgQueues); i++ {
 		if sess.bgQueues[i].Active && sess.bgQueues[i].IsArena {
-			sess.bgQueues[i].Status = arena.Status
+			sess.bgQueues[i].Status = bgStatusForArena(arena.Status)
 			sess.bgQueues[i].MapID = arena.MapID
 			sess.bgQueues[i].InstanceID = arena.InstanceID
 			sess.bgQueues[i].ArenaType = arena.ArenaType
@@ -617,7 +639,7 @@ func (s *Server) startArenaMatch(arena *arenaBattlegroundState) {
 			// Update queue status
 			for i := 0; i < len(sess.bgQueues); i++ {
 				if sess.bgQueues[i].Active && sess.bgQueues[i].IsArena {
-					sess.bgQueues[i].Status = ArenaStatusInProgress
+					sess.bgQueues[i].Status = BGStatusInProgress
 					sess.bgQueues[i].StartTime = arena.MatchStartTime
 					sess.sendBattlefieldStatus(uint8(i))
 					break
@@ -735,7 +757,7 @@ func (s *Server) endArena(arena *arenaBattlegroundState, winner int8) {
 			// Update queue entry
 			for i := 0; i < len(sess.bgQueues); i++ {
 				if sess.bgQueues[i].Active && sess.bgQueues[i].IsArena {
-					sess.bgQueues[i].Status = ArenaStatusWaitLeave
+					sess.bgQueues[i].Status = BGStatusWaitLeave
 					sess.sendBattlefieldStatus(uint8(i))
 					break
 				}
