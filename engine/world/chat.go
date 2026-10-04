@@ -230,6 +230,9 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	if typeID == chatWhisper && language != languageAddon {
 		language = languageUniversal
 	}
+	if typeID == chatEmote {
+		language = languageUniversal
+	}
 	if (typeID == chatGuild || typeID == chatOfficer) && !s.guildChatSpeakAllowed(typeID == chatOfficer) {
 		s.debug("chat rejected", "account", s.accountName, "reason", "guild rights", "type", typeID)
 		return true
@@ -249,6 +252,7 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		receiver = s.server.findSessionByName(targetName)
 		if receiver == nil {
 			s.debug("chat rejected", "account", s.accountName, "reason", "whisper target missing")
+			s.sendChatPlayerNotFound(targetName)
 			return true
 		}
 		if !chatGMMode(s) && s.player != nil && uint32(s.player.Level) < s.server.Config.ChatWhisperLevelReq {
@@ -257,11 +261,13 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			return true
 		}
 		if s.hasAura(1852) && !chatGMMode(receiver) {
+			s.sendNotification(fmt.Sprintf("Silence is ON for %s", s.player.Name))
 			s.debug("chat rejected", "account", s.accountName, "reason", "GM silence aura", "spell", 1852, "receiver", receiver.playerGUID)
 			return true
 		}
 		if !s.twoSideChat && !chatGMMode(receiver) && s.playerAlliance() != receiver.playerAlliance() {
 			s.debug("chat rejected", "account", s.accountName, "reason", "whisper wrong faction", "receiver", receiver.playerGUID)
+			s.sendChatWrongFaction()
 			return true
 		}
 	}
@@ -530,6 +536,29 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 			if _, ok := channelTargets[value]; !ok {
 				continue
 			}
+		} else if chatType == chatSay || chatType == chatYell || chatType == chatEmote {
+			// Reference: Player::Say/Yell/TextEmote (Player.cpp:20975-21019) —
+			// SendMessageToSetInRange with CONFIG_LISTEN_RANGE_SAY/YELL/TEXTEMOTE.
+			if value.player.Map != source.player.Map || value.player.InstanceID != source.player.InstanceID {
+				continue
+			}
+			var listenRange float64
+			switch chatType {
+			case chatSay:
+				listenRange = s.Config.ChatListenRangeSay
+			case chatYell:
+				listenRange = s.Config.ChatListenRangeYell
+			default:
+				listenRange = s.Config.ChatListenRangeTextEmote
+			}
+			if listenRange > 0 && distance3D(source.player.X, source.player.Y, source.player.Z, value.player.X, value.player.Y, value.player.Z) > listenRange {
+				continue
+			}
+			// Reference: Player::TextEmote passes ownTeamOnly =
+			// !HasPermission(RBAC_PERM_TWO_SIDE_INTERACTION_CHAT).
+			if chatType == chatEmote && !source.twoSideChat && value.playerAlliance() != source.playerAlliance() {
+				continue
+			}
 		} else if chatType == chatParty || chatType == chatPartyLeader {
 			if source.groupID == 0 || value.groupID != source.groupID {
 				continue
@@ -595,6 +624,20 @@ func (s *session) chatTag() uint8 {
 		tag |= 0x01
 	}
 	return tag
+}
+
+// sendChatPlayerNotFound mirrors WorldSession::SendPlayerNotFoundNotice
+// (ChatHandler.cpp:768): SMSG_CHAT_PLAYER_NOT_FOUND carrying the name.
+func (s *session) sendChatPlayerNotFound(name string) {
+	buf := protocol.NewBuffer(len(name) + 1)
+	buf.WriteCString(name)
+	_ = s.write(uint16(protocol.OpcodeSMSG_CHAT_PLAYER_NOT_FOUND), buf.Bytes(), true)
+}
+
+// sendChatWrongFaction mirrors WorldSession::SendWrongFactionNotice
+// (ChatHandler.cpp:781): empty SMSG_CHAT_WRONG_FACTION.
+func (s *session) sendChatWrongFaction() {
+	_ = s.write(uint16(protocol.OpcodeSMSG_CHAT_WRONG_FACTION), []byte{}, true)
 }
 
 // handleChatIgnored processes CMSG_CHAT_IGNORED (0x225).
