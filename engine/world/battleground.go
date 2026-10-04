@@ -170,6 +170,11 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 	return true
 }
 
+// groupJoinBattlegroundDeserters mirrors ERR_GROUP_JOIN_BATTLEGROUND_DESERTERS
+// (SharedDefines.h:3692 — "You cannot join the battleground yet because you or
+// one of your party members is flagged as a Deserter.").
+const groupJoinBattlegroundDeserters = int32(-2)
+
 // handleBattlefieldPort processes CMSG_BATTLEFIELD_PORT (0x2D5).
 // Reference: WorldSession::HandleBattleFieldPortOpcode (BattleGroundHandler.cpp:357).
 func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) bool {
@@ -185,6 +190,29 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 	}
 	_, _ = r.ReadU16() // unk
 	action, _ := r.ReadU8()
+
+	// Deserter demotion (BattleGroundHandler.cpp:429-439 — action==1 &&
+	// ginfo.ArenaType==0 && _player->IsDeserter() == HasAura(26013) (Player.h:1913)
+	// → BuildGroupJoinedBattlegroundPacket ERR_GROUP_JOIN_BATTLEGROUND_DESERTERS
+	// and the accept demotes to leave; the shared leave arm below then clears the
+	// slot, exactly as the C++ else branch does). The rest of the C++ action==1
+	// accept path (BattleGroundHandler.cpp:448-501 — resurrect, taxi finish,
+	// STATUS_IN_PROGRESS packet, queue removal, SendToBattleground teleport into
+	// a live instance) has no Go counterpart: there is no BattlegroundMgr /
+	// Battleground / queue world model to port the player to, so the port itself
+	// is documented no-bridge rather than stubbed.
+	if action == 1 {
+		for i := 0; i < len(s.bgQueues); i++ {
+			if s.bgQueues[i].Active && !s.bgQueues[i].IsArena && s.bgQueues[i].BgTypeID == bgTypeID && s.hasAura(deserterSpellBG) {
+				buf := protocol.NewBuffer(4)
+				buf.WriteI32(groupJoinBattlegroundDeserters)
+				_ = s.write(uint16(protocol.OpcodeSMSG_GROUP_JOINED_BATTLEGROUND), buf.Bytes(), true)
+				s.debug("battlefield port accept demoted to leave: deserter debuff", "account", s.accountName, "bg", bgTypeID)
+				action = 0
+				break
+			}
+		}
+	}
 
 	if action == 0 {
 		// Leave queue
