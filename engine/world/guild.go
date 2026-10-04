@@ -1855,22 +1855,20 @@ func (s *session) handleInspectHonorStats(ctx context.Context, payload []byte) b
 }
 
 // handlePvpLogData processes MSG_PVP_LOG_DATA (0x2E0).
-// Reference: WorldSession::HandlePVPLogDataOpcode (BattlegroundHandler.cpp:211).
+// Reference: WorldSession::HandlePVPLogDataOpcode (BattleGroundHandler.cpp:306)
+// — both gates are silent: Battleground* bg = _player->GetBattleground();
+// if (!bg) return; then "Prevent players from sending BuildPvpLogDataPacket
+// in an arena except for when sent in BattleGround::EndBattleGround":
+// if (bg->isArena()) return.
+// Go has no live non-arena Battleground instance model, so no session maps
+// to the in-BG arm and the null-BG gate covers every non-arena session;
+// arena sessions map to the isArena gate. The arena packet itself is pushed
+// server-side by endArena (== Battleground::EndBattleGround's
+// BuildPvPLogDataPacket arm), and buildArenaPvPLogDataPacket matches the
+// C++ arena layout slot-for-slot (type 1, per-team rating blocks green
+// first, per-team name blocks, ended+winner, count, then per-score
+// guid/killingblows/teamid/damage/healing/zero-objectives).
 func (s *session) handlePvpLogData(ctx context.Context, payload []byte) bool {
-	if s.server != nil && s.player != nil && IsArenaMap(s.player.Map) {
-		if arena := s.server.findArenaState(s.player.Map, 0); arena != nil {
-			pkt := s.server.buildArenaPvPLogDataPacket(arena)
-			if len(pkt) > 0 {
-				_ = s.write(uint16(protocol.OpcodeMSG_PVP_LOG_DATA), pkt, true)
-				return true
-			}
-		}
-	}
-	buf := protocol.NewBuffer(16)
-	buf.WriteU8(0)  // arena (0)
-	buf.WriteU32(0) // count (0)
-	buf.WriteU8(0)  // winner
-	_ = s.write(uint16(protocol.OpcodeMSG_PVP_LOG_DATA), buf.Bytes(), true)
 	return true
 }
 
