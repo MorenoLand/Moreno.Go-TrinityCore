@@ -1217,6 +1217,30 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventMapChange, s.luaPlayer())
 	s.triggerMapEntryEvent(ctx)
 	s.streamDynamicSpellObjects()
+	// WorldSession::HandleMoveWorldportAck mount-allow leg (MovementHandler.cpp):
+	// allowMount = !IsDungeon() || IsBattlegroundOrArena(), overridden by the
+	// instance_template.allowMount row when present; a worldport into a
+	// disallowing dungeon strips SPELL_AURA_MOUNTED. Same computation as
+	// checkMountedCast (spells.go); removeAura drives the wasMounted dismount
+	// broadcast (the C++ Dismount tail). No mount leg exists in the near
+	// teleport ack (same map, mountability cannot change).
+	allowMount := true
+	if entry, found, err := s.server.Data.Map(s.player.Map); err == nil && found {
+		allowMount = !entry.IsDungeon() || teleIsBattlegroundOrArena(entry)
+	}
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var dbAllow int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT allowMount FROM instance_template WHERE map = ?", s.player.Map).Scan(&dbAllow); err == nil {
+			allowMount = dbAllow != 0
+		}
+	}
+	if !allowMount {
+		for _, aura := range s.loadedAuras() {
+			if aura != nil && aura.AuraType == spellAuraMounted {
+				s.removeAura(aura.SpellID)
+			}
+		}
+	}
 	s.updateZoneAndArea(ctx, true)
 	s.recordInstanceEnterTime(ctx, time.Now())
 	s.resetTimeSync()
