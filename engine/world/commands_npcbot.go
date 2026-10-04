@@ -6,16 +6,18 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
+	"strconv"
 	"strings"
 )
 
 // This file wires the ".npcbot" command family
 // (src/server/game/AI/NpcBots/botcommands.cpp:97-125). The "add", "remove",
 // "spawn", "move", "delete", "lookup", "revive", "reloadconfig", "command"
-// (standstill/stopfully/follow), "info", "hide", "unhide" and "show" arms are
-// converted; the first five give Recruit/AddBotFree/Add their first real
-// call sites. The remaining arms (recall/kill/
-// suicide/distance/order/set) land in later units.
+// (standstill/stopfully/follow), "info", "hide", "unhide", "show", "recall",
+// "kill", "suicide", "distance" (follow + attack short/long/exact) and "order"
+// (cast) arms are converted; the first five give Recruit/AddBotFree/Add their
+// first real call sites. The remaining "set" sub-table (faction/owner/spec)
+// lands in a later unit.
 //
 // The "add"/"remove" arms are selection-driven in C++ (owner->GetSelectedUnit()
 // must be a live uncontrolled/controlled npcbot creature). Go keeps no
@@ -117,6 +119,10 @@ func (s *session) handleCmdNpcBot(ctx context.Context, args []string) {
 		s.handleNpcBotKillCommand(ctx)
 	case strings.HasPrefix("suicide", sub):
 		s.handleNpcBotKillCommand(ctx) // C++ maps "suicide" to HandleNpcBotKillCommand
+	case strings.HasPrefix("distance", sub):
+		s.handleNpcBotDistanceCommand(ctx, rest)
+	case strings.HasPrefix("order", sub):
+		s.handleNpcBotOrderCommand(ctx, rest)
 	default:
 		s.sendSysMessage(syntax)
 	}
@@ -821,6 +827,15 @@ const (
 	botCommandFullStop = 0x10 // BOT_COMMAND_FULLSTOP
 )
 
+// attack range modes mirrored from botmgr.h:38-40; the Go tree keeps no live
+// BotMgr, so they label which C++ mode each arm would set rather than drive
+// anything.
+const (
+	botAttackRangeShort = 1 // BOT_ATTACK_RANGE_SHORT
+	botAttackRangeLong  = 2 // BOT_ATTACK_RANGE_LONG
+	botAttackRangeExact = 3 // BOT_ATTACK_RANGE_EXACT
+)
+
 // handleNpcBotReloadConfigCommand mirrors HandleNpcBotReloadConfigCommand
 // (botcommands.cpp:1392, GM_COMMANDS, Console::Yes). The C++ arm re-reads the
 // world and NpcBot config files (sWorld->LoadConfigSettings + BotMgr::ReloadConfig
@@ -905,6 +920,195 @@ func (s *session) handleNpcBotBotCommandState(ctx context.Context, state uint8, 
 		}
 	}
 	s.sendSysMessage(fmt.Sprintf("Bots' command state set to '%s'", stateName))
+}
+
+// handleNpcBotDistanceCommand dispatches the ".npcbot distance" sub-table
+// (botcommands.cpp:86-90: "attack" -> npcbotAttackDistanceCommandTable, ""
+// -> HandleNpcBotFollowDistanceCommand). The C++ table matches empty input
+// text against the "attack" arm first (empty input matches every arm name),
+// which then matches "short" — so bare ".npcbot distance" answers the short
+// arm's usage gate, and ".npcbot distance attack" (no range) does the same.
+func (s *session) handleNpcBotDistanceCommand(ctx context.Context, args []string) {
+	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
+		s.sendSysMessage("NpcBots is unavailable.")
+		return
+	}
+	if len(args) == 0 {
+		s.handleNpcBotAttackDistanceCommand(ctx, nil)
+		return
+	}
+	if strings.HasPrefix("attack", strings.ToLower(args[0])) {
+		s.handleNpcBotAttackDistanceCommand(ctx, args[1:])
+		return
+	}
+	s.handleNpcBotFollowDistanceCommand(ctx, args)
+}
+
+// handleNpcBotFollowDistanceCommand mirrors HandleNpcBotFollowDistanceCommand
+// (botcommands.cpp:342): the !HaveBot() || !dist_str gate answers the C++
+// usage lines verbatim; the distance clamps to [0,100] == C++. BotMgr::
+// SetBotFollowDist writes the live BotMgr _followdist field (botmgr.h:130),
+// which has no Go model, so the state change is a documented no-bridge and
+// the success line is answered as a state-change no-op.
+func (s *session) handleNpcBotFollowDistanceCommand(ctx context.Context, args []string) {
+	owner := uint32(s.playerGUID)
+	if s.server.Features.NPCBots.CountByOwner(owner) == 0 || len(args) == 0 {
+		s.sendSysMessage(".npcbot distance #[attack] #newdist")
+		s.sendSysMessage("Sets follow / attack distance for bots")
+		return
+	}
+	newdist, _ := strconv.Atoi(args[0])
+	if newdist < 0 {
+		newdist = 0
+	}
+	if newdist > 100 {
+		newdist = 100
+	}
+	s.sendSysMessage(fmt.Sprintf("Bots' follow distance is set to %d", newdist))
+}
+
+// handleNpcBotAttackDistanceCommand dispatches npcbotAttackDistanceCommandTable
+// (botcommands.cpp:80-84: "short"/"long"/"" -> ExactCommand). Empty input
+// matches "short" first in C++; any token that is not a prefix of "short" or
+// "long" falls to the "" arm == HandleNpcBotAttackDistanceExactCommand.
+func (s *session) handleNpcBotAttackDistanceCommand(ctx context.Context, args []string) {
+	if len(args) > 0 {
+		switch sub := strings.ToLower(args[0]); {
+		case strings.HasPrefix("short", sub):
+			s.handleNpcBotAttackDistanceShortLong(ctx, botAttackRangeShort, "short")
+			return
+		case strings.HasPrefix("long", sub):
+			s.handleNpcBotAttackDistanceShortLong(ctx, botAttackRangeLong, "long")
+			return
+		}
+		s.handleNpcBotAttackDistanceExactCommand(ctx, args)
+		return
+	}
+	s.handleNpcBotAttackDistanceShortLong(ctx, botAttackRangeShort, "short")
+}
+
+// handleNpcBotAttackDistanceShortLong mirrors HandleNpcBotAttackDistanceShortCommand
+// and HandleNpcBotAttackDistanceLongCommand (botcommands.cpp:361-391): the
+// !HaveBot() gate answers each arm's C++ usage lines verbatim. BotMgr::
+// SetBotAttackRangeMode is live-BotMgr-only (botmgr.h:134), so the mode change
+// is a documented no-bridge and the success line is answered as a
+// state-change no-op.
+func (s *session) handleNpcBotAttackDistanceShortLong(ctx context.Context, mode uint8, modeName string) {
+	_ = ctx
+	_ = mode // which BOT_ATTACK_RANGE_* the arm would set; no live BotMgr to receive it
+	owner := uint32(s.playerGUID)
+	if s.server.Features.NPCBots.CountByOwner(owner) == 0 {
+		s.sendSysMessage(fmt.Sprintf(".npcbot distance attack %s", modeName))
+		s.sendSysMessage("Sets attack distance for bots")
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("Bots' attack distance is set to '%s'", modeName))
+}
+
+// handleNpcBotAttackDistanceExactCommand mirrors
+// HandleNpcBotAttackDistanceExactCommand (botcommands.cpp:393): the
+// !HaveBot() || !dist_str gate answers the C++ usage lines verbatim; the
+// distance clamps to [0,50] == C++. The SetBotAttackRangeMode(EXACT, range)
+// leg is live-BotMgr-only — same documented no-bridge as the short/long arms.
+func (s *session) handleNpcBotAttackDistanceExactCommand(ctx context.Context, args []string) {
+	owner := uint32(s.playerGUID)
+	if s.server.Features.NPCBots.CountByOwner(owner) == 0 || len(args) == 0 {
+		s.sendSysMessage(".npcbot distance attack #newdist")
+		s.sendSysMessage("Sets attack distance for bots")
+		return
+	}
+	newdist, _ := strconv.Atoi(args[0])
+	if newdist < 0 {
+		newdist = 0
+	}
+	if newdist > 50 {
+		newdist = 50
+	}
+	s.sendSysMessage(fmt.Sprintf("Bots' attack distance is set to %d", newdist))
+}
+
+// handleNpcBotOrderCommand dispatches the ".npcbot order" sub-table
+// (botcommands.cpp:92-95: only "cast"). Empty input matches "cast" in C++
+// (empty input matches every arm name), so bare ".npcbot order" answers the
+// cast arm's usage gate.
+func (s *session) handleNpcBotOrderCommand(ctx context.Context, args []string) {
+	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
+		s.sendSysMessage("NpcBots is unavailable.")
+		return
+	}
+	if len(args) == 0 || strings.HasPrefix("cast", strings.ToLower(args[0])) {
+		var rest []string
+		if len(args) > 0 {
+			rest = args[1:]
+		}
+		s.handleNpcBotOrderCastCommand(ctx, rest)
+		return
+	}
+	s.sendSysMessage(".npcbot order cast #bot_name #spell_underscored_name #[target_token]")
+	s.sendSysMessage("Orders bot to cast a spell immediately")
+}
+
+// handleNpcBotOrderCastCommand mirrors HandleNpcBotOrderCastCommand
+// (botcommands.cpp:233): the !HaveBot() || !bot_name || !spell_name gate
+// answers the C++ usage lines verbatim; underscores in the spell name become
+// spaces == C++; the bot lookup answers "Bot %s is not found!" with the typed
+// name; the target-token validation answers the C++ invalid-token lines
+// verbatim. bot->GetBotAI()->GetSpellMap(), GetSpellCooldown(), the IsAlive
+// gate, ObjectAccessor::GetUnit target resolution and AddOrder(BOT_ORDER_
+// SPELLCAST) are all live-creature/bot_ai legs with no Go model — bot_ai is
+// unconverted, so the spell and order dispatch have no bridge. DEBUG_BOT_
+// ORDERS is 0 (botcommon.h:1036), meaning the C++ success path sends no
+// message, so the Go arm returns silently after the bridgeable guards pass.
+func (s *session) handleNpcBotOrderCastCommand(ctx context.Context, args []string) {
+	mgr := s.server.Features.NPCBots
+	owner := uint32(s.playerGUID)
+	if mgr.CountByOwner(owner) == 0 || len(args) < 2 {
+		s.sendSysMessage(".npcbot order cast #bot_name #spell_underscored_name #[target_token]")
+		s.sendSysMessage("Orders bot to cast a spell immediately")
+		return
+	}
+	botName := args[0]
+	spellName := strings.ReplaceAll(args[1], "_", " ")
+	var targetToken string
+	if len(args) > 2 {
+		targetToken = args[2]
+	}
+
+	// BotMgr::GetBotByName (botmgr.cpp:576): case-insensitive full-name match
+	// against the owner's bots. No live creature names exist in Go; the
+	// template name == Creature::GetName for template-spawned bots (the
+	// session-locale override has no bridge — chat.go enUS convention).
+	var found bool
+	want := strings.ToLower(botName)
+	for _, data := range mgr.Snapshot() {
+		if data.Owner != owner {
+			continue
+		}
+		if strings.ToLower(s.npcbotTemplateName(ctx, data.Entry)) == want {
+			found = true
+			break
+		}
+	}
+	if !found {
+		s.sendSysMessage(fmt.Sprintf("Bot %s is not found!", botName))
+		return
+	}
+
+	// Target token validation == C++ verbatim (botcommands.cpp:290-303); the
+	// GetUnit/map resolution below it is live-world-only.
+	if targetToken != "" {
+		switch strings.ToLower(targetToken) {
+		case "bot", "self", "me", "master", "target", "mytarget":
+		default:
+			s.sendSysMessage(fmt.Sprintf("Invalid target token '%s'!", targetToken))
+			s.sendSysMessage("Valid target tokens:\n    '','bot','self', 'me','master', 'target', 'mytarget'")
+			return
+		}
+	}
+	// Spell lookup (bot_ai::GetSpellMap), the IsAlive gate, cooldown check and
+	// AddOrder(BOT_ORDER_SPELLCAST, botcommon.h:1034) are live-only; the spell
+	// name was still underscore-normalized above == C++.
+	_ = spellName
 }
 
 // handleNpcBotInfoCommand mirrors HandleNpcBotInfoCommand
