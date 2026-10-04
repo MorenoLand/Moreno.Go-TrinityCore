@@ -6598,6 +6598,46 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, 0, 0, 1, nil, false, s.playerGUID)
 	}
 
+	// Spell::handle_immediate (Spell.cpp:3493, 3613-3626): Go's triggered
+	// path models the immediate case (no delayed branch, no channel
+	// start), so the finish phase and finish(true) run here, ahead of the
+	// _cast tail below — handle_immediate is called at 3493, the
+	// spell_linked tail starts at 3503. Legs:
+	//   - _handle_finish_phase combo give (Spell.cpp:3737-3752): the
+	//     take leg (m_needComboPoints -> ClearComboPoints) is dead here —
+	//     prepare resets m_needComboPoints for any triggered cast via
+	//     TRIGGERED_IGNORE_COMBO_POINTS (Spell.cpp:3096;
+	//     SpellDefines.h:140, carried by TRIGGERED_FULL_MASK at :153),
+	//     which this path always uses. Only the give leg runs — the
+	//     banked per-cast gain from ADD_COMBO_POINTS effects. The
+	//     RETAIN_COMBO_POINTS aura removal (Spell.cpp:3747-3750) has no
+	//     Go bridge — the Go aura model tracks no such aura type (same
+	//     no-bridge as the client path).
+	//   - TakeCastItem: vacuous — this path never carries a cast item
+	//     (item casts run finishSpellCast).
+	//   - TakeAmmo (Volley): documented delta (see the finishSpellCast
+	//     note) — Go fires no per-tick triggered casts.
+	//   - finish(true) (Spell.cpp:3886-3977): the spell-state/caster
+	//     gates are structural (no Spell object; the session/player nil
+	//     checks at the top cover them); UpdateInterruptMask and the
+	//     UNIT_STATE_CASTING clear have no Go model (cast/channel state
+	//     lives in castMu); the possessed-puppet unsummon needs the
+	//     charm model Go does not have (and channeled casts skip
+	//     finish(true) at 3625 anyway); ReleaseSpellFocus and the statue
+	//     unsummon need creature casters (every Go cast runs on a player
+	//     session); IsAutoActionResetSpell is always false for triggered
+	//     casts (Spell.cpp:7529) and Go has no attack-timer model
+	//     regardless; the potion flush is vacuous here — every Go
+	//     triggered cast carries TRIGGERED_FULL_MASK, so
+	//     IsIgnoringCooldowns() (Spell.cpp:7506-7509) makes
+	//     UpdatePotionCooldown(Spell*) return without sending or
+	//     clearing (Player.cpp:22233-22236).
+	//   - SPELL_ATTR0_STOP_ATTACK_TARGET -> AttackStop: bridged below.
+	if comboGainTarget != 0 && comboGain > 0 {
+		s.addSessionComboPoints(comboGainTarget, comboGain)
+	}
+	s.stopAttackOnSpellFinish(spell)
+
 	// Spell::_cast (Spell.cpp:3502-3511): a triggered cast (C++
 	// Unit::CastSpell(id, true)) runs the same _cast tail, so the
 	// spell_linked_spell list fires here too. The CHEAT_COOLDOWN leg
@@ -6608,20 +6648,6 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	s.fireSpellLinkedTriggers(ctx, spellID, targetGUID)
 	s.resetCastCooldownCheat(spellID)
 	s.procSpellCastPhaseAuraTriggers(ctx, spell)
-
-	// Spell::_handle_finish_phase (Spell.cpp:3737-3752) combo-point legs
-	// for the triggered path, landing after the _cast tail the way the
-	// C++ finish phase follows _cast. The take leg (m_needComboPoints →
-	// ClearComboPoints) is dead here: prepare resets m_needComboPoints for
-	// any triggered cast via TRIGGERED_IGNORE_COMBO_POINTS (Spell.cpp:3096;
-	// SpellDefines.h:140, carried by TRIGGERED_FULL_MASK at :153), which
-	// this path always uses. Only the give leg runs — the banked per-cast
-	// gain from ADD_COMBO_POINTS effects. The RETAIN_COMBO_POINTS aura
-	// removal (Spell.cpp:3747-3750) has no Go bridge — the Go aura model
-	// tracks no such aura type (same no-bridge as the client path).
-	if comboGainTarget != 0 && comboGain > 0 {
-		s.addSessionComboPoints(comboGainTarget, comboGain)
-	}
 }
 
 func (s *session) applySpellEnergize(ctx context.Context, targetGUID uint64, powerType int32, amount int32) {
