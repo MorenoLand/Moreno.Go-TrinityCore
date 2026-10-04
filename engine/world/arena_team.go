@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -135,6 +136,57 @@ func (s *session) handleArenaTeamRoster(ctx context.Context, payload []byte) boo
 	return s.write(uint16(protocol.OpcodeSMSG_ARENA_TEAM_ROSTER), buf.Bytes(), true) == nil
 }
 
+// Arena-team command-result action/error ids.
+// Reference: the ArenaTeamError enum (ArenaTeam.h:33-57).
+const (
+	arenaTeamCreateS           uint32 = 0x00
+	arenaTeamInviteSS          uint32 = 0x01
+	alreadyInArenaTeamS        uint32 = 0x03
+	alreadyInvitedToArenaTeamS uint32 = 0x05
+	arenaTeamPermissions       uint32 = 0x08
+	arenaTeamPlayerNotInTeam   uint32 = 0x09
+	arenaTeamPlayerNotFoundS   uint32 = 0x0B
+	arenaTeamNotAllied         uint32 = 0x0C
+	arenaTeamTargetTooLowS     uint32 = 0x15
+	arenaTeamTooManyMembersS   uint32 = 0x17
+)
+
+// sendArenaTeamCommandResult answers SMSG_ARENA_TEAM_COMMAND_RESULT.
+// Reference: WorldSession::SendArenaTeamCommandResult (ArenaTeamHandler.cpp:404).
+func (s *session) sendArenaTeamCommandResult(teamAction uint32, team, player string, errorID uint32) {
+	buf := protocol.NewBuffer(12 + len(team) + len(player))
+	buf.WriteU32(teamAction)
+	buf.WriteCString(team)
+	buf.WriteCString(player)
+	buf.WriteU32(errorID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_ARENA_TEAM_COMMAND_RESULT), buf.Bytes(), true)
+}
+
+// arenaTeamSlotByType mirrors ArenaTeam::GetSlotByType (ArenaTeam.cpp:599):
+// 2v2 -> 0, 3v3 -> 1, 5v5 -> 2, anything else -> 0xFF.
+func arenaTeamSlotByType(aType uint32) uint32 {
+	switch aType {
+	case 2:
+		return 0
+	case 3:
+		return 1
+	case 5:
+		return 2
+	}
+	return 0xFF
+}
+
+// arenaTeamIDForSlot returns the arena team id the character holds for the
+// given team type's slot, or 0. Mirrors Player::GetArenaTeamId(slot).
+func arenaTeamIDForSlot(ctx context.Context, cdb *sql.DB, guid uint64, aType uint32) uint32 {
+	var teamID uint32
+	if cdb == nil {
+		return 0
+	}
+	_ = cdb.QueryRowContext(ctx, "SELECT atm.arenaTeamId FROM arena_team_member AS atm JOIN arena_team AS at ON at.arenaTeamId = atm.arenaTeamId WHERE atm.guid = ? AND at.type = ?", guid, aType).Scan(&teamID)
+	return teamID
+}
+
 // handleArenaTeamInvite processes CMSG_ARENA_TEAM_INVITE (0x34F).
 // Reference: WorldSession::HandleArenaTeamInviteOpcode (ArenaTeamHandler.cpp:86).
 func (s *session) handleArenaTeamInvite(ctx context.Context, payload []byte) bool {
@@ -150,23 +202,74 @@ func (s *session) handleArenaTeamInvite(ctx context.Context, payload []byte) boo
 	if err != nil {
 		return false
 	}
+	invitedName = normalizePlayerName(invitedName)
 
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
 	}
 
-	var teamName string
-	_ = cdb.QueryRowContext(ctx, "SELECT name FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&teamName)
-
 	targetSess := s.server.findSessionByName(invitedName)
-	if targetSess != nil {
-		targetSess.arenaTeamInvited = teamID
-		invBuf := protocol.NewBuffer(len(s.player.Name) + len(teamName) + 2)
-		invBuf.WriteCString(s.player.Name)
-		invBuf.WriteCString(teamName)
-		_ = targetSess.write(uint16(protocol.OpcodeSMSG_ARENA_TEAM_INVITE), invBuf.Bytes(), true)
+	if targetSess == nil || targetSess.player == nil {
+		s.sendArenaTeamCommandResult(arenaTeamCreateS, "", invitedName, arenaTeamPlayerNotFoundS)
+		return true
 	}
+
+	maxLevel := s.server.Config.MaxPlayerLevel
+	if maxLevel == 0 {
+		maxLevel = 80
+	}
+	if uint32(targetSess.player.Level) < maxLevel {
+		s.sendArenaTeamCommandResult(arenaTeamCreateS, "", targetSess.player.Name, arenaTeamTargetTooLowS)
+		return true
+	}
+
+	var teamName string
+	var aType uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT name, type FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&teamName, &aType); err != nil {
+		s.sendArenaTeamCommandResult(arenaTeamCreateS, "", "", arenaTeamPlayerNotInTeam)
+		return true
+	}
+
+	if arenaTeamIDForSlot(ctx, cdb, s.playerGUID, aType) != teamID {
+		s.sendArenaTeamCommandResult(arenaTeamCreateS, "", "", arenaTeamPermissions)
+		return true
+	}
+
+	// OK result but don't send the invite.
+	var ignored int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_social WHERE guid = ? AND friend = ? AND flags & 2 != 0", targetSess.playerGUID, s.playerGUID).Scan(&ignored)
+	if ignored > 0 {
+		return true
+	}
+
+	if !s.server.Config.AllowTwoSideInteractionGuild && teamForRace(targetSess.player.Race) != teamForRace(s.player.Race) {
+		s.sendArenaTeamCommandResult(arenaTeamInviteSS, "", "", arenaTeamNotAllied)
+		return true
+	}
+
+	if arenaTeamIDForSlot(ctx, cdb, targetSess.playerGUID, aType) != 0 {
+		s.sendArenaTeamCommandResult(arenaTeamInviteSS, "", targetSess.player.Name, alreadyInArenaTeamS)
+		return true
+	}
+
+	if targetSess.arenaTeamInvited != 0 {
+		s.sendArenaTeamCommandResult(arenaTeamInviteSS, "", targetSess.player.Name, alreadyInvitedToArenaTeamS)
+		return true
+	}
+
+	var members int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM arena_team_member WHERE arenaTeamId = ?", teamID).Scan(&members)
+	if uint64(members) >= uint64(aType)*2 {
+		s.sendArenaTeamCommandResult(arenaTeamCreateS, teamName, "", arenaTeamTooManyMembersS)
+		return true
+	}
+
+	targetSess.arenaTeamInvited = teamID
+	invBuf := protocol.NewBuffer(len(s.player.Name) + len(teamName) + 2)
+	invBuf.WriteCString(s.player.Name)
+	invBuf.WriteCString(teamName)
+	_ = targetSess.write(uint16(protocol.OpcodeSMSG_ARENA_TEAM_INVITE), invBuf.Bytes(), true)
 
 	s.debug("arena team invite sent", "team", teamName, "target", invitedName)
 	return true
