@@ -5480,6 +5480,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			//     because Go has no single cast object spanning the phases
 			//     (C++ keeps Spell::m_appliedMods for the Spell's whole
 			//     lifetime). Noted delta.
+			//   - SpellEvent::Execute's DELAYED two-step (Spell.cpp:7596-7650):
+			//     the first event tick is SetDelayStart(e_time) + re-plan at
+			//     e_time + GetDelayMoment() (the minimum target TimeDelay,
+			//     Spell.cpp:2167-2168 — the first landing); later ticks run
+			//     t_offset = e_time - GetDelayStart() -> handle_delayed and
+			//     re-add at GetDelayStart() + n_offset. Go's single arrival
+			//     timer IS the re-planned event: the two-step split exists
+			//     in C++ only to anchor t_offset for the wave staggering,
+			//     and without waves the first handle_delayed tick finishes
+			//     (return 0). SpellEvent::Abort's cancel-on-non-FINISHED
+			//     leg is structural — Go has no per-cast object to cancel
+			//     once the arrival timer is in flight.
+			//   - The commented-out channeled arm inside that block
+			//     (Spell.cpp:7599-7624) is dead code upstream (commented out
+			//     in C++); nothing to bridge.
 			//   - Per-target TimeDelay waves: C++ staggers multi-target
 			//     landings by distance (single_missile when HasDst(),
 			//     else per-target t_offset waves with next_time
