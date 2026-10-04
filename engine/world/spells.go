@@ -5168,12 +5168,32 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						s.removeAura(45062)
 					}
 				}
-				// Swiftmend (TargetAuraState == AURA_STATE_SWIFTMEND) stays
-				// open: it needs the shortest-duration Rejuvenation/Regrowth
-				// periodic-heal aura's tick amount times its tick count plus
-				// the Glyph of Swiftmend (54824) no-consume arm.
+				// Swiftmend (Spell::EffectHeal, SpellEffects.cpp:1423-1462): the
+				// TargetAuraState == AURA_STATE_SWIFTMEND arm consumes the
+				// target's shortest-duration Rejuvenation/Regrowth
+				// periodic-heal aura — its tick amount times its tick count
+				// (4 Rejuvenation / 6 Regrowth) joins the heal — and skips
+				// the SpellHealingBonusDone leg on this path (the else-if
+				// chain never reaches it). The effect-time HasAuraState
+				// recheck mirrors C++; the cast-time TargetAuraState gate
+				// already ran ahead of the effects.
+				swiftmend := eff.Effect == 10 && spell.TargetAuraState == auraStateSwiftmend
 				for _, effectTarget := range hitTargets {
-					s.executeSpellHeal(effCtx, effectTarget, spellID, chainScaledAmount(heal, eff, chainJumpIndex[effectTarget]), effectIndex)
+					targetHeal := chainScaledAmount(heal, eff, chainJumpIndex[effectTarget])
+					doneBonus := true
+					if swiftmend {
+						resolved := effectTarget
+						if resolved == 0 {
+							resolved = s.playerGUID
+						}
+						if s.targetHasAuraState(effCtx, resolved, auraStateSwiftmend, spell) {
+							if tick, ok := s.swiftmendConsumedTick(effCtx, resolved); ok {
+								targetHeal += tick
+								doneBonus = false
+							}
+						}
+					}
+					s.executeSpellHealDoneBonus(effCtx, effectTarget, spellID, targetHeal, effectIndex, doneBonus)
 				}
 			case spellEffectEnergize:
 				amount := eff.BasePoints + 1
@@ -7060,6 +7080,15 @@ func (s *session) executeSpellMaxHealthHeal(ctx context.Context, targetGUID uint
 }
 
 func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spellID, heal uint32, effIndex int) {
+	s.executeSpellHealDoneBonus(ctx, targetGUID, spellID, heal, effIndex, true)
+}
+
+// executeSpellHealDoneBonus is executeSpellHeal with control over the
+// SpellHealingBonusDone (spell-power) leg. The Swiftmend arm of
+// Spell::EffectHeal (SpellEffects.cpp:1423-1462) skips that leg on its path
+// (the else-if chain never reaches SpellHealingBonusDone), so the Swiftmend
+// dispatch passes doneBonus=false; every other caller passes true.
+func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint64, spellID, heal uint32, effIndex int, doneBonus bool) {
 	if s.player == nil {
 		return
 	}
@@ -7083,7 +7112,7 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 	}
 
 	// Apply Spell Power bonus to healing (TrinityCore Unit::SpellHealingBonusDone)
-	if s.player != nil && s.player.SpellPower > 0 {
+	if doneBonus && s.player != nil && s.player.SpellPower > 0 {
 		heal += uint32(math.Round(float64(s.player.SpellPower) * s.spellBonusMultiplier(spellID, effIndex, true)))
 	}
 
@@ -7168,6 +7197,104 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 			s.procWeaponEnchantProcsFromSpellHit(ctx, combatTarget{GUID: targetGUID}, alive)
 		}
 	}
+}
+
+// swiftmendConsumedTick mirrors the Swiftmend arm of Spell::EffectHeal
+// (SpellEffects.cpp:1423-1462): among the target's SPELL_AURA_PERIODIC_HEAL
+// (8) aura effects whose spell is Druid-family with SpellFamilyFlags[0] &
+// 0x50 (Rejuvenation 0x10, Regrowth 0x40 — the classifier that raises
+// AURA_STATE_SWIFTMEND, SpellInfo.cpp:1994-1996), the one with the shortest
+// live remaining duration (Aura::GetDuration) is consumed, returning its
+// tick amount times its tick count (4 for Rejuvenation, 6 for Regrowth).
+// The consumed aura is removed from the target unless the caster carries
+// Glyph of Swiftmend (54824). The DOT healing-taken leg
+// (SpellHealingBonusTaken, SpellEffects.cpp:1448) has no Go model and is
+// folded as-is; the C++ error-return when no aura matches despite the aura
+// state is unreachable here because Go's aura-state bit derives from the
+// same family-flags classifier.
+func (s *session) swiftmendConsumedTick(ctx context.Context, targetGUID uint64) (uint32, bool) {
+	if s.server == nil || s.server.Data == nil {
+		return 0, false
+	}
+	var auras []*activeAura
+	remove := func(uint32) {}
+	if targetGUID == 0 || targetGUID == s.playerGUID {
+		auras = s.loadedAuras()
+		remove = s.removeAura
+	} else if other := s.server.findSessionByGUID(targetGUID); other != nil && other.player != nil {
+		auras = other.loadedAuras()
+		remove = other.removeAura
+	} else if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
+		key := creatureAuraKeyForTarget(target)
+		s.server.auraMu.Lock()
+		for _, aura := range s.server.activeCreatureAuras[key] {
+			auras = append(auras, aura)
+		}
+		s.server.auraMu.Unlock()
+		remove = func(spellID uint32) { s.server.removeCreatureAura(key, spellID) }
+	} else {
+		return 0, false
+	}
+	var (
+		best      *activeAura
+		bestTick  int32
+		bestRest  uint32
+		bestRejuv bool
+	)
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if auraSpell.SpellFamilyName != spellFamilyDruid || auraSpell.SpellFamilyFlags[0]&0x50 == 0 {
+			continue
+		}
+		for index, eff := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || index >= 8 || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellEffectIsAuraEffect(eff) || eff.Aura != spellAuraPeriodicHeal {
+				continue
+			}
+			// Aura::GetDuration is the live remaining duration
+			// (player_aura_save.go:305-318 pattern).
+			rest := aura.RemainingMs
+			if !aura.DurationUpdatedAt.IsZero() {
+				if elapsed := time.Since(aura.DurationUpdatedAt).Milliseconds(); elapsed > 0 {
+					if uint64(elapsed) < uint64(rest) {
+						rest -= uint32(elapsed)
+					} else {
+						rest = 0
+					}
+				}
+			}
+			if best == nil || rest < bestRest {
+				best, bestTick, bestRest = aura, aura.Amounts[index], rest
+				bestRejuv = auraSpell.SpellFamilyFlags[0]&0x10 != 0
+			}
+		}
+	}
+	if best == nil {
+		return 0, false
+	}
+	if bestTick < 0 {
+		bestTick = 0
+	}
+	// Rejuvenation (flags & 0x10) consumes 4 ticks, Regrowth 6
+	// (SpellEffects.cpp:1450-1455); the 0x50 gate above guarantees one of
+	// the two bits is set.
+	tickCount := uint32(6)
+	if bestRejuv {
+		tickCount = 4
+	}
+	// Glyph of Swiftmend (54824): the consumed aura survives.
+	if !s.hasAura(54824) {
+		remove(best.SpellID)
+	}
+	return uint32(bestTick) * tickCount, true
 }
 
 func buildSpellNonMeleeDamageLog(targetGUID, attackerGUID uint64, spellID, damage, overkill uint32, schoolMask uint8, extra ...uint32) []byte {
