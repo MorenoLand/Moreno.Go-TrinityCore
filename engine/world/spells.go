@@ -241,6 +241,7 @@ const (
 	spellEffectPowerBurn               = 62
 	spellEffectThreat                  = 63
 	spellEffectTriggerSpell            = 64
+	spellEffectTriggerSpellWithValue   = 142 // SPELL_EFFECT_TRIGGER_SPELL_WITH_VALUE (SpellEffects.cpp:211)
 	spellEffectHealMaxHealth           = 67
 	spellEffectCreateItem              = 24
 	spellEffectCreateItem2             = 70
@@ -392,6 +393,7 @@ const (
 	spellAuraModConfuse                            = 5   // SPELL_AURA_MOD_CONFUSE (SpellAuraDefines.h:85)
 	spellAuraModFear                               = 7   // SPELL_AURA_MOD_FEAR (SpellAuraDefines.h:87)
 	spellAuraModStun                               = 12  // SPELL_AURA_MOD_STUN (SpellAuraDefines.h:92)
+	spellAuraModStalked                            = 68  // SPELL_AURA_MOD_STALKED (SpellAuraDefines.h:148)
 	spellAuraStrangulate                           = 298 // SPELL_AURA_STRANGULATE (SpellAuraDefines.h:378)
 	spellAuraModSilence                            = 27  // SPELL_AURA_MOD_SILENCE (SpellAuraDefines.h:107)
 	spellAuraModPacify                             = 25  // SPELL_AURA_MOD_PACIFY (SpellAuraDefines.h:105)
@@ -5838,11 +5840,22 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.updatePlayerParryPercentage(s.player, s.player.Level)
 					s.sendPlayerUpdate()
 				}
-			case spellEffectTriggerSpell:
+			case spellEffectTriggerSpell, spellEffectTriggerSpellWithValue:
+				// Spell::EffectTriggerSpell (SpellEffects.cpp:823-996) —
+				// audited; the per-target legs ride
+				// triggerSpellEffectTarget, which bridges the effect-64
+				// special cases (Replenish Life/Mana base-point arms, Glyph
+				// of Mirror Image, Demonic Empowerment succubus cleanse,
+				// Sayge's Dark Fortune skip, Brittle Armor / Mercurial
+				// Shield stacking), the TRIGGER_SPELL_WITH_VALUE base-point
+				// override (effect 0 only — C++ sets all effects), and the
+				// unknown-spell gate. Already-covered legs: the
+				// effectHandleMode, NeedsToBeTriggeredByCaster, and LAUNCH
+				// target-resolution gates are structural (see the helper
+				// note); the zero-trigger gate, the warn/error logs, and
+				// the GO-cast original-caster leg are documented there.
 				for _, effectTarget := range hitTargets {
-					if eff.TriggerSpell != 0 && eff.TriggerSpell != spellID {
-						s.castSpellDirect(effCtx, eff.TriggerSpell, effectTarget)
-					}
+					s.triggerSpellEffectTarget(effCtx, spellID, eff, effectTarget)
 				}
 			case spellEffectAddExtraAttacks: // 19: SPELL_EFFECT_ADD_EXTRA_ATTACKS
 				// Spell::EffectAddExtraAttacks (SpellEffects.cpp:4301-4314)
@@ -7312,10 +7325,12 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			if burned := s.applySpellPowerBurn(ctx, targetGUID, eff.MiscValue, eff.BasePoints+1, spellID); burned > 0 {
 				s.executeSpellDamage(ctx, targetGUID, spellID, effectValueMultiplied(burned, eff.Amplitude), effectIndex)
 			}
-		} else if eff.Effect == spellEffectTriggerSpell {
-			if eff.TriggerSpell != 0 && eff.TriggerSpell != spellID {
-				s.castSpellDirect(ctx, eff.TriggerSpell, targetGUID)
-			}
+		} else if eff.Effect == spellEffectTriggerSpell || eff.Effect == spellEffectTriggerSpellWithValue {
+			// Spell::EffectTriggerSpell per-target legs ride
+			// triggerSpellEffectTarget on the triggered path too (the
+			// special cases are per-target LAUNCH_TARGET legs; the
+			// handle-mode split is structural on both paths).
+			s.triggerSpellEffectTarget(ctx, spellID, eff, targetGUID)
 		} else if eff.Effect == spellEffectThreat {
 			s.applySpellThreat(ctx, targetGUID, eff.BasePoints+1)
 		} else if eff.Effect == spellEffectHealMaxHealth {
@@ -7546,6 +7561,293 @@ func (s *session) energizePctEffectTarget(ctx context.Context, spell wotlk.Spell
 		return
 	}
 	s.applySpellEnergize(ctx, effectTarget, power, gain)
+}
+
+// Triggered-spell IDs for the Spell::EffectTriggerSpell special cases
+// (SpellEffects.cpp:828-946).
+const (
+	triggerReplenishLifeSpell   = 25155 // Replenish Life's triggered heal (SpellEffects.cpp:839)
+	triggerReplenishManaSpell   = 60628 // Replenish Mana's triggered energize (SpellEffects.cpp:867)
+	triggerMirrorImageSpell     = 58832 // Mirror Image (SpellEffects.cpp:891)
+	triggerDemonicEmpowerSuccub = 54437 // Demonic Empowerment, succubus (SpellEffects.cpp:900)
+	triggerSaygesDarkFortune    = 23770 // Sayge's Dark Fortune (SpellEffects.cpp:912)
+	triggerBrittleArmorSpell    = 29284 // Brittle Armor stacker (SpellEffects.cpp:916)
+	triggerMercurialShieldSpell = 29286 // Mercurial Shield stacker (SpellEffects.cpp:926)
+
+	spellReplenishLife       = 34756 // triggering spell for triggerReplenishLifeSpell
+	spellReplenishMana       = 33394 // triggering spell for triggerReplenishManaSpell
+	spellGlyphOfMirrorImage  = 63093
+	spellMirrorImageCopies   = 65047 // Glyph of Mirror Image's triggered summon
+	spellLesserInvisibility  = 7870  // Demonic Empowerment (succubus) invisibility
+	spellBrittleArmorAura    = 24575 // aura stacked by triggerBrittleArmorSpell
+	spellMercurialShieldAura = 26464 // aura stacked by triggerMercurialShieldSpell
+
+	mechanicRoot  = 7  // MECHANIC_ROOT (SharedDefines.h:1364)
+	mechanicSnare = 11 // MECHANIC_SNARE (SharedDefines.h:1368)
+)
+
+// triggerSpellEffectTarget mirrors one target invocation of
+// Spell::EffectTriggerSpell (SpellEffects.cpp:823-996): the zero-trigger and
+// unknown-spell gates, the TRIGGER_SPELL_WITH_VALUE base-point override, the
+// effect-64 special cases, and the normal triggered cast. Both dispatch sites
+// (the client-cast hit loop and the triggered-cast path) share it.
+// Already-covered legs: the effectHandleMode gate (823-826, LAUNCH_TARGET /
+// LAUNCH) is structural — both Go sites run in the hit phase (the
+// combo-point arm's convention), so the LAUNCH/LAUNCH_TARGET split has no Go
+// phase model; the LAUNCH_TARGET NeedsToBeTriggeredByCaster gate (961-966)
+// has no Go model (NeedsExplicitUnitTarget plus the channeled-triggering
+// unit-mask leg, SpellInfo.cpp:1052) — Go casts on its resolved targets
+// unconditionally; the LAUNCH no-target resolution (968-985, dest-location
+// copy, caster-unit and GO fallbacks, plus the 971-972 early return) has no
+// Go counterpart — an empty hit-target list simply runs no triggers, and GO
+// casts are unmodeled tree-wide; the m_originalCasterGUID GO-cast leg
+// (994-996) is structural for the same reason. The self-trigger skip
+// (TriggerSpell == spellID) is a Go recursion guard with no C++ counterpart.
+func (s *session) triggerSpellEffectTarget(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, effectTarget uint64) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	if eff.TriggerSpell == 0 || eff.TriggerSpell == spellID {
+		// SpellEffects.cpp:948-951: no triggered spell — warn and return
+		// (the warn log has no Go equivalent).
+		return
+	}
+	if eff.Effect == spellEffectTriggerSpellWithValue {
+		// SpellEffects.cpp:989-992: TRIGGER_SPELL_WITH_VALUE overrides the
+		// triggered spell's base points with the effect damage. Go's
+		// override machinery (castSpellDirectWithOverrides) covers effect 0
+		// only — C++ sets all MAX_SPELL_EFFECTS — documented delta. The
+		// effect damage lands on the tree-wide flat convention
+		// (BasePoints+1), clamped at zero like the damage model.
+		bp := eff.BasePoints + 1
+		if bp < 0 {
+			bp = 0
+		}
+		if _, found, err := s.server.Data.Spell(eff.TriggerSpell); err != nil || !found {
+			return
+		}
+		s.castSpellDirectWithBasePoint(ctx, eff.TriggerSpell, effectTarget, uint32(bp))
+		return
+	}
+	if s.triggerSpellSpecialCase(ctx, spellID, eff, effectTarget) {
+		return
+	}
+	// SpellEffects.cpp:954-958: unknown triggered spell — C++ logs an error
+	// and returns. Without this gate Go's castSpellDirect would build an
+	// effect-less stub whose !hasExplicitEffects arm applies a dummy aura
+	// to the target.
+	if _, found, err := s.server.Data.Spell(eff.TriggerSpell); err != nil || !found {
+		return
+	}
+	s.castSpellDirect(ctx, eff.TriggerSpell, effectTarget)
+}
+
+// triggerSpellSpecialCase mirrors the "special cases" switch of
+// Spell::EffectTriggerSpell (SpellEffects.cpp:828-946), which runs only for
+// SPELL_EFFECT_TRIGGER_SPELL (64). Reports whether the trigger was fully
+// handled (skip the normal cast). The unitCaster term
+// (GetUnitCasterForEffectHandlers) is vacuous on both Go dispatch sites —
+// the caster is always the session player.
+func (s *session) triggerSpellSpecialCase(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, effectTarget uint64) bool {
+	switch eff.TriggerSpell {
+	case triggerSaygesDarkFortune:
+		// SpellEffects.cpp:912-914: "just skip" — the triggered spell does
+		// not exist; common cooldowns would live in scripts if needed.
+		return true
+	case triggerMirrorImageSpell:
+		// SpellEffects.cpp:891-898: Glyph of Mirror Image (63093) fires the
+		// copy-summon (65047), then the normal triggered cast runs.
+		if s.hasAura(spellGlyphOfMirrorImage) {
+			// C++ casts with a null target; the triggered spell is
+			// self-targeted, so the caster GUID is the exact substitute.
+			s.castSpellDirect(ctx, spellMirrorImageCopies, s.playerGUID)
+		}
+		return false
+	case triggerReplenishLifeSpell:
+		// SpellEffects.cpp:837-862: Replenish Life (34756) — cannot target
+		// self; basepoints0 = 1% of the target's max health times the
+		// triggering effect's BasePoints. Any other triggering spell falls
+		// through to the normal cast (the inner-switch default).
+		if spellID != spellReplenishLife {
+			return false
+		}
+		if effectTarget == s.playerGUID {
+			return true
+		}
+		maxHealth := s.triggerTargetMaxHealth(ctx, effectTarget)
+		if maxHealth == 0 {
+			return true // C++-unreachable: the target is always a unit there
+		}
+		// int32 truncation of the float product, like C++.
+		bp0 := int32(0.01 * float64(maxHealth) * float64(eff.BasePoints))
+		// C++ has the TARGET cast the triggered heal on itself
+		// (unitTarget->CastSpell(unitTarget, ...)); every Go cast runs on
+		// the player session, so the heal lands with the right amount but
+		// the caster attribution differs — documented delta.
+		s.castSpellDirectWithOverrides(ctx, triggerReplenishLifeSpell, effectTarget, false, &bp0)
+		return true
+	case triggerReplenishManaSpell:
+		// SpellEffects.cpp:865-889: Replenish Mana (33394) — cannot target
+		// self. The "% of max mana" comment is stale: the code passes the
+		// triggering effect's raw BasePoints through as the override
+		// (EffectBasePoints, the true value, not raw-minus-one), which the
+		// int32 override below reproduces exactly. Same caster delta as the
+		// Replenish Life arm.
+		if spellID != spellReplenishMana {
+			return false
+		}
+		if effectTarget == s.playerGUID {
+			return true
+		}
+		bp0 := eff.BasePoints
+		s.castSpellDirectWithOverrides(ctx, triggerReplenishManaSpell, effectTarget, false, &bp0)
+		return true
+	case triggerDemonicEmpowerSuccub:
+		// SpellEffects.cpp:900-908: Demonic Empowerment (succubus) — strip
+		// movement-impairing, stalked, and stun auras, then Lesser
+		// Invisibility (7870), cast by the target on itself (same caster
+		// delta as the Replenish arms).
+		s.removeTargetMovementImpairingAuras(ctx, effectTarget)
+		s.removeTargetAurasByType(ctx, effectTarget, spellAuraModStalked)
+		s.removeTargetAurasByType(ctx, effectTarget, spellAuraModStun)
+		s.castSpellDirect(ctx, spellLesserInvisibility, effectTarget)
+		return true
+	case triggerBrittleArmorSpell, triggerMercurialShieldSpell:
+		// SpellEffects.cpp:916-936: stack the aura spell to its DBC
+		// StackAmount via repeated triggered casts (m_caster is the player
+		// here, matching castSpellDirect; the StackAmount-missing row
+		// returns without casting, like C++).
+		auraSpellID := uint32(spellBrittleArmorAura)
+		if eff.TriggerSpell == triggerMercurialShieldSpell {
+			auraSpellID = spellMercurialShieldAura
+		}
+		auraSpell, found, err := s.server.Data.Spell(auraSpellID)
+		if err != nil || !found {
+			return true
+		}
+		for i := uint32(0); i < auraSpell.StackAmount; i++ {
+			s.castSpellDirect(ctx, auraSpellID, effectTarget)
+		}
+		return true
+	}
+	return false
+}
+
+// triggerTargetMaxHealth resolves the target's max health for the Replenish
+// Life arm: the session player, another player's session, or a creature
+// motion. Unresolvable targets yield zero.
+func (s *session) triggerTargetMaxHealth(ctx context.Context, targetGUID uint64) uint32 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	if targetGUID == 0 || targetGUID == s.playerGUID {
+		return s.player.MaxHealth
+	}
+	if s.server != nil {
+		if other := s.server.findSessionByGUID(targetGUID); other != nil && other.player != nil {
+			return other.player.MaxHealth
+		}
+	}
+	if creature, ok := s.getCombatTarget(ctx, targetGUID); ok {
+		return creature.MaxHealth
+	}
+	return 0
+}
+
+// removeTargetAurasByType removes every live aura of the given aura type from
+// the target (self, another player, or a creature), mirroring
+// Unit::RemoveAurasByType for the Demonic Empowerment arm of
+// Spell::EffectTriggerSpell (SpellEffects.cpp:903-904). The read side rides
+// targetAuraEffectsByType (the three-way resolution); removal rides the
+// standard per-target paths.
+func (s *session) removeTargetAurasByType(ctx context.Context, targetGUID uint64, auraType uint32) {
+	for _, ref := range s.targetAuraEffectsByType(targetGUID, auraType) {
+		s.removeTargetAura(ctx, targetGUID, ref.spellID)
+	}
+}
+
+// removeTargetMovementImpairingAuras mirrors
+// Unit::RemoveMovementImpairingAuras(true) (Unit.cpp:4193-4213) for the
+// Demonic Empowerment arm of Spell::EffectTriggerSpell (SpellEffects.cpp:902):
+// auras whose spell-level or any-effect mechanic (GetAllEffectsMechanicMask,
+// SpellInfo.cpp:1893) is root (7) are removed, as are auras whose spell-level
+// mechanic is snare (11). Documented no-bridge: the per-effect snare leg
+// (Unit.cpp:4206-4210), which zeroes the snare effect's amount instead of
+// removing the aura — Go has no per-effect amount-zeroing wire model for
+// arbitrary targets.
+func (s *session) removeTargetMovementImpairingAuras(ctx context.Context, targetGUID uint64) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	var auras []*activeAura
+	if targetGUID == 0 || targetGUID == s.playerGUID {
+		auras = s.loadedAuras()
+	} else if other := s.server.findSessionByGUID(targetGUID); other != nil && other.player != nil {
+		auras = other.loadedAuras()
+	} else if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
+		key := creatureAuraKeyForTarget(target)
+		s.server.auraMu.Lock()
+		for _, aura := range s.server.activeCreatureAuras[key] {
+			auras = append(auras, aura)
+		}
+		s.server.auraMu.Unlock()
+	} else {
+		return
+	}
+	var toRemove []uint32
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spellRow, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if spellHasAnyEffectMechanic(spellRow, mechanicRoot) || spellRow.Mechanic == mechanicSnare {
+			toRemove = append(toRemove, aura.SpellID)
+		}
+	}
+	for _, spellID := range toRemove {
+		s.removeTargetAura(ctx, targetGUID, spellID)
+	}
+}
+
+// spellHasAnyEffectMechanic mirrors SpellInfo::GetAllEffectsMechanicMask
+// (SpellInfo.cpp:1893-1902) as a predicate: the spell-level mechanic or any
+// live effect's mechanic equals m.
+func spellHasAnyEffectMechanic(spellRow wotlk.Spell, m uint32) bool {
+	if spellRow.Mechanic == m {
+		return true
+	}
+	for i := range spellRow.Effects {
+		if eff := spellRow.Effects[i]; eff.Effect != 0 && eff.Mechanic == m {
+			return true
+		}
+	}
+	return false
+}
+
+// removeTargetAura removes one aura spell from the target through the
+// standard per-target removal path: the session's own removeAura for players
+// (self or another session), the server creature-aura removal for creatures.
+// Unresolvable targets are a no-op.
+func (s *session) removeTargetAura(ctx context.Context, targetGUID uint64, spellID uint32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	if targetGUID == 0 || targetGUID == s.playerGUID {
+		s.removeAura(spellID)
+		return
+	}
+	if s.server != nil {
+		if other := s.server.findSessionByGUID(targetGUID); other != nil && other.player != nil {
+			other.removeAura(spellID)
+			return
+		}
+		if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			s.server.removeCreatureAura(creatureAuraKeyForTarget(target), spellID)
+		}
+	}
 }
 
 // effectValueMultiplied applies the effect's value multiplier
