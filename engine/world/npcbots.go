@@ -404,6 +404,14 @@ func (m *NPCBotManager) Assign(ctx context.Context, owner, entry uint32) error {
 }
 
 func (m *NPCBotManager) Recruit(ctx context.Context, owner, entry uint32) (BotAssignResult, error) {
+	return m.addBot(ctx, owner, entry, true)
+}
+
+func (m *NPCBotManager) AddBotFree(ctx context.Context, owner, entry uint32) (BotAssignResult, error) {
+	return m.addBot(ctx, owner, entry, false)
+}
+
+func (m *NPCBotManager) addBot(ctx context.Context, owner, entry uint32, takeMoney bool) (BotAssignResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.config.Enable {
@@ -427,14 +435,17 @@ func (m *NPCBotManager) Recruit(ctx context.Context, owner, entry uint32) (BotAs
 		return BotAddNotAvailable, nil
 	}
 	var level, money int64
-	if err := m.characters.DB.QueryRowContext(ctx, "SELECT level, money FROM characters WHERE guid = ?", owner).Scan(&level, &money); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return BotAddNotAvailable, nil
+	var cost uint64
+	if takeMoney {
+		if err := m.characters.DB.QueryRowContext(ctx, "SELECT level, money FROM characters WHERE guid = ?", owner).Scan(&level, &money); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return BotAddNotAvailable, nil
+			}
+			return 0, err
 		}
-		return 0, err
-	}
-	if gate := npcBotHireMinLevel(extra.Class); gate > 0 && level < int64(gate) {
-		return BotAddLevelGate, nil
+		if gate := npcBotHireMinLevel(extra.Class); gate > 0 && level < int64(gate) {
+			return BotAddLevelGate, nil
+		}
 	}
 	var owned uint32
 	var classOwned uint32
@@ -453,27 +464,31 @@ func (m *NPCBotManager) Recruit(ctx context.Context, owner, entry uint32) (BotAs
 	if m.config.MaxBotsPerClass > 0 && classOwned >= m.config.MaxBotsPerClass {
 		return BotAddMaxClassExceeded, nil
 	}
-	cost := NpcBotCost(uint8(level), extra.Class, m.config.Cost)
-	if uint64(money) < cost {
-		return BotAddCannotAfford, nil
+	if takeMoney {
+		cost = NpcBotCost(uint8(level), extra.Class, m.config.Cost)
+		if uint64(money) < cost {
+			return BotAddCannotAfford, nil
+		}
 	}
 	tx, err := m.characters.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
-	result, err := tx.ExecContext(ctx, "UPDATE characters SET money = money - ? WHERE guid = ? AND money >= ?", cost, owner, cost)
-	if err != nil {
-		_ = tx.Rollback()
-		return 0, err
-	}
-	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
-		_ = tx.Rollback()
+	if takeMoney {
+		result, err := tx.ExecContext(ctx, "UPDATE characters SET money = money - ? WHERE guid = ? AND money >= ?", cost, owner, cost)
 		if err != nil {
+			_ = tx.Rollback()
 			return 0, err
 		}
-		return BotAddCannotAfford, nil
+		if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+			_ = tx.Rollback()
+			if err != nil {
+				return 0, err
+			}
+			return BotAddCannotAfford, nil
+		}
 	}
-	result, err = tx.ExecContext(ctx, "UPDATE characters_npcbot SET owner = ? WHERE entry = ? AND owner = 0", owner, entry)
+	result, err := tx.ExecContext(ctx, "UPDATE characters_npcbot SET owner = ? WHERE entry = ? AND owner = 0", owner, entry)
 	if err != nil {
 		_ = tx.Rollback()
 		return 0, err
