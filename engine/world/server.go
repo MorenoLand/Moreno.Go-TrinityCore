@@ -249,15 +249,25 @@ type session struct {
 	emoteState                   uint32
 	playerLocked                 bool
 	rooted                       bool
-	attackTarget                 uint64
-	duelPartner                  uint64
-	duelArbiterX                 float32
-	duelArbiterY                 float32
-	duelArbiterZ                 float32
-	duelOutOfBounds              time.Time
-	lastSwing                    time.Time
-	lastOffhandSwing             time.Time
-	lastRangedSwing              time.Time
+	// forcedSpeedChanges mirrors Player::m_forced_speed_changes (Player.h:2023):
+	// pending forced-speed-change ACKs per UnitMoveType, incremented for every
+	// real SMSG_FORCE_*_SPEED_CHANGE sent. forcedSpeedExpected holds the last
+	// sent speed per type for the HandleForceSpeedChangeAck anti-cheat check.
+	forcedSpeedChanges  [9]uint8
+	forcedSpeedExpected [9]float32
+	// forcedSpeedSent marks types with a real sent packet: the ACK speed
+	// check only runs against a sent expectation (C++ falls back to
+	// GetSpeed, which Go does not model for types it never forces).
+	forcedSpeedSent  [9]bool
+	attackTarget     uint64
+	duelPartner      uint64
+	duelArbiterX     float32
+	duelArbiterY     float32
+	duelArbiterZ     float32
+	duelOutOfBounds  time.Time
+	lastSwing        time.Time
+	lastOffhandSwing time.Time
+	lastRangedSwing  time.Time
 	// swingErrorMsg is the m_swingErrorMsg latch (Player.cpp): 0 = no
 	// swing error sent, 1 = SMSG_ATTACK_SWING_NOT_IN_RANGE sent,
 	// 2 = SMSG_ATTACK_SWING_BAD_FACING sent. A new error packet goes out
@@ -1703,12 +1713,15 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleMoveTeleportAck(ctx, payload) {
 				return
 			}
-		case uint32(protocol.OpcodeMSG_MOVE_TELEPORT), uint32(protocol.OpcodeCMSG_MOVE_SET_CAN_FLY_ACK),
-			uint32(protocol.OpcodeCMSG_FORCE_RUN_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_RUN_BACK_SPEED_CHANGE_ACK),
+		case uint32(protocol.OpcodeMSG_MOVE_TELEPORT), uint32(protocol.OpcodeCMSG_MOVE_SET_CAN_FLY_ACK):
+			// Movement acknowledged by client
+		case uint32(protocol.OpcodeCMSG_FORCE_RUN_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_RUN_BACK_SPEED_CHANGE_ACK),
 			uint32(protocol.OpcodeCMSG_FORCE_SWIM_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_SWIM_BACK_SPEED_CHANGE_ACK),
 			uint32(protocol.OpcodeCMSG_FORCE_WALK_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_FLIGHT_SPEED_CHANGE_ACK),
-			uint32(protocol.OpcodeCMSG_FORCE_FLIGHT_BACK_SPEED_CHANGE_ACK):
-			// Movement acknowledged by client
+			uint32(protocol.OpcodeCMSG_FORCE_FLIGHT_BACK_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_PITCH_RATE_CHANGE_ACK):
+			if !state.authed || !state.handleForceSpeedChangeAck(uint16(header.Opcode), ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_MESSAGECHAT):
 			if !state.authed || !state.handleMessageChat(ctx, payload) {
 				return
@@ -2897,7 +2910,6 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			uint32(protocol.OpcodeCMSG_FORCEACTIONONOTHER),
 			uint32(protocol.OpcodeCMSG_FORCEACTIONSHOW),
 			uint32(protocol.OpcodeCMSG_FORCE_ANIM),
-			uint32(protocol.OpcodeCMSG_FORCE_PITCH_RATE_CHANGE_ACK),
 			uint32(protocol.OpcodeCMSG_FORCE_SAY_CHEAT),
 			uint32(protocol.OpcodeCMSG_GAMESPEED_SET),
 			uint32(protocol.OpcodeCMSG_GAMETIME_SET),

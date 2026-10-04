@@ -758,6 +758,61 @@ func (s *session) handleMoveKnockBackAck(ctx context.Context, payload []byte) bo
 	return true
 }
 
+// handleForceSpeedChangeAck processes the CMSG_FORCE_*_SPEED_CHANGE_ACK
+// opcodes (0x0E2/0x0E3/0x0E5/0x0E7/0x0E8/0x0EA/0x0EC/0x45D).
+// Reference: WorldSession::HandleForceSpeedChangeAck (MovementHandler.cpp:442).
+func (s *session) handleForceSpeedChangeAck(opcode uint16, ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	b := protocol.NewReader(payload)
+	guid, _ := b.ReadPackedGUID()
+	// now can skip not our packet
+	if guid != s.playerGUID {
+		return true
+	}
+	_, _ = b.ReadU32() // ack counter, unused
+	// The movement info is parsed but not applied, matching C++ which never
+	// assigns it to m_movementInfo here.
+	_, _ = readMovementInfo(b)
+	newspeed, _ := b.ReadF32()
+	moveType, ok := forcedSpeedAckMoveType(opcode)
+	if !ok {
+		return true
+	}
+	// skip all forced speed changes except last and unexpected: the client
+	// sends one ACK for the mounted/run case and intermediate ACKs must not
+	// trip the anti-cheat check.
+	if s.forcedSpeedChanges[moveType] > 0 {
+		s.forcedSpeedChanges[moveType]--
+		if s.forcedSpeedChanges[moveType] > 0 {
+			return true
+		}
+	}
+	if !s.forcedSpeedSent[moveType] || s.player.TransportGUID != 0 {
+		return true
+	}
+	expected := s.forcedSpeedExpected[moveType]
+	if math.Abs(float64(expected-newspeed)) > 0.01 {
+		if expected > newspeed {
+			// client under-reports: re-send the correct speed
+			// (Unit::SetSpeedRate leg, MovementHandler.cpp:505-509)
+			s.debug("force speed change corrected", "account", s.accountName, "moveType", moveType, "expected", expected, "acked", newspeed)
+			switch moveType {
+			case moveTypeRun:
+				s.sendRuntimeMovementSpeed(protocol.OpcodeSMSG_FORCE_RUN_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_RUN_SPEED, expected, true)
+			case moveTypeFlight:
+				s.sendRuntimeMovementSpeed(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_FLIGHT_SPEED, expected, false)
+			}
+		} else {
+			// client over-reports its speed: cheating
+			s.debug("force speed change mismatch, kicking", "account", s.accountName, "moveType", moveType, "expected", expected, "acked", newspeed)
+			s.kickSession(s)
+		}
+	}
+	return true
+}
+
 // handleMoveNotActiveMover processes CMSG_MOVE_NOT_ACTIVE_MOVER (0x2D1).
 func (s *session) handleMoveNotActiveMover(ctx context.Context, payload []byte) bool {
 	return s.handleMovementAck(ctx, payload)

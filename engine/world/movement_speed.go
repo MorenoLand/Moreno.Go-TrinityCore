@@ -366,9 +366,72 @@ func (s *session) hasFlightSpeedAura() bool {
 	return false
 }
 
+// UnitMoveType indices (Unit.h:262), used for the forced-speed-change ACK
+// bookkeeping that mirrors Player::m_forced_speed_changes (Player.h:2023).
+const (
+	moveTypeWalk = iota
+	moveTypeRun
+	moveTypeRunBack
+	moveTypeSwim
+	moveTypeSwimBack
+	moveTypeTurnRate
+	moveTypeFlight
+	moveTypeFlightBack
+	moveTypePitchRate
+	moveTypeCount
+)
+
+// forcedSpeedMoveType maps an SMSG_FORCE_*_SPEED_CHANGE opcode to its
+// UnitMoveType index (Unit::SendSpeedChange, Unit.cpp:8835).
+func forcedSpeedMoveType(opcode protocol.Opcode) (int, bool) {
+	switch opcode {
+	case protocol.OpcodeSMSG_FORCE_RUN_SPEED_CHANGE:
+		return moveTypeRun, true
+	case protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE:
+		return moveTypeFlight, true
+	}
+	return 0, false
+}
+
+// forcedSpeedAckMoveType maps a CMSG_FORCE_*_SPEED_CHANGE_ACK opcode to its
+// UnitMoveType index (WorldSession::HandleForceSpeedChangeAck, MovementHandler.cpp:477).
+func forcedSpeedAckMoveType(opcode uint16) (int, bool) {
+	switch protocol.Opcode(opcode) {
+	case protocol.OpcodeCMSG_FORCE_WALK_SPEED_CHANGE_ACK:
+		return moveTypeWalk, true
+	case protocol.OpcodeCMSG_FORCE_RUN_SPEED_CHANGE_ACK:
+		return moveTypeRun, true
+	case protocol.OpcodeCMSG_FORCE_RUN_BACK_SPEED_CHANGE_ACK:
+		return moveTypeRunBack, true
+	case protocol.OpcodeCMSG_FORCE_SWIM_SPEED_CHANGE_ACK:
+		return moveTypeSwim, true
+	case protocol.OpcodeCMSG_FORCE_SWIM_BACK_SPEED_CHANGE_ACK:
+		return moveTypeSwimBack, true
+	case protocol.OpcodeCMSG_FORCE_TURN_RATE_CHANGE_ACK:
+		return moveTypeTurnRate, true
+	case protocol.OpcodeCMSG_FORCE_FLIGHT_SPEED_CHANGE_ACK:
+		return moveTypeFlight, true
+	case protocol.OpcodeCMSG_FORCE_FLIGHT_BACK_SPEED_CHANGE_ACK:
+		return moveTypeFlightBack, true
+	case protocol.OpcodeCMSG_FORCE_PITCH_RATE_CHANGE_ACK:
+		return moveTypePitchRate, true
+	}
+	return 0, false
+}
+
 func (s *session) sendRuntimeMovementSpeed(opcode protocol.Opcode, nearbyOpcode protocol.Opcode, speed float32, run bool) {
 	if s == nil || s.player == nil || s.server == nil {
 		return
+	}
+	// Unit::SendSpeedChange (Unit.cpp:8852) registers every real sent forced
+	// speed packet so WorldSession::HandleForceSpeedChangeAck can skip all
+	// but the last ACK per type.
+	if mt, ok := forcedSpeedMoveType(opcode); ok {
+		if s.forcedSpeedChanges[mt] < 255 {
+			s.forcedSpeedChanges[mt]++
+		}
+		s.forcedSpeedExpected[mt] = speed
+		s.forcedSpeedSent[mt] = true
 	}
 	self := protocol.NewBuffer(packedGUIDSize(s.playerGUID) + 9)
 	self.WritePackedGUID(s.playerGUID)
