@@ -193,7 +193,10 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 			continue
 		}
 		if buyPrice > 0 {
-			buyPrice = int64(math.Floor(float64(buyPrice) * s.vendorReputationPriceDiscount(ctx, creatureEntry)))
+			// SendListInventory (ItemHandler.cpp): int32 price = item->IsGoldRequired(itemTemplate)
+			//   ? uint32(floor(itemTemplate->BuyPrice * discountMod)) : 0 — discount floored on the
+			//   unit price in the list, unlike the buy path which floors it on the total.
+			buyPrice = int64(math.Floor(float64(float32(buyPrice) * s.vendorReputationPriceDiscount(ctx, creatureEntry))))
 		}
 		if buyCount <= 0 {
 			buyCount = 1
@@ -322,16 +325,19 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 		}
 		return true
 	}
-	if extCost != 0 && flagsExtra&int64(itemFlag2DontIgnoreBuyPrice) == 0 {
-		buyPrice = 0
+	// Player.cpp:22063-22085: price = pProto->BuyPrice * count; then
+	// price = uint32(floor(price * GetReputationPriceDiscount(creature))) — the discount is floored
+	// on the TOTAL, not the unit price, so multi-count buys can differ by whole coppers from the
+	// floored-unit form. IsGoldRequired gates the whole block; the MAX_MONEY_AMOUNT cheat clamp on
+	// count is deliberately not replicated (Go drops the overflowing buy silently).
+	goldRequired := extCost == 0 || flagsExtra&int64(itemFlag2DontIgnoreBuyPrice) != 0
+	var totalCost uint32
+	if goldRequired && buyPrice > 0 {
+		if uint64(buyPrice) > uint64(^uint32(0))/uint64(count) {
+			return true
+		}
+		totalCost = uint32(math.Floor(float64(float32(uint32(buyPrice)*count) * s.vendorReputationPriceDiscount(ctx, vendorEntry))))
 	}
-	if buyPrice > 0 {
-		buyPrice = int64(math.Floor(float64(buyPrice) * s.vendorReputationPriceDiscount(ctx, vendorEntry)))
-	}
-	if uint64(buyPrice) > uint64(^uint32(0))/uint64(count) {
-		return true
-	}
-	totalCost := uint32(buyPrice) * count
 	remainingStock := int32(-1)
 	if maxCount > 0 {
 		current := s.server.currentVendorStockForGUID(vendorGUID, itemEntry, slot, uint32(extCost), int32(maxCount), time.Duration(incrTime)*time.Second, uint32(buyCount))
@@ -455,7 +461,9 @@ func (s *session) vendorReputationRank(ctx context.Context, factionID uint32) ui
 	return reputationRank(standing)
 }
 
-func (s *session) vendorReputationPriceDiscount(ctx context.Context, vendorEntry uint32) float64 {
+// vendorReputationPriceDiscount mirrors Player::GetReputationPriceDiscount (Player.cpp:23679-23689):
+// float return, 1.0f below or at REP_NEUTRAL, else 1.0f - 0.05f*(rank - REP_NEUTRAL).
+func (s *session) vendorReputationPriceDiscount(ctx context.Context, vendorEntry uint32) float32 {
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.Data == nil {
 		return 1
 	}
@@ -471,7 +479,7 @@ func (s *session) vendorReputationPriceDiscount(ctx context.Context, vendorEntry
 	if rank <= 3 {
 		return 1
 	}
-	return 1 - 0.05*float64(rank-3)
+	return 1 - 0.05*float32(rank-3)
 }
 
 func (s *session) vendorExtendedCost(ctx context.Context, id, count uint32) (wotlk.ItemExtendedCostEntry, uint8, bool) {
