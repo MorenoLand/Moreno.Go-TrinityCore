@@ -19,9 +19,10 @@ const (
 	AVReinforcementsCaptain uint32 = 100
 	AVReinforcementsTower   uint32 = 75
 
-	AVDefaultCaptureDuration  = 240 * time.Second // 4 minutes
-	AVDefaultMineTickDuration = 45 * time.Second  // 45 seconds
-	AVFirstCapDuration        = 300 * time.Second // 5 minutes (BG_AV_SNOWFALL_FIRSTCAP)
+	AVDefaultCaptureDuration     = 240 * time.Second // 4 minutes
+	AVDefaultMineTickDuration    = 45 * time.Second  // 45 seconds
+	AVDefaultMineReclaimDuration = 20 * time.Minute  // 20 minutes (AV_MINE_RECLAIM_TIMER)
+	AVFirstCapDuration           = 300 * time.Second // 5 minutes (BG_AV_SNOWFALL_FIRSTCAP)
 
 	// Kill/rep rewards mirroring BattlegroundAV.h.
 	AVHonorKillsBoss    uint32 = 4   // BG_AV_KILL_BOSS
@@ -178,9 +179,10 @@ type avNodeState struct {
 }
 
 type avMineState struct {
-	MineID   uint32
-	Owner    uint8 // 0: Neutral, 1: Alliance, 2: Horde
-	LastTick time.Time
+	MineID         uint32
+	Owner          uint8 // 0: Neutral, 1: Alliance, 2: Horde
+	ReclaimTimerMs int64 // == m_Mine_Reclaim_Timer: counts down to neutral reclaim
+	LastTick       time.Time
 }
 
 type avBattlegroundState struct {
@@ -194,7 +196,8 @@ type avBattlegroundState struct {
 	Mines                  [2]avMineState
 	CaptureDuration        time.Duration
 	MineTickDuration       time.Duration
-	Winner                 int8 // -1: ongoing, 0: Alliance, 1: Horde
+	MineTickElapsedMs      int64 // == m_Mine_Timer accumulation toward the 45s score tick
+	Winner                 int8  // -1: ongoing, 0: Alliance, 1: Horde
 	StopTicker             chan struct{}
 }
 
@@ -611,6 +614,16 @@ func (s *Server) changeAVMineOwner(av *avBattlegroundState, mineID uint32, newOw
 		return
 	}
 	mine.Owner = newOwner
+	// Reference: BattlegroundAV::ChangeMineOwner (BattlegroundAV.cpp:687):
+	// m_Mine_Reclaim_Timer[mine] = AV_MINE_RECLAIM_TIMER (1200000ms) only when
+	// the new owner is a faction. The same-owner early return above precedes
+	// this, matching C++ arm order (re-capturing an already-owned mine does
+	// not extend the reclaim timer).
+	if newOwner == AVTeamAlliance || newOwner == AVTeamHorde {
+		mine.ReclaimTimerMs = AVDefaultMineReclaimDuration.Milliseconds()
+	} else {
+		mine.ReclaimTimerMs = 0
+	}
 	// Update WorldStates
 	for ownerIdx := uint32(0); ownerIdx < 3; ownerIdx++ {
 		val := uint32(0)
@@ -765,8 +778,12 @@ func (s *Server) handleAVCreatureKilled(sess *session, creatureEntry uint32) {
 	}
 }
 
-// TickMines processes passive reinforcement generation for controlled mines (+1 per 45s).
-// Reference: BattlegroundAV::PostUpdateImpl / AV_MINE_TICK_TIMER (BattlegroundAV.cpp).
+// TickAVMines processes mine reinforcement ticks and neutral reclaims.
+// Reference: BattlegroundAV::PostUpdateImpl (BattlegroundAV.cpp:390-407):
+// m_Mine_Timer -= diff, per owned mine UpdateScore(owner, 1) when the 45s
+// AV_MINE_TICK_TIMER elapses (reset afterwards), and the per-mine
+// m_Mine_Reclaim_Timer countdown -> ChangeMineOwner(mine, AV_NEUTRAL_TEAM)
+// on expiry.
 func (s *Server) TickAVMines(av *avBattlegroundState, elapsedMs int64) {
 	if av == nil {
 		return
@@ -778,13 +795,56 @@ func (s *Server) TickAVMines(av *avBattlegroundState, elapsedMs int64) {
 		return
 	}
 
+	tickMs := av.MineTickDuration.Milliseconds()
+	if tickMs <= 0 {
+		tickMs = AVDefaultMineTickDuration.Milliseconds()
+	}
+	av.MineTickElapsedMs += elapsedMs
+
 	for i := uint32(0); i < 2; i++ {
 		mine := &av.Mines[i]
-		if mine.Owner == AVTeamAlliance {
-			s.updateAVScore(av, AVTeamAlliance, 1)
-		} else if mine.Owner == AVTeamHorde {
-			s.updateAVScore(av, AVTeamHorde, 1)
+		if mine.Owner != AVTeamAlliance && mine.Owner != AVTeamHorde {
+			continue
 		}
+		if av.MineTickElapsedMs >= tickMs {
+			s.updateAVScore(av, mine.Owner, 1)
+		}
+		if mine.ReclaimTimerMs > elapsedMs {
+			mine.ReclaimTimerMs -= elapsedMs
+		} else {
+			s.changeAVMineOwner(av, i, AVTeamNeutral)
+		}
+	}
+	if av.MineTickElapsedMs >= tickMs {
+		av.MineTickElapsedMs = 0
+	}
+}
+
+// updateAVBattles ticks every live AV state, driving the mine reinforcement
+// tick and the mine neutral-reclaim timers. BattlegroundMgr::Update
+// (BattlegroundMgr.cpp:94) sweeps all running instances with bg->Update(diff)
+// every BATTLEGROUND_OBJECTIVE_UPDATE_INTERVAL (BattlegroundMgr.h:38 = 1000ms);
+// the 1s gate here mirrors that cadence, like updateArenaBattles.
+func (s *Server) updateAVBattles(now time.Time) {
+	if s == nil {
+		return
+	}
+	if !s.avTickLast.IsZero() && now.Sub(s.avTickLast) < time.Second {
+		return
+	}
+	var elapsedMs int64 = 1000
+	if !s.avTickLast.IsZero() {
+		elapsedMs = now.Sub(s.avTickLast).Milliseconds()
+	}
+	s.avTickLast = now
+	s.avMu.RLock()
+	battles := make([]*avBattlegroundState, 0, len(s.avState))
+	for _, av := range s.avState {
+		battles = append(battles, av)
+	}
+	s.avMu.RUnlock()
+	for _, av := range battles {
+		s.TickAVMines(av, elapsedMs)
 	}
 }
 
