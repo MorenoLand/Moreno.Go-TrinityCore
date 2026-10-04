@@ -24,35 +24,43 @@ const (
 	gameObjectBytes1                      = 17
 )
 
-// Game object types mirroring TrinityCore GameobjectTypes (GameObject.h:60).
+// Game object types mirroring TrinityCore GameobjectTypes (SharedDefines.h:1592).
 const (
-	GameObjectTypeDoor         uint8 = 0
-	GameObjectTypeButton       uint8 = 1
-	GameObjectTypeQuestGiver   uint8 = 2
-	GameObjectTypeChest        uint8 = 3
-	GameObjectTypeBinder       uint8 = 4
-	GameObjectTypeGeneric      uint8 = 5
-	GameObjectTypeTrap         uint8 = 6
-	GameObjectTypeChair        uint8 = 7
-	GameObjectTypeSpellFocus   uint8 = 8
-	GameObjectTypeText         uint8 = 9
-	GameObjectTypeGoober       uint8 = 10
-	GameObjectTypeTransport    uint8 = 11
-	GameObjectTypeAreaDamage   uint8 = 12
-	GameObjectTypeCamera       uint8 = 13
-	GameObjectTypeMapObject    uint8 = 14
-	GameObjectTypeMOTransport  uint8 = 15
-	GameObjectTypeDuelArbiter  uint8 = 16
-	GameObjectTypeFishingNode  uint8 = 17
-	GameObjectTypeRitual       uint8 = 18
-	GameObjectTypeMailbox      uint8 = 19
-	GameObjectTypeDOONotUse    uint8 = 20
-	GameObjectTypeGuardPost    uint8 = 21
-	GameObjectTypeSpellCaster  uint8 = 22
-	GameObjectTypeMeetingStone uint8 = 23
-	GameObjectTypeFlagStand    uint8 = 24
-	GameObjectTypeFishingHole  uint8 = 25
-	GameObjectTypeFlagDrop     uint8 = 29
+	GameObjectTypeDoor                 uint8 = 0
+	GameObjectTypeButton               uint8 = 1
+	GameObjectTypeQuestGiver           uint8 = 2
+	GameObjectTypeChest                uint8 = 3
+	GameObjectTypeBinder               uint8 = 4
+	GameObjectTypeGeneric              uint8 = 5
+	GameObjectTypeTrap                 uint8 = 6
+	GameObjectTypeChair                uint8 = 7
+	GameObjectTypeSpellFocus           uint8 = 8
+	GameObjectTypeText                 uint8 = 9
+	GameObjectTypeGoober               uint8 = 10
+	GameObjectTypeTransport            uint8 = 11
+	GameObjectTypeAreaDamage           uint8 = 12
+	GameObjectTypeCamera               uint8 = 13
+	GameObjectTypeMapObject            uint8 = 14
+	GameObjectTypeMOTransport          uint8 = 15
+	GameObjectTypeDuelArbiter          uint8 = 16
+	GameObjectTypeFishingNode          uint8 = 17
+	GameObjectTypeRitual               uint8 = 18
+	GameObjectTypeMailbox              uint8 = 19
+	GameObjectTypeDOONotUse            uint8 = 20
+	GameObjectTypeGuardPost            uint8 = 21
+	GameObjectTypeSpellCaster          uint8 = 22
+	GameObjectTypeMeetingStone         uint8 = 23
+	GameObjectTypeFlagStand            uint8 = 24
+	GameObjectTypeFishingHole          uint8 = 25
+	GameObjectTypeFlagDrop             uint8 = 26
+	GameObjectTypeMiniGame             uint8 = 27
+	GameObjectTypeCapturePoint         uint8 = 29
+	GameObjectTypeAuraGenerator        uint8 = 30
+	GameObjectTypeDungeonDifficulty    uint8 = 31
+	GameObjectTypeBarberChair          uint8 = 32
+	GameObjectTypeDestructibleBuilding uint8 = 33
+	GameObjectTypeGuildBank            uint8 = 34
+	GameObjectTypeTrapDoor             uint8 = 35
 )
 
 // Game object states mirroring TrinityCore GOState (GameObject.h:35).
@@ -91,6 +99,7 @@ type dynamicGameObjectState struct {
 	DespawnTimer    *time.Timer
 	Hidden          bool
 	IsRuntimeSpawn  bool
+	ChairSlots      map[uint32]uint64 // chair slot index -> occupant player GUID (GAMEOBJECT_TYPE_CHAIR)
 }
 
 type gameObjectSpawn struct {
@@ -574,6 +583,95 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		if tpl.spellID != 0 {
 			s.castSpellDirect(ctx, tpl.spellID, s.playerGUID)
 		}
+
+	case GameObjectTypeTrap:
+		// GameObject::Use GAMEOBJECT_TYPE_TRAP arm (GameObject.cpp:1536-1549;
+		// template layout GameObjectData.h:120-138).
+		tpl := s.loadGameObjectTemplateData(ctx, entry)
+		if tpl[3] != 0 { // trap.spellId (data3)
+			s.castSpellDirect(ctx, tpl[3], s.playerGUID)
+		}
+		// trap.cooldown (data5) feeds m_cooldownTime in C++; Go has no GO
+		// cooldown-time model, so no cooldown is modeled (documented).
+		if tpl[4] == 1 { // type == 1: deactivate after trigger
+			// GO_JUST_DEACTIVATED has no Go analog; the instance copy is
+			// hidden and a despawn goes out to viewers.
+			s.server.setGameObjectHiddenInInstance(goState.Map, goState.InstanceID, guid, true)
+			s.server.broadcastGameObjectDespawn(goState.Map, guid)
+		}
+
+	case GameObjectTypeChair:
+		s.useGameObjectChair(ctx, goState, entry)
+
+	case GameObjectTypeCamera:
+		// GameObject::Use GAMEOBJECT_TYPE_CAMERA arm (GameObject.cpp:1697-1713;
+		// template layout GameObjectData.h:220-228).
+		tpl := s.loadGameObjectTemplateData(ctx, entry)
+		if tpl[1] != 0 { // camera.cinematicId (data1)
+			buf := protocol.NewBuffer(4)
+			buf.WriteU32(tpl[1])
+			_ = s.write(uint16(protocol.OpcodeSMSG_TRIGGER_CINEMATIC), buf.Bytes(), true)
+		}
+		// camera.eventID (data2) starts event scripts; Go has no event-script
+		// model (documented).
+
+	case GameObjectTypeSpellCaster:
+		// GameObject::Use GAMEOBJECT_TYPE_SPELLCASTER arm
+		// (GameObject.cpp:1905-1925; template layout GameObjectData.h:267-277).
+		tpl := s.loadGameObjectTemplateData(ctx, entry)
+		if tpl[2] != 0 { // partyOnly (data2)
+			// C++ gates on the GO owner's player being in the same raid;
+			// only runtime-spawned GOs carry OwnerGUID in Go, and a null
+			// owner fails the C++ gate the same way.
+			owner := s.server.playerSessionForGUID(goState.OwnerGUID)
+			if owner == nil || owner.player == nil {
+				return true
+			}
+			if s.groupID == 0 || owner.groupID == 0 || s.groupID != owner.groupID {
+				return true
+			}
+		}
+		// RemoveAurasByType(SPELL_AURA_MOUNTED) has no Go mounted-aura model
+		// (documented); AddUse() has no Go use-count model (documented).
+		if tpl[0] != 0 { // spellcaster.spellId (data0)
+			// C++ casts with the GO as caster at the end of Use(); Go's
+			// castSpellDirect casts as the player (documented).
+			s.castSpellDirect(ctx, tpl[0], s.playerGUID)
+		}
+
+	case GameObjectTypeMeetingStone:
+		// GameObject::Use GAMEOBJECT_TYPE_MEETINGSTONE arm
+		// (GameObject.cpp:1927-1953; template layout GameObjectData.h:279-284).
+		tpl := s.loadGameObjectTemplateData(ctx, entry)
+		target := s.server.playerSessionForGUID(s.selection)
+		if target == nil || target == s || target.player == nil {
+			return true
+		}
+		// C++ Player::IsInSameRaidWith = same group (Player.cpp:2543).
+		if s.groupID == 0 || target.groupID == 0 || s.groupID != target.groupID {
+			return true
+		}
+		// Both players must meet the stone's min level.
+		if uint32(s.player.Level) < tpl[0] || uint32(target.player.Level) < tpl[0] {
+			return true
+		}
+		spellID := uint32(59782) // Summoning Stone Effect
+		if entry == 194097 {
+			spellID = 61994 // Ritual of Summoning
+		}
+		s.castSpellDirect(ctx, spellID, s.playerGUID)
+
+	case GameObjectTypeBarberChair:
+		// GameObject::Use GAMEOBJECT_TYPE_BARBER_CHAIR arm
+		// (GameObject.cpp:2049-2065; template layout GameObjectData.h:367-372).
+		tpl := s.loadGameObjectTemplateData(ctx, entry)
+		// C++ keeps combat/pet state with TELE_TO_NOT_LEAVE_* flags; Go's
+		// teleportTo stops combat and may unsummon the pet (documented).
+		s.teleportTo(goState.Map, goState.X, goState.Y, goState.Z, goState.Orientation)
+		_ = s.write(uint16(protocol.OpcodeSMSG_ENABLE_BARBER_SHOP), nil, true)
+		// UNIT_STAND_STATE_SIT_LOW_CHAIR (4) + chairheight (data0).
+		s.player.StandState = 4 + uint8(tpl[0])
+		s.sendPlayerUpdate()
 	}
 
 	return true
@@ -646,6 +744,114 @@ func (s *session) loadGooberTemplate(ctx context.Context, entry uint32) gooberTe
 	tpl.linkedTrapID = uint32(linkedTrapID)
 	tpl.gossipID = uint32(gossipID)
 	return tpl
+}
+
+// loadGameObjectTemplateData fetches gameobject_template data0..data7 for the
+// GameObject::Use arms that read type-specific template fields
+// (GameObjectData.h:110-372).
+func (s *session) loadGameObjectTemplateData(ctx context.Context, entry uint32) [8]uint32 {
+	var data [8]uint32
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return data
+	}
+	var d [8]int64
+	err := s.server.WorldStore.DB.QueryRowContext(ctx,
+		`SELECT COALESCE(Data0, 0), COALESCE(Data1, 0), COALESCE(Data2, 0), COALESCE(Data3, 0),
+			COALESCE(Data4, 0), COALESCE(Data5, 0), COALESCE(Data6, 0), COALESCE(Data7, 0)
+		FROM gameobject_template WHERE entry = ? LIMIT 1`, entry).
+		Scan(&d[0], &d[1], &d[2], &d[3], &d[4], &d[5], &d[6], &d[7])
+	if err != nil {
+		return data
+	}
+	for i := range d {
+		data[i] = uint32(d[i])
+	}
+	return data
+}
+
+// useGameObjectChair mirrors the GAMEOBJECT_TYPE_CHAIR arm of GameObject::Use
+// (GameObject.cpp:1550-1629): the player teleports to the nearest free slot
+// along the chair's orthogonal axis and sits.
+func (s *session) useGameObjectChair(ctx context.Context, goState *dynamicGameObjectState, entry uint32) {
+	if s.server == nil || s.player == nil {
+		return
+	}
+	tpl := s.loadGameObjectTemplateData(ctx, entry)
+	slots := tpl[0] // chair.slots (data0)
+	if slots == 0 {
+		slots = 1 // C++ DB-error fallback: one default slot
+	}
+	height := tpl[1] // chair.height (data1)
+	orthogonal := float64(goState.Orientation) + math.Pi/2
+	slotPos := func(i uint32) (float32, float32) {
+		relative := float64(goState.Size)*float64(i) - float64(goState.Size)*float64(slots-1)/2.0
+		return goState.X + float32(relative*math.Cos(orthogonal)), goState.Y + float32(relative*math.Sin(orthogonal))
+	}
+	sv := s.server
+	// Snapshot occupant GUIDs before resolving sessions so no session lock is
+	// ever taken while holding objectsMu.
+	sv.objectsMu.RLock()
+	snapshot := make(map[uint32]uint64, slots)
+	for i := uint32(0); i < slots; i++ {
+		if og := goState.ChairSlots[i]; og != 0 {
+			snapshot[i] = og
+		}
+	}
+	sv.objectsMu.RUnlock()
+	// A slot stays taken only while its occupant is online, in a chair sit
+	// state (C++: IsSitState() && GetStandState() != UNIT_STAND_STATE_SIT),
+	// and within 0.1 yards of the slot position.
+	occupied := make(map[uint32]bool, len(snapshot))
+	for i, og := range snapshot {
+		sx, sy := slotPos(i)
+		occ := sv.playerSessionForGUID(og)
+		if occ == nil || occ.player == nil {
+			continue
+		}
+		switch occ.player.StandState {
+		case 2, 4, 5, 6: // SIT_CHAIR, SIT_LOW/MEDIUM/HIGH_CHAIR
+		default:
+			continue
+		}
+		dx := float64(occ.player.X - sx)
+		dy := float64(occ.player.Y - sy)
+		if math.Hypot(dx, dy) < 0.1 {
+			occupied[i] = true
+		}
+	}
+	var nearestSlot uint32
+	nearestX, nearestY := goState.X, goState.Y
+	foundFree := false
+	lowestDist := math.MaxFloat64
+	sv.objectsMu.Lock()
+	if goState.ChairSlots == nil {
+		goState.ChairSlots = make(map[uint32]uint64, slots)
+	}
+	for i := uint32(0); i < slots; i++ {
+		if occupied[i] {
+			continue
+		}
+		goState.ChairSlots[i] = 0
+		foundFree = true
+		sx, sy := slotPos(i)
+		dx := float64(s.player.X - sx)
+		dy := float64(s.player.Y - sy)
+		if dist := math.Hypot(dx, dy); dist <= lowestDist {
+			lowestDist = dist
+			nearestSlot = i
+			nearestX, nearestY = sx, sy
+		}
+	}
+	if foundFree {
+		goState.ChairSlots[nearestSlot] = s.playerGUID
+	}
+	sv.objectsMu.Unlock()
+	if !foundFree {
+		return
+	}
+	s.teleportTo(goState.Map, nearestX, nearestY, goState.Z, goState.Orientation)
+	s.player.StandState = 4 + uint8(height) // UNIT_STAND_STATE_SIT_LOW_CHAIR + height
+	s.sendPlayerUpdate()
 }
 
 func (s *Server) getOrLoadGameObjectState(ctx context.Context, guid uint64, lowGUID, entry, mapID, instanceID uint32) (*dynamicGameObjectState, error) {
