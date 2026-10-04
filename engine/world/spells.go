@@ -728,6 +728,73 @@ func (s *session) takeSpellReagents(ctx context.Context, spell wotlk.Spell) {
 	}
 }
 
+const (
+	spellDisablePlayer          uint16 = 0x01  // SPELL_DISABLE_PLAYER (DisableMgr.h:37)
+	spellDisableDeprecatedSpell uint16 = 0x08  // SPELL_DISABLE_DEPRECATED_SPELL (DisableMgr.h:40)
+	spellDisableMap             uint16 = 0x10  // SPELL_DISABLE_MAP (DisableMgr.h:41)
+	spellDisableArea            uint16 = 0x20  // SPELL_DISABLE_AREA (DisableMgr.h:42)
+	spellDisableArenas          uint16 = 0x100 // SPELL_DISABLE_ARENAS (DisableMgr.h:45)
+	spellDisableBattlegrounds   uint16 = 0x200 // SPELL_DISABLE_BATTLEGROUNDS (DisableMgr.h:46)
+)
+
+// spellDisabledForCaster mirrors DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL,
+// entry, caster) (DisableMgr.cpp:320-368) for the Spell::prepare disabled-spell
+// gate (Spell.cpp:3074-3080). Only the player-caster arm is bridged: the
+// creature/pet/gameobject arms never apply on the handleCastSpell path (the
+// session is always a player). The SPELL_DISABLE_LOS sub-arm plays no role here
+// (prepare calls with no flags); the aura-LOS spell arms evaluate it per call.
+// A missing disables row, missing table, or query error is permissive
+// (terrain.go convention); the deprecated-spell bit (DisableMgr.cpp:366-367)
+// still disables the cast outright when the PLAYER bit is absent.
+func (s *session) spellDisabledForCaster(ctx context.Context, spellID uint32) bool {
+	db := s.server.WorldStore.DB
+	if db == nil {
+		return false
+	}
+	var flags uint16
+	var mapList, areaList string
+	if err := db.QueryRowContext(ctx, "SELECT flags, params_0, params_1 FROM disables WHERE sourceType = ? AND entry = ?", disableTypeSpell, spellID).Scan(&flags, &mapList, &areaList); err != nil {
+		return false
+	}
+	if flags&spellDisablePlayer == 0 {
+		return flags&spellDisableDeprecatedSpell != 0
+	}
+	if flags&(spellDisableArenas|spellDisableBattlegrounds) != 0 {
+		if mapInfo, found, err := s.server.Data.Map(s.player.Map); err == nil && found {
+			if flags&spellDisableArenas != 0 && mapInfo.IsBattleArena() {
+				return true
+			}
+			if flags&spellDisableBattlegrounds != 0 && mapInfo.IsBattleground() {
+				return true
+			}
+		}
+	}
+	if flags&spellDisableMap != 0 {
+		if disabledIDListContains(mapList, s.player.Map) {
+			return true
+		}
+		if flags&spellDisableArea == 0 {
+			return false
+		}
+	}
+	if flags&spellDisableArea != 0 {
+		return disabledIDListContains(areaList, s.areaID)
+	}
+	return true
+}
+
+// disabledIDListContains parses the comma-separated params_0/params_1 id lists
+// that DisableMgr::LoadDisables builds with Trinity::Tokenize(params_0, ',') /
+// Tokenize(params_1, ',') (DisableMgr.cpp:106-122).
+func disabledIDListContains(list string, id uint32) bool {
+	for _, token := range strings.Split(list, ",") {
+		if n, err := strconv.ParseUint(strings.TrimSpace(token), 10, 32); err == nil && uint32(n) == id {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || s.server.Data == nil {
 		return true
@@ -786,6 +853,15 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	gmMode := s.player.ExtraFlags&playerExtraGMOn != 0 || s.player.PlayerFlags&playerFlagGM != 0
 	if !found || spell.Attributes&spellAttributePassive != 0 || !canPlayerCastSpell(learned, gmMode) {
 		s.debug("spell cast ignored", "account", s.accountName, "spell", spellID, "reason", spellCastIgnoreReason(spell, found, learned))
+		return true
+	}
+	// Spell::prepare disabled-spell gate (Spell.cpp:3074-3080) via
+	// DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, id, caster)
+	// (DisableMgr.cpp:320-368): fires before the in-progress gate, matching
+	// C++ relative order.
+	if s.spellDisabledForCaster(ctx, spellID) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedSpellUnavailable), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell disabled", "failure", spellFailedSpellUnavailable)
 		return true
 	}
 	// Spell::prepare server-side gate (Spell.cpp:3082-3087) via
