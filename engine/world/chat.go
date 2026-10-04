@@ -244,6 +244,11 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	if typeID == chatEmote {
 		language = languageUniversal
 	}
+	// Reference: Channel::Say (Channel.cpp) - channel chat goes out in the
+	// universal language when two-side channel interaction is on.
+	if typeID == chatChannel && s.twoSideChannelInteraction() {
+		language = languageUniversal
+	}
 	// Reference: the CHAT_MSG_GUILD/CHAT_MSG_OFFICER arms of
 	// WorldSession::HandleMessagechatOpcode (ChatHandler.cpp:425-451) — the
 	// guild-presence gate wraps the chat hook, while the rank-rights gate lives
@@ -763,6 +768,12 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 			}
 		} else if chatType == chatChannel {
 			if _, ok := channelTargets[value]; !ok {
+				continue
+			}
+			// Reference: Channel::Say (Channel.cpp) - SendToAll skips
+			// listeners that ignored the speaker unless the speaker is a
+			// channel moderator.
+			if value != source && !s.isChannelModerator(source, channel) && s.chatIgnoredBy(value.playerGUID, source.playerGUID) {
 				continue
 			}
 		} else if chatType == chatSay || chatType == chatYell || chatType == chatEmote {
