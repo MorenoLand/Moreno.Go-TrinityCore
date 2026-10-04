@@ -222,6 +222,7 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) bool {
 		}
 	}
 	movement := s.movementInfoForCreate(*s.player)
+	s.stopPlayerCombat()
 	s.selection = 0
 	s.player.Selection = 0
 	transportGUID := s.player.TransportGUID

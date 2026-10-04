@@ -2721,6 +2721,7 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 	s.worldReady.Store(false)
 	s.stopSpellLifecycle()
 	s.stopTimedAchievements()
+	s.stopPlayerCombat()
 	s.broadcastGuildMemberLogout()
 	s.triggerLogout(ctx)
 	s.releaseActiveLoot()

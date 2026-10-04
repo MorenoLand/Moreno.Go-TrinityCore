@@ -291,6 +291,33 @@ func (s *Server) removeThreatVictimFromAllLists(mapID, instanceID uint32, victim
 	}
 }
 
+// stopPlayerCombat mirrors the combat half of Unit::CombatStop (Unit.cpp:5809-5825)
+// reached on logout via Unit::CleanupBeforeRemoveFromMap (Unit.cpp:9845) and on
+// teleport via Player::TeleportTo (Player.cpp:1753 same-map unless
+// TELE_TO_NOT_LEAVE_COMBAT, 1803 far-teleport unconditional): drop the player as a
+// victim from every creature/pet threat table on the map/instance
+// (ThreatManager::RemoveMeFromThreatLists, ThreatManager.cpp:690-697, via
+// CombatManager::EndAllPvECombat, CombatManager.cpp:344-350) and stop the player's
+// own attack (AttackStop + SMSG_ATTACK_STOP). The ClearAllThreat leg is vacuous —
+// Go players carry no ThreatMgr — and RemoveAllAttackers needs no bridge
+// (attackers hold no separate attacker list in Go); the PvP suppression leg has
+// no Go model outside sanctuary handling. No Go teleportTo caller maps to a
+// TELE_TO_NOT_LEAVE_COMBAT (Player.h:666) site — blink/GO/transport/boss-mechanic
+// teleports have no Go analog routing through teleportTo — so the stop is
+// unconditional here, matching C++ for every Go caller (incl. Hearthstone, whose
+// TELE_TO_SPELL still drops combat at Player.cpp:1753).
+func (s *session) stopPlayerCombat() {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	s.server.removeThreatVictimFromAllLists(s.player.Map, s.player.InstanceID, s.playerGUID)
+	if s.attackTarget != 0 {
+		victim := s.attackTarget
+		s.attackTarget = 0
+		_ = s.sendAttackStop(victim, false)
+	}
+}
+
 func (s *Server) broadcastThreatClear(mapID uint32, creatureGUID uint64) {
 	if s == nil {
 		return
