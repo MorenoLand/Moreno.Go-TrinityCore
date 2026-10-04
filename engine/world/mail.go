@@ -1150,7 +1150,12 @@ func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) 
 			nextGUID = uint64(time.Now().UnixNano())
 		}
 		creator := mailCreateTextItemCreator(messageType, mailSender)
-		_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, ?, 1, 0, '', 1, '', 0, 0, 0, ?)", nextGUID, mailBodyItemTemplate, s.playerGUID, creator, body)
+		// Reference: MailHandler.cpp:599 — the letter item carries
+		// ITEM_FLAG_MAIL_TEXT_MASK (ItemTemplate.h:147) = ITEM_FIELD_FLAG_READABLE
+		// (0x200) | ITEM_FIELD_FLAG_UNK13 (0x40000) | ITEM_FIELD_FLAG_UNK14
+		// (0x80000) = 0xC0200, not ITEM_FIELD_FLAG_SOULBOUND.
+		const mailTextItemFlags = 0xC0200
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, ?, 1, 0, '', ?, '', 0, 0, 0, ?)", nextGUID, mailBodyItemTemplate, s.playerGUID, creator, mailTextItemFlags, body)
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, freeBagKey, freeSlot, nextGUID)
 		_, _ = cdb.ExecContext(ctx, "UPDATE mail SET checked = checked | 4 WHERE id = ?", mailID) // MAIL_CHECK_MASK_COPIED = 4
 		_ = s.sendItemCreate(nextGUID, mailBodyItemTemplate, 1, freeClientBag, freeSlot)
