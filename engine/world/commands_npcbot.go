@@ -71,7 +71,7 @@ const (
 
 // handleCmdNpcBot dispatches the "npcbot" root (botcommands.cpp:124-126).
 func (s *session) handleCmdNpcBot(ctx context.Context, args []string) {
-	const syntax = "Syntax: .npcbot add|remove|spawn|move|delete|lookup|revive|reloadconfig|command|info|hide|unhide|show"
+	const syntax = "Syntax: .npcbot add|remove|spawn|move|delete|lookup|revive|reloadconfig|command|info|hide|unhide|show|recall|kill|suicide"
 	if len(args) == 0 {
 		s.sendSysMessage(syntax)
 		return
@@ -111,6 +111,12 @@ func (s *session) handleCmdNpcBot(ctx context.Context, args []string) {
 		s.handleNpcBotUnhideCommand(ctx)
 	case strings.HasPrefix("show", sub):
 		s.handleNpcBotUnhideCommand(ctx) // C++ maps "show" to HandleNpcBotUnhideCommand
+	case strings.HasPrefix("recall", sub):
+		s.handleNpcBotRecallCommand(ctx)
+	case strings.HasPrefix("kill", sub):
+		s.handleNpcBotKillCommand(ctx)
+	case strings.HasPrefix("suicide", sub):
+		s.handleNpcBotKillCommand(ctx) // C++ maps "suicide" to HandleNpcBotKillCommand
 	default:
 		s.sendSysMessage(syntax)
 	}
@@ -1061,4 +1067,95 @@ func (s *session) handleNpcBotUnhideCommand(ctx context.Context) {
 		return
 	}
 	s.sendSysMessage("Bots unhidden")
+}
+
+// npcbotSelectedOwnedBot bridges owner->GetBotMgr()->GetBot(guid) at the
+// entry level for the recall/kill arms: the selection must be a creature
+// HighGuid (the IsAnyTypeCreature set, mail.go:157), the entry must carry the
+// NPCBOT template mask (== Creature::IsNPCBot, the delete-arm gate), and the
+// entry must decode to one of the caller's owned npcbot entries
+// (npcbotTemplateGate + mgr.Get == the revive-arm convention).
+func (s *session) npcbotSelectedOwnedBot(ctx context.Context, mgr *NPCBotManager, owner uint32, sel uint64) (NpcBotData, bool) {
+	var zero NpcBotData
+	switch uint16(sel >> 48) {
+	case 0xF130, 0xF140, 0xF150:
+	default:
+		return zero, false
+	}
+	entry := uint32((sel >> 24) & 0x00FFFFFF)
+	flagsExtra, ok := s.npcTemplateGate(ctx, entry)
+	if !ok || flagsExtra&npcbotCreatureFlagMask == 0 {
+		return zero, false
+	}
+	data, ok := mgr.Get(entry)
+	if !ok || data.Owner != owner {
+		return zero, false
+	}
+	return data, true
+}
+
+// handleNpcBotRecallCommand mirrors HandleNpcBotRecallCommand
+// (botcommands.cpp:502, PLAYER_COMMANDS, Console::No): teleports the selected
+// npcbot onto the owner's position, or all owned npcbots when the owner
+// selects themselves. The !guid || !HaveBot() guard answers the C++ usage
+// lines verbatim; the IsPartyInCombat gate bridges to the session combat
+// state == LANG_YOU_IN_COMBAT(23) (commands_tele.go:388). BotMgr::RecallAllBots
+// and BotMgr::RecallBot (botmgr.cpp:1085-1098) are MovePoint teleports —
+// live-world legs with no Go model (no live creature state for bots), so the
+// recall is a documented state-change no-op; C++ returns true with no message
+// on success, mirrored here.
+func (s *session) handleNpcBotRecallCommand(ctx context.Context) {
+	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
+		s.sendSysMessage("NpcBots is unavailable.")
+		return
+	}
+	mgr := s.server.Features.NPCBots
+	owner := uint32(s.playerGUID)
+	sel := s.selection
+	if sel == 0 || mgr.CountByOwner(owner) == 0 {
+		s.sendSysMessage(".npcbot recall")
+		s.sendSysMessage("Forces npcbots to move directly on your position. Select a npcbot you want to move or select yourself to move all bots")
+		return
+	}
+	if s.isInCombat() {
+		s.sendNotification("You are in combat!") // LANG_YOU_IN_COMBAT (23)
+		return
+	}
+	if uint16(sel>>48) == 0x0000 && uint32(sel) == owner {
+		return // C++: RecallAllBots() → true, no message
+	}
+	if _, ok := s.npcbotSelectedOwnedBot(ctx, mgr, owner, sel); ok {
+		return // C++: RecallBot(bot) → true, no message
+	}
+	s.sendSysMessage("You must select one of your bots or yourself")
+}
+
+// handleNpcBotKillCommand mirrors HandleNpcBotKillCommand (botcommands.cpp:473,
+// PLAYER_COMMANDS, Console::No); the C++ table maps both "kill" and "suicide"
+// to this handler. Note the C++ copy-paste quirk (botcommands.cpp:476): the
+// kill handler's first usage line literally reads ".npcbot recall" — mirrored
+// verbatim. BotMgr::KillAllBots (botmgr.cpp:1100) / BotMgr::KillBot
+// (botmgr.cpp:1106) perform zero DB writes (setDeathState(JUST_DIED) +
+// bot_ai::JustDied, live-only), so the kill is a documented state-change
+// no-op; C++ returns true with no message on success, mirrored here.
+func (s *session) handleNpcBotKillCommand(ctx context.Context) {
+	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
+		s.sendSysMessage("NpcBots is unavailable.")
+		return
+	}
+	mgr := s.server.Features.NPCBots
+	owner := uint32(s.playerGUID)
+	sel := s.selection
+	if sel == 0 || mgr.CountByOwner(owner) == 0 {
+		s.sendSysMessage(".npcbot recall") // C++ quirk: kill's usage line says ".npcbot recall"
+		s.sendSysMessage("Makes your npcbot just drop dead. If you select yourself ALL your bots will die")
+		return
+	}
+	if uint16(sel>>48) == 0x0000 && uint32(sel) == owner {
+		return // C++: KillAllBots() → true, no message
+	}
+	if _, ok := s.npcbotSelectedOwnedBot(ctx, mgr, owner, sel); ok {
+		return // C++: KillBot(bot) → true, no message
+	}
+	s.sendSysMessage("You must select one of your bots or yourself")
 }

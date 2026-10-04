@@ -6175,7 +6175,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("morph", func(ctx context.Context, args []string) bool { s.handleCmdMorph(ctx, args); return true }, nil, nil)
 	root.add("demorph", func(ctx context.Context, args []string) bool { s.handleCmdDeMorph(ctx); return true }, nil, nil)
 	root.add("npc", func(ctx context.Context, args []string) bool { s.handleCmdNPC(ctx, args); return true }, []string{"add", "set", "move", "delete", "near", "info", "playemote", "say", "textemote", "whisper", "yell", "tame", "spawngroup", "despawngroup", "follow", "evade", "showloot"}, nil)
-	root.add("npcbot", func(ctx context.Context, args []string) bool { s.handleCmdNpcBot(ctx, args); return true }, []string{"add", "remove", "spawn", "move", "delete", "lookup", "revive", "reloadconfig", "command", "info", "hide", "unhide", "show"}, nil)
+	root.add("npcbot", func(ctx context.Context, args []string) bool { s.handleCmdNpcBot(ctx, args); return true }, []string{"add", "remove", "spawn", "move", "delete", "lookup", "revive", "reloadconfig", "command", "info", "hide", "unhide", "show", "recall", "kill", "suicide"}, nil)
 	root.add("quest", func(ctx context.Context, args []string) bool { s.handleCmdQuest(ctx, args); return true }, []string{"add", "complete", "remove", "reward"}, nil)
 	root.add("pet", func(ctx context.Context, args []string) bool { s.handleCmdPet(ctx, args); return true }, []string{"create", "learn", "unlearn", "level"}, nil)
 	root.add("rbac", func(ctx context.Context, args []string) bool { s.handleCmdRBAC(ctx, args); return true }, []string{"account list", "account grant", "account deny", "account revoke", "list"}, nil)
