@@ -49,6 +49,7 @@ const (
 	charCreateError                     = 48
 	charCreateFailed                    = 49
 	charCreateDisabled                  = 51
+	charCreatePvpTeamsViolation         = 52
 	charCreateServerLimit               = 53
 	charCreateAccountLimit              = 54
 	charCreateExpansion                 = 57
@@ -306,6 +307,21 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	}
 	if realmCharacterCount >= int64(s.server.Config.CharactersPerRealm) {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateServerLimit)
+	}
+	if s.server.Config.GameType == 1 || s.server.Config.GameType == 4 || s.server.Config.GameType == 8 {
+		var accRace uint8
+		err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT race FROM characters WHERE account = ? LIMIT 1", s.accountID).Scan(&accRace)
+		if err == nil {
+			var accTeam uint8
+			if accRace > 0 {
+				accTeam = raceTeam(accRace)
+			}
+			if accTeam != raceTeam(race) {
+				return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreatePvpTeamsViolation)
+			}
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return false
+		}
 	}
 	guid, err := s.server.allocateCharacterGUID(ctx)
 	if err != nil {
