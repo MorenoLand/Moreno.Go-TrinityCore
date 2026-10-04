@@ -66,6 +66,7 @@ const (
 	spellAttr0NotShapeshift                uint32 = 0x00010000 // SPELL_ATTR0_NOT_SHAPESHIFT (SharedDefines.h:428)
 	spellAttr2NotNeedShapeshift            uint32 = 0x00080000 // SPELL_ATTR2_NOT_NEED_SHAPESHIFT (SharedDefines.h:505) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr1CantBeReflected              uint32 = 0x00000080 // SPELL_ATTR1_CANT_BE_REFLECTED (SharedDefines.h:456)
+	spellAttr1CantTargetSelf               uint32 = 0x00080000 // SPELL_ATTR1_CANT_TARGET_SELF (SharedDefines.h:468) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr1ReqComboPoints1              uint32 = 0x00100000 // SPELL_ATTR1_REQ_COMBO_POINTS1 (SharedDefines.h:469) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr1ReqComboPoints2              uint32 = 0x00400000 // SPELL_ATTR1_REQ_COMBO_POINTS2 (SharedDefines.h:471) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr1DrainAllPower                uint32 = 0x00000002 // SPELL_ATTR1_DRAIN_ALL_POWER (SharedDefines.h:450) "Drain all power" — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
@@ -1630,6 +1631,24 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		targetGUID = target.UnitGUID
 	} else if s.selection != 0 {
 		targetGUID = s.selection
+	}
+
+	// Cannot-target-self gate (SpellInfo::CheckTarget, SpellInfo.cpp:1637-1638):
+	// a spell with SPELL_ATTR1_CANT_TARGET_SELF rejects an explicit self-target
+	// with SPELL_FAILED_BAD_TARGETS. C++ compares caster == target; the caster
+	// is always the session player on this path, so targetGUID == s.playerGUID
+	// is the self case. Only checked when a unit target exists, like C++ m_targets.GetUnitTarget().
+	// The visibility gate right below it (SpellInfo.cpp:1641-1642 — !HasAttribute(SPELL_ATTR6_CAN_TARGET_INVISIBLE) &&
+	// !caster->CanSeeOrDetect(target, implicit)) is unbridged: Go has no CanSeeOrDetect
+	// model (no invisibility-level vs detect-invisibility-level comparison, no
+	// stealth-level vs detect-stealth skill machinery, and creature motions
+	// carry no aura state to answer "is the target stealthed"); the implicit-target
+	// stealth exemption has no Go analog either.
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if spell.AttributesEx&spellAttr1CantTargetSelf != 0 && targetGUID != 0 && targetGUID == s.playerGUID {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "cannot target self", "failReason", spellFailedBadTargets)
+		return true
 	}
 
 	// Target creature-type gate (SpellInfo::CheckTarget, SpellInfo.cpp:1728):
