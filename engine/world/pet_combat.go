@@ -579,6 +579,11 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				// owner's session, so keep the pre-existing minimal
 				// registration (health zero + lootable flag broadcast above)
 				// and the event-3 double dispatch.
+				// ThreatManager::RemoveMeFromThreatLists (ThreatManager.cpp:690-697):
+				// this path skips onCreatureKilled, so the death-side victim
+				// drop must run here — otherwise the dead creature stays a
+				// victim in every other table on the map/instance.
+				s.removeThreatVictimFromAllLists(motion.Map, motion.InstanceID, targetGUID)
 				s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(victim))
 				s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(victim))
 			}

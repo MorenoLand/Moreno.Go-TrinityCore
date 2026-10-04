@@ -223,6 +223,17 @@ func (s *session) killPlayer(ctx context.Context) {
 	if s.player == nil || s.player.Health > 0 {
 		return
 	}
+	// ThreatManager::RemoveMeFromThreatLists on the dead player
+	// (ThreatManager.cpp:690-697, reached on player death through
+	// Unit::setDeathState → CombatStop, Unit.cpp:8901-8907): a dead
+	// player must stop being a victim in every creature/pet threat
+	// table on the map/instance, exactly like a dead creature.
+	// Placed first, matching the C++ order where setDeathState (and
+	// its CombatStop) runs inside Unit::Kill ahead of all post-kill
+	// processing.
+	if s.server != nil {
+		s.server.removeThreatVictimFromAllLists(s.player.Map, s.player.InstanceID, s.playerGUID)
+	}
 	if s.playerLoaded && s.player.PlayerFieldBytes&playerFieldByteReleaseTimer == 0 {
 		s.player.PlayerFieldBytes |= playerFieldByteReleaseTimer
 	}

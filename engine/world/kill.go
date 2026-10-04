@@ -452,6 +452,19 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 	if s.player == nil {
 		return
 	}
+	// ThreatManager::RemoveMeFromThreatLists (ThreatManager.cpp:690-697):
+	// C++ setDeathState(JUST_DIED) runs CombatStop (Unit.cpp:8901-8907),
+	// which pairs ClearAllThreat (the dead unit's own table — cleared and
+	// SMSG_THREAT_CLEAR-broadcast by every kill path before this call)
+	// with dropping the dead unit as a victim from every other threat
+	// table. Fires before the post-kill dispatch below, matching the C++
+	// order (threat teardown inside setDeathState ahead of Kill's
+	// post-processing, Unit.cpp:11320-11324). All six kill paths funnel
+	// through here, so this one call covers melee, spell, DoT, and both
+	// pet kill sites.
+	if s.server != nil {
+		s.server.removeThreatVictimFromAllLists(target.Map, target.InstanceID, target.GUID)
+	}
 	creatureEntry := uint32((target.GUID >> 24) & 0xFFFFFF)
 	guid := uint32(target.GUID & 0x00FFFFFF)
 	now := time.Now()
@@ -764,6 +777,16 @@ func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target com
 }
 
 // processCreatureRespawns restores expired spawns; called from world tick.
+// Reference: Creature::Respawn (Creature.cpp:2156-2215). The C++ force,
+// entry/display re-selection (UpdateEntry/SelectLevel/random display
+// gender), MotionMaster re-init, InitializeReactState, ai->Reset(), pool
+// membership, and corpse-removal/despawn legs have no Go analog — no corpse
+// objects, no spawn pools, no MotionMaster, and Lua CREATURE_EVENT_ON_SPAWN
+// (5) is the AI re-init point. Respawn only restores the recorded spawn
+// health/position and clears the combat flags; the motion's own threat
+// table is already empty from the death chain (cleared at the kill site,
+// and the dead unit was dropped from everyone else's table by
+// removeThreatVictimFromAllLists), so no threat reset is needed here.
 func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
 		return

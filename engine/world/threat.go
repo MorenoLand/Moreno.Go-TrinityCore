@@ -259,11 +259,13 @@ func (s *Server) broadcastThreatRemoveInInstance(mapID, instanceID uint32, creat
 // threat table on the map/instance.
 // Reference: TrinityCore ThreatManager::RemoveMeFromThreatLists
 // (ThreatManager.cpp:690-697), reached on evade via CombatStop(true) ->
-// CombatManager::EndAllPvECombat (CombatManager.cpp:344-350), which pairs
-// ClearAllThreat (the evading unit's own table) with RemoveMeFromThreatLists
-// (the evading unit as victim in everyone else's table). Per-victim removal
-// sends SMSG_THREAT_REMOVE (SendRemoveToClients, ThreatManager.cpp:477) and
-// re-evaluates the top victim (RemoveThreat / UpdateVictim).
+// CombatManager::EndAllPvECombat (CombatManager.cpp:344-350) and on death
+// via Unit::setDeathState -> CombatStop (Unit.cpp:8901-8907) — the
+// setDeathState pairing of RemoveMeFromThreatLists (the dead unit as
+// victim in everyone else's table) with ClearAllThreat (the dead unit's
+// own table). Per-victim removal sends SMSG_THREAT_REMOVE
+// (SendRemoveToClients, ThreatManager.cpp:477) and re-evaluates the top
+// victim (RemoveThreat / UpdateVictim).
 func (s *Server) removeThreatVictimFromAllLists(mapID, instanceID uint32, victimGUID uint64) {
 	if s == nil || victimGUID == 0 {
 		return
