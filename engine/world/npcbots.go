@@ -20,6 +20,7 @@ const (
 	BotRoleDPS                = uint16(0x002)
 	BotRoleHeal               = uint16(0x004)
 	BotRoleRanged             = uint16(0x008)
+	BotClassDeathKnight       = uint8(6)
 	BotClassBlademaster       = uint8(12)
 	BotClassObsidianDestroyer = uint8(13)
 	BotClassArchmage          = uint8(14)
@@ -40,6 +41,7 @@ const (
 	BotAddBusy             BotAssignResult = 0x040
 	BotAddNotAvailable     BotAssignResult = 0x080
 	BotAddSuccess          BotAssignResult = 0x100
+	BotAddLevelGate        BotAssignResult = 0x200
 
 	BotAddFatal BotAssignResult = BotAddDisabled | BotAddCannotAfford | BotAddMaxExceeded | BotAddMaxClassExceeded
 )
@@ -424,6 +426,16 @@ func (m *NPCBotManager) Recruit(ctx context.Context, owner, entry uint32) (BotAs
 	if !m.classEnabled(extra.Class) {
 		return BotAddNotAvailable, nil
 	}
+	var level, money int64
+	if err := m.characters.DB.QueryRowContext(ctx, "SELECT level, money FROM characters WHERE guid = ?", owner).Scan(&level, &money); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return BotAddNotAvailable, nil
+		}
+		return 0, err
+	}
+	if gate := npcBotHireMinLevel(extra.Class); gate > 0 && level < int64(gate) {
+		return BotAddLevelGate, nil
+	}
 	var owned uint32
 	var classOwned uint32
 	for botEntry, bot := range m.bots {
@@ -440,13 +452,6 @@ func (m *NPCBotManager) Recruit(ctx context.Context, owner, entry uint32) (BotAs
 	}
 	if m.config.MaxBotsPerClass > 0 && classOwned >= m.config.MaxBotsPerClass {
 		return BotAddMaxClassExceeded, nil
-	}
-	var level, money int64
-	if err := m.characters.DB.QueryRowContext(ctx, "SELECT level, money FROM characters WHERE guid = ?", owner).Scan(&level, &money); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return BotAddNotAvailable, nil
-		}
-		return 0, err
 	}
 	cost := NpcBotCost(uint8(level), extra.Class, m.config.Cost)
 	if uint64(money) < cost {
@@ -504,6 +509,25 @@ func (m *NPCBotManager) classEnabled(class uint8) bool {
 		return m.config.DarkRangerEnable
 	default:
 		return true
+	}
+}
+
+func npcBotHireMinLevel(class uint8) uint8 {
+	switch class {
+	case BotClassDeathKnight:
+		return 55
+	case BotClassObsidianDestroyer:
+		return 60
+	case BotClassArchmage:
+		return 20
+	case BotClassDreadlord:
+		return 60
+	case BotClassSpellbreaker:
+		return 20
+	case BotClassDarkRanger:
+		return 40
+	default:
+		return 0
 	}
 }
 
