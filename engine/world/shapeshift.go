@@ -2,6 +2,11 @@ package world
 
 import "github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 
+// formShadow mirrors FORM_SHADOW (SpellAuraDefines.h:435): the Shadowform
+// shapeshift form id carried by SPELL_AURA_MOD_SHAPESHIFT's MiscValue and,
+// through refreshTransformDisplay, by state.ShapeshiftForm.
+const formShadow uint8 = 0x1C
+
 func playerPowerType(state *playerState) uint8 {
 	if state == nil {
 		return 0

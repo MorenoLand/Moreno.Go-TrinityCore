@@ -5171,6 +5171,26 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							s.targetHasFamilyAuraEffect(effCtx, effectTarget, spellAuraPeriodicDamage, spellFamilyWarlock, 0x4) {
 							targetDamage += targetDamage / 4
 						}
+						// Spell::EffectSchoolDMG (SpellEffects.cpp:460-479): the
+						// Improved Mind Blast arm (Priest family,
+						// SpellFamilyFlags[0] & 0x00002000) fires only while the
+						// caster is in Shadowform (FORM_SHADOW,
+						// SpellAuraDefines.h:435). The caster's Improved Mind
+						// Blast talent aura (Priest family, SpellIconID 95,
+						// carrying an ADD_FLAT_MODIFIER effect) supplies
+						// Effects[1].CalcValue as the percent chance to trigger
+						// Mind Trauma (48301) on the target
+						// (unitCaster->CastSpell(unitTarget, 48301, true)).
+						// SCHOOL_DAMAGE (effect 2) only — the weapon-damage
+						// effects in this case route to different C++ handlers.
+						// The unitCaster null gate is vacuous here: the caster
+						// is always the session player on these cast paths.
+						if eff.Effect == 2 && s.player != nil && s.player.ShapeshiftForm == formShadow &&
+							spell.SpellFamilyName == spellFamilyPriest && spell.SpellFamilyFlags[0]&0x2000 != 0 {
+							if chance := s.improvedMindBlastChance(); chance > 0 && rand.Float64()*100 < float64(chance) {
+								s.castSpellDirect(effCtx, 48301, effectTarget)
+							}
+						}
 						s.executeSpellDamage(effCtx, effectTarget, spellID, targetDamage, effectIndex)
 					}
 				}
@@ -7377,6 +7397,46 @@ func (s *session) targetHasFamilyAuraEffect(ctx context.Context, targetGUID uint
 		}
 	}
 	return false
+}
+
+// improvedMindBlastChance mirrors the Improved Mind Blast lookup in the
+// priest arm of Spell::EffectSchoolDMG (SpellEffects.cpp:465-476):
+// Unit::GetAuraEffectsByType(SPELL_AURA_ADD_FLAT_MODIFIER) on the caster,
+// keeping the first aura effect whose aura spell is Priest-family with
+// SpellIconID 95, and returning its Effects[1].CalcValue — the Mind Trauma
+// trigger chance. Returns 0 when the caster carries no such aura (the C++
+// loop simply never fires).
+func (s *session) improvedMindBlastChance() int32 {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil {
+		return 0
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if auraSpell.SpellFamilyName != spellFamilyPriest || auraSpell.SpellIconID != 95 {
+			continue
+		}
+		hasFlatModifier := false
+		for _, eff := range auraSpell.Effects {
+			if spellEffectIsAuraEffect(eff) && eff.Aura == spellAuraAddFlatModifier {
+				hasFlatModifier = true
+				break
+			}
+		}
+		if !hasFlatModifier {
+			continue
+		}
+		if len(auraSpell.Effects) > 1 {
+			return auraSpell.Effects[1].CalcValueForLevel(auraSpell, uint32(s.player.Level))
+		}
+		return 0
+	}
+	return 0
 }
 
 func buildSpellNonMeleeDamageLog(targetGUID, attackerGUID uint64, spellID, damage, overkill uint32, schoolMask uint8, extra ...uint32) []byte {
