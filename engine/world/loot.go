@@ -93,6 +93,16 @@ func (l *activeLootState) broadcastRemoved(slot uint8) {
 	}
 }
 
+// Loot::NotifyMoneyRemoved (Loot.cpp:384): SMSG_LOOT_CLEAR_MONEY goes to
+// every player currently viewing the loot, not just the one taking the money.
+func (l *activeLootState) broadcastMoneyRemoved() {
+	for _, sess := range l.Viewers {
+		if sess != nil {
+			_ = sess.write(uint16(protocol.OpcodeSMSG_LOOT_CLEAR_MONEY), nil, true)
+		}
+	}
+}
+
 func (l *activeLootState) hasOverThresholdItem(threshold uint8) bool {
 	for _, item := range l.Items {
 		if item.Quality >= uint32(threshold) {
@@ -774,8 +784,11 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 	var nearMembers []*session
 	if s.groupID != 0 && s.server != nil {
 		allGroupSess := s.server.getGroupSessions(s.groupID)
+		// Player::IsAtGroupRewardDistance (Player.cpp:24160): same map and
+		// (dungeon, always) or within CONFIG_GROUP_XP_DISTANCE (default 100).
+		inDungeon := s.isDungeonMap(s.player.Map)
 		for _, m := range allGroupSess {
-			if m.player != nil && m.player.Map == s.player.Map && m.player.InstanceID == s.player.InstanceID && distance3D(s.player.X, s.player.Y, s.player.Z, m.player.X, m.player.Y, m.player.Z) <= 100.0 {
+			if m.player != nil && m.player.Map == s.player.Map && m.player.InstanceID == s.player.InstanceID && (inDungeon || distance3D(s.player.X, s.player.Y, s.player.Z, m.player.X, m.player.Y, m.player.Z) <= 100.0) {
 				nearMembers = append(nearMembers, m)
 			}
 		}
@@ -785,6 +798,9 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 		copperPerPlayer := copper / uint32(len(nearMembers))
 		for _, m := range nearMembers {
 			m.player.Money += copperPerPlayer
+			// HandleLootMoneyOpcode (LootHandler.cpp:104): the achievement
+			// fires per recipient, including the split path.
+			m.updateAchievementCriteria(criteriaTypeLootMoney, 0, copperPerPlayer)
 			if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", m.player.Money, m.playerGUID)
 			}
@@ -807,7 +823,7 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 		s.sendPlayerUpdate()
 	}
 
-	_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_CLEAR_MONEY), nil, true)
+	s.activeLoot.broadcastMoneyRemoved()
 	if s.activeLoot.Money == 0 && len(s.activeLoot.Items) == 0 {
 		s.clearCreatureLoot(s.activeLoot)
 	}
