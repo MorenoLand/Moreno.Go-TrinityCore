@@ -25,6 +25,8 @@ const (
 	chatAFK            = 0x17
 	chatDND            = 0x18
 	chatIgnored        = 0x19
+	chatRaidLeader     = 0x27
+	chatRaidWarning    = 0x28
 	chatBattleground   = 0x2C
 	chatBattleLeader   = 0x2D
 	chatPartyLeader    = 0x33
@@ -242,8 +244,13 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	if typeID == chatEmote {
 		language = languageUniversal
 	}
-	if (typeID == chatGuild || typeID == chatOfficer) && !s.guildChatSpeakAllowed(typeID == chatOfficer) {
-		s.debug("chat rejected", "account", s.accountName, "reason", "guild rights", "type", typeID)
+	// Reference: the CHAT_MSG_GUILD/CHAT_MSG_OFFICER arms of
+	// WorldSession::HandleMessagechatOpcode (ChatHandler.cpp:425-451) — the
+	// guild-presence gate wraps the chat hook, while the rank-rights gate lives
+	// inside Guild::BroadcastToGuild (Guild.cpp:2135) and runs after the hook.
+	// The rights check therefore moves below with the other post-hook gates.
+	if (typeID == chatGuild || typeID == chatOfficer) && s.player.GuildID == 0 {
+		s.debug("chat rejected", "account", s.accountName, "reason", "no guild", "type", typeID)
 		return true
 	}
 	// Reference: WorldSession::HandleMessagechatOpcode (ChatHandler.cpp:575-625) —
@@ -290,6 +297,19 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			s.sendChatWrongFaction()
 			return true
 		}
+	}
+	// Reference: the CHAT_MSG_PARTY/PARTY_LEADER/RAID/RAID_LEADER/RAID_WARNING
+	// arms of WorldSession::HandleMessagechatOpcode (ChatHandler.cpp:395-528)
+	// and Guild::BroadcastToGuild (Guild.cpp:2133-2145) — sScriptMgr::OnPlayerChat
+	// fires first (firePlayerChatHook above), then the group/guild gates silently
+	// drop the message with no packet at all.
+	if (typeID == chatGuild || typeID == chatOfficer) && !s.guildChatSpeakAllowed(typeID == chatOfficer) {
+		s.debug("chat rejected", "account", s.accountName, "reason", "guild rights", "type", typeID)
+		return true
+	}
+	if !s.groupChatAllowed(uint8(typeID)) {
+		s.debug("chat rejected", "account", s.accountName, "reason", "group chat gate", "type", typeID)
+		return true
 	}
 	if typeID == chatChannel && !s.server.isChannelMember(s, channel) {
 		s.debug("chat rejected", "account", s.accountName, "reason", "channel membership", "channel", channel)
@@ -607,6 +627,57 @@ func (s *Server) guildChatListenAllowed(target *session, officer bool) bool {
 	return rights&required == required
 }
 
+// groupChatAllowed mirrors the group-resolution gates of the
+// CHAT_MSG_PARTY/PARTY_LEADER/RAID/RAID_LEADER/RAID_WARNING arms of
+// WorldSession::HandleMessagechatOpcode (ChatHandler.cpp:395-528). Non-group
+// chat types always pass; group chat silently fails (no packet) when the gates
+// fail. Go has no original-group (pre-battleground) model, so the
+// battleground-group exclusion applies to the session's current group; the
+// original-group preference stays a documented delta, as do the
+// CHAT_MSG_BATTLEGROUND/BATTLEGROUND_LEADER arms, which need the BG-group
+// model that Go does not assign yet.
+func (s *session) groupChatAllowed(chatType uint8) bool {
+	switch chatType {
+	case chatParty, chatPartyLeader, chatRaid, chatRaidLeader, chatRaidWarning:
+	default:
+		return true
+	}
+	if s == nil || s.server == nil || s.groupID == 0 {
+		return false
+	}
+	group := s.server.findGroupByID(s.groupID)
+	if group == nil {
+		return false
+	}
+	// Reference: Group::isBGGroup — Go keys battleground groups by the
+	// groupTypeBattleground bit (Group.h:213, Group.cpp).
+	isBGGroup := group.GroupType&groupTypeBattleground != 0
+	switch chatType {
+	case chatParty, chatPartyLeader:
+		// C++: without an original group, the current group must not be a
+		// battleground group; party-leader chat requires the group leader.
+		if isBGGroup {
+			return false
+		}
+		return chatType != chatPartyLeader || group.isLeader(s.playerGUID)
+	case chatRaid, chatRaidLeader:
+		// C++: the group must be a raid group and not a battleground group;
+		// raid-leader chat requires the group leader.
+		if isBGGroup || !group.IsRaid {
+			return false
+		}
+		return chatType != chatRaidLeader || group.isLeader(s.playerGUID)
+	case chatRaidWarning:
+		// C++: raid group (or CONFIG_CHAT_PARTY_RAID_WARNINGS), never a
+		// battleground group, and the sender must be leader or assistant.
+		if isBGGroup || !(group.IsRaid || s.server.Config.ChatPartyRaidWarnings) {
+			return false
+		}
+		return group.isLeaderOrAssistant(s.playerGUID)
+	}
+	return false
+}
+
 func (s *Server) chatIgnoredBy(targetGUID, sourceGUID uint64) bool {
 	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
 		return false
@@ -653,6 +724,28 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 	if source == nil || source.player == nil {
 		return
 	}
+	// Reference: Guild::BroadcastToGuild (Guild.cpp:2138) — guild and officer
+	// chat always go out in LANG_UNIVERSAL unless they are addon messages; the
+	// sender's typed language never reaches the wire. The chat hook still sees
+	// the typed language (it fires before this point in handleMessageChat).
+	if (chatType == chatGuild || chatType == chatOfficer) && language != languageAddon {
+		language = languageUniversal
+	}
+	// Party/raid chat is group-scoped (ChatHandler.cpp:395-528); hoist the
+	// group lookup so the per-target filter below stays cheap.
+	var chatGroup *groupState
+	if chatType == chatParty || chatType == chatPartyLeader || chatType == chatRaid || chatType == chatRaidLeader || chatType == chatRaidWarning {
+		chatGroup = s.findGroupByID(source.groupID)
+	}
+	// Reference: the CHAT_MSG_PARTY/PARTY_LEADER arm calls
+	// group->BroadcastPacket(&data, false, group->GetMemberGroup(senderGUID)),
+	// so party chat reaches only the sender's own subgroup (a 5-man party is
+	// all subgroup 0, so delivery there is unchanged).
+	var senderSubGroup uint8
+	senderSubGroupKnown := false
+	if chatGroup != nil && (chatType == chatParty || chatType == chatPartyLeader) {
+		senderSubGroup, senderSubGroupKnown = chatGroup.memberSubGroup(source.playerGUID)
+	}
 	s.sessionsMu.RLock()
 	targets := make([]*session, 0, len(s.sessions))
 	channelTargets := s.channelMembers(source, channel)
@@ -696,6 +789,19 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 				continue
 			}
 		} else if chatType == chatParty || chatType == chatPartyLeader {
+			if source.groupID == 0 || value.groupID != source.groupID {
+				continue
+			}
+			if senderSubGroupKnown {
+				if sub, ok := chatGroup.memberSubGroup(value.playerGUID); !ok || sub != senderSubGroup {
+					continue
+				}
+			}
+		} else if chatType == chatRaid || chatType == chatRaidLeader || chatType == chatRaidWarning {
+			// Reference: the CHAT_MSG_RAID/RAID_LEADER/RAID_WARNING arms
+			// broadcast to the group only (ChatHandler.cpp:470-528) — the
+			// raid-group / leader / assistant gates already ran in
+			// groupChatAllowed before broadcast.
 			if source.groupID == 0 || value.groupID != source.groupID {
 				continue
 			}

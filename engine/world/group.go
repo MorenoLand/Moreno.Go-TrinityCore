@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 const (
@@ -91,6 +91,15 @@ func (g *groupState) isAssistant(guid uint64) bool {
 
 func (g *groupState) isLeaderOrAssistant(guid uint64) bool {
 	return g.isLeader(guid) || g.isAssistant(guid)
+}
+
+func (g *groupState) memberSubGroup(guid uint64) (uint8, bool) {
+	for _, m := range g.Members {
+		if m.GUID == guid {
+			return m.SubGroup, true
+		}
+	}
+	return 0, false
 }
 
 func (g *groupState) countInSubGroup(subGroup uint8) int {
