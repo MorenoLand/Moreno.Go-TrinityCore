@@ -125,6 +125,8 @@ const (
 	spellFailedItemAtMaxCharges          uint8  = 179   // SPELL_FAILED_ITEM_AT_MAX_CHARGES (SharedDefines.h:1161)
 	spellEffectWeaponDamage                     = 58    // SPELL_EFFECT_WEAPON_DAMAGE (SharedDefines.h:869)
 	spellEffectWeaponDamageNoschool             = 17    // SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL (SharedDefines.h:828)
+	spellEffectWeaponPercentDamage              = 31    // SPELL_EFFECT_WEAPON_PERCENT_DAMAGE (SharedDefines.h:842)
+	spellEffectNormalizedWeaponDmg              = 121   // SPELL_EFFECT_NORMALIZED_WEAPON_DMG (SharedDefines.h:932)
 	spellEffectCreateManaGem                    = 66    // SPELL_EFFECT_CREATE_MANA_GEM (SharedDefines.h:877)
 	itemSubclassWeaponThrown                    = 16    // ITEM_SUBCLASS_WEAPON_THROWN (ItemTemplate.h:365)
 	itemSubclassWeaponBow                       = 2     // ITEM_SUBCLASS_WEAPON_BOW (ItemTemplate.h:351)
@@ -5144,6 +5146,81 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				for _, effectTarget := range hitTargets {
 					if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
 						targetDamage := chainScaledAmount(damage, eff, chainJumpIndex[effectTarget])
+						// Spell::EffectWeaponDmg (SpellEffects.cpp:3171-3498):
+						// the weapon-damage computation itself
+						// (Unit::CalculateDamage, the fixed_bonus /
+						// spell_bonus / weaponDamagePercentMod accumulation,
+						// the addPctMods UNIT_MOD_DAMAGE_* leg, ApplySpellMod,
+						// MeleeDamageBonusDone/Taken) has no Go model — this
+						// dispatch still deals the flat BasePoints+1 damage for
+						// weapon-damage effects, the standing weapon-damage
+						// gap recorded on the Steady Shot audit. The
+						// family-specific legs below are the only
+						// EffectWeaponDmg pieces with bridgeable
+						// infrastructure. The multiple-weapon-dmg-effect
+						// workaround (3178-3190) mirrors exactly: only the
+						// last weapon-damage effect in the spell runs the
+						// family switch; earlier ones return without doing
+						// anything. C++ counts all four weapon effect types
+						// (17/31/58/121) in that scan — 121
+						// (NORMALIZED_WEAPON_DMG) never reaches this
+						// dispatch, but it still suppresses the arm when it
+						// follows, like C++.
+						weaponDamageEffect := eff.Effect == spellEffectWeaponDamage || eff.Effect == spellEffectWeaponDamageNoschool || eff.Effect == spellEffectWeaponPercentDamage
+						lastWeaponEffect := true
+						for later := effectIndex + 1; later < len(spell.Effects); later++ {
+							switch spell.Effects[later].Effect {
+							case spellEffectWeaponDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectNormalizedWeaponDmg:
+								lastWeaponEffect = false
+							}
+						}
+						if weaponDamageEffect && lastWeaponEffect && spell.SpellFamilyName == spellFamilyWarrior && spell.SpellFamilyFlags[1]&0x40 != 0 {
+							// Spell::EffectWeaponDmg (SpellEffects.cpp:3181-3192):
+							// the Devastate arm (Warrior family,
+							// SpellFamilyFlags[1] & 0x40 — "player ones" per
+							// the C++ comment) applies Sunder Armor through a
+							// triggered cast of 58567, then a second time when
+							// the caster carries the Glyph of Devastate dummy
+							// aura (58388), and folds (stackAmount-1) *
+							// CalculateDamage(EFFECT_2) into fixed_bonus. The
+							// triggered casts ride castSpellDirect (the C++
+							// CastSpell(..., true) route); the stack count is
+							// the target's live Sunder Armor stacks (the C++
+							// GetAura(58567, casterGUID) lookup — the
+							// caster-GUID filter folds into Go's
+							// one-aura-per-spell merge model, so stacks
+							// applied by other warriors merge in, the same
+							// standing delta recorded on the Envenom arm).
+							// The C++ effect-2 CalculateDamage term lands as
+							// the flat BasePoints+1 convention used tree-wide;
+							// the actual weapon swing behind it stays
+							// unmodeled.
+							s.castSpellDirect(effCtx, devastateSunderArmorSpell, effectTarget)
+							if s.hasAura(devastateGlyphSpell) {
+								s.castSpellDirect(effCtx, devastateSunderArmorSpell, effectTarget)
+							}
+							if stacks := s.devastateSunderStacks(effCtx, effectTarget); stacks > 1 {
+								var eff2 uint32
+								if len(spell.Effects) > 2 {
+									eff2 = uint32(spell.Effects[2].BasePoints + 1)
+								}
+								targetDamage += (stacks - 1) * eff2
+							}
+						}
+						if weaponDamageEffect && lastWeaponEffect && spell.SpellFamilyName == spellFamilyWarrior && spell.SpellFamilyFlags[0]&0x8000000 != 0 {
+							// Spell::EffectWeaponDmg (SpellEffects.cpp:3193-3200):
+							// the Mocking Blow arm zeroes the damage (m_damage
+							// = 0, return) when the target is immune to effect
+							// 1 or is a player. The immunity leg is a
+							// documented no-bridge — there is no per-effect
+							// immunity check on the damage path — while the
+							// TYPEID_PLAYER leg mirrors as a skip of this
+							// target's damage: a target resolving to a player
+							// session takes nothing from this arm.
+							if effectTarget == s.playerGUID || (s.server != nil && s.server.findSessionByGUID(effectTarget) != nil) {
+								continue
+							}
+						}
 						// Spell::EffectSchoolDMG (SpellEffects.cpp:354-378): the
 						// Warrior arms are documented no-bridge. Shield Slam
 						// (360-366, SpellFamilyFlags[1] & 0x200 with
@@ -7683,6 +7760,53 @@ func (s *session) wrathInsectSwarmBonus() int32 {
 			return amount
 		}
 		return int32(aura.Amount)
+	}
+	return 0
+}
+
+// Devastate's Sunder Armor application spell and the Glyph of Devastate
+// dummy aura (Spell::EffectWeaponDmg, SpellEffects.cpp:3185-3188).
+const (
+	devastateSunderArmorSpell = 58567
+	devastateGlyphSpell       = 58388
+)
+
+// devastateSunderStacks mirrors the GetAura(58567, unitCaster->GetGUID())
+// lookup in the Devastate arm of Spell::EffectWeaponDmg
+// (SpellEffects.cpp:3190): the target's live Sunder Armor aura applied by
+// the caster, returning its StackCount (the C++ GetStackAmount()). The
+// three-way target resolution follows the envenomPoisonDoses pattern; a
+// zero StackCount reads as one stack, the codebase's existing convention.
+// Go holds one aura per spell ID per target, so the caster-GUID filter is
+// exact only when this caster applied it last — stacks from other
+// warriors merge into the same aura, the standing merge-model delta.
+func (s *session) devastateSunderStacks(ctx context.Context, targetGUID uint64) uint32 {
+	if s == nil || s.server == nil || s.player == nil {
+		return 0
+	}
+	var auras []*activeAura
+	if targetGUID == 0 || targetGUID == s.playerGUID {
+		auras = s.loadedAuras()
+	} else if other := s.server.findSessionByGUID(targetGUID); other != nil && other.player != nil {
+		auras = other.loadedAuras()
+	} else if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
+		key := creatureAuraKeyForTarget(target)
+		s.server.auraMu.Lock()
+		for _, aura := range s.server.activeCreatureAuras[key] {
+			auras = append(auras, aura)
+		}
+		s.server.auraMu.Unlock()
+	} else {
+		return 0
+	}
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped || aura.SpellID != devastateSunderArmorSpell || aura.CasterGUID != s.playerGUID {
+			continue
+		}
+		if aura.StackCount == 0 {
+			return 1
+		}
+		return uint32(aura.StackCount)
 	}
 	return 0
 }
