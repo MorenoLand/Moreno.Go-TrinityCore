@@ -161,7 +161,6 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 	}
 	instanceID, _ := r.ReadU32()
 	joinAsGroup, _ := r.ReadU8()
-	_ = joinAsGroup
 
 	// sBattlemasterListStore.LookupEntry(bgTypeId_) (BattleGroundHandler.cpp:84-88):
 	// an invalid bgTypeId is answered with silence (error log on the C++ side).
@@ -184,6 +183,14 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 	// arm — same documented delta as the arena unit.
 	if s.battlegroundDisabled(ctx, bgTypeID) {
 		s.debug("battlemaster join rejected: battleground disabled", "account", s.accountName, "bg", bgTypeID)
+		return true
+	}
+
+	// The solo-only checks below (deserter, duplicate queue, free slots, freeze) live in the
+	// !joinAsGroup arm of HandleBattlemasterJoinOpcode (BattleGroundHandler.cpp:131-193); the
+	// group arm re-checks per member through Group::CanJoinBattlegroundQueue (Group.cpp:2024).
+	if joinAsGroup != 0 {
+		s.handleBattlemasterJoinGroup(bgTypeID, instanceID)
 		return true
 	}
 
@@ -238,6 +245,139 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 	s.sendBattlefieldStatus(uint8(slot))
 	s.debug("queued for battleground", "account", s.accountName, "bg", bgTypeID, "slot", slot)
 	return true
+}
+
+// groupJoinBattlegroundTimedOut mirrors ERR_BATTLEGROUND_JOIN_TIMED_OUT
+// (SharedDefines.h:3701 — "%s was unavailable to join the queue.").
+const groupJoinBattlegroundTimedOut = int32(-11)
+
+// groupJoinBattlegroundFailed mirrors ERR_BATTLEGROUND_JOIN_FAILED
+// (SharedDefines.h:3702 — "Join as a group failed").
+const groupJoinBattlegroundFailed = int32(-12)
+
+// groupJoinBattlegroundLFGCantUse mirrors ERR_LFG_CANT_USE_BATTLEGROUND
+// (SharedDefines.h:3703 — "You cannot queue for a battleground or arena while
+// using the dungeon system.").
+const groupJoinBattlegroundLFGCantUse = int32(-13)
+
+// handleBattlemasterJoinGroup processes the joinAsGroup arm of CMSG_BATTLEMASTER_JOIN.
+// Reference: WorldSession::HandleBattlemasterJoinOpcode, group branch
+// (BattleGroundHandler.cpp:212-258) and Group::CanJoinBattlegroundQueue (Group.cpp:2024).
+func (s *session) handleBattlemasterJoinGroup(bgTypeID, instanceID uint32) {
+	// grp = _player->GetGroup(); no group or non-leader join: silent return == C++
+	// (BattleGroundHandler.cpp:213-217).
+	if s.groupID == 0 {
+		return
+	}
+	grp := s.server.findGroupByID(s.groupID)
+	if grp == nil || grp.LeaderGUID != s.playerGUID {
+		return
+	}
+
+	// Group::CanJoinBattlegroundQueue (Group.cpp:2027): LFG group → ERR_LFG_CANT_USE_BATTLEGROUND.
+	if grp.IsLFG {
+		s.sendGroupJoinBGResult(grp.Members, groupJoinBattlegroundLFGCantUse)
+		return
+	}
+
+	// Member sessions in group order (leader first), mirroring the C++ GroupReference walk.
+	members := make([]*session, 0, len(grp.Members))
+	for _, m := range grp.Members {
+		members = append(members, s.server.findSessionByGUID(m.GUID))
+	}
+
+	// CanJoinBattlegroundQueue per-member checks in C++ order (Group.cpp:2049-2087); the first
+	// failing member decides err, which is then broadcast to every member.
+	err := int32(bgTypeID) // success: positive values are indexes in BattlemasterList.dbc (SharedDefines.h:3689)
+	leaderTeam := teamForRace(s.player.Race)
+	for _, member := range members {
+		switch {
+		case member == nil || !member.playerLoaded || member.player == nil:
+			// offline member → ERR_BATTLEGROUND_JOIN_FAILED (Group.cpp:2049-2051)
+			err = groupJoinBattlegroundFailed
+		case teamForRace(member.player.Race) != leaderTeam:
+			// cross-faction → ERR_BATTLEGROUND_JOIN_TIMED_OUT (Group.cpp:2056-2058)
+			err = groupJoinBattlegroundTimedOut
+		case memberBGQueueIndex(member, bgTypeID) != -1:
+			// member already in this queue → ERR_BATTLEGROUND_JOIN_FAILED (Group.cpp:2067-2068)
+			err = groupJoinBattlegroundFailed
+		case member.hasAura(deserterSpellBG):
+			// deserter → ERR_GROUP_JOIN_BATTLEGROUND_DESERTERS (Group.cpp:2076-2077)
+			err = groupJoinBattlegroundDeserters
+		case memberFreeBGQueueIndex(member) == -1:
+			// no free slot → ERR_BATTLEGROUND_TOO_MANY_QUEUES (Group.cpp:2079-2080)
+			err = groupJoinTooManyQueues
+		case member.hasAura(freezeAuraSpellID):
+			// freeze → ERR_BATTLEGROUND_JOIN_FAILED (Group.cpp:2085-2086)
+			err = groupJoinBattlegroundFailed
+		}
+		if err <= 0 {
+			break
+		}
+	}
+
+	if err <= 0 {
+		// err <= 0 → BuildGroupJoinedBattlegroundPacket(err) to every member
+		// (BattleGroundHandler.cpp:234-242).
+		s.sendGroupJoinBGResult(grp.Members, err)
+		return
+	}
+
+	// err > 0: queue every member — AddBattlegroundQueueId slot assignment +
+	// BuildBattlegroundStatusPacket(STATUS_WAIT_QUEUE) + BuildGroupJoinedBattlegroundPacket(err)
+	// to each member (BattleGroundHandler.cpp:243-258). avgTime comes from
+	// GetAverageQueueWaitTime; Go keeps no queue wait stats, so sendBattlefieldStatus answers
+	// the hardcoded average — same documented delta as the solo arm.
+	for _, member := range members {
+		slot := memberFreeBGQueueIndex(member)
+		if slot == -1 {
+			continue
+		}
+		member.bgQueues[slot] = bgQueueEntry{Active: true, BgTypeID: bgTypeID, InstanceID: instanceID, JoinTime: time.Now(), Status: BGStatusWaitQueue}
+		member.sendBattlefieldStatus(uint8(slot))
+	}
+	s.sendGroupJoinBGResult(grp.Members, err)
+	s.debug("group queued for battleground", "account", s.accountName, "bg", bgTypeID, "members", len(members))
+}
+
+// sendGroupJoinBGResult mirrors BattlegroundMgr::BuildGroupJoinedBattlegroundPacket
+// (BattlegroundMgr.cpp:239): SMSG_GROUP_JOINED_BATTLEGROUND carries int32(result); the u64
+// arm fires only for ERR_BATTLEGROUND_JOIN_TIMED_OUT/JOIN_FAILED. The packet goes to every
+// online group member, mirroring the C++ per-member SendDirectMessage fan-out.
+func (s *session) sendGroupJoinBGResult(members []groupMember, result int32) {
+	buf := protocol.NewBuffer(12)
+	buf.WriteI32(result)
+	if result == groupJoinBattlegroundTimedOut || result == groupJoinBattlegroundFailed {
+		buf.WriteU64(0) // player guid — C++ writes a zero GUID here (BattlegroundMgr.cpp:244)
+	}
+	pkt := buf.Bytes()
+	for _, m := range members {
+		if member := s.server.findSessionByGUID(m.GUID); member != nil {
+			_ = member.write(uint16(protocol.OpcodeSMSG_GROUP_JOINED_BATTLEGROUND), pkt, true)
+		}
+	}
+}
+
+// memberBGQueueIndex mirrors the duplicate-queue arm of CanJoinBattlegroundQueue
+// (Group.cpp:2067): the index of the member's active non-arena queue for bgTypeID, -1 if none.
+func memberBGQueueIndex(member *session, bgTypeID uint32) int {
+	for i := 0; i < len(member.bgQueues); i++ {
+		if member.bgQueues[i].Active && !member.bgQueues[i].IsArena && member.bgQueues[i].BgTypeID == bgTypeID {
+			return i
+		}
+	}
+	return -1
+}
+
+// memberFreeBGQueueIndex mirrors Player::HasFreeBattlegroundQueueId: the first inactive
+// queue slot of the member, -1 when the member is queued for the maximum.
+func memberFreeBGQueueIndex(member *session) int {
+	for i := 0; i < len(member.bgQueues); i++ {
+		if !member.bgQueues[i].Active {
+			return i
+		}
+	}
+	return -1
 }
 
 // battlegroundAA mirrors BATTLEGROUND_AA (SharedDefines.h:3515 — BattlemasterList.dbc index 6, All Arenas).
