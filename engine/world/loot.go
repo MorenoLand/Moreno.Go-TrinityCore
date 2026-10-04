@@ -1025,8 +1025,28 @@ func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool
 
 	res, err := targetSess.storeOrStackItem(ctx, targetGUID, it.ItemEntry, it.Count)
 	if err != nil {
-		_ = s.sendLootError(lootGUID, 12) // LOOT_ERROR_MASTER_INV_FULL
+		// HandleLootMasterGiveOpcode (LootHandler.cpp:460-471): inventory
+		// full maps to LOOT_ERROR_MASTER_INV_FULL (12), any other store
+		// failure to LOOT_ERROR_MASTER_OTHER (14); the loot stays put. The
+		// CANT_CARRY_MORE_OF_THIS -> LOOT_ERROR_MASTER_UNIQUE_ITEM (13) leg
+		// has no Go analog (storeOrStackItem models no unique-item check).
+		code := uint8(14)
+		if errors.Is(err, errInventoryFull) {
+			code = 12
+		}
+		_ = s.sendLootError(lootGUID, code)
 		return true
+	}
+	// HandleLootMasterGiveOpcode (LootHandler.cpp:476-479): the recipient —
+	// not the master looter — earns the loot achievement criteria; the
+	// RECEIVE_EPIC_ITEM leg comes from the target->StoreNewItem call
+	// (Player.cpp:12144). Mirrors the autostore arm above, including the
+	// quality>=4 gate Go uses for the epic pair.
+	targetSess.updateAchievementCriteria(criteriaTypeLootItem, it.ItemEntry, it.Count)
+	targetSess.updateAchievementCriteria(criteriaTypeLootType, uint32(s.activeLoot.LootType), it.Count)
+	if it.Quality >= 4 {
+		targetSess.updateAchievementCriteria(criteriaTypeLootEpicItem, it.ItemEntry, it.Count)
+		targetSess.updateAchievementCriteria(criteriaTypeReceiveEpicItem, it.ItemEntry, it.Count)
 	}
 	delete(s.activeLoot.Items, slotID)
 	_ = targetSess.sendInventoryItems(ctx)
