@@ -5118,6 +5118,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case 2, 17, 31, 58, 87: // Damage effects (School damage, Weapon damage, etc.)
 				damageEffectSeen = true
 				damage := uint32(eff.BasePoints + 1)
+				// Spell::EffectSchoolDMG (SpellEffects.cpp:334-348): Meteor-like
+				// GENERIC-family spells carrying SPELL_ATTR0_CU_SHARE_DAMAGE
+				// divide the damage by the number of targets hit with this
+				// effect. C++ counts every unique target info with
+				// MissCondition == NONE and the effect bit in EffectMask; on
+				// this path that is exactly the set the damage loop below hits
+				// (applyEffects returns early when any missStatus entry exists,
+				// and the hit roll only applies to the primary non-area
+				// target). The division is integer, like C++'s damage /= count.
+				if eff.Effect == 2 && spell.SpellFamilyName == spellFamilyGeneric && s.server != nil &&
+					s.server.getSpellCustomAttr(spellID)&SpellCustomAttrShareDamage != 0 {
+					count := 0
+					for _, effectTarget := range hitTargets {
+						if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
+							count++
+						}
+					}
+					if count > 0 {
+						damage /= uint32(count)
+					}
+				}
 				for _, effectTarget := range hitTargets {
 					if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
 						s.executeSpellDamage(effCtx, effectTarget, spellID, chainScaledAmount(damage, eff, chainJumpIndex[effectTarget]), effectIndex)
@@ -6584,6 +6605,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			s.executeSpellInstantKill(ctx, targetGUID, spellID)
 		} else if eff.Effect == 2 { // SPELL_EFFECT_SCHOOL_DAMAGE
 			baseDmg := uint32(eff.BasePoints + 1)
+			// The SPELL_ATTR0_CU_SHARE_DAMAGE division arm of
+			// Spell::EffectSchoolDMG (SpellEffects.cpp:334-348) is a no-op on
+			// this path: a triggered cast serves exactly one target per call,
+			// so the divisor is 1. The client path divides in applyEffects.
 			if baseDmg == 0 {
 				if spellID == ProcSpellFieryWeapon {
 					baseDmg = 40

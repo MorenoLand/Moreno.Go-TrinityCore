@@ -17,6 +17,13 @@ const (
 	// read from AttributesCu via Server.getSpellCustomAttr.
 	SpellCustomAttrAllowInflightTarget uint32 = 0x00040000
 
+	// SpellCustomAttrShareDamage marks Meteor-like spells whose school damage is
+	// divided by the number of hit targets (Spell::EffectSchoolDMG,
+	// SpellEffects.cpp:334-348). Mirrors TrinityCore
+	// SPELL_ATTR0_CU_SHARE_DAMAGE (SpellInfo.h:181), read from AttributesCu via
+	// Server.getSpellCustomAttr.
+	SpellCustomAttrShareDamage uint32 = 0x00000008
+
 	// SpellFacingFlagInfront requires target to be within caster's 120° frontal cone (2*pi/3).
 	// Mirrors TrinityCore SPELL_FACING_FLAG_INFRONT (DBCStructure.h:1409, Spell.dbc field 19).
 	SpellFacingFlagInfront uint32 = 0x0001
