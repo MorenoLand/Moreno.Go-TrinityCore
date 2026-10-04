@@ -57,6 +57,7 @@ const (
 	spellAttr4TreatAsDelayed               uint32 = 0x00000010 // SPELL_ATTR4_UNK4 "Treat as delayed spell" (SharedDefines.h:564) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4ProcOnlyOnCaster             uint32 = 0x00000002 // SPELL_ATTR4_PROC_ONLY_ON_CASTER (SharedDefines.h:561) "Only proc on self-cast" — ATTR4 is Go's AttributesEx4
 	spellAttr4CastOnlyInOutland            uint32 = 0x04000000 // SPELL_ATTR4_CAST_ONLY_IN_OUTLAND (SharedDefines.h:586) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
+	spellAttr4SpellVsExtendCost            uint32 = 0x00000400 // SPELL_ATTR4_SPELL_VS_EXTEND_COST (SharedDefines.h:570) "Attack speed modifies cost" — ATTR4 is Go's AttributesEx4
 	targetUnitCaster                       uint32 = 1          // TARGET_UNIT_CASTER (SharedDefines.h:1442)
 	spellAttr0UnaffectedByInvulnerability  uint32 = 0x20000000 // SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY (SharedDefines.h:441)
 	spellAttr0NotShapeshift                uint32 = 0x00010000 // SPELL_ATTR0_NOT_SHAPESHIFT (SharedDefines.h:428)
@@ -64,6 +65,7 @@ const (
 	spellAttr1CantBeReflected              uint32 = 0x00000080 // SPELL_ATTR1_CANT_BE_REFLECTED (SharedDefines.h:456)
 	spellAttr1ReqComboPoints1              uint32 = 0x00100000 // SPELL_ATTR1_REQ_COMBO_POINTS1 (SharedDefines.h:469) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr1ReqComboPoints2              uint32 = 0x00400000 // SPELL_ATTR1_REQ_COMBO_POINTS2 (SharedDefines.h:471) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
+	spellAttr1DrainAllPower                uint32 = 0x00000002 // SPELL_ATTR1_DRAIN_ALL_POWER (SharedDefines.h:450) "Drain all power" — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr2CanTargetDead                uint32 = 0x00000001 // SPELL_ATTR2_CAN_TARGET_DEAD (SharedDefines.h:486) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr2AutorepeatFlag               uint32 = 0x00000020 // SPELL_ATTR2_AUTOREPEAT_FLAG (SharedDefines.h:491) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr2NotResetAutoActions          uint32 = 0x00020000 // SPELL_ATTR2_NOT_RESET_AUTO_ACTIONS (SharedDefines.h:503) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
@@ -634,11 +636,43 @@ func (s *session) totalAuraModifierByAffectMask(auraType uint32, spell wotlk.Spe
 	return total
 }
 
+// calculateSpellPowerCost bridges SpellInfo::CalcPowerCost
+// (SpellInfo.cpp:3154-3242), the m_powerCost fill of Spell::prepare
+// (Spell.cpp:3093), in C++ relative order: the SPELL_ATTR1_DRAIN_ALL_POWER
+// early return, base + percentage cost, the flat aura modifier by spell
+// school (SPELL_AURA_MOD_POWER_COST_SCHOOL), the Shiv
+// ATTR4_SPELL_VS_EXTEND_COST weapon-speed arm, the SPELLMOD_COST fold, and
+// the percentage aura modifier by school
+// (SPELL_AURA_MOD_POWER_COST_SCHOOL_PCT), clamped at zero. Documented
+// no-bridge: the non-player-controlled caster arm (GtNPCManaCostScaler,
+// SpellInfo.cpp:3224-3233) and the npcbot spell-cost mods (3235-3238) are
+// structural — every Go cast originates from a player session; the
+// "gameobject casts don't use power" arm (3156-3159) is vacuous on this
+// path for the same reason.
 func (s *session) calculateSpellPowerCost(spell wotlk.Spell) uint32 {
-	cost := spell.ManaCost
-	if spell.ManaCostPct > 0 && s.player != nil {
-		pType := spell.PowerType
-		if pType == 0 { // Mana: calculate percentage from BaseMana per TrinityCore Player::GetCreateMana()
+	if s == nil || s.player == nil {
+		return 0
+	}
+	// Spell drain all exist power on cast (Only paladin lay of Hands):
+	// health-as-power spells drain the current health, other known power
+	// types drain the current power (SpellInfo.cpp:3161-3174).
+	if spell.AttributesEx&spellAttr1DrainAllPower != 0 {
+		if spell.PowerType == 0xFFFFFFFE { // POWER_HEALTH = -2 in C++
+			return s.player.Health
+		}
+		if spell.PowerType < 7 {
+			return s.player.Powers[spell.PowerType]
+		}
+		return 0
+	}
+	pType := spell.PowerType
+	cost := int32(spell.ManaCost)
+	if spell.ManaCostPct > 0 {
+		switch pType {
+		case 0xFFFFFFFE: // health as power used: pct of created health (SpellInfo.cpp:3181-3183)
+			// Go tracks no GetCreateHealth; MaxHealth is the bridge.
+			cost += int32(s.player.MaxHealth) * int32(spell.ManaCostPct) / 100
+		case 0: // Mana: calculate percentage from BaseMana per TrinityCore Player::GetCreateMana()
 			basePower := s.player.BaseMana
 			if basePower == 0 {
 				basePower = s.player.MaxPowers[0]
@@ -646,19 +680,55 @@ func (s *session) calculateSpellPowerCost(spell wotlk.Spell) uint32 {
 			if basePower == 0 {
 				basePower = 100
 			}
-			cost += (basePower * spell.ManaCostPct) / 100
-		} else if pType < 7 {
-			basePower := s.player.MaxPowers[pType]
-			if basePower == 0 {
-				basePower = s.player.Powers[pType]
+			cost += int32(basePower) * int32(spell.ManaCostPct) / 100
+		default:
+			if pType < 7 {
+				basePower := s.player.MaxPowers[pType]
+				if basePower == 0 {
+					basePower = s.player.Powers[pType]
+				}
+				if basePower == 0 {
+					basePower = 100
+				}
+				cost += int32(basePower) * int32(spell.ManaCostPct) / 100
 			}
-			if basePower == 0 {
-				basePower = 100
-			}
-			cost += (basePower * spell.ManaCostPct) / 100
 		}
 	}
-	return cost
+	// Flat mod from caster auras by spell school (SpellInfo.cpp:3199-3200):
+	// UNIT_FIELD_POWER_COST_MODIFIER is fed by
+	// SPELL_AURA_MOD_POWER_COST_SCHOOL (SpellAuraEffects.cpp:4259-4269),
+	// summed over effects whose misc mask carries the spell's first school.
+	var school uint32
+	for i := uint32(0); i < 7; i++ {
+		if spell.SchoolMask&(1<<i) != 0 {
+			school = i
+			break
+		}
+	}
+	for _, mod := range s.auraTypeModifiersByMiscMask(spellAuraModPowerCostSchool, 1<<school) {
+		cost += mod
+	}
+	// Shiv - costs 20 + weaponSpeed*10 energy (SpellInfo.cpp:3207-3218): the
+	// base cost already carries the flat part, this adds attack time / 100.
+	// s.player.AttackTime already folds the shapeshift-form CombatRoundTime
+	// (shapeshift.go), mirroring the C++ form lookup else GetAttackTime.
+	if spell.AttributesEx4&spellAttr4SpellVsExtendCost != 0 {
+		cost += int32(s.player.AttackTime) / 100
+	}
+	// Apply cost mod by spell (SpellInfo.cpp:3220-3221).
+	cost = s.applySpellMod(spell, spellModCost, cost)
+	// PCT mod from user auras by school (SpellInfo.cpp:3237-3240):
+	// UNIT_FIELD_POWER_COST_MULTIPLIER is fed by
+	// SPELL_AURA_MOD_POWER_COST_SCHOOL_PCT (SpellAuraEffects.cpp:4246-4257).
+	var pct int32
+	for _, mod := range s.auraTypeModifiersByMiscMask(spellAuraModPowerCostSchoolPct, 1<<school) {
+		pct += mod
+	}
+	cost = int32(float64(cost) * (1.0 + float64(pct)/100.0))
+	if cost < 0 {
+		cost = 0
+	}
+	return uint32(cost)
 }
 
 func (s *session) hasSpellReagents(ctx context.Context, spell wotlk.Spell) bool {
