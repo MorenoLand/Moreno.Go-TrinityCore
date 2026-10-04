@@ -290,7 +290,8 @@ func (s *session) sendForcedMovement(opcode uint16) {
 
 // buildPlayerRepop mirrors Player::BuildPlayerRepop: announce the repop with
 // SMSG_PRE_RESURRECT, record the corpse at the death location, convert the
-// body to a ghost with one health point, switch to water walking, unroot, and
+// body to a ghost with one health point, switch to water walking, unroot (unless
+// the session is logging out, mirroring Player.cpp:4662-4663), and
 // send the corpse reclaim delay. The reference ghost auras 8326 (Ghost) and
 // buildCorpseCreateBlock constructs an SMSG_UPDATE_OBJECT block creating a visible
 // Corpse object in the world, matching TrinityCore Corpse::Create and Corpse::BuildValuesUpdate.
@@ -417,7 +418,15 @@ func (s *session) despawnCorpseObject() {
 
 // buildPlayerRepop converts the dead player into a ghost, persists the corpse record,
 // spawns the physical Corpse object into the world grid, and applies ghost visual auras.
-func (s *session) buildPlayerRepop(ctx context.Context) {
+// loggingOut mirrors WorldSession::isLogingOut (WorldSession.h:456): during logout
+// (m_playerLogout is set before BuildPlayerRepop in WorldSession::LogoutPlayer,
+// WorldSession.cpp:502) the MOVE_UNROOT leg is skipped — Player.cpp:4662-4663.
+// No-bridge: C++ aborts before the ghost conversion when a corpse already
+// exists on the map (Player.cpp:4640-4646); Go deletes the previous record
+// (CHAR_DEL_CORPSE) first, so the leg is unreachable. When both reclaim-delay
+// configs are off C++ returns -1 and skips the packet (Player.cpp:24374+4670);
+// Go sends a 0ms SMSG_CORPSE_RECLAIM_DELAY instead.
+func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 	if s.player == nil {
 		return
 	}
@@ -456,7 +465,9 @@ func (s *session) buildPlayerRepop(ctx context.Context) {
 	s.player.UnitFlags &^= unitFlagSkinnable
 	s.sendPlayerUpdate()
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK))
-	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_UNROOT))
+	if !loggingOut {
+		s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_UNROOT))
+	}
 	s.sendCorpseReclaimDelay(s.corpseReclaimDelaySeconds(false))
 	s.stopMirrorTimers()
 }
@@ -649,7 +660,7 @@ func (s *session) handleRepopRequest(ctx context.Context, payload []byte) bool {
 	// pet before the repop (e.g. a warlock re-summon while dead); RemoveGhoul
 	// has no Go analog (see killPlayer).
 	s.unsummonPet(ctx, petSaveNotInSlot)
-	s.buildPlayerRepop(ctx)
+	s.buildPlayerRepop(ctx, false)
 	s.repopAtGraveyard(ctx)
 	return true
 }
@@ -678,7 +689,7 @@ func (s *Server) updatePlayerDeathTimers(ctx context.Context, now time.Time) {
 	}
 	s.sessionsMu.RUnlock()
 	for _, sess := range due {
-		sess.buildPlayerRepop(ctx)
+		sess.buildPlayerRepop(ctx, false)
 		sess.repopAtGraveyard(ctx)
 	}
 }
@@ -1235,7 +1246,7 @@ func (s *session) handleHearthAndResurrect(ctx context.Context) bool {
 	if !canHearthAndRes {
 		return true
 	}
-	s.buildPlayerRepop(ctx)
+	s.buildPlayerRepop(ctx, false)
 	s.resurrectPlayer(ctx, 1.0)
 	destMap := s.player.HomebindMap
 	destX := s.player.HomebindX

@@ -935,7 +935,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.updateAchievementCriteria(criteriaTypeOnLogin, 0, 1)
 	s.setAchievementCriteria(criteriaTypeKnownFactions, 0, uint32(len(state.Reputations)))
 	if s.player.repopOnLogin {
-		s.buildPlayerRepop(ctx)
+		s.buildPlayerRepop(ctx, false)
 		s.repopAtGraveyard(ctx)
 		s.player.repopOnLogin = false
 	}
@@ -2754,7 +2754,10 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 	s.triggerLogout(ctx)
 	s.releaseActiveLoot()
 	if s.player != nil && s.player.Health == 0 && s.player.PlayerFlags&playerFlagGhost == 0 && !s.deathTimer.IsZero() {
-		s.buildPlayerRepop(ctx)
+		// WorldSession::LogoutPlayer sets m_playerLogout before the repop
+		// (WorldSession.cpp:502), so WorldSession::isLogingOut() holds here and
+		// the MOVE_UNROOT leg is skipped (Player.cpp:4662-4663).
+		s.buildPlayerRepop(ctx, true)
 		s.repopAtGraveyard(ctx)
 	}
 	if s.playerLoaded && s.player != nil {
