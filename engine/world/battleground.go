@@ -74,6 +74,14 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 	joinAsGroup, _ := r.ReadU8()
 	_ = joinAsGroup
 
+	// Duplicate-queue protection: player is already in this queue (C++ WorldSession::HandleBattlemasterJoinOpcode
+	// — GetBattlegroundQueueIndex(bgQueueTypeId) < PLAYER_MAX_BATTLEGROUND_QUEUES → silent return).
+	for i := 0; i < len(s.bgQueues); i++ {
+		if s.bgQueues[i].Active && !s.bgQueues[i].IsArena && s.bgQueues[i].BgTypeID == bgTypeID {
+			return true
+		}
+	}
+
 	// Find free queue slot
 	slot := -1
 	for i := 0; i < len(s.bgQueues); i++ {
@@ -123,6 +131,14 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 	default:
 		if arenaSlot == 2 || arenaSlot == 3 || arenaSlot == 5 {
 			arenaType = arenaSlot
+		}
+	}
+
+	// Duplicate-queue protection: player is already in this arena queue (C++ WorldSession::HandleBattlemasterJoinArena
+	// — GetBattlegroundQueueIndex(bgQueueTypeId) < PLAYER_MAX_BATTLEGROUND_QUEUES → silent return).
+	for i := 0; i < len(s.bgQueues); i++ {
+		if s.bgQueues[i].Active && s.bgQueues[i].IsArena && s.bgQueues[i].ArenaType == arenaType {
+			return true
 		}
 	}
 
