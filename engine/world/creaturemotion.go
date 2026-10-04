@@ -1145,8 +1145,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if !canCreatureDetectStealthOfPlayer(motion, p.Sess, dist) {
 			continue
 		}
-		// Creature::GetAggroRange (Creature.cpp:2017-2033): 20 yards at equal
-		// level, +/-1 yard per level difference, clamped to [5, 45].
+		// Creature::GetAttackDistance (Creature.cpp:2022-2058): 20 yards at equal
+		// level, minus combat reach, +/-1 yard per creature-minus-player level
+		// difference, clamped to [5, 45]. (Creature::GetAggroRange, 3130-3168,
+		// is the pet-only variant — world-creature acquisition uses
+		// GetAttackDistance.) Documented deltas: the SPELL_AURA_MOD_DETECT_RANGE /
+		// MOD_DETECTED_RANGE terms are unmodeled (no aura-modifier query on
+		// creatures or players); the RATE_CREATURE_AGGRO multiplier and the
+		// expansion-max-level clamp are unmodeled (no rate model); the
+		// + m_CombatDistance term of CanStartAttack (Creature.cpp:1987-1989)
+		// is unmodeled (creature motions carry no combat-distance field).
 		levelDiff := int32(motion.Level) - int32(p.Level)
 		aggroDist := float32(20.0) - motion.CombatReach + float32(levelDiff)
 		if aggroDist < 5.0 {
@@ -1163,6 +1171,35 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if s.fireCreatureMoveInLOS(ctx, motion, p.Sess) {
 				continue
 			}
+			// Aggro acquisition audit vs CreatureAI::MoveInLineOfSight
+			// (CreatureAI.cpp:118-123) + Creature::CanStartAttack
+			// (Creature.cpp:1960-2004): the IsEngaged return lands via block
+			// order (this scan only runs when !InCombat); the REACT_AGGRESSIVE
+			// gate lands via the !isCreaturePassive guard (C++ InitializeReactState,
+			// Creature.cpp:1255-1266, also only distinguishes passive vs
+			// aggressive — the civilian arm is commented out there too);
+			// stealth detection rides canCreatureDetectStealthOfPlayer
+			// (stealth only — the CanSeeOrDetect invisibility legs are
+			// unmodeled); LOS rides hasLineOfSight; the civilian arm of
+			// CanStartAttack rides the passive mapping; CallAssistance is
+			// absent here as in C++ (sight-aggro only engages via
+			// Unit::EngageWithTarget, Unit.cpp:8429-8438 — assistance fires on
+			// AttackStart, not on acquisition). Documented no-bridge arms: the
+			// home-distance gate of CanCreatureAttack (Creature.cpp:2582-2599 —
+			// non-dungeon victim must sit within visibility-range/2-cell of
+			// home unless recently damaged or taunted; Go puts no
+			// home-proximity limit on acquisition); the gray-aggro config
+			// (CheckNoGrayAggroConfig, Creature.cpp:2006-2019 — vacuous under
+			// the default NoGrayAggro.Above/Below = 0 config, World.cpp:1299);
+			// the immune-to-NPC/PC target pairing of CanStartAttack
+			// (Creature.cpp:1964-1970 — creatureCombatDisabled only models the
+			// creature-side IMMUNE_TO_PC bit, not the target-side pairing);
+			// PetAI's aggressive-pet acquisition (PetAI.cpp:352,
+			// SelectNearestHostileUnitInAggroRange — Go pets never
+			// auto-acquire). Documented delta: Unit::EngageWithTarget seeds 0
+			// threat with ignoreModifiers/ignoreRedirects while Go seeds 100.0
+			// — AddThreat early-returns on amount <= 0, so a literal 0 would
+			// skip the victim bookkeeping C++ still runs.
 			motion.InCombat = true
 			if motion.ThreatMgr == nil {
 				motion.ThreatMgr = NewThreatManager(motion.GUID)
@@ -1249,6 +1286,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	motion.WaitUntil = motion.MoveEnds.Add(wait)
 }
 
+// canCreatureStartAttack mirrors the range arms of Creature::CanStartAttack
+// (Creature.cpp:1960-2004): the non-flyer Z check (CREATURE_Z_ATTACK_RANGE,
+// Creature.h:57 — the + m_CombatDistance term is unmodeled) and the
+// GetAttackDistance distance check (C++ also adds m_CombatDistance there).
+// The civilian, immunity, _IsTargetAcceptable, and gray-aggro arms live in
+// the aggro scan's guard and its audit note above.
 func canCreatureStartAttack(motion *creatureMotion, target playerPos, distance, attackDistance float32) bool {
 	return motion != nil && (motion.CanFly || math.Abs(float64(target.Z-motion.Z)) <= 3.0) && distance <= attackDistance
 }
