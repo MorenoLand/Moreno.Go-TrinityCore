@@ -45,6 +45,7 @@ const (
 	spellAttr3StackForDiffCasters          uint32 = 0x00000080 // SPELL_ATTR3_STACK_FOR_DIFF_CASTERS (SharedDefines.h:530) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 	spellAttr7NoPushbackOnDamage           uint32 = 0x00000040 // SPELL_ATTR7_NO_PUSHBACK_ON_DAMAGE (SharedDefines.h:677) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr7DispelCharges                uint32 = 0x00000400 // SPELL_ATTR7_DISPEL_CHARGES (SharedDefines.h:681) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
+	spellAttr7CanRestoreSecondaryPower     uint32 = 0x00010000 // SPELL_ATTR7_CAN_RESTORE_SECONDARY_POWER (SharedDefines.h:687) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr6AssistIgnoreImmuneFlag       uint32 = 0x00000008 // SPELL_ATTR6_ASSIST_IGNORE_IMMUNE_FLAG (SharedDefines.h:637) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6CanTargetUntargetable        uint32 = 0x01000000 // SPELL_ATTR6_CAN_TARGET_UNTARGETABLE (SharedDefines.h:658) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6DontConsumeProcCharges       uint32 = 0x00000020 // SPELL_ATTR6_DONT_CONSUME_PROC_CHARGES (SharedDefines.h:639) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
@@ -5790,9 +5791,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.executeSpellHealDoneBonus(effCtx, effectTarget, spellID, targetHeal, effectIndex, doneBonus)
 				}
 			case spellEffectEnergize:
-				amount := eff.BasePoints + 1
+				// Spell::EffectEnergize (SpellEffects.cpp:1775-1845) — audited;
+				// the per-target legs ride energizeEffectTarget. Already-covered
+				// legs: the effectHandleMode gate (1778-1779) is structural (this
+				// dispatch is the HIT_TARGET phase, the combo-point arm's
+				// convention); the null-caster arm (1781) is vacuous (the caster
+				// is always the session player); the null-target, !IsAlive,
+				// MiscValue power-range, and GetMaxPower(power) == 0 gates plus
+				// the Unit::EnergizeBySpell ModifyPower tail ride
+				// applySpellEnergize/adjustSpellPower. Documented no-bridge:
+				// SendEnergizeSpellLog (SMSG_SPELLENERGIZELOG — no Go sender)
+				// and the ForwardThreatForAssistingMe damage/2 threat forward
+				// (Unit.cpp:6590-6596 — no energize-threat model).
 				for _, effectTarget := range hitTargets {
-					s.applySpellEnergize(effCtx, effectTarget, eff.MiscValue, amount)
+					s.energizeEffectTarget(effCtx, spell, spellID, eff, effectTarget)
 				}
 			case spellEffectPowerBurn:
 				amount := eff.BasePoints + 1
@@ -7271,7 +7283,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 			s.executeSpellHeal(ctx, targetGUID, spellID, healAmount, effectIndex)
 		} else if eff.Effect == spellEffectEnergize {
-			s.applySpellEnergize(ctx, targetGUID, eff.MiscValue, eff.BasePoints+1)
+			// Spell::EffectEnergize per-target legs (power-type gate,
+			// per-spell adjustments) ride energizeEffectTarget on the
+			// triggered path too.
+			s.energizeEffectTarget(ctx, spell, spellID, eff, targetGUID)
 		} else if eff.Effect == spellEffectPowerBurn {
 			if burned := s.applySpellPowerBurn(ctx, targetGUID, eff.MiscValue, eff.BasePoints+1, spellID); burned > 0 {
 				s.executeSpellDamage(ctx, targetGUID, spellID, effectValueMultiplied(burned, eff.Amplitude), effectIndex)
@@ -7377,6 +7392,86 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	s.fireSpellLinkedTriggers(ctx, spellID, targetGUID)
 	s.resetCastCooldownCheat(spellID)
 	s.procSpellCastPhaseAuraTriggers(ctx, spell)
+}
+
+// energizeEffectTarget mirrors the per-target legs of Spell::EffectEnergize
+// (SpellEffects.cpp:1775-1845): the power-type-mismatch gate, the "Some
+// level depends spells" per-spell amount adjustments, and the damage < 0
+// early return. The HIT_TARGET mode, null-caster/target, alive, power-range,
+// and max-power gates plus the ModifyPower tail ride
+// applySpellEnergize/adjustSpellPower (see the arm note).
+func (s *session) energizeEffectTarget(ctx context.Context, spell wotlk.Spell, spellID uint32, eff wotlk.SpellEffect, effectTarget uint64) {
+	amount := int32(eff.BasePoints + 1)
+	power := eff.MiscValue
+	// SpellEffects.cpp:1788-1791: a player target whose current power type
+	// differs from the energized power gets nothing, unless the spell is
+	// potion-family or carries SPELL_ATTR7_CAN_RESTORE_SECONDARY_POWER.
+	// Creature targets skip the gate (C++ gates TYPEID_PLAYER only).
+	if power >= 0 && power < 7 {
+		if tgt := s.spellPowerTarget(effectTarget); tgt != nil && tgt.player != nil &&
+			playerPowerType(tgt.player) != uint8(power) &&
+			spell.SpellFamilyName != spellFamilyPotion &&
+			spell.AttributesEx7&spellAttr7CanRestoreSecondaryPower == 0 {
+			return
+		}
+	}
+	target := s.spellPowerTarget(effectTarget)
+	switch spellID {
+	case 9512, 24571, 24532: // Restore Energy / Blood Fury / Burst of Energy (1804-1815)
+		if s.player != nil {
+			var base, mult int32
+			switch spellID {
+			case 9512:
+				base, mult = 40, 2
+			case 24571:
+				base, mult = 60, 10
+			default:
+				base, mult = 60, 4
+			}
+			if diff := int32(s.player.Level) - base; diff > 0 {
+				amount -= mult * diff
+			}
+		}
+	case 31930, 63375, 68082: // Judgements of the Wise / Improved Stormstrike / Glyph of Seal of Command (1816-1819)
+		amount = int32(int64(energizeCreateMana(target)) * int64(amount) / 100)
+	case 48542: // Revitalize (1821-1823)
+		var maxPower uint32
+		if target != nil && target.player != nil && power >= 0 && power < 7 {
+			maxPower = target.player.MaxPowers[uint32(power)]
+		}
+		amount = int32(int64(maxPower) * int64(amount) / 100)
+	case 67490: // Runic Mana Injector (1824-1830)
+		// The ToPlayer arm is vacuous — the caster is always the session
+		// player; HasSkill rides playerSkillTotalValue presence (> 0).
+		if s.player != nil && playerSkillTotalValue(s.player, skillEngineering) > 0 {
+			amount = amount * 125 / 100
+		}
+	case 71132: // Glyph of Shadow Word: Pain (1831-1834)
+		amount = int32(int64(energizeCreateMana(target)) / 100)
+	}
+	// SpellEffects.cpp:1838-1842: the level-diff subtraction can drive the
+	// amount negative — C++ returns without energizing, and Go must not fall
+	// through to adjustSpellPower, which would drain instead.
+	if amount < 0 {
+		return
+	}
+	s.applySpellEnergize(ctx, effectTarget, power, amount)
+}
+
+// energizeCreateMana mirrors Unit::GetCreateMana for the energize pct arms
+// via the player's BaseMana with the ManaCostPct fallback chain (the
+// mana-cost block): BaseMana, then MaxPowers[0], then 100. Creature targets
+// carry no BaseMana model — the pct arms leave their amount unadjusted.
+func energizeCreateMana(target *session) uint32 {
+	if target != nil && target.player != nil {
+		if base := target.player.BaseMana; base != 0 {
+			return base
+		}
+		if max := target.player.MaxPowers[0]; max != 0 {
+			return max
+		}
+	}
+	return 100
 }
 
 func (s *session) applySpellEnergize(ctx context.Context, targetGUID uint64, powerType int32, amount int32) {

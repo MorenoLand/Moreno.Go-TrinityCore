@@ -33,12 +33,15 @@ const (
 // flag (Unit::HasAuraState, Unit.cpp:5946).
 const perCasterAuraStateMask = uint32(1<<(auraStateConflagrate-1)) | uint32(1<<(auraStateDeadlyPoison-1))
 
-// Spell family names used by _LoadAuraState (SharedDefines.h:3585-3589).
+// Spell family names used by _LoadAuraState (SharedDefines.h:3585-3589)
+// plus SPELLFAMILY_POTION (SharedDefines.h:3594) for the EffectEnergize
+// power-type gate.
 const (
 	spellFamilyWarrior = 4
 	spellFamilyWarlock = 5
 	spellFamilyDruid   = 7
 	spellFamilyRogue   = 8
+	spellFamilyPotion  = 13
 )
 
 // spellAuraAbilityIgnoreAuraState is SPELL_AURA_ABILITY_IGNORE_AURASTATE
