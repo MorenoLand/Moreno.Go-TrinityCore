@@ -51,6 +51,7 @@ type tradeSlotItem struct {
 	EnchantID       uint32
 	GiftCreatorGUID uint64
 	CreatorGUID     uint64
+	Wrapped         bool
 }
 
 type playerTradeState struct {
@@ -450,8 +451,16 @@ func (s *session) handleSetTradeGold(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
+	// Reference: TradeData::SetMoney (TradeData.cpp:93-110). No-change is a
+	// silent no-op (no un-accept, no update); insufficient funds answers
+	// TRADE_STATUS_CLOSE_WINDOW + EQUIP_ERR_NOT_ENOUGH_MONEY and leaves the
+	// stored money unchanged.
+	if gold == s.trade.Money {
+		return true
+	}
 	if gold > s.player.Money {
-		gold = s.player.Money
+		_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrNotEnoughMoney, 0, 0)
+		return true
 	}
 	s.trade.Money = gold
 	if s.trade.Accepted {
@@ -534,6 +543,16 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT displayid FROM item_template WHERE entry = ?", itemEntry).Scan(&disp)
 		displayID = uint32(disp)
 	}
+	if existing, ok := s.trade.Items[tradeSlot]; ok && existing.ItemGUID == uint64(itemGUID) {
+		// TradeData::SetItem (TradeData.cpp:60-65) early-returns when the slot
+		// already holds this item: no un-accept, no spell clear, no update.
+		return true
+	}
+	// Reference: SendUpdateTrade (TradeHandler.cpp:95-96) writes
+	// item->IsWrapped() ? 1 : 0. Go models wrapping via the character_gifts
+	// row (items.go:2178), so the bit is derived from that row's presence.
+	var wrappedProbe int64
+	wrapped := cdb.QueryRowContext(ctx, "SELECT 1 FROM character_gifts WHERE item_guid = ? LIMIT 1", itemGUID).Scan(&wrappedProbe) == nil
 	s.trade.Items[tradeSlot] = tradeSlotItem{
 		ItemGUID:        uint64(itemGUID),
 		ItemEntry:       uint32(itemEntry),
@@ -542,6 +561,7 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 		EnchantID:       enchantID,
 		GiftCreatorGUID: giftCreatorGUID,
 		CreatorGUID:     creatorGUID,
+		Wrapped:         wrapped,
 	}
 	// TradeData::SetItem spell clearing (TradeData.cpp:72-77): changing the
 	// non-traded slot removes a possible spell the trader applied to it;
@@ -572,6 +592,16 @@ func (s *session) handleClearTradeItem(ctx context.Context, payload []byte) bool
 		return true
 	}
 	tradeSlot := payload[0]
+	// Reference: WorldSession::HandleClearTradeItemOpcode (TradeHandler.cpp:784-793)
+	// -> TradeData::SetItem(slot, nullptr) (TradeData.cpp:60-78): an invalid
+	// slot returns silently, and clearing an already-empty slot early-returns
+	// (no un-accept, no spell clear, no update).
+	if tradeSlot >= tradeSlotCount {
+		return true
+	}
+	if _, ok := s.trade.Items[tradeSlot]; !ok {
+		return true
+	}
 	delete(s.trade.Items, tradeSlot)
 	// HandleClearTradeItemOpcode routes through TradeData::SetItem(slot,
 	// nullptr) (TradeHandler.cpp:778-792), so the same spell clearing as
@@ -915,9 +945,11 @@ func (s *session) handleUnacceptTrade(ctx context.Context) bool {
 		return true
 	}
 	s.trade.Accepted = false
-	_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
-	if s.trade.Partner != nil && s.trade.Partner.trade != nil {
-		s.trade.Partner.trade.Accepted = false
+	// Reference: WorldSession::HandleUnacceptTradeOpcode (TradeHandler.cpp:552-558)
+	// -> TradeData::SetAccepted(false, forTrader=true) (TradeData.cpp:122-133):
+	// only the un-acceptor's own accepted state clears; TRADE_STATUS_BACK_TO_TRADE
+	// goes to the trader (partner) alone. The partner's accepted flag is untouched.
+	if s.trade.Partner != nil {
 		_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
 	}
 	return true
@@ -969,7 +1001,11 @@ func (s *session) sendTradeStatusExtended(traderData bool) {
 			buf.WriteU32(it.ItemEntry)
 			buf.WriteU32(it.DisplayID)
 			buf.WriteU32(it.StackCount)
-			buf.WriteU32(0)                  // wrapped
+			if it.Wrapped {
+				buf.WriteU32(1) // wrapped: hide stats but show giftcreator name
+			} else {
+				buf.WriteU32(0)
+			}
 			buf.WriteU64(it.GiftCreatorGUID) // giftCreator (SendUpdateTrade, TradeHandler.cpp:98)
 			buf.WriteU32(it.EnchantID)       // permEnchant
 			for j := 0; j < 3; j++ {
