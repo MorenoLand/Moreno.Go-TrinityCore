@@ -1036,6 +1036,23 @@ func (s *session) handleLootMethod(_ context.Context, payload []byte) bool {
 		srv.groupsMu.Unlock()
 		return false
 	}
+	if g.IsLFG { // C++ HandleLootMethodOpcode: isLFGGroup() -> return
+		srv.groupsMu.Unlock()
+		return false
+	}
+	if lootMethod == 2 { // MASTER_LOOT: master looter must be a group member
+		masterIsMember := false
+		for _, m := range g.Members {
+			if m.GUID == masterLooter {
+				masterIsMember = true
+				break
+			}
+		}
+		if !masterIsMember {
+			srv.groupsMu.Unlock()
+			return false
+		}
+	}
 	g.LootMethod = uint8(lootMethod)
 	g.MasterLooter = masterLooter
 	g.LootThreshold = uint8(lootThreshold)
