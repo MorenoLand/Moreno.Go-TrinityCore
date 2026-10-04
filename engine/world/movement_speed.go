@@ -153,6 +153,11 @@ func (s *session) auraMultiplier(auraType uint32) float32 {
 	return multiplier
 }
 
+// Mounted run speed mirrors Unit::UpdateSpeed's MOVE_RUN mounted branch (Unit.cpp:8678-8694):
+// max-positive 32 main mod, total-multiplier 130 stack, max-positive 172 non-stack, speed = max(stack, nonstack)
+// with the main mod applied as AddPct — verified equal here. C++ gates on IsMounted() (Unit.h:932,
+// UNIT_FLAG_MOUNT); this gate additionally treats MountDisplayID != 0 as mounted, so Go's display-only
+// mounts (taxi legs, .modify mount) take the mounted formula where C++ would see the flag unset.
 func (s *session) mountedRunSpeed() float32 {
 	main := s.maxPositiveAuraModifier(spellAuraIncreaseSpeed)
 	stack := s.auraMultiplier(129)
@@ -169,6 +174,13 @@ func (s *session) mountedRunSpeed() float32 {
 	return s.adjustMovementSpeed(7 * multiplier)
 }
 
+// Mounted flight speed mirrors Unit::UpdateSpeed's MOVE_FLIGHT mounted branch (Unit.cpp:8714-8722):
+// max-positive 207 main, total-multiplier 209 stack, max-positive 211 non-stack — verified equal here,
+// as is the unmounted total-of-208 + total-of-206 arm below it. No bridge: the vehicle-flight arms
+// (TYPEID_UNIT controlled-by-player 206-with-vehicle + GetCharmer owner max, and the
+// GetVehicleBase()->UpdateSpeed(MOVE_FLIGHT) propagation at the MOVE_FLIGHT tail) and the minion
+// follow-speed leg (Unit.cpp:8774-8788, FOLLOW-motion pets borrowing the owner's rate near 10yd);
+// the 191 normalization snare/daze immune-mask skip is vacuous for players.
 func (s *session) mountedFlightSpeed() float32 {
 	main := s.totalAuraModifier(spellAuraIncreaseFlightSpeed) + s.totalAuraModifier(spellAuraIncreaseVehicleFlight)
 	stack, nonStack := float32(1), float32(1)
