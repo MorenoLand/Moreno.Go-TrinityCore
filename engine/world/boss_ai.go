@@ -58,13 +58,22 @@ import (
 // SetCombatPulseDelay(5) and setActive(true) have no Go models — no bridge;
 // DoZoneInCombat() has no engine analog — no bridge (the C++ vancleef
 // summons.DoZoneInCombat() arm likewise; Go's 50%-arm blackguards spawn
-// already in combat). ScheduleTasks() is only partly bridged: Go per-AI
-// OnAggro arms are talk lines (vancleef, mrSmite, rhahkZor) or empty
-// (taragaman, kresh) — timer re-arm lives in OnReset (respawn/evade only).
-// Delta: on the first pull after server start, timers are zero-valued, so
-// mrSmite's trash/slam, rhahkZor's slam, and taragaman's fire-nova/uppercut
-// fire on the first combat tick instead of after their scheduled delays;
-// after any evade or respawn, OnReset re-arms and behavior matches C++.
+// already in combat). ScheduleTasks() needs no aggro-time bridge: every
+// Go AI arms its timers in its constructor, and getBossAIForCreature runs
+// lazily at first engagement (creaturemotion.go:461 and the combat.go /
+// spells.go combat sites), with OnUpdate decrementing only while InCombat —
+// outcome-equivalent to C++ spawn-time arming. C++ boss_mr_smite's
+// JustEngagedWith is empty (boss_mr_smite.cpp:105-107), so Go likewise
+// re-arms nothing in OnAggro. mrSmite initial values mirror Initialize()
+// (boss_mr_smite.cpp:70-80): trash urand(5000,9000), slam 9000; repeat
+// arms mirror UpdateAI (:125-139): trash urand(6000,15500), slam 11000,
+// with the bCheckChances 84% cast gate (:109-114) bridged — the timer
+// re-arms even when the cast is skipped, matching C++. rhahkZor (644) and
+// taragaman (11520) have no script files in this C++ tree — their logic is
+// TDB smart_scripts rows — so their constructor values (slam 12s; fire
+// nova 8s init/9s repeat, uppercut 12s) stand as transcribed; SmartAI's
+// AGGRO-event processing (SmartAI.cpp:562) cannot be verified against the
+// missing rows, so no OnAggro re-arm is applied for them either.
 type BossAI interface {
 	OnReset(ctx context.Context, s *Server, motion *creatureMotion)
 	OnAggro(ctx context.Context, s *Server, motion *creatureMotion, victim uint64)
@@ -303,17 +312,20 @@ type mrSmiteAI struct {
 }
 
 func newMrSmiteAI(m *creatureMotion) BossAI {
+	// C++ Initialize() (boss_mr_smite.cpp:70-80) runs from both the
+	// constructor and Reset(): uiTrashTimer = urand(5000,9000) (inclusive),
+	// uiSlamTimer = 9000.
 	return &mrSmiteAI{
 		motion:     m,
-		trashTimer: 6 * time.Second,
-		slamTimer:  11 * time.Second,
+		trashTimer: time.Duration(5000+rand.Intn(4001)) * time.Millisecond,
+		slamTimer:  9 * time.Second,
 	}
 }
 
 func (ai *mrSmiteAI) OnReset(ctx context.Context, s *Server, m *creatureMotion) {
 	ai.phase = 0
-	ai.trashTimer = 6 * time.Second
-	ai.slamTimer = 11 * time.Second
+	ai.trashTimer = time.Duration(5000+rand.Intn(4001)) * time.Millisecond
+	ai.slamTimer = 9 * time.Second
 }
 
 func (ai *mrSmiteAI) OnAggro(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
@@ -363,14 +375,21 @@ func (ai *mrSmiteAI) OnUpdate(ctx context.Context, s *Server, m *creatureMotion,
 	}
 	ai.trashTimer -= diff
 	if ai.trashTimer <= 0 {
-		ai.trashTimer = time.Duration(6000+rand.Intn(4000)) * time.Millisecond
-		s.castCreatureSpell(ctx, m, 3391, m.TargetGUID) // SPELL_TRASH
+		// urand(6000,15500) inclusive, re-armed even when bCheckChances
+		// skips the cast (boss_mr_smite.cpp:125-131).
+		ai.trashTimer = time.Duration(6000+rand.Intn(9501)) * time.Millisecond
+		if rand.Intn(100) > 15 { // bCheckChances (109-114): urand(0,99) <= 15 skips
+			s.castCreatureSpell(ctx, m, 3391, m.TargetGUID) // SPELL_TRASH
+		}
 	}
 
 	ai.slamTimer -= diff
 	if ai.slamTimer <= 0 {
+		// 11000 re-armed even when bCheckChances skips the cast (:133-137).
 		ai.slamTimer = 11 * time.Second
-		s.castCreatureSpell(ctx, m, 6435, m.TargetGUID) // SPELL_SMITE_SLAM
+		if rand.Intn(100) > 15 { // bCheckChances (109-114)
+			s.castCreatureSpell(ctx, m, 6435, m.TargetGUID) // SPELL_SMITE_SLAM
+		}
 	}
 }
 
