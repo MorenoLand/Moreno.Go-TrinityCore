@@ -409,6 +409,19 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	defer tx.Rollback()
+	// Player::DeleteFromDB (Player.cpp:4349): online players who had the
+	// deleted character on their social list get FRIEND_REMOVED. Capture the
+	// contact list before the wipe below deletes the rows.
+	var deletedContacts []uint64
+	if rows, qerr := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT friend FROM character_social WHERE guid = ?", guid); qerr == nil {
+		for rows.Next() {
+			var contactGUID uint64
+			if rows.Scan(&contactGUID) == nil {
+				deletedContacts = append(deletedContacts, contactGUID)
+			}
+		}
+		rows.Close()
+	}
 	// Player::DeleteFromDB CHAR_DELETE_REMOVE (Player.cpp:4253): the deleted
 	// character's COD mails carrying items are returned to their senders
 	// before any owned-state rows are wiped, so the re-homed items survive
@@ -424,6 +437,11 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 	}
 	if err := tx.Commit(); err != nil {
 		return false
+	}
+	for _, contactGUID := range deletedContacts {
+		if sess := s.server.findSessionByGUID(contactGUID); sess != nil && sess.worldReady.Load() {
+			_ = sess.sendFriendStatus(friendsResultRemoved, guid, "")
+		}
 	}
 	delete(s.legitimate, guid)
 	return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_DELETE), 71)

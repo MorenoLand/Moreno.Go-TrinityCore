@@ -205,6 +205,8 @@ type session struct {
 	twoSideChat                  bool
 	twoSideWhoList               bool
 	whoSeeAllSecurityLevels      bool
+	twoSideAddFriend             bool
+	allowGMFriend                bool
 	legitimate                   map[uint64]struct{}
 	characterNames               map[uint64]enumCharacter
 	mounts                       *MountState
@@ -3321,6 +3323,14 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	if s.whoSeeAllSecurityLevels, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionWhoSeeAllSecurityLevels); err != nil {
 		s.whoSeeAllSecurityLevels = false
 		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionWhoSeeAllSecurityLevels, "error", err)
+	}
+	if s.twoSideAddFriend, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionTwoSideAddFriend); err != nil {
+		s.twoSideAddFriend = false
+		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionTwoSideAddFriend, "error", err)
+	}
+	if s.allowGMFriend, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionAllowGMFriend); err != nil {
+		s.allowGMFriend = false
+		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionAllowGMFriend, "error", err)
 	}
 	s.accountExpansion = account.Expansion
 	s.debug("world authentication accepted", "account", accountName, "build", build, "expansion", s.accountExpansion, "gm_chat", s.gmChat, "two_side_chat", s.twoSideChat, "remote", remoteAddress(s.conn))

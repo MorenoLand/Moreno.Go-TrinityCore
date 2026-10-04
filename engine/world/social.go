@@ -94,6 +94,51 @@ func (s *Server) canFriendSee(viewer, target *session) bool {
 	return target.player.ExtraFlags&playerExtraGMInvisible == 0 || (viewer.security != 0 && target.security <= viewer.security)
 }
 
+// isVisibleGloballyFor mirrors Player::IsVisibleGloballyFor (Player.cpp:22599):
+// self is always visible, a GM-visible target is visible to everyone, and an
+// invisible target is visible only to a GM viewer of equal-or-higher security.
+func isVisibleGloballyFor(viewer, target *session) bool {
+	if viewer == nil || target == nil || viewer.player == nil || target.player == nil {
+		return false
+	}
+	if viewer.player.GUID == target.player.GUID {
+		return true
+	}
+	if target.player.ExtraFlags&playerExtraGMInvisible == 0 {
+		return true
+	}
+	if viewer.security != 0 {
+		return target.security <= viewer.security
+	}
+	return false
+}
+
+// truncateSocialNote mirrors utf8truncate(note, 48) in
+// PlayerSocial::SetFriendNote (SocialMgr.cpp:131): the note is limited to 48
+// Unicode code points, not bytes.
+func truncateSocialNote(note string) string {
+	if runes := []rune(note); len(runes) > 48 {
+		return string(runes[:48])
+	}
+	return note
+}
+
+// upsertSocialContact mirrors PlayerSocial::AddToSocialList (SocialMgr.cpp:50):
+// the flag bit is ORed into any existing row (never clobbering other flags)
+// and the row is created otherwise. REPLACE INTO is valid on both SQLite and
+// MySQL, unlike the SQLite-only ON CONFLICT / INSERT OR REPLACE pair this
+// replaces.
+func upsertSocialContact(ctx context.Context, cdb *sql.DB, guid, friendGUID uint64, flagBit uint8, note string, keepNote bool) error {
+	var oldFlags uint8
+	var oldNote string
+	_ = cdb.QueryRowContext(ctx, "SELECT flags, note FROM character_social WHERE guid = ? AND friend = ?", guid, friendGUID).Scan(&oldFlags, &oldNote)
+	if keepNote {
+		note = oldNote
+	}
+	_, err := cdb.ExecContext(ctx, "REPLACE INTO character_social (guid, friend, flags, note) VALUES (?, ?, ?, ?)", guid, friendGUID, oldFlags|flagBit, note)
+	return err
+}
+
 func (s *session) sendContactList(ctx context.Context, flags uint32) error {
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
@@ -294,6 +339,8 @@ func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	friendNote, _ := r.ReadCString()
+	// TrinityCore: HandleAddFriendOpcode normalizes the name before the lookup.
+	friendName = normalizePlayerName(friendName)
 
 	// Can't friend yourself
 	if toLower(friendName) == toLower(s.player.Name) {
@@ -308,7 +355,8 @@ func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	var friendGUID uint64
-	err = cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ? LIMIT 1", friendName).Scan(&friendGUID)
+	var friendRace uint8
+	err = cdb.QueryRowContext(ctx, "SELECT guid, race FROM characters WHERE name = ? LIMIT 1", friendName).Scan(&friendGUID, &friendRace)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) || missingTable(err) {
 			_ = s.sendFriendStatus(friendsResultNotFound, 0, "")
@@ -318,6 +366,35 @@ func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 	}
 	if friendGUID == s.playerGUID {
 		_ = s.sendFriendStatus(friendsResultSelf, 0, "")
+		return true
+	}
+
+	// TrinityCore: without RBAC_PERM_ALLOW_GM_FRIEND the target must be a
+	// plain player account, checked on the online session or, when offline,
+	// via the account's realm security (AccountMgr::GetSecurityAsync arm).
+	if !s.allowGMFriend {
+		var targetSecurity uint8
+		if friendSess := s.server.findSessionByGUID(friendGUID); friendSess != nil {
+			targetSecurity = friendSess.security
+		} else if s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
+			var accountID uint32
+			if cdb.QueryRowContext(ctx, "SELECT account FROM characters WHERE guid = ?", friendGUID).Scan(&accountID) == nil {
+				var sec int64
+				if s.server.AuthStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(SecurityLevel), 0) FROM account_access WHERE AccountID = ? AND RealmID IN (-1, ?)", accountID, s.server.RealmID).Scan(&sec) == nil && sec > 0 && sec <= 255 {
+					targetSecurity = uint8(sec)
+				}
+			}
+		}
+		if targetSecurity != 0 {
+			_ = s.sendFriendStatus(friendsResultNotFound, 0, "")
+			return true
+		}
+	}
+
+	// TrinityCore: cross-faction target without RBAC_PERM_TWO_SIDE_ADD_FRIEND
+	// is FRIEND_ENEMY (SocialHandler.cpp:68).
+	if playerTeam(friendRace) != playerTeam(s.player.Race) && !s.twoSideAddFriend {
+		_ = s.sendFriendStatus(friendsResultEnemy, friendGUID, "")
 		return true
 	}
 
@@ -336,26 +413,21 @@ func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	// Add/update
-	_, err = cdb.ExecContext(ctx,
-		"INSERT INTO character_social (guid, friend, flags, note) VALUES (?, ?, 1, ?) "+
-			"ON CONFLICT(guid, friend) DO UPDATE SET flags = flags | 1, note = excluded.note",
-		s.playerGUID, friendGUID, friendNote)
-	if err != nil {
-		// Try without ON CONFLICT for SQLite compatibility
-		_, err = cdb.ExecContext(ctx,
-			"INSERT OR REPLACE INTO character_social (guid, friend, flags, note) VALUES (?, ?, 1, ?)",
-			s.playerGUID, friendGUID, friendNote)
-		if err != nil {
-			return false
-		}
-	}
-
-	// Online or offline?
+	// Online or offline? TrinityCore reports FRIEND_ADDED_ONLINE only when
+	// the target is online AND globally visible to the requester
+	// (Player::IsVisibleGloballyFor).
 	result := friendsResultAddedOffline
-	if s.server.findSessionByGUID(friendGUID) != nil {
+	if friendSess := s.server.findSessionByGUID(friendGUID); friendSess != nil && isVisibleGloballyFor(s, friendSess) {
 		result = friendsResultAddedOnline
 	}
+
+	// TrinityCore: AddToSocialList ORs the flag into any existing row, then
+	// SetFriendNote stores the (48-code-point truncated) note.
+	friendNote = truncateSocialNote(friendNote)
+	if err := upsertSocialContact(ctx, cdb, s.playerGUID, friendGUID, socialFlagFriend, friendNote, false); err != nil {
+		return false
+	}
+
 	_ = s.sendFriendStatus(result, friendGUID, friendNote)
 	return true
 }
@@ -401,6 +473,8 @@ func (s *session) handleAddIgnore(ctx context.Context, payload []byte) bool {
 	if err != nil || ignoreName == "" {
 		return false
 	}
+	// TrinityCore: HandleAddIgnoreOpcode normalizes the name before the lookup.
+	ignoreName = normalizePlayerName(ignoreName)
 
 	if toLower(ignoreName) == toLower(s.player.Name) {
 		_ = s.sendFriendStatus(friendsResultIgnoreSelf, 0, "")
@@ -439,10 +513,9 @@ func (s *session) handleAddIgnore(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	_, err = cdb.ExecContext(ctx,
-		"INSERT OR REPLACE INTO character_social (guid, friend, flags, note) VALUES (?, ?, COALESCE((SELECT flags FROM character_social WHERE guid = ? AND friend = ?) | 2, 2), COALESCE((SELECT note FROM character_social WHERE guid = ? AND friend = ?), ''))",
-		s.playerGUID, ignoreGUID, s.playerGUID, ignoreGUID, s.playerGUID, ignoreGUID)
-	if err != nil {
+	// TrinityCore: AddToSocialList ORs SOCIAL_FLAG_IGNORED into any existing
+	// row without touching the note.
+	if err := upsertSocialContact(ctx, cdb, s.playerGUID, ignoreGUID, socialFlagIgnored, "", true); err != nil {
 		return false
 	}
 	_ = s.sendFriendStatus(friendsResultIgnoreAdded, ignoreGUID, "")
@@ -490,9 +563,8 @@ func (s *session) handleSetContactNotes(ctx context.Context, payload []byte) boo
 		return false
 	}
 	note, _ := r.ReadCString()
-	if len(note) > 48 {
-		note = note[:48]
-	}
+	// TrinityCore: SetFriendNote truncates to 48 code points (utf8truncate).
+	note = truncateSocialNote(note)
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return false

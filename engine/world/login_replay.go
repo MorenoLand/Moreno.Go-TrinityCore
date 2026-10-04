@@ -603,6 +603,12 @@ func newReplayCharacterSession(ctx context.Context, server *Server, guid uint64)
 		if permission, err := accountHasPermission(ctx, server.AuthStore.DB, sess.accountID, server.RealmID, sess.security, permissionWhoSeeAllSecurityLevels); err == nil {
 			sess.whoSeeAllSecurityLevels = permission
 		}
+		if permission, err := accountHasPermission(ctx, server.AuthStore.DB, sess.accountID, server.RealmID, sess.security, permissionTwoSideAddFriend); err == nil {
+			sess.twoSideAddFriend = permission
+		}
+		if permission, err := accountHasPermission(ctx, server.AuthStore.DB, sess.accountID, server.RealmID, sess.security, permissionAllowGMFriend); err == nil {
+			sess.allowGMFriend = permission
+		}
 	}
 	return sess, nil
 }

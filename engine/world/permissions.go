@@ -120,7 +120,13 @@ const permissionTwoSideInteractionChannel uint32 = 26
 
 const permissionTwoSideWhoList uint32 = 28
 
+// permissionTwoSideAddFriend mirrors rbac::RBAC_PERM_TWO_SIDE_ADD_FRIEND (RBAC.h:82).
+const permissionTwoSideAddFriend uint32 = 29
+
 const permissionWhoSeeAllSecurityLevels uint32 = 35
+
+// permissionAllowGMFriend mirrors rbac::RBAC_PERM_ALLOW_GM_FRIEND (RBAC.h:93).
+const permissionAllowGMFriend uint32 = 40
 
 // permissionAllowTwoSideTrade mirrors rbac::RBAC_PERM_ALLOW_TWO_SIDE_TRADE (RBAC.h:104).
 const permissionAllowTwoSideTrade uint32 = 51
