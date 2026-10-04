@@ -64,6 +64,7 @@ const (
 	targetUnitCaster                       uint32 = 1          // TARGET_UNIT_CASTER (SharedDefines.h:1442)
 	spellAttr0UnaffectedByInvulnerability  uint32 = 0x20000000 // SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY (SharedDefines.h:441)
 	spellAttr0NotShapeshift                uint32 = 0x00010000 // SPELL_ATTR0_NOT_SHAPESHIFT (SharedDefines.h:428)
+	spellAttr0CuPickpocket                 uint32 = 0x00000400 // SPELL_ATTR0_CU_PICKPOCKET (SpellInfo.h:188) — custom attr, tested against AttributesCu
 	spellAttr2NotNeedShapeshift            uint32 = 0x00080000 // SPELL_ATTR2_NOT_NEED_SHAPESHIFT (SharedDefines.h:505) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr1CantBeReflected              uint32 = 0x00000080 // SPELL_ATTR1_CANT_BE_REFLECTED (SharedDefines.h:456)
 	spellAttr1CantTargetSelf               uint32 = 0x00080000 // SPELL_ATTR1_CANT_TARGET_SELF (SharedDefines.h:468) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
@@ -106,6 +107,7 @@ const (
 	spellFailedBadTargets                uint8  = 12  // SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992)
 	spellFailedBmOrInvisGod              uint8  = 159 // SPELL_FAILED_BM_OR_INVISGOD (SharedDefines.h:1141)
 	spellFailedTargetIsPlayer            uint8  = 117 // SPELL_FAILED_TARGET_IS_PLAYER (SharedDefines.h:1099)
+	spellFailedTargetNoPockets           uint8  = 123 // SPELL_FAILED_TARGET_NO_POCKETS (SharedDefines.h:1105)
 	spellFailedAffectingCombat           uint8  = 1
 	spellFailedFoodLowLevel              uint8  = 35
 	spellFailedNoPet                     uint8  = 84
@@ -137,6 +139,7 @@ const (
 	spellEffectNormalizedWeaponDmg              = 121   // SPELL_EFFECT_NORMALIZED_WEAPON_DMG (SharedDefines.h:932)
 	spellEffectCreateManaGem                    = 66    // SPELL_EFFECT_CREATE_MANA_GEM (SharedDefines.h:877)
 	spellEffectStuck                            = 84    // SPELL_EFFECT_STUCK (SharedDefines.h:895)
+	spellEffectPickpocket                       = 71    // SPELL_EFFECT_PICKPOCKET (SharedDefines.h:882)
 	itemSubclassWeaponThrown                    = 16    // ITEM_SUBCLASS_WEAPON_THROWN (ItemTemplate.h:365)
 	itemSubclassWeaponBow                       = 2     // ITEM_SUBCLASS_WEAPON_BOW (ItemTemplate.h:351)
 	itemSubclassWeaponGun                       = 3     // ITEM_SUBCLASS_WEAPON_GUN (ItemTemplate.h:352)
@@ -1649,6 +1652,43 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "cannot target self", "failReason", spellFailedBadTargets)
 		return true
+	}
+
+	// Pickpocket target gate (SpellInfo::CheckTarget, SpellInfo.cpp:1669-1675):
+	// a spell with SPELL_ATTR0_CU_PICKPOCKET rejects player targets with
+	// SPELL_FAILED_BAD_TARGETS, and rejects creature targets whose creature-type
+	// mask excludes CREATURE_TYPEMASK_HUMANOID_OR_UNDEAD with
+	// SPELL_FAILED_TARGET_NO_POCKETS. C++ fills the custom attribute at load
+	// from SPELL_EFFECT_PICKPOCKET (SpellMgr.cpp:2719-2720); Go never populates
+	// that bit, so the effect scan is the load-time equivalent, checked
+	// alongside the spell_custom_attr row. Runs inside the caster != unitTarget
+	// block, so it only fires on a non-self unit target; the TYPEID_PLAYER
+	// caster arm is vacuous (the caster is always the session player on this
+	// path). Unknown/zero masks fail NO_POCKETS, like C++'s zero-mask & test.
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if targetGUID != 0 && targetGUID != s.playerGUID {
+		pickpocket := s.server != nil && s.server.getSpellCustomAttr(spell.ID)&spellAttr0CuPickpocket != 0
+		if !pickpocket {
+			for _, eff := range spell.Effects {
+				if eff.Effect == spellEffectPickpocket {
+					pickpocket = true
+					break
+				}
+			}
+		}
+		if pickpocket {
+			failReason := spellFailedTargetNoPockets
+			if mask, isPlayer := s.targetCreatureTypeMask(ctx, targetGUID); isPlayer {
+				failReason = spellFailedBadTargets
+			} else if mask&creatureTypeMaskHumanoidOrUndead != 0 {
+				failReason = 0
+			}
+			if failReason != 0 {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "pickpocket target invalid", "failReason", failReason)
+				return true
+			}
+		}
 	}
 
 	// Target creature-type gate (SpellInfo::CheckTarget, SpellInfo.cpp:1728):
