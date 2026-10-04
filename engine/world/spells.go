@@ -371,6 +371,7 @@ const (
 	spellAuraModDamageFromCaster                   = 271  // SPELL_AURA_MOD_DAMAGE_FROM_CASTER (SpellAuraDefines.h:351)
 	spellAuraDummy                                 = 4    // SPELL_AURA_DUMMY (SpellAuraDefines.h:84)
 	spellIconCheatDeath                            = 2109 // Cheat Death dummy aura (Unit.cpp:7078)
+	spellIconImprovedInsectSwarm                   = 1771 // Improved Insect Swarm talent dummy aura (SpellEffects.cpp:521)
 	spellSchoolMaskNormal                          = 1    // SPELL_SCHOOL_MASK_NORMAL (SharedDefines.h:324)
 	spellAuraAttackPowerPercent                    = 166
 	spellAuraRangedAttackPowerPercent              = 167
@@ -5208,6 +5209,31 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							s.hasAura(57627) {
 							targetDamage *= 2
 						}
+						// Spell::EffectSchoolDMG (SpellEffects.cpp:515-524): the
+						// Wrath arm (Druid family, SpellFamilyFlags[0] &
+						// 0x00000001) improves the damage by AddPct of the
+						// caster's Improved Insect Swarm talent dummy aura
+						// (Druid family, SpellIconID 1771, effect 0 — the C++
+						// GetDummyAuraEffect lookup) when the target carries
+						// the Insect Swarm periodic-damage aura
+						// (SPELL_AURA_PERIODIC_DAMAGE, Druid family,
+						// SpellFamilyFlags[0] & 0x00200000, no caster-GUID
+						// filter like the C++ GetAuraEffect call).
+						// SCHOOL_DAMAGE (effect 2) only — the weapon-damage
+						// effects in this case route to different C++ handlers.
+						// The C++ else-if chain's Ferocious Bite arms
+						// (SpellFamilyFlags[0] & 0x000800000, the total-AP leg)
+						// take priority but no Wrath-flagged spell carries that
+						// bit, so the plain Wrath gate is exact; the unitCaster
+						// null gate is vacuous here: the caster is always the
+						// session player on these cast paths.
+						if eff.Effect == 2 && s.player != nil &&
+							spell.SpellFamilyName == spellFamilyDruid && spell.SpellFamilyFlags[0]&0x1 != 0 &&
+							s.targetHasFamilyAuraEffect(effCtx, effectTarget, spellAuraPeriodicDamage, spellFamilyDruid, 0x00200000) {
+							if bonus := s.wrathInsectSwarmBonus(); bonus != 0 {
+								targetDamage = uint32(int64(targetDamage) + int64(targetDamage)*int64(bonus)/100)
+							}
+						}
 						s.executeSpellDamage(effCtx, effectTarget, spellID, targetDamage, effectIndex)
 					}
 				}
@@ -7414,6 +7440,40 @@ func (s *session) targetHasFamilyAuraEffect(ctx context.Context, targetGUID uint
 		}
 	}
 	return false
+}
+
+// wrathInsectSwarmBonus mirrors the Improved Insect Swarm lookup in the
+// druid arm of Spell::EffectSchoolDMG (SpellEffects.cpp:515-524):
+// Unit::GetDummyAuraEffect(SPELLFAMILY_DRUID, 1771, 0) on the caster keeps
+// the first live SPELL_AURA_DUMMY effect whose aura spell is Druid-family
+// with SpellIconID 1771 at effect index 0, and its amount is the AddPct
+// bonus applied when the target carries the Insect Swarm periodic-damage
+// aura. Returns 0 when the caster carries no such aura (the C++ if simply
+// never fires).
+func (s *session) wrathInsectSwarmBonus() int32 {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil {
+		return 0
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.EffectMask&1 == 0 {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if auraSpell.SpellFamilyName != spellFamilyDruid || auraSpell.SpellIconID != spellIconImprovedInsectSwarm {
+			continue
+		}
+		if len(auraSpell.Effects) == 0 || !spellEffectIsAuraEffect(auraSpell.Effects[0]) || auraSpell.Effects[0].Aura != spellAuraDummy {
+			continue
+		}
+		if amount := aura.Amounts[0]; amount != 0 {
+			return amount
+		}
+		return int32(aura.Amount)
+	}
+	return 0
 }
 
 // improvedMindBlastChance mirrors the Improved Mind Blast lookup in the
