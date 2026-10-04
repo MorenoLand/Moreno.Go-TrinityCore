@@ -869,6 +869,12 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "caster aura state", "failure", result, "mechanic", mechanic)
 		return true
 	}
+	// CallScriptCheckCastHandlers (Spell.cpp:5515) is a no-op: Go has no
+	// SpellScript registry (the Lua runtime covers boss/zone creature
+	// scripts only), so the C++ m_loadedScripts loop iterates nothing and
+	// always returns SPELL_CAST_OK. C++ order places it between
+	// CheckCasterAuras and the dispel gate; that order is preserved by
+	// documenting it here.
 	if s.isGCDActive(spell) {
 		// Spell::CheckCast (Spell.cpp:5227-5228): DISABLED_WHILE_ACTIVE spells
 		// report DONT_REPORT instead of NOT_READY on GCD.
