@@ -563,6 +563,12 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	stopPkt := buildAttackStop(motion.GUID, motion.TargetGUID, false)
 	s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
 	s.broadcastThreatClearInInstance(motion.Map, motion.InstanceID, motion.GUID)
+	// ThreatManager::RemoveMeFromThreatLists (ThreatManager.cpp:690-697):
+	// evade drops the creature from everyone else's threat table too, so no
+	// stale entry keeps another creature hunting an evaded/reset target.
+	// The own-table half (ClearAllThreat, ThreatManager.cpp:483-492) is the
+	// ClearThreat + SMSG_THREAT_CLEAR broadcast above.
+	s.removeThreatVictimFromAllLists(motion.Map, motion.InstanceID, motion.GUID)
 	if motion.BossAI != nil {
 		s.clearInstanceEncounter(motion)
 		motion.BossAI.OnEvade(ctx, s, motion)

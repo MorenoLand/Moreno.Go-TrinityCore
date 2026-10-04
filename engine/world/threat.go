@@ -157,6 +157,17 @@ func (tm *ThreatManager) RemoveThreat(victim uint64) (switched bool, newVictim u
 	return false, tm.currentVictim
 }
 
+// HasVictim reports whether victim holds an entry in the threat table.
+// Used by the RemoveMeFromThreatLists bridge (ThreatManager.cpp:690-697):
+// removal tests entry existence, not a positive value.
+func (tm *ThreatManager) HasVictim(victim uint64) bool {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	_, ok := tm.entries[victim]
+	return ok
+}
+
 // ClearThreat wipes the threat table on evade or death.
 // Reference: TrinityCore ThreatManager::ClearAllThreat.
 func (tm *ThreatManager) ClearThreat() {
@@ -234,6 +245,48 @@ func (s *Server) broadcastThreatRemove(mapID uint32, creatureGUID, victimGUID ui
 	}
 	payload := protocol.BuildThreatRemove(creatureGUID, victimGUID)
 	s.broadcastToNearby(uint16(protocol.OpcodeSMSG_THREAT_REMOVE), payload, nil)
+}
+
+func (s *Server) broadcastThreatRemoveInInstance(mapID, instanceID uint32, creatureGUID, victimGUID uint64) {
+	if s == nil {
+		return
+	}
+	payload := protocol.BuildThreatRemove(creatureGUID, victimGUID)
+	s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_THREAT_REMOVE), payload, nil)
+}
+
+// removeThreatVictimFromAllLists drops victimGUID from every other unit's
+// threat table on the map/instance.
+// Reference: TrinityCore ThreatManager::RemoveMeFromThreatLists
+// (ThreatManager.cpp:690-697), reached on evade via CombatStop(true) ->
+// CombatManager::EndAllPvECombat (CombatManager.cpp:344-350), which pairs
+// ClearAllThreat (the evading unit's own table) with RemoveMeFromThreatLists
+// (the evading unit as victim in everyone else's table). Per-victim removal
+// sends SMSG_THREAT_REMOVE (SendRemoveToClients, ThreatManager.cpp:477) and
+// re-evaluates the top victim (RemoveThreat / UpdateVictim).
+func (s *Server) removeThreatVictimFromAllLists(mapID, instanceID uint32, victimGUID uint64) {
+	if s == nil || victimGUID == 0 {
+		return
+	}
+	var owners []uint64
+	s.motionMu.Lock()
+	for guid, motion := range s.motionMapLocked(mapID, instanceID) {
+		if guid == victimGUID || motion == nil || motion.ThreatMgr == nil {
+			continue
+		}
+		if motion.ThreatMgr.HasVictim(victimGUID) {
+			owners = append(owners, guid)
+		}
+	}
+	s.motionMu.Unlock()
+	for _, ownerGUID := range owners {
+		motion := s.findCreatureMotion(mapID, instanceID, ownerGUID)
+		if motion == nil || motion.ThreatMgr == nil {
+			continue
+		}
+		motion.ThreatMgr.RemoveThreat(victimGUID)
+		s.broadcastThreatRemoveInInstance(mapID, instanceID, ownerGUID, victimGUID)
+	}
 }
 
 func (s *Server) broadcastThreatClear(mapID uint32, creatureGUID uint64) {
