@@ -384,6 +384,7 @@ const (
 	spellAuraInvisibilityDetect                    = 19
 	spellAuraStealthLevel                          = 154
 	spellAuraTrackStealthed                        = 151
+	spellAuraPreventResurrection                   = 314 // SPELL_AURA_PREVENT_RESURRECTION (SpellAuraDefines.h:394)
 	spellAuraConvertRune                           = 249
 	spellAuraDamagePercentDone                     = 79
 	spellAuraModDamagePercentTaken                 = 87   // SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN (SpellAuraDefines.h:167)

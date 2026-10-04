@@ -234,6 +234,12 @@ func (s *session) killPlayer(ctx context.Context) {
 	if s.server != nil {
 		s.server.removeThreatVictimFromAllLists(s.player.Map, s.player.InstanceID, s.playerGUID)
 	}
+	// Player::setDeathState(JUST_DIED), Player.cpp:1412 — RemovePet(nullptr,
+	// PET_SAVE_NOT_IN_SLOT, true) dismisses the pet at death rather than
+	// keeping it alive on a dead owner; RemoveGhoul has no Go analog (no
+	// raised-ghoul pet model). Placed before the penalty/achievement legs,
+	// matching the C++ relative order.
+	s.unsummonPet(ctx, petSaveNotInSlot)
 	if s.playerLoaded && s.player.PlayerFieldBytes&playerFieldByteReleaseTimer == 0 {
 		s.player.PlayerFieldBytes |= playerFieldByteReleaseTimer
 	}
@@ -621,11 +627,13 @@ func closestGraveyardCandidate(locations []wotlk.WorldSafeLoc, mapID uint32, map
 }
 
 // handleRepopRequest mirrors WorldSession::HandleRepopRequest: alive players
-// and players that are already ghosts are ignored, otherwise the repop flow
-// (corpse creation, ghost conversion) runs followed by the graveyard teleport.
-// The reference SPELL_AURA_PREVENT_RESURRECTION guard has no aura system yet.
-// The payload carries one bool (CheckInstance) which the reference also reads
-// but does not act on.
+// and players that are already ghosts are ignored, and the reference
+// SPELL_AURA_PREVENT_RESURRECTION aura-type guard (MiscHandler.cpp:66-67) is
+// honored via hasAuraType (spell id 58549 previously checked here is the
+// Wintergrasp Tenacity spell, not a prevent-resurrection aura); otherwise the
+// repop flow (corpse creation, ghost conversion) runs followed by the
+// graveyard teleport. The payload carries one bool (CheckInstance) which the
+// reference also reads but does not act on.
 func (s *session) handleRepopRequest(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	if _, err := reader.ReadU8(); err != nil {
@@ -634,9 +642,13 @@ func (s *session) handleRepopRequest(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	if s.player.Health > 0 || s.player.PlayerFlags&playerFlagGhost != 0 || s.hasAura(58549) {
+	if s.player.Health > 0 || s.player.PlayerFlags&playerFlagGhost != 0 || s.hasAuraType(spellAuraPreventResurrection) {
 		return true
 	}
+	// WorldSession::HandleRepopRequest, MiscHandler.cpp:87-89 — dismiss any
+	// pet before the repop (e.g. a warlock re-summon while dead); RemoveGhoul
+	// has no Go analog (see killPlayer).
+	s.unsummonPet(ctx, petSaveNotInSlot)
 	s.buildPlayerRepop(ctx)
 	s.repopAtGraveyard(ctx)
 	return true
@@ -644,9 +656,10 @@ func (s *session) handleRepopRequest(ctx context.Context, payload []byte) bool {
 
 // updatePlayerDeathTimers runs the reference Player::Update auto-release:
 // after six minutes a dead player that has not released is converted to a
-// ghost and teleported to the graveyard. The reference skips this on
-// instanceable maps and under SPELL_AURA_PREVENT_RESURRECTION; the Go server
-// has no instance maps or aura system.
+// ghost and teleported to the graveyard (Player.cpp:1302). The reference
+// skips this on instanceable maps, under SPELL_AURA_PREVENT_RESURRECTION,
+// and while ghouled; the Go server has no instance maps and no raised-ghoul
+// pet model.
 func (s *Server) updatePlayerDeathTimers(ctx context.Context, now time.Time) {
 	s.sessionsMu.RLock()
 	var due []*session
@@ -659,7 +672,7 @@ func (s *Server) updatePlayerDeathTimers(ctx context.Context, now time.Time) {
 				continue
 			}
 		}
-		if sess.player.Health == 0 && sess.player.PlayerFlags&playerFlagGhost == 0 && !sess.deathTimer.IsZero() && !now.Before(sess.deathTimer) {
+		if sess.player.Health == 0 && sess.player.PlayerFlags&playerFlagGhost == 0 && !sess.hasAuraType(spellAuraPreventResurrection) && !sess.deathTimer.IsZero() && !now.Before(sess.deathTimer) {
 			due = append(due, sess)
 		}
 	}
@@ -1051,9 +1064,13 @@ const (
 // clears the field. The stored spell's resurrect effect registers a resurrect
 // request from the player to the player, which the client answers through
 // CMSG_RESURRECT_RESPONSE, exactly like the reference EffectResurrectNew chain.
-// The SPELL_AURA_PREVENT_RESURRECTION guard has no aura system yet.
 func (s *session) handleSelfRes(ctx context.Context) bool {
 	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	// WorldSession::HandleSelfResOpcode, SpellHandler.cpp:605-606 — silent
+	// return under SPELL_AURA_PREVENT_RESURRECTION.
+	if s.hasAuraType(spellAuraPreventResurrection) {
 		return true
 	}
 	spellID := s.player.SelfResSpell
