@@ -7248,8 +7248,12 @@ func (s *session) handleCancelCast(payload []byte) bool {
 //     here.
 //   - SPELL_STATE_CASTING (channeled): covered by interruptCurrentChannel,
 //     which stops the timers, expires the channel aura on caster and target
-//     (the RemoveOwnedAura(AURA_REMOVE_BY_CANCEL) mirror) and sends
-//     SMSG_CHANNEL_UPDATE 0. The m_appliedMods.clear() term has no bridge: Go
+//     (the RemoveOwnedAura(AURA_REMOVE_BY_CANCEL) mirror), sends
+//     SMSG_CHANNEL_UPDATE 0, and follows with the caster's
+//     SMSG_CAST_FAILED(INTERRUPTED) plus the set-wide SendInterrupted
+//     broadcasts, in C++ relative order (SendChannelUpdate →
+//     SendInterrupted → SendCastResult). The m_appliedMods.clear() term
+//     has no bridge: Go
 //     has no per-cast Spell object to hold applied mods (standing gap noted in
 //     spellmod.go). A CMSG_CANCEL_CAST naming a channeled spell id also
 //     interrupts the channel in C++ (InterruptNonMeleeSpells always checks
@@ -11390,6 +11394,14 @@ func (s *session) interruptCurrentChannel() {
 
 	s.expireChannelAuras(channel)
 	s.sendChannelUpdate(0)
+	// Spell::cancel (Spell.cpp:3227-3238): the CASTING-state arm follows
+	// SendChannelUpdate(0) with SendInterrupted(0) and
+	// SendCastResult(SPELL_FAILED_INTERRUPTED). Every Go caller of
+	// interruptCurrentChannel is a genuine interrupt (movement, new-cast
+	// break, CMSG_CANCEL_CHANNELLING, damage abort, drain failure), so the
+	// two broadcast packets go out here exactly where C++ sends them.
+	_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(channel.CastID, channel.SpellID, spellFailedInterrupted), true)
+	s.sendInterrupted(channel.CastID, channel.SpellID, spellFailedInterrupted)
 }
 
 // channelTargetAlive answers Spell::update's UpdateChanneledTargetList
