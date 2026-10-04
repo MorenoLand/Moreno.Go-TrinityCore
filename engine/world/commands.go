@@ -2373,15 +2373,17 @@ func (s *session) deletedCharacterInfoList(ctx context.Context, needle string) [
 	var found []deletedCharacterInfo
 	for rows.Next() {
 		var info deletedCharacterInfo
-		var deleteAccount string
+		var deleteAccount sql.NullInt64
 		if err := rows.Scan(&info.guid, &info.name, &deleteAccount, &info.deleteDate); err != nil {
 			continue
 		}
-		// deleteInfos_Account is stored numeric by CHAR_UPD_DELETE_INFO.
-		if id, convErr := strconv.ParseUint(deleteAccount, 10, 32); convErr == nil {
-			info.accountID = uint32(id)
-			info.accountName = s.accountNameByID(ctx, info.accountID)
+		// deleteInfos_Account is stored numeric by CHAR_UPD_DELETE_INFO;
+		// NULL reads as 0 like fields[2].GetUInt32() (cs_character.cpp:145),
+		// and the row is still listed with an empty account name.
+		if deleteAccount.Valid {
+			info.accountID = uint32(deleteAccount.Int64)
 		}
+		info.accountName = s.accountNameByID(ctx, info.accountID)
 		found = append(found, info)
 	}
 	return found
