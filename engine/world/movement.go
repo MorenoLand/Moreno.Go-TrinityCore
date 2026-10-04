@@ -953,10 +953,12 @@ func (s *session) handleFall(ctx context.Context, info movementInfo) {
 
 	if damage > 0 {
 		before := s.player.Health
-		s.environmentalDamage(ctx, damageFall, damage)
-		// Reference Player.cpp:25410: surviving the fall with real damage
-		// credits FALL_WITHOUT_DYING with the fall distance in centimeters.
-		if s.player.Health > 0 && uint32(damage) < before {
+		dealt := s.environmentalDamage(ctx, damageFall, damage)
+		// Reference Player.cpp:25406-25410: final_damage < original_health credits
+		// FALL_WITHOUT_DYING with the fall distance in centimeters. The returned
+		// value is the post-negation damage, so god-cheat falls (final_damage 0)
+		// credit exactly like C++.
+		if s.player.Health > 0 && dealt < before {
 			s.updateAchievementCriteria(criteriaTypeFallWithoutDying, 0, uint32(zDiff*100))
 		}
 	}
@@ -974,6 +976,15 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 		return 0
 	}
 
+	// Unit::DealDamage (Unit.cpp:735-737) via Player::EnvironmentalDamage
+	// (Player.cpp:784): CHEAT_GOD negates all environmental damage (fall,
+	// drowning, fatigue, lava) — the HandleFall zeroing (Player.cpp:25390) is the
+	// same arm one call up, so no separate fall check is needed. The damage log
+	// below still reports the pre-negation amount, matching C++ sending
+	// EnvironmentalDamageLog before DealDamage; the health legs run on the
+	// negated value and no damage procs fire.
+	damage = s.negateGodModeDamage(damage)
+
 	absorb := uint32(0)
 	resist := uint32(0)
 
@@ -982,7 +993,9 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 		s.player.Health = 0
 	} else {
 		s.player.Health -= damage
-		s.procDamageAuras(true)
+		if damage > 0 {
+			s.procDamageAuras(true)
+		}
 	}
 
 	packet := protocol.NewBuffer(21)

@@ -920,7 +920,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 			overkill := uint32(0)
 			if target.Sess != nil && target.Sess.player != nil {
-				if damage >= target.Sess.player.Health {
+				// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD victims take no
+				// damage — the kill/health legs are skipped explicitly (not via a
+				// damage==0 gate) because absorbed-to-zero damage still runs them
+				// in C++. The damage log below keeps the original amount, matching
+				// C++ sending SMSG_SPELLNONMELEEDAMAGELOG before DealDamage
+				// (Spell.cpp:2542).
+				godNegated := target.Sess.godCheatActive()
+				if !godNegated && damage >= target.Sess.player.Health {
 					overkill = damage - target.Sess.player.Health
 					target.Sess.player.Health = 0
 					target.IsDead = true
@@ -934,7 +941,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					if motion.BossAI != nil {
 						motion.BossAI.OnKillPlayer(ctx, s, motion, target.GUID)
 					}
-				} else {
+				} else if !godNegated {
 					target.Sess.player.Health -= damage
 					// Reference Unit::DealDamage -> Spell::Delayed / DelayedChannel
 					target.Sess.delayCurrentCast()
@@ -1083,6 +1090,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					hitInfo |= protocol.HitInfoPartialAbsorb
 				}
 			}
+			// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
+			// after absorption (C++ absorbs before DealDamage) — the application
+			// block below is then skipped: no health loss, no death, no pushback,
+			// no procs. lastCombatTime / in-combat still update, as entering
+			// combat precedes DealDamage in C++.
+			damage = target.Sess.negateGodModeDamage(damage)
 			if damage > 0 {
 				if damage >= target.Sess.player.Health {
 					overkill = damage - target.Sess.player.Health

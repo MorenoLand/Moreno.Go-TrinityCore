@@ -737,10 +737,15 @@ func (s *session) cheatToggle(flag uint32, args []string) (bool, bool) {
 	return enable, true
 }
 
-// handleCheatGod mirrors HandleGodModeCheatCommand (cs_cheat.cpp:66).
-// Fidelity gap: the damage-path consumers of CHEAT_GOD (Unit.cpp:735,
-// SpellEffects.cpp:283, Player.cpp:25390) have no Go bridge, so the flag is
-// stored and reported by the status arm but damage is not negated yet.
+// handleCheatGod mirrors HandleGodModeCheatCommand (cs_cheat.cpp:66). The
+// damage-path consumers of CHEAT_GOD are bridged: Unit::DealDamage (Unit.cpp:735)
+// via negateGodModeDamage at every player-victim damage site (combat.go melee /
+// ranged, spells.go direct / periodic, pet_combat.go melee / spell,
+// creaturemotion.go creature melee / spell, and environmentalDamage in
+// movement.go — C++ Player::EnvironmentalDamage routes through DealDamage at
+// Player.cpp:784, which also covers the HandleFall zeroing at Player.cpp:25390)
+// and Spell::EffectInstaKill (SpellEffects.cpp:283) via godCheatActive in
+// executeSpellInstantKill.
 func (s *session) handleCheatGod(ctx context.Context, args []string) {
 	if !s.commandAllowed(ctx, permissionCommandCheatGod) {
 		s.sendNotification("You do not have permission to use that command.")

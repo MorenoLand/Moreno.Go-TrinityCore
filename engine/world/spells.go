@@ -7019,6 +7019,13 @@ func (s *session) executeSpellInstantKill(ctx context.Context, targetGUID uint64
 	if !ok || target.Health == 0 {
 		return
 	}
+	// Spell::EffectInstaKill (SpellEffects.cpp:283-287): a CHEAT_GOD player
+	// target is not killed — return before SMSG_SPELLINSTAKILLLOG, matching C++.
+	if s.server != nil {
+		if ps := s.server.findSessionByGUID(targetGUID); ps != nil && ps.godCheatActive() {
+			return
+		}
+	}
 	packet := protocol.NewBuffer(20)
 	packet.WriteU64(s.playerGUID)
 	packet.WriteU64(targetGUID)
@@ -7370,6 +7377,12 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// If target is an online player (e.g. duel opponent or PvP)
 	if s.server != nil {
 		if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil && playerSess.player != nil {
+			// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
+			// before the achievement, lethal, duel, and pushback legs. The
+			// spell damage log above still carries the original amount,
+			// matching C++ sending SMSG_SPELLNONMELEEDAMAGELOG before DealDamage
+			// (Spell.cpp:2542).
+			damage = playerSess.negateGodModeDamage(damage)
 			playerSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, damage)
 			playerSess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
 			playerSess.lastCombatTime = time.Now()
@@ -12403,7 +12416,14 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, ts)
 		}
 
-		if dmg >= targetHealth {
+		// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage before
+		// the kill/health legs — no health loss, no death, no aura stripping.
+		// The periodic log above still carries the pre-negation amount, matching
+		// C++ sending SMSG_PERIODICAURALOG before DealDamage. The skip is explicit
+		// rather than a damage==0 gate because absorbed-to-zero damage still runs
+		// the legs in C++ (absorbed hits strip TAKE_DAMAGE-interrupt auras).
+		godNegated := ts.godCheatActive()
+		if !godNegated && dmg >= targetHealth {
 			if ts.duelPartner != 0 && ts.player.DuelTeam != 0 {
 				ts.player.Health = 1
 				ts.sendPlayerUpdate()
@@ -12429,7 +12449,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 				}
 			}
 			ts.clearActiveAuras()
-		} else {
+		} else if !godNegated {
 			ts.player.Health -= dmg
 			ts.procDamageAuras(false, dmg)
 			ts.sendPlayerUpdate()

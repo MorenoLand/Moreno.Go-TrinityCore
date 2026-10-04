@@ -511,6 +511,9 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 	if isTargetPlayer && targetSess != nil {
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, true)
 		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, targetSess)
+		// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
+		// after the attacker-state update (sent pre-DealDamage in C++).
+		damage = targetSess.negateGodModeDamage(damage)
 		if damage >= targetHealth {
 			targetSess.player.Health = 0
 			targetSess.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((motion.GUID>>24)&0xFFFFFF), 1)
@@ -973,6 +976,9 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		if victim == nil || victim.player == nil {
 			return
 		}
+		// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
+		// after the spell damage log (sent pre-DealDamage in C++).
+		damage = victim.negateGodModeDamage(damage)
 		if damage >= victim.player.Health {
 			victim.player.Health = 0
 			victim.sendPlayerUpdate()

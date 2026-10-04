@@ -257,6 +257,30 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	return true
 }
 
+// godCheatActive reports whether this session's player carries the CHEAT_GOD
+// flag (.cheat god, commands.go).
+func (s *session) godCheatActive() bool {
+	return s != nil && s.player != nil && s.player.ActiveCheats&cheatGod != 0
+}
+
+// negateGodModeDamage mirrors Unit::DealDamage's CHEAT_GOD arm (Unit.cpp:735-737):
+// a player victim with the god cheat takes no damage — DealDamage returns 0
+// before the aura-interrupt, share-damage, rage, duel, achievement, and
+// kill/health legs. Every player-victim damage application site zeroes through
+// here (melee, ranged, direct spell, periodic, pet, creature), and
+// environmentalDamage (movement.go) does too, because C++
+// Player::EnvironmentalDamage routes through Unit::DealDamage (Player.cpp:784),
+// which also covers the HandleFall zeroing (Player.cpp:25390). It is applied
+// after the victim-side hooks (procs, combat logs) because in C++ those fire
+// ahead of DealDamage as well (DealMeleeDamage procs, SMSG_SPELLNONMELEEDAMAGELOG
+// / periodic aura log precede the DealDamage call).
+func (s *session) negateGodModeDamage(damage uint32) uint32 {
+	if s.godCheatActive() {
+		return 0
+	}
+	return damage
+}
+
 func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, attType protocol.WeaponAttackType) {
 	if s.player == nil || s.isDeadOrGhost() || target.Health == 0 {
 		return
@@ -469,6 +493,9 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	// If target is an online player (e.g. duel opponent or PvP)
 	if s.server != nil {
 		if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil && playerSess.player != nil {
+			// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
+			// before the lethal / non-lethal legs (duel defeat included).
+			damage = playerSess.negateGodModeDamage(damage)
 			if playerSess.player.UnitFlags&unitFlagInCombat == 0 {
 				playerSess.player.UnitFlags |= unitFlagInCombat
 			}
@@ -775,6 +802,9 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil && vicSess.player != nil {
+			// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
+			// before the lethal / non-lethal legs (arena score included).
+			damage = vicSess.negateGodModeDamage(damage)
 			if vicSess.player.UnitFlags&unitFlagInCombat == 0 {
 				vicSess.player.UnitFlags |= unitFlagInCombat
 			}
