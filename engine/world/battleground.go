@@ -518,38 +518,117 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 	_, _ = r.ReadU16() // unk
 	action, _ := r.ReadU8()
 
+	// sBattlemasterListStore.LookupEntry(bgTypeId_) (BattleGroundHandler.cpp:368-372):
+	// an invalid bgTypeId is answered with silence.
+	if s.server == nil || s.server.Data == nil {
+		return true
+	}
+	if file, fileErr := s.server.Data.File("BattlemasterList"); fileErr == nil {
+		if _, found := file.Find(bgTypeID); !found {
+			return true
+		}
+	}
+
+	// _player->InBattlegroundQueue() (BattleGroundHandler.cpp:374-379) — no active
+	// slot for this battleground is answered with silence. The found slot doubles as
+	// the GroupQueueInfo the C++ leg reads (BattleGroundHandler.cpp:383-387).
+	slot := -1
+	for i := 0; i < len(s.bgQueues); i++ {
+		if s.bgQueues[i].Active && s.bgQueues[i].BgTypeID == bgTypeID {
+			slot = i
+			break
+		}
+	}
+	if slot == -1 {
+		return true
+	}
+	entry := &s.bgQueues[slot]
+
+	// !ginfo.IsInvitedToBGInstanceGUID && action == 1 (BattleGroundHandler.cpp:396-401):
+	// a port accept with no invite instance is answered with silence. This is also the
+	// Go form of the "cheating?" IsInvitedForBattlegroundQueueType gate
+	// (BattleGroundHandler.cpp:453-454).
+	if action == 1 && entry.InstanceID == 0 {
+		return true
+	}
+
 	// Deserter demotion (BattleGroundHandler.cpp:429-439 — action==1 &&
 	// ginfo.ArenaType==0 && _player->IsDeserter() == HasAura(26013) (Player.h:1913)
 	// → BuildGroupJoinedBattlegroundPacket ERR_GROUP_JOIN_BATTLEGROUND_DESERTERS
 	// and the accept demotes to leave; the shared leave arm below then clears the
-	// slot, exactly as the C++ else branch does). The rest of the C++ action==1
-	// accept path (BattleGroundHandler.cpp:448-501 — resurrect, taxi finish,
-	// STATUS_IN_PROGRESS packet, queue removal, SendToBattleground teleport into
-	// a live instance) has no Go counterpart: there is no BattlegroundMgr /
-	// Battleground / queue world model to port the player to, so the port itself
-	// is documented no-bridge rather than stubbed.
-	if action == 1 {
-		for i := 0; i < len(s.bgQueues); i++ {
-			if s.bgQueues[i].Active && !s.bgQueues[i].IsArena && s.bgQueues[i].BgTypeID == bgTypeID && s.hasAura(deserterSpellBG) {
-				buf := protocol.NewBuffer(4)
-				buf.WriteI32(groupJoinBattlegroundDeserters)
-				_ = s.write(uint16(protocol.OpcodeSMSG_GROUP_JOINED_BATTLEGROUND), buf.Bytes(), true)
-				s.debug("battlefield port accept demoted to leave: deserter debuff", "account", s.accountName, "bg", bgTypeID)
-				action = 0
-				break
-			}
+	// slot, exactly as the C++ else branch does).
+	if action == 1 && !entry.IsArena && s.hasAura(deserterSpellBG) {
+		buf := protocol.NewBuffer(4)
+		buf.WriteI32(groupJoinBattlegroundDeserters)
+		_ = s.write(uint16(protocol.OpcodeSMSG_GROUP_JOINED_BATTLEGROUND), buf.Bytes(), true)
+		s.debug("battlefield port accept demoted to leave: deserter debuff", "account", s.accountName, "bg", bgTypeID)
+		action = 0
+	}
+
+	// Level gate (BattleGroundHandler.cpp:441-448): a player who leveled past the
+	// battleground's max level while queued does not port — the accept demotes to
+	// leave. MaxLvl comes from battleground_template (the Go mirror of the BG
+	// template's GetMaxLevel, same table bgAccessByLevel reads); a missing row
+	// leaves the demote unevaluated.
+	if action == 1 && !entry.IsArena && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var maxLvl uint32
+		if qerr := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT MaxLvl FROM battleground_template WHERE ID = ?`, bgTypeID).Scan(&maxLvl); qerr == nil && maxLvl != 0 && uint32(s.player.Level) > maxLvl {
+			s.debug("battlefield port accept demoted to leave: level above bg max", "account", s.accountName, "bg", bgTypeID)
+			action = 0
 		}
 	}
 
-	if action == 0 {
-		// Leave queue
-		for i := 0; i < len(s.bgQueues); i++ {
-			if s.bgQueues[i].Active && s.bgQueues[i].BgTypeID == bgTypeID {
-				s.bgQueues[i] = bgQueueEntry{}
-				s.sendBattlefieldStatus(uint8(i))
-				break
-			}
+	if action == 1 {
+		// Freeze debuff (BattleGroundHandler.cpp:450-451 — HasAura(9454) → silent return).
+		if s.hasAura(freezeAuraSpellID) {
+			return true
 		}
+
+		// !_player->InBattleground() → SetBattlegroundEntryPoint
+		// (BattleGroundHandler.cpp:456-457). The Go "in battleground" test is the
+		// current map; setBattlegroundEntryPoint (battleground_entry.go) is the
+		// faithful SetBattlegroundEntryPoint port: taxi-path store, dungeon →
+		// graveyard, mount-spell capture.
+		if _, _, _, inBattlefield := battlegroundTypeForMap(s.player.Map); !inBattlefield {
+			s.setBattlegroundEntryPoint()
+		}
+
+		// !_player->IsAlive() → ResurrectPlayer(1.0f)
+		// (BattleGroundHandler.cpp:459-463).
+		if s.isDeadOrGhost() {
+			s.resurrectPlayer(ctx, 1.0)
+		}
+
+		// Stop taxi flight at port (BattleGroundHandler.cpp:465-466).
+		s.finishTaxiFlight()
+
+		// STATUS_IN_PROGRESS leg (BattleGroundHandler.cpp:468-482): the slot data
+		// C++ keeps across the port — SetBattlegroundId (instance) and SetBGTeam
+		// (ginfo.Team) — then the BuildBattlegroundStatusPacket. The
+		// RemovePlayerAtLeave leg and the SendToBattleground teleport
+		// (BattleGroundHandler.cpp:472-486) have no Go world model: there is no
+		// BattlegroundMgr / live Battleground instance to port the player into, so
+		// the port itself is documented no-bridge rather than stubbed.
+		team := teamForRace(s.player.Race)
+		entry.Status = BGStatusInProgress
+		entry.StartTime = time.Now()
+		entry.MapID = battlegroundMapForType(bgTypeID)
+		entry.ArenaFaction = uint8(team)
+		s.bgData.InstanceID = entry.InstanceID
+		s.bgData.Team = uint16(team)
+		s.sendBattlefieldStatus(uint8(slot))
+		s.debug("battlefield port accept", "account", s.accountName, "bg", bgTypeID, "instance", entry.InstanceID)
+	}
+
+	if action == 0 {
+		// Arena leave gate (BattleGroundHandler.cpp:493-494): leaving an arena past
+		// STATUS_WAIT_QUEUE is answered with silence.
+		if entry.IsArena && entry.Status > BGStatusWaitQueue {
+			return true
+		}
+		// Leave queue
+		s.bgQueues[slot] = bgQueueEntry{}
+		s.sendBattlefieldStatus(uint8(slot))
 	}
 
 	return true
@@ -657,6 +736,31 @@ func battlegroundTypeForMap(mapID uint32) (uint32, uint8, bool, bool) {
 		return 4, uint8(2), true, true
 	default:
 		return 0, 0, false, false
+	}
+}
+
+// battlegroundMapForType inverts battlegroundTypeForMap: the map a battleground
+// instance runs on, == Battleground::GetMapId for the accept status packet
+// (BattleGroundHandler.cpp:468). Arena type 4 covers five maps; 559 (Nagrand
+// Arena) stands in since Go has no live instance to read the map from.
+func battlegroundMapForType(bgTypeID uint32) uint32 {
+	switch bgTypeID {
+	case 1:
+		return 30
+	case 2:
+		return 489
+	case 3:
+		return 529
+	case 7:
+		return 566
+	case 9:
+		return 607
+	case 30:
+		return 628
+	case 4:
+		return 559
+	default:
+		return 0
 	}
 }
 
