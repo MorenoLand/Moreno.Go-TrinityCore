@@ -2,7 +2,6 @@ package world
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"sort"
 	"strconv"
@@ -57,7 +56,16 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 		s.debug("gossip hello out of interaction range", "account", s.accountName, "guid", guid)
 		return true
 	}
-	if s.isDeadOrGhost() && isBattlegroundMap(s.player.Map) && objectUint32OrZero(creature, "NPCFlags")&npcFlagSpiritGuide != 0 {
+	// WorldSession::HandleGossipHelloOpcode (NPCHandler.cpp:153) resolves the
+	// NPC through GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_GOSSIP), which
+	// requires the GOSSIP npc flag before the spirit-guide arm or any script
+	// hook runs.
+	npcFlags := objectUint32OrZero(creature, "NPCFlags")
+	if npcFlags&npcFlagGossip == 0 {
+		s.debug("gossip hello rejected: npc lacks gossip flag", "account", s.accountName, "guid", guid)
+		return true
+	}
+	if s.isDeadOrGhost() && isBattlegroundMap(s.player.Map) && npcFlags&npcFlagSpiritGuide != 0 {
 		return s.handleAreaSpiritHealerQueue(ctx, payload)
 	}
 	entry, ok := objectUint32Field(creature, "Entry")
@@ -72,7 +80,6 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 		}
 	}
 	if s.gossip == nil && !s.gossipClosed {
-		npcFlags := objectUint32OrZero(creature, "NPCFlags")
 		defaultMenu, err := s.prepareCreatureGossip(ctx, guid, entry, npcFlags, objectUint32OrZero(creature, "GossipMenuID"))
 		if err != nil {
 			s.debug("default gossip load failed", "account", s.accountName, "entry", entry, "error", err)
@@ -176,6 +183,14 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 		s.debug("gossip selection out of interaction range", "account", s.accountName, "guid", guid)
 		return true
 	}
+	// HandleGossipSelectOptionOpcode (MiscHandler.cpp:119) uses
+	// GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_GOSSIP): the flag gate
+	// applies to selections exactly as it does to hellos.
+	npcFlags := objectUint32OrZero(creature, "NPCFlags")
+	if npcFlags&npcFlagGossip == 0 {
+		s.debug("gossip selection rejected: npc lacks gossip flag", "account", s.accountName, "guid", guid)
+		return true
+	}
 	entry, ok := objectUint32Field(creature, "Entry")
 	if !ok {
 		return true
@@ -192,6 +207,21 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 		}
 	}
 	if s.gossip == nil && !s.gossipClosed {
+		// Player::OnGossipSelect (Player.cpp:14595-14601): the option's
+		// BoxMoney is charged; insufficient funds send BUY_ERR_NOT_ENOUGHT_MONEY
+		// and close the menu, and the charge applies to every option arm.
+		if cost := item.BoxMoney; cost > 0 {
+			if s.player == nil || s.player.Money < cost {
+				_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(0, 0, buyErrNotEnoughMoney), true)
+				s.sendGossipComplete()
+				return true
+			}
+			s.player.Money -= cost
+			if cdb := s.server.CharactersStore.DB; cdb != nil {
+				_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+			}
+			s.sendPlayerUpdate()
+		}
 		// TrinityCore Gossip_Option: 1 gossip submenu, 2 questgiver (quest
 		// menu), 3 vendor, 4 taxivendor, 5 trainer, 8 innkeeper, 9 banker,
 		// 13 auctioneer. The old code treated 2/3/4 as vendor/taxi/trainer,
@@ -257,17 +287,41 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			if err := s.write(uint16(protocol.OpcodeMSG_TALENT_WIPE_CONFIRM), wipeBuf.Bytes(), true); err != nil {
 				return false
 			}
-		} else if item.Action == 1 && item.ActionMenuID != 0 {
-			defaultMenu, loadErr := s.prepareCreatureGossip(ctx, guid, entry, objectUint32OrZero(creature, "NPCFlags"), item.ActionMenuID)
+		} else if item.Action == 1 || item.Action == 19 { // GOSSIP_OPTION_GOSSIP / GOSSIP_OPTION_DUALSPEC_INFO
+			// Player::OnGossipSelect (Player.cpp:14604-14615): the POI fires
+			// before the submenu, for both option types.
+			if item.ActionPoiID != 0 {
+				s.sendGossipPOI(ctx, item.ActionPoiID)
+			}
+			if item.ActionMenuID != 0 {
+				defaultMenu, loadErr := s.prepareCreatureGossip(ctx, guid, entry, objectUint32OrZero(creature, "NPCFlags"), item.ActionMenuID)
+				if loadErr != nil {
+					s.debug("gossip submenu load failed", "account", s.accountName, "entry", entry, "menu", item.ActionMenuID, "error", loadErr)
+					s.gossipClosed = true
+					_ = s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true)
+					return true
+				}
+				s.gossip = defaultMenu
+				if sendErr := s.sendGossipMenu(); sendErr != nil {
+					s.debug("gossip submenu response failed", "account", s.accountName, "entry", entry, "menu", item.ActionMenuID, "error", sendErr)
+					return true
+				}
+			}
+		} else if item.Action == 7 { // GOSSIP_OPTION_SPIRITGUIDE
+			// Player::OnGossipSelect (Player.cpp:14677-14680): re-prepare the
+			// creature's default gossip menu without the quest list
+			// (PrepareGossipMenu(source) passes showQuests=false).
+			defaultMenu, loadErr := s.prepareCreatureGossip(ctx, guid, entry, npcFlags, 0)
 			if loadErr != nil {
-				s.debug("gossip submenu load failed", "account", s.accountName, "entry", entry, "menu", item.ActionMenuID, "error", loadErr)
+				s.debug("gossip spiritguide menu load failed", "account", s.accountName, "entry", entry, "error", loadErr)
 				s.gossipClosed = true
 				_ = s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true)
 				return true
 			}
+			defaultMenu.Quests = nil
 			s.gossip = defaultMenu
 			if sendErr := s.sendGossipMenu(); sendErr != nil {
-				s.debug("gossip submenu response failed", "account", s.accountName, "entry", entry, "menu", item.ActionMenuID, "error", sendErr)
+				s.debug("gossip spiritguide response failed", "account", s.accountName, "entry", entry, "error", sendErr)
 				return true
 			}
 		}
@@ -289,13 +343,11 @@ func (s *session) prepareCreatureGossip(ctx context.Context, guid uint64, entry,
 		return nil, nil
 	}
 	menu := &gossipMenuState{SenderGUID: guid, MenuID: menuID, TitleID: 0x00FFFFFF, Items: make(map[uint32]gossipMenuItem)}
-	var titleID int64
-	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT TextID FROM gossip_menu WHERE MenuID = ? ORDER BY TextID LIMIT 1", menuID).Scan(&titleID)
-	if err == nil {
-		menu.TitleID = uint32(titleID)
-	} else if err != sql.ErrNoRows && !missingTable(err) {
+	titleID, err := s.loadGossipMenuTitleID(ctx, menuID, entry, guid)
+	if err != nil {
 		return nil, err
 	}
+	menu.TitleID = titleID
 	options, err := s.loadCreatureGossipOptions(ctx, menuID, npcFlags, entry, guid)
 	if err != nil {
 		return nil, err
@@ -320,6 +372,67 @@ func (s *session) prepareCreatureGossip(ctx context.Context, guid uint64, entry,
 		menu.Quests = quests
 	}
 	return menu, nil
+}
+
+// loadGossipMenuTitleID mirrors Player::GetGossipTextId (Player.cpp:14711-14727):
+// every gossip_menu row for the menu is visited and the LAST TextID whose
+// attached conditions (SourceType 14, SourceGroup=MenuID, SourceEntry=TextID)
+// pass is kept. A menuId of 0 falls back to DEFAULT_GOSSIP_MESSAGE
+// (0x00FFFFFF) without a lookup.
+func (s *session) loadGossipMenuTitleID(ctx context.Context, menuID, creatureEntry uint32, creatureGUID uint64) (uint32, error) {
+	titleID := uint32(0x00FFFFFF)
+	if menuID == 0 || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return titleID, nil
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT TextID FROM gossip_menu WHERE MenuID = ? ORDER BY TextID", menuID)
+	if err != nil {
+		if missingTable(err) {
+			return titleID, nil
+		}
+		return titleID, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var textID int64
+		if err := rows.Scan(&textID); err != nil {
+			return titleID, err
+		}
+		meets, err := s.meetGossipMenuConditions(ctx, menuID, uint32(textID), creatureEntry, creatureGUID)
+		if err != nil {
+			return titleID, err
+		}
+		if meets {
+			titleID = uint32(textID)
+		}
+	}
+	return titleID, rows.Err()
+}
+
+// sendGossipPOI mirrors PlayerMenu::SendPointOfInterest (GossipDef.cpp:250-274):
+// SMSG_GOSSIP_POI carries the points_of_interest row for a gossip option's
+// ActionPoiID (flags, X, Y, icon, importance, name).
+func (s *session) sendGossipPOI(ctx context.Context, poiID uint32) {
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	var flags, icon, importance int64
+	var x, y float64
+	var name string
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Flags, PositionX, PositionY, Icon, Importance, Name FROM points_of_interest WHERE ID = ?", poiID).Scan(&flags, &x, &y, &icon, &importance, &name)
+	if err != nil {
+		if !errorsIsNoRows(err) {
+			s.debug("gossip poi lookup failed", "account", s.accountName, "poi", poiID, "error", err)
+		}
+		return
+	}
+	buf := protocol.NewBuffer(32)
+	buf.WriteU32(uint32(flags))
+	buf.WriteF32(float32(x))
+	buf.WriteF32(float32(y))
+	buf.WriteU32(uint32(icon))
+	buf.WriteU32(uint32(importance))
+	buf.WriteCString(name)
+	_ = s.write(uint16(protocol.OpcodeSMSG_GOSSIP_POI), buf.Bytes(), true)
 }
 
 type loadedGossipOption struct {

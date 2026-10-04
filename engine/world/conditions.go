@@ -237,6 +237,79 @@ func (s *session) loadImplicitTargetConditions(ctx context.Context, spellID uint
 	return result
 }
 
+// loadGossipMenuConditions fetches conditions attached to a gossip menu title
+// row (SourceType 14: SourceGroup = MenuID, SourceEntry = TextID; see
+// ConditionMgr::addToGossipMenus, ConditionMgr.cpp:1368).
+func (s *session) loadGossipMenuConditions(ctx context.Context, menuID, textID uint32) ([]conditionRow, error) {
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx,
+		"SELECT ElseGroup, ConditionTypeOrReference, ConditionTarget, ConditionValue1, ConditionValue2, ConditionValue3, NegativeCondition FROM conditions WHERE SourceTypeOrReferenceId = 14 AND SourceGroup = ? AND SourceEntry = ?",
+		menuID, textID)
+	if err != nil {
+		if missingTable(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]conditionRow, 0, 4)
+	for rows.Next() {
+		var row conditionRow
+		if err := rows.Scan(&row.ElseGroup, &row.ConditionType, &row.ConditionTarget, &row.Value1, &row.Value2, &row.Value3, &row.Negative); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+// evalConditionGroups evaluates the ElseGroup clause set; empty sets pass (no
+// conditions attached).
+func (s *session) evalConditionGroups(ctx context.Context, conditions []conditionRow, eval func(context.Context, conditionRow) (bool, error)) (bool, error) {
+	if len(conditions) == 0 {
+		return true, nil
+	}
+	groups := make(map[int64][]conditionRow)
+	for _, row := range conditions {
+		groups[row.ElseGroup] = append(groups[row.ElseGroup], row)
+	}
+	for _, group := range groups {
+		met := true
+		for _, row := range group {
+			ok, err := eval(ctx, row)
+			if err != nil {
+				return false, err
+			}
+			if row.Negative {
+				ok = !ok
+			}
+			if !ok {
+				met = false
+				break
+			}
+		}
+		if met {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// meetGossipMenuConditions mirrors the Conditions arm of Player::GetGossipTextId
+// (Player.cpp:14722): a gossip_menu title row applies only when its attached
+// conditions pass.
+func (s *session) meetGossipMenuConditions(ctx context.Context, menuID, textID, creatureEntry uint32, creatureGUID uint64) (bool, error) {
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return true, nil
+	}
+	conditions, err := s.loadGossipMenuConditions(ctx, menuID, textID)
+	if err != nil {
+		return false, err
+	}
+	return s.evalConditionGroups(ctx, conditions, func(ctx context.Context, row conditionRow) (bool, error) {
+		return s.evalCondition(ctx, row, creatureEntry, creatureGUID)
+	})
+}
+
 // loadGossipOptionConditions fetches conditions attached to a gossip menu
 // option (SourceType 15: SourceGroup = MenuID, SourceEntry = OptionID).
 func (s *session) loadGossipOptionConditions(ctx context.Context, menuID, optionID uint32) ([]conditionRow, error) {
@@ -363,33 +436,9 @@ func (s *session) meetGossipOptionConditions(ctx context.Context, menuID, option
 	if err != nil {
 		return false, err
 	}
-	if len(conditions) == 0 {
-		return true, nil
-	}
-	groups := make(map[int64][]conditionRow)
-	for _, row := range conditions {
-		groups[row.ElseGroup] = append(groups[row.ElseGroup], row)
-	}
-	for _, group := range groups {
-		met := true
-		for _, row := range group {
-			ok, err := s.evalCondition(ctx, row, creatureEntry, creatureGUID)
-			if err != nil {
-				return false, err
-			}
-			if row.Negative {
-				ok = !ok
-			}
-			if !ok {
-				met = false
-				break
-			}
-		}
-		if met {
-			return true, nil
-		}
-	}
-	return false, nil
+	return s.evalConditionGroups(ctx, conditions, func(ctx context.Context, row conditionRow) (bool, error) {
+		return s.evalCondition(ctx, row, creatureEntry, creatureGUID)
+	})
 }
 
 func (s *session) meetVendorItemConditions(ctx context.Context, creatureEntry, itemEntry uint32, vendorGUID uint64) (bool, error) {
