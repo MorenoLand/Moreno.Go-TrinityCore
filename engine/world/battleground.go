@@ -474,30 +474,26 @@ func (s *session) handleBattlegroundPlayerPositions(ctx context.Context, payload
 	// Only respond if player is inside a battleground or arena instance/map
 	switch s.player.Map {
 	case 30, 489, 529, 566, 607, 628, 559, 562, 572, 617, 618:
-		var teammates []*session
-		if s.server != nil {
-			s.server.sessionsMu.RLock()
-			for other := range s.server.sessions {
-				if other != s && other.worldReady.Load() && other.player != nil && other.player.Map == s.player.Map && teamForRace(other.player.Race) == teamForRace(s.player.Race) {
-					teammates = append(teammates, other)
-				}
-			}
-			s.server.sessionsMu.RUnlock()
-		}
-
+		// Reference BattleGroundHandler.cpp:274-286:
+		// The two flag-picker queries run in order: GetFlagPickerGUID(TEAM_ALLIANCE)
+		// then GetFlagPickerGUID(TEAM_HORDE), each counted only when the player is
+		// still in the world (== ObjectAccessor::FindPlayer non-null). WSG answers
+		// per team (BattlegroundWS.h:211); EOTS ignores the team arg and returns the
+		// single flag keeper for both queries (BattlegroundEY.h:392), so the same
+		// carrier is sent twice — matching the C++ wire output.
 		var flagCarriers []*session
 		if s.server != nil {
 			flagCarriers = append(flagCarriers, s.server.getWSGFlagCarriers(s.player.Map)...)
-			flagCarriers = append(flagCarriers, s.server.getEOTSFlagCarriers(s.player.Map)...)
+			eotsCarriers := s.server.getEOTSFlagCarriers(s.player.Map)
+			flagCarriers = append(flagCarriers, eotsCarriers...)
+			flagCarriers = append(flagCarriers, eotsCarriers...)
 		}
 
-		buf := protocol.NewBuffer(8 + len(teammates)*16 + len(flagCarriers)*16)
-		buf.WriteU32(uint32(len(teammates))) // numPlayerPositions
-		for _, mate := range teammates {
-			buf.WriteU64(mate.playerGUID)
-			buf.WriteF32(mate.player.X)
-			buf.WriteF32(mate.player.Y)
-		}
+		// Reference BattleGroundHandler.cpp:288-294:
+		// numPlayerPositions is hardcoded 0 — the per-player guid/x/y loop is
+		// commented out in C++; player positions are never sent.
+		buf := protocol.NewBuffer(8 + len(flagCarriers)*16)
+		buf.WriteU32(0)                         // numPlayerPositions
 		buf.WriteU32(uint32(len(flagCarriers))) // flagCarrierCount
 		for _, carrier := range flagCarriers {
 			buf.WriteU64(carrier.playerGUID)
