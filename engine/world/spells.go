@@ -5146,6 +5146,32 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case 10, 136, 105: // Heal effects
 				heal := uint32(eff.BasePoints + 1)
+				// Spell::EffectHeal (SpellEffects.cpp): the Death Pact arm
+				// (SPELLFAMILY_DEATHKNIGHT, SpellFamilyFlags[0] & 0x00080000)
+				// replaces the flat effect value with damage% of the caster's
+				// max health (Unit::CountPctFromMaxHealth) before the standard
+				// SpellHealingBonusDone leg (executeSpellHeal folds the Go
+				// spell-power bonus over it, like the C++ else arm).
+				if eff.Effect == 10 && spell.SpellFamilyName == spellFamilyDeathKnight &&
+					spell.SpellFamilyFlags[0]&0x80000 != 0 && s.player != nil {
+					heal = uint32(uint64(s.player.MaxHealth) * uint64(eff.BasePoints+1) / 100)
+				}
+				// Vessel of the Naaru (spell 45064, Vial of the Sunwell
+				// trinket): the stacked Holy Energy (aura 45062 effect-0
+				// amount) joins the heal and the aura is consumed. Added
+				// before executeSpellHeal so the bonus leg covers it, matching
+				// the C++ addhealth += damageAmount ahead of
+				// SpellHealingBonusDone.
+				if eff.Effect == 10 && spellID == 45064 {
+					if aura, ok := s.activeAuras[45062]; ok && aura != nil {
+						heal += aura.Amount
+						s.removeAura(45062)
+					}
+				}
+				// Swiftmend (TargetAuraState == AURA_STATE_SWIFTMEND) stays
+				// open: it needs the shortest-duration Rejuvenation/Regrowth
+				// periodic-heal aura's tick amount times its tick count plus
+				// the Glyph of Swiftmend (54824) no-consume arm.
 				for _, effectTarget := range hitTargets {
 					s.executeSpellHeal(effCtx, effectTarget, spellID, chainScaledAmount(heal, eff, chainJumpIndex[effectTarget]), effectIndex)
 				}
@@ -7074,6 +7100,14 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 		targetSess.player.Health = targetSess.player.MaxHealth
 	} else {
 		targetSess.player.Health += heal
+	}
+	// Spell::EffectHeal (SpellEffects.cpp): a fully-healed target loses the
+	// Grievous Bite aura (48920). C++ evaluates
+	// GetHealth() + addhealth >= GetMaxHealth() ahead of the actual heal
+	// application, so the post-application Health >= MaxHealth gate is the
+	// same condition on this path.
+	if targetSess.hasAura(48920) && targetSess.player.Health >= targetSess.player.MaxHealth {
+		targetSess.removeAura(48920)
 	}
 	s.updateAchievementCriteria(criteriaTypeHealingDone, 0, heal)
 	s.setAchievementCriteria(criteriaTypeHighestHealCasted, 0, heal)
