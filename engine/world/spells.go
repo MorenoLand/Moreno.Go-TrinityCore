@@ -5902,7 +5902,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case spellEffectHealMaxHealth:
 				for _, effectTarget := range hitTargets {
-					s.executeSpellMaxHealthHeal(effCtx, effectTarget, spellID)
+					s.executeSpellMaxHealthHeal(effCtx, effectTarget, spellID, eff.BasePoints+1)
 				}
 			case 6, 27, 35: // Apply Aura
 				durationMs, periodMs, amount := s.auraEffectParams(spell, eff)
@@ -7334,7 +7334,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		} else if eff.Effect == spellEffectThreat {
 			s.applySpellThreat(ctx, spell, targetGUID, eff.BasePoints+1)
 		} else if eff.Effect == spellEffectHealMaxHealth {
-			s.executeSpellMaxHealthHeal(ctx, targetGUID, spellID)
+			s.executeSpellMaxHealthHeal(ctx, targetGUID, spellID, eff.BasePoints+1)
 		} else if eff.Effect == spellEffectAddComboPoints {
 			// Spell::EffectAddComboPoints (SpellEffects.cpp:3781-3789):
 			// the effectHandleMode gate is structural (this dispatch is the
@@ -8143,28 +8143,71 @@ func (s *session) applySpellThreat(ctx context.Context, spell wotlk.Spell, targe
 	_ = ctx
 }
 
-func (s *session) executeSpellMaxHealthHeal(ctx context.Context, targetGUID uint64, spellID uint32) {
+func (s *session) executeSpellMaxHealthHeal(ctx context.Context, targetGUID uint64, spellID uint32, damage int32) {
 	if s == nil || s.player == nil {
 		return
 	}
-	if targetGUID == 0 || targetGUID == s.playerGUID {
+	if targetGUID == 0 {
+		targetGUID = s.playerGUID
+	}
+	// Spell::EffectHealMaxHealth (SpellEffects.cpp:3488-3504): damage == 0
+	// heals for the caster's max health (Lay on Hands); otherwise the target
+	// heals its missing health. The effectHandleMode gate is structural (this
+	// dispatch is the HIT_TARGET phase) and the null-caster gate is vacuous
+	// (s.player is the caster); the dead-target gate lands on the Health > 0
+	// checks below. Player targets ride executeSpellHeal so the
+	// SpellHealingBonusDone / crit / threat-forward legs of HealBySpell
+	// (Spell.cpp:2496-2513) apply; the creature arm has no such model and
+	// lands the clamped heal on the motion directly.
+	if targetGUID == s.playerGUID {
 		if s.player.Health == 0 {
 			return
 		}
-		s.player.Health = s.player.MaxHealth
-		s.sendPlayerUpdate()
+		var addhealth uint32
+		if damage == 0 {
+			addhealth = s.player.MaxHealth
+		} else {
+			addhealth = s.player.MaxHealth - s.player.Health
+		}
+		s.executeSpellHeal(ctx, targetGUID, spellID, addhealth, 0)
 		return
 	}
 	if s.server == nil {
 		return
 	}
-	if target := s.server.findSessionByGUID(targetGUID); target != nil && target.player != nil && target.player.Health > 0 {
-		target.player.Health = target.player.MaxHealth
-		target.sendPlayerUpdate()
+	if target := s.server.findSessionByGUID(targetGUID); target != nil && target.player != nil {
+		if target.player.Health == 0 {
+			return
+		}
+		var addhealth uint32
+		if damage == 0 {
+			addhealth = s.player.MaxHealth
+		} else {
+			addhealth = target.player.MaxHealth - target.player.Health
+		}
+		s.executeSpellHeal(ctx, targetGUID, spellID, addhealth, 0)
 		return
 	}
 	if creature, ok := s.getCombatTarget(ctx, targetGUID); ok && creature.Health > 0 {
-		s.executeSpellHeal(ctx, targetGUID, spellID, creature.MaxHealth, 0)
+		var addhealth uint32
+		if damage == 0 {
+			addhealth = s.player.MaxHealth
+		} else {
+			addhealth = creature.MaxHealth - creature.Health
+		}
+		newHealth := creature.Health + addhealth
+		if newHealth > creature.MaxHealth {
+			newHealth = creature.MaxHealth
+		}
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
+		if motion != nil {
+			motion.Health = newHealth
+		}
+		s.server.motionMu.Unlock()
+		if motion != nil {
+			s.server.broadcastCreatureValuesUpdateInInstance(s.player.Map, s.player.InstanceID, targetGUID, map[int]uint32{unitFieldHealth: motion.Health})
+		}
 	}
 }
 
