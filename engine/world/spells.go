@@ -46,6 +46,7 @@ const (
 	spellAttr7NoPushbackOnDamage           uint32 = 0x00000040 // SPELL_ATTR7_NO_PUSHBACK_ON_DAMAGE (SharedDefines.h:677) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr7DispelCharges                uint32 = 0x00000400 // SPELL_ATTR7_DISPEL_CHARGES (SharedDefines.h:681) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr7CanRestoreSecondaryPower     uint32 = 0x00010000 // SPELL_ATTR7_CAN_RESTORE_SECONDARY_POWER (SharedDefines.h:687) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
+	spellAttr7IsCheatSpell                 uint32 = 0x00000008 // SPELL_ATTR7_IS_CHEAT_SPELL (SharedDefines.h:674) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr6AssistIgnoreImmuneFlag       uint32 = 0x00000008 // SPELL_ATTR6_ASSIST_IGNORE_IMMUNE_FLAG (SharedDefines.h:637) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6CanTargetUntargetable        uint32 = 0x01000000 // SPELL_ATTR6_CAN_TARGET_UNTARGETABLE (SharedDefines.h:658) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6DontConsumeProcCharges       uint32 = 0x00000020 // SPELL_ATTR6_DONT_CONSUME_PROC_CHARGES (SharedDefines.h:639) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
@@ -96,6 +97,8 @@ const (
 	spellFailedEquippedItemClassMainhand uint8  = 30  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
 	spellFailedEquippedItemClassOffhand  uint8  = 31  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND (SharedDefines.h:1013)
 	spellFailedNotInFront                uint8  = 61  // SPELL_FAILED_NOT_INFRONT (SharedDefines.h:1042)
+	spellFailedCustomError               uint8  = 172 // SPELL_FAILED_CUSTOM_ERROR (SharedDefines.h:1154)
+	spellCustomErrorGMOnly               uint32 = 65  // SPELL_CUSTOM_ERROR_GM_ONLY (SharedDefines.h:1241)
 	spellFailedBadTargets                uint8  = 12  // SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992)
 	spellFailedBmOrInvisGod              uint8  = 159 // SPELL_FAILED_BM_OR_INVISGOD (SharedDefines.h:1141)
 	spellFailedTargetIsPlayer            uint8  = 117 // SPELL_FAILED_TARGET_IS_PLAYER (SharedDefines.h:1099)
@@ -1066,6 +1069,18 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "allow-only-ability flag set")
 		return true
 	}
+	// Potion leg of the CheckCast cooldown block (Spell::CheckCast,
+	// Spell.cpp:5198-5199): vacuous on this path — the arm requires m_CastItem,
+	// which is always nil here (item casts run through handleUseItem, never
+	// handleCastSpell). The live bridge sits on the m_CastItem path
+	// (handleUseItem, items.go) where s.lastPotionId != 0 plus an item that is
+	// a potion (ItemTemplate::IsPotion) or a cooldown-started-on-event spell
+	// (SpellInfo::IsCooldownStartedOnEvent) fails SPELL_FAILED_NOT_READY; the
+	// bank side (SpellHistory::HandleCooldowns) and the combat-end flush
+	// (Player::UpdatePotionCooldown) are already bridged. The
+	// !IsIgnoringCooldowns() arm is vacuous there: handleUseItem serves only
+	// client CMSG_USE_ITEM casts, never triggered ones. C++ relative order:
+	// second arm inside the cooldown block, ahead of the IsReady loop below.
 	for _, cd := range s.player.Cooldowns {
 		if cd.Spell == spellID && cd.End > nowUnix {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
@@ -1081,6 +1096,23 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				return true
 			}
 		}
+	}
+	// CheckCast cheat-spell gate (Spell::CheckCast, Spell.cpp:5223-5227):
+	// SPELL_ATTR7_IS_CHEAT_SPELL spells fail with SPELL_FAILED_CUSTOM_ERROR
+	// (172) plus the custom error SPELL_CUSTOM_ERROR_GM_ONLY (65) unless the
+	// caster carries UNIT_FIELD_FLAGS_2 UNIT_FLAG2_ALLOW_CHEAT_SPELLS
+	// (0x00040000, UnitDefines.h:178) — set by Player::SetGameMaster(true)
+	// (Player.cpp:2446), which Go mirrors as the .gm-on flag pair
+	// (playerExtraGMOn / playerFlagGM, commands.go:391). The WriteCastResultInfo
+	// customError leg (Spell.cpp:4073-4075) rides buildCastFailedParams.
+	// C++ relative order: after the cooldown block (5218), before the GCD
+	// check (5230); the IsPassive wrapper is vacuous here (passive spells are
+	// rejected at the lookup above).
+	if spell.AttributesEx7&spellAttr7IsCheatSpell != 0 &&
+		s.player.ExtraFlags&playerExtraGMOn == 0 && s.player.PlayerFlags&playerFlagGM == 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(castID, spellID, spellFailedCustomError, spellCustomErrorGMOnly), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "cheat spell without gm mode")
+		return true
 	}
 	// CheckCast battleground gate (Spell::CheckCast, Spell.cpp:5433-5437): client-initiated
 	// casts only — this path is the client path; the TYPEID_PLAYER arm is vacuous
