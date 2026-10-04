@@ -532,6 +532,35 @@ func (s *session) handleGroupInvite(_ context.Context, payload []byte) bool {
 		return s.sendPartyResult(partyOpInvite, memberName, errBadPlayerNameS)
 	}
 
+	// Restrict invite to GMs (GroupHandler.cpp:103 — GM.AllowInvite, default false)
+	if !s.server.Config.GMAllowInvite && s.security == 0 && invitedSess.security > 0 {
+		return s.sendPartyResult(partyOpInvite, memberName, errBadPlayerNameS)
+	}
+
+	// Can't group with the opposite faction (AllowTwoSide.Interaction.Group, default false)
+	if s.security == 0 && !s.server.Config.AllowTwoSideInteractionGroup &&
+		playerTeam(s.player.Race) != playerTeam(invitedSess.player.Race) {
+		return s.sendPartyResult(partyOpInvite, memberName, errPlayerWrongFaction)
+	}
+
+	// Both inside different instances of the same map
+	if s.player.InstanceID != 0 && invitedSess.player.InstanceID != 0 &&
+		s.player.InstanceID != invitedSess.player.InstanceID && s.player.Map == invitedSess.player.Map {
+		return s.sendPartyResult(partyOpInvite, memberName, errTargetNotInInstanceS)
+	}
+
+	// The invited player ignored the inviter
+	if s.server.chatIgnoredBy(invitedSess.playerGUID, s.playerGUID) {
+		return s.sendPartyResult(partyOpInvite, memberName, errIgnoringYouS)
+	}
+
+	// Party level requirement (World.cpp:680, default 1), waived when the
+	// invited player lists the inviter as a friend
+	if !s.server.socialHasFriend(invitedSess.playerGUID, s.playerGUID) &&
+		s.server.Config.PartyLevelReq > 0 && uint32(s.player.Level) < s.server.Config.PartyLevelReq {
+		return s.sendPartyResult(partyOpInvite, memberName, errInviteRestricted)
+	}
+
 	// Invited player already in a group or has a pending invite
 	if invitedSess.groupID != 0 || invitedSess.pendingGroupLeader != 0 {
 		_ = s.sendPartyResult(partyOpInvite, memberName, errAlreadyInGroupS)
@@ -541,12 +570,12 @@ func (s *session) handleGroupInvite(_ context.Context, payload []byte) bool {
 		return true
 	}
 
-	// Inviting player must be leader if already in a group
+	// Inviting player must be leader or assistant if already in a group
 	if s.groupID != 0 {
 		g := s.server.findGroupByID(s.groupID)
 		if g == nil {
 			s.groupID = 0
-		} else if g.LeaderGUID != s.playerGUID {
+		} else if !g.isLeaderOrAssistant(s.playerGUID) {
 			return s.sendPartyResult(partyOpInvite, "", errNotLeader)
 		} else if len(g.Members) >= maxGroupSize {
 			return s.sendPartyResult(partyOpInvite, "", errGroupFull)
@@ -577,19 +606,22 @@ func (s *session) handleGroupAccept(_ context.Context, _ []byte) bool {
 	}
 
 	leaderSess := s.server.findSessionByGUID(leaderGUID)
-	if leaderSess == nil || leaderSess.player == nil {
-		return false
-	}
 
 	srv := s.server
 	srv.groupsMu.Lock()
 
 	var g *groupState
-	if leaderSess.groupID != 0 {
+	if leaderSess != nil && leaderSess.groupID != 0 {
 		g = srv.groups[leaderSess.groupID]
 	}
 
 	if g == nil {
+		// Forming a new group needs the leader present; joining an
+		// existing group does not (HandleGroupAcceptOpcode)
+		if leaderSess == nil || leaderSess.player == nil {
+			srv.groupsMu.Unlock()
+			return false
+		}
 		// Create new group
 		g = &groupState{
 			ID:            newGroupID(),
@@ -657,13 +689,21 @@ func (s *session) handleGroupUninvite(_ context.Context, payload []byte) bool {
 	}
 
 	g := s.server.findGroupByID(s.groupID)
-	if g == nil || g.LeaderGUID != s.playerGUID {
+	if g == nil || !g.isLeaderOrAssistant(s.playerGUID) {
 		return s.sendPartyResult(partyOpUninvite, "", errNotLeader)
 	}
 
 	target := s.server.findSessionByName(name)
 	if target == nil {
 		return s.sendPartyResult(partyOpUninvite, name, errTargetNotInGroup)
+	}
+	if target.playerGUID == g.LeaderGUID {
+		return s.sendPartyResult(partyOpUninvite, "", errNotLeader)
+	}
+	// A pending invite issued by this leader can be withdrawn
+	if target.pendingGroupLeader == s.playerGUID {
+		target.pendingGroupLeader = 0
+		return true
 	}
 	return s.removeFromGroup(g, target)
 }
@@ -681,13 +721,21 @@ func (s *session) handleGroupUninviteGUID(_ context.Context, payload []byte) boo
 	}
 
 	g := s.server.findGroupByID(s.groupID)
-	if g == nil || g.LeaderGUID != s.playerGUID {
+	if g == nil || !g.isLeaderOrAssistant(s.playerGUID) {
 		return s.sendPartyResult(partyOpUninvite, "", errNotLeader)
 	}
 
 	target := s.server.findSessionByGUID(guid)
 	if target == nil {
 		return s.sendPartyResult(partyOpUninvite, "", errTargetNotInGroup)
+	}
+	if target.playerGUID == g.LeaderGUID {
+		return s.sendPartyResult(partyOpUninvite, "", errNotLeader)
+	}
+	// A pending invite issued by this leader can be withdrawn
+	if target.pendingGroupLeader == s.playerGUID {
+		target.pendingGroupLeader = 0
+		return true
 	}
 	return s.removeFromGroup(g, target)
 }

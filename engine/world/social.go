@@ -58,6 +58,19 @@ const (
 // TrinityCore: PlayerSocial::SendSocialList
 // flags: 0x1=friends, 0x2=ignored, 0x4=muted
 // -----------------------------------------------------------------
+// socialHasFriend reports whether ownerGUID lists friendGUID with the friend
+// flag — the PlayerSocial::HasFriend arm used by the group-invite level gate.
+func (s *Server) socialHasFriend(ownerGUID, friendGUID uint64) bool {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return false
+	}
+	var flags int64
+	if err := s.CharactersStore.DB.QueryRowContext(context.Background(), "SELECT flags FROM character_social WHERE guid = ? AND friend = ? LIMIT 1", ownerGUID, friendGUID).Scan(&flags); err != nil {
+		return false
+	}
+	return uint64(flags)&uint64(socialFlagFriend) != 0
+}
+
 func (s *Server) friendStatus(viewer *session, guid uint64) (uint8, uint32, uint32, uint32) {
 	if s == nil || viewer == nil || viewer.player == nil {
 		return friendStatusOffline, 0, 0, 0
