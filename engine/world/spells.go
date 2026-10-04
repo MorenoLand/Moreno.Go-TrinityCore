@@ -5191,6 +5191,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 								s.castSpellDirect(effCtx, 48301, effectTarget)
 							}
 						}
+						// Spell::EffectSchoolDMG (SpellEffects.cpp:663-668): the
+						// Gore arm (Hunter family, SpellIconID 1578) doubles
+						// the damage when the caster carries aura 57627 (the
+						// 6 sec post-Charge affect). SCHOOL_DAMAGE (effect 2)
+						// only — the weapon-damage effects in this case route
+						// to different C++ handlers. The bonus stays on the
+						// direct-bonus path (C++ leaves apply_direct_bonus
+						// true here), so executeSpellDamage's
+						// SpellDamageBonusDone/Taken legs cover the doubled
+						// damage. The unitCaster null gate is vacuous here:
+						// the caster is always the session player on these
+						// cast paths.
+						if eff.Effect == 2 && s.player != nil &&
+							spell.SpellFamilyName == spellFamilyHunter && spell.SpellIconID == 1578 &&
+							s.hasAura(57627) {
+							targetDamage *= 2
+						}
 						s.executeSpellDamage(effCtx, effectTarget, spellID, targetDamage, effectIndex)
 					}
 				}
