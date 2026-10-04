@@ -1956,6 +1956,18 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
 		return true
 	}
+	// Spell::CheckPetCast (Spell.cpp:6219-6220): the UNIT_STATE_CASTING arm has
+	// no Go bridge — creatureMotion carries no cast-in-progress state and pet
+	// casts resolve instantly through executePetSpellWithOptions, so the
+	// overlap the guard prevents cannot occur; the TRIGGERED_IGNORE_CAST_IN_PROGRESS
+	// wrapper is vacuous here (this path never carries triggered flags).
+	// Dead-owner arm (Spell.cpp:6222-6225): the owner on this path is always
+	// the session player (petMotionForCast requires OwnerGUID/CharmerGUID ==
+	// playerGUID); the IsGhouled() exemption has no Go model.
+	if s.isDeadOrGhost() {
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedCasterDead), true)
+		return true
+	}
 	if target.UnitGUID == 0 {
 		if isSelfCastOnly(spell) {
 			target.UnitGUID = motion.GUID
@@ -1965,6 +1977,22 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 			target.Flags |= protocol.SpellTargetFlagUnitWireMask
 		}
 	}
+	// Spell::CheckPetCast (Spell.cpp:6230-6235): a spell that needs an explicit
+	// unit target fails SPELL_FAILED_BAD_IMPLICIT_TARGETS when none was
+	// provided (Spell.cpp:6227-6228's m_targets unit-target copy is already
+	// covered by the resolution above; the m_targets.SetUnitTarget(target) half
+	// is structural — target.UnitGUID carries the resolved target onward).
+	if spellNeedsExplicitUnitTarget(spell) && target.UnitGUID == 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadImplicitTargets), true)
+		return true
+	}
+	// Power (Spell.cpp:6237-6242) and cooldown (Spell.cpp:6244-6247) arms are
+	// already covered below by checkPetSpellPower and the motion
+	// SpellCooldowns/SpellCategoryCooldowns checks. The GCD arm
+	// (Spell.cpp:6249-6252) has no Go bridge — Go never applies or tracks a
+	// global cooldown on pet casts (only the NoGCD wire flag at
+	// pet_combat.go:626). The CheckCast(true) tail (Spell.cpp:6254) is out of
+	// scope: the pet path runs no CheckCast gauntlet.
 	if isHarmfulSpell(spell) && target.UnitGUID == motion.GUID && !isSelfCastOnly(spell) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
 		return true
