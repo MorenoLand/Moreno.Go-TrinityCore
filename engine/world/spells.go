@@ -132,6 +132,7 @@ const (
 	spellEffectWeaponPercentDamage              = 31    // SPELL_EFFECT_WEAPON_PERCENT_DAMAGE (SharedDefines.h:842)
 	spellEffectNormalizedWeaponDmg              = 121   // SPELL_EFFECT_NORMALIZED_WEAPON_DMG (SharedDefines.h:932)
 	spellEffectCreateManaGem                    = 66    // SPELL_EFFECT_CREATE_MANA_GEM (SharedDefines.h:877)
+	spellEffectStuck                            = 84    // SPELL_EFFECT_STUCK (SharedDefines.h:895)
 	itemSubclassWeaponThrown                    = 16    // ITEM_SUBCLASS_WEAPON_THROWN (ItemTemplate.h:365)
 	itemSubclassWeaponBow                       = 2     // ITEM_SUBCLASS_WEAPON_BOW (ItemTemplate.h:351)
 	itemSubclassWeaponGun                       = 3     // ITEM_SUBCLASS_WEAPON_GUN (ItemTemplate.h:352)
@@ -1112,6 +1113,32 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.player.ExtraFlags&playerExtraGMOn == 0 && s.player.PlayerFlags&playerFlagGM == 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(castID, spellID, spellFailedCustomError, spellCustomErrorGMOnly), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "cheat spell without gm mode")
+		return true
+	}
+	// CheckCast moving/autorepeat arm (Spell::CheckCast, Spell.cpp:5316-5323):
+	// a moving player fails SPELL_FAILED_MOVING (51) when the cast is an
+	// auto-repeat spell (m_autoRepeat = SpellInfo::IsAutoRepeatRangedSpell,
+	// SPELL_ATTR2_AUTOREPEAT_FLAG — SpellInfo.cpp:1256-1259, Spell.cpp:609) or
+	// the spell's auras interrupt on standing up
+	// (AURA_INTERRUPT_FLAG_NOT_SEATED, SpellDefines.h:65 — food, drink, sleep,
+	// Fake Death). SPELL_EFFECT_STUCK (84) spells are exempt while the caster
+	// is falling far (the /stuck escape hatch). The TYPEID_PLAYER arm is
+	// vacuous here (this is the client-initiated path), and the
+	// charmer-is-creature trust hack is vacuous — Go has no charmed-caster
+	// model (the interruptSpellsOnMovement note). The Spell::prepare
+	// channeled/cast-time gate below is a different arm (Spell.cpp:3139-3149);
+	// this one catches zero-cast-time NOT_SEATED and autorepeat casts.
+	// C++ relative order: immediately after the cheat-spell gate, inside the
+	// unit-caster block, ahead of the vehicle check.
+	// Delta: Go tracks only a coarse s.isFalling (movementFalling flag, no
+	// FALLING_FAR distinction), so the STUCK exemption rides isFalling alone.
+	// Delta: the arm also fires on triggered casts in C++ (no
+	// triggered-flags guard); Go's triggered path never runs this gauntlet.
+	if s.isMoving &&
+		!(s.isFalling && len(spell.Effects) > 0 && spell.Effects[0].Effect == spellEffectStuck) &&
+		(spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0 || spell.AuraInterruptFlags&auraInterruptFlagNotSeated != 0) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedMoving), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "moving autorepeat or not-seated cast")
 		return true
 	}
 	// CheckCast battleground gate (Spell::CheckCast, Spell.cpp:5433-5437): client-initiated
