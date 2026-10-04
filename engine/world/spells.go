@@ -4795,7 +4795,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
-	// Spell::_cast (Spell.cpp:3293-3304): as of 3.0.2 the caster's pets begin
+	// Spell::_cast front (Spell.cpp:3284-3302) no-bridge legs, ahead of the
+	// pet-assist bridge below, in C++ relative order:
+	//   - UpdatePointers() fail -> cancel (3284-3289): Go has no pointer
+	//     model — targets travel as GUIDs and are resolved at each use site,
+	//     so there is nothing to refresh or invalidate.
+	//   - lost explicit target -> cancel (3291-3296): Go never stores an
+	//     object target, so the m_targets.GetObjectTarget() leg cannot fire;
+	//     a target removed mid-cast fails the range/LoS revalidation below
+	//     instead of cancelling silently.
+	//   - OnPlayerSpellCast script hook (3302): Go has no ScriptMgr model,
+	//     so the script callback has nowhere to land.
+	// (Spell::cast's own window, 3264-3279, is bridged by the spellmod
+	// taking stack — nested casts push their own context, spellmod.go.)
+
+	// Spell::_cast (Spell.cpp:3303-3312): as of 3.0.2 the caster's pets begin
 	// attacking the owner's target immediately when the owner casts a harmful
 	// spell. C++ runs this before the CheckCast revalidation below, so it
 	// fires even when the cast then fails; target.UnitGUID is the explicit
