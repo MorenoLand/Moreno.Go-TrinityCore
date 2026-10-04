@@ -40,6 +40,14 @@ const (
 	buyErrReputationRequire = 12
 )
 
+// SellResult (ItemDefines.h:132) for SMSG_SELL_ITEM error arms.
+const (
+	sellErrCantFindItem           = 1
+	sellErrCantSellItem           = 2
+	sellErrCantFindVendor         = 3
+	sellErrCantSellToThisMerchant = 7
+)
+
 type vendorInventoryStack struct {
 	GUID  int64
 	Bag   int64
@@ -764,8 +772,33 @@ func (s *session) maxPersonalArenaRating(ctx context.Context, minSlot uint32) ui
 	return maxRating
 }
 
+// vendorRefusesSale reports whether the vendor's template carries
+// CREATURE_FLAG_EXTRA_NO_SELL_VENDOR (0x1000, CreatureData.h:49):
+// players can't sell items to this vendor (ItemHandler.cpp:391-395).
+func (s *session) vendorRefusesSale(ctx context.Context, vendorGUID uint64) bool {
+	if uint16(vendorGUID>>48) != 0xF130 || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	low := uint32(vendorGUID & 0x00FFFFFF)
+	entry := uint32((vendorGUID >> 24) & 0x00FFFFFF)
+	var flagsExtra int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT t.flags_extra FROM creature AS c
+		JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?`, low, entry).Scan(&flagsExtra); err != nil {
+		return false
+	}
+	return flagsExtra&0x1000 != 0
+}
+
+// sendSellError mirrors Player::SendSellError (Player.cpp:13646): SMSG_SELL_ITEM
+// carries the vendor GUID (0 when the vendor itself is the problem), the item
+// GUID, and the SellResult byte. Success sends result 0, which C++ never emits
+// (HandleSellItemOpcode sends nothing on success) and the client ignores.
+func (s *session) sendSellError(vendorGUID, itemGUID uint64, result uint8) {
+	_ = s.write(uint16(protocol.OpcodeSMSG_SELL_ITEM), buildSellResult(vendorGUID, itemGUID, result), true)
+}
+
 func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 17 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 20 {
 		return true
 	}
 	reader := protocol.NewReader(payload)
@@ -777,33 +810,81 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
-	itemGUID := int64(rawItemGUID & 0xFFFFFFFF)
-	if itemGUID == 0 {
-		itemGUID = int64(rawItemGUID)
+	// ItemHandler.cpp:379 — empty item GUID is silently ignored.
+	if rawItemGUID == 0 {
+		return true
 	}
-	count, err := reader.ReadU8()
-	if err != nil || count == 0 {
-		count = 1
+	// CMSG_SELL_ITEM carries count as uint32 (ItemHandler.cpp:376).
+	count, err := reader.ReadU32()
+	if err != nil {
+		return false
 	}
 	cdb := s.server.CharactersStore.DB
 	wdb := s.server.WorldStore.DB
 	if cdb == nil || wdb == nil {
 		return true
 	}
+	// ItemHandler.cpp:384-388 — vendor not found or not interactable.
 	if !s.canInteractWithNPC(ctx, vendorGUID, uint64(unitNPCFlagVendor)) {
+		s.sendSellError(0, rawItemGUID, sellErrCantFindVendor)
 		return true
 	}
-	var itemEntry, currentCount int64
-	err = cdb.QueryRowContext(ctx, `SELECT ii.itemEntry, ii.count FROM character_inventory AS ci
+	// ItemHandler.cpp:391-395 — CREATURE_FLAG_EXTRA_NO_SELL_VENDOR (0x1000).
+	if s.vendorRefusesSale(ctx, vendorGUID) {
+		s.sendSellError(vendorGUID, rawItemGUID, sellErrCantSellToThisMerchant)
+		return true
+	}
+	itemGUID := int64(rawItemGUID & 0xFFFFFFFF)
+	if itemGUID == 0 {
+		itemGUID = int64(rawItemGUID)
+	}
+	var itemEntry, currentCount, ownerGUID int64
+	err = cdb.QueryRowContext(ctx, `SELECT ii.itemEntry, ii.count, COALESCE(ii.owner_guid, 0) FROM character_inventory AS ci
 		JOIN item_instance AS ii ON ii.guid = ci.item
-		WHERE ci.guid = ? AND ci.item = ? LIMIT 1`, s.playerGUID, itemGUID).Scan(&itemEntry, &currentCount)
+		WHERE ci.guid = ? AND ci.item = ? LIMIT 1`, s.playerGUID, itemGUID).Scan(&itemEntry, &currentCount, &ownerGUID)
+	// ItemHandler.cpp:476 — the item was not found.
 	if err != nil || itemEntry == 0 {
+		s.sendSellError(vendorGUID, rawItemGUID, sellErrCantFindItem)
+		return true
+	}
+	// ItemHandler.cpp:404-408 — prevent selling an item owned by someone else.
+	if ownerGUID != 0 && uint64(ownerGUID) != s.playerGUID {
+		s.sendSellError(vendorGUID, rawItemGUID, sellErrCantSellItem)
+		return true
+	}
+	// ItemHandler.cpp:411-415 — prevent selling a non-empty bag.
+	var bagContents int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_inventory WHERE bag = ?", itemGUID).Scan(&bagContents)
+	if bagContents > 0 {
+		s.sendSellError(vendorGUID, rawItemGUID, sellErrCantSellItem)
+		return true
+	}
+	// ItemHandler.cpp:418-422 — prevent selling the currently looted item.
+	if s.activeLoot != nil && s.activeLoot.TargetGUID == rawItemGUID {
+		s.sendSellError(vendorGUID, rawItemGUID, sellErrCantSellItem)
+		return true
+	}
+	// ItemHandler.cpp:423-426 — a still-refundable item is silently ignored
+	// (the client sends both CMSG_SELL_ITEM and CMSG_REFUND_ITEM on right-click).
+	var refundable int64
+	if cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM item_refund_instance WHERE item_guid = ? AND player_guid = ?", itemGUID, s.playerGUID).Scan(&refundable) == nil && refundable > 0 {
+		return true
+	}
+	// ItemHandler.cpp:428-440 — count == 0 is the auto-sell-whole-stack case;
+	// asking for more than the stack holds is rejected.
+	if count == 0 {
+		count = uint32(currentCount)
+	}
+	if uint64(count) > uint64(currentCount) {
+		s.sendSellError(vendorGUID, rawItemGUID, sellErrCantSellItem)
 		return true
 	}
 	var sellPrice int64
 	_ = wdb.QueryRowContext(ctx, "SELECT SellPrice FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&sellPrice)
+	// ItemHandler.cpp:472-474 — SellPrice <= 0 means the merchant doesn't want it.
 	if sellPrice <= 0 {
-		sellPrice = 1
+		s.sendSellError(vendorGUID, rawItemGUID, sellErrCantSellItem)
+		return true
 	}
 	earned := uint32(sellPrice) * uint32(count)
 	s.player.Money += earned
@@ -889,7 +970,9 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
+	// ItemHandler.cpp:497-502 — vendor not found or not interactable.
 	if !s.canInteractWithNPC(ctx, vendorGUID, uint64(unitNPCFlagVendor)) {
+		s.sendSellError(0, 0, sellErrCantFindVendor)
 		return true
 	}
 	slot, err := r.ReadU32()
@@ -901,7 +984,9 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 	if eslot >= 74 && eslot <= 85 {
 		eslot -= 74
 	}
+	// ItemHandler.cpp:531-532 — empty buyback slot.
 	if eslot < 0 || eslot >= 12 || s.buyback[eslot] == nil {
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, 0, buyErrCantFindItem), true)
 		return true
 	}
 
