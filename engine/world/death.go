@@ -1296,8 +1296,11 @@ func (s *session) applySelfResurrectEffect(spell wotlk.Spell) {
 }
 
 // creatureIsSpiritService resolves the npcflag of a spawned creature and
-// mirrors Unit::IsSpiritService (UNIT_NPC_FLAG_SPIRITHEALER | SPIRITGUIDE).
-func (s *session) creatureIsSpiritService(ctx context.Context, guid uint64) bool {
+// tests it against the caller's mask: Unit::IsSpiritService
+// (UNIT_NPC_FLAG_SPIRITHEALER | SPIRITGUIDE) for the area-spirit-healer
+// handlers, UNIT_NPC_FLAG_SPIRITHEALER alone for the activate handler
+// (NPCHandler.cpp:198 passes only SPIRITHEALER).
+func (s *session) creatureIsSpiritService(ctx context.Context, guid uint64, mask uint32) bool {
 	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil || guid == 0 {
 		return false
 	}
@@ -1315,7 +1318,7 @@ func (s *session) creatureIsSpiritService(ctx context.Context, guid uint64) bool
 	if err != nil {
 		return false
 	}
-	return npcFlag&npcFlagSpiritService != 0
+	return npcFlag&mask != 0
 }
 
 // sendAreaSpiritHealerTime mirrors BattlegroundMgr::SendAreaSpiritHealerQueryOpcode:
@@ -1357,7 +1360,7 @@ func (s *session) handleAreaSpiritHealerQuery(ctx context.Context, payload []byt
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	if !s.creatureIsSpiritService(ctx, guid) {
+	if !s.creatureIsSpiritService(ctx, guid, npcFlagSpiritService) {
 		return true
 	}
 	if !s.inBattlegroundWaveMap() {
@@ -1393,7 +1396,7 @@ func (s *session) handleAreaSpiritHealerQueue(ctx context.Context, payload []byt
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	if !s.creatureIsSpiritService(ctx, guid) {
+	if !s.creatureIsSpiritService(ctx, guid, npcFlagSpiritService) {
 		return true
 	}
 	if !s.inBattlegroundWaveMap() {
@@ -1459,7 +1462,7 @@ func (s *session) resSicknessSpellID(race uint8) uint32 {
 }
 
 // handleSpiritHealerActivate processes CMSG_SPIRIT_HEALER_ACTIVATE (0x21C).
-// Reference: WorldSession::HandleSpiritHealerActivateOpcode (MiscHandler.cpp:712)
+// Reference: WorldSession::HandleSpiritHealerActivateOpcode (NPCHandler.cpp:198)
 // and WorldSession::SendSpiritResurrect (NPCHandler.cpp:219).
 func (s *session) handleSpiritHealerActivate(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
@@ -1467,10 +1470,10 @@ func (s *session) handleSpiritHealerActivate(ctx context.Context, payload []byte
 	}
 	r := protocol.NewReader(payload)
 	guid, _ := r.ReadU64()
-	if !s.creatureIsSpiritService(ctx, guid) {
+	if !s.creatureIsSpiritService(ctx, guid, npcFlagSpiritHealer) {
 		return true
 	}
-	if !s.canInteractWithNPC(ctx, guid, uint64(npcFlagSpiritService)) {
+	if !s.canInteractWithNPC(ctx, guid, uint64(npcFlagSpiritHealer)) {
 		return true
 	}
 	corpse, hasCorpse := s.loadCorpse(ctx)
