@@ -3652,15 +3652,27 @@ func (s *session) handleGuildBankBuyTab(ctx context.Context, payload []byte) boo
 
 	s.player.Money -= cost
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
-	_, _ = cdb.ExecContext(ctx, "INSERT OR IGNORE INTO guild_bank_tab (guildid, TabId, TabName, TabIcon, TabText) VALUES (?, ?, ?, 'INV_Misc_Bag_08', '')",
-		guildID, tabID, "Tab "+string(rune('1'+tabID)))
 
-	// Reference: Guild::_CreateNewBankTab (Guild.cpp:2404-2425) via
-	// RankInfo::CreateMissingTabsIfNeeded (Guild.cpp:276-300): every rank
-	// gains a rights row for the new tab — full/unlimited for the
-	// guildmaster rank, empty for all others.
+	// Reference: Guild::_CreateNewBankTab (Guild.cpp:2404-2425): the tab-row
+	// delete+insert and all per-rank rights inserts run inside one
+	// CharacterDatabase transaction, and the tab row carries only the
+	// (guildid, TabId) columns == CHAR_INS_GUILD_BANK_TAB — TabName/TabIcon
+	// stay at their '' schema defaults and TabText stays NULL until set.
+	tx, err := cdb.BeginTx(ctx, nil)
+	if err != nil {
+		return true
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO guild_bank_tab (guildid, TabId) VALUES (?, ?)", guildID, tabID); err != nil {
+		return true
+	}
+
+	// Reference: RankInfo::CreateMissingTabsIfNeeded (Guild.cpp:276-300)
+	// via GuildBankRightsAndSlots::SetGuildMasterValues (Guild.h:259-263):
+	// fresh rights rows start at rights 0/slots 0; only the guildmaster
+	// rank (rid 0 == GR_GUILDMASTER) gets FULL rights + unlimited slots.
 	var rankIDs []uint32
-	if rankRows, err := cdb.QueryContext(ctx, "SELECT rid FROM guild_rank WHERE guildid = ?", guildID); err == nil {
+	if rankRows, err := tx.QueryContext(ctx, "SELECT rid FROM guild_rank WHERE guildid = ?", guildID); err == nil {
 		for rankRows.Next() {
 			var rid uint32
 			if err := rankRows.Scan(&rid); err == nil {
@@ -3676,8 +3688,13 @@ func (s *session) handleGuildBankBuyTab(ctx context.Context, payload []byte) boo
 			rights = guildBankRightFull
 			slots = guildWithdrawSlotUnlimited
 		}
-		_, _ = cdb.ExecContext(ctx, "INSERT OR IGNORE INTO guild_bank_right (guildid, TabId, rid, gbright, SlotPerDay) VALUES (?, ?, ?, ?, ?)",
-			guildID, tabID, rid, rights, slots)
+		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO guild_bank_right (guildid, TabId, rid, gbright, SlotPerDay) VALUES (?, ?, ?, ?, ?)",
+			guildID, tabID, rid, rights, slots); err != nil {
+			return true
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return true
 	}
 
 	// Reference: Guild::HandleBuyBankTab (Guild.cpp:1460-1461): broadcast
