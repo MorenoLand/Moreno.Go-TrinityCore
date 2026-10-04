@@ -5144,6 +5144,24 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				for _, effectTarget := range hitTargets {
 					if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
 						targetDamage := chainScaledAmount(damage, eff, chainJumpIndex[effectTarget])
+						// Spell::EffectSchoolDMG (SpellEffects.cpp:354-378): the
+						// Warrior arms are documented no-bridge. Shield Slam
+						// (360-366, SpellFamilyFlags[1] & 0x200 with
+						// GetCategory() == 1209) adds ApplyEffectModifiers of
+						// GetShieldBlockValue(level*24.5, level*34.5) —
+						// blocked on the missing shield-block-value model
+						// (grep for ShieldBlockValue: empty). Victory Rush
+						// (367-369, SpellFamilyFlags[1] & 0x100) runs
+						// ApplyPct(damage, GetTotalAttackPowerValue(
+						// BASE_ATTACK)) — blocked on the missing total-AP
+						// model (standing delta). Shockwave (370-377, Id ==
+						// 46968) adds CalculatePct(GetTotalAttackPowerValue(
+						// BASE_ATTACK), CalculateSpellDamage(EFFECT_2)) —
+						// blocked on both the CalculateSpellDamage standing
+						// delta and the total-AP model. The !unitCaster gates
+						// are vacuous (the caster is always the session player
+						// on these cast paths). Revisit only when the
+						// shield-block-value and total-AP models land.
 						// Spell::EffectSchoolDMG (SpellEffects.cpp:382-393): the
 						// Incinerate Rank 1 & 2 arm (Warlock family,
 						// SpellFamilyFlags[1] & 0x40, SpellIconID 2128) adds
@@ -5258,6 +5276,25 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							s.hasAura(57627) {
 							targetDamage *= 2
 						}
+						// Spell::EffectSchoolDMG (SpellEffects.cpp:669-724):
+						// the Steady Shot arm (Hunter family,
+						// SpellFamilyFlags[1] & 0x1) is a documented
+						// no-bridge. The dazed leg scans the target's
+						// SPELL_AURA_MOD_DECREASE_SPEED auras for SpellIconID
+						// 15 with Dispel 0 and adds Effects[EFFECT_1]
+						// .CalcValue() — blocked on the CalculateSpellDamage
+						// standing delta. The weapon leg adds a ranged weapon
+						// damage roll (GetWeaponDamageRange(RANGED_ATTACK)
+						// summed over the damage slots) plus GetAmmoDPS() *
+						// GetAttackTime(RANGED_ATTACK) * 0.001f — blocked on
+						// the missing ranged weapon-damage model (AmmoDPS is
+						// modeled in player_state.go, but no weapon damage
+						// range exists anywhere in the tree). The npcbot arm
+						// is structural (no npcbot model). The C++ else-if
+						// with the Gore arm above (663-668) cannot misroute:
+						// Gore-flagged spells carry no Steady Shot flag.
+						// Revisit only when the weapon-damage and
+						// CalculateSpellDamage machinery land.
 						// Spell::EffectSchoolDMG (SpellEffects.cpp:515-524): the
 						// Wrath arm (Druid family, SpellFamilyFlags[0] &
 						// 0x00000001) improves the damage by AddPct of the
@@ -5283,6 +5320,26 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 								targetDamage = uint32(int64(targetDamage) + int64(targetDamage)*int64(bonus)/100)
 							}
 						}
+						// Spell::EffectSchoolDMG (SpellEffects.cpp:496-505):
+						// the Ferocious Bite arm (Druid family,
+						// SpellFamilyFlags[0] & 0x000800000, SpellVisual[0]
+						// == 6587) is a documented no-bridge. C++ converts
+						// the energy spent above the spell's cost into damage
+						// at (AP/410 + DamageMultiplier) per point
+						// (ModifyPower(POWER_ENERGY, -30) returns the negative
+						// of the energy actually removed) and adds
+						// CalculatePct(comboPoints * GetTotalAttackPowerValue
+						// (BASE_ATTACK), 7). Blocked on the missing total-AP
+						// model (standing delta; the energy-power drain has no
+						// player power model either, but the AP gap alone
+						// closes the arm). Combo points are modeled
+						// (sessionComboPoints), but bridge nothing while the
+						// AP model is absent. The npcbot arm (506-514) is
+						// structural (no npcbot model). The C++ else-if order
+						// puts Ferocious Bite before the Wrath arm bridged
+						// above — disjoint gates (0x800000 vs 0x1), so no
+						// Ferocious Bite-flagged spell reaches the Wrath
+						// gate. Revisit only when the total-AP model lands.
 						// Spell::EffectSchoolDMG (SpellEffects.cpp:531-624): the
 						// Envenom arm (Rogue family, SpellFamilyFlags[1] &
 						// 0x00000008) — else-if chained with the Eviscerate arm
@@ -5346,6 +5403,25 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 								}
 							}
 						}
+						// Spell::EffectSchoolDMG (SpellEffects.cpp:734-759):
+						// the Paladin arms are documented no-bridge. Hammer
+						// of the Righteous (735-752, SpellFamilyFlags[1] &
+						// 0x00040000) sums CalculateMinMaxDamage(BASE_ATTACK)
+						// over the weapon's damage slots for the weapon DPS
+						// and adds CalculateSpellDamage(EFFECT_2) * average *
+						// 1000 / GetAttackTime(BASE_ATTACK) — blocked on the
+						// missing weapon-damage model and the
+						// CalculateSpellDamage standing delta. Shield of
+						// Righteousness (754-759, SpellFamilyFlags[EFFECT_1]
+						// & 0x100000) adds CalculatePct of GetShieldBlockValue
+						// (level*29.5, level*39.5) at Effects[EFFECT_1]
+						// .CalcValue() — blocked on the missing
+						// shield-block-value model and the CalcValue
+						// machinery. The !unitCaster gates are vacuous (the
+						// caster is always the session player on these cast
+						// paths). Revisit only when the weapon-damage,
+						// shield-block-value, and CalculateSpellDamage
+						// machinery land.
 						// Spell::EffectSchoolDMG (SpellEffects.cpp:767-774):
 						// the Blood Boil arm (DeathKnight family,
 						// SpellFamilyFlags[0] & 0x00040000) is a documented
