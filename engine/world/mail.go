@@ -38,6 +38,16 @@ const (
 	mailErrItemHasExpired        uint32 = 21
 
 	equipErrMailBoundItem uint32 = 72
+	// Reference: ItemDefines.h:107 (enum EquipError)
+	equipErrArtefactsOnlyForOwnCharacters uint32 = 82
+)
+
+// Reference: ItemTemplate.h (enum ItemFlags / ItemFieldFlags)
+const (
+	itemFlagConjured         uint32 = 0x00000002 // ITEM_FLAG_CONJURED (ItemTemplate.h:153)
+	itemFlagIsBoundToAccount uint32 = 0x08000000 // ITEM_FLAG_IS_BOUND_TO_ACCOUNT (ItemTemplate.h:179)
+	itemFieldFlagSoulbound   uint32 = 0x00000001 // ITEM_FIELD_FLAG_SOULBOUND (ItemTemplate.h:119)
+	itemFieldFlagWrapped     uint32 = 0x00000008 // ITEM_FIELD_FLAG_WRAPPED (ItemTemplate.h:117)
 )
 
 // Reference: Player.cpp:179 (uint32 const MAX_MONEY_AMOUNT = int32 max)
@@ -439,8 +449,13 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	targetName, err := reader.ReadCString()
-	if err != nil || targetName == "" {
+	if err != nil {
 		return false
+	}
+	// Reference: MailHandler.cpp:59-60 — an empty target is a silent no-op
+	// (the C++ arm returns without a mail result; Go keeps the connection).
+	if targetName == "" {
+		return true
 	}
 	subject, err := reader.ReadCString()
 	if err != nil {
@@ -464,18 +479,35 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 		ItemGUID uint64
 	}
 	var attachments []itemAttachment
+	emptyAttachment := false
 	for i := uint8(0); i < attachCount; i++ {
 		slot, _ := reader.ReadU8()
 		itemGUID, _ := reader.ReadU64()
-		if itemGUID != 0 {
-			attachments = append(attachments, itemAttachment{Slot: slot, ItemGUID: itemGUID})
+		if itemGUID == 0 {
+			// Reference: MailHandler.cpp:196-200 — an empty attachment GUID
+			// answers (MAIL_SEND, MAIL_ERR_MAIL_ATTACHMENT_INVALID).
+			emptyAttachment = true
+			continue
 		}
+		attachments = append(attachments, itemAttachment{Slot: slot, ItemGUID: itemGUID})
 	}
 	money, _ := reader.ReadU32()
 	cod, _ := reader.ReadU32()
 
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
+		return true
+	}
+	// Reference: MailHandler.cpp:62-67 — the sender must meet
+	// CONFIG_MAIL_LEVEL_REQ ("LevelReq.Mail", default 1, World.cpp:684);
+	// the LANG_MAIL_SENDER_REQ (6611) notification fires and the send is
+	// refused silently (no mail result).
+	mailLevelReq := uint32(1)
+	if s.server != nil {
+		mailLevelReq = s.server.Config.MailLevelReq
+	}
+	if uint32(s.player.Level) < mailLevelReq {
+		s.sendNotification("You must be level " + strconv.FormatUint(uint64(mailLevelReq), 10) + " to send mail.")
 		return true
 	}
 	// Find receiver
@@ -489,15 +521,61 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrCannotSendToSelf, 0, 0, 0), true)
 		return true
 	}
-	var receiverRace, receiverAccount int64
-	_ = cdb.QueryRowContext(ctx, "SELECT race, account FROM characters WHERE guid = ?", receiverGUID).Scan(&receiverRace, &receiverAccount)
-	if s.player.Race != 0 && receiverRace != 0 && teamForRace(s.player.Race) != teamForRace(uint8(receiverRace)) {
+	var receiverRace, receiverAccount, receiverLevel int64
+	_ = cdb.QueryRowContext(ctx, "SELECT race, account, level FROM characters WHERE guid = ?", receiverGUID).Scan(&receiverRace, &receiverAccount, &receiverLevel)
+	// Reference: MailHandler.cpp:196-235 — attachment pre-validation. The
+	// account-bound probe (HasFlag(ITEM_FLAG_IS_BOUND_TO_ACCOUNT)) runs before
+	// the faction check so that cross-faction mail carrying only
+	// account-bound items is allowed; an attachment GUID that is empty or not
+	// in the sender's own inventory (Player::GetItemByGuid) answers
+	// MAIL_ERR_MAIL_ATTACHMENT_INVALID.
+	if emptyAttachment {
+		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrMailAttachmentInvalid, 0, 0, 0), true)
+		return true
+	}
+	type attachmentInfo struct {
+		entry         uint32
+		flags         uint32
+		duration      uint32
+		templateFlags uint32
+	}
+	accountBound := len(attachments) > 0
+	var attInfos []attachmentInfo
+	for _, att := range attachments {
+		var entry, flags, duration int64
+		if err := cdb.QueryRowContext(ctx, "SELECT itemEntry, flags, duration FROM item_instance WHERE guid = ? AND owner_guid = ?", att.ItemGUID, s.playerGUID).Scan(&entry, &flags, &duration); err != nil || entry <= 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrMailAttachmentInvalid, 0, 0, 0), true)
+			return true
+		}
+		var templateFlags int64
+		if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT flags FROM item_template WHERE entry = ?", entry).Scan(&templateFlags)
+		}
+		if templateFlags&int64(itemFlagIsBoundToAccount) == 0 {
+			accountBound = false
+		}
+		attInfos = append(attInfos, attachmentInfo{entry: uint32(entry), flags: uint32(flags), duration: uint32(duration), templateFlags: uint32(templateFlags)})
+	}
+	// Reference: MailHandler.cpp:141-145 — cross-faction mail is refused with
+	// MAIL_ERR_NOT_YOUR_TEAM unless every attachment is account-bound
+	// (the RBAC_PERM_TWO_SIDE_INTERACTION_MAIL arm has no Go permission
+	// wiring — standing delta).
+	if !accountBound && s.player.Race != 0 && receiverRace != 0 && teamForRace(s.player.Race) != teamForRace(uint8(receiverRace)) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrNotYourTeam, 0, 0, 0), true)
+		return true
+	}
+	// Reference: MailHandler.cpp:147-151 — the receiver must meet
+	// CONFIG_MAIL_LEVEL_REQ too; LANG_MAIL_RECEIVER_REQ (6612) fires and the
+	// send is refused silently.
+	if uint32(receiverLevel) < mailLevelReq {
+		s.sendNotification("Recipient must be level " + strconv.FormatUint(uint64(mailLevelReq), 10) + " to receive mail.")
 		return true
 	}
 	var mailCount int64
 	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM mail WHERE receiver = ?", receiverGUID).Scan(&mailCount)
-	if mailCount >= 100 {
+	// Reference: MailHandler.cpp:127-132 — "do not allow to have more than
+	// 100 mails in mailbox"; the C++ arm is mailsCount > 100.
+	if mailCount > 100 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrRecipientCapReached, 0, 0, 0), true)
 		return true
 	}
@@ -508,13 +586,34 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	if len(attachments) == 0 {
 		cod = 0
 	}
-	for _, att := range attachments {
-		var itemFlags int64
-		_ = cdb.QueryRowContext(ctx, "SELECT flags FROM item_instance WHERE guid = ?", att.ItemGUID).Scan(&itemFlags)
-		if itemFlags&1 != 0 {
+	for _, info := range attInfos {
+		// Reference: MailHandler.cpp:209-213 — Item::CanBeTraded(true,
+		// Item.cpp:720): in mail, a soulbound item is unmailable unless it is
+		// account-wide bound (the (!mail || !IsBoundAccountWide()) term).
+		if info.flags&itemFieldFlagSoulbound != 0 && info.templateFlags&itemFlagIsBoundToAccount == 0 {
 			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrEquipError, equipErrMailBoundItem, 0, 0), true)
 			return true
 		}
+		// Reference: MailHandler.cpp:215-219 — an account-wide soulbound
+		// item may only go to the sender's own account.
+		if info.flags&itemFieldFlagSoulbound != 0 && info.templateFlags&itemFlagIsBoundToAccount != 0 && s.accountID != uint32(receiverAccount) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrEquipError, equipErrArtefactsOnlyForOwnCharacters, 0, 0), true)
+			return true
+		}
+		// Reference: MailHandler.cpp:221-225 — conjured items and items
+		// with a duration cannot be mailed.
+		if info.templateFlags&itemFlagConjured != 0 || info.duration != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrEquipError, equipErrMailBoundItem, 0, 0), true)
+			return true
+		}
+		// Reference: MailHandler.cpp:227-231 — a wrapped item cannot be
+		// sent Cash On Delivery.
+		if cod > 0 && info.flags&itemFieldFlagWrapped != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrCantSendWrappedCOD, 0, 0, 0), true)
+			return true
+		}
+	}
+	for _, att := range attachments {
 		// Reference: MailHandler.cpp:218-222 — a non-empty bag cannot be
 		// mailed (Item::IsNotEmptyBag, Item.cpp:298): answer (MAIL_SEND,
 		// MAIL_ERR_EQUIP_ERROR, EQUIP_ERR_CAN_ONLY_DO_WITH_EMPTY_BAGS = 31).
@@ -528,15 +627,30 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 		postageFee = uint32(30 * len(attachments))
 	}
 	totalRequired := postageFee + money
-	if s.player.Money >= totalRequired && postageFee > 0 {
-		s.updateAchievementCriteria(criteriaTypeGoldSpentForMail, 0, postageFee)
-	}
-	if s.player.Money < totalRequired {
+	// Reference: MailHandler.cpp:120-125 — the cost+money overflow arm
+	// answers MAIL_ERR_NOT_ENOUGH_MONEY.
+	if totalRequired < money {
 		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrNotEnoughMoney, 0, 0, 0), true)
 		return true
 	}
-	s.player.Money -= totalRequired
-	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+	isGameMaster := s.player.ExtraFlags&playerExtraGMOn != 0
+	// Reference: MailHandler.cpp:132-136 — game masters bypass the
+	// HasEnoughMoney check (Player::IsGameMaster, Player.h:959).
+	if !isGameMaster && s.player.Money < totalRequired {
+		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrNotEnoughMoney, 0, 0, 0), true)
+		return true
+	}
+	// Reference: MailHandler.cpp:243-244 — Player::SendMailResult(0,
+	// MAIL_SEND, MAIL_OK) fires first, then ModifyMoney(-reqmoney), then
+	// UpdateAchievementCriteria(GOLD_SPENT_FOR_MAIL, cost). ModifyMoney is
+	// a no-op when funds are insufficient (the GM bypass arm above), so the
+	// deduction applies only when covered.
+	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailOk, 0, 0, 0), true)
+	if s.player.Money >= totalRequired {
+		s.player.Money -= totalRequired
+		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+	}
+	s.updateAchievementCriteria(criteriaTypeGoldSpentForMail, 0, postageFee)
 	now := time.Now().Unix()
 	// TrinityCore HandleSendMail (MailHandler.cpp:264-276) takes deliver_delay =
 	// CONFIG_MAIL_DELIVERY_DELAY when the mail carries attachments to a character on
@@ -551,8 +665,8 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	// MAIL_STATIONERY_GM instead of the client-supplied stationery, and
 	// MailDraft::SendMailTo (Mail.cpp:214) gives GM-sent mail a 90-day expire
 	// delay instead of 30 days. Player::IsGameMaster() (Player.h:959) is exactly
-	// the PLAYER_EXTRA_GM_ON extra flag.
-	isGameMaster := s.player.ExtraFlags&playerExtraGMOn != 0
+	// the PLAYER_EXTRA_GM_ON extra flag (isGameMaster was resolved with the
+	// money gates above).
 	stationery = mailSenderStationery(isGameMaster)
 	// MailDraft::SendMailTo (Mail.cpp:203) anchors expire_time on deliver_time, not
 	// on now (MAIL_NORMAL send path).
@@ -589,7 +703,7 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", receiverGUID, att.ItemGUID)
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, receiver) VALUES (?, ?, ?)", nextMailID, att.ItemGUID, receiverGUID)
 	}
-	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(uint32(nextMailID), mailSend, mailOk, 0, 0, 0), true)
+	// Reference: MailHandler.cpp:243 — the MAIL_OK answer carries mail id 0.
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerMoneyUpdate()
 	s.sendPlayerUpdate()
