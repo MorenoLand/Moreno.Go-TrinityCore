@@ -3,8 +3,11 @@ package world
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"sync"
 	"time"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
 
 // Strand of the Ancients (SotA) Constants mirroring TrinityCore BattlegroundSA.h / BattlegroundSA.cpp.
@@ -168,6 +171,13 @@ type saBattlegroundState struct {
 	DemolishersDestroyed map[uint64]uint32
 	GatesDestroyed       map[uint64]uint32
 	StopTicker           chan struct{}
+	// RoundTwoWarnTimer models BattlegroundSA::PostUpdateImpl's InitSecondRound /
+	// UpdateWaitTimer arm: 5s into the second warmup the "round 2 starts in one
+	// minute" broadcast fires (BG_SA_TEXT_ROUND_TWO_START_ONE_MINUTE); at 30s the
+	// half-minute broadcast fires (BG_SA_TEXT_ROUND_TWO_START_HALF_MINUTE).
+	RoundTwoWarnTimer     time.Duration
+	RoundTwoWarned        bool
+	RoundTwoHalfMinWarned bool
 }
 
 func isSAGameObject(entry uint32) bool {
@@ -203,10 +213,16 @@ func (s *Server) getOrCreateSAState(mapID uint32) *saBattlegroundState {
 	}
 	state := s.saState[mapID]
 	if state == nil {
+		// Reference: BattlegroundSA::Reset (BattlegroundSA.cpp:78): the first
+		// attackers are picked with urand(0, 1); rounds after that swap sides.
+		attackers := SATeamAlliance
+		if rand.Intn(2) == 1 {
+			attackers = SATeamHorde
+		}
 		state = &saBattlegroundState{
 			MapID:                mapID,
 			Status:               SAStatusWarmup,
-			Attackers:            SATeamAlliance, // Default Alliance attacks first
+			Attackers:            attackers,
 			WarmupLength:         SAWarmupLength,
 			RoundLength:          SARoundLength,
 			SecondWarmupLength:   SASecondWarmupLength,
@@ -271,7 +287,11 @@ func (sa *saBattlegroundState) canInteractWithObject(entry uint32) bool {
 		return redDestroyed || purpleDestroyed
 
 	case SAGameObjectTitanRelic, SAGameObjectTitanRelic2:
-		return yellowDestroyed && ancientDestroyed
+		// Reference: BattlegroundSA::CanInteractWithObject (BattlegroundSA.cpp:737-760):
+		// the TITAN_RELIC case falls through into CENTRAL_FLAG and then LEFT/RIGHT_FLAG,
+		// so the relic needs yellow AND ancient destroyed plus red-or-purple plus
+		// green-or-blue destroyed.
+		return yellowDestroyed && ancientDestroyed && (redDestroyed || purpleDestroyed) && (greenDestroyed || blueDestroyed)
 
 	default:
 		return true
@@ -390,6 +410,12 @@ func (sa *saBattlegroundState) activateTitanRelic(s *Server, sess *session) {
 		sa.Status = SAStatusSecondWarmup
 		sa.TotalTime = 0
 		sa.TimerEnabled = false
+		// Reference: BattlegroundSA::TitanRelicActivated round-one arm
+		// (BattlegroundSA.cpp:893-958): UpdateWaitTimer = 5000, SignaledRoundTwo =
+		// SignaledRoundTwoHalfMin = false, InitSecondRound = true.
+		sa.RoundTwoWarnTimer = 5 * time.Second
+		sa.RoundTwoWarned = false
+		sa.RoundTwoHalfMinWarned = false
 		sa.resetObjects()
 		s.sendSAAllWorldStates(sa)
 
@@ -500,6 +526,20 @@ func (s *Server) TickSA(sa *saBattlegroundState, delta time.Duration) {
 			sa.EndRoundTimer = sa.RoundLength
 		}
 
+		// Reference: BattlegroundSA::PostUpdateImpl's InitSecondRound/UpdateWaitTimer
+		// arm plus the 30s SignaledRoundTwoHalfMin arm (BattlegroundSA.cpp:319-438).
+		if sa.RoundTwoWarnTimer > 0 {
+			sa.RoundTwoWarnTimer -= delta
+			if sa.RoundTwoWarnTimer <= 0 && !sa.RoundTwoWarned {
+				sa.RoundTwoWarned = true
+				s.broadcastBattlegroundMessage(sa.MapID, "Round 2 will begin in one minute!")
+			}
+		}
+		if !sa.RoundTwoHalfMinWarned && sa.TotalTime >= 30*time.Second {
+			sa.RoundTwoHalfMinWarned = true
+			s.broadcastBattlegroundMessage(sa.MapID, "Round 2 will begin in 30 seconds!")
+		}
+
 		if sa.TotalTime >= sa.SecondWarmupLength {
 			sa.Status = SAStatusRoundTwo
 			sa.TotalTime = 0
@@ -512,13 +552,21 @@ func (s *Server) TickSA(sa *saBattlegroundState, delta time.Duration) {
 		s.sendSATime(sa)
 		// Check round 1 timer expiration (Defenders held for full 10m)
 		if sa.TotalTime >= sa.RoundLength {
-			sa.RoundScores[0].Winner = sa.defenders()
+			// Reference: BattlegroundSA::PostUpdateImpl round-one expiry arm
+			// (BattlegroundSA.cpp:319-438): RoundScores[0].winner = Attackers (the
+			// round-one attackers, who failed to reach the relic in time), then the
+			// roles swap and the second warmup starts with the 5s round-two warning
+			// timer armed (UpdateWaitTimer = 5000, InitSecondRound = true).
+			sa.RoundScores[0].Winner = sa.Attackers
 			sa.RoundScores[0].Time = sa.RoundLength
 
 			sa.Attackers = sa.defenders()
 			sa.Status = SAStatusSecondWarmup
 			sa.TotalTime = 0
 			sa.TimerEnabled = false
+			sa.RoundTwoWarnTimer = 5 * time.Second
+			sa.RoundTwoWarned = false
+			sa.RoundTwoHalfMinWarned = false
 			sa.resetObjects()
 			s.sendSAAllWorldStates(sa)
 
@@ -585,7 +633,14 @@ func (s *Server) endSA(sa *saBattlegroundState, winner int8) {
 	// Reference: BattlegroundSA::EndBattleground (BattlegroundSA.cpp:965): the
 	// winning team gets GetBonusHonorFromKill(1), then BOTH teams get the
 	// completion honor GetBonusHonorFromKill(2), ahead of Battleground::EndBattleground.
+	// The WIN_BG / COMPLETE_BATTLEGROUND criteria arms of the base-class
+	// EndBattleground are covered by creditBattlegroundWin (same pattern as the
+	// AB/EotS/IoC victories). On a draw there is no winning team to credit:
+	// C++'s draw path calls EndBattleground(0), which collides with TEAM_ALLIANCE=0
+	// and grants Alliance the winner honor and the Alliance-wins announcement as
+	// an upstream quirk; Go keeps the draw a true draw instead of replicating it.
 	if winner == 0 || winner == 1 {
+		s.creditBattlegroundWin(sa.MapID, uint32(winner))
 		s.rewardBGEndHonor(sa.MapID, uint32(winner), 1)
 	}
 	s.rewardBGEndHonor(sa.MapID, 0, 2)
@@ -625,6 +680,99 @@ func (s *Server) handleSAPlayerLeave(sess *session) {
 	if s == nil || sess == nil || sess.player == nil || sess.player.Map != SAMapID {
 		return
 	}
+}
+
+// updateSABattles ticks every live SA state, driving the warmup/round timers and
+// round transitions (BattlegroundSA::PostUpdateImpl). BattlegroundMgr::Update
+// (BattlegroundMgr.cpp:94) sweeps all running instances with bg->Update(diff)
+// every BATTLEGROUND_OBJECTIVE_UPDATE_INTERVAL (BattlegroundMgr.h:38 = 1000ms);
+// the 1s gate here mirrors that cadence, like
+// updateArenaBattles/updateAVBattles/updateEOTSBattles.
+func (s *Server) updateSABattles(now time.Time) {
+	if s == nil {
+		return
+	}
+	if !s.saTickLast.IsZero() && now.Sub(s.saTickLast) < time.Second {
+		return
+	}
+	var elapsed time.Duration = time.Second
+	if !s.saTickLast.IsZero() {
+		elapsed = now.Sub(s.saTickLast)
+	}
+	s.saTickLast = now
+	s.saMu.RLock()
+	battles := make([]*saBattlegroundState, 0, len(s.saState))
+	for _, sa := range s.saState {
+		battles = append(battles, sa)
+	}
+	s.saMu.RUnlock()
+	for _, sa := range battles {
+		s.TickSA(sa, elapsed)
+	}
+}
+
+// SAGraveyardIDs mirrors BG_SA_GYEntries (BattlegroundSA.h:466): beach,
+// defender-last, right capturable, left capturable, central capturable.
+var SAGraveyardIDs = [SAMaxGY]uint32{1350, 1349, 1347, 1346, 1348}
+
+// closestSAGraveyard mirrors BattlegroundSA::GetClosestGraveyard
+// (BattlegroundSA.cpp:693-727): attackers fall back to the beach graveyard,
+// defenders to the defender-last graveyard, and either side prefers the nearest
+// capturable graveyard it owns, by 3D exact distance like C++'s GetExactDistSq.
+func (s *Server) closestSAGraveyard(x, y, z float32, team uint32) (wotlk.WorldSafeLoc, bool) {
+	var teamIndex uint32
+	switch team {
+	case teamAlliance:
+		teamIndex = SATeamAlliance
+	case teamHorde:
+		teamIndex = SATeamHorde
+	default:
+		return wotlk.WorldSafeLoc{}, false
+	}
+	if s == nil || s.Data == nil {
+		return wotlk.WorldSafeLoc{}, false
+	}
+	sa := s.getOrCreateSAState(SAMapID)
+	if sa == nil {
+		return wotlk.WorldSafeLoc{}, false
+	}
+	sa.mu.Lock()
+	attackers := sa.Attackers
+	owners := sa.Graveyards
+	sa.mu.Unlock()
+
+	base := SABeachGY
+	if teamIndex != attackers {
+		base = SADefenderLastGY
+	}
+
+	var best wotlk.WorldSafeLoc
+	bestDist := float32(999999.0)
+	found := false
+	consider := func(id uint32) {
+		if id == 0 {
+			return
+		}
+		loc, ok, err := s.Data.WorldSafeLoc(id)
+		if err != nil || !ok {
+			return
+		}
+		dx, dy, dz := loc.X-x, loc.Y-y, loc.Z-z
+		if dist := dx*dx + dy*dy + dz*dz; !found || dist < bestDist {
+			best, bestDist, found = loc, dist, true
+		}
+	}
+	consider(SAGraveyardIDs[base])
+	for i := SARightCapturableGY; i < SAMaxGY; i++ {
+		if owners[i] != teamIndex {
+			continue
+		}
+		consider(SAGraveyardIDs[i])
+	}
+	if found {
+		return best, true
+	}
+	return wotlk.WorldSafeLoc{}, false
 }
 
 func (s *Server) updateSAWorldState(mapID, variableID, value uint32) {

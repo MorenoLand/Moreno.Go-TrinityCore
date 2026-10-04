@@ -600,6 +600,14 @@ func (s *Server) closestGraveyard(ctx context.Context, x, y, z float32, mapID, z
 			return loc, true
 		}
 	}
+	// BattlegroundSA::GetClosestGraveyard replaces the generic zone lookup
+	// wholesale for SotA: beach/defender-last fallback plus the nearest owned
+	// capturable graveyard.
+	if mapID == SAMapID {
+		if loc, found := s.closestSAGraveyard(x, y, z, team); found {
+			return loc, true
+		}
+	}
 	if s.WorldStore == nil || s.WorldStore.DB == nil || s.Data == nil {
 		return wotlk.WorldSafeLoc{}, false
 	}
