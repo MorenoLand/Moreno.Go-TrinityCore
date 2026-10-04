@@ -1074,6 +1074,12 @@ const permissionCommandNPCYell uint32 = 600
 // permissionCommandNPCTame mirrors rbac::RBAC_PERM_COMMAND_NPC_TAME (RBAC.h:469).
 const permissionCommandNPCTame uint32 = 601
 
+// permissionCommandNPCBotAdd gates the ".npcbot add" arm (HandleNpcBotAddCommand,
+// botcommands.cpp:102, GM_COMMANDS). NpcBots defines no RBAC permission for its
+// custom command table, so the ID is a Go-side alias outside the RBAC range;
+// commandAllowed's security>=1 fast path still carries the GM gate.
+const permissionCommandNPCBotAdd uint32 = 10001
+
 // permissionCommandNPCEvade mirrors rbac::RBAC_PERM_COMMAND_NPC_EVADE (RBAC.h:704).
 const permissionCommandNPCEvade uint32 = 837
 
