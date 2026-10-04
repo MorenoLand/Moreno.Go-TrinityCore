@@ -27,6 +27,7 @@ const (
 	characterFlagLockedByBilling uint32 = 0x01000000
 	characterFlagDeclined        uint32 = 0x02000000
 	playerFlagGhost              uint32 = 0x00000010
+	playerFlagOutOfBounds        uint32 = 0x00004000 // PLAYER_FLAGS_IS_OUT_OF_BOUNDS (Player.h:347) — cleared by Player::RepopAtGraveyard
 	playerFlagInPVP              uint32 = 0x00000200
 	playerFlagPVPTimer           uint32 = 0x00040000
 	playerFlagContestedPVP       uint32 = 0x00000100

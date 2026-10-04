@@ -472,25 +472,68 @@ func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 	s.stopMirrorTimers()
 }
 
-// repopAtGraveyard mirrors Player::RepopAtGraveyard: locate the graveyard
-// linked to the ghost zone, teleport there, point the client corpse map at
-// the graveyard, and in battlegrounds automatically queue into the spirit wave.
+// areaFlagNeedFly is AREA_FLAG_NEED_FLY (DBCEnums.h:259): zones flagged
+// this way revive the ghost automatically at the graveyard instead of
+// leaving it a ghost (Player::RepopAtGraveyard, Player.cpp:5117-5122).
+const areaFlagNeedFly uint32 = 0x00001000
+
+// repopAtGraveyard mirrors Player::RepopAtGraveyard (Player.cpp:5109-5157):
+// stop the auto-release countdown, locate the graveyard linked to the ghost
+// zone, teleport there, point the client corpse map at the graveyard, and in
+// battlegrounds automatically queue into the spirit wave. Ghosts that died
+// in unreachable spots are revived at the graveyard instead of staying
+// ghosts.
 func (s *session) repopAtGraveyard(ctx context.Context) {
 	if s.player == nil {
 		return
 	}
+	// Reference clears the repop countdown here (m_deathTimer = 0,
+	// Player.cpp:5135) so the Player::Update auto-release arm cannot fire a
+	// second time for the same death.
+	s.deathTimer = time.Time{}
+
+	// Reference auto-revive (Player.cpp:5117-5122): a NEED_FLY zone, a
+	// transport, or below the map minimum height teleports with
+	// TELE_REVIVE_AT_TELEPORT and converts the corpse to bones first. The
+	// transport leg is bridged via s.player.TransportGUID and the NEED_FLY
+	// leg via the AreaTable DBC entry of the player's area; the
+	// minimum-height leg has no bridge — Go models no terrain min-height, so
+	// the homebind fallback on a missing grave (Player.cpp:5151-5152) is
+	// unreachable too.
+	shouldResurrect := s.player.TransportGUID != 0
+	if !shouldResurrect && s.isDeadOrGhost() && s.areaID != 0 && s.server != nil && s.server.Data != nil {
+		if area, found, err := s.server.Data.Area(s.areaID); err == nil && found && area.Flags&areaFlagNeedFly != 0 {
+			shouldResurrect = true
+		}
+	}
+	if shouldResurrect {
+		s.spawnCorpseBones(ctx)
+	}
+
 	grave, ok := s.server.closestGraveyard(ctx, s.player.X, s.player.Y, s.player.Z, s.player.Map, s.player.Zone, playerTeam(s.player.Race))
 	if ok {
 		s.teleportTo(grave.MapID, grave.X, grave.Y, grave.Z, s.player.Orientation)
-		packet := protocol.NewBuffer(16)
-		packet.WriteU32(grave.MapID)
-		packet.WriteF32(grave.X)
-		packet.WriteF32(grave.Y)
-		packet.WriteF32(grave.Z)
-		_ = s.write(uint16(protocol.OpcodeSMSG_DEATH_RELEASE_LOC), packet.Bytes(), true)
+		if shouldResurrect {
+			// TELE_REVIVE_AT_TELEPORT: TeleportTo resurrects at half
+			// health/mana inside the teleport (Player.cpp:1749-1750).
+			s.resurrectPlayer(ctx, 0.5)
+		} else if s.isDeadOrGhost() {
+			// SMSG_DEATH_RELEASE_LOC is sent only when dead (Player.cpp:5146);
+			// the alive homebind-fallback caller skips it.
+			packet := protocol.NewBuffer(16)
+			packet.WriteU32(grave.MapID)
+			packet.WriteF32(grave.X)
+			packet.WriteF32(grave.Y)
+			packet.WriteF32(grave.Z)
+			_ = s.write(uint16(protocol.OpcodeSMSG_DEATH_RELEASE_LOC), packet.Bytes(), true)
+		}
 	} else {
 		s.debug("no graveyard found, staying at current location", "account", s.accountName, "guid", s.playerGUID)
 	}
+
+	// Reference clears PLAYER_FLAGS_IS_OUT_OF_BOUNDS on every repop
+	// (Player.cpp:5155); Go never sets the flag, so the clear is a no-op.
+	s.player.PlayerFlags &^= playerFlagOutOfBounds
 
 	// In battlegrounds, automatically queue for wave resurrection
 	switch s.player.Map {
