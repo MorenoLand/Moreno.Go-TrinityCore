@@ -40,7 +40,9 @@ const (
 	tradeSlotCount       = 7
 	tradeSlotTradedCount = 6
 	tradeSlotNonTraded   = 6
-	tradeDistance        = 11.111111
+	// TRADE_DISTANCE (ObjectDefines.h:27) — 11.11f. Compared in 2D
+	// (IsWithinDistInMap(..., false), Object.cpp:1166).
+	tradeDistance = 11.11
 )
 
 type tradeSlotItem struct {
@@ -363,6 +365,29 @@ func (s *session) handleInitiateTrade(ctx context.Context, payload []byte) bool 
 		_ = s.sendTradeStatus(tradeStatusYouDead, 0, 0, 0, 0, 0)
 		return true
 	}
+	// Reference: WorldSession::HandleInitiateTradeOpcode (TradeHandler.cpp:606-610):
+	// UNIT_STATE_STUNNED on the initiator answers TRADE_STATUS_YOU_STUNNED.
+	// Go's model is the stun aura itself (conditions.go:625 — the same
+	// HandleAuraModStun arm that sets UNIT_STATE_STUNNED in C++).
+	if s.hasAuraType(spellAuraModStun) {
+		_ = s.sendTradeStatus(tradeStatusYouStunned, 0, 0, 0, 0, 0)
+		return true
+	}
+	// Reference: TradeHandler.cpp:612-616 — WorldSession::isLogingOut()
+	// (_logoutTime set by CMSG_LOGOUT_REQUEST) answers TRADE_STATUS_YOU_LOGOUT.
+	// logoutAt is Go's pending-logout-timer model (characters.go:2730).
+	if !s.logoutAt.IsZero() {
+		_ = s.sendTradeStatus(tradeStatusYouLogout, 0, 0, 0, 0, 0)
+		return true
+	}
+	// Reference: TradeHandler.cpp:618-622 — an in-flight initiator answers
+	// TRADE_STATUS_TARGET_TO_FAR (C++ reports the far arm here, not a
+	// dedicated taxi status). isInFlight mirrors UNIT_STATE_IN_FLIGHT
+	// (taxi.go:561).
+	if s.isInFlight() {
+		_ = s.sendTradeStatus(tradeStatusTargetTooFar, 0, 0, 0, 0, 0)
+		return true
+	}
 	// Reference: WorldSession::HandleInitiateTradeOpcode (TradeHandler.cpp:624-631):
 	// level below CONFIG_TRADE_LEVEL_REQ ("LevelReq.Trade", default 1) ->
 	// notification + TRADE_STATUS_CLOSE_WINDOW before the target is even looked up.
@@ -387,16 +412,28 @@ func (s *session) handleInitiateTrade(ctx context.Context, payload []byte) bool 
 		_ = s.sendTradeStatus(tradeStatusTargetDead, 0, 0, 0, 0, 0)
 		return true
 	}
-	// Reference: WorldSession::HandleInitiateTradeOpcode (TradeHandler.cpp:670-675):
-	// the target ignoring the initiator answers TRADE_STATUS_IGNORE_YOU. C++
-	// checks this after the dead/stunned/logout guards and before the faction
-	// term; Go conservatively skips the stunned/logout/in-flight guards (no
-	// model), so the check lands between the dead check and the faction check.
+	// Reference: WorldSession::HandleInitiateTradeOpcode (TradeHandler.cpp:658-675):
+	// target in-flight -> TARGET_TO_FAR, target stunned -> TARGET_STUNNED,
+	// target logging out -> TARGET_LOGOUT, all before the ignore check.
+	if targetSess.isInFlight() {
+		_ = s.sendTradeStatus(tradeStatusTargetTooFar, 0, 0, 0, 0, 0)
+		return true
+	}
+	if targetSess.hasAuraType(spellAuraModStun) {
+		_ = s.sendTradeStatus(tradeStatusTargetStunned, 0, 0, 0, 0, 0)
+		return true
+	}
+	if !targetSess.logoutAt.IsZero() {
+		_ = s.sendTradeStatus(tradeStatusTargetLogout, 0, 0, 0, 0, 0)
+		return true
+	}
+	// Reference: WorldSession::HandleInitiateTradeOpcode (TradeHandler.cpp:679-684):
+	// the target ignoring the initiator answers TRADE_STATUS_IGNORE_YOU.
 	if s.server.chatIgnoredBy(targetSess.playerGUID, s.playerGUID) {
 		_ = s.sendTradeStatus(tradeStatusIgnoreYou, 0, 0, 0, 0, 0)
 		return true
 	}
-	// Reference: WorldSession::HandleInitiateTradeOpcode (TradeHandler.cpp:677-684):
+	// Reference: WorldSession::HandleInitiateTradeOpcode (TradeHandler.cpp:686-693):
 	// cross-faction trade is refused with TRADE_STATUS_WRONG_FACTION unless
 	// CONFIG_ALLOW_TWO_SIDE_TRADE ("AllowTwoSide.Trade", default false) is set
 	// or the session holds RBAC_PERM_ALLOW_TWO_SIDE_TRADE (id 51). C++ checks
@@ -413,7 +450,9 @@ func (s *session) handleInitiateTrade(ctx context.Context, payload []byte) bool 
 			return true
 		}
 	}
-	if targetSess.player.Map != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, targetSess.player.X, targetSess.player.Y, targetSess.player.Z) > tradeDistance {
+	// Reference: TradeHandler.cpp:695-699 — IsWithinDistInMap(..., false) is a
+	// 2D (X/Y only) check at TRADE_DISTANCE.
+	if targetSess.player.Map != s.player.Map || distance2D(s.player.X, s.player.Y, targetSess.player.X, targetSess.player.Y) > tradeDistance {
 		_ = s.sendTradeStatus(tradeStatusTargetTooFar, 0, 0, 0, 0, 0)
 		return true
 	}
@@ -650,7 +689,8 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 	// with a BACK_TO_TRADE notice to themselves (TradeData::SetAccepted(false)
 	// with forTrader=false -> the owner's session), and the trade window stays
 	// open — the partner is not notified and neither side tears down.
-	if partner.player == nil || s.player.Map != partner.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, partner.player.X, partner.player.Y, partner.player.Z) > tradeDistance {
+	// C++ uses IsWithinDistInMap(..., false): 2D at TRADE_DISTANCE.
+	if partner.player == nil || s.player.Map != partner.player.Map || distance2D(s.player.X, s.player.Y, partner.player.X, partner.player.Y) > tradeDistance {
 		_ = s.sendTradeStatus(tradeStatusTargetTooFar, 0, 0, 0, 0, 0)
 		s.trade.Accepted = false
 		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)

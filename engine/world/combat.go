@@ -1477,6 +1477,15 @@ func distance3D(x1, y1, z1, x2, y2, z2 float32) float64 {
 	return math.Sqrt(dx*dx + dy*dy + dz*dz)
 }
 
+// distance2D mirrors WorldObject::_IsWithinDist with is3D=false
+// (Object.cpp:1166 — IsInDist2d): the trade range checks
+// (TradeHandler.cpp:271/695, TRADE_DISTANCE) compare X/Y only.
+func distance2D(x1, y1, x2, y2 float32) float64 {
+	dx := float64(x1 - x2)
+	dy := float64(y1 - y2)
+	return math.Sqrt(dx*dx + dy*dy)
+}
+
 // rollMeleeOutcome implements TrinityCore's single-roll melee attack table:
 // MISS > DODGE > PARRY > GLANCING > BLOCK > CRIT > CRUSHING > HIT
 // Reference: Unit::RollMeleeOutcomeAgainst (Unit.cpp:2189-2320).
