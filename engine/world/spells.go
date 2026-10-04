@@ -11516,6 +11516,71 @@ func (s *session) channelTargetAlive(ctx context.Context, targetGUID uint64) boo
 	return ok && target.Health > 0
 }
 
+// channelTargetAuraStale answers the aura legs of
+// Spell::UpdateChanneledTargetList (Spell.cpp:2977-3013). C++ only
+// rechecks range for effects that both apply an aura and need an alive
+// target (channelAuraMask = APPLY_AURA effects & m_channelTargetEffectMask,
+// Spell.cpp:2968-2975); Go folds the mask into "any APPLY_AURA effect".
+// Either leg ends the channel on the same SendChannelUpdate(0) + finish()
+// completion the dead-target check uses: the target's aura application is
+// gone (dispelled — Spell.cpp:3012-3013, the effect mask never clears), or
+// the caster drifted out of range and C++ strips the target's aura
+// application (Spell.cpp:3004-3010, RemoveAura(aurApp)) — with Go's
+// single-target channel the stripped effect is the whole target list, so
+// the channel ends instead of limping on. Range is GetMaxRange(IsPositive)
+// + SPELLMOD_RANGE (ApplySpellMod, Spell.cpp:2980-2981; the npcbot arm is
+// structural — Go channels are player-cast) + 10% tolerance capped at
+// MAX_SPELL_RANGE_TOLERANCE (3.0, Spell.h:69). The self-target arm
+// (m_caster == unit) needs no range check, and dest-only channels carry
+// no unit target.
+func (s *session) channelTargetAuraStale(ctx context.Context, spell wotlk.Spell, targetGUID uint64) bool {
+	hasAuraEffect := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == spellEffectApplyAura {
+			hasAuraEffect = true
+			break
+		}
+	}
+	if !hasAuraEffect || targetGUID == 0 || targetGUID == s.playerGUID || s.server == nil || s.server.Data == nil || s.player == nil {
+		return false
+	}
+	if !s.targetHasAura(ctx, targetGUID, spell.ID) {
+		return true
+	}
+	rangeEntry, ok, _ := s.server.Data.SpellRange(spell.RangeIndex)
+	if !ok {
+		return false
+	}
+	maxRange := rangeEntry.MaxFriendly
+	if isHarmfulSpell(spell) {
+		maxRange = rangeEntry.MaxHostile
+	}
+	if maxRange <= 0 {
+		return false
+	}
+	rng := s.applySpellModFloat(spell, spellModRange, float64(maxRange))
+	if tol := rng * 0.1; tol < 3.0 {
+		rng += tol
+	} else {
+		rng += 3.0
+	}
+	var tMap uint32
+	var tx, ty, tz float32
+	if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		tMap, tx, ty, tz = ts.player.Map, ts.player.X, ts.player.Y, ts.player.Z
+	} else if t, ok := s.getCombatTarget(ctx, targetGUID); ok {
+		tMap, tx, ty, tz = t.Map, t.X, t.Y, t.Z
+	} else {
+		// Unresolvable here is owned by the dead-target check above;
+		// this leg does not end the channel on its own.
+		return false
+	}
+	if tMap != s.player.Map {
+		return true
+	}
+	return distance3D(s.player.X, s.player.Y, s.player.Z, tx, ty, tz) > rng
+}
+
 // channelTick applies one periodic effect tick of the channeled spell and
 // schedules the next while the channel is alive.
 func (s *session) channelTick() {
@@ -11540,6 +11605,14 @@ func (s *session) channelTick() {
 	// result and no interrupt broadcast). Go has no per-tick update loop,
 	// so the check rides the period tick instead of the 50ms server tick.
 	if targetGUID != 0 && !s.channelTargetAlive(ctx, targetGUID) {
+		s.expireChannelAuras(channel)
+		s.finishChannel()
+		return
+	}
+	// Spell::UpdateChanneledTargetList (Spell.cpp:2977-3013): the aura legs
+	// (out-of-range strip, dispelled) ride the same period tick as the
+	// dead-target recheck above.
+	if targetGUID != 0 && s.channelTargetAuraStale(ctx, spell, targetGUID) {
 		s.expireChannelAuras(channel)
 		s.finishChannel()
 		return
