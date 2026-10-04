@@ -11393,9 +11393,27 @@ func (s *session) finishChannel() {
 	}
 	channel.Stopped = true
 	spellID := channel.SpellID
+	spell := channel.Spell
 	s.castMu.Unlock()
 
 	s.sendChannelUpdate(0)
+	// Spell::finish (Spell.cpp:3959-3983): the natural channel end calls
+	// finish() (ok=true), so the banked-potion flush and the
+	// SPELL_ATTR0_STOP_ATTACK_TARGET attack stop fire here too, in C++
+	// relative order (potion 3959-3964, attack stop 3978-3983). The potion
+	// flush's !m_triggeredByAuraSpell and IsIgnoringCooldowns gates
+	// (Spell.cpp:7506-7509, TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD) are
+	// vacuous: Go channels start only on the client cast path
+	// (finishSpellCast's channeled arm), never with triggered flags.
+	// The remaining finish legs have no Go bridge: UpdateInterruptMask
+	// and the UNIT_STATE_CASTING clear have no model (Go tracks
+	// cast/channel state in castMu, cleared above); the possessed-puppet
+	// unsummon needs the charm model Go does not have; ReleaseSpellFocus,
+	// the statue unsummon and IsAutoActionResetSpell need creature casters
+	// (every Go cast runs on a player session) and Go has no attack-timer
+	// model at all.
+	s.updatePotionCooldown(spell)
+	s.stopAttackOnSpellFinish(spell)
 	s.debug("channel finished", "account", s.accountName, "spell", spellID)
 }
 
