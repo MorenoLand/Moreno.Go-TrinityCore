@@ -534,6 +534,31 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 // triggerCreatureEvade resets a creature's combat state, clears threat & auras,
 // restores health to max, and routes it back to its spawn position with Evading = true.
 // Reference: TrinityCore Creature::EnterEvadeMode (Creature.cpp).
+//
+// CreatureAI::_EnterEvadeMode (CreatureAI.cpp:294-316) leg audit, in C++ relative
+// order: RemoveAurasOnEvade (Unit.cpp:4343) is bridged via clearCreatureAuras with
+// two deltas — C++ keeps SPELL_AURA_CONTROL_VEHICLE/CLONE_CASTER auras (Go has no
+// aura-type model for either, so the clear is unconditional) and skips the removal
+// entirely for charmed/player-owned creatures (vacuous here — OwnerGUID != 0
+// motions return through updatePetMotion ahead of the combat tick, so they never
+// reach this function). CombatStop(true) is bridged (threat own-table and
+// victim halves, c3701e6/dc4885d; attack stop). LoadCreaturesAddon has no bridge —
+// Go models only creature_addon/creature_template_addon's path_id (loadCreaturePathID);
+// addon flags/emotes/auras/mount are unmodeled. SetLootRecipient(nullptr),
+// ResetPlayerDamageReq, SetLastDamagedTime(0) have no bridge — Go carries no
+// loot-recipient/tapped-by/damage-req model on creatures. SetCannotReachTarget(false)
+// is vacuous (the flag can never be set, see the no-path note below).
+// DoNotReacquireSpellFocusTarget is vacuous (creature casts acquire no spell focus).
+// SetTarget(Empty) is bridged (TargetGUID=0). GetSpellHistory()->ResetAllCooldowns()
+// is vacuous — SpellCooldowns/SpellCategoryCooldowns live only on pet motions
+// (pet_cooldowns.go, pets.go:2022, pet_save.go), and pet motions never route here,
+// while world creature casts (castCreatureSpell, the combat tick below) never read
+// or write either map, so there is nothing to reset. EngagementOver()->AtDisengage()
+// has no AI-disengage model; the Go analog is InCombat=false plus the Eluna
+// On_Reset/On_LeaveCombat hooks already fired above, in Eluna::EnterEvadeMode
+// (CreatureHooks.cpp:202) order. Health is restored at evade start where C++
+// restores it on home arrival (HomeMovementGenerator::DoFinalize::SetSpawnHealth);
+// that delta is documented with the JustReachedHome note below.
 func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotion, now time.Time) {
 	if motion == nil {
 		return
