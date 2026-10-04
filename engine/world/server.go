@@ -358,6 +358,8 @@ type session struct {
 	arenaTeamInvited          uint32
 	bgQueues                  [2]bgQueueEntry
 	afkReporters              map[uint64]struct{}
+	afkReportedCount          uint8     // Player::CanReportAfkDueToLimit (Player.cpp:22514): 15 reports per 5 minutes
+	afkReportWindowEnd        time.Time // lazy reset point for afkReportedCount (== Player::UpdateAfkReport, Player.cpp:20715)
 	targetGlyphSlot           uint8
 	activeCast                *activeCastState
 	summonExpire              time.Time

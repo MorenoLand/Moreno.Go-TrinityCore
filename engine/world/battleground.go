@@ -630,22 +630,69 @@ func (s *session) handleReportPvPAfk(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	targetGUID, _ := r.ReadU64()
 
-	if s.server != nil && targetGUID != s.playerGUID {
-		targetSess := s.server.findSessionByGUID(targetGUID)
-		if targetSess != nil && targetSess.player != nil {
-			targetSess.writeMu.Lock()
-			if targetSess.afkReporters == nil {
-				targetSess.afkReporters = make(map[uint64]struct{})
-			}
-			targetSess.afkReporters[s.playerGUID] = struct{}{}
-			reportCount := len(targetSess.afkReporters)
-			targetSess.writeMu.Unlock()
+	if s.server == nil {
+		return true
+	}
+	targetSess := s.server.findSessionByGUID(targetGUID)
+	if targetSess == nil || targetSess.player == nil {
+		return true
+	}
 
-			s.debug("reported player for pvp afk", "account", s.accountName, "target", targetGUID, "reports", reportCount)
-			if reportCount >= 3 {
-				targetSess.applyAura(43680) // Idle debuff
-			}
-		}
+	// Player::ReportedAfkBy (Player.cpp:22526-22529): the report only counts when both
+	// players share the same live battleground, that battleground is in progress, and
+	// both are on the same team. Go has no live battleground instance model outside
+	// arenas, so the gates are mapped onto the live arena state; reports on non-arena
+	// maps are silent no-ops, as they would be in C++ with GetBattleground() null.
+	arena := s.server.findArenaState(s.player.Map, 0)
+	if arena == nil {
+		return true
+	}
+	arena.mu.Lock()
+	reporterTeam, reporterIn := arena.PlayerTeams[s.playerGUID]
+	targetTeam, targetIn := arena.PlayerTeams[targetGUID]
+	gates := reporterIn && targetIn && reporterTeam == targetTeam && arena.Status == ArenaStatusInProgress
+	arena.mu.Unlock()
+	if !gates {
+		return true
+	}
+
+	// Player::CanReportAfkDueToLimit (Player.cpp:22514-22521): a player can complain
+	// about 15 people per 5 minutes. The window resets on a 5-minute timer
+	// (Player::UpdateAfkReport, Player.cpp:20715-20721), evaluated lazily here.
+	now := time.Now()
+	s.writeMu.Lock()
+	if now.After(s.afkReportWindowEnd) {
+		s.afkReportWindowEnd = now.Add(5 * time.Minute)
+		s.afkReportedCount = 0
+	}
+	allowed := s.afkReportedCount < 15
+	s.afkReportedCount++
+	s.writeMu.Unlock()
+	if !allowed {
+		return true
+	}
+
+	// Player::ReportedAfkBy (Player.cpp:22531-22542): no duplicate reporters, and no
+	// report against a target already carrying Idle (43680) or Inactive (43681). On
+	// reaching CONFIG_BATTLEGROUND_REPORT_AFK reporters (default 3) the Idle debuff is
+	// cast and the reporter set is cleared.
+	targetSess.writeMu.Lock()
+	if targetSess.afkReporters == nil {
+		targetSess.afkReporters = make(map[uint64]struct{})
+	}
+	_, dup := targetSess.afkReporters[s.playerGUID]
+	if !dup && !targetSess.hasAura(43680) && !targetSess.hasAura(43681) {
+		targetSess.afkReporters[s.playerGUID] = struct{}{}
+	}
+	reportCount := len(targetSess.afkReporters)
+	if reportCount >= 3 {
+		targetSess.afkReporters = make(map[uint64]struct{})
+	}
+	targetSess.writeMu.Unlock()
+
+	s.debug("reported player for pvp afk", "account", s.accountName, "target", targetGUID, "reports", reportCount)
+	if reportCount >= 3 {
+		targetSess.applyAura(43680) // Idle debuff
 	}
 	return true
 }
