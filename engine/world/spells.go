@@ -5440,7 +5440,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.beginSpellModTaking()
 				defer s.endSpellModTaking()
 				applyEffects(context.Background())
-				s.consumeExtraAttacks(context.Background(), spellExtraAttackVictim(target, explicitUnitGUID))
+				// The extra-attacks spend runs only for spells carrying
+				// SPELL_EFFECT_ADD_EXTRA_ATTACKS (Spell.cpp:3754) — a
+				// pending counter from another cast survives this finish.
+				if spellHasEffect(spell, spellEffectAddExtraAttacks) {
+					s.consumeExtraAttacks(context.Background(), spellExtraAttackVictim(target, explicitUnitGUID))
+				}
 				s.procSpellFinishAuraTriggers(context.Background(), spell)
 				s.stopAttackOnSpellFinish(spell)
 			})
@@ -5529,8 +5534,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// Spell::_handle_finish_phase (Spell.cpp:3753-3761): a finished cast
 	// whose spell carries SPELL_EFFECT_ADD_EXTRA_ATTACKS spends the
 	// caster's pending extra attacks as extra base-attack swings against
-	// the cast's original unit target.
-	s.consumeExtraAttacks(ctx, spellExtraAttackVictim(target, explicitUnitGUID))
+	// the cast's original unit target. The HasEffect gate is C++'s
+	// (3754): a counter banked by another spell is not spent by this
+	// cast. The null-victim counter burn (3757-3758) lives inside
+	// consumeExtraAttacks.
+	if spellHasEffect(spell, spellEffectAddExtraAttacks) {
+		s.consumeExtraAttacks(ctx, spellExtraAttackVictim(target, explicitUnitGUID))
+	}
 	s.procSpellFinishAuraTriggers(ctx, spell)
 
 	// Spell::handle_immediate tail (Spell.cpp:3616-3625):
@@ -6636,6 +6646,26 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	if comboGainTarget != 0 && comboGain > 0 {
 		s.addSessionComboPoints(comboGainTarget, comboGain)
 	}
+	// Spell::_handle_finish_phase (Spell.cpp:3753-3758): a triggered
+	// cast whose spell carries SPELL_EFFECT_ADD_EXTRA_ATTACKS spends
+	// the caster's pending extra attacks against the cast's original
+	// unit target — targetGUID is that target here (triggered casts
+	// carry no packet target data, so no spellExtraAttackVictim
+	// resolution applies). The HasEffect gate is C++'s (3754); the
+	// null-victim counter burn (3757-3758) lives inside
+	// consumeExtraAttacks. The take leg (3734-3736) is dead on this
+	// path (documented above); the combo give runs just above.
+	if spellHasEffect(spell, spellEffectAddExtraAttacks) {
+		s.consumeExtraAttacks(ctx, targetGUID)
+	}
+	// Spell::_handle_finish_phase (Spell.cpp:3760-3777): the on-finish
+	// proc event — PROC_SPELL_PHASE_FINISH over PROC_SPELL_TYPE_MASK_ALL
+	// with the m_procAttacker fallback type mask. The m_originalCaster
+	// gate is vacuous (every Go cast runs on a player session); the
+	// triggered cast's TRIGGERED_DISALLOW_PROC_EVENTS state rides
+	// s.triggeredNoProcEvents into the event, matching C++'s
+	// CanSpellTriggerProcOnEvent suppression on this path.
+	s.procSpellFinishAuraTriggers(ctx, spell)
 	s.stopAttackOnSpellFinish(spell)
 
 	// Spell::_cast (Spell.cpp:3502-3511): a triggered cast (C++
