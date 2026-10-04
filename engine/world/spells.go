@@ -5172,6 +5172,31 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							s.targetHasFamilyAuraEffect(effCtx, effectTarget, spellAuraPeriodicDamage, spellFamilyWarlock, 0x4) {
 							targetDamage += targetDamage / 4
 						}
+						// Spell::EffectSchoolDMG (SpellEffects.cpp:397-438):
+						// the Conflagrate arm (Warlock family, TargetAuraState
+						// == AURA_STATE_CONFLAGRATE) is a documented
+						// no-bridge. C++ picks the target's Immolate
+						// (preferred) or Shadowflame (SpellFamilyFlags[2] &
+						// 0x00000002) periodic-damage aura cast by the caster,
+						// runs its tick amount through SpellDamageBonusTaken
+						// (..., DOT), multiplies by the aura spell's DBC
+						// GetMaxTicks() for the damage potential, adds
+						// CalculatePct(potential, CalculateSpellDamage
+						// (EFFECT_1)) to the direct damage, rewrites the
+						// Conflagrate DoT component's base points to
+						// CalculatePct(potential, CalculateSpellDamage
+						// (EFFECT_2)) / GetMaxTicks() with apply_direct_bonus
+						// = false, and consumes the aura unless the caster
+						// carries Glyph of Conflagrate (56235). Go lacks every
+						// structural piece: no DBC tick-count lookup
+						// (GetMaxTicks — Go only hard-codes tick counts for
+						// Swiftmend), no CalculateSpellDamage bridge
+						// (standing delta), no per-cast m_spellValue
+						// EffectBasePoints override (Go's aura amounts come
+						// from the pristine DBC row), and executeSpellDamage
+						// always runs its spell-power Done leg with no
+						// apply_direct_bonus skip. Revisit only when the
+						// DoT-potential machinery lands.
 						// Spell::EffectSchoolDMG (SpellEffects.cpp:460-479): the
 						// Improved Mind Blast arm (Priest family,
 						// SpellFamilyFlags[0] & 0x00002000) fires only while the
