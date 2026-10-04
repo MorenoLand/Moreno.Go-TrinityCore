@@ -26,6 +26,22 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocoltrace"
 )
 
+// upperOnlyLatin mirrors TrinityCore Utf8ToUpperOnlyLatin (AuthSession.cpp,
+// AccountInfo::LoadResult): only ASCII a-z are uppercased, so logins with
+// accented characters keep working against the ASCII-only UPPER() in the
+// SQLite statement overrides.
+func upperOnlyLatin(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r >= 'a' && r <= 'z' {
+			r -= 'a' - 'A'
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 const (
 	logonChallenge        byte   = 0x00
 	logonProof            byte   = 0x01
@@ -307,7 +323,7 @@ func (s *session) handleLogonChallenge(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	login = strings.TrimSpace(strings.ToUpper(login))
+	login = strings.TrimSpace(upperOnlyLatin(login))
 	s.build = build
 	s.postBC = s.build > preBCMaxBuild
 	s.login = login
@@ -499,7 +515,7 @@ func (s *session) handleReconnectChallenge(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	login = strings.TrimSpace(strings.ToUpper(login))
+	login = strings.TrimSpace(upperOnlyLatin(login))
 	s.build = build
 	s.postBC = build > preBCMaxBuild
 	s.login = login
@@ -700,7 +716,7 @@ func loadAccount(ctx context.Context, store *database.Store, login, remoteIP str
 	result.Security = uint8(security)
 	result.TotpConfigured = totp != nil
 	result.TotpSecret = totp
-	result.Login = strings.ToUpper(result.Login)
+	result.Login = upperOnlyLatin(result.Login)
 	if len(salt) != crypto.SRP6SaltLength || len(verifier) != crypto.SRP6VerifierLength {
 		return nil, errors.New("account SRP6 data has invalid length")
 	}
