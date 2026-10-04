@@ -219,7 +219,10 @@ func ShouldConvertLoadedCorpseToBones(playerMap, corpseMap uint32, alive bool) b
 // the corpse in place, keep health at zero, raise the release timer flag on
 // non-instance maps (the Go server has no instance maps), start the 6 minute
 // auto-release timer, and notify the client of the corpse reclaim delay.
-func (s *session) killPlayer(ctx context.Context) {
+// pvpDeath carries Unit::Kill's attacker arm (Unit.cpp:11341-11343): true when
+// the killer resolves to a player (attacker->GetCharmerOrOwnerPlayerOrPlayerItself()),
+// feeding the corpse type and the reclaim delay.
+func (s *session) killPlayer(ctx context.Context, pvpDeath bool) {
 	if s.player == nil || s.player.Health > 0 {
 		return
 	}
@@ -240,6 +243,11 @@ func (s *session) killPlayer(ctx context.Context) {
 	// raised-ghoul pet model). Placed before the penalty/achievement legs,
 	// matching the C++ relative order.
 	s.unsummonPet(ctx, petSaveNotInSlot)
+	// Unit::Kill (Unit.cpp:11341-11343): remember the victim's PvP death for
+	// corpse type and corpse reclaim delay, stored until CreateCorpse (the
+	// SetPvPDeath(player != nullptr) leg). Placed after the pet arm, matching
+	// the C++ relative order.
+	s.pvpDeath = pvpDeath
 	if s.playerLoaded && s.player.PlayerFieldBytes&playerFieldByteReleaseTimer == 0 {
 		s.player.PlayerFieldBytes |= playerFieldByteReleaseTimer
 	}
@@ -266,9 +274,11 @@ func (s *session) killPlayer(ctx context.Context) {
 	s.stopMirrorTimers()
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT))
 	s.sendPlayerUpdate()
-	pvp := false
-	s.updateCorpseReclaimDelay(pvp)
-	s.sendCorpseReclaimDelay(s.corpseReclaimDelaySeconds(pvp))
+	// Player::UpdateCorpseReclaimDelay (Player.cpp:24324) and
+	// Player::GetCorpseReclaimDelay (Player.cpp:24353) read the PvP-death
+	// flag rather than taking a parameter.
+	s.updateCorpseReclaimDelay(s.pvpDeath)
+	s.sendCorpseReclaimDelay(s.corpseReclaimDelaySeconds(s.pvpDeath))
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET death_expire_time = ? WHERE guid = ?", s.deathExpireTime, s.playerGUID)
 	}
@@ -444,13 +454,20 @@ func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 		}
 	}
 
+	// Player::CreateCorpse (Player.cpp:4817-4818): the corpse type comes from
+	// the PvP-death flag, which the creation consumes.
+	corpseType := corpseTypePvE
+	if s.pvpDeath {
+		corpseType = corpseTypePvP
+	}
+	s.pvpDeath = false
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		// Reference Corpse::SaveToDB deletes any previous record first.
 		bytes1, bytes2 := corpseAppearance(s.player)
 		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_DEL_CORPSE", s.playerGUID)
 		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_CORPSE",
 			s.playerGUID, s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.Map,
-			displayID, s.player.Equipment, bytes1, bytes2, s.player.GuildID, corpseFlags(s.player), 0, time.Now().Unix(), corpseTypePvE, 0, s.currentPlayerPhaseMask())
+			displayID, s.player.Equipment, bytes1, bytes2, s.player.GuildID, corpseFlags(s.player), 0, time.Now().Unix(), corpseType, 0, s.currentPlayerPhaseMask())
 	}
 
 	s.player.PlayerFlags |= playerFlagGhost
@@ -468,7 +485,9 @@ func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 	if !loggingOut {
 		s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_UNROOT))
 	}
-	s.sendCorpseReclaimDelay(s.corpseReclaimDelaySeconds(false))
+	// Player::CalculateCorpseReclaimDelay (Player.cpp:24353): at repop time
+	// the PvP leg comes from the corpse type, not the (consumed) flag.
+	s.sendCorpseReclaimDelay(s.corpseReclaimDelaySeconds(corpseType != corpseTypePvE))
 	s.stopMirrorTimers()
 }
 

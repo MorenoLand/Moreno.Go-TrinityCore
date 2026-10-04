@@ -335,6 +335,7 @@ type session struct {
 	overSpeedPings            uint32
 	deathExpireTime           int64
 	deathTimer                time.Time
+	pvpDeath                  bool // PLAYER_EXTRA_PVP_DEATH analog (Player.h:450/971): Unit::Kill records it, CreateCorpse consumes it
 	resurrection              *resurrectionData
 	earnedAchievements        map[uint32]uint32
 	criteriaProgress          map[uint32]*criteriaProgressState

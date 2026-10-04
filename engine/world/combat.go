@@ -546,7 +546,8 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 						playerSess.player.Health = 0
 						playerSess.sendPlayerUpdate()
 						s.server.creditHonorableKill(s, playerSess)
-						playerSess.killPlayer(ctx)
+						// Unit::Kill (Unit.cpp:11341-11343): the attacker is a player.
+						playerSess.killPlayer(ctx, true)
 						// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
 						// pet arm — attacker is the player (player = attacker
 						// itself), so only the attacker's live pet gets
@@ -860,7 +861,8 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 					if s.server != nil {
 						s.server.creditHonorableKill(s, vicSess)
 					}
-					vicSess.killPlayer(ctx)
+					// Unit::Kill (Unit.cpp:11341-11343): the attacker is a player.
+					vicSess.killPlayer(ctx, true)
 					// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
 					// pet arm — attacker is the player, so only the
 					// attacker's live pet gets KilledUnit(victim)

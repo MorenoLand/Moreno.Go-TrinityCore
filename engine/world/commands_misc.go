@@ -759,7 +759,8 @@ func (s *session) handleCmdDamage(ctx context.Context, args []string) {
 	if damage >= target.player.Health {
 		target.player.Health = 0
 		target.sendPlayerUpdate()
-		target.killPlayer(ctx)
+		// GM-issued damage has no player attacker.
+		target.killPlayer(ctx, false)
 		return
 	}
 	target.player.Health -= damage
@@ -807,7 +808,8 @@ func (s *session) handleCmdDie(ctx context.Context, args []string) {
 	}
 	target.player.Health = 0
 	target.sendPlayerUpdate()
-	target.killPlayer(ctx)
+	// GM .die has no player attacker.
+	target.killPlayer(ctx, false)
 }
 
 // handleCmdDismount mirrors HandleDismountCommand (cs_misc.cpp:656-678, RBAC
