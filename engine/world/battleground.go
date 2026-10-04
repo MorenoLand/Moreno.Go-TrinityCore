@@ -406,7 +406,6 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 	arenaSlot, _ := r.ReadU8()
 	asGroup, _ := r.ReadU8()
 	isRated, _ := r.ReadU8()
-	_ = asGroup
 
 	arenaType := uint8(2)
 	switch arenaSlot {
@@ -429,6 +428,12 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 	if s.battlegroundDisabled(ctx, battlegroundAA) {
 		s.debug("arena join rejected: battleground disabled", "account", s.accountName)
 		return true
+	}
+
+	// BattleGroundHandler.cpp:699-709 — the asGroup arm computes err through
+	// Group::CanJoinBattlegroundQueue instead of the solo checks below.
+	if asGroup != 0 {
+		return s.handleBattlemasterJoinArenaGroup(ctx, arenaType, arenaSlot, isRated != 0)
 	}
 
 	// Duplicate-queue protection: player is already in this arena queue (C++ WorldSession::HandleBattlemasterJoinArena
@@ -491,6 +496,177 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 	s.sendBattlefieldStatus(uint8(slot))
 	s.debug("queued for arena", "account", s.accountName, "slot", slot, "type", arenaType, "rated", isRated != 0)
 	return true
+}
+
+// arenaTeamPartySize mirrors ERR_ARENA_TEAM_PARTY_SIZE
+// (SharedDefines.h:3693 — "Incorrect party size for this arena.").
+const arenaTeamPartySize = int32(-3)
+
+// handleBattlemasterJoinArenaGroup processes the asGroup arm of CMSG_BATTLEMASTER_JOIN_ARENA.
+// Reference: WorldSession::HandleBattlemasterJoinArena, group branch
+// (BattleGroundHandler.cpp:700-788) with Group::CanJoinBattlegroundQueue (Group.cpp:2024)
+// specialized for the arena variant (MinPlayerCount == MaxPlayerCount == arenatype, isRated,
+// arenaSlot — so RB/non-random/random queue arms are skipped for BATTLEGROUND_AA and the
+// deserter arm is skipped: Group.cpp:2084 only checks deserters for non-arena queues).
+func (s *session) handleBattlemasterJoinArenaGroup(ctx context.Context, arenaType uint8, arenaSlot uint8, isRated bool) bool {
+	// grp = _player->GetGroup(); no group or non-leader join: silent return == C++
+	// (BattleGroundHandler.cpp:701-705).
+	if s.groupID == 0 {
+		return true
+	}
+	grp := s.server.findGroupByID(s.groupID)
+	if grp == nil || grp.LeaderGUID != s.playerGUID {
+		return true
+	}
+
+	// Group::CanJoinBattlegroundQueue (Group.cpp:2027): LFG group → ERR_LFG_CANT_USE_BATTLEGROUND.
+	err := int32(battlegroundAA) // success: positive values are indexes in BattlemasterList.dbc (SharedDefines.h:3689)
+	if grp.IsLFG {
+		err = groupJoinBattlegroundLFGCantUse
+	} else {
+		// Member sessions in group order (leader first), mirroring the C++ GroupReference walk.
+		members := make([]*session, 0, len(grp.Members))
+		for _, m := range grp.Members {
+			members = append(members, s.server.findSessionByGUID(m.GUID))
+		}
+
+		// The rated team-id arm (Group.cpp:2071-2073) compares each member against the
+		// reference player's team; the reference is the group leader here.
+		var leaderTeamID uint32
+		if isRated {
+			if cdb := s.server.CharactersStore.DB; cdb != nil {
+				dbErr := cdb.QueryRowContext(ctx, "SELECT m.arenaTeamId FROM arena_team_member AS m JOIN arena_team AS t ON t.arenaTeamId = m.arenaTeamId WHERE m.guid = ? AND t.type = ?", s.playerGUID, arenaType).Scan(&leaderTeamID)
+				if dbErr != nil && !errors.Is(dbErr, sql.ErrNoRows) {
+					return false
+				}
+			}
+		}
+
+		// CanJoinBattlegroundQueue per-member checks in C++ order (Group.cpp:2049-2087),
+		// arena-variant subset; the first failing member decides err.
+		leaderTeam := teamForRace(s.player.Race)
+		for _, member := range members {
+			switch {
+			case member == nil || !member.playerLoaded || member.player == nil:
+				// offline member → ERR_BATTLEGROUND_JOIN_FAILED (Group.cpp:2049-2051)
+				err = groupJoinBattlegroundFailed
+			case teamForRace(member.player.Race) != leaderTeam:
+				// cross-faction → ERR_BATTLEGROUND_JOIN_TIMED_OUT (Group.cpp:2056-2058);
+				// the RBAC CanJoinToBattleground arm between them has no Go RBAC model —
+				// the battlemaster group-arm documented delta.
+				err = groupJoinBattlegroundTimedOut
+			case isRated && s.arenaTeamIDOfMember(ctx, member, arenaType) != leaderTeamID:
+				// rated arena team id mismatch → ERR_BATTLEGROUND_JOIN_FAILED (Group.cpp:2071-2073)
+				err = groupJoinBattlegroundFailed
+			case memberArenaQueueIndex(member, arenaType) != -1:
+				// member already in this arena queue → ERR_BATTLEGROUND_JOIN_FAILED
+				// (Group.cpp:2066-2068 — InBattlegroundQueueForBattlegroundQueueType)
+				err = groupJoinBattlegroundFailed
+			case memberFreeBGQueueIndex(member) == -1:
+				// no free slot → ERR_BATTLEGROUND_TOO_MANY_QUEUES (Group.cpp:2079-2080)
+				err = groupJoinTooManyQueues
+			case member.hasAura(freezeAuraSpellID):
+				// freeze → ERR_BATTLEGROUND_JOIN_FAILED (Group.cpp:2085-2086)
+				err = groupJoinBattlegroundFailed
+			}
+			if err <= 0 {
+				break
+			}
+		}
+
+		// Arena party-size gate (Group.cpp:2089-2091): MinPlayerCount == arenatype.
+		if err > 0 && uint8(len(grp.Members)) != arenaType {
+			err = arenaTeamPartySize
+		}
+	}
+
+	if isRated {
+		// BattleGroundHandler.cpp:714-732 — a rated queue requires a real arena team for
+		// the leader even when err <= 0: GetArenaTeamId(arenaslot) + GetArenaTeamById null →
+		// SendNotInArenaTeamPacket(arenatype) + return. arenaRating clamps to 1,
+		// matchmakerRating/previousOpponents feed bgQueue.AddGroup and ScheduleQueueUpdate,
+		// which have no Go queue model — documented delta.
+		if cdb := s.server.CharactersStore.DB; cdb != nil {
+			var teamID uint32
+			dbErr := cdb.QueryRowContext(ctx, "SELECT m.arenaTeamId FROM arena_team_member AS m JOIN arena_team AS t ON t.arenaTeamId = m.arenaTeamId WHERE m.guid = ? AND t.type = ?", s.playerGUID, arenaType).Scan(&teamID)
+			if dbErr != nil {
+				if !errors.Is(dbErr, sql.ErrNoRows) {
+					return false
+				}
+				buf := protocol.NewBuffer(5)
+				buf.WriteU32(0)
+				buf.WriteU8(arenaType)
+				_ = s.write(uint16(protocol.OpcodeSMSG_ARENA_ERROR), buf.Bytes(), true)
+				s.debug("rated arena group join rejected: no arena team", "account", s.accountName, "type", arenaType)
+				return true
+			}
+		}
+	}
+
+	if err <= 0 {
+		// err <= 0 → BuildGroupJoinedBattlegroundPacket(err) to every online member
+		// (BattleGroundHandler.cpp:737-745).
+		s.sendGroupJoinBGResult(grp.Members, err)
+		return true
+	}
+
+	// err > 0: per-member slot assignment + BuildBattlegroundStatusPacket(STATUS_WAIT_QUEUE)
+	// + BuildGroupJoinedBattlegroundPacket(err) (BattleGroundHandler.cpp:747-773). avgTime
+	// comes from GetAverageQueueWaitTime; Go keeps no queue wait stats, so
+	// sendBattlefieldStatus answers the hardcoded average — same documented delta as the
+	// battlemaster group arm. bg->SetRated(isRated) has no Go template model; the rating
+	// rides on the queue entry, the solo-arm convention.
+	for _, m := range grp.Members {
+		member := s.server.findSessionByGUID(m.GUID)
+		if member == nil || !member.playerLoaded || member.player == nil {
+			continue
+		}
+		slot := memberFreeBGQueueIndex(member)
+		if slot == -1 {
+			continue
+		}
+		member.bgQueues[slot] = bgQueueEntry{
+			Active:       true,
+			BgTypeID:     battlegroundAA, // BATTLEGROUND_AA (All Arenas)
+			InstanceID:   0,
+			JoinTime:     time.Now(),
+			Status:       BGStatusWaitQueue,
+			ArenaType:    arenaType,
+			IsArena:      true,
+			IsRated:      isRated,
+			ArenaFaction: 0,
+		}
+		member.sendBattlefieldStatus(uint8(slot))
+	}
+	s.sendGroupJoinBGResult(grp.Members, err)
+	s.debug("group queued for arena", "account", s.accountName, "type", arenaType, "rated", isRated, "members", len(grp.Members))
+	return true
+}
+
+// arenaTeamIDOfMember mirrors the rated team-id arm of Group::CanJoinBattlegroundQueue
+// (Group.cpp:2071-2073): the member's arena team id for the slot's type, 0 when the
+// member is in no team of that type or the DB read fails.
+func (s *session) arenaTeamIDOfMember(ctx context.Context, member *session, arenaType uint8) uint32 {
+	if member == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0
+	}
+	var teamID uint32
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT m.arenaTeamId FROM arena_team_member AS m JOIN arena_team AS t ON t.arenaTeamId = m.arenaTeamId WHERE m.guid = ? AND t.type = ?", member.playerGUID, arenaType).Scan(&teamID); err != nil {
+		return 0
+	}
+	return teamID
+}
+
+// memberArenaQueueIndex mirrors the duplicate-queue arm of CanJoinBattlegroundQueue
+// (Group.cpp:2066 — InBattlegroundQueueForBattlegroundQueueType) for the arena variant:
+// the index of the member's active arena queue for arenaType, -1 if none.
+func memberArenaQueueIndex(member *session, arenaType uint8) int {
+	for i := 0; i < len(member.bgQueues); i++ {
+		if member.bgQueues[i].Active && member.bgQueues[i].IsArena && member.bgQueues[i].ArenaType == arenaType {
+			return i
+		}
+	}
+	return -1
 }
 
 // groupJoinBattlegroundDeserters mirrors ERR_GROUP_JOIN_BATTLEGROUND_DESERTERS
