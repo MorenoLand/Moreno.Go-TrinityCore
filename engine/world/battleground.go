@@ -398,6 +398,24 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte) bo
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
+	// C++ WorldSession::HandleBattlefieldLeaveOpcode (BattleGroundHandler.cpp:528)
+	// denies leaving a battleground while in combat unless the BG is already in
+	// STATUS_WAIT_LEAVE. Go's live-BG analog is the arena world model
+	// (battleground_arena.go): a registered participant of a live arena whose
+	// status is not ArenaStatusWaitLeave cannot leave while in combat
+	// (Unit::IsInCombat == session.isInCombat, combat.go:1924). Queue-leave is
+	// never gated: C++'s port action==0 arm has no combat check.
+	if s.server != nil && IsArenaMap(s.player.Map) && s.isInCombat() {
+		if arena := s.server.findArenaState(s.player.Map, 0); arena != nil {
+			arena.mu.Lock()
+			_, inArena := arena.PlayerTeams[s.playerGUID]
+			waitLeave := arena.Status == ArenaStatusWaitLeave
+			arena.mu.Unlock()
+			if inArena && !waitLeave {
+				return true
+			}
+		}
+	}
 	if s.server != nil {
 		s.server.handleWSGPlayerLeave(s)
 		s.server.handleEOTSPlayerLeave(s)
