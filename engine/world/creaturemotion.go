@@ -559,6 +559,34 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 // (CreatureHooks.cpp:202) order. Health is restored at evade start where C++
 // restores it on home arrival (HomeMovementGenerator::DoFinalize::SetSpawnHealth);
 // that delta is documented with the JustReachedHome note below.
+//
+// Call-site EvadeReason audit (CreatureAI.h:93-98): CreatureAI::_EnterEvadeMode
+// takes EvadeReason /*why*/ (CreatureAI.cpp:294) — the reason never branches the
+// evade body, so coverage is a call-site-reachability question. NO_PATH is closed
+// (f18f6c7, no bridge). NO_HOSTILES ("the creature's threat list is empty"): the
+// Go analog is the combat-tick site at creaturemotion.go:847 — target
+// invalid/gone with an empty threat table routes here. Sub-site deltas:
+// CreatureAI.cpp:261 (UpdateVictim, REACT_PASSIVE && !InCombat) has a lighter Go
+// analog at creaturemotion.go:805-812 (inline ClearThreat + InCombat=false, no
+// home-walk, no health restore, no Eluna hooks); CreatureAI.cpp:67 (OnCharmed —
+// engage the last charmer, evade if still not in combat) has no bridge —
+// uncharmCreature restores flags/faction and clears threat but never engages the
+// charmer; PassiveAI.cpp:51 (engaged && !InCombat) is vacuous as a separate site
+// — in Go engagement is InCombat. BOUNDARY ("the creature has moved outside its
+// evade boundary"): Creature::Update (Creature.cpp:830-838) calls
+// AI()->CheckInRoom() every 2.5s while engaged → EnterEvadeMode at
+// CreatureAI.cpp:425. Go has no boundary model (no SetBoundary/IsInBounds
+// analog; the instance GetBossBoundary arm is unmodeled, matching the per-boss
+// Lua notes); the 45.0yd leash at creaturemotion.go:878 is the open-world analog
+// only. SEQUENCE_BREAK ("boss prerequisites not defeated"):
+// BossAI::_JustEngagedWith (ScriptedCreature.cpp:530-535, CheckRequiredBosses
+// fail) plus the hadronox / blood_prince_council / lady_deathwhisper /
+// sindragosa / valithria_dreamwalker boss scripts — no bridge: Go has no
+// CheckRequiredBosses / instance boss-state model, consistent with the per-boss
+// "BossAI bookkeeping has no bridges" notes. OTHER: this function is the single
+// funnel for all unreasoned calls — covered; the CritterAI flee-done site
+// (PassiveAI.cpp:85) can never fire — Go has no UNIT_STATE_FLEEING model
+// (critter fleeing is unmodeled; item 6's critter bullet stays open).
 func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotion, now time.Time) {
 	if motion == nil {
 		return
