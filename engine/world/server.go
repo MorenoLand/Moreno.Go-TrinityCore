@@ -197,7 +197,12 @@ type session struct {
 	muteTime                     int64
 	speakTime                    int64
 	speakCount                   uint32
-	gmChat                       bool
+	// calendarEventCooldown mirrors WorldSession's calendar event creation
+	// cooldown (CalendarHandler.cpp:262-265): unix time before which a new
+	// calendar event or copy may not be created
+	// (CALENDAR_CREATE_EVENT_COOLDOWN = 5s).
+	calendarEventCooldown int64
+	gmChat                bool
 	// autoReplyMsg mirrors Player::autoReplyMsg (Player.h:939): the AFK/DND
 	// auto-reply message announced to whispering players (Player.cpp:21050).
 	autoReplyMsg                 string

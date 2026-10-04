@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"database/sql"
 	"strconv"
 	"time"
 
@@ -17,6 +18,7 @@ const (
 	CalendarStatusSignedUp    = 4
 	CalendarStatusNotSignedUp = 5
 	CalendarStatusTentative   = 6
+	CalendarStatusRemoved     = 9
 )
 
 // Calendar rank constants matching TrinityCore 3.3.5.
@@ -30,12 +32,22 @@ const (
 const (
 	calendarFlagGuildEvent     = 0x400
 	calendarFlagWithoutInvites = 0x040
+	calendarFlagInvitesLocked  = 0x010
 )
 
 // Calendar limits matching CalendarLimits (CalendarMgr.h:130-136).
 const (
-	calendarMaxInvites = 100
+	calendarMaxInvites              = 100
+	calendarMaxEvents               = 30
+	calendarMaxGuildEvents          = 100
+	calendarCreateEventCooldownSecs = 5
 )
+
+// calendarDefaultResponseTime is the 946684800 (01/01/2000 00:00:00) default
+// response time CalendarHandler.cpp stamps on freshly created invites; the
+// SMSG_CALENDAR_EVENT_INVITE hasStatusTime arm keys off it
+// (CalendarMgr::SendCalendarEventInvite, CalendarMgr.cpp:481).
+const calendarDefaultResponseTime = 946684800
 
 // Calendar send type constants.
 const (
@@ -106,6 +118,78 @@ func (s *session) sendCalendarCommandResult(err uint32, name ...string) bool {
 	}
 	buf.WriteU32(err)
 	return s.write(uint16(protocol.OpcodeSMSG_CALENDAR_COMMAND_RESULT), buf.Bytes(), true) == nil
+}
+
+// unpackCalendarPackedTime decodes the client's packed 4-byte time format
+// (ByteBuffer::AppendPackedTime) into local time; the unix value is what
+// LocalTimeToUTCTime produces on the packed value in CalendarHandler.cpp.
+func unpackCalendarPackedTime(packed uint32) time.Time {
+	return time.Date(
+		2000+int(packed>>24),
+		time.Month(1+((packed>>20)&0xF)),
+		1+int((packed>>14)&0x3F),
+		int((packed>>6)&0x1F),
+		int(packed&0x3F),
+		0, 0, time.Local,
+	)
+}
+
+// calendarEventInPast mirrors the "prevent events in the past" gate in
+// HandleCalendarAddEvent/UpdateEvent/CopyEvent (CalendarHandler.cpp:238):
+// the converted packed time must not be older than now minus the 86400s hack.
+func calendarEventInPast(packed uint32) bool {
+	return unpackCalendarPackedTime(packed).Unix() < time.Now().Unix()-86400
+}
+
+// calendarCreatorGuildID returns the guild of an event's creator, which is
+// where CalendarEvent::GetGuildId comes from for guild events and guild
+// announcements (CalendarHandler.cpp:262-265 sets it from the creator).
+func calendarCreatorGuildID(ctx context.Context, cdb *sql.DB, creator uint64) uint32 {
+	var guildID uint32
+	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(guildid, 0) FROM guild_member WHERE guid = ?", creator).Scan(&guildID)
+	return guildID
+}
+
+// calendarCreateGateError enforces the shared add/copy creation gates
+// (CalendarHandler.cpp:246-277 and :352-380): guild events and announcements
+// require guild membership, then the per-guild (100) or per-player (30)
+// event caps answer their errors; CalendarOk means creation may proceed.
+func calendarCreateGateError(ctx context.Context, cdb *sql.DB, playerGUID uint64, playerGuildID uint32, flags uint32) uint32 {
+	if flags&(calendarFlagGuildEvent|calendarFlagWithoutInvites) != 0 {
+		if playerGuildID == 0 {
+			return CalendarErrorGuildPlayerNotInGuild
+		}
+		var count int
+		_ = cdb.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM calendar_events e
+			 JOIN guild_member gm ON gm.guid = e.creator
+			 WHERE (e.flags & ?) != 0 AND gm.guildid = ?`,
+			calendarFlagGuildEvent|calendarFlagWithoutInvites, playerGuildID).Scan(&count)
+		if count >= calendarMaxGuildEvents {
+			return CalendarErrorGuildEventsExceeded
+		}
+		return CalendarOk
+	}
+	var count int
+	_ = cdb.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM calendar_events WHERE creator = ? AND (flags & ?) = 0`,
+		playerGUID, calendarFlagGuildEvent|calendarFlagWithoutInvites).Scan(&count)
+	if count >= calendarMaxEvents {
+		return CalendarErrorEventsExceeded
+	}
+	return CalendarOk
+}
+
+// calendarTakeCreateCooldown mirrors the CALENDAR_CREATE_EVENT_COOLDOWN gate
+// (CalendarHandler.cpp:279-283, :382-386): while the session cooldown is in
+// the future creation is rejected; otherwise the cooldown is armed 5s out.
+func calendarTakeCreateCooldown(s *session) bool {
+	now := time.Now().Unix()
+	if s.calendarEventCooldown > now {
+		return false
+	}
+	s.calendarEventCooldown = now + calendarCreateEventCooldownSecs
+	return true
 }
 
 // handleCalendarGetCalendar processes CMSG_CALENDAR_GET_CALENDAR (0x429).
@@ -524,11 +608,19 @@ func (s *session) handleCalendarArenaTeam(ctx context.Context, payload []byte) b
 }
 
 // handleCalendarAddEvent processes CMSG_CALENDAR_ADD_EVENT (0x42D).
-// Reference: WorldSession::HandleCalendarAddEvent (CalendarHandler.cpp:187-268)
-// & WorldPackets::Calendar::CalendarAddEvent::Read (CalendarPackets.cpp:123-137).
+// Reference: WorldSession::HandleCalendarAddEvent (CalendarHandler.cpp:221-268)
+// & WorldPackets::Calendar::CalendarAddEvent::Read (CalendarPackets.cpp:123-137):
+// past-time gate (with the -86400s hack) answers CALENDAR_ERROR_EVENT_PASSED,
+// guild events/announcements require guild membership, then the per-guild
+// (100) / per-player (30) caps and the 5s creation cooldown gate; the
+// client invite list is capped at CALENDAR_MAX_INVITES (100); guild
+// announcements store no invites at all (AddInvite is a no-op for them).
 func (s *session) handleCalendarAddEvent(ctx context.Context, payload []byte) bool {
 	if len(payload) < 16 {
 		return s.sendCalendarCommandResult(CalendarErrorInternal)
+	}
+	if !s.playerLoaded || s.player == nil {
+		return true
 	}
 	r := protocol.NewReader(payload)
 	title, _ := r.ReadCString()
@@ -548,7 +640,7 @@ func (s *session) handleCalendarAddEvent(ctx context.Context, payload []byte) bo
 		moderator uint8
 	}
 	var rawInvites []rawInvite
-	for i := uint32(0); i < inviteCount; i++ {
+	for i := uint32(0); i < inviteCount && i < calendarMaxInvites; i++ {
 		invGuid, err := r.ReadPackedGUID()
 		if err != nil {
 			break
@@ -558,8 +650,19 @@ func (s *session) handleCalendarAddEvent(ctx context.Context, payload []byte) bo
 		rawInvites = append(rawInvites, rawInvite{guid: invGuid, status: status, moderator: moderator})
 	}
 
+	if calendarEventInPast(packedEventTime) {
+		return s.sendCalendarCommandResult(CalendarErrorEventPassed)
+	}
+
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
+		if errCode := calendarCreateGateError(ctx, cdb, s.playerGUID, s.player.GuildID, flags); errCode != CalendarOk {
+			return s.sendCalendarCommandResult(errCode)
+		}
+		if !calendarTakeCreateCooldown(s) {
+			return s.sendCalendarCommandResult(CalendarErrorInternal)
+		}
+
 		var nextID uint64 = 1
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM calendar_events").Scan(&nextID)
 		_, _ = cdb.ExecContext(ctx,
@@ -567,40 +670,45 @@ func (s *session) handleCalendarAddEvent(ctx context.Context, payload []byte) bo
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			nextID, s.playerGUID, title, description, eventType, dungeonID, packedEventTime, flags, packedLockDate)
 
-		// Insert creator invite
-		var nextInviteID uint64 = 1
-		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM calendar_invites").Scan(&nextInviteID)
-		_, _ = cdb.ExecContext(ctx,
-			`INSERT INTO calendar_invites (id, event, invitee, sender, status, statustime, rank, text)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, '')`,
-			nextInviteID, nextID, s.playerGUID, s.playerGUID, CalendarStatusAccepted, time.Now().Unix(), CalendarRankCreator)
-
-		// Insert additional invites
-		for _, inv := range rawInvites {
-			if inv.guid == s.playerGUID || inv.guid == 0 {
-				continue
-			}
-			nextInviteID++
+		// Guild announcements carry a single Empty-GUID NOT_SIGNED_UP invite
+		// that CalendarMgr::AddInvite neither stores nor broadcasts
+		// (CalendarMgr.cpp:147-160), so no invites are inserted for them.
+		if flags&calendarFlagWithoutInvites == 0 {
+			// Insert creator invite
+			var nextInviteID uint64 = 1
+			_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM calendar_invites").Scan(&nextInviteID)
 			_, _ = cdb.ExecContext(ctx,
 				`INSERT INTO calendar_invites (id, event, invitee, sender, status, statustime, rank, text)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, '')`,
-				nextInviteID, nextID, inv.guid, s.playerGUID, inv.status, time.Now().Unix(), inv.moderator)
+				nextInviteID, nextID, s.playerGUID, s.playerGUID, CalendarStatusAccepted, time.Now().Unix(), CalendarRankCreator)
 
-			// Send SMSG_CALENDAR_EVENT_INVITE_ALERT to online invitee
-			if otherSess := s.server.findSessionByGUID(inv.guid); otherSess != nil {
-				alertBuf := protocol.NewBuffer(64 + len(title))
-				alertBuf.WriteU64(nextID)
-				alertBuf.WriteCString(title)
-				alertBuf.WritePackedTime(time.Unix(int64(packedEventTime), 0))
-				alertBuf.WriteU32(flags)
-				alertBuf.WriteU32(uint32(eventType))
-				alertBuf.WriteI32(dungeonID)
-				alertBuf.WriteU64(nextInviteID)
-				alertBuf.WriteU8(inv.status)
-				alertBuf.WriteU8(inv.moderator)
-				alertBuf.WritePackedGUID(s.playerGUID)
-				alertBuf.WritePackedGUID(s.playerGUID)
-				_ = otherSess.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertBuf.Bytes(), true)
+			// Insert additional invites
+			for _, inv := range rawInvites {
+				if inv.guid == s.playerGUID || inv.guid == 0 {
+					continue
+				}
+				nextInviteID++
+				_, _ = cdb.ExecContext(ctx,
+					`INSERT INTO calendar_invites (id, event, invitee, sender, status, statustime, rank, text)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, '')`,
+					nextInviteID, nextID, inv.guid, s.playerGUID, inv.status, calendarDefaultResponseTime, inv.moderator)
+
+				// Send SMSG_CALENDAR_EVENT_INVITE_ALERT to online invitee
+				if otherSess := s.server.findSessionByGUID(inv.guid); otherSess != nil {
+					alertBuf := protocol.NewBuffer(64 + len(title))
+					alertBuf.WriteU64(nextID)
+					alertBuf.WriteCString(title)
+					alertBuf.WritePackedTime(time.Unix(int64(packedEventTime), 0))
+					alertBuf.WriteU32(flags)
+					alertBuf.WriteU32(uint32(eventType))
+					alertBuf.WriteI32(dungeonID)
+					alertBuf.WriteU64(nextInviteID)
+					alertBuf.WriteU8(inv.status)
+					alertBuf.WriteU8(inv.moderator)
+					alertBuf.WritePackedGUID(s.playerGUID)
+					alertBuf.WritePackedGUID(s.playerGUID)
+					_ = otherSess.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertBuf.Bytes(), true)
+				}
 			}
 		}
 	}
@@ -609,7 +717,9 @@ func (s *session) handleCalendarAddEvent(ctx context.Context, payload []byte) bo
 
 // handleCalendarUpdateEvent processes CMSG_CALENDAR_UPDATE_EVENT (0x42E).
 // Reference: WorldSession::HandleCalendarUpdateEvent (CalendarHandler.cpp:270-302)
-// & WorldPackets::Calendar::CalendarUpdateEvent::Read (CalendarPackets.cpp:139-152).
+// & WorldPackets::Calendar::CalendarUpdateEvent::Read (CalendarPackets.cpp:139-152):
+// the past-time gate returns silently (no error packet), and an unknown
+// event answers CALENDAR_ERROR_EVENT_INVALID.
 func (s *session) handleCalendarUpdateEvent(ctx context.Context, payload []byte) bool {
 	if len(payload) < 24 {
 		return s.sendCalendarCommandResult(CalendarErrorInternal)
@@ -630,8 +740,18 @@ func (s *session) handleCalendarUpdateEvent(ctx context.Context, payload []byte)
 	packedLockDate, _ := r.ReadU32()
 	flags, _ := r.ReadU32()
 
+	if calendarEventInPast(packedEventTime) {
+		return true
+	}
+
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
+		var exists int
+		_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM calendar_events WHERE id = ?", eventID).Scan(&exists)
+		if exists == 0 {
+			return s.sendCalendarCommandResult(CalendarErrorEventInvalid)
+		}
+
 		var oldEventTime uint32
 		_ = cdb.QueryRowContext(ctx, "SELECT eventtime FROM calendar_events WHERE id = ?", eventID).Scan(&oldEventTime)
 
@@ -745,10 +865,19 @@ func (s *session) handleCalendarRemoveEvent(ctx context.Context, payload []byte)
 }
 
 // handleCalendarCopyEvent processes CMSG_CALENDAR_COPY_EVENT (0x430).
-// Reference: WorldSession::HandleCalendarCopyEvent (CalendarHandler.cpp:310-389).
+// Reference: WorldSession::HandleCalendarCopyEvent (CalendarHandler.cpp:310-389):
+// the past-time gate answers CALENDAR_ERROR_EVENT_PASSED; guild events and
+// announcements may only be copied by a member of the event's guild,
+// anything else only by the event's creator
+// (CALENDAR_ERROR_EVENT_INVALID); the per-guild/per-player caps and the 5s
+// creation cooldown gate before the copy; the copy keeps the original
+// creator (CalendarEvent copy ctor, CalendarMgr.h:201-213).
 func (s *session) handleCalendarCopyEvent(ctx context.Context, payload []byte) bool {
 	if len(payload) < 12 {
 		return s.sendCalendarCommandResult(CalendarErrorInternal)
+	}
+	if !s.playerLoaded || s.player == nil {
+		return true
 	}
 	r := protocol.NewReader(payload)
 	eventID, err := r.ReadU64()
@@ -758,14 +887,40 @@ func (s *session) handleCalendarCopyEvent(ctx context.Context, payload []byte) b
 	_, _ = r.ReadU64() // moderatorID
 	packedEventTime, _ := r.ReadU32()
 
+	if calendarEventInPast(packedEventTime) {
+		return s.sendCalendarCommandResult(CalendarErrorEventPassed)
+	}
+
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
+		var creator uint64
+		var flags uint32
+		if err := cdb.QueryRowContext(ctx,
+			"SELECT creator, flags FROM calendar_events WHERE id = ?", eventID).Scan(&creator, &flags); err != nil {
+			return s.sendCalendarCommandResult(CalendarErrorEventInvalid)
+		}
+
+		if flags&(calendarFlagGuildEvent|calendarFlagWithoutInvites) != 0 {
+			if calendarCreatorGuildID(ctx, cdb, creator) != s.player.GuildID {
+				return s.sendCalendarCommandResult(CalendarErrorEventInvalid)
+			}
+		} else if creator != s.playerGUID {
+			return s.sendCalendarCommandResult(CalendarErrorEventInvalid)
+		}
+
+		if errCode := calendarCreateGateError(ctx, cdb, s.playerGUID, s.player.GuildID, flags); errCode != CalendarOk {
+			return s.sendCalendarCommandResult(errCode)
+		}
+		if !calendarTakeCreateCooldown(s) {
+			return s.sendCalendarCommandResult(CalendarErrorInternal)
+		}
+
 		var nextID uint64 = 1
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM calendar_events").Scan(&nextID)
 		_, _ = cdb.ExecContext(ctx,
 			`INSERT INTO calendar_events (id, creator, title, description, type, dungeon, eventtime, flags, time2)
-			 SELECT ?, ?, title, description, type, dungeon, ?, flags, time2 FROM calendar_events WHERE id = ?`,
-			nextID, s.playerGUID, packedEventTime, eventID)
+			 SELECT ?, creator, title, description, type, dungeon, ?, flags, time2 FROM calendar_events WHERE id = ?`,
+			nextID, packedEventTime, eventID)
 
 		rows, err := cdb.QueryContext(ctx, "SELECT invitee, sender, status, statustime, rank, text FROM calendar_invites WHERE event = ?", eventID)
 		if err == nil {
@@ -787,58 +942,119 @@ func (s *session) handleCalendarCopyEvent(ctx context.Context, payload []byte) b
 }
 
 // handleCalendarEventInvite processes CMSG_CALENDAR_EVENT_INVITE (0x431).
-// Reference: WorldSession::HandleCalendarEventInvite (CalendarHandler.cpp:391-450).
+// Reference: WorldSession::HandleCalendarEventInvite (CalendarHandler.cpp:391-450):
+// empty names are dropped silently; unknown names answer
+// CALENDAR_ERROR_PLAYER_NOT_FOUND; cross-faction invites answer
+// CALENDAR_ERROR_NOT_ALLIED unless AllowTwoSide.Interaction.Calendar; an
+// invitee ignoring the inviter answers CALENDAR_ERROR_IGNORING_YOU_S with
+// the name; on an existing event, inviting a same-guild member to a guild
+// event answers CALENDAR_ERROR_NO_GUILD_INVITES, and a missing event
+// answers CALENDAR_ERROR_EVENT_INVALID; a pre-invite (the event does not
+// exist yet) answers CALENDAR_ERROR_NO_GUILD_INVITES when a guild-context
+// invite targets a guildmate, else the SMSG_CALENDAR_EVENT_INVITE goes
+// straight back to the sender with the packet's invite id and event 0
+// (CalendarMgr::SendCalendarEventInvite pre-invite arm, CalendarMgr.cpp:481).
 func (s *session) handleCalendarEventInvite(ctx context.Context, payload []byte) bool {
 	if len(payload) < 16 {
 		return s.sendCalendarCommandResult(CalendarErrorInternal)
+	}
+	if !s.playerLoaded || s.player == nil {
+		return true
 	}
 	r := protocol.NewReader(payload)
 	eventID, err := r.ReadU64()
 	if err != nil {
 		return s.sendCalendarCommandResult(CalendarErrorInternal)
 	}
-	_, _ = r.ReadU64() // moderatorID
+	inviteID, _ := r.ReadU64()
 	name, _ := r.ReadCString()
-	creating, _ := r.ReadU8()
-	_ = creating
+	isPreInvite, _ := r.ReadU8()
+	isGuildEvent, _ := r.ReadU8()
 
 	if name == "" {
-		return s.sendCalendarCommandResult(CalendarErrorPlayerNotFound)
+		return true
 	}
+
+	// sendCalendarEventInviteToSender serializes SMSG_CALENDAR_EVENT_INVITE
+	// (CalendarMgr::SendCalendarEventInvite, CalendarMgr.cpp:481-514):
+	// packed invitee, event id, invite id, level, status, hasStatusTime
+	// (never set here: new invites carry the default 946684800 response
+	// time), then sender != invitee.
+	sendCalendarEventInviteToSender := func(targetGUID uint64, targetLevel uint8, event, invite uint64) bool {
+		invBuf := protocol.NewBuffer(32)
+		invBuf.WritePackedGUID(targetGUID)
+		invBuf.WriteU64(event)
+		invBuf.WriteU64(invite)
+		invBuf.WriteU8(targetLevel)
+		invBuf.WriteU8(CalendarStatusInvited)
+		invBuf.WriteU8(0) // hasStatusTime
+		invBuf.WriteU8(1) // sender != invitee
+		return s.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE), invBuf.Bytes(), true) == nil
+	}
+
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
 		var targetGUID uint64
-		var targetLevel uint8 = 1
-		err := cdb.QueryRowContext(ctx, "SELECT guid, level FROM characters WHERE name = ? COLLATE NOCASE", name).Scan(&targetGUID, &targetLevel)
-		if err != nil || targetGUID == 0 {
+		var targetRace uint8
+		var targetLevel uint8
+		if err := cdb.QueryRowContext(ctx,
+			"SELECT guid, race, level FROM characters WHERE name = ? COLLATE NOCASE", name).
+			Scan(&targetGUID, &targetRace, &targetLevel); err != nil || targetGUID == 0 {
 			return s.sendCalendarCommandResult(CalendarErrorPlayerNotFound)
 		}
+		var inviteeGuildID uint32
+		_ = cdb.QueryRowContext(ctx,
+			"SELECT COALESCE(guildid, 0) FROM guild_member WHERE guid = ?", targetGUID).Scan(&inviteeGuildID)
+
+		if !s.server.Config.AllowTwoSideInteractionCalendar &&
+			teamForRace(s.player.Race) != teamForRace(targetRace) {
+			return s.sendCalendarCommandResult(CalendarErrorNotAllied)
+		}
+
+		var ignoreFlags uint8
+		_ = cdb.QueryRowContext(ctx,
+			"SELECT flags FROM character_social WHERE guid = ? AND friend = ?",
+			targetGUID, s.playerGUID).Scan(&ignoreFlags)
+		if ignoreFlags&socialFlagIgnored != 0 {
+			return s.sendCalendarCommandResult(CalendarErrorIgnoringYouS, name)
+		}
+
+		if isPreInvite != 0 {
+			if isGuildEvent != 0 && inviteeGuildID == s.player.GuildID {
+				return s.sendCalendarCommandResult(CalendarErrorNoGuildInvites)
+			}
+			sendCalendarEventInviteToSender(targetGUID, targetLevel, 0, inviteID)
+			return s.sendCalendarCommandResult(CalendarOk)
+		}
+
+		var evFlags uint32
+		var evCreator uint64
+		if err := cdb.QueryRowContext(ctx,
+			"SELECT flags, creator FROM calendar_events WHERE id = ?", eventID).Scan(&evFlags, &evCreator); err != nil {
+			return s.sendCalendarCommandResult(CalendarErrorEventInvalid)
+		}
+
+		if evFlags&calendarFlagGuildEvent != 0 &&
+			calendarCreatorGuildID(ctx, cdb, evCreator) == inviteeGuildID {
+			return s.sendCalendarCommandResult(CalendarErrorNoGuildInvites)
+		}
+
 		var nextInviteID uint64 = 1
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM calendar_invites").Scan(&nextInviteID)
 		_, _ = cdb.ExecContext(ctx,
 			"INSERT INTO calendar_invites (id, event, invitee, sender, status, statustime, rank, text) VALUES (?, ?, ?, ?, ?, ?, ?, '')",
-			nextInviteID, eventID, targetGUID, s.playerGUID, CalendarStatusInvited, time.Now().Unix(), CalendarRankPlayer)
+			nextInviteID, eventID, targetGUID, s.playerGUID, CalendarStatusInvited, calendarDefaultResponseTime, CalendarRankPlayer)
 
-		// Send SMSG_CALENDAR_EVENT_INVITE to the inviter
-		invBuf := protocol.NewBuffer(32)
-		invBuf.WritePackedGUID(targetGUID)
-		invBuf.WriteU64(eventID)
-		invBuf.WriteU64(nextInviteID)
-		invBuf.WriteU8(targetLevel)
-		invBuf.WriteU8(CalendarStatusInvited)
-		invBuf.WriteU8(0) // type
-		invBuf.WriteU8(0) // clearPending
-		_ = s.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE), invBuf.Bytes(), true)
+		sendCalendarEventInviteToSender(targetGUID, targetLevel, eventID, nextInviteID)
 
 		// Send SMSG_CALENDAR_EVENT_INVITE_ALERT to target player if online
 		if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil {
 			var evTitle string
-			var evFlags, evType uint32
+			var evType uint32
 			var evDungeon int32
 			var evTime uint32
-			var evCreator uint64
-			_ = cdb.QueryRowContext(ctx, "SELECT title, flags, type, dungeon, eventtime, creator FROM calendar_events WHERE id = ?", eventID).
-				Scan(&evTitle, &evFlags, &evType, &evDungeon, &evTime, &evCreator)
+			_ = cdb.QueryRowContext(ctx, "SELECT title, type, dungeon, eventtime FROM calendar_events WHERE id = ?", eventID).
+				Scan(&evTitle, &evType, &evDungeon, &evTime)
 
 			alertBuf := protocol.NewBuffer(64 + len(evTitle))
 			alertBuf.WriteU64(eventID)
@@ -859,7 +1075,11 @@ func (s *session) handleCalendarEventInvite(ctx context.Context, payload []byte)
 }
 
 // handleCalendarEventRSVP processes CMSG_CALENDAR_EVENT_RSVP (0x432).
-// Reference: WorldSession::HandleCalendarEventRsvp (CalendarHandler.cpp:630).
+// Reference: WorldSession::HandleCalendarEventRsvp (CalendarHandler.cpp:608-628):
+// RSVPing any status other than REMOVED on a locked event answers
+// CALENDAR_ERROR_EVENT_LOCKED; an unknown event answers
+// CALENDAR_ERROR_EVENT_INVALID; an unknown invite answers
+// CALENDAR_ERROR_NO_INVITE.
 func (s *session) handleCalendarEventRSVP(ctx context.Context, payload []byte) bool {
 	if len(payload) < 20 {
 		return s.sendCalendarCommandResult(CalendarErrorInternal)
@@ -870,10 +1090,26 @@ func (s *session) handleCalendarEventRSVP(ctx context.Context, payload []byte) b
 	status, _ := r.ReadU32()
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		var evFlags uint32
+		if err := cdb.QueryRowContext(ctx,
+			"SELECT flags FROM calendar_events WHERE id = ?", eventID).Scan(&evFlags); err != nil {
+			return s.sendCalendarCommandResult(CalendarErrorEventInvalid)
+		}
+		if status != CalendarStatusRemoved && evFlags&calendarFlagInvitesLocked != 0 {
+			return s.sendCalendarCommandResult(CalendarErrorEventLocked)
+		}
+		var inviteExists int
+		_ = cdb.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM calendar_invites WHERE id = ?", inviteID).Scan(&inviteExists)
+		if inviteExists == 0 {
+			return s.sendCalendarCommandResult(CalendarErrorNoInvite)
+		}
+
 		now := time.Now().Unix()
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
-			"UPDATE calendar_invites SET status = ?, statustime = ? WHERE (id = ? OR (event = ? AND invitee = ?))",
-			status, now, inviteID, eventID, s.playerGUID)
+		_, _ = cdb.ExecContext(ctx,
+			"UPDATE calendar_invites SET status = ?, statustime = ? WHERE id = ?",
+			status, now, inviteID)
 
 		// Send SMSG_CALENDAR_EVENT_STATUS
 		statBuf := protocol.NewBuffer(32)
@@ -890,7 +1126,11 @@ func (s *session) handleCalendarEventRSVP(ctx context.Context, payload []byte) b
 }
 
 // handleCalendarEventRemoveInvite processes CMSG_CALENDAR_EVENT_REMOVE_INVITE (0x433).
-// Reference: WorldSession::HandleCalendarEventRemoveInvite (CalendarHandler.cpp:667).
+// Reference: WorldSession::HandleCalendarEventRemoveInvite (CalendarHandler.cpp:640-665):
+// removing the event creator answers CALENDAR_ERROR_DELETE_CREATOR_FAILED;
+// an unknown event answers CALENDAR_ERROR_NO_INVITE (not EVENT_INVALID);
+// CalendarMgr::RemoveInvite (CalendarMgr.cpp:216) only ever deletes the
+// invite matching both the invite id and the event id.
 func (s *session) handleCalendarEventRemoveInvite(ctx context.Context, payload []byte) bool {
 	if len(payload) < 24 {
 		return s.sendCalendarCommandResult(CalendarErrorInternal)
@@ -902,9 +1142,18 @@ func (s *session) handleCalendarEventRemoveInvite(ctx context.Context, payload [
 	eventID, _ := r.ReadU64()
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
-			"DELETE FROM calendar_invites WHERE id = ? OR (event = ? AND (invitee = ? OR ? = 0))",
-			inviteID, eventID, inviteeGUID, inviteeGUID)
+		cdb := s.server.CharactersStore.DB
+		var creator uint64
+		if err := cdb.QueryRowContext(ctx,
+			"SELECT creator FROM calendar_events WHERE id = ?", eventID).Scan(&creator); err != nil {
+			return s.sendCalendarCommandResult(CalendarErrorNoInvite)
+		}
+		if creator == inviteeGUID {
+			return s.sendCalendarCommandResult(CalendarErrorDeleteCreatorFailed)
+		}
+
+		_, _ = cdb.ExecContext(ctx,
+			"DELETE FROM calendar_invites WHERE id = ? AND event = ?", inviteID, eventID)
 
 		// Send SMSG_CALENDAR_EVENT_INVITE_REMOVED
 		remBuf := protocol.NewBuffer(24)
@@ -977,10 +1226,16 @@ func (s *session) handleCalendarEventModeratorStatus(ctx context.Context, payloa
 }
 
 // handleCalendarEventSignup processes CMSG_CALENDAR_EVENT_SIGNUP (0x4BA).
-// Reference: WorldSession::HandleCalendarEventSignup (CalendarHandler.cpp:604).
+// Reference: WorldSession::HandleCalendarEventSignup (CalendarHandler.cpp:576-602):
+// signing up for a guild event of another guild answers
+// CALENDAR_ERROR_GUILD_PLAYER_NOT_IN_GUILD; an unknown event answers
+// CALENDAR_ERROR_EVENT_INVALID.
 func (s *session) handleCalendarEventSignup(ctx context.Context, payload []byte) bool {
 	if len(payload) < 9 {
 		return s.sendCalendarCommandResult(CalendarErrorInternal)
+	}
+	if !s.playerLoaded || s.player == nil {
+		return true
 	}
 	r := protocol.NewReader(payload)
 	eventID, _ := r.ReadU64()
@@ -988,6 +1243,17 @@ func (s *session) handleCalendarEventSignup(ctx context.Context, payload []byte)
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
+		var evFlags uint32
+		var evCreator uint64
+		if err := cdb.QueryRowContext(ctx,
+			"SELECT flags, creator FROM calendar_events WHERE id = ?", eventID).Scan(&evFlags, &evCreator); err != nil {
+			return s.sendCalendarCommandResult(CalendarErrorEventInvalid)
+		}
+		if evFlags&calendarFlagGuildEvent != 0 &&
+			calendarCreatorGuildID(ctx, cdb, evCreator) != s.player.GuildID {
+			return s.sendCalendarCommandResult(CalendarErrorGuildPlayerNotInGuild)
+		}
+
 		status := CalendarStatusSignedUp
 		if tentative != 0 {
 			status = CalendarStatusTentative
