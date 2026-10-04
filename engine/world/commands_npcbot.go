@@ -11,10 +11,11 @@ import (
 
 // This file wires the ".npcbot" command family
 // (src/server/game/AI/NpcBots/botcommands.cpp:97-125). The "add", "remove",
-// "spawn", "move", "delete", "lookup" and "revive" arms are converted; the
-// first five give Recruit/AddBotFree/Add their first real call sites. The
-// remaining arms (reloadconfig/command/info/hide/unhide/show/recall/kill/
-// suicide/distance/order) land in later units.
+// "spawn", "move", "delete", "lookup", "revive", "reloadconfig" and "command"
+// (standstill/stopfully/follow) arms are converted; the first five give
+// Recruit/AddBotFree/Add their first real call sites. The
+// remaining arms (info/hide/unhide/show/recall/kill/
+// suicide/distance/order/set) land in later units.
 //
 // The "add"/"remove" arms are selection-driven in C++ (owner->GetSelectedUnit()
 // must be a live uncontrolled/controlled npcbot creature). Go keeps no
@@ -69,7 +70,7 @@ const (
 
 // handleCmdNpcBot dispatches the "npcbot" root (botcommands.cpp:124-126).
 func (s *session) handleCmdNpcBot(ctx context.Context, args []string) {
-	const syntax = "Syntax: .npcbot add|remove|spawn|move|delete|lookup|revive"
+	const syntax = "Syntax: .npcbot add|remove|spawn|move|delete|lookup|revive|reloadconfig|command"
 	if len(args) == 0 {
 		s.sendSysMessage(syntax)
 		return
@@ -97,6 +98,10 @@ func (s *session) handleCmdNpcBot(ctx context.Context, args []string) {
 		s.handleNpcBotLookupCommand(ctx, rest)
 	case strings.HasPrefix("revive", sub):
 		s.handleNpcBotReviveCommand(ctx)
+	case strings.HasPrefix("reloadconfig", sub):
+		s.handleNpcBotReloadConfigCommand(ctx)
+	case strings.HasPrefix("command", sub):
+		s.handleNpcBotCommandSubCommand(ctx, rest)
 	default:
 		s.sendSysMessage(syntax)
 	}
@@ -790,4 +795,99 @@ func (s *session) handleNpcBotReviveCommand(ctx context.Context) {
 	// creature state for bots); ReviveBot's legs are all live-only. The
 	// guards above match, so the success line is answered.
 	s.sendSysMessage(fmt.Sprintf("%s revived", s.npcbotTemplateName(ctx, entry)))
+}
+
+// bot command state bits mirrored from botcommon.h:1017-1021; the Go tree keeps
+// no live BotAI, so they label which C++ state each arm would set rather than
+// drive anything.
+const (
+	botCommandStay     = 0x01 // BOT_COMMAND_STAY
+	botCommandFollow   = 0x02 // BOT_COMMAND_FOLLOW
+	botCommandFullStop = 0x10 // BOT_COMMAND_FULLSTOP
+)
+
+// handleNpcBotReloadConfigCommand mirrors HandleNpcBotReloadConfigCommand
+// (botcommands.cpp:1392, GM_COMMANDS, Console::Yes). The C++ arm re-reads the
+// world and NpcBot config files (sWorld->LoadConfigSettings + BotMgr::ReloadConfig
+// re-reading the 36 NpcBot.* keys from the config manager). The Go server does
+// not retain the config file path, so live re-read has no bridge — the same
+// documented block as handleReloadConfig (commands_reload.go:366). The arm
+// gates the GM permission and the NpcBots feature like its siblings, then
+// answers with the tree-standard not-supported line instead of claiming a
+// reload through the C++ global GM messages.
+func (s *session) handleNpcBotReloadConfigCommand(ctx context.Context) {
+	if s.miscDeny(ctx, permissionCommandNPCBotReloadConfig) {
+		return
+	}
+	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
+		s.sendSysMessage("NpcBots is unavailable.")
+		return
+	}
+	s.sendSysMessage("Reload of NpcBot config is not supported by this server (config path not retained).")
+}
+
+// handleNpcBotCommandSubCommand dispatches the ".npcbot command" sub-table
+// (botcommands.cpp:72-76: standstill/stopfully/follow). The arms are
+// PLAYER_COMMANDS, so no permission gate is applied — any in-game player may
+// use them (the root dispatcher already requires s.player != nil).
+func (s *session) handleNpcBotCommandSubCommand(ctx context.Context, args []string) {
+	const syntax = "Syntax: .npcbot command standstill|stopfully|follow"
+	if len(args) == 0 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	sub := strings.ToLower(args[0])
+	switch {
+	case strings.HasPrefix("standstill", sub):
+		s.handleNpcBotBotCommandState(ctx, botCommandStay, "STAY",
+			".npcbot command standstill",
+			"Forces your npcbots to stop all movement and remain stationed")
+	case strings.HasPrefix("stopfully", sub):
+		s.handleNpcBotBotCommandState(ctx, botCommandFullStop, "FULLSTOP",
+			".npcbot command stopfully",
+			"Forces your npcbots to stop all activity")
+	case strings.HasPrefix("follow", sub):
+		s.handleNpcBotBotCommandState(ctx, botCommandFollow, "FOLLOW",
+			".npcbot command follow",
+			"Allows npcbots to follow you again if stopped")
+	default:
+		s.sendSysMessage(syntax)
+	}
+}
+
+// handleNpcBotBotCommandState mirrors HandleNpcBotCommandStandstillCommand,
+// HandleNpcBotCommandStopfullyCommand and HandleNpcBotCommandFollowCommand
+// (botcommands.cpp:1178-1236): the !HaveBot() gate answers the C++ usage lines
+// verbatim; the selected-unit branch answers the per-bot "%s's command state
+// set to 'STATE'" line when the selection decodes to one of the caller's owned
+// npcbot entries (entry-level bridge of owner->GetBotMgr()->GetBot), else the
+// "Bots' command state set to 'STATE'" all-bots line. BotMgr::SendBotCommandState
+// and bot_ai::SetBotCommandState are live-AI-only (the Go tree keeps no BotMap),
+// so the state change itself is a documented no-bridge and the success lines
+// are answered as a state-change no-op.
+func (s *session) handleNpcBotBotCommandState(ctx context.Context, state uint8, stateName, syntaxArm, syntaxDesc string) {
+	_ = state // which BOT_COMMAND_* the arm would set; no live BotAI to receive it
+	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
+		s.sendSysMessage("NpcBots is unavailable.")
+		return
+	}
+	mgr := s.server.Features.NPCBots
+	owner := uint32(s.playerGUID)
+	if mgr.CountByOwner(owner) == 0 {
+		s.sendSysMessage(syntaxArm)
+		s.sendSysMessage(syntaxDesc)
+		return
+	}
+	sel := s.selection
+	if sel != 0 {
+		switch uint16(sel >> 48) {
+		case 0xF130, 0xF140, 0xF150: // unit/pet/vehicle: the IsAnyTypeCreature set (mail.go:157)
+			entry := uint32((sel >> 24) & 0x00FFFFFF)
+			if data, ok := mgr.Get(entry); ok && data.Owner == owner {
+				s.sendSysMessage(fmt.Sprintf("%s's command state set to '%s'", s.npcbotTemplateName(ctx, entry), stateName))
+				return
+			}
+		}
+	}
+	s.sendSysMessage(fmt.Sprintf("Bots' command state set to '%s'", stateName))
 }

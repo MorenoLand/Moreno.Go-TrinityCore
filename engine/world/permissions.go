@@ -1110,6 +1110,11 @@ const permissionCommandNPCBotLookup uint32 = 10006
 // Go-side-alias convention as permissionCommandNPCBotAdd.
 const permissionCommandNPCBotRevive uint32 = 10007
 
+// permissionCommandNPCBotReloadConfig gates the ".npcbot reloadconfig" arm
+// (HandleNpcBotReloadConfigCommand, botcommands.cpp:109, GM_COMMANDS). Same
+// Go-side-alias convention as permissionCommandNPCBotAdd.
+const permissionCommandNPCBotReloadConfig uint32 = 10008
+
 // permissionCommandNPCEvade mirrors rbac::RBAC_PERM_COMMAND_NPC_EVADE (RBAC.h:704).
 const permissionCommandNPCEvade uint32 = 837
 
