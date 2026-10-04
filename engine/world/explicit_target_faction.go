@@ -9,11 +9,12 @@ import (
 // SpellCastTargetFlags unit bits (SpellInfo.h:41-47). ENEMY/ALLY/PARTY/RAID
 // are never sent by the client; they only validate the explicit unit target.
 const (
-	targetFlagUnit      uint32 = 0x2
-	targetFlagUnitRaid  uint32 = 0x4
-	targetFlagUnitParty uint32 = 0x8
-	targetFlagUnitEnemy uint32 = 0x80
-	targetFlagUnitAlly  uint32 = 0x100
+	targetFlagUnit          uint32 = 0x2
+	targetFlagUnitRaid      uint32 = 0x4
+	targetFlagUnitParty     uint32 = 0x8
+	targetFlagUnitEnemy     uint32 = 0x80
+	targetFlagUnitAlly      uint32 = 0x100
+	targetFlagUnitPassenger uint32 = 0x100000 // TARGET_FLAG_UNIT_PASSENGER (SpellInfo.h:68)
 )
 
 // UNIT_FIELD_BYTES_2 PvP-flag byte values (UnitDefines.h:103-106); Go's
@@ -30,9 +31,15 @@ const (
 // type map their selection check type to the validating flag:
 // TARGET_CHECK_ENEMY -> TARGET_FLAG_UNIT_ENEMY, TARGET_CHECK_ALLY ->
 // TARGET_FLAG_UNIT_ALLY, TARGET_CHECK_PARTY -> TARGET_FLAG_UNIT_PARTY,
-// TARGET_CHECK_RAID -> TARGET_FLAG_UNIT_RAID. The table rows used are:
+// TARGET_CHECK_RAID -> TARGET_FLAG_UNIT_RAID, TARGET_CHECK_PASSENGER ->
+// TARGET_FLAG_UNIT_PASSENGER. The table rows used are:
 // 6 -> ENEMY; 21, 45 -> ALLY; 35 -> PARTY; 57 -> RAID (SpellInfo.cpp:226,
-// 241, 255, 265, 277).
+// 241, 255, 265, 277); 95 -> PASSENGER (SpellInfo.cpp:184, 315). Target 90
+// (TARGET_UNIT_TARGET_MINIPET) carries TARGET_CHECK_DEFAULT and falls
+// through to plain TARGET_FLAG_UNIT, so the TARGET_FLAG_UNIT_MINIPET bit
+// (0x10000, SpellInfo.h:64) is never produced by GetExplicitTargetMask and
+// its CheckExplicitTarget arm (SpellInfo.cpp:1806-1808) is dead on the
+// DBC-driven path.
 func spellExplicitUnitTargetMask(spell wotlk.Spell) uint32 {
 	mask := uint32(0)
 	for _, eff := range spell.Effects {
@@ -49,6 +56,8 @@ func spellExplicitUnitTargetMask(spell wotlk.Spell) uint32 {
 				mask |= targetFlagUnitParty
 			case 57:
 				mask |= targetFlagUnitRaid
+			case 95:
+				mask |= targetFlagUnitPassenger
 			}
 		}
 	}
@@ -64,10 +73,14 @@ func spellExplicitUnitTargetMask(spell wotlk.Spell) uint32 {
 // ALLY/PARTY/RAID runs the WorldObject::IsValidAssistTarget term ("can't
 // assist non-friendly targets" - GetReactionTo below REP_NEUTRAL in both
 // directions, Object.cpp:3145), with the PARTY/RAID membership terms
-// (Unit::IsInPartyWith/Unit::IsInRaidWith, Unit.cpp:12126). Returns true
-// when no branch passes and the cast must fail with SPELL_FAILED_BAD_TARGETS.
+// (Unit::IsInPartyWith/Unit::IsInRaidWith, Unit.cpp:12126).
+// TARGET_FLAG_UNIT_PASSENGER runs the unitTarget->IsOnVehicle(unitCaster)
+// term (SpellInfo.cpp:1809-1811) via explicitTargetPassengerBlocked. The
+// TARGET_FLAG_UNIT_MINIPET arm is dead (see spellExplicitUnitTargetMask).
+// Returns true when no branch passes and the cast must fail with
+// SPELL_FAILED_BAD_TARGETS.
 func (s *session) explicitTargetFactionBlocked(mask uint32, explicitUnitGUID uint64, tgt combatTarget) bool {
-	if mask&(targetFlagUnitEnemy|targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid) == 0 {
+	if mask&(targetFlagUnitEnemy|targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid|targetFlagUnitPassenger) == 0 {
 		return false
 	}
 	targetSess := s.server.findSessionByGUID(explicitUnitGUID)
@@ -100,7 +113,35 @@ func (s *session) explicitTargetFactionBlocked(mask uint32, explicitUnitGUID uin
 	if mask&targetFlagUnitRaid != 0 && !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) && s.sameGroupAs(targetSess, true) {
 		return false
 	}
+	if mask&targetFlagUnitPassenger != 0 && !s.explicitTargetPassengerBlocked(explicitUnitGUID) {
+		return false
+	}
 	return true
+}
+
+// explicitTargetPassengerBlocked mirrors the TARGET_FLAG_UNIT_PASSENGER arm
+// of SpellInfo::CheckExplicitTarget (SpellInfo.cpp:1809-1811):
+// unitTarget->IsOnVehicle(unitCaster) (Unit.cpp:12074-12077: m_vehicle &&
+// m_vehicle == vehicle->GetVehicleKit()). The caster is always the session
+// player on this path, so the caster's vehicle kit is the one registered
+// under their own GUID (getVehicleKit, vehicle.go:404); a missing kit means
+// the caster is not a vehicle and the target cannot ride it. The target
+// must occupy one of that kit's seats (VehicleKit.GetSeatForPassenger,
+// vehicle.go:94) — kit-pointer equality collapses to the same base GUID,
+// the m_vehicle non-null leg collapses to seat occupancy, and seats store
+// raw GUIDs so creature passengers ride the same lookup. The unitCaster
+// null arm is vacuous (the caster is always a player session here).
+// Returns true when the cast must fail with SPELL_FAILED_BAD_TARGETS.
+func (s *session) explicitTargetPassengerBlocked(explicitUnitGUID uint64) bool {
+	if s == nil || s.server == nil || s.player == nil {
+		return true
+	}
+	kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID)
+	if kit == nil {
+		return true
+	}
+	seatID, _, _ := kit.GetSeatForPassenger(explicitUnitGUID)
+	return seatID < 0
 }
 
 // explicitTargetAttackPvPBlocked mirrors the player-vs-player tail of

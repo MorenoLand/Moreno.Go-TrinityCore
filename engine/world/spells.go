@@ -2278,10 +2278,11 @@ func (s *session) unitTargetPowerType(guid uint64) (int32, bool) {
 // spellNeedsExplicitUnitTarget mirrors SpellInfo::NeedsExplicitUnitTarget
 // (SpellInfo.cpp:1047-1050): (GetExplicitTargetMask() &
 // TARGET_FLAG_UNIT_MASK) != 0, with TARGET_FLAG_UNIT_MASK = 0x2 | 0x4 | 0x8
-// (SpellInfo.h:70). The PARTY (0x8) and RAID (0x4) bits come from
-// spellExplicitUnitTargetMask (targets 35/57, SpellInfo.cpp:226/265); the
-// plain-UNIT (0x2) bit comes from TARGET-reference-type entries whose check
-// type falls through to TARGET_FLAG_UNIT in
+// | 0x80 | 0x100 | 0x400 | 0x10000 | 0x100000 (SpellInfo.h:70-71). The
+// PARTY (0x8), RAID (0x4), and PASSENGER (0x100000) bits come from
+// spellExplicitUnitTargetMask (targets 35/57/95, SpellInfo.cpp:226/265/184);
+// the plain-UNIT (0x2) bit comes from TARGET-reference-type entries whose
+// check type falls through to TARGET_FLAG_UNIT in
 // SpellImplicitTargetInfo::GetExplicitTargetMask (SpellInfo.cpp:134-210):
 // TARGET_CHECK_DEFAULT unit entries (25 TARGET_UNIT_TARGET_ANY) and dest
 // entries (63-71 TARGET_DEST_TARGET_ANY/front/.../left, 74/75
@@ -2290,7 +2291,7 @@ func (s *session) unitTargetPowerType(guid uint64) (int32, bool) {
 // use target 6 (UNIT_ENEMY = 0x80) or 21 (UNIT_ALLY = 0x100), so the mask
 // test is vacuous for them — the helper stays for custom-spell fidelity.
 func spellNeedsExplicitUnitTarget(spell wotlk.Spell) bool {
-	if mask := spellExplicitUnitTargetMask(spell); mask&(targetFlagUnitParty|targetFlagUnitRaid) != 0 {
+	if mask := spellExplicitUnitTargetMask(spell); mask&(targetFlagUnitParty|targetFlagUnitRaid|targetFlagUnitPassenger) != 0 {
 		return true
 	}
 	for _, eff := range spell.Effects {
@@ -4778,6 +4779,25 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// explicitTargetGMBlocked) fails the cast with
 	// SPELL_FAILED_BM_OR_INVISGOD (SharedDefines.h:1141).
 	// Self is exempt: IsValidAssistTarget returns true for self (Object.cpp:3092).
+	// The remaining CheckExplicitTarget arms (SpellInfo.cpp:1784-1811):
+	// the TARGET_FLAG_UNIT_PASSENGER arm (1809-1811) rides
+	// explicitTargetFactionBlocked via explicitTargetPassengerBlocked
+	// (unitTarget->IsOnVehicle(unitCaster), Unit.cpp:12074-12077 — caster's
+	// kit registered under their own GUID, target in one of its seats);
+	// the TARGET_FLAG_UNIT_MINIPET arm (1806-1808) is dead —
+	// GetExplicitTargetMask never produces the MINIPET bit (target 90 falls
+	// through to plain TARGET_FLAG_UNIT, SpellInfo.cpp:184-210). The
+	// null-target arm (1784-1790 — BAD_TARGETS when the unit/GO/corpse mask
+	// needs a target and none is sent, with the GAMEOBJECT_ITEM + itemTarget
+	// escape) is only partially covered: spellNeedsExplicitUnitTarget
+	// models the unit half of the mask, and the completion path defaults
+	// missing targets to self for self-cast-only and non-harmful spells,
+	// but a missing explicit target on a mask-needing spell does not fail
+	// BAD_TARGETS here. The IsPassive wrapper (Spell.cpp:5353-5360) is
+	// vacuous (passive spells are rejected at the lookup) and the
+	// m_originalCaster / GO-caster arm (5360-5364) is vacuous on the
+	// client-initiated path (the caster is always the session player; no
+	// original-caster or gameobject-cast model).
 	explicitUnitGUID := uint64(0)
 	if isSelfCastOnly(spell) {
 		hitTargets = append(hitTargets, s.playerGUID)
