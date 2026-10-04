@@ -40,6 +40,8 @@ const (
 	BotAddBusy             BotAssignResult = 0x040
 	BotAddNotAvailable     BotAssignResult = 0x080
 	BotAddSuccess          BotAssignResult = 0x100
+
+	BotAddFatal BotAssignResult = BotAddDisabled | BotAddCannotAfford | BotAddMaxExceeded | BotAddMaxClassExceeded
 )
 
 type NpcBotUpdateType uint8
@@ -348,6 +350,13 @@ func (m *NPCBotManager) IsClassEnabled(class uint8) bool {
 	}
 }
 
+func (m *NPCBotManager) maxNPCBots() uint32 {
+	if m.config.MaxBots > maxRaidSize-1 {
+		return maxRaidSize - 1
+	}
+	return m.config.MaxBots
+}
+
 func (m *NPCBotManager) CanAssign(owner, entry uint32) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -376,16 +385,13 @@ func (m *NPCBotManager) CanAssign(owner, entry uint32) bool {
 			}
 		}
 	}
-	if m.config.MaxBots == 0 {
-		return true
-	}
 	count := uint32(0)
 	for _, bot := range m.bots {
 		if bot.Owner == owner {
 			count++
 		}
 	}
-	return count < m.config.MaxBots
+	return count < m.maxNPCBots()
 }
 
 func (m *NPCBotManager) Assign(ctx context.Context, owner, entry uint32) error {
@@ -429,7 +435,7 @@ func (m *NPCBotManager) Recruit(ctx context.Context, owner, entry uint32) (BotAs
 			classOwned++
 		}
 	}
-	if m.config.MaxBots > 0 && owned >= m.config.MaxBots {
+	if owned >= m.maxNPCBots() {
 		return BotAddMaxExceeded, nil
 	}
 	if m.config.MaxBotsPerClass > 0 && classOwned >= m.config.MaxBotsPerClass {
