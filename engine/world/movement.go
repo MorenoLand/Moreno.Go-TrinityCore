@@ -366,12 +366,13 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	}
 	s.checkDuelBounds()
 
-	// Swimming state and breath mirror timer updates
+	// Swimming state and breath mirror timer updates (TC MovementHandler.cpp:366-369):
+	// InWater follows the MOVEMENTFLAG_SWIMMING bit on a flag/state mismatch;
+	// C++ keeps InWater when the reported position is still under water
+	// (jumping under water with the flag absent) — no bridge, Go has no
+	// water-volume model. START_SWIM/STOP_SWIM carry no override in C++.
 	wasSwimming := s.isSwimming
-	isSwimming := (info.Flags&movementSwimming != 0) || opcode == uint32(protocol.OpcodeMSG_MOVE_START_SWIM)
-	if opcode == uint32(protocol.OpcodeMSG_MOVE_STOP_SWIM) {
-		isSwimming = false
-	}
+	isSwimming := info.Flags&movementSwimming != 0
 	s.isSwimming = isSwimming
 	if isSwimming && !wasSwimming {
 		s.handleEnterSwimming()
