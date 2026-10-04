@@ -817,6 +817,21 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			return
 		}
 		dist := float32(math.Hypot(float64(target.X-motion.X), float64(target.Y-motion.Y)))
+		// Creature::Update no-path evade arm (Creature.cpp:924-930, CREATURE_NOPATH_EVADE_TIME
+		// = 5 * IN_MILLISECONDS, CreatureData.h:139) — document-only, no Go bridge.
+		// In C++ the ChaseMovementGenerator sets the m_cannotReachTarget flag when the
+		// target is in an inaccessible place (Unit::isInAccessiblePlaceFor: target in
+		// water requires the creature to swim, otherwise it must walk or fly —
+		// ChaseMovementGenerator.cpp:164) or when pathfinding fails outright
+		// (NOPATH, :200); SetCannotReachTarget resets the 5s timer on every change
+		// (Creature.cpp:3001-3010, clear sites at :207/CreatureAI.cpp:312/
+		// ScriptedCreature.cpp:259/Creature.cpp:2127), and the timer arm skips raid
+		// maps before calling AI()->EnterEvadeMode(EVADE_REASON_NO_PATH). Go has no
+		// PathGenerator — pursuit runs straight-line to the target's XYZ below, so
+		// the path-fail site can never fire; and creatureMotion carries CanFly only
+		// (no CanSwim/CanWalk flags) while player positions carry no liquid status,
+		// so the accessible-place predicate cannot be evaluated either. The flag can
+		// never be set, so the timer can never start.
 		if dist > 45.0 {
 			// Evade / drop combat if player ran too far: reset health, stop attack, and run back home
 			if motion.ThreatMgr != nil {
