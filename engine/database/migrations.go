@@ -145,6 +145,13 @@ func ApplyMigrationsWithOptions(ctx context.Context, store *Store, migrations []
 		if err != sql.ErrNoRows {
 			return result, err
 		}
+		renamed, renameErr := renameMigratedUpdate(ctx, store, migrations, *migration)
+		if renameErr != nil {
+			return result, renameErr
+		}
+		if renamed {
+			continue
+		}
 		if err := applyMigration(ctx, store, *migration, false); err != nil {
 			return result, err
 		}
@@ -193,6 +200,38 @@ type migrationRecord struct {
 	Name  string
 	Hash  string
 	State string
+}
+
+func renameMigratedUpdate(ctx context.Context, store *Store, migrations []Migration, migration Migration) (bool, error) {
+	if migration.Hash == "" {
+		return false, nil
+	}
+	names := make(map[string]struct{}, len(migrations))
+	for _, candidate := range migrations {
+		names[candidate.Name] = struct{}{}
+	}
+	rows, err := store.DB.QueryContext(ctx, "SELECT name FROM updates WHERE hash = ?", migration.Hash)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var oldName string
+		if err := rows.Scan(&oldName); err != nil {
+			return false, err
+		}
+		if _, present := names[oldName]; present {
+			continue
+		}
+		if _, err := store.DB.ExecContext(ctx, "UPDATE updates SET name = ? WHERE name = ?", migration.Name, oldName); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 func ensureMigrationMetadata(ctx context.Context, store *Store) error {

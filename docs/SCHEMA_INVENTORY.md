@@ -11,7 +11,7 @@ This is a schema inventory and dialect-drift report; it does not prove runtime d
 | --- | ---: |
 | Missing from SQLite | 0 |
 | Extra in SQLite | 0 |
-| Definition mismatches | 1 |
+| Definition mismatches | 0 |
 
 ## Missing from SQLite
 
@@ -23,4 +23,4 @@ None.
 
 ## Definition mismatches
 
-- `characters/TABLE/character_pet`
+None.
