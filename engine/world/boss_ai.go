@@ -11,6 +11,58 @@ import (
 
 // BossAI defines the interface for scripted boss encounters.
 // Reference: TrinityCore BossAI.h / ScriptedCreature.h.
+//
+// Callback audit vs BossAI::_Reset/_JustDied/_JustReachedHome/_JustEngagedWith
+// (ScriptedCreature.cpp:499-544), per implemented BossAI (item 6):
+// _Reset (499-510) vs OnReset — fired at respawn (kill.go:865, mirroring
+// ai->Reset() in Creature::Respawn, Creature.cpp:2198) and at evade via
+// OnEvade (mirroring Reset() at the tail of CreatureAI::_EnterEvadeMode,
+// CreatureAI.cpp:237); C++ runs no Reset at first spawn either, so Go's
+// alive-only call sites match. The !IsAlive() early return is vacuous.
+// SetCombatPulseDelay(0) and ResetLootMode() have no Go models — no bridge.
+// events.Reset() is bridged per-AI: every implementation re-arms its own
+// flags/timers in OnReset (vancleef 5 flags, mrSmite phase + 2 timers,
+// rhahkZor slamTimer, taragaman 2 timers, kresh shieldUsed); luaBossAI is a
+// no-op — its Lua script owns state via the Lua On_Reset event (23) the
+// engine fires. summons.DespawnAll() is bridged for vancleefAI, the only
+// implementation tracking summons, via despawnSummons; C++
+// boss_vancleef::Reset additionally re-summons its blackguards
+// (SummonBlackguards, boss_vancleef.cpp:83-87) — no Go analog, Go's
+// blackguards are 50%-arm spawns only (deliberate divergence from this C++
+// tree's reset-summon design). scheduler.CancelAll() needs no bridge — the
+// AIs are tick-driven and OnReset re-arms their timers. The instance
+// SetBossState(NOT_STARTED) arm has no boss-state model; Go's analog is
+// clearInstanceEncounter on evade (creaturemotion.go:626).
+// _JustDied (512-518) vs Go: the BossAI interface has NO death hook — the
+// checklist-named gap, still open. The Lua side keeps Eluna parity
+// (fireCreatureDied fires Lua event 23 On_Reset then event 4 On_Died), but
+// Go-native implementations get no callback: vancleefAI's summons persist
+// on death (C++ DespawnAll), per-AI flags linger until the respawn OnReset
+// re-arms them (next pull clean), and stale timers stay inert via the
+// OnUpdate !InCombat guard the kill paths set. The instance DONE arm has no
+// state model; the kill sites approximate it by clearing encounter-active
+// tracking (combat.go:566/879, spells.go:7446/12646) — except the pet
+// owner-gone branch (pet_combat.go:578-585), which skips the encounter clear
+// and the event-4 fire entirely.
+// _JustReachedHome (520-523) = me->setActive(false): no active model in Go;
+// already documented at creaturemotion.go:659-671 (Eluna event 24 fires, the
+// veto discarded as a provable no-op since only BossAI overrides
+// JustReachedHome). Go-native AIs carry no home-arrival model.
+// _JustEngagedWith (525-539) vs OnAggro (creaturemotion.go:443/1301):
+// CheckRequiredBosses SEQUENCE_BREAK documented no-bridge; instance
+// SetBossState(IN_PROGRESS) has no boss-state model — beginInstanceEncounter
+// is raid-gated (IsRaid) and a no-op for all five Go bosses (Deadmines and
+// Wailing Caverns are dungeons; only Lua-ported raid bosses use it);
+// SetCombatPulseDelay(5) and setActive(true) have no Go models — no bridge;
+// DoZoneInCombat() has no engine analog — no bridge (the C++ vancleef
+// summons.DoZoneInCombat() arm likewise; Go's 50%-arm blackguards spawn
+// already in combat). ScheduleTasks() is only partly bridged: Go per-AI
+// OnAggro arms are talk lines (vancleef, mrSmite, rhahkZor) or empty
+// (taragaman, kresh) — timer re-arm lives in OnReset (respawn/evade only).
+// Delta: on the first pull after server start, timers are zero-valued, so
+// mrSmite's trash/slam, rhahkZor's slam, and taragaman's fire-nova/uppercut
+// fire on the first combat tick instead of after their scheduled delays;
+// after any evade or respawn, OnReset re-arms and behavior matches C++.
 type BossAI interface {
 	OnReset(ctx context.Context, s *Server, motion *creatureMotion)
 	OnAggro(ctx context.Context, s *Server, motion *creatureMotion, victim uint64)
