@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -651,7 +652,8 @@ func (s *session) handleCalendarRemoveEvent(ctx context.Context, payload []byte)
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
 		var evTime uint32
-		_ = cdb.QueryRowContext(ctx, "SELECT eventtime FROM calendar_events WHERE id = ?", eventID).Scan(&evTime)
+		var evTitle string
+		_ = cdb.QueryRowContext(ctx, "SELECT eventtime, title FROM calendar_events WHERE id = ?", eventID).Scan(&evTime, &evTitle)
 
 		// Alert connected invitees before deleting
 		invRows, err := cdb.QueryContext(ctx, "SELECT invitee FROM calendar_invites WHERE event = ?", eventID)
@@ -668,6 +670,36 @@ func (s *session) handleCalendarRemoveEvent(ctx context.Context, payload []byte)
 						_ = otherSess.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_REMOVED_ALERT), remBuf.Bytes(), true)
 					}
 				}
+			}
+		}
+
+		// CalendarMgr::RemoveEvent (CalendarMgr.cpp:177-217): when an event is
+		// deleted, every invitee except the remover gets a calendar mail
+		// (MailDraft(subject, body) with MAIL_CHECK_MASK_COPIED). Subject is
+		// removerGUID:title, body is the packed event time as a decimal string
+		// (CalendarEvent::BuildCalendarMailSubject/BuildCalendarMailBody).
+		// MailSender(CalendarEvent*) -> MAIL_CALENDAR (5), sender = event id,
+		// MAIL_STATIONERY_DEFAULT; the 30-day expiry arm applies.
+		now := time.Now().Unix()
+		mailBody := strconv.FormatUint(uint64(protocol.PackTime(time.Unix(int64(evTime), 0))), 10)
+		mailRows, mailErr := cdb.QueryContext(ctx, "SELECT invitee FROM calendar_invites WHERE event = ?", eventID)
+		if mailErr == nil {
+			defer mailRows.Close()
+			for mailRows.Next() {
+				var inviteeGUID uint64
+				if err := mailRows.Scan(&inviteeGUID); err != nil || inviteeGUID == s.playerGUID {
+					continue
+				}
+				var nextMailID int64
+				_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&nextMailID)
+				if nextMailID <= 0 {
+					nextMailID = 1
+				}
+				subject := strconv.FormatUint(s.playerGUID, 10) + ":" + evTitle
+				_, _ = cdb.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
+					VALUES (?, 5, 41, 0, ?, ?, ?, ?, 0, ?, ?, 0, 0, 4)`,
+					nextMailID, uint32(eventID), inviteeGUID, subject, mailBody, now+mailSendExpireDelay(false, 0), now)
+				s.sendMailNotify(inviteeGUID)
 			}
 		}
 

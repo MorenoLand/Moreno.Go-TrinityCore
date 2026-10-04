@@ -694,6 +694,9 @@ func (s *session) grantXPWithVictimGroup(ctx context.Context, amount uint32, vic
 			_ = s.sendTalentsInfo(false)
 		}
 		s.updatePetOnLevelUp(ctx)
+		// Reference: Player::GiveLevel mails level rewards from mail_level_reward
+		// (Player.cpp:2768) once per reached level.
+		s.sendLevelUpMail(ctx, s.player.Level)
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET level = ?, xp = ?, health = ? WHERE guid = ?", s.player.Level, s.player.XP, s.player.Health, s.playerGUID)
 			for _, sk := range s.player.Skills {

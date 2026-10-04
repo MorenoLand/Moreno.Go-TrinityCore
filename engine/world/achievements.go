@@ -1228,6 +1228,10 @@ func (s *session) completeAchievement(achievementID uint32) {
 	}
 	achievementIndex.mu.RUnlock()
 	s.setAchievementCriteria(criteriaTypeEarnAchievementPoints, 0, totalPoints)
+
+	// Reference: AchievementMgr::CompletedAchievement mails the configured
+	// achievement_reward row (AchievementMgr.cpp:1544-1578).
+	s.sendAchievementRewardMail(achievementID)
 }
 
 // achievementCriteriaCount is used by tests to inspect the index size.
