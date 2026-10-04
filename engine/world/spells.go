@@ -376,6 +376,7 @@ const (
 	spellAuraModDurationByDispelNotStack           = 246  // SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL_NOT_STACK (SpellAuraDefines.h:326)
 	spellIconCheatDeath                            = 2109 // Cheat Death dummy aura (Unit.cpp:7078)
 	spellIconImprovedInsectSwarm                   = 1771 // Improved Insect Swarm talent dummy aura (SpellEffects.cpp:521)
+	spellIconRendAndTear                           = 2859 // Rend and Tear talent dummy aura (SpellEffects.cpp:3306)
 	spellSchoolMaskNormal                          = 1    // SPELL_SCHOOL_MASK_NORMAL (SharedDefines.h:324)
 	spellAuraAttackPowerPercent                    = 166
 	spellAuraRangedAttackPowerPercent              = 167
@@ -5280,6 +5281,48 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 								}
 							}
 						}
+						if weaponDamageEffect && lastWeaponEffect && spell.SpellFamilyName == spellFamilyDruid {
+							// Spell::EffectWeaponDmg (SpellEffects.cpp:3297-3311):
+							// the druid family arms. Mangle (Cat)
+							// (SpellFamilyFlags[1] & 0x400) banks one combo
+							// point on the target — the C++
+							// AddComboPointGain(unitTarget, 1), folded into the
+							// same comboGainTarget/comboGain per-cast bank as
+							// the Hemorrhage arm above (a new target restarts
+							// the bank, the same target accumulates, exactly
+							// matching the SPELL_EFFECT_ADD_COMBO_POINTS bank;
+							// the finish-phase spend covers both sources):
+							if spell.SpellFamilyFlags[1]&0x400 != 0 {
+								if effectTarget != comboGainTarget {
+									comboGainTarget = effectTarget
+									comboGain = 1
+								} else {
+									comboGain += 1
+								}
+							} else if spell.SpellFamilyFlags[0]&0x8800 != 0 && s.targetHasAuraState(effCtx, effectTarget, auraStateBleeding, spell) {
+								// Shred and Maul (SpellFamilyFlags[0] &
+								// 0x8800) with the Rend and Tear talent: when
+								// the target is bleeding, the first live
+								// caster dummy aura of Druid family icon 2859
+								// at effect index 0 (rendAndTearPct) adds its
+								// amount to totalDamagePercentMod. The C++
+								// unitTarget->HasAuraState(AURA_STATE_BLEEDING)
+								// fast path carries no spell/caster, so it is
+								// the unit-wide bit — the non-per-caster leg
+								// of targetHasAuraState matches it, while the
+								// caster IGNORE_AURASTATE bypass that helper
+								// consults has no C++ counterpart on this arm
+								// (documented delta). The AddPct lands here as
+								// targetDamage*(100+pct)/100, the integer
+								// equivalent of the C++
+								// int32(damage*totalDamagePercentMod) at
+								// SpellEffects.cpp:3456 for positive damage,
+								// behind the standing weapon-damage gap.
+								if pct := s.rendAndTearPct(); pct != 0 {
+									targetDamage = targetDamage * (100 + uint32(pct)) / 100
+								}
+							}
+						}
 						// Spell::EffectSchoolDMG (SpellEffects.cpp:354-378): the
 						// Warrior arms are documented no-bridge. Shield Slam
 						// (360-366, SpellFamilyFlags[1] & 0x200 with
@@ -7810,6 +7853,40 @@ func (s *session) wrathInsectSwarmBonus() int32 {
 			continue
 		}
 		if auraSpell.SpellFamilyName != spellFamilyDruid || auraSpell.SpellIconID != spellIconImprovedInsectSwarm {
+			continue
+		}
+		if len(auraSpell.Effects) == 0 || !spellEffectIsAuraEffect(auraSpell.Effects[0]) || auraSpell.Effects[0].Aura != spellAuraDummy {
+			continue
+		}
+		if amount := aura.Amounts[0]; amount != 0 {
+			return amount
+		}
+		return int32(aura.Amount)
+	}
+	return 0
+}
+
+// rendAndTearPct mirrors the Rend and Tear lookup in the druid arm of
+// Spell::EffectWeaponDmg (SpellEffects.cpp:3305-3308):
+// Unit::GetDummyAuraEffect(SPELLFAMILY_DRUID, 2859, 0) on the caster keeps
+// the first live SPELL_AURA_DUMMY effect whose aura spell is Druid-family
+// with SpellIconID 2859 at effect index 0, and its amount is the AddPct
+// bonus on totalDamagePercentMod applied to Shred and Maul on bleeding
+// targets. Returns 0 when the caster carries no such aura (the C++ if
+// simply never fires).
+func (s *session) rendAndTearPct() int32 {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil {
+		return 0
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.EffectMask&1 == 0 {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if auraSpell.SpellFamilyName != spellFamilyDruid || auraSpell.SpellIconID != spellIconRendAndTear {
 			continue
 		}
 		if len(auraSpell.Effects) == 0 || !spellEffectIsAuraEffect(auraSpell.Effects[0]) || auraSpell.Effects[0].Aura != spellAuraDummy {
