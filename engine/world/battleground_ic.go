@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
 
 // Isle of Conquest (IoC) Constants mirroring TrinityCore BattlegroundIC.h / BattlegroundIC.cpp.
@@ -37,6 +39,14 @@ const (
 	ICNodeStateConflictH    uint8 = 2
 	ICNodeStateControlledA  uint8 = 3
 	ICNodeStateControlledH  uint8 = 4
+)
+
+// BG_IC_GraveyardIds (BattlegroundIC.h:833): world_safe_locs IDs per node
+// type (indices 0..6; refinery/quarry are 0 = no grave), plus the per-team
+// "last resort" fallback graves (indices 7..8 = teamIndex + MAX_NODE_TYPES).
+var ICGraveyardIDs = [ICMaxNodes + 2]uint32{0, 0, 1480, 1481, 1482, 1485, 1486, 1483, 1484}
+
+const (
 
 	// Gate States
 	ICGateOK        uint8 = 1
@@ -259,6 +269,65 @@ type icNodeState struct {
 	Timer        time.Duration
 	CaptureTimer *time.Timer
 	Banners      [4]uint32 // ControlledA, ContestedA, ControlledH, ContestedH
+}
+
+// closestICGraveyard mirrors BattlegroundIC::GetClosestGraveyard: every node
+// owned by the player's team is a candidate via its ICGraveyardIDs entry, the
+// closest by 2D distance wins, and the per-team fallback grave applies when
+// the team owns no node. A false return lets the generic zone path run (C++
+// always returns an entry; Go falls back when the DBC rows are missing).
+func (s *Server) closestICGraveyard(x, y float32, team uint32) (wotlk.WorldSafeLoc, bool) {
+	var teamIndex uint32
+	switch team {
+	case teamAlliance:
+		teamIndex = ICTeamAlliance
+	case teamHorde:
+		teamIndex = ICTeamHorde
+	default:
+		return wotlk.WorldSafeLoc{}, false
+	}
+	if s == nil || s.Data == nil {
+		return wotlk.WorldSafeLoc{}, false
+	}
+	ic := s.getOrCreateICState(ICMapID)
+	if ic == nil {
+		return wotlk.WorldSafeLoc{}, false
+	}
+	ic.mu.Lock()
+	factions := make([]uint32, ICMaxNodes)
+	for i := range ic.Nodes {
+		factions[i] = ic.Nodes[i].Faction
+	}
+	ic.mu.Unlock()
+
+	var best wotlk.WorldSafeLoc
+	bestDist := float32(999999.0)
+	found := false
+	for i, faction := range factions {
+		if faction != teamIndex {
+			continue
+		}
+		id := ICGraveyardIDs[i]
+		if id == 0 {
+			continue
+		}
+		loc, ok, err := s.Data.WorldSafeLoc(id)
+		if err != nil || !ok {
+			continue
+		}
+		dx, dy := loc.X-x, loc.Y-y
+		if dist := dx*dx + dy*dy; !found || dist < bestDist {
+			best, bestDist, found = loc, dist, true
+		}
+	}
+	if found {
+		return best, true
+	}
+	loc, ok, err := s.Data.WorldSafeLoc(ICGraveyardIDs[ICMaxNodes+teamIndex])
+	if err != nil || !ok {
+		return wotlk.WorldSafeLoc{}, false
+	}
+	return loc, true
 }
 
 type icBattlegroundState struct {

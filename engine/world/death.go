@@ -593,6 +593,13 @@ func playerTeam(race uint8) uint32 {
 
 // closestGraveyard mirrors ObjectMgr::GetClosestGraveyard.
 func (s *Server) closestGraveyard(ctx context.Context, x, y, z float32, mapID, zoneID, team uint32) (wotlk.WorldSafeLoc, bool) {
+	// BattlegroundIC::GetClosestGraveyard replaces the generic zone lookup
+	// wholesale for IoC: owned-node graves first, per-team fallback after.
+	if mapID == ICMapID {
+		if loc, found := s.closestICGraveyard(x, y, team); found {
+			return loc, true
+		}
+	}
 	if s.WorldStore == nil || s.WorldStore.DB == nil || s.Data == nil {
 		return wotlk.WorldSafeLoc{}, false
 	}
