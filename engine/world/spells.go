@@ -6316,6 +6316,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	}
 
 	hasExplicitEffects := false
+	// Spell::AddComboPointGain (Spell.h:515-522) per-cast bank for the
+	// triggered path: ADD_COMBO_POINTS effects (Spell::EffectAddComboPoints,
+	// SpellEffects.cpp:3781-3789) fire on the HIT phase of triggered casts
+	// too, and _handle_finish_phase spends the bank after all targets are
+	// processed (Spell.cpp:3738-3752). The dodge/miss no-take arm
+	// (Spell.cpp:2606) is structural — this path has no miss model.
+	var comboGainTarget uint64
+	var comboGain int8
 	// Per-(cast, target) first-merge marker for the aura re-apply path
 	// (Spell.cpp:2842): only the first aura effect per target runs the
 	// ModStackAmount(+1) merge, later effects only refresh their amounts.
@@ -6364,6 +6372,21 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			s.applySpellThreat(ctx, targetGUID, eff.BasePoints+1)
 		} else if eff.Effect == spellEffectHealMaxHealth {
 			s.executeSpellMaxHealthHeal(ctx, targetGUID, spellID)
+		} else if eff.Effect == spellEffectAddComboPoints {
+			// Spell::EffectAddComboPoints (SpellEffects.cpp:3781-3789):
+			// the effectHandleMode gate is structural (this dispatch is the
+			// HIT phase), damage <= 0 gains nothing. A new target restarts
+			// the bank, the same target accumulates (Spell::AddComboPointGain,
+			// Spell.h:515-522); the spend lands in _handle_finish_phase.
+			gain := int8(eff.BasePoints + 1)
+			if gain > 0 && targetGUID != 0 {
+				if targetGUID != comboGainTarget {
+					comboGainTarget = targetGUID
+					comboGain = gain
+				} else {
+					comboGain += gain
+				}
+			}
 		}
 	}
 
@@ -6382,6 +6405,20 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	s.fireSpellLinkedTriggers(ctx, spellID, targetGUID)
 	s.resetCastCooldownCheat(spellID)
 	s.procSpellCastPhaseAuraTriggers(ctx, spell)
+
+	// Spell::_handle_finish_phase (Spell.cpp:3737-3752) combo-point legs
+	// for the triggered path, landing after the _cast tail the way the
+	// C++ finish phase follows _cast. The take leg (m_needComboPoints →
+	// ClearComboPoints) is dead here: prepare resets m_needComboPoints for
+	// any triggered cast via TRIGGERED_IGNORE_COMBO_POINTS (Spell.cpp:3096;
+	// SpellDefines.h:140, carried by TRIGGERED_FULL_MASK at :153), which
+	// this path always uses. Only the give leg runs — the banked per-cast
+	// gain from ADD_COMBO_POINTS effects. The RETAIN_COMBO_POINTS aura
+	// removal (Spell.cpp:3747-3750) has no Go bridge — the Go aura model
+	// tracks no such aura type (same no-bridge as the client path).
+	if comboGainTarget != 0 && comboGain > 0 {
+		s.addSessionComboPoints(comboGainTarget, comboGain)
+	}
 }
 
 func (s *session) applySpellEnergize(ctx context.Context, targetGUID uint64, powerType int32, amount int32) {
