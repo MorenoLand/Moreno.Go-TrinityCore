@@ -192,6 +192,36 @@ func calendarTakeCreateCooldown(s *session) bool {
 	return true
 }
 
+// boolToU8 maps a boolean wire arm to its u8 encoding.
+func boolToU8(b bool) uint8 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// calendarGuildMemberSessions returns every online session whose player is in
+// the given guild — the Guild::BroadcastPacket arm used by
+// CalendarMgr::SendCalendarEventInviteAlert (CalendarMgr.cpp:581-598) and
+// CalendarMgr::SendPacketToAllEventRelatives (CalendarMgr.cpp:700-712).
+func calendarGuildMemberSessions(srv *Server, guildID uint32) []*session {
+	var targets []*session
+	if srv == nil || guildID == 0 {
+		return targets
+	}
+	srv.sessionsMu.RLock()
+	for sess := range srv.sessions {
+		if !sess.worldReady.Load() || sess.player == nil {
+			continue
+		}
+		if sess.player.GuildID == guildID {
+			targets = append(targets, sess)
+		}
+	}
+	srv.sessionsMu.RUnlock()
+	return targets
+}
+
 // calendarEventRelativeSessions implements CalendarMgr::SendPacketToAllEventRelatives
 // (CalendarMgr.cpp:700-712): guild events and guild announcements go to every
 // online guild member; every connected invitee outside the event's guild gets a
@@ -223,16 +253,9 @@ func calendarEventRelativeSessions(ctx context.Context, srv *Server, eventID uin
 			targets = append(targets, sess)
 		}
 	}
-	srv.sessionsMu.RLock()
-	for sess := range srv.sessions {
-		if !sess.worldReady.Load() || sess.player == nil {
-			continue
-		}
-		if eventGuild != 0 && sess.player.GuildID == eventGuild {
-			add(sess)
-		}
+	for _, sess := range calendarGuildMemberSessions(srv, eventGuild) {
+		add(sess)
 	}
-	srv.sessionsMu.RUnlock()
 	invRows, err := cdb.QueryContext(ctx, "SELECT invitee FROM calendar_invites WHERE event = ?", eventID)
 	if err != nil {
 		return targets
@@ -779,19 +802,51 @@ func (s *session) handleCalendarAddEvent(ctx context.Context, payload []byte) bo
 				 VALUES (?, ?, ?, ?, ?, ?, ?, '')`,
 				nextInviteID, nextID, s.playerGUID, s.playerGUID, CalendarStatusAccepted, time.Now().Unix(), CalendarRankCreator)
 
-			// Insert additional invites
+			// Insert additional invites. CalendarMgr::AddInvite (CalendarMgr.cpp:147-160)
+			// broadcasts the SMSG_CALENDAR_EVENT_INVITE before storing the invite
+			// row, so the relative set is read first; the invite packet goes to
+			// every event relative (SendCalendarEventInvite, CalendarMgr.cpp:481-514)
+			// and the alert goes to the connected invitee direct for non-guild
+			// events — guild events alert only the creator-invitee (never true
+			// here, self is skipped), and announcements carry no invites.
 			for _, inv := range rawInvites {
 				if inv.guid == s.playerGUID || inv.guid == 0 {
 					continue
 				}
+
+				var invLevel uint8
+				inviteSess := s.server.findSessionByGUID(inv.guid)
+				if inviteSess != nil && inviteSess.player != nil {
+					invLevel = inviteSess.player.Level
+				} else {
+					_ = cdb.QueryRowContext(ctx,
+						"SELECT level FROM characters WHERE guid = ?", inv.guid).Scan(&invLevel)
+				}
+
+				relatives := calendarEventRelativeSessions(ctx, s.server, nextID)
+
 				nextInviteID++
 				_, _ = cdb.ExecContext(ctx,
 					`INSERT INTO calendar_invites (id, event, invitee, sender, status, statustime, rank, text)
 					 VALUES (?, ?, ?, ?, ?, ?, ?, '')`,
 					nextInviteID, nextID, inv.guid, s.playerGUID, inv.status, calendarDefaultResponseTime, inv.moderator)
 
-				// Send SMSG_CALENDAR_EVENT_INVITE_ALERT to online invitee
-				if otherSess := s.server.findSessionByGUID(inv.guid); otherSess != nil {
+				invBuf := protocol.NewBuffer(32)
+				invBuf.WritePackedGUID(inv.guid)
+				invBuf.WriteU64(nextID)
+				invBuf.WriteU64(nextInviteID)
+				invBuf.WriteU8(invLevel)
+				invBuf.WriteU8(inv.status)
+				invBuf.WriteU8(0) // hasStatusTime (new invites carry 946684800)
+				invBuf.WriteU8(1) // sender (creator) != invitee
+				for _, t := range relatives {
+					_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE), invBuf.Bytes(), true)
+				}
+
+				// SendCalendarEventInviteAlert (CalendarMgr.cpp:581-598): guild
+				// events broadcast only to the guild, and the creator-invitee
+				// case cannot occur in the client invite list.
+				if flags&calendarFlagGuildEvent == 0 && inviteSess != nil {
 					alertBuf := protocol.NewBuffer(64 + len(title))
 					alertBuf.WriteU64(nextID)
 					alertBuf.WriteCString(title)
@@ -804,7 +859,7 @@ func (s *session) handleCalendarAddEvent(ctx context.Context, payload []byte) bo
 					alertBuf.WriteU8(inv.moderator)
 					alertBuf.WritePackedGUID(s.playerGUID)
 					alertBuf.WritePackedGUID(s.playerGUID)
-					_ = otherSess.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertBuf.Bytes(), true)
+					_ = inviteSess.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertBuf.Bytes(), true)
 				}
 			}
 		}
@@ -1071,8 +1126,8 @@ func (s *session) handleCalendarEventInvite(ctx context.Context, payload []byte)
 		invBuf.WriteU64(invite)
 		invBuf.WriteU8(targetLevel)
 		invBuf.WriteU8(CalendarStatusInvited)
-		invBuf.WriteU8(0) // hasStatusTime
-		invBuf.WriteU8(1) // sender != invitee
+		invBuf.WriteU8(0)                                    // hasStatusTime
+		invBuf.WriteU8(boolToU8(s.playerGUID != targetGUID)) // sender != invitee
 		return s.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE), invBuf.Bytes(), true) == nil
 	}
 
@@ -1129,29 +1184,55 @@ func (s *session) handleCalendarEventInvite(ctx context.Context, payload []byte)
 			"INSERT INTO calendar_invites (id, event, invitee, sender, status, statustime, rank, text) VALUES (?, ?, ?, ?, ?, ?, ?, '')",
 			nextInviteID, eventID, targetGUID, s.playerGUID, CalendarStatusInvited, calendarDefaultResponseTime, CalendarRankPlayer)
 
-		sendCalendarEventInviteToSender(targetGUID, targetLevel, eventID, nextInviteID)
+		// CalendarMgr::AddInvite (CalendarMgr.cpp:147-160) via SendCalendarEventInvite
+		// (CalendarMgr.cpp:481-514): the invite packet goes to every event
+		// relative and is skipped entirely when the invitee is the event
+		// creator (the relatives set is read before the insert, matching
+		// AddInvite's broadcast-before-store order).
+		if evCreator != targetGUID {
+			invBuf := protocol.NewBuffer(32)
+			invBuf.WritePackedGUID(targetGUID)
+			invBuf.WriteU64(eventID)
+			invBuf.WriteU64(nextInviteID)
+			invBuf.WriteU8(targetLevel)
+			invBuf.WriteU8(CalendarStatusInvited)
+			invBuf.WriteU8(0)                                    // hasStatusTime (new invites carry 946684800)
+			invBuf.WriteU8(boolToU8(s.playerGUID != targetGUID)) // sender != invitee
+			for _, t := range calendarEventRelativeSessions(ctx, s.server, eventID) {
+				_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE), invBuf.Bytes(), true)
+			}
+		}
 
-		// Send SMSG_CALENDAR_EVENT_INVITE_ALERT to target player if online
-		if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil {
-			var evTitle string
-			var evType uint32
-			var evDungeon int32
-			var evTime uint32
-			_ = cdb.QueryRowContext(ctx, "SELECT title, type, dungeon, eventtime FROM calendar_events WHERE id = ?", eventID).
-				Scan(&evTitle, &evType, &evDungeon, &evTime)
+		// SendCalendarEventInviteAlert (CalendarMgr.cpp:581-598): guild events
+		// are broadcast to every online guild member (only the creator-invitee
+		// case reaches this arm); otherwise the alert goes to the connected
+		// invitee direct.
+		var evTitle string
+		var evType uint32
+		var evDungeon int32
+		var evTime uint32
+		_ = cdb.QueryRowContext(ctx, "SELECT title, type, dungeon, eventtime FROM calendar_events WHERE id = ?", eventID).
+			Scan(&evTitle, &evType, &evDungeon, &evTime)
 
-			alertBuf := protocol.NewBuffer(64 + len(evTitle))
-			alertBuf.WriteU64(eventID)
-			alertBuf.WriteCString(evTitle)
-			alertBuf.WritePackedTime(time.Unix(int64(evTime), 0))
-			alertBuf.WriteU32(evFlags)
-			alertBuf.WriteU32(evType)
-			alertBuf.WriteI32(evDungeon)
-			alertBuf.WriteU64(nextInviteID)
-			alertBuf.WriteU8(CalendarStatusInvited)
-			alertBuf.WriteU8(CalendarRankPlayer)
-			alertBuf.WritePackedGUID(evCreator)
-			alertBuf.WritePackedGUID(s.playerGUID)
+		alertBuf := protocol.NewBuffer(64 + len(evTitle))
+		alertBuf.WriteU64(eventID)
+		alertBuf.WriteCString(evTitle)
+		alertBuf.WritePackedTime(time.Unix(int64(evTime), 0))
+		alertBuf.WriteU32(evFlags)
+		alertBuf.WriteU32(evType)
+		alertBuf.WriteI32(evDungeon)
+		alertBuf.WriteU64(nextInviteID)
+		alertBuf.WriteU8(CalendarStatusInvited)
+		alertBuf.WriteU8(CalendarRankPlayer)
+		alertBuf.WritePackedGUID(evCreator)
+		alertBuf.WritePackedGUID(s.playerGUID)
+		if evFlags&calendarFlagGuildEvent != 0 {
+			if targetGUID == evCreator {
+				for _, t := range calendarGuildMemberSessions(s.server, calendarCreatorGuildID(ctx, cdb, evCreator)) {
+					_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertBuf.Bytes(), true)
+				}
+			}
+		} else if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil {
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertBuf.Bytes(), true)
 		}
 	}
