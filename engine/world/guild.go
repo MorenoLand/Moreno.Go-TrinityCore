@@ -3967,17 +3967,26 @@ func (s *session) handleQueryGuildBankText(ctx context.Context, payload []byte) 
 		return false
 	}
 
+	// Reference: WorldSession::HandleGuildBankTextQuery (GuildHandler.cpp:
+	// 368) + Guild::SendBankTabText (Guild.cpp:1848-1850): a guildless
+	// player gets no packet (the guild lookup fails), and a missing bank
+	// tab sends nothing — the packet is only built when GetBankTab
+	// returns the tab.
 	cdb := s.server.CharactersStore.DB
+	if cdb == nil || s.player == nil {
+		return true
+	}
+	var guildID int64
+	if err := cdb.QueryRowContext(ctx, "SELECT guildid FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&guildID); err != nil || guildID <= 0 {
+		return true
+	}
+	var text sql.NullString
+	if err := cdb.QueryRowContext(ctx, "SELECT TabText FROM guild_bank_tab WHERE guildid = ? AND TabId = ? LIMIT 1", guildID, tabID).Scan(&text); err != nil {
+		return true
+	}
 	tabText := ""
-	if cdb != nil {
-		var guildID int64
-		if err := cdb.QueryRowContext(ctx, "SELECT guildid FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&guildID); err == nil && guildID > 0 {
-			var text sql.NullString
-			_ = cdb.QueryRowContext(ctx, "SELECT TabText FROM guild_bank_tab WHERE guildid = ? AND TabId = ? LIMIT 1", guildID, tabID).Scan(&text)
-			if text.Valid {
-				tabText = text.String
-			}
-		}
+	if text.Valid {
+		tabText = text.String
 	}
 
 	buf := protocol.NewBuffer(64 + len(tabText))
