@@ -373,6 +373,9 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 					node.CaptureTimer.Stop()
 					node.CaptureTimer = nil
 				}
+				// Reference: BattlegroundAV::DefendNode (BattlegroundAV.cpp:1467):
+				// PrevOwner = Owner, and C++'s Owner is the assaulter at this point.
+				node.PrevOwner = AVTeamAlliance
 				node.State = AVNodeStateControlled
 				node.Owner = AVTeamHorde
 				s.updateAVNodeBanner(av, nodeID)
@@ -386,6 +389,9 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 					node.CaptureTimer.Stop()
 					node.CaptureTimer = nil
 				}
+				// Reference: BattlegroundAV::DefendNode (BattlegroundAV.cpp:1467):
+				// PrevOwner = Owner, and C++'s Owner is the assaulter at this point.
+				node.PrevOwner = AVTeamHorde
 				node.State = AVNodeStateControlled
 				node.Owner = AVTeamAlliance
 				s.updateAVNodeBanner(av, nodeID)
@@ -422,6 +428,9 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 						node.CaptureTimer.Stop()
 						node.CaptureTimer = nil
 					}
+					// Reference: BattlegroundAV::DefendNode (BattlegroundAV.cpp:1467):
+					// PrevOwner = Owner, and C++'s Owner is the assaulter at this point.
+					node.PrevOwner = AVTeamAlliance
 					node.State = AVNodeStateControlled
 					node.Owner = AVTeamHorde
 					s.updateAVNodeBanner(av, nodeID)
@@ -433,7 +442,12 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 						node.CaptureTimer.Stop()
 					}
 					node.State = AVNodeStateContestedHorde
-					s.startAVNodeCaptureTimer(av, nodeID, playerTeam, node.PrevOwner == AVTeamNeutral)
+					// Reference: BattlegroundAV::AssaultNode (BattlegroundAV.cpp:1414):
+					// on a re-assault of an already-assaulted node, C++ reads
+					// PrevOwner before assignment, and it holds the first
+					// assaulter (a real team, never neutral), so the timer is
+					// always BG_AV_CAPTIME, never BG_AV_SNOWFALL_FIRSTCAP.
+					s.startAVNodeCaptureTimer(av, nodeID, playerTeam, false)
 					s.updateAVNodeBanner(av, nodeID)
 					s.updateAVNodeWorldStates(av, nodeID)
 					s.announceAVAssault(av.MapID, sess.accountName, nodeID, playerTeam)
@@ -447,6 +461,9 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 						node.CaptureTimer.Stop()
 						node.CaptureTimer = nil
 					}
+					// Reference: BattlegroundAV::DefendNode (BattlegroundAV.cpp:1467):
+					// PrevOwner = Owner, and C++'s Owner is the assaulter at this point.
+					node.PrevOwner = AVTeamHorde
 					node.State = AVNodeStateControlled
 					node.Owner = AVTeamAlliance
 					s.updateAVNodeBanner(av, nodeID)
@@ -458,7 +475,12 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 						node.CaptureTimer.Stop()
 					}
 					node.State = AVNodeStateContestedAlliance
-					s.startAVNodeCaptureTimer(av, nodeID, playerTeam, node.PrevOwner == AVTeamNeutral)
+					// Reference: BattlegroundAV::AssaultNode (BattlegroundAV.cpp:1414):
+					// on a re-assault of an already-assaulted node, C++ reads
+					// PrevOwner before assignment, and it holds the first
+					// assaulter (a real team, never neutral), so the timer is
+					// always BG_AV_CAPTIME, never BG_AV_SNOWFALL_FIRSTCAP.
+					s.startAVNodeCaptureTimer(av, nodeID, playerTeam, false)
 					s.updateAVNodeBanner(av, nodeID)
 					s.updateAVNodeWorldStates(av, nodeID)
 					s.announceAVAssault(av.MapID, sess.accountName, nodeID, playerTeam)
