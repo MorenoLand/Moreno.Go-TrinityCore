@@ -23,6 +23,20 @@ const (
 	WSGFlagStateOnBase   uint32 = 1
 	WSGFlagStateOnPlayer uint32 = 2
 	WSGFlagStateOnGround uint32 = 3
+	// WSGFlagStateWaitRespawn is Go-internal: C++ BG_WS_FLAG_STATE_WAIT_RESPAWN=1
+	// collides with Go's OnBase=1 worldstate convention, so the capture-respawn
+	// window gets its own internal state while still broadcasting 1.
+	WSGFlagStateWaitRespawn uint32 = 4
+
+	WSGFlagRespawnTime = 23 * time.Second // BG_WS_FLAG_RESPAWN_TIME (BattlegroundWS.h:27)
+	WSGFlagDropTime    = 10 * time.Second // BG_WS_FLAG_DROP_TIME (BattlegroundWS.h:28)
+
+	WSGSpellSilverwingFlagPicked uint32 = 61265 // BG_WS_SPELL_SILVERWING_FLAG_PICKED (fake spell, timed-achievement event)
+	WSGSpellWarsongFlagPicked    uint32 = 61266 // BG_WS_SPELL_WARSONG_FLAG_PICKED
+
+	WSGFactionSilverwingSentinels uint32 = 890 // Alliance WSG reputation faction
+	WSGFactionWarsongOutriders    uint32 = 889 // Horde WSG reputation faction
+	WSGReputationCapture          uint32 = 35  // m_ReputationCapture non-weekend (BattlegroundWS.cpp:740); Go has no BG-weekend model
 
 	WSWorldStateAllianceCaptures  uint32 = 1581
 	WSWorldStateHordeCaptures     uint32 = 1582
@@ -47,6 +61,11 @@ type wsgBattlegroundState struct {
 	HordeDroppedGUID    uint64
 	AllianceReturnTimer *time.Timer
 	HordeReturnTimer    *time.Timer
+	// WaitRespawnTimer arms mirror BattlegroundWS::PostUpdateImpl's _flagsTimer
+	// countdown (BattlegroundWS.cpp:112-122): the captured flag returns to its
+	// base BG_WS_FLAG_RESPAWN_TIME after a capture via RespawnFlag(team, true).
+	AllianceWaitRespawnTimer *time.Timer
+	HordeWaitRespawnTimer    *time.Timer
 }
 
 func isWSGFlag(entry uint32) bool {
@@ -105,6 +124,7 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				wsg.AllianceBaseGUID = guid
 
 				sess.applyAura(WSGSpellSilverwingFlag)
+				sess.startTimedAchievement(timedTypeSpellTarget, WSGSpellSilverwingFlagPicked)
 				s.setGameObjectHidden(guid, true)
 				s.broadcastGameObjectDespawn(sess.player.Map, guid)
 				s.broadcastWorldState(sess.player.Map, WSWorldStateAllianceFlagState, WSGFlagStateOnPlayer)
@@ -115,14 +135,15 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 			if wsg.HordeCarrierGUID == sess.playerGUID && wsg.AllianceFlagState == WSGFlagStateOnBase {
 				sess.removeAura(WSGSpellWarsongFlag)
 				wsg.HordeCarrierGUID = 0
-				wsg.HordeFlagState = WSGFlagStateOnBase
+				wsg.HordeFlagState = WSGFlagStateWaitRespawn
 				wsg.AllianceScore++
+
+				s.rewardBGEndReputation(sess.player.Map, 0, WSGFactionSilverwingSentinels, WSGReputationCapture)
+				s.rewardBGEndHonor(sess.player.Map, 0, 2)
 
 				s.broadcastWorldState(sess.player.Map, WSWorldStateAllianceCaptures, wsg.AllianceScore)
 				s.broadcastWorldState(sess.player.Map, WSWorldStateHordeFlagState, WSGFlagStateOnBase)
-				if wsg.HordeBaseGUID != 0 {
-					s.setGameObjectHidden(wsg.HordeBaseGUID, false)
-				}
+				s.startWSGFlagRespawnTimer(wsg, sess.player.Map, 1)
 				s.broadcastBattlegroundMessage(sess.player.Map, sess.player.Name+" captured the Warsong flag!")
 				if wsg.AllianceScore >= wsg.MaxScore {
 					s.endWSGVictory(sess.player.Map, 0)
@@ -139,6 +160,7 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				wsg.HordeBaseGUID = guid
 
 				sess.applyAura(WSGSpellWarsongFlag)
+				sess.startTimedAchievement(timedTypeSpellTarget, WSGSpellWarsongFlagPicked)
 				s.setGameObjectHidden(guid, true)
 				s.broadcastGameObjectDespawn(sess.player.Map, guid)
 				s.broadcastWorldState(sess.player.Map, WSWorldStateHordeFlagState, WSGFlagStateOnPlayer)
@@ -149,14 +171,15 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 			if wsg.AllianceCarrierGUID == sess.playerGUID && wsg.HordeFlagState == WSGFlagStateOnBase {
 				sess.removeAura(WSGSpellSilverwingFlag)
 				wsg.AllianceCarrierGUID = 0
-				wsg.AllianceFlagState = WSGFlagStateOnBase
+				wsg.AllianceFlagState = WSGFlagStateWaitRespawn
 				wsg.HordeScore++
+
+				s.rewardBGEndReputation(sess.player.Map, 1, WSGFactionWarsongOutriders, WSGReputationCapture)
+				s.rewardBGEndHonor(sess.player.Map, 1, 2)
 
 				s.broadcastWorldState(sess.player.Map, WSWorldStateHordeCaptures, wsg.HordeScore)
 				s.broadcastWorldState(sess.player.Map, WSWorldStateAllianceFlagState, WSGFlagStateOnBase)
-				if wsg.AllianceBaseGUID != 0 {
-					s.setGameObjectHidden(wsg.AllianceBaseGUID, false)
-				}
+				s.startWSGFlagRespawnTimer(wsg, sess.player.Map, 0)
 				s.broadcastBattlegroundMessage(sess.player.Map, sess.player.Name+" captured the Alliance flag!")
 				if wsg.HordeScore >= wsg.MaxScore {
 					s.endWSGVictory(sess.player.Map, 1)
@@ -183,6 +206,7 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 			wsg.AllianceFlagState = WSGFlagStateOnPlayer
 			wsg.AllianceCarrierGUID = sess.playerGUID
 			sess.applyAura(WSGSpellSilverwingFlag)
+			sess.startTimedAchievement(timedTypeSpellTarget, WSGSpellSilverwingFlagPicked)
 			s.broadcastWorldState(sess.player.Map, WSWorldStateAllianceFlagState, WSGFlagStateOnPlayer)
 			s.broadcastBattlegroundMessage(sess.player.Map, "The Alliance flag was picked up by "+sess.player.Name+"!")
 		}
@@ -206,12 +230,46 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 			wsg.HordeFlagState = WSGFlagStateOnPlayer
 			wsg.HordeCarrierGUID = sess.playerGUID
 			sess.applyAura(WSGSpellWarsongFlag)
+			sess.startTimedAchievement(timedTypeSpellTarget, WSGSpellWarsongFlagPicked)
 			s.broadcastWorldState(sess.player.Map, WSWorldStateHordeFlagState, WSGFlagStateOnPlayer)
 			s.broadcastBattlegroundMessage(sess.player.Map, "The Warsong flag was picked up by "+sess.player.Name+"!")
 		}
 	}
 
+	sess.removeAurasWithInterruptFlags(auraInterruptFlagEnterPvPCombat)
+
 	return true
+}
+
+// startWSGFlagRespawnTimer mirrors BattlegroundWS::PostUpdateImpl's _flagsTimer
+// countdown (BattlegroundWS.cpp:112-122): the captured team's flag state is
+// BG_WS_FLAG_STATE_WAIT_RESPAWN for BG_WS_FLAG_RESPAWN_TIME, then
+// RespawnFlag(team, true) returns it to base with the BG_WS_TEXT_FLAGS_PLACED
+// broadcast. The caller's wsg.mu is held; team is 0 Alliance, 1 Horde.
+func (s *Server) startWSGFlagRespawnTimer(wsg *wsgBattlegroundState, mapID uint32, team uint32) {
+	arm := func(timer **time.Timer, state *uint32, baseGUID *uint64, worldStateID uint32) {
+		if *timer != nil {
+			(*timer).Stop()
+		}
+		*timer = time.AfterFunc(WSGFlagRespawnTime, func() {
+			wsg.mu.Lock()
+			defer wsg.mu.Unlock()
+			*timer = nil
+			if *state == WSGFlagStateWaitRespawn {
+				*state = WSGFlagStateOnBase
+				if *baseGUID != 0 {
+					s.setGameObjectHidden(*baseGUID, false)
+				}
+				s.broadcastWorldState(mapID, worldStateID, WSGFlagStateOnBase)
+				s.broadcastBattlegroundMessage(mapID, "The flags were placed!")
+			}
+		})
+	}
+	if team == 0 {
+		arm(&wsg.AllianceWaitRespawnTimer, &wsg.AllianceFlagState, &wsg.AllianceBaseGUID, WSWorldStateAllianceFlagState)
+	} else {
+		arm(&wsg.HordeWaitRespawnTimer, &wsg.HordeFlagState, &wsg.HordeBaseGUID, WSWorldStateHordeFlagState)
+	}
 }
 
 func (s *Server) handleWSGPlayerDeath(sess *session) {
@@ -261,7 +319,7 @@ func (s *Server) handleWSGPlayerDeath(sess *session) {
 		if wsg.AllianceReturnTimer != nil {
 			wsg.AllianceReturnTimer.Stop()
 		}
-		wsg.AllianceReturnTimer = time.AfterFunc(15*time.Second, func() {
+		wsg.AllianceReturnTimer = time.AfterFunc(WSGFlagDropTime, func() {
 			wsg.mu.Lock()
 			defer wsg.mu.Unlock()
 			if wsg.AllianceFlagState == WSGFlagStateOnGround {
@@ -307,7 +365,7 @@ func (s *Server) handleWSGPlayerDeath(sess *session) {
 		if wsg.HordeReturnTimer != nil {
 			wsg.HordeReturnTimer.Stop()
 		}
-		wsg.HordeReturnTimer = time.AfterFunc(15*time.Second, func() {
+		wsg.HordeReturnTimer = time.AfterFunc(WSGFlagDropTime, func() {
 			wsg.mu.Lock()
 			defer wsg.mu.Unlock()
 			if wsg.HordeFlagState == WSGFlagStateOnGround {
