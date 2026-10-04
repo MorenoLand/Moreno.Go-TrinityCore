@@ -28,9 +28,37 @@ func NewThreatManager(ownerGUID uint64) *ThreatManager {
 }
 
 // AddThreat adds threat for a victim and evaluates target switching.
-// Reference: TrinityCore ThreatManager::AddThreat / CompareThreatLessThan.
-// In melee range (< 5yd), a new target requires 110% of current victim's threat.
-// At range (>= 5yd), a new target requires 130% of current victim's threat.
+// Reference: TrinityCore ThreatManager::AddThreat (ThreatManager.cpp:308-410) /
+// ReselectVictim (531-585) / CompareReferencesLT (593-601) / UpdateVictim (516-528).
+// The 110%/130% switch gate matches C++ exactly, including the strict-greater
+// boundary (CompareReferencesLT uses `<`, so equal threat never switches):
+// a candidate breaks the current victim at >110% only in melee range,
+// otherwise it needs >130%.
+// Documented deltas: (1) C++ AddThreat never switches - selection happens in
+// UpdateVictim->ReselectVictim on the AI tick (or when there is no current
+// victim); Go re-evaluates eagerly inside AddThreat, outcome-equivalent for
+// the adding victim but never re-evaluating non-adding candidates. (2) C++
+// walks the sorted heap, so a ranged top below 130% does not block a melee
+// candidate above 110% beneath it; Go tests only the adding victim against a
+// single threshold, so that steal is missed. (3) the melee test is per
+// candidate Unit::IsWithinMeleeRange (Unit.cpp:599), combat-reach-based
+// (GetMeleeRange: both combat reaches + 4/3, min NOMINAL_MELEE_RANGE); Go uses
+// the adding victim's flat 5.0yd (meleeAttackRange) distance at add time.
+// (4) ThreatReference::AddThreat accepts negative amounts (floored at 0); Go's
+// `amount <= 0` early-return leaves threat reduction unmodeled.
+// Documented no-bridge: FixateTarget/_fixateRef (always preferred in
+// ReselectVictim); taunt-state precedence in the comparator (TAUNT > NONE >
+// DETAUNT) with TauntUpdate driven by SPELL_AURA_MOD_TAUNT (Go taunt is the
+// one-shot MatchUnitThreatToHighestThreat in handleEffectTaunt); the
+// online/suppressed/offline ref states (ShouldBeOffline/ShouldBeSuppressed:
+// CanSeeOrDetect, _IsTargetAcceptable, CanCreatureAttack, immune flags,
+// melee-school immunity, confuse, breakable stun) - Go refs are removed only
+// via RemoveThreat/ClearThreat; ProcessAIUpdates/JustStartedThreateningMe
+// (boss hooks ride the new-victim broadcast instead).
+// Out of scope for this unit: AddThreat's modifier/redirection arms
+// (CalculateModifiedThreat, NO_THREAT/NO_INITIAL_AGGRO attrs, vehicle and
+// misdirection redirects) belong to the HandleThreatSpells cast-threat audit;
+// getThreatMultiplier already covers stance/aura SPELL_AURA_MOD_THREAT.
 func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) (switched bool, newVictim uint64) {
 	if victim == 0 || amount <= 0 {
 		return false, tm.currentVictim
@@ -77,6 +105,12 @@ func (tm *ThreatManager) SetThreat(victim uint64, amount float32) (switched bool
 
 // MatchUnitThreatToHighestThreat sets the victim's threat equal to the highest threat currently on the creature.
 // Reference: TrinityCore ThreatManager::MatchUnitThreatToHighestThreat (ThreatManager.cpp:419-437).
+// Documented deltas: C++ returns early on an empty list and skips a highest
+// that is itself taunting; Go seeds 100.0 when the list is empty (echoing the
+// documented EngageWithTarget seed delta) and always reports switched. C++
+// routes the delta through AddThreat with ignoreModifiers/ignoreRedirects.
+// The taunt-state machinery (TauntUpdate, comparator precedence) is
+// documented at AddThreat; Go has no taunt-state model.
 func (tm *ThreatManager) MatchUnitThreatToHighestThreat(victim uint64) (switched bool, newVictim uint64) {
 	if victim == 0 {
 		return false, tm.currentVictim
