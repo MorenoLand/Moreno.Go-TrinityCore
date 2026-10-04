@@ -73,6 +73,28 @@ type combatTarget struct {
 // calcMeleeRange computes maximum melee attack distance between attacker and target,
 // matching TrinityCore Unit::GetMeleeRange (Unit.cpp:614-618):
 // max(attacker.CombatReach + target.CombatReach + 4.0/3.0, NOMINAL_MELEE_RANGE)
+// (NOMINAL_MELEE_RANGE = 5.0f; the 1.5 defaults mirror the engine's default
+// combat reach). Boundary matches: C++ IsWithinMeleeRangeAt tests
+// distsq <= maxdist*maxdist (Unit.cpp:611), Go tests dist <= calcMeleeRange.
+// Audit notes (Unit::IsWithinCombatRange 583-597 / IsWithinMeleeRangeAt 599-612
+// / GetMeleeRange 614-618 / resetAttackTimer 571-575 / Player::Update melee
+// block Player.cpp:1116-1180):
+//   - Unit::IsWithinCombatRange (dist2compare + both combat reaches, 3D,
+//     strict <) is the AI spell-range predicate (UnitAI::DoSpellAttackIfReady,
+//     UnitAI.cpp:88-100). The Go creature spell-cast gate (creaturemotion.go)
+//     uses calcMeleeRange as the sizefactor instead, so it carries the +4/3
+//     and the 5.0 floor that C++ omits there — a documented range overshoot.
+//   - IsWithinMeleeRangeAt's Position overload (predicted-position test) has
+//     no Go analog; Go always measures from live positions.
+//   - C++ applies no range slop on the swing gate; Go adds +2.0 (updatePlayerCombat,
+//     handleAttackSwing) as lag compensation — a deliberate delta.
+//   - resetAttackTimer multiplies by m_modAttackSpeedPct (SPELL_AURA_MOD_MELEE_HASTE
+//     / MOD_RANGED_HASTE via Unit::applyAttackTimePercentMod, Unit.cpp:10851-10864);
+//     Go's getHastedMeleeSpeed/getHastedRangedSpeed model rating haste only, so
+//     aura-driven attack-speed changes never alter swing cadence.
+//   - The m_attackTimer init (Unit.cpp:316-318, all zero) means the first swing
+//     fires on the next update tick; Go's handleAttackSwing swings immediately
+//     when in range — outcome-equivalent.
 func calcMeleeRange(attackerReach, victimReach float32) float64 {
 	if attackerReach <= 0 {
 		attackerReach = 1.5

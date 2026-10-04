@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -257,93 +258,98 @@ type session struct {
 	lastSwing                    time.Time
 	lastOffhandSwing             time.Time
 	lastRangedSwing              time.Time
-	autoRepeatSpell              uint32
-	autoRepeatTarget             uint64
-	isMoving                     bool
-	isFalling                    bool
-	lastMovementInfo             movementInfo
-	lastMovementInfoSet          bool
-	transportContactProbeGUID    uint64
-	transportContactProbeAt      time.Time
-	lastFallZ                    float32
-	lastFallTime                 uint32
-	isSwimming                   bool
-	breathTimer                  int32
-	lastBreathTick               time.Time
-	inDarkWater                  bool
-	fatigueTimer                 int32
-	lastFatigueTick              time.Time
-	lastRegenTick                time.Time
-	lastRestBonusUpdate          time.Time
-	innTriggerID                 uint32
-	lastCastTime                 time.Time
-	lastCombatTime               time.Time
-	contestedPVPEnd              time.Time
-	loadedCorpseBones            bool
-	pvpEnd                       time.Time
-	pvpHostile                   bool
-	areaID                       uint32
-	lastZoneUpdate               time.Time
-	logoutHook                   bool
-	questStatusSent              bool
-	timeSyncNextCounter          uint32
-	timeSyncDue                  time.Time
-	gossip                       *gossipMenuState
-	gossipClosed                 bool
-	channels                     map[string]struct{}
-	tutorials                    [8]uint32
-	tutorialsInDB                bool
-	unreadMails                  uint32
-	nextMailDelivery             int64
-	activeLoot                   *activeLootState
-	trade                        *playerTradeState
-	diminishing                  [DiminishingMax]diminishingReturn
-	procICD                      map[uint32]time.Time
-	triggeredNoProcEvents        int
-	extraAttacks                 uint32 // Unit::m_extraAttacks (Unit.h:802) — banked SPELL_EFFECT_ADD_EXTRA_ATTACKS swings
-	comboPoints                  uint8  // Unit::m_comboPoints (Unit.h) — banked combo points on comboTargetGUID
-	comboTargetGUID              uint64 // Unit::m_comboTarget (Unit.h) — unit the combo points are banked against
-	lastPotionId                 uint32 // Player::m_lastPotionId (Player.h:2337) — last potion/cooldown-on-event item used in combat; blocks the next potion cast
-	guildInvitedID               uint32
-	guildInviterGUID             uint64
-	groupID                      uint64 // GUID of the group this player is in (0 = no group)
-	pendingGroupLeader           uint64 // GUID of the player who invited us (0 = no invite pending)
-	lastStreamX                  float32
-	lastStreamY                  float32
-	lastStreamZ                  float32
-	latency                      atomic.Uint32
-	lastPing                     time.Time
-	overSpeedPings               uint32
-	deathExpireTime              int64
-	deathTimer                   time.Time
-	resurrection                 *resurrectionData
-	earnedAchievements           map[uint32]uint32
-	criteriaProgress             map[uint32]*criteriaProgressState
-	timedCriteria                map[uint32]*time.Timer
-	inFlight                     bool
-	buyback                      [12]*buybackSlot
-	currentBuybackSlot           uint8
-	arenaTeamInvited             uint32
-	bgQueues                     [2]bgQueueEntry
-	afkReporters                 map[uint64]struct{}
-	targetGlyphSlot              uint8
-	activeCast                   *activeCastState
-	summonExpire                 time.Time
-	summonerGUID                 uint64
-	activeChannel                *activeChannelState
-	runes                        *dkRuneState
-	castMu                       sync.Mutex
-	schoolLockouts               map[uint32]int64
-	gcdCooldowns                 map[uint32]int64 // per-category Global Cooldown expiry Unix-ms (SpellHistory::_globalCooldowns)
-	pendingBindInstanceID        uint64
-	pendingBindMapID             uint32
-	pendingBindDiff              uint32
-	pendingBindTimer             uint32
-	pendingBindMu                sync.Mutex
-	sharingQuestID               uint32
-	sharingQuestSender           uint64
-	warden                       *wardenSession
-	playerStateMu                sync.RWMutex
+	// swingErrorMsg is the m_swingErrorMsg latch (Player.cpp): 0 = no
+	// swing error sent, 1 = SMSG_ATTACK_SWING_NOT_IN_RANGE sent,
+	// 2 = SMSG_ATTACK_SWING_BAD_FACING sent. A new error packet goes out
+	// only when the state changes; a landed swing resets it to 0.
+	swingErrorMsg             uint8
+	autoRepeatSpell           uint32
+	autoRepeatTarget          uint64
+	isMoving                  bool
+	isFalling                 bool
+	lastMovementInfo          movementInfo
+	lastMovementInfoSet       bool
+	transportContactProbeGUID uint64
+	transportContactProbeAt   time.Time
+	lastFallZ                 float32
+	lastFallTime              uint32
+	isSwimming                bool
+	breathTimer               int32
+	lastBreathTick            time.Time
+	inDarkWater               bool
+	fatigueTimer              int32
+	lastFatigueTick           time.Time
+	lastRegenTick             time.Time
+	lastRestBonusUpdate       time.Time
+	innTriggerID              uint32
+	lastCastTime              time.Time
+	lastCombatTime            time.Time
+	contestedPVPEnd           time.Time
+	loadedCorpseBones         bool
+	pvpEnd                    time.Time
+	pvpHostile                bool
+	areaID                    uint32
+	lastZoneUpdate            time.Time
+	logoutHook                bool
+	questStatusSent           bool
+	timeSyncNextCounter       uint32
+	timeSyncDue               time.Time
+	gossip                    *gossipMenuState
+	gossipClosed              bool
+	channels                  map[string]struct{}
+	tutorials                 [8]uint32
+	tutorialsInDB             bool
+	unreadMails               uint32
+	nextMailDelivery          int64
+	activeLoot                *activeLootState
+	trade                     *playerTradeState
+	diminishing               [DiminishingMax]diminishingReturn
+	procICD                   map[uint32]time.Time
+	triggeredNoProcEvents     int
+	extraAttacks              uint32 // Unit::m_extraAttacks (Unit.h:802) — banked SPELL_EFFECT_ADD_EXTRA_ATTACKS swings
+	comboPoints               uint8  // Unit::m_comboPoints (Unit.h) — banked combo points on comboTargetGUID
+	comboTargetGUID           uint64 // Unit::m_comboTarget (Unit.h) — unit the combo points are banked against
+	lastPotionId              uint32 // Player::m_lastPotionId (Player.h:2337) — last potion/cooldown-on-event item used in combat; blocks the next potion cast
+	guildInvitedID            uint32
+	guildInviterGUID          uint64
+	groupID                   uint64 // GUID of the group this player is in (0 = no group)
+	pendingGroupLeader        uint64 // GUID of the player who invited us (0 = no invite pending)
+	lastStreamX               float32
+	lastStreamY               float32
+	lastStreamZ               float32
+	latency                   atomic.Uint32
+	lastPing                  time.Time
+	overSpeedPings            uint32
+	deathExpireTime           int64
+	deathTimer                time.Time
+	resurrection              *resurrectionData
+	earnedAchievements        map[uint32]uint32
+	criteriaProgress          map[uint32]*criteriaProgressState
+	timedCriteria             map[uint32]*time.Timer
+	inFlight                  bool
+	buyback                   [12]*buybackSlot
+	currentBuybackSlot        uint8
+	arenaTeamInvited          uint32
+	bgQueues                  [2]bgQueueEntry
+	afkReporters              map[uint64]struct{}
+	targetGlyphSlot           uint8
+	activeCast                *activeCastState
+	summonExpire              time.Time
+	summonerGUID              uint64
+	activeChannel             *activeChannelState
+	runes                     *dkRuneState
+	castMu                    sync.Mutex
+	schoolLockouts            map[uint32]int64
+	gcdCooldowns              map[uint32]int64 // per-category Global Cooldown expiry Unix-ms (SpellHistory::_globalCooldowns)
+	pendingBindInstanceID     uint64
+	pendingBindMapID          uint32
+	pendingBindDiff           uint32
+	pendingBindTimer          uint32
+	pendingBindMu             sync.Mutex
+	sharingQuestID            uint32
+	sharingQuestSender        uint64
+	warden                    *wardenSession
+	playerStateMu             sync.RWMutex
 }
 
 type activeCastState struct {
@@ -873,9 +879,38 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 			}
 			allowedRange := calcMeleeRange(pReach, target.CombatReach) + 2.0
 
-			if distance3D(sess.player.X, sess.player.Y, sess.player.Z, target.X, target.Y, target.Z) <= allowedRange {
+			dist := distance3D(sess.player.X, sess.player.Y, sess.player.Z, target.X, target.Y, target.Z)
+			inMelee := dist <= allowedRange
+			mainReady := now.Sub(sess.lastSwing) >= mainSpeed
+			offReady := sess.haveOffhandWeapon() && now.Sub(sess.lastOffhandSwing) >= offSpeed
+			// TrinityCore Player::Update melee block (Player.cpp:1116-1180): an
+			// attack-ready swing that cannot land reports a single swing-error
+			// packet to the client, latched on m_swingErrorMsg so it is not
+			// re-sent every tick (1 = not in range, 2 = bad facing). The
+			// setAttackTimer(..., 100) retry cadence needs no bridge: this tick
+			// already runs every 100ms (server.go:777). The off-hand arm sends
+			// no error packets, it only skips; and a swing that can land
+			// resets the latch.
+			badFacing := !hasInArc(sess.player.Orientation, sess.player.X, sess.player.Y, target.X, target.Y, 2*math.Pi/3)
+			if mainReady {
+				if !inMelee {
+					if sess.swingErrorMsg != 1 {
+						_ = sess.write(uint16(protocol.OpcodeSMSG_ATTACK_SWING_NOT_IN_RANGE), nil, true)
+						sess.swingErrorMsg = 1
+					}
+				} else if badFacing {
+					if sess.swingErrorMsg != 2 {
+						_ = sess.write(uint16(protocol.OpcodeSMSG_ATTACK_SWING_BAD_FACING), nil, true)
+						sess.swingErrorMsg = 2
+					}
+				} else {
+					sess.swingErrorMsg = 0
+				}
+			}
+
+			if inMelee && !badFacing {
 				// Main hand attack
-				if now.Sub(sess.lastSwing) >= mainSpeed {
+				if mainReady {
 					if sess.haveOffhandWeapon() && now.Sub(sess.lastOffhandSwing) < attackDisplayDelay {
 						sess.lastOffhandSwing = now.Add(-(offSpeed - attackDisplayDelay))
 					}
@@ -884,7 +919,7 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 				}
 
 				// Off-hand attack (dual-wielding)
-				if sess.haveOffhandWeapon() && now.Sub(sess.lastOffhandSwing) >= offSpeed {
+				if offReady {
 					if now.Sub(sess.lastSwing) < attackDisplayDelay {
 						sess.lastSwing = now.Add(-(mainSpeed - attackDisplayDelay))
 					}
