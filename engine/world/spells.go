@@ -1745,6 +1745,14 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		}
 	}
 
+	// Corpse-specific target checks (SpellInfo::CheckTarget, SpellInfo.cpp:1697-1710):
+	// documented no-bridge. The CORPSE_BONES reject, the owner rebind
+	// (unitTarget = ObjectAccessor::FindPlayer(corpse->GetOwnerGUID())), and
+	// the ownerless-corpse BAD_TARGETS reject all require a corpse-typed
+	// target — Go has no corpse-target model on the client path (targetGUID
+	// can only name units), so the ToCorpse() leg never fires. Sits ahead of
+	// the corpseOwner/unit section in C++ CheckTarget order.
+
 	// Only-target-players gate (SpellInfo::CheckTarget, SpellInfo.cpp:1712-1713):
 	// a spell with SPELL_ATTR3_ONLY_TARGET_PLAYERS rejects a non-player unit
 	// target with SPELL_FAILED_TARGET_NOT_PLAYER. Sits in the corpseOwner/unit
@@ -1760,6 +1768,16 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			return true
 		}
 	}
+
+	// Implicit crowd-control gate (SpellInfo::CheckTarget, SpellInfo.cpp:1718-1720):
+	// documented no-bridge. SPELL_ATTR6_CANT_TARGET_CROWD_CONTROLLED
+	// (0x00000100, SharedDefines.h:642) with !unitTarget->CanFreeMove()
+	// rejects crowd-controlled units — but only for implicit targets (chain
+	// and area targeting). handleCastSpell processes explicit client targets
+	// and Go has no CanFreeMove model (no root/snare/stun query on the
+	// target), so the arm has nothing to consult. Sits after the dead-target
+	// gate (1715-1716, bridged in the completion path) in C++ CheckTarget
+	// order.
 
 	// Target creature-type gate (SpellInfo::CheckTarget, SpellInfo.cpp:1728):
 	// sits ahead of the aura-state/aura-spell gates in C++ CheckTarget order.
