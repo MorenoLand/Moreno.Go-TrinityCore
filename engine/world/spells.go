@@ -366,6 +366,8 @@ const (
 	spellEffectHealPct                             = 136 // SPELL_EFFECT_HEAL_PCT (SharedDefines.h:947)
 	spellEffectEnergizePct                         = 137 // SPELL_EFFECT_ENERGIZE_PCT (SharedDefines.h:948)
 	spellAuraMounted                               = 78
+	spellAuraModShapeshift                         = 36  // SPELL_AURA_MOD_SHAPESHIFT (SpellAuraDefines.h:116)
+	spellAuraSpiritOfRedemption                    = 176 // SPELL_AURA_SPIRIT_OF_REDEMPTION (SpellAuraDefines.h:256)
 	spellAuraModParryPercent                       = 47
 	spellAuraModSpellCritChance                    = 57  // SPELL_AURA_MOD_SPELL_CRIT_CHANCE (SpellAuraDefines.h:137)
 	spellAuraModSpellCritChanceSchool              = 71  // SPELL_AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL (SpellAuraDefines.h:151)

@@ -749,9 +749,36 @@ func (s *Server) endArena(arena *arenaBattlegroundState, winner int8) {
 
 	// Build and dispatch MSG_PVP_LOG_DATA to all players in the match
 	logData := s.buildArenaPvPLogDataPacket(arena)
+	ctx := context.Background()
 	s.sessionsMu.RLock()
 	for sess := range s.sessions {
 		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == arena.MapID {
+			// Battleground::EndBattleground per-player arms (Battleground.cpp:728-802):
+			// remove spirit of redemption (the reference removes the linked
+			// SPELL_AURA_MOD_SHAPESHIFT auras, Battleground.cpp:732-734).
+			if sess.hasAuraType(spellAuraSpiritOfRedemption) {
+				sess.removeTargetAurasByType(ctx, sess.playerGUID, spellAuraModShapeshift)
+			}
+			// ResurrectPlayer(1.0f) + SpawnCorpseBones for the dead
+			// (Battleground.cpp:736-739); the living CombatStop() arm has no Go
+			// model (no combat-stop API in engine/world), no-bridge.
+			if sess.player.Health == 0 {
+				sess.resurrectPlayer(ctx, 1.0)
+				sess.spawnCorpseBones(ctx)
+			}
+			s.resetPlayerPowers(sess)                      // ResetAllPowers (Battleground.cpp:791)
+			sess.sendClientControl(sess.playerGUID, false) // BlockMovement (Battleground.cpp:808-812)
+			// The honor-bonus / arena-point reward arms (Battleground.cpp:742-786)
+			// are gated by IsRandom() || BattlegroundMgr::IsBGWeekend(GetTypeID());
+			// arenas are never random and no arena type is a BG weekend, so the
+			// gate is false here: no bonus honor, no arena points, and the
+			// random-winner flag is never set at arena end. Rated vs skirmish is
+			// decided by the Arena::EndBattleground isRated() arm above.
+			if _, won := winningMembers[sess.playerGUID]; won {
+				sess.updateAchievementCriteria(criteriaTypeWinBG, mapID, 1) // ACHIEVEMENT_CRITERIA_TYPE_WIN_BG (Battleground.cpp:788)
+			}
+			sess.updateAchievementCriteria(criteriaTypeCompleteBattleground, mapID, 1) // ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_BATTLEGROUND (Battleground.cpp:802)
+
 			_ = sess.write(uint16(protocol.OpcodeMSG_PVP_LOG_DATA), logData, true)
 
 			// Update queue entry
