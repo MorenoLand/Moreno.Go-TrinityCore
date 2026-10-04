@@ -370,6 +370,7 @@ const (
 	spellAuraModIgnoreTargetResist                 = 269  // SPELL_AURA_MOD_IGNORE_TARGET_RESIST (SpellAuraDefines.h:349)
 	spellAuraModDamageFromCaster                   = 271  // SPELL_AURA_MOD_DAMAGE_FROM_CASTER (SpellAuraDefines.h:351)
 	spellAuraDummy                                 = 4    // SPELL_AURA_DUMMY (SpellAuraDefines.h:84)
+	spellAuraModDurationByDispelNotStack           = 246  // SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL_NOT_STACK (SpellAuraDefines.h:326)
 	spellIconCheatDeath                            = 2109 // Cheat Death dummy aura (Unit.cpp:7078)
 	spellIconImprovedInsectSwarm                   = 1771 // Improved Insect Swarm talent dummy aura (SpellEffects.cpp:521)
 	spellSchoolMaskNormal                          = 1    // SPELL_SCHOOL_MASK_NORMAL (SharedDefines.h:324)
@@ -5282,6 +5283,69 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 								targetDamage = uint32(int64(targetDamage) + int64(targetDamage)*int64(bonus)/100)
 							}
 						}
+						// Spell::EffectSchoolDMG (SpellEffects.cpp:531-624): the
+						// Envenom arm (Rogue family, SpellFamilyFlags[1] &
+						// 0x00000008) — else-if chained with the Eviscerate arm
+						// below, so no Envenom-flagged spell reaches the
+						// Eviscerate gate, matching C++ exactly. C++ reads the
+						// banked combo points with the no-arg GetComboPoints()
+						// overload, mirrored here by sessionComboPoints(0). The
+						// caster's Deadly Poison doses on the target multiply
+						// the damage (doses capped at the combo count) and are
+						// consumed one stack per dose unless the Master Poisoner
+						// talent roll keeps them. The npcbot arm is structural —
+						// Go has no npcbot model and the caster is always the
+						// session player on these cast paths, so the !unitCaster
+						// gate is vacuous too. SCHOOL_DAMAGE (effect 2) only —
+						// the weapon-damage effects in this case route to
+						// different C++ handlers.
+						if eff.Effect == 2 && s.player != nil &&
+							spell.SpellFamilyName == spellFamilyRogue && spell.SpellFamilyFlags[1]&0x8 != 0 {
+							if combo := s.sessionComboPoints(0); combo > 0 {
+								if poison, ok := s.envenomPoisonDoses(effCtx, effectTarget); ok {
+									doses := uint32(poison.StackCount)
+									if doses == 0 {
+										doses = 1
+									}
+									if doses > uint32(combo) {
+										doses = uint32(combo)
+									}
+									if !s.masterPoisonerKeepsDoses() {
+										s.consumePoisonDoses(effCtx, effectTarget, poison, doses)
+									}
+									targetDamage *= doses
+									// Documented no-bridge: damage += int32(
+									// GetTotalAttackPowerValue(BASE_ATTACK) *
+									// 0.09f * combo) — no total-attack-power
+									// model exists anywhere in the tree (standing
+									// delta, same queue as Ferocious Bite,
+									// Shield Slam, Eviscerate). Revisit only if
+									// it lands.
+								}
+								// Eviscerate and Envenom Bonus Damage item set
+								// effect (aura 37169).
+								if s.hasAura(37169) {
+									targetDamage += uint32(combo) * 40
+								}
+							}
+						} else if eff.Effect == 2 && s.player != nil &&
+							spell.SpellFamilyName == spellFamilyRogue && spell.SpellFamilyFlags[0]&0x20000 != 0 {
+							// Spell::EffectSchoolDMG (SpellEffects.cpp:626-653):
+							// the Eviscerate arm (Rogue family,
+							// SpellFamilyFlags[0] & 0x00020000). The main leg is
+							// a documented no-bridge: damage += std::lroundf(
+							// GetTotalAttackPowerValue(BASE_ATTACK) * combo *
+							// 0.07f) — no total-attack-power model in the tree
+							// (standing delta). The shared item set effect
+							// (aura 37169) below is bridged; the npcbot arm is
+							// structural (no npcbot model), and the !unitCaster
+							// gate is vacuous as above.
+							if combo := s.sessionComboPoints(0); combo > 0 {
+								if s.hasAura(37169) {
+									targetDamage += uint32(combo) * 40
+								}
+							}
+						}
 						// Spell::EffectSchoolDMG (SpellEffects.cpp:767-774):
 						// the Blood Boil arm (DeathKnight family,
 						// SpellFamilyFlags[0] & 0x00040000) is a documented
@@ -7545,6 +7609,208 @@ func (s *session) wrathInsectSwarmBonus() int32 {
 		return int32(aura.Amount)
 	}
 	return 0
+}
+
+// envenomPoisonDoses mirrors the Deadly Poison lookup in the rogue Envenom
+// arm of Spell::EffectSchoolDMG (SpellEffects.cpp:531-536):
+// unitTarget->GetAuraEffect(SPELL_AURA_PERIODIC_DAMAGE, SPELLFAMILY_ROGUE,
+// 0x00010000, 0, 0, unitCaster->GetGUID()) — the first live periodic-damage
+// aura effect whose spell is Rogue-family with SpellFamilyFlags[0] &
+// 0x10000, applied by the caster (the caster-GUID filter, Unit.cpp:4524).
+// The returned aura's StackCount is the C++ GetStackAmount() dose count.
+// The three-way target resolution follows the targetHasFamilyAuraEffect
+// scan. Go holds one aura per spell ID per target, so on a target poisoned
+// by two rogues the merged StackCount may include the other rogue's doses —
+// a standing merge-model delta, not a lookup error.
+func (s *session) envenomPoisonDoses(ctx context.Context, targetGUID uint64) (*activeAura, bool) {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil {
+		return nil, false
+	}
+	var auras []*activeAura
+	if targetGUID == 0 || targetGUID == s.playerGUID {
+		auras = s.loadedAuras()
+	} else if other := s.server.findSessionByGUID(targetGUID); other != nil && other.player != nil {
+		auras = other.loadedAuras()
+	} else if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
+		key := creatureAuraKeyForTarget(target)
+		s.server.auraMu.Lock()
+		for _, aura := range s.server.activeCreatureAuras[key] {
+			auras = append(auras, aura)
+		}
+		s.server.auraMu.Unlock()
+	} else {
+		return nil, false
+	}
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped || aura.CasterGUID != s.playerGUID {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if auraSpell.SpellFamilyName != spellFamilyRogue || auraSpell.SpellFamilyFlags[0]&0x10000 == 0 {
+			continue
+		}
+		for index, eff := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || index >= 8 || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellEffectIsAuraEffect(eff) || eff.Aura != spellAuraPeriodicDamage {
+				continue
+			}
+			return aura, true
+		}
+	}
+	return nil, false
+}
+
+// masterPoisonerKeepsDoses mirrors the Master Poisoner roll in the rogue
+// Envenom arm of Spell::EffectSchoolDMG (SpellEffects.cpp:542-557):
+// player->GetAuraEffectsByType(SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL_NOT_
+// STACK), keeping the first aura effect whose spell is Rogue-family with
+// SpellIconID 1960, then roll_chance_i(Effects[EFFECT_2].CalcValue) decides
+// whether the consumed poison doses survive (needConsume = false). True
+// means the doses are kept. The break-after-first-match semantics are
+// preserved by the early return; a missing or zero chance reads as false,
+// matching the C++ `chance && roll_chance_i(chance)` gate.
+func (s *session) masterPoisonerKeepsDoses() bool {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil {
+		return false
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if auraSpell.SpellFamilyName != spellFamilyRogue || auraSpell.SpellIconID != 1960 {
+			continue
+		}
+		hasType := false
+		for index, eff := range auraSpell.Effects {
+			if index >= 8 || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if spellEffectIsAuraEffect(eff) && eff.Aura == spellAuraModDurationByDispelNotStack {
+				hasType = true
+				break
+			}
+		}
+		if !hasType {
+			continue
+		}
+		if len(auraSpell.Effects) > 2 {
+			if chance := auraSpell.Effects[2].CalcValueForLevel(auraSpell, uint32(s.player.Level)); chance > 0 && rand.Float64()*100 < float64(chance) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+// consumePoisonDoses mirrors the Envenom dose consumption
+// (SpellEffects.cpp:559-561): unitTarget->RemoveAuraFromStack(spellId,
+// unitCaster->GetGUID()) once per consumed dose. When the consumed doses
+// reach the aura's stack count the aura is removed outright through the
+// existing removal paths; otherwise StackCount is decremented and the new
+// stack count goes out on the wire, mirroring the aura-update packet the
+// stack-merge paths send.
+func (s *session) consumePoisonDoses(ctx context.Context, targetGUID uint64, poison *activeAura, doses uint32) {
+	if s == nil || s.server == nil || poison == nil || poison.Stopped || doses == 0 {
+		return
+	}
+	stacks := uint32(poison.StackCount)
+	if stacks == 0 {
+		stacks = 1
+	}
+	if doses >= stacks {
+		if targetGUID == 0 || targetGUID == s.playerGUID {
+			s.removeAura(poison.SpellID)
+		} else if other := s.server.findSessionByGUID(targetGUID); other != nil && other.player != nil {
+			other.removeAura(poison.SpellID)
+		} else if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			s.server.removeCreatureAura(creatureAuraKeyForTarget(target), poison.SpellID)
+		}
+		return
+	}
+	if targetGUID == 0 || targetGUID == s.playerGUID {
+		s.castMu.Lock()
+		aura := s.activeAuras[poison.SpellID]
+		if aura == nil || aura.Stopped || aura != poison {
+			s.castMu.Unlock()
+			return
+		}
+		aura.StackCount -= uint8(doses)
+		stack, slot, effectMask, positive, casterGUID := aura.StackCount, aura.Slot, aura.EffectMask, aura.Positive, aura.CasterGUID
+		maxDur, dur := auraWireDurationsForAura(s, aura)
+		s.castMu.Unlock()
+		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, casterGUID, slot, poison.SpellID, false, positive, maxDur, dur, s.player.Level, stack, effectMask)
+		_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
+		if s.server != nil {
+			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, s)
+		}
+		return
+	}
+	if other := s.server.findSessionByGUID(targetGUID); other != nil && other.player != nil {
+		other.castMu.Lock()
+		aura := other.activeAuras[poison.SpellID]
+		if aura == nil || aura.Stopped || aura != poison {
+			other.castMu.Unlock()
+			return
+		}
+		aura.StackCount -= uint8(doses)
+		stack, slot, effectMask, positive, casterGUID := aura.StackCount, aura.Slot, aura.EffectMask, aura.Positive, aura.CasterGUID
+		maxDur, dur := auraWireDurationsForAura(other, aura)
+		other.castMu.Unlock()
+		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, casterGUID, slot, poison.SpellID, false, positive, maxDur, dur, other.player.Level, stack, effectMask)
+		_ = other.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
+		if other.server != nil {
+			other.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, other)
+		}
+		return
+	}
+	if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
+		key := creatureAuraKeyForTarget(target)
+		s.server.auraMu.Lock()
+		aura := s.server.activeCreatureAuras[key][poison.SpellID]
+		if aura == nil || aura.Stopped || aura != poison {
+			s.server.auraMu.Unlock()
+			return
+		}
+		aura.StackCount -= uint8(doses)
+		stack, slot, effectMask, positive := aura.StackCount, aura.Slot, aura.EffectMask, aura.Positive
+		maxDur, dur := auraWireDurationsForAura(s, aura)
+		s.server.auraMu.Unlock()
+		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, s.playerGUID, slot, poison.SpellID, false, positive, maxDur, dur, s.player.Level, stack, effectMask)
+		_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, s)
+	}
+}
+
+// auraWireDurationsForAura computes the wire max/current durations for an
+// active aura, folding the hide-duration attribute the same way the
+// stack-merge paths do via auraWireDurations.
+func auraWireDurationsForAura(s *session, aura *activeAura) (uint32, uint32) {
+	maxDur, dur := aura.DurationMs, aura.RemainingMs
+	if !aura.DurationUpdatedAt.IsZero() {
+		if elapsed := time.Since(aura.DurationUpdatedAt).Milliseconds(); elapsed > 0 {
+			if uint64(elapsed) < uint64(dur) {
+				dur -= uint32(elapsed)
+			} else {
+				dur = 0
+			}
+		}
+	}
+	if s != nil && s.server != nil && s.server.Data != nil {
+		if spell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+			return auraWireDurations(spell, maxDur, dur)
+		}
+	}
+	return maxDur, dur
 }
 
 // improvedMindBlastChance mirrors the Improved Mind Blast lookup in the
