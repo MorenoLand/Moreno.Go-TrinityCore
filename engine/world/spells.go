@@ -1833,6 +1833,10 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		}
 	}
 	// Spell::prepare (Spell.cpp:3175-3189): stealth breaks at cast start.
+	// The TRIGGERED_IGNORE_AURA_INTERRUPT_FLAGS (0x00000100,
+	// SpellDefines.h:142) sub-arm is structural: handleCastSpell never
+	// carries triggered flags, so the gate reduces to IsBreakingStealth()
+	// (SpellInfo.cpp:1244-1247) == !SPELL_ATTR1_NOT_BREAK_STEALTH.
 	if spell.AttributesEx&spellAttr1NotBreakStealth == 0 {
 		s.removeAurasWithInterruptFlags(auraInterruptFlagCast)
 		for _, eff := range spell.Effects {
@@ -1894,6 +1898,20 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		// pass, which no consumer depends on (the commented-out
 		// !m_spellInfo->StartRecoveryTime forced-defer leg at
 		// Spell.cpp:3189-3193 stayed out of the tree for the same reason).
+		// This is the !m_casttime && GetCurrentContainer() ==
+		// CURRENT_GENERIC_SPELL → cast(true) arm (Spell.cpp:3200-3201):
+		// SetCurrentCastSpell registered the spell in the generic
+		// container at prepare time (bridged above), nothing in between
+		// can interrupt it, so the arm always fires here exactly when
+		// castTime is 0. cast(true) → _cast(skipCheck=true) skips the
+		// CheckCast revalidation; Go's finishSpellCast revalidation legs
+		// are vacuous on this same-tick synchronous path, so the cast
+		// lands with the same state it passed the gates with. The
+		// TRIGGERED_CAST_DIRECTLY arm (Spell.cpp:3172-3173) is structural:
+		// handleCastSpell is never triggered, and the triggered route
+		// (castSpellDirectWithOverrides) runs the _cast tail directly,
+		// skipping SetCurrentCastSpell, SendSpellStart, and the GCD —
+		// matching C++'s direct cast(true).
 		s.finishSpellCast(context.Background(), castID, spellID, spell, target, 0, 0)
 	}
 
