@@ -24,6 +24,14 @@ type vendorItemRecord struct {
 
 const itemFlag2DontIgnoreBuyPrice uint32 = 0x00000004
 
+// BuyItemFromVendorSlot bag/slot arms (Player.cpp:21909-21910, ItemHandler.cpp:537-575):
+// NULL_BAG/NULL_SLOT mark "no specific bag", MAX_BAG_SIZE bounds the bag slot.
+const (
+	vendorNullBag    uint8 = 0xFF
+	vendorNullSlot   uint8 = 0xFF
+	vendorMaxBagSize uint8 = 36
+)
+
 const (
 	buyErrCantFindItem      = 0
 	buyErrItemAlreadySold   = 1
@@ -280,15 +288,76 @@ func (s *session) handleBuyItem(ctx context.Context, payload []byte) bool {
 	if err != nil || count == 0 {
 		count = 1
 	}
-	return s.processBuyItem(ctx, vendorGUID, itemEntry, slot, count)
+	return s.processBuyItem(ctx, vendorGUID, itemEntry, slot, count, vendorNullBag, vendorNullSlot)
 }
 
 func (s *session) handleBuyItemInSlot(ctx context.Context, payload []byte) bool {
-	return s.handleBuyItem(ctx, payload)
+	// CMSG_BUY_ITEM_IN_SLOT (ItemHandler.cpp:537-575): vendorguid, item, vendorslot,
+	// bagguid, bagslot, count. The client slot stays 1-based here — processBuyItem
+	// applies the OFFSET slot-1 lookup, matching the plain-buy path.
+	if !s.playerLoaded || s.player == nil || len(payload) < 26 {
+		return true
+	}
+	reader := protocol.NewReader(payload)
+	vendorGUID, err := reader.ReadU64()
+	if err != nil {
+		return false
+	}
+	itemEntry, err := reader.ReadU32()
+	if err != nil {
+		return false
+	}
+	slot, err := reader.ReadU32()
+	if err != nil {
+		return false
+	}
+	bagGUID, err := reader.ReadU64()
+	if err != nil {
+		return false
+	}
+	bagSlot, err := reader.ReadU8()
+	if err != nil {
+		return false
+	}
+	count, err := reader.ReadU8()
+	if err != nil || count == 0 {
+		count = 1
+	}
+	// Player.cpp:21909-21910: a bag slot beyond MAX_BAG_SIZE (and not NULL_SLOT)
+	// is a cheating attempt — no reply.
+	if bagSlot > vendorMaxBagSize && bagSlot != vendorNullSlot {
+		return true
+	}
+	// ItemHandler.cpp:568-570: an unresolvable bag guid is a cheating attempt — no reply.
+	bag, ok := s.vendorBuyBagSlot(ctx, bagGUID)
+	if !ok {
+		return true
+	}
+	return s.processBuyItem(ctx, vendorGUID, itemEntry, slot, uint32(count), bag, bagSlot)
 }
 
-func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEntry, slot, count uint32) bool {
+// vendorBuyBagSlot resolves a CMSG_BUY_ITEM_IN_SLOT bag guid to the bag's equip slot
+// (19-22) or 0 for the backpack (ItemHandler.cpp:552-567).
+func (s *session) vendorBuyBagSlot(ctx context.Context, bagGUID uint64) (uint8, bool) {
+	if bagGUID == s.playerGUID {
+		return 0, true
+	}
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return vendorNullBag, false
+	}
+	var slot int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= ? AND slot < ? AND item = ?", s.playerGUID, invSlotBagStart, invSlotBagEnd, bagGUID).Scan(&slot); err != nil {
+		return vendorNullBag, false
+	}
+	return uint8(slot), true
+}
+
+func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEntry, slot, count uint32, bag, bagSlot uint8) bool {
 	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return true
+	}
+	// Player.cpp:21912-21913: dead players cannot buy — no reply.
+	if s.isDeadOrGhost() {
 		return true
 	}
 	if !s.canInteractWithNPC(ctx, uint64(vendorGUID), uint64(unitNPCFlagVendor)) {
@@ -318,7 +387,7 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	if amount > uint64(^uint32(0)) {
 		return true
 	}
-	accessResult, allowed := s.vendorItemAccess(uint32(allowableClass), uint32(bonding), uint32(flagsExtra), uint32(requiredReputationFaction), uint32(requiredReputationRank), ctx)
+	accessResult, allowed := s.vendorItemAccess(uint32(allowableClass), uint32(bonding), uint32(flagsExtra))
 	if !allowed {
 		if accessResult >= 0 {
 			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, uint8(accessResult)), true)
@@ -346,17 +415,34 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 			return true
 		}
 	}
+	// Player.cpp:22012-22016: the reputation gate runs after the stock check —
+	// BUY_ERR_ITEM_ALREADY_SOLD fires before BUY_ERR_REPUTATION_REQUIRE.
+	if requiredReputationFaction != 0 && s.vendorReputationRank(ctx, uint32(requiredReputationFaction)) < uint32(requiredReputationRank) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrReputationRequire), true)
+		return true
+	}
 	extendedCost, extendedCostResult, ok := s.vendorExtendedCost(ctx, uint32(extCost), count)
 	if !ok {
 		if extendedCostResult != equipErrOk {
 			s.sendEquipError(extendedCostResult, 0)
 		} else {
-			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrCantFindItem), true)
+			// Player.cpp:22003-22007: a wrong ExtendedCost id only logs
+			// (TC_LOG_ERROR) and returns false — no error packet reaches the client.
+			s.debug("vendor item has wrong ExtendedCost id", "account", s.accountName, "item", itemEntry, "extendedCost", extCost)
 		}
 		return true
 	}
 	if s.player.Money < totalCost {
 		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrNotEnoughMoney), true)
+		return true
+	}
+	// Player.cpp:22085-22095: buying into an equipment slot requires a single item —
+	// the EQUIP_ERR_ITEM_CANT_BE_EQUIPPED gate runs after the money check. Placement
+	// into the requested bag/slot itself is unmodeled (the item auto-stores), so the
+	// EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT arm is unreachable after the bagslot sanity
+	// check in handleBuyItemInSlot.
+	if bag == 0 && bagSlot < uint8(equipSlotEnd) && uint64(buyCount)*uint64(count) != 1 {
+		s.sendEquipError(equipErrItemCantBeEquipped, 0)
 		return true
 	}
 	if maxCount > 0 {
@@ -416,7 +502,7 @@ func (s *session) recordVendorRefund(ctx context.Context, cdb *sql.DB, itemGUID 
 	_, _ = cdb.ExecContext(ctx, "REPLACE INTO item_refund_instance (item_guid, player_guid, paidMoney, paidExtendedCost) VALUES (?, ?, ?, ?)", itemGUID, s.playerGUID, paidMoney, extendedCost)
 }
 
-func (s *session) vendorItemAccess(allowableClass, bonding, flagsExtra, requiredFaction, requiredRank uint32, ctx context.Context) (int, bool) {
+func (s *session) vendorItemAccess(allowableClass, bonding, flagsExtra uint32) (int, bool) {
 	isGM := s != nil && s.player != nil && (s.security > 0 || s.player.PlayerFlags&playerFlagGM != 0 || s.player.ExtraFlags&playerExtraGMOn != 0)
 	if !isGM && bonding == 1 && s.player != nil {
 		if s.player.Class == 0 || allowableClass&(uint32(1)<<(s.player.Class-1)) == 0 {
@@ -431,9 +517,6 @@ func (s *session) vendorItemAccess(allowableClass, bonding, flagsExtra, required
 		if flagsExtra&0x00000002 != 0 && team != 0 {
 			return -1, false
 		}
-	}
-	if requiredFaction != 0 && s.vendorReputationRank(ctx, requiredFaction) < requiredRank {
-		return buyErrReputationRequire, false
 	}
 	return buyErrCantFindItem, true
 }
