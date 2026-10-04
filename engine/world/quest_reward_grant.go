@@ -127,6 +127,9 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 		s.debug("quest reward commit failed", "account", s.accountName, "quest", questID, "error", err)
 		return false
 	}
+	// C++ Player::RewardQuest (Player.cpp:15439-15448): the quest reward mail
+	// goes out as part of the reward flow, once the reward is committed.
+	s.sendQuestRewardMail(ctx, questID, giverGUID)
 	// Eluna CREATURE_EVENT_ON_QUEST_REWARD (event 34), fired from the
 	// reward-completion switch arm after the grant (QuestHandler.cpp:330-335);
 	// the reward-choice index rides as the opt argument.
@@ -165,17 +168,7 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	if giverGUID != 0 {
-		var entry uint32
-		if creature := s.luaCreature(ctx, giverGUID); creature != nil {
-			entry = objectUint32OrZero(creature, "Entry")
-		}
-		if entry == 0 {
-			entry = uint32((giverGUID >> 24) & 0x00FFFFFF)
-		}
-		if entry == 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-			rawGUID := giverGUID & 0x00000000FFFFFFFF
-			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", rawGUID).Scan(&entry)
-		}
+		entry, _ := questGiverMailSource(ctx, s, giverGUID)
 		status := uint8(questDialogNone)
 		if entry != 0 {
 			if qStatus, err := s.questDialogStatus(ctx, entry); err == nil {
@@ -191,6 +184,85 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	s.gossipClosed = true
 	s.debug("quest rewarded", "account", s.accountName, "quest", questID, "reward", reward, "items", len(grants), "money", view.Detail.RewardMoney)
 	return true
+}
+
+// questGiverMailSource resolves the quest giver's creature/gameobject entry
+// and its mail message type, mirroring the MailSender(Object*) constructor
+// (Mail.cpp:38-57): creatures send as MAIL_CREATURE (3) with the creature
+// entry, gameobjects as MAIL_GAMEOBJECT (4) with the gameobject entry,
+// stationery MAIL_STATIONERY_DEFAULT in both cases.
+func questGiverMailSource(ctx context.Context, s *session, giverGUID uint64) (entry uint32, messageType uint32) {
+	messageType = 3 // MAIL_CREATURE (Mail.h:39)
+	if creature := s.luaCreature(ctx, giverGUID); creature != nil {
+		entry = objectUint32OrZero(creature, "Entry")
+	} else if goObj := s.luaGameObject(ctx, giverGUID); goObj != nil {
+		entry = objectUint32OrZero(goObj, "Entry")
+		messageType = 4 // MAIL_GAMEOBJECT (Mail.h:40)
+	}
+	if entry == 0 {
+		entry = uint32((giverGUID >> 24) & 0x00FFFFFF)
+	}
+	if entry == 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		rawGUID := giverGUID & 0x00000000FFFFFFFF
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", rawGUID).Scan(&entry)
+	}
+	return entry, messageType
+}
+
+// sendQuestRewardMail mirrors the quest reward mail arm of Player::RewardQuest
+// (Player.cpp:15439-15448): when quest_template_addon.RewardMailTemplateID is
+// set, the player receives a template mail once the reward commits. The sender
+// is quest_mail_sender.RewardMailSenderEntry (MailSender(uint32) ->
+// MAIL_CREATURE) or, when unset, the quest giver. ObjectMgr.cpp:5148-5168
+// zeroes the template id when the template is missing from MailTemplate.dbc
+// or is shared by more than one quest, so no mail goes out in either case.
+// MailDraft::SendMailTo (Mail.cpp:187-215) anchors deliver_time on now +
+// RewMailDelaySecs; quest template mails never carry COD and the sender is a
+// creature entry (never a GM player), so the 30-day expire arm applies. The
+// subject/body are stored empty — the client renders them from MailTemplate.dbc
+// by mailTemplateId — and checked is MAIL_CHECK_MASK_HAS_BODY (0x10).
+func (s *session) sendQuestRewardMail(ctx context.Context, questID uint32, giverGUID uint64) {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil ||
+		s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.Data == nil {
+		return
+	}
+	wdb := s.server.WorldStore.DB
+	cdb := s.server.CharactersStore.DB
+	var templateID, delaySecs uint32
+	if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(RewardMailTemplateID, 0), COALESCE(RewardMailDelay, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&templateID, &delaySecs); err != nil || templateID == 0 {
+		return
+	}
+	var useCount int
+	if err := wdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM quest_template_addon WHERE RewardMailTemplateID = ?", templateID).Scan(&useCount); err != nil || useCount != 1 {
+		return
+	}
+	if _, ok, err := s.server.Data.MailTemplate(templateID); err != nil || !ok {
+		return
+	}
+	var senderEntry uint32
+	_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(RewardMailSenderEntry, 0) FROM quest_mail_sender WHERE QuestId = ?", questID).Scan(&senderEntry)
+	messageType := uint32(3) // MAIL_CREATURE (Mail.h:39)
+	if senderEntry == 0 {
+		senderEntry, messageType = questGiverMailSource(ctx, s, giverGUID)
+	}
+	now := time.Now().Unix()
+	deliverTime := now + int64(delaySecs)
+	expireTime := deliverTime + mailSendExpireDelay(false, 0)
+	var money uint32
+	// C++ MailDraft::prepareItems (Mail.cpp:102-104): the mail sent after
+	// turning in the quest "The Good News and The Bad News" contains 100g.
+	if templateID == 123 {
+		money = 1000000
+	}
+	var nextMailID int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&nextMailID)
+	if nextMailID <= 0 {
+		nextMailID = 1
+	}
+	_, _ = cdb.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
+		VALUES (?, ?, 41, ?, ?, ?, '', '', 0, ?, ?, ?, 0, 16)`,
+		nextMailID, messageType, templateID, senderEntry, s.playerGUID, expireTime, deliverTime, money)
+	s.sendMailNotify(s.playerGUID)
 }
 
 func (s *session) commitQuestReward(ctx context.Context, view questRewardView, choice uint32) ([]questItemGrant, []uint64, error) {
