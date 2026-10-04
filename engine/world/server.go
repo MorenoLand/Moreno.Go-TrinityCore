@@ -883,7 +883,11 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 		// Melee combat
 		if sess.attackTarget != 0 {
 			target, ok := sess.getCombatTarget(ctx, sess.attackTarget)
-			if !ok || target.Health == 0 {
+			// The ghost leg mirrors WorldObject::IsValidAttackTarget's "can't
+			// attack dead" (Object.cpp:2935-2937): ghosts carry Health=1 in Go,
+			// so the Health==0 gate misses them; nowDead=false matches the
+			// SendAttackStop IsValidAttackTarget-failure arm.
+			if !ok || target.Health == 0 || sess.ghostAttackTargetBlocked(sess.attackTarget) {
 				_ = sess.sendAttackStop(sess.attackTarget, target.Health == 0)
 				sess.attackTarget = 0
 				continue
@@ -965,7 +969,9 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 				targetGUID = sess.selection
 			}
 			rTarget, rOk := sess.getCombatTarget(ctx, targetGUID)
-			if !rOk || rTarget.Health == 0 || rTarget.Map != sess.player.Map {
+			// The ghost leg mirrors WorldObject::IsValidAttackTarget's "can't
+			// attack dead" (Object.cpp:2935-2937): ghosts carry Health=1 in Go.
+			if !rOk || rTarget.Health == 0 || sess.ghostAttackTargetBlocked(targetGUID) || rTarget.Map != sess.player.Map {
 				sess.autoRepeatSpell = 0
 				sess.autoRepeatTarget = 0
 				buf := protocol.NewBuffer(9)

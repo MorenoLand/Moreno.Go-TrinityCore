@@ -6863,7 +6863,9 @@ func (s *session) consumeExtraAttacks(ctx context.Context, targetGUID uint64) {
 	}
 	for s.extraAttacks > 0 {
 		target, ok := s.getCombatTarget(ctx, targetGUID)
-		if !ok || target.Health == 0 {
+		// Ghost leg mirrors WorldObject::IsValidAttackTarget's "can't attack
+		// dead" (Object.cpp:2935-2937): ghosts carry Health=1 in Go.
+		if !ok || target.Health == 0 || s.ghostAttackTargetBlocked(targetGUID) {
 			break
 		}
 		savedSwing := s.lastSwing
@@ -7208,7 +7210,13 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// a zero incoming damage takes the no-damage arm (Spell.cpp:2563-2579).
 	hadIncomingDamage := damage > 0
 	target, ok := s.getCombatTarget(ctx, targetGUID)
-	if !ok || target.Health == 0 {
+	// The ghost leg mirrors WorldObject::IsValidAttackTarget's "can't attack
+	// dead" (Object.cpp:2935-2937): ghosts carry Health=1 in Go (buildPlayerRepop,
+	// death.go:473) but IsAlive() is false in C++ (deathState CORPSE), so the
+	// Health==0 gate misses them. Spells that allow dead targets
+	// (SPELL_ATTR.../IsAllowingDeadTarget — resurrection) route through the
+	// resurrect request path, never this damage funnel.
+	if !ok || target.Health == 0 || s.ghostAttackTargetBlocked(targetGUID) {
 		return 0
 	}
 

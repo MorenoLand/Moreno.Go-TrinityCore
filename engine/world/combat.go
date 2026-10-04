@@ -203,6 +203,24 @@ func (s *Server) gmAttackTargetBlocked(guid uint64) bool {
 	return flags&playerExtraGMInvisible != 0 || flags&playerExtraGMOn != 0
 }
 
+// ghostAttackTargetBlocked mirrors the "can't attack dead" leg of
+// WorldObject::IsValidAttackTarget (Object.cpp:2935-2937):
+// ((!bySpell || !bySpell->IsAllowingDeadTarget()) && unitTarget &&
+// !unitTarget->IsAlive()) rejects the target. Ghosts carry Health=1 in Go
+// (buildPlayerRepop, death.go:473) but IsAlive() is false in C++
+// (deathState CORPSE), so the Health==0 dead gates miss them. Creature
+// targets never match: dead creatures report Health==0 through
+// getCombatTarget, and no ghost flag exists on creature motions.
+func (s *session) ghostAttackTargetBlocked(guid uint64) bool {
+	if s == nil || s.server == nil || guid == 0 {
+		return false
+	}
+	if vicSess := s.server.findSessionByGUID(guid); vicSess != nil && vicSess.player != nil {
+		return vicSess.isDeadOrGhost()
+	}
+	return false
+}
+
 func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
@@ -238,6 +256,16 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	if target.Health == 0 {
 		s.attackTarget = 0
 		return s.write(uint16(protocol.OpcodeSMSG_ATTACK_SWING_DEAD_TARGET), nil, true) == nil
+	}
+	// WorldObject::IsValidAttackTarget's "can't attack dead" leg
+	// (Object.cpp:2935-2937): ghosts model IsAlive()==false with Health=1,
+	// so the dead-target gate above misses them. C++ answers an
+	// IsValidAttackTarget failure with SendAttackStop (HandleAttackSwingOpcode,
+	// CombatHandler.cpp:40-43), not the dead-target packet (whose sender,
+	// Player::SendAttackSwingDeadTarget, has no callers in this revision).
+	if s.ghostAttackTargetBlocked(victim) {
+		s.attackTarget = 0
+		return s.sendAttackStop(victim, false) == nil
 	}
 	if creatureCombatDisabled(target.UnitFlags, target.FlagsExtra) {
 		s.attackTarget = 0

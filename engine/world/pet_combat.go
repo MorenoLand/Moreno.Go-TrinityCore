@@ -425,7 +425,10 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 	}
 
 	// If target is missing or dead, disengage
-	if !targetFound || targetHealth == 0 {
+	// The ghost leg mirrors WorldObject::IsValidAttackTarget's "can't attack
+	// dead" (Object.cpp:2935-2937): ghosts carry Health=1 in Go (death.go:473)
+	// but IsAlive() is false in C++ (deathState CORPSE).
+	if !targetFound || targetHealth == 0 || (isTargetPlayer && targetSess != nil && targetSess.isDeadOrGhost()) {
 		motion.TargetGUID = 0
 		motion.InCombat = false
 		motion.Moving = false
@@ -951,7 +954,9 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		return
 	}
 	target, ok := s.getCombatTarget(ctx, targetGUID)
-	if !ok || target.Health == 0 {
+	// Ghost leg mirrors WorldObject::IsValidAttackTarget's "can't attack dead"
+	// (Object.cpp:2935-2937): ghosts carry Health=1 in Go.
+	if !ok || target.Health == 0 || s.ghostAttackTargetBlocked(targetGUID) {
 		return
 	}
 	isPlayerVictim := s.server.findSessionByGUID(target.GUID) != nil
