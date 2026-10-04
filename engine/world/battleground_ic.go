@@ -15,6 +15,10 @@ const (
 
 	ICMaxReinforcements uint32 = 300
 
+	// ICWinnerHonorAmount mirrors WINNER_HONOR_AMOUNT (BattlegroundIC.h:907):
+	// raw honor granted to the winning team on a boss kill.
+	ICWinnerHonorAmount uint32 = 500
+
 	ICDefaultBannerCaptureDuration = 60 * time.Second // 1 minute
 	ICResourceTickDuration         = 45 * time.Second // 45 seconds
 
@@ -734,18 +738,73 @@ func (s *Server) handleICCreatureKilled(sess *session, creatureEntry uint32) {
 		// Alliance General killed -> Horde wins immediately!
 		ic.AllianceBossAlive = false
 		s.broadcastBattlegroundMessage(ic.MapID, "High Commander Halford Wyrmbane has been slain! The Horde is victorious!")
+		s.grantICWinnerHonor(ic, ICTeamHorde)
 		s.endIC(ic, int8(ICTeamHorde))
 
 	case ICCreatureOverlordAgmar:
 		// Horde General killed -> Alliance wins immediately!
 		ic.HordeBossAlive = false
 		s.broadcastBattlegroundMessage(ic.MapID, "Overlord Agmar has been slain! The Alliance is victorious!")
+		s.grantICWinnerHonor(ic, ICTeamAlliance)
 		s.endIC(ic, int8(ICTeamAlliance))
 
 	case ICCreatureDemolisher, ICCreatureSiegeEngineA, ICCreatureSiegeEngineH,
 		ICCreatureGlaiveThrowerA, ICCreatureGlaiveThrowerH, ICCreatureCatapult:
 		ic.VehiclesDestroyed[sess.playerGUID]++
 		s.broadcastBattlegroundMessage(ic.MapID, fmt.Sprintf("%s has destroyed a siege vehicle!", sess.player.Name))
+	}
+}
+
+// grantICWinnerHonor mirrors the RewardHonorToTeam(WINNER_HONOR_AMOUNT, team)
+// arm of BattlegroundIC::HandleKillUnit (BattlegroundIC.cpp:385-396): 500 raw
+// honor to every worldReady session on the IoC map on the winning team, ahead
+// of the end-battleground arm (== C++ arm order). rewardBGEndHonor derives
+// honor from kill counts via GetBonusHonorFromKill, so the flat winner amount
+// goes through sess.rewardHonorPoints directly.
+func (s *Server) grantICWinnerHonor(ic *icBattlegroundState, team uint32) {
+	if s == nil || ic == nil {
+		return
+	}
+	s.sessionsMu.RLock()
+	var targets []*session
+	for sess := range s.sessions {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == ic.MapID && teamForRace(sess.player.Race) == team {
+			targets = append(targets, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range targets {
+		sess.rewardHonorPoints(context.Background(), ICWinnerHonorAmount)
+	}
+}
+
+// applyICNodeAuras mirrors BattlegroundIC::HandlePlayerResurrect
+// (BattlegroundIC.cpp:63-70): on resurrection in IoC, grant the
+// quarry/refinery buffs (SPELL_QUARRY=68720 / SPELL_OIL_REFINERY=68719) when
+// the player's team controls that node (== C++ nodeState == controlled-for-team
+// gate). Called from the resurrect choke point, same class as the
+// death.go closestGraveyard IoC dispatch.
+func (s *Server) applyICNodeAuras(sess *session) {
+	if s == nil || sess == nil || sess.player == nil {
+		return
+	}
+	ic := s.getOrCreateICState(sess.player.Map)
+	if ic == nil {
+		return
+	}
+	controlledState := ICNodeStateControlledH
+	if teamForRace(sess.player.Race) == ICTeamAlliance {
+		controlledState = ICNodeStateControlledA
+	}
+	ic.mu.Lock()
+	quarryControlled := ic.Nodes[ICNodeQuarry].State == controlledState
+	refineryControlled := ic.Nodes[ICNodeRefinery].State == controlledState
+	ic.mu.Unlock()
+	if quarryControlled {
+		sess.applyAura(ICSpellQuarry)
+	}
+	if refineryControlled {
+		sess.applyAura(ICSpellOilRefinery)
 	}
 }
 

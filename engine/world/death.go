@@ -1068,6 +1068,9 @@ func (s *session) resurrectPlayer(ctx context.Context, restorePercent float32) {
 	}
 	s.persistResurrectionState(ctx)
 	s.sendPlayerUpdate()
+	if s.player.Map == ICMapID && s.server != nil {
+		s.server.applyICNodeAuras(s)
+	}
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_LAND_WALK))
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_UNROOT))
 	s.refreshNearbyObjects(ctx)
