@@ -10302,10 +10302,26 @@ func (s *session) removeAura(spellID uint32) {
 			delete(s.auraSlots, spellID)
 		}
 	}
-	if wasMounted && !s.hasAuraType(spellAuraMounted) && s.player != nil {
+	// Unit::Dismount (Unit.cpp:8365-8415) as reached from
+	// AuraEffect::HandleAuraMounted's remove leg (SpellAuraEffects.cpp:2613-2624):
+	// display cleared, UNIT_FLAG_MOUNT dropped, SMSG_DISMOUNT broadcast. The
+	// flag/display gate is Unit::Dismount's `if (!IsMounted()) return;` early
+	// return — Go reaches this block only via nested removeAura calls once the
+	// flag is already cleared. C++ dismounts on every mounted-aura removal
+	// (then RemoveAurasByType(SPELL_AURA_MOUNTED) clears the rest); Go dismounts
+	// once the last mounted aura leaves — SMSG_DISMOUNT fires at most once per
+	// dismount either way. The vehicle-kit teardown leg has no bridge.
+	if wasMounted && !s.hasAuraType(spellAuraMounted) && s.player != nil &&
+		(s.player.UnitFlags&unitFlagMount != 0 || s.player.MountDisplayID != 0) {
 		s.player.MountDisplayID = 0
 		s.sendPlayerMountUpdate()
 		s.sendPlayerDismount()
+		// Unit::Dismount's RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_MOUNTED)
+		// runs after the SMSG_DISMOUNT broadcast, matching this placement.
+		s.removeAurasWithInterruptFlags(auraInterruptFlagNotMounted)
+		// ResummonPetTemporaryUnSummonedIfAny: the arena pet-unstun leg has no
+		// bridge; the charm-unstun leg has no charm model.
+		s.resummonTemporaryPet(context.Background())
 	}
 	if (wasTransform || wasShapeshift) && s.player != nil {
 		s.refreshTransformDisplay(context.Background())
@@ -10421,6 +10437,18 @@ func (s *session) clearOtherMountedAuras(spellID uint32) {
 	}
 }
 
+// applyMountedDisplay mirrors Unit::Mount (Unit.cpp:8310-8361) as reached from
+// AuraEffect::HandleAuraMounted's apply leg (SpellAuraEffects.cpp:2579-2611):
+// mount display id from the aura MiscValue (creature entry), UNIT_FLAG_MOUNT,
+// and the collision-height update, in C++ relative order. Documented deltas:
+// display selection uses the first nonzero modelid1..4, where C++ takes
+// ObjectMgr::GetRandomValidModelId (random among valid model ids) plus a 50%
+// GetCreatureModelRandomGender other-gender swap; the vehicle leg
+// (CreateVehicleKit, SMSG_PLAYER_VEHICLE_DATA, SMSG_ON_CANCEL_EXPECTED_RIDE_VEHICLE_AURA,
+// InstallAllAccessories) has no bridge — createVehicleKit exists but the mount
+// path never invokes it; the charmed-NPC stun has no bridge; the festive
+// Holiday Mount 62061 check reads the applied aura's own spell id, which is
+// outcome-equivalent to C++'s target->HasAura(62061) during 62061's apply.
 func (s *session) applyMountedDisplay(ctx context.Context, aura *activeAura) {
 	if s == nil || s.player == nil || aura == nil {
 		return
@@ -10440,6 +10468,12 @@ func (s *session) applyMountedDisplay(ctx context.Context, aura *activeAura) {
 		}
 	}
 	s.sendPlayerMountUpdate()
+	// Unit::Mount unsummons the active pet (temporary-unsummon bookkeeping so
+	// it returns on dismount); the arena pet-stun leg has no bridge.
+	s.temporarilyUnsummonPet(ctx)
+	// Unit::Mount's tail RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_MOUNT)
+	// runs after the display/flag update and collision-height packet.
+	s.removeAurasWithInterruptFlags(auraInterruptFlagMount)
 }
 
 func (s *session) refreshTransformDisplay(ctx context.Context) {
