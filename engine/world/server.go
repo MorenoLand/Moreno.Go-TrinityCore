@@ -110,6 +110,7 @@ type Server struct {
 	icState                   map[uint32]*icBattlegroundState
 	arenaMu                   sync.RWMutex
 	arenaState                map[uint32]*arenaBattlegroundState
+	arenaTickLast             time.Time
 	wgMu                      sync.RWMutex
 	wgState                   *wgBattlegroundState
 	totemMu                   sync.RWMutex
@@ -844,6 +845,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updateSpiritHealerResurrectWaves(ctx, now)
 			s.updateCorpseExpiry(ctx)
 			s.updatePlayerUnderwater(ctx, now)
+			s.updateArenaBattles(now)
 			s.updateWardenSessions(ctx, 100*time.Millisecond)
 		}
 	}

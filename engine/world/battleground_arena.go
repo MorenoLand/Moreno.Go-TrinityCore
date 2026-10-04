@@ -80,7 +80,7 @@ const (
 
 	// Timers & Limits
 	ArenaWarmupLength        = 60 * time.Second
-	ArenaMatchTimeLimit      = 45 * time.Minute
+	ArenaMatchTimeLimit      = 47 * time.Minute
 	ArenaDoorRemovalDelay    = 5 * time.Second
 	ArenaShadowSightDelay    = 60 * time.Second
 	ArenaAutoLeaveDelay      = 120 * time.Second
@@ -914,6 +914,30 @@ func (s *Server) broadcastArenaMessage(mapID uint32, msg string) {
 		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID {
 			sess.sendSystemMessage(msg)
 		}
+	}
+}
+
+// updateArenaBattles ticks every live arena, driving warmup countdowns, match
+// start, the match time limit, and per-map hazards. BattlegroundMgr::Update
+// (BattlegroundMgr.cpp:94) sweeps all running instances with bg->Update(diff)
+// every BATTLEGROUND_OBJECTIVE_UPDATE_INTERVAL (BattlegroundMgr.h:38 = 1000ms);
+// the 1s gate here mirrors that cadence.
+func (s *Server) updateArenaBattles(now time.Time) {
+	if s == nil {
+		return
+	}
+	if !s.arenaTickLast.IsZero() && now.Sub(s.arenaTickLast) < time.Second {
+		return
+	}
+	s.arenaTickLast = now
+	s.arenaMu.RLock()
+	arenas := make([]*arenaBattlegroundState, 0, len(s.arenaState))
+	for _, arena := range s.arenaState {
+		arenas = append(arenas, arena)
+	}
+	s.arenaMu.RUnlock()
+	for _, arena := range arenas {
+		s.updateArenaTick(arena, now)
 	}
 }
 
