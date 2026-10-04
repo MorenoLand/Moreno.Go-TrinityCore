@@ -1023,7 +1023,12 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// documenting it here.
 	if s.isGCDActive(spell) {
 		// Spell::CheckCast (Spell.cpp:5227-5228): DISABLED_WHILE_ACTIVE spells
-		// report DONT_REPORT instead of NOT_READY on GCD.
+		// report DONT_REPORT instead of NOT_READY on GCD. The
+		// TRIGGERED_IGNORE_GCD suppression arm is structural: this gate runs
+		// only on the non-triggered client path, while the triggered path
+		// (castSpellDirectWithOverrides) never consults GCD — matching C++
+		// TRIGGERED_FULL_MASK, which carries TRIGGERED_IGNORE_GCD
+		// (SpellDefines.h:134/153).
 		reason := spellFailedNotReady
 		if spell.Attributes&spellAttr0DisabledWhileActive != 0 {
 			reason = spellFailedDontReport
@@ -1842,7 +1847,11 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	}
 
 	// Spell::prepare (Spell.cpp:3188-3193) sends SMSG_SPELL_START before
-	// TriggerGlobalCooldown.
+	// TriggerGlobalCooldown. The TRIGGERED_IGNORE_GCD arm (Spell.cpp:3196)
+	// is structural: triggered casts route through
+	// castSpellDirectWithOverrides, which never triggers GCD — matching C++
+	// TRIGGERED_FULL_MASK, which carries TRIGGERED_IGNORE_GCD
+	// (SpellDefines.h:134/153).
 	s.triggerGlobalCooldown(spell)
 
 	if castTime > 0 {
