@@ -957,6 +957,19 @@ func (s *Server) endAV(av *avBattlegroundState, winner int8) {
 		return
 	}
 	av.Winner = winner
+	// Reference: BattlegroundAV::PostUpdateImpl (BattlegroundAV.cpp:363-364) gates
+	// the whole node-timer loop on GetStatus() == STATUS_IN_PROGRESS: once the
+	// battle ends the node timers stop. Go models each node timer as a
+	// time.AfterFunc, so stop every armed node timer here under the caller's
+	// av.mu (the lock is also held by the timer callback, so Stop never races a
+	// running callback; the av.Winner >= 0 gate in the callback stays as defense
+	// for a fire that lands between the gate and Stop).
+	for i := range av.Nodes {
+		if av.Nodes[i].CaptureTimer != nil {
+			av.Nodes[i].CaptureTimer.Stop()
+			av.Nodes[i].CaptureTimer = nil
+		}
+	}
 	winnerTeam := "Alliance"
 	if winner == 1 {
 		winnerTeam = "Horde"
