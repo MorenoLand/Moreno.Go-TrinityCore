@@ -21,6 +21,15 @@ const (
 
 	AVDefaultCaptureDuration  = 240 * time.Second // 4 minutes
 	AVDefaultMineTickDuration = 45 * time.Second  // 45 seconds
+	AVFirstCapDuration        = 300 * time.Second // 5 minutes (BG_AV_SNOWFALL_FIRSTCAP)
+
+	// Kill/rep rewards mirroring BattlegroundAV.h.
+	AVHonorKillsBoss    uint32 = 4   // BG_AV_KILL_BOSS
+	AVRepBoss           uint32 = 350 // BG_AV_REP_BOSS
+	AVHonorKillsCaptain uint32 = 3   // BG_AV_KILL_CAPTAIN
+	AVRepCaptain        uint32 = 125 // BG_AV_REP_CAPTAIN
+	AVHonorKillsTower   uint32 = 3   // BG_AV_KILL_TOWER
+	AVRepTower          uint32 = 12  // BG_AV_REP_TOWER
 
 	// Teams
 	AVTeamNeutral  uint8 = 0
@@ -262,7 +271,7 @@ func (s *Server) getOrCreateAVState(mapID uint32) *avBattlegroundState {
 				IsTower:     isTower,
 				Owner:       initOwner,
 				State:       AVNodeStateControlled,
-				PrevOwner:   initOwner,
+				PrevOwner:   AVTeamNeutral, // == C++ InitNode's PrevOwner = 0 (BattlegroundAV.cpp:1457)
 				BannerEntry: bannerEntry,
 				X:           avNodeCoords[i][0],
 				Y:           avNodeCoords[i][1],
@@ -337,8 +346,12 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 				} else {
 					node.State = AVNodeStateContestedHorde
 				}
+				// Reference: BattlegroundAV::AssaultNode (BattlegroundAV.cpp:1437):
+				// the capture timer is BG_AV_SNOWFALL_FIRSTCAP when the
+				// pre-assault previous owner was neutral, else BG_AV_CAPTIME.
+				firstCap := node.PrevOwner == AVTeamNeutral
 				node.PrevOwner = node.Owner
-				s.startAVNodeCaptureTimer(av, nodeID, playerTeam)
+				s.startAVNodeCaptureTimer(av, nodeID, playerTeam, firstCap)
 				s.updateAVNodeBanner(av, nodeID)
 				s.updateAVNodeWorldStates(av, nodeID)
 				s.announceAVAssault(av.MapID, sess.accountName, nodeID, playerTeam)
@@ -381,8 +394,12 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 				} else {
 					node.State = AVNodeStateContestedHorde
 				}
+				// Reference: BattlegroundAV::AssaultNode (BattlegroundAV.cpp:1437):
+				// the capture timer is BG_AV_SNOWFALL_FIRSTCAP when the
+				// pre-assault previous owner was neutral, else BG_AV_CAPTIME.
+				firstCap := node.PrevOwner == AVTeamNeutral
 				node.PrevOwner = node.Owner
-				s.startAVNodeCaptureTimer(av, nodeID, playerTeam)
+				s.startAVNodeCaptureTimer(av, nodeID, playerTeam, firstCap)
 				s.updateAVNodeBanner(av, nodeID)
 				s.updateAVNodeWorldStates(av, nodeID)
 				s.announceAVAssault(av.MapID, sess.accountName, nodeID, playerTeam)
@@ -406,7 +423,7 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 						node.CaptureTimer.Stop()
 					}
 					node.State = AVNodeStateContestedHorde
-					s.startAVNodeCaptureTimer(av, nodeID, playerTeam)
+					s.startAVNodeCaptureTimer(av, nodeID, playerTeam, node.PrevOwner == AVTeamNeutral)
 					s.updateAVNodeBanner(av, nodeID)
 					s.updateAVNodeWorldStates(av, nodeID)
 					s.announceAVAssault(av.MapID, sess.accountName, nodeID, playerTeam)
@@ -431,7 +448,7 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 						node.CaptureTimer.Stop()
 					}
 					node.State = AVNodeStateContestedAlliance
-					s.startAVNodeCaptureTimer(av, nodeID, playerTeam)
+					s.startAVNodeCaptureTimer(av, nodeID, playerTeam, node.PrevOwner == AVTeamNeutral)
 					s.updateAVNodeBanner(av, nodeID)
 					s.updateAVNodeWorldStates(av, nodeID)
 					s.announceAVAssault(av.MapID, sess.accountName, nodeID, playerTeam)
@@ -442,7 +459,7 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 	return true
 }
 
-func (s *Server) startAVNodeCaptureTimer(av *avBattlegroundState, nodeID uint32, capturingTeam uint8) {
+func (s *Server) startAVNodeCaptureTimer(av *avBattlegroundState, nodeID uint32, capturingTeam uint8, firstCap bool) {
 	node := &av.Nodes[nodeID]
 	if node.CaptureTimer != nil {
 		node.CaptureTimer.Stop()
@@ -450,6 +467,12 @@ func (s *Server) startAVNodeCaptureTimer(av *avBattlegroundState, nodeID uint32,
 	duration := av.CaptureDuration
 	if duration <= 0 {
 		duration = AVDefaultCaptureDuration
+	}
+	// Reference: BattlegroundAV::AssaultNode (BattlegroundAV.cpp:1437): the
+	// timer is BG_AV_SNOWFALL_FIRSTCAP when the pre-assault previous owner was
+	// neutral, else BG_AV_CAPTIME.
+	if firstCap {
+		duration = AVFirstCapDuration
 	}
 
 	node.CaptureTimer = time.AfterFunc(duration, func() {
@@ -465,6 +488,15 @@ func (s *Server) startAVNodeCaptureTimer(av *avBattlegroundState, nodeID uint32,
 			node.State = AVNodeStateDestroyed
 			loserTeam := node.PrevOwner
 			s.updateAVScore(av, loserTeam, -int32(AVReinforcementsTower))
+			// Reference: BattlegroundAV::EventPlayerDestroyedPoint (BattlegroundAV.cpp:565):
+			// the destroying (assaulting) team gains rep + bonus honor.
+			capturingIdx := uint32(capturingTeam - 1)
+			capturingFaction := uint32(730) // Stormpike Guard
+			if capturingTeam == AVTeamHorde {
+				capturingFaction = 729 // Frostwolf Clan
+			}
+			s.rewardBGEndReputation(av.MapID, capturingIdx, capturingFaction, AVRepTower)
+			s.rewardBGEndHonor(av.MapID, capturingIdx, AVHonorKillsTower)
 			s.updateAVNodeBanner(av, nodeID)
 			s.updateAVNodeWorldStates(av, nodeID)
 			nodeName := avNodeNames[nodeID]
@@ -679,17 +711,36 @@ func (s *Server) handleAVCreatureKilled(sess *session, creatureEntry uint32) {
 	switch creatureEntry {
 	case AVCreatureVanndar:
 		// Alliance General killed -> Horde wins!
+		// Reference: BattlegroundAV::HandleKillUnit (BattlegroundAV.cpp:97):
+		// RewardReputationToTeam(729, BG_AV_REP_BOSS, HORDE) +
+		// RewardHonorToTeam(GetBonusHonorFromKill(BG_AV_KILL_BOSS), HORDE),
+		// then EndBattleground(HORDE). CastSpellOnTeam(23658) has no bridge
+		// (no team-wide quest-completion spell model).
+		s.rewardBGEndReputation(av.MapID, 1, 729, AVRepBoss)
+		s.rewardBGEndHonor(av.MapID, 1, AVHonorKillsBoss)
 		s.broadcastBattlegroundMessage(av.MapID, "General Vanndar Stormpike has been slain! The Horde is victorious!")
 		s.endAV(av, 1)
 
 	case AVCreatureDrekThar:
 		// Horde General killed -> Alliance wins!
+		// Reference: BattlegroundAV::HandleKillUnit (BattlegroundAV.cpp:106):
+		// RewardReputationToTeam(730, BG_AV_REP_BOSS, ALLIANCE) +
+		// RewardHonorToTeam(GetBonusHonorFromKill(BG_AV_KILL_BOSS), ALLIANCE),
+		// then EndBattleground(ALLIANCE).
+		s.rewardBGEndReputation(av.MapID, 0, 730, AVRepBoss)
+		s.rewardBGEndHonor(av.MapID, 0, AVHonorKillsBoss)
 		s.broadcastBattlegroundMessage(av.MapID, "General Drek'Thar has been slain! The Alliance is victorious!")
 		s.endAV(av, 0)
 
 	case AVCreatureBalinda:
 		if av.AllianceCaptainAlive {
 			av.AllianceCaptainAlive = false
+			// Reference: BattlegroundAV::HandleKillUnit (BattlegroundAV.cpp:113):
+			// RewardReputationToTeam(729, BG_AV_REP_CAPTAIN, HORDE) +
+			// RewardHonorToTeam(GetBonusHonorFromKill(BG_AV_KILL_CAPTAIN), HORDE)
+			// ahead of UpdateScore(ALLIANCE, -BG_AV_RES_CAPTAIN).
+			s.rewardBGEndReputation(av.MapID, 1, 729, AVRepCaptain)
+			s.rewardBGEndHonor(av.MapID, 1, AVHonorKillsCaptain)
 			s.updateAVScore(av, AVTeamAlliance, -int32(AVReinforcementsCaptain))
 			s.broadcastBattlegroundMessage(av.MapID, "Captain Balinda Stonehearth has been slain! Alliance loses 100 reinforcements!")
 		}
@@ -697,6 +748,12 @@ func (s *Server) handleAVCreatureKilled(sess *session, creatureEntry uint32) {
 	case AVCreatureGalvangar:
 		if av.HordeCaptainAlive {
 			av.HordeCaptainAlive = false
+			// Reference: BattlegroundAV::HandleKillUnit (BattlegroundAV.cpp:133):
+			// RewardReputationToTeam(730, BG_AV_REP_CAPTAIN, ALLIANCE) +
+			// RewardHonorToTeam(GetBonusHonorFromKill(BG_AV_KILL_CAPTAIN), ALLIANCE)
+			// ahead of UpdateScore(HORDE, -BG_AV_RES_CAPTAIN).
+			s.rewardBGEndReputation(av.MapID, 0, 730, AVRepCaptain)
+			s.rewardBGEndHonor(av.MapID, 0, AVHonorKillsCaptain)
 			s.updateAVScore(av, AVTeamHorde, -int32(AVReinforcementsCaptain))
 			s.broadcastBattlegroundMessage(av.MapID, "Captain Galvangar has been slain! Horde loses 100 reinforcements!")
 		}
