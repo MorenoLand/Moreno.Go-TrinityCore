@@ -496,6 +496,12 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 				s.server.fireCreatureTargetDied(ctx, pet, victim)
 			}
 			s.fireCreatureDied(ctx, motion)
+			// BossAI::_JustDied (ScriptedCreature.cpp:512-518): native death
+			// hook after the Eluna event-23/4 fire, matching the
+			// Eluna-first/native-second order used at respawn (kill.go:865).
+			if motion.BossAI != nil {
+				motion.BossAI.OnDied(ctx, s.server, motion)
+			}
 		}
 	}
 

@@ -33,17 +33,19 @@ import (
 // AIs are tick-driven and OnReset re-arms their timers. The instance
 // SetBossState(NOT_STARTED) arm has no boss-state model; Go's analog is
 // clearInstanceEncounter on evade (creaturemotion.go:626).
-// _JustDied (512-518) vs Go: the BossAI interface has NO death hook — the
-// checklist-named gap, still open. The Lua side keeps Eluna parity
-// (fireCreatureDied fires Lua event 23 On_Reset then event 4 On_Died), but
-// Go-native implementations get no callback: vancleefAI's summons persist
-// on death (C++ DespawnAll), per-AI flags linger until the respawn OnReset
-// re-arms them (next pull clean), and stale timers stay inert via the
-// OnUpdate !InCombat guard the kill paths set. The instance DONE arm has no
-// state model; the kill sites approximate it by clearing encounter-active
-// tracking (combat.go:566/879, spells.go:7446/12646) — except the pet
-// owner-gone branch (pet_combat.go:578-585), which skips the encounter clear
-// and the event-4 fire entirely.
+// _JustDied (512-518) vs OnDied — bridged: BossAI._JustDied's events.Reset()
+// is covered per-AI (flags/timers linger until the respawn OnReset re-arms
+// them; stale timers stay inert via the OnUpdate !InCombat guard the kill
+// paths set), scheduler.CancelAll() needs no bridge (tick-driven AIs),
+// and summons.DespawnAll() is bridged by vancleefAI, the only implementation
+// tracking summons, via despawnSummons. The instance SetBossState(DONE) arm
+// has no state model; the kill sites clear encounter-active tracking
+// (combat.go:566/879, spells.go:7446/12646) — the pet owner-gone branch
+// (pet_combat.go:578-585) skips the encounter clear and the event-4 Lua
+// fire, but still runs OnDied so the native summon cleanup fires. Lua keeps
+// Eluna parity (fireCreatureDied fires Lua event 23 On_Reset then event 4
+// On_Died) with the native hook fired right after, matching the
+// Eluna-first/native-second order used at respawn (kill.go:865).
 // _JustReachedHome (520-523) = me->setActive(false): no active model in Go;
 // already documented at creaturemotion.go:659-671 (Eluna event 24 fires, the
 // veto discarded as a provable no-op since only BossAI overrides
@@ -69,6 +71,7 @@ type BossAI interface {
 	OnDamageTaken(ctx context.Context, s *Server, motion *creatureMotion, attacker uint64, damage uint32)
 	OnKillPlayer(ctx context.Context, s *Server, motion *creatureMotion, victim uint64)
 	OnEvade(ctx context.Context, s *Server, motion *creatureMotion)
+	OnDied(ctx context.Context, s *Server, motion *creatureMotion)
 	OnUpdate(ctx context.Context, s *Server, motion *creatureMotion, diff time.Duration, players []playerPos, now time.Time)
 }
 
@@ -248,6 +251,15 @@ func (ai *vancleefAI) OnEvade(ctx context.Context, s *Server, m *creatureMotion)
 	ai.OnReset(ctx, s, m)
 }
 
+// OnDied mirrors BossAI::_JustDied (ScriptedCreature.cpp:512-518): the
+// summons.DespawnAll() arm, the only per-AI-relevant leg for this
+// implementation. events.Reset()/scheduler.CancelAll() need no bridge —
+// flags/timers re-arm at the respawn OnReset and stale ticks are inert
+// while !InCombat.
+func (ai *vancleefAI) OnDied(ctx context.Context, s *Server, m *creatureMotion) {
+	ai.despawnSummons(ctx, s, m)
+}
+
 func (ai *vancleefAI) OnUpdate(ctx context.Context, s *Server, m *creatureMotion, diff time.Duration, players []playerPos, now time.Time) {
 }
 
@@ -338,6 +350,13 @@ func (ai *mrSmiteAI) OnEvade(ctx context.Context, s *Server, m *creatureMotion) 
 	ai.OnReset(ctx, s, m)
 }
 
+// OnDied mirrors BossAI::_JustDied (ScriptedCreature.cpp:512-518) — this
+// implementation tracks no summons and its timers re-arm at the respawn
+// OnReset, so no cleanup is needed; events.Reset()/scheduler.CancelAll()
+// need no bridge (tick-driven AI, inert while !InCombat).
+func (ai *mrSmiteAI) OnDied(ctx context.Context, s *Server, m *creatureMotion) {
+}
+
 func (ai *mrSmiteAI) OnUpdate(ctx context.Context, s *Server, m *creatureMotion, diff time.Duration, players []playerPos, now time.Time) {
 	if !m.InCombat || m.TargetGUID == 0 {
 		return
@@ -390,6 +409,11 @@ func (ai *rhahkZorAI) OnEvade(ctx context.Context, s *Server, m *creatureMotion)
 	ai.OnReset(ctx, s, m)
 }
 
+// OnDied mirrors BossAI::_JustDied (ScriptedCreature.cpp:512-518) — no
+// per-AI cleanup needed (see mrSmiteAI.OnDied).
+func (ai *rhahkZorAI) OnDied(ctx context.Context, s *Server, m *creatureMotion) {
+}
+
 func (ai *rhahkZorAI) OnUpdate(ctx context.Context, s *Server, m *creatureMotion, diff time.Duration, players []playerPos, now time.Time) {
 	if !m.InCombat || m.TargetGUID == 0 {
 		return
@@ -434,6 +458,11 @@ func (ai *taragamanAI) OnKillPlayer(ctx context.Context, s *Server, m *creatureM
 
 func (ai *taragamanAI) OnEvade(ctx context.Context, s *Server, m *creatureMotion) {
 	ai.OnReset(ctx, s, m)
+}
+
+// OnDied mirrors BossAI::_JustDied (ScriptedCreature.cpp:512-518) — no
+// per-AI cleanup needed (see mrSmiteAI.OnDied).
+func (ai *taragamanAI) OnDied(ctx context.Context, s *Server, m *creatureMotion) {
 }
 
 func (ai *taragamanAI) OnUpdate(ctx context.Context, s *Server, m *creatureMotion, diff time.Duration, players []playerPos, now time.Time) {
@@ -490,6 +519,11 @@ func (ai *kreshAI) OnEvade(ctx context.Context, s *Server, m *creatureMotion) {
 	ai.OnReset(ctx, s, m)
 }
 
+// OnDied mirrors BossAI::_JustDied (ScriptedCreature.cpp:512-518) — no
+// per-AI cleanup needed (see mrSmiteAI.OnDied).
+func (ai *kreshAI) OnDied(ctx context.Context, s *Server, m *creatureMotion) {
+}
+
 func (ai *kreshAI) OnUpdate(ctx context.Context, s *Server, m *creatureMotion, diff time.Duration, players []playerPos, now time.Time) {
 }
 
@@ -536,6 +570,11 @@ func (ai *luaBossAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMo
 func (ai *luaBossAI) OnKillPlayer(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
 }
 func (ai *luaBossAI) OnEvade(ctx context.Context, s *Server, m *creatureMotion) {}
+
+// OnDied mirrors BossAI::_JustDied (ScriptedCreature.cpp:512-518) — no-op:
+// Lua-scripted fights keep their death handling in the script (Eluna event
+// 4, fired by fireCreatureDied just ahead of this hook).
+func (ai *luaBossAI) OnDied(ctx context.Context, s *Server, m *creatureMotion) {}
 func (ai *luaBossAI) OnUpdate(ctx context.Context, s *Server, m *creatureMotion, diff time.Duration, players []playerPos, now time.Time) {
 }
 

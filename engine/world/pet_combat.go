@@ -589,6 +589,13 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				s.removeThreatVictimFromAllLists(motion.Map, motion.InstanceID, targetGUID)
 				s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(victim))
 				s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(victim))
+				// BossAI::_JustDied (ScriptedCreature.cpp:512-518): this
+				// path skips onCreatureKilled, so the native death hook must
+				// fire here — vancleefAI.OnDied despawns the 50%-arm
+				// blackguards even when the pet owner is gone mid-tick.
+				if victim.BossAI != nil {
+					victim.BossAI.OnDied(ctx, s, victim)
+				}
 			}
 		}
 	}
