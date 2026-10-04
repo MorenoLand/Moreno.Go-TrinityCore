@@ -613,7 +613,10 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		entry.Status = BGStatusInProgress
 		entry.StartTime = time.Now()
 		entry.MapID = battlegroundMapForType(bgTypeID)
-		entry.ArenaFaction = uint8(team)
+		// C++ SetBGTeam(team) stores arenaFaction = team == ALLIANCE ? 1 : 0
+		// (Player.cpp:22458-22461); teamForRace is 0 alliance / 1 horde, so the
+		// wire byte is inverted here.
+		entry.ArenaFaction = 1 - uint8(team)
 		s.bgData.InstanceID = entry.InstanceID
 		s.bgData.Team = uint16(team)
 		s.sendBattlefieldStatus(uint8(slot))
@@ -641,6 +644,11 @@ func (s *session) handleBattlefieldStatus(ctx context.Context, payload []byte) b
 		return false
 	}
 	for slot := uint8(0); slot < uint8(len(s.bgQueues)); slot++ {
+		// C++ sends no packet for slots with no queue type
+		// (BattleGroundHandler.cpp:554-556).
+		if !s.bgQueues[slot].Active {
+			continue
+		}
 		s.sendBattlefieldStatus(slot)
 	}
 	return true
@@ -669,10 +677,21 @@ func (s *session) sendBattlefieldStatus(slot uint8) {
 	}
 	buf.WriteU32(entry.BgTypeID)
 	buf.WriteU16(0x1F90)
-	buf.WriteU8(10) // minLevel
-	buf.WriteU8(80) // maxLevel
+	// C++ reads the BG's level range per packet (BattlegroundMgr.cpp:210-211):
+	// the template range for queued packets; live instances carry the bracket
+	// range instead (Battleground.cpp:1792), which has no Go model (no
+	// PvPDifficulty data), so the template range stands for all statuses.
+	minLvl, maxLvl := bgTemplateLevels(s.server, entry.BgTypeID)
+	buf.WriteU8(minLvl)
+	buf.WriteU8(maxLvl)
 	buf.WriteU32(entry.InstanceID)
-	if entry.IsRated {
+	if entry.Status == BGStatusWaitQueue {
+		// The queued packet is built from the BG template
+		// (BattleGroundHandler.cpp:580-588), and templates are never rated —
+		// SetRated runs only for live instances
+		// (BattlegroundMgr::CreateNewBattleground) — so the wire byte is 0.
+		buf.WriteU8(0)
+	} else if entry.IsRated {
 		buf.WriteU8(1)
 	} else {
 		buf.WriteU8(0)
@@ -696,6 +715,9 @@ func (s *session) sendBattlefieldStatus(slot uint8) {
 			elapsed = uint32(time.Since(entry.StartTime).Milliseconds())
 		}
 		buf.WriteU32(elapsed)
+		// C++: arenaFaction == ALLIANCE ? 1 : 0 (BattlegroundMgr.cpp:225 ==
+		// Player::SetBGTeam, Player.cpp:22458-22461). All ArenaFaction writers
+		// store this wire value (1 alliance, 0 horde).
 		buf.WriteU8(entry.ArenaFaction)
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_BATTLEFIELD_STATUS), buf.Bytes(), true)
@@ -713,7 +735,10 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 		if s.bgQueues[index].Active {
 			continue
 		}
-		s.bgQueues[index] = bgQueueEntry{Active: true, BgTypeID: bgTypeID, InstanceID: s.bgData.InstanceID, Status: BGStatusInProgress, ArenaType: arenaType, IsArena: isArena, MapID: state.Map, StartTime: time.Now(), ArenaFaction: uint8(s.bgData.Team)}
+		// bgData.Team is the teamForRace id (0 alliance / 1 horde); the status
+		// packet's arena-faction byte is the C++ wire value (1 alliance /
+		// 0 horde, Player::SetBGTeam).
+		s.bgQueues[index] = bgQueueEntry{Active: true, BgTypeID: bgTypeID, InstanceID: s.bgData.InstanceID, Status: BGStatusInProgress, ArenaType: arenaType, IsArena: isArena, MapID: state.Map, StartTime: time.Now(), ArenaFaction: 1 - uint8(s.bgData.Team)}
 		return
 	}
 }
@@ -762,6 +787,21 @@ func battlegroundMapForType(bgTypeID uint32) uint32 {
 	default:
 		return 0
 	}
+}
+
+// bgTemplateLevels returns the battleground_template MinLvl/MaxLvl pair ==
+// Battleground::GetMinLevel/GetMaxLevel for the status packet
+// (BattlegroundMgr.cpp:210-211). The table is unseeded in this repo's
+// world.sql, so the 10/80 fallback applies (bgMaxLevelForMap convention).
+func bgTemplateLevels(srv *Server, bgTypeID uint32) (uint8, uint8) {
+	if srv == nil || srv.WorldStore == nil || srv.WorldStore.DB == nil {
+		return 10, 80
+	}
+	var minLvl, maxLvl uint32
+	if err := srv.WorldStore.DB.QueryRowContext(context.Background(), `SELECT MinLvl, MaxLvl FROM battleground_template WHERE ID = ?`, bgTypeID).Scan(&minLvl, &maxLvl); err != nil || maxLvl == 0 {
+		return 10, 80
+	}
+	return uint8(minLvl), uint8(maxLvl)
 }
 
 // bgMaxLevelForMap returns the BG's m_LevelMax == Battleground::GetMaxLevel,
