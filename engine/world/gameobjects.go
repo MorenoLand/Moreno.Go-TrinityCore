@@ -82,6 +82,7 @@ type dynamicGameObjectState struct {
 	Type            uint8
 	DisplayID       uint32
 	Size            float32
+	IconName        string
 	Flags           uint32
 	Faction         uint32
 	Data1           uint32
@@ -422,7 +423,8 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 	}
 
 	entry := uint32((guid >> 24) & 0x00FFFFFF)
-	s.updateAchievementCriteria(criteriaTypeUseGameObject, entry, 1)
+	// ACHIEVEMENT_CRITERIA_TYPE_USE_GAMEOBJECT is updated by CMSG_GAMEOBJ_REPORT_USE
+	// (HandleGameobjectReportUse, SpellHandler.cpp:318), not by CMSG_GAMEOBJ_USE.
 	lowGUID := uint32(guid & 0x00FFFFFF)
 
 	// Delegate Warsong Gulch flags to WSG state machine
@@ -482,6 +484,12 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		return true
 	}
 
+	// Player::GetGameObjectIfCanInteractWith (Player.cpp:2379): players cannot
+	// interact with gameobjects that use the "Point" icon.
+	if goState.IconName == "Point" {
+		return true
+	}
+
 	switch goState.Type {
 	case GameObjectTypeDoor:
 		// Toggle door open/closed
@@ -512,12 +520,60 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		return s.handleFishingHoleUse(ctx, payload, goState)
 
 	case GameObjectTypeGoober:
-		s.server.setGameObjectStateInInstance(goState.Map, goState.InstanceID, guid, GameObjectStateActive)
-		s.server.broadcastGameObjectCustomAnimInInstance(goState.Map, goState.InstanceID, guid, 0)
-		if goState.Data1 > 0 {
-			s.castSpellDirect(ctx, goState.Data1, s.playerGUID)
+		// GameObject::Use GAMEOBJECT_TYPE_GOOBER arm (GameObject.cpp:1630-1696).
+		tpl := s.loadGooberTemplate(ctx, entry)
+		// Page text is shown before the quest-gate break, like C++.
+		if tpl.pageID != 0 {
+			buf := protocol.NewBuffer(8)
+			buf.WriteU64(guid)
+			_ = s.write(uint16(protocol.OpcodeSMSG_GAMEOBJECT_PAGETEXT), buf.Bytes(), true)
 		}
-		s.server.scheduleGameObjectResetInInstance(goState.Map, goState.InstanceID, guid, 10*time.Second)
+		// The goober gossip menu needs a gameobject gossip source; Go's gossip
+		// path is creature-only, so the gossipID arm is unmodeled (documented).
+		// The eventId script-start arm has no Go event-script model (documented).
+		// The quest gate: with a questId and no incomplete quest, C++ breaks
+		// out of the switch — no kill credit, no state change, no spell.
+		if tpl.questID != 0 {
+			status, _ := s.characterQuestStatus(ctx, tpl.questID)
+			if status != questStatusIncomplete {
+				return true
+			}
+		}
+		// Player::KillCreditGO: group members at group reward distance share it.
+		s.creditQuestKills(ctx, entry, guid)
+		if s.groupID != 0 && s.server != nil {
+			inDungeon := s.isDungeonMap(s.player.Map)
+			for _, m := range s.server.getGroupSessions(s.groupID) {
+				if m == s || m.player == nil {
+					continue
+				}
+				if m.player.Map == s.player.Map && m.player.InstanceID == s.player.InstanceID &&
+					(inDungeon || distance3D(s.player.X, s.player.Y, s.player.Z, m.player.X, m.player.Y, m.player.Z) <= 100.0) {
+					m.creditQuestKills(ctx, entry, guid)
+				}
+			}
+		}
+		// linkedTrapId has no Go trap model (documented).
+		// GO_FLAG_IN_USE / GO_ACTIVATED loot state has no Go analog; the custom
+		// anim goes out only when the template sets customAnim, otherwise the GO
+		// state moves to ACTIVE (documented).
+		if tpl.customAnim != 0 {
+			s.server.broadcastGameObjectCustomAnimInInstance(goState.Map, goState.InstanceID, guid, uint32(goState.AnimProgress))
+		} else {
+			s.server.setGameObjectStateInInstance(goState.Map, goState.InstanceID, guid, GameObjectStateActive)
+		}
+		resetDelay := 10 * time.Second
+		if tpl.autoCloseTime > 0 {
+			resetDelay = time.Duration(tpl.autoCloseTime) * time.Second
+		}
+		s.server.scheduleGameObjectResetInInstance(goState.Map, goState.InstanceID, guid, resetDelay)
+		// The spell is data10 in this TrinityCore layout (GameObjectData.h:171);
+		// the old code cast data1 (the questId) as the spell. C++ casts it at
+		// the end of Use() with the GO as caster; Go's castSpellDirect casts as
+		// the player (documented).
+		if tpl.spellID != 0 {
+			s.castSpellDirect(ctx, tpl.spellID, s.playerGUID)
+		}
 	}
 
 	return true
@@ -525,16 +581,71 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 
 // handleGameObjectReportUse processes CMSG_GAMEOBJ_REPORT_USE (0x481).
 // Reference: WorldSession::HandleGameobjectReportUse (SpellHandler.cpp:318).
+// This is the opcode that carries ACHIEVEMENT_CRITERIA_TYPE_USE_GAMEOBJECT in
+// C++; CMSG_GAMEOBJ_USE (HandleGameObjectUseOpcode) never updates it.
 func (s *session) handleGameObjectReportUse(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil {
+	if !s.playerLoaded || s.player == nil || len(payload) == 0 {
 		return false
 	}
 	guid, err := readObjectGUID(payload)
-	if err != nil {
+	if err != nil || guid == 0 {
 		return false
 	}
-	_ = guid
+	entry := uint32((guid >> 24) & 0x00FFFFFF)
+	lowGUID := uint32(guid & 0x00FFFFFF)
+	goState, err := s.server.getOrLoadGameObjectState(ctx, guid, lowGUID, entry, s.player.Map, s.player.InstanceID)
+	if err != nil || goState == nil {
+		return false
+	}
+	// The GetGameObjectIfCanInteractWith gates (Player.cpp:2363): the "Point"
+	// icon and interaction range gates apply here as in C++.
+	if goState.IconName == "Point" {
+		return true
+	}
+	if goState.Map != s.player.Map || goState.InstanceID != s.player.InstanceID || distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > 10.0 {
+		return true
+	}
+	s.updateAchievementCriteria(criteriaTypeUseGameObject, entry, 1)
 	return true
+}
+
+// gooberTemplateData carries the gameobject_template data columns used by the
+// GameObject::Use GAMEOBJECT_TYPE_GOOBER arm (GameObjectData.h:171-197).
+type gooberTemplateData struct {
+	questID       uint32 // data1
+	eventID       uint32 // data2
+	autoCloseTime uint32 // data3
+	customAnim    uint32 // data4
+	pageID        uint32 // data7
+	spellID       uint32 // data10
+	linkedTrapID  uint32 // data12
+	gossipID      uint32 // data19
+}
+
+// loadGooberTemplate fetches the template data fields the goober use-arm reads.
+func (s *session) loadGooberTemplate(ctx context.Context, entry uint32) gooberTemplateData {
+	var tpl gooberTemplateData
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return tpl
+	}
+	var questID, eventID, autoCloseTime, customAnim, pageID, spellID, linkedTrapID, gossipID int64
+	err := s.server.WorldStore.DB.QueryRowContext(ctx,
+		`SELECT COALESCE(Data1, 0), COALESCE(Data2, 0), COALESCE(Data3, 0), COALESCE(Data4, 0),
+			COALESCE(Data7, 0), COALESCE(Data10, 0), COALESCE(Data12, 0), COALESCE(Data19, 0)
+		FROM gameobject_template WHERE entry = ? LIMIT 1`, entry).
+		Scan(&questID, &eventID, &autoCloseTime, &customAnim, &pageID, &spellID, &linkedTrapID, &gossipID)
+	if err != nil {
+		return tpl
+	}
+	tpl.questID = uint32(questID)
+	tpl.eventID = uint32(eventID)
+	tpl.autoCloseTime = uint32(autoCloseTime)
+	tpl.customAnim = uint32(customAnim)
+	tpl.pageID = uint32(pageID)
+	tpl.spellID = uint32(spellID)
+	tpl.linkedTrapID = uint32(linkedTrapID)
+	tpl.gossipID = uint32(gossipID)
+	return tpl
 }
 
 func (s *Server) getOrLoadGameObjectState(ctx context.Context, guid uint64, lowGUID, entry, mapID, instanceID uint32) (*dynamicGameObjectState, error) {
@@ -551,11 +662,12 @@ func (s *Server) getOrLoadGameObjectState(ctx context.Context, guid uint64, lowG
 
 	var goMap, goState, goType, displayID, data1 int64
 	var goX, goY, goZ, goO, size float64
+	var iconName string
 	err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT g.map, g.position_x, g.position_y, g.position_z, g.orientation, g.state,
-		t.type, t.displayId, t.size, COALESCE(t.data1, 0)
+		t.type, t.displayId, t.size, COALESCE(t.data1, 0), COALESCE(t.IconName, '')
 		FROM gameobject AS g
 		JOIN gameobject_template AS t ON t.entry = g.id
-		WHERE g.guid = ? AND g.id = ? LIMIT 1`, lowGUID, entry).Scan(&goMap, &goX, &goY, &goZ, &goO, &goState, &goType, &displayID, &size, &data1)
+		WHERE g.guid = ? AND g.id = ? LIMIT 1`, lowGUID, entry).Scan(&goMap, &goX, &goY, &goZ, &goO, &goState, &goType, &displayID, &size, &data1, &iconName)
 	if err != nil {
 		return nil, err
 	}
@@ -574,6 +686,7 @@ func (s *Server) getOrLoadGameObjectState(ctx context.Context, guid uint64, lowG
 		Type:        uint8(goType),
 		DisplayID:   uint32(displayID),
 		Size:        float32(size),
+		IconName:    iconName,
 		Data1:       uint32(data1),
 	}
 	if dyn.Type == GameObjectTypeFishingHole {
