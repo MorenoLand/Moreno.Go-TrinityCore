@@ -5323,6 +5323,117 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 								}
 							}
 						}
+						// Spell::EffectWeaponDmg (SpellEffects.cpp:3279-3287): the
+						// Paladin arm is documented no-bridge. Seal of Command
+						// Unleashed (3282-3286, Id == 20467) adds 0.08 *
+						// GetTotalAttackPowerValue(BASE_ATTACK) plus 0.13 *
+						// SpellBaseDamageBonusDone(school) to spell_bonus —
+						// blocked on the missing total-AP model (standing
+						// delta; grep for TotalAttackPowerValue: empty). The
+						// spellpower leg alone is readable from
+						// s.player.SpellPower, but the AP leg closes the arm.
+						// Revisit when the total-AP model lands.
+						// Spell::EffectWeaponDmg (SpellEffects.cpp:3289-3295): the
+						// Shaman arm is documented no-bridge. Stormstrike
+						// (3292-3294) fires the Skyshatter Harness set bonus:
+						// Unit::IsScriptOverriden(m_spellInfo, 5634) scans the
+						// caster's SPELL_AURA_OVERRIDE_CLASS_SCRIPTS (112)
+						// aura effects for MiscValue == 5634 with
+						// IsAffectedOnSpell(m_spellInfo) (Unit.cpp:4764-4774),
+						// then unitCaster->CastSpell(nullptr, 38430, aurEff) —
+						// a triggered cast of 38430 with the aura effect as
+						// the trigger and no explicit target. Blocked: Go
+						// has no aura-112 model (the same gap the Warbringer
+						// arm note records at spells.go:2188). The triggered
+						// cast would ride castSpellDirect, like the Devastate
+						// Sunder Armor trigger above. Revisit only when the
+						// override-class-scripts aura model lands.
+						// Spell::EffectWeaponDmg (SpellEffects.cpp:3311-3317): the
+						// Hunter arm is documented no-bridge. Kill Shot
+						// (3313-3316, SpellFamilyFlags[1] & 0x800000) adds
+						// 0.4 * GetTotalAttackPowerValue(RANGED_ATTACK) to
+						// spell_bonus — blocked on the missing ranged-AP
+						// model (no RANGED_ATTACK attack power anywhere in
+						// the tree; creatures.go only models ranged attack
+						// time). Revisit when the ranged-AP model lands.
+						if weaponDamageEffect && lastWeaponEffect && spell.SpellFamilyName == spellFamilyDeathKnight {
+							// Spell::EffectWeaponDmg (SpellEffects.cpp:3318-3385):
+							// the DeathKnight arms. The C++ family case runs
+							// independent if blocks with a break at each
+							// match, in order Plague Strike (3320-3327),
+							// Blood Strike (3328-3341), Death Strike
+							// (3343-3350), Obliterate (3352-3366),
+							// Blood-Caked Strike (3367-3373), Heart Strike
+							// (3375-3383); the else-if chain below preserves
+							// that first-match order. The !unitCaster gates
+							// are vacuous (the caster is always the session
+							// player on these cast paths).
+							if spell.SpellFamilyFlags[0]&0x1 != 0 {
+								// Plague Strike (3321-3327): the Glyph of
+								// Plague Strike arm (3323-3326) adds the
+								// live effect-0 amount of the caster's 58657
+								// aura (the C++ GetAuraEffect(58657,
+								// EFFECT_0) lookup, glyphEffectZeroPct) to
+								// totalDamagePercentMod. The AddPct lands
+								// as targetDamage*(100+pct)/100, the integer
+								// equivalent of the C++
+								// int32(damage*totalDamagePercentMod) at
+								// SpellEffects.cpp:3456 for positive damage,
+								// behind the standing weapon-damage gap.
+								if pct := s.glyphEffectZeroPct(plagueStrikeGlyphSpell); pct != 0 {
+									targetDamage = targetDamage * (100 + uint32(pct)) / 100
+								}
+							} else if spell.SpellFamilyFlags[0]&0x10 != 0 {
+								// Death Strike (3344-3350): the Glyph of
+								// Death Strike arm (3346-3348) adds min(
+								// current runic power, the glyph aura's DBC
+								// effect-1 value) to totalDamagePercentMod
+								// when the caster carries the 59336 aura. The
+								// C++ Effects[EFFECT_1].CalcValue() (null
+								// caster, SpellInfo.cpp:402) lands as the
+								// tree-wide flat BasePoints+1 convention; the
+								// runic power read is s.player.Powers[
+								// powerRunicPower] (runes.go). The zero
+								// result skips the AddPct, matching the C++
+								// if (runic) gate.
+								if s.glyphEffectZeroPct(deathStrikeGlyphSpell) != 0 {
+									cap := int32(0)
+									if s.server != nil && s.server.Data != nil {
+										if glyphSpell, found, err := s.server.Data.Spell(deathStrikeGlyphSpell); err == nil && found && len(glyphSpell.Effects) > 1 {
+											cap = int32(glyphSpell.Effects[1].BasePoints + 1)
+										}
+									}
+									runic := int32(s.player.Powers[powerRunicPower])
+									if runic > cap {
+										runic = cap
+									}
+									if runic > 0 {
+										targetDamage = targetDamage * (100 + uint32(runic)) / 100
+									}
+								}
+							}
+							// The remaining DeathKnight arms are documented
+							// no-bridge, all blocked on
+							// unitTarget->GetDiseasesByCaster (Unit.cpp:4776)
+							// — no per-caster disease-counting model exists
+							// in the tree (grep for DiseasesByCaster: empty;
+							// dispel.go only models the DispelDisease mask).
+							// Blood Strike (3328-3341, SpellFamilyFlags[0] &
+							// 0x400000) needs disease count/2 *
+							// Effects[2].CalcValue() plus the T8 4P bonus
+							// aura 64736 and the Glyph of Blood Strike 59332
+							// (+20% on slowed targets). Obliterate
+							// (3352-3366, SpellFamilyFlags[1] & 0x20000)
+							// needs the Annihilation dummy-aura 2710
+							// no-consume roll plus the disease count with
+							// optional consumption, plus T8 4P 64736.
+							// Blood-Caked Strike (3367-3373, SpellIconID ==
+							// 1736) needs 50% per disease. Heart Strike
+							// (3375-3383, SpellFamilyFlags[0] & 0x1000000)
+							// needs disease count * Effects[2].CalcValue()
+							// plus T8 4P 64736. Revisit when per-caster
+							// disease tracking lands.
+						}
 						// Spell::EffectSchoolDMG (SpellEffects.cpp:354-378): the
 						// Warrior arms are documented no-bridge. Shield Slam
 						// (360-366, SpellFamilyFlags[1] & 0x200 with
@@ -7890,6 +8001,38 @@ func (s *session) rendAndTearPct() int32 {
 			continue
 		}
 		if len(auraSpell.Effects) == 0 || !spellEffectIsAuraEffect(auraSpell.Effects[0]) || auraSpell.Effects[0].Aura != spellAuraDummy {
+			continue
+		}
+		if amount := aura.Amounts[0]; amount != 0 {
+			return amount
+		}
+		return int32(aura.Amount)
+	}
+	return 0
+}
+
+// The glyph auras read by the DeathKnight arms of Spell::EffectWeaponDmg
+// (SpellEffects.cpp:3324, 3347).
+const (
+	plagueStrikeGlyphSpell = 58657
+	deathStrikeGlyphSpell  = 59336
+)
+
+// glyphEffectZeroPct mirrors the GetAuraEffect(spellID, EFFECT_0) glyph
+// lookups in the Plague Strike and Death Strike arms of
+// Spell::EffectWeaponDmg (SpellEffects.cpp:3324, 3347): the first live
+// caster aura from spellID whose effect mask covers index 0, returning
+// its effect-0 live amount (the live-amount-first pattern of the
+// rendAndTearPct helper above). Returns 0 when the caster carries no
+// such aura (the C++ if simply never fires); the Death Strike arm
+// calls it for the aura's presence only — the damage bonus there is
+// the runic-power figure, not the aura amount.
+func (s *session) glyphEffectZeroPct(spellID uint32) int32 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.SpellID != spellID || aura.EffectMask&1 == 0 {
 			continue
 		}
 		if amount := aura.Amounts[0]; amount != 0 {
