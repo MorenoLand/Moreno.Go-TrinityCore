@@ -44,14 +44,18 @@ const (
 )
 
 type tradeSlotItem struct {
-	ItemGUID        uint64
-	ItemEntry       uint32
-	DisplayID       uint32
-	StackCount      uint32
-	EnchantID       uint32
-	GiftCreatorGUID uint64
-	CreatorGUID     uint64
-	Wrapped         bool
+	ItemGUID         uint64
+	ItemEntry        uint32
+	DisplayID        uint32
+	StackCount       uint32
+	EnchantID        uint32
+	GiftCreatorGUID  uint64
+	CreatorGUID      uint64
+	Wrapped          bool
+	RandomPropertyID uint32
+	Durability       uint32
+	MaxDurability    uint32
+	LockID           uint32
 }
 
 type playerTradeState struct {
@@ -210,7 +214,7 @@ func (caster *session) tradeSpellStillCastable(ctx context.Context, target *sess
 // (sSpellItemEnchantmentStore.LookupEntry). Stat application for an equipped
 // target is covered by the syncEquipmentCache calls later in completeTrade,
 // which read the enchantment column.
-func (caster *session) applyDeferredTradeEnchant(ctx context.Context, target *session) {
+func (caster *session) applyDeferredTradeEnchant(ctx context.Context, tx *sql.Tx, target *session) {
 	if caster.trade == nil || target.trade == nil || caster.trade.SpellID == 0 {
 		return
 	}
@@ -264,12 +268,8 @@ func (caster *session) applyDeferredTradeEnchant(ctx context.Context, target *se
 	if len(writes) == 0 {
 		return
 	}
-	cdb := caster.server.CharactersStore.DB
-	if cdb == nil {
-		return
-	}
 	var encStr sql.NullString
-	if err := cdb.QueryRowContext(ctx, "SELECT enchantments FROM item_instance WHERE guid = ? LIMIT 1", item.ItemGUID).Scan(&encStr); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT enchantments FROM item_instance WHERE guid = ? LIMIT 1", item.ItemGUID).Scan(&encStr); err != nil {
 		return
 	}
 	fields := strings.Fields(encStr.String)
@@ -289,7 +289,7 @@ func (caster *session) applyDeferredTradeEnchant(ctx context.Context, target *se
 	for i := 0; i < 36; i++ {
 		encParts[i] = strconv.FormatUint(uint64(enchants[i]), 10)
 	}
-	_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET enchantments = ? WHERE guid = ?", strings.Join(encParts, " "), item.ItemGUID)
+	_, _ = tx.ExecContext(ctx, "UPDATE item_instance SET enchantments = ? WHERE guid = ?", strings.Join(encParts, " "), item.ItemGUID)
 }
 
 // tempTradeEnchantDurationMs mirrors the duration selection in
@@ -474,7 +474,7 @@ func (s *session) handleSetTradeGold(ctx context.Context, payload []byte) bool {
 			s.trade.Partner.trade.Accepted = false
 			_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 		}
-		s.notifyTradeUpdate()
+		s.notifyTradePartnerUpdate()
 	}
 	return true
 }
@@ -523,8 +523,9 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 	}
 	var itemEntry, count, flags int64
 	var giftCreatorGUID, creatorGUID uint64
+	var durability, randomPropertyID int64
 	var encStr sql.NullString
-	_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count, flags, giftCreatorGuid, creatorGuid, enchantments FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemEntry, &count, &flags, &giftCreatorGUID, &creatorGUID, &encStr)
+	_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count, flags, giftCreatorGuid, creatorGuid, enchantments, durability, randomPropertyId FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemEntry, &count, &flags, &giftCreatorGUID, &creatorGUID, &encStr, &durability, &randomPropertyID)
 	if tradeSlot < tradeSlotTradedCount && (flags&1 != 0) {
 		// Soulbound items cannot be placed in traded slots
 		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
@@ -539,11 +540,13 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 			}
 		}
 	}
-	var displayID uint32
+	var displayID, lockID, maxDurability uint32
 	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		var disp int64
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT displayid FROM item_template WHERE entry = ?", itemEntry).Scan(&disp)
+		var disp, lock, maxDur int64
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT displayid, lockid, MaxDurability FROM item_template WHERE entry = ?", itemEntry).Scan(&disp, &lock, &maxDur)
 		displayID = uint32(disp)
+		lockID = uint32(lock)
+		maxDurability = uint32(maxDur)
 	}
 	if existing, ok := s.trade.Items[tradeSlot]; ok && existing.ItemGUID == uint64(itemGUID) {
 		// TradeData::SetItem (TradeData.cpp:60-65) early-returns when the slot
@@ -556,14 +559,18 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 	var wrappedProbe int64
 	wrapped := cdb.QueryRowContext(ctx, "SELECT 1 FROM character_gifts WHERE item_guid = ? LIMIT 1", itemGUID).Scan(&wrappedProbe) == nil
 	s.trade.Items[tradeSlot] = tradeSlotItem{
-		ItemGUID:        uint64(itemGUID),
-		ItemEntry:       uint32(itemEntry),
-		DisplayID:       displayID,
-		StackCount:      uint32(count),
-		EnchantID:       enchantID,
-		GiftCreatorGUID: giftCreatorGUID,
-		CreatorGUID:     creatorGUID,
-		Wrapped:         wrapped,
+		ItemGUID:         uint64(itemGUID),
+		ItemEntry:        uint32(itemEntry),
+		DisplayID:        displayID,
+		StackCount:       uint32(count),
+		EnchantID:        enchantID,
+		GiftCreatorGUID:  giftCreatorGUID,
+		CreatorGUID:      creatorGUID,
+		Wrapped:          wrapped,
+		RandomPropertyID: uint32(randomPropertyID),
+		Durability:       uint32(durability),
+		MaxDurability:    maxDurability,
+		LockID:           lockID,
 	}
 	// TradeData::SetItem spell clearing (TradeData.cpp:72-77): changing the
 	// non-traded slot removes a possible spell the trader applied to it;
@@ -582,7 +589,7 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 			s.trade.Partner.trade.Accepted = false
 			_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 		}
-		s.notifyTradeUpdate()
+		s.notifyTradePartnerUpdate()
 	}
 	return true
 }
@@ -621,7 +628,7 @@ func (s *session) handleClearTradeItem(ctx context.Context, payload []byte) bool
 			s.trade.Partner.trade.Accepted = false
 			_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 		}
-		s.notifyTradeUpdate()
+		s.notifyTradePartnerUpdate()
 	}
 	return true
 }
@@ -872,24 +879,65 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 		return
 	}
 
+	// Execute trade inside one transaction: C++ wraps both players'
+	// SaveInventoryAndGoldToDB in a single CharacterDatabaseTransaction
+	// (TradeHandler.cpp:532-535). A mid-trade DB failure rolls back, tears
+	// the trade down, and closes both client windows with TRADE_CANCELED
+	// (C++ has no failure arm here; leaving the windows open on torn-down
+	// server state would desync the clients).
+	tx, err := cdb.BeginTx(ctx, nil)
+	if err != nil {
+		clearAcceptTradeMode(s, partner)
+		s.trade = nil
+		partner.trade = nil
+		return
+	}
+	aborted := false
+	abort := func() {
+		if !aborted {
+			aborted = true
+			_ = tx.Rollback()
+			clearAcceptTradeMode(s, partner)
+			_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
+			_ = partner.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
+			s.trade = nil
+			partner.trade = nil
+		}
+	}
+	execTx := func(query string, args ...interface{}) bool {
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			abort()
+			return false
+		}
+		return true
+	}
+
 	// Money transfer
 	s.player.Money = s.player.Money - s.trade.Money + partner.trade.Money
 	partner.player.Money = partner.player.Money - partner.trade.Money + s.trade.Money
-	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
-	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", partner.player.Money, partner.playerGUID)
+	if !execTx("UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID) {
+		return
+	}
+	if !execTx("UPDATE characters SET money = ? WHERE guid = ?", partner.player.Money, partner.playerGUID) {
+		return
+	}
 
 	sTransferSlots := make(map[uint8]int, tradeSlotTradedCount)
 	partnerTransferSlots := make(map[uint8]int, tradeSlotTradedCount)
 	for slot := uint8(0); slot < tradeSlotTradedCount; slot++ {
 		if it, ok := s.trade.Items[slot]; ok {
 			sTransferSlots[slot] = len(sTransferSlots)
-			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, it.ItemGUID)
+			if !execTx("DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, it.ItemGUID) {
+				return
+			}
 			s.despawnItem(it.ItemGUID)
 			s.adjustQuestItemCount(ctx, it.ItemEntry, it.StackCount, false)
 		}
 		if it, ok := partner.trade.Items[slot]; ok {
 			partnerTransferSlots[slot] = len(partnerTransferSlots)
-			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", partner.playerGUID, it.ItemGUID)
+			if !execTx("DELETE FROM character_inventory WHERE guid = ? AND item = ?", partner.playerGUID, it.ItemGUID) {
+				return
+			}
 			partner.despawnItem(it.ItemGUID)
 			partner.adjustQuestItemCount(ctx, it.ItemEntry, it.StackCount, false)
 		}
@@ -900,16 +948,24 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 			targetLoc := partnerSlots[sTransferSlots[slot]]
 			// Execute trade: C++ stamps the giver's GUID as ITEM_FIELD_GIFTCREATOR
 			// on each traded item (TradeHandler.cpp:483).
-			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ?, giftCreatorGuid = ? WHERE guid = ?", partner.playerGUID, s.playerGUID, it.ItemGUID)
-			_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", partner.playerGUID, targetLoc.bagKey, targetLoc.slot, it.ItemGUID)
+			if !execTx("UPDATE item_instance SET owner_guid = ?, giftCreatorGuid = ? WHERE guid = ?", partner.playerGUID, s.playerGUID, it.ItemGUID) {
+				return
+			}
+			if !execTx("INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", partner.playerGUID, targetLoc.bagKey, targetLoc.slot, it.ItemGUID) {
+				return
+			}
 			partner.adjustQuestItemCount(ctx, it.ItemEntry, it.StackCount, true)
 		}
 		if it, ok := partner.trade.Items[slot]; ok {
 			targetLoc := sSlots[partnerTransferSlots[slot]]
 			// Execute trade: C++ stamps the giver's GUID as ITEM_FIELD_GIFTCREATOR
 			// on each traded item (TradeHandler.cpp:488).
-			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ?, giftCreatorGuid = ? WHERE guid = ?", s.playerGUID, partner.playerGUID, it.ItemGUID)
-			_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, targetLoc.bagKey, targetLoc.slot, it.ItemGUID)
+			if !execTx("UPDATE item_instance SET owner_guid = ?, giftCreatorGuid = ? WHERE guid = ?", s.playerGUID, partner.playerGUID, it.ItemGUID) {
+				return
+			}
+			if !execTx("INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, targetLoc.bagKey, targetLoc.slot, it.ItemGUID) {
+				return
+			}
 			s.adjustQuestItemCount(ctx, it.ItemEntry, it.StackCount, true)
 		}
 	}
@@ -917,8 +973,13 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 	// Deferred-spell prepare at execute (TradeHandler.cpp:524-526): each
 	// side's deferred spell is applied to the other side's non-traded slot
 	// item now that the inventory move is done, before the trade completes.
-	s.applyDeferredTradeEnchant(ctx, partner)
-	partner.applyDeferredTradeEnchant(ctx, s)
+	s.applyDeferredTradeEnchant(ctx, tx, partner)
+	partner.applyDeferredTradeEnchant(ctx, tx, s)
+
+	if err := tx.Commit(); err != nil {
+		abort()
+		return
+	}
 
 	_ = s.sendTradeStatus(tradeStatusTradeComplete, 0, 0, 0, 0, 0)
 	_ = partner.sendTradeStatus(tradeStatusTradeComplete, 0, 0, 0, 0, 0)
@@ -1014,12 +1075,14 @@ func (s *session) sendTradeStatusExtended(traderData bool) {
 				buf.WriteU32(0) // gem sockets
 			}
 			buf.WriteU64(it.CreatorGUID) // creator (SendUpdateTrade, TradeHandler.cpp:101)
-			buf.WriteU32(0)              // charges
-			buf.WriteU32(0)              // randomPropId
-			buf.WriteU32(0)              // suffixFactor
-			buf.WriteU32(0)              // lockId
-			buf.WriteU32(0)              // maxDurability
-			buf.WriteU32(0)              // durability
+			buf.WriteU32(0)              // charges: C++ item->GetSpellCharges(); Go's
+			// item_instance.charges TEXT column is never populated with live
+			// charge data, so there is nothing representable to send.
+			buf.WriteU32(0) // suffixFactor: no Go model (no item_instance column)
+			buf.WriteU32(it.RandomPropertyID)
+			buf.WriteU32(it.LockID)
+			buf.WriteU32(it.MaxDurability)
+			buf.WriteU32(it.Durability)
 		} else {
 			for j := 0; j < 18; j++ {
 				buf.WriteU32(0)
@@ -1031,6 +1094,18 @@ func (s *session) sendTradeStatusExtended(traderData bool) {
 
 func (s *session) notifyTradeUpdate() {
 	s.sendTradeStatusExtended(false)
+	if s.trade != nil && s.trade.Partner != nil {
+		s.trade.Partner.sendTradeStatusExtended(true)
+	}
+}
+
+// notifyTradePartnerUpdate mirrors TradeData::Update(true)
+// (TradeData.cpp:119-125): only the trader's (partner's) session receives
+// the extended update carrying the changer's data. The SetItem/SetMoney
+// paths use this — C++ sends no extended update back to the changing
+// player's own client there (SetSpell is the only path that updates both
+// sides, and it keeps notifyTradeUpdate).
+func (s *session) notifyTradePartnerUpdate() {
 	if s.trade != nil && s.trade.Partner != nil {
 		s.trade.Partner.sendTradeStatusExtended(true)
 	}
