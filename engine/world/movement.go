@@ -950,6 +950,10 @@ func (s *session) handleMoveTimeSkipped(ctx context.Context, payload []byte) boo
 	if err != nil {
 		return true
 	}
+	// MovementHandler.cpp:651 — mover->m_movementInfo.time += timeSkipped.
+	s.movementMu.Lock()
+	s.lastMovementInfo.Time += timeSkipped
+	s.movementMu.Unlock()
 	buf := protocol.NewBuffer(16)
 	buf.WritePackedGUID(s.playerGUID)
 	buf.WriteU32(timeSkipped)
