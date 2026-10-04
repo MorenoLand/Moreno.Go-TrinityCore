@@ -3337,8 +3337,20 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 			return rollback(equipErrCanOnlyDoWithEmptyBags, source.GUID)
 		}
 	}
+	// PlayerMoveItemData::InitItem (Guild.cpp:810-812) rejects the item
+	// before _MoveItems' rights steps with EQUIP_ERR_ITEMS_CANT_BE_SWAPPED
+	// (21) when it cannot be traded — a soulbound player item is never
+	// tradable (Item::CanBeTraded, Item.cpp:720-743) — so the deposit path
+	// emits 21 here, not the EQUIP_ERR_CANT_DROP_SOULBOUND (24) that
+	// BankMoveItemData::CanStore (Guild.cpp:1023-1029) emits for the
+	// bank->bank direction. The 21 arm is unreachable there: soulbound
+	// items cannot be deposited, so the bank side never holds them.
 	if destination != nil && destination.Bank && source.Flags&itemInstanceFlagSoulbound != 0 {
-		return rollback(guildEquipErrCantDropSoulbound, source.GUID)
+		code := guildEquipErrCantDropSoulbound
+		if !sourceLoc.Bank {
+			code = equipErrItemsCantBeSwapped
+		}
+		return rollback(code, source.GUID)
 	}
 	maxStack := s.guildMoveMaxStack(ctx, source.Entry)
 	// Guild::_MoveItems step 3 (Guild.cpp:2683-2690) runs before step 4's
