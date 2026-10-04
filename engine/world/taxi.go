@@ -412,6 +412,11 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte) bool {
 		}
 		s.sendPlayerMoneyUpdate()
 	}
+	// Flight start tears the trade down: the client closes its trade window
+	// when the taxi map opens, but cheating tools can reopen it, so C++
+	// calls TradeCancel(true) unconditionally at flight start
+	// (Player::ActivateTaxiPathTo, Player.cpp:21586).
+	s.cancelTrade(true)
 	// SendDoFlight: mount and run the TaxiPathNode spline as a flying
 	// monster move (Flying 0x2000 | Catmullrom 0x40000 per MoveSplineFlag).
 	mount := uint32(0)

@@ -894,19 +894,27 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 	partnerSlots, ok1 := partner.findFreeSlotsForTrade(ctx, len(sTradedItems))
 	sSlots, ok2 := s.findFreeSlotsForTrade(ctx, len(partnerTradedItems))
 	if !ok1 || !ok2 {
-		// Fit failure: leave the accept process (TradeHandler.cpp:451/465)
-		// before answering CLOSE_WINDOW, in C++ order.
+		// Fit failure (TradeHandler.cpp:449-476): leave the accept process
+		// before answering CLOSE_WINDOW, in C++ order. C++ checks the
+		// acceptor's own fit FIRST (the myCanCompleteInfo arm): the failing
+		// acceptor is answered second with IsTargetResult set, after the
+		// partner; the partner-fit arm (hisCanCompleteInfo) answers the
+		// acceptor first, then the failing partner with IsTargetResult set.
+		// Both arms un-accept both sides and KEEP the trade alive — the
+		// client windows stay open so the players can make space and
+		// re-accept. The delete my_spell/delete his_spell deletes the local
+		// Spell objects only; Go stores no Spell object (SpellID is the
+		// representable term), so there is nothing to clear here.
 		clearAcceptTradeMode(s, partner)
-		// EQUIP_ERR_BAG_FULL = 1
-		if !ok1 {
-			_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 0, 0, 0)
-			_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 1, 0, 0) // isTargetResult = 1
+		if !ok2 {
+			_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrBagFull, 0, 0, 0)
+			_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrBagFull, 1, 0, 0) // isTargetResult = 1
 		} else {
-			_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 0, 0, 0)
-			_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 1, 0, 0) // isTargetResult = 1
+			_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrBagFull, 0, 0, 0)
+			_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrBagFull, 1, 0, 0) // isTargetResult = 1
 		}
-		s.trade = nil
-		partner.trade = nil
+		s.trade.Accepted = false
+		partner.trade.Accepted = false
 		return
 	}
 
@@ -1060,17 +1068,33 @@ func (s *session) handleUnacceptTrade(ctx context.Context) bool {
 
 // handleCancelTrade processes CMSG_CANCEL_TRADE (0x11C).
 // Reference: WorldSession::HandleCancelTradeOpcode (TradeHandler.cpp:583).
-func (s *session) handleCancelTrade(ctx context.Context) bool {
-	if !s.playerLoaded || s.player == nil || s.trade == nil {
-		return true
+// cancelTrade mirrors Player::TradeCancel (Player.cpp:13709): tears the
+// trade down and answers TRADE_STATUS_TRADE_CANCELED (== C++
+// SendCancelTrade) to the partner; with sendback=true the cancelling
+// player's own client is answered too. The CMSG_CANCEL_TRADE path calls
+// with sendback=true; the taxi flight-start path (Player.cpp:21586) calls
+// TradeCancel(true) unconditionally because the client closes its trade
+// window when the taxi map opens but cheating tools can reopen it.
+func (s *session) cancelTrade(sendback bool) {
+	if s.trade == nil {
+		return
 	}
 	partner := s.trade.Partner
-	_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
+	if sendback {
+		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
+	}
 	s.trade = nil
 	if partner != nil {
 		partner.trade = nil
 		_ = partner.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
 	}
+}
+
+func (s *session) handleCancelTrade(ctx context.Context) bool {
+	if !s.playerLoaded || s.player == nil || s.trade == nil {
+		return true
+	}
+	s.cancelTrade(true)
 	return true
 }
 
