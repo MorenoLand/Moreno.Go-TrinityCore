@@ -6,6 +6,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -28,6 +29,9 @@ const (
 	movementStrafeRight      uint32 = 0x00000008
 	movementTurnLeft         uint32 = 0x00000010
 	movementTurnRight        uint32 = 0x00000020
+	movementPitchUp          uint32 = 0x00000040
+	movementPitchDown        uint32 = 0x00000080
+	movementFallingFar       uint32 = 0x00002000
 	movementAscending        uint32 = 0x00400000
 	movementDescending       uint32 = 0x00800000
 	movement2Pitch           uint16 = 0x00000020
@@ -239,6 +243,33 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 			buf.WritePackedGUID(s.playerGUID)
 			_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
 		}
+	}
+	// Vehicle passengers may only turn their own orientation when the seat
+	// carries VEHICLE_SEAT_FLAG_ALLOW_TURNING (DBCEnums.h:462); an orientation
+	// change on such a seat breaks auras with AURA_INTERRUPT_FLAG_TURNING
+	// (0x10, SpellDefines.h:51), and a turn on a locked seat is ignored so
+	// the server orientation stands. MovementHandler.cpp:390-402.
+	if s.player.VehicleGUID != 0 && s.server != nil {
+		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
+			if _, seatInfo, _ := kit.GetSeatForPassenger(s.playerGUID); seatInfo != nil {
+				if seatInfo.HasFlag(wotlk.VehicleSeatFlagAllowTurning) {
+					if info.Orientation != s.player.Orientation {
+						s.removeAurasWithInterruptFlags(auraInterruptFlagTurning)
+					}
+				} else {
+					info.Orientation = s.player.Orientation
+				}
+			}
+		}
+	}
+	// A sitting player stands on any move or turn input (MovementHandler.cpp:404-405;
+	// Unit::IsSitState, Unit.cpp:10542-10549 — the chair variants are unreachable
+	// from Go's 0..3 stand-state range). Gated on not being a vehicle passenger,
+	// matching the C++ vehicle block's early return.
+	if s.player.VehicleGUID == 0 && (s.player.StandState == 1 || s.player.StandState == 2) &&
+		info.Flags&(movementForward|movementBackward|movementStrafeLeft|movementStrafeRight|movementFalling|movementFallingFar|movementAscending|movementDescending|movementSplineElevation|movementTurnLeft|movementTurnRight|movementPitchUp|movementPitchDown) != 0 {
+		s.player.StandState = 0
+		s.sendPlayerUpdate()
 	}
 	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
 	s.updateZoneAndArea(ctx, false)
