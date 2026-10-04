@@ -188,6 +188,15 @@ const (
 	// ITEM_CLASS_TRADE_GOODS (ItemTemplate.h:303): vellum class for the
 	// IsFitToSpellRequirements enchant-spell carve-outs (Item.cpp:803-809).
 	itemClassTradeGoods = 7
+	// ITEM_CLASS_CONSUMABLE (ItemTemplate.h:302) / ITEM_SUBCLASS_POTION
+	// (ItemTemplate.h:320): ItemTemplate::IsPotion (ItemTemplate.h:700).
+	itemClassConsumable = 0
+	itemSubClassPotion  = 1
+
+	// SPELL_CATEGORY_FLAG_COOLDOWN_STARTS_ON_EVENT (DBCEnums.h:385):
+	// SpellCategory.dbc Flags bit tested by
+	// SpellInfo::IsCooldownStartedOnEvent (SpellInfo.cpp:1159-1165).
+	spellCategoryFlagCooldownStartsOnEvent = 0x04
 
 	itemSubclassArmorBuckler = 5
 	itemSubclassArmorShield  = 6
@@ -4747,7 +4756,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		categoryEnd = now.Add(time.Duration(categoryRecoveryTime) * time.Millisecond).Unix()
 	}
 	applyCooldown := len(hitTargets) > 0 && !isFishingSpell(spellID)
-	if applyCooldown && (spell.RecoveryTime > 0 || categoryRecoveryTime > 0) {
+	// SpellHistory::HandleCooldowns potion arm (SpellHistory.cpp:172-184):
+	// a player item cast whose item is a potion (ItemTemplate::IsPotion,
+	// ItemTemplate.h:700) or whose spell starts its cooldown on event
+	// (SpellInfo::IsCooldownStartedOnEvent, SpellInfo.cpp:1159-1165)
+	// banks the item id in m_lastPotionId (Player::SetLastPotionId) and
+	// takes no cooldown at cast time — the cooldown event fires when
+	// combat ends (Player::UpdatePotionCooldown, Player.cpp:22215).
+	if castItemEntry != 0 && (s.server.isPotionItem(ctx, castItemEntry) || s.server.spellIsCooldownStartedOnEvent(spell)) {
+		s.lastPotionId = castItemEntry
+	} else if applyCooldown && (spell.RecoveryTime > 0 || categoryRecoveryTime > 0) {
 		cooldownEnd := categoryEnd
 		if spell.RecoveryTime > 0 {
 			cooldownEnd = now.Add(time.Duration(spell.RecoveryTime) * time.Millisecond).Unix()
@@ -5338,9 +5356,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	//   - IsAutoActionResetSpell -> resetAttackTimer(BASE/OFF/RANGED): the
 	//     Go tree has no attack-timer model at all (melee swing timing is not
 	//     simulated), so there is nothing to reset.
-	//   - UpdatePotionCooldown (Player.cpp:22215): needs the last-used potion
-	//     item id (m_lastPotionId, set in Spell::SendSpellCooldown) and a
-	//     potion-cooldown event model; neither exists in Go.
 	// The remaining finish legs have no Go bridge: UpdateInterruptMask
 	// (IsChanneled) and the UNIT_STATE_CASTING clear have no model (Go
 	// tracks cast/channel state in castMu, not unit states or interrupt
@@ -5349,6 +5364,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// needs creature casters, which Go never creates (every cast is a
 	// player session). SPELL_ATTR0_STOP_ATTACK_TARGET is covered by
 	// stopAttackOnSpellFinish.
+	//
+	// Spell::finish (Spell.cpp:3959-3964): UpdatePotionCooldown(this) —
+	// the banked m_lastPotionId flushes here when the caster is out of
+	// combat (updatePotionCooldown, the Spell* arm of
+	// Player::UpdatePotionCooldown). It runs in finish, before the
+	// _cast tail (spell_linked_spell) below.
 
 	// Spell::_cast (Spell.cpp:3502-3511): the spell_linked_spell tail runs
 	// after handle_immediate for immediate spells — positive ids are cast
@@ -5362,6 +5383,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// on both the delayed and immediate branches. The C++ m_originalCaster
 	// early-return gate is vacuous: finishSpellCast always runs on the
 	// casting player session, and Go has no creature casters.
+	s.updatePotionCooldown(spell)
 	s.fireSpellLinkedTriggers(ctx, spellID, targetGUID)
 	s.resetCastCooldownCheat(spellID)
 	s.procSpellCastPhaseAuraTriggers(ctx, spell)
@@ -10326,6 +10348,92 @@ func buildSpellCooldown(playerGUID uint64, spellID uint32, cooldownDurationMs ui
 	buf.WriteU32(spellID)
 	buf.WriteU32(cooldownDurationMs)
 	return buf.Bytes()
+}
+
+// isPotionItem bridges Item::IsPotion (Item.h:177) via
+// ItemTemplate::IsPotion (ItemTemplate.h:700): class ITEM_CLASS_CONSUMABLE
+// with subclass ITEM_SUBCLASS_POTION. A missing template row is
+// permissive (the terrain.go convention); C++ GetTemplate is non-null
+// on the item-use path, so this only diverges for data gaps.
+func (s *Server) isPotionItem(ctx context.Context, entry uint32) bool {
+	info, ok := s.getItemStoreTemplateInfo(ctx, entry)
+	return ok && info.Class == itemClassConsumable && info.SubClass == itemSubClassPotion
+}
+
+// spellIsCooldownStartedOnEvent bridges
+// SpellInfo::IsCooldownStartedOnEvent (SpellInfo.cpp:1159-1165):
+// SPELL_ATTR0_DISABLED_WHILE_ACTIVE, or the SpellCategory.dbc Flags
+// SPELL_CATEGORY_FLAG_COOLDOWN_STARTS_ON_EVENT bit. A missing DBC row
+// is permissive (the terrain.go convention).
+func (s *Server) spellIsCooldownStartedOnEvent(spell wotlk.Spell) bool {
+	if spell.Attributes&spellAttr0DisabledWhileActive != 0 {
+		return true
+	}
+	if spell.Category == 0 || s.Data == nil {
+		return false
+	}
+	flags, ok, err := s.Data.SpellCategory(spell.Category)
+	if err != nil || !ok {
+		return false
+	}
+	return flags&spellCategoryFlagCooldownStartsOnEvent != 0
+}
+
+// buildCooldownEvent packs SMSG_COOLDOWN_EVENT: the spell id whose
+// cooldown starts, then the caster GUID (SpellHistory.cpp:386-388).
+func buildCooldownEvent(casterGUID uint64, spellID uint32) []byte {
+	buf := protocol.NewBuffer(4 + 8)
+	buf.WriteU32(spellID)
+	buf.WriteU64(casterGUID)
+	return buf.Bytes()
+}
+
+// sendPotionCooldownEvent bridges SpellHistory::SendCooldownEvent
+// (SpellHistory.cpp:364-391) for the potion flush: the
+// SMSG_COOLDOWN_EVENT for the spell plus the server-side cooldown
+// start (StartCooldown, with the potion item id carried on the
+// cooldown entry like the player Cooldowns Item field). The category
+// arm — a different spell currently holding the category cooldown
+// fires its own event first — is covered by scanning the session
+// cooldowns for an active same-category entry from another spell.
+func (s *session) sendPotionCooldownEvent(spell wotlk.Spell, itemID uint32) {
+	now := time.Now()
+	for _, cd := range s.player.Cooldowns {
+		if cd.Category != 0 && cd.Category == spell.Category && cd.Spell != spell.ID && (cd.End > now.Unix() || cd.CategoryEnd > now.Unix()) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_COOLDOWN_EVENT), buildCooldownEvent(s.playerGUID, cd.Spell), true)
+		}
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_COOLDOWN_EVENT), buildCooldownEvent(s.playerGUID, spell.ID), true)
+	if spell.RecoveryTime > 0 || spell.CategoryRecoveryTime > 0 {
+		categoryEnd := now.Unix()
+		if spell.CategoryRecoveryTime > 0 {
+			categoryEnd = now.Add(time.Duration(spell.CategoryRecoveryTime) * time.Millisecond).Unix()
+		}
+		cooldownEnd := categoryEnd
+		if spell.RecoveryTime > 0 {
+			cooldownEnd = now.Add(time.Duration(spell.RecoveryTime) * time.Millisecond).Unix()
+		}
+		s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: spell.ID, Item: itemID, Category: spell.Category, End: cooldownEnd, CategoryEnd: categoryEnd})
+	}
+}
+
+// updatePotionCooldown bridges the Spell::finish potion leg
+// (Spell.cpp:3959-3964): Unit::ToPlayer()->UpdatePotionCooldown(this)
+// (Player.cpp:22215-22242, the Spell* arm). When a potion id is banked
+// (m_lastPotionId, set at SendSpellCooldown above) and the caster is no
+// longer in combat, the delayed cooldown event fires and the bank
+// clears. The !m_triggeredByAuraSpell arm is vacuous: finishSpellCast
+// serves only client-initiated casts, never triggered-by-aura ones.
+// The Player::AtExitCombat UpdatePotionCooldown() arm
+// (Player.cpp:24567) has no Go caller — Go has no combat-exit hook —
+// so the flush lands at the next non-combat cast finish instead of at
+// combat exit; the bank still clears exactly once.
+func (s *session) updatePotionCooldown(spell wotlk.Spell) {
+	if s.lastPotionId == 0 || s.isInCombat() {
+		return
+	}
+	s.sendPotionCooldownEvent(spell, s.lastPotionId)
+	s.lastPotionId = 0
 }
 
 // resetCastCooldownCheat mirrors SpellHistory::ResetCooldown(spellId, true)

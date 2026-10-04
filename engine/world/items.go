@@ -1468,6 +1468,21 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	// Cast spell
 	if spellID != 0 && s.server != nil && s.server.Data != nil {
 		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			// Spell::CheckCast potion leg (Spell.cpp:5195-5198): with a
+			// banked m_lastPotionId (set at SendSpellCooldown above), a
+			// further potion (Item::IsPotion, Item.h:177) or
+			// cooldown-started-on-event spell
+			// (SpellInfo::IsCooldownStartedOnEvent, SpellInfo.cpp:1159)
+			// item cast fails SPELL_FAILED_NOT_READY. C++ runs this in
+			// Spell::CheckCast with m_CastItem set; Go's item casts never
+			// pass through handleCastSpell's gates, so the arm lives on
+			// the m_CastItem path here. The !IsIgnoringCooldowns() arm is
+			// vacuous: handleUseItem serves only client CMSG_USE_ITEM
+			// casts, never triggered ones.
+			if s.lastPotionId != 0 && (s.server.isPotionItem(ctx, uint32(itemEntry)) || s.server.spellIsCooldownStartedOnEvent(spell)) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
+				return true
+			}
 			castTime := uint32(0)
 			if value, ok, castErr := s.server.Data.SpellCastTime(spell.CastingTimeIndex); castErr == nil && ok && value > 0 {
 				castTime = uint32(value)
