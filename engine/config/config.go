@@ -79,6 +79,7 @@ type Config struct {
 	XPRateQuest                             float64
 	XPRateExplore                           float64
 	XPRateBattlegroundKill                  float64
+	MinDiscoveredScaledXpRatio              int
 	AuctionTimeRate                         float64
 	AuctionDepositRate                      float64
 	AuctionGetAllDelay                      int
@@ -223,6 +224,7 @@ func Default() Config {
 	c.XPRateQuest = 1
 	c.XPRateExplore = 1
 	c.XPRateBattlegroundKill = 1
+	c.MinDiscoveredScaledXpRatio = 0
 	c.AuctionTimeRate = 1
 	c.AuctionDepositRate = 1
 	c.AuctionGetAllDelay = 900
@@ -259,6 +261,9 @@ func Load(path string) (Config, error) {
 	if c.AuctionSearchDelay < 100 || c.AuctionSearchDelay > 10000 {
 		c.AuctionSearchDelay = 300
 	}
+	if c.MinDiscoveredScaledXpRatio > 100 {
+		c.MinDiscoveredScaledXpRatio = 0
+	}
 	return c, nil
 }
 
@@ -285,6 +290,7 @@ func (c *Config) ApplyEnv() {
 	values["MORENOCORE_RATE_XP_QUEST"] = "Rate.XP.Quest"
 	values["MORENOCORE_RATE_XP_EXPLORE"] = "Rate.XP.Explore"
 	values["MORENOCORE_RATE_XP_BATTLEGROUND_KILL"] = "Rate.XP.BattlegroundKill"
+	values["MORENOCORE_MIN_DISCOVERED_SCALED_XP_RATIO"] = "MinDiscoveredScaledXPRatio"
 	values["MORENOCORE_RATE_AUCTION_TIME"] = "Rate.Auction.Time"
 	values["MORENOCORE_RATE_AUCTION_DEPOSIT"] = "Rate.Auction.Deposit"
 	values["MORENOCORE_AUCTION_GETALL_SCAN_DELAY"] = "Auction.GetAllScanDelay"
@@ -640,6 +646,8 @@ func (c *Config) set(key, value string) error {
 		return setFloat64(&c.XPRateExplore, key, value)
 	case "Rate.XP.BattlegroundKill":
 		return setFloat64(&c.XPRateBattlegroundKill, key, value)
+	case "MinDiscoveredScaledXPRatio":
+		return setInt(&c.MinDiscoveredScaledXpRatio, key, value)
 	case "Rate.Auction.Time":
 		return setFloat64(&c.AuctionTimeRate, key, value)
 	case "Rate.Auction.Deposit":

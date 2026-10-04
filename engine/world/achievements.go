@@ -1397,7 +1397,14 @@ func (s *session) calculateExplorationXP(ctx context.Context, explorationLevel i
 	if difference > 5 {
 		baseXP = baseXP * uint32(percent) / 100
 	}
-	return uint32(float64(baseXP) * s.server.Config.XPRateExplore)
+	xp := uint32(float64(baseXP) * s.server.Config.XPRateExplore)
+	if ratio := s.server.Config.MinDiscoveredScaledXpRatio; ratio > 0 {
+		minScaledXP := uint32(float64(s.server.baseXPForLevel(ctx, uint32(explorationLevel)))*s.server.Config.XPRateExplore) * uint32(ratio) / 100
+		if minScaledXP > xp {
+			xp = minScaledXP
+		}
+	}
+	return xp
 }
 
 func serializeExploredZones(values [playerExploredZonesCount]uint32) string {
