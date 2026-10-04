@@ -198,6 +198,9 @@ type session struct {
 	speakTime                    int64
 	speakCount                   uint32
 	gmChat                       bool
+	// autoReplyMsg mirrors Player::autoReplyMsg (Player.h:939): the AFK/DND
+	// auto-reply message announced to whispering players (Player.cpp:21050).
+	autoReplyMsg                 string
 	gmMessage                    bool
 	twoSideChat                  bool
 	twoSideWhoList               bool

@@ -33,6 +33,15 @@ const (
 	languageAddon      = ^uint32(0)
 )
 
+// Default AFK/DND auto-reply messages: the enUS trinity_string defaults
+// (LANG_PLAYER_AFK_DEFAULT=710 "AFK", LANG_PLAYER_DND_DEFAULT=709 "DND").
+// Go carries enUS text only, so the defaults are hardcoded like other
+// untranslated trinity_string references.
+const (
+	autoReplyAFKDefault = "AFK"
+	autoReplyDNDDefault = "DND"
+)
+
 func (s *session) handleSetSelection(payload []byte) bool {
 	if !s.playerLoaded {
 		return true
@@ -237,15 +246,26 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "guild rights", "type", typeID)
 		return true
 	}
-	if s.server.Features != nil && s.server.Features.Scripts != nil {
-		values, hookErr := s.triggerPlayerEventValues(ctx, scripting.PlayerEventChat, s.luaPlayer(), message, typeID, language)
-		if hookErr != nil {
-			s.debug("lua chat hook failed", "account", s.accountName, "error", hookErr)
-		}
-		if luaCancelled(values) {
-			s.debug("chat rejected", "account", s.accountName, "reason", "lua hook cancelled", "type", typeID)
+	// Reference: WorldSession::HandleMessagechatOpcode (ChatHandler.cpp:575-625) —
+	// CHAT_MSG_AFK/CHAT_MSG_DND never broadcast a chat message; they toggle the
+	// AFK/DND player flags and update the auto-reply message. The toggle runs
+	// before the chat hook (mirroring OnPlayerChat-after-toggle in C++), and the
+	// whole AFK arm is gated on !IsInCombat() while the DND arm has no combat gate.
+	if typeID == chatAFK || typeID == chatDND {
+		if typeID == chatAFK && s.isInCombat() {
+			s.debug("chat rejected", "account", s.accountName, "reason", "AFK while in combat", "type", typeID)
 			return true
 		}
+		if typeID == chatAFK {
+			s.toggleChatAFK(message)
+		} else {
+			s.toggleChatDND(message)
+		}
+		s.firePlayerChatHook(ctx, typeID, language, message)
+		return true
+	}
+	if s.firePlayerChatHook(ctx, typeID, language, message) {
+		return true
 	}
 	var receiver *session
 	if typeID == chatWhisper {
@@ -282,8 +302,124 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		return s.sendChannelNotify(channelMutedNotice, channel, nil) == nil
 	}
 	s.server.broadcastChat(s, receiver, uint8(typeID), language, message, channel)
+	if typeID == chatWhisper && receiver != nil && language != languageAddon {
+		s.announceChatAutoReply(receiver)
+	}
 	s.debug("chat accepted", "account", s.accountName, "type", typeID, "gm_chat", s.gmChat)
 	return true
+}
+
+// firePlayerChatHook fires the PlayerEventChat Lua hook (the sScriptMgr::OnPlayerChat
+// + Eluna OnChat analog) and reports whether a script cancelled the chat.
+func (s *session) firePlayerChatHook(ctx context.Context, typeID uint32, language uint32, message string) bool {
+	if s.server.Features == nil || s.server.Features.Scripts == nil {
+		return false
+	}
+	values, hookErr := s.triggerPlayerEventValues(ctx, scripting.PlayerEventChat, s.luaPlayer(), message, typeID, language)
+	if hookErr != nil {
+		s.debug("lua chat hook failed", "account", s.accountName, "error", hookErr)
+	}
+	if luaCancelled(values) {
+		s.debug("chat rejected", "account", s.accountName, "reason", "lua hook cancelled", "type", typeID)
+		return true
+	}
+	return false
+}
+
+// toggleChatAFK mirrors the CHAT_MSG_AFK arm of WorldSession::HandleMessagechatOpcode
+// (ChatHandler.cpp:575-601): when already AFK, an empty message removes AFK and a
+// non-empty one updates the auto-reply message; when not AFK, the auto-reply is set
+// (defaulting to the trinity_string 710 text) and any DND flag is cleared first.
+func (s *session) toggleChatAFK(message string) {
+	if s.player == nil {
+		return
+	}
+	if s.player.PlayerFlags&playerFlagAFK != 0 {
+		if message == "" {
+			s.setPlayerAFK(false)
+		} else {
+			s.autoReplyMsg = message
+		}
+		return
+	}
+	if message == "" {
+		s.autoReplyMsg = autoReplyAFKDefault
+	} else {
+		s.autoReplyMsg = message
+	}
+	if s.player.PlayerFlags&playerFlagDND != 0 {
+		s.setPlayerDND(false)
+	}
+	s.setPlayerAFK(true)
+}
+
+// toggleChatDND mirrors the CHAT_MSG_DND arm of WorldSession::HandleMessagechatOpcode
+// (ChatHandler.cpp:603-625): symmetric to toggleChatAFK with the trinity_string
+// 709 default and no combat gate.
+func (s *session) toggleChatDND(message string) {
+	if s.player == nil {
+		return
+	}
+	if s.player.PlayerFlags&playerFlagDND != 0 {
+		if message == "" {
+			s.setPlayerDND(false)
+		} else {
+			s.autoReplyMsg = message
+		}
+		return
+	}
+	if message == "" {
+		s.autoReplyMsg = autoReplyDNDDefault
+	} else {
+		s.autoReplyMsg = message
+	}
+	if s.player.PlayerFlags&playerFlagAFK != 0 {
+		s.setPlayerAFK(false)
+	}
+	s.setPlayerDND(true)
+}
+
+// setPlayerAFK mirrors Player::ToggleAFK (Player.cpp:1628-1635): toggles the
+// PLAYER_FLAGS_AFK bit and pushes the update to the client.
+func (s *session) setPlayerAFK(on bool) {
+	if s.player == nil {
+		return
+	}
+	if on {
+		s.player.PlayerFlags |= playerFlagAFK
+	} else {
+		s.player.PlayerFlags &^= playerFlagAFK
+	}
+	s.sendPlayerUpdate()
+}
+
+// setPlayerDND mirrors Player::ToggleDND (Player.cpp:1637-1640).
+func (s *session) setPlayerDND(on bool) {
+	if s.player == nil {
+		return
+	}
+	if on {
+		s.player.PlayerFlags |= playerFlagDND
+	} else {
+		s.player.PlayerFlags &^= playerFlagDND
+	}
+	s.sendPlayerUpdate()
+}
+
+// announceChatAutoReply mirrors the AFK/DND auto-reply announcement at the end
+// of Player::Whisper (Player.cpp:21050-21054): the target's auto-reply message
+// is sent to the whispering player as a notification (not an addon whisper).
+func (s *session) announceChatAutoReply(target *session) {
+	if s == nil || target == nil || target.player == nil {
+		return
+	}
+	if target.player.PlayerFlags&playerFlagAFK != 0 {
+		// LANG_PLAYER_AFK (708).
+		s.sendNotification(fmt.Sprintf("%s is AFK: %s", target.player.Name, target.autoReplyMsg))
+	} else if target.player.PlayerFlags&playerFlagDND != 0 {
+		// LANG_PLAYER_DND (707).
+		s.sendNotification(fmt.Sprintf("%s is DND: %s", target.player.Name, target.autoReplyMsg))
+	}
 }
 
 func addonChatType(typeID uint32) bool {
