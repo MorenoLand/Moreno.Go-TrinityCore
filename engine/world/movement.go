@@ -190,6 +190,22 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		s.debug("movement rejected", "account", s.accountName, "reason", "invalid position", "guid", guid)
 		return true
 	}
+	if info.Flags&movementOnTransport != 0 && info.Transport != nil {
+		// MovementHandler.cpp:307-311 — drop packets broadcast before a
+		// teleport: the reported world position is nowhere near the server's.
+		if math.Hypot(float64(info.X-s.player.X), float64(info.Y-s.player.Y)) > terrainGridSize {
+			s.debug("movement rejected", "account", s.accountName, "reason", "stale transport packet", "opcode", opcode)
+			return true
+		}
+		// MovementHandler.cpp:312-318 — transports size limited: the client
+		// reports the passenger's offset relative to the transport here, so an
+		// offset past the deck (or the zeppelin-leave glitch that arrives with
+		// absolute continent coordinates) is a tampered packet.
+		if math.Abs(float64(info.Transport.X)) > 75 || math.Abs(float64(info.Transport.Y)) > 75 || math.Abs(float64(info.Transport.Z)) > 75 {
+			s.debug("movement rejected", "account", s.accountName, "reason", "transport offset out of bounds", "opcode", opcode)
+			return true
+		}
+	}
 	info.Flags &^= movementRoot
 	info.Flags = sanitizeMovementFlags(info.Flags)
 	isMove := info.Flags&(movementForward|movementBackward|movementStrafeLeft|movementStrafeRight|movementFalling) != 0
