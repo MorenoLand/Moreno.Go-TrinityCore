@@ -52,8 +52,12 @@ type creatureMotion struct {
 	Orientation   float32
 	Speed         float32 // yd/s walk speed used for wander
 	RunSpeed      float32 // yd/s run speed used for pursuit
-	MoveType      uint32  // 1 random, 2 waypoint
+	MoveType      uint32  // 1 random, 2 waypoint; 0 = IDLE_MOTION_TYPE (MovementDefines.h:28-30)
 	Wander        float64
+	// WanderSteps is the remaining _wanderSteps of RandomMovementGenerator
+	// (RandomMovementGenerator.cpp:DoInitialize): the creature walks
+	// urand(2,10) splines, then pauses urand(4,10) seconds after the last one.
+	WanderSteps int
 
 	Faction         uint32
 	Level           uint32
@@ -300,6 +304,7 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			RunSpeed:        creatureBaseRunSpeed,
 			MoveType:        moveType,
 			Wander:          wander,
+			WanderSteps:     2 + rand.Intn(9), // urand(2,10), RandomMovementGenerator.cpp:DoInitialize
 			Health:          health,
 			MaxHealth:       st.MaxHealth,
 			Armor:           st.Armor,
@@ -1369,18 +1374,44 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			wait = time.Duration(point.Delay) * time.Second
 		}
 		motion.NextIdx = (motion.NextIdx + 1) % len(motion.Points)
-	} else {
+	} else if motion.MoveType == 1 {
+		// RandomMovementGenerator<Creature>::SetRandomLocation
+		// (RandomMovementGenerator.cpp): frand(0, _wanderDistance) around the
+		// reference point, walking; MovePositionToFirstCollision, the LOS
+		// re-check, and the PathGenerator leg (30.0 path-length limit) have no
+		// bridge — Go has no PathGenerator model, consistent with the NO_PATH
+		// note at the evade arm. The walk/run legs of
+		// CreatureMovementData::Random (CanRun/AlwaysRun, CreatureData.h:105)
+		// have no bridge either (Go models no creature_template_addon fields
+		// beyond path_id). SignalFormationMovement (creature groups) is
+		// unmodeled, as are the UNIT_STATE_NOT_MOVE/LOST_CONTROL/casting
+		// interruption guards of SetRandomLocation.
 		angle := rand.Float64() * 2 * math.Pi
 		dist := rand.Float64() * motion.Wander
 		destX = float32(float64(motion.HomeX) + dist*math.Cos(angle))
 		destY = float32(float64(motion.HomeY) + dist*math.Sin(angle))
 		destZ = motion.HomeZ
 		speed = motion.Speed
-		wait = time.Duration(1+rand.Intn(9)) * time.Second
+	} else {
+		// MoveType 0 is IDLE_MOTION_TYPE (MovementDefines.h:28): Creature::Initialize
+		// (Creature.cpp:543-545) demotes RANDOM to IDLE when wander_distance is 0,
+		// and IDLE never wanders.
+		return
 	}
 	moveDist := math.Hypot(float64(destX-motion.X), float64(destY-motion.Y))
 	if moveDist < 0.5 {
 		return
+	}
+	if motion.MoveType == 1 {
+		// RandomMovementGenerator.cpp:SetRandomLocation: each launched spline
+		// consumes one step; once the steps run out the creature rests
+		// urand(4,10)s (rounded, retail) and the step counter resets to
+		// urand(2,10).
+		motion.WanderSteps--
+		if motion.WanderSteps <= 0 {
+			wait = time.Duration(4+rand.Intn(7)) * time.Second
+			motion.WanderSteps = 2 + rand.Intn(9)
+		}
 	}
 	duration := uint32((moveDist / float64(speed)) * 1000)
 	if duration < 250 {
