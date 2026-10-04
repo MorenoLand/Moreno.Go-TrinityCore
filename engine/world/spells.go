@@ -5440,6 +5440,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.beginSpellModTaking()
 				defer s.endSpellModTaking()
 				applyEffects(context.Background())
+				// Spell::_handle_finish_phase (Spell.cpp:3737-3752): the
+				// combo legs run at the last delayed tick (next_time == 0)
+				// on this branch too — the take lands before the gain,
+				// matching the C++ ClearComboPoints-then-AddComboPoints
+				// order, same as the immediate path below.
+				if spellNeedsComboPoints(spell) && castItemGUID == 0 {
+					s.clearSessionComboPoints()
+				}
+				if comboGainTarget != 0 && comboGain > 0 {
+					s.addSessionComboPoints(comboGainTarget, comboGain)
+				}
 				// The extra-attacks spend runs only for spells carrying
 				// SPELL_EFFECT_ADD_EXTRA_ATTACKS (Spell.cpp:3754) — a
 				// pending counter from another cast survives this finish.
@@ -5448,6 +5459,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				s.procSpellFinishAuraTriggers(context.Background(), spell)
 				s.stopAttackOnSpellFinish(spell)
+				// Spell::finish (Spell.cpp:3961-3964): the potion flush
+				// runs on the delayed branch too — handle_delayed's last
+				// tick (next_time == 0) calls _handle_finish_phase then
+				// finish(true). Kept in the immediate path's finish order
+				// (stop attack, then the flush); C++ runs the flush just
+				// before STOP_ATTACK_TARGET — packet-order only, the two
+				// operations are independent.
+				s.updatePotionCooldown(spell)
 			})
 			// Spell::handle_delayed (Spell.cpp:3629) no-bridge legs, noted:
 			//   - UpdatePointers() fail -> finish(false): targets are
