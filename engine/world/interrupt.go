@@ -65,7 +65,8 @@ func (s *session) getInterruptDuration(spell wotlk.Spell) uint32 {
 }
 
 // handleEffectInterruptCast processes SPELL_EFFECT_INTERRUPT_CAST (68) and interrupts active target casts/channels.
-// Mirrors TrinityCore Spell::EffectInterruptCast (SpellEffects.cpp:4500-4540) and Player::ProhibitSpellSchool.
+// Mirrors TrinityCore Spell::EffectInterruptCast (SpellEffects.cpp:3508-3551), with the school lockout
+// landing through SpellHistory::LockSpellSchool (SpellHistory.cpp:517-570).
 func (s *session) handleEffectInterruptCast(ctx context.Context, targetGUID uint64, interruptSpell wotlk.Spell, eff wotlk.SpellEffect) {
 	if targetGUID == 0 || s.server == nil {
 		return
@@ -75,11 +76,28 @@ func (s *session) handleEffectInterruptCast(ctx context.Context, targetGUID uint
 	if targetSess == nil || targetSess.player == nil {
 		return
 	}
+	// Spell::EffectInterruptCast (SpellEffects.cpp:3511-3512): dead targets
+	// are not interrupted.
+	if targetSess.player.Health == 0 {
+		return
+	}
 
-	interrupted := false
-	interruptedSchoolMask := uint32(0)
+	// Spell::EffectInterruptCast loops CURRENT_FIRST_NON_MELEE_SPELL up to
+	// CURRENT_AUTOREPEAT_SPELL (SpellEffects.cpp:3518-3520): the generic cast
+	// and the channeled spell are evaluated independently, so one interrupt
+	// can stop both, each locking its own school below. (The
+	// SPELL_STATE_PREPARING + GetCastTime() > 0 leg at 3527-3529 is
+	// structural: Go's activeCast is created at cast start for castTime > 0
+	// — spells.go:1899 — so preparing casts are already covered by
+	// activeCast != nil, and instant casts have no preparing state in C++
+	// either.)
+	type interruptedCast struct {
+		schoolMask uint32
+		spellID    uint32
+	}
+	var interrupted []interruptedCast
 
-	// 1. Check target's active cast
+	// 1. Check target's active cast (CURRENT_GENERIC_SPELL).
 	targetSess.castMu.Lock()
 	if targetSess.activeCast != nil {
 		curCastID := targetSess.activeCast.CastID
@@ -95,6 +113,12 @@ func (s *session) handleEffectInterruptCast(ctx context.Context, targetGUID uint
 				if curSpellInfo.InterruptFlags != 0 && (curSpellInfo.InterruptFlags&spellInterruptFlagInterrupt == 0) {
 					canInterrupt = false
 				}
+				// SpellEffects.cpp:3530-3532: the interrupted spell must be
+				// preventable by silence; without the DBC row the gate
+				// cannot be evaluated and the cast stays interruptible.
+				if curSpellInfo.PreventionType != spellPreventionTypeSilence {
+					canInterrupt = false
+				}
 				if curSpellInfo.SchoolMask != 0 {
 					schoolMask = curSpellInfo.SchoolMask
 				}
@@ -107,67 +131,103 @@ func (s *session) handleEffectInterruptCast(ctx context.Context, targetGUID uint
 			}
 			targetSess.activeCast.Cancelled = true
 			targetSess.activeCast = nil
-			interrupted = true
-			interruptedSchoolMask = schoolMask
+			interrupted = append(interrupted, interruptedCast{schoolMask: schoolMask, spellID: curSpellID})
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(curCastID, curSpellID, spellFailedInterrupted), true)
 			targetSess.sendInterrupted(curCastID, curSpellID, spellFailedInterrupted)
 		}
 	}
 	targetSess.castMu.Unlock()
 
-	// 2. Check target's active channel if not already interrupted
+	// 2. Check target's active channel (CURRENT_CHANNELED_SPELL), independent
+	// of the generic arm above.
 	interruptedChannel := false
-	if !interrupted {
-		targetSess.castMu.Lock()
-		if targetSess.activeChannel != nil {
-			curCastID := targetSess.activeChannel.CastID
-			curSpellID := targetSess.activeChannel.SpellID
-			canInterrupt := true
-			schoolMask := uint32(1)
+	targetSess.castMu.Lock()
+	if targetSess.activeChannel != nil {
+		curCastID := targetSess.activeChannel.CastID
+		curSpellID := targetSess.activeChannel.SpellID
+		canInterrupt := true
+		schoolMask := uint32(1)
 
-			if s.server.Data != nil {
-				if curSpellInfo, found, _ := s.server.Data.Spell(curSpellID); found {
-					if curSpellInfo.ChannelInterrupt != 0 && (curSpellInfo.ChannelInterrupt&channelInterruptFlagInterrupt == 0) {
-						canInterrupt = false
-					}
-					if curSpellInfo.SchoolMask != 0 {
-						schoolMask = curSpellInfo.SchoolMask
-					}
+		if s.server.Data != nil {
+			if curSpellInfo, found, _ := s.server.Data.Spell(curSpellID); found {
+				if curSpellInfo.ChannelInterrupt != 0 && (curSpellInfo.ChannelInterrupt&channelInterruptFlagInterrupt == 0) {
+					canInterrupt = false
 				}
-			}
-
-			if canInterrupt {
-				channel := targetSess.activeChannel
-				targetSess.activeChannel = nil
-				if channel.Timer != nil {
-					channel.Timer.Stop()
+				// Same PreventionType gate as the generic arm above
+				// (SpellEffects.cpp:3530-3532).
+				if curSpellInfo.PreventionType != spellPreventionTypeSilence {
+					canInterrupt = false
 				}
-				if channel.TickTimer != nil {
-					channel.TickTimer.Stop()
+				if curSpellInfo.SchoolMask != 0 {
+					schoolMask = curSpellInfo.SchoolMask
 				}
-				channel.Stopped = true
-				interrupted = true
-				interruptedChannel = true
-				interruptedSchoolMask = schoolMask
-				_ = targetSess.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(curCastID, curSpellID, spellFailedInterrupted), true)
-				targetSess.sendInterrupted(curCastID, curSpellID, spellFailedInterrupted)
 			}
 		}
-		targetSess.castMu.Unlock()
-		if interruptedChannel {
-			targetSess.sendChannelUpdate(0)
+
+		if canInterrupt {
+			channel := targetSess.activeChannel
+			targetSess.activeChannel = nil
+			if channel.Timer != nil {
+				channel.Timer.Stop()
+			}
+			if channel.TickTimer != nil {
+				channel.TickTimer.Stop()
+			}
+			channel.Stopped = true
+			interrupted = append(interrupted, interruptedCast{schoolMask: schoolMask, spellID: curSpellID})
+			interruptedChannel = true
+			_ = targetSess.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(curCastID, curSpellID, spellFailedInterrupted), true)
+			targetSess.sendInterrupted(curCastID, curSpellID, spellFailedInterrupted)
 		}
 	}
+	targetSess.castMu.Unlock()
+	if interruptedChannel {
+		targetSess.sendChannelUpdate(0)
+	}
 
-	// 3. Prohibit spell school if a spell was interrupted
-	if interrupted && interruptedSchoolMask != 0 {
+	// 3. Log and lock the school of each interrupted spell
+	// (SpellEffects.cpp:3536-3537, 3547-3549). Not bridged: the lockout
+	// duration's victim-side mechanic/dispel duration mods
+	// (unitTarget->ModSpellDuration, Object.cpp:2354-2400) — Go has no
+	// victim-side duration-mod application model (applySpellMod is the
+	// caster-side Player::ApplySpellMod, the wrong model here); and the
+	// ProcSkillsAndAuras interrupt procs (SpellEffects.cpp:3540-3545) — Go
+	// has no unit-aura proc trigger model (procs.go is item/enchant only;
+	// procHitInterrupt is defined but unwired).
+	if len(interrupted) > 0 {
 		durationMs := s.getInterruptDuration(interruptSpell)
-		targetSess.prohibitSpellSchool(ctx, interruptedSchoolMask, durationMs)
+		for _, in := range interrupted {
+			s.sendInterruptCastLog(interruptSpell.ID, targetGUID, in.spellID)
+			if in.schoolMask != 0 && durationMs > 0 {
+				targetSess.prohibitSpellSchool(ctx, in.schoolMask, durationMs)
+			}
+		}
+	}
+}
+
+// sendInterruptCastLog mirrors Spell::ExecuteLogEffectInterruptCast
+// (Spell.cpp:4573-4578) as flushed by SendLogExecute (Spell.cpp:4523-4555):
+// SMSG_SPELLLOGEXECUTE carrying the effect id, the interrupted unit, and the
+// interrupted spell id.
+func (s *session) sendInterruptCastLog(interruptSpellID uint32, victimGUID uint64, interruptedSpellID uint32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	log := protocol.NewBuffer(32)
+	log.WritePackedGUID(s.playerGUID)
+	log.WriteU32(interruptSpellID)
+	log.WriteU32(1)
+	log.WriteU32(spellEffectInterruptCast)
+	log.WritePackedGUID(victimGUID)
+	log.WriteU32(interruptedSpellID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
 	}
 }
 
 // prohibitSpellSchool applies a school lockout cooldown to all silence-preventable spells of the specified school.
-// Mirrors TrinityCore Player::ProhibitSpellSchool (Player.cpp:11520-11550).
+// Mirrors TrinityCore SpellHistory::LockSpellSchool (SpellHistory.cpp:517-570).
 func (s *session) prohibitSpellSchool(ctx context.Context, schoolMask uint32, durationMs uint32) {
 	if s.player == nil || durationMs == 0 || schoolMask == 0 {
 		return
@@ -194,8 +254,15 @@ func (s *session) prohibitSpellSchool(ctx context.Context, schoolMask uint32, du
 			if err != nil || !found {
 				continue
 			}
-			// Only lock spells sharing the interrupted school and preventable by silence
-			if (spellInfo.SchoolMask&schoolMask != 0) && (spellInfo.PreventionType == spellPreventionTypeSilence || spellInfo.PreventionType == 0) {
+			// SpellHistory::LockSpellSchool (SpellHistory.cpp:555-563):
+			// cooldown-on-event spells are skipped, PreventionType must be
+			// silence exactly, and only spells sharing the interrupted
+			// school whose remaining cooldown is shorter than the lockout
+			// are extended.
+			if s.server.spellIsCooldownStartedOnEvent(spellInfo) {
+				continue
+			}
+			if (spellInfo.SchoolMask&schoolMask != 0) && spellInfo.PreventionType == spellPreventionTypeSilence {
 				foundCD := false
 				for i := range s.player.Cooldowns {
 					if s.player.Cooldowns[i].Spell == ls.ID {
