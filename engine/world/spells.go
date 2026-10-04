@@ -111,6 +111,7 @@ const (
 	spellFailedTargetIsPlayer            uint8  = 117 // SPELL_FAILED_TARGET_IS_PLAYER (SharedDefines.h:1099)
 	spellFailedTargetNoPockets           uint8  = 123 // SPELL_FAILED_TARGET_NO_POCKETS (SharedDefines.h:1105)
 	spellFailedTargetNotPlayer           uint8  = 122 // SPELL_FAILED_TARGET_NOT_PLAYER (SharedDefines.h:1104)
+	spellFailedTargetNoWeapons           uint8  = 124 // SPELL_FAILED_TARGET_NO_WEAPONS (SharedDefines.h:1106)
 	spellFailedTargetAffectingCombat     uint8  = 110 // SPELL_FAILED_TARGET_AFFECTING_COMBAT (SharedDefines.h:1092)
 	spellFailedAffectingCombat           uint8  = 1
 	spellFailedFoodLowLevel              uint8  = 35
@@ -1717,6 +1718,30 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "pickpocket target invalid", "failReason", failReason)
 				return true
 			}
+		}
+	}
+
+	// Disarm target-weapon gate (SpellInfo::CheckTarget, SpellInfo.cpp:1681-1692):
+	// a spell with Mechanic == MECHANIC_DISARM rejects an unarmed target with
+	// SPELL_FAILED_TARGET_NO_WEAPONS. Runs inside the caster != unitTarget
+	// block, so it only fires on a non-self unit target; the TYPEID_PLAYER
+	// caster arm is vacuous (the caster is always the session player on this
+	// path). The player-target leg (Player::GetWeaponForAttack(BASE_ATTACK))
+	// is bridged via targetPlayerHasMainHandWeapon — the equipped main-hand
+	// inventory query with the Item::IsBroken gate (MaxDurability > 0 and
+	// Durability == 0, the checkSpellRangedWeaponCast pattern), the same
+	// shape as mainHandWeaponIsDagger but for any ITEM_CLASS_WEAPON. The
+	// Player::IsUseEquipedWeapon(true) legs (Player.cpp:13657-13661) are
+	// unbridged: IsInFeralForm has no Go model (ShapeshiftForm carries no
+	// cat/bear/dire-bear form consts) and UNIT_FLAG_DISARMED has no Go
+	// UnitFlags bit. The creature leg (!UNIT_VIRTUAL_ITEM_SLOT_ID) is
+	// unbridged: creature motions carry no virtual-item model.
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if spell.Mechanic == mechanicDisarm && targetGUID != 0 && targetGUID != s.playerGUID {
+		if _, isPlayer := s.targetCreatureTypeMask(ctx, targetGUID); isPlayer && !s.targetPlayerHasMainHandWeapon(ctx, targetGUID) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetNoWeapons), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "disarm target unarmed", "failReason", spellFailedTargetNoWeapons)
+			return true
 		}
 	}
 
@@ -7901,8 +7926,9 @@ const (
 	spellBrittleArmorAura    = 24575 // aura stacked by triggerBrittleArmorSpell
 	spellMercurialShieldAura = 26464 // aura stacked by triggerMercurialShieldSpell
 
-	mechanicRoot  = 7  // MECHANIC_ROOT (SharedDefines.h:1364)
-	mechanicSnare = 11 // MECHANIC_SNARE (SharedDefines.h:1368)
+	mechanicRoot   = 7  // MECHANIC_ROOT (SharedDefines.h:1364)
+	mechanicSnare  = 11 // MECHANIC_SNARE (SharedDefines.h:1368)
+	mechanicDisarm = 3  // MECHANIC_DISARM (SharedDefines.h:1360)
 )
 
 // triggerSpellEffectTarget mirrors one target invocation of
@@ -8971,6 +8997,39 @@ func (s *session) mainHandWeaponIsDagger(ctx context.Context) bool {
 	}
 	weapon, ok := s.server.getItemStoreTemplateInfo(ctx, uint32(itemEntry))
 	if !ok || weapon.Class != itemClassWeapon || weapon.SubClass != uint32(itemSubclassWeaponDagger) {
+		return false
+	}
+	var durability int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		`SELECT COALESCE(durability, 0) FROM item_instance WHERE guid = ? LIMIT 1`,
+		instanceGUID).Scan(&durability); err == nil && weapon.MaxDurability > 0 && durability == 0 {
+		return false
+	}
+	return true
+}
+
+// targetPlayerHasMainHandWeapon mirrors the player-target leg of the disarm
+// arm of SpellInfo::CheckTarget (SpellInfo.cpp:1681-1687):
+// Player::GetWeaponForAttack(BASE_ATTACK) on the target player — the
+// equipped item in EQUIPMENT_SLOT_MAINHAND that is a weapon
+// (Class == ITEM_CLASS_WEAPON, any subclass) and not broken (Item::IsBroken:
+// MaxDurability > 0 and Durability == 0). The inventory rows are keyed by
+// character GUID, so the target's own GUID is queried directly; the target
+// need not have a live session. Same query shape as mainHandWeaponIsDagger.
+func (s *session) targetPlayerHasMainHandWeapon(ctx context.Context, targetGUID uint64) bool {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return false
+	}
+	var instanceGUID, itemEntry int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		`SELECT ii.guid, ii.itemEntry FROM character_inventory ci
+		JOIN item_instance ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot = ? LIMIT 1`,
+		targetGUID, int64(equipSlotMainhand)).Scan(&instanceGUID, &itemEntry); err != nil || itemEntry <= 0 {
+		return false
+	}
+	weapon, ok := s.server.getItemStoreTemplateInfo(ctx, uint32(itemEntry))
+	if !ok || weapon.Class != itemClassWeapon {
 		return false
 	}
 	var durability int64
