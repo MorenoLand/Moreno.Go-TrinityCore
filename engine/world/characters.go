@@ -1078,6 +1078,9 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	if s == nil || s.server == nil || s.player == nil {
 		return false
 	}
+	// Player::RemoveFromWorld (Player.cpp:1976-1979): a far teleport releases
+	// the active loot, which also clears the UNIT_FLAG_LOOTING bit set at open.
+	s.releaseActiveLoot()
 	originOrientation := s.farTeleportOriginOrientation
 	s.worldReady.Store(false)
 	s.farTeleportPending = false
@@ -2858,6 +2861,13 @@ func (s *session) clearBuybackState(ctx context.Context) error {
 }
 
 func (s *session) releaseActiveLoot() {
+	// WorldSession::DoLootRelease (LootHandler.cpp:265): the UNIT_FLAG_LOOTING
+	// bit set at loot open is removed on every release arm; clearing ahead of
+	// the loot==nil return keeps a stuck flag from surviving any release path.
+	if s.player != nil && s.player.UnitFlags&unitFlagLooting != 0 {
+		s.player.UnitFlags &^= unitFlagLooting
+		s.sendPlayerUpdate()
+	}
 	loot := s.activeLoot
 	if loot == nil {
 		return

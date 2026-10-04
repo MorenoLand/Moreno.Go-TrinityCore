@@ -223,7 +223,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 			loot.addViewer(s)
 			s.activeLoot = loot
 			s.interruptCurrentCast()
-			return s.sendLootResponse(loot) == nil
+			return s.finishLootOpen(loot)
 		}
 
 		rows, err := wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0)
@@ -282,7 +282,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 		loot.addViewer(s)
 		s.activeLoot = loot
 		s.interruptCurrentCast()
-		return s.sendLootResponse(loot) == nil
+		return s.finishLootOpen(loot)
 	}
 
 	target, ok := s.getCombatTarget(ctx, targetGUID)
@@ -323,7 +323,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 		loot.addViewer(s)
 		s.activeLoot = loot
 		s.interruptCurrentCast()
-		return s.sendLootResponse(loot) == nil
+		return s.finishLootOpen(loot)
 	}
 	// Query min/max gold and lootid from creature_template
 	var minGold, maxGold, lootID int64
@@ -395,7 +395,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	loot.addViewer(s)
 	s.activeLoot = loot
 	s.interruptCurrentCast()
-	return s.sendLootResponse(loot) == nil
+	return s.finishLootOpen(loot)
 }
 
 func (s *session) handleFishingNodeUse(ctx context.Context, payload []byte, goState *dynamicGameObjectState) bool {
@@ -567,6 +567,23 @@ func (s *session) fishingHoleNearby(ctx context.Context, bobber *dynamicGameObje
 		WHERE g.map = ? AND t.type = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ?
 		LIMIT 1`, bobber.Map, GameObjectTypeFishingHole, bobber.X-20, bobber.X+20, bobber.Y-20, bobber.Y+20).Scan(&found)
 	return err == nil && found == 1
+}
+
+// finishLootOpen completes a successful corpse-loot open: after the response is
+// on the wire it sets the UNIT_FLAG_LOOTING bit (UnitDefines.h:134), the
+// Player::SendLoot arm at Player.cpp:8906-8910 (loot_type == LOOT_CORPSE &&
+// !guid.IsItem()); the handleLoot paths are corpse loot of creatures and
+// gameobjects only, so the !IsItem leg is vacuous here. Item loot (items.go)
+// and fishing (LOOT_FISHING) never take this path, matching C++.
+func (s *session) finishLootOpen(loot *activeLootState) bool {
+	if s.sendLootResponse(loot) != nil {
+		return false
+	}
+	if s.player != nil && s.player.UnitFlags&unitFlagLooting == 0 {
+		s.player.UnitFlags |= unitFlagLooting
+		s.sendPlayerUpdate()
+	}
+	return true
 }
 
 func (s *session) sendLootResponse(loot *activeLootState) error {
@@ -926,12 +943,13 @@ func (s *session) handleLootRelease(payload []byte) bool {
 	if loot.MapID != s.player.Map || loot.InstanceID != s.player.InstanceID {
 		return s.sendLootError(targetGUID, 4) == nil
 	}
+	// The round-robin reset, viewer removal, empty-loot cleanup and the
+	// UNIT_FLAG_LOOTING clear live in releaseActiveLoot (the DoLootRelease
+	// analog); the CMSG_LOOT_RELEASE response and the group looter broadcast
+	// stay here. C++ resets roundRobinPlayer only on release of the round
+	// robin player (LootHandler.cpp:366-374), which releaseActiveLoot matches.
 	releasedRoundRobin := loot.RoundRobinPlayer == s.playerGUID
-	if releasedRoundRobin {
-		loot.RoundRobinPlayer = 0
-	}
-	loot.removeViewer(s.playerGUID)
-	s.activeLoot = nil
+	s.releaseActiveLoot()
 	if releasedRoundRobin && s.server != nil && s.groupID != 0 && uint16(loot.TargetGUID>>48) != 0xF110 {
 		s.server.groupsMu.Lock()
 		grp := s.server.groups[s.groupID]
@@ -939,9 +957,6 @@ func (s *session) handleLootRelease(payload []byte) bool {
 		if grp != nil {
 			s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LOOT_LIST), buildLootLooterPacket(loot, grp))
 		}
-	}
-	if loot.Money == 0 && len(loot.Items) == 0 {
-		s.clearCreatureLoot(loot)
 	}
 	release := protocol.NewBuffer(9)
 	release.WriteU64(targetGUID)
