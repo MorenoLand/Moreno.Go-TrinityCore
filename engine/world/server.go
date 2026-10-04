@@ -349,6 +349,12 @@ type session struct {
 	activeCast                *activeCastState
 	summonExpire              time.Time
 	summonerGUID              uint64
+	summonMap                 uint32
+	summonX                   float32
+	summonY                   float32
+	summonZ                   float32
+	summonO                   float32
+	summonLocSet              bool
 	activeChannel             *activeChannelState
 	runes                     *dkRuneState
 	castMu                    sync.Mutex

@@ -1064,9 +1064,29 @@ func (s *session) handleMoveTimeSkipped(ctx context.Context, payload []byte) boo
 	return true
 }
 
+func (s *session) clearSummonPending() {
+	s.summonExpire = time.Time{}
+	s.summonerGUID = 0
+	s.summonLocSet = false
+}
+
 func (s *session) sendSummonRequest(summonerGUID uint64, zoneID uint32) {
+	if !s.summonExpire.IsZero() && time.Now().Before(s.summonExpire) {
+		return
+	}
+	if s.hasAura(23445) {
+		return
+	}
 	s.summonExpire = time.Now().Add(2 * time.Minute)
 	s.summonerGUID = summonerGUID
+	s.summonLocSet = false
+	if s.server != nil {
+		if summonerSess := s.server.findSessionByGUID(summonerGUID); summonerSess != nil && summonerSess.playerLoaded && summonerSess.player != nil {
+			s.summonMap = summonerSess.player.Map
+			s.summonX, s.summonY, s.summonZ, s.summonO = summonerSess.player.X, summonerSess.player.Y, summonerSess.player.Z, summonerSess.player.Orientation
+			s.summonLocSet = true
+		}
+	}
 	buf := protocol.NewBuffer(16)
 	buf.WriteU64(summonerGUID)
 	buf.WriteU32(zoneID)
@@ -1081,38 +1101,38 @@ func (s *session) handleSummonResponse(ctx context.Context, payload []byte) bool
 		return true
 	}
 	if len(payload) < 9 {
-		s.summonExpire = time.Time{}
-		s.summonerGUID = 0
+		s.clearSummonPending()
 		return true
 	}
 	r := protocol.NewReader(payload)
 	summonerGUID, _ := r.ReadU64()
 	agree, _ := r.ReadU8()
 	if agree == 0 {
-		s.summonExpire = time.Time{}
-		s.summonerGUID = 0
+		s.clearSummonPending()
 		return true
 	}
 	if s.player.Health == 0 || (s.player.UnitFlags&unitFlagInCombat != 0) {
-		s.summonExpire = time.Time{}
-		s.summonerGUID = 0
+		s.clearSummonPending()
 		return true
 	}
 	if !s.summonExpire.IsZero() && time.Now().After(s.summonExpire) {
-		s.summonExpire = time.Time{}
-		s.summonerGUID = 0
+		s.clearSummonPending()
 		return true
 	}
 
-	if s.server != nil {
+	s.finishTaxiFlight()
+	summonLocSet := s.summonLocSet
+	summonMap, summonX, summonY, summonZ, summonO := s.summonMap, s.summonX, s.summonY, s.summonZ, s.summonO
+	s.clearSummonPending()
+	s.updateAchievementCriteria(criteriaTypeAcceptedSummonings, 0, 1)
+	if summonLocSet {
+		s.teleportTo(summonMap, summonX, summonY, summonZ, summonO)
+	} else if s.server != nil {
 		summonerSess := s.server.findSessionByGUID(summonerGUID)
 		if summonerSess != nil && summonerSess.playerLoaded && summonerSess.player != nil {
 			s.teleportTo(summonerSess.player.Map, summonerSess.player.X, summonerSess.player.Y, summonerSess.player.Z, summonerSess.player.Orientation)
 		}
 	}
-	s.updateAchievementCriteria(criteriaTypeAcceptedSummonings, 0, 1)
-	s.summonExpire = time.Time{}
-	s.summonerGUID = 0
 	return true
 }
 
