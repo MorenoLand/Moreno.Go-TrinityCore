@@ -89,12 +89,12 @@ func (s *session) setTradeSpell(spellID uint32, castItemGUID uint64) {
 	s.trade.SpellCastItemGUID = castItemGUID
 	if s.trade.Accepted {
 		s.trade.Accepted = false
-		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 	}
 	if s.trade.Partner != nil && s.trade.Partner.trade != nil {
 		if s.trade.Partner.trade.Accepted {
 			s.trade.Partner.trade.Accepted = false
-			_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+			_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 		}
 		s.notifyTradeUpdate()
 	}
@@ -327,7 +327,7 @@ func tempTradeEnchantDurationMs(spell wotlk.Spell) uint32 {
 
 // sendTradeStatus sends SMSG_TRADE_STATUS (0x120) with matching TrinityCore structure.
 // Reference: WorldSession::SendTradeStatus (TradeHandler.cpp:34).
-func (s *session) sendTradeStatus(status uint32, traderGUID uint64, result uint32, isTargetResult uint8, itemLimitCategory uint32) error {
+func (s *session) sendTradeStatus(status uint32, traderGUID uint64, result uint32, isTargetResult uint8, itemLimitCategory uint32, slot uint8) error {
 	buf := protocol.NewBuffer(16)
 	buf.WriteU32(status)
 	switch status {
@@ -339,6 +339,8 @@ func (s *session) sendTradeStatus(status uint32, traderGUID uint64, result uint3
 		buf.WriteU32(result)
 		buf.WriteU8(isTargetResult)
 		buf.WriteU32(itemLimitCategory)
+	case tradeStatusWrongRealm, tradeStatusNotOnTaplist:
+		buf.WriteU8(slot) // Trade slot; -1 here clears CGTradeInfo::m_tradeMoney
 	}
 	return s.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), buf.Bytes(), true)
 }
@@ -358,7 +360,7 @@ func (s *session) handleInitiateTrade(ctx context.Context, payload []byte) bool 
 		return true
 	}
 	if s.player.MaxHealth > 0 && s.player.Health == 0 {
-		_ = s.sendTradeStatus(tradeStatusYouDead, 0, 0, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusYouDead, 0, 0, 0, 0, 0)
 		return true
 	}
 	// Reference: WorldSession::HandleInitiateTradeOpcode (TradeHandler.cpp:624-631):
@@ -369,20 +371,20 @@ func (s *session) handleInitiateTrade(ctx context.Context, payload []byte) bool 
 		// GetTrinityString(LANG_TRADE_REQ) (entry 6609) and the trinity_string
 		// content lives in the DB import, not in this repo.
 		s.sendNotification(fmt.Sprintf("You must be at least level %d to initiate a trade.", s.server.Config.TradeLevelReq))
-		_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, 0, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, 0, 0, 0, 0)
 		return true
 	}
 	targetSess := s.server.findSessionByGUID(targetGUID)
 	if targetSess == nil || targetSess.player == nil {
-		_ = s.sendTradeStatus(tradeStatusNoTarget, 0, 0, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusNoTarget, 0, 0, 0, 0, 0)
 		return true
 	}
 	if targetSess == s || targetSess.trade != nil {
-		_ = s.sendTradeStatus(tradeStatusBusy, 0, 0, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusBusy, 0, 0, 0, 0, 0)
 		return true
 	}
 	if targetSess.player.MaxHealth > 0 && targetSess.player.Health == 0 {
-		_ = s.sendTradeStatus(tradeStatusTargetDead, 0, 0, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusTargetDead, 0, 0, 0, 0, 0)
 		return true
 	}
 	// Reference: WorldSession::HandleInitiateTradeOpcode (TradeHandler.cpp:670-675):
@@ -391,7 +393,7 @@ func (s *session) handleInitiateTrade(ctx context.Context, payload []byte) bool 
 	// term; Go conservatively skips the stunned/logout/in-flight guards (no
 	// model), so the check lands between the dead check and the faction check.
 	if s.server.chatIgnoredBy(targetSess.playerGUID, s.playerGUID) {
-		_ = s.sendTradeStatus(tradeStatusIgnoreYou, 0, 0, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusIgnoreYou, 0, 0, 0, 0, 0)
 		return true
 	}
 	// Reference: WorldSession::HandleInitiateTradeOpcode (TradeHandler.cpp:677-684):
@@ -407,12 +409,12 @@ func (s *session) handleInitiateTrade(ctx context.Context, payload []byte) bool 
 			twoSide = permErr == nil && granted
 		}
 		if !twoSide {
-			_ = s.sendTradeStatus(tradeStatusWrongFaction, 0, 0, 0, 0)
+			_ = s.sendTradeStatus(tradeStatusWrongFaction, 0, 0, 0, 0, 0)
 			return true
 		}
 	}
 	if targetSess.player.Map != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, targetSess.player.X, targetSess.player.Y, targetSess.player.Z) > tradeDistance {
-		_ = s.sendTradeStatus(tradeStatusTargetTooFar, 0, 0, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusTargetTooFar, 0, 0, 0, 0, 0)
 		return true
 	}
 
@@ -420,7 +422,7 @@ func (s *session) handleInitiateTrade(ctx context.Context, payload []byte) bool 
 	targetSess.trade = &playerTradeState{Partner: s, Items: make(map[uint8]tradeSlotItem)}
 
 	// Send SMSG_TRADE_STATUS (TRADE_STATUS_BEGIN_TRADE) to target
-	_ = targetSess.sendTradeStatus(tradeStatusBeginTrade, s.playerGUID, 0, 0, 0)
+	_ = targetSess.sendTradeStatus(tradeStatusBeginTrade, s.playerGUID, 0, 0, 0, 0)
 	s.debug("trade initiated", "from", s.accountName, "to", targetSess.accountName)
 	return true
 }
@@ -432,8 +434,8 @@ func (s *session) handleBeginTrade(ctx context.Context) bool {
 		return true
 	}
 	partner := s.trade.Partner
-	_ = s.sendTradeStatus(tradeStatusOpenWindow, 0, 0, 0, 0)
-	_ = partner.sendTradeStatus(tradeStatusOpenWindow, 0, 0, 0, 0)
+	_ = s.sendTradeStatus(tradeStatusOpenWindow, 0, 0, 0, 0, 0)
+	_ = partner.sendTradeStatus(tradeStatusOpenWindow, 0, 0, 0, 0, 0)
 	s.notifyTradeUpdate()
 	partner.notifyTradeUpdate()
 	s.debug("trade window opened", "player1", s.accountName, "player2", partner.accountName)
@@ -459,18 +461,18 @@ func (s *session) handleSetTradeGold(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	if gold > s.player.Money {
-		_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrNotEnoughMoney, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrNotEnoughMoney, 0, 0, 0)
 		return true
 	}
 	s.trade.Money = gold
 	if s.trade.Accepted {
 		s.trade.Accepted = false
-		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 	}
 	if s.trade.Partner != nil && s.trade.Partner.trade != nil {
 		if s.trade.Partner.trade.Accepted {
 			s.trade.Partner.trade.Accepted = false
-			_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+			_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 		}
 		s.notifyTradeUpdate()
 	}
@@ -499,7 +501,7 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 	slot := payload[2]
 	if tradeSlot >= tradeSlotCount {
 		// Invalid trade slot: C++ answers TRADE_STATUS_TRADE_CANCELED (TradeHandler.cpp:749-755).
-		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
 		return true
 	}
 	cdb := s.server.CharactersStore.DB
@@ -511,12 +513,12 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 	if err != nil || itemGUID == 0 {
 		// Missing item (cheating, can't fail with correct client operations): C++ answers
 		// TRADE_STATUS_TRADE_CANCELED (TradeHandler.cpp:760-765).
-		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
 		return true
 	}
 	if tradeHasItem(s.trade.Items, uint64(itemGUID)) {
 		// Prevent placing a single item into multiple trade slots (cheating attempt).
-		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
 		return true
 	}
 	var itemEntry, count, flags int64
@@ -525,7 +527,7 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 	_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count, flags, giftCreatorGuid, creatorGuid, enchantments FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemEntry, &count, &flags, &giftCreatorGUID, &creatorGUID, &encStr)
 	if tradeSlot < tradeSlotTradedCount && (flags&1 != 0) {
 		// Soulbound items cannot be placed in traded slots
-		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
 		return true
 	}
 	var enchantID uint32
@@ -573,12 +575,12 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 	s.setTradeSpell(0, 0)
 	if s.trade.Accepted {
 		s.trade.Accepted = false
-		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 	}
 	if s.trade.Partner != nil && s.trade.Partner.trade != nil {
 		if s.trade.Partner.trade.Accepted {
 			s.trade.Partner.trade.Accepted = false
-			_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+			_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 		}
 		s.notifyTradeUpdate()
 	}
@@ -612,12 +614,12 @@ func (s *session) handleClearTradeItem(ctx context.Context, payload []byte) bool
 	s.setTradeSpell(0, 0)
 	if s.trade.Accepted {
 		s.trade.Accepted = false
-		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 	}
 	if s.trade.Partner != nil && s.trade.Partner.trade != nil {
 		if s.trade.Partner.trade.Accepted {
 			s.trade.Partner.trade.Accepted = false
-			_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+			_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 		}
 		s.notifyTradeUpdate()
 	}
@@ -642,9 +644,9 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 	// with forTrader=false -> the owner's session), and the trade window stays
 	// open — the partner is not notified and neither side tears down.
 	if partner.player == nil || s.player.Map != partner.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, partner.player.X, partner.player.Y, partner.player.Z) > tradeDistance {
-		_ = s.sendTradeStatus(tradeStatusTargetTooFar, 0, 0, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusTargetTooFar, 0, 0, 0, 0, 0)
 		s.trade.Accepted = false
-		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 		return true
 	}
 
@@ -652,27 +654,27 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 	// failure un-accepts the failing side with a BACK_TO_TRADE notice to the
 	// other party and keeps the trade window open.
 	if s.player.Money < s.trade.Money {
-		_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrNotEnoughMoney, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrNotEnoughMoney, 0, 0, 0)
 		s.trade.Accepted = false
-		_ = partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+		_ = partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 		return true
 	}
 	if partner.trade != nil && partner.player.Money < partner.trade.Money {
-		_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrNotEnoughMoney, 0, 0)
+		_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrNotEnoughMoney, 0, 0, 0)
 		partner.trade.Accepted = false
-		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 		return true
 	}
 	if partner.trade != nil && s.player.Money >= maxMoneyAmount-partner.trade.Money {
-		_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrTooMuchGold, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrTooMuchGold, 0, 0, 0)
 		s.trade.Accepted = false
-		_ = partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+		_ = partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 		return true
 	}
 	if partner.trade != nil && partner.player.Money >= maxMoneyAmount-s.trade.Money {
-		_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrTooMuchGold, 0, 0)
+		_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrTooMuchGold, 0, 0, 0)
 		partner.trade.Accepted = false
-		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 		return true
 	}
 
@@ -702,7 +704,7 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 				var flags int64
 				_ = cdb.QueryRowContext(ctx, "SELECT flags FROM item_instance WHERE guid = ? LIMIT 1", it.ItemGUID).Scan(&flags)
 				if flags&1 != 0 {
-					_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0)
+					_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
 					return true
 				}
 			}
@@ -710,7 +712,7 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 	}
 
 	// Inform partner
-	_ = partner.sendTradeStatus(tradeStatusTradeAccept, 0, 0, 0, 0)
+	_ = partner.sendTradeStatus(tradeStatusTradeAccept, 0, 0, 0, 0, 0)
 
 	if partner.trade != nil && partner.trade.Accepted {
 		// Both accepted -> enter the accept process (TradeHandler.cpp:356-357)
@@ -850,11 +852,11 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 		clearAcceptTradeMode(s, partner)
 		// EQUIP_ERR_BAG_FULL = 1
 		if !ok1 {
-			_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 0, 0)
-			_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 1, 0) // isTargetResult = 1
+			_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 0, 0, 0)
+			_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 1, 0, 0) // isTargetResult = 1
 		} else {
-			_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 0, 0)
-			_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 1, 0) // isTargetResult = 1
+			_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 0, 0, 0)
+			_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 1, 0, 0) // isTargetResult = 1
 		}
 		s.trade = nil
 		partner.trade = nil
@@ -863,8 +865,8 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 
 	if s.player.Money < s.trade.Money || partner.player.Money < partner.trade.Money {
 		clearAcceptTradeMode(s, partner)
-		_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, 0, 0, 0)
-		_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, 0, 0, 0)
+		_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, 0, 0, 0, 0)
+		_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, 0, 0, 0, 0)
 		s.trade = nil
 		partner.trade = nil
 		return
@@ -918,8 +920,8 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 	s.applyDeferredTradeEnchant(ctx, partner)
 	partner.applyDeferredTradeEnchant(ctx, s)
 
-	_ = s.sendTradeStatus(tradeStatusTradeComplete, 0, 0, 0, 0)
-	_ = partner.sendTradeStatus(tradeStatusTradeComplete, 0, 0, 0, 0)
+	_ = s.sendTradeStatus(tradeStatusTradeComplete, 0, 0, 0, 0, 0)
+	_ = partner.sendTradeStatus(tradeStatusTradeComplete, 0, 0, 0, 0, 0)
 
 	_ = s.sendInventoryItems(ctx)
 	_ = partner.sendInventoryItems(ctx)
@@ -950,7 +952,7 @@ func (s *session) handleUnacceptTrade(ctx context.Context) bool {
 	// only the un-acceptor's own accepted state clears; TRADE_STATUS_BACK_TO_TRADE
 	// goes to the trader (partner) alone. The partner's accepted flag is untouched.
 	if s.trade.Partner != nil {
-		_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+		_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 	}
 	return true
 }
@@ -962,11 +964,11 @@ func (s *session) handleCancelTrade(ctx context.Context) bool {
 		return true
 	}
 	partner := s.trade.Partner
-	_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0)
+	_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
 	s.trade = nil
 	if partner != nil {
 		partner.trade = nil
-		_ = partner.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0)
+		_ = partner.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
 	}
 	return true
 }
