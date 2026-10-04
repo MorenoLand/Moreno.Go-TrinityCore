@@ -5197,6 +5197,29 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						// always runs its spell-power Done leg with no
 						// apply_direct_bonus skip. Revisit only when the
 						// DoT-potential machinery lands.
+						// Spell::EffectSchoolDMG (SpellEffects.cpp:444-460):
+						// the Shadow Bite arm (Warlock family,
+						// SpellFamilyFlags[1] & 0x400000) is a documented
+						// no-bridge. C++ fires only when the caster is the
+						// pet itself (TYPEID_UNIT && IsPet), the pet's owner
+						// is a player, and the owner carries the Improved
+						// Shadow Bite talent aura (SPELL_AURA_ADD_FLAT_
+						// MODIFIER, Warlock family, SpellIconID 214, effect
+						// index 0 — Unit.cpp:4510 matches effIndex +
+						// SpellIconID + family name, with the quirk that the
+						// talent rows carry no family flags); bp0 is 4 for
+						// aura 54037 (rank 1) else 8, and the pet makes a
+						// triggered cast of 54425 with a per-cast
+						// SPELLVALUE_BASE_POINT0 override of bp0 and a null
+						// explicit target. Go lacks both structural pieces:
+						// pet casts route through executePetSpellWithOptions
+						// (pet_combat.go) and never reach the session player's
+						// per-target damage-effect loop, and no per-cast
+						// spell-value base-point override machinery exists
+						// anywhere in the tree (triggered casts read amounts
+						// from the pristine DBC row). Revisit only if pet
+						// casts gain a real effect pipeline and per-cast
+						// spell-value overrides land.
 						// Spell::EffectSchoolDMG (SpellEffects.cpp:460-479): the
 						// Improved Mind Blast arm (Priest family,
 						// SpellFamilyFlags[0] & 0x00002000) fires only while the
