@@ -581,6 +581,15 @@ func (s *Server) endSA(sa *saBattlegroundState, winner int8) {
 	default:
 		s.broadcastBattlegroundMessage(sa.MapID, "The battle ended in a draw!")
 	}
+
+	// Reference: BattlegroundSA::EndBattleground (BattlegroundSA.cpp:965): the
+	// winning team gets GetBonusHonorFromKill(1), then BOTH teams get the
+	// completion honor GetBonusHonorFromKill(2), ahead of Battleground::EndBattleground.
+	if winner == 0 || winner == 1 {
+		s.rewardBGEndHonor(sa.MapID, uint32(winner), 1)
+	}
+	s.rewardBGEndHonor(sa.MapID, 0, 2)
+	s.rewardBGEndHonor(sa.MapID, 1, 2)
 }
 
 // handleSACreatureKilled tracks Demolisher kills and marks AllVehiclesAlive false.

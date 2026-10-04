@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -516,6 +517,77 @@ func battlegroundTypeForMap(mapID uint32) (uint32, uint8, bool, bool) {
 		return 4, uint8(2), true, true
 	default:
 		return 0, 0, false, false
+	}
+}
+
+// bgMaxLevelForMap returns the BG's m_LevelMax == Battleground::GetMaxLevel,
+// read from battleground_template (MaxLvl) keyed by battlegroundTypeForMap's
+// type ID. The table is unseeded in this repo's world.sql, so the 80 fallback
+// == DEFAULT_MAX_LEVEL applies (same convention as bgAccessByLevel's
+// MaxPlayerLevel cap).
+func bgMaxLevelForMap(s *Server, mapID uint32) uint32 {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return 80
+	}
+	bgTypeID, _, _, ok := battlegroundTypeForMap(mapID)
+	if !ok {
+		return 80
+	}
+	var minLvl, maxLvl uint32
+	if err := s.WorldStore.DB.QueryRowContext(context.Background(), `SELECT MinLvl, MaxLvl FROM battleground_template WHERE ID = ?`, bgTypeID).Scan(&minLvl, &maxLvl); err != nil || maxLvl == 0 {
+		return 80
+	}
+	return maxLvl
+}
+
+// rewardBGEndHonor mirrors Battleground::RewardHonorToTeam (Battleground.cpp:633)
+// fed by GetBonusHonorFromKill (Battleground.cpp:806): ceil(min(maxLevel,80)*1.55*kills)
+// honor to every worldReady session on the BG map on the given team (0 Alliance,
+// 1 Horde). C++ iterates the live instance's m_Players; Go's ambient BG model
+// treats all worldReady sessions on the map as participants, the same proxy
+// creditBattlegroundWin uses (achievements.go:1455). The per-session call is
+// rewardHonorPoints == Player::RewardHonor(nullptr, 1, honor), the same tail
+// Battleground::UpdatePlayerScore reaches for SCORE_BONUS_HONOR (Battleground.cpp:1231).
+func (s *Server) rewardBGEndHonor(mapID, team uint32, kills uint32) {
+	if s == nil || kills == 0 {
+		return
+	}
+	honor := uint32(math.Ceil(float64(min(bgMaxLevelForMap(s, mapID), 80)) * 1.55 * float64(kills)))
+	if honor == 0 {
+		return
+	}
+	s.sessionsMu.RLock()
+	var targets []*session
+	for sess := range s.sessions {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID && teamForRace(sess.player.Race) == team {
+			targets = append(targets, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range targets {
+		sess.rewardHonorPoints(context.Background(), honor)
+	}
+}
+
+// rewardBGEndReputation mirrors Battleground::RewardReputationToTeam's standing arm
+// (Battleground.cpp:640): rep standing to every worldReady session on the BG map
+// on the given team (0 Alliance, 1 Horde). C++ adds the SPELL_AURA_MOD_REPUTATION_GAIN
+// and SPELL_AURA_MOD_FACTION_REPUTATION_GAIN aura modifiers first; Go has no
+// reputation-gain aura model, so the flat giveReputation standing arm is the bridge.
+func (s *Server) rewardBGEndReputation(mapID, team uint32, factionID uint32, rep uint32) {
+	if s == nil || factionID == 0 || rep == 0 {
+		return
+	}
+	s.sessionsMu.RLock()
+	var targets []*session
+	for sess := range s.sessions {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID && teamForRace(sess.player.Race) == team {
+			targets = append(targets, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range targets {
+		sess.giveReputation(context.Background(), factionID, int32(rep))
 	}
 }
 

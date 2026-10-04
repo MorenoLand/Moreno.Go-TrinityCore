@@ -741,6 +741,48 @@ func (s *Server) endAV(av *avBattlegroundState, winner int8) {
 		winnerTeam = "Horde"
 	}
 	s.broadcastBattlegroundMessage(av.MapID, fmt.Sprintf("The %s has won the battle for Alterac Valley!", winnerTeam))
+	// Reference: BattlegroundAV::EndBattleground (BattlegroundAV.cpp:453): bonus
+	// kills for surviving towers (BattlegroundAV.h:45-49: 2 kills / 12 rep per
+	// tower, 2 kills / 125 rep per living captain) plus Stormpike (730) /
+	// Frostwolf (729) reputation, ahead of Battleground::EndBattleground.
+	// The C++ arms are:
+	//   towers (DUNBALDAR_SOUTH..FROSTWOLF_WTOWER) in POINT_CONTROLED state:
+	//     alliance-owned: rep[alliance] += 12, kills[alliance] += 2
+	//     horde-owned:    rep[alliance] += 2,  kills[horde]    += 2
+	//     (the rep[alliance] += 2 arm for horde-owned towers is a genuine
+	//     upstream quirk, reproduced here for 1:1 fidelity)
+	//   living captains: kills[team] += 2, rep[team] += 125.
+	var kills, rep [2]uint32
+	for i := uint32(AVNodeDunBaldarSouth); i <= uint32(AVNodeFrostwolfWestTower); i++ {
+		node := &av.Nodes[i]
+		if node.State != AVNodeStateControlled {
+			continue
+		}
+		if node.Owner == AVTeamAlliance {
+			rep[0] += 12
+			kills[0] += 2
+		} else {
+			rep[0] += 2
+			kills[1] += 2
+		}
+	}
+	if av.AllianceCaptainAlive {
+		kills[0] += 2
+		rep[0] += 125
+	}
+	if av.HordeCaptainAlive {
+		kills[1] += 2
+		rep[1] += 125
+	}
+	factions := [2]uint32{730, 729} // Stormpike Guard, Frostwolf Clan
+	for team := uint32(0); team < 2; team++ {
+		if rep[team] != 0 {
+			s.rewardBGEndReputation(av.MapID, team, factions[team], rep[team])
+		}
+		if kills[team] != 0 {
+			s.rewardBGEndHonor(av.MapID, team, kills[team])
+		}
+	}
 }
 
 func (s *Server) sendAVInitialWorldStates(sess *session) {

@@ -125,7 +125,7 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				}
 				s.broadcastBattlegroundMessage(sess.player.Map, sess.player.Name+" captured the Warsong flag!")
 				if wsg.AllianceScore >= wsg.MaxScore {
-					s.broadcastBattlegroundMessage(sess.player.Map, "The Alliance wins!")
+					s.endWSGVictory(sess.player.Map, 0)
 				}
 			}
 		}
@@ -159,7 +159,7 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				}
 				s.broadcastBattlegroundMessage(sess.player.Map, sess.player.Name+" captured the Alliance flag!")
 				if wsg.HordeScore >= wsg.MaxScore {
-					s.broadcastBattlegroundMessage(sess.player.Map, "The Horde wins!")
+					s.endWSGVictory(sess.player.Map, 1)
 				}
 			}
 		}
@@ -408,4 +408,22 @@ func (s *Server) broadcastBattlegroundMessage(mapID uint32, message string) {
 	}
 	payload := protocol.BuildChatMessageWithOptions(chatSystem, 0, 0, 0, message, "", false, "", 0)
 	s.broadcastToMap(mapID, uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload)
+}
+
+// endWSGVictory runs the Warsong Gulch end-of-match rewards.
+// Reference: BattlegroundWS::EndBattleground (BattlegroundWS.cpp:755): the
+// winning team gets GetBonusHonorFromKill(m_HonorWinKills), then BOTH teams
+// get GetBonusHonorFromKill(m_HonorEndKills), ahead of Battleground::EndBattleground.
+// The kill counts are BG-weekend gated in C++ (3/4 on weekend, 1/2 otherwise,
+// BattlegroundWS.cpp:733-743); Go has no BG-weekend model, so the non-weekend
+// defaults apply.
+func (s *Server) endWSGVictory(mapID uint32, winningTeam uint32) {
+	teamName := "Alliance"
+	if winningTeam == 1 {
+		teamName = "Horde"
+	}
+	s.broadcastBattlegroundMessage(mapID, "The "+teamName+" wins!")
+	s.rewardBGEndHonor(mapID, winningTeam, 1)
+	s.rewardBGEndHonor(mapID, 0, 2)
+	s.rewardBGEndHonor(mapID, 1, 2)
 }

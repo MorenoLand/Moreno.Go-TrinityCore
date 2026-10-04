@@ -541,5 +541,11 @@ func (s *Server) announceABVictory(mapID uint32, winningTeam uint32) {
 	}
 	msg := fmt.Sprintf("The %s wins!", teamName)
 	s.broadcastBattlegroundMessage(mapID, msg)
+	// Reference: BattlegroundAB::EndBattleground (BattlegroundAB.cpp:624): the
+	// winning team gets GetBonusHonorFromKill(1), then BOTH teams get the
+	// completion honor (even if no team wins), ahead of Battleground::EndBattleground.
+	s.rewardBGEndHonor(mapID, winningTeam, 1)
+	s.rewardBGEndHonor(mapID, 0, 1)
+	s.rewardBGEndHonor(mapID, 1, 1)
 	s.creditBattlegroundWin(mapID, winningTeam)
 }
