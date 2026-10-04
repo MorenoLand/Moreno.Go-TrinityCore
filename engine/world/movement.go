@@ -1169,6 +1169,12 @@ func (s *session) updateFallInformationIfNeed(info movementInfo, opcode uint16) 
 
 // handleFall calculates fall damage and applies it via environmentalDamage.
 // Mirrors TrinityCore Player::HandleFall (Player.cpp:25369-25418).
+// Documented deltas: no sWorld->getRate(RATE_DAMAGE_FALL) multiplier (defaults to 1.0;
+// Go has no world-rate config); no UpdateGroundPositionZ leg (no ground-height model);
+// C++ sets Gust-of-Wind damage to exactly GetMaxHealth()/2 while Go caps at the half
+// (identical whenever computed damage >= half; the raise case needs a 14.57-41.5yd fall
+// with 43621, where C++ itself would usually have safe_fall zeroed the damage anyway);
+// isImmuneToDamage does not consume aura charges (Go models no charge counters).
 func (s *session) handleFall(ctx context.Context, info movementInfo) {
 	if s.player == nil || s.player.Health == 0 || s.inFlight {
 		return
@@ -1187,6 +1193,13 @@ func (s *session) handleFall(ctx context.Context, info movementInfo) {
 
 	// Immune to fall damage via feather fall / slow fall (105), hover (106), or fly (201)
 	if s.hasAuraType(105) || s.hasAuraType(106) || s.hasAuraType(201) {
+		return
+	}
+
+	// Physical damage immunity negates fall damage outright (Player.cpp:25380-25382:
+	// !IsImmunedToDamage(SPELL_SCHOOL_MASK_NORMAL), "physical immunity (charges used)");
+	// ordered after the aura gates to match the C++ && short-circuit chain.
+	if s.isImmuneToDamage(spellSchoolMaskNormal) {
 		return
 	}
 
