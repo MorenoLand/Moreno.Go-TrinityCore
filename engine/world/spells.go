@@ -4600,6 +4600,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		s.updateAchievementCriteria(criteriaTypeUseItem, castItemEntry, 1)
 	}
 
+	// Spell::_cast (Spell.cpp:3404-3422): the creature-caster SetInFront leg
+	// (m_caster->ToCreature() facing its unit target, guarded against
+	// UNIT_FLAG_POSSESSED) is vacuous — finishSpellCast only serves player
+	// casts (s.player == nil returns at the top). Go has no SPELL_STATE
+	// machine; the m_spellState == SPELL_STATE_FINISHED check right after
+	// SelectSpellTargets is the target-map failure exit, which Go fails
+	// explicitly instead: BAD_IMPLICIT_TARGETS below and the BAD_TARGETS
+	// legs in the explicit-target and area-target checks (no modOwner
+	// spellmod-window arm either — beginSpellModTaking defers the window
+	// across the whole function, matching 3323/3418/3519).
 	// Spell::SelectImplicitTargetDestTargets (Spell.cpp:1433) and
 	// Spell::SelectImplicitDestDestTargets (Spell.cpp:1464): resolve the
 	// spell destination from target-relative / dest-relative implicit
@@ -5399,6 +5409,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// but SetDelayStart(0) with no travel speed means the delay timer
 	// fires on the next update tick — behaviorally identical to the
 	// immediate path, which is where it falls through here.
+	// Spell::_cast (Spell.cpp:3497-3500): the npcbot hook runs only for
+	// TYPEID_UNIT casters — Creature::OnSpellGo (Creature.cpp:3751) just
+	// forwards to bot_AI/bot_pet_AI. finishSpellCast serves player casts
+	// only and Go has no npcbot model, so the leg is a no-op here.
 	// CallScriptAfterCastHandlers is a no-op (no SpellScript bridge).
 	isDelayedBranch := (spell.Speed > 0 && !isChanneledSpell(spell)) || spell.AttributesEx4&spellAttr4TreatAsDelayed != 0
 	if isDelayedBranch && targetGUID != 0 && targetGUID != s.playerGUID && spell.Speed > 0 {
