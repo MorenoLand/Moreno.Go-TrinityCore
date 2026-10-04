@@ -772,9 +772,11 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		return false
 	}
 	s.lastStreamX, s.lastStreamY, s.lastStreamZ = state.X, state.Y, state.Z
+	s.resetTimeSync()
 	if err := s.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true); err != nil {
 		return false
 	}
+	s.recordTimeSyncSent(0)
 	s.timeSyncNextCounter = 1
 	s.timeSyncDue = time.Now().Add(5 * time.Second)
 	if err := s.sendLoginEffect(); err != nil {
@@ -1217,9 +1219,11 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	s.streamDynamicSpellObjects()
 	s.updateZoneAndArea(ctx, true)
 	s.recordInstanceEnterTime(ctx, time.Now())
+	s.resetTimeSync()
 	if err := s.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true); err != nil {
 		return false
 	}
+	s.recordTimeSyncSent(0)
 	s.timeSyncNextCounter = 1
 	s.timeSyncDue = time.Now().Add(5 * time.Second)
 	if err := s.sendLoginEffect(); err != nil {

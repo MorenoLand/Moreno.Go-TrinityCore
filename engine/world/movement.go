@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"math"
+	"sort"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -399,6 +400,18 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 				info.X, info.Y, info.Z, info.Orientation, s.player.Map, s.player.Zone, s.playerGUID)
 		}
 	}
+	// MovementHandler.cpp:371-379 — the server rebroadcasts the movement packet
+	// with the client timestamp shifted onto the server clock by the time-sync
+	// clock delta; with no sync sample established (or the sum leaving u32
+	// range) the server game time is written instead, and the stored movement
+	// info carries the rewritten time like C++'s m_movementInfo = movementInfo.
+	moveTime := int64(info.Time) + s.timeSyncClockDelta
+	if s.timeSyncClockDelta == 0 || moveTime < 0 || moveTime > 0xFFFFFFFF {
+		s.debug("movement time fallback", "account", s.accountName, "reason", "no clock delta or overflow")
+		info.Time = gameTimeMS()
+	} else {
+		info.Time = uint32(moveTime)
+	}
 	s.setLastMovementInfo(info)
 	packet := protocol.NewBuffer(len(payload))
 	writeMovementInfo(packet, info)
@@ -423,6 +436,7 @@ func (s *session) handleSetActiveMover(payload []byte) bool {
 }
 
 func (s *session) handleTimeSyncResponse(payload []byte) bool {
+	recvMS := gameTimeMS()
 	reader := protocol.NewReader(payload)
 	counter, err := reader.ReadU32()
 	if err != nil {
@@ -433,6 +447,24 @@ func (s *session) handleTimeSyncResponse(payload []byte) bool {
 		return false
 	}
 	s.debug("time sync response", "account", s.accountName, "counter", counter, "client_time", clientTime)
+	// MovementHandler.cpp:658-689 — responses to unknown counters are dropped.
+	sentAt, ok := s.timeSyncPending[counter]
+	if !ok {
+		return true
+	}
+	delete(s.timeSyncPending, counter)
+	// Half of the round trip is attributed to the request leg, the other half
+	// to the response leg; the delta then maps client timestamps onto the
+	// server clock (serverTime = clockDelta + clientTime).
+	roundTrip := recvMS - sentAt
+	lagDelay := roundTrip / 2
+	clockDelta := int64(sentAt+lagDelay) - int64(clientTime)
+	if len(s.timeSyncClockDeltaQueue) == 6 {
+		s.timeSyncClockDeltaQueue = s.timeSyncClockDeltaQueue[1:]
+	}
+	s.timeSyncClockDeltaQueue = append(s.timeSyncClockDeltaQueue, timeSyncSample{clockDelta: clockDelta, latency: roundTrip})
+	s.computeNewClockDelta()
+
 	if s.playerLoaded && !s.questStatusSent {
 		s.questStatusSent = true
 		if !s.sendQuestgiverStatusMultiple(context.Background()) {
@@ -443,6 +475,75 @@ func (s *session) handleTimeSyncResponse(payload []byte) bool {
 		}
 	}
 	return true
+}
+
+// resetTimeSync clears the pending time-sync requests and restarts the
+// counter (WorldSession::ResetTimeSync, WorldSession.cpp:1682-1686), used when
+// the player is added to a map and the clock exchange starts over.
+func (s *session) resetTimeSync() {
+	s.timeSyncNextCounter = 0
+	s.timeSyncPending = make(map[uint32]uint32)
+}
+
+// recordTimeSyncSent registers the server send time of a SMSG_TIME_SYNC_REQ
+// (WorldSession::SendTimeSync, WorldSession.cpp:1689-1697).
+func (s *session) recordTimeSyncSent(counter uint32) {
+	if s.timeSyncPending == nil {
+		s.timeSyncPending = make(map[uint32]uint32)
+	}
+	s.timeSyncPending[counter] = gameTimeMS()
+}
+
+// computeNewClockDelta recomputes the session's time-sync clock delta from the
+// sample queue (WorldSession::ComputeNewClockDelta, MovementHandler.cpp:690-725):
+// the mean of the clock deltas whose round-trip latency is below
+// median+stddev (population variance, boost::accumulators semantics), adopted
+// only when it drifts more than 25ms; with no passing samples and no delta
+// established yet, the most recent sample is used verbatim.
+func (s *session) computeNewClockDelta() {
+	n := len(s.timeSyncClockDeltaQueue)
+	if n == 0 {
+		return
+	}
+	latencies := make([]float64, n)
+	for i, sample := range s.timeSyncClockDeltaQueue {
+		latencies[i] = float64(sample.latency)
+	}
+	sort.Float64s(latencies)
+	var median float64
+	if n%2 == 1 {
+		median = latencies[n/2]
+	} else {
+		median = (latencies[n/2-1] + latencies[n/2]) / 2
+	}
+	mean := 0.0
+	for _, latency := range latencies {
+		mean += latency
+	}
+	mean /= float64(n)
+	variance := 0.0
+	for _, latency := range latencies {
+		dev := latency - mean
+		variance += dev * dev
+	}
+	variance /= float64(n)
+	threshold := uint32(math.Round(median)) + uint32(math.Round(math.Sqrt(variance)))
+	var sum int64
+	passing := 0
+	for _, sample := range s.timeSyncClockDeltaQueue {
+		if sample.latency < threshold {
+			sum += sample.clockDelta
+			passing++
+		}
+	}
+	if passing != 0 {
+		newDelta := int64(math.Round(float64(sum) / float64(passing)))
+		if newDelta-s.timeSyncClockDelta > 25 || s.timeSyncClockDelta-newDelta > 25 {
+			s.timeSyncClockDelta = newDelta
+		}
+	} else if s.timeSyncClockDelta == 0 {
+		s.timeSyncClockDelta = s.timeSyncClockDeltaQueue[n-1].clockDelta
+	}
 }
 
 func readMovementInfo(b *protocol.Buffer) (movementInfo, error) {

@@ -304,6 +304,9 @@ type session struct {
 	questStatusSent           bool
 	timeSyncNextCounter       uint32
 	timeSyncDue               time.Time
+	timeSyncClockDelta        int64
+	timeSyncClockDeltaQueue   []timeSyncSample
+	timeSyncPending           map[uint32]uint32
 	gossip                    *gossipMenuState
 	gossipClosed              bool
 	channels                  map[string]struct{}
@@ -827,6 +830,14 @@ func (s *Server) runWorldTick(ctx context.Context) {
 	}
 }
 
+// timeSyncSample holds one (clockDelta, round-trip latency) pair from a
+// CMSG_TIME_SYNC_RESP exchange (WorldSession.h:1232). The queue keeps the six
+// most recent samples (WorldSession.cpp:141).
+type timeSyncSample struct {
+	clockDelta int64
+	latency    uint32
+}
+
 func (s *Server) updateTimeSync(now time.Time) {
 	if s == nil {
 		return
@@ -844,6 +855,7 @@ func (s *Server) updateTimeSync(now time.Time) {
 		if sess.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(counter), true) != nil {
 			continue
 		}
+		sess.recordTimeSyncSent(counter)
 		sess.timeSyncNextCounter++
 		sess.timeSyncDue = now.Add(10 * time.Second)
 	}
@@ -1125,7 +1137,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 		}
 	}()
 	defer close(closed)
-	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{}), characterNames: make(map[uint64]enumCharacter), auras: make(map[uint32]struct{}), auraSlots: make(map[uint32]uint8), channels: make(map[string]struct{}), scale: 1, breathTimer: -1, fatigueTimer: -1, schoolLockouts: make(map[uint32]int64)}
+	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{}), characterNames: make(map[uint64]enumCharacter), auras: make(map[uint32]struct{}), auraSlots: make(map[uint32]uint8), channels: make(map[string]struct{}), timeSyncPending: make(map[uint32]uint32), scale: 1, breathTimer: -1, fatigueTimer: -1, schoolLockouts: make(map[uint32]int64)}
 	s.addSession(state)
 	defer s.removeSession(state)
 	defer state.logout()
