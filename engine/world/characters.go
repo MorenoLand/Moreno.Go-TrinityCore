@@ -356,7 +356,7 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 		uint16(0), uint8(0), uint16(atLoginFirst), uint16(spawn.Zone), uint32(0), "",
 		startArena, startHonor, uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0),
 		uint64(0), watchedFaction, drunkenness, uint32(1),
-		uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0),
+		uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0),
 		uint8(1), uint8(0), "", "", uint32(0), "", uint8(0), uint32(0),
 	}
 	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_CHARACTER", args...); err != nil {
