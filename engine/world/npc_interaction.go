@@ -8,6 +8,9 @@ import (
 
 const unitNPCFlagVendor uint32 = 0x00000080
 
+// unitNPCFlagBattlemaster mirrors UNIT_NPC_FLAG_BATTLEMASTER (UnitDefines.h:206).
+const unitNPCFlagBattlemaster uint32 = 0x00100000
+
 const gameObjectTypeGuildBank uint32 = 34
 
 // canInteractWithGameObject mirrors Player::GetGameObjectIfCanInteractWith

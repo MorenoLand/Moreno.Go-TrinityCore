@@ -21,7 +21,80 @@ func (s *session) handleBattlemasterHello(ctx context.Context, payload []byte) b
 		return false
 	}
 
-	return s.sendBattlefieldList(bmGUID, 0, 1) // default to Warsong Gulch or first BG
+	// WorldSession::HandleBattlemasterHelloOpcode (BattleGroundHandler.cpp:41-45): the
+	// creature must be interactable with UNIT_NPC_FLAG_BATTLEMASTER, or the hello is ignored.
+	if !s.canInteractWithNPC(ctx, bmGUID, uint64(unitNPCFlagBattlemaster)) {
+		return true
+	}
+
+	// BattleGroundHandler.cpp:47 — the battleground type is derived server-side from the
+	// battlemaster's creature entry (BattlegroundMgr::GetBattleMasterBG: battlemaster_entry.entry
+	// → bg_template), never from the client. The previous hardcoded bgTypeId 1 was Go-original.
+	bgTypeID := s.battlemasterBGType(ctx, uint32(bmGUID>>24)&0x00FFFFFF)
+	if bgTypeID == battlegroundTypeNone {
+		// == GetBattleMasterBG returning BATTLEGROUND_TYPE_NONE: the level gate below denies it
+		// (GetBattlegroundTemplate null), so the list is never sent.
+		return true
+	}
+
+	// Player::GetBGAccessByLevel (Player.cpp:23656-23672): a missing battleground_template row
+	// (== GetBattlegroundTemplate null) or a level outside [MinLvl, MaxLvl] answers with
+	// SendNotification(LANG_YOUR_BG_LEVEL_REQ_ERROR) and no list. trinity_string 715 is not
+	// seeded in this repo's world.sql, so the arm returns without the message — the same
+	// documented delta class as the arena unit's LANG_ARENA_DISABLED.
+	if !s.bgAccessByLevel(ctx, bgTypeID) {
+		return true
+	}
+
+	return s.sendBattlefieldList(bmGUID, 0, bgTypeID)
+}
+
+// battlegroundTypeNone mirrors BATTLEGROUND_TYPE_NONE (SharedDefines.h:3509).
+const battlegroundTypeNone = uint32(0)
+
+// battlemasterBGType mirrors BattlegroundMgr::LoadBattleMastersEntry/GetBattleMasterBG
+// (BattlegroundMgr.cpp:872-915, BattlegroundMgr.h:127-133): entry → bg_template from the
+// battlemaster_entry table, validated against the BattlemasterList DBC (the loader skips rows
+// whose bg_template has no DBC entry). Unknown entries map to BATTLEGROUND_TYPE_NONE.
+func (s *session) battlemasterBGType(ctx context.Context, entry uint32) uint32 {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.Data == nil {
+		return battlegroundTypeNone
+	}
+	var bgTypeID uint32
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT bg_template FROM battlemaster_entry WHERE entry = ?`, entry).Scan(&bgTypeID); err != nil {
+		return battlegroundTypeNone
+	}
+	file, fileErr := s.server.Data.File("BattlemasterList")
+	if fileErr != nil {
+		return battlegroundTypeNone
+	}
+	if _, found := file.Find(bgTypeID); !found {
+		return battlegroundTypeNone
+	}
+	return bgTypeID
+}
+
+// bgAccessByLevel mirrors Player::GetBGAccessByLevel (Player.cpp:23656-23672): the player's
+// level is capped at the max player level (DEFAULT_MAX_LEVEL in C++) and must fall inside the
+// battleground_template row's [MinLvl, MaxLvl]; a missing row (== GetBattlegroundTemplate null)
+// denies access.
+func (s *session) bgAccessByLevel(ctx context.Context, bgTypeID uint32) bool {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.player == nil {
+		return false
+	}
+	var minLvl, maxLvl uint32
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT MinLvl, MaxLvl FROM battleground_template WHERE ID = ?`, bgTypeID).Scan(&minLvl, &maxLvl); err != nil {
+		return false
+	}
+	maxLevel := s.server.Config.MaxPlayerLevel
+	if maxLevel == 0 {
+		maxLevel = 80
+	}
+	level := uint32(s.player.Level)
+	if level > maxLevel {
+		level = maxLevel
+	}
+	return level >= minLvl && level <= maxLvl
 }
 
 // handleBattlefieldList processes CMSG_BATTLEFIELD_LIST (0x23C).
