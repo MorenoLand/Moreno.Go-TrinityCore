@@ -20,7 +20,7 @@ const (
 type creatureQueryData struct {
 	Entry       uint32
 	Name        string
-	Subname     string
+	Title       string
 	IconName    string
 	Flags       uint32
 	Type        uint32
@@ -70,14 +70,14 @@ func (s *session) handleCreatureQuery(ctx context.Context, payload []byte) bool 
 func (s *session) loadCreatureQueryData(ctx context.Context, entry uint32) (creatureQueryData, error) {
 	var data creatureQueryData
 	var killCredit1, killCredit2, model1, model2, model3, model4, flags, creatureType, family, rank, leader, movementID int64
-	var name, subname, iconName sql.NullString
+	var name, title, iconName sql.NullString
 	var health, mana float64
-	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT name, COALESCE(subname, ''), COALESCE(IconName, ''), type_flags, type, family, rank, KillCredit1, KillCredit2, modelid1, modelid2, modelid3, modelid4, HealthModifier, ManaModifier, RacialLeader, movementId FROM creature_template WHERE entry = ?", entry).Scan(&name, &subname, &iconName, &flags, &creatureType, &family, &rank, &killCredit1, &killCredit2, &model1, &model2, &model3, &model4, &health, &mana, &leader, &movementID)
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT name, COALESCE(Title, ''), COALESCE(IconName, ''), type_flags, type, family, rank, KillCredit1, KillCredit2, modelid1, modelid2, modelid3, modelid4, HealthModifier, ManaModifier, RacialLeader, movementId FROM creature_template WHERE entry = ?", entry).Scan(&name, &title, &iconName, &flags, &creatureType, &family, &rank, &killCredit1, &killCredit2, &model1, &model2, &model3, &model4, &health, &mana, &leader, &movementID)
 	if err != nil {
 		return data, err
 	}
 	data.Entry = entry
-	data.Name, data.Subname, data.IconName = name.String, subname.String, iconName.String
+	data.Name, data.Title, data.IconName = name.String, title.String, iconName.String
 	data.Flags, data.Type, data.Family, data.Rank = uint32(flags), uint32(creatureType), uint32(family), uint32(rank)
 	data.KillCredits = [creatureKillCredits]uint32{uint32(killCredit1), uint32(killCredit2)}
 	data.Models = [creatureModels]uint32{uint32(model1), uint32(model2), uint32(model3), uint32(model4)}
@@ -104,7 +104,7 @@ func buildCreatureQueryResponse(data creatureQueryData, allow bool) []byte {
 	packet.WriteU8(0)
 	packet.WriteU8(0)
 	packet.WriteU8(0)
-	packet.WriteCString(data.Subname)
+	packet.WriteCString(data.Title)
 	packet.WriteCString(data.IconName)
 	packet.WriteU32(data.Flags)
 	packet.WriteU32(data.Type)
