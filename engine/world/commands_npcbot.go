@@ -73,7 +73,7 @@ const (
 
 // handleCmdNpcBot dispatches the "npcbot" root (botcommands.cpp:124-126).
 func (s *session) handleCmdNpcBot(ctx context.Context, args []string) {
-	const syntax = "Syntax: .npcbot add|remove|spawn|move|delete|lookup|revive|reloadconfig|command|info|hide|unhide|show|recall|kill|suicide"
+	const syntax = "Syntax: .npcbot add|remove|spawn|move|delete|lookup|revive|reloadconfig|command|info|hide|unhide|show|recall|kill|suicide|distance|order|set"
 	if len(args) == 0 {
 		s.sendSysMessage(syntax)
 		return
@@ -123,6 +123,8 @@ func (s *session) handleCmdNpcBot(ctx context.Context, args []string) {
 		s.handleNpcBotDistanceCommand(ctx, rest)
 	case strings.HasPrefix("order", sub):
 		s.handleNpcBotOrderCommand(ctx, rest)
+	case strings.HasPrefix("set", sub):
+		s.handleNpcBotSetCommand(ctx, rest)
 	default:
 		s.sendSysMessage(syntax)
 	}
@@ -1362,4 +1364,244 @@ func (s *session) handleNpcBotKillCommand(ctx context.Context) {
 		return // C++: KillBot(bot) → true, no message
 	}
 	s.sendSysMessage("You must select one of your bots or yourself")
+}
+
+// handleNpcBotSetCommand dispatches the ".npcbot set" sub-table
+// (botcommands.cpp:65-70: faction/owner/spec, all GM_COMMANDS, Console::No).
+// The C++ table matches empty input against "faction" first (empty input
+// matches every arm name), so bare ".npcbot set" answers the faction arm's
+// usage gate — the distance-arm precedent.
+func (s *session) handleNpcBotSetCommand(ctx context.Context, args []string) {
+	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
+		s.sendSysMessage("NpcBots is unavailable.")
+		return
+	}
+	if len(args) == 0 {
+		s.handleNpcBotSetFactionCommand(ctx, nil)
+		return
+	}
+	switch sub := strings.ToLower(args[0]); {
+	case strings.HasPrefix("faction", sub):
+		s.handleNpcBotSetFactionCommand(ctx, args[1:])
+	case strings.HasPrefix("owner", sub):
+		s.handleNpcBotSetOwnerCommand(ctx, args[1:])
+	case strings.HasPrefix("spec", sub):
+		s.handleNpcBotSetSpecCommand(ctx, args[1:])
+	default:
+		s.sendSysMessage("Syntax: .npcbot set faction|owner|spec")
+	}
+}
+
+// handleNpcBotSetFactionCommand mirrors HandleNpcBotSetFactionCommand
+// (botcommands.cpp:580): sets the faction of the selected uncontrolled
+// npcbot, persisted in the DB. The !ubot || !*args gate answers the C++ usage
+// lines verbatim; the creature + NPCBOT-template-mask + owner==0 decode
+// answers ToCreature()/IsNPCBot()/IsFreeBot() == the add-arm convention. The
+// 'a'/'h'/'m'/'f' first-char shortcuts (case-sensitive == C++) map to
+// 1802/1801/14/35; anything else goes through the |Hfaction link extractor
+// (== ChatHandler::extractKeyFromLink, extractModifyFactionKey in
+// commands_modify4.go) and atoi == C++. BotDataMgr::UpdateNpcBotData(
+// NPCBOT_UPDATE_FACTION) == NPCBotManager.Update(NpcBotUpdateFaction); the
+// faction-template check == sFactionTemplateStore.LookupEntry via
+// factionTemplateEntry; bot->GetBotAI()->ReInitFaction() is a live bot_ai leg
+// (bot_ai is unconverted) with no Go model.
+func (s *session) handleNpcBotSetFactionCommand(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCBotSetFaction) {
+		return
+	}
+	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
+		s.sendSysMessage("NpcBots is unavailable.")
+		return
+	}
+	mgr := s.server.Features.NPCBots
+	sel := s.selection
+	if sel == 0 || len(args) == 0 {
+		s.sendSysMessage(".npcbot set faction #faction")
+		s.sendSysMessage("Sets faction for selected npcbot (saved in DB)")
+		s.sendSysMessage("Use 'a', 'h', 'm' or 'f' as argument to set faction to alliance, horde, monsters (hostile to all) or friends (friendly to all)")
+		return
+	}
+	var entry uint32
+	free := false
+	switch uint16(sel >> 48) {
+	case 0xF130, 0xF140, 0xF150: // unit/pet/vehicle: the IsAnyTypeCreature set (mail.go:157)
+		entry = uint32((sel >> 24) & 0x00FFFFFF)
+		if flagsExtra, ok := s.npcTemplateGate(ctx, entry); ok && flagsExtra&npcbotCreatureFlagMask != 0 {
+			if data, ok := mgr.Get(entry); ok && data.Owner == 0 {
+				free = true // == !bot->GetBotAI()->GetBotOwnerGuid()
+			}
+		}
+	}
+	if !free {
+		s.sendSysMessage("You must select uncontrolled npcbot")
+		return
+	}
+	var factionID uint32
+	switch args[0][0] {
+	case 'a':
+		factionID = 1802 // Alliance
+	case 'h':
+		factionID = 1801 // Horde
+	case 'm':
+		factionID = 14 // Monsters
+	case 'f':
+		factionID = 35 // Friendly to all
+	default:
+		key, _ := extractModifyFactionKey(args[0])
+		if n, _ := strconv.Atoi(key); n > 0 {
+			factionID = uint32(n)
+		}
+	}
+	if _, ok := s.factionTemplateEntry(factionID); !ok {
+		// LANG_WRONG_FACTION (129): the enUS text lives in the TDB seed,
+		// which is not part of this checkout (world.sql seeds zero
+		// trinity_string rows) and no local DB is available, so the exact
+		// wording is unverifiable — the semantic content is answered instead.
+		s.sendSysMessage(fmt.Sprintf("Invalid faction id %d", factionID))
+		return
+	}
+	if err := mgr.Update(ctx, entry, NpcBotUpdateFaction, factionID); err != nil {
+		s.debug("npcbot set faction failed", "account", s.accountName, "entry", entry, "error", err)
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("%s's faction set to %d", s.npcbotTemplateName(ctx, entry), factionID))
+}
+
+// handleNpcBotSetOwnerCommand mirrors HandleNpcBotSetOwnerCommand
+// (botcommands.cpp:634): binds the selected npcbot to a new player owner by
+// guid or name, persisted in the DB. The !ubot || !*args gate answers the C++
+// usage lines verbatim; the creature + NPCBOT-template-mask decode answers
+// ToCreature()/IsNPCBot() (== the delete-arm gate), and the persisted owner
+// answers GetBotAI()->GetBotOwnerGuid() for the "already has owner" gate.
+// The name/guid resolution mirrors C++: a numeric token looks up the name by
+// guid (miss → found=false), otherwise the guid by name (miss → guidlow=0);
+// !guidlow || !found answers "Player not found". BotDataMgr::UpdateNpcBotData(
+// NPCBOT_UPDATE_OWNER) == NPCBotManager.Update(NpcBotUpdateOwner); bot->
+// GetBotAI()->ReinitOwner() is a live bot_ai leg with no Go model.
+func (s *session) handleNpcBotSetOwnerCommand(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCBotSetOwner) {
+		return
+	}
+	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
+		s.sendSysMessage("NpcBots is unavailable.")
+		return
+	}
+	mgr := s.server.Features.NPCBots
+	sel := s.selection
+	if sel == 0 || len(args) == 0 {
+		s.sendSysMessage(".npcbot set owner #guid | #name")
+		s.sendSysMessage("Binds selected npcbot to new player owner using guid or name and updates owner in DB")
+		return
+	}
+	var entry uint32
+	isBot := false
+	switch uint16(sel >> 48) {
+	case 0xF130, 0xF140, 0xF150: // unit/pet/vehicle: the IsAnyTypeCreature set (mail.go:157)
+		entry = uint32((sel >> 24) & 0x00FFFFFF)
+		if flagsExtra, ok := s.npcTemplateGate(ctx, entry); ok && flagsExtra&npcbotCreatureFlagMask != 0 {
+			isBot = true
+		}
+	}
+	if !isBot {
+		s.sendSysMessage("You must select a npcbot")
+		return
+	}
+	var owner uint32
+	if data, ok := mgr.Get(entry); ok {
+		owner = data.Owner
+	}
+	if owner != 0 {
+		s.sendSysMessage("This npcbot already has owner")
+		return
+	}
+	token := args[0]
+	guidlow, _ := strconv.Atoi(token)
+	characterName := token
+	found := true
+	cdb := s.server.CharactersStore
+	if guidlow != 0 {
+		// C++: GetCharacterNameByGuid overwrites characterName; a miss leaves
+		// found=false == "Player not found".
+		if cdb == nil || cdb.DB == nil {
+			found = false
+		} else {
+			var name sql.NullString
+			if err := cdb.DB.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", guidlow).Scan(&name); err != nil || !name.Valid || name.String == "" {
+				found = false
+			} else {
+				characterName = name.String
+			}
+		}
+	} else if cdb != nil && cdb.DB != nil {
+		// C++: GetCharacterGuidByName; a miss leaves guidlow=0.
+		var guid int64
+		if err := cdb.DB.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ?", token).Scan(&guid); err != nil || guid <= 0 {
+			guidlow = 0
+		} else {
+			guidlow = int(guid)
+		}
+	}
+	if guidlow == 0 || !found {
+		s.sendSysMessage("Player not found")
+		return
+	}
+	if err := mgr.Update(ctx, entry, NpcBotUpdateOwner, uint32(guidlow)); err != nil {
+		s.debug("npcbot set owner failed", "account", s.accountName, "entry", entry, "error", err)
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("%s's new owner is %s (guidlow: %d)", s.npcbotTemplateName(ctx, entry), characterName, guidlow))
+}
+
+// handleNpcBotSetSpecCommand mirrors HandleNpcBotSetSpecCommand
+// (botcommands.cpp:689): changes the talent spec of the selected npcbot. The
+// !ubot || !*args gate answers the C++ usage lines verbatim; the creature +
+// NPCBOT-template-mask decode answers ToCreature()/IsNPCBot() (== the
+// delete-arm gate). The range check == C++ verbatim, including the C++ quirk
+// that the "Spec is out of range (1 to 3)!" text claims 1-3 while the
+// comparison is against BOT_SPEC_BEGIN=1 (botcommon.h:801, ==
+// BOT_SPEC_WARRIOR_ARMS) and BOT_SPEC_END=31 (botcommon.h:802, ==
+// BOT_SPEC_DEFAULT); the (uint8)atoi cast wraps == C++ (e.g. 300 → 44, in
+// range). C++ calls bot_ai::SetSpec(spec) with activate=true, whose persisted
+// arm BotDataMgr::UpdateNpcBotData(NPCBOT_UPDATE_SPEC) == NPCBotManager.
+// Update(NpcBotUpdateSpec); the rest of SetSpec (UnsummonAll, spell/talent
+// re-init) is a live bot_ai leg with no Go model.
+func (s *session) handleNpcBotSetSpecCommand(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCBotSetSpec) {
+		return
+	}
+	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
+		s.sendSysMessage("NpcBots is unavailable.")
+		return
+	}
+	mgr := s.server.Features.NPCBots
+	sel := s.selection
+	if sel == 0 || len(args) == 0 {
+		s.sendSysMessage(".npcbot set spec #specnumber")
+		s.sendSysMessage("Changes talent spec for selected npcbot")
+		return
+	}
+	var entry uint32
+	isBot := false
+	switch uint16(sel >> 48) {
+	case 0xF130, 0xF140, 0xF150: // unit/pet/vehicle: the IsAnyTypeCreature set (mail.go:157)
+		entry = uint32((sel >> 24) & 0x00FFFFFF)
+		if flagsExtra, ok := s.npcTemplateGate(ctx, entry); ok && flagsExtra&npcbotCreatureFlagMask != 0 {
+			isBot = true
+		}
+	}
+	if !isBot {
+		s.sendSysMessage("You must select a npcbot")
+		return
+	}
+	n, _ := strconv.Atoi(args[0])
+	spec := uint8(n)           // (uint8)atoi == C++; values wrap (300 → 44)
+	if spec < 1 || spec > 31 { // BOT_SPEC_BEGIN..BOT_SPEC_END (botcommon.h:801-802)
+		s.sendSysMessage("Spec is out of range (1 to 3)!")
+		return
+	}
+	if err := mgr.Update(ctx, entry, NpcBotUpdateSpec, spec); err != nil {
+		s.debug("npcbot set spec failed", "account", s.accountName, "entry", entry, "error", err)
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("%s's new spec is %d", s.npcbotTemplateName(ctx, entry), spec))
 }

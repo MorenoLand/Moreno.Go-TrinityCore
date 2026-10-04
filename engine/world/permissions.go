@@ -1115,6 +1115,21 @@ const permissionCommandNPCBotRevive uint32 = 10007
 // Go-side-alias convention as permissionCommandNPCBotAdd.
 const permissionCommandNPCBotReloadConfig uint32 = 10008
 
+// permissionCommandNPCBotSetFaction gates the ".npcbot set faction" arm
+// (HandleNpcBotSetFactionCommand, botcommands.cpp:580, GM_COMMANDS). Same
+// Go-side-alias convention as permissionCommandNPCBotAdd.
+const permissionCommandNPCBotSetFaction uint32 = 10009
+
+// permissionCommandNPCBotSetOwner gates the ".npcbot set owner" arm
+// (HandleNpcBotSetOwnerCommand, botcommands.cpp:634, GM_COMMANDS). Same
+// Go-side-alias convention as permissionCommandNPCBotAdd.
+const permissionCommandNPCBotSetOwner uint32 = 10010
+
+// permissionCommandNPCBotSetSpec gates the ".npcbot set spec" arm
+// (HandleNpcBotSetSpecCommand, botcommands.cpp:689, GM_COMMANDS). Same
+// Go-side-alias convention as permissionCommandNPCBotAdd.
+const permissionCommandNPCBotSetSpec uint32 = 10011
+
 // permissionCommandNPCEvade mirrors rbac::RBAC_PERM_COMMAND_NPC_EVADE (RBAC.h:704).
 const permissionCommandNPCEvade uint32 = 837
 
