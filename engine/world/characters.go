@@ -237,14 +237,20 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	}
 	raceAllowed, raceRequiredExpansion := s.server.raceDefinition(race)
 	classAllowed, classRequiredExpansion := s.server.classDefinition(class)
-	if !raceAllowed || s.server.Config.CharacterCreatingDisabledRaceMask&(uint32(1)<<(race-1)) != 0 || !classAllowed || s.server.Config.CharacterCreatingDisabledClassMask&(uint32(1)<<(class-1)) != 0 {
-		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateDisabled)
+	if !raceAllowed || !classAllowed {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateFailed)
 	}
 	if raceRequiredExpansion > uint32(s.accountExpansion) {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateExpansion)
 	}
 	if classRequiredExpansion > uint32(s.accountExpansion) {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateExpansionClass)
+	}
+	if s.server.Config.CharacterCreatingDisabledRaceMask&(uint32(1)<<(race-1)) != 0 {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateDisabled)
+	}
+	if s.server.Config.CharacterCreatingDisabledClassMask&(uint32(1)<<(class-1)) != 0 {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateDisabled)
 	}
 	if class == 6 {
 		if s.server.Config.DeathKnightsPerRealm == 0 {
