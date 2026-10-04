@@ -1808,6 +1808,16 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 
 	s.lastCastTime = time.Now()
 	castTime := s.calculateSpellCastTime(spell)
+	// Spell::prepare (Spell.cpp:3125-3133): the .cheat casttime arm forces
+	// m_casttime to 0 after the first CheckCast pass (the C++ comment's
+	// charge-count rationale). GetCommandStatus(CHEAT_CASTTIME)
+	// (Player.h:982) reads the cheatCasttime bit (Player.h:825) of
+	// _activeCheats, mirrored by ActiveCheats; the m_caster->ToPlayer()
+	// arm is vacuous here — handleCastSpell serves the client path only,
+	// so s.player is non-nil by the early return above.
+	if s.player.ActiveCheats&cheatCasttime != 0 {
+		castTime = 0
+	}
 	// Spell::prepare (Spell.cpp:3139-3149): channeled spells and spells with
 	// cast time cannot start while moving, unless the channel allows movement.
 	if (isChanneledSpell(spell) || castTime > 0) && s.isMoving && spell.InterruptFlags&spellInterruptFlagMovement != 0 {
