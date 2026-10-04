@@ -22,12 +22,13 @@ const (
 	spellCastFlagGo       uint32 = 0x00000100
 	spellCastFlagPending  uint32 = 0x00000001
 
-	spellAttr3MainHand             uint32 = 0x00000400 // SPELL_ATTR3_MAIN_HAND: Require main hand weapon (SharedDefines.h:533)
-	spellAttr3ReqOffhand           uint32 = 0x01000000 // SPELL_ATTR3_REQ_OFFHAND: Require offhand weapon (SharedDefines.h:547)
-	spellAttr3ReqWand              uint32 = 0x00400000 // SPELL_ATTR3_REQ_WAND: Requires equipped Wand (SharedDefines.h:545)
-	spellAttr5HideDuration         uint32 = 0x00000400 // SPELL_ATTR5_HIDE_DURATION (SharedDefines.h:607)
-	spellAttr5CanChannelWhenMoving uint32 = 0x00000001 // SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING (SharedDefines.h:597)
-	spellAttr5SingleTarget         uint32 = 0x00000020 // SPELL_ATTR5_SINGLE_TARGET_SPELL (SharedDefines.h:602)
+	spellAttr3MainHand              uint32 = 0x00000400 // SPELL_ATTR3_MAIN_HAND: Require main hand weapon (SharedDefines.h:533)
+	spellAttr3ReqOffhand            uint32 = 0x01000000 // SPELL_ATTR3_REQ_OFFHAND: Require offhand weapon (SharedDefines.h:547)
+	spellAttr3ReqWand               uint32 = 0x00400000 // SPELL_ATTR3_REQ_WAND: Requires equipped Wand (SharedDefines.h:545)
+	spellAttr5HideDuration          uint32 = 0x00000400 // SPELL_ATTR5_HIDE_DURATION (SharedDefines.h:607)
+	spellAttr5CanChannelWhenMoving  uint32 = 0x00000001 // SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING (SharedDefines.h:597)
+	spellAttr5SingleTarget          uint32 = 0x00000020 // SPELL_ATTR5_SINGLE_TARGET_SPELL (SharedDefines.h:602)
+	spellAttr5SkipCheckcastLosCheck uint32 = 0x04000000 // SPELL_ATTR5_SKIP_CHECKCAST_LOS_CHECK (SharedDefines.h:623) — ATTR5 is Go's AttributesEx5
 
 	spellInterruptFlagMovement uint32 = 0x01 // SPELL_INTERRUPT_FLAG_MOVEMENT (SpellDefines.h:30)
 
@@ -91,12 +92,14 @@ const (
 	spellAttr0LevelDamageCalculation uint32 = 0x00080000 // SPELL_ATTR0_LEVEL_DAMAGE_CALCULATION (SharedDefines.h:431)
 	spellAttr0Negative1              uint32 = 0x04000000 // SPELL_ATTR0_NEGATIVE_1 (SharedDefines.h:438) — forces the spell to be treated as negative
 	spellAttr2Unk3                   uint32 = 0x00000008 // SPELL_ATTR2_UNK3 (SharedDefines.h:489) — "Ignore aura scaling"; GetAuraRankForLevel returns the cast rank — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
+	spellAttr2CanTargetNotInLOS      uint32 = 0x00000004 // SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS (SharedDefines.h:488) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr3DrainSoul              uint32 = 0x08000000 // SPELL_ATTR3_DRAIN_SOUL (SharedDefines.h:550) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 
 	spellFailedEquippedItemClass         uint8  = 29  // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
 	spellFailedEquippedItemClassMainhand uint8  = 30  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
 	spellFailedEquippedItemClassOffhand  uint8  = 31  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND (SharedDefines.h:1013)
 	spellFailedNotInFront                uint8  = 61  // SPELL_FAILED_NOT_INFRONT (SharedDefines.h:1042)
+	spellFailedLineOfSight               uint8  = 47  // SPELL_FAILED_LINE_OF_SIGHT (SharedDefines.h:1029)
 	spellFailedCustomError               uint8  = 172 // SPELL_FAILED_CUSTOM_ERROR (SharedDefines.h:1154)
 	spellCustomErrorGMOnly               uint32 = 65  // SPELL_CUSTOM_ERROR_GM_ONLY (SharedDefines.h:1241)
 	spellFailedBadTargets                uint8  = 12  // SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992)
@@ -1772,6 +1775,43 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 					return true
 				}
 			}
+
+			// Line-of-sight arm (Spell::CheckCast, Spell.cpp:5391-5401): the
+			// unit-target LOS leg of the CheckCast unit block, after the
+			// behind/facing arms in C++ relative order. Fails
+			// SPELL_FAILED_LINE_OF_SIGHT when the caster has no terrain LoS
+			// to the target, unless the spell ignores LoS. The
+			// m_caster->GetTypeId() != TYPEID_GAMEOBJECT wrapper is vacuous
+			// (client-initiated path: the caster is always the session
+			// player); the IsTriggered/m_triggeredByAuraSpell dynObj-origin
+			// arm is vacuous here (triggered casts ride
+			// castSpellDirectWithOverrides, which runs no CheckCast
+			// gauntlet). Documented no-bridge:
+			// DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, id, nullptr,
+			// SPELL_DISABLE_LOS) — Go has no DisableMgr model, so the
+			// disable leg is unmodeled. Documented delta: the
+			// completion-path LOS revalidation does not apply these
+			// attribute exemptions yet.
+			if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 && spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 && s.server != nil {
+				if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedLineOfSight), true)
+					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "line of sight")
+					return true
+				}
+			}
+		}
+	}
+
+	// Dest line-of-sight arm (Spell::CheckCast, Spell.cpp:5404-5413): spells
+	// with a destination target fail SPELL_FAILED_LINE_OF_SIGHT when the
+	// caster has no terrain LoS to the dest point, with the same LoS-ignoring
+	// attribute exemptions as the unit-target arm (the DisableMgr arm stays
+	// unmodeled here too).
+	if target.Flags&protocol.SpellTargetFlagDestLocation != 0 && spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 && spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 && s.server != nil {
+		if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, target.Destination.X, target.Destination.Y, target.Destination.Z) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedLineOfSight), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "line of sight to dest")
+			return true
 		}
 	}
 
