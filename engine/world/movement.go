@@ -163,6 +163,34 @@ func (s *session) handleMoveTeleportAck(ctx context.Context, payload []byte) boo
 	return true
 }
 
+// handleMoveSetCanFlyAck mirrors WorldSession::HandleMoveSetCanFlyAckOpcode
+// (MiscHandler.cpp:1384-1398): the client acknowledges a can-fly toggle, and
+// the server applies the reported movement flags to the mover's canonical
+// movement info. Only flags are copied, not flags2 — matching C++.
+func (s *session) handleMoveSetCanFlyAck(payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	b := protocol.NewReader(payload)
+	if _, err := b.ReadPackedGUID(); err != nil {
+		s.debug("set can fly ack rejected", "account", s.accountName, "reason", "malformed guid")
+		return false
+	}
+	if _, err := b.ReadU32(); err != nil {
+		s.debug("set can fly ack rejected", "account", s.accountName, "reason", "malformed unk")
+		return false
+	}
+	info, err := readMovementInfo(b)
+	if err != nil {
+		s.debug("set can fly ack rejected", "account", s.accountName, "reason", "malformed movement", "error", err)
+		return false
+	}
+	s.movementMu.Lock()
+	s.lastMovementInfo.Flags = info.Flags
+	s.movementMu.Unlock()
+	return true
+}
+
 func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true

@@ -1713,7 +1713,11 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleMoveTeleportAck(ctx, payload) {
 				return
 			}
-		case uint32(protocol.OpcodeMSG_MOVE_TELEPORT), uint32(protocol.OpcodeCMSG_MOVE_SET_CAN_FLY_ACK):
+		case uint32(protocol.OpcodeCMSG_MOVE_SET_CAN_FLY_ACK):
+			if !state.authed || !state.handleMoveSetCanFlyAck(payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_MOVE_TELEPORT):
 			// Movement acknowledged by client
 		case uint32(protocol.OpcodeCMSG_FORCE_RUN_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_RUN_BACK_SPEED_CHANGE_ACK),
 			uint32(protocol.OpcodeCMSG_FORCE_SWIM_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_SWIM_BACK_SPEED_CHANGE_ACK),
