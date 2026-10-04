@@ -835,9 +835,13 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 			if nextMailID <= 0 {
 				nextMailID = 1
 			}
+			// C++ MailDraft::SendMailTo (Mail.cpp:211-215): the COD-payment draft
+			// carries no COD, so expiry is 90 days when the taker is a game
+			// master, 30 days otherwise.
+			expireTime := now + mailSendExpireDelay(s.player.ExtraFlags&playerExtraGMOn != 0, 0)
 			_, _ = cdb.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
 				VALUES (?, 0, 41, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 0x08)`,
-				nextMailID, s.playerGUID, senderGUID, subject, now+30*86400, now, cod)
+				nextMailID, s.playerGUID, senderGUID, subject, expireTime, now, cod)
 			s.sendMailNotify(uint64(senderGUID))
 		}
 		s.sendPlayerMoneyUpdate()
