@@ -1080,6 +1080,16 @@ const permissionCommandNPCTame uint32 = 601
 // commandAllowed's security>=1 fast path still carries the GM gate.
 const permissionCommandNPCBotAdd uint32 = 10001
 
+// permissionCommandNPCBotRemove gates the ".npcbot remove" arm
+// (HandleNpcBotRemoveCommand, botcommands.cpp:103, GM_COMMANDS). Same
+// Go-side-alias convention as permissionCommandNPCBotAdd.
+const permissionCommandNPCBotRemove uint32 = 10002
+
+// permissionCommandNPCBotSpawn gates the ".npcbot spawn" arm
+// (HandleNpcBotSpawnCommand, botcommands.cpp:104, GM_COMMANDS). Same
+// Go-side-alias convention as permissionCommandNPCBotAdd.
+const permissionCommandNPCBotSpawn uint32 = 10003
+
 // permissionCommandNPCEvade mirrors rbac::RBAC_PERM_COMMAND_NPC_EVADE (RBAC.h:704).
 const permissionCommandNPCEvade uint32 = 837
 
