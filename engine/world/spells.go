@@ -5898,7 +5898,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectThreat:
 				amount := eff.BasePoints + 1
 				for _, effectTarget := range hitTargets {
-					s.applySpellThreat(effCtx, effectTarget, amount)
+					s.applySpellThreat(effCtx, spell, effectTarget, amount)
 				}
 			case spellEffectHealMaxHealth:
 				for _, effectTarget := range hitTargets {
@@ -7332,7 +7332,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// handle-mode split is structural on both paths).
 			s.triggerSpellEffectTarget(ctx, spellID, eff, targetGUID)
 		} else if eff.Effect == spellEffectThreat {
-			s.applySpellThreat(ctx, targetGUID, eff.BasePoints+1)
+			s.applySpellThreat(ctx, spell, targetGUID, eff.BasePoints+1)
 		} else if eff.Effect == spellEffectHealMaxHealth {
 			s.executeSpellMaxHealthHeal(ctx, targetGUID, spellID)
 		} else if eff.Effect == spellEffectAddComboPoints {
@@ -8080,13 +8080,41 @@ func (s *session) adjustSpellPower(ctx context.Context, targetGUID uint64, power
 	}
 }
 
-func (s *session) applySpellThreat(ctx context.Context, targetGUID uint64, amount int32) {
+func (s *session) applySpellThreat(ctx context.Context, spell wotlk.Spell, targetGUID uint64, amount int32) {
 	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 || amount <= 0 {
+		return
+	}
+	// Spell::EffectThreat (SpellEffects.cpp:3476): a dead caster generates no
+	// threat.
+	if s.player.Health == 0 {
+		return
+	}
+	// ThreatManager::AddThreat step 1 (ThreatManager.cpp:311-314): a
+	// SPELL_ATTR1_NO_THREAT spell generates nothing, checked before anything
+	// else on the C++ path.
+	if spell.AttributesEx&spellAttr1NoThreat != 0 {
 		return
 	}
 	s.server.motionMu.Lock()
 	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
 	if motion == nil || motion.Health == 0 || isCreaturePassive(motion) {
+		s.server.motionMu.Unlock()
+		return
+	}
+	// ThreatManager::CanHaveThreatList (ThreatManager.cpp:156-178): pets cannot
+	// hold a threat list (same PetID/OwnerGUID convention as kill.go:219).
+	// Totems, triggers and player-summoned minions/guardians carry no identity
+	// markers on creatureMotion, so those arms stay unbridged.
+	if motion.PetID != 0 && motion.OwnerGUID != 0 {
+		s.server.motionMu.Unlock()
+		return
+	}
+	// ThreatManager::AddThreat step 1 (ThreatManager.cpp:315-317): a
+	// SPELL_ATTR3_NO_INITIAL_AGGRO spell generates nothing when the owner is
+	// not engaged (motion.InCombat is the engagement proxy), checked before
+	// the combat set below. The redirect and vehicle legs are unbridged —
+	// EffectThreat passes ignoreRedirects and Go has no vehicle model.
+	if spell.AttributesEx3&spellAttr3NoInitialAggro != 0 && !motion.InCombat {
 		s.server.motionMu.Unlock()
 		return
 	}
