@@ -240,7 +240,7 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		}
 	}
 	info.Flags &^= movementRoot
-	info.Flags = sanitizeMovementFlags(info.Flags)
+	info.Flags = s.sanitizeMovementFlags(info.Flags)
 	isMove := info.Flags&(movementForward|movementBackward|movementStrafeLeft|movementStrafeRight|movementFalling) != 0
 	s.isMoving = isMove
 	if isMove {
@@ -718,7 +718,7 @@ func (s *session) movementInfoForCreate(state playerState) movementInfo {
 	return info
 }
 
-func sanitizeMovementFlags(flags uint32) uint32 {
+func (s *session) sanitizeMovementFlags(flags uint32) uint32 {
 	if flags&movementForward != 0 && flags&movementBackward != 0 {
 		flags &^= movementForward | movementBackward
 	}
@@ -730,6 +730,18 @@ func sanitizeMovementFlags(flags uint32) uint32 {
 	}
 	if flags&movementAscending != 0 && flags&movementDescending != 0 {
 		flags &^= movementAscending | movementDescending
+	}
+	// Cannot fly if no fly auras present. Exception is being a GM — account
+	// security governs, not an active .gm flag (WorldSession.cpp:1006-1009;
+	// s.security is the account level, 0 = SEC_PLAYER). s is the only mover
+	// in Go, so HasAuraType on the player mirrors the UnitBeingMoved leg.
+	if s.security == 0 && flags&(movementFlying|movementCanFly) != 0 &&
+		!s.hasAuraType(spellAuraFly) && !s.hasAuraType(spellAuraMountedFlightSpeed) {
+		flags &^= movementFlying | movementCanFly
+	}
+	// Cannot fly and fall at the same time (WorldSession.cpp:1011-1012).
+	if flags&(movementCanFly|movementDisableGravity) != 0 && flags&movementFalling != 0 {
+		flags &^= movementFalling
 	}
 	return flags
 }
