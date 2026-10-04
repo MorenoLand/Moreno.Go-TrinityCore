@@ -1100,6 +1100,16 @@ const permissionCommandNPCBotMove uint32 = 10004
 // Go-side-alias convention as permissionCommandNPCBotAdd.
 const permissionCommandNPCBotDelete uint32 = 10005
 
+// permissionCommandNPCBotLookup gates the ".npcbot lookup" arm
+// (HandleNpcBotLookupCommand, botcommands.cpp:107, GM_COMMANDS). Same
+// Go-side-alias convention as permissionCommandNPCBotAdd.
+const permissionCommandNPCBotLookup uint32 = 10006
+
+// permissionCommandNPCBotRevive gates the ".npcbot revive" arm
+// (HandleNpcBotReviveCommand, botcommands.cpp:108, GM_COMMANDS). Same
+// Go-side-alias convention as permissionCommandNPCBotAdd.
+const permissionCommandNPCBotRevive uint32 = 10007
+
 // permissionCommandNPCEvade mirrors rbac::RBAC_PERM_COMMAND_NPC_EVADE (RBAC.h:704).
 const permissionCommandNPCEvade uint32 = 837
 

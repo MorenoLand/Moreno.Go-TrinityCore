@@ -5,15 +5,16 @@ import (
 	"database/sql"
 	"fmt"
 	"math/rand"
+	"sort"
 	"strings"
 )
 
 // This file wires the ".npcbot" command family
 // (src/server/game/AI/NpcBots/botcommands.cpp:97-125). The "add", "remove",
-// "spawn", "move" and "delete" arms are converted; they give Recruit/
-// AddBotFree/Add their first real call sites. The remaining arms (lookup/
-// revive/reloadconfig/command/info/hide/unhide/show/recall/kill/suicide/
-// distance/order) land in later units.
+// "spawn", "move", "delete", "lookup" and "revive" arms are converted; the
+// first five give Recruit/AddBotFree/Add their first real call sites. The
+// remaining arms (reloadconfig/command/info/hide/unhide/show/recall/kill/
+// suicide/distance/order) land in later units.
 //
 // The "add"/"remove" arms are selection-driven in C++ (owner->GetSelectedUnit()
 // must be a live uncontrolled/controlled npcbot creature). Go keeps no
@@ -41,11 +42,34 @@ const (
 	npcBotClassDruid      = uint8(11)
 	npcBotSpecDefault     = uint8(31)          // BOT_SPEC_DEFAULT (botcommon.h:799)
 	npcBotSpawnFlagNPCBot = uint32(0x04000000) // CREATURE_FLAG_EXTRA_NPCBOT (CreatureData.h:63)
+
+	// Bot template entry range and class/race bounds for the lookup arm.
+	npcBotEntryBegin       = uint32(70001) // BOT_ENTRY_BEGIN (botcommon.h:13)
+	npcBotEntryEnd         = uint32(71000) // BOT_ENTRY_END (botcommon.h:14)
+	npcBotEntryMirrorImage = uint32(70552) // BOT_ENTRY_MIRROR_IMAGE_BM (botcommon.h:17)
+	npcBotClassEnd         = uint8(18)     // BOT_CLASS_END (botcommon.h:718)
+	npcBotRaceMax          = uint8(12)     // MAX_RACES (SharedDefines.h:110)
+)
+
+// Player races (SharedDefines.h:84-110), needed by the lookup arm's label
+// switch. RACE_UNDEAD_PLAYER is labeled "Forsaken" == the C++ switch.
+const (
+	npcBotRaceNone     = uint8(0)  // RACE_NONE
+	npcBotRaceHuman    = uint8(1)  // RACE_HUMAN
+	npcBotRaceOrc      = uint8(2)  // RACE_ORC
+	npcBotRaceDwarf    = uint8(3)  // RACE_DWARF
+	npcBotRaceNightElf = uint8(4)  // RACE_NIGHTELF
+	npcBotRaceUndead   = uint8(5)  // RACE_UNDEAD_PLAYER
+	npcBotRaceTauren   = uint8(6)  // RACE_TAUREN
+	npcBotRaceGnome    = uint8(7)  // RACE_GNOME
+	npcBotRaceTroll    = uint8(8)  // RACE_TROLL
+	npcBotRaceBloodElf = uint8(10) // RACE_BLOODELF
+	npcBotRaceDraenei  = uint8(11) // RACE_DRAENEI
 )
 
 // handleCmdNpcBot dispatches the "npcbot" root (botcommands.cpp:124-126).
 func (s *session) handleCmdNpcBot(ctx context.Context, args []string) {
-	const syntax = "Syntax: .npcbot add|remove|spawn|move|delete"
+	const syntax = "Syntax: .npcbot add|remove|spawn|move|delete|lookup|revive"
 	if len(args) == 0 {
 		s.sendSysMessage(syntax)
 		return
@@ -69,6 +93,10 @@ func (s *session) handleCmdNpcBot(ctx context.Context, args []string) {
 		s.handleNpcBotMoveCommand(ctx, rest)
 	case strings.HasPrefix("delete", sub):
 		s.handleNpcBotDeleteCommand(ctx)
+	case strings.HasPrefix("lookup", sub):
+		s.handleNpcBotLookupCommand(ctx, rest)
+	case strings.HasPrefix("revive", sub):
+		s.handleNpcBotReviveCommand(ctx)
 	default:
 		s.sendSysMessage(syntax)
 	}
@@ -557,4 +585,209 @@ func (s *session) npcbotTemplateName(ctx context.Context, entry uint32) string {
 		}
 	}
 	return fmt.Sprintf("Npcbot %d", entry)
+}
+
+// npcbotPlayerName reads the player name == Unit::GetName() on the selected
+// master (the revive arm's "%s has no npcbots!" line).
+func (s *session) npcbotPlayerName(ctx context.Context, guid uint32) string {
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var name sql.NullString
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", guid).Scan(&name); err == nil && name.Valid && name.String != "" {
+			return name.String
+		}
+	}
+	return fmt.Sprintf("Player %d", guid)
+}
+
+// handleNpcBotLookupCommand mirrors HandleNpcBotLookupCommand
+// (botcommands.cpp:727): lists npcbot template entries of a bot class,
+// ascending by entry, with the race label per entry. BotDataMgr::
+// SelectNpcBotExtras (== NPCBotManager.Extras) supplies the class and race;
+// creature_template supplies the names. Creature-locale names have no Go
+// bridge (no session db-locale model; Go carries enUS text only — the chat.go
+// convention), so the template name is always used; empty names are skipped
+// == C++.
+func (s *session) handleNpcBotLookupCommand(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCBotLookup) {
+		return
+	}
+	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
+		s.sendSysMessage("NpcBots is unavailable.")
+		return
+	}
+	mgr := s.server.Features.NPCBots
+	if len(args) == 0 {
+		s.sendSysMessage(".npcbot lookup #class")
+		s.sendSysMessage("Looks up npcbots by #class, and returns all matches with their creature ID's")
+		s.sendSysMessage(fmt.Sprintf("BOT_CLASS_WARRIOR = %d", npcBotClassWarrior))
+		s.sendSysMessage(fmt.Sprintf("BOT_CLASS_PALADIN = %d", npcBotClassPaladin))
+		s.sendSysMessage(fmt.Sprintf("BOT_CLASS_HUNTER = %d", npcBotClassHunter))
+		s.sendSysMessage(fmt.Sprintf("BOT_CLASS_ROGUE = %d", npcBotClassRogue))
+		s.sendSysMessage(fmt.Sprintf("BOT_CLASS_PRIEST = %d", npcBotClassPriest))
+		s.sendSysMessage(fmt.Sprintf("BOT_CLASS_DEATH_KNIGHT = %d", BotClassDeathKnight))
+		s.sendSysMessage(fmt.Sprintf("BOT_CLASS_SHAMAN = %d", npcBotClassShaman))
+		s.sendSysMessage(fmt.Sprintf("BOT_CLASS_MAGE = %d", npcBotClassMage))
+		s.sendSysMessage(fmt.Sprintf("BOT_CLASS_WARLOCK = %d", npcBotClassWarlock))
+		s.sendSysMessage(fmt.Sprintf("BOT_CLASS_DRUID = %d", npcBotClassDruid))
+		s.sendSysMessage(fmt.Sprintf("BOT_CLASS_BLADEMASTER = %d", BotClassBlademaster))
+		s.sendSysMessage(fmt.Sprintf("BOT_CLASS_SPHYNX = %d", BotClassObsidianDestroyer))
+		s.sendSysMessage(fmt.Sprintf("BOT_CLASS_ARCHMAGE = %d", BotClassArchmage))
+		s.sendSysMessage(fmt.Sprintf("BOT_CLASS_DREADLORD = %d", BotClassDreadlord))
+		s.sendSysMessage(fmt.Sprintf("BOT_CLASS_SPELLBREAKER = %d", BotClassSpellbreaker))
+		s.sendSysMessage(fmt.Sprintf("BOT_CLASS_DARK_RANGER = %d", BotClassDarkRanger))
+		return
+	}
+	// C++: strtok(args, " ") takes the first token; (uint8)atoi classifies it.
+	botclass := uint8(cAtoi(args[0]))
+	if botclass == 0 || botclass >= npcBotClassEnd {
+		s.sendSysMessage(fmt.Sprintf("Unknown bot class %d", botclass))
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("Looking for bots of class %d...", botclass))
+	db := s.npcWorldDB()
+	if db == nil {
+		return
+	}
+	type npcBotLookupHit struct {
+		id   uint32
+		name string
+		race uint8
+	}
+	var hits []npcBotLookupHit
+	// C++ iterates sObjectMgr->GetCreatureTemplates() (entry-ordered) with
+	// the [BOT_ENTRY_BEGIN, BOT_ENTRY_END] gate; ORDER BY entry reproduces it.
+	rows, err := db.QueryContext(ctx, "SELECT entry, COALESCE(name, '') FROM creature_template WHERE entry BETWEEN ? AND ? ORDER BY entry", npcBotEntryBegin, npcBotEntryEnd)
+	if err != nil {
+		s.debug("npcbot lookup query failed", "account", s.accountName, "error", err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uint32
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			continue
+		}
+		if id == npcBotEntryMirrorImage {
+			continue
+		}
+		// Blademaster disabled: the C++ gate sits inside the entry loop, so
+		// a class-12 lookup always comes back empty.
+		if botclass == BotClassBlademaster {
+			continue
+		}
+		extras, ok := mgr.Extras(id)
+		if !ok || extras.Class != botclass {
+			continue
+		}
+		if name == "" {
+			continue
+		}
+		hits = append(hits, npcBotLookupHit{id: id, name: name, race: extras.Race})
+	}
+	if len(hits) == 0 {
+		// C++ sends LANG_COMMAND_NOCREATUREFOUND (447, Language.h:499); the
+		// enUS default is hardcoded like other untranslated trinity_string
+		// references (chat.go convention — unseeded in world.sql).
+		s.sendSysMessage("No creature template found.")
+		return
+	}
+	// C++: botlist.sort(&script_bot_commands::sortbots) — ascending id.
+	sort.Slice(hits, func(i, j int) bool { return hits[i].id < hits[j].id })
+	for _, hit := range hits {
+		s.sendSysMessage(fmt.Sprintf("%d - |cffffffff|Hcreature_entry:%d|h[%s]|h|r %s", hit.id, hit.id, hit.name, npcBotLookupRaceName(hit.race)))
+	}
+}
+
+// npcBotLookupRaceName mirrors the race switch in HandleNpcBotLookupCommand
+// (botcommands.cpp:786-814): races >= MAX_RACES are clamped to RACE_NONE
+// before the switch == C++.
+func npcBotLookupRaceName(race uint8) string {
+	if race >= npcBotRaceMax {
+		race = npcBotRaceNone
+	}
+	switch race {
+	case npcBotRaceHuman:
+		return "Human"
+	case npcBotRaceOrc:
+		return "Orc"
+	case npcBotRaceDwarf:
+		return "Dwarf"
+	case npcBotRaceNightElf:
+		return "Night Elf"
+	case npcBotRaceUndead:
+		return "Forsaken"
+	case npcBotRaceTauren:
+		return "Tauren"
+	case npcBotRaceGnome:
+		return "Gnome"
+	case npcBotRaceTroll:
+		return "Troll"
+	case npcBotRaceBloodElf:
+		return "Blood Elf"
+	case npcBotRaceDraenei:
+		return "Draenei"
+	case npcBotRaceNone:
+		return "No Race"
+	default:
+		return "Unknown"
+	}
+}
+
+// handleNpcBotReviveCommand mirrors HandleNpcBotReviveCommand
+// (botcommands.cpp:1309): revives the selected npcbot, or all npcbots of the
+// selected player. BotMgr::_reviveBot (botmgr.cpp:533) performs zero DB
+// writes — resurrection visual, teleport to owner, display/faction/health/
+// flags reset, follow state — all live-creature legs with no Go bridge (Go
+// keeps no live creature state for bots), and the IsAlive gate has no
+// bridgeable model either. The arm answers the C++ guard and success lines;
+// the revive itself is a state-change no-op.
+func (s *session) handleNpcBotReviveCommand(ctx context.Context) {
+	if s.miscDeny(ctx, permissionCommandNPCBotRevive) {
+		return
+	}
+	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
+		s.sendSysMessage("NpcBots is unavailable.")
+		return
+	}
+	mgr := s.server.Features.NPCBots
+	sel := s.selection
+	if sel == 0 {
+		s.sendSysMessage(".npcbot revive")
+		s.sendSysMessage("Revives selected npcbot. If player is selected, revives all selected player's npcbots")
+		return
+	}
+	// C++: u->ToPlayer(); !HaveBot() → "%s has no npcbots!"; else
+	// ReviveAllBots() (no bridge) → "Npcbots revived".
+	if uint16(sel>>48) == 0x0000 {
+		guid := uint32(sel)
+		if mgr.CountByOwner(guid) == 0 {
+			s.sendSysMessage(fmt.Sprintf("%s has no npcbots!", s.npcbotPlayerName(ctx, guid)))
+			return
+		}
+		s.sendSysMessage("Npcbots revived")
+		return
+	}
+	// C++: u->ToCreature() + GetBotAI() — entry-level bridged as the template
+	// npcbot mask + persisted bot data, like the delete arm.
+	switch uint16(sel >> 48) {
+	case 0xF130, 0xF140, 0xF150: // unit/pet/vehicle: the IsAnyTypeCreature set (mail.go:157)
+	default:
+		s.sendSysMessage("You must select player or npcbot")
+		return
+	}
+	entry := uint32((sel >> 24) & 0x00FFFFFF)
+	flagsExtra, ok := s.npcTemplateGate(ctx, entry)
+	if !ok || flagsExtra&npcbotCreatureFlagMask == 0 {
+		s.sendSysMessage("You must select player or npcbot")
+		return
+	}
+	if _, ok := mgr.Get(entry); !ok {
+		s.sendSysMessage("You must select player or npcbot")
+		return
+	}
+	// C++: bot->IsAlive() → "%s is not dead" has no Go model (no live
+	// creature state for bots); ReviveBot's legs are all live-only. The
+	// guards above match, so the success line is answered.
+	s.sendSysMessage(fmt.Sprintf("%s revived", s.npcbotTemplateName(ctx, entry)))
 }
