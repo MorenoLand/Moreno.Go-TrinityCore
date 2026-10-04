@@ -51,17 +51,25 @@ func spellSuppressesInitialThreat(spell wotlk.Spell) bool {
 	return false
 }
 
-// handleSpellInitialThreat mirrors Spell::HandleThreatSpells (Spell.cpp:5096-5150).
+// handleSpellInitialThreat mirrors Spell::HandleThreatSpells (Spell.cpp:5096-5151).
 // Every cast with initial aggro adds spell_threat-row threat
 // (flatMod + apPctMod * base attack power) or, without a row, the spell's
-// SpellLevel, split evenly across the hit targets, before any effect-damage
-// threat lands. Missed targets carry zero threat (Spell.cpp:5125); Go's
-// hitTargets only ever holds hits, so that term needs no code. Positive
+// SpellLevel, split evenly across ALL unique targets — hits and misses alike
+// (Spell.cpp:5123) — before any effect-damage threat lands; missed shares are
+// wasted, and missed targets carry zero threat (Spell.cpp:5125). Positive
 // spells forward the threat to every creature currently threatening the
 // target (ThreatManager::ForwardThreatForAssistingMe, ThreatManager.cpp:662);
 // negative spells add it to creature targets directly (ignoreModifiers, so
-// no caster multiplier on this path).
-func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spell, hitTargets []uint64) {
+// no caster multiplier on this path). Only player casts route through this
+// path: C++ runs HandleThreatSpells for any unit caster, but Go creature and
+// pet casts resolve instantly (executePetSpellWithOptions) with no
+// initial-threat pass. The negative half is vacuous for creature casts on
+// players — players cannot have threat lists (ThreatManager.cpp:156-179),
+// which is exactly C++'s CanHaveThreatList skip; creature-on-creature casts
+// and creature heal forwarding (a creature as the ForwardThreatForAssistingMe
+// assistant) have no Go analog. C++ takes the caster from m_originalCaster
+// when set (Spell.cpp:5098); Go always uses the session player.
+func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spell, hitTargets []uint64, missCount int) {
 	if s == nil || s.server == nil || s.player == nil || len(hitTargets) == 0 {
 		return
 	}
@@ -82,8 +90,13 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 	if threat == 0 {
 		return
 	}
-	// Spell.cpp:5123: the defined bonus is distributed among all targets.
-	threat /= float32(len(hitTargets))
+	// Spell.cpp:5123: the defined bonus is distributed among all unique
+	// targets, misses included (their shares are wasted, Spell.cpp:5125).
+	totalTargets := len(hitTargets) + missCount
+	if totalTargets <= 0 {
+		return
+	}
+	threat /= float32(totalTargets)
 
 	positive := !isHarmfulSpell(spell)
 	// Caster-side threat modifiers (ThreatManager::CalculateModifiedThreat via
@@ -108,6 +121,15 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 		if motion == nil {
 			continue
 		}
+		// Spell.cpp:5143-5144: the negative path skips targets that cannot
+		// have a threat list. ThreatManager::CanHaveThreatList
+		// (ThreatManager.cpp:156-179) excludes pets, totems, triggers,
+		// player-summoned minions and npcbots; in Go, owned creature motions
+		// (OwnerGUID != 0 — pets and player summons) are the modeled members
+		// of that set, so they take no initial threat here.
+		if motion.OwnerGUID != 0 {
+			continue
+		}
 		if motion.ThreatMgr == nil {
 			motion.ThreatMgr = NewThreatManager(motion.GUID)
 		}
@@ -130,6 +152,14 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 // ThreatManager::ForwardThreatForAssistingMe (ThreatManager.cpp:662-688): the
 // initial threat of a positive spell is split evenly among all creatures
 // currently threatening the target. Caller holds motionMu.
+// Documented deltas: creatures under UNIT_STATE_CONTROLLED are excluded from
+// the even split in C++ and receive a zero-threat add instead
+// (ThreatManager.cpp:676-680); Go has no CC-state model, so every recipient
+// takes the full share. C++ builds its recipient set from the target's
+// _threatenedByMe refs, which include zero-threat engaged creatures; Go's
+// scan requires GetThreat > 0. C++ also applies the assistant's
+// SPELLMOD_THREAT spell mods via CalculateModifiedThreat (ThreatManager.cpp:606);
+// Go's getThreatMultiplier covers school/stance auras only.
 func (s *session) forwardInitialAssistThreatLocked(threat float32, targetGUID uint64) {
 	if threat <= 0 {
 		return
@@ -137,6 +167,12 @@ func (s *session) forwardInitialAssistThreatLocked(threat float32, targetGUID ui
 	var assisting []*creatureMotion
 	for _, m := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
 		if m == nil || m.GUID == targetGUID || m.ThreatMgr == nil {
+			continue
+		}
+		// ForwardThreatForAssistingMe iterates the target's _threatenedByMe
+		// refs, which can only exist on threat-list-capable creatures
+		// (ThreatManager.cpp:156-179); owned pet/summon motions never hold one.
+		if m.OwnerGUID != 0 {
 			continue
 		}
 		if m.ThreatMgr.GetThreat(targetGUID) <= 0 {
