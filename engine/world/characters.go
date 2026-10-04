@@ -3177,7 +3177,7 @@ func buildInitWorldStates(state playerState, areaID, arenaSeasonID uint32, arena
 			[2]int32{1777, 0}, // Resources Horde
 			[2]int32{1778, 0},
 			[2]int32{1779, 0},
-			[2]int32{1780, 2000},
+			[2]int32{1780, 1600}, // BG_AB_OP_RESOURCES_MAX
 			[2]int32{1782, 0},
 			[2]int32{1783, 0},
 			[2]int32{1784, 0},
@@ -3196,7 +3196,7 @@ func buildInitWorldStates(state playerState, areaID, arenaSeasonID uint32, arena
 			[2]int32{1845, 1},
 			[2]int32{1846, 1},
 			[2]int32{1861, 2},
-			[2]int32{1955, 1800},
+			[2]int32{1955, 1400}, // BG_AB_OP_RESOURCES_WARNING
 		)
 	} else if state.Map == 566 {
 		worldStates = append(worldStates,

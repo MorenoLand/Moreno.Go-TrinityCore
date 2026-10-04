@@ -31,9 +31,16 @@ const (
 	// World States
 	ABWorldStateAllianceResources uint32 = 1776
 	ABWorldStateHordeResources    uint32 = 1777
-	ABWorldStateMaxResources      uint32 = 1778
+	ABWorldStateMaxResources      uint32 = 1780
 	ABWorldStateBasesAlliance     uint32 = 1779
-	ABWorldStateBasesHorde        uint32 = 1780
+	ABWorldStateBasesHorde        uint32 = 1778
+
+	// Per-tick award thresholds from BattlegroundAB::Startup (BattlegroundAB.cpp:606-607).
+	// Go has no BG-weekend model, so the non-weekend values are used, matching the
+	// convention of the other per-BG reward bridges.
+	abHonorTicsThreshold uint32 = 260  // BG_AB_NotABBGWeekendHonorTicks
+	abRepTicsThreshold   uint32 = 160  // BG_AB_NotABBGWeekendReputationTicks
+	abNearVictoryScore   uint32 = 1400 // BG_AB_WARNING_NEAR_VICTORY_SCORE
 )
 
 var abNodeNames = [ABNodeMax]string{
@@ -71,18 +78,21 @@ func getABBannerEntry(nodeID uint32, state uint32) uint32 {
 }
 
 // WorldState Icon mapping for each node in each state.
-// Mirrors TrinityCore BattlegroundAB.h BG_AB_WorldStates.
+// Mirrors TrinityCore BattlegroundAB.h BG_AB_WorldStates: per node the state ids are
+// BG_AB_OP_NODESTATES[node]+{0,2,3,0,1} for {ally-occupied, ally-contested,
+// horde-contested} via the plusArray in _SendNodeUpdate, and BG_AB_OP_NODEICONS[node]
+// while neutral.
 var abNodeWorldStates = [ABNodeMax][5]uint32{
-	// Stables: Ally=1767, ContAlly=1768, ContHorde=1769, Horde=1770, Neutral=1771
-	{1771, 1768, 1769, 1767, 1770},
-	// Blacksmith: Ally=1772, ContAlly=1773, ContHorde=1774, Horde=1775, Neutral=1781
-	{1781, 1773, 1774, 1772, 1775},
-	// Farm: Ally=1782, ContAlly=1783, ContHorde=1784, Horde=1785, Neutral=1786
-	{1786, 1783, 1784, 1782, 1785},
-	// Lumber Mill: Ally=1787, ContAlly=1788, ContHorde=1789, Horde=1790, Neutral=1791
-	{1791, 1788, 1789, 1787, 1790},
-	// Gold Mine: Ally=1792, ContAlly=1793, ContHorde=1794, Horde=1795, Neutral=1796
-	{1796, 1793, 1794, 1792, 1795},
+	// Stables: Neutral=1842(icon), ContAlly=1769, ContHorde=1770, Ally=1767, Horde=1768
+	{1842, 1769, 1770, 1767, 1768},
+	// Blacksmith: Neutral=1846(icon), ContAlly=1784, ContHorde=1785, Ally=1782, Horde=1783
+	{1846, 1784, 1785, 1782, 1783},
+	// Farm: Neutral=1845(icon), ContAlly=1774, ContHorde=1775, Ally=1772, Horde=1773
+	{1845, 1774, 1775, 1772, 1773},
+	// Lumber Mill: Neutral=1844(icon), ContAlly=1794, ContHorde=1795, Ally=1792, Horde=1793
+	{1844, 1794, 1795, 1792, 1793},
+	// Gold Mine: Neutral=1843(icon), ContAlly=1789, ContHorde=1790, Ally=1787, Horde=1788
+	{1843, 1789, 1790, 1787, 1788},
 }
 
 // Resource accumulation intervals and tick points from TrinityCore BattlegroundAB.h:
@@ -116,19 +126,22 @@ type abNodeState struct {
 }
 
 type abBattlegroundState struct {
-	mu                 sync.Mutex
-	MapID              uint32
-	AllianceResources  uint32
-	HordeResources     uint32
-	MaxResources       uint32
-	AllianceBasesCount uint32
-	HordeBasesCount    uint32
-	Nodes              [ABNodeMax]abNodeState
-	CaptureDuration    time.Duration
-	Winner             int8 // -1 = ongoing, 0 = Alliance, 1 = Horde
-	AllianceAccumMs    int64
-	HordeAccumMs       int64
-	StopAccumulation   chan struct{}
+	mu                   sync.Mutex
+	MapID                uint32
+	AllianceResources    uint32
+	HordeResources       uint32
+	MaxResources         uint32
+	AllianceBasesCount   uint32
+	HordeBasesCount      uint32
+	Nodes                [ABNodeMax]abNodeState
+	CaptureDuration      time.Duration
+	Winner               int8 // -1 = ongoing, 0 = Alliance, 1 = Horde
+	AllianceAccumMs      int64
+	HordeAccumMs         int64
+	HonorTicsAccum       [2]uint32 // resource points banked toward the next trickle-honor award
+	RepTicsAccum         [2]uint32 // resource points banked toward the next trickle-rep award
+	NearVictoryAnnounced bool
+	StopAccumulation     chan struct{}
 }
 
 func isABBanner(entry uint32) bool {
@@ -247,6 +260,10 @@ func (s *Server) handleABBannerUse(ctx context.Context, sess *session, guid uint
 	}
 
 	team := teamForRace(sess.player.Race) // 0 = Alliance, 1 = Horde
+
+	// TrinityCore EventPlayerClickedOnFlag strips ENTER_PVP_COMBAT auras after the
+	// banner-legitimacy gate, before the node-state dispatch.
+	sess.removeAurasWithInterruptFlags(auraInterruptFlagEnterPvPCombat)
 
 	switch node.State {
 	case ABNodeStateNeutral:
@@ -505,6 +522,7 @@ func (s *Server) TickResources(ab *abBattlegroundState, elapsedMs int64) {
 			for ab.AllianceAccumMs >= intervalMs && ab.Winner < 0 {
 				ab.AllianceAccumMs -= intervalMs
 				ab.AllianceResources += abTickPoints[ab.AllianceBasesCount]
+				s.abResourceTickAwards(ab, 0, abTickPoints[ab.AllianceBasesCount])
 				if ab.AllianceResources >= ab.MaxResources {
 					ab.AllianceResources = ab.MaxResources
 					ab.Winner = 0
@@ -523,6 +541,7 @@ func (s *Server) TickResources(ab *abBattlegroundState, elapsedMs int64) {
 			for ab.HordeAccumMs >= intervalMs && ab.Winner < 0 {
 				ab.HordeAccumMs -= intervalMs
 				ab.HordeResources += abTickPoints[ab.HordeBasesCount]
+				s.abResourceTickAwards(ab, 1, abTickPoints[ab.HordeBasesCount])
 				if ab.HordeResources >= ab.MaxResources {
 					ab.HordeResources = ab.MaxResources
 					ab.Winner = 1
@@ -532,6 +551,50 @@ func (s *Server) TickResources(ab *abBattlegroundState, elapsedMs int64) {
 			}
 		}
 	}
+}
+
+// abResourceTickAwards runs the per-resource-tick award arms of TrinityCore
+// BattlegroundAB::PostUpdateImpl (BattlegroundAB.cpp:140-162): trickle reputation
+// (509 League of Arathor / 510 The Defilers, +10) and trickle honor
+// (GetBonusHonorFromKill(1)) banked per resource point, plus the one-time
+// near-victory broadcast at BG_AB_WARNING_NEAR_VICTORY_SCORE. Arm order (rep,
+// honor, near-victory) matches C++.
+func (s *Server) abResourceTickAwards(ab *abBattlegroundState, team uint32, points uint32) {
+	ab.RepTicsAccum[team] += points
+	if ab.RepTicsAccum[team] >= abRepTicsThreshold {
+		faction := uint32(509)
+		if team == 1 {
+			faction = 510
+		}
+		s.rewardBGEndReputation(ab.MapID, team, faction, 10)
+		ab.RepTicsAccum[team] -= abRepTicsThreshold
+	}
+	ab.HonorTicsAccum[team] += points
+	if ab.HonorTicsAccum[team] >= abHonorTicsThreshold {
+		s.rewardBGEndHonor(ab.MapID, team, 1)
+		ab.HonorTicsAccum[team] -= abHonorTicsThreshold
+	}
+	if !ab.NearVictoryAnnounced {
+		resources := ab.AllianceResources
+		if team == 1 {
+			resources = ab.HordeResources
+		}
+		if resources > abNearVictoryScore {
+			ab.NearVictoryAnnounced = true
+			s.announceABNearVictory(ab.MapID, team)
+		}
+	}
+}
+
+func (s *Server) announceABNearVictory(mapID uint32, team uint32) {
+	teamName := "Alliance"
+	if team == 1 {
+		teamName = "Horde"
+	}
+	// C++ sends broadcast_text 10598/10599 + BG_AB_SOUND_NEAR_VICTORY (8456);
+	// Go uses its generic BG message convention (no broadcast_text seed, no
+	// PlaySound model).
+	s.broadcastBattlegroundMessage(mapID, fmt.Sprintf("The %s is near victory!", teamName))
 }
 
 func (s *Server) announceABVictory(mapID uint32, winningTeam uint32) {
