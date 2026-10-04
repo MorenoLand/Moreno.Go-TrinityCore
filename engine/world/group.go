@@ -1177,12 +1177,8 @@ func (s *session) handleGroupRaidConvert(_ context.Context, _ []byte) bool {
 		srv.groupsMu.Unlock()
 		return false
 	}
-	g.IsRaid = !g.IsRaid
-	if g.IsRaid {
-		g.GroupType |= 0x02
-	} else {
-		g.GroupType &^= 0x02
-	}
+	g.IsRaid = true
+	g.GroupType |= 0x02
 	srv.groupsMu.Unlock()
 	_ = s.sendPartyResult(partyOpInvite, "", errPartyResultOK)
 	srv.broadcastGroupList(g)
@@ -1214,7 +1210,7 @@ func (s *session) handlePartyAssignment(_ context.Context, payload []byte) bool 
 	srv := s.server
 	srv.groupsMu.Lock()
 	g := srv.groups[s.groupID]
-	if g == nil || !g.isLeaderOrAssistant(s.playerGUID) {
+	if g == nil || !g.IsRaid || !g.isLeaderOrAssistant(s.playerGUID) {
 		srv.groupsMu.Unlock()
 		return false
 	}
@@ -1233,7 +1229,8 @@ func (s *session) handlePartyAssignment(_ context.Context, payload []byte) bool 
 		setFlag = memberFlagMainTank
 	default:
 		srv.groupsMu.Unlock()
-		return false
+		srv.broadcastGroupList(g)
+		return true
 	}
 	// Clear flag from all members first
 	for i := range g.Members {
@@ -1410,11 +1407,12 @@ func (s *session) handleGroupAssistantLeader(ctx context.Context, payload []byte
 
 	s.server.groupsMu.Lock()
 	grp := s.server.groups[s.groupID]
-	if grp == nil || !grp.isLeader(s.playerGUID) {
+	if grp == nil || !grp.isLeader(s.playerGUID) || !grp.IsRaid {
 		s.server.groupsMu.Unlock()
 		return true
 	}
 
+	changed := false
 	for i := range grp.Members {
 		if grp.Members[i].GUID == guid {
 			if apply != 0 {
@@ -1422,12 +1420,15 @@ func (s *session) handleGroupAssistantLeader(ctx context.Context, payload []byte
 			} else {
 				grp.Members[i].Flags &^= memberFlagAssistant
 			}
+			changed = true
 			break
 		}
 	}
 	s.server.groupsMu.Unlock()
 
-	s.server.broadcastGroupList(grp)
+	if changed {
+		s.server.broadcastGroupList(grp)
+	}
 	return true
 }
 
@@ -1449,7 +1450,7 @@ func (s *session) handleGroupChangeSubGroup(ctx context.Context, payload []byte)
 
 	s.server.groupsMu.Lock()
 	grp := s.server.groups[s.groupID]
-	if grp == nil || !grp.isLeaderOrAssistant(s.playerGUID) {
+	if grp == nil || !grp.IsRaid || !grp.isLeaderOrAssistant(s.playerGUID) {
 		s.server.groupsMu.Unlock()
 		return true
 	}
@@ -1462,8 +1463,10 @@ func (s *session) handleGroupChangeSubGroup(ctx context.Context, payload []byte)
 	var found bool
 	for i := range grp.Members {
 		if strings.EqualFold(grp.Members[i].Name, name) {
-			grp.Members[i].SubGroup = groupNr
-			found = true
+			if grp.Members[i].SubGroup != groupNr {
+				grp.Members[i].SubGroup = groupNr
+				found = true
+			}
 			break
 		}
 	}
