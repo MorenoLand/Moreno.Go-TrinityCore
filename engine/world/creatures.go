@@ -342,7 +342,18 @@ func buildCreatureUpdate(spawn creatureSpawn) []byte {
 		block.WriteI8(-1)
 	}
 	block.WriteU32(0)
-	for _, speed := range []float32{2.5 * spawn.WalkSpeed, 7 * spawn.RunSpeed, 4.5 * spawn.RunSpeed, 4.722222 * spawn.WalkSpeed, 2.5 * spawn.WalkSpeed, 7 * spawn.RunSpeed, 4.5 * spawn.RunSpeed, 3.141594, 3.14} {
+	// Create-block speed order (Object.cpp:337-345): WALK, RUN, RUN_BACK, SWIM,
+	// SWIM_BACK, FLIGHT, FLIGHT_BACK, TURN_RATE, PITCH_RATE; bases from
+	// baseMoveSpeed (Unit.cpp:88-98). Only WALK and RUN carry the template
+	// multipliers: m_speed_rate defaults to 1.0 (Unit.cpp:376) and
+	// Creature::Initialize sets only WALK/RUN from the template while SWIM and
+	// FLIGHT are set to 1.0 (Creature.cpp:529-532); the back-speed UpdateSpeed
+	// arms only apply debuffs (Unit.cpp:8675-8677), so the template multipliers
+	// never reach RUN_BACK/SWIM/SWIM_BACK/FLIGHT/FLIGHT_BACK at spawn.
+	// Documented delta: a later UpdateSpeed(MOVE_SWIM/MOVE_FLIGHT) would fold
+	// the template speed_run into the rate (Unit.cpp:8750); Go never re-sends
+	// creature speeds after create, so the init-time rates stand.
+	for _, speed := range []float32{2.5 * spawn.WalkSpeed, 7 * spawn.RunSpeed, 4.5, 4.722222, 2.5, 7, 4.5, 3.141594, 3.14} {
 		block.WriteF32(speed)
 	}
 	block.WriteU8(uint8(mask.BlockCount()))

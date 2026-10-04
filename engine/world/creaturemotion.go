@@ -154,6 +154,16 @@ const (
 	creatureBaseRunSpeed  = 7.0
 )
 
+// splineDurationMs mirrors MoveSpline's duration computation
+// (MoveSpline.cpp:104-114): CommonInitializer starts the clock at
+// minimal_duration (1ms) and each segment adds trunc(segLength*1000/velocity).
+// Go launches single-segment linear splines, so the duration is
+// 1 + trunc(dist*1000/speed); C++ applies no per-generator floor (a
+// zero-length spline becomes a 1ms spline, MoveSpline.cpp:145-149).
+func splineDurationMs(dist float64, speed float32) uint32 {
+	return 1 + uint32(dist*1000/float64(speed))
+}
+
 const (
 	creatureReactPassive uint8 = iota
 	creatureReactDefensive
@@ -681,10 +691,7 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 		if speed <= 0 {
 			speed = creatureBaseRunSpeed
 		}
-		duration := uint32((homeDist / speed) * 1000)
-		if duration < 500 {
-			duration = 500
-		}
+		duration := splineDurationMs(float64(homeDist), speed)
 		s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false)
 		motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
 		motion.Moving = true
@@ -1061,10 +1068,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if dist > contactDist {
 			// Pursue player: move towards target at run speed
 			if !motion.Moving || now.After(motion.MoveEnds) {
-				duration := uint32((dist / motion.RunSpeed) * 1000)
-				if duration < 300 {
-					duration = 300
-				}
+				duration := splineDurationMs(float64(dist), motion.RunSpeed)
 				s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, target.X, target.Y, target.Z, duration, false)
 				motion.X, motion.Y, motion.Z = target.X, target.Y, target.Z
 				motion.Moving = true
@@ -1413,10 +1417,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			motion.WanderSteps = 2 + rand.Intn(9)
 		}
 	}
-	duration := uint32((moveDist / float64(speed)) * 1000)
-	if duration < 250 {
-		duration = 250
-	}
+	duration := splineDurationMs(moveDist, speed)
 	s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, walk)
 	motion.X, motion.Y, motion.Z = destX, destY, destZ
 	motion.Moving = true
