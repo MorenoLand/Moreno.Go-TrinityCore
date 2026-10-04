@@ -132,6 +132,7 @@ const (
 	itemSubclassWeaponBow                       = 2     // ITEM_SUBCLASS_WEAPON_BOW (ItemTemplate.h:351)
 	itemSubclassWeaponGun                       = 3     // ITEM_SUBCLASS_WEAPON_GUN (ItemTemplate.h:352)
 	itemSubclassWeaponCrossbow                  = 18    // ITEM_SUBCLASS_WEAPON_CROSSBOW (ItemTemplate.h:367)
+	itemSubclassWeaponDagger                    = 15    // ITEM_SUBCLASS_WEAPON_DAGGER (ItemTemplate.h:364)
 	itemClassProjectile                  uint32 = 6     // ITEM_CLASS_PROJECTILE (ItemTemplate.h:302)
 	itemSubclassArrow                    uint32 = 2     // ITEM_SUBCLASS_ARROW (ItemTemplate.h:421)
 	itemSubclassBullet                   uint32 = 3     // ITEM_SUBCLASS_BULLET (ItemTemplate.h:422)
@@ -5107,6 +5108,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		castMerged := make(map[uint64]struct{})
 		interruptHandled := false
 		damageEffectSeen := false
+		// Lazily computed once per cast invocation: whether the caster's
+		// usable main-hand weapon is a dagger, for the rogue arm of
+		// Spell::EffectWeaponDmg (SpellEffects.cpp:3237-3245).
+		var mainhandDagger *bool
 		for effectIndex, eff := range spell.Effects {
 			if eff.Effect == 0 {
 				continue
@@ -5219,6 +5224,60 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							// session takes nothing from this arm.
 							if effectTarget == s.playerGUID || (s.server != nil && s.server.findSessionByGUID(effectTarget) != nil) {
 								continue
+							}
+						}
+						if weaponDamageEffect && lastWeaponEffect && spell.SpellFamilyName == spellFamilyRogue {
+							// Spell::EffectWeaponDmg (SpellEffects.cpp:3229-3280):
+							// the rogue family arms. Fan of Knives, Hemorrhage
+							// and Ghostly Strike (SpellFamilyFlags[1] & 0x40000
+							// || SpellFamilyFlags[0] & 0x6000000):
+							if spell.SpellFamilyFlags[1]&0x40000 != 0 || spell.SpellFamilyFlags[0]&0x6000000 != 0 {
+								// Hemorrhage (SpellFamilyFlags[0] & 0x2000000)
+								// banks one combo point on the target — the C++
+								// AddComboPointGain(unitTarget, 1) (Spell.h:513-522):
+								// a new target restarts the per-cast bank, the
+								// same target accumulates, exactly matching the
+								// SPELL_EFFECT_ADD_COMBO_POINTS bank above, and
+								// the finish-phase spend covers both sources.
+								if spell.SpellFamilyFlags[0]&0x2000000 != 0 {
+									if effectTarget != comboGainTarget {
+										comboGainTarget = effectTarget
+										comboGain = 1
+									} else {
+										comboGain += 1
+									}
+								}
+								// 50% more damage with daggers
+								// (SpellEffects.cpp:3237-3245): the caster is
+								// always the session player on these cast paths
+								// (the TYPEID_PLAYER gate is vacuous), and the
+								// npcbot arm is structural (no npcbot model).
+								// The usable-weapon lookup runs once per cast
+								// invocation; the 1.5x lands as
+								// targetDamage*3/2, the integer equivalent of
+								// the C++ int32(damage*totalDamagePercentMod)
+								// at SpellEffects.cpp:3456 for positive damage.
+								if mainhandDagger == nil {
+									dagger := s.mainHandWeaponIsDagger(effCtx)
+									mainhandDagger = &dagger
+								}
+								if *mainhandDagger {
+									targetDamage = targetDamage * 3 / 2
+								}
+							} else if spell.SpellFamilyFlags[1]&0x6 != 0 {
+								// Mutilate (SpellFamilyFlags[1] & 0x6, for each
+								// hand — SpellEffects.cpp:3255-3280): 120% damage
+								// when the target is poisoned. The fast
+								// HasAuraState(AURA_STATE_DEADLY_POISON,
+								// m_spellInfo, unitCaster) path plus the full
+								// applied-aura scan for Dispel == DISPEL_POISON
+								// live in targetHasPoisonAura. The *6/5 is the
+								// integer equivalent of the C++
+								// int32(damage*totalDamagePercentMod) for
+								// positive damage.
+								if s.targetHasPoisonAura(effCtx, effectTarget, spell) {
+									targetDamage = targetDamage * 6 / 5
+								}
 							}
 						}
 						// Spell::EffectSchoolDMG (SpellEffects.cpp:354-378): the
@@ -7809,6 +7868,87 @@ func (s *session) devastateSunderStacks(ctx context.Context, targetGUID uint64) 
 		return uint32(aura.StackCount)
 	}
 	return 0
+}
+
+// mainHandWeaponIsDagger mirrors the dagger leg of the rogue arm of
+// Spell::EffectWeaponDmg (SpellEffects.cpp:3237-3245):
+// Player::GetWeaponForAttack(m_attackType, true) with m_attackType ==
+// BASE_ATTACK — Fan of Knives, Hemorrhage and Ghostly Strike are all
+// main-hand melee weapon-damage spells, so the slot is always
+// EQUIPMENT_SLOT_MAINHAND. The useable=true route returns nil when the
+// item is missing, is not a weapon (Class != ITEM_CLASS_WEAPON), or is
+// broken (Item::IsBroken: MaxDurability > 0 and Durability == 0); the
+// IsInFeralForm leg is vacuous under the rogue family gate. The equipped
+// item lookup follows the checkSpellRangedWeaponCast query pattern.
+func (s *session) mainHandWeaponIsDagger(ctx context.Context) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return false
+	}
+	var instanceGUID, itemEntry int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		`SELECT ii.guid, ii.itemEntry FROM character_inventory ci
+		JOIN item_instance ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot = ? LIMIT 1`,
+		s.playerGUID, int64(equipSlotMainhand)).Scan(&instanceGUID, &itemEntry); err != nil || itemEntry <= 0 {
+		return false
+	}
+	weapon, ok := s.server.getItemStoreTemplateInfo(ctx, uint32(itemEntry))
+	if !ok || weapon.Class != itemClassWeapon || weapon.SubClass != uint32(itemSubclassWeaponDagger) {
+		return false
+	}
+	var durability int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		`SELECT COALESCE(durability, 0) FROM item_instance WHERE guid = ? LIMIT 1`,
+		instanceGUID).Scan(&durability); err == nil && weapon.MaxDurability > 0 && durability == 0 {
+		return false
+	}
+	return true
+}
+
+// targetHasPoisonAura mirrors the Mutilate arm's poisoned-target check in
+// Spell::EffectWeaponDmg (SpellEffects.cpp:3256-3277): first the fast
+// unitTarget->HasAuraState(AURA_STATE_DEADLY_POISON, m_spellInfo,
+// unitCaster) path (the per-caster state read with the
+// SPELL_AURA_ABILITY_IGNORE_AURASTATE bypass, Unit.cpp:5946-5965, via
+// targetHasAuraState), then the full applied-aura scan that sets found on
+// the first aura whose spell has Dispel == DISPEL_POISON. The three-way
+// target resolution follows the envenomPoisonDoses pattern; the full scan
+// carries no caster-GUID filter, matching C++.
+func (s *session) targetHasPoisonAura(ctx context.Context, targetGUID uint64, spell wotlk.Spell) bool {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil {
+		return false
+	}
+	if s.targetHasAuraState(ctx, targetGUID, auraStateDeadlyPoison, spell) {
+		return true
+	}
+	var auras []*activeAura
+	if targetGUID == 0 || targetGUID == s.playerGUID {
+		auras = s.loadedAuras()
+	} else if other := s.server.findSessionByGUID(targetGUID); other != nil && other.player != nil {
+		auras = other.loadedAuras()
+	} else if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
+		key := creatureAuraKeyForTarget(target)
+		s.server.auraMu.Lock()
+		for _, aura := range s.server.activeCreatureAuras[key] {
+			auras = append(auras, aura)
+		}
+		s.server.auraMu.Unlock()
+	} else {
+		return false
+	}
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if auraSpell.DispelType == DispelPoison {
+			return true
+		}
+	}
+	return false
 }
 
 // envenomPoisonDoses mirrors the Deadly Poison lookup in the rogue Envenom
