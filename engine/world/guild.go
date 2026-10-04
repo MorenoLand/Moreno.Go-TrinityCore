@@ -3757,8 +3757,10 @@ func (s *session) handleGuildBankDepositMoney(ctx context.Context, payload []byt
 	}
 
 	// Guild::HandleMemberDepositMoney (Guild.cpp:1699): refuse deposits that
-	// would overflow the bank money cap.
-	if bankMoney > 0 && uint64(bankMoney) > guildBankMoneyLimit-uint64(amount) {
+	// would overflow the bank money cap. C++ promotes m_bankMoney to uint64
+	// for the comparison (GUILD_BANK_MONEY_LIMIT is uint64), so the bare
+	// uint64 form below is the exact mirror.
+	if uint64(bankMoney) > guildBankMoneyLimit-uint64(amount) {
 		s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildBankFull)
 		return true
 	}
@@ -3827,7 +3829,7 @@ func (s *session) handleGuildBankWithdrawMoney(ctx context.Context, payload []by
 	// (HandleMemberWithdrawMoney checks the limit silently first, then calls
 	// ModifyMoney), and the daily allowance is consumed only on the success
 	// path.
-	if s.player.Money > maxMoneyAmount-amount {
+	if s.player.Money >= maxMoneyAmount-amount {
 		s.sendEquipError(equipErrTooMuchGold, 0)
 		return true
 	}
