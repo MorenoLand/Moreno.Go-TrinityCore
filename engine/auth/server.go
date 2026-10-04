@@ -158,6 +158,18 @@ func NewServer(store *database.Store, logger *slog.Logger, realmID uint32, setti
 		address = "127.0.0.1"
 	}
 	server.RealmAddress = address
+	if store != nil {
+		// Expired ban cleanup mirrors authserver Main.cpp:284-285: purge
+		// expired IP bans and deactivate expired account bans at startup.
+		// C++ fires these as async fire-and-forget; failures are logged here
+		// without failing startup.
+		if _, err := store.ExecStatement(context.Background(), "LOGIN_DEL_EXPIRED_IP_BANS"); err != nil && logger != nil {
+			logger.Error("expired IP ban cleanup failed", "error", err)
+		}
+		if _, err := store.ExecStatement(context.Background(), "LOGIN_UPD_EXPIRED_ACCOUNT_BANS"); err != nil && logger != nil {
+			logger.Error("expired account ban cleanup failed", "error", err)
+		}
+	}
 	return server
 }
 
