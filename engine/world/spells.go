@@ -25,6 +25,7 @@ const (
 	spellAttr3MainHand              uint32 = 0x00000400 // SPELL_ATTR3_MAIN_HAND: Require main hand weapon (SharedDefines.h:533)
 	spellAttr3ReqOffhand            uint32 = 0x01000000 // SPELL_ATTR3_REQ_OFFHAND: Require offhand weapon (SharedDefines.h:547)
 	spellAttr3ReqWand               uint32 = 0x00400000 // SPELL_ATTR3_REQ_WAND: Requires equipped Wand (SharedDefines.h:545)
+	spellAttr3OnlyTargetPlayers     uint32 = 0x00000100 // SPELL_ATTR3_ONLY_TARGET_PLAYERS: Can only target players (SharedDefines.h:531) — ATTR3 is Go's AttributesEx3
 	spellAttr5HideDuration          uint32 = 0x00000400 // SPELL_ATTR5_HIDE_DURATION (SharedDefines.h:607)
 	spellAttr5CanChannelWhenMoving  uint32 = 0x00000001 // SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING (SharedDefines.h:597)
 	spellAttr5SingleTarget          uint32 = 0x00000020 // SPELL_ATTR5_SINGLE_TARGET_SPELL (SharedDefines.h:602)
@@ -108,6 +109,7 @@ const (
 	spellFailedBmOrInvisGod              uint8  = 159 // SPELL_FAILED_BM_OR_INVISGOD (SharedDefines.h:1141)
 	spellFailedTargetIsPlayer            uint8  = 117 // SPELL_FAILED_TARGET_IS_PLAYER (SharedDefines.h:1099)
 	spellFailedTargetNoPockets           uint8  = 123 // SPELL_FAILED_TARGET_NO_POCKETS (SharedDefines.h:1105)
+	spellFailedTargetNotPlayer           uint8  = 122 // SPELL_FAILED_TARGET_NOT_PLAYER (SharedDefines.h:1104)
 	spellFailedAffectingCombat           uint8  = 1
 	spellFailedFoodLowLevel              uint8  = 35
 	spellFailedNoPet                     uint8  = 84
@@ -1688,6 +1690,22 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "pickpocket target invalid", "failReason", failReason)
 				return true
 			}
+		}
+	}
+
+	// Only-target-players gate (SpellInfo::CheckTarget, SpellInfo.cpp:1712-1713):
+	// a spell with SPELL_ATTR3_ONLY_TARGET_PLAYERS rejects a non-player unit
+	// target with SPELL_FAILED_TARGET_NOT_PLAYER. Sits in the corpseOwner/unit
+	// section of C++ CheckTarget — after the caster != unitTarget block (the
+	// PICKPOCKET arm above) and before the creature-type gate (1728). The
+	// corpse-owner leg is vacuous: Go has no corpse-target model on the client
+	// path. Only checked when a unit target exists, like C++ m_targets.GetUnitTarget().
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if spell.AttributesEx3&spellAttr3OnlyTargetPlayers != 0 && targetGUID != 0 {
+		if _, isPlayer := s.targetCreatureTypeMask(ctx, targetGUID); !isPlayer {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetNotPlayer), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell only targets players", "failReason", spellFailedTargetNotPlayer)
+			return true
 		}
 	}
 
