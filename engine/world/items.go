@@ -2661,8 +2661,13 @@ func (s *session) handleEquipmentSetSave(ctx context.Context, payload []byte) bo
 		return false
 	}
 	index, err := r.ReadU32()
-	if err != nil || index >= maxEquipmentSetIndex {
+	if err != nil {
 		return false
+	}
+	if index >= maxEquipmentSetIndex {
+		// C++ silently drops an out-of-range set index (HandleEquipmentSetSave,
+		// CharacterHandler.cpp:1498): no disconnect, no packet.
+		return true
 	}
 	name, err := r.ReadCString()
 	if err != nil {
@@ -2961,7 +2966,7 @@ func (s *session) equipmentSetBagByte(ctx context.Context, bagKey int64) (uint8,
 }
 
 // equipmentSetUnequipSlot moves the item worn in equipment slot into the
-// backpack (WorldSession::HandleEquipmentSetUse, CharacterHandler.cpp:1576-
+// inventory (WorldSession::HandleEquipmentSetUse, CharacterHandler.cpp:1576-
 // 1593: CanStoreItem NULL_BAG/NULL_SLOT, then CanUnequipItem(dstpos) — always
 // OK for equipment slots since bags cannot be equipped — then RemoveItem +
 // StoreItem; a full inventory sends the equip error).
@@ -2975,12 +2980,15 @@ func (s *session) equipmentSetUnequipSlot(ctx context.Context, slot uint32) {
 	if itemGUID == 0 {
 		return
 	}
-	freeSlot, ok := s.findFreeBackpackSlot(ctx)
+	// CanStoreItem(NULL_BAG, NULL_SLOT) searches the backpack first, then the
+	// equipped bags — findFreeInventorySlot covers both (findFreeBackpackSlot
+	// stopped at the backpack and reported full too early).
+	freeBagKey, _, freeSlot, ok := s.findFreeInventorySlot(ctx, s.playerGUID)
 	if !ok {
 		s.sendEquipError(equipErrInvFull, uint64(itemGUID))
 		return
 	}
-	_, _ = db.ExecContext(ctx, "UPDATE character_inventory SET bag = 0, slot = ? WHERE guid = ? AND item = ?", freeSlot, s.playerGUID, itemGUID)
+	_, _ = db.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?", freeBagKey, freeSlot, s.playerGUID, itemGUID)
 	s.syncEquipmentCache(ctx)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
