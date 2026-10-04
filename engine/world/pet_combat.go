@@ -131,6 +131,12 @@ func (s *Server) onPetCommandAttack(mapID, instanceID uint32, petGUID uint64, ta
 	if s == nil || petGUID == 0 || targetGUID == 0 {
 		return
 	}
+	// Unit::Attack GM leg (Unit.cpp:5664-5668) via PetAI::AttackStart: a pet
+	// cannot be ordered onto a GM-mode or GM-invisible player; the command is
+	// dropped without engaging, like the failed Attack in C++.
+	if s.gmAttackTargetBlocked(targetGUID) {
+		return
+	}
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
 	if motion := s.motionMapLocked(mapID, instanceID)[petGUID]; motion != nil && motion.Health > 0 {

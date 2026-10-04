@@ -1986,6 +1986,16 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadImplicitTargets), true)
 		return true
 	}
+	// SpellInfo::CheckTarget GM/invisibility leg (SpellInfo.cpp:1736-1743) via
+	// the CheckCast tail (Spell.cpp:6254): a GM-mode or GM-invisible player
+	// target fails with SPELL_FAILED_BM_OR_INVISGOD. The pet caster's
+	// GetAffectingPlayer is the session player, so the gate fires for harmful
+	// and helpful casts alike, like C++; self-targets are exempt
+	// (unitTarget != caster).
+	if target.UnitGUID != 0 && target.UnitGUID != motion.GUID && s.server != nil && s.server.gmAttackTargetBlocked(target.UnitGUID) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBmOrInvisGod), true)
+		return true
+	}
 	// Power (Spell.cpp:6237-6242) and cooldown (Spell.cpp:6244-6247) arms are
 	// already covered below by checkPetSpellPower and the motion
 	// SpellCooldowns/SpellCategoryCooldowns checks. The GCD arm

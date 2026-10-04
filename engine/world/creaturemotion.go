@@ -156,6 +156,41 @@ const (
 	creatureReactAggressive
 )
 
+// Item 6 coverage-bullet audit (passive, neutral, hostile, critter, GM,
+// dead/ghost, invisible, summoned) vs Creature::InitializeReactState
+// (Creature.cpp:1255-1266) and the react-state dispatch in
+// CreatureAI::MoveInLineOfSight (CreatureAI.cpp:118-123):
+//   - passive: bridged — the mapping below mirrors C++ exactly (totem,
+//     trigger, critter, spirit-service; the civilian/REACT_DEFENSIVE arm is
+//     commented out in C++ too, so creatureReactDefensive is defined but
+//     never assigned); the aggro scan skips passive motions.
+//   - neutral (REACT_NEUTRAL): no model — C++ init never assigns it either
+//     (only scripted SetReactState produces neutrals); faction-neutral
+//     creatures are still covered by the isAttackableFaction gate, so only
+//     scripted hostile-faction neutrals diverge (they aggro on sight in Go
+//     instead of engaging on damage only).
+//   - hostile: the default path, fully covered by the aggro scan.
+//   - critter: maps to passive via creatureType 8, matching C++
+//     IsCritter()->REACT_PASSIVE; CritterAI::JustEngagedWith's flee
+//     (PassiveAI.cpp:76-79, UNIT_STATE_FLEEING) is unmodeled — Go has no
+//     fleeing state, so critters stand instead of fleeing.
+//   - GM: bridged on all player-initiated paths — the aggro scan skips GM
+//     players, player spells reject GM/invisible targets at completion
+//     (explicitTargetGMBlocked), and melee swings / pet attack commands /
+//     directed pet casts reject them via gmAttackTargetBlocked (the
+//     IsValidAttackTarget GM/invisibility legs, Object.cpp:2945-2947, and
+//     the Unit::Attack GM leg, Unit.cpp:5664-5668).
+//   - dead/ghost: bridged — the aggro scan skips dead players, melee
+//     rejects dead targets, and the spell dead-target gate is in the
+//     completion path.
+//   - invisible: unmodeled beyond the GM-invisibility flag — Go has no
+//     invisibility-level/detect-level comparison (the CanSeeOrDetect legs);
+//     stealth detection is the only modeled sense.
+//   - summoned: guardian AI selection (CritterAI::Permissible,
+//     PassiveAI.cpp:95-100) is unmodeled; creature-vs-creature acquisition
+//     has no bridge — the aggro scan only iterates player targets, so C++
+//     MoveInLineOfSight engagements against non-player units (guards vs
+//     invaders, creatures vs summoned guardians) never start in Go.
 func creatureReactState(creatureType, npcFlags, flagsExtra uint32, aiName string) uint8 {
 	if creatureType == 8 || creatureType == 11 || flagsExtra&(0x00000002|0x00000080) != 0 || npcFlags&0x0000C000 != 0 || aiName == "PassiveAI" || aiName == "NullCreatureAI" || aiName == "TriggerAI" {
 		return creatureReactPassive

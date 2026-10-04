@@ -182,6 +182,27 @@ func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarge
 	return target, true
 }
 
+// gmAttackTargetBlocked mirrors the player-target legs of
+// WorldObject::IsValidAttackTarget (Object.cpp:2945-2947): a target in GM mode
+// (PLAYER_EXTRA_GM_ON, the "can't attack GMs" leg) or GM invisibility (the
+// "can't attack invisible" visibility leg) cannot be attacked. The melee swing
+// path reaches it via HandleAttackSwingOpcode's IsValidAttackTarget gate
+// (CombatHandler.cpp), the pet attack command via PetAI::AttackStart into
+// Unit::Attack's GM leg (Unit.cpp:5664-5668), and directed pet spell casts via
+// SpellInfo::CheckTarget (SpellInfo.cpp:1736-1743). Creature targets never
+// match: findSessionByGUID returns nil for them.
+func (s *Server) gmAttackTargetBlocked(guid uint64) bool {
+	if s == nil || guid == 0 {
+		return false
+	}
+	targetSess := s.findSessionByGUID(guid)
+	if targetSess == nil || targetSess.player == nil {
+		return false
+	}
+	flags := targetSess.player.ExtraFlags
+	return flags&playerExtraGMInvisible != 0 || flags&playerExtraGMOn != 0
+}
+
 func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
@@ -204,6 +225,15 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	if !ok {
 		s.debug("attack target not found", "account", s.accountName, "victim", victim)
 		return true
+	}
+	// WorldObject::IsValidAttackTarget GM/invisibility legs (Object.cpp:2945-2947)
+	// via HandleAttackSwingOpcode (CombatHandler.cpp): a GM-mode or GM-invisible
+	// player target rejects CMSG_ATTACK_SWING with SMSG_ATTACK_STOP. C++ checks
+	// IsValidAttackTarget before Unit::Attack, so this gate sits ahead of the
+	// dead-target reject and of Unit::Attack's own GM leg (Unit.cpp:5664-5668).
+	if s.server != nil && s.server.gmAttackTargetBlocked(victim) {
+		s.attackTarget = 0
+		return s.sendAttackStop(victim, false) == nil
 	}
 	if target.Health == 0 {
 		s.attackTarget = 0
