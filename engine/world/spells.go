@@ -5282,6 +5282,29 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 								targetDamage = uint32(int64(targetDamage) + int64(targetDamage)*int64(bonus)/100)
 							}
 						}
+						// Spell::EffectSchoolDMG (SpellEffects.cpp:767-774):
+						// the Blood Boil arm (DeathKnight family,
+						// SpellFamilyFlags[0] & 0x00040000) is a documented
+						// no-bridge. C++ fires only when the target carries the
+						// caster's Blood Plague (GetAuraEffect(
+						// SPELL_AURA_PERIODIC_DAMAGE, SPELLFAMILY_DEATHKNIGHT,
+						// 0, 0, 0x00000002 — SpellFamilyFlags[2] & 0x2 — with the
+						// caster-GUID filter, Unit.cpp:4524): damage += m_damage / 2
+						// (half of the cast-wide damage accumulated so far —
+						// m_damage is a Spell member fed post-bonus by every
+						// damage effect handler: EffectSchoolDMG at 788,
+						// EffectHealthLeech at 1532, EffectWeaponDmg at 3467, the
+						// power-burn leg at 1390; reset only in the Mocking Blow
+						// immune leg at 3223) plus int32(GetTotalAttackPowerValue(
+						// BASE_ATTACK) * 0.035f). Go lacks both structural pieces:
+						// the per-target loop rebuilds each target's damage from
+						// the base amount (no cross-target accumulator exists, and
+						// the post-bonus final stays inside executeSpellDamage),
+						// and no total-attack-power model exists anywhere in the
+						// tree. The !unitCaster gate is vacuous here: the caster
+						// is always the session player on these cast paths.
+						// Revisit only if a cast-wide damage accumulator and the
+						// total-AP model land.
 						s.executeSpellDamage(effCtx, effectTarget, spellID, targetDamage, effectIndex)
 					}
 				}
