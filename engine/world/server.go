@@ -150,7 +150,8 @@ type Server struct {
 	spiritWaveMu              sync.Mutex
 	lastSpiritWave            time.Time
 	lastCorpseExpiry          time.Time
-	spiritReviveQueue         map[uint64]uint64 // playerGUID -> spiritGuideGUID
+	spiritReviveQueue         map[uint64]uint64            // playerGUID -> spiritGuideGUID
+	spiritResurrectPending    map[uint64]spiritWavePending // playerGUID -> wave visual pass (resurrect due 500ms later)
 	creatureTextMgr           *creatureTextMgr
 	wardenCheckMgr            *wardenCheckMgr
 	spellChainMu              sync.RWMutex
