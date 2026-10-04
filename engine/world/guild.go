@@ -2341,6 +2341,38 @@ func guildConsumeBankWithdraw(ctx context.Context, q guildWithdrawExecutor, play
 	return true
 }
 
+// guildCheckBankWithdraw mirrors the check portion of
+// BankMoveItemData::HasWithdrawRights (Guild.cpp:864-876) without consuming
+// the slot: guildmaster (rank 0) passes, other ranks need the tab's view
+// right (0x01) and at least one remaining daily withdraw slot on the tab.
+// Used for same-tab bank rearrangements, where _MoveItems step 4 still
+// applies but RemoveItem never decrements (Guild.cpp:888-894).
+func guildCheckBankWithdraw(ctx context.Context, q guildWithdrawExecutor, playerGUID uint64, guildID uint32, tabID uint8) bool {
+	if tabID >= guildBankMaxTabs {
+		return false
+	}
+	var rank uint32
+	err := q.QueryRowContext(ctx, "SELECT rank FROM guild_member WHERE guid = ? AND guildid = ?", playerGUID, guildID).Scan(&rank)
+	if err != nil {
+		return false
+	}
+	if rank == 0 {
+		return true
+	}
+	var gbright, slotPerDay uint32
+	err = q.QueryRowContext(ctx, "SELECT gbright, SlotPerDay FROM guild_bank_right WHERE guildid = ? AND TabId = ? AND rid = ?", guildID, tabID, rank).Scan(&gbright, &slotPerDay)
+	if err != nil || gbright&0x01 == 0 || slotPerDay == 0 {
+		return false
+	}
+	if slotPerDay == 0xFFFFFFFF {
+		return true
+	}
+	tabCol := fmt.Sprintf("tab%d", tabID)
+	var currentWithdrawn uint32
+	_ = q.QueryRowContext(ctx, "SELECT "+tabCol+" FROM guild_member_withdraw WHERE guid = ?", playerGUID).Scan(&currentWithdrawn)
+	return currentWithdrawn < slotPerDay
+}
+
 // checkGuildBankMoneyWithdraw mirrors the silent pre-transfer validation of
 // Guild::HandleMemberWithdrawMoney (Guild.cpp:1724-1746): member-miss, the
 // withdraw-rights gate and the daily allowance check
@@ -3340,6 +3372,15 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 			return false
 		}
 		if swapping && destination.Bank && (!sourceLoc.Bank || sourceLoc.Tab != destination.Tab) && !guildConsumeBankWithdraw(ctx, tx, s.playerGUID, guildID, destination.Tab) {
+			return false
+		}
+		// Guild::_MoveItems step 4 (Guild.cpp:2683-2690):
+		// BankMoveItemData::HasWithdrawRights (Guild.cpp:864-876) has no
+		// same-tab skip, so even a same-tab bank rearrangement requires
+		// remaining withdraw slots != 0. RemoveItem only decrements when the
+		// item leaves the tab (Guild.cpp:888-894), so this arm checks without
+		// consuming. Silent on failure — _MoveItems returns with no feedback.
+		if sourceLoc.Bank && destination.Bank && sourceLoc.Tab == destination.Tab && !guildCheckBankWithdraw(ctx, tx, s.playerGUID, guildID, sourceLoc.Tab) {
 			return false
 		}
 		return true
