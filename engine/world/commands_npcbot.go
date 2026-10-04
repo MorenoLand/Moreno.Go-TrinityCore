@@ -11,10 +11,10 @@ import (
 
 // This file wires the ".npcbot" command family
 // (src/server/game/AI/NpcBots/botcommands.cpp:97-125). The "add", "remove",
-// "spawn", "move", "delete", "lookup", "revive", "reloadconfig" and "command"
-// (standstill/stopfully/follow) arms are converted; the first five give
-// Recruit/AddBotFree/Add their first real call sites. The
-// remaining arms (info/hide/unhide/show/recall/kill/
+// "spawn", "move", "delete", "lookup", "revive", "reloadconfig", "command"
+// (standstill/stopfully/follow), "info", "hide", "unhide" and "show" arms are
+// converted; the first five give Recruit/AddBotFree/Add their first real
+// call sites. The remaining arms (recall/kill/
 // suicide/distance/order/set) land in later units.
 //
 // The "add"/"remove" arms are selection-driven in C++ (owner->GetSelectedUnit()
@@ -32,17 +32,18 @@ const npcbotCreatureFlagMask = 0x04000000 | 0x08000000
 // Base player classes (SharedDefines.h), needed by the default roles/spec
 // mirrors. The custom bot classes live in npcbots.go (BotClassBlademaster etc.).
 const (
-	npcBotClassWarrior    = uint8(1)
-	npcBotClassPaladin    = uint8(2)
-	npcBotClassHunter     = uint8(3)
-	npcBotClassRogue      = uint8(4)
-	npcBotClassPriest     = uint8(5)
-	npcBotClassShaman     = uint8(7)
-	npcBotClassMage       = uint8(8)
-	npcBotClassWarlock    = uint8(9)
-	npcBotClassDruid      = uint8(11)
-	npcBotSpecDefault     = uint8(31)          // BOT_SPEC_DEFAULT (botcommon.h:799)
-	npcBotSpawnFlagNPCBot = uint32(0x04000000) // CREATURE_FLAG_EXTRA_NPCBOT (CreatureData.h:63)
+	npcBotClassWarrior     = uint8(1)
+	npcBotClassPaladin     = uint8(2)
+	npcBotClassHunter      = uint8(3)
+	npcBotClassRogue       = uint8(4)
+	npcBotClassPriest      = uint8(5)
+	npcBotClassDeathKnight = uint8(6)
+	npcBotClassShaman      = uint8(7)
+	npcBotClassMage        = uint8(8)
+	npcBotClassWarlock     = uint8(9)
+	npcBotClassDruid       = uint8(11)
+	npcBotSpecDefault      = uint8(31)          // BOT_SPEC_DEFAULT (botcommon.h:799)
+	npcBotSpawnFlagNPCBot  = uint32(0x04000000) // CREATURE_FLAG_EXTRA_NPCBOT (CreatureData.h:63)
 
 	// Bot template entry range and class/race bounds for the lookup arm.
 	npcBotEntryBegin       = uint32(70001) // BOT_ENTRY_BEGIN (botcommon.h:13)
@@ -70,7 +71,7 @@ const (
 
 // handleCmdNpcBot dispatches the "npcbot" root (botcommands.cpp:124-126).
 func (s *session) handleCmdNpcBot(ctx context.Context, args []string) {
-	const syntax = "Syntax: .npcbot add|remove|spawn|move|delete|lookup|revive|reloadconfig|command"
+	const syntax = "Syntax: .npcbot add|remove|spawn|move|delete|lookup|revive|reloadconfig|command|info|hide|unhide|show"
 	if len(args) == 0 {
 		s.sendSysMessage(syntax)
 		return
@@ -102,6 +103,14 @@ func (s *session) handleCmdNpcBot(ctx context.Context, args []string) {
 		s.handleNpcBotReloadConfigCommand(ctx)
 	case strings.HasPrefix("command", sub):
 		s.handleNpcBotCommandSubCommand(ctx, rest)
+	case strings.HasPrefix("info", sub):
+		s.handleNpcBotInfoCommand(ctx)
+	case strings.HasPrefix("hide", sub):
+		s.handleNpcBotHideCommand(ctx)
+	case strings.HasPrefix("unhide", sub):
+		s.handleNpcBotUnhideCommand(ctx)
+	case strings.HasPrefix("show", sub):
+		s.handleNpcBotUnhideCommand(ctx) // C++ maps "show" to HandleNpcBotUnhideCommand
 	default:
 		s.sendSysMessage(syntax)
 	}
@@ -890,4 +899,166 @@ func (s *session) handleNpcBotBotCommandState(ctx context.Context, state uint8, 
 		}
 	}
 	s.sendSysMessage(fmt.Sprintf("Bots' command state set to '%s'", stateName))
+}
+
+// handleNpcBotInfoCommand mirrors HandleNpcBotInfoCommand
+// (botcommands.cpp:1089, PLAYER_COMMANDS, Console::No): lists the selected
+// player's npcbot count per class. The target decode mirrors C++: no target
+// answers the usage lines, a non-player target answers "No player selected",
+// and the HasLowerSecurity arm answers "Invalid target" (bridged via the
+// target account's security level == ChatHandler::HasLowerSecurity). The
+// per-class counts come from the persisted bot data plus NPCBotManager.Extras
+// (== BotDataMgr::SelectNpcBotExtras) — the same source as the lookup arm.
+// The per-class alive counts and GetNpcBotsCount's live BotMap walk have no
+// Go bridge (Go keeps no live-creature state for bots); the alive field is
+// answered as 0 and the count is the persisted owned-bot total.
+func (s *session) handleNpcBotInfoCommand(ctx context.Context) {
+	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
+		s.sendSysMessage("NpcBots is unavailable.")
+		return
+	}
+	mgr := s.server.Features.NPCBots
+	sel := s.selection
+	if sel == 0 {
+		s.sendSysMessage(".npcbot info")
+		s.sendSysMessage("Lists NpcBots count of each class owned by selected player. You can use this on self and your party members")
+		return
+	}
+	// C++: owner->GetSelectedPlayer() — only a player target qualifies.
+	if uint16(sel>>48) != 0x0000 {
+		s.sendSysMessage("No player selected")
+		return
+	}
+	master := uint32(sel)
+	var accountID uint32
+	if cs := s.server.CharactersStore; cs != nil && cs.DB != nil {
+		_ = cs.DB.QueryRowContext(ctx, "SELECT account FROM characters WHERE guid = ?", master).Scan(&accountID)
+	}
+	if s.security < s.accountSecurityLevel(ctx, accountID) {
+		s.sendSysMessage("Invalid target")
+		return
+	}
+	if mgr.CountByOwner(master) == 0 {
+		s.sendSysMessage(fmt.Sprintf("%s has no NpcBots!", s.npcbotPlayerName(ctx, master)))
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("Listing NpcBots for %s", s.npcbotPlayerName(ctx, master)))
+	s.sendSysMessage(fmt.Sprintf("Owned NpcBots: %d", mgr.CountByOwner(master)))
+	counts := make(map[uint8]uint8)
+	for _, bot := range mgr.Snapshot() {
+		if bot.Owner != master {
+			continue
+		}
+		extras, ok := mgr.Extras(bot.Entry)
+		if !ok {
+			continue
+		}
+		if extras.Class < npcBotClassWarrior || extras.Class >= npcBotClassEnd {
+			continue
+		}
+		counts[extras.Class]++
+	}
+	for class := npcBotClassWarrior; class < npcBotClassEnd; class++ {
+		if counts[class] == 0 {
+			continue
+		}
+		s.sendSysMessage(fmt.Sprintf("%s: %d (alive: %d)", npcbotInfoClassLabel(class), counts[class], 0))
+	}
+}
+
+// npcbotInfoClassLabel mirrors the class-label switch in
+// HandleNpcBotInfoCommand (botcommands.cpp:1118-1139).
+func npcbotInfoClassLabel(class uint8) string {
+	switch class {
+	case npcBotClassWarrior:
+		return "Warriors"
+	case npcBotClassPaladin:
+		return "Paladins"
+	case npcBotClassMage:
+		return "Mages"
+	case npcBotClassPriest:
+		return "Priests"
+	case npcBotClassWarlock:
+		return "Warlocks"
+	case npcBotClassDruid:
+		return "Druids"
+	case npcBotClassDeathKnight:
+		return "Death Knights"
+	case npcBotClassRogue:
+		return "Rogues"
+	case npcBotClassShaman:
+		return "Shamans"
+	case npcBotClassHunter:
+		return "Hunters"
+	case BotClassBlademaster:
+		return "Blademasters"
+	case BotClassObsidianDestroyer:
+		return "Destroyers"
+	case BotClassArchmage:
+		return "Archmagi"
+	case BotClassDreadlord:
+		return "Dreadlords"
+	case BotClassSpellbreaker:
+		return "Spell Breakers"
+	case BotClassDarkRanger:
+		return "Dark Rangers"
+	default:
+		return "Unknown Class"
+	}
+}
+
+// handleNpcBotHideCommand mirrors HandleNpcBotHideCommand (botcommands.cpp:412,
+// PLAYER_COMMANDS, Console::No). The !HaveBot() gate answers the C++ usage
+// lines verbatim; the !IsAlive() gate bridges to isDeadOrGhost() and the
+// IsPartyInCombat() gate bridges to the session combat state ==
+// LANG_YOU_IN_COMBAT(23) (commands_tele.go:388). BotMgr::SetBotsHidden(true)
+// and the IsPartyInCombat party remainder are live-world legs with no Go
+// model (no BotMap), so the success line is answered as a state-change no-op.
+func (s *session) handleNpcBotHideCommand(ctx context.Context) {
+	_ = ctx
+	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
+		s.sendSysMessage("NpcBots is unavailable.")
+		return
+	}
+	if s.server.Features.NPCBots.CountByOwner(uint32(s.playerGUID)) == 0 {
+		s.sendSysMessage(".npcbot hide")
+		s.sendSysMessage("Removes your owned npcbots from world temporarily")
+		return
+	}
+	if s.isDeadOrGhost() {
+		s.sendNotification("You are dead")
+		return
+	}
+	if s.isInCombat() {
+		s.sendNotification("You are in combat!") // LANG_YOU_IN_COMBAT (23)
+		return
+	}
+	s.sendSysMessage("Bots hidden")
+}
+
+// handleNpcBotUnhideCommand mirrors HandleNpcBotUnhideCommand
+// (botcommands.cpp:444, PLAYER_COMMANDS, Console::No); the C++ table maps both
+// "unhide" and "show" to this handler, so this covers both Go arms. The
+// guard chain and the SetBotsHidden(false) no-bridge delta are identical to
+// the hide arm above.
+func (s *session) handleNpcBotUnhideCommand(ctx context.Context) {
+	_ = ctx
+	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
+		s.sendSysMessage("NpcBots is unavailable.")
+		return
+	}
+	if s.server.Features.NPCBots.CountByOwner(uint32(s.playerGUID)) == 0 {
+		s.sendSysMessage(".npcbot unhide | show")
+		s.sendSysMessage("Returns your temporarily hidden bots back")
+		return
+	}
+	if s.isDeadOrGhost() {
+		s.sendNotification("You are dead")
+		return
+	}
+	if s.isInCombat() {
+		s.sendNotification("You are in combat!") // LANG_YOU_IN_COMBAT (23)
+		return
+	}
+	s.sendSysMessage("Bots unhidden")
 }
