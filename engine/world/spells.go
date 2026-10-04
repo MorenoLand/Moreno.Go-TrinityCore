@@ -1129,7 +1129,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// channeled/cast-time gate below is a different arm (Spell.cpp:3139-3149);
 	// this one catches zero-cast-time NOT_SEATED and autorepeat casts.
 	// C++ relative order: immediately after the cheat-spell gate, inside the
-	// unit-caster block, ahead of the vehicle check.
+	// unit-caster block, ahead of the vehicle arm's no-bridge note.
 	// Delta: Go tracks only a coarse s.isFalling (movementFalling flag, no
 	// FALLING_FAR distinction), so the STUCK exemption rides isFalling alone.
 	// Delta: the arm also fires on triggered casts in C++ (no
@@ -1139,6 +1139,40 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		(spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0 || spell.AuraInterruptFlags&auraInterruptFlagNotSeated != 0) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedMoving), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "moving autorepeat or not-seated cast")
+		return true
+	}
+	// CheckCast vehicle arm (Spell::CheckCast, Spell.cpp:5332-5336):
+	// SpellInfo::CheckVehicle (SpellInfo.cpp:1818-1863) gates spells cast
+	// while the caster rides a vehicle — seat-flag check against the spell's
+	// attributes plus the controlled-vehicle summon restriction — but the
+	// caster is never in a vehicle on this path: Go has no runtime vehicle
+	// model (no GetVehicle / no vehicle kit on the session player; only the
+	// DBC consts in data/wotlk/vehicle.go exist), so the arm always resolves
+	// to SPELL_CAST_OK. Documented no-bridge; the TRIGGERED_IGNORE_CASTED_WHILE_MOUNTED
+	// wrapper is vacuous for client casts (never set on this path).
+	// CheckCast pet-presence gate (Spell::CheckCast, Spell.cpp:5413-5431):
+	// any effect with TargetA == TARGET_UNIT_PET (5) requires the caster's
+	// guardian pet (Unit::GetGuardianPet); without one the cast fails with
+	// SPELL_FAILED_DONT_REPORT (27) when triggered by an aura spell, else
+	// SPELL_FAILED_NO_PET (84). The npcbot arm is vacuous (this is the
+	// client-initiated path — caster is always the session player), and the
+	// m_triggeredByAuraSpell arm is vacuous here (aura-triggered casts ride
+	// castSpellDirectWithOverrides, which runs no CheckCast gauntlet), so the
+	// reject is always SPELL_FAILED_NO_PET. s.activePetNumber() == 0 is the
+	// standing guardian-pet model (the checkLearnSpellCast convention:
+	// PetNumber first, then the pet number embedded in PetGUID).
+	// C++ relative order: right after the dest-LOS check, ahead of the
+	// battleground gate.
+	hasPetTarget := false
+	for _, effect := range spell.Effects {
+		if effect.ImplicitTargetA == spellImplicitTargetUnitPet {
+			hasPetTarget = true
+			break
+		}
+	}
+	if hasPetTarget && s.activePetNumber() == 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoPet), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "pet-targeted spell without guardian pet")
 		return true
 	}
 	// CheckCast battleground gate (Spell::CheckCast, Spell.cpp:5433-5437): client-initiated
