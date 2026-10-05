@@ -4,7 +4,7 @@
 -- (boss_deathbringer_saurfang (BossAI, DATA_DEATHBRINGER_SAURFANG =
 -- 3), npc_high_overlord_saurfang_icc (ScriptedAI intro/outro event
 -- NPC), npc_muradin_bronzebeard_icc (ScriptedAI intro/outro event
--- NPC), npc_saurfang_event (ScriptedAI guard)) + 9 SpellScripts
+-- NPC), npc_saurfang_event (ScriptedAI guard)) + 7 SpellScripts
 -- (spell_deathbringer_blood_link, spell_deathbringer_blood_power,
 -- spell_deathbringer_rune_of_blood, spell_deathbringer_blood_nova,
 -- spell_deathbringer_blood_nova_targeting,
@@ -104,12 +104,12 @@
 -- no-AuraScript-bridge queue.
 -- achievement_ive_gone_and_made_a_mess joins the no-achievement
 -- bridge queue (the gunship achievement_im_on_a_boat precedent).
--- All 27 Talk() calls in the file accounted for (27 = saurfang
+-- All 29 Talk() calls in the file accounted for (29 = saurfang
 -- boss aggro 7 (1) + kill 10 (1) + frenzy 11 (1) + death 13 (1) +
--- mark 8 (1) + intro alliance 0-3 (4) + intro horde 4-6 (3) +
--- blood beasts 9 (1) + berserk 12 (1) + emote 14 (1) + horde
--- saurfang intro/outro 0/11..14/1..5 (9) + alliance muradin
--- intro/outro 0/3/1/2 (4)).
+-- mark 8 (1) + boss intro alliance 0-3 (4) + boss intro horde 4-6
+-- (3) + blood beasts 9 (1) + berserk 12 (1) + emote 14 (1) [15] +
+-- horde saurfang intro/outro 0/1/2..5/11..14 (10) + alliance
+-- muradin intro/outro 0/1/2/3 (4)).
 
 local ENTRY_DEATHBRINGER_SAURFANG = 37813
 
