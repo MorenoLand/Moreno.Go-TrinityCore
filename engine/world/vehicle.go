@@ -648,7 +648,7 @@ func (s *session) dropBattlegroundFlagIfCarried() {
 
 // enterVehicle places the session's player into the specified vehicle and seat.
 // Reference: Unit::_EnterVehicle (Unit.cpp:8320) & VehicleJoinEvent::Execute (Vehicle.cpp:790-910).
-func (s *session) enterVehicle(vehicleGUID uint64, seatID int8) {
+func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID int8) {
 	if s == nil || s.player == nil {
 		return
 	}
@@ -665,13 +665,15 @@ func (s *session) enterVehicle(vehicleGUID uint64, seatID int8) {
 
 	actualSeat := seatID
 	playerVehicleID := uint32(0)
+	var seatInfo *wotlk.VehicleSeatEntry
 	if s.server != nil {
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, vehicleGUID); kit != nil {
-			assigned, seatInfo, ok := kit.AddPassenger(s.playerGUID, seatID)
+			assigned, si, ok := kit.AddPassenger(s.playerGUID, seatID)
 			if !ok {
 				return
 			}
 			actualSeat = assigned
+			seatInfo = si
 			if kit.IsPlayer {
 				playerVehicleID = kit.VehicleID
 			}
@@ -688,6 +690,14 @@ func (s *session) enterVehicle(vehicleGUID uint64, seatID int8) {
 		}
 	}
 
+	// VehicleJoinEvent::Execute (Vehicle.cpp:832-852): boarding strips the
+	// passenger's mounted auras and temporarily unsummons the pet unless the
+	// seat carries VEHICLE_SEAT_FLAG_B_KEEP_PET.
+	s.clearOtherMountedAuras(0)
+	if seatInfo == nil || !seatInfo.HasFlag(wotlk.VehicleSeatFlagBKeepPet) {
+		s.temporarilyUnsummonPet(ctx)
+	}
+
 	s.player.VehicleGUID = vehicleGUID
 	s.player.VehicleSeat = actualSeat
 	if playerVehicleID != 0 {
@@ -700,7 +710,7 @@ func (s *session) enterVehicle(vehicleGUID uint64, seatID int8) {
 
 // exitVehicle removes the session's player from their current vehicle.
 // Reference: Unit::_ExitVehicle (Unit.cpp:8365) & Vehicle::RemovePassenger (Vehicle.cpp:498-543).
-func (s *session) exitVehicle() {
+func (s *session) exitVehicle(ctx context.Context) {
 	if s == nil || s.player == nil || s.player.VehicleGUID == 0 {
 		return
 	}
@@ -732,6 +742,12 @@ func (s *session) exitVehicle() {
 		}
 	}
 
+	// Unit::_ExitVehicle (Unit.cpp:13202-13204): the fall baseline resets to
+	// the exit position, and a temporarily-unsummoned pet is resummoned.
+	s.lastFallZ = s.player.Z
+	s.lastFallTime = 0
+	s.resummonTemporaryPet(ctx)
+
 	s.player.VehicleGUID = 0
 	s.player.VehicleSeat = 0
 	if playerVehicleID != 0 {
@@ -742,37 +758,68 @@ func (s *session) exitVehicle() {
 
 // handleChangeSeatsOnControlledVehicle processes CMSG_CHANGE_SEATS_ON_CONTROLLED_VEHICLE (0x49B).
 // Reference: WorldSession::HandleChangeSeatsOnControlledVehicle (VehicleHandler.cpp:52-127).
+// Packet layout: packed vehicle GUID, MovementInfo, packed accessory GUID, int8 seat id.
 func (s *session) handleChangeSeatsOnControlledVehicle(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) == 0 {
 		return true
 	}
-	targetSeat := int8(payload[0])
-	if len(payload) >= 9 {
-		r := protocol.NewReader(payload)
-		_, _ = r.ReadU64()
-		if sByte, err := r.ReadU8(); err == nil {
-			targetSeat = int8(sByte)
-		}
+	b := protocol.NewReader(payload)
+	vehGUID, err := b.ReadPackedGUID()
+	if err != nil {
+		return true
+	}
+	// vehicle_base->m_movementInfo = movementInfo (VehicleHandler.cpp:113):
+	// no bridge — Go has no creature-unit model behind a vehicle base.
+	if _, err := readMovementInfo(b); err != nil {
+		return true
+	}
+	accessory, err := b.ReadPackedGUID()
+	if err != nil {
+		return true
+	}
+	seatByte, err := b.ReadU8()
+	if err != nil {
+		return true
 	}
 
-	if s.server != nil && s.player.VehicleGUID != 0 {
+	// if (vehicle_base->GetGUID() != guid) return (VehicleHandler.cpp:116-117).
+	if s.player.VehicleGUID == 0 || vehGUID != s.player.VehicleGUID {
+		return true
+	}
+
+	// Accessory arm (VehicleHandler.cpp:119-123): boarding a seat on another
+	// unit's vehicle via HandleSpellClick — no bridge, Go has no
+	// creature-unit/spell-click model.
+	if accessory != 0 {
+		return true
+	}
+
+	// ChangeSeat(-1, seatId > 0): previous/next empty seat (VehicleHandler.cpp:118).
+	// The CanSwitchFromSeat pre-gate (VehicleHandler.cpp:60-67) lives inside
+	// VehicleKit.SwitchSeat.
+	next := int8(seatByte) > 0
+	if s.server != nil {
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
-			newSeat, seatInfo, ok := kit.SwitchSeat(s.playerGUID, targetSeat)
-			if !ok {
-				return true
+			if nextSeat, ok := kit.GetNextEmptySeat(s.player.VehicleSeat, next); ok {
+				if assigned, seatInfo, switched := kit.SwitchSeat(s.playerGUID, nextSeat); switched {
+					s.player.VehicleSeat = assigned
+					if seatInfo != nil && seatInfo.CanControl() {
+						s.sendClientControl(kit.VehicleGUID, true)
+						spells := s.server.loadCreatureSpells(ctx, kit.CreatureEntry)
+						s.sendVehiclePetSpells(kit.VehicleGUID, spells)
+					}
+					s.sendPlayerUpdate()
+				}
 			}
-			s.player.VehicleSeat = newSeat
-			if seatInfo != nil && seatInfo.CanControl() {
-				s.sendClientControl(kit.VehicleGUID, true)
-				spells := s.server.loadCreatureSpells(ctx, kit.CreatureEntry)
-				s.sendVehiclePetSpells(kit.VehicleGUID, spells)
-			}
-			s.sendPlayerUpdate()
 			return true
 		}
 	}
 
-	s.player.VehicleSeat = targetSeat
+	if next {
+		s.player.VehicleSeat++
+	} else if s.player.VehicleSeat > 0 {
+		s.player.VehicleSeat--
+	}
 	s.sendPlayerUpdate()
 	return true
 }
@@ -801,7 +848,7 @@ func (s *session) handleControllerEjectPassenger(ctx context.Context, payload []
 		return true
 	}
 	if passSess := s.server.findSessionByGUID(passGUID); passSess != nil && passSess.player.Map == s.player.Map && passSess.player.InstanceID == s.player.InstanceID && passSess.player.VehicleGUID == vehGUID {
-		passSess.exitVehicle()
+		passSess.exitVehicle(ctx)
 	}
 	return true
 }
@@ -822,11 +869,24 @@ func canEjectVehiclePassenger(kit *VehicleKit, controllerGUID, passengerGUID uin
 
 // handleDismissControlledVehicle processes CMSG_DISMISS_CONTROLLED_VEHICLE (0x46D).
 // Reference: WorldSession::HandleDismissControlledVehicle (VehicleHandler.cpp:27-50).
+// Packet layout: packed charmed-vehicle GUID, MovementInfo.
 func (s *session) handleDismissControlledVehicle(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	s.exitVehicle()
+	// The GetCharmedGUID() gate (VehicleHandler.cpp:33-38) has no bridge —
+	// Go tracks no charmed-unit model; the in-vehicle gate inside exitVehicle
+	// is the Go form.
+	if len(payload) > 0 {
+		b := protocol.NewReader(payload)
+		if _, err := b.ReadPackedGUID(); err == nil {
+			// _player->m_movementInfo = mi (VehicleHandler.cpp:46).
+			if info, err := readMovementInfo(b); err == nil {
+				s.setLastMovementInfo(info)
+			}
+		}
+	}
+	s.exitVehicle(ctx)
 	return true
 }
 
@@ -859,7 +919,7 @@ func (s *session) handlePlayerVehicleEnter(ctx context.Context, payload []byte) 
 	if kit == nil || !kit.IsPlayer {
 		return true
 	}
-	s.enterVehicle(vehGUID, seat)
+	s.enterVehicle(ctx, vehGUID, seat)
 	return true
 }
 
@@ -888,7 +948,7 @@ func (s *session) handleRequestVehicleExit(ctx context.Context, payload []byte) 
 			}
 		}
 	}
-	s.exitVehicle()
+	s.exitVehicle(ctx)
 	return true
 }
 
