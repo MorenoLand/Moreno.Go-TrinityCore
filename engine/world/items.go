@@ -1354,6 +1354,7 @@ const (
 	equipErrItemNotFound                      = 23
 	equipErrNotEnoughMoney                    = 29
 	equipErrCanOnlyDoWithEmptyBags            = 31
+	equipErrItemLocked                        = 36 // C++ EQUIP_ERR_ITEM_LOCKED (ItemDefines.h:62)
 	equipErrYouAreDead                        = 38
 	equipErrCantDoRightNow                    = 39
 	equipErrStackableCantBeWrapped            = 43
@@ -1372,7 +1373,9 @@ const (
 	// equipErrNone is C++ EQUIP_ERR_NONE (59): Eluna::OnUse's tail
 	// (ItemHooks.cpp) sends it raw in SMSG_INVENTORY_CHANGE_FAILURE when a
 	// Lua handler blocks the cast, to un-stick the grayed item client-side.
-	equipErrNone = 59
+	equipErrNone                = 59
+	equipErrNotInCombat         = 60 // C++ EQUIP_ERR_NOT_IN_COMBAT (ItemDefines.h:86)
+	equipErrNotDuringArenaMatch = 78 // C++ EQUIP_ERR_NOT_DURING_ARENA_MATCH (ItemDefines.h:103)
 )
 
 func (s *session) sendEquipError(errCode uint8, itemGUID uint64) {
@@ -1429,6 +1432,13 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
+	if glyphIndex >= 6 {
+		// SpellHandler.cpp:95-99 — glyphIndex >= MAX_GLYPH_SLOT_INDEX (6) is a
+		// hard EQUIP_ERR_ITEM_NOT_FOUND, not a silent ignore. C++ reads the
+		// whole payload first, so the check sits after the castFlags read.
+		s.sendEquipError(equipErrItemNotFound, itemGUID)
+		return true
+	}
 
 	target, _ := protocol.ReadSpellTargetData(r)
 
@@ -1447,10 +1457,11 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	var dbItemGUID int64
 	var itemEntry int64
 	var count int64
-	err = cdb.QueryRowContext(ctx, `SELECT ci.item, ii.itemEntry, ii.count
+	var itemInstanceFlags int64
+	err = cdb.QueryRowContext(ctx, `SELECT ci.item, ii.itemEntry, ii.count, ii.flags
 		FROM character_inventory AS ci
 		JOIN item_instance AS ii ON ii.guid = ci.item
-		WHERE ci.guid = ? AND ci.bag = ? AND ci.slot = ? LIMIT 1`, s.playerGUID, bagKey, slot).Scan(&dbItemGUID, &itemEntry, &count)
+		WHERE ci.guid = ? AND ci.bag = ? AND ci.slot = ? LIMIT 1`, s.playerGUID, bagKey, slot).Scan(&dbItemGUID, &itemEntry, &count, &itemInstanceFlags)
 	if err != nil || count <= 0 {
 		s.sendEquipError(equipErrItemNotFound, itemGUID)
 		return true
@@ -1460,6 +1471,70 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	if itemGUID != 0 && itemGUID != rawItemGUID && itemGUID != fullItemGUID {
 		s.sendEquipError(equipErrItemNotFound, itemGUID)
 		return true
+	}
+
+	// Item-template gates (SpellHandler.cpp:127-172). When the template row is
+	// missing the arms are skipped — C++ would already have errored at the
+	// !proto check above, so a missing row here means the DB is incomplete,
+	// not a bypass.
+	var itemClass, itemInvType, itemTplFlags, bonding, reqLevel int64
+	var itemSpellIDs [5]int64
+	tplOK := false
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		tplOK = s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT Class, InventoryType, Flags, Bonding, RequiredLevel, spellid_1, spellid_2, spellid_3, spellid_4, spellid_5 FROM item_template WHERE entry = ? LIMIT 1`, itemEntry).Scan(&itemClass, &itemInvType, &itemTplFlags, &bonding, &reqLevel, &itemSpellIDs[0], &itemSpellIDs[1], &itemSpellIDs[2], &itemSpellIDs[3], &itemSpellIDs[4]) == nil
+	}
+	if tplOK {
+		// SpellHandler.cpp:127-132 — item classes with an equip slot can only
+		// be used from equipped state. Go models equipped items at bag 0,
+		// slots 0..18 (the client's bagIndex 255 arm resolves to bagKey 0).
+		if itemInvType != 0 /* INVTYPE_NON_EQUIP (ItemTemplate.h:261) */ && !(bagKey == 0 && slot < 19) {
+			s.sendEquipError(equipErrItemNotFound, fullItemGUID)
+			return true
+		}
+		// Player::CanUseItem (Player.cpp:11936) — the level gate. The
+		// faction/class/race, skill, reputation, holiday and learning arms of
+		// CanUseItem have no Go models yet (no per-player known-spell/skill
+		// reads on this path); queued.
+		if s.player.Level < uint8(reqLevel) {
+			s.sendEquipError(equipErrCantEquipLevelI, fullItemGUID)
+			return true
+		}
+		// SpellHandler.cpp:137-149 — arena restrictions. InArena's Go proxy is
+		// an active arena queue entry past the wait queue (arena_team.go
+		// documents the established/in-progress leg mapping).
+		inArena := false
+		for i := range s.bgQueues {
+			if e := &s.bgQueues[i]; e.Active && e.IsArena && e.Status == BGStatusInProgress {
+				inArena = true
+				break
+			}
+		}
+		// ITEM_FLAG_IGNORE_DEFAULT_ARENA_RESTRICTIONS 0x200000 (ItemTemplate.h:173),
+		// ITEM_FLAG_NOT_USEABLE_IN_ARENA 0x4000000 (ItemTemplate.h:178).
+		if inArena && ((itemClass == itemClassConsumable && itemTplFlags&0x200000 == 0) || itemTplFlags&0x4000000 != 0) {
+			s.sendEquipError(equipErrNotDuringArenaMatch, fullItemGUID)
+			return true
+		}
+		// SpellHandler.cpp:151-162 — in-combat items whose any spell cannot be
+		// used in combat refuse with EQUIP_ERR_NOT_IN_COMBAT.
+		if s.isInCombat() && s.server != nil && s.server.Data != nil {
+			for _, tplSpellID := range itemSpellIDs {
+				if tplSpellID == 0 {
+					continue
+				}
+				if spell, found, sErr := s.server.Data.Spell(uint32(tplSpellID)); sErr == nil && found && spell.Attributes&spellAttr0CantUsedInCombat == 0 {
+					s.sendEquipError(equipErrNotInCombat, fullItemGUID)
+					return true
+				}
+			}
+		}
+		// SpellHandler.cpp:164-172 — BIND_WHEN_PICKED_UP (1), BIND_WHEN_USE
+		// (3), BIND_QUEST_ITEM (4) (ItemTemplate.h:99-102) soulbind on first
+		// use. C++ does this before the targets read; Go does it before the
+		// cooldown/cast arms, same effective order.
+		if (bonding == 1 || bonding == 3 || bonding == 4) && itemInstanceFlags&int64(itemInstanceFlagSoulbound) == 0 {
+			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET flags = flags | ? WHERE guid = ?", uint32(itemInstanceFlagSoulbound), rawItemGUID)
+		}
 	}
 
 	// Check player spell cooldown
@@ -2021,6 +2096,31 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 	itemGUID, itemEntry, _, err := s.inventoryItemAt(ctx, bagIndex, slot)
 	if err != nil || itemGUID == 0 {
 		s.sendEquipError(equipErrItemNotFound, 0)
+		return true
+	}
+
+	// SpellHandler.cpp:221-229 — only items flagged lootable (ITEM_FLAG_HAS_LOOT
+	// 0x4, ItemTemplate.h:154) or wrapped (a character_gifts row, the async
+	// HandleOpenWrappedItemCallback arm) can be opened at all.
+	wrapped := false
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var giftCount int64
+		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_gifts WHERE item_guid = ?", itemGUID).Scan(&giftCount)
+		wrapped = giftCount > 0
+	}
+	var tplFlags, lockID int64
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Flags, LockID FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&tplFlags, &lockID)
+	}
+	if tplFlags&0x4 == 0 && !wrapped {
+		s.sendEquipError(equipErrCantDoRightNow, uint64(itemGUID))
+		return true
+	}
+	// SpellHandler.cpp:231-250 — locked items refuse with EQUIP_ERR_ITEM_LOCKED.
+	// Go has no Lock.dbc model and no per-item unlocked state, so any LockID
+	// refuses; the unknown-lock vs not-unlocked nuance is a documented delta.
+	if lockID != 0 {
+		s.sendEquipError(equipErrItemLocked, uint64(itemGUID))
 		return true
 	}
 

@@ -41,6 +41,7 @@ const (
 
 	spellAttr0Ability                      uint32 = 0x00000010 // SPELL_ATTR0_ABILITY (SharedDefines.h:416)
 	spellAttr0CantCancel                   uint32 = 0x80000000 // SPELL_ATTR0_CANT_CANCEL (SharedDefines.h:443)
+	spellAttr0CantUsedInCombat             uint32 = 0x10000000 // SPELL_ATTR0_CANT_USED_IN_COMBAT (SharedDefines.h:440)
 	spellAttr0ReqAmmo                      uint32 = 0x00000002 // SPELL_ATTR0_REQ_AMMO (SharedDefines.h:413)
 	spellAttr0Tradespell                   uint32 = 0x00000020 // SPELL_ATTR0_TRADESPELL (SharedDefines.h:417)
 	spellAttr3NoDoneBonus                  uint32 = 0x20000000 // SPELL_ATTR3_NO_DONE_BONUS (SharedDefines.h:552) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
@@ -13248,6 +13249,11 @@ func (s *session) handleFarSight(ctx context.Context, payload []byte) bool {
 
 // handleGetMirrorImageData processes CMSG_GET_MIRRORIMAGE_DATA (0x401).
 // Reference: WorldSession::HandleMirrorImageDataRequest (SpellHandler.cpp:635).
+// DOCUMENTED DELTA: C++ resolves the target unit and returns unless it carries
+// SPELL_AURA_CLONE_CASTER, then replies with the aura creator's appearance
+// (npcbot outfit arms included). Go has no per-unit aura store for arbitrary
+// world GUIDs (session.activeAuras covers the player only), so the gate and
+// the creator-lookup arms are no-bridge; the reply shape is unchanged.
 func (s *session) handleGetMirrorImageData(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
@@ -13304,6 +13310,18 @@ func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
 	npcEntry := uint32((targetGUID >> 24) & 0x00FFFFFF)
 	s.debug("spell click", "account", s.accountName, "target", targetGUID, "entry", npcEntry)
 
+	// SpellHandler.cpp:616-630 — GetCreatureOrPetOrVehicle must resolve and the
+	// unit must be in world. Go's world objects live in the motion registry;
+	// pets resolve via the session pet GUID (vehicle bases are motions too).
+	isPet := s.player.PetGUID != 0 && targetGUID == s.player.PetGUID
+	var motion *creatureMotion
+	if !isPet {
+		motion = s.findCreatureMotion(targetGUID)
+		if motion == nil {
+			return true
+		}
+	}
+
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return true
 	}
@@ -13332,6 +13350,34 @@ func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
 	}
 
 	for _, click := range clicks {
+		// SpellClickInfo::IsFitToRequirements (ObjectMgr.cpp:194). C++ skips
+		// userType >= SPELL_CLICK_USER_MAX (4, SharedDefines.h:718) at DB load;
+		// Go filters at use. For pets the summoner IS the clicker, so
+		// IsInPartyWith/IsInRaidWith hit the this==unit arm and every userType
+		// passes (Unit.cpp:12126-12163). For creatures FRIEND means not
+		// hostile; RAID/PARTY always reject (creatures are never in groups).
+		// The sConditionMgr database-conditions arm has no Go model — queued.
+		if click.userType >= 4 {
+			continue
+		}
+		if !isPet {
+			switch click.userType {
+			case 1: // SPELL_CLICK_USER_FRIEND
+				player := playerPos{Race: s.player.Race, Class: s.player.Class, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+				if s.server.isHostileFaction(motion.Faction, player) {
+					continue
+				}
+			case 2, 3: // SPELL_CLICK_USER_RAID / SPELL_CLICK_USER_PARTY
+				continue
+			}
+		}
+		// Unit::HandleSpellClick (Unit.cpp:12982): the caster is the clicker
+		// only under NPC_CLICK_CAST_CASTER_CLICKER (0x01, SharedDefines.h:723);
+		// otherwise the creature casts, which has no Go model — no-bridge.
+		if click.castFlags&0x01 == 0 {
+			continue
+		}
+
 		targetUnit := targetGUID
 		if click.castFlags&0x02 != 0 { // NPC_CLICK_CAST_TARGET_CLICKER
 			targetUnit = s.playerGUID
