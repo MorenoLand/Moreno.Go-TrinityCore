@@ -55,17 +55,31 @@ func (s *session) npcTemplateGate(ctx context.Context, entry uint32) (flagsExtra
 	return flagsExtra, true
 }
 
-// npcbotEntryBlocked mirrors the NPCBots gate in HandleNpcAddCommand /
-// HandleNpcMoveCommand (cs_npc.cpp:121/636): npcbot entries must go through
-// '.npcbot spawn' / '.npcbot move' instead.
-func (s *session) npcbotEntryBlocked(entry uint32, flagsExtra uint32, what string) bool {
-	const npcbotMask = 0x04000000 | 0x08000000 // CREATURE_FLAG_EXTRA_NPCBOT|_NPCBOT_PET (CreatureData.h:63-64)
-	if flagsExtra&npcbotMask != 0 {
-		s.sendSysMessage(fmt.Sprintf("You tried to %s creature %d, which is part of NPCBots mod. To spawn bots use '.npcbot spawn' instead.", what, entry))
+// npcbotSpawnBlocked mirrors the NPCBots gate in HandleNpcAddCommand
+// (cs_npc.cpp:121-132): npcbot entries must go through '.npcbot spawn'
+// instead.
+func (s *session) npcbotSpawnBlocked(entry uint32, flagsExtra uint32) bool {
+	if flagsExtra&npcbotEntryMask != 0 {
+		s.sendSysMessage(fmt.Sprintf("You tried to spawn creature %d, which is part of NPCBots mod. To spawn bots use '.npcbot spawn' instead.", entry))
 		return true
 	}
 	return false
 }
+
+// npcbotMoveBlocked mirrors the NPCBots gate in HandleNpcMoveCommand
+// (cs_npc.cpp:625-631): npcbot entries must go through '.npcbot move'
+// instead. The message differs from the add-arm wording.
+func (s *session) npcbotMoveBlocked(guid, entry uint32, flagsExtra uint32) bool {
+	if flagsExtra&npcbotEntryMask != 0 {
+		s.sendSysMessage(fmt.Sprintf("creature %d (id %d) is a part of NPCBots mod. Use '.npcbot move' instead", guid, entry))
+		return true
+	}
+	return false
+}
+
+// npcbotEntryMask is CREATURE_FLAG_EXTRA_NPCBOT|_NPCBOT_PET
+// (CreatureData.h:63-64).
+const npcbotEntryMask = 0x04000000 | 0x08000000
 
 // handleCmdNPC dispatches the "npc" root (cs_npc.cpp:89-116). Chunk 1 covers
 // the "add" sub-table and the flat arms move/delete/near; the rest lands in
@@ -203,7 +217,7 @@ func (s *session) handleNPCAdd(ctx context.Context, args []string) {
 	if !ok {
 		return // C++: silent false on unknown template
 	}
-	if s.npcbotEntryBlocked(entry, flagsExtra, "spawn") {
+	if s.npcbotSpawnBlocked(entry, flagsExtra) {
 		return
 	}
 	var guid uint32
@@ -249,7 +263,7 @@ func (s *session) handleNPCMove(ctx context.Context, args []string) {
 		return
 	}
 	if flagsExtra, ok := s.npcTemplateGate(ctx, entry); ok {
-		if s.npcbotEntryBlocked(entry, flagsExtra, "move") {
+		if s.npcbotMoveBlocked(guid, entry, flagsExtra) {
 			return
 		}
 	}

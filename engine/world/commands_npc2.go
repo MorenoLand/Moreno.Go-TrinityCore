@@ -20,12 +20,13 @@ import (
 // exist in the Go tree.
 
 // handleNPCSetTable dispatches the "set" sub-table (cs_npc.cpp:72-86).
+// The "set" node is a bare SubCommandEntry container (ChatCommand.h:248-251)
+// with no permission of its own, and RBAC_PERM_COMMAND_NPC_SET (RBAC.h:448,
+// 580) is referenced by no handler in C++ — so a bare ".npc set" prints the
+// help listing with no gate, same as the mmap container-root fix.
 func (s *session) handleNPCSetTable(ctx context.Context, args []string) {
 	const syntax = "Syntax: .npc set allowmove|entry|factionid|flag|level|link|model|movetype|phase|wanderdistance|spawntime|data <args>"
 	if len(args) == 0 {
-		if s.miscDeny(ctx, permissionCommandNPCSet) {
-			return
-		}
 		s.sendSysMessage(syntax)
 		return
 	}
