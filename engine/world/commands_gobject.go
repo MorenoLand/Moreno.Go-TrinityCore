@@ -29,7 +29,10 @@ import (
 // handleCmdGObject mirrors gobject_commandscript::GetCommands (cs_gobject.cpp:58):
 // per-arm RBAC gates (RBAC.h:256-267, 725-726) and Trinity per-level prefix
 // matching, including the two-level "add temp" / "set phase" / "set state"
-// nested commands.
+// nested commands. The tree registers only the first level ("add", "set"):
+// multi-word child names break resolve's prefix canonicalization (a bare
+// "set" token ambiguates "set phase"/"set state", and "set ownership"-style
+// names never match per-word), so the handler owns the second level itself.
 func (s *session) handleCmdGObject(ctx context.Context, args []string) {
 	const syntax = "Syntax: .gobject activate <guid> | .gobject add <entry> [spawntime] | .gobject add temp <entry> [spawntime] | .gobject delete <guid> | .gobject info [guid] <entry|guid> | .gobject move <guid> [x y z] | .gobject near [dist] | .gobject target [entry|name] | .gobject turn <guid> [oz] [oy] [ox] | .gobject spawngroup <groupId> [force] [ignorerespawn] | .gobject despawngroup <groupId> [removerespawntime] | .gobject set phase <guid> <phaseMask> | .gobject set state <guid> <type> [state]"
 	if len(args) == 0 {

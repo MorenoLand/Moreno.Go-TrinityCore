@@ -87,6 +87,28 @@ func (s *Server) broadcastMessageChatGM(ctx context.Context, msg string) {
 	}
 }
 
+// broadcastServerMessageAll mirrors World::SendServerMessage
+// (World.cpp:3074) with player == nullptr: the SMSG_CHAT_SERVER_MESSAGE
+// packet (ChatPackets.cpp:33-39) goes to every in-game session, ==
+// SendGlobalMessage's player-in-world filter (World.cpp:2590-2606).
+func (s *Server) broadcastServerMessageAll(messageID int32, stringParam string) {
+	if s == nil {
+		return
+	}
+	payload := protocol.BuildChatServerMessage(messageID, stringParam)
+	s.sessionsMu.RLock()
+	targets := make([]*session, 0, len(s.sessions))
+	for sess := range s.sessions {
+		if sess != nil && sess.worldReady.Load() && sess.player != nil {
+			targets = append(targets, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, target := range targets {
+		_ = target.write(uint16(protocol.OpcodeSMSG_CHAT_SERVER_MESSAGE), payload, true)
+	}
+}
+
 // broadcastNotificationAll mirrors the SMSG_NOTIFICATION global loop in
 // HandleNotifyCommand (cs_message.cpp:183-195).
 func (s *Server) broadcastNotificationAll(msg string) {
@@ -226,14 +248,18 @@ func (s *session) handleCmdGMNameAnnounceCommand(ctx context.Context, args []str
 	s.server.broadcastMessageChatGM(ctx, fmt.Sprintf(messageGMAnnounceColor, s.player.Name, msg))
 }
 
+// serverMessageString is the SERVER_MSG_STRING id (World.h:45-52).
+const serverMessageString int32 = 3
+
 // handleCmdAnnounceCommand mirrors HandleAnnounceCommand (cs_message.cpp:152-161,
-// RBAC 462): SendServerMessage(SERVER_MSG_STRING, LANG_SYSTEMMESSAGE % text).
+// RBAC 462): SendServerMessage(SERVER_MSG_STRING, LANG_SYSTEMMESSAGE % text)
+// emits SMSG_CHAT_SERVER_MESSAGE (World.cpp:3074), not CHAT_MSG_SYSTEM.
 func (s *session) handleCmdAnnounceCommand(ctx context.Context, args []string) {
 	msg, ok := s.messageTailGate(ctx, "Syntax: .announce <text>", permissionCommandAnnounce, args)
 	if !ok {
 		return
 	}
-	s.server.broadcastMessageChatAll(fmt.Sprintf(messageSystemMessage, msg))
+	s.server.broadcastServerMessageAll(serverMessageString, fmt.Sprintf(messageSystemMessage, msg))
 }
 
 // handleCmdGMAnnounceCommand mirrors HandleGMAnnounceCommand (cs_message.cpp:164-172,

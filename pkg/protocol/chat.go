@@ -28,6 +28,18 @@ func BuildSystemChatMessage(message string) []byte {
 	return BuildChatMessage(0, 0, 0, 0, message, "")
 }
 
+// BuildChatServerMessage builds an SMSG_CHAT_SERVER_MESSAGE payload:
+// int32 MessageID followed by the string parameter, mirroring
+// WorldPackets::Chat::ChatServerMessage::Write (ChatPackets.cpp:33-39).
+// World::SendServerMessage (World.cpp:3074) only fills StringParam when
+// MessageID <= SERVER_MSG_STRING (World.h:45-52; SERVER_MSG_STRING = 3).
+func BuildChatServerMessage(messageID int32, stringParam string) []byte {
+	packet := NewBuffer(4 + len(stringParam) + 1)
+	packet.WriteI32(messageID)
+	packet.WriteCString(stringParam)
+	return packet.Bytes()
+}
+
 // BuildMonsterChatMessage builds an SMSG_MESSAGECHAT payload for monster speech
 // (say, yell, whisper, emote, boss emote).
 // Reference: TrinityCore Chat.cpp:203-220.
@@ -45,4 +57,3 @@ func BuildMonsterChatMessage(chatType uint8, language uint32, senderGUID uint64,
 	packet.WriteU8(0)
 	return packet.Bytes()
 }
-
