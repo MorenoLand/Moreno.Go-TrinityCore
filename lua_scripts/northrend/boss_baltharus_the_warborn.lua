@@ -1,8 +1,8 @@
 -- Baltharus the Warborn (Ruby Sanctum) — Lua port of
 -- src/server/scripts/Northrend/ChamberOfAspects/RubySanctum/boss_baltharus_the_warborn.cpp
 -- (368 lines incl. license; 2 CreatureScripts (boss_baltharus_the_warborn
--- (BossAI, DATA_BALTHARUS_THE_WARBORN = 1) +
--- npc_baltharus_the_warborn_clone (BossAI, DATA_BALTHARUS_CLONE = 3));
+-- (BossAI, DATA_BALTHARUS_THE_WARBORN = 0) +
+-- npc_baltharus_the_warborn_clone (BossAI, DATA_BALTHARUS_CLONE = 19));
 -- all registered from inside AddSC_boss_baltharus_the_warborn()
 -- (line 363); loader decl 190 / call 385 per
 -- northrend_script_loader.cpp — the THIRD group of the
@@ -18,8 +18,7 @@
 -- Sole-source verified: whole-server-tree grep for
 -- "AddSC_boss_baltharus_the_warborn" hits boss_baltharus_the_warborn.cpp
 -- only (+ the loader decl/call lines); this clone carries no sql/ tree,
--- so ScriptName bindings are DB-side by construction. No baltharus lua
--- existed.
+-- so ScriptName bindings are DB-side by construction.
 -- Eluna creature events: 1 OnEnterCombat, 3 OnKill, 4 OnDied.
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_baltharus_the_warborn JustEngagedWith — Talk(SAY_AGGRO 1)
@@ -47,6 +46,9 @@
 -- DamageTaken DATA_BALTHARUS_SHARED_HEALTH leg and the JustDied
 -- Unit::Kill(baltharus) leg ride instance/actor bridges that don't
 -- exist.
+-- spell_baltharus_enervating_brand_trigger (SpellScript, OnHit
+-- HandleSiphonedMight: aura-caster CastSpell SPELL_SIPHONED_MIGHT) —
+-- joins the standing no-SpellScript-bridge queue.
 -- All 5 Talk() calls in the file accounted for (SAY_AGGRO 1 +
 -- SAY_DEATH 4 + SAY_KILL 2 ported; SAY_CLONE 3 + SAY_BALTHARUS_INTRO 0
 -- documented above).
