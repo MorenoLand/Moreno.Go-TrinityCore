@@ -78,7 +78,10 @@ func (s *session) handleArenaTeamRoster(ctx context.Context, payload []byte) boo
 	}
 
 	var aType, captainGuid uint32
-	_ = cdb.QueryRowContext(ctx, "SELECT type, captainGuid FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&aType, &captainGuid)
+	// C++: GetArenaTeamById miss → silent return, no packet (ArenaTeamHandler.cpp:82-83).
+	if err := cdb.QueryRowContext(ctx, "SELECT type, captainGuid FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&aType, &captainGuid); err != nil {
+		return true
+	}
 
 	type memberInfo struct {
 		guid           uint64
@@ -124,7 +127,12 @@ func (s *session) handleArenaTeamRoster(ctx context.Context, payload []byte) boo
 			captainFlag = 0
 		}
 		buf.WriteU32(captainFlag)
-		buf.WriteU8(m.level)
+		// C++: uint8(player ? player->GetLevel() : 0) — offline members send level 0 (ArenaTeam.cpp:449).
+		if online == 1 {
+			buf.WriteU8(m.level)
+		} else {
+			buf.WriteU8(0)
+		}
 		buf.WriteU8(m.class)
 		buf.WriteU32(m.weekGames)
 		buf.WriteU32(m.weekWins)
