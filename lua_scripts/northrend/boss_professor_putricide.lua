@@ -3,7 +3,11 @@
 -- (1517 lines incl. license; 3 CreatureScripts
 -- (boss_professor_putricide (BossAI, DATA_PROFESSOR_PUTRICIDE = 6),
 -- npc_volatile_ooze (npc_putricide_oozeAI, ScriptedAI),
--- npc_gas_cloud (npc_putricide_oozeAI, ScriptedAI)) + 20 SpellScripts
+-- npc_gas_cloud (npc_putricide_oozeAI, ScriptedAI)) + 16 SpellScript
+-- classes (19 RegisterSpellScript registrations — the 16 below +
+-- gaseous_bloat, ooze_tank_protection, mutated_plague registered as
+-- spell scripts; spell_putricide_mutation_init registered as a
+-- SpellScript + AuraScript pair)
 -- (spell_putricide_ooze_channel, spell_putricide_slime_puddle,
 -- spell_putricide_slime_puddle_aura, spell_putricide_unstable_experiment,
 -- spell_putricide_ooze_eruption_searcher, spell_putricide_choking_gas_bomb,
