@@ -3,7 +3,7 @@
 -- (2 CreatureScripts: boss_general_zarithrian (BossAI,
 -- DATA_GENERAL_ZARITHRIAN = 1) + npc_onyx_flamecaller (ScriptedAI,
 -- NPC_ONYX_FLAMECALLER = 39814); both registered from inside
--- AddSC_boss_general_zarithrian() (line 320); loader decl 192 /
+-- AddSC_boss_general_zarithrian() (line 276); loader decl 192 /
 -- call 387 per northrend_script_loader.cpp — the FIFTH group of the
 -- "// Ruby Sanctum" block in AddNorthrendScripts(), immediately after
 -- AddSC_boss_saviana_ragefire() (call 386) — verified from the
@@ -19,8 +19,7 @@
 -- Sole-source verified: whole-server-tree grep for
 -- "AddSC_boss_general_zarithrian" hits boss_general_zarithrian.cpp
 -- only (+ the loader decl/call lines); this clone carries no sql/ tree,
--- so ScriptName bindings are DB-side by construction. No zarithrian
--- lua existed.
+-- so ScriptName bindings are DB-side by construction.
 -- Eluna creature events: 1 OnEnterCombat, 3 OnKill, 4 OnDied.
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_general_zarithrian JustEngagedWith — Talk(SAY_AGGRO 0)
