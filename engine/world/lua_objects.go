@@ -7,6 +7,7 @@ import (
 	"math"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 type luaCreatureState struct {
@@ -191,6 +192,24 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		return nil, nil
 	}
 	methods["SendBroadcastMessage"] = s.luaMessageMethod()
+	// Whisper(message) mirrors the botgiver's WhisperTo helper
+	// (botgiver.cpp): me->Whisper(message, LANG_UNIVERSAL, player).
+	// Sends SMSG_MESSAGECHAT with CHAT_MSG_MONSTER_WHISPER (0x0F,
+	// SharedDefines.h:3177), LANG_UNIVERSAL (0), sender = creature GUID,
+	// receiver = the gossiping (session) player's GUID.
+	methods["Whisper"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("message is required")
+		}
+		message, ok := args[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("message must be a string")
+		}
+		if s == nil || s.player == nil {
+			return nil, nil
+		}
+		return nil, s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), protocol.BuildChatMessage(0x0F, 0, state.GUID, s.player.GUID, message, ""), true)
+	}
 	return &scripting.Object{Type: "Creature", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "GossipMenuID": state.GossipMenuID, "NPCFlags": state.NPCFlags, "Map": state.Map, "MapId": state.Map, "X": state.X, "Y": state.Y, "Z": state.Z, "Health": state.Health, "MaxHealth": state.MaxHealth, "Level": state.Level, "InWorld": true}, Methods: methods}
 }
 

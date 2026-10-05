@@ -396,6 +396,147 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["GossipClearMenu"] = s.luaGossipClearMenu
 	methods["GossipMenuAddItem"] = s.luaGossipMenuAddItem
 	methods["GossipSendMenu"] = s.luaGossipSendMenu
+	// NpcBot hire-state queries for the botgiver Lua port
+	// (lua_scripts/world/botgiver.lua, port of script_bot_giver in
+	// src/server/game/AI/NpcBots/botgiver.cpp). The gossip-hire flow is the
+	// only C++ caller of BotMgr::AddBot(bot, takeMoney=true); the paid-hire
+	// entry point it drives is NPCBotManager.Recruit.
+	npcBots := func() *NPCBotManager {
+		if s == nil || s.server == nil || s.server.Features == nil {
+			return nil
+		}
+		return s.server.Features.NPCBots
+	}
+	methods["IsNpcBotEnabled"] = luaNoArgs(func() any {
+		mgr := npcBots()
+		return mgr != nil && mgr.Config().Enable
+	})
+	methods["GetNpcBotsCount"] = luaNoArgs(func() any {
+		mgr := npcBots()
+		if mgr == nil {
+			return uint32(0)
+		}
+		return uint32(mgr.CountByOwner(uint32(s.playerGUID)))
+	})
+	methods["GetMaxNpcBots"] = luaNoArgs(func() any {
+		mgr := npcBots()
+		if mgr == nil {
+			return uint32(0)
+		}
+		return mgr.MaxNPCBots()
+	})
+	methods["IsNpcBotClassEnabled"] = func(_ context.Context, args []any) ([]any, error) {
+		class, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		mgr := npcBots()
+		if mgr == nil {
+			return []any{false}, nil
+		}
+		return []any{mgr.IsClassEnabled(uint8(class))}, nil
+	}
+	methods["GetMaxNpcBotsPerClass"] = luaNoArgs(func() any {
+		mgr := npcBots()
+		if mgr == nil {
+			return uint32(0)
+		}
+		return mgr.MaxNPCBotsPerClass()
+	})
+	methods["GetNpcBotClassCount"] = func(_ context.Context, args []any) ([]any, error) {
+		class, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		mgr := npcBots()
+		if mgr == nil {
+			return []any{uint32(0)}, nil
+		}
+		return []any{mgr.ClassBotCount(uint32(s.playerGUID), uint8(class))}, nil
+	}
+	// GetFreeNpcBotCount(class) / GetFreeNpcBot(class, index) expose the
+	// hireable bots of one class == the botgiver HIRE_CLASS menu loop over
+	// _existingBots; names come from creature_template. Index-based (rather
+	// than a table) because the Lua value pusher only handles scalars.
+	methods["GetFreeNpcBotCount"] = func(_ context.Context, args []any) ([]any, error) {
+		class, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		mgr := npcBots()
+		if mgr == nil {
+			return []any{uint32(0)}, nil
+		}
+		return []any{uint32(len(mgr.FreeBotEntries(uint8(class))))}, nil
+	}
+	methods["GetFreeNpcBot"] = func(ctx context.Context, args []any) ([]any, error) {
+		class, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		index, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		mgr := npcBots()
+		if mgr == nil {
+			return []any{uint32(0), ""}, nil
+		}
+		entries := mgr.FreeBotEntries(uint8(class))
+		if int(index) >= len(entries) {
+			return []any{uint32(0), ""}, nil
+		}
+		entry := entries[index]
+		return []any{entry, s.npcbotTemplateName(ctx, entry)}, nil
+	}
+	// GetNpcBotName(entry) resolves a bot entry to its creature_template
+	// name == Creature::GetName() for the HIRE_ENTRY busy whisper.
+	methods["GetNpcBotName"] = func(ctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{s.npcbotTemplateName(ctx, entry)}, nil
+	}
+	// GetNpcBotCost(level, class) is BotMgr::GetNpcBotCost
+	// (botmgr.cpp:1014), the hire price shown in the botgiver HIRE menu
+	// labels and re-checked in the HIRE_CLASS arm.
+	methods["GetNpcBotCost"] = func(_ context.Context, args []any) ([]any, error) {
+		level, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		class, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		mgr := npcBots()
+		if mgr == nil {
+			return []any{uint64(0)}, nil
+		}
+		return []any{mgr.HireCost(uint8(level), uint8(class))}, nil
+	}
+	// RecruitNpcBot(entry) is the botgiver HIRE_ENTRY arm's paid hire:
+	// NPCBotManager.Recruit == BotMgr::AddBot(bot, takeMoney=true), the
+	// takeMoney=true path the gossip-hire arms always take (bot_ai.cpp:343
+	// SetBotOwner pre-filters owned bots in both gossip arms, so the
+	// takeMoney=false case never reaches AddBot from gossip). Returns the
+	// BotAssignResult code (BotAddSuccess == 0x100 on success).
+	methods["RecruitNpcBot"] = func(ctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		mgr := npcBots()
+		if mgr == nil {
+			return []any{uint16(BotAddDisabled)}, nil
+		}
+		result, err := mgr.Recruit(ctx, uint32(s.playerGUID), entry)
+		if err != nil {
+			return nil, err
+		}
+		return []any{uint16(result)}, nil
+	}
 	methods["SetBinding"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
 	methods["SetNotRefundable"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
 	methods["PlayDirectSound"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }

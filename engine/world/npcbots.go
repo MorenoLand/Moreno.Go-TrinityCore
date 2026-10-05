@@ -339,6 +339,89 @@ func (m *NPCBotManager) CountByOwner(owner uint32) uint8 {
 	return count
 }
 
+// MaxNPCBots exposes the maxNPCBots() cap for the botgiver hire menu
+// (BotMgr::GetMaxNpcBots, botmgr.h).
+func (m *NPCBotManager) MaxNPCBots() uint32 {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.maxNPCBots()
+}
+
+// MaxNPCBotsPerClass exposes the per-class cap for the botgiver hire menu
+// (BotMgr::GetMaxClassBots, botmgr.h: NPCBotConfig::MaxBotsPerClass).
+func (m *NPCBotManager) MaxNPCBotsPerClass() uint32 {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.config.MaxBotsPerClass
+}
+
+// ClassBotCount counts the bots of one class owned by a player == the
+// botgiver HIRE arm's per-class loop over player->GetBotMgr()->GetBotMap()
+// with GetBotClass() == botclass (botgiver.cpp OnGossipSelect HIRE arm).
+func (m *NPCBotManager) ClassBotCount(owner uint32, class uint8) uint32 {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var count uint32
+	for entry, data := range m.bots {
+		if data.Owner != owner {
+			continue
+		}
+		if extra, ok := m.extras[entry]; ok && extra.Class == class {
+			count++
+		}
+	}
+	return count
+}
+
+// FreeBotEntries lists unowned bots of one class for the botgiver HIRE_CLASS
+// menu == the _existingBots loop in botgiver.cpp filtered by
+// GetBotClass() == botclass, IsAlive, !IsTempBot, !GetBotOwnerGuid and
+// !HasAura(BERSERK). The Go mirror has no live-bot model, so the alive,
+// CCed/teleporting/casting and aura legs have no bridge (same no-bridge
+// family as the teleport-busy note in the addBot audit): free means an
+// unowned mirror row, and the temp exclusion is bridged by entry
+// (npcBotEntryMirrorImage == BOT_ENTRY_MIRROR_IMAGE_BM, botcommon.h:17).
+// Sorted by entry for a deterministic menu order.
+func (m *NPCBotManager) FreeBotEntries(class uint8) []uint32 {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var entries []uint32
+	for entry, data := range m.bots {
+		if data.Owner != 0 || entry == npcBotEntryMirrorImage {
+			continue
+		}
+		if extra, ok := m.extras[entry]; ok && extra.Class == class {
+			entries = append(entries, entry)
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i] < entries[j] })
+	return entries
+}
+
+// HireCost is BotMgr::GetNpcBotCost(level, botclass) (botmgr.cpp:1014): the
+// hire price shown in the botgiver HIRE menu labels and re-checked in the
+// HIRE_CLASS arm before listing bots.
+func (m *NPCBotManager) HireCost(level, class uint8) uint64 {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return NpcBotCost(level, class, m.config.Cost)
+}
+
 // dismissableCountByOwner mirrors the remove-all HaveBot() gates: temp bots
 // (entry 70552, bot_ai.h:114) are deferred out of RemoveBot's DB-write arm
 // (botmgr.cpp:803-808), so only non-temp ownership decides the "Npcbots are
