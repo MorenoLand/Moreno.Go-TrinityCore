@@ -34,7 +34,10 @@ func extractM2(data []byte) ([]byte, error) {
 	vertices := make([][3]float32, nVertices)
 	for index := range vertices {
 		base := int(verticesOffset) + index*12
-		vertices[index] = [3]float32{math.Float32frombits(binary.LittleEndian.Uint32(data[base:])), math.Float32frombits(binary.LittleEndian.Uint32(data[base+4:])), math.Float32frombits(binary.LittleEndian.Uint32(data[base+8:]))}
+		x := math.Float32frombits(binary.LittleEndian.Uint32(data[base:]))
+		y := math.Float32frombits(binary.LittleEndian.Uint32(data[base+4:]))
+		z := math.Float32frombits(binary.LittleEndian.Uint32(data[base+8:]))
+		vertices[index] = [3]float32{x, -z, y}
 	}
 	var output bytes.Buffer
 	output.WriteString("VMAP047")
