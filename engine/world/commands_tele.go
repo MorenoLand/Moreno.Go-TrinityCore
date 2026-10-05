@@ -11,7 +11,7 @@ import (
 )
 
 // tele command port: tele_commandscript (cs_tele.cpp), the "tele" root with
-// 5 arms (add, del, name, group, ""). THIRTY-SIXTH of 39 Commands groups
+// 5 arms (add, del, name, group, ""). THIRTY-SEVENTH of 40 Commands groups
 // (cs_script_loader.cpp decl 55 / call 100; call order server(99) ->
 // tele(100)). Trinity checks permission only on the invoker leaf node
 // (ChatCommand.cpp:487), so each arm gates exactly its own C++ permission
@@ -43,7 +43,11 @@ import (
 // bridge (same gap as goDoTeleport, cs_go.cpp:73); Player::IsBeingTeleported
 // has no Go bridge, so teleportTo is the single re-entrant path (as in the
 // group summon port); the zone column written by Player::SavePositionInDB
-// is not rewritten (sMapMgr::GetZoneId has no Go bridge).
+// is not rewritten (sMapMgr::GetZoneId has no Go bridge); a name miss in
+// teleResolveTele reports the LANG_COMMAND_TELE_NOTFOUND (164) stand-in —
+// C++ reports LANG_CMDPARSER_GAME_TELE_NO_EXIST (1512) whose enUS text is
+// not in the tree, and the handler's own null checks are dead arms (the
+// non-Optional GameTele parse fails before the handler runs).
 // LANG texts are inlined from the TDB enUS recall (no in-tree
 // trinity_string seed).
 
@@ -308,6 +312,26 @@ func teleIsBattlegroundOrArena(entry wotlk.MapEntry) bool {
 	return entry.InstanceType == 3 || entry.InstanceType == 4
 }
 
+// teleGroupTarget mirrors ChatHandler::getSelectedPlayer (Chat.cpp:300) for
+// the group arm: no selection resolves to the invoker, but an unresolvable
+// selection (targeting a creature, an offline GUID) reports
+// LANG_NO_CHAR_SELECTED (116) instead of falling back to self — the same
+// convention as the quest port's questTargetPlayer.
+func (s *session) teleGroupTarget() *session {
+	if s.selection != 0 && s.server != nil {
+		if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {
+			return ts
+		}
+		s.sendSysMessage("No character selected.") // LANG_NO_CHAR_SELECTED (116)
+		return nil
+	}
+	if s.player == nil {
+		s.sendSysMessage("No character selected.") // LANG_NO_CHAR_SELECTED (116)
+		return nil
+	}
+	return s
+}
+
 // handleTeleGroupCommand mirrors HandleTeleGroupCommand (cs_tele.cpp:199-262,
 // RBAC 741): teleports every online member of the selected player's group.
 func (s *session) handleTeleGroupCommand(ctx context.Context, args []string) {
@@ -319,10 +343,9 @@ func (s *session) handleTeleGroupCommand(ctx context.Context, args []string) {
 	if !ok {
 		return
 	}
-	selected := s.miscSelectedPlayerOrSelf()
+	selected := s.teleGroupTarget()
 	if selected == nil || selected.player == nil {
-		s.sendSysMessage("No character selected.") // LANG_NO_CHAR_SELECTED (116)
-		return
+		return // teleGroupTarget already reported LANG_NO_CHAR_SELECTED
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{online: selected, guid: selected.playerGUID, name: selected.player.Name}) {
 		return // C++ HasLowerSecurity: silent fail
