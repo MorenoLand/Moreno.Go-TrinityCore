@@ -1,10 +1,14 @@
 // reset command port: reset_commandscript (cs_reset.cpp), the "reset" root
 // with 7 arms (achievements, honor, level, spells, stats, talents, all).
-// THIRTY-THIRD of 39 Commands groups (cs_script_loader.cpp decl 52 / call 97;
-// call order reload(96) -> reset(97)). Trinity checks permission only on the
-// invoker leaf node (ChatCommand.cpp:487), so each arm gates exactly its own
-// C++ permission (RBAC.h:578-585, 8 constants in permissions.go); the root
-// permission 710 covers the bare `.reset`.
+// THIRTY-FOURTH of 40 Commands groups (cs_script_loader.cpp decl 52 /
+// call 97; call order reload(96) -> reset(97)). Trinity checks permission
+// only on the invoker leaf node (ChatCommand.cpp:487), so each arm gates
+// exactly its own C++ permission (RBAC.h:579-585, 7 constants in
+// permissions.go); the root's RBAC_PERM_COMMAND_RESET 710 is dead in C++
+// (deprecated 6-arg nullptr+subtable overload drops it, same as the
+// reload/rbac/pet/quest/modify/mmap roots), so bare ".reset" prints the
+// syntax line ungated and permissionCommandReset stays in permissions.go
+// as documentation.
 //
 // Player targeting mirrors ChatHandler::extractPlayerTarget via
 // miscResolvePlayerTarget (name -> selection -> self, offline guids resolved
@@ -58,7 +62,10 @@
 //   - reset all (cs_reset.cpp:272-312): native — ORs the at-login flag onto
 //     every characters row (CHAR_UPD_ALL_AT_LOGIN_FLAGS) and every online
 //     session, then broadcasts the C++ world text. Only the exact case names
-//     "spells" and "talents" match, like the C++ == comparison.
+//     "spells" and "talents" match, like the C++ == comparison. Deliberate
+//     delta: with no case arg C++ returns false and the framework prints the
+//     help-generic pair (SendCommandHelp on the "all" node); the Go port
+//     prints its syntax line instead, per tree convention.
 //
 // LANG texts are inlined from TDB enUS (no in-tree trinity_string seed), per
 // tree convention; the LANG id is cited on each message.
@@ -75,9 +82,9 @@ import (
 func (s *session) handleCmdReset(ctx context.Context, args []string) {
 	const syntax = "Syntax: .reset achievements|honor|level|spells|stats|talents [$player] | .reset all spells|talents"
 	if len(args) == 0 {
-		if s.miscDeny(ctx, permissionCommandReset) {
-			return
-		}
+		// Bare ".reset": the root's RBAC_PERM_COMMAND_RESET is dead in C++
+		// (deprecated 6-arg nullptr+subtable overload drops it), so the help
+		// line prints with no gate, like the reload/rbac/pet/quest/modify/mmap roots.
 		s.sendSysMessage(syntax)
 		return
 	}
@@ -163,8 +170,11 @@ func (s *session) handleResetHonor(ctx context.Context, args []string) {
 	t.player.YesterdayHonorPoints = 0 // PLAYER_FIELD_YESTERDAY_CONTRIBUTION
 	t.persistHonorFields(ctx)
 	t.sendPlayerUpdate()
-	// Player::UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_EARN_HONORABLE_KILL).
-	t.updateAchievementCriteria(criteriaTypeEarnHonorableKill, 0, 1)
+	// Player::UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_EARN_HONORABLE_KILL)
+	// ignores its misc values: the C++ switch SETS progress to the player's
+	// current lifetime kills (AchievementMgr.cpp:1039), which this arm just
+	// zeroed — so this is a set-to-zero, not an increment.
+	t.setAchievementCriteria(criteriaTypeEarnHonorableKill, 0, t.player.TotalKills)
 }
 
 // handleResetLevel mirrors HandleResetLevelCommand (cs_reset.cpp:129-163):
