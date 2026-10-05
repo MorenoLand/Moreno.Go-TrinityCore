@@ -1155,19 +1155,6 @@ func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
 
-		// Reference: MailHandler.cpp:604 — CanStoreItem(NULL_BAG, NULL_SLOT)
-		// searches the backpack and all equipped bags (not the backpack only),
-		// and answers the CanTakeMoreSimilarItems max-count term before the
-		// inventory-space term.
-		const mailBodyItemTemplate uint32 = 8383 // Plain Letter
-		templateFound, maxCount := s.mailItemTemplateMaxCount(ctx, mailBodyItemTemplate)
-		ownedCount := s.mailOwnedItemCount(ctx, mailBodyItemTemplate)
-		freeBagKey, freeClientBag, freeSlot, slotOK := s.findFreeInventorySlot(ctx, s.playerGUID)
-		if equipErr := mailStoreEquipError(templateFound, maxCount, ownedCount, 1, slotOK); equipErr != equipErrOk {
-			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailMadePermanent, mailErrEquipError, uint32(equipErr), 0, 0), true)
-			return true
-		}
-
 		var body string
 		var mailTemplateId uint32
 		var deliverTime int64
@@ -1187,6 +1174,45 @@ func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) 
 			return true
 		}
 
+		// Reference: MailHandler.cpp:580-584 — Item::Create fails when the
+		// body-item template is unknown and the handler returns silently
+		// (no mail result), before CanStoreItem ever runs.
+		const mailBodyItemTemplate uint32 = 8383 // Plain Letter
+		templateFound, maxCount := s.mailItemTemplateMaxCount(ctx, mailBodyItemTemplate)
+		if !templateFound {
+			return true
+		}
+
+		// Reference: MailHandler.cpp:586-594 — a template mail's letter text
+		// comes from MailTemplate.dbc Body[GetSessionDbcLocale()], not the
+		// stored body column; the ASSERT on the lookup is mirrored as a
+		// silent return (the tree's convention for a failed DBC lookup).
+		// Store.MailTemplate reads field 18, which is Body[LOCALE_enUS]
+		// (MailTemplateEntryfmt "nxxxxxxxxxxxxxxxxxssssssssssssssssx");
+		// locales are unmodeled and the tree is enUS-only.
+		letterText := body
+		if mailTemplateId != 0 {
+			if s.server.Data == nil {
+				return true
+			}
+			tplBody, ok, tplErr := s.server.Data.MailTemplate(mailTemplateId)
+			if tplErr != nil || !ok {
+				return true
+			}
+			letterText = tplBody
+		}
+
+		// Reference: MailHandler.cpp:604 — CanStoreItem(NULL_BAG, NULL_SLOT)
+		// searches the backpack and all equipped bags (not the backpack only),
+		// and answers the CanTakeMoreSimilarItems max-count term before the
+		// inventory-space term.
+		ownedCount := s.mailOwnedItemCount(ctx, mailBodyItemTemplate)
+		freeBagKey, freeClientBag, freeSlot, slotOK := s.findFreeInventorySlot(ctx, s.playerGUID)
+		if equipErr := mailStoreEquipError(true, maxCount, ownedCount, 1, slotOK); equipErr != equipErrOk {
+			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailMadePermanent, mailErrEquipError, uint32(equipErr), 0, 0), true)
+			return true
+		}
+
 		var nextGUID uint64
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextGUID)
 		if nextGUID == 0 {
@@ -1198,7 +1224,7 @@ func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) 
 		// (0x200) | ITEM_FIELD_FLAG_UNK13 (0x40000) | ITEM_FIELD_FLAG_UNK14
 		// (0x80000) = 0xC0200, not ITEM_FIELD_FLAG_SOULBOUND.
 		const mailTextItemFlags = 0xC0200
-		_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, ?, 1, 0, '', ?, '', 0, 0, 0, ?)", nextGUID, mailBodyItemTemplate, s.playerGUID, creator, mailTextItemFlags, body)
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, ?, 1, 0, '', ?, '', 0, 0, 0, ?)", nextGUID, mailBodyItemTemplate, s.playerGUID, creator, mailTextItemFlags, letterText)
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, freeBagKey, freeSlot, nextGUID)
 		_, _ = cdb.ExecContext(ctx, "UPDATE mail SET checked = checked | 4 WHERE id = ?", mailID) // MAIL_CHECK_MASK_COPIED = 4
 		_ = s.sendItemCreate(nextGUID, mailBodyItemTemplate, 1, freeClientBag, freeSlot)
