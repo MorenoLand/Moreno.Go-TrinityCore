@@ -13326,7 +13326,26 @@ func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT spell_id, cast_flags, user_type FROM npc_spellclick_spells WHERE npc_entry = ?", npcEntry)
+	// Unit::HandleSpellClick (Unit.cpp:12982): spellClickEntry is the vehicle
+	// kit's creature entry when the unit carries one, otherwise the unit's
+	// own entry. Both the row lookup (GetSpellClickInfoMapBounds) and the
+	// condition lookup (IsObjectMeetingSpellClickConditions) key on it.
+	// Pet GUIDs encode the pet number (makePetGUID), not a creature entry,
+	// so the pet arm resolves the entry from the pet's motion; creatures
+	// keep the GUID-embedded entry.
+	clickEntry := npcEntry
+	if isPet {
+		if pm := s.findCreatureMotion(targetGUID); pm != nil && pm.OwnerGUID == s.playerGUID && pm.Entry != 0 {
+			clickEntry = pm.Entry
+		}
+	}
+	if s.server != nil {
+		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, targetGUID); kit != nil && kit.CreatureEntry != 0 {
+			clickEntry = kit.CreatureEntry
+		}
+	}
+
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT spell_id, cast_flags, user_type FROM npc_spellclick_spells WHERE npc_entry = ?", clickEntry)
 	if err != nil {
 		return true
 	}
@@ -13356,7 +13375,6 @@ func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
 		// IsInPartyWith/IsInRaidWith hit the this==unit arm and every userType
 		// passes (Unit.cpp:12126-12163). For creatures FRIEND means not
 		// hostile; RAID/PARTY always reject (creatures are never in groups).
-		// The sConditionMgr database-conditions arm has no Go model — queued.
 		if click.userType >= 4 {
 			continue
 		}
@@ -13370,6 +13388,13 @@ func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
 			case 2, 3: // SPELL_CLICK_USER_RAID / SPELL_CLICK_USER_PARTY
 				continue
 			}
+		}
+		// ConditionMgr::IsObjectMeetingSpellClickConditions
+		// (ConditionMgr.cpp:1008): `conditions` rows for (click entry,
+		// spell id) evaluate with the player as target 0 and the clicked
+		// unit as target 1; missing rows pass, query errors fail closed.
+		if meets, err := s.meetSpellClickConditions(ctx, clickEntry, click.spellID, targetGUID); err != nil || !meets {
+			continue
 		}
 		// Unit::HandleSpellClick (Unit.cpp:12982): the caster is the clicker
 		// only under NPC_CLICK_CAST_CASTER_CLICKER (0x01, SharedDefines.h:723);

@@ -178,6 +178,8 @@ const conditionSourceGossipMenuOption = 15
 
 const conditionSourceSpellImplicitTarget = 13 // CONDITION_SOURCE_TYPE_SPELL_IMPLICIT_TARGET (ConditionMgr.h:136)
 
+const conditionSourceSpellClickEvent = 18 // CONDITION_SOURCE_TYPE_SPELL_CLICK_EVENT (ConditionMgr.h:141)
+
 // Object type bits from the C++ TypeMask enum (ObjectGuid.h:48-56).
 // isType (Object.h:91) tests (mask & m_objectType) != 0 with the mask
 // truncated to uint16. m_objectType accumulates OBJECT (Object.cpp:71) |
@@ -292,6 +294,42 @@ func (s *session) evalConditionGroups(ctx context.Context, conditions []conditio
 		}
 	}
 	return false, nil
+}
+
+// meetSpellClickConditions mirrors ConditionMgr::IsObjectMeetingSpellClickConditions
+// (ConditionMgr.cpp:1008): `conditions` rows for source type 18 keyed on the
+// spell-click entry (SourceGroup) and spell id (SourceEntry) must evaluate
+// with the player as condition target 0 and the clicked unit as target 1.
+// A missing row set passes; a missing table degrades to pass, other query
+// errors fail closed like the gossip/vendor condition arms.
+func (s *session) meetSpellClickConditions(ctx context.Context, clickEntry, spellID uint32, creatureGUID uint64) (bool, error) {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return true, nil
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx,
+		"SELECT ElseGroup, ConditionTypeOrReference, ConditionTarget, ConditionValue1, ConditionValue2, ConditionValue3, NegativeCondition FROM conditions WHERE SourceTypeOrReferenceId = ? AND SourceGroup = ? AND SourceEntry = ? ORDER BY ElseGroup",
+		conditionSourceSpellClickEvent, clickEntry, spellID)
+	if err != nil {
+		if missingTable(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	defer rows.Close()
+	var conditions []conditionRow
+	for rows.Next() {
+		var row conditionRow
+		if err := rows.Scan(&row.ElseGroup, &row.ConditionType, &row.ConditionTarget, &row.Value1, &row.Value2, &row.Value3, &row.Negative); err != nil {
+			return false, err
+		}
+		conditions = append(conditions, row)
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return s.evalConditionGroups(ctx, conditions, func(ctx context.Context, row conditionRow) (bool, error) {
+		return s.evalCondition(ctx, row, clickEntry, creatureGUID)
+	})
 }
 
 // meetGossipMenuConditions mirrors the Conditions arm of Player::GetGossipTextId
