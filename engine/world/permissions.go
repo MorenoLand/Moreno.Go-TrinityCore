@@ -5,6 +5,9 @@ import (
 	"database/sql"
 )
 
+// permissionIgnoreIdleConnection mirrors rbac::RBAC_PERM_IGNORE_IDLE_CONNECTION (RBAC.h:60).
+const permissionIgnoreIdleConnection uint32 = 7
+
 const permissionCommandGMChat uint32 = 372
 
 // permissionCommandGM mirrors rbac::RBAC_PERM_COMMAND_GM (RBAC.h:243).

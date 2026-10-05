@@ -210,24 +210,33 @@ type session struct {
 	gmChat                bool
 	// autoReplyMsg mirrors Player::autoReplyMsg (Player.h:939): the AFK/DND
 	// auto-reply message announced to whispering players (Player.cpp:21050).
-	autoReplyMsg                 string
-	gmMessage                    bool
-	twoSideChat                  bool
-	twoSideWhoList               bool
-	whoSeeAllSecurityLevels      bool
-	twoSideAddFriend             bool
-	allowGMFriend                bool
-	legitimate                   map[uint64]struct{}
-	characterNames               map[uint64]enumCharacter
-	mounts                       *MountState
-	playerGUID                   uint64
-	playerLoading                bool
-	playerLoaded                 bool
-	inQueue                      bool
-	pendingAddonInfo             []byte
-	worldReady                   atomic.Bool
-	worldInstance                atomic.Uint64
-	worldReadyGM                 atomic.Bool
+	autoReplyMsg            string
+	gmMessage               bool
+	twoSideChat             bool
+	twoSideWhoList          bool
+	whoSeeAllSecurityLevels bool
+	twoSideAddFriend        bool
+	allowGMFriend           bool
+	// ignoreIdleTimeout caches rbac::RBAC_PERM_IGNORE_IDLE_CONNECTION (RBAC.h:60)
+	// at auth time so the idle-connection sweeper needs no per-tick DB lookup,
+	// mirroring WorldSession::Update's HasPermission check (WorldSession.cpp:290).
+	ignoreIdleTimeout bool
+	legitimate        map[uint64]struct{}
+	characterNames    map[uint64]enumCharacter
+	mounts            *MountState
+	playerGUID        uint64
+	playerLoading     bool
+	playerLoaded      bool
+	inQueue           bool
+	pendingAddonInfo  []byte
+	worldReady        atomic.Bool
+	worldInstance     atomic.Uint64
+	worldReadyGM      atomic.Bool
+	// timeoutTime mirrors WorldSession::m_timeOutTime (WorldSession.h:574): unix
+	// time after which the connection counts as idle
+	// (WorldSession::IsConnectionIdle, WorldSession.cpp:741), armed by
+	// ResetTimeOutTime (WorldSession.cpp:733).
+	timeoutTime                  atomic.Int64
 	farTeleportPending           bool
 	farTeleportOriginOrientation float32
 	nearTeleportPending          bool
@@ -851,6 +860,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updateSpiritHealerResurrectWaves(ctx, now)
 			s.updateCorpseExpiry(ctx)
 			s.updatePlayerUnderwater(ctx, now)
+			s.sweepIdleConnections(now)
 			s.updateArenaBattles(now)
 			s.updateAVBattles(now)
 			s.updateEOTSBattles(now)
@@ -888,6 +898,36 @@ func (s *Server) updateTimeSync(now time.Time) {
 		sess.recordTimeSyncSent(counter)
 		sess.timeSyncNextCounter++
 		sess.timeSyncDue = now.Add(10 * time.Second)
+	}
+}
+
+// sweepIdleConnections mirrors WorldSession::Update's idle check (WorldSession.cpp:290):
+// a session whose activity timeout expired (WorldSession::IsConnectionIdle,
+// WorldSession.cpp:741) and that is not sitting in the login queue has its socket
+// closed, unless its account holds RBAC_PERM_IGNORE_IDLE_CONNECTION (cached on the
+// session at auth time). Only authed sessions are swept; pre-auth sockets have no
+// WorldSession in C++ either.
+func (s *Server) sweepIdleConnections(now time.Time) {
+	if s == nil {
+		return
+	}
+	unix := now.Unix()
+	s.sessionsMu.RLock()
+	var idle []*session
+	for sess := range s.sessions {
+		if sess == nil || !sess.authed || sess.inQueue || sess.ignoreIdleTimeout {
+			continue
+		}
+		if sess.timeoutTime.Load() < unix {
+			idle = append(idle, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range idle {
+		sess.debug("closing idle connection", "account", sess.accountName)
+		if sess.conn != nil {
+			_ = sess.conn.Close()
+		}
 	}
 }
 
@@ -1174,6 +1214,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 	}()
 	defer close(closed)
 	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{}), characterNames: make(map[uint64]enumCharacter), auras: make(map[uint32]struct{}), auraSlots: make(map[uint32]uint8), channels: make(map[string]struct{}), timeSyncPending: make(map[uint32]uint32), scale: 1, breathTimer: -1, fatigueTimer: -1, schoolLockouts: make(map[uint32]int64)}
+	state.resetTimeoutTime(false)
 	s.addSession(state)
 	defer s.removeSession(state)
 	defer state.logout()
@@ -1234,6 +1275,15 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if blocked {
 				continue
 			}
+		}
+		// WorldSocket::ReadDataHandler refreshes the idle timer on every packet
+		// (WorldSocket.cpp:384) except CMSG_KEEP_ALIVE, which only refreshes the
+		// in-world timer (ResetTimeOutTime(true), WorldSocket.cpp:352); CMSG_PING
+		// and CMSG_AUTH_SESSION return early without touching it.
+		switch header.Opcode {
+		case opcodeAuthSession, uint32(protocol.OpcodeCMSG_PING), uint32(protocol.OpcodeCMSG_KEEP_ALIVE):
+		default:
+			state.resetTimeoutTime(false)
 		}
 		switch header.Opcode {
 		case opcodeAuthSession:
@@ -3352,6 +3402,11 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	}
 	s.accountExpansion = account.Expansion
 	s.debug("world authentication accepted", "account", accountName, "build", build, "expansion", s.accountExpansion, "gm_chat", s.gmChat, "two_side_chat", s.twoSideChat, "remote", remoteAddress(s.conn))
+	s.resetTimeoutTime(false)
+	if s.ignoreIdleTimeout, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionIgnoreIdleConnection); err != nil {
+		s.ignoreIdleTimeout = false
+		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionIgnoreIdleConnection, "error", err)
+	}
 	s.loadTutorials(ctx)
 	s.pendingAddonInfo = append([]byte(nil), b.Bytes()[b.Position():]...)
 
@@ -3600,9 +3655,27 @@ func (s *session) handlePing(ctx context.Context, payload []byte) bool {
 }
 
 // handleKeepAlive mirrors WorldSocket::ReadDataHandler case CMSG_KEEP_ALIVE (WorldSocket.cpp:348).
-// An empty client heartbeat packet resetting the session activity timeout.
+// An empty client heartbeat packet; it only refreshes the in-world activity timeout
+// (ResetTimeOutTime(true)), so keep-alives never extend the character-select idle timer.
 func (s *session) handleKeepAlive() bool {
+	s.resetTimeoutTime(true)
 	return true
+}
+
+// resetTimeoutTime mirrors WorldSession::ResetTimeOutTime (WorldSession.cpp:733):
+// with a live player the in-world timeout (SocketTimeOutTimeActive) applies; otherwise
+// the character-select timeout (SocketTimeOutTime) applies unless onlyActive is set.
+func (s *session) resetTimeoutTime(onlyActive bool) {
+	var timeoutMs int64
+	switch {
+	case s.playerLoaded:
+		timeoutMs = int64(s.server.Config.SocketTimeOutTimeActive)
+	case !onlyActive:
+		timeoutMs = int64(s.server.Config.SocketTimeOutTime)
+	default:
+		return
+	}
+	s.timeoutTime.Store(time.Now().Add(time.Duration(timeoutMs) * time.Millisecond).Unix())
 }
 
 func (s *session) decrypt(data []byte) error {
