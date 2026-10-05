@@ -34,8 +34,7 @@
 -- Sole-source verified: whole-server-tree grep for
 -- "AddSC_boss_sindragosa" hits boss_sindragosa.cpp only (+ the
 -- loader decl/call lines); this clone carries no sql/ tree, so
--- ScriptName bindings are DB-side by construction. No sindragosa
--- lua existed.
+-- ScriptName bindings are DB-side by construction.
 -- Eluna creature events: 1 OnEnterCombat, 3 OnKill, 4 OnDied.
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_sindragosa JustEngagedWith — Talk(SAY_AGGRO 0) (event 1 —
