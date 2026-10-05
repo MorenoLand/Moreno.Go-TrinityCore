@@ -468,7 +468,8 @@ func (s *session) handleArenaTeamLeave(ctx context.Context, payload []byte) bool
 }
 
 // handleArenaTeamRemove processes CMSG_ARENA_TEAM_REMOVE (0x354).
-// Reference: WorldSession::HandleArenaTeamRemoveOpcode (ArenaTeamHandler.cpp:298).
+// Reference: WorldSession::HandleArenaTeamRemoveOpcode (ArenaTeamHandler.cpp:298)
+// plus ArenaTeam::DelMember (ArenaTeam.cpp:316).
 func (s *session) handleArenaTeamRemove(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 5 {
 		return true
@@ -484,24 +485,83 @@ func (s *session) handleArenaTeamRemove(ctx context.Context, payload []byte) boo
 	}
 
 	cdb := s.server.CharactersStore.DB
-	if cdb != nil {
-		var memberGUID int64
-		if err := cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ?", name).Scan(&memberGUID); err == nil && memberGUID > 0 {
-			_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", teamID, memberGUID)
-		}
+	if cdb == nil {
+		return true
 	}
 
-	res := protocol.NewBuffer(12)
-	res.WriteU32(3) // ERR_ARENA_TEAM_QUIT_S
-	res.WriteCString("")
-	res.WriteCString(name)
-	res.WriteU32(0)
-	_ = s.write(uint16(protocol.OpcodeSMSG_ARENA_TEAM_COMMAND_RESULT), res.Bytes(), true)
+	// Check for valid arena team -> silent return == C++.
+	var teamName string
+	var aType, captainGUID uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT name, type, captainGuid FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&teamName, &aType, &captainGUID); err != nil {
+		return true
+	}
+
+	// Only captain can remove members == C++.
+	if s.playerGUID != uint64(captainGUID) {
+		s.sendArenaTeamCommandResult(arenaTeamCreateS, "", "", arenaTeamPermissions)
+		return true
+	}
+
+	// normalizePlayerName arm == C++; the Go form fails only on empty names.
+	name = normalizePlayerName(name)
+	if name == "" {
+		return true
+	}
+
+	// GetMember(name) miss -> CREATE_S/PLAYER_NOT_FOUND_S == C++.
+	var memberGUID int64
+	if err := cdb.QueryRowContext(ctx, "SELECT atm.guid FROM arena_team_member AS atm JOIN characters AS c ON c.guid = atm.guid WHERE atm.arenaTeamId = ? AND c.name = ?", teamID, name).Scan(&memberGUID); err != nil || memberGUID == 0 {
+		s.sendArenaTeamCommandResult(arenaTeamCreateS, "", name, arenaTeamPlayerNotFoundS)
+		return true
+	}
+
+	// Captain cannot be removed == C++.
+	if uint64(memberGUID) == uint64(captainGUID) {
+		s.sendArenaTeamCommandResult(arenaTeamQuitS, "", "", arenaTeamLeaderLeaveS)
+		return true
+	}
+
+	// Team cannot be removed during queues: the captain's invited arena queue
+	// entry of this type locks the team == C++ (same port-arm convention as
+	// the leave handler).
+	if s.arenaTeamQueueLocked(uint8(aType)) {
+		s.sendArenaTeamCommandResult(arenaTeamQuitS, "", "", arenaTeamsLocked)
+		return true
+	}
+
+	// Player cannot be removed during fights == C++ IsFighting().
+	if arenaTeamIsFighting(ctx, s.server, cdb, teamID) {
+		return true
+	}
+
+	// ArenaTeam::DelMember(guid, true): drop the member row, drop the removed
+	// member's queued (not invited) arena entries when in a group, and answer
+	// QUIT_S with the team name to an online member == the leave handler's
+	// DelMember port. BroadcastEvent(ERR_ARENA_TEAM_REMOVE_SSS) has no Go
+	// member-broadcast model (precedent: accept/leave handlers).
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", teamID, memberGUID)
+	if ms := s.server.findSessionByGUID(uint64(memberGUID)); ms != nil {
+		if ms.groupID != 0 {
+			for i := range ms.bgQueues {
+				e := &ms.bgQueues[i]
+				if e.Active && e.IsArena && e.ArenaType == uint8(aType) && e.InstanceID == 0 {
+					ms.bgQueues[i] = bgQueueEntry{}
+					ms.sendBattlefieldStatus(uint8(i))
+				}
+			}
+		}
+		if ms.player != nil {
+			ms.sendArenaTeamCommandResult(arenaTeamQuitS, teamName, "", 0)
+		}
+	}
+	s.debug("arena team member removed", "team", teamID, "member", memberGUID)
 	return true
 }
 
 // handleArenaTeamDisband processes CMSG_ARENA_TEAM_DISBAND (0x355).
-// Reference: WorldSession::HandleArenaTeamDisbandOpcode (ArenaTeamHandler.cpp:266).
+// Reference: WorldSession::HandleArenaTeamDisbandOpcode (ArenaTeamHandler.cpp:266)
+// plus ArenaTeam::Disband (ArenaTeam.cpp:374) and ArenaTeam::DelMember
+// (ArenaTeam.cpp:316).
 func (s *session) handleArenaTeamDisband(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
 		return true
@@ -513,17 +573,51 @@ func (s *session) handleArenaTeamDisband(ctx context.Context, payload []byte) bo
 	}
 
 	cdb := s.server.CharactersStore.DB
-	if cdb != nil {
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team_member WHERE arenaTeamId = ?", teamID)
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team WHERE arenaTeamId = ?", teamID)
+	if cdb == nil {
+		return true
 	}
 
-	res := protocol.NewBuffer(12)
-	res.WriteU32(3)
-	res.WriteCString("")
-	res.WriteCString("")
-	res.WriteU32(0)
-	_ = s.write(uint16(protocol.OpcodeSMSG_ARENA_TEAM_COMMAND_RESULT), res.Bytes(), true)
+	// GetArenaTeamById miss -> silent return == C++.
+	var teamName string
+	var aType, captainGUID uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT name, type, captainGuid FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&teamName, &aType, &captainGUID); err != nil {
+		return true
+	}
+
+	// Only captain can disband the team == C++ (no error packet).
+	if s.playerGUID != uint64(captainGUID) {
+		return true
+	}
+
+	// Teams cannot be disbanded during queues == C++.
+	if s.arenaTeamQueueLocked(uint8(aType)) {
+		return true
+	}
+
+	// Teams cannot be disbanded during fights == C++ IsFighting().
+	if arenaTeamIsFighting(ctx, s.server, cdb, teamID) {
+		return true
+	}
+
+	// ArenaTeam::Disband: DelMember each member (online members get QUIT_S
+	// with the team name), then delete the team and member rows. C++ sends no
+	// command result on this path; the BroadcastEvent(ERR_ARENA_TEAM_DISBANDED_S)
+	// fan-out has no Go member-broadcast model (precedent: leave handler).
+	rows, err := cdb.QueryContext(ctx, "SELECT guid FROM arena_team_member WHERE arenaTeamId = ?", teamID)
+	if err == nil {
+		for rows.Next() {
+			var mGUID int64
+			if rows.Scan(&mGUID) == nil {
+				if ms := s.server.findSessionByGUID(uint64(mGUID)); ms != nil && ms.player != nil {
+					ms.sendArenaTeamCommandResult(arenaTeamQuitS, teamName, "", 0)
+				}
+			}
+		}
+		rows.Close()
+	}
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team_member WHERE arenaTeamId = ?", teamID)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team WHERE arenaTeamId = ?", teamID)
+	s.debug("arena team disbanded", "team", teamID)
 	return true
 }
 
@@ -544,18 +638,89 @@ func (s *session) handleArenaTeamLeader(ctx context.Context, payload []byte) boo
 	}
 
 	cdb := s.server.CharactersStore.DB
-	if cdb != nil {
-		var newLeaderGUID int64
-		if err := cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ?", name).Scan(&newLeaderGUID); err == nil && newLeaderGUID > 0 {
-			_, _ = cdb.ExecContext(ctx, "UPDATE arena_team SET captainGuid = ? WHERE arenaTeamId = ?", newLeaderGUID, teamID)
-		}
+	if cdb == nil {
+		return true
 	}
 
-	res := protocol.NewBuffer(12)
-	res.WriteU32(3)
-	res.WriteCString("")
-	res.WriteCString(name)
-	res.WriteU32(0)
-	_ = s.write(uint16(protocol.OpcodeSMSG_ARENA_TEAM_COMMAND_RESULT), res.Bytes(), true)
+	// Check for valid arena team -> silent return == C++.
+	var aType, captainGUID uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT type, captainGuid FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&aType, &captainGUID); err != nil {
+		return true
+	}
+
+	// Only captain can pass leadership == C++.
+	if s.playerGUID != uint64(captainGUID) {
+		s.sendArenaTeamCommandResult(arenaTeamCreateS, "", "", arenaTeamPermissions)
+		return true
+	}
+
+	// normalizePlayerName arm == C++ (Go fails only on empty names).
+	name = normalizePlayerName(name)
+	if name == "" {
+		return true
+	}
+
+	// GetMember(name) miss -> CREATE_S/PLAYER_NOT_FOUND_S == C++.
+	var memberGUID int64
+	if err := cdb.QueryRowContext(ctx, "SELECT atm.guid FROM arena_team_member AS atm JOIN characters AS c ON c.guid = atm.guid WHERE atm.arenaTeamId = ? AND c.name = ?", teamID, name).Scan(&memberGUID); err != nil || memberGUID == 0 {
+		s.sendArenaTeamCommandResult(arenaTeamCreateS, "", name, arenaTeamPlayerNotFoundS)
+		return true
+	}
+
+	// Target already captain -> silent return == C++.
+	if uint64(memberGUID) == uint64(captainGUID) {
+		return true
+	}
+
+	// ArenaTeam::SetCaptain == C++. The BroadcastEvent
+	// (ERR_ARENA_TEAM_LEADER_CHANGED_SSS) fan-out has no Go member-broadcast
+	// model (precedent: accept/leave/remove handlers).
+	_, _ = cdb.ExecContext(ctx, "UPDATE arena_team SET captainGuid = ? WHERE arenaTeamId = ?", memberGUID, teamID)
+	s.debug("arena team leader changed", "team", teamID, "captain", memberGUID)
 	return true
+}
+
+// arenaTeamQueueLocked reports whether the session holds an invited arena
+// queue entry of the given arena type (BattlegroundMgr::BGQueueTypeId
+// (BATTLEGROUND_AA, type) + GetPlayerGroupInfoData IsInvitedToBGInstanceGUID).
+// Go's invited ⇔ entry.InstanceID != 0 convention comes from the port arm.
+func (s *session) arenaTeamQueueLocked(arenaType uint8) bool {
+	for i := range s.bgQueues {
+		e := &s.bgQueues[i]
+		if e.Active && e.IsArena && e.ArenaType == arenaType && e.InstanceID != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// arenaTeamIsFighting mirrors ArenaTeam::IsFighting (ArenaTeam.cpp:973): any
+// team member on a battle-arena map. Go keeps no live-map model; an online
+// member session with an active arena queue entry past wait-queue is the
+// port-arm's established proxy for being inside the arena.
+func arenaTeamIsFighting(ctx context.Context, srv interface {
+	findSessionByGUID(guid uint64) *session
+}, cdb *sql.DB, teamID uint32) bool {
+	rows, err := cdb.QueryContext(ctx, "SELECT guid FROM arena_team_member WHERE arenaTeamId = ?", teamID)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var mGUID int64
+		if rows.Scan(&mGUID) != nil {
+			continue
+		}
+		ms := srv.findSessionByGUID(uint64(mGUID))
+		if ms == nil {
+			continue
+		}
+		for i := range ms.bgQueues {
+			e := &ms.bgQueues[i]
+			if e.Active && e.IsArena && e.Status == BGStatusInProgress {
+				return true
+			}
+		}
+	}
+	return false
 }
