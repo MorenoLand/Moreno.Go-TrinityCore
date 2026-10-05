@@ -785,8 +785,22 @@ func (s *session) handleBinderActivate(ctx context.Context, payload []byte) bool
 	if err != nil {
 		return false
 	}
-	if !s.canInteractWithNPC(ctx, npcGUID, 0x00000004) {
+	// NPCHandler.cpp:247-256 (HandleBinderActivateOpcode): dead or
+	// not-in-world players are silently dropped before the interact check.
+	// Go has no separate in-world flag; playerLoaded sessions are in-world.
+	if s.isDeadOrGhost() {
 		return true
+	}
+	if !s.canInteractWithNPC(ctx, npcGUID, uint64(unitNPCFlagInnkeeper)) {
+		return true
+	}
+	// NPCHandler.cpp:265-268 (SendBindPoint): homebind can never be set
+	// inside an instance (C++ Map::Instanceable, i.e. DBC Map InstanceType
+	// != 0); the handler returns before the bind spell cast.
+	if s.server != nil && s.server.Data != nil {
+		if mapEntry, found, err := s.server.Data.Map(s.player.Map); err == nil && found && mapEntry.InstanceType != 0 {
+			return true
+		}
 	}
 
 	// Update player homebind location

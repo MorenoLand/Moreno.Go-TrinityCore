@@ -2251,9 +2251,15 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	_, _ = r.ReadU64() // npcGUID
+	npcGUID, _ := r.ReadU64()
 	itemGUID, _ := r.ReadU64()
 	guildBank, _ := r.ReadU8()
+
+	// NPCHandler.cpp:717-731 (HandleRepairItemOpcode): repairs require an
+	// interactable repair NPC (UNIT_NPC_FLAG_REPAIR), otherwise silent drop.
+	if !s.canInteractWithNPC(ctx, npcGUID, uint64(unitNPCFlagRepair)) {
+		return true
+	}
 
 	if s.server == nil || s.server.CharactersStore == nil {
 		return true

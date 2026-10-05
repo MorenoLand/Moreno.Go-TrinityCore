@@ -44,6 +44,11 @@ func (s *session) handleBankerActivate(ctx context.Context, payload []byte) bool
 	if err != nil {
 		return false
 	}
+	// BankHandler.cpp:46-53 (HandleBankerActivateOpcode): the NPC must be
+	// interactable as a banker (UNIT_NPC_FLAG_BANKER), otherwise silent drop.
+	if !s.canInteractWithNPC(ctx, bankerGUID, uint64(unitNPCFlagBanker)) {
+		return true
+	}
 
 	res := protocol.NewBuffer(8)
 	res.WriteU64(bankerGUID)

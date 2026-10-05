@@ -4852,7 +4852,7 @@ func (s *session) handlePetitionRename(ctx context.Context, payload []byte) bool
 }
 
 // handleTabardVendorActivate processes MSG_TABARDVENDOR_ACTIVATE (0x1FA).
-// Reference: WorldSession::HandleTabardVendorActivateOpcode (NPCHandler.cpp:665).
+// Reference: WorldSession::HandleTabardVendorActivateOpcode (NPCHandler.cpp:58).
 func (s *session) handleTabardVendorActivate(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
@@ -4861,6 +4861,11 @@ func (s *session) handleTabardVendorActivate(ctx context.Context, payload []byte
 	vendorGUID, err := r.ReadU64()
 	if err != nil {
 		return false
+	}
+	// NPCHandler.cpp:62-67: the NPC must be interactable as a tabard
+	// designer (UNIT_NPC_FLAG_TABARDDESIGNER), otherwise silent drop.
+	if !s.canInteractWithNPC(ctx, vendorGUID, uint64(unitNPCFlagTabardDesigner)) {
+		return true
 	}
 
 	buf := protocol.NewBuffer(8)

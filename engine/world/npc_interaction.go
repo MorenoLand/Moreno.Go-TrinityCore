@@ -8,6 +8,18 @@ import (
 
 const unitNPCFlagVendor uint32 = 0x00000080
 
+// unitNPCFlagRepair mirrors UNIT_NPC_FLAG_REPAIR (UnitDefines.h:198).
+const unitNPCFlagRepair uint32 = 0x00001000
+
+// unitNPCFlagInnkeeper mirrors UNIT_NPC_FLAG_INNKEEPER (UnitDefines.h:202).
+const unitNPCFlagInnkeeper uint32 = 0x00010000
+
+// unitNPCFlagBanker mirrors UNIT_NPC_FLAG_BANKER (UnitDefines.h:203).
+const unitNPCFlagBanker uint32 = 0x00020000
+
+// unitNPCFlagTabardDesigner mirrors UNIT_NPC_FLAG_TABARDDESIGNER (UnitDefines.h:205).
+const unitNPCFlagTabardDesigner uint32 = 0x00080000
+
 // unitNPCFlagBattlemaster mirrors UNIT_NPC_FLAG_BATTLEMASTER (UnitDefines.h:206).
 const unitNPCFlagBattlemaster uint32 = 0x00100000
 

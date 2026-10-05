@@ -165,7 +165,8 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 	}
 	creatureEntry := uint32((vendorGUID >> 24) & 0xFFFFFF)
 	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT v.slot, v.item, v.maxcount, v.incrtime, v.ExtendedCost,
-		COALESCE(t.displayid, 0), COALESCE(t.BuyPrice, 0), COALESCE(t.MaxDurability, 0), COALESCE(t.BuyCount, 1), COALESCE(t.FlagsExtra, 0)
+		COALESCE(t.displayid, 0), COALESCE(t.BuyPrice, 0), COALESCE(t.MaxDurability, 0), COALESCE(t.BuyCount, 1), COALESCE(t.FlagsExtra, 0),
+		COALESCE(t.AllowableClass, -1), COALESCE(t.Bonding, 0)
 		FROM npc_vendor AS v
 		LEFT JOIN item_template AS t ON t.entry = v.item
 		WHERE v.entry = ? ORDER BY v.slot LIMIT 150`, creatureEntry)
@@ -173,12 +174,12 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 		return true
 	}
 	type vendorRow struct {
-		slot, item, maxCount, incrTime, extCost, display, buyPrice, maxDur, buyCount, flagsExtra int64
+		slot, item, maxCount, incrTime, extCost, display, buyPrice, maxDur, buyCount, flagsExtra, allowableClass, bonding int64
 	}
 	rowsData := make([]vendorRow, 0, 150)
 	for rows.Next() {
 		var row vendorRow
-		if err := rows.Scan(&row.slot, &row.item, &row.maxCount, &row.incrTime, &row.extCost, &row.display, &row.buyPrice, &row.maxDur, &row.buyCount, &row.flagsExtra); err == nil {
+		if err := rows.Scan(&row.slot, &row.item, &row.maxCount, &row.incrTime, &row.extCost, &row.display, &row.buyPrice, &row.maxDur, &row.buyCount, &row.flagsExtra, &row.allowableClass, &row.bonding); err == nil {
 			rowsData = append(rowsData, row)
 		}
 	}
@@ -204,6 +205,12 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 			if flagsExtra&int64(itemFlag2DontIgnoreBuyPrice) == 0 {
 				buyPrice = 0
 			}
+		}
+		// ItemHandler.cpp:652-666 (SendListInventory): hide bind-on-pickup
+		// items unusable by the player's class and wrong-faction items from
+		// non-GMs — the buy path re-checks the same gates.
+		if !s.vendorItemListable(uint32(row.allowableClass), uint32(row.bonding), uint32(flagsExtra)) {
+			continue
 		}
 		if meets, err := s.meetVendorItemConditions(ctx, creatureEntry, uint32(item), vendorGUID); err != nil || !meets {
 			continue
@@ -510,6 +517,32 @@ func (s *session) recordVendorRefund(ctx context.Context, cdb *sql.DB, itemGUID 
 	_, _ = cdb.ExecContext(ctx, "REPLACE INTO item_refund_instance (item_guid, player_guid, paidMoney, paidExtendedCost) VALUES (?, ?, ?, ?)", itemGUID, s.playerGUID, paidMoney, extendedCost)
 }
 
+// vendorItemListable mirrors the SendListInventory visibility filters
+// (ItemHandler.cpp:652-666): bind-on-pickup items unusable by the player's
+// class, wrong-faction items, and (via the caller's stock check) sold-out
+// stock are hidden from non-GMs. Unlike the buy path (Player.cpp:21941),
+// both faction checks here are bitmask HasFlag checks — the buy path's
+// exact-equality quirk does not apply to the list.
+func (s *session) vendorItemListable(allowableClass, bonding, flagsExtra uint32) bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	if s.player.PlayerFlags&playerFlagGM != 0 || s.player.ExtraFlags&playerExtraGMOn != 0 {
+		return true
+	}
+	if bonding == 1 && (s.player.Class == 0 || allowableClass&(uint32(1)<<(s.player.Class-1)) == 0) {
+		return false
+	}
+	team := teamForRace(s.player.Race)
+	if flagsExtra&0x00000001 != 0 && team != 1 {
+		return false
+	}
+	if flagsExtra&0x00000002 != 0 && team != 0 {
+		return false
+	}
+	return true
+}
+
 func (s *session) vendorItemAccess(allowableClass, bonding, flagsExtra uint32) (int, bool) {
 	isGM := s != nil && s.player != nil && (s.security > 0 || s.player.PlayerFlags&playerFlagGM != 0 || s.player.ExtraFlags&playerExtraGMOn != 0)
 	if !isGM && bonding == 1 && s.player != nil {
@@ -522,7 +555,12 @@ func (s *session) vendorItemAccess(allowableClass, bonding, flagsExtra uint32) (
 		if flagsExtra&0x00000001 != 0 && team != 1 {
 			return -1, false
 		}
-		if flagsExtra&0x00000002 != 0 && team != 0 {
+		// Player.cpp:21941: the Alliance-faction buy check is an exact
+		// Flags2 equality (==), not a bitmask — an item carrying
+		// FACTION_ALLIANCE alongside other Flags2 bits stays buyable
+		// cross-faction in C++, so the client-side silent drop only fires
+		// when Flags2 is exactly 0x2.
+		if flagsExtra == 0x00000002 && team != 0 {
 			return -1, false
 		}
 	}

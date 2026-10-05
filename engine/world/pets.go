@@ -2356,29 +2356,57 @@ func (s *session) handleRequestPetInfo(ctx context.Context, payload []byte) bool
 }
 
 // handleListStabledPets processes MSG_LIST_STABLED_PETS (0x26F).
-// Reference: WorldSession::HandleListStabledPetsOpcode (NPCHandler.cpp:520).
+// Reference: WorldSession::HandleRequestStabledPets (NPCHandler.cpp:288)
+// and WorldSession::SendStablePet (NPCHandler.cpp:310).
 func (s *session) handleListStabledPets(ctx context.Context, payload []byte) bool {
-	if len(payload) < 8 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	npcGUID, _ := r.ReadU64()
+	npcGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	// NPCHandler.cpp:293-295: not a stablemaster -> silent drop.
+	if !s.checkStableMaster(ctx, npcGUID) {
+		return true
+	}
+	// NPCHandler.cpp:299-303: opening the stable dismounts the player
+	// (C++ removes SPELL_AURA_MOUNTED; stabling while mounted deleted the pet).
+	if s.isPlayerMounted() {
+		for _, aura := range s.loadedAuras() {
+			if aura != nil && aura.AuraType == spellAuraMounted {
+				s.removeAura(aura.SpellID)
+			}
+		}
+		s.player.MountDisplayID = 0
+		s.sendPlayerUpdate()
+	}
 
 	type petInfo struct {
 		ID    uint32
 		Entry uint32
 		Level uint32
 		Name  string
-		Slot  uint8
+		Flags uint8 // NPCHandler.cpp:344/362: 1 active, 2 stabled
 	}
 	var pets []petInfo
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT id, entry, level, name, slot FROM character_pet WHERE owner = ? AND slot > 0 ORDER BY slot", s.playerGUID)
+		cdb := s.server.CharactersStore.DB
+		// NPCHandler.cpp:336-353: the current pet is listed first with the
+		// active flag. Go has no unslotted-hunter-pet concept (C++ :343).
+		var cur petInfo
+		if err := cdb.QueryRowContext(ctx, "SELECT id, entry, level, name FROM character_pet WHERE owner = ? AND slot = 0 LIMIT 1", s.playerGUID).Scan(&cur.ID, &cur.Entry, &cur.Level, &cur.Name); err == nil {
+			cur.Flags = 1
+			pets = append(pets, cur)
+		}
+		rows, err := cdb.QueryContext(ctx, "SELECT id, entry, level, name FROM character_pet WHERE owner = ? AND slot > 0 ORDER BY slot", s.playerGUID)
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
 				var p petInfo
-				if err := rows.Scan(&p.ID, &p.Entry, &p.Level, &p.Name, &p.Slot); err == nil {
+				if err := rows.Scan(&p.ID, &p.Entry, &p.Level, &p.Name); err == nil {
+					p.Flags = 2
 					pets = append(pets, p)
 				}
 			}
@@ -2388,13 +2416,16 @@ func (s *session) handleListStabledPets(ctx context.Context, payload []byte) boo
 	buf := protocol.NewBuffer(16 + len(pets)*32)
 	buf.WriteU64(npcGUID)
 	buf.WriteU8(uint8(len(pets)))
+	// NPCHandler.cpp:328: the slots byte is the player's MaxStabledPets.
+	// Go does not track purchased slot counts (C++ characters.stableSlots),
+	// so the stable always reports the maximum.
 	buf.WriteU8(4) // num slots
 	for _, p := range pets {
 		buf.WriteU32(p.ID)
 		buf.WriteU32(p.Entry)
 		buf.WriteU32(p.Level)
 		buf.WriteCString(p.Name)
-		buf.WriteU8(p.Slot)
+		buf.WriteU8(p.Flags)
 	}
 	_ = s.write(uint16(protocol.OpcodeMSG_LIST_STABLED_PETS), buf.Bytes(), true)
 	return true
