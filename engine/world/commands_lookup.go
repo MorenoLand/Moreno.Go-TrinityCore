@@ -42,29 +42,13 @@ func lookupMaxResultsMsg(maxResults uint32) string {
 	return fmt.Sprintf("Showing only the first %d results.", maxResults)
 }
 
-// lookupTargetOrSelf mirrors ChatHandler::getSelectedPlayerOrSelf
-// (cs_lookup.cpp quest/quest-id arms): the selected online player, else the
-// invoker; an unresolvable selection reports LANG_PLAYER_NOT_FOUND (499).
-func (s *session) lookupTargetOrSelf() (*session, bool) {
-	target := s
-	if s.selection != 0 && s.server != nil {
-		ts := s.server.playerSessionForGUID(s.selection)
-		if ts == nil || ts.player == nil {
-			s.sendSysMessage("Player not found.")
-			return nil, false
-		}
-		target = ts
-	}
-	if target.player == nil {
-		s.sendSysMessage("Player not found.")
-		return nil, false
-	}
-	return target, true
-}
-
 // lookupSelectedPlayer mirrors ChatHandler::getSelectedPlayer
-// (cs_lookup.cpp spell/skill/title/faction arms): the selected player, which
-// may be nil (the C++ explicitly allows NULL at console call).
+// (cs_lookup.cpp spell/skill/title/faction arms): the selected player, nil
+// only for an unresolvable selection (the C++ also allows NULL at console
+// call; Go commands are always sessioned). The helper keeps its nil-on-empty
+// contract for its other (lfg/list) callers, which carry their own fallbacks;
+// the lookup arms use lookupSelectedPlayerOrSelf for the C++ in-session
+// contract (Chat.cpp:300: no selection resolves to the invoker).
 func (s *session) lookupSelectedPlayer() *session {
 	if s.selection == 0 || s.server == nil {
 		return nil
@@ -74,6 +58,16 @@ func (s *session) lookupSelectedPlayer() *session {
 		return nil
 	}
 	return ts
+}
+
+// lookupSelectedPlayerOrSelf adapts lookupSelectedPlayer to the C++
+// getSelectedPlayer contract (Chat.cpp:300): an empty selection resolves to
+// the invoker, so only an unresolvable selection yields nil.
+func (s *session) lookupSelectedPlayerOrSelf() *session {
+	if target := s.lookupSelectedPlayer(); target != nil || s.selection != 0 {
+		return target
+	}
+	return s
 }
 
 // lookupDBC iterates a DBC file's records in index order and sends one line
@@ -486,13 +480,15 @@ func (s *session) handleLookupItem(query string) {
 
 // handleLookupItemID ports HandleLookupItemIdCommand (cs_lookup.cpp:478-504).
 func (s *session) handleLookupItemID(arg string) {
-	id, _ := strconv.ParseUint(arg, 10, 32)
+	// C++ is uint32 id = atoi(args) (cs_lookup.cpp:482); cAtoi keeps the
+	// prefix-digit/negative/whitespace behavior ParseUint would reject.
+	id := uint32(cAtoi(arg))
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		s.sendSysMessage("World data is unavailable.")
 		return
 	}
 	var name string
-	if err := s.server.WorldStore.DB.QueryRowContext(context.Background(), "SELECT name FROM item_template WHERE entry = ?", uint32(id)).Scan(&name); err != nil || name == "" {
+	if err := s.server.WorldStore.DB.QueryRowContext(context.Background(), "SELECT name FROM item_template WHERE entry = ?", id).Scan(&name); err != nil || name == "" {
 		s.sendSysMessage("No item found.")
 		return
 	}
@@ -546,9 +542,11 @@ func (s *session) lookupQuestStatusStr(ctx context.Context, target *session, que
 // quest_template title search with the selected-or-self target's quest
 // status. Quest locales are unmodeled (enUS Title only).
 func (s *session) handleLookupQuest(ctx context.Context, query string) {
-	target, ok := s.lookupTargetOrSelf()
-	if !ok {
-		return
+	// getSelectedPlayerOrSelf (Chat.cpp:344): no selection or an unresolvable
+	// selection both fall back to the invoker; never nil in-session.
+	target := s.lookupSelectedPlayerOrSelf()
+	if target == nil {
+		target = s
 	}
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		s.sendSysMessage("World data is unavailable.")
@@ -591,22 +589,26 @@ func (s *session) handleLookupQuest(ctx context.Context, query string) {
 
 // handleLookupQuestID ports HandleLookupQuestIdCommand (cs_lookup.cpp:773-821).
 func (s *session) handleLookupQuestID(ctx context.Context, arg string) {
-	target, ok := s.lookupTargetOrSelf()
-	if !ok {
-		return
+	// getSelectedPlayerOrSelf (Chat.cpp:344): no selection or an unresolvable
+	// selection both fall back to the invoker; never nil in-session.
+	target := s.lookupSelectedPlayerOrSelf()
+	if target == nil {
+		target = s
 	}
-	id, _ := strconv.ParseUint(arg, 10, 32)
+	// C++ is uint32 id = atoi(args) (cs_lookup.cpp:777); cAtoi keeps the
+	// prefix-digit/negative/whitespace behavior ParseUint would reject.
+	id := uint32(cAtoi(arg))
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		s.sendSysMessage("World data is unavailable.")
 		return
 	}
 	var title string
 	var level uint32
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Title, QuestLevel FROM quest_template WHERE entry = ?", uint32(id)).Scan(&title, &level); err != nil || title == "" {
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Title, QuestLevel FROM quest_template WHERE entry = ?", id).Scan(&title, &level); err != nil || title == "" {
 		s.sendSysMessage("No quest found.")
 		return
 	}
-	s.sendSysMessage(fmt.Sprintf("%d - |cffffffff|Hquest:%d:%d|h[%s]|h|r%s", id, id, level, title, s.lookupQuestStatusStr(ctx, target, uint32(id))))
+	s.sendSysMessage(fmt.Sprintf("%d - |cffffffff|Hquest:%d:%d|h[%s]|h|r%s", id, id, level, title, s.lookupQuestStatusStr(ctx, target, id)))
 }
 
 // handleLookupPlayerIP ports HandleLookupPlayerIpCommand
@@ -799,7 +801,7 @@ func (s *session) lookupSpellLine(id uint32, name, rankText string, target *sess
 // Spell.dbc name search. The known/active marks use the selected player; the
 // C++ also allows NULL (console), so a nil selection simply omits them.
 func (s *session) handleLookupSpell(query string) {
-	target := s.lookupSelectedPlayer()
+	target := s.lookupSelectedPlayerOrSelf()
 	// SpellName is the enUS string at field 136 (wotlk.Store.SpellName).
 	s.lookupDBC("Spell", "Spell", 136, query, "No spell found.",
 		func(id uint32, name string, rec lookupRecord) string {
@@ -810,17 +812,19 @@ func (s *session) handleLookupSpell(query string) {
 
 // handleLookupSpellID ports HandleLookupSpellIdCommand (cs_lookup.cpp:1023-1091).
 func (s *session) handleLookupSpellID(ctx context.Context, arg string) {
-	id, _ := strconv.ParseUint(arg, 10, 32)
+	// C++ is uint32 id = atoi(args) (cs_lookup.cpp:1027); cAtoi keeps the
+	// prefix-digit/negative/whitespace behavior ParseUint would reject.
+	id := uint32(cAtoi(arg))
 	if s.server == nil || s.server.Data == nil {
 		s.sendSysMessage("Spell data is unavailable.")
 		return
 	}
-	name, rankText, found, err := s.server.Data.SpellName(uint32(id))
+	name, rankText, found, err := s.server.Data.SpellName(id)
 	if err != nil || !found || name == "" {
 		s.sendSysMessage("No spell found.")
 		return
 	}
-	s.sendSysMessage(s.lookupSpellLine(uint32(id), name, rankText, s.lookupSelectedPlayer()))
+	s.sendSysMessage(s.lookupSpellLine(id, name, rankText, s.lookupSelectedPlayerOrSelf()))
 }
 
 // handleLookupTaxinode ports HandleLookupTaxiNodeCommand (cs_lookup.cpp:1093-1165):
@@ -868,7 +872,9 @@ func (s *session) handleLookupTele(ctx context.Context, token string) {
 			break
 		}
 		count++
-		fmt.Fprintf(&reply, "  |cffffffff|Htele:%s|h[%s]|h|r\n", name, name)
+		// The C++ link target is the tele id (itr->first of the
+		// unordered_map<uint32, GameTele>); |Htele:id| links resolve by id.
+		fmt.Fprintf(&reply, "  |cffffffff|Htele:%d|h[%s]|h|r\n", id, name)
 	}
 	if reply.Len() == 0 {
 		s.sendSysMessage("No location found.")
@@ -885,7 +891,7 @@ func (s *session) handleLookupTele(ctx context.Context, token string) {
 // marks from the selected player's titles (female name variant unmodeled,
 // like the C++ @todo).
 func (s *session) handleLookupTitle(query string) {
-	target := s.lookupSelectedPlayer()
+	target := s.lookupSelectedPlayerOrSelf()
 	targetName := "NAME"
 	if target != nil && target.player != nil {
 		targetName = target.player.Name
@@ -947,12 +953,14 @@ func (s *session) handleLookupMap(query string) {
 // The C++ sends LANG_COMMAND_NOSPELLFOUND when the entry exists but its name
 // is empty (cs_lookup.cpp:1408); the quirk is mirrored.
 func (s *session) handleLookupMapID(arg string) {
-	id, _ := strconv.ParseUint(arg, 10, 32)
+	// C++ is uint32 id = atoi(args) (cs_lookup.cpp:1383); cAtoi keeps the
+	// prefix-digit/negative/whitespace behavior ParseUint would reject.
+	id := uint32(cAtoi(arg))
 	if s.server == nil || s.server.Data == nil {
 		s.sendSysMessage("Map data is unavailable.")
 		return
 	}
-	info, found, err := s.server.Data.Map(uint32(id))
+	info, found, err := s.server.Data.Map(id)
 	if err != nil || !found {
 		s.sendSysMessage("No map found.")
 		return
@@ -961,5 +969,5 @@ func (s *session) handleLookupMapID(arg string) {
 		s.sendSysMessage("No spell found.")
 		return
 	}
-	s.sendSysMessage(lookupMapLine(uint32(id), info.MapName, info.InstanceType))
+	s.sendSysMessage(lookupMapLine(id, info.MapName, info.InstanceType))
 }
