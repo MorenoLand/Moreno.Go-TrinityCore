@@ -70,6 +70,33 @@ func (s *Server) creatureLootAllowed(mapID, instanceID uint32, targetGUID, stand
 	return playerGUID == owner.PlayerGUID
 }
 
+// withinLootDistance mirrors WorldObject::IsWithinDistInMap(obj,
+// INTERACTION_DISTANCE) (Object.cpp:1147): the 5.0-yard interaction check
+// adds both combat reaches (Object.cpp:1149-1152), so a large creature stays
+// lootable from farther out than a flat 5.0 center-distance check allows.
+func withinLootDistance(s *session, target combatTarget) bool {
+	targetReach := float64(target.CombatReach)
+	if targetReach <= 0 {
+		targetReach = 1.5
+	}
+	playerReach := 1.5
+	if s != nil && s.player != nil && s.player.CombatReach > 0 {
+		playerReach = float64(s.player.CombatReach)
+	}
+	return distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) <= 5.0+playerReach+targetReach
+}
+
+// sendLootReleaseResponse mirrors Player::SendLootRelease (Player.cpp:8519):
+// SMSG_LOOT_RELEASE_RESPONSE carrying the guid and a 1 byte. Player::SendLoot
+// answers missing/alive-state/distance failures on the open path with this
+// silent release, not a SendLootError.
+func (s *session) sendLootReleaseResponse(guid uint64) error {
+	buf := protocol.NewBuffer(9)
+	buf.WriteU64(guid)
+	buf.WriteU8(1)
+	return s.write(uint16(protocol.OpcodeSMSG_LOOT_RELEASE_RESPONSE), buf.Bytes(), true)
+}
+
 func (l *activeLootState) addViewer(s *session) {
 	if l.Viewers == nil {
 		l.Viewers = make(map[uint64]*session)
@@ -209,7 +236,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 				WHERE g.guid = ? LIMIT 1`, lowGUID).Scan(&goMap, &goX, &goY, &goZ, &data1)
 		}
 		if goMap != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, goX, goY, goZ) > 10.0 {
-			return s.sendLootError(targetGUID, 4) == nil
+			return s.sendLootReleaseResponse(targetGUID) == nil
 		}
 		lootID := data1
 		if lootID == 0 {
@@ -296,11 +323,11 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	}
 
 	target, ok := s.getCombatTarget(ctx, targetGUID)
-	if !ok || target.Map != s.player.Map || target.InstanceID != s.player.InstanceID || distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) > 5.0 {
-		return s.sendLootError(targetGUID, 4) == nil
+	if !ok || target.Map != s.player.Map || target.InstanceID != s.player.InstanceID || !withinLootDistance(s, target) {
+		return s.sendLootReleaseResponse(targetGUID) == nil
 	}
 	if target.Health != 0 {
-		return s.sendLootError(targetGUID, 0) == nil
+		return s.sendLootReleaseResponse(targetGUID) == nil
 	}
 	guid := uint32(targetGUID & 0x00FFFFFF)
 	creatureEntry := uint32((targetGUID >> 24) & 0x00FFFFFF)
@@ -778,6 +805,23 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 	if s.activeLoot.MapID != s.player.Map || s.activeLoot.InstanceID != s.player.InstanceID {
 		return s.sendLootError(s.activeLoot.TargetGUID, 4) == nil
 	}
+	// HandleLootMoneyOpcode (LootHandler.cpp:132-142) Unit/Vehicle arm: the
+	// creature must still be dead and lootable and within INTERACTION_DISTANCE,
+	// else LOOT_ERROR_DIDNT_KILL / LOOT_ERROR_TOO_FAR. Gameobject loot keeps the
+	// existing behavior (no owner model for the owned-bobber arm).
+	if high := uint16(s.activeLoot.TargetGUID >> 48); high != 0xF110 {
+		target, ok := s.getCombatTarget(ctx, s.activeLoot.TargetGUID)
+		guid := uint32(s.activeLoot.TargetGUID & 0x00FFFFFF)
+		entry := uint32((s.activeLoot.TargetGUID >> 24) & 0x00FFFFFF)
+		lootAllowed := ok && target.Health == 0 && s.server.creatureLootAllowed(s.activeLoot.MapID, s.activeLoot.InstanceID, s.activeLoot.TargetGUID, creatureWorldGUID(guid, entry), s.playerGUID, s.groupID)
+		if !lootAllowed || !withinLootDistance(s, target) {
+			code := uint8(0)
+			if lootAllowed {
+				code = 4
+			}
+			return s.sendLootError(s.activeLoot.TargetGUID, code) == nil
+		}
+	}
 	copper := s.activeLoot.Money
 	s.activeLoot.Money = 0
 
@@ -853,7 +897,7 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 		}
 	} else {
 		target, validTarget := s.getCombatTarget(ctx, s.activeLoot.TargetGUID)
-		if !validTarget || target.Map != s.player.Map || target.InstanceID != s.player.InstanceID || target.Health != 0 || distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) > 5.0 {
+		if !validTarget || target.Map != s.player.Map || target.InstanceID != s.player.InstanceID || target.Health != 0 || !withinLootDistance(s, target) {
 			return s.sendLootError(s.activeLoot.TargetGUID, 4) == nil
 		}
 		guid := uint32(s.activeLoot.TargetGUID & 0x00FFFFFF)
