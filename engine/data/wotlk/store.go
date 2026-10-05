@@ -1693,6 +1693,60 @@ func (s *Store) Talent(id uint32) (TalentEntry, bool, error) {
 	}, true, nil
 }
 
+// TalentTabEntry mirrors TrinityCore's TalentTabEntry (DBCStructure.h:1680).
+// Only the ClassMask column (20) is bridged here; PetTalentMask (21) is read
+// inline by PetTalentSpells.
+type TalentTabEntry struct {
+	ID        uint32
+	ClassMask uint32
+}
+
+// TalentTab loads a talent-tab record by ID from TalentTab.dbc.
+func (s *Store) TalentTab(id uint32) (TalentTabEntry, bool, error) {
+	file, err := s.File("TalentTab")
+	if err != nil {
+		return TalentTabEntry{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return TalentTabEntry{}, false, nil
+	}
+	classMask, err := record.Uint32(20)
+	if err != nil {
+		return TalentTabEntry{}, false, err
+	}
+	return TalentTabEntry{ID: id, ClassMask: classMask}, true, nil
+}
+
+// TalentsByTab enumerates every talent record in one tree from Talent.dbc.
+func (s *Store) TalentsByTab(tabID uint32) ([]TalentEntry, error) {
+	file, err := s.File("Talent")
+	if err != nil {
+		return nil, err
+	}
+	var out []TalentEntry
+	for i := 0; i < file.Records(); i++ {
+		rec, recErr := file.Record(i)
+		if recErr != nil {
+			continue
+		}
+		tab, tabErr := rec.Uint32(1)
+		if tabErr != nil || tab != tabID {
+			continue
+		}
+		id, idErr := rec.Uint32(0)
+		if idErr != nil {
+			continue
+		}
+		entry, ok, tErr := s.Talent(id)
+		if tErr != nil || !ok {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out, nil
+}
+
 // TalentBySpell scans Talent.dbc for a talent record that grants the given spell.
 func (s *Store) TalentBySpell(spellID uint32) (uint32, uint8, bool) {
 	if spellID == 0 {

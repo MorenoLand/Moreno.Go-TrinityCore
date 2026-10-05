@@ -9,6 +9,10 @@ const (
 )
 
 const SkillFlagAlwaysMaxValue uint32 = 0x10
+
+// SkillFlagUnlearnable mirrors SKILL_FLAG_UNLEARNABLE (DBCEnums.h:376): the
+// skill can be unlearned via CMSG_UNLEARN_SKILL (SkillHandler.cpp:99).
+const SkillFlagUnlearnable uint32 = 0x20
 const skillLineCategoryProfession int32 = 11
 
 func isProfessionOrRidingSkill(skillID uint32, category int32) bool {

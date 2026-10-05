@@ -13659,7 +13659,7 @@ func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
 }
 
 // handleTalentWipeConfirm processes MSG_TALENT_WIPE_CONFIRM (0x2AA).
-// Reference: WorldSession::HandleTalentWipeConfirmOpcode (SpellHandler.cpp:732).
+// Reference: WorldSession::HandleTalentWipeConfirmOpcode (SkillHandler.cpp:60).
 func (s *session) handleTalentWipeConfirm(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true

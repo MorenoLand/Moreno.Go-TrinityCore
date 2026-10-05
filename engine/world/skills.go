@@ -33,9 +33,26 @@ func (s *session) freeTalentPoints() uint32 {
 	return totalPoints - spent
 }
 
-// learnTalent mirrors Player::LearnTalent (Player.cpp:25460).
+// learnTalent mirrors Player::LearnTalent (Player.cpp:25460), in C++ check
+// order: talent row, tab row, class-mask anti-cheat, known-rank, free points,
+// prerequisite talent, tier points, spell row, already-known.
 func (s *session) learnTalent(ctx context.Context, talentID, requestedRank uint32) bool {
 	if s.player == nil || requestedRank >= maxTalentRank {
+		return false
+	}
+	if s.server == nil || s.server.Data == nil {
+		return false
+	}
+	tEntry, ok, err := s.server.Data.Talent(talentID)
+	if err != nil || !ok {
+		return false
+	}
+	tabEntry, ok, err := s.server.Data.TalentTab(tEntry.TabID)
+	if err != nil || !ok {
+		return false
+	}
+	// C++: "prevent learn talent for different class (cheating)"
+	if playerCreateMask(s.player.Class)&tabEntry.ClassMask == 0 {
 		return false
 	}
 	if s.player.Talents == nil {
@@ -52,27 +69,64 @@ func (s *session) learnTalent(ctx context.Context, talentID, requestedRank uint3
 	if s.freeTalentPoints() < neededPoints {
 		return false
 	}
+	// PrereqTalent arm (Player.cpp:25497-25510): some rank at or above the
+	// required rank of the prerequisite talent must be known.
+	if tEntry.PrereqTalent > 0 {
+		depEntry, ok, depErr := s.server.Data.Talent(tEntry.PrereqTalent)
+		if depErr != nil || !ok {
+			return false
+		}
+		hasEnoughRank := false
+		for rank := tEntry.PrereqRank; rank < maxTalentRank; rank++ {
+			if depEntry.SpellRank[rank] != 0 && playerHasSpell(s.player, depEntry.SpellRank[rank]) {
+				hasEnoughRank = true
+				break
+			}
+		}
+		if !hasEnoughRank {
+			return false
+		}
+	}
+	// Tier arm (Player.cpp:25512-25526): the tree must already hold
+	// TierID*MAX_TALENT_RANK spent points (rank+1 per known rank spell).
+	if tEntry.TierID > 0 {
+		treeTalents, treeErr := s.server.Data.TalentsByTab(tEntry.TabID)
+		if treeErr != nil {
+			return false
+		}
+		var spentPoints uint32
+		for _, treeTalent := range treeTalents {
+			for rank := uint32(0); rank < maxTalentRank; rank++ {
+				if spell := treeTalent.SpellRank[rank]; spell != 0 && playerHasSpell(s.player, spell) {
+					spentPoints += rank + 1
+				}
+			}
+		}
+		if spentPoints < tEntry.TierID*maxTalentRank {
+			return false
+		}
+	}
 
 	var oldSpellID uint32
-	if has && s.server != nil && s.server.Data != nil {
-		if tEntry, ok, err := s.server.Data.Talent(talentID); err == nil && ok && uint32(curRank) < uint32(len(tEntry.SpellRank)) {
-			oldSpellID = tEntry.SpellRank[curRank]
-		}
+	if has && uint32(curRank) < uint32(len(tEntry.SpellRank)) {
+		oldSpellID = tEntry.SpellRank[curRank]
 	}
 
 	var spellID uint32
-	if s.server != nil && s.server.Data != nil {
-		if tEntry, ok, err := s.server.Data.Talent(talentID); err == nil && ok && requestedRank < uint32(len(tEntry.SpellRank)) {
-			spellID = tEntry.SpellRank[requestedRank]
-		}
+	if requestedRank < uint32(len(tEntry.SpellRank)) {
+		spellID = tEntry.SpellRank[requestedRank]
 	}
 	if spellID == 0 {
+		return false
+	}
+	// C++: "already known"
+	if playerHasSpell(s.player, spellID) {
 		return false
 	}
 
 	s.player.Talents[talentID] = uint8(requestedRank)
 
-	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
 		if oldSpellID > 0 {
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_talent WHERE guid = ? AND spell = ? AND talentGroup = ?", s.playerGUID, oldSpellID, s.player.ActiveTalentGroup)
@@ -295,6 +349,18 @@ func (s *session) handleUnlearnSkill(ctx context.Context, payload []byte) bool {
 	skillID, err := r.ReadU32()
 	if err != nil {
 		return false
+	}
+
+	// SkillHandler.cpp:99: the skill must exist in SkillRaceClassInfo for this
+	// race/class and carry SKILL_FLAG_UNLEARNABLE; anything else is a silent
+	// return. Fail closed when the DBC is unavailable, matching C++'s null
+	// rcEntry arm.
+	if s.server == nil || s.server.Data == nil {
+		return true
+	}
+	rcEntry, found, rcErr := s.server.Data.SkillRaceClassInfo(skillID, s.player.Race, s.player.Class)
+	if rcErr != nil || !found || rcEntry.Flags&wotlk.SkillFlagUnlearnable == 0 {
+		return true
 	}
 
 	newSkills := make([]playerSkill, 0, len(s.player.Skills))
