@@ -4243,6 +4243,33 @@ func init() {
 	// achievement_the_hundred_club (no achievement bridge).
 	RegisterLuaBoss("boss_sapphiron", 15989)
 
+	// Grand Widow Faerlina (15953, Naxxramas) —
+	// lua_scripts/northrend/boss_faerlina.lua.
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 1)
+	// (event 1; BossAI bookkeeping + summons.DoZoneInCombat + the
+	// three event schedules have no bridge — tharon_ja precedent);
+	// KilledUnit Talk(SAY_SLAY 2) player-gated
+	// (victim:GetObjectType()=="Player" — nalorakk precedent); JustDied
+	// Talk(SAY_DEATH 3) (event 4; _JustDied bookkeeping has no bridge).
+	// SAY_GREET (0) + EMOTE_WIDOW_EMBRACE (4) ride unported legs
+	// (vortex — not ported orphaned; SpellHit never fires in Lua).
+	// Unmodeled: EVENT_POISON DoCastAOE 28796 + widows-embrace
+	// suppression (no DoCastAOE/aura bridges), EVENT_FIRE DoCast
+	// 28794 on random target (no random-target bridge), EVENT_FRENZY
+	// DoCastSelf 28798 + Talk(EMOTE_FRENZY 5) 1min+randtime(0s,20s) —
+	// moroes-ready in isolation but C++-gated on
+	// GetAura(SPELL_WIDOWS_EMBRACE_HELPER) with reschedule-at-
+	// aura-duration leg (no aura-duration bridge; scheduling ungated
+	// would cast through Widow's Embrace — context-blocked queue),
+	// SummonAdds SummonCreatureGroup 1/2 + 25-man gate (no summon/
+	// difficulty bridges), GetData(DATA_FRENZY_DISPELS 1) (achievement
+	// bridge absent), at_faerlina_entrance (no area-trigger bridge),
+	// achievement_momma_said_knock_you_out (no achievement bridge),
+	// npc_faerlina_add (ScriptedAI — no RegisterLuaBoss surface;
+	// DoCastVictim ADD_FIREBALL 54095/54096 in the
+	// bridgeable-but-entry-blocked queue).
+	RegisterLuaBoss("boss_faerlina", 15953)
+
 	// Gothik the Harvester (16060, Naxxramas) — lua_scripts/northrend/boss_gothik.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_INTRO_1 0)
 	// (event 1; BossAI bookkeeping has no bridge — tharon_ja precedent);
