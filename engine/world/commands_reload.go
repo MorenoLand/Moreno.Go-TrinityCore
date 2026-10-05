@@ -5,16 +5,25 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
 // reload command port: reload_commandscript (cs_reload.cpp), the "reload"
-// root with 89 flat arms plus the 11-arm "all" sub-table. THIRTY-SECOND of
-// 39 Commands groups (cs_script_loader.cpp decl 51 / call 96; call order
+// root with 90 flat arms plus the 11-arm "all" sub-table. THIRTY-THIRD of
+// 40 Commands groups (cs_script_loader.cpp decl 51 / call 96; call order
 // rbac(95) -> reload(96)). Trinity checks permission only on the invoker
 // leaf node (ChatCommand.cpp:487), so each arm gates exactly its own C++
-// permission (RBAC.h:475-580, 106 constants in permissions.go); the root
-// permission 607 covers the bare ".reload".
+// permission (RBAC.h:475-577 block, ids 607-709 + 842/843/867/873, mirrored
+// in permissions.go); the root permission 607 is DEAD in C++ — the root is
+// the deprecated 6-arg nullptr+subtable overload (ChatCommand.h:261-263,
+// drops RBACPermissions, delegates to the sub-only constructor), so bare
+// ".reload" prints the help listing with no gate (same dead-root-perm
+// pattern as the mmap/modify/npc/quest/pet/rbac ports); permissionCommandReload
+// stays in permissions.go as documentation (unused const is legal). The
+// "all" row's own perm is dead the same way, but the "" entry inside the
+// all sub-table uses the 5-arg handler overload (perm kept), so bare
+// ".reload all" IS gated on 611.
 //
 // The Go worldserver has no ObjectMgr-style in-memory stores: every one of
 // these tables is read on demand straight from the world DB. "Reloading" a
@@ -26,8 +35,10 @@ import (
 //
 // Special arms:
 //   - `creature_template` takes entry args (C++ returns false on empty args):
-//     each entry is verified in creature_template and every online session's
-//     creatureStatsCache is dropped (LANG 817/818 on a missing entry).
+//     each token is parsed with StringTo semantics (parse failure -> 0, and 0
+//     is queried, not skipped) and verified in creature_template; then every
+//     online session's creatureStatsCache is dropped (LANG 817 on a missing
+//     entry; the C++ LANG 818 storage-miss arm is moot — Go reads on demand).
 //   - `auctions` / `gm_tickets` probe the characters DB (auctionhouse /
 //     gm_ticket); gm_tickets sends no message, like the C++ arm.
 //   - `rbac` probes the auth DB rbac_* tables.
@@ -118,7 +129,7 @@ var reloadArms = []reloadArm{
 	{"quest_greeting", permissionCommandReloadQuestGreeting, "DB table `quest_greeting` reloaded.", reloadStoreWorld, "quest_greeting"},
 	{"quest_greeting_locale", permissionCommandReloadQuestGreetingLocale, "DB table `quest_greeting_locale` reloaded.", reloadStoreWorld, "quest_greeting_locale"},
 	{"quest_poi", permissionCommandReloadQuestPoi, "DB Table `quest_poi` and `quest_poi_points` reloaded.", reloadStoreWorld, "quest_poi"},
-	{"quest_template", permissionCommandReloadQuestTemplate, "DB table `quest_template` (quest definitions) reloaded.", reloadStoreWorld, "quest_template"},
+	{"quest_template", permissionCommandReloadQuestTemplate, "DB table `quest_template` (quest definitions) reloaded.\nData GameObjects for quests reloaded.", reloadStoreWorld, "quest_template"},
 	{"reference_loot_template", permissionCommandReloadReferenceLootTemplate, "DB table `reference_loot_template` reloaded.", reloadStoreWorld, "reference_loot_template"},
 	{"reserved_name", permissionCommandReloadReservedName, "DB table `reserved_name` (player reserved names) reloaded.", reloadStoreWorld, "reserved_name"},
 	{"reputation_reward_rate", permissionCommandReloadReputationRewardRate, "DB table `reputation_reward_rate` reloaded.", reloadStoreWorld, "reputation_reward_rate"},
@@ -139,7 +150,7 @@ var reloadArms = []reloadArm{
 	{"spell_proc", permissionCommandReloadSpellProc, "DB table `spell_proc` (spell proc conditions and data) reloaded.", reloadStoreWorld, "spell_proc"},
 	{"spell_scripts", permissionCommandReloadSpellScripts, "DB table `spell_scripts` reloaded.", reloadStoreWorld, "spell_scripts"},
 	{"spell_target_position", permissionCommandReloadSpellTargetPosition, "DB table `spell_target_position` (destination coordinates for spell targets) reloaded.", reloadStoreWorld, "spell_target_position"},
-	{"spell_threats", permissionCommandReloadSpellThreats, "DB table `spell_threat` (spell aggro definitions) reloaded.", reloadStoreWorld, "spell_threats"},
+	{"spell_threats", permissionCommandReloadSpellThreats, "DB table `spell_threat` (spell aggro definitions) reloaded.", reloadStoreWorld, "spell_threat"},
 	{"spell_group_stack_rules", permissionCommandReloadSpellGroupStackRules, "DB table `spell_group_stack_rules` (spell stacking definitions) reloaded.", reloadStoreWorld, "spell_group_stack_rules"},
 	{"trainer", permissionCommandReloadTrainer, "DB table `trainer` reloaded.\nDB table `trainer_locale` reloaded.\nDB table `trainer_spell` reloaded.\nDB table `creature_default_trainer` reloaded.", reloadStoreWorld, "trainer"},
 	{"trinity_string", permissionCommandReloadTrinityString, "DB table `trinity_string` reloaded.", reloadStoreWorld, "trinity_string"},
@@ -190,7 +201,10 @@ func (s *session) runReloadArm(ctx context.Context, arm reloadArm, quiet bool) b
 }
 
 // runReloadArms runs a list of flat arms quietly (the C++ "all" groups call
-// the inner handlers directly, bypassing their RBAC checks).
+// the inner handlers directly, bypassing their RBAC checks). Deliberate
+// delta: C++ broadcasts each inner arm's own GM message during `reload all`;
+// the Go port suppresses them (quiet) so one `reload all` does not flood the
+// GM channel with ~100 lines — only the groups' extra summary messages print.
 func (s *session) runReloadArms(ctx context.Context, names ...string) {
 	for _, n := range names {
 		if arm, ok := reloadArmByName[n]; ok {
@@ -201,61 +215,92 @@ func (s *session) runReloadArms(ctx context.Context, names ...string) {
 
 // reloadAllGroups mirrors the C++ HandleReloadAll*Command handlers
 // (cs_reload.cpp:183-211): permission for the group plus the member arms and
-// any extra group message.
+// any extra group message. probes are world-DB tables the C++ group handler
+// reloads through handlers that have NO command-table row (so they are not
+// flat arms): the all-locales group calls the unregistered quest_offer_reward
+// and quest_request_item locale handlers (cs_reload.cpp:310-320); the
+// all-loot group re-reads `conditions` via sConditionMgr->LoadConditions(true)
+// (:238), so "conditions" is a regular member arm here.
 type reloadAllGroup struct {
-	perm  uint32
-	arms  []string
-	extra string
+	perm   uint32
+	arms   []string
+	extra  string
+	probes []string
 }
 
 var reloadAllGroups = map[string]reloadAllGroup{
 	"achievement": {permissionCommandReloadAllAchievement,
-		[]string{"achievement_criteria_data", "achievement_reward"}, ""},
+		[]string{"achievement_criteria_data", "achievement_reward"}, "", nil},
 	"area": {permissionCommandReloadAllArea,
-		[]string{"areatrigger_teleport", "areatrigger_tavern", "graveyard_zone"}, ""},
+		[]string{"areatrigger_teleport", "areatrigger_tavern", "graveyard_zone"}, "", nil},
 	"gossips": {permissionCommandReloadAllGossip,
-		[]string{"gossip_menu", "gossip_menu_option", "points_of_interest"}, ""},
+		[]string{"gossip_menu", "gossip_menu_option", "points_of_interest"}, "", nil},
 	"item": {permissionCommandReloadAllItem,
-		[]string{"page_text", "item_enchantment_template"}, ""},
+		[]string{"page_text", "item_enchantment_template"}, "", nil},
 	"locales": {permissionCommandReloadAllLocales,
 		[]string{"achievement_reward_locale", "creature_template_locale", "creature_text_locale",
 			"gameobject_template_locale", "gossip_menu_option_locale", "item_template_locale",
 			"item_set_name_locale", "npc_text_locale", "page_text_locale", "points_of_interest_locale",
-			"quest_template_locale", "quest_greeting_locale"}, ""},
+			"quest_template_locale", "quest_greeting_locale"}, "",
+		[]string{"quest_offer_reward_locale", "quest_request_item_locale"}},
 	"loot": {permissionCommandReloadAllLoot,
 		[]string{"creature_loot_template", "disenchant_loot_template", "fishing_loot_template",
 			"gameobject_loot_template", "item_loot_template", "milling_loot_template",
 			"pickpocketing_loot_template", "prospecting_loot_template", "mail_loot_template",
-			"reference_loot_template", "skinning_loot_template", "spell_loot_template"},
-		"DB tables `*_loot_template` reloaded."},
+			"reference_loot_template", "skinning_loot_template", "spell_loot_template", "conditions"},
+		"DB tables `*_loot_template` reloaded.", nil},
 	"npc": {permissionCommandReloadAllNpc,
-		[]string{"trainer", "npc_vendor", "points_of_interest", "npc_spellclick_spells"}, ""},
+		[]string{"trainer", "npc_vendor", "points_of_interest", "npc_spellclick_spells"}, "", nil},
 	"quest": {permissionCommandReloadAllQuest,
 		[]string{"quest_greeting", "areatrigger_involvedrelation", "quest_poi", "quest_template",
 			"creature_queststarter", "creature_questender", "gameobject_queststarter", "gameobject_questender"},
-		"DB tables `*_queststarter` and `*_questender` reloaded."},
+		"DB tables `*_queststarter` and `*_questender` reloaded.", nil},
 	"scripts": {permissionCommandReloadAllScripts,
 		[]string{"event_scripts", "spell_scripts", "waypoint_scripts", "waypoint_data"},
-		"DB tables `*_scripts` reloaded."},
+		"DB tables `*_scripts` reloaded.", nil},
 	"spell": {permissionCommandReloadAllSpell,
 		[]string{"skill_discovery_template", "skill_extra_item_template", "spell_required",
 			"spell_area", "spell_group", "spell_learn_spell", "spell_linked_spell", "spell_proc",
 			"spell_bonus_data", "spell_target_position", "spell_threats", "spell_group_stack_rules",
-			"spell_pet_auras"}, ""},
+			"spell_pet_auras"}, "", nil},
 }
 
 // handleCmdReload dispatches the "reload" root (cs_reload.cpp:59-175).
 func (s *session) handleCmdReload(ctx context.Context, args []string) {
 	if len(args) == 0 {
-		if s.miscDeny(ctx, permissionCommandReload) {
-			return
-		}
+		// Bare ".reload": the root's RBAC_PERM_COMMAND_RELOAD is dead in C++
+		// (deprecated 6-arg nullptr+subtable overload drops it), so the help
+		// line prints with no gate, like the mmap/modify/npc/quest/pet/rbac roots.
 		s.sendSysMessage("Syntax: .reload <table>|all [group]")
 		return
 	}
 	sub := strings.ToLower(args[0])
 	if sub == "all" {
 		s.handleReloadAll(ctx, args[1:])
+		return
+	}
+	// The six special arms are exact-match rows in the C++ table, so they are
+	// dispatched before the prefix scan: "creature_template" must not fall
+	// through to the "creature_template_locale" prefix match (C++ exact match
+	// wins over prefix matches).
+	switch sub {
+	case "creature_template":
+		s.handleReloadCreatureTemplate(ctx, args[1:])
+		return
+	case "config":
+		s.handleReloadConfig(ctx)
+		return
+	case "gm_tickets":
+		s.handleReloadGMTickets(ctx)
+		return
+	case "rbac":
+		s.handleReloadRBACData(ctx)
+		return
+	case "vehicle_accessory":
+		s.handleReloadVehicleAccessory(ctx)
+		return
+	case "vehicle_template_accessory":
+		s.handleReloadVehicleTemplateAccessory(ctx)
 		return
 	}
 	// Prefix-match flat arms like the Trinity parser.
@@ -266,27 +311,14 @@ func (s *session) handleCmdReload(ctx context.Context, args []string) {
 			break
 		}
 	}
-	switch {
-	case matched != nil:
+	if matched != nil {
 		if s.miscDeny(ctx, matched.perm) {
 			return
 		}
 		s.runReloadArm(ctx, *matched, false)
-	case sub == "creature_template":
-		s.handleReloadCreatureTemplate(ctx, args[1:])
-	case sub == "config":
-		s.handleReloadConfig(ctx)
-	case sub == "gm_tickets":
-		s.handleReloadGMTickets(ctx)
-	case sub == "rbac":
-		s.handleReloadRBACData(ctx)
-	case sub == "vehicle_accessory":
-		s.handleReloadVehicleAccessory(ctx)
-	case sub == "vehicle_template_accessory":
-		s.handleReloadVehicleTemplateAccessory(ctx)
-	default:
-		s.sendSysMessage("Syntax: .reload <table>|all [group]")
+		return
 	}
+	s.sendSysMessage("Syntax: .reload <table>|all [group]")
 }
 
 // handleReloadAll mirrors the `reload all` sub-table (cs_reload.cpp:62-73):
@@ -296,11 +328,13 @@ func (s *session) handleReloadAll(ctx context.Context, args []string) {
 		if s.miscDeny(ctx, permissionCommandReloadAll) {
 			return
 		}
-		// C++ HandleReloadAllCommand order (cs_reload.cpp:183-211).
+		// C++ HandleReloadAllCommand order (cs_reload.cpp:183-211):
+		// skill_fishing_base_level runs BEFORE the groups.
+		s.runReloadArms(ctx, "skill_fishing_base_level")
 		for _, g := range []string{"achievement", "area", "loot", "npc", "quest", "spell", "item", "gossips", "locales"} {
 			s.runReloadAllGroup(ctx, g)
 		}
-		s.runReloadArms(ctx, "skill_fishing_base_level", "access_requirement", "mail_level_reward",
+		s.runReloadArms(ctx, "access_requirement", "mail_level_reward",
 			"reserved_name", "trinity_string", "game_tele", "creature_movement_override",
 			"creature_summon_groups", "autobroadcast", "battleground_template")
 		s.handleReloadVehicleAccessoryQuiet(ctx)
@@ -322,13 +356,17 @@ func (s *session) handleReloadAll(ctx context.Context, args []string) {
 
 // runReloadAllGroup runs one all-group's member arms quietly plus its extra
 // message (the C++ handlers call the inner commands directly, bypassing
-// their individual RBAC checks).
+// their individual RBAC checks). probes are extra world-DB tables the C++
+// group reloads through handlers with no command row (locales group only).
 func (s *session) runReloadAllGroup(ctx context.Context, name string) {
 	g, ok := reloadAllGroups[name]
 	if !ok {
 		return
 	}
 	s.runReloadArms(ctx, g.arms...)
+	for _, table := range g.probes {
+		s.runReloadArm(ctx, reloadArm{store: reloadStoreWorld, table: table}, true)
+	}
 	if g.extra != "" {
 		s.server.sendGlobalGMMessage(ctx, g.extra)
 	}
@@ -347,12 +385,16 @@ func (s *session) handleReloadCreatureTemplate(ctx context.Context, args []strin
 	}
 	wdb := s.server.WorldStore.DB
 	for _, tok := range args {
-		entry := uint32(cAtoi(tok))
-		if entry == 0 {
-			continue
+		// C++ tokenizes on space and parses each token with
+		// Trinity::StringTo<uint32> (cs_reload.cpp:427): a parse failure
+		// yields 0 (not skipped), and entry 0 flows to the template query
+		// below, which reports LANG 817.
+		entry, err := strconv.ParseUint(tok, 10, 32)
+		if err != nil {
+			entry = 0
 		}
 		var one int
-		if wdb == nil || wdb.QueryRowContext(ctx, "SELECT 1 FROM creature_template WHERE entry = ?", entry).Scan(&one) != nil {
+		if wdb == nil || wdb.QueryRowContext(ctx, "SELECT 1 FROM creature_template WHERE entry = ?", uint32(entry)).Scan(&one) != nil {
 			s.sendSysMessage(fmt.Sprintf("Creature template (Entry: %d) not found.", entry)) // LANG_COMMAND_CREATURETEMPLATE_NOTFOUND 817
 			continue
 		}
