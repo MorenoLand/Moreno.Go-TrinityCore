@@ -210,6 +210,24 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return nil, s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), protocol.BuildChatMessage(0x0F, 0, state.GUID, s.player.GUID, message, ""), true)
 	}
+	// TextEmote(message) is Unit::TextEmote (Unit.cpp:14058): the
+	// plain-string emote == SMSG_MESSAGECHAT with CHAT_MSG_MONSTER_EMOTE
+	// (0x10, SharedDefines.h:3178), LANG_UNIVERSAL, sender = creature
+	// GUID, receiver = the gossiping (session) player — the same
+	// session-player targeting the Whisper binding above uses.
+	methods["TextEmote"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("message is required")
+		}
+		message, ok := args[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("message must be a string")
+		}
+		if s == nil || s.player == nil {
+			return nil, nil
+		}
+		return nil, s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), protocol.BuildChatMessage(0x10, 0, state.GUID, s.player.GUID, message, ""), true)
+	}
 	return &scripting.Object{Type: "Creature", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "GossipMenuID": state.GossipMenuID, "NPCFlags": state.NPCFlags, "Map": state.Map, "MapId": state.Map, "X": state.X, "Y": state.Y, "Z": state.Z, "Health": state.Health, "MaxHealth": state.MaxHealth, "Level": state.Level, "InWorld": true}, Methods: methods}
 }
 

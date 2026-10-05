@@ -117,10 +117,11 @@ local CLASS_PLURALS = {
 
 -- BotMgr::GetNpcBotCostStr (botmgr.cpp:1051): nonzero parts only,
 -- concatenated directly, coin icon markup. GOLD = 10000, SILVER = 100.
+-- (math.floor division: this runtime's Lua has no // operator.)
 local function costString(cost)
-    local gold = cost // 10000
+    local gold = math.floor(cost / 10000)
     local rem = cost % 10000
-    local silver = rem // 100
+    local silver = math.floor(rem / 100)
     local copper = rem % 100
     local str = ""
     if gold ~= 0 then

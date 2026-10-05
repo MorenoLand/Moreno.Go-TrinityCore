@@ -498,6 +498,43 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.npcbotTemplateName(ctx, entry)}, nil
 	}
+	// GetNpcBotClass(entry) is bot_ai::_botclass for the per-bot hire
+	// menu (lua_scripts/world/bothire.lua, port of the bot_ai.cpp
+	// free-bot hire arms at :5279-5336 + :7202-7270): 0 when the entry
+	// is not a known bot.
+	methods["GetNpcBotClass"] = func(_ context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		mgr := npcBots()
+		if mgr == nil {
+			return []any{uint32(0)}, nil
+		}
+		extras, ok := mgr.Extras(entry)
+		if !ok {
+			return []any{uint32(0)}, nil
+		}
+		return []any{uint32(extras.Class)}, nil
+	}
+	// GetNpcBotOwnerGuid(entry) is bot_ai::_ownerGuid (the owner
+	// character's counter, 0 == free == bot_ai::IAmFree, bot_ai.cpp:10552)
+	// for the per-bot hire menu's outer player-guid/owner gate.
+	methods["GetNpcBotOwnerGuid"] = func(_ context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		mgr := npcBots()
+		if mgr == nil {
+			return []any{uint32(0)}, nil
+		}
+		data, ok := mgr.Get(entry)
+		if !ok {
+			return []any{uint32(0)}, nil
+		}
+		return []any{data.Owner}, nil
+	}
 	// GetNpcBotCost(level, class) is BotMgr::GetNpcBotCost
 	// (botmgr.cpp:1014), the hire price shown in the botgiver HIRE menu
 	// labels and re-checked in the HIRE_CLASS arm.
