@@ -57,7 +57,7 @@
 -- Attack) has no SpellScript bridge anywhere in the model
 -- (blasted_lands / gordunni precedents) — documented-only.
 -- spell_q12096_q12092_bark — Bark of the Walkers (Lothalor
--- entry-gated Talk SAY_LOTHALOR + RemoveAura(52405 confused) +
+-- entry-gated Talk SAY_LOTHALOR + RemoveAura(SPELL_CONFUSED 47044) +
 -- DespawnOrUnsummon 4s) has no SpellScript bridge — documented-only.
 -- npc_wyrmrest_defender (VehicleAI) — UpdateAI low-hp arm
 -- (GetHealthPct() <= 30% -> CastSpell(me, 52421), 20s renew
