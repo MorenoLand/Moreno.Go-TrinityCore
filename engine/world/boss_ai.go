@@ -4211,6 +4211,38 @@ func init() {
 	// bridgeable-but-entry-blocked queue).
 	RegisterLuaBoss("boss_gluth", 15932)
 
+	// Sapphiron (15989, Naxxramas) — lua_scripts/northrend/boss_sapphiron.lua.
+	// Ported arms (C++-exact): JustEngagedWith CastSpell(self,
+	// FROST_AURA 28531, triggered) (BossAI bookkeeping + SetPhase(
+	// PHASE_GROUND) have no bridge — tharon_ja precedent);
+	// EVENT_CHECK_RESISTS DoCastSelf(CHECK_RESISTS 60539) 0s/30s (the
+	// SpellHitTarget resist check + DATA_THE_HUNDRED_CLUB legs have no
+	// bridges); EVENT_CLEAVE DoCastVictim(CLEAVE 19983) randtime(5s,
+	// 15s)/randtime(5s,15s) (moroes precedent; PHASE_GROUND gating
+	// documented, scheduled ungated — anubrekhan locust precedent);
+	// EVENT_BERSERK Talk(EMOTE_ENRAGE 3) + DoCastSelf(BERSERK 26662)
+	// 15min one-shot (anubarak one-shot precedent); JustDied CastSpell(
+	// self, DIES 29357, triggered) death visual (_JustDied bookkeeping
+	// has no bridge — tharon_ja precedent). EMOTE_AIR_PHASE (0),
+	// EMOTE_GROUND_PHASE (1), EMOTE_BREATH (2) ride unported legs
+	// (vortex — not ported orphaned). Unmodeled: InitializeAI/
+	// Reset/DoAction(ACTION_BIRTH)/MovementInform + BIRTH + FLIGHT/
+	// LIFTOFF/LAND hover/emote legs (no instance/flag/react/hover/
+	// motion bridges), DamageTaken air-phase death prevention (no
+	// health bridge — doomwalker precedent), EVENT_TAIL/DRAIN/
+	// BLIZZARD/BREATH/EXPLOSION DoCastAOE legs (no DoCastAOE bridge),
+	// EVENT_BLIZZARD difficulty gate (kelidan), EVENT_LIFTOFF summon
+	// wing buffet 17025 + random icebolt target list, EVENT_ICEBOLT
+	// targeted casts over the stored GUID vector (no summon/
+	// random-target bridges), GetGUID(DATA_BLIZZARD_TARGET) selector
+	// (no bridges), npc_sapphiron_blizzard (16474, ScriptedAI — no
+	// RegisterLuaBoss surface, razuvious precedent — its
+	// TaskScheduler DoCastSelf joins the bridgeable-but-entry-blocked
+	// queue), go_sapphiron_birth (no GO bridge), the three SpellScript/
+	// AuraScript loaders (no binding bridge — razelikh precedent),
+	// achievement_the_hundred_club (no achievement bridge).
+	RegisterLuaBoss("boss_sapphiron", 15989)
+
 	// Gothik the Harvester (16060, Naxxramas) — lua_scripts/northrend/boss_gothik.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_INTRO_1 0)
 	// (event 1; BossAI bookkeeping has no bridge — tharon_ja precedent);
