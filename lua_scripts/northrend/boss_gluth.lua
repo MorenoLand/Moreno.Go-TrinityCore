@@ -6,7 +6,7 @@
 -- loader decl 67 / call 262 per northrend_script_loader.cpp — the
 -- NINTH Naxxramas group in AddNorthrendScripts(), immediately after
 -- AddSC_boss_noth(), under the "// Naxxramas" marker; the call after
--- it is AddSC_boss_gothik() (decl 72 / call 267)).
+-- it is AddSC_boss_sapphiron() (decl 68 / call 263)).
 -- Entry: 15932 Gluth (naxxramas.h NPC_GLUTH — kalecgos pass;
 -- instance_naxxramas.cpp binds NPC_GLUTH -> GluthGUID and DATA_GLUTH
 -- -> GluthGUID; the CreatureScript ScriptName binding is
