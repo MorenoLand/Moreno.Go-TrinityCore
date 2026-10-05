@@ -40,6 +40,7 @@ const (
 	spellAttr3NoInitialAggro   uint32 = 0x00020000 // SPELL_ATTR3_NO_INITIAL_AGGRO (SharedDefines.h:540) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7)
 
 	spellAttr0Ability                      uint32 = 0x00000010 // SPELL_ATTR0_ABILITY (SharedDefines.h:416)
+	spellAttr0CantCancel                   uint32 = 0x80000000 // SPELL_ATTR0_CANT_CANCEL (SharedDefines.h:443)
 	spellAttr0ReqAmmo                      uint32 = 0x00000002 // SPELL_ATTR0_REQ_AMMO (SharedDefines.h:413)
 	spellAttr0Tradespell                   uint32 = 0x00000020 // SPELL_ATTR0_TRADESPELL (SharedDefines.h:417)
 	spellAttr3NoDoneBonus                  uint32 = 0x20000000 // SPELL_ATTR3_NO_DONE_BONUS (SharedDefines.h:552) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
@@ -9640,9 +9641,63 @@ func (s *session) handleCancelChanneling(payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	// Reference: cancel clears the running channel and its bar.
+	// WorldSession::HandleCancelChanneling (SpellHandler.cpp:560):
+	// CancelChannelling carries the channeled spell id; it only interrupts
+	// when that spell is the mover's current channeled spell, and never
+	// interrupts a CANT_CANCEL spell.
+	r := protocol.NewReader(payload)
+	channelSpell, err := r.ReadU32()
+	if err != nil {
+		return false
+	}
+	if s.server == nil || s.server.Data == nil {
+		s.interruptCurrentChannel()
+		return true
+	}
+	spell, found, spellErr := s.server.Data.Spell(channelSpell)
+	if spellErr != nil || !found {
+		return true
+	}
+	if spell.Attributes&spellAttr0CantCancel != 0 {
+		return true
+	}
+	s.castMu.Lock()
+	channel := s.activeChannel
+	s.castMu.Unlock()
+	if channel == nil || channel.Stopped || channel.SpellID != channelSpell {
+		return true
+	}
 	s.interruptCurrentChannel()
 	return true
+}
+
+// spellIsPositive mirrors SpellInfo::IsPositive (SpellInfo.h): the spell is
+// positive when every non-zero effect is positive.
+func spellIsPositive(spell wotlk.Spell) bool {
+	for i := range spell.Effects {
+		if spell.Effects[i].Effect != 0 && !spell.IsPositiveEffect(i) {
+			return false
+		}
+	}
+	return true
+}
+
+// cancelAuraRemovable mirrors the RemoveAurasByType predicate shared by
+// HandleCancelMountAuraOpcode / HandleCancelGrowthAuraOpcode
+// (SpellHandler.cpp:535-552): a voluntary cancel only removes auras whose
+// spell is not CANT_CANCEL, is positive, and is not passive. Unknown spells
+// stay permissive (the terrain.go convention); C++ always has the SpellInfo.
+func (s *session) cancelAuraRemovable(spellID uint32) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return true
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		return true
+	}
+	return spell.Attributes&spellAttr0CantCancel == 0 &&
+		spell.Attributes&spellAttributePassive == 0 &&
+		spellIsPositive(spell)
 }
 
 func (s *session) handleCancelAura(payload []byte) bool {
@@ -9651,7 +9706,49 @@ func (s *session) handleCancelAura(payload []byte) bool {
 	if err != nil {
 		return false
 	}
+	// WorldSession::HandleCancelAuraOpcode (SpellHandler.cpp:455).
+	if s.server == nil || s.server.Data == nil {
+		s.removeAura(spellID)
+		return true
+	}
+	spell, found, spellErr := s.server.Data.Spell(spellID)
+	if spellErr != nil || !found {
+		return true
+	}
+	// not allow remove spells with attr SPELL_ATTR0_CANT_CANCEL
+	if spell.Attributes&spellAttr0CantCancel != 0 {
+		return true
+	}
+	// channeled spell case: interrupt the current channel when it is the
+	// named spell, then return without the aura path
+	if isChanneledSpell(spell) {
+		s.castMu.Lock()
+		channel := s.activeChannel
+		s.castMu.Unlock()
+		if channel != nil && !channel.Stopped && channel.SpellID == spellID {
+			s.interruptCurrentChannel()
+		}
+		return true
+	}
+	// don't allow remove non positive spells; don't allow cancelling
+	// passive auras (some of them are visible)
+	if !spellIsPositive(spell) || spell.Attributes&spellAttributePassive != 0 {
+		return true
+	}
 	s.removeAura(spellID)
+	// If spell being removed is a resource tracker, see if player was
+	// tracking both (herbs / minerals) and remove the other
+	if s.server != nil && s.server.Config.AllowTrackBothResources && spellHasAura(spell, spellAuraTrackResources) {
+		var tracked []uint32
+		for _, aura := range s.loadedAuras() {
+			if aura != nil && aura.AuraType == spellAuraTrackResources {
+				tracked = append(tracked, aura.SpellID)
+			}
+		}
+		for _, trackedID := range tracked {
+			s.removeAura(trackedID)
+		}
+	}
 	return true
 }
 
@@ -12894,7 +12991,9 @@ func (s *session) handleCancelMountAura(payload []byte) bool {
 		return true
 	}
 	for _, aura := range s.loadedAuras() {
-		if aura != nil && aura.AuraType == spellAuraMounted {
+		// WorldSession::HandleCancelMountAuraOpcode (SpellHandler.cpp:544):
+		// RemoveAurasByType(MOUNTED) with the voluntary-cancel predicate.
+		if aura != nil && aura.AuraType == spellAuraMounted && s.cancelAuraRemovable(aura.SpellID) {
 			s.removeAura(aura.SpellID)
 		}
 	}
@@ -12908,6 +13007,9 @@ func (s *session) handleCancelMountAura(payload []byte) bool {
 
 // handleCancelGrowthAura processes CMSG_CANCEL_GROWTH_AURA (0x29B).
 // Reference: WorldSession::HandleCancelGrowthAuraOpcode (SpellHandler.cpp:535).
+// C++ removes all SPELL_AURA_MOD_SCALE auras with the voluntary-cancel
+// predicate; Go has no MOD_SCALE aura application model (no such aura rows
+// ever exist), so resetting the tracked scale is the whole arm.
 func (s *session) handleCancelGrowthAura(payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
