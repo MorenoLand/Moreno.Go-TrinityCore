@@ -51,6 +51,7 @@ type tradeSlotItem struct {
 	DisplayID        uint32
 	StackCount       uint32
 	EnchantID        uint32
+	GemSocketIDs     [3]uint32
 	GiftCreatorGUID  uint64
 	CreatorGUID      uint64
 	Wrapped          bool
@@ -473,10 +474,12 @@ func (s *session) handleBeginTrade(ctx context.Context) bool {
 		return true
 	}
 	partner := s.trade.Partner
-	_ = s.sendTradeStatus(tradeStatusOpenWindow, 0, 0, 0, 0, 0)
+	// C++-exact: OPEN_WINDOW goes to the trader's session first, then to self
+	// (TradeHandler.cpp:567-568), and no extended update is sent here — the
+	// window state syncs on the TradeData::Update calls in SetItem/SetMoney/
+	// SetSpell. The pre-audit initial-sync broadcast is removed.
 	_ = partner.sendTradeStatus(tradeStatusOpenWindow, 0, 0, 0, 0, 0)
-	s.notifyTradeUpdate()
-	partner.notifyTradeUpdate()
+	_ = s.sendTradeStatus(tradeStatusOpenWindow, 0, 0, 0, 0, 0)
 	s.debug("trade window opened", "player1", s.accountName, "player2", partner.accountName)
 	return true
 }
@@ -571,11 +574,24 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	var enchantID uint32
+	var gemSocketIDs [3]uint32
 	if encStr.Valid && encStr.String != "" {
 		fields := strings.Fields(encStr.String)
 		if len(fields) > 0 {
 			if e, err := strconv.ParseUint(fields[0], 10, 32); err == nil {
 				enchantID = uint32(e)
+			}
+		}
+		// Reference: SendUpdateTrade (TradeHandler.cpp:96-97) writes the gem
+		// socket enchantment ids (SOCK_ENCHANTMENT_SLOT=2..+MAX_GEM_SOCKETS)
+		// after the permanent enchant. The 36-int enchantments column is
+		// slot*3 + (id, duration, charges), so the sockets sit at fields
+		// 6/9/12 (same layout socketGemEnchantmentIDs reads, items.go:42).
+		for j := 0; j < 3; j++ {
+			if idx := (2 + j) * 3; idx < len(fields) {
+				if e, err := strconv.ParseUint(fields[idx], 10, 32); err == nil {
+					gemSocketIDs[j] = uint32(e)
+				}
 			}
 		}
 	}
@@ -603,6 +619,7 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 		DisplayID:        displayID,
 		StackCount:       uint32(count),
 		EnchantID:        enchantID,
+		GemSocketIDs:     gemSocketIDs,
 		GiftCreatorGUID:  giftCreatorGUID,
 		CreatorGUID:      creatorGUID,
 		Wrapped:          wrapped,
@@ -1136,7 +1153,7 @@ func (s *session) sendTradeStatusExtended(traderData bool) {
 			buf.WriteU64(it.GiftCreatorGUID) // giftCreator (SendUpdateTrade, TradeHandler.cpp:98)
 			buf.WriteU32(it.EnchantID)       // permEnchant
 			for j := 0; j < 3; j++ {
-				buf.WriteU32(0) // gem sockets
+				buf.WriteU32(it.GemSocketIDs[j]) // gem sockets (SendUpdateTrade, TradeHandler.cpp:96-97)
 			}
 			buf.WriteU64(it.CreatorGUID) // creator (SendUpdateTrade, TradeHandler.cpp:101)
 			buf.WriteU32(0)              // charges: C++ item->GetSpellCharges(); Go's
