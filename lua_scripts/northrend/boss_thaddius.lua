@@ -7,7 +7,7 @@
 -- (OnlyOnceAreaTriggerScript); achievement_thaddius_shocking
 -- (AchievementCriteriaScript); AddSC_boss_thaddius registers all nine;
 -- loader decl 73 / call 268 per northrend_script_loader.cpp — the
--- ELEVENTH Naxxramas group in AddNorthrendScripts(), immediately after
+-- FIFTEENTH Naxxramas group in AddNorthrendScripts(), immediately after
 -- AddSC_boss_gothik() (decl 72 / call 267), under the "// Naxxramas"
 -- marker; the call after it is AddSC_naxxramas() (decl 74 / call 269),
 -- then AddSC_instance_naxxramas() (decl 75 / call 270) — loader order

@@ -5,7 +5,7 @@
 -- npc_feugen, npc_tesla, the three polarity/magnetic-pull
 -- SpellScripts, at_thaddius_entrance and achievement_thaddius_
 -- shocking; loader decl 73 / call 268 per
--- northrend_script_loader.cpp — the ELEVENTH Naxxramas group in
+-- northrend_script_loader.cpp — the FIFTEENTH Naxxramas group in
 -- AddNorthrendScripts(), immediately after AddSC_boss_gothik()).
 -- Entry: 15929 Stalagg (naxxramas.h NPC_STALAGG line 100 —
 -- kalecgos pass; instance_naxxramas.cpp binds NPC_STALAGG ->
