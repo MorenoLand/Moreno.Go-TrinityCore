@@ -446,6 +446,12 @@ func (s *session) prepareCreatureGossip(ctx context.Context, guid uint64, entry,
 		if option.Item.Action == 6 && !s.isDeadOrGhost() {
 			continue
 		}
+		// Player.cpp:14425 — the UNLEARNTALENTS option is hidden when
+		// !creature->CanResetTalents(this, false); see session.canResetTalents
+		// (trainers.go) for the Creature::CanResetTalents bridge.
+		if option.Item.Action == 16 && !s.canResetTalents(ctx, guid) {
+			continue
+		}
 		menu.Items[option.ID] = option.Item
 	}
 	if npcFlags&0x00000002 != 0 && s.player != nil {
