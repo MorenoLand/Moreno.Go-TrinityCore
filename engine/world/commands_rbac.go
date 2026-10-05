@@ -9,13 +9,18 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 )
 
-// rbac command port (cs_rbac.cpp): 6 arms — the "account" sub-table
-// (list/grant/deny/revoke, RBAC 202-205) plus "list" (206). The bare roots
-// gate RBAC 200 ("rbac") and 201 ("rbac account"); Trinity only checks the
-// invoker leaf node (ChatCommand.cpp:487), so each arm gates exactly its own
-// permission. All C++ table entries are console=true, which is moot here
-// (Go commands are always sessioned), so the arms run in-game with the same
-// RBAC gates.
+// rbac command port (cs_rbac.cpp): 5 leaf arms — the "account" sub-table
+// (list/grant/deny/revoke, RBAC 202-205) plus "list" (206). The bare roots'
+// own perms (200 on "rbac", 201 on "rbac account") are DEAD in C++: both are
+// 6-arg nullptr+subtable entries (ChatCommand.h deprecated overload drops the
+// RBACPermissions param, delegating to the sub-only constructor), so bare
+// ".rbac" / ".rbac account" print the help listing ungated — the tree's
+// syntax-line stand-in, same pattern as the mmap/modify/npc/quest/pet ports.
+// permissionCommandRBAC stays in permissions.go as documentation (unused const
+// is legal). Trinity only checks the invoker leaf node (ChatCommand.cpp:487),
+// so each arm gates exactly its own permission. All C++ table entries are
+// console=true, which is moot here (Go commands are always sessioned), so the
+// arms run in-game with the same RBAC gates.
 //
 // The Go tree has no RBACData object (RBAC.cpp): the granted/denied/default
 // permission model is reimplemented at the auth DB level, which is where the
@@ -28,6 +33,11 @@ import (
 // writes are the LOGIN_INS/DEL_RBAC_ACCOUNT_PERMISSION statements verbatim
 // (INSERT ... ON DUPLICATE KEY UPDATE granted for MySQL, INSERT OR REPLACE
 // for SQLite per tree convention).
+//
+// Deliberate delta: HandleRBACPermRevokeCommand dereferences
+// GetRBACPermission(id) unconditionally, so a nonexistent id is a nullptr
+// deref in C++; the Go port reports WRONG_PARAMETER_ID instead (matching the
+// grant/deny arms' own existence check).
 
 // Inlined enUS texts (Language.h ids; no in-tree trinity_string seed), TDB
 // enUS recall per tree convention.
@@ -83,7 +93,12 @@ func (s *session) readRBACParams(ctx context.Context, tokens []string, checkPara
 	useSelected := false
 	if checkParams {
 		if p3 == "" {
-			p.realmID = int32(cAtoi(p2))
+			// C++: if (param2) realmId = atoi(param2) — a missing second
+			// token leaves realmId at -1 (all realms), it does not parse
+			// to 0 (cs_rbac.cpp:110-116).
+			if p2 != "" {
+				p.realmID = int32(cAtoi(p2))
+			}
 			p.id = uint32(cAtoi(p1))
 			useSelected = true
 		} else {
@@ -103,8 +118,18 @@ func (s *session) readRBACParams(ctx context.Context, tokens []string, checkPara
 	}
 
 	if useSelected {
-		target := s.server.playerSessionForGUID(s.selection)
-		if target == nil || target.player == nil {
+		// getSelectedPlayer (Chat.cpp:310): no selection resolves to the
+		// invoker; only an unresolvable selection yields null (silent, the
+		// handler reports the error).
+		target := s
+		if s.selection != 0 && s.server != nil {
+			ts := s.server.playerSessionForGUID(s.selection)
+			if ts == nil || ts.player == nil {
+				return nil, false
+			}
+			target = ts
+		}
+		if target.player == nil {
 			return nil, false
 		}
 		p.accountID = target.accountID
@@ -255,14 +280,13 @@ func (s *session) deleteRBACPermission(ctx context.Context, p *rbacCommandParams
 }
 
 // handleCmdRBAC dispatches the "rbac" root (cs_rbac.cpp:59-85) with Trinity
-// per-level prefix matching. "rbac account" is a three-level path, dispatched
-// two-level like the channel "set ownership" arm.
+// per-level prefix matching. A bare ".rbac" prints the syntax line with no
+// permission gate: the root's own 200 is dead in C++ (ChatCommand.h
+// deprecated 6-arg overload). "rbac account" is a three-level path,
+// dispatched two-level like the channel "set ownership" arm.
 func (s *session) handleCmdRBAC(ctx context.Context, args []string) {
 	const syntax = "Syntax: .rbac account list|grant|deny|revoke <args> | .rbac list [id]"
 	if len(args) == 0 {
-		if s.miscDeny(ctx, permissionCommandRBAC) {
-			return
-		}
 		s.sendSysMessage(syntax)
 		return
 	}
