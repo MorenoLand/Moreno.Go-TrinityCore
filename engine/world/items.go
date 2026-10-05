@@ -1339,35 +1339,36 @@ func (s *session) handleItemRefund(ctx context.Context, payload []byte) bool {
 }
 
 const (
-	equipErrOk                      = 0
-	equipErrCantEquipLevelI         = 1
-	equipErrItemDoesntGoToSlot      = 2
-	equipErrBagFull                 = 4
-	equipErrNonemptyBagOverOtherBag = 5
-	equipErrCantEquipWithTwohanded  = 13
-	equipErrCantDualWield           = 14
-	equipErrCantCarryMoreOfThis     = 17
-	equipErrItemDoesntGoIntoBag     = 15
-	equipErrItemCantBeEquipped      = 20
-	equipErrItemsCantBeSwapped      = 21
-	equipErrSlotIsEmpty             = 22
-	equipErrItemNotFound            = 23
-	equipErrNotEnoughMoney          = 29
-	equipErrCanOnlyDoWithEmptyBags  = 31
-	equipErrYouAreDead              = 38
-	equipErrCantDoRightNow          = 39
-	equipErrStackableCantBeWrapped  = 43
-	equipErrEquippedCantBeWrapped   = 44
-	equipErrWrappedCantBeWrapped    = 45
-	equipErrBoundCantBeWrapped      = 46
-	equipErrUniqueCantBeWrapped     = 47
-	equipErrBagsCantBeWrapped       = 48
-	equipErrInvFull                 = 50
-	equipErrTooMuchGold             = 77
-	equipErrCantEquipRank           = 63
-	equipErrVendorMissingTurnins    = 68
-	equipErrNotEnoughHonorPoints    = 69
-	equipErrNotEnoughArenaPoints    = 70
+	equipErrOk                                = 0
+	equipErrCantEquipLevelI                   = 1
+	equipErrItemDoesntGoToSlot                = 2
+	equipErrBagFull                           = 4
+	equipErrNonemptyBagOverOtherBag           = 5
+	equipErrCantEquipWithTwohanded            = 13
+	equipErrCantDualWield                     = 14
+	equipErrCantCarryMoreOfThis               = 17
+	equipErrItemDoesntGoIntoBag               = 15
+	equipErrItemCantBeEquipped                = 20
+	equipErrItemsCantBeSwapped                = 21
+	equipErrSlotIsEmpty                       = 22
+	equipErrItemNotFound                      = 23
+	equipErrNotEnoughMoney                    = 29
+	equipErrCanOnlyDoWithEmptyBags            = 31
+	equipErrYouAreDead                        = 38
+	equipErrCantDoRightNow                    = 39
+	equipErrStackableCantBeWrapped            = 43
+	equipErrEquippedCantBeWrapped             = 44
+	equipErrWrappedCantBeWrapped              = 45
+	equipErrBoundCantBeWrapped                = 46
+	equipErrUniqueCantBeWrapped               = 47
+	equipErrBagsCantBeWrapped                 = 48
+	equipErrInvFull                           = 50
+	equipErrTooMuchGold                       = 77
+	equipErrItemMaxLimitCategoryCountExceeded = 84
+	equipErrCantEquipRank                     = 63
+	equipErrVendorMissingTurnins              = 68
+	equipErrNotEnoughHonorPoints              = 69
+	equipErrNotEnoughArenaPoints              = 70
 )
 
 func (s *session) sendEquipError(errCode uint8, itemGUID uint64) {

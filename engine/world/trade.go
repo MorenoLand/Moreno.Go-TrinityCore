@@ -780,6 +780,13 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 	}
 	partner := s.trade.Partner
 
+	// C++ checks the partner's TradeData before anything else
+	// (TradeHandler.cpp:259-262): a nil partner trade returns silently,
+	// before my_trade->SetAccepted(true) and before any status is sent.
+	if partner.trade == nil {
+		return true
+	}
+
 	// Set before the checks so each failure can properly undo it, in C++ order
 	// (TradeHandler.cpp:266-268).
 	s.trade.Accepted = true
@@ -859,9 +866,7 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 	}
 
 	// Inform partner
-	_ = partner.sendTradeStatus(tradeStatusTradeAccept, 0, 0, 0, 0, 0)
-
-	if partner.trade != nil && partner.trade.Accepted {
+	if partner.trade.Accepted {
 		// Both accepted -> enter the accept process (TradeHandler.cpp:356-357)
 		// before executing: flags both trades and locks the traded items.
 		setAcceptTradeMode(s, partner)
@@ -886,7 +891,16 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 			return true
 		}
 
+		// C++ position (TradeHandler.cpp:403-404): the partner client is
+		// told TRADE_ACCEPT only after both deferred spells validated — a
+		// failed spell guard above returns before this point, so the partner
+		// never sees TRADE_ACCEPT for an aborted accept.
+		_ = partner.sendTradeStatus(tradeStatusTradeAccept, 0, 0, 0, 0, 0)
+
 		s.completeTrade(ctx, partner)
+	} else {
+		// Single accept (TradeHandler.cpp:541-544).
+		_ = partner.sendTradeStatus(tradeStatusTradeAccept, 0, 0, 0, 0, 0)
 	}
 	return true
 }
@@ -968,6 +982,138 @@ func (s *session) findFreeSlotsForTrade(ctx context.Context, count int) ([]trade
 	return freeLocs, len(freeLocs) >= count
 }
 
+// checkTradeFit mirrors the per-item head of Player::CanStoreItems
+// (Player.cpp:11134-11215) for the HandleAcceptTradeOpcode fit pre-check
+// (TradeHandler.cpp:443-476): the receiver is the session whose inventory
+// takes the items, and items are the giver's traded items in slot order.
+// The first failing item decides the result, returned as the CLOSE_WINDOW
+// equip error plus the item-limit-category id the packet carries for the
+// limit-category arm (TradeStatusInfo::ItemLimitCategoryId). On success the
+// free slots for the execute are returned, aligned with items.
+func (receiver *session) checkTradeFit(ctx context.Context, items []tradeSlotItem) (uint32, uint32, []tradeSlotLoc) {
+	for _, it := range items {
+		templateFound, maxCount, limitCategory := receiver.tradeItemTemplateLimits(ctx, it.ItemEntry)
+		if !templateFound {
+			// "strange item" (Player.cpp:11200-11201).
+			return uint32(equipErrItemNotFound), 0, nil
+		}
+		// CanTakeMoreSimilarItems (Player.cpp:10410-10460). m_lootGenerated
+		// (EQUIP_ERR_ALREADY_LOOTED) and IsBindedNotWith
+		// (EQUIP_ERR_DONT_OWN_THAT_ITEM) have no Go model — documented
+		// no-bridge, same standing as the accept-time revalidation in
+		// handleAcceptTrade.
+		if maxCount > 0 && maxCount != 2147483647 {
+			owned := receiver.tradeOwnedItemCount(ctx, receiver.playerGUID, it.ItemEntry)
+			if uint64(owned)+uint64(it.StackCount) > uint64(maxCount) {
+				return uint32(equipErrCantCarryMoreOfThis), 0, nil
+			}
+		}
+		if limitCategory != 0 {
+			quantity, flags, found := receiver.tradeItemLimitCategory(ctx, limitCategory)
+			if !found {
+				return uint32(equipErrItemCantBeEquipped), 0, nil
+			}
+			// ITEM_LIMIT_CATEGORY_MODE_HAVE = 0 (DBCEnums.h:368): the limit
+			// applies to the amount held in inventory/bank. EQUIP mode is
+			// an equip-time concern, not a store-time one.
+			if flags == 0 {
+				owned := receiver.tradeOwnedLimitCategoryCount(ctx, receiver.playerGUID, limitCategory)
+				if uint64(owned)+uint64(it.StackCount) > uint64(quantity) {
+					return uint32(equipErrItemMaxLimitCategoryCountExceeded), limitCategory, nil
+				}
+			}
+		}
+	}
+	// Space search (Player.cpp:11427-11428 answers EQUIP_ERR_BAG_FULL when
+	// no free slot is found). The wholesale free-slot scan approximates
+	// C++'s stack-merge-then-free-slot mock; the similarity checks above
+	// run first in slot order, matching C++'s per-item check order.
+	// DOCUMENTED NUANCE: C++ interleaves similarity and space per item, so
+	// a space failure on an earlier slot would win over a similarity
+	// failure on a later one; the wholesale scan reports the first
+	// similarity failure instead. The client window state is identical
+	// either way.
+	locs, ok := receiver.findFreeSlotsForTrade(ctx, len(items))
+	if !ok {
+		return uint32(equipErrBagFull), 0, nil
+	}
+	return uint32(equipErrOk), 0, locs
+}
+
+// tradeItemTemplateLimits reads the item_template terms the fit pre-check
+// needs; found=false mirrors C++'s null ItemTemplate (Player.cpp:11200).
+func (s *session) tradeItemTemplateLimits(ctx context.Context, entry uint32) (bool, int64, uint32) {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false, 0, 0
+	}
+	var maxCount, limitCategory int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(maxcount, 0), COALESCE(ItemLimitCategory, 0) FROM item_template WHERE entry = ?`, entry).Scan(&maxCount, &limitCategory); err != nil {
+		return false, 0, 0
+	}
+	return true, maxCount, uint32(limitCategory)
+}
+
+// tradeOwnedItemCount mirrors Player::GetItemCount(entry, true, skipItem)
+// (Player.cpp:9914-9953) for the fit pre-check's max-count term: the
+// skipItem term is vacuous because the incoming item is still in the
+// giver's inventory, and bank rows live in character_inventory under the
+// same guid, matching inBankAlso=true.
+func (s *session) tradeOwnedItemCount(ctx context.Context, playerGUID uint64, itemEntry uint32) uint32 {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0
+	}
+	var total int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory AS ci
+		JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ii.itemEntry = ?`, playerGUID, itemEntry).Scan(&total); err != nil || total < 0 {
+		return 0
+	}
+	return uint32(total)
+}
+
+// tradeItemLimitCategory reads the ItemLimitCategory DBC entry the
+// HAVE-mode term needs (sItemLimitCategoryStore.LookupEntry,
+// Player.cpp:10435).
+func (s *session) tradeItemLimitCategory(ctx context.Context, id uint32) (uint32, uint32, bool) {
+	if s.server == nil || s.server.Data == nil {
+		return 0, 0, false
+	}
+	entry, found, err := s.server.Data.ItemLimitCategory(id)
+	if err != nil || !found {
+		return 0, 0, false
+	}
+	return entry.Quantity, entry.Flags, true
+}
+
+// tradeOwnedLimitCategoryCount mirrors
+// Player::GetItemCountWithLimitCategory (Player.cpp:9959-9987) for the
+// fit pre-check's HAVE-mode term: equipment, inventory and bank rows all
+// live in character_inventory under the player's guid; the skipItem term
+// is vacuous for the same reason as tradeOwnedItemCount.
+func (s *session) tradeOwnedLimitCategoryCount(ctx context.Context, playerGUID uint64, limitCategory uint32) uint32 {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil ||
+		s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT entry FROM item_template WHERE ItemLimitCategory = ?`, limitCategory)
+	if err != nil {
+		return 0
+	}
+	var entries []uint32
+	for rows.Next() {
+		var e int64
+		if rows.Scan(&e) == nil && e > 0 {
+			entries = append(entries, uint32(e))
+		}
+	}
+	rows.Close()
+	var total uint32
+	for _, e := range entries {
+		total += s.tradeOwnedItemCount(ctx, playerGUID, e)
+	}
+	return total
+}
+
 // completeTrade finalizes the trade, exchanging traded items (slots 0..5) and currency.
 // Reference: WorldSession::HandleAcceptTradeOpcode (TradeHandler.cpp:443-544).
 func (s *session) completeTrade(ctx context.Context, partner *session) {
@@ -991,30 +1137,37 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 		}
 	}
 
-	partnerSlots, ok1 := partner.findFreeSlotsForTrade(ctx, len(sTradedItems))
-	sSlots, ok2 := s.findFreeSlotsForTrade(ctx, len(partnerTradedItems))
-	if !ok1 || !ok2 {
-		// Fit failure (TradeHandler.cpp:449-476): leave the accept process
-		// before answering CLOSE_WINDOW, in C++ order. C++ checks the
-		// acceptor's own fit FIRST (the myCanCompleteInfo arm): the failing
-		// acceptor is answered second with IsTargetResult set, after the
-		// partner; the partner-fit arm (hisCanCompleteInfo) answers the
-		// acceptor first, then the failing partner with IsTargetResult set.
-		// Both arms un-accept both sides and KEEP the trade alive — the
-		// client windows stay open so the players can make space and
-		// re-accept. The delete my_spell/delete his_spell deletes the local
-		// Spell objects only; Go stores no Spell object (SpellID is the
-		// representable term), so there is nothing to clear here.
+	// Fit pre-check (TradeHandler.cpp:443-476): the acceptor's own fit is
+	// checked FIRST (the myCanCompleteInfo arm: the partner's items into
+	// the acceptor's inventory), then the partner's (hisCanCompleteInfo).
+	// A failing arm answers CLOSE_WINDOW with the exact equip error (plus
+	// the limit-category id for that arm), then un-accepts both sides with
+	// BACK_TO_TRADE to each (the single-arg SetAccepted(false) calls), and
+	// KEEPS the trade alive — the client windows stay open so the players
+	// can make space and re-accept. The delete my_spell/delete his_spell
+	// deletes the local Spell objects only; Go stores no Spell object
+	// (SpellID is the representable term), so there is nothing to clear
+	// here.
+	sFitResult, sFitCat, sSlots := s.checkTradeFit(ctx, partnerTradedItems)
+	if sFitResult != equipErrOk {
 		clearAcceptTradeMode(s, partner)
-		if !ok2 {
-			_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrBagFull, 0, 0, 0)
-			_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrBagFull, 1, 0, 0) // isTargetResult = 1
-		} else {
-			_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrBagFull, 0, 0, 0)
-			_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrBagFull, 1, 0, 0) // isTargetResult = 1
-		}
+		_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, sFitResult, 0, sFitCat, 0)
+		_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, sFitResult, 1, sFitCat, 0) // isTargetResult = 1
 		s.trade.Accepted = false
+		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 		partner.trade.Accepted = false
+		_ = partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
+		return
+	}
+	pFitResult, pFitCat, partnerSlots := partner.checkTradeFit(ctx, sTradedItems)
+	if pFitResult != equipErrOk {
+		clearAcceptTradeMode(s, partner)
+		_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, pFitResult, 0, pFitCat, 0)
+		_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, pFitResult, 1, pFitCat, 0) // isTargetResult = 1
+		s.trade.Accepted = false
+		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
+		partner.trade.Accepted = false
+		_ = partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0, 0)
 		return
 	}
 
