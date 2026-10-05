@@ -27,8 +27,8 @@ import (
 //     talent points from level minus spent (freeTalentPoints).
 
 // handleModifyGender mirrors HandleModifyGenderCommand (cs_modify.cpp:899):
-// "male"/"female" (prefix-matched like the C++ strncmp) on the selected
-// player or the handler's own player. The sObjectMgr->GetPlayerInfo gate is
+// "male"/"female" (prefix-matched with the case-sensitive C++ strncmp) on
+// the selected player or the handler's own player. The sObjectMgr->GetPlayerInfo gate is
 // moot: race/class pairs are validated at character creation in the Go tree.
 func (s *session) handleModifyGender(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandModifyGender) {
@@ -42,7 +42,7 @@ func (s *session) handleModifyGender(ctx context.Context, args []string) {
 	if target == nil {
 		return
 	}
-	genderStr := strings.ToLower(args[0])
+	genderStr := args[0] // case-sensitive, like the C++ strncmp
 	var gender uint8
 	switch {
 	case strings.HasPrefix("male", genderStr):

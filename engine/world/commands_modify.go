@@ -8,12 +8,13 @@ import (
 
 // modify command port: modify_commandscript (cs_modify.cpp), the "morph" /
 // "demorph" roots and the "modify" root with its 21 sub-arms plus the 6-arm
-// "speed" sub-table. TWENTY-EIGHTH of 39 Commands groups
+// "speed" sub-table. TWENTY-EIGHTH of 40 Commands groups
 // (cs_script_loader.cpp decl 46 / call 91; call order re-verified this run:
 // mmaps(90) -> modify(91)). Trinity checks permission only on the invoker
 // leaf node (ChatCommand.cpp:487), so each arm gates exactly its own C++
-// permission (RBAC.h:410-437/666); the root permission 544 covers the bare
-// ".modify".
+// permission (RBAC.h:410-437/666); the root entry uses the deprecated 6-arg
+// overload, so permission 544 is dead and bare ".modify" prints the help
+// listing with no gate (same pattern as the mmap port).
 //
 // This file is chunk 1: morph, demorph, and the modify arms hp, mana,
 // energy, rage, runicpower, money, honor, arenapoints, xp and drunk.
@@ -27,25 +28,22 @@ import (
 // trinity_string seed).
 
 // modifyTargetPlayer mirrors ChatHandler::getSelectedPlayerOrSelf
-// (Chat.cpp:300): the selected online player, else the handler's own player.
-// An unresolvable selection reports LANG_PLAYER_NOT_FOUND (499, "Player not
-// found." per the tree convention).
+// (Chat.cpp:343): the selected online player, else the handler's own player.
+// An unresolvable selection falls back to the invoker silently, never nil
+// in-session. A nil own player reports LANG_PLAYER_NOT_FOUND (499, "Player
+// not found." per the tree convention).
 func (s *session) modifyTargetPlayer(ctx context.Context) *session {
 	_ = ctx
-	target := s
 	if s.selection != 0 && s.server != nil {
 		if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {
-			target = ts
-		} else {
-			s.sendSysMessage("Player not found.")
-			return nil
+			return ts
 		}
 	}
-	if target.player == nil {
+	if s.player == nil {
 		s.sendSysMessage("Player not found.")
 		return nil
 	}
-	return target
+	return s
 }
 
 // modifyTargetLowerSecurity mirrors the HasLowerSecurity guard shared by the
@@ -88,6 +86,9 @@ func (s *session) notifyModify(target *session, msg, targetMsg string) {
 // selected unit (online player only in the Go tree) or the handler's own
 // player gets the display id via UNIT_FIELD_DISPLAYID.
 func (s *session) handleCmdMorph(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandMorph) {
+		return
+	}
 	if len(args) == 0 {
 		s.sendSysMessage("Syntax: .morph <displayid>")
 		return
@@ -112,6 +113,9 @@ func (s *session) handleCmdMorph(ctx context.Context, args []string) {
 // selected unit (online player only in the Go tree) or the handler's own
 // player drops the morph.
 func (s *session) handleCmdDeMorph(ctx context.Context) {
+	if s.miscDeny(ctx, permissionCommandDeMorph) {
+		return
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
 		return
@@ -133,10 +137,11 @@ func (s *session) handleCmdDeMorph(ctx context.Context) {
 func (s *session) handleCmdModify(ctx context.Context, args []string) {
 	const syntax = "Syntax: .modify hp|mana|energy|rage|runicpower|money|honor|arenapoints|xp|drunk|scale|spell|standstate|mount|gender|bit|faction|phase|speed|talentpoints|reputation <val>"
 	if len(args) == 0 {
-		// Bare ".modify" matches the root node, whose own permission is 544.
-		if s.miscDeny(ctx, permissionCommandModify) {
-			return
-		}
+		// Bare ".modify": the root entry uses the deprecated 6-arg
+		// ChatCommandBuilder overload (ChatCommand.h:260-263), which drops
+		// the root permission 544 — the node is a pure SubCommandEntry
+		// container, so the help listing prints with no perm gate (same
+		// dead-root-perm pattern as the mmap port).
 		s.sendSysMessage(syntax)
 		return
 	}
@@ -460,7 +465,7 @@ func (s *session) handleModifyDrunk(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .modify drunk <val>")
 		return
 	}
-	drunklevel := cAtoi(args[0])
+	drunklevel := uint8(cAtoi(args[0])) // (uint8)atoi: wraps mod 256 like C++
 	if drunklevel > 100 {
 		drunklevel = 100
 	}

@@ -157,6 +157,10 @@ func (s *session) handleModifyMount(ctx context.Context, args []string) {
 		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE 115
 		return
 	}
+	if target.isInFlight() {
+		s.sendSysMessage(miscCharInFlight) // LANG_CHAR_IN_FLIGHT 21
+		return
+	}
 	_ = speed
 	// LANG_YOU_GIVE_MOUNT 150 / LANG_MOUNT_GIVED 151.
 	s.notifyModify(target,
