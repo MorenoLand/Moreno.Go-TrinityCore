@@ -1,8 +1,10 @@
 package world
 
 import (
+	"context"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -76,11 +78,20 @@ func (s *Server) setGameObjectStateInInstance(mapID, instanceID uint32, guid uin
 	if s == nil {
 		return
 	}
+	found := false
 	s.objectsMu.Lock()
 	if object := s.gameObjectStateLocked(mapID, instanceID, guid); object != nil {
 		object.State = state
+		found = true
 	}
 	s.objectsMu.Unlock()
+	// Eluna GAMEOBJECT_EVENT_ON_GO_STATE_CHANGED (event 10), fired from
+	// GameObject::SetGoState (GameObject.cpp:2407): (event, go, state).
+	// The hook runs after objectsMu is released — Lua handlers must never
+	// run under the object lock.
+	if found {
+		s.triggerGameObjectEvent(context.Background(), guid, scripting.GameObjectEventOnGOStateChange, uint32(state))
+	}
 }
 
 func (s *Server) scheduleGameObjectResetInInstance(mapID, instanceID uint32, guid uint64, delay time.Duration) {
@@ -97,11 +108,17 @@ func (s *Server) scheduleGameObjectResetInInstance(mapID, instanceID uint32, gui
 		state.AutoCloseTimer.Stop()
 	}
 	state.AutoCloseTimer = time.AfterFunc(delay, func() {
-		s.objectsMu.Lock()
-		if current := s.gameObjectStateLocked(mapID, instanceID, guid); current == state {
-			current.State = GameObjectStateReady
+		// Routed through setGameObjectStateInInstance so the Eluna
+		// GAMEOBJECT_EVENT_ON_GO_STATE_CHANGED hook fires, matching C++
+		// where the door auto-close goes through GameObject::SetGoState.
+		// The pointer-identity check preserves the original semantics: a
+		// replaced state object is not reset.
+		s.objectsMu.RLock()
+		current := s.gameObjectStateLocked(mapID, instanceID, guid)
+		s.objectsMu.RUnlock()
+		if current == state {
+			s.setGameObjectStateInInstance(mapID, instanceID, guid, GameObjectStateReady)
 		}
-		s.objectsMu.Unlock()
 		s.broadcastGameObjectResetStateInInstance(mapID, instanceID, guid)
 	})
 	s.objectsMu.Unlock()
@@ -200,4 +217,10 @@ func (s *Server) despawnDynamicGameObjectInInstance(mapID, instanceID uint32, gu
 		}
 	}
 	s.broadcastGameObjectDespawnInInstance(mapID, instanceID, guid)
+	// Eluna GAMEOBJECT_EVENT_ON_REMOVE (event 13), fired from
+	// GameObject::RemoveFromWorld (GameObject.cpp:244): (event, gameobject).
+	// Only dynamic despawns have a live server-side object — static template
+	// GOs are per-client update packets, so their map removal has no Go
+	// counterpart.
+	s.triggerGameObjectEvent(context.Background(), guid, scripting.GameObjectEventOnRemove)
 }

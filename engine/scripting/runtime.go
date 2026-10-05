@@ -61,6 +61,26 @@ const (
 	GroupEventOnCreate       = 6
 )
 
+// Eluna GameObjectEvents contract for RegisterGameObjectEvent. Numbering
+// is the TrinityCore LuaEngine numbering (LuaEngine/Hooks.h
+// GameObjectEvents): 11 is UNUSED in C++ and carries no Go constant; only
+// the events the engine fires carry Go constants.
+const (
+	GameObjectEventOnAIUpdate      = 1
+	GameObjectEventOnSpawn         = 2
+	GameObjectEventOnDummyEffect   = 3
+	GameObjectEventOnQuestAccept   = 4
+	GameObjectEventOnQuestReward   = 5
+	GameObjectEventOnDialogStatus  = 6
+	GameObjectEventOnDestroyed     = 7
+	GameObjectEventOnDamaged       = 8
+	GameObjectEventOnLootState     = 9
+	GameObjectEventOnGOStateChange = 10
+	GameObjectEventOnAdd           = 12
+	GameObjectEventOnRemove        = 13
+	GameObjectEventOnUse           = 14
+)
+
 // Eluna ServerEvents contract for RegisterServerEvent. Numbering is the
 // TrinityCore LuaEngine numbering (LuaEngine/Hooks.h ServerEvents); only
 // the events the engine fires carry Go constants.
@@ -405,6 +425,15 @@ func (r *Runtime) TriggerUniqueCreatureEvent2Updated(ctx context.Context, guid u
 // RegisterUniqueCreatureEvent(guid, instanceID, event, fn).
 func (r *Runtime) TriggerUniqueCreatureEvent(ctx context.Context, guid uint64, instanceID uint32, event int, args ...any) ([]any, error) {
 	return r.Trigger(ctx, "creature_unique:"+strconv.FormatUint(guid, 10)+":"+strconv.FormatUint(uint64(instanceID), 10), event, args...)
+}
+
+// TriggerGameObjectEvent fires hooks registered with
+// RegisterGameObjectEvent(entry, event, fn) for the given gameobject entry.
+// C++ Eluna gameobject hooks pass (event, go, ...) (LuaEngine/
+// GameObjectHooks.cpp), so the event number is prepended like
+// TriggerGuildEvent.
+func (r *Runtime) TriggerGameObjectEvent(ctx context.Context, entry uint32, event int, args ...any) ([]any, error) {
+	return r.Trigger(ctx, "gameobject:"+strconv.FormatUint(uint64(entry), 10), event, append([]any{event}, args...)...)
 }
 
 func (r *Runtime) TriggerMapEvent(ctx context.Context, mapID uint32, event int, args ...any) ([]any, error) {

@@ -241,7 +241,7 @@ func (s *session) luaGameObject(ctx context.Context, guid uint64) *scripting.Obj
 	}
 	low := uint32(guid & 0x00FFFFFF)
 	entry := uint32((guid >> 24) & 0x00FFFFFF)
-	state, ok := s.loadLuaGameObject(ctx, low, entry)
+	state, ok := s.server.loadLuaGameObject(ctx, low, entry)
 	if !ok || s.player == nil || state.Map != s.player.Map {
 		return nil
 	}
@@ -249,13 +249,13 @@ func (s *session) luaGameObject(ctx context.Context, guid uint64) *scripting.Obj
 	if s.server.isGameObjectHiddenInInstance(state.Map, state.InstanceID, state.GUID) {
 		return nil
 	}
-	return s.luaGameObjectObject(state)
+	return s.server.luaGameObjectObject(state)
 }
 
-func (s *session) loadLuaGameObject(ctx context.Context, low, entry uint32) (luaGameObjectState, bool) {
+func (srv *Server) loadLuaGameObject(ctx context.Context, low, entry uint32) (luaGameObjectState, bool) {
 	var state luaGameObjectState
 	var mapID int64
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.map, g.position_x, g.position_y, g.position_z FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.guid = ? AND g.id = ?", low, entry).Scan(&state.LowGUID, &state.Entry, &state.DisplayID, &state.Name, &mapID, &state.X, &state.Y, &state.Z); err != nil {
+	if err := srv.WorldStore.DB.QueryRowContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.map, g.position_x, g.position_y, g.position_z FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.guid = ? AND g.id = ?", low, entry).Scan(&state.LowGUID, &state.Entry, &state.DisplayID, &state.Name, &mapID, &state.X, &state.Y, &state.Z); err != nil {
 		return state, false
 	}
 	state.Map, state.GUID = uint32(mapID), gameObjectGUID(state.LowGUID, state.Entry)
@@ -263,7 +263,7 @@ func (s *session) loadLuaGameObject(ctx context.Context, low, entry uint32) (lua
 	return state, true
 }
 
-func (s *session) luaGameObjectObject(state luaGameObjectState) *scripting.Object {
+func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Object {
 	methods := map[string]scripting.ObjectMethod{}
 	methods["GetName"] = luaNoArgs(func() any { return state.Name })
 	methods["GetEntry"] = luaNoArgs(func() any { return state.Entry })
@@ -271,7 +271,7 @@ func (s *session) luaGameObjectObject(state luaGameObjectState) *scripting.Objec
 	methods["GetDBTableGUIDLow"] = luaNoArgs(func() any { return state.LowGUID })
 	methods["GetGoState"] = luaNoArgs(func() any { return state.GoState })
 	methods["GetLootState"] = luaNoArgs(func() any { return state.LootState })
-	methods["IsSpawned"] = luaNoArgs(func() any { return !s.server.isGameObjectHiddenInInstance(state.Map, state.InstanceID, state.GUID) })
+	methods["IsSpawned"] = luaNoArgs(func() any { return !srv.isGameObjectHiddenInInstance(state.Map, state.InstanceID, state.GUID) })
 	methods["IsActive"] = luaNoArgs(func() any { return state.GoState == 0 })
 	methods["GetGUID"] = luaNoArgs(func() any { return state.GUID })
 	methods["GetGUIDLow"] = luaNoArgs(func() any { return state.LowGUID })
@@ -281,7 +281,7 @@ func (s *session) luaGameObjectObject(state luaGameObjectState) *scripting.Objec
 	methods["GetY"] = luaNoArgs(func() any { return state.Y })
 	methods["GetZ"] = luaNoArgs(func() any { return state.Z })
 	methods["RemoveFromWorld"] = func(_ context.Context, _ []any) ([]any, error) {
-		s.server.setGameObjectHiddenInInstance(state.Map, state.InstanceID, state.GUID, true)
+		srv.setGameObjectHiddenInInstance(state.Map, state.InstanceID, state.GUID, true)
 		return nil, nil
 	}
 	methods["SetGoState"] = func(_ context.Context, args []any) ([]any, error) {
@@ -313,21 +313,28 @@ func (s *session) luaGameObjectObject(state luaGameObjectState) *scripting.Objec
 		return nil, nil
 	}
 	methods["Despawn"] = func(_ context.Context, _ []any) ([]any, error) {
-		s.objectsMuLockGameObject(state.Map, state.InstanceID, state.GUID)
+		srv.objectsMuLockGameObject(state.Map, state.InstanceID, state.GUID)
 		return nil, nil
 	}
 	methods["Respawn"] = func(_ context.Context, _ []any) ([]any, error) {
-		s.objectsMuUnlockGameObject(state.Map, state.InstanceID, state.GUID)
+		srv.objectsMuUnlockGameObject(state.Map, state.InstanceID, state.GUID)
 		return nil, nil
 	}
 	return &scripting.Object{Type: "GameObject", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "Map": state.Map, "MapId": state.Map, "X": state.X, "Y": state.Y, "Z": state.Z, "DisplayID": state.DisplayID, "GoState": state.GoState, "LootState": state.LootState, "InWorld": true}, Methods: methods}
 }
 
+func (srv *Server) objectsMuLockGameObject(mapID, instanceID uint32, guid uint64) {
+	srv.setGameObjectHiddenInInstance(mapID, instanceID, guid, true)
+}
+func (srv *Server) objectsMuUnlockGameObject(mapID, instanceID uint32, guid uint64) {
+	srv.setGameObjectHiddenInInstance(mapID, instanceID, guid, false)
+}
+
 func (s *session) objectsMuLockGameObject(mapID, instanceID uint32, guid uint64) {
-	s.server.setGameObjectHiddenInInstance(mapID, instanceID, guid, true)
+	s.server.objectsMuLockGameObject(mapID, instanceID, guid)
 }
 func (s *session) objectsMuUnlockGameObject(mapID, instanceID uint32, guid uint64) {
-	s.server.setGameObjectHiddenInInstance(mapID, instanceID, guid, false)
+	s.server.objectsMuUnlockGameObject(mapID, instanceID, guid)
 }
 
 func (s *session) nearestGameObject(ctx context.Context, mapID uint32, x, y float32, distance float32) *scripting.Object {
@@ -358,7 +365,7 @@ func (s *session) nearestGameObject(ctx context.Context, mapID uint32, x, y floa
 	if nearest.GUID == 0 {
 		return nil
 	}
-	return s.luaGameObjectObject(nearest)
+	return s.server.luaGameObjectObject(nearest)
 }
 
 func (s *Server) isGameObjectHidden(guid uint64) bool {

@@ -143,6 +143,7 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 		// Eluna CREATURE_EVENT_ON_QUEST_ACCEPT (event 31), fired from
 		// Player::AddQuestAndCheckCompletion (Player.cpp:15119 region).
 		s.fireCreatureQuestHook(ctx, guid, scripting.CreatureEventOnQuestAccept, s.luaQuest(ctx, questID))
+		s.fireGameObjectQuestHook(ctx, guid, scripting.GameObjectEventOnQuestAccept, s.luaQuest(ctx, questID))
 	}
 
 	// TrinityCore HandleQuestgiverQueryQuestOpcode (QuestHandler.cpp:233): quests
@@ -201,6 +202,7 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 	// Player::AddQuestAndCheckCompletion after the auto-complete check
 	// (Player.cpp:15105-15122).
 	s.fireCreatureQuestHook(ctx, guid, scripting.CreatureEventOnQuestAccept, s.luaQuest(ctx, questID))
+	s.fireGameObjectQuestHook(ctx, guid, scripting.GameObjectEventOnQuestAccept, s.luaQuest(ctx, questID))
 	s.debug("quest accepted", "account", s.accountName, "quest", questID)
 
 	// Refresh questgiver overhead status (Player::AddQuestAndCheckCompletion)

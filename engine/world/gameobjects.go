@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -703,6 +704,13 @@ func (s *session) handleGameObjectReportUse(ctx context.Context, payload []byte)
 	if goState.Map != s.player.Map || goState.InstanceID != s.player.InstanceID || distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > 10.0 {
 		return true
 	}
+	// Eluna GAMEOBJECT_EVENT_ON_USE (event 14), fired from
+	// HandleGameobjectReportUse after the interact gates
+	// (SpellHandler.cpp:318-336): (event, go, player) — cancel skips the
+	// achievement-criteria update, like the C++ early return.
+	if s.fireGameObjectEvent(ctx, guid, scripting.GameObjectEventOnUse, s.luaPlayer()) {
+		return true
+	}
 	s.updateAchievementCriteria(criteriaTypeUseGameObject, entry, 1)
 	return true
 }
@@ -920,13 +928,23 @@ func (s *Server) setGameObjectState(guid uint64, state uint8) {
 	if s == nil {
 		return
 	}
+	found := false
 	s.objectsMu.Lock()
-	defer s.objectsMu.Unlock()
 	if s.dynamicGameObjects == nil {
+		s.objectsMu.Unlock()
 		return
 	}
 	if dyn, ok := s.dynamicGameObjects[guid]; ok && dyn != nil {
 		dyn.State = state
+		found = true
+	}
+	s.objectsMu.Unlock()
+	// Eluna GAMEOBJECT_EVENT_ON_GO_STATE_CHANGED (event 10), fired from
+	// GameObject::SetGoState (GameObject.cpp:2407): (event, go, state).
+	// The hook runs after objectsMu is released — Lua handlers must never
+	// run under the object lock.
+	if found {
+		s.triggerGameObjectEvent(context.Background(), guid, scripting.GameObjectEventOnGOStateChange, uint32(state))
 	}
 }
 
@@ -945,11 +963,10 @@ func (s *Server) scheduleGameObjectReset(guid uint64, delay time.Duration) {
 	}
 	mapID := dyn.Map
 	dyn.AutoCloseTimer = time.AfterFunc(delay, func() {
-		s.objectsMu.Lock()
-		if currentDyn, exists := s.dynamicGameObjects[guid]; exists && currentDyn != nil {
-			currentDyn.State = GameObjectStateReady
-		}
-		s.objectsMu.Unlock()
+		// Routed through setGameObjectState so the Eluna
+		// GAMEOBJECT_EVENT_ON_GO_STATE_CHANGED hook fires, matching C++
+		// where the door auto-close goes through GameObject::SetGoState.
+		s.setGameObjectState(guid, GameObjectStateReady)
 		s.broadcastGameObjectResetState(mapID, guid)
 	})
 	s.objectsMu.Unlock()
@@ -1037,6 +1054,12 @@ func (s *Server) spawnDynamicGameObject(dyn *dynamicGameObjectState) {
 			s.broadcastToMap(dyn.Map, packet.Opcode, packet.Payload.Bytes())
 		}
 	}
+	// Eluna GAMEOBJECT_EVENT_ON_ADD (event 12), fired from
+	// GameObject::AddToWorld (GameObject.cpp:233): (event, gameobject).
+	// Only dynamic spawns have a live server-side object — static template
+	// GOs are per-client update packets, so their map add has no Go
+	// counterpart.
+	s.triggerGameObjectEvent(context.Background(), dyn.GUID, scripting.GameObjectEventOnAdd)
 }
 
 func isFishingSpell(spellID uint32) bool {
@@ -1082,10 +1105,12 @@ func (s *Server) despawnDynamicGameObject(guid uint64) {
 	var mapID uint32
 	var ownerGUID uint64
 	var fishingHandled bool
+	removed := false
 	if dyn, ok := s.dynamicGameObjects[guid]; ok && dyn != nil {
 		mapID = dyn.Map
 		ownerGUID = dyn.OwnerGUID
 		fishingHandled = dyn.FishingHandled
+		removed = true
 		if dyn.AutoCloseTimer != nil {
 			dyn.AutoCloseTimer.Stop()
 		}
@@ -1102,6 +1127,14 @@ func (s *Server) despawnDynamicGameObject(guid uint64) {
 		}
 	}
 	s.broadcastGameObjectDespawn(mapID, guid)
+	// Eluna GAMEOBJECT_EVENT_ON_REMOVE (event 13), fired from
+	// GameObject::RemoveFromWorld (GameObject.cpp:244): (event, gameobject).
+	// Only dynamic despawns have a live server-side object — static template
+	// GOs are per-client update packets, so their map removal has no Go
+	// counterpart.
+	if removed {
+		s.triggerGameObjectEvent(context.Background(), guid, scripting.GameObjectEventOnRemove)
+	}
 }
 
 func (s *Server) setGameObjectHidden(guid uint64, hidden bool) {

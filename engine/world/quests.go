@@ -226,6 +226,7 @@ func (s *session) handleQuestgiverStatusQuery(ctx context.Context, payload []byt
 	// Player::GetQuestDialogStatus before the AI/relation checks
 	// (Player.cpp:16290-16296).
 	s.fireCreatureQuestHook(ctx, guid, scripting.CreatureEventOnDialogStatus)
+	s.fireGameObjectQuestHook(ctx, guid, scripting.GameObjectEventOnDialogStatus)
 	if st, err := s.questDialogStatus(ctx, entry); err == nil {
 		status = st
 	}
@@ -822,6 +823,7 @@ func (s *session) sendQuestgiverStatusMultiple(ctx context.Context) bool {
 		// (Player.cpp:17160-17176). Gameobject GUIDs are skipped by the
 		// hook's TYPEID_UNIT gate.
 		s.fireCreatureQuestHook(ctx, questgiver.guid, scripting.CreatureEventOnDialogStatus)
+		s.fireGameObjectQuestHook(ctx, questgiver.guid, scripting.GameObjectEventOnDialogStatus)
 		status, statusErr := s.questDialogStatusFromRelations(ctx, questgiver.entry, questgiver.enderTable, questgiver.starterTable)
 		if statusErr != nil {
 			continue

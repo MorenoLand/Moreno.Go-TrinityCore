@@ -134,6 +134,7 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	// reward-completion switch arm after the grant (QuestHandler.cpp:330-335);
 	// the reward-choice index rides as the opt argument.
 	s.fireCreatureQuestHook(ctx, giverGUID, scripting.CreatureEventOnQuestReward, s.luaQuest(ctx, questID), reward)
+	s.fireGameObjectQuestHook(ctx, giverGUID, scripting.GameObjectEventOnQuestReward, s.luaQuest(ctx, questID), reward)
 	for slot := range s.player.QuestLog {
 		if s.player.QuestLog[slot].QuestID == questID {
 			s.player.QuestLog[slot] = questLogEntry{}
