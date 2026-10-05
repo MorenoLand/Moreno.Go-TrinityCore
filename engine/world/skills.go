@@ -438,6 +438,7 @@ func (s *session) resetTalents(ctx context.Context, free bool) bool {
 	}
 
 	// Unlearn the highest known rank spell of every talent.
+	cdb := s.server.CharactersStore.DB
 	for talentID, rank := range s.player.Talents {
 		if s.server.Data == nil {
 			continue
@@ -445,6 +446,16 @@ func (s *session) resetTalents(ctx context.Context, free bool) bool {
 		if tEntry, ok, err := s.server.Data.Talent(talentID); err == nil && ok && uint32(rank) < uint32(len(tEntry.SpellRank)) {
 			spellID := tEntry.SpellRank[rank]
 			if spellID != 0 {
+				// Player::ResetTalents unlearns each talent spell via
+				// RemoveSpell(spell, true): the spell row is dropped (persisted
+				// by _SaveSpells) and its auras stripped. The triggered
+				// SPELL_EFFECT_LEARN_SPELL spells C++ also unlearns have no Go
+				// model (no spell-effect introspection on talent rows here).
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM character_spell WHERE guid = ? AND spell = ?", s.playerGUID, spellID)
+				if s.hasAura(spellID) {
+					s.removeAura(spellID)
+				}
+				s.removeOwnerPetAurasForSpell(ctx, spellID)
 				removed := protocol.NewBuffer(4)
 				removed.WriteU32(spellID)
 				_ = s.write(uint16(protocol.OpcodeSMSG_REMOVED_SPELL), removed.Bytes(), true)
@@ -453,7 +464,6 @@ func (s *session) resetTalents(ctx context.Context, free bool) bool {
 	}
 
 	s.player.Talents = make(map[uint32]uint8)
-	cdb := s.server.CharactersStore.DB
 	if _, err := cdb.ExecContext(ctx, "DELETE FROM character_talent WHERE guid = ? AND talentGroup = ?", s.playerGUID, s.player.ActiveTalentGroup); err != nil {
 		s.debug("talent reset persistence failed", "account", s.accountName, "error", err)
 	}

@@ -13667,40 +13667,38 @@ func (s *session) handleTalentWipeConfirm(ctx context.Context, payload []byte) b
 	r := protocol.NewReader(payload)
 	wipeGUID, _ := r.ReadU64()
 
-	// Clear player talents and unlearn all talent spells
-	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		cdb := s.server.CharactersStore.DB
-		rows, err := cdb.QueryContext(ctx, "SELECT spell FROM character_talent WHERE guid = ? AND talentGroup = ?", s.playerGUID, s.player.ActiveTalentGroup)
-		if err == nil {
-			var unlearnSpells []uint32
-			for rows.Next() {
-				var sp int64
-				if rows.Scan(&sp) == nil && sp > 0 {
-					unlearnSpells = append(unlearnSpells, uint32(sp))
-				}
-			}
-			rows.Close()
-			for _, sp := range unlearnSpells {
-				_, _ = cdb.ExecContext(ctx, "DELETE FROM character_spell WHERE guid = ? AND spell = ?", s.playerGUID, sp)
-				if s.hasAura(sp) {
-					s.removeAura(sp)
-				}
-				s.removeOwnerPetAurasForSpell(ctx, sp)
-				unlearnBuf := protocol.NewBuffer(4)
-				unlearnBuf.WriteU32(sp)
-				_ = s.write(uint16(protocol.OpcodeSMSG_REMOVED_SPELL), unlearnBuf.Bytes(), true)
-			}
-		}
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_talent WHERE guid = ? AND talentGroup = ?", s.playerGUID, s.player.ActiveTalentGroup)
+	// GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_TRAINER): silent drop when
+	// the trainer cannot be interacted with (SkillHandler.cpp:65-70).
+	if !s.canInteractWithNPC(ctx, wipeGUID, uint64(unitNPCFlagTrainer)) {
+		s.debug("talent wipe confirm rejected: trainer not interactable", "account", s.accountName, "guid", wipeGUID)
+		return true
 	}
-	s.player.Talents = make(map[uint32]uint8)
+	// Creature::CanResetTalents(_player, false): silent drop when the NPC is
+	// not a class trainer valid for this player (SkillHandler.cpp:72-73).
+	if !s.canResetTalents(ctx, wipeGUID) {
+		s.debug("talent wipe confirm rejected: cannot reset talents", "account", s.accountName, "guid", wipeGUID)
+		return true
+	}
+	// The feign-death strip (HasUnitState(UNIT_STATE_DIED) ->
+	// RemoveAurasByType(SPELL_AURA_FEIGN_DEATH)) has no Go bridge: Go tracks
+	// no player unit states and models no feign-death aura type — the same
+	// standing delta as the gossip select arm.
+	if len(s.player.Talents) == 0 || !s.resetTalents(ctx, false) {
+		// Player::ResetTalents returns false when no talents are spent
+		// (Player.cpp:3998) or the escalating cost cannot be paid
+		// (Player.cpp:4013): the handler answers (0,0) — "you have not any
+		// talent". The cost charge itself happens inside resetTalents.
+		wipe := protocol.NewBuffer(12)
+		wipe.WriteU64(0)
+		wipe.WriteU32(0)
+		_ = s.write(uint16(protocol.OpcodeMSG_TALENT_WIPE_CONFIRM), wipe.Bytes(), true)
+		return true
+	}
 
-	buf := protocol.NewBuffer(12)
-	buf.WriteU64(wipeGUID)
-	buf.WriteU32(0) // free or cost
-	_ = s.write(uint16(protocol.OpcodeMSG_TALENT_WIPE_CONFIRM), buf.Bytes(), true)
-
-	// Cast visual untalent effect 14867 from trainer to player
+	// C++ sends no packet on success (the old Go (guid,0) success reply is
+	// dropped); the talents panel refresh and player update already happened
+	// inside resetTalents. unit->CastSpell(_player, 14867, true):
+	// "Untalent Visual Effect".
 	castPkt := protocol.NewBuffer(16)
 	castPkt.WritePackedGUID(wipeGUID)
 	castPkt.WritePackedGUID(s.playerGUID)
@@ -13708,8 +13706,6 @@ func (s *session) handleTalentWipeConfirm(ctx context.Context, payload []byte) b
 	castPkt.WriteU32(14867)
 	castPkt.WriteU32(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), castPkt.Bytes(), true)
-	_ = s.sendTalentsInfo(false)
-	s.sendPlayerUpdate()
 	return true
 }
 
