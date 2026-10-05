@@ -2,7 +2,7 @@
 -- src/server/scripts/Northrend/Gundrak/boss_slad_ran.cpp
 -- (boss_slad_ran + npc_slad_ran_constrictor + npc_slad_ran_viper).
 -- Gundrak dungeon-script unit per northrend_script_loader.cpp order
--- (call 215, Gundrak block start; next: boss_drakkari_colossus).
+-- (call 215, Gundrak block start; next: boss_moorabi).
 -- Entries: 29304 Slad'ran (gundrak.h NPC_SLAD_RAN — the
 -- RegisterCreatureAIWithFactory(GetGundrakAI) ScriptName bindings are
 -- instance-shimmed, the creature_template bindings DB-side as usual);
@@ -34,6 +34,8 @@
 -- SpawnLoc entries, TEMPSUMMON_CORPSE_TIMED_DESPAWN) sit behind the
 -- summon STRAND (standing), so the GROUP_SNAKES cancel and the
 -- PHASE_SNAKES -> PHASE_CONSTRICTORS transition never fire.
+-- Talk(SAY_SUMMON_SNAKES 3) / Talk(SAY_SUMMON_CONSTRICTORS 4) ride
+-- that same machine — documented-only.
 -- JustSummoned's MovePoint-to-boss choreography is movement-model
 -- only and has no summons to move; summons.Summon bookkeeping has
 -- no Go bearer. SetGUID(DATA_SNAKES_WHYD_IT_HAVE_TO_BE_SNAKES) /
