@@ -144,6 +144,10 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 		// Player::AddQuestAndCheckCompletion (Player.cpp:15119 region).
 		s.fireCreatureQuestHook(ctx, guid, scripting.CreatureEventOnQuestAccept, s.luaQuest(ctx, questID))
 		s.fireGameObjectQuestHook(ctx, guid, scripting.GameObjectEventOnQuestAccept, s.luaQuest(ctx, questID))
+		// Eluna ITEM_EVENT_ON_QUEST_ACCEPT (event 3), fired from the
+		// TYPEID_ITEM/TYPEID_CONTAINER arm of Player::AddQuestAndCheckCompletion
+		// (Player.cpp:15128); fires only for item giver GUIDs.
+		s.fireItemQuestHook(ctx, guid, questID)
 	}
 
 	// TrinityCore HandleQuestgiverQueryQuestOpcode (QuestHandler.cpp:233): quests
@@ -203,6 +207,10 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 	// (Player.cpp:15105-15122).
 	s.fireCreatureQuestHook(ctx, guid, scripting.CreatureEventOnQuestAccept, s.luaQuest(ctx, questID))
 	s.fireGameObjectQuestHook(ctx, guid, scripting.GameObjectEventOnQuestAccept, s.luaQuest(ctx, questID))
+	// Eluna ITEM_EVENT_ON_QUEST_ACCEPT (event 3), fired from the
+	// TYPEID_ITEM/TYPEID_CONTAINER arm of Player::AddQuestAndCheckCompletion
+	// (Player.cpp:15128); fires only for item giver GUIDs.
+	s.fireItemQuestHook(ctx, guid, questID)
 	s.debug("quest accepted", "account", s.accountName, "quest", questID)
 
 	// Refresh questgiver overhead status (Player::AddQuestAndCheckCompletion)

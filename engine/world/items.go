@@ -1369,6 +1369,10 @@ const (
 	equipErrVendorMissingTurnins              = 68
 	equipErrNotEnoughHonorPoints              = 69
 	equipErrNotEnoughArenaPoints              = 70
+	// equipErrNone is C++ EQUIP_ERR_NONE (59): Eluna::OnUse's tail
+	// (ItemHooks.cpp) sends it raw in SMSG_INVENTORY_CHANGE_FAILURE when a
+	// Lua handler blocks the cast, to un-stick the grayed item client-side.
+	equipErrNone = 59
 )
 
 func (s *session) sendEquipError(errCode uint8, itemGUID uint64) {
@@ -1464,6 +1468,16 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		if cd.Spell == spellID && cd.End > nowUnix {
 			return true
 		}
+	}
+
+	// Eluna ITEM_EVENT_ON_USE (2): ScriptMgr::OnItemUse
+	// (SpellHandler.cpp:176) fires after the item validation and bonding
+	// gates, before CastItemUseSpell. A Lua false return blocks the cast;
+	// C++ then sends the raw EQUIP_ERR_NONE failure packet (the stuck-item
+	// hack at the tail of Eluna::OnUse, ItemHooks.cpp) and skips the cast.
+	if s.fireItemUseHook(ctx, rawItemGUID) {
+		s.sendEquipError(equipErrNone, fullItemGUID)
+		return true
 	}
 
 	// Cast spell

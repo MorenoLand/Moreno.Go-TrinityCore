@@ -81,6 +81,19 @@ const (
 	GameObjectEventOnUse           = 14
 )
 
+// Eluna ItemEvents contract for RegisterItemEvent. Numbering is the
+// TrinityCore LuaEngine numbering (LuaEngine/Hooks.h ItemEvents). The
+// engine fires ON_USE (2) and ON_QUEST_ACCEPT (3); ON_DUMMY_EFFECT (1),
+// ON_EXPIRE (4) and ON_REMOVE (5) carry constants but have no Go fire
+// sites (documented in engine/world/item_hooks.go).
+const (
+	ItemEventOnDummyEffect = 1
+	ItemEventOnUse         = 2
+	ItemEventOnQuestAccept = 3
+	ItemEventOnExpire      = 4
+	ItemEventOnRemove      = 5
+)
+
 // Eluna ServerEvents contract for RegisterServerEvent. Numbering is the
 // TrinityCore LuaEngine numbering (LuaEngine/Hooks.h ServerEvents); only
 // the events the engine fires carry Go constants.
@@ -434,6 +447,16 @@ func (r *Runtime) TriggerUniqueCreatureEvent(ctx context.Context, guid uint64, i
 // TriggerGuildEvent.
 func (r *Runtime) TriggerGameObjectEvent(ctx context.Context, entry uint32, event int, args ...any) ([]any, error) {
 	return r.Trigger(ctx, "gameobject:"+strconv.FormatUint(uint64(entry), 10), event, append([]any{event}, args...)...)
+}
+
+// TriggerItemEvent fires hooks registered with
+// RegisterItemEvent(entry, event, fn) for the given item entry.
+// C++ Eluna item hooks pass (event, player, item, ...) (LuaEngine/
+// ItemHooks.cpp), so the event number is prepended like
+// TriggerGameObjectEvent. Callers pass the C++ argument order without the
+// leading event.
+func (r *Runtime) TriggerItemEvent(ctx context.Context, entry uint32, event int, args ...any) ([]any, error) {
+	return r.Trigger(ctx, "item:"+strconv.FormatUint(uint64(entry), 10), event, append([]any{event}, args...)...)
 }
 
 func (r *Runtime) TriggerMapEvent(ctx context.Context, mapID uint32, event int, args ...any) ([]any, error) {

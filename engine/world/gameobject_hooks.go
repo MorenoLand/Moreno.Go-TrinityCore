@@ -109,8 +109,9 @@ func (s *session) fireGameObjectEvent(ctx context.Context, guid uint64, event in
 // and ItemQuestEvents families, so non-gameobject GUIDs are skipped here.
 // Unlike the combat hooks, the quest hooks push the player first — Eluna
 // argument order is (event, player, go, quest[, opt]) per
-// GameObjectHooks.cpp. The return values of these hooks are discarded by
-// every C++ call site, so Go discards them too.
+// GameObjectHooks.cpp. TriggerGameObjectEvent prepends the event, so the
+// caller passes (player, go, quest) without it. The return values of these
+// hooks are discarded by every C++ call site, so Go discards them too.
 func (s *session) fireGameObjectQuestHook(ctx context.Context, giverGUID uint64, event int, extra ...any) {
 	if s == nil || s.server == nil || uint16(giverGUID>>48) != 0xF110 {
 		return
@@ -123,8 +124,8 @@ func (s *session) fireGameObjectQuestHook(ctx context.Context, giverGUID uint64,
 		return
 	}
 	entry := uint32((giverGUID >> 24) & 0x00FFFFFF)
-	args := make([]any, 0, len(extra)+3)
-	args = append(args, event, s.luaPlayer(), goObj)
+	args := make([]any, 0, len(extra)+2)
+	args = append(args, s.luaPlayer(), goObj)
 	args = append(args, extra...)
 	_, _ = s.server.Features.Scripts.TriggerGameObjectEvent(ctx, entry, event, args...)
 }
