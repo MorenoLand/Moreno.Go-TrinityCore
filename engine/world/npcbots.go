@@ -274,17 +274,25 @@ func (m *NPCBotManager) Update(ctx context.Context, entry uint32, kind NpcBotUpd
 }
 
 func (m *NPCBotManager) UpdateOwnerAll(ctx context.Context, previousOwner, owner uint32) error {
-	if _, err := m.characters.ExecStatement(ctx, "CHAR_UPD_NPCBOT_OWNER_ALL", owner, previousOwner); err != nil {
-		return err
-	}
+	// C++: BotMgr::RemoveAllBots loops RemoveBot per bot (botmgr.cpp:777-781),
+	// and RemoveBot's temp-bot deferral arm (botmgr.cpp:803-808, IsTempBot ==
+	// entry 70552, bot_ai.h:114) returns before the NPCBOT_UPDATE_OWNER write
+	// (:820-826) — temp-bot rows never get their owner reset on dismiss, so
+	// the write is issued per non-temp entry. (The character-delete leg,
+	// Player.cpp:4534 UpdateNpcBotDataAll, is intentionally unfiltered and is
+	// queued separately — this method's only caller is the dismiss path.)
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	for entry, data := range m.bots {
-		if data.Owner == previousOwner {
-			data.Owner = owner
-			m.bots[entry] = data
+		if data.Owner != previousOwner || entry == npcBotEntryMirrorImage {
+			continue
 		}
+		if _, err := m.characters.ExecStatement(ctx, "CHAR_UPD_NPCBOT_OWNER", owner, entry); err != nil {
+			return err
+		}
+		data.Owner = owner
+		m.bots[entry] = data
 	}
-	m.mu.Unlock()
 	return nil
 }
 
@@ -300,6 +308,28 @@ func (m *NPCBotManager) CountByOwner(owner uint32) uint8 {
 	count := uint8(0)
 	for _, data := range m.bots {
 		if data.Owner == owner {
+			count++
+		}
+	}
+	return count
+}
+
+// dismissableCountByOwner mirrors the remove-all HaveBot() gates: temp bots
+// (entry 70552, bot_ai.h:114) are deferred out of RemoveBot's DB-write arm
+// (botmgr.cpp:803-808), so only non-temp ownership decides the "Npcbots are
+// not found!" / "Some npcbots were not removed!" gates.
+func (m *NPCBotManager) dismissableCountByOwner(owner uint32) uint8 {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if !m.loaded {
+		return 0
+	}
+	count := uint8(0)
+	for entry, data := range m.bots {
+		if data.Owner == owner && entry != npcBotEntryMirrorImage {
 			count++
 		}
 	}
@@ -480,12 +510,35 @@ func (m *NPCBotManager) addBot(ctx context.Context, owner, entry uint32, takeMon
 			return BotAddCannotAfford, nil
 		}
 	}
-	tx, err := m.characters.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	if takeMoney {
-		result, err := tx.ExecContext(ctx, "UPDATE characters SET money = money - ? WHERE guid = ? AND money >= ?", cost, owner, cost)
+	// C++: AddBot's post-gate tail persists the owner only for non-temporary
+	// bots (botmgr.cpp:933-939 `if (!temporary)`); temp bots (mirror-image
+	// summons) live in the BotMgr map only and never touch characters_npcbot.
+	// The money deduction is likewise temp-gated in C++ (`if (!temporary &&
+	// takeMoney)`, botmgr.cpp:895) — Go's cost is already 0 for temp, so
+	// skipping the tx is equivalent. The SetBotCommandState(FOLLOW) and
+	// AddBotToGroup legs of the same block are live-only (no Go bridge).
+	// Nuance: re-adding a temp bot answers success again in Go — C++'s
+	// ALREADY_HAVE gate reads the live _bots map, which has no Go counterpart.
+	if !temporary {
+		tx, err := m.characters.DB.BeginTx(ctx, nil)
+		if err != nil {
+			return 0, err
+		}
+		if takeMoney {
+			result, err := tx.ExecContext(ctx, "UPDATE characters SET money = money - ? WHERE guid = ? AND money >= ?", cost, owner, cost)
+			if err != nil {
+				_ = tx.Rollback()
+				return 0, err
+			}
+			if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+				_ = tx.Rollback()
+				if err != nil {
+					return 0, err
+				}
+				return BotAddCannotAfford, nil
+			}
+		}
+		result, err := tx.ExecContext(ctx, "UPDATE characters_npcbot SET owner = ? WHERE entry = ? AND owner = 0", owner, entry)
 		if err != nil {
 			_ = tx.Rollback()
 			return 0, err
@@ -495,26 +548,14 @@ func (m *NPCBotManager) addBot(ctx context.Context, owner, entry uint32, takeMon
 			if err != nil {
 				return 0, err
 			}
-			return BotAddCannotAfford, nil
+			return BotAddNotAvailable, nil
 		}
-	}
-	result, err := tx.ExecContext(ctx, "UPDATE characters_npcbot SET owner = ? WHERE entry = ? AND owner = 0", owner, entry)
-	if err != nil {
-		_ = tx.Rollback()
-		return 0, err
-	}
-	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
-		_ = tx.Rollback()
-		if err != nil {
+		if err := tx.Commit(); err != nil {
 			return 0, err
 		}
-		return BotAddNotAvailable, nil
+		data.Owner = owner
+		m.bots[entry] = data
 	}
-	if err := tx.Commit(); err != nil {
-		return 0, err
-	}
-	data.Owner = owner
-	m.bots[entry] = data
 	return BotAddSuccess, nil
 }
 

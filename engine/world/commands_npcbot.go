@@ -195,6 +195,11 @@ func (s *session) npcbotAddUsage() {
 // (botmgr.cpp:820); the live legs (CleanupsBeforeBotDelete group/unsummon
 // removal, ResetBotAI, faction/level restore, RemoveFromWorld) have no Go
 // bridge — Go keeps no live BotAI or group-membership model for bots.
+// RemoveBot's temp-bot deferral arm (botmgr.cpp:803-808, IsTempBot == entry
+// 70552) never issues the owner write and fails the command's GetBot check:
+// single dismiss answers "NOT removed for some stupid reason!", and the
+// remove-all write skips temp rows (dismissableCountByOwner mirrors the
+// HaveBot gates the same way).
 func (s *session) handleNpcBotRemoveCommand(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandNPCBotRemove) {
 		return
@@ -215,8 +220,11 @@ func (s *session) handleNpcBotRemoveCommand(ctx context.Context) {
 		// C++: master->RemoveAllBots(BOT_REMOVE_DISMISS), then
 		// !master->HaveBot() → success. The owner counter convention is
 		// uint32(guid), matching the add arm's uint32(s.playerGUID).
+		// The gates count only dismissable (non-temp) ownership: temp bots
+		// are deferred out of RemoveBot's DB-write arm (botmgr.cpp:803-808),
+		// so a temp row keeps its owner and never trips the gates.
 		owner := uint32(sel)
-		if mgr.CountByOwner(owner) == 0 {
+		if mgr.dismissableCountByOwner(owner) == 0 {
 			s.sendSysMessage("Npcbots are not found!")
 			return
 		}
@@ -225,7 +233,7 @@ func (s *session) handleNpcBotRemoveCommand(ctx context.Context) {
 			s.sendSysMessage("Some npcbots were not removed!")
 			return
 		}
-		if mgr.CountByOwner(owner) != 0 {
+		if mgr.dismissableCountByOwner(owner) != 0 {
 			s.sendSysMessage("Some npcbots were not removed!")
 			return
 		}
@@ -253,6 +261,17 @@ func (s *session) handleNpcBotRemoveCommand(ctx context.Context) {
 	}
 	// C++: master->GetBotMgr()->RemoveBot(cre->GetGUID(), BOT_REMOVE_DISMISS),
 	// then GetBot(guid) == nullptr → "NpcBot successfully removed".
+	// C++: RemoveBot's temp-bot deferral arm (botmgr.cpp:803-808) — IsTempBot
+	// (entry == BOT_ENTRY_MIRROR_IMAGE_BM = 70552, bot_ai.h:114) bots are
+	// added to _removeList and kept in _bots, so the command's GetBot check
+	// fails and it answers "NpcBot was NOT removed for some stupid reason!"
+	// with no DB write (the NPCBOT_UPDATE_OWNER write at botmgr.cpp:820-826
+	// is only reached for non-temp bots). CleanupsBeforeBotDelete's live
+	// legs (group/unsummon/owner-reset) have no Go bridge.
+	if entry == npcBotEntryMirrorImage {
+		s.sendSysMessage("NpcBot was NOT removed for some stupid reason!")
+		return
+	}
 	if err := mgr.Update(ctx, entry, NpcBotUpdateOwner, uint32(0)); err != nil {
 		s.debug("npcbot remove failed", "account", s.accountName, "entry", entry, "error", err)
 		s.sendSysMessage("NpcBot was NOT removed for some stupid reason!")
