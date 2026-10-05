@@ -130,7 +130,9 @@ func ApplyMigrationsWithOptions(ctx context.Context, store *Store, migrations []
 				continue
 			}
 			if options.AllowRehash && applied.Hash == "" {
-				if _, err := store.DB.ExecContext(ctx, "UPDATE updates SET hash = ?, state = ? WHERE name = ?", migration.Hash, migration.State, migration.Name); err != nil {
+				// C++ UpdateFetcher rehashes via REPLACE INTO (name, hash, state, speed):
+				// the timestamp refreshes and the apply speed resets to 0.
+				if _, err := store.DB.ExecContext(ctx, "UPDATE updates SET hash = ?, state = ?, speed = 0, timestamp = CURRENT_TIMESTAMP WHERE name = ?", migration.Hash, migration.State, migration.Name); err != nil {
 					return result, err
 				}
 				result.Rehashed++
@@ -210,28 +212,25 @@ func renameMigratedUpdate(ctx context.Context, store *Store, migrations []Migrat
 	for _, candidate := range migrations {
 		names[candidate.Name] = struct{}{}
 	}
-	rows, err := store.DB.QueryContext(ctx, "SELECT name FROM updates WHERE hash = ?", migration.Hash)
+	// C++ UpdateFetcher::hashToName keeps only the first-by-name applied entry
+	// per hash (ReceiveAppliedFiles orders by name ASC). If that candidate is
+	// still on disk it is a rename conflict: the file is treated as new and no
+	// other same-hash row is consulted.
+	var oldName string
+	err := store.DB.QueryRowContext(ctx, "SELECT name FROM updates WHERE hash = ? ORDER BY name ASC LIMIT 1", migration.Hash).Scan(&oldName)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var oldName string
-		if err := rows.Scan(&oldName); err != nil {
-			return false, err
-		}
-		if _, present := names[oldName]; present {
-			continue
-		}
-		if _, err := store.DB.ExecContext(ctx, "UPDATE updates SET name = ? WHERE name = ?", migration.Name, oldName); err != nil {
-			return false, err
-		}
-		return true, nil
+	if _, present := names[oldName]; present {
+		return false, nil
 	}
-	if err := rows.Err(); err != nil {
+	if _, err := store.DB.ExecContext(ctx, "UPDATE updates SET name = ? WHERE name = ?", migration.Name, oldName); err != nil {
 		return false, err
 	}
-	return false, nil
+	return true, nil
 }
 
 func ensureMigrationMetadata(ctx context.Context, store *Store) error {
