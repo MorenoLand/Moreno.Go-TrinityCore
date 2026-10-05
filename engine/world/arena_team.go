@@ -141,7 +141,10 @@ func (s *session) handleArenaTeamRoster(ctx context.Context, payload []byte) boo
 const (
 	arenaTeamCreateS           uint32 = 0x00
 	arenaTeamInviteSS          uint32 = 0x01
+	arenaTeamQuitS             uint32 = 0x03
 	arenaTeamInternal          uint32 = 0x01
+	arenaTeamLeaderLeaveS      uint32 = 0x08
+	arenaTeamsLocked           uint32 = 0x1E
 	alreadyInArenaTeam         uint32 = 0x02
 	alreadyInArenaTeamS        uint32 = 0x03
 	alreadyInvitedToArenaTeamS uint32 = 0x05
@@ -355,7 +358,9 @@ func (s *session) handleArenaTeamDecline(ctx context.Context, payload []byte) bo
 }
 
 // handleArenaTeamLeave processes CMSG_ARENA_TEAM_LEAVE (0x353).
-// Reference: WorldSession::HandleArenaTeamLeaveOpcode (ArenaTeamHandler.cpp:211).
+// Reference: WorldSession::HandleArenaTeamLeaveOpcode (ArenaTeamHandler.cpp:211)
+// plus ArenaTeam::DelMember (ArenaTeam.cpp:316) and ArenaTeam::Disband
+// (ArenaTeam.cpp:374).
 func (s *session) handleArenaTeamLeave(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
 		return true
@@ -367,16 +372,98 @@ func (s *session) handleArenaTeamLeave(ctx context.Context, payload []byte) bool
 	}
 
 	cdb := s.server.CharactersStore.DB
-	if cdb != nil {
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", teamID, s.playerGUID)
+	if cdb == nil {
+		return true
 	}
 
-	res := protocol.NewBuffer(12)
-	res.WriteU32(3) // ERR_ARENA_TEAM_QUIT_S
-	res.WriteCString("")
-	res.WriteCString("")
-	res.WriteU32(0)
-	_ = s.write(uint16(protocol.OpcodeSMSG_ARENA_TEAM_COMMAND_RESULT), res.Bytes(), true)
+	// GetArenaTeamById miss -> silent return == C++.
+	var teamName string
+	var aType, captainGUID uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT name, type, captainGuid FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&teamName, &aType, &captainGUID); err != nil {
+		return true
+	}
+
+	var members int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM arena_team_member WHERE arenaTeamId = ?", teamID).Scan(&members)
+
+	// Disallow leave team while in arena == C++ Player::InArena(). Go keeps no
+	// live-instance model; an active arena queue entry past wait-queue is the
+	// port-arm's established proxy. Only the in-progress leg maps to InArena —
+	// invited-but-not-ported players fall to the locked arm below, == C++.
+	inArena := false
+	invited := false
+	for i := range s.bgQueues {
+		e := &s.bgQueues[i]
+		if !e.Active || !e.IsArena {
+			continue
+		}
+		if e.Status == BGStatusInProgress {
+			inArena = true
+		}
+		if e.ArenaType == uint8(aType) && e.InstanceID != 0 {
+			invited = true
+		}
+	}
+	if inArena {
+		s.sendArenaTeamCommandResult(arenaTeamQuitS, "", "", arenaTeamInternal)
+		return true
+	}
+
+	// Team captain can't leave the team if other members are still present.
+	if s.playerGUID == uint64(captainGUID) && members > 1 {
+		s.sendArenaTeamCommandResult(arenaTeamQuitS, "", "", arenaTeamLeaderLeaveS)
+		return true
+	}
+
+	// Player cannot be removed during queues: an invited arena queue entry of
+	// this team's type locks the team (BattlegroundMgr::BGQueueTypeId
+	// (BATTLEGROUND_AA, type) + GetPlayerGroupInfoData IsInvitedToBGInstanceGUID
+	// arm). Go's invited ⇔ entry.InstanceID != 0 convention comes from the
+	// port arm.
+	if invited {
+		s.sendArenaTeamCommandResult(arenaTeamQuitS, "", "", arenaTeamsLocked)
+		return true
+	}
+
+	// If team consists only of the captain, disband the team ==
+	// ArenaTeam::Disband: DelMember each member (online members get QUIT_S with
+	// the team name), then delete the team and member rows. C++ returns without
+	// the leave event or a further command result on this path.
+	if s.playerGUID == uint64(captainGUID) {
+		rows, err := cdb.QueryContext(ctx, "SELECT guid FROM arena_team_member WHERE arenaTeamId = ?", teamID)
+		if err == nil {
+			for rows.Next() {
+				var mGUID int64
+				if rows.Scan(&mGUID) == nil {
+					if ms := s.server.findSessionByGUID(uint64(mGUID)); ms != nil && ms.player != nil {
+						ms.sendArenaTeamCommandResult(arenaTeamQuitS, teamName, "", 0)
+					}
+				}
+			}
+			rows.Close()
+		}
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team_member WHERE arenaTeamId = ?", teamID)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team WHERE arenaTeamId = ?", teamID)
+		s.debug("arena team disbanded on captain leave", "team", teamID)
+		return true
+	}
+
+	// ArenaTeam::DelMember (cleanDb = true): drop the member row, drop the
+	// leaver's queued (not invited) arena queue entries when in a group ==
+	// the group-mate queue cleanup leg (invited players never reach here),
+	// and answer QUIT_S with the team name.
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", teamID, s.playerGUID)
+	if s.groupID != 0 {
+		for i := range s.bgQueues {
+			e := &s.bgQueues[i]
+			if e.Active && e.IsArena && e.ArenaType == uint8(aType) && e.InstanceID == 0 {
+				s.bgQueues[i] = bgQueueEntry{}
+				s.sendBattlefieldStatus(uint8(i))
+			}
+		}
+	}
+	s.sendArenaTeamCommandResult(arenaTeamQuitS, teamName, "", 0)
+	s.debug("arena team leave", "team", teamID)
 	return true
 }
 
