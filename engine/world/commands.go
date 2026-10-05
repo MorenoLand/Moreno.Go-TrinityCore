@@ -3346,6 +3346,15 @@ func (s *session) deleteAccount(ctx context.Context, accountID uint32) accountOp
 			return accountOpDBInternalError
 		}
 	}
+	// C++ AccountMgr::DeleteAccount (AccountMgr.cpp:77-150) issues no explicit
+	// rbac_account_permissions delete: MySQL's ON DELETE CASCADE FK
+	// (fk__rbac_account_permissions__account in sql/mysql/auth.sql) removes them.
+	// SQLite leaves PRAGMA foreign_keys off, so without this the rows would
+	// orphan; the explicit delete reproduces the cascade end state on both dialects.
+	if _, err := tx.ExecContext(ctx, "DELETE FROM rbac_account_permissions WHERE accountId = ?", accountID); err != nil {
+		tx.Rollback()
+		return accountOpDBInternalError
+	}
 	if err := tx.Commit(); err != nil {
 		return accountOpDBInternalError
 	}
