@@ -10,12 +10,18 @@ import (
 // ticket command port: ticket_commandscript (cs_ticket.cpp), the "ticket"
 // root with 16 arms (assign, close, closedlist, comment, complete, delete,
 // escalate, escalatedlist, list, onlinelist, reset, response[append|appendln],
-// togglesystem, unassign, viewid, viewname). THIRTY-SEVENTH of 39 Commands
+// togglesystem, unassign, viewid, viewname). THIRTY-EIGHTH of 40 Commands
 // groups (cs_script_loader.cpp decl 56 / call 101; call order tele(100) ->
 // ticket(101)). Trinity checks permission only on the invoker leaf node
-// (ChatCommand.cpp:487), so each arm gates exactly its own C++ permission
-// (RBAC.h:610-628, 19 constants 742-760 in permissions.go; the root
-// permission 742 covers the bare ".ticket").
+// (ChatCommand.cpp:487); the "ticket" root and the "response" node both use
+// the deprecated 6-arg nullptr+subtable overload (ChatCommand.h:262-264
+// drops the RBACPermissions param, pure SubCommandEntry containers), so the
+// root perm 742 and the response-node perm 754 are DEAD in C++ — bare
+// ".ticket" and bare ".ticket response" print their help listing ungated
+// (same dead-root-perm pattern as the mmap/modify/npc/quest/pet/rbac/reload/
+// reset ports); permissionCommandTicket/permissionCommandTicketResponse stay
+// in permissions.go as documentation. All live arm perms are exact
+// (RBAC.h:610-628: 743-753, 755-760).
 //
 // All arms work directly against the gm_ticket table (tickets.go), whose Go
 // schema matches the C++ one. Assignment/conflict rules mirror the C++
@@ -26,6 +32,15 @@ import (
 // `togglesystem` is native via a new Server.ticketsEnabled flag that gates
 // ticket creation (tickets.go). LANG texts are inlined from the TDB enUS
 // recall (no in-tree trinity_string seed).
+//
+// Documented no-bridge/deltas: the SMSG_GMTICKET_DELETETICKET packet to the
+// submitter (close/delete arms) and the SMSG_GMTICKET_GETTICKET responses
+// (complete/escalate arms) have no packet bridge in the Go tree, so those
+// legs are silent on the submitter side; GmTicket::FormatMessageString is
+// rendered as a compact one-line summary rather than the multi-line C++
+// layout; comment/response text joins the tokenized args with single spaces
+// (C++ takes the raw rest-of-line via strtok, so leading/multiple spaces are
+// not preserved — the framework tokenizes before the handler runs).
 
 // gmTicketRow mirrors the gm_ticket columns the command arms touch.
 type gmTicketRow struct {
@@ -111,9 +126,8 @@ func (s *session) ticketFormat(ctx context.Context, t *gmTicketRow) string {
 // handleCmdTicket dispatches the "ticket" root (cs_ticket.cpp:52-72).
 func (s *session) handleCmdTicket(ctx context.Context, args []string) {
 	if len(args) == 0 {
-		if s.miscDeny(ctx, permissionCommandTicket) {
-			return
-		}
+		// Dead root perm (see header): bare ".ticket" prints the syntax
+		// listing with no gate, == C++.
 		s.sendSysMessage("Syntax: .ticket assign|close|closedlist|comment|complete|delete|escalate|escalatedlist|list|onlinelist|reset|response|togglesystem|unassign|viewid|viewname")
 		return
 	}
@@ -201,8 +215,8 @@ func (s *session) handleTicketAssign(ctx context.Context, args []string) {
 	}
 	// Target must exist and have administrative rights (cs_ticket.cpp:103).
 	canAssign := false
+	var sec uint8
 	if targetGuid != 0 && s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
-		var sec uint8
 		_ = s.server.AuthStore.DB.QueryRowContext(ctx, "SELECT gmlevel FROM account WHERE id = ?", targetAccount).Scan(&sec)
 		if hasPerm, err := accountHasPermission(ctx, s.server.AuthStore.DB, targetAccount, s.server.RealmID, sec, 32); err == nil && hasPerm { // RBAC_PERM_COMMANDS_BE_ASSIGNED_TICKET 32
 			canAssign = true
@@ -221,6 +235,18 @@ func (s *session) handleTicketAssign(ctx context.Context, args []string) {
 		return
 	}
 	t.assignedTo = targetGuid
+	// GmTicket::SetAssignedTo (TicketMgr.h:115-122): assigning to an admin
+	// while the ticket sits in the escalation queue moves it to
+	// TICKET_ESCALATED_ASSIGNED (3); any assignment of an unassigned ticket
+	// marks it TICKET_ASSIGNED (1). IsAdminAccount (AccountMgr.cpp:404) is
+	// SEC_ADMINISTRATOR(3) <= gmlevel <= SEC_CONSOLE.
+	isAdmin := sec >= 3
+	switch {
+	case isAdmin && t.escalated == 2: // TICKET_IN_ESCALATION_QUEUE
+		t.escalated = 3 // TICKET_ESCALATED_ASSIGNED
+	case t.escalated == 0: // TICKET_UNASSIGNED
+		t.escalated = 1 // TICKET_ASSIGNED
+	}
 	t.lastModifiedTime = time.Now().Unix()
 	s.saveGMTicket(ctx, t)
 	s.server.sendGlobalGMMessage(ctx, fmt.Sprintf("Ticket %d assigned to %s.", t.id, targetName))
@@ -338,16 +364,18 @@ func (s *session) handleTicketEscalate(ctx context.Context, args []string) {
 		return
 	}
 	t, ok := s.ticketOpenByID(ctx, args, "Syntax: .ticket escalate <id>")
-	if !ok || t.completed || t.escalated != 0 {
+	if !ok || t.completed || t.escalated != 0 { // != TICKET_UNASSIGNED (TicketMgr.h:60)
 		if ok {
 			s.sendSysMessage("Ticket does not exist.") // LANG_COMMAND_TICKETNOTEXIST 2005
 		}
 		return
 	}
-	t.escalated = 1 // TICKET_IN_ESCALATION_QUEUE
+	t.escalated = 2 // TICKET_IN_ESCALATION_QUEUE (TicketMgr.h:62)
 	t.lastModifiedTime = time.Now().Unix()
 	s.saveGMTicket(ctx, t)
-	s.sendSysMessage(fmt.Sprintf("Ticket %d escalated.", t.id))
+	// C++ sends no message to the invoking GM here (the submitter gets the
+	// ticket packet via SendTicket, which has no Go bridge), so this arm is
+	// silent, == C++.
 }
 
 // handleTicketEscalatedList mirrors HandleGMTicketListEscalatedCommand.
@@ -355,7 +383,7 @@ func (s *session) handleTicketEscalatedList(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandTicketEscalatedlist) {
 		return
 	}
-	s.ticketListQuery(ctx, "escalated = 1 AND closedBy = 0", "Escalated tickets:")
+	s.ticketListQuery(ctx, "escalated = 2 AND closedBy = 0", "Escalated tickets:") // TICKET_IN_ESCALATION_QUEUE (TicketMgr.h:62)
 }
 
 // ticketListQuery prints open/closed/escalated ticket lists.
@@ -397,7 +425,8 @@ func (s *session) handleTicketList(ctx context.Context, onlineOnly bool) {
 		return
 	}
 	if !onlineOnly {
-		s.ticketListQuery(ctx, "closedBy = 0", "Open tickets:")
+		// TicketMgr::ShowList (TicketMgr.cpp:421): !IsClosed() && !IsCompleted().
+		s.ticketListQuery(ctx, "closedBy = 0 AND completed = 0", "Open tickets:")
 		return
 	}
 	// Restrict to tickets whose submitter is online.
@@ -422,7 +451,7 @@ func (s *session) ticketListQueryOnline(ctx context.Context, guids []uint64, hea
 	empty := true
 	for _, g := range guids {
 		var id uint32
-		if err := cdb.QueryRowContext(ctx, "SELECT id FROM gm_ticket WHERE playerGuid = ? AND closedBy = 0 LIMIT 1", g).Scan(&id); err != nil {
+		if err := cdb.QueryRowContext(ctx, "SELECT id FROM gm_ticket WHERE playerGuid = ? AND closedBy = 0 AND completed = 0 LIMIT 1", g).Scan(&id); err != nil {
 			continue
 		}
 		if t, ok := s.loadGMTicket(ctx, id); ok {
@@ -537,7 +566,7 @@ func (s *session) handleTicketViewName(ctx context.Context, args []string) {
 		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid FROM characters WHERE UPPER(name) = UPPER(?) LIMIT 1", name).Scan(&guid)
 	}
 	if guid == 0 {
-		s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
+		s.sendSysMessage("No players found.") // LANG_NO_PLAYERS_FOUND 330 (cs_ticket.cpp:462)
 		return
 	}
 	var id uint32
@@ -560,23 +589,34 @@ func (s *session) handleTicketViewName(ctx context.Context, args []string) {
 // (cs_ticket.cpp:52-53): append, appendln.
 func (s *session) handleTicketResponse(ctx context.Context, args []string) {
 	if len(args) == 0 {
-		if s.miscDeny(ctx, permissionCommandTicketResponse) {
-			return
-		}
+		// Dead response-node perm (see header): bare ".ticket response"
+		// prints the syntax listing with no gate, == C++.
 		s.sendSysMessage("Syntax: .ticket response append|appendln <id> <text>")
 		return
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
 	newLine := false
+	// C++ prefix matching (ChatCommand.cpp:268-285): exact match wins, a
+	// proper prefix of "append" is also a prefix of "appendln" and is
+	// ambiguous (LANG_CMD_AMBIGUOUS 194; the syntax line is the tree's
+	// stand-in), longer "appendl*" prefixes resolve to appendln.
 	switch {
-	case strings.HasPrefix("appendln", sub):
+	case sub == "append":
+		if s.miscDeny(ctx, permissionCommandTicketResponseAppend) {
+			return
+		}
+	case sub == "appendln":
 		newLine = true
 		if s.miscDeny(ctx, permissionCommandTicketResponseAppendln) {
 			return
 		}
 	case strings.HasPrefix("append", sub):
-		if s.miscDeny(ctx, permissionCommandTicketResponseAppend) {
+		s.sendSysMessage("Syntax: .ticket response append|appendln <id> <text>")
+		return
+	case strings.HasPrefix("appendln", sub):
+		newLine = true
+		if s.miscDeny(ctx, permissionCommandTicketResponseAppendln) {
 			return
 		}
 	default:
