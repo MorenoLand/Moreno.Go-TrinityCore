@@ -32,7 +32,7 @@
 -- hook itself is bridged; its other legs — the two DATA_ANUBARAK_
 -- WALL GO-state doors (instance->GetGameObject, GO_STATE_ACTIVE —
 -- instance-script model absent, standing blocker), the
--- DoStartTimedAchievement(ACHIEV_GOTTA_GO_START_EVENT 20382)
+-- DoStartTimedAchievement(ACHIEV_GOTTA_GO_START_EVENT 20381)
 -- (instance model absent), events.SetPhase(PHASE_EMERGE) (no phase
 -- bridge on the Lua surface — gal_darah / moorabi precedent),
 -- EVENT_CLOSE_DOOR (5s GO-state flip — instance model absent),
