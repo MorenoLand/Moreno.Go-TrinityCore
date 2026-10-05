@@ -1567,12 +1567,58 @@ func (s *session) handleDismissCritter(ctx context.Context, payload []byte) bool
 	return true
 }
 
+// controlledPetMotion mirrors the GetFirstControlled gate shared by the pet
+// command handlers (PetHandler.cpp:97 HandlePetAction, :433 HandlePetSetAction,
+// :269 HandlePetStopAttack): the GUID must resolve to the player's active pet
+// or to a creature the player currently charms; anything else is a silent drop.
+func (s *session) controlledPetMotion(petGUID uint64) *creatureMotion {
+	if s == nil || s.server == nil || s.player == nil || petGUID == 0 {
+		return nil
+	}
+	s.server.motionMu.Lock()
+	defer s.server.motionMu.Unlock()
+	if petGUID != s.player.PetGUID {
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID)
+		if motion == nil || motion.CharmerGUID != s.playerGUID {
+			return nil
+		}
+		return motion
+	}
+	return s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID)
+}
+
 // handlePetAbandon processes CMSG_PET_ABANDON (0x176).
-// Reference: WorldSession::HandlePetAbandonOpcode (PetHandler.cpp:52).
+// Reference: WorldSession::HandlePetAbandonOpcode (PetHandler.cpp:695-710).
 func (s *session) handlePetAbandon(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
+	if len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	petGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	petNumber := s.petNumberForGUID(petGUID)
+	if petNumber == 0 || s.server == nil || s.server.CharactersStore == nil {
+		return true
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return true
+	}
+	// PetHandler.cpp:703-709: only hunter pets can be abandoned; the GUID
+	// must resolve to the player's own pet (petNumberForGUID already requires
+	// the active-pet GUID match).
+	var petType int64
+	if err := cdb.QueryRowContext(ctx, "SELECT PetType FROM character_pet WHERE id = ? AND owner = ?", petNumber, s.playerGUID).Scan(&petType); err != nil || petType != 1 {
+		return true
+	}
+	// PetHandler.cpp:705-708: abandoning the active pet drains 50000
+	// happiness first, clamped at zero.
+	_, _ = cdb.ExecContext(ctx, "UPDATE character_pet SET curhappiness = CASE WHEN curhappiness > 50000 THEN curhappiness - 50000 ELSE 0 END WHERE id = ? AND owner = ?", petNumber, s.playerGUID)
 	s.unsummonPet(ctx, petSaveAsDeleted)
 	return true
 }
@@ -1836,6 +1882,20 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 		aiReactionHostile uint32 = 2
 	)
 
+	// PetHandler.cpp:97-102: the action target must be the player's first
+	// controlled unit — any other GUID is a silent drop.
+	motion := s.controlledPetMotion(petGUID)
+	if motion == nil {
+		return true
+	}
+	// PetHandler.cpp:104-111: a dead pet drops command/reaction/disabled
+	// actions (the spell arm survives only for CASTABLE_WHILE_DEAD spells,
+	// which Go's spell model does not carry — the cast arm keeps its current
+	// behavior and the nuance stays a documented delta).
+	if motion.Health == 0 && (actFlag == actCommand || actFlag == actReaction || actFlag == actDisabled) {
+		return true
+	}
+
 	switch actFlag {
 	case actCommand:
 		switch spellOrAction {
@@ -1867,7 +1927,23 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 			_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
 			s.debug("pet stay command", "account", s.accountName, "pet", petGUID)
 		case commandAbandon:
-			s.unsummonPet(ctx, petSaveAsDeleted)
+			// PetHandler.cpp:242-256: a charmed creature is un-charmed
+			// (StopCastingCharm) rather than removed; hunter pets are
+			// deleted outright while other summoned pets are merely
+			// unsummoned (kept out of the active slot).
+			if motion.CharmerGUID == s.playerGUID && s.server != nil {
+				s.server.uncharmCreature(creatureAuraKey{Map: s.player.Map, InstanceID: s.player.InstanceID, GUID: petGUID}, s.playerGUID)
+				s.debug("pet charm released via command", "account", s.accountName, "pet", petGUID)
+				break
+			}
+			saveMode := uint8(petSaveAsDeleted)
+			if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				var petType int64
+				if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT PetType FROM character_pet WHERE owner = ? AND id = ?", s.playerGUID, s.petNumberForGUID(petGUID)).Scan(&petType); err == nil && petType != 1 {
+					saveMode = uint8(petSaveNotInSlot)
+				}
+			}
+			s.unsummonPet(ctx, saveMode)
 			s.debug("pet abandoned via command", "account", s.accountName, "pet", petGUID)
 		}
 	case actReaction:
@@ -2156,6 +2232,14 @@ func (s *session) handlePetRename(ctx context.Context, payload []byte) bool {
 	}
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		petNumber := s.petNumberForGUID(petGUID)
+		// PetHandler.cpp:591-596: only hunter pets can be renamed; the GUID
+		// must resolve to the player's own pet (petNumberForGUID already
+		// requires the active-pet GUID match) and the owner column must match.
+		var petType int64
+		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT PetType FROM character_pet WHERE id = ? AND owner = ?", petNumber, s.playerGUID).Scan(&petType)
+		if petNumber == 0 || petType != 1 {
+			return true
+		}
 		now := time.Now().Unix()
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
 			"UPDATE character_pet SET name = ?, renamed = 1, savetime = ? WHERE id = ? AND owner = ?",
@@ -2174,6 +2258,12 @@ func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
 	petGUID, err := r.ReadU64()
 	if err != nil {
 		return false
+	}
+	// PetHandler.cpp:433-438: the GUID must be the player's first controlled
+	// pet — the Go action-bar model is the active pet's DB row, so charmed
+	// creatures have no bridge here and are dropped as well.
+	if s.player == nil || petGUID == 0 || petGUID != s.player.PetGUID {
+		return true
 	}
 	count := 1
 	if len(payload) >= 24 {
@@ -2213,8 +2303,13 @@ func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
 	for i := 0; i < count; i++ {
 		pos, pErr := r.ReadU32()
 		data, dErr := r.ReadU32()
-		if pErr != nil || dErr != nil || pos >= 10 {
+		if pErr != nil || dErr != nil {
 			continue
+		}
+		// PetHandler.cpp:460-461: an out-of-range action-bar position drops
+		// the whole packet instead of skipping the entry.
+		if pos >= 10 {
+			return true
 		}
 		aType := uint8((data >> 24) & 0xFF)
 		aAction := data & 0x00FFFFFF
@@ -2317,13 +2412,31 @@ func (s *session) handlePetSpellAutocast(ctx context.Context, payload []byte) bo
 }
 
 // handlePetStopAttack processes CMSG_PET_STOP_ATTACK (0x2EA).
-// Reference: WorldSession::HandlePetStopAttack (PetHandler.cpp:401).
+// Reference: WorldSession::HandlePetStopAttack (PetHandler.cpp:261-280).
 func (s *session) handlePetStopAttack(ctx context.Context, payload []byte) bool {
 	if len(payload) < 8 {
 		return true
 	}
 	r := protocol.NewReader(payload)
 	petGUID, _ := r.ReadU64()
+	// PetHandler.cpp:269-277: the GUID must resolve to the player's pet or
+	// charmed creature and the unit must be alive; the stop clears the victim
+	// (Unit::AttackStop) and drops the pet's threat.
+	motion := s.controlledPetMotion(petGUID)
+	if motion == nil || motion.Health == 0 || s.server == nil {
+		return true
+	}
+	s.server.motionMu.Lock()
+	victim := motion.TargetGUID
+	motion.TargetGUID = 0
+	motion.InCombat = false
+	if motion.ThreatMgr != nil {
+		motion.ThreatMgr.ClearThreat()
+	}
+	s.server.motionMu.Unlock()
+	stopPkt := buildAttackStop(petGUID, victim, false)
+	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
+	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, s)
 	s.debug("pet stop attack", "account", s.accountName, "pet", petGUID)
 	return true
 }
