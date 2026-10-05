@@ -6103,7 +6103,6 @@ func (s *session) handleCmdUnBanCharacter(ctx context.Context, args []string) {
 // TrinityCore names; aliases mark non-prefix spellings.
 func (s *session) buildCommandTree() *commandNode {
 	root := &commandNode{name: "", children: make(map[string]*commandNode)}
-	root.add("help", func(ctx context.Context, args []string) bool { s.handleCmdHelp(args); return true }, nil, map[string]string{"?": "help"})
 	root.add("gm", func(ctx context.Context, args []string) bool { s.handleCmdGM(ctx, args); return true }, []string{"chat", "fly", "ingame", "list", "visible", "on", "off"}, map[string]string{"vis": "visible"})
 	root.add("cheat", func(ctx context.Context, args []string) bool { return s.handleCmdCheat(ctx, args) }, []string{"god", "casttime", "cooldown", "power", "waterwalk", "status", "taxi", "explore"}, nil)
 	root.add("tele", func(ctx context.Context, args []string) bool { s.handleCmdTele(ctx, args); return true }, []string{"add", "del", "name", "group"}, nil)
@@ -6112,7 +6111,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("wp", func(ctx context.Context, args []string) bool { s.handleCmdWp(ctx, args); return true }, []string{"add", "event", "load", "modify", "unload", "reload", "show"}, nil)
 	root.add("go", func(ctx context.Context, args []string) bool { s.handleCmdGo(ctx, args); return true }, []string{"creature", "gameobject", "graveyard", "grid", "taxinode", "areatrigger", "zonexy", "xyz", "ticket", "offset", "instance", "boss"}, nil)
 	root.add("modify", func(ctx context.Context, args []string) bool { s.handleCmdModify(ctx, args); return true }, []string{"hp", "mana", "energy", "rage", "runicpower", "money", "honor", "arenapoints", "xp", "drunk", "scale", "spell", "standstate", "mount", "gender", "bit", "faction", "phase", "speed", "talentpoints", "reputation"}, map[string]string{"mod": "modify"})
-	root.add("additem", func(ctx context.Context, args []string) bool { s.handleCmdAddItem(ctx, args); return true }, []string{"set"}, map[string]string{"item": "additem"})
+	root.add("additem", func(ctx context.Context, args []string) bool { s.handleCmdAddItem(ctx, args); return true }, []string{"set"}, nil)
 	root.add("cast", func(ctx context.Context, args []string) bool { s.handleCmdCast(ctx, args); return true }, nil, nil)
 	root.add("server", func(ctx context.Context, args []string) bool { s.handleCmdServer(ctx, args); return true }, []string{"corpses", "debug", "exit", "idlerestart", "idleshutdown", "info", "motd", "plimit", "restart", "shutdown", "set"}, nil)
 	root.add("character", func(ctx context.Context, args []string) bool { s.handleCmdCharacter(ctx, args); return true }, []string{"customize", "changefaction", "changerace", "changeaccount", "deleted", "erase", "level", "rename", "reputation", "titles"}, map[string]string{"char": "character"})
@@ -6166,7 +6165,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("distance", func(ctx context.Context, args []string) bool { s.handleCmdDistance(ctx, args); return true }, nil, nil)
 	root.add("flusharenapoints", func(ctx context.Context, args []string) bool { s.handleCmdFlushArenaPoints(ctx, args); return true }, nil, nil)
 	root.add("freeze", func(ctx context.Context, args []string) bool { s.handleCmdFreeze(ctx, args); return true }, nil, nil)
-	root.add("revive", func(ctx context.Context, args []string) bool { s.handleCmdRevive2(ctx, args); return true }, nil, map[string]string{"res": "revive", "rev": "revive"})
+	root.add("revive", func(ctx context.Context, args []string) bool { s.handleCmdRevive2(ctx, args); return true }, nil, nil)
 	root.add("dismount", func(ctx context.Context, args []string) bool { s.handleCmdDismount(ctx, args); return true }, nil, nil)
 	root.add("saveall", func(ctx context.Context, args []string) bool { s.handleCmdSaveAll(ctx); return true }, nil, nil)
 	root.add("save", func(ctx context.Context, args []string) bool { s.handleCmdSave2(ctx); return true }, nil, nil)
