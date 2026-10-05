@@ -769,8 +769,10 @@ func (s *session) handleChannelSetOwner(ctx context.Context, payload []byte) boo
 }
 
 // handleChannelOwner processes CMSG_CHANNEL_OWNER (0x09E).
-// Reference: Channel::SendWhoOwner - members learn the owner GUID, everyone
-// else is told they are not on the channel.
+// Reference: Channel::SendWhoOwner - members learn the owner NAME
+// (ChannelOwnerAppend, ChannelAppenders.h:186: a C-string, "Nobody" for
+// constant channels or no owner), everyone else is told they are not on
+// the channel.
 func (s *session) handleChannelOwner(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || len(payload) == 0 {
 		return true
@@ -786,13 +788,25 @@ func (s *session) handleChannelOwner(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	_, on := ch.Members[s]
+	custom := ch.Flags&channelFlagCustom != 0
 	owner := ch.Owner
+	ownerName := ""
+	if custom && owner != 0 {
+		for m := range ch.Members {
+			if m.playerGUID == owner && m.player != nil {
+				ownerName = m.player.Name
+				break
+			}
+		}
+	} else {
+		ownerName = "Nobody"
+	}
 	s.server.channelsMu.RUnlock()
 	if !on {
 		_ = s.sendChannelNotify(channelNotMemberNotice, name, nil)
 		return true
 	}
-	_ = s.sendChannelNotify(channelChannelOwnerNotice, name, &channelNotifyGUID{GUID: owner})
+	_ = s.sendChannelNotify(channelChannelOwnerNotice, name, &channelNotifyName{Name: ownerName})
 	return true
 }
 
