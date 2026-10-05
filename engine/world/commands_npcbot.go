@@ -200,6 +200,16 @@ func (s *session) npcbotAddUsage() {
 // single dismiss answers "NOT removed for some stupid reason!", and the
 // remove-all write skips temp rows (dismissableCountByOwner mirrors the
 // HaveBot gates the same way).
+// releaseNpcBotOwnerCache mirrors the character-delete npcbot owner reset
+// (Player.cpp:4532-4534 → BotDataMgr::UpdateNpcBotDataAll, unfiltered) into
+// the manager's in-memory mirror after the delete tx commits.
+func (s *session) releaseNpcBotOwnerCache(guid uint64) {
+	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
+		return
+	}
+	s.server.Features.NPCBots.ReleaseOwnerCache(uint32(guid))
+}
+
 func (s *session) handleNpcBotRemoveCommand(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandNPCBotRemove) {
 		return

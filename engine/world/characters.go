@@ -460,6 +460,7 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 	if err := tx.Commit(); err != nil {
 		return false
 	}
+	s.releaseNpcBotOwnerCache(guid)
 	for _, contactGUID := range deletedContacts {
 		if sess := s.server.findSessionByGUID(contactGUID); sess != nil && sess.worldReady.Load() {
 			_ = sess.sendFriendStatus(friendsResultRemoved, guid, "")

@@ -2598,6 +2598,7 @@ func (s *session) deleteCharacterFromDB(ctx context.Context, guid uint64, accoun
 		return
 	}
 	_ = tx.Commit()
+	s.releaseNpcBotOwnerCache(guid)
 }
 
 // handleCharacterErase mirrors HandleCharacterEraseCommand
@@ -3328,6 +3329,7 @@ func (s *session) deleteAccount(ctx context.Context, accountID uint32) accountOp
 		if err := tx.Commit(); err != nil {
 			return accountOpDBInternalError
 		}
+		s.releaseNpcBotOwnerCache(guid)
 	}
 	for _, stmt := range []string{"CHAR_DEL_TUTORIALS", "CHAR_DEL_ACCOUNT_DATA", "CHAR_DEL_CHARACTER_BAN"} {
 		if _, err := s.server.CharactersStore.ExecStatement(ctx, database.StatementID(stmt), accountID); err != nil {

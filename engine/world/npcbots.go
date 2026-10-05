@@ -296,6 +296,31 @@ func (m *NPCBotManager) UpdateOwnerAll(ctx context.Context, previousOwner, owner
 	return nil
 }
 
+// ReleaseOwnerCache sweeps the in-memory mirror after a character delete.
+// Player::DeleteFromDB CHAR_DELETE_REMOVE (Player.cpp:4532-4534) resets
+// characters_npcbot owners via BotDataMgr::UpdateNpcBotDataAll
+// (botdatamgr.cpp:388-406, CHAR_UPD_NPCBOT_OWNER_ALL — "UPDATE
+// characters_npcbot SET owner = ? WHERE owner = ?", intentionally unfiltered,
+// temp rows included). The DB write lands inside deleteCharacterOwnedState's
+// tx; this mirrors the same unfiltered reset into the manager's
+// startup-loaded cache. C++ keeps no such cache (BotDataMgr is stateless),
+// so the sweep has no C++ counterpart — it exists only to keep Go's mirror
+// from going stale. Must be called after the delete tx commits.
+func (m *NPCBotManager) ReleaseOwnerCache(previousOwner uint32) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for entry, data := range m.bots {
+		if data.Owner != previousOwner {
+			continue
+		}
+		data.Owner = 0
+		m.bots[entry] = data
+	}
+}
+
 func (m *NPCBotManager) CountByOwner(owner uint32) uint8 {
 	if m == nil {
 		return 0
