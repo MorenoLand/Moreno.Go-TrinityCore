@@ -94,6 +94,29 @@ const (
 	ItemEventOnRemove      = 5
 )
 
+// Eluna InstanceEvents contract for RegisterMapEvent/RegisterInstanceEvent.
+// Numbering is the TrinityCore LuaEngine numbering (LuaEngine/Hooks.h
+// InstanceEvents). RegisterMapEvent binds a map ID (Go kind "map:<mapID>");
+// RegisterInstanceEvent binds an instance ID (Go kind "instance:<id>") —
+// C++ fires both binding maps at every fire site
+// (LuaEngine/InstanceHooks.cpp START_HOOK). The engine fires
+// ON_PLAYER_ENTER (4), ON_GAMEOBJECT_CREATE (6) and
+// ON_CHECK_ENCOUNTER_IN_PROGRESS (7); ON_INITIALIZE (1) is #ifndef
+// TRINITY-dead in C++ on this fork, ON_LOAD (2) has no Go instance-data
+// load path, ON_UPDATE (3) has no Go per-instance tick, and
+// ON_CREATURE_CREATE (5) has no central Go creature-creation funnel — all
+// four carry constants but no Go fire sites (documented in
+// engine/world/instance_hooks.go).
+const (
+	InstanceEventOnInitialize             = 1
+	InstanceEventOnLoad                   = 2
+	InstanceEventOnUpdate                 = 3
+	InstanceEventOnPlayerEnter            = 4
+	InstanceEventOnCreatureCreate         = 5
+	InstanceEventOnGameObjectCreate       = 6
+	InstanceEventOnCheckEncounterProgress = 7
+)
+
 // Eluna ServerEvents contract for RegisterServerEvent. Numbering is the
 // TrinityCore LuaEngine numbering (LuaEngine/Hooks.h ServerEvents); only
 // the events the engine fires carry Go constants.
@@ -457,6 +480,24 @@ func (r *Runtime) TriggerGameObjectEvent(ctx context.Context, entry uint32, even
 // leading event.
 func (r *Runtime) TriggerItemEvent(ctx context.Context, entry uint32, event int, args ...any) ([]any, error) {
 	return r.Trigger(ctx, "item:"+strconv.FormatUint(uint64(entry), 10), event, append([]any{event}, args...)...)
+}
+
+// TriggerInstanceEvent fires hooks registered with RegisterMapEvent(mapID,
+// event, fn) (kind "map:<mapID>") and RegisterInstanceEvent(instanceID,
+// event, fn) (kind "instance:<instanceID>"), mirroring Eluna::InstanceHooks
+// (LuaEngine/InstanceHooks.cpp), whose START_HOOK macro calls
+// CallAllFunctions over both the map-level and instance-level binding maps
+// at every fire site. C++ instance hooks pass (event, instance_data, map,
+// ...) (LuaEngine/InstanceHooks.cpp), so the event number is prepended like
+// TriggerMapEvent. Callers pass the C++ argument order without the leading
+// event.
+func (r *Runtime) TriggerInstanceEvent(ctx context.Context, mapID, instanceID uint32, event int, args ...any) ([]any, error) {
+	mapValues, err := r.Trigger(ctx, "map:"+strconv.FormatUint(uint64(mapID), 10), event, append([]any{event}, args...)...)
+	if err != nil {
+		return mapValues, err
+	}
+	instanceValues, err := r.Trigger(ctx, "instance:"+strconv.FormatUint(uint64(instanceID), 10), event, append([]any{event}, args...)...)
+	return append(mapValues, instanceValues...), err
 }
 
 func (r *Runtime) TriggerMapEvent(ctx context.Context, mapID uint32, event int, args ...any) ([]any, error) {

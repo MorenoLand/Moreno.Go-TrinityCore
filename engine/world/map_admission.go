@@ -128,7 +128,7 @@ func (s *session) playerCannotEnterMap(ctx context.Context, mapID uint32) mapEnt
 					check.Reason = mapEntryMaxPlayers
 					return check
 				}
-				if entry.IsRaid() && s.server.instanceEncounterInProgress(mapID, uint32(groupInstanceID)) {
+				if entry.IsRaid() && (s.server.instanceEncounterInProgress(mapID, uint32(groupInstanceID)) || s.instanceEncounterHooked(ctx, mapID, uint32(groupInstanceID))) {
 					check.Reason = mapEntryZoneInCombat
 					return check
 				}

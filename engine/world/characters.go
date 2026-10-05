@@ -793,6 +793,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventMapChange, s.luaPlayer())
 	s.triggerMapEntryEvent(ctx)
+	s.fireInstancePlayerEnter(ctx)
 	s.streamDynamicSpellObjects()
 	zoneID, areaID := s.server.zoneAndAreaID(state.Map, state.X, state.Y, state.Z, state.Zone)
 	state.Zone = zoneID
@@ -1155,7 +1156,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	if !s.worldportInstanceHasRoom(selection, mapEntry) {
 		return fallbackHomebind()
 	}
-	if !s.initialLoginPending && mapEntry.IsRaid() && s.server.instanceEncounterInProgress(state.Map, selection.InstanceID) {
+	if !s.initialLoginPending && mapEntry.IsRaid() && (s.server.instanceEncounterInProgress(state.Map, selection.InstanceID) || s.instanceEncounterHooked(ctx, state.Map, selection.InstanceID)) {
 		return fallbackHomebind()
 	}
 	admissionReserved := mapEntry.IsDungeon() && !s.isMapAdmissionGM()
@@ -1261,6 +1262,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	s.sendVisibleCreatureAuras(state)
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventMapChange, s.luaPlayer())
 	s.triggerMapEntryEvent(ctx)
+	s.fireInstancePlayerEnter(ctx)
 	s.streamDynamicSpellObjects()
 	// WorldSession::HandleMoveWorldportAck mount-allow leg (MovementHandler.cpp):
 	// allowMount = !IsDungeon() || IsBattlegroundOrArena(), overridden by the

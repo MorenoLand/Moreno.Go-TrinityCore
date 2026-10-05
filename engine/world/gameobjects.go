@@ -1060,6 +1060,11 @@ func (s *Server) spawnDynamicGameObject(dyn *dynamicGameObjectState) {
 	// GOs are per-client update packets, so their map add has no Go
 	// counterpart.
 	s.triggerGameObjectEvent(context.Background(), dyn.GUID, scripting.GameObjectEventOnAdd)
+	// Eluna INSTANCE_EVENT_ON_GAMEOBJECT_CREATE (event 6), fired from
+	// GameObject::AddToWorld (GameObject.cpp:213) via the instance's zone
+	// script. Instance maps only; the static-spawn delta is documented in
+	// engine/world/instance_hooks.go.
+	s.triggerInstanceGameObjectCreate(dyn)
 }
 
 func isFishingSpell(spellID uint32) bool {
