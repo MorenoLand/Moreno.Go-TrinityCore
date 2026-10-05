@@ -7,11 +7,11 @@
 -- (ScriptedAI via shared npc_gothik_minion_baseAI); npc_gothik_trigger
 -- (ScriptedAI); spell_gothik_shadow_bolt_volley (SpellScript via
 -- SpellScriptLoader); AddSC_boss_gothik registers all ten; loader
--- decl 72 / call 267 per northrend_script_loader.cpp — the TENTH
--- Naxxramas group in AddNorthrendScripts(), immediately after
--- AddSC_boss_gluth(), under the "// Naxxramas" marker; the call after
--- it is AddSC_boss_thaddius() (call 268) — loader order confirmed this
--- run; the checkpoint sequence (gluth -> gothik) is followed).
+-- decl 72 / call 267 per northrend_script_loader.cpp — the FOURTEENTH
+-- Naxxramas group under the "// Naxxramas" block comment (:58/:253),
+-- immediately after AddSC_boss_heigan() (decl 71 / call 266); the call
+-- after it is AddSC_boss_thaddius() (decl 73 / call 268) — loader order
+-- verified in the audit run.
 -- Entry: 16060 Gothik the Harvester (naxxramas.h NPC_GOTHIK — kalecgos
 -- pass; instance_naxxramas.cpp binds NPC_GOTHIK -> GothikGUID and
 -- DATA_GOTHIK -> GothikGUID; the CreatureScript ScriptName binding is
