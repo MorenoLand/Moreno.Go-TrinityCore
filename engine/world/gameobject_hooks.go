@@ -129,3 +129,55 @@ func (s *session) fireGameObjectQuestHook(ctx context.Context, giverGUID uint64,
 	args = append(args, extra...)
 	_, _ = s.server.Features.Scripts.TriggerGameObjectEvent(ctx, entry, event, args...)
 }
+
+// fireGameObjectGossipHelloHook dispatches GOSSIP_EVENT_ON_HELLO (1) for the
+// gameobject_gossip bindings as (event, player, go), mirroring
+// Eluna::OnGossipHello(Player*, GameObject*) (GossipHooks.cpp:32), which
+// fires at the head of GameObject::Use (GameObject.cpp:1502) and skips the
+// native use arms when a handler returns false. The caller passes the C++
+// argument order without the leading event — TriggerGameObjectGossipEvent
+// prepends it, like TriggerItemGossipEvent. The pending gossip menu is
+// cleared first, but only when a handler is actually registered: C++'s
+// ClearMenus() sits behind START_HOOK_WITH_RETVAL's early return for
+// unbound entries. Returns true when a handler returned false, following the
+// engine's luaCancelled convention, same as fireItemGossipHelloHook.
+//
+// Documented no-bridge (gameobject_gossip family): ON_SELECT (2) fires from
+// the guid.IsGameObject() arm of HandleGossipSelectOptionOpcode
+// (MiscHandler.cpp:138-198); Go never opens gameobject gossip menus
+// (gameobjects.go:541 — Go's gossip path is creature-only), so that arm can
+// never be reached and selections are rejected at the sender cheat check.
+//
+// Documented no-bridge (player_gossip family): ON_HELLO does not exist in
+// Eluna — GossipHooks.cpp has no player hello arm and Hooks.h:327 documents
+// the hello object as Creature/GameObject/Item only. ON_SELECT (2) fires
+// from the guid.IsPlayer() arm of HandleGossipSelectOptionOpcode via
+// ScriptMgr::OnGossipSelect (ScriptMgr.cpp:2178), keyed by menuId; Go never
+// opens player gossip menus, so that arm can never be reached either.
+func (s *session) fireGameObjectGossipHelloHook(ctx context.Context, guid uint64) bool {
+	if s == nil || s.server == nil || uint16(guid>>48) != 0xF110 {
+		return false
+	}
+	if s.server.Features == nil || s.server.Features.Scripts == nil {
+		return false
+	}
+	goObj := s.luaGameObject(ctx, guid)
+	if goObj == nil {
+		// Dynamic/instance spawns have no gameobject-table row; resolve
+		// from the object registry instead, like fireGameObjectEvent.
+		goObj = s.server.serverLuaGameObject(ctx, guid)
+	}
+	if goObj == nil {
+		return false
+	}
+	entry := uint32((guid >> 24) & 0x00FFFFFF)
+	if !s.server.Features.Scripts.HasHook(scripting.GameObjectGossipKind(entry), scripting.GossipEventOnHello) {
+		return false
+	}
+	s.gossip = nil
+	values, err := s.server.Features.Scripts.TriggerGameObjectGossipEvent(ctx, entry, scripting.GossipEventOnHello, s.luaPlayer(), goObj)
+	if err != nil {
+		s.debug("lua gameobject gossip hello failed", "entry", entry, "error", err)
+	}
+	return luaCancelled(values)
+}

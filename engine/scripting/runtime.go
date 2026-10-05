@@ -99,8 +99,13 @@ const (
 // RegisterPlayerGossipEvent. Numbering is the TrinityCore LuaEngine
 // numbering (LuaEngine/Hooks.h GossipEvents). The engine fires the item
 // gossip arms (ON_HELLO, ON_SELECT) via TriggerItemGossipEvent; the
-// creature arms fire inline in engine/world/gossip.go, and the
-// gameobject/player arms have no fire sites yet.
+// creature arms fire inline in engine/world/gossip.go; the gameobject hello
+// arm fires via TriggerGameObjectGossipEvent from handleGameObjectUse, and
+// the gameobject/player select arms have no fire sites — Go never opens
+// gameobject or player gossip menus (see engine/world/gameobjects.go:541),
+// so CMSG_GOSSIP_SELECT_OPTION with a gameobject/player GUID is rejected at
+// the sender check, like the C++ fire conditions in
+// HandleGossipSelectOptionOpcode (MiscHandler.cpp:138-198).
 const (
 	GossipEventOnHello  = 1
 	GossipEventOnSelect = 2
@@ -527,6 +532,23 @@ func ItemGossipKind(entry uint32) string {
 // leading event.
 func (r *Runtime) TriggerItemGossipEvent(ctx context.Context, entry uint32, event int, args ...any) ([]any, error) {
 	return r.Trigger(ctx, ItemGossipKind(entry), event, append([]any{event}, args...)...)
+}
+
+// GameObjectGossipKind is the hook kind for RegisterGameObjectGossipEvent(entry,
+// event, fn): "gameobject_gossip:<entry>", mirroring Eluna's
+// GameObjectGossipBindings entry key (LuaEngine/GossipHooks.cpp).
+func GameObjectGossipKind(entry uint32) string {
+	return "gameobject_gossip:" + strconv.FormatUint(uint64(entry), 10)
+}
+
+// TriggerGameObjectGossipEvent fires hooks registered with
+// RegisterGameObjectGossipEvent(entry, event, fn) for the given gameobject
+// entry. C++ Eluna gossip hooks pass (event, player, go, ...)
+// (LuaEngine/GossipHooks.cpp), so the event number is prepended like
+// TriggerItemGossipEvent. Callers pass the C++ argument order without the
+// leading event.
+func (r *Runtime) TriggerGameObjectGossipEvent(ctx context.Context, entry uint32, event int, args ...any) ([]any, error) {
+	return r.Trigger(ctx, GameObjectGossipKind(entry), event, append([]any{event}, args...)...)
 }
 
 // TriggerInstanceEvent fires hooks registered with RegisterMapEvent(mapID,

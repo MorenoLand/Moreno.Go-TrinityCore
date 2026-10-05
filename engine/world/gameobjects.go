@@ -500,6 +500,15 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		return true
 	}
 
+	// Eluna GOSSIP_EVENT_ON_HELLO (1) for the gameobject_gossip bindings,
+	// fired at the head of GameObject::Use (GameObject.cpp:1502) after the
+	// interact gates (HandleGameObjectUseOpcode, SpellHandler.cpp:300) and
+	// before the type arms: a Lua false return skips the native arms, like
+	// the C++ early return.
+	if s.fireGameObjectGossipHelloHook(ctx, guid) {
+		return true
+	}
+
 	switch goState.Type {
 	case GameObjectTypeDoor:
 		// Toggle door open/closed
