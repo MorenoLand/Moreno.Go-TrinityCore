@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -1799,25 +1800,70 @@ func (s *session) sendGuildPermissions(ctx context.Context) {
 }
 
 // handleInspectArenaTeams processes MSG_INSPECT_ARENA_TEAMS (0x377).
-// Reference: WorldSession::HandleInspectArenaTeamsOpcode (ArenaTeamHandler.cpp:333).
+// Reference: WorldSession::HandleInspectArenaTeamsOpcode (ArenaTeamHandler.cpp:33)
+// and ArenaTeam::Inspect (ArenaTeam.cpp:504).
 func (s *session) handleInspectArenaTeams(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	targetGUID, _ := r.ReadU64()
-
-	buf := protocol.NewBuffer(8 + 3*24)
-	buf.WriteU64(targetGUID)
-	for slot := 0; slot < 3; slot++ {
-		buf.WriteU32(0) // arenaTeamID
-		buf.WriteU32(0) // rating
-		buf.WriteU32(0) // seasonGames
-		buf.WriteU32(0) // seasonWins
-		buf.WriteU32(0) // played
-		buf.WriteU32(0) // personalRating
+	targetGUID, err := r.ReadU64()
+	if err != nil {
+		return false
 	}
-	_ = s.write(uint16(protocol.OpcodeMSG_INSPECT_ARENA_TEAMS), buf.Bytes(), true)
+
+	// ObjectAccessor::FindPlayer - target must be online (ArenaTeamHandler.cpp:44-46)
+	targetSession := s.server.findSessionByGUID(targetGUID)
+	if targetSession == nil || !targetSession.worldReady.Load() || targetSession.player == nil {
+		return true
+	}
+	target := targetSession.player
+
+	// IsWithinDistInMap(player, INSPECT_DISTANCE = 28.0) (ArenaTeamHandler.cpp:48)
+	if target.Map != s.player.Map {
+		return true
+	}
+	dx := float64(s.player.X - target.X)
+	dy := float64(s.player.Y - target.Y)
+	dz := float64(s.player.Z - target.Z)
+	if math.Sqrt(dx*dx+dy*dy+dz*dz) > inspectDistance {
+		return true
+	}
+
+	// IsValidAttackTarget arm (ArenaTeamHandler.cpp:51)
+	if s.security == 0 && playerTeam(s.player.Race) != playerTeam(target.Race) {
+		return true
+	}
+
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return true
+	}
+
+	// For each arena team the target is a member of, ArenaTeam::Inspect sends one
+	// packet (ArenaTeam.cpp:511-520); the membership join encodes the GetMember
+	// miss arm, which silently skips the team.
+	rows, err := cdb.QueryContext(ctx, "SELECT t.arenaTeamId, t.type, t.rating, t.seasonGames, t.seasonWins, m.seasonGames, m.personalRating FROM arena_team_member AS m JOIN arena_team AS t ON t.arenaTeamId = m.arenaTeamId WHERE m.guid = ?", targetGUID)
+	if err != nil {
+		return true
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var teamID, aType, rating, tSeasonGames, tSeasonWins, mSeasonGames, mPersonalRating uint32
+		if rows.Scan(&teamID, &aType, &rating, &tSeasonGames, &tSeasonWins, &mSeasonGames, &mPersonalRating) != nil {
+			continue
+		}
+		buf := protocol.NewBuffer(8 + 1 + 4*6)
+		buf.WriteU64(targetGUID)                       // player guid
+		buf.WriteU8(uint8(arenaTeamSlotByType(aType))) // slot (0...2)
+		buf.WriteU32(teamID)                           // arena team id
+		buf.WriteU32(rating)                           // rating
+		buf.WriteU32(tSeasonGames)                     // season played
+		buf.WriteU32(tSeasonWins)                      // season wins
+		buf.WriteU32(mSeasonGames)                     // played (member's games)
+		buf.WriteU32(mPersonalRating)                  // personal rating
+		_ = s.write(uint16(protocol.OpcodeMSG_INSPECT_ARENA_TEAMS), buf.Bytes(), true)
+	}
 	return true
 }
 
