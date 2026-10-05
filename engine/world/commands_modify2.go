@@ -16,9 +16,10 @@ import (
 // the speed sub-table and talentpoints.
 //
 // mount is partial: the CreatureDisplayInfo.dbc gate and MountDisplayID are
-// native, but the SetSpeedRate(MOVE_RUN/MOVE_FLIGHT) legs have no Go bridge
-// (speeds are aura-derived; there is no per-type speed-rate store), so the
-// arm mounts without touching speeds and says so honestly.
+// native, and the SetSpeedRate(MOVE_RUN/MOVE_FLIGHT) legs ride the
+// setGMSpeedRate bridge (movement_speed.go); the Go mount itself stays
+// display-only (no mount aura), so a later aura-driven speed recompute
+// clears the override exactly like C++ UpdateSpeed overwriting m_speed_rate.
 
 // checkModifySpeedBounds mirrors modify_commandscript::CheckModifySpeed
 // (cs_modify.cpp:374) minus the target/security legs, which each arm handles
@@ -133,8 +134,8 @@ func (s *session) mountDisplayValid(mount uint32) bool {
 
 // handleModifyMount mirrors HandleModifyMountCommand (cs_modify.cpp:486):
 // the selected player or the handler's own player is mounted on the display
-// id. The SetSpeedRate(MOVE_RUN/MOVE_FLIGHT) legs have no Go bridge (speeds
-// are aura-derived), so the mount lands without speed changes.
+// id, and the RUN/FLIGHT rates take the given speed via the SetSpeedRate
+// bridge (Unit.cpp:8825).
 func (s *session) handleModifyMount(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandModifyMount) {
 		return
@@ -161,7 +162,6 @@ func (s *session) handleModifyMount(ctx context.Context, args []string) {
 		s.sendSysMessage(miscCharInFlight) // LANG_CHAR_IN_FLIGHT 21
 		return
 	}
-	_ = speed
 	// LANG_YOU_GIVE_MOUNT 150 / LANG_MOUNT_GIVED 151.
 	s.notifyModify(target,
 		fmt.Sprintf("You give %s a mount.", target.player.Name),
@@ -169,7 +169,11 @@ func (s *session) handleModifyMount(ctx context.Context, args []string) {
 	target.player.MountDisplayID = mount
 	target.sendPlayerUpdate()
 	target.sendPlayerCollisionHeight()
-	s.sendSysMessage("Mount speed changes are not supported: per-type speed rates have no Go bridge.")
+	// C++: Mount(mount) then SetSpeedRate(MOVE_RUN, speed) and
+	// SetSpeedRate(MOVE_FLIGHT, speed) (cs_modify.cpp:541-542). The Go mount
+	// is display-only (no mount aura), so the rates land directly.
+	target.setGMSpeedRate(moveTypeRun, speed)
+	target.setGMSpeedRate(moveTypeFlight, speed)
 }
 
 // extendModifyDispatcher adds the chunk-2a arms to the modify root. It is

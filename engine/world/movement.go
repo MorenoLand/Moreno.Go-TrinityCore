@@ -987,11 +987,13 @@ func (s *session) handleForceSpeedChangeAck(opcode uint16, ctx context.Context, 
 			// client under-reports: re-send the correct speed
 			// (Unit::SetSpeedRate leg, MovementHandler.cpp:505-509)
 			s.debug("force speed change corrected", "account", s.accountName, "moveType", moveType, "expected", expected, "acked", newspeed)
-			switch moveType {
-			case moveTypeRun:
-				s.sendRuntimeMovementSpeed(protocol.OpcodeSMSG_FORCE_RUN_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_RUN_SPEED, expected, true)
-			case moveTypeFlight:
-				s.sendRuntimeMovementSpeed(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_FLIGHT_SPEED, expected, false)
+			// C++ re-sends via SetSpeedRate(move_type, GetSpeedRate(move_type)):
+			// same type, same rate. The GM-override store holds the last
+			// rate the server forced for walk/run/runBack/swim/flight.
+			if moveType >= 0 && moveType < len(speedForceOpcodes) {
+				if opcodes := speedForceOpcodes[moveType]; opcodes[0] != 0 {
+					s.sendRuntimeMovementSpeed(opcodes[0], opcodes[1], expected, moveType == moveTypeRun)
+				}
 			}
 		} else {
 			// client over-reports its speed: cheating

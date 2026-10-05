@@ -159,6 +159,11 @@ func (s *session) auraMultiplier(auraType uint32) float32 {
 // UNIT_FLAG_MOUNT); this gate additionally treats MountDisplayID != 0 as mounted, so Go's display-only
 // mounts (taxi legs, .modify mount) take the mounted formula where C++ would see the flag unset.
 func (s *session) mountedRunSpeed() float32 {
+	// A .modify speed override shadows the aura computation while active,
+	// mirroring m_speed_rate (Unit::GetSpeed, Unit.cpp:8811).
+	if ov := s.gmSpeedOverride(moveTypeRun); ov > 0 {
+		return ov
+	}
 	main := s.maxPositiveAuraModifier(spellAuraIncreaseSpeed)
 	stack := s.auraMultiplier(129)
 	nonStack := float32(1) + float32(s.maxPositiveAuraModifier(171))/100
@@ -182,6 +187,11 @@ func (s *session) mountedRunSpeed() float32 {
 // follow-speed leg (Unit.cpp:8774-8788, FOLLOW-motion pets borrowing the owner's rate near 10yd);
 // the 191 normalization snare/daze immune-mask skip is vacuous for players.
 func (s *session) mountedFlightSpeed() float32 {
+	// A .modify speed override shadows the aura computation while active,
+	// mirroring m_speed_rate (Unit::GetSpeed, Unit.cpp:8811).
+	if ov := s.gmSpeedOverride(moveTypeFlight); ov > 0 {
+		return ov
+	}
 	main := s.totalAuraModifier(spellAuraIncreaseFlightSpeed) + s.totalAuraModifier(spellAuraIncreaseVehicleFlight)
 	stack, nonStack := float32(1), float32(1)
 	if s.hasAuraType(spellAuraMounted) || s.player != nil && s.player.MountDisplayID != 0 {
@@ -214,7 +224,28 @@ func ResolveMovementSpeed(speed float32, slowPercent, minimumPercent int32) floa
 func (s *session) movementSpeeds() [9]float32 {
 	const walk, runBack, swim, swimBack, flightBack = float32(2.5), float32(4.5), float32(4.722222), float32(2.5), float32(4.5)
 	swimSpeed := swim * (1 + float32(s.maxPositiveAuraModifier(spellAuraIncreaseSwimSpeed))/100)
-	return [9]float32{walk, s.mountedRunSpeed(), s.adjustMovementSpeed(runBack), s.adjustMovementSpeed(swimSpeed), s.adjustMovementSpeed(swimBack), s.mountedFlightSpeed(), s.adjustMovementSpeed(flightBack), 3.141594, 3.14}
+	// UnitMoveType order (Unit.h:262): walk, run, runBack, swim, swimBack,
+	// turnRate, flight, flightBack, pitchRate. (Previously flight/flightBack
+	// sat at 5/6 with turnRate at 7 — misordered vs the client's parse.)
+	speeds := [9]float32{
+		walk,                              // MOVE_WALK
+		s.mountedRunSpeed(),               // MOVE_RUN
+		s.adjustMovementSpeed(runBack),    // MOVE_RUN_BACK
+		s.adjustMovementSpeed(swimSpeed),  // MOVE_SWIM
+		s.adjustMovementSpeed(swimBack),   // MOVE_SWIM_BACK
+		3.141594,                          // MOVE_TURN_RATE
+		s.mountedFlightSpeed(),            // MOVE_FLIGHT
+		s.adjustMovementSpeed(flightBack), // MOVE_FLIGHT_BACK
+		3.14,                              // MOVE_PITCH_RATE
+	}
+	// .modify speed overrides shadow the aura-derived values while active
+	// (Unit::GetSpeed = m_speed_rate * base, Unit.cpp:8811).
+	for mtype := 0; mtype < len(speeds); mtype++ {
+		if ov := s.gmSpeedOverride(mtype); ov > 0 {
+			speeds[mtype] = ov
+		}
+	}
+	return speeds
 }
 
 func (s *session) castSpeedMultiplier() float32 {
@@ -381,14 +412,103 @@ const (
 	moveTypeCount
 )
 
+// playerBaseMoveSpeed mirrors Unit::playerBaseMoveSpeed (Unit.cpp:101-112):
+// the absolute base speed per UnitMoveType that m_speed_rate multiplies.
+var playerBaseMoveSpeed = [9]float32{
+	2.5,      // MOVE_WALK
+	7.0,      // MOVE_RUN
+	4.5,      // MOVE_RUN_BACK
+	4.722222, // MOVE_SWIM
+	2.5,      // MOVE_SWIM_BACK
+	3.141594, // MOVE_TURN_RATE
+	7.0,      // MOVE_FLIGHT
+	4.5,      // MOVE_FLIGHT_BACK
+	3.14,     // MOVE_PITCH_RATE
+}
+
+// speedForceOpcodes maps each UnitMoveType to its {SMSG_FORCE_*_SPEED_CHANGE,
+// MSG_MOVE_SET_*_SPEED} pair (Unit::SetSpeedRate's moveTypeToOpcode table,
+// Unit.cpp:8837-8847). Only the types the command and aura systems touch
+// are populated; the rest have no Go sender.
+var speedForceOpcodes = [9][2]protocol.Opcode{
+	moveTypeWalk:       {protocol.OpcodeSMSG_FORCE_WALK_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_WALK_SPEED},
+	moveTypeRun:        {protocol.OpcodeSMSG_FORCE_RUN_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_RUN_SPEED},
+	moveTypeRunBack:    {protocol.OpcodeSMSG_FORCE_RUN_BACK_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_RUN_BACK_SPEED},
+	moveTypeSwim:       {protocol.OpcodeSMSG_FORCE_SWIM_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_SWIM_SPEED},
+	moveTypeFlight:     {protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_FLIGHT_SPEED},
+	moveTypeFlightBack: {protocol.OpcodeSMSG_FORCE_FLIGHT_BACK_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_FLIGHT_BACK_SPEED},
+}
+
+// setGMSpeedRate mirrors Unit::SetSpeedRate (Unit.cpp:8825-8880) for the
+// .modify speed command: the no-op-on-unchanged gate, the m_speed_rate
+// store (here gmSpeedRates), the forced-speed-change ACK registration, and
+// the SMSG_FORCE_*_SPEED_CHANGE to self plus MSG_MOVE_SET_*_SPEED to
+// nearby. PropagateSpeedChange is MotionMaster-only (no Go bridge) and the
+// pet propagation needs no bridge (Go pets have no speed model).
+func (s *session) setGMSpeedRate(mtype int, rate float32) {
+	if s == nil || s.player == nil || mtype < 0 || mtype >= len(speedForceOpcodes) {
+		return
+	}
+	if rate < 0 {
+		rate = 0
+	}
+	// Update speed only on change (Unit.cpp:8827-8828).
+	if s.gmSpeedRates[mtype] == rate {
+		return
+	}
+	s.gmSpeedRates[mtype] = rate
+	opcodes := speedForceOpcodes[mtype]
+	if opcodes[0] == 0 {
+		return
+	}
+	s.sendRuntimeMovementSpeed(opcodes[0], opcodes[1], rate*playerBaseMoveSpeed[mtype], mtype == moveTypeRun)
+}
+
+// gmSpeedOverride returns the absolute GM-forced speed for a move type, or
+// 0 when no override is active (Unit::GetSpeed =
+// m_speed_rate[mtype] * playerBaseMoveSpeed[mtype], Unit.cpp:8811-8814).
+func (s *session) gmSpeedOverride(mtype int) float32 {
+	if s == nil || mtype < 0 || mtype >= len(s.gmSpeedRates) {
+		return 0
+	}
+	if rate := s.gmSpeedRates[mtype]; rate > 0 {
+		return rate * playerBaseMoveSpeed[mtype]
+	}
+	return 0
+}
+
+// clearGMSpeedRate drops the GM override for a move type, mirroring C++
+// UpdateSpeed overwriting m_speed_rate via SetSpeedRate at the end of every
+// aura-driven recompute (Unit.cpp:8779).
+func (s *session) clearGMSpeedRate(mtype int) {
+	if s == nil || mtype < 0 || mtype >= len(s.gmSpeedRates) {
+		return
+	}
+	s.gmSpeedRates[mtype] = 0
+}
+
 // forcedSpeedMoveType maps an SMSG_FORCE_*_SPEED_CHANGE opcode to its
 // UnitMoveType index (Unit::SendSpeedChange, Unit.cpp:8835).
 func forcedSpeedMoveType(opcode protocol.Opcode) (int, bool) {
 	switch opcode {
+	case protocol.OpcodeSMSG_FORCE_WALK_SPEED_CHANGE:
+		return moveTypeWalk, true
 	case protocol.OpcodeSMSG_FORCE_RUN_SPEED_CHANGE:
 		return moveTypeRun, true
+	case protocol.OpcodeSMSG_FORCE_RUN_BACK_SPEED_CHANGE:
+		return moveTypeRunBack, true
+	case protocol.OpcodeSMSG_FORCE_SWIM_SPEED_CHANGE:
+		return moveTypeSwim, true
+	case protocol.OpcodeSMSG_FORCE_SWIM_BACK_SPEED_CHANGE:
+		return moveTypeSwimBack, true
+	case protocol.OpcodeSMSG_FORCE_TURN_RATE_CHANGE:
+		return moveTypeTurnRate, true
 	case protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE:
 		return moveTypeFlight, true
+	case protocol.OpcodeSMSG_FORCE_FLIGHT_BACK_SPEED_CHANGE:
+		return moveTypeFlightBack, true
+	case protocol.OpcodeSMSG_FORCE_PITCH_RATE_CHANGE:
+		return moveTypePitchRate, true
 	}
 	return 0, false
 }
@@ -478,9 +598,14 @@ func (s *session) sendRuntimeMovementUpdates(auraType uint32) {
 		s.sendRuntimeFlightState()
 	}
 	if runSpeed {
+		// C++ UpdateSpeed overwrites m_speed_rate via SetSpeedRate
+		// (Unit.cpp:8779): a .modify speed override is transient and dies
+		// on the next aura-driven recompute for its type.
+		s.clearGMSpeedRate(moveTypeRun)
 		s.sendRuntimeMovementSpeed(protocol.OpcodeSMSG_FORCE_RUN_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_RUN_SPEED, s.mountedRunSpeed(), true)
 	}
 	if flightSpeed {
+		s.clearGMSpeedRate(moveTypeFlight)
 		s.sendRuntimeMovementSpeed(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_FLIGHT_SPEED, s.mountedFlightSpeed(), false)
 	}
 }

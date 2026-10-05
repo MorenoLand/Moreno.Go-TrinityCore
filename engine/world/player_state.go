@@ -3435,7 +3435,10 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	flags := PlayerCreateUpdateFlags(targetSelf, runtime != nil && runtime.attackTarget != 0)
 	block.WriteU16(flags)
 	writeRawMovementInfo(block, runtime.movementInfoForCreate(state))
-	speeds := [...]float32{2.5, 7, 4.5, 4.722222, 2.5, 7, 4.5, 3.141594, 3.14}
+	// UnitMoveType order (Unit.h:262): walk, run, runBack, swim, swimBack,
+	// turnRate, flight, flightBack, pitchRate — matches playerBaseMoveSpeed
+	// (Unit.cpp:101).
+	speeds := [...]float32{2.5, 7, 4.5, 4.722222, 2.5, 3.141594, 7, 4.5, 3.14}
 	if runtime != nil && runtime.player != nil && runtime.player.GUID == state.GUID {
 		speeds = runtime.movementSpeeds()
 	}

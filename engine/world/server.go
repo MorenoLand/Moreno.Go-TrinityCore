@@ -283,7 +283,13 @@ type session struct {
 	// forcedSpeedSent marks types with a real sent packet: the ACK speed
 	// check only runs against a sent expectation (C++ falls back to
 	// GetSpeed, which Go does not model for types it never forces).
-	forcedSpeedSent  [9]bool
+	forcedSpeedSent [9]bool
+	// gmSpeedRates is the Go analog of Unit::m_speed_rate (Unit.cpp:376):
+	// the per-UnitMoveType rate multiplier, 0 when unset. The aura system
+	// writes through the same slot (C++ UpdateSpeed ends in SetSpeedRate),
+	// so a .modify speed override is transient by design — the next
+	// aura-driven recompute for that type overwrites it, exactly like C++.
+	gmSpeedRates     [9]float32
 	attackTarget     uint64
 	duelPartner      uint64
 	duelArbiterX     float32

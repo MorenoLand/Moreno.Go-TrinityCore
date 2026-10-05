@@ -105,11 +105,13 @@ func (s *session) handleModifyPhase(ctx context.Context) {
 	s.sendSysMessage("modify phase is not supported: stored phase masks have no Go bridge.")
 }
 
-// handleModifySpeed dispatches the "speed" sub-table (cs_modify.cpp:47-56):
+// handleModifySpeed implements the "speed" sub-table (cs_modify.cpp:47-56):
 // all/backwalk/fly/walk/swim plus the "" entry (bare ".modify speed <val>"
-// behaves like "all"). All six are documented-blocked: per-type speed rates
-// have no Go store (movementSpeeds is aura-derived), so neither the rate nor
-// the SMSG_FORCE_*_SPEED_CHANGE broadcast can be modeled faithfully.
+// shares the all-speeds handler HandleModifyASpeedCommand and the root speed
+// permission, 561). Rates go through the Unit::SetSpeedRate bridge
+// (setGMSpeedRate): the SMSG_FORCE_*_SPEED_CHANGE to self and
+// MSG_MOVE_SET_*_SPEED to nearby are real, and the ACK bookkeeping covers
+// all nine move types.
 func (s *session) handleModifySpeed(ctx context.Context, args []string) {
 	const syntax = "Syntax: .modify speed [all|backwalk|fly|walk|swim] <val>"
 	if len(args) == 0 {
@@ -124,31 +126,91 @@ func (s *session) handleModifySpeed(ctx context.Context, args []string) {
 	// Bare ".modify speed <val>" hits the "" table entry, which shares the
 	// all-speeds handler and the root speed permission (561).
 	if _, err := strconv.ParseFloat(sub, 32); err == nil {
-		s.modifySpeedBlocked(ctx, permissionCommandModifySpeed, "all")
+		s.modifySpeedAll(ctx, permissionCommandModifySpeed, args)
 		return
 	}
 	switch {
 	case strings.HasPrefix("all", sub):
-		s.modifySpeedBlocked(ctx, permissionCommandModifySpeedAll, "all")
+		s.modifySpeedAll(ctx, permissionCommandModifySpeedAll, rest)
 	case strings.HasPrefix("backwalk", sub):
-		s.modifySpeedBlocked(ctx, permissionCommandModifySpeedBackwalk, "backwalk")
+		s.modifySpeedType(ctx, permissionCommandModifySpeedBackwalk, rest, "back", []int{moveTypeRunBack}, true)
 	case strings.HasPrefix("fly", sub):
-		s.modifySpeedBlocked(ctx, permissionCommandModifySpeedFly, "fly")
+		s.modifySpeedType(ctx, permissionCommandModifySpeedFly, rest, "fly", []int{moveTypeFlight}, false)
 	case strings.HasPrefix("walk", sub):
-		s.modifySpeedBlocked(ctx, permissionCommandModifySpeedWalk, "walk")
+		s.modifySpeedType(ctx, permissionCommandModifySpeedWalk, rest, "", []int{moveTypeRun}, true)
 	case strings.HasPrefix("swim", sub):
-		s.modifySpeedBlocked(ctx, permissionCommandModifySpeedSwim, "swim")
+		s.modifySpeedType(ctx, permissionCommandModifySpeedSwim, rest, "swim", []int{moveTypeSwim}, true)
 	default:
-		_ = rest
 		s.sendSysMessage(syntax)
 	}
 }
 
-func (s *session) modifySpeedBlocked(ctx context.Context, perm uint32, what string) {
+// modifySpeedAll mirrors HandleModifyASpeedCommand (cs_modify.cpp:417):
+// the WALK, RUN, SWIM and FLIGHT rates are all set to the same value.
+func (s *session) modifySpeedAll(ctx context.Context, perm uint32, args []string) {
 	if s.miscDeny(ctx, perm) {
 		return
 	}
-	s.sendSysMessage(fmt.Sprintf("modify speed %s is not supported: per-type speed rates have no Go bridge.", what))
+	speed, target, ok := s.checkModifySpeedTarget(ctx, args, true)
+	if !ok {
+		return
+	}
+	// LANG_YOU_CHANGE_ASPEED 137 / LANG_YOURS_ASPEED_CHANGED 138.
+	s.notifyModify(target,
+		fmt.Sprintf("You change %s's all speeds to %.2f.", target.player.Name, speed),
+		fmt.Sprintf("%s changed your all speeds to %.2f.", s.player.Name, speed))
+	for _, mtype := range []int{moveTypeWalk, moveTypeRun, moveTypeSwim, moveTypeFlight} {
+		target.setGMSpeedRate(mtype, speed)
+	}
+}
+
+// modifySpeedType mirrors the single-type arms (cs_modify.cpp:434-492):
+// walk -> MOVE_RUN, backwalk -> MOVE_RUN_BACK, swim -> MOVE_SWIM,
+// fly -> MOVE_FLIGHT. Only fly skips the in-flight check.
+func (s *session) modifySpeedType(ctx context.Context, perm uint32, args []string, kind string, mtypes []int, checkInFlight bool) {
+	if s.miscDeny(ctx, perm) {
+		return
+	}
+	speed, target, ok := s.checkModifySpeedTarget(ctx, args, checkInFlight)
+	if !ok {
+		return
+	}
+	label := "speed"
+	if kind != "" {
+		label = kind + " speed"
+	}
+	s.notifyModify(target,
+		fmt.Sprintf("You change %s's %s to %.2f.", target.player.Name, label, speed),
+		fmt.Sprintf("%s changed your %s to %.2f.", s.player.Name, label, speed))
+	for _, mtype := range mtypes {
+		target.setGMSpeedRate(mtype, speed)
+	}
+}
+
+// checkModifySpeedTarget mirrors modify_commandscript::CheckModifySpeed
+// (cs_modify.cpp:379): the value must parse inside [0.1, 50.0]
+// (LANG_BAD_VALUE 115), the target is the selected player or self with the
+// lower-security guard, and a target in flight is rejected unless the arm
+// skips the flight check (LANG_CHAR_IN_FLIGHT 21).
+func (s *session) checkModifySpeedTarget(ctx context.Context, args []string, checkInFlight bool) (float32, *session, bool) {
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .modify speed [all|backwalk|fly|walk|swim] <val>")
+		return 0, nil, false
+	}
+	speed, ok := checkModifySpeedBounds(args[0], 0.1, 50.0)
+	if !ok {
+		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE 115
+		return 0, nil, false
+	}
+	target := s.modifyTargetPlayer(ctx)
+	if target == nil || s.modifyTargetLowerSecurity(ctx, target) {
+		return 0, nil, false
+	}
+	if checkInFlight && target.isInFlight() {
+		s.sendSysMessage(miscCharInFlight) // LANG_CHAR_IN_FLIGHT 21
+		return 0, nil, false
+	}
+	return speed, target, true
 }
 
 // handleModifyTalentPoints is documented-blocked (cs_modify.cpp:342): the
