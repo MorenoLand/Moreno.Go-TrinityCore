@@ -273,10 +273,10 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		} else {
 			s.toggleChatDND(message)
 		}
-		s.firePlayerChatHook(ctx, typeID, language, message)
+		s.firePlayerChatHook(ctx, typeID, language, message, targetName)
 		return true
 	}
-	if s.firePlayerChatHook(ctx, typeID, language, message) {
+	if s.firePlayerChatHook(ctx, typeID, language, message, targetName) {
 		return true
 	}
 	var receiver *session
@@ -336,7 +336,13 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 
 // firePlayerChatHook fires the PlayerEventChat Lua hook (the sScriptMgr::OnPlayerChat
 // + Eluna OnChat analog) and reports whether a script cancelled the chat.
-func (s *session) firePlayerChatHook(ctx context.Context, typeID uint32, language uint32, message string) bool {
+// Addon-language messages never reach the chat hook: C++ Eluna::OnChat routes
+// LANG_ADDON to Eluna::OnAddonMessage instead (PlayerHooks.cpp:394-422), so
+// they fire the addon hook below.
+func (s *session) firePlayerChatHook(ctx context.Context, typeID uint32, language uint32, message string, targetName string) bool {
+	if language == languageAddon {
+		return s.fireAddonMessageHook(ctx, typeID, message, targetName)
+	}
 	if s.server.Features == nil || s.server.Features.Scripts == nil {
 		return false
 	}
@@ -346,6 +352,49 @@ func (s *session) firePlayerChatHook(ctx context.Context, typeID uint32, languag
 	}
 	if luaCancelled(values) {
 		s.debug("chat rejected", "account", s.accountName, "reason", "lua hook cancelled", "type", typeID)
+		return true
+	}
+	return false
+}
+
+// fireAddonMessageHook fires the Eluna ADDON_EVENT_ON_MESSAGE server hook
+// (ServerEvents 30, LuaEngine/Hooks.h:130) for LANG_ADDON chat and reports
+// whether a script cancelled the message. C++ (Eluna::OnAddonMessage,
+// ServerHooks.cpp:33-64) splits the message on the first '\t' into prefix
+// and content (no tab: prefix is the whole message, content empty) and
+// passes (event, sender, type, prefix, msg, target), where target is the
+// whisper receiver's player, and nil for guild/party/raid/battleground
+// targets — Go has no Lua guild/group objects, and addon messages to
+// channels are rejected by addonChatType before this point. A boolean false
+// from any handler cancels the message, mirroring CallAllFunctionsBool;
+// unlike OnChat there is no message rewrite. For addon whispers to a
+// missing player the hook does not fire at all: C++ sends the
+// player-not-found notice and returns before OnChat (ChatHandler.cpp:355-359),
+// and the Go whisper arm below does the same.
+func (s *session) fireAddonMessageHook(ctx context.Context, typeID uint32, message string, targetName string) bool {
+	if s.server.Features == nil || s.server.Features.Scripts == nil {
+		return false
+	}
+	prefix, content := message, ""
+	if i := strings.IndexByte(message, '\t'); i >= 0 {
+		prefix, content = message[:i], message[i+1:]
+	}
+	var target any
+	if typeID == chatWhisper {
+		receiver := s.server.findSessionByName(targetName)
+		if receiver == nil {
+			return false
+		}
+		if player := receiver.luaPlayer(); player != nil {
+			target = player
+		}
+	}
+	values, hookErr := s.server.Features.Scripts.TriggerServerEvent(ctx, scripting.ServerEventAddonMessage, s.luaPlayer(), typeID, prefix, content, target)
+	if hookErr != nil {
+		s.debug("lua addon message hook failed", "account", s.accountName, "error", hookErr)
+	}
+	if luaCancelled(values) {
+		s.debug("chat rejected", "account", s.accountName, "reason", "lua addon hook cancelled", "type", typeID)
 		return true
 	}
 	return false

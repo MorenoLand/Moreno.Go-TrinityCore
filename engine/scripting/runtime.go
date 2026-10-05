@@ -29,6 +29,13 @@ const (
 	MapEventOnPlayerEnter = 21
 )
 
+// Eluna ServerEvents contract for RegisterServerEvent. Numbering is the
+// TrinityCore LuaEngine numbering (LuaEngine/Hooks.h ServerEvents); only
+// the events the engine fires carry Go constants.
+const (
+	ServerEventAddonMessage = 30
+)
+
 // Eluna CreatureEvents contract for RegisterCreatureEvent /
 // RegisterUniqueCreatureEvent. The world engine fires these through
 // TriggerCreatureEvent; scripts use the raw event numbers. Numbering is the
