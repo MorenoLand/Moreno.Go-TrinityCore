@@ -120,21 +120,24 @@ func parseListEntryID(arg, link string) (uint32, bool) {
 		t = t[:j]
 	}
 	n, err := strconv.ParseUint(t, 10, 32)
-	if err != nil || n == 0 {
+	if err != nil {
 		return 0, false
 	}
 	return uint32(n), true
 }
 
 // listCountArg mirrors the Optional<uint32> count args: default 10, zero
-// aborts the arm silently like the C++ (count == 0 -> return false).
+// aborts the arm silently like the C++ (count == 0 -> return false), and an
+// unparseable token fails the arm (the C++ prints LANG_CMDPARSER_STRING_VALUE_INVALID
+// at ChatCommand.h:77-94, for which the tree's stand-in is the syntax line),
+// never silently defaulting to 10.
 func listCountArg(args []string) (uint32, bool) {
 	if len(args) == 0 {
 		return 10, true
 	}
 	n, err := strconv.ParseUint(args[0], 10, 32)
 	if err != nil {
-		return 10, true
+		return 0, false
 	}
 	return uint32(n), true
 }
@@ -165,7 +168,11 @@ func (s *session) handleListCreatureCommand(ctx context.Context, args []string) 
 		return
 	}
 	count, ok := listCountArg(args[1:])
-	if !ok || count == 0 {
+	if !ok {
+		s.sendSysMessage("Syntax: .list creature <entry|link> [count]")
+		return
+	}
+	if count == 0 {
 		return
 	}
 	var creatureCount uint64
@@ -223,7 +230,11 @@ func (s *session) handleListObjectCommand(ctx context.Context, args []string) {
 		return
 	}
 	count, ok := listCountArg(args[1:])
-	if !ok || count == 0 {
+	if !ok {
+		s.sendSysMessage("Syntax: .list object <entry|link> [count]")
+		return
+	}
+	if count == 0 {
 		return
 	}
 	var objectCount uint64
@@ -309,7 +320,11 @@ func (s *session) handleListItemCommand(ctx context.Context, args []string) {
 		return
 	}
 	count, ok := listCountArg(args[1:])
-	if !ok || count == 0 {
+	if !ok {
+		s.sendSysMessage("Syntax: .list item <link|entry> [count]")
+		return
+	}
+	if count == 0 {
 		return
 	}
 
