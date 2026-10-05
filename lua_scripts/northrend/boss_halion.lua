@@ -6,7 +6,7 @@
 -- npc_meteor_strike_flame / npc_meteor_strike_initial / npc_meteor_strike
 -- / npc_combustion_consumption / npc_orb_carrier / npc_living_inferno /
 -- npc_living_ember (ScriptedAI, zero Talk); 1 GameObjectScript
--- (go_twilight_portal); 17 SpellScriptLoaders
+-- (go_twilight_portal); 15 SpellScriptLoaders
 -- (spell_halion_meteor_strike_marker,
 -- spell_halion_combustion_consumption x2, spell_halion_marks x2,
 -- spell_halion_combustion_consumption_periodic,
@@ -30,7 +30,8 @@
 -- Sole-source verified: whole-server-tree grep for
 -- "AddSC_boss_halion" hits boss_halion.cpp only (+ the loader
 -- decl/call lines); this clone carries no sql/ tree, so ScriptName
--- bindings are DB-side by construction. No halion lua existed.
+-- bindings are DB-side by construction. Pre-existing lua coverage
+-- AUDITED this run — COMPLETE (see accounting below).
 -- Eluna creature events: 1 OnEnterCombat, 3 OnKill, 4 OnDied.
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_halion JustEngagedWith — Talk(SAY_AGGRO 2)
@@ -82,7 +83,7 @@
 -- bridge); the DoCastSelf / scheduler / DoAction legs ride absent
 -- bridges. Zero Talk on its own unit — NOT registered (the bronjahm
 -- npc_corrupted_soul_fragment precedent).
--- The other 8 CreatureScripts / go_twilight_portal / the 17
+-- The other 8 CreatureScripts / go_twilight_portal / the 15
 -- SpellScriptLoaders — zero Talk (npc_orb_carrier /
 -- npc_meteor_strike* / npc_combustion_consumption / npc_living_inferno
 -- / npc_living_ember) or spell-model arms (no-SpellScript /
