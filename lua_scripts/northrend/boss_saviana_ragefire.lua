@@ -1,7 +1,7 @@
 -- Saviana Ragefire (Ruby Sanctum) — Lua port of
 -- src/server/scripts/Northrend/ChamberOfAspects/RubySanctum/boss_saviana_ragefire.cpp
 -- (all 1 CreatureScript registered from inside
--- AddSC_boss_saviana_ragefire() (line 319); loader decl 191 / call 386
+-- AddSC_boss_saviana_ragefire() (line 292); loader decl 191 / call 386
 -- per northrend_script_loader.cpp — the FOURTH group of the
 -- "// Ruby Sanctum" block in AddNorthrendScripts(), immediately after
 -- AddSC_boss_baltharus_the_warborn() (call 385) — verified from the
@@ -16,8 +16,7 @@
 -- Sole-source verified: whole-server-tree grep for
 -- "AddSC_boss_saviana_ragefire" hits boss_saviana_ragefire.cpp
 -- only (+ the loader decl/call lines); this clone carries no sql/ tree,
--- so ScriptName bindings are DB-side by construction. No saviana lua
--- existed.
+-- so ScriptName bindings are DB-side by construction.
 -- Eluna creature events: 1 OnEnterCombat, 3 OnKill.
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_saviana_ragefire JustEngagedWith — Talk(SAY_AGGRO 0)
