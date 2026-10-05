@@ -5534,6 +5534,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		if partner := s.server.findSessionByGUID(targetGUID); partner != nil && partner.player != nil {
 			s.duelPartner = targetGUID
 			partner.duelPartner = s.playerGUID
+			// Spell::EffectDuel (SpellEffects.cpp:3867-3868): the caster is the
+			// initiator on both DuelInfo records; only the challenged accepts.
+			s.duelInitiator = true
+			partner.duelInitiator = false
+			s.duelCountdown = false
+			partner.duelCountdown = false
 			arbiterGUID := uint64(s.playerGUID) | (uint64(0xF110) << 48)
 			s.player.DuelArbiter = arbiterGUID
 			partner.player.DuelArbiter = arbiterGUID

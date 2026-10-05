@@ -293,9 +293,16 @@ type session struct {
 	// writes through the same slot (C++ UpdateSpeed ends in SetSpeedRate),
 	// so a .modify speed override is transient by design — the next
 	// aura-driven recompute for that type overwrites it, exactly like C++.
-	gmSpeedRates     [9]float32
-	attackTarget     uint64
-	duelPartner      uint64
+	gmSpeedRates [9]float32
+	attackTarget uint64
+	duelPartner  uint64
+	// duelInitiator is the DuelInfo::Initiator analog (Player.h:239-248): true
+	// when this session cast the duel challenge (Spell::EffectDuel). Only the
+	// challenged party may accept (DuelHandler.cpp:27).
+	duelInitiator bool
+	// duelCountdown is the DUEL_STATE_COUNTDOWN analog: the accept was
+	// processed and the 3s StartTime is ticking (DuelHandler.cpp:44-49).
+	duelCountdown    bool
 	duelArbiterX     float32
 	duelArbiterY     float32
 	duelArbiterZ     float32

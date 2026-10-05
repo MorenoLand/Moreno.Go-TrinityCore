@@ -1696,20 +1696,38 @@ func buildAttackerStateUpdate(attacker, victim uint64, damage, overkill uint32) 
 }
 
 // handleDuelAccepted processes CMSG_DUEL_ACCEPTED (0x16C).
-// Reference: WorldSession::HandleDuelAcceptedOpcode (DuelHandler.cpp:25).
+// Reference: WorldSession::HandleDuelAcceptedOpcode (DuelHandler.cpp:25-51).
 func (s *session) handleDuelAccepted(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
+	// DuelHandler.cpp:27-28: no duel, the acceptor is the initiator, or the
+	// duel already left DUEL_STATE_CHALLENGED -> silent return.
+	if s.duelPartner == 0 || s.duelInitiator || s.duelCountdown {
+		return true
+	}
+	var partner *session
+	if s.server != nil {
+		partner = s.server.findSessionByGUID(s.duelPartner)
+	}
+	// DuelHandler.cpp:30-34: the arbiter GUID on the wire must match the
+	// opponent's PLAYER_DUEL_ARBITER (both sides share the flag object, so the
+	// local copy is the equivalent check).
+	r := protocol.NewReader(payload)
+	arbiterGUID, err := r.ReadPackedGUID()
+	if err != nil || arbiterGUID != s.player.DuelArbiter {
+		return true
+	}
+	// DuelHandler.cpp:44-45: StartTime = now + 3, state -> DUEL_STATE_COUNTDOWN.
+	s.duelCountdown = true
+	if partner != nil {
+		partner.duelCountdown = true
+	}
 	buf := protocol.NewBuffer(4)
 	buf.WriteU32(3000) // 3000ms duel countdown
 	_ = s.write(uint16(protocol.OpcodeSMSG_DUEL_COUNTDOWN), buf.Bytes(), true)
-	var partner *session
-	if s.duelPartner != 0 && s.server != nil {
-		partner = s.server.findSessionByGUID(s.duelPartner)
-		if partner != nil {
-			_ = partner.write(uint16(protocol.OpcodeSMSG_DUEL_COUNTDOWN), buf.Bytes(), true)
-		}
+	if partner != nil {
+		_ = partner.write(uint16(protocol.OpcodeSMSG_DUEL_COUNTDOWN), buf.Bytes(), true)
 	}
 
 	// Initialize arbiter coordinates if not yet set
@@ -1721,14 +1739,19 @@ func (s *session) handleDuelAccepted(ctx context.Context, payload []byte) bool {
 		partner.duelArbiterX, partner.duelArbiterY, partner.duelArbiterZ = midX, midY, midZ
 	}
 
-	// After 3-second countdown, set PLAYER_DUEL_TEAM to start the duel! (TC: Player::UpdateDuelFlag)
+	// Player::UpdateDuelFlag (Player.cpp:20785-20797): COUNTDOWN elapsed ->
+	// OnPlayerDuelStart hook, PLAYER_DUEL_TEAM 1/2, state IN_PROGRESS. (The
+	// hook has no Go dispatch bridge; see the duel_reset audit.)
+	partnerGUID := s.duelPartner
 	time.AfterFunc(3*time.Second, func() {
-		if s.duelPartner == 0 || s.player == nil {
+		if s.player == nil || !s.duelCountdown || s.duelPartner != partnerGUID {
 			return
 		}
+		s.duelCountdown = false
 		s.player.DuelTeam = 1
 		s.sendPlayerUpdate()
-		if partner != nil && partner.player != nil {
+		if partner != nil && partner.player != nil && partner.duelPartner == s.playerGUID {
+			partner.duelCountdown = false
 			partner.player.DuelTeam = 2
 			partner.sendPlayerUpdate()
 		}
@@ -1737,18 +1760,54 @@ func (s *session) handleDuelAccepted(ctx context.Context, payload []byte) bool {
 }
 
 // handleDuelCancelled processes CMSG_DUEL_CANCELLED (0x16D).
-// Reference: WorldSession::HandleDuelCancelledOpcode (DuelHandler.cpp:53).
+// Reference: WorldSession::HandleDuelCancelledOpcode (DuelHandler.cpp:53-74).
 func (s *session) handleDuelCancelled(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	// Player surrendered in an active duel using /forfeit (TC: HandleDuelCancelledOpcode:66)
-	if s.player.DuelTeam != 0 && s.duelPartner != 0 {
+	// DuelHandler.cpp:59-60: no duel requested or already completed -> silent
+	// return (no SMSG_DUEL_COMPLETE).
+	if s.duelPartner == 0 {
+		return true
+	}
+	// Player surrendered in an active duel using /forfeit (TC: HandleDuelCancelledOpcode:62-69)
+	if s.player.DuelTeam != 0 {
+		// CombatStopWithPets(true) on both duelists (DuelHandler.cpp:65-66).
+		s.stopControlledPetCombat()
+		if s.server != nil {
+			if partner := s.server.findSessionByGUID(s.duelPartner); partner != nil {
+				partner.stopControlledPetCombat()
+			}
+		}
 		s.endDuel(true, s.duelPartner, false)
 		return true
 	}
 	s.endDuel(false, 0, false)
 	return true
+}
+
+// stopControlledPetCombat stops the session's pet combat: the pet half of
+// CombatStopWithPets(true) on the duel-surrender path (DuelHandler.cpp:65-66).
+// Mirrors the handlePetStopAttack core (PetHandler.cpp:261-280).
+func (s *session) stopControlledPetCombat() {
+	if s == nil || s.player == nil || s.player.PetGUID == 0 || s.server == nil {
+		return
+	}
+	motion := s.controlledPetMotion(s.player.PetGUID)
+	if motion == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	victim := motion.TargetGUID
+	motion.TargetGUID = 0
+	motion.InCombat = false
+	if motion.ThreatMgr != nil {
+		motion.ThreatMgr.ClearThreat()
+	}
+	s.server.motionMu.Unlock()
+	stopPkt := buildAttackStop(s.player.PetGUID, victim, false)
+	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
+	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, s)
 }
 
 // DuelCompleteType mirrors TrinityCore's DuelCompleteType enum.
@@ -1825,6 +1884,14 @@ func (s *session) checkDuelBounds() {
 
 // endDuel cleans up duel flags, clears arbiter/team, and emits SMSG_DUEL_COMPLETE and SMSG_DUEL_WINNER.
 // Reference: Player::DuelComplete (Player.cpp:7328-7442).
+// Documented no-bridge arms of DuelComplete: the OnPlayerDuelStart/OnPlayerDuelEnd
+// script hooks (no PlayerScript duel dispatch bridge — duel_reset audit); the
+// negative-aura strip (auras cast during the duel, apply time >= StartTime — no
+// aura apply-time tracking model); the combo-point cleanup (no combo-point
+// model); the Death Knight quest 12733 credit and CONFIG_HONOR_AFTER_DUEL arms;
+// the duel-flag gameobject removal (Go's arbiter is a synthetic GUID, no
+// gameobject). CombatStopWithPets' charmed-creature arm is unmodeled — the pet
+// arm is bridged via stopControlledPetCombat on the surrender path.
 func (s *session) endDuel(won bool, winnerGUID uint64, fled bool) {
 	partnerGUID := s.duelPartner
 	var partner *session
@@ -1911,6 +1978,8 @@ func (s *session) endDuel(won bool, winnerGUID uint64, fled bool) {
 		s.sendPlayerUpdate()
 	}
 	s.duelPartner = 0
+	s.duelInitiator = false
+	s.duelCountdown = false
 	s.duelOutOfBounds = time.Time{}
 
 	// Clean up fields on partner
@@ -1921,6 +1990,8 @@ func (s *session) endDuel(won bool, winnerGUID uint64, fled bool) {
 			partner.sendPlayerUpdate()
 		}
 		partner.duelPartner = 0
+		partner.duelInitiator = false
+		partner.duelCountdown = false
 		partner.duelOutOfBounds = time.Time{}
 	}
 }
