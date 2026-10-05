@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -197,12 +198,20 @@ func (s *session) handleLfgCleanCommand() {
 }
 
 // handleLfgOptionsCommand mirrors HandleLfgOptionsCommand (cs_lfg.cpp:133-145):
-// an argument sets the options mask (C++ Optional<uint32>, atoi semantics),
-// then the current value is always reported: LANG_LFG_OPTIONS_CHANGED (9985)
-// / LANG_LFG_OPTIONS (9984).
+// an argument sets the options mask (C++ Optional<uint32> consumed via
+// StringTo<uint32> (ChatCommandArgs.h:62) — strict base-10 parse that fails
+// the command on garbage, so a bad value prints the syntax line == the
+// tree's LANG 1502 convention), then the current value is always reported:
+// LANG_LFG_OPTIONS_CHANGED (9985) / LANG_LFG_OPTIONS (9984).
 func (s *session) handleLfgOptionsCommand(arg string) {
-	if strings.TrimSpace(arg) != "" {
-		s.server.Features.LFG.SetOptions(uint32(cAtoi(arg)))
+	const syntax = "Syntax: .lfg options [options]"
+	if trimmed := strings.TrimSpace(arg); trimmed != "" {
+		options, err := strconv.ParseUint(trimmed, 10, 32)
+		if err != nil {
+			s.sendSysMessage(syntax)
+			return
+		}
+		s.server.Features.LFG.SetOptions(uint32(options))
 		s.sendSysMessage("LFG options changed.") // LANG_LFG_OPTIONS_CHANGED (9985)
 	}
 	s.sendSysMessage(fmt.Sprintf("LFG options: %d", s.server.Features.LFG.GetOptions())) // LANG_LFG_OPTIONS (9984)
