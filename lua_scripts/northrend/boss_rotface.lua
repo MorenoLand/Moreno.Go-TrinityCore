@@ -68,10 +68,13 @@
 -- The 10 spell scripts join the no-SpellScript-bridge queue (the
 -- boss_moragg optic-link precedent): spell_rotface_mutated_infection
 -- Talk(EMOTE_MUTATED_INFECTION 9) is cross-AI Talk riding a
--- SpellScript (NotifyTargets); spell_rotface_unstable_ooze_explosion_init
+-- SpellScript (NotifyTargets); spell_rotface_large_ooze_buff_combine
 -- Talk(EMOTE_UNSTABLE_2..4 0..2) + Talk(EMOTE_UNSTABLE_EXPLOSION 3)
--- + rotface->AI()->Talk(SAY_UNSTABLE_EXPLOSION 5) are caster /
--- cross-AI Talk riding a SpellScript; the remaining 8 join the
+-- + rotface->AI()->Talk(SAY_UNSTABLE_EXPLOSION 5) (:597-:618) and
+-- spell_rotface_large_ooze_combine rotface->AI()->Talk(
+-- SAY_UNSTABLE_EXPLOSION 5) (:557) are caster / cross-AI Talk riding
+-- SpellScripts; spell_rotface_unstable_ooze_explosion_init carries
+-- zero Talk calls; the remaining 7 join the
 -- same queue on their caster / targeting legs.
 -- spell_rotface_mutated_infection_aura joins the no-AuraScript-bridge
 -- queue.
@@ -79,7 +82,8 @@
 -- SAY_PRECIOUS_DIES 0 (1, cross-AI from npc_precious_icc JustDied)
 -- + SAY_AGGRO 1 (1) + EMOTE_SLIME_SPRAY 2 (1, scheduler) +
 -- SAY_SLIME_SPRAY 3 (1, SpellHitTarget) + SAY_UNSTABLE_EXPLOSION 5
--- (1, cross-AI from the unstable-ooze-explosion SpellScript) +
+-- (2, cross-AI from the large_ooze_combine + large_ooze_buff_combine
+-- SpellScripts) + EMOTE_PRECIOUS_ZOMBIES 0 (1, scheduler) +
 -- SAY_KILL 6 (1) + SAY_DEATH 8 (1) +
 -- EMOTE_MUTATED_INFECTION 9 (1, SpellScript) +
 -- EMOTE_UNSTABLE_2..4 / EMOTE_UNSTABLE_EXPLOSION 0..3 (4,
