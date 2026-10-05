@@ -565,15 +565,10 @@ func (s *session) repopAtGraveyard(ctx context.Context) {
 				s.server.spiritReviveQueue = make(map[uint64]uint64)
 			}
 			s.server.spiritReviveQueue[s.playerGUID] = 0
-			elapsed := time.Since(s.server.lastSpiritWave)
 			s.server.spiritWaveMu.Unlock()
 
 			s.applyAura(2584) // SPELL_WAITING_FOR_RESURRECT
-			timeLeftMs := uint32(30000)
-			if elapsed < 30*time.Second {
-				timeLeftMs = uint32((30*time.Second - elapsed).Milliseconds())
-			}
-			s.sendAreaSpiritHealerTime(0, timeLeftMs)
+			s.sendAreaSpiritHealerTime(0, s.server.spiritWaveTimeLeftMs())
 		}
 	}
 }
@@ -1348,6 +1343,18 @@ func (s *session) sendAreaSpiritHealerTime(guid uint64, timeLeft uint32) {
 	_ = s.write(uint16(protocol.OpcodeSMSG_AREA_SPIRIT_HEALER_TIME), packet.Bytes(), true)
 }
 
+// spiritWaveTimeLeftMs mirrors the 30000 - GetLastResurrectTime() computation in
+// BattlegroundMgr::SendAreaSpiritHealerQueryOpcode (BattlegroundMgr.cpp:720):
+// milliseconds until the next 30-second resurrection wave.
+func (s *Server) spiritWaveTimeLeftMs() uint32 {
+	s.spiritWaveMu.Lock()
+	defer s.spiritWaveMu.Unlock()
+	if elapsed := time.Since(s.lastSpiritWave); elapsed < 30*time.Second {
+		return uint32((30*time.Second - elapsed).Milliseconds())
+	}
+	return 30000
+}
+
 // inBattlegroundWaveMap reports whether the player's map runs spirit-healer
 // resurrection waves — the Go analog of HandleAreaSpiritHealer*Opcode's
 // `_player->GetBattleground()` non-null gate (MiscHandler.cpp:1459-1502). Go has
@@ -1384,15 +1391,7 @@ func (s *session) handleAreaSpiritHealerQuery(ctx context.Context, payload []byt
 	if !s.inBattlegroundWaveMap() {
 		return true
 	}
-	now := time.Now()
-	s.server.spiritWaveMu.Lock()
-	elapsed := now.Sub(s.server.lastSpiritWave)
-	s.server.spiritWaveMu.Unlock()
-	timeLeftMs := uint32(30000)
-	if elapsed < 30*time.Second {
-		timeLeftMs = uint32((30*time.Second - elapsed).Milliseconds())
-	}
-	s.sendAreaSpiritHealerTime(guid, timeLeftMs)
+	s.sendAreaSpiritHealerTime(guid, s.server.spiritWaveTimeLeftMs())
 	return true
 }
 
@@ -1403,8 +1402,10 @@ func (s *session) handleAreaSpiritHealerQuery(ctx context.Context, payload []byt
 // C++ queues only via the live Battleground / Battlefield. The Go-original
 // interact/distance gate is dropped (C++ has none here); like C++, the queue
 // handler itself sends no time packet — the client already received it from
-// the query (the repop auto-queue arm below is the only Go-original path that
-// sends the time packet, since its ghosts never sent a query).
+// the query. The gossip-hello spirit-guide arm above is the one C++ path that
+// sends the time packet right after queueing (NPCHandler.cpp:171-185), so it
+// sends it there; the repop auto-queue arm below is the only other sender,
+// since its ghosts never sent a query.
 func (s *session) handleAreaSpiritHealerQueue(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	guid, err := reader.ReadU64()

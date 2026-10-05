@@ -66,7 +66,18 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	if s.isDeadOrGhost() && isBattlegroundMap(s.player.Map) && npcFlags&npcFlagSpiritGuide != 0 {
-		return s.handleAreaSpiritHealerQueue(ctx, payload)
+		// WorldSession::HandleGossipHelloOpcode (NPCHandler.cpp:171-185): a
+		// spirit guide queues the ghost (== AddPlayerToResurrectQueue) and
+		// answers with the wave timer (== SendAreaSpiritHealerQueryOpcode)
+		// instead of opening a gossip menu. The queue handler itself sends no
+		// time packet, so it goes out here, exactly where C++ sends it.
+		if !s.handleAreaSpiritHealerQueue(ctx, payload) {
+			return false
+		}
+		if s.inBattlegroundWaveMap() {
+			s.sendAreaSpiritHealerTime(guid, s.server.spiritWaveTimeLeftMs())
+		}
+		return true
 	}
 	entry, ok := objectUint32Field(creature, "Entry")
 	if !ok {

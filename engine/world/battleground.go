@@ -1142,6 +1142,18 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte) bo
 		s.server.handleAVPlayerLeave(s)
 		s.server.handleArenaPlayerLeave(s)
 		s.server.handleWGPlayerLeave(s)
+		// Battleground::RemovePlayerAtLeave (Battleground.cpp:840) dequeues the
+		// player from the resurrect queue on BG leave: drop the revive-queue
+		// entry and strip SPELL_WAITING_FOR_RESURRECT.
+		s.server.spiritWaveMu.Lock()
+		_, queued := s.server.spiritReviveQueue[s.playerGUID]
+		if queued {
+			delete(s.server.spiritReviveQueue, s.playerGUID)
+		}
+		s.server.spiritWaveMu.Unlock()
+		if queued {
+			s.removeAura(2584) // SPELL_WAITING_FOR_RESURRECT
+		}
 	}
 	s.resetAchievementCriteriaByCondition(criteriaConditionBGMap, s.player.Map)
 	for slot := 0; slot < len(s.bgQueues); slot++ {
