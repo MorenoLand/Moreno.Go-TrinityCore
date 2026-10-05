@@ -532,6 +532,74 @@ func tradeHasItem(items map[uint8]tradeSlotItem, itemGUID uint64) bool {
 	return false
 }
 
+// tradeItemCanBeTraded mirrors Item::CanBeTraded(false, true) (Item.cpp:720-742):
+// whether the item may occupy a traded slot of the trade window.
+func (s *session) tradeItemCanBeTraded(ctx context.Context, itemGUID uint64, bag, slot uint8, flags int64, containerSlots, itemClass, inventoryType uint32, templateFound bool, enchantFields []string) bool {
+	// Soulbound arm (Item.cpp:724): C++ admits BOP-tradeable items here
+	// (IsBOPTradeable), but Go has no item_soulbound_trade_data bridge, so
+	// soulbound items stay rejected conservatively. That also subsumes the
+	// TRADE_STATUS_NOT_ON_TAPLIST leg (TradeHandler.cpp:774-780), which only
+	// fires for BOP-tradeable items offered to a trader outside the allowed set.
+	if flags&1 != 0 {
+		return false
+	}
+	// IsBoundByEnchant arm (Item.cpp:1049-1058): any enchantment carrying
+	// ENCHANTMENT_CAN_SOULBOUND binds the item. The 36-int enchantments column
+	// is slot*3 + (id, duration, charges) over MAX_ENCHANTMENT_SLOT=12 slots.
+	if s.server != nil && s.server.Data != nil {
+		for e := 0; e < 12; e++ {
+			idx := e * 3
+			if idx >= len(enchantFields) {
+				break
+			}
+			id, err := strconv.ParseUint(enchantFields[idx], 10, 32)
+			if err != nil || id == 0 {
+				continue
+			}
+			if entry, found, derr := s.server.Data.SpellItemEnchantment(uint32(id)); derr == nil && found && entry.Flags&enchantFlagCanSoulbound != 0 {
+				return false
+			}
+		}
+	}
+	// Bag arm (Item.cpp:730): a bag sitting in a bag position, or a non-empty
+	// bag, cannot be traded.
+	if containerSlots > 0 {
+		if bag >= invSlotBagStart && bag < invSlotBagEnd && slot == 0 {
+			return false
+		}
+		if !s.isBagEmpty(ctx, int64(itemGUID)) {
+			return false
+		}
+	}
+	// CanUnequipItem arm (Item.cpp:734-735; Player::CanUnequipItem): applies
+	// only to equipped items and bag positions. The loot-generation
+	// (m_lootGenerated), loot-window (GetLootGUID), charm, and arena arms are
+	// transient server state with no database bridge and are not modeled.
+	if (bag == invSlotBag0 && slot < equipSlotEnd) || (bag >= invSlotBagStart && bag < invSlotBagEnd && slot == 0) {
+		if !templateFound {
+			return false
+		}
+		if s.player != nil && s.player.UnitFlags&unitFlagInCombat != 0 && !tradeItemCanChangeEquipStateInCombat(itemClass, inventoryType) {
+			return false
+		}
+	}
+	return true
+}
+
+// tradeItemCanChangeEquipStateInCombat mirrors
+// ItemTemplate::CanChangeEquipStateInCombat (ItemTemplate.cpp:35-52).
+func tradeItemCanChangeEquipStateInCombat(itemClass, inventoryType uint32) bool {
+	switch inventoryType {
+	case 28, 14, 23: // INVTYPE_RELIC, INVTYPE_SHIELD, INVTYPE_HOLDABLE (ItemTemplate.h:275-289)
+		return true
+	}
+	switch itemClass {
+	case 2, 6: // ITEM_CLASS_WEAPON, ITEM_CLASS_PROJECTILE (ItemTemplate.h:298-302)
+		return true
+	}
+	return false
+}
+
 // handleSetTradeItem processes CMSG_SET_TRADE_ITEM (0x11D).
 // Reference: WorldSession::HandleSetTradeItemOpcode (TradeHandler.cpp:723).
 func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
@@ -575,10 +643,11 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 	}
 	var enchantID uint32
 	var gemSocketIDs [3]uint32
+	var enchantFields []string
 	if encStr.Valid && encStr.String != "" {
-		fields := strings.Fields(encStr.String)
-		if len(fields) > 0 {
-			if e, err := strconv.ParseUint(fields[0], 10, 32); err == nil {
+		enchantFields = strings.Fields(encStr.String)
+		if len(enchantFields) > 0 {
+			if e, err := strconv.ParseUint(enchantFields[0], 10, 32); err == nil {
 				enchantID = uint32(e)
 			}
 		}
@@ -588,20 +657,34 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 		// slot*3 + (id, duration, charges), so the sockets sit at fields
 		// 6/9/12 (same layout socketGemEnchantmentIDs reads, items.go:42).
 		for j := 0; j < 3; j++ {
-			if idx := (2 + j) * 3; idx < len(fields) {
-				if e, err := strconv.ParseUint(fields[idx], 10, 32); err == nil {
+			if idx := (2 + j) * 3; idx < len(enchantFields) {
+				if e, err := strconv.ParseUint(enchantFields[idx], 10, 32); err == nil {
 					gemSocketIDs[j] = uint32(e)
 				}
 			}
 		}
 	}
-	var displayID, lockID, maxDurability uint32
+	var displayID, lockID, maxDurability, containerSlots uint32
+	var itemClass, inventoryType uint32
+	templateFound := false
 	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		var disp, lock, maxDur int64
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT displayid, lockid, MaxDurability FROM item_template WHERE entry = ?", itemEntry).Scan(&disp, &lock, &maxDur)
-		displayID = uint32(disp)
-		lockID = uint32(lock)
-		maxDurability = uint32(maxDur)
+		var disp, lock, maxDur, slots, class, invType int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT displayid, lockid, MaxDurability, COALESCE(ContainerSlots, 0), class, InventoryType FROM item_template WHERE entry = ?", itemEntry).Scan(&disp, &lock, &maxDur, &slots, &class, &invType); err == nil {
+			templateFound = true
+			displayID = uint32(disp)
+			lockID = uint32(lock)
+			maxDurability = uint32(maxDur)
+			containerSlots = uint32(slots)
+			itemClass = uint32(class)
+			inventoryType = uint32(invType)
+		}
+	}
+	if tradeSlot < tradeSlotTradedCount && !s.tradeItemCanBeTraded(ctx, uint64(itemGUID), bag, slot, flags, containerSlots, itemClass, inventoryType, templateFound, enchantFields) {
+		// Item::CanBeTraded(false, true) (Item.cpp:720-742) rejects the item
+		// for a traded slot: C++ answers TRADE_STATUS_TRADE_CANCELED
+		// (TradeHandler.cpp:760-765).
+		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
+		return true
 	}
 	if existing, ok := s.trade.Items[tradeSlot]; ok && existing.ItemGUID == uint64(itemGUID) {
 		// TradeData::SetItem (TradeData.cpp:60-65) early-returns when the slot
