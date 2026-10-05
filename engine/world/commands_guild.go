@@ -286,7 +286,7 @@ func (s *session) handleGuildCreateCommand(ctx context.Context, args []string) {
 	// IsReservedName / IsValidCharterName have no Go bridge (documented
 	// gap); the empty and >24-char rejects are enforced (Guild.cpp:1224).
 	if guildName == "" || len(guildName) > 24 {
-		s.sendSysMessage("Incorrect value") // LANG_BAD_VALUE 44
+		s.sendSysMessage("Incorrect value") // LANG_BAD_VALUE 115
 		return
 	}
 
@@ -472,7 +472,12 @@ func (s *session) handleGuildRankCommand(ctx context.Context, args []string) {
 	var rankTok string
 	if len(toks) == 1 {
 		// Optional<PlayerIdentifier> absent -> FromTargetOrSelf
-		// (cs_guild.cpp:207).
+		// (cs_guild.cpp:207). A non-numeric single token is a player name
+		// with the rank missing; the C++ parser rejects it with syntax.
+		if _, err := strconv.ParseUint(toks[0], 10, 8); err != nil {
+			s.sendSysMessage("Syntax: .guild rank [<player>] <rank>")
+			return
+		}
 		if target := s.guildSelectionOrSelf(); target.player != nil {
 			guid = target.playerGUID
 		}
@@ -536,7 +541,7 @@ func (s *session) handleGuildRenameCommand(ctx context.Context, args []string) {
 	}
 	toks := splitQuotedArgs(args)
 	if len(toks) < 1 {
-		s.sendSysMessage("Incorrect value") // LANG_BAD_VALUE 44
+		s.sendSysMessage("Incorrect value") // LANG_BAD_VALUE 115
 		return
 	}
 	if len(toks) < 2 {
@@ -558,11 +563,11 @@ func (s *session) handleGuildRenameCommand(ctx context.Context, args []string) {
 	// reserved or invalid charter name fail. The reserved/charter checks
 	// have no Go bridge (documented gap).
 	if newName == "" || len(newName) > 24 {
-		s.sendSysMessage("Incorrect value") // LANG_BAD_VALUE 44
+		s.sendSysMessage("Incorrect value") // LANG_BAD_VALUE 115
 		return
 	}
 	if _, err := cdb.ExecContext(ctx, "UPDATE guild SET name = ? WHERE guildid = ?", newName, guildID); err != nil {
-		s.sendSysMessage("Incorrect value") // LANG_BAD_VALUE 44
+		s.sendSysMessage("Incorrect value") // LANG_BAD_VALUE 115
 		return
 	}
 	s.sendSysMessage(fmt.Sprintf("'%s' Guild name changed to '%s'", oldName, newName)) // LANG_GUILD_RENAME_DONE 97
