@@ -2,10 +2,10 @@
 -- src/server/scripts/Northrend/DraktharonKeep/boss_tharon_ja.cpp
 -- (boss_tharon_ja (BossAI), spell_tharon_ja_clear_gift_of_tharon_ja
 -- (SpellScript); AddSC_boss_tharon_ja at end registers all via
--- GetDrakTharonKeepAI / RegisterSpellScript). The fourth and last
+-- GetDrakTharonKeepAI / RegisterSpellScript). The fourth
 -- Drak'Tharon Keep group in northrend_script_loader.cpp order
 -- (decl 42 / call 237, immediately after AddSC_boss_king_dred();
--- Drak'Tharon Keep block now CLOSED).
+-- instance_drak_tharon_keep follows at decl 43 / call 238).
 -- Entry: 26632 Tharon'ja (drak_tharon_keep.h NPC_THARON_JA —
 -- kalecgos pass; the GetDrakTharonKeepAI ScriptName binding is
 -- instance-shimmed, the creature_template binding DB-side as usual).
