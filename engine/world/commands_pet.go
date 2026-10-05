@@ -8,27 +8,41 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
-// pet command port (cs_pet.cpp): 4 arms — create (480), learn (481),
-// unlearn (482), level (838). learn/unlearn are native via the pet_spell
-// bridge (INSERT OR REPLACE / DELETE + SMSG_PET_LEARNED_SPELL /
-// SMSG_PET_UNLEARNED_SPELL, mirroring pet->learnSpell/removeSpell), and
-// level is native via applyPetLevel (pet_progression.go), mirroring
-// Pet::GivePetLevel. create is documented-blocked: it needs the selected
-// live creature (ChatHandler::getSelectedCreature; command selections
-// resolve only to online players in the Go tree) and the taming pipeline
+// pet command port: pet_commandscript (cs_pet.cpp), the "pet" root with 4
+// arms (create, learn, unlearn, level). THIRTY-FIRST of 40 Commands groups
+// (cs_script_loader.cpp decl 48 / call 94; call order: quest(93) -> pet(94)).
+// Trinity checks permission only on the invoker leaf node
+// (ChatCommand.cpp:487), so each arm gates exactly its own C++ permission
+// (create/learn/unlearn at RBAC.h:348-350, level at RBAC.h:705). The root's
+// own RBAC_PERM_COMMAND_PET (RBAC.h:347, 479) is DEAD in C++: the root uses
+// the deprecated 6-arg ChatCommandBuilder overload (ChatCommand.h:262),
+// which drops the RBACPermissions param and delegates to the sub-only
+// constructor — so a bare ".pet" prints the syntax line with no gate ever
+// checked (same dead-root-perm pattern as the mmap/modify/npc/quest ports);
+// permissionCommandPet stays in permissions.go as documentation only.
+//
+// learn/unlearn are native via the pet_spell bridge (INSERT OR REPLACE /
+// DELETE + SMSG_PET_LEARNED_SPELL / SMSG_PET_UNLEARNED_SPELL, mirroring
+// pet->learnSpell/removeSpell), and level is native via applyPetLevel
+// (pet_progression.go), mirroring Pet::GivePetLevel. create is
+// documented-blocked: it needs the selected live creature
+// (ChatHandler::getSelectedCreature; command selections resolve only to
+// online players in the Go tree) and the taming pipeline
 // (CreateTamedPetFrom / DespawnOrUnsummon / InitTalentForLevel /
 // SavePetToDB / SetMinion), none of which has a Go bridge.
 
-// handleCmdPet dispatches the pet sub-table (cs_pet.cpp:68-75) with Trinity
-// per-level prefix matching. The bare root gates RBAC_PERM_COMMAND_PET
-// (479); each arm gates its own leaf permission per ChatCommand.cpp:487.
+// handleCmdPet dispatches the pet sub-table (cs_pet.cpp:61-75) with Trinity
+// per-level prefix matching. A bare ".pet" prints the syntax line with no
+// permission gate: the root's own 479 is dead in C++ (ChatCommand.h:262
+// deprecated overload).
 func (s *session) handleCmdPet(ctx context.Context, args []string) {
 	const syntax = "Syntax: .pet create|learn|unlearn|level <args>"
 	if len(args) == 0 {
-		if s.miscDeny(ctx, permissionCommandPet) {
-			return
-		}
 		s.sendSysMessage(syntax)
+		return
+	}
+	if s.player == nil {
+		s.sendSysMessage("You must be in game to use that command.")
 		return
 	}
 	sub := strings.ToLower(args[0])
@@ -47,23 +61,21 @@ func (s *session) handleCmdPet(ctx context.Context, args []string) {
 	}
 }
 
-// petTargetOrSelf mirrors ChatHandler::getSelectedPlayerOrSelf for the pet
-// commands (cs_pet.cpp:38-48): the selected online player, else the invoker.
-// An unresolvable selection reports LANG_PLAYER_NOT_FOUND (499) per the
-// tree convention. The C++ also accepts a selected pet unit directly; pet
-// units have no Go bridge (documented gap).
+// petTargetOrSelf mirrors getSelectedPlayerOrSelf (Chat.cpp:344-360) for the
+// pet commands (cs_pet.cpp:38-48): the selected online player, else the
+// invoker. An unresolvable selection falls back to the invoker silently,
+// never nil in-session (same bug class the modify port fixed in dc89b37).
+// The C++ also accepts a selected pet unit directly; pet units have no Go
+// bridge (documented gap).
 func (s *session) petTargetOrSelf() (*session, bool) {
 	target := s
 	if s.selection != 0 && s.server != nil {
-		ts := s.server.playerSessionForGUID(s.selection)
-		if ts == nil || ts.player == nil {
-			s.sendSysMessage("Player not found.")
-			return nil, false
+		if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {
+			target = ts
 		}
-		target = ts
 	}
 	if target.player == nil {
-		s.sendSysMessage("Player not found.")
+		s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
 		return nil, false
 	}
 	return target, true
