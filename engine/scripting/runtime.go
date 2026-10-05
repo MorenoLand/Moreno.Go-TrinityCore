@@ -23,6 +23,8 @@ const (
 	PlayerEventLogin      = 3
 	PlayerEventLogout     = 4
 	PlayerEventChat       = 18
+	PlayerEventEmote      = 23
+	PlayerEventTextEmote  = 24
 	PlayerEventUpdateZone = 27
 	PlayerEventMapChange  = 28
 	PlayerEventCommand    = 42

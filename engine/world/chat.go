@@ -110,8 +110,46 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	s.debug("chat request parsed", "account", s.accountName, "type", typeID, "language", language, "size", len(payload))
-	if len(message) > 255 || (language != languageAddon && (strings.ContainsAny(message, "\r\n") || strings.IndexFunc(message, func(r rune) bool { return r < 32 && r != '\t' }) >= 0)) {
-		s.debug("chat rejected", "account", s.accountName, "reason", "invalid characters")
+	// C++ (ChatHandler.cpp:231-232): messages over 255 bytes are dropped before
+	// any further processing.
+	if len(message) > 255 {
+		s.debug("chat rejected", "account", s.accountName, "reason", "message too long")
+		return true
+	}
+	// C++ (ChatHandler.cpp:253-271): cut at the first newline or carriage
+	// return (drop when the message starts with one), then abort on nasty
+	// (ASCII control, tab allowed) characters.
+	if language != languageAddon {
+		if pos := strings.IndexAny(message, "\r\n"); pos == 0 {
+			s.debug("chat rejected", "account", s.accountName, "reason", "leading newline")
+			return true
+		} else if pos > 0 {
+			message = message[:pos]
+		}
+		if strings.IndexFunc(message, func(r rune) bool { return r < 32 && r != '\t' }) >= 0 {
+			s.debug("chat rejected", "account", s.accountName, "reason", "invalid characters")
+			return true
+		}
+	}
+	// C++ (ChatHandler.cpp:179-193): the mute gate, speak-time update, and
+	// GM-silence aura gate all run before the warden response and command
+	// parsing; addon messages are exempt from flood control. A muted player
+	// therefore cannot run chat commands.
+	if language != languageAddon && s.muteTime > now {
+		remaining := s.muteTime - now
+		if remaining < 1 {
+			remaining = 1
+		}
+		s.sendNotification(fmt.Sprintf("You must wait %d seconds before speaking again.", remaining))
+		s.debug("chat rejected", "account", s.accountName, "reason", "account muted", "mute_until", s.muteTime)
+		return true
+	}
+	if language != languageAddon && typeID != chatAFK && typeID != chatDND {
+		s.updateSpeakTime()
+	}
+	if typeID != chatWhisper && s.hasAura(1852) {
+		s.sendNotification(fmt.Sprintf("Silence is ON for %s", s.player.Name))
+		s.debug("chat rejected", "account", s.accountName, "reason", "GM silence aura", "spell", 1852)
 		return true
 	}
 	if s.warden != nil && s.warden.processLuaCheckResponse(message) {
@@ -133,15 +171,6 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			}
 			return !luaCancelled(values)
 		}
-		return true
-	}
-	if s.muteTime > now {
-		remaining := s.muteTime - now
-		if remaining < 1 {
-			remaining = 1
-		}
-		s.sendNotification(fmt.Sprintf("You must wait %d seconds before speaking again.", remaining))
-		s.debug("chat rejected", "account", s.accountName, "reason", "account muted", "mute_until", s.muteTime)
 		return true
 	}
 	if language == languageAddon && !addonChatType(typeID) {
@@ -171,14 +200,6 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			s.debug("chat rejected", "account", s.accountName, "reason", "language not learned", "language", language, "skill", skill)
 			return true
 		}
-	}
-	if language != languageAddon && typeID != chatAFK && typeID != chatDND {
-		s.updateSpeakTime()
-	}
-	if typeID != chatWhisper && s.hasAura(1852) {
-		s.sendNotification(fmt.Sprintf("Silence is ON for %s", s.player.Name))
-		s.debug("chat rejected", "account", s.accountName, "reason", "GM silence aura", "spell", 1852)
-		return true
 	}
 	if s.player != nil && s.server != nil {
 		required := uint32(0)

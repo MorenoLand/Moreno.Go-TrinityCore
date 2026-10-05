@@ -3,7 +3,10 @@ package world
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -22,7 +25,7 @@ func (s *session) handleStandStateChange(ctx context.Context, payload []byte) bo
 	return true
 }
 
-func (s *session) handleEmote(payload []byte) bool {
+func (s *session) handleEmote(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 4 || s.player.Health == 0 {
 		return true
 	}
@@ -31,6 +34,10 @@ func (s *session) handleEmote(payload []byte) bool {
 	if err != nil || (emote != 0 && emote != 17) {
 		return true
 	}
+	// C++ (ChatHandler.cpp:636-647): Eluna PLAYER_EVENT_ON_EMOTE (23) fires
+	// from ScriptMgr::OnPlayerEmote before the native HandleEmoteCommand; the
+	// hook is void (CallAllFunctions) and cannot cancel.
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventEmote, s.luaPlayer(), emote)
 	packet := protocol.NewBuffer(12)
 	packet.WriteU32(emote)
 	packet.WriteU64(s.playerGUID)
@@ -50,6 +57,13 @@ func (s *session) handleTextEmote(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || s.player.Health == 0 || len(payload) < 16 || s.server.Data == nil {
 		return true
 	}
+	// C++ (ChatHandler.cpp:683-693): text emotes are muted like chat, with
+	// the LANG_WAIT_BEFORE_SPEAKING notification.
+	if now := time.Now().Unix(); s.muteTime > now {
+		s.sendNotification(fmt.Sprintf("You must wait %d seconds before speaking again.", s.muteTime-now))
+		s.debug("text emote rejected", "account", s.accountName, "reason", "account muted")
+		return true
+	}
 	reader := protocol.NewReader(payload)
 	textEmote, err := reader.ReadU32()
 	if err != nil {
@@ -63,6 +77,10 @@ func (s *session) handleTextEmote(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
+	// C++ (ChatHandler.cpp:699): Eluna PLAYER_EVENT_ON_TEXT_EMOTE (24) fires
+	// from ScriptMgr::OnPlayerTextEmote right after the payload read, before
+	// the EmotesText lookup; the hook is void (CallAllFunctions).
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventTextEmote, s.luaPlayer(), textEmote, emoteNum, targetGUID)
 	file, err := s.server.Data.File("EmotesText")
 	if err != nil {
 		return true

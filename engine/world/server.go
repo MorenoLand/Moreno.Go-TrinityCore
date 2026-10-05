@@ -1747,7 +1747,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_EMOTE):
-			if !state.authed || !state.handleEmote(payload) {
+			if !state.authed || !state.handleEmote(ctx, payload) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_TEXT_EMOTE):
