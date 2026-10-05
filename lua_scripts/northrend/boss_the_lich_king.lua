@@ -51,9 +51,8 @@
 -- Sole-source verified: whole-server-tree grep for
 -- "AddSC_boss_the_lich_king" hits boss_the_lich_king.cpp only (+ the
 -- loader decl/call lines); this clone carries no sql/ tree, so
--- ScriptName bindings are DB-side by construction. No lich_king lua
--- existed.
--- Eluna creature events: 1 OnEnterCombat, 3 OnKill, 4 OnDied.
+-- ScriptName bindings are DB-side by construction.
+-- Eluna creature events: 3 OnKill.
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_the_lich_king KilledUnit — Talk(SAY_LK_KILL 10) gated on
 -- victim->GetTypeId() == TYPEID_PLAYER (event 3 — the razuvious
