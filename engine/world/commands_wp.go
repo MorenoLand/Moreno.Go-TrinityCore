@@ -12,8 +12,12 @@ import (
 // the ported Commands groups (cs_script_loader.cpp decl 58 / call 103; call
 // order titles(102) -> wp(103)). Trinity checks permission only on the
 // invoker leaf node (ChatCommand.cpp:487), so each arm gates exactly its own
-// C++ permission (RBAC.h:635-642, 8 constants 767-774 in permissions.go);
-// the root permission 767 covers the bare ".wp".
+// C++ permission (RBAC.h:635-642, 8 constants 767-774 in permissions.go).
+// The root permission 767 is DEAD in C++ — the root is the deprecated 6-arg
+// nullptr+subtable overload (ChatCommand.h:261-263 drops RBACPermissions),
+// so bare ".wp" prints the syntax listing ungated (same pattern as the
+// titles/ticket/reset ports); permissionCommandWp stays in permissions.go as
+// documentation.
 //
 // The Go worldserver has a real waypoint system (creaturemotion.go:
 // loadWaypoints reads waypoint_data on demand; creature_addon.path_id binds a
@@ -82,9 +86,7 @@ func (s *session) wpRefreshMotion(ctx context.Context, guid uint32, pathID uint3
 // handleCmdWp dispatches the "wp" root (cs_wp.cpp:51-57).
 func (s *session) handleCmdWp(ctx context.Context, args []string) {
 	if len(args) == 0 {
-		if s.miscDeny(ctx, permissionCommandWp) {
-			return
-		}
+		// Dead root perm 767 (see header): ungated syntax listing.
 		s.sendSysMessage("Syntax: .wp add|event|load|modify|unload|reload|show")
 		return
 	}
@@ -128,13 +130,9 @@ func (s *session) handleWpAdd(ctx context.Context, args []string) {
 	if len(args) > 0 {
 		pathID = uint32(cAtoi(args[0]))
 	} else if guid, _, ok := s.wpSelectedCreature(ctx); ok {
+		// == target->GetWaypointPath(): the creature's own path, 0 when it
+		// has none — C++ does NOT start a new path here (cs_wp.cpp:97-100).
 		_ = wdb.QueryRowContext(ctx, "SELECT path_id FROM creature_addon WHERE guid = ?", guid).Scan(&pathID)
-		if pathID == 0 {
-			var maxID uint32
-			_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) FROM waypoint_data").Scan(&maxID)
-			pathID = maxID + 1
-			s.sendSysMessage("New path started.")
-		}
 	} else {
 		var maxID uint32
 		_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) FROM waypoint_data").Scan(&maxID)
@@ -192,10 +190,13 @@ func (s *session) handleWpEvent(ctx context.Context, args []string) {
 			s.sendSysMessage(fmt.Sprintf("Wp Event: New waypoint event added: %d", id))
 		}
 	case "del":
-		if id == 0 {
+		// C++ checks arg presence, not the parsed id (cs_wp.cpp:389-392):
+		// ".wp event del 0" queries guid 0 and reports it missing.
+		if len(args) < 2 {
 			s.sendSysMessage("ERROR: Waypoint script guid not present.")
 			return
 		}
+		id := uint32(cAtoi(args[1]))
 		res, err := wdb.ExecContext(ctx, "DELETE FROM waypoint_scripts WHERE guid = ?", id)
 		if err != nil {
 			return
@@ -206,10 +207,12 @@ func (s *session) handleWpEvent(ctx context.Context, args []string) {
 			s.sendSysMessage(fmt.Sprintf("Wp Event: ERROR: you have selected a non existing script: %d", id))
 		}
 	case "listid":
-		if id == 0 {
+		// C++ checks arg presence, not the parsed id (cs_wp.cpp:348-353).
+		if len(args) < 2 {
 			s.sendSysMessage("Wp Event: You must provide waypoint script id.")
 			return
 		}
+		id = uint32(cAtoi(args[1]))
 		rows, err := wdb.QueryContext(ctx, "SELECT guid, delay, command, datalong, datalong2, dataint, x, y, z, o FROM waypoint_scripts WHERE id = ?", id)
 		if err != nil {
 			return
@@ -222,7 +225,10 @@ func (s *session) handleWpEvent(ctx context.Context, args []string) {
 			if rows.Scan(&guid, &delay, &command, &datalong, &datalong2, &dataint, &x, &y, &z, &o) != nil {
 				continue
 			}
-			s.sendSysMessage(fmt.Sprintf("id: %d, guid: %d, delay: %d, command: %d, datalong: %d, datalong2: %d, dataint: %d, posx: %f, posy: %f, posz: %f, orientation: %f",
+			// C++ prints "datatext: %s" with GetCString() on the dataint
+			// field (WorldDatabase.cpp WORLD_SEL_WAYPOINT_SCRIPT_BY_ID has no
+			// datatext column) — the dataint value rendered as a string.
+			s.sendSysMessage(fmt.Sprintf("id: %d, guid: %d, delay: %d, command: %d, datalong: %d, datalong2: %d, datatext: %d, posx: %f, posy: %f, posz: %f, orientation: %f",
 				id, guid, delay, command, datalong, datalong2, dataint, x, y, z, o))
 			found = true
 		}
@@ -236,27 +242,45 @@ func (s *session) handleWpEvent(ctx context.Context, args []string) {
 	}
 }
 
-// handleWpEventMod mirrors the "mod" leg of HandleWpEventCommand.
+// handleWpEventMod mirrors the "mod" leg of HandleWpEventCommand
+// (cs_wp.cpp:413-527): sequential arg checks with the C++-exact literal
+// messages (including its "vallid"/"Wypoint scipt" typos), the setid special
+// branch (no existence check, updates the id column), and per-field update
+// messages. Field names are lowercased per the tree's dispatch convention
+// (C++ compares exact case).
 func (s *session) handleWpEventMod(ctx context.Context, args []string) {
 	wdb := s.server.WorldStore.DB
-	if len(args) < 4 {
-		s.sendSysMessage("Syntax: .wp event mod <id> <setid|delay|command|datalong|datalong2|dataint|posx|posy|posz|orientation> <value>")
+	if len(args) < 2 {
+		s.sendSysMessage("ERROR: Waypoint script guid not present.")
 		return
 	}
 	id := uint32(cAtoi(args[1]))
 	if id == 0 {
-		s.sendSysMessage("ERROR: No valid waypoint script id present.")
+		s.sendSysMessage("ERROR: No vallid waypoint script id not present.")
+		return
+	}
+	if len(args) < 3 {
+		s.sendSysMessage("ERROR: No argument present.")
 		return
 	}
 	field := strings.ToLower(args[2])
-	columns := map[string]string{
-		"setid": "id", "delay": "delay", "command": "command", "datalong": "datalong",
-		"datalong2": "datalong2", "dataint": "dataint", "posx": "x", "posy": "y",
-		"posz": "z", "orientation": "o",
-	}
-	col, ok := columns[field]
-	if !ok {
+	if field != "setid" && field != "delay" && field != "command" && field != "datalong" &&
+		field != "datalong2" && field != "dataint" && field != "posx" && field != "posy" &&
+		field != "posz" && field != "orientation" {
 		s.sendSysMessage("ERROR: No valid argument present.")
+		return
+	}
+	if len(args) < 4 {
+		s.sendSysMessage("ERROR: No additional argument present.")
+		return
+	}
+	value := args[3]
+	if field == "setid" {
+		newID := uint32(cAtoi(value))
+		if _, err := wdb.ExecContext(ctx, "UPDATE waypoint_scripts SET id = ? WHERE guid = ?", newID, id); err != nil {
+			return
+		}
+		s.sendSysMessage(fmt.Sprintf("Wp Event: Wypoint scipt guid: %d id changed: %d", newID, id))
 		return
 	}
 	var existing int
@@ -264,10 +288,23 @@ func (s *session) handleWpEventMod(ctx context.Context, args []string) {
 		s.sendSysMessage("ERROR: You have selected an non existing waypoint script guid.")
 		return
 	}
-	if _, err := wdb.ExecContext(ctx, "UPDATE waypoint_scripts SET "+col+" = ? WHERE guid = ?", args[3], id); err != nil {
+	switch field {
+	case "posx", "posy", "posz", "orientation", "dataint":
+		cols := map[string]string{"posx": "x", "posy": "y", "posz": "z", "orientation": "o", "dataint": "dataint"}
+		names := map[string]string{"posx": "position_x", "posy": "position_y", "posz": "position_z", "orientation": "orientation", "dataint": "dataint"}
+		if _, err := wdb.ExecContext(ctx, "UPDATE waypoint_scripts SET "+cols[field]+" = ? WHERE guid = ?", value, id); err != nil {
+			return
+		}
+		s.sendSysMessage(fmt.Sprintf("Waypoint script: %d %s updated.", id, names[field]))
 		return
+	case "delay", "command", "datalong", "datalong2":
+		if _, err := wdb.ExecContext(ctx, "UPDATE waypoint_scripts SET "+field+" = ? WHERE guid = ?", value, id); err != nil {
+			return
+		}
+		s.sendSysMessage(fmt.Sprintf("Waypoint script: %d: %s updated.", id, field))
+	default:
+		s.sendSysMessage("ERROR: No valid argument present.")
 	}
-	s.sendSysMessage(fmt.Sprintf("Waypoint script: %d: %s updated.", id, field))
 }
 
 // handleWpLoad mirrors HandleWpLoadCommand (cs_wp.cpp:163).
@@ -351,7 +388,8 @@ func (s *session) handleWpReload(ctx context.Context, args []string) {
 
 // wpVisualPoint resolves the selected visual waypoint (entry 1) to its
 // (pathid, point): by wpguid when the column exists, else by position
-// proximity (the C++ fallback, cs_wp.cpp:600-625).
+// proximity (the C++ fallback, cs_wp.cpp:600-625). C++ takes the LAST
+// matching row (do-while), so the proximity scan keeps the last hit too.
 func (s *session) wpVisualPoint(ctx context.Context, guid uint32) (pathID, point uint32, ok bool) {
 	wdb := s.server.WorldStore.DB
 	if wdb.QueryRowContext(ctx, "SELECT id, point FROM waypoint_data WHERE wpguid = ?", guid).Scan(&pathID, &point) == nil {
@@ -361,12 +399,20 @@ func (s *session) wpVisualPoint(ctx context.Context, guid uint32) (pathID, point
 	if wdb.QueryRowContext(ctx, "SELECT position_x, position_y, position_z FROM creature WHERE guid = ?", guid).Scan(&x, &y, &z) != nil {
 		return 0, 0, false
 	}
-	if wdb.QueryRowContext(ctx, `SELECT id, point FROM waypoint_data
-		WHERE abs(position_x - ?) <= 0.01 AND abs(position_y - ?) <= 0.01 AND abs(position_z - ?) <= 0.01 LIMIT 1`,
-		x, y, z).Scan(&pathID, &point) == nil {
-		return pathID, point, true
+	rows, err := wdb.QueryContext(ctx, `SELECT id, point FROM waypoint_data
+		WHERE abs(position_x - ?) <= 0.01 AND abs(position_y - ?) <= 0.01 AND abs(position_z - ?) <= 0.01`,
+		x, y, z)
+	if err != nil {
+		return 0, 0, false
 	}
-	return 0, 0, false
+	defer rows.Close()
+	for rows.Next() {
+		var pid, pt uint32
+		if rows.Scan(&pid, &pt) == nil {
+			pathID, point, ok = pid, pt, true
+		}
+	}
+	return pathID, point, ok
 }
 
 // handleWpModify mirrors HandleWpModifyCommand (cs_wp.cpp:541): delay,
@@ -383,6 +429,9 @@ func (s *session) handleWpModify(ctx context.Context, args []string) {
 	switch show {
 	case "delay", "action", "action_chance", "move_type", "del", "move":
 	default:
+		// C++ returns false (framework help); the tree prints the syntax
+		// line for that (the reset-port convention).
+		s.sendSysMessage("Syntax: .wp modify delay|action|action_chance|move_type|del|move [value]")
 		return
 	}
 	guid, entry, ok := s.wpSelectedCreature(ctx)
@@ -398,6 +447,7 @@ func (s *session) handleWpModify(ctx context.Context, args []string) {
 	wdb := s.server.WorldStore.DB
 	switch show {
 	case "del":
+		s.sendSysMessage(fmt.Sprintf("DEBUG: wp modify del, PathID: %d", pathID))
 		_, _ = wdb.ExecContext(ctx, "DELETE FROM waypoint_data WHERE id = ? AND point = ?", pathID, point)
 		_, _ = wdb.ExecContext(ctx, "UPDATE waypoint_data SET point = point - 1 WHERE id = ? AND point > ?", pathID, point)
 		_, _ = wdb.ExecContext(ctx, "DELETE FROM creature WHERE guid = ?", guid)
@@ -407,6 +457,7 @@ func (s *session) handleWpModify(ctx context.Context, args []string) {
 		if s.player == nil {
 			return
 		}
+		s.sendSysMessage(fmt.Sprintf("DEBUG: wp move, PathID: %d", pathID))
 		p := s.player
 		_, _ = wdb.ExecContext(ctx, "UPDATE waypoint_data SET position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE id = ? AND point = ?",
 			p.X, p.Y, p.Z, p.Orientation, pathID, point)
@@ -422,7 +473,7 @@ func (s *session) handleWpModify(ctx context.Context, args []string) {
 	if _, err := wdb.ExecContext(ctx, "UPDATE waypoint_data SET "+show+" = ? WHERE id = ? AND point = ?", args[1], pathID, point); err != nil {
 		return
 	}
-	s.sendSysMessage(fmt.Sprintf("Waypoint %s updated.", show))
+	s.sendSysMessage(fmt.Sprintf("Waypoint %s changed.", show)) // LANG_WAYPOINT_CHANGED_NO 237
 }
 
 // wpSpawnVisual spawns one visual-waypoint creature row (entry 1, the
@@ -459,54 +510,84 @@ func (s *session) handleWpShow(ctx context.Context, args []string) {
 		return
 	}
 	show := strings.ToLower(args[0])
+	// C++ pathid resolution (cs_wp.cpp:741-764): an explicit pathid wins and
+	// warns when a creature is also selected; otherwise the selected
+	// creature's path is used, and with neither the command errors.
+	guid, _, hasTarget := s.wpSelectedCreature(ctx)
 	var pathID uint32
 	if len(args) > 1 {
+		if hasTarget {
+			s.sendSysMessage("Creature selected.") // LANG_WAYPOINT_CREATSELECTED 224, TDB enUS recall
+		}
 		pathID = uint32(cAtoi(args[1]))
-	} else if guid, _, ok := s.wpSelectedCreature(ctx); ok {
+	} else {
+		if !hasTarget {
+			s.sendSysMessage("Select a creature.") // LANG_SELECT_CREATURE 199
+			return
+		}
 		_ = wdb.QueryRowContext(ctx, "SELECT path_id FROM creature_addon WHERE guid = ?", guid).Scan(&pathID)
 	}
 	switch show {
 	case "info":
 		guid, entry, ok := s.wpSelectedCreature(ctx)
 		if !ok || entry != 1 {
-			s.sendSysMessage("Select a visual waypoint.")
+			s.sendSysMessage("Select a visual waypoint.") // LANG_WAYPOINT_VP_SELECT 226, TDB enUS recall
 			return
 		}
-		pid, point, ok := s.wpVisualPoint(ctx, guid)
-		if !ok {
+		// C++ info looks up by wpguid only — no position fallback
+		// (WORLD_SEL_WAYPOINT_DATA_ALL_BY_WPGUID, cs_wp.cpp:778-784).
+		rows, err := wdb.QueryContext(ctx, "SELECT id, point, delay, move_type, action, action_chance FROM waypoint_data WHERE wpguid = ?", guid)
+		if err != nil {
+			return
+		}
+		defer rows.Close()
+		found := false
+		for rows.Next() {
+			var pid, point, delay, moveType, action, actionChance uint32
+			if rows.Scan(&pid, &point, &delay, &moveType, &action, &actionChance) != nil {
+				continue
+			}
+			if !found {
+				s.sendSysMessage("DEBUG: wp show info:")
+			}
+			found = true
+			s.sendSysMessage(fmt.Sprintf("Show info: for current point: %d, Path ID: %d", point, pid))
+			s.sendSysMessage(fmt.Sprintf("Show info: delay: %d", delay))
+			s.sendSysMessage(fmt.Sprintf("Show info: Move flag: %d", moveType))
+			s.sendSysMessage(fmt.Sprintf("Show info: Waypoint event: %d", action))
+			s.sendSysMessage(fmt.Sprintf("Show info: Event chance: %d", actionChance))
+		}
+		if !found {
+			// LANG_WAYPOINT_NOTFOUNDDBPROBLEM 223; text unconfirmed from TDB,
+			// keeping the port's established wording.
 			s.sendSysMessage(fmt.Sprintf("Waypoint %d not found in DB.", guid))
-			return
 		}
-		var delay, moveType, action, actionChance uint32
-		_ = wdb.QueryRowContext(ctx, "SELECT delay, move_type, action, action_chance FROM waypoint_data WHERE id = ? AND point = ?", pid, point).Scan(&delay, &moveType, &action, &actionChance)
-		s.sendSysMessage(fmt.Sprintf("Show info: for current point: %d, Path ID: %d", point, pid))
-		s.sendSysMessage(fmt.Sprintf("Show info: delay: %d", delay))
-		s.sendSysMessage(fmt.Sprintf("Show info: Move flag: %d", moveType))
-		s.sendSysMessage(fmt.Sprintf("Show info: Waypoint event: %d", action))
-		s.sendSysMessage(fmt.Sprintf("Show info: Event chance: %d", actionChance))
 	case "on":
-		if pathID == 0 {
-			s.sendSysMessage("Select a creature.")
+		// C++ checks the path exists first (cs_wp.cpp:808-814).
+		var one int
+		if wdb.QueryRowContext(ctx, "SELECT 1 FROM waypoint_data WHERE id = ? LIMIT 1", pathID).Scan(&one) != nil {
+			s.sendSysMessage("Path no found.")
 			return
 		}
-		// Delete existing visuals for this path first.
-		rows, err := wdb.QueryContext(ctx, "SELECT guid FROM creature WHERE id = 1")
+		s.sendSysMessage(fmt.Sprintf("DEBUG: wp on, PathID: %d", pathID))
+		// Delete only this path's visuals (wpguids attached to its rows),
+		// not every visual waypoint in the world (cs_wp.cpp:818-843).
+		vrows, err := wdb.QueryContext(ctx, "SELECT wpguid FROM waypoint_data WHERE id = ? AND wpguid <> 0", pathID)
 		if err == nil {
-			for rows.Next() {
+			for vrows.Next() {
 				var g uint32
-				if rows.Scan(&g) == nil {
+				if vrows.Scan(&g) == nil {
 					_, _ = wdb.ExecContext(ctx, "DELETE FROM creature WHERE guid = ?", g)
 				}
 			}
-			rows.Close()
+			vrows.Close()
 		}
-		_, _ = wdb.ExecContext(ctx, "UPDATE waypoint_data SET wpguid = 0")
+		_, _ = wdb.ExecContext(ctx, "UPDATE waypoint_data SET wpguid = 0 WHERE id = ?", pathID)
 		pts, err := wdb.QueryContext(ctx, "SELECT point, position_x, position_y, position_z, orientation FROM waypoint_data WHERE id = ? ORDER BY point", pathID)
 		if err != nil {
 			return
 		}
 		defer pts.Close()
-		shown := false
 		for pts.Next() {
 			var point uint32
 			var x, y, z, o float64
@@ -515,18 +596,14 @@ func (s *session) handleWpShow(ctx context.Context, args []string) {
 			}
 			if vg := s.wpSpawnVisual(ctx, x, y, z, o); vg != 0 {
 				_, _ = wdb.ExecContext(ctx, "UPDATE waypoint_data SET wpguid = ? WHERE id = ? AND point = ?", vg, pathID, point)
-				shown = true
 			}
-		}
-		if !shown {
-			s.sendSysMessage("Path not found.")
-			return
 		}
 		s.sendSysMessage("Showing the current creature's path.")
 	case "first", "last":
-		if pathID == 0 {
-			s.sendSysMessage("Select a creature.")
-			return
+		if show == "first" {
+			s.sendSysMessage(fmt.Sprintf("DEBUG: wp first, GUID: %d", pathID))
+		} else {
+			s.sendSysMessage(fmt.Sprintf("DEBUG: wp last, PathID: %d", pathID))
 		}
 		order := "ORDER BY point ASC"
 		if show == "last" {
@@ -534,7 +611,7 @@ func (s *session) handleWpShow(ctx context.Context, args []string) {
 		}
 		var x, y, z, o float64
 		if wdb.QueryRowContext(ctx, "SELECT position_x, position_y, position_z, orientation FROM waypoint_data WHERE id = ? "+order+" LIMIT 1", pathID).Scan(&x, &y, &z, &o) != nil {
-			s.sendSysMessage(fmt.Sprintf("Waypoint %d not found.", pathID))
+			s.sendSysMessage(fmt.Sprintf("Waypoint %d not found.", pathID)) // LANG_WAYPOINT_NOTFOUND 220 / NOTFOUNDLAST 221
 			return
 		}
 		s.wpSpawnVisual(ctx, x, y, z, o)
@@ -543,16 +620,22 @@ func (s *session) handleWpShow(ctx context.Context, args []string) {
 		if err != nil {
 			return
 		}
+		found := false
 		for rows.Next() {
 			var g uint32
 			if rows.Scan(&g) == nil {
 				_, _ = wdb.ExecContext(ctx, "DELETE FROM creature WHERE guid = ?", g)
+				found = true
 			}
 		}
 		rows.Close()
+		if !found {
+			s.sendSysMessage("Visual waypoint not found.") // LANG_WAYPOINT_VP_NOTFOUND 227, TDB enUS recall
+			return
+		}
 		_, _ = wdb.ExecContext(ctx, "UPDATE waypoint_data SET wpguid = 0")
 		s.sendSysMessage("All visual waypoints removed.")
 	default:
-		s.sendSysMessage("Syntax: .wp show on|off|first|last|info [pathid]")
+		s.sendSysMessage("DEBUG: wpshow - no valid command found")
 	}
 }
