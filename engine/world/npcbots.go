@@ -403,6 +403,9 @@ func (m *NPCBotManager) Assign(ctx context.Context, owner, entry uint32) error {
 	return m.Update(ctx, entry, NpcBotUpdateOwner, owner)
 }
 
+// Recruit is the paid-hire entry point (BotMgr::AddBot(bot, true)). Its C++
+// callers are the gossip-hire flows (botgiver.cpp HIRE_ENTRY, bot_ai.cpp
+// GOSSIP_SENDER_HIRE), which have no Go counterpart yet — no call sites.
 func (m *NPCBotManager) Recruit(ctx context.Context, owner, entry uint32) (BotAssignResult, error) {
 	return m.addBot(ctx, owner, entry, true)
 }
@@ -458,13 +461,20 @@ func (m *NPCBotManager) addBot(ctx context.Context, owner, entry uint32, takeMon
 			classOwned++
 		}
 	}
-	if owned >= m.maxNPCBots() {
+	// C++: temporary bots (mirror-image blademaster summons, entry 70552 ==
+	// BOT_ENTRY_MIRROR_IMAGE_BM, bot_ai.h:114) skip the max-count, max-class
+	// and cost gates (botmgr.cpp:832). IsDuringTeleport (BOT_ADD_BUSY) has no
+	// Go bridge: hires act on persisted rows, never a live BotAI, so the
+	// transient teleport state cannot be observed here (BotAddBusy stays
+	// defined for enum parity with BOT_ADD_BUSY = 0x040).
+	temporary := entry == npcBotEntryMirrorImage
+	if !temporary && owned >= m.maxNPCBots() {
 		return BotAddMaxExceeded, nil
 	}
-	if m.config.MaxBotsPerClass > 0 && classOwned >= m.config.MaxBotsPerClass {
+	if !temporary && m.config.MaxBotsPerClass > 0 && classOwned >= m.config.MaxBotsPerClass {
 		return BotAddMaxClassExceeded, nil
 	}
-	if takeMoney {
+	if !temporary && takeMoney {
 		cost = NpcBotCost(uint8(level), extra.Class, m.config.Cost)
 		if uint64(money) < cost {
 			return BotAddCannotAfford, nil
