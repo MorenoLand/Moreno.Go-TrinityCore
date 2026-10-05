@@ -553,6 +553,27 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 		return s.finishLootOpen(ctx, loot)
 	}
 
+	// HandleLootOpcode cheat gate (LootHandler.cpp:229-239): CMSG_LOOT with a
+	// non creature/vehicle GUID is dropped silently — no release response.
+	// Player-corpse (bones) GUIDs (0xF101, ObjectGuid.h HighGuid::Corpse)
+	// fall here: the SendLoot LOOT_CORPSE/LOOT_INSIGNIA arm
+	// (Player.cpp:8712-8749) is server-driven only, via
+	// Player::RemovedInsignia (Player.cpp:8486, bones conversion +
+	// CORPSE_DYNFLAG_LOOTABLE + level stashed in loot.gold + lootRecipient)
+	// reached from Spell::EffectSkinPlayerCorpse (SpellEffects.cpp:5126).
+	// Go has no EffectSkinPlayerCorpse trigger, no corpse INSERT on death,
+	// and no per-corpse loot store, so the insignia/bones regen path
+	// (AV/Wintergrasp FillLoot(PLAYER_CORPSE_LOOT_ENTRY, LootTemplates_Creature)
+	// + gold = urand(50,150)*0.016*pow(level/5.76,2.5)*RATE_DROP_MONEY,
+	// Player.cpp:8727-8742; OWNER/NONE permission on lootRecipient;
+	// HandleLootMoney corpse arm LootHandler.cpp:128-139 shareMoney=false;
+	// DoLootRelease corpse arm LootHandler.cpp:311-322 clearing loot and
+	// CORPSE_DYNFLAG_LOOTABLE) has no bridge until a bones-loot trigger
+	// exists; the cheat-gate silent return is the only reachable arm.
+	if high == 0xF101 {
+		return true
+	}
+
 	target, ok := s.getCombatTarget(ctx, targetGUID)
 	if !ok || target.Map != s.player.Map || target.InstanceID != s.player.InstanceID || !withinLootDistance(s, target) {
 		return s.sendLootReleaseResponse(targetGUID) == nil
