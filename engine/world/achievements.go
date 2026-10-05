@@ -1282,9 +1282,11 @@ func (s *Server) creditHonorableKill(killer, victim *session) {
 	}
 	killer.sendPlayerUpdate()
 	killer.updateAchievementCriteria(criteriaTypeHonorableKill, 0, 1)
-	killer.updateAchievementCriteria(criteriaTypeEarnHonorableKill, 0, 1)
-	if killer.player.Zone > 0 {
-		killer.updateAchievementCriteria(criteriaTypeHKAtArea, killer.player.Zone, 1)
+	// EARN_HONORABLE_KILL is PROGRESS_SET to lifetime kills (AchievementMgr.cpp:1039),
+	// not an accumulate; HONORABLE_KILL_AT_AREA is keyed by area id (Player.cpp:6945).
+	killer.setAchievementCriteria(criteriaTypeEarnHonorableKill, 0, killer.player.TotalKills)
+	if killer.areaID > 0 {
+		killer.updateAchievementCriteria(criteriaTypeHKAtArea, killer.areaID, 1)
 	}
 	victim.updateAchievementCriteria(criteriaTypeKilledByPlayer, 0, 1)
 	killer.updateAchievementCriteria(criteriaTypeHKClass, uint32(victim.player.Class), 1)

@@ -253,11 +253,14 @@ func (s *session) rewardHonorKill(ctx context.Context, victim *session) {
 		s.player.TodayKills++
 	}
 	s.player.TotalKills++
-	// UpdateAchievementCriteria chain (Player.cpp:6940-6945).
+	// UpdateAchievementCriteria chain (Player.cpp:6940-6945). EARN_HONORABLE_KILL
+	// is PROGRESS_SET to the lifetime kill field (AchievementMgr.cpp:1039),
+	// not an accumulate; HONORABLE_KILL_AT_AREA is keyed by area id
+	// (GetAreaId, Player.cpp:6945), not zone id.
 	s.updateAchievementCriteria(criteriaTypeHonorableKill, 0, 1)
-	s.updateAchievementCriteria(criteriaTypeEarnHonorableKill, 0, 1)
-	if s.player.Zone > 0 {
-		s.updateAchievementCriteria(criteriaTypeHKAtArea, s.player.Zone, 1)
+	s.setAchievementCriteria(criteriaTypeEarnHonorableKill, 0, s.player.TotalKills)
+	if s.areaID > 0 {
+		s.updateAchievementCriteria(criteriaTypeHKAtArea, s.areaID, 1)
 	}
 	s.updateAchievementCriteria(criteriaTypeHKClass, uint32(victim.player.Class), 1)
 	s.updateAchievementCriteria(criteriaTypeHKRace, uint32(victim.player.Race), 1)
