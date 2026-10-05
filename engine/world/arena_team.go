@@ -141,6 +141,8 @@ func (s *session) handleArenaTeamRoster(ctx context.Context, payload []byte) boo
 const (
 	arenaTeamCreateS           uint32 = 0x00
 	arenaTeamInviteSS          uint32 = 0x01
+	arenaTeamInternal          uint32 = 0x01
+	alreadyInArenaTeam         uint32 = 0x02
 	alreadyInArenaTeamS        uint32 = 0x03
 	alreadyInvitedToArenaTeamS uint32 = 0x05
 	arenaTeamPermissions       uint32 = 0x08
@@ -276,18 +278,67 @@ func (s *session) handleArenaTeamInvite(ctx context.Context, payload []byte) boo
 }
 
 // handleArenaTeamAccept processes CMSG_ARENA_TEAM_ACCEPT (0x351).
-// Reference: WorldSession::HandleArenaTeamAcceptOpcode (ArenaTeamHandler.cpp:170).
+// Reference: WorldSession::HandleArenaTeamAcceptOpcode (ArenaTeamHandler.cpp:170)
+// and ArenaTeam::AddMember (ArenaTeam.cpp:93).
 func (s *session) handleArenaTeamAccept(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || s.arenaTeamInvited == 0 {
 		return true
 	}
 	teamID := s.arenaTeamInvited
-	s.arenaTeamInvited = 0
 
 	cdb := s.server.CharactersStore.DB
-	if cdb != nil {
-		_, _ = cdb.ExecContext(ctx, "INSERT OR REPLACE INTO arena_team_member (arenaTeamId, guid, weekGames, weekWins, seasonGames, seasonWins, personalRating) VALUES (?, ?, 0, 0, 0, 0, 1500)", teamID, s.playerGUID)
+	if cdb == nil {
+		return true
 	}
+
+	// GetArenaTeamById miss -> silent return == C++.
+	var aType, captainGUID uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT type, captainGuid FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&aType, &captainGUID); err != nil {
+		return true
+	}
+
+	// Already in another team of the same size == C++ GetArenaTeamId(slot) arm.
+	if arenaTeamIDForSlot(ctx, cdb, s.playerGUID, aType) != 0 {
+		s.sendArenaTeamCommandResult(arenaTeamCreateS, "", "", alreadyInArenaTeam)
+		return true
+	}
+
+	// Only the other faction joins when cross-faction interaction is on ==
+	// C++ GetCharacterTeamByGuid(arenaTeam->GetCaptain()).
+	if !s.server.Config.AllowTwoSideInteractionGuild {
+		var captainRace uint8
+		if err := cdb.QueryRowContext(ctx, "SELECT race FROM characters WHERE guid = ?", captainGUID).Scan(&captainRace); err == nil {
+			if teamForRace(s.player.Race) != teamForRace(captainRace) {
+				s.sendArenaTeamCommandResult(arenaTeamCreateS, "", "", arenaTeamNotAllied)
+				return true
+			}
+		}
+	}
+
+	// Team full == C++ AddMember GetMembersSize() >= GetType() * 2.
+	var members int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM arena_team_member WHERE arenaTeamId = ?", teamID).Scan(&members)
+	if uint64(members) >= uint64(aType)*2 {
+		s.sendArenaTeamCommandResult(arenaTeamCreateS, "", "", arenaTeamInternal)
+		return true
+	}
+
+	// Player::RemovePetitionsAndSigns: drop the player's arena-charter signs and
+	// owned arena charters of this type == C++ (charter type == arena type: 2/3/5).
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition_sign WHERE playerguid = ? AND type = ?", s.playerGUID, aType)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition WHERE ownerguid = ? AND type = ?", s.playerGUID, aType)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition_sign WHERE ownerguid = ? AND type = ?", s.playerGUID, aType)
+
+	// Personal rating == C++ AddMember: CONFIG_ARENA_START_PERSONAL_RATING (1000
+	// by default) wins when positive; Go keeps no arena rating config, so the
+	// C++ default applies. The old 1500 constant belonged to the matchmaker rating.
+	if _, err := cdb.ExecContext(ctx, "INSERT INTO arena_team_member (arenaTeamId, guid, weekGames, weekWins, seasonGames, seasonWins, personalRating) VALUES (?, ?, 0, 0, 0, 0, 1000)", teamID, s.playerGUID); err != nil {
+		s.sendArenaTeamCommandResult(arenaTeamCreateS, "", "", arenaTeamInternal)
+		return true
+	}
+
+	// Player::SetArenaTeamIdInvited(0) on the online player == C++ AddMember.
+	s.arenaTeamInvited = 0
 
 	rosterPayload := protocol.NewBuffer(4)
 	rosterPayload.WriteU32(teamID)
