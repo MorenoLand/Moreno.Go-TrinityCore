@@ -148,6 +148,150 @@ func itemFitsEquipmentSlot(state *playerState, equipped map[int64]itemQueryData,
 	return false
 }
 
+// grantMaxSkill mirrors the Denveous-marker SetSkill(itemSkill, 0, 400, 400)
+// arms in Player::CanUseItem (Player.cpp:11875, 11957): when the player has
+// the item's equip spell or proficiency skill (or a required spell/skill) but
+// its value is zero, the skill is maxed out and persisted to character_skills.
+func (s *session) grantMaxSkill(ctx context.Context, state *playerState, skillID uint32) {
+	if s == nil || state == nil || skillID == 0 || skillID > 0xffff {
+		return
+	}
+	for i := range state.Skills {
+		if uint32(state.Skills[i].Skill) == skillID {
+			if state.Skills[i].Value != 0 {
+				return
+			}
+			state.Skills[i].Value, state.Skills[i].Max = 400, 400
+			if db := s.server.CharactersStore.DB; db != nil {
+				_, _ = db.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, 400, 400)", state.GUID, skillID)
+			}
+			return
+		}
+	}
+	state.Skills = append(state.Skills, playerSkill{Skill: uint16(skillID), Value: 400, Max: 400})
+	if db := s.server.CharactersStore.DB; db != nil {
+		_, _ = db.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, 400, 400)", state.GUID, skillID)
+	}
+}
+
+// canUseItemResult mirrors Player::CanUseItem(Item*) (Player.cpp:11859) in
+// InventoryResult form for the use-item path: the dead gate lives in
+// handleUseItem and the level gate in its template-gates block, so this
+// covers the remaining arms in C++ order — the Denveous-marker AX1 bypass
+// (Player.cpp:11871), the proto arms (Player.cpp:11932: faction flags2,
+// allowable class/race, Denveous-marker AX2 bypass, RequiredSkill/Rank,
+// RequiredSpell, HolidayId, the 483/55884 learning arm), the
+// GetSkill()-proficiency + heirloom-exception arm (Player.cpp:11984) and the
+// reputation arm (Player.cpp:12008). IsBindedNotWith is vacuous here: the
+// item row was read from this player's own character_inventory, so the owner
+// is necessarily the player. Eluna's OnCanUseItem has no Go fire site.
+func (s *session) canUseItemResult(ctx context.Context, itemClass, itemSubClass, itemTplFlags2 uint32, allowableClass, allowableRace int64, reqSkill, reqSkillRank, reqSpell, holidayID, quality, reqRepFaction, reqRepRank uint32, itemSpellIDs [5]int64) uint8 {
+	if s == nil || s.player == nil {
+		return equipErrItemNotFound
+	}
+	// Item::GetSpell/GetSkill (Item.cpp:545-588) — class/subclass tables, the
+	// same rows as the canUseItemData path above.
+	weaponSkills := [...]uint32{44, 172, 45, 46, 54, 160, 229, 43, 55, 0, 136, 0, 0, 473, 0, 173, 176, 253, 226, 228, 356}
+	weaponSpells := [...]uint32{196, 197, 264, 266, 198, 199, 200, 201, 202, 0, 227, 0, 0, 0, 0, 1180, 2567, 3386, 5011, 5009, 0}
+	armorSkills := [...]uint32{0, 415, 414, 413, 293, 0, 433, 0, 0, 0, 0}
+	armorSpells := [...]uint32{0, 9078, 9077, 8737, 750, 0, 9116, 0, 0, 0, 0}
+	itemSkill, itemSpell := uint32(0), uint32(0)
+	switch itemClass {
+	case itemClassWeapon:
+		if itemSubClass < uint32(len(weaponSkills)) {
+			itemSkill, itemSpell = weaponSkills[itemSubClass], weaponSpells[itemSubClass]
+		}
+	case itemClassArmor:
+		if itemSubClass < uint32(len(armorSkills)) {
+			itemSkill, itemSpell = armorSkills[itemSubClass], armorSpells[itemSubClass]
+		}
+	}
+	hasSkill := func(skillID uint32) bool {
+		if skillID == 0 {
+			return false
+		}
+		for _, skill := range s.player.Skills {
+			if uint32(skill.Skill) == skillID {
+				return true
+			}
+		}
+		return false
+	}
+	// Denveous's Marker AX1 (Player.cpp:11871-11880) — the equip spell or
+	// proficiency skill is known: max a zero skill out and accept outright.
+	if playerHasSpell(s.player, itemSpell) || hasSkill(itemSkill) {
+		s.grantMaxSkill(ctx, s.player, itemSkill)
+		return equipErrOk
+	}
+	team := playerTeam(s.player.Race)
+	if (itemTplFlags2&0x01 != 0 && team != teamHorde) || (itemTplFlags2&0x02 != 0 && team != teamAlliance) {
+		return equipErrYouCanNeverUseThatItem
+	}
+	classMask, raceMask := uint32(0), uint32(0)
+	if s.player.Class > 0 {
+		classMask = uint32(1) << uint(s.player.Class-1)
+	}
+	if s.player.Race > 0 {
+		raceMask = uint32(1) << uint(s.player.Race-1)
+	}
+	if uint32(allowableClass)&classMask == 0 || uint32(allowableRace)&raceMask == 0 {
+		return equipErrYouCanNeverUseThatItem
+	}
+	// Denveous's Marker AX2 (Player.cpp:11953-11963).
+	if playerHasSpell(s.player, reqSpell) || hasSkill(reqSkill) {
+		s.grantMaxSkill(ctx, s.player, reqSkill)
+		return equipErrOk
+	}
+	if reqSkill != 0 {
+		skillVal := playerSkillTotalValue(s.player, reqSkill)
+		if skillVal == 0 {
+			return equipErrNoRequiredProficiency
+		} else if skillVal < int32(reqSkillRank) {
+			return equipErrCantEquipSkill
+		}
+	}
+	if reqSpell != 0 && !playerHasSpell(s.player, reqSpell) {
+		return equipErrNoRequiredProficiency
+	}
+	if holidayID != 0 {
+		if _, active := s.server.cachedActiveGameHolidays(ctx)[int64(holidayID)]; !active {
+			return equipErrCantDoRightNow
+		}
+	}
+	// learning (recipes, mounts, pets, etc.): C++ returns EQUIP_ERR_NONE (59)
+	// when the taught spell is already known — a denial, not EQUIP_ERR_OK.
+	if (itemSpellIDs[0] == 483 || itemSpellIDs[0] == 55884) && itemSpellIDs[1] > 0 && playerHasSpell(s.player, uint32(itemSpellIDs[1])) {
+		return equipErrNone
+	}
+	if itemSkill != 0 {
+		allowEquip := false
+		if quality == 7 /* ITEM_QUALITY_HEIRLOOM */ && itemClass == itemClassArmor && !hasSkill(itemSkill) {
+			switch s.player.Class {
+			case 3, 7:
+				allowEquip = itemSkill == 413
+			case 1, 2:
+				allowEquip = itemSkill == 293
+			}
+		}
+		if !allowEquip && playerSkillTotalValue(s.player, itemSkill) == 0 {
+			return equipErrNoRequiredProficiency
+		}
+	}
+	if reqRepFaction != 0 {
+		rank := uint32(3)
+		for _, reputation := range s.player.Reputations {
+			if reputation.FactionID == reqRepFaction {
+				rank = reputationRank(int64(totalReputationStanding(reputation)))
+				break
+			}
+		}
+		if rank < reqRepRank {
+			return equipErrCantEquipReputation
+		}
+	}
+	return equipErrOk
+}
+
 func (s *session) canUseItemTemplate(ctx context.Context, entry uint32) bool {
 	if s == nil || s.player == nil {
 		return false
@@ -203,22 +347,7 @@ func (s *session) canUseItemData(ctx context.Context, state *playerState, data i
 		return 0
 	}
 	maxSkill := func(skillID uint32) {
-		if skillID == 0 || skillID > 0xffff || skillValue(skillID) != 0 {
-			return
-		}
-		for i := range state.Skills {
-			if uint32(state.Skills[i].Skill) == skillID {
-				state.Skills[i].Value, state.Skills[i].Max = 400, 400
-				if db := s.server.CharactersStore.DB; db != nil {
-					_, _ = db.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, 400, 400)", state.GUID, skillID)
-				}
-				return
-			}
-		}
-		state.Skills = append(state.Skills, playerSkill{Skill: uint16(skillID), Value: 400, Max: 400})
-		if db := s.server.CharactersStore.DB; db != nil {
-			_, _ = db.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, 400, 400)", state.GUID, skillID)
-		}
+		s.grantMaxSkill(ctx, state, skillID)
 	}
 	if playerHasSpell(state, itemSpell) || hasSkill(itemSkill) {
 		maxSkill(itemSkill)
@@ -1339,9 +1468,16 @@ func (s *session) handleItemRefund(ctx context.Context, payload []byte) bool {
 }
 
 const (
-	equipErrOk                                = 0
-	equipErrCantEquipLevelI                   = 1
+	equipErrOk              = 0
+	equipErrCantEquipLevelI = 1
+	// C++ EQUIP_ERR_CANT_EQUIP_SKILL (ItemDefines.h:28); the pre-existing
+	// equipErrItemDoesntGoToSlot const shares this value by a stale mislabel.
+	equipErrCantEquipSkill                    = 2
 	equipErrItemDoesntGoToSlot                = 2
+	equipErrNoRequiredProficiency             = 8  // C++ EQUIP_ERR_NO_REQUIRED_PROFICIENCY (ItemDefines.h:34)
+	equipErrYouCanNeverUseThatItem            = 10 // C++ EQUIP_ERR_YOU_CAN_NEVER_USE_THAT_ITEM (ItemDefines.h:36)
+	equipErrDontOwnThatItem                   = 32 // C++ EQUIP_ERR_DONT_OWN_THAT_ITEM (ItemDefines.h:58)
+	equipErrCantEquipReputation               = 64 // C++ EQUIP_ERR_CANT_EQUIP_REPUTATION (ItemDefines.h:90)
 	equipErrBagFull                           = 4
 	equipErrNonemptyBagOverOtherBag           = 5
 	equipErrCantEquipWithTwohanded            = 13
@@ -1477,11 +1613,12 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	// missing the arms are skipped — C++ would already have errored at the
 	// !proto check above, so a missing row here means the DB is incomplete,
 	// not a bypass.
-	var itemClass, itemInvType, itemTplFlags, bonding, reqLevel int64
+	var itemClass, itemSubClass, itemInvType, itemTplFlags, itemTplFlags2, bonding, reqLevel int64
+	var allowableClass, allowableRace, reqSkill, reqSkillRank, reqSpell, holidayID, quality, reqRepFaction, reqRepRank int64
 	var itemSpellIDs [5]int64
 	tplOK := false
 	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		tplOK = s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT Class, InventoryType, Flags, Bonding, RequiredLevel, spellid_1, spellid_2, spellid_3, spellid_4, spellid_5 FROM item_template WHERE entry = ? LIMIT 1`, itemEntry).Scan(&itemClass, &itemInvType, &itemTplFlags, &bonding, &reqLevel, &itemSpellIDs[0], &itemSpellIDs[1], &itemSpellIDs[2], &itemSpellIDs[3], &itemSpellIDs[4]) == nil
+		tplOK = s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT Class, SubClass, InventoryType, Flags, Flags2, Bonding, RequiredLevel, AllowableClass, AllowableRace, RequiredSkill, RequiredSkillRank, RequiredSpell, HolidayId, Quality, RequiredReputationFaction, RequiredReputationRank, spellid_1, spellid_2, spellid_3, spellid_4, spellid_5 FROM item_template WHERE entry = ? LIMIT 1`, itemEntry).Scan(&itemClass, &itemSubClass, &itemInvType, &itemTplFlags, &itemTplFlags2, &bonding, &reqLevel, &allowableClass, &allowableRace, &reqSkill, &reqSkillRank, &reqSpell, &holidayID, &quality, &reqRepFaction, &reqRepRank, &itemSpellIDs[0], &itemSpellIDs[1], &itemSpellIDs[2], &itemSpellIDs[3], &itemSpellIDs[4]) == nil
 	}
 	if tplOK {
 		// SpellHandler.cpp:127-132 — item classes with an equip slot can only
@@ -1491,12 +1628,16 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			s.sendEquipError(equipErrItemNotFound, fullItemGUID)
 			return true
 		}
-		// Player::CanUseItem (Player.cpp:11936) — the level gate. The
-		// faction/class/race, skill, reputation, holiday and learning arms of
-		// CanUseItem have no Go models yet (no per-player known-spell/skill
-		// reads on this path); queued.
+		// Player::CanUseItem (Player.cpp:11936) — the level gate.
 		if s.player.Level < uint8(reqLevel) {
 			s.sendEquipError(equipErrCantEquipLevelI, fullItemGUID)
+			return true
+		}
+		// SpellHandler.cpp:135 — Player::CanUseItem (Player.cpp:11859) in
+		// result form; the Denveous-marker AX1/AX2 bypasses plus the
+		// faction/class/race/skill/spell/holiday/learning/reputation arms.
+		if msg := s.canUseItemResult(ctx, uint32(itemClass), uint32(itemSubClass), uint32(itemTplFlags2), allowableClass, allowableRace, uint32(reqSkill), uint32(reqSkillRank), uint32(reqSpell), uint32(holidayID), uint32(quality), uint32(reqRepFaction), uint32(reqRepRank), itemSpellIDs); msg != equipErrOk {
+			s.sendEquipError(msg, fullItemGUID)
 			return true
 		}
 		// SpellHandler.cpp:137-149 — arena restrictions. InArena's Go proxy is
