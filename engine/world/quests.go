@@ -196,7 +196,7 @@ func QuestItemCountAfterDelta(current uint16, inventoryCount, required, count ui
 }
 
 func (s *session) handleQuestgiverHello(ctx context.Context, payload []byte) bool {
-	return s.handleGossipHello(ctx, payload)
+	return s.helloCreatureNPC(ctx, payload, npcFlagQuestgiver, true)
 }
 
 func (s *session) handleQuestgiverStatusQuery(ctx context.Context, payload []byte) bool {
@@ -222,13 +222,28 @@ func (s *session) handleQuestgiverStatusQuery(ctx context.Context, payload []byt
 		return true
 	}
 	status := uint8(questDialogNone)
-	// Eluna CREATURE_EVENT_ON_DIALOG_STATUS (event 35), fired from
-	// Player::GetQuestDialogStatus before the AI/relation checks
-	// (Player.cpp:16290-16296).
-	s.fireCreatureQuestHook(ctx, guid, scripting.CreatureEventOnDialogStatus)
-	s.fireGameObjectQuestHook(ctx, guid, scripting.GameObjectEventOnDialogStatus)
-	if st, err := s.questDialogStatus(ctx, entry); err == nil {
-		status = st
+	// WorldSession::HandleQuestgiverStatusQueryOpcode (QuestHandler.cpp:41-56):
+	// a creature hostile to the player keeps DIALOG_STATUS_NONE —
+	// GetQuestDialogStatus (and the Eluna OnDialogStatus hook inside it) never
+	// runs for it. The gate applies to units only; gameobjects skip it,
+	// mirroring C++.
+	hostile := false
+	if s.player != nil && uint16(guid>>48) == 0xF130 && entry != 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var faction int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(faction, 0) FROM creature_template WHERE entry = ?", entry).Scan(&faction); err == nil && faction != 0 {
+			player := playerPos{Race: s.player.Race, Class: s.player.Class, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+			hostile = s.server.isHostileFaction(uint32(faction), player)
+		}
+	}
+	if !hostile {
+		// Eluna CREATURE_EVENT_ON_DIALOG_STATUS (event 35), fired from
+		// Player::GetQuestDialogStatus before the AI/relation checks
+		// (Player.cpp:16290-16296).
+		s.fireCreatureQuestHook(ctx, guid, scripting.CreatureEventOnDialogStatus)
+		s.fireGameObjectQuestHook(ctx, guid, scripting.GameObjectEventOnDialogStatus)
+		if st, err := s.questDialogStatus(ctx, entry); err == nil {
+			status = st
+		}
 	}
 	packet := protocol.NewBuffer(9)
 	packet.WriteU64(guid)
@@ -554,7 +569,13 @@ func loadQuestRelationIDs(ctx context.Context, db *sql.DB, table string, entry u
 }
 
 // handleQuestConfirmAccept processes CMSG_QUEST_CONFIRM_ACCEPT (0x19B).
-// Reference: WorldSession::HandleQuestConfirmAccept (QuestHandler.cpp:655).
+// Reference: WorldSession::HandleQuestConfirmAccept (QuestHandler.cpp:474).
+// Unlike the normal accept path, the quest giver is nil here: the quest comes
+// from a party share, so no quest-accept hooks fire (Player::
+// AddQuestAndCheckCompletion returns before the giver switch when the giver
+// is nil, Player.cpp:15105-15122). Every early return below leaves the sharing
+// info set, matching C++; only the template-missing fallthrough and the
+// completed path clear it.
 func (s *session) handleQuestConfirmAccept(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
 		return true
@@ -562,10 +583,45 @@ func (s *session) handleQuestConfirmAccept(ctx context.Context, payload []byte) 
 	r := protocol.NewReader(payload)
 	questID, _ := r.ReadU32()
 
-	buf := protocol.NewBuffer(12)
-	buf.WriteU64(0)
-	buf.WriteU32(questID)
-	return s.handleQuestgiverAcceptQuest(ctx, buf.Bytes())
+	data, err := s.loadQuestDetailData(ctx, questID)
+	if err != nil {
+		s.sharingQuestID = 0
+		s.sharingQuestSender = 0
+		return true
+	}
+	if data.Flags&questFlagsPartyAccept == 0 {
+		return true
+	}
+	if s.sharingQuestSender == 0 || s.server == nil {
+		return true
+	}
+	sharer := s.server.findSessionByGUID(s.sharingQuestSender)
+	if sharer == nil || sharer.player == nil {
+		return true
+	}
+	// Player::IsInSameRaidWith — Go has no raid/party distinction, so same
+	// group is the whole check.
+	if s.groupID == 0 || sharer.groupID != s.groupID {
+		return true
+	}
+	if st, _ := sharer.characterQuestStatus(ctx, questID); st == 0 {
+		return true
+	}
+	if canTake, err := s.canTakeQuest(ctx, questID); err != nil || !canTake {
+		return true
+	}
+	activeCount := 0
+	for _, q := range s.player.QuestLog {
+		if q.QuestID != 0 {
+			activeCount++
+		}
+	}
+	if activeCount < 25 {
+		s.addQuestToPlayer(ctx, questID)
+	}
+	s.sharingQuestID = 0
+	s.sharingQuestSender = 0
+	return true
 }
 
 // handleQuestPoiQuery processes CMSG_QUEST_POI_QUERY (0x1E3).
@@ -663,20 +719,34 @@ func (s *session) handlePushQuestToParty(ctx context.Context, payload []byte) bo
 		return true
 	}
 
+	// Player::CanShareQuest (Player.cpp:16145): the quest must carry
+	// QUEST_FLAGS_SHARABLE and the sender must have it active. (The
+	// pool-availability arm has no Go model.)
+	if data.Flags&questFlagsSharable == 0 {
+		return true
+	}
+	if st, _ := s.characterQuestStatus(ctx, questID); st == 0 {
+		return true
+	}
+
 	members := s.server.getGroupSessions(s.groupID)
 	for _, receiver := range members {
 		if receiver == nil || receiver == s || !receiver.worldReady.Load() || receiver.player == nil {
 			continue
 		}
 
-		if receiver.isQuestRewarded(ctx, questID) {
-			s.sendPushToPartyResponse(receiver.playerGUID, QuestPartyMsgFinishQuest)
+		st, _ := receiver.characterQuestStatus(ctx, questID)
+		if st != 0 || receiver.isQuestRewarded(ctx, questID) {
+			// Player::SatisfyQuestStatus(quest, false) (Player.cpp:15878)
+			// rejects REWARDED and any non-NONE status with
+			// QUEST_PARTY_MSG_HAVE_QUEST; the QUEST_STATUS_COMPLETE ->
+			// QUEST_PARTY_MSG_FINISH_QUEST arm below it is unreachable for
+			// the same reason and is kept only for parity.
+			s.sendPushToPartyResponse(receiver.playerGUID, QuestPartyMsgHaveQuest)
 			continue
 		}
-
-		st, _ := receiver.characterQuestStatus(ctx, questID)
-		if st != 0 {
-			s.sendPushToPartyResponse(receiver.playerGUID, QuestPartyMsgHaveQuest)
+		if st == questStatusComplete {
+			s.sendPushToPartyResponse(receiver.playerGUID, QuestPartyMsgFinishQuest)
 			continue
 		}
 

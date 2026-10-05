@@ -1243,6 +1243,7 @@ func (s *session) handleReclaimCorpse(ctx context.Context, payload []byte) bool 
 const (
 	spellEffectResurrectNew = 113        // SPELL_EFFECT_RESURRECT_NEW (SharedDefines.h:924)
 	npcFlagGossip           = 0x00000001 // UNIT_NPC_FLAG_GOSSIP (UnitDefines.h)
+	npcFlagQuestgiver       = 0x00000002 // UNIT_NPC_FLAG_QUESTGIVER (UnitDefines.h:187)
 	npcFlagSpiritHealer     = 0x00004000
 	npcFlagSpiritGuide      = 0x00008000
 	npcFlagSpiritService    = npcFlagSpiritHealer | npcFlagSpiritGuide

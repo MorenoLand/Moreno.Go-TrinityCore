@@ -18,6 +18,8 @@ const (
 	questRewardFactions    = 5
 	questDetailEmotes      = 4
 	questAutoCompleteFlags = 0x00010000
+	questFlagsPartyAccept  = 0x00000002 // QUEST_FLAGS_PARTY_ACCEPT (QuestDef.h:133)
+	questFlagsSharable     = 0x00000008 // QUEST_FLAGS_SHARABLE (QuestDef.h:135)
 )
 
 // QuestFailedReason values for SMSG_QUESTGIVER_QUEST_INVALID (QuestDef.h:48).

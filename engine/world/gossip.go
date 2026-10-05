@@ -41,6 +41,17 @@ type gossipQuestItem struct {
 }
 
 func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
+	return s.helloCreatureNPC(ctx, payload, npcFlagGossip, false)
+}
+
+// helloCreatureNPC is the shared creature-hello flow behind CMSG_GOSSIP_HELLO
+// and CMSG_QUESTGIVER_HELLO. The two C++ handlers differ in the NPC-flag gate
+// (UNIT_NPC_FLAG_GOSSIP vs UNIT_NPC_FLAG_QUESTGIVER) and in the arms the
+// questgiver path skips: it has no spirit-guide arm and no trainer/vendor/
+// flightmaster/banker/tabard/auctioneer/stable service fallthroughs — it goes
+// straight from the script hooks to PrepareGossipMenu + SendPreparedGossip
+// (QuestHandler.cpp:78 vs NPCHandler.cpp:147).
+func (s *session) helloCreatureNPC(ctx context.Context, payload []byte, requiredFlag uint32, questPath bool) bool {
 	reader := protocol.NewReader(payload)
 	guid, err := reader.ReadU64()
 	if err != nil {
@@ -56,13 +67,14 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 		s.debug("gossip hello out of interaction range", "account", s.accountName, "guid", guid)
 		return true
 	}
-	// WorldSession::HandleGossipHelloOpcode (NPCHandler.cpp:153) resolves the
-	// NPC through GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_GOSSIP), which
-	// requires the GOSSIP npc flag before the spirit-guide arm or any script
-	// hook runs.
+	// GetNPCIfCanInteractWith(guid, flag) requires the matching NPC flag before
+	// any script hook runs: UNIT_NPC_FLAG_GOSSIP for
+	// WorldSession::HandleGossipHelloOpcode (NPCHandler.cpp:153),
+	// UNIT_NPC_FLAG_QUESTGIVER for WorldSession::HandleQuestgiverHelloOpcode
+	// (QuestHandler.cpp:78).
 	npcFlags := objectUint32OrZero(creature, "NPCFlags")
-	if npcFlags&npcFlagGossip == 0 {
-		s.debug("gossip hello rejected: npc lacks gossip flag", "account", s.accountName, "guid", guid)
+	if npcFlags&requiredFlag == 0 {
+		s.debug("npc hello rejected: missing required npc flag", "account", s.accountName, "guid", guid, "flag", requiredFlag)
 		return true
 	}
 	// WorldSession::HandleGossipHelloOpcode (NPCHandler.cpp:164):
@@ -71,7 +83,9 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 	// (The faction SetVisible call above it has no Go reputation-visible
 	// setter — documented open gap.)
 	s.removeAurasWithInterruptFlags(auraInterruptFlagTalk)
-	if s.isDeadOrGhost() && isBattlegroundMap(s.player.Map) && npcFlags&npcFlagSpiritGuide != 0 {
+	// The spirit-guide arm exists only on the gossip path;
+	// WorldSession::HandleQuestgiverHelloOpcode (QuestHandler.cpp:78) has none.
+	if !questPath && s.isDeadOrGhost() && isBattlegroundMap(s.player.Map) && npcFlags&npcFlagSpiritGuide != 0 {
 		// WorldSession::HandleGossipHelloOpcode (NPCHandler.cpp:171-185): a
 		// spirit guide queues the ghost (== AddPlayerToResurrectQueue) and
 		// answers with the wave timer (== SendAreaSpiritHealerQueryOpcode)
@@ -104,7 +118,9 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 			_ = s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true)
 			return true
 		}
-		if defaultMenu != nil && len(defaultMenu.Items) == 0 && len(defaultMenu.Quests) == 0 {
+		// The service fallthroughs exist only on the gossip path; the questgiver
+		// hello never opens trainer/vendor/etc. windows (QuestHandler.cpp:78).
+		if !questPath && defaultMenu != nil && len(defaultMenu.Items) == 0 && len(defaultMenu.Quests) == 0 {
 			if npcFlags&0x70 != 0 { // UNIT_NPC_FLAG_TRAINER (0x10, 0x20, 0x40)
 				return s.sendTrainerList(ctx, guid)
 			}
@@ -155,7 +171,7 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 			return false
 		}
 	}
-	s.debug("gossip hello handled", "account", s.accountName, "entry", entry)
+	s.debug("npc hello handled", "account", s.accountName, "entry", entry, "questPath", questPath)
 	return true
 }
 
