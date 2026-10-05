@@ -21,6 +21,7 @@ const (
 	objectFieldEntry                              = 3
 	objectFieldScale                              = 4
 	unitFieldSummon                               = 8
+	unitFieldCritter                              = 10 // UNIT_FIELD_CRITTER: vanity-pet GUID mirror (Unit.h:1155)
 	unitFieldTarget                               = 18
 	unitFieldChannelObject                        = 20
 	unitFieldChannelSpell                         = 22
@@ -177,6 +178,8 @@ type playerState struct {
 	Selection                       uint64
 	PetGUID                         uint64
 	PetNumber                       uint32
+	CritterGUID                     uint64
+	CritterPetID                    uint32
 	Name                            string
 	Race                            uint8
 	Class                           uint8
@@ -3248,6 +3251,10 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	if state.PetGUID != 0 {
 		values[unitFieldSummon] = uint32(state.PetGUID)
 		values[unitFieldSummon+1] = uint32(state.PetGUID >> 32)
+	}
+	if state.CritterGUID != 0 {
+		values[unitFieldCritter] = uint32(state.CritterGUID)
+		values[unitFieldCritter+1] = uint32(state.CritterGUID >> 32)
 	}
 	for slot := 0; slot < playerQuestLogSlots; slot++ {
 		entry := state.QuestLog[slot]

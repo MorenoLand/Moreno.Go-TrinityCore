@@ -629,6 +629,18 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 	if !critter {
 		s.player.PetGUID = petGUID
 		s.player.PetNumber = petID
+	} else {
+		// Unit.cpp:6085-6087 (SetMinion add-arm): a SUMMON_TYPE_MINIPET summon
+		// overwrites the player's critter GUID (UNIT_FIELD_CRITTER). A stale
+		// tracked critter is destroy-wired out; C++ leaves the old TempSummon
+		// to despawn on its own, Go has no motion registered for critters so
+		// the client object is dropped here and its character_pet row removed.
+		if old := s.player.CritterGUID; old != 0 && old != petGUID {
+			s.destroyCritterObject(old)
+			s.deleteCritterRow(ctx, s.player.CritterPetID)
+		}
+		s.player.CritterGUID = petGUID
+		s.player.CritterPetID = petID
 	}
 	if petHappiness < 0 {
 		petHappiness = 0
@@ -1557,14 +1569,70 @@ func (s *session) handleBuyStableSlot(ctx context.Context, payload []byte) bool 
 }
 
 // handleDismissCritter processes CMSG_DISMISS_CRITTER (0x48D).
+// Reference: WorldSession::HandleDismissCritter (PetHandler.cpp:40-55): the
+// GUID resolves like GetCreatureOrPetOrVehicle; only the player's tracked
+// critter GUID (UNIT_FIELD_CRITTER) may be dismissed, and dismissal unsummons
+// the temp summon. An unmatched GUID is a silent no-op (TC_LOG_DEBUG arm).
 func (s *session) handleDismissCritter(ctx context.Context, payload []byte) bool {
+	if s.player == nil {
+		return true
+	}
 	if len(payload) < 8 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	critterGUID, _ := r.ReadU64()
-	s.debug("dismiss critter", "account", s.accountName, "critter", critterGUID)
+	critterGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	// PetHandler.cpp:51: _player->GetCritterGUID() == pet->GetGUID() gate.
+	if critterGUID == 0 || critterGUID != s.player.CritterGUID {
+		s.debug("dismiss critter", "account", s.accountName, "critter", critterGUID, "ignored", true)
+		return true
+	}
+	s.dismissCritter(ctx, critterGUID)
 	return true
+}
+
+// dismissCritter wires the destroy path shared by CMSG_DISMISS_CRITTER and
+// critter replacement at summon: despawn the client object, clear the tracked
+// GUID (Unit.cpp:6111-6114 SetMinion remove-arm), and delete the vanity pet's
+// character_pet row so a dismissed critter does not respawn at next login.
+func (s *session) dismissCritter(ctx context.Context, critterGUID uint64) {
+	s.destroyCritterObject(critterGUID)
+	s.deleteCritterRow(ctx, s.player.CritterPetID)
+	s.player.CritterGUID = 0
+	s.player.CritterPetID = 0
+	s.sendPlayerUpdate()
+	s.debug("critter dismissed", "account", s.accountName, "critter", critterGUID)
+}
+
+// destroyCritterObject despawns a critter object for the session and nearby
+// players, mirroring TempSummon::UnSummon's removal from world.
+func (s *session) destroyCritterObject(critterGUID uint64) {
+	if critterGUID == 0 {
+		return
+	}
+	s.sendDestroyObject(critterGUID, false)
+	if s.server != nil {
+		destroyBuf := protocol.NewBuffer(9)
+		destroyBuf.WriteU64(critterGUID)
+		destroyBuf.WriteU8(0)
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), s)
+	}
+}
+
+// deleteCritterRow removes the vanity pet's character_pet row (and its
+// pet_spell rows) created at summon; C++ has no row for temp-summon
+// minipets, Go's summon path inserts one that would otherwise respawn the
+// dismissed critter at login.
+func (s *session) deleteCritterRow(ctx context.Context, petID uint32) {
+	if petID == 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM pet_spell WHERE guid = ?", petID)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM character_pet WHERE id = ? AND owner = ?", petID, s.playerGUID)
 }
 
 // controlledPetMotion mirrors the GetFirstControlled gate shared by the pet
