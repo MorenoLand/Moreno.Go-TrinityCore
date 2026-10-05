@@ -1119,11 +1119,12 @@ func (s *session) sendDestroyObject(guid uint64, onDeath bool) {
 	_ = s.write(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), buf.Bytes(), true)
 }
 
-// goGridCenter and goSizeOfGrids mirror MapDefines.h (CENTER_GRID_ID = 64,
-// SIZE_OF_GRIDS = 533.33333f), used by HandleGoGridCommand (cs_go.cpp:205).
+// goGridCenterID and goSizeOfGrids mirror GridDefines.h (CENTER_GRID_ID =
+// MAX_NUMBER_OF_GRIDS/2 = 32, SIZE_OF_GRIDS = 533.3333f), used by
+// HandleGoGridCommand (cs_go.cpp:205).
 const (
-	goGridCenterID = 64
-	goSizeOfGrids  = 533.33333
+	goGridCenterID = 32
+	goSizeOfGrids  = 533.3333
 )
 
 // goDoTeleport mirrors go_commandscript::DoTeleport (cs_go.cpp:73): reject
@@ -1149,7 +1150,8 @@ func (s *session) goDoTeleport(ctx context.Context, mapID uint32, x, y, z, o flo
 // FIFTEENTH Commands file): creature, creature id, gameobject, gameobject id,
 // graveyard, grid, taxinode, areatrigger, zonexy, xyz, ticket, offset,
 // instance, boss — each gated on RBAC_PERM_COMMAND_GO (377) per the C++
-// ChatCommandTable. Blocked arms are documented, not stubbed.
+// ChatCommandTable. The zonexy arm is documented-blocked (no WorldMapArea
+// bridge for Zone2MapCoordinates); the other 13 arms are ported natively.
 func (s *session) handleCmdGo(ctx context.Context, args []string) {
 	const syntax = "Syntax: .go creature <spawnId>|creature id <entry>|gameobject <spawnId>|gameobject id <entry>|graveyard <gyId>|grid <x> <y> [map]|taxinode <nodeId>|areatrigger <id>|zonexy <x> <y> [area]|xyz <x> <y> [z] [map] [o]|ticket <id>|offset <dx> [dy] [dz] [do]|instance <label...>|boss <name...>"
 	if len(args) == 0 {
@@ -1170,7 +1172,7 @@ func (s *session) handleCmdGo(ctx context.Context, args []string) {
 	case "gameobject":
 		s.handleCmdGoGameObject(ctx, args[1:])
 	case "graveyard":
-		s.sendSysMessage("go graveyard is not supported: WorldSafeLocs.dbc has no Go bridge.")
+		s.handleCmdGoGraveyard(ctx, args[1:])
 	case "grid":
 		s.handleCmdGoGrid(ctx, args[1:])
 	case "taxinode":
@@ -1338,6 +1340,32 @@ func (s *session) handleCmdGoGameObject(ctx context.Context, args []string) {
 		return
 	}
 	s.goDoTeleport(ctx, mapID, x, y, z, s.player.Orientation)
+}
+
+// handleCmdGoGraveyard mirrors HandleGoGraveyardCommand (cs_go.cpp:183):
+// teleport to the WorldSafeLocs.dbc entry with the given id
+// (LANG_COMMAND_GRAVEYARDNOEXIST = 449), keeping the player's orientation.
+// Fidelity gap: Player::SaveRecallPosition has no Go bridge (goDoTeleport).
+func (s *session) handleCmdGoGraveyard(ctx context.Context, args []string) {
+	if len(args) < 1 {
+		s.sendSysMessage("Syntax: .go graveyard <gyId>")
+		return
+	}
+	gyID, err := strconv.ParseUint(args[0], 10, 32)
+	if err != nil {
+		s.sendSysMessage("Invalid graveyard id.")
+		return
+	}
+	if s.server == nil || s.server.Data == nil {
+		s.sendSysMessage("DBC data not available.")
+		return
+	}
+	gy, found, err := s.server.Data.WorldSafeLoc(uint32(gyID))
+	if err != nil || !found {
+		s.sendSysMessage(fmt.Sprintf("Graveyard %d does not exist.", gyID))
+		return
+	}
+	s.goDoTeleport(ctx, gy.MapID, gy.X, gy.Y, gy.Z, s.player.Orientation)
 }
 
 // handleCmdGoGrid mirrors HandleGoGridCommand (cs_go.cpp:205): teleport to the
