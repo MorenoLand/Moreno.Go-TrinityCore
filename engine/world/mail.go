@@ -929,6 +929,11 @@ func (s *session) handleMailDelete(ctx context.Context, payload []byte) bool {
 			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailDeleted, mailErrInternalError, 0, 0, 0), true)
 			return true
 		}
+		// Reference: Player::_SaveMail MAIL_STATE_DELETED arm (Player.cpp:20090+):
+		// deleting a mail destroys the item instances still attached to it
+		// (CHAR_DEL_ITEM_INSTANCE per remaining item), then the mail and
+		// mail_items rows.
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid IN (SELECT item_guid FROM mail_items WHERE mail_id = ?)", mailID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM mail WHERE id = ? AND receiver = ?", mailID, s.playerGUID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ?", mailID)
 	}
