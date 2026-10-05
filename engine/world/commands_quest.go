@@ -7,12 +7,17 @@ import (
 )
 
 // quest command port: quest_commandscript (cs_quest.cpp), the "quest" root
-// with 4 arms (add, complete, remove, reward). THIRTIETH of 39 Commands
-// groups (cs_script_loader.cpp decl 48 / call 93; call order re-verified this
-// run: npc(92) -> quest(93)). Trinity checks permission only on the invoker
-// leaf node (ChatCommand.cpp:487), so each arm gates exactly its own C++
-// permission (RBAC.h:470-474); the root permission 602 covers the bare
-// ".quest".
+// with 4 arms (add, complete, remove, reward). THIRTIETH of 40 Commands
+// groups (cs_script_loader.cpp decl 49 / call 93; call order: npc(92) ->
+// quest(93)). Trinity checks permission only on the invoker leaf node
+// (ChatCommand.cpp:487), so each arm gates exactly its own C++ permission
+// (RBAC.h:471-474). The root's own RBAC_PERM_COMMAND_QUEST (RBAC.h:470, 602)
+// is DEAD in C++: the root uses the deprecated 6-arg ChatCommandBuilder
+// overload (ChatCommand.h:262), which drops the RBACPermissions param and
+// delegates to the sub-only constructor — so a bare ".quest" prints the
+// syntax line with no gate ever checked (same dead-root-perm pattern as the
+// mmap/modify/npc ports); permissionCommandQuest stays in permissions.go as
+// documentation only.
 //
 // All four arms are native or partial-native on the Go quest bridges
 // (quest_template, character_queststatus, addQuestToPlayer, completeQuest,
@@ -24,8 +29,8 @@ import (
 //   - `remove` is native: template gate, status gate, quest-log slot clear,
 //     character_queststatus + character_queststatus_rewarded deletes.
 //   - `complete` is partial: the gates and the CompleteQuest transition are
-//     native; the required-item grant, kill-credit, reputation and money
-//     objective legs have no Go bridge, so a GM-completed quest flips to
+//     native; the required-item grant, kill-credit, reputation, money and
+//     quest-tracker legs have no Go bridge, so a GM-completed quest flips to
 //     complete without auto-granting its objectives.
 //   - `reward` is native: template gate, must-be-complete gate,
 //     disabled gate, then the RewardQuest path via loadQuestRewardView +
@@ -40,9 +45,13 @@ import (
 const questStatusNoneValue = 0
 
 // parseQuestLink mirrors the extractKeyFromLink("Hquest") + atoul pattern in
-// the quest arms (cs_quest.cpp:95): a plain entry id or a
+// the quest arms (cs_quest.cpp:73): a plain entry id or a
 // |Hquest:quest_id:quest_level|h[name]|h|r shift-click link.
-func parseQuestLink(arg string) (uint32, bool) {
+// extractKeyFromLink only returns nullptr on empty text (impossible here —
+// every arm gates on len(args)) or a totally malformed link; anything else,
+// including "0" and "abc", reaches atoul and yields 0, so a zero entry flows
+// to the template gate and its NOTFOUND message instead of failing silently.
+func parseQuestLink(arg string) uint32 {
 	if i := strings.Index(arg, "Hquest:"); i >= 0 {
 		rest := arg[i+len("Hquest:"):]
 		num := ""
@@ -53,15 +62,11 @@ func parseQuestLink(arg string) (uint32, bool) {
 			num += string(r)
 		}
 		if num == "" {
-			return 0, false
+			return 0 // atoul of an empty key is 0 -> template gate reports NOTFOUND
 		}
-		return uint32(cAtoi(num)), true
+		return uint32(cAtoi(num))
 	}
-	v := cAtoi(arg)
-	if v <= 0 {
-		return 0, false
-	}
-	return uint32(v), true
+	return uint32(cAtoi(arg)) // atoul: "0"/"abc" -> 0 -> template gate
 }
 
 // questTemplateGate mirrors sObjectMgr->GetQuestTemplate: the entry must
@@ -86,43 +91,47 @@ func (s *session) questDisabled(ctx context.Context, entry uint32) bool {
 	return db.QueryRowContext(ctx, "SELECT 1 FROM disables WHERE sourceType = 1 AND entry = ?", entry).Scan(&one) == nil
 }
 
-// questTarget mirrors getSelectedPlayerOrSelf for the add/complete arms.
+// questTargetPlayerOrSelf mirrors getSelectedPlayerOrSelf (Chat.cpp:344-360):
+// an unresolvable selection falls back to the invoker silently, never nil
+// in-session (same bug class the modify port fixed).
 func (s *session) questTargetPlayerOrSelf() *session {
 	target := s
 	if s.selection != 0 && s.server != nil {
 		if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {
 			target = ts
-		} else {
-			s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
-			return nil
 		}
 	}
 	if target.player == nil {
-		s.sendSysMessage("No character selected.") // LANG_NO_CHAR_SELECTED 116
+		s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
 		return nil
 	}
 	return target
 }
 
-// questTargetPlayer mirrors getSelectedPlayer for the remove/reward arms: no
-// self fallback, an unresolvable selection reports LANG_NO_CHAR_SELECTED.
+// questTargetPlayer mirrors getSelectedPlayer (Chat.cpp:300) for the
+// remove/reward arms: no selection resolves to the invoker; only an
+// unresolvable selection yields null and LANG_NO_CHAR_SELECTED.
 func (s *session) questTargetPlayer() *session {
 	if s.selection != 0 && s.server != nil {
 		if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {
 			return ts
 		}
+		s.sendSysMessage("No character selected.") // LANG_NO_CHAR_SELECTED 116
+		return nil
 	}
-	s.sendSysMessage("No character selected.") // LANG_NO_CHAR_SELECTED 116
-	return nil
+	if s.player == nil {
+		s.sendSysMessage("No character selected.") // LANG_NO_CHAR_SELECTED 116
+		return nil
+	}
+	return s
 }
 
-// handleCmdQuest dispatches the "quest" root (cs_quest.cpp:47-58).
+// handleCmdQuest dispatches the "quest" root (cs_quest.cpp:47-58). A bare
+// ".quest" prints the syntax line with no permission gate: the root's own
+// 602 is dead in C++ (ChatCommand.h:262 deprecated overload).
 func (s *session) handleCmdQuest(ctx context.Context, args []string) {
 	const syntax = "Syntax: .quest add|complete|remove|reward <entry>"
 	if len(args) == 0 {
-		if s.miscDeny(ctx, permissionCommandQuest) {
-			return
-		}
 		s.sendSysMessage(syntax)
 		return
 	}
@@ -148,7 +157,7 @@ func (s *session) handleCmdQuest(ctx context.Context, args []string) {
 	}
 }
 
-// handleQuestAdd mirrors HandleQuestAdd (cs_quest.cpp:78).
+// handleQuestAdd mirrors HandleQuestAdd (cs_quest.cpp:61).
 func (s *session) handleQuestAdd(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandQuestAdd) {
 		return
@@ -161,10 +170,7 @@ func (s *session) handleQuestAdd(ctx context.Context, args []string) {
 	if target == nil {
 		return
 	}
-	entry, ok := parseQuestLink(args[0])
-	if !ok {
-		return
-	}
+	entry := parseQuestLink(args[0])
 	if !s.questTemplateGate(ctx, entry) || s.questDisabled(ctx, entry) {
 		s.sendSysMessage(fmt.Sprintf("Quest %d not found.", entry)) // LANG_COMMAND_QUEST_NOTFOUND 471
 		return
@@ -183,7 +189,7 @@ func (s *session) handleQuestAdd(ctx context.Context, args []string) {
 	target.addQuestToPlayer(ctx, entry) // AddQuestAndCheckCompletion
 }
 
-// handleQuestRemove mirrors HandleQuestRemove (cs_quest.cpp:130).
+// handleQuestRemove mirrors HandleQuestRemove (cs_quest.cpp:112).
 func (s *session) handleQuestRemove(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandQuestRemove) {
 		return
@@ -196,10 +202,7 @@ func (s *session) handleQuestRemove(ctx context.Context, args []string) {
 	if target == nil {
 		return
 	}
-	entry, ok := parseQuestLink(args[0])
-	if !ok {
-		return
-	}
+	entry := parseQuestLink(args[0])
 	if !s.questTemplateGate(ctx, entry) {
 		s.sendSysMessage(fmt.Sprintf("Quest %d not found.", entry)) // LANG_COMMAND_QUEST_NOTFOUND 471
 		return
@@ -227,9 +230,9 @@ func (s *session) handleQuestRemove(ctx context.Context, args []string) {
 	s.sendSysMessage("Quest removed.") // LANG_COMMAND_QUEST_REMOVED 473
 }
 
-// handleQuestComplete mirrors HandleQuestComplete (cs_quest.cpp:181): the
+// handleQuestComplete mirrors HandleQuestComplete (cs_quest.cpp:175): the
 // gates and the CompleteQuest transition are native; the required-item grant,
-// kill-credit, reputation and money objective legs have no Go bridge.
+// kill-credit, reputation, money and quest-tracker legs have no Go bridge.
 func (s *session) handleQuestComplete(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandQuestComplete) {
 		return
@@ -242,10 +245,7 @@ func (s *session) handleQuestComplete(ctx context.Context, args []string) {
 	if target == nil {
 		return
 	}
-	entry, ok := parseQuestLink(args[0])
-	if !ok {
-		return
-	}
+	entry := parseQuestLink(args[0])
 	if !s.questTemplateGate(ctx, entry) || s.questDisabled(ctx, entry) {
 		s.sendSysMessage(fmt.Sprintf("Quest %d not found.", entry)) // LANG_COMMAND_QUEST_NOTFOUND 471
 		return
@@ -258,7 +258,7 @@ func (s *session) handleQuestComplete(ctx context.Context, args []string) {
 	target.completeQuest(ctx, entry) // Player::CompleteQuest
 }
 
-// handleQuestReward mirrors HandleQuestReward (cs_quest.cpp:268): the quest
+// handleQuestReward mirrors HandleQuestReward (cs_quest.cpp:285): the quest
 // must be complete, then the RewardQuest path runs with no choice item.
 func (s *session) handleQuestReward(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandQuestReward) {
@@ -272,10 +272,7 @@ func (s *session) handleQuestReward(ctx context.Context, args []string) {
 	if target == nil {
 		return
 	}
-	entry, ok := parseQuestLink(args[0])
-	if !ok {
-		return
-	}
+	entry := parseQuestLink(args[0])
 	if !s.questTemplateGate(ctx, entry) || s.questDisabled(ctx, entry) {
 		s.sendSysMessage(fmt.Sprintf("Quest %d not found.", entry)) // LANG_COMMAND_QUEST_NOTFOUND 471
 		return
