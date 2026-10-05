@@ -4603,11 +4603,30 @@ func (s *session) handleTogglePvP(ctx context.Context, payload []byte) bool {
 // handleAcceptLevelGrant processes CMSG_ACCEPT_LEVEL_GRANT (0x420).
 // Reference: WorldSession::HandleAcceptGrantLevel (ReferAFriendHandler.cpp:67).
 func (s *session) handleAcceptLevelGrant(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil {
+	if !s.playerLoaded || s.player == nil || s.server == nil {
 		return false
 	}
 	r := protocol.NewReader(payload)
-	granterGUID, _ := r.ReadPackedGUID()
+	granterGUID, err := r.ReadPackedGUID()
+	if err != nil || granterGUID == 0 {
+		return false
+	}
+	granter := s.server.findSessionByGUID(granterGUID)
+	if granter == nil || granter.player == nil || !granter.playerLoaded {
+		return false
+	}
+	if s.accountID != granter.recruiterID {
+		return false
+	}
+	if granter.player.GrantableLevels == 0 {
+		return false
+	}
+
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET grantableLevels = CASE WHEN grantableLevels > 0 THEN grantableLevels - 1 ELSE 0 END WHERE guid = ?", granterGUID)
+	}
+	granter.player.GrantableLevels--
+	granter.sendPlayerUpdate()
 
 	if s.player.Level >= 80 {
 		return true
@@ -4621,15 +4640,8 @@ func (s *session) handleAcceptLevelGrant(ctx context.Context, payload []byte) bo
 		s.player.Powers[0] = s.player.MaxPowers[0]
 	}
 
-	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET level = ?, health = ? WHERE guid = ?", s.player.Level, s.player.Health, s.playerGUID)
-		if granterGUID != 0 {
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET grantableLevels = CASE WHEN grantableLevels > 0 THEN grantableLevels - 1 ELSE 0 END WHERE guid = ?", granterGUID)
-			if granter := s.server.findSessionByGUID(granterGUID); granter != nil && granter.player != nil && granter.player.GrantableLevels > 0 {
-				granter.player.GrantableLevels--
-				granter.sendPlayerUpdate()
-			}
-		}
 	}
 
 	s.updatePetOnLevelUp(ctx)
@@ -4638,25 +4650,68 @@ func (s *session) handleAcceptLevelGrant(ctx context.Context, payload []byte) bo
 	return true
 }
 
+// Refer-a-friend grant error codes (ReferAFriendHandler.cpp via Player.h:798).
+const (
+	referAFriendErrNone                        = 0x00
+	referAFriendErrNotReferredBy               = 0x01
+	referAFriendErrTargetTooHigh               = 0x02
+	referAFriendErrInsufficientGrantableLevels = 0x03
+	referAFriendErrDifferentFaction            = 0x05
+	referAFriendErrGrantLevelMaxI              = 0x07
+	referAFriendErrNoTarget                    = 0x08
+	referAFriendErrNotInGroup                  = 0x09
+)
+
+// recruitAFriendMaxBonusLevel is CONFIG_MAX_RECRUIT_A_FRIEND_BONUS_PLAYER_LEVEL
+// (World.cpp:963, "RecruitAFriend.MaxLevel", default 60).
+const recruitAFriendMaxBonusLevel = 60
+
 // handleGrantLevel processes CMSG_GRANT_LEVEL (0x41F).
 // Reference: WorldSession::HandleGrantLevel (ReferAFriendHandler.cpp:24).
 func (s *session) handleGrantLevel(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
+	if !s.playerLoaded || s.player == nil || s.server == nil {
 		return true
 	}
 	r := protocol.NewReader(payload)
 	targetGUID, err := r.ReadPackedGUID()
-	if err != nil || targetGUID == 0 || targetGUID == s.playerGUID {
+	if err != nil || targetGUID == 0 {
 		return true
 	}
-	if s.server != nil {
-		targetSess := s.server.findSessionByGUID(targetGUID)
-		if targetSess != nil && targetSess.player != nil && targetSess.playerLoaded {
-			buf := protocol.NewBuffer(9)
-			buf.WritePackedGUID(s.playerGUID)
-			_ = targetSess.write(uint16(protocol.OpcodeSMSG_PROPOSE_LEVEL_GRANT), buf.Bytes(), true)
-		}
+	var targetSess *session
+	var targetName string
+	if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil && ts.playerLoaded {
+		targetSess = ts
+		targetName = ts.player.Name
 	}
+	var code uint32
+	switch {
+	case targetSess == nil:
+		code = referAFriendErrNoTarget
+	case s.player.GrantableLevels == 0:
+		code = referAFriendErrInsufficientGrantableLevels
+	case s.recruiterID != targetSess.accountID:
+		code = referAFriendErrNotReferredBy
+	case teamForRace(targetSess.player.Race) != teamForRace(s.player.Race):
+		code = referAFriendErrDifferentFaction
+	case targetSess.player.Level >= s.player.Level:
+		code = referAFriendErrTargetTooHigh
+	case targetSess.player.Level >= recruitAFriendMaxBonusLevel:
+		code = referAFriendErrGrantLevelMaxI
+	case !s.inSameGroupAs(targetSess):
+		code = referAFriendErrNotInGroup
+	}
+	if code != referAFriendErrNone {
+		buf := protocol.NewBuffer(4 + len(targetName) + 1)
+		buf.WriteU32(code)
+		if code == referAFriendErrNotInGroup {
+			buf.WriteCString(targetName)
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_REFER_A_FRIEND_FAILURE), buf.Bytes(), true)
+		return true
+	}
+	buf := protocol.NewBuffer(9)
+	buf.WritePackedGUID(s.playerGUID)
+	_ = targetSess.write(uint16(protocol.OpcodeSMSG_PROPOSE_LEVEL_GRANT), buf.Bytes(), true)
 	return true
 }
 
