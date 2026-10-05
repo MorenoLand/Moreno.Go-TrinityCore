@@ -103,3 +103,35 @@ func guildMoneyReturn(v any) (uint32, bool) {
 	}
 	return 0, false
 }
+
+// moveLocHookParams maps a guildMoveLocation onto the (isBank, container,
+// slot) triple of Eluna::OnItemMove (GuildHooks.cpp:126-141): bank locations
+// carry the tab id as the container (BankMoveItemData::GetContainer,
+// Guild.h:615), player locations carry the C++ bag slot id (BagSlot, ==
+// PlayerMoveItemData::GetContainer); 0xFF/0xFF is the auto-store sentinel
+// (NULL_BAG/NULL_SLOT, GuildHandler.cpp:318-329).
+func moveLocHookParams(loc guildMoveLocation) (isBank bool, container, slot uint8) {
+	if loc.Bank {
+		return true, loc.Tab, loc.Slot
+	}
+	return false, loc.BagSlot, loc.Slot
+}
+
+// fireGuildItemMove dispatches GUILD_EVENT_ON_ITEM_MOVE (9) as
+// (event, guild, player, item, isSrcBank, srcContainer, srcSlotId,
+// isDestBank, destContainer, destSlotId), mirroring MoveItemData::LogAction
+// (Guild.cpp:774-781) via ScriptMgr::OnGuildItemMove (ScriptMgr.cpp:2310).
+// C++ fires once per _MoveItems with the source item, and a second time on
+// swaps with the destination item and swapped roles (Guild.cpp:2751-2754);
+// the hook never cancels (CallAllFunctions).
+func (s *session) fireGuildItemMove(ctx context.Context, guildID uint32, srcLoc, dstLoc guildMoveLocation, item guildMoveItem, count uint32) {
+	guild := s.luaGuildObject(ctx, guildID)
+	if guild == nil {
+		return
+	}
+	srcBank, srcContainer, srcSlot := moveLocHookParams(srcLoc)
+	dstBank, dstContainer, dstSlot := moveLocHookParams(dstLoc)
+	s.fireGuildEvent(ctx, scripting.GuildEventOnItemMove, guild, s.luaPlayer(),
+		scripting.NewItemObject(item.GUID, item.Entry, count),
+		srcBank, srcContainer, srcSlot, dstBank, dstContainer, dstSlot)
+}

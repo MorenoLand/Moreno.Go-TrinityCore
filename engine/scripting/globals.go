@@ -156,6 +156,19 @@ func NewGuildObject(guildID uint32, name string, leaderGUID uint64, memberCount 
 	return &Object{Type: "Guild", Fields: map[string]any{"ID": uint32(guildID), "Name": name, "LeaderGUID": uint64(leaderGUID), "MemberCount": uint32(memberCount)}, Methods: methods}
 }
 
+// NewItemObject builds the Lua Item object surface for hooks that hand
+// scripts a live item (Eluna's Push(Item*) via ElunaTemplate): the GUID,
+// Entry and Count fields plus the GetCount method. The generic object
+// methods supply GetEntry/GetGUID/GetGUIDLow/GetTypeId (object.go); the
+// rest of Eluna's Item method surface has no Go live-item model behind it
+// and stays unbridged.
+func NewItemObject(guid uint64, entry, count uint32) *Object {
+	methods := map[string]ObjectMethod{
+		"GetCount": func(context.Context, []any) ([]any, error) { return []any{count}, nil },
+	}
+	return &Object{Type: "Item", Fields: map[string]any{"GUID": guid, "Entry": entry, "Count": count}, Methods: methods}
+}
+
 func (r *Runtime) pushGuildLookup(state *lua.State, statement string, arg any) int {
 	if r.config.CharacterDB == nil {
 		state.PushNil()

@@ -2270,10 +2270,22 @@ func (s *session) logGuildBankEvent(ctx context.Context, guildID uint32, tabID u
 	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || guildID == 0 {
 		return
 	}
+	// Guild::_LogBankEvent (Guild.cpp:2656-2661): tab ids past the bank are
+	// dropped, and moves within the same tab are not logged.
+	if tabID > guildBankMaxTabs {
+		return
+	}
+	if eventType == guildBankLogMoveItem && tabID == destTabID {
+		return
+	}
 	cdb := s.server.CharactersStore.DB
 
+	// Money events are stored under the money-logs tab, but the hook sees
+	// GUILD_BANK_MAX_TABS (Guild.cpp:2663-2673, 2683).
+	hookTabID := tabID
 	dbTabID := tabID
 	if eventType == guildBankLogDepositMoney || eventType == guildBankLogWithdrawMoney || eventType == guildBankLogRepairMoney {
+		hookTabID = guildBankMaxTabs
 		dbTabID = guildBankMoneyLogsTab
 	}
 
@@ -2303,6 +2315,10 @@ func (s *session) logGuildBankEvent(ctx context.Context, guildID uint32, tabID u
 			}
 		}
 	}
+	// sScriptMgr->OnGuildBankEvent fires after the log write
+	// (Guild.cpp:2683): (event, guild, eventType, tabId, playerGUIDLow,
+	// itemOrMoney, itemStackCount, destTabId).
+	s.fireGuildEvent(ctx, scripting.GuildEventOnBankEvent, s.luaGuildObject(ctx, guildID), eventType, hookTabID, uint32(playerGUID), itemOrMoney, uint16(stackCount), destTabID)
 }
 
 // logGuildEvent mirrors Guild::_LogEvent (Guild.cpp:2639) plus
@@ -2345,6 +2361,9 @@ func (s *session) logGuildEvent(ctx context.Context, guildID uint32, eventType u
 			}
 		}
 	}
+	// sScriptMgr->OnGuildEvent fires after the log write (Guild.cpp:2650):
+	// (event, guild, eventType, plrGUIDLow1, plrGUIDLow2, newRank).
+	s.fireGuildEvent(ctx, scripting.GuildEventOnEvent, s.luaGuildObject(ctx, guildID), eventType, uint32(playerGUID1), uint32(playerGUID2), newRank)
 }
 
 func (s *session) checkGuildBankRights(ctx context.Context, guildID uint32, tabID uint8, checkDeposit bool) bool {
@@ -2792,9 +2811,9 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 				if !ok {
 					return true
 				}
-				destination = &guildMoveLocation{Bag: bagKey, Slot: containerItemSlot}
+				destination = &guildMoveLocation{Bag: bagKey, Slot: containerItemSlot, BagSlot: containerSlot}
 			} else {
-				destination = &guildMoveLocation{}
+				destination = &guildMoveLocation{BagSlot: 0xFF, Slot: 0xFF}
 			}
 			outcome, moved := s.guildMoveItem(ctx, guildID, source, destination, autoTarget, splitCount)
 			movedItems = moved
@@ -2819,7 +2838,7 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 			if !ok {
 				return true
 			}
-			source := guildMoveLocation{Bag: bagKey, Slot: containerItemSlot}
+			source := guildMoveLocation{Bag: bagKey, Slot: containerItemSlot, BagSlot: containerSlot}
 			destination := guildMoveLocation{Bank: true, Tab: bankTab, Slot: bankSlot}
 			outcome, moved := s.guildMoveItem(ctx, guildID, source, &destination, false, splitCount)
 			movedItems = moved
@@ -2857,7 +2876,11 @@ type guildMoveLocation struct {
 	Bank bool
 	Tab  uint8
 	Bag  int64
-	Slot uint8
+	// BagSlot is the C++ bag slot id (PlayerMoveItemData::GetContainer)
+	// for the GUILD_EVENT_ON_ITEM_MOVE hook; the Bag key alone cannot
+	// recover it (inventoryBagKey maps slots to bag item GUIDs).
+	BagSlot uint8
+	Slot    uint8
 }
 
 type guildMoveItem struct {
@@ -3603,6 +3626,11 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 		if err := guildSwapMoveItems(ctx, tx, uint64(guildID), s.playerGUID, sourceLoc, *destination, source, destItem); err != nil {
 			return rollback(0, source.GUID)
 		}
+		// Guild::_MoveItems (Guild.cpp:2751-2754): pDest->LogAction(pSrc)
+		// then pSrc->LogAction(pDest) fire the OnItemMove hook before the
+		// store transaction commits.
+		s.fireGuildItemMove(ctx, guildID, sourceLoc, *destination, source, moveCount)
+		s.fireGuildItemMove(ctx, guildID, *destination, sourceLoc, destItem, destItem.Count)
 		if err := tx.Commit(); err != nil {
 			return guildMoveOutcome{}, false
 		}
@@ -3649,6 +3677,13 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 	if err := s.guildApplyMovePlan(ctx, tx, uint64(guildID), s.playerGUID, sourceLoc, source, moveCount, full, placements); err != nil {
 		return rollback(0, source.GUID)
 	}
+	// Guild::_MoveItems (Guild.cpp:2751): pDest->LogAction(pSrc) fires the
+	// OnItemMove hook before the store transaction commits.
+	destLoc := guildMoveLocation{BagSlot: 0xFF, Slot: 0xFF}
+	if destination != nil {
+		destLoc = *destination
+	}
+	s.fireGuildItemMove(ctx, guildID, sourceLoc, destLoc, source, moveCount)
 	if err := tx.Commit(); err != nil {
 		return guildMoveOutcome{}, false
 	}
@@ -3658,7 +3693,7 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 	if destination != nil && !destination.Bank {
 		s.adjustQuestItemCount(ctx, source.Entry, moveCount, true)
 	}
-	return guildMoveOutcome{Source: source, SourceLoc: sourceLoc, Count: moveCount, DestLoc: guildMoveLocation{Bank: destination != nil && destination.Bank}}, true
+	return guildMoveOutcome{Source: source, SourceLoc: sourceLoc, Count: moveCount, DestLoc: destLoc}, true
 }
 
 func guildSwapMoveItems(ctx context.Context, tx *sql.Tx, guildID, playerGUID uint64, sourceLoc, destination guildMoveLocation, source, dest guildMoveItem) error {
