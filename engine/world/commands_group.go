@@ -55,7 +55,10 @@ func (s *session) handleCmdGroup(ctx context.Context, args []string) {
 	case "set":
 		// The C++ groupSetCommandTable is a second nesting level; the
 		// Trinity parser prefix-matches at every level, mirrored here.
-		if len(args) < 3 {
+		// A bare ".group set leader" (no name) is valid in C++: the
+		// strtok yields a null nameStr and GetPlayerGroupAndGUIDByName
+		// (Chat.cpp:806) falls back to the selected / own player.
+		if len(args) < 2 {
 			s.sendSysMessage(syntax)
 			return
 		}
@@ -321,7 +324,10 @@ func (s *session) handleGroupJoinCommand(ctx context.Context, args []string) {
 		s.sendSysMessage("Player not found.") // C++ Group::AddMember needs a live player
 		return
 	}
-	if groupTarget := s.server.groupOfGUID(target.guid); groupTarget != nil && (groupTarget == groupSource || target.guid == source.guid) {
+	// C++ (cs_group.cpp:313): any existing group membership — the target's
+	// own group OR the source group — rejects with ALREADY_IN_GROUP, not
+	// just membership in the source group.
+	if s.server.groupOfGUID(target.guid) != nil {
 		s.sendSysMessage(fmt.Sprintf("%s is already in a group.", target.name)) // LANG_GROUP_ALREADY_IN_GROUP (1145)
 		return
 	}
