@@ -842,6 +842,20 @@ func (s *Server) endIC(ic *icBattlegroundState, winner int8) {
 		return
 	}
 	ic.Winner = winner
+	// Reference: Battleground::EndBattleground (Battleground.cpp:667) sets the
+	// winner and the instance leaves STATUS_IN_PROGRESS, so the zone
+	// PostUpdateImpl timer arms never tick again and the timers die with the
+	// instance. Go models each IoC node timer as a time.AfterFunc, so stop
+	// every armed node timer here under the caller's ic.mu (the lock is also
+	// held by the timer callback, so Stop never races a running callback;
+	// the ic.Winner >= 0 gate in resolveICNodeCapture stays as defense for a
+	// fire that lands between the gate and Stop).
+	for i := range ic.Nodes {
+		if ic.Nodes[i].CaptureTimer != nil {
+			ic.Nodes[i].CaptureTimer.Stop()
+			ic.Nodes[i].CaptureTimer = nil
+		}
+	}
 	winnerTeam := "Alliance"
 	if winner == int8(ICTeamHorde) {
 		winnerTeam = "Horde"

@@ -526,6 +526,7 @@ func (s *Server) TickResources(ab *abBattlegroundState, elapsedMs int64) {
 				if ab.AllianceResources >= ab.MaxResources {
 					ab.AllianceResources = ab.MaxResources
 					ab.Winner = 0
+					s.stopABNodeCaptureTimers(ab)
 					s.announceABVictory(ab.MapID, 0)
 				}
 				s.broadcastWorldState(ab.MapID, ABWorldStateAllianceResources, ab.AllianceResources)
@@ -545,6 +546,7 @@ func (s *Server) TickResources(ab *abBattlegroundState, elapsedMs int64) {
 				if ab.HordeResources >= ab.MaxResources {
 					ab.HordeResources = ab.MaxResources
 					ab.Winner = 1
+					s.stopABNodeCaptureTimers(ab)
 					s.announceABVictory(ab.MapID, 1)
 				}
 				s.broadcastWorldState(ab.MapID, ABWorldStateHordeResources, ab.HordeResources)
@@ -595,6 +597,22 @@ func (s *Server) announceABNearVictory(mapID uint32, team uint32) {
 	// Go uses its generic BG message convention (no broadcast_text seed, no
 	// PlaySound model).
 	s.broadcastBattlegroundMessage(mapID, fmt.Sprintf("The %s is near victory!", teamName))
+}
+
+// stopABNodeCaptureTimers cancels every armed AB banner capture timer; the
+// Go form of the STATUS_IN_PROGRESS gate + instance deletion in
+// Battleground::EndBattleground. Called with ab.mu held (from
+// TickResources), the same lock the timer callbacks take, so Stop never
+// races a running callback; the ab.Winner >= 0 gate in
+// completeABNodeCapture stays as defense for a fire landing between the
+// gate and Stop.
+func (s *Server) stopABNodeCaptureTimers(ab *abBattlegroundState) {
+	for i := range ab.Nodes {
+		if ab.Nodes[i].CaptureTimer != nil {
+			ab.Nodes[i].CaptureTimer.Stop()
+			ab.Nodes[i].CaptureTimer = nil
+		}
+	}
 }
 
 func (s *Server) announceABVictory(mapID uint32, winningTeam uint32) {

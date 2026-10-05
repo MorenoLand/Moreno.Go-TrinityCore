@@ -386,6 +386,12 @@ func (s *Server) captureEOTSFlag(eots *eotsBattlegroundState, sess *session, tea
 	eots.FlagRespawnTimer = time.AfterFunc(EOTSFlagRespawnTime, func() {
 		eots.mu.Lock()
 		defer eots.mu.Unlock()
+		// Battle-over gate: a fire landing after EndBattleground must not
+		// unhide the flag or broadcast into the finished battle (defense for
+		// a fire racing the Stop at victory).
+		if eots.Winner >= 0 {
+			return
+		}
 		if eots.FlagCenterGUID != 0 {
 			s.setGameObjectHidden(eots.FlagCenterGUID, false)
 		}
@@ -471,6 +477,10 @@ func (s *Server) dropEOTSFlag(eots *eotsBattlegroundState, sess *session) {
 	eots.FlagReturnTimer = time.AfterFunc(EOTSFlagRespawnTime, func() {
 		eots.mu.Lock()
 		defer eots.mu.Unlock()
+		// Battle-over gate: same defense as the respawn-timer gate above.
+		if eots.Winner >= 0 {
+			return
+		}
 		if eots.FlagState == EOTSFlagStateDropped {
 			s.despawnDynamicGameObject(eots.FlagDroppedGUID)
 			eots.FlagDroppedGUID = 0
@@ -594,6 +604,21 @@ func (s *Server) addEOTSResources(eots *eotsBattlegroundState, team uint32, poin
 		*resources = eots.MaxResources
 		if eots.Winner < 0 {
 			eots.Winner = int8(team)
+			// Reference: Battleground::EndBattleground (Battleground.cpp:667)
+			// sets the winner and the instance leaves STATUS_IN_PROGRESS, so
+			// the m_FlagsTimer arm (BattlegroundEY PostUpdateImpl) never ticks
+			// again. Go models the flag respawn/return windows as
+			// time.AfterFunc, so stop both armed timers here under the
+			// caller's eots.mu (the lock is also held by both timer
+			// callbacks, so Stop never races a running callback).
+			if eots.FlagRespawnTimer != nil {
+				eots.FlagRespawnTimer.Stop()
+				eots.FlagRespawnTimer = nil
+			}
+			if eots.FlagReturnTimer != nil {
+				eots.FlagReturnTimer.Stop()
+				eots.FlagReturnTimer = nil
+			}
 			s.announceEOTSVictory(eots.MapID, team)
 		}
 	}

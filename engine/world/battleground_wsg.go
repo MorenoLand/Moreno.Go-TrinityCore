@@ -146,7 +146,7 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				s.startWSGFlagRespawnTimer(wsg, sess.player.Map, 1)
 				s.broadcastBattlegroundMessage(sess.player.Map, sess.player.Name+" captured the Warsong flag!")
 				if wsg.AllianceScore >= wsg.MaxScore {
-					s.endWSGVictory(sess.player.Map, 0)
+					s.endWSGVictory(wsg, sess.player.Map, 0)
 				}
 			}
 		}
@@ -182,7 +182,7 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				s.startWSGFlagRespawnTimer(wsg, sess.player.Map, 0)
 				s.broadcastBattlegroundMessage(sess.player.Map, sess.player.Name+" captured the Alliance flag!")
 				if wsg.HordeScore >= wsg.MaxScore {
-					s.endWSGVictory(sess.player.Map, 1)
+					s.endWSGVictory(wsg, sess.player.Map, 1)
 				}
 			}
 		}
@@ -475,7 +475,28 @@ func (s *Server) broadcastBattlegroundMessage(mapID uint32, message string) {
 // The kill counts are BG-weekend gated in C++ (3/4 on weekend, 1/2 otherwise,
 // BattlegroundWS.cpp:733-743); Go has no BG-weekend model, so the non-weekend
 // defaults apply.
-func (s *Server) endWSGVictory(mapID uint32, winningTeam uint32) {
+//
+// The caller's wsg.mu is held (both callers are the flag-capture arms of
+// handleWSGFlagUse).
+func (s *Server) endWSGVictory(wsg *wsgBattlegroundState, mapID uint32, winningTeam uint32) {
+	// Reference: Battleground::EndBattleground (Battleground.cpp:667) sets the
+	// winner and the instance leaves STATUS_IN_PROGRESS, so the _flagsTimer
+	// arm (BattlegroundWS::PostUpdateImpl, BattlegroundWS.cpp:112-122) never
+	// ticks again. Go models the respawn/return windows as time.AfterFunc, so
+	// stop every armed flag timer here under the caller's wsg.mu (the lock is
+	// also held by the timer callbacks, so Stop never races a running
+	// callback). The winning capture arms a respawn timer just before this
+	// runs, so it must be cancelled here or it would unhide the flag and
+	// broadcast "The flags were placed!" into the finished battle.
+	for _, timer := range [4]**time.Timer{
+		&wsg.AllianceWaitRespawnTimer, &wsg.HordeWaitRespawnTimer,
+		&wsg.AllianceReturnTimer, &wsg.HordeReturnTimer,
+	} {
+		if *timer != nil {
+			(*timer).Stop()
+			*timer = nil
+		}
+	}
 	teamName := "Alliance"
 	if winningTeam == 1 {
 		teamName = "Horde"
