@@ -94,12 +94,12 @@ func (s *session) handleCmdGObject(ctx context.Context, args []string) {
 		if deny(permissionCommandGObjectSpawnGroup) || !needArgs(1) {
 			return
 		}
-		s.sendSysMessage("gobject spawngroup is not supported: the spawn-group handlers live in cs_npc.cpp (HandleNpcSpawnGroup), which is not ported yet.")
+		s.sendSysMessage("gobject spawngroup is not supported: the spawn-group manager has no Go bridge.")
 	case "despawngroup":
 		if deny(permissionCommandGObjectDespawnGroup) || !needArgs(1) {
 			return
 		}
-		s.sendSysMessage("gobject despawngroup is not supported: the spawn-group handlers live in cs_npc.cpp (HandleNpcDespawnGroup), which is not ported yet.")
+		s.sendSysMessage("gobject despawngroup is not supported: the spawn-group manager has no Go bridge.")
 	case "add":
 		if len(args) > 1 && strings.HasPrefix("temp", strings.ToLower(args[1])) {
 			if deny(permissionCommandGObjectAddTemp) {
@@ -451,7 +451,7 @@ func (s *session) handleGObjectMove(ctx context.Context, args []string) {
 		for i := 0; i < 3; i++ {
 			v, err := strconv.ParseFloat(args[1+i], 32)
 			if err != nil {
-				s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (44)
+				s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (115)
 				return
 			}
 			coords[i] = float32(v)
@@ -485,7 +485,7 @@ func (s *session) handleGObjectNear(ctx context.Context, args []string) {
 	if len(args) > 0 {
 		v, err := strconv.ParseFloat(args[0], 64)
 		if err != nil || v < 0 {
-			s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (44)
+			s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (115)
 			return
 		}
 		distance = v
@@ -579,10 +579,11 @@ func (s *session) handleGObjectTarget(ctx context.Context, args []string) {
 		found = runQuery(base+"WHERE g.map = ? AND g.id = ? ORDER BY "+distExpr+" ASC LIMIT 1",
 			px, px, py, py, pz, pz, s.player.Map, entry)
 	default:
-		name := strings.ReplaceAll(args[0], "%", "")
-		name = strings.ReplaceAll(name, "_", "")
+		// The C++ passes the name straight into LIKE '%<name>%', so user
+		// % and _ keep their SQL wildcard meaning; a bound parameter needs
+		// no EscapeString.
 		found = runQuery("SELECT g.guid, g.id, g.position_x, g.position_y, g.position_z, g.orientation, g.map, g.phaseMask FROM gameobject AS g LEFT JOIN gameobject_template AS t ON t.entry = g.id WHERE g.map = ? AND t.name LIKE ? ORDER BY "+distExpr+" ASC LIMIT 1",
-			s.player.Map, "%"+name+"%", px, px, py, py, pz, pz)
+			s.player.Map, "%"+args[0]+"%", px, px, py, py, pz, pz)
 	}
 	if len(found) == 0 {
 		s.sendSysMessage("Cannot find any gameobject.") // LANG_COMMAND_TARGETOBJNOTFOUND (266)
@@ -630,7 +631,7 @@ func (s *session) handleGObjectTurn(ctx context.Context, args []string) {
 	for i := 0; i < len(vals) && i+1 < len(args); i++ {
 		v, err := strconv.ParseFloat(args[1+i], 64)
 		if err != nil {
-			s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (44)
+			s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (115)
 			return
 		}
 		*vals[i] = v
@@ -681,7 +682,7 @@ func (s *session) handleGObjectAdd(ctx context.Context, args []string) {
 	if len(args) > 1 {
 		v, err := strconv.ParseInt(args[1], 10, 32)
 		if err != nil {
-			s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (44)
+			s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (115)
 			return
 		}
 		spawnTimeSecs = v
@@ -731,7 +732,7 @@ func (s *session) handleGObjectAddTemp(ctx context.Context, args []string) {
 	if len(args) > 1 {
 		v, err := strconv.ParseInt(args[1], 10, 64)
 		if err != nil || v < 0 {
-			s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (44)
+			s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (115)
 			return
 		}
 		spawnSecs = v
@@ -785,7 +786,7 @@ func (s *session) handleGObjectSetPhase(ctx context.Context, args []string) {
 	}
 	phaseMask, err := strconv.ParseUint(args[1], 10, 32)
 	if err != nil || phaseMask == 0 {
-		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (44)
+		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (115)
 		return
 	}
 	if _, err := db.ExecContext(ctx, "UPDATE gameobject SET phaseMask = ? WHERE guid = ?", uint32(phaseMask), row.guid); err != nil {
@@ -823,7 +824,7 @@ func (s *session) handleGObjectSetState(ctx context.Context, args []string) {
 	}
 	objectType, err := strconv.ParseInt(args[1], 10, 32)
 	if err != nil {
-		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (44)
+		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (115)
 		return
 	}
 	packed := gameObjectGUID(row.guid, row.entry)
@@ -838,7 +839,7 @@ func (s *session) handleGObjectSetState(ctx context.Context, args []string) {
 	}
 	objectState, err := strconv.ParseUint(args[2], 10, 32)
 	if err != nil {
-		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (44)
+		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (115)
 		return
 	}
 	if objectType == 4 {
