@@ -44,6 +44,53 @@ const (
 	spellFamilyPotion  = 13
 )
 
+// cloneCasterGUIDForUnit is the per-unit aura-index lookup for the mirror
+// image handler: it returns the caster GUID of the target unit's live
+// SPELL_AURA_CLONE_CASTER aura (the aura does not stack in C++, so the first
+// match is the GetAuraEffectsByType(...).front() analog).
+// Reference: WorldSession::HandleMirrorImageDataRequest (SpellHandler.cpp:740-745).
+// Player targets resolve through the session's activeAuras under its castMu
+// (the dispel.go locking pattern); creature and pet targets consult the
+// server's activeCreatureAuras index under auraMu. A zero caster GUID is
+// the C++ !GetCaster() return. Unresolvable GUIDs yield no match, like the
+// C++ !unit return.
+func (s *session) cloneCasterGUIDForUnit(targetGUID uint64) (uint64, bool) {
+	if s == nil || s.server == nil || targetGUID == 0 {
+		return 0, false
+	}
+	if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		ts.castMu.Lock()
+		for _, aura := range ts.activeAuras {
+			if aura == nil || aura.Stopped || aura.AuraType != spellAuraCloneCaster {
+				continue
+			}
+			casterGUID := aura.CasterGUID
+			ts.castMu.Unlock()
+			if casterGUID == 0 {
+				return 0, false
+			}
+			return casterGUID, true
+		}
+		ts.castMu.Unlock()
+		return 0, false
+	}
+	if s.player == nil {
+		return 0, false
+	}
+	s.server.auraMu.Lock()
+	defer s.server.auraMu.Unlock()
+	for _, aura := range s.server.activeCreatureAuras[creatureAuraKeyForPlayer(*s.player, targetGUID)] {
+		if aura == nil || aura.Stopped || aura.AuraType != spellAuraCloneCaster {
+			continue
+		}
+		if aura.CasterGUID == 0 {
+			return 0, false
+		}
+		return aura.CasterGUID, true
+	}
+	return 0, false
+}
+
 // spellAuraAbilityIgnoreAuraState is SPELL_AURA_ABILITY_IGNORE_AURASTATE
 // (SpellAuraDefines.h:342): a caster-side aura effect that makes
 // Unit::HasAuraState succeed for spells its affect mask covers

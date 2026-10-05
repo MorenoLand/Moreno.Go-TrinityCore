@@ -397,6 +397,7 @@ const (
 	spellAuraModDamageFromCaster                   = 271  // SPELL_AURA_MOD_DAMAGE_FROM_CASTER (SpellAuraDefines.h:351)
 	spellAuraDummy                                 = 4    // SPELL_AURA_DUMMY (SpellAuraDefines.h:84)
 	spellAuraModDurationByDispelNotStack           = 246  // SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL_NOT_STACK (SpellAuraDefines.h:326)
+	spellAuraCloneCaster                           = 247  // SPELL_AURA_CLONE_CASTER (SpellAuraDefines.h:327)
 	spellIconCheatDeath                            = 2109 // Cheat Death dummy aura (Unit.cpp:7078)
 	spellIconImprovedInsectSwarm                   = 1771 // Improved Insect Swarm talent dummy aura (SpellEffects.cpp:521)
 	spellIconRendAndTear                           = 2859 // Rend and Tear talent dummy aura (SpellEffects.cpp:3306)
@@ -13249,11 +13250,20 @@ func (s *session) handleFarSight(ctx context.Context, payload []byte) bool {
 
 // handleGetMirrorImageData processes CMSG_GET_MIRRORIMAGE_DATA (0x401).
 // Reference: WorldSession::HandleMirrorImageDataRequest (SpellHandler.cpp:635).
-// DOCUMENTED DELTA: C++ resolves the target unit and returns unless it carries
-// SPELL_AURA_CLONE_CASTER, then replies with the aura creator's appearance
-// (npcbot outfit arms included). Go has no per-unit aura store for arbitrary
-// world GUIDs (session.activeAuras covers the player only), so the gate and
-// the creator-lookup arms are no-bridge; the reply shape is unchanged.
+//
+// C++ relative order: GetUnit resolution (639-642) -> npcbot outfit arms
+// (643-737) -> the SPELL_AURA_CLONE_CASTER gate (740: HasAuraType return,
+// "does not stack" — the front effect's caster, 742-745) -> the
+// creator-appearance reply (747-800): displayId/race/gender/class, then the
+// player arm (skin, face, hairstyle, haircolor, facialstyle, guildId, the 11
+// visible equipment slots with the PLAYER_FLAGS_HIDE_HELM/HIDE_CLOAK
+// suppression, item DisplayInfoID) or the creature arm (skipped player data).
+//
+// DOCUMENTED DELTA: the npcbot outfit arms stay no-bridge — Go has
+// NpcBotAppearanceData but no CreatureOutfitMap equivalent and Go bots never
+// route through this handler's clone path. A non-player aura caster has no
+// race/gender/class/display model on creature motions, so the creature arm
+// writes zeros for those fields alongside the skipped player-data block.
 func (s *session) handleGetMirrorImageData(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
@@ -13261,23 +13271,143 @@ func (s *session) handleGetMirrorImageData(ctx context.Context, payload []byte) 
 	r := protocol.NewReader(payload)
 	guid, _ := r.ReadU64()
 
+	// SpellHandler.cpp:639-642 — the requested unit must resolve (player
+	// sessions, pets, and creature motions are Go's GetUnit universe).
+	if guid != s.playerGUID {
+		if ts := s.server.findSessionByGUID(guid); ts == nil || ts.player == nil {
+			if s.findCreatureMotion(guid) == nil {
+				return true
+			}
+		}
+	}
+
+	// SpellHandler.cpp:740-745 — no reply without a live CLONE_CASTER aura,
+	// and no reply when the aura's caster is gone.
+	casterGUID, ok := s.cloneCasterGUIDForUnit(guid)
+	if !ok {
+		return true
+	}
+
+	var creator *playerState
+	if casterGUID == s.playerGUID {
+		creator = s.player
+	} else if ts := s.server.findSessionByGUID(casterGUID); ts != nil && ts.player != nil {
+		creator = ts.player
+	}
+
 	buf := protocol.NewBuffer(68)
 	buf.WriteU64(guid)
-	buf.WriteU32(0) // displayId
-	buf.WriteU8(s.player.Race)
-	buf.WriteU8(s.player.Gender)
-	buf.WriteU8(s.player.Class)
-	buf.WriteU8(s.player.Skin)
-	buf.WriteU8(s.player.Face)
-	buf.WriteU8(s.player.HairStyle)
-	buf.WriteU8(s.player.HairColor)
-	buf.WriteU8(s.player.FacialStyle)
-	buf.WriteU32(0) // guildId
-	for i := 0; i < 11; i++ {
-		buf.WriteU32(0) // outfit item displays
+	if creator == nil {
+		buf.WriteU32(0) // displayId
+		buf.WriteU8(0)  // race
+		buf.WriteU8(0)  // gender
+		buf.WriteU8(0)  // class
+		buf.WriteU8(0)  // creature arm: skipped player data
+		for i := 0; i < 13; i++ {
+			buf.WriteU32(0)
+		}
+	} else {
+		buf.WriteU32(mirrorImageCreatorDisplayID(s, creator))
+		buf.WriteU8(creator.Race)
+		buf.WriteU8(creator.Gender)
+		buf.WriteU8(creator.Class)
+		buf.WriteU8(creator.Skin)
+		buf.WriteU8(creator.Face)
+		buf.WriteU8(creator.HairStyle)
+		buf.WriteU8(creator.HairColor)
+		buf.WriteU8(creator.FacialStyle)
+		buf.WriteU32(creator.GuildID)
+		for _, display := range mirrorImageItemDisplays(ctx, s, creator) {
+			buf.WriteU32(display)
+		}
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_MIRRORIMAGE_DATA), buf.Bytes(), true)
 	return true
+}
+
+// mirrorImageCreatorDisplayID mirrors creator->GetDisplayId() for a player
+// creator: the race/gender native display (the corpse-display pattern in
+// death.go), overridden by the transform display (player_state.go:3150).
+func mirrorImageCreatorDisplayID(s *session, state *playerState) uint32 {
+	var displayID uint32
+	if s != nil && s.server != nil && s.server.Data != nil && state != nil {
+		if race, found, err := s.server.Data.Race(uint32(state.Race)); err == nil && found {
+			displayID = race.MaleDisplayID
+			if state.Gender != 0 {
+				displayID = race.FemaleDisplayID
+			}
+		}
+	}
+	if state != nil && state.TransformDisplayID != 0 {
+		displayID = state.TransformDisplayID
+	}
+	return displayID
+}
+
+// mirrorImageItemSlots is the EquipmentSlots list written by
+// HandleMirrorImageDataRequest (SpellHandler.cpp:764-777): HEAD, SHOULDERS,
+// BODY, CHEST, WAIST, LEGS, FEET, WRISTS, HANDS, BACK, TABARD.
+var mirrorImageItemSlots = []int{0, 2, 3, 4, 5, 6, 7, 8, 9, 14, 18}
+
+// mirrorImageItemDisplays returns the 11 item DisplayInfoID values for the
+// creator's visible equipment: head suppressed by PLAYER_FLAGS_HIDE_HELM
+// (0x400), back suppressed by PLAYER_FLAGS_HIDE_CLOAK (0x800), otherwise the
+// item template's display id (SpellHandler.cpp:779-794). The equipment cache
+// is parsed the way buildPlayerUpdateValues does (player_state.go:3270);
+// a missing store or template row yields 0 (terrain.go convention).
+func mirrorImageItemDisplays(ctx context.Context, s *session, state *playerState) [11]uint32 {
+	var displays [11]uint32
+	if state == nil {
+		return displays
+	}
+	entries := make([]uint32, 0, len(mirrorImageItemSlots))
+	slots := make([]int, 0, len(mirrorImageItemSlots))
+	fields := strings.Fields(state.Equipment)
+	for i, slot := range mirrorImageItemSlots {
+		// C++ slot suppressions run before the item lookup.
+		if slot == 0 && state.PlayerFlags&playerFlagHideHelm != 0 {
+			continue
+		}
+		if slot == 14 && state.PlayerFlags&playerFlagHideCloak != 0 {
+			continue
+		}
+		base := slot * 2
+		if base >= len(fields) {
+			continue
+		}
+		entry, err := strconv.ParseUint(fields[base], 10, 32)
+		if err != nil || entry == 0 {
+			continue
+		}
+		entries = append(entries, uint32(entry))
+		slots = append(slots, i)
+	}
+	if len(entries) == 0 || s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return displays
+	}
+	placeholders := strings.Repeat("?,", len(entries))
+	query := "SELECT entry, displayid FROM item_template WHERE entry IN (" + placeholders[:len(placeholders)-1] + ")"
+	args := make([]any, len(entries))
+	for i, entry := range entries {
+		args[i] = entry
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return displays
+	}
+	defer rows.Close()
+	byEntry := make(map[uint32]uint32, len(entries))
+	for rows.Next() {
+		var entry, display uint32
+		if rows.Scan(&entry, &display) != nil {
+			continue
+		}
+		byEntry[entry] = display
+	}
+	for i, index := range slots {
+		displays[index] = byEntry[entries[i]]
+	}
+	return displays
 }
 
 // handleTotemDestroyed processes CMSG_TOTEM_DESTROYED (0x413).
