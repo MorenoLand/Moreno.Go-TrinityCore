@@ -2336,7 +2336,7 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 					s.server.creatureLoot[loot.objectKey()] = loot
 					s.server.lootMu.Unlock()
 					s.activeLoot = loot
-					return s.sendLootResponse(loot) == nil
+					return s.sendLootResponse(ctx, loot) == nil
 				}
 			}
 		}

@@ -18,17 +18,83 @@ type lootItem struct {
 	Quality       uint32
 	IsBlocked     bool
 	RollWinner    uint64
+	// NeedsQuest mirrors LootItem::needs_quest (Loot.h:140): the
+	// creature/gameobject_loot_template QuestRequired column. Quest-required
+	// rows roll into the separate QuestItems list, never the normal Items,
+	// and are only shown to viewers whose quest state allows them
+	// (LootItem::AllowedForPlayer, Loot.cpp:57-95).
+	NeedsQuest  bool
+	StartQuest  uint32
+	CustomFlags uint32
 }
 
+// itemFlagsCuIgnoreQuestStatus / itemFlagsCuFollowLootRules mirror
+// ITEM_FLAGS_CU_IGNORE_QUEST_STATUS and ITEM_FLAGS_CU_FOLLOW_LOOT_RULES
+// (ItemTemplate.h:225-226).
+const (
+	itemFlagsCuIgnoreQuestStatus uint32 = 0x0002
+	itemFlagsCuFollowLootRules   uint32 = 0x0004
+)
+
+// maxQuestLootItems mirrors MAX_NR_QUEST_ITEMS (Loot.h:57).
+const maxQuestLootItems = 32
+
 type activeLootState struct {
-	TargetGUID       uint64
-	MapID            uint32
-	InstanceID       uint32
-	LootType         uint8
-	Money            uint32
-	Items            map[uint8]lootItem
+	TargetGUID uint64
+	MapID      uint32
+	InstanceID uint32
+	LootType   uint8
+	Money      uint32
+	Items      map[uint8]lootItem
+	// QuestItems mirrors Loot::quest_items (Loot.h): quest-required rolls live
+	// in their own index space. A viewer sees them at display slot
+	// NormalSlotCount + position-in-their-quest-list (Loot.cpp:704).
+	QuestItems map[uint8]lootItem
+	// NormalSlotCount mirrors Loot::items.size(): the constant display-slot
+	// base for quest items (C++ items.size() never shrinks on take; the Go
+	// Items map does, so the base is captured at fill time).
+	NormalSlotCount  uint8
 	RoundRobinPlayer uint64
 	Viewers          map[uint64]*session
+}
+
+// storeLootTemplateRow routes one rolled loot-template row into Items or
+// QuestItems, mirroring Loot::AddItem (Loot.cpp:141-152) where needs_quest
+// rows go to quest_items with the MAX_NR_QUEST_ITEMS cap.
+func storeLootTemplateRow(loot *activeLootState, slot, qidx *uint8, itemID, count, displayID, quality, startQuest, customFlags uint32, questRequired bool) {
+	if questRequired {
+		if *qidx >= maxQuestLootItems {
+			return
+		}
+		if loot.QuestItems == nil {
+			loot.QuestItems = make(map[uint8]lootItem)
+		}
+		loot.QuestItems[*qidx] = lootItem{
+			Slot:          *qidx,
+			ItemEntry:     itemID,
+			Count:         count,
+			DisplayInfoID: displayID,
+			Quality:       quality,
+			NeedsQuest:    true,
+			StartQuest:    startQuest,
+			CustomFlags:   customFlags,
+		}
+		*qidx++
+		return
+	}
+	if *slot >= 16 {
+		return
+	}
+	loot.Items[*slot] = lootItem{
+		Slot:          *slot,
+		ItemEntry:     itemID,
+		Count:         count,
+		DisplayInfoID: displayID,
+		Quality:       quality,
+		StartQuest:    startQuest,
+		CustomFlags:   customFlags,
+	}
+	*slot++
 }
 
 type lootObjectKey struct {
@@ -116,6 +182,176 @@ func (l *activeLootState) broadcastRemoved(slot uint8) {
 	for _, sess := range l.Viewers {
 		if sess != nil {
 			_ = sess.write(uint16(protocol.OpcodeSMSG_LOOT_REMOVED), buf.Bytes(), true)
+		}
+	}
+}
+
+// hasQuestForItem mirrors Player::HasQuestForItem (Player.cpp:16945-16998)
+// with turnIn=false: true when the session holds an incomplete quest that
+// still needs itemID, either as a RequiredItemId objective (quest-log item
+// count below the required count) or as an ItemDrop source item the player
+// does not yet own enough of.
+func (s *session) hasQuestForItem(ctx context.Context, itemID uint32) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	wdb := s.server.WorldStore.DB
+	for qi := range s.player.QuestLog {
+		entry := &s.player.QuestLog[qi]
+		if entry.QuestID == 0 {
+			continue
+		}
+		status, err := s.characterQuestStatus(ctx, entry.QuestID)
+		if err != nil || status != questStatusIncomplete {
+			continue
+		}
+		var reqIDs [6]int64
+		var reqCounts [6]int64
+		var dropIDs [4]int64
+		var dropQty [4]int64
+		if err := wdb.QueryRowContext(ctx, `SELECT
+				COALESCE(RequiredItemId1, 0), COALESCE(RequiredItemId2, 0), COALESCE(RequiredItemId3, 0),
+				COALESCE(RequiredItemId4, 0), COALESCE(RequiredItemId5, 0), COALESCE(RequiredItemId6, 0),
+				COALESCE(RequiredItemCount1, 0), COALESCE(RequiredItemCount2, 0), COALESCE(RequiredItemCount3, 0),
+				COALESCE(RequiredItemCount4, 0), COALESCE(RequiredItemCount5, 0), COALESCE(RequiredItemCount6, 0),
+				COALESCE(ItemDrop1, 0), COALESCE(ItemDrop2, 0), COALESCE(ItemDrop3, 0), COALESCE(ItemDrop4, 0),
+				COALESCE(ItemDropQuantity1, 0), COALESCE(ItemDropQuantity2, 0), COALESCE(ItemDropQuantity3, 0), COALESCE(ItemDropQuantity4, 0)
+			FROM quest_template WHERE ID = ?`, entry.QuestID).Scan(
+			&reqIDs[0], &reqIDs[1], &reqIDs[2], &reqIDs[3], &reqIDs[4], &reqIDs[5],
+			&reqCounts[0], &reqCounts[1], &reqCounts[2], &reqCounts[3], &reqCounts[4], &reqCounts[5],
+			&dropIDs[0], &dropIDs[1], &dropIDs[2], &dropIDs[3],
+			&dropQty[0], &dropQty[1], &dropQty[2], &dropQty[3]); err != nil {
+			continue
+		}
+		for j := 0; j < 6; j++ {
+			if uint32(reqIDs[j]) == itemID && entry.ItemCounts[j] < uint16(reqCounts[j]) {
+				return true
+			}
+		}
+		needsDrop := false
+		for j := 0; j < 4; j++ {
+			if uint32(dropIDs[j]) == itemID {
+				needsDrop = true
+				break
+			}
+		}
+		if !needsDrop {
+			continue
+		}
+		var maxCount, stackable int64
+		if err := wdb.QueryRowContext(ctx, `SELECT COALESCE(MaxCount, 0), COALESCE(Stackable, 1) FROM item_template WHERE entry = ?`, itemID).Scan(&maxCount, &stackable); err != nil {
+			continue
+		}
+		var owned int64
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_ = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory AS ci
+				JOIN item_instance AS ii ON ii.guid = ci.item
+				WHERE ci.guid = ? AND ii.itemEntry = ?`, s.playerGUID, itemID).Scan(&owned)
+		}
+		for j := 0; j < 4; j++ {
+			if uint32(dropIDs[j]) != itemID {
+				continue
+			}
+			if maxCount > 0 && owned < maxCount {
+				return true
+			}
+			if dropQty[j] > 0 {
+				if owned < dropQty[j] {
+					return true
+				}
+			} else if stackable > 0 && owned < stackable {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// lootQuestItemAllowed mirrors the master-looter visibility arm and the
+// quest-requirement arm of LootItem::AllowedForPlayer (Loot.cpp:57-95). The
+// DB-conditions, faction-flag and recipe arms have no model on this path and
+// stay unmodeled (documented delta).
+func (s *session) lootQuestItemAllowed(ctx context.Context, item lootItem, givenByMasterLooter bool) bool {
+	if s == nil {
+		return false
+	}
+	ignoreQuest := item.CustomFlags&itemFlagsCuIgnoreQuestStatus != 0
+	// Loot.cpp:73-81: the master looter can see non-quest items but never
+	// quest-gated ones; the master-give target arm (isGivenByMasterLooter)
+	// skips this early-true leg.
+	if !givenByMasterLooter && s.groupID != 0 && s.server != nil {
+		s.server.groupsMu.Lock()
+		grp := s.server.groups[s.groupID]
+		s.server.groupsMu.Unlock()
+		if grp != nil && grp.MasterLooter == s.playerGUID {
+			if !ignoreQuest && (item.NeedsQuest || item.StartQuest != 0) {
+				return false
+			}
+			return true
+		}
+	}
+	// Loot.cpp:92-93: quest-gated items (needs_quest, or StartQuest items for
+	// a quest the player has started) are hidden unless the player has a
+	// quest that needs the item.
+	if !ignoreQuest && (item.NeedsQuest || (item.StartQuest != 0 && s.questStatusNotNone(ctx, item.StartQuest))) && !s.hasQuestForItem(ctx, item.ItemEntry) {
+		return false
+	}
+	return true
+}
+
+// questStatusNotNone mirrors the GetQuestStatus(...) != QUEST_STATUS_NONE
+// half of the StartQuest arm (Loot.cpp:93): any recorded status (incomplete,
+// complete, failed, rewarded) hides the quest-starting item.
+func (s *session) questStatusNotNone(ctx context.Context, questID uint32) bool {
+	status, err := s.characterQuestStatus(ctx, questID)
+	return err == nil && status != 0
+}
+
+// viewerQuestLootList mirrors Loot::FillQuestLoot (Loot.cpp:296-332): the
+// sorted quest_items indices this viewer may see, gated by AllowedForPlayer
+// or the follow-loot-rules group arm (Loot.cpp:307) that lets the master
+// looter (or any member under non-master methods) distribute them.
+func (s *session) viewerQuestLootList(ctx context.Context, loot *activeLootState) []uint8 {
+	if s == nil || loot == nil || len(loot.QuestItems) == 0 {
+		return nil
+	}
+	var grp *groupState
+	if s.server != nil && s.groupID != 0 {
+		s.server.groupsMu.Lock()
+		grp = s.server.groups[s.groupID]
+		s.server.groupsMu.Unlock()
+	}
+	indices := make([]uint8, 0, len(loot.QuestItems))
+	for idx, item := range loot.QuestItems {
+		if s.lootQuestItemAllowed(ctx, item, false) {
+			indices = append(indices, idx)
+			continue
+		}
+		if item.CustomFlags&itemFlagsCuFollowLootRules != 0 && grp != nil &&
+			((grp.LootMethod == 2 && grp.MasterLooter == s.playerGUID) || grp.LootMethod != 2) {
+			indices = append(indices, idx)
+		}
+	}
+	sort.Slice(indices, func(i, j int) bool { return indices[i] < indices[j] })
+	return indices
+}
+
+// broadcastQuestRemoved mirrors Loot::NotifyQuestItemRemoved (Loot.cpp:399):
+// every looting player gets SMSG_LOOT_REMOVED with the slot from their own
+// quest list (items.size() + their position), since the display slot is
+// per-viewer.
+func (l *activeLootState) broadcastQuestRemoved(ctx context.Context, questIndex uint8) {
+	for _, sess := range l.Viewers {
+		if sess == nil {
+			continue
+		}
+		for pos, idx := range sess.viewerQuestLootList(ctx, l) {
+			if idx == questIndex {
+				buf := protocol.NewBuffer(1)
+				buf.WriteU8(l.NormalSlotCount + uint8(pos))
+				_ = sess.write(uint16(protocol.OpcodeSMSG_LOOT_REMOVED), buf.Bytes(), true)
+				break
+			}
 		}
 	}
 }
@@ -260,27 +496,31 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 			loot.addViewer(s)
 			s.activeLoot = loot
 			s.interruptCurrentCast()
-			return s.finishLootOpen(loot)
+			return s.finishLootOpen(ctx, loot)
 		}
 
-		rows, err := wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0)
+		rows, err := wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0),
+				COALESCE(l.QuestRequired, 0), COALESCE(t.StartQuest, 0), COALESCE(t.flagsCustom, 0)
 			FROM gameobject_loot_template AS l
 			LEFT JOIN item_template AS t ON t.entry = l.Item
-			WHERE l.Entry = ? ORDER BY l.Item LIMIT 16`, lootID)
+			WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, lootID)
 		if err != nil && isMissingColumn(err) {
-			rows, err = wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), 0
+			rows, err = wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), 0,
+					0, 0, 0
 				FROM gameobject_loot_template AS l
 				LEFT JOIN item_template AS t ON t.entry = l.Item
-				WHERE l.Entry = ? ORDER BY l.Item LIMIT 16`, lootID)
+				WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, lootID)
 		}
 		if err == nil {
 			defer rows.Close()
 			var slot uint8 = 0
+			var qidx uint8 = 0
 			for rows.Next() {
 				var itemID int64
 				var chance float64
 				var minCount, maxCount, displayID, quality int64
-				if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality); err != nil {
+				var questRequired, startQuest, customFlags int64
+				if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality, &questRequired, &startQuest, &customFlags); err != nil {
 					continue
 				}
 				roll := rand.Float64() * 100.0
@@ -294,18 +534,9 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 				if count == 0 {
 					count = 1
 				}
-				loot.Items[slot] = lootItem{
-					Slot:          slot,
-					ItemEntry:     uint32(itemID),
-					Count:         count,
-					DisplayInfoID: uint32(displayID),
-					Quality:       uint32(quality),
-				}
-				slot++
-				if slot >= 16 {
-					break
-				}
+				storeLootTemplateRow(loot, &slot, &qidx, uint32(itemID), count, uint32(displayID), uint32(quality), uint32(startQuest), uint32(customFlags), questRequired != 0)
 			}
+			loot.NormalSlotCount = slot
 		}
 		if s.server != nil && s.groupID != 0 {
 			s.server.groupsMu.Lock()
@@ -319,7 +550,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 		loot.addViewer(s)
 		s.activeLoot = loot
 		s.interruptCurrentCast()
-		return s.finishLootOpen(loot)
+		return s.finishLootOpen(ctx, loot)
 	}
 
 	target, ok := s.getCombatTarget(ctx, targetGUID)
@@ -360,7 +591,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 		loot.addViewer(s)
 		s.activeLoot = loot
 		s.interruptCurrentCast()
-		return s.finishLootOpen(loot)
+		return s.finishLootOpen(ctx, loot)
 	}
 	// Query min/max gold and lootid from creature_template
 	var minGold, maxGold, lootID int64
@@ -375,24 +606,28 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 		loot.Money = uint32(minGold)
 	}
 	// Query creature_loot_template
-	rows, err := wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0)
+	rows, err := wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0),
+			COALESCE(l.QuestRequired, 0), COALESCE(t.StartQuest, 0), COALESCE(t.flagsCustom, 0)
 		FROM creature_loot_template AS l
 		LEFT JOIN item_template AS t ON t.entry = l.Item
-		WHERE l.Entry = ? ORDER BY l.Item LIMIT 16`, lootID)
+		WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, lootID)
 	if err != nil && isMissingColumn(err) {
-		rows, err = wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), 0
+		rows, err = wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), 0,
+				0, 0, 0
 			FROM creature_loot_template AS l
 			LEFT JOIN item_template AS t ON t.entry = l.Item
-			WHERE l.Entry = ? ORDER BY l.Item LIMIT 16`, lootID)
+			WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, lootID)
 	}
 	if err == nil {
 		defer rows.Close()
 		var slot uint8 = 0
+		var qidx uint8 = 0
 		for rows.Next() {
 			var itemID int64
 			var chance float64
 			var minCount, maxCount, displayID, quality int64
-			if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality); err != nil {
+			var questRequired, startQuest, customFlags int64
+			if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality, &questRequired, &startQuest, &customFlags); err != nil {
 				continue
 			}
 			// Roll chance (0-100%)
@@ -407,18 +642,9 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 			if count == 0 {
 				count = 1
 			}
-			loot.Items[slot] = lootItem{
-				Slot:          slot,
-				ItemEntry:     uint32(itemID),
-				Count:         count,
-				DisplayInfoID: uint32(displayID),
-				Quality:       uint32(quality),
-			}
-			slot++
-			if slot >= 16 {
-				break
-			}
+			storeLootTemplateRow(loot, &slot, &qidx, uint32(itemID), count, uint32(displayID), uint32(quality), uint32(startQuest), uint32(customFlags), questRequired != 0)
 		}
+		loot.NormalSlotCount = slot
 	}
 	if s.server != nil && s.groupID != 0 {
 		s.server.groupsMu.Lock()
@@ -432,7 +658,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	loot.addViewer(s)
 	s.activeLoot = loot
 	s.interruptCurrentCast()
-	return s.finishLootOpen(loot)
+	return s.finishLootOpen(ctx, loot)
 }
 
 func (s *session) handleFishingNodeUse(ctx context.Context, payload []byte, goState *dynamicGameObjectState) bool {
@@ -470,7 +696,7 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 		if !requireOwner {
 			goState.FishingUses++
 		}
-		return s.sendLootResponse(loot) == nil
+		return s.sendLootResponse(ctx, loot) == nil
 	}
 	var zoneSkill int64
 	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT skill FROM skill_fishing_base_level WHERE entry = ?", s.player.Zone).Scan(&zoneSkill); err != nil && !missingTable(err) {
@@ -566,7 +792,7 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 	loot.addViewer(s)
 	s.activeLoot = loot
 	s.interruptCurrentCast()
-	if err := s.sendLootResponse(loot); err != nil {
+	if err := s.sendLootResponse(ctx, loot); err != nil {
 		return false
 	}
 	if requireOwner {
@@ -612,8 +838,8 @@ func (s *session) fishingHoleNearby(ctx context.Context, bobber *dynamicGameObje
 // !guid.IsItem()); the handleLoot paths are corpse loot of creatures and
 // gameobjects only, so the !IsItem leg is vacuous here. Item loot (items.go)
 // and fishing (LOOT_FISHING) never take this path, matching C++.
-func (s *session) finishLootOpen(loot *activeLootState) bool {
-	if s.sendLootResponse(loot) != nil {
+func (s *session) finishLootOpen(ctx context.Context, loot *activeLootState) bool {
+	if s.sendLootResponse(ctx, loot) != nil {
 		return false
 	}
 	if s.player != nil && s.player.UnitFlags&unitFlagLooting == 0 {
@@ -623,7 +849,7 @@ func (s *session) finishLootOpen(loot *activeLootState) bool {
 	return true
 }
 
-func (s *session) sendLootResponse(loot *activeLootState) error {
+func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) error {
 	var grp *groupState
 	if s.server != nil && s.groupID != 0 {
 		s.server.groupsMu.Lock()
@@ -631,11 +857,15 @@ func (s *session) sendLootResponse(loot *activeLootState) error {
 		s.server.groupsMu.Unlock()
 	}
 
-	packet := protocol.NewBuffer(8 + 1 + 4 + 1 + len(loot.Items)*22)
+	// LootView (Loot.cpp:596): quest items are appended after the normal
+	// items at slots items.size() + position-in-the-viewer's-quest-list.
+	questList := s.viewerQuestLootList(ctx, loot)
+
+	packet := protocol.NewBuffer(8 + 1 + 4 + 1 + (len(loot.Items)+len(questList))*22)
 	packet.WriteU64(loot.TargetGUID)
 	packet.WriteU8(loot.LootType)
 	packet.WriteU32(loot.Money)
-	packet.WriteU8(uint8(len(loot.Items)))
+	packet.WriteU8(uint8(len(loot.Items) + len(questList)))
 	items := sortedLootItems(loot.Items)
 	for _, it := range items {
 		var slotType uint8 = 0 // LOOT_SLOT_TYPE_ALLOW_LOOT
@@ -689,6 +919,32 @@ func (s *session) sendLootResponse(loot *activeLootState) error {
 		packet.WriteU32(0) // RandomPropertyId
 		packet.WriteU32(0) // RandomSuffix
 		packet.WriteU8(slotType)
+	}
+	// LootView quest arm (Loot.cpp:703-745): the viewer's quest items follow
+	// the normal items. follow_loot_rules items take the master/locked arms
+	// under master loot; otherwise they ride the permission default (Go's
+	// solo/group default is ALLOW_LOOT, matching the normal-item legs above).
+	// Go has no quest-item block model, so the GROUP/NBG ROLL_ONGOING leg has
+	// no bridge: follow_loot_rules quest items under group/nbg stay directly
+	// lootable (documented delta).
+	for pos, qidx := range questList {
+		qit := loot.QuestItems[qidx]
+		var qSlotType uint8 = 0 // LOOT_SLOT_TYPE_ALLOW_LOOT
+		if qit.CustomFlags&itemFlagsCuFollowLootRules != 0 && grp != nil && grp.LootMethod == 2 &&
+			qit.Quality >= uint32(grp.LootThreshold) {
+			if s.playerGUID == grp.MasterLooter {
+				qSlotType = 2 // LOOT_SLOT_TYPE_MASTER
+			} else {
+				qSlotType = 3 // LOOT_SLOT_TYPE_LOCKED
+			}
+		}
+		packet.WriteU8(loot.NormalSlotCount + uint8(pos))
+		packet.WriteU32(qit.ItemEntry)
+		packet.WriteU32(qit.Count)
+		packet.WriteU32(qit.DisplayInfoID)
+		packet.WriteU32(0) // RandomPropertyId
+		packet.WriteU32(0) // RandomSuffix
+		packet.WriteU8(qSlotType)
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_LOOT_RESPONSE), packet.Bytes(), true); err != nil {
 		return err
@@ -887,7 +1143,21 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 	}
 	lootSlot := payload[0]
 	it, ok := s.activeLoot.Items[lootSlot]
-	if !ok {
+	// Loot::LootItemInSlot (Loot.cpp:446): slots at/above items.size() index
+	// into the viewer's quest list, not the raw quest_items vector.
+	questIndex := uint8(0)
+	isQuestItem := false
+	if !ok && lootSlot >= s.activeLoot.NormalSlotCount {
+		questList := s.viewerQuestLootList(ctx, s.activeLoot)
+		if pos := int(lootSlot - s.activeLoot.NormalSlotCount); pos < len(questList) {
+			questIndex = questList[pos]
+			if qit, found := s.activeLoot.QuestItems[questIndex]; found {
+				it = qit
+				isQuestItem = true
+			}
+		}
+	}
+	if !ok && !isQuestItem {
 		return true
 	}
 	high := uint16(s.activeLoot.TargetGUID >> 48)
@@ -907,13 +1177,24 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 		}
 	}
 
+	// Player::StoreLootItem (Player.cpp:25071-25075): the AllowedForPlayer
+	// gate is re-checked at take time; a quest item the viewer no longer
+	// qualifies for answers with a silent loot release, not an error.
+	if isQuestItem && !s.lootQuestItemAllowed(ctx, it, false) {
+		return s.sendLootReleaseResponse(s.activeLoot.TargetGUID) == nil
+	}
+
 	if s.server != nil && s.groupID != 0 {
 		s.server.groupsMu.Lock()
 		grp := s.server.groups[s.groupID]
 		s.server.groupsMu.Unlock()
 		if grp != nil {
 			isOverThreshold := it.Quality >= uint32(grp.LootThreshold)
-			if grp.LootMethod == 2 && isOverThreshold {
+			// Loot.cpp:307: only follow_loot_rules quest items are
+			// master-distributed; plain quest items stay directly lootable
+			// by quest-holding members under master loot.
+			if grp.LootMethod == 2 && isOverThreshold &&
+				!(isQuestItem && it.CustomFlags&itemFlagsCuFollowLootRules == 0) {
 				// Master loot item must be given by master looter
 				return true
 			}
@@ -954,8 +1235,18 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 		s.updateAchievementCriteria(criteriaTypeLootEpicItem, it.ItemEntry, it.Count)
 		s.updateAchievementCriteria(criteriaTypeReceiveEpicItem, it.ItemEntry, it.Count)
 	}
-	delete(s.activeLoot.Items, lootSlot)
-	s.activeLoot.broadcastRemoved(lootSlot)
+	// Player::StoreLootItem (Player.cpp:25122-25124): a taken quest item is
+	// marked looted for everyone (Go has no ITEM_FLAG_MULTI_DROP free-for-all
+	// quest model, so the per-player qitem copy leg is a documented delta).
+	// The removal broadcast goes out before the delete because each viewer
+	// gets the slot from their own quest list.
+	if isQuestItem {
+		s.activeLoot.broadcastQuestRemoved(ctx, questIndex)
+		delete(s.activeLoot.QuestItems, questIndex)
+	} else {
+		delete(s.activeLoot.Items, lootSlot)
+		s.activeLoot.broadcastRemoved(lootSlot)
+	}
 	_ = s.sendInventoryItems(ctx)
 
 	slotForPush := uint32(res.Slot)
@@ -964,7 +1255,7 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(s.playerGUID, res.ClientBag, slotForPush, it.ItemEntry, it.Count, res.InventoryCount), true)
 	s.sendPlayerUpdate()
-	if s.activeLoot.Money == 0 && len(s.activeLoot.Items) == 0 {
+	if s.activeLoot.Money == 0 && len(s.activeLoot.Items) == 0 && len(s.activeLoot.QuestItems) == 0 {
 		s.clearCreatureLoot(s.activeLoot)
 	}
 	s.debug("loot item stored", "account", s.accountName, "item", it.ItemEntry, "slot", res.Slot, "bag", res.ClientBag, "stacked", res.IsStack)
@@ -1062,8 +1353,32 @@ func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool
 		_ = s.sendLootError(lootGUID, 0)
 		return true
 	}
+	// HandleLootMasterGiveOpcode (LootHandler.cpp:448-452): the slot range
+	// covers items.size() + quest_items.size(); slots at/above items.size()
+	// index into the master looter's quest list.
 	it, ok := s.activeLoot.Items[slotID]
-	if !ok {
+	questIndex := uint8(0)
+	isQuestItem := false
+	if !ok && slotID >= s.activeLoot.NormalSlotCount {
+		questList := s.viewerQuestLootList(ctx, s.activeLoot)
+		if pos := int(slotID - s.activeLoot.NormalSlotCount); pos < len(questList) {
+			questIndex = questList[pos]
+			if qit, found := s.activeLoot.QuestItems[questIndex]; found {
+				it = qit
+				isQuestItem = true
+			}
+		}
+	}
+	if !ok && !isQuestItem {
+		return true
+	}
+
+	// HandleLootMasterGiveOpcode (LootHandler.cpp:454-458): the recipient is
+	// gated by AllowedForPlayer with isGivenByMasterLooter=true; a quest
+	// item the target has no quest for maps
+	// EQUIP_ERR_YOU_CAN_NEVER_USE_THAT_ITEM to LOOT_ERROR_MASTER_OTHER (14).
+	if isQuestItem && !targetSess.lootQuestItemAllowed(ctx, it, true) {
+		_ = s.sendLootError(lootGUID, 14)
 		return true
 	}
 
@@ -1092,7 +1407,16 @@ func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool
 		targetSess.updateAchievementCriteria(criteriaTypeLootEpicItem, it.ItemEntry, it.Count)
 		targetSess.updateAchievementCriteria(criteriaTypeReceiveEpicItem, it.ItemEntry, it.Count)
 	}
-	delete(s.activeLoot.Items, slotID)
+	// HandleLootMasterGiveOpcode (LootHandler.cpp:484-486): the given item is
+	// marked looted (count zeroed in C++; the Go analog deletes the row) and
+	// every viewer is notified with their own slot.
+	if isQuestItem {
+		s.activeLoot.broadcastQuestRemoved(ctx, questIndex)
+		delete(s.activeLoot.QuestItems, questIndex)
+	} else {
+		delete(s.activeLoot.Items, slotID)
+		s.activeLoot.broadcastRemoved(slotID)
+	}
 	_ = targetSess.sendInventoryItems(ctx)
 	targetSess.sendPlayerUpdate()
 	slotForPush := uint32(res.Slot)
@@ -1101,8 +1425,7 @@ func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool
 	}
 	_ = targetSess.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(targetGUID, res.ClientBag, slotForPush, it.ItemEntry, it.Count, res.InventoryCount), true)
 
-	s.activeLoot.broadcastRemoved(slotID)
-	if s.activeLoot.Money == 0 && len(s.activeLoot.Items) == 0 {
+	if s.activeLoot.Money == 0 && len(s.activeLoot.Items) == 0 && len(s.activeLoot.QuestItems) == 0 {
 		s.clearCreatureLoot(s.activeLoot)
 	}
 	return true
