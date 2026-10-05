@@ -29,6 +29,24 @@ const (
 	MapEventOnPlayerEnter = 21
 )
 
+// Eluna GuildEvents contract for RegisterGuildEvent. Numbering is the
+// TrinityCore LuaEngine numbering (LuaEngine/Hooks.h GuildEvents): 1-11 are
+// all fired by Eluna::GuildHooks; only the events the engine fires carry Go
+// constants.
+const (
+	GuildEventOnAddMember     = 1
+	GuildEventOnRemoveMember  = 2
+	GuildEventOnMotdChange    = 3
+	GuildEventOnInfoChange    = 4
+	GuildEventOnCreate        = 5
+	GuildEventOnDisband       = 6
+	GuildEventOnMoneyWithdraw = 7
+	GuildEventOnMoneyDeposit  = 8
+	GuildEventOnItemMove      = 9
+	GuildEventOnEvent         = 10
+	GuildEventOnBankEvent     = 11
+)
+
 // Eluna ServerEvents contract for RegisterServerEvent. Numbering is the
 // TrinityCore LuaEngine numbering (LuaEngine/Hooks.h ServerEvents); only
 // the events the engine fires carry Go constants.
@@ -381,6 +399,25 @@ func (r *Runtime) TriggerMapEvent(ctx context.Context, mapID uint32, event int, 
 
 func (r *Runtime) TriggerServerEvent(ctx context.Context, event int, args ...any) ([]any, error) {
 	return r.Trigger(ctx, "server", event, append([]any{event}, args...)...)
+}
+
+// TriggerGuildEvent fires hooks registered with RegisterGuildEvent(event,
+// fn). C++ Eluna guild hooks pass (event, guild, ...) (LuaEngine/
+// GuildHooks.cpp), so the event number is prepended like TriggerServerEvent.
+func (r *Runtime) TriggerGuildEvent(ctx context.Context, event int, args ...any) ([]any, error) {
+	return r.Trigger(ctx, "guild", event, append([]any{event}, args...)...)
+}
+
+// TriggerGuildEventUpdated is TriggerGuildEvent with per-handler argument
+// chaining: after each handler's returns are captured, update may mutate
+// args for the subsequent handlers, mirroring Eluna's ReplaceArgument. Used
+// by GUILD_EVENT_ON_MONEY_WITHDRAW (7) and GUILD_EVENT_ON_MONEY_DEPOSIT (8),
+// whose C++ call sites (GuildHooks.cpp OnMemberWitdrawMoney /
+// OnMemberDepositMoney) consume one numeric return per handler as the new
+// amount and rewrite the argument each handler sees (CallOneFunction(n,
+// args, 1), so nresults is 1).
+func (r *Runtime) TriggerGuildEventUpdated(ctx context.Context, event int, args []any, update func(returns []any)) ([][]any, error) {
+	return r.triggerNUpdated(ctx, "guild", event, 1, args, update)
 }
 
 func (r *Runtime) TriggerPacketEvent(ctx context.Context, opcode, event int, args ...any) ([]any, error) {

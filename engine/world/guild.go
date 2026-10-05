@@ -12,6 +12,7 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -725,6 +726,10 @@ func (s *session) handleGuildAccept(ctx context.Context) bool {
 	}
 	s.server.sessionsMu.RUnlock()
 
+	// ScriptMgr::OnGuildAddMember (Guild.cpp:2272): fires after the member is
+	// stored and broadcast, with the new member's player and rank.
+	s.fireGuildEvent(ctx, scripting.GuildEventOnAddMember, s.luaGuildObject(ctx, uint32(guildID)), s.luaPlayer(), uint32(4))
+
 	// Guild::HandleAcceptMember (Guild.cpp:1518) sends no roster — the
 	// client re-requests it via CMSG_GUILD_ROSTER.
 	return true
@@ -767,6 +772,15 @@ func (s *session) handleGuildLeave(ctx context.Context) bool {
 			s.sendGuildCommandResult(guildCmdQuit, "", errGuildLeaderLeave)
 			return true
 		}
+		// ScriptMgr::OnGuildDisband (Guild.cpp:1144) fires before guild data is
+		// removed; Disband then DeleteMember()s the lone leader with
+		// isDisbanding=true, firing OnGuildRemoveMember (Guild.cpp:1148-1154,
+		// 2318). The fire sites sit before execGuildDisband, like C++ firing
+		// before the data removal.
+		disbandGuildObj := s.luaGuildObject(ctx, uint32(guildID))
+		s.fireGuildEvent(ctx, scripting.GuildEventOnDisband, disbandGuildObj)
+		s.fireGuildEvent(ctx, scripting.GuildEventOnRemoveMember, disbandGuildObj, s.luaPlayer(), true)
+
 		execGuildDisband(ctx, cdb, guildID)
 		s.player.GuildID = 0
 		s.player.GuildRank = 0
@@ -780,6 +794,10 @@ func (s *session) handleGuildLeave(ctx context.Context) bool {
 		s.debug("guild disbanded on leader leave", "guild_id", guildID)
 		return true
 	}
+	// ScriptMgr::OnGuildRemoveMember (Guild.cpp:2318): fires in DeleteMember
+	// before the member is erased from the roster and the database.
+	s.fireGuildEvent(ctx, scripting.GuildEventOnRemoveMember, s.luaGuildObject(ctx, uint32(guildID)), s.luaPlayer(), false)
+
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_member WHERE guid = ?", s.playerGUID)
 	s.player.GuildID = 0
 	s.player.GuildRank = 0
@@ -845,6 +863,10 @@ func (s *session) handleGuildMotd(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET motd = ? WHERE guildid = ?", motd, guildID)
+
+	// ScriptMgr::OnGuildMOTDChanged (Guild.cpp:1313): fires after the motd
+	// changes and before the broadcast.
+	s.fireGuildEvent(ctx, scripting.GuildEventOnMotdChange, s.luaGuildObject(ctx, uint32(guildID)), motd)
 
 	// _BroadcastEvent(GE_MOTD, ObjectGuid::Empty, motd) (Guild.cpp:1320):
 	// type 2 with one string param, reaching every online guild member.
@@ -1206,6 +1228,15 @@ func (s *session) handleGuildRemove(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// ScriptMgr::OnGuildRemoveMember (Guild.cpp:2318): fires in DeleteMember
+	// before the member is erased from the roster and the database; the
+	// removed player may be offline (Eluna pushes nil).
+	var targetPlayer *scripting.Object
+	if targetSess := s.server.findSessionByGUID(uint64(targetGUID)); targetSess != nil {
+		targetPlayer = targetSess.luaPlayer()
+	}
+	s.fireGuildEvent(ctx, scripting.GuildEventOnRemoveMember, s.luaGuildObject(ctx, uint32(guildID)), targetPlayer, false)
+
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_member WHERE guid = ? AND guildid = ?", targetGUID, guildID)
 
 	// Guild::HandleRemoveMember (Guild.cpp:1582-1584): DeleteMember runs
@@ -1276,6 +1307,32 @@ func (s *session) handleGuildDisband(ctx context.Context) bool {
 		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &leaderGUID)
 	if err != nil || guildID == 0 || uint64(leaderGUID) != s.playerGUID {
 		return true
+	}
+
+	// ScriptMgr::OnGuildDisband (Guild.cpp:1144) fires before guild data is
+	// removed; Disband then DeleteMember()s every member with
+	// isDisbanding=true, firing OnGuildRemoveMember per member
+	// (Guild.cpp:1148-1154, 2318) — offline members reach the hook as nil,
+	// like Eluna's Push of a null Player*. The fire sites sit before the row
+	// deletions, like C++ firing before the data removal.
+	disbandGuild := s.luaGuildObject(ctx, uint32(guildID))
+	s.fireGuildEvent(ctx, scripting.GuildEventOnDisband, disbandGuild)
+	var disbandMembers []int64
+	if rows, err := cdb.QueryContext(ctx, "SELECT guid FROM guild_member WHERE guildid = ?", guildID); err == nil && rows != nil {
+		for rows.Next() {
+			var memberGUID int64
+			if err := rows.Scan(&memberGUID); err == nil {
+				disbandMembers = append(disbandMembers, memberGUID)
+			}
+		}
+		rows.Close()
+	}
+	for _, memberGUID := range disbandMembers {
+		var memberPlayer *scripting.Object
+		if memberSess := s.server.findSessionByGUID(uint64(memberGUID)); memberSess != nil {
+			memberPlayer = memberSess.luaPlayer()
+		}
+		s.fireGuildEvent(ctx, scripting.GuildEventOnRemoveMember, disbandGuild, memberPlayer, true)
 	}
 
 	// Guild::Disband (Guild.cpp:1141-1190) via the shared GM helper: GE_DISBANDED
@@ -1658,6 +1715,11 @@ func (s *session) handleGuildInfoText(ctx context.Context, payload []byte) bool 
 		return true
 	}
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET info = ? WHERE guildid = ?", infoText, guildID)
+
+	// ScriptMgr::OnGuildInfoChanged (Guild.cpp:1334): fires after the info
+	// changes and before the DB save — the UPDATE above is the save, and the
+	// fired string is the same either way.
+	s.fireGuildEvent(ctx, scripting.GuildEventOnInfoChange, s.luaGuildObject(ctx, uint32(guildID)), infoText)
 	return true
 }
 
@@ -2527,6 +2589,12 @@ func (s *session) guildBankWithdrawMoneyForRepair(ctx context.Context, guildID u
 		if withdrawn+amount > perDay {
 			return false
 		}
+		// ScriptMgr::OnGuildMemberWitdrawMoney (Guild.cpp:1742, repair=true):
+		// fires after validation and before the allowance update and bank
+		// debit; a handler's numeric return rewrites the amount
+		// (GuildHooks.cpp OnMemberWitdrawMoney), so the allowance, debit,
+		// log, and broadcast below all run on the rewritten amount.
+		amount = s.fireGuildMoneyEvent(ctx, scripting.GuildEventOnMoneyWithdraw, s.luaGuildObject(ctx, guildID), s.luaPlayer(), amount, true)
 		var exists int
 		_ = cdb.QueryRowContext(ctx, "SELECT 1 FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&exists)
 		if exists == 0 {
@@ -3868,6 +3936,12 @@ func (s *session) handleGuildBankDepositMoney(ctx context.Context, payload []byt
 		return true
 	}
 
+	// ScriptMgr::OnGuildMemberDepositMoney (Guild.cpp:1697): fires after
+	// validation and before the money transfer — C++ fires before the
+	// bank-full check, so the check and the transfer both use the rewritten
+	// amount (GuildHooks.cpp OnMemberDepositMoney).
+	amount = s.fireGuildMoneyEvent(ctx, scripting.GuildEventOnMoneyDeposit, s.luaGuildObject(ctx, uint32(guildID)), s.luaPlayer(), amount)
+
 	// Guild::HandleMemberDepositMoney (Guild.cpp:1699): refuse deposits that
 	// would overflow the bank money cap. C++ promotes m_bankMoney to uint64
 	// for the comparison (GUILD_BANK_MONEY_LIMIT is uint64), so the bare
@@ -3945,6 +4019,14 @@ func (s *session) handleGuildBankWithdrawMoney(ctx context.Context, payload []by
 		s.sendEquipError(equipErrTooMuchGold, 0)
 		return true
 	}
+
+	// ScriptMgr::OnGuildMemberWitdrawMoney (Guild.cpp:1742): fires after all
+	// validation (bank money, member, daily allowance, player cap above) and
+	// before the money transfer; a handler's numeric return rewrites the
+	// transferred amount (GuildHooks.cpp OnMemberWitdrawMoney), so every use
+	// below — allowance consumption, player credit, bank debit, log,
+	// broadcast — runs on the rewritten amount.
+	amount = s.fireGuildMoneyEvent(ctx, scripting.GuildEventOnMoneyWithdraw, s.luaGuildObject(ctx, uint32(guildID)), s.luaPlayer(), amount, false)
 
 	s.consumeGuildBankMoneyWithdraw(ctx, uint32(guildID), amount)
 
@@ -4547,6 +4629,13 @@ func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool
 	s.player.GuildID = uint32(newGuildID)
 	s.player.GuildRank = 0
 
+	// Guild::Create (Guild.cpp:1130, 1135): AddMember fires OnGuildAddMember
+	// for the leader, then OnGuildCreate fires on the created guild — before
+	// the signature members are added (PetitionsHandler.cpp:701).
+	createGuild := s.luaGuildObject(ctx, uint32(newGuildID))
+	s.fireGuildEvent(ctx, scripting.GuildEventOnAddMember, createGuild, s.luaPlayer(), uint32(0))
+	s.fireGuildEvent(ctx, scripting.GuildEventOnCreate, createGuild, s.luaPlayer(), guildName)
+
 	// Add signers
 	var signers []int64
 	rows, _ := cdb.QueryContext(ctx, "SELECT playerguid FROM petition_sign WHERE petitionguid = ?", petitionGUID)
@@ -4561,13 +4650,21 @@ func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool
 	}
 	for _, signerGUID := range signers {
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_member (guildid, guid, rank, pnote, offnote) VALUES (?, ?, 4, '', '')", newGuildID, signerGUID)
+		var signerPlayer *scripting.Object
 		if s.server != nil {
 			if signerSess := s.server.findSessionByGUID(uint64(signerGUID)); signerSess != nil && signerSess.worldReady.Load() {
-				signerSess.player.GuildID = uint32(newGuildID)
-				signerSess.player.GuildRank = 4
-				signerSess.sendPlayerUpdate()
+				signerPlayer = signerSess.luaPlayer()
+				if signerPlayer != nil {
+					signerSess.player.GuildID = uint32(newGuildID)
+					signerSess.player.GuildRank = 4
+					signerSess.sendPlayerUpdate()
+				}
 			}
 		}
+		// PetitionsHandler.cpp:701: each signature member is AddMember()ed,
+		// firing OnGuildAddMember (Guild.cpp:2272); offline signers reach the
+		// hook as nil, like Eluna's Push of a null Player*.
+		s.fireGuildEvent(ctx, scripting.GuildEventOnAddMember, createGuild, signerPlayer, uint32(4))
 	}
 
 	// Clean up petition and charter item

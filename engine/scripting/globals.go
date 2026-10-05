@@ -141,6 +141,21 @@ func (r *Runtime) getGuildByLeaderGUID(state *lua.State) int {
 	return r.pushGuildLookup(state, "SELECT guildid, name, leaderguid FROM guild WHERE leaderguid = ? LIMIT 1", checkLuaUint64(state, 1))
 }
 
+// NewGuildObject builds the Lua Guild object surface: the ID, Name,
+// LeaderGUID and MemberCount fields plus the GetId/GetName/GetLeaderGUID/
+// GetMemberCount methods. It is the Go model of Eluna's Push(guild)
+// (LuaEngine/GuildHooks.cpp via ElunaTemplate), shared by the GetGuildBy*
+// globals and the world engine's guild event hooks.
+func NewGuildObject(guildID uint32, name string, leaderGUID uint64, memberCount uint32) *Object {
+	methods := map[string]ObjectMethod{
+		"GetId":          func(context.Context, []any) ([]any, error) { return []any{uint32(guildID)}, nil },
+		"GetName":        func(context.Context, []any) ([]any, error) { return []any{name}, nil },
+		"GetLeaderGUID":  func(context.Context, []any) ([]any, error) { return []any{uint64(leaderGUID)}, nil },
+		"GetMemberCount": func(context.Context, []any) ([]any, error) { return []any{uint32(memberCount)}, nil },
+	}
+	return &Object{Type: "Guild", Fields: map[string]any{"ID": uint32(guildID), "Name": name, "LeaderGUID": uint64(leaderGUID), "MemberCount": uint32(memberCount)}, Methods: methods}
+}
+
 func (r *Runtime) pushGuildLookup(state *lua.State, statement string, arg any) int {
 	if r.config.CharacterDB == nil {
 		state.PushNil()
@@ -154,13 +169,7 @@ func (r *Runtime) pushGuildLookup(state *lua.State, statement string, arg any) i
 	}
 	memberCount := int64(0)
 	_ = r.config.CharacterDB.QueryRow("SELECT COUNT(1) FROM guild_member WHERE guildid = ?", guildID).Scan(&memberCount)
-	methods := map[string]ObjectMethod{
-		"GetId":          func(context.Context, []any) ([]any, error) { return []any{uint32(guildID)}, nil },
-		"GetName":        func(context.Context, []any) ([]any, error) { return []any{name}, nil },
-		"GetLeaderGUID":  func(context.Context, []any) ([]any, error) { return []any{uint64(leaderGUID)}, nil },
-		"GetMemberCount": func(context.Context, []any) ([]any, error) { return []any{uint32(memberCount)}, nil },
-	}
-	PushObject(state, &Object{Type: "Guild", Fields: map[string]any{"ID": uint32(guildID), "Name": name, "LeaderGUID": uint64(leaderGUID), "MemberCount": uint32(memberCount)}, Methods: methods})
+	PushObject(state, NewGuildObject(uint32(guildID), name, uint64(leaderGUID), uint32(memberCount)))
 	return 1
 }
 
