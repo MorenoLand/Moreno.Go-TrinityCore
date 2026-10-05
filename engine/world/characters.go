@@ -2808,7 +2808,11 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 		s.handleLeaveBattlefield(ctx, nil)
 	}
 	if s.trade != nil {
-		_ = s.handleCancelTrade(ctx)
+		// Reference: Player::CleanupsBeforeDelete (Player.cpp:471) -> TradeCancel(false):
+		// the logging-out player is NOT answered (sendback=false) — only the
+		// trader gets TRADE_STATUS_TRADE_CANCELED. Using handleCancelTrade here
+		// (sendback=true) would also send the packet to the disconnecting client.
+		s.cancelTrade(false)
 	}
 	if s.server != nil {
 		s.server.removeSessionFromGroup(s)

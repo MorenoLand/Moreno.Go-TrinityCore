@@ -1327,7 +1327,12 @@ func (s *session) handleUnacceptTrade(ctx context.Context) bool {
 // player's own client is answered too. The CMSG_CANCEL_TRADE path calls
 // with sendback=true; the taxi flight-start path (Player.cpp:21586) calls
 // TradeCancel(true) unconditionally because the client closes its trade
-// window when the taxi map opens but cheating tools can reopen it.
+// window when the taxi map opens but cheating tools can reopen it. The logout
+// teardown (characters.go completeLogoutWithPacket) calls cancelTrade(false),
+// matching Player::CleanupsBeforeDelete (Player.cpp:471) -> TradeCancel(false):
+// the logging-out player gets no packet, only the trader. SendCancelTrade's
+// PlayerRecentlyLoggedOut/PlayerLogout skip has no Go model (transient session
+// logout state) — packets go out unconditionally.
 func (s *session) cancelTrade(sendback bool) {
 	if s.trade == nil {
 		return
