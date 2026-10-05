@@ -2639,6 +2639,41 @@ func (s *session) checkSkinningCast(spell wotlk.Spell, target protocol.SpellTarg
 	return 0
 }
 
+// handleEffectSkinning mirrors Spell::EffectSkinning
+// (SpellEffects.cpp:4464-4492): the skinnable flag is removed,
+// UNIT_DYNFLAG_LOOTABLE is set, and the creature's loot window opens as
+// LOOT_SKINNING. The effectHandleMode gate is structural (this dispatch is
+// the HIT_TARGET phase) and the caster-is-player arm is vacuous
+// (handleCastSpell only serves player sessions). The target gates
+// (TYPEID_UNIT, skinnable flag, looted corpse, loot skill) already ran in
+// checkSkinningCast. UpdateGatherSkill (SpellEffects.cpp:4489) has no Go
+// model — Go has no gather skill-up roll — so the skill-gain leg is a
+// documented delta.
+func (s *session) handleEffectSkinning(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	if uint16(targetGUID>>48) != 0xF130 {
+		return
+	}
+	motion := s.findCreatureMotion(targetGUID)
+	if motion == nil {
+		return
+	}
+	entry := motion.Entry
+	s.server.motionMu.Lock()
+	motion.UnitFlags &^= unitFlagSkinnable
+	motion.DynamicFlags |= unitDynFlagLootable
+	unitFlags, dynFlags := motion.UnitFlags, motion.DynamicFlags
+	mapID, instanceID := motion.Map, motion.InstanceID
+	s.server.motionMu.Unlock()
+	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, motion.GUID, map[int]uint32{
+		unitFieldFlags:        unitFlags,
+		unitFieldDynamicFlags: dynFlags,
+	})
+	s.openSkinningLoot(ctx, targetGUID, entry)
+}
+
 // skillByLockType mirrors SkillByLockType (SharedDefines.h:3044): lock types
 // without a gathering skill (disarm trap, open, treasure, slow open, ...)
 // map to SKILL_NONE.
@@ -6381,6 +6416,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff)
 			case spellEffectCreateItem2: // 70: SPELL_EFFECT_CREATE_ITEM_2
 				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff)
+			case spellEffectSkinning: // 95: SPELL_EFFECT_SKINNING
+				s.handleEffectSkinning(effCtx, targetGUID, spell, eff)
 			case spellEffectLearnSpell: // 36: SPELL_EFFECT_LEARN_SPELL
 				if eff.TriggerSpell != 0 {
 					s.learnSpell(effCtx, eff.TriggerSpell)

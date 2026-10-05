@@ -36,6 +36,9 @@ const (
 	itemFlagsCuFollowLootRules   uint32 = 0x0004
 )
 
+// lootTypeSkinning mirrors LOOT_SKINNING (Loot.h:89).
+const lootTypeSkinning uint8 = 6
+
 // maxQuestLootItems mirrors MAX_NR_QUEST_ITEMS (Loot.h:57).
 const maxQuestLootItems = 32
 
@@ -890,7 +893,10 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 	items := sortedLootItems(loot.Items)
 	for _, it := range items {
 		var slotType uint8 = 0 // LOOT_SLOT_TYPE_ALLOW_LOOT
-		if grp != nil {
+		// Player::SendLoot (Player.cpp:8849): group rights are set only for
+		// loot_type != LOOT_SKINNING, so skinning loot always shows plain
+		// allow-loot slots even when the skinner is grouped.
+		if grp != nil && loot.LootType != lootTypeSkinning {
 			isOverThreshold := it.Quality >= uint32(grp.LootThreshold)
 			switch grp.LootMethod {
 			case 0: // Free for all
@@ -1042,10 +1048,153 @@ func (s *session) clearCreatureLoot(loot *activeLootState) {
 		// motion flips to looted here (respawn clears it in kill.go).
 		if motion := s.server.findCreatureMotion(loot.MapID, loot.InstanceID, stdGUID); motion != nil {
 			motion.Looted = true
+			// Creature::AllLootRemovedFromCorpse skinnable arm (Creature.cpp:2827-2833):
+			// a fully-looted non-skinning corpse with a skinning loot id becomes skinnable.
+			if loot.LootType != lootTypeSkinning {
+				s.maybeSetMotionSkinnable(motion, loot.MapID, loot.InstanceID, loot.TargetGUID, stdGUID)
+			}
 		}
 		s.server.broadcastCreatureValuesUpdateInInstance(loot.MapID, loot.InstanceID, loot.TargetGUID, map[int]uint32{unitFieldDynamicFlags: 0})
 		s.server.broadcastCreatureValuesUpdateInInstance(loot.MapID, loot.InstanceID, stdGUID, map[int]uint32{unitFieldDynamicFlags: 0})
 	}
+}
+
+// maybeSetMotionSkinnable mirrors the SetFlag arm of
+// Creature::AllLootRemovedFromCorpse (Creature.cpp:2827-2833): a fully
+// looted (motion.Looted) non-skinning corpse becomes skinnable when the
+// template names a skinning loot id that actually has rows in
+// skinning_loot_template (the HaveLootFor arm) and someone still holds the
+// loot rights (the hasLootRecipient arm). The !IsPet() arm is structural:
+// creature loot states are only ever created for world-creature GUIDs, so
+// pet motions never reach here. The RATE_CORPSE_DECAY_LOOTED shortening
+// (Creature.cpp:2835-2845) has no Go analog — Go has no corpse-removal
+// phase; the respawn timer is spawntimesecs from the kill (kill.go), so
+// there is no corpse phase to shorten.
+func (s *session) maybeSetMotionSkinnable(motion *creatureMotion, mapID, instanceID uint32, targetGUID, stdGUID uint64) {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || motion == nil {
+		return
+	}
+	wdb := s.server.WorldStore.DB
+	ctx := context.Background()
+	var skinLootID int64
+	if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(SkinLootId, 0) FROM creature_template WHERE entry = ? LIMIT 1", motion.Entry).Scan(&skinLootID); err != nil || skinLootID == 0 {
+		return
+	}
+	var rows int64
+	if err := wdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM skinning_loot_template WHERE Entry = ?", skinLootID).Scan(&rows); err != nil || rows == 0 {
+		return
+	}
+	s.server.lootMu.Lock()
+	_, found := s.server.creatureLootOwners[lootObjectKey{MapID: mapID, InstanceID: instanceID, GUID: targetGUID}]
+	if !found {
+		_, found = s.server.creatureLootOwners[lootObjectKey{MapID: mapID, InstanceID: instanceID, GUID: stdGUID}]
+	}
+	s.server.lootMu.Unlock()
+	if !found {
+		return
+	}
+	s.server.motionMu.Lock()
+	motion.UnitFlags |= unitFlagSkinnable
+	flags := motion.UnitFlags
+	s.server.motionMu.Unlock()
+	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, motion.GUID, map[int]uint32{unitFieldFlags: flags})
+}
+
+// openSkinningLoot mirrors the LOOT_SKINNING arm of Player::SendLoot
+// (Player.cpp:8834-8843) as driven by Spell::EffectSkinning
+// (SpellEffects.cpp:4464-4492): the creature's loot is cleared and refilled
+// from skinning_loot_template[SkinLootId] (no entry fallback — C++ passes
+// SkinLootId straight through), the loot type is LOOT_SKINNING, and the
+// recipient is the skinner alone (SetLootRecipient(this, false)); group
+// rights are skipped (Player.cpp:8849). The OWNER permission and the
+// recipient-only CanLoot arm (Player.cpp:18118) ride the existing
+// creatureLootAllowed owner check: a GroupID-0 owner reduces it to the
+// player-GUID match, exactly the C++ arm.
+func (s *session) openSkinningLoot(ctx context.Context, targetGUID uint64, entry uint32) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return true
+	}
+	wdb := s.server.WorldStore.DB
+	guid := uint32(targetGUID & 0x00FFFFFF)
+	stdKey := creatureWorldGUID(guid, entry)
+	s.server.lootMu.Lock()
+	key := lootObjectKey{MapID: s.player.Map, InstanceID: s.player.InstanceID, GUID: targetGUID}
+	standardKey := lootObjectKey{MapID: s.player.Map, InstanceID: s.player.InstanceID, GUID: stdKey}
+	if s.server.creatureLoot == nil {
+		s.server.creatureLoot = make(map[lootObjectKey]*activeLootState)
+	}
+	loot := s.server.creatureLoot[key]
+	if loot == nil {
+		loot = s.server.creatureLoot[standardKey]
+	}
+	if loot == nil {
+		loot = &activeLootState{TargetGUID: targetGUID, MapID: s.player.Map, InstanceID: s.player.InstanceID, Items: make(map[uint8]lootItem)}
+		s.server.creatureLoot[key] = loot
+		s.server.creatureLoot[standardKey] = loot
+	}
+	// Loot::clear() + SendLoot's loot->loot_type = LOOT_SKINNING (Player.cpp:8894).
+	loot.Items = make(map[uint8]lootItem)
+	loot.QuestItems = nil
+	loot.Money = 0
+	loot.LootType = lootTypeSkinning
+	loot.NormalSlotCount = 0
+	loot.RoundRobinPlayer = 0
+	loot.Viewers = make(map[uint64]*session)
+	if s.server.creatureLootOwners == nil {
+		s.server.creatureLootOwners = make(map[lootObjectKey]lootOwnerState)
+	}
+	owner := lootOwnerState{PlayerGUID: s.playerGUID}
+	s.server.creatureLootOwners[key] = owner
+	s.server.creatureLootOwners[standardKey] = owner
+	s.server.lootMu.Unlock()
+	var skinLootID int64
+	_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(SkinLootId, 0) FROM creature_template WHERE entry = ? LIMIT 1", entry).Scan(&skinLootID)
+	if skinLootID != 0 {
+		rows, err := wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0),
+				COALESCE(l.QuestRequired, 0), COALESCE(t.StartQuest, 0), COALESCE(t.flagsCustom, 0)
+			FROM skinning_loot_template AS l
+			LEFT JOIN item_template AS t ON t.entry = l.Item
+			WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, skinLootID)
+		if err != nil && isMissingColumn(err) {
+			rows, err = wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), 0,
+					0, 0, 0
+				FROM skinning_loot_template AS l
+				LEFT JOIN item_template AS t ON t.entry = l.Item
+				WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, skinLootID)
+		}
+		if err == nil {
+			defer rows.Close()
+			var slot uint8 = 0
+			var qidx uint8 = 0
+			for rows.Next() {
+				var itemID int64
+				var chance float64
+				var minCount, maxCount, displayID, quality int64
+				var questRequired, startQuest, customFlags int64
+				if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality, &questRequired, &startQuest, &customFlags); err != nil {
+					continue
+				}
+				// Roll chance (0-100%), mirroring the creature-loot fill above.
+				roll := rand.Float64() * 100.0
+				if chance > 0 && roll > chance {
+					continue
+				}
+				count := uint32(minCount)
+				if maxCount > minCount {
+					count += uint32(rand.Intn(int(maxCount - minCount + 1)))
+				}
+				if count == 0 {
+					count = 1
+				}
+				storeLootTemplateRow(loot, &slot, &qidx, uint32(itemID), count, uint32(displayID), uint32(quality), uint32(startQuest), uint32(customFlags), questRequired != 0)
+			}
+			loot.NormalSlotCount = slot
+		}
+	}
+	loot.addViewer(s)
+	s.activeLoot = loot
+	s.interruptCurrentCast()
+	return s.finishLootOpen(ctx, loot)
 }
 
 func (s *Server) clearLootState(mapID, instanceID uint32, guids ...uint64) {
