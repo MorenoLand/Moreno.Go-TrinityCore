@@ -3,7 +3,6 @@ package world
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -175,17 +174,16 @@ func instanceExtendLabel(extendState uint8) string {
 
 // instanceCommandTarget mirrors ChatHandler::getSelectedPlayer
 // (cs_instance.cpp:97-99, 135-137): own player when nothing is targeted,
-// otherwise the connected player matching the selection; an unresolvable
-// selection reports LANG_PLAYER_NOT_FOUND (499) per tree convention.
+// otherwise the connected player matching the selection. When the selection
+// is set but resolves to nothing, Chat::getSelectedPlayer (Chat.cpp:300)
+// returns null and the C++ handlers silently fall back to the handler's own
+// player (no LANG_PLAYER_NOT_FOUND arm) - so this does the same.
 func (s *session) instanceCommandTarget() (*session, bool) {
 	target := s
 	if s.selection != 0 && s.server != nil {
-		ts := s.server.playerSessionForGUID(s.selection)
-		if ts == nil || ts.player == nil {
-			s.sendSysMessage("Player not found.")
-			return nil, false
+		if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {
+			target = ts
 		}
-		target = ts
 	}
 	if target.player == nil {
 		s.sendSysMessage("Player not found.")
@@ -332,7 +330,9 @@ func (s *session) handleInstanceUnbind(ctx context.Context, args []string) {
 		return
 	}
 	var mapID uint32
-	if !strings.EqualFold(args[0], "all") {
+	if args[0] != "all" {
+		// C++ compares with strcmp(map, "all") (cs_instance.cpp:143): the
+		// keyword match is case-sensitive, unlike the tree's usual folding.
 		parsed, ok := parseInstanceMapID(args[0])
 		if !ok {
 			s.sendSysMessage(syntax)
@@ -375,8 +375,10 @@ func (s *session) handleInstanceUnbind(ctx context.Context, args []string) {
 // 5050) has no Go bridge - the Go tree keeps no loaded-map registry - and is
 // omitted (documented gap). The remaining four lines are answered natively:
 // players in instances (online sessions on dungeon maps), instance saves
-// (instance row count), players bound (distinct character_instance guids),
-// groups bound (distinct group_instance guids).
+// (instance row count), players bound (total player binds:
+// InstanceSaveManager::GetNumBoundPlayersTotal sums GetPlayerCount() over
+// every save, InstanceSaveMgr.cpp:719-726 - so COUNT(*), not DISTINCT),
+// groups bound (same over group_instance, :728-735).
 func (s *session) handleInstanceStats(ctx context.Context) {
 	if s.server == nil {
 		return
@@ -398,8 +400,8 @@ func (s *session) handleInstanceStats(ctx context.Context) {
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
 		_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM instance").Scan(&saves)
-		_ = cdb.QueryRowContext(ctx, "SELECT COUNT(DISTINCT guid) FROM character_instance").Scan(&playersBound)
-		_ = cdb.QueryRowContext(ctx, "SELECT COUNT(DISTINCT guid) FROM group_instance").Scan(&groupsBound)
+		_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_instance").Scan(&playersBound)
+		_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM group_instance").Scan(&groupsBound)
 	}
 	s.sendSysMessage(fmt.Sprintf("Players in instances: %d", playersIn))
 	s.sendSysMessage(fmt.Sprintf("Instance saves: %d", saves))
@@ -492,12 +494,13 @@ func (s *session) handleInstanceGetBossState(ctx context.Context, args []string)
 }
 
 // parseInstanceMapID parses the <map|all> token's numeric form, mirroring
-// the atoi gate in HandleInstanceUnbindCommand (cs_instance.cpp:145-150):
-// a non-numeric or zero map id is a syntax error.
+// MapId = uint16(atoi(map)) plus the !MapId gate (cs_instance.cpp:145-150):
+// cAtoi is the tree's atoi clone (stops at the first non-digit, 0 when there
+// are none), and the uint16 cast keeps the C++ wrap for out-of-range values.
 func parseInstanceMapID(tok string) (uint32, bool) {
-	n, err := strconv.ParseUint(tok, 10, 32)
-	if err != nil || n == 0 {
+	mapID := uint16(cAtoi(tok))
+	if mapID == 0 {
 		return 0, false
 	}
-	return uint32(n), true
+	return uint32(mapID), true
 }
