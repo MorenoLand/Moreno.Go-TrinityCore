@@ -10,28 +10,46 @@ import (
 )
 
 // send command port: send_commandscript (cs_send.cpp), the "send" root with
-// 4 arms (items, mail, message, money). THIRTY-FOURTH of 39 Commands groups
+// 4 arms (items, mail, message, money). THIRTY-FIFTH of 40 Commands groups
 // (cs_script_loader.cpp decl 53 / call 98; call order reset(97) ->
 // send(98)). Trinity checks permission only on the invoker leaf node
 // (ChatCommand.cpp:487), so each arm gates exactly its own C++ permission
-// (RBAC.h:351-355); the root permission 483 covers the bare ".send".
+// (RBAC.h:351-355); the root permission 483 is DEAD — the root uses the
+// deprecated nullptr+subtable ChatCommandBuilder overload (ChatCommand.h),
+// which drops the RBACPermissions param, so bare ".send" prints the syntax
+// line ungated (same dead-root pattern as the mmap/modify/rbac/reload/reset
+// ports); permissionCommandSend stays in permissions.go as documentation.
 //
 // All four arms are native on the Go mail system (mail.go: the mail /
 // mail_items / item_instance tables, GM stationery + 90-day expiry for
 // GM-sent mail per MailDraft::SendMailTo):
 //   - `mail` inserts a GM-stationery mail row for the resolved receiver
-//     (online or offline, via miscResolvePlayerTarget).
+//     (online or offline, via miscResolvePlayerTarget; the 499 not-found text
+//     is printed once by the resolver, == C++ extractPlayerTarget).
 //   - `items` validates each item entry against item_template, splits counts
-//     across max stacks, enforces the 12-item mail cap, creates the
-//     item_instance rows, and attaches them via mail_items.
+//     across max stacks per ItemTemplate::GetMaxStackSize (ItemTemplate.h:686:
+//     Stackable <= 0 or 2147483647 means effectively unlimited, not 1),
+//     enforces the 12-item mail cap, creates the item_instance rows, and
+//     attaches them via mail_items. Zero item tokens sends an empty mail ==
+//     C++ (no guard on the tail).
 //   - `money` inserts a GM-stationery mail row carrying the copper amount.
-//   - `message` requires an online player and delivers the two C++
-//     area-trigger texts through SMSG_MESSAGECHAT system chat (the Go
-//     equivalent of Player::SendAreaTriggerMessage).
+//   - `message` requires an online player and delivers the two C++ texts via
+//     SMSG_AREA_TRIGGER_MESSAGE (== WorldSession::SendAreaTriggerMessage,
+//     MiscHandler.cpp:628; message first, then the administrator tag, ==
+//     cs_send.cpp:273-274).
 //
-// Quoted subject/text parsing mirrors extractQuotedArg via the existing
-// splitQuotedArgs + unquoteCommandToken helpers. LANG texts are inlined from
-// the TDB enUS recall (no in-tree trinity_string seed).
+// Quoted subject/text parsing mirrors extractQuotedArg (Chat.cpp:714): the
+// token must open with a quote (unquoted subject/text fails the command ==
+// C++), the value runs to the next quote or the end of the token, and a ""
+// pair yields an empty string. LANG texts are inlined from the TDB enUS
+// recall (no in-tree trinity_string seed).
+//
+// Documented no-bridge/deltas (not stubs): the message arm's isLogingOut
+// gate has no Go bridge (no session logout state); negative item counts
+// clamp to 1 (C++ wraps to a huge uint32 and trips the 12-item cap, same
+// net refusal for stackables); player links render as plain names per the
+// tree's miscPlayerLink convention; console-vs-chat branches moot (Go
+// commands always sessioned).
 
 // sendMailTarget resolves the receiver for the send arms (online session or
 // offline guid), mirroring ChatHandler::extractPlayerTarget.
@@ -73,21 +91,42 @@ func (s *session) sendMailInsert(ctx context.Context, receiverGUID uint64, subje
 	return true
 }
 
+// sendQuotedArg mirrors ChatHandler::extractQuotedArg (Chat.cpp:714): the
+// token must open with a quote; the value runs to the next quote or the end
+// of the token (a "" pair yields an empty string).
+func sendQuotedArg(tok string) (string, bool) {
+	if !strings.HasPrefix(tok, "\"") {
+		return "", false
+	}
+	rest := tok[1:]
+	if i := strings.IndexByte(rest, '"'); i >= 0 {
+		return rest[:i], true
+	}
+	return rest, true
+}
+
 // sendMailArgs parses: name "subject text" "mail text" [rest...].
 func sendMailArgs(args []string) (name, subject, text string, rest []string, ok bool) {
 	toks := splitQuotedArgs(args)
 	if len(toks) < 3 {
 		return "", "", "", nil, false
 	}
-	return toks[0], unquoteCommandToken(toks[1]), unquoteCommandToken(toks[2]), toks[3:], true
+	subject, ok = sendQuotedArg(toks[1])
+	if !ok {
+		return "", "", "", nil, false
+	}
+	text, ok = sendQuotedArg(toks[2])
+	if !ok {
+		return "", "", "", nil, false
+	}
+	return toks[0], subject, text, toks[3:], true
 }
 
 // handleCmdSend dispatches the "send" root (cs_send.cpp:43-46).
 func (s *session) handleCmdSend(ctx context.Context, args []string) {
 	if len(args) == 0 {
-		if s.miscDeny(ctx, permissionCommandSend) {
-			return
-		}
+		// The root's own 483 perm is dead (deprecated nullptr+subtable
+		// overload drops it); bare ".send" prints the syntax line ungated.
 		s.sendSysMessage("Syntax: .send items|mail|message|money")
 		return
 	}
@@ -120,9 +159,8 @@ func (s *session) handleSendMailCmd(ctx context.Context, args []string) {
 		return
 	}
 	_, guid, targetName, ok := s.sendMailTarget(ctx, []string{name})
-	if !ok || guid == 0 {
-		s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
-		return
+	if !ok {
+		return // miscResolvePlayerTarget already reported LANG 499 == C++
 	}
 	if !s.sendMailInsert(ctx, guid, subject, text, 0, nil) {
 		return
@@ -145,9 +183,8 @@ func (s *session) handleSendMoney(ctx context.Context, args []string) {
 		return
 	}
 	_, guid, targetName, ok := s.sendMailTarget(ctx, []string{name})
-	if !ok || guid == 0 {
-		s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
-		return
+	if !ok {
+		return // miscResolvePlayerTarget already reported LANG 499 == C++
 	}
 	if !s.sendMailInsert(ctx, guid, subject, text, uint32(money), nil) {
 		return
@@ -163,7 +200,7 @@ func (s *session) handleSendItems(ctx context.Context, args []string) {
 		return
 	}
 	name, subject, text, rest, ok := sendMailArgs(args)
-	if !ok || len(rest) < 1 {
+	if !ok {
 		s.sendSysMessage(`Syntax: .send items <name> "subject" "text" <item1[:count1]> ...`)
 		return
 	}
@@ -193,8 +230,8 @@ func (s *session) handleSendItems(ctx context.Context, args []string) {
 			return
 		}
 		maxStack := stackable
-		if maxStack < 1 {
-			maxStack = 1
+		if maxStack <= 0 || maxStack == 2147483647 {
+			maxStack = 0x7FFFFFFE // GetMaxStackSize: Stackable <= 0 or INT32_MAX means unlimited
 		}
 		for itemCount > maxStack {
 			items = append(items, itemPair{itemID, uint32(maxStack)})
@@ -207,9 +244,8 @@ func (s *session) handleSendItems(ctx context.Context, args []string) {
 		}
 	}
 	_, guid, targetName, ok := s.sendMailTarget(ctx, []string{name})
-	if !ok || guid == 0 {
-		s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
-		return
+	if !ok {
+		return // miscResolvePlayerTarget already reported LANG 499 == C++
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
@@ -234,8 +270,9 @@ func (s *session) handleSendItems(ctx context.Context, args []string) {
 }
 
 // handleSendMessageCmd mirrors HandleSendMessageCommand (cs_send.cpp:261):
-// the target must be online; the two C++ area-trigger texts go out through
-// SMSG_MESSAGECHAT system chat (the Go equivalent of SendAreaTriggerMessage).
+// the target must be online; the two C++ texts go out as
+// SMSG_AREA_TRIGGER_MESSAGE (== WorldSession::SendAreaTriggerMessage,
+// MiscHandler.cpp:628).
 func (s *session) handleSendMessageCmd(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandSendMessage) {
 		return
@@ -250,7 +287,9 @@ func (s *session) handleSendMessageCmd(ctx context.Context, args []string) {
 		return
 	}
 	msg := strings.Join(args[1:], " ")
-	_ = target.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), protocol.BuildSystemChatMessage(msg), true)
-	_ = target.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), protocol.BuildSystemChatMessage("|cffff0000[Message from administrator]:|r"), true)
+	// == WorldSession::SendAreaTriggerMessage (MiscHandler.cpp:628): message
+	// first, then the administrator tag (cs_send.cpp:273-274).
+	_ = target.write(uint16(protocol.OpcodeSMSG_AREA_TRIGGER_MESSAGE), protocol.BuildAreaTriggerMessage(msg), true)
+	_ = target.write(uint16(protocol.OpcodeSMSG_AREA_TRIGGER_MESSAGE), protocol.BuildAreaTriggerMessage("|cffff0000[Message from administrator]:|r"), true)
 	s.sendSysMessage(fmt.Sprintf("Message sent to %s: %s.", target.player.Name, msg)) // LANG_SENDMESSAGE 1102
 }

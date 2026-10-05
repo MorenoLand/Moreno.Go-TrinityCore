@@ -40,6 +40,16 @@ func BuildChatServerMessage(messageID int32, stringParam string) []byte {
 	return packet.Bytes()
 }
 
+// BuildAreaTriggerMessage builds an SMSG_AREA_TRIGGER_MESSAGE payload:
+// uint32 length (strlen+1) followed by the NUL-terminated text, mirroring
+// WorldSession::SendAreaTriggerMessage (MiscHandler.cpp:628).
+func BuildAreaTriggerMessage(message string) []byte {
+	packet := NewBuffer(4 + len(message) + 1)
+	packet.WriteU32(uint32(len(message) + 1))
+	packet.WriteCString(message)
+	return packet.Bytes()
+}
+
 // BuildMonsterChatMessage builds an SMSG_MESSAGECHAT payload for monster speech
 // (say, yell, whisper, emote, boss emote).
 // Reference: TrinityCore Chat.cpp:203-220.
