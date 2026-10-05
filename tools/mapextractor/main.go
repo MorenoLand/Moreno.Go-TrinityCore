@@ -116,7 +116,7 @@ func readClientAsset(input, name string) ([]byte, error) {
 	if input == "" {
 		return nil, localErr
 	}
-	archives, err := mpq.Archives(input)
+	archives, err := mpq.OrderedArchives(input)
 	if err != nil {
 		return nil, err
 	}
