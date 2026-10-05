@@ -52,6 +52,11 @@ const (
 	BGStatusInProgress uint32 = 3
 	BGStatusWaitLeave  uint32 = 4
 
+	// ArenaTimeToAutoRemove mirrors TIME_TO_AUTOREMOVE (Battleground.h:151):
+	// Battleground::_ProcessLeave removes every remaining player this long after
+	// the match ends (Battleground.cpp:506-528).
+	ArenaTimeToAutoRemove = 120 * time.Second
+
 	// Spells
 	SpellArenaPreparation  uint32 = 32727
 	SpellAllianceGoldFlag  uint32 = 32724
@@ -554,6 +559,10 @@ func (s *Server) handleArenaPlayerLeave(sess *session) {
 			}
 		}
 	}
+	// Battleground::RemovePlayerAtLeave (Battleground.cpp:818-839): the leaver is
+	// erased from the player and score maps.
+	delete(arena.PlayerTeams, sess.playerGUID)
+	delete(arena.Scores, sess.playerGUID)
 	greenAlive := arena.GreenAlive
 	goldAlive := arena.GoldAlive
 	arena.mu.Unlock()
@@ -794,6 +803,114 @@ func (s *Server) endArena(arena *arenaBattlegroundState, winner int8) {
 	s.sessionsMu.RUnlock()
 }
 
+// processArenaLeave ports Battleground::_ProcessLeave (Battleground.cpp:506-528):
+// after ArenaTimeToAutoRemove, RemovePlayerAtLeave(guid, true, true) runs for
+// every remaining player. When the roster empties, the instance is deleted from
+// the manager (the m_SetDeleteThis arm of BattlegroundMgr::Update,
+// BattlegroundMgr.cpp:95-125).
+func (s *Server) processArenaLeave(arena *arenaBattlegroundState) {
+	if s == nil || arena == nil {
+		return
+	}
+
+	arena.mu.Lock()
+	guids := make([]uint64, 0, len(arena.PlayerTeams))
+	for guid := range arena.PlayerTeams {
+		guids = append(guids, guid)
+	}
+	arena.mu.Unlock()
+
+	ctx := context.Background()
+	for _, guid := range guids {
+		s.removeArenaPlayerAtLeave(ctx, arena, guid)
+	}
+
+	arena.mu.Lock()
+	empty := len(arena.PlayerTeams) == 0
+	arena.mu.Unlock()
+	if empty {
+		s.deleteArenaState(arena)
+	}
+}
+
+// removeArenaPlayerAtLeave ports the arena arms of
+// Battleground::RemovePlayerAtLeave(guid, Transport=true, SendPacket=true)
+// (Battleground.cpp:810-932).
+func (s *Server) removeArenaPlayerAtLeave(ctx context.Context, arena *arenaBattlegroundState, guid uint64) {
+	if s == nil || arena == nil {
+		return
+	}
+
+	var sess *session
+	s.sessionsMu.RLock()
+	for cand := range s.sessions {
+		if cand.playerGUID == guid && cand.worldReady.Load() && cand.player != nil {
+			sess = cand
+			break
+		}
+	}
+	s.sessionsMu.RUnlock()
+
+	if sess != nil {
+		// Battleground.cpp:826-828: strip spirit of redemption.
+		if sess.hasAuraType(spellAuraSpiritOfRedemption) {
+			sess.removeTargetAurasByType(ctx, guid, spellAuraModShapeshift)
+		}
+		// Battleground.cpp:830: strip mounted auras.
+		sess.removeTargetAurasByType(ctx, guid, spellAuraMounted)
+		// Battleground.cpp:832-835: resurrect the dead and spawn corpse bones.
+		if sess.player.Health == 0 {
+			sess.resurrectPlayer(ctx, 1.0)
+			sess.spawnCorpseBones(ctx)
+		}
+		// Battleground.cpp:880-881: unsummon the current pet, resummon the old one.
+		sess.unsummonPet(ctx, petSaveNotInSlot)
+		sess.resummonTemporaryPet(ctx)
+		// SendPacket=true arm (Battleground.cpp:883-887): the STATUS_NONE
+		// battlefield-status packet; the cleared slot is the Go form of
+		// RemoveBattlegroundQueueId, and sendBattlefieldStatus writes the
+		// 12-byte none form for an inactive slot.
+		for i := 0; i < len(sess.bgQueues); i++ {
+			if sess.bgQueues[i].Active && sess.bgQueues[i].IsArena {
+				sess.bgQueues[i] = bgQueueEntry{}
+				sess.sendBattlefieldStatus(uint8(i))
+				break
+			}
+		}
+		// Transport=true arm (Battleground.cpp:925-927):
+		// Player::TeleportToBGEntryPoint.
+		if sess.bgData.JoinMap != 0 {
+			sess.teleportTo(sess.bgData.JoinMap, sess.bgData.JoinX, sess.bgData.JoinY, sess.bgData.JoinZ, sess.bgData.JoinO)
+		}
+	}
+
+	// Battleground.cpp:818-839: erase the player and delete their score.
+	arena.mu.Lock()
+	delete(arena.PlayerTeams, guid)
+	delete(arena.Scores, guid)
+	arena.mu.Unlock()
+}
+
+// deleteArenaState removes a finished arena instance from the manager, the Go
+// form of BattlegroundMgr::Update deleting a ToBeDeleted battleground
+// (BattlegroundMgr.cpp:95-125: erase from the instance map, erase the
+// client-instance-id mapping, `delete bg`). The Go registry is keyed by
+// map+instance rather than instance id, and there is no client-instance-id
+// mapping to erase.
+func (s *Server) deleteArenaState(arena *arenaBattlegroundState) {
+	if s == nil || arena == nil {
+		return
+	}
+	s.arenaMu.Lock()
+	defer s.arenaMu.Unlock()
+	for key, state := range s.arenaState {
+		if state == arena {
+			delete(s.arenaState, key)
+			return
+		}
+	}
+}
+
 // awardLastManStanding grants SpellLastManStanding (26549) to the solely alive participant.
 func (s *Server) awardLastManStanding(arena *arenaBattlegroundState, team uint8) {
 	s.sessionsMu.RLock()
@@ -978,6 +1095,7 @@ func (s *Server) updateArenaTick(arena *arenaBattlegroundState, now time.Time) {
 	status := arena.Status
 	startTime := arena.StartTime
 	matchStartTime := arena.MatchStartTime
+	endTime := arena.EndTime
 	arena.mu.Unlock()
 
 	if status == ArenaStatusWaitJoin {
@@ -1011,6 +1129,20 @@ func (s *Server) updateArenaTick(arena *arenaBattlegroundState, now time.Time) {
 				arena.RVPillarSwitchTimer = now.Add(25 * time.Second)
 			}
 			arena.mu.Unlock()
+		}
+	} else if status == ArenaStatusWaitLeave {
+		// Battleground::_ProcessLeave (Battleground.cpp:506-528) plus the
+		// m_SetDeleteThis sweep (Battleground.cpp:164-186,
+		// BattlegroundMgr::Update): once the match ends, every remaining player
+		// is auto-removed after TIME_TO_AUTOREMOVE, and the emptied instance is
+		// deleted from the manager.
+		arena.mu.Lock()
+		remaining := len(arena.PlayerTeams)
+		arena.mu.Unlock()
+		if remaining == 0 {
+			s.deleteArenaState(arena)
+		} else if !endTime.IsZero() && now.Sub(endTime) >= ArenaTimeToAutoRemove {
+			s.processArenaLeave(arena)
 		}
 	}
 }
