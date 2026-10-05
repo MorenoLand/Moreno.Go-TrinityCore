@@ -93,8 +93,14 @@ type combatTarget struct {
 //     Go's getHastedMeleeSpeed/getHastedRangedSpeed model rating haste only, so
 //     aura-driven attack-speed changes never alter swing cadence.
 //   - The m_attackTimer init (Unit.cpp:316-318, all zero) means the first swing
-//     fires on the next update tick; Go's handleAttackSwing swings immediately
-//     when in range — outcome-equivalent.
+//     fires on the next update tick; Go's handleAttackSwing likewise never
+//     swings — it only sets the victim (Unit::Attack never swings, and this
+//     tree has no ResetAttackTimer call in it), so the first swing also
+//     lands on the next 100ms tick via updatePlayerCombat. A same-victim
+//     T re-press is a no-op, exactly like C++ returning false.
+//   - C++ delays the offhand timer only for non-players
+//     (Unit.cpp:5743, GetTypeId() != TYPEID_PLAYER), so Go applies no
+//     offhand delay on attack start either.
 func calcMeleeRange(attackerReach, victimReach float32) float64 {
 	if attackerReach <= 0 {
 		attackerReach = 1.5
@@ -275,7 +281,17 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 		s.attackTarget = 0
 		return s.sendAttackStop(victim, false) == nil
 	}
-	if s.attackTarget != 0 && s.attackTarget != victim {
+	// C++ Unit::Attack (Unit.cpp:5650-5760): re-pressing T on the current
+	// victim while melee-attacking is a no-op (returns false, no packet);
+	// it never swings and never touches the attack timer. Swings come
+	// only from the update loop when the timer expires (m_attackTimer
+	// starts at 0, so the first swing lands on the next tick). Go
+	// previously swung immediately on every CMSG_ATTACKSWING, letting
+	// clients spam T to bypass weapon speed entirely.
+	if s.attackTarget != 0 && s.attackTarget == victim {
+		return true
+	}
+	if s.attackTarget != 0 {
 		if err := s.sendAttackStop(s.attackTarget, false); err != nil {
 			return false
 		}
@@ -291,26 +307,6 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPayload, true)
 	if s.server != nil {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPayload, s)
-	}
-	reach := float32(1.5)
-	if s.player.CombatReach > 0 {
-		reach = s.player.CombatReach
-	}
-	allowedRange := calcMeleeRange(reach, target.CombatReach) + 2.0
-	if distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) <= allowedRange {
-		s.executeMeleeSwing(ctx, target, protocol.BaseAttack)
-	}
-	// If dual wielding, delay offhand swing by 50% of base attack time (TrinityCore Unit.cpp:5745)
-	if s.haveOffhandWeapon() {
-		baseSpeed := time.Duration(s.player.AttackTime) * time.Millisecond
-		if baseSpeed <= 0 {
-			baseSpeed = 2 * time.Second
-		}
-		offSpeed := time.Duration(s.player.OffhandAttackTime) * time.Millisecond
-		if offSpeed <= 0 {
-			offSpeed = 2 * time.Second
-		}
-		s.lastOffhandSwing = time.Now().Add(-(offSpeed - baseSpeed/2))
 	}
 	return true
 }
