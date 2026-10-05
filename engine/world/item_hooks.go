@@ -52,17 +52,85 @@ func (s *session) fireItemEvent(ctx context.Context, entry uint32, event int, ar
 // (event, player, item, target), mirroring Eluna::OnItemUse (ItemHooks.cpp)
 // via ScriptMgr::OnItemUse (SpellHandler.cpp:176). The target is nil: Go's
 // spell-target decode has no Lua object surface for it, the same documented
-// delta as the gameobject OnUse leg. C++ also fires the item gossip hello
-// hook (GOSSIP_EVENT_ON_HELLO) inside Eluna::OnUse when the item still
-// exists; the item_gossip family has no Go Trigger yet, so only event 2
-// fires here. Returns true when a handler returned false, i.e. the cast
-// must not start.
+// delta as the gameobject OnUse leg. Eluna::OnUse also fires the item
+// gossip hello hook (GOSSIP_EVENT_ON_HELLO) when the item still exists;
+// that arm is fireItemGossipHelloHook, fired from handleUseItem right after
+// this one in Eluna::OnUse's OnItemUse-then-OnItemGossip order. Returns true
+// when a handler returned false, i.e. the cast must not start.
 func (s *session) fireItemUseHook(ctx context.Context, rawItemGUID uint64) bool {
 	item := s.sessionLuaItem(ctx, rawItemGUID)
 	if item == nil {
 		return false
 	}
 	return s.fireItemEvent(ctx, objectUint32OrZero(item, "Entry"), scripting.ItemEventOnUse, s.luaPlayer(), item, nil)
+}
+
+// fireItemGossipEvent dispatches an Eluna item-gossip hook
+// (RegisterItemGossipEvent) for the item entry. The caller passes the C++
+// argument order without the leading event — TriggerItemGossipEvent
+// prepends it, like TriggerItemEvent. The gossip hello arm (1) reads the
+// return: a Lua false stops the spell cast (GossipHooks.cpp). The select
+// arm (2) discards it: C++ CallAllFunctions has no return.
+func (s *session) fireItemGossipEvent(ctx context.Context, entry uint32, event int, args ...any) bool {
+	if s == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
+		return false
+	}
+	values, err := s.server.Features.Scripts.TriggerItemGossipEvent(ctx, entry, event, args...)
+	if err != nil {
+		s.debug("lua item gossip event failed", "event", event, "error", err)
+	}
+	return luaCancelled(values)
+}
+
+// fireItemGossipHelloHook dispatches GOSSIP_EVENT_ON_HELLO (1) for the
+// item_gossip bindings as (event, player, item), mirroring
+// Eluna::OnItemGossip (GossipHooks.cpp:81), which Eluna::OnUse calls after
+// OnItemUse whenever the item still exists in the player's inventory — the
+// sessionLuaItem re-fetch is that existence gate. A Lua false return stops
+// the spell cast, so it returns true when cancelled, the same convention
+// as fireItemUseHook. The pending gossip menu is cleared first, but only
+// when a handler is actually registered: C++'s ClearMenus() sits behind
+// START_HOOK_WITH_RETVAL's early return for unbound entries.
+func (s *session) fireItemGossipHelloHook(ctx context.Context, rawItemGUID uint64) bool {
+	if s == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
+		return false
+	}
+	item := s.sessionLuaItem(ctx, rawItemGUID)
+	if item == nil {
+		return false
+	}
+	entry := objectUint32OrZero(item, "Entry")
+	if !s.server.Features.Scripts.HasHook(scripting.ItemGossipKind(entry), scripting.GossipEventOnHello) {
+		return false
+	}
+	s.gossip = nil
+	return s.fireItemGossipEvent(ctx, entry, scripting.GossipEventOnHello, s.luaPlayer(), item)
+}
+
+// fireItemGossipSelectHook dispatches GOSSIP_EVENT_ON_SELECT (2) for the
+// item_gossip bindings as (event, player, item, sender, action[, code]),
+// mirroring Eluna::HandleGossipSelectOption's item arm (GossipHooks.cpp:90)
+// via ScriptMgr::OnGossipSelect[Code] (ScriptMgr.cpp:1655-1677), fired from
+// the item-GUID arm of HandleGossipSelectOptionOpcode (MiscHandler.cpp).
+// C++ fires it with CallAllFunctions (no cancel semantics), so the return
+// is discarded. The pending menu is cleared before firing, gated on
+// registered bindings exactly like the hello arm. code is appended only
+// when the menu option is coded — C++ pushes nil for an empty code, but Go
+// passes the decoded string, the same convention as the creature gossip
+// select arm in handleGossipSelectOption.
+func (s *session) fireItemGossipSelectHook(ctx context.Context, entry uint32, menuItem gossipMenuItem, code string, item *scripting.Object) {
+	if s == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil || item == nil {
+		return
+	}
+	if !s.server.Features.Scripts.HasHook(scripting.ItemGossipKind(entry), scripting.GossipEventOnSelect) {
+		return
+	}
+	s.gossip = nil
+	args := []any{s.luaPlayer(), item, menuItem.Sender, menuItem.Action}
+	if menuItem.Coded {
+		args = append(args, code)
+	}
+	s.fireItemGossipEvent(ctx, entry, scripting.GossipEventOnSelect, args...)
 }
 
 // fireItemQuestHook dispatches ITEM_EVENT_ON_QUEST_ACCEPT (3) as

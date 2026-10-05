@@ -170,6 +170,9 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 		return true
 	}
 	s.debug("gossip selection received", "account", s.accountName, "guid", guid, "menu", menuID, "list", listID)
+	if uint16(guid>>48) == 0x4000 {
+		return s.handleItemGossipSelectOption(ctx, reader, guid, listID)
+	}
 	if s.gossip == nil || s.gossip.SenderGUID != guid || s.gossip.MenuID != menuID {
 		s.debug("gossip selection rejected", "account", s.accountName, "guid", guid, "menu", menuID, "list", listID)
 		return true
@@ -344,6 +347,47 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 		}
 	}
 	s.debug("gossip selection handled", "account", s.accountName, "entry", entry, "list", listID)
+	return true
+}
+
+// handleItemGossipSelectOption processes CMSG_GOSSIP_SELECT_OPTION for an
+// item GUID — the item arm of WorldSession::HandleGossipSelectOptionOpcode
+// (MiscHandler.cpp:138-145). C++ resolves the item by GUID only
+// (Player::GetItemByGuid): no interaction-range or npc-flag gates apply,
+// and only the gossip sender-GUID cheat check runs (no menuId check,
+// unlike the player arm). It dispatches Eluna::HandleGossipSelectOption's
+// item arm (GossipHooks.cpp:90) via ScriptMgr::OnGossipSelect[Code]
+// (ScriptMgr.cpp:1655-1677), which fires GOSSIP_EVENT_ON_SELECT (2) with
+// (event, player, item, sender, action[, code]) and no cancel semantics
+// (CallAllFunctions). Go has no C++ ItemScript system, so the native
+// OnGossipSelect[Code] tail has no counterpart. The feign-death strip C++
+// runs for every arm is a standing Go-wide delta — the creature select arm
+// in this file never had it either.
+func (s *session) handleItemGossipSelectOption(ctx context.Context, reader *protocol.Buffer, guid uint64, listID uint32) bool {
+	if s.gossip == nil || s.gossip.SenderGUID != guid {
+		s.debug("item gossip selection rejected", "account", s.accountName, "guid", guid, "list", listID)
+		return true
+	}
+	menuItem, ok := s.gossip.Items[listID]
+	if !ok {
+		return true
+	}
+	code := ""
+	if menuItem.Coded {
+		var err error
+		code, err = reader.ReadCString()
+		if err != nil {
+			s.debug("item gossip selection rejected", "account", s.accountName, "guid", guid, "list", listID, "reason", "malformed code", "error", err)
+			return true
+		}
+	}
+	item := s.sessionLuaItem(ctx, guid)
+	if item == nil {
+		s.debug("item gossip selection unknown item", "account", s.accountName, "guid", guid)
+		return true
+	}
+	s.fireItemGossipSelectHook(ctx, objectUint32OrZero(item, "Entry"), menuItem, code, item)
+	s.debug("item gossip selection handled", "account", s.accountName, "guid", guid, "list", listID)
 	return true
 }
 

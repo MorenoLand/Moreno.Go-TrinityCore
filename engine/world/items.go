@@ -1470,12 +1470,20 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		}
 	}
 
-	// Eluna ITEM_EVENT_ON_USE (2): ScriptMgr::OnItemUse
-	// (SpellHandler.cpp:176) fires after the item validation and bonding
-	// gates, before CastItemUseSpell. A Lua false return blocks the cast;
-	// C++ then sends the raw EQUIP_ERR_NONE failure packet (the stuck-item
-	// hack at the tail of Eluna::OnUse, ItemHooks.cpp) and skips the cast.
-	if s.fireItemUseHook(ctx, rawItemGUID) {
+	// Eluna::OnUse (ItemHooks.cpp:55) fires ITEM_EVENT_ON_USE (2) via
+	// ScriptMgr::OnItemUse (SpellHandler.cpp:176) after the item validation
+	// and bonding gates, then the item gossip hello hook
+	// (GOSSIP_EVENT_ON_HELLO, GossipHooks.cpp:81) whenever the item still
+	// exists — the hello fires even when the use hook already cancelled,
+	// exactly like Eluna::OnUse's OnItemUse-then-OnItemGossip order. A Lua
+	// false return from either blocks the cast; C++ then sends the raw
+	// EQUIP_ERR_NONE failure packet (the stuck-item hack at the tail of
+	// Eluna::OnUse) and skips the cast.
+	cancelUse := s.fireItemUseHook(ctx, rawItemGUID)
+	if s.fireItemGossipHelloHook(ctx, rawItemGUID) {
+		cancelUse = true
+	}
+	if cancelUse {
 		s.sendEquipError(equipErrNone, fullItemGUID)
 		return true
 	}

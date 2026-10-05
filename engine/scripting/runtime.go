@@ -94,6 +94,18 @@ const (
 	ItemEventOnRemove      = 5
 )
 
+// Eluna GossipEvents contract shared by RegisterCreatureGossipEvent,
+// RegisterGameObjectGossipEvent, RegisterItemGossipEvent and
+// RegisterPlayerGossipEvent. Numbering is the TrinityCore LuaEngine
+// numbering (LuaEngine/Hooks.h GossipEvents). The engine fires the item
+// gossip arms (ON_HELLO, ON_SELECT) via TriggerItemGossipEvent; the
+// creature arms fire inline in engine/world/gossip.go, and the
+// gameobject/player arms have no fire sites yet.
+const (
+	GossipEventOnHello  = 1
+	GossipEventOnSelect = 2
+)
+
 // Eluna InstanceEvents contract for RegisterMapEvent/RegisterInstanceEvent.
 // Numbering is the TrinityCore LuaEngine numbering (LuaEngine/Hooks.h
 // InstanceEvents). RegisterMapEvent binds a map ID (Go kind "map:<mapID>");
@@ -333,6 +345,24 @@ func (r *Runtime) Trigger(ctx context.Context, kind string, event int, args ...a
 	return result, err
 }
 
+// HasHook reports whether at least one non-cancelled hook is registered
+// for the given kind and event — the Go model of Eluna's
+// Bindings::HasBindingsFor, which the START_HOOK macros consult before
+// running hook prologues such as PlayerTalkClass::ClearMenus().
+func (r *Runtime) HasHook(kind string, event int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, hook := range r.hooks {
+		if _, cancelled := r.cancelled[hook.id]; cancelled {
+			continue
+		}
+		if hook.Kind == kind && hook.Event == event {
+			return true
+		}
+	}
+	return false
+}
+
 // triggerN is the shared hook dispatcher behind Trigger. It captures
 // nresults return values per handler so Eluna hooks whose C++ call sites
 // consume a second return (CallOneFunction(n, args, 2)) can read it. Each
@@ -480,6 +510,23 @@ func (r *Runtime) TriggerGameObjectEvent(ctx context.Context, entry uint32, even
 // leading event.
 func (r *Runtime) TriggerItemEvent(ctx context.Context, entry uint32, event int, args ...any) ([]any, error) {
 	return r.Trigger(ctx, "item:"+strconv.FormatUint(uint64(entry), 10), event, append([]any{event}, args...)...)
+}
+
+// ItemGossipKind is the hook kind for RegisterItemGossipEvent(entry, event,
+// fn): "item_gossip:<entry>", mirroring Eluna's ItemGossipBindings entry
+// key (LuaEngine/GossipHooks.cpp).
+func ItemGossipKind(entry uint32) string {
+	return "item_gossip:" + strconv.FormatUint(uint64(entry), 10)
+}
+
+// TriggerItemGossipEvent fires hooks registered with
+// RegisterItemGossipEvent(entry, event, fn) for the given item entry.
+// C++ Eluna gossip hooks pass (event, player, item, ...) (LuaEngine/
+// GossipHooks.cpp), so the event number is prepended like
+// TriggerItemEvent. Callers pass the C++ argument order without the
+// leading event.
+func (r *Runtime) TriggerItemGossipEvent(ctx context.Context, entry uint32, event int, args ...any) ([]any, error) {
+	return r.Trigger(ctx, ItemGossipKind(entry), event, append([]any{event}, args...)...)
 }
 
 // TriggerInstanceEvent fires hooks registered with RegisterMapEvent(mapID,
