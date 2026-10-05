@@ -2674,6 +2674,66 @@ func (s *session) handleEffectSkinning(ctx context.Context, targetGUID uint64, s
 	s.openSkinningLoot(ctx, targetGUID, entry)
 }
 
+// handleEffectPickpocket mirrors Spell::EffectPickPocket
+// (SpellEffects.cpp:2563-2578): a player pickpocketing a living,
+// non-friendly, humanoid-or-undead creature opens its pickpocket loot
+// window. The effectHandleMode HIT_TARGET gate is structural (this dispatch
+// runs the hit phase) and the caster-is-player arm is vacuous
+// (handleCastSpell only serves player sessions). The cast-time target gate
+// (SPELL_FAILED_TARGET_NO_POCKETS, spells.go:1693) already enforced the
+// creature-type mask; execution re-verifies the mask, the alive state, the
+// hostile gate, and the SendLoot distance arm (Player.cpp:8755-8761), then
+// opens the window via openPickpocketLoot.
+func (s *session) handleEffectPickpocket(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	if uint16(targetGUID>>48) != 0xF130 {
+		return
+	}
+	target, ok := s.getCombatTarget(ctx, targetGUID)
+	if !ok || target.Map != s.player.Map || target.InstanceID != s.player.InstanceID || target.Health == 0 {
+		return
+	}
+	// Spell::EffectPickPocket: victim must be humanoid or undead.
+	if mask, isPlayer := s.targetCreatureTypeMask(ctx, targetGUID); isPlayer || mask&creatureTypeMaskHumanoidOrUndead == 0 {
+		return
+	}
+	// !m_caster->IsFriendlyTo(unitTarget): Go's friendliness model reduces
+	// to hostile-vs-not (the SpellClick FRIEND convention).
+	player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	if !s.server.isHostileFaction(target.Faction, player) {
+		return
+	}
+	if !withinLootDistance(s, target) {
+		return
+	}
+	entry := uint32((targetGUID >> 24) & 0x00FFFFFF)
+	s.openPickpocketLoot(ctx, targetGUID, entry, uint32(target.Level))
+}
+
+// handleEffectOpenLock mirrors the gameobject arm of Spell::EffectOpenLock
+// (SpellEffects.cpp:2020-2042): after CanOpenLock (already enforced by
+// checkOpenLockCast), a gameobject target opens its loot window as
+// LOOT_SKINNING — the disarm-trap arm. The itemTarget arm
+// (ITEM_FIELD_FLAG_UNLOCKED, SpellEffects.cpp:2032-2035) has no Go model:
+// nothing in the Go item path sets per-item lock state (the open-item leg
+// refuses any LockID outright), so there is no unlockable item to flag —
+// documented no-bridge.
+func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.SpellTargetData, spell wotlk.Spell, eff wotlk.SpellEffect) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	var goGUID uint64
+	if target.Flags&protocol.SpellTargetFlagGameObject != 0 && target.UnitGUID != 0 && uint16(target.UnitGUID>>48) == 0xF110 {
+		goGUID = target.UnitGUID
+	}
+	if goGUID == 0 {
+		return
+	}
+	s.openGameObjectLoot(ctx, goGUID, lootTypeSkinning, 20.0)
+}
+
 // skillByLockType mirrors SkillByLockType (SharedDefines.h:3044): lock types
 // without a gathering skill (disarm trap, open, treasure, slow open, ...)
 // map to SKILL_NONE.
@@ -6418,6 +6478,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff)
 			case spellEffectSkinning: // 95: SPELL_EFFECT_SKINNING
 				s.handleEffectSkinning(effCtx, targetGUID, spell, eff)
+			case spellEffectPickpocket: // 71: SPELL_EFFECT_PICKPOCKET
+				s.handleEffectPickpocket(effCtx, targetGUID, spell, eff)
+			case spellEffectOpenLock: // 33: SPELL_EFFECT_OPEN_LOCK
+				s.handleEffectOpenLock(effCtx, target, spell, eff)
 			case spellEffectLearnSpell: // 36: SPELL_EFFECT_LEARN_SPELL
 				if eff.TriggerSpell != 0 {
 					s.learnSpell(effCtx, eff.TriggerSpell)

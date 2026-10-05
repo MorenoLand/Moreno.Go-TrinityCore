@@ -39,6 +39,22 @@ const (
 // lootTypeSkinning mirrors LOOT_SKINNING (Loot.h:89).
 const lootTypeSkinning uint8 = 6
 
+// lootTypeCorpse mirrors LOOT_CORPSE (Loot.h:82): the loot type Go stores on
+// creature and gameobject loot opened via the CMSG_LOOT path.
+const lootTypeCorpse uint8 = 1
+
+// lootTypePickpocketing mirrors LOOT_PICKPOCKETING (Loot.h:83).
+const lootTypePickpocketing uint8 = 2
+
+// lootErrorAlreadyPickpocketed mirrors LOOT_ERROR_ALREADY_PICKPOCKETED
+// (Loot.h:113): "Your target has already had its pockets picked".
+const lootErrorAlreadyPickpocketed uint8 = 15
+
+// pickpocketRefillSeconds mirrors CONFIG_CREATURE_PICKPOCKET_REFILL's default
+// (World.cpp:1229): Creature.PickPocketRefillDelay = 10 * MINUTE. Go reads no
+// world-int config, so the C++ default is the constant.
+const pickpocketRefillSeconds = 600
+
 // maxQuestLootItems mirrors MAX_NR_QUEST_ITEMS (Loot.h:57).
 const maxQuestLootItems = 32
 
@@ -439,6 +455,124 @@ func rollLootObjectKey(roll *activeGroupRoll) lootObjectKey {
 	return lootObjectKey{MapID: roll.MapID, InstanceID: roll.InstanceID, GUID: roll.SourceGUID}
 }
 
+// openGameObjectLoot mirrors the GO arm of Player::SendLoot
+// (Player.cpp:8537-8662): the gameobject's loot is generated from its
+// gameobject_template loot id (data1, falling back to the entry) on first
+// open, then the stored window is reused; the round-robin looter is set for
+// grouped players. lootType carries the caller — LOOT_CORPSE (1) for the
+// CMSG_LOOT path, LOOT_SKINNING (6) for the disarm-trap EffectOpenLock arm
+// (SpellEffects.cpp:2031) — and maxDist the C++ distance arm: 20.0 yards
+// for the disarm arm (Player.cpp:8549) vs INTERACTION_DISTANCE otherwise.
+// Documented deltas: the GO loot-regen arm (GO_ACTIVATED + respawn-delay
+// re-roll, Player.cpp:8574-8578), the chest groupLootRules distribution
+// (GroupLoot/NeedBeforeGreed/MasterLoot), the battleground CanActivateGO
+// gate, and the fishing/fishing-hole/fishing-junk arms have no Go model.
+func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, lootType uint8, maxDist float64) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	wdb := s.server.WorldStore.DB
+	if wdb == nil {
+		return true
+	}
+	lowGUID := uint32(targetGUID & 0x00FFFFFF)
+	entry := uint32((targetGUID >> 24) & 0x00FFFFFF)
+
+	var goMap uint32
+	var goX, goY, goZ float32
+	var data1 int64
+	err := wdb.QueryRowContext(ctx, `SELECT g.map, g.position_x, g.position_y, g.position_z, COALESCE(t.data1, 0)
+		FROM gameobject AS g
+		JOIN gameobject_template AS t ON t.entry = g.id
+		WHERE g.guid = ? AND g.id = ? LIMIT 1`, lowGUID, entry).Scan(&goMap, &goX, &goY, &goZ, &data1)
+	if err != nil {
+		_ = wdb.QueryRowContext(ctx, `SELECT g.map, g.position_x, g.position_y, g.position_z, COALESCE(t.data1, 0)
+			FROM gameobject AS g
+			JOIN gameobject_template AS t ON t.entry = g.id
+			WHERE g.guid = ? LIMIT 1`, lowGUID).Scan(&goMap, &goX, &goY, &goZ, &data1)
+	}
+	if goMap != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, goX, goY, goZ) > maxDist {
+		return s.sendLootReleaseResponse(targetGUID) == nil
+	}
+	lootID := data1
+	if lootID == 0 {
+		lootID = int64(entry)
+	}
+
+	key := lootObjectKey{MapID: goMap, InstanceID: s.player.InstanceID, GUID: targetGUID}
+	s.server.lootMu.Lock()
+	if s.server.creatureLoot == nil {
+		s.server.creatureLoot = make(map[lootObjectKey]*activeLootState)
+	}
+	loot := s.server.creatureLoot[key]
+	newLoot := loot == nil
+	if newLoot {
+		loot = &activeLootState{TargetGUID: targetGUID, MapID: goMap, InstanceID: s.player.InstanceID, LootType: lootType, Items: make(map[uint8]lootItem)}
+		s.server.creatureLoot[key] = loot
+	}
+	s.server.lootMu.Unlock()
+
+	if !newLoot {
+		loot.addViewer(s)
+		s.activeLoot = loot
+		s.interruptCurrentCast()
+		return s.finishLootOpen(ctx, loot)
+	}
+
+	rows, err := wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0),
+			COALESCE(l.QuestRequired, 0), COALESCE(t.StartQuest, 0), COALESCE(t.flagsCustom, 0)
+		FROM gameobject_loot_template AS l
+		LEFT JOIN item_template AS t ON t.entry = l.Item
+		WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, lootID)
+	if err != nil && isMissingColumn(err) {
+		rows, err = wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), 0,
+				0, 0, 0
+			FROM gameobject_loot_template AS l
+			LEFT JOIN item_template AS t ON t.entry = l.Item
+			WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, lootID)
+	}
+	if err == nil {
+		defer rows.Close()
+		var slot uint8 = 0
+		var qidx uint8 = 0
+		for rows.Next() {
+			var itemID int64
+			var chance float64
+			var minCount, maxCount, displayID, quality int64
+			var questRequired, startQuest, customFlags int64
+			if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality, &questRequired, &startQuest, &customFlags); err != nil {
+				continue
+			}
+			roll := rand.Float64() * 100.0
+			if chance > 0 && roll > chance {
+				continue
+			}
+			count := uint32(minCount)
+			if maxCount > minCount {
+				count += uint32(rand.Intn(int(maxCount - minCount + 1)))
+			}
+			if count == 0 {
+				count = 1
+			}
+			storeLootTemplateRow(loot, &slot, &qidx, uint32(itemID), count, uint32(displayID), uint32(quality), uint32(startQuest), uint32(customFlags), questRequired != 0)
+		}
+		loot.NormalSlotCount = slot
+	}
+	if s.server != nil && s.groupID != 0 {
+		s.server.groupsMu.Lock()
+		grp := s.server.groups[s.groupID]
+		if grp != nil && loot.RoundRobinPlayer == 0 && grp.LootMethod != 0 {
+			grp.updateLooter(s.server, goMap, goX, goY, goZ)
+			loot.RoundRobinPlayer = grp.LooterGUID
+		}
+		s.server.groupsMu.Unlock()
+	}
+	loot.addViewer(s)
+	s.activeLoot = loot
+	s.interruptCurrentCast()
+	return s.finishLootOpen(ctx, loot)
+}
+
 func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
@@ -458,102 +592,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	high := uint16(targetGUID >> 48)
 
 	if high == 0xF110 {
-		lowGUID := uint32(targetGUID & 0x00FFFFFF)
-		entry := uint32((targetGUID >> 24) & 0x00FFFFFF)
-
-		var goMap uint32
-		var goX, goY, goZ float32
-		var data1 int64
-		err := wdb.QueryRowContext(ctx, `SELECT g.map, g.position_x, g.position_y, g.position_z, COALESCE(t.data1, 0)
-			FROM gameobject AS g
-			JOIN gameobject_template AS t ON t.entry = g.id
-			WHERE g.guid = ? AND g.id = ? LIMIT 1`, lowGUID, entry).Scan(&goMap, &goX, &goY, &goZ, &data1)
-		if err != nil {
-			_ = wdb.QueryRowContext(ctx, `SELECT g.map, g.position_x, g.position_y, g.position_z, COALESCE(t.data1, 0)
-				FROM gameobject AS g
-				JOIN gameobject_template AS t ON t.entry = g.id
-				WHERE g.guid = ? LIMIT 1`, lowGUID).Scan(&goMap, &goX, &goY, &goZ, &data1)
-		}
-		if goMap != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, goX, goY, goZ) > 10.0 {
-			return s.sendLootReleaseResponse(targetGUID) == nil
-		}
-		lootID := data1
-		if lootID == 0 {
-			lootID = int64(entry)
-		}
-
-		key := lootObjectKey{MapID: goMap, InstanceID: s.player.InstanceID, GUID: targetGUID}
-		s.server.lootMu.Lock()
-		if s.server.creatureLoot == nil {
-			s.server.creatureLoot = make(map[lootObjectKey]*activeLootState)
-		}
-		loot := s.server.creatureLoot[key]
-		newLoot := loot == nil
-		if newLoot {
-			loot = &activeLootState{TargetGUID: targetGUID, MapID: goMap, InstanceID: s.player.InstanceID, LootType: 1, Items: make(map[uint8]lootItem)}
-			s.server.creatureLoot[key] = loot
-		}
-		s.server.lootMu.Unlock()
-
-		if !newLoot {
-			loot.addViewer(s)
-			s.activeLoot = loot
-			s.interruptCurrentCast()
-			return s.finishLootOpen(ctx, loot)
-		}
-
-		rows, err := wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0),
-				COALESCE(l.QuestRequired, 0), COALESCE(t.StartQuest, 0), COALESCE(t.flagsCustom, 0)
-			FROM gameobject_loot_template AS l
-			LEFT JOIN item_template AS t ON t.entry = l.Item
-			WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, lootID)
-		if err != nil && isMissingColumn(err) {
-			rows, err = wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), 0,
-					0, 0, 0
-				FROM gameobject_loot_template AS l
-				LEFT JOIN item_template AS t ON t.entry = l.Item
-				WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, lootID)
-		}
-		if err == nil {
-			defer rows.Close()
-			var slot uint8 = 0
-			var qidx uint8 = 0
-			for rows.Next() {
-				var itemID int64
-				var chance float64
-				var minCount, maxCount, displayID, quality int64
-				var questRequired, startQuest, customFlags int64
-				if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality, &questRequired, &startQuest, &customFlags); err != nil {
-					continue
-				}
-				roll := rand.Float64() * 100.0
-				if chance > 0 && roll > chance {
-					continue
-				}
-				count := uint32(minCount)
-				if maxCount > minCount {
-					count += uint32(rand.Intn(int(maxCount - minCount + 1)))
-				}
-				if count == 0 {
-					count = 1
-				}
-				storeLootTemplateRow(loot, &slot, &qidx, uint32(itemID), count, uint32(displayID), uint32(quality), uint32(startQuest), uint32(customFlags), questRequired != 0)
-			}
-			loot.NormalSlotCount = slot
-		}
-		if s.server != nil && s.groupID != 0 {
-			s.server.groupsMu.Lock()
-			grp := s.server.groups[s.groupID]
-			if grp != nil && loot.RoundRobinPlayer == 0 && grp.LootMethod != 0 {
-				grp.updateLooter(s.server, goMap, goX, goY, goZ)
-				loot.RoundRobinPlayer = grp.LooterGUID
-			}
-			s.server.groupsMu.Unlock()
-		}
-		loot.addViewer(s)
-		s.activeLoot = loot
-		s.interruptCurrentCast()
-		return s.finishLootOpen(ctx, loot)
+		return s.openGameObjectLoot(ctx, targetGUID, lootTypeCorpse, 10.0)
 	}
 
 	// HandleLootOpcode cheat gate (LootHandler.cpp:229-239): CMSG_LOOT with a
@@ -893,10 +932,12 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 	items := sortedLootItems(loot.Items)
 	for _, it := range items {
 		var slotType uint8 = 0 // LOOT_SLOT_TYPE_ALLOW_LOOT
-		// Player::SendLoot (Player.cpp:8849): group rights are set only for
-		// loot_type != LOOT_SKINNING, so skinning loot always shows plain
-		// allow-loot slots even when the skinner is grouped.
-		if grp != nil && loot.LootType != lootTypeSkinning {
+		// Player::SendLoot (Player.cpp:8784, 8849): the pickpocket arm sets
+		// OWNER_PERMISSION without touching the group ladder, and group
+		// rights are set only for loot_type != LOOT_SKINNING, so skinning
+		// and pickpocket loot always show plain allow-loot slots even when
+		// the looter is grouped.
+		if grp != nil && loot.LootType != lootTypeSkinning && loot.LootType != lootTypePickpocketing {
 			isOverThreshold := it.Quality >= uint32(grp.LootThreshold)
 			switch grp.LootMethod {
 			case 0: // Free for all
@@ -1197,6 +1238,136 @@ func (s *session) openSkinningLoot(ctx context.Context, targetGUID uint64, entry
 	return s.finishLootOpen(ctx, loot)
 }
 
+// openPickpocketLoot mirrors the LOOT_PICKPOCKETING arm of Player::SendLoot
+// (Player.cpp:8754-8790) as driven by Spell::EffectPickPocket
+// (SpellEffects.cpp:2563-2578). The open gates (living creature,
+// humanoid-or-undead mask, hostile, INTERACTION_DISTANCE) already ran in
+// handleEffectPickPocket; this is the SendLoot body. Pickpocket loot is
+// generated once: a second cast before the refill timer elapses answers
+// LOOT_ERROR_ALREADY_PICKPOCKETED instead of regenerating
+// (Creature::CanGeneratePickPocketLoot, Creature.cpp:3384), and an
+// already-generated window is kept as-is (C++ "still has pickpocket loot
+// generated & not fully taken"). Generation clears the loot, fills from
+// pickpocketing_loot_template[pickpocketLootId] (no entry fallback — C++
+// passes pickpocketLootId straight through), sets gold = 10 *
+// (urand(0, creatureLvl/2) + urand(0, playerLvl/2)) (RATE_DROP_MONEY has no Go
+// model, matching the existing unrated-gold convention), stores
+// loot_type = LOOT_PICKPOCKETING (Player.cpp:8894), and assigns the
+// pickpocketer as the sole recipient (SetLootRecipient(this, false)); the
+// OWNER permission rides the existing creatureLootAllowed owner check with
+// a GroupID-0 owner, and the pickpocket arm never touches the group ladder
+// (Player.cpp:8792-8875 sit in the non-pickpocket else), so the group
+// slot-type block in sendLootResponse skips LOOT_PICKPOCKETING. The refill
+// timer (Creature::StartPickPocketRefillTimer, Creature.cpp:3379) is keyed
+// on the per-instance loot key — Go stores no per-Creature field.
+func (s *session) openPickpocketLoot(ctx context.Context, targetGUID uint64, entry, creatureLevel uint32) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return true
+	}
+	wdb := s.server.WorldStore.DB
+	guid := uint32(targetGUID & 0x00FFFFFF)
+	stdKey := creatureWorldGUID(guid, entry)
+	s.server.lootMu.Lock()
+	key := lootObjectKey{MapID: s.player.Map, InstanceID: s.player.InstanceID, GUID: targetGUID}
+	standardKey := lootObjectKey{MapID: s.player.Map, InstanceID: s.player.InstanceID, GUID: stdKey}
+	if s.server.creatureLoot == nil {
+		s.server.creatureLoot = make(map[lootObjectKey]*activeLootState)
+	}
+	loot := s.server.creatureLoot[key]
+	if loot == nil {
+		loot = s.server.creatureLoot[standardKey]
+	}
+	if loot != nil && loot.LootType == lootTypePickpocketing {
+		s.server.lootMu.Unlock()
+		loot.addViewer(s)
+		s.activeLoot = loot
+		s.interruptCurrentCast()
+		return s.finishLootOpen(ctx, loot)
+	}
+	// Creature::CanGeneratePickPocketLoot (Creature.cpp:3384).
+	if s.server.pickpocketLootRestore[key] > time.Now().Unix() {
+		s.server.lootMu.Unlock()
+		return s.sendLootError(targetGUID, lootErrorAlreadyPickpocketed) == nil
+	}
+	if loot == nil {
+		loot = &activeLootState{TargetGUID: targetGUID, MapID: s.player.Map, InstanceID: s.player.InstanceID, Items: make(map[uint8]lootItem)}
+		s.server.creatureLoot[key] = loot
+		s.server.creatureLoot[standardKey] = loot
+	}
+	// Loot::clear() + loot->loot_type = LOOT_PICKPOCKETING
+	// (Player.cpp:8894); Creature::StartPickPocketRefillTimer
+	// (Creature.cpp:3379).
+	loot.Items = make(map[uint8]lootItem)
+	loot.QuestItems = nil
+	loot.Money = 0
+	loot.LootType = lootTypePickpocketing
+	loot.NormalSlotCount = 0
+	loot.RoundRobinPlayer = 0
+	loot.Viewers = make(map[uint64]*session)
+	if s.server.creatureLootOwners == nil {
+		s.server.creatureLootOwners = make(map[lootObjectKey]lootOwnerState)
+	}
+	owner := lootOwnerState{PlayerGUID: s.playerGUID}
+	s.server.creatureLootOwners[key] = owner
+	s.server.creatureLootOwners[standardKey] = owner
+	if s.server.pickpocketLootRestore == nil {
+		s.server.pickpocketLootRestore = make(map[lootObjectKey]int64)
+	}
+	s.server.pickpocketLootRestore[key] = time.Now().Unix() + pickpocketRefillSeconds
+	s.server.lootMu.Unlock()
+	var pickpocketLootID int64
+	_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(pickpocketLootId, 0) FROM creature_template WHERE entry = ? LIMIT 1", entry).Scan(&pickpocketLootID)
+	if pickpocketLootID != 0 {
+		rows, err := wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0),
+					COALESCE(l.QuestRequired, 0), COALESCE(t.StartQuest, 0), COALESCE(t.flagsCustom, 0)
+				FROM pickpocketing_loot_template AS l
+				LEFT JOIN item_template AS t ON t.entry = l.Item
+				WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, pickpocketLootID)
+		if err != nil && isMissingColumn(err) {
+			rows, err = wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), 0,
+						0, 0, 0
+					FROM pickpocketing_loot_template AS l
+					LEFT JOIN item_template AS t ON t.entry = l.Item
+					WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, pickpocketLootID)
+		}
+		if err == nil {
+			defer rows.Close()
+			var slot uint8 = 0
+			var qidx uint8 = 0
+			for rows.Next() {
+				var itemID int64
+				var chance float64
+				var minCount, maxCount, displayID, quality int64
+				var questRequired, startQuest, customFlags int64
+				if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality, &questRequired, &startQuest, &customFlags); err != nil {
+					continue
+				}
+				// Roll chance (0-100%), mirroring the creature-loot fill above.
+				roll := rand.Float64() * 100.0
+				if chance > 0 && roll > chance {
+					continue
+				}
+				count := uint32(minCount)
+				if maxCount > minCount {
+					count += uint32(rand.Intn(int(maxCount - minCount + 1)))
+				}
+				if count == 0 {
+					count = 1
+				}
+				storeLootTemplateRow(loot, &slot, &qidx, uint32(itemID), count, uint32(displayID), uint32(quality), uint32(startQuest), uint32(customFlags), questRequired != 0)
+			}
+			loot.NormalSlotCount = slot
+		}
+	}
+	// Player.cpp:8781-8783: gold = 10 * (urand(0, creatureLvl/2) +
+	// urand(0, playerLvl/2)) * RATE_DROP_MONEY; the rate has no Go model.
+	loot.Money = uint32(10 * (rand.Intn(int(creatureLevel)/2+1) + rand.Intn(int(s.player.Level)/2+1)))
+	loot.addViewer(s)
+	s.activeLoot = loot
+	s.interruptCurrentCast()
+	return s.finishLootOpen(ctx, loot)
+}
+
 func (s *Server) clearLootState(mapID, instanceID uint32, guids ...uint64) {
 	if s == nil {
 		return
@@ -1235,11 +1406,19 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 	// creature must still be dead and lootable and within INTERACTION_DISTANCE,
 	// else LOOT_ERROR_DIDNT_KILL / LOOT_ERROR_TOO_FAR. Gameobject loot keeps the
 	// existing behavior (no owner model for the owned-bobber arm).
+	// shareMoney starts true and the Unit/Vehicle arm below clears it for
+	// pickpocket money (LootHandler.cpp:150-158).
+	shareMoney := true
 	if high := uint16(s.activeLoot.TargetGUID >> 48); high != 0xF110 {
 		target, ok := s.getCombatTarget(ctx, s.activeLoot.TargetGUID)
 		guid := uint32(s.activeLoot.TargetGUID & 0x00FFFFFF)
 		entry := uint32((s.activeLoot.TargetGUID >> 24) & 0x00FFFFFF)
-		lootAllowed := ok && target.Health == 0 && s.server.creatureLootAllowed(s.activeLoot.MapID, s.activeLoot.InstanceID, s.activeLoot.TargetGUID, creatureWorldGUID(guid, entry), s.playerGUID, s.groupID)
+		// LootHandler.cpp:150-158 (HandleLootMoneyOpcode) Unit/Vehicle arm:
+		// alive iff rogue pickpocketing (same gate as HandleAutostoreLootItem
+		// above); pickpocket money is never shared
+		// ("item, pickpocket and players can be looted only single player").
+		isRoguePickpocket := s.player.Class == 4 && s.activeLoot.LootType == lootTypePickpocketing
+		lootAllowed := ok && (target.Health != 0) == isRoguePickpocket && s.server.creatureLootAllowed(s.activeLoot.MapID, s.activeLoot.InstanceID, s.activeLoot.TargetGUID, creatureWorldGUID(guid, entry), s.playerGUID, s.groupID)
 		if !lootAllowed || !withinLootDistance(s, target) {
 			code := uint8(0)
 			if lootAllowed {
@@ -1247,10 +1426,14 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 			}
 			return s.sendLootError(s.activeLoot.TargetGUID, code) == nil
 		}
+		shareMoney = !isRoguePickpocket
 	}
 	copper := s.activeLoot.Money
 	s.activeLoot.Money = 0
 
+	// LootHandler.cpp:157 (HandleLootMoneyOpcode): shareMoney is false for
+	// item, pickpocket, and player-corpse loot — the split below only runs
+	// for shared money.
 	var nearMembers []*session
 	if s.groupID != 0 && s.server != nil {
 		allGroupSess := s.server.getGroupSessions(s.groupID)
@@ -1264,7 +1447,7 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 		}
 	}
 
-	if len(nearMembers) > 1 {
+	if len(nearMembers) > 1 && shareMoney {
 		copperPerPlayer := copper / uint32(len(nearMembers))
 		for _, m := range nearMembers {
 			m.player.Money += copperPerPlayer
@@ -1337,7 +1520,15 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 		}
 	} else {
 		target, validTarget := s.getCombatTarget(ctx, s.activeLoot.TargetGUID)
-		if !validTarget || target.Map != s.player.Map || target.InstanceID != s.player.InstanceID || target.Health != 0 || !withinLootDistance(s, target) {
+		// LootHandler.cpp:87-97 (HandleAutostoreLootItem) Unit/Vehicle arm:
+		// the creature must be alive iff the taker is a rogue lifting an
+		// already-open pickpocket window (loot_type == LOOT_PICKPOCKETING);
+		// every other loot take still requires the corpse. CLASS_ROGUE = 4
+		// (SharedDefines.h); the Go loot take previously rejected any
+		// living target outright, which would wrongly fail pickpocket
+		// takes.
+		isRoguePickpocket := s.player.Class == 4 && s.activeLoot.LootType == lootTypePickpocketing
+		if !validTarget || target.Map != s.player.Map || target.InstanceID != s.player.InstanceID || (target.Health != 0) != isRoguePickpocket || !withinLootDistance(s, target) {
 			return s.sendLootError(s.activeLoot.TargetGUID, 4) == nil
 		}
 		guid := uint32(s.activeLoot.TargetGUID & 0x00FFFFFF)

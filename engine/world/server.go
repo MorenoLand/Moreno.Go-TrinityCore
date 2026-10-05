@@ -145,40 +145,44 @@ type Server struct {
 	lootMu                    sync.Mutex
 	creatureLoot              map[lootObjectKey]*activeLootState
 	creatureLootOwners        map[lootObjectKey]lootOwnerState
-	vendorMu                  sync.Mutex
-	vendorStock               map[vendorStockKey]*vendorStockState
-	statsMu                   sync.RWMutex
-	creatureStatsCache        map[uint32]creatureStats
-	groupRolls                map[lootRollKey]*activeGroupRoll
-	spiritWaveMu              sync.Mutex
-	lastSpiritWave            time.Time
-	lastCorpseExpiry          time.Time
-	spiritReviveQueue         map[uint64]uint64            // playerGUID -> spiritGuideGUID
-	spiritResurrectPending    map[uint64]spiritWavePending // playerGUID -> wave visual pass (resurrect due 500ms later)
-	creatureTextMgr           *creatureTextMgr
-	wardenCheckMgr            *wardenCheckMgr
-	spellChainMu              sync.RWMutex
-	spellChainLoaded          bool
-	prevSpellInChain          map[uint32]uint32
-	nextSpellInChain          map[uint32]uint32
-	firstSpellInChain         map[uint32]uint32
-	spellCustomAttrMu         sync.RWMutex
-	spellCustomAttrLoaded     bool
-	spellCustomAttr           map[uint32]uint32
-	enchantProcAttrMu         sync.RWMutex
-	enchantProcAttrLoaded     bool
-	enchantProcAttrs          map[uint32]uint32
-	itemTemplateMu            sync.RWMutex
-	itemTemplates             map[uint32]itemTemplateClassInfo
-	itemStoreTemplateMu       sync.RWMutex
-	itemStoreTemplates        map[uint32]itemStoreTemplateInfo
-	terrainMu                 sync.Mutex
-	terrainTiles              map[uint64][]terrainSpawn
-	terrainTileKnown          map[uint64]bool
-	terrainModels             map[string]*terrainModel
-	weatherMu                 sync.Mutex
-	weather                   map[uint32]*zoneWeather
-	stopOnce                  sync.Once
+	// pickpocketLootRestore mirrors Creature::_pickpocketLootRestore
+	// (Creature.h): the game-time after which the creature instance's
+	// pickpocket loot may be generated again, keyed per loot object.
+	pickpocketLootRestore  map[lootObjectKey]int64
+	vendorMu               sync.Mutex
+	vendorStock            map[vendorStockKey]*vendorStockState
+	statsMu                sync.RWMutex
+	creatureStatsCache     map[uint32]creatureStats
+	groupRolls             map[lootRollKey]*activeGroupRoll
+	spiritWaveMu           sync.Mutex
+	lastSpiritWave         time.Time
+	lastCorpseExpiry       time.Time
+	spiritReviveQueue      map[uint64]uint64            // playerGUID -> spiritGuideGUID
+	spiritResurrectPending map[uint64]spiritWavePending // playerGUID -> wave visual pass (resurrect due 500ms later)
+	creatureTextMgr        *creatureTextMgr
+	wardenCheckMgr         *wardenCheckMgr
+	spellChainMu           sync.RWMutex
+	spellChainLoaded       bool
+	prevSpellInChain       map[uint32]uint32
+	nextSpellInChain       map[uint32]uint32
+	firstSpellInChain      map[uint32]uint32
+	spellCustomAttrMu      sync.RWMutex
+	spellCustomAttrLoaded  bool
+	spellCustomAttr        map[uint32]uint32
+	enchantProcAttrMu      sync.RWMutex
+	enchantProcAttrLoaded  bool
+	enchantProcAttrs       map[uint32]uint32
+	itemTemplateMu         sync.RWMutex
+	itemTemplates          map[uint32]itemTemplateClassInfo
+	itemStoreTemplateMu    sync.RWMutex
+	itemStoreTemplates     map[uint32]itemStoreTemplateInfo
+	terrainMu              sync.Mutex
+	terrainTiles           map[uint64][]terrainSpawn
+	terrainTileKnown       map[uint64]bool
+	terrainModels          map[string]*terrainModel
+	weatherMu              sync.Mutex
+	weather                map[uint32]*zoneWeather
+	stopOnce               sync.Once
 }
 
 type session struct {
@@ -488,7 +492,7 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 	if len(settings) != 0 {
 		c = settings[0]
 	}
-	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), playerLimit: c.PlayerLimit, hiddenGameObjects: make(map[uint64]struct{}), auctionGetAllThrottle: make(map[uint64]int64), dynamicGameObjects: make(map[uint64]*dynamicGameObjectState), dynamicSpellObjects: make(map[uint64]*dynamicSpellObjectState), wsgState: make(map[uint32]*wsgBattlegroundState), abState: make(map[uint32]*abBattlegroundState), eotsState: make(map[uint32]*eotsBattlegroundState), avState: make(map[uint32]*avBattlegroundState), saState: make(map[uint32]*saBattlegroundState), icState: make(map[uint32]*icBattlegroundState), activeTotems: make(map[uint64][4]*activeTotem), creatureAuras: make(map[creatureAuraKey]map[uint32]struct{}), activeCreatureAuras: make(map[creatureAuraKey]map[uint32]*activeAura), singleCastAuras: make(map[uint64][]singleCastEntry), channels: make(map[string]*worldChannel), groups: make(map[uint64]*groupState), instanceCreatureMotion: make(map[instanceAdmissionKey]map[uint64]*creatureMotion), creatureRespawns: make(map[uint32]creatureRespawn), transports: make(map[uint32]*continentTransport), creatureLoot: make(map[lootObjectKey]*activeLootState), creatureLootOwners: make(map[lootObjectKey]lootOwnerState), creatureStatsCache: make(map[uint32]creatureStats), groupRolls: make(map[lootRollKey]*activeGroupRoll), wardenCheckMgr: newWardenCheckMgr(), vehicleKits: make(map[uint64]*VehicleKit), vehicleSeatAddons: make(map[uint32]*VehicleSeatAddon), vehicleAccessories: make(map[uint32][]VehicleAccessory), terrainTiles: make(map[uint64][]terrainSpawn), terrainTileKnown: make(map[uint64]bool), terrainModels: make(map[string]*terrainModel), worldstates: make(map[uint32]uint64)}
+	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), playerLimit: c.PlayerLimit, hiddenGameObjects: make(map[uint64]struct{}), auctionGetAllThrottle: make(map[uint64]int64), dynamicGameObjects: make(map[uint64]*dynamicGameObjectState), dynamicSpellObjects: make(map[uint64]*dynamicSpellObjectState), wsgState: make(map[uint32]*wsgBattlegroundState), abState: make(map[uint32]*abBattlegroundState), eotsState: make(map[uint32]*eotsBattlegroundState), avState: make(map[uint32]*avBattlegroundState), saState: make(map[uint32]*saBattlegroundState), icState: make(map[uint32]*icBattlegroundState), activeTotems: make(map[uint64][4]*activeTotem), creatureAuras: make(map[creatureAuraKey]map[uint32]struct{}), activeCreatureAuras: make(map[creatureAuraKey]map[uint32]*activeAura), singleCastAuras: make(map[uint64][]singleCastEntry), channels: make(map[string]*worldChannel), groups: make(map[uint64]*groupState), instanceCreatureMotion: make(map[instanceAdmissionKey]map[uint64]*creatureMotion), creatureRespawns: make(map[uint32]creatureRespawn), transports: make(map[uint32]*continentTransport), creatureLoot: make(map[lootObjectKey]*activeLootState), creatureLootOwners: make(map[lootObjectKey]lootOwnerState), pickpocketLootRestore: make(map[lootObjectKey]int64), creatureStatsCache: make(map[uint32]creatureStats), groupRolls: make(map[lootRollKey]*activeGroupRoll), wardenCheckMgr: newWardenCheckMgr(), vehicleKits: make(map[uint64]*VehicleKit), vehicleSeatAddons: make(map[uint32]*VehicleSeatAddon), vehicleAccessories: make(map[uint32][]VehicleAccessory), terrainTiles: make(map[uint64][]terrainSpawn), terrainTileKnown: make(map[uint64]bool), terrainModels: make(map[string]*terrainModel), worldstates: make(map[uint32]uint64)}
 	server.ticketsEnabled.Store(true)
 	if c.IPLocationFile != "" {
 		locations, err := iplocation.Load(c.IPLocationFile)
