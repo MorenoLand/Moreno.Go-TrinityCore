@@ -47,6 +47,20 @@ const (
 	GuildEventOnBankEvent     = 11
 )
 
+// Eluna GroupEvents contract for RegisterGroupEvent. Numbering is the
+// TrinityCore LuaEngine numbering (LuaEngine/Hooks.h GroupEvents):
+// GROUP_EVENT_ON_CREATE (6) has no fire site in this fork —
+// Eluna::GroupHooks::OnCreate is never called from ScriptMgr or Group — so
+// it is documented but never fired by the engine.
+const (
+	GroupEventOnMemberAdd    = 1
+	GroupEventOnMemberInvite = 2
+	GroupEventOnMemberRemove = 3
+	GroupEventOnLeaderChange = 4
+	GroupEventOnDisband      = 5
+	GroupEventOnCreate       = 6
+)
+
 // Eluna ServerEvents contract for RegisterServerEvent. Numbering is the
 // TrinityCore LuaEngine numbering (LuaEngine/Hooks.h ServerEvents); only
 // the events the engine fires carry Go constants.
@@ -418,6 +432,13 @@ func (r *Runtime) TriggerGuildEvent(ctx context.Context, event int, args ...any)
 // args, 1), so nresults is 1).
 func (r *Runtime) TriggerGuildEventUpdated(ctx context.Context, event int, args []any, update func(returns []any)) ([][]any, error) {
 	return r.triggerNUpdated(ctx, "guild", event, 1, args, update)
+}
+
+// TriggerGroupEvent fires hooks registered with RegisterGroupEvent(event,
+// fn). C++ Eluna group hooks pass (event, group, ...) (LuaEngine/
+// GroupHooks.cpp), so the event number is prepended like TriggerGuildEvent.
+func (r *Runtime) TriggerGroupEvent(ctx context.Context, event int, args ...any) ([]any, error) {
+	return r.Trigger(ctx, "group", event, append([]any{event}, args...)...)
 }
 
 func (r *Runtime) TriggerPacketEvent(ctx context.Context, opcode, event int, args ...any) ([]any, error) {

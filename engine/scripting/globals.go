@@ -169,6 +169,26 @@ func NewItemObject(guid uint64, entry, count uint32) *Object {
 	return &Object{Type: "Item", Fields: map[string]any{"GUID": guid, "Entry": entry, "Count": count}, Methods: methods}
 }
 
+// NewGroupObject builds the Lua Group object surface: the GUID, LeaderGUID
+// and member GUID list plus the GetId/GetLeaderGUID/GetMembers/
+// GetMembersCount methods. It is the Go model of Eluna's Push(group)
+// (LuaEngine/GroupHooks.cpp via ElunaTemplate), shared by the world
+// engine's group event hooks. The rest of Eluna's Group method surface
+// (IsLeader/SetLeader/RemoveMember/Disband/SendPacket/ConvertToRaid/...,
+// GroupMethods.h) has no live-group model behind the hooks and stays
+// unbridged. groupGUID is the protocol group GUID (0x1F50 high bits, as in
+// world group.go's groupGUID); leaderGUID/memberGUIDs are player GUIDs.
+func NewGroupObject(groupGUID, leaderGUID uint64, memberGUIDs []uint64) *Object {
+	members := append([]uint64(nil), memberGUIDs...)
+	methods := map[string]ObjectMethod{
+		"GetId":           func(context.Context, []any) ([]any, error) { return []any{uint32(groupGUID & 0xFFFFFFFF)}, nil },
+		"GetLeaderGUID":   func(context.Context, []any) ([]any, error) { return []any{leaderGUID}, nil },
+		"GetMembers":      func(context.Context, []any) ([]any, error) { return []any{append([]uint64(nil), members...)}, nil },
+		"GetMembersCount": func(context.Context, []any) ([]any, error) { return []any{uint32(len(members))}, nil },
+	}
+	return &Object{Type: "Group", Fields: map[string]any{"ID": uint32(groupGUID & 0xFFFFFFFF), "GUID": groupGUID, "LeaderGUID": leaderGUID, "Members": members}, Methods: methods}
+}
+
 func (r *Runtime) pushGuildLookup(state *lua.State, statement string, arg any) int {
 	if r.config.CharacterDB == nil {
 		state.PushNil()

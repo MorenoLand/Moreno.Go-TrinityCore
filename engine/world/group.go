@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -439,6 +440,7 @@ func (s *Server) removeSessionFromGroup(member *session) {
 		return
 	}
 	s.groupsMu.Lock()
+	groupObj := groupLuaObject(g)
 	index := -1
 	for i, value := range g.Members {
 		if value.GUID == member.playerGUID {
@@ -452,15 +454,32 @@ func (s *Server) removeSessionFromGroup(member *session) {
 	member.groupID = 0
 	member.pendingGroupLeader = 0
 	s.onPlayerLeaveGroupRolls(member.playerGUID, g.ID)
-	if len(g.Members) == 0 {
+	disbanded := len(g.Members) == 0
+	if disbanded {
 		delete(s.groups, g.ID)
 		s.groupsMu.Unlock()
+		// C++ Group::RemoveMember fires OnGroupRemoveMember (Group.cpp:569)
+		// and disbands a 1-or-fewer-member group, which fires OnGroupDisband.
+		s.triggerGroupEvent(scripting.GroupEventOnMemberRemove, groupObj, member.playerGUID, uint8(groupRemoveMethodDefault))
+		s.triggerGroupEvent(scripting.GroupEventOnDisband, groupObj)
 		return
 	}
+	// C++ Group::RemoveMember picks a new leader via ChangeLeader when the
+	// removed member was the leader, which fires OnGroupChangeLeader
+	// (Group.cpp:765).
+	oldLeader := g.LeaderGUID
+	var newLeader uint64
+	leaderChanged := false
 	if g.LeaderGUID == member.playerGUID {
-		g.LeaderGUID = g.Members[0].GUID
+		newLeader = g.Members[0].GUID
+		g.LeaderGUID = newLeader
+		leaderChanged = true
 	}
 	s.groupsMu.Unlock()
+	s.triggerGroupEvent(scripting.GroupEventOnMemberRemove, groupObj, member.playerGUID, uint8(groupRemoveMethodDefault))
+	if leaderChanged {
+		s.triggerGroupEvent(scripting.GroupEventOnLeaderChange, groupObj, newLeader, oldLeader)
+	}
 	s.broadcastGroupList(g)
 }
 
@@ -585,6 +604,21 @@ func (s *session) handleGroupInvite(_ context.Context, payload []byte) bool {
 	// Set the pending invite on the target player
 	invitedSess.pendingGroupLeader = s.playerGUID
 
+	// Eluna GROUP_EVENT_ON_MEMBER_INVITE (2): C++ Group::AddInvite fires
+	// OnGroupInviteMember (Group.cpp:351). When the inviter has no group yet,
+	// C++ builds an ephemeral Group and fires once for the leader (via
+	// AddLeaderInvite) and once for the invitee; with an existing group it
+	// fires only for the invitee.
+	if s.groupID != 0 {
+		if g := s.server.findGroupByID(s.groupID); g != nil {
+			s.server.triggerGroupEvent(scripting.GroupEventOnMemberInvite, groupLuaObject(g), invitedSess.playerGUID)
+		}
+	} else {
+		ephemeral := scripting.NewGroupObject(groupGUID(0), s.playerGUID, []uint64{s.playerGUID})
+		s.server.triggerGroupEvent(scripting.GroupEventOnMemberInvite, ephemeral, s.playerGUID)
+		s.server.triggerGroupEvent(scripting.GroupEventOnMemberInvite, ephemeral, invitedSess.playerGUID)
+	}
+
 	// Send SMSG_GROUP_INVITE to invited player
 	_ = invitedSess.write(uint16(protocol.OpcodeSMSG_GROUP_INVITE), buildGroupInvite(1, s.player.Name), true)
 	// Tell inviter that invite was sent OK
@@ -646,9 +680,15 @@ func (s *session) handleGroupAccept(_ context.Context, _ []byte) bool {
 
 	g.Members = append(g.Members, groupMember{GUID: s.playerGUID, Name: s.player.Name})
 	s.groupID = g.ID
+	groupObj := groupLuaObject(g)
 	srv.groupsMu.Unlock()
 
 	srv.broadcastGroupList(g)
+	// Eluna GROUP_EVENT_ON_MEMBER_ADD (1): C++ Group::AddMember fires
+	// OnGroupAddMember after SendUpdate (Group.cpp:477). The leader joined via
+	// AddLeaderInvite at invite time and never passes through AddMember, so
+	// only the accepting member fires here.
+	srv.triggerGroupEvent(scripting.GroupEventOnMemberAdd, groupObj, s.playerGUID)
 	return true
 }
 
@@ -705,7 +745,7 @@ func (s *session) handleGroupUninvite(_ context.Context, payload []byte) bool {
 		target.pendingGroupLeader = 0
 		return true
 	}
-	return s.removeFromGroup(g, target)
+	return s.removeFromGroup(g, target, groupRemoveMethodKick)
 }
 
 // handleGroupUninviteGUID processes CMSG_GROUP_UNINVITE_GUID (0x076).
@@ -737,13 +777,22 @@ func (s *session) handleGroupUninviteGUID(_ context.Context, payload []byte) boo
 		target.pendingGroupLeader = 0
 		return true
 	}
-	return s.removeFromGroup(g, target)
+	return s.removeFromGroup(g, target, groupRemoveMethodKick)
 }
 
-// removeFromGroup kicks target from the group, dissolving if group goes to 1 member.
-func (s *session) removeFromGroup(g *groupState, target *session) bool {
+// removeFromGroup removes target from the group, dissolving if the group
+// goes to 1 member. method is the Eluna-visible RemoveMethod for
+// GROUP_EVENT_ON_MEMBER_REMOVE (SharedDefines.h:3640-3643):
+// GROUP_REMOVEMETHOD_KICK from the uninvite handlers (GroupHandler.cpp:323
+// and :368 via Player::RemoveFromGroup), GROUP_REMOVEMETHOD_DEFAULT from the
+// GM .group remove command (cs_group.cpp:284). C++ Group::RemoveMember fires
+// OnGroupRemoveMember before the removal (Group.cpp:569) and OnGroupDisband
+// when its tail disbands the group; the Lua group object is snapshotted at
+// the C++ fire point and the hooks fire after the lock is released.
+func (s *session) removeFromGroup(g *groupState, target *session, method uint8) bool {
 	srv := s.server
 	srv.groupsMu.Lock()
+	groupObj := groupLuaObject(g)
 	// Remove the target member
 	for i, m := range g.Members {
 		if m.GUID == target.playerGUID {
@@ -758,7 +807,8 @@ func (s *session) removeFromGroup(g *groupState, target *session) bool {
 	// Send SMSG_GROUP_UNINVITE to the kicked player
 	_ = target.write(uint16(protocol.OpcodeSMSG_GROUP_UNINVITE), nil, true)
 
-	if len(g.Members) <= 1 {
+	disbanded := len(g.Members) <= 1
+	if disbanded {
 		// Disband the group
 		delete(srv.groups, g.ID)
 		if len(g.Members) == 1 {
@@ -771,10 +821,14 @@ func (s *session) removeFromGroup(g *groupState, target *session) bool {
 				_ = last.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), emptyList, true)
 			}
 		}
-		srv.groupsMu.Unlock()
-		return true
 	}
 	srv.groupsMu.Unlock()
+
+	srv.triggerGroupEvent(scripting.GroupEventOnMemberRemove, groupObj, target.playerGUID, method)
+	if disbanded {
+		srv.triggerGroupEvent(scripting.GroupEventOnDisband, groupObj)
+		return true
+	}
 	srv.broadcastGroupList(g)
 	return true
 }
@@ -785,13 +839,16 @@ func (s *session) removeFromGroup(g *groupState, target *session) bool {
 // CHAR_DEL_GROUP_MEMBER is the C++ _removeMember DB persist.
 func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, guid uint64) {
 	if sess := s.findSessionByGUID(guid); sess != nil {
-		sess.removeFromGroup(g, sess)
+		// GM .group remove: cs_group.cpp:284 calls RemoveMember with the
+		// default method (GROUP_REMOVEMETHOD_DEFAULT).
+		sess.removeFromGroup(g, sess, groupRemoveMethodDefault)
 		if s.CharactersStore != nil && s.CharactersStore.DB != nil {
 			_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER"), guid)
 		}
 		return
 	}
 	s.groupsMu.Lock()
+	groupObj := groupLuaObject(g)
 	idx := -1
 	for i, m := range g.Members {
 		if m.GUID == guid {
@@ -804,13 +861,19 @@ func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, gui
 		return
 	}
 	g.Members = append(g.Members[:idx], g.Members[idx+1:]...)
-	if len(g.Members) <= 1 {
+	disbanded := len(g.Members) <= 1
+	if disbanded {
 		// Dissolve like Group::RemoveMember does for a 1-member group.
 		delete(s.groups, g.ID)
 	}
 	s.groupsMu.Unlock()
 	if s.CharactersStore != nil && s.CharactersStore.DB != nil {
 		_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER"), guid)
+	}
+	s.triggerGroupEvent(scripting.GroupEventOnMemberRemove, groupObj, guid, uint8(groupRemoveMethodDefault))
+	if disbanded {
+		s.triggerGroupEvent(scripting.GroupEventOnDisband, groupObj)
+		return
 	}
 	s.broadcastGroupList(g)
 }
@@ -859,6 +922,8 @@ func (s *Server) setGroupLeader(g *groupState, guid uint64) bool {
 		s.groupsMu.Unlock()
 		return false
 	}
+	groupObj := groupLuaObject(g)
+	oldLeader := g.LeaderGUID
 	g.LeaderGUID = guid
 
 	// Move new leader to front of members list
@@ -869,6 +934,11 @@ func (s *Server) setGroupLeader(g *groupState, guid uint64) bool {
 		}
 	}
 	s.groupsMu.Unlock()
+
+	// Eluna GROUP_EVENT_ON_LEADER_CHANGE (4): C++ Group::ChangeLeader fires
+	// OnGroupChangeLeader(newLeaderGuid, m_leaderGuid) after the member-slot
+	// and offline checks (Group.cpp:765).
+	s.triggerGroupEvent(scripting.GroupEventOnLeaderChange, groupObj, guid, oldLeader)
 
 	// SMSG_GROUP_SET_LEADER: cstring name
 	name := newLeader.player.Name
@@ -892,12 +962,16 @@ func (s *Server) setGroupLeader(g *groupState, guid uint64) bool {
 // HandleGroupDisbandCommand (cs_group.cpp:246).
 func (s *Server) disbandGroup(ctx context.Context, g *groupState) {
 	s.groupsMu.Lock()
+	groupObj := groupLuaObject(g)
 	members := make([]uint64, len(g.Members))
 	for i, m := range g.Members {
 		members[i] = m.GUID
 	}
 	delete(s.groups, g.ID)
 	s.groupsMu.Unlock()
+	// Eluna GROUP_EVENT_ON_DISBAND (5): C++ Group::Disband fires
+	// OnGroupDisband first, before the per-member detach (Group.cpp:859).
+	s.triggerGroupEvent(scripting.GroupEventOnDisband, groupObj)
 	for _, guid := range members {
 		sess := s.findSessionByGUID(guid)
 		if sess == nil {
@@ -951,6 +1025,7 @@ func (s *session) handleGroupDisband(_ context.Context, _ []byte) bool {
 
 	if g.LeaderGUID == s.playerGUID {
 		// Leader disbands entire group
+		groupObj := groupLuaObject(g)
 		members := make([]uint64, len(g.Members))
 		for i, m := range g.Members {
 			members[i] = m.GUID
@@ -967,8 +1042,13 @@ func (s *session) handleGroupDisband(_ context.Context, _ []byte) bool {
 			empty := buildGroupList(srv, &groupState{ID: g.ID, LeaderGUID: guid}, guid, 0)
 			_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), empty, true)
 		}
+		// Eluna GROUP_EVENT_ON_DISBAND (5): C++ Group::Disband fires
+		// OnGroupDisband first (Group.cpp:859).
+		srv.triggerGroupEvent(scripting.GroupEventOnDisband, groupObj)
 	} else {
-		// Non-leader leaves
+		// Non-leader leaves: C++ HandleGroupDisbandOpcode calls
+		// Player::RemoveFromGroup(GROUP_REMOVEMETHOD_LEAVE) (GroupHandler.cpp:424).
+		groupObj := groupLuaObject(g)
 		for i, m := range g.Members {
 			if m.GUID == s.playerGUID {
 				g.Members = append(g.Members[:i], g.Members[i+1:]...)
@@ -977,8 +1057,9 @@ func (s *session) handleGroupDisband(_ context.Context, _ []byte) bool {
 		}
 		s.groupID = 0
 		srv.onPlayerLeaveGroupRolls(s.playerGUID, g.ID)
-		if len(g.Members) <= 1 {
-			var lastGUID uint64
+		disbanded := len(g.Members) <= 1
+		var lastGUID uint64
+		if disbanded {
 			if len(g.Members) == 1 {
 				lastGUID = g.Members[0].GUID
 			}
@@ -995,6 +1076,13 @@ func (s *session) handleGroupDisband(_ context.Context, _ []byte) bool {
 		} else {
 			srv.groupsMu.Unlock()
 			srv.broadcastGroupList(g)
+		}
+		// C++ Group::RemoveMember fires OnGroupRemoveMember (Group.cpp:569);
+		// its tail disbands the group (firing OnGroupDisband) when the
+		// member count drops to 1 or fewer.
+		srv.triggerGroupEvent(scripting.GroupEventOnMemberRemove, groupObj, s.playerGUID, uint8(groupRemoveMethodLeave))
+		if disbanded {
+			srv.triggerGroupEvent(scripting.GroupEventOnDisband, groupObj)
 		}
 	}
 
