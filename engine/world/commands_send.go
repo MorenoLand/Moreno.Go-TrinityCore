@@ -165,6 +165,10 @@ func (s *session) handleSendMailCmd(ctx context.Context, args []string) {
 	if !s.sendMailInsert(ctx, guid, subject, text, 0, nil) {
 		return
 	}
+	// cs_send.cpp HandleSendMailCommand: MailReceiver(target, ...) with an
+	// online target fires AddNewMailDeliverTime(deliver_time) (immediate here),
+	// i.e. SendNewMail()/++unReadMails — the online receiver gets the icon.
+	s.sendMailNotify(guid)
 	s.sendSysMessage(fmt.Sprintf("Mail sent to %s.", targetName)) // LANG_MAIL_SENT 169
 }
 
@@ -189,6 +193,9 @@ func (s *session) handleSendMoney(ctx context.Context, args []string) {
 	if !s.sendMailInsert(ctx, guid, subject, text, uint32(money), nil) {
 		return
 	}
+	// Same AddNewMailDeliverTime notify as HandleSendMailCommand: the GM
+	// money mail is delivered immediately (cs_send.cpp HandleSendMoneyCommand).
+	s.sendMailNotify(guid)
 	s.sendSysMessage(fmt.Sprintf("Mail sent to %s.", targetName)) // LANG_MAIL_SENT 169
 }
 
@@ -266,6 +273,9 @@ func (s *session) handleSendItems(ctx context.Context, args []string) {
 	if !s.sendMailInsert(ctx, guid, subject, text, 0, itemGUIDs) {
 		return
 	}
+	// Same AddNewMailDeliverTime notify: the GM item mail is delivered
+	// immediately (cs_send.cpp HandleSendItemsCommand).
+	s.sendMailNotify(guid)
 	s.sendSysMessage(fmt.Sprintf("Mail sent to %s.", targetName)) // LANG_MAIL_SENT 169
 }
 
