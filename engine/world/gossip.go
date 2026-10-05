@@ -65,6 +65,12 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 		s.debug("gossip hello rejected: npc lacks gossip flag", "account", s.accountName, "guid", guid)
 		return true
 	}
+	// WorldSession::HandleGossipHelloOpcode (NPCHandler.cpp:164):
+	// GetPlayer()->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TALK)
+	// runs right after the gossip-flag gate, before the spirit-guide arm.
+	// (The faction SetVisible call above it has no Go reputation-visible
+	// setter — documented open gap.)
+	s.removeAurasWithInterruptFlags(auraInterruptFlagTalk)
 	if s.isDeadOrGhost() && isBattlegroundMap(s.player.Map) && npcFlags&npcFlagSpiritGuide != 0 {
 		// WorldSession::HandleGossipHelloOpcode (NPCHandler.cpp:171-185): a
 		// spirit guide queues the ghost (== AddPlayerToResurrectQueue) and
@@ -212,7 +218,11 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 	s.gossip = nil
 	s.gossipClosed = false
 	args := []any{uint32(2), s.luaPlayer(), creature, item.Sender, item.Action}
-	if item.Coded {
+	// HandleGossipSelectOptionOpcode (MiscHandler.cpp:175) dispatches on
+	// !code.empty() — Eluna::OnGossipSelectCode (5 args) vs OnGossipSelect
+	// (4 args) — not on the coded flag: a coded option answered with an
+	// empty code string takes the non-code path.
+	if code != "" {
 		args = append(args, code)
 	}
 	if s.server.Features != nil && s.server.Features.Scripts != nil {

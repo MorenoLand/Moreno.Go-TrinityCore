@@ -108,16 +108,16 @@ func (s *session) fireItemGossipHelloHook(ctx context.Context, rawItemGUID uint6
 }
 
 // fireItemGossipSelectHook dispatches GOSSIP_EVENT_ON_SELECT (2) for the
-// item_gossip bindings as (event, player, item, sender, action[, code]),
+// item_gossip bindings as (event, player, item, sender, action, code),
 // mirroring Eluna::HandleGossipSelectOption's item arm (GossipHooks.cpp:90)
 // via ScriptMgr::OnGossipSelect[Code] (ScriptMgr.cpp:1655-1677), fired from
 // the item-GUID arm of HandleGossipSelectOptionOpcode (MiscHandler.cpp).
+// C++ always pushes the 5th argument — nil when the code is empty — so Go
+// always appends it too (pushValue maps Go nil to Lua nil), including for
+// non-coded options which C++ routes through the same single fire site.
 // C++ fires it with CallAllFunctions (no cancel semantics), so the return
 // is discarded. The pending menu is cleared before firing, gated on
-// registered bindings exactly like the hello arm. code is appended only
-// when the menu option is coded — C++ pushes nil for an empty code, but Go
-// passes the decoded string, the same convention as the creature gossip
-// select arm in handleGossipSelectOption.
+// registered bindings exactly like the hello arm.
 func (s *session) fireItemGossipSelectHook(ctx context.Context, entry uint32, menuItem gossipMenuItem, code string, item *scripting.Object) {
 	if s == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil || item == nil {
 		return
@@ -126,10 +126,11 @@ func (s *session) fireItemGossipSelectHook(ctx context.Context, entry uint32, me
 		return
 	}
 	s.gossip = nil
-	args := []any{s.luaPlayer(), item, menuItem.Sender, menuItem.Action}
-	if menuItem.Coded {
-		args = append(args, code)
+	var codeArg any = code
+	if code == "" {
+		codeArg = nil
 	}
+	args := []any{s.luaPlayer(), item, menuItem.Sender, menuItem.Action, codeArg}
 	s.fireItemGossipEvent(ctx, entry, scripting.GossipEventOnSelect, args...)
 }
 

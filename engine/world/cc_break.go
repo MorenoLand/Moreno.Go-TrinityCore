@@ -10,10 +10,10 @@ const (
 	auraInterruptFlagJump           uint32 = 0x00000020 // removed by jumping
 	auraInterruptFlagNotMounted     uint32 = 0x00000040 // removed by dismounting
 	auraInterruptFlagNotSeated      uint32 = 0x00040000 // removed by standing up (AURA_INTERRUPT_FLAG_NOT_SEATED, SpellDefines.h:65)
-	auraInterruptFlagChangeMap      uint32 = 0x00000100 // removed by changing map
-	auraInterruptFlagEnterCombat    uint32 = 0x00000400 // removed on entering combat
+	auraInterruptFlagTalk           uint32 = 0x00000400 // removed by talking to an npc (AURA_INTERRUPT_FLAG_TALK, SpellDefines.h:57)
+	auraInterruptFlagChangeMap      uint32 = 0x00080000 // removed by changing map (AURA_INTERRUPT_FLAG_CHANGE_MAP, SpellDefines.h:66)
 	auraInterruptFlagEnterPvPCombat uint32 = 0x00800000 // removed by entering pvp combat (AURA_INTERRUPT_FLAG_ENTER_PVP_COMBAT, SpellDefines.h:70)
-	auraInterruptFlagDirectDamage   uint32 = 0x00001000 // removed only by direct damage
+	auraInterruptFlagDirectDamage   uint32 = 0x01000000 // removed only by direct damage (AURA_INTERRUPT_FLAG_DIRECT_DAMAGE, SpellDefines.h:71)
 	auraInterruptFlagLanding        uint32 = 0x02000000 // removed on landing
 	auraInterruptFlagSpellAttack    uint32 = 0x00002000 // AURA_INTERRUPT_FLAG_SPELL_ATTACK (SpellDefines.h:60)
 	auraInterruptFlagMount          uint32 = 0x00020000 // removed by mounting (AURA_INTERRUPT_FLAG_MOUNT, SpellDefines.h:64)
