@@ -8,13 +8,18 @@ import (
 
 // mmaps command port: mmaps_commandscript (cs_mmaps.cpp), the "mmap" root
 // with 5 arms in C++ table order (loadedtiles, loc, path, stats, testarea).
-// TWENTY-SEVENTH of 39 Commands groups (cs_script_loader.cpp decl 45 /
+// TWENTY-SEVENTH of 40 Commands groups (cs_script_loader.cpp decl 45 /
 // call 90; call order re-verified this run: misc(89) -> mmaps(90) ->
-// modify(91)). Trinity checks permission only on the invoker leaf node
-// (ChatCommand.cpp:487), so each arm gates exactly its own C++ permission
-// (RBAC.h:404-409); the root permission 536 covers the bare ".mmap".
+// modify(91)). The "mmap" root is a pure container in C++: the deprecated
+// 6-arg ChatCommandBuilder overload (ChatCommand.h:260-263) drops the
+// RBAC_PERM_COMMAND_MMAP 536 permission and the console flag, keeping only
+// the sub-table, so the root permission is dead and bare ".mmap" prints
+// the permission-filtered help listing with no gate; the Go tree follows
+// the audited gobject container-root convention and prints the syntax
+// line. Trinity checks permission only on the invoker leaf node, so each
+// arm gates exactly its own C++ permission (RBAC.h:405-409).
 //
-// Of the 5 arms, 2 are native or partially native and 3 are
+// Of the 5 arms, 3 are native or partially native and 2 are
 // documented-blocked:
 //
 //   - `loc` is partially native: the grid tile location math (cs_mmaps.cpp:
@@ -23,18 +28,19 @@ import (
 //     the arm ends with the C++-exact "NavMesh not loaded for current map."
 //     report, which is the true state of the Go tree (no navmesh is ever
 //     loaded).
-//   - `stats` is partially native: "mmap stats:" and the "global mmap
-//     pathfinding is %sabled" line are real (DisableMgr::IsPathfindingEnabled
-//     = CONFIG_ENABLE_MMAPS && no DISABLE_TYPE_MMAP disables row; for MMAP
+//   - `stats` is partially native: "mmap stats:", the "global mmap
+//     pathfinding is %sabled" line (DisableMgr::IsPathfindingEnabled =
+//     CONFIG_ENABLE_MMAPS && no DISABLE_TYPE_MMAP disables row; for MMAP
 //     disables the entry's mere presence disables pathfinding,
-//     MMAP_DISABLE_PATHFINDING = 0x0, DisableMgr.cpp:404). The
-//     MMapManager::getLoadedMapsCount/getLoadedTilesCount line and the
-//     per-tile dtNavMesh stats have no Go bridge, so the arm ends with the
-//     C++-exact "NavMesh not loaded for current map." report.
+//     DisableMgr.cpp:403-404), and the " %u maps loaded with %u tiles
+//     overall" line (the Go MMapManager loads nothing, so both counts are
+//     exactly 0) are real. The per-tile dtNavMesh stats have no Go bridge,
+//     so the arm ends with the C++-exact "NavMesh not loaded for current
+//     map." report.
 //   - `path` has no Go bridge: PathGenerator/dtNavMesh are unbuilt. The C++
-//     handler prints "mmap path:" then reports the navmesh as missing
-//     (cs_mmaps.cpp:100) before touching target selection, so the Go arm
-//     emits exactly those two lines.
+//     handler gates on the navmesh (cs_mmaps.cpp:97-101) before printing
+//     "mmap path:" (:103), so with no navmesh loaded the output is exactly
+//     the missing report.
 //   - `loadedtiles` has no Go bridge: dtNavMesh is unbuilt. The C++ handler
 //     (cs_mmaps.cpp:207) reports the navmesh as missing before printing
 //     anything, so the Go arm emits exactly that line.
@@ -48,10 +54,10 @@ import (
 func (s *session) handleCmdMMap(ctx context.Context, args []string) {
 	const syntax = "Syntax: .mmap loadedtiles|loc|path|stats|testarea"
 	if len(args) == 0 {
-		// Bare ".mmap" matches the root node, whose own permission is 536.
-		if s.miscDeny(ctx, permissionCommandMMap) {
-			return
-		}
+		// Bare ".mmap" matches the container root node, which carries no
+		// permission in C++ (the 536 perm is dropped by the deprecated
+		// ChatCommandBuilder overload); print the syntax line with no
+		// gate, per the audited gobject container-root convention.
 		s.sendSysMessage(syntax)
 		return
 	}
@@ -115,9 +121,10 @@ func (s *session) handleMmapPathCommand(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandMMapPath) {
 		return
 	}
-	s.sendSysMessage("mmap path:")
-	// The C++ handler reports the missing navmesh (cs_mmaps.cpp:100) before
-	// the target-selection check, so that check is unreachable here.
+	// The C++ handler gates on the navmesh (cs_mmaps.cpp:97-101) before
+	// printing "mmap path:" (:103), so with no navmesh loaded the output
+	// is exactly the missing report; the target-selection check is
+	// unreachable here.
 	s.sendSysMessage("NavMesh not loaded for current map.")
 }
 
@@ -139,8 +146,8 @@ func (s *session) mmapPathfindingEnabled(ctx context.Context, mapID uint32) bool
 }
 
 // handleMmapStatsCommand mirrors HandleMmapStatsCommand (cs_mmaps.cpp:
-// 231-278, RBAC 540): the header and pathfinding lines are native; the
-// manager counts and per-tile navmesh stats have no Go bridge.
+// 231-278, RBAC 540): the header, pathfinding, and manager-counts lines
+// are native; the per-tile navmesh stats have no Go bridge.
 func (s *session) handleMmapStatsCommand(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandMMapStats) {
 		return
@@ -151,10 +158,14 @@ func (s *session) handleMmapStatsCommand(ctx context.Context) {
 		enabled = "en"
 	}
 	s.sendSysMessage(fmt.Sprintf("  global mmap pathfinding is %sabled", enabled))
-	// MMapManager::getLoadedMapsCount/getLoadedTilesCount and the per-tile
-	// dtNavMesh stats (cs_mmaps.cpp:240-273) have no Go bridge; report the
-	// navmesh as missing exactly like the C++ handler does (cs_mmaps.cpp:
-	// 244).
+	// MMapManager::getLoadedMapsCount/getLoadedTilesCount
+	// (cs_mmaps.cpp:240) have no Go bridge, but the Go manager loads
+	// nothing, so both counts are exactly 0 == the C++ output on an
+	// empty manager.
+	s.sendSysMessage(" 0 maps loaded with 0 tiles overall")
+	// The per-tile dtNavMesh stats (cs_mmaps.cpp:247-273) have no Go
+	// bridge; report the navmesh as missing exactly like the C++ handler
+	// does (cs_mmaps.cpp:244).
 	s.sendSysMessage("NavMesh not loaded for current map.")
 }
 
