@@ -116,11 +116,14 @@
 -- join the unmodeled-achievement queue.
 -- spell_overload_circuit (62326) / spell_tar_blaze — AuraScript
 -- bridges absent; both join the no-AuraScript-bridge queue.
--- spell_load_into_catapult / spell_auto_repair (EMOTE_REPAIR
--- TextEmote leg rides the spell script) / spell_systems_shutdown
--- / spell_pursue (FlameLeviathanPursuedTargetSelector) /
+-- spell_load_into_catapult / spell_systems_shutdown — both are
+-- SpellScriptLoader classes whose innards are AuraScript
+-- (GetAuraScript() overrides) — no AuraScript bridge; both join
+-- the no-AuraScript-bridge queue.
+-- spell_auto_repair (EMOTE_REPAIR TextEmote leg rides the spell
+-- script) / spell_pursue (FlameLeviathanPursuedTargetSelector) /
 -- spell_vehicle_throw_passenger — no SpellScript bridge; all
--- five join the no-SpellScript-bridge queue.
+-- three join the no-SpellScript-bridge queue.
 
 local ENTRY_FLAME_LEVIATHAN = 33113
 

@@ -5023,10 +5023,12 @@ func init() {
 	// nine join the unmodeled-achievement queue);
 	// spell_overload_circuit / spell_tar_blaze — no AuraScript
 	// bridge; both join the no-AuraScript-bridge queue;
-	// spell_load_into_catapult / spell_auto_repair /
-	// spell_systems_shutdown / spell_pursue /
+	// spell_load_into_catapult / spell_systems_shutdown — both are
+	// SpellScriptLoader classes with GetAuraScript() innards — no
+	// AuraScript bridge; both join the no-AuraScript-bridge queue;
+	// spell_auto_repair / spell_pursue /
 	// spell_vehicle_throw_passenger — no SpellScript bridge;
-	// all five join the no-SpellScript-bridge queue.
+	// all three join the no-SpellScript-bridge queue.
 	RegisterLuaBoss("boss_flame_leviathan", 33113)
 
 	// Ignis the Furnace Master (33118), Ulduar —
