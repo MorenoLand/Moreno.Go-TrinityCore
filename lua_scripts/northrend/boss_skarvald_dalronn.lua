@@ -23,9 +23,10 @@
 -- structurally (only non-ghost entries run this lua).
 -- Sole-source verified: whole-server-tree grep for both script names
 -- hits boss_skarvald_dalronn.cpp only (+ the loader decl/call lines for
--- AddSC_boss_skarvald_dalronn); this clone carries no sql/ tree, so
--- ScriptName bindings are DB-side by construction. No skarvald lua
--- existed.
+-- AddSC_boss_skarvald_dalronn); this clone carries an (empty) sql/ tree
+-- with zero skarvald hits, so ScriptName bindings are DB-side by
+-- construction. The lua was ported Oct 2 10:00 in 980a824 and re-audited
+-- this run (the keleseth/yogg/thorim audited-artifact precedent).
 -- Eluna creature events: 1 OnEnterCombat, 3 OnKill.
 -- Ported arms (C++-exact for all modeled arms):
 -- Skarvald JustEngagedWith — Talk(SAY_AGGRO 0) (event 1); the Talk fires
@@ -35,7 +36,9 @@
 -- — the auriaya engage-port precedent).
 -- KilledUnit — Talk(SAY_KILL 3) player-gated (event 3, both bosses; the
 -- razuvious player-gated variant precedent; the !IsInGhostForm gate is
--- structural).
+-- structural; the lua victim nil-guard follows the hodir port
+-- convention — Eluna event 3 always carries a victim, C++-exactness
+-- unaffected).
 -- DOCUMENTED-ONLY (in this header; no registrations beyond entries
 -- 24200 / 24201):
 -- Dalronn JustEngagedWith — Talk(SAY_AGGRO) rides EVENT_DELAYED_AGGRO_SAY
@@ -78,13 +81,13 @@ end
 -- who->GetTypeId() == TYPEID_PLAYER) Talk(SAY_KILL) — ghost gate
 -- structural — the razuvious player-gated variant precedent.
 local function skarvaldKilledUnit(event, creature, victim)
-    if victim:GetObjectType() == "Player" then
+    if victim and victim:GetObjectType() == "Player" then
         creature:Talk(SAY_KILL)
     end
 end
 
 local function dalronnKilledUnit(event, creature, victim)
-    if victim:GetObjectType() == "Player" then
+    if victim and victim:GetObjectType() == "Player" then
         creature:Talk(SAY_KILL)
     end
 end
