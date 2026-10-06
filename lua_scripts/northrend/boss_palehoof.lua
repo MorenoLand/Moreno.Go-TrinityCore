@@ -1,6 +1,6 @@
 -- Gortok Palehoof (Utgarde Pinnacle) — Lua port of
 -- src/server/scripts/Northrend/UtgardeKeep/UtgardePinnacle/boss_palehoof.cpp
--- (711 lines; 9 scripts — boss_palehoof (CreatureScript via
+-- (723 lines; 10 scripts — boss_palehoof (CreatureScript via
 -- GetUtgardePinnacleAI (BossAI), DATA_GORTOK_PALEHOOF = 1);
 -- boss_ravenous_furbolg / boss_frenzied_worgen / boss_ferocious_rhino /
 -- boss_massive_jormungar (CreatureScript via GetUtgardePinnacleAI
@@ -26,9 +26,11 @@
 -- binding is DB-side as usual. DATA_GORTOK_PALEHOOF = 1
 -- (utgarde_pinnacle.h line 32).
 -- Sole-source verified: whole-server-tree grep for "AddSC_boss_palehoof"
--- hits boss_palehoof.cpp only (+ the loader decl/call lines); this clone
--- carries no sql/ tree, so ScriptName bindings are DB-side by
--- construction. No palehoof lua existed.
+-- hits boss_palehoof.cpp only (+ the loader decl/call lines); the clone's
+-- sql/ tree (~/workspace/moreno-trinitycore/sql/, characters/ + world/)
+-- carries zero palehoof hits (empty of bindings). The lua was ported Oct 2
+-- 10:25 UTC in 491fb38 and re-audited this run (the keleseth 23:39 /
+-- skarvald 23:44 / ingvar 23:46 / svala 23:59 precedent).
 -- Eluna creature events: 1 OnEnterCombat, 3 OnKill.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) — unconditional (the auriaya
@@ -37,7 +39,9 @@
 -- and the instance SendEncounterUnit(ENCOUNTER_FRAME_ENGAGE) leg have no
 -- bridges).
 -- KilledUnit — Talk(SAY_SLAY 1) player-gated (event 3 — the razuvious
--- player-gated variant precedent).
+-- player-gated variant precedent; the nil-guard is the hodir-port
+-- convention — Eluna event 3 always carries a victim, so C++-exactness
+-- is unaffected).
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry 26687):
 -- JustDied — DoPlaySoundToSet(PALEHOOF_SOUND_DEATH 13467) with no Talk —
 -- joins the no-sound / documented-only queue.
@@ -68,11 +72,14 @@ local function palehoofEnterCombat(event, creature, target)
 end
 
 -- C++ KilledUnit: if (who->GetTypeId() == TYPEID_PLAYER) Talk(SAY_SLAY)
--- — the razuvious player-gated variant precedent.
+-- — the razuvious player-gated variant precedent; the nil-guard is the
+-- hodir-port convention (Eluna event 3 always carries a victim, so
+-- C++-exactness is unaffected).
 local function palehoofKilledUnit(event, creature, victim)
-    if victim:GetObjectType() == "Player" then
-        creature:Talk(SAY_SLAY)
+    if victim == nil or victim:GetObjectType() ~= "Player" then
+        return
     end
+    creature:Talk(SAY_SLAY)
 end
 
 RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 1, palehoofEnterCombat)
