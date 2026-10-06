@@ -22,7 +22,10 @@
 -- "spell_general_vezax_saronite_vapors", "achievement_shadowdodger",
 -- "achievement_smell_saronite") hits boss_general_vezax.cpp
 -- (+ the loader decl/call lines for AddSC_boss_general_vezax)
--- only; zero sql/ hits for all nine. No vezax lua existed.
+-- only; zero sql/ hits for all nine. The vezax lua existed from a
+-- prior session; parity audited and closed this run (the xt002
+-- 22:38 / ignis 22:29 / krystallus 21:59 / sjonnir 22:04
+-- precedent).
 -- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4
 -- OnDied.
 -- Ported arms (C++-exact for all modeled arms):
