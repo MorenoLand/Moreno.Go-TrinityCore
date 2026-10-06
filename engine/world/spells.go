@@ -2143,7 +2143,10 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	}
 	s.procCastAuras()
 
-	s.lastCastTime = time.Now()
+	// Spell::TakePower (Spell.cpp:4870-4872) sets the five-second rule
+	// timer at cast COMPLETION, not initiation — s.lastCastTime is now
+	// assigned in finishSpellCast alongside the power deduction, so
+	// interrupted casts and non-mana spells do not start the timer.
 	castTime := s.calculateSpellCastTime(spell)
 	// Spell::prepare (Spell.cpp:3125-3133): the .cheat casttime arm forces
 	// m_casttime to 0 after the first CheckCast pass (the C++ comment's
@@ -5399,6 +5402,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if pType < 7 && cost > 0 {
 		// Re-validation above guarantees sufficient power; C++ TakePower deducts.
 		s.player.Powers[pType] -= cost
+		// Spell::TakePower (Spell.cpp:4870-4872): set the five second
+		// timer when mana is spent. C++ gates on powerType == POWER_MANA
+		// (0) && m_powerCost > 0; the timer starts at cast completion
+		// (TakePower runs in Spell::cast), not at cast initiation, and
+		// interrupted casts never trigger it.
+		if pType == 0 {
+			s.lastCastTime = time.Now()
+		}
 		powerPacket := protocol.NewBuffer(13)
 		powerPacket.WritePackedGUID(s.playerGUID)
 		powerPacket.WriteU8(uint8(pType))
