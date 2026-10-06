@@ -24,7 +24,9 @@
 -- "spell_assembly_rune_of_summoning",
 -- "achievement_assembly_i_choose_you") hits
 -- boss_assembly_of_iron.cpp only; zero sql/ hits for all seven.
--- No assembly/iron lua existed.
+-- Audited 2026-10-05: lua port from the 10-02 run (a7021b3) re-verified
+-- C++-exact — all 21 Talk arms accounted (9 ported / 12
+-- documented-only); loader decl 116 / call 311 re-confirmed.
 -- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4
 -- OnDied.
 -- Ported arms (C++-exact for all modeled arms):
