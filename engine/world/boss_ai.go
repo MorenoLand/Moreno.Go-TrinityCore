@@ -4591,8 +4591,12 @@ func init() {
 	// VehicleAI PassengerBoarded / MovementInform machines (no vehicle /
 	// passenger / motion bridges); npc_nexus_lord (DoAction ->
 	// EVENT_NUKE_DUMMY / EVENT_ARCANE_SHOCK / EVENT_HASTE_BUFF machine —
-	// no timer-event / cast bridges); npc_scion_of_eternity (NPC_SURGE_OF_
-	// POWER 30334 — EVENT_ARCANE_BARRAGE machine, JustDied increments
+	// no timer-event / cast bridges); npc_scion_of_eternity (entry-
+	// UNVERIFIABLE from repo sources: NPC_SURGE_OF_POWER 30334 is
+	// defined at eye_of_eternity.h :60 but never referenced anywhere
+	// in the C++ tree; the ScriptName->entry binding is DB-side —
+	// the npc_azure_ring_captain / gothik-minions precedent) —
+	// EVENT_ARCANE_BARRAGE machine, JustDied increments
 	// DATA_SUMMON_DEATHS — no timer-event / instance / target-selection
 	// bridges); npc_arcane_overload (NPC_ARCANE_OVERLOAD 30282 — SetGUID
 	// DATA_LAST_OVERLOAD_GUID / phase-gated DespawnOrUnsummon / SpellHit

@@ -28,8 +28,8 @@
 -- is AddSC_instance_eye_of_eternity() (decl 92 / call 287) —
 -- loader order confirmed this run; the checkpoint sequence
 -- (oculus -> boss_malygos) is followed).
--- Entry: 28859 Malygos (eye_of_eternity.h NPC_MALYGOS, line 43;
--- DATA_MALYGOS_EVENT = 0, line 29;
+-- Entry: 28859 Malygos (eye_of_eternity.h NPC_MALYGOS, line 49;
+-- DATA_MALYGOS_EVENT = 0, line 28;
 -- instance_eye_of_eternity.cpp OnCreatureCreate binds case
 -- NPC_MALYGOS (line 134) — entry-verifiable, registration
 -- proceeds (the nexus_commanders kalecgos precedent); the
@@ -96,7 +96,11 @@
 -- EVENT_NUKE_DUMMY / EVENT_ARCANE_SHOCK / EVENT_HASTE_BUFF
 -- event machine (DoCast SPELL_ARCANE_SHOCK / haste, nuke the
 -- disk the player rides) — no timer-event / cast bridges.
--- npc_scion_of_eternity (NPC_SURGE_OF_POWER 30334) —
+-- npc_scion_of_eternity (entry-UNVERIFIABLE from repo sources:
+-- NPC_SURGE_OF_POWER 30334 is defined at eye_of_eternity.h :60 but
+-- never referenced anywhere in the C++ tree; the ScriptName->entry
+-- binding is DB-side — the npc_azure_ring_captain /
+-- gothik-minions precedent) —
 -- IsSummonedBy schedules EVENT_ARCANE_BARRAGE (target-list
 -- arcane barrage machine), JustDied increments Malygos
 -- DATA_SUMMON_DEATHS — no timer-event / instance /
@@ -110,7 +114,9 @@
 -- disk machine: IsSummonedBy -> MovePoint cycle; SpellHit
 -- shock-lance legs; PassengerBoarded player machine — no
 -- vehicle / motion / passenger bridges. npc_static_field
--- (NPC_VORTEX_TRIGGER 30090) — periodic trigger — no bridge.
+-- (NPC_VORTEX_TRIGGER 30090) — IsSummonedBy ->
+-- DespawnOrUnsummon(30s) (no periodic logic in the C++) — no
+-- despawn bridge.
 -- The 17 spell scripts (SpellScript / AuraScript handlers:
 -- portal beam relocating, random portal target selection,
 -- arcane storm target filters, vortex dummy destination
