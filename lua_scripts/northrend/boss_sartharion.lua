@@ -10,8 +10,8 @@
 -- AddSC_obsidian_sanctum() (decl 95 / call 290) — loader order
 -- confirmed this run; the checkpoint sequence
 -- (instance_eye_of_eternity -> boss_sartharion) is followed).
--- Entry: 28860 Sartharion (obsidian_sanctum.h NPC_SARTHARION, line 36;
--- DATA_SARTHARION = 0, line 30; EncounterCount = 5, line 27);
+-- Entry: 28860 Sartharion (obsidian_sanctum.h NPC_SARTHARION, line 40;
+-- DATA_SARTHARION = 0, line 30; EncounterCount = 5, line 26);
 -- instance_obsidian_sanctum.cpp OnCreatureCreate binds case
 -- NPC_SARTHARION (line 51) — entry-verifiable, registration proceeds
 -- (the nexus_commanders / malygos kalecgos precedent); the
