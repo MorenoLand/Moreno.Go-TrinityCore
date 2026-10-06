@@ -10,14 +10,18 @@
 -- confirmed this run; the checkpoint sequence (instance_naxxramas ->
 -- boss_nexus_commanders) is followed).
 -- Entries: 26796 Commander Stoutbeard (nexus.h NPC_COMMANDER_
--- STOUTBEARD), 26798 Commander Kolurg (nexus.h NPC_COMMANDER_KOLURG)
--- — kalecgos pass; instance_nexus.cpp OnCreatureCreate binds both
--- NPC_COMMANDER_STOUTBEARD / NPC_ALLIANCE_COMMANDER to the
--- DATA_COMMANDER GUID (lines 59-60) and GetGuidData(DATA_COMMANDER)
--- resolves team-dependently (ALLIANCE team in instance -> KOLURG, else
--- STOUTBEARD, lines 90-91) — entry-verifiable, registration proceeds
--- for both entries (twin_valkyr shared-handler precedent); the
--- CreatureScript ScriptName binding is DB-side as usual.
+-- STOUTBEARD :57), 26798 Commander Kolurg (nexus.h NPC_COMMANDER_
+-- KOLURG :58) — kalecgos pass. DATA_COMMANDER=0 is the BossAI boss
+-- number only: instance_nexus.cpp GetGuidData has NO DATA_COMMANDER
+-- case (audited this run), so no instance commander-GUID leg is
+-- bridged — the script uses only BossAI(creature, DATA_COMMANDER)
+-- bookkeeping. OnCreatureCreate (:59-:60) merely flips the Alliance-
+-- side NPCs (incl. STOUTBEARD) to FACTION_MONSTER_2 under
+-- ServerAllowsTwoSideGroups(); team-dependent entry resolution lives
+-- in GetCreatureEntry (:88-:91) — team==ALLIANCE ? KOLURG :
+-- STOUTBEARD. Both entries stay registered (twin_valkyr
+-- shared-handler precedent); the CreatureScript ScriptName binding
+-- is DB-side as usual.
 -- Sole-source verified: whole-server-tree grep for
 -- "boss_nexus_commanders" hits boss_nexus_commanders.cpp only (loader
 -- carries only the decl/call lines); zero sql/ hits. No nexus lua
