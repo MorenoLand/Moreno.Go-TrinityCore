@@ -4,7 +4,8 @@
 -- spell_amanitar_potent_fungus).
 -- Ahn'kahet dungeon-script unit per northrend_script_loader.cpp order
 -- (decl 34 / call 224, immediately after AddSC_boss_taldaram();
--- next: boss_herald_volazj).
+-- next: AddSC_boss_jedoga_shadowseeker() (decl 35 / call 225), then
+-- AddSC_boss_volazj() (decl 36 / call 226, script boss_herald_volazj)).
 -- Entry: 30258 Amanitar (ahnkahet.h NPC_AMANITAR — kalecgos pass; the
 -- RegisterAhnKahetCreatureAI ScriptName binding is
 -- instance-shimmed, the creature_template binding DB-side as
