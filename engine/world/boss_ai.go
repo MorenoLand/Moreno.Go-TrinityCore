@@ -3226,6 +3226,29 @@ func init() {
 	// documented in lua_scripts/kalimdor/boss_ayamiss.lua, not wired.
 	RegisterLuaBoss("boss_ayamiss", 15369)
 
+	// boss_ossirian (Ossirian the Unscarred, entry 15339 —
+	// C++-verified via ruins_of_ahnqiraj.h:46's NPC_OSSIRIAN
+	// constant; the creature_template ScriptName binding stays
+	// DB-side): the self-contained in-combat legs only — engage
+	// self-casts SUPREME 25176 + Talk(SAY_AGGRO 2), arms SILENCE
+	// (30s -> 20-30s), CYCLONE (20s), STOMP (30s); Curse of Tongues
+	// 25195 on all live instance players (C++ DoCastAOE — no AoE
+	// bridge, maiden GetPlayersInWorld convention); Cyclone 25189
+	// on the victim (jeklik convention); Stomp 25188 self-cast;
+	// the per-tick Supreme reapply (HasAura-gated, netherspite
+	// convention) + SAY_SUPREME on a 5s timer; the 60-120yd
+	// no-kiting summon (moroes GetDistance convention) on a 5s
+	// timer; KilledUnit Talk(SAY_SLAY 3) via event 3; SpellHit
+	// weakness -> RemoveAura(SUPREME) via event 14 (midnight
+	// convention). Unwired: weather, tornado/crystal/trigger
+	// summons (SummonCreature — zero Lua usage); go_ossirian_crystal
+	// (GameObjectAI); MoveInLineOfSight intro; DoAction weakness
+	// trigger (cross-AI); Cleanup/JustDied/Evade instance legs.
+	// BossAI's ctor leg DATA_OSSIRIAN and _Reset() ride the absent
+	// instance bridge — documented in
+	// lua_scripts/kalimdor/boss_ossirian.lua, not wired.
+	RegisterLuaBoss("boss_ossirian", 15339)
+
 	// boss_epoch (Chrono-Lord Epoch, entry 26532 — C++-verified via
 	// npc_arthas.cpp:59's NPC_EPOCH constant plus :1329's
 	// instance->instance->SummonCreature(NPC_EPOCH, ...) in the
