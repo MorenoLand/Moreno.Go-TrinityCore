@@ -2,8 +2,13 @@
 -- src/server/scripts/Northrend/AzjolNerub/Ahnkahet/boss_herald_volazj.cpp
 -- (single script: boss_volazj, BossAI).
 -- Ahn'kahet dungeon-script unit per northrend_script_loader.cpp order
--- (decl 36 / call 226, immediately after AddSC_boss_amanitar();
--- next: boss_jedoga_shadowseeker).
+-- (decl 36 / call 226, immediately after
+-- AddSC_boss_jedoga_shadowseeker(); next: AddSC_instance_ahnkahet()
+-- (decl 37 / call 227), which closes the block. FIRST-PASS HEADER
+-- DEFECT (re-audited 2026-10-06): the Oct 1 header said "after
+-- AddSC_boss_amanitar(); next: boss_jedoga_shadowseeker" — WRONG,
+-- the loader order is ...amanitar(34)->jedoga(35)->volazj(36)->
+-- instance_ahnkahet(37) (the amanitar-run / jedoga-run precedent).
 -- Entry: 29311 Herald Volazj (ahnkahet.h NPC_HERALD_VOLAZJ —
 -- kalecgos pass; the RegisterAhnKahetCreatureAI ScriptName binding
 -- is instance-shimmed, the creature_template binding DB-side as
@@ -85,6 +90,9 @@ local SPELL_SHADOW_BOLT_VOLLEY = 57942
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
 local SAY_DEATH = 2
+-- (C++ Yells enum also declares SAY_PHASE = 3, but it is never
+-- used in boss_herald_volazj.cpp — the sole usage grep hits only
+-- the enum line — so nothing to port.)
 
 local timers = {}
 
