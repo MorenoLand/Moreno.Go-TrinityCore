@@ -2186,6 +2186,18 @@ func init() {
 	// HANDOFTHAURISSAN 17492 sits on SelectTarget(Random) — no bridge;
 	// JustDied moira arm needs the instance-script model.
 	RegisterLuaBoss("boss_emperor_dagran_thaurissan", 9019)
+
+	// boss_doomrel (Doomrel, entry 9039 — NPC_DOOMREL at
+	// instance_blackrock_depths.cpp:43): ScriptedAI combat scheduler.
+	// Ported: Shadowbolt Volley 15245 (10s->12s), Curse of Weakness
+	// 12493 (5s->45s), Demon Armor 13787 (16s->5min), DamageTaken 50%
+	// one-shot Summon Voidwalkers 15092 (triggered, once, resets on
+	// 23). Gossip challenge menu (texts approximated, DB-side).
+	// Unmodeled: Immolate 12742 (SelectTarget Random, no bridge),
+	// faction/immune/flag/instance arms (no bridges). Full analysis in
+	// lua_scripts/eastern_kingdoms/boss_doomrel.lua.
+	RegisterLuaBoss("boss_doomrel", 9039)
+
 	// boss_magmus / boss_magmusAI (Blackrock Depths, Iron Hall; ScriptedAI
 	// combat scheduler via GetBlackrockDepthsAI — fieryburst 13900
 	// victim-cast 5s->6s; DamageTaken 50% one-shot phase-two latch
