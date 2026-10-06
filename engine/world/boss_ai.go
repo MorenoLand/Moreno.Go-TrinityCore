@@ -3121,6 +3121,29 @@ func init() {
 	// do not exist (standing).
 	RegisterLuaBoss("the_black_morass", 15608)
 
+	// boss_kurinnaxx (Kurinnaxx, entry 15348 — C++-verified via
+	// ruins_of_ahnqiraj.h:41's NPC_KURINNAXX constant; the
+	// creature_template ScriptName binding stays DB-side): the
+	// self-contained in-combat legs only — engage arms the four timers
+	// at their C++ ScheduleEvent cooldowns (no Talk in C++
+	// JustEngagedWith); Mortal Wound 25646 on the victim (jeklik
+	// GetVictim + CastSpell convention, 8s -> 8s); Sand Trap 25648 on a
+	// bounded random alive player within 100 (nil target -> C++'s
+	// victim-fallback wired: the victim casts on itself, {5s,15s} ->
+	// {5s,15s}); Wide Slash 25814 self-cast (11s -> 11s); Trash 3391
+	// self-cast fired once at 1s (C++ EVENT_TRASH reschedules
+	// EVENT_WIDE_SLASH at 15s instead of itself — C++-verbatim);
+	// DamageTaken enrage 26527 below 30% health, latched per GUID
+	// (moroes event-9 convention); melee engine-driven. The
+	// while(ExecuteEvent()) + UNIT_STATE_CASTING gate has no bridge
+	// (aeonus precedent). JustDied's Ossirian SAY_KURINNAXX_DEATH yell
+	// (ObjectAccessor::GetCreature(*me,
+	// instance->GetGuidData(DATA_OSSIRIAN))) and the _JustDied() /
+	// DATA_KURINNAXX boss-state legs have no instance-data bridge
+	// (standing) — documented in lua_scripts/kalimdor/boss_kurinnaxx.lua,
+	// not wired.
+	RegisterLuaBoss("boss_kurinnaxx", 15348)
+
 	// boss_epoch (Chrono-Lord Epoch, entry 26532 — C++-verified via
 	// npc_arthas.cpp:59's NPC_EPOCH constant plus :1329's
 	// instance->instance->SummonCreature(NPC_EPOCH, ...) in the
