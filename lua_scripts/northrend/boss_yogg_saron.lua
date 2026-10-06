@@ -34,7 +34,9 @@
 -- for AddSC_boss_yogg_saron); this clone carries no sql/
 -- tree, so the ScriptName bindings are DB-side by
 -- construction.
--- No yogg lua existed.
+-- Audited artifact: this lua was ported 2026-10-02 09:40 in
+-- e0f1acf and re-audited this run; the header below documents
+-- that audit.
 -- Eluna creature events: 1 OnEnterCombat, 4 OnDied.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Sara Talk(SAY_SARA_AGGRO 2) (event 1;
