@@ -78,7 +78,7 @@
 -- spell_varos_centrifuge_shield — AuraScript OnApply / OnRemove
 -- (EFFECT_0 SPELL_AURA_DUMMY): apply -> caster flags gate ->
 -- SetReactState(REACT_PASSIVE) + SetFlag(SWIMMING|UNK_6) +
--- SetImmuneToAll(true); remove -> SetReactState(REACT_AGGRESSIVE)
+-- SetImmuneToAll(true, true); remove -> SetReactState(REACT_AGGRESSIVE)
 -- + RemoveFlag(SWIMMING|UNK_6) + SetImmuneToAll(false) — no
 -- AuraScript bridge (the keristrasza spell_intense_cold
 -- precedent); joins the no-AuraScript-bridge queue.
