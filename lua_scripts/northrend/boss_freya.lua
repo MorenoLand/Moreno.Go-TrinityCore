@@ -56,7 +56,9 @@
 -- variant ported (40 pattern-carrying lua ports have mtimes
 -- older than this file's 2026-10-02 09:31 birth; 60 are born
 -- before it by git birth-order count — the hodir 23:04
--- ordinal-repair precedent).
+-- ordinal-repair precedent). (A follow-up commit this run
+-- corrected the parenthetical's 66→60 after the exact git
+-- birth-order count finished: bd6d8e8.)
 -- Freya DamageTaken — lethal (damage >= health) ->
 -- Talk(SAY_DEATH 3) + damage = 0 (event 9; in C++ the
 -- lethal branch sets damage = 0 and manually calls
