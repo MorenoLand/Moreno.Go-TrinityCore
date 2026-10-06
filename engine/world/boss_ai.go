@@ -3269,6 +3269,23 @@ func init() {
 	// lua_scripts/kalimdor/boss_viscidus.lua.
 	RegisterLuaBoss("boss_viscidus", 15299)
 
+	// boss_fankriss (Fankriss the Unyielding, entry 15510 — no
+	// NPC_FANKRISS constant in temple_of_ahnqiraj.h; armory npc=15510;
+	// the creature_template ScriptName binding stays DB-side): the
+	// self-contained in-combat legs only — engage arms the mortal-wound
+	// timer at its C++ urand(10000,15000) init (no Talk in C++ —
+	// "sound not implemented", zero Talk() calls); Mortal Wound 28467
+	// on the victim (DoCastVictim, GetVictim nil-guarded,
+	// urand(10000,20000)). Unwired: the spawn/hatchling machine —
+	// DoSpawnCreature(15630) + me->SummonCreature(15962) have zero
+	// Lua usage, DoTeleportPlayer and ModifyThreatByPercent have no
+	// bridges, SelectTarget Random none either (casting Root 28858
+	// alone without the teleport/summon legs would misrepresent the
+	// mechanic); the GetThreat/HealthAbovePct(3) gates; evade cleanup;
+	// BossAI ctor leg DATA_FRANKRIS. Full analysis in
+	// lua_scripts/kalimdor/boss_fankriss.lua.
+	RegisterLuaBoss("boss_fankriss", 15510)
+
 	// boss_epoch (Chrono-Lord Epoch, entry 26532 — C++-verified via
 	// npc_arthas.cpp:59's NPC_EPOCH constant plus :1329's
 	// instance->instance->SummonCreature(NPC_EPOCH, ...) in the
