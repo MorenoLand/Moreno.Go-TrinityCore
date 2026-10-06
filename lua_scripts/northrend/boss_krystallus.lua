@@ -12,8 +12,8 @@
 -- after it is AddSC_boss_sjonnir() (decl 106 / call 301) —
 -- loader order confirmed this run; the checkpoint sequence
 -- (boss_maiden_of_grief -> boss_krystallus) is followed).
--- Entry: 27977 Krystallus (halls_of_stone.h NPC_KRYSTALLUS, line 42;
--- DATA_KRYSTALLUS = 0, line 30; GO_KRYSTALLUS doors are not bound
+-- Entry: 27977 Krystallus (halls_of_stone.h NPC_KRYSTALLUS, line 50;
+-- DATA_KRYSTALLUS = 0, line 31; GO_KRYSTALLUS doors are not bound
 -- in this script) — entry-verifiable, registration proceeds (the
 -- nexus_commanders / malygos / sartharion kalecgos precedent); the
 -- CreatureScript ScriptName binding is DB-side as usual.
@@ -22,7 +22,9 @@
 -- decl/call lines for AddSC_boss_krystallus() only; whole-tree
 -- grep for "spell_krystallus_shatter" and
 -- "spell_krystallus_shatter_effect" hits boss_krystallus.cpp
--- only; zero sql/ hits for all three. No krystallus lua existed.
+-- only; zero sql/ hits for all three. No krystallus lua existed
+-- at the time of the first-pass port; this file is the audited
+-- artifact of the 21:58 audit run.
 -- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4 OnDied.
 -- No timers in the ported arms; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
