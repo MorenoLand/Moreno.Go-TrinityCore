@@ -3286,6 +3286,22 @@ func init() {
 	// lua_scripts/kalimdor/boss_fankriss.lua.
 	RegisterLuaBoss("boss_fankriss", 15510)
 
+	// boss_huhuran (Huhuran, entry 15509 — C++-verified via armory
+	// npc=15509 and temple_of_ahnqiraj.h sequence adjacency; the
+	// creature_template ScriptName binding stays DB-side): the
+	// self-contained in-combat legs only — Frenzy 26051 self-cast +
+	// Talk(EMOTE_FRENZY_KILL 0) on a 25-35s timer (latched, with
+	// 15s FrenzyBack re-arm); Wyvern Sting 26180 on random player
+	// via GetPlayersInWorld (18-28s -> 15-32s); Acid Spit 26050 on
+	// victim (8s -> 5-10s, jeklik convention); Noxious Poison 26053
+	// on victim (10-20s -> 12-24s); Poison Bolt 26052 on victim
+	// while Frenzy/Berserk (3s, C++-exact flag gate); Berserk
+	// 26068 + Talk(EMOTE_BERSERK 1) at <31% health via event 9
+	// (latched). Unwired: InterruptNonMeleeSpells (no bridge);
+	// BossAI ctor leg DATA_HUHURAN. Full analysis in
+	// lua_scripts/kalimdor/boss_huhuran.lua.
+	RegisterLuaBoss("boss_huhuran", 15509)
+
 	// boss_epoch (Chrono-Lord Epoch, entry 26532 — C++-verified via
 	// npc_arthas.cpp:59's NPC_EPOCH constant plus :1329's
 	// instance->instance->SummonCreature(NPC_EPOCH, ...) in the
