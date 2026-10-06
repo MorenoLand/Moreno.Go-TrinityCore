@@ -3144,6 +3144,23 @@ func init() {
 	// not wired.
 	RegisterLuaBoss("boss_kurinnaxx", 15348)
 
+	// boss_rajaxx (General Rajaxx, entry 15341 — C++-verified via
+	// ruins_of_ahnqiraj.h:42's NPC_RAJAXX constant; the
+	// creature_template ScriptName binding stays DB-side): the
+	// self-contained in-combat legs only — engage arms the two timers
+	// at their C++ ScheduleEvent cooldowns (zero Talk() calls in C++;
+	// the Yells enum belongs to the Andorov event NPCs); Disarm 6713
+	// on the victim (jeklik GetVictim + CastSpell convention, 10s ->
+	// 22s); Thunder Crash 25599 self-cast (12s -> 21s); melee
+	// engine-driven. The while(ExecuteEvent()) + UNIT_STATE_CASTING
+	// gate has no bridge (aeonus precedent); spell_rajaxx_thundercrash
+	// (SpellScript damage calc) has no SpellScript bridge (standing);
+	// EVENT_CHANGE_AGGRO and the enraged bool are dead in C++ (never
+	// used) — nothing to port. BossAI's ctor leg DATA_RAJAXX and
+	// _Reset() ride the absent instance bridge — documented in
+	// lua_scripts/kalimdor/boss_rajaxx.lua, not wired.
+	RegisterLuaBoss("boss_rajaxx", 15341)
+
 	// boss_epoch (Chrono-Lord Epoch, entry 26532 — C++-verified via
 	// npc_arthas.cpp:59's NPC_EPOCH constant plus :1329's
 	// instance->instance->SummonCreature(NPC_EPOCH, ...) in the
