@@ -25,8 +25,12 @@
 -- "spell_auriaya_random_agro_periodic",
 -- "spell_auriaya_feral_essence_removal", "spell_auriaya_feral_rush",
 -- "achievement_nine_lives" and "achievement_crazy_cat_lady" hits
--- boss_auriaya.cpp only; zero sql/ hits for all thirteen. No
--- auriaya lua existed.
+-- boss_auriaya.cpp only; zero sql/ hits for all thirteen
+-- (the clone's sql/ tree, ~/workspace/moreno-trinitycore/sql/
+-- characters/ + world/, carries zero hits — the svala 23:59
+-- wording formula). The file was ported Oct 2 in e2878fb and
+-- re-audited this run (the palehoof 00:09 / svala 23:59 / ingvar
+-- 23:46 stale-first-pass precedent).
 -- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied. No
 -- timers in the ported arms; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
