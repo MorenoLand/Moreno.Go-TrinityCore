@@ -22,8 +22,10 @@
 -- arms ride the EVENT_INTRO_* timer machine (see DOCUMENTED-ONLY).
 -- Sole-source verified: whole-server-tree grep for all six script names
 -- hits boss_svala.cpp only (+ the loader decl/call lines for
--- AddSC_boss_svala); this clone carries no sql/ tree, so ScriptName
--- bindings are DB-side by construction. No svala lua existed.
+-- AddSC_boss_svala); the clone's sql/ tree (~/workspace/moreno-trinitycore/sql/,
+-- characters/ + world/) carries zero svala hits (empty of bindings). The lua
+-- was ported Oct 2 in d2645ec and re-audited this run (the ingvar
+-- 23:46 / skarvald 23:44 / keleseth 23:39 stale-first-pass precedent).
 -- Eluna creature events: 1 OnEnterCombat, 3 OnKill, 4 OnDied.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 2) (event 1; BossAI::JustEngagedWith
@@ -69,11 +71,14 @@ local function svalaEnterCombat(event, creature, target)
 end
 
 -- C++ KilledUnit: if (who->GetTypeId() == TYPEID_PLAYER) Talk(SAY_SLAY)
--- — the razuvious player-gated variant precedent.
+-- — the razuvious player-gated variant precedent; the nil-guard is the
+-- hodir-port convention (Eluna event 3 always carries a victim, so
+-- C++-exactness is unaffected).
 local function svalaKilledUnit(event, creature, victim)
-    if victim:GetObjectType() == "Player" then
-        creature:Talk(SAY_SLAY)
+    if victim == nil or victim:GetObjectType() ~= "Player" then
+        return
     end
+    creature:Talk(SAY_SLAY)
 end
 
 -- C++ JustDied: <unbridgeable equipment/emote/passthrough legs>;
