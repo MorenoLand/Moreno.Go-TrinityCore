@@ -3179,6 +3179,30 @@ func init() {
 	// documented in lua_scripts/kalimdor/boss_moam.lua, not wired.
 	RegisterLuaBoss("boss_moam", 15340)
 
+	// boss_buru (Buru the Gorger, entry 15370 — C++-verified via
+	// ruins_of_ahnqiraj.h:44's NPC_BURU constant; the
+	// creature_template ScriptName binding stays DB-side): the
+	// self-contained in-combat legs only — engage Talks EMOTE_TARGET
+	// at the target, self-casts THORNS 25640, arms DISMEMBER 5s,
+	// GATHERING_SPEED 9s, FULL_SPEED 60s (phase EGG); Dismember 96
+	// on the victim (jeklik GetVictim + CastSpell convention, 5s);
+	// Gathering Speed 1834 self-cast (9s); Full Speed 1557 self-cast
+	// one-shot; the per-tick <20% health transform (checked on
+	// damage, event 9) casts BURU_TRANSFORM 24721 + FULL_SPEED and
+	// strips THORNS (netherspite RemoveAura convention), phase
+	// TRANSFORM; KilledUnit on a player re-arms the speed timers
+	// (aura strip + reschedule). Unwired: ChaseNewVictim's
+	// SelectTarget/ResetThreatList/AttackStart (no Lua bridge for any
+	// — zero usage in lua_scripts); npc_buru_egg's cross-AI egg legs
+	// (instance GetGuidData + dynamic_cast + ManageRespawn);
+	// spell_egg_explosion (SpellScript); ACTION_EXPLODE's self-damage;
+	// EVENT_CREEPING_PLAGUE never scheduled in C++ (dead);
+	// EVENT_RESPAWN_EGG (unbridged egg list); EnterEvadeMode egg
+	// respawn. BossAI's ctor leg DATA_BURU and _Reset() ride the
+	// absent instance bridge — documented in
+	// lua_scripts/kalimdor/boss_buru.lua, not wired.
+	RegisterLuaBoss("boss_buru", 15370)
+
 	// boss_epoch (Chrono-Lord Epoch, entry 26532 — C++-verified via
 	// npc_arthas.cpp:59's NPC_EPOCH constant plus :1329's
 	// instance->instance->SummonCreature(NPC_EPOCH, ...) in the
