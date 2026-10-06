@@ -3203,6 +3203,29 @@ func init() {
 	// lua_scripts/kalimdor/boss_buru.lua, not wired.
 	RegisterLuaBoss("boss_buru", 15370)
 
+	// boss_ayamiss (Ayamiss the Hunter, entry 15369 — C++-verified
+	// via ruins_of_ahnqiraj.h:45's NPC_AYAMISS constant; the
+	// creature_template ScriptName binding stays DB-side): the
+	// self-contained in-combat legs only — engage arms STINGER_SPRAY
+	// (20-30s -> 15-20s), POISON_STINGER (5s -> 2-3s), PARALYZE
+	// (15s); Stinger Spray 25749 self-cast; Poison Stinger 25748 on
+	// the victim (jeklik GetVictim + CastSpell convention); Paralyze
+	// 25725 on a random player via GetPlayersInWorld filtered by
+	// map/instance/alive (maiden_of_virtue convention — C++
+	// SelectTarget has no bridge); the <70% ground-phase transition
+	// (checked on damage, event 9) cancels Poison Stinger and arms
+	// LASH 25852 (5-8s -> 8-15s) + TRASH 3391 (3-6s -> 5-7s), both on
+	// the victim; the <20% frenzy (event 9, latched per kurinnaxx
+	// enrage convention) self-casts FRENZY 8269 + Talk(EMOTE_FRENZY
+	// 0). Unwired: all motion (SetCanFly/SetDisableGravity/MovePoint/
+	// SetCombatMovement/UNIT_STATE_ROOT — no bridge); SummonCreature
+	// (swarmers 15546 / larvae 15555 — zero Lua usage); the swarmer
+	// AttackStart cross-AI; npc_hive_zara_larva (instance boss-state
+	// gated); instance SetGuidData(DATA_PARALYZED). BossAI's ctor leg
+	// DATA_AYAMISS and _Reset() ride the absent instance bridge —
+	// documented in lua_scripts/kalimdor/boss_ayamiss.lua, not wired.
+	RegisterLuaBoss("boss_ayamiss", 15369)
+
 	// boss_epoch (Chrono-Lord Epoch, entry 26532 — C++-verified via
 	// npc_arthas.cpp:59's NPC_EPOCH constant plus :1329's
 	// instance->instance->SummonCreature(NPC_EPOCH, ...) in the
