@@ -4483,7 +4483,9 @@ func init() {
 	// when _platform > 2); porting either unconditionally would be
 	// C++-inexact — no _platform-state / summon / cast bridges;
 	// Reset (SetControlled / SetDisableGravity / SetReactState /
-	// DoCastSelf SPELL_EVOCATE 51602 / _Reset()); EnterEvadeMode
+	// DoCastSelf SPELL_EVOCATE 51602 / _Reset());
+	// JustReachedHome (DoCastSelf SPELL_EVOCATE — no cast bridge);
+	// EnterEvadeMode
 	// (center-gated, no evade / teleport / motion bridges);
 	// AttackStart (z-gated DoStartNoMovement); the UpdateAI
 	// teleport event machine (no timer-event / random-target /

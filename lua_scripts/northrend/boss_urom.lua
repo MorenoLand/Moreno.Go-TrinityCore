@@ -49,6 +49,8 @@
 -- (false) + SetReactState(REACT_AGGRESSIVE) + DoCastSelf(
 -- SPELL_EVOCATE 51602) + _Reset() — no react-state / gravity /
 -- control / cast / instance bridges.
+-- JustReachedHome — DoCastSelf(SPELL_EVOCATE 51602) — no cast
+-- bridge.
 -- EnterEvadeMode — gated on _platform > 2 (center only): _EnterEvade-
 -- Mode + NearTeleportTo(1118.3101, 1080.3800, 508.3610, 4.25) or
 -- MoveTargetedHome + Reset + events.Reset — no evade / teleport /
