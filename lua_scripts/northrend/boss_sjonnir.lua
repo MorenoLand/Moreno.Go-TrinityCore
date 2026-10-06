@@ -23,7 +23,8 @@
 -- lines for AddSC_boss_sjonnir()) only; whole-tree grep for
 -- "npc_malformed_ooze", "npc_iron_sludge" and
 -- "achievement_abuse_the_ooze" hits boss_sjonnir.cpp only; zero
--- sql/ hits for all four. No sjonnir lua existed.
+-- sql/ hits for all four. boss_sjonnir.lua is the audited
+-- port artifact for this unit (entry 27978 bridgeable arms).
 -- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4
 -- OnDied. No timers in the ported arms; melee is engine-driven
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
