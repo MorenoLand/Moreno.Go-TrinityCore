@@ -5,9 +5,10 @@
 -- spell_random_lightning_visual_effect (SpellScript),
 -- achievement_volunteer_work (AchievementCriteriaScript)).
 -- Ahn'kahet dungeon-script unit per northrend_script_loader.cpp order
--- (decl 35 / call 225, immediately before AddSC_boss_volazj();
--- next: instance_ahnkahet — the Ahn'kahet dungeon boss roster closes
--- with this unit: elder_nadox 29309, taldaram 29308, amanitar 30258,
+-- (decl 35 / call 225, next: AddSC_boss_volazj();
+-- the Ahn'kahet dungeon boss roster closes with that unit, then
+-- instance_ahnkahet (decl 37 / call 227):
+-- elder_nadox 29309, taldaram 29308, amanitar 30258,
 -- volazj 29311, jedoga 29310).
 -- Entry: 29310 Jedoga Shadowseeker (ahnkahet.h
 -- NPC_JEDOGA_SHADOWSEEKER — kalecgos pass; the
