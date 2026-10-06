@@ -54,8 +54,9 @@
 -- player-gated variant precedent — the earlier "thirtieth"
 -- claim was wrong: at least the forty-first player-gated
 -- variant ported (40 pattern-carrying lua ports have mtimes
--- older than this file's 2026-10-02 09:30 birth; 66 are born
--- before it — the hodir 23:04 ordinal-repair precedent).
+-- older than this file's 2026-10-02 09:31 birth; 60 are born
+-- before it by git birth-order count — the hodir 23:04
+-- ordinal-repair precedent).
 -- Freya DamageTaken — lethal (damage >= health) ->
 -- Talk(SAY_DEATH 3) + damage = 0 (event 9; in C++ the
 -- lethal branch sets damage = 0 and manually calls
