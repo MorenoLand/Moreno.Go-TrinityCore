@@ -46,7 +46,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	archives, err := mpq.Archives(*input)
+	// vmapexport.cpp fillArchiveNameVector open order, reversed into lookup
+	// precedence (highest first) for the first-hit-wins extraction loop.
+	archives, err := mpq.OrderedVmapArchives(*input)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to locate MPQ archives in %s: %v\n", *input, err)
 		os.Exit(1)
