@@ -7,8 +7,12 @@
 -- "// Ulduar" block in AddNorthrendScripts(), immediately
 -- after AddSC_boss_mimiron() (decl 118 / call 313); the call
 -- after it is AddSC_boss_freya() — loader order confirmed
--- this run; the checkpoint sequence (boss_mimiron ->
--- boss_hodir) is followed).
+-- 2026-10-06 in the 23:03 EDT audit (this lua was written
+-- from the Oct 2 port session and re-audited, per the
+-- xt002 22:38 / vezax 22:48 / assembly_of_iron 22:54 /
+-- kologarn 22:58 stale-header precedent — this run fixes the
+-- stale first-pass "No hodir lua existed" line to this
+-- audited-artifact wording).
 -- Entry: 32845 Hodir (ulduar.h NPC_HODIR, line 78 —
 -- entry-verifiable, registration proceeds (the
 -- nexus_commanders / malygos / sartharion kalecgos
@@ -22,7 +26,6 @@
 -- "spell_biting_cold", "spell_biting_cold_dot") hits
 -- boss_hodir.cpp (+ the loader decl/call lines for
 -- AddSC_boss_hodir) only; zero sql/ hits for all twelve.
--- No hodir lua existed.
 -- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied,
 -- 9 OnDamageTaken.
 -- Ported arms (C++-exact for all modeled arms):
@@ -32,8 +35,12 @@
 -- have no bridges — the auriaya engage-port precedent).
 -- KilledUnit — player-gated Talk(SAY_SLAY 1) (event 3;
 -- who->GetTypeId() == TYPEID_PLAYER — the razuvious
--- player-gated variant precedent — the twenty-fifth
--- player-gated variant ported).
+-- player-gated variant precedent — at least the
+-- forty-first player-gated variant ported: 40 player-gated
+-- lua ports carry mtimes untouched since before this file's
+-- creation (file-birth order puts it at sixtieth; both
+-- counts floor the original "twenty-fifth" claim, which was
+-- also duplicated verbatim on boss_general_vezax.lua).
 -- DamageTaken — lethal (damage >= health) -> Talk(SAY_DEATH
 -- 4) + damage = 0 (event 9; the numeric second return
 -- rewrites damage C++-exact — the moroes damage-rewrite
