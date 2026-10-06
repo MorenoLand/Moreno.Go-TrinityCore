@@ -18,8 +18,8 @@
 -- AddSC_boss_ignis) only; whole-tree grep for
 -- "npc_iron_construct", "npc_scorch_ground",
 -- "spell_ignis_slag_pot" and "achievement_ignis_shattered"
--- hits boss_ignis.cpp only; zero sql/ hits for all five. No
--- ignis lua existed.
+-- hits boss_ignis.cpp only; zero sql/ hits for all five —
+-- the audited artifact this run. No second ignis lua exists.
 -- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4
 -- OnDied.
 -- Ported arms (C++-exact for all modeled arms):
