@@ -5330,7 +5330,8 @@ func init() {
 	// (boss_yogg_saron -> boss_algalon_the_observer; next call is
 	// AddSC_instance_ulduar()). Bridgeable arms: KilledUnit player-gated
 	// Talk(SAY_ALGALON_KILL 20) (event 3 — the razuvious player-gated
-	// variant precedent — the thirty-fifth player-gated variant ported),
+	// variant precedent — at least the fortieth player-gated variant ported
+	// (39 'player-gated' lua files git-born before it)),
 	// with the C++ _hasYelled 1s rate limit modeled as an os.time()
 	// per-guid deadline (1s resolution); DamageTaken phase-two
 	// Talk(SAY_ALGALON_PHASE_TWO 11) gated on HealthBelowPctDamaged(20) +

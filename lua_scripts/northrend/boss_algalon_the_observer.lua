@@ -27,12 +27,15 @@
 -- Sole-source verified: whole-server-tree grep for each of the seventeen
 -- script names hits boss_algalon_the_observer.cpp (+ the loader decl/call
 -- lines for AddSC_boss_algalon_the_observer) only; zero sql/ hits for all
--- seventeen. No algalon lua existed.
+-- seventeen. Lua body: ported Oct 2 09:46 in 8af8496; re-audited this run
+-- — both ported arms C++-exact (player-gated event-3 slay with the
+-- os.time() 1s rate-limit deadline; event-9 phase-two threshold+latch).
 -- Eluna creature events: 3 OnTargetDied, 9 OnDamageTaken, 23 OnReset.
 -- Ported arms (C++-exact for all modeled arms):
 -- KilledUnit — player-gated Talk(SAY_ALGALON_KILL 20) (event 3;
 -- who->GetTypeId() == TYPEID_PLAYER — the razuvious player-gated
--- variant precedent — the thirty-fifth player-gated variant ported);
+-- variant precedent — at least the fortieth player-gated variant ported
+-- (39 'player-gated' lua files git-born before it));
 -- the C++ _hasYelled 1s rate limit (EVENT_UNLOCK_YELL) is modeled with
 -- an os.time() per-guid deadline (the malchezaar os.time-deadline
 -- precedent); 1s resolution caveat — the re-yell unlocks on the next
