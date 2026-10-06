@@ -2198,6 +2198,18 @@ func init() {
 	// lua_scripts/eastern_kingdoms/boss_doomrel.lua.
 	RegisterLuaBoss("boss_doomrel", 9039)
 
+	// boss_coren_direbrew (Coren Direbrew, entry 23872 — NPC_COREN at
+	// instance_blackrock_depths.cpp:47): BossAI combat scheduler.
+	// Ported: Summon Mole Machine 47691 (15s->15s, triggered self-cast),
+	// Direbrew's Disarm 47407 (20s->20s, triggered self-cast). Gossip
+	// fight/apologize menu (texts approximated, DB-side). Unmodeled:
+	// intro phase + 3x antagonist summons, DamageTaken 66%/33% sister
+	// summons (26764/26822), sisters/minion/antagonist scripts, mole
+	// machine GO script, six SpellScript/AuraScripts, LFG FinishDungeon
+	// — no summon/GO/spell/LFG bridges. Full analysis in
+	// lua_scripts/eastern_kingdoms/boss_coren_direbrew.lua.
+	RegisterLuaBoss("boss_coren_direbrew", 23872)
+
 	// boss_magmus / boss_magmusAI (Blackrock Depths, Iron Hall; ScriptedAI
 	// combat scheduler via GetBlackrockDepthsAI — fieryburst 13900
 	// victim-cast 5s->6s; DamageTaken 50% one-shot phase-two latch
