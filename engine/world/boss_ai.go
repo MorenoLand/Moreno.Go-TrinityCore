@@ -2431,6 +2431,22 @@ func init() {
 	// verifiable from the C++ sources: blackrock_spire.h:64 names
 	// NPC_UROK_DOOMHOWL = 10584 (gizrul / rend_blackhand precedent).
 	RegisterLuaBoss("boss_urok_doomhowl", 10584)
+	// lua_scripts/eastern_kingdoms/boss_lord_valthalak.lua.
+	// Self-cast summon-spectral-assassin 27249 6s init -> 30s loop;
+	// victim-cast shadow-wrath 27286 9s init -> 19s loop (urand lower
+	// bounds; gyth/urok convention). Health latches via OnDamageTaken(9):
+	// 40% one-shot -> self-cast frenzy 8269 + Talk(EMOTE_FRENZY=0) +
+	// CancelEvent(summon) (C++-exact drop, not re-arm); 15% one-shot ->
+	// self-cast frenzy + Talk(EMOTE_FRENZY) + ScheduleEvent shadow-bolt-
+	// volley 27382 7s init -> 4s loop (volley fires only after the 15%
+	// latch; gyth latch convention). Entry 16042 not in the C++ creature
+	// enum (ScriptName binding is DB-side); verified from the 3.3.5 data
+	// source (npc=16042/lord-valthalak, "Mea Culpa" quest objective NPC
+	// #16042 slain — Lord Valthalak); AI runs under BossAI(DATA_LORD_
+	// VALTHALAK = 14, blackrock_spire.h:44). Reset _Reset / JustDied
+	// _JustDied covered by the cancel on 2/4/23; JustDied's instance
+	// SetData(DONE) has no bridge (documented-only).
+	RegisterLuaBoss("boss_lord_valthalak", 16042)
 	// lua_scripts/eastern_kingdoms/boss_vaelastrasz.lua.
 	// Combat entry self-cast essence-of-the-red 23513 + SetHealth(30%
 	// of max); cleave 19983 victim-cast 10s init -> 15s loop;
