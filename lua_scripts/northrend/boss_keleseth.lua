@@ -18,11 +18,11 @@
 -- malygos / sartharion kalecgos precedent); the CreatureScript ScriptName
 -- binding is DB-side as usual). DATA_PRINCE_KELESETH = 0 (utgarde_keep.h
 -- line 31).
--- Sole-source verified: whole-server-tree grep for each of the five
--- script names hits boss_keleseth.cpp (+ the loader decl/call lines for
--- AddSC_boss_keleseth) only; this clone carries no sql/ tree, so
--- ScriptName bindings are DB-side by construction. No keleseth lua
--- existed.
+-- Sole-source verified this run: whole-server-tree grep for each of the
+-- five script names hits boss_keleseth.cpp (+ the loader decl/call lines
+-- for AddSC_boss_keleseth) only; this clone carries no sql/ tree, so
+-- ScriptName bindings are DB-side by construction. The lua was ported
+-- Oct 2 09:55 in e526894 and re-audited this run (both arms C++-exact).
 -- Eluna creature events: 1 OnEnterCombat, 4 OnDied.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_START_COMBAT 1) (event 1); the Talk fires
