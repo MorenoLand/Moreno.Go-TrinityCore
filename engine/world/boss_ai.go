@@ -2447,6 +2447,24 @@ func init() {
 	// _JustDied covered by the cancel on 2/4/23; JustDied's instance
 	// SetData(DONE) has no bridge (documented-only).
 	RegisterLuaBoss("boss_lord_valthalak", 16042)
+	// instance_blackrock_spire (AddSC_instance_blackrock_spire; BRS
+	// encounter-state machine, map 229 — InstanceMapScript + 3
+	// AreaTriggerScripts. 23 encounter slots (DATA_HIGHLORD_OMOKK=0 ..
+	// DATA_GENERAL_DRAKKISATH=13, DATA_DRAGONSPIRE_ROOM=15,
+	// DATA_HALL_RUNE_1..7=16..22), DoorData for GO_DOORS / GO_EMBERSEER_OUT
+	// / GO_DRAKKISATH_DOOR_1+2, GUID latches for all 14 bosses plus scarshield
+	// infiltrator / finkle einhorn / 6 blackhand incarcerators, done-state
+	// DespawnOrUnsummon of ember-seer/rend/nefarius, GO GUID latching with
+	// done-state open/close on create (emberseer_in, doors, emberseer_out,
+	// 7 hall runes, 7 emberseer runes, 2 portcullis), whelp-spawner spell,
+	// ProcessEvent -> emberseer SetData(1,1), SetData AREATRIGGER -> 1s
+	// dragonspire-store / 3s dragonspire-check loop (grid capture of
+	// dreadweaver/summoner/veteran per hall rune, alive-check -> rune close +
+	// HALL_RUNE_x DONE, all-7 -> DRAGONSPIRE_ROOM DONE + door open), and the
+	// at_dragonspire_hall / at_blackrock_stadium /
+	// at_nearby_scarshield_infiltrator AreaTriggers): every arm needs the
+	// instance-script model — the Lua scripting surface has no
+	// InstanceMapScript bridge, so this unit is documented-only.
 	// lua_scripts/eastern_kingdoms/boss_vaelastrasz.lua.
 	// Combat entry self-cast essence-of-the-red 23513 + SetHealth(30%
 	// of max); cleave 19983 victim-cast 10s init -> 15s loop;
