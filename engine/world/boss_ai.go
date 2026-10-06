@@ -3161,6 +3161,24 @@ func init() {
 	// lua_scripts/kalimdor/boss_rajaxx.lua, not wired.
 	RegisterLuaBoss("boss_rajaxx", 15341)
 
+	// boss_moam (Moam, entry 15340 — C++-verified via
+	// ruins_of_ahnqiraj.h:43's NPC_MOAM constant; the
+	// creature_template ScriptName binding stays DB-side): the
+	// self-contained in-combat legs only — engage schedules stone
+	// phase at 90s (C++ Reset); DamageTaken below 45% health enters
+	// stone phase (moroes event-9 convention); stone phase casts
+	// SUMMON_MANA_FIEND 1/2/3 (25681/25682/25683) + ENERGIZE 25685
+	// and exits after 90s via RemoveAura(ENERGIZE) (netherspite
+	// convention), rescheduling the next phase. Zero Talk() calls in
+	// C++ (the Texts enum is unused). Unwired: mana-full Arcane
+	// Eruption 25672 + SetPower(MANA, 0) — no SetPower bridge for
+	// creatures (curator precedent); EVENT_DRAIN_MANA never scheduled
+	// in C++ Reset (dead); SPELL_TRAMPLE never cast (dead);
+	// EVENT_WIDE_SLASH/TRASH commented out (inactive). BossAI's ctor
+	// leg DATA_MOAM and _Reset() ride the absent instance bridge —
+	// documented in lua_scripts/kalimdor/boss_moam.lua, not wired.
+	RegisterLuaBoss("boss_moam", 15340)
+
 	// boss_epoch (Chrono-Lord Epoch, entry 26532 — C++-verified via
 	// npc_arthas.cpp:59's NPC_EPOCH constant plus :1329's
 	// instance->instance->SummonCreature(NPC_EPOCH, ...) in the
