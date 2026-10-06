@@ -5,8 +5,10 @@
 -- boss_elder_ironbranch / boss_elder_stonebark (CreatureScript
 -- via GetUlduarAI<...AI> (BossAI), BOSS_BRIGHTLEAF = 14 /
 -- BOSS_IRONBRANCH = 15 / BOSS_STONEBARK = 16 — all registered
--- from inside AddSC_boss_freya(); loader decl 120 / call 316
--- per northrend_script_loader.cpp — the ELEVENTH group of the
+-- from inside AddSC_boss_freya(); loader decl 120 / call 315
+-- (call side verified this run — the header's earlier "call 316"
+-- was wrong; 316 is AddSC_boss_thorim()) per
+-- northrend_script_loader.cpp — the ELEVENTH group of the
 -- "// Ulduar" block in AddNorthrendScripts(), immediately
 -- after AddSC_boss_hodir() (decl 119 / call 314); the call
 -- after it is AddSC_boss_thorim() — loader order confirmed
@@ -36,7 +38,10 @@
 -- "achievement_knock_knock_knock_on_wood") hits
 -- boss_freya.cpp (+ the loader decl/call lines for
 -- AddSC_boss_freya) only; zero sql/ hits for all twenty-one.
--- No freya lua existed.
+-- Ported 2026-10-02 09:30 from a prior-session audit; this run
+-- re-verified every claim below against the C++ (the xt002 /
+-- vezax / assembly_of_iron / kologarn / hodir stale-wording
+-- fix precedent).
 -- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4
 -- OnDied, 9 OnDamageTaken.
 -- Ported arms (C++-exact for all modeled arms):
@@ -46,8 +51,11 @@
 -- no instance GuidData bridge; no registration.
 -- Freya KilledUnit — player-gated Talk(SAY_SLAY 2) (event 3;
 -- who->GetTypeId() == TYPEID_PLAYER — the razuvious
--- player-gated variant precedent — the thirtieth
--- player-gated variant ported).
+-- player-gated variant precedent — the earlier "thirtieth"
+-- claim was wrong: at least the forty-first player-gated
+-- variant ported (40 pattern-carrying lua ports have mtimes
+-- older than this file's 2026-10-02 09:30 birth; 66 are born
+-- before it — the hodir 23:04 ordinal-repair precedent).
 -- Freya DamageTaken — lethal (damage >= health) ->
 -- Talk(SAY_DEATH 3) + damage = 0 (event 9; in C++ the
 -- lethal branch sets damage = 0 and manually calls
@@ -63,9 +71,11 @@
 -- Elder KilledUnit (all three elders, identical) —
 -- player-gated Talk(SAY_ELDER_SLAY 1) (event 3;
 -- who->GetTypeId() == TYPEID_PLAYER — the razuvious
--- player-gated variant precedent — the thirty-first,
--- thirty-second and thirty-third player-gated variants
--- ported).
+-- player-gated variant precedent — the earlier
+-- "thirty-first / thirty-second / thirty-third" claim was
+-- wrong: at least the forty-second through forty-fourth
+-- player-gated variants ported (same count as above,
+-- file order: freya then the three elders).
 -- Elder JustDied (all three elders, identical) —
 -- Talk(SAY_ELDER_DEATH 2) (event 4; the _JustDied()
 -- passthrough has no bridge — the sjonnir JustDied-Talk
@@ -82,12 +92,14 @@
 -- elder scan (instance GetGuidData + alive checks) ->
 -- applies SPELL_DRAINED_OF_POWER 62467 to the elder, essence
 -- casts, RemoveLootMode, elder AttackStart + AddThreat; the
--- Talk choice above; CastSpell SPELL_ATTUNED_TO_NATURE 62550
+-- Talk choice above; CastSpell SPELL_ATTUNED_TO_NATURE 62519
 -- (150 stacks); six ScheduleEvent legs — no instance
 -- GuidData / aura / threat / loot-mode / cast / timer
 -- bridges.
 -- Freya JustDied companion legs — chest summon
--- (SPELL_CHEST... 62950-62958 by difficulty/elderCount),
+-- (summonSpell[2][4]: 62950/62952/62953/62954 10-man,
+-- 62955/62956/62957/62958 25-man, indexed by
+-- difficulty/elderCount),
 -- SetReactState REACT_PASSIVE, InterruptNonMeleeSpells,
 -- RemoveAllAttackers, AttackStop, SetFaction FRIENDLY,
 -- DespawnOrUnsummon(7.5s), CastSpell
@@ -97,15 +109,17 @@
 -- — no cast / react-state / faction / despawn / DoAction
 -- bridges; Talk(SAY_DEATH) itself is ported via event 9.
 -- Freya UpdateAI event machine — EVENT_WAVE (summon wave
--- adds); EVENT_EONAR_GIFT (Talk(EMOTE_LIFEBINDERS_GIFT 6));
+-- adds); EVENT_EONAR_GIFT (Talk(EMOTE_LIFEBINDERS_GIFT 8));
 -- EVENT_NATURE_BOMB / EVENT_UNSTABLE_ENERGY / EVENT_STRENGTHENED_IRON_ROOTS
--- (Talk(EMOTE_IRON_ROOTS 7)); EVENT_GROUND_TREMOR
--- (Talk(EMOTE_GROUND_TREMOR 8)); EVENT_ENRAGE
--- (Talk(SAY_BERSERK 5)); wave summon Talks
--- (SAY_SUMMON_LASHERS 9 / SAY_SUMMON_TRIO 10 /
--- SAY_SUMMON_CONSERVATOR 11); Talk(EMOTE_ALLIES_OF_NATURE
--- 12) — no timer-event / cast / summon bridges; all timer-leg
--- yells ride the unbridgeable event machine.
+-- (Talk(EMOTE_IRON_ROOTS 11)); EVENT_GROUND_TREMOR
+-- (Talk(EMOTE_GROUND_TREMOR 10)); EVENT_ENRAGE
+-- (Talk(SAY_BERSERK 4)); wave summon Talks
+-- (SAY_SUMMON_LASHERS 7 / SAY_SUMMON_TRIO 6 /
+-- SAY_SUMMON_CONSERVATOR 5); Talk(EMOTE_ALLIES_OF_NATURE
+-- 9) — no timer-event / cast / summon bridges; all timer-leg
+-- yells ride the unbridgeable event machine (every one of
+-- these numbers re-verified against the yells enum this run;
+-- the earlier header had them all off).
 -- Freya GetData(DATA_GETTING_BACK_TO_NATURE /
 -- DATA_KNOCK_ON_WOOD / DATA_KNOCK_KNOCK_ON_WOOD /
 -- DATA_KNOCK_KNOCK_KNOCK_ON_WOOD) + DoAction — no GetData /

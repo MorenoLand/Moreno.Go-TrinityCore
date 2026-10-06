@@ -5263,7 +5263,7 @@ func init() {
 	// boss_elder_stonebark — ulduar.h NPC_FREYA line 80,
 	// NPC_BRIGHTLEAF line 137, NPC_STONEBARK line 138,
 	// NPC_IRONBRANCH line 136; AddSC_boss_freya(), loader
-	// decl 120 / call 316 — the ELEVENTH group of the
+	// decl 120 / call 315 — the ELEVENTH group of the
 	// "// Ulduar" block in AddNorthrendScripts()).
 	// Freya: KilledUnit player-gated Talk(SAY_SLAY 2)
 	// (event 3); DamageTaken lethal -> Talk(SAY_DEATH 3) +
