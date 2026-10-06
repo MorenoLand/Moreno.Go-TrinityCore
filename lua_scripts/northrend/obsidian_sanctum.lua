@@ -11,9 +11,9 @@
 -- AddSC_instance_obsidian_sanctum() (decl 96 / call 291) — loader
 -- order confirmed this run; the checkpoint sequence
 -- (boss_sartharion -> obsidian_sanctum) is followed).
--- Entries: 30452 Tenebron (obsidian_sanctum.h NPC_TENEBRON, line 40),
--- 30451 Shadron (NPC_SHADRON, line 41), 30449 Vesperon
--- (NPC_VESPERON, line 42) — entry-verifiable (the nexus_commanders /
+-- Entries: 30452 Tenebron (obsidian_sanctum.h NPC_TENEBRON, line 41),
+-- 30451 Shadron (NPC_SHADRON, line 42), 30449 Vesperon
+-- (NPC_VESPERON, line 43) — entry-verifiable (the nexus_commanders /
 -- malygos / sartharion kalecgos precedent); the CreatureScript
 -- ScriptName bindings are DB-side as usual.
 -- Sole-source verified: whole-server-tree grep for each of the
