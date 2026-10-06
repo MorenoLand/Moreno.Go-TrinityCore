@@ -21,8 +21,11 @@
 -- "spell_ulduar_stone_grip_absorb", "spell_ulduar_stone_grip",
 -- "spell_kologarn_stone_shout",
 -- "spell_kologarn_summon_focused_eyebeam") hits
--- boss_kologarn.cpp only; zero sql/ hits for all nine. No
--- kologarn lua existed.
+-- boss_kologarn.cpp only; zero sql/ hits for all nine. The
+-- lua port below was written from a prior-session audit and
+-- re-audited this run: all Talk arms and id claims verified
+-- against the C++ (the xt002 22:38 / vezax 22:48 /
+-- assembly_of_iron 22:54 precedent).
 -- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4
 -- OnDied.
 -- Ported arms (C++-exact for all modeled arms):
@@ -61,7 +64,7 @@
 -- (NPC_ARM_SWEEP_STALKER + SPELL_ARM_SWEEP 63766);
 -- EVENT_SMASH (SPELL_TWO_ARM_SMASH 63356 / SPELL_ONE_ARM_
 -- SMASH 63573); EVENT_STONE_SHOUT (SPELL_STONE_SHOUT 63716);
--- EVENT_ENRAGE (DoCast 26662 + Talk(SAY_BERSERK 7));
+-- EVENT_ENRAGE (DoCast 47008 + Talk(SAY_BERSERK 7));
 -- EVENT_RESPAWN_LEFT_ARM / EVENT_RESPAWN_RIGHT_ARM
 -- (InstallAccessory NPC_LEFT_ARM / NPC_RIGHT_ARM); EVENT_
 -- STONE_GRIP (DoCast 62166 + Talk(SAY_GRAB_PLAYER 5) +
