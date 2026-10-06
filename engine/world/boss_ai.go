@@ -3341,6 +3341,25 @@ func init() {
 	// lua_scripts/kalimdor/boss_sartura.lua.
 	RegisterLuaBoss("boss_sartura", 15516)
 
+	// boss_skeram (Prophet Skeram, entry 15263 —
+	// C++-verified via temple_of_ahnqiraj.h:71 NPC_SKERAM; the
+	// creature_template ScriptName binding stays DB-side): Arcane
+	// Explosion 26192 self-cast (6-12s init -> 8-18s); True
+	// Fulfillment 785 on a random player via GetPlayersInWorld
+	// (15s -> 20-30s); Blink self-cast from {4801, 8195, 20449}
+	// (30-45s init -> 10-30s); Earth Shock 26194 victim-cast
+	// (2s repeat); Split Talk SAY_SPLIT at 75/50/25% via event 9
+	// (latched, blink re-armed to 2s); Talk SAY_AGGRO 0 /
+	// SAY_SLAY 1 / SAY_DEATH 3. Unwired: image summons
+	// (SPELL_SUMMON_IMAGES 747 — no SummonCreature bridge);
+	// JustSummoned positioning + health seeding; Blink
+	// ResetThreatList/SetVisible; Arcane Explosion + True
+	// Fulfillment SpellScripts; JustDied !IsSummon gate (no
+	// IsSummon bridge — DEATH Talk ungated); BossAI ctor leg
+	// DATA_SKERAM (instance bridge). Full analysis in
+	// lua_scripts/kalimdor/boss_skeram.lua.
+	RegisterLuaBoss("boss_skeram", 15263)
+
 	// boss_epoch (Chrono-Lord Epoch, entry 26532 — C++-verified via
 	// npc_arthas.cpp:59's NPC_EPOCH constant plus :1329's
 	// instance->instance->SummonCreature(NPC_EPOCH, ...) in the
