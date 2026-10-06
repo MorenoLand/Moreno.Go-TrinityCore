@@ -3249,6 +3249,26 @@ func init() {
 	// lua_scripts/kalimdor/boss_ossirian.lua, not wired.
 	RegisterLuaBoss("boss_ossirian", 15339)
 
+	// boss_viscidus (Viscidus, entry 15299 — C++-verified via
+	// temple_of_ahnqiraj.h:68's NPC_VISCIDUS constant; the
+	// creature_template ScriptName binding stays DB-side): the
+	// self-contained in-combat legs only — engage (JustEngagedWith
+	// -> InitSpells) self-casts TOXIN 26575 and arms POISONBOLT_VOLLEY
+	// 25991 (10-15s -> 10-15s) + POISON_SHOCK 25993 (7-12s ->
+	// 7-12s). Unwired: the SpellHit frost-slow/freeze machine (no
+	// spell-school bridge — any-spellId matching would misfire, so
+	// the SLOWED/SLOWED_MORE/FREEZE + EMOTE_SLOW/FREEZE/FROZEN
+	// progression and the 15s EVENT_RESET_PHASE stay out); the
+	// DamageTaken hitcounter (dead in Lua while the MELEE phase is
+	// unreachable — CRACK/SHATTER/EXPLODE emotes + EXPLODE cast);
+	// the glob ring (SummonCreature — zero Lua usage) and
+	// npc_glob_of_viscidus 15667 JustDied/MovementInform legs
+	// (cross-AI/instance/motion bridges absent — no file created,
+	// no-placeholder rule); JustDied suicide cast 26003; evade
+	// cleanup; BossAI ctor leg DATA_VISCIDUS. Full analysis in
+	// lua_scripts/kalimdor/boss_viscidus.lua.
+	RegisterLuaBoss("boss_viscidus", 15299)
+
 	// boss_epoch (Chrono-Lord Epoch, entry 26532 — C++-verified via
 	// npc_arthas.cpp:59's NPC_EPOCH constant plus :1329's
 	// instance->instance->SummonCreature(NPC_EPOCH, ...) in the
