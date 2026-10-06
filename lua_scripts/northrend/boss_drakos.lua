@@ -10,7 +10,7 @@
 -- AddSC_boss_urom() — loader order confirmed this run; the
 -- checkpoint sequence (instance_nexus -> boss_drakos) is followed).
 -- Entry: 27654 Drakos the Interrogator (oculus.h NPC_DRAKOS, line
--- 47; instance_oculus.cpp OnCreatureCreate binds case NPC_DRAKOS
+-- 41; instance_oculus.cpp OnCreatureCreate binds case NPC_DRAKOS
 -- (line 59) — entry-verifiable, registration proceeds (the
 -- nexus_commanders kalecgos precedent); the CreatureScript
 -- ScriptName binding is DB-side as usual.
