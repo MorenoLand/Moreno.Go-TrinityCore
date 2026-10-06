@@ -3360,6 +3360,48 @@ func init() {
 	// lua_scripts/kalimdor/boss_skeram.lua.
 	RegisterLuaBoss("boss_skeram", 15263)
 
+	// boss_veknilash (Emperor Vek'nilash, entry 15275 —
+	// C++-verified via temple_of_ahnqiraj.h:75 NPC_VEKNILASH; the
+	// creature_template ScriptName binding stays DB-side): the
+	// self-contained in-combat legs only — Unbalancing Strike
+	// 26613 victim-cast (8-18s init -> 8-20s); Uppercut 26007
+	// (C++ random melee target — no range/SelectTarget bridge,
+	// ported as victim-cast, kri convention; 14-29s init ->
+	// 15-30s); Berserk 26662 self-cast at 15min (60min repeat).
+	// Unwired: shared twin health + SpellHit heal-brother
+	// rebalance (cross-boss via instance->GetCreature(DATA_VEKLOR)
+	// — no instance bridge); TryHealBrother (cross-boss); the
+	// 30s teleport swap + SetAfterTeleport stun/visual 26638 +
+	// post-teleport re-arm (no position/SelectTarget/InterruptNonMeleeSpells/
+	// ResetThreatList/AttackStart bridges); HandleBugs + Mutate Bug
+	// 802 (creature grid + SetFaction + AttackStart — no bridges);
+	// Aggro/Kill/Death DoPlaySoundToSet 8661/8662/8660 (no sound
+	// bridge; zero Talk in C++); TwinReset/BossAI ctor leg
+	// DATA_TWIN_EMPERORS (instance bridge). Full analysis in
+	// lua_scripts/kalimdor/boss_veknilash.lua.
+	RegisterLuaBoss("boss_veknilash", 15275)
+
+	// boss_veklor (Emperor Vek'lor, entry 15276 —
+	// C++-verified via temple_of_ahnqiraj.h:74 NPC_VEKLOR; the
+	// creature_template ScriptName binding stays DB-side): the
+	// self-contained in-combat legs only — Shadow Bolt 26006
+	// victim-cast (2s repeat; the <45y MoveChase leg has no motion
+	// bridge — fankriss convention); Blizzard 26607 on a random
+	// player via GetPlayersInWorld (15-20s init -> 15-30s,
+	// huhuran convention); Berserk 26662 self-cast at 15min
+	// (60min repeat). VL does not melee (C++ AttackStart override
+	// chases at 20y — motion bridge absent). Unwired: shared twin
+	// health (no instance bridge); the 30s teleport swap +
+	// SetAfterTeleport stun/visual + post-teleport Arcane Burst 5s
+	// re-arm (no position/threat/interrupt bridges); Arcane Burst
+	// 568 nearest-melee punishment (no range bridge); HandleBugs +
+	// Explode Bug 804 (no creature-grid/SetFaction bridges);
+	// Aggro/Kill/Death DoPlaySoundToSet 8657/8658/8659 (no sound
+	// bridge; zero Talk in C++); TwinReset/BossAI ctor leg
+	// DATA_TWIN_EMPERORS (instance bridge). Full analysis in
+	// lua_scripts/kalimdor/boss_veklor.lua.
+	RegisterLuaBoss("boss_veklor", 15276)
+
 	// boss_epoch (Chrono-Lord Epoch, entry 26532 — C++-verified via
 	// npc_arthas.cpp:59's NPC_EPOCH constant plus :1329's
 	// instance->instance->SummonCreature(NPC_EPOCH, ...) in the
