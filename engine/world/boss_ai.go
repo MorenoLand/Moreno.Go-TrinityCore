@@ -5292,15 +5292,18 @@ func init() {
 	// JustEngagedWith Talk(SAY_AGGRO_1 0) (event 1; the
 	// auriaya engage-port precedent); KilledUnit player-gated
 	// Talk(SAY_SLAY 4) (event 3 — the razuvious precedent —
-	// the thirty-fourth player-gated variant ported).
+	// at least the forty-first player-gated variant ported;
+	// file-birth order puts it at sixty-second).
 	// Talk(SAY_DEATH 7) lives in FinishEncounter() (called
 	// from the event machine, not from JustDied) — event 4
 	// deliberately not registered. Timer Talks, the pre-phase
 	// DamageTaken SAY_JUMPDOWN arm (phase + instance-state
 	// condition), cross-creature Talk(SAY_SPECIAL),
-	// DoAction/SpellHit Talks, the ten spell scripts, the
-	// condition script and the three achievements are
-	// bridge-blocked — documented in the lua header.
+	// DoAction/SpellHit Talks (incl. cross-creature
+	// Talk(SAY_SIF_DESPAWN 1) in the pre-phase SpellHit leg),
+	// the ten spell scripts, the condition script and the
+	// three achievements are bridge-blocked — documented in
+	// the lua header.
 	RegisterLuaBoss("boss_thorim", 32865)
 
 	// boss_yogg_saron.lua (lua_scripts/northrend/boss_yogg_saron.lua):

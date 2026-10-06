@@ -31,7 +31,10 @@
 -- \"achievement_i_ll_take_you_all_on\",
 -- \"condition_thorim_arena_leap\") hits boss_thorim.cpp
 -- only; zero sql/ hits for all twenty.
--- No thorim lua existed.
+-- Lua port written 2026-10-02 (commit 626a320) from the
+-- first-pass audit; re-audited against the C++ this run —
+-- all 16 Talk arms accounted, header loader/id claims
+-- re-verified exact.
 -- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO_1 0) (event 1; the
@@ -44,8 +47,10 @@
 -- bridges — the auriaya engage-port precedent).
 -- KilledUnit — player-gated Talk(SAY_SLAY 4) (event 3;
 -- who->GetTypeId() == TYPEID_PLAYER — the razuvious
--- player-gated variant precedent — the thirty-fourth
--- player-gated variant ported).
+-- player-gated variant precedent — at least the forty-first
+-- player-gated variant ported (file-birth order puts it at
+-- sixty-second; the "thirty-fourth" first-pass claim was
+-- verifiably wrong — the hodir 23:04 repair precedent).
 -- DOCUMENTED-ONLY (in this header; no registration beyond
 -- entry 32865):
 -- Talk(SAY_DEATH 7) lives in FinishEncounter() (DoCastAOE
@@ -71,6 +76,10 @@
 -- DATA_RUNE_GIANT dead) — no phase / instance GuidData /
 -- distance bridges; the event-9 DamageTaken bridge cannot
 -- model the condition — bridge-blocked, no registration.
+-- npc_thorim_pre_phaseAI::SpellHit (SPELL_TOUCH_OF_DOMINION_TRIGGERED
+-- 62565) — sif->AI()->Talk(SAY_SIF_DESPAWN 1) + DespawnOrUnsummon(6s) +
+-- _hardMode = false — no SpellHit / cross-creature-Talk bridge
+-- (the mimiron cross-creature precedent); documented-only.
 -- npc_thorim_pre_phaseAI / npc_thorim_arena_phaseAI share
 -- creature entry 32865 (phase variants selected by
 -- GetUlduarAI on instance state) — both have no bridgeable
