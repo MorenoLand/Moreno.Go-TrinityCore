@@ -3302,6 +3302,30 @@ func init() {
 	// lua_scripts/kalimdor/boss_huhuran.lua.
 	RegisterLuaBoss("boss_huhuran", 15509)
 
+	// boss_kri (Kri, entry 15511 — Bug Trio; the creature_template
+	// ScriptName binding stays DB-side): Cleave 26350 on victim
+	// (4-8s -> 5-12s); Toxic Volley 25812 on victim (6-12s ->
+	// 10-15s); Poison Cloud 38718 on victim at <5% health via
+	// event 9 (latched). Unwired: Vem-dead Enrage (instance
+	// DATA_VEMISDEAD); JustDied loot/instance legs. Full analysis
+	// in lua_scripts/kalimdor/boss_kri.lua.
+	RegisterLuaBoss("boss_kri", 15511)
+
+	// boss_vem (Vem, entry 15544 — Bug Trio): Charge 26561 on
+	// random player via GetPlayersInWorld (15-27s -> 8-16s; the
+	// AttackStart leg has no bridge); Knockback 26027 on victim
+	// (8-20s -> 15-25s; threat modify has no bridge); Enrage 34624
+	// self-cast after 120s (latched). Unwired: JustDied instance
+	// legs. Full analysis in lua_scripts/kalimdor/boss_vem.lua.
+	RegisterLuaBoss("boss_vem", 15544)
+
+	// boss_yauj (Princess Yauj, entry 15543 — Bug Trio): Fear 19408
+	// on victim (12-24s -> 20s; ResetThreatList has no bridge).
+	// Unwired: Heal (instance target selection); Vem-dead Enrage;
+	// JustDied summons (no SummonCreature bridge). Full analysis in
+	// lua_scripts/kalimdor/boss_yauj.lua.
+	RegisterLuaBoss("boss_yauj", 15543)
+
 	// boss_epoch (Chrono-Lord Epoch, entry 26532 — C++-verified via
 	// npc_arthas.cpp:59's NPC_EPOCH constant plus :1329's
 	// instance->instance->SummonCreature(NPC_EPOCH, ...) in the
