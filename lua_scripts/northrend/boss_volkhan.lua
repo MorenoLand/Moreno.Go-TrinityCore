@@ -12,8 +12,8 @@
 -- it is AddSC_instance_halls_of_lightning() (decl 102 / call 297) —
 -- loader order confirmed this run; the checkpoint sequence
 -- (boss_ionar -> boss_volkhan) is followed).
--- Entry: 28587 Volkhan (halls_of_lightning.h NPC_VOLKHAN, line 41;
--- DATA_VOLKHAN = 1, line 33; GO_VOLKHAN_DOOR = 191325, line 50);
+-- Entry: 28587 Volkhan (halls_of_lightning.h NPC_VOLKHAN, line 40;
+-- DATA_VOLKHAN = 1, line 32; GO_VOLKHAN_DOOR = 191325, line 48);
 -- instance_halls_of_lightning.cpp binds { GO_VOLKHAN_DOOR,
 -- DATA_VOLKHAN, DOOR_TYPE_PASSAGE } (line 27), OnCreatureCreate case
 -- NPC_VOLKHAN (line 54), GetGuidData case DATA_VOLKHAN (line 107) —
