@@ -139,6 +139,10 @@ func main() {
 		failed = true
 		fmt.Fprintf(os.Stderr, "Failed to assemble map trees: %v\n", err)
 	}
+	if err := exportGameobjectModels(src, dest); err != nil {
+		failed = true
+		fmt.Fprintf(os.Stderr, "Failed to export gameobject models: %v\n", err)
+	}
 
 	elapsed := time.Since(start)
 	fmt.Printf("Assembled %d building model trees into '%s' in %v\n", modelsProcessed, dest, elapsed.Round(time.Millisecond))
@@ -282,10 +286,7 @@ func readRawModel(reader io.Reader) (rawModel, error) {
 				return rawModel{}, err
 			}
 		} else {
-			liquid.Heights = make([]float32, 1)
-			if err := binary.Read(reader, binary.LittleEndian, &liquid.Heights[0]); err != nil {
-				return rawModel{}, err
-			}
+			liquid.Heights = []float32{group.High.Z}
 		}
 		model.Groups[i].Liquid = liquid
 	}
@@ -352,6 +353,9 @@ func writeGroupGeometry(writer io.Writer, group rawGroup) error {
 	if err := binary.Write(writer, binary.LittleEndian, uint32(4+len(group.Vertices)*12)); err != nil || binary.Write(writer, binary.LittleEndian, uint32(len(group.Vertices))) != nil || binary.Write(writer, binary.LittleEndian, group.Vertices) != nil {
 		return errors.New("failed to write VMAP vertices")
 	}
+	if len(group.Vertices) == 0 {
+		return nil
+	}
 	if _, err := io.WriteString(writer, "TRIM"); err != nil {
 		return err
 	}
@@ -374,7 +378,7 @@ func writeGroupGeometry(writer io.Writer, group rawGroup) error {
 	if group.Liquid == nil {
 		return binary.Write(writer, binary.LittleEndian, uint32(0))
 	}
-	liquidSize := uint32(16 + len(group.Liquid.Heights)*4 + len(group.Liquid.Flags))
+	liquidSize := uint32(24 + len(group.Liquid.Heights)*4 + len(group.Liquid.Flags))
 	if err := binary.Write(writer, binary.LittleEndian, liquidSize); err != nil || binary.Write(writer, binary.LittleEndian, group.Liquid.TilesX) != nil || binary.Write(writer, binary.LittleEndian, group.Liquid.TilesY) != nil || binary.Write(writer, binary.LittleEndian, group.Liquid.Corner) != nil || binary.Write(writer, binary.LittleEndian, group.Liquid.Type) != nil || binary.Write(writer, binary.LittleEndian, group.Liquid.Heights) != nil || binary.Write(writer, binary.LittleEndian, group.Liquid.Flags) != nil {
 		return errors.New("failed to write VMAP liquid")
 	}

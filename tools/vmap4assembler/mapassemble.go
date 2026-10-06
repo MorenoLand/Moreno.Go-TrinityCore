@@ -176,7 +176,7 @@ func calculateM2Bound(srcDir string, spawn *mapSpawnRecord) error {
 }
 
 func transformModelVertex(value, rotation vector3, scale float32) vector3 {
-	x, y, z := float64(rotation.X)*math.Pi/180, float64(rotation.Y)*math.Pi/180, float64(rotation.Z)*math.Pi/180
+	x, y, z := float64(rotation.Z)*math.Pi/180, float64(rotation.X)*math.Pi/180, float64(rotation.Y)*math.Pi/180
 	sx, cx := math.Sin(x), math.Cos(x)
 	sy, cy := math.Sin(y), math.Cos(y)
 	sz, cz := math.Sin(z), math.Cos(z)
@@ -200,6 +200,100 @@ func prepareMapSpawns(srcDir string, assembly *mapAssembly) error {
 			offset := vector3{533.33333 * 32, 533.33333 * 32, 0}
 			spawn.BoundsLow = addVector(spawn.BoundsLow, offset)
 			spawn.BoundsHigh = addVector(spawn.BoundsHigh, offset)
+		}
+	}
+	return nil
+}
+
+func finiteVector(value vector3) bool {
+	return !math.IsInf(float64(value.X), 0) && !math.IsNaN(float64(value.X)) &&
+		!math.IsInf(float64(value.Y), 0) && !math.IsNaN(float64(value.Y)) &&
+		!math.IsInf(float64(value.Z), 0) && !math.IsNaN(float64(value.Z))
+}
+
+func exportGameobjectModels(srcDir, destDir string) error {
+	list, err := os.Open(filepath.Join(srcDir, "temp_gameobject_models"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer list.Close()
+	ident := make([]byte, 8)
+	if _, err := io.ReadFull(list, ident); err != nil || string(ident[:7]) != rawVMapMagic || ident[7] != 0 {
+		return nil
+	}
+	out, err := os.Create(filepath.Join(destDir, "GameObjectModels.dtree"))
+	if err != nil {
+		return nil
+	}
+	defer out.Close()
+	if _, err := io.WriteString(out, vMapMagic); err != nil {
+		return err
+	}
+	for {
+		var displayID uint32
+		err := binary.Read(list, binary.LittleEndian, &displayID)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("temp_gameobject_models seems to be corrupted: %w", err)
+		}
+		var isWmo byte
+		var nameLen uint32
+		if err := binary.Read(list, binary.LittleEndian, &isWmo); err != nil {
+			return fmt.Errorf("temp_gameobject_models seems to be corrupted: %w", err)
+		}
+		if err := binary.Read(list, binary.LittleEndian, &nameLen); err != nil || nameLen >= 500 {
+			return fmt.Errorf("temp_gameobject_models seems to be corrupted: %w", err)
+		}
+		name := make([]byte, nameLen)
+		if _, err := io.ReadFull(list, name); err != nil {
+			return fmt.Errorf("temp_gameobject_models seems to be corrupted: %w", err)
+		}
+		data, err := os.ReadFile(filepath.Join(srcDir, string(name)))
+		if err != nil {
+			continue
+		}
+		raw, err := readRawModel(bytes.NewReader(data))
+		if err != nil {
+			continue
+		}
+		boundSet := false
+		var low, high vector3
+		for _, group := range raw.Groups {
+			for _, vertex := range group.Vertices {
+				if !boundSet {
+					low, high = vertex, vertex
+					boundSet = true
+				} else {
+					low = minVector(low, vertex)
+					high = maxVector(high, vertex)
+				}
+			}
+		}
+		if !boundSet || !finiteVector(low) || !finiteVector(high) {
+			continue
+		}
+		if err := binary.Write(out, binary.LittleEndian, displayID); err != nil {
+			return err
+		}
+		if err := binary.Write(out, binary.LittleEndian, isWmo); err != nil {
+			return err
+		}
+		if err := binary.Write(out, binary.LittleEndian, nameLen); err != nil {
+			return err
+		}
+		if _, err := out.Write(name); err != nil {
+			return err
+		}
+		if err := binary.Write(out, binary.LittleEndian, low); err != nil {
+			return err
+		}
+		if err := binary.Write(out, binary.LittleEndian, high); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -269,16 +363,17 @@ func writeMapFiles(destDir string, mapID uint32, assembly *mapAssembly) error {
 	}
 	keys := make([]uint32, 0, len(assembly.Tiles))
 	for key := range assembly.Tiles {
-		if key != packTileID(65, 65) {
-			keys = append(keys, key)
-		}
+		keys = append(keys, key)
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
 	for _, key := range keys {
+		spawns := assembly.Tiles[key]
+		if assembly.Unique[spawns[0]].Flags&modelFlagWorldSpawn != 0 {
+			continue
+		}
 		tileX, tileY := key>>16, key&0xFF
 		var tile bytes.Buffer
 		tile.WriteString(vMapMagic)
-		spawns := assembly.Tiles[key]
 		if err := binary.Write(&tile, binary.LittleEndian, uint32(len(spawns))); err != nil {
 			return err
 		}
