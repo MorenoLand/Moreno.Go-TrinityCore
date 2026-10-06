@@ -1,7 +1,9 @@
 -- Flame Leviathan (Ulduar) — Lua port of
 -- src/server/scripts/Northrend/Ulduar/Ulduar/boss_flame_leviathan.cpp
 -- (boss_flame_leviathan (CreatureScript) via
--- RegisterUlduarCreatureAI<boss_flame_leviathan> (BossAI),
+-- `new boss_flame_leviathan()` in AddSC with the
+-- GetUlduarAI<boss_flame_leviathanAI>(creature) binding (cpp
+-- :605) (BossAI),
 -- BOSS_LEVIATHAN = 0 — registered from inside
 -- AddSC_boss_flame_leviathan(); loader decl 111 / call 306 per
 -- northrend_script_loader.cpp — the SECOND group of the "//
@@ -20,8 +22,14 @@
 -- whole-tree grep for "npc_mechanolift", "npc_colossus",
 -- "npc_brann_bronzebeard_ulduar_intro", "achievement_shutout",
 -- "achievement_orbit_uary", "spell_overload_circuit" and
--- "spell_pursue" hits boss_flame_leviathan.cpp only; zero sql/
--- hits for all. No flame_leviathan lua existed.
+-- "spell_pursue" hits boss_flame_leviathan.cpp only; the
+-- clone's sql/ tree (~/workspace/moreno-trinitycore/sql/,
+-- characters/ + world/) carries zero hits for all (empty of
+-- bindings — the svala 23:59 wording formula). The lua was
+-- ported in dfa7526 and first-pass audited in 6db6d69 (02:26
+-- UTC Oct 6, AuraScript/SpellScript queue reclassification),
+-- re-audited this run (the auriaya 00:14 / palehoof 00:09 /
+-- svala 23:59 precedent).
 -- Eluna creature events: 4 OnDied. No KilledUnit talk in C++
 -- (no event 3 arms exist — the only boss so far without a slay
 -- line). The aggro talk is conditional (ActiveTower), not
