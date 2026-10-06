@@ -26,8 +26,8 @@
 -- "spell_xt002_exposed_heart", "achievement_nerf_engineering",
 -- "achievement_heartbreaker", "achievement_nerf_gravity_bombs")
 -- hits boss_xt002.cpp (+ the loader decl/call lines for
--- AddSC_boss_xt002) only; zero sql/ hits for all nineteen. No
--- xt002 lua existed.
+-- AddSC_boss_xt002) only; zero sql/ hits for all nineteen —
+-- the audited artifact this run. No second xt002 lua exists.
 -- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4
 -- OnDied.
 -- Ported arms (C++-exact for all modeled arms):
