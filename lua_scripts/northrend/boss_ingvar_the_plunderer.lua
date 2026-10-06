@@ -20,9 +20,12 @@
 -- DB-side as usual. DATA_INGVAR = 2 (utgarde_keep.h line 33).
 -- Sole-source verified: whole-server-tree grep for all five script names
 -- hits boss_ingvar_the_plunderer.cpp only (+ the loader decl/call lines
--- for AddSC_boss_ingvar_the_plunderer); this clone carries no sql/ tree,
--- so ScriptName bindings are DB-side by construction. No ingvar lua
--- existed.
+-- for AddSC_boss_ingvar_the_plunderer); the clone's sql/ tree
+-- (~/workspace/moreno-trinitycore/sql/, characters/ + world/) carries
+-- zero ingvar hits (empty of bindings), so ScriptName bindings are
+-- DB-side by construction. This header is the audited-artifact record
+-- for the existing port (9df78d1, Oct 2 10:06 UTC) — re-verified this
+-- run; the first-pass "no ingvar lua existed" claim was stale.
 -- Eluna creature events: 1 OnEnterCombat, 3 OnKill, 4 OnDied,
 -- 9 OnDamageTaken, 23 OnReset.
 -- Ported arms (C++-exact for all modeled arms):
@@ -38,7 +41,9 @@
 -- the real (undead-phase) death yell; the sjonnir JustDied-Talk
 -- precedent).
 -- KilledUnit — Talk(SAY_SLAY 1) player-gated (event 3, both entries — no
--- phase gate in C++; the razuvious player-gated variant precedent).
+-- phase gate in C++; the razuvious player-gated variant precedent; the
+-- lua victim nil-guard follows the hodir port convention — Eluna event
+-- 3 always carries a victim, C++-exactness unaffected).
 -- DOCUMENTED-ONLY (in this header; no registrations beyond entries 23954
 -- / 23980):
 -- EVENT_JUST_TRANSFORMED Talk(SAY_AGGRO) (the phase-2 aggro yell) and the
@@ -128,9 +133,11 @@ local function ingvarJustDied(event, creature)
 end
 
 -- C++ KilledUnit: if (who->GetTypeId() == TYPEID_PLAYER) Talk(SAY_SLAY)
--- — no phase gate — the razuvious player-gated variant precedent.
+-- — no phase gate — the razuvious player-gated variant precedent; the
+-- nil-guard follows the hodir port convention (Eluna event 3 always
+-- carries a victim; C++-exactness unaffected).
 local function ingvarKilledUnit(event, creature, victim)
-    if victim:GetObjectType() == "Player" then
+    if victim and victim:GetObjectType() == "Player" then
         creature:Talk(SAY_SLAY)
     end
 end
