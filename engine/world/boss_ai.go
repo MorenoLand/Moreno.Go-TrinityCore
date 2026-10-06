@@ -3402,6 +3402,16 @@ func init() {
 	// lua_scripts/kalimdor/boss_veklor.lua.
 	RegisterLuaBoss("boss_veklor", 15276)
 
+	// boss_ouro (Ouro, entry 15517 — the creature_template
+	// ScriptName binding stays DB-side): the self-contained
+	// in-combat legs only — engage Birth 26262 on victim; Sweep
+	// 26103 on victim (5-10s -> 15-30s, !Submerged gated); Sand
+	// Blast legs; Submerge cycle (60-120s) with submerged-state
+	// gating suppressing Sweep/SandBlast. Zero Talk() calls in C++.
+	// Unwired: instance legs. Full analysis in
+	// lua_scripts/kalimdor/boss_ouro.lua.
+	RegisterLuaBoss("boss_ouro", 15517)
+
 	// boss_epoch (Chrono-Lord Epoch, entry 26532 — C++-verified via
 	// npc_arthas.cpp:59's NPC_EPOCH constant plus :1329's
 	// instance->instance->SummonCreature(NPC_EPOCH, ...) in the
