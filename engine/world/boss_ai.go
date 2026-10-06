@@ -3326,6 +3326,21 @@ func init() {
 	// lua_scripts/kalimdor/boss_yauj.lua.
 	RegisterLuaBoss("boss_yauj", 15543)
 
+	// boss_sartura (Battleguard Sartura, entry 15516 —
+	// C++-verified via temple_of_ahnqiraj.h:76 NPC_SARTURA; the
+	// creature_template ScriptName binding stays DB-side): Whirlwind
+	// 26083 self-cast (30s init -> 25-40s, 15s whirlwind mode);
+	// Enrage 28747 self-cast at <20% health via event 9 (latched,
+	// jeklik convention); hard Enrage 28798 self-cast at 10min
+	// (latched); Talk SAY_AGGRO 0 / SAY_SLAY 1 / SAY_DEATH 2.
+	// Unwired: whirlwind + AggroReset random-target switching
+	// (no SelectTarget/AttackStart bridge); BossAI ctor leg
+	// DATA_SARTURA (instance bridge); at_aq_battleground_sartura
+	// AreaTrigger 4052; npc_sartura_royal_guard (entry not in the
+	// C++ tree — left unbound). Full analysis in
+	// lua_scripts/kalimdor/boss_sartura.lua.
+	RegisterLuaBoss("boss_sartura", 15516)
+
 	// boss_epoch (Chrono-Lord Epoch, entry 26532 — C++-verified via
 	// npc_arthas.cpp:59's NPC_EPOCH constant plus :1329's
 	// instance->instance->SummonCreature(NPC_EPOCH, ...) in the
