@@ -2162,6 +2162,16 @@ func init() {
 	// through OnReset(23). YELL_SPELL=3 declared but unused. Entry 11948
 	// verifiable from the C++ sources: BattlegroundAV.h names "Vanndar
 	// Stormpike" at 11948 — see lua_scripts/eastern_kingdoms/boss_vanndar.lua.
+	// instance_blackrock_depths (AddSC_instance_blackrock_depths; BRD
+	// encounter-state machine, map 230 — Ring of Law/Vault/Bar/Tomb of
+	// Seven/Lyceum/Iron Hall encounter slots, GO-door GUID latching
+	// (arena1-4, shadow-lock, bar keg/door, tomb enter/exit, lyceum,
+	// braziers, golem/throne rooms, spectral chalice), quest-gated Moira
+	// UpdateEntry transform, save/load instance data string, and the 15s
+	// Tomb of Seven faction-sequencer (ghost kill count 0..7 with boss
+	// respawn/faction resets)): every arm needs the instance-script
+	// model — the Lua scripting surface has no InstanceMapScript bridge,
+	// so this unit is documented-only.
 	RegisterLuaBoss("boss_vanndar", 11948)
 	// npc_phalanx (Blackrock Depths; ScriptedAI combat scheduler —
 	// thunderclap 8732 victim-cast 12s->10s, fireballvolley 22425
