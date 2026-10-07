@@ -228,7 +228,10 @@ func (ai *vancleefAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureM
 				TargetGUID: m.TargetGUID,
 			}
 			bgMotion.ThreatMgr = NewThreatManager(bgGUID)
-			bgMotion.ThreatMgr.AddThreat(m.TargetGUID, 100, true)
+			// C++ summons DoZoneInCombat (boss_vancleef.cpp:69) acquire via the
+			// normal engage path, which seeds 0.0f threat
+			// (Unit::EngageWithTarget, Unit.cpp:8429-8438).
+			bgMotion.ThreatMgr.AddThreat(m.TargetGUID, 0.0, true)
 			s.motionMapLocked(m.Map, m.InstanceID)[bgGUID] = bgMotion
 			ai.summons = append(ai.summons, bgGUID)
 			ai.pendingSummonHooks = append(ai.pendingSummonHooks, bgMotion)

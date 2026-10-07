@@ -7698,7 +7698,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
 			}
 			dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
-			inMelee := dist <= meleeAttackRange
+			inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
 			threat := float32(damage) * s.getThreatMultiplier(uint32(schoolMask))
 			switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
 			if switched && newVictim != motion.TargetGUID {
@@ -8738,7 +8738,7 @@ func (s *session) applySpellThreat(ctx context.Context, spell wotlk.Spell, targe
 		motion.ThreatMgr = NewThreatManager(motion.GUID)
 	}
 	wasInCombat := motion.InCombat
-	inMelee := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z) <= meleeAttackRange
+	inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z))
 	switched, victim := motion.ThreatMgr.AddThreat(s.playerGUID, float32(amount), inMelee)
 	motion.TargetGUID = victim
 	motion.InCombat = true
@@ -13047,7 +13047,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 						motion.ThreatMgr = NewThreatManager(target.GUID)
 					}
 					dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
-					inMelee := dist <= meleeAttackRange
+					inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
 					motion.ThreatMgr.AddThreat(s.playerGUID, float32(dmg), inMelee)
 					motion.Moving = true
 				}

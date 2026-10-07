@@ -134,7 +134,7 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 			motion.ThreatMgr = NewThreatManager(motion.GUID)
 		}
 		dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
-		inMelee := dist <= meleeAttackRange
+		inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
 		switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
 		if switched && newVictim != motion.TargetGUID {
 			motion.TargetGUID = newVictim
@@ -186,7 +186,7 @@ func (s *session) forwardInitialAssistThreatLocked(threat float32, targetGUID ui
 	perTarget := threat / float32(len(assisting))
 	for _, m := range assisting {
 		dist := distance3D(s.player.X, s.player.Y, s.player.Z, m.X, m.Y, m.Z)
-		inMelee := dist <= meleeAttackRange
+		inMelee := inMeleeThreatRange(m.CombatReach, s.player.CombatReach, dist)
 		switched, newVictim := m.ThreatMgr.AddThreat(s.playerGUID, perTarget, inMelee)
 		if switched && newVictim != m.TargetGUID {
 			m.TargetGUID = newVictim

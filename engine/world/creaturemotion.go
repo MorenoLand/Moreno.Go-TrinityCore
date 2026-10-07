@@ -475,7 +475,10 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		if motion.BossAI == nil {
 			motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
 		}
-		motion.ThreatMgr.AddThreat(playerGUID, 100.0, true)
+		// Unit::EngageWithTarget (Unit.cpp:8429-8438) seeds 0.0f threat with
+		// ignoreModifiers/ignoreRedirects; the add still registers the entry
+		// and runs the victim leg (ThreatManager::AddThreat new-target arm).
+		motion.ThreatMgr.AddThreat(playerGUID, 0.0, true)
 		if !motion.InCombat {
 			enteredCombat = true
 			s.broadcastAIReactionInInstance(motion.Map, motion.InstanceID, creatureGUID, 2)
@@ -1312,10 +1315,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// creature-side IMMUNE_TO_PC bit, not the target-side pairing);
 			// PetAI's aggressive-pet acquisition (PetAI.cpp:352,
 			// SelectNearestHostileUnitInAggroRange — Go pets never
-			// auto-acquire). Documented delta: Unit::EngageWithTarget seeds 0
-			// threat with ignoreModifiers/ignoreRedirects while Go seeds 100.0
-			// — AddThreat early-returns on amount <= 0, so a literal 0 would
-			// skip the victim bookkeeping C++ still runs.
+			// auto-acquire). Bridged: Unit::EngageWithTarget seeds 0.0f threat
+			// (Unit.cpp:8429-8438) — Go seeds 0.0 at the add below, and
+			// AddThreat registers the new-victim entry and runs the victim
+			// leg on a zero add (ThreatManager::AddThreat new-target arm).
 			motion.InCombat = true
 			if motion.ThreatMgr == nil {
 				motion.ThreatMgr = NewThreatManager(motion.GUID)
@@ -1326,7 +1329,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if isCreaturePassive(motion) {
 				continue
 			}
-			motion.ThreatMgr.AddThreat(p.GUID, 100.0, true)
+			// Unit::EngageWithTarget seeds 0.0f threat (Unit.cpp:8429-8438) — the
+			// add still registers the entry and runs the victim leg
+			// (ThreatManager::AddThreat new-target arm, ThreatManager.cpp:308-410).
+			motion.ThreatMgr.AddThreat(p.GUID, 0.0, true)
 			motion.TargetGUID = p.GUID
 			motion.Moving = false
 			s.broadcastAIReactionInInstance(motion.Map, motion.InstanceID, motion.GUID, 2)

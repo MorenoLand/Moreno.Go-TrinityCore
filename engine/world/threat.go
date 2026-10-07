@@ -40,14 +40,17 @@ func NewThreatManager(ownerGUID uint64) *ThreatManager {
 // the adding victim but never re-evaluating non-adding candidates. (2) C++
 // walks the sorted heap, so a ranged top below 130% does not block a melee
 // candidate above 110% beneath it; Go tests only the adding victim against a
-// single threshold, so that steal is missed. (3) the melee test is per
-// candidate Unit::IsWithinMeleeRange (Unit.cpp:599), combat-reach-based
-// (GetMeleeRange: both combat reaches + 4/3, min NOMINAL_MELEE_RANGE); Go uses
-// the adding victim's flat 5.0yd (meleeAttackRange) distance at add time.
+// single threshold, so that steal is missed.
 // Bridged: ThreatReference::AddThreat negative amounts reduce the entry
-// floored at 0 (ThreatManager.cpp:592-601); a decrease never clears the
-// 110%/130% switch gate for the adding victim. Tick-based re-selection of a
-// decreased non-current-victim entry stays under delta (1).
+// floored at 0 (ThreatManager.cpp:40-41); a zero add on an existing entry is a
+// no-op, but on a NEW victim it still creates the entry and runs the victim
+// leg (ThreatManager.cpp:308-410) — the EngageWithTarget 0.0f seed
+// (Unit.cpp:8429-8438) registers the acquirer with zero threat. A decrease
+// never clears the 110%/130% switch gate for the adding victim. Tick-based
+// re-selection of a decreased non-current-victim entry stays under delta (1).
+// The melee gate is per add, combat-reach-based via inMeleeThreatRange
+// (Unit::IsWithinMeleeRange -> GetMeleeRange, Unit.cpp:599-618), matching the
+// C++ per-candidate test positionally.
 // Documented no-bridge: FixateTarget/_fixateRef (always preferred in
 // ReselectVictim); taunt-state precedence in the comparator (TAUNT > NONE >
 // DETAUNT) with TauntUpdate driven by SPELL_AURA_MOD_TAUNT (Go taunt is the
@@ -62,19 +65,46 @@ func NewThreatManager(ownerGUID uint64) *ThreatManager {
 // misdirection redirects) belong to the HandleThreatSpells cast-threat audit;
 // getThreatMultiplier already covers stance/aura SPELL_AURA_MOD_THREAT.
 func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) (switched bool, newVictim uint64) {
-	if victim == 0 || amount == 0 {
+	if victim == 0 {
 		return false, tm.currentVictim
 	}
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
-	// ThreatReference::AddThreat (ThreatManager.cpp:592-601): negative amounts
-	// reduce the entry, floored at zero; zero itself is a no-op above.
-	newThreat := tm.entries[victim] + amount
-	if newThreat < 0 {
-		newThreat = 0
+	// ThreatManager::AddThreat (ThreatManager.cpp:308-410): the new-target leg
+	// creates the ThreatReference and applies the amount through
+	// ThreatReference::AddThreat even when the amount is 0 — Unit::EngageWithTarget
+	// seeds 0.0f (Unit.cpp:8429-8438), and the zero add still registers the entry
+	// and runs the victim leg. ThreatReference::AddThreat (ThreatManager.cpp:40-41)
+	// no-ops on 0 and floors negatives at 0.
+	oldThreat, exists := tm.entries[victim]
+	var newThreat float32
+	if !exists {
+		if amount < 0 {
+			amount = 0
+		}
+		newThreat = amount
+		tm.entries[victim] = newThreat
+		// With no current victim the new ref becomes the victim outright
+		// (C++ UpdateVictim); otherwise C++ runs ProcessAIUpdates (no
+		// re-selection) — Go keeps its documented eager gate as delta (1).
+		if tm.currentVictim == 0 {
+			tm.currentVictim = victim
+			return false, victim
+		}
+	} else {
+		// ThreatReference::AddThreat: zero is a no-op on an existing entry;
+		// negatives reduce, floored at zero. A decrease never clears the
+		// 110%/130% switch gate for the adding victim.
+		if amount == 0 {
+			return false, tm.currentVictim
+		}
+		newThreat = oldThreat + amount
+		if newThreat < 0 {
+			newThreat = 0
+		}
+		tm.entries[victim] = newThreat
 	}
-	tm.entries[victim] = newThreat
 
 	if tm.currentVictim == 0 || tm.currentVictim == victim {
 		tm.currentVictim = victim
@@ -112,10 +142,12 @@ func (tm *ThreatManager) SetThreat(victim uint64, amount float32) (switched bool
 
 // MatchUnitThreatToHighestThreat sets the victim's threat equal to the highest threat currently on the creature.
 // Reference: TrinityCore ThreatManager::MatchUnitThreatToHighestThreat (ThreatManager.cpp:419-437).
-// Documented deltas: C++ returns early on an empty list and skips a highest
-// that is itself taunting; Go seeds 100.0 when the list is empty (echoing the
-// documented EngageWithTarget seed delta) and always reports switched. C++
-// routes the delta through AddThreat with ignoreModifiers/ignoreRedirects.
+// Documented deltas: C++ skips a highest that is itself taunting or unavailable;
+// Go has no taunt-state model, so the raw highest wins. C++ returns early on an
+// empty list; Go matches (no seed, no victim change). C++ routes the delta
+// through AddThreat with ignoreModifiers/ignoreRedirects; Go writes the entry
+// directly, which is value-equivalent for the missing-or-lower victim. Go always
+// reports switched; C++ re-selects through the taunt-state comparator.
 // The taunt-state machinery (TauntUpdate, comparator precedence) is
 // documented at AddThreat; Go has no taunt-state model.
 func (tm *ThreatManager) MatchUnitThreatToHighestThreat(victim uint64) (switched bool, newVictim uint64) {
@@ -124,6 +156,12 @@ func (tm *ThreatManager) MatchUnitThreatToHighestThreat(victim uint64) (switched
 	}
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
+
+	// ThreatManager::MatchUnitThreatToHighestThreat (ThreatManager.cpp:419-437)
+	// returns early on an empty list — no seed, no victim change.
+	if len(tm.entries) == 0 {
+		return false, tm.currentVictim
+	}
 
 	var highestThreat float32
 	for _, threat := range tm.entries {
@@ -134,8 +172,6 @@ func (tm *ThreatManager) MatchUnitThreatToHighestThreat(victim uint64) (switched
 	current := tm.entries[victim]
 	if highestThreat > current {
 		tm.entries[victim] = highestThreat
-	} else if highestThreat == 0 {
-		tm.entries[victim] = 100.0
 	}
 	tm.currentVictim = victim
 	return true, victim
@@ -477,7 +513,7 @@ func (s *Server) distributeHealingThreat(ctx context.Context, healerGUID, target
 			m.ThreatMgr = NewThreatManager(m.GUID)
 		}
 		dist := distance3D(healerSess.player.X, healerSess.player.Y, healerSess.player.Z, m.X, m.Y, m.Z)
-		inMelee := dist <= meleeAttackRange
+		inMelee := inMeleeThreatRange(m.CombatReach, healerSess.player.CombatReach, dist)
 		switched, newVictim := m.ThreatMgr.AddThreat(healerGUID, threatPerCreature, inMelee)
 		if switched && newVictim != m.TargetGUID {
 			m.TargetGUID = newVictim

@@ -12,7 +12,6 @@ import (
 )
 
 const (
-	meleeAttackRange               = 5.0
 	creatureFlagExtraNoParryHasten = 0x00000008
 	attackDisplayDelay             = 200 * time.Millisecond
 )
@@ -113,6 +112,15 @@ func calcMeleeRange(attackerReach, victimReach float32) float64 {
 		return 5.0
 	}
 	return rangeVal
+}
+
+// inMeleeThreatRange is the positional melee test for the threat-switch gate,
+// matching the per-candidate Unit::IsWithinMeleeRange check C++
+// ThreatManager::ReselectVictim applies (Unit::IsWithinMeleeRangeAt 599-612 /
+// GetMeleeRange 614-618): both combat reaches + 4/3, floored at
+// NOMINAL_MELEE_RANGE.
+func inMeleeThreatRange(attackerReach, victimReach float32, dist float64) bool {
+	return dist <= calcMeleeRange(attackerReach, victimReach)
 }
 
 func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarget, bool) {
@@ -653,7 +661,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 				motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
 			}
 			dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
-			inMelee := dist <= meleeAttackRange
+			inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
 			threat := float32(damage) * s.getThreatMultiplier(1)
 			switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
 			if switched && newVictim != motion.TargetGUID {
@@ -973,7 +981,9 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
 			}
 			threat := float32(damage) * s.getThreatMultiplier(uint32(schoolMask))
-			switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, false)
+			dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
+			inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
+			switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
 			if switched && newVictim != motion.TargetGUID {
 				motion.TargetGUID = newVictim
 				entries := motion.ThreatMgr.SortedEntries()
