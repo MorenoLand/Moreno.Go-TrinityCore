@@ -3434,6 +3434,21 @@ func init() {
 	// (IN_PROGRESS-not-DONE C++ quirk, nerubenkan precedent),
 	// UpdateVictim/UNIT_STATE_CASTING gates, melee engine-driven.
 	RegisterLuaBoss("boss_baroness_anastari", 10436)
+	// boss_ramstein_the_gorger.cpp audit (EK loader decl :131 / call
+	// :309 follows baroness_anastari): 1 script, ScriptedAI diff-timer AI
+	// (Initialize/Reset arms Trample 3s + Knockout 12s; UpdateVictim
+	// gate; empty JustEngagedWith; no Talk, no gossip/quest, no
+	// Spell/AuraScripts) — C++-verified lua registered
+	// (NPC_RAMSTEIN=10439 stratholme.h:54). Lua arms: OnEnterCombat
+	// Trample 3s->7s (non-triggered self-cast 5568) / Knockout 12s->10s
+	// (non-triggered DoCastVictim 17307, nil-victim keeps schedule);
+	// timers cleared on Reset/LeaveCombat/Died. Documented-only (no
+	// bridges): JustDied's 30x SummonCreature(NPC_MINDLESS_UNDEAD=11030,
+	// 3969.35f±10, -3391.87f±10, 119.11f, 30min timed-or-dead) +
+	// AttackStart(SelectNearestTarget(100)) legs, instance->SetData(
+	// TYPE_RAMSTEIN=5, DONE), GetStratholmeAI instance leg; melee
+	// engine-driven.
+	RegisterLuaBoss("boss_ramstein_the_gorger", 10439)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
