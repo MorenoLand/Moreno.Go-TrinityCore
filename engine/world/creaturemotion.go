@@ -1061,6 +1061,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					target.Sess.player.UnitFlags |= unitFlagInCombat
 				}
 				target.Sess.sendPlayerUpdate()
+				// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled
+				// creatures are signaled OwnerAttackedBy on any non-DoT damage.
+				if s != nil {
+					s.triggerPetDefensive(target.Map, target.InstanceID, target.GUID, motion.GUID)
+				}
 			}
 			motion.LastSpell = now
 			if dist > contactDist {

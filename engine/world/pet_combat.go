@@ -230,8 +230,14 @@ func (s *Server) onPetToggleAutocast(mapID, instanceID uint32, petGUID uint64, s
 	}
 }
 
-// triggerPetDefensive triggers the owner's active pet into defensive attack mode if appropriate.
-// Mirrors TrinityCore PetAI::OwnerAttackedBy / PetAI::OwnerAttacked (PetAI.cpp:240-310).
+// triggerPetDefensive triggers the owner's controlled creatures into attack
+// mode when the owner either attacks (assist) or takes damage (defend).
+// Mirrors TrinityCore PetAI::OwnerAttackedBy / PetAI::OwnerAttacked
+// (PetAI.cpp:240-310) and the base CreatureAI::OnOwnerCombatInteraction
+// (CreatureAI.cpp:126-133): both fire for every non-passive controlled
+// creature with no live victim, regardless of react state or command —
+// defensive-only/follow-only gating is not in the C++.
+// (PetAI::_AttackStart: stay-commanded pets attack without chasing.)
 func (s *Server) triggerPetDefensive(mapID, instanceID uint32, ownerGUID, targetGUID uint64) {
 	if s == nil || ownerGUID == 0 || targetGUID == 0 || ownerGUID == targetGUID {
 		return
@@ -239,15 +245,21 @@ func (s *Server) triggerPetDefensive(mapID, instanceID uint32, ownerGUID, target
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
 	for _, m := range s.motionMapLocked(mapID, instanceID) {
-		if m.OwnerGUID == ownerGUID && m.Health > 0 {
-			// Pet must be in Defensive mode, currently following, and not already attacking a target
-			if m.PetReact == PetReactDefensive && m.PetCommand == PetCommandFollow && (m.TargetGUID == 0 || !m.InCombat) {
-				m.TargetGUID = targetGUID
-				m.InCombat = true
-				m.Moving = true
-			}
-			break
+		if m.OwnerGUID != ownerGUID || m.Health == 0 {
+			continue
 		}
+		// PetAI::OwnerAttackedBy / PetAI::OwnerAttacked: passive pets don't
+		// do anything; a pet with a live victim does not disengage
+		// (PetAI::AttackStart's victim-alive guard).
+		if m.PetReact == PetReactPassive {
+			continue
+		}
+		if m.TargetGUID != 0 && m.InCombat {
+			continue
+		}
+		m.TargetGUID = targetGUID
+		m.InCombat = true
+		m.Moving = m.PetCommand != PetCommandStay
 	}
 }
 
@@ -523,6 +535,9 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
 		// after the attacker-state update (sent pre-DealDamage in C++).
 		damage = targetSess.negateGodModeDamage(damage)
+		// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled
+		// creatures are signaled OwnerAttackedBy on any non-DoT damage.
+		s.triggerPetDefensive(targetSess.player.Map, targetSess.player.InstanceID, targetGUID, motion.GUID)
 		if damage >= targetHealth {
 			targetSess.player.Health = 0
 			targetSess.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((motion.GUID>>24)&0xFFFFFF), 1)
@@ -999,6 +1014,9 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
 		// after the spell damage log (sent pre-DealDamage in C++).
 		damage = victim.negateGodModeDamage(damage)
+		// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled
+		// creatures are signaled OwnerAttackedBy on any non-DoT damage.
+		s.server.triggerPetDefensive(victim.player.Map, victim.player.InstanceID, target.GUID, caster.GUID)
 		if damage >= victim.player.Health {
 			victim.player.Health = 0
 			victim.sendPlayerUpdate()

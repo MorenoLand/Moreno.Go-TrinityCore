@@ -848,6 +848,14 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 			// pre-fire (Eluna::JustRespawned, CreatureHooks.cpp:210-216).
 			if motion != nil {
 				s.fireCreatureSpawned(ctx, motion)
+				// Creature::Respawn (Creature.cpp:2198): ai->Reset() runs on
+				// every respawn — the instance path already calls OnReset;
+				// the world path needs the same arm (Eluna-first, matching
+				// ElunaCreatureAI::JustAppeared calling sEluna before
+				// ScriptedAI::JustAppeared).
+				if motion.BossAI != nil {
+					motion.BossAI.OnReset(ctx, s, motion)
+				}
 			}
 		}
 	}

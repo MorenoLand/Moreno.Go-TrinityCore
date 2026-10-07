@@ -7639,6 +7639,11 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				}
 				playerSess.procDamageAuras(true, damage)
 				playerSess.sendPlayerUpdate()
+				// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled
+				// creatures are signaled OwnerAttackedBy on any non-DoT damage.
+				if s.server != nil {
+					s.server.triggerPetDefensive(playerSess.player.Map, playerSess.player.InstanceID, target.GUID, s.playerGUID)
+				}
 			}
 			return damage
 		}
