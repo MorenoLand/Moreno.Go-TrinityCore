@@ -1678,13 +1678,10 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		}
 	}
 
-	// Check player spell cooldown
-	nowUnix := time.Now().Unix()
-	for _, cd := range s.player.Cooldowns {
-		if cd.Spell == spellID && cd.End > nowUnix {
-			return true
-		}
-	}
+	// Spell::CheckCast cooldown block (Spell.cpp:5187-5221) lives on the
+	// spell-found path below (it needs the spell's category), after the
+	// Eluna hooks — matching C++ SpellHandler.cpp order (OnItemUse at
+	// SpellHandler.cpp:176 precedes the cast and its CheckCast).
 
 	// Eluna::OnUse (ItemHooks.cpp:55) fires ITEM_EVENT_ON_USE (2) via
 	// ScriptMgr::OnItemUse (SpellHandler.cpp:176) after the item validation
@@ -1707,6 +1704,33 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	// Cast spell
 	if spellID != 0 && s.server != nil && s.server.Data != nil {
 		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			// Spell::CheckCast cooldown block (Spell.cpp:5187-5221) on the
+			// m_CastItem path: SpellHistory::IsReady/HasCooldown
+			// (SpellHistory.cpp:190-200/473-487) fails with
+			// SPELL_FAILED_NOT_READY when the spell or its category is
+			// cooling down. The category arm reads the category entry
+			// alone — SpellHistory::Update (SpellHistory.cpp:141-155)
+			// erases category and spell entries independently, so the
+			// spell arm's End must not gate it. Runs after the Eluna
+			// hooks, matching C++ SpellHandler.cpp order (OnItemUse at
+			// SpellHandler.cpp:176 precedes the cast and its CheckCast).
+			nowUnix := time.Now().Unix()
+			for _, cd := range s.player.Cooldowns {
+				if cd.Spell == spellID && cd.End > nowUnix {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
+					s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell on cooldown")
+					return true
+				}
+			}
+			if categoryID := spell.Category; categoryID != 0 {
+				for _, cd := range s.player.Cooldowns {
+					if cd.Category == categoryID && cd.CategoryEnd > nowUnix {
+						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
+						s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "category cooldown active", "category", categoryID)
+						return true
+					}
+				}
+			}
 			// Spell::CheckCast potion leg (Spell.cpp:5195-5198): with a
 			// banked m_lastPotionId (set at SendSpellCooldown above), a
 			// further potion (Item::IsPotion, Item.h:177) or
@@ -1721,6 +1745,52 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			if s.lastPotionId != 0 && (s.server.isPotionItem(ctx, uint32(itemEntry)) || s.server.spellIsCooldownStartedOnEvent(spell)) {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
 				return true
+			}
+			// Consumable full-health/full-power arm of Spell::CheckItems
+			// (Spell.cpp:6704-6751): when the cast item is a consumable and
+			// the spell targets a unit, effects are tried in order — the
+			// first HEAL effect against a non-full-health target or
+			// ENERGIZE effect against a non-full power target clears the
+			// pending failure (the Rejuvenation Potion pattern), while an
+			// effect that finds a full target only sets the failure reason
+			// and continues. TARGET_UNIT_PET effects are skipped: there the
+			// C++ target is the caster, not the pet. Only the
+			// caster-as-target leg is bridged — other unit targets have no
+			// Go model to read health/power from. Runs before SMSG_SPELL_START,
+			// matching C++ CheckCast order (CheckItems precedes prepare's START).
+			if tplOK && itemClass == itemClassConsumable && target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 && target.UnitGUID == s.playerGUID {
+				failReason := uint8(0)
+				for _, eff := range spell.Effects {
+					if eff.ImplicitTargetA == spellImplicitTargetUnitPet {
+						continue
+					}
+					if eff.Effect == spellEffectHeal {
+						if s.player.Health >= s.player.MaxHealth {
+							failReason = spellFailedAlreadyAtFullHealth
+							continue
+						}
+						failReason = 0
+						break
+					}
+					if eff.Effect == spellEffectEnergize {
+						if eff.MiscValue < 0 || eff.MiscValue >= 7 /* MAX_POWERS (SharedDefines.h:302) */ {
+							failReason = spellFailedAlreadyAtFullPower
+							continue
+						}
+						power := int(eff.MiscValue)
+						if s.player.Powers[power] >= s.player.MaxPowers[power] {
+							failReason = spellFailedAlreadyAtFullPower
+							continue
+						}
+						failReason = 0
+						break
+					}
+				}
+				if failReason != 0 {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
+					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "consumable target at full health/power", "failReason", failReason)
+					return true
+				}
 			}
 			castTime := uint32(0)
 			if value, ok, castErr := s.server.Data.SpellCastTime(spell.CastingTimeIndex); castErr == nil && ok && value > 0 {

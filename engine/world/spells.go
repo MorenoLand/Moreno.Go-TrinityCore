@@ -121,6 +121,8 @@ const (
 	spellFailedWrongPetFood              uint8  = 135
 	spellFailedNotReady                  uint8  = 67    // SPELL_FAILED_NOT_READY (SharedDefines.h:1049)
 	spellFailedDontReport                uint8  = 27    // SPELL_FAILED_DONT_REPORT (SharedDefines.h:1009)
+	spellFailedAlreadyAtFullHealth       uint8  = 2     // SPELL_FAILED_ALREADY_AT_FULL_HEALTH (SharedDefines.h:984)
+	spellFailedAlreadyAtFullPower        uint8  = 4     // SPELL_FAILED_ALREADY_AT_FULL_POWER (SharedDefines.h:986)
 	spellFailedSilenced                  uint8  = 104   // SPELL_FAILED_SILENCED (SharedDefines.h:1086)
 	spellFailedCasterDead                uint8  = 23    // SPELL_FAILED_CASTER_DEAD (SharedDefines.h:1003)
 	spellFailedCasterAurastate           uint8  = 22    // SPELL_FAILED_CASTER_AURASTATE (SharedDefines.h:1002)
@@ -256,6 +258,7 @@ const (
 	itemSubclassMaskWeaponRanged uint32 = (1 << 2) | (1 << 3) | (1 << 18) | (1 << 16)
 
 	spellEffectEnergize                = 30
+	spellEffectHeal                    = 10 // SPELL_EFFECT_HEAL (SharedDefines.h:821)
 	spellEffectParry                   = 22
 	spellEffectPowerBurn               = 62
 	spellEffectThreat                  = 63
@@ -1110,7 +1113,14 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	}
 	if categoryID := spell.Category; categoryID != 0 {
 		for _, cooldown := range s.player.Cooldowns {
-			if cooldown.Category == categoryID && cooldown.End > nowUnix && cooldown.CategoryEnd > nowUnix {
+			// SpellHistory::HasCooldown (SpellHistory.cpp:473-487): the
+			// category arm reads _categoryCooldowns alone, and
+			// SpellHistory::Update (SpellHistory.cpp:141-155) erases the
+			// _categoryCooldowns entry on CategoryEnd and the
+			// _spellCooldowns entry on CooldownEnd independently — a
+			// category cooldown can outlive the spell's own cooldown, so
+			// the spell arm's End must not gate this check.
+			if cooldown.Category == categoryID && cooldown.CategoryEnd > nowUnix {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
 				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "category cooldown active", "category", categoryID)
 				return true
