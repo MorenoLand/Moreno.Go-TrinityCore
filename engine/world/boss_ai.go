@@ -3139,6 +3139,22 @@ func init() {
 	// BossAI::JustEngagedWith + DATA_INSTRUCTORMALICIA=1 bookkeeping
 	// (scholomance.h:31) (luaBossAI shim).
 	RegisterLuaBoss("boss_instructor_malicia", 10505)
+	// boss_kormok.cpp (EK loader AddSC_boss_kormok decl :114 / call
+	// :293, Scholomance block continues; script name "boss_kormok"):
+	// boss AI ported in lua_scripts/eastern_kingdoms/boss_kormok.lua
+	// (entry 16118 — no NPC_ constant in scholomance.h, DB-side
+	// ScriptName binding; level 60 elite, Scholomance; not one of the
+	// 8 scholomance.h tracked encounters, so no DATA_ bookkeeping).
+	// OnEnterCombat schedules shadowbolt volley 20741 (victim,
+	// 10s->15s), bone shield 27688 (victim per C++ DoCastVictim,
+	// 2s->45s), summon bone minions 27687 (self-cast, 15s->12s);
+	// sub-25% DamageTaken once-latch (damaged class, per-GUID
+	// once-guard, cleared 2/4/23) self-casts summon bone mages
+	// 27695; zero Talk lines. Documented-only (no bridges):
+	// UpdateAI UNIT_STATE_CASTING gates, JustSummoned
+	// AttackStart(victim), both summon SpellScripts (nightbane
+	// precedent).
+	RegisterLuaBoss("boss_kormok", 16118)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
