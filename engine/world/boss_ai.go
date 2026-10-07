@@ -664,6 +664,16 @@ func init() {
 	// Arcane Protector (Karazhan) — fight logic in
 	// lua_scripts/karazhan/npc_arcane_protector.lua.
 	RegisterLuaBoss("npc_arcane_protector", 16504)
+	// Karazhan instance script (instance_karazhan.cpp, map 532) —
+	// InstanceMapScript only: GUID latches on creature/GO create (Kil'rek,
+	// Terestian, Moroes, Nightbane; 13 GO doors incl. stage doors,
+	// side entrance, dust-covered chest, blackened urn), optional-boss
+	// trash-death counter spawning Hyakiss/Shadikith/Rokad, Oz death
+	// counter via SetData, opera-DONE door/flag unlock, chess-DONE
+	// dust-covered-chest respawn, GetData OperaEvent (urand OZ..RAJ at
+	// construction, never altered) and GetGuidData for 18 keys. No Lua
+	// InstanceMapScript bridge (instance_deadmines, instance_blackrock_spire,
+	// instance_gnomeregan precedent) — documented only.
 	// Aki'lzon (Zul'Aman) — fight logic in
 	// lua_scripts/zulaman/boss_akilzon.lua (soaring eagle 24858 AI
 	// "npc_akilzon_eagle" in the same file).
