@@ -382,7 +382,9 @@ func (s *session) handleCmdGM(ctx context.Context, args []string) {
 // UNIT_FLAG2_ALLOW_CHEAT_SPELLS, clears the FFA PvP byte flag, stops combat
 // with pets, forces PHASEMASK_ANYWHERE and the serverside GM visibility —
 // none of those engine effects have Go bridges; the flag changes are the
-// portable core and are stored for real.
+// portable core and are stored for real. The GM visibility detect is stored
+// too: SetGameMaster(true) sets it to the account security, which is what
+// lets the session see serverside-hidden creatures (Object.cpp:2457).
 func (s *session) handleCmdGMOn(ctx context.Context) {
 	if !s.commandAllowed(ctx, permissionCommandGM) {
 		s.sendNotification("You do not have permission to use that command.")
@@ -391,6 +393,7 @@ func (s *session) handleCmdGMOn(ctx context.Context) {
 	if s.player != nil {
 		s.player.ExtraFlags |= playerExtraGMOn
 		s.player.PlayerFlags |= playerFlagGM
+		s.gmVisibilityDetect = s.security
 		s.updateWorldReadyGM()
 		s.persistExtraFlags()
 		s.sendPlayerUpdate()
@@ -411,6 +414,10 @@ func (s *session) handleCmdGMOff(ctx context.Context) {
 	if s.player != nil {
 		s.player.ExtraFlags &^= playerExtraGMOn
 		s.player.PlayerFlags &^= playerFlagGM
+		// SetGameMaster(false) restores the GM visibility detect to
+		// SEC_PLAYER (Player.cpp:2476); hidden creatures re-hide via the
+		// refresh below.
+		s.gmVisibilityDetect = 0
 		s.updateWorldReadyGM()
 		s.persistExtraFlags()
 		s.sendPlayerUpdate()
@@ -499,9 +506,9 @@ func (s *session) handleCmdGMFly(ctx context.Context, args []string) {
 }
 
 // handleCmdGMVisible mirrors HandleGMVisibleCommand (cs_gm.cpp:185).
-// Fidelity gap: SetGMVisible's SetAcceptWhispers(false), channel
-// SetInvisible and the serverside-visibility values have no Go bridges; the
-// aura + flag changes are the portable core.
+// Fidelity gap: SetGMVisible's SetAcceptWhispers(false) and channel
+// SetInvisible have no Go bridges; the aura + flag + visibility-detect
+// changes are the portable core.
 func (s *session) handleCmdGMVisible(ctx context.Context, args []string) {
 	if !s.commandAllowed(ctx, permissionCommandGMVisible) {
 		s.sendNotification("You do not have permission to use that command.")
@@ -529,8 +536,12 @@ func (s *session) handleCmdGMVisible(ctx context.Context, args []string) {
 		if s.hasAura(gmVisualAura) {
 			s.removeAura(gmVisualAura)
 		}
-		// Player::SetGMVisible(true): clear the invisible flag.
+		// Player::SetGMVisible(true): clear the invisible flag and reset the
+		// GM visibility detect to SEC_PLAYER (Player.cpp:2506-2509) — GM_ON
+		// stays set, but serverside-hidden creatures re-hide from this
+		// session on the refresh below (Object.cpp:1622-1630).
 		s.player.ExtraFlags &^= playerExtraGMInvisible
+		s.gmVisibilityDetect = 0
 		s.updateWorldReadyGM()
 		s.persistExtraFlags()
 		s.sendPlayerUpdate()
@@ -540,11 +551,14 @@ func (s *session) handleCmdGMVisible(ctx context.Context, args []string) {
 		return
 	}
 	// Player::SetGMVisible(false): aura + invisible flag + SetGameMaster(true)
-	// (SetGameMaster engine effects are the documented gm-on gap).
+	// (SetGameMaster engine effects are the documented gm-on gap); the
+	// visibility detect becomes the account security, so hidden creatures
+	// become visible to this session.
 	s.applyAuraWithDuration(gmVisualAura, 0) // AddAura: permanent
 	s.player.ExtraFlags |= playerExtraGMInvisible
 	s.player.ExtraFlags |= playerExtraGMOn
 	s.player.PlayerFlags |= playerFlagGM
+	s.gmVisibilityDetect = s.security
 	s.updateWorldReadyGM()
 	s.persistExtraFlags()
 	s.sendPlayerUpdate()
@@ -995,9 +1009,13 @@ func (s *session) refreshNearbyObjects(ctx context.Context) {
 	if !s.playerLoaded || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return
 	}
-	isGM := (s.player.ExtraFlags&playerExtraGMOn != 0) || (s.player.PlayerFlags&playerFlagGM != 0)
-	if !isGM {
-		// When GM mode is turned OFF, destroy any GM-only creatures that were previously visible
+	if s.gmVisibilityDetect == 0 {
+		// The session cannot see serverside-hidden creatures (plain player,
+		// or a GM whose visibility detect was reset to SEC_PLAYER by
+		// SetGMVisible(true)/SetGameMaster(false)): destroy any hidden
+		// creatures that were previously visible, so e.g. `.gm visible on`
+		// re-hides spirit healers and GHOST_VISIBILITY creatures
+		// (Object.cpp:1622-1633, Player.cpp:2504-2523).
 		s.destroyHiddenCreaturesInRange(ctx, *s.player)
 		s.destroyHiddenGameObjectsInRange(ctx, *s.player)
 	}

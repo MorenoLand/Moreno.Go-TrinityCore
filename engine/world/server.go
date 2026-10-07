@@ -212,6 +212,16 @@ type session struct {
 	// (CALENDAR_CREATE_EVENT_COOLDOWN = 5s).
 	calendarEventCooldown int64
 	gmChat                bool
+	// gmVisibilityDetect mirrors Player::m_serverSideVisibilityDetect for
+	// SERVERSIDE_VISIBILITY_GM (Object.cpp WorldObject::CanSeeOrDetect, the
+	// "GM visibility off or hidden NPC" arm): nonzero (the account security,
+	// as SetGameMaster(true) stores GetSecurity()) means the session sees
+	// serverside-hidden creatures (spirit healers/guides, GHOST_VISIBILITY
+	// creatures); SEC_PLAYER (0) means they stay hidden. SetGMVisible(true)
+	// resets it to SEC_PLAYER while PLAYER_EXTRA_GM_ON stays set — that
+	// reset is what re-hides hidden NPCs after `.gm visible on`
+	// (Player::SetGMVisible, Player.cpp:2504).
+	gmVisibilityDetect uint8
 	// autoReplyMsg mirrors Player::autoReplyMsg (Player.h:939): the AFK/DND
 	// auto-reply message announced to whispering players (Player.cpp:21050).
 	autoReplyMsg            string

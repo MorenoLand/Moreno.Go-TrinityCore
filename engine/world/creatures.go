@@ -77,6 +77,14 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		return nil, 0, nil
 	}
 	isGM := state.ExtraFlags&playerExtraGMOn != 0 || state.PlayerFlags&playerFlagGM != 0
+	// seesHidden is the SERVERSIDE_VISIBILITY_GM detect arm of
+	// WorldObject::CanSeeOrDetect (Object.cpp:1622-1630), distinct from the
+	// GM_ON phase-anywhere arm above: Player::SetGMVisible(true) resets the
+	// detect to SEC_PLAYER while GM_ON stays set, so a GM who just ran
+	// `.gm visible on` stops seeing serverside-hidden creatures (spirit
+	// healers/guides, GHOST_VISIBILITY creatures) even though the phase
+	// bypass still applies (Player.cpp:2504-2523).
+	seesHidden := observer != nil && observer.gmVisibilityDetect != 0
 	isGhost := state.Health > 0 && state.PlayerFlags&playerFlagGhost != 0
 	// Event creatures spawn only while their event runs; game_event_npcflag
 	// flags OR into the template npcflag during events (guards gaining
@@ -112,7 +120,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		ORDER BY c.guid`
 	queryArgs := make([]any, 0, len(selectArgs)+9+len(eventArgs))
 	queryArgs = append(queryArgs, selectArgs...)
-	queryArgs = append(queryArgs, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, phaseMask, isGM, isGhost)
+	queryArgs = append(queryArgs, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, phaseMask, seesHidden, isGhost)
 	queryArgs = append(queryArgs, eventArgs...)
 	rows, err := s.WorldStore.DB.QueryContext(ctx, fullQuery, queryArgs...)
 	if err != nil {
@@ -126,7 +134,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 			AND (? OR (c.phaseMask & ?) <> 0)
 			AND (? OR ? OR ((COALESCE(t.flags_extra, 0) & 0x400) = 0 AND (COALESCE(t.npcflag, 0) & 0xC000) = 0))
 			ORDER BY c.guid`
-		rows, err = s.WorldStore.DB.QueryContext(ctx, fallbackQuery, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, phaseMask, isGM, isGhost)
+		rows, err = s.WorldStore.DB.QueryContext(ctx, fallbackQuery, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, phaseMask, seesHidden, isGhost)
 		if err != nil {
 			if missingTable(err) {
 				return nil, 0, nil

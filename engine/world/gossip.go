@@ -696,6 +696,13 @@ func (s *session) canInteractWithCreature(creature *scripting.Object) bool {
 	if s == nil || s.player == nil || creature == nil {
 		return false
 	}
+	// Player::GetNPCIfCanInteractWith (Player.cpp:2323): no NPC interaction
+	// while the player is in flight — the same gate canInteractWithNPC
+	// carries; gossip hello/select both resolve through it in C++
+	// (HandleGossipHelloOpcode, HandleGossipSelectOptionOpcode).
+	if s.isInFlight() {
+		return false
+	}
 	mapID, mapOK := objectUint32Field(creature, "Map")
 	x, xOK := objectFloat32Field(creature, "X")
 	y, yOK := objectFloat32Field(creature, "Y")

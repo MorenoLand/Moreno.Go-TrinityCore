@@ -12,16 +12,20 @@ import (
 )
 
 type playerPos struct {
-	Map             uint32
-	InstanceID      uint32
-	X               float32
-	Y               float32
-	Z               float32
-	GUID            uint64
-	Race            uint8
-	Class           uint8
-	Level           uint8
-	IsGM            bool
+	Map        uint32
+	InstanceID uint32
+	X          float32
+	Y          float32
+	Z          float32
+	GUID       uint64
+	Race       uint8
+	Class      uint8
+	Level      uint8
+	IsGM       bool
+	// SeesHidden mirrors the SERVERSIDE_VISIBILITY_GM detect arm
+	// (Object.cpp:1622): false for a GM after `.gm visible on`, even though
+	// IsGM stays true — hidden creatures stay out of the motion set.
+	SeesHidden      bool
 	IsDead          bool
 	FactionTemplate uint32
 	Reputations     map[uint32]playerReputation
@@ -790,6 +794,10 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 	for sess := range s.sessions {
 		if sess.worldReady.Load() && sess.player != nil {
 			isGM := (sess.player.ExtraFlags&playerExtraGMOn != 0) || (sess.player.PlayerFlags&playerFlagGM != 0)
+			// Phase-anywhere rides on GM_ON; serverside-hidden visibility
+			// rides on the GM visibility detect (see creatures.go) — a GM
+			// after `.gm visible on` keeps phase-anywhere but loses hidden.
+			seesHidden := sess.gmVisibilityDetect != 0
 			isDead := (sess.player.Health == 0 && sess.player.MaxHealth > 0) || sess.player.PlayerFlags&playerFlagGhost != 0
 			players = append(players, playerPos{
 				Map:             sess.player.Map,
@@ -802,6 +810,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 				Class:           sess.player.Class,
 				Level:           sess.player.Level,
 				IsGM:            isGM,
+				SeesHidden:      seesHidden,
 				IsDead:          isDead,
 				FactionTemplate: s.raceFaction(sess.player.Race),
 				Reputations:     playerReputationMap(sess.player.Reputations),
@@ -830,7 +839,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 		AND (? OR ? OR ((COALESCE(t.flags_extra, 0) & 0x400) = 0 AND (COALESCE(t.npcflag, 0) & 0xC000) = 0))`
 	seenCreatures := make(map[creatureMotionSpawnKey]struct{})
 	for _, p := range players {
-		rows, err := s.WorldStore.DB.QueryContext(ctx, query, p.Map, float64(p.X)-distance, float64(p.X)+distance, float64(p.Y)-distance, float64(p.Y)+distance, p.IsGM, p.IsGM, p.IsDead)
+		rows, err := s.WorldStore.DB.QueryContext(ctx, query, p.Map, float64(p.X)-distance, float64(p.X)+distance, float64(p.Y)-distance, float64(p.Y)+distance, p.IsGM, p.SeesHidden, p.IsDead)
 		if err != nil {
 			continue
 		}

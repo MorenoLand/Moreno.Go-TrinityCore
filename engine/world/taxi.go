@@ -186,6 +186,10 @@ func (s *session) sendTaxiNodeStatusMultiple(ctx context.Context) bool {
 	var eventArgs []any
 	eventClause := gameEventSpawnClause("gec.eventEntry", s.server.activeEventList(ctx), &eventArgs)
 	isGM := s.player.ExtraFlags&playerExtraGMOn != 0 || s.player.PlayerFlags&playerFlagGM != 0
+	// Serverside-hidden visibility rides on the GM visibility detect, not
+	// GM_ON (see creatures.go): a GM after `.gm visible on` keeps
+	// phase-anywhere but hidden flight masters re-hide.
+	seesHidden := s.gmVisibilityDetect != 0
 	isGhost := s.player.Health > 0 && s.player.PlayerFlags&playerFlagGhost != 0
 	phaseMask := s.currentPlayerPhaseMask()
 	query := `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), (t.npcflag | ` + npcFlagExpr + `)
@@ -197,7 +201,7 @@ func (s *session) sendTaxiNodeStatusMultiple(ctx context.Context) bool {
 		AND ` + eventClause + ` ORDER BY c.guid`
 	queryArgs := make([]any, 0, len(selectArgs)+10+len(eventArgs))
 	queryArgs = append(queryArgs, selectArgs...)
-	queryArgs = append(queryArgs, s.player.Map, float64(s.player.X)-distance, float64(s.player.X)+distance, float64(s.player.Y)-distance, float64(s.player.Y)+distance, isGM, phaseMask, isGM, isGhost)
+	queryArgs = append(queryArgs, s.player.Map, float64(s.player.X)-distance, float64(s.player.X)+distance, float64(s.player.Y)-distance, float64(s.player.Y)+distance, isGM, phaseMask, seesHidden, isGhost)
 	queryArgs = append(queryArgs, eventArgs...)
 	rows, err := s.server.WorldStore.DB.QueryContext(ctx, query, queryArgs...)
 	if err != nil {

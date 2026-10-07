@@ -430,6 +430,15 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 			s.gmChat = true
 			state.ExtraFlags |= playerExtraGMChat
 		}
+		if state.ExtraFlags&playerExtraGMOn != 0 {
+			// SetGameMaster(true) during the login-state restore sets the GM
+			// visibility detect to the account security (Player.cpp:2457);
+			// the visible-state branch never resets it to SEC_PLAYER, so a
+			// GM logging in with saved GM_ON still sees serverside-hidden
+			// creatures until a runtime `.gm visible on`
+			// (Player.cpp:18037-18060).
+			s.gmVisibilityDetect = s.security
+		}
 	} else {
 		state.ExtraFlags &^= playerExtraGMOn | playerExtraGMInvisible | playerExtraGMChat
 		s.gmChat = false
