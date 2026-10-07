@@ -2736,6 +2736,14 @@ func init() {
 	// spell_collecting_fallout (SpellScript: 25% roll_chance_i on EFFECT_0
 	// launch, fail-gate on EFFECT_1). Zero Lua/Go bearer for EscortAI,
 	// summoner-SetData, or SpellScript — documented-only.
+	// AddSC_instance_gnomeregan (instance_gnomeregan.cpp — document-only audit):
+	// InstanceMapScript only (map 90, "GNO"), zero creature/at_ scripts.
+	// Arms: OnCreatureCreate latches Blastmaster Emi Shortfuse GUID (entry
+	// 7998); OnGameObjectCreate latches the two cave-in GOs (146085/146086);
+	// OnUnitDeath -> SetBossState DONE for DATA_VICIOUS_FALLOUT (1),
+	// DATA_ELECTROCUTIONER (2), DATA_CROWD_PUMMELER (3), DATA_THERMAPLUGG (4);
+	// GetGuidData serves the three latched GUIDs. Zero Lua InstanceMapScript
+	// bridge (instance_deadmines / instance_blackwing_lair precedent).
 	// boss_mr_smite (Deadmines, boss_mr_smite.cpp — ScriptedAI via
 	// GetDeadminesAI; the first unit of the Deadmines block): the combat
 	// machine (Trash 3391 self-cast {5,9}s->{6,15.5}s, Smite Slam 6435
