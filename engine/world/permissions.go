@@ -1729,3 +1729,48 @@ const permissionCommandTeleName uint32 = 740
 
 // permissionCommandTeleGroup mirrors rbac::RBAC_PERM_COMMAND_TELE_GROUP (RBAC.h:609).
 const permissionCommandTeleGroup uint32 = 741
+
+// permissionCommandAhbotItems mirrors rbac::RBAC_PERM_COMMAND_AHBOT_ITEMS (RBAC.h:647).
+const permissionCommandAhbotItems uint32 = 779
+
+// permissionCommandAhbotItemsGray mirrors rbac::RBAC_PERM_COMMAND_AHBOT_ITEMS_GRAY (RBAC.h:648).
+const permissionCommandAhbotItemsGray uint32 = 780
+
+// permissionCommandAhbotItemsWhite mirrors rbac::RBAC_PERM_COMMAND_AHBOT_ITEMS_WHITE (RBAC.h:649).
+const permissionCommandAhbotItemsWhite uint32 = 781
+
+// permissionCommandAhbotItemsGreen mirrors rbac::RBAC_PERM_COMMAND_AHBOT_ITEMS_GREEN (RBAC.h:650).
+const permissionCommandAhbotItemsGreen uint32 = 782
+
+// permissionCommandAhbotItemsBlue mirrors rbac::RBAC_PERM_COMMAND_AHBOT_ITEMS_BLUE (RBAC.h:651).
+const permissionCommandAhbotItemsBlue uint32 = 783
+
+// permissionCommandAhbotItemsPurple mirrors rbac::RBAC_PERM_COMMAND_AHBOT_ITEMS_PURPLE (RBAC.h:652).
+const permissionCommandAhbotItemsPurple uint32 = 784
+
+// permissionCommandAhbotItemsOrange mirrors rbac::RBAC_PERM_COMMAND_AHBOT_ITEMS_ORANGE (RBAC.h:653).
+const permissionCommandAhbotItemsOrange uint32 = 785
+
+// permissionCommandAhbotItemsYellow mirrors rbac::RBAC_PERM_COMMAND_AHBOT_ITEMS_YELLOW (RBAC.h:654).
+const permissionCommandAhbotItemsYellow uint32 = 786
+
+// permissionCommandAhbotRatio mirrors rbac::RBAC_PERM_COMMAND_AHBOT_RATIO (RBAC.h:655).
+const permissionCommandAhbotRatio uint32 = 787
+
+// permissionCommandAhbotRatioAlliance mirrors rbac::RBAC_PERM_COMMAND_AHBOT_RATIO_ALLIANCE (RBAC.h:656).
+const permissionCommandAhbotRatioAlliance uint32 = 788
+
+// permissionCommandAhbotRatioHorde mirrors rbac::RBAC_PERM_COMMAND_AHBOT_RATIO_HORDE (RBAC.h:657).
+const permissionCommandAhbotRatioHorde uint32 = 789
+
+// permissionCommandAhbotRatioNeutral mirrors rbac::RBAC_PERM_COMMAND_AHBOT_RATIO_NEUTRAL (RBAC.h:658).
+const permissionCommandAhbotRatioNeutral uint32 = 790
+
+// permissionCommandAhbotRebuild mirrors rbac::RBAC_PERM_COMMAND_AHBOT_REBUILD (RBAC.h:659).
+const permissionCommandAhbotRebuild uint32 = 791
+
+// permissionCommandAhbotReload mirrors rbac::RBAC_PERM_COMMAND_AHBOT_RELOAD (RBAC.h:660).
+const permissionCommandAhbotReload uint32 = 792
+
+// permissionCommandAhbotStatus mirrors rbac::RBAC_PERM_COMMAND_AHBOT_STATUS (RBAC.h:661).
+const permissionCommandAhbotStatus uint32 = 793

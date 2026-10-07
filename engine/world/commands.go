@@ -1887,19 +1887,19 @@ func (s *session) handleCmdCast(ctx context.Context, args []string) {
 	// paths are unit-target only).
 	switch strings.ToLower(args[0]) {
 	case "back":
-		s.castArmBlocked(ctx, permissionCommandCastBack, "cast back is not supported: selected-creature-as-caster has no command bridge.")
+		s.blockedCommandArm(ctx, permissionCommandCastBack, "cast back is not supported: selected-creature-as-caster has no command bridge.")
 		return
 	case "dist":
-		s.castArmBlocked(ctx, permissionCommandCastDist, "cast dist is not supported: destination-target casts have no command entry.")
+		s.blockedCommandArm(ctx, permissionCommandCastDist, "cast dist is not supported: destination-target casts have no command entry.")
 		return
 	case "self":
-		s.castArmBlocked(ctx, permissionCommandCastSelf, "cast self is not supported: selected-unit-as-caster has no command bridge.")
+		s.blockedCommandArm(ctx, permissionCommandCastSelf, "cast self is not supported: selected-unit-as-caster has no command bridge.")
 		return
 	case "target":
-		s.castArmBlocked(ctx, permissionCommandCastTarget, "cast target is not supported: no creature victim model and no creature-as-caster bridge.")
+		s.blockedCommandArm(ctx, permissionCommandCastTarget, "cast target is not supported: no creature victim model and no creature-as-caster bridge.")
 		return
 	case "dest":
-		s.castArmBlocked(ctx, permissionCommandCastDest, "cast dest is not supported: destination-target casts have no command entry.")
+		s.blockedCommandArm(ctx, permissionCommandCastDest, "cast dest is not supported: destination-target casts have no command entry.")
 		return
 	}
 	// Bare arm: HandleCastCommand — player casts at the selected unit.
@@ -1939,15 +1939,100 @@ func (s *session) handleCmdCast(ctx context.Context, args []string) {
 	s.castSpellDirect(ctx, uint32(spellID), s.selection)
 }
 
-// castArmBlocked gates a blocked cast sub-arm on its RBAC permission (mirroring
+// blockedCommandArm gates a blocked command sub-arm on its RBAC permission (mirroring
 // the ChatCommandTable permission check, which runs before the handler body)
 // and reports the missing bridge honestly instead of stubbing the arm.
-func (s *session) castArmBlocked(ctx context.Context, permissionID uint32, reason string) {
+func (s *session) blockedCommandArm(ctx context.Context, permissionID uint32, reason string) {
 	if !s.commandAllowed(ctx, permissionID) {
 		s.sendNotification("You do not have permission to use that command.")
 		return
 	}
 	s.sendSysMessage(reason)
+}
+
+// handleCmdAhbot dispatches ".ahbot items|ratio|rebuild|reload|status"
+// (cs_ahbot.cpp ahbotCommandTable). Every arm drives the AuctionHouseBot
+// engine (sAuctionBot / sAuctionBotConfig: SetItemsAmount[ForQuality],
+// SetItemsRatio[ForHouse], Rebuild, ReloadAllConfig, PrepareStatusInfos),
+// which has no Go model, so each arm is RBAC-gated on its own C++
+// permission and reports the missing bridge honestly instead of stubbing
+// the arm (blockedCommandArm pattern).
+func (s *session) handleCmdAhbot(ctx context.Context, args []string) {
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .ahbot items|ratio|rebuild|reload|status")
+		return
+	}
+	const blocked = "ahbot is not supported: the auction house bot engine has no Go model."
+	switch strings.ToLower(args[0]) {
+	case "items":
+		perm, ok := ahbotItemsPerm(args)
+		if !ok {
+			s.sendSysMessage("Syntax: .ahbot items [gray|white|green|blue|purple|orange|yellow]")
+			return
+		}
+		s.blockedCommandArm(ctx, perm, blocked)
+		return
+	case "ratio":
+		perm, ok := ahbotRatioPerm(args)
+		if !ok {
+			s.sendSysMessage("Syntax: .ahbot ratio [alliance|horde|neutral]")
+			return
+		}
+		s.blockedCommandArm(ctx, perm, blocked)
+		return
+	case "rebuild":
+		s.blockedCommandArm(ctx, permissionCommandAhbotRebuild, blocked)
+		return
+	case "reload":
+		s.blockedCommandArm(ctx, permissionCommandAhbotReload, blocked)
+		return
+	case "status":
+		s.blockedCommandArm(ctx, permissionCommandAhbotStatus, blocked)
+		return
+	}
+	s.sendSysMessage("Syntax: .ahbot items|ratio|rebuild|reload|status")
+}
+
+// ahbotItemsPerm mirrors the ahbotItemsAmountCommandTable permission ladder:
+// a quality sub-token picks its own permission, the bare row uses the items
+// permission; an unknown token matches no C++ table row (syntax failure).
+func ahbotItemsPerm(args []string) (uint32, bool) {
+	if len(args) == 1 {
+		return permissionCommandAhbotItems, true
+	}
+	switch strings.ToLower(args[1]) {
+	case "gray":
+		return permissionCommandAhbotItemsGray, true
+	case "white":
+		return permissionCommandAhbotItemsWhite, true
+	case "green":
+		return permissionCommandAhbotItemsGreen, true
+	case "blue":
+		return permissionCommandAhbotItemsBlue, true
+	case "purple":
+		return permissionCommandAhbotItemsPurple, true
+	case "orange":
+		return permissionCommandAhbotItemsOrange, true
+	case "yellow":
+		return permissionCommandAhbotItemsYellow, true
+	}
+	return 0, false
+}
+
+// ahbotRatioPerm mirrors the ahbotItemsRatioCommandTable permission ladder.
+func ahbotRatioPerm(args []string) (uint32, bool) {
+	if len(args) == 1 {
+		return permissionCommandAhbotRatio, true
+	}
+	switch strings.ToLower(args[1]) {
+	case "alliance":
+		return permissionCommandAhbotRatioAlliance, true
+	case "horde":
+		return permissionCommandAhbotRatioHorde, true
+	case "neutral":
+		return permissionCommandAhbotRatioNeutral, true
+	}
+	return 0, false
 }
 
 // handleCmdCharacter dispatches ".character customize|changefaction|changerace|
@@ -6130,6 +6215,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("pdump", func(ctx context.Context, args []string) bool { s.handleCmdPDump(ctx, args); return true }, []string{"copy", "load", "write"}, nil)
 	root.add("account", func(ctx context.Context, args []string) bool { s.handleCmdAccount(ctx, args); return true }, []string{"set", "password", "addon", "email", "lock"}, map[string]string{"acct": "account"})
 	root.add("achievement", func(ctx context.Context, args []string) bool { s.handleCmdAchievement(ctx, args); return true }, []string{"add"}, nil)
+	root.add("ahbot", func(ctx context.Context, args []string) bool { s.handleCmdAhbot(ctx, args); return true }, []string{"items", "ratio", "rebuild", "reload", "status"}, nil)
 	root.add("arena", func(ctx context.Context, args []string) bool { s.handleCmdArena(ctx, args); return true }, []string{"create", "disband", "rename", "captain", "info", "lookup"}, nil)
 	root.add("ban", func(ctx context.Context, args []string) bool { s.handleCmdBan(ctx, args); return true }, []string{"account", "character", "playeraccount", "ip"}, nil)
 	root.add("baninfo", func(ctx context.Context, args []string) bool { s.handleCmdBanInfo(ctx, args); return true }, []string{"account", "character", "ip"}, nil)
