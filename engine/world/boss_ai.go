@@ -2962,6 +2962,41 @@ func init() {
 	// (entry wowhead-cited: www.wowhead.com/cata/npc=3975/herod).
 	RegisterLuaBoss("boss_herod", 3975)
 
+	// boss_high_inquisitor_fairbanks (Scarlet Monastery, Cathedral wing,
+	// EK loader decl :103 / call :281): OnEnterCombat(1) arms curse of
+	// blood 8282 10s->25s (non-triggered DoCastVictim -> GetVictim +
+	// CastSpell, nil-victim ticks keep the schedule — jeklik
+	// convention), dispel magic 15090 30s->30s, fear 12096 40s->40s,
+	// and sleep 8399 25s->30s. C++ has zero Talk lines. The dispel
+	// arm's custom target selector (TYPEID_PLAYER within 30 yd WITH a
+	// dispellable DISPEL_MAGIC aura) loses the aura leg — no aura-list
+	// bridge (shazzrah curse precedent) — and casts on a random alive
+	// player within 30 yd, skipping the cast when none is in range
+	// (C++ DoCast is conditional; the 30s repeat is unconditional).
+	// Fear follows SelectTarget(Random, 1, 20.f, true): random alive
+	// player within 20 yd excluding the victim (majordomo
+	// victim-excluding + opera in-range convention), nil pick casts
+	// nothing, 40s re-arm unconditional. Sleep's MaxThreat pick is the
+	// current victim (jeklik convention). The DamageTaken latch fires
+	// when post-damage health drops strictly below 25%
+	// (HealthBelowPctDamaged(25, damage) — the thalnos/azshir damaged
+	// class, not the golemagg 704fb8e bug class): a per-GUID once-guard
+	// self-casts power word: shield 11647, then heal 12039 self-cast
+	// under a 30s per-GUID cooldown (C++ _healTimer Reset(0s) in Reset,
+	// so the first dip heals immediately), modeled on the pre-damage
+	// hook (event 9) with the per-GUID state cleared on 2/4/23; the
+	// !IsNonMeleeSpellCast(false) heal gate has no casting-state
+	// bridge. SetStandState(DEAD/STAND) (the secret-chamber corpse
+	// visual) is documented-only — no stand-state bridge (npc_barnes
+	// precedent); BossAI::JustEngagedWith and the
+	// DATA_HIGH_INQUISITOR_FAIRBANKS bookkeeping have no
+	// instance-script bridge (luaBossAI shim). Entry 4542 has no NPC_
+	// constant in the C++ tree — RegisterScarletMonasteryCreatureAI
+	// binds the ScriptName DB-side (entry wowhead-cited:
+	// www.wowhead.com/classic/npc=4542/high-inquisitor-fairbanks;
+	// the adjacent 3974 was disproven before porting).
+	RegisterLuaBoss("boss_high_inquisitor_fairbanks", 4542)
+
 	// boss_arcanist_doan (Scarlet Monastery, Library wing, EK loader
 	// decl :98 / call :276): OnEnterCombat(1) arms silence 8988
 	// 15s->{15s,20s}, arcane explosion 9433 3s->8s (both non-triggered
