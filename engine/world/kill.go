@@ -577,9 +577,12 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 			if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 				_, _ = s.server.WorldStore.DB.ExecContext(ctx, "UPDATE creature SET curhealth = 0 WHERE guid = ?", guid)
 			}
-			s.server.scheduleCreatureRespawn(ctx, guid, uint32(math.Max(float64(target.Health), 1)), now)
+			// Respawn at full health: target.Health is stale (captured before
+			// the killing blow) and 0 at death; C++ respawn restores max via
+			// SetSpawnHealth.
+			s.server.scheduleCreatureRespawn(ctx, guid, uint32(math.Max(float64(target.MaxHealth), 1)), now)
 		} else {
-			s.server.scheduleInstanceCreatureRespawn(ctx, target, uint32(math.Max(float64(target.Health), 1)), now)
+			s.server.scheduleInstanceCreatureRespawn(ctx, target, uint32(math.Max(float64(target.MaxHealth), 1)), now)
 		}
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth:       0,

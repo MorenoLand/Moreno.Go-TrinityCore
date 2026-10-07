@@ -349,6 +349,7 @@ func CriteriaTypeName(cType uint32) string {
 type achievementEntry struct {
 	ID              uint32
 	Faction         int32 // -1 any, 0 horde, 1 alliance
+	InstanceID      int32 // DBC field 2, -1 = none (map gate from CanUpdateCriteria)
 	Category        uint32
 	Points          uint32
 	Flags           uint32
@@ -508,11 +509,12 @@ func (s *Server) loadAchievementIndex() {
 					continue
 				}
 				faction, _ := record.Int32(1)
+				instanceID, _ := record.Int32(2)
 				category, _ := record.Uint32(38)
 				points, _ := record.Uint32(39)
 				flags, _ := record.Uint32(41)
 				minimum, _ := record.Uint32(60)
-				achievementIndex.achieveByID[id] = achievementEntry{ID: id, Faction: faction, Category: category, Points: points, Flags: flags, MinimumCriteria: minimum}
+				achievementIndex.achieveByID[id] = achievementEntry{ID: id, Faction: faction, InstanceID: instanceID, Category: category, Points: points, Flags: flags, MinimumCriteria: minimum}
 			}
 		}
 	}
@@ -808,6 +810,14 @@ func (s *session) meetsCriteriaRequirements(criterion achievementCriteriaEntry, 
 		if (achieve.Faction == 0 && team != teamHorde) || (achieve.Faction == 1 && team != teamAlliance) {
 			return false
 		}
+	}
+
+	// Map check (AchievementMgr::CanUpdateCriteria): if the achievement is
+	// tied to a specific instance/map, the player must be on that map.
+	// Without this, zone-specific achievements (e.g. Wintergrasp) would be
+	// credited anywhere.
+	if hasAchieve && achieve.InstanceID != -1 && s.player.Map != uint32(achieve.InstanceID) {
+		return false
 	}
 
 	// DBC AdditionalRequirements checks
