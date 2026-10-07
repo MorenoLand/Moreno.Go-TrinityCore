@@ -2710,6 +2710,14 @@ func init() {
 	// chapter2.cpp's own ScarletCourierEnum (line 336) names
 	// NPC_SCARLET_COURIER = 29076.
 	RegisterLuaBoss("npc_scarlet_courier", 29076)
+	// deadmines.cpp zone script: single ItemScript item_defias_gunpowder
+	// (AddSC_deadmines). OnUse(player, item, targets): null instance ->
+	// SendNotification("Instance script not initialized"), return true;
+	// GetData(EVENT_STATE = 7) != CANNON_NOT_USED (0) -> return false;
+	// GO target entry == GO_DEFIAS_CANNON (16398) ->
+	// SetData(EVENT_STATE, CANNON_GUNPOWDER_USED (1)); DestroyItemCount 1,
+	// return true (deadmines.h verified). Zero Lua ItemScript/OnUse
+	// bridge — documented-only (denveous_stuff precedent).
 	// boss_mr_smite (Deadmines, boss_mr_smite.cpp — ScriptedAI via
 	// GetDeadminesAI; the first unit of the Deadmines block): the combat
 	// machine (Trash 3391 self-cast {5,9}s->{6,15.5}s, Smite Slam 6435
