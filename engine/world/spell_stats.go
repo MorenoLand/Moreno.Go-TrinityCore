@@ -263,6 +263,28 @@ func (s *session) rollSpellCrit(targetGUID uint64, schoolMask uint8) bool {
 	return rand.Float64() < chance
 }
 
+// tickCritChance mirrors the chance arm of AuraEffect::GetCritChanceFor
+// (SpellAuraEffects.cpp:843-846) as used by the periodic tick handlers
+// (HandlePeriodicDamageAurasTick, HandlePeriodicHealAurasTick): the caster's
+// spell-crit chance done (baked into the aura's crit chance in C++) plus the
+// victim's SPELL_AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE taken modifier, minus
+// resilience crit-chance reduction (folded into calculateSpellCritChance).
+// takenCritBonusPct carries the victim-side modifier in percent points (0 for
+// positive spells, where C++ skips the taken arm). Scripted overrides
+// (Shatter, Glyph of Shadowburn, Renewed Hope, Improved Faerie Fire,
+// Ferocious Bite on bleeding targets) have no Go model and stay unbridged.
+func (s *session) tickCritChance(targetGUID uint64, schoolMask uint8, takenCritBonusPct float64) float64 {
+	chance := 0.0
+	if s != nil {
+		chance = s.calculateSpellCritChance(targetGUID, schoolMask)
+	}
+	chance += takenCritBonusPct / 100.0
+	if chance < 0 {
+		chance = 0
+	}
+	return chance
+}
+
 // getSpellCritMultiplier calculates the critical strike damage/healing multiplier for a spell,
 // factoring in the base 150% multiplier, talents/auras modifying critical bonus (AuraType 182),
 // and metagem modifiers (+3% crit damage).

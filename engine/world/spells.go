@@ -9140,12 +9140,12 @@ func (s *session) hasAuraOfType(auraType, familyName, flag0, flag1, flag2 uint32
 
 // healingTakenBonus mirrors Unit::SpellHealingBonusTaken (Unit.cpp:7714-7759):
 // SPELL_AURA_MOD_HEALING_PCT (max negative + max positive, multiplicative
-// via AddPct), the Nourish 1.2x leg, and SPELL_AURA_MOD_HEALING_RECEIVED
-// (multiplicative per matching aura: caster GUID matches and the aura's
-// spell is affected on the heal spell per AuraEffect::IsAffectedOnSpell).
-// The MOD_HOT_PCT leg is DOT-type only; Go has no periodic-heal tick path
-// through executeSpellHeal, so that leg has no consumer and is not bridged.
-func (s *session) healingTakenBonus(target *session, spellID uint32, heal uint32) uint32 {
+// via AddPct), the Nourish 1.2x leg, SPELL_AURA_MOD_HOT_PCT (DOT type only —
+// the periodic-heal tick and HealthLeech callers pass dotType=true), and
+// SPELL_AURA_MOD_HEALING_RECEIVED (multiplicative per matching aura: caster
+// GUID matches and the aura's spell is affected on the heal spell per
+// AuraEffect::IsAffectedOnSpell).
+func (s *session) healingTakenBonus(target *session, spellID uint32, heal uint32, dotType bool) uint32 {
 	if target == nil {
 		return heal
 	}
@@ -9155,6 +9155,15 @@ func (s *session) healingTakenBonus(target *session, spellID uint32, heal uint32
 	}
 	if maxval := target.maxPositiveAuraModifier(spellAuraModHealingPct); maxval != 0 {
 		takenMult *= float64(100+maxval) / 100
+	}
+	if dotType {
+		// Unit.cpp:7736-7746 — Healing over time taken percent, DOT type only.
+		if minval := target.maxNegativeAuraModifier(spellAuraModHotPct); minval != 0 {
+			takenMult *= float64(100+minval) / 100
+		}
+		if maxval := target.maxPositiveAuraModifier(spellAuraModHotPct); maxval != 0 {
+			takenMult *= float64(100+maxval) / 100
+		}
 	}
 	if s.server != nil && s.server.Data != nil {
 		if healSpell, found, err := s.server.Data.Spell(spellID); err == nil && found {
@@ -9275,8 +9284,9 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 	// Unit::SpellHealingBonusTaken (Unit.cpp:7714-7759) runs after
 	// SpellHealingBonusDone and before the crit roll: DoDamageAndTriggers
 	// crits m_healing, which already carries the taken modifiers
-	// (Spell.cpp:2500-2515).
-	heal = s.healingTakenBonus(targetSess, spellID, heal)
+	// (Spell.cpp:2500-2515). Direct heals are HEAL type, so the MOD_HOT_PCT
+	// leg is off (dotType=false).
+	heal = s.healingTakenBonus(targetSess, spellID, heal, false)
 
 	// Roll healing critical strike (TrinityCore: 150% healing on crit, modified by metagem)
 	isCrit := s.rollSpellCrit(0, 2)
@@ -9365,7 +9375,7 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 // full Swiftmend amount (SpellHealingBonusTaken, SpellEffects.cpp:1466)
 // rides executeSpellHealDoneBonus's healingTakenBonus; the tick-internal
 // DOT-type taken leg on the consumed tick amount (SpellEffects.cpp:1448,
-// MOD_HOT_PCT etc.) has no Go periodic-tick model and stays unbridged.
+// MOD_HOT_PCT etc.) rides healingTakenBonus's dotType arm.
 // The C++ error-return when no aura matches despite the aura state is
 // unreachable here because Go's aura-state bit derives from the same
 // family-flags classifier.
@@ -11596,6 +11606,7 @@ const (
 	spellAuraModHealingPct                 = 118 // SPELL_AURA_MOD_HEALING_PCT (SpellAuraDefines.h:198)
 	spellAuraModHotPct                     = 259 // SPELL_AURA_MOD_HOT_PCT (SpellAuraDefines.h:339)
 	spellAuraModHealingReceived            = 283 // SPELL_AURA_MOD_HEALING_RECEIVED (SpellAuraDefines.h:363)
+	spellAuraModAttackerSpellCritChance    = 179 // SPELL_AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE (SpellAuraDefines.h:259)
 )
 
 // rankChainNoStackPurge mirrors the rank-chain term of
@@ -13237,33 +13248,65 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			// then runs on the converted value, matching C++ order.
 			dmg = uint32(math.Ceil(float64(ts.player.MaxHealth) * float64(aura.Amount) / 100))
 		}
-		resisted := uint32(0)
+		var tickSpell wotlk.Spell
+		tickKnown := false
+		if ts.server != nil && ts.server.Data != nil {
+			if sp, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
+				tickSpell, tickKnown = sp, true
+			}
+		}
+		var tickCaster *session
+		if ts.server != nil {
+			tickCaster = ts.server.findSessionByGUID(aura.CasterGUID)
+		}
+		fixedDamage := tickKnown && tickSpell.AttributesEx4&spellAttr4FixedDamage != 0
+		// Victim-side damage-taken multiplier runs FIRST on the tick
+		// (Unit::SpellDamageBonusTaken, Unit.cpp:7052, called at
+		// SpellAuraEffects.cpp:5171 before the crit roll) — not after
+		// resist like the earlier Go order.
+		if tickKnown {
+			dmg = spellDamageBonusTaken(dmg, tickSpell, aura.SchoolMask, ts, tickCaster)
+		}
+		// Tick crit roll (roll_chance_f(GetCritChanceFor),
+		// SpellAuraEffects.cpp:5173-5175): fixed-damage spells do not crit,
+		// like the direct-damage path.
+		crit := false
+		if !fixedDamage && tickCaster != nil {
+			takenCritBonus := float64(ts.playerAuraModifierByMiscMask(spellAuraModAttackerSpellCritChance, int32(aura.SchoolMask)))
+			if rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
+				crit = true
+				mult := 1.5
+				if tickKnown {
+					mult = tickCaster.getSpellCritMultiplier(tickSpell)
+				}
+				dmg = uint32(math.Round(float64(dmg) * mult))
+			}
+		}
+		// Armor mitigation (SpellAuraEffects.cpp:5177-5182) — physical
+		// schools only; the AOE-avoidance leg (5184-5188) has no Go model
+		// and stays unbridged.
 		if aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
 			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, dmg)
-		} else if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
+		}
+		// Resilience (SpellAuraEffects.cpp:5190-5192): skipped for fixed
+		// damage; the isCrit arm now carries the real tick crit instead of
+		// the earlier hardcoded false.
+		if !fixedDamage && aura.CasterGUID != aura.TargetGUID {
+			ts.applyResilienceToDamage(true, &dmg, crit, CombatRatingCritTakenSpell)
+		}
+		// Unit::CalcAbsorbResist (Unit.cpp:1828) handles resist then absorb
+		// at the END of the tick pipeline — the earlier Go order resisted
+		// before the taken leg.
+		resisted := uint32(0)
+		if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
 			pen := uint32(0)
-			if ts.server != nil {
-				if cs := ts.server.findSessionByGUID(aura.CasterGUID); cs != nil && cs.player != nil {
-					pen = cs.player.SpellPenetration
-				}
+			if tickCaster != nil && tickCaster.player != nil {
+				pen = tickCaster.player.SpellPenetration
 			}
 			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, aura.CasterLevel, ts.player.Level, false, false, pen)
 		}
-		if aura.CasterGUID != aura.TargetGUID {
-			ts.applyResilienceToDamage(true, &dmg, false, CombatRatingCritTakenSpell)
-		}
 		if dmg < 1 && resisted == 0 {
 			dmg = 1
-		}
-		// Victim-side damage-taken multiplier (TrinityCore
-		// Unit::SpellDamageBonusTaken, Unit.cpp:7052): the PERIODIC_DAMAGE
-		// tick (SpellAuraEffects.cpp:5171/5256) runs the taken leg on the
-		// target's damage. Applied after resist and before absorption — the
-		// same relative position as the direct-damage path.
-		if ts.server != nil && ts.server.Data != nil {
-			if tickSpell, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
-				dmg = spellDamageBonusTaken(dmg, tickSpell, aura.SchoolMask, ts, ts.server.findSessionByGUID(aura.CasterGUID))
-			}
 		}
 		absorbed := uint32(0)
 		if dmg > 0 {
@@ -13275,7 +13318,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			overkill = dmg - targetHealth
 		}
 
-		logPkt := protocol.BuildPeriodicAuraLogDamage(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, dmg, overkill, aura.SchoolMask, absorbed, resisted, false)
+		logPkt := protocol.BuildPeriodicAuraLogDamage(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, dmg, overkill, aura.SchoolMask, absorbed, resisted, crit)
 		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if ts.server != nil {
 			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
@@ -13335,6 +13378,43 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 
 	case 8, 20: // SPELL_AURA_PERIODIC_HEAL, SPELL_AURA_OBS_MOD_HEALTH
 		heal := aura.Amount
+		var healCaster *session
+		if ts.server != nil {
+			healCaster = ts.server.findSessionByGUID(aura.CasterGUID)
+		}
+		// Unit::SpellHealingBonusTaken with DOT type (Unit.cpp:7714-7759,
+		// called at SpellAuraEffects.cpp:5386): MOD_HEALING_PCT, Nourish,
+		// MOD_HOT_PCT and MOD_HEALING_RECEIVED run on the tick before the
+		// crit roll — the earlier Go path healed the raw aura amount.
+		// CalcHealAbsorb has no Go model and stays unbridged.
+		if healCaster != nil {
+			heal = healCaster.healingTakenBonus(ts, aura.SpellID, heal, true)
+		} else {
+			heal = ts.healingTakenBonus(ts, aura.SpellID, heal, true)
+		}
+		// Tick crit roll (roll_chance_f(GetCritChanceFor),
+		// SpellAuraEffects.cpp:5388-5390): heals are positive, so the
+		// victim-side taken crit modifier does not apply.
+		healCrit := false
+		if healCaster != nil {
+			var healSpell wotlk.Spell
+			healKnown := false
+			if ts.server != nil && ts.server.Data != nil {
+				if sp, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
+					healSpell, healKnown = sp, true
+				}
+			}
+			if rand.Float64() < healCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), 0) {
+				healCrit = true
+				mult := 1.5
+				if healKnown {
+					mult = healCaster.getSpellCritMultiplier(healSpell)
+				} else {
+					mult = healCaster.getSpellCritMultiplier(wotlk.Spell{ID: aura.SpellID, SchoolMask: aura.SchoolMask})
+				}
+				heal = uint32(math.Round(float64(heal) * mult))
+			}
+		}
 		curHP := ts.player.Health
 		maxHP := ts.player.MaxHealth
 		newHP := curHP + heal
@@ -13344,7 +13424,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			newHP = maxHP
 		}
 
-		logPkt := protocol.BuildPeriodicAuraLogHeal(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, heal, overheal, 0, false)
+		logPkt := protocol.BuildPeriodicAuraLogHeal(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, heal, overheal, 0, healCrit)
 		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if ts.server != nil {
 			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
@@ -13475,31 +13555,69 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			// then runs on the converted value, matching C++ order.
 			dmg = uint32(math.Ceil(float64(target.MaxHealth) * float64(aura.Amount) / 100))
 		}
-		resisted := uint32(0)
+		var tickSpell wotlk.Spell
+		tickKnown := false
+		if s.server != nil && s.server.Data != nil {
+			if sp, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+				tickSpell, tickKnown = sp, true
+			}
+		}
+		var tickCaster *session
+		if s.server != nil {
+			tickCaster = s.server.findSessionByGUID(aura.CasterGUID)
+			if tickCaster == nil {
+				tickCaster = s
+			}
+		}
+		fixedDamage := tickKnown && tickSpell.AttributesEx4&spellAttr4FixedDamage != 0
+		// Victim-side damage-taken multiplier runs FIRST on the tick
+		// (Unit::SpellDamageBonusTaken, Unit.cpp:7052, called at
+		// SpellAuraEffects.cpp:5171 before the crit roll) — the earlier Go
+		// order ran it after resist.
+		if tickKnown {
+			dmg = creatureSpellDamageBonusTaken(s.server, dmg, tickSpell, aura.SchoolMask, key, tickCaster)
+		}
+		// Tick crit roll (roll_chance_f(GetCritChanceFor),
+		// SpellAuraEffects.cpp:5173-5175); creature casters have no Go
+		// spell-crit model, so only player-caster ticks roll.
+		crit := false
+		if !fixedDamage && tickCaster != nil && tickCaster.player != nil {
+			takenCritBonus := 0.0
+			for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, spellAuraModAttackerSpellCritChance, aura.SchoolMask) {
+				takenCritBonus += float64(amt)
+			}
+			if rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
+				crit = true
+				mult := 1.5
+				if tickKnown {
+					mult = tickCaster.getSpellCritMultiplier(tickSpell)
+				}
+				dmg = uint32(math.Round(float64(dmg) * mult))
+			}
+		}
+		// Armor mitigation (SpellAuraEffects.cpp:5177-5182); resilience has
+		// no Go creature-victim model (Unit.cpp:12345-12355: owner-is-player
+		// only) and stays unbridged, as does AOE-avoidance.
 		if aura.SchoolMask&1 != 0 && target.Armor > 0 {
 			dmg = calcArmorReducedDamage(float64(target.Armor), aura.CasterLevel, dmg)
-		} else if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
+		}
+		// Unit::CalcAbsorbResist (Unit.cpp:1828): resist then absorb at the
+		// END of the tick pipeline — the earlier Go order resisted before
+		// the taken leg and never absorbed on creature ticks.
+		resisted := uint32(0)
+		if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
 			pen := uint32(0)
-			if s.server != nil {
-				if cs := s.server.findSessionByGUID(aura.CasterGUID); cs != nil && cs.player != nil {
-					pen = cs.player.SpellPenetration
-				}
+			if tickCaster != nil && tickCaster.player != nil {
+				pen = tickCaster.player.SpellPenetration
 			}
 			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), target.Resistances, aura.CasterLevel, target.Level, true, false, pen)
 		}
-		// Victim-side damage-taken multiplier (TrinityCore
-		// Unit::SpellDamageBonusTaken, Unit.cpp:7052) on the creature
-		// periodic-damage tick, mirroring the direct-damage creature branch
-		// above (SpellAuraEffects.cpp:5171 runs the taken leg on unit-aura
-		// ticks before crit/armor/resist; Go keeps it after resist, before
-		// absorption, like the other Go paths).
-		if s.server != nil && s.server.Data != nil {
-			if tickSpell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
-				dmg = creatureSpellDamageBonusTaken(s.server, dmg, tickSpell, aura.SchoolMask, key, s.server.findSessionByGUID(aura.CasterGUID))
-			}
-		}
 		if dmg < 1 && resisted == 0 {
 			dmg = 1
+		}
+		absorbed := uint32(0)
+		if dmg > 0 && s.server != nil {
+			absorbed, dmg = s.server.applyCreatureAbsorptionShields(key, dmg, uint8(aura.SchoolMask))
 		}
 		targetHealth := target.Health
 		overkill := uint32(0)
@@ -13507,7 +13625,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			overkill = dmg - targetHealth
 		}
 
-		logPkt := protocol.BuildPeriodicAuraLogDamage(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, dmg, overkill, aura.SchoolMask, 0, resisted, false)
+		logPkt := protocol.BuildPeriodicAuraLogDamage(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, dmg, overkill, aura.SchoolMask, absorbed, resisted, crit)
 		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if s.server != nil {
 			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
