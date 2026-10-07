@@ -61,6 +61,11 @@ func (s *session) canInteractWithNPC(ctx context.Context, guid, requiredFlags ui
 	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || uint16(guid>>48) != 0xF130 {
 		return false
 	}
+	// Player::GetNPCIfCanInteractWith (Player.cpp:2314): no NPC interaction
+	// while the player is in flight.
+	if s.isInFlight() {
+		return false
+	}
 	low := uint32(guid & 0x00FFFFFF)
 	entry := uint32((guid >> 24) & 0x00FFFFFF)
 	var mapID, npcFlags int64

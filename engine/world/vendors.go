@@ -188,6 +188,40 @@ func (s *session) expandedVendorRows(ctx context.Context, vendorEntry uint32) []
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return nil
 	}
+	// ObjectMgr::IsVendorItemValid (ObjectMgr.cpp:9617) drops rows at load
+	// time: maxcount>0 requires incrtime>0, maxcount==0 requires incrtime==0,
+	// a non-zero ExtendedCost must exist in the DBC, and duplicate
+	// (item, ExtendedCost) pairs are ignored. Dropped rows never enter the
+	// vendor vector, so they consume no client slot — enforcing the rules
+	// here keeps the list and buy paths slot-identical to C++.
+	extCostOK := make(map[int64]bool)
+	checkExtCost := func(ec int64) bool {
+		if ok, seen := extCostOK[ec]; seen {
+			return ok
+		}
+		ok := false
+		if s.server.Data != nil {
+			_, found, err := s.server.Data.ItemExtendedCost(uint32(ec))
+			ok = err == nil && found
+		}
+		extCostOK[ec] = ok
+		return ok
+	}
+	seenPair := make(map[uint64]bool)
+	validRow := func(r expandedVendorRow) bool {
+		if r.item <= 0 || r.maxCount < 0 || (r.maxCount > 0 && r.incrTime == 0) || (r.maxCount == 0 && r.incrTime > 0) {
+			return false
+		}
+		if r.extCost != 0 && !checkExtCost(r.extCost) {
+			return false
+		}
+		key := uint64(uint32(r.item))<<32 | uint64(uint32(r.extCost))
+		if seenPair[key] {
+			return false
+		}
+		seenPair[key] = true
+		return true
+	}
 	visited := make(map[uint32]bool)
 	var expand func(entry uint32) []expandedVendorRow
 	expand = func(entry uint32) []expandedVendorRow {
@@ -207,6 +241,9 @@ func (s *session) expandedVendorRows(ctx context.Context, vendorEntry uint32) []
 			}
 			if r.item < 0 {
 				out = append(out, expand(uint32(-r.item))...)
+				continue
+			}
+			if !validRow(r) {
 				continue
 			}
 			out = append(out, r)
@@ -302,16 +339,13 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 		item, maxCount, incrTime, extCost := row.item, row.maxCount, row.incrTime, row.extCost
 		display, buyPrice, maxDur, buyCount, flagsExtra := tmpl.display, tmpl.buyPrice, tmpl.maxDur, tmpl.buyCount, tmpl.flagsExtra
 		allowableClass, bonding := tmpl.allowableClass, tmpl.bonding
-		if extCost != 0 {
-			if s.server.Data == nil {
-				continue
-			}
-			if _, found, err := s.server.Data.ItemExtendedCost(uint32(extCost)); err != nil || !found {
-				continue
-			}
-			if flagsExtra&int64(itemFlag2DontIgnoreBuyPrice) == 0 {
-				buyPrice = 0
-			}
+		// VendorItem::IsGoldRequired (Creature.cpp:89): an ExtendedCost row
+		// costs no gold unless the template sets
+		// ITEM_FLAG2_DONT_IGNORE_BUY_PRICE. Row validity itself (bad
+		// ExtendedCost, maxcount/incrtime rules, duplicate pairs) is enforced
+		// at load in expandedVendorRows per ObjectMgr::IsVendorItemValid.
+		if extCost != 0 && flagsExtra&int64(itemFlag2DontIgnoreBuyPrice) == 0 {
+			buyPrice = 0
 		}
 		// ItemHandler.cpp:652-666 (SendListInventory): hide bind-on-pickup
 		// items unusable by the player's class and wrong-faction items from
