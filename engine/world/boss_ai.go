@@ -3371,6 +3371,19 @@ func init() {
 	// nil-victim keeps schedule). Documented-only (no bridges):
 	// SetDisplayId(10433/3637) legs in Reset/JustDied (jandice precedent).
 	RegisterLuaBoss("boss_magistrate_barthilas", 10435)
+	// boss_maleki_the_pallid.cpp audit (Stratholme block, EK loader decl
+	// :127 / call :305 follows barthilas): 1 script, pure timer-driven
+	// ScriptedAI — no NPC_ constant in C++ (DB-side ScriptName binding,
+	// entry 10438 wowhead-cited). Ported in
+	// lua_scripts/eastern_kingdoms/boss_maleki_the_pallid.lua:
+	// FROSTBOLT 1s->3.5s DoCastVictim 17503 / ICETOMB 16s->28s DoCastVictim
+	// 16869 / DRAINLIFE 31s DoCastVictim 20743 (rand32()%90/65/55 cast
+	// gates preserved, re-arm unconditional; GetVictim + CastSpell,
+	// nil-victim keeps schedule). Documented-only (no bridges):
+	// JustDied instance->SetData(TYPE_PALLID 4, IN_PROGRESS) (no
+	// instance-script bridge), UpdateAI UNIT_STATE_CASTING gate, dead
+	// EVENT_DRAIN_MANA 17243 (declared, never scheduled).
+	RegisterLuaBoss("boss_maleki_the_pallid", 10438)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
