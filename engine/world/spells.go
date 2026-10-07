@@ -1305,40 +1305,66 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			return true
 		}
 		// Battleground-spell special cases (SpellInfo::CheckLocation,
-		// SpellInfo.cpp:1569-1623). Player::InBattleground is
+		// SpellInfo.cpp:1569-1631). Player::InBattleground is
 		// m_bgData.bgInstanceID != 0 (Player.h:1906), mirrored by
 		// s.bgData.InstanceID; the player argument is never nil on this path.
+		// A missing Map.dbc entry fails with SPELL_FAILED_INCORRECT_AREA
+		// (SpellInfo.cpp:1576/1588/1602/1617), not SPELL_FAILED_REQUIRES_AREA.
 		inBattleground := s.bgData.InstanceID != 0
 		mapEntry, mapFound, mapErr := s.server.Data.Map(s.player.Map)
-		locationOK := true
+		var locationFail uint8
 		switch spellID {
 		case 23333, 23335: // Warsong Gulch / Silverwing flag
-			locationOK = s.player.Map == 489 && inBattleground
+			if !(s.player.Map == 489 && inBattleground) {
+				locationFail = spellFailedRequiresArea
+			}
 		case 34976: // Netherstorm flag
-			locationOK = s.player.Map == 566 && inBattleground
+			if !(s.player.Map == 566 && inBattleground) {
+				locationFail = spellFailedRequiresArea
+			}
 		case 2584, 22011, 22012, 42792, 43681, 44535: // spirit heal / dropped-flag spells
-			locationOK = zoneID == WGZoneID || (mapErr == nil && mapFound && mapEntry.IsBattleground() && inBattleground)
+			switch {
+			case mapErr != nil || !mapFound:
+				locationFail = spellFailedIncorrectArea
+			case !(zoneID == WGZoneID || (mapEntry.IsBattleground() && inBattleground)):
+				locationFail = spellFailedRequiresArea
+			}
 		case 44521: // Preparation
-			locationOK = mapErr == nil && mapFound && mapEntry.IsBattleground() && inBattleground
+			switch {
+			case mapErr != nil || !mapFound:
+				locationFail = spellFailedIncorrectArea
+			case !(mapEntry.IsBattleground() && inBattleground):
+				locationFail = spellFailedRequiresArea
+			}
 			// STATUS_WAIT_JOIN refinement has no bridge: Go battleground
 			// queue entries never model WAIT_JOIN (they go 1 -> 3), unlike
 			// arena entries whose status syncs to the arena state.
 		case 32724, 32725, 35774, 35775: // arena team spells
-			locationOK = mapErr == nil && mapFound && mapEntry.IsBattleArena() && inBattleground
+			switch {
+			case mapErr != nil || !mapFound:
+				locationFail = spellFailedIncorrectArea
+			case !(mapEntry.IsBattleArena() && inBattleground):
+				locationFail = spellFailedRequiresArea
+			}
 		case 32727: // Arena Preparation
-			locationOK = false
-			if mapErr == nil && mapFound && mapEntry.IsBattleArena() && inBattleground {
-				for i := range s.bgQueues {
-					if q := &s.bgQueues[i]; q.Active && q.IsArena && q.InstanceID == s.bgData.InstanceID && q.Status == ArenaStatusWaitJoin {
-						locationOK = true
-						break
+			switch {
+			case mapErr != nil || !mapFound:
+				locationFail = spellFailedIncorrectArea
+			default:
+				locationFail = spellFailedRequiresArea
+				if mapEntry.IsBattleArena() && inBattleground {
+					for i := range s.bgQueues {
+						if q := &s.bgQueues[i]; q.Active && q.IsArena && q.InstanceID == s.bgData.InstanceID && q.Status == ArenaStatusWaitJoin {
+							locationFail = 0
+							break
+						}
 					}
 				}
 			}
 		}
-		if !locationOK {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedRequiresArea), true)
-			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "requires area", "zone", zoneID, "area", areaID)
+		if locationFail != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, locationFail), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "location check", "zone", zoneID, "area", areaID, "failure", locationFail)
 			return true
 		}
 		// SPELL_ATTR4_CAST_ONLY_IN_OUTLAND (SpellInfo.cpp:1529-1550): no bridge.
