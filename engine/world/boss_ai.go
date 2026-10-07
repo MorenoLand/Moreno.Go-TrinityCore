@@ -3263,6 +3263,25 @@ func init() {
 	// Documented-only: intro choreography, gate/brazier GO arms,
 	// go_brazier_of_the_herald (no bridges).
 	RegisterLuaBoss("boss_kirtonos_the_herald", 10506)
+	// instance_scholomance.cpp audit (map 289, "SC", EK loader decl :122 /
+	// call :300 follows kirtonos_the_herald): InstanceMapScript only — no
+	// creature/at_ scripts, no Talk lines, no Lua InstanceMapScript bridge,
+	// so this unit is documented-only. C++ arms: ctor SetHeaders("SC") +
+	// SetBossNumber(EncounterCount 8, DATA 0..7: theolen/kirtonos last in C++
+	// order DATA_KIRTONOS=7). OnGameObjectCreate latches 9 GUIDs: gates
+	// 175570 kirtonos / 177374 gandling / 177375 malicia / 177377 theolen /
+	// 177376 polkelt / 177372 ravenian / 177373 barov / 177371 illucia +
+	// brazier_of_the_herald 175564. SetBossState on the 6 pre-gandling bosses
+	// (DATA_LORDALEXEIBAROV/DOCTORTHEOLENKRASTINOV/THERAVENIAN/
+	// LOREKEEPERPOLKELT/INSTRUCTORMALICIA/LADYILLUCIABAROV) calls
+	// CheckToSpawnGandling; CheckPreBosses(DATA_DARKMASTERGANDLING=6)
+	// requires all six DONE and gandling not DONE; then SummonCreature
+	// NPC_DARKMASTER_GANDLING=1853 at GandlingLoc (180.7712, -5.428603,
+	// 75.57024, 1.291544). ReadSaveDataMore re-checks across map loads.
+	// GetGuidData returns the 9 latched GUIDs. No SummonCreature/SetBossState/
+	// GetBossState/GetGuidData bridges — joins the no-instance-script-bridge
+	// queue (deadmines/blackrock_spire/gnomeregan/karazhan/molten_core/
+	// naxxramas/trial_of_the_crusader/scarlet_monastery precedent).
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
