@@ -30,7 +30,8 @@
 -- - KilledUnit: Talk(SAY_KILL = 2) (C++ has no player gate — faithful;
 --   event 3 is wired — nalorakk DISCOVERY holds).
 -- - HP machine (C++ UpdateAI sequential ifs): via DamageTaken (event 9)
---   on pre-damage health like C++ HealthBelowPct (moroes convention);
+--   on post-damage health — the C++ checks run in UpdateAI ticks after
+--   the damage has been applied, so (health - damage) matches exactly;
 --   one-shot flags reset in Reset like C++ Initialize():
 --   HealthBelowPct(80): Talk(SAY_WARD = 1) + one-shot Ward of Zum'rah
 --   11086 self-cast at 1s; HealthBelowPct(40): same again;
@@ -124,8 +125,8 @@ end
 -- EVENT_WARD_OF_ZUM_RAH at 1s; HealthBelowPct(30) -> one-shot
 -- EVENT_HEALING_WAVE at 3s. Both ward arms self-cast 11086; the heal
 -- arm self-casts 12491. Non-triggered; no reschedules (one-shots).
--- DamageTaken fires pre-application, so pre-damage health matches C++
--- HealthBelowPct exactly (moroes convention).
+-- DamageTaken's (health - damage) equals the post-hit health the C++
+-- UpdateAI tick would read, so HealthBelowPct matches exactly.
 local function onDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local flags = hpFlags[guid]

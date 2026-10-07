@@ -86,18 +86,23 @@ end
 
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
-    cancelTimers(guid)
-    schedule(guid, "bomb", 10000, function()
-        onBomb(creature, guid)
-    end)
+    -- C++ Reset() is effectively empty (body commented out): Bomb_Timer
+    -- is NOT re-armed on evade, it freezes and resumes. Preserve a
+    -- pending bomb timer across re-engages instead of restarting 10s.
+    local per = timers[guid]
+    if not (per and per["bomb"]) then
+        schedule(guid, "bomb", 10000, function()
+            onBomb(creature, guid)
+        end)
+    end
 end
 
+-- C++ Reset() leaves Bomb_Timer untouched, so leave-combat and reset
+-- must not cancel the pending bomb; the timer resumes on re-engage.
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
