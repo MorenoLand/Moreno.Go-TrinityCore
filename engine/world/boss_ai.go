@@ -3081,6 +3081,17 @@ func init() {
 	// UNIT_STATE_CASTING gates, BossAI::JustEngagedWith +
 	// DATA_DARKMASTERGANDLING bookkeeping (luaBossAI shim).
 	RegisterLuaBoss("boss_darkmaster_gandling", 1853)
+	// boss_death_knight_darkreaver.cpp (EK loader decl :110 / call :288,
+	// Scholomance block continues): boss AI ported in
+	// lua_scripts/eastern_kingdoms/boss_death_knight_darkreaver.lua
+	// (entry 14516 — no NPC_ constant in scholomance.h, DB-side
+	// ScriptName binding, wowhead TBC-cited): the only arm is DamageTaken —
+	// a lethal blow (current health <= incoming damage, pre-damage hook
+	// event 9, NOT the golemagg HealthBelowPct bug class) triggers a
+	// self-cast of 23261 (Summon Darkreaver's Fallen Charger). C++
+	// Reset() and JustEngagedWith() are both empty; no timers, no Talk
+	// lines, no instance bookkeeping (luaBossAI shim).
+	RegisterLuaBoss("boss_death_knight_darkreaver", 14516)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
