@@ -58,9 +58,10 @@ func (s *session) handleTextEmote(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	// C++ (ChatHandler.cpp:683-693): text emotes are muted like chat, with
-	// the LANG_WAIT_BEFORE_SPEAKING notification.
+	// the LANG_WAIT_BEFORE_SPEAKING notification (705, secsToTimeString
+	// ShortText duration).
 	if now := time.Now().Unix(); s.muteTime > now {
-		s.sendNotification(fmt.Sprintf("You must wait %d seconds before speaking again.", s.muteTime-now))
+		s.sendNotification(fmt.Sprintf("You must wait %s before speaking again.", secsToTimeStringShort(uint64(s.muteTime-now))))
 		s.debug("text emote rejected", "account", s.accountName, "reason", "account muted")
 		return true
 	}

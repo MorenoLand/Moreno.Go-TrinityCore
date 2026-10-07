@@ -140,7 +140,10 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		if remaining < 1 {
 			remaining = 1
 		}
-		s.sendNotification(fmt.Sprintf("You must wait %d seconds before speaking again.", remaining))
+		// Reference: WorldSession::HandleMessagechatOpcode (ChatHandler.cpp:196-202)
+		// — the muted notification is LANG_WAIT_BEFORE_SPEAKING (705) with a
+		// secsToTimeString ShortText duration, not raw seconds.
+		s.sendNotification(fmt.Sprintf("You must wait %s before speaking again.", secsToTimeStringShort(uint64(remaining))))
 		s.debug("chat rejected", "account", s.accountName, "reason", "account muted", "mute_until", s.muteTime)
 		return true
 	}
@@ -239,15 +242,16 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	if message == "" && typeID != chatAFK && typeID != chatDND {
 		return true
 	}
-	isGM := s.player != nil && ((s.player.ExtraFlags&playerExtraGMOn != 0) || (s.player.PlayerFlags&playerFlagGM != 0))
-	if language == languageUniversal && typeID != chatAFK && typeID != chatDND {
-		if !isGM || (!s.gmChat && s.player.ExtraFlags&playerExtraGMChat == 0) {
-			if s.playerAlliance() {
-				language = 7 // Common
-			} else {
-				language = 1 // Orcish
-			}
-		}
+	// Reference: the non-addon branch of WorldSession::HandleMessagechatOpcode
+	// (ChatHandler.cpp:179-181) — a player in .gm on mode sends in the
+	// universal language regardless of spell effects or typed language. The
+	// gmChat/.gm chat flag only feeds the SMSG_GM_MESSAGECHAT opcode and the
+	// GM tag byte (ChatHandler::BuildChatPacket, Chat.cpp:271-297), never the
+	// language. (The old universal-to-faction fallback block here was dead
+	// code: the validation above already rejects every universal non-AFK/DND
+	// message before this point.)
+	if language != languageAddon && chatGMMode(s) {
+		language = languageUniversal
 	}
 	if language != languageAddon && typeID != chatAFK && typeID != chatDND {
 		if modifiedLanguage, ok := s.chatLanguageModifier(); ok {
@@ -255,9 +259,6 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		} else if s.twoSideChat {
 			language = languageUniversal
 		}
-	}
-	if language != languageAddon && isGM && (s.gmChat || s.player.ExtraFlags&playerExtraGMChat != 0) {
-		language = languageUniversal
 	}
 	if typeID == chatWhisper && language != languageAddon {
 		language = languageUniversal
@@ -308,19 +309,25 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			s.sendChatPlayerNotFound(targetName)
 			return true
 		}
-		if !chatGMMode(s) && s.player != nil && uint32(s.player.Level) < s.server.Config.ChatWhisperLevelReq {
+		// Reference: the CHAT_MSG_WHISPER arm (ChatHandler.cpp:340-394) — the
+		// sender level requirement and the faction check are both skipped when
+		// the receiver is a GM accepting whispers; Go has no
+		// AcceptWhispers/whitelist state, so chatGMMode(receiver) is the
+		// IsGameMasterAcceptingWhispers() analog. The silence-aura check runs
+		// after the faction check in C++ (ChatHandler.cpp:388-393).
+		if !chatGMMode(s) && !chatGMMode(receiver) && s.player != nil && uint32(s.player.Level) < s.server.Config.ChatWhisperLevelReq {
 			s.sendNotification(fmt.Sprintf("You cannot whisper until you become level %d.", s.server.Config.ChatWhisperLevelReq))
 			s.debug("chat rejected", "account", s.accountName, "reason", "whisper level requirement", "required", s.server.Config.ChatWhisperLevelReq, "level", s.player.Level)
-			return true
-		}
-		if s.hasAura(1852) && !chatGMMode(receiver) {
-			s.sendNotification(fmt.Sprintf("Silence is ON for %s", s.player.Name))
-			s.debug("chat rejected", "account", s.accountName, "reason", "GM silence aura", "spell", 1852, "receiver", receiver.playerGUID)
 			return true
 		}
 		if !s.twoSideChat && !chatGMMode(receiver) && s.playerAlliance() != receiver.playerAlliance() {
 			s.debug("chat rejected", "account", s.accountName, "reason", "whisper wrong faction", "receiver", receiver.playerGUID)
 			s.sendChatWrongFaction()
+			return true
+		}
+		if s.hasAura(1852) && !chatGMMode(receiver) {
+			s.sendNotification(fmt.Sprintf("Silence is ON for %s", s.player.Name))
+			s.debug("chat rejected", "account", s.accountName, "reason", "GM silence aura", "spell", 1852, "receiver", receiver.playerGUID)
 			return true
 		}
 	}
@@ -337,17 +344,30 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "group chat gate", "type", typeID)
 		return true
 	}
-	if typeID == chatChannel && !s.server.isChannelMember(s, channel) {
-		s.debug("chat rejected", "account", s.accountName, "reason", "channel membership", "channel", channel)
-		return s.sendChannelNotify(channelNotMemberNotice, channel, nil) == nil
+	// Reference: the CHAT_MSG_CHANNEL arm (ChatHandler.cpp:529-547) resolves the
+	// channel with ChannelMgr::GetChannelForPlayerByNamePart — a
+	// case-insensitive prefix over the sender's joined channels — and silently
+	// drops the message when nothing matches.
+	channelName := channel
+	if typeID == chatChannel {
+		_, resolved, ok := s.server.resolveChannelNamePart(s, channel)
+		if !ok {
+			s.debug("chat rejected", "account", s.accountName, "reason", "channel name not resolved", "channel", channel)
+			return true
+		}
+		channelName = resolved
 	}
-	if typeID == chatChannel && s.server.isChannelMuted(s, channel) {
-		s.debug("chat rejected", "account", s.accountName, "reason", "channel muted", "channel", channel)
+	if typeID == chatChannel && !s.server.isChannelMember(s, channelName) {
+		s.debug("chat rejected", "account", s.accountName, "reason", "channel membership", "channel", channelName)
+		return s.sendChannelNotify(channelNotMemberNotice, channelName, nil) == nil
+	}
+	if typeID == chatChannel && s.server.isChannelMuted(s, channelName) {
+		s.debug("chat rejected", "account", s.accountName, "reason", "channel muted", "channel", channelName)
 		// Reference Channel::Say: muted members receive CHAT_MUTED_NOTICE and
 		// the message is not delivered.
-		return s.sendChannelNotify(channelMutedNotice, channel, nil) == nil
+		return s.sendChannelNotify(channelMutedNotice, channelName, nil) == nil
 	}
-	s.server.broadcastChat(s, receiver, uint8(typeID), language, message, channel)
+	s.server.broadcastChat(s, receiver, uint8(typeID), language, message, channelName)
 	if typeID == chatWhisper && receiver != nil && language != languageAddon {
 		s.announceChatAutoReply(receiver)
 	}

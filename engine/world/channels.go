@@ -367,6 +367,40 @@ func (s *Server) isChannelModerator(member *session, name string) bool {
 	return moderator
 }
 
+// resolveChannelNamePart mirrors ChannelMgr::GetChannelForPlayerByNamePart
+// (ChannelMgr.cpp:124-142): the channel name carried by a channel-chat packet
+// is a case-insensitive prefix matched against the sender's joined channels,
+// not an exact key lookup. It returns the canonical channel name and key of
+// the first match (deterministic by name; C++ iterates an arbitrary-order
+// pointer set).
+func (s *Server) resolveChannelNamePart(member *session, namePart string) (string, string, bool) {
+	if s == nil || member == nil || member.channels == nil {
+		return "", "", false
+	}
+	part := strings.ToLower(strings.TrimSpace(namePart))
+	if part == "" {
+		return "", "", false
+	}
+	s.channelsMu.RLock()
+	defer s.channelsMu.RUnlock()
+	bestKey, bestName := "", ""
+	for key := range member.channels {
+		ch := s.channels[key]
+		if ch == nil {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(ch.Name), part) {
+			if bestKey == "" || ch.Name < bestName {
+				bestKey, bestName = key, ch.Name
+			}
+		}
+	}
+	if bestKey == "" {
+		return "", "", false
+	}
+	return bestKey, bestName, true
+}
+
 // channelTakeOwnershipLocked hands a custom channel to its next member when the
 // owner leaves, mirroring Channel::LeaveChannel: the first remaining member
 // becomes owner and moderator. C++ iterates its member map (arbitrary order)
