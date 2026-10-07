@@ -3027,6 +3027,30 @@ func init() {
 	// ScriptName DB-side) — db.moonwell-cited (?npc=14693 "Scorn",
 	// level 34 elite undead, spawned via script).
 	RegisterLuaBoss("boss_scorn", 14693)
+	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
+	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
+	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
+	// is documented-only. C++ arms: ctor SetHeaders("SM") +
+	// SetBossNumber(EncounterCount 9) + LoadObjectData(8 creature pairs:
+	// 23775->DATA_HORSEMAN_HEAD, 23682->DATA_HEADLESS_HORSEMAN,
+	// 23686->DATA_FLAME_BUNNY, 23758->DATA_EARTH_BUNNY, 23904->DATA_THOMAS,
+	// 3976->DATA_MOGRAINE, 3981->DATA_VORREL, 3977->DATA_WHITEMANE; 3 GO
+	// pairs: 186267->DATA_PUMPKIN_SHRINE, 104600->DATA_HIGH_INQUISITORS_DOOR,
+	// 186314->DATA_LOOSELY_TURNED_SOIL), _horsemanState NOT_STARTED.
+	// HandleStartEvent sets IN_PROGRESS, GO_FLAG_NOT_SELECTABLE on shrine +
+	// soil, summons 23775/23686/23758 at the SM spawn positions, schedules
+	// EVENT_ACTIVE_EARTH_EXPLOSION (1) at 1.5s, EVENT_SPAWN_HEADLESS_HORSEMAN
+	// (2) at 3s, EVENT_DESPAWN_OBJECTS (3) at 10s, despawns Sir Thomas.
+	// SetData: DATA_START_HORSEMAN_EVENT starts once, DATA_HORSEMAN_EVENT_STATE
+	// sets state, DATA_PREPARE_RESET clears + despawns bunnies;
+	// GetData: DATA_HORSEMAN_EVENT_STATE. Update: earth bunny self-casts
+	// SPELL_EARTH_EXPLOSION 42373; horseman 23682 summon + AI DoAction
+	// (ACTION_HORSEMAN_EVENT_START 101) — the horseman AI itself is ported in
+	// lua_scripts/eastern_kingdoms/boss_headless_horseman.lua; shrine + soil
+	// RemoveFromWorld. No SummonCreature/GetCreature/GetGameObject/SetFlag/
+	// DespawnOrUnsummon/SetData/GetData/EventMap bridges — joins the
+	// no-instance-script-bridge queue (deadmines/blackrock_spire/gnomeregan/
+	// karazhan/molten_core/naxxramas/trial_of_the_crusader precedent).
 
 	// boss_arcanist_doan (Scarlet Monastery, Library wing, EK loader
 	// decl :98 / call :276): OnEnterCombat(1) arms silence 8988
