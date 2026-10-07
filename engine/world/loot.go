@@ -1025,7 +1025,7 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 		} else if grp.LootMethod == 3 || grp.LootMethod == 4 { // Group Loot / Need Before Greed
 			for _, it := range sortedLootItems(loot.Items) {
 				if it.Quality >= uint32(grp.LootThreshold) {
-					s.server.startGroupLootRoll(loot.TargetGUID, uint32(it.Slot), it.ItemEntry, it.Count, loot.MapID, loot.InstanceID, s.groupID)
+					s.server.startGroupLootRoll(loot.TargetGUID, uint32(it.Slot), it.ItemEntry, it.Count, loot.MapID, loot.InstanceID, s.groupID, s)
 				}
 			}
 		}
@@ -1845,7 +1845,7 @@ func buildLootStartRollPacket(sourceGUID uint64, mapID, slot, itemEntry, randomS
 	return buf.Bytes()
 }
 
-func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry uint32, itemCount uint32, mapID, instanceID uint32, groupID uint64) {
+func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry uint32, itemCount uint32, mapID, instanceID uint32, groupID uint64, looter *session) {
 	if groupID == 0 {
 		return
 	}
@@ -1853,11 +1853,21 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 	if len(members) == 0 {
 		return
 	}
+	// Player::IsAtGroupRewardDistance (Player.cpp:24160): same map instance,
+	// then dungeon-always, else within CONFIG_GROUP_XP_DISTANCE (100yd) of
+	// the looted object. Go proxies the object position with the looter's —
+	// the looter opened the window within ~5yd of the corpse, and
+	// sendLootMasterList uses the same proxy for the MasterLoot list.
+	inDungeon := looter.isDungeonMap(mapID)
 	var eligible []*session
 	for _, m := range members {
-		if m.player != nil && m.player.Map == mapID && m.player.InstanceID == instanceID {
-			eligible = append(eligible, m)
+		if m.player == nil || m.player.Map != mapID || m.player.InstanceID != instanceID {
+			continue
 		}
+		if !inDungeon && looter.player != nil && distance3D(m.player.X, m.player.Y, m.player.Z, looter.player.X, looter.player.Y, looter.player.Z) > 100.0 {
+			continue
+		}
+		eligible = append(eligible, m)
 	}
 	if len(eligible) == 0 {
 		return
@@ -1879,13 +1889,18 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 	s.groupsMu.Unlock()
 
 	var disenchantID uint32
+	var requiredDisenchantSkill uint32
 	var allowableClass uint32 = 0xFFFFFFFF
 	if s.WorldStore != nil && s.WorldStore.DB != nil {
-		_ = s.WorldStore.DB.QueryRowContext(context.Background(), "SELECT DisenchantID, AllowableClass FROM item_template WHERE entry = ?", itemEntry).Scan(&disenchantID, &allowableClass)
+		_ = s.WorldStore.DB.QueryRowContext(context.Background(), "SELECT DisenchantID, RequiredDisenchantSkill, AllowableClass FROM item_template WHERE entry = ?", itemEntry).Scan(&disenchantID, &requiredDisenchantSkill, &allowableClass)
 	}
 
 	baseMask := rollFlagTypePass | rollFlagTypeNeed | rollFlagTypeGreed
-	if disenchantID > 0 {
+	// Group::GroupLoot / NeedBeforeGreed (Group.cpp:1146/1296): the disenchant
+	// option is offered only when a group member's enchanting skill covers
+	// the item's RequiredDisenchantSkill (m_maxEnchantingLevel, maintained on
+	// group join/leave in group.go).
+	if disenchantID > 0 && grp != nil && grp.MaxEnchantingLevel >= uint16(requiredDisenchantSkill) {
 		baseMask |= rollFlagTypeDisenchant
 	}
 
@@ -2073,28 +2088,16 @@ func (s *Server) deliverGroupLootItem(roll *activeGroupRoll, winnerGUID uint64, 
 	}
 	ctx := context.Background()
 
+	// Group::CountTheRoll disenchant arm (Group.cpp:1648-1680) gets its own
+	// path: AutoStoreLoot converts the win over the whole
+	// disenchant_loot_template, not a single top-chance row.
+	if winningType == rollDisenchant {
+		s.deliverDisenchantMats(ctx, roll, winnerGUID, winnerSess)
+		return
+	}
+
 	deliveredItem := roll.ItemEntry
 	deliveredCount := roll.ItemCount
-
-	// If won via Disenchant, deliver disenchanted material from disenchant_loot_template (TC Group.cpp:1655)
-	if winningType == rollDisenchant && s.WorldStore != nil && s.WorldStore.DB != nil {
-		var disenchantID uint32
-		_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT DisenchantID FROM item_template WHERE entry = ?", roll.ItemEntry).Scan(&disenchantID)
-		if disenchantID > 0 {
-			var matItem, minCount, maxCount uint32
-			err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT Item, MinCount, MaxCount FROM disenchant_loot_template WHERE Entry = ? ORDER BY Chance DESC LIMIT 1", disenchantID).Scan(&matItem, &minCount, &maxCount)
-			if err == nil && matItem > 0 {
-				deliveredItem = matItem
-				deliveredCount = minCount
-				if maxCount > minCount {
-					deliveredCount += uint32(rand.Intn(int(maxCount - minCount + 1)))
-				}
-				if deliveredCount == 0 {
-					deliveredCount = 1
-				}
-			}
-		}
-	}
 
 	res, err := winnerSess.storeOrStackItem(ctx, winnerGUID, deliveredItem, deliveredCount)
 	if err != nil {
@@ -2117,6 +2120,99 @@ func (s *Server) deliverGroupLootItem(roll *activeGroupRoll, winnerGUID uint64, 
 		slotForPush = 0xFFFFFFFF
 	}
 	_ = winnerSess.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(winnerGUID, res.ClientBag, slotForPush, deliveredItem, deliveredCount, res.InventoryCount), true)
+
+	s.lootMu.Lock()
+	cLoot := s.creatureLoot[rollLootObjectKey(roll)]
+	if cLoot != nil {
+		delete(cLoot.Items, uint8(roll.Slot))
+	}
+	s.lootMu.Unlock()
+
+	if cLoot != nil {
+		cLoot.broadcastRemoved(uint8(roll.Slot))
+	} else {
+		remBuf := protocol.NewBuffer(1)
+		remBuf.WriteU8(uint8(roll.Slot))
+		s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_REMOVED), remBuf.Bytes())
+	}
+}
+
+// deliverDisenchantMats bridges the Group::CountTheRoll disenchant arm
+// (Group.cpp:1648-1680): the win is converted via Player::AutoStoreLoot over
+// the whole disenchant_loot_template — every chance-rolled material is
+// stored, a per-material equip error skips just that material
+// (Player.cpp:25030-25057), and the disenchant cast credits the winner with
+// ACHIEVEMENT_CRITERIA_TYPE_CAST_SPELL 13262 (Group.cpp:1654). A full bag
+// mails the materials in C++ (SendItemRetrievalMail); Go has no player-mail
+// bridge (item 13 partial), so a winner who stores nothing falls back to the
+// RollWinner path and can take the item on a later loot open.
+func (s *Server) deliverDisenchantMats(ctx context.Context, roll *activeGroupRoll, winnerGUID uint64, winnerSess *session) {
+	// Group.cpp:1654 — the disenchant cast credits the connected winner.
+	winnerSess.updateAchievementCriteria(criteriaTypeCastSpell, 13262, 0)
+
+	type deMat struct {
+		item  uint32
+		count uint32
+	}
+	var mats []deMat
+	if s.WorldStore != nil && s.WorldStore.DB != nil {
+		var disenchantID uint32
+		_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT DisenchantID FROM item_template WHERE entry = ?", roll.ItemEntry).Scan(&disenchantID)
+		if disenchantID > 0 {
+			rows, err := s.WorldStore.DB.QueryContext(ctx, "SELECT Item, MinCount, MaxCount, Chance FROM disenchant_loot_template WHERE Entry = ?", disenchantID)
+			if err == nil {
+				for rows.Next() {
+					var item, minCount, maxCount uint32
+					var chance float64
+					if err := rows.Scan(&item, &minCount, &maxCount, &chance); err != nil || item == 0 {
+						continue
+					}
+					if rand.Float64()*100.0 >= chance {
+						continue
+					}
+					count := minCount
+					if maxCount > minCount {
+						count += uint32(rand.Intn(int(maxCount-minCount) + 1))
+					}
+					if count == 0 {
+						count = 1
+					}
+					mats = append(mats, deMat{item: item, count: count})
+				}
+				rows.Close()
+			}
+		}
+	}
+
+	storedAny := false
+	for _, m := range mats {
+		res, err := winnerSess.storeOrStackItem(ctx, winnerGUID, m.item, m.count)
+		if err != nil {
+			winnerSess.sendEquipError(equipErrInvFull, 0)
+			continue
+		}
+		storedAny = true
+		_ = winnerSess.sendInventoryItems(ctx)
+		winnerSess.sendPlayerUpdate()
+		slotForPush := uint32(res.Slot)
+		if res.IsStack {
+			slotForPush = 0xFFFFFFFF
+		}
+		_ = winnerSess.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(winnerGUID, res.ClientBag, slotForPush, m.item, m.count, res.InventoryCount), true)
+	}
+
+	if len(mats) == 0 || !storedAny {
+		s.lootMu.Lock()
+		if cLoot := s.creatureLoot[rollLootObjectKey(roll)]; cLoot != nil {
+			if li, ok := cLoot.Items[uint8(roll.Slot)]; ok {
+				li.IsBlocked = false
+				li.RollWinner = winnerGUID
+				cLoot.Items[uint8(roll.Slot)] = li
+			}
+		}
+		s.lootMu.Unlock()
+		return
+	}
 
 	s.lootMu.Lock()
 	cLoot := s.creatureLoot[rollLootObjectKey(roll)]
@@ -2200,6 +2296,14 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// Group::CountRollVote (Group.cpp:1452-1494): the vote switch has no
+	// default arm — a rollType outside 0..3 (pass/need/greed/disenchant)
+	// records no vote, counts nothing, and fires no achievement.
+	if rollType > rollDisenchant {
+		s.server.lootMu.Unlock()
+		return true
+	}
+
 	// In Need Before Greed, verify that player can need if they chose NEED (TC GroupHandler.cpp:487)
 	if rollType == rollNeed && s.groupID != 0 {
 		s.server.groupsMu.Lock()
@@ -2228,9 +2332,11 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 	case 2:
 		roll.TotalGreed++
 		s.updateAchievementCriteria(criteriaTypeRollGreedCount, 0, 1)
-	case 3:
+	case 3: // DISENCHANT shares the greed total (Group.cpp:1484).
+		// C++ HandleLootRoll fires no achievement for a disenchant vote
+		// (the NEED/GREED-only switch, GroupHandler.cpp:483-490); the
+		// disenchant cast credits the winner at delivery (Group.cpp:1654).
 		roll.TotalGreed++
-		s.updateAchievementCriteria(criteriaTypeRollDisenchant, 0, 1)
 	default:
 		roll.TotalGreed++
 		s.updateAchievementCriteria(criteriaTypeRollGreedCount, 0, 1)

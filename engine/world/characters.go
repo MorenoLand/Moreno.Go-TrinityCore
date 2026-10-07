@@ -2907,6 +2907,31 @@ func (s *session) clearBuybackState(ctx context.Context) error {
 	return nil
 }
 
+// lootReleaseCleanupAllowed mirrors the gate ahead of the fully-looted
+// legs of WorldSession::DoLootRelease's creature arm (LootHandler.cpp:349-352):
+// the cleanup only runs when the creature still exists on the map
+// (lootAllowed — a despawned creature's map lookup fails) and is within
+// INTERACTION_DISTANCE of the player. A release after a far teleport or a
+// despawn silently skips the dynflag/loot-clear legs; the release legs
+// (loot-GUID clear, release response, UNIT_FLAG_LOOTING removal) already ran
+// unconditionally above. Gameobject loot keeps the existing unconditional
+// cleanup (separate C++ arm, out of this unit's scope).
+func (s *session) lootReleaseCleanupAllowed(loot *activeLootState) bool {
+	if s == nil || s.server == nil || loot == nil {
+		return false
+	}
+	if high := uint16(loot.TargetGUID >> 48); high == 0xF110 {
+		return true
+	}
+	guid := uint32(loot.TargetGUID & 0x00FFFFFF)
+	entry := uint32((loot.TargetGUID >> 24) & 0x00FFFFFF)
+	motion := s.server.findCreatureMotion(loot.MapID, loot.InstanceID, creatureWorldGUID(guid, entry))
+	if motion == nil || s.player == nil {
+		return false
+	}
+	return distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z) <= 5.0+1.5+1.5
+}
+
 func (s *session) releaseActiveLoot() {
 	// WorldSession::DoLootRelease (LootHandler.cpp:265): the UNIT_FLAG_LOOTING
 	// bit set at loot open is removed on every release arm; clearing ahead of
@@ -2924,7 +2949,7 @@ func (s *session) releaseActiveLoot() {
 	}
 	loot.removeViewer(s.playerGUID)
 	s.activeLoot = nil
-	if loot.Money == 0 && len(loot.Items) == 0 {
+	if loot.Money == 0 && len(loot.Items) == 0 && s.lootReleaseCleanupAllowed(loot) {
 		s.clearCreatureLoot(loot)
 	}
 }

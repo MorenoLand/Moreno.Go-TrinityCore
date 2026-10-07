@@ -43,6 +43,11 @@ type groupState struct {
 	LFGDungeonID  uint32
 	TargetIcons   [8]uint64 // raid target icons, index=icon, value=target GUID
 	counter       uint32
+	// MaxEnchantingLevel mirrors Group::m_maxEnchantingLevel: the highest
+	// enchanting skill among members. Group::GroupLoot/NeedBeforeGreed gate
+	// the disenchant roll option on m_maxEnchantingLevel >=
+	// item->RequiredDisenchantSkill (Group.cpp:1146/1296).
+	MaxEnchantingLevel uint16
 }
 
 func (g *groupState) updateLooter(srv *Server, mapID uint32, x, y, z float32) {
@@ -72,6 +77,21 @@ func (g *groupState) updateLooter(srv *Server, mapID uint32, x, y, z float32) {
 
 func (g *groupState) isLeader(guid uint64) bool {
 	return g.LeaderGUID == guid
+}
+
+// refreshGroupMaxEnchantingLevel mirrors the m_maxEnchantingLevel maintenance
+// in Group::AddMember (Group.cpp:556-557, raised on join) and
+// Group::RemoveMember (Group.cpp:2411-2417, recomputed over members on leave).
+func refreshGroupMaxEnchantingLevel(srv *Server, g *groupState) {
+	var maxLvl uint16
+	for _, m := range g.Members {
+		if sess := srv.findSessionByGUID(m.GUID); sess != nil && sess.player != nil {
+			if v := playerSkillTotalValue(sess.player, skillEnchanting); v > int32(maxLvl) {
+				maxLvl = uint16(v)
+			}
+		}
+	}
+	g.MaxEnchantingLevel = maxLvl
 }
 
 func UpdatePlayerGroupLeaderFlag(flags uint32, leader bool) uint32 {
@@ -668,6 +688,7 @@ func (s *session) handleGroupAccept(_ context.Context, _ []byte) bool {
 			RaidDiff:      1,
 		}
 		g.Members = append(g.Members, groupMember{GUID: leaderGUID, Name: leaderSess.player.Name})
+		refreshGroupMaxEnchantingLevel(srv, g)
 		srv.groups[g.ID] = g
 		leaderSess.groupID = g.ID
 	}
@@ -679,6 +700,7 @@ func (s *session) handleGroupAccept(_ context.Context, _ []byte) bool {
 	}
 
 	g.Members = append(g.Members, groupMember{GUID: s.playerGUID, Name: s.player.Name})
+	refreshGroupMaxEnchantingLevel(srv, g)
 	s.groupID = g.ID
 	groupObj := groupLuaObject(g)
 	srv.groupsMu.Unlock()
@@ -800,6 +822,7 @@ func (s *session) removeFromGroup(g *groupState, target *session, method uint8) 
 			break
 		}
 	}
+	refreshGroupMaxEnchantingLevel(srv, g)
 	target.groupID = 0
 	target.pendingGroupLeader = 0
 	srv.onPlayerLeaveGroupRolls(target.playerGUID, g.ID)
@@ -861,6 +884,7 @@ func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, gui
 		return
 	}
 	g.Members = append(g.Members[:idx], g.Members[idx+1:]...)
+	refreshGroupMaxEnchantingLevel(s, g)
 	disbanded := len(g.Members) <= 1
 	if disbanded {
 		// Dissolve like Group::RemoveMember does for a 1-member group.
