@@ -2997,6 +2997,22 @@ func init() {
 	// the adjacent 3974 was disproven before porting).
 	RegisterLuaBoss("boss_high_inquisitor_fairbanks", 4542)
 
+	// boss_houndmaster_loksey (3974, Scarlet Monastery Library, EK
+	// loader decl :104 / call :282 follows fairbanks): OnEnterCombat(1)
+	// Talk(SAY_AGGRO 0) + non-triggered self-cast summon scarlet hound
+	// 17164 (DoCast(spellId) self-cast) + bloodlust arm 20s->(60s on
+	// cast, 1s retry until below-60%): C++ EVENT_BLOODLUST casts
+	// DoCastSelf(bloodlust 6742) only while HealthBelowPct(60) holds
+	// (current-health read, golemagg 704fb8e bug class) and otherwise
+	// re-arms at 1s. The UpdateAI UNIT_STATE_CASTING queue gate and
+	// BossAI::JustEngagedWith + DATA_HOUNDMASTER_LOKSEY bookkeeping
+	// have no UNIT_STATE/instance-script bridges (luaBossAI shim).
+	// Entry 3974 is not named in the C++ tree
+	// (RegisterScarletMonasteryCreatureAI binds the creature_template
+	// ScriptName DB-side) — db.moonwell-cited (?npc=3974
+	// "Houndmaster Loksey").
+	RegisterLuaBoss("boss_houndmaster_loksey", 3974)
+
 	// boss_arcanist_doan (Scarlet Monastery, Library wing, EK loader
 	// decl :98 / call :276): OnEnterCombat(1) arms silence 8988
 	// 15s->{15s,20s}, arcane explosion 9433 3s->8s (both non-triggered
