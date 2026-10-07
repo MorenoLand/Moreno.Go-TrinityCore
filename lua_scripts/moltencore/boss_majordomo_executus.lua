@@ -25,7 +25,9 @@
 -- a sole-victim tick casts nothing but keeps the schedule). Nil-
 -- victim ticks cast nothing but keep the schedule (jeklik
 -- convention). OnTargetDied(3): 25% Talk(SAY_SLAY). OnDamageTaken(9,
--- pre-damage hook): post-damage health strictly below 50% ->
+-- pre-damage hook): current (pre-damage) health strictly below 50%
+-- (C++ HealthBelowPct(50) reads current health; the engine's event 9
+-- fires before damage is applied, matching C++ Unit::DealDamage) ->
 -- triggered self-cast Aegis of Ragnaros 20620 (C++-exact — no
 -- once-guard; C++ re-casts every UpdateAI tick below 50%). OnDied/
 -- OnLeaveCombat/OnReset: cancel timers. OnGossipSelect (DB menu 4108
@@ -171,16 +173,18 @@ local function majordomoTargetDied(event, creature, victim)
     end
 end
 
--- C++ UpdateAI: HealthBelowPct(50) -> triggered self-cast Aegis of
--- Ragnaros 20620 (C++-exact — no once-guard; C++ re-casts every
--- UpdateAI tick below 50%, so the damage hook re-casts per damage
--- event below 50%, geddon convention).
+-- C++ UpdateAI: current (pre-damage) health strictly below 50%
+-- (HealthBelowPct(50) — the engine's event 9 fires before damage is
+-- applied, matching C++ Unit::DealDamage) -> triggered self-cast
+-- Aegis of Ragnaros 20620 (C++-exact — no once-guard; C++ re-casts
+-- every UpdateAI tick below 50%, so the damage hook re-casts per
+-- damage event below 50%, geddon convention).
 local function majordomoDamageTaken(event, creature, attacker, damage)
     local maxHealth = creature:GetMaxHealth()
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 50 then
+    if creature:GetHealth() * 100 / maxHealth < 50 then
         creature:CastSpell(creature, SPELL_AEGIS_OF_RAGNAROS, true)
     end
 end
