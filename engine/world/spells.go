@@ -123,6 +123,7 @@ const (
 	spellFailedDontReport                uint8  = 27    // SPELL_FAILED_DONT_REPORT (SharedDefines.h:1009)
 	spellFailedSilenced                  uint8  = 104   // SPELL_FAILED_SILENCED (SharedDefines.h:1086)
 	spellFailedCasterDead                uint8  = 23    // SPELL_FAILED_CASTER_DEAD (SharedDefines.h:1003)
+	spellFailedCasterAurastate           uint8  = 22    // SPELL_FAILED_CASTER_AURASTATE (SharedDefines.h:1002)
 	spellFailedNotFishable               uint8  = 58    // SPELL_FAILED_NOT_FISHABLE (SharedDefines.h:1040)
 	spellFailedCharmed                   uint8  = 24    // SPELL_FAILED_CHARMED (SharedDefines.h:1006)
 	spellFailedConfused                  uint8  = 26    // SPELL_FAILED_CONFUSED (SharedDefines.h:1008)
@@ -1499,6 +1500,22 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	}
 	cost := s.calculateSpellPowerCost(spell)
 	pType := spell.PowerType
+	// Spell::CheckPower (Spell.cpp:6651-6656): health-as-power spells
+	// (PowerType == POWER_HEALTH, -2 in C++, 0xFFFFFFFE in Go's uint32
+	// field) fail with SPELL_FAILED_CASTER_AURASTATE when the caster's
+	// health is at or below the cost — and pass outright otherwise,
+	// without reaching the rune/power arms below. Runs ahead of the
+	// rune arm, matching C++ relative order (health 6651 → unknown-type
+	// 6659 → rune 6665 → power amount 6673). The unknown-power-type
+	// arm (Spell.cpp:6659-6663 — error log + SPELL_FAILED_UNKNOWN) is
+	// unbridged: spell data never carries a PowerType >= MAX_POWERS
+	// other than POWER_HEALTH, so the pType < 7 guard below silently
+	// accepts the impossible case instead of logging.
+	if spell.PowerType == 0xFFFFFFFE && cost > 0 && s.player.Health <= cost {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAurastate), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not enough health for health-cost spell", "failReason", spellFailedCasterAurastate)
+		return true
+	}
 	// Spell::CheckPower (Spell.cpp:6665-6670) checks rune costs when
 	// PowerType == POWER_RUNE; RuneCostID (Spell.dbc field 226) was loaded
 	// in store.go but never read in world/ — the earlier "wired" claim was
@@ -2307,7 +2324,11 @@ func (s *session) validateSpellRange(ctx context.Context, spellID uint32, spell 
 	dist := distance3D(s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z)
 	if spellID == 75 { // Auto Shot
 		if dist < calcMeleeRange(pReach, tgt.CombatReach) {
-			return 128 // SPELL_FAILED_TOO_CLOSE
+			// Spell::CheckRange (Spell.cpp:6555-6556) returns
+			// SPELL_FAILED_OUT_OF_RANGE for min-range violations —
+			// SPELL_FAILED_TOO_CLOSE is defined but never emitted by
+			// this C++ tree, so the too-close code does not apply here.
+			return 97 // SPELL_FAILED_OUT_OF_RANGE
 		}
 		if dist > 35.0 {
 			return 97 // SPELL_FAILED_OUT_OF_RANGE
@@ -2335,7 +2356,10 @@ func (s *session) validateSpellRange(ctx context.Context, spellID uint32, spell 
 		return 97 // SPELL_FAILED_OUT_OF_RANGE
 	}
 	if minRange > 0 && dist < float64(minRange) {
-		return 128 // SPELL_FAILED_TOO_CLOSE
+		// Spell::CheckRange (Spell.cpp:6568-6569): min-range violations
+		// fail with SPELL_FAILED_OUT_OF_RANGE, not TOO_CLOSE — this C++
+		// tree never emits SPELL_FAILED_TOO_CLOSE anywhere in game code.
+		return 97 // SPELL_FAILED_OUT_OF_RANGE
 	}
 	return 0
 }
@@ -9645,8 +9669,8 @@ func (s *session) interruptCurrentCast() {
 //     the same activeCastState, so they break on movement here where C++
 //     would let them continue. Auto-repeat lives on the session
 //     (autoRepeatSpell), not on a per-cast Spell object.
-//   - IsMoveAllowedChannel channeled exemption: covered at startChannel —
-//     Go breaks channels on movement unconditionally.
+//   - IsMoveAllowedChannel channeled exemption: bridged in the movement
+//     break below (SpellInfo.cpp:1229-1232).
 //   - the charmer-is-creature trust hack: Go has no charmed-caster model.
 func (s *session) interruptSpellsOnMovement() {
 	if s == nil {
@@ -9656,7 +9680,15 @@ func (s *session) interruptSpellsOnMovement() {
 	cast := s.activeCast
 	channel := s.activeChannel
 	castBreaks := cast != nil && !cast.Cancelled && cast.InterruptFlg&spellInterruptFlagMovement != 0
-	channelBreaks := channel != nil && !channel.Stopped && channel.Spell.InterruptFlags&spellInterruptFlagMovement != 0
+	// Spell::update movement leg (Spell.cpp:3814-3831) skips the cancel for a
+	// channel C++ lets move: SpellInfo::IsMoveAllowedChannel
+	// (SpellInfo.cpp:1229-1232) = channeled (true here — the channel is
+	// active) AND (ATTR5_CAN_CHANNEL_WHEN_MOVING OR ChannelInterruptFlags
+	// lacking both AURA_INTERRUPT_FLAG_MOVE and AURA_INTERRUPT_FLAG_TURNING).
+	moveAllowed := channel != nil &&
+		(channel.Spell.AttributesEx5&spellAttr5CanChannelWhenMoving != 0 ||
+			channel.Spell.ChannelInterrupt&(auraInterruptFlagMove|auraInterruptFlagTurning) == 0)
+	channelBreaks := channel != nil && !channel.Stopped && !moveAllowed && channel.Spell.InterruptFlags&spellInterruptFlagMovement != 0
 	s.castMu.Unlock()
 
 	if castBreaks {
@@ -14101,10 +14133,10 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 	}
 	// Spell::handle_immediate (Spell.cpp:3588-3591): channeled spells with
 	// nonzero duration take SPELL_STATE_CASTING and AddInterruptMask
-	// (ChannelInterruptFlags). Go has no interrupt-mask model: movement
-	// cancels the active channel unconditionally (movement.go), so channels
-	// that C++ would let move (IsMoveAllowedChannel) are also stopped here.
-	// Noted, not bridged.
+	// (ChannelInterruptFlags). Go has no interrupt-mask model; the
+	// move-allowed-channel exemption (SpellInfo::IsMoveAllowedChannel,
+	// SpellInfo.cpp:1229-1232) is bridged in interruptSpellsOnMovement,
+	// which lets move-allowed channels survive movement.
 	channel := &activeChannelState{
 		CastID:     castID,
 		SpellID:    spellID,

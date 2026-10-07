@@ -263,8 +263,11 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	}
 	s.isFalling = isFalling
 	if isMove {
-		s.interruptCurrentCast()
-		s.interruptCurrentChannel()
+		// Movement interrupts land via interruptSpellsOnMovement above,
+		// which gates on SPELL_INTERRUPT_FLAG_MOVEMENT (Spell::update,
+		// Spell.cpp:3814-3831) — including the IsMoveAllowedChannel
+		// channeled exemption. No unconditional interrupt here: C++
+		// never breaks a cast whose InterruptFlags lack the movement bit.
 		if s.autoRepeatSpell != 0 && s.autoRepeatSpell != 75 {
 			s.autoRepeatSpell = 0
 			s.autoRepeatTarget = 0
