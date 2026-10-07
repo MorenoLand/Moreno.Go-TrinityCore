@@ -10446,33 +10446,38 @@ func (s *session) handleCancelAura(payload []byte) bool {
 
 // activeAura tracks an applied periodic or timed aura on a unit (player or creature).
 type activeAura struct {
-	SpellID                    uint32
-	DispelType                 uint32
-	Mechanic                   uint32
-	AuraType                   uint32
-	EffectMask                 uint8
-	CasterGUID                 uint64
-	TargetGUID                 uint64
-	ChannelTargetGUID          uint64
-	TargetKey                  creatureAuraKey
-	ItemGUID                   uint64
-	SchoolMask                 uint32
-	MiscValue                  int32
-	Amount                     uint32
-	Amounts                    [3]int32
-	BaseAmounts                [3]int32
-	RecalculateMask            uint8
-	CritChance                 float32
-	ApplyResilience            bool
-	DurationMs                 uint32
-	PeriodMs                   uint32
-	RemainingMs                uint32
-	DurationUpdatedAt          time.Time
-	Slot                       uint8
-	Positive                   bool
-	CasterLevel                uint8
-	StackCount                 uint8
-	SingleTarget               bool
+	SpellID           uint32
+	DispelType        uint32
+	Mechanic          uint32
+	AuraType          uint32
+	EffectMask        uint8
+	CasterGUID        uint64
+	TargetGUID        uint64
+	ChannelTargetGUID uint64
+	TargetKey         creatureAuraKey
+	ItemGUID          uint64
+	SchoolMask        uint32
+	MiscValue         int32
+	Amount            uint32
+	Amounts           [3]int32
+	BaseAmounts       [3]int32
+	RecalculateMask   uint8
+	CritChance        float32
+	ApplyResilience   bool
+	DurationMs        uint32
+	PeriodMs          uint32
+	RemainingMs       uint32
+	DurationUpdatedAt time.Time
+	Slot              uint8
+	Positive          bool
+	CasterLevel       uint8
+	StackCount        uint8
+	SingleTarget      bool
+	// TickCount is the C++ AuraEffect::_ticksDone counter
+	// (SpellAuraEffects.cpp:827-830): incremented before each periodic tick
+	// handler runs, so the first tick already sees 1. Drives the Unbound
+	// Plague 1.25^_ticksDone ramp (SpellAuraEffects.cpp:5149-5163).
+	TickCount                  uint32
 	RemainingCharges           uint8
 	StackAmount                uint32
 	HideDuration               bool
@@ -13228,6 +13233,9 @@ func (ts *session) schedulePlayerPeriodicTickLocked(aura *activeAura, periodMs u
 }
 
 func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
+	// SpellAuraEffects.cpp:827-830 — _ticksDone increments before the tick
+	// handler runs, even when the handler early-returns on a dead target.
+	aura.TickCount++
 	if aura.AuraType == 23 && aura.TriggerSpell != 0 {
 		ts.castSpellDirect(context.Background(), aura.TriggerSpell, ts.periodicTriggerTarget(aura))
 		return
@@ -13241,6 +13249,13 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 	switch aura.AuraType {
 	case 3, 89: // SPELL_AURA_PERIODIC_DAMAGE, SPELL_AURA_PERIODIC_DAMAGE_PERCENT
 		dmg := aura.Amount
+		var tickSpell wotlk.Spell
+		tickKnown := false
+		if ts.server != nil && ts.server.Data != nil {
+			if sp, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
+				tickSpell, tickKnown = sp, true
+			}
+		}
 		if aura.AuraType == 89 {
 			// SpellAuraEffects.cpp:5166-5168 — PERIODIC_DAMAGE_PERCENT
 			// ticks deal a percentage of the target's max health
@@ -13248,12 +13263,11 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			// then runs on the converted value, matching C++ order.
 			dmg = uint32(math.Ceil(float64(ts.player.MaxHealth) * float64(aura.Amount) / 100))
 		}
-		var tickSpell wotlk.Spell
-		tickKnown := false
-		if ts.server != nil && ts.server.Data != nil {
-			if sp, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
-				tickSpell, tickKnown = sp, true
-			}
+		// SpellAuraEffects.cpp:5149-5163 — Unbound Plague
+		// (70911/72854/72855/72856) ramps 1.25^_ticksDone on the base amount
+		// before the taken leg.
+		if aura.AuraType == 3 && isUnboundPlagueSpell(aura.SpellID) {
+			dmg *= uint32(math.Pow(1.25, float64(aura.TickCount)))
 		}
 		var tickCaster *session
 		if ts.server != nil {
@@ -13327,54 +13341,9 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, ts)
 		}
 
-		// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage before
-		// the kill/health legs — no health loss, no death, no aura stripping.
-		// The periodic log above still carries the pre-negation amount, matching
-		// C++ sending SMSG_PERIODICAURALOG before DealDamage. The skip is explicit
-		// rather than a damage==0 gate because absorbed-to-zero damage still runs
-		// the legs in C++ (absorbed hits strip TAKE_DAMAGE-interrupt auras).
-		godNegated := ts.godCheatActive()
-		// Duel defeat threshold is damage >= health-1 (Unit.cpp:826), not just
-		// lethal.
-		if !godNegated && targetHealth > 0 && dmg+1 >= targetHealth {
-			if ts.duelPartner != 0 && ts.player.DuelTeam != 0 {
-				ts.player.Health = 1
-				ts.sendPlayerUpdate()
-				if ts.server != nil {
-					if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
-						casterSess.endDuel(true, casterSess.playerGUID, false)
-					}
-				}
-			} else {
-				ts.player.Health = 0
-				ts.sendPlayerUpdate()
-				// The periodic tick's attacker is the aura caster, a player in
-				// Go's model (Unit::Kill Unit.cpp:11341-11343) — the caster
-				// session is the GetCharmerOrOwnerPlayerOrPlayerItself killer
-				// for the kill procs and killing-blow criteria.
-				var tickKiller *session
-				if ts.server != nil {
-					tickKiller = ts.server.findSessionByGUID(aura.CasterGUID)
-				}
-				ts.killPlayer(context.Background(), tickKiller, true)
-				// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill pet
-				// arm — the periodic tick's attacker is the aura caster (a
-				// player in Go's model), so only the caster's live pet gets
-				// KilledUnit(victim) (Unit.cpp:11324-11335).
-				if ts.server != nil {
-					if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
-						if pet := casterSess.livePetMotion(); pet != nil {
-							ts.server.fireCreatureTargetDied(context.Background(), pet, ts.luaPlayer())
-						}
-					}
-				}
-			}
-			ts.clearActiveAuras()
-		} else if !godNegated {
-			ts.player.Health -= dmg
-			ts.procDamageAuras(false, dmg)
-			ts.sendPlayerUpdate()
-		}
+		// Unit::DealDamage (Unit.cpp:735-737) + kill legs, shared with the
+		// leech tick path (case 53) below.
+		_ = ts.applyPeriodicTickDamageToPlayer(dmg, targetHealth, aura)
 
 	case 8, 20: // SPELL_AURA_PERIODIC_HEAL, SPELL_AURA_OBS_MOD_HEALTH
 		heal := aura.Amount
@@ -13451,6 +13420,246 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, ts)
 		}
 		ts.adjustSpellPower(context.Background(), aura.TargetGUID, aura.MiscValue, int64(aura.Amount))
+
+	case 53: // SPELL_AURA_PERIODIC_LEECH
+		// SpellAuraEffects.cpp:5232-5321 (HandlePeriodicHealthLeechAuraTick):
+		// the leech damage side runs the same taken->crit->armor->resilience->
+		// absorb/resist funnel as damage ticks; the dynobj done leg is already
+		// baked into AuraAmount at spawn like the damage path (see the dynobj
+		// comment at the persistent-area-aura spawn). The persistent-area-aura
+		// SpellHitResult gate (5244-5246) stays unbridged — Go models no miss
+		// roll on dynobj ticks, consistent with case 3.
+		dmg := aura.Amount
+		var tickSpell wotlk.Spell
+		tickKnown := false
+		if ts.server != nil && ts.server.Data != nil {
+			if sp, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
+				tickSpell, tickKnown = sp, true
+			}
+		}
+		leechEffIndex := 0
+		if tickKnown {
+			for i, eff := range tickSpell.Effects {
+				if eff.Aura == 53 {
+					leechEffIndex = i
+					break
+				}
+			}
+		}
+		var tickCaster *session
+		if ts.server != nil {
+			tickCaster = ts.server.findSessionByGUID(aura.CasterGUID)
+		}
+		fixedDamage := tickKnown && tickSpell.AttributesEx4&spellAttr4FixedDamage != 0
+		if tickKnown {
+			dmg = spellDamageBonusTaken(dmg, tickSpell, aura.SchoolMask, ts, tickCaster)
+		}
+		crit := false
+		if !fixedDamage && tickCaster != nil {
+			takenCritBonus := float64(ts.playerAuraModifierByMiscMask(spellAuraModAttackerSpellCritChance, int32(aura.SchoolMask)))
+			if rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
+				crit = true
+				mult := 1.5
+				if tickKnown {
+					mult = tickCaster.getSpellCritMultiplier(tickSpell)
+				}
+				dmg = uint32(math.Round(float64(dmg) * mult))
+			}
+		}
+		if aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
+			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, dmg)
+		}
+		if !fixedDamage && aura.CasterGUID != aura.TargetGUID {
+			ts.applyResilienceToDamage(true, &dmg, crit, CombatRatingCritTakenSpell)
+		}
+		resisted := uint32(0)
+		if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
+			pen := uint32(0)
+			if tickCaster != nil && tickCaster.player != nil {
+				pen = tickCaster.player.SpellPenetration
+			}
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, aura.CasterLevel, ts.player.Level, false, false, pen)
+		}
+		if dmg < 1 && resisted == 0 {
+			dmg = 1
+		}
+		absorbed := uint32(0)
+		if dmg > 0 {
+			absorbed, dmg = ts.applyAbsorptionShields(dmg, uint8(aura.SchoolMask))
+		}
+		targetHealth := ts.player.Health
+		overkill := uint32(0)
+		if dmg >= targetHealth && targetHealth > 0 {
+			overkill = dmg - targetHealth
+		}
+		logPkt := protocol.BuildPeriodicAuraLogDamage(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, dmg, overkill, aura.SchoolMask, absorbed, resisted, crit)
+		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
+		if ts.server != nil {
+			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
+				_ = casterSess.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
+			}
+			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, ts)
+		}
+		dealt := ts.applyPeriodicTickDamageToPlayer(dmg, targetHealth, aura)
+		ts.applyPeriodicLeechHeal(tickCaster, aura, dealt, leechEffIndex)
+
+	case 62: // SPELL_AURA_PERIODIC_HEALTH_FUNNEL
+		// SpellAuraEffects.cpp:5323-5349 (HandlePeriodicHealthFunnelAuraTick):
+		// the caster pays the tick amount in health — clamped so the donator
+		// is not killed (health < damage -> damage = health-1) — and the
+		// target is healed for the paid amount x CalcValueMultiplier. No bonus
+		// legs, no crit, no absorb; C++ sends no periodic log for the funnel
+		// heal, so none is sent here either.
+		var funnelCaster *session
+		if ts.server != nil {
+			funnelCaster = ts.server.findSessionByGUID(aura.CasterGUID)
+		}
+		if funnelCaster == nil || funnelCaster.player == nil || funnelCaster.player.Health == 0 || ts.player.Health == 0 {
+			break
+		}
+		damage := aura.Amount
+		if funnelCaster.player.Health < damage {
+			damage = funnelCaster.player.Health - 1
+		}
+		if damage == 0 {
+			break
+		}
+		funnelCaster.player.Health -= damage
+		funnelCaster.sendPlayerUpdate()
+		// gainMultiplier = SpellEffectInfo::CalcValueMultiplier — the
+		// ValueMultiplier DBC field has no Go model and
+		// SPELLMOD_VALUE_MULTIPLIER is unbridged; funnel spells carry 1.0.
+		heal := damage
+		curHP := ts.player.Health
+		maxHP := ts.player.MaxHealth
+		newHP := curHP + heal
+		effectiveHeal := heal
+		if newHP > maxHP {
+			effectiveHeal = maxHP - curHP
+			newHP = maxHP
+		}
+		ts.player.Health = newHP
+		ts.sendPlayerUpdate()
+		if ts.server != nil && effectiveHeal > 0 {
+			ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, effectiveHeal)
+		}
+	}
+}
+
+// isUnboundPlagueSpell identifies the Unbound Plague spell IDs whose periodic
+// damage ramps 1.25^_ticksDone before the taken leg
+// (SpellAuraEffects.cpp:5149-5163).
+func isUnboundPlagueSpell(spellID uint32) bool {
+	switch spellID {
+	case 70911, 72854, 72855, 72856: // Unbound Plague
+		return true
+	}
+	return false
+}
+
+// applyPeriodicTickDamageToPlayer runs the Unit::DealDamage + kill legs for a
+// periodic tick on a player target, shared by the damage (3/89) and leech (53)
+// tick paths. targetHealth is the pre-tick health captured before the periodic
+// log send. Returns the damage actually dealt (0 when god-cheat negates it) so
+// the leech path can scale the caster heal off the DealDamage return value
+// (SpellAuraEffects.cpp:5296).
+func (ts *session) applyPeriodicTickDamageToPlayer(dmg, targetHealth uint32, aura *activeAura) uint32 {
+	// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage before
+	// the kill/health legs — no health loss, no death, no aura stripping.
+	// The periodic log above still carries the pre-negation amount, matching
+	// C++ sending SMSG_PERIODICAURALOG before DealDamage. The skip is explicit
+	// rather than a damage==0 gate because absorbed-to-zero damage still runs
+	// the legs in C++ (absorbed hits strip TAKE_DAMAGE-interrupt auras).
+	godNegated := ts.godCheatActive()
+	// Duel defeat threshold is damage >= health-1 (Unit.cpp:826), not just
+	// lethal.
+	if !godNegated && targetHealth > 0 && dmg+1 >= targetHealth {
+		if ts.duelPartner != 0 && ts.player.DuelTeam != 0 {
+			ts.player.Health = 1
+			ts.sendPlayerUpdate()
+			if ts.server != nil {
+				if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
+					casterSess.endDuel(true, casterSess.playerGUID, false)
+				}
+			}
+		} else {
+			ts.player.Health = 0
+			ts.sendPlayerUpdate()
+			// The periodic tick's attacker is the aura caster, a player in
+			// Go's model (Unit::Kill Unit.cpp:11341-11343) — the caster
+			// session is the GetCharmerOrOwnerPlayerOrPlayerItself killer
+			// for the kill procs and killing-blow criteria.
+			var tickKiller *session
+			if ts.server != nil {
+				tickKiller = ts.server.findSessionByGUID(aura.CasterGUID)
+			}
+			ts.killPlayer(context.Background(), tickKiller, true)
+			// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill pet
+			// arm — the periodic tick's attacker is the aura caster (a
+			// player in Go's model), so only the caster's live pet gets
+			// KilledUnit(victim) (Unit.cpp:11324-11335).
+			if ts.server != nil {
+				if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
+					if pet := casterSess.livePetMotion(); pet != nil {
+						ts.server.fireCreatureTargetDied(context.Background(), pet, ts.luaPlayer())
+					}
+				}
+			}
+		}
+		ts.clearActiveAuras()
+		return dmg
+	} else if !godNegated {
+		ts.player.Health -= dmg
+		ts.procDamageAuras(false, dmg)
+		ts.sendPlayerUpdate()
+		return dmg
+	}
+	return 0
+}
+
+// applyPeriodicLeechHeal runs the caster-side heal of a PERIODIC_LEECH tick
+// (SpellAuraEffects.cpp:5304-5316): heal = dealt damage x CalcValueMultiplier,
+// then SpellHealingBonusDone (DOT, per-tick caster spellpower scaled by the
+// aura stack count) and SpellHealingBonusTaken (DOT) on the caster. Leech
+// heals never crit.
+func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, dealtDamage uint32, leechEffIndex int) {
+	// C++: the caster heal runs only when the caster is in world and alive.
+	if casterSess == nil || casterSess.player == nil || casterSess.player.Health == 0 || dealtDamage == 0 {
+		return
+	}
+	heal := dealtDamage
+	// gainMultiplier = SpellEffectInfo::CalcValueMultiplier — the
+	// ValueMultiplier DBC field has no Go model and
+	// SPELLMOD_VALUE_MULTIPLIER is unbridged; leech spells carry 1.0, so the
+	// heal equals the dealt damage.
+	if casterSess.player.SpellPower > 0 {
+		// Unit::SpellHealingBonusDone scales the spellpower coefficient by
+		// the aura stack count (Unit.cpp factorMod = penalty * stack);
+		// StackCount is the C++ GetStackAmount() dose count.
+		stack := uint32(aura.StackCount)
+		if stack == 0 {
+			stack = 1
+		}
+		heal += uint32(math.Round(float64(casterSess.player.SpellPower) * casterSess.spellBonusMultiplier(aura.SpellID, leechEffIndex, true) * float64(stack)))
+	}
+	heal = casterSess.healingTakenBonus(casterSess, aura.SpellID, heal, true)
+	if heal == 0 {
+		return
+	}
+	curHP := casterSess.player.Health
+	maxHP := casterSess.player.MaxHealth
+	newHP := curHP + heal
+	effectiveHeal := heal
+	if newHP > maxHP {
+		effectiveHeal = maxHP - curHP
+		newHP = maxHP
+	}
+	casterSess.player.Health = newHP
+	casterSess.sendPlayerUpdate()
+	// Unit::ForwardThreatForAssistingMe(caster, effectiveHeal * 0.5) — the 0.5
+	// is inside distributeHealingThreat.
+	if s.server != nil && effectiveHeal > 0 {
+		s.server.distributeHealingThreat(context.Background(), casterSess.playerGUID, casterSess.playerGUID, effectiveHeal)
 	}
 }
 
@@ -13535,6 +13744,9 @@ func (s *session) scheduleCreaturePeriodicTickLocked(aura *activeAura, periodMs 
 }
 
 func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
+	// SpellAuraEffects.cpp:827-830 — _ticksDone increments before the tick
+	// handler runs, even when the handler early-returns on a dead target.
+	aura.TickCount++
 	ctx := context.Background()
 	key := aura.TargetKey
 	target, ok := s.getCombatTarget(ctx, aura.TargetGUID)
@@ -13548,6 +13760,13 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 	switch aura.AuraType {
 	case 3, 89: // SPELL_AURA_PERIODIC_DAMAGE, SPELL_AURA_PERIODIC_DAMAGE_PERCENT
 		dmg := aura.Amount
+		var tickSpell wotlk.Spell
+		tickKnown := false
+		if s.server != nil && s.server.Data != nil {
+			if sp, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+				tickSpell, tickKnown = sp, true
+			}
+		}
 		if aura.AuraType == 89 {
 			// SpellAuraEffects.cpp:5166-5168 — PERIODIC_DAMAGE_PERCENT
 			// ticks deal a percentage of the target's max health
@@ -13555,12 +13774,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			// then runs on the converted value, matching C++ order.
 			dmg = uint32(math.Ceil(float64(target.MaxHealth) * float64(aura.Amount) / 100))
 		}
-		var tickSpell wotlk.Spell
-		tickKnown := false
-		if s.server != nil && s.server.Data != nil {
-			if sp, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
-				tickSpell, tickKnown = sp, true
-			}
+		// SpellAuraEffects.cpp:5149-5163 — Unbound Plague
+		// (70911/72854/72855/72856) ramps 1.25^_ticksDone on the base amount
+		// before the taken leg.
+		if aura.AuraType == 3 && isUnboundPlagueSpell(aura.SpellID) {
+			dmg *= uint32(math.Pow(1.25, float64(aura.TickCount)))
 		}
 		var tickCaster *session
 		if s.server != nil {
@@ -13651,67 +13869,10 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			}
 		}
 
-		if dmg >= targetHealth {
-			// Target slain by DoT
-			if s.server != nil {
-				s.server.motionMu.Lock()
-				motion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
-				if motion != nil {
-					s.server.clearInstanceEncounter(motion)
-					motion.Health = 0
-					motion.DynamicFlags |= unitDynFlagLootable
-					motion.InCombat = false
-					motion.TargetGUID = 0
-					motion.Moving = false
-					if motion.ThreatMgr != nil {
-						motion.ThreatMgr.ClearThreat()
-					}
-				}
-				s.server.motionMu.Unlock()
-
-				s.server.stopCreatureMotionInInstance(target.Map, target.InstanceID, target.GUID, target.X, target.Y, target.Z)
-				s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
-					unitFieldHealth:       0,
-					unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
-				})
-				s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.GUID)
-				s.server.clearCreatureAuras(key)
-			}
-			_ = s.sendAttackStop(target.GUID, true)
-			s.attackTarget = 0
-			// Eluna CREATURE_EVENT_ON_TARGET_DIED (3) attacker: the periodic
-			// tick's killer is the aura caster — a pet motion when the DoT
-			// came from a pet (pet_combat.go), else the player (nil).
-			var killer *creatureMotion
-			if s.server != nil && aura.CasterGUID != 0 && (s.player == nil || aura.CasterGUID != s.playerGUID) {
-				if pm := s.server.findCreatureMotion(target.Map, target.InstanceID, aura.CasterGUID); pm != nil && pm.Health > 0 {
-					killer = pm
-				}
-			}
-			s.onCreatureKilled(ctx, target, killer)
-			return false
-		} else {
-			newHealth := targetHealth - dmg
-			if s.server != nil {
-				s.server.motionMu.Lock()
-				motion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
-				if motion != nil {
-					motion.Health = newHealth
-					motion.InCombat = true
-					if motion.ThreatMgr == nil {
-						motion.ThreatMgr = NewThreatManager(target.GUID)
-					}
-					dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
-					inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
-					motion.ThreatMgr.AddThreat(s.playerGUID, float32(dmg), inMelee)
-					motion.Moving = true
-				}
-				s.server.motionMu.Unlock()
-				s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldHealth: newHealth})
-				s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
-			}
-			return true
-		}
+		// Unit::DealDamage + kill legs, shared with the leech tick path
+		// (case 53) below.
+		_, targetAlive := s.applyPeriodicTickDamageToCreature(ctx, dmg, targetHealth, target, key, aura)
+		return targetAlive
 
 	case 8, 20: // SPELL_AURA_PERIODIC_HEAL, SPELL_AURA_OBS_MOD_HEALTH
 		heal := aura.Amount
@@ -13766,8 +13927,217 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		}
 		s.adjustSpellPower(ctx, aura.TargetGUID, aura.MiscValue, int64(aura.Amount))
 		return true
+
+	case 53: // SPELL_AURA_PERIODIC_LEECH
+		// SpellAuraEffects.cpp:5232-5321 (HandlePeriodicHealthLeechAuraTick):
+		// the leech damage side runs the same taken->crit->armor->resilience->
+		// absorb/resist funnel as damage ticks; the dynobj done leg is already
+		// baked into AuraAmount at spawn like the damage path.
+		dmg := aura.Amount
+		var tickSpell wotlk.Spell
+		tickKnown := false
+		if s.server != nil && s.server.Data != nil {
+			if sp, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+				tickSpell, tickKnown = sp, true
+			}
+		}
+		leechEffIndex := 0
+		if tickKnown {
+			for i, eff := range tickSpell.Effects {
+				if eff.Aura == 53 {
+					leechEffIndex = i
+					break
+				}
+			}
+		}
+		var tickCaster *session
+		if s.server != nil {
+			tickCaster = s.server.findSessionByGUID(aura.CasterGUID)
+			if tickCaster == nil {
+				tickCaster = s
+			}
+		}
+		fixedDamage := tickKnown && tickSpell.AttributesEx4&spellAttr4FixedDamage != 0
+		if tickKnown {
+			dmg = creatureSpellDamageBonusTaken(s.server, dmg, tickSpell, aura.SchoolMask, key, tickCaster)
+		}
+		crit := false
+		if !fixedDamage && tickCaster != nil && tickCaster.player != nil {
+			takenCritBonus := 0.0
+			for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, spellAuraModAttackerSpellCritChance, aura.SchoolMask) {
+				takenCritBonus += float64(amt)
+			}
+			if rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
+				crit = true
+				mult := 1.5
+				if tickKnown {
+					mult = tickCaster.getSpellCritMultiplier(tickSpell)
+				}
+				dmg = uint32(math.Round(float64(dmg) * mult))
+			}
+		}
+		if aura.SchoolMask&1 != 0 && target.Armor > 0 {
+			dmg = calcArmorReducedDamage(float64(target.Armor), aura.CasterLevel, dmg)
+		}
+		resisted := uint32(0)
+		if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
+			pen := uint32(0)
+			if tickCaster != nil && tickCaster.player != nil {
+				pen = tickCaster.player.SpellPenetration
+			}
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), target.Resistances, aura.CasterLevel, target.Level, true, false, pen)
+		}
+		if dmg < 1 && resisted == 0 {
+			dmg = 1
+		}
+		absorbed := uint32(0)
+		if dmg > 0 && s.server != nil {
+			absorbed, dmg = s.server.applyCreatureAbsorptionShields(key, dmg, uint8(aura.SchoolMask))
+		}
+		targetHealth := target.Health
+		overkill := uint32(0)
+		if dmg >= targetHealth && targetHealth > 0 {
+			overkill = dmg - targetHealth
+		}
+		logPkt := protocol.BuildPeriodicAuraLogDamage(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, dmg, overkill, aura.SchoolMask, absorbed, resisted, crit)
+		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
+		if s.server != nil {
+			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
+		}
+		// Eluna CREATURE_EVENT_ON_DAMAGE_TAKEN (9), mirroring the damage tick.
+		if s.server != nil {
+			var attacker *scripting.Object
+			if aura.CasterGUID == s.playerGUID {
+				attacker = s.luaPlayer()
+			} else if cs := s.server.findSessionByGUID(aura.CasterGUID); cs != nil {
+				attacker = cs.luaPlayer()
+			}
+			if attacker != nil {
+				if motion := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); motion != nil {
+					dmg = s.server.fireCreatureDamageTaken(ctx, motion, attacker, dmg)
+				}
+			}
+		}
+		dealt, targetAlive := s.applyPeriodicTickDamageToCreature(ctx, dmg, targetHealth, target, key, aura)
+		s.applyPeriodicLeechHeal(tickCaster, aura, dealt, leechEffIndex)
+		return targetAlive
+
+	case 62: // SPELL_AURA_PERIODIC_HEALTH_FUNNEL
+		// SpellAuraEffects.cpp:5323-5349 (HandlePeriodicHealthFunnelAuraTick):
+		// the caster pays the tick amount in health — clamped so the donator
+		// is not killed (health < damage -> damage = health-1) — and the
+		// target is healed for the paid amount x CalcValueMultiplier. No bonus
+		// legs, no crit, no absorb; C++ sends no periodic log for the funnel
+		// heal, so none is sent here either.
+		var funnelCaster *session
+		if s.server != nil {
+			funnelCaster = s.server.findSessionByGUID(aura.CasterGUID)
+		}
+		if funnelCaster == nil || funnelCaster.player == nil || funnelCaster.player.Health == 0 || target.Health == 0 {
+			return true
+		}
+		damage := aura.Amount
+		if funnelCaster.player.Health < damage {
+			damage = funnelCaster.player.Health - 1
+		}
+		if damage == 0 {
+			return true
+		}
+		funnelCaster.player.Health -= damage
+		funnelCaster.sendPlayerUpdate()
+		// gainMultiplier = SpellEffectInfo::CalcValueMultiplier — the
+		// ValueMultiplier DBC field has no Go model and
+		// SPELLMOD_VALUE_MULTIPLIER is unbridged; funnel spells carry 1.0.
+		heal := damage
+		curHP := target.Health
+		maxHP := target.MaxHealth
+		newHP := curHP + heal
+		effectiveHeal := heal
+		if newHP > maxHP {
+			effectiveHeal = maxHP - curHP
+			newHP = maxHP
+		}
+		if s.server != nil {
+			s.server.motionMu.Lock()
+			motion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
+			if motion != nil {
+				motion.Health = newHP
+			}
+			s.server.motionMu.Unlock()
+			s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldHealth: newHP})
+		}
+		if s.server != nil && effectiveHeal > 0 {
+			s.server.distributeHealingThreat(ctx, aura.CasterGUID, aura.TargetGUID, effectiveHeal)
+		}
+		return true
 	}
 	return true
+}
+
+// applyPeriodicTickDamageToCreature runs the Unit::DealDamage + kill legs for a
+// periodic tick on a creature target, shared by the damage (3/89) and leech (53)
+// tick paths. Returns the damage actually dealt and whether the target survived.
+func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, targetHealth uint32, target combatTarget, key creatureAuraKey, aura *activeAura) (uint32, bool) {
+	if dmg >= targetHealth {
+		// Target slain by DoT
+		if s.server != nil {
+			s.server.motionMu.Lock()
+			motion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
+			if motion != nil {
+				s.server.clearInstanceEncounter(motion)
+				motion.Health = 0
+				motion.DynamicFlags |= unitDynFlagLootable
+				motion.InCombat = false
+				motion.TargetGUID = 0
+				motion.Moving = false
+				if motion.ThreatMgr != nil {
+					motion.ThreatMgr.ClearThreat()
+				}
+			}
+			s.server.motionMu.Unlock()
+
+			s.server.stopCreatureMotionInInstance(target.Map, target.InstanceID, target.GUID, target.X, target.Y, target.Z)
+			s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
+				unitFieldHealth:       0,
+				unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
+			})
+			s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.GUID)
+			s.server.clearCreatureAuras(key)
+		}
+		_ = s.sendAttackStop(target.GUID, true)
+		s.attackTarget = 0
+		// Eluna CREATURE_EVENT_ON_TARGET_DIED (3) attacker: the periodic
+		// tick's killer is the aura caster — a pet motion when the DoT
+		// came from a pet (pet_combat.go), else the player (nil).
+		var killer *creatureMotion
+		if s.server != nil && aura.CasterGUID != 0 && (s.player == nil || aura.CasterGUID != s.playerGUID) {
+			if pm := s.server.findCreatureMotion(target.Map, target.InstanceID, aura.CasterGUID); pm != nil && pm.Health > 0 {
+				killer = pm
+			}
+		}
+		s.onCreatureKilled(ctx, target, killer)
+		return dmg, false
+	}
+	newHealth := targetHealth - dmg
+	if s.server != nil {
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
+		if motion != nil {
+			motion.Health = newHealth
+			motion.InCombat = true
+			if motion.ThreatMgr == nil {
+				motion.ThreatMgr = NewThreatManager(target.GUID)
+			}
+			dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
+			inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
+			motion.ThreatMgr.AddThreat(s.playerGUID, float32(dmg), inMelee)
+			motion.Moving = true
+		}
+		s.server.motionMu.Unlock()
+		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldHealth: newHealth})
+		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
+	}
+	return dmg, true
 }
 
 func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot uint8) {
