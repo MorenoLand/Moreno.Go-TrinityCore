@@ -245,6 +245,8 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) bool {
 	} else {
 		s.clearLastMovementInfo()
 		s.farTeleportOriginOrientation = s.player.Orientation
+		s.farTeleportOriginMap = s.player.Map
+		s.farTeleportOriginInstanceID = s.player.InstanceID
 		s.nearTeleportPending = false
 		s.nearTeleportDest = nearTeleportDestination{}
 		s.player.Map, s.player.X, s.player.Y, s.player.Z, s.player.Orientation = mapID, x, y, z, orientation
@@ -2266,6 +2268,8 @@ func (s *session) handleCharacterLevel(ctx context.Context, args []string) {
 	if t.online != nil && t.online.player != nil {
 		t.online.player.Level = uint8(newLevel)
 		t.online.player.XP = 0
+		// AutoBalance_PlayerScript::OnLevelChanged (AutoBalance.cpp).
+		t.online.autoBalanceOnLevelChanged()
 		t.online.sendPlayerUpdate()
 		switch {
 		case oldLevel == newLevel:

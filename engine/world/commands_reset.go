@@ -205,6 +205,8 @@ func (s *session) handleResetLevel(ctx context.Context, args []string) {
 	}
 	t.player.Level = startLevel // Player::SetLevel(startLevel)
 	t.player.XP = 0             // Player::SetXP(0)
+	// AutoBalance_PlayerScript::OnLevelChanged (AutoBalance.cpp).
+	t.autoBalanceOnLevelChanged()
 	t.sendPlayerUpdate()
 }
 

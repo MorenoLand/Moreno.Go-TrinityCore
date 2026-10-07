@@ -643,6 +643,15 @@ func (s *session) grantXPWithVictimGroup(ctx context.Context, amount uint32, vic
 	if s.player == nil || amount == 0 {
 		return
 	}
+	// AutoBalance_PlayerScript::OnGiveXP (AutoBalance.cpp): dungeon kill XP
+	// scales by current/max instance players. The C++ arm is not gated on
+	// AutoBalance.enable, only on victim && DungeonScaleDownXP.
+	if victimGUID != 0 && s.server.Config.AutoBalance.DungeonScaleDownXP {
+		amount = s.server.autoBalanceScaleDungeonXP(ctx, s, amount)
+		if amount == 0 {
+			return
+		}
+	}
 	petXP := amount
 	if grouped {
 		petXP /= 2
@@ -695,6 +704,8 @@ func (s *session) grantXPWithVictimGroup(ctx context.Context, amount uint32, vic
 		oldStats := s.player.Stats
 		s.player.Level++
 		s.setAchievementCriteria(criteriaTypeReachLevel, uint32(s.player.Level), uint32(s.player.Level))
+		// AutoBalance_PlayerScript::OnLevelChanged (AutoBalance.cpp).
+		s.autoBalanceOnLevelChanged()
 		_ = s.calculatePlayerStats(ctx, s.player)
 		s.player.Health = s.player.MaxHealth
 		if len(s.player.MaxPowers) > 0 {

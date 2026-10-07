@@ -998,7 +998,19 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			return false
 		}
 	}
+	// AutoBalance_PlayerScript::OnLogin (AutoBalance.cpp): announce the
+	// module on every login, gated on AutoBalanceAnnounce.enable.
+	if s.server.Config.AutoBalance.AnnounceEnable {
+		message := protocol.BuildSystemChatMessage("This server is running the |cff4CFF00AutoBalance |rmodule.")
+		if err := s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), message, true); err != nil {
+			return false
+		}
+	}
 	s.debug("player login complete", "account", s.accountName, "guid", s.playerGUID, "map", state.Map, "x", state.X, "y", state.Y, "z", state.Z)
+	// AutoBalance_AllMapScript::OnPlayerEnterAll (AutoBalance.cpp): the
+	// login lands the player on the map; the matching leave fires in
+	// removeSession on disconnect.
+	s.server.autoBalancePlayerEnter(s, state.Map, state.InstanceID)
 	return true
 }
 
@@ -1337,6 +1349,11 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	s.lastStreamX, s.lastStreamY, s.lastStreamZ = s.player.X, s.player.Y, s.player.Z
 	s.farTeleportPending = false
 	s.initialLoginPending = false
+	// AutoBalance_AllMapScript::OnPlayerEnterAll/OnPlayerLeaveAll
+	// (AutoBalance.cpp): the completed far teleport leaves the origin
+	// instance and enters the new one.
+	s.server.autoBalanceTransferInstance(s, s.farTeleportOriginMap, s.farTeleportOriginInstanceID, s.player.Map, s.player.InstanceID)
+	s.farTeleportOriginMap, s.farTeleportOriginInstanceID = 0, 0
 	return true
 }
 

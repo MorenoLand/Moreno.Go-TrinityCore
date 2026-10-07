@@ -835,6 +835,11 @@ func (s *Server) removeSession(session *session) {
 		}
 	}
 	s.sessionsMu.Unlock()
+	// AutoBalance_AllMapScript::OnPlayerLeaveAll (AutoBalance.cpp): the
+	// disconnecting player leaves the map it is currently on.
+	if session != nil && session.player != nil {
+		s.autoBalancePlayerLeave(session, session.player.Map, session.player.InstanceID)
+	}
 	if !wasQueued {
 		s.promoteQueuedPlayers()
 	}

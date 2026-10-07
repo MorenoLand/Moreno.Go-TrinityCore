@@ -96,6 +96,7 @@ type Config struct {
 	WeatherChangeInterval                   uint32
 	SoloLFGEnable                           bool
 	SoloLFGAnnounce                         bool
+	AutoBalance                             AutoBalanceConfig
 	QuestIgnoreRaid                         bool
 	GMLoginState                            int
 	GMVisibleState                          int
@@ -155,6 +156,42 @@ type Config struct {
 	// (ms): idle timeout for connections logged into the world.
 	SocketTimeOutTimeActive int
 	UnrecognizedKeys        []string
+	seenKeys                map[string]struct{}
+}
+
+// AutoBalanceConfig wires the AutoBalance module keys from AutoBalance.cpp's
+// SetInitialWorldSettings (key names kept verbatim from worldserver.conf.dist,
+// which still carries the original C++ key spellings).
+type AutoBalanceConfig struct {
+	Enable                       bool
+	AnnounceEnable               bool
+	InflectionPoint              float64
+	InflectionPointHeroic        float64
+	InflectionPointRaid10M       float64
+	InflectionPointRaid10MHeroic float64
+	InflectionPointRaid25M       float64
+	InflectionPointRaid25MHeroic float64
+	InflectionPointRaid          float64
+	InflectionPointRaidHeroic    float64
+	BossInflectionMult           float64
+	LevelScaling                 int
+	LevelHigherOffset            int
+	LevelLowerOffset             int
+	LevelUseDb                   bool
+	LevelEndGameBoost            bool
+	DungeonScaleDownXP           bool
+	DungeonsOnly                 bool
+	DebugLevel                   int
+	PlayerChangeNotify           bool
+	MinHPModifier                float64
+	MinManaModifier              float64
+	MinDamageModifier            float64
+	GlobalRate                   float64
+	HealthMultiplier             float64
+	ManaMultiplier               float64
+	ArmorMultiplier              float64
+	DamageMultiplier             float64
+	PlayerCountDifficultyOffset  int
 }
 
 type NPCBotConfig struct {
@@ -236,12 +273,45 @@ func Default() Config {
 	c.AuctionGetAllDelay = 900
 	c.AuctionSearchDelay = 300
 	c.AccountInstancesPerHour = 5
+	// AutoBalance.cpp SetInitialWorldSettings defaults (the Get*Default
+	// fallbacks, not the worldserver.conf.dist shipped values).
+	c.AutoBalance.Enable = true
+	c.AutoBalance.AnnounceEnable = true
+	c.AutoBalance.InflectionPoint = 0.5
+	c.AutoBalance.InflectionPointHeroic = 0.5
+	c.AutoBalance.InflectionPointRaid = 0.5
+	c.AutoBalance.InflectionPointRaid10M = 0.5
+	c.AutoBalance.InflectionPointRaid25M = 0.5
+	c.AutoBalance.InflectionPointRaidHeroic = 0.5
+	c.AutoBalance.InflectionPointRaid10MHeroic = 0.5
+	c.AutoBalance.InflectionPointRaid25MHeroic = 0.5
+	c.AutoBalance.BossInflectionMult = 1
+	c.AutoBalance.LevelScaling = 1
+	c.AutoBalance.LevelHigherOffset = 3
+	c.AutoBalance.LevelLowerOffset = 0
+	c.AutoBalance.LevelUseDb = true
+	c.AutoBalance.LevelEndGameBoost = true
+	c.AutoBalance.DungeonScaleDownXP = false
+	c.AutoBalance.DungeonsOnly = true
+	c.AutoBalance.DebugLevel = 2
+	c.AutoBalance.PlayerChangeNotify = true
+	c.AutoBalance.MinHPModifier = 0.1
+	c.AutoBalance.MinManaModifier = 0.1
+	c.AutoBalance.MinDamageModifier = 0.1
+	c.AutoBalance.GlobalRate = 1
+	c.AutoBalance.HealthMultiplier = 1
+	c.AutoBalance.ManaMultiplier = 1
+	c.AutoBalance.ArmorMultiplier = 1
+	c.AutoBalance.DamageMultiplier = 1
+	c.AutoBalance.PlayerCountDifficultyOffset = 0
 	return c
 }
 
 func Load(path string) (Config, error) {
 	c := Default()
+	c.seenKeys = map[string]struct{}{}
 	if path == "" {
+		c.finalizeAutoBalance()
 		return c, nil
 	}
 	f, err := os.Open(path)
@@ -270,7 +340,47 @@ func Load(path string) (Config, error) {
 	if c.MinDiscoveredScaledXpRatio > 100 {
 		c.MinDiscoveredScaledXpRatio = 0
 	}
+	c.finalizeAutoBalance()
 	return c, nil
+}
+
+// finalizeAutoBalance mirrors the default cascade in
+// AutoBalance_WorldScript::SetInitialWorldSettings: each InflectionPoint*
+// key defaults to the previously resolved value when absent from the conf,
+// and GetValidDebugLevel clamps an out-of-range debug level to 1.
+func (c *Config) finalizeAutoBalance() {
+	ab := &c.AutoBalance
+	seen := func(key string) bool {
+		if c.seenKeys == nil {
+			return false
+		}
+		_, ok := c.seenKeys[key]
+		return ok
+	}
+	if !seen("AutoBalance.InflectionPointRaid") {
+		ab.InflectionPointRaid = ab.InflectionPoint
+	}
+	if !seen("AutoBalance.InflectionPointRaid25M") {
+		ab.InflectionPointRaid25M = ab.InflectionPointRaid
+	}
+	if !seen("AutoBalance.InflectionPointRaid10M") {
+		ab.InflectionPointRaid10M = ab.InflectionPointRaid
+	}
+	if !seen("AutoBalance.InflectionPointHeroic") {
+		ab.InflectionPointHeroic = ab.InflectionPoint
+	}
+	if !seen("AutoBalance.InflectionPointRaidHeroic") {
+		ab.InflectionPointRaidHeroic = ab.InflectionPointRaid
+	}
+	if !seen("AutoBalance.InflectionPointRaid25MHeroic") {
+		ab.InflectionPointRaid25MHeroic = ab.InflectionPointRaid25M
+	}
+	if !seen("AutoBalance.InflectionPointRaid10MHeroic") {
+		ab.InflectionPointRaid10MHeroic = ab.InflectionPointRaid10M
+	}
+	if ab.DebugLevel < 0 || ab.DebugLevel > 3 {
+		ab.DebugLevel = 1
+	}
 }
 
 func (c *Config) ApplyEnv() {
@@ -495,7 +605,68 @@ func split(line string) (string, string, bool) {
 }
 
 func (c *Config) set(key, value string) error {
+	if c.seenKeys != nil {
+		c.seenKeys[key] = struct{}{}
+	}
 	switch key {
+	case "AutoBalanceAnnounce.enable":
+		return setBool(&c.AutoBalance.AnnounceEnable, key, value)
+	case "AutoBalance.enable":
+		return setBool(&c.AutoBalance.Enable, key, value)
+	case "AutoBalance.InflectionPoint":
+		return setFloat64(&c.AutoBalance.InflectionPoint, key, value)
+	case "AutoBalance.InflectionPointHeroic":
+		return setFloat64(&c.AutoBalance.InflectionPointHeroic, key, value)
+	case "AutoBalance.InflectionPointRaid10M":
+		return setFloat64(&c.AutoBalance.InflectionPointRaid10M, key, value)
+	case "AutoBalance.InflectionPointRaid10MHeroic":
+		return setFloat64(&c.AutoBalance.InflectionPointRaid10MHeroic, key, value)
+	case "AutoBalance.InflectionPointRaid25M":
+		return setFloat64(&c.AutoBalance.InflectionPointRaid25M, key, value)
+	case "AutoBalance.InflectionPointRaid25MHeroic":
+		return setFloat64(&c.AutoBalance.InflectionPointRaid25MHeroic, key, value)
+	case "AutoBalance.InflectionPointRaid":
+		return setFloat64(&c.AutoBalance.InflectionPointRaid, key, value)
+	case "AutoBalance.InflectionPointRaidHeroic":
+		return setFloat64(&c.AutoBalance.InflectionPointRaidHeroic, key, value)
+	case "AutoBalance.BossInflectionMult":
+		return setFloat64(&c.AutoBalance.BossInflectionMult, key, value)
+	case "AutoBalance.levelScaling":
+		return setInt(&c.AutoBalance.LevelScaling, key, value)
+	case "AutoBalance.levelHigherOffset":
+		return setInt(&c.AutoBalance.LevelHigherOffset, key, value)
+	case "AutoBalance.levelLowerOffset":
+		return setInt(&c.AutoBalance.LevelLowerOffset, key, value)
+	case "AutoBalance.levelUseDbValuesWhenExists":
+		return setBool(&c.AutoBalance.LevelUseDb, key, value)
+	case "AutoBalance.LevelEndGameBoost":
+		return setBool(&c.AutoBalance.LevelEndGameBoost, key, value)
+	case "AutoBalance.DungeonScaleDownXP":
+		return setBool(&c.AutoBalance.DungeonScaleDownXP, key, value)
+	case "AutoBalance.DungeonsOnly":
+		return setBool(&c.AutoBalance.DungeonsOnly, key, value)
+	case "AutoBalance.DebugLevel":
+		return setInt(&c.AutoBalance.DebugLevel, key, value)
+	case "AutoBalance.PlayerChangeNotify":
+		return setBool(&c.AutoBalance.PlayerChangeNotify, key, value)
+	case "AutoBalance.MinHPModifier":
+		return setFloat64(&c.AutoBalance.MinHPModifier, key, value)
+	case "AutoBalance.MinManaModifier":
+		return setFloat64(&c.AutoBalance.MinManaModifier, key, value)
+	case "AutoBalance.MinDamageModifier":
+		return setFloat64(&c.AutoBalance.MinDamageModifier, key, value)
+	case "AutoBalance.rate.global":
+		return setFloat64(&c.AutoBalance.GlobalRate, key, value)
+	case "AutoBalance.rate.health":
+		return setFloat64(&c.AutoBalance.HealthMultiplier, key, value)
+	case "AutoBalance.rate.mana":
+		return setFloat64(&c.AutoBalance.ManaMultiplier, key, value)
+	case "AutoBalance.rate.armor":
+		return setFloat64(&c.AutoBalance.ArmorMultiplier, key, value)
+	case "AutoBalance.rate.damage":
+		return setFloat64(&c.AutoBalance.DamageMultiplier, key, value)
+	case "AutoBalance.playerCountDifficultyOffset":
+		return setInt(&c.AutoBalance.PlayerCountDifficultyOffset, key, value)
 	case "Database.Backend":
 		c.Backend = strings.ToLower(value)
 	case "DataDir":

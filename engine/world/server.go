@@ -73,6 +73,8 @@ type Server struct {
 	worldstates               map[uint32]uint64
 	sessionsMu                sync.RWMutex
 	sessions                  map[*session]struct{}
+	autoBalanceMu             sync.RWMutex
+	autoBalanceMaps           map[autoBalanceInstanceKey]*autoBalanceMapInfo
 	queuedSessions            []*session
 	playerLimit               uint32
 	closed                    atomic.Bool
@@ -263,6 +265,8 @@ type session struct {
 	timeoutTime                  atomic.Int64
 	farTeleportPending           bool
 	farTeleportOriginOrientation float32
+	farTeleportOriginMap         uint32
+	farTeleportOriginInstanceID  uint32
 	nearTeleportPending          bool
 	nearTeleportDest             nearTeleportDestination
 	initialLoginPending          bool
