@@ -3415,6 +3415,25 @@ func init() {
 	// bridges): JustDied 7x SummonCreature(11054) at ADD 1,2,3,4,5,7,9
 	// (C++ skips 6/8), UpdateVictim gate, melee engine-driven.
 	RegisterLuaBoss("boss_cannon_master_willey", 10997)
+	// boss_baroness_anastari.cpp audit (Stratholme block, EK loader decl
+	// :130 / call :308 follows willey): 1 script, BossAI timer AI
+	// (TYPE_BARONESS = 2, stratholme.h:29) — no Talk lines, no NPC_
+	// constant (DB-side ScriptName binding, entry 10436 wowhead-cited).
+	// Ported in lua_scripts/eastern_kingdoms/boss_baroness_anastari.lua:
+	// BANSHEEWAIL 1s->4s DoCastVictim 16565 / BANSHEECURSE 11s->18s
+	// DoCastVictim 16867 / SILENCE 13s->13s DoCastVictim 18327 /
+	// POSSESS 20s-30s random (SelectTarget Random,1,0,true,false ->
+	// random alive non-victim player, fairbanks-fear convention):
+	// triggered 17244 + 17246 on target, triggered self-cast 17250
+	// (invisibility), GUID latch, immediate EVENT_CHECK_POSSESSED;
+	// check leg via GetPlayerByGUID (nil = chain dies, C++-exact):
+	// !HasAura(17246) or HealthBelowPct(50) -> strip auras, re-arm
+	// possess 20s-30s random, else repeat 1s. Documented-only (no
+	// bridges): Reset's instance-wide DoRemoveAurasDueToSpellOnPlayers
+	// (17244/17246), JustDied instance->SetData(TYPE_BARONESS, IN_PROGRESS)
+	// (IN_PROGRESS-not-DONE C++ quirk, nerubenkan precedent),
+	// UpdateVictim/UNIT_STATE_CASTING gates, melee engine-driven.
+	RegisterLuaBoss("boss_baroness_anastari", 10436)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
