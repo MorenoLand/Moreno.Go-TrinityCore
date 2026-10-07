@@ -39,7 +39,10 @@
 -- uses GetVictim (no threat list); range gates (100 yd SelectTarget) are
 -- skipped since the bridge exposes no player coordinates. The phase-3
 -- Shadow Nova clamp (re-arm to EnfeebleTimer+5s when >35s out) is modeled
--- with os.time deadlines recorded at arm time.
+-- with os.time deadlines recorded at arm time. The phase-2 SWPain freeze
+-- (C++ neither fires nor decrements the timer in phase 2, preserving the
+-- leftover into phase 3) is approximated: the in-flight timer fires once as
+-- a no-op in phase 2 and re-arms 20s at phase-3 entry.
 
 local ENTRY_MALCHEZAAR = 15690
 
@@ -272,7 +275,9 @@ local function startPhaseTwo(creature, guid)
     creature:CastSpell(creature, SPELL_EQUIP_AXES)
     creature:CastSpell(creature, SPELL_THRASH_AURA, true)
     schedule(guid, "sunder", {5000, 10000}, function() onSunderArmor(creature, guid) end)
-    onCleave(creature, guid)
+    -- C++ Cleave_Timer = 8000 in Initialize, decremented only in the
+    -- phase-2 arm, so the first cleave lands 8s after the transition.
+    schedule(guid, "cleave", 8000, function() onCleave(creature, guid) end)
 end
 
 local function startPhaseThree(creature, guid)
