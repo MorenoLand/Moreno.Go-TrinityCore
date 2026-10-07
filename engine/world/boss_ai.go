@@ -2739,6 +2739,37 @@ func init() {
 	// ghoul (owner/minion machines; no minion bridges), spell_gift_of_
 	// the_harvester (SpellScript; no bridge). No new registrations,
 	// no Lua files.
+	// AddSC_the_scarlet_enclave_c2 (chapter2.cpp, EK loader decl :96 /
+	// call :274): full-file audit 2026-10-07. npc_koltira_deathweaver
+	// (entry 28912, chapter2.cpp :90 BloodyBreakout enum — quest-12727
+	// Bloody Breakout intro/outro event machine) is ported in
+	// lua_scripts/eastern_kingdoms/npc_koltira_deathweaver.lua:
+	// OnQuestAccept(12727) -> 500ms Talk(SAY_KOLTIRA_0 0) -> 5s
+	// Talk(SAY_KOLTIRA_1 1) (C++-exact EVENT_INTRO_0/1 legs);
+	// OnGossipHello TEXT_ID_EVENT 13425 branch (stranded on the
+	// unbridged EVENT_INTRO_6, kept faithful); onReset clears timers
+	// + event-gossip state. Unmodeled (no bridges): MoveJump/
+	// MovePoint/MovePath/MovementInform legs (selin_fireheart /
+	// kalecgos precedents), SummonCreatureGroup waves + valroth
+	// (dark-rider precedent), FakeValrothTalk (no nearest-creature
+	// bridge), EVENT_CHECK_PLAYER player-GUID / FailQuest (no
+	// ObjectAccessor / quest-status bridges), stand-state / flag /
+	// aura arms. npc_scarlet_courier (entry 29076, chapter2.cpp :336
+	// ScarletCourierEnum) is ported: JustEngagedWith -> Talk(SAY_TREE2
+	// 1) on event 1 (Dismount arm has no bridge — uiStage stops with
+	// the unbridged machine); the mounted inconspicuous-tree stage
+	// machine + MovementInform + AttackStart legs are documented-only
+	// (no MotionMaster / gameobject-contact / owner bridges).
+	// npc_a_special_surprise (10 execution-scene entries 29032/29061/
+	// 29065/29067/29068/29070/29074/29072/29073/29071, script "signed
+	// for 29032") is documented-only: the quest-status MoveInLineOfSight
+	// trigger + 12-step Talk machine (stand-state / SetImmuneToPC /
+	// setDeathState / Plaguefist Talk) have no bridges. spell_death_
+	// knight_devour_humanoid (SpellScript OnEffectHitTarget: GetHitUnit
+	// ->CastSpell(GetCaster(), GetEffectValue()), true) is documented-
+	// only — no SpellScript bridge (nightbane precedent).
+	RegisterLuaBoss("npc_koltira_deathweaver", 28912)
+	RegisterLuaBoss("npc_scarlet_courier", 29076)
 	// npc_valkyr_battle_maiden (The Scarlet Enclave zone file,
 	// zone_the_scarlet_enclave.cpp — AddSC_the_scarlet_enclave, loader
 	// decl :94 / call :272): PassiveAI revive-valkyr driven by an
