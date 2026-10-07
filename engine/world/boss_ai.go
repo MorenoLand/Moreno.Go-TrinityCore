@@ -3172,6 +3172,21 @@ func init() {
 	// AttackStart(victim), both summon SpellScripts (nightbane
 	// precedent).
 	RegisterLuaBoss("boss_kormok", 16118)
+	// boss_lord_alexei_barov.cpp (EK loader AddSC_boss_lordalexeibarov
+	// decl :116 / call :294, Scholomance block continues; script name
+	// "boss_lord_alexei_barov"): boss AI ported in
+	// lua_scripts/eastern_kingdoms/boss_lord_alexei_barov.lua (entry
+	// 10504 — no NPC_ constant in scholomance.h, DB-side ScriptName
+	// binding, wotlk.wowhead-verified). OnReset self-casts unholy aura
+	// 17467 when absent (no HasAura bridge — per-guid latch,
+	// kirtonos convention, cleared 2/4/23); OnEnterCombat schedules
+	// immolate 20294 (triggered, random alive player within 100yd
+	// incl. victim, 7s->12s) and veil of shadow 17820 (triggered
+	// DoCastVictim, 15s->20s), nil pick casts nothing but keeps the
+	// schedule; zero Talk lines. Documented-only (no bridges):
+	// UpdateAI UNIT_STATE_CASTING gates, BossAI::JustEngagedWith +
+	// DATA_LORDALEXEIBAROV=3 bookkeeping (luaBossAI shim).
+	RegisterLuaBoss("boss_lord_alexei_barov", 10504)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
