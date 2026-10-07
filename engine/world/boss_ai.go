@@ -3449,6 +3449,20 @@ func init() {
 	// TYPE_RAMSTEIN=5, DONE), GetStratholmeAI instance leg; melee
 	// engine-driven.
 	RegisterLuaBoss("boss_ramstein_the_gorger", 10439)
+	// boss_timmy_the_cruel.cpp audit (EK loader decl :132 / call :310
+	// follows ramstein_the_gorger): 1 script, ScriptedAI diff-timer AI
+	// (Initialize/Reset arms RavenousClaw 10s + clears HasYelled latch;
+	// JustEngagedWith Talk(SAY_SPAWN=0) once per engagement cycle;
+	// UpdateVictim gate; no gossip/quest, no Spell/AuraScripts) —
+	// Oct-1 lua_scripts/eastern_kingdoms/boss_timmy_the_cruel.lua
+	// name-by-name C++-verified exact (NPC_TIMMY_THE_CRUEL=10808
+	// stratholme.h:66) and registered. Lua arms: OnEnterCombat
+	// RavenousClaw 10s->15s (non-triggered DoCastVictim 17470,
+	// nil-victim keeps schedule); yelled latch cleared on OnReset (23);
+	// timers cleared on Reset/LeaveCombat/Died. Documented-only (no
+	// bridges): GetStratholmeAI -> GetInstanceAI instance leg;
+	// melee engine-driven.
+	RegisterLuaBoss("boss_timmy_the_cruel", 10808)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
