@@ -3282,6 +3282,36 @@ func init() {
 	// GetBossState/GetGuidData bridges — joins the no-instance-script-bridge
 	// queue (deadmines/blackrock_spire/gnomeregan/karazhan/molten_core/
 	// naxxramas/trial_of_the_crusader/scarlet_monastery precedent).
+	// instance_shadowfang_keep.cpp audit (map 33, "SK", EK loader decl :124 /
+	// call :302 follows shadowfang_keep): InstanceMapScript only — no
+	// creature/at_/go scripts, no Lua InstanceMapScript bridge, so this
+	// unit is documented-only. C++ arms: ctor SetHeaders("SK") +
+	// MAX_ENCOUNTER 4, m_auiEncounter zeroed; Load resets IN_PROGRESS to
+	// NOT_STARTED. OnCreatureCreate latches uiAshGUID (NPC_ASH=3850),
+	// uiAdaGUID (NPC_ADA=3849), uiArchmageArugalGUID
+	// (NPC_ARCHMAGE_ARUGAL=4275), and the
+	// NPC_DND_CRAZED_APOTHECARY_GENERATOR=36212 vector.
+	// OnGameObjectCreate latches DoorCourtyardGUID (GO_COURTYARD_DOOR=18895,
+	// encounter[0]), DoorSorcererGUID (GO_SORCERER_DOOR=18972, encounter[2]),
+	// DoorArugalGUID (GO_ARUGAL_DOOR=18971, encounter[3]) — each re-opened
+	// on late map load when its encounter is already DONE. SetData:
+	// TYPE_FREE_NPC=1 DONE -> DoUseDoorOrButton(courtyard door);
+	// TYPE_RETHILGORE=2 DONE -> DoSpeech (Ada Talk(SAY_BOSS_DIE_AD=4) +
+	// Ash Talk(SAY_BOSS_DIE_AS=3), both alive); TYPE_FENRUS=3 DONE -> 1s
+	// timer, uiPhase=1; data==7 -> open sorcerer door; TYPE_NANDOS=4 DONE
+	// -> open arugal door; DATA_SPAWN_VALENTINE_ADDS=7 -> each generator
+	// CastSpell(68610). Every DONE persists the 4 encounters to DB.
+	// GetData returns encounters 1..4. Update (Fenrus DONE only): phase 1
+	// -> summon duplicate Archmage (entry 4275) at SpawnLocation[4]
+	// (-138.64, 2170.159, 136.577, 2.737), SetImmuneToPC, REACT_DEFENSIVE,
+	// triggered self-cast SPELL_ASHCROMBE_TELEPORT=15742,
+	// Talk(SAY_ARCHMAGE=0), 2s -> phase 2 -> summon 4x
+	// NPC_ARUGAL_VOIDWALKER=4627 at SpawnLocation[0..3]. No
+	// SummonCreature/SetData/GetData/DoUseDoorOrButton/SaveToDB bridges —
+	// joins the no-instance-script-bridge queue
+	// (deadmines/blackrock_spire/gnomeregan/karazhan/molten_core/
+	// naxxramas/trial_of_the_crusader/scarlet_monastery/scholomance
+	// precedent).
 	// shadowfang_keep.cpp audit (EK loader decl :123 / call :301 follows
 	// instance_scholomance): all four AddSC arms accounted for.
 	// npc_arugal_voidwalker (entry 4627) and boss_archmage_arugal
