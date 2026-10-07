@@ -6435,6 +6435,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						}
 					}
 					s.executeSpellHealDoneBonus(effCtx, effectTarget, spellID, targetHeal, effectIndex, doneBonus)
+					// Spell::EffectHeal (SpellEffects.cpp:1468-1470): the
+					// Grievous Bite (48920) removal arm lives in EffectHeal
+					// (10) only — EffectHealPct (136), EffectHealMechanical
+					// (75) and HealthLeech (96) never evaluate it, and the
+					// shared helper no longer applies it.
+					if eff.Effect == spellEffectHeal {
+						s.removeGrievousBiteIfFullyHealed(effectTarget)
+					}
 				}
 			case spellEffectHealMechanical: // SPELL_EFFECT_HEAL_MECHANICAL (75)
 				// Spell::EffectHealMechanical (SpellEffects.cpp:1495-1510):
@@ -7212,6 +7220,16 @@ func (s *session) spawnPersistentAreaAura(ctx context.Context, spell wotlk.Spell
 	}
 	if amount == 0 && (auraEffect.Aura == 3 || auraEffect.Aura == 23 || auraEffect.Aura == 89) {
 		amount = uint32(10 + int(s.player.Level)*2)
+	}
+	// Spell power bonus for the dynobj's periodic-damage aura. C++ runs
+	// SpellDamageBonusDone per tick for DYNOBJ_AURA_TYPE auras
+	// (SpellAuraEffects.cpp:5145-5146, never baked at apply); Go bakes it
+	// at apply like the unit-aura path in auraEffectParams — the only
+	// divergence is a mid-duration spell-power change, which no Go path
+	// re-evaluates. Without this the dynobj DoT carried no done leg at all.
+	if s.player != nil && s.player.SpellPower > 0 && periodMs > 0 &&
+		(auraEffect.Aura == 3 || auraEffect.Aura == 53) {
+		amount += uint32(math.Round(float64(s.player.SpellPower) * (float64(periodMs) / 15000.0)))
 	}
 	schoolMask := uint8(spell.SchoolMask)
 	if schoolMask == 0 {
@@ -9193,6 +9211,34 @@ func (s *session) healingTakenBonus(target *session, spellID uint32, heal uint32
 	return uint32(math.Max(float64(heal)*takenMult, 0))
 }
 
+// removeGrievousBiteIfFullyHealed mirrors the tail of Spell::EffectHeal
+// (SpellEffects.cpp:1468-1470): a fully-healed target loses the Grievous
+// Bite aura (48920). C++ evaluates GetHealth() + addhealth >= GetMaxHealth()
+// ahead of application; the post-application Health >= MaxHealth gate is the
+// same condition because the heal clamps at MaxHealth.
+func (s *session) removeGrievousBiteIfFullyHealed(targetGUID uint64) {
+	if s == nil {
+		return
+	}
+	if targetGUID == 0 {
+		targetGUID = s.playerGUID
+	}
+	target := s
+	if targetGUID != s.playerGUID && s.server != nil {
+		if other := s.server.findSessionByGUID(targetGUID); other != nil && other.player != nil {
+			target = other
+		} else {
+			return
+		}
+	}
+	if target.player == nil {
+		return
+	}
+	if target.hasAura(48920) && target.player.Health >= target.player.MaxHealth {
+		target.removeAura(48920)
+	}
+}
+
 // executeSpellHealDoneBonus is executeSpellHeal with control over the
 // SpellHealingBonusDone (spell-power) leg. The Swiftmend arm of
 // Spell::EffectHeal (SpellEffects.cpp:1423-1462) skips that leg on its path
@@ -9245,14 +9291,6 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 		targetSess.player.Health = targetSess.player.MaxHealth
 	} else {
 		targetSess.player.Health += heal
-	}
-	// Spell::EffectHeal (SpellEffects.cpp): a fully-healed target loses the
-	// Grievous Bite aura (48920). C++ evaluates
-	// GetHealth() + addhealth >= GetMaxHealth() ahead of the actual heal
-	// application, so the post-application Health >= MaxHealth gate is the
-	// same condition on this path.
-	if targetSess.hasAura(48920) && targetSess.player.Health >= targetSess.player.MaxHealth {
-		targetSess.removeAura(48920)
 	}
 	s.updateAchievementCriteria(criteriaTypeHealingDone, 0, heal)
 	s.setAchievementCriteria(criteriaTypeHighestHealCasted, 0, heal)
@@ -11508,9 +11546,13 @@ func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (du
 			}
 		}
 	}
-	// Spell power bonus for periodic effects and absorption shields (TrinityCore Unit::SpellDamageBonusDone / SpellHealingBonusDone)
+	// Spell power bonus for periodic effects and absorption shields (TrinityCore Unit::SpellDamageBonusDone / SpellHealingBonusDone).
+	// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:498-507) runs the
+	// done leg for PERIODIC_DAMAGE (3), PERIODIC_LEECH (53) and
+	// PERIODIC_HEAL (8) only — PERIODIC_DAMAGE_PERCENT (89) is excluded,
+	// so 89 auras never carry a spell-power bonus.
 	if s.player != nil && s.player.SpellPower > 0 {
-		if periodMs > 0 && (eff.Aura == 3 || eff.Aura == 23 || eff.Aura == 89 || eff.Aura == 8 || eff.Aura == 20) {
+		if periodMs > 0 && (eff.Aura == 3 || eff.Aura == 23 || eff.Aura == 53 || eff.Aura == 8 || eff.Aura == 20) {
 			tickBonus := uint32(math.Round(float64(s.player.SpellPower) * (float64(periodMs) / 15000.0)))
 			amount += tickBonus
 		} else if eff.Aura == SpellAuraSchoolAbsorb || eff.Aura == SpellAuraManaShield || eff.Aura == SpellAuraMagicAbsorb {
@@ -13188,6 +13230,13 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 	switch aura.AuraType {
 	case 3, 89: // SPELL_AURA_PERIODIC_DAMAGE, SPELL_AURA_PERIODIC_DAMAGE_PERCENT
 		dmg := aura.Amount
+		if aura.AuraType == 89 {
+			// SpellAuraEffects.cpp:5166-5168 — PERIODIC_DAMAGE_PERCENT
+			// ticks deal a percentage of the target's max health
+			// (ceil), not the stored flat amount; the taken leg below
+			// then runs on the converted value, matching C++ order.
+			dmg = uint32(math.Ceil(float64(ts.player.MaxHealth) * float64(aura.Amount) / 100))
+		}
 		resisted := uint32(0)
 		if aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
 			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, dmg)
@@ -13419,6 +13468,13 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 	switch aura.AuraType {
 	case 3, 89: // SPELL_AURA_PERIODIC_DAMAGE, SPELL_AURA_PERIODIC_DAMAGE_PERCENT
 		dmg := aura.Amount
+		if aura.AuraType == 89 {
+			// SpellAuraEffects.cpp:5166-5168 — PERIODIC_DAMAGE_PERCENT
+			// ticks deal a percentage of the target's max health
+			// (ceil), not the stored flat amount; the taken leg below
+			// then runs on the converted value, matching C++ order.
+			dmg = uint32(math.Ceil(float64(target.MaxHealth) * float64(aura.Amount) / 100))
+		}
 		resisted := uint32(0)
 		if aura.SchoolMask&1 != 0 && target.Armor > 0 {
 			dmg = calcArmorReducedDamage(float64(target.Armor), aura.CasterLevel, dmg)
