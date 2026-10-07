@@ -3217,6 +3217,20 @@ func init() {
 	// lines. Documented-only (no bridges): UpdateAI UNIT_STATE_CASTING
 	// gates, GetScholomanceAI template validation (luaBossAI shim).
 	RegisterLuaBoss("boss_boss_ras_frostwhisper", 10508)
+	// boss_the_ravenian.cpp (EK loader AddSC_boss_theravenian decl
+	// :119 / call :297, Scholomance block continues; script name
+	// "boss_the_ravenian"): boss AI ported in
+	// lua_scripts/eastern_kingdoms/boss_the_ravenian.lua (entry
+	// 10507 — no NPC_ constant in scholomance.h, DB-side ScriptName
+	// binding, wowhead-verified). OnEnterCombat schedules trample
+	// 15550 24s->10s / cleave 20691 15s->7s / sundering cleave
+	// 25174 40s->20s / knock away 10101 32s->12s (all triggered
+	// DoCastVictim -> GetVictim + CastSpell(victim, spell, true),
+	// nil-victim keeps schedule); zero Talk lines. Documented-only
+	// (no bridges): UpdateAI UNIT_STATE_CASTING gates,
+	// GetScholomanceAI template validation (luaBossAI shim),
+	// BossAI::JustEngagedWith + DATA_THERAVENIAN=5 bookkeeping.
+	RegisterLuaBoss("boss_the_ravenian", 10507)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
