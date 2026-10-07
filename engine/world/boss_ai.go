@@ -3463,6 +3463,26 @@ func init() {
 	// bridges): GetStratholmeAI -> GetInstanceAI instance leg;
 	// melee engine-driven.
 	RegisterLuaBoss("boss_timmy_the_cruel", 10808)
+	// boss_postmaster_malown.cpp port (EK loader decl :133 / call :311
+	// follows timmy_the_cruel): 1 script, BossAI event arms (BossAI
+	// constructor arg TYPE_MALOWN=7, stratholme.h:35; no NPC_ constant —
+	// DB-side ScriptName binding, entry 11143 wowhead-cited). New
+	// lua_scripts/eastern_kingdoms/boss_postmaster_malown.lua. Lua arms:
+	// OnEnterCombat schedules WAILINGDEAD 19s / BACKHAND 8s /
+	// CURSEOFWEAKNESS 20s / CURSEOFTONGUES 22s / CALLOFTHEGRAVE 25s;
+	// WAILINGDEAD 7713 65% gate -> 19s re-arm / BACKHAND 6253 45% gate /
+	// CURSEOFWEAKNESS 8552 3% gate / CURSEOFTONGUES 12889 3% gate /
+	// CALLOFTHEGRAVE 17831 5% gate (all triggered DoCastVictim ->
+	// GetVictim + CastSpell(victim, spell, true), nil-victim keeps
+	// schedule); C++ quirk preserved verbatim: every non-wailing case
+	// reschedules EVENT_WAILINGDEAD with its own timer (8s/20s/22s/25s)
+	// instead of its own event, replacing any pending wailingdead timer;
+	// KilledUnit Talk(SAY_KILL 0) player-gated (illidan convention);
+	// timers cleared on LeaveCombat/Died/Reset. Documented-only (no
+	// bridges): empty Reset + BossAI::JustEngagedWith/TYPE_MALOWN
+	// bookkeeping (luaBossAI shim); UNIT_STATE_CASTING gates (barthilas
+	// precedent); GetStratholmeAI factory; melee engine-driven.
+	RegisterLuaBoss("boss_postmaster_malown", 11143)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
