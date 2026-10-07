@@ -3508,6 +3508,29 @@ func init() {
 	// DoCastSelf(17472, TRIGGERED) leg not registered — no C++-verifiable
 	// NPC entry and no SpellHit bridge (entry-unverifiable queue).
 	RegisterLuaBoss("boss_baron_rivendare", 10440)
+	// boss_dathrohan_balnazzar.cpp audit (EK loader decl :135 / call :313
+	// follows baron_rivendare): 1 script, ScriptedAI via GetStratholmeAI
+	// (no BossAI, no instance bookkeeping). Fresh port —
+	// lua_scripts/eastern_kingdoms/boss_dathrohan_balnazzar.lua (Oct-1
+	// pass was document-only, zero trust). Arms: OnEnterCombat
+	// Initialize() — mindblast 17287 6s->{15s,20s} (shared timer across
+	// both phases, kept pending on transform) / crusadershammer 17286
+	// 8s->12s / crusaderstrike 17281 12s->15s / holystrike 17284 18s->15s
+	// (all DoCastVictim -> GetVictim + CastSpell, nil-victim keeps
+	// schedule). Per-tick HealthBelowPct(40) check approximated by a 1s
+	// poll (no OnAIUpdate bridge, event 7 unfired): transform cancels the
+	// Dathrohan arms, self-casts 17288 (barthilas convention), and starts
+	// the Balnazzar arms at their C++-frozen initials — shadowshock 17399
+	// 4s->11s / psychicscream 13704 16s->20s / sleep 12098 20s->15s
+	// (SelectTarget(Random, 0) -> random alive player on map+instance, no
+	// distance bound; nil pick casts nothing, re-arm unconditional) /
+	// mindcontrol 15690 10s->15s. Timers + transform latch cleared on
+	// LeaveCombat/Died/Reset. Documented-only (no bridges): transform's
+	// InterruptNonMeleeSpells gate + UpdateEntry(10813)/Reset's
+	// UpdateEntry(10812) revert, JustDied's 8x zombie (10698) summons at
+	// the file's m_aSummonPoint coords (1h timed despawn), empty
+	// JustEngagedWith, GetStratholmeAI factory; melee engine-driven.
+	RegisterLuaBoss("boss_dathrohan_balnazzar", 10812)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
