@@ -318,14 +318,17 @@ func (s *session) casterIgnoresAuraState(spell wotlk.Spell) bool {
 	return auraStateBypassApplies(s.loadedAuras(), func(spellID uint32) (wotlk.Spell, bool) {
 		granting, found, err := data.Spell(spellID)
 		return granting, err == nil && found
-	}, spell)
+	}, spell, -1)
 }
 
 // auraStateBypassApplies is the data-free core of casterIgnoresAuraState: true
 // when any live aura grants a 262 effect (masked in by EffectMask, the
 // per-effect merge accumulator) whose spell-family affect mask covers the
 // spell being cast (AuraEffect::IsAffectedOnSpell, SpellAuraEffects.cpp:848).
-func auraStateBypassApplies(auras []*activeAura, grantingSpell func(uint32) (wotlk.Spell, bool), spell wotlk.Spell) bool {
+// miscValue < 0 disables the MiscValue filter; otherwise only effects whose
+// MiscValue equals it count (AuraEffect::GetMiscValue reads the granting
+// spell's effect row: m_spellInfo->Effects[m_effIndex].MiscValue).
+func auraStateBypassApplies(auras []*activeAura, grantingSpell func(uint32) (wotlk.Spell, bool), spell wotlk.Spell, miscValue int32) bool {
 	for _, aura := range auras {
 		if aura == nil || aura.Stopped {
 			continue
@@ -338,10 +341,29 @@ func auraStateBypassApplies(auras []*activeAura, grantingSpell func(uint32) (wot
 			if effect.Aura != spellAuraAbilityIgnoreAuraState || aura.EffectMask&(1<<uint(index)) == 0 {
 				continue
 			}
+			if miscValue >= 0 && effect.MiscValue != miscValue {
+				continue
+			}
 			if spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// auraStateReqCombatExempt mirrors the reqCombat leg of Spell::CheckCast
+// (Spell.cpp:5280-5292): a SPELL_AURA_ABILITY_IGNORE_AURASTATE (262)
+// effect affecting the spell whose MiscValue is 1 lifts the in-combat
+// CanBeUsedInCombat gate (the SPELL_FAILED_AFFECTING_COMBAT arm of the
+// caster-state block, Spell.cpp:5311-5312).
+func (s *session) auraStateReqCombatExempt(spell wotlk.Spell) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	data := s.server.Data
+	return auraStateBypassApplies(s.loadedAuras(), func(spellID uint32) (wotlk.Spell, bool) {
+		granting, found, err := data.Spell(spellID)
+		return granting, err == nil && found
+	}, spell, 1)
 }

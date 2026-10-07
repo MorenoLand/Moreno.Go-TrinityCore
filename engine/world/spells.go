@@ -1026,6 +1026,23 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded caster aura state present", "state", spell.ExcludeCasterAuraState)
 		return true
 	}
+	// CheckCast caster-state reqCombat arm (Spell::CheckCast, Spell.cpp:5311-5312):
+	// a spell that cannot be used in combat (SPELL_ATTR0_CANT_USED_IN_COMBAT,
+	// SpellInfo::CanBeUsedInCombat — SpellInfo.cpp:1200-1203) fails with
+	// SPELL_FAILED_AFFECTING_COMBAT (1, SharedDefines.h:983) when the caster
+	// is in combat, unless a SPELL_AURA_ABILITY_IGNORE_AURASTATE (262)
+	// effect affecting the spell carries MiscValue == 1 (Spell.cpp:5280-5292).
+	// Client-initiated casts only — triggered casts go through
+	// castSpellDirect, not this path, which is the structural equivalent of
+	// the TRIGGERED_IGNORE_CASTER_AURASTATE wrapper (SpellDefines.h:134).
+	// C++ relative order: last arm of the caster-state block, right after
+	// the ExcludeCasterAuraSpell gate.
+	if !s.auraStateReqCombatExempt(spell) && s.player != nil &&
+		s.player.UnitFlags&unitFlagInCombat != 0 && spell.Attributes&spellAttr0CantUsedInCombat != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedAffectingCombat), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "cannot be used in combat", "result", spellFailedAffectingCombat)
+		return true
+	}
 	if spell.RequiresSpellFocus != 0 && !s.spellFocusFound(ctx, spell) {
 		s.sendCastFailed(ctx, castID, spell, spellFailedRequiresSpellFocus)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "no spell focus object in range", "focus", spell.RequiresSpellFocus)
@@ -3940,6 +3957,10 @@ func (s *session) clearSessionComboPoints() {
 // of target otherwise — or the cast fails with SPELL_FAILED_NO_COMBO_POINTS
 // (78). The m_caster->ToUnit() null arm is vacuous on the client path (the
 // session is always a player) and the npcbot creature arm is out of scope.
+// The m_needComboPoints=false leg (Spell::CheckCast, Spell.cpp:5286) clears
+// the requirement when a SPELL_AURA_ABILITY_IGNORE_AURASTATE effect
+// affects the spell — bridged via casterIgnoresAuraState, evaluated here
+// (C++ latches it at CheckCast time; Go re-evaluates, same aura set).
 // NO_COMBO_POINTS carries no extra WriteCastResultInfo params (verified
 // Spell.cpp:3974-4160), so castFailedExtParams needs no case. Returns the
 // SPELL_FAILED_* result code, 0 on success.
@@ -3947,7 +3968,7 @@ func (s *session) checkComboPointsCast(spell wotlk.Spell, target protocol.SpellT
 	if s == nil || s.player == nil {
 		return 0
 	}
-	if !spellNeedsComboPoints(spell) {
+	if !spellNeedsComboPoints(spell) || s.casterIgnoresAuraState(spell) {
 		return 0
 	}
 	var points uint8
@@ -6688,8 +6709,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// combo legs run at the last delayed tick (next_time == 0)
 				// on this branch too — the take lands before the gain,
 				// matching the C++ ClearComboPoints-then-AddComboPoints
-				// order, same as the immediate path below.
-				if spellNeedsComboPoints(spell) && castItemGUID == 0 {
+				// order, same as the immediate path below. The
+				// ABILITY_IGNORE_AURASTATE override (Spell.cpp:5286) is
+				// bridged here as well via casterIgnoresAuraState.
+				if spellNeedsComboPoints(spell) && castItemGUID == 0 && !s.casterIgnoresAuraState(spell) {
 					s.clearSessionComboPoints()
 				}
 				if comboGainTarget != 0 && comboGain > 0 {
@@ -6796,8 +6819,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// early for missed spells. The RETAIN_COMBO_POINTS aura removal
 	// (Spell.cpp:3747-3750) has no Go bridge — the Go aura model tracks
 	// no such aura type. The ABILITY_IGNORE_AURASTATE override
-	// (Spell.cpp:5286) has no bridge for the same reason.
-	if spellNeedsComboPoints(spell) && castItemGUID == 0 {
+	// (Spell.cpp:5286, m_needComboPoints=false) is bridged below via
+	// casterIgnoresAuraState — the same 262-effect/affect-mask predicate
+	// the CheckCast loop uses, re-evaluated at finish time (C++ latches
+	// m_needComboPoints at CheckCast; the aura set is the same one).
+	if spellNeedsComboPoints(spell) && castItemGUID == 0 && !s.casterIgnoresAuraState(spell) {
 		s.clearSessionComboPoints()
 	}
 	if comboGainTarget != 0 && comboGain > 0 {
