@@ -44,8 +44,10 @@ func NewThreatManager(ownerGUID uint64) *ThreatManager {
 // candidate Unit::IsWithinMeleeRange (Unit.cpp:599), combat-reach-based
 // (GetMeleeRange: both combat reaches + 4/3, min NOMINAL_MELEE_RANGE); Go uses
 // the adding victim's flat 5.0yd (meleeAttackRange) distance at add time.
-// (4) ThreatReference::AddThreat accepts negative amounts (floored at 0); Go's
-// `amount <= 0` early-return leaves threat reduction unmodeled.
+// Bridged: ThreatReference::AddThreat negative amounts reduce the entry
+// floored at 0 (ThreatManager.cpp:592-601); a decrease never clears the
+// 110%/130% switch gate for the adding victim. Tick-based re-selection of a
+// decreased non-current-victim entry stays under delta (1).
 // Documented no-bridge: FixateTarget/_fixateRef (always preferred in
 // ReselectVictim); taunt-state precedence in the comparator (TAUNT > NONE >
 // DETAUNT) with TauntUpdate driven by SPELL_AURA_MOD_TAUNT (Go taunt is the
@@ -60,14 +62,19 @@ func NewThreatManager(ownerGUID uint64) *ThreatManager {
 // misdirection redirects) belong to the HandleThreatSpells cast-threat audit;
 // getThreatMultiplier already covers stance/aura SPELL_AURA_MOD_THREAT.
 func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) (switched bool, newVictim uint64) {
-	if victim == 0 || amount <= 0 {
+	if victim == 0 || amount == 0 {
 		return false, tm.currentVictim
 	}
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
-	tm.entries[victim] += amount
-	newThreat := tm.entries[victim]
+	// ThreatReference::AddThreat (ThreatManager.cpp:592-601): negative amounts
+	// reduce the entry, floored at zero; zero itself is a no-op above.
+	newThreat := tm.entries[victim] + amount
+	if newThreat < 0 {
+		newThreat = 0
+	}
+	tm.entries[victim] = newThreat
 
 	if tm.currentVictim == 0 || tm.currentVictim == victim {
 		tm.currentVictim = victim
