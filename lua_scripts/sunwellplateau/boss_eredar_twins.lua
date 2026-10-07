@@ -33,7 +33,8 @@
 -- 45329 30s then {30s,35s}, non-triggered on a random alive player
 -- in the instance (C++ SelectTarget(Random, 0), player-only — teron
 -- convention; nil pick casts nothing but keeps the schedule),
--- Talk(EMOTE_SHADOW_NOVA) + Talk(YELL_SHADOW_NOVA) (the
+-- Talk(EMOTE_SHADOW_NOVA, on target) + Talk(YELL_SHADOW_NOVA,
+-- even on nil pick — C++-exact) (the
 -- !SisterDeath gate is always true on this path; the emote's C++
 -- target arm has no target bridge — felmyst convention) /
 -- confounding blow 45256 25s then {20s,25s}, non-triggered on a
@@ -61,8 +62,9 @@
 -- driven). Grand Warlock Alythess (25166). OnEnterCombat(1):
 -- per-GUID reset, arm conflagration 45342 45s then {30s,35s}, non-
 -- triggered on a random alive player in the instance (nil pick
--- casts nothing but keeps the schedule), Talk(EMOTE_CONFLAGRATION)
--- + Talk(YELL_CANFLAGRATION), then the blaze timer is re-armed
+-- casts nothing but keeps the schedule), Talk(EMOTE_CONFLAGRATION,
+-- on target) + Talk(YELL_CANFLAGRATION, even on nil pick —
+-- C++-exact), then the blaze timer is re-armed
 -- once at 4s (C++-exact — the conflag arm sets BlazeTimer = 4000)
 -- / flame sear 46771 15s then 15s, non-triggered self-cast /
 -- pyrogenics 45230 15s then 15s, triggered self-cast (C++ DoCast
@@ -194,14 +196,16 @@ end
 -- C++ EVENT shadow nova: DoCast(random target, 45329) +
 -- Talk(EMOTE_SHADOW_NOVA) + Talk(YELL_SHADOW_NOVA); repeat
 -- {30s,35s}. The !SisterDeath Talk gate is always true on this
--- path (sister-death arm is cross-creature blocked).
+-- path (sister-death arm is cross-creature blocked); C++ fires
+-- YELL_SHADOW_NOVA even when the target pick is nil — Talk
+-- placement matches.
 local function sacrolashShadowNova(creature, guid)
     local target = pickRandomPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_SHADOW_NOVA)
         creature:Talk(EMOTE_SHADOW_NOVA)
-        creature:Talk(YELL_SHADOW_NOVA)
     end
+    creature:Talk(YELL_SHADOW_NOVA)
     schedule(guid, "shadownova", math.random(30000, 35000), function()
         sacrolashShadowNova(creature, guid)
     end)
@@ -286,14 +290,16 @@ end
 
 -- C++ EVENT conflagration: DoCast(random target, 45342) +
 -- Talk(EMOTE_CONFLAGRATION) + Talk(YELL_CANFLAGRATION), BlazeTimer
--- = 4000; repeat {30s,35s}.
+-- = 4000; repeat {30s,35s}. C++ fires YELL_CANFLAGRATION and the
+-- blaze re-arm even when the target pick is nil — placement
+-- matches.
 local function alythessConflagration(creature, guid)
     local target = pickRandomPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_CONFLAGRATION)
         creature:Talk(EMOTE_CONFLAGRATION)
-        creature:Talk(YELL_CANFLAGRATION)
     end
+    creature:Talk(YELL_CANFLAGRATION)
     schedule(guid, "blaze", 4000, function()
         alythessBlaze(creature, guid)
     end)
