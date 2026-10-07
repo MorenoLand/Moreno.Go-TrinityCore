@@ -2770,6 +2770,26 @@ func init() {
 	// only — no SpellScript bridge (nightbane precedent).
 	RegisterLuaBoss("npc_koltira_deathweaver", 28912)
 	RegisterLuaBoss("npc_scarlet_courier", 29076)
+	// AddSC_the_scarlet_enclave_c5 (chapter5.cpp, EK loader decl :97 /
+	// call :275): full-file audit 2026-10-07 — 3 scripts, zero Lua
+	// bridges, documented-only. npc_highlord_darion_mograine (entry
+	// 29173, chapter5.cpp :138) is an EscortAI event machine (Light of
+	// Dawn, quest 12801): OnGossipHello offers "I am ready." while
+	// quest 12801 incomplete; OnGossipSelect sets uiStep=1 + Start()
+	// escort; the WaypointReached step machine summons dawn/scourge
+	// waves (29219/29186/29206/29190 defenders 29174 earthshatter
+	// 29182), GUID stores via ObjectAccessor, Talks, world states
+	// 3592/3605, Mount 25279, SetStandState, SetVisible, emote states,
+	// gossip-flag clear, GetClosestCreatureWithEntry, KillSelf; combat
+	// arms 52893/53639/53635/49723/53640 inside the same UpdateAI.
+	// Every arm unbridged (EscortAI/waypoint/summon/GUID-store/world-
+	// state/stand-state/movement/flag bridges all absent — npc_barnes
+	// precedent). npc_the_lich_king_tirion_dawn (entry 29183, :161) is
+	// a trivially empty ScriptedAI (all overrides no-op) — nothing to
+	// port. spell_teleport_leaders_blessing (58418/58420 portals:
+	// OnEffectHitTarget GetHitPlayer + EFFECT_0/1 CalcValue quest-
+	// complete -> CastSpell) is documented-only — no SpellScript
+	// bridge (nightbane precedent).
 	// npc_valkyr_battle_maiden (The Scarlet Enclave zone file,
 	// zone_the_scarlet_enclave.cpp — AddSC_the_scarlet_enclave, loader
 	// decl :94 / call :272): PassiveAI revive-valkyr driven by an
