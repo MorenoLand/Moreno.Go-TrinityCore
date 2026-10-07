@@ -167,7 +167,10 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 	}
 	channelName, channelFlagsValue, channelIDValue, announce := channel.Name, channel.Flags, channel.ID, channel.Announce
 	s.server.channelsMu.Unlock()
-	if announce {
+	// Reference: Channel::JoinChannel (Channel.cpp) - the joined broadcast
+	// is suppressed when the session holds
+	// RBAC_PERM_SILENTLY_JOIN_CHANNEL.
+	if announce && !s.silentlyJoinChannel() {
 		for _, member := range others {
 			_ = member.sendChannelNotify(channelJoinedNotice, channelName, &channelNotifyGUID{GUID: s.playerGUID})
 		}
@@ -234,7 +237,10 @@ func (s *session) handleLeaveChannel(payload []byte) bool {
 		delete(s.server.channels, key)
 	}
 	s.server.channelsMu.Unlock()
-	if announce {
+	// Reference: Channel::LeaveChannel (Channel.cpp) - the left broadcast
+	// is suppressed when the session holds
+	// RBAC_PERM_SILENTLY_JOIN_CHANNEL.
+	if announce && !s.silentlyJoinChannel() {
 		for _, member := range others {
 			_ = member.sendChannelNotify(channelLeftNotice, channelName, &channelNotifyGUID{GUID: s.playerGUID})
 		}
@@ -689,8 +695,8 @@ func (c *worldChannel) findMemberByName(name string) *session {
 
 // channelCommandGuard applies the two guard steps every Channel.cpp command
 // runs: the sender must be on the channel (CHAT_NOT_MEMBER_NOTICE) and must be
-// a moderator (CHAT_NOT_MODERATOR_NOTICE). The reference also accepts
-// RBAC_PERM_CHANGE_CHANNEL_NOT_MODERATOR, which has no wiring here yet.
+// a moderator (CHAT_NOT_MODERATOR_NOTICE) unless they hold
+// RBAC_PERM_CHANGE_CHANNEL_NOT_MODERATOR.
 func (s *session) channelCommandGuard(name string) (*worldChannel, bool) {
 	s.server.channelsMu.RLock()
 	ch := s.server.channels[s.scopedChannelKey(name)]
@@ -703,7 +709,7 @@ func (s *session) channelCommandGuard(name string) (*worldChannel, bool) {
 		_ = s.sendChannelNotify(channelNotMemberNotice, name, nil)
 		return nil, false
 	}
-	if !ch.isModerator(s.playerGUID) {
+	if !ch.isModerator(s.playerGUID) && !s.changeChannelNotModerator() {
 		s.server.channelsMu.RUnlock()
 		_ = s.sendChannelNotify(channelNotModeratorNotice, name, nil)
 		return nil, false
@@ -742,8 +748,8 @@ func (s *session) handleChannelPassword(ctx context.Context, payload []byte) boo
 		return false
 	}
 	// Reference: Channel::Password - the sender must be on the channel
-	// (CHAT_NOT_MEMBER_NOTICE) and a moderator (CHAT_NOT_MODERATOR_NOTICE);
-	// the RBAC_PERM_CHANGE_CHANNEL_NOT_MODERATOR bypass has no Go model.
+	// (CHAT_NOT_MEMBER_NOTICE) and a moderator (CHAT_NOT_MODERATOR_NOTICE),
+	// unless they hold RBAC_PERM_CHANGE_CHANNEL_NOT_MODERATOR.
 	s.server.channelsMu.Lock()
 	ch := s.server.channels[s.scopedChannelKey(name)]
 	if ch == nil {
@@ -755,7 +761,7 @@ func (s *session) handleChannelPassword(ctx context.Context, payload []byte) boo
 		_ = s.sendChannelNotify(channelNotMemberNotice, name, nil)
 		return true
 	}
-	if !ch.isModerator(s.playerGUID) {
+	if !ch.isModerator(s.playerGUID) && !s.changeChannelNotModerator() {
 		s.server.channelsMu.Unlock()
 		_ = s.sendChannelNotify(channelNotModeratorNotice, name, nil)
 		return true
@@ -771,7 +777,8 @@ func (s *session) handleChannelPassword(ctx context.Context, payload []byte) boo
 
 // handleChannelSetOwner processes CMSG_CHANNEL_SET_OWNER (0x09D).
 // Reference: Channel::SetOwner(player, newname) -> Channel::SetOwner(guid, true):
-// owner-only senders (not just moderators), the target must be on the channel
+// the sender must be the owner (CHAT_NOT_OWNER_NOTICE) unless they hold
+// RBAC_PERM_CHANGE_CHANNEL_NOT_MODERATOR, the target must be on the channel
 // (cross-team targets are reported as not found unless both sides hold
 // RBAC_PERM_TWO_SIDE_INTERACTION_CHANNEL), and the new owner gains moderator
 // and owner flags while everyone sees a mode change broadcast followed by
@@ -795,7 +802,7 @@ func (s *session) handleChannelSetOwner(ctx context.Context, payload []byte) boo
 		_ = s.sendChannelNotify(channelNotMemberNotice, name, nil)
 		return true
 	}
-	if ch.Owner != s.playerGUID {
+	if ch.Owner != s.playerGUID && !s.changeChannelNotModerator() {
 		s.server.channelsMu.Unlock()
 		_ = s.sendChannelNotify(channelNotOwnerNotice, name, nil)
 		return true
@@ -895,7 +902,7 @@ func (s *session) channelSetMode(payload []byte, moderator, set bool) bool {
 		_ = s.sendChannelNotify(channelNotMemberNotice, name, nil)
 		return true
 	}
-	if !ch.isModerator(s.playerGUID) {
+	if !ch.isModerator(s.playerGUID) && !s.changeChannelNotModerator() {
 		s.server.channelsMu.Unlock()
 		_ = s.sendChannelNotify(channelNotModeratorNotice, name, nil)
 		return true
@@ -1005,7 +1012,7 @@ func (s *session) handleChannelInvite(ctx context.Context, payload []byte) bool 
 		}
 	}
 	s.server.sessionsMu.RUnlock()
-	if target == nil {
+	if target == nil || target.player.ExtraFlags&playerExtraGMInvisible != 0 {
 		_ = s.sendChannelNotify(channelPlayerNotFoundNotice, name, &channelNotifyName{Name: targetName})
 		return true
 	}
@@ -1043,7 +1050,7 @@ func (s *session) handleChannelInvite(ctx context.Context, payload []byte) bool 
 }
 
 // twoSideChannelInteraction resolves the reference
-// RBAC_PERM_TWO_SIDE_INTERACTION_CHANNEL permission (id 36) for channel use.
+// RBAC_PERM_TWO_SIDE_INTERACTION_CHANNEL permission (id 26) for channel use.
 func (s *session) twoSideChannelInteraction() bool {
 	if s.server == nil || s.server.AuthStore == nil || s.server.AuthStore.DB == nil || !s.authed {
 		return false
@@ -1054,6 +1061,35 @@ func (s *session) twoSideChannelInteraction() bool {
 		return false
 	}
 	granted, err := accountHasPermission(context.Background(), s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionTwoSideInteractionChannel)
+	return err == nil && granted
+}
+
+// silentlyJoinChannel resolves the reference RBAC_PERM_SILENTLY_JOIN_CHANNEL
+// permission (id 45): Channel::JoinChannel/LeaveChannel/KickOrBan suppress
+// the join/leave/kicked/banned broadcast when the acting session holds it.
+func (s *session) silentlyJoinChannel() bool {
+	if s.server == nil || s.server.AuthStore == nil || s.server.AuthStore.DB == nil || !s.authed {
+		return false
+	}
+	if s.accountID == 0 {
+		return false
+	}
+	granted, err := accountHasPermission(context.Background(), s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionSilentlyJoinChannel)
+	return err == nil && granted
+}
+
+// changeChannelNotModerator resolves the reference
+// RBAC_PERM_CHANGE_CHANNEL_NOT_MODERATOR permission (id 46): lets a session
+// run the moderator-gated channel commands (kick/ban/unban, mode, password,
+// announcements, ownership handout) without being a channel moderator.
+func (s *session) changeChannelNotModerator() bool {
+	if s.server == nil || s.server.AuthStore == nil || s.server.AuthStore.DB == nil || !s.authed {
+		return false
+	}
+	if s.accountID == 0 {
+		return false
+	}
+	granted, err := accountHasPermission(context.Background(), s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionChangeChannelNotModerator)
 	return err == nil && granted
 }
 
@@ -1080,7 +1116,7 @@ func (s *session) channelKickBan(payload []byte, ban bool) bool {
 		_ = s.sendChannelNotify(channelNotMemberNotice, name, nil)
 		return true
 	}
-	if !ch.isModerator(s.playerGUID) {
+	if !ch.isModerator(s.playerGUID) && !s.changeChannelNotModerator() {
 		s.server.channelsMu.Unlock()
 		_ = s.sendChannelNotify(channelNotModeratorNotice, name, nil)
 		return true
@@ -1091,7 +1127,7 @@ func (s *session) channelKickBan(payload []byte, ban bool) bool {
 		_ = s.sendChannelNotify(channelPlayerNotFoundNotice, name, &channelNotifyName{Name: targetName})
 		return true
 	}
-	if ch.Owner == target.playerGUID && ch.Owner != s.playerGUID {
+	if ch.Owner == target.playerGUID && ch.Owner != s.playerGUID && !s.changeChannelNotModerator() {
 		s.server.channelsMu.Unlock()
 		_ = s.sendChannelNotify(channelNotOwnerNotice, name, nil)
 		return true
@@ -1122,14 +1158,19 @@ func (s *session) channelKickBan(payload []byte, ban bool) bool {
 	if ban {
 		notice = channelPlayerBannedNotice
 	}
-	for _, m := range members {
-		_ = m.sendChannelNotify(notice, name, &channelNotifyTwoGUID{Victim: victimGUID, Moderator: s.playerGUID})
-		if ownerTransferred {
-			_ = m.sendChannelNotify(channelModeChangeNotice, name, &channelNotifyModeChange{GUID: s.playerGUID, OldFlags: oldFlags, NewFlags: newFlags})
-			_ = m.sendChannelNotify(channelOwnerChangedNotice, name, &channelNotifyGUID{GUID: s.playerGUID})
+	// Reference: Channel::KickOrBan (Channel.cpp) - the kicked/banned
+	// broadcast is suppressed when the acting session holds
+	// RBAC_PERM_SILENTLY_JOIN_CHANNEL; the removal itself always runs.
+	if !s.silentlyJoinChannel() {
+		_ = target.sendChannelNotify(notice, name, &channelNotifyTwoGUID{Victim: victimGUID, Moderator: s.playerGUID})
+		for _, m := range members {
+			_ = m.sendChannelNotify(notice, name, &channelNotifyTwoGUID{Victim: victimGUID, Moderator: s.playerGUID})
+			if ownerTransferred {
+				_ = m.sendChannelNotify(channelModeChangeNotice, name, &channelNotifyModeChange{GUID: s.playerGUID, OldFlags: oldFlags, NewFlags: newFlags})
+				_ = m.sendChannelNotify(channelOwnerChangedNotice, name, &channelNotifyGUID{GUID: s.playerGUID})
+			}
 		}
 	}
-	_ = target.sendChannelNotify(notice, name, &channelNotifyTwoGUID{Victim: victimGUID, Moderator: s.playerGUID})
 	_ = target.sendChannelNotify(channelYouLeftNotice, name, &channelNotifyChannel{Flags: channelFlags, ID: channelID})
 	return true
 }
@@ -1166,7 +1207,7 @@ func (s *session) handleChannelUnban(ctx context.Context, payload []byte) bool {
 		_ = s.sendChannelNotify(channelNotMemberNotice, name, nil)
 		return true
 	}
-	if !ch.isModerator(s.playerGUID) {
+	if !ch.isModerator(s.playerGUID) && !s.changeChannelNotModerator() {
 		s.server.channelsMu.Unlock()
 		_ = s.sendChannelNotify(channelNotModeratorNotice, name, nil)
 		return true
@@ -1215,7 +1256,7 @@ func (s *session) handleChannelAnnouncements(ctx context.Context, payload []byte
 		_ = s.sendChannelNotify(channelNotMemberNotice, name, nil)
 		return true
 	}
-	if !ch.isModerator(s.playerGUID) {
+	if !ch.isModerator(s.playerGUID) && !s.changeChannelNotModerator() {
 		s.server.channelsMu.Unlock()
 		_ = s.sendChannelNotify(channelNotModeratorNotice, name, nil)
 		return true

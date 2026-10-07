@@ -131,6 +131,12 @@ const permissionTwoSideWhoList uint32 = 28
 // permissionTwoSideAddFriend mirrors rbac::RBAC_PERM_TWO_SIDE_ADD_FRIEND (RBAC.h:82).
 const permissionTwoSideAddFriend uint32 = 29
 
+// permissionSilentlyJoinChannel mirrors rbac::RBAC_PERM_SILENTLY_JOIN_CHANNEL (RBAC.h:98).
+const permissionSilentlyJoinChannel uint32 = 45
+
+// permissionChangeChannelNotModerator mirrors rbac::RBAC_PERM_CHANGE_CHANNEL_NOT_MODERATOR (RBAC.h:99).
+const permissionChangeChannelNotModerator uint32 = 46
+
 const permissionWhoSeeAllSecurityLevels uint32 = 35
 
 // permissionAllowGMFriend mirrors rbac::RBAC_PERM_ALLOW_GM_FRIEND (RBAC.h:93).
