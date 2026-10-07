@@ -905,6 +905,19 @@ func init() {
 	// the npc_son_of_flame add AI is not registered (no entry constant in
 	// the C++ tree, DB-side ScriptName binding).
 	RegisterLuaBoss("boss_ragnaros", 11502)
+	// instance_molten_core.cpp audit (map 409, "MC"): InstanceMapScript only,
+	// no creature/at_ scripts — and there is no Lua InstanceMapScript bridge,
+	// so this unit is documented-only. C++ arms: OnCreatureCreate latches the
+	// Golemagg (11988) and Majordomo Executus (12018) GUIDs; OnGameObjectCreate
+	// latches the Cache of the Firelord GO (179703); DATA_RAGNAROS_ADDS death
+	// counter (feeds the >8-adds early-emerge arm in boss_ragnaros.lua, but
+	// no summon bridge means the 8 sons of flame never spawn); GetGuidData for
+	// the two boss GUIDs; SetBossState spawns Majordomo + 4 healer (11663) +
+	// 4 elite (11664) flamewakers once all 8 prior bosses are DONE (deferred
+	// across map loads via ReadSaveDataMore), respawns the cache 7 days after
+	// Majordomo dies, and re-summons Majordomo at the tele pos with
+	// ACTION_START_RAGNAROS_ALT to trigger the intro if he is already DONE.
+	// None of it is bridgeable without an instance-script model.
 	// RegisterLuaBoss wires lua_scripts/blacktemple/boss_warlord_najentus.lua.
 	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
 	// encounter-state bookkeeping is blocked on the instance-script model; the
