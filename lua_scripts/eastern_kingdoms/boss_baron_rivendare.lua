@@ -43,10 +43,13 @@
 -- 17478, 17479, 17480} / SPELL_UNHOLY_AURA = 17467 (loaded-only,
 -- never cast by the C++ AI — data foundation, not a ported arm).
 -- Ported arms (C++ UpdateAI event arms):
--- - Shadowbolt: 5s init -> 10s re-arm; SelectTarget(Random, 0)
---   -> randomTargetInRange (maiden convention); DoCast(target,
---   17393) non-triggered -> GetVictim + CastSpell equivalent
---   (mr_smite convention).
+-- - Shadowbolt: 5s init -> 10s re-arm; SelectTarget(Random, 0) ->
+--   random alive player on the same map+instance with NO distance
+--   bound (C++ DefaultTargetSelector dist=0 = "ignored" = unlimited
+--   range, UnitAI.h:63; the threat-list-only pick is approximated —
+--   no threat-list bridge); nil pick casts nothing, 10s re-arm
+--   unconditional (C++ events.Repeat(10s) sits outside the target
+--   gate).
 -- - Cleave: 8s init -> Repeat(7s, 17s) {7000, 17000} (maiden
 --   range convention); DoCastVictim(15284) non-triggered.
 -- - Mortal Strike: 12s init -> Repeat(10s, 25s) {10000, 25000};
@@ -56,9 +59,10 @@
 --   DoCastSelf(RaiseDeadSpells, TRIGGERED) -> CastSpell on self
 --   (triggered flag not modeled — mr_smite convention) +
 --   Talk(EMOTE_RAISE_DEAD = 0); else Talk(EMOTE_DEATH_PACT = 1);
---   per-guid RaiseDead latch (kirtonos latch convention), set on
---   the raise half, cleared on the death-pact half, on combat
---   entry, and on OnReset(23).
+--   per-guid RaiseDead latch, set on the raise half, cleared ONLY on
+--   the death-pact half — C++ Reset/JustEngagedWith never touch the
+--   bool (constructor false persists across evades; C++-exact, so
+--   OnReset/OnEnterCombat do not clear it).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - Reset's instance->GetData(TYPE_RAMSTEIN)==DONE ->
 --   instance->SetData(TYPE_BARON, NOT_STARTED) leg,
@@ -107,12 +111,12 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function randomTargetInRange(creature, range)
+local function randomPlayerOnMap(creature)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
     for _, p in ipairs(GetPlayersInWorld()) do
         if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:IsWithinDist(p, range) then
+                and not p:IsDead() then
             candidates[#candidates + 1] = p
         end
     end
@@ -123,7 +127,7 @@ local function randomTargetInRange(creature, range)
 end
 
 local function onShadowbolt(creature, guid)
-    local target = randomTargetInRange(creature, 100)
+    local target = randomPlayerOnMap(creature)
     if target then
         creature:CastSpell(target, SPELL_SHADOWBOLT)
     end
@@ -164,7 +168,6 @@ end
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    raiseDead[guid] = false
     schedule(guid, "shadowbolt", 5000, function() onShadowbolt(creature, guid) end)
     schedule(guid, "cleave", 8000, function() onCleave(creature, guid) end)
     schedule(guid, "mortalstrike", 12000, function() onMortalStrike(creature, guid) end)
@@ -176,9 +179,7 @@ local function onCombatEnd(_, creature)
 end
 
 local function onReset(_, creature)
-    local guid = creature:GetGUID()
-    cancelTimers(guid)
-    raiseDead[guid] = false
+    cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(NPC_BARON, 1, onEnterCombat)

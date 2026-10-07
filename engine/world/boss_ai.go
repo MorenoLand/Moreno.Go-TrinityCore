@@ -3483,6 +3483,31 @@ func init() {
 	// bookkeeping (luaBossAI shim); UNIT_STATE_CASTING gates (barthilas
 	// precedent); GetStratholmeAI factory; melee engine-driven.
 	RegisterLuaBoss("boss_postmaster_malown", 11143)
+	// boss_baron_rivendare.cpp audit (EK loader decl :134 / call :312
+	// follows postmaster_malown): 2 scripts, BossAI(creature, TYPE_BARON=6)
+	// + npc_summoned_skeleton (ScriptedAI). Existing Oct-1
+	// lua_scripts/eastern_kingdoms/boss_baron_rivendare.lua (3c2c512)
+	// audited name-by-name vs C++ and fixed two deviations: shadowbolt's
+	// SelectTarget(Random, 0) now picks a random alive player on the
+	// map+instance with no distance bound (C++ DefaultTargetSelector
+	// dist=0 = ignored = unlimited; threat-list-only pick approximated,
+	// no threat-list bridge) instead of an arbitrary 100yd cap; the
+	// RaiseDead latch now persists across evades exactly like C++ (C++
+	// Reset/JustEngagedWith never touch the bool — only the event
+	// handler toggles it). Arms: OnEnterCombat schedules shadowbolt
+	// 17393 5s->10s / cleave 15284 8s->{7s,17s} / mortal strike 15708
+	// 12s->{10s,25s} (all DoCastVictim -> GetVictim + CastSpell,
+	// nil-victim keeps schedule, moroes/maiden convention) / raise dead
+	// 15s->12s (!latch: DoCastSelf 17473 + 6x triggered DoCastSelf
+	// 17475-17480 + Talk(0); latch: Talk(1)). Timers cleared on
+	// LeaveCombat/Died/Reset. Documented-only (no bridges): Reset's
+	// TYPE_RAMSTEIN-DONE->TYPE_BARON-NOT_STARTED leg, JustEngagedWith's
+	// TYPE_BARON IN_PROGRESS leg, JustDied's TYPE_BARON DONE leg, the
+	// UNIT_STATE_CASTING gates, GetStratholmeAI factory; melee
+	// engine-driven. npc_summoned_skeleton's SpellHit(17471) ->
+	// DoCastSelf(17472, TRIGGERED) leg not registered — no C++-verifiable
+	// NPC entry and no SpellHit bridge (entry-unverifiable queue).
+	RegisterLuaBoss("boss_baron_rivendare", 10440)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
