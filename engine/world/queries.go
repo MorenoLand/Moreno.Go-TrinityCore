@@ -75,6 +75,16 @@ func (s *session) loadCreatureQueryData(ctx context.Context, entry uint32) (crea
 	var name, title, iconName sql.NullString
 	var health, mana float64
 	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT name, COALESCE(Title, ''), COALESCE(IconName, ''), type_flags, type, family, rank, KillCredit1, KillCredit2, modelid1, modelid2, modelid3, modelid4, HealthModifier, ManaModifier, RacialLeader, movementId FROM creature_template WHERE entry = ?", entry).Scan(&name, &title, &iconName, &flags, &creatureType, &family, &rank, &killCredit1, &killCredit2, &model1, &model2, &model3, &model4, &health, &mana, &leader, &movementID)
+	if err != nil && isMissingColumn(err) {
+		// Fallback for DBs missing the extended columns: just get the name.
+		// Without this, ALL creature names show as Unknown if any column is missing.
+		var fallbackName sql.NullString
+		if ferr := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT name FROM creature_template WHERE entry = ?", entry).Scan(&fallbackName); ferr != nil {
+			return data, ferr
+		}
+		name = fallbackName
+		err = nil
+	}
 	if err != nil {
 		return data, err
 	}
