@@ -13,7 +13,8 @@
 -- DoCastVictim / rain of fire 19717 10s then {4s,12s}, non-triggered
 -- on a random alive player in the instance (wushoolay
 -- randomAlivePlayer helper) / shadow bolt 19728 6s then 7s,
--- non-triggered on a random alive player in the instance.
+-- non-triggered on a random alive player in the instance excluding the
+-- current victim (C++ SelectTarget(Random, 1) skips position 0).
 -- Nil-target ticks cast nothing but keep the schedule (jeklik
 -- convention). OnDied(4)/OnLeaveCombat(2)/OnReset(23): cancel timers.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
@@ -94,9 +95,27 @@ local function onRainOfFire(creature, guid)
 end
 
 -- C++ EVENT_SHADOW_BOLT: non-triggered cast 19728 on a random alive
--- player in the instance; re-arm 7s.
+-- player in the instance excluding the current victim (C++
+-- SelectTarget(Random, 1) skips position 0); a sole-victim tick casts
+-- nothing but keeps the schedule. Re-arm 7s regardless.
+local function randomAlivePlayerExcluding(creature, victim)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local victimGUID = victim and victim:GetGUID() or 0
+    local players = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() and p:GetGUID() ~= victimGUID then
+            players[#players + 1] = p
+        end
+    end
+    if #players == 0 then
+        return nil
+    end
+    return players[math.random(#players)]
+end
+
 local function onShadowBolt(creature, guid)
-    local pick = randomAlivePlayer(creature)
+    local pick = randomAlivePlayerExcluding(creature, creature:GetVictim())
     if pick then
         creature:CastSpell(pick, SPELL_SHADOW_BOLT)
     end
