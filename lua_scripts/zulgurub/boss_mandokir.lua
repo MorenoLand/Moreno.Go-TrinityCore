@@ -22,7 +22,7 @@
 -- DoCast(me), C++-exact) / watch 24314 {13s,15s} then {12s,15s} on a
 -- random alive player within 100 yd (Talk(SAY_WATCH=2) at the player,
 -- C++-exact) / charge 24408 {33s,38s} then {22s,30s} on a random
--- alive player within 40 yd (triggered DoCast, C++-exact). Re-arms are
+-- alive player within 40 yd (non-triggered DoCast, C++-exact). Re-arms are
 -- unconditional (nil-victim/nil-target ticks cast nothing but keep the
 -- schedule, jeklik convention). Every third player kill: Talk
 -- (SAY_DING_KILL=1), triggered self-cast 24312 (level up), kill count
@@ -183,13 +183,13 @@ local function onWatchPlayer(creature, guid)
     end)
 end
 
--- C++ EVENT_CHARGE_PLAYER: triggered DoCast(SelectTarget(Random, 0,
--- 40.0f, true), SPELL_CHARGE); re-arm {22s,30s}. Nil-target ticks cast
--- nothing but keep the schedule.
+-- C++ EVENT_CHARGE_PLAYER: non-triggered DoCast(SelectTarget(Random,
+-- 0, 40.0f, true), SPELL_CHARGE); re-arm {22s,30s}. Nil-target ticks
+-- cast nothing but keep the schedule.
 local function onChargePlayer(creature, guid)
     local target = randomPlayerInRange(creature, 40)
     if target then
-        creature:CastSpell(target, SPELL_CHARGE, true)
+        creature:CastSpell(target, SPELL_CHARGE)
     end
     schedule(guid, "charge", math.random(22000, 30000), function()
         onChargePlayer(creature, guid)

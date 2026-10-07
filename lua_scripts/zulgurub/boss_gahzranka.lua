@@ -57,7 +57,7 @@ end
 local function onFrostBreath(creature, guid)
     local victim = creature:GetVictim()
     if victim then
-        creature:CastSpell(victim, SPELL_FROSTBREATH)
+        creature:CastSpell(victim, SPELL_FROSTBREATH, true)
     end
     schedule(guid, "frostbreath", math.random(7000, 11000), function()
         onFrostBreath(creature, guid)
@@ -69,7 +69,7 @@ end
 local function onMassiveGeyser(creature, guid)
     local victim = creature:GetVictim()
     if victim then
-        creature:CastSpell(victim, SPELL_MASSIVEGEYSER)
+        creature:CastSpell(victim, SPELL_MASSIVEGEYSER, true)
     end
     schedule(guid, "geyser", math.random(22000, 32000), function()
         onMassiveGeyser(creature, guid)
@@ -80,7 +80,7 @@ end
 local function onSlam(creature, guid)
     local victim = creature:GetVictim()
     if victim then
-        creature:CastSpell(victim, SPELL_SLAM)
+        creature:CastSpell(victim, SPELL_SLAM, true)
     end
     schedule(guid, "slam", math.random(12000, 20000), function()
         onSlam(creature, guid)

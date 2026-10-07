@@ -20,9 +20,12 @@
 -- EVENT_TRANSFORM twice at 45s, both PHASE_TWO — the second is inert,
 -- so only the first-to-fire is modeled) / poison volley 24099 15s then
 -- {10s,20s} on the victim (triggered DoCastVictim, C++-exact, all
--- phases) / hatch spider egg 24082 30s then {12s,17s} (non-triggered
--- self-cast; only the re-arm cycle is modeled — no summon model, so
--- eggs never hatch into spiders). Transform: Talk(SAY_TRANSFORM=1),
+-- phases; each transform-back adds a fresh concurrent 15s cycle —
+-- C++ ScheduleEvent never dedups) / hatch spider egg 24082 30s then
+-- {12s,17s} (non-triggered self-cast; only the re-arm cycle is modeled
+-- — no summon model, so eggs never hatch into spiders; the cycle is
+-- canceled at transform and re-armed at transform-back, C++-exact).
+-- Transform: Talk(SAY_TRANSFORM=1),
 -- non-triggered self-cast 24084 (spider form), non-triggered
 -- DoCastVictim(24110) envolwing web, threat wipe (no threat model —
 -- skipped), phase -> 3; the phase-2 timers are canceled (C++ phase
@@ -134,21 +137,37 @@ local function alivePlayersInInstance(creature)
 end
 
 -- C++ EVENT_POISON_VOLLEY: triggered DoCastVictim(24099); re-arm
--- {10s,20s}. Phase-all: fires in every phase, C++-exact.
-local function onPoisonVolley(creature, guid)
+-- {10s,20s}. Phase-all: fires in every phase, C++-exact. C++
+-- ScheduleEvent never dedups — every TRANSFORM_BACK schedules a fresh
+-- 15s cycle alongside the surviving pre-transform cycle, so the volley
+-- accumulates one concurrent cycle per transform-back (malown
+-- duplicate-schedule precedent). Each cycle carries its own timer key.
+local function onPoisonVolley(creature, guid, key)
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_POISON_VOLLEY, true)
     end
-    schedule(guid, "poisonvolley", math.random(10000, 20000), function()
-        onPoisonVolley(creature, guid)
+    schedule(guid, key, math.random(10000, 20000), function()
+        onPoisonVolley(creature, guid, key)
+    end)
+end
+
+-- Arms one independent 15s -> {10s,20s} poison cycle. Called at combat
+-- start and at every transform-back, C++-exact.
+local function armPoisonCycle(creature, guid)
+    local st = marliState(guid)
+    st.poisonCycles = (st.poisonCycles or 0) + 1
+    local key = "poisonvolley" .. st.poisonCycles
+    schedule(guid, key, 15000, function()
+        onPoisonVolley(creature, guid, key)
     end)
 end
 
 -- C++ EVENT_HATCH_SPIDER_EGG: non-triggered self-cast 24082; re-arm
--- {12s,17s}. Phase-all. No summon model, so the cast itself has no
--- bearer — only the re-arm cycle is modeled (jeklik six-bat
--- convention).
+-- {12s,17s}. Phase-all EXCEPT the transform CancelEvent kills the
+-- cycle (re-armed fresh {12s,17s} at transform-back, C++-exact). No
+-- summon model, so the cast itself has no bearer — only the re-arm
+-- cycle is modeled (jeklik six-bat convention).
 local function onHatchEgg(creature, guid)
     schedule(guid, "hatchegg", math.random(12000, 17000), function()
         onHatchEgg(creature, guid)
@@ -248,6 +267,7 @@ onTransform = function(creature, guid)
         creature:CastSpell(victim, SPELL_ENVOLWINGWEB)
     end
     cancelTimer(guid, "aspect")
+    cancelTimer(guid, "hatchegg") -- C++ CancelEvent(EVENT_HATCH_SPIDER_EGG)
     cancelTimer(guid, "transformB")
     st.phase = PHASE_THREE
     schedule(guid, "charge", 1500, function()
@@ -273,9 +293,7 @@ onTransformBack = function(creature, guid)
         onAspectOfMarli(creature, guid)
     end)
     armTransformTimers(creature, guid, 45000, math.random(35000, 60000))
-    schedule(guid, "poisonvolley", 15000, function()
-        onPoisonVolley(creature, guid)
-    end)
+    armPoisonCycle(creature, guid)
     schedule(guid, "hatchegg", math.random(12000, 17000), function()
         onHatchEgg(creature, guid)
     end)
@@ -292,9 +310,7 @@ local function onSpawnStartSpiders(creature, guid)
         onAspectOfMarli(creature, guid)
     end)
     armTransformTimers(creature, guid, 45000)
-    schedule(guid, "poisonvolley", 15000, function()
-        onPoisonVolley(creature, guid)
-    end)
+    armPoisonCycle(creature, guid)
     schedule(guid, "hatchegg", 30000, function()
         onHatchEgg(creature, guid)
     end)
