@@ -337,9 +337,8 @@ func (s *session) handleContactList(ctx context.Context, payload []byte) bool {
 	}
 	r := protocol.NewReader(payload)
 	flags, _ := r.ReadU32()
-	if flags == 0 {
-		flags = 0x7 // all
-	}
+	// TrinityCore: HandleContactListOpcode passes flags through verbatim to
+	// PlayerSocial::SendSocialList (SocialMgr.cpp:124) — no zero default.
 	return s.sendContactList(ctx, flags) == nil
 }
 
@@ -360,9 +359,11 @@ func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 	// TrinityCore: HandleAddFriendOpcode normalizes the name before the lookup.
 	friendName = normalizePlayerName(friendName)
 
-	// Can't friend yourself
+	// Can't friend yourself. TrinityCore answers FRIEND_SELF with the
+	// requester's own GUID (SocialHandler.cpp:66-67 -> SendFriendStatus
+	// carries friendCharacterInfo->Guid, which is the player's own GUID).
 	if toLower(friendName) == toLower(s.player.Name) {
-		_ = s.sendFriendStatus(friendsResultSelf, 0, "")
+		_ = s.sendFriendStatus(friendsResultSelf, s.playerGUID, "")
 		return true
 	}
 
@@ -383,7 +384,7 @@ func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	if friendGUID == s.playerGUID {
-		_ = s.sendFriendStatus(friendsResultSelf, 0, "")
+		_ = s.sendFriendStatus(friendsResultSelf, s.playerGUID, "")
 		return true
 	}
 
