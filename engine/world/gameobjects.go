@@ -511,16 +511,7 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 
 	switch goState.Type {
 	case GameObjectTypeDoor:
-		// Toggle door open/closed
-		newState := GameObjectStateActive
-		if goState.State == GameObjectStateActive {
-			newState = GameObjectStateReady
-		}
-		s.server.setGameObjectStateInInstance(goState.Map, goState.InstanceID, guid, newState)
-		s.server.broadcastGameObjectCustomAnimInInstance(goState.Map, goState.InstanceID, guid, 0)
-		if newState == GameObjectStateActive {
-			s.server.scheduleGameObjectResetInInstance(goState.Map, goState.InstanceID, guid, 10*time.Second)
-		}
+		s.server.useDoorOrButton(goState.Map, goState.InstanceID, guid)
 
 	case GameObjectTypeButton:
 		// Press button

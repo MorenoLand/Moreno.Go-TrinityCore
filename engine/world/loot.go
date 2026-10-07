@@ -756,9 +756,6 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 	}
 	loot := &activeLootState{TargetGUID: targetGUID, MapID: goState.Map, InstanceID: goState.InstanceID, LootType: 3, Items: make(map[uint8]lootItem)}
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
-		if !requireOwner {
-			goState.FishingUses++
-		}
 		return s.sendLootResponse(ctx, loot) == nil
 	}
 	var zoneSkill int64
@@ -858,16 +855,13 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 	if err := s.sendLootResponse(ctx, loot); err != nil {
 		return false
 	}
+	// The fishing-hole use-count and loot-state transitions moved to the
+	// release arm (releaseGameObjectLoot): C++ counts the use on DoLootRelease
+	// (LootHandler.cpp:290), not on open, and only for fully-looted holes.
+	// The bobber despawn stays at open — it matches the release-time
+	// GO_JUST_DEACTIVATED terminal state a release away from the window.
 	if requireOwner {
 		s.server.despawnDynamicGameObjectInInstance(goState.Map, goState.InstanceID, targetGUID)
-	} else {
-		goState.FishingUses++
-		if goState.FishingMaxOpens > 0 && goState.FishingUses >= goState.FishingMaxOpens {
-			s.server.setGameObjectStateInInstance(goState.Map, goState.InstanceID, targetGUID, GameObjectStateActive)
-			s.server.broadcastGameObjectDespawnInInstance(goState.Map, goState.InstanceID, targetGUID)
-		} else {
-			s.server.setGameObjectStateInInstance(goState.Map, goState.InstanceID, targetGUID, GameObjectStateReady)
-		}
 	}
 	return true
 }
@@ -1409,6 +1403,22 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 	// shareMoney starts true and the Unit/Vehicle arm below clears it for
 	// pickpocket money (LootHandler.cpp:150-158).
 	shareMoney := true
+	if uint16(s.activeLoot.TargetGUID>>48) == 0xF110 {
+		// HandleLootMoneyOpcode (LootHandler.cpp:116-126) GameObject arm:
+		// the money is only reachable when the GO is still there for the
+		// player — owned GOs (fishing bobbers) skip the distance check, all
+		// other types must be within GameObject::IsWithinDistInMap
+		// (interact distance, approximated with the 8.0 convention of
+		// lootReleaseCleanupAllowed). A blocked take is silent: C++ leaves
+		// loot null and skips the money block without an error. Static GOs
+		// have no server-side dynamic state, so a nil state allows the take.
+		// shareMoney stays true for GOs — only corpse/item/pickpocket clear
+		// it (LootHandler.cpp:157 comment).
+		if goState := s.server.gameObjectState(s.activeLoot.MapID, s.activeLoot.InstanceID, s.activeLoot.TargetGUID); goState != nil && goState.OwnerGUID != s.playerGUID &&
+			(s.player == nil || distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > 8.0) {
+			return true
+		}
+	}
 	if high := uint16(s.activeLoot.TargetGUID >> 48); high != 0xF110 {
 		target, ok := s.getCombatTarget(ctx, s.activeLoot.TargetGUID)
 		guid := uint32(s.activeLoot.TargetGUID & 0x00FFFFFF)
@@ -1685,7 +1695,15 @@ func (s *session) handleLootRelease(payload []byte) bool {
 	// loot.clear). A release after a map change therefore still completes;
 	// it never answers LOOT_ERROR_TOO_FAR.
 	releasedRoundRobin := loot.RoundRobinPlayer == s.playerGUID
-	s.releaseActiveLoot()
+	cleanupAllowed := s.lootReleaseCleanupAllowed(loot)
+	if uint16(targetGUID>>48) == 0xF110 {
+		// DoLootRelease's GameObject arm (LootHandler.cpp:270-313) gates
+		// its cleanup legs (door use, fishing-hole use-count, loot-state
+		// transitions, loot.clear) on GO reachability; the unconditional
+		// legs above still run on a blocked release.
+		cleanupAllowed = s.releaseGameObjectLoot(loot, targetGUID)
+	}
+	s.releaseActiveLootCleanup(cleanupAllowed)
 	if releasedRoundRobin && s.server != nil && s.groupID != 0 && uint16(loot.TargetGUID>>48) != 0xF110 {
 		s.server.groupsMu.Lock()
 		grp := s.server.groups[s.groupID]
@@ -1699,6 +1717,57 @@ func (s *session) handleLootRelease(payload []byte) bool {
 	release.WriteU8(1)
 	_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_RELEASE_RESPONSE), release.Bytes(), true)
 	s.debug("loot released", "account", s.accountName, "target", targetGUID)
+	return true
+}
+
+// releaseGameObjectLoot mirrors the GameObject arm of WorldSession::DoLootRelease
+// (LootHandler.cpp:270-313) and returns whether the fully-looted cleanup legs
+// may run. The distance gate skips owned GOs (fishing bobbers) and fishing
+// holes (LootHandler.cpp:274); every other type must be within
+// GameObject::IsWithinDistInMap — IsAtInteractDistance with
+// GetInteractionDistance (5.0 + object radius for chests/doors), approximated
+// with the 8.0 convention of lootReleaseCleanupAllowed. Static GOs have no
+// server-side dynamic state (their world presence is per-client), so a nil
+// state allows the cleanup — the C++ !go gate has no Go registry to check.
+// Door GOs are re-used instead of marked looted (UseDoorOrButton,
+// LootHandler.cpp:281-285); fishing holes count one more use per fully-looted
+// release and deactivate at max opens (despawned next tick) or return to ready
+// (LootHandler.cpp:289-296); the bobber always despawns on release
+// (LootHandler.cpp:287, type == FISHINGNODE enters the despawn branch even
+// with loot remaining). Chest GO_JUST_DEACTIVATED respawn timing has no Go
+// model — the loot row is still deleted by clearCreatureLoot.
+func (s *session) releaseGameObjectLoot(loot *activeLootState, targetGUID uint64) bool {
+	if s == nil || s.server == nil {
+		return true
+	}
+	goState := s.server.gameObjectState(loot.MapID, loot.InstanceID, targetGUID)
+	if goState == nil {
+		return true
+	}
+	if goState.OwnerGUID != s.playerGUID && goState.Type != GameObjectTypeFishingHole &&
+		(s.player == nil || distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > 8.0) {
+		return false
+	}
+	if goState.Type == GameObjectTypeDoor {
+		s.server.useDoorOrButton(goState.Map, goState.InstanceID, goState.GUID)
+	}
+	if loot.Money != 0 || len(loot.Items) != 0 {
+		return true
+	}
+	switch goState.Type {
+	case GameObjectTypeFishingHole:
+		s.server.objectsMu.Lock()
+		goState.FishingUses++
+		uses, maxOpens := goState.FishingUses, goState.FishingMaxOpens
+		s.server.objectsMu.Unlock()
+		if maxOpens > 0 && uses >= maxOpens {
+			s.server.despawnDynamicGameObjectInInstance(goState.Map, goState.InstanceID, goState.GUID)
+		} else {
+			s.server.setGameObjectStateInInstance(goState.Map, goState.InstanceID, goState.GUID, GameObjectStateReady)
+		}
+	case GameObjectTypeFishingNode:
+		s.server.despawnDynamicGameObjectInInstance(goState.Map, goState.InstanceID, goState.GUID)
+	}
 	return true
 }
 

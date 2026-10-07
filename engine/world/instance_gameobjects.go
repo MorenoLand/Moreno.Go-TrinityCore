@@ -94,6 +94,31 @@ func (s *Server) setGameObjectStateInInstance(mapID, instanceID uint32, guid uin
 	}
 }
 
+// useDoorOrButton mirrors GameObject::UseDoorOrButton for doors
+// (GameObject.cpp): the door flips between active and ready with the
+// custom-anim broadcast, and an opened door schedules its auto-close from
+// the template timing. Shared by handleGameObjectUse and the DoLootRelease
+// door arm (LootHandler.cpp:281-285) — locked doors opened with openlock are
+// re-used on release instead of being marked looted.
+func (s *Server) useDoorOrButton(mapID, instanceID uint32, guid uint64) {
+	if s == nil {
+		return
+	}
+	current := GameObjectStateReady
+	if st := s.gameObjectState(mapID, instanceID, guid); st != nil {
+		current = st.State
+	}
+	newState := GameObjectStateActive
+	if current == GameObjectStateActive {
+		newState = GameObjectStateReady
+	}
+	s.setGameObjectStateInInstance(mapID, instanceID, guid, newState)
+	s.broadcastGameObjectCustomAnimInInstance(mapID, instanceID, guid, 0)
+	if newState == GameObjectStateActive {
+		s.scheduleGameObjectResetInInstance(mapID, instanceID, guid, 10*time.Second)
+	}
+}
+
 func (s *Server) scheduleGameObjectResetInInstance(mapID, instanceID uint32, guid uint64, delay time.Duration) {
 	if s == nil {
 		return
