@@ -24,7 +24,10 @@
 -- AddThreat(target, 100000) arm is skipped (the beam buff itself is
 -- applied). No UNIT_STATE_CASTING model, so the phase switch fires
 -- unconditionally instead of waiting for IsNonMeleeSpellCast(false)
--- (same convention as the other Karazhan Lua ports).
+-- (same convention as the other Karazhan Lua ports). After the first
+-- banish phase, Netherbreath re-arms on a random 5-7s instead of the
+-- C++ leftover timer value (unmodelable without persisting the
+-- decremented member across phases in C++-exact form).
 
 local ENTRY_NETHERSPITE = 15689
 
@@ -57,6 +60,22 @@ local timers = {}
 local netherState = {}
 
 local onPhaseSwitch, onNetherbreath
+
+local function cancelPhaseTimers(guid)
+    -- C++ SwitchToPortalPhase/SwitchToBanishPhase do NOT reset VoidZoneTimer
+    -- or NetherInfusionTimer — those tick continuously across both phases.
+    -- Cancel only the phase-specific keys, never "voidzone"/"berserk".
+    local per = timers[guid]
+    if per then
+        for _, key in ipairs({ "portalTick", "empowerment", "netherbreath", "phase" }) do
+            local id = per[key]
+            if id then
+                RemoveEventById(id)
+                per[key] = nil
+            end
+        end
+    end
+end
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -203,7 +222,7 @@ local function switchToPortal(creature, guid)
     creature:RemoveAura(SPELL_BANISH_VISUAL)
     summonPortals(guid)
     state.portalPhase = true
-    cancelTimers(guid)
+    cancelPhaseTimers(guid)
     schedule(guid, "portalTick", 10000, function() updatePortals(creature, guid) end)
     schedule(guid, "empowerment", 10000, function() onEmpowerment(creature, guid) end)
     schedule(guid, "phase", PHASE_PORTAL_MS, function() onPhaseSwitch(creature, guid) end)
@@ -224,7 +243,7 @@ local function switchToBanish(creature, guid)
     for j = 1, 3 do
         creature:RemoveAura(NETHER_BUFF[j])
     end
-    cancelTimers(guid)
+    cancelPhaseTimers(guid)
     local firstBreath = 3000
     if state.breathPrimed then
         firstBreath = { 5000, 7000 }
