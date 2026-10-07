@@ -59,7 +59,7 @@ end
 local function onManaBurn(creature, guid)
     local victim = creature:GetVictim()
     if victim then
-        creature:CastSpell(victim, SPELL_MANABURN)
+        creature:CastSpell(victim, SPELL_MANABURN, true)
     end
     schedule(guid, "manaburn", math.random(8000, 16000), function()
         onManaBurn(creature, guid)
@@ -70,7 +70,7 @@ end
 local function onSleep(creature, guid)
     local victim = creature:GetVictim()
     if victim then
-        creature:CastSpell(victim, SPELL_SLEEP)
+        creature:CastSpell(victim, SPELL_SLEEP, true)
     end
     schedule(guid, "sleep", math.random(12000, 20000), function()
         onSleep(creature, guid)

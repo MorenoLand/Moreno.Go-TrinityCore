@@ -67,7 +67,7 @@ end
 local function onGroundTremor(creature, guid)
     local victim = creature:GetVictim()
     if victim then
-        creature:CastSpell(victim, SPELL_GROUND_TREMOR)
+        creature:CastSpell(victim, SPELL_GROUND_TREMOR, true)
     end
     schedule(guid, "tremor", math.random(12000, 16000), function()
         onGroundTremor(creature, guid)
