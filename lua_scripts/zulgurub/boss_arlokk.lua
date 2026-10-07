@@ -169,9 +169,26 @@ local function onMarkOfArlokk(creature, guid)
     end)
 end
 
--- Timer keys canceled when leaving the troll form (the transform
--- interrupts troll-phase timers C++-exact).
-local TROLL_TIMER_KEYS = { "swp", "gouge", "transform" }
+-- C++ EventMap phase semantics (src/common/Utilities/EventMap.cpp
+-- ExecuteEvent): while no phase is set (_phase == 0 — the whole troll
+-- stretch up to EVENT_VISIBLE), every due event fires regardless of
+-- the phase it was scheduled with. So the transform does NOT interrupt
+-- the troll timers: shadow word pain keeps firing through the vanish
+-- chain. SetPhase(PHASE_TWO) at EVENT_VISIBLE lazily discards the
+-- pending phase-one events; SetPhase(PHASE_ONE) at transform back
+-- discards the pending phase-two events. The cancelKeys calls below
+-- model exactly those two discards.
+local function cancelKeys(store, guid, keys)
+    local per = store[guid]
+    if per then
+        for _, key in ipairs(keys) do
+            if per[key] then
+                RemoveEventById(per[key])
+                per[key] = nil
+            end
+        end
+    end
+end
 
 -- Forward declarations: onVanish2 schedules onRavage/onTransformBack,
 -- which are defined below (halazzi/zuljin convention).
@@ -194,6 +211,9 @@ local function onVanish2(creature, guid)
         if st2.panther then
             return
         end
+        -- C++ EVENT_VISIBLE: SetPhase(PHASE_TWO) discards the pending
+        -- phase-one timers (shadow word pain / gouge / transform).
+        cancelKeys(timers, guid, { "swp", "gouge", "transform" })
         st2.panther = true
         creature:RemoveAura(SPELL_SUPER_INVIS)
         creature:RemoveAura(SPELL_VANISH)
@@ -222,15 +242,8 @@ local function onTransform(creature, guid)
     if arlokkState(guid).panther then
         return
     end
-    local per = timers[guid]
-    if per then
-        for _, key in ipairs(TROLL_TIMER_KEYS) do
-            if per[key] then
-                RemoveEventById(per[key])
-                per[key] = nil
-            end
-        end
-    end
+    -- C++ does not cancel the troll timers here: with _phase still 0
+    -- they keep firing through the vanish chain (see cancelKeys note).
     creature:CastSpell(creature, SPELL_PANTHER_TRANSFORM)
     creature:CastSpell(creature, SPELL_VANISH_VISUAL)
     creature:CastSpell(creature, SPELL_VANISH)
@@ -263,15 +276,10 @@ onTransformBack = function(creature, guid)
         return
     end
     st.panther = false
-    local per = timers[guid]
-    if per then
-        for _, key in ipairs({ "ravage", "transformback" }) do
-            if per[key] then
-                RemoveEventById(per[key])
-                per[key] = nil
-            end
-        end
-    end
+    -- C++ transform back: SetPhase(PHASE_ONE) discards the pending
+    -- phase-two timers (ravage / transform back); the troll timers are
+    -- re-armed fresh below.
+    cancelKeys(timers, guid, { "ravage", "transformback" })
     creature:RemoveAura(SPELL_PANTHER_TRANSFORM)
     creature:CastSpell(creature, SPELL_VANISH_VISUAL)
     schedule(timers, guid, "swp", math.random(4000, 7000), function()
