@@ -3247,6 +3247,22 @@ func init() {
 	// BossAI::JustEngagedWith bookkeeping (Vectus is not one of the
 	// 8 tracked encounters — no DATA_ constant in scholomance.h).
 	RegisterLuaBoss("boss_vectus", 10432)
+	// boss_kirtonos_the_herald.cpp (EK loader AddSC_boss_kirtonos_the_herald
+	// decl :121 / call :299, Scholomance block; script names
+	// "boss_kirtonos_the_herald" + "go_brazier_of_the_herald"): boss AI
+	// ported in lua_scripts/eastern_kingdoms/boss_kirtonos_the_herald.lua
+	// (entry NPC_KIRTONOS = 10506 from the file's own
+	// Brazier_Of_The_Herald enum — C++-named, DB-side ScriptName binding;
+	// DATA_KIRTONOS via luaBossAI shim). Oct-1 port 8a04cc9 added the lua
+	// file but never registered it — this line completes the unit. Arms:
+	// swoop 18144 8s->15s / wing flap 12882 15s->13s (self-cast) / pierce
+	// armor 6016 18s->12s / disarm 8379 22s->11s / shadow bolt 17228
+	// 42s->42s / curse of tongues 12889 53s->35s / dominate mind 14515
+	// {34s,48s}->{44s,48s} (all triggered DoCastVictim) / transform 16467
+	// 20s->{16s,18s} (per-guid latch toggle, no HasAura bridge).
+	// Documented-only: intro choreography, gate/brazier GO arms,
+	// go_brazier_of_the_herald (no bridges).
+	RegisterLuaBoss("boss_kirtonos_the_herald", 10506)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
