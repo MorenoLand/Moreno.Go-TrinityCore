@@ -21,6 +21,14 @@ import (
 )
 
 func (s *session) sendSysMessage(msg string) {
+	if s != nil && s.addonCmdActive {
+		// Reference: AddonChannelCommandHandler::SendSysMessage
+		// (Chat.cpp:938-957) — while a "TrinityCore\t" remote-console
+		// command runs, output goes back as framed addon whispers to self,
+		// not as system chat messages.
+		s.sendAddonChannelSysMessage(msg)
+		return
+	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), protocol.BuildSystemChatMessage(msg), true)
 }
 
@@ -986,6 +994,14 @@ func (s *session) handleCheatExplore(ctx context.Context, args []string) {
 }
 
 func (s *session) sendNotification(msg string) {
+	if s != nil && s.addonCmdActive {
+		// Approximate ChatHandler::HasSentErrorMessage() for the addon
+		// console: Go's command layer has no error/info sysmessage split,
+		// so an error notification during execution marks the command
+		// failed ('f'); plain output sysmessages do not. The notification
+		// itself is still delivered normally.
+		s.addonCmdFailed = true
+	}
 	buf := protocol.NewBuffer(len(msg) + 1)
 	buf.WriteCString(msg)
 	_ = s.write(uint16(protocol.OpcodeSMSG_NOTIFICATION), buf.Bytes(), true)

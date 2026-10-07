@@ -97,6 +97,11 @@ const permissionCommandNotify uint32 = 470
 // permissionCommandWhispers mirrors rbac::RBAC_PERM_COMMAND_WHISPERS (RBAC.h:339).
 const permissionCommandWhispers uint32 = 471
 
+// permissionCommandsNotifyCommandNotFoundError mirrors
+// rbac::RBAC_PERM_COMMANDS_NOTIFY_COMMAND_NOT_FOUND_ERROR (RBAC.h:86): unknown
+// chat/addon commands are reported only to sessions holding this permission.
+const permissionCommandsNotifyCommandNotFoundError uint32 = 33
+
 // permissionCommandsAppearInGMList mirrors rbac::RBAC_PERM_COMMANDS_APPEAR_IN_GM_LIST (RBAC.h:87).
 const permissionCommandsAppearInGMList uint32 = 34
 

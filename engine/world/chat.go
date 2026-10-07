@@ -155,7 +155,11 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "GM silence aura", "spell", 1852)
 		return true
 	}
-	if s.warden != nil && s.warden.processLuaCheckResponse(message) {
+	// Reference: WorldSession::HandleMessagechatOpcode (ChatHandler.cpp:228-232) —
+	// the warden Lua-check response arm runs only for guild-targeted addon
+	// messages; a "_TW\t" response on any other channel is not a check
+	// response.
+	if typeID == chatGuild && language == languageAddon && s.warden != nil && s.warden.processLuaCheckResponse(message) {
 		s.debug("chat rejected", "account", s.accountName, "reason", "warden check response")
 		return true
 	}
@@ -182,6 +186,13 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	}
 	if language == languageAddon && (s.server == nil || !s.server.Config.AddonChannel) {
 		s.debug("chat rejected", "account", s.accountName, "reason", "addon channel disabled")
+		return true
+	}
+	// Reference: WorldSession::HandleMessagechatOpcode (ChatHandler.cpp:239-248) —
+	// LANG_ADDON messages framed as "TrinityCore\t" are the remote admin console
+	// (AddonChannelCommandHandler::ParseCommands); they run before the whisper
+	// target lookup and consume the message.
+	if language == languageAddon && s.parseAddonChannelCommand(ctx, message) {
 		return true
 	}
 	languageSkillID, languageKnown := languageSkill(language)
@@ -439,6 +450,121 @@ func (s *session) fireAddonMessageHook(ctx context.Context, typeID uint32, messa
 		return true
 	}
 	return false
+}
+
+// parseAddonChannelCommand mirrors AddonChannelCommandHandler::ParseCommands
+// (Chat.cpp:860-899): LANG_ADDON messages framed as "TrinityCore\t<op><echo4>"
+// are the TrinityCore remote admin console protocol. 'p' is a ping, answered
+// with an 'a' ack whisper; 'h'/'i' execute a chat command with 'o'/'f' result
+// framing and sysmessage output routed through the framed whisper protocol
+// (the SendSysMessage override, Chat.cpp:938-957). Like C++ this runs BEFORE
+// the whisper target lookup, so it fires even when the whisper target name is
+// invalid. IsHumanReadable ('h' vs 'i') has no Go analog — no command output
+// varies on it — so it is parsed and ignored. Returns true when the message
+// was consumed as an addon console frame.
+func (s *session) parseAddonChannelCommand(ctx context.Context, msg string) bool {
+	if len(msg) < 17 || !strings.HasPrefix(msg, "TrinityCore\t") {
+		return false
+	}
+	opcode := msg[12]
+	copy(s.addonCmdEcho[:], msg[13:17])
+	s.addonCmdHadAck = false
+	s.addonCmdFailed = false
+	s.addonCmdActive = true
+	defer func() { s.addonCmdActive = false }()
+	switch opcode {
+	case 'p': // p Ping
+		s.sendAddonChannelAck()
+		return true
+	case 'h', 'i': // h Issue human-readable command / i Issue command
+		if len(msg) <= 17 || msg[17] == 0 {
+			return false
+		}
+		// C++ feeds the raw remainder to _ParseCommands, which requires the
+		// '.'/'!' prefix (TryExecuteCommand); Go's executeCommand takes the
+		// bare command, so strip one leading prefix like the chat path does.
+		cmd := strings.TrimPrefix(strings.TrimPrefix(msg[17:], "."), "!")
+		if s.executeCommand(ctx, cmd) {
+			if !s.addonCmdHadAck {
+				s.sendAddonChannelAck()
+			}
+			if s.addonCmdFailed {
+				s.sendAddonChannelFailed()
+			} else {
+				s.sendAddonChannelOK()
+			}
+		} else if s.addonCommandNotFoundNotified(ctx) {
+			// Reference: ChatHandler::_ParseCommands (Chat.cpp:153-166) —
+			// unknown commands are reported only to sessions holding
+			// RBAC_PERM_COMMANDS_NOTIFY_COMMAND_NOT_FOUND_ERROR; everyone
+			// else pretends commands don't exist. C++ routes the
+			// LANG_CMD_INVALID notice through the framed SendSysMessage and
+			// then answers 'f'.
+			s.sendAddonChannelSysMessage("Invalid command: " + cmd)
+			s.sendAddonChannelFailed()
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+// addonCommandNotFoundNotified mirrors the HasPermission gate in
+// ChatHandler::_ParseCommands (Chat.cpp:159), with a security-level fallback
+// when the auth store is unavailable (players never see the notice).
+func (s *session) addonCommandNotFoundNotified(ctx context.Context) bool {
+	if s == nil {
+		return false
+	}
+	if s.server == nil || s.server.AuthStore == nil || s.server.AuthStore.DB == nil {
+		return s.security > 0
+	}
+	has, err := accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionCommandsNotifyCommandNotFoundError)
+	if err != nil {
+		return s.security > 0
+	}
+	return has
+}
+
+// sendAddonChannelReply mirrors AddonChannelCommandHandler::Send
+// (Chat.cpp:902-907): a CHAT_MSG_WHISPER/LANG_ADDON packet from the player to
+// themselves.
+func (s *session) sendAddonChannelReply(body string) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	s.server.broadcastChat(s, s, chatWhisper, languageAddon, body, "")
+}
+
+// sendAddonChannelAck mirrors AddonChannelCommandHandler::SendAck
+// (Chat.cpp:909-917): "TrinityCore\ta" + the 4 echo bytes.
+func (s *session) sendAddonChannelAck() {
+	s.sendAddonChannelReply("TrinityCore\ta" + string(s.addonCmdEcho[:]))
+	s.addonCmdHadAck = true
+}
+
+// sendAddonChannelOK mirrors AddonChannelCommandHandler::SendOK (Chat.cpp:919-926).
+func (s *session) sendAddonChannelOK() {
+	s.sendAddonChannelReply("TrinityCore\to" + string(s.addonCmdEcho[:]))
+}
+
+// sendAddonChannelFailed mirrors AddonChannelCommandHandler::SendFailed
+// (Chat.cpp:928-936).
+func (s *session) sendAddonChannelFailed() {
+	s.sendAddonChannelReply("TrinityCore\tf" + string(s.addonCmdEcho[:]))
+}
+
+// sendAddonChannelSysMessage mirrors AddonChannelCommandHandler::SendSysMessage
+// (Chat.cpp:938-957): ack first if none was sent, escape '|' as '||', split on
+// newlines, and send each line as "TrinityCore\tm" + echo + line.
+func (s *session) sendAddonChannelSysMessage(msg string) {
+	if !s.addonCmdHadAck {
+		s.sendAddonChannelAck()
+	}
+	body := strings.ReplaceAll(msg, "|", "||")
+	for _, line := range strings.Split(body, "\n") {
+		s.sendAddonChannelReply("TrinityCore\tm" + string(s.addonCmdEcho[:]) + line)
+	}
 }
 
 // toggleChatAFK mirrors the CHAT_MSG_AFK arm of WorldSession::HandleMessagechatOpcode

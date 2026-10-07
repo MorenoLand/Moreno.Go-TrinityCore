@@ -206,6 +206,16 @@ type session struct {
 	muteTime                     int64
 	speakTime                    int64
 	speakCount                   uint32
+	// addonCmdEcho mirrors AddonChannelCommandHandler::echo (Chat.h:175): the
+	// 4-byte request correlator from a "TrinityCore\t" addon command frame
+	// (Chat.cpp:860-899). addonCmdHadAck tracks the 'a' response; addonCmdFailed
+	// approximates HasSentErrorMessage() via error notifications sent while the
+	// remote-console command runs; addonCmdActive routes sendSysMessage output
+	// through the framed whisper protocol for the command's duration.
+	addonCmdEcho   [4]byte
+	addonCmdHadAck bool
+	addonCmdFailed bool
+	addonCmdActive bool
 	// calendarEventCooldown mirrors WorldSession's calendar event creation
 	// cooldown (CalendarHandler.cpp:262-265): unix time before which a new
 	// calendar event or copy may not be created

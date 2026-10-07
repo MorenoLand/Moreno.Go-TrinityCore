@@ -73,6 +73,31 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 	}
 	key := s.scopedChannelKey(name)
 	flags := channelFlags(channelID, name)
+	// Reference: WorldSession::HandleJoinChannel (ChannelHandler.cpp:38-49) —
+	// unknown built-in channel IDs are silently dropped, and
+	// Player::CanJoinConstantChannelInZone (Player.cpp:5159-5171) rejects
+	// zone-dependent channels (General/Trade/LocalDefense/GuildRecruitment)
+	// inside arena instances, plus the guild-recruitment channel for players
+	// already in a guild. Channel IDs are ChatChannels.dbc rows:
+	// 1 General, 2 Trade, 3 LocalDefense, 22 WorldDefense, 23
+	// GuildRecruitment, 24 LookingForGroup.
+	if channelID != 0 {
+		switch channelID {
+		case 1, 2, 3, 22, 23, 24:
+		default:
+			s.debug("channel join rejected: unknown channel id", "account", s.accountName, "id", channelID)
+			return true
+		}
+		if _, _, inArena, _ := battlegroundTypeForMap(s.player.Map); inArena &&
+			(channelID == 1 || channelID == 2 || channelID == 3 || channelID == 23) {
+			s.debug("channel join rejected: zone-dependent channel in arena", "account", s.accountName, "id", channelID)
+			return true
+		}
+		if channelID == 23 && s.player.GuildID != 0 {
+			s.debug("channel join rejected: guild-recruitment requires guildless", "account", s.accountName)
+			return true
+		}
+	}
 	if flags&channelFlagCity != 0 && !s.isCityZone(s.player.Zone) {
 		s.debug("city channel join rejected: outside city zone", "account", s.accountName, "zone", s.player.Zone, "channel", name)
 		return true
