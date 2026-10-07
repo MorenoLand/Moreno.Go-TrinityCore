@@ -23,6 +23,7 @@ const (
 	movementWaterWalking     uint32 = 0x10000000
 	movementFallingSlow      uint32 = 0x20000000
 	movementHover            uint32 = 0x40000000
+	movementSplineEnabled    uint32 = 0x08000000 // MOVEMENTFLAG_SPLINE_ENABLED (UnitDefines.h:245), used for flight paths
 	movementPlayerStatusMask        = movementDisableGravity | movementRoot | movementCanFly | movementWaterWalking | movementFallingSlow | movementHover
 	movementForward          uint32 = 0x00000001
 	movementBackward         uint32 = 0x00000002
@@ -195,6 +196,10 @@ func (s *session) handleMoveSetCanFlyAck(payload []byte) bool {
 		s.debug("set can fly ack rejected", "account", s.accountName, "reason", "malformed movement", "error", err)
 		return false
 	}
+	// The copied flags come from the sanitizing ReadMovementInfo in C++, so
+	// the ack runs the same anti-cheat pass before the copy.
+	info.Flags &^= movementRoot
+	info.Flags = s.sanitizeMovementFlags(info.Flags)
 	s.movementMu.Lock()
 	s.lastMovementInfo.Flags = info.Flags
 	s.movementMu.Unlock()
@@ -245,6 +250,12 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		// absolute continent coordinates) is a tampered packet.
 		if math.Abs(float64(info.Transport.X)) > 75 || math.Abs(float64(info.Transport.Y)) > 75 || math.Abs(float64(info.Transport.Z)) > 75 {
 			s.debug("movement rejected", "account", s.accountName, "reason", "transport offset out of bounds", "opcode", opcode)
+			return true
+		}
+		// MovementHandler.cpp:319-324 — the world position plus the
+		// transport-relative offset must still be a valid map coordinate.
+		if !validMovementPosition(info.X+info.Transport.X, info.Y+info.Transport.Y, info.Z+info.Transport.Z, info.Orientation+info.Transport.Orientation) {
+			s.debug("movement rejected", "account", s.accountName, "reason", "transport combined position invalid", "opcode", opcode)
 			return true
 		}
 	}
@@ -743,6 +754,28 @@ func (s *session) sanitizeMovementFlags(flags uint32) uint32 {
 	if flags&movementAscending != 0 && flags&movementDescending != 0 {
 		flags &^= movementAscending | movementDescending
 	}
+	// Cannot pitch up and down at the same time (WorldSession.cpp:981-983).
+	if flags&movementPitchUp != 0 && flags&movementPitchDown != 0 {
+		flags &^= movementPitchUp | movementPitchDown
+	}
+	// Cannot hover without SPELL_AURA_HOVER (WorldSession.cpp:973-975).
+	if flags&movementHover != 0 && !s.hasAuraType(spellAuraHover) {
+		flags &^= movementHover
+	}
+	// Cannot walk on water without SPELL_AURA_WATER_WALK except for ghosts
+	// (WorldSession.cpp:989-993).
+	if flags&movementWaterWalking != 0 && !s.hasAuraType(spellAuraWaterWalk) && !s.hasAuraType(spellAuraGhost) {
+		flags &^= movementWaterWalking
+	}
+	// Cannot feather fall without SPELL_AURA_FEATHER_FALL (WorldSession.cpp:996-998).
+	if flags&movementFallingSlow != 0 && !s.hasAuraType(spellAuraFeatherFall) {
+		flags &^= movementFallingSlow
+	}
+	// SPLINE_ENABLED is stripped unless the mover's spline is initialized and
+	// not finalized (WorldSession.cpp:1014-1016). Go has no player movespline
+	// model — taxi flights are server-simulated — so the condition can never
+	// hold and the flag is always stripped.
+	flags &^= movementSplineEnabled
 	// Cannot fly if no fly auras present. Exception is being a GM — account
 	// security governs, not an active .gm flag (WorldSession.cpp:1006-1009;
 	// s.security is the account level, 0 = SEC_PLAYER). s is the only mover
@@ -828,42 +861,34 @@ func (s *Server) broadcastMovement(opcode uint16, payload []byte, info movementI
 }
 
 // handleForceMoveRootAck processes CMSG_FORCE_MOVE_ROOT_ACK (0x0E9).
-// Reference: WorldSession::HandleMoveRootAck (MiscHandler.cpp:945).
+// Reference: WorldSession::HandleMoveRootAck (MiscHandler.cpp:941-959):
+// the C++ body is commented out and the handler just finishes the packet
+// ("no used"), so the ack changes nothing — no position apply, no rooted
+// flip, no broadcast. The server's own root application rides on
+// SMSG_FORCE_MOVE_ROOT via setRooted, never on this ack.
 func (s *session) handleForceMoveRootAck(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
-		return true
-	}
-	b := protocol.NewReader(payload)
-	_, _ = b.ReadPackedGUID()
-	_, _ = b.ReadU32() // ack index
-	info, err := readMovementInfo(b)
-	if err == nil && validMovementPosition(info.X, info.Y, info.Z, info.Orientation) {
-		s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
-		s.rooted = true
-		if s.server != nil {
-			s.server.broadcastMovement(uint16(protocol.OpcodeMSG_MOVE_ROOT), payload, info, s)
-		}
-	}
-	return true
+	return s.discardMovementAck(payload)
 }
 
 // handleForceMoveUnrootAck processes CMSG_FORCE_MOVE_UNROOT_ACK (0x0EB).
-// Reference: WorldSession::HandleMoveUnRootAck (MiscHandler.cpp:919).
+// Reference: WorldSession::HandleMoveUnRootAck (MiscHandler.cpp:919-939):
+// same "no used" discard as the root ack above.
 func (s *session) handleForceMoveUnrootAck(ctx context.Context, payload []byte) bool {
+	return s.discardMovementAck(payload)
+}
+
+// discardMovementAck parses a movement ack the server intentionally ignores
+// and applies nothing, mirroring the C++ "no used" handlers that just
+// rfinish the packet (HandleFeatherFallAck, HandleMoveRootAck,
+// HandleMoveUnRootAck, HandleMoveHoverAck, HandleMoveWaterWalkAck).
+func (s *session) discardMovementAck(payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
 	}
 	b := protocol.NewReader(payload)
 	_, _ = b.ReadPackedGUID()
 	_, _ = b.ReadU32() // ack index
-	info, err := readMovementInfo(b)
-	if err == nil && validMovementPosition(info.X, info.Y, info.Z, info.Orientation) {
-		s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
-		s.rooted = false
-		if s.server != nil {
-			s.server.broadcastMovement(uint16(protocol.OpcodeMSG_MOVE_UNROOT), payload, info, s)
-		}
-	}
+	_, _ = readMovementInfo(b)
 	return true
 }
 
@@ -912,18 +937,24 @@ func (s *Server) broadcastToInstance(mapID, instanceID uint32, opcode uint16, pa
 }
 
 // handleMoveFeatherFallAck processes CMSG_MOVE_FEATHER_FALL_ACK (0x2CF).
+// Reference: WorldSession::HandleFeatherFallAck (MiscHandler.cpp:908-914):
+// "no used" — the packet is just finished, so the ack applies nothing.
 func (s *session) handleMoveFeatherFallAck(ctx context.Context, payload []byte) bool {
-	return s.handleMovementAck(ctx, payload)
+	return s.discardMovementAck(payload)
 }
 
 // handleMoveHoverAck processes CMSG_MOVE_HOVER_ACK (0x0F6).
+// Reference: WorldSession::HandleMoveHoverAck (MovementHandler.cpp:583-596):
+// the acked movement info is parsed and dropped; no state changes.
 func (s *session) handleMoveHoverAck(ctx context.Context, payload []byte) bool {
-	return s.handleMovementAck(ctx, payload)
+	return s.discardMovementAck(payload)
 }
 
 // handleMoveWaterWalkAck processes CMSG_MOVE_WATER_WALK_ACK (0x2D0).
+// Reference: WorldSession::HandleMoveWaterWalkAck (MovementHandler.cpp:598-611):
+// parsed and dropped like the hover ack.
 func (s *session) handleMoveWaterWalkAck(ctx context.Context, payload []byte) bool {
-	return s.handleMovementAck(ctx, payload)
+	return s.discardMovementAck(payload)
 }
 
 // handleMoveKnockBackAck processes CMSG_MOVE_KNOCK_BACK_ACK (0x0F0).
@@ -936,9 +967,20 @@ func (s *session) handleMoveKnockBackAck(ctx context.Context, payload []byte) bo
 	guid, _ := b.ReadPackedGUID()
 	_, _ = b.ReadU32() // ack index
 	info, err := readMovementInfo(b)
-	if err == nil && validMovementPosition(info.X, info.Y, info.Z, info.Orientation) {
-		s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
+	if err != nil || guid != s.playerGUID {
+		return true
 	}
+	// MovementHandler.cpp:553-576 — the acked info becomes m_movementInfo
+	// but the server position is NOT updated (no UpdatePosition leg); the
+	// MSG_MOVE_KNOCK_BACK broadcast is built from the stored movement info
+	// plus the acked jump params. Applying the acked position here would
+	// let a client teleport by knockback ack. The info passes through the
+	// ReadMovementInfo anti-cheat sanitize like C++ before it is stored and
+	// rebroadcast.
+	info.Flags &^= movementRoot
+	info.Flags = s.sanitizeMovementFlags(info.Flags)
+	info.GUID = guid
+	s.setLastMovementInfo(info)
 
 	packet := protocol.NewBuffer(66)
 	packet.WritePackedGUID(guid)
@@ -1017,17 +1059,35 @@ func (s *session) handleForceSpeedChangeAck(opcode uint16, ctx context.Context, 
 }
 
 // handleMoveNotActiveMover processes CMSG_MOVE_NOT_ACTIVE_MOVER (0x2D1).
+// Reference: WorldSession::HandleMoveNotActiveMover (MovementHandler.cpp:
+// the parsed info becomes m_movementInfo only — no position update, no
+// broadcast.
 func (s *session) handleMoveNotActiveMover(ctx context.Context, payload []byte) bool {
-	return s.handleMovementAck(ctx, payload)
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	b := protocol.NewReader(payload)
+	guid, _ := b.ReadPackedGUID()
+	info, err := readMovementInfo(b)
+	if err != nil {
+		return true
+	}
+	// The info runs the ReadMovementInfo anti-cheat sanitize before it is
+	// stored, matching C++ (WorldSession.cpp:969-1016).
+	info.Flags &^= movementRoot
+	info.Flags = s.sanitizeMovementFlags(info.Flags)
+	info.GUID = guid
+	s.setLastMovementInfo(info)
+	return true
 }
 
-// handleMoveFallReset processes CMSG_MOVE_FALL_RESET (0x0CA).
+// handleMoveFallReset processes CMSG_MOVE_FALL_RESET (0x2CA).
+// Reference: Opcodes.cpp:845 routes CMSG_MOVE_FALL_RESET to
+// WorldSession::HandleMovementOpcodes, so the packet takes the normal
+// movement path (fall-info latch, zone update, broadcast) with no
+// fall-tracker reset of its own.
 func (s *session) handleMoveFallReset(ctx context.Context, payload []byte) bool {
-	if s.player != nil {
-		s.lastFallZ = s.player.Z
-		s.lastFallTime = 0
-	}
-	return s.handleMovementAck(ctx, payload)
+	return s.handleMovement(ctx, uint32(protocol.OpcodeCMSG_MOVE_FALL_RESET), payload)
 }
 
 // handleMoveSplineDone processes CMSG_MOVE_SPLINE_DONE (0x2C9).
@@ -1038,10 +1098,12 @@ func (s *session) handleMoveSplineDone(ctx context.Context, payload []byte) bool
 	}
 	b := protocol.NewReader(payload)
 	_, _ = b.ReadPackedGUID()
-	info, err := readMovementInfo(b)
-	if err == nil && validMovementPosition(info.X, info.Y, info.Z, info.Orientation) {
-		s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
-	}
+	// HandleMoveSplineDoneOpcode (TaxiHandler.cpp:201-247) reads the movement
+	// info and the spline id only to advance the packet — the acked position
+	// is never applied. Go pins the arrival position when the flight starts
+	// (taxi.go), so applying the client-reported coordinates here would let a
+	// forged SPLINE_DONE teleport the player.
+	_, _ = readMovementInfo(b)
 	if s.inFlight {
 		s.inFlight = false
 		if s.player != nil {

@@ -380,6 +380,10 @@ const (
 	spellAuraModCritPct                            = 290 // SPELL_AURA_MOD_CRIT_PCT (SpellAuraDefines.h:370)
 	spellAuraRangedAttackPowerAttackerBonus        = 127 // SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS (SpellAuraDefines.h:207)
 	spellAuraFly                                   = 201 // SPELL_AURA_FLY (SpellAuraDefines.h:281)
+	spellAuraWaterWalk                             = 104 // SPELL_AURA_WATER_WALK (SpellAuraDefines.h:184)
+	spellAuraFeatherFall                           = 105 // SPELL_AURA_FEATHER_FALL (SpellAuraDefines.h:185)
+	spellAuraHover                                 = 106 // SPELL_AURA_HOVER (SpellAuraDefines.h:186)
+	spellAuraGhost                                 = 95  // SPELL_AURA_GHOST (SpellAuraDefines.h:175)
 	spellAuraModIncreaseMountedFlightSpeed         = 207 // SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED (SpellAuraDefines.h:287)
 	spellAuraConfuse                               = 5
 	spellAuraCharm                                 = 6
