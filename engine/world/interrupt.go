@@ -133,7 +133,7 @@ func (s *session) handleEffectInterruptCast(ctx context.Context, targetGUID uint
 			targetSess.activeCast = nil
 			interrupted = append(interrupted, interruptedCast{schoolMask: schoolMask, spellID: curSpellID})
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(curCastID, curSpellID, spellFailedInterrupted), true)
-			targetSess.sendInterrupted(curCastID, curSpellID, spellFailedInterrupted)
+			targetSess.sendInterrupted(curCastID, curSpellID, 0)
 		}
 	}
 	targetSess.castMu.Unlock()
@@ -177,7 +177,7 @@ func (s *session) handleEffectInterruptCast(ctx context.Context, targetGUID uint
 			interrupted = append(interrupted, interruptedCast{schoolMask: schoolMask, spellID: curSpellID})
 			interruptedChannel = true
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(curCastID, curSpellID, spellFailedInterrupted), true)
-			targetSess.sendInterrupted(curCastID, curSpellID, spellFailedInterrupted)
+			targetSess.sendInterrupted(curCastID, curSpellID, 0)
 		}
 	}
 	targetSess.castMu.Unlock()

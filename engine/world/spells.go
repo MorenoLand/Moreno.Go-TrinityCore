@@ -5019,12 +5019,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	cost := s.calculateSpellPowerCost(spell)
 	if pType < 7 && cost > 0 && s.player.Powers[pType] < cost {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 85), true) // SPELL_FAILED_NO_POWER = 85
+		s.sendInterrupted(castID, spellID, 0)                                                            // Spell::_cast cleanupSpell (Spell.cpp:3330-3334): CheckCast failure at completion sends SendCastResult + SendInterrupted(0)
 		return
 	}
 	// Spell::_cast re-runs CheckCast at completion; runes spent mid-cast
 	// must fail the cast too (Spell::CheckPower rune check, Spell.cpp:6665).
 	if spell.PowerType == 5 && !s.checkRuneCost(spell, time.Now().UnixMilli()) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 85), true) // SPELL_FAILED_NO_POWER = 85
+		s.sendInterrupted(castID, spellID, 0)
 		return
 	}
 
@@ -5042,12 +5044,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		if _, ok := s.getCombatTarget(ctx, target.UnitGUID); !ok {
 			s.cancelGlobalCooldown(spellID)
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedInterrupted), true)
-			s.sendInterrupted(castID, spellID, spellFailedInterrupted)
+			s.sendInterrupted(castID, spellID, 0) // Spell::cancel (Spell.cpp:3220-3225): SendInterrupted always carries 0, never the failure code
 			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target removed")
 			return
 		}
 		if failCode := s.validateSpellRange(ctx, spellID, spell, target.UnitGUID); failCode != 0 {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failCode), true)
+			s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
 			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "range", "code", failCode)
 			return
 		}
@@ -5060,6 +5063,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 && spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
 				if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 47), true) // SPELL_FAILED_LINE_OF_SIGHT = 47
+					s.sendInterrupted(castID, spellID, 0)                                                            // _cast cleanupSpell (Spell.cpp:3330-3334)
 					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "line of sight")
 					return
 				}
@@ -5078,6 +5082,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				if !canResurrect && !spellAllowsDeadTarget(spell) {
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 109), true)
+					s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
 					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target dead")
 					return
 				}
@@ -5096,6 +5101,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// m_CastItem is set only by CastItemUseSpell), so only item casts trip it.
 	if target.Flags&protocol.SpellTargetFlagTradeItem != 0 && castItemGUID != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedItemEnchantTradeWindow), true)
+		s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334): trade-slot gate lives in CheckCast
 		s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "item enchant trade window")
 		return
 	}
@@ -8882,6 +8888,117 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 	s.executeSpellHealDoneBonus(ctx, targetGUID, spellID, heal, effIndex, true)
 }
 
+// hasAuraOfType reports whether the session carries an active aura whose
+// DBC row has an effect of the given aura type and whose spell passes
+// SpellInfo::IsAffected(familyName, {flag0,flag1,flag2})
+// (SpellInfo.cpp:1305-1317) — the Go analog of
+// Unit::GetAuraEffect(auraType, familyName, f0, f1, f2).
+func (s *session) hasAuraOfType(auraType, familyName, flag0, flag1, flag2 uint32) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	want := [3]uint32{flag0, flag1, flag2}
+	anyFlag := flag0|flag1|flag2 != 0
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || auraSpell.SpellFamilyName != familyName {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if effect.Aura != auraType || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !anyFlag {
+				return true
+			}
+			// flag96::HasFlag (Util.h:401-404): OR across the three words,
+			// against the spell-level SpellFamilyFlags.
+			for i := 0; i < 3; i++ {
+				if want[i] != 0 && auraSpell.SpellFamilyFlags[i]&want[i] != 0 {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// healingTakenBonus mirrors Unit::SpellHealingBonusTaken (Unit.cpp:7714-7759):
+// SPELL_AURA_MOD_HEALING_PCT (max negative + max positive, multiplicative
+// via AddPct), the Nourish 1.2x leg, and SPELL_AURA_MOD_HEALING_RECEIVED
+// (multiplicative per matching aura: caster GUID matches and the aura's
+// spell is affected on the heal spell per AuraEffect::IsAffectedOnSpell).
+// The MOD_HOT_PCT leg is DOT-type only; Go has no periodic-heal tick path
+// through executeSpellHeal, so that leg has no consumer and is not bridged.
+func (s *session) healingTakenBonus(target *session, spellID uint32, heal uint32) uint32 {
+	if target == nil {
+		return heal
+	}
+	takenMult := 1.0
+	if minval := target.maxNegativeAuraModifier(spellAuraModHealingPct); minval != 0 {
+		takenMult *= float64(100+minval) / 100
+	}
+	if maxval := target.maxPositiveAuraModifier(spellAuraModHealingPct); maxval != 0 {
+		takenMult *= float64(100+maxval) / 100
+	}
+	if s.server != nil && s.server.Data != nil {
+		if healSpell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			// Nourish (Unit.cpp:7725-7732): +20% when the target carries a
+			// druid periodic-heal aura from the Rejuv/Regrowth/Lifebloom/WG set.
+			if healSpell.SpellFamilyName == spellFamilyDruid && healSpell.SpellFamilyFlags[1]&0x2000000 != 0 &&
+				target.hasAuraOfType(spellAuraPeriodicHeal, spellFamilyDruid, 0x50, 0x4000010, 0) {
+				takenMult *= 1.2
+			}
+			// SPELL_AURA_MOD_HEALING_RECEIVED (Unit.cpp:7746-7754).
+			for _, aura := range target.loadedAuras() {
+				if aura == nil || aura.Stopped || aura.CasterGUID != s.playerGUID {
+					continue
+				}
+				auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+				if err != nil || !found {
+					continue
+				}
+				for index, effect := range auraSpell.Effects {
+					if effect.Aura != spellAuraModHealingReceived || aura.EffectMask&(1<<uint(index)) == 0 {
+						continue
+					}
+					if index >= len(aura.Amounts) {
+						continue
+					}
+					// SpellInfo::IsAffected (SpellInfo.cpp:1305-1317).
+					if auraSpell.SpellFamilyName != 0 {
+						if auraSpell.SpellFamilyName != healSpell.SpellFamilyName {
+							continue
+						}
+						overlap := false
+						for i := 0; i < 3; i++ {
+							if effect.SpellClassMask[i]&healSpell.SpellFamilyFlags[i] != 0 {
+								overlap = true
+								break
+							}
+						}
+						if !overlap {
+							continue
+						}
+					}
+					amount := aura.Amounts[index]
+					if amount == 0 {
+						amount = effect.BasePoints + 1
+					}
+					takenMult *= float64(100+amount) / 100
+				}
+			}
+		}
+	}
+	if takenMult == 1.0 {
+		return heal
+	}
+	return uint32(math.Max(float64(heal)*takenMult, 0))
+}
+
 // executeSpellHealDoneBonus is executeSpellHeal with control over the
 // SpellHealingBonusDone (spell-power) leg. The Swiftmend arm of
 // Spell::EffectHeal (SpellEffects.cpp:1423-1462) skips that leg on its path
@@ -8914,6 +9031,12 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 	if doneBonus && s.player != nil && s.player.SpellPower > 0 {
 		heal += uint32(math.Round(float64(s.player.SpellPower) * s.spellBonusMultiplier(spellID, effIndex, true)))
 	}
+
+	// Unit::SpellHealingBonusTaken (Unit.cpp:7714-7759) runs after
+	// SpellHealingBonusDone and before the crit roll: DoDamageAndTriggers
+	// crits m_healing, which already carries the taken modifiers
+	// (Spell.cpp:2500-2515).
+	heal = s.healingTakenBonus(targetSess, spellID, heal)
 
 	// Roll healing critical strike (TrinityCore: 150% healing on crit, modified by metagem)
 	isCrit := s.rollSpellCrit(0, 2)
@@ -9006,11 +9129,14 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 // live remaining duration (Aura::GetDuration) is consumed, returning its
 // tick amount times its tick count (4 for Rejuvenation, 6 for Regrowth).
 // The consumed aura is removed from the target unless the caster carries
-// Glyph of Swiftmend (54824). The DOT healing-taken leg
-// (SpellHealingBonusTaken, SpellEffects.cpp:1448) has no Go model and is
-// folded as-is; the C++ error-return when no aura matches despite the aura
-// state is unreachable here because Go's aura-state bit derives from the
-// same family-flags classifier.
+// Glyph of Swiftmend (54824). The outer HEAL-type healing-taken leg on the
+// full Swiftmend amount (SpellHealingBonusTaken, SpellEffects.cpp:1466)
+// rides executeSpellHealDoneBonus's healingTakenBonus; the tick-internal
+// DOT-type taken leg on the consumed tick amount (SpellEffects.cpp:1448,
+// MOD_HOT_PCT etc.) has no Go periodic-tick model and stays unbridged.
+// The C++ error-return when no aura matches despite the aura state is
+// unreachable here because Go's aura-state bit derives from the same
+// family-flags classifier.
 func (s *session) swiftmendConsumedTick(ctx context.Context, targetGUID uint64) (uint32, bool) {
 	if s.server == nil || s.server.Data == nil {
 		return 0, false
@@ -9792,9 +9918,16 @@ func (s *session) sendInterrupted(castID uint8, spellID uint32, result uint8) {
 	if s.server == nil || s.player == nil {
 		return
 	}
+	// Spell::SendInterrupted (Spell.cpp:4624-4639): SMSG_SPELL_FAILURE +
+	// SMSG_SPELL_FAILED_OTHER go to the caster's set INCLUDING the caster
+	// (SendMessageToSet(&data, true)); every Spell.cpp call site passes
+	// result 0 — the failure reason reaches the caster separately via
+	// SMSG_CAST_FAILED (SendCastResult).
 	payload := protocol.BuildSpellFailure(s.playerGUID, castID, spellID, result)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_FAILURE), payload, s)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_FAILED_OTHER), payload, s)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_FAILURE), payload, true)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_FAILED_OTHER), payload, true)
 }
 
 func (s *session) interruptCurrentCast() {
@@ -9813,7 +9946,7 @@ func (s *session) interruptCurrentCast() {
 		s.cancelGlobalCooldown(spellID)
 
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedInterrupted), true)
-		s.sendInterrupted(castID, spellID, spellFailedInterrupted)
+		s.sendInterrupted(castID, spellID, 0)
 		return
 	}
 	s.castMu.Unlock()
@@ -9915,7 +10048,7 @@ func (s *session) handleCancelCast(payload []byte) bool {
 
 		s.cancelGlobalCooldown(curSpellID)
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(curCastID, curSpellID, spellFailedInterrupted), true)
-		s.sendInterrupted(curCastID, curSpellID, spellFailedInterrupted)
+		s.sendInterrupted(curCastID, curSpellID, 0)
 		return true
 	}
 	s.castMu.Unlock()
@@ -11224,6 +11357,9 @@ const (
 	spellAuraPowerBurn                     = 162 // SPELL_AURA_POWER_BURN (SpellAuraDefines.h:242)
 	spellAuraPeriodicDummy                 = 226 // SPELL_AURA_PERIODIC_DUMMY (SpellAuraDefines.h:306)
 	spellAuraPeriodicTriggerSpellWithValue = 227 // SPELL_AURA_PERIODIC_TRIGGER_SPELL_WITH_VALUE (SpellAuraDefines.h:307)
+	spellAuraModHealingPct                 = 118 // SPELL_AURA_MOD_HEALING_PCT (SpellAuraDefines.h:198)
+	spellAuraModHotPct                     = 259 // SPELL_AURA_MOD_HOT_PCT (SpellAuraDefines.h:339)
+	spellAuraModHealingReceived            = 283 // SPELL_AURA_MOD_HEALING_RECEIVED (SpellAuraDefines.h:363)
 )
 
 // rankChainNoStackPurge mirrors the rank-chain term of
@@ -14475,7 +14611,7 @@ func (s *session) interruptCurrentChannel() {
 	// break, CMSG_CANCEL_CHANNELLING, damage abort, drain failure), so the
 	// two broadcast packets go out here exactly where C++ sends them.
 	_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(channel.CastID, channel.SpellID, spellFailedInterrupted), true)
-	s.sendInterrupted(channel.CastID, channel.SpellID, spellFailedInterrupted)
+	s.sendInterrupted(channel.CastID, channel.SpellID, 0)
 }
 
 // channelTargetAlive answers Spell::update's UpdateChanneledTargetList
