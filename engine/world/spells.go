@@ -26,6 +26,7 @@ const (
 	spellAttr3ReqOffhand            uint32 = 0x01000000 // SPELL_ATTR3_REQ_OFFHAND: Require offhand weapon (SharedDefines.h:547)
 	spellAttr3ReqWand               uint32 = 0x00400000 // SPELL_ATTR3_REQ_WAND: Requires equipped Wand (SharedDefines.h:545)
 	spellAttr3OnlyTargetPlayers     uint32 = 0x00000100 // SPELL_ATTR3_ONLY_TARGET_PLAYERS: Can only target players (SharedDefines.h:531) — ATTR3 is Go's AttributesEx3
+	spellAttr3OnlyTargetGhosts      uint32 = 0x00001000 // SPELL_ATTR3_ONLY_TARGET_GHOSTS: Can only target ghost players (SharedDefines.h:535)
 	spellAttr5HideDuration          uint32 = 0x00000400 // SPELL_ATTR5_HIDE_DURATION (SharedDefines.h:607)
 	spellAttr5CanChannelWhenMoving  uint32 = 0x00000001 // SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING (SharedDefines.h:597)
 	spellAttr5SingleTarget          uint32 = 0x00000020 // SPELL_ATTR5_SINGLE_TARGET_SPELL (SharedDefines.h:602)
@@ -2277,8 +2278,8 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		// move to completion: finishSpellCast revalidates power, runes,
 		// range, and line of sight, and movement interrupts land eagerly
 		// via interruptSpellsOnMovement (movement.go). A target removed
-		// mid-cast fails the range/LoS revalidation at completion rather
-		// than cancelling mid-bar.
+		// mid-cast cancels with the update-cancel packets (INTERRUPTED +
+		// GCD refund) at completion instead of mid-bar.
 		s.castMu.Lock()
 		castState := &activeCastState{
 			CastID:       castID,
@@ -5026,6 +5027,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// Spell::_cast revalidates CheckCast at completion: the target may have
 	// moved during the cast bar.
 	if target.UnitGUID != 0 {
+		// Spell::update (Spell.cpp:3805-3811) cancels the spell on every
+		// tick while PREPARING when the explicit unit target no longer
+		// resolves in the caster's world — the cancel() arm refunds the
+		// GCD and sends INTERRUPTED (SendInterrupted + SendCastResult,
+		// Spell.cpp:3220-3225). Go has no per-tick update loop, so the
+		// recheck lands here at completion; the packets match, only the
+		// timing moves to bar end. A dead-but-present target still
+		// resolves and falls through to the TARGETS_DEAD gate below.
+		if _, ok := s.getCombatTarget(ctx, target.UnitGUID); !ok {
+			s.cancelGlobalCooldown(spellID)
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedInterrupted), true)
+			s.sendInterrupted(castID, spellID, spellFailedInterrupted)
+			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target removed")
+			return
+		}
 		if failCode := s.validateSpellRange(ctx, spellID, spell, target.UnitGUID); failCode != 0 {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failCode), true)
 			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "range", "code", failCode)
@@ -9744,11 +9760,14 @@ func (s *session) interruptCurrentCast() {
 // (Spell.cpp:3814-3831). No-bridge legs from that leg, noted:
 //   - SPELL_EFFECT_STUCK spells are exempt while the caster is falling far;
 //     Go has no STUCK model and checks the flag alone.
-//   - IsNextMeleeSwingSpell / IsAutoRepeat / IsTriggered exclusions: Go
-//     casts are always player-session casts; triggered casts route through
-//     the same activeCastState, so they break on movement here where C++
-//     would let them continue. Auto-repeat lives on the session
-//     (autoRepeatSpell), not on a per-cast Spell object.
+//   - IsNextMeleeSwingSpell / IsAutoRepeat / IsTriggered exclusions: the
+//     client-cast path only ever arms activeCast for non-instant casts with
+//     a cast bar, and triggered casts never arm it at all
+//     (castSpellDirectWithOverrides runs the _cast tail directly without
+//     touching activeCastState), so the IsTriggered exemption holds by
+//     construction here. Auto-repeat lives on the session
+//     (autoRepeatSpell), not on a per-cast Spell object, and next-swing
+//     spells are instant, so those exclusions are vacuous too.
 //   - IsMoveAllowedChannel channeled exemption: bridged in the movement
 //     break below (SpellInfo.cpp:1229-1232).
 //   - the charmer-is-creature trust hack: Go has no charmed-caster model.
@@ -14394,22 +14413,36 @@ func (s *session) interruptCurrentChannel() {
 }
 
 // channelTargetAlive answers Spell::update's UpdateChanneledTargetList
-// (Spell.cpp:3853): the channel's explicit unit target is still valid while
-// alive. Player targets use the live session (ghost included); creature
-// targets resolve through the combat-target pipeline, which returns
+// (Spell.cpp:3853) through Spell::IsValidDeadOrAliveTarget
+// (Spell.cpp:7684): the channel's explicit unit target stays valid while it
+// resolves in the caster's world and passes the dead/alive gates — an alive
+// target is valid unless the spell requires dead targets
+// (SPELL_ATTR3_ONLY_TARGET_GHOSTS), a dead target is valid only when the
+// spell allows dead targets (SpellInfo::IsAllowingDeadTarget,
+// SpellInfo.cpp:1177). Player targets use the live session (ghost included);
+// creature targets resolve through the combat-target pipeline, which returns
 // Health == 0 for dead creatures and ok == false for unresolvable GUIDs.
 // A zero target (dest-only channels) has no unit to recheck.
-func (s *session) channelTargetAlive(ctx context.Context, targetGUID uint64) bool {
+func (s *session) channelTargetAlive(ctx context.Context, spell wotlk.Spell, targetGUID uint64) bool {
 	if targetGUID == 0 {
 		return true
 	}
+	alive := false
 	if s.server != nil {
 		if sess := s.server.findSessionByGUID(targetGUID); sess != nil && sess.player != nil {
-			return !sess.isDeadOrGhost()
+			alive = !sess.isDeadOrGhost()
+		} else if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			alive = target.Health > 0
+		} else {
+			return false
 		}
+	} else {
+		return false
 	}
-	target, ok := s.getCombatTarget(ctx, targetGUID)
-	return ok && target.Health > 0
+	if alive {
+		return spell.AttributesEx3&spellAttr3OnlyTargetGhosts == 0
+	}
+	return spellAllowsDeadTarget(spell)
 }
 
 // channelTargetAuraStale answers the aura legs of
@@ -14500,7 +14533,7 @@ func (s *session) channelTick() {
 	// completes normally (SendChannelUpdate(0) + finish(), no cast-failure
 	// result and no interrupt broadcast). Go has no per-tick update loop,
 	// so the check rides the period tick instead of the 50ms server tick.
-	if targetGUID != 0 && !s.channelTargetAlive(ctx, targetGUID) {
+	if targetGUID != 0 && !s.channelTargetAlive(ctx, spell, targetGUID) {
 		s.expireChannelAuras(channel)
 		s.finishChannel()
 		return
