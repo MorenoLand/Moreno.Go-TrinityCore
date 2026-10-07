@@ -1500,6 +1500,7 @@ const (
 	equipErrUniqueCantBeWrapped               = 47
 	equipErrBagsCantBeWrapped                 = 48
 	equipErrInvFull                           = 50
+	equipErrAlreadyLooted                     = 26 // C++ EQUIP_ERR_ALREADY_LOOTED (ItemDefines.h:53)
 	equipErrTooMuchGold                       = 77
 	equipErrItemMaxLimitCategoryCountExceeded = 84
 	equipErrCantEquipRank                     = 63

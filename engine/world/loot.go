@@ -1431,6 +1431,11 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 	copper := s.activeLoot.Money
 	s.activeLoot.Money = 0
 
+	// HandleLootMoneyOpcode (LootHandler.cpp:160): NotifyMoneyRemoved fires
+	// before the split — viewers see SMSG_LOOT_CLEAR_MONEY ahead of the
+	// SMSG_LOOT_MONEY_NOTIFY distribution, not after.
+	s.activeLoot.broadcastMoneyRemoved()
+
 	// LootHandler.cpp:157 (HandleLootMoneyOpcode): shareMoney is false for
 	// item, pickpocket, and player-corpse loot — the split below only runs
 	// for shared money.
@@ -1476,7 +1481,6 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 		s.sendPlayerUpdate()
 	}
 
-	s.activeLoot.broadcastMoneyRemoved()
 	if s.activeLoot.Money == 0 && len(s.activeLoot.Items) == 0 {
 		s.clearCreatureLoot(s.activeLoot)
 	}
@@ -1510,7 +1514,10 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 			}
 		}
 	}
+	// Player::StoreLootItem (Player.cpp:25059-25063): a missing or already
+	// taken slot answers EQUIP_ERR_ALREADY_LOOTED, not a silent drop.
 	if !ok && !isQuestItem {
+		s.sendEquipError(equipErrAlreadyLooted, 0)
 		return true
 	}
 	high := uint16(s.activeLoot.TargetGUID >> 48)
@@ -1524,17 +1531,26 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 		// the creature must be alive iff the taker is a rogue lifting an
 		// already-open pickpocket window (loot_type == LOOT_PICKPOCKETING);
 		// every other loot take still requires the corpse. CLASS_ROGUE = 4
-		// (SharedDefines.h); the Go loot take previously rejected any
-		// living target outright, which would wrongly fail pickpocket
-		// takes.
+		// (SharedDefines.h). The error code splits on the gate that failed:
+		// a failed alive-gate is LOOT_ERROR_DIDNT_KILL, a passed gate with
+		// a dead/lost target out of range is LOOT_ERROR_TOO_FAR
+		// (lootAllowed ? LOOT_ERROR_TOO_FAR : LOOT_ERROR_DIDNT_KILL).
 		isRoguePickpocket := s.player.Class == 4 && s.activeLoot.LootType == lootTypePickpocketing
-		if !validTarget || target.Map != s.player.Map || target.InstanceID != s.player.InstanceID || (target.Health != 0) != isRoguePickpocket || !withinLootDistance(s, target) {
+		lootAllowed := validTarget && target.Map == s.player.Map && target.InstanceID == s.player.InstanceID && (target.Health != 0) == isRoguePickpocket
+		if !lootAllowed {
+			return s.sendLootError(s.activeLoot.TargetGUID, 0) == nil
+		}
+		if !withinLootDistance(s, target) {
 			return s.sendLootError(s.activeLoot.TargetGUID, 4) == nil
 		}
+		// Take-time recipient re-check: C++ has none in this handler, but
+		// StoreLootItem's AllowedForPlayer-fail arm (Player.cpp:25065-25068)
+		// answers with SendLootRelease, so a revoked permission releases
+		// the window instead of erroring.
 		guid := uint32(s.activeLoot.TargetGUID & 0x00FFFFFF)
 		entry := uint32((s.activeLoot.TargetGUID >> 24) & 0x00FFFFFF)
 		if !s.server.creatureLootAllowed(s.activeLoot.MapID, s.activeLoot.InstanceID, s.activeLoot.TargetGUID, creatureWorldGUID(guid, entry), s.playerGUID, s.groupID) {
-			return s.sendLootError(s.activeLoot.TargetGUID, 0) == nil
+			return s.sendLootReleaseResponse(s.activeLoot.TargetGUID) == nil
 		}
 	}
 
@@ -1553,7 +1569,8 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 			isOverThreshold := it.Quality >= uint32(grp.LootThreshold)
 			// Loot.cpp:307: only follow_loot_rules quest items are
 			// master-distributed; plain quest items stay directly lootable
-			// by quest-holding members under master loot.
+			// by quest-holding members under master loot. (Go anti-cheat
+			// gate: C++ hides these slots instead of rejecting the take.)
 			if grp.LootMethod == 2 && isOverThreshold &&
 				!(isQuestItem && it.CustomFlags&itemFlagsCuFollowLootRules == 0) {
 				// Master loot item must be given by master looter
@@ -1564,14 +1581,23 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 				s.server.lootMu.Lock()
 				activeRoll := s.server.groupRolls[rollKey]
 				s.server.lootMu.Unlock()
+				// Player::StoreLootItem (Player.cpp:25077-25080): a
+				// blocked item answers with SendLootRelease, not a
+				// silent drop.
 				if activeRoll != nil || it.IsBlocked {
-					return true
+					return s.sendLootReleaseResponse(s.activeLoot.TargetGUID) == nil
 				}
+				// Player::StoreLootItem (Player.cpp:25082-25086): a roll
+				// won by someone else releases the window.
 				if it.RollWinner != 0 && it.RollWinner != s.playerGUID {
-					return true
+					return s.sendLootReleaseResponse(s.activeLoot.TargetGUID) == nil
 				}
-			} else if grp.LootMethod != 0 {
-				// Under threshold or round robin
+			} else if grp.LootMethod == 1 {
+				// Loot.cpp:675-689 (ROUND_ROBIN_PERMISSION): only the
+				// round-robin loot owner may take; under group/need-greed
+				// (GROUP_PERMISSION, Loot.cpp:657) under-threshold items
+				// are ALLOW_LOOT for every viewer, so the gate must not
+				// fire for methods 3/4.
 				if s.activeLoot.RoundRobinPlayer != 0 && s.activeLoot.RoundRobinPlayer != s.playerGUID {
 					return true
 				}
@@ -1704,12 +1730,19 @@ func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool
 		_ = s.sendLootError(lootGUID, 10) // LOOT_ERROR_PLAYER_NOT_FOUND
 		return true
 	}
-	if targetSess.player.Map != s.player.Map || targetSess.player.InstanceID != s.player.InstanceID || distance3D(s.player.X, s.player.Y, s.player.Z, targetSess.player.X, targetSess.player.Y, targetSess.player.Z) > 100.0 {
-		_ = s.sendLootError(lootGUID, 14) // LOOT_ERROR_MASTER_OTHER
+	// HandleLootMasterGiveOpcode (LootHandler.cpp:417-421): the giver's own
+	// loot GUID must match the packet's before eligibility is checked.
+	if s.activeLoot == nil || s.activeLoot.TargetGUID != lootGUID || s.activeLoot.MapID != s.player.Map || s.activeLoot.InstanceID != s.player.InstanceID {
+		_ = s.sendLootError(lootGUID, 0) // LOOT_ERROR_DIDNT_KILL
 		return true
 	}
-	if s.activeLoot == nil || s.activeLoot.TargetGUID != lootGUID || s.activeLoot.MapID != s.player.Map || s.activeLoot.InstanceID != s.player.InstanceID {
-		_ = s.sendLootError(lootGUID, 0)
+	// HandleLootMasterGiveOpcode (LootHandler.cpp:423-429):
+	// !_player->IsInRaidWith(target) || !_player->IsInMap(target) — the
+	// target must be in the same group and on the same map instance, with
+	// NO distance gate (C++ allows a give to a same-map member at any
+	// range; the old 100-yard check wrongly rejected that).
+	if targetSess.groupID != s.groupID || targetSess.player.Map != s.player.Map || targetSess.player.InstanceID != s.player.InstanceID {
+		_ = s.sendLootError(lootGUID, 14) // LOOT_ERROR_MASTER_OTHER
 		return true
 	}
 	// HandleLootMasterGiveOpcode (LootHandler.cpp:448-452): the slot range
