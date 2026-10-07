@@ -134,14 +134,19 @@ local function onGarrote(creature, guid)
     creature:Talk(SAY_SPECIAL)
     local target = randomTargetInRange(creature, 100)
     if target then
-        creature:CastSpell(target, SPELL_GARROTE, true)
+        -- C++-exact: the TARGET self-casts garrote (triggered); Moroes is
+        -- not the caster (target->CastSpell(target, SPELL_GARROTE, true)).
+        target:CastSpell(target, SPELL_GARROTE, true)
     end
     state.invanish = false
 end
 
 local function onVanish(creature, guid)
     local state = moroesState[guid]
-    if state == nil then
+    if state == nil or state.enrage then
+        -- C++ UpdateAI gates vanish/blind/gouge on !Enrage: once frenzy
+        -- fires at <30% no new vanish casts land (onBlind/onGouge already
+        -- gate this way).
         return
     end
     creature:CastSpell(creature, SPELL_VANISH)
