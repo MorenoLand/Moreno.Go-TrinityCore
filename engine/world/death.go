@@ -282,8 +282,22 @@ func (s *session) killPlayer(ctx context.Context, pvpDeath bool) {
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET death_expire_time = ? WHERE guid = ?", s.deathExpireTime, s.playerGUID)
 	}
-	s.durabilityLossAll(ctx, 0.10, false)
-	_ = s.write(uint16(protocol.OpcodeSMSG_DURABILITY_DAMAGE_DEATH), []byte{}, true)
+	// Unit::Kill (Unit.cpp:11359-11365): a duelist killed by anyone other
+	// than the duel opponent (creature, environment, third party — every
+	// death that reaches here bypassed the duel-defeat leg) interrupts the
+	// duel instead of completing it. Placed with the death-penalty legs,
+	// matching the C++ player-victim branch order.
+	if s.duelPartner != 0 {
+		s.interruptDuel()
+	}
+	// Unit::Kill (Unit.cpp:11351-11357): 10% durability loss on death, but
+	// not for PvP deaths — CONFIG_DURABILITY_LOSS_IN_PVP defaults false —
+	// and not in battlegrounds (no BG-membership model on the session; the
+	// PvP-death gate covers the player-killer case).
+	if !s.pvpDeath {
+		s.durabilityLossAll(ctx, 0.10, false)
+		_ = s.write(uint16(protocol.OpcodeSMSG_DURABILITY_DAMAGE_DEATH), []byte{}, true)
+	}
 	s.debug("player killed", "account", s.accountName, "guid", s.playerGUID)
 }
 

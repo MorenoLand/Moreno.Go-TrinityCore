@@ -7534,7 +7534,14 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	if damage >= target.Health && target.Health > 0 {
 		overkill = damage - target.Health
 	}
-	s.updateAchievementCriteria(criteriaTypeDamageDone, 0, damage)
+	// Unit::DealDamage (Unit.cpp:855-860): DAMAGE_DONE is capped at the
+	// target's pre-damage health (no overkill credit); HIGHEST_HIT_DEALT
+	// takes the raw hit.
+	damageDone := damage
+	if target.Health > 0 && damageDone > target.Health {
+		damageDone = target.Health
+	}
+	s.updateAchievementCriteria(criteriaTypeDamageDone, 0, damageDone)
 	s.setAchievementCriteria(criteriaTypeHighestHitDealt, 0, damage)
 
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo), true)
@@ -7608,7 +7615,9 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				playerSess.player.UnitFlags |= unitFlagInCombat
 			}
 			_ = playerSess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo), true)
-			if damage > 0 && damage >= playerSess.player.Health {
+			if damage > 0 && playerSess.player.Health > 0 && damage+1 >= playerSess.player.Health {
+				// Duel defeat threshold is damage >= health-1 (Unit.cpp:826),
+				// not just lethal — the clamped hit leaves the loser at 1 HP.
 				if s.duelPartner == target.GUID && s.player.DuelTeam != 0 {
 					// Duel defeat: loser drops to 1 HP and duel completes
 					playerSess.player.Health = 1
@@ -12785,7 +12794,9 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// rather than a damage==0 gate because absorbed-to-zero damage still runs
 		// the legs in C++ (absorbed hits strip TAKE_DAMAGE-interrupt auras).
 		godNegated := ts.godCheatActive()
-		if !godNegated && dmg >= targetHealth {
+		// Duel defeat threshold is damage >= health-1 (Unit.cpp:826), not just
+		// lethal.
+		if !godNegated && targetHealth > 0 && dmg+1 >= targetHealth {
 			if ts.duelPartner != 0 && ts.player.DuelTeam != 0 {
 				ts.player.Health = 1
 				ts.sendPlayerUpdate()

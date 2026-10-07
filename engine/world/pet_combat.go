@@ -538,7 +538,17 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled
 		// creatures are signaled OwnerAttackedBy on any non-DoT damage.
 		s.triggerPetDefensive(targetSess.player.Map, targetSess.player.InstanceID, targetGUID, motion.GUID)
-		if damage >= targetHealth {
+		// Duel defeat (Unit.cpp:826-844): a pet is controlled by its owner, so
+		// the killing blow lands as a duel defeat — loser at 1 HP, duel
+		// completes — when the owner is the victim's duel opponent, matching
+		// C++ clamping the damage to health-1 via GetControllingPlayer.
+		if targetHealth > 0 && damage+1 >= targetHealth &&
+			targetSess.duelPartner != 0 && targetSess.player.DuelTeam != 0 &&
+			owner != nil && owner.player != nil && targetSess.duelPartner == owner.playerGUID {
+			targetSess.player.Health = 1
+			targetSess.sendPlayerUpdate()
+			owner.endDuel(true, owner.playerGUID, false)
+		} else if damage >= targetHealth {
 			targetSess.player.Health = 0
 			targetSess.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((motion.GUID>>24)&0xFFFFFF), 1)
 			// GetCharmerOrOwnerPlayerOrPlayerItself (Unit.cpp:11164) resolves a
@@ -1017,7 +1027,17 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled
 		// creatures are signaled OwnerAttackedBy on any non-DoT damage.
 		s.server.triggerPetDefensive(victim.player.Map, victim.player.InstanceID, target.GUID, caster.GUID)
-		if damage >= victim.player.Health {
+		// Duel defeat (Unit.cpp:826-844): a pet is controlled by its owner (s is
+		// the owner session here), so the killing blow lands as a duel
+		// defeat — loser at 1 HP, duel completes — when the owner is the
+		// victim's duel opponent.
+		if victim.player.Health > 0 && damage+1 >= victim.player.Health &&
+			victim.duelPartner != 0 && victim.player.DuelTeam != 0 &&
+			s.player != nil && victim.duelPartner == s.playerGUID {
+			victim.player.Health = 1
+			victim.sendPlayerUpdate()
+			s.endDuel(true, s.playerGUID, false)
+		} else if damage >= victim.player.Health {
 			victim.player.Health = 0
 			victim.sendPlayerUpdate()
 			// The pet spell's killer resolves to the pet's owner player.

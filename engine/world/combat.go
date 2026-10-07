@@ -568,15 +568,30 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			// ordering; the trigger spell targets the attacker.
 			playerSess.procVictimAuraTriggers(ctx, s.playerGUID, outcome, hitInfo, targetState, blocked, damage)
 			if damage > 0 {
-				if damage >= playerSess.player.Health {
+				// Unit::DealDamage (Unit.cpp:855-877): the arena damage score
+				// and the killer achievement arms (DAMAGE_DONE capped at the
+				// victim's pre-damage health — no overkill credit, and
+				// HIGHEST_HIT_DEALT) fire on any player-attacker damage, plus
+				// the victim-side HIGHEST_HIT_RECEIVED arm.
+				s.server.updateArenaDamageScore(s, damage)
+				victimHealth := playerSess.player.Health
+				s.updateAchievementCriteria(criteriaTypeDamageDone, 0, min(damage, victimHealth))
+				s.setAchievementCriteria(criteriaTypeHighestHitDealt, 0, damage)
+				playerSess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
+				// Duel defeat (Unit.cpp:826): C++ ends the duel at
+				// damage >= health-1, not just at lethal — the clamped hit
+				// leaves the loser at 1 HP.
+				if victimHealth > 0 && damage+1 >= victimHealth {
 					if s.duelPartner == target.GUID && s.player.DuelTeam != 0 {
 						// Duel defeat: loser drops to 1 HP and kneels (TC: Player::DuelComplete)
 						playerSess.player.Health = 1
 						playerSess.sendPlayerUpdate()
+						playerSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth-1)
 						s.endDuel(true, s.playerGUID, false)
 					} else {
 						playerSess.player.Health = 0
 						playerSess.sendPlayerUpdate()
+						playerSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth)
 						s.server.creditHonorableKill(s, playerSess)
 						// Unit::Kill (Unit.cpp:11341-11343): the attacker is a player.
 						playerSess.killPlayer(ctx, true)
@@ -592,6 +607,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 					s.attackTarget = 0
 				} else {
 					playerSess.player.Health -= damage
+					playerSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, damage)
 					playerSess.delayCurrentCast()
 					playerSess.delayCurrentChannel()
 					playerSess.procDamageAuras(true, damage)
@@ -879,37 +895,57 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			// spell targets the attacker.
 			vicSess.procRangedVictimAuraTriggers(ctx, s.playerGUID, spellID, outcome, absorbed, blocked, damage)
 			if damage > 0 {
+				// Unit::DealDamage (Unit.cpp:855-877): the arena damage score
+				// and the killer/victim achievement arms fire on player
+				// ranged damage exactly like the melee leg; DAMAGE_DONE and
+				// TOTAL_DAMAGE_RECEIVED are capped at pre-damage health.
 				s.server.updateArenaDamageScore(s, damage)
-				if damage >= vicSess.player.Health {
-					if arena := s.server.findArenaState(s.player.Map, 0); arena != nil {
-						arena.mu.Lock()
-						if sc, ok := arena.Scores[s.playerGUID]; ok {
-							sc.KillingBlows++
+				victimHealth := vicSess.player.Health
+				s.updateAchievementCriteria(criteriaTypeDamageDone, 0, min(damage, victimHealth))
+				s.setAchievementCriteria(criteriaTypeHighestHitDealt, 0, damage)
+				vicSess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
+				// Duel defeat (Unit.cpp:826): damage >= health-1 ends the duel
+				// with the loser at 1 HP — the ranged path was killing the
+				// duelist outright.
+				if victimHealth > 0 && damage+1 >= victimHealth {
+					if s.duelPartner == target.GUID && s.player.DuelTeam != 0 {
+						vicSess.player.Health = 1
+						vicSess.sendPlayerUpdate()
+						vicSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth-1)
+						s.endDuel(true, s.playerGUID, false)
+					} else {
+						if arena := s.server.findArenaState(s.player.Map, 0); arena != nil {
+							arena.mu.Lock()
+							if sc, ok := arena.Scores[s.playerGUID]; ok {
+								sc.KillingBlows++
+							}
+							arena.mu.Unlock()
 						}
-						arena.mu.Unlock()
+						vicSess.player.Health = 0
+						vicSess.sendPlayerUpdate()
+						vicSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth)
+						if s.server != nil {
+							s.server.creditHonorableKill(s, vicSess)
+						}
+						// Unit::Kill (Unit.cpp:11341-11343): the attacker is a player.
+						vicSess.killPlayer(ctx, true)
+						// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
+						// pet arm — attacker is the player, so only the
+						// attacker's live pet gets KilledUnit(victim)
+						// (Unit.cpp:11324-11335).
+						if pet := s.livePetMotion(); pet != nil {
+							s.server.fireCreatureTargetDied(ctx, pet, vicSess.luaPlayer())
+						}
+						s.server.handleWGPlayerDeath(vicSess, s)
+						s.autoRepeatSpell = 0
+						s.autoRepeatTarget = 0
+						buf := protocol.NewBuffer(9)
+						buf.WritePackedGUID(s.playerGUID)
+						_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
 					}
-					vicSess.player.Health = 0
-					vicSess.sendPlayerUpdate()
-					if s.server != nil {
-						s.server.creditHonorableKill(s, vicSess)
-					}
-					// Unit::Kill (Unit.cpp:11341-11343): the attacker is a player.
-					vicSess.killPlayer(ctx, true)
-					// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
-					// pet arm — attacker is the player, so only the
-					// attacker's live pet gets KilledUnit(victim)
-					// (Unit.cpp:11324-11335).
-					if pet := s.livePetMotion(); pet != nil {
-						s.server.fireCreatureTargetDied(ctx, pet, vicSess.luaPlayer())
-					}
-					s.server.handleWGPlayerDeath(vicSess, s)
-					s.autoRepeatSpell = 0
-					s.autoRepeatTarget = 0
-					buf := protocol.NewBuffer(9)
-					buf.WritePackedGUID(s.playerGUID)
-					_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
 				} else {
 					vicSess.player.Health -= damage
+					vicSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, damage)
 					vicSess.delayCurrentCast()
 					vicSess.delayCurrentChannel()
 					vicSess.procDamageAuras(true, damage)
@@ -1974,6 +2010,32 @@ func (s *session) endDuel(won bool, winnerGUID uint64, fled bool) {
 	}
 
 	// Stop combat on both
+	s.clearDuelState(partner)
+}
+
+// interruptDuel mirrors Player::DuelComplete(DUEL_INTERRUPTED)
+// (Player.cpp:7328-7358): SMSG_DUEL_COMPLETE carries the not-completed flag
+// and no SMSG_DUEL_WINNER / win-lose achievement legs run — only the state
+// cleanup. Reached from Unit::Kill when a duelist dies to anyone other than
+// the duel opponent (Unit.cpp:11359-11365).
+func (s *session) interruptDuel() {
+	partnerGUID := s.duelPartner
+	var partner *session
+	if partnerGUID != 0 && s.server != nil {
+		partner = s.server.findSessionByGUID(partnerGUID)
+	}
+	buf := protocol.NewBuffer(1)
+	buf.WriteU8(0)
+	_ = s.write(uint16(protocol.OpcodeSMSG_DUEL_COMPLETE), buf.Bytes(), true)
+	if partner != nil {
+		_ = partner.write(uint16(protocol.OpcodeSMSG_DUEL_COMPLETE), buf.Bytes(), true)
+	}
+	s.clearDuelState(partner)
+}
+
+// clearDuelState performs the shared end-of-duel cleanup: attack stops and
+// field resets on both duelists.
+func (s *session) clearDuelState(partner *session) {
 	_ = s.sendAttackStop(s.attackTarget, false)
 	s.attackTarget = 0
 	if partner != nil {
