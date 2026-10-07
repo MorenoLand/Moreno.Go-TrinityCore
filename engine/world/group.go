@@ -1424,18 +1424,12 @@ func (s *session) handleReadyCheck(_ context.Context, payload []byte) bool {
 }
 
 // handleRaidReadyCheckFinished processes MSG_RAID_READY_CHECK_FINISHED (0x3C6).
-// Reference: WorldSession::HandleRaidReadyCheckFinishedOpcode (GroupHandler.cpp:722).
+// Reference: WorldSession::HandleRaidReadyCheckFinishedOpcode (GroupHandler.cpp:722)
+// is a deliberate no-op (the whole body is commented out): the server never sends
+// MSG_RAID_READY_CHECK_FINISHED — the client ends the check when it has received
+// all MSG_RAID_READY_CHECK_CONFIRM replies. Broadcasting it here would end the
+// ready-check display early, diverging from C++.
 func (s *session) handleRaidReadyCheckFinished(_ context.Context, _ []byte) bool {
-	if !s.playerLoaded || s.player == nil || s.server == nil || s.groupID == 0 {
-		return true
-	}
-	s.server.groupsMu.RLock()
-	g := s.server.groups[s.groupID]
-	s.server.groupsMu.RUnlock()
-	if g == nil || !g.isLeaderOrAssistant(s.playerGUID) {
-		return true
-	}
-	s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeMSG_RAID_READY_CHECK_FINISHED), []byte{})
 	return true
 }
 

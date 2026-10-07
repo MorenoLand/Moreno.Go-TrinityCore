@@ -87,6 +87,12 @@ func (s *Server) friendStatus(viewer *session, guid uint64) (uint8, uint32, uint
 		status = friendStatusDND
 	} else if friendSess.player.PlayerFlags&playerFlagAFK != 0 {
 		status = friendStatusAFK
+	} else if (friendSess.recruiterID != 0 && friendSess.recruiterID == viewer.accountID) ||
+		(viewer.recruiterID != 0 && viewer.recruiterID == friendSess.accountID) {
+		// SocialMgr::GetFriendInfo (SocialMgr.cpp:234): the friend is marked
+		// recruit-a-friend linked when the accounts are recruiter-linked in
+		// either direction. Applies to the plain-online branch only, like C++.
+		status |= friendStatusRAF
 	}
 	return status, uint32(friendSess.player.Zone), uint32(friendSess.player.Level), uint32(friendSess.player.Class)
 }
@@ -288,35 +294,34 @@ func (s *Server) broadcastFriendStatus(playerGUID uint64, result uint8, zone, le
 		return
 	}
 
+	// SocialMgr::SendFriendStatus (SocialMgr.cpp:245): the packet is built ONCE
+	// via GetFriendInfo(subject, subjectGUID, fi) and the identical payload goes
+	// to every friend lister; per-recipient status recomputation would inject a
+	// FRIEND_STATUS_RAF bit that C++ only ever sets for direct (non-broadcast)
+	// packets. The subject is always visible to itself (ObjectAccessor always
+	// resolves it), so the shared status is the subject's real DND/AFK/online
+	// state without RAF, independent of the worldReady gate used for viewers.
+	status := friendStatusOnline
+	if target.player.PlayerFlags&playerFlagDND != 0 {
+		status = friendStatusDND
+	} else if target.player.PlayerFlags&playerFlagAFK != 0 {
+		status = friendStatusAFK
+	}
 	b := protocol.NewBuffer(22)
 	b.WriteU8(result)
 	b.WriteU64(playerGUID)
 	if result == friendsResultOnline {
-		b.WriteU8(friendStatusOnline)
+		b.WriteU8(status)
 		b.WriteU32(zone)
 		b.WriteU32(level)
 		b.WriteU32(class)
 	}
-
 	payload := b.Bytes()
+
 	for _, recipient := range recipientGUIDs {
 		sess := s.findSessionByGUID(recipient)
 		if sess == nil || !sess.worldReady.Load() || !s.canFriendSee(sess, target) {
 			continue
-		}
-		if result == friendsResultOnline {
-			status, _, _, _ := s.friendStatus(sess, playerGUID)
-			if status == friendStatusOffline {
-				continue
-			}
-			b := protocol.NewBuffer(22)
-			b.WriteU8(result)
-			b.WriteU64(playerGUID)
-			b.WriteU8(status)
-			b.WriteU32(zone)
-			b.WriteU32(level)
-			b.WriteU32(class)
-			payload = b.Bytes()
 		}
 		_ = sess.write(uint16(protocol.OpcodeSMSG_FRIEND_STATUS), payload, true)
 	}
