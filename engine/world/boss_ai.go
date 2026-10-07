@@ -3123,6 +3123,22 @@ func init() {
 	// DATA_LADYILLUCIABAROV=2 bookkeeping (scholomance.h:32)
 	// (luaBossAI shim).
 	RegisterLuaBoss("boss_illucia_barov", 10502)
+	// boss_instructor_malicia.cpp (EK loader AddSC_boss_instructormalicia
+	// decl :113 / call :292, Scholomance block continues; script
+	// name "boss_instructor_malicia"): boss AI ported in
+	// lua_scripts/eastern_kingdoms/boss_instructor_malicia.lua
+	// (entry 10505 — no NPC_ constant in scholomance.h, DB-side
+	// ScriptName binding, classic wowhead-verified): OnEnterCombat
+	// schedules call of the grave 17831 (triggered victim, 4s->65s),
+	// corruption 11672 (triggered, random alive player within 100yd
+	// incl. victim, 8s->24s), renew 10929 (self-cast, 32s->10s),
+	// flash heal 10917 (self-cast, 38s->5s while FlashCounter<2 then
+	// 30s), healing touch 9889 (self-cast, 45s->5500ms while
+	// TouchCounter<2 then 30s); zero Talk lines. Documented-only (no
+	// bridges): UpdateAI UNIT_STATE_CASTING gates,
+	// BossAI::JustEngagedWith + DATA_INSTRUCTORMALICIA=1 bookkeeping
+	// (scholomance.h:31) (luaBossAI shim).
+	RegisterLuaBoss("boss_instructor_malicia", 10505)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
