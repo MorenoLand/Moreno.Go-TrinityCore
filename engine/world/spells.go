@@ -6366,7 +6366,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						s.executeSpellDamage(effCtx, effectTarget, spellID, targetDamage, effectIndex)
 					}
 				}
-			case 10, 136, 105: // Heal effects
+			case spellEffectHeal, spellEffectHealPct: // SPELL_EFFECT_HEAL (10), SPELL_EFFECT_HEAL_PCT (136)
 				heal := uint32(eff.BasePoints + 1)
 				// Spell::EffectHeal (SpellEffects.cpp): the Death Pact arm
 				// (SPELLFAMILY_DEATHKNIGHT, SpellFamilyFlags[0] & 0x00080000)
@@ -6402,6 +6402,25 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				swiftmend := eff.Effect == 10 && spell.TargetAuraState == auraStateSwiftmend
 				for _, effectTarget := range hitTargets {
 					targetHeal := chainScaledAmount(heal, eff, chainJumpIndex[effectTarget])
+					if eff.Effect == spellEffectHealPct {
+						// Spell::EffectHealPct (SpellEffects.cpp:1477-1492):
+						// the effect value is a percentage of the TARGET's
+						// max health (Unit::CountPctFromMaxHealth), not a
+						// flat amount — the old flat treatment healed
+						// BasePoints+1 HP (a 10% max-health heal landing 10
+						// HP). The damage<0 and !IsAlive gates are
+						// per-effect in C++; effectTargetMaxHealth returns
+						// 0 for dead or unresolvable targets, landing both.
+						if pct := eff.BasePoints + 1; pct > 0 {
+							if maxHealth := s.effectTargetMaxHealth(effCtx, effectTarget); maxHealth > 0 {
+								targetHeal = uint32(uint64(maxHealth) * uint64(pct) / 100)
+							} else {
+								continue
+							}
+						} else {
+							continue
+						}
+					}
 					doneBonus := true
 					if swiftmend {
 						resolved := effectTarget
@@ -6416,6 +6435,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						}
 					}
 					s.executeSpellHealDoneBonus(effCtx, effectTarget, spellID, targetHeal, effectIndex, doneBonus)
+				}
+			case spellEffectHealMechanical: // SPELL_EFFECT_HEAL_MECHANICAL (75)
+				// Spell::EffectHealMechanical (SpellEffects.cpp:1495-1510):
+				// the flat effect value with the standard
+				// SpellHealingBonusDone / SpellHealingBonusTaken legs —
+				// previously fell through to the default no-op arm, so
+				// mechanical heals did nothing at all. The damage<0 and
+				// !IsAlive gates ride effectTargetMaxHealth like the pct arm.
+				if eff.BasePoints+1 <= 0 {
+					break
+				}
+				mechHeal := uint32(eff.BasePoints + 1)
+				for _, effectTarget := range hitTargets {
+					if s.effectTargetMaxHealth(effCtx, effectTarget) == 0 {
+						continue
+					}
+					s.executeSpellHealDoneBonus(effCtx, effectTarget, spellID, mechHeal, effectIndex, true)
 				}
 			case spellEffectEnergize:
 				// Spell::EffectEnergize (SpellEffects.cpp:1775-1845) — audited;
@@ -8882,6 +8918,37 @@ func (s *session) executeSpellMaxHealthHeal(ctx context.Context, targetGUID uint
 			s.server.broadcastCreatureValuesUpdateInInstance(s.player.Map, s.player.InstanceID, targetGUID, map[int]uint32{unitFieldHealth: motion.Health})
 		}
 	}
+}
+
+// effectTargetMaxHealth resolves the max health of a hit target for
+// percentage-of-max-health effects (Spell::EffectHealPct,
+// SpellEffects.cpp:1477-1492 — Unit::CountPctFromMaxHealth lands on the
+// target's max health). Player targets resolve through their session;
+// creature targets through their combat motion. It returns 0 when the
+// target is dead or unresolvable, which also lands C++'s
+// !unitTarget->IsAlive() early-out for the pct/mechanical arms.
+func (s *session) effectTargetMaxHealth(ctx context.Context, targetGUID uint64) uint32 {
+	if s.player != nil && (targetGUID == 0 || targetGUID == s.playerGUID) {
+		if s.player.Health == 0 {
+			return 0
+		}
+		return s.player.MaxHealth
+	}
+	if s.server != nil {
+		if other := s.server.findSessionByGUID(targetGUID); other != nil && other.player != nil {
+			if other.player.Health == 0 {
+				return 0
+			}
+			return other.player.MaxHealth
+		}
+		if creature, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			if creature.Health == 0 {
+				return 0
+			}
+			return creature.MaxHealth
+		}
+	}
+	return 0
 }
 
 func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spellID, heal uint32, effIndex int) {
