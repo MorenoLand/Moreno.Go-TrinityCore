@@ -4719,6 +4719,41 @@ func init() {
 	// on Reset. RAZORFEN DOWNS GROUP CLOSED.
 	RegisterLuaBoss("boss_amnennar_the_coldbringer", 7358)
 
+	// npc_belnistrasz: Razorfen Downs zone script, entry 8516
+	// wowhead-verified (classic.wowhead.com/npc=8516/belnistrasz; no
+	// NPC_ constant in the C++ tree — vishas precedent). ScriptedAI
+	// (not BossAI); AddSC_razorfen_downs also registers
+	// npc_idol_room_spawner (SetData-only summon machine — no summon
+	// bridge) and go_gong (SendCustomAnim + instance SetData — no
+	// instance-data bridge), both documented-only, zero registrations.
+	// Ported arms in lua_scripts/kalimdor/npc_belnistrasz.lua:
+	// Reset refreshes Arcane Intellect 13326 under the C++ HasAura
+	// guard (the gossip-questgiver flag re-set has no bridge);
+	// OnQuestAccept(3525) latches eventInProgress + Talk(0) (escort
+	// Start/faction/MovePath have no bridges); JustEngagedWith arms
+	// Fireball 9053 (1s init, 8s repeat, victim-cast) + Frost Nova
+	// 11831 (DoCastAOE resolved to self-cast, {8s,12s} init, 15s
+	// repeat) + 60% Talk(6) (targeted-player Talk broadcasts);
+	// MovementInform/idol-ritual machine (SummonCreature NPC 8611,
+	// Talk 1-5 progress, GO summons, GroupEventHappens credit) and
+	// JustDied's instance SetBossState + 5s despawn have no bridges —
+	// documented in the lua file, not wired.
+	RegisterLuaBoss("npc_belnistrasz", 8516)
+
+	// npc_willix: Razorfen Kraul zone script, entry 4508
+	// wowhead-verified (wowhead.com/forever/npc=4508/willix-the-importer;
+	// no NPC_ constant in the C++ tree — belnistrasz precedent).
+	// EscortAI (not BossAI); AddSC_razorfen_kraul's only registration.
+	// Ported arms in lua_scripts/kalimdor/npc_willix.lua:
+	// OnQuestAccept(1144) -> Talk(0) (EscortAI Start + faction swap
+	// have no bridges); JustEngagedWith -> Talk(2) ungated
+	// (targeted-player Talk broadcasts). The whole WaypointReached
+	// escort path (Talk 1/3-10, emotes, boar 4514 summons,
+	// GroupEventHappens credit), JustSummoned AttackStart, and
+	// JustDied FailQuest have no bridges — documented in the lua
+	// file, not wired.
+	RegisterLuaBoss("npc_willix", 4508)
+
 	// boss_zum_rah: Zul'Farrak, entry 7271 (zulfarrak.h ZFEntries
 	// ENTRY_ZUM_RAH — kalecgos passes). BossAI(creature, DATA_ZUM_RAH)
 	// (DATA_ZUM_RAH = 0 of ZFDataTypes, "instance_zulfarrak" gate) —
