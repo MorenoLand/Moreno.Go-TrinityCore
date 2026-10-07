@@ -130,6 +130,9 @@ type Config struct {
 	DeathBonesWorld                         bool
 	DeathBonesBattleground                  bool
 	DeletedCharacterTicketTrace             bool
+	CharDeleteMethod                        uint32
+	CharDeleteMinLevel                      uint32
+	CharDeleteDeathKnightMinLevel           uint32
 	PlayerStartAllSpells                    bool
 	PlayerStartAllReputation                bool
 	PlayerStartMapsExplored                 bool
@@ -993,6 +996,12 @@ func (c *Config) set(key, value string) error {
 		return setBool(&c.DeathBonesBattleground, key, value)
 	case "DeletedCharacterTicketTrace":
 		return setBool(&c.DeletedCharacterTicketTrace, key, value)
+	case "CharDelete.Method":
+		return setUint32(&c.CharDeleteMethod, key, value)
+	case "CharDelete.MinLevel":
+		return setUint32(&c.CharDeleteMinLevel, key, value)
+	case "CharDelete.DeathKnight.MinLevel":
+		return setUint32(&c.CharDeleteDeathKnightMinLevel, key, value)
 	case "PlayerStart.AllSpells":
 		return setBool(&c.PlayerStartAllSpells, key, value)
 	case "PlayerStart.AllReputation":

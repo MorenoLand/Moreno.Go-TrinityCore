@@ -1007,7 +1007,9 @@ func (s *session) handleMoveKnockBackAck(ctx context.Context, payload []byte) bo
 }
 
 // handleForceSpeedChangeAck processes the CMSG_FORCE_*_SPEED_CHANGE_ACK
-// opcodes (0x0E2/0x0E3/0x0E5/0x0E7/0x0E8/0x0EA/0x0EC/0x45D).
+// opcodes (0x0E2/0x0E3/0x0E5/0x0E7/0x0E8/0x0EA/0x0EC). 0x45D
+// (CMSG_FORCE_PITCH_RATE_CHANGE_ACK) is STATUS_NEVER/Handle_NULL in C++ and
+// is discarded in the dispatch table instead.
 // Reference: WorldSession::HandleForceSpeedChangeAck (MovementHandler.cpp:442).
 func (s *session) handleForceSpeedChangeAck(opcode uint16, ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {

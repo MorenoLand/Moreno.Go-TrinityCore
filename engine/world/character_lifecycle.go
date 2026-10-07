@@ -12,6 +12,43 @@ var characterGUIDReferences = []characterGUIDReference{
 	{"character_pet", "owner"}, {"character_pet_declinedname", "owner"}, {"characters_npcbot", "owner"}, {"character_social", "friend"}, {"arena_team", "captainGuid"}, {"arena_team_member", "guid"}, {"auctionbidders", "bidderguid"}, {"auctionhouse", "itemowner"}, {"auctionhouse", "buyguid"}, {"battleground_deserters", "guid"}, {"calendar_invites", "invitee"}, {"calendar_invites", "sender"}, {"corpse", "guid"}, {"custom_transmogrification", "Owner"}, {"gm_survey", "guid"}, {"gm_ticket", "playerGuid"}, {"group_member", "memberGuid"}, {"groups", "leaderGuid"}, {"groups", "looterGuid"}, {"groups", "masterLooterGuid"}, {"guild", "leaderguid"}, {"guild_bank_eventlog", "PlayerGuid"}, {"guild_eventlog", "PlayerGuid1"}, {"guild_eventlog", "PlayerGuid2"}, {"guild_member", "guid"}, {"guild_member_withdraw", "guid"}, {"item_instance", "owner_guid"}, {"item_instance", "creatorGuid"}, {"item_instance", "giftCreatorGuid"}, {"item_refund_instance", "player_guid"}, {"lag_reports", "guid"}, {"lfg_data", "guid"}, {"mail", "sender"}, {"mail", "receiver"}, {"mail_items", "receiver"}, {"petition", "ownerguid"}, {"petition_sign", "ownerguid"}, {"petition_sign", "playerguid"}, {"pvpstats_players", "character_guid"}, {"quest_tracker", "character_guid"},
 }
 
+// characterDeletePreludeDeletes runs the Player::DeleteFromDB pre-switch
+// prelude (Player.cpp:4228-4246): guild membership, arena teams, group and
+// petition state are detached on BOTH delete methods, before the method arm.
+var characterDeletePreludeDeletes = []string{
+	// Guild::DeleteMember -> _DeleteMemberFromDB (Guild.cpp:2396-2403):
+	// "DELETE FROM guild_member WHERE guid = ?" (CHAR_DEL_GUILD_MEMBER). The
+	// handler rejects guild leaders (CHAR_DELETE_FAILED_GUILD_LEADER), so the
+	// disband/leader-handoff arm is unreachable on this path.
+	"DELETE FROM guild_member WHERE guid = ?",
+	// Player::LeaveAllArenaTeams -> ArenaTeam::DelMember cleanDb
+	// (ArenaTeam.cpp:366-369): "DELETE FROM arena_team_member WHERE
+	// arenaTeamId = ? AND guid = ?" (CHAR_DEL_ARENA_TEAM_MEMBER); the guid
+	// alone identifies the member row. Captains are rejected by the handler.
+	"DELETE FROM arena_team_member WHERE guid = ?",
+	// Player::DeleteFromDB -> RemoveFromGroup (Player.cpp:4240-4244):
+	// "DELETE FROM group_member WHERE memberGuid = ?" (CHAR_DEL_GROUP_MEMBER).
+	"DELETE FROM group_member WHERE memberGuid = ?",
+	// Player::RemovePetitionsAndSigns CHARTER_TYPE_ANY (Player.cpp:4246 via
+	// PetitionMgr): CHAR_DEL_ALL_PETITION_SIGNATURES, CHAR_DEL_PETITION_BY_OWNER,
+	// CHAR_DEL_PETITION_SIGNATURE_BY_OWNER.
+	"DELETE FROM petition_sign WHERE playerguid = ?",
+	"DELETE FROM petition WHERE ownerguid = ?",
+	"DELETE FROM petition_sign WHERE ownerguid = ?",
+}
+
+// characterDeleteCalendarDeletes drops the character's calendar state.
+// CalendarMgr::RemoveAllPlayerEventsAndInvites (CalendarMgr.cpp:285-293) runs
+// in WorldSession::HandleCharDeleteOpcode (CharacterHandler.cpp:699) before
+// Player::DeleteFromDB, on both delete methods. The calendar mail arm is
+// skipped (remover is empty on this path); the removed alert broadcast runs
+// in handleCharDelete before the wipe.
+var characterDeleteCalendarDeletes = []string{
+	"DELETE FROM calendar_invites WHERE event IN (SELECT id FROM calendar_events WHERE creator = ?)",
+	"DELETE FROM calendar_events WHERE creator = ?",
+	"DELETE FROM calendar_invites WHERE invitee = ?",
+}
+
 var characterOwnedStateDeletes = []string{
 	"DELETE FROM character_account_data WHERE guid = ?",
 	"DELETE FROM character_achievement WHERE guid = ?",
@@ -56,33 +93,6 @@ var characterOwnedStateDeletes = []string{
 	"DELETE FROM gm_ticket WHERE playerGuid = ?",
 	"DELETE FROM guild_bank_eventlog WHERE PlayerGuid = ?",
 	"DELETE FROM guild_eventlog WHERE PlayerGuid1 = ? OR PlayerGuid2 = ?",
-	// Guild::DeleteMember -> _DeleteMemberFromDB (Guild.cpp:2396-2403):
-	// "DELETE FROM guild_member WHERE guid = ?" (CHAR_DEL_GUILD_MEMBER). The
-	// handler rejects guild leaders (CHAR_DELETE_FAILED_GUILD_LEADER), so the
-	// disband/leader-handoff arm is unreachable on this path.
-	"DELETE FROM guild_member WHERE guid = ?",
-	// Player::LeaveAllArenaTeams -> ArenaTeam::DelMember cleanDb
-	// (ArenaTeam.cpp:366-369): "DELETE FROM arena_team_member WHERE
-	// arenaTeamId = ? AND guid = ?" (CHAR_DEL_ARENA_TEAM_MEMBER); the guid
-	// alone identifies the member row. Captains are rejected by the handler.
-	"DELETE FROM arena_team_member WHERE guid = ?",
-	// Player::DeleteFromDB -> RemoveFromGroup (Player.cpp:4240-4244):
-	// "DELETE FROM group_member WHERE memberGuid = ?" (CHAR_DEL_GROUP_MEMBER).
-	"DELETE FROM group_member WHERE memberGuid = ?",
-	// Player::RemovePetitionsAndSigns CHARTER_TYPE_ANY (Player.cpp:4246 via
-	// PetitionMgr): CHAR_DEL_ALL_PETITION_SIGNATURES, CHAR_DEL_PETITION_BY_OWNER,
-	// CHAR_DEL_PETITION_SIGNATURE_BY_OWNER.
-	"DELETE FROM petition_sign WHERE playerguid = ?",
-	"DELETE FROM petition WHERE ownerguid = ?",
-	"DELETE FROM petition_sign WHERE ownerguid = ?",
-	// CalendarMgr::RemoveAllPlayerEventsAndInvites (CalendarMgr.cpp:285-293):
-	// events created by the deleted character are dropped with their invites,
-	// and the character's own invites to other events are removed. The
-	// calendar mail arm is skipped (remover is empty on this path); the
-	// removed alert broadcast runs in handleCharDelete before the wipe.
-	"DELETE FROM calendar_invites WHERE event IN (SELECT id FROM calendar_events WHERE creator = ?)",
-	"DELETE FROM calendar_events WHERE creator = ?",
-	"DELETE FROM calendar_invites WHERE invitee = ?",
 	"UPDATE characters_npcbot SET owner = 0 WHERE owner = ?",
 }
 
@@ -98,6 +108,25 @@ func highestCharacterGUID(ctx context.Context, db *sql.DB) (uint64, error) {
 		}
 	}
 	return highest, nil
+}
+
+// deleteCharacterPrelude runs the association/calendar detachment shared by
+// both char-delete methods: the Player::DeleteFromDB pre-switch prelude and
+// the HandleCharDeleteOpcode calendar arm (see the slice comments above).
+// Everything else (owned-state wipe, mail return, character row) is
+// CHAR_DELETE_REMOVE-only.
+func deleteCharacterPrelude(ctx context.Context, tx *sql.Tx, guid uint64) error {
+	for _, query := range characterDeletePreludeDeletes {
+		if _, err := tx.ExecContext(ctx, query, guid); err != nil {
+			return err
+		}
+	}
+	for _, query := range characterDeleteCalendarDeletes {
+		if _, err := tx.ExecContext(ctx, query, guid); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func deleteCharacterOwnedState(ctx context.Context, tx *sql.Tx, guid uint64, ticketTrace bool) error {

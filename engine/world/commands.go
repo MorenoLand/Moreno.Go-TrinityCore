@@ -2714,6 +2714,9 @@ func (s *session) deleteCharacterFromDB(ctx context.Context, guid uint64, accoun
 	if err := s.deleteCharacterReturnMails(ctx, tx, guid, accountID); err != nil {
 		return
 	}
+	if err := deleteCharacterPrelude(ctx, tx, guid); err != nil {
+		return
+	}
 	if err := deleteCharacterOwnedState(ctx, tx, guid, s.server.Config.DeletedCharacterTicketTrace); err != nil {
 		return
 	}
@@ -3438,6 +3441,10 @@ func (s *session) deleteAccount(ctx context.Context, accountID uint32) accountOp
 			return accountOpDBInternalError
 		}
 		if err := s.deleteCharacterReturnMails(ctx, tx, guid, accountID); err != nil {
+			tx.Rollback()
+			return accountOpDBInternalError
+		}
+		if err := deleteCharacterPrelude(ctx, tx, guid); err != nil {
 			tx.Rollback()
 			return accountOpDBInternalError
 		}

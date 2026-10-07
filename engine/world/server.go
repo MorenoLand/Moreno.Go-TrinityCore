@@ -1864,7 +1864,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 		case uint32(protocol.OpcodeCMSG_FORCE_RUN_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_RUN_BACK_SPEED_CHANGE_ACK),
 			uint32(protocol.OpcodeCMSG_FORCE_SWIM_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_SWIM_BACK_SPEED_CHANGE_ACK),
 			uint32(protocol.OpcodeCMSG_FORCE_WALK_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_FLIGHT_SPEED_CHANGE_ACK),
-			uint32(protocol.OpcodeCMSG_FORCE_FLIGHT_BACK_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_PITCH_RATE_CHANGE_ACK):
+			uint32(protocol.OpcodeCMSG_FORCE_FLIGHT_BACK_SPEED_CHANGE_ACK):
 			if !state.authed || !state.handleForceSpeedChangeAck(uint16(header.Opcode), ctx, payload) {
 				return
 			}
@@ -3057,6 +3057,10 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			uint32(protocol.OpcodeCMSG_FORCEACTIONSHOW),
 			uint32(protocol.OpcodeCMSG_FORCE_ANIM),
 			uint32(protocol.OpcodeCMSG_FORCE_SAY_CHEAT),
+			// CMSG_FORCE_PITCH_RATE_CHANGE_ACK (0x45D) is STATUS_NEVER +
+			// Handle_NULL in Opcodes.cpp: discarded, never dispatched to the
+			// speed-ack handler.
+			uint32(protocol.OpcodeCMSG_FORCE_PITCH_RATE_CHANGE_ACK),
 			uint32(protocol.OpcodeCMSG_GAMESPEED_SET),
 			uint32(protocol.OpcodeCMSG_GAMETIME_SET),
 			uint32(protocol.OpcodeCMSG_GETDEATHBINDZONE),

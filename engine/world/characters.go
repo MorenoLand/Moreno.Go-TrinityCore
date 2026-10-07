@@ -61,6 +61,9 @@ const (
 	charDeleteFailed                    = 72
 	charDeleteFailedGuildLeader         = 74
 	charDeleteFailedArenaCaptain        = 75
+	// Player::DeleteFromDB delete methods (Player.h:785-786).
+	charDeleteRemove = 0
+	charDeleteUnlink = 1
 )
 
 type enumCharacter struct {
@@ -438,9 +441,24 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_DELETE), charDeleteFailedArenaCaptain)
 	}
 	var accountID uint32
-	err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT account FROM characters WHERE guid = ?", guid).Scan(&accountID)
+	var charClass, charLevel uint8
+	err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT account, class, level FROM characters WHERE guid = ?", guid).Scan(&accountID, &charClass, &charLevel)
 	if errors.Is(err, sql.ErrNoRows) || err != nil || accountID != s.accountID {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_DELETE), 72)
+	}
+	// Player::DeleteFromDB (Player.cpp:4204-4221): the delete method comes
+	// from CharDelete.Method (0 = REMOVE, 1 = UNLINK); a character below the
+	// configured minimum level always takes REMOVE. This is the
+	// HandleCharDeleteOpcode path, so deleteFinally is never set.
+	deleteMethod := s.server.Config.CharDeleteMethod
+	if deleteMethod == charDeleteUnlink {
+		minLevel := s.server.Config.CharDeleteMinLevel
+		if charClass == 6 { // CLASS_DEATH_KNIGHT (Player.h:784)
+			minLevel = s.server.Config.CharDeleteDeathKnightMinLevel
+		}
+		if uint32(charLevel) < minLevel {
+			deleteMethod = charDeleteRemove
+		}
 	}
 	tx, err := s.server.CharactersStore.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -475,6 +493,27 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 		for _, t := range calendarEventRelativeSessions(ctx, s.server, ev.id) {
 			_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_REMOVED_ALERT), remBuf.Bytes(), true)
 		}
+	}
+	// Player::DeleteFromDB pre-switch prelude (Player.cpp:4228-4246) plus the
+	// HandleCharDeleteOpcode calendar arm (CharacterHandler.cpp:699): shared
+	// by both delete methods.
+	if err := deleteCharacterPrelude(ctx, tx, guid); err != nil {
+		return false
+	}
+	if deleteMethod == charDeleteUnlink {
+		// Player::DeleteFromDB CHAR_DELETE_UNLINK (Player.cpp:4537-4543,
+		// CHAR_UPD_DELETE_INFO): the character is unlinked from the account,
+		// the name is freed for reuse and the row shows as deleted in-game.
+		// Owned state, mails, pets and social rows are kept, and npcbot
+		// owners are not reset (REMOVE-only per Player.cpp:4532).
+		if _, err := tx.ExecContext(ctx, "UPDATE characters SET deleteInfos_Name = name, deleteInfos_Account = account, deleteDate = UNIX_TIMESTAMP(), name = '', account = 0 WHERE guid = ?", guid); err != nil {
+			return false
+		}
+		if err := tx.Commit(); err != nil {
+			return false
+		}
+		delete(s.legitimate, guid)
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_DELETE), charDeleteSuccess)
 	}
 	// Player::DeleteFromDB (Player.cpp:4349): online players who had the
 	// deleted character on their social list get FRIEND_REMOVED. Capture the
