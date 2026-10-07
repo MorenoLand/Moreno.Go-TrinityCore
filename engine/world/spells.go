@@ -2290,7 +2290,11 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		}
 		castState.Timer = time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
 			s.castMu.Lock()
-			if castState.Cancelled {
+			// The cast must still be the active one: if it was interrupted,
+			// activeCast is nil (or a different cast), and the spell must not
+			// fire. Checking Cancelled alone is insufficient because of the
+			// race between the timer firing and the interrupt acquiring the lock.
+			if castState.Cancelled || s.activeCast != castState {
 				s.castMu.Unlock()
 				return
 			}
@@ -6173,14 +6177,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						}
 						// Spell::EffectSchoolDMG (SpellEffects.cpp:669-724):
 						// the Steady Shot arm (Hunter family,
-						// SpellFamilyFlags[1] & 0x1) is a documented
-						// no-bridge. The dazed leg scans the target's
-						// SPELL_AURA_MOD_DECREASE_SPEED auras for SpellIconID
-						// 15 with Dispel 0 and adds Effects[EFFECT_1]
-						// .CalcValue() — blocked on the CalculateSpellDamage
-						// standing delta. The weapon leg adds a ranged weapon
-						// damage roll (GetWeaponDamageRange(RANGED_ATTACK)
-						// summed over the damage slots) plus GetAmmoDPS() *
+						// SpellFamilyFlags[1] & 0x1). The dazed leg scans the
+						// target's SPELL_AURA_MOD_DECREASE_SPEED auras for
+						// SpellIconID 15 with Dispel 0 and adds
+						// Effects[EFFECT_1].CalcValue() to the damage — bridged
+						// below via targetHasDazedAura; the earlier note
+						// blaming the CalculateSpellDamage standing delta was
+						// wrong (CalcValue is the no-caster flat value, not
+						// CalculateSpellDamage). The bonus stays on the
+						// direct-bonus path (C++ leaves apply_direct_bonus
+						// true), so executeSpellDamage's
+						// SpellDamageBonusDone/Taken legs cover it. The weapon
+						// leg adds a ranged weapon damage roll
+						// (GetWeaponDamageRange(RANGED_ATTACK) summed over the
+						// damage slots) plus GetAmmoDPS() *
 						// GetAttackTime(RANGED_ATTACK) * 0.001f — blocked on
 						// the missing ranged weapon-damage model (AmmoDPS is
 						// modeled in player_state.go, but no weapon damage
@@ -6188,8 +6198,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						// is structural (no npcbot model). The C++ else-if
 						// with the Gore arm above (663-668) cannot misroute:
 						// Gore-flagged spells carry no Steady Shot flag.
-						// Revisit only when the weapon-damage and
-						// CalculateSpellDamage machinery land.
+						// SCHOOL_DAMAGE (effect 2) only — the weapon-damage
+						// effects in this case route to different C++ handlers.
+						if eff.Effect == 2 && s.player != nil &&
+							spell.SpellFamilyName == spellFamilyHunter && spell.SpellFamilyFlags[1]&0x1 != 0 &&
+							len(spell.Effects) > 1 && s.targetHasDazedAura(effCtx, effectTarget) {
+							if bonus := spell.Effects[1].CalcValue(); bonus != 0 {
+								targetDamage = uint32(max(int64(0), int64(targetDamage)+int64(bonus)))
+							}
+						}
 						// Spell::EffectSchoolDMG (SpellEffects.cpp:515-524): the
 						// Wrath arm (Druid family, SpellFamilyFlags[0] &
 						// 0x00000001) improves the damage by AddPct of the
@@ -9386,6 +9403,55 @@ func (s *session) targetHasPoisonAura(ctx context.Context, targetGUID uint64, sp
 			continue
 		}
 		if auraSpell.DispelType == DispelPoison {
+			return true
+		}
+	}
+	return false
+}
+
+// targetHasDazedAura mirrors the dazed leg of the Steady Shot arm of
+// Spell::EffectSchoolDMG (SpellEffects.cpp:676-686): the target's
+// SPELL_AURA_MOD_DECREASE_SPEED aura effects are scanned for a spell with
+// SpellIconID 15 and Dispel 0. The three-way target resolution follows the
+// targetHasFamilyAuraEffect pattern; there is no caster-GUID filter, matching
+// the C++ GetAuraEffectsByType scan.
+func (s *session) targetHasDazedAura(ctx context.Context, targetGUID uint64) bool {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil {
+		return false
+	}
+	var auras []*activeAura
+	if targetGUID == 0 || targetGUID == s.playerGUID {
+		auras = s.loadedAuras()
+	} else if other := s.server.findSessionByGUID(targetGUID); other != nil && other.player != nil {
+		auras = other.loadedAuras()
+	} else if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
+		key := creatureAuraKeyForTarget(target)
+		s.server.auraMu.Lock()
+		for _, aura := range s.server.activeCreatureAuras[key] {
+			auras = append(auras, aura)
+		}
+		s.server.auraMu.Unlock()
+	} else {
+		return false
+	}
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if auraSpell.SpellIconID != 15 || auraSpell.DispelType != 0 {
+			continue
+		}
+		for index, eff := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || index >= 8 || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellEffectIsAuraEffect(eff) || eff.Aura != spellAuraDecreaseSpeed {
+				continue
+			}
 			return true
 		}
 	}
@@ -14630,39 +14696,48 @@ func (s *session) channelDrainTick() {
 	s.castMu.Unlock()
 }
 
-// getPushbackReductionLocked returns total percent pushback reduction from active auras (SPELL_AURA_REDUCE_PUSHBACK = 149).
-// Assumes s.castMu is held.
-// Reference: TrinityCore Spell::Delayed / Spell::DelayedChannel: delayReduce += playerCaster->GetTotalAuraModifier(SPELL_AURA_REDUCE_PUSHBACK) - 100.
-func (s *session) getPushbackReductionLocked() int32 {
-	if s == nil {
-		return 0
+// spellRowOrZero loads the DBC row for a spell ID, returning the zero Spell
+// when the row is unavailable (the pushback spellmod fold then runs on the
+// pristine base, matching C++ with no registered mods).
+func (s *session) spellRowOrZero(spellID uint32) wotlk.Spell {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return wotlk.Spell{}
 	}
-	var reduction int32
-	for _, a := range s.activeAuras {
-		if a != nil && !a.Stopped && a.AuraType == 149 { // SPELL_AURA_REDUCE_PUSHBACK
-			reduction += int32(a.Amount)
-		}
+	if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+		return spell
 	}
-	if reduction > 100 {
-		reduction = 100
-	}
-	return reduction
+	return wotlk.Spell{}
 }
 
-func (s *session) getPushbackReduction() int32 {
+// getPushbackReductionLocked mirrors the pushback-reduction computation shared
+// by Spell::Delayed (Spell.cpp:7256-7262) and Spell::DelayedChannel
+// (Spell.cpp:7300-7306): delayReduce starts at 100, folds the caster's
+// SPELLMOD_NOT_LOSE_CASTING_TIME spellmods (nil-spell semantics — Delayed
+// runs while the cast is still on the bar, before _cast sets the taking
+// spell), then adds the SPELL_AURA_REDUCE_PUSHBACK (149) aura total minus
+// 100. The >= 100 early-out lives in the callers, matching C++. Assumes
+// s.castMu is held.
+func (s *session) getPushbackReductionLocked(spell wotlk.Spell) int32 {
 	if s == nil {
 		return 0
 	}
-	s.castMu.Lock()
-	defer s.castMu.Unlock()
-	return s.getPushbackReductionLocked()
+	delayReduce := s.applySpellModNoTakingLocked(spell, spellModNotLoseCastingTime, 100)
+	var auraTotal int32
+	for _, a := range s.activeAuras {
+		if a != nil && !a.Stopped && a.AuraType == 149 { // SPELL_AURA_REDUCE_PUSHBACK
+			auraTotal += int32(a.Amount)
+		}
+	}
+	return delayReduce + auraTotal - 100
 }
 
 // delayCurrentCast mirrors Spell::Delayed: called when the player takes
 // damage during a timed cast. Requires SPELL_INTERRUPT_FLAG_PUSH_BACK, at
-// most two pushbacks per cast, 500ms each clamped to remaining time, and
-// announces SMSG_SPELL_DELAYED. Spells with SPELL_INTERRUPT_FLAG_ABORT_ON_DMG
-// are aborted entirely on direct damage.
+// most two pushbacks per cast, 500ms each (AddPct-reduced by
+// SPELLMOD_NOT_LOSE_CASTING_TIME spellmods and SPELL_AURA_REDUCE_PUSHBACK
+// auras) clamped to remaining time, and announces SMSG_SPELL_DELAYED.
+// Spells with SPELL_INTERRUPT_FLAG_ABORT_ON_DMG are aborted entirely on
+// direct damage.
 func (s *session) delayCurrentCast() {
 	if s.player == nil {
 		return
@@ -14684,7 +14759,7 @@ func (s *session) delayCurrentCast() {
 		s.castMu.Unlock()
 		return
 	}
-	reduction := s.getPushbackReductionLocked()
+	reduction := s.getPushbackReductionLocked(s.spellRowOrZero(cast.SpellID))
 	if reduction >= 100 {
 		s.castMu.Unlock()
 		return
@@ -14695,10 +14770,10 @@ func (s *session) delayCurrentCast() {
 		s.castMu.Unlock()
 		return
 	}
-	delayMs := defaultCastPushbackMs
-	if reduction > 0 {
-		delayMs = uint32(float64(delayMs) * float64(100-reduction) / 100.0)
-	}
+	// Spell::Delayed (Spell.cpp:7263): AddPct(delaytime, -delayReduce) in
+	// int32 arithmetic — a negative reduction lengthens the pushback.
+	delayMs := int32(defaultCastPushbackMs)
+	delayMs += delayMs * -reduction / 100
 	delay := time.Duration(delayMs) * time.Millisecond
 	if delay > remaining {
 		delay = remaining
@@ -14722,8 +14797,9 @@ func (s *session) delayCurrentCast() {
 
 // delayCurrentChannel mirrors Spell::DelayedChannel: called when the player
 // takes damage while channeling. Requires CHANNEL_FLAG_DELAY, at most two
-// pushbacks, 25% of the total channel duration per hit, announced via
-// MSG_CHANNEL_UPDATE with the new remaining time.
+// pushbacks, 25% of the total channel duration per hit (AddPct-reduced like
+// the cast pushback), announced via MSG_CHANNEL_UPDATE with the new
+// remaining time.
 func (s *session) delayCurrentChannel() {
 	if s.player == nil {
 		return
@@ -14734,21 +14810,22 @@ func (s *session) delayCurrentChannel() {
 		s.castMu.Unlock()
 		return
 	}
-	reduction := s.getPushbackReductionLocked()
+	reduction := s.getPushbackReductionLocked(channel.Spell)
 	if reduction >= 100 {
 		s.castMu.Unlock()
 		return
 	}
-	delayMs := channel.DurationMs / 4 // 25% of total duration per hit
-	if reduction > 0 {
-		delayMs = uint32(float64(delayMs) * float64(100-reduction) / 100.0)
-	}
-	if delayMs == 0 {
+	// Spell::DelayedChannel (Spell.cpp:7305-7308): delaytime is 25% of the
+	// (modded, haste-compressed) channel duration per hit, then
+	// AddPct(delaytime, -delayReduce) in int32 arithmetic.
+	delayMs := int32(channel.DurationMs / 4)
+	delayMs += delayMs * -reduction / 100
+	if delayMs <= 0 {
 		s.castMu.Unlock()
 		return
 	}
 	if time.Duration(delayMs)*time.Millisecond >= channel.Remaining {
-		delayMs = uint32(channel.Remaining.Milliseconds())
+		delayMs = int32(channel.Remaining.Milliseconds())
 		channel.Remaining = 0
 	} else {
 		channel.Remaining -= time.Duration(delayMs) * time.Millisecond

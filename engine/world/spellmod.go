@@ -362,6 +362,56 @@ func (s *session) applySpellMod(spell wotlk.Spell, op uint8, basevalue int32) in
 	return int32(float64(basevalue+totalFlat) * totalMul)
 }
 
+// applySpellModNoTakingLocked mirrors Player::ApplySpellMod called with a null
+// taking spell (Player.cpp:21309-21370): the (basevalue + totalFlat) * totalMul
+// fold over the registered mods affecting spell, with no taking-cast
+// registration and no charge consumption. Spell::Delayed / DelayedChannel
+// (Spell.cpp:7260/7300) call it while the cast is still on the bar, before
+// _cast sets the taking spell, so the SPELLMOD_NOT_LOSE_CASTING_TIME fold
+// runs with nil-spell semantics (the IsAffectedBySpellmod charge leg only
+// gates the taking-cast path, Player.cpp:21294). Assumes s.castMu is held —
+// the shared spellModTotals copy would re-lock.
+func (s *session) applySpellModNoTakingLocked(spell wotlk.Spell, op uint8, basevalue int32) int32 {
+	if s == nil || s.server == nil || s.server.Data == nil || op >= spellModOpCount {
+		return basevalue
+	}
+	// SpellInfo::IsAffectedBySpellMods (SpellInfo.cpp:1319).
+	if spell.AttributesEx3&spellAttr3NoDoneBonus != 0 {
+		return basevalue
+	}
+	var totalFlat int32
+	totalMul := 1.0
+	var charged *spellModifier
+	fold := func(m *spellModifier) {
+		if m.modType == uint8(spellAuraAddFlatModifier) {
+			totalFlat += m.value
+		} else {
+			totalMul += float64(m.value) / 100.0
+		}
+	}
+	for _, m := range s.spellMods[op] {
+		if m == nil || m.owner == nil || m.owner.Stopped {
+			continue
+		}
+		if !s.spellModAffectsSpell(m.spellID, m.mask, op, spell) {
+			continue
+		}
+		if m.usesCharges {
+			// Highest Priority wins in C++; wotlk.Spell has no Priority
+			// field, so the first one wins — same as spellModTotals.
+			if charged == nil {
+				charged = m
+			}
+			continue
+		}
+		fold(m)
+	}
+	if charged != nil {
+		fold(charged)
+	}
+	return int32(float64(basevalue+totalFlat) * totalMul)
+}
+
 // applySpellModFloat mirrors the float instantiation of
 // Player::ApplySpellMod (Player.cpp:21309-21370): the base value stays in
 // the float domain through the whole computation, matching basevalue =
