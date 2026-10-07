@@ -2716,6 +2716,29 @@ func init() {
 	RegisterLuaBoss("npc_unworthy_initiate", 29565)
 	RegisterLuaBoss("npc_unworthy_initiate", 29566)
 	RegisterLuaBoss("npc_unworthy_initiate", 29567)
+	// AddSC_the_scarlet_enclave_c1 (chapter1.cpp, EK loader decl :95 /
+	// call :273): full-file audit 2026-10-07. Of the 14 scripts only
+	// npc_unworthy_initiate is ported/registered (above). The remaining
+	// 13 have zero Lua bridges — documented-only: npc_unworthy_initiate_
+	// anchor (PassiveAI SetGUID/GetGUID prisoner store), go_acherus_
+	// soul_prison (GO gossip -> EventStart; no gameobject-gossip bridge),
+	// spell_death_knight_initiate_visual (display-ID 25354-25373 ->
+	// spell 51520-51552 equip map; no SpellScript bridge), npc_eye_of_
+	// acherus (charmer lookup / RemoveAurasDueToSpell / flight spline;
+	// no charmer/movement bridges), npc_death_knight_initiate (duel
+	// machine: SpellHit 52996 accept, DamageTaken clamp-to-1 victory
+	// arms, gossip duel menu; no damage-hook / player-self-cast / gossip
+	// bridges), npc_dark_rider_of_acherus (TempSummon summoner chain,
+	// MoveChase, DespawnOrUnsummon; no summon/movement bridges), npc_
+	// salanar_the_horseman (gossip 9739 realm-of-shadows cast, MoveInLineOf
+	// Sight vehicle machine; no gossip/vehicle bridges), spell_stable_
+	// master_repo (AuraScript; no bridge), spell_deliver_stolen_horse
+	// (SpellScript; no bridge), npc_ros_dark_rider (EnterVehicle /
+	// deathcharger faction flip; no vehicle bridge), npc_dkc1_gothik
+	// (MoveInLineOfSight ghoul-collect; no proximity bridge), npc_scarlet_
+	// ghoul (owner/minion machines; no minion bridges), spell_gift_of_
+	// the_harvester (SpellScript; no bridge). No new registrations,
+	// no Lua files.
 	// npc_valkyr_battle_maiden (The Scarlet Enclave zone file,
 	// zone_the_scarlet_enclave.cpp — AddSC_the_scarlet_enclave, loader
 	// decl :94 / call :272): PassiveAI revive-valkyr driven by an
