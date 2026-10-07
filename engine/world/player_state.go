@@ -1368,7 +1368,7 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 				if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", state.GUID, item.item); err != nil {
 					return false
 				}
-				if _, err := tx.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, item_template, receiver) VALUES (?, ?, ?, ?)", mailID, item.item, item.entry, state.GUID); err != nil {
+				if _, err := tx.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, receiver) VALUES (?, ?, ?)", mailID, item.item, state.GUID); err != nil {
 					return false
 				}
 			}

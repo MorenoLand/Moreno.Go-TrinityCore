@@ -634,14 +634,22 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrMailAttachmentInvalid, 0, 0, 0), true)
 			return true
 		}
-		// Reference: MailHandler.cpp:209-213 — Item::CanBeTraded(true)
-		// (Item.cpp:720): in mail, a soulbound item is unmailable unless it
-		// is account-wide bound (the (!mail || !IsBoundAccountWide()) term).
-		// CanBeTraded's other legs — loot-generated items, equipped items
-		// (CanUnequipItem), the item currently being looted, and
-		// enchant-bound items — have no Go item models, so they are
-		// documented no-bridge arms.
+		// Reference: Item::CanBeTraded(true) (Item.cpp:720-743) — the C++
+		// mail path runs CanBeTraded before the explicit IsNotEmptyBag check,
+		// so a non-empty bag answers MAIL_ERR_EQUIP_ERROR with
+		// EQUIP_ERR_MAIL_BOUND_ITEM, never EQUIP_ERR_CAN_ONLY_DO_WITH_EMPTY_BAGS
+		// (the C++ IsNotEmptyBag arm at MailHandler.cpp:233-235 is unreachable
+		// in this path). Modeled arms: the soulbound term
+		// ((!mail || !IsBoundAccountWide()) && IsSoulBound()) and the bag term
+		// (IsBag() in an equipped bag slot or with contents). CanBeTraded's
+		// other legs — loot-generated items, CanUnequipItem, the item
+		// currently being looted, and enchant-bound items — have no Go item
+		// models, so they are documented no-bridge arms.
 		if info.flags&itemFieldFlagSoulbound != 0 && info.templateFlags&itemFlagIsBoundToAccount == 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrEquipError, equipErrMailBoundItem, 0, 0), true)
+			return true
+		}
+		if s.mailAttachmentBagBlocked(ctx, att.ItemGUID) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrEquipError, equipErrMailBoundItem, 0, 0), true)
 			return true
 		}
@@ -663,13 +671,10 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrCantSendWrappedCOD, 0, 0, 0), true)
 			return true
 		}
-		// Reference: MailHandler.cpp:233-235 — a non-empty bag cannot be
-		// mailed (Item::IsNotEmptyBag, Item.cpp:298): answer (MAIL_SEND,
-		// MAIL_ERR_EQUIP_ERROR, EQUIP_ERR_CAN_ONLY_DO_WITH_EMPTY_BAGS = 31).
-		if s.itemIsNonemptyBag(ctx, att.ItemGUID) {
-			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrEquipError, equipErrCanOnlyDoWithEmptyBags, 0, 0), true)
-			return true
-		}
+		// The explicit IsNotEmptyBag arm (MailHandler.cpp:233-235,
+		// EQUIP_ERR_CAN_ONLY_DO_WITH_EMPTY_BAGS) is unreachable: the
+		// CanBeTraded bag arm above answers EQUIP_ERR_MAIL_BOUND_ITEM first
+		// for every bag that arm would reject.
 	}
 	// Reference: MailHandler.cpp:243-244 — Player::SendMailResult(0,
 	// MAIL_SEND, MAIL_OK) fires first, then ModifyMoney(-reqmoney), then
@@ -1085,6 +1090,29 @@ func mailCreateTextItemCreator(messageType uint32, mailSender uint64) uint64 {
 // CANT_CARRY_MORE_OF_THIS (Player.cpp:10711). maxCount <= 0 is uncapped
 // (ItemTemplate.h:628); the ItemLimitCategory sub-term needs DBC data absent
 // from this server, so it is not modeled.
+// mailAttachmentBagBlocked mirrors the bag arm of Item::CanBeTraded(true)
+// (Item.cpp:728): a container (Item::IsBag — template class
+// ITEM_CLASS_CONTAINER == 1) that sits in an equipped bag slot (the
+// Player::IsBagPos analog — Go inventory convention: bag = 0, slots 19-22)
+// or holds any contents cannot be mailed.
+func (s *session) mailAttachmentBagBlocked(ctx context.Context, itemGUID uint64) bool {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return false
+	}
+	var class int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(class, 0) FROM item_template WHERE entry = (SELECT itemEntry FROM item_instance WHERE guid = ?)`, itemGUID).Scan(&class); err != nil || class != 1 {
+		return false
+	}
+	var bag, slot int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(bag, 0), COALESCE(slot, 0) FROM character_inventory WHERE guid = ? AND item = ? LIMIT 1`, s.playerGUID, itemGUID).Scan(&bag, &slot); err != nil {
+		return false
+	}
+	if bag == 0 && slot >= 19 && slot < 23 {
+		return true
+	}
+	return !s.isBagEmpty(ctx, int64(itemGUID))
+}
+
 // itemIsNonemptyBag mirrors Item::IsNotEmptyBag (Item.cpp:298):
 // true when the item is a bag (template ContainerSlots > 0) and holds any
 // items. MailHandler.cpp:218 refuses such items as mail attachments;

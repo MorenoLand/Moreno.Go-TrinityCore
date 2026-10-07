@@ -747,7 +747,7 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 			wonBody := fmt.Sprintf("%X:%d:%d", ownerGUID, buyout, buyout)
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, ?, 1, ?, ?, 0, 0, 4)",
 				nextMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, s.playerGUID, wonSubj, wonBody, now+30*86400, now)
-			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, item_template, receiver) VALUES (?, ?, ?, ?)", nextMailID, itemGUID, itemEntry, s.playerGUID)
+			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, receiver) VALUES (?, ?, ?)", nextMailID, itemGUID, s.playerGUID)
 			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, itemGUID)
 			s.sendMailNotify(uint64(s.playerGUID))
 			// C++ SendAuctionWonMail (AuctionHouseMgr.cpp:170-174): the
@@ -1031,7 +1031,7 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 	cancelSubj := fmt.Sprintf("%d:0:%d:%d:%d", itemEntry, auctionCanceled, auctionID, itemCount)
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, '', 1, ?, ?, 0, 0, 4)",
 		nextMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, ownerGUID, cancelSubj, now+30*86400, now)
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, item_template, receiver) VALUES (?, ?, ?, ?)", nextMailID, itemGUID, itemEntry, ownerGUID)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, receiver) VALUES (?, ?, ?)", nextMailID, itemGUID, ownerGUID)
 	s.sendMailNotify(uint64(ownerGUID))
 
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM auctionhouse WHERE id = ?", auctionID)
@@ -1134,7 +1134,7 @@ func (s *session) expireAuctions(ctx context.Context) {
 					wonBody := fmt.Sprintf("%X:%d:%d", a.owner, a.lastBid, a.buyout)
 					_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, ?, 1, ?, ?, 0, 0, 4)",
 						wonMailID, mailAuctionType, mailStationeryAuction, a.houseID, a.bidder, wonSubj, wonBody, now+30*86400, now)
-					_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, item_template, receiver) VALUES (?, ?, ?, ?)", wonMailID, a.itemGUID, a.itemTmpl, a.bidder)
+					_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, receiver) VALUES (?, ?, ?)", wonMailID, a.itemGUID, a.bidder)
 					_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", a.bidder, a.itemGUID)
 					s.sendMailNotify(uint64(a.bidder))
 					// C++ :170-174: the connected winning bidder gets the
@@ -1172,7 +1172,7 @@ func (s *session) expireAuctions(ctx context.Context) {
 			expSubj := fmt.Sprintf("%d:0:%d:%d:%d", a.itemTmpl, auctionExpired, a.id, a.count)
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, '', 1, ?, ?, 0, 0, 4)",
 				expMailID, mailAuctionType, mailStationeryAuction, a.houseID, a.owner, expSubj, now+30*86400, now)
-			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, item_template, receiver) VALUES (?, ?, ?, ?)", expMailID, a.itemGUID, a.itemTmpl, a.owner)
+			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, receiver) VALUES (?, ?, ?)", expMailID, a.itemGUID, a.owner)
 			s.sendMailNotify(uint64(a.owner))
 			s.notifyAuctionOwner(uint64(a.owner), uint32(a.id), 0, uint32(a.itemTmpl))
 		}
