@@ -115,6 +115,19 @@ local function alivePlayersInRange(creature, maxDist)
     return found
 end
 
+-- C++ SelectTarget(SelectTargetMethod::Random, 0) with no distance or
+-- alive filter (Julianne's Powerful Attraction): any player on the map.
+local function playersOnMap(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local found = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
+            found[#found + 1] = p
+        end
+    end
+    return found
+end
+
 local function randomPlayerInRange(creature, maxDist)
     local candidates = alivePlayersInRange(creature, maxDist)
     if #candidates == 0 then
@@ -545,7 +558,9 @@ local function wolfChase(creature, guid)
             creature:CastSpell(target, SPELL_LITTLE_RED_RIDING_HOOD, true)
             st.chasing = true
         end
-        schedule(guid, "chase", 20000, function()
+        -- C++ leaves ChaseTimer armed, so a null target retries on the
+        -- next tick; only a successful chase starts the 20s chase timer.
+        schedule(guid, "chase", target and 20000 or 1000, function()
             wolfChase(creature, guid)
         end)
     else
@@ -600,8 +615,9 @@ RegisterCreatureEvent(ENTRY_WOLF, 23, wolfLeaveCombat)
 -- 17534 / 17533): the three-phase fake-death dance.
 -- Phase JULIANNE: Julianne fights alone — blinding passion 30890 on a
 -- random alive player within 100 yd every 30-45s, devotion 30887 on self
--- every 15-45s, powerful attraction 30889 on a random alive player within
--- 100 yd every 5-30s, eternal affection 30878 on self every 45-60s (C++
+-- every 15-45s, powerful attraction 30889 on a random player (any range,
+-- alive or dead — C++ SelectTarget(Random, 0) has no distance/alive
+-- filter, unlike blinding passion's (Random, 0, 100, true)) every 5-30s, eternal affection 30878 on self every 45-60s (C++
 -- casts it on Romulo half the time once he is up; he never spawns, so it
 -- always lands on Julianne). Lethal damage in this phase is absorbed:
 -- Talk(SAY_JULIANNE_DEATH01 = 2), a triggered drink-poison 30907 visual on
@@ -689,7 +705,11 @@ local function julianneDevotion(creature, guid)
 end
 
 local function julianneAttraction(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    -- C++: DoCast(SelectTarget(SelectTargetMethod::Random, 0),
+    -- SPELL_POWERFUL_ATTRACTION) — no 100yd limit, no alive filter,
+    -- unlike Blinding Passion (Random, 0, 100, true).
+    local candidates = playersOnMap(creature)
+    local target = #candidates > 0 and candidates[math.random(#candidates)] or nil
     if target then
         creature:CastSpell(target, SPELL_POWERFUL_ATTRACTION)
     end
