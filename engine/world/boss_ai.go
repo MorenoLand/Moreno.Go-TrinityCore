@@ -3027,6 +3027,42 @@ func init() {
 	// ScriptName DB-side) — db.moonwell-cited (?npc=14693 "Scorn",
 	// level 34 elite undead, spawned via script).
 	RegisterLuaBoss("boss_scorn", 14693)
+
+	// boss_mograine_and_whitemane (3976 Scarlet Commander Mograine + 3977
+	// High Inquisitor Whitemane, Scarlet Monastery Cathedral finale, EK
+	// loader decl :108 / call :286 follows instance_scarlet_monastery;
+	// entries C++-named at scarlet_monastery.h:66-67): OnEnterCombat(1)
+	// Mograine Talk(SAY_MO_AGGRO 0) + crusader strike 14518 at
+	// {10s,15s}->10s + hammer of justice 5589 at {10s,15s}->60s; Whitemane
+	// Talk(SAY_WH_INTRO 0) + 5s scheduler gate -> heal 12039 10s->13s
+	// (self-cast only while own health strictly below 75% — the Mograine
+	// target leg needs instance GetCreature(DATA_MOGRAINE), no bridge) +
+	// power word: shield 22187 15s->15s + holy smite 9481 6s->6s (all
+	// non-triggered DoCastVictim/DoCastSelf -> GetVictim/self + CastSpell,
+	// nil-victim keeps schedule, jeklik convention). Both bosses:
+	// KilledUnit(3) player-gated Talk(SAY_KILL 1) with the 5s _killYellTimer
+	// (herod victim:IsPlayer() convention; flag cleared only on event 23,
+	// C++ _Reset() never touches it). OnReset(23) cancels timers + clears
+	// the yell flag + self-casts retribution aura 8990 (Lua CastSpell has
+	// no triggered leg, documented). Documented-unmodeled: Mograine's
+	// fake-death DamageTaken machine (door open, GetCreature(DATA_WHITEMANE)
+	// MovePoint + DoZoneInCombat, flags/stand-state/react/motion legs, the
+	// killing-damage negation while !_canDie, and the SpellHit(SCARLET_
+	// RESURRECTION 9232) 3s/5s resurrect scheduler legs — no instance/
+	// flag/stand-state/react/MotionMaster/SpellHit bridges; without the
+	// negation the boss dies on the first lethal hit, headless-horseman
+	// cheat-death precedent) and Whitemane's sub-50%-damaged latch (cancel
+	// events, DoCastAOE deep sleep 9256, MovePosition/MovePoint to Mograine,
+	// MovementInform 3s -> DoCast(SCARLET_RESURRECTION), SpellHitTarget ->
+	// Talk(SAY_WH_RESURRECT 2) + reschedule + _canDie=true + MoveChase —
+	// no DoCastAOE/MotionMaster/MovementInform/SpellHitTarget bridges; she
+	// stays killable below 50%, documented divergence). Dominate mind 14515
+	// is declared in the C++ spell enum but never cast. UpdateAI
+	// UNIT_STATE_CASTING gates + BossAI::JustEngagedWith +
+	// DATA_MOGRAINE_AND_WHITE_EVENT bookkeeping have no bridges (luaBossAI
+	// shim).
+	RegisterLuaBoss("boss_mograine_and_whitemane", 3976)
+	RegisterLuaBoss("boss_whitemane", 3977)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
