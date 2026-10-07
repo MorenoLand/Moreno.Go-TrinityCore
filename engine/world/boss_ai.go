@@ -3092,6 +3092,21 @@ func init() {
 	// Reset() and JustEngagedWith() are both empty; no timers, no Talk
 	// lines, no instance bookkeeping (luaBossAI shim).
 	RegisterLuaBoss("boss_death_knight_darkreaver", 14516)
+	// boss_doctor_theolen_krastinov.cpp (EK loader decl :111 / call :289,
+	// Scholomance block continues; script name
+	// "boss_doctor_theolen_krastinov", AddSC_boss_theolenkrastinov): boss
+	// AI ported in
+	// lua_scripts/eastern_kingdoms/boss_doctor_theolen_krastinov.lua
+	// (entry 11261 — no NPC_ constant in scholomance.h, DB-side
+	// ScriptName binding, classic wowhead-verified): OnEnterCombat
+	// schedules rend 16509 (triggered victim, 8s->10s), backhand 18103
+	// (triggered victim, 9s->10s), frenzy 8269 (triggered self +
+	// Talk(EMOTE_FRENZY_KILL 0), 1s->120s); nil-victim ticks cast nothing
+	// but keep the schedule. Documented-only (no bridges): UpdateAI
+	// UNIT_STATE_CASTING gates, BossAI::JustEngagedWith +
+	// DATA_DOCTORTHEOLENKRASTINOV=0 bookkeeping (scholomance.h:30)
+	// (luaBossAI shim).
+	RegisterLuaBoss("boss_doctor_theolen_krastinov", 11261)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
