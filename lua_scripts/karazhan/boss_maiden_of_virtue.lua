@@ -82,11 +82,11 @@ local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
-    creature:CastSpell(creature, SPELL_HOLYGROUND)
+    creature:CastSpell(creature, SPELL_HOLYGROUND, true)
     schedule(guid, "repentance", {33000, 45000}, function() onRepentance(creature, guid) end)
     schedule(guid, "holyfire", 8000, function() onHolyFire(creature, guid) end)
     schedule(guid, "holywrath", {15000, 25000}, function() onHolyWrath(creature, guid) end)
-    schedule(guid, "enrage", 600000, function() creature:CastSpell(creature, SPELL_BERSERK) end)
+    schedule(guid, "enrage", 600000, function() creature:CastSpell(creature, SPELL_BERSERK, true) end)
 end
 
 local function onLeaveCombat(event, creature)
