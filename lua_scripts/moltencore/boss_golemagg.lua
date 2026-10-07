@@ -20,7 +20,9 @@
 -- SelectTarget(Random, 0) takes any alive target — wushoolay
 -- randomAlivePlayer helper). Nil-target ticks cast nothing but keep
 -- the schedule (jeklik convention). OnDamageTaken(9, pre-damage
--- hook): post-damage health strictly below 10% and not yet enraged
+-- hook): current (pre-damage) health strictly below 10%
+-- (C++ HealthBelowPct(10) — the engine's event 9 fires before damage is
+-- applied, matching C++ Unit::DealDamage) and not yet enraged
 -- -> triggered self-cast enrage 19953, arm earthquake 19798 3s then
 -- 3s, non-triggered DoCastVictim (the C++ HasAura(SPELL_ENRAGE)
 -- once-guard is kept as per-GUID Lua state — no HasAura bridge).
@@ -140,7 +142,9 @@ local function golemaggReset(event, creature)
     creature:CastSpell(creature, SPELL_MAGMASPLASH, true)
 end
 
--- C++ DamageTaken: health below 10% and not already enraged ->
+-- C++ DamageTaken: current (pre-damage) health strictly below 10%
+-- (HealthBelowPct(10) — the engine's event 9 fires before damage is
+-- applied, matching C++ Unit::DealDamage) and not already enraged ->
 -- triggered self-cast enrage 19953 and arm the earthquake cycle
 -- (C++-exact; the C++ HasAura(SPELL_ENRAGE) once-guard is kept as
 -- per-GUID Lua state — no HasAura bridge).
@@ -153,7 +157,7 @@ local function golemaggDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 10 then
+    if creature:GetHealth() * 100 / maxHealth < 10 then
         enraged[guid] = true
         creature:CastSpell(creature, SPELL_ENRAGE, true)
         schedule(guid, "earthquake", 3000, function()
