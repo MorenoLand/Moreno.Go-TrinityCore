@@ -7468,6 +7468,125 @@ func spellDamageBonusTaken(damage uint32, spell wotlk.Spell, schoolMask uint32, 
 	return uint32(result)
 }
 
+// creatureAuraModifiersByMiscMask mirrors the creature half of the session
+// auraTypeModifiersByMiscMask (movement_speed.go): it collects per-effect
+// amounts of the creature's active auras whose DBC row carries an effect of
+// auraType matching miscMask.
+func creatureAuraModifiersByMiscMask(s *Server, key creatureAuraKey, auraType, miscMask uint32) []int32 {
+	if s == nil || s.Data == nil || miscMask == 0 || key.GUID == 0 {
+		return nil
+	}
+	s.auraMu.Lock()
+	auras := s.activeCreatureAuras[key]
+	copies := make([]*activeAura, 0, len(auras))
+	for _, aura := range auras {
+		copies = append(copies, aura)
+	}
+	s.auraMu.Unlock()
+	result := make([]int32, 0)
+	for _, aura := range copies {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		usedStoredAmount := false
+		for index, effect := range spell.Effects {
+			if index >= len(aura.Amounts) || effect.Aura != auraType || aura.EffectMask&(1<<uint(index)) == 0 || uint32(effect.MiscValue)&miscMask == 0 {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount == 0 && aura.AuraType == auraType && uint32(aura.MiscValue)&miscMask != 0 && !usedStoredAmount {
+				amount = int32(aura.Amount)
+				usedStoredAmount = true
+			}
+			if amount == 0 {
+				amount = effect.BasePoints + 1
+			}
+			result = append(result, amount)
+		}
+	}
+	return result
+}
+
+// creatureDamageFromCasterMultiplier mirrors the
+// SPELL_AURA_MOD_DAMAGE_FROM_CASTER arm of TrinityCore
+// Unit::SpellDamageBonusTaken (Unit.cpp:7094) for creature victims: the
+// creature's auras of that type multiply damage only when the aura's caster
+// matches this caster and the aura spell affects the damage spell
+// (AuraEffect::IsAffectedOnSpell).
+func creatureDamageFromCasterMultiplier(server *Server, key creatureAuraKey, spell wotlk.Spell, caster *session) float32 {
+	if server == nil || server.Data == nil || caster == nil || caster.playerGUID == 0 || key.GUID == 0 {
+		return 1
+	}
+	server.auraMu.Lock()
+	auras := server.activeCreatureAuras[key]
+	copies := make([]*activeAura, 0, len(auras))
+	for _, aura := range auras {
+		copies = append(copies, aura)
+	}
+	server.auraMu.Unlock()
+	multiplier := float32(1)
+	for _, aura := range copies {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 || aura.CasterGUID != caster.playerGUID {
+			continue
+		}
+		auraSpell, found, err := server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || effect.Aura != spellAuraModDamageFromCaster || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount == 0 {
+				amount = int32(aura.Amount)
+			}
+			if amount == 0 {
+				amount = effect.BasePoints + 1
+			}
+			multiplier *= 1 + float32(amount)/100
+		}
+	}
+	return multiplier
+}
+
+// creatureSpellDamageBonusTaken mirrors TrinityCore
+// Unit::SpellDamageBonusTaken (Unit.cpp:7052) for creature victims. The
+// DIRECT_DAMAGE (melee) early-out has no reachable arm on the Go spell
+// paths; the Cheat Death dummy arm is player-only by construction
+// (resilience stats); the npcbot BotMgr arm has no Go model. The
+// Sanctified Wrath bypass reads the caster's own auras, which live on the
+// session even when the victim is a creature.
+func creatureSpellDamageBonusTaken(server *Server, damage uint32, spell wotlk.Spell, schoolMask uint32, key creatureAuraKey, caster *session) uint32 {
+	takenTotalMod := float32(1)
+	if mechanicMask := spellMechanicMask(spell); mechanicMask != 0 {
+		takenTotalMod *= ResolveAuraPercentMultiplier(creatureAuraModifiersByMiscMask(server, key, spellAuraModMechanicDamageTakenPercent, mechanicMask))
+	}
+	if spell.AttributesEx4&spellAttr4FixedDamage == 0 {
+		takenTotalMod *= ResolveAuraPercentMultiplier(creatureAuraModifiersByMiscMask(server, key, spellAuraModDamagePercentTaken, schoolMask))
+		takenTotalMod *= creatureDamageFromCasterMultiplier(server, key, spell, caster)
+	}
+	if caster != nil && takenTotalMod < 1 {
+		damageReduction := float32(1) - takenTotalMod
+		for _, amount := range caster.auraTypeModifiersByMiscMask(spellAuraModIgnoreTargetResist, schoolMask) {
+			damageReduction *= 1 - float32(amount)/100
+		}
+		takenTotalMod = 1 - damageReduction
+	}
+	result := float64(damage) * float64(takenTotalMod)
+	if result < 0 {
+		result = 0
+	}
+	return uint32(result)
+}
+
 // spellDamagePushesBack mirrors the pushback half of Unit::DealDamage
 // (Unit.cpp:937): damage dealt by a spell carrying
 // SPELL_ATTR7_NO_PUSHBACK_ON_DAMAGE or SPELL_ATTR3_TREAT_AS_PERIODIC never
@@ -7605,6 +7724,14 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				}
 			}
 		} else if !instantKill && s.server != nil && damage > 0 {
+			// Victim-side damage-taken multiplier for creature victims
+			// (TrinityCore Unit::SpellDamageBonusTaken, Unit.cpp:7052):
+			// EffectSchoolDMG (SpellEffects.cpp:365-366) runs the taken leg
+			// on every target, not just players. Applied before absorption
+			// like the player path above.
+			if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+				damage = creatureSpellDamageBonusTaken(s.server, damage, spell, uint32(schoolMask), creatureAuraKeyForTarget(target), s)
+			}
 			absorbed, damage = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage, schoolMask)
 		}
 	}
@@ -13079,6 +13206,16 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if dmg < 1 && resisted == 0 {
 			dmg = 1
 		}
+		// Victim-side damage-taken multiplier (TrinityCore
+		// Unit::SpellDamageBonusTaken, Unit.cpp:7052): the PERIODIC_DAMAGE
+		// tick (SpellAuraEffects.cpp:5171/5256) runs the taken leg on the
+		// target's damage. Applied after resist and before absorption — the
+		// same relative position as the direct-damage path.
+		if ts.server != nil && ts.server.Data != nil {
+			if tickSpell, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
+				dmg = spellDamageBonusTaken(dmg, tickSpell, aura.SchoolMask, ts, ts.server.findSessionByGUID(aura.CasterGUID))
+			}
+		}
 		absorbed := uint32(0)
 		if dmg > 0 {
 			absorbed, dmg = ts.applyAbsorptionShields(dmg, uint8(aura.SchoolMask))
@@ -13293,6 +13430,17 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				}
 			}
 			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), target.Resistances, aura.CasterLevel, target.Level, true, false, pen)
+		}
+		// Victim-side damage-taken multiplier (TrinityCore
+		// Unit::SpellDamageBonusTaken, Unit.cpp:7052) on the creature
+		// periodic-damage tick, mirroring the direct-damage creature branch
+		// above (SpellAuraEffects.cpp:5171 runs the taken leg on unit-aura
+		// ticks before crit/armor/resist; Go keeps it after resist, before
+		// absorption, like the other Go paths).
+		if s.server != nil && s.server.Data != nil {
+			if tickSpell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+				dmg = creatureSpellDamageBonusTaken(s.server, dmg, tickSpell, aura.SchoolMask, key, s.server.findSessionByGUID(aura.CasterGUID))
+			}
 		}
 		if dmg < 1 && resisted == 0 {
 			dmg = 1
