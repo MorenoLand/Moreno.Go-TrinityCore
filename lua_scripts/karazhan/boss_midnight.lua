@@ -116,9 +116,14 @@ local function midnightInitState(guid)
 end
 
 local function onMidnightKnockdown(creature, guid)
-    local victim = creature:GetVictim()
-    if victim ~= nil then
-        creature:CastSpell(victim, SPELL_KNOCKDOWN)
+    -- C++ boss_midnightAI::UpdateAI returns early (scheduler never runs) while
+    -- _phase == PHASE_MOUNTED: the event stays scheduled but never fires.
+    local state = midnightState[guid]
+    if state ~= nil and state.phase ~= PHASE_MOUNTED then
+        local victim = creature:GetVictim()
+        if victim ~= nil then
+            creature:CastSpell(victim, SPELL_KNOCKDOWN)
+        end
     end
     schedule(guid, "knockdown", {15000, 25000}, function() onMidnightKnockdown(creature, guid) end)
 end
@@ -142,7 +147,10 @@ local function midnightDamageTaken(event, creature, attacker, damage)
         return
     end
     local newDamage = damage
-    if health > 1 and damage >= health then
+    -- Midnight never dies: C++ clamps unconditionally (damage >= health ->
+    -- health - 1), pinning it at 1 HP forever. health > 0 guards the hook
+    -- firing on an already-dead creature only.
+    if health > 0 and damage >= health then
         newDamage = health - 1
     end
     local postHealth = health - newDamage
@@ -260,8 +268,10 @@ local function attumenDamageTaken(event, creature, attacker, damage)
         return
     end
     local newDamage = damage
-    -- Attumen does not die until he mounts Midnight (C++ DamageTaken).
-    if state.phase ~= PHASE_MOUNTED and health > 1 and damage >= health then
+    -- Attumen does not die until he mounts Midnight: C++ clamps unconditionally
+    -- (damage >= health -> health - 1) whenever phase != MOUNTED, pinning him
+    -- at 1 HP forever.
+    if state.phase ~= PHASE_MOUNTED and health > 0 and damage >= health then
         newDamage = health - 1
     end
     local postHealth = health - newDamage
