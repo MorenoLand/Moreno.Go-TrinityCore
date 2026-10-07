@@ -2730,6 +2730,12 @@ func init() {
 	// -> SMITE_ALARMED (5s: Talk(SAY_ALARM2)) -> EVENT_DONE. GetGuidData:
 	// DATA_SMITE_CHEST. Zero Lua InstanceMapScript bridge — documented-only
 	// (instance_blackrock_spire / instance_blackwing_lair precedent).
+	// gnomeregan.cpp zone scripts (AddSC_gnomeregan — document-only audit):
+	// npc_blastmaster_emi_shortfuse (EscortAI escort event machine),
+	// boss_grubbis (ScriptedAI, summoner-SetData chain arm), and
+	// spell_collecting_fallout (SpellScript: 25% roll_chance_i on EFFECT_0
+	// launch, fail-gate on EFFECT_1). Zero Lua/Go bearer for EscortAI,
+	// summoner-SetData, or SpellScript — documented-only.
 	// boss_mr_smite (Deadmines, boss_mr_smite.cpp — ScriptedAI via
 	// GetDeadminesAI; the first unit of the Deadmines block): the combat
 	// machine (Trash 3391 self-cast {5,9}s->{6,15.5}s, Smite Slam 6435
