@@ -2718,6 +2718,18 @@ func init() {
 	// SetData(EVENT_STATE, CANNON_GUNPOWDER_USED (1)); DestroyItemCount 1,
 	// return true (deadmines.h verified). Zero Lua ItemScript/OnUse
 	// bridge — documented-only (denveous_stuff precedent).
+	// instance_deadmines (AddSC_instance_deadmines, map 36 — document-only audit,
+	// commit follows): InstanceMapScript with encounter doors (doorData: Rhahk'Zor,
+	// Sneed, Gilnid passages) + cannon event machine driven by EVENT_STATE (7).
+	// OnUnitDeath: Rhahk'Zor/Sneed/Gilnid -> SetBossState DONE. SetData(EVENT_STATE)
+	// latches only when cannon + ironclad door exist. Update state machine:
+	// CANNON_GUNPOWDER_USED (1) -> 3s blast timer -> SummonCreatures (2x entry 657
+	// Defias Pirate, corpse-timed despawn 3s), ShootCannon (GO active + sound 1400),
+	// BlastOutDoor (GO destroyed + sound 3079), lever stuck (flags=4), Mr. Smite
+	// Talk(SAY_ALARM1) -> PIRATES_ATTACK (1s: pirates move to -102.7,-655.9)
+	// -> SMITE_ALARMED (5s: Talk(SAY_ALARM2)) -> EVENT_DONE. GetGuidData:
+	// DATA_SMITE_CHEST. Zero Lua InstanceMapScript bridge — documented-only
+	// (instance_blackrock_spire / instance_blackwing_lair precedent).
 	// boss_mr_smite (Deadmines, boss_mr_smite.cpp — ScriptedAI via
 	// GetDeadminesAI; the first unit of the Deadmines block): the combat
 	// machine (Trash 3391 self-cast {5,9}s->{6,15.5}s, Smite Slam 6435
