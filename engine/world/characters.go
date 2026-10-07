@@ -59,6 +59,8 @@ const (
 	charCreateNameInUse                 = 50
 	charDeleteSuccess                   = 71
 	charDeleteFailed                    = 72
+	charDeleteFailedGuildLeader         = 74
+	charDeleteFailedArenaCaptain        = 75
 )
 
 type enumCharacter struct {
@@ -421,6 +423,20 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 	if _, ok := s.legitimate[guid]; !ok {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_DELETE), 72)
 	}
+	// WorldSession::HandleCharDeleteOpcode (CharacterHandler.cpp:641-666): a
+	// loaded character cannot be deleted (silent return, no result packet);
+	// guild leaders and arena team captains are rejected with dedicated codes.
+	if s.playerLoaded && s.playerGUID == guid {
+		return true
+	}
+	var guildLeaderCount int
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM guild WHERE leaderguid = ?", guid).Scan(&guildLeaderCount); err == nil && guildLeaderCount > 0 {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_DELETE), charDeleteFailedGuildLeader)
+	}
+	var arenaCaptainCount int
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM arena_team WHERE captainGuid = ?", guid).Scan(&arenaCaptainCount); err == nil && arenaCaptainCount > 0 {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_DELETE), charDeleteFailedArenaCaptain)
+	}
 	var accountID uint32
 	err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT account FROM characters WHERE guid = ?", guid).Scan(&accountID)
 	if errors.Is(err, sql.ErrNoRows) || err != nil || accountID != s.accountID {
@@ -431,6 +447,35 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	defer tx.Rollback()
+	// CalendarMgr::RemoveAllPlayerEventsAndInvites (CalendarMgr.cpp:285-293):
+	// events created by the deleted character are dropped with the removed
+	// alert (SendCalendarEventRemovedAlert, u8(1) + event id + packed time) to
+	// online relatives; the calendar mail arm is skipped because the remover
+	// is empty on this path. The row deletes themselves run inside
+	// deleteCharacterOwnedState below, before the character row goes away.
+	type removedCalendarEvent struct {
+		id        uint64
+		eventTime uint32
+	}
+	var removedCalEvents []removedCalendarEvent
+	if calRows, calErr := tx.QueryContext(ctx, "SELECT id, eventtime FROM calendar_events WHERE creator = ?", guid); calErr == nil {
+		for calRows.Next() {
+			var ev removedCalendarEvent
+			if calRows.Scan(&ev.id, &ev.eventTime) == nil {
+				removedCalEvents = append(removedCalEvents, ev)
+			}
+		}
+		calRows.Close()
+	}
+	for _, ev := range removedCalEvents {
+		remBuf := protocol.NewBuffer(16)
+		remBuf.WriteU8(1)
+		remBuf.WriteU64(ev.id)
+		remBuf.WritePackedTime(time.Unix(int64(ev.eventTime), 0))
+		for _, t := range calendarEventRelativeSessions(ctx, s.server, ev.id) {
+			_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_REMOVED_ALERT), remBuf.Bytes(), true)
+		}
+	}
 	// Player::DeleteFromDB (Player.cpp:4349): online players who had the
 	// deleted character on their social list get FRIEND_REMOVED. Capture the
 	// contact list before the wipe below deletes the rows.
