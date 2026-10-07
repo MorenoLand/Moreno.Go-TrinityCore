@@ -3531,6 +3531,18 @@ func init() {
 	// the file's m_aSummonPoint coords (1h timed despawn), empty
 	// JustEngagedWith, GetStratholmeAI factory; melee engine-driven.
 	RegisterLuaBoss("boss_dathrohan_balnazzar", 10812)
+	// boss_order_of_silver_hand.cpp audit (EK loader decl :136 / call
+	// :314 follows dathrohan_balnazzar :135/:313; one script
+	// "boss_silver_hand_bosses", ScriptedAI diff-timer AI, Oct-1 pass was
+	// document-only): all five Order of the Silver Hand members run the
+	// same AI — Gregor 17910 / Cathela 17911 / Nemas 17912 / Aelmar 17913 /
+	// Vicar 17914 (SH_GREGOR..SH_VICAR, file's own enum). ScriptName binds
+	// all five rows DB-side.
+	RegisterLuaBoss("boss_silver_hand_bosses", 17910)
+	RegisterLuaBoss("boss_silver_hand_bosses", 17911)
+	RegisterLuaBoss("boss_silver_hand_bosses", 17912)
+	RegisterLuaBoss("boss_silver_hand_bosses", 17913)
+	RegisterLuaBoss("boss_silver_hand_bosses", 17914)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
