@@ -74,8 +74,11 @@ func (s *Server) buildNearbyCorpseUpdates(ctx context.Context, state playerState
 		return nil, 0, nil
 	}
 	distance := float64(s.Config.VisibilityDistanceContinents)
+	// Reference Map::LoadCorpseData (Map.cpp:4551-4583) scopes the map's
+	// corpse grid by (mapId, instanceId): corpses from another dungeon
+	// instance of the same map are never visible.
 	rows, err := s.CharactersStore.DB.QueryContext(ctx, `SELECT guid, mapId, posX, posY, posZ, orientation, displayId, bytes1, bytes2, guildId, flags, dynFlags, corpseType, phaseMask
-		FROM corpse WHERE mapId = ? AND posX BETWEEN ? AND ? AND posY BETWEEN ? AND ? ORDER BY guid`, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance)
+		FROM corpse WHERE mapId = ? AND instanceId = ? AND posX BETWEEN ? AND ? AND posY BETWEEN ? AND ? ORDER BY guid`, state.Map, state.InstanceID, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance)
 	if err != nil {
 		if missingTable(err) || isMissingColumn(err) {
 			return nil, 0, nil
@@ -641,11 +644,16 @@ func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 	bgLootable := s.bgData.InstanceID != 0
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		// Reference Corpse::SaveToDB deletes any previous record first.
+		// Column order mirrors SaveToDB (Corpse.cpp:102-119): the dynFlags
+		// 0 is exact — Player::CreateCorpse never sets CORPSE_FIELD_DYNAMIC_FLAGS
+		// on a fresh corpse — and instanceId is the map's instance id
+		// (Corpse::SaveToDB writes GetInstanceId(), Object.cpp:1846), 0 on
+		// world maps, the dungeon/BG instance id elsewhere.
 		bytes1, bytes2 := corpseAppearance(s.player)
 		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_DEL_CORPSE", s.playerGUID)
 		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_CORPSE",
 			s.playerGUID, s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.Map,
-			displayID, s.player.Equipment, bytes1, bytes2, s.player.GuildID, corpseFlags(s.player, bgLootable), 0, time.Now().Unix(), corpseType, 0, s.currentPlayerPhaseMask())
+			displayID, s.player.Equipment, bytes1, bytes2, s.player.GuildID, corpseFlags(s.player, bgLootable), 0, time.Now().Unix(), corpseType, s.player.InstanceID, s.currentPlayerPhaseMask())
 	}
 
 	s.player.PlayerFlags |= playerFlagGhost
@@ -1364,6 +1372,7 @@ type corpseRecord struct {
 	Orientation float32
 	CorpseType  uint32
 	GhostTime   int64
+	InstanceID  uint32
 }
 
 // loadCorpse mirrors Player::GetCorpse: the resurrectable corpse of this
@@ -1372,9 +1381,9 @@ func (s *session) loadCorpse(ctx context.Context) (corpseRecord, bool) {
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return corpseRecord{}, false
 	}
-	row := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT mapId, posX, posY, posZ, orientation, corpseType, time FROM corpse WHERE guid = ? AND corpseType <> ?", s.playerGUID, corpseTypeBones)
+	row := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT mapId, posX, posY, posZ, orientation, corpseType, time, instanceId FROM corpse WHERE guid = ? AND corpseType <> ?", s.playerGUID, corpseTypeBones)
 	var corpse corpseRecord
-	if err := row.Scan(&corpse.MapID, &corpse.X, &corpse.Y, &corpse.Z, &corpse.Orientation, &corpse.CorpseType, &corpse.GhostTime); err != nil {
+	if err := row.Scan(&corpse.MapID, &corpse.X, &corpse.Y, &corpse.Z, &corpse.Orientation, &corpse.CorpseType, &corpse.GhostTime, &corpse.InstanceID); err != nil {
 		return corpseRecord{}, false
 	}
 	return corpse, true
@@ -1410,7 +1419,7 @@ func (s *session) handleReclaimCorpse(ctx context.Context, payload []byte) bool 
 	if corpse.GhostTime+int64(s.corpseReclaimDelaySeconds(corpse.CorpseType != corpseTypePvE)) > time.Now().Unix() {
 		return true
 	}
-	if corpse.MapID != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, corpse.X, corpse.Y, corpse.Z) > corpseReclaimRadius {
+	if corpse.MapID != s.player.Map || corpse.InstanceID != s.player.InstanceID || distance3D(s.player.X, s.player.Y, s.player.Z, corpse.X, corpse.Y, corpse.Z) > corpseReclaimRadius {
 		return true
 	}
 	// WorldSession::HandleReclaimCorpse (MiscHandler.cpp:576-603): battleground

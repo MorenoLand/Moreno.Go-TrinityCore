@@ -1652,14 +1652,12 @@ func (s *session) handleLootRelease(payload []byte) bool {
 		return true
 	}
 	loot := s.activeLoot
-	if loot.MapID != s.player.Map || loot.InstanceID != s.player.InstanceID {
-		return s.sendLootError(targetGUID, 4) == nil
-	}
-	// The round-robin reset, viewer removal, empty-loot cleanup and the
-	// UNIT_FLAG_LOOTING clear live in releaseActiveLoot (the DoLootRelease
-	// analog); the CMSG_LOOT_RELEASE response and the group looter broadcast
-	// stay here. C++ resets roundRobinPlayer only on release of the round
-	// robin player (LootHandler.cpp:366-374), which releaseActiveLoot matches.
+	// WorldSession::DoLootRelease (LootHandler.cpp:258-264): the loot-GUID
+	// clear, the release response, and the UNIT_FLAG_LOOTING removal run
+	// unconditionally — the map/instance/distance checks only gate the
+	// fully-looted cleanup legs (dynflag clear, AllLootRemovedFromCorpse,
+	// loot.clear). A release after a map change therefore still completes;
+	// it never answers LOOT_ERROR_TOO_FAR.
 	releasedRoundRobin := loot.RoundRobinPlayer == s.playerGUID
 	s.releaseActiveLoot()
 	if releasedRoundRobin && s.server != nil && s.groupID != 0 && uint16(loot.TargetGUID>>48) != 0xF110 {
