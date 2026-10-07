@@ -3331,6 +3331,34 @@ func init() {
 	// UpdatePeriodic recalculates — no SpellScript/AuraScript bridge,
 	// joins the no-SpellScript-bridge queue. No new registrations, no
 	// Lua files.
+	// boss_apothecary_hummel.cpp audit (EK loader decl :125 / call :303
+	// follows instance_shadowfang_keep): 9 scripts. boss_apothecary_hummel
+	// (entry 36296 — no NPC_ constant in C++, DB-side ScriptName binding,
+	// wowhead npc=36296 / TrinityCore issue #16629 cited) ported in
+	// lua_scripts/eastern_kingdoms/boss_apothecary_hummel.lua: gossip +
+	// quest-reward (14488) start the intro machine (SAY_0..2 at 1ms/4s/4s),
+	// START_FIGHT arms CALL_BAXTER 6s (Talk 3) / CALL_FRYE 14s (Talk 4) /
+	// CALL_CRAZED 15s (Talk 6) / PERFUME_SPRAY 3640ms (DoCastVictim 68607)
+	// / CHAIN_REACTION 15s->25s (triggered DoCastVictim 69218); lethal-blow
+	// DamageTaken clamps to health-1 via the event-9 second return with a
+	// per-GUID feign-death latch (Talk 5 + triggered self-cast 29266).
+	// npc_apothecary_baxter (36565) + npc_apothecary_frye (36272) were
+	// ported Oct-1 (364e946) and verified C++-exact this tick: baxter
+	// EVENT_COLOGNE_SPRAY 7s->4s (DoCastVictim 68948) / EVENT_CHAIN_REACTION
+	// 12s->25s (DoCastVictim 69218 + DoCastVictim 68821, both non-triggered),
+	// JustDied Talk(0); frye JustDied Talk(0). DATA_APOTHECARY_HUMMEL=6 /
+	// DATA_SPAWN_VALENTINE_ADDS=7 per shadowfang_keep.h:33-34.
+	// Documented-only (no bridges): 6 SpellScripts + 2 AuraScripts
+	// (68965/68644/69038/68966/68798/68614), npc_apothecary_genericAI
+	// DoAction/MovementInform legs, summon-DoAction/DoZoneInCombat relays,
+	// SetImmuneToPC/SetFaction/SetFlag/RemoveAurasDueToSpell arms,
+	// SummonedCreatureDies (no event-21 fire site — the lethal clamp
+	// persists and the QUIET_SUICIDE arm cannot fire), instance SetBossState
+	// / SetData / LFG FinishDungeon(288) legs, DoCastAOE(68821), the
+	// EVENT_CRAZED_APOTHECARY SetData-only timer, UNIT_STATE_CASTING gates.
+	RegisterLuaBoss("boss_apothecary_hummel", 36296)
+	RegisterLuaBoss("npc_apothecary_baxter", 36565)
+	RegisterLuaBoss("npc_apothecary_frye", 36272)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
