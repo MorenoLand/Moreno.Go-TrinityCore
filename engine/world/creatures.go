@@ -400,6 +400,13 @@ func (s *Server) broadcastMonsterMove(mapID uint32, rawGUID uint64, startX, star
 }
 
 func (s *Server) broadcastMonsterMoveMode(mapID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, walk bool) {
+	// Documented delta vs C++ (audited 2026-10-07): WaypointMovementGenerator
+	// selects walk speed via init.SetWalk (velocity only — MoveSplineInitArgs.h:58,
+	// MoveSplineInit.cpp:111) and never calls Creature::SetWalk, so C++ sends no
+	// SMSG_SPLINE_MOVE_SET_WALK_MODE for walk waypoint nodes (the packet is sent
+	// only by Creature::SetWalk, Creature.cpp:3017, i.e. persistent walk state).
+	// Go sends the mode packet per walk node so walk-speed splines animate as
+	// walk instead of run-in-place; deliberate client-visible improvement.
 	packet := buildMonsterMove(rawGUID, startX, startY, startZ, destX, destY, destZ, duration)
 	modeOpcode := protocol.OpcodeSMSG_SPLINE_MOVE_SET_RUN_MODE
 	if walk {

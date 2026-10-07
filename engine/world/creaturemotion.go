@@ -150,9 +150,34 @@ type waypointPoint struct {
 const motionTTL = 10 * time.Minute
 
 const (
-	creatureBaseWalkSpeed = 2.5
-	creatureBaseRunSpeed  = 7.0
+	creatureBaseWalkSpeed   = 2.5
+	creatureBaseRunSpeed    = 7.0
+	creatureBaseFlightSpeed = 7.0
 )
+
+// creatureSplineVelocity mirrors the velocity selection of
+// MoveSplineInit::Launch (MoveSplineInit.cpp:106-124): without an explicit
+// SetVelocity the spline runs at SelectSpeedType(unit movement flags), and
+// MOVEMENTFLAG_FLYING selects MOVE_FLIGHT before the WALKING leg, so a
+// flying creature's waypoint/evade/pursuit/wander spline runs at
+// GetSpeed(MOVE_FLIGHT) = 1.0 * 7.0 (Creature::Initialize sets the flight
+// rate to 1.0, Creature.cpp:532). Go tracks the flying analog on
+// motion.CanFly, so flyers use the flight velocity regardless of walk.
+// Documented no-bridge arms of the same Launch block: the SWIMMING leg of
+// SelectSpeedType (creatureMotion carries no swim flag), the 0.66
+// searched-assistance multiplier (no assistance model), and the client
+// speed cap min(velocity, catmullrom||flying ? 50 : max(28, run*4)) —
+// vacuous for template speeds (velocity stays near the base rates).
+// Waypoint LAND/TAKEOFF set only AnimationTier (cosmetic), unmodeled.
+func creatureSplineVelocity(motion *creatureMotion, walk bool) float32 {
+	if motion != nil && motion.CanFly {
+		return creatureBaseFlightSpeed
+	}
+	if walk {
+		return motion.Speed
+	}
+	return motion.RunSpeed
+}
 
 // splineDurationMs mirrors MoveSpline's duration computation
 // (MoveSpline.cpp:104-114): CommonInitializer starts the clock at
@@ -690,7 +715,7 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	}
 	homeDist := float32(math.Hypot(float64(motion.HomeX-motion.X), float64(motion.HomeY-motion.Y)))
 	if homeDist > 0.5 {
-		speed := motion.RunSpeed
+		speed := creatureSplineVelocity(motion, false)
 		if speed <= 0 {
 			speed = creatureBaseRunSpeed
 		}
@@ -1083,7 +1108,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if dist > contactDist {
 			// Pursue player: move towards target at run speed
 			if !motion.Moving || now.After(motion.MoveEnds) {
-				duration := splineDurationMs(float64(dist), motion.RunSpeed)
+				duration := splineDurationMs(float64(dist), creatureSplineVelocity(motion, false))
 				s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, target.X, target.Y, target.Z, duration, false)
 				motion.X, motion.Y, motion.Z = target.X, target.Y, target.Z
 				motion.Moving = true
@@ -1394,11 +1419,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	if motion.MoveType == 2 {
 		point := motion.Points[motion.NextIdx]
 		destX, destY, destZ = point.X, point.Y, point.Z
-		speed = motion.RunSpeed
-		walk = point.MoveType == 0
-		if walk {
-			speed = motion.Speed
-		}
+		walk = point.MoveType == 0 // WAYPOINT_MOVE_TYPE_WALK (WaypointDefines.h:26); default RUN
+		speed = creatureSplineVelocity(motion, walk)
 		if point.Delay > 0 {
 			wait = time.Duration(point.Delay) * time.Second
 		}
@@ -1420,7 +1442,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		destX = float32(float64(motion.HomeX) + dist*math.Cos(angle))
 		destY = float32(float64(motion.HomeY) + dist*math.Sin(angle))
 		destZ = motion.HomeZ
-		speed = motion.Speed
+		// RandomMovementGenerator defaults to walk (RandomMovementGenerator.cpp:156-167);
+		// CanRun/AlwaysRun template legs stay unmodeled (no creature_template_addon bridge).
+		speed = creatureSplineVelocity(motion, true)
 	} else {
 		// MoveType 0 is IDLE_MOTION_TYPE (MovementDefines.h:28): Creature::Initialize
 		// (Creature.cpp:543-545) demotes RANDOM to IDLE when wander_distance is 0,
