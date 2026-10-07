@@ -3543,6 +3543,48 @@ func init() {
 	RegisterLuaBoss("boss_silver_hand_bosses", 17912)
 	RegisterLuaBoss("boss_silver_hand_bosses", 17913)
 	RegisterLuaBoss("boss_silver_hand_bosses", 17914)
+	// instance_stratholme.cpp audit (map 329, "STR", EK loader
+	// decl :137 / call :315 follows order_of_silver_hand): InstanceMapScript
+	// only — zero creature/at_/go scripts, zero Spell/AuraScripts, no Lua
+	// InstanceMapScript bridge, so this unit is documented-only. C++ arms:
+	// ctor SetHeaders("STR"), 6 EncounterState NOT_STARTED,
+	// IsSilverHandDead[5] false, timmySpawned false, scarletsKilled 0.
+	// OnUnitDeath: crimson guardsman/conjuror/initiate/gallant deaths inside
+	// the beforeScarletGate ellipse increment scarletsKilled — at 15
+	// (TIMMY_THE_CRUEL_CRUSADERS_REQUIRED) summons NPC_TIMMY_THE_CRUEL
+	// 10808 at (3625.358, -3188.108, 130.3985, 4.834562), one-shot.
+	// OnCreatureCreate/Remove latch baron/ysida/ysida-trigger GUIDs +
+	// crystals and bile/venom abomination GuidSets (crystals unused in
+	// logic — "change to DONE when crystals implemented" TODO).
+	// OnGameObjectCreate latches 12 GO GUIDs with late-load reopen legs
+	// (ziggurats 1-5, port gauntlet/slaugther/elders, service entrance,
+	// ysida cage; gauntlet gate 1 gets GO_FLAG_LOCKED, "DB bug?" C++ note).
+	// SetData: TYPE_BARON_RUN IN_PROGRESS arms 45min EVENT_BARON_RUN /
+	// FAIL removes ultimatum 27861 auras + ysida feign-death 29266 /
+	// DONE opens ysida cage, ysida self-casts 31912, AI Talk(0),
+	// questgiver flag restore, MovePoint 1, per-player 31913 credit leg.
+	// TYPE_BARONESS/NERUB/PALLID IN_PROGRESS open ziggurats 1/2/3 +
+	// StartSlaugtherSquare (all three IN_PROGRESS opens port gauntlet +
+	// slaugther GOs). TYPE_RAMSTEIN IN_PROGRESS: if all abominations
+	// dead, summons ramstein 10439 (4032.84, -3390.24, 119.73, 4.71,
+	// 30min despawn); DONE schedules 1min EVENT_SLAUGHTER_SQUARE;
+	// NOT_STARTED reopens port gauntlet. TYPE_BARON IN_PROGRESS closes
+	// ziggurats 4/5; DONE opens them + port gauntlet, removes ultimatum,
+	// cascades TYPE_BARON_RUN DONE. TYPE_SH_* latch the 5 silver-hand
+	// death flags consumed by GetData(TYPE_SH_QUEST)=20 (all five ->
+	// boss_silver_hand_bosses quest credit leg, already ported). DONE
+	// persists to DB. GetSaveData/Load: six encounter states (IN_PROGRESS
+	// on 0/4/5 reset to NOT_STARTED at load). GetGuidData: DATA_BARON /
+	// DATA_YSIDA_TRIGGER / NPC_YSIDA. Update: EventMap arms —
+	// EVENT_BARON_RUN expires to FAIL (unless already DONE);
+	// EVENT_SLAUGHTER_SQUARE summons 4x black guard 10394 at the ramstein
+	// position and opens ziggurats 4/5. The single Talk line (Ysida
+	// SAY_YSIDA_SAVED 0) is instance-driven, not a creature script.
+	// No SummonCreature/GetCreature/GetGameObject/SetGoState/MovePoint/
+	// AreaBoundary/EventMap bridges — joins the no-instance-script-bridge
+	// queue (deadmines/blackrock_spire/gnomeregan/karazhan/molten_core/
+	// naxxramas/trial_of_the_crusader precedent). STRATHOLME GROUP
+	// COMPLETE.
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
