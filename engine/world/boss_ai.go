@@ -2974,6 +2974,26 @@ func init() {
 	// binds the creature_template ScriptName DB-side) — wowhead-cited
 	// (classic.wowhead.com/npc=6490/azshir-the-sleepless).
 	RegisterLuaBoss("boss_azshir_the_sleepless", 6490)
+	// boss_bloodmage_thalnos (4543, Scarlet Monastery Graveyard, EK
+	// loader decl :100 / call :278): OnEnterCombat(1) Talk(SAY_AGGRO 0)
+	// + flame shock 8053 10s->{10s,15s}, shadow bolt 1106 2s->2s,
+	// flame spike 8814 8s->30s, fire nova 16079 40s->40s (all
+	// non-triggered DoCastVictim -> GetVictim + CastSpell; nil-victim
+	// ticks cast nothing but keep the schedule — jeklik convention).
+	// KilledUnit(3): Talk(SAY_KILL 2) only when the victim is a player
+	// (C++ TYPEID_PLAYER gate -> victim:IsPlayer(), illidan
+	// convention). DamageTaken(9): once, when post-damage health drops
+	// strictly below 35% (HealthBelowPctDamaged — damaged class, not
+	// the golemagg 704fb8e current-health bug class): Talk(SAY_HEALTH
+	// 1), per-GUID once-guard; the C++ arm casts no spell. The
+	// UpdateAI UNIT_STATE_CASTING queue gate and
+	// BossAI::JustEngagedWith + DATA_BLOODMAGE_THALNOS encounter
+	// bookkeeping have no instance/UNIT_STATE bridges (luaBossAI shim).
+	// Entry 4543 is not named in the C++ tree
+	// (RegisterScarletMonasteryCreatureAI binds the creature_template
+	// ScriptName DB-side) — wowhead-cited
+	// (www.wowhead.com/cata/npc=4543/bloodmage-thalnos).
+	RegisterLuaBoss("boss_bloodmage_thalnos", 4543)
 	// Archaedas (2748, Uldaman) runs the Ground Tremor (6524)
 	// schedule (60s init, 45s re-arm, DoCastVictim -> GetVictim +
 	// CastSpell). The awaken sequence (SpellHit 10347 Talk/yell +
