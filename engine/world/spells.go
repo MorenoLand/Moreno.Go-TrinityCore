@@ -10550,6 +10550,17 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	if mounted {
 		s.applyMountedDisplay(context.Background(), aura)
 	}
+	if auraType == spellAuraSpiritOfRedemption {
+		// AuraEffect::HandleSpiritOfRedemption apply leg
+		// (SpellAuraEffects.cpp:1527-1548): the spirit form stands and holds
+		// at 1 HP instead of dying.
+		if s.player != nil {
+			s.player.StandState = 0 // UNIT_STAND_STATE_STAND
+			if s.player.Health == 0 {
+				s.player.Health = 1
+			}
+		}
+	}
 	s.sendAuraUpdateWithStack(slot, spellID, false, positive, durationMs, durationMs, stackCount)
 	s.sendPlayerUpdate()
 	if auraType == 4 {
@@ -10715,6 +10726,14 @@ func (s *session) removeAura(spellID uint32) {
 	}
 	if wasParryAura && s.player != nil {
 		s.updatePlayerParryPercentage(s.player, s.player.Level)
+	}
+	// AuraEffect::HandleSpiritOfRedemption remove leg
+	// (SpellAuraEffects.cpp:1527-1553): "die at aura end" — when the spirit
+	// form fades while the player is still alive, the JUST_DIED cascade
+	// deferred by killPlayer's Spirit of Redemption arm runs now. The guard
+	// mirrors the C++ `else if (target->IsAlive())`.
+	if spellID == spiritOfRedemptionSpellID && s.player != nil && s.player.Health > 0 {
+		s.completeSpiritOfRedemptionDeath(context.Background())
 	}
 	s.sendPlayerUpdate()
 	if wasVisibilityAura && s.server != nil {

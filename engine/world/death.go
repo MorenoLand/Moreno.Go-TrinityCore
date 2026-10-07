@@ -215,6 +215,13 @@ func ShouldConvertLoadedCorpseToBones(playerMap, corpseMap uint32, alive bool) b
 	return alive && playerMap == corpseMap
 }
 
+// spiritOfRedemptionSpellID is the Spirit of Redemption form spell cast by
+// the Unit::Kill talent arm (Unit.cpp:11313); its DBC duration is 15s.
+const (
+	spiritOfRedemptionSpellID    uint32 = 27827
+	spiritOfRedemptionDurationMs uint32 = 15000
+)
+
 // killPlayer mirrors Player::KillPlayer for the lethal-damage call site: root
 // the corpse in place, keep health at zero, raise the release timer flag on
 // non-instance maps (the Go server has no instance maps), start the 6 minute
@@ -229,6 +236,14 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath bool
 	if s.player == nil || s.player.Health > 0 {
 		return
 	}
+	// Unit::Kill Spirit of Redemption gate (Unit.cpp:11298-11301): a priest
+	// with the talent defers death — the JUST_DIED cascade below is skipped
+	// now and runs when the spirit form fades (HandleSpiritOfRedemption
+	// remove leg, SpellAuraEffects.cpp:1527-1553, "die at aura end"). The
+	// Unit::Kill post-SoR arms (PvP-death flag, BG handlers, duel interrupt,
+	// durability) still run at the original death: the C++ flow gates only
+	// setDeathState(JUST_DIED) on spiritOfRedemption.
+	spiritOfRedemption := s.hasSpiritOfRedemptionTalent()
 	// ThreatManager::RemoveMeFromThreatLists on the dead player
 	// (ThreatManager.cpp:690-697, reached on player death through
 	// Unit::setDeathState → CombatStop, Unit.cpp:8901-8907): a dead
@@ -236,33 +251,42 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath bool
 	// table on the map/instance, exactly like a dead creature.
 	// Placed first, matching the C++ order where setDeathState (and
 	// its CombatStop) runs inside Unit::Kill ahead of all post-kill
-	// processing.
-	if s.server != nil {
+	// processing. Skipped while the spirit form holds: the player is
+	// still alive, so the threat leg runs at the deferred death.
+	if !spiritOfRedemption && s.server != nil {
 		s.server.removeThreatVictimFromAllLists(s.player.Map, s.player.InstanceID, s.playerGUID)
 	}
 	// Player::setDeathState(JUST_DIED), Player.cpp:1412 — RemovePet(nullptr,
 	// PET_SAVE_NOT_IN_SLOT, true) dismisses the pet at death rather than
 	// keeping it alive on a dead owner; RemoveGhoul has no Go analog (no
 	// raised-ghoul pet model). Placed before the penalty/achievement legs,
-	// matching the C++ relative order.
-	s.unsummonPet(ctx, petSaveNotInSlot)
+	// matching the C++ relative order. Skipped while the spirit form holds.
+	if !spiritOfRedemption {
+		s.unsummonPet(ctx, petSaveNotInSlot)
+	}
 	// Unit::Kill (Unit.cpp:11341-11343): remember the victim's PvP death for
 	// corpse type and corpse reclaim delay, stored until CreateCorpse (the
 	// SetPvPDeath(player != nullptr) leg). Placed after the pet arm, matching
-	// the C++ relative order.
+	// the C++ relative order. Runs at the original death even under Spirit of
+	// Redemption (Unit.cpp:11344-11346: "at original death (not at
+	// SpiritOfRedemtionTalent timeout)").
 	s.pvpDeath = pvpDeath
-	if s.playerLoaded && s.player.PlayerFieldBytes&playerFieldByteReleaseTimer == 0 {
-		s.player.PlayerFieldBytes |= playerFieldByteReleaseTimer
-	}
-	s.deathTimer = time.Now().Add(autoRepopDelay)
-	s.updateAchievementCriteria(criteriaTypeDeath, 0, 1)
-	s.updateAchievementCriteria(criteriaTypeDeathAtMap, s.player.Map, 1)
-	if s.server != nil && s.server.Data != nil {
-		if mapInfo, found, err := s.server.Data.Map(s.player.Map); err == nil && found && mapInfo.InstanceType != 0 {
-			s.updateAchievementCriteria(criteriaTypeDeathInDungeon, 0, 1)
+	if !spiritOfRedemption {
+		if s.playerLoaded && s.player.PlayerFieldBytes&playerFieldByteReleaseTimer == 0 {
+			s.player.PlayerFieldBytes |= playerFieldByteReleaseTimer
 		}
+		s.deathTimer = time.Now().Add(autoRepopDelay)
 	}
-	s.resetAchievementCriteriaByCondition(criteriaConditionNoDeath, 0)
+	if !spiritOfRedemption {
+		s.updateAchievementCriteria(criteriaTypeDeath, 0, 1)
+		s.updateAchievementCriteria(criteriaTypeDeathAtMap, s.player.Map, 1)
+		if s.server != nil && s.server.Data != nil {
+			if mapInfo, found, err := s.server.Data.Map(s.player.Map); err == nil && found && mapInfo.InstanceType != 0 {
+				s.updateAchievementCriteria(criteriaTypeDeathInDungeon, 0, 1)
+			}
+		}
+		s.resetAchievementCriteriaByCondition(criteriaConditionNoDeath, 0)
+	}
 	if s.server != nil {
 		s.server.handleWSGPlayerDeath(s)
 		s.server.handleEOTSPlayerDeath(s)
@@ -292,18 +316,37 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath bool
 	if killer != nil {
 		killer.creditKillingBlowCriteria()
 	}
-	s.clearActiveAuras()
-	s.clearDiminishings()
-	s.stopMirrorTimers()
-	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT))
+	if spiritOfRedemption {
+		// Unit::Kill Spirit of Redemption arm (Unit.cpp:11302-11314):
+		// RemoveAllAurasOnDeath, then CastSpell(27827). Go holds no passive
+		// aura instances, so clearActiveAuras is the RemoveAllAurasOnDeath
+		// analog over the applied set; the talent passive survives in the
+		// learned-spell list. PLAYER_SELF_RES_SPELL needs no save/restore:
+		// clearActiveAuras never touches the player field, and the
+		// GetResurrectionSpellId fill sub-arm is unmodeled (no
+		// reincarnation/soulstone self-res model in Go). The 27827 apply leg
+		// (stand state + SetHealth(1)) lives in applyAuraWithDuration.
+		s.clearActiveAuras()
+		s.applyAuraWithDuration(spiritOfRedemptionSpellID, spiritOfRedemptionDurationMs)
+	} else {
+		s.clearActiveAuras()
+	}
+	if !spiritOfRedemption {
+		s.clearDiminishings()
+		s.stopMirrorTimers()
+		s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT))
+	}
 	s.sendPlayerUpdate()
 	// Player::UpdateCorpseReclaimDelay (Player.cpp:24324) and
 	// Player::GetCorpseReclaimDelay (Player.cpp:24353) read the PvP-death
-	// flag rather than taking a parameter.
-	s.updateCorpseReclaimDelay(s.pvpDeath)
-	s.sendCorpseReclaimDelay(s.corpseReclaimDelaySeconds(s.pvpDeath))
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET death_expire_time = ? WHERE guid = ?", s.deathExpireTime, s.playerGUID)
+	// flag rather than taking a parameter. Deferred while the spirit form
+	// holds: no corpse exists until the real death.
+	if !spiritOfRedemption {
+		s.updateCorpseReclaimDelay(s.pvpDeath)
+		s.sendCorpseReclaimDelay(s.corpseReclaimDelaySeconds(s.pvpDeath))
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET death_expire_time = ? WHERE guid = ?", s.deathExpireTime, s.playerGUID)
+		}
 	}
 	// Unit::Kill (Unit.cpp:11359-11365): a duelist killed by anyone other
 	// than the duel opponent (creature, environment, third party — every
@@ -322,6 +365,80 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath bool
 		_ = s.write(uint16(protocol.OpcodeSMSG_DURABILITY_DAMAGE_DEATH), []byte{}, true)
 	}
 	s.debug("player killed", "account", s.accountName, "guid", s.playerGUID)
+}
+
+// hasSpiritOfRedemptionTalent mirrors the Unit::Kill Spirit of Redemption
+// gate (Unit.cpp:11298-11301): the victim carries SPELL_AURA_DUMMY with
+// SPELLFAMILY_PRIEST family flags 0x200 (the priest talent passive, spell
+// 20711). Go holds no passive aura instances, so the learned passive spell
+// list stands in for the applied aura-effect check.
+func (s *session) hasSpiritOfRedemptionTalent() bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	for _, learned := range s.player.Spells {
+		if !learned.Active || learned.Disabled {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(learned.ID)
+		if err != nil || !found {
+			continue
+		}
+		if spell.Attributes&spellAttributePassive == 0 {
+			continue
+		}
+		if spell.SpellFamilyName != spellFamilyPriest || len(spell.SpellFamilyFlags) < 3 || spell.SpellFamilyFlags[2]&0x200 == 0 {
+			continue
+		}
+		for _, eff := range spell.Effects {
+			if eff.Aura == spellAuraDummy {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// completeSpiritOfRedemptionDeath runs the JUST_DIED cascade deferred by the
+// Spirit of Redemption arm: AuraEffect::HandleSpiritOfRedemption's remove leg
+// (SpellAuraEffects.cpp:1527-1553) calls setDeathState(JUST_DIED) when the
+// spirit form fades ("die at aura end"). The Unit::Kill post-SoR arms (PvP
+// flag, BG handlers, duel interrupt, durability) already ran at the original
+// death and are not repeated. The C++ leg keeps the 1 HP alongside the death
+// state; the Go death model keys on Health==0, so health is clamped to keep
+// that invariant.
+func (s *session) completeSpiritOfRedemptionDeath(ctx context.Context) {
+	if s == nil || s.player == nil || s.player.Health == 0 {
+		return
+	}
+	s.player.Health = 0
+	if s.server != nil {
+		s.server.removeThreatVictimFromAllLists(s.player.Map, s.player.InstanceID, s.playerGUID)
+	}
+	s.unsummonPet(ctx, petSaveNotInSlot)
+	if s.playerLoaded && s.player.PlayerFieldBytes&playerFieldByteReleaseTimer == 0 {
+		s.player.PlayerFieldBytes |= playerFieldByteReleaseTimer
+	}
+	s.deathTimer = time.Now().Add(autoRepopDelay)
+	s.updateAchievementCriteria(criteriaTypeDeath, 0, 1)
+	s.updateAchievementCriteria(criteriaTypeDeathAtMap, s.player.Map, 1)
+	if s.server != nil && s.server.Data != nil {
+		if mapInfo, found, err := s.server.Data.Map(s.player.Map); err == nil && found && mapInfo.InstanceType != 0 {
+			s.updateAchievementCriteria(criteriaTypeDeathInDungeon, 0, 1)
+		}
+	}
+	s.resetAchievementCriteriaByCondition(criteriaConditionNoDeath, 0)
+	s.clearDiminishings()
+	s.stopMirrorTimers()
+	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT))
+	s.clearActiveAuras()
+	s.sendPlayerUpdate()
+	s.updateCorpseReclaimDelay(s.pvpDeath)
+	s.sendCorpseReclaimDelay(s.corpseReclaimDelaySeconds(s.pvpDeath))
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET death_expire_time = ? WHERE guid = ?", s.deathExpireTime, s.playerGUID)
+	}
+	s.debug("player killed (spirit of redemption expired)", "account", s.accountName, "guid", s.playerGUID)
 }
 
 // sendForcedMovement sends one of the forced movement packets used by
