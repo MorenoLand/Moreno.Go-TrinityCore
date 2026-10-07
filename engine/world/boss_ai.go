@@ -3359,6 +3359,18 @@ func init() {
 	RegisterLuaBoss("boss_apothecary_hummel", 36296)
 	RegisterLuaBoss("npc_apothecary_baxter", 36565)
 	RegisterLuaBoss("npc_apothecary_frye", 36272)
+	// boss_magistrate_barthilas.cpp audit (Stratholme block, EK loader decl
+	// :126 / call :304 follows hummel): 1 script, pure timer-driven
+	// ScriptedAI — no NPC_ constant in C++ (DB-side ScriptName binding,
+	// entry 10435 wowhead-cited). Ported in
+	// lua_scripts/eastern_kingdoms/boss_magistrate_barthilas.lua:
+	// FURIOUS_ANGER 5s->4s self-cast 16791 (re-arm precedes the
+	// AngerCount > 25 check, so the 26th cast is last) / DRAINING_BLOW
+	// 20s->15s DoCastVictim 16793 / CROWD_PUMMEL 15s DoCastVictim 10887 /
+	// MIGHTY_BLOW 10s->20s DoCastVictim 14099 (GetVictim + CastSpell,
+	// nil-victim keeps schedule). Documented-only (no bridges):
+	// SetDisplayId(10433/3637) legs in Reset/JustDied (jandice precedent).
+	RegisterLuaBoss("boss_magistrate_barthilas", 10435)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
