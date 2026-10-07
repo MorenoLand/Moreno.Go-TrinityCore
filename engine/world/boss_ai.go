@@ -3231,6 +3231,22 @@ func init() {
 	// GetScholomanceAI template validation (luaBossAI shim),
 	// BossAI::JustEngagedWith + DATA_THERAVENIAN=5 bookkeeping.
 	RegisterLuaBoss("boss_the_ravenian", 10507)
+	// boss_vectus.cpp (EK loader AddSC_boss_vectus decl :120 / call
+	// :298, Scholomance block continues; script name "boss_vectus"):
+	// boss AI ported in lua_scripts/eastern_kingdoms/boss_vectus.lua
+	// (entry 10432 — no NPC_ constant in scholomance.h, DB-side
+	// ScriptName binding, wowhead-verified). OnEnterCombat schedules
+	// fire shield 19626 2s->90s / blast wave 16046 14s->12s (both
+	// non-triggered DoCast(me), jeklik convention); DamageTaken has
+	// NO once-guard — every sub-25% post-damage hit fires the
+	// EVENT_FRENZY arm: non-triggered self-cast frenzy 8269 +
+	// Talk(EMOTE_FRENZY 0) + 24s re-arm; SPELL_FLAMESTRIKE 18399
+	// declared but unused in C++ (dead enum entry, not modeled).
+	// Documented-only (no bridges): UpdateAI UNIT_STATE_CASTING
+	// gates, GetScholomanceAI template validation (luaBossAI shim),
+	// BossAI::JustEngagedWith bookkeeping (Vectus is not one of the
+	// 8 tracked encounters — no DATA_ constant in scholomance.h).
+	RegisterLuaBoss("boss_vectus", 10432)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
