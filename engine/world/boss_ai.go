@@ -3384,6 +3384,21 @@ func init() {
 	// instance-script bridge), UpdateAI UNIT_STATE_CASTING gate, dead
 	// EVENT_DRAIN_MANA 17243 (declared, never scheduled).
 	RegisterLuaBoss("boss_maleki_the_pallid", 10438)
+	// boss_nerubenkan.cpp audit (Stratholme block, EK loader decl :128 /
+	// call :306 follows maleki): 1 script, pure timer-driven ScriptedAI —
+	// no Talk lines, no NPC_ constant in stratholme.h (DB-side ScriptName
+	// binding, entry 10437 classic.wowhead-cited). Ported in
+	// lua_scripts/eastern_kingdoms/boss_nerubenkan.lua: ENCASINGWEBS 7s->30s
+	// DoCastVictim 4962 / PIERCEARMOR 19s->35s DoCastVictim 6016
+	// (urand(0,3)<2 50% cast gate, re-arm unconditional) / CRYPTSCARABS
+	// 3s->20s DoCastVictim 31602 / RAISEUNDEADSCARAB 3s->16s timer shape
+	// preserved with documented-only legs (DoSpawnCreature 10876 +
+	// AttackStart — no summon bridge, herod precedent) (GetVictim +
+	// CastSpell, nil-victim keeps schedule; JustEngagedWith empty in C++).
+	// Documented-only (no bridges): JustDied instance->SetData(TYPE_NERUB
+	// 3, IN_PROGRESS) (no instance-script bridge), UpdateVictim gate,
+	// melee engine-driven.
+	RegisterLuaBoss("boss_nerubenkan", 10437)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
