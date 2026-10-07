@@ -37,6 +37,7 @@ const (
 	corpsePhaseAuraType uint32 = 261
 	corpseFlagBones     uint32 = 0x01
 	corpseFlagUnk2      uint32 = 0x04
+	corpseFlagLootable  uint32 = 0x20 // CORPSE_FLAG_LOOTABLE (Corpse.h:45)
 	playerFlagHideHelm  uint32 = 0x00000400
 	playerFlagHideCloak uint32 = 0x00000800
 
@@ -263,6 +264,17 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath bool
 	// matching the C++ relative order. Skipped while the spirit form holds.
 	if !spiritOfRedemption {
 		s.unsummonPet(ctx, petSaveNotInSlot)
+	}
+	// Player::setDeathState(JUST_DIED), Player.cpp:1385-1404: drunkenness is
+	// cleared (SetDrunkValue(0)), banked combo points are lost
+	// (ClearComboPoints), and any pending resurrect request is dropped
+	// (ClearResurrectRequestData). Skipped while the spirit form holds: the
+	// JUST_DIED cascade, including its setDeathState, is deferred until the
+	// spirit fades (Unit.cpp:11298-11301).
+	if !spiritOfRedemption {
+		s.player.DrunkenState = 0
+		s.clearSessionComboPoints()
+		s.resurrection = nil
 	}
 	// Unit::Kill (Unit.cpp:11341-11343): remember the victim's PvP death for
 	// corpse type and corpse reclaim delay, stored until CreateCorpse (the
@@ -535,7 +547,7 @@ func corpseAppearance(player *playerState) (uint32, uint32) {
 	return uint32(player.Race)<<8 | uint32(player.Gender)<<16 | uint32(player.Skin)<<24, uint32(player.Face) | uint32(player.HairStyle)<<8 | uint32(player.HairColor)<<16 | uint32(player.FacialStyle)<<24
 }
 
-func corpseFlags(player *playerState) uint32 {
+func corpseFlags(player *playerState, battlegroundLootable bool) uint32 {
 	flags := corpseFlagUnk2
 	if player != nil {
 		if player.PlayerFlags&playerFlagHideHelm != 0 {
@@ -545,16 +557,23 @@ func corpseFlags(player *playerState) uint32 {
 			flags |= 0x10
 		}
 	}
+	// Player::CreateCorpse (Player.cpp:4845-4846): battleground corpses carry
+	// CORPSE_FLAG_LOOTABLE (0x20) so the insignia can be removed. The
+	// !InArena() sub-arm has no bridge — Go has no arena system — and the
+	// insignia loot itself is documented unbridged at loot.go:601.
+	if battlegroundLootable {
+		flags |= corpseFlagLootable
+	}
 	return flags
 }
 
-func (s *session) spawnCorpseObject(displayID uint32) {
+func (s *session) spawnCorpseObject(displayID uint32, battlegroundLootable bool) {
 	if s.player == nil {
 		return
 	}
 	corpseGUID := s.playerGUID | (uint64(0xF101) << 48)
 	bytes1, bytes2 := corpseAppearance(s.player)
-	fields := corpseObjectFields{OwnerGUID: s.playerGUID, DisplayID: displayID, Bytes1: bytes1, Bytes2: bytes2, GuildID: s.player.GuildID, Flags: corpseFlags(s.player)}
+	fields := corpseObjectFields{OwnerGUID: s.playerGUID, DisplayID: displayID, Bytes1: bytes1, Bytes2: bytes2, GuildID: s.player.GuildID, Flags: corpseFlags(s.player, battlegroundLootable)}
 	block := buildCorpseCreateBlockWithFields(corpseGUID, fields, s.player.X, s.player.Y, s.player.Z, s.player.Orientation)
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(block)
@@ -615,13 +634,18 @@ func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 		corpseType = corpseTypePvP
 	}
 	s.pvpDeath = false
+	// Player::CreateCorpse (Player.cpp:4845-4846): the LOOTABLE flag is a
+	// battleground arm (InBattleground(), Player.h:1906); Go mirrors it with
+	// the session BG instance id. Both the DB row and the visible corpse
+	// object carry the same flags.
+	bgLootable := s.bgData.InstanceID != 0
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		// Reference Corpse::SaveToDB deletes any previous record first.
 		bytes1, bytes2 := corpseAppearance(s.player)
 		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_DEL_CORPSE", s.playerGUID)
 		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_CORPSE",
 			s.playerGUID, s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.Map,
-			displayID, s.player.Equipment, bytes1, bytes2, s.player.GuildID, corpseFlags(s.player), 0, time.Now().Unix(), corpseType, 0, s.currentPlayerPhaseMask())
+			displayID, s.player.Equipment, bytes1, bytes2, s.player.GuildID, corpseFlags(s.player, bgLootable), 0, time.Now().Unix(), corpseType, 0, s.currentPlayerPhaseMask())
 	}
 
 	s.player.PlayerFlags |= playerFlagGhost
@@ -632,7 +656,7 @@ func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 		s.applyAura(20584) // Wisp Spirit
 	}
 	s.applyAura(8326) // Ghost
-	s.spawnCorpseObject(displayID)
+	s.spawnCorpseObject(displayID, bgLootable)
 	s.player.UnitFlags &^= unitFlagSkinnable
 	s.sendPlayerUpdate()
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK))
@@ -1358,8 +1382,8 @@ func (s *session) loadCorpse(ctx context.Context) (corpseRecord, bool) {
 
 // handleReclaimCorpse mirrors WorldSession::HandleReclaimCorpse: a ghost in
 // range of its own resurrectable corpse after the reclaim delay elapses is
-// resurrected at half health and the corpse is turned into bones. The arena
-// guard has no Go arena system yet.
+// resurrected (half health/mana, full in battlegrounds) and the corpse is
+// turned into bones. The arena guard has no Go arena system yet.
 func (s *session) handleReclaimCorpse(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	_, err := reader.ReadU64()
@@ -1389,7 +1413,16 @@ func (s *session) handleReclaimCorpse(ctx context.Context, payload []byte) bool 
 	if corpse.MapID != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, corpse.X, corpse.Y, corpse.Z) > corpseReclaimRadius {
 		return true
 	}
-	s.resurrectPlayer(ctx, 0.5)
+	// WorldSession::HandleReclaimCorpse (MiscHandler.cpp:576-603): battleground
+	// corpse reclaims resurrect at full health/mana (ResurrectPlayer(1.0f)),
+	// everywhere else at half. InBattleground() is the session BG instance id
+	// (Player.h:1906); the arena reclaim block stays documented unbridged (no
+	// Go arena system).
+	restore := float32(0.5)
+	if s.bgData.InstanceID != 0 {
+		restore = 1.0
+	}
+	s.resurrectPlayer(ctx, restore)
 	s.spawnCorpseBones(ctx)
 	return true
 }
