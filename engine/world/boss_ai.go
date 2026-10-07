@@ -4611,6 +4611,34 @@ func init() {
 	// Redeemed) has no summon bridge — documented in
 	// lua_scripts/kalimdor/boss_celebras_the_cursed.lua, not wired.
 	RegisterLuaBoss("boss_celebras_the_cursed", 12225)
+	// boss_landslide: Maraudon, entry 12203 (classicdb-cited; no NPC_
+	// constant in the C++ tree — celebras / vishas / gelihast
+	// precedent) — knock away 18670 DoCastVictim 8s/15s, trample 5568
+	// self-cast 2s/8s (both non-triggered), landslide 21808 self-cast
+	// fired on the first below-50% tick then re-armed 60s of
+	// below-50% time (event-9 crossing latch + 1s pump, C++ tick
+	// semantics; InterruptNonMeleeSpells leg has no interrupt
+	// bridge); melee is engine-driven — documented in
+	// lua_scripts/kalimdor/boss_landslide.lua, not wired.
+	RegisterLuaBoss("boss_landslide", 12203)
+	// boss_noxxion: Maraudon, entry 13282 (wowhead-cited; no NPC_
+	// constant in the C++ tree) — toxic volley 21687 DoCastVictim 7s/9s
+	// + uppercut 22916 DoCastVictim 16s/12s (both non-triggered). The
+	// 19s/40s invisible-adds machine (5x DoSpawnCreature 13456,
+	// SetFaction(FRIENDLY), NOT_SELECTABLE, SetDisplayId(11686)/11172 —
+	// which also freezes both timers for 15s) has no summon / faction /
+	// flag / display bridges, so the lua timers keep their cadence
+	// through the invisible windows — documented in
+	// lua_scripts/kalimdor/boss_noxxion.lua, not wired.
+	RegisterLuaBoss("boss_noxxion", 13282)
+	// boss_princess_theradras: Maraudon, entry 12201 (wowhead-cited; no
+	// NPC_ constant in the C++ tree) — dust field 21909 self-cast
+	// 8s/14s, boulder 21832 random-player 2s/10s, thrash 3391 self-cast
+	// 5s/18s, repulsive gaze 21869 DoCastVictim 23s/20s (all
+	// non-triggered); the JustDied summon of 12238 has no summon bridge
+	// — documented in
+	// lua_scripts/kalimdor/boss_princess_theradras.lua, not wired.
+	RegisterLuaBoss("boss_princess_theradras", 12201)
 	// Onyxia: combat arms ported (entry 10184, NPC_ONYXIA GUID-bound
 	// in instance_onyxias_lair.cpp OnCreatureCreate —
 	// onyxias_lair.h:62; OnyxiaScriptName "instance_onyxias_lair",
