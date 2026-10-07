@@ -260,6 +260,19 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath bool
 	if !spiritOfRedemption && s.server != nil {
 		s.server.removeThreatVictimFromAllLists(s.player.Map, s.player.InstanceID, s.playerGUID)
 	}
+	// Unit::setDeathState(JUST_DIED) (Unit.cpp) runs inside Unit::Kill via
+	// InterruptNonMeleeSpells(false): a PREPARING generic cast is cancelled
+	// (Spell::cancel, Spell.cpp:3210-3225 — CancelGlobalCooldown refunds the
+	// GCD, then SendInterrupted + SendCastResult(SPELL_FAILED_INTERRUPTED)),
+	// and an active channel is broken the same way. interruptCurrentCast /
+	// interruptCurrentChannel carry exactly those legs, so death no longer
+	// leaves a phantom GCD or a running cast bar. Deferred while the spirit
+	// form holds: the JUST_DIED cascade runs at
+	// completeSpiritOfRedemptionDeath instead.
+	if !spiritOfRedemption {
+		s.interruptCurrentCast()
+		s.interruptCurrentChannel()
+	}
 	// Player::setDeathState(JUST_DIED), Player.cpp:1412 — RemovePet(nullptr,
 	// PET_SAVE_NOT_IN_SLOT, true) dismisses the pet at death rather than
 	// keeping it alive on a dead owner; RemoveGhoul has no Go analog (no
@@ -430,6 +443,11 @@ func (s *session) completeSpiritOfRedemptionDeath(ctx context.Context) {
 	if s.server != nil {
 		s.server.removeThreatVictimFromAllLists(s.player.Map, s.player.InstanceID, s.playerGUID)
 	}
+	// Deferred Unit::setDeathState(JUST_DIED) cascade: the spirit form kept
+	// the player alive, so the cast/channel interrupt (and its GCD refund)
+	// lands now, matching Unit::Kill's deferred setDeathState.
+	s.interruptCurrentCast()
+	s.interruptCurrentChannel()
 	s.unsummonPet(ctx, petSaveNotInSlot)
 	if s.playerLoaded && s.player.PlayerFieldBytes&playerFieldByteReleaseTimer == 0 {
 		s.player.PlayerFieldBytes |= playerFieldByteReleaseTimer

@@ -1793,6 +1793,42 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 					return true
 				}
 			}
+			// Spell::prepare disabled-spell gate (Spell.cpp:3074-3080) via
+			// DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, id, caster):
+			// item casts are TRIGGERED_NONE prepares
+			// (Player::CastItemUseSpell, Player.cpp:8232), so the gate
+			// applies here too, ahead of the in-progress gate.
+			if s.spellDisabledForCaster(ctx, spellID) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedSpellUnavailable), true)
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell disabled", "failure", spellFailedSpellUnavailable)
+				return true
+			}
+			// Spell::prepare server-side gate (Spell.cpp:3082-3087): a
+			// cast-bar cast already in progress blocks the item cast with
+			// SPELL_FAILED_SPELL_IN_PROGRESS (105). The TRIGGERED_NONE
+			// item prepare carries no TRIGGERED_IGNORE_CAST_IN_PROGRESS,
+			// so the gate is live on this path; the auto-shot exception
+			// rides the same helper as the client cast path.
+			if s.genericCastInProgress() && !s.autoShotNonBlockingCast(spellID) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, 105), true) // SPELL_FAILED_SPELL_IN_PROGRESS = 105
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "another spell cast is in progress")
+				return true
+			}
+			// Spell::CheckCast GCD arm (Spell.cpp:5227-5228): the
+			// TRIGGERED_NONE item prepare runs the strict CheckCast, so an
+			// active global cooldown fails the cast with
+			// SPELL_FAILED_NOT_READY (SPELL_FAILED_DONT_REPORT for
+			// DISABLED_WHILE_ACTIVE spells), ahead of SMSG_SPELL_START —
+			// matching C++ CheckCast-before-START order.
+			if s.isGCDActive(spell) {
+				reason := spellFailedNotReady
+				if spell.Attributes&spellAttr0DisabledWhileActive != 0 {
+					reason = spellFailedDontReport
+				}
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, reason), true)
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "global cooldown active")
+				return true
+			}
 			castTime := uint32(0)
 			if value, ok, castErr := s.server.Data.SpellCastTime(spell.CastingTimeIndex); castErr == nil && ok && value > 0 {
 				castTime = uint32(value)
@@ -1800,6 +1836,11 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_START), protocol.BuildSpellStart(s.playerGUID, s.playerGUID, castCount, spellID, spellCastFlagStart, castTime, target), true); err != nil {
 				return false
 			}
+			// Spell::prepare (Spell.cpp:3188-3196) sends SMSG_SPELL_START
+			// before TriggerGlobalCooldown: item casts are TRIGGERED_NONE
+			// prepares (Player::CastItemUseSpell, Player.cpp:8232), so they
+			// set the category GCD exactly like client-initiated casts.
+			s.triggerGlobalCooldown(spell)
 			if castTime > 0 {
 				time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
 					s.finishSpellCast(context.Background(), castCount, spellID, spell, target, rawItemGUID, uint32(itemEntry))
