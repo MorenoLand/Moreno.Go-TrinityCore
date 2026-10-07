@@ -34,8 +34,8 @@
 --   C++ EVENT_TRASH arm reschedules EVENT_WIDE_SLASH at 15s instead of
 --   itself (faithful C++-verbatim: wide slash's next tick is pushed
 --   out to 15s when trash fires).
--- - DamageTaken enrage (event 9, moroes convention): health below 30%
---   -> self-cast 26527, latched by a per-GUID flag (C++ _enraged,
+-- - DamageTaken enrage (event 9): PRE-damage health below 30% ->
+--   self-cast 26527, latched by a per-GUID flag (C++ _enraged,
 --   reset in Reset's Initialize()).
 -- Unmodeled (documented-only, no bridges):
 -- - JustDied's Ossirian yell: sCreatureTextMgr->SendChat(Ossirian,
@@ -170,7 +170,11 @@ local function onReset(event, creature)
 end
 
 -- C++ DamageTaken: !_enraged && HealthBelowPct(30) -> DoCast(me,
--- SPELL_ENRAGE 26527), latched (moroes event-9 convention).
+-- SPELL_ENRAGE 26527), latched. HealthBelowPct reads the PRE-damage
+-- health (the damage parameter is unnamed/unused in C++; event 9 fires
+-- before damage is applied per engine lua_creature_events.go), so no
+-- damage subtraction — unlike moroes, whose C++ uses
+-- HealthBelowPctDamaged and correctly subtracts.
 local function onDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local state = kurinnaxxState[guid]
@@ -181,7 +185,7 @@ local function onDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 30 then
+    if creature:GetHealth() * 100 / maxHealth < 30 then
         creature:CastSpell(creature, SPELL_ENRAGE)
         state.enraged = true
     end
