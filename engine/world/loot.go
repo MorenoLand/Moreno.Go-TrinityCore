@@ -617,7 +617,10 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	}
 
 	target, ok := s.getCombatTarget(ctx, targetGUID)
+	// DIAGNOSTIC: log loot attempts to diagnose window-not-opening
+	s.debug("loot attempt", "account", s.accountName, "guid", targetGUID, "found", ok, "target_health", target.Health, "player_map", s.player.Map, "target_map", target.Map)
 	if !ok || target.Map != s.player.Map || target.InstanceID != s.player.InstanceID || !withinLootDistance(s, target) {
+		s.debug("loot rejected", "account", s.accountName, "reason", "target-not-found-or-invalid")
 		return s.sendLootReleaseResponse(targetGUID) == nil
 	}
 	if target.Health != 0 {

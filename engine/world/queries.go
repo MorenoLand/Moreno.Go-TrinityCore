@@ -49,7 +49,9 @@ type gameObjectQueryData struct {
 }
 
 func (s *session) handleCreatureQuery(ctx context.Context, payload []byte) bool {
-	entry, _, err := readQueryEntryAndGUID(payload)
+	entry, guid, err := readQueryEntryAndGUID(payload)
+	// DIAGNOSTIC: log all creature queries to diagnose Unknown names
+	s.debug("creature query received", "account", s.accountName, "entry", entry, "guid", guid, "payload_len", len(payload))
 	if err != nil {
 		s.debug("creature query rejected", "account", s.accountName, "error", err)
 		return false
