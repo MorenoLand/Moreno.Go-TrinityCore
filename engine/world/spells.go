@@ -7222,14 +7222,15 @@ func (s *session) spawnPersistentAreaAura(ctx context.Context, spell wotlk.Spell
 	if amount == 0 && (auraEffect.Aura == 3 || auraEffect.Aura == 23 || auraEffect.Aura == 89) {
 		amount = uint32(10 + int(s.player.Level)*2)
 	}
-	// Spell power bonus for the dynobj's periodic-damage aura. C++ runs
-	// SpellDamageBonusDone per tick for DYNOBJ_AURA_TYPE auras
-	// (SpellAuraEffects.cpp:5145-5146, never baked at apply); Go bakes it
-	// at apply like the unit-aura path in auraEffectParams — the only
-	// divergence is a mid-duration spell-power change, which no Go path
-	// re-evaluates. Without this the dynobj DoT carried no done leg at all.
+	// Spell power bonus for the dynobj's periodic-damage and periodic-heal
+	// auras. C++ runs SpellDamageBonusDone / SpellHealingBonusDone per tick
+	// for DYNOBJ_AURA_TYPE auras (SpellAuraEffects.cpp:5145-5146 and
+	// 5373-5376, never baked at apply); Go bakes it at apply like the
+	// unit-aura path in auraEffectParams — the only divergence is a
+	// mid-duration spell-power change, which no Go path re-evaluates.
+	// Without this the dynobj DoT and HoT carried no done leg at all.
 	if s.player != nil && s.player.SpellPower > 0 && periodMs > 0 &&
-		(auraEffect.Aura == 3 || auraEffect.Aura == 53) {
+		(auraEffect.Aura == 3 || auraEffect.Aura == 53 || auraEffect.Aura == 8) {
 		amount += uint32(math.Round(float64(s.player.SpellPower) * (float64(periodMs) / 15000.0)))
 	}
 	schoolMask := uint8(spell.SchoolMask)
@@ -11565,10 +11566,12 @@ func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (du
 	// Spell power bonus for periodic effects and absorption shields (TrinityCore Unit::SpellDamageBonusDone / SpellHealingBonusDone).
 	// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:498-507) runs the
 	// done leg for PERIODIC_DAMAGE (3), PERIODIC_LEECH (53) and
-	// PERIODIC_HEAL (8) only — PERIODIC_DAMAGE_PERCENT (89) is excluded,
-	// so 89 auras never carry a spell-power bonus.
+	// PERIODIC_HEAL (8) only — PERIODIC_DAMAGE_PERCENT (89),
+	// OBS_MOD_HEALTH (20) and PERIODIC_TRIGGER_SPELL (23) are excluded, so
+	// 89/20/23 auras never carry a spell-power bonus (20 converts to % of
+	// max health at tick time instead).
 	if s.player != nil && s.player.SpellPower > 0 {
-		if periodMs > 0 && (eff.Aura == 3 || eff.Aura == 23 || eff.Aura == 53 || eff.Aura == 8 || eff.Aura == 20) {
+		if periodMs > 0 && (eff.Aura == 3 || eff.Aura == 53 || eff.Aura == 8) {
 			tickBonus := uint32(math.Round(float64(s.player.SpellPower) * (float64(periodMs) / 15000.0)))
 			amount += tickBonus
 		} else if eff.Aura == SpellAuraSchoolAbsorb || eff.Aura == SpellAuraManaShield || eff.Aura == SpellAuraMagicAbsorb {
@@ -13366,6 +13369,13 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if healthFunnel && (healCaster == nil || healCaster.player == nil || healCaster.player.Health == 0) {
 			break
 		}
+		// SpellAuraEffects.cpp:5371-5372 — OBS_MOD_HEALTH ticks heal a
+		// percentage of the target's max health, not the stored amount
+		// (Unit::CountPctFromMaxHealth = CalculatePct truncation), before
+		// the taken leg below.
+		if aura.AuraType == 20 {
+			heal = uint32(float32(ts.player.MaxHealth) * float32(heal) / 100.0)
+		}
 		// Unit::SpellHealingBonusTaken with DOT type (Unit.cpp:7714-7759,
 		// called at SpellAuraEffects.cpp:5386): MOD_HEALING_PCT, Nourish,
 		// MOD_HOT_PCT and MOD_HEALING_RECEIVED run on the tick before the
@@ -13632,6 +13642,133 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, ts)
 		}
 		ts.applyPeriodicManaLeechGain(context.Background(), leechCaster, aura, tickSpell, tickKnown, powerType, drained)
+
+	case 21: // SPELL_AURA_OBS_MOD_POWER
+		// SpellAuraEffects.cpp:5513-5546 (HandleObsModPowerAuraTick): the
+		// target regenerates a percentage of its max power per tick.
+		obsPowerType := aura.MiscValue
+		if obsPowerType == 127 {
+			// POWER_ALL (SharedDefines.h): C++ regenerates the target's
+			// current power type — Go has no player power-type model, so
+			// the tick is unbridged rather than draining the wrong power.
+			break
+		}
+		if obsPowerType < 0 || obsPowerType > 6 {
+			break
+		}
+		if int(obsPowerType) >= len(ts.player.MaxPowers) || ts.player.MaxPowers[obsPowerType] == 0 {
+			break
+		}
+		// C++ skips the tick when a permanent aura's target already has
+		// full power.
+		if aura.DurationMs == 0 && ts.player.Powers[obsPowerType] == ts.player.MaxPowers[obsPowerType] {
+			break
+		}
+		// uint32 amount = std::max(GetAmount(), 0) * maxPower / 100.
+		amount := aura.Amount * ts.player.MaxPowers[obsPowerType] / 100
+		oldObsPower := ts.player.Powers[obsPowerType]
+		ts.adjustSpellPower(context.Background(), aura.TargetGUID, obsPowerType, int64(amount))
+		gained := uint32(0)
+		if ts.player.Powers[obsPowerType] > oldObsPower {
+			gained = ts.player.Powers[obsPowerType] - oldObsPower
+		}
+		// The periodic log carries the energize shape
+		// (SpellPeriodicAuraLogInfo with the raw amount).
+		logPkt21 := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, uint32(obsPowerType), amount)
+		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt21, true)
+		if ts.server != nil {
+			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
+				_ = casterSess.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt21, true)
+			}
+			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt21, ts)
+		}
+		// ThreatManager::ForwardThreatForAssistingMe(caster, gain * 0.5f) —
+		// distributeHealingThreat already folds the 0.5 in.
+		if ts.server != nil && gained > 0 {
+			ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, gained)
+		}
+
+	case 162: // SPELL_AURA_POWER_BURN
+		// SpellAuraEffects.cpp:5583-5623 (HandlePeriodicPowerBurnAuraTick):
+		// the target loses power and takes the drained amount as spell
+		// damage. "No SpellDamageBonus for burn mana" — the damage has no
+		// done leg; the taken leg runs Unit::CalculateSpellDamageTaken
+		// (armor for physical schools, CalcAbsorbResist: resist then
+		// absorb), the non-melee log carries periodicLog = true, and the
+		// tick lands through Unit::DealSpellDamage. Procs have no Go
+		// model on tick paths and stay unbridged.
+		burnPowerType := aura.MiscValue
+		if burnPowerType < 0 || burnPowerType > 6 {
+			break
+		}
+		var burnCaster *session
+		if ts.server != nil {
+			burnCaster = ts.server.findSessionByGUID(aura.CasterGUID)
+		}
+		// C++ gates: caster and target alive, and the target's power type
+		// matches the effect. Go has no player PowerType model; the drain
+		// below no-ops when MaxPowers[burnPowerType] is 0. UNIT_STATE_ISOLATED
+		// / IsImmunedToDamage have no Go model (SendTickImmune unbridged).
+		if burnCaster == nil || burnCaster.player == nil || burnCaster.player.Health == 0 || ts.player.Health == 0 {
+			break
+		}
+		if int(burnPowerType) >= len(ts.player.MaxPowers) || ts.player.MaxPowers[burnPowerType] == 0 {
+			break
+		}
+		burnDamage := aura.Amount
+		// SpellAuraEffects.cpp:5596-5598 — resilience cuts mana burns at
+		// the spell-crit-damage reduction rate (added in 2.4).
+		if burnPowerType == 0 && int(CombatRatingCritTakenSpell) < len(ts.player.CombatRatings) {
+			if rating := ts.player.CombatRatings[CombatRatingCritTakenSpell]; rating != 0 {
+				_, critDmgRed, _ := getResilienceStats(ts.player.Level, rating)
+				if critDmgRed > 0 {
+					burnDamage -= uint32(float64(burnDamage) * float64(critDmgRed) / 100.0)
+				}
+			}
+		}
+		// uint32 gain = uint32(-target->ModifyPower(powerType, -damage)).
+		oldBurnPower := ts.player.Powers[burnPowerType]
+		ts.adjustSpellPower(context.Background(), aura.TargetGUID, burnPowerType, -int64(burnDamage))
+		burnDealt := uint32(0)
+		if ts.player.Powers[burnPowerType] < oldBurnPower {
+			burnDealt = oldBurnPower - ts.player.Powers[burnPowerType]
+		}
+		// gainMultiplier = SpellEffectInfo::CalcValueMultiplier — the
+		// ValueMultiplier DBC field has no Go model; burn spells carry
+		// 1.0, so the damage equals the drained amount.
+		dmg := burnDealt
+		if aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
+			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, dmg)
+		}
+		burnResisted := uint32(0)
+		if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
+			pen := uint32(0)
+			if burnCaster.player != nil {
+				pen = burnCaster.player.SpellPenetration
+			}
+			burnResisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, aura.CasterLevel, ts.player.Level, false, false, pen)
+		}
+		if dmg < 1 && burnResisted == 0 {
+			dmg = 1
+		}
+		burnAbsorbed := uint32(0)
+		if dmg > 0 {
+			burnAbsorbed, dmg = ts.applyAbsorptionShields(dmg, uint8(aura.SchoolMask))
+		}
+		burnTargetHealth := ts.player.Health
+		burnOverkill := uint32(0)
+		if dmg >= burnTargetHealth && burnTargetHealth > 0 {
+			burnOverkill = dmg - burnTargetHealth
+		}
+		logPkt162 := buildPeriodicNonMeleeDamageLog(aura.TargetGUID, aura.CasterGUID, aura.SpellID, dmg, burnOverkill, uint8(aura.SchoolMask), burnAbsorbed, burnResisted, 0)
+		_ = ts.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, true)
+		if ts.server != nil {
+			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
+				_ = casterSess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, true)
+			}
+			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, ts)
+		}
+		_ = ts.applyPeriodicTickDamageToPlayer(dmg, burnTargetHealth, aura)
 	}
 }
 
@@ -13984,6 +14121,39 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			return true
 		}
 		heal := aura.Amount
+		// SpellAuraEffects.cpp:5371-5372 — OBS_MOD_HEALTH ticks heal a
+		// percentage of the target's max health, not the stored amount
+		// (Unit::CountPctFromMaxHealth = CalculatePct truncation), before
+		// the crit roll below.
+		if aura.AuraType == 20 {
+			heal = uint32(float32(target.MaxHealth) * float32(heal) / 100.0)
+		}
+		// Tick crit roll (roll_chance_f(GetCritChanceFor),
+		// SpellAuraEffects.cpp:5388-5390), mirroring the player-target
+		// path. Creature casters have no Go spell-crit model, so only
+		// player-caster ticks roll; the taken-side bonus comes from the
+		// target's MOD_ATTACKER_SPELL_CRIT_CHANCE (179) auras. The
+		// Unit::SpellHealingBonusTaken taken leg has no Go creature model
+		// and stays unbridged — the earlier path healed the raw amount.
+		healCrit := false
+		if tickCaster != nil && tickCaster.player != nil {
+			takenCritBonus := 0.0
+			if s.server != nil {
+				for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, spellAuraModAttackerSpellCritChance, aura.SchoolMask) {
+					takenCritBonus += float64(amt)
+				}
+			}
+			var critSpell wotlk.Spell
+			if tickKnown {
+				critSpell = tickSpell
+			} else {
+				critSpell = wotlk.Spell{ID: aura.SpellID, SchoolMask: aura.SchoolMask}
+			}
+			if rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
+				healCrit = true
+				heal = uint32(math.Round(float64(heal) * tickCaster.getSpellCritMultiplier(critSpell)))
+			}
+		}
 		curHP := target.Health
 		maxHP := target.MaxHealth
 		newHP := curHP + heal
@@ -13993,7 +14163,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			newHP = maxHP
 		}
 
-		logPkt := protocol.BuildPeriodicAuraLogHeal(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, heal, overheal, 0, false)
+		logPkt := protocol.BuildPeriodicAuraLogHeal(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, heal, overheal, 0, healCrit)
 		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if s.server != nil {
 			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
@@ -14004,6 +14174,12 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			}
 			s.server.motionMu.Unlock()
 			s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldHealth: newHP})
+			// Unit::DealHeal -> ForwardThreatForAssistingMe(caster,
+			// effectiveHeal * 0.5f, SpellAuraEffects.cpp:5411): healing a
+			// creature pulls threat on the engaged attackers.
+			if heal > overheal {
+				s.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, heal-overheal)
+			}
 		}
 		// SpellAuraEffects.cpp:5411-5433 — Health Funnel caster cost, after
 		// the heal (C++ order).
@@ -14262,8 +14438,191 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		}
 		s.applyPeriodicManaLeechGain(ctx, leechCaster, aura, tickSpell, tickKnown, powerType, drained)
 		return true
+
+	case 21: // SPELL_AURA_OBS_MOD_POWER
+		// SpellAuraEffects.cpp:5513-5546 (HandleObsModPowerAuraTick): the
+		// target regenerates a percentage of its max power per tick.
+		obsPowerType := aura.MiscValue
+		if obsPowerType == 127 {
+			// POWER_ALL (SharedDefines.h): C++ regenerates the target's
+			// current power type — Go creatures have no power-type model,
+			// unbridged.
+			return true
+		}
+		if obsPowerType < 0 || obsPowerType > 6 {
+			return true
+		}
+		if s.server == nil {
+			return true
+		}
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
+		maxObsPower := uint32(0)
+		curObsPower := uint32(0)
+		if motion != nil && int(obsPowerType) < len(motion.MaxPowers) {
+			maxObsPower, curObsPower = motion.MaxPowers[obsPowerType], motion.Powers[obsPowerType]
+		}
+		s.server.motionMu.Unlock()
+		if maxObsPower == 0 {
+			return true
+		}
+		// C++ skips the tick when a permanent aura's target already has
+		// full power.
+		if aura.DurationMs == 0 && curObsPower == maxObsPower {
+			return true
+		}
+		// uint32 amount = std::max(GetAmount(), 0) * maxPower / 100.
+		obsAmount := aura.Amount * maxObsPower / 100
+		gained := uint32(0)
+		if s.server != nil {
+			s.server.motionMu.Lock()
+			if motion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID); motion != nil && int(obsPowerType) < len(motion.Powers) {
+				old := motion.Powers[obsPowerType]
+				next := old + obsAmount
+				if next > motion.MaxPowers[obsPowerType] {
+					next = motion.MaxPowers[obsPowerType]
+				}
+				motion.Powers[obsPowerType] = next
+				gained = next - old
+				if obsPowerType == 0 {
+					motion.Mana = motion.Powers[0]
+				}
+				mapID, instID, guid, newPower := motion.Map, motion.InstanceID, motion.GUID, motion.Powers[obsPowerType]
+				s.server.motionMu.Unlock()
+				s.server.broadcastCreatureValuesUpdateInInstance(mapID, instID, guid, map[int]uint32{unitFieldPower1 + int(obsPowerType): newPower})
+			} else {
+				s.server.motionMu.Unlock()
+			}
+		}
+		logPkt21 := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, uint32(obsPowerType), obsAmount)
+		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt21, true)
+		if s.server != nil {
+			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt21, s)
+		}
+		// ThreatManager::ForwardThreatForAssistingMe(caster, gain * 0.5f) —
+		// distributeHealingThreat already folds the 0.5 in.
+		if s.server != nil && gained > 0 {
+			s.server.distributeHealingThreat(ctx, aura.CasterGUID, aura.TargetGUID, gained)
+		}
+		return true
+
+	case 162: // SPELL_AURA_POWER_BURN
+		// SpellAuraEffects.cpp:5583-5623 (HandlePeriodicPowerBurnAuraTick):
+		// the target loses power and takes the drained amount as spell
+		// damage — no SpellDamageBonus for burn mana; the taken leg is
+		// armor (physical schools) + CalcAbsorbResist (resist then absorb),
+		// the non-melee log carries periodicLog = true, and the damage
+		// lands through Unit::DealSpellDamage.
+		burnPowerType := aura.MiscValue
+		if burnPowerType < 0 || burnPowerType > 6 {
+			return true
+		}
+		var burnCaster *session
+		if s.server != nil {
+			burnCaster = s.server.findSessionByGUID(aura.CasterGUID)
+		}
+		// C++ gates: caster and target alive, target power type matches.
+		// Target liveness is checked at the top of this function; the
+		// power-type gate has no Go creature model (the drain below no-ops
+		// when MaxPowers[burnPowerType] is 0). Creature victims have no
+		// resilience model (consistent with the damage ticks), and the
+		// persistent-area-aura gate stays unbridged.
+		if burnCaster == nil || burnCaster.player == nil || burnCaster.player.Health == 0 {
+			return true
+		}
+		// int32 drainedAmount = -target->ModifyPower(powerType, -damage).
+		burnDrain := aura.Amount
+		drained := uint32(0)
+		if s.server != nil {
+			s.server.motionMu.Lock()
+			if motion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID); motion != nil && int(burnPowerType) < len(motion.Powers) {
+				old := motion.Powers[burnPowerType]
+				if burnDrain >= old {
+					motion.Powers[burnPowerType] = 0
+				} else {
+					motion.Powers[burnPowerType] = old - burnDrain
+				}
+				drained = old - motion.Powers[burnPowerType]
+				if burnPowerType == 0 {
+					motion.Mana = motion.Powers[0]
+				}
+				mapID, instID, guid, newPower := motion.Map, motion.InstanceID, motion.GUID, motion.Powers[burnPowerType]
+				s.server.motionMu.Unlock()
+				s.server.broadcastCreatureValuesUpdateInInstance(mapID, instID, guid, map[int]uint32{unitFieldPower1 + int(burnPowerType): newPower})
+			} else {
+				s.server.motionMu.Unlock()
+			}
+		}
+		// gainMultiplier = 1.0 (no Go ValueMultiplier model); the damage
+		// equals the drained amount.
+		dmg := drained
+		if aura.SchoolMask&1 != 0 && target.Armor > 0 {
+			dmg = calcArmorReducedDamage(float64(target.Armor), aura.CasterLevel, dmg)
+		}
+		burnResisted := uint32(0)
+		if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
+			pen := uint32(0)
+			if burnCaster.player != nil {
+				pen = burnCaster.player.SpellPenetration
+			}
+			burnResisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), target.Resistances, aura.CasterLevel, target.Level, true, false, pen)
+		}
+		if dmg < 1 && burnResisted == 0 {
+			dmg = 1
+		}
+		burnAbsorbed := uint32(0)
+		if dmg > 0 && s.server != nil {
+			burnAbsorbed, dmg = s.server.applyCreatureAbsorptionShields(key, dmg, uint8(aura.SchoolMask))
+		}
+		burnTargetHealth := target.Health
+		burnOverkill := uint32(0)
+		if dmg >= burnTargetHealth && burnTargetHealth > 0 {
+			burnOverkill = dmg - burnTargetHealth
+		}
+		logPkt162 := buildPeriodicNonMeleeDamageLog(aura.TargetGUID, aura.CasterGUID, aura.SpellID, dmg, burnOverkill, uint8(aura.SchoolMask), burnAbsorbed, burnResisted, 0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, true)
+		if s.server != nil {
+			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, s)
+		}
+		_, burnAlive := s.applyPeriodicTickDamageToCreature(ctx, dmg, burnTargetHealth, target, key, aura)
+		return burnAlive
 	}
 	return true
+}
+
+// buildPeriodicNonMeleeDamageLog mirrors buildSpellNonMeleeDamageLog with
+// the periodicLog byte set: C++ calls Unit::SendSpellNonMeleeDamageLog on a
+// SpellNonMeleeDamage whose periodicLog = true for power-burn ticks
+// (SpellAuraEffects.cpp:5604-5606), which the health-funnel path also
+// needs — burn just additionally carries real absorb/resist/hitInfo.
+func buildPeriodicNonMeleeDamageLog(targetGUID, attackerGUID uint64, spellID, damage, overkill uint32, schoolMask uint8, extra ...uint32) []byte {
+	absorb := uint32(0)
+	resist := uint32(0)
+	hitInfo := uint32(0)
+	if len(extra) > 0 {
+		absorb = extra[0]
+	}
+	if len(extra) > 1 {
+		resist = extra[1]
+	}
+	if len(extra) > 2 {
+		hitInfo = extra[2]
+	}
+	buf := protocol.NewBuffer(64)
+	buf.WritePackedGUID(targetGUID)
+	buf.WritePackedGUID(attackerGUID)
+	buf.WriteU32(spellID)
+	buf.WriteU32(damage)
+	buf.WriteU32(overkill)
+	buf.WriteU8(schoolMask)
+	buf.WriteU32(absorb)  // Absorbed
+	buf.WriteU32(resist)  // Resist
+	buf.WriteU8(1)        // periodicLog
+	buf.WriteU8(0)        // unused
+	buf.WriteU32(0)       // blocked
+	buf.WriteU32(hitInfo) // HitInfo flags (0 = normal hit, 2 = SPELL_HIT_TYPE_CRIT)
+	buf.WriteU8(0)        // HitInfo & debugMask (always 0, no crit/hit debug)
+	return buf.Bytes()
 }
 
 // buildHealthFunnelDamageLog mirrors buildSpellNonMeleeDamageLog with the
