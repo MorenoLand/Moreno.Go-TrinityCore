@@ -3605,6 +3605,23 @@ func init() {
 	// would be a stub (go_blackfathom_fire / go_keystone_chamber
 	// precedent) — DOCUMENTED, not registered. Joins the no-instance-/
 	// no-AreaTrigger-bridge queues.
+	// instance_sunken_temple.cpp audit (map 109, "ST", EK loader decl
+	// :140 / call :318 follows sunken_temple): InstanceMapScript only —
+	// zero creature/at_/go scripts, zero Talk, zero Spell/AuraScripts, no
+	// Lua InstanceMapScript bridge, so this unit is documented-only. C++
+	// arms: ctor SetHeaders("ST"), State=0, s1..s6 false. OnGameObjectCreate
+	// latches 6 statue GUIDs (GO_ATALAI_STATUE1..6 = 148830-148835).
+	// Update() runs the statue press-order machine (correct order 1-6):
+	// statue-N leg requires s1..s(N-1) all true with sN..s6 false, then
+	// UseStatue summons GO_ATALAI_LIGHT1 148883 at the statue + sets
+	// GAMEOBJECT_FLAGS 4, sets sN=true, resets State=0; the statue-6 leg
+	// also calls UseLastStatue — 6x GO_ATALAI_LIGHT2 148937 at the C++-exact
+	// statuePositions + SummonCreature(NPC_ATALALARION 8580, corpse-timed
+	// 10min, atalalarianPos). SetData/GetData(EVENT_STATE=1) carry the
+	// pending statue entry from go_atalai_statue gossip (audited above).
+	// No SummonGameObject/SummonCreature/OnGameObjectCreate/Update bridges
+	// — joins the no-instance-script-bridge queue. SUNKEN TEMPLE GROUP
+	// COMPLETE.
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
