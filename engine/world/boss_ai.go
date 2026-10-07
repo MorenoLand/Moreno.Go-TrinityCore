@@ -3201,6 +3201,22 @@ func init() {
 	// UpdateAI UNIT_STATE_CASTING gates, BossAI::JustEngagedWith +
 	// DATA_LOREKEEPERPOLKELT=4 bookkeeping (luaBossAI shim).
 	RegisterLuaBoss("boss_lorekeeper_polkelt", 10901)
+	// boss_ras_frostwhisper.cpp (EK loader AddSC_boss_rasfrost decl
+	// :118 / call :296, Scholomance block continues; script name
+	// "boss_boss_ras_frostwhisper" — C++ double-"boss" quirk preserved
+	// verbatim): boss AI ported in
+	// lua_scripts/eastern_kingdoms/boss_ras_frostwhisper.lua (entry
+	// 10508 — no NPC_ constant in scholomance.h, DB-side ScriptName
+	// binding, wowhead-verified). OnReset non-triggered self-cast ice
+	// armor 18100; OnEnterCombat schedules ice armor 2s->3min (self),
+	// frostbolt 21369 8s->8s (random alive player within 40yd incl.
+	// victim, nil pick casts nothing), chill nova 18099 12s->14s /
+	// freeze 18763 18s->24s / fear 26070 45s->30s (all non-triggered
+	// DoCastVictim, nil-victim keeps schedule); EVENT_FROSTVOLLEY is
+	// never scheduled in C++ (dead code) — not modeled; zero Talk
+	// lines. Documented-only (no bridges): UpdateAI UNIT_STATE_CASTING
+	// gates, GetScholomanceAI template validation (luaBossAI shim).
+	RegisterLuaBoss("boss_boss_ras_frostwhisper", 10508)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
