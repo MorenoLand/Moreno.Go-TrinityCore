@@ -3,11 +3,12 @@
 -- (npc_anubisath_sentinelAI : public ScriptedAI via GetAQ40AI;
 -- registered in AddSC_npc_anubisath_sentinel()).
 -- Entry: 15264 (the buddy-grid search uses the sentinel's own entry).
--- Ported: on enter combat the sentinel picks one of the 9 sentinel
--- ability buffs at random (C++ selectAbility/pickAbilityRandom) and
--- self-casts it every engage (JustEngagedWith -> GainSentinelAbility ->
--- AddAura(id, me)); the pick persists until the sentinel dies and
--- respawns, matching the C++ constructor/initialization lifetime.
+-- Ported: on EVERY enter combat the sentinel picks one of the 9
+-- sentinel ability buffs at random (C++ JustEngagedWith ->
+-- GetOtherSentinels -> selectAbility(pickAbilityRandom); Reset()
+-- re-arms gatherOthersWhenAggro, so evade -> next engage re-picks;
+-- uniform 1-9 pick, matching C++ rand32()%9 on a fresh dedup set)
+-- and self-casts it (GainSentinelAbility -> AddAura(id, me)).
 -- Zero Talk() in C++.
 -- Documented-only: the whole buddy machinery (AddSentinelsNear grid
 -- scan, GiveBuddyMyList/SendMyListToBuddies/CallBuddiesToAttack,
@@ -31,21 +32,10 @@ local BUFFS = {
     2148,  -- SPELL_STORM_BUFF
 }
 
-local abilities = {}
-
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
-    local ability = abilities[guid]
-    if not ability then
-        ability = BUFFS[math.random(#BUFFS)]
-        abilities[guid] = ability
-    end
+    -- C++ re-picks a random ability on EVERY engage (see header).
+    local ability = BUFFS[math.random(#BUFFS)]
     creature:CastSpell(creature, ability)
 end
 
-local function onDied(event, creature, killer)
-    abilities[creature:GetGUID()] = nil
-end
-
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
-RegisterCreatureEvent(ENTRY, 4, onDied)
