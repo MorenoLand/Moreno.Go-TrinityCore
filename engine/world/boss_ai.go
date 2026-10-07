@@ -3063,6 +3063,24 @@ func init() {
 	// shim).
 	RegisterLuaBoss("boss_mograine_and_whitemane", 3976)
 	RegisterLuaBoss("boss_whitemane", 3977)
+	// boss_darkmaster_gandling.cpp (EK loader decl :109 / call :287,
+	// Scholomance block start): boss AI ported in
+	// lua_scripts/eastern_kingdoms/boss_darkmaster_gandling.lua (entry
+	// NPC_DARKMASTER_GANDLING=1853, scholomance.h:42): OnEnterCombat
+	// schedules arcane missiles 15790 (triggered victim, 4.5s->8s),
+	// shadow shield 12040 (self, 12s->{14s,28s}), curse 18702 (triggered
+	// victim, 2s->{15s,27s}), shadow portal 17950 (triggered random
+	// alive player within 100yd, 15s->{17s,27s}, only while current
+	// health strictly above 3% — the C++ re-schedule lives inside the
+	// gate, so below 3% the event dies); nil-target casts nothing,
+	// schedule kept. Documented-only (no bridges): GO_GATE_GANDLING
+	// (177374) Reset/JustDied/JustEngagedWith state legs,
+	// IsSummonedBy Talk(0)+MoveRandom(5), spell_shadow_portal (room
+	// portal picker, 6 tries among open gates) + spell_shadow_portal_rooms
+	// (3x RISEN_GUARDIAN 11598 summons per room + gate close),
+	// UNIT_STATE_CASTING gates, BossAI::JustEngagedWith +
+	// DATA_DARKMASTERGANDLING bookkeeping (luaBossAI shim).
+	RegisterLuaBoss("boss_darkmaster_gandling", 1853)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
