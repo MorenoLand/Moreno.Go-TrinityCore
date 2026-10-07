@@ -63,7 +63,8 @@
 --   the engage re-arm (hyjal.lua convention).
 -- - hyjal_trashAI::JustDied: instance->SetData(DATA_TRASH, 0) wave signal
 --   plus the MINRAIDDAMAGE lootable-flag gate — blocked (standing).
--- npc_lesser_doomguard: NOT registered — zero C++ entry evidence (no
+-- npc_lesser_doomguard: IS registered in C++ (new npc_lesser_doomguard()
+-- in AddSC_boss_azgalor) but unportable with zero C++ entry evidence (no
 -- hyjal.h constant, zero hits outside boss_azgalor.cpp + loader):
 -- registering would invent an identifier (gelihast precedent). Its
 -- bridgeable arms, documented here for when an entry verifies:

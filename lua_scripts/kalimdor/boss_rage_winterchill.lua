@@ -2,7 +2,7 @@
 -- src/server/scripts/Kalimdor/CavernsOfTime/BattleForMountHyjal/
 -- boss_rage_winterchill.cpp (171 lines; boss_rage_winterchillAI : public
 -- hyjal_trashAI : public EscortAI; AddSC_boss_rage_winterchill at end
--- registers the one script; kalimdor loader decl 27 / call 143 per
+-- registers the one script; kalimdor loader decl 30 / call 143 per
 -- kalimdor_script_loader.cpp).
 -- Whole-server-tree quoted-name grep confirms the cpp as the sole source
 -- of "boss_rage_winterchill" (loader lines only otherwise).

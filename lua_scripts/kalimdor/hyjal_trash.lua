@@ -79,13 +79,15 @@
 -- - npc_banshee / crypt fiend / fel stalker / abomination / ghoul:
 --   IsEvent escort start legs (Start(false/true, true) with
 --   DATA_ALLIANCE_RETREAT-dependent HordeWPs/AllianceWPs) — no bridge.
--- npc_alliance_rifleman: NOT registered — zero C++ entry evidence (no
--- hyjal.h constant, zero "alliance_rifleman" hits outside hyjal_trash.cpp
--- and the loader): registering would invent an identifier (gelihast
--- precedent). Its combat arms (MoveInLineOfSight attack within 30,
--- Exploding Shot 7896 with SPELLVALUE_BASE_POINT0 500 + rand%700, evade
--- when the victim leaves 30) also need a spell-mod bridge that does not
--- exist. Documented here for when an entry verifies.
+-- alliance_rifleman: IS registered in C++ (new alliance_rifleman() at the
+-- end of AddSC_hyjal_trash, hyjal_trash.cpp:1517) but unportable with zero
+-- bridges: MoveInLineOfSight custom aggro-30 attack arm, EnterEvadeMode when
+-- the victim leaves 30, and Exploding Shot 7896 via CastSpellExtraArgs
+-- SPELLVALUE_BASE_POINT0 = 500 + rand%700 — no spell-mod bridge exists
+-- (documented-only standing precedent). Entry unverified: no hyjal.h
+-- constant and ScriptName binding is DB-side, so no fabricated identifier
+-- (gelihast precedent) — RegisterCreatureEvent needs a verifiable entry.
+-- Documented here for when an entry verifies.
 
 local MOB = {
     ["npc_giant_infernal"] = 17908,
@@ -107,10 +109,12 @@ local MOB = {
 -- gate: cast only when the victim's distance passes the gate
 --   ("far": dist > d, frost wyrm 25 / "near": dist <= d, gargoyle 20);
 --   otherwise the timer stays expired — 1s retry (batrider precedent).
+-- trig: C++ casts with the triggered flag (DoCast*(..., true)) — cast via
+--   CastSpell(target, spell, true); default is non-triggered (2-arg).
 local SPELLS = {
     ["npc_giant_infernal"] = {
         { spell = 31724, lo = 2000, hi = 2000, rlo = 7000, rhi = 7000,
-          target = "victim" },
+          target = "victim", trig = true },
         { spell = 37059, once = true, target = "self" },
     },
     ["npc_abomination"] = {
@@ -201,7 +205,11 @@ local function onSpell(creature, guid, name, idx)
     local spec = SPELLS[name][idx]
     local target = resolveTarget(creature, spec)
     if target and gateOk(creature, target, spec.gate) then
-        creature:CastSpell(target, spec.spell)
+        if spec.trig then
+            creature:CastSpell(target, spec.spell, true)
+        else
+            creature:CastSpell(target, spec.spell)
+        end
         local rlo, rhi = repeatRange(spec)
         schedule(guid, "spell" .. idx, math.random(rlo, rhi), function()
             onSpell(creature, guid, name, idx)

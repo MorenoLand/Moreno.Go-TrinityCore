@@ -59,10 +59,12 @@
 --   the engage re-arm (hyjal.lua convention).
 -- - hyjal_trashAI::JustDied: instance->SetData(DATA_TRASH, 0) wave signal
 --   plus the MINRAIDDAMAGE lootable-flag gate — blocked (standing).
--- - npc_towering_infernal: NOT registered — zero C++ entry evidence (no
---   hyjal.h constant, zero "towering" hits outside boss_anetheron.cpp +
---   loader): registering would invent an identifier (gelihast precedent).
---   Combat arms (fully bridgeable, awaiting entry verification):
+-- - npc_towering_infernal: IS registered in C++ (new
+-- npc_towering_infernal() in AddSC_boss_anetheron) but unportable with zero
+-- C++ entry evidence (no hyjal.h constant, zero "towering" hits outside
+-- boss_anetheron.cpp + loader): registering would invent an identifier
+-- (gelihast precedent). Combat arms (fully bridgeable, awaiting entry
+-- verification):
 --   Reset self-casts SPELL_INFERNO_EFFECT 31302 (non-triggered,
 --   C++-exact); Immolation 31303 self init 5s -> 5s (non-triggered);
 --   MoveInLineOfSight AttackStart within 50 while not in combat (no
