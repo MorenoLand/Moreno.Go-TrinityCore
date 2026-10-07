@@ -3585,6 +3585,26 @@ func init() {
 	// queue (deadmines/blackrock_spire/gnomeregan/karazhan/molten_core/
 	// naxxramas/trial_of_the_crusader precedent). STRATHOLME GROUP
 	// COMPLETE.
+	// sunken_temple.cpp audit (EK loader decl :139 / call :317 follows
+	// stratholme): two scripts, zero bridgeable arms — documented-only,
+	// no lua, no registration. at_malfurion_stormrage (AreaTriggerScript):
+	// OnTrigger summons Malfurion Stormrage 15362 at the player (facing
+	// -1.52f, 100s timed-or-dead despawn) only when the player has an
+	// instance script, no Malfurion within 15 yd, quest 8555
+	// (THE_CHARGE_OF_DRAGONFLIGHTS) REWARDED, and quest 8733
+	// (ERANIKUS_TYRANT_OF_DREAMS) not REWARDED; returns false. No
+	// AreaTrigger bridge on the Lua surface (boss_the_beast /
+	// OnlyOnceAreaTriggerScript precedent) — cannot register. go_atalai_statue
+	// (GameObjectScript + go_atalai_statueAI : GameObjectAI): OnGossipHello's
+	// only arm is instance->SetData(EVENT_STATE, go entry) feeding the
+	// instance_sunken_temple statue press-order puzzle machine (GO_ATALAI_
+	// STATUE1..6 = 148830-148835, lights 148883/148937, sunken_temple.h
+	// STScriptName "instance_sunken_temple"/DataHeader "ST"/EVENT_STATE=1);
+	// the AI's GetAI leg is GetSunkenTempleAI (GetInstanceAI) — instance
+	// model blocked. A gossip hook whose sole arm is instance SetData
+	// would be a stub (go_blackfathom_fire / go_keystone_chamber
+	// precedent) — DOCUMENTED, not registered. Joins the no-instance-/
+	// no-AreaTrigger-bridge queues.
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
