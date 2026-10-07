@@ -810,6 +810,15 @@ func init() {
 	// model, no movement model); only the Talk arm of phase 3 is
 	// modeled.
 	RegisterLuaBoss("boss_nefarian", 11583)
+	// instance_blackwing_lair (AddSC_instance_blackwing_lair; map 469 —
+	// InstanceMapScript only, zero creature/at_ scripts): encounter gate
+	// CheckRequiredBosses, Razorgore egg-event machine (EGG_EVENT SetData,
+	// EVENT_RAZOR_SPAWN wave loop, EVENT_RAZOR_PHASE_TWO,
+	// OnCreatureCreate summon-forward, OnUnitDeath charm-hack),
+	// SetBossState egg-phase + Nefarius fail/respawn arms. Every arm needs
+	// the instance-script model — the Lua surface has no InstanceMapScript
+	// bridge, so this unit is documented-only (precedent:
+	// instance_blackrock_spire).
 	// Lucifron (Molten Core, first boss) — fight logic in
 	// lua_scripts/moltencore/boss_lucifron.lua. The UpdateAI casting
 	// gates have no bridge (no UNIT_STATE model); the encounter-state
