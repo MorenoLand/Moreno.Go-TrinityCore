@@ -3837,6 +3837,19 @@ func init() {
 	// have no bridges; see lua_scripts/kalimdor/boss_aku_mai.lua.
 	RegisterLuaBoss("boss_aku_mai", 4829)
 
+	// instance_blackfathom_deeps.cpp audit (map 48, "BFD", Kalimdor loader
+	// decl :24 / call :137 follows boss_aku_mai): InstanceMapScript only —
+	// OnCreatureCreate latches Kelris 4832 GUID + randomizes Lorgus Jett
+	// 12902 home position; OnGameObjectCreate latches 4 fires of Aku'mai
+	// 21118-21121, shrine of Gelihast 103015, altar of the deeps 103016,
+	// Aku'mai door 21117 (NOT_SELECTABLE gates on Gelihast/Aku'mai boss
+	// state); SetData DATA_FIRE spawns snapjaw/softshell/servant/crustacean
+	// packs via shrine1 GO, DATA_EVENT opens the main door at 18 deaths;
+	// SetBossState DONE clears the shrine/altar flags + summons Morridune
+	// 6729. No SummonCreature/DoCast/GameObject-flag/GetGuidData bridges —
+	// joins the no-instance-script-bridge queue. BLACKFATHOM GROUP CLOSED
+	// (blackfathom_deeps, gelihast, kelris, aku_mai, instance).
+
 	// npc_jaina_proudmoore (Jaina, entry 17772) and npc_thrall (Thrall,
 	// entry 17852 — C++-verified via hyjal.h HYCreaturesIds plus
 	// instance_hyjal.cpp's OnCreatureCreate GUID-capture arms and the
@@ -3985,6 +3998,19 @@ func init() {
 	// gelihast precedent) with their bridgeable arms documented in the
 	// header; see lua_scripts/kalimdor/boss_archimonde.lua.
 	RegisterLuaBoss("boss_archimonde", 17968)
+
+	// instance_hyjal.cpp audit (map 534, "HY", Kalimdor loader decl :28 /
+	// call :141 follows boss_archimonde): InstanceMapScript only —
+	// OnCreatureCreate latches the 4 boss + Jaina 17772 / Thrall 17852 /
+	// Tyrande 17948 GUIDs (Archimonde hidden+passive until Azgalor DONE);
+	// OnGameObjectCreate latches horde/elf gates + ancient gems; SetData
+	// drives the 5-encounter array, Azgalor-DONE unhides Archimonde +
+	// one-shot YELL_ARCHIMONDE_INTRO (8), retreat/TRASH/RaidDamage/world
+	// states; GetData/GetGuidData/Load (IN_PROGRESS->NOT_STARTED) /save.
+	// No instance-script/GUID/GO-flag bridges — joins the
+	// no-instance-script-bridge queue. MOUNT HYJAL GROUP: hyjal, archimonde,
+	// instance done; rage_winterchill/anetheron/kazrogal/azgalor/hyjal_trash
+	// remain.
 
 	// boss_captain_skarloc (Captain Skarloc, entry 17862 — C++-verified
 	// via old_hillsbrad.cpp:151's ENTRY_SCARLOC constant (C++ spelling

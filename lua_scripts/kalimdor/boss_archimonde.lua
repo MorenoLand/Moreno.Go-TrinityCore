@@ -38,13 +38,14 @@
 --   non-triggered, init 30s -> {25s,40s}.
 -- - Grip of the Legion 31972: SelectTargetMethod::Random, 0 with no
 --   range cap (unbounded alive player in the instance — nefarian
---   randomAlivePlayer convention), non-triggered, init {5s,25s} ->
---   {5s,25s}.
+--   randomAlivePlayer convention) EXCLUDING the tank (C++-exact:
+--   withTank=false), non-triggered, init {5s,25s} -> {5s,25s}.
 -- - Finger of Death 31984: init 15s. C++ checks
---   SelectTarget(Random, 0, 5.0f): no player within 5 yards -> cast on
---   SelectTarget(Random, 0) (a second, independent selection — may be nil,
---   DoCast nil no-op), re-arm 1s; player in melee range -> re-arm 5s
---   (no tank-revictiming leg modeled — no threat-list bridge).
+--   SelectTarget(Random, 0, 5.0f): no target (tank excluded) within 5
+--   yards -> cast on SelectTarget(Random, 0) (tank excluded; a second,
+--   independent selection — may be nil, DoCast nil no-op), re-arm 1s;
+--   target in melee range -> re-arm 5s (no tank-revictiming leg in the
+--   actual code — the class comment's aggro-swap paragraph is aspirational).
 -- - Hand of Death 35354 (the 10-minute raid wiper): DoCastAOE resolves
 --   to self-cast, non-triggered, init 10min -> 2s (C++-exact).
 -- - Soul charges: C++ KilledUnit casts SPELL_SOUL_CHARGE_RED/YELLOW/GREEN
@@ -249,8 +250,25 @@ local function alivePlayersInInstance(creature)
     return found
 end
 
-local function randomAlivePlayer(creature)
+-- nefarian convention: unbounded random alive player in the instance.
+-- C++ SelectTarget(Random, 0) for the grip and finger-of-death legs is
+-- DefaultTargetSelector(me, dist=0, playerOnly=false, withTank=false, 0):
+-- the tank is EXCLUDED via _exception and dist=0 means no range cap
+-- (UnitAI.h comment: "if 0: ignored"; UnitAI.cpp:259-285 verified) —
+-- so the victim exclusion here is C++-exact; the player-only restriction
+-- stays the documented approximation of the uncapped threat-list pick.
+local function randomAlivePlayer(creature, excludeVictim)
     local players = alivePlayersInInstance(creature)
+    if excludeVictim then
+        local victim = creature:GetVictim()
+        if victim then
+            for i = #players, 1, -1 do
+                if players[i] == victim then
+                    table.remove(players, i)
+                end
+            end
+        end
+    end
     if #players == 0 then
         return nil
     end
@@ -283,9 +301,11 @@ local function onAirBurst(creature, guid)
 end
 
 -- C++ EVENT_GRIP_OF_THE_LEGION: DoCast(SelectTarget(Random, 0),
--- 31972), non-triggered, init {5s,25s} -> {5s,25s}.
+-- 31972), non-triggered, init {5s,25s} -> {5s,25s}. The C++ selection
+-- excludes the tank (withTank=false in DefaultTargetSelector), so the
+-- victim exclusion is C++-exact.
 local function onGrip(creature, guid)
-    local target = randomAlivePlayer(creature)
+    local target = randomAlivePlayer(creature, true)
     if target and not target:IsDead() then
         creature:CastSpell(target, SPELL_GRIP_OF_THE_LEGION)
     end
@@ -294,13 +314,14 @@ local function onGrip(creature, guid)
     end)
 end
 
--- C++ EVENT_FINGER_OF_DEATH: no player within 5 yards ->
--- DoCast(SelectTarget(Random, 0), 31984), re-arm 1s; else re-arm 5s.
--- The second selection is independent (may be nil -> DoCast nil no-op),
--- non-triggered, init 15s.
+-- C++ EVENT_FINGER_OF_DEATH: no target within 5 yards (tank excluded
+-- from the check, like every SelectTarget in this file) ->
+-- DoCast(SelectTarget(Random, 0), 31984) (tank excluded again), re-arm
+-- 1s; else re-arm 5s. The second selection is independent (may be nil ->
+-- DoCast nil no-op), non-triggered, init 15s.
 local function onFingerOfDeath(creature, guid)
-    if not randomPlayerInRange(creature, 5, false) then
-        local target = randomAlivePlayer(creature)
+    if not randomPlayerInRange(creature, 5, true) then
+        local target = randomAlivePlayer(creature, true)
         if target and not target:IsDead() then
             creature:CastSpell(target, SPELL_FINGER_OF_DEATH)
         end
