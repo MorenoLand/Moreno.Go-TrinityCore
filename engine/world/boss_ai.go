@@ -3139,7 +3139,24 @@ func init() {
 	// BossAI::JustEngagedWith + DATA_INSTRUCTORMALICIA=1 bookkeeping
 	// (scholomance.h:31) (luaBossAI shim).
 	RegisterLuaBoss("boss_instructor_malicia", 10505)
-	// boss_kormok.cpp (EK loader AddSC_boss_kormok decl :114 / call
+	// boss_jandice_barov.cpp (EK loader AddSC_boss_jandicebarov decl
+	// :114 / call :292, Scholomance block continues; script name
+	// "boss_jandice_barov"): boss AI ported in
+	// lua_scripts/eastern_kingdoms/boss_jandice_barov.lua (entry
+	// 10503 — no NPC_ constant in scholomance.h, DB-side ScriptName
+	// binding, wotlk.wowhead-verified): OnEnterCombat schedules
+	// curse of blood 24673 (victim, 15s->30s) and illusion 17773
+	// (self-cast, 30s->25s, plus a 3s one-shot EVENT_SET_VISIBILITY
+	// whose legs are documented-only); OnDied triggered self-cast
+	// drop journal 26096; zero Talk lines. Documented-only (no
+	// bridges): JustSummoned illusion arms (AttackStart on a random
+	// target, ApplySpellImmune magic-damage, SummonList
+	// tracking/DespawnAll), the NOT_SELECTABLE flag / SetDisplayId
+	// (11686 invisible, 11073 Jandice model) / ModifyThreatByPercent
+	// (victim, -99) legs, UpdateAI UNIT_STATE_CASTING gates;
+	// EVENT_CLEAVE is declared in C++ but never scheduled.
+	RegisterLuaBoss("boss_jandice_barov", 10503)
+	// boss_kormok.cpp (EK loader AddSC_boss_kormok decl :115 / call
 	// :293, Scholomance block continues; script name "boss_kormok"):
 	// boss AI ported in lua_scripts/eastern_kingdoms/boss_kormok.lua
 	// (entry 16118 — no NPC_ constant in scholomance.h, DB-side
