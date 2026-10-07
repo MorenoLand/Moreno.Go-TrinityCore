@@ -3013,6 +3013,30 @@ func init() {
 	// "Houndmaster Loksey").
 	RegisterLuaBoss("boss_houndmaster_loksey", 3974)
 
+	// boss_interrogator_vishas (3983, Scarlet Monastery Graveyard, EK
+	// loader decl :105 / call :283 follows loksey): OnEnterCombat(1)
+	// Talk(SAY_AGGRO 0) + shadow word: pain 2767 armed at 5s->({5s,15s})
+	// (non-triggered DoCastVictim -> GetVictim + CastSpell, nil-victim
+	// ticks keep the schedule — jeklik convention). KilledUnit's
+	// TYPEID_PLAYER-gated Talk(SAY_KILL 3) -> OnTargetDied(3) with
+	// victim:IsPlayer() (illidan convention). The DamageTaken latches
+	// use the C++ _yellCount staircase on HealthBelowPctDamaged
+	// semantics (post-damage, strictly below — the thalnos/azshir
+	// damaged class): below 60% with count < 1 -> Talk(SAY_HEALTH1 1),
+	// then below 30% with count < 2 -> Talk(SAY_HEALTH2 2); both can
+	// fire on one damage packet, so the port keeps a per-GUID integer
+	// counter on the pre-damage hook (event 9), cleared on 2/4/23.
+	// JustDied's Vorrel Sengutz Talk(SAY_TRIGGER_VORREL 0) via
+	// instance->GetCreature(DATA_VORREL 3981) has no instance-creature
+	// bridge (documented-only); BossAI::JustEngagedWith/_Reset/_JustDied
+	// and DATA_INTERROGATOR_VISHAS=0 bookkeeping have no
+	// instance-script bridge (luaBossAI shim). Entry 3983 has no NPC_
+	// constant in the C++ tree — RegisterScarletMonasteryCreatureAI
+	// binds the creature_template ScriptName DB-side
+	// (entry classicdb/wowhead-cited: classicdb.ch/?npc=3983,
+	// www.wowhead.com/classic/npc=3983/interrogator-vishas).
+	RegisterLuaBoss("boss_interrogator_vishas", 3983)
+
 	// boss_scorn (14693, Scarlet Monastery Graveyard, Scourge Invasion,
 	// EK loader decl :106 / call :284 follows loksey): OnEnterCombat(1)
 	// arms lich slap 28873 at 45s->45s, frostbolt volley 8398 at
