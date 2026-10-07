@@ -3187,6 +3187,20 @@ func init() {
 	// UpdateAI UNIT_STATE_CASTING gates, BossAI::JustEngagedWith +
 	// DATA_LORDALEXEIBAROV=3 bookkeeping (luaBossAI shim).
 	RegisterLuaBoss("boss_lord_alexei_barov", 10504)
+	// boss_lorekeeper_polkelt.cpp (EK loader AddSC_boss_lorekeeperpolkelt
+	// decl :117 / call :295, Scholomance block continues; script name
+	// "boss_lorekeeper_polkelt"): boss AI ported in
+	// lua_scripts/eastern_kingdoms/boss_lorekeeper_polkelt.lua (entry
+	// 10901 — no NPC_ constant in scholomance.h, DB-side ScriptName
+	// binding, classic.wowhead-verified). OnEnterCombat schedules
+	// volatile infection 24928 (triggered DoCastVictim, 38s->32s) /
+	// dark plague 18270 (triggered DoCastVictim, 8s->8s) / corrosive
+	// acid 23313 (triggered DoCastVictim, 45s->25s) / noxious catalyst
+	// 18151 (triggered DoCastVictim, 35s->38s), nil-victim keeps
+	// schedule; zero Talk lines. Documented-only (no bridges):
+	// UpdateAI UNIT_STATE_CASTING gates, BossAI::JustEngagedWith +
+	// DATA_LOREKEEPERPOLKELT=4 bookkeeping (luaBossAI shim).
+	RegisterLuaBoss("boss_lorekeeper_polkelt", 10901)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
