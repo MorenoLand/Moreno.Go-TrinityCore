@@ -88,9 +88,12 @@ end
 -- fiends + Energize, schedule stone phase end at 90s.
 local function startStonePhase(creature, guid)
     local state = moamState[guid]
-    if state == nil or state.stonePhase then
+    if state == nil then
         return
     end
+    -- C++ re-fires ACTION_STONE_PHASE_START even mid-stone-phase
+    -- (EVENT_STONE_PHASE keeps its 90s Reset cadence; ScheduleEvent
+    -- dedups, and schedule() replaces by key the same way).
     state.stonePhase = true
     creature:CastSpell(creature, SPELL_SUMMON_MANA_FIEND_1)
     creature:CastSpell(creature, SPELL_SUMMON_MANA_FIEND_2)
@@ -123,7 +126,10 @@ local function onReset(event, creature)
 end
 
 -- C++ DamageTaken: !_isStonePhase && HealthBelowPct(45) ->
--- stone phase start (moroes event-9 convention).
+-- stone phase start. HealthBelowPct reads the PRE-damage health
+-- (the damage parameter is unnamed/unused in C++; event 9 fires
+-- before damage is applied per engine lua_creature_events.go —
+-- kurinnaxx/a1d74e6 convention), so no damage subtraction.
 local function onDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local state = moamState[guid]
@@ -134,7 +140,7 @@ local function onDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 45 then
+    if creature:GetHealth() * 100 / maxHealth < 45 then
         startStonePhase(creature, guid)
     end
 end

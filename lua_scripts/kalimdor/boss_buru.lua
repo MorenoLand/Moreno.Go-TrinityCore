@@ -27,7 +27,7 @@
 -- - Transform (event 9 damage leg, C++ UpdateAI's per-tick
 --   GetHealthPct() < 20 check): phase EGG -> self-cast
 --   BURU_TRANSFORM 24721, self-cast FULL_SPEED 1557 (triggered in
---   C++; Lua CastSpell has no triggered flag — cast as normal),
+--   C++ — kurinnaxx sand-trap triggered-flag convention),
 --   RemoveAura(THORNS), phase = PHASE_TRANSFORM.
 -- - OnTargetDied (event 3, C++ KilledUnit): player victim ->
 --   ChaseNewVictim's bridgeable legs — if phase EGG, RemoveAura
@@ -122,9 +122,10 @@ local function armSpeedTimers(creature, guid)
 end
 
 -- C++ UpdateAI transform leg: GetHealthPct() < 20 && phase EGG ->
--- transform, FULL_SPEED, remove THORNS, phase TRANSFORM.
--- Checked on damage (event 9) since Lua has no per-tick UpdateAI.
-local function checkTransform(creature, guid)
+-- transform, FULL_SPEED (triggered in C++), remove THORNS, phase
+-- TRANSFORM. Checked on damage (event 9); event 9 fires pre-damage
+-- so the subtraction mirrors the post-damage C++ read.
+local function checkTransform(creature, guid, damage)
     local state = buruState[guid]
     if state == nil or state.phase ~= PHASE_EGG then
         return
@@ -133,10 +134,10 @@ local function checkTransform(creature, guid)
     if maxHealth == 0 then
         return
     end
-    if creature:GetHealth() * 100 / maxHealth < 20 then
+    if (creature:GetHealth() - damage) * 100 / maxHealth < 20 then
         state.phase = PHASE_TRANSFORM
         creature:CastSpell(creature, SPELL_BURU_TRANSFORM)
-        creature:CastSpell(creature, SPELL_FULL_SPEED)
+        creature:CastSpell(creature, SPELL_FULL_SPEED, true)
         creature:RemoveAura(SPELL_THORNS)
     end
 end
@@ -184,7 +185,7 @@ local function onTargetDied(event, creature, victim)
 end
 
 local function onDamageTaken(event, creature, attacker, damage)
-    checkTransform(creature, creature:GetGUID())
+    checkTransform(creature, creature:GetGUID(), damage)
 end
 
 local function onDied(event, creature, killer)

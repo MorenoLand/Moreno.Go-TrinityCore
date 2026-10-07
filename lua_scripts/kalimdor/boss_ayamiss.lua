@@ -160,10 +160,12 @@ local function onTrash(creature, guid)
     end)
 end
 
--- C++ ground-phase leg: <70% health in PHASE_AIR -> PHASE_GROUND,
--- cancel POISON_STINGER, arm LASH + TRASH. Checked on damage
--- (event 9); motion/ResetThreatList have no bridge.
-local function checkGroundPhase(creature, guid)
+-- C++ ground-phase leg: GetHealthPct() < 70 in PHASE_AIR ->
+-- PHASE_GROUND, cancel POISON_STINGER, arm LASH + TRASH. Checked on
+-- damage (event 9); event 9 fires pre-damage so the subtraction
+-- mirrors the post-damage C++ read (buru transform convention).
+-- Motion/ResetThreatList have no bridge.
+local function checkGroundPhase(creature, guid, damage)
     local state = ayamissState[guid]
     if state == nil or state.phase ~= PHASE_AIR then
         return
@@ -172,7 +174,7 @@ local function checkGroundPhase(creature, guid)
     if maxHealth == 0 then
         return
     end
-    if creature:GetHealth() * 100 / maxHealth < 70 then
+    if (creature:GetHealth() - damage) * 100 / maxHealth < 70 then
         state.phase = PHASE_GROUND
         cancelTimer(guid, "poison")
         schedule(guid, "lash", math.random(5000, 8000), function()
@@ -184,9 +186,11 @@ local function checkGroundPhase(creature, guid)
     end
 end
 
--- C++ frenzy leg: !_enraged && <20% -> FRENZY + EMOTE_FRENZY,
--- latched. Checked on damage (event 9).
-local function checkFrenzy(creature, guid)
+-- C++ frenzy leg: !_enraged && GetHealthPct() < 20 -> FRENZY +
+-- EMOTE_FRENZY, latched. Checked on damage (event 9); event 9 is
+-- pre-damage, so the subtraction mirrors the post-damage C++ read
+-- (buru transform convention).
+local function checkFrenzy(creature, guid, damage)
     local state = ayamissState[guid]
     if state == nil or state.enraged then
         return
@@ -195,7 +199,7 @@ local function checkFrenzy(creature, guid)
     if maxHealth == 0 then
         return
     end
-    if creature:GetHealth() * 100 / maxHealth < 20 then
+    if (creature:GetHealth() - damage) * 100 / maxHealth < 20 then
         state.enraged = true
         creature:CastSpell(creature, SPELL_FRENZY)
         creature:Talk(0)
@@ -231,8 +235,8 @@ end
 
 local function onDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
-    checkGroundPhase(creature, guid)
-    checkFrenzy(creature, guid)
+    checkGroundPhase(creature, guid, damage)
+    checkFrenzy(creature, guid, damage)
 end
 
 local function onDied(event, creature, killer)
