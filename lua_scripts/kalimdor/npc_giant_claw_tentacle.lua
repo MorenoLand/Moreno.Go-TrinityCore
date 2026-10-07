@@ -6,11 +6,15 @@
 -- Entry: 15728 (worker-verified from C++ NPC_GIANT_CLAW_TENTACLE).
 -- Ported: Ground Rupture 26139 on victim (500ms init -> 30s
 -- repeat); Thrash 3391 on victim (5s init -> 10s repeat per C++
--- ThrashTimer reset, kurinnaxx convention). The EvadeTimer leg
+-- ThrashTimer reset, kurinnaxx convention); Hamstring 26141 on
+-- victim (2s init -> 10s repeat per C++ HamstringTimer reset —
+-- the giant claw's repeat is 10s, unlike the claw tentacle's
+-- 5s). The EvadeTimer leg
 -- has no Lua bridge — documented, not wired.
 local ENTRY = 15728
 local SPELL_GROUND_RUPTURE = 26139
 local SPELL_THRASH = 3391
+local SPELL_HAMSTRING = 26141
 
 local timers = {}
 
@@ -56,6 +60,16 @@ local function onThrash(creature, guid)
     end)
 end
 
+local function onHamstring(creature, guid)
+    local victim = creature:GetVictim()
+    if victim then
+        creature:CastSpell(victim, SPELL_HAMSTRING)
+    end
+    schedule(guid, "hamstring", 10000, function()
+        onHamstring(creature, guid)
+    end)
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -64,6 +78,9 @@ local function onEnterCombat(event, creature, target)
     end)
     schedule(guid, "thrash", 5000, function()
         onThrash(creature, guid)
+    end)
+    schedule(guid, "hamstring", 2000, function()
+        onHamstring(creature, guid)
     end)
 end
 

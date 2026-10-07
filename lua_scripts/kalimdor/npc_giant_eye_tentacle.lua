@@ -6,7 +6,8 @@
 -- Entry: 15334 (worker-verified from C++ NPC_GIANT_EYE_TENTACLE).
 -- Ported: Green Beam 26134 on random player (500ms init -> 2.1s
 -- repeat; C++ SelectTarget Random has no bridge — GetPlayersInWorld
--- filtered by map/instance/alive, maiden_of_virtue convention).
+-- filtered by map/instance/alive plus the Digestive Acid 26476
+-- exclusion the C++ cast leg applies, maiden_of_virtue convention).
 -- Summon/positioning legs have no bridge — documented, not wired.
 local ENTRY = 15334
 local SPELL_GREEN_BEAM = 26134
@@ -28,7 +29,7 @@ local function onGreenBeam(creature, guid)
     local candidates = {}
     for _, p in ipairs(GetPlayersInWorld()) do
         if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
+                and not p:IsDead() and not p:HasAura(26476) then
             candidates[#candidates + 1] = p
         end
     end

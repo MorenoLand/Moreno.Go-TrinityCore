@@ -4484,6 +4484,41 @@ func init() {
 	// lua_scripts/kalimdor/boss_ouro.lua.
 	RegisterLuaBoss("boss_ouro", 15517)
 
+	// boss_cthun audit (Temple of Ahn'Qiraj head, loader decl :87 / call
+	// :200): eye_of_cthunAI + cthunAI are no-bridge document-only — the
+	// fight runs on instance DATA_CTHUN_PHASE SetData/GetData (no
+	// InstanceScript bridge), DoSpawnCreature tentacle spawns (no summon
+	// bridge), SelectTarget Random (no bridge), Dark Glare positioning
+	// math, and cross-AI DoAction coordination (no DoAction bridge at
+	// all); the single Talk (EMOTE_WEAKENED) is trivial without the phase
+	// machinery. flesh_tentacleAI's only arm (JustDied -> summoner AI
+	// DoAction(ACTION_FLESH_TENTACLE_KILLED)) has no bearer — razorgore
+	// precedent. The 4 tentacle NPCs ARE ported (npc_eye_tentacle 15726 /
+	// npc_claw_tentacle 15725 / npc_giant_claw_tentacle 15728 /
+	// npc_giant_eye_tentacle 15334, npc_*.lua convention — no Go
+	// registration). 2026-10-07 name-by-name re-verify found 3 fidelity
+	// deviations, fixed: claw Hamstring repeat 10s -> 5s (C++ reset is
+	// 5000 — the 10s was a giant-claw copy slip), giant claw was MISSING
+	// the Hamstring arm (2s init -> 10s repeat per C++), giant eye beam
+	// candidate filter lacked the Digestive Acid 26476 exclusion the C++
+	// cast leg applies. No-bridge legs (portal summon/KillSelf, EvadeTimer
+	// reposition, DoZoneInCombat, 35s KillSelf) stay documented in the
+	// lua files, not wired.
+	// wailing_caverns.cpp audit (loader decl :99 / call :212): single
+	// script npc_disciple_of_naralex, an EscortAI — the whole Naralex
+	// awakening chain (WaypointReached 4/5/11/19/24 arms,
+	// TYPE_NARALEX_PART* SetData/GetData legs, Deviate/Viper/Moccasin/
+	// Ectoplasm/Mutanus SummonCreature waves, cross-AI naralex Talks,
+	// kneel/stand/flight-form auras, SetRun) needs escort-waypoint +
+	// summon + instance-data bridges — none exist — so this unit is
+	// documented-only, no lua file, joins the no-bridge queue.
+	// instance_wailing_caverns.cpp audit (loader decl :100 / call :213):
+	// pure InstanceMapScript (map 43, "WC") — 9 encounter-state slots
+	// (lords + naralex event/parts + mutanus), Naralex GUID latch, DONE
+	// persistence, 9-slot save/load with IN_PROGRESS reset. Zero Talk,
+	// zero timers, zero creature behavior — joins the
+	// no-instance-script-bridge queue.
+
 	// boss_epoch (Chrono-Lord Epoch, entry 26532 — C++-verified via
 	// npc_arthas.cpp:59's NPC_EPOCH constant plus :1329's
 	// instance->instance->SummonCreature(NPC_EPOCH, ...) in the

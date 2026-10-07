@@ -4,10 +4,9 @@
 -- GetAQ40AI<claw_tentacleAI>(creature); registered in
 -- AddSC_boss_cthun()).
 -- Entry: 15725 (worker-verified from C++ NPC_CLAW_TENTACLE).
--- Ported: Ground Rupture 26139 on victim (500ms init -> 30s
--- repeat, jeklik GetVictim + CastSpell convention); Hamstring
--- 26141 on victim (2s init -> 10s repeat per C++ HamstringTimer
--- reset). The EvadeTimer leg (5s no-target evade) has no Lua
+-- Hamstring 26141 on victim (2s init -> 5s repeat per C++
+-- HamstringTimer reset; the giant-claw port (C++ repeat 10s) is
+-- a different AI — not copied here). The EvadeTimer leg (5s
 -- bridge — documented, not wired.
 local ENTRY = 15725
 local SPELL_GROUND_RUPTURE = 26139
@@ -52,7 +51,7 @@ local function onHamstring(creature, guid)
     if victim then
         creature:CastSpell(victim, SPELL_HAMSTRING)
     end
-    schedule(guid, "hamstring", 10000, function()
+    schedule(guid, "hamstring", 5000, function()
         onHamstring(creature, guid)
     end)
 end
