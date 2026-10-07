@@ -3013,6 +3013,21 @@ func init() {
 	// "Houndmaster Loksey").
 	RegisterLuaBoss("boss_houndmaster_loksey", 3974)
 
+	// boss_scorn (14693, Scarlet Monastery Graveyard, Scourge Invasion,
+	// EK loader decl :106 / call :284 follows loksey): OnEnterCombat(1)
+	// arms lich slap 28873 at 45s->45s, frostbolt volley 8398 at
+	// 30s->20s, mind flay 17313 at 30s->20s, frost nova 15531 at
+	// 30s->15s (all non-triggered DoCastVictim -> GetVictim + CastSpell,
+	// jeklik convention, nil-victim ticks keep the schedule, no reschedule
+	// jitter). Zero Talk lines in the C++ (no SAY enum); the UpdateAI
+	// UNIT_STATE_CASTING queue gate and BossAI::JustEngagedWith +
+	// DATA_SCORN bookkeeping have no UNIT_STATE/instance-script bridges
+	// (luaBossAI shim). Entry 14693 is not named in the C++ tree
+	// (RegisterScarletMonasteryCreatureAI binds the creature_template
+	// ScriptName DB-side) — db.moonwell-cited (?npc=14693 "Scorn",
+	// level 34 elite undead, spawned via script).
+	RegisterLuaBoss("boss_scorn", 14693)
+
 	// boss_arcanist_doan (Scarlet Monastery, Library wing, EK loader
 	// decl :98 / call :276): OnEnterCombat(1) arms silence 8988
 	// 15s->{15s,20s}, arcane explosion 9433 3s->8s (both non-triggered
