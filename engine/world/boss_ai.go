@@ -2716,6 +2716,28 @@ func init() {
 	RegisterLuaBoss("npc_unworthy_initiate", 29565)
 	RegisterLuaBoss("npc_unworthy_initiate", 29566)
 	RegisterLuaBoss("npc_unworthy_initiate", 29567)
+	// npc_valkyr_battle_maiden (The Scarlet Enclave zone file,
+	// zone_the_scarlet_enclave.cpp — AddSC_the_scarlet_enclave, loader
+	// decl :94 / call :272): PassiveAI revive-valkyr driven by an
+	// internal FlyBackTimer phase machine. Phase 0: emote
+	// FLYGRABCLOSED (500ms re-arm). Phase 1: GetClosePoint onto the
+	// summoner player + MovePoint(0), SetTarget(player), SetVisible
+	// (4500ms re-arm). Phase 2: if the player has not requested
+	// resurrection yet, emote CUSTOM_SPELL_01 + triggered cast
+	// SPELL_REVIVE 51918 on the player + whisper Talk(0) (5000ms
+	// re-arm). Phase 3: re-hide (3000ms). Phase 4: DisappearAndDie.
+	// Reset repositions/flies/hides the valkyr and clears the
+	// MotionMaster. Every arm is unbridged on the Lua surface: player
+	// acquisition needs the summoner chain (IsSummon / ToTempSummon /
+	// GetSummonerUnit / ToPlayer — no summoner bridge, midnight
+	// precedent); movement (MotionMaster Clear/MovePoint,
+	// GetClosePoint, UpdatePosition), visibility, SetTarget, emote,
+	// SetCanFly/SetFarVisible/setActive have no bridges; Talk(0) is a
+	// player-targeted whisper (broadcast Talk has no whisper target,
+	// hiborne-lamenter precedent); IsResurrectRequested and
+	// DisappearAndDie are unbridged. Entry is not C++-verifiable
+	// (DB-side ScriptName binding only) — documented-only,
+	// unregistered, zero Lua file.
 	// npc_koltira_deathweaver (The Scarlet Enclave, Bloody Breakout
 	// quest-12727 intro): OnQuestAccept(12727) -> 500ms Talk(0) ->
 	// 5s Talk(1) intro legs + OnGossipHello 13425 event-menu arm
