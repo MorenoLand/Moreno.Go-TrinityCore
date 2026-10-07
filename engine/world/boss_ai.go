@@ -4603,6 +4603,14 @@ func init() {
 	// have no spawn / instance-data bridges — documented in
 	// lua_scripts/kalimdor/boss_meathook.lua, not wired.
 	RegisterLuaBoss("boss_meathook", 26529)
+	// boss_celebras_the_cursed: Maraudon, entry 12225 (classicdb/tauri-cited;
+	// no NPC_ constant in the C++ tree — vishas/gelihast precedent) — wrath
+	// DoCast(random player) 8s/8s, entangling roots DoCastVictim 2s/20s,
+	// corrupt forces self-cast 30s/20s (InterruptNonMeleeSpells leg has no
+	// interrupt bridge); the JustDied summon of 13716 (Celebras the
+	// Redeemed) has no summon bridge — documented in
+	// lua_scripts/kalimdor/boss_celebras_the_cursed.lua, not wired.
+	RegisterLuaBoss("boss_celebras_the_cursed", 12225)
 	// Onyxia: combat arms ported (entry 10184, NPC_ONYXIA GUID-bound
 	// in instance_onyxias_lair.cpp OnCreatureCreate —
 	// onyxias_lair.h:62; OnyxiaScriptName "instance_onyxias_lair",
