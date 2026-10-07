@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -56,10 +57,13 @@ type vendorInventoryStack struct {
 }
 
 type vendorStockKey struct {
-	VendorGUID   uint64
-	Item         uint32
-	Slot         uint32
-	ExtendedCost uint32
+	// Creature::m_vendorItemCounts is keyed by itemId ONLY (Creature.cpp:2893:
+	// itr->itemId == vItem->item) — two npc_vendor rows selling the same item
+	// entry share one restock counter, even across ExtendedCost variants. Slot
+	// and ExtendedCost stay in the helper signatures for call-site convenience
+	// but do not participate in the key.
+	VendorGUID uint64
+	Item       uint32
 }
 
 type vendorStockState struct {
@@ -87,7 +91,7 @@ func (s *Server) currentVendorStockForGUID(vendorGUID uint64, item, slot, extend
 	if s.vendorStock == nil {
 		s.vendorStock = make(map[vendorStockKey]*vendorStockState)
 	}
-	key := vendorStockKey{VendorGUID: vendorGUID, Item: item, Slot: slot, ExtendedCost: extendedCost}
+	key := vendorStockKey{VendorGUID: vendorGUID, Item: item}
 	stock := s.vendorStock[key]
 	if stock == nil {
 		stock = &vendorStockState{Current: maxCount, Updated: time.Now()}
@@ -97,13 +101,18 @@ func (s *Server) currentVendorStockForGUID(vendorGUID uint64, item, slot, extend
 		stock.Current = maxCount
 	}
 	if increment > 0 && stock.Current < maxCount {
-		steps := int32(time.Since(stock.Updated) / increment)
+		// Creature::GetVendorItemCurrentCount (Creature.cpp:2907):
+		// lastIncrementTime is reset to the current time (ptime), not to the
+		// last increment boundary — the next restock step lands a full
+		// incrtime after the query that observed the increment.
+		now := time.Now()
+		steps := int32(now.Sub(stock.Updated) / increment)
 		if steps > 0 {
 			stock.Current += steps * int32(buyCount)
 			if stock.Current > maxCount {
 				stock.Current = maxCount
 			}
-			stock.Updated = stock.Updated.Add(time.Duration(steps) * increment)
+			stock.Updated = now
 		}
 	}
 	return stock.Current
@@ -120,11 +129,15 @@ func (s *Server) consumeVendorStockFor(vendor, item, slot, extendedCost, amount 
 func (s *Server) consumeVendorStockForGUID(vendorGUID uint64, item, slot, extendedCost, amount uint32) (int32, bool) {
 	s.vendorMu.Lock()
 	defer s.vendorMu.Unlock()
-	stock := s.vendorStock[vendorStockKey{VendorGUID: vendorGUID, Item: item, Slot: slot, ExtendedCost: extendedCost}]
+	stock := s.vendorStock[vendorStockKey{VendorGUID: vendorGUID, Item: item}]
 	if stock == nil || stock.Current < int32(amount) {
 		return 0, false
 	}
 	stock.Current -= int32(amount)
+	// Creature::UpdateVendorItemCurrentCount (Creature.cpp:2944): a purchase
+	// resets lastIncrementTime to now — the restock clock restarts from the
+	// purchase, it does not continue from the pre-purchase boundary.
+	stock.Updated = time.Now()
 	return stock.Current, true
 }
 
@@ -138,14 +151,21 @@ func (s *Server) restoreVendorStockFor(vendor, item, slot, extendedCost, amount 
 
 func (s *Server) restoreVendorStockForGUID(vendorGUID uint64, item, slot, extendedCost, amount uint32) {
 	s.vendorMu.Lock()
-	if stock := s.vendorStock[vendorStockKey{VendorGUID: vendorGUID, Item: item, Slot: slot, ExtendedCost: extendedCost}]; stock != nil {
+	// Go-only rollback path (C++ has no equivalent): mirror the purchase arm
+	// and restart the clock from the rollback, keeping consume/restore symmetric.
+	if stock := s.vendorStock[vendorStockKey{VendorGUID: vendorGUID, Item: item}]; stock != nil {
 		stock.Current += int32(amount)
+		stock.Updated = time.Now()
 	}
 	s.vendorMu.Unlock()
 }
 
 func (s *session) handleListInventory(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	// ItemHandler.cpp:610-611: dead players get no vendor list.
+	if s.isDeadOrGhost() {
 		return true
 	}
 	reader := protocol.NewReader(payload)
@@ -156,6 +176,103 @@ func (s *session) handleListInventory(ctx context.Context, payload []byte) bool 
 	return s.sendVendorList(ctx, vendorGUID)
 }
 
+// expandedVendorRow is one npc_vendor row after reference expansion
+// (ObjectMgr::LoadVendors / LoadReferenceVendor, ObjectMgr.cpp:9365-9402): a
+// negative item id splices the referenced vendor's rows inline at that slot
+// position, recursively, in slot order.
+type expandedVendorRow struct {
+	item, maxCount, incrTime, extCost int64
+}
+
+func (s *session) expandedVendorRows(ctx context.Context, vendorEntry uint32) []expandedVendorRow {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return nil
+	}
+	visited := make(map[uint32]bool)
+	var expand func(entry uint32) []expandedVendorRow
+	expand = func(entry uint32) []expandedVendorRow {
+		if visited[entry] {
+			return nil
+		}
+		visited[entry] = true
+		rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT item, maxcount, incrtime, ExtendedCost FROM npc_vendor WHERE entry = ? ORDER BY slot`, entry)
+		if err != nil {
+			return nil
+		}
+		var out []expandedVendorRow
+		for rows.Next() {
+			var r expandedVendorRow
+			if err := rows.Scan(&r.item, &r.maxCount, &r.incrTime, &r.extCost); err != nil {
+				continue
+			}
+			if r.item < 0 {
+				out = append(out, expand(uint32(-r.item))...)
+				continue
+			}
+			out = append(out, r)
+		}
+		_ = rows.Close()
+		return out
+	}
+	return expand(vendorEntry)
+}
+
+// vendorTemplateInfo carries the item_template columns the vendor list and
+// buy paths need, batch-loaded so reference-expanded rows don't cost a query
+// per item.
+type vendorTemplateInfo struct {
+	display, buyPrice, maxDur, buyCount, flagsExtra, allowableClass, bonding, reqRepFaction, reqRepRank int64
+}
+
+func vendorRowItemEntries(rows []expandedVendorRow) []int64 {
+	items := make([]int64, 0, len(rows))
+	for _, r := range rows {
+		items = append(items, r.item)
+	}
+	return items
+}
+
+func (s *session) vendorTemplateMap(ctx context.Context, items []int64) map[int64]vendorTemplateInfo {
+	out := make(map[int64]vendorTemplateInfo)
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || len(items) == 0 {
+		return out
+	}
+	uniq := make([]int64, 0, len(items))
+	seen := make(map[int64]bool)
+	for _, it := range items {
+		if it <= 0 || seen[it] {
+			continue
+		}
+		seen[it] = true
+		uniq = append(uniq, it)
+	}
+	for start := 0; start < len(uniq); start += 200 {
+		end := start + 200
+		if end > len(uniq) {
+			end = len(uniq)
+		}
+		placeholders := strings.Repeat("?,", end-start)
+		placeholders = placeholders[:len(placeholders)-1]
+		args := make([]interface{}, 0, end-start)
+		for _, it := range uniq[start:end] {
+			args = append(args, it)
+		}
+		rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT entry, COALESCE(displayid, 0), COALESCE(BuyPrice, 0), COALESCE(MaxDurability, 0), COALESCE(BuyCount, 1), COALESCE(FlagsExtra, 0), COALESCE(AllowableClass, -1), COALESCE(Bonding, 0), COALESCE(RequiredReputationFaction, 0), COALESCE(RequiredReputationRank, 0) FROM item_template WHERE entry IN (`+placeholders+`)`, args...)
+		if err != nil {
+			continue
+		}
+		for rows.Next() {
+			var entry int64
+			var t vendorTemplateInfo
+			if err := rows.Scan(&entry, &t.display, &t.buyPrice, &t.maxDur, &t.buyCount, &t.flagsExtra, &t.allowableClass, &t.bonding, &t.reqRepFaction, &t.reqRepRank); err == nil && entry > 0 {
+				out[entry] = t
+			}
+		}
+		_ = rows.Close()
+	}
+	return out
+}
+
 func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return true
@@ -164,37 +281,27 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 		return true
 	}
 	creatureEntry := uint32((vendorGUID >> 24) & 0xFFFFFF)
-	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT v.slot, v.item, v.maxcount, v.incrtime, v.ExtendedCost,
-		COALESCE(t.displayid, 0), COALESCE(t.BuyPrice, 0), COALESCE(t.MaxDurability, 0), COALESCE(t.BuyCount, 1), COALESCE(t.FlagsExtra, 0),
-		COALESCE(t.AllowableClass, -1), COALESCE(t.Bonding, 0)
-		FROM npc_vendor AS v
-		LEFT JOIN item_template AS t ON t.entry = v.item
-		WHERE v.entry = ? ORDER BY v.slot LIMIT 150`, creatureEntry)
-	if err != nil {
-		return true
-	}
-	type vendorRow struct {
-		slot, item, maxCount, incrTime, extCost, display, buyPrice, maxDur, buyCount, flagsExtra, allowableClass, bonding int64
-	}
-	rowsData := make([]vendorRow, 0, 150)
-	for rows.Next() {
-		var row vendorRow
-		if err := rows.Scan(&row.slot, &row.item, &row.maxCount, &row.incrTime, &row.extCost, &row.display, &row.buyPrice, &row.maxDur, &row.buyCount, &row.flagsExtra, &row.allowableClass, &row.bonding); err == nil {
-			rowsData = append(rowsData, row)
-		}
-	}
-	rowsErr := rows.Err()
-	_ = rows.Close()
-	if rowsErr != nil {
-		return true
-	}
+	// ObjectMgr::LoadVendors (ObjectMgr.cpp:9404): rows load in slot order with
+	// reference rows (negative item) expanded inline; rows without an item
+	// template are dropped at load (IsVendorItemValid) and never consume a
+	// client slot — the skipped-by-filter rows below DO consume one, matching
+	// the C++ vector index (SendListInventory sends slot+1 for every vector
+	// element, ItemHandler.cpp:680).
+	rowsData := s.expandedVendorRows(ctx, creatureEntry)
+	templates := s.vendorTemplateMap(ctx, vendorRowItemEntries(rowsData))
 	var items []vendorItemRecord
-	var fallbackSlot uint32 = 1
+	var itemSlot uint32 = 1
 	isGM := s.player != nil && (s.player.PlayerFlags&playerFlagGM != 0 || s.player.ExtraFlags&playerExtraGMOn != 0)
 	for _, row := range rowsData {
-		item, maxCount, incrTime, extCost, display, buyPrice, maxDur, buyCount, flagsExtra := row.item, row.maxCount, row.incrTime, row.extCost, row.display, row.buyPrice, row.maxDur, row.buyCount, row.flagsExtra
-		itemSlot := fallbackSlot
-		fallbackSlot++
+		tmpl, ok := templates[row.item]
+		if !ok {
+			continue
+		}
+		slot := itemSlot
+		itemSlot++
+		item, maxCount, incrTime, extCost := row.item, row.maxCount, row.incrTime, row.extCost
+		display, buyPrice, maxDur, buyCount, flagsExtra := tmpl.display, tmpl.buyPrice, tmpl.maxDur, tmpl.buyCount, tmpl.flagsExtra
+		allowableClass, bonding := tmpl.allowableClass, tmpl.bonding
 		if extCost != 0 {
 			if s.server.Data == nil {
 				continue
@@ -209,7 +316,7 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 		// ItemHandler.cpp:652-666 (SendListInventory): hide bind-on-pickup
 		// items unusable by the player's class and wrong-faction items from
 		// non-GMs — the buy path re-checks the same gates.
-		if !s.vendorItemListable(uint32(row.allowableClass), uint32(row.bonding), uint32(flagsExtra)) {
+		if !s.vendorItemListable(uint32(allowableClass), uint32(bonding), uint32(flagsExtra)) {
 			continue
 		}
 		if meets, err := s.meetVendorItemConditions(ctx, creatureEntry, uint32(item), vendorGUID); err != nil || !meets {
@@ -224,12 +331,12 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 		if buyCount <= 0 {
 			buyCount = 1
 		}
-		inStock := s.server.currentVendorStockForGUID(vendorGUID, uint32(item), itemSlot, uint32(extCost), int32(maxCount), time.Duration(incrTime)*time.Second, uint32(buyCount))
+		inStock := s.server.currentVendorStockForGUID(vendorGUID, uint32(item), slot, uint32(extCost), int32(maxCount), time.Duration(incrTime)*time.Second, uint32(buyCount))
 		if inStock == 0 && !isGM {
 			continue
 		}
 		items = append(items, vendorItemRecord{
-			Slot:          itemSlot,
+			Slot:          slot,
 			ItemEntry:     uint32(item),
 			DisplayInfoID: uint32(display),
 			MaxCount:      inStock,
@@ -238,6 +345,10 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 			BuyCount:      uint32(buyCount),
 			ExtendedCost:  uint32(extCost),
 		})
+		// ItemHandler.cpp:695: MAX_VENDOR_ITEMS (150) caps the listed count.
+		if len(items) >= 150 {
+			break
+		}
 	}
 	packet := protocol.NewBuffer(8 + 2 + len(items)*32)
 	packet.WriteU64(vendorGUID)
@@ -384,17 +495,30 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrCantFindItem), true)
 		return true
 	}
-	var dbItemEntry, maxCount, incrTime, extCost, buyPrice, buyCount, flagsExtra, allowableClass, bonding, requiredReputationFaction, requiredReputationRank int64
-	var queryErr error
-	if slot == 0 || slot > 150 {
-		queryErr = sql.ErrNoRows
-	} else {
-		queryErr = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT v.item, v.maxcount, v.incrtime, v.ExtendedCost, t.BuyPrice, t.BuyCount, COALESCE(t.FlagsExtra, 0), COALESCE(t.AllowableClass, -1), COALESCE(t.Bonding, 0), COALESCE(t.RequiredReputationFaction, 0), COALESCE(t.RequiredReputationRank, 0) FROM npc_vendor AS v JOIN item_template AS t ON t.entry = v.item WHERE v.entry = ? ORDER BY v.slot, v.item LIMIT 1 OFFSET ?", vendorEntry, slot-1).Scan(&dbItemEntry, &maxCount, &incrTime, &extCost, &buyPrice, &buyCount, &flagsExtra, &allowableClass, &bonding, &requiredReputationFaction, &requiredReputationRank)
+	// Player.cpp:21965-21976: the client slot (1-based) indexes the vendor's
+	// loaded item vector — reference-expanded, template-validated rows only,
+	// exactly the sequence sendVendorList numbers.
+	rowsData := s.expandedVendorRows(ctx, vendorEntry)
+	templates := s.vendorTemplateMap(ctx, vendorRowItemEntries(rowsData))
+	validRows := make([]expandedVendorRow, 0, len(rowsData))
+	for _, r := range rowsData {
+		if _, ok := templates[r.item]; ok {
+			validRows = append(validRows, r)
+		}
 	}
-	if queryErr != nil || uint32(dbItemEntry) != itemEntry {
+	if slot == 0 || int(slot) > len(validRows) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrCantFindItem), true)
 		return true
 	}
+	row := validRows[slot-1]
+	tmpl := templates[row.item]
+	if uint32(row.item) != itemEntry {
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrCantFindItem), true)
+		return true
+	}
+	maxCount, incrTime, extCost := row.maxCount, row.incrTime, row.extCost
+	buyPrice, buyCount, flagsExtra, allowableClass, bonding := tmpl.buyPrice, tmpl.buyCount, tmpl.flagsExtra, tmpl.allowableClass, tmpl.bonding
+	requiredReputationFaction, requiredReputationRank := tmpl.reqRepFaction, tmpl.reqRepRank
 	if buyCount <= 0 {
 		buyCount = 1
 	}
@@ -1018,12 +1142,16 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 		return false
 	}
 
-	eslot := int(slot)
-	if eslot >= 74 && eslot <= 85 {
-		eslot -= 74
+	// Player::GetItemFromBuyBackSlot (Player.cpp:13550-13557): slots outside
+	// [BUYBACK_SLOT_START, BUYBACK_SLOT_END) return nullptr — the raw client
+	// slot is not a 0-based index.
+	if slot < 74 || slot > 85 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, 0, buyErrCantFindItem), true)
+		return true
 	}
+	eslot := int(slot) - 74
 	// ItemHandler.cpp:531-532 — empty buyback slot.
-	if eslot < 0 || eslot >= 12 || s.buyback[eslot] == nil {
+	if s.buyback[eslot] == nil {
 		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, 0, buyErrCantFindItem), true)
 		return true
 	}
@@ -1042,7 +1170,12 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 
 	oldItemGUID := entry.ItemGUID
 	s.buyback[eslot] = nil
-	s.currentBuybackSlot = uint8(eslot)
+	// Player::RemoveItemFromBuyBackSlot (Player.cpp:13587-13588): the freed
+	// slot becomes the current buyback slot only when the current slot is
+	// occupied — an already-free pointer does not move.
+	if s.currentBuybackSlot < 12 && s.buyback[s.currentBuybackSlot] != nil {
+		s.currentBuybackSlot = uint8(eslot)
+	}
 	s.player.Money -= entry.Price
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
