@@ -3786,19 +3786,30 @@ func init() {
 	// npc_blackfathom_deeps_event (Blackfathom Deeps dungeon script):
 	// 4825 Aku'mai Snapjaw runs Ravage (8391, DoCastVictim ->
 	// GetVictim + CastSpell, 5-8s init / 9-14s repeat) and 4978
-	// Aku'mai Servant runs Frostbolt Volley (8398, random alive
+	// Aku'mai Servant runs Frost Nova (865, non-triggered DoCastAOE ->
+	// self-cast per the illidan/vaelastrasz convention, 9-12s init /
+	// 25-30s repeat) plus Frostbolt Volley (8398, random alive
 	// player target, 2-4s init / 5-8s repeat), all non-triggered
-	// (C++-exact). The Servant's Frost Nova DoCastAOE arm, the
-	// JustDied DATA_EVENT increment, the IsSummonedBy DoZoneInCombat
-	// leg, and the 15%-hp flee arms (4977/4823, unregistered) have
-	// no bridges; the go_blackfathom_fire gossip and npc_morridune
-	// escort scripts are documented-only. Entries C++-verified via
+	// (C++-exact). The JustDied DATA_EVENT increment, the
+	// IsSummonedBy DoZoneInCombat leg, and the 15%-hp flee arms
+	// (4977/4823, unregistered) have no bridges; the
+	// go_blackfathom_fire gossip and npc_morridune escort scripts
+	// are documented-only. Entries C++-verified via
 	// blackfathom_deeps.h BFDCreatureIds plus instance_
 	// blackfathom_deeps.cpp's SetData(DATA_FIRE) summon arms
 	// (ramstein strength); see lua_scripts/kalimdor/
 	// blackfathom_deeps.lua.
 	RegisterLuaBoss("npc_blackfathom_deeps_event", 4825)
 	RegisterLuaBoss("npc_blackfathom_deeps_event", 4978)
+
+	// boss_gelihast (Gelihast, entry 6243 — BFDCreatureIds names no
+	// Gelihast entry; registered on the DB ScriptName tie plus wowhead
+	// npc=6243 corroboration, jeklik/vishas precedent): Throw Net 6533
+	// on the victim (2-4s init / 4-7s repeat, jeklik GetVictim +
+	// CastSpell convention, non-triggered); melee engine-driven. The
+	// BossAI::JustEngagedWith instance leg and the GetInstanceAI leg
+	// have no bridges; see lua_scripts/kalimdor/boss_gelihast.lua.
+	RegisterLuaBoss("boss_gelihast", 6243)
 
 	// boss_kelris (Twilight Lord Kelris, entry 4832 — C++-verified via
 	// blackfathom_deeps.h BFDCreatureIds plus instance_blackfathom_deeps.
@@ -3820,8 +3831,8 @@ func init() {
 	// npc=4829 corroboration, jeklik precedent): Poison Cloud 3815 on the
 	// victim (5-9s init / 25-50s repeat, jeklik GetVictim + CastSpell
 	// convention, non-triggered) and the sub-30% one-shot DamageTaken
-	// enrage — triggered self-cast Frenzied Rage 3490 on projected health
-	// (jeklik pre-damage subtraction, C++-exact); melee engine-driven.
+	// enrage — non-triggered self-cast Frenzied Rage 3490 on projected health
+	// (C++ DoCast(me, spell) defaults to TRIGGERED_NONE; jeklik pre-damage subtraction, C++-exact); melee engine-driven.
 	// The BossAI _Reset/_JustDied instance legs and the GetInstanceAI leg
 	// have no bridges; see lua_scripts/kalimdor/boss_aku_mai.lua.
 	RegisterLuaBoss("boss_aku_mai", 4829)

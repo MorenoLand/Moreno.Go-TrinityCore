@@ -33,10 +33,9 @@
 --   Ravage 8391 DoCastVictim, init {5s,8s} -> repeat {9s,14s} (C++-exact;
 --   jeklik GetVictim + CastSpell convention, non-triggered).
 -- - npc_blackfathom_deeps_event, entry 4978 (JustEngagedWith switch arm):
---   Frostbolt Volley 8398 on a random alive player (SelectTarget Random,0
---   -> janalai randomPlayerInRange convention), init {2s,4s} -> repeat
---   {5s,8s} (C++-exact, non-triggered). The Frost Nova 865 DoCastAOE arm
---   has no bridge (arugal precedent) — skipped.
+--   Frost Nova 865 non-triggered DoCastAOE, false (C++-exact: init
+--   {9s,12s} -> repeat {25s,30s}; self-cast bridge per illidan/
+--   vaelastrasz convention) + Frostbolt Volley 8398 on a random alive
 -- - go_blackfathom_altar (GO 103016), GossipHello(1): if the player lacks
 --   aura 8733, player:AddAura(8733) (kalecgos spectral-rift GO gossip +
 --   netherspite player:HasAura/AddAura precedent); returns true.
@@ -69,6 +68,7 @@ local ENTRY_AKU_MAI_SERVANT = 4978
 local ENTRY_ALTAR_OF_THE_DEEPS = 103016
 
 local SPELL_RAVAGE = 8391
+local SPELL_FROST_NOVA = 865
 local SPELL_FROST_BOLT_VOLLEY = 8398
 local SPELL_BLESSING_OF_BLACKFATHOM = 8733
 
@@ -120,8 +120,16 @@ local function onRavage(creature, guid)
     end)
 end
 
--- npc_blackfathom_deeps_event: 4978 Aku'mai Servant — Frostbolt Volley on
--- a random alive player (C++-exact timers, non-triggered).
+-- npc_blackfathom_deeps_event: 4978 Aku'mai Servant — Frost Nova (C++
+-- non-triggered DoCastAOE, false: vaelastrasz/illidan self-cast
+-- convention) + Frostbolt Volley on a random alive player.
+local function onFrostNova(creature, guid)
+    creature:CastSpell(creature, SPELL_FROST_NOVA, false)
+    schedule(guid, "frostnova", math.random(25000, 30000), function()
+        onFrostNova(creature, guid)
+    end)
+end
+
 local function onFrostboltVolley(creature, guid)
     local target = randomPlayerInRange(creature, 100)
     if target then
@@ -141,6 +149,9 @@ local function onEventEnterCombat(_, creature)
             onRavage(creature, guid)
         end)
     elseif entry == ENTRY_AKU_MAI_SERVANT then
+        schedule(guid, "frostnova", math.random(9000, 12000), function()
+            onFrostNova(creature, guid)
+        end)
         schedule(guid, "frostboltvolley", math.random(2000, 4000), function()
             onFrostboltVolley(creature, guid)
         end)

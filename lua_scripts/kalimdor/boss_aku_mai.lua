@@ -21,8 +21,9 @@
 -- - JustEngagedWith: Poison Cloud 3815 DoCastVictim (jeklik GetVictim +
 --   CastSpell convention, non-triggered), init {5s,9s} -> repeat {25s,50s}
 --   (C++-exact).
--- - DamageTaken: HealthBelowPctDamaged(30, damage) -> triggered self-cast
---   Frenzied Rage 3490 (DoCast(me, spell) — CastSpell(self, 3490, true)
+-- - DamageTaken: HealthBelowPctDamaged(30, damage) -> non-triggered
+--   self-cast Frenzied Rage 3490 (C++ DoCast(me, spell) uses default
+--   CastSpellExtraArgs -> TRIGGERED_NONE; CastSpell(self, 3490, false)
 --   convention), one-shot via the IsEnraged flag (C++-exact; jeklik
 --   pre-damage subtraction makes the projected-health check exact).
 -- Unmodeled (documented-only, no bridges): the BossAI _Reset() /
@@ -121,7 +122,7 @@ local function akuMaiDamageTaken(event, creature, attacker, damage)
     end
     if (health - damage) * 100 < 30 * maxHealth then
         st.enraged = true
-        creature:CastSpell(creature, SPELL_FRENZIED_RAGE, true)
+        creature:CastSpell(creature, SPELL_FRENZIED_RAGE, false)
     end
 end
 
