@@ -451,7 +451,7 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 	if err := s.deleteCharacterReturnMails(ctx, tx, guid, accountID); err != nil {
 		return false
 	}
-	if err := deleteCharacterOwnedState(ctx, tx, guid); err != nil {
+	if err := deleteCharacterOwnedState(ctx, tx, guid, s.server.Config.DeletedCharacterTicketTrace); err != nil {
 		return false
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM characters WHERE guid = ?", guid); err != nil {

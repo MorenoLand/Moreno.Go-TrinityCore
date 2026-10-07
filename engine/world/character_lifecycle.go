@@ -73,12 +73,17 @@ func highestCharacterGUID(ctx context.Context, db *sql.DB) (uint64, error) {
 	return highest, nil
 }
 
-func deleteCharacterOwnedState(ctx context.Context, tx *sql.Tx, guid uint64) error {
+func deleteCharacterOwnedState(ctx context.Context, tx *sql.Tx, guid uint64, ticketTrace bool) error {
 	for _, query := range characterOwnedStateDeletes {
 		var err error
-		if query == "DELETE FROM character_social WHERE guid = ? OR friend = ?" || query == "DELETE FROM guild_eventlog WHERE PlayerGuid1 = ? OR PlayerGuid2 = ?" {
+		switch {
+		// Player::DeleteFromDB (Player.cpp:4433): with DeletedCharacterTicketTrace
+		// the tickets are preserved as type 2 (trace) instead of deleted.
+		case ticketTrace && query == "DELETE FROM gm_ticket WHERE playerGuid = ?":
+			_, err = tx.ExecContext(ctx, "UPDATE gm_ticket SET type = 2 WHERE playerGuid = ?", guid)
+		case query == "DELETE FROM character_social WHERE guid = ? OR friend = ?" || query == "DELETE FROM guild_eventlog WHERE PlayerGuid1 = ? OR PlayerGuid2 = ?":
 			_, err = tx.ExecContext(ctx, query, guid, guid)
-		} else {
+		default:
 			_, err = tx.ExecContext(ctx, query, guid)
 		}
 		if err != nil {

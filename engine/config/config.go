@@ -129,6 +129,7 @@ type Config struct {
 	DeathCorpseReclaimDelayPvP              bool
 	DeathBonesWorld                         bool
 	DeathBonesBattleground                  bool
+	DeletedCharacterTicketTrace             bool
 	PlayerStartAllSpells                    bool
 	PlayerStartAllReputation                bool
 	PlayerStartMapsExplored                 bool
@@ -990,6 +991,8 @@ func (c *Config) set(key, value string) error {
 		return setBool(&c.DeathBonesWorld, key, value)
 	case "Death.Bones.BattlegroundOrArena":
 		return setBool(&c.DeathBonesBattleground, key, value)
+	case "DeletedCharacterTicketTrace":
+		return setBool(&c.DeletedCharacterTicketTrace, key, value)
 	case "PlayerStart.AllSpells":
 		return setBool(&c.PlayerStartAllSpells, key, value)
 	case "PlayerStart.AllReputation":
