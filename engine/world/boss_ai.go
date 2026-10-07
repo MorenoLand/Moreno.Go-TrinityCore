@@ -3282,6 +3282,25 @@ func init() {
 	// GetBossState/GetGuidData bridges — joins the no-instance-script-bridge
 	// queue (deadmines/blackrock_spire/gnomeregan/karazhan/molten_core/
 	// naxxramas/trial_of_the_crusader/scarlet_monastery precedent).
+	// shadowfang_keep.cpp audit (EK loader decl :123 / call :301 follows
+	// instance_scholomance): all four AddSC arms accounted for.
+	// npc_arugal_voidwalker (entry 4627) and boss_archmage_arugal
+	// (entry 4275) ported in lua_scripts/eastern_kingdoms/
+	// npc_arugal_voidwalker.lua + boss_archmage_arugal.lua (Oct-1
+	// 90de428, Eluna self-registering by entry). npc_shadowfang_prisoner
+	// (NPC_ASH=3850/NPC_ADA=3849, shadowfang_keep.h:39-40) is an EscortAI
+	// waypoint step machine with gossip select/hello: WaypointReached
+	// Talks (wp 0 free / wp 10 open door / wp 12 post-door / wp 13 ADA
+	// post2) + DoCast(me, SPELL_UNLOCK=6421) at wp 11 by Ash only,
+	// instance SetData(TYPE_FREE_NPC=1, DONE) at wp 12, gossip gated on
+	// TYPE_FREE_NPC != DONE && TYPE_RETHILGORE=2 == DONE — no
+	// EscortAI/waypoint/gossip bridges, documented-only
+	// (npc_barnes precedent). spell_shadowfang_keep_haunting_spirits
+	// is an AuraScript (SPELL_AURA_DUMMY, EFFECT_0): CalcPeriodic arms
+	// 30-90s, dummy tick casts aurEff->GetAmount() triggered on target,
+	// UpdatePeriodic recalculates — no SpellScript/AuraScript bridge,
+	// joins the no-SpellScript-bridge queue. No new registrations, no
+	// Lua files.
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
