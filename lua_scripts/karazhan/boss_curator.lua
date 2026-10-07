@@ -161,8 +161,13 @@ local function onDamageTaken(event, creature, attacker, damage)
         st = { infused = false, mana = 100 }
         state[guid] = st
     end
+    -- Engine fires event 9 post-damage (combat.go reduces health before
+    -- dispatching), while C++ DamageTaken fires pre-damage with
+    -- HealthAbovePct(15) reading current health. Closest faithful match:
+    -- latch when current (already post-damage) health pct is at or below
+    -- 15, i.e. not strictly above 15 as C++ HealthAbovePct requires.
     local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
-    if maxHealth ~= 0 and not st.infused and (health - damage) * 100 / maxHealth < 15 then
+    if maxHealth ~= 0 and not st.infused and health * 100 / maxHealth <= 15 then
         st.infused = true
         cancelKey(guid, "astralflare")
         schedule(guid, "infusion", 1, function() onArcaneInfusion(creature) end)
