@@ -2960,6 +2960,20 @@ func init() {
 	// binds the creature_template ScriptName DB-side) — wowhead-cited
 	// (classic.wowhead.com/npc=6487/arcanist-doan).
 	RegisterLuaBoss("boss_arcanist_doan", 6487)
+	// Azshir the Sleepless (6490, Scarlet Monastery Graveyard rare)
+	// runs call of the grave 17831 30s->30s / terrify 7399 20s->20s
+	// (non-triggered DoCastVictim -> GetVictim + CastSpell; nil-victim
+	// ticks cast nothing but keep the schedule — jeklik convention)
+	// and the DamageTaken soul siphon 7290 once when post-damage
+	// health drops strictly below 50% (HealthBelowPctDamaged —
+	// damaged class, not the golemagg 704fb8e bug class) + 20s
+	// re-arm; no Talk lines. The UpdateAI UNIT_STATE_CASTING gates
+	// and BossAI::JustEngagedWith + DATA_AZSHIR bookkeeping have no
+	// instance/UNIT_STATE bridges (luaBossAI shim). Entry 6490 is
+	// not named in the C++ tree (RegisterScarletMonasteryCreatureAI
+	// binds the creature_template ScriptName DB-side) — wowhead-cited
+	// (classic.wowhead.com/npc=6490/azshir-the-sleepless).
+	RegisterLuaBoss("boss_azshir_the_sleepless", 6490)
 	// Archaedas (2748, Uldaman) runs the Ground Tremor (6524)
 	// schedule (60s init, 45s re-arm, DoCastVictim -> GetVictim +
 	// CastSpell). The awaken sequence (SpellHit 10347 Talk/yell +
