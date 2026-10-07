@@ -2937,6 +2937,29 @@ func init() {
 	// C++ sources: scarlet_monastery.h's own SMCreatureIds enum names
 	// NPC_HEADLESS_HORSEMAN = 23682.
 	RegisterLuaBoss("boss_headless_horseman", 23682)
+
+	// boss_arcanist_doan (Scarlet Monastery, Library wing, EK loader
+	// decl :98 / call :276): OnEnterCombat(1) arms silence 8988
+	// 15s->{15s,20s}, arcane explosion 9433 3s->8s (both non-triggered
+	// DoCastVictim -> GetVictim + CastSpell, nil-victim ticks keep the
+	// schedule), and polymorph 13323 30s->20s on a random alive player
+	// within 30 yd skipping position 0 (C++ SelectTarget(Random, 1,
+	// 30.0f, true) — majordomo victim-excluding + opera in-range
+	// convention); Talk(SAY_AGGRO 0) on engage. The UpdateAI
+	// below-50% arm (Talk(SAY_SPECIALAE 1) + non-triggered DoCastSelf
+	// arcane bubble 9438, once via _healthAbove50Pct) is modeled on
+	// the pre-damage hook (event 9) with current-health strictly
+	// below 50% semantics (C++ HealthBelowPct — golemagg 704fb8e bug
+	// class); the latch fires on the damage hook rather than the next
+	// UpdateAI tick (documented timing deviation) and the
+	// DoCastAOE(detonation 9435) arm has no bridge (shazzrah gate
+	// precedent). The UpdateAI UNIT_STATE_CASTING gates and
+	// BossAI::JustEngagedWith + DATA_ARCANIST_DOAN bookkeeping have
+	// no instance/UNIT_STATE bridges (luaBossAI shim). Entry 6487 is
+	// not named in the C++ tree (RegisterScarletMonasteryCreatureAI
+	// binds the creature_template ScriptName DB-side) — wowhead-cited
+	// (classic.wowhead.com/npc=6487/arcanist-doan).
+	RegisterLuaBoss("boss_arcanist_doan", 6487)
 	// Archaedas (2748, Uldaman) runs the Ground Tremor (6524)
 	// schedule (60s init, 45s re-arm, DoCastVictim -> GetVictim +
 	// CastSpell). The awaken sequence (SpellHit 10347 Talk/yell +
