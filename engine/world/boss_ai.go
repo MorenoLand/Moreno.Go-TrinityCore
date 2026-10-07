@@ -2674,6 +2674,16 @@ func init() {
 	// magisters_terrace.h:64 names NPC_KALECGOS = 24844
 	// (boss_felblood_kaelthas precedent).
 	RegisterLuaBoss("npc_kalecgos", 24844)
+	// Magister's Terrace instance script (instance_magisters_terrace.cpp,
+	// map 585) — InstanceMapScript only: 5 boss + 1 GO data binds
+	// (EncounterCount 4, DataHeader "MT"), Delrissa death-count
+	// SetData/GetData (SPECIAL ++, IN_PROGRESS reset on Delrissa
+	// engage), Kael'thas pre-trash GUID set (6 trash entries within
+	// 10yd of {150, 141, -14.4} -> kaelthas SetData INTRO on empty),
+	// 6 door-data rows (passage/room), escape-orb 188173 unflag on
+	// Kael'thas DONE, EVENT_SPAWN_KALECGOS 1min summon + flight path
+	// 248440. Zero Lua InstanceMapScript bridge (karazhan / BRD /
+	// blackrock-spire / ulduar precedents) — documented-only.
 	RegisterLuaBoss("npc_storm_cloud", 29939)
 	// npc_unworthy_initiate (The Scarlet Enclave, Acherus DK intro):
 	// the class's PHASE_ATTACKING combat machine (icy touch 52372 /
