@@ -3107,6 +3107,22 @@ func init() {
 	// DATA_DOCTORTHEOLENKRASTINOV=0 bookkeeping (scholomance.h:30)
 	// (luaBossAI shim).
 	RegisterLuaBoss("boss_doctor_theolen_krastinov", 11261)
+	// boss_illucia_barov.cpp (EK loader AddSC_boss_illuciabarov
+	// decl :112 / call :290, Scholomance block continues; script
+	// name "boss_illucia_barov"): boss AI ported in
+	// lua_scripts/eastern_kingdoms/boss_illucia_barov.lua
+	// (entry 10502 — no NPC_ constant in scholomance.h, DB-side
+	// ScriptName binding, wowhead TBC-verified): OnEnterCombat
+	// schedules curse of agony 18671 (triggered victim, 18s->30s),
+	// shadow shock 17234 (triggered, random alive player within
+	// 100yd, 9s->12s), silence 12528 (triggered victim, 5s->14s),
+	// fear 12542 (triggered victim, 30s->30s); nil picks keep the
+	// schedule. SPELL_DOMINATE 7645 marked UNUSED in C++ (never
+	// cast). Documented-only (no bridges): UpdateAI
+	// UNIT_STATE_CASTING gates, BossAI::JustEngagedWith +
+	// DATA_LADYILLUCIABAROV=2 bookkeeping (scholomance.h:32)
+	// (luaBossAI shim).
+	RegisterLuaBoss("boss_illucia_barov", 10502)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
