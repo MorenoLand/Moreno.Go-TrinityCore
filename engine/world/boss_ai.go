@@ -3622,6 +3622,28 @@ func init() {
 	// No SummonGameObject/SummonCreature/OnGameObjectCreate/Update bridges
 	// — joins the no-instance-script-bridge queue. SUNKEN TEMPLE GROUP
 	// COMPLETE.
+	// instance_sunwell_plateau.cpp audit (map 580, "SWP", EK loader decl
+	// :141 / call :319 follows instance_sunken_temple): InstanceMapScript only —
+	// zero creature/at_/go scripts, zero Talk, zero Spell/AuraScripts, no
+	// Lua InstanceMapScript bridge, so this unit is documented-only. C++
+	// arms: ctor SetHeaders("SWP") + SetBossNumber(EncounterCount 6) +
+	// LoadDoorData (7 rows: GO_FIRE_BARRIER 188075->DATA_FELMYST=2 PASSAGE,
+	// GO_MURUS_GATE_1 187990->DATA_MURU=4 ROOM, GO_MURUS_GATE_2 188118->
+	// DATA_MURU=4 PASSAGE, GO_BOSS_COLLISION_1/2 188523/188524 + GO_FORCE_
+	// FIELD 188421 ->DATA_KALECGOS=0 ROOM) + LoadObjectData (13 creature
+	// pairs: 24850->DATA_KALECGOS_DRAGON, 24891->DATA_KALECGOS_HUMAN,
+	// 24892->DATA_SATHROVARR, 24882->DATA_BRUTALLUS, 24895->DATA_MADRIGOSA,
+	// 25038->DATA_FELMYST, 25166->DATA_ALYTHESS, 25165->DATA_SACROLASH,
+	// 25741->DATA_MURU, 25315->DATA_KILJAEDEN, 25608->DATA_KILJAEDEN_
+	// CONTROLLER, 26046->DATA_ANVEENA, 25319->DATA_KALECGOS_KJ) +
+	// LoadBossBoundaries (DATA_KALECGOS: union of CircleBoundary(1704.9,
+	// 928.4, 34.0) + RectangleBoundary(1689.2, 1713.3, 762.2, 1074.8)).
+	// GetPlayerInMap: first player in map without aura 45839 (TC_LOG_DEBUG
+	// if the player list is empty), else nullptr; GetGuidData(DATA_PLAYER_
+	// GUID) returns that player's GUID or ObjectGuid::Empty. All six boss
+	// fights already ported + registered (lua_scripts/sunwellplateau/;
+	// boss_ai.go). Joins the no-instance-script-bridge queue. SUNWELL
+	// PLATEAU GROUP STARTS.
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
