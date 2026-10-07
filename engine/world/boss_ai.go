@@ -4681,6 +4681,44 @@ func init() {
 	RegisterLuaBoss("npc_tomb_creature", 7349)
 	RegisterLuaBoss("npc_tomb_creature", 7351)
 
+	// boss_mordresh_fire_eye: Razorfen Downs, entry 7357 wowhead-cited
+	// (no NPC_ constant in the C++ tree — vishas precedent).
+	// BossAI(creature, DATA_MORDRESH_FIRE_EYE) (razorfen_downs.h:32).
+	// Ported arms in lua_scripts/kalimdor/boss_mordresh_fire_eye.lua:
+	// Reset arms the out-of-combat talk loop at 10s (Talk 0, 8s ->
+	// Talk 1, 3s -> emote EXCLAMATION documented-only, 6s -> Talk 2,
+	// 14s -> loop; cleared on engage like C++ events.Reset());
+	// JustEngagedWith Talk 3 + Fireball 12466 (victim-cast, init
+	// 100ms, {2400ms,3800ms}) + Fire Nova 12470 (self-cast,
+	// {8s,12s} -> {11s,16s}); UNIT_STATE_CASTING gates and BossAI
+	// instance legs unmodeled.
+	RegisterLuaBoss("boss_mordresh_fire_eye", 7357)
+
+	// boss_glutton: Razorfen Downs, entry 8567 tauri-cited
+	// (shoot.tauri.hu/?npc=8567 = Glutton; no NPC_ constant in the
+	// C++ tree — vishas precedent). BossAI(creature, DATA_GLUTTON)
+	// (razorfen_downs.h:33). Ported arms in
+	// lua_scripts/kalimdor/boss_glutton.lua: JustEngagedWith Talk 0 +
+	// 1s health pump; HealthBelowPct(50) -> Talk 2 latch;
+	// HealthBelowPct(15) -> Talk 3 + self-cast Frenzy 12795 latch;
+	// KilledUnit Talk 1 ungated; SPELL_DISEASE_CLOUD 12627 is
+	// declared-but-never-cast in C++ (correctly omitted).
+	RegisterLuaBoss("boss_glutton", 8567)
+
+	// boss_amnennar_the_coldbringer: Razorfen Downs, entry 7358
+	// tauri-cited (shoot.tauri.hu/?npc=7358; no NPC_ constant in the
+	// C++ tree — vishas precedent). BossAI(creature,
+	// DATA_AMNENNAR_THE_COLD_BRINGER). Ported arms in
+	// lua_scripts/kalimdor/boss_amnennar_the_coldbringer.lua:
+	// JustEngagedWith arms Wrath 13009 (8s->12s) + Frostbolt 15530
+	// (1s->8s, both victim-cast) + Frost Nova 15531 (self-cast,
+	// {10s,15s}->15s) + Talk 0; 1s health pump: <=60% Talk 1 +
+	// spectre summon documented-only, <=50% Talk 3, <=30% Talk 2 +
+	// spectre summon documented-only (no summon bridge, jeklik
+	// precedent); KilledUnit Talk 4 player-gated; latches cleared
+	// on Reset. RAZORFEN DOWNS GROUP CLOSED.
+	RegisterLuaBoss("boss_amnennar_the_coldbringer", 7358)
+
 	// boss_zum_rah: Zul'Farrak, entry 7271 (zulfarrak.h ZFEntries
 	// ENTRY_ZUM_RAH — kalecgos passes). BossAI(creature, DATA_ZUM_RAH)
 	// (DATA_ZUM_RAH = 0 of ZFDataTypes, "instance_zulfarrak" gate) —
