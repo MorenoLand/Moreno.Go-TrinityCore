@@ -75,6 +75,8 @@ type Server struct {
 	sessions                  map[*session]struct{}
 	autoBalanceMu             sync.RWMutex
 	autoBalanceMaps           map[autoBalanceInstanceKey]*autoBalanceMapInfo
+	autoBalanceCreatures      map[uint64]*autoBalanceCreatureInfo
+	autoBalanceLFG            []wotlk.LFGDungeon
 	queuedSessions            []*session
 	playerLimit               uint32
 	closed                    atomic.Bool

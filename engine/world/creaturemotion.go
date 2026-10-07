@@ -318,6 +318,7 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 	motions := s.motionMapLocked(mapID, instanceID)
 	key := creatureWorldGUID(guid, entry)
 	motion := motions[key]
+	created := false
 	if motion == nil || motion.Entry != entry || motion.Map != mapID || motion.InstanceID != instanceID {
 		st := s.loadCreatureStats(ctx, entry)
 		health := st.Health
@@ -379,6 +380,12 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			motion.Points = s.loadWaypoints(ctx, motion.PathID)
 		}
 		motions[key] = motion
+		created = true
+	}
+	if created {
+		// Creature_SelectLevel analog: a freshly materialized creature gets
+		// its AutoBalance attributes computed before it acts.
+		s.autoBalanceModifyCreatureAttributes(ctx, motion, true)
 	}
 	motion.Refreshed = time.Now()
 	return motion
@@ -885,6 +892,9 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 			if motion.Health == 0 {
 				continue
 			}
+			// OnAllCreatureUpdate analog: re-evaluate AutoBalance attributes;
+			// the recalc early-out keeps this cheap when nothing changed.
+			s.autoBalanceModifyCreatureAttributes(ctx, motion, false)
 			s.stepCreatureMotion(ctx, motion, players, now)
 		}
 		rows.Close()
@@ -1055,6 +1065,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					damage = 1
 				}
 			}
+			// AutoBalance_UnitScript::ModifySpellDamageTaken analog.
+			damage = s.autoBalanceModifyDealDamage(motion, target.Sess, damage)
 			overkill := uint32(0)
 			if target.Sess != nil && target.Sess.player != nil {
 				// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD victims take no
@@ -1159,6 +1171,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 				damage = uint32(minDmg + rand.Float64()*(maxDmg-minDmg))
 			}
+			// AutoBalance_UnitScript::ModifyMeleeDamage analog.
+			damage = s.autoBalanceModifyDealDamage(motion, target.Sess, damage)
 			if target.Sess.player.Armor > 0 {
 				damage = calcArmorReducedDamage(float64(target.Sess.player.Armor), uint8(motion.Level), damage)
 			}

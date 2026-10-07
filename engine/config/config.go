@@ -192,6 +192,16 @@ type AutoBalanceConfig struct {
 	ArmorMultiplier              float64
 	DamageMultiplier             float64
 	PlayerCountDifficultyOffset  int
+	ForcedID40                   string
+	ForcedID25                   string
+	ForcedID10                   string
+	ForcedID5                    string
+	ForcedID2                    string
+	DisabledID                   string
+	// ForcedCreaturePlayers is the parsed form of the ForcedID*/DisabledID
+	// lists (AutoBalance.cpp LoadForcedCreatureIdsFromString): entry ->
+	// forced player count, 0 = disabled. Rebuilt by finalizeAutoBalance.
+	ForcedCreaturePlayers map[int]int
 }
 
 type NPCBotConfig struct {
@@ -381,6 +391,54 @@ func (c *Config) finalizeAutoBalance() {
 	if ab.DebugLevel < 0 || ab.DebugLevel > 3 {
 		ab.DebugLevel = 1
 	}
+	// LoadForcedCreatureIdsFromString order: the DisabledID list is parsed
+	// last so a 0 entry wins over any earlier forced count for the same id.
+	ab.ForcedCreaturePlayers = map[int]int{}
+	autoBalanceParseForcedIDs(ab.ForcedCreaturePlayers, ab.ForcedID40, 40)
+	autoBalanceParseForcedIDs(ab.ForcedCreaturePlayers, ab.ForcedID25, 25)
+	autoBalanceParseForcedIDs(ab.ForcedCreaturePlayers, ab.ForcedID10, 10)
+	autoBalanceParseForcedIDs(ab.ForcedCreaturePlayers, ab.ForcedID5, 5)
+	autoBalanceParseForcedIDs(ab.ForcedCreaturePlayers, ab.ForcedID2, 2)
+	autoBalanceParseForcedIDs(ab.ForcedCreaturePlayers, ab.DisabledID, 0)
+}
+
+// autoBalanceParseForcedIDs mirrors
+// AutoBalance.cpp::LoadForcedCreatureIdsFromString: comma-delimited ids,
+// C's atoi per token, entries with id >= 0 recorded. An empty list parses
+// to zero tokens (std::getline on an empty stream iterates nothing), while
+// an empty token inside a non-empty list is atoi("") == 0.
+func autoBalanceParseForcedIDs(dst map[int]int, list string, forcedPlayerCount int) {
+	if list == "" {
+		return
+	}
+	for _, token := range strings.Split(list, ",") {
+		if id := autoBalanceCATOI(token); id >= 0 {
+			dst[id] = forcedPlayerCount
+		}
+	}
+}
+
+// autoBalanceCATOI is C's atoi: skip whitespace, optional sign, then
+// leading digits; anything unparseable is 0.
+func autoBalanceCATOI(s string) int {
+	i := 0
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r' || s[i] == '\f' || s[i] == '\v') {
+		i++
+	}
+	neg := false
+	if i < len(s) && (s[i] == '+' || s[i] == '-') {
+		neg = s[i] == '-'
+		i++
+	}
+	n := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		n = n*10 + int(s[i]-'0')
+		i++
+	}
+	if neg {
+		n = -n
+	}
+	return n
 }
 
 func (c *Config) ApplyEnv() {
@@ -667,6 +725,18 @@ func (c *Config) set(key, value string) error {
 		return setFloat64(&c.AutoBalance.DamageMultiplier, key, value)
 	case "AutoBalance.playerCountDifficultyOffset":
 		return setInt(&c.AutoBalance.PlayerCountDifficultyOffset, key, value)
+	case "AutoBalance.ForcedID40":
+		c.AutoBalance.ForcedID40 = value
+	case "AutoBalance.ForcedID25":
+		c.AutoBalance.ForcedID25 = value
+	case "AutoBalance.ForcedID10":
+		c.AutoBalance.ForcedID10 = value
+	case "AutoBalance.ForcedID5":
+		c.AutoBalance.ForcedID5 = value
+	case "AutoBalance.ForcedID2":
+		c.AutoBalance.ForcedID2 = value
+	case "AutoBalance.DisabledID":
+		c.AutoBalance.DisabledID = value
 	case "Database.Backend":
 		c.Backend = strings.ToLower(value)
 	case "DataDir":
