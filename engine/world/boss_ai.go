@@ -2938,6 +2938,30 @@ func init() {
 	// NPC_HEADLESS_HORSEMAN = 23682.
 	RegisterLuaBoss("boss_headless_horseman", 23682)
 
+	// boss_herod (Scarlet Monastery, Armory wing, EK loader decl :102 /
+	// call :280): OnEnterCombat(1) talks SAY_AGGRO 0, non-triggered
+	// self-casts rushing charge 8260 (DoCast(me, ...) ->
+	// creature:CastSpell(creature, ...)), arms cleave 15496 12s->12s and
+	// whirlwind 8989 60s->30s (both non-triggered DoCastVictim ->
+	// GetVictim + CastSpell, nil-victim ticks keep the schedule —
+	// jeklik convention); whirlwind casts also fire Talk(SAY_WHIRLWIND
+	// 1). KilledUnit's TYPEID_PLAYER-gated Talk(SAY_KILL 3) ->
+	// OnTargetDied(3) with victim:IsPlayer() (illidan convention). The
+	// DamageTaken enrage latch fires once when post-damage health drops
+	// strictly below 30% (HealthBelowPctDamaged(30, damage) — the
+	// thalnos/azshir damaged class, not the golemagg 704fb8e bug class):
+	// Talk(EMOTE_ENRAGE 4) + Talk(SAY_ENRAGE 2) + non-triggered
+	// self-cast frenzy 8269, modeled on the pre-damage hook (event 9)
+	// with a per-GUID once-guard cleared on 2/4/23. JustDied's 20x
+	// SummonCreature(NPC_SCARLET_TRAINEE 6575, timed-or-dead 10min
+	// around 1939.18/-431.58/17.09) and the npc_scarlet_trainee EscortAI
+	// (urand 1-6s start -> Start(true, true)) are documented-only — no
+	// summon or EscortAI bridges (nightbane/npc_barnes precedent).
+	// Entry 3975 has no NPC_ constant in the C++ tree —
+	// RegisterScarletMonasteryCreatureAI binds the ScriptName DB-side
+	// (entry wowhead-cited: www.wowhead.com/cata/npc=3975/herod).
+	RegisterLuaBoss("boss_herod", 3975)
+
 	// boss_arcanist_doan (Scarlet Monastery, Library wing, EK loader
 	// decl :98 / call :276): OnEnterCombat(1) arms silence 8988
 	// 15s->{15s,20s}, arcane explosion 9433 3s->8s (both non-triggered
