@@ -3399,6 +3399,22 @@ func init() {
 	// 3, IN_PROGRESS) (no instance-script bridge), UpdateVictim gate,
 	// melee engine-driven.
 	RegisterLuaBoss("boss_nerubenkan", 10437)
+	// boss_cannon_master_willey.cpp audit (Stratholme block, EK loader decl
+	// :129 / call :307 follows nerubenkan): 1 script, pure timer-driven
+	// ScriptedAI — no Talk lines, no NPC_ constant in stratholme.h
+	// (DB-side ScriptName binding, entry 10997 classic.wowhead-cited).
+	// Ported in lua_scripts/eastern_kingdoms/boss_cannon_master_willey.lua:
+	// PUMMEL 7s->12s DoCastVictim 15615 (90% cast gate, re-arm
+	// unconditional) / KNOCKAWAY 11s->14s DoCastVictim 10101 (80% gate,
+	// re-arm unconditional) / SHOOT 1s->1s DoCastVictim 16496 /
+	// SUMMONRIFLEMAN 15s->30s timer shape preserved with rand32()%9 case
+	// selection as the random leg and SummonCreature(11054) legs
+	// documented-only (no summon bridge, herod precedent; 9 ADD positions
+	// C++-exact in the lua header) (GetVictim + CastSpell, nil-victim
+	// keeps schedule; JustEngagedWith empty in C++). Documented-only (no
+	// bridges): JustDied 7x SummonCreature(11054) at ADD 1,2,3,4,5,7,9
+	// (C++ skips 6/8), UpdateVictim gate, melee engine-driven.
+	RegisterLuaBoss("boss_cannon_master_willey", 10997)
 	// instance_scarlet_monastery.cpp audit (map 189, "SM", EK loader
 	// decl :107 / call :285 follows scorn): InstanceMapScript only — no
 	// creature/at_ scripts, no Lua InstanceMapScript bridge, so this unit
