@@ -916,29 +916,66 @@ func (s *session) updateAchievementCriteria(criterionType, asset uint32, quantit
 	}
 
 	for _, criterion := range matched {
-		if _, done := s.earnedAchievements[criterion.AchievementID]; done {
-			continue
-		}
-		if !s.meetsCriteriaRequirements(criterion, quantity, asset) {
-			continue
-		}
-		progress := s.criteriaProgress[criterion.ID]
-		if progress == nil {
-			progress = &criteriaProgressState{CriteriaID: criterion.ID}
-			s.criteriaProgress[criterion.ID] = progress
-		}
-		progress.Counter += quantity
-		progress.Date = uint32(time.Now().Unix())
-		s.sendCriteriaUpdate(progress)
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(),
-				"REPLACE INTO character_achievement_progress (guid, criteria, counter, date) VALUES (?, ?, ?, ?)",
-				s.playerGUID, criterion.ID, progress.Counter, progress.Date)
-		}
-		if criterion.Quantity > 0 && progress.Counter >= criterion.Quantity {
-			s.stopTimedAchievement(criterion.ID)
-			s.checkAchievementComplete(criterion.AchievementID)
-		}
+		s.applyCriteriaProgress(criterion, quantity, asset)
+	}
+}
+
+// applyCriteriaProgress applies one criterion's progress update: the
+// earned/requirements gates, counter advance, client update, DB persist,
+// and completion check shared by every criteria advance path.
+func (s *session) applyCriteriaProgress(criterion achievementCriteriaEntry, quantity, asset uint32) {
+	if _, done := s.earnedAchievements[criterion.AchievementID]; done {
+		return
+	}
+	if !s.meetsCriteriaRequirements(criterion, quantity, asset) {
+		return
+	}
+	progress := s.criteriaProgress[criterion.ID]
+	if progress == nil {
+		progress = &criteriaProgressState{CriteriaID: criterion.ID}
+		s.criteriaProgress[criterion.ID] = progress
+	}
+	progress.Counter += quantity
+	progress.Date = uint32(time.Now().Unix())
+	s.sendCriteriaUpdate(progress)
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(),
+			"REPLACE INTO character_achievement_progress (guid, criteria, counter, date) VALUES (?, ?, ?, ?)",
+			s.playerGUID, criterion.ID, progress.Counter, progress.Date)
+	}
+	if criterion.Quantity > 0 && progress.Counter >= criterion.Quantity {
+		s.stopTimedAchievement(criterion.ID)
+		s.checkAchievementComplete(criterion.AchievementID)
+	}
+}
+
+// creditKillingBlowCriteria mirrors the per-kill GET_KILLING_BLOWS leg of
+// Unit::Kill (Unit.cpp:11277-11279): killerPlayer->UpdateAchievementCriteria
+// fires on every kill for every criterion of the type, because
+// GET_KILLING_BLOWS is not misc-value-keyed
+// (IsAchievementCriteriaTypeStoredByMiscValue) — the C++ dispatch returns the
+// full type list regardless of asset. The all-assets walk reproduces that;
+// the victim's auras cannot be consulted for criteria_data aura rules (no
+// cross-session aura read), matching the rest of the Go criteria model's
+// documented deltas. The old arena-end approximation (crediting from the
+// scoreboard at arena close) had no C++ counterpart — C++ credits only
+// per-kill — and is removed.
+func (s *session) creditKillingBlowCriteria() {
+	if s.player == nil || s.server == nil {
+		return
+	}
+	if s.earnedAchievements == nil {
+		s.earnedAchievements = make(map[uint32]uint32)
+	}
+	if s.criteriaProgress == nil {
+		s.criteriaProgress = make(map[uint32]*criteriaProgressState)
+	}
+	s.server.loadAchievementIndex()
+	achievementIndex.mu.RLock()
+	matched := achievementIndex.byType[criteriaTypeGetKillingBlows]
+	achievementIndex.mu.RUnlock()
+	for _, criterion := range matched {
+		s.applyCriteriaProgress(criterion, 1, criterion.Asset)
 	}
 }
 
@@ -1475,10 +1512,12 @@ func (s *Server) creditBattlegroundWin(mapID, winningTeam uint32) {
 	}
 }
 
-// creditArenaParticipants mirrors PLAY_ARENA / WIN_ARENA / WIN_RATED_ARENA / GET_KILLING_BLOWS
-// at arena end: every player on the arena map gains play credit, winners gain
-// the win, and killing blow totals come from the scoreboard.
-func (s *Server) creditArenaParticipants(mapID uint32, scores map[uint64]uint32, winners map[uint64]struct{}) {
+// creditArenaParticipants mirrors PLAY_ARENA / WIN_ARENA / WIN_RATED_ARENA
+// at arena end: every player on the arena map gains play credit and winners
+// gain the win. Killing-blow criteria are NOT credited here — C++ has no
+// arena-end GET_KILLING_BLOWS leg; the per-kill Unit::Kill leg
+// (creditKillingBlowCriteria) is the only source.
+func (s *Server) creditArenaParticipants(mapID uint32, winners map[uint64]struct{}) {
 	s.sessionsMu.RLock()
 	var participants []*session
 	for sess := range s.sessions {
@@ -1489,9 +1528,6 @@ func (s *Server) creditArenaParticipants(mapID uint32, scores map[uint64]uint32,
 	s.sessionsMu.RUnlock()
 	for _, sess := range participants {
 		sess.updateAchievementCriteria(criteriaTypePlayArena, mapID, 1)
-		if blows, has := scores[sess.playerGUID]; has && blows > 0 {
-			sess.updateAchievementCriteria(criteriaTypeGetKillingBlows, mapID, blows)
-		}
 		if _, won := winners[sess.playerGUID]; won {
 			sess.updateAchievementCriteria(criteriaTypeWinArena, mapID, 1)
 			sess.updateAchievementCriteria(criteriaTypeWinRatedArena, 0, 1)

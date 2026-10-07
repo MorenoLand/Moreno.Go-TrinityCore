@@ -517,6 +517,13 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 	if mobLevel == 0 {
 		mobLevel = 1
 	}
+	// creatureType backs the KILL-proc critter gate below and the
+	// KILL_CREATURE_TYPE achievement credit further down; one query serves
+	// both.
+	var creatureType uint32
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(type, 0) FROM creature_template WHERE entry = ?", creatureEntry).Scan(&creatureType)
+	}
 	if s.server != nil {
 		standardGUID := creatureWorldGUID(guid, creatureEntry)
 		s.server.lootMu.Lock()
@@ -528,6 +535,20 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 		s.server.creatureLootOwners[lootObjectKey{MapID: target.Map, InstanceID: target.InstanceID, GUID: standardGUID}] = owner
 		s.server.lootMu.Unlock()
 		s.rewardCreatureKillXP(ctx, target, creatureEntry, mobLevel)
+
+		// Unit::Kill (Unit.cpp:11257-11279): after the reward, the KILL proc
+		// leg fires on the killer's auras, then the per-kill GET_KILLING_BLOWS
+		// criteria. The C++ pet/totem arm procs the OWNER with (KILL, NONE);
+		// pet kills already run on the owner session s here, so one KILL
+		// event covers it — the pet's own aura leg is unmodeled (no pet
+		// aura/proc loop). The (KILL, KILLED) general arm is gated on the
+		// victim not being a critter (creatureTypeCritter = 8, SharedDefines.h:2668). The victim-side KILLED and DEATH legs have
+		// no bearer: creature auras live in a server-side map with no
+		// generic proc loop (only the damage-aura break bridge).
+		if creatureType != creatureTypeCritter {
+			s.procKillAuraTriggers(ctx, target.GUID, s.playerGUID, procFlagKill)
+		}
+		s.creditKillingBlowCriteria()
 
 		if target.InstanceID == 0 {
 			if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
@@ -546,10 +567,6 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 	// Quest kill credit: RequiredNpcOrGo entries plus KillCredit templates.
 	s.creditQuestKills(ctx, creatureEntry, target.GUID)
 	s.updateAchievementCriteria(criteriaTypeKillCreature, creatureEntry, 1)
-	var creatureType uint32
-	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(type, 0) FROM creature_template WHERE entry = ?", creatureEntry).Scan(&creatureType)
-	}
 	if creatureType > 0 {
 		s.updateAchievementCriteria(criteriaTypeKillCreatureType, creatureType, 1)
 	}

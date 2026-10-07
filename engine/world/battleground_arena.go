@@ -683,12 +683,11 @@ func (s *Server) endArena(arena *arenaBattlegroundState, winner int8) {
 	greenAlive := arena.GreenAlive
 	arena.mu.Unlock()
 
-	// Reference arena end criteria: PLAY_ARENA, WIN_ARENA, GET_KILLING_BLOWS.
+	// Reference arena end criteria: PLAY_ARENA, WIN_ARENA.
+	// Killing blows stay on the scoreboard only (arena.Scores.KillingBlows);
+	// the GET_KILLING_BLOWS achievement leg is per-kill via Unit::Kill
+	// (creditKillingBlowCriteria), not arena-end.
 	arena.mu.RLock()
-	scoreBlows := make(map[uint64]uint32, len(arena.Scores))
-	for guid, score := range arena.Scores {
-		scoreBlows[guid] = score.KillingBlows
-	}
 	winningMembers := make(map[uint64]struct{})
 	if winner == int8(ArenaTeamGold) || winner == int8(ArenaTeamGreen) {
 		for guid, team := range arena.PlayerTeams {
@@ -699,7 +698,7 @@ func (s *Server) endArena(arena *arenaBattlegroundState, winner int8) {
 	}
 	mapID := arena.MapID
 	arena.mu.RUnlock()
-	s.creditArenaParticipants(mapID, scoreBlows, winningMembers)
+	s.creditArenaParticipants(mapID, winningMembers)
 
 	// Victory announcement
 	if winner == int8(ArenaTeamGold) {

@@ -1300,7 +1300,7 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 	if s.player.Health == 0 {
 		s.updateAchievementCriteria(criteriaTypeDeathsFrom, uint32(damageType), 1)
 		// Environmental damage has no attacker (Unit::Kill's attacker is nil).
-		s.killPlayer(ctx, false)
+		s.killPlayer(ctx, nil, false)
 	}
 	return damage
 }

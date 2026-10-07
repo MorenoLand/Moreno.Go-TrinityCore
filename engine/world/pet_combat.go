@@ -553,7 +553,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			targetSess.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((motion.GUID>>24)&0xFFFFFF), 1)
 			// GetCharmerOrOwnerPlayerOrPlayerItself (Unit.cpp:11164) resolves a
 			// player-owned pet to its owner: PvP death.
-			targetSess.killPlayer(ctx, true)
+			targetSess.killPlayer(ctx, owner, true)
 			// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): the attacker is the
 			// pet — C++ Unit::Kill fires the pet arm (the owner's pet is the
 			// attacker itself) AND the player-victim branch arm, i.e. two
@@ -1041,7 +1041,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			victim.player.Health = 0
 			victim.sendPlayerUpdate()
 			// The pet spell's killer resolves to the pet's owner player.
-			victim.killPlayer(ctx, true)
+			victim.killPlayer(ctx, s, true)
 			// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): the attacker is the
 			// pet — C++ Unit::Kill fires the pet arm (the owner's pet is the
 			// attacker itself) AND the player-victim branch arm, i.e. two

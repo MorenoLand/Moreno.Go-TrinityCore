@@ -1774,6 +1774,29 @@ func (s *session) procAuraTriggers(ctx context.Context, target combatTarget, att
 	})
 }
 
+// procKillAuraTriggers evaluates the kill/death proc legs of Unit::Kill
+// (Unit.cpp:11257-11272): the KILL leg on the killer/owner side and the
+// KILLED/DEATH legs on the victim side. C++ passes PROC_SPELL_TYPE_MASK_ALL,
+// PROC_SPELL_PHASE_NONE, PROC_HIT_NONE, no spell, and no school mask — the
+// generated proc model already carries the matching early-exit for
+// kill-flagged events (canSpellTriggerProcOnEvent), so the school and
+// triggered-suppression gates are bypassed exactly as in C++.
+// triggerTargetGUID is the kill victim for the killer's KILL event and the
+// killer for the victim's KILLED event; the DEATH event targets the victim
+// itself (ProcSkillsAndAuras(victim, victim, NONE, DEATH)). actorGUID follows
+// the damage-path convention: the aura owner's GUID on the done side, the
+// attacker's on the taken side.
+func (s *session) procKillAuraTriggers(ctx context.Context, triggerTargetGUID uint64, actorGUID uint64, typeMask uint32) {
+	s.procAuraTriggerLoop(ctx, triggerTargetGUID, procEventInfo{
+		typeMask:       typeMask,
+		schoolMask:     0,
+		spellTypeMask:  procSpellTypeMaskAll,
+		spellPhaseMask: procSpellPhaseNone,
+		hitMask:        procHitNone,
+		actorGUID:      actorGUID,
+	})
+}
+
 // procVictimAuraTriggers evaluates real aura procs on the taken side of a
 // melee hit: the victim-side half of Unit::ProcDamageAndSpellFor's aura loop
 // (Unit.cpp:1194-1198 — ProcVictim = PROC_FLAG_TAKEN_MELEE_AUTO_ATTACK for

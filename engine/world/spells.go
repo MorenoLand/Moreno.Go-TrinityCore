@@ -7630,7 +7630,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 						s.server.creditHonorableKill(s, playerSess)
 					}
 					// The spell caster s is a player (Unit::Kill Unit.cpp:11341-11343).
-					playerSess.killPlayer(ctx, true)
+					playerSess.killPlayer(ctx, s, true)
 					// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
 					// pet arm — attacker is the player, so only the
 					// attacker's live pet gets KilledUnit(victim)
@@ -12809,8 +12809,14 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 				ts.player.Health = 0
 				ts.sendPlayerUpdate()
 				// The periodic tick's attacker is the aura caster, a player in
-				// Go's model (Unit::Kill Unit.cpp:11341-11343).
-				ts.killPlayer(context.Background(), true)
+				// Go's model (Unit::Kill Unit.cpp:11341-11343) — the caster
+				// session is the GetCharmerOrOwnerPlayerOrPlayerItself killer
+				// for the kill procs and killing-blow criteria.
+				var tickKiller *session
+				if ts.server != nil {
+					tickKiller = ts.server.findSessionByGUID(aura.CasterGUID)
+				}
+				ts.killPlayer(context.Background(), tickKiller, true)
 				// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill pet
 				// arm — the periodic tick's attacker is the aura caster (a
 				// player in Go's model), so only the caster's live pet gets

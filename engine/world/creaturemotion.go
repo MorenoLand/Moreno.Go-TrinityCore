@@ -1035,7 +1035,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					target.Sess.player.Health = 0
 					target.IsDead = true
 					target.Sess.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((motion.GUID>>24)&0xFFFFFF), 1)
-					target.Sess.killPlayer(ctx, false)
+					// GetCharmerOrOwnerPlayerOrPlayerItself (Unit.cpp:11279):
+					// a player-owned pet's kill credits its owner; a wild
+					// creature resolves to no player.
+					var creatureKiller *session
+					if motion.OwnerGUID != 0 {
+						creatureKiller = s.findSessionByGUID(motion.OwnerGUID)
+					}
+					target.Sess.killPlayer(ctx, creatureKiller, false)
 					// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
 					// player-victim branch — attacker is a wild creature (no
 					// owner player, so no pet arm):
@@ -1207,7 +1214,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					target.Sess.player.Health = 0
 					target.IsDead = true
 					target.Sess.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((motion.GUID>>24)&0xFFFFFF), 1)
-					target.Sess.killPlayer(ctx, false)
+					// GetCharmerOrOwnerPlayerOrPlayerItself (Unit.cpp:11279):
+					// a player-owned pet's kill credits its owner; a wild
+					// creature resolves to no player.
+					var creatureKiller *session
+					if motion.OwnerGUID != 0 {
+						creatureKiller = s.findSessionByGUID(motion.OwnerGUID)
+					}
+					target.Sess.killPlayer(ctx, creatureKiller, false)
 					if motion.BossAI != nil {
 						motion.BossAI.OnKillPlayer(ctx, s, motion, target.GUID)
 					}

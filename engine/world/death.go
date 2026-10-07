@@ -219,10 +219,13 @@ func ShouldConvertLoadedCorpseToBones(playerMap, corpseMap uint32, alive bool) b
 // the corpse in place, keep health at zero, raise the release timer flag on
 // non-instance maps (the Go server has no instance maps), start the 6 minute
 // auto-release timer, and notify the client of the corpse reclaim delay.
+// killer is the killing player session (nil for environment, fall, and GM
+// kills) — the Go analog of Unit::Kill's
+// attacker->GetCharmerOrOwnerPlayerOrPlayerItself() arm (Unit.cpp:11279).
 // pvpDeath carries Unit::Kill's attacker arm (Unit.cpp:11341-11343): true when
 // the killer resolves to a player (attacker->GetCharmerOrOwnerPlayerOrPlayerItself()),
 // feeding the corpse type and the reclaim delay.
-func (s *session) killPlayer(ctx context.Context, pvpDeath bool) {
+func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath bool) {
 	if s.player == nil || s.player.Health > 0 {
 		return
 	}
@@ -268,6 +271,26 @@ func (s *session) killPlayer(ctx context.Context, pvpDeath bool) {
 		s.server.handleICPlayerDeath(s)
 		s.server.handleArenaPlayerDeath(s)
 		s.server.handleWGPlayerDeath(s, nil)
+	}
+	// Unit::Kill proc legs (Unit.cpp:11257-11272) and the per-kill
+	// GET_KILLING_BLOWS criteria (Unit.cpp:11277-11279) — must run before
+	// the aura/combat removal below ("Proc auras on death — must be before
+	// aura/combat remove", and the killing-blow update "before setDeathState
+	// to be able to require auras on target"). C++ order: KILL on the
+	// killer/owner, KILLED on the victim, DEATH on the victim, then the
+	// killing-blow criteria. The pet-owner (KILL, NONE) arm is covered by the
+	// killer leg: pet kills already arrive here with killer = the owner
+	// session. killerGUID doubles as the victim-side actor GUID (the
+	// damage-path convention); nil-killer environment kills pass 0.
+	var killerGUID uint64
+	if killer != nil {
+		killerGUID = killer.playerGUID
+		killer.procKillAuraTriggers(ctx, s.playerGUID, killer.playerGUID, procFlagKill)
+	}
+	s.procKillAuraTriggers(ctx, killerGUID, killerGUID, procFlagKilled)
+	s.procKillAuraTriggers(ctx, s.playerGUID, s.playerGUID, procFlagDeath)
+	if killer != nil {
+		killer.creditKillingBlowCriteria()
 	}
 	s.clearActiveAuras()
 	s.clearDiminishings()
