@@ -143,6 +143,7 @@ func (s *session) handleMoveTeleportAck(ctx context.Context, payload []byte) boo
 	dest := s.nearTeleportDest
 	s.nearTeleportPending = false
 	s.nearTeleportDest = nearTeleportDestination{}
+	oldZone := s.player.Zone
 	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = dest.X, dest.Y, dest.Z, dest.Orientation
 	if dest.Movement.Flags&movementOnTransport != 0 && dest.Movement.Transport != nil {
 		s.player.TransportGUID = dest.Movement.Transport.GUID
@@ -157,6 +158,14 @@ func (s *session) handleMoveTeleportAck(ctx context.Context, payload []byte) boo
 	s.lastFallZ, s.lastFallTime = dest.Z, 0
 	s.setLastMovementInfo(dest.Movement)
 	s.updateZoneAndArea(ctx, true)
+	// MovementHandler.cpp:240-248 (HandleMoveTeleportAck): after a
+	// zone-changing near teleport, a hostile-zone landing earns Honorless
+	// Target (2479, triggered). The friendly-area UpdatePvP(false,false) arm
+	// is vacuous in Go: IN_PVP is never set without the unit flag, and
+	// applyZoneState derives the unit flag deterministically from the zone.
+	if s.player.Zone != oldZone && s.pvpHostile {
+		s.castSpellDirect(ctx, 2479, s.playerGUID)
+	}
 	if s.worldReady.Load() {
 		s.refreshNearbyObjects(ctx)
 	}

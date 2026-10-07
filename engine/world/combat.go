@@ -2024,6 +2024,20 @@ func (s *session) interruptDuel() {
 	if partnerGUID != 0 && s.server != nil {
 		partner = s.server.findSessionByGUID(partnerGUID)
 	}
+	// Unit::Kill (Unit.cpp:11359-11365): before the interrupt completes, both
+	// duelists' combat stops WITH pets — CombatStopWithPets(true) interrupts
+	// non-melee casts and drops pet attacks on both sides. This arm is not
+	// gated by Spirit of Redemption in C++: it runs at the original death even
+	// when the victim's cast interrupt above was deferred, so both calls stay
+	// ungated here (the interrupt helpers are no-ops when nothing is active).
+	s.interruptCurrentCast()
+	s.interruptCurrentChannel()
+	s.stopOwnPetAttacks()
+	if partner != nil {
+		partner.interruptCurrentCast()
+		partner.interruptCurrentChannel()
+		partner.stopOwnPetAttacks()
+	}
 	buf := protocol.NewBuffer(1)
 	buf.WriteU8(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_DUEL_COMPLETE), buf.Bytes(), true)

@@ -1289,6 +1289,14 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 		}
 	}
 	s.updateZoneAndArea(ctx, true)
+	// MovementHandler.cpp:186-196 (HandleMoveWorldPortAck): a far teleport
+	// into a hostile zone earns Honorless Target (2479, triggered) — unlike
+	// the near-teleport arm there is no zone-change gate here, only
+	// hostility. The UpdatePvP(false,false) arm is vacuous in Go (see the
+	// near-teleport note).
+	if s.pvpHostile {
+		s.castSpellDirect(ctx, 2479, s.playerGUID)
+	}
 	s.recordInstanceEnterTime(ctx, time.Now())
 	s.resetTimeSync()
 	if err := s.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true); err != nil {

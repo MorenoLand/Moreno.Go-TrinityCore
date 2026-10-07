@@ -2490,9 +2490,18 @@ func (s *session) handlePetStopAttack(ctx context.Context, payload []byte) bool 
 	// PetHandler.cpp:269-277: the GUID must resolve to the player's pet or
 	// charmed creature and the unit must be alive; the stop clears the victim
 	// (Unit::AttackStop) and drops the pet's threat.
+	s.stopPetAttacks(petGUID)
+	return true
+}
+
+// stopPetAttacks mirrors the pet leg of Unit::CombatStopWithPets
+// (Unit.cpp): the pet's victim and threat clear and SMSG_ATTACK_STOP goes
+// out. Extracted from handlePetStopAttack so death/duel paths can stop a
+// controlled pet without going through the opcode handler.
+func (s *session) stopPetAttacks(petGUID uint64) {
 	motion := s.controlledPetMotion(petGUID)
 	if motion == nil || motion.Health == 0 || s.server == nil {
-		return true
+		return
 	}
 	s.server.motionMu.Lock()
 	victim := motion.TargetGUID
@@ -2506,7 +2515,15 @@ func (s *session) handlePetStopAttack(ctx context.Context, payload []byte) bool 
 	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, s)
 	s.debug("pet stop attack", "account", s.accountName, "pet", petGUID)
-	return true
+}
+
+// stopOwnPetAttacks runs the pet leg of Unit::CombatStopWithPets for the
+// session's own summoned pet (Player::GetPet analog: s.player.PetGUID).
+func (s *session) stopOwnPetAttacks() {
+	if s == nil || s.player == nil || s.player.PetGUID == 0 {
+		return
+	}
+	s.stopPetAttacks(s.player.PetGUID)
 }
 
 // handleRequestPetInfo processes CMSG_REQUEST_PET_INFO (0x279).

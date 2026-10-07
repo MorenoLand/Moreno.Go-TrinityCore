@@ -558,6 +558,19 @@ func (s *session) startTaxiFlightFrom(pathID, mountDisplay uint32, startNode int
 		if s.player != nil && s.player.TaxiPath == taxiPath {
 			s.player.TaxiPath = ""
 		}
+		// HandleMoveSplineDoneOpcode (TaxiHandler.cpp:241-247): on taxi
+		// arrival the fall info resets and a hostile-zone landing earns
+		// Honorless Target (2479, triggered). The zone state refreshes here
+		// because Go pins the arrival position at flight start and the client
+		// sends no movement mid-flight, so s.pvpHostile would otherwise be
+		// stale from the departure zone.
+		if s.player != nil {
+			s.updateZoneAndArea(context.Background(), true)
+			s.lastFallZ, s.lastFallTime = s.player.Z, 0
+			if s.pvpHostile {
+				s.castSpellDirect(context.Background(), 2479, s.playerGUID)
+			}
+		}
 		if s.currentPlayer() != nil {
 			s.player.MountDisplayID = 0
 			s.sendPlayerMountUpdate()
