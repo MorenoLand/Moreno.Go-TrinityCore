@@ -2,7 +2,6 @@ package world
 
 import (
 	"context"
-	"encoding/binary"
 	"math/rand"
 	"strings"
 	"sync/atomic"
@@ -1190,10 +1189,6 @@ func (s *session) handleMinimapPing(_ context.Context, payload []byte) bool {
 		return false
 	}
 
-	b := protocol.NewBuffer(16)
-	b.WriteU64(s.playerGUID)
-	binary.LittleEndian.AppendUint32(b.Bytes(), 0) // placeholder
-	_ = b.Bytes()
 	buf := protocol.NewBuffer(16)
 	buf.WriteU64(s.playerGUID)
 	buf.WriteF32(x)
@@ -1232,49 +1227,90 @@ func (s *session) handleRaidTargetUpdate(_ context.Context, payload []byte) bool
 	}
 
 	if x == 0xFF {
-		// Query — send current icon list
+		// Query — Group::SendTargetIconList: u8(1) then (u8 index, u64 guid)
+		// per non-empty slot, sent to the requester only.
+		var icons [8]uint64
+		copy(icons[:], g.TargetIcons[:])
 		srv.groupsMu.Unlock()
-		b := protocol.NewBuffer(2 + 8*8)
-		b.WriteU8(1) // full update
-		for _, iconGUID := range g.TargetIcons {
+		b := protocol.NewBuffer(2 + 8*9)
+		b.WriteU8(1)
+		for i, iconGUID := range icons {
+			if iconGUID == 0 {
+				continue
+			}
+			b.WriteU8(uint8(i))
 			b.WriteU64(iconGUID)
 		}
 		_ = s.write(uint16(protocol.OpcodeMSG_RAID_TARGET_UPDATE), b.Bytes(), true)
 		return true
 	}
 
-	// Must be leader or assistant in raid
-	if g.IsRaid && g.LeaderGUID != s.playerGUID {
-		srv.groupsMu.Unlock()
+	// Raid groups: leader or assistant only (GroupHandler.cpp).
+	raidGateOK := !g.IsRaid || g.isLeaderOrAssistant(s.playerGUID)
+	srv.groupsMu.Unlock()
+	if !raidGateOK {
 		return false
 	}
 
 	guid, err := r.ReadU64()
 	if err != nil {
-		srv.groupsMu.Unlock()
 		return false
 	}
-	if x >= 8 {
-		srv.groupsMu.Unlock()
-		return false
-	}
-	g.TargetIcons[x] = guid
-	srv.groupsMu.Unlock()
 
-	b := protocol.NewBuffer(11)
-	b.WriteU8(0) // partial update
-	b.WriteU8(x)
-	b.WriteU64(guid)
-	pkt := b.Bytes()
-	srv.sessionsMu.RLock()
-	for sess := range srv.sessions {
-		if sess.groupID == s.groupID {
-			_ = sess.write(uint16(protocol.OpcodeMSG_RAID_TARGET_UPDATE), pkt, true)
+	// Player targets must resolve to a connected, non-hostile player
+	// (HandleRaidTargetUpdateOpcode's guid.IsPlayer() arm). HIGHGUID_PLAYER is
+	// 0, so clear high bits mark a player GUID — the same test C++ uses; an
+	// empty GUID qualifies and misses the lookup, matching the C++ silent
+	// return. Hostility is the playerTeam analog (FFA/duel edges unmodeled).
+	if uint16(guid>>48) == 0 {
+		target := srv.findSessionByGUID(guid)
+		hostile := target == nil || target.player == nil || s.player == nil
+		if !hostile {
+			tTeam, sTeam := playerTeam(target.player.Race), playerTeam(s.player.Race)
+			hostile = tTeam != 0 && sTeam != 0 && tTeam != sTeam
+		}
+		if hostile {
+			return false
 		}
 	}
-	srv.sessionsMu.RUnlock()
+
+	srv.groupsMu.Lock()
+	g = srv.groups[s.groupID]
+	if g == nil || x >= targetIconCount {
+		srv.groupsMu.Unlock()
+		return false
+	}
+	// Group::SetTargetIcon: clear the GUID from any other slot first (each
+	// clear broadcasts its own packet), then set and broadcast.
+	type iconUpdate struct {
+		icon uint8
+		guid uint64
+	}
+	var updates []iconUpdate
+	if guid != 0 {
+		for i := range g.TargetIcons {
+			if uint8(i) != x && g.TargetIcons[i] == guid {
+				g.TargetIcons[i] = 0
+				updates = append(updates, iconUpdate{uint8(i), 0})
+			}
+		}
+	}
+	g.TargetIcons[x] = guid
+	updates = append(updates, iconUpdate{x, guid})
+	srv.groupsMu.Unlock()
+	for _, u := range updates {
+		b := protocol.NewBuffer(18)
+		b.WriteU8(0)
+		b.WriteU64(s.playerGUID)
+		b.WriteU8(u.icon)
+		b.WriteU64(u.guid)
+		srv.broadcastToGroup(s.groupID, uint16(protocol.OpcodeMSG_RAID_TARGET_UPDATE), b.Bytes())
+	}
 	return true
 }
+
+// targetIconCount mirrors TARGETICONCOUNT (Group.h:45).
+const targetIconCount = 8
 
 // handleGroupRaidConvert processes CMSG_GROUP_RAID_CONVERT (0x28E).
 // TrinityCore: WorldSession::HandleGroupRaidConvertOpcode.
