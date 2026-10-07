@@ -125,8 +125,10 @@ func (s *Server) autoBalanceModifyDealDamage(motion *creatureMotion, target *ses
 		}
 	}
 	// (IsHunterPet() || IsPet() || IsSummon()) && IsControlledByPlayer():
-	// player-owned attackers never scale.
-	if motion.PetID != 0 || motion.UnitFlags&unitFlagPlayerControlled != 0 {
+	// only pet-type attackers under player control never scale. A charmed
+	// (player-controlled but not pet-type) creature IS scaled in C++
+	// (m_unitTypeMask keeps its non-pet bits), so the gate is AND, not OR.
+	if motion.PetID != 0 && motion.UnitFlags&unitFlagPlayerControlled != 0 {
 		return damage
 	}
 	return uint32(float64(damage) * info.damageMultiplier)
@@ -229,8 +231,10 @@ func (s *Server) autoBalanceBaseStats(ctx context.Context, level, class uint32) 
 }
 
 // autoBalanceBaseDamage mirrors CreatureBaseStats::GenerateBaseDamage: the
-// exp-selected raw damage times the template damage modifier.
-func autoBalanceBaseDamage(st autoBalanceBaseStats, exp uint32, damageMod float64) float64 {
+// exp-selected raw BaseDamage row (CreatureData.h:276-279). It deliberately
+// carries NO damage modifier — C++ GenerateBaseDamage returns the raw row,
+// so both the original and the scaled base damage are unmodified.
+func autoBalanceBaseDamage(st autoBalanceBaseStats, exp uint32) float64 {
 	var raw float64
 	switch {
 	case exp >= 2:
@@ -240,7 +244,7 @@ func autoBalanceBaseDamage(st autoBalanceBaseStats, exp uint32, damageMod float6
 	default:
 		raw = st.dmg[0]
 	}
-	return raw * damageMod
+	return raw
 }
 
 // autoBalanceAreaLevel mirrors getAreaLevel's LFGDungeons arm: min from
@@ -269,6 +273,64 @@ func (s *Server) autoBalanceAreaLevel(mapID uint32, difficulty uint8) (uint8, ui
 	return minLvl, maxLvl
 }
 
+// autoBalanceIsDungeonBoss mirrors Creature::IsDungeonBoss (Creature.h:112):
+// flags_extra & CREATURE_FLAG_EXTRA_DUNGEON_BOSS, which ObjectMgr sets at
+// load for instance_encounters kill-credit creatures and their
+// creature_template difficulty entries (ObjectMgr.cpp:6085) — it is NOT the
+// type_flags boss bit. The entry set is cached under autoBalanceMu.
+func (s *Server) autoBalanceIsDungeonBoss(ctx context.Context, entry uint32) bool {
+	s.autoBalanceMu.RLock()
+	bosses, loaded := s.autoBalanceBosses, s.autoBalanceBossesLoaded
+	s.autoBalanceMu.RUnlock()
+	if !loaded {
+		bosses = s.loadAutoBalanceBosses(ctx)
+		s.autoBalanceMu.Lock()
+		if !s.autoBalanceBossesLoaded {
+			s.autoBalanceBosses = bosses
+			s.autoBalanceBossesLoaded = true
+		} else {
+			bosses = s.autoBalanceBosses
+		}
+		s.autoBalanceMu.Unlock()
+	}
+	_, ok := bosses[entry]
+	return ok
+}
+
+func (s *Server) loadAutoBalanceBosses(ctx context.Context) map[uint32]struct{} {
+	bosses := make(map[uint32]struct{})
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return bosses
+	}
+	rows, err := s.WorldStore.DB.QueryContext(ctx,
+		"SELECT creditEntry FROM instance_encounters WHERE creditType = 0")
+	if err != nil {
+		return bosses
+	}
+	var credits []uint32
+	for rows.Next() {
+		var entry uint32
+		if err := rows.Scan(&entry); err == nil && entry != 0 {
+			credits = append(credits, entry)
+		}
+	}
+	rows.Close()
+	for _, entry := range credits {
+		bosses[entry] = struct{}{}
+		var d1, d2, d3 uint32
+		if err := s.WorldStore.DB.QueryRowContext(ctx,
+			"SELECT difficulty_entry_1, difficulty_entry_2, difficulty_entry_3 FROM creature_template WHERE entry = ?",
+			entry).Scan(&d1, &d2, &d3); err == nil {
+			for _, d := range []uint32{d1, d2, d3} {
+				if d != 0 {
+					bosses[d] = struct{}{}
+				}
+			}
+		}
+	}
+	return bosses
+}
+
 // autoBalanceModifyCreatureAttributes mirrors
 // AutoBalance_AllCreatureScript::ModifyCreatureAttributes: the tanh
 // player-count scaling, forced-ID overrides, level scaling with offsets,
@@ -292,7 +354,7 @@ func (s *Server) autoBalanceModifyCreatureAttributes(ctx context.Context, motion
 	if cfg.DungeonsOnly && !mapEntry.IsDungeon() && !inBG {
 		return
 	}
-	if motion.PetID != 0 || motion.UnitFlags&unitFlagPlayerControlled != 0 {
+	if motion.PetID != 0 && motion.UnitFlags&unitFlagPlayerControlled != 0 {
 		return
 	}
 
@@ -363,12 +425,14 @@ func (s *Server) autoBalanceModifyCreatureAttributes(ctx context.Context, motion
 			return
 		}
 	}
-	if curCount <= 0 {
-		return
-	}
+	// C++-exact order: instancePlayerCount is assigned BEFORE the zero
+	// check (uint32 wrap included), so a zero count still lands in the info.
 	s.autoBalanceMu.Lock()
 	info.instancePlayerCount = uint32(curCount)
 	s.autoBalanceMu.Unlock()
+	if curCount <= 0 {
+		return
+	}
 
 	originalLevel := tmpl.maxLevel
 	areaMinLvl, areaMaxLvl := s.autoBalanceAreaLevel(motion.Map, difficulty)
@@ -414,7 +478,7 @@ func (s *Server) autoBalanceModifyCreatureAttributes(ctx context.Context, motion
 	}
 	baseHealth := origHP * tmpl.healthMod             // GenerateHealth
 	baseMana := float64(orig.baseMana) * tmpl.manaMod // GenerateMana
-	origDmgBase := autoBalanceBaseDamage(orig, tmpl.exp, tmpl.damageMod)
+	origDmgBase := autoBalanceBaseDamage(orig, tmpl.exp)
 
 	defaultMultiplier := 1.0
 	if uint32(curCount) < maxPlayers {
@@ -444,7 +508,7 @@ func (s *Server) autoBalanceModifyCreatureAttributes(ctx context.Context, motion
 		} else {
 			inflectionValue *= cfg.InflectionPoint
 		}
-		if tmpl.typeFlags&0x4 != 0 { // CREATURE_TYPE_FLAG_BOSS_MOB
+		if s.autoBalanceIsDungeonBoss(ctx, motion.Entry) {
 			inflectionValue *= cfg.BossInflectionMult
 		}
 		diff := (float64(maxPlayers) / 5) * 1.5
@@ -516,8 +580,8 @@ func (s *Server) autoBalanceModifyCreatureAttributes(ctx context.Context, motion
 	}
 	if !useDefStats && cfg.LevelScaling != 0 && !skipLevel {
 		if scaled, ok := s.autoBalanceBaseStats(ctx, uint32(selectedLevel), tmpl.unitClass); ok {
-			// C++-exact asymmetry: origDmgBase carries GenerateBaseDamage's
-			// DamageModifier while newDmgBase uses the raw BaseDamage row.
+			// Both base damages are raw BaseDamage rows (GenerateBaseDamage
+			// carries no DamageModifier) — the ratio is pure row-to-row.
 			var newDmgBase float64
 			switch {
 			case level <= 60:

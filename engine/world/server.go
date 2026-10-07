@@ -77,6 +77,8 @@ type Server struct {
 	autoBalanceMaps           map[autoBalanceInstanceKey]*autoBalanceMapInfo
 	autoBalanceCreatures      map[uint64]*autoBalanceCreatureInfo
 	autoBalanceLFG            []wotlk.LFGDungeon
+	autoBalanceBosses         map[uint32]struct{}
+	autoBalanceBossesLoaded   bool
 	queuedSessions            []*session
 	playerLimit               uint32
 	closed                    atomic.Bool
