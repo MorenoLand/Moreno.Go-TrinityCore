@@ -550,6 +550,29 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 		}
 		s.creditKillingBlowCriteria()
 
+		// Boss_Announcer::OnCreatureKill (Custom/cs_worldboss_kill_announce.cpp:20-32):
+		// fires from Unit::Kill's ScriptMgr hook block (Unit.cpp:11468-11482),
+		// after the achievement-credit block, only when the attacker is a
+		// player (killer == nil here — a non-nil killer motion means a pet or
+		// creature landed the blow, where C++ attacker->ToPlayer() is null
+		// and the hook never fires) and the victim is a world boss
+		// (Creature::isWorldBoss, Creature.cpp:2353-2359: type_flags &
+		// CREATURE_TYPE_FLAG_BOSS_MOB, 0x4, SharedDefines.h:2731; the IsPet()
+		// exclusion is vacuous — Go kill targets are creature motions only).
+		// Broadcasts via World::SendServerMessage(SERVER_MSG_STRING, msg, 0)
+		// (World.cpp:3074), bridged by broadcastServerMessageAll; the killer
+		// link mirrors ChatHandler::playerLink (Chat.h:119). The companion
+		// OnUpdateZone arm (area 420 run-speed set) is commented-out/dev-debug
+		// code in C++ and is deliberately not bridged.
+		if killer == nil && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			var bossName string
+			var typeFlags uint32
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(name, ''), COALESCE(type_flags, 0) FROM creature_template WHERE entry = ?", creatureEntry).Scan(&bossName, &typeFlags); err == nil && typeFlags&0x4 != 0 {
+				killerLink := "|cffffffff|Hplayer:" + s.player.Name + "|h[" + s.player.Name + "]|h|r"
+				s.server.broadcastServerMessageAll(serverMessageString, "|CFF64FF64World Boss |CFFFFFFFF["+bossName+"]|r|CFF64FF64 has been slain by|r "+killerLink+"|CFF64FF64.")
+			}
+		}
+
 		if target.InstanceID == 0 {
 			if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 				_, _ = s.server.WorldStore.DB.ExecContext(ctx, "UPDATE creature SET curhealth = 0 WHERE guid = ?", guid)

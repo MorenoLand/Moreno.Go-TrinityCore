@@ -154,8 +154,7 @@ func (s *session) guildAddMember(ctx context.Context, cdb *sql.DB, guildID uint3
 	}
 	// Player::RemovePetitionsAndSigns(guid, GUILD_CHARTER_TYPE): prevent
 	// corrupt data from a pending charter (Guild.cpp:2209). Best-effort.
-	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition_sign WHERE playerguid = ?", guid)
-	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition WHERE owerguid = ?", guid)
+	removeGuildCharterPetitions(ctx, cdb, guid)
 	if _, err := cdb.ExecContext(ctx, "INSERT INTO guild_member (guildid, guid, `rank`, pnote, offnote) VALUES (?, ?, ?, '', '')", guildID, guid, rankID); err != nil {
 		return false
 	}

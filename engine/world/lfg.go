@@ -347,7 +347,11 @@ func (m *LFGManager) UpdateProposal(proposalID uint32, guid uint64, accept bool)
 			break
 		}
 	}
-	if allAgree {
+	// LFGMgr::UpdateProposal (LFGMgr.cpp:1228): with SoloLFG on, the
+	// proposal completes on the first accept without waiting for the other
+	// players' answers (!IsSoloLFG() && !allAnswered waits); otherwise all
+	// must agree.
+	if allAgree || m.Solo() {
 		prop.State = LFGProposalSuccess
 		delete(m.proposals, proposalID)
 	}

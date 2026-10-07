@@ -96,6 +96,27 @@ const (
 	petitionSignNotServer      uint32 = 4
 )
 
+// charterTypeGuild mirrors GUILD_CHARTER_TYPE (SharedDefines.h:3790-3798).
+const charterTypeGuild uint8 = 9
+
+// petitionExecer is satisfied by *sql.DB and *sql.Tx.
+type petitionExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+// removeGuildCharterPetitions bridges Player::RemovePetitionsAndSigns(guid,
+// GUILD_CHARTER_TYPE) (Player.cpp:21455-21459) via PetitionMgr's three
+// type-gated DB arms (PetitionMgr.cpp:145-216): CHAR_DEL_PETITION_SIGNATURE
+// (the player's signatures on guild charters),
+// CHAR_DEL_PETITION_BY_OWNER_AND_TYPE (charters the player owns), and
+// CHAR_DEL_PETITION_SIGNATURE_BY_OWNER_AND_TYPE (signatures on those owned
+// charters). Errors are best-effort like the other petition bridges.
+func removeGuildCharterPetitions(ctx context.Context, exec petitionExecer, guid uint64) {
+	_, _ = exec.ExecContext(ctx, "DELETE FROM petition_sign WHERE playerguid = ? AND type = ?", guid, charterTypeGuild)
+	_, _ = exec.ExecContext(ctx, "DELETE FROM petition WHERE ownerguid = ? AND type = ?", guid, charterTypeGuild)
+	_, _ = exec.ExecContext(ctx, "DELETE FROM petition_sign WHERE ownerguid = ? AND type = ?", guid, charterTypeGuild)
+}
+
 // Guild command types mirroring TrinityCore Guild.h:103-121.
 const (
 	guildCmdCreate       uint32 = 0
@@ -239,6 +260,10 @@ func (s *session) ensureStartingGuild(ctx context.Context, playerGUID uint64) er
 	if err := tx.QueryRowContext(ctx, "SELECT MAX(rid) FROM guild_rank WHERE guildid = ?", guildID).Scan(&rank); err != nil {
 		return err
 	}
+	// Guild::AddMember (Guild.cpp:2209) runs Player::RemovePetitionsAndSigns
+	// before inserting the member; the starting-guild script reaches
+	// AddMember on both its OnCreate and OnLogin arms.
+	removeGuildCharterPetitions(ctx, tx, playerGUID)
 	memberRank := uint32(4)
 	if rank.Valid {
 		memberRank = uint32(rank.Int64)
