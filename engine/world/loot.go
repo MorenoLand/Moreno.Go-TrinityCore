@@ -2396,7 +2396,18 @@ func (s *session) releaseGameObjectLoot(loot *activeLootState, targetGUID uint64
 	if goState.Type == GameObjectTypeDoor {
 		s.server.useDoorOrButton(goState.Map, goState.InstanceID, goState.GUID)
 	}
-	if loot.Money != 0 || len(loot.Items) != 0 {
+	// DoLootRelease (LootHandler.cpp:287): a fishing bobber despawns on
+	// release even with the catch still in the window — FISHINGNODE enters
+	// the despawn/clear branch regardless of loot->isLooted(). The fishing
+	// hole and every other GO wait for Loot::isLooted (Loot.h:236: gold == 0
+	// and unlootedCount == 0, counting quest rows and one entry per viewer
+	// per free-for-all row), which lootFullyLooted mirrors — the old inline
+	// check missed quest-only remainders.
+	if goState.Type == GameObjectTypeFishingNode {
+		s.server.despawnDynamicGameObjectInInstance(goState.Map, goState.InstanceID, goState.GUID)
+		return true
+	}
+	if !lootFullyLooted(loot) {
 		return true
 	}
 	switch goState.Type {
@@ -2410,8 +2421,6 @@ func (s *session) releaseGameObjectLoot(loot *activeLootState, targetGUID uint64
 		} else {
 			s.server.setGameObjectStateInInstance(goState.Map, goState.InstanceID, goState.GUID, GameObjectStateReady)
 		}
-	case GameObjectTypeFishingNode:
-		s.server.despawnDynamicGameObjectInInstance(goState.Map, goState.InstanceID, goState.GUID)
 	}
 	return true
 }

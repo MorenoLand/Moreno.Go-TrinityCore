@@ -3040,6 +3040,16 @@ func (s *session) lootReleaseCleanupAllowed(loot *activeLootState) bool {
 	if motion == nil || s.player == nil {
 		return false
 	}
+	// WorldSession::DoLootRelease creature arm (LootHandler.cpp:351-354): the
+	// cleanup legs only run when the creature's alive state matches the loot
+	// type — a pickpocket window released after the mark died, or a corpse
+	// window on a creature that's alive again, skips the dynflag/loot-clear
+	// legs. CLASS_ROGUE = 4 (SharedDefines.h); mirrors the take-time gate in
+	// handleAutostoreLootItem (LootHandler.cpp:87-97).
+	isRoguePickpocket := s.player.Class == 4 && loot.LootType == lootTypePickpocketing
+	if (motion.Health != 0) != isRoguePickpocket {
+		return false
+	}
 	return distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z) <= 5.0+1.5+1.5
 }
 
