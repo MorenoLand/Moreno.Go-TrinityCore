@@ -205,6 +205,12 @@ func (a *Archive) ReadFile(name string) ([]byte, error) {
 		return nil, errors.New("MPQ block index is out of range")
 	}
 	block := a.blocks[index]
+	// HACK (mpq_libmpq.cpp:73): in patch.mpq some files report an unpacked
+	// size of 0/1 and cannot be read; C++ treats them as missing and tries
+	// the next archive, so do the same.
+	if block.FileSize <= 1 {
+		return nil, os.ErrNotExist
+	}
 	if block.Flags&fileImplode != 0 {
 		data, err := a.readAt(block.FilePos, uint64(block.CompressedSize))
 		if err != nil {
@@ -214,7 +220,10 @@ func (a *Archive) ReadFile(name string) ([]byte, error) {
 		if block.Flags&fileEncrypt != 0 {
 			key = hashString(name, 3)
 			if block.Flags&fileFixKey != 0 {
-				key = (key + uint32(block.RelativePos)) ^ block.FileSize
+				// FIX_KEY adjusts by the absolute file position
+				// (FilePos = RelativePos + ArchiveOffset), not the
+				// header-relative offset.
+				key = (key + uint32(block.FilePos)) ^ block.FileSize
 			}
 		}
 		if key != 0 {
@@ -226,7 +235,7 @@ func (a *Archive) ReadFile(name string) ([]byte, error) {
 	if block.Flags&fileEncrypt != 0 {
 		key = hashString(name, 3)
 		if block.Flags&fileFixKey != 0 {
-			key = (key + uint32(block.RelativePos)) ^ block.FileSize
+			key = (key + uint32(block.FilePos)) ^ block.FileSize
 		}
 	}
 	if block.Flags&fileSingle != 0 {
@@ -520,7 +529,20 @@ func decompressWave(data []byte, expected uint32, channels int) ([]byte, error) 
 }
 
 func normalize(name string) string {
-	return strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(name, "\\", "/"), "//", "/"))
+	return asciiUpper(strings.ReplaceAll(name, "/", "\\"))
+}
+
+// asciiUpper uppercases ASCII a-z only, matching C toupper on MPQ file
+// names; strings.ToUpper would rewrite bytes >= 0x80 into U+FFFD and
+// diverge from the C hash for non-ASCII names.
+func asciiUpper(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'a' && c <= 'z' {
+			b[i] = c - ('a' - 'A')
+		}
+	}
+	return string(b)
 }
 
 func initCryptTable() {
@@ -540,7 +562,10 @@ func hashString(name string, hashType uint32) uint32 {
 	cryptOnce.Do(initCryptTable)
 	seed1, seed2 := uint32(0x7FED7FED), uint32(0xEEEEEEEE)
 	for index := 0; index < len(name); index++ {
-		value := byte(strings.ToUpper(name[index : index+1])[0])
+		value := name[index]
+		if value >= 'a' && value <= 'z' {
+			value -= 'a' - 'A'
+		}
 		seed1 = cryptTable[(hashType<<8)+uint32(value)] ^ (seed1 + seed2)
 		seed2 = uint32(value) + seed1 + seed2 + (seed2 << 5) + 3
 	}

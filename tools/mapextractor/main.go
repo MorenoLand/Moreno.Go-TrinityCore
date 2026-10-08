@@ -106,6 +106,12 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Printf("Extracted and validated %d DBC files into %s\n", count, *output)
+	camCount, err := wowdata.ExtractCameras(*input, *output)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Camera extraction failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Extracted %d camera files into %s\n", camCount, filepath.Join(*output, "Cameras"))
 }
 
 func readClientAsset(input, name string) ([]byte, error) {

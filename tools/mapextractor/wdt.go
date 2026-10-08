@@ -28,6 +28,7 @@ type wdtInfo struct {
 
 func parseWDT(data []byte) (wdtInfo, error) {
 	var info wdtInfo
+	seenMVER := false
 	for offset := 0; offset < len(data); {
 		if len(data)-offset < 8 {
 			return wdtInfo{}, errors.New("truncated WDT chunk header")
@@ -45,6 +46,14 @@ func parseWDT(data []byte) (wdtInfo, error) {
 				return wdtInfo{}, errors.New("truncated WDT MVER chunk")
 			}
 			info.Version = binary.LittleEndian.Uint32(chunk)
+			// C++ owner: FileLoader::prepareLoadedData
+			// (map_extractor/loadlib/loadlib.cpp:65-74) — the load fails
+			// unless the MVER version equals FILE_FORMAT_VERSION (18,
+			// loadlib/loadlib.h:25); ExtractMapsFromMpq then skips the map.
+			if info.Version != 18 {
+				return wdtInfo{}, fmt.Errorf("unsupported WDT version %d, want 18", info.Version)
+			}
+			seenMVER = true
 		case "MPHD":
 			if size < len(info.MPHD)*4 {
 				return wdtInfo{}, errors.New("truncated WDT MPHD chunk")
@@ -81,6 +90,9 @@ func parseWDT(data []byte) (wdtInfo, error) {
 			info.GlobalWMOModels = append(info.GlobalWMOModels, instances...)
 		}
 		offset += size
+	}
+	if !seenMVER {
+		return wdtInfo{}, errors.New("WDT MVER chunk not found")
 	}
 	if !info.HasMain {
 		return wdtInfo{}, errors.New("WDT MAIN chunk not found")

@@ -235,9 +235,8 @@ func parseMH2O(chunk []byte, info *adtInfo) error {
 			base := int(offsetInstances + layer*24)
 			lvf := binary.LittleEndian.Uint16(chunk[base+2:])
 			width, height := chunk[base+14], chunk[base+15]
-			if width == 0 || height == 0 || width > 8 || height > 8 {
-				return fmt.Errorf("invalid ADT MH2O liquid dimensions %d x %d", width, height)
-			}
+			// C++ performs no dimension validation here (adt.h MH2O
+			// parsing); the old Go hard-error on 0 or >8 is dropped.
 			info.LiquidInstances++
 			info.LiquidTiles += int(width) * int(height)
 			existsOffset := binary.LittleEndian.Uint32(chunk[base+16:])
@@ -250,10 +249,12 @@ func parseMH2O(chunk []byte, info *adtInfo) error {
 			}
 			vertexOffset := binary.LittleEndian.Uint32(chunk[base+20:])
 			if vertexOffset != 0 {
-				bytesPerVertex := map[uint16]uint64{0: 5, 1: 8, 2: 1, 3: 9}[lvf]
-				if bytesPerVertex == 0 {
-					return fmt.Errorf("unsupported ADT MH2O liquid vertex format %d", lvf)
-				}
+				// C++ owner: LiquidVertexFormatType
+				// (map_extractor/adt.h:190-195) + GetLiquidVertexFormatSize
+				// (adt.h:256-303): HeightDepth(0)=5,
+				// HeightTextureCoord(1)=8, Depth(2)=1 bytes/vertex;
+				// undefined formats default to 0, they are not an error.
+				bytesPerVertex := map[uint16]uint64{0: 5, 1: 8, 2: 1}[lvf]
 				vertexBytes := uint64(width+1) * uint64(height+1) * bytesPerVertex
 				if uint64(vertexOffset)+vertexBytes > uint64(len(chunk)) {
 					return fmt.Errorf("invalid ADT MH2O vertex offset %d", vertexOffset)
@@ -290,8 +291,10 @@ func countADTSubchunks(chunk []byte, info *adtInfo) error {
 		}
 		switch name {
 		case "MCVT":
-			if size < 145*4 {
-				return fmt.Errorf("truncated ADT MCVT subchunk: got %d, want %d", size, 145*4)
+			// C++ owner: map_extractor/adt.cpp:129-137 — MCVT must be
+			// exactly 145 floats (580 bytes); oversized chunks are rejected.
+			if size != 145*4 {
+				return fmt.Errorf("invalid ADT MCVT subchunk: got %d, want %d", size, 145*4)
 			}
 			info.MCVTCount++
 			previousHeights := info.MCVTHeights

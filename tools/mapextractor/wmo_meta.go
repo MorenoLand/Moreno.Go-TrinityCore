@@ -166,11 +166,40 @@ func rotateDoodadVector(q doodadQuaternion, value [3]float32) [3]float32 {
 	return [3]float32{float32(rotated.X), float32(rotated.Y), float32(rotated.Z)}
 }
 
-func doodadRotation(q doodadQuaternion) [3]float32 {
-	roll := math.Atan2(2*(q.W*q.X+q.Y*q.Z), 1-2*(q.X*q.X+q.Y*q.Y))
-	pitch := math.Asin(math.Max(-1, math.Min(1, 2*(q.W*q.Y-q.Z*q.X))))
-	yaw := math.Atan2(2*(q.W*q.Z+q.X*q.Y), 1-2*(q.Y*q.Y+q.Z*q.Z))
-	return [3]float32{float32(roll * 180 / math.Pi), float32(pitch * 180 / math.Pi), float32(yaw * 180 / math.Pi)}
+// doodadRotationEulerXYZ extracts G3D XYZ Euler angles from the composed
+// WMO doodad rotation matrix and returns them in the C++ dir-record slot
+// order (Y, Z, X) in degrees.
+// C++ owner: (G3D::Quat(doodad.quat).toRotationMatrix() * wmoRotation)
+// .toEulerAnglesXYZ(rotation.z, rotation.x, rotation.y)
+// (vmap4_extractor/model.cpp:231-236) with G3D::Matrix3::toEulerAnglesXYZ
+// (dep/g3dlite/source/Matrix3.cpp:1383-1409) and G3D::Matrix3(const Quat&)
+// (Matrix3.cpp:122-142, Watt & Watt pg 362). The old Go code extracted ZYX
+// Euler (roll, pitch, yaw), producing genuinely different triples — e.g. a
+// pure Z 90° rotation wrote (0, 0, 90) where C++ writes (0, 90, 0).
+func doodadRotationEulerXYZ(q doodadQuaternion) [3]float32 {
+	n := math.Sqrt(q.X*q.X + q.Y*q.Y + q.Z*q.Z + q.W*q.W)
+	x, y, z, w := q.X/n, q.Y/n, q.Z/n, q.W/n
+	xx, xy, xz, xw := 2*x*x, 2*x*y, 2*x*z, 2*x*w
+	yy, yz, yw := 2*y*y, 2*y*z, 2*y*w
+	zz, zw := 2*z*z, 2*z*w
+	m00, m01, m02 := 1-yy-zz, xy-zw, xz+yw
+	m10, m11, m12 := xy+zw, 1-xx-zz, yz-xw
+	m22 := 1 - xx - yy
+	var ex, ey, ez float64
+	switch {
+	case m02 <= -1:
+		ex = -math.Atan2(m10, m11)
+		ey = -math.Pi / 2
+	case m02 >= 1:
+		ex = math.Atan2(m10, m11)
+		ey = math.Pi / 2
+	default:
+		ex = math.Atan2(-m12, m22)
+		ey = math.Asin(m02)
+		ez = math.Atan2(-m01, m00)
+	}
+	const rad2deg = 180 / math.Pi
+	return [3]float32{float32(ey * rad2deg), float32(ez * rad2deg), float32(ex * rad2deg)}
 }
 
 func transformWMODoodad(instance adtWorldModelInstance, doodad rawWMODoodad) ([3]float32, [3]float32) {
@@ -179,7 +208,5 @@ func transformWMODoodad(instance adtWorldModelInstance, doodad rawWMODoodad) ([3
 	local := rotateDoodadVector(worldRotation, doodad.Position)
 	position := [3]float32{worldPosition[0] + local[0], worldPosition[1] + local[1], worldPosition[2] + local[2]}
 	doodadRotation := doodadQuaternion{X: float64(doodad.Rotation[0]), Y: float64(doodad.Rotation[1]), Z: float64(doodad.Rotation[2]), W: float64(doodad.Rotation[3])}
-	return position, doodadRotationEuler(quaternionMultiply(doodadRotation, worldRotation))
+	return position, doodadRotationEulerXYZ(quaternionMultiply(doodadRotation, worldRotation))
 }
-
-func doodadRotationEuler(q doodadQuaternion) [3]float32 { return doodadRotation(q) }

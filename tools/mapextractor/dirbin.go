@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -12,6 +15,40 @@ const (
 	modelFlagWorldSpawn uint32 = 1 << 1
 	modelFlagHasBound   uint32 = 1 << 2
 )
+
+// modelGatePass mirrors the C++ model gate: Doodad::Extract
+// (vmap4_extractor/model.cpp:143-158) and MapObject::Extract
+// (vmap4_extractor/wmo.cpp:519-537) open "<szWorkDirWmo>/<name>"
+// ("./Buildings") and write no dir record when the file is missing or its
+// int32 vertex count at offset 8 reads as zero. With an explicit -model-dir
+// (converted VMAP047 models, not raw client files) the equivalent signal is
+// whether the metadata loader finds the model at all.
+func modelGatePass(modelDir, name string) bool {
+	if modelDir != "" {
+		_, ok := findRawModel(modelDir, name)
+		return ok
+	}
+	return rawModelHasVertices("./Buildings", name)
+}
+
+// rawModelHasVertices opens the raw client model file and reports whether
+// its int32 vertex count at offset 8 reads as nonzero, like the C++
+// fopen + fseek(8) + fread arm.
+func rawModelHasVertices(modelDir, name string) bool {
+	f, err := os.Open(filepath.Join(modelDir, name))
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if _, err := f.Seek(8, io.SeekStart); err != nil {
+		return false
+	}
+	var nVertices int32
+	if err := binary.Read(f, binary.LittleEndian, &nVertices); err != nil {
+		return false
+	}
+	return nVertices != 0
+}
 
 func buildADTDirBin(info adtInfo, mapID, tileX, tileY uint32) ([]byte, error) {
 	return buildADTDirBinWithModelDir(info, mapID, tileX, tileY, "")
@@ -53,6 +90,9 @@ func buildADTDirBinWithModelDir(info adtInfo, mapID, tileX, tileY uint32, modelD
 			if name == "" {
 				return nil, fmt.Errorf("MDDF name id %d has an empty model name", instance.NameID)
 			}
+			if !modelGatePass(modelDir, name) {
+				continue
+			}
 			writeDirRecord(&output, mapID, tileX, tileY, modelSpawn{Flags: modelFlagM2 | worldSpawnFlag(tileX, tileY), ID: uniqueID(instance.UniqueID, 0), Position: fixModelVector(instance.Position), Rotation: instance.Rotation, Scale: instance.Scale, Name: name})
 			continue
 		}
@@ -69,6 +109,9 @@ func buildADTDirBinWithModelDir(info adtInfo, mapID, tileX, tileY uint32, modelD
 		name := plainModelName(info.WorldModelNames[instance.NameID])
 		if name == "" {
 			return nil, fmt.Errorf("MODF name id %d has an empty model name", instance.NameID)
+		}
+		if !modelGatePass(modelDir, name) {
+			continue
 		}
 		position := instance.Position
 		if position[0] == 0 && position[2] == 0 {
@@ -182,10 +225,10 @@ func plainModelName(name string) string {
 			data[index] &^= 0x20
 		}
 	}
+	// C++ owner: fixnamen (vmap4_extractor/adtfile.cpp:43-56) — the last 3
+	// chars (extension) are unconditionally ORed with 0x20, not just A-Z.
 	for index := len(data) - 3; index < len(data); index++ {
-		if data[index] >= 'A' && data[index] <= 'Z' {
-			data[index] |= 0x20
-		}
+		data[index] |= 0x20
 	}
 	for index := 0; index < len(data)-3; index++ {
 		if data[index] == ' ' {
