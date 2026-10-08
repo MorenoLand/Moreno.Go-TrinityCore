@@ -2568,6 +2568,32 @@ func (s *session) doLootRelease(loot *activeLootState) {
 			s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LOOT_LIST), buildLootLooterPacket(loot, grp))
 		}
 	}
+	// WorldSession::DoLootRelease creature arm (LootHandler.cpp:372-373): the
+	// not-fully-looted leg ends with creature->ForceValuesUpdateAtIndex
+	// (UNIT_DYNAMIC_FLAGS) — "force dynflag update to update looter and
+	// lootable info". The release legs above (loot-GUID clear, round-robin
+	// reset, SendLooter broadcast) changed the per-viewer sparkle masking, so
+	// C++ rebuilds the update block for every viewer (Unit.cpp:13921-13931
+	// masks UNIT_DYNFLAG_LOOTABLE via isAllowedToLoot). Go had no analog: a
+	// round-robin holder's release left the old holder's client showing the
+	// sparkle and the new holder's client without it until an unrelated
+	// update arrived. Rebroadcast the motion's current dynamic flags;
+	// broadcastCreatureValuesUpdateInInstance applies the same per-viewer
+	// mask, and the update still runs when the flags value itself did not
+	// change because the mask did.
+	if cleanupAllowed && !fullyLooted && s.server != nil && uint16(targetGUID>>48) != 0xF110 {
+		if motion := s.server.findCreatureMotion(loot.MapID, loot.InstanceID, targetGUID); motion != nil {
+			s.server.motionMu.Lock()
+			flags := motion.DynamicFlags
+			s.server.motionMu.Unlock()
+			s.server.broadcastCreatureValuesUpdateInInstance(loot.MapID, loot.InstanceID, targetGUID, map[int]uint32{unitFieldDynamicFlags: flags})
+			guid := uint32(targetGUID & 0x00FFFFFF)
+			entry := uint32((targetGUID >> 24) & 0x00FFFFFF)
+			if std := creatureWorldGUID(guid, entry); std != targetGUID {
+				s.server.broadcastCreatureValuesUpdateInInstance(loot.MapID, loot.InstanceID, std, map[int]uint32{unitFieldDynamicFlags: flags})
+			}
+		}
+	}
 	release := protocol.NewBuffer(9)
 	release.WriteU64(targetGUID)
 	release.WriteU8(1)
