@@ -174,6 +174,11 @@ type Server struct {
 	lootMu                    sync.Mutex
 	creatureLoot              map[lootObjectKey]*activeLootState
 	creatureLootOwners        map[lootObjectKey]lootOwnerState
+	// storedContainerLoot mirrors LootItemStorage::_lootItemStore
+	// (Loot/LootItemStorage.cpp): persisted container (item) loot keyed by
+	// the container item's instance GUID, loaded at startup and kept in
+	// sync by takes, money looting and item destruction.
+	storedContainerLoot map[uint64]*storedContainerLoot
 	// pickpocketLootRestore mirrors Creature::_pickpocketLootRestore
 	// (Creature.h): the game-time after which the creature instance's
 	// pickpocket loot may be generated again, keyed per loot object.
@@ -599,6 +604,7 @@ func (s *Server) Initialize(ctx context.Context) error {
 	s.loadWorldStates(ctx)
 	s.initializeMailState(ctx)
 	s.seedItemGUID(ctx)
+	s.loadStoredContainerLoot(ctx)
 	go s.runWorldTick(ctx)
 	go s.runMailSweepLoop(ctx)
 	return nil

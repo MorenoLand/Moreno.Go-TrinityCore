@@ -283,6 +283,9 @@ func (s *session) destroyPlayerItemCount(ctx context.Context, targetGUID uint64,
 		if take >= it.count {
 			_, _ = db.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", it.guid)
 			_, _ = db.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ?", it.guid)
+			// A fully-destroyed item drops its persisted container loot
+			// (LootItemStorage::RemoveStoredLootForContainer).
+			s.server.removeStoredContainerLoot(ctx, it.guid)
 		} else {
 			_, _ = db.ExecContext(ctx, "UPDATE item_instance SET `count` = `count` - ? WHERE guid = ?", take, it.guid)
 		}

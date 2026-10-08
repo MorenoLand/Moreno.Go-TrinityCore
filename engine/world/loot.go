@@ -158,11 +158,17 @@ type activeLootState struct {
 	// alive/distance gates for item targets.
 	LootItemGUID uint64
 	// GeneratedAt mirrors GameObject::m_lootGenerationTime (GameObject.cpp:2402),
-	// stamped at every loot fill (Player.cpp:8599). Player::SendLoot's GO arm
-	// (Player.cpp:8568-8570) re-rolls a default-spawned chest's loot on the
-	// next open once its respawn delay has elapsed since generation instead
-	// of re-showing the stale partially-looted remainder. Unix seconds.
+	// stamped at every chest fill: a partially-looted default-spawned chest
+	// whose generation + respawn delay has elapsed re-rolls its loot on
+	// re-open (Player::SendLoot, Player.cpp:8568-8570). 0 means no
+	// regeneration tracking (creature loot, item loot).
 	GeneratedAt int64
+	// StoredContainerGUID mirrors Loot::containerID (Loot.h): the container
+	// item instance whose rolled loot was persisted through LootItemStorage
+	// (Loot/LootItemStorage.cpp) — non-zero only for container opens whose
+	// loot lives in the stored-container store, so takes and money looting
+	// keep the persisted remainder in sync.
+	StoredContainerGUID uint64
 }
 
 // storeLootTemplateRow routes one rolled loot-template row into Items or
@@ -2291,6 +2297,11 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 	}
 	copper := s.activeLoot.Money
 	s.activeLoot.Money = 0
+	// LootHandler.cpp:215-217: the money row leaves the persisted
+	// container loot with the take.
+	if s.activeLoot.StoredContainerGUID != 0 {
+		s.server.removeStoredContainerLootMoney(ctx, s.activeLoot.StoredContainerGUID)
+	}
 
 	// HandleLootMoneyOpcode (LootHandler.cpp:160): NotifyMoneyRemoved fires
 	// before the split — viewers see SMSG_LOOT_CLEAR_MONEY ahead of the
@@ -2516,6 +2527,11 @@ func (s *session) storeTakenLootRow(ctx context.Context, loot *activeLootState, 
 			s.sendEquipError(equipErrInvFull, 0)
 		}
 		return true
+	}
+	// Player::StoreLootItem (Player.cpp:25136-25137): a row taken from a
+	// persisted container leaves the stored loot too.
+	if loot.StoredContainerGUID != 0 {
+		s.server.removeStoredContainerLootItem(ctx, loot.StoredContainerGUID, it.ItemEntry, it.Count)
 	}
 	s.updateAchievementCriteria(criteriaTypeLootItem, it.ItemEntry, it.Count)
 	s.updateAchievementCriteria(criteriaTypeLootType, uint32(loot.LootType), it.Count)
@@ -2824,7 +2840,9 @@ func (s *session) releaseItemLoot(loot *activeLootState) {
 }
 
 // destroyItemInstance mirrors Player::DestroyItem (Player.cpp): the whole
-// item instance leaves the player's inventory.
+// item instance leaves the player's inventory. A destroyed container also
+// drops its persisted loot (LootItemStorage::RemoveStoredLootForContainer,
+// Loot/LootItemStorage.cpp:200; Player.cpp:12710, 13573).
 func (s *session) destroyItemInstance(ctx context.Context, instanceGUID uint64) {
 	s.destroyItemInstanceCount(ctx, instanceGUID, ^uint32(0))
 }
@@ -2847,6 +2865,9 @@ func (s *session) destroyItemInstanceCount(ctx context.Context, instanceGUID uin
 	if cur <= count {
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", instanceGUID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ?", instanceGUID)
+		// A fully-destroyed item drops its persisted container loot
+		// (LootItemStorage::RemoveStoredLootForContainer).
+		s.server.removeStoredContainerLoot(ctx, instanceGUID)
 	} else {
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET `count` = `count` - ? WHERE guid = ?", count, instanceGUID)
 	}

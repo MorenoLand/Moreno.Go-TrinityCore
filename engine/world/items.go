@@ -2532,13 +2532,25 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 			// Player.cpp:8699: generateMoneyLoot(MinMoneyLoot, MaxMoneyLoot)
 			// runs before the template fill; the fill's noEmptyError arm is
 			// (gold != 0), so money alone still opens a window.
-			var minMoney, maxMoney int64
-			_ = lootSource.QueryRowContext(ctx, "SELECT MinMoneyLoot, MaxMoneyLoot FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&minMoney, &maxMoney)
-			loot.Money = generateMoneyLootValue(minMoney, maxMoney)
-			s.server.fillLootTemplate(ctx, lootSource, "item_loot_template", int64(itemEntry), lootModeDefault, loot)
-			// FillNotNormalLootFor (Loot.cpp:246-266) auto-stores
-			// currency-token rows straight into the opener's bags.
-			s.server.autoStoreLootCurrencyTokens(ctx, loot, s)
+			// Player.cpp:8683: a container that already has persisted loot
+			// reopens it from the store (LoadStoredLoot) instead of
+			// rolling fresh.
+			if s.server.applyStoredContainerLoot(ctx, s, uint64(itemGUID), loot) {
+				// Stored remainder reopened; no fresh roll, no re-store.
+			} else {
+				var minMoney, maxMoney int64
+				_ = lootSource.QueryRowContext(ctx, "SELECT MinMoneyLoot, MaxMoneyLoot FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&minMoney, &maxMoney)
+				loot.Money = generateMoneyLootValue(minMoney, maxMoney)
+				s.server.fillLootTemplate(ctx, lootSource, "item_loot_template", int64(itemEntry), lootModeDefault, loot)
+				// FillNotNormalLootFor (Loot.cpp:246-266) auto-stores
+				// currency-token rows straight into the opener's bags.
+				s.server.autoStoreLootCurrencyTokens(ctx, loot, s)
+				// Player.cpp:8703-8706: the default (container) arm persists
+				// the rolled loot so a later reopen yields the same
+				// remainder. Tokens are already gone from the fill above.
+				s.server.storeNewContainerLoot(ctx, uint64(itemGUID), loot, s)
+			}
+			loot.addViewer(s)
 
 			if len(loot.Items) > 0 || len(loot.QuestItems) > 0 || loot.Money > 0 {
 				s.server.lootMu.Lock()
