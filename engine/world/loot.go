@@ -112,6 +112,14 @@ type activeLootState struct {
 	// keeps their own copy (Loot::NotifyQuestItemRemoved stays the
 	// taker-only SMSG_LOOT_REMOVED in that arm, Player.cpp:25099).
 	QuestFFATaken map[uint8]map[uint64]bool
+	// GOLootRules mirrors chest.groupLootRules (gameobject_template.data15,
+	// GameObjectData.h:104): only chests with the flag set run the group
+	// distribution calls (GroupLoot / NeedBeforeGreed / MasterLoot) and the
+	// round-robin looter rotation at open (Player.cpp:8590-8627). Chests
+	// without the flag still ride the group permission ladder
+	// (Player.cpp:8641-8662) but never start rolls or receive the
+	// master-loot list. Non-GO loot leaves this false and is unaffected.
+	GOLootRules bool
 }
 
 // storeLootTemplateRow routes one rolled loot-template row into Items or
@@ -1011,9 +1019,11 @@ func rollLootObjectKey(roll *activeGroupRoll) lootObjectKey {
 // (SpellEffects.cpp:2031) — and maxDist the C++ distance arm: 20.0 yards
 // for the disarm arm (Player.cpp:8549) vs INTERACTION_DISTANCE otherwise.
 // Documented deltas: the GO loot-regen arm (GO_ACTIVATED + respawn-delay
-// re-roll, Player.cpp:8574-8578), the chest groupLootRules distribution
-// (GroupLoot/NeedBeforeGreed/MasterLoot), the battleground CanActivateGO
-// gate, and the fishing/fishing-hole/fishing-junk arms have no Go model.
+// re-roll, Player.cpp:8574-8578), the battleground CanActivateGO gate,
+// the respawn-time release arm (Player.cpp:8560, needs live GO respawn
+// timers; static GOs are per-client), the per-viewer GO-flag masking for
+// groupLootRules chests (GameObject.cpp:2543/2606, no per-viewer GO-flag
+// model), and the fishing/fishing-hole/fishing-junk arms have no Go model.
 // generateMoneyLootValue mirrors Loot::generateMoneyLoot (Loot.cpp:433):
 // the maxAmount<=minAmount arm takes maxAmount (not minAmount), and a zero
 // max means no money at all. The (maxAmount-minAmount)>=32700 arm is a
@@ -1043,15 +1053,17 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 	var goMap uint32
 	var goX, goY, goZ float32
 	var data1 int64
-	err := wdb.QueryRowContext(ctx, `SELECT g.map, g.position_x, g.position_y, g.position_z, COALESCE(t.data1, 0)
+	var goType uint8
+	var goData15 int64
+	err := wdb.QueryRowContext(ctx, `SELECT g.map, g.position_x, g.position_y, g.position_z, COALESCE(t.data1, 0), COALESCE(t.type, 0), COALESCE(t.data15, 0)
 		FROM gameobject AS g
 		JOIN gameobject_template AS t ON t.entry = g.id
-		WHERE g.guid = ? AND g.id = ? LIMIT 1`, lowGUID, entry).Scan(&goMap, &goX, &goY, &goZ, &data1)
+		WHERE g.guid = ? AND g.id = ? LIMIT 1`, lowGUID, entry).Scan(&goMap, &goX, &goY, &goZ, &data1, &goType, &goData15)
 	if err != nil {
-		_ = wdb.QueryRowContext(ctx, `SELECT g.map, g.position_x, g.position_y, g.position_z, COALESCE(t.data1, 0)
+		_ = wdb.QueryRowContext(ctx, `SELECT g.map, g.position_x, g.position_y, g.position_z, COALESCE(t.data1, 0), COALESCE(t.type, 0), COALESCE(t.data15, 0)
 			FROM gameobject AS g
 			JOIN gameobject_template AS t ON t.entry = g.id
-			WHERE g.guid = ? LIMIT 1`, lowGUID).Scan(&goMap, &goX, &goY, &goZ, &data1)
+			WHERE g.guid = ? LIMIT 1`, lowGUID).Scan(&goMap, &goX, &goY, &goZ, &data1, &goType, &goData15)
 	}
 	if goMap != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, goX, goY, goZ) > maxDist {
 		return s.sendLootReleaseResponse(targetGUID) == nil
@@ -1069,7 +1081,10 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 	loot := s.server.creatureLoot[key]
 	newLoot := loot == nil
 	if newLoot {
-		loot = &activeLootState{TargetGUID: targetGUID, MapID: goMap, InstanceID: s.player.InstanceID, LootType: lootType, Items: make(map[uint8]lootItem)}
+		loot = &activeLootState{TargetGUID: targetGUID, MapID: goMap, InstanceID: s.player.InstanceID, LootType: lootType, Items: make(map[uint8]lootItem),
+			// Player.cpp:8590: the group distribution/round-robin arms run
+			// only for chests with chest.groupLootRules (data15).
+			GOLootRules: goType == GameObjectTypeChest && goData15 != 0}
 		s.server.creatureLoot[key] = loot
 	}
 	s.server.lootMu.Unlock()
@@ -1092,7 +1107,11 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 		}
 	}
 	s.server.autoStoreLootCurrencyTokens(ctx, loot, s)
-	if s.server != nil && s.groupID != 0 {
+	// Player::SendLoot GO arm (Player.cpp:8592-8606): the round-robin looter
+	// update before the fill and the unconditional advance after it run only
+	// when groupRules holds (chest with chest.groupLootRules); a chest
+	// without the flag never rotates the group looter.
+	if s.server != nil && s.groupID != 0 && loot.GOLootRules {
 		s.server.groupsMu.Lock()
 		grp := s.server.groups[s.groupID]
 		if grp != nil && loot.RoundRobinPlayer == 0 && grp.LootMethod != 0 {
@@ -1660,7 +1679,14 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 	}
 	s.debug("loot response sent", "account", s.accountName, "target", loot.TargetGUID, "money", loot.Money, "items", len(loot.Items))
 
-	if grp != nil {
+	// Player::SendLoot GO arm (Player.cpp:8614-8627): the GroupLoot /
+	// NeedBeforeGreed / MasterLoot distribution calls (roll starts and the
+	// SMSG_LOOT_MASTER_LIST) run only for chests with chest.groupLootRules.
+	// A GO chest without the flag keeps the group permission ladder in the
+	// render above but never starts rolls or receives the master list.
+	// Creature loot always qualifies.
+	groupDistribute := uint16(loot.TargetGUID>>48) != 0xF110 || loot.GOLootRules
+	if grp != nil && groupDistribute {
 		if grp.LootMethod == 2 { // Master Loot
 			s.sendLootMasterList(loot)
 		} else if grp.LootMethod == 3 || grp.LootMethod == 4 { // Group Loot / Need Before Greed
