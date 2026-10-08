@@ -1282,8 +1282,10 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 		return
 	}
 
-	_ = s.sendTradeStatus(tradeStatusTradeComplete, 0, 0, 0, 0, 0)
+	// Reference: TradeHandler.cpp:537-538 — TRADE_COMPLETE goes to the
+	// trader's session first, then to self.
 	_ = partner.sendTradeStatus(tradeStatusTradeComplete, 0, 0, 0, 0, 0)
+	_ = s.sendTradeStatus(tradeStatusTradeComplete, 0, 0, 0, 0, 0)
 
 	_ = s.sendInventoryItems(ctx)
 	_ = partner.sendInventoryItems(ctx)

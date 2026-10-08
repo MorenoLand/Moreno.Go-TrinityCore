@@ -155,10 +155,7 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 		return s.sendChannelNotify(channelNotInLFGNotice, channel.Name, nil) == nil
 	}
 	channel.Members[s] = struct{}{}
-	if s.channels == nil {
-		s.channels = make(map[string]struct{})
-	}
-	s.channels[key] = struct{}{}
+	addChannelKeyLocked(s, key)
 	others := make([]*session, 0, len(channel.Members)-1)
 	for member := range channel.Members {
 		if member != s {
@@ -218,9 +215,7 @@ func (s *session) handleLeaveChannel(payload []byte) bool {
 		return s.sendChannelNotify(channelNotMemberNotice, channel.Name, nil) == nil
 	}
 	delete(channel.Members, s)
-	if s.channels != nil {
-		delete(s.channels, key)
-	}
+	removeChannelKeyLocked(s, key)
 	others := make([]*session, 0, len(channel.Members))
 	for member := range channel.Members {
 		others = append(others, member)
@@ -412,24 +407,54 @@ func (s *Server) resolveChannelNamePart(member *session, namePart string) (strin
 	if part == "" {
 		return "", "", false
 	}
+	// Reference: ChannelMgr::GetChannelForPlayerByNamePart walks the player's
+	// joined-channel list (a std::list in join order) and returns the FIRST
+	// channel whose lowercased name starts with the lowercased prefix.
 	s.channelsMu.RLock()
 	defer s.channelsMu.RUnlock()
-	bestKey, bestName := "", ""
-	for key := range member.channels {
+	order := member.channelOrder
+	if len(order) == 0 {
+		for key := range member.channels {
+			order = append(order, key)
+		}
+	}
+	for _, key := range order {
 		ch := s.channels[key]
 		if ch == nil {
 			continue
 		}
 		if strings.HasPrefix(strings.ToLower(ch.Name), part) {
-			if bestKey == "" || ch.Name < bestName {
-				bestKey, bestName = key, ch.Name
-			}
+			return key, ch.Name, true
 		}
 	}
-	if bestKey == "" {
-		return "", "", false
+	return "", "", false
+}
+
+// addChannelKeyLocked records a channel join in the session's channel list in
+// join order (Player::GetJoinedChannels is join-ordered in the reference).
+func addChannelKeyLocked(member *session, key string) {
+	if member.channels == nil {
+		member.channels = make(map[string]struct{})
 	}
-	return bestKey, bestName, true
+	if _, ok := member.channels[key]; ok {
+		return
+	}
+	member.channels[key] = struct{}{}
+	member.channelOrder = append(member.channelOrder, key)
+}
+
+// removeChannelKeyLocked drops a channel from the session's channel list,
+// keeping the join-order slice in sync.
+func removeChannelKeyLocked(member *session, key string) {
+	if member.channels != nil {
+		delete(member.channels, key)
+	}
+	for i, k := range member.channelOrder {
+		if k == key {
+			member.channelOrder = append(member.channelOrder[:i], member.channelOrder[i+1:]...)
+			break
+		}
+	}
 }
 
 // channelTakeOwnershipLocked hands a custom channel to its next member when the
@@ -508,6 +533,7 @@ func (s *Server) removeSessionChannels(member *session) {
 	if s.channels == nil {
 		s.channelsMu.Unlock()
 		member.channels = nil
+		member.channelOrder = nil
 		return
 	}
 	for key, channel := range s.channels {
@@ -534,6 +560,7 @@ func (s *Server) removeSessionChannels(member *session) {
 	}
 	s.channelsMu.Unlock()
 	member.channels = nil
+	member.channelOrder = nil
 	for _, left := range departures {
 		for _, other := range left.members {
 			if left.announce {
@@ -1134,10 +1161,13 @@ func (s *session) channelKickBan(payload []byte, ban bool) bool {
 	}
 	victimGUID := target.playerGUID
 	delete(ch.Members, target)
-	if target.channels != nil {
-		delete(target.channels, target.scopedChannelKey(name))
-	}
+	removeChannelKeyLocked(target, target.scopedChannelKey(name))
+	// Reference: Channel::KickOrBan - the banned broadcast fires only from
+	// the first arm (ban && !IsBanned(victim)); re-banning an already-banned
+	// on-channel member falls through to the kicked broadcast.
+	alreadyBanned := false
 	if ban {
+		_, alreadyBanned = ch.Banned[victimGUID]
 		ch.Banned[victimGUID] = struct{}{}
 	}
 	// Reference: Channel::KickOrBan - when the owner is removed from a custom
@@ -1155,7 +1185,7 @@ func (s *session) channelKickBan(payload []byte, ban bool) bool {
 	channelFlags, channelID := ch.Flags, ch.ID
 	s.server.channelsMu.Unlock()
 	notice := channelPlayerKickedNotice
-	if ban {
+	if ban && !alreadyBanned {
 		notice = channelPlayerBannedNotice
 	}
 	// Reference: Channel::KickOrBan (Channel.cpp) - the kicked/banned
@@ -1186,8 +1216,11 @@ func (s *session) handleChannelBan(ctx context.Context, payload []byte) bool {
 }
 
 // handleChannelUnban processes CMSG_CHANNEL_UNBAN (0x0A6).
-// Reference: Channel::UnBan - moderator guards, target resolved by name even
-// when offline, not-banned guard, then the unbanned broadcast.
+// Reference: Channel::UnBan - the target is resolved by
+// ObjectAccessor::FindConnectedPlayerByName (online players only), and both
+// the not-online and not-banned cases answer CHAT_PLAYER_NOT_FOUND_NOTICE;
+// PlayerNotBannedAppend exists in the reference but is never sent by any
+// Channel code path, so Go must not emit it either.
 func (s *session) handleChannelUnban(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) == 0 {
 		return true
@@ -1213,9 +1246,14 @@ func (s *session) handleChannelUnban(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	var targetGUID uint64
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ? COLLATE NOCASE", targetName).Scan(&targetGUID)
+	s.server.sessionsMu.RLock()
+	for sess := range s.server.sessions {
+		if sess.player != nil && strings.EqualFold(sess.player.Name, targetName) {
+			targetGUID = sess.playerGUID
+			break
+		}
 	}
+	s.server.sessionsMu.RUnlock()
 	if targetGUID == 0 {
 		s.server.channelsMu.Unlock()
 		_ = s.sendChannelNotify(channelPlayerNotFoundNotice, name, &channelNotifyName{Name: targetName})
@@ -1223,7 +1261,7 @@ func (s *session) handleChannelUnban(ctx context.Context, payload []byte) bool {
 	}
 	if _, banned := ch.Banned[targetGUID]; !banned {
 		s.server.channelsMu.Unlock()
-		_ = s.sendChannelNotify(channelPlayerNotBannedNotice, name, &channelNotifyName{Name: targetName})
+		_ = s.sendChannelNotify(channelPlayerNotFoundNotice, name, &channelNotifyName{Name: targetName})
 		return true
 	}
 	delete(ch.Banned, targetGUID)

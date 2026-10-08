@@ -496,7 +496,7 @@ func (s *session) handleAddIgnore(ctx context.Context, payload []byte) bool {
 	ignoreName = normalizePlayerName(ignoreName)
 
 	if toLower(ignoreName) == toLower(s.player.Name) {
-		_ = s.sendFriendStatus(friendsResultIgnoreSelf, 0, "")
+		_ = s.sendFriendStatus(friendsResultIgnoreSelf, s.playerGUID, "")
 		return true
 	}
 
@@ -515,7 +515,7 @@ func (s *session) handleAddIgnore(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	if ignoreGUID == s.playerGUID {
-		_ = s.sendFriendStatus(friendsResultIgnoreSelf, 0, "")
+		_ = s.sendFriendStatus(friendsResultIgnoreSelf, s.playerGUID, "")
 		return true
 	}
 

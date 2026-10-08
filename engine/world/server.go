@@ -380,6 +380,7 @@ type session struct {
 	gossip                    *gossipMenuState
 	gossipClosed              bool
 	channels                  map[string]struct{}
+	channelOrder              []string // join order of channels: reference Player::GetJoinedChannels is a join-ordered std::list, and GetChannelForPlayerByNamePart returns the first joined prefix match
 	tutorials                 [8]uint32
 	tutorialsInDB             bool
 	unreadMails               uint32
@@ -1558,8 +1559,16 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleUnacceptTrade(ctx) {
 				return
 			}
-		case uint32(protocol.OpcodeCMSG_CANCEL_TRADE), uint32(protocol.OpcodeCMSG_IGNORE_TRADE), uint32(protocol.OpcodeCMSG_BUSY_TRADE):
+		case uint32(protocol.OpcodeCMSG_CANCEL_TRADE):
 			if !state.authed || !state.handleCancelTrade(ctx) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_IGNORE_TRADE), uint32(protocol.OpcodeCMSG_BUSY_TRADE):
+			// Reference: HandleIgnoreTradeOpcode/HandleBusyTradeOpcode
+			// (TradeHandler.cpp:63-73) are debug-log no-ops — routing them
+			// through handleCancelTrade would nuke an in-progress trade
+			// whenever the client auto-responds busy/ignore.
+			if !state.authed {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_GUILD_QUERY):
