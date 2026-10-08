@@ -100,7 +100,7 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 			COALESCE(ts.ReqAbility1, 0), COALESCE(ts.ReqAbility2, 0), COALESCE(ts.ReqAbility3, 0)
 			FROM trainer_spell AS ts
 			WHERE ts.TrainerId = ?
-			ORDER BY ts.ReqLevel, ts.SpellId LIMIT 512`, trainerID)
+			LIMIT 512`, trainerID)
 		if qErr == nil {
 			for rows.Next() {
 				var spellID, moneyCost, reqSkill, reqSkillValue, reqLevel, reqAb1, reqAb2, reqAb3 int64
@@ -122,6 +122,11 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 
 		for _, raw := range rawList {
 			if !s.isSpellFitByClassAndRace(raw.spellID) {
+				continue
+			}
+			// Reference: ObjectMgr::LoadTrainers drops dangling rows at
+			// load (Globals/ObjectMgr.cpp:9211-9243).
+			if !s.trainerSpellRowValid(raw.spellID, raw.reqSkill, []uint32{raw.reqAb1, raw.reqAb2, raw.reqAb3}) {
 				continue
 			}
 			reqAbs := []uint32{raw.reqAb1, raw.reqAb2, raw.reqAb3}
@@ -220,7 +225,7 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 			FROM trainer_spell AS ts
 			JOIN trainer AS t ON t.Id = ts.TrainerId
 			WHERE t.Type = 0 AND t.Requirement = ?
-			ORDER BY ts.ReqLevel, ts.SpellId LIMIT 128`, s.player.Class)
+			LIMIT 128`, s.player.Class)
 		if ctErr == nil {
 			for ctRows.Next() {
 				var spellID, moneyCost, reqSkill, reqSkillValue, reqLevel, reqAb1, reqAb2, reqAb3, tType int64
@@ -249,6 +254,11 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 
 		for _, raw := range rawCtList {
 			if !s.isSpellFitByClassAndRace(raw.spellID) {
+				continue
+			}
+			// Reference: ObjectMgr::LoadTrainers drops dangling rows at
+			// load (Globals/ObjectMgr.cpp:9211-9243).
+			if !s.trainerSpellRowValid(raw.spellID, raw.reqSkill, []uint32{raw.reqAb1, raw.reqAb2, raw.reqAb3}) {
 				continue
 			}
 			if raw.greet != "" {
@@ -357,7 +367,7 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 
 	// 2. Fetch spell requirements on this trainer
 	var moneyCost, reqLevel, reqSkill, reqSkillValue, reqAb1, reqAb2, reqAb3 int64
-	var foundSpell bool
+	var foundSpell, spellFromTrainerSpell bool
 	if foundTrainer {
 		err = wdb.QueryRowContext(ctx, `SELECT COALESCE(MoneyCost, 0), COALESCE(ReqLevel, 0),
 			COALESCE(ReqSkillLine, 0), COALESCE(ReqSkillRank, 0),
@@ -366,6 +376,7 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 			trainerID, spellID).Scan(&moneyCost, &reqLevel, &reqSkill, &reqSkillValue, &reqAb1, &reqAb2, &reqAb3)
 		if err == nil {
 			foundSpell = true
+			spellFromTrainerSpell = true
 		}
 	}
 
@@ -391,7 +402,19 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 			s.player.Class, spellID).Scan(&moneyCost, &reqLevel, &reqSkill, &reqSkillValue, &reqAb1, &reqAb2, &reqAb3)
 		if err == nil {
 			foundSpell = true
+			spellFromTrainerSpell = true
 		}
+	}
+
+	// Reference: ObjectMgr::LoadTrainers drops dangling trainer_spell rows at
+	// load (Globals/ObjectMgr.cpp:9211-9243), so TeachSpell's GetSpell null
+	// arm fails them as Unavailable. The Go tree loads rows per request, so
+	// the validation runs here instead; the npc_trainer legacy fallback has
+	// no C++ owner and is left unvalidated.
+	if foundSpell && spellFromTrainerSpell &&
+		!s.trainerSpellRowValid(spellID, uint32(reqSkill), []uint32{uint32(reqAb1), uint32(reqAb2), uint32(reqAb3)}) {
+		foundSpell = false
+		s.debug("trainer spell row failed validation", "account", s.accountName, "trainer", trainerGUID, "spell", spellID)
 	}
 
 	if !foundSpell {
@@ -959,6 +982,40 @@ func (s *session) learnedPrimaryProfessionCount() int {
 		}
 	}
 	return count
+}
+
+// trainerSpellRowValid mirrors the ObjectMgr::LoadTrainers row validation
+// (Globals/ObjectMgr.cpp:9211-9243): a trainer_spell row is dropped when its
+// SpellId has no SpellInfo, when the spell is a talent (GetTalentSpellCost),
+// when ReqSkillLine names a missing SkillLine.dbc entry, or when any
+// ReqAbility names a missing spell. Dropped rows never reach the list and
+// TeachSpell's GetSpell(spellId) null arm fails them as Unavailable. A DBC
+// that cannot be read at all fails the validation open — C++ always has its
+// DBCs, so on a healthy server the behavior is identical.
+func (s *session) trainerSpellRowValid(spellID, reqSkillLine uint32, reqAbilities []uint32) bool {
+	if s.server == nil || s.server.Data == nil {
+		return true
+	}
+	if _, ok, err := s.server.Data.Spell(spellID); err == nil && !ok {
+		return false
+	}
+	if _, _, found := s.server.Data.TalentBySpell(spellID); found {
+		return false
+	}
+	if reqSkillLine != 0 {
+		if _, found, err := s.server.Data.SkillLineCategory(reqSkillLine); err == nil && !found {
+			return false
+		}
+	}
+	for _, reqAb := range reqAbilities {
+		if reqAb == 0 {
+			continue
+		}
+		if _, ok, err := s.server.Data.Spell(reqAb); err == nil && !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *session) getTrainerSpellState(ctx context.Context, spellID uint32, reqLevel uint8, reqSkill, reqSkillValue uint32, reqAbilities []uint32) uint8 {

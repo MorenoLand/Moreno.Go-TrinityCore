@@ -340,6 +340,7 @@ func (m MapEntry) IsBattleArena() bool {
 const (
 	AreaFlagSlaveCapital     uint32 = 0x00000008 // AREA_FLAG_SLAVE_CAPITAL (DBCEnums.h:250)
 	AreaFlagArena            uint32 = 0x00000080
+	AreaFlagArenaInstance    uint32 = 0x00010000 // AREA_FLAG_ARENA_INSTANCE (DBCEnums.h:263)
 	AreaFlagCapital          uint32 = 0x00000100
 	AreaFlagSanctuary        uint32 = 0x00000800
 	AreaFlagRestZoneHorde    uint32 = 0x00400000
@@ -1621,6 +1622,63 @@ func (s *Store) Area(id uint32) (AreaTableEntry, bool, error) {
 		FactionGroupMask: factionGroupMask,
 		Name:             name,
 	}, true, nil
+}
+
+// ChatChannelEntry mirrors ChatChannelsEntry
+// (shared/DataStores/DBCStructure.h:371): one ChatChannels.dbc row — the DBC
+// id, the CHANNEL_DBC_FLAG_* flags (Channel.h:93-102) and the enUS name
+// template. Channel::GetChannelName (Channel.cpp:88-103) formats the "%s" in
+// the template with the zone's area name, or with LANG_CHANNEL_CITY for
+// CITY_ONLY channels.
+type ChatChannelEntry struct {
+	ID    uint32
+	Flags uint32
+	Name  string
+}
+
+// stockChatChannels is the canonical ChatChannels.dbc content, used when no
+// ChatChannels.dbc ships with the data dir. Flags follow Channel.h: INITIAL
+// (General, Trade, LocalDefense, LFG), ZONE_DEP (General, Trade,
+// LocalDefense, GuildRecruitment), GLOBAL (WorldDefense), TRADE (Trade, LFG),
+// CITY_ONLY/CITY_ONLY2 (Trade, GuildRecruitment, LFG), DEFENSE (LocalDefense,
+// WorldDefense), GUILD_REQ (GuildRecruitment), LFG (LookingForGroup), UNK1
+// (General).
+func stockChatChannels() []ChatChannelEntry {
+	return []ChatChannelEntry{
+		{ID: 1, Flags: 0x80003, Name: "General - %s"},
+		{ID: 2, Flags: 0x0003B, Name: "Trade - %s"},
+		{ID: 3, Flags: 0x10003, Name: "LocalDefense - %s"},
+		{ID: 22, Flags: 0x10004, Name: "WorldDefense"},
+		{ID: 23, Flags: 0x20032, Name: "GuildRecruitment - %s"},
+		{ID: 24, Flags: 0x40039, Name: "LookingForGroup - %s"},
+	}
+}
+
+// ChatChannels loads the ChatChannels.dbc rows in id order, falling back to
+// the stock table when the DBC file is absent from the data dir.
+func (s *Store) ChatChannels() ([]ChatChannelEntry, error) {
+	file, err := s.File("ChatChannels")
+	if err != nil {
+		return stockChatChannels(), nil
+	}
+	entries := make([]ChatChannelEntry, 0, file.Records())
+	seen := make(map[uint32]struct{}, file.Records())
+	for i := 0; i < file.Records(); i++ {
+		rec, rerr := file.Record(i)
+		if rerr != nil {
+			continue
+		}
+		id, _ := rec.Uint32(0)
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		flags, _ := rec.Uint32(1)
+		name, _ := rec.String(3)
+		entries = append(entries, ChatChannelEntry{ID: id, Flags: flags, Name: name})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
+	return entries, nil
 }
 
 func (s *Store) AreaGroupAllows(id, zoneID, areaID uint32) (bool, bool, error) {

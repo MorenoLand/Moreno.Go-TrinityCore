@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,6 +29,43 @@ const (
 	channelFlagCity            uint8 = 0x20
 	channelFlagLFG             uint8 = 0x40
 )
+
+// CHANNEL_DBC_FLAG_* from Channel.h:93-102 — the ChatChannels.dbc flag bits
+// driving Player::UpdateLocalChannels and
+// Player::CanJoinConstantChannelInZone.
+const (
+	channelDBCFlagInitial   uint32 = 0x00001
+	channelDBCFlagZoneDep   uint32 = 0x00002
+	channelDBCFlagGlobal    uint32 = 0x00004
+	channelDBCFlagTrade     uint32 = 0x00008
+	channelDBCFlagCityOnly  uint32 = 0x00010
+	channelDBCFlagCityOnly2 uint32 = 0x00020
+	channelDBCFlagDefense   uint32 = 0x10000
+	channelDBCFlagGuildReq  uint32 = 0x20000
+	channelDBCFlagLFG       uint32 = 0x40000
+)
+
+// channelCityName is the LANG_CHANNEL_CITY trinity_string (819) that
+// Channel::GetChannelName (Channel.cpp:96) formats into CITY_ONLY channel
+// names: "Trade - City", "GuildRecruitment - City", "LookingForGroup - City".
+const channelCityName = "City"
+
+// chatChannelZoneAllowed mirrors Player::CanJoinConstantChannelInZone
+// (Player.cpp:5159-5171) driven by the DBC row flags: zone-dependent rows
+// are refused inside arena instances, CITY_ONLY rows outside cities, and
+// GUILD_REQ rows for players already in a guild.
+func chatChannelZoneAllowed(dbcFlags, areaFlags uint32, inGuild bool) bool {
+	if dbcFlags&channelDBCFlagZoneDep != 0 && areaFlags&wotlk.AreaFlagArenaInstance != 0 {
+		return false
+	}
+	if dbcFlags&channelDBCFlagCityOnly != 0 && areaFlags&wotlk.AreaFlagSlaveCapital == 0 {
+		return false
+	}
+	if dbcFlags&channelDBCFlagGuildReq != 0 && inGuild {
+		return false
+	}
+	return true
+}
 
 type worldChannel struct {
 	ID         uint32
@@ -668,57 +706,230 @@ func (s *session) updateLocalChannels(newZone uint32) {
 		return
 	}
 	s.player.Zone = newZone
-	if !s.isCityZone(newZone) {
-		// Player left city: remove from all city-only channels (Trade,
-		// GuildRecruitment, LFG — CHANNEL_DBC_FLAG_CITY_ONLY, Channel.h).
-		type departure struct {
-			name     string
-			flags    uint8
-			id       uint32
-			members  []*session
-			newOwner *session
-			oldFlags uint8
-			newFlags uint8
-		}
-		departures := make([]departure, 0)
-		s.server.channelsMu.Lock()
-		if s.channels == nil || s.server.channels == nil {
-			s.server.channelsMu.Unlock()
-			return
-		}
-		for key := range s.channels {
-			// City-only channels carry the City runtime flag (Trade,
-			// GuildRecruitment); LFG is city-only per CHANNEL_DBC_FLAG_CITY_ONLY
-			// but its runtime flags byte is 0x50 (Channel.h), so it is matched
-			// on its LFG bit.
-			if ch := s.server.channels[key]; ch != nil && ch.Flags&(channelFlagCity|channelFlagLFG) != 0 {
-				delete(ch.Members, s)
-				delete(s.channels, key)
-				var newOwner *session
-				var oldFlags, newFlags uint8
-				if ch.Owner == s.playerGUID {
-					newOwner, oldFlags, newFlags = channelTakeOwnershipLocked(ch)
-				}
-				members := make([]*session, 0, len(ch.Members))
-				for other := range ch.Members {
-					members = append(members, other)
-				}
-				departures = append(departures, departure{name: ch.Name, flags: ch.Flags, id: ch.ID, members: members, newOwner: newOwner, oldFlags: oldFlags, newFlags: newFlags})
-				if len(ch.Members) == 0 {
-					delete(s.server.channels, key)
-				}
-			}
-		}
+	// Reference: Player::UpdateLocalChannels (Player.cpp:5199-5202) — during
+	// initial login the client drives the built-in channel joins itself, so
+	// the server skips the whole walk; it runs on every later zone change
+	// (Player::UpdateZone, Player.cpp:7272: "recent client version not send
+	// leave/join channel packets for built-in local channels"). The Go login
+	// flow has no teleported-far window (no IsBeingTeleportedFar analog), so
+	// playerLoading alone gates it.
+	if s.playerLoading {
+		return
+	}
+	s.syncLocalChannels(newZone)
+}
+
+// channelZoneEvent is one membership change produced by the zone-change walk;
+// notices go out after the channel lock is released.
+type channelZoneEvent struct {
+	join      bool
+	channel   *worldChannel
+	key       string
+	notice    uint8 // banned / not-in-LFG denial notice for failed joins
+	announce  bool
+	sendLeave bool // C++ LeaveChannel(this, send): false skips the YouLeft notice
+	members   []*session
+	newOwner  *session
+	oldFlags  uint8
+	newFlags  uint8
+}
+
+// syncLocalChannels ports Player::UpdateLocalChannels (Player.cpp:5210-5269):
+// one walk over the ChatChannels.dbc rows. For each row it locates the
+// player's joined channel with that DBC id (usedChannel), then either joins
+// the zone's system channel — replacing the old zone's channel without a
+// leave notice when the name changed (General/LocalDefense:
+// sendRemove=false, the client already replaced it), skipping when already
+// on it (city channels keep their names; the WorldDefense re-join is a
+// silent no-op) — or removes the player from the channel when the zone no
+// longer allows it (leaving a city, entering an arena instance, joining a
+// guild). The old city-exit-only removal is subsumed by the walk's
+// !CanJoin arm, which additionally covers arena and guild gates.
+func (s *session) syncLocalChannels(newZone uint32) {
+	if s.server.Data == nil {
+		return
+	}
+	entries, err := s.server.Data.ChatChannels()
+	if err != nil || len(entries) == 0 {
+		return
+	}
+	// Reference: sAreaTableStore.LookupEntry(newZone) null arm — without a
+	// zone entry there is nothing to key the zone channels by.
+	area, found, aerr := s.server.Data.Area(newZone)
+	if aerr != nil || !found {
+		return
+	}
+	inGuild := s.player.GuildID != 0
+
+	var events []channelZoneEvent
+
+	s.server.channelsMu.Lock()
+	if s.channels == nil || s.server.channels == nil {
 		s.server.channelsMu.Unlock()
-		for _, left := range departures {
-			_ = s.sendChannelNotify(channelYouLeftNotice, left.name, &channelNotifyChannel{Flags: left.flags, ID: left.id})
-			for _, other := range left.members {
-				if left.newOwner != nil {
-					_ = other.sendChannelNotify(channelModeChangeNotice, left.name, &channelNotifyModeChange{GUID: left.newOwner.playerGUID, OldFlags: left.oldFlags, NewFlags: left.newFlags})
-					_ = other.sendChannelNotify(channelOwnerChangedNotice, left.name, &channelNotifyGUID{GUID: left.newOwner.playerGUID})
-				}
+		return
+	}
+	for _, entry := range entries {
+		// Reference: the usedChannel scan — the player's joined channel
+		// whose DBC id matches this row.
+		var usedKey string
+		var used *worldChannel
+		for _, key := range s.channelOrder {
+			if ch := s.server.channels[key]; ch != nil && ch.ID == entry.ID {
+				usedKey, used = key, ch
+				break
 			}
 		}
+		if !chatChannelZoneAllowed(entry.Flags, area.Flags, inGuild) {
+			// Reference: removeChannel = usedChannel (sendRemove=true).
+			if used != nil {
+				events = append(events, s.removeZoneChannelLocked(usedKey, used, true))
+			}
+			continue
+		}
+		var joinName string
+		switch {
+		case entry.Flags&channelDBCFlagGlobal != 0:
+			// WorldDefense: single channel, no zone in the name; the
+			// re-join of a member is a silent no-op (Channel::JoinChannel
+			// IsOn arm).
+			if used != nil {
+				continue
+			}
+			joinName = entry.Name
+		case entry.Flags&channelDBCFlagCityOnly != 0:
+			// Already on the channel, as city channel names are not changing.
+			if used != nil {
+				continue
+			}
+			joinName = fmt.Sprintf(entry.Name, channelCityName)
+		default:
+			joinName = fmt.Sprintf(entry.Name, area.Name)
+			if used != nil && used.Name == joinName {
+				continue // joinChannel == usedChannel
+			}
+		}
+		key := s.scopedChannelKey(joinName)
+		channel := s.server.channels[key]
+		if channel == nil {
+			channel = &worldChannel{
+				ID:    entry.ID,
+				Name:  joinName,
+				Flags: channelFlags(entry.ID, joinName),
+				// Built-in channels have no ownership model in C++
+				// (_ownershipEnabled=false); the Go tree tracks the first
+				// joiner as owner like the client-driven join path does.
+				Owner:      s.playerGUID,
+				Announce:   false,
+				Members:    make(map[*session]struct{}),
+				Moderators: make(map[uint64]struct{}),
+				Muted:      make(map[uint64]struct{}),
+				Banned:     make(map[uint64]struct{}),
+			}
+			s.server.channels[key] = channel
+		}
+		// Reference: Channel::JoinChannel (Channel.cpp) gate order —
+		// already-member is silent for constant channels, then banned, then
+		// the LFG restriction (constant channels carry no password).
+		if _, ok := channel.Members[s]; ok {
+			continue
+		}
+		if _, banned := channel.Banned[s.playerGUID]; banned {
+			events = append(events, channelZoneEvent{channel: channel, notice: channelBannedNotice})
+			continue
+		}
+		if channel.Flags&channelFlagLFG != 0 && s.server.Config.ChannelRestrictedLFG &&
+			s.security == 0 && s.groupID != 0 {
+			events = append(events, channelZoneEvent{channel: channel, notice: channelNotInLFGNotice})
+			continue
+		}
+		channel.Members[s] = struct{}{}
+		addChannelKeyLocked(s, key)
+		members := make([]*session, 0, len(channel.Members)-1)
+		for other := range channel.Members {
+			if other != s {
+				members = append(members, other)
+			}
+		}
+		events = append(events, channelZoneEvent{join: true, channel: channel, key: key, members: members})
+		if used != nil && used != channel {
+			// Reference: removeChannel = usedChannel, sendRemove=false —
+			// the client already replaced the channel, so no leave notice.
+			events = append(events, s.removeZoneChannelLocked(usedKey, used, false))
+		}
+	}
+	s.server.channelsMu.Unlock()
+
+	for _, ev := range events {
+		switch {
+		case ev.notice != 0:
+			_ = s.sendChannelNotify(ev.notice, ev.channel.Name, nil)
+		case ev.join:
+			channel := ev.channel
+			if err := s.sendChannelNotify(channelYouJoinedNotice, channel.Name, &channelNotifyChannel{Flags: channel.Flags, ID: channel.ID}); err != nil {
+				continue
+			}
+			// Reference: Channel::JoinNotify (Channel.cpp:822-840) —
+			// constant channels broadcast SMSG_USERLIST_ADD to all-but-one.
+			s.broadcastUserlist(true, s.playerGUID, channel.memberFlags(s.playerGUID), channel.Flags, uint32(len(channel.Members)), channel.Name, ev.members)
+		default:
+			channel := ev.channel
+			if ev.announce && !s.silentlyJoinChannel() {
+				for _, other := range ev.members {
+					_ = other.sendChannelNotify(channelLeftNotice, channel.Name, &channelNotifyGUID{GUID: s.playerGUID})
+				}
+			}
+			if ev.newOwner != nil {
+				for _, other := range ev.members {
+					_ = other.sendChannelNotify(channelModeChangeNotice, channel.Name, &channelNotifyModeChange{GUID: ev.newOwner.playerGUID, OldFlags: ev.oldFlags, NewFlags: ev.newFlags})
+					_ = other.sendChannelNotify(channelOwnerChangedNotice, channel.Name, &channelNotifyGUID{GUID: ev.newOwner.playerGUID})
+				}
+			}
+			if ev.sendLeave {
+				_ = s.sendChannelNotify(channelYouLeftNotice, channel.Name, &channelNotifyChannel{Flags: channel.Flags, ID: channel.ID})
+			}
+			// Reference: Channel::LeaveNotify (Channel.cpp:842-860) —
+			// SMSG_USERLIST_REMOVE to the remaining members.
+			removePkt := protocol.NewBuffer(8 + 1 + 4 + len(channel.Name) + 1)
+			removePkt.WriteU64(s.playerGUID)
+			removePkt.WriteU8(channel.Flags)
+			removePkt.WriteU32(uint32(len(channel.Members)))
+			removePkt.WriteCString(channel.Name)
+			for _, other := range ev.members {
+				_ = other.write(uint16(protocol.OpcodeSMSG_USERLIST_REMOVE), removePkt.Bytes(), true)
+			}
+		}
+	}
+}
+
+// removeZoneChannelLocked erases the session from a zone-change walk channel:
+// member removal, join-order list cleanup, ownership hand-off when the owner
+// leaves, and channel deletion when empty — the shared tail of
+// Channel::LeaveChannel for the walk. The caller emits the notices after
+// unlocking. sendLeave selects the C++ LeaveChannel(this, send) notice arm.
+func (s *session) removeZoneChannelLocked(key string, channel *worldChannel, sendLeave bool) channelZoneEvent {
+	delete(channel.Members, s)
+	removeChannelKeyLocked(s, key)
+	var newOwner *session
+	var oldFlags, newFlags uint8
+	if channel.Owner == s.playerGUID {
+		newOwner, oldFlags, newFlags = channelTakeOwnershipLocked(channel)
+	}
+	members := make([]*session, 0, len(channel.Members))
+	for other := range channel.Members {
+		members = append(members, other)
+	}
+	if len(channel.Members) == 0 {
+		delete(s.server.channels, key)
+	}
+	return channelZoneEvent{
+		channel:   channel,
+		key:       key,
+		announce:  channel.Announce,
+		sendLeave: sendLeave,
+		members:   members,
+		newOwner:  newOwner,
+		oldFlags:  oldFlags,
+		newFlags:  newFlags,
 	}
 }
 
