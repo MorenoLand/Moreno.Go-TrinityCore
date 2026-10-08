@@ -2850,6 +2850,76 @@ func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.Spel
 	s.openGameObjectLoot(ctx, goGUID, lootTypeSkinning, 20.0)
 }
 
+// handleEffectDisenchant mirrors Spell::EffectDisEnchant
+// (SpellEffects.cpp:4127-4140): the HIT_TARGET handle-mode gate is
+// structural — this dispatch is the HIT_TARGET phase — and a missing item
+// target or an item with no DisenchantID silently returns (the cast gates
+// already enforced all of this). The crafting-skill gain
+// (Player::UpdateCraftSkill, Player.cpp:5789) has no Go model (documented
+// no-bridge, same as the UpdateGatherSkill gap at 2740); the rest is
+// Player::SendLoot with LOOT_DISENCHANTING (Player.cpp:8675-8710): the
+// disenchant_loot_template fill keyed by the template's DisenchantID, no
+// money roll on this arm.
+func (s *session) handleEffectDisenchant(ctx context.Context, target protocol.SpellTargetData, spell wotlk.Spell) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	t, ok := s.resolveEnchantItemTarget(ctx, target)
+	if !ok {
+		return
+	}
+	var disenchantID uint32
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(DisenchantID, 0) FROM item_template WHERE entry = ? LIMIT 1", t.entry).Scan(&disenchantID); err != nil || disenchantID == 0 {
+		return
+	}
+	s.openTradeSkillItemLoot(ctx, t.instanceGUID, lootTypeDisenchanting, "disenchant_loot_template", disenchantID)
+}
+
+// handleEffectProspectMilling mirrors Spell::EffectProspecting and
+// Spell::EffectMilling (SpellEffects.cpp:5043-5095): the HIT_TARGET gate is
+// structural and a non-player caster is impossible on a player session; a
+// missing item target, a missing IS_PROSPECTABLE / IS_MILLABLE flag, or a
+// stack under 5 silently returns — the cast gates already enforced all of
+// these (checkSpellProspectMillingCast). The gather-skill gains
+// (CONFIG_SKILL_PROSPECTING / CONFIG_SKILL_MILLING, Player::UpdateGatherSkill)
+// have no Go model (documented no-bridge, same as the skinning
+// UpdateGatherSkill at 2740); the rest is Player::SendLoot with
+// LOOT_PROSPECTING / LOOT_MILLING (Player.cpp:8675-8710): the
+// prospecting_loot_template / milling_loot_template fill keyed by the item
+// entry, personal=true, no money roll. The 5 consumed from the stack are
+// destroyed at loot release (LootHandler.cpp:328-339), not here.
+func (s *session) handleEffectProspectMilling(ctx context.Context, target protocol.SpellTargetData, spell wotlk.Spell, effect uint32) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	itemFlag := itemFlagIsProspectable
+	lootType := lootTypeProspecting
+	table := "prospecting_loot_template"
+	if effect == spellEffectMilling {
+		itemFlag = itemFlagIsMillable
+		lootType = lootTypeMilling
+		table = "milling_loot_template"
+	}
+	t, ok := s.resolveEnchantItemTarget(ctx, target)
+	if !ok {
+		return
+	}
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	var tplFlags uint32
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(Flags, 0) FROM item_template WHERE entry = ? LIMIT 1", t.entry).Scan(&tplFlags); err != nil || tplFlags&itemFlag == 0 {
+		return
+	}
+	if s.itemInstanceCount(ctx, t.instanceGUID) < 5 {
+		return
+	}
+	s.openTradeSkillItemLoot(ctx, t.instanceGUID, lootType, table, t.entry)
+}
+
 // skillByLockType mirrors SkillByLockType (SharedDefines.h:3044): lock types
 // without a gathering skill (disarm trap, open, treasure, slow open, ...)
 // map to SKILL_NONE.
@@ -6694,6 +6764,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleEffectSkinning(effCtx, targetGUID, spell, eff)
 			case spellEffectPickpocket: // 71: SPELL_EFFECT_PICKPOCKET
 				s.handleEffectPickpocket(effCtx, targetGUID, spell, eff)
+			case spellEffectDisenchant: // 99: SPELL_EFFECT_DISENCHANT
+				s.handleEffectDisenchant(effCtx, target, spell)
+			case spellEffectProspecting: // 127: SPELL_EFFECT_PROSPECTING
+				s.handleEffectProspectMilling(effCtx, target, spell, spellEffectProspecting)
+			case spellEffectMilling: // 158: SPELL_EFFECT_MILLING
+				s.handleEffectProspectMilling(effCtx, target, spell, spellEffectMilling)
 			case spellEffectOpenLock: // 33: SPELL_EFFECT_OPEN_LOCK
 				s.handleEffectOpenLock(effCtx, target, spell, eff)
 			case spellEffectLearnSpell: // 36: SPELL_EFFECT_LEARN_SPELL

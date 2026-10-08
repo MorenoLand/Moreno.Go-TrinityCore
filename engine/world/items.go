@@ -2524,6 +2524,10 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 				// fill passes personal=true, so quest rows belong to the
 				// opener alone (viewerQuestLootList pins on this).
 				QuestPersonalGUID: s.playerGUID,
+				// The window's target is the opener's own item instance:
+				// takes skip the creature gates and the release runs the
+				// DoLootRelease item arm (LootHandler.cpp:60-66/321-349).
+				LootItemGUID: uint64(itemGUID),
 			}
 			// Player.cpp:8699: generateMoneyLoot(MinMoneyLoot, MaxMoneyLoot)
 			// runs before the template fill; the fill's noEmptyError arm is

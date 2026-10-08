@@ -60,6 +60,18 @@ const lootTypeCorpse uint8 = 1
 // lootTypePickpocketing mirrors LOOT_PICKPOCKETING (Loot.h:83).
 const lootTypePickpocketing uint8 = 2
 
+// lootTypeDisenchanting mirrors LOOT_DISENCHANTING (Loot.h:85): the loot
+// window opened by Spell::EffectDisEnchant (SpellEffects.cpp:4127).
+const lootTypeDisenchanting uint8 = 4
+
+// lootTypeProspecting mirrors LOOT_PROSPECTING (Loot.h:90): the loot window
+// opened by Spell::EffectProspecting (SpellEffects.cpp:5043).
+const lootTypeProspecting uint8 = 7
+
+// lootTypeMilling mirrors LOOT_MILLING (Loot.h:91): the loot window opened
+// by Spell::EffectMilling (SpellEffects.cpp:5075).
+const lootTypeMilling uint8 = 8
+
 // lootErrorAlreadyPickpocketed mirrors LOOT_ERROR_ALREADY_PICKPOCKETED
 // (Loot.h:113): "Your target has already had its pockets picked".
 const lootErrorAlreadyPickpocketed uint8 = 15
@@ -137,6 +149,14 @@ type activeLootState struct {
 	// zero value means the default 1; the group-roll exclusion treats it
 	// that way so only the raid fills need to set it.
 	MaxDuplicates uint8
+	// LootItemGUID marks loot whose target is one of the opener's item
+	// instances (container opens, the disenchant/prospect/mill spell
+	// windows): the raw item_instance guid behind TargetGUID. Zero for
+	// creature/gameobject loot. It drives the WorldSession::DoLootRelease
+	// item arm (LootHandler.cpp:321-349) and the HandleAutostoreLootItem
+	// item leg (LootHandler.cpp:60-66), which skip the creature
+	// alive/distance gates for item targets.
+	LootItemGUID uint64
 }
 
 // storeLootTemplateRow routes one rolled loot-template row into Items or
@@ -237,7 +257,8 @@ func (s *Server) fillLootTemplateDepth(ctx context.Context, wdb *sql.DB, table s
 	switch table {
 	case "creature_loot_template", "gameobject_loot_template", "skinning_loot_template",
 		"pickpocketing_loot_template", "reference_loot_template", "spell_loot_template",
-		"item_loot_template":
+		"item_loot_template", "disenchant_loot_template", "prospecting_loot_template",
+		"milling_loot_template":
 	default:
 		return
 	}
@@ -2310,7 +2331,7 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 		if s.activeLoot.MapID != s.player.Map || s.activeLoot.InstanceID != s.player.InstanceID {
 			return s.sendLootError(s.activeLoot.TargetGUID, 4) == nil
 		}
-	} else {
+	} else if s.activeLoot.LootItemGUID == 0 {
 		target, validTarget := s.getCombatTarget(ctx, s.activeLoot.TargetGUID)
 		// LootHandler.cpp:87-97 (HandleAutostoreLootItem) Unit/Vehicle arm:
 		// the creature must be alive iff the taker is a rogue lifting an
@@ -2338,6 +2359,11 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 			return s.sendLootReleaseResponse(s.activeLoot.TargetGUID) == nil
 		}
 	}
+	// LootHandler.cpp:60-66 (HandleAutostoreLootItem): the IsItem arm
+	// resolves the item and proceeds straight to StoreLootItem — the
+	// alive/distance gates of the Unit/Vehicle arm above don't apply to
+	// item loot (containers, disenchant/prospect/mill windows), which
+	// reaches the take with no target gate.
 
 	// Player::StoreLootItem (Player.cpp:25071-25075): the AllowedForPlayer
 	// gate is re-checked at take time for every item, not just quest
@@ -2503,8 +2529,17 @@ func (s *session) storeTakenLootRow(ctx context.Context, loot *activeLootState, 
 	s.sendPlayerUpdate()
 	// Loot::isLooted (Loot.h:236) via lootFullyLooted: a multi-drop row
 	// keeps the loot open until every current viewer takes their copy.
+	// LootHandler.cpp:99-100 (HandleAutostoreLootItem): when the last row
+	// leaves an ITEM loot, C++ runs DoLootRelease on it — the release's
+	// item arm destroys the emptied container / disenchanted item or the
+	// 5 consumed prospect/mill stack — so item loot routes through
+	// doLootRelease instead of just clearing the state.
 	if lootFullyLooted(loot) {
-		s.clearCreatureLoot(loot)
+		if loot.LootItemGUID != 0 {
+			s.doLootRelease(loot)
+		} else {
+			s.clearCreatureLoot(loot)
+		}
 	}
 	s.debug("loot item stored", "account", s.accountName, "item", it.ItemEntry, "slot", res.Slot, "bag", res.ClientBag, "stacked", res.IsStack)
 	return true
@@ -2636,6 +2671,130 @@ func (s *session) handleLootRelease(payload []byte) bool {
 	return true
 }
 
+// openTradeSkillItemLoot mirrors the Player::SendLoot item arms reached from
+// the trade-skill spell effects (Spell::EffectDisEnchant,
+// Spell::EffectProspecting, Spell::EffectMilling — SpellEffects.cpp:4127,
+// 5043, 5075 — via Player.cpp:8675-8710): like the container arm it opens
+// with OWNER_PERMISSION and a personal fill, but it rolls no money and
+// fills the effect's own template table (LootTemplates_Disenchant keyed by
+// the template's DisenchantID; LootTemplates_Prospecting /
+// LootTemplates_Milling keyed by the item entry). The C++ SendLoot item arm
+// has no empty-fill bail, so the window renders even when the fill rolls
+// nothing. The previously open loot is released first
+// (Player.cpp:8526-8527), skipped for a same-target re-open.
+func (s *session) openTradeSkillItemLoot(ctx context.Context, itemGUID uint64, lootType uint8, table string, lootID uint32) {
+	if s == nil || s.player == nil || s.server == nil || itemGUID == 0 {
+		return
+	}
+	if prev := s.activeLoot; prev != nil && prev.TargetGUID != itemGUID {
+		s.doLootRelease(prev)
+	}
+	var lootSource *sql.DB
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		lootSource = s.server.WorldStore.DB
+	} else if s.server.CharactersStore != nil {
+		lootSource = s.server.CharactersStore.DB
+	}
+	if lootSource == nil {
+		return
+	}
+	loot := &activeLootState{
+		TargetGUID: itemGUID,
+		MapID:      s.player.Map,
+		InstanceID: s.player.InstanceID,
+		LootType:   lootType,
+		Items:      make(map[uint8]lootItem),
+		// Loot::FillLoot personal arm (Loot.cpp:214-232): the item fills
+		// pass personal=true, so quest rows belong to the filler alone.
+		QuestPersonalGUID: s.playerGUID,
+		LootItemGUID:      itemGUID,
+	}
+	s.server.fillLootTemplate(ctx, lootSource, table, int64(lootID), lootModeDefault, loot)
+	// FillNotNormalLootFor (Loot.cpp:246-266) auto-stores currency-token
+	// rows straight into the filler's bags.
+	s.server.autoStoreLootCurrencyTokens(ctx, loot, s)
+	s.server.lootMu.Lock()
+	if s.server.creatureLoot == nil {
+		s.server.creatureLoot = make(map[lootObjectKey]*activeLootState)
+	}
+	s.server.creatureLoot[loot.objectKey()] = loot
+	s.server.lootMu.Unlock()
+	s.activeLoot = loot
+	_ = s.sendLootResponse(ctx, loot)
+}
+
+// releaseItemLoot mirrors the item arm of WorldSession::DoLootRelease
+// (LootHandler.cpp:321-349): the target is a player item instance rather
+// than a creature or gameobject, so the distance/alive gates of the other
+// arms don't apply — "item can be looted only single player".
+// Prospecting and milling destroy 5 from the target stack
+// (LootHandler.cpp:328-339: count = min(GetCount(), 5), the >=5 already
+// checked by the spell); every other item — containers and disenchanted
+// gear — is destroyed when its loot is fully taken, or whenever it isn't
+// an openable container (ITEM_FLAG_HAS_LOOT 0x4, ItemTemplate.h:154)
+// (LootHandler.cpp:340-347).
+func (s *session) releaseItemLoot(loot *activeLootState) {
+	ctx := context.Background()
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || loot == nil || loot.LootItemGUID == 0 {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	switch loot.LootType {
+	case lootTypeProspecting, lootTypeMilling:
+		var count uint32
+		if err := cdb.QueryRowContext(ctx, "SELECT `count` FROM item_instance WHERE guid = ?", loot.LootItemGUID).Scan(&count); err != nil {
+			return
+		}
+		if count > 5 {
+			count = 5
+		}
+		s.destroyItemInstanceCount(ctx, loot.LootItemGUID, count)
+	default:
+		var entry uint32
+		if err := cdb.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", loot.LootItemGUID).Scan(&entry); err != nil {
+			return
+		}
+		var flags int64
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(Flags, 0) FROM item_template WHERE entry = ? LIMIT 1", entry).Scan(&flags)
+		}
+		if lootFullyLooted(loot) || flags&0x4 == 0 {
+			s.destroyItemInstance(ctx, loot.LootItemGUID)
+		}
+	}
+}
+
+// destroyItemInstance mirrors Player::DestroyItem (Player.cpp): the whole
+// item instance leaves the player's inventory.
+func (s *session) destroyItemInstance(ctx context.Context, instanceGUID uint64) {
+	s.destroyItemInstanceCount(ctx, instanceGUID, ^uint32(0))
+}
+
+// destroyItemInstanceCount mirrors Player::DestroyItemCount(Item*, ...)
+// starting at the given item: up to count leave that one stack, a short
+// stack is deleted outright and a taller one is decremented. The callers
+// (the DoLootRelease item arm above) never spill to other stacks — the
+// prospecting/milling cast-time >=5 check covers the stack under the
+// window — so unlike destroyPlayerItemCount this stays on one instance.
+func (s *session) destroyItemInstanceCount(ctx context.Context, instanceGUID uint64, count uint32) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || instanceGUID == 0 || count == 0 {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	var cur uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT `count` FROM item_instance WHERE guid = ?", instanceGUID).Scan(&cur); err != nil || cur == 0 {
+		return
+	}
+	if cur <= count {
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", instanceGUID)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ?", instanceGUID)
+	} else {
+		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET `count` = `count` - ? WHERE guid = ?", count, instanceGUID)
+	}
+	_ = s.sendInventoryItems(ctx)
+	s.sendPlayerUpdate()
+}
+
 // doLootRelease runs the WorldSession::DoLootRelease (LootHandler.cpp:258)
 // legs for an already-open loot: the unconditional release (loot-GUID
 // clear, release response, UNIT_FLAG_LOOTING removal), the type-specific
@@ -2701,6 +2860,14 @@ func (s *session) doLootRelease(loot *activeLootState) {
 				s.server.broadcastCreatureValuesUpdateInInstance(loot.MapID, loot.InstanceID, std, map[int]uint32{unitFieldDynamicFlags: flags})
 			}
 		}
+	}
+	// WorldSession::DoLootRelease item arm (LootHandler.cpp:321-349): it runs
+	// instead of the creature/gameobject arms — "item can be looted only
+	// single player". Prospecting/milling destroy 5 from the target stack;
+	// containers and disenchanted gear are destroyed when fully looted (or
+	// whenever they aren't openable).
+	if loot.LootItemGUID != 0 {
+		s.releaseItemLoot(loot)
 	}
 	release := protocol.NewBuffer(9)
 	release.WriteU64(targetGUID)
