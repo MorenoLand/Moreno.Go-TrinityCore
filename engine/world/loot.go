@@ -1289,11 +1289,10 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 	}
 	// LootView quest arm (Loot.cpp:703-745): the viewer's quest items follow
 	// the normal items. follow_loot_rules items take the master/locked arms
-	// under master loot; otherwise they ride the permission default
-	// (ownerSlot, matching the normal-item legs above). Go has no
-	// quest-item block model, so the GROUP/NBG ROLL_ONGOING leg has
-	// no bridge: follow_loot_rules quest items under group/nbg stay directly
-	// lootable (documented delta).
+	// under master loot; under group loot they render ROLL_ONGOING while a
+	// roll blocks them (Loot.cpp:731-735) and ALLOW_LOOT otherwise;
+	// otherwise they ride the permission default (ownerSlot, matching the
+	// normal-item legs above).
 	for pos, qidx := range questList {
 		qit := loot.QuestItems[qidx]
 		// Loot.cpp:709-711: the quest section rides the permission default
@@ -1303,11 +1302,22 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 		// permission arms render ALLOW_LOOT (Loot.cpp:709:
 		// OWNER_PERMISSION ? OWNER : ALLOW_LOOT).
 		var qSlotType uint8 = baseSlot
-		if qit.CustomFlags&itemFlagsCuFollowLootRules != 0 && grp != nil && grp.LootMethod == 2 {
-			if s.playerGUID == grp.MasterLooter {
-				qSlotType = 2 // LOOT_SLOT_TYPE_MASTER
-			} else {
-				qSlotType = 3 // LOOT_SLOT_TYPE_LOCKED
+		if qit.CustomFlags&itemFlagsCuFollowLootRules != 0 && grp != nil {
+			switch grp.LootMethod {
+			case 2: // Master Loot
+				if s.playerGUID == grp.MasterLooter {
+					qSlotType = 2 // LOOT_SLOT_TYPE_MASTER
+				} else {
+					qSlotType = 3 // LOOT_SLOT_TYPE_LOCKED
+				}
+			case 3, 4: // Group Loot / Need Before Greed
+				// Loot.cpp:731-735: follow_loot_rules quest items under
+				// GROUP/ROUND_ROBIN permission render ROLL_ONGOING while
+				// blocked, ALLOW_LOOT once the roll clears.
+				qSlotType = 0 // LOOT_SLOT_TYPE_ALLOW_LOOT
+				if qit.IsBlocked {
+					qSlotType = 1 // LOOT_SLOT_TYPE_ROLL_ONGOING
+				}
 			}
 		}
 		packet.WriteU8(loot.NormalSlotCount + uint8(pos))
@@ -1331,6 +1341,22 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 				if it.Quality >= uint32(grp.LootThreshold) {
 					s.server.startGroupLootRoll(loot.TargetGUID, uint32(it.Slot), it.ItemEntry, it.Count, loot.MapID, loot.InstanceID, s.groupID, s)
 				}
+			}
+			// Group::GroupLoot / NeedBeforeGreed quest-item loops
+			// (Group.cpp:1192-1252/1337-1380): follow_loot_rules quest items
+			// roll under group methods regardless of threshold, in
+			// items.size()+index slot order (NormalSlotCount + qidx).
+			qindices := make([]uint8, 0, len(loot.QuestItems))
+			for qidx := range loot.QuestItems {
+				qindices = append(qindices, qidx)
+			}
+			sort.Slice(qindices, func(i, j int) bool { return qindices[i] < qindices[j] })
+			for _, qidx := range qindices {
+				qit := loot.QuestItems[qidx]
+				if qit.CustomFlags&itemFlagsCuFollowLootRules == 0 {
+					continue
+				}
+				s.server.startGroupQuestLootRoll(loot.TargetGUID, uint32(loot.NormalSlotCount)+uint32(qidx), qidx, qit.ItemEntry, qit.Count, loot.MapID, loot.InstanceID, s.groupID, s)
 			}
 		}
 	}
@@ -2300,6 +2326,145 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 	})
 }
 
+// questRollSlot resolves a roll slot into the quest_items index space:
+// C++ registers quest-item rolls at itemSlot = items.size() + raw index
+// (Group.cpp:1226/1366); Go captures items.size() as NormalSlotCount at
+// fill time, so any roll slot at/above it is a quest slot.
+func questRollSlot(cLoot *activeLootState, slot uint32) (lootItem, uint8, bool) {
+	if cLoot == nil || slot < uint32(cLoot.NormalSlotCount) {
+		return lootItem{}, 0, false
+	}
+	qidx := uint8(slot - uint32(cLoot.NormalSlotCount))
+	qi, ok := cLoot.QuestItems[qidx]
+	return qi, qidx, ok
+}
+
+// startGroupQuestLootRoll mirrors the follow_loot_rules quest-item loops in
+// Group::GroupLoot (Group.cpp:1192-1252) and Group::NeedBeforeGreed
+// (Group.cpp:1337-1380): quest items roll under group methods regardless of
+// threshold, in items.size()+index slot order. Deltas vs startGroupLootRoll:
+// the vote default is plain NOT_EMITED_YET (no PassOnGroupLoot default,
+// Group.cpp:1211/1353), the vote mask is the constructor default
+// ROLL_ALL_TYPE_NO_DISENCHANT (no disenchant arm, no CAN_ONLY_ROLL_GREED
+// clear — the quest loops never touch the mask), and a missing item template
+// skips the roll under GroupLoot (Group.cpp:1196-1203) but not under NBG
+// (no null check in the NBG quest loop).
+func (s *Server) startGroupQuestLootRoll(sourceGUID uint64, qslot uint32, qidx uint8, itemEntry, itemCount, mapID, instanceID uint32, groupID uint64, looter *session) {
+	if groupID == 0 {
+		return
+	}
+	members := s.getGroupSessions(groupID)
+	if len(members) == 0 {
+		return
+	}
+	// Same IsAtGroupRewardDistance proxy as startGroupLootRoll.
+	inDungeon := looter.isDungeonMap(mapID)
+	var eligible []*session
+	for _, m := range members {
+		if m.player == nil || m.player.Map != mapID || m.player.InstanceID != instanceID {
+			continue
+		}
+		if !inDungeon && looter.player != nil && distance3D(m.player.X, m.player.Y, m.player.Z, looter.player.X, looter.player.Y, looter.player.Z) > 100.0 {
+			continue
+		}
+		eligible = append(eligible, m)
+	}
+	if len(eligible) == 0 {
+		return
+	}
+
+	objectKey := lootObjectKey{MapID: mapID, InstanceID: instanceID, GUID: sourceGUID}
+	rollKey := lootRollKey{Object: objectKey, Slot: qslot}
+
+	s.groupsMu.Lock()
+	grp := s.groups[groupID]
+	s.groupsMu.Unlock()
+
+	var allowableClass uint32 = 0xFFFFFFFF
+	var maxCount uint32
+	var templateFound bool
+	if s.WorldStore != nil && s.WorldStore.DB != nil {
+		if err := s.WorldStore.DB.QueryRowContext(context.Background(), "SELECT AllowableClass, MaxCount FROM item_template WHERE entry = ?", itemEntry).Scan(&allowableClass, &maxCount); err == nil {
+			templateFound = true
+		}
+	}
+	// Group::GroupLoot quest loop (Group.cpp:1196-1203): missing item
+	// prototype skips the roll. The NBG quest loop has no such check.
+	if grp != nil && grp.LootMethod == 3 && !templateFound {
+		return
+	}
+
+	// ROLL_ALL_TYPE_NO_DISENCHANT: pass|need|greed. The quest loops never
+	// set the disenchant bit (Roll ctor default, Group.cpp:48) and never
+	// clear need for CAN_ONLY_ROLL_GREED (no arm at 1192-1252/1337-1380).
+	baseMask := rollFlagTypePass | rollFlagTypeNeed | rollFlagTypeGreed
+
+	roll := &activeGroupRoll{
+		SourceGUID:          sourceGUID,
+		Slot:                qslot,
+		ItemEntry:           itemEntry,
+		ItemCount:           itemCount,
+		RollVoteMask:        baseMask,
+		GroupID:             groupID,
+		MapID:               mapID,
+		InstanceID:          instanceID,
+		EligiblePlayers:     make(map[uint64]struct{}, len(eligible)),
+		StartedAt:           time.Now(),
+		Duration:            60 * time.Second,
+		TotalPlayersRolling: len(eligible),
+		Votes:               make(map[uint64]uint8),
+		Rolls:               make(map[uint64]uint8),
+	}
+	for _, m := range eligible {
+		roll.EligiblePlayers[m.playerGUID] = struct{}{}
+	}
+	s.lootMu.Lock()
+	if s.groupRolls == nil {
+		s.groupRolls = make(map[lootRollKey]*activeGroupRoll)
+	}
+	if existing := s.groupRolls[rollKey]; existing != nil {
+		s.lootMu.Unlock()
+		return
+	}
+	// Group.cpp:1226/1366: the quest item is blocked while the roll runs.
+	if cLoot := s.creatureLoot[objectKey]; cLoot != nil {
+		if qi, ok := cLoot.QuestItems[qidx]; ok {
+			qi.IsBlocked = true
+			cLoot.QuestItems[qidx] = qi
+		}
+	}
+	s.groupRolls[rollKey] = roll
+	s.lootMu.Unlock()
+
+	// Personalized SMSG_LOOT_START_ROLL per member; NBG keeps the
+	// CanRollForItemInLFG personalization (Group.cpp:1360).
+	for _, m := range eligible {
+		memberMask := baseMask
+		if grp != nil && grp.LootMethod == 4 { // Need Before Greed
+			if allowableClass > 0 && allowableClass != 0xFFFFFFFF && m.player != nil && m.player.Class > 0 {
+				playerClassMask := uint32(1 << (m.player.Class - 1))
+				if (allowableClass & playerClassMask) == 0 {
+					memberMask &= ^rollFlagTypeNeed // Ineligible to roll Need
+				}
+			}
+		}
+
+		buf := buildLootStartRollPacket(sourceGUID, mapID, qslot, itemEntry, 0, 0, itemCount, 60000, memberMask)
+		_ = m.write(uint16(protocol.OpcodeSMSG_LOOT_START_ROLL), buf, true)
+
+		// Quest loops default to NOT_EMITED_YET (Group.cpp:1211/1353): no
+		// PassOnGroupLoot default — only the CanRollOnItem gate auto-passes.
+		if !canRollOnItem(m, itemEntry, itemCount, maxCount) {
+			m.handleLootRoll(context.Background(), buildLootRollPayload(sourceGUID, qslot, rollPass))
+		}
+	}
+
+	// Arm 60s countdown (same m_groupLootTimer/lootingGroupLowGUID stand-in).
+	roll.Timer = time.AfterFunc(60*time.Second, func() {
+		s.resolveGroupLootRoll(rollKey, true)
+	})
+}
+
 // canRollOnItem mirrors the file-static CanRollOnItem (Group.cpp:1081-1095):
 // players can't roll on a unique item once they already hold the max, and
 // LootItem::AllowedForPlayer applies (Go's template-lookup-failure
@@ -2461,7 +2626,10 @@ func (s *Server) resolveGroupLootRoll(rollKey lootRollKey, enforceMap bool) {
 		// by all players.
 		s.lootMu.Lock()
 		if cLoot := s.creatureLoot[rollLootObjectKey(roll)]; cLoot != nil {
-			if li, ok := cLoot.Items[uint8(roll.Slot)]; ok {
+			if qi, qidx, ok := questRollSlot(cLoot, roll.Slot); ok {
+				qi.IsBlocked = false
+				cLoot.QuestItems[qidx] = qi
+			} else if li, ok := cLoot.Items[uint8(roll.Slot)]; ok {
 				li.IsBlocked = false
 				cLoot.Items[uint8(roll.Slot)] = li
 			}
@@ -2475,7 +2643,13 @@ func (s *Server) deliverGroupLootItem(roll *activeGroupRoll, winnerGUID uint64, 
 	if winnerSess == nil || winnerSess.player == nil || winnerSess.player.Map != roll.MapID || winnerSess.player.InstanceID != roll.InstanceID || s.CharactersStore == nil || s.CharactersStore.DB == nil {
 		s.lootMu.Lock()
 		if cLoot := s.creatureLoot[rollLootObjectKey(roll)]; cLoot != nil {
-			if li, ok := cLoot.Items[uint8(roll.Slot)]; ok {
+			// Group.cpp:1567-1570: full bags unblock the item and record the
+			// winner for a later take. Quest-slot rolls live in QuestItems.
+			if qi, qidx, ok := questRollSlot(cLoot, roll.Slot); ok {
+				qi.IsBlocked = false
+				qi.RollWinner = winnerGUID
+				cLoot.QuestItems[qidx] = qi
+			} else if li, ok := cLoot.Items[uint8(roll.Slot)]; ok {
 				li.IsBlocked = false
 				li.RollWinner = winnerGUID
 				cLoot.Items[uint8(roll.Slot)] = li
@@ -2502,7 +2676,11 @@ func (s *Server) deliverGroupLootItem(roll *activeGroupRoll, winnerGUID uint64, 
 		winnerSess.sendEquipError(equipErrInvFull, 0)
 		s.lootMu.Lock()
 		if cLoot := s.creatureLoot[rollLootObjectKey(roll)]; cLoot != nil {
-			if li, ok := cLoot.Items[uint8(roll.Slot)]; ok {
+			if qi, qidx, ok := questRollSlot(cLoot, roll.Slot); ok {
+				qi.IsBlocked = false
+				qi.RollWinner = winnerGUID
+				cLoot.QuestItems[qidx] = qi
+			} else if li, ok := cLoot.Items[uint8(roll.Slot)]; ok {
 				li.IsBlocked = false
 				li.RollWinner = winnerGUID
 				cLoot.Items[uint8(roll.Slot)] = li
@@ -2522,7 +2700,13 @@ func (s *Server) deliverGroupLootItem(roll *activeGroupRoll, winnerGUID uint64, 
 	s.lootMu.Lock()
 	cLoot := s.creatureLoot[rollLootObjectKey(roll)]
 	if cLoot != nil {
-		delete(cLoot.Items, uint8(roll.Slot))
+		// Group.cpp:1561-1566: the delivered item is marked looted and
+		// removed from its slot — quest-slot wins leave QuestItems.
+		if _, qidx, ok := questRollSlot(cLoot, roll.Slot); ok {
+			delete(cLoot.QuestItems, qidx)
+		} else {
+			delete(cLoot.Items, uint8(roll.Slot))
+		}
 	}
 	s.lootMu.Unlock()
 
@@ -2602,7 +2786,11 @@ func (s *Server) deliverDisenchantMats(ctx context.Context, roll *activeGroupRol
 	if len(mats) == 0 || !storedAny {
 		s.lootMu.Lock()
 		if cLoot := s.creatureLoot[rollLootObjectKey(roll)]; cLoot != nil {
-			if li, ok := cLoot.Items[uint8(roll.Slot)]; ok {
+			if qi, qidx, ok := questRollSlot(cLoot, roll.Slot); ok {
+				qi.IsBlocked = false
+				qi.RollWinner = winnerGUID
+				cLoot.QuestItems[qidx] = qi
+			} else if li, ok := cLoot.Items[uint8(roll.Slot)]; ok {
 				li.IsBlocked = false
 				li.RollWinner = winnerGUID
 				cLoot.Items[uint8(roll.Slot)] = li
@@ -2615,7 +2803,11 @@ func (s *Server) deliverDisenchantMats(ctx context.Context, roll *activeGroupRol
 	s.lootMu.Lock()
 	cLoot := s.creatureLoot[rollLootObjectKey(roll)]
 	if cLoot != nil {
-		delete(cLoot.Items, uint8(roll.Slot))
+		if _, qidx, ok := questRollSlot(cLoot, roll.Slot); ok {
+			delete(cLoot.QuestItems, qidx)
+		} else {
+			delete(cLoot.Items, uint8(roll.Slot))
+		}
 	}
 	s.lootMu.Unlock()
 
