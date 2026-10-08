@@ -2766,6 +2766,53 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 		baseMask &^= rollFlagTypeNeed
 	}
 
+	// Group::GroupLoot (Group.cpp:1133-1136): PassOnGroupLoot and the
+	// CanRollOnItem gate record PASS at roll start. Precomputed here so the
+	// all-pass arm below can decide before any packet goes out.
+	autoPass := make(map[uint64]bool, len(eligible))
+	allPass := len(eligible) > 0
+	for _, m := range eligible {
+		ap := m.player != nil && m.player.PassOnGroupLoot
+		if !ap {
+			ap = !canRollOnItem(m, itemEntry, itemCount, maxCount)
+		}
+		autoPass[m.playerGUID] = ap
+		if !ap {
+			allPass = false
+		}
+	}
+
+	// Group::GroupLoot (Group.cpp:1155-1159): when every eligible member
+	// auto-passes, the roll is deleted without starting — no
+	// SMSG_LOOT_START_ROLL, no SMSG_LOOT_ALL_PASSED, no timer. The
+	// is_blocked set stands (Group.cpp:1148, ahead of the check), so the
+	// item stays blocked until the loot is released, and the auto-passes
+	// are broadcast with autoPass=1. NeedBeforeGreed has no such arm: it
+	// always starts the roll.
+	if grp != nil && grp.LootMethod == 3 && allPass {
+		if cLoot := s.creatureLoot[objectKey]; cLoot != nil {
+			if li, ok := cLoot.Items[uint8(slot)]; ok {
+				li.IsBlocked = true
+				cLoot.Items[uint8(slot)] = li
+			}
+		}
+		s.lootMu.Unlock()
+		for _, m := range eligible {
+			buf := protocol.NewBuffer(35)
+			buf.WriteU64(sourceGUID)
+			buf.WriteU32(slot)
+			buf.WriteU64(m.playerGUID)
+			buf.WriteU32(itemEntry)
+			buf.WriteU32(0) // randomSuffix
+			buf.WriteU32(0) // randomPropId
+			buf.WriteU8(128)
+			buf.WriteU8(rollPass)
+			buf.WriteU8(1) // autoPass
+			_ = m.write(uint16(protocol.OpcodeSMSG_LOOT_ROLL), buf.Bytes(), true)
+		}
+		return
+	}
+
 	roll := &activeGroupRoll{
 		SourceGUID:          sourceGUID,
 		Slot:                slot,
@@ -2816,11 +2863,7 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 		// auto-passes with autoPass=1 before the start-roll; Go records them
 		// through the vote path (autoPass=0), matching NBG's post-start
 		// broadcast order exactly and GroupLoot's packet shape only.
-		autoPass := m.player != nil && m.player.PassOnGroupLoot
-		if !autoPass {
-			autoPass = !canRollOnItem(m, itemEntry, itemCount, maxCount)
-		}
-		if autoPass {
+		if autoPass[m.playerGUID] {
 			m.handleLootRoll(context.Background(), buildLootRollPayload(sourceGUID, slot, rollPass))
 		}
 	}
