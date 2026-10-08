@@ -3310,8 +3310,41 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 	s.groupRolls[rollKey] = roll
 	s.lootMu.Unlock()
 
+	isGroupLoot := grp != nil && grp.LootMethod == 3
+	if isGroupLoot {
+		// Group::GroupLoot (Group.cpp:1137-1153): auto-passes broadcast
+		// SMSG_LOOT_ROLL with autoPass=1 to every eligible voter BEFORE any
+		// start roll, and pass voters never receive SMSG_LOOT_START_ROLL —
+		// SendLootStartRoll only targets NOT_EMITED_YET votes
+		// (Group.cpp:963-971). The vote is recorded here so the roll timer
+		// and the later handleLootRoll duplicate check agree.
+		for _, m := range eligible {
+			if !autoPass[m.playerGUID] {
+				continue
+			}
+			roll.Votes[m.playerGUID] = rollPass
+			buf := protocol.NewBuffer(35)
+			buf.WriteU64(sourceGUID)
+			buf.WriteU32(slot)
+			buf.WriteU64(m.playerGUID)
+			buf.WriteU32(itemEntry)
+			buf.WriteU32(0) // randomSuffix
+			buf.WriteU32(0) // randomPropId
+			buf.WriteU8(128)
+			buf.WriteU8(rollPass)
+			buf.WriteU8(1) // autoPass
+			for _, n := range eligible {
+				_ = n.write(uint16(protocol.OpcodeSMSG_LOOT_ROLL), buf.Bytes(), true)
+			}
+		}
+	}
+
 	// Send personalized SMSG_LOOT_START_ROLL to each eligible member (TC Group.cpp:971)
 	for _, m := range eligible {
+		if isGroupLoot && autoPass[m.playerGUID] {
+			// pass voters handled above; they get no start roll (Group.cpp:969)
+			continue
+		}
 		memberMask := baseMask
 		if grp != nil && grp.LootMethod == 4 { // Need Before Greed
 			if allowableClass > 0 && allowableClass != 0xFFFFFFFF && m.player != nil && m.player.Class > 0 {
@@ -3326,13 +3359,12 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 		_ = m.write(uint16(protocol.OpcodeSMSG_LOOT_START_ROLL), buf, true)
 
 		// Auto-pass check: PassOnGroupLoot, plus the CanRollOnItem gate
-		// (Group.cpp:1081-1095, applied at Group.cpp:1133-1136 / 1283-1286) —
-		// unique-max holders and AllowedForPlayer failures are recorded PASS
-		// at roll start. Documented delta: C++ GroupLoot broadcasts these
-		// auto-passes with autoPass=1 before the start-roll; Go records them
-		// through the vote path (autoPass=0), matching NBG's post-start
-		// broadcast order exactly and GroupLoot's packet shape only.
-		if autoPass[m.playerGUID] {
+		// (Group.cpp:1081-1095, applied at Group.cpp:1283-1286) — unique-max
+		// holders and AllowedForPlayer failures are recorded PASS at roll
+		// start. NeedBeforeGreed broadcasts the pass after the start roll
+		// with autoPass=0 (Group.cpp:1301-1312), so it keeps the vote-path
+		// order; GroupLoot is handled by the pre-broadcast above.
+		if !isGroupLoot && autoPass[m.playerGUID] {
 			m.handleLootRoll(context.Background(), buildLootRollPayload(sourceGUID, slot, rollPass))
 		}
 	}

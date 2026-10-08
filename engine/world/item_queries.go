@@ -105,6 +105,10 @@ type itemQueryData struct {
 	Duration                  uint32
 	ItemLimitCategory         uint32
 	HolidayID                 uint32
+	// FlagsCustom mirrors item_template.flagsCustom (ItemTemplate.h:225):
+	// the template custom flags (IGNORE_QUEST_STATUS, FOLLOW_LOOT_RULES)
+	// the loot fill carries per row. Read live, never stored.
+	FlagsCustom uint32
 }
 
 func (s *session) handleItemQuerySingle(ctx context.Context, payload []byte) bool {
@@ -140,7 +144,7 @@ func itemQueryColumns() []string {
 	for index := 1; index <= itemSockets; index++ {
 		columns = append(columns, "socketColor_"+strconv.Itoa(index), "socketContent_"+strconv.Itoa(index))
 	}
-	columns = append(columns, "socketBonus", "GemProperties", "RequiredDisenchantSkill", "ArmorDamageModifier", "duration", "ItemLimitCategory", "HolidayId")
+	columns = append(columns, "socketBonus", "GemProperties", "RequiredDisenchantSkill", "ArmorDamageModifier", "duration", "ItemLimitCategory", "HolidayId", "flagsCustom")
 	return columns
 }
 
@@ -170,7 +174,7 @@ func (s *session) loadItemQueryData(ctx context.Context, entry uint32) (itemQuer
 	var material, randomProperty, randomSuffix int64
 	socketColors := make([]int64, itemSockets)
 	socketContents := make([]int64, itemSockets)
-	var socketBonus, gemProperties, requiredDisenchantSkill, duration, itemLimitCategory, holidayID int64
+	var socketBonus, gemProperties, requiredDisenchantSkill, duration, itemLimitCategory, holidayID, flagsCustom int64
 	var armorDamageModifier float64
 	targets := []any{&class, &subclass, &sound, &name, &display, &quality, &flags, &flags2, &buyPrice, &sellPrice, &inventoryType, &allowableClass, &allowableRace, &itemLevel, &requiredLevel, &requiredSkill, &requiredSkillRank, &requiredSpell, &requiredHonorRank, &requiredCityRank, &requiredReputationFaction, &requiredReputationRank, &maxCount, &stackable, &containerSlots, &statsCount}
 	for index := range statTypes {
@@ -191,7 +195,7 @@ func (s *session) loadItemQueryData(ctx context.Context, entry uint32) (itemQuer
 	for index := range socketColors {
 		targets = append(targets, &socketColors[index], &socketContents[index])
 	}
-	targets = append(targets, &socketBonus, &gemProperties, &requiredDisenchantSkill, &armorDamageModifier, &duration, &itemLimitCategory, &holidayID)
+	targets = append(targets, &socketBonus, &gemProperties, &requiredDisenchantSkill, &armorDamageModifier, &duration, &itemLimitCategory, &holidayID, &flagsCustom)
 	query := "SELECT " + strings.Join(itemQueryColumns(), ", ") + " FROM item_template WHERE entry = ?"
 	if err := s.server.WorldStore.DB.QueryRowContext(ctx, query, entry).Scan(targets...); err != nil {
 		return data, err
@@ -229,6 +233,7 @@ func (s *session) loadItemQueryData(ctx context.Context, entry uint32) (itemQuer
 		data.Sockets[index] = itemSocketQueryData{Color: uint32(socketColors[index]), Content: uint32(socketContents[index])}
 	}
 	data.SocketBonus, data.GemProperties, data.RequiredDisenchantSkill, data.ArmorDamageModifier, data.Duration, data.ItemLimitCategory, data.HolidayID = uint32(socketBonus), uint32(gemProperties), uint32(requiredDisenchantSkill), float32(armorDamageModifier), uint32(duration), uint32(itemLimitCategory), uint32(holidayID)
+	data.FlagsCustom = uint32(flagsCustom)
 	return data, nil
 }
 

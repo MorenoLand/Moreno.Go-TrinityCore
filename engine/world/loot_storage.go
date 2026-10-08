@@ -6,14 +6,18 @@ import (
 
 // storedContainerItem mirrors StoredLootItem (Loot/LootItemStorage.h): one
 // persisted row of a container (item) loot, keyed by the container item's
-// instance GUID. Only the arms Go's lootItem models are kept — random
-// property/suffix and follow_loot_rules have no Go fill model (loot.go
-// writes 0 for the wire fields), so they are not persisted; the reopen
-// re-derives the display fields from the template the same way the fill
-// does.
+// instance GUID. follow_loot_rules is persisted exactly like C++
+// (item_loot_items.follow_rules, restored in
+// LootItemStorage::LoadStoredLoot, Loot/LootItemStorage.cpp:158) — a
+// template-derived bit the reopen would otherwise drop, since Go's fill
+// carries it only in lootItem.CustomFlags. random property/suffix and
+// is_counted/is_underthreshold have no Go fill model, so they are not
+// persisted; the reopen re-derives the display fields from the template
+// the same way the fill does.
 type storedContainerItem struct {
 	ItemEntry     uint32
 	Count         uint32
+	FollowRules   bool
 	FreeForAll    bool
 	IsBlocked     bool
 	NeedsQuest    bool
@@ -63,6 +67,7 @@ func (s *Server) loadStoredContainerLoot(ctx context.Context) {
 		item.FreeForAll = ffa
 		item.IsBlocked = blocked
 		item.NeedsQuest = needsQuest
+		item.FollowRules = followRules
 		st := s.storedContainerLoot[containerID]
 		if st == nil {
 			st = &storedContainerLoot{}
@@ -123,6 +128,16 @@ func (s *Server) applyStoredContainerLoot(ctx context.Context, opener *session, 
 			continue
 		}
 		slot := uint8(len(loot.Items))
+		// LootItemStorage::LoadStoredLoot (Loot/LootItemStorage.cpp:158):
+		// the stored follow_loot_rules bit wins over the template-derived
+		// value; every other template custom flag (e.g.
+		// ITEM_FLAGS_CU_IGNORE_QUEST_STATUS, which C++ reads live from the
+		// item template at each AllowedForPlayer check, Loot.cpp:92) is
+		// re-derived from the template, exactly like the display fields.
+		customFlags := data.FlagsCustom &^ itemFlagsCuFollowLootRules
+		if stored.FollowRules {
+			customFlags |= itemFlagsCuFollowLootRules
+		}
 		loot.Items[slot] = lootItem{
 			Slot:          slot,
 			ItemEntry:     stored.ItemEntry,
@@ -132,6 +147,7 @@ func (s *Server) applyStoredContainerLoot(ctx context.Context, opener *session, 
 			IsBlocked:     stored.IsBlocked,
 			NeedsQuest:    stored.NeedsQuest,
 			FreeForAll:    stored.FreeForAll,
+			CustomFlags:   customFlags,
 		}
 	}
 	loot.NormalSlotCount = uint8(len(loot.Items))
@@ -171,9 +187,15 @@ func (s *Server) storeNewContainerLoot(ctx context.Context, containerGUID uint64
 		if err != nil || data.BagFamily&itemBagFamilyCurrency != 0 {
 			continue
 		}
+		// StoredLootContainer::AddLootItem persists LootItem::follow_loot_rules
+		// (Loot/LootItemStorage.cpp:287-308), the template-derived
+		// ITEM_FLAGS_CU_FOLLOW_LOOT_RULES bit the fill carries in
+		// lootItem.CustomFlags — Go's fill drops it on restore without this.
+		followRules := it.CustomFlags&itemFlagsCuFollowLootRules != 0
 		st.Items = append(st.Items, storedContainerItem{
 			ItemEntry:     it.ItemEntry,
 			Count:         it.Count,
+			FollowRules:   followRules,
 			FreeForAll:    it.FreeForAll,
 			IsBlocked:     it.IsBlocked,
 			NeedsQuest:    it.NeedsQuest,
@@ -207,7 +229,7 @@ func (s *Server) storeNewContainerLoot(ctx context.Context, containerGUID uint64
 	_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_DEL_ITEMCONTAINER_ITEMS", containerGUID)
 	for _, it := range st.Items {
 		_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_INS_ITEMCONTAINER_ITEMS",
-			containerGUID, it.ItemEntry, it.Count, false, it.FreeForAll, it.IsBlocked, false, false, it.NeedsQuest, 0, 0)
+			containerGUID, it.ItemEntry, it.Count, it.FollowRules, it.FreeForAll, it.IsBlocked, false, false, it.NeedsQuest, 0, 0)
 	}
 	loot.StoredContainerGUID = containerGUID
 }
