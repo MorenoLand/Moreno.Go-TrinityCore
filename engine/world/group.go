@@ -535,23 +535,29 @@ func (s *Server) removeSessionFromGroup(member *session) {
 		s.triggerGroupEvent(scripting.GroupEventOnDisband, groupObj)
 		return
 	}
-	// C++ Group::RemoveMember picks a new leader via ChangeLeader when the
-	// removed member was the leader, which fires OnGroupChangeLeader
-	// (Group.cpp:765).
-	oldLeader := g.LeaderGUID
-	var newLeader uint64
-	leaderChanged := false
-	if g.LeaderGUID == member.playerGUID {
-		newLeader = g.Members[0].GUID
-		g.LeaderGUID = newLeader
-		leaderChanged = true
+	// C++ Group::RemoveMember (Group.cpp:712-720): when the removed member
+	// was the leader, the first remaining CONNECTED member is promoted via
+	// ChangeLeader. Pick the candidate here; the full ChangeLeader path runs
+	// after unlock.
+	leaderWasRemoved := g.LeaderGUID == member.playerGUID
+	var leaderCandidate uint64
+	if leaderWasRemoved {
+		for _, m := range g.Members {
+			if cs := s.findSessionByGUID(m.GUID); cs != nil && cs.player != nil {
+				leaderCandidate = m.GUID
+				break
+			}
+		}
 	}
 	s.groupsMu.Unlock()
 	s.triggerGroupEvent(scripting.GroupEventOnMemberRemove, groupObj, member.playerGUID, uint8(groupRemoveMethodDefault))
-	if leaderChanged {
-		s.triggerGroupEvent(scripting.GroupEventOnLeaderChange, groupObj, newLeader, oldLeader)
+	if leaderWasRemoved && leaderCandidate != 0 {
+		if !s.setGroupLeader(g, leaderCandidate) {
+			s.broadcastGroupList(g)
+		}
+	} else {
+		s.broadcastGroupList(g)
 	}
-	s.broadcastGroupList(g)
 }
 
 func (s *Server) broadcastGroupList(g *groupState) {
@@ -1017,6 +1023,7 @@ func (s *Server) setGroupLeader(g *groupState, guid uint64) bool {
 	}
 	groupObj := groupLuaObject(g)
 	oldLeader := g.LeaderGUID
+	oldSess := s.findSessionByGUID(oldLeader)
 	g.LeaderGUID = guid
 
 	// Move new leader to front of members list
@@ -1026,7 +1033,23 @@ func (s *Server) setGroupLeader(g *groupState, guid uint64) bool {
 			break
 		}
 	}
+	// Group::ChangeLeader (Group.cpp:813): the new leader loses assistant
+	// status when promoted.
+	for i := range g.Members {
+		if g.Members[i].GUID == guid {
+			g.Members[i].Flags &^= memberFlagAssistant
+		}
+	}
 	s.groupsMu.Unlock()
+
+	// Group::ChangeLeader (Group.cpp:806-809): the old leader loses
+	// PLAYER_FLAGS_GROUP_LEADER (when connected) and the new leader gains it.
+	if oldSess != nil && oldSess.player != nil && oldLeader != guid {
+		oldSess.player.PlayerFlags = UpdatePlayerGroupLeaderFlag(oldSess.player.PlayerFlags, false)
+		oldSess.sendPlayerUpdate()
+	}
+	newLeader.player.PlayerFlags = UpdatePlayerGroupLeaderFlag(newLeader.player.PlayerFlags, true)
+	newLeader.sendPlayerUpdate()
 
 	// Eluna GROUP_EVENT_ON_LEADER_CHANGE (4): C++ Group::ChangeLeader fires
 	// OnGroupChangeLeader(newLeaderGuid, m_leaderGuid) after the member-slot

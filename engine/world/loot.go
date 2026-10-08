@@ -1093,6 +1093,7 @@ const (
 
 type activeGroupRoll struct {
 	SourceGUID          uint64
+	ItemGUID            uint64 // Group::Roll::itemGUID: the generated roll item GUID — C++ writes it (not the looted object's GUID) as the first field of SMSG_LOOT_START_ROLL, the auto-pass SMSG_LOOT_ROLL broadcasts and SMSG_LOOT_ALL_PASSED (Group.cpp:943-990, 1015, 1040).
 	Slot                uint32
 	ItemEntry           uint32
 	ItemCount           uint32
@@ -3251,17 +3252,9 @@ func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool
 	return true
 }
 
-func buildLootRollPayload(itemGUID uint64, slot uint32, rollType uint8) []byte {
-	buf := protocol.NewBuffer(13)
-	buf.WriteU64(itemGUID)
-	buf.WriteU32(slot)
-	buf.WriteU8(rollType)
-	return buf.Bytes()
-}
-
-func buildLootStartRollPacket(sourceGUID uint64, mapID, slot, itemEntry, randomSuffix, randomPropID, itemCount, countdown uint32, rollVoteMask uint8) []byte {
+func buildLootStartRollPacket(rollItemGUID uint64, mapID, slot, itemEntry, randomSuffix, randomPropID, itemCount, countdown uint32, rollVoteMask uint8) []byte {
 	buf := protocol.NewBuffer(8 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 1)
-	buf.WriteU64(sourceGUID)
+	buf.WriteU64(rollItemGUID) // Group.cpp:946/975 — the roll item guid, not the looted object
 	buf.WriteU32(mapID)
 	buf.WriteU32(slot)
 	buf.WriteU32(itemEntry)
@@ -3340,30 +3333,27 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 		baseMask &^= rollFlagTypeNeed
 	}
 
-	// Group::GroupLoot (Group.cpp:1133-1136): PassOnGroupLoot and the
-	// CanRollOnItem gate record PASS at roll start. Precomputed here so the
-	// all-pass arm below can decide before any packet goes out.
+	// Group::Roll::itemGUID (Group.cpp:1265/1110): the generated roll item
+	// GUID goes on every roll packet's first field, not the looted
+	// object's GUID.
+	rollItemGUID := uint64(s.generateItemGUID()) | (uint64(0x4000) << 48)
+	// Group::GroupLoot/NeedBeforeGreed vote seeding (Group.cpp:1128-1139,
+	// 1280-1290): PassOnGroupLoot records PASS without touching the pass
+	// total; only a CanRollOnItem failure records PASS and increments
+	// totalPass. The delete-without-start arm (Group.cpp:1165) fires only
+	// when every eligible voter failed CanRollOnItem — a pure PassOnGroupLoot
+	// all-pass registers the roll and lets the 60s timer resolve it, C++-exact.
 	autoPass := make(map[uint64]bool, len(eligible))
-	allPass := len(eligible) > 0
+	canRollFailTotal := 0
 	for _, m := range eligible {
-		ap := m.player != nil && m.player.PassOnGroupLoot
-		if !ap {
-			ap = !canRollOnItem(m, itemEntry, itemCount, maxCount)
+		canRollFail := !canRollOnItem(m, itemEntry, itemCount, maxCount)
+		if canRollFail {
+			canRollFailTotal++
 		}
-		autoPass[m.playerGUID] = ap
-		if !ap {
-			allPass = false
-		}
+		autoPass[m.playerGUID] = canRollFail || (m.player != nil && m.player.PassOnGroupLoot)
 	}
 
-	// Group::GroupLoot (Group.cpp:1155-1159): when every eligible member
-	// auto-passes, the roll is deleted without starting — no
-	// SMSG_LOOT_START_ROLL, no SMSG_LOOT_ALL_PASSED, no timer. The
-	// is_blocked set stands (Group.cpp:1148, ahead of the check), so the
-	// item stays blocked until the loot is released, and the auto-passes
-	// are broadcast with autoPass=1. NeedBeforeGreed has no such arm: it
-	// always starts the roll.
-	if grp != nil && grp.LootMethod == 3 && allPass {
+	if grp != nil && grp.LootMethod == 3 && len(eligible) > 0 && canRollFailTotal == len(eligible) {
 		if cLoot := s.creatureLoot[objectKey]; cLoot != nil {
 			if li, ok := cLoot.Items[uint8(slot)]; ok {
 				li.IsBlocked = true
@@ -3373,7 +3363,7 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 		s.lootMu.Unlock()
 		for _, m := range eligible {
 			buf := protocol.NewBuffer(35)
-			buf.WriteU64(sourceGUID)
+			buf.WriteU64(rollItemGUID) // Group.cpp:1162 — the roll item guid, not the looted object
 			buf.WriteU32(slot)
 			buf.WriteU64(m.playerGUID)
 			buf.WriteU32(itemEntry)
@@ -3389,6 +3379,7 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 
 	roll := &activeGroupRoll{
 		SourceGUID:          sourceGUID,
+		ItemGUID:            rollItemGUID,
 		Slot:                slot,
 		ItemEntry:           itemEntry,
 		ItemCount:           itemCount,
@@ -3400,6 +3391,7 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 		StartedAt:           time.Now(),
 		Duration:            60 * time.Second,
 		TotalPlayersRolling: len(eligible),
+		TotalPass:           canRollFailTotal, // Group.cpp:1133-1136: pre-incremented at vote-record time
 		Votes:               make(map[uint64]uint8),
 		Rolls:               make(map[uint64]uint8),
 	}
@@ -3416,20 +3408,21 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 	s.lootMu.Unlock()
 
 	isGroupLoot := grp != nil && grp.LootMethod == 3
-	if isGroupLoot {
-		// Group::GroupLoot (Group.cpp:1137-1153): auto-passes broadcast
-		// SMSG_LOOT_ROLL with autoPass=1 to every eligible voter BEFORE any
-		// start roll, and pass voters never receive SMSG_LOOT_START_ROLL —
-		// SendLootStartRoll only targets NOT_EMITED_YET votes
-		// (Group.cpp:963-971). The vote is recorded here so the roll timer
-		// and the later handleLootRoll duplicate check agree.
+	// Auto-pass broadcasts go out BEFORE any start roll, carrying the roll
+	// item guid: GroupLoot (Group.cpp:1160-1163, autoPass=1, gated on
+	// totalPass) and NeedBeforeGreed (Group.cpp:1301-1312, per-voter,
+	// autoPass=0). Pass voters never receive SMSG_LOOT_START_ROLL —
+	// SendLootStartRoll only targets NOT_EMITED_YET votes (Group.cpp:963-971).
+	// Votes are recorded here so the timer and the handleLootRoll duplicate
+	// check agree.
+	if !isGroupLoot || canRollFailTotal > 0 {
 		for _, m := range eligible {
 			if !autoPass[m.playerGUID] {
 				continue
 			}
 			roll.Votes[m.playerGUID] = rollPass
 			buf := protocol.NewBuffer(35)
-			buf.WriteU64(sourceGUID)
+			buf.WriteU64(rollItemGUID)
 			buf.WriteU32(slot)
 			buf.WriteU64(m.playerGUID)
 			buf.WriteU32(itemEntry)
@@ -3437,17 +3430,19 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 			buf.WriteU32(0) // randomPropId
 			buf.WriteU8(128)
 			buf.WriteU8(rollPass)
-			buf.WriteU8(1) // autoPass
-			for _, n := range eligible {
-				_ = n.write(uint16(protocol.OpcodeSMSG_LOOT_ROLL), buf.Bytes(), true)
+			if isGroupLoot {
+				buf.WriteU8(1) // autoPass
+			} else {
+				buf.WriteU8(0)
 			}
+			s.sendGroupRollToEligible(roll, uint16(protocol.OpcodeSMSG_LOOT_ROLL), buf.Bytes())
 		}
 	}
 
-	// Send personalized SMSG_LOOT_START_ROLL to each eligible member (TC Group.cpp:971)
+	// SMSG_LOOT_START_ROLL to each NOT_EMITED_YET voter only; the first
+	// field is the roll item guid (Group.cpp:943-990).
 	for _, m := range eligible {
-		if isGroupLoot && autoPass[m.playerGUID] {
-			// pass voters handled above; they get no start roll (Group.cpp:969)
+		if autoPass[m.playerGUID] {
 			continue
 		}
 		memberMask := baseMask
@@ -3460,18 +3455,8 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 			}
 		}
 
-		buf := buildLootStartRollPacket(sourceGUID, mapID, slot, itemEntry, 0, 0, itemCount, 60000, memberMask)
+		buf := buildLootStartRollPacket(rollItemGUID, mapID, slot, itemEntry, 0, 0, itemCount, 60000, memberMask)
 		_ = m.write(uint16(protocol.OpcodeSMSG_LOOT_START_ROLL), buf, true)
-
-		// Auto-pass check: PassOnGroupLoot, plus the CanRollOnItem gate
-		// (Group.cpp:1081-1095, applied at Group.cpp:1283-1286) — unique-max
-		// holders and AllowedForPlayer failures are recorded PASS at roll
-		// start. NeedBeforeGreed broadcasts the pass after the start roll
-		// with autoPass=0 (Group.cpp:1301-1312), so it keeps the vote-path
-		// order; GroupLoot is handled by the pre-broadcast above.
-		if !isGroupLoot && autoPass[m.playerGUID] {
-			m.handleLootRoll(context.Background(), buildLootRollPayload(sourceGUID, slot, rollPass))
-		}
 	}
 
 	// Arm 60s countdown
@@ -3555,8 +3540,24 @@ func (s *Server) startGroupQuestLootRoll(sourceGUID uint64, qslot uint32, qidx u
 	// clear need for CAN_ONLY_ROLL_GREED (no arm at 1192-1252/1337-1380).
 	baseMask := rollFlagTypePass | rollFlagTypeNeed | rollFlagTypeGreed
 
+	isGroupLoot := grp != nil && grp.LootMethod == 3
+
+	// Quest-loop vote seeding (Group.cpp:1214-1223, 1352-1361): quest votes
+	// default NOT_EMITED_YET — no PassOnGroupLoot default — and only a
+	// CanRollOnItem failure records PASS and increments totalPass.
+	questAutoPass := make(map[uint64]bool, len(eligible))
+	questPassTotal := 0
+	for _, m := range eligible {
+		if !canRollOnItem(m, itemEntry, itemCount, maxCount) {
+			questAutoPass[m.playerGUID] = true
+			questPassTotal++
+		}
+	}
+
+	rollItemGUID := uint64(s.generateItemGUID()) | (uint64(0x4000) << 48) // ObjectGuid::Create<HighGuid::Item> (Group.cpp:1342)
 	roll := &activeGroupRoll{
 		SourceGUID:          sourceGUID,
+		ItemGUID:            rollItemGUID,
 		Slot:                qslot,
 		ItemEntry:           itemEntry,
 		ItemCount:           itemCount,
@@ -3568,6 +3569,7 @@ func (s *Server) startGroupQuestLootRoll(sourceGUID uint64, qslot uint32, qidx u
 		StartedAt:           time.Now(),
 		Duration:            60 * time.Second,
 		TotalPlayersRolling: len(eligible),
+		TotalPass:           questPassTotal,
 		Votes:               make(map[uint64]uint8),
 		Rolls:               make(map[uint64]uint8),
 	}
@@ -3592,9 +3594,44 @@ func (s *Server) startGroupQuestLootRoll(sourceGUID uint64, qslot uint32, qidx u
 	s.groupRolls[rollKey] = roll
 	s.lootMu.Unlock()
 
+	// GroupLoot quest loop: CanRollOnItem failures are recorded silently —
+	// no pass broadcast, and SendLootStartRoll only targets NOT_EMITED_YET
+	// (Group.cpp:1226-1238, 963-971). NBG quest loop: the pass broadcasts
+	// (roll item guid, autoPass=0) go out before any start roll
+	// (Group.cpp:1372-1382).
+	if isGroupLoot {
+		for _, m := range eligible {
+			if questAutoPass[m.playerGUID] {
+				roll.Votes[m.playerGUID] = rollPass
+			}
+		}
+	} else {
+		for _, m := range eligible {
+			if !questAutoPass[m.playerGUID] {
+				continue
+			}
+			roll.Votes[m.playerGUID] = rollPass
+			buf := protocol.NewBuffer(35)
+			buf.WriteU64(rollItemGUID)
+			buf.WriteU32(qslot)
+			buf.WriteU64(m.playerGUID)
+			buf.WriteU32(itemEntry)
+			buf.WriteU32(0) // randomSuffix
+			buf.WriteU32(0) // randomPropId
+			buf.WriteU8(128)
+			buf.WriteU8(rollPass)
+			buf.WriteU8(0) // autoPass
+			s.sendGroupRollToEligible(roll, uint16(protocol.OpcodeSMSG_LOOT_ROLL), buf.Bytes())
+		}
+	}
+
 	// Personalized SMSG_LOOT_START_ROLL per member; NBG keeps the
-	// CanRollForItemInLFG personalization (Group.cpp:1360).
+	// CanRollForItemInLFG personalization (Group.cpp:1360). Pass voters get
+	// no start roll (Group.cpp:963-971).
 	for _, m := range eligible {
+		if questAutoPass[m.playerGUID] {
+			continue
+		}
 		memberMask := baseMask
 		if grp != nil && grp.LootMethod == 4 { // Need Before Greed
 			if allowableClass > 0 && allowableClass != 0xFFFFFFFF && m.player != nil && m.player.Class > 0 {
@@ -3605,14 +3642,8 @@ func (s *Server) startGroupQuestLootRoll(sourceGUID uint64, qslot uint32, qidx u
 			}
 		}
 
-		buf := buildLootStartRollPacket(sourceGUID, mapID, qslot, itemEntry, 0, 0, itemCount, 60000, memberMask)
+		buf := buildLootStartRollPacket(rollItemGUID, mapID, qslot, itemEntry, 0, 0, itemCount, 60000, memberMask)
 		_ = m.write(uint16(protocol.OpcodeSMSG_LOOT_START_ROLL), buf, true)
-
-		// Quest loops default to NOT_EMITED_YET (Group.cpp:1211/1353): no
-		// PassOnGroupLoot default — only the CanRollOnItem gate auto-passes.
-		if !canRollOnItem(m, itemEntry, itemCount, maxCount) {
-			m.handleLootRoll(context.Background(), buildLootRollPayload(sourceGUID, qslot, rollPass))
-		}
 	}
 
 	// Arm 60s countdown (same m_groupLootTimer/lootingGroupLowGUID stand-in).
@@ -3784,7 +3815,7 @@ func (s *Server) resolveGroupLootRoll(rollKey lootRollKey, enforceMap bool) {
 		s.deliverGroupLootItem(roll, winnerGUID, winningType)
 	} else {
 		passBuf := protocol.NewBuffer(24)
-		passBuf.WriteU64(roll.SourceGUID)
+		passBuf.WriteU64(roll.ItemGUID) // Group.cpp:1043 — the roll item guid, not the looted object
 		passBuf.WriteU32(roll.Slot)
 		passBuf.WriteU32(roll.ItemEntry)
 		passBuf.WriteU32(roll.RandomPropID)
@@ -4076,6 +4107,16 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 	rollKey := lootRollKey{Object: lootObjectKey{MapID: s.player.Map, InstanceID: s.player.InstanceID, GUID: itemGUID}, Slot: itemSlot}
 	s.server.lootMu.Lock()
 	roll := s.server.groupRolls[rollKey]
+	if roll == nil && itemGUID != 0 {
+		// CMSG_LOOT_ROLL echoes the roll item guid from SMSG_LOOT_START_ROLL
+		// (Group.cpp:1475-1477); resolve it against the registered rolls.
+		for _, other := range s.server.groupRolls {
+			if other != nil && other.ItemGUID == itemGUID && other.Slot == itemSlot && other.GroupID == s.groupID {
+				roll = other
+				break
+			}
+		}
+	}
 	if roll == nil {
 		for key, other := range s.server.groupRolls {
 			if other != nil && other.GroupID == s.groupID && key.Object.MapID == s.player.Map && key.Object.GUID == itemGUID && key.Slot == itemSlot && key.Object.InstanceID != s.player.InstanceID {
