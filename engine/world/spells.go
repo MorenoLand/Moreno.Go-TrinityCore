@@ -7948,40 +7948,42 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			if damage > 0 {
 				s.splitShareDamagePct(ctx, target.GUID, true, creatureAuraKey{}, s.playerGUID, damage, uint32(schoolMask))
 			}
-			playerSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, damage)
 			playerSess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
 			playerSess.lastCombatTime = time.Now()
 			if playerSess.player.UnitFlags&unitFlagInCombat == 0 {
 				playerSess.player.UnitFlags |= unitFlagInCombat
 			}
 			_ = playerSess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo), true)
-			if damage > 0 && playerSess.player.Health > 0 && damage+1 >= playerSess.player.Health {
-				// Duel defeat threshold is damage >= health-1 (Unit.cpp:826),
-				// not just lethal — the clamped hit leaves the loser at 1 HP.
-				if s.duelPartner == target.GUID && s.player.DuelTeam != 0 {
-					// Duel defeat: loser drops to 1 HP and duel completes
-					playerSess.player.Health = 1
-					playerSess.sendPlayerUpdate()
-					s.endDuel(true, s.playerGUID, false)
-				} else {
-					playerSess.player.Health = 0
-					playerSess.sendPlayerUpdate()
-					if s.server != nil {
-						s.server.creditHonorableKill(s, playerSess)
-					}
-					// The spell caster s is a player (Unit::Kill Unit.cpp:11341-11343).
-					playerSess.killPlayer(ctx, s, true)
-					// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
-					// pet arm — attacker is the player, so only the
-					// attacker's live pet gets KilledUnit(victim)
-					// (Unit.cpp:11324-11335).
-					if pet := s.livePetMotion(); pet != nil {
-						s.server.fireCreatureTargetDied(ctx, pet, playerSess.luaPlayer())
-					}
-					s.server.handleWGPlayerDeath(playerSess, s)
+			victimHealth := playerSess.player.Health
+			// Duel defeat (Unit.cpp:825-853, 957-973): any damage >= health-1
+			// on a duelist ends the duel — the clamped hit leaves the loser
+			// at 1 HP.
+			if duelDefeatOnDamage(playerSess, s.playerGUID, damage, victimHealth) {
+				playerSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth-1)
+			} else if damage > 0 && victimHealth > 0 && damage+1 >= victimHealth {
+				playerSess.player.Health = 0
+				playerSess.sendPlayerUpdate()
+				// Unit::DealDamage (Unit.cpp:887-890): TOTAL_DAMAGE_RECEIVED
+				// fires with the pre-damage health on a kill.
+				playerSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth)
+				if s.server != nil {
+					s.server.creditHonorableKill(s, playerSess)
 				}
+				// The spell caster s is a player (Unit::Kill Unit.cpp:11341-11343).
+				playerSess.killPlayer(ctx, s, true)
+				// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
+				// pet arm — attacker is the player, so only the
+				// attacker's live pet gets KilledUnit(victim)
+				// (Unit.cpp:11324-11335).
+				if pet := s.livePetMotion(); pet != nil {
+					s.server.fireCreatureTargetDied(ctx, pet, playerSess.luaPlayer())
+				}
+				s.server.handleWGPlayerDeath(playerSess, s)
 			} else if damage > 0 {
 				playerSess.player.Health -= damage
+				// Unit::DealDamage (Unit.cpp:891-894): TOTAL_DAMAGE_RECEIVED
+				// fires with the dealt damage on a non-lethal hit.
+				playerSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, damage)
 				// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
 				playerSess.grantRageFromDamageTaken(ctx, damage+absorbed)
 				// Unit::DealDamage (Unit.cpp:906-913, 925-931): random
@@ -7999,6 +8001,19 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				// creatures are signaled OwnerAttackedBy on any non-DoT damage.
 				if s.server != nil {
 					s.server.triggerPetDefensive(playerSess.player.Map, playerSess.player.InstanceID, target.GUID, s.playerGUID)
+				}
+			} else if absorbed > 0 && !playerSess.godCheatActive() {
+				// Unit::DealDamage (Unit.cpp:813-819): rage from fully absorbed
+				// damage — the god arm above returns before this leg in C++.
+				playerSess.grantRageFromDamageTaken(ctx, absorbed)
+				// Unit::DealDamage (Unit.cpp:742-747): absorbed damage still
+				// strips TAKE_DAMAGE-interrupt auras — the removal runs before
+				// the !damage early-return.
+				playerSess.procDamageAuras(false)
+				// Unit::DealDamage (Unit.cpp:749-761): fully absorbed non-DoT
+				// damage aborts ABORT_ON_DMG casts.
+				if s.playerGUID != target.GUID {
+					playerSess.interruptAbsorbedCast()
 				}
 			}
 			return damage
@@ -14033,38 +14048,37 @@ func (ts *session) applyPeriodicTickDamageToPlayer(dmg, targetHealth uint32, aur
 	if !godNegated && dmg > 0 {
 		ts.splitShareDamagePct(context.Background(), ts.playerGUID, true, creatureAuraKey{}, aura.CasterGUID, dmg, aura.SchoolMask)
 	}
-	// Duel defeat threshold is damage >= health-1 (Unit.cpp:826), not just
-	// lethal.
-	if !godNegated && targetHealth > 0 && dmg+1 >= targetHealth {
-		if ts.duelPartner != 0 && ts.player.DuelTeam != 0 {
-			ts.player.Health = 1
-			ts.sendPlayerUpdate()
-			if ts.server != nil {
-				if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
-					casterSess.endDuel(true, casterSess.playerGUID, false)
-				}
-			}
-		} else {
-			ts.player.Health = 0
-			ts.sendPlayerUpdate()
-			// The periodic tick's attacker is the aura caster, a player in
-			// Go's model (Unit::Kill Unit.cpp:11341-11343) — the caster
-			// session is the GetCharmerOrOwnerPlayerOrPlayerItself killer
-			// for the kill procs and killing-blow criteria.
-			var tickKiller *session
-			if ts.server != nil {
-				tickKiller = ts.server.findSessionByGUID(aura.CasterGUID)
-			}
-			ts.killPlayer(context.Background(), tickKiller, true)
-			// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill pet
-			// arm — the periodic tick's attacker is the aura caster (a
-			// player in Go's model), so only the caster's live pet gets
-			// KilledUnit(victim) (Unit.cpp:11324-11335).
-			if ts.server != nil {
-				if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
-					if pet := casterSess.livePetMotion(); pet != nil {
-						ts.server.fireCreatureTargetDied(context.Background(), pet, ts.luaPlayer())
-					}
+	// Duel defeat (Unit.cpp:825-853, 957-973): the tick's attacker is the aura
+	// caster — via GetControllingPlayer, the caster itself or its owner for
+	// pet DoTs. Only the duel opponent's damage completes the duel (with the
+	// opponent as winner); a lethal third-party tick kills and interrupts
+	// instead, and absorbed ticks never reach the duel leg (the !damage
+	// early-return precedes it in C++).
+	if !godNegated && duelDefeatOnDamage(ts, ts.controllingPlayerGUID(aura.CasterGUID), dmg, targetHealth) {
+		// Duel defeat (Unit.cpp:826-853, 957-973): loser at 1 HP, duel
+		// complete — the health/kill legs are skipped.
+	} else if !godNegated && targetHealth > 0 && dmg+1 >= targetHealth {
+		// Lethal blow from anyone but the duel opponent — the kill path
+		// interrupts the duel (Unit::Kill, Unit.cpp:11363-11368).
+		ts.player.Health = 0
+		ts.sendPlayerUpdate()
+		// The periodic tick's attacker is the aura caster, a player in
+		// Go's model (Unit::Kill Unit.cpp:11341-11343) — the caster
+		// session is the GetCharmerOrOwnerPlayerOrPlayerItself killer
+		// for the kill procs and killing-blow criteria.
+		var tickKiller *session
+		if ts.server != nil {
+			tickKiller = ts.server.findSessionByGUID(aura.CasterGUID)
+		}
+		ts.killPlayer(context.Background(), tickKiller, true)
+		// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill pet
+		// arm — the periodic tick's attacker is the aura caster (a
+		// player in Go's model), so only the caster's live pet gets
+		// KilledUnit(victim) (Unit.cpp:11324-11335).
+		if ts.server != nil {
+			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
+				if pet := casterSess.livePetMotion(); pet != nil {
+					ts.server.fireCreatureTargetDied(context.Background(), pet, ts.luaPlayer())
 				}
 			}
 		}
@@ -16647,6 +16661,10 @@ func (s *session) delayCurrentCast() {
 	if cast.InterruptFlg&spellInterruptAbortOnDmg != 0 {
 		s.castMu.Unlock()
 		s.interruptCurrentCast()
+		// Unit::DealDamage (Unit.cpp:944-945) calls InterruptNonMeleeSpells(false),
+		// which also interrupts the channeled spell (Unit.cpp:3222-3224) — the
+		// channel does not survive an ABORT_ON_DMG hit.
+		s.interruptCurrentChannel()
 		return
 	}
 	if cast.InterruptFlg&spellInterruptPushBack == 0 || cast.Pushbacks >= maxSpellPushbacks {
@@ -16687,6 +16705,27 @@ func (s *session) delayCurrentCast() {
 	packet.WriteU32(uint32(delay.Milliseconds()))
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_DELAYED), packet.Bytes(), true)
 	s.debug("cast pushed back", "account", s.accountName, "spell", spellID, "delay_ms", delay.Milliseconds(), "count", pushbacks)
+}
+
+// interruptAbsorbedCast mirrors the absorbed-damage arm of Unit::DealDamage
+// (Unit.cpp:749-761): damage fully absorbed by shields (never DoTs) still
+// aborts a preparing generic spell carrying SPELL_INTERRUPT_FLAG_ABORT_ON_DMG
+// — InterruptNonMeleeSpells(false), with no pushback. Like delayCurrentCast's
+// abort branch, the channeled spell is interrupted too (Unit.cpp:3222-3224).
+// Callers gate on: player victim, victim != attacker, absorbed > 0.
+func (s *session) interruptAbsorbedCast() {
+	if s == nil || s.player == nil {
+		return
+	}
+	s.castMu.Lock()
+	cast := s.activeCast
+	aborts := cast != nil && cast.CastTimeMs != 0 && cast.InterruptFlg&spellInterruptAbortOnDmg != 0
+	s.castMu.Unlock()
+	if !aborts {
+		return
+	}
+	s.interruptCurrentCast()
+	s.interruptCurrentChannel()
 }
 
 // delayCurrentChannel mirrors Spell::DelayedChannel: called when the player

@@ -1122,8 +1122,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// fires for any damage to a player victim, creature-caster
 				// spells included.
 				target.Sess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
-				if !godNegated && damage >= target.Sess.player.Health {
-					overkill = damage - target.Sess.player.Health
+				victimHealth := target.Sess.player.Health
+				// Duel defeat (Unit.cpp:825-853, 957-973): a charmed creature's
+				// spell lands as a duel defeat when its charmer is the duel
+				// opponent (GetControllingPlayer, Unit.cpp:5996); a wild
+				// creature's exactly-health-1 hit still completes the duel as
+				// won, while its lethal hit kills and interrupts.
+				if !godNegated && duelDefeatOnDamage(target.Sess, target.Sess.controllingPlayerGUID(motion.GUID), damage, victimHealth) {
+					// Duel defeat consumed the hit — loser at 1 HP, duel complete.
+				} else if !godNegated && damage >= victimHealth {
+					overkill = damage - victimHealth
 					target.Sess.player.Health = 0
 					target.IsDead = true
 					target.Sess.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((motion.GUID>>24)&0xFFFFFF), 1)
@@ -1316,6 +1324,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// god arm itself returns before this leg in C++).
 			if damage == 0 && absorbedDmg > 0 && !target.Sess.godCheatActive() {
 				target.Sess.grantRageFromDamageTaken(ctx, absorbedDmg)
+				// Unit::DealDamage (Unit.cpp:742-747): absorbed damage still
+				// strips TAKE_DAMAGE-interrupt auras — the removal runs before
+				// the !damage early-return.
+				target.Sess.procDamageAuras(false)
+				// Unit::DealDamage (Unit.cpp:749-761): fully absorbed non-DoT
+				// damage aborts ABORT_ON_DMG casts (creature attacker !=
+				// player victim).
+				target.Sess.interruptAbsorbedCast()
 			}
 			if damage > 0 {
 				// Unit::DealDamage (Unit.cpp:766-788):
@@ -1325,8 +1341,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// fires for any damage to a player victim, wild-creature
 				// attackers included.
 				target.Sess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
-				if damage >= target.Sess.player.Health {
-					overkill = damage - target.Sess.player.Health
+				victimHealth := target.Sess.player.Health
+				// Duel defeat (Unit.cpp:825-853, 957-973): a charmed creature's
+				// blow lands as a duel defeat when its charmer is the duel
+				// opponent (GetControllingPlayer, Unit.cpp:5996); a wild
+				// creature's exactly-health-1 hit still completes the duel as
+				// won, while its lethal hit kills and interrupts.
+				if duelDefeatOnDamage(target.Sess, target.Sess.controllingPlayerGUID(motion.GUID), damage, victimHealth) {
+					// Duel defeat consumed the hit — loser at 1 HP, duel complete.
+				} else if damage >= victimHealth {
+					overkill = damage - victimHealth
 					target.Sess.player.Health = 0
 					target.IsDead = true
 					target.Sess.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((motion.GUID>>24)&0xFFFFFF), 1)

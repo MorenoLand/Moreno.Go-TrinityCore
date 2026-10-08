@@ -590,6 +590,14 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			// damage — the god arm above returns before this leg in C++.
 			if damage == 0 && absorbedDmg > 0 && !playerSess.godCheatActive() {
 				playerSess.grantRageFromDamageTaken(ctx, absorbedDmg)
+				// Unit::DealDamage (Unit.cpp:742-747): absorbed damage still
+				// strips TAKE_DAMAGE-interrupt auras — the removal runs before
+				// the !damage early-return.
+				playerSess.procDamageAuras(false)
+				// Unit::DealDamage (Unit.cpp:749-761): fully absorbed non-DoT
+				// damage aborts ABORT_ON_DMG casts (attacker != victim holds —
+				// melee vs another player).
+				playerSess.interruptAbsorbedCast()
 			}
 			if playerSess.player.UnitFlags&unitFlagInCombat == 0 {
 				playerSess.player.UnitFlags |= unitFlagInCombat
@@ -616,30 +624,24 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 				s.updateAchievementCriteria(criteriaTypeDamageDone, 0, min(damage, victimHealth))
 				s.setAchievementCriteria(criteriaTypeHighestHitDealt, 0, damage)
 				playerSess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
-				// Duel defeat (Unit.cpp:826): C++ ends the duel at
-				// damage >= health-1, not just at lethal — the clamped hit
+				// Duel defeat (Unit.cpp:825-853, 957-973): any damage >=
+				// health-1 on a duelist ends the duel — the clamped hit
 				// leaves the loser at 1 HP.
-				if victimHealth > 0 && damage+1 >= victimHealth {
-					if s.duelPartner == target.GUID && s.player.DuelTeam != 0 {
-						// Duel defeat: loser drops to 1 HP and kneels (TC: Player::DuelComplete)
-						playerSess.player.Health = 1
-						playerSess.sendPlayerUpdate()
-						playerSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth-1)
-						s.endDuel(true, s.playerGUID, false)
-					} else {
-						playerSess.player.Health = 0
-						playerSess.sendPlayerUpdate()
-						playerSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth)
-						s.server.creditHonorableKill(s, playerSess)
-						// Unit::Kill (Unit.cpp:11341-11343): the attacker is a player.
-						playerSess.killPlayer(ctx, s, true)
-						// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
-						// pet arm — attacker is the player (player = attacker
-						// itself), so only the attacker's live pet gets
-						// KilledUnit(victim) (Unit.cpp:11324-11335).
-						if pet := s.livePetMotion(); pet != nil {
-							s.server.fireCreatureTargetDied(ctx, pet, playerSess.luaPlayer())
-						}
+				if duelDefeatOnDamage(playerSess, s.playerGUID, damage, victimHealth) {
+					playerSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth-1)
+				} else if victimHealth > 0 && damage+1 >= victimHealth {
+					playerSess.player.Health = 0
+					playerSess.sendPlayerUpdate()
+					playerSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth)
+					s.server.creditHonorableKill(s, playerSess)
+					// Unit::Kill (Unit.cpp:11341-11343): the attacker is a player.
+					playerSess.killPlayer(ctx, s, true)
+					// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
+					// pet arm — attacker is the player (player = attacker
+					// itself), so only the attacker's live pet gets
+					// KilledUnit(victim) (Unit.cpp:11324-11335).
+					if pet := s.livePetMotion(); pet != nil {
+						s.server.fireCreatureTargetDied(ctx, pet, playerSess.luaPlayer())
 					}
 					_ = s.sendAttackStop(target.GUID, true)
 					s.attackTarget = 0
@@ -979,6 +981,14 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			// damage — the god arm above returns before this leg in C++.
 			if damage == 0 && absorbed > 0 && !vicSess.godCheatActive() {
 				vicSess.grantRageFromDamageTaken(ctx, absorbed)
+				// Unit::DealDamage (Unit.cpp:742-747): absorbed damage still
+				// strips TAKE_DAMAGE-interrupt auras — the removal runs before
+				// the !damage early-return.
+				vicSess.procDamageAuras(false)
+				// Unit::DealDamage (Unit.cpp:749-761): fully absorbed non-DoT
+				// damage aborts ABORT_ON_DMG casts (attacker != victim holds —
+				// ranged vs another player).
+				vicSess.interruptAbsorbedCast()
 			}
 			if vicSess.player.UnitFlags&unitFlagInCombat == 0 {
 				vicSess.player.UnitFlags |= unitFlagInCombat
@@ -1005,45 +1015,40 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				s.updateAchievementCriteria(criteriaTypeDamageDone, 0, min(damage, victimHealth))
 				s.setAchievementCriteria(criteriaTypeHighestHitDealt, 0, damage)
 				vicSess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
-				// Duel defeat (Unit.cpp:826): damage >= health-1 ends the duel
-				// with the loser at 1 HP — the ranged path was killing the
-				// duelist outright.
-				if victimHealth > 0 && damage+1 >= victimHealth {
-					if s.duelPartner == target.GUID && s.player.DuelTeam != 0 {
-						vicSess.player.Health = 1
-						vicSess.sendPlayerUpdate()
-						vicSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth-1)
-						s.endDuel(true, s.playerGUID, false)
-					} else {
-						if arena := s.server.findArenaState(s.player.Map, 0); arena != nil {
-							arena.mu.Lock()
-							if sc, ok := arena.Scores[s.playerGUID]; ok {
-								sc.KillingBlows++
-							}
-							arena.mu.Unlock()
+				// Duel defeat (Unit.cpp:825-853, 957-973): any damage >=
+				// health-1 on a duelist ends the duel — the clamped hit
+				// leaves the loser at 1 HP.
+				if duelDefeatOnDamage(vicSess, s.playerGUID, damage, victimHealth) {
+					vicSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth-1)
+				} else if victimHealth > 0 && damage+1 >= victimHealth {
+					if arena := s.server.findArenaState(s.player.Map, 0); arena != nil {
+						arena.mu.Lock()
+						if sc, ok := arena.Scores[s.playerGUID]; ok {
+							sc.KillingBlows++
 						}
-						vicSess.player.Health = 0
-						vicSess.sendPlayerUpdate()
-						vicSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth)
-						if s.server != nil {
-							s.server.creditHonorableKill(s, vicSess)
-						}
-						// Unit::Kill (Unit.cpp:11341-11343): the attacker is a player.
-						vicSess.killPlayer(ctx, s, true)
-						// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
-						// pet arm — attacker is the player, so only the
-						// attacker's live pet gets KilledUnit(victim)
-						// (Unit.cpp:11324-11335).
-						if pet := s.livePetMotion(); pet != nil {
-							s.server.fireCreatureTargetDied(ctx, pet, vicSess.luaPlayer())
-						}
-						s.server.handleWGPlayerDeath(vicSess, s)
-						s.autoRepeatSpell = 0
-						s.autoRepeatTarget = 0
-						buf := protocol.NewBuffer(9)
-						buf.WritePackedGUID(s.playerGUID)
-						_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
+						arena.mu.Unlock()
 					}
+					vicSess.player.Health = 0
+					vicSess.sendPlayerUpdate()
+					vicSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth)
+					if s.server != nil {
+						s.server.creditHonorableKill(s, vicSess)
+					}
+					// Unit::Kill (Unit.cpp:11341-11343): the attacker is a player.
+					vicSess.killPlayer(ctx, s, true)
+					// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): C++ Unit::Kill
+					// pet arm — attacker is the player, so only the
+					// attacker's live pet gets KilledUnit(victim)
+					// (Unit.cpp:11324-11335).
+					if pet := s.livePetMotion(); pet != nil {
+						s.server.fireCreatureTargetDied(ctx, pet, vicSess.luaPlayer())
+					}
+					s.server.handleWGPlayerDeath(vicSess, s)
+					s.autoRepeatSpell = 0
+					s.autoRepeatTarget = 0
+					buf := protocol.NewBuffer(9)
+					buf.WritePackedGUID(s.playerGUID)
+					_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
 				} else {
 					vicSess.player.Health -= damage
 					// Unit::DealDamage (Unit.cpp:915-924): rage from damage
@@ -2199,6 +2204,61 @@ func (s *session) interruptDuel() {
 		_ = partner.write(uint16(protocol.OpcodeSMSG_DUEL_COMPLETE), buf.Bytes(), true)
 	}
 	s.clearDuelState(partner)
+}
+
+// duelDefeatOnDamage mirrors the duel legs of Unit::DealDamage
+// (Unit.cpp:825-853 + 957-973): any damage >= health-1 on a dueling player
+// ends the duel. attackerPlayerGUID is the blow's GetControllingPlayer()
+// (Unit.cpp:5996) — the attacker's own GUID for players, the owner's GUID for
+// pets and charmed creatures, 0 for wild creatures. Environmental damage never
+// reaches here: with no attacker C++ returns before the health legs
+// (Unit.cpp:828-830).
+// A blow from the duel opponent (or its controlled creature) is capped to
+// health-1 and completes the duel as won; a lethal blow from anyone else is
+// NOT consumed — the caller runs its normal kill path, which interrupts the
+// duel (Unit::Kill, Unit.cpp:11363-11368). Exactly-health-1 damage from a
+// non-opponent still completes the duel as won, since C++ sets duel_hasEnded
+// regardless of the attacker. Damage of 0 never reaches the duel leg (the
+// !damage early-return precedes it). Returns true when the duel leg consumed
+// the hit and the caller must skip its normal health/kill legs.
+func duelDefeatOnDamage(victim *session, attackerPlayerGUID uint64, damage, health uint32) bool {
+	if victim == nil || victim.player == nil || victim.duelPartner == 0 || victim.player.DuelTeam == 0 {
+		return false
+	}
+	if damage == 0 || health == 0 || damage+1 < health {
+		return false
+	}
+	if attackerPlayerGUID != victim.duelPartner && damage >= health {
+		return false
+	}
+	victim.player.Health = 1
+	victim.sendPlayerUpdate()
+	if victim.server != nil {
+		opp := victim.server.findSessionByGUID(victim.duelPartner)
+		if opp == nil {
+			opp = victim
+		}
+		opp.endDuel(true, victim.duelPartner, false)
+	}
+	return true
+}
+
+// controllingPlayerGUID mirrors Unit::GetControllingPlayer (Unit.cpp:5996) for
+// duel/ownership gates: a player GUID resolves to itself, a pet or charmed
+// creature's GUID to its player owner, anything else to 0.
+func (s *session) controllingPlayerGUID(guid uint64) uint64 {
+	if s == nil || s.server == nil {
+		return 0
+	}
+	if ps := s.server.findSessionByGUID(guid); ps != nil {
+		return guid
+	}
+	if m := s.findCreatureMotion(guid); m != nil && m.OwnerGUID != 0 {
+		if os := s.server.findSessionByGUID(m.OwnerGUID); os != nil {
+			return m.OwnerGUID
+		}
+	}
+	return 0
 }
 
 // clearDuelState performs the shared end-of-duel cleanup: attack stops and

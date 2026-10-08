@@ -545,16 +545,16 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled
 		// creatures are signaled OwnerAttackedBy on any non-DoT damage.
 		s.triggerPetDefensive(targetSess.player.Map, targetSess.player.InstanceID, targetGUID, motion.GUID)
-		// Duel defeat (Unit.cpp:826-844): a pet is controlled by its owner, so
-		// the killing blow lands as a duel defeat — loser at 1 HP, duel
-		// completes — when the owner is the victim's duel opponent, matching
-		// C++ clamping the damage to health-1 via GetControllingPlayer.
-		if targetHealth > 0 && damage+1 >= targetHealth &&
-			targetSess.duelPartner != 0 && targetSess.player.DuelTeam != 0 &&
-			owner != nil && owner.player != nil && targetSess.duelPartner == owner.playerGUID {
-			targetSess.player.Health = 1
-			targetSess.sendPlayerUpdate()
-			owner.endDuel(true, owner.playerGUID, false)
+		// Duel defeat (Unit.cpp:825-853, 957-973): a pet is controlled by its owner
+		// (GetControllingPlayer, Unit.cpp:5996) — the blow lands as a duel
+		// defeat when the owner is the victim's duel opponent; a lethal blow
+		// from anyone else's pet kills and interrupts instead.
+		var petOwnerGUID uint64
+		if owner != nil && owner.player != nil {
+			petOwnerGUID = owner.playerGUID
+		}
+		if duelDefeatOnDamage(targetSess, petOwnerGUID, damage, targetHealth) {
+			// Duel defeat consumed the hit — loser at 1 HP, duel complete.
 		} else if damage >= targetHealth {
 			targetSess.player.Health = 0
 			targetSess.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((motion.GUID>>24)&0xFFFFFF), 1)
@@ -1055,6 +1055,17 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, true)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, s)
 	if damage == 0 {
+		// Unit::DealDamage absorbed legs (Unit.cpp:742-761, 813-819): a fully
+		// absorbed pet-spell hit still strips TAKE_DAMAGE-interrupt auras,
+		// grants absorbed rage, and aborts ABORT_ON_DMG casts on a player
+		// victim — the god arm above returns before all of these in C++.
+		if isPlayerVictim && absorbed > 0 && s.server != nil {
+			if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil && !victim.godCheatActive() {
+				victim.grantRageFromDamageTaken(ctx, absorbed)
+				victim.procDamageAuras(false)
+				victim.interruptAbsorbedCast()
+			}
+		}
 		return
 	}
 	if isPlayerVictim {
@@ -1075,16 +1086,13 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled
 		// creatures are signaled OwnerAttackedBy on any non-DoT damage.
 		s.server.triggerPetDefensive(victim.player.Map, victim.player.InstanceID, target.GUID, caster.GUID)
-		// Duel defeat (Unit.cpp:826-844): a pet is controlled by its owner (s is
-		// the owner session here), so the killing blow lands as a duel
-		// defeat — loser at 1 HP, duel completes — when the owner is the
-		// victim's duel opponent.
-		if victim.player.Health > 0 && damage+1 >= victim.player.Health &&
-			victim.duelPartner != 0 && victim.player.DuelTeam != 0 &&
-			s.player != nil && victim.duelPartner == s.playerGUID {
-			victim.player.Health = 1
-			victim.sendPlayerUpdate()
-			s.endDuel(true, s.playerGUID, false)
+		// Duel defeat (Unit.cpp:825-853, 957-973): a pet is controlled by its
+		// owner (s is the owner session here; GetControllingPlayer,
+		// Unit.cpp:5996) — the blow lands as a duel defeat when the owner is
+		// the victim's duel opponent; a lethal blow from anyone else's pet
+		// kills and interrupts instead.
+		if duelDefeatOnDamage(victim, s.playerGUID, damage, victim.player.Health) {
+			// Duel defeat consumed the hit — loser at 1 HP, duel complete.
 		} else if damage >= victim.player.Health {
 			victim.player.Health = 0
 			victim.sendPlayerUpdate()

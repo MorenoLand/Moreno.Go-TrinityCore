@@ -1356,10 +1356,14 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 	// negated value and no damage procs fire.
 	damage = s.negateGodModeDamage(damage)
 
-	absorb := uint32(0)
-	resist := uint32(0)
-
-	if damage >= s.player.Health {
+	// Unit::DealDamage (Unit.cpp:825-853, 957-973): environmental damage is
+	// self-damage (attacker == victim, Player.cpp:792) — damage of exactly
+	// health-1 on a duelist completes the duel as won; lethal damage is not
+	// capped (the attacker is not the opponent) and falls through to the
+	// kill path, which interrupts the duel (Unit::Kill, Unit.cpp:11363-11368).
+	if duelDefeatOnDamage(s, s.playerGUID, damage, s.player.Health) {
+		// Duel defeat consumed the hit — loser at 1 HP, duel complete.
+	} else if damage >= s.player.Health {
 		damage = s.player.Health
 		s.player.Health = 0
 	} else {
@@ -1368,6 +1372,9 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 			s.procDamageAuras(true)
 		}
 	}
+
+	absorb := uint32(0)
+	resist := uint32(0)
 
 	packet := protocol.NewBuffer(21)
 	packet.WriteU64(s.playerGUID)

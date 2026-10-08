@@ -235,25 +235,24 @@ func (s *session) applySharedDamageToPlayer(ctx context.Context, victimGUID, att
 		return
 	}
 	health := ts.player.Health
+	// Duel defeat (Unit.cpp:825-853, 957-973): the recursive NODAMAGE split is
+	// a full DealDamage with the original attacker — the duel leg runs with
+	// the attacker's GetControllingPlayer (Unit.cpp:5996). A lethal blow from
+	// anyone but the duel opponent is not consumed: the kill path below
+	// interrupts the duel (Unit::Kill, Unit.cpp:11363-11368).
+	if duelDefeatOnDamage(ts, ts.controllingPlayerGUID(attackerGUID), share, health) {
+		ts.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, health-1)
+		return
+	}
 	if health > 0 && share+1 >= health {
-		// Duel defeat (Unit.cpp:826): ends at damage >= health-1.
-		if ts.duelPartner != 0 && ts.duelPartner == attackerGUID && ts.player.DuelTeam != 0 {
-			ts.player.Health = 1
-			ts.sendPlayerUpdate()
-			ts.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, health-1)
-			if as := s.server.findSessionByGUID(attackerGUID); as != nil {
-				as.endDuel(true, attackerGUID, false)
-			}
-		} else {
-			ts.player.Health = 0
-			ts.sendPlayerUpdate()
-			ts.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, health)
-			var killer *session
-			if as := s.server.findSessionByGUID(attackerGUID); as != nil {
-				killer = as
-			}
-			ts.killPlayer(ctx, killer, true)
+		ts.player.Health = 0
+		ts.sendPlayerUpdate()
+		ts.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, health)
+		var killer *session
+		if as := s.server.findSessionByGUID(attackerGUID); as != nil {
+			killer = as
 		}
+		ts.killPlayer(ctx, killer, true)
 		return
 	}
 	ts.player.Health -= share
