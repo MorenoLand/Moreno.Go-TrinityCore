@@ -235,7 +235,7 @@ func (ai *vancleefAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureM
 			s.motionMapLocked(m.Map, m.InstanceID)[bgGUID] = bgMotion
 			ai.summons = append(ai.summons, bgGUID)
 			ai.pendingSummonHooks = append(ai.pendingSummonHooks, bgMotion)
-			s.broadcastMonsterMoveInInstance(m.Map, m.InstanceID, bgGUID, bgMotion.X, bgMotion.Y, bgMotion.Z, bgMotion.X, bgMotion.Y, bgMotion.Z, 0, false)
+			s.broadcastMonsterMoveInInstance(m.Map, m.InstanceID, bgGUID, bgMotion.X, bgMotion.Y, bgMotion.Z, bgMotion.X, bgMotion.Y, bgMotion.Z, 0, false, 0, false)
 		}
 	}
 

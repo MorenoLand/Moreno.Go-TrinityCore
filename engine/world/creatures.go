@@ -374,7 +374,7 @@ func buildCreatureUpdate(spawn creatureSpawn) []byte {
 	return block.Bytes()
 }
 
-func buildMonsterMove(rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32) []byte {
+func buildMonsterMove(rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, facing float32, hasFacing bool) []byte {
 	packet := protocol.NewBuffer(64)
 	packet.WritePackedGUID(rawGUID)
 	packet.WriteU8(0) // MOVEMENTFLAG2_UNK7
@@ -382,10 +382,22 @@ func buildMonsterMove(rawGUID uint64, startX, startY, startZ, destX, destY, dest
 	packet.WriteF32(startY)
 	packet.WriteF32(startZ)
 	packet.WriteU32(uint32(time.Now().UnixMilli())) // SplineID
-	packet.WriteU8(0)                               // MonsterMoveNormal
-	packet.WriteU32(0)                              // SplineFlags (Linear)
-	packet.WriteU32(duration)                       // Duration in ms
-	packet.WriteU32(1)                              // Points count
+	if hasFacing {
+		// MoveSplineInit::SetFacing(float) (MoveSplineInit.cpp:219) arms the
+		// Final_Angle leg of PacketBuilder::WriteCommonMonsterMovePart
+		// (MovementPacketBuilder.cpp:58-61): facing type 4
+		// (MonsterMoveFacingAngle) followed by the f32 angle. The Final_Angle
+		// bit is inside Mask_Final_Facing, which WriteCommonMonsterMovePart
+		// strips from the wire SplineFlags (Mask_No_Monster_Move), so the
+		// flags field below stays 0 exactly like C++.
+		packet.WriteU8(4) // MonsterMoveFacingAngle
+		packet.WriteF32(facing)
+	} else {
+		packet.WriteU8(0) // MonsterMoveNormal
+	}
+	packet.WriteU32(0)        // SplineFlags (Linear)
+	packet.WriteU32(duration) // Duration in ms
+	packet.WriteU32(1)        // Points count
 	packet.WriteF32(destX)
 	packet.WriteF32(destY)
 	packet.WriteF32(destZ)
@@ -415,7 +427,7 @@ func (s *Server) broadcastMonsterMoveMode(mapID uint32, rawGUID uint64, startX, 
 	// only by Creature::SetWalk, Creature.cpp:3017, i.e. persistent walk state).
 	// Go sends the mode packet per walk node so walk-speed splines animate as
 	// walk instead of run-in-place; deliberate client-visible improvement.
-	packet := buildMonsterMove(rawGUID, startX, startY, startZ, destX, destY, destZ, duration)
+	packet := buildMonsterMove(rawGUID, startX, startY, startZ, destX, destY, destZ, duration, 0, false)
 	modeOpcode := protocol.OpcodeSMSG_SPLINE_MOVE_SET_RUN_MODE
 	if walk {
 		modeOpcode = protocol.OpcodeSMSG_SPLINE_MOVE_SET_WALK_MODE
@@ -439,8 +451,8 @@ func (s *Server) broadcastMonsterMoveMode(mapID uint32, rawGUID uint64, startX, 
 	}
 }
 
-func (s *Server) broadcastMonsterMoveInInstance(mapID, instanceID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, walk bool) {
-	packet := buildMonsterMove(rawGUID, startX, startY, startZ, destX, destY, destZ, duration)
+func (s *Server) broadcastMonsterMoveInInstance(mapID, instanceID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, walk bool, facing float32, hasFacing bool) {
+	packet := buildMonsterMove(rawGUID, startX, startY, startZ, destX, destY, destZ, duration, facing, hasFacing)
 	modeOpcode := protocol.OpcodeSMSG_SPLINE_MOVE_SET_RUN_MODE
 	if walk {
 		modeOpcode = protocol.OpcodeSMSG_SPLINE_MOVE_SET_WALK_MODE

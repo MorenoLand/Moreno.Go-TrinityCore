@@ -379,7 +379,7 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 			motion.Y = destY
 			motion.Z = destZ
 			motion.Moving = true
-			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, false)
+			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, false, 0, false)
 		} else {
 			motion.Moving = false
 		}
@@ -476,7 +476,7 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 		motion.Y = destY
 		motion.Z = destZ
 		motion.Moving = true
-		s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, false)
+		s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, false, 0, false)
 	} else {
 		motion.Moving = false
 

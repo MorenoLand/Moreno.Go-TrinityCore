@@ -149,6 +149,10 @@ type waypointPoint struct {
 	Delay       uint32
 }
 
+// waypointMotionType mirrors WAYPOINT_MOTION_TYPE (MovementDefines.h:30),
+// the type id Eluna::MovementInform reports for waypoint arrivals.
+const waypointMotionType = 2
+
 // motionTTL bounds how long idle state survives between nearby sweeps so a
 // creature nobody observes stops consuming memory.
 const motionTTL = 10 * time.Minute
@@ -735,7 +739,7 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 			speed = creatureBaseRunSpeed
 		}
 		duration := splineDurationMs(float64(homeDist), speed)
-		s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false)
+		s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, 0, false)
 		motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
 		motion.Moving = true
 		motion.Evading = true
@@ -1137,7 +1141,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// Pursue player: move towards target at run speed
 			if !motion.Moving || now.After(motion.MoveEnds) {
 				duration := splineDurationMs(float64(dist), creatureSplineVelocity(motion, false))
-				s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, target.X, target.Y, target.Z, duration, false)
+				s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, target.X, target.Y, target.Z, duration, false, 0, false)
 				motion.X, motion.Y, motion.Z = target.X, target.Y, target.Z
 				motion.Moving = true
 				motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
@@ -1435,6 +1439,30 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		}
 		motion.Moving = false
 		motion.WaitUntil = motion.MoveEnds
+		if motion.MoveType == 2 && len(motion.Points) > 0 {
+			// WaypointMovementGenerator::OnArrived (WaypointMovementGenerator.cpp):
+			// the C++ arrival hook calls AI->MovementInform(WAYPOINT_MOTION_TYPE,
+			// _currentNode); Eluna::MovementInform (CreatureHooks.cpp:182-190) turns
+			// it into CREATURE_EVENT_ON_REACH_WP (6) with (type=2, id=node index).
+			// Go's CreatureEventOnReachWP was defined but never fired, so any Lua
+			// patrol/escort script registered on event 6 was dead. NextIdx was
+			// advanced at launch, so the arrived node is (NextIdx-1) mod len.
+			// The veto return gates ScriptedAI::MovementInform — a provable no-op
+			// here (only PetAI overrides MovementInform, for POINT_MOTION_TYPE pet
+			// returns, and pets never run waypoint generators), so it is discarded
+			// like the ON_REACH_HOME arm in the evade section.
+			arrived := (motion.NextIdx - 1 + len(motion.Points)) % len(motion.Points)
+			s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachWP, uint32(waypointMotionType), uint32(arrived))
+			// WaypointMovementGenerator::StartMove: "if (waypoint.orientation &&
+			// waypoint.delay) init.SetFacing(waypoint.orientation)" — the node's
+			// facing applies at arrival, only when both are set (0 orientation is
+			// the DB default meaning "no facing"). The client-side turn rode the
+			// Final_Angle arm of the SMSG_MONSTER_MOVE packet at launch; this sets
+			// the logical orientation to match, the way X/Y/Z already jump.
+			if point := motion.Points[arrived]; point.Orientation != 0 && point.Delay > 0 {
+				motion.Orientation = point.Orientation
+			}
+		}
 	}
 	if now.Before(motion.WaitUntil) {
 		return
@@ -1445,6 +1473,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	var destX, destY, destZ float32
 	var speed float32
 	var wait time.Duration
+	var facing float32
+	var hasFacing bool
 	walk := true
 	if motion.MoveType == 2 {
 		point := motion.Points[motion.NextIdx]
@@ -1453,6 +1483,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		speed = creatureSplineVelocity(motion, walk)
 		if point.Delay > 0 {
 			wait = time.Duration(point.Delay) * time.Second
+		}
+		// WaypointMovementGenerator::StartMove (WaypointMovementGenerator.cpp):
+		// "if (waypoint.orientation && waypoint.delay) init.SetFacing(waypoint.orientation)"
+		// — the destination facing rides the spline's Final_Angle arm only when
+		// BOTH are set; 0 orientation is the DB default meaning "no facing".
+		// The logical orientation itself is set at arrival (see the arrival
+		// block above), matching the C++ spline-end timing.
+		if point.Orientation != 0 && point.Delay > 0 {
+			facing, hasFacing = point.Orientation, true
 		}
 		motion.NextIdx = (motion.NextIdx + 1) % len(motion.Points)
 	} else if motion.MoveType == 1 {
@@ -1497,7 +1536,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		}
 	}
 	duration := splineDurationMs(moveDist, speed)
-	s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, walk)
+	s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, walk, facing, hasFacing)
 	motion.X, motion.Y, motion.Z = destX, destY, destZ
 	motion.Moving = true
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
