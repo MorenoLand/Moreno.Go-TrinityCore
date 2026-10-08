@@ -364,6 +364,10 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	}
 
 	damage := uint32(20 + int(s.player.Level)*5)
+	// absorbedDmg carries the pre-absorb portion for the rage-from-damage
+	// legs (Unit.cpp:789-924): the dealt leg uses post-absorb damage while the
+	// received leg adds the absorbed amount back.
+	absorbedDmg := uint32(0)
 	if maxDmg > minDmg && minDmg > 0 {
 		attSpeed := float64(attTime) / 1000.0
 		if attSpeed <= 0 {
@@ -475,6 +479,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			vicSess.applyResilienceToDamage(true, &damage, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenMelee)
 			if damage > 0 {
 				absorbed, remaining := vicSess.applyAbsorptionShields(damage, 1)
+				absorbedDmg = absorbed
 				damage = remaining
 				if remaining == 0 && absorbed > 0 {
 					hitInfo |= protocol.HitInfoFullAbsorb
@@ -490,6 +495,29 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			hitInfo |= protocol.HitInfoFullAbsorb
 		} else if absorbed > 0 {
 			hitInfo |= protocol.HitInfoPartialAbsorb
+		}
+	}
+
+	// Unit::DealDamage (Unit.cpp:789-813): rage from damage dealt — direct
+	// weapon damage only, attacker POWER_RAGE, attacker != victim. Ranged
+	// attacks never grant it (Unit.cpp:806-807, RANGED_ATTACK breaks with no
+	// RewardRage). weaponSpeedHitFactor = attackTime/1000 * 3.5 (main) or 1.75
+	// (offhand), doubled on crit. Miss/dodge/parry outcomes grant nothing
+	// (C++ never reaches DealDamage for them); a fully absorbed hit still
+	// grants the factor leg, matching C++ (the leg is not damage-gated).
+	switch outcome {
+	case protocol.MeleeHitNormal, protocol.MeleeHitCrit, protocol.MeleeHitGlancing, protocol.MeleeHitCrushing, protocol.MeleeHitBlock:
+		if playerPowerType(s.player) == powerRage {
+			factor := uint32(float64(attTime) / 1000.0 * 3.5)
+			if attType == protocol.OffAttack {
+				factor = uint32(float64(attTime) / 1000.0 * 1.75)
+			}
+			if outcome == protocol.MeleeHitCrit {
+				factor *= 2
+			}
+			if pts := rewardRagePoints(uint32(s.player.Level), damage, factor, true, s.rageFromDamageDealtPct(), false); pts > 0 {
+				s.adjustSpellPower(ctx, s.playerGUID, powerRage, int64(pts))
+			}
 		}
 	}
 
@@ -558,6 +586,11 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
 			// before the lethal / non-lethal legs (duel defeat included).
 			damage = playerSess.negateGodModeDamage(damage)
+			// Unit::DealDamage (Unit.cpp:815-819): rage from fully absorbed
+			// damage — the god arm above returns before this leg in C++.
+			if damage == 0 && absorbedDmg > 0 && !playerSess.godCheatActive() {
+				playerSess.grantRageFromDamageTaken(ctx, absorbedDmg)
+			}
 			if playerSess.player.UnitFlags&unitFlagInCombat == 0 {
 				playerSess.player.UnitFlags |= unitFlagInCombat
 			}
@@ -568,6 +601,11 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			// ordering; the trigger spell targets the attacker.
 			playerSess.procVictimAuraTriggers(ctx, s.playerGUID, outcome, hitInfo, targetState, blocked, damage)
 			if damage > 0 {
+				// Unit::DealDamage (Unit.cpp:766-788):
+				// SPELL_AURA_SHARE_DAMAGE_PCT copies CalculatePct(damage,
+				// amount) to the aura's caster. Runs inside DealDamage, ahead
+				// of the health reduction below.
+				s.splitShareDamagePct(ctx, target.GUID, true, creatureAuraKey{}, s.playerGUID, damage, 1)
 				// Unit::DealDamage (Unit.cpp:855-877): the arena damage score
 				// and the killer achievement arms (DAMAGE_DONE capped at the
 				// victim's pre-damage health — no overkill credit, and
@@ -607,6 +645,9 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 					s.attackTarget = 0
 				} else {
 					playerSess.player.Health -= damage
+					// Unit::DealDamage (Unit.cpp:915-924): rage from damage
+					// received — damage + absorbed for the conversion.
+					playerSess.grantRageFromDamageTaken(ctx, damage+absorbedDmg)
 					playerSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, damage)
 					playerSess.delayCurrentCast()
 					playerSess.delayCurrentChannel()
@@ -635,6 +676,11 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, target.GUID); motion != nil {
 			damage = s.server.fireCreatureDamageTaken(ctx, motion, s.luaPlayer(), damage)
 		}
+	}
+
+	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
+	if damage > 0 {
+		s.splitShareDamagePct(ctx, target.GUID, false, creatureAuraKeyForTarget(target), s.playerGUID, damage, 1)
 	}
 
 	if damage >= target.Health {
@@ -674,6 +720,9 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		s.debug("target slain by auto-attack", "account", s.accountName, "guid", target.GUID)
 	} else {
 		newHealth := target.Health - damage
+		rageChanged := false
+		var rageNext, rageMapID, rageInstanceID uint32
+		var rageGUID uint64
 		s.server.motionMu.Lock()
 		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
 		newlyTapped := false
@@ -687,6 +736,12 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 				tappedFlags = motion.DynamicFlags
 			}
 			motion.Health = newHealth
+			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received
+			// (creature victims; creatures have no absorbed-damage model here).
+			if next, changed := s.server.addCreatureRageLocked(motion, motion.Level, damage); changed {
+				rageChanged, rageNext = true, next
+				rageMapID, rageInstanceID, rageGUID = motion.Map, motion.InstanceID, motion.GUID
+			}
 			if motion.ThreatMgr == nil {
 				motion.ThreatMgr = NewThreatManager(target.GUID)
 			}
@@ -718,6 +773,11 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth: newHealth,
 		})
+		if rageChanged {
+			s.server.broadcastCreatureValuesUpdateInInstance(rageMapID, rageInstanceID, rageGUID, map[int]uint32{
+				unitFieldPower1 + powerRage: rageNext,
+			})
+		}
 		if newlyTapped {
 			// New tap: the client grays the name via UNIT_DYNFLAG_TAPPED.
 			s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
@@ -907,6 +967,11 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
 			// before the lethal / non-lethal legs (arena score included).
 			damage = vicSess.negateGodModeDamage(damage)
+			// Unit::DealDamage (Unit.cpp:815-819): rage from fully absorbed
+			// damage — the god arm above returns before this leg in C++.
+			if damage == 0 && absorbed > 0 && !vicSess.godCheatActive() {
+				vicSess.grantRageFromDamageTaken(ctx, absorbed)
+			}
 			if vicSess.player.UnitFlags&unitFlagInCombat == 0 {
 				vicSess.player.UnitFlags |= unitFlagInCombat
 			}
@@ -918,6 +983,11 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			// spell targets the attacker.
 			vicSess.procRangedVictimAuraTriggers(ctx, s.playerGUID, spellID, outcome, absorbed, blocked, damage)
 			if damage > 0 {
+				// Unit::DealDamage (Unit.cpp:766-788):
+				// SPELL_AURA_SHARE_DAMAGE_PCT copies CalculatePct(damage,
+				// amount) to the aura's caster. Runs inside DealDamage, ahead
+				// of the health reduction below.
+				s.splitShareDamagePct(ctx, target.GUID, true, creatureAuraKey{}, s.playerGUID, damage, uint32(schoolMask))
 				// Unit::DealDamage (Unit.cpp:855-877): the arena damage score
 				// and the killer/victim achievement arms fire on player
 				// ranged damage exactly like the melee leg; DAMAGE_DONE and
@@ -968,6 +1038,9 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 					}
 				} else {
 					vicSess.player.Health -= damage
+					// Unit::DealDamage (Unit.cpp:915-924): rage from damage
+					// received — damage + absorbed for the conversion.
+					vicSess.grantRageFromDamageTaken(ctx, damage+absorbed)
 					vicSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, damage)
 					vicSess.delayCurrentCast()
 					vicSess.delayCurrentChannel()
@@ -992,6 +1065,11 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, target.GUID); motion != nil {
 			damage = s.server.fireCreatureDamageTaken(ctx, motion, s.luaPlayer(), damage)
 		}
+	}
+
+	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
+	if damage > 0 {
+		s.splitShareDamagePct(ctx, target.GUID, false, creatureAuraKeyForTarget(target), s.playerGUID, damage, uint32(schoolMask))
 	}
 
 	if damage >= target.Health {
@@ -1037,6 +1115,9 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			return
 		}
 		newHealth := target.Health - damage
+		rageChanged := false
+		var rageNext, rageMapID, rageInstanceID uint32
+		var rageGUID uint64
 		s.server.motionMu.Lock()
 		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
 		newlyTapped := false
@@ -1048,6 +1129,12 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				tappedFlags = motion.DynamicFlags
 			}
 			motion.Health = newHealth
+			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received
+			// (creature victims; no absorbed model on this path).
+			if next, changed := s.server.addCreatureRageLocked(motion, motion.Level, damage); changed {
+				rageChanged, rageNext = true, next
+				rageMapID, rageInstanceID, rageGUID = motion.Map, motion.InstanceID, motion.GUID
+			}
 			if motion.ThreatMgr == nil {
 				motion.ThreatMgr = NewThreatManager(target.GUID)
 			}
@@ -1079,6 +1166,11 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth: newHealth,
 		})
+		if rageChanged {
+			s.server.broadcastCreatureValuesUpdateInInstance(rageMapID, rageInstanceID, rageGUID, map[int]uint32{
+				unitFieldPower1 + powerRage: rageNext,
+			})
+		}
 		if newlyTapped {
 			// New tap: the client grays the name via UNIT_DYNFLAG_TAPPED.
 			s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{

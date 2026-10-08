@@ -535,6 +535,10 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
 		// after the attacker-state update (sent pre-DealDamage in C++).
 		damage = targetSess.negateGodModeDamage(damage)
+		// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
+		if owner != nil && damage > 0 {
+			owner.splitShareDamagePct(ctx, targetGUID, true, creatureAuraKey{}, motion.GUID, damage, 1)
+		}
 		// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled
 		// creatures are signaled OwnerAttackedBy on any non-DoT damage.
 		s.triggerPetDefensive(targetSess.player.Map, targetSess.player.InstanceID, targetGUID, motion.GUID)
@@ -562,9 +566,15 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			s.fireCreatureTargetDied(ctx, motion, targetSess.luaPlayer())
 		} else {
 			targetSess.player.Health -= damage
+			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
+			targetSess.grantRageFromDamageTaken(ctx, damage)
 			targetSess.sendPlayerUpdate()
 		}
 	} else {
+		// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
+		if owner != nil && damage > 0 {
+			owner.splitShareDamagePct(ctx, targetGUID, false, creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: targetGUID}, motion.GUID, damage, 1)
+		}
 		s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, nil)
 		var killedTarget combatTarget
 		var killed bool
@@ -610,6 +620,10 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			} else {
 				cMotion.Health -= damage
 				healthUpdate := map[int]uint32{unitFieldHealth: cMotion.Health}
+				// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
+				if next, changed := s.addCreatureRageLocked(cMotion, cMotion.Level, damage); changed {
+					healthUpdate[unitFieldPower1+powerRage] = next
+				}
 				if newlyTapped {
 					healthUpdate[unitFieldDynamicFlags] = cMotion.DynamicFlags
 				}
@@ -1038,6 +1052,10 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
 		// after the spell damage log (sent pre-DealDamage in C++).
 		damage = victim.negateGodModeDamage(damage)
+		// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
+		if damage > 0 {
+			s.splitShareDamagePct(ctx, target.GUID, true, creatureAuraKey{}, caster.GUID, damage, uint32(schoolMask))
+		}
 		// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled
 		// creatures are signaled OwnerAttackedBy on any non-DoT damage.
 		s.server.triggerPetDefensive(victim.player.Map, victim.player.InstanceID, target.GUID, caster.GUID)
@@ -1064,13 +1082,21 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			s.server.fireCreatureTargetDied(ctx, caster, victim.luaPlayer())
 		} else {
 			victim.player.Health -= damage
+			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
+			victim.grantRageFromDamageTaken(ctx, damage)
 			victim.sendPlayerUpdate()
 		}
 		return
 	}
+	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
+	if damage > 0 {
+		s.splitShareDamagePct(ctx, target.GUID, false, creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}, caster.GUID, damage, uint32(schoolMask))
+	}
 	s.server.motionMu.Lock()
 	targetMotion := s.server.findCreatureMotionLocked(target.Map, target.InstanceID, target.GUID)
 	newlyTapped := false
+	rageChanged := false
+	var rageNext uint32
 	if targetMotion != nil {
 		// Unit::DealDamage tap block (Unit.cpp:872-876): pet spell
 		// damage taps for the owner (GetCharmerOrOwnerPlayerOrPlayerItself).
@@ -1094,6 +1120,10 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				targetMotion.ThreatMgr = NewThreatManager(targetMotion.GUID)
 			}
 			targetMotion.ThreatMgr.AddThreat(caster.OwnerGUID, float32(damage), false)
+			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
+			if next, changed := s.server.addCreatureRageLocked(targetMotion, targetMotion.Level, damage); changed {
+				rageNext, rageChanged = next, true
+			}
 		}
 	}
 	s.server.motionMu.Unlock()
@@ -1110,6 +1140,9 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		healthUpdate := map[int]uint32{unitFieldHealth: targetMotion.Health}
 		if newlyTapped {
 			healthUpdate[unitFieldDynamicFlags] = targetMotion.DynamicFlags
+		}
+		if rageChanged {
+			healthUpdate[unitFieldPower1+powerRage] = rageNext
 		}
 		s.server.broadcastCreatureValuesUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, healthUpdate)
 		s.server.triggerCreatureAggro(ctx, targetMotion.GUID, caster.OwnerGUID)

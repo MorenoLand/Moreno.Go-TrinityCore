@@ -7944,6 +7944,10 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			// matching C++ sending SMSG_SPELLNONMELEEDAMAGELOG before DealDamage
 			// (Spell.cpp:2542).
 			damage = playerSess.negateGodModeDamage(damage)
+			// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
+			if damage > 0 {
+				s.splitShareDamagePct(ctx, target.GUID, true, creatureAuraKey{}, s.playerGUID, damage, uint32(schoolMask))
+			}
 			playerSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, damage)
 			playerSess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
 			playerSess.lastCombatTime = time.Now()
@@ -7978,6 +7982,8 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				}
 			} else if damage > 0 {
 				playerSess.player.Health -= damage
+				// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
+				playerSess.grantRageFromDamageTaken(ctx, damage+absorbed)
 				if s.spellDamagePushesBack(spellID, playerSess.playerGUID) {
 					playerSess.delayCurrentCast()
 					playerSess.delayCurrentChannel()
@@ -8005,6 +8011,11 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, target.GUID); motion != nil {
 			damage = s.server.fireCreatureDamageTaken(ctx, motion, s.luaPlayer(), damage)
 		}
+	}
+
+	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
+	if damage > 0 {
+		s.splitShareDamagePct(ctx, target.GUID, false, creatureAuraKeyForTarget(target), s.playerGUID, damage, uint32(schoolMask))
 	}
 
 	if damage >= target.Health {
@@ -8043,6 +8054,9 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		s.debug("target slain by spell", "account", s.accountName, "spell", spellID, "guid", target.GUID)
 	} else {
 		newHealth := target.Health - damage
+		rageChanged := false
+		var rageNext, rageMapID, rageInstanceID uint32
+		var rageGUID uint64
 		s.server.motionMu.Lock()
 		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
 		newlyTapped := false
@@ -8054,6 +8068,12 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				tappedFlags = motion.DynamicFlags
 			}
 			motion.Health = newHealth
+			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received
+			// (creature victims; no absorbed model on this path).
+			if next, changed := s.server.addCreatureRageLocked(motion, motion.Level, damage); changed {
+				rageChanged, rageNext = true, next
+				rageMapID, rageInstanceID, rageGUID = motion.Map, motion.InstanceID, motion.GUID
+			}
 			motion.InCombat = true
 			if motion.ThreatMgr == nil {
 				motion.ThreatMgr = NewThreatManager(target.GUID)
@@ -8087,6 +8107,9 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		}
 
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldHealth: newHealth})
+		if rageChanged {
+			s.server.broadcastCreatureValuesUpdateInInstance(rageMapID, rageInstanceID, rageGUID, map[int]uint32{unitFieldPower1 + powerRage: rageNext})
+		}
 		if newlyTapped {
 			// New tap: the client grays the name via UNIT_DYNFLAG_TAPPED.
 			s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldDynamicFlags: tappedFlags})
@@ -13998,6 +14021,10 @@ func (ts *session) applyPeriodicTickDamageToPlayer(dmg, targetHealth uint32, aur
 	// rather than a damage==0 gate because absorbed-to-zero damage still runs
 	// the legs in C++ (absorbed hits strip TAKE_DAMAGE-interrupt auras).
 	godNegated := ts.godCheatActive()
+	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
+	if !godNegated && dmg > 0 {
+		ts.splitShareDamagePct(context.Background(), ts.playerGUID, true, creatureAuraKey{}, aura.CasterGUID, dmg, aura.SchoolMask)
+	}
 	// Duel defeat threshold is damage >= health-1 (Unit.cpp:826), not just
 	// lethal.
 	if !godNegated && targetHealth > 0 && dmg+1 >= targetHealth {
@@ -14037,6 +14064,8 @@ func (ts *session) applyPeriodicTickDamageToPlayer(dmg, targetHealth uint32, aur
 		return dmg
 	} else if !godNegated {
 		ts.player.Health -= dmg
+		// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
+		ts.grantRageFromDamageTaken(context.Background(), dmg)
 		ts.procDamageAuras(false, dmg)
 		ts.sendPlayerUpdate()
 		return dmg
@@ -14985,6 +15014,10 @@ func (s *session) applyPeriodicManaLeechGain(ctx context.Context, caster *sessio
 // periodic tick on a creature target, shared by the damage (3/89) and leech (53)
 // tick paths. Returns the damage actually dealt and whether the target survived.
 func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, targetHealth uint32, target combatTarget, key creatureAuraKey, aura *activeAura) (uint32, bool) {
+	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
+	if dmg > 0 {
+		s.splitShareDamagePct(ctx, key.GUID, false, key, aura.CasterGUID, dmg, aura.SchoolMask)
+	}
 	if dmg >= targetHealth {
 		// Target slain by DoT
 		if s.server != nil {
@@ -15036,6 +15069,9 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 		return dmg, false
 	}
 	newHealth := targetHealth - dmg
+	rageChanged := false
+	var rageNext, rageMapID, rageInstanceID uint32
+	var rageGUID uint64
 	if s.server != nil {
 		s.server.motionMu.Lock()
 		motion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
@@ -15049,6 +15085,12 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 				tappedFlags = motion.DynamicFlags
 			}
 			motion.Health = newHealth
+			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received
+			// (creature victims; no absorbed model on this path).
+			if next, changed := s.server.addCreatureRageLocked(motion, motion.Level, dmg); changed {
+				rageChanged, rageNext = true, next
+				rageMapID, rageInstanceID, rageGUID = motion.Map, motion.InstanceID, motion.GUID
+			}
 			motion.InCombat = true
 			if motion.ThreatMgr == nil {
 				motion.ThreatMgr = NewThreatManager(target.GUID)
@@ -15060,6 +15102,9 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 		}
 		s.server.motionMu.Unlock()
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldHealth: newHealth})
+		if rageChanged {
+			s.server.broadcastCreatureValuesUpdateInInstance(rageMapID, rageInstanceID, rageGUID, map[int]uint32{unitFieldPower1 + powerRage: rageNext})
+		}
 		if newlyTapped {
 			// New tap: the client grays the name via UNIT_DYNFLAG_TAPPED.
 			s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldDynamicFlags: tappedFlags})

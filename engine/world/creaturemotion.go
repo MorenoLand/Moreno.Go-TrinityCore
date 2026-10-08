@@ -1112,6 +1112,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// C++ sending SMSG_SPELLNONMELEEDAMAGELOG before DealDamage
 				// (Spell.cpp:2542).
 				godNegated := target.Sess.godCheatActive()
+				// Unit::DealDamage (Unit.cpp:766-788):
+				// SPELL_AURA_SHARE_DAMAGE_PCT copies CalculatePct(damage,
+				// amount) to the aura's caster.
+				if !godNegated && damage > 0 {
+					target.Sess.splitShareDamagePct(ctx, target.GUID, true, creatureAuraKey{}, motion.GUID, damage, uint32(schoolMask))
+				}
 				if !godNegated && damage >= target.Sess.player.Health {
 					overkill = damage - target.Sess.player.Health
 					target.Sess.player.Health = 0
@@ -1135,6 +1141,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 				} else if !godNegated {
 					target.Sess.player.Health -= damage
+					// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
+					target.Sess.grantRageFromDamageTaken(ctx, damage)
 					// Reference Unit::DealDamage -> Spell::Delayed / DelayedChannel
 					target.Sess.delayCurrentCast()
 					target.Sess.delayCurrentChannel()
@@ -1277,8 +1285,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 
 			overkill := uint32(0)
+			// absorbedDmg carries the pre-absorb portion for the rage legs
+			// (Unit.cpp:815-924): the received leg converts damage + absorbed.
+			absorbedDmg := uint32(0)
 			if damage > 0 && isPlayerVictim {
 				absorbed, rem := target.Sess.applyAbsorptionShields(damage, 1)
+				absorbedDmg = absorbed
 				damage = rem
 				if rem == 0 && absorbed > 0 {
 					hitInfo |= protocol.HitInfoFullAbsorb
@@ -1292,7 +1304,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// no procs. lastCombatTime / in-combat still update, as entering
 			// combat precedes DealDamage in C++.
 			damage = target.Sess.negateGodModeDamage(damage)
+			// Unit::DealDamage (Unit.cpp:815-819): rage from fully absorbed
+			// damage — ahead of the application block the god arm skips (the
+			// god arm itself returns before this leg in C++).
+			if damage == 0 && absorbedDmg > 0 && !target.Sess.godCheatActive() {
+				target.Sess.grantRageFromDamageTaken(ctx, absorbedDmg)
+			}
 			if damage > 0 {
+				// Unit::DealDamage (Unit.cpp:766-788):
+				// SPELL_AURA_SHARE_DAMAGE_PCT.
+				target.Sess.splitShareDamagePct(ctx, target.GUID, true, creatureAuraKey{}, motion.GUID, damage, 1)
 				if damage >= target.Sess.player.Health {
 					overkill = damage - target.Sess.player.Health
 					target.Sess.player.Health = 0
@@ -1311,6 +1332,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 				} else {
 					target.Sess.player.Health -= damage
+					// Unit::DealDamage (Unit.cpp:915-924): rage from damage
+					// received — damage + absorbed for the conversion.
+					target.Sess.grantRageFromDamageTaken(ctx, damage+absorbedDmg)
 					// Reference Unit::DealDamage -> Spell::Delayed / DelayedChannel
 					target.Sess.delayCurrentCast()
 					target.Sess.delayCurrentChannel()
