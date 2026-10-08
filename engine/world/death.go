@@ -2,7 +2,10 @@ package world
 
 import (
 	"context"
+	"database/sql"
 	"math"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -77,7 +80,7 @@ func (s *Server) buildNearbyCorpseUpdates(ctx context.Context, state playerState
 	// Reference Map::LoadCorpseData (Map.cpp:4551-4583) scopes the map's
 	// corpse grid by (mapId, instanceId): corpses from another dungeon
 	// instance of the same map are never visible.
-	rows, err := s.CharactersStore.DB.QueryContext(ctx, `SELECT guid, mapId, posX, posY, posZ, orientation, displayId, bytes1, bytes2, guildId, flags, dynFlags, corpseType, phaseMask
+	rows, err := s.CharactersStore.DB.QueryContext(ctx, `SELECT guid, mapId, posX, posY, posZ, orientation, displayId, itemCache, bytes1, bytes2, guildId, flags, dynFlags, corpseType, phaseMask
 		FROM corpse WHERE mapId = ? AND instanceId = ? AND posX BETWEEN ? AND ? AND posY BETWEEN ? AND ? ORDER BY guid`, state.Map, state.InstanceID, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance)
 	if err != nil {
 		if missingTable(err) || isMissingColumn(err) {
@@ -86,28 +89,95 @@ func (s *Server) buildNearbyCorpseUpdates(ctx context.Context, state playerState
 		return nil, 0, err
 	}
 	defer rows.Close()
-	updates := protocol.NewUpdateData()
-	count := 0
+	type gridCorpse struct {
+		guid, mapID, displayID, bytes1, bytes2, guildID, flags, dynamicFlags, corpseType, phaseMask int64
+		x, y, z, orientation                                                                        float64
+		itemCache                                                                                   string
+	}
+	var corpses []gridCorpse
 	for rows.Next() {
-		var guid, mapID, displayID, bytes1, bytes2, guildID, flags, dynamicFlags, corpseType, corpsePhaseMask int64
-		var x, y, z, orientation float64
-		if err := rows.Scan(&guid, &mapID, &x, &y, &z, &orientation, &displayID, &bytes1, &bytes2, &guildID, &flags, &dynamicFlags, &corpseType, &corpsePhaseMask); err != nil {
-			return nil, count, err
+		var c gridCorpse
+		if err := rows.Scan(&c.guid, &c.mapID, &c.x, &c.y, &c.z, &c.orientation, &c.displayID, &c.itemCache, &c.bytes1, &c.bytes2, &c.guildID, &c.flags, &c.dynamicFlags, &c.corpseType, &c.phaseMask); err != nil {
+			return nil, 0, err
 		}
-		if guid <= 0 || uint32(mapID) != state.Map || uint32(corpsePhaseMask)&phaseMask == 0 || math.Hypot(x-float64(state.X), y-float64(state.Y)) > distance || !validMovementPosition(float32(x), float32(y), float32(z), float32(orientation)) {
+		if c.guid <= 0 || uint32(c.mapID) != state.Map || uint32(c.phaseMask)&phaseMask == 0 || math.Hypot(c.x-float64(state.X), c.y-float64(state.Y)) > distance || !validMovementPosition(float32(c.x), float32(c.y), float32(c.z), float32(c.orientation)) {
 			continue
 		}
-		ownerGUID := uint64(guid)
-		if corpseType == int64(corpseTypeBones) {
-			ownerGUID = 0
-		}
-		corpseGUID := uint64(guid) | (uint64(0xF101) << 48)
-		block := buildCorpseCreateBlockWithFields(corpseGUID, corpseObjectFields{OwnerGUID: ownerGUID, DisplayID: uint32(displayID), Bytes1: uint32(bytes1), Bytes2: uint32(bytes2), GuildID: uint32(guildID), Flags: uint32(flags), DynamicFlags: uint32(dynamicFlags)}, float32(x), float32(y), float32(z), float32(orientation))
-		updates.AddUpdateBlock(block)
-		count++
+		corpses = append(corpses, c)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, count, err
+		return nil, 0, err
+	}
+	// The equipment cache rides the same packing as the fresh-corpse visual
+	// (Corpse::LoadCorpseFromDB restores CORPSE_FIELD_ITEM from the stored
+	// row, Corpse.cpp:155-159); one batched template lookup covers every
+	// corpse on the grid.
+	var worldDB *sql.DB
+	if s.WorldStore != nil {
+		worldDB = s.WorldStore.DB
+	}
+	caches := make([][corpseItemSlots]uint32, len(corpses))
+	if worldDB != nil {
+		parsed := make([][]uint32, len(corpses))
+		entries := make([]uint32, 0, len(corpses)*corpseItemSlots)
+		seen := make(map[uint32]bool)
+		for i, c := range corpses {
+			fields := strings.Fields(c.itemCache)
+			parsed[i] = make([]uint32, corpseItemSlots)
+			for slot := 0; slot < corpseItemSlots; slot++ {
+				base := slot * 2
+				if base >= len(fields) {
+					continue
+				}
+				entry, err := strconv.ParseUint(fields[base], 10, 32)
+				if err != nil || entry == 0 {
+					continue
+				}
+				parsed[i][slot] = uint32(entry)
+				if !seen[uint32(entry)] {
+					seen[uint32(entry)] = true
+					entries = append(entries, uint32(entry))
+				}
+			}
+		}
+		if len(entries) > 0 {
+			placeholders := strings.Repeat("?,", len(entries))
+			query := "SELECT entry, displayid, InventoryType FROM item_template WHERE entry IN (" + placeholders[:len(placeholders)-1] + ")"
+			args := make([]any, len(entries))
+			for i, entry := range entries {
+				args[i] = entry
+			}
+			if qrows, err := worldDB.QueryContext(ctx, query, args...); err == nil {
+				byEntry := make(map[uint32][2]uint32, len(entries))
+				for qrows.Next() {
+					var entry, display, invType uint32
+					if qrows.Scan(&entry, &display, &invType) == nil {
+						byEntry[entry] = [2]uint32{display, invType}
+					}
+				}
+				_ = qrows.Close()
+				for i := range corpses {
+					for slot := 0; slot < corpseItemSlots; slot++ {
+						if v, ok := byEntry[parsed[i][slot]]; ok {
+							caches[i][slot] = v[0] | (v[1] << 24)
+						}
+					}
+				}
+			}
+		}
+	}
+	updates := protocol.NewUpdateData()
+	count := 0
+	for i, c := range corpses {
+		guid := uint64(c.guid)
+		ownerGUID := guid
+		if c.corpseType == int64(corpseTypeBones) {
+			ownerGUID = 0
+		}
+		corpseGUID := guid | (uint64(0xF101) << 48)
+		block := buildCorpseCreateBlockWithFields(corpseGUID, corpseObjectFields{OwnerGUID: ownerGUID, DisplayID: uint32(c.displayID), Items: caches[i], Bytes1: uint32(c.bytes1), Bytes2: uint32(c.bytes2), GuildID: uint32(c.guildID), Flags: uint32(c.flags), DynamicFlags: uint32(c.dynamicFlags)}, float32(c.x), float32(c.y), float32(c.z), float32(c.orientation))
+		updates.AddUpdateBlock(block)
+		count++
 	}
 	if count == 0 {
 		return nil, 0, nil
@@ -500,6 +570,11 @@ type corpseObjectFields struct {
 	GuildID      uint32
 	Flags        uint32
 	DynamicFlags uint32
+	// Items is the CORPSE_FIELD_ITEM equipment cache (values[11..29]):
+	// per-slot DisplayInfoID | (InventoryType << 24) for the 19 equipment
+	// slots (Player::CreateCorpse, Player.cpp:4854-4864). Bones visuals
+	// leave it zeroed (Map::ConvertCorpseToBones clears every slot).
+	Items [19]uint32
 }
 
 func buildCorpseCreateBlock(corpseGUID, ownerGUID uint64, displayID uint32, posX, posY, posZ, orientation float32, isBones bool) []byte {
@@ -521,6 +596,9 @@ func buildCorpseCreateBlockWithFields(corpseGUID uint64, fields corpseObjectFiel
 	values[6] = uint32(fields.OwnerGUID)
 	values[7] = uint32(fields.OwnerGUID >> 32)
 	values[10] = fields.DisplayID
+	for i := 0; i < 19 && i < len(fields.Items); i++ {
+		values[11+i] = fields.Items[i] // CORPSE_FIELD_ITEM + i
+	}
 	values[30] = fields.Bytes1
 	values[31] = fields.Bytes2
 	values[32] = fields.GuildID
@@ -588,13 +666,76 @@ func corpseFlags(player *playerState, battlegroundLootable bool) uint32 {
 	return flags
 }
 
-func (s *session) spawnCorpseObject(displayID uint32, battlegroundLootable bool) {
+// corpseItemSlots is EQUIPMENT_SLOT_END (Player.h): the 19 worn-gear slots
+// the corpse item cache covers (Player.cpp:4854). The Go equipment string
+// carries 23 slots (4 bag slots follow); only the first 19 are packed here.
+const corpseItemSlots = 19
+
+// resolveCorpseItemCache builds the CORPSE_FIELD_ITEM equipment cache for a
+// corpse visual: per worn slot, DisplayInfoID | (InventoryType << 24)
+// (Player::CreateCorpse, Player.cpp:4857-4863). equipment is the
+// entry/enchantments pair string from loadEquipmentCache (slots beyond the
+// string or with no resolvable template row stay 0). Unlike the mirror-image
+// arm, the cache carries no hide-helm/hide-cloak suppression — the client
+// applies those from CORPSE_FIELD_FLAGS.
+func resolveCorpseItemCache(ctx context.Context, db *sql.DB, equipment string) [corpseItemSlots]uint32 {
+	var items [corpseItemSlots]uint32
+	fields := strings.Fields(equipment)
+	entries := make([]uint32, 0, corpseItemSlots)
+	slots := make([]int, 0, corpseItemSlots)
+	for slot := 0; slot < corpseItemSlots; slot++ {
+		base := slot * 2
+		if base >= len(fields) {
+			continue
+		}
+		entry, err := strconv.ParseUint(fields[base], 10, 32)
+		if err != nil || entry == 0 {
+			continue
+		}
+		entries = append(entries, uint32(entry))
+		slots = append(slots, slot)
+	}
+	if len(entries) == 0 || db == nil {
+		return items
+	}
+	placeholders := strings.Repeat("?,", len(entries))
+	query := "SELECT entry, displayid, InventoryType FROM item_template WHERE entry IN (" + placeholders[:len(placeholders)-1] + ")"
+	args := make([]any, len(entries))
+	for i, entry := range entries {
+		args[i] = entry
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return items
+	}
+	defer rows.Close()
+	byEntry := make(map[uint32][2]uint32, len(entries))
+	for rows.Next() {
+		var entry, display, invType uint32
+		if rows.Scan(&entry, &display, &invType) != nil {
+			continue
+		}
+		byEntry[entry] = [2]uint32{display, invType}
+	}
+	for i, slot := range slots {
+		if v, ok := byEntry[entries[i]]; ok {
+			items[slot] = v[0] | (v[1] << 24)
+		}
+	}
+	return items
+}
+
+func (s *session) spawnCorpseObject(ctx context.Context, displayID uint32, battlegroundLootable bool) {
 	if s.player == nil {
 		return
 	}
 	corpseGUID := s.playerGUID | (uint64(0xF101) << 48)
 	bytes1, bytes2 := corpseAppearance(s.player)
-	fields := corpseObjectFields{OwnerGUID: s.playerGUID, DisplayID: displayID, Bytes1: bytes1, Bytes2: bytes2, GuildID: s.player.GuildID, Flags: corpseFlags(s.player, battlegroundLootable)}
+	var worldDB *sql.DB
+	if s.server != nil && s.server.WorldStore != nil {
+		worldDB = s.server.WorldStore.DB
+	}
+	fields := corpseObjectFields{OwnerGUID: s.playerGUID, DisplayID: displayID, Bytes1: bytes1, Bytes2: bytes2, GuildID: s.player.GuildID, Flags: corpseFlags(s.player, battlegroundLootable), Items: resolveCorpseItemCache(ctx, worldDB, s.player.Equipment)}
 	block := buildCorpseCreateBlockWithFields(corpseGUID, fields, s.player.X, s.player.Y, s.player.Z, s.player.Orientation)
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(block)
@@ -626,8 +767,9 @@ func (s *session) despawnCorpseObject() {
 // (m_playerLogout is set before BuildPlayerRepop in WorldSession::LogoutPlayer,
 // WorldSession.cpp:502) the MOVE_UNROOT leg is skipped — Player.cpp:4662-4663.
 // No-bridge: C++ aborts before the ghost conversion when a corpse already
-// exists on the map (Player.cpp:4640-4646); Go deletes the previous record
-// (CHAR_DEL_CORPSE) first, so the leg is unreachable. When both reclaim-delay
+// exists on the map (Player.cpp:4640-4646); Go converts the previous corpse
+// to bones first (Player::CreateCorpse's SpawnCorpseBones arm), so the leg
+// is unreachable. When both reclaim-delay configs are off C++ returns -1
 // configs are off C++ returns -1 and skips the packet (Player.cpp:24374+4670);
 // Go sends a 0ms SMSG_CORPSE_RECLAIM_DELAY instead.
 func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
@@ -661,8 +803,15 @@ func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 	// these flags; the DB row only exists outside battlegrounds (the
 	// BG/arena save-skip at Player.cpp:4867-4868, gated in buildPlayerRepop).
 	bgLootable := s.bgData.InstanceID != 0
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		// Reference Corpse::SaveToDB deletes any previous record first.
+	// Player::CreateCorpse (Player.cpp:4812) opens with SpawnCorpseBones():
+	// a second death converts the existing corpse to bones
+	// (Map::ConvertCorpseToBones deletes the old row outside the BG/arena
+	// save-skip gate and spawns the ownerless bones visual per the
+	// DEATH_BONES configs) instead of only deleting the row.
+	// convertCorpseToBones is the Go analog; it early-returns when no row
+	// exists, matching ConvertCorpseToBones' GetCorpseByPlayer miss.
+	s.convertCorpseToBones(ctx, false)
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil && !bgLootable {
 		// Column order mirrors SaveToDB (Corpse.cpp:102-119): the dynFlags
 		// 0 is exact — Player::CreateCorpse never sets CORPSE_FIELD_DYNAMIC_FLAGS
 		// on a fresh corpse — and instanceId is the map's instance id
@@ -677,12 +826,9 @@ func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 		// gate), but no new row is written, so BG deaths leave no stale
 		// corpse row behind for the reclaim / map-admission / login loaders.
 		bytes1, bytes2 := corpseAppearance(s.player)
-		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_DEL_CORPSE", s.playerGUID)
-		if !bgLootable {
-			_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_CORPSE",
-				s.playerGUID, s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.Map,
-				displayID, s.player.Equipment, bytes1, bytes2, s.player.GuildID, corpseFlags(s.player, bgLootable), 0, time.Now().Unix(), corpseType, s.player.InstanceID, s.currentPlayerPhaseMask())
-		}
+		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_CORPSE",
+			s.playerGUID, s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.Map,
+			displayID, s.player.Equipment, bytes1, bytes2, s.player.GuildID, corpseFlags(s.player, bgLootable), 0, time.Now().Unix(), corpseType, s.player.InstanceID, s.currentPlayerPhaseMask())
 	}
 
 	s.player.PlayerFlags |= playerFlagGhost
@@ -693,7 +839,7 @@ func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 		s.applyAura(20584) // Wisp Spirit
 	}
 	s.applyAura(8326) // Ghost
-	s.spawnCorpseObject(displayID, bgLootable)
+	s.spawnCorpseObject(ctx, displayID, bgLootable)
 	s.player.UnitFlags &^= unitFlagSkinnable
 	s.sendPlayerUpdate()
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK))
