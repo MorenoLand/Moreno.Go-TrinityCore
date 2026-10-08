@@ -520,7 +520,20 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		s.server.scheduleGameObjectResetInInstance(goState.Map, goState.InstanceID, guid, 5*time.Second)
 
 	case GameObjectTypeChest:
-		s.handleLoot(ctx, payload)
+		// Chests open through the lock path: the client casts Opening and
+		// Spell::EffectOpenLock answers Spell::SendLoot(guid, LOOT_SKINNING)
+		// (SpellEffects.cpp:2031), so the window carries LOOT_SKINNING (not
+		// LOOT_CORPSE) and SendLoot's shouldLootRelease LOOT_SKINNING arm
+		// allows 20 yards (Player.cpp:8545-8550). The previous-loot release
+		// and dead-player drop mirror the handleLoot head they replace
+		// (Player.cpp:8526-8527, LootHandler.cpp:232-233).
+		if s.isDeadOrGhost() {
+			return true
+		}
+		if prev := s.activeLoot; prev != nil && prev.TargetGUID != guid {
+			s.doLootRelease(prev)
+		}
+		return s.openGameObjectLoot(ctx, guid, lootTypeSkinning, 20.0)
 
 	case GameObjectTypeFishingNode, GameObjectTypeFishingHole:
 		s.updateAchievementCriteria(criteriaTypeFishInGameObject, entry, 1)

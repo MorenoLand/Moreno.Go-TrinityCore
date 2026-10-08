@@ -955,19 +955,29 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 	// Player::SendLoot permission model (Player.cpp:8784-8862, Loot.cpp:672):
 	// solo creature/item loot carries OWNER_PERMISSION, rendered as
 	// LOOT_SLOT_TYPE_OWNER; ungrouped gameobject loot carries ALL_PERMISSION
-	// (plain allow-loot). The skinning/pickpocket arms set OWNER explicitly
-	// and skip the group ladder entirely.
+	// (plain allow-loot).
 	ownerSlot := uint8(0) // LOOT_SLOT_TYPE_ALLOW_LOOT
 	if uint16(loot.TargetGUID>>48) != 0xF110 {
 		ownerSlot = 4 // LOOT_SLOT_TYPE_OWNER
 	}
+	// The gameobject group-permission ladder (Player.cpp:8640-8661) applies
+	// whenever a GO loot window opens in a group — even with loot_type
+	// LOOT_SKINNING, since chests open via EffectOpenLock
+	// (SpellEffects.cpp:2031). Only creature skinning/pickpocketing skip the
+	// ladder (Player.cpp:8770-8790, never touching the group ladder).
+	groupLadder := grp != nil && !((loot.LootType == lootTypeSkinning || loot.LootType == lootTypePickpocketing) &&
+		uint16(loot.TargetGUID>>48) != 0xF110)
+	// Under the ladder the default slot is ALLOW_LOOT (Loot.cpp:596-706);
+	// the OWNER base only applies outside it.
+	baseSlot := ownerSlot
+	if groupLadder {
+		baseSlot = 0
+	}
 	for _, it := range items {
-		var slotType uint8 = ownerSlot
-		if grp != nil && loot.LootType != lootTypeSkinning && loot.LootType != lootTypePickpocketing {
+		var slotType uint8 = baseSlot
+		if groupLadder {
 			isOverThreshold := it.Quality >= uint32(grp.LootThreshold)
 			switch grp.LootMethod {
-			case 0: // Free for all
-				slotType = 0
 			case 1: // Round Robin
 				if loot.RoundRobinPlayer != 0 && s.playerGUID != loot.RoundRobinPlayer {
 					slotType = 3 // LOOT_SLOT_TYPE_LOCKED
@@ -979,11 +989,10 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 					} else {
 						slotType = 3 // LOOT_SLOT_TYPE_LOCKED
 					}
-				} else {
-					if loot.RoundRobinPlayer != 0 && s.playerGUID != loot.RoundRobinPlayer {
-						slotType = 3 // LOOT_SLOT_TYPE_LOCKED
-					}
 				}
+				// Under-threshold items are ALLOW_LOOT for every viewer
+				// (Loot.cpp:657: the !is_underthreshold arm; MasterLoot sets
+				// is_blocked = !is_underthreshold, Group.cpp:1413).
 			case 3, 4: // Group Loot / Need Before Greed
 				if isOverThreshold {
 					rollKey := lootRollKey{Object: loot.objectKey(), Slot: uint32(it.Slot)}
@@ -999,11 +1008,8 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 							slotType = 3 // LOOT_SLOT_TYPE_LOCKED
 						}
 					}
-				} else {
-					if loot.RoundRobinPlayer != 0 && s.playerGUID != loot.RoundRobinPlayer {
-						slotType = 3 // LOOT_SLOT_TYPE_LOCKED
-					}
 				}
+				// Under-threshold: ALLOW_LOOT for every viewer (same arm).
 			}
 		}
 		packet.WriteU8(it.Slot)
@@ -1026,7 +1032,10 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 		// Loot.cpp:709-711: the quest section rides the permission default
 		// (OWNER/ALLOW) unless follow_loot_rules pulls it into the master
 		// arm, which always renders MASTER for the master looter's view.
-		var qSlotType uint8 = ownerSlot
+		// The default follows baseSlot: under the group ladder the
+		// permission arms render ALLOW_LOOT (Loot.cpp:709:
+		// OWNER_PERMISSION ? OWNER : ALLOW_LOOT).
+		var qSlotType uint8 = baseSlot
 		if qit.CustomFlags&itemFlagsCuFollowLootRules != 0 && grp != nil && grp.LootMethod == 2 {
 			if s.playerGUID == grp.MasterLooter {
 				qSlotType = 2 // LOOT_SLOT_TYPE_MASTER
