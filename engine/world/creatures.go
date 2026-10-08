@@ -172,7 +172,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 			spawns[index].BoundingRadius, spawns[index].CombatReach, spawns[index].MaxHealth = stats.BoundingRadius, stats.CombatReach, stats.MaxHealth
 			spawns[index].Health = creatureSpawnHealth(spawns[index].RegenerateHealth, spawns[index].Health, stats.MaxHealth)
 			s.applyCreatureMotionToSpawn(state, &spawns[index])
-			updates.AddUpdateBlock(buildCreatureUpdate(spawns[index]))
+			updates.AddUpdateBlock(buildCreatureUpdate(spawns[index], observer))
 		}
 		packet, err := updates.BuildPacket(0)
 		return packet, count, err
@@ -208,7 +208,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		spawns[index].BoundingRadius, spawns[index].CombatReach, spawns[index].MaxHealth = stats.BoundingRadius, stats.CombatReach, stats.MaxHealth
 		spawns[index].Health = creatureSpawnHealth(spawns[index].RegenerateHealth, spawns[index].Health, stats.MaxHealth)
 		s.applyCreatureMotionToSpawn(state, &spawns[index])
-		updates.AddUpdateBlock(buildCreatureUpdate(spawns[index]))
+		updates.AddUpdateBlock(buildCreatureUpdate(spawns[index], observer))
 	}
 	packet, err := updates.BuildPacket(0)
 	return packet, count, err
@@ -244,7 +244,7 @@ func filterNewTransportCreaturePassengers(observer *session, spawns []creatureSp
 	return visible
 }
 
-func buildCreatureUpdate(spawn creatureSpawn) []byte {
+func buildCreatureUpdate(spawn creatureSpawn, observer *session) []byte {
 	values := make([]uint32, creatureValuesCount)
 	rawGUID := spawn.RawGUID
 	if rawGUID == 0 {
@@ -273,6 +273,14 @@ func buildCreatureUpdate(spawn creatureSpawn) []byte {
 	values[unitModCastSpeed] = math.Float32bits(1)
 	if spawn.Health == 0 {
 		values[unitFieldDynamicFlags] = 1 // UNIT_DYNFLAG_LOOTABLE
+		// Unit::BuildValuesUpdateBlockForPlayer (Unit.cpp:13921-13931) masks
+		// UNIT_DYNFLAG_LOOTABLE per viewer via Player::isAllowedToLoot: a dead
+		// spawn only sparkles for the observer when the sparkle-visibility
+		// check passes for them.
+		if observer != nil && observer.server != nil && observer.player != nil &&
+			!observer.server.creatureLootSparkleVisible(spawn.Map, observer.player.InstanceID, rawGUID, observer.player.GUID, observer.groupID) {
+			values[unitFieldDynamicFlags] &^= unitDynFlagLootable
+		}
 	}
 	values[unitFieldNPCFlags] = spawn.NPCFlags
 	values[unitFieldAttackTime] = maxUint32(spawn.AttackTime, 2000)
@@ -508,10 +516,27 @@ func (s *Server) broadcastCreatureValuesUpdate(mapID uint32, guid uint64, fields
 	if err != nil || packet == nil {
 		return
 	}
+	// Unit::BuildValuesUpdateBlockForPlayer (Unit.cpp:13921-13931) masks
+	// UNIT_DYNFLAG_LOOTABLE per viewer via Player::isAllowedToLoot: build the
+	// masked variant once and pick per viewer. A failed masked build falls
+	// back to the base packet for everyone.
+	var masked *protocol.Packet
+	if fields[unitFieldDynamicFlags]&unitDynFlagLootable != 0 {
+		maskedFields := make(map[int]uint32, len(fields))
+		for k, v := range fields {
+			maskedFields[k] = v
+		}
+		maskedFields[unitFieldDynamicFlags] &^= unitDynFlagLootable
+		masked, _ = s.buildCreatureValuesUpdate(guid, maskedFields)
+	}
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
 		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID {
+			continue
+		}
+		if masked != nil && !s.creatureLootSparkleVisible(mapID, sess.player.InstanceID, guid, sess.player.GUID, sess.groupID) {
+			_ = sess.write(masked.Opcode, masked.Payload.Bytes(), true)
 			continue
 		}
 		_ = sess.write(packet.Opcode, packet.Payload.Bytes(), true)
@@ -523,10 +548,27 @@ func (s *Server) broadcastCreatureValuesUpdateInInstance(mapID, instanceID uint3
 	if err != nil || packet == nil {
 		return
 	}
+	// Unit::BuildValuesUpdateBlockForPlayer (Unit.cpp:13921-13931) masks
+	// UNIT_DYNFLAG_LOOTABLE per viewer via Player::isAllowedToLoot: build the
+	// masked variant once and pick per viewer. A failed masked build falls
+	// back to the base packet for everyone.
+	var masked *protocol.Packet
+	if fields[unitFieldDynamicFlags]&unitDynFlagLootable != 0 {
+		maskedFields := make(map[int]uint32, len(fields))
+		for k, v := range fields {
+			maskedFields[k] = v
+		}
+		maskedFields[unitFieldDynamicFlags] &^= unitDynFlagLootable
+		masked, _ = s.buildCreatureValuesUpdate(guid, maskedFields)
+	}
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
 		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID || sess.player.InstanceID != instanceID {
+			continue
+		}
+		if masked != nil && !s.creatureLootSparkleVisible(mapID, instanceID, guid, sess.player.GUID, sess.groupID) {
+			_ = sess.write(masked.Opcode, masked.Payload.Bytes(), true)
 			continue
 		}
 		_ = sess.write(packet.Opcode, packet.Payload.Bytes(), true)

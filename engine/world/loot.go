@@ -454,6 +454,132 @@ func (s *Server) creatureLootAllowed(mapID, instanceID uint32, targetGUID, stand
 	return playerGUID == owner.PlayerGUID
 }
 
+// creatureLootSparkleVisible mirrors Player::isAllowedToLoot (Player.cpp:18104-18150)
+// as consulted by Unit::BuildValuesUpdateBlockForPlayer's UNIT_DYNAMIC_FLAGS arm
+// (Unit.cpp:13921-13931): the UNIT_DYNFLAG_LOOTABLE bit is masked per viewer, so a
+// corpse only sparkles for players who may actually loot it. Only the arms Go can
+// model are evaluated:
+//   - the fully-looted arm (Player.cpp:18109): motion.Looted (set by clearCreatureLoot)
+//     or a loot store with no rows left hides the sparkle for everyone;
+//   - the group loot-method ladder (Player.cpp:18125-18147): MASTER_LOOT and
+//     FREE_FOR_ALL show the sparkle to every group member; ROUND_ROBIN shows it to
+//     the round-robin holder (or everyone while no holder is assigned / anyone with
+//     a personal row); GROUP_LOOT and NEED_BEFORE_GREED show it to the round-robin
+//     holder, to everyone while an over-threshold row stands (rolls are about to
+//     launch), or to anyone with a personal row. A solo tap shows the sparkle to
+//     the tapper only (Player.cpp:18124); the skinning arm (Player.cpp:18118) rides
+//     the same leg because Go stores the skinner as a GroupID-0 owner.
+//   - no owner on record defaults to visible, matching creatureLootAllowed.
+//
+// Loot::hasItemForAll / hasItemFor / hasOverThresholdItem (Loot.cpp:516-585) feed the
+// personal-row arms from the server loot store; when the store has no rows yet (Go
+// fills loot lazily at first open) the personal arms default to visible.
+// Documented no-bridge arms: HasPendingBind (Player.cpp:18107, no Go bind model),
+// LootItem conditions (Loot.cpp:519, no Go condition model — every row counts as
+// unconditional), the isDead arm (Go only broadcasts LOOTABLE on death paths, where
+// C++'s arm is definitionally true), and IsDamageEnoughForLootingAndReward (the kill
+// path already sheds LOOTABLE|TAPPED on a failed requirement, kill.go).
+func (s *Server) creatureLootSparkleVisible(mapID, instanceID uint32, targetGUID, viewerGUID, viewerGroupID uint64) bool {
+	if s == nil {
+		return true
+	}
+	if motion := s.findCreatureMotion(mapID, instanceID, targetGUID); motion != nil && motion.Looted {
+		return false
+	}
+	s.lootMu.Lock()
+	key := lootObjectKey{MapID: mapID, InstanceID: instanceID, GUID: targetGUID}
+	owner, found := s.creatureLootOwners[key]
+	loot := s.creatureLoot[key]
+	if low, entry := uint32(targetGUID&0x00FFFFFF), uint32(targetGUID>>24&0x00FFFFFF); !found || loot == nil {
+		if std := creatureWorldGUID(low, entry); std != targetGUID {
+			skey := lootObjectKey{MapID: mapID, InstanceID: instanceID, GUID: std}
+			if o, ok := s.creatureLootOwners[skey]; ok && !found {
+				owner, found = o, true
+			}
+			if l := s.creatureLoot[skey]; l != nil && loot == nil {
+				loot = l
+			}
+		}
+	}
+	s.lootMu.Unlock()
+	if loot != nil && lootFullyLooted(loot) {
+		return false
+	}
+	// No loot left for this viewer at all (Player.cpp:18113-18114). Skipped
+	// while the store has no rows: Go fills lazily at first open, so an
+	// unfilled store must not hide the sparkle.
+	if loot != nil && !lootHasItemForAll(loot) && !lootHasItemForViewer(loot, viewerGUID) {
+		return false
+	}
+	if !found {
+		return true
+	}
+	if owner.GroupID != 0 {
+		if viewerGroupID == 0 || viewerGroupID != owner.GroupID {
+			return false
+		}
+		grp := s.getGroup(viewerGroupID)
+		if grp == nil {
+			return true
+		}
+		switch grp.LootMethod {
+		case 2, 0: // MASTER_LOOT, FREE_FOR_ALL (Player.cpp:18129-18131)
+			return true
+		case 1: // ROUND_ROBIN (Player.cpp:18132-18137)
+			if loot == nil || loot.RoundRobinPlayer == 0 || loot.RoundRobinPlayer == viewerGUID {
+				return true
+			}
+			return lootHasItemForViewer(loot, viewerGUID)
+		default: // GROUP_LOOT, NEED_BEFORE_GREED (Player.cpp:18138-18147)
+			if loot == nil || loot.RoundRobinPlayer == 0 || loot.RoundRobinPlayer == viewerGUID {
+				return true
+			}
+			if loot.hasOverThresholdItem(grp.LootThreshold) {
+				return true
+			}
+			return lootHasItemForViewer(loot, viewerGUID)
+		}
+	}
+	return viewerGUID == owner.PlayerGUID
+}
+
+// lootHasItemForAll mirrors Loot::hasItemForAll (Loot.cpp:516-526): gold or any
+// unlooted, non-free-for-all row. Go deletes taken rows from the Items map, so
+// presence implies !is_looted.
+func lootHasItemForAll(loot *activeLootState) bool {
+	if loot == nil {
+		return false
+	}
+	if loot.Money != 0 {
+		return true
+	}
+	for _, it := range loot.Items {
+		if !it.FreeForAll {
+			return true
+		}
+	}
+	return false
+}
+
+// lootHasItemForViewer mirrors Loot::hasItemFor (Loot.cpp:529-564): any
+// free-for-all row the viewer hasn't taken, or any quest row. Per-viewer quest
+// visibility (AllowedForPlayer) is approximated by row presence — the real check
+// needs a DB-backed quest evaluation per broadcast viewer.
+func lootHasItemForViewer(loot *activeLootState, viewerGUID uint64) bool {
+	if loot == nil {
+		return false
+	}
+	if len(loot.QuestItems) != 0 {
+		return true
+	}
+	for slot, it := range loot.Items {
+		if it.FreeForAll && !loot.FFATaken[slot][viewerGUID] {
+			return true
+		}
+	}
+	return false
+}
+
 // withinLootDistance mirrors WorldObject::IsWithinDistInMap(obj,
 // INTERACTION_DISTANCE) (Object.cpp:1147): the 5.0-yard interaction check
 // adds both combat reaches (Object.cpp:1149-1152), so a large creature stays
