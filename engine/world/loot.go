@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"math/rand"
 	"sort"
@@ -58,6 +59,15 @@ const pickpocketRefillSeconds = 600
 // maxQuestLootItems mirrors MAX_NR_QUEST_ITEMS (Loot.h:57).
 const maxQuestLootItems = 32
 
+// maxNormalLootItems mirrors MAX_NR_LOOT_ITEMS (Loot.h:55): Loot::AddItem
+// caps the normal items vector at 18 rows.
+const maxNormalLootItems = 18
+
+// lootModeDefault mirrors LOOT_MODE_DEFAULT (SharedDefines.h:42): the loot
+// mode every Go template fill passes, since Go models no creature loot modes
+// (C++ passes creature->GetLootMode(), Unit.cpp:11250).
+const lootModeDefault = 1
+
 type activeLootState struct {
 	TargetGUID uint64
 	MapID      uint32
@@ -101,7 +111,7 @@ func storeLootTemplateRow(loot *activeLootState, slot, qidx *uint8, itemID, coun
 		*qidx++
 		return
 	}
-	if *slot >= 16 {
+	if *slot >= maxNormalLootItems {
 		return
 	}
 	loot.Items[*slot] = lootItem{
@@ -114,6 +124,271 @@ func storeLootTemplateRow(loot *activeLootState, slot, qidx *uint8, itemID, coun
 		CustomFlags:   customFlags,
 	}
 	*slot++
+}
+
+// maxLootReferenceDepth caps recursive reference_loot_template expansion in
+// fillLootTemplate. C++ imposes no cap (reference cycles are a DB error); the
+// cap only guards a corrupt reference chain from recursing without bound.
+const maxLootReferenceDepth = 8
+
+// lootTemplateRow is one row of a *_loot_template table as loaded for
+// generation, mirroring LootStoreItem (LootMgr.h).
+type lootTemplateRow struct {
+	itemID        uint32
+	reference     uint32
+	chance        float64
+	minCount      uint32
+	maxCount      uint32
+	displayID     uint32
+	quality       uint32
+	questRequired bool
+	startQuest    uint32
+	customFlags   uint32
+	lootMode      uint32
+	groupID       uint8
+	maxStack      uint32
+}
+
+// fillLootTemplate mirrors LootTemplate::Process (LootMgr.cpp:562-600) driving
+// Loot::AddItem (Loot.cpp:141-186): rows whose lootmode bit is not set for the
+// requested mode are skipped (SharedDefines.h LootModes); non-grouped rows are
+// rolled independently, reference rows expanding reference_loot_template;
+// then each loot group rolls exactly one entry (LootGroup::Roll/Process,
+// LootMgr.cpp:375-397/421-426). table is one of the *_loot_template tables;
+// loot must be freshly cleared — slot counters restart at 0 and
+// NormalSlotCount is set on return.
+func (s *Server) fillLootTemplate(ctx context.Context, wdb *sql.DB, table string, lootID int64, lootMode uint32, loot *activeLootState) {
+	var slot, qidx uint8
+	s.fillLootTemplateDepth(ctx, wdb, table, lootID, lootMode, loot, &slot, &qidx, 0)
+	loot.NormalSlotCount = slot
+}
+
+func (s *Server) fillLootTemplateDepth(ctx context.Context, wdb *sql.DB, table string, lootID int64, lootMode uint32, loot *activeLootState, slot, qidx *uint8, depth int) {
+	switch table {
+	case "creature_loot_template", "gameobject_loot_template", "skinning_loot_template",
+		"pickpocketing_loot_template", "reference_loot_template":
+	default:
+		return
+	}
+	if depth > maxLootReferenceDepth || wdb == nil {
+		return
+	}
+	rows := loadLootTemplateRows(ctx, wdb, table, lootID, lootMode)
+
+	// Rolling non-grouped items first (LootMgr.cpp:574-597); references never
+	// join groups (LootTemplate::AddEntry, LootMgr.cpp:522-535).
+	var groups []*lootGroup
+	groupIndex := make(map[uint8]*lootGroup)
+	for i := range rows {
+		row := &rows[i]
+		if row.lootMode&lootMode == 0 {
+			continue
+		}
+		if row.groupID == 0 {
+			if row.reference > 0 {
+				if !lootRowTakesChance(row.chance) {
+					continue
+				}
+				// Reference multiplicator: maxcount loops over the referenced
+				// template (LootMgr.cpp:587-591); RATE_DROP_ITEM_REFERENCED and
+				// RATE_DROP_ITEM_REFERENCED_AMOUNT have no Go model.
+				for n := uint32(0); n < row.maxCount; n++ {
+					s.fillLootTemplateDepth(ctx, wdb, "reference_loot_template", int64(row.reference), lootMode, loot, slot, qidx, depth+1)
+				}
+				continue
+			}
+			if !lootRowTakesChance(row.chance) {
+				continue
+			}
+			addLootTemplateRow(loot, slot, qidx, row)
+			continue
+		}
+		g := groupIndex[row.groupID]
+		if g == nil {
+			g = &lootGroup{groupID: row.groupID}
+			groupIndex[row.groupID] = g
+			groups = append(groups, g)
+		}
+		if row.chance != 0 {
+			g.explicit = append(g.explicit, row)
+		} else {
+			g.equal = append(g.equal, row)
+		}
+	}
+
+	// Now processing groups, in ascending groupid order like the C++ Groups
+	// vector (LootMgr.cpp:599-601).
+	sort.Slice(groups, func(i, j int) bool { return groups[i].groupID < groups[j].groupID })
+	for _, g := range groups {
+		if row := g.roll(loot); row != nil {
+			addLootTemplateRow(loot, slot, qidx, row)
+		}
+	}
+}
+
+// lootGroup mirrors LootTemplate::LootGroup (LootMgr.h): entries with an
+// explicit chance roll sequentially, zero-chance entries share one equal
+// pick. At most one entry per group drops.
+type lootGroup struct {
+	groupID  uint8
+	explicit []*lootTemplateRow
+	equal    []*lootTemplateRow
+}
+
+// roll mirrors LootTemplate::LootGroup::Roll (LootMgr.cpp:375-397): the first
+// explicitly-chanced entry whose running chance subtraction drops below zero
+// wins (chance >= 100 wins immediately); otherwise one equal-chanced entry is
+// picked at random. Entries already present maxDuplicates (1) times in the
+// loot are excluded, mirroring LootGroupInvalidSelector (LootMgr.cpp:58-76);
+// the lootmode arm of that selector is applied at load time and conditions
+// have no Go model.
+func (g *lootGroup) roll(loot *activeLootState) *lootTemplateRow {
+	if len(g.explicit) > 0 {
+		roll := rand.Float64() * 100
+		for _, row := range g.explicit {
+			if lootHasItem(loot, row.itemID) {
+				continue
+			}
+			if row.chance >= 100 {
+				return row
+			}
+			roll -= row.chance
+			if roll < 0 {
+				return row
+			}
+		}
+	}
+	var candidates []*lootTemplateRow
+	for _, row := range g.equal {
+		if !lootHasItem(loot, row.itemID) {
+			candidates = append(candidates, row)
+		}
+	}
+	if len(candidates) > 0 {
+		return candidates[rand.Intn(len(candidates))]
+	}
+	return nil
+}
+
+// lootHasItem reports whether itemID already occupies a normal loot slot,
+// for the LootGroupInvalidSelector maxDuplicates arm (LootMgr.cpp:66-71).
+func lootHasItem(loot *activeLootState, itemID uint32) bool {
+	for _, it := range loot.Items {
+		if it.ItemEntry == itemID {
+			return true
+		}
+	}
+	return false
+}
+
+// lootRowTakesChance mirrors LootStoreItem::Roll (LootMgr.cpp:281-295) minus
+// the world rates (RATE_DROP_ITEM_REFERENCED and the qualityToRate table have
+// no Go model): a flat roll against the row chance.
+func lootRowTakesChance(chance float64) bool {
+	if chance >= 100 {
+		return true
+	}
+	return rand.Float64()*100 < chance
+}
+
+// addLootTemplateRow mirrors the count/stack arms of Loot::AddItem
+// (Loot.cpp:144-152): the rolled count is split into max-stack-sized rows
+// (ItemTemplate::GetMaxStackSize, ItemTemplate.h:688 — Stackable <= 0 means
+// effectively unlimited, so an unknown maxStack disables splitting).
+func addLootTemplateRow(loot *activeLootState, slot, qidx *uint8, row *lootTemplateRow) {
+	count := row.minCount
+	if row.maxCount > row.minCount {
+		count += uint32(rand.Intn(int(row.maxCount - row.minCount + 1)))
+	}
+	if count == 0 {
+		count = 1
+	}
+	stacks := uint32(1)
+	if row.maxStack > 1 && count > row.maxStack {
+		stacks = count / row.maxStack
+		if count%row.maxStack != 0 {
+			stacks++
+		}
+	}
+	for i := uint32(0); i < stacks; i++ {
+		c := count - i*row.maxStack
+		if row.maxStack > 0 && c > row.maxStack {
+			c = row.maxStack
+		}
+		storeLootTemplateRow(loot, slot, qidx, row.itemID, c, row.displayID, row.quality, row.startQuest, row.customFlags, row.questRequired)
+	}
+}
+
+// loadLootTemplateRows loads one loot template table's rows for an entry.
+// The full column set degrades through the two historical fallbacks when the
+// world schema lacks the newer columns (matching the pre-existing
+// isMissingColumn fallbacks at the call sites).
+func loadLootTemplateRows(ctx context.Context, wdb *sql.DB, table string, lootID int64, lootMode uint32) []lootTemplateRow {
+	full := `SELECT l.Item, l.Reference, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0),
+			COALESCE(l.QuestRequired, 0), COALESCE(t.StartQuest, 0), COALESCE(t.flagsCustom, 0),
+			COALESCE(l.LootMode, 1), COALESCE(l.GroupId, 0), COALESCE(t.Stackable, 0)
+		FROM ` + table + ` AS l
+		LEFT JOIN item_template AS t ON t.entry = l.Item
+		WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`
+	rows, err := wdb.QueryContext(ctx, full, lootID)
+	if err != nil && isMissingColumn(err) {
+		rows, err = wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0),
+				COALESCE(l.QuestRequired, 0), COALESCE(t.StartQuest, 0), COALESCE(t.flagsCustom, 0)
+			FROM `+table+` AS l
+			LEFT JOIN item_template AS t ON t.entry = l.Item
+			WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, lootID)
+	}
+	if err != nil && isMissingColumn(err) {
+		rows, err = wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), 0,
+					0, 0, 0
+			FROM `+table+` AS l
+			LEFT JOIN item_template AS t ON t.entry = l.Item
+			WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, lootID)
+	}
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []lootTemplateRow
+	for rows.Next() {
+		var r lootTemplateRow
+		var itemID, reference, minCount, maxCount, displayID, quality int64
+		var questRequired, startQuest, customFlags, lootModeRow, groupID, maxStack int64
+		var chance float64
+		cols, colErr := rows.Columns()
+		if colErr != nil {
+			continue
+		}
+		var scanErr error
+		if len(cols) >= 13 {
+			scanErr = rows.Scan(&itemID, &reference, &chance, &minCount, &maxCount, &displayID, &quality,
+				&questRequired, &startQuest, &customFlags, &lootModeRow, &groupID, &maxStack)
+		} else {
+			// Either historical fallback shape (9 selected columns); the
+			// unselected generation columns keep their neutral defaults.
+			scanErr = rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality,
+				&questRequired, &startQuest, &customFlags)
+			lootModeRow = int64(lootMode)
+		}
+		if scanErr != nil {
+			continue
+		}
+		r.itemID = uint32(itemID)
+		r.reference = uint32(reference)
+		r.chance = chance
+		r.minCount = uint32(minCount)
+		r.maxCount = uint32(maxCount)
+		r.displayID = uint32(displayID)
+		r.quality = uint32(quality)
+		r.questRequired = questRequired != 0
+		r.startQuest = uint32(startQuest)
+		r.customFlags = uint32(customFlags)
+		r.lootMode = uint32(lootModeRow)
+		r.groupID = uint8(groupID)
+		r.maxStack = uint32(maxStack)
+		out = append(out, r)
+	}
+	return out
 }
 
 type lootObjectKey struct {
@@ -519,45 +794,7 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 		return s.finishLootOpen(ctx, loot)
 	}
 
-	rows, err := wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0),
-			COALESCE(l.QuestRequired, 0), COALESCE(t.StartQuest, 0), COALESCE(t.flagsCustom, 0)
-		FROM gameobject_loot_template AS l
-		LEFT JOIN item_template AS t ON t.entry = l.Item
-		WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, lootID)
-	if err != nil && isMissingColumn(err) {
-		rows, err = wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), 0,
-				0, 0, 0
-			FROM gameobject_loot_template AS l
-			LEFT JOIN item_template AS t ON t.entry = l.Item
-			WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, lootID)
-	}
-	if err == nil {
-		defer rows.Close()
-		var slot uint8 = 0
-		var qidx uint8 = 0
-		for rows.Next() {
-			var itemID int64
-			var chance float64
-			var minCount, maxCount, displayID, quality int64
-			var questRequired, startQuest, customFlags int64
-			if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality, &questRequired, &startQuest, &customFlags); err != nil {
-				continue
-			}
-			roll := rand.Float64() * 100.0
-			if chance > 0 && roll > chance {
-				continue
-			}
-			count := uint32(minCount)
-			if maxCount > minCount {
-				count += uint32(rand.Intn(int(maxCount - minCount + 1)))
-			}
-			if count == 0 {
-				count = 1
-			}
-			storeLootTemplateRow(loot, &slot, &qidx, uint32(itemID), count, uint32(displayID), uint32(quality), uint32(startQuest), uint32(customFlags), questRequired != 0)
-		}
-		loot.NormalSlotCount = slot
-	}
+	s.server.fillLootTemplate(ctx, wdb, "gameobject_loot_template", lootID, lootModeDefault, loot)
 	if s.server != nil && s.groupID != 0 {
 		s.server.groupsMu.Lock()
 		grp := s.server.groups[s.groupID]
@@ -696,47 +933,10 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	} else if minGold > 0 {
 		loot.Money = uint32(minGold)
 	}
-	// Query creature_loot_template
-	rows, err := wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0),
-			COALESCE(l.QuestRequired, 0), COALESCE(t.StartQuest, 0), COALESCE(t.flagsCustom, 0)
-		FROM creature_loot_template AS l
-		LEFT JOIN item_template AS t ON t.entry = l.Item
-		WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, lootID)
-	if err != nil && isMissingColumn(err) {
-		rows, err = wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), 0,
-				0, 0, 0
-			FROM creature_loot_template AS l
-			LEFT JOIN item_template AS t ON t.entry = l.Item
-			WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, lootID)
-	}
-	if err == nil {
-		defer rows.Close()
-		var slot uint8 = 0
-		var qidx uint8 = 0
-		for rows.Next() {
-			var itemID int64
-			var chance float64
-			var minCount, maxCount, displayID, quality int64
-			var questRequired, startQuest, customFlags int64
-			if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality, &questRequired, &startQuest, &customFlags); err != nil {
-				continue
-			}
-			// Roll chance (0-100%)
-			roll := rand.Float64() * 100.0
-			if chance > 0 && roll > chance {
-				continue
-			}
-			count := uint32(minCount)
-			if maxCount > minCount {
-				count += uint32(rand.Intn(int(maxCount - minCount + 1)))
-			}
-			if count == 0 {
-				count = 1
-			}
-			storeLootTemplateRow(loot, &slot, &qidx, uint32(itemID), count, uint32(displayID), uint32(quality), uint32(startQuest), uint32(customFlags), questRequired != 0)
-		}
-		loot.NormalSlotCount = slot
-	}
+	// Loot::FillLoot (Loot.cpp:188) drives LootTemplate::Process over the
+	// creature template; Go has no creature loot modes, so the default mode
+	// (Unit.cpp:11250 passes creature->GetLootMode() in C++).
+	s.server.fillLootTemplate(ctx, wdb, "creature_loot_template", lootID, lootModeDefault, loot)
 	if s.server != nil && s.groupID != 0 {
 		s.server.groupsMu.Lock()
 		grp := s.server.groups[s.groupID]
@@ -1228,46 +1428,7 @@ func (s *session) openSkinningLoot(ctx context.Context, targetGUID uint64, entry
 	var skinLootID int64
 	_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(SkinLootId, 0) FROM creature_template WHERE entry = ? LIMIT 1", entry).Scan(&skinLootID)
 	if skinLootID != 0 {
-		rows, err := wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0),
-				COALESCE(l.QuestRequired, 0), COALESCE(t.StartQuest, 0), COALESCE(t.flagsCustom, 0)
-			FROM skinning_loot_template AS l
-			LEFT JOIN item_template AS t ON t.entry = l.Item
-			WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, skinLootID)
-		if err != nil && isMissingColumn(err) {
-			rows, err = wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), 0,
-					0, 0, 0
-				FROM skinning_loot_template AS l
-				LEFT JOIN item_template AS t ON t.entry = l.Item
-				WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, skinLootID)
-		}
-		if err == nil {
-			defer rows.Close()
-			var slot uint8 = 0
-			var qidx uint8 = 0
-			for rows.Next() {
-				var itemID int64
-				var chance float64
-				var minCount, maxCount, displayID, quality int64
-				var questRequired, startQuest, customFlags int64
-				if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality, &questRequired, &startQuest, &customFlags); err != nil {
-					continue
-				}
-				// Roll chance (0-100%), mirroring the creature-loot fill above.
-				roll := rand.Float64() * 100.0
-				if chance > 0 && roll > chance {
-					continue
-				}
-				count := uint32(minCount)
-				if maxCount > minCount {
-					count += uint32(rand.Intn(int(maxCount - minCount + 1)))
-				}
-				if count == 0 {
-					count = 1
-				}
-				storeLootTemplateRow(loot, &slot, &qidx, uint32(itemID), count, uint32(displayID), uint32(quality), uint32(startQuest), uint32(customFlags), questRequired != 0)
-			}
-			loot.NormalSlotCount = slot
-		}
+		s.server.fillLootTemplate(ctx, wdb, "skinning_loot_template", skinLootID, lootModeDefault, loot)
 	}
 	loot.addViewer(s)
 	s.activeLoot = loot
@@ -1355,46 +1516,7 @@ func (s *session) openPickpocketLoot(ctx context.Context, targetGUID uint64, ent
 	var pickpocketLootID int64
 	_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(pickpocketLootId, 0) FROM creature_template WHERE entry = ? LIMIT 1", entry).Scan(&pickpocketLootID)
 	if pickpocketLootID != 0 {
-		rows, err := wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0),
-					COALESCE(l.QuestRequired, 0), COALESCE(t.StartQuest, 0), COALESCE(t.flagsCustom, 0)
-				FROM pickpocketing_loot_template AS l
-				LEFT JOIN item_template AS t ON t.entry = l.Item
-				WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, pickpocketLootID)
-		if err != nil && isMissingColumn(err) {
-			rows, err = wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), 0,
-						0, 0, 0
-					FROM pickpocketing_loot_template AS l
-					LEFT JOIN item_template AS t ON t.entry = l.Item
-					WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, pickpocketLootID)
-		}
-		if err == nil {
-			defer rows.Close()
-			var slot uint8 = 0
-			var qidx uint8 = 0
-			for rows.Next() {
-				var itemID int64
-				var chance float64
-				var minCount, maxCount, displayID, quality int64
-				var questRequired, startQuest, customFlags int64
-				if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality, &questRequired, &startQuest, &customFlags); err != nil {
-					continue
-				}
-				// Roll chance (0-100%), mirroring the creature-loot fill above.
-				roll := rand.Float64() * 100.0
-				if chance > 0 && roll > chance {
-					continue
-				}
-				count := uint32(minCount)
-				if maxCount > minCount {
-					count += uint32(rand.Intn(int(maxCount - minCount + 1)))
-				}
-				if count == 0 {
-					count = 1
-				}
-				storeLootTemplateRow(loot, &slot, &qidx, uint32(itemID), count, uint32(displayID), uint32(quality), uint32(startQuest), uint32(customFlags), questRequired != 0)
-			}
-			loot.NormalSlotCount = slot
-		}
+		s.server.fillLootTemplate(ctx, wdb, "pickpocketing_loot_template", pickpocketLootID, lootModeDefault, loot)
 	}
 	// Player.cpp:8781-8783: gold = 10 * (urand(0, creatureLvl/2) +
 	// urand(0, playerLvl/2)) * RATE_DROP_MONEY; the rate has no Go model.
