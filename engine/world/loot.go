@@ -1368,14 +1368,17 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	var minGold, maxGold, lootID int64
 	_ = wdb.QueryRowContext(ctx, "SELECT minGold, maxGold FROM creature_template WHERE entry = ? LIMIT 1", creatureEntry).Scan(&minGold, &maxGold)
 	_ = wdb.QueryRowContext(ctx, "SELECT lootid FROM creature_template WHERE entry = ? LIMIT 1", creatureEntry).Scan(&lootID)
-	if lootID == 0 {
-		lootID = int64(creatureEntry)
-	}
 	loot.Money = generateMoneyLootValue(minGold, maxGold)
+	// Unit.cpp:11257-11258 (creature kill-time fill): the creature_loot_template
+	// fill runs ONLY when lootid != 0 — no entry fallback (mirrors the 11:59
+	// gameobject chest bridge at Player.cpp:8607). A zero-lootid creature still
+	// rolls money (GetLootMode() > 0; Go has no loot modes, so unconditionally).
 	// Loot::FillLoot (Loot.cpp:188) drives LootTemplate::Process over the
 	// creature template; Go has no creature loot modes, so the default mode
 	// (Unit.cpp:11250 passes creature->GetLootMode() in C++).
-	s.server.fillLootTemplate(ctx, wdb, "creature_loot_template", lootID, lootModeDefault, loot)
+	if lootID != 0 {
+		s.server.fillLootTemplate(ctx, wdb, "creature_loot_template", lootID, lootModeDefault, loot)
+	}
 	s.server.autoStoreLootCurrencyTokens(ctx, loot, s)
 	if s.server != nil && s.groupID != 0 {
 		s.server.groupsMu.Lock()
