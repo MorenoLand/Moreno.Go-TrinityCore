@@ -2170,9 +2170,12 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 	}
 
 	// Player::StoreLootItem (Player.cpp:25071-25075): the AllowedForPlayer
-	// gate is re-checked at take time; a quest item the viewer no longer
-	// qualifies for answers with a silent loot release, not an error.
-	if isQuestItem && !s.lootQuestItemAllowed(ctx, it, false) {
+	// gate is re-checked at take time for every item, not just quest
+	// rows; an item the viewer no longer qualifies for (faction recipe
+	// learned, quest completed since the window opened, a raw take
+	// opcode on a hidden row) answers with a silent loot release,
+	// not an error.
+	if !s.lootItemAllowedForPlayer(ctx, it, false) {
 		return s.sendLootReleaseResponse(s.activeLoot.TargetGUID) == nil
 	}
 
