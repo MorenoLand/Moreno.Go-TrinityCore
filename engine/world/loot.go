@@ -1232,7 +1232,14 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	stdKey := creatureWorldGUID(guid, creatureEntry)
 	if !s.server.creatureLootAllowed(target.Map, target.InstanceID, targetGUID, stdKey, s.playerGUID, s.groupID) {
 		s.interruptCurrentCast()
-		return s.sendLootError(targetGUID, 0) == nil
+		// Player::SendLoot (Player.cpp:8911-8912): the permission-NONE arm sends
+		// the error with GetLootGUID(), which the entry DoLootRelease already
+		// cleared (player->SetLootGUID(ObjectGuid::Empty), LootHandler.cpp:262)
+		// and the success-path SetLootGUID never runs here — so the wire guid
+		// is 0, not the corpse GUID. (The !recipient/!recipientGroup early arm
+		// at Player.cpp:8805 sends the target GUID, but Go's creatureLootAllowed
+		// never reaches it: a missing owner record defaults to allowed.)
+		return s.sendLootError(0, 0) == nil
 	}
 
 	s.server.lootMu.Lock()
@@ -1255,7 +1262,10 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	if !newLoot {
 		if !s.server.creatureLootAllowed(target.Map, target.InstanceID, targetGUID, stdKey, s.playerGUID, s.groupID) {
 			s.interruptCurrentCast()
-			return s.sendLootError(targetGUID, 0) == nil
+			// Player::SendLoot (Player.cpp:8911-8912): the permission-NONE arm
+			// answers with the cleared loot GUID (0), not the corpse GUID —
+			// see the same-gate comment above.
+			return s.sendLootError(0, 0) == nil
 		}
 		loot.addViewer(s)
 		s.activeLoot = loot
