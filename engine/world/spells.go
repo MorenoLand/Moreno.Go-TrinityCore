@@ -8011,10 +8011,17 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		// Target dies
 		s.server.motionMu.Lock()
 		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
+		corpseFlags := unitDynFlagLootable
 		if motion != nil {
+			// Unit::DealDamage tap block (Unit.cpp:872-876): the killing
+			// blow taps and lowers the damage requirement when untapped.
+			s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, target.Health)
 			s.server.clearInstanceEncounter(motion)
 			motion.Health = 0
 			motion.DynamicFlags |= unitDynFlagLootable
+			// The corpse keeps TAPPED when the tap survived to death
+			// (Unit.cpp:11172-11175), so broadcast the real flags.
+			corpseFlags = motion.DynamicFlags
 			motion.InCombat = false
 			motion.TargetGUID = 0
 			motion.Moving = false
@@ -8027,7 +8034,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		s.server.stopCreatureMotionInInstance(target.Map, target.InstanceID, target.GUID, target.X, target.Y, target.Z)
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth:       0,
-			unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
+			unitFieldDynamicFlags: corpseFlags,
 		})
 		s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.GUID)
 		_ = s.sendAttackStop(target.GUID, true)
@@ -8038,7 +8045,14 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		newHealth := target.Health - damage
 		s.server.motionMu.Lock()
 		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
+		newlyTapped := false
+		tappedFlags := uint32(0)
 		if motion != nil {
+			// Unit::DealDamage tap block (Unit.cpp:872-876).
+			if s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, target.Health) {
+				newlyTapped = true
+				tappedFlags = motion.DynamicFlags
+			}
 			motion.Health = newHealth
 			motion.InCombat = true
 			if motion.ThreatMgr == nil {
@@ -8073,6 +8087,10 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		}
 
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldHealth: newHealth})
+		if newlyTapped {
+			// New tap: the client grays the name via UNIT_DYNFLAG_TAPPED.
+			s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldDynamicFlags: tappedFlags})
+		}
 		s.server.procCreatureDamageAuras(creatureAuraKeyForTarget(target), true, damage, target.MaxHealth)
 		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
 		s.server.triggerPetDefensive(s.player.Map, s.player.InstanceID, s.playerGUID, targetGUID)
@@ -14949,10 +14967,20 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 		if s.server != nil {
 			s.server.motionMu.Lock()
 			motion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
+			corpseFlags := unitDynFlagLootable
 			if motion != nil {
+				// Unit::DealDamage tap block (Unit.cpp:872-876): the
+				// killing tick taps and lowers the damage requirement
+				// when untapped. The tick runs on the caster's session
+				// (the owner's when the caster is a pet), so s.playerGUID
+				// is already the charmer/owner-resolved player.
+				s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, dmg, targetHealth)
 				s.server.clearInstanceEncounter(motion)
 				motion.Health = 0
 				motion.DynamicFlags |= unitDynFlagLootable
+				// The corpse keeps TAPPED when the tap survived to death
+				// (Unit.cpp:11172-11175), so broadcast the real flags.
+				corpseFlags = motion.DynamicFlags
 				motion.InCombat = false
 				motion.TargetGUID = 0
 				motion.Moving = false
@@ -14965,7 +14993,7 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 			s.server.stopCreatureMotionInInstance(target.Map, target.InstanceID, target.GUID, target.X, target.Y, target.Z)
 			s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 				unitFieldHealth:       0,
-				unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
+				unitFieldDynamicFlags: corpseFlags,
 			})
 			s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.GUID)
 			s.server.clearCreatureAuras(key)
@@ -14988,7 +15016,15 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 	if s.server != nil {
 		s.server.motionMu.Lock()
 		motion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
+		newlyTapped := false
+		tappedFlags := uint32(0)
 		if motion != nil {
+			// Unit::DealDamage tap block (Unit.cpp:872-876); the tick
+			// runs on the caster/owner session (see the kill arm above).
+			if s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, dmg, targetHealth) {
+				newlyTapped = true
+				tappedFlags = motion.DynamicFlags
+			}
 			motion.Health = newHealth
 			motion.InCombat = true
 			if motion.ThreatMgr == nil {
@@ -15001,6 +15037,10 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 		}
 		s.server.motionMu.Unlock()
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldHealth: newHealth})
+		if newlyTapped {
+			// New tap: the client grays the name via UNIT_DYNFLAG_TAPPED.
+			s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldDynamicFlags: tappedFlags})
+		}
 		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
 	}
 	return dmg, true

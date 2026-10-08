@@ -125,9 +125,23 @@ type creatureMotion struct {
 	// Looted mirrors Loot::isLooted (Loot.h:236 — gold == 0 && unlootedCount
 	// == 0): set when the corpse's loot window fully empties, cleared on
 	// respawn. Consulted by the skinning CheckCast gate (spells.go).
-	Looted         bool
-	PetReact       uint8 // 0: passive, 1: defensive, 2: aggressive
-	AutocastSpells []uint32
+	Looted bool
+	// TapPlayerGUID/TapGroupID mirror Creature::SetLootRecipient
+	// (Creature.cpp:1328-1355): the first player-attributed damager
+	// (charmer/owner-resolved, so pet hits credit the owner) claims the
+	// loot rights at first hit (Unit::DealDamage, Unit.cpp:872-876), not
+	// at kill time; the UNIT_DYNFLAG_TAPPED flag rides with the tap and
+	// the group half feeds the group loot-permission check.
+	TapPlayerGUID uint64
+	TapGroupID    uint64
+	// PlayerDamageReq mirrors Creature::m_PlayerDamageReq
+	// (Creature.h:322-325): MaxHealth/2 at spawn, lowered by every
+	// player-attributed hit (Creature::LowerPlayerDamageReq,
+	// Creature.cpp:1577-1582, capped at the pre-hit health); kill
+	// rewards require it at 0 (IsDamageEnoughForLootingAndReward).
+	PlayerDamageReq uint32
+	PetReact        uint8 // 0: passive, 1: defensive, 2: aggressive
+	AutocastSpells  []uint32
 
 	PathID  uint32
 	Points  []waypointPoint
@@ -340,23 +354,25 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			health = st.MaxHealth
 		}
 		motion = &creatureMotion{
-			GUID:            key,
-			Entry:           entry,
-			Map:             mapID,
-			InstanceID:      instanceID,
-			HomeX:           x,
-			HomeY:           y,
-			HomeZ:           z,
-			Orientation:     orientation,
-			X:               x,
-			Y:               y,
-			Z:               z,
-			Speed:           creatureWalkVelocity(float64(walkSpeedRate)),
-			RunSpeed:        creatureRunVelocity(float64(runSpeedRate)),
-			MoveType:        moveType,
-			Wander:          wander,
-			WanderSteps:     2 + rand.Intn(9), // urand(2,10), RandomMovementGenerator.cpp:DoInitialize
-			Health:          health,
+			GUID:        key,
+			Entry:       entry,
+			Map:         mapID,
+			InstanceID:  instanceID,
+			HomeX:       x,
+			HomeY:       y,
+			HomeZ:       z,
+			Orientation: orientation,
+			X:           x,
+			Y:           y,
+			Z:           z,
+			Speed:       creatureWalkVelocity(float64(walkSpeedRate)),
+			RunSpeed:    creatureRunVelocity(float64(runSpeedRate)),
+			MoveType:    moveType,
+			Wander:      wander,
+			WanderSteps: 2 + rand.Intn(9), // urand(2,10), RandomMovementGenerator.cpp:DoInitialize
+			Health:      health,
+			// Creature::ResetPlayerDamageReq (Creature.h:324): GetHealth()/2.
+			PlayerDamageReq: health / 2,
 			MaxHealth:       st.MaxHealth,
 			Armor:           st.Armor,
 			Resistances:     st.Resistances,
@@ -470,21 +486,23 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				health = st.MaxHealth
 			}
 			motion = &creatureMotion{
-				GUID:            creatureGUID,
-				Entry:           entry,
-				Map:             uint32(mapID),
-				InstanceID:      instanceID,
-				HomeX:           float32(x),
-				HomeY:           float32(y),
-				HomeZ:           float32(z),
-				X:               float32(x),
-				Y:               float32(y),
-				Z:               float32(z),
-				Speed:           creatureBaseWalkSpeed,
-				RunSpeed:        creatureBaseRunSpeed,
-				Faction:         uint32(faction),
-				Level:           st.Level,
-				Health:          health,
+				GUID:       creatureGUID,
+				Entry:      entry,
+				Map:        uint32(mapID),
+				InstanceID: instanceID,
+				HomeX:      float32(x),
+				HomeY:      float32(y),
+				HomeZ:      float32(z),
+				X:          float32(x),
+				Y:          float32(y),
+				Z:          float32(z),
+				Speed:      creatureBaseWalkSpeed,
+				RunSpeed:   creatureBaseRunSpeed,
+				Faction:    uint32(faction),
+				Level:      st.Level,
+				Health:     health,
+				// Creature::ResetPlayerDamageReq (Creature.h:324): GetHealth()/2.
+				PlayerDamageReq: health / 2,
 				MaxHealth:       st.MaxHealth,
 				Armor:           st.Armor,
 				MinDamage:       st.MinDamage,
@@ -726,10 +744,17 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	motion.InCombat = false
 	motion.TargetGUID = 0
 	motion.Health = motion.MaxHealth
+	// CreatureAI::EnterEvadeMode (CreatureAI.cpp:307-311): the tap and the
+	// damage requirement reset with the evade (SetLootRecipient(nullptr)
+	// clears UNIT_DYNFLAG_TAPPED, so it rides the health broadcast).
+	motion.TapPlayerGUID, motion.TapGroupID = 0, 0
+	motion.PlayerDamageReq = motion.MaxHealth / 2
+	motion.DynamicFlags &^= unitDynFlagTapped
 	if s != nil {
 		s.clearCreatureAuras(creatureAuraKeyForMotion(motion))
 		s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, map[int]uint32{
-			unitFieldHealth: motion.MaxHealth,
+			unitFieldHealth:       motion.MaxHealth,
+			unitFieldDynamicFlags: motion.DynamicFlags,
 		})
 	}
 	homeDist := float32(math.Hypot(float64(motion.HomeX-motion.X), float64(motion.HomeY-motion.Y)))

@@ -20,6 +20,48 @@ const (
 // unitDynFlagLootable marks a corpse lootable in UNIT_FIELD_DYNAMIC_FLAGS.
 const unitDynFlagLootable uint32 = 0x00000001
 
+// unitDynFlagTapped mirrors UNIT_DYNFLAG_TAPPED (SharedDefines.h:3130):
+// set by Creature::SetLootRecipient on the first player-attributed hit.
+const unitDynFlagTapped uint32 = 0x00000004
+
+// creatureFlagExtraNoPlayerDamageReq mirrors
+// CREATURE_FLAG_EXTRA_NO_PLAYER_DAMAGE_REQ (CreatureData.h:58): the
+// creature needs no player damage for kill credit.
+const creatureFlagExtraNoPlayerDamageReq uint32 = 0x00200000
+
+// recordCreatureTap mirrors the tap block of Unit::DealDamage
+// (Unit.cpp:872-876): the first player-attributed damage sets the loot
+// recipient (Creature::SetLootRecipient, Creature.cpp:1328-1355 — the
+// charmer/owner-resolved player GUID plus group, UNIT_DYNFLAG_TAPPED)
+// and every such hit lowers m_PlayerDamageReq
+// (Creature::LowerPlayerDamageReq, Creature.cpp:1577-1582, capped at the
+// pre-hit health). Call with motionMu held. Returns true when the tap is
+// newly set — the caller broadcasts the dynamic-flags update after
+// unlocking. A zero playerGUID (no session) lowers the requirement but
+// sets no recipient, matching C++'s !attacker LowerPlayerDamageReq arm.
+func (s *Server) recordCreatureTap(motion *creatureMotion, playerGUID, groupID uint64, damage, healthBefore uint32) bool {
+	if motion == nil {
+		return false
+	}
+	newlyTapped := false
+	if playerGUID != 0 && motion.TapPlayerGUID == 0 {
+		motion.TapPlayerGUID = playerGUID
+		motion.TapGroupID = groupID
+		motion.DynamicFlags |= unitDynFlagTapped
+		newlyTapped = true
+	}
+	dealt := damage
+	if healthBefore < damage {
+		dealt = healthBefore
+	}
+	if motion.PlayerDamageReq > dealt {
+		motion.PlayerDamageReq -= dealt
+	} else {
+		motion.PlayerDamageReq = 0
+	}
+	return newlyTapped
+}
+
 // creatureRespawn records when a killed spawn restores its health.
 type creatureRespawn struct {
 	GUID       uint32
@@ -526,15 +568,56 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 	}
 	if s.server != nil {
 		standardGUID := creatureWorldGUID(guid, creatureEntry)
-		s.server.lootMu.Lock()
-		if s.server.creatureLootOwners == nil {
-			s.server.creatureLootOwners = make(map[lootObjectKey]lootOwnerState)
+		// Unit::Kill (Unit.cpp:11169-11204): the damage requirement
+		// (IsDamageEnoughForLootingAndReward) gates the loot recipient —
+		// a failed requirement clears it (SetLootRecipient(nullptr)) —
+		// while the player-pet exploit arm gates only the reward block
+		// (PARTY_KILL, loot generation, XP). The loot owner is the
+		// first-hit tapper (DealDamage, Unit.cpp:872-876), not the
+		// killer — the killer fallback covers tap-less kills (GM
+		// commands) where C++ would leave the recipient empty.
+		damageReqMet := true
+		petVictim := false
+		tapPlayer, tapGroup := s.playerGUID, s.groupID
+		if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
+			if motion.FlagsExtra&creatureFlagExtraNoPlayerDamageReq == 0 && motion.PlayerDamageReq != 0 {
+				damageReqMet = false
+			}
+			if motion.PetType != 0 && motion.OwnerGUID != 0 {
+				petVictim = true
+			}
+			if motion.TapPlayerGUID != 0 {
+				tapPlayer, tapGroup = motion.TapPlayerGUID, motion.TapGroupID
+			}
 		}
-		owner := lootOwnerState{PlayerGUID: s.playerGUID, GroupID: s.groupID}
-		s.server.creatureLootOwners[lootObjectKey{MapID: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}] = owner
-		s.server.creatureLootOwners[lootObjectKey{MapID: target.Map, InstanceID: target.InstanceID, GUID: standardGUID}] = owner
-		s.server.lootMu.Unlock()
-		s.rewardCreatureKillXP(ctx, target, creatureEntry, mobLevel)
+		if !damageReqMet {
+			// Unit::Kill (Unit.cpp:11172-11175): a failed requirement
+			// clears the loot recipient (SetLootRecipient(nullptr),
+			// Creature.cpp:1330-1338) — the corpse sheds LOOTABLE|TAPPED.
+			// The kill paths already broadcast the corpse flags before
+			// this gate ran, so re-broadcast the cleared value.
+			if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
+				s.server.motionMu.Lock()
+				motion.TapPlayerGUID, motion.TapGroupID = 0, 0
+				motion.DynamicFlags &^= unitDynFlagTapped | unitDynFlagLootable
+				flags := motion.DynamicFlags
+				s.server.motionMu.Unlock()
+				s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldDynamicFlags: flags})
+			}
+		}
+		if damageReqMet {
+			s.server.lootMu.Lock()
+			if s.server.creatureLootOwners == nil {
+				s.server.creatureLootOwners = make(map[lootObjectKey]lootOwnerState)
+			}
+			owner := lootOwnerState{PlayerGUID: tapPlayer, GroupID: tapGroup}
+			s.server.creatureLootOwners[lootObjectKey{MapID: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}] = owner
+			s.server.creatureLootOwners[lootObjectKey{MapID: target.Map, InstanceID: target.InstanceID, GUID: standardGUID}] = owner
+			s.server.lootMu.Unlock()
+		}
+		if damageReqMet && !petVictim {
+			s.rewardCreatureKillXP(ctx, target, creatureEntry, mobLevel)
+		}
 
 		// Unit::Kill (Unit.cpp:11257-11279): after the reward, the KILL proc
 		// leg fires on the killer's auras, then the per-kill GET_KILLING_BLOWS
@@ -894,6 +977,10 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 				motion.X, motion.Y, motion.Z = respawn.X, respawn.Y, respawn.Z
 				motion.InCombat, motion.TargetGUID, motion.Moving = false, 0, false
 				motion.Looted = false
+				// Creature::JUST_RESPAWNED (Creature.cpp:2121-2125):
+				// SetLootRecipient(nullptr) + ResetPlayerDamageReq().
+				motion.TapPlayerGUID, motion.TapGroupID = 0, 0
+				motion.PlayerDamageReq = respawn.Health / 2
 			}
 			s.motionMu.Unlock()
 			s.clearLootState(respawn.Map, 0, rawGUID)
@@ -923,6 +1010,11 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 			motion.InCombat, motion.Evading, motion.TargetGUID, motion.Moving = false, false, 0, false
 			motion.Looted = false
 			motion.Refreshed = now
+			// Creature::JUST_RESPAWNED (Creature.cpp:2121-2125):
+			// SetLootRecipient(nullptr) + ResetPlayerDamageReq().
+			motion.TapPlayerGUID, motion.TapGroupID = 0, 0
+			motion.DynamicFlags &^= unitDynFlagTapped | unitDynFlagLootable
+			motion.PlayerDamageReq = respawn.Health / 2
 		}
 		s.motionMu.Unlock()
 		s.clearLootState(item.key.MapID, item.key.InstanceID, creatureWorldGUID(respawn.GUID, respawn.Entry))

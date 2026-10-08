@@ -572,6 +572,14 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		s.motionMu.Lock()
 		cMotion := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, targetGUID)
 		if cMotion != nil {
+			// Unit::DealDamage tap block (Unit.cpp:872-876): pet damage
+			// taps for the owner (Creature::SetLootRecipient's
+			// GetCharmerOrOwnerPlayerOrPlayerItself).
+			var tapPlayer, tapGroup uint64
+			if owner != nil && owner.player != nil {
+				tapPlayer, tapGroup = owner.playerGUID, owner.groupID
+			}
+			newlyTapped := s.recordCreatureTap(cMotion, tapPlayer, tapGroup, damage, cMotion.Health)
 			if damage >= cMotion.Health {
 				// Snapshot the pre-kill target for the death chain, like the
 				// player swing path's getCombatTarget-before-damage.
@@ -595,11 +603,17 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				if cMotion.ThreatMgr != nil {
 					cMotion.ThreatMgr.ClearThreat()
 				}
-				s.broadcastCreatureValuesUpdateInInstance(cMotion.Map, cMotion.InstanceID, targetGUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: 1})
+				// The corpse keeps TAPPED when the tap survived to death
+				// (Unit.cpp:11172-11175), so broadcast the real flags.
+				s.broadcastCreatureValuesUpdateInInstance(cMotion.Map, cMotion.InstanceID, targetGUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: cMotion.DynamicFlags})
 				killed = true
 			} else {
 				cMotion.Health -= damage
-				s.broadcastCreatureValuesUpdateInInstance(cMotion.Map, cMotion.InstanceID, targetGUID, map[int]uint32{unitFieldHealth: cMotion.Health})
+				healthUpdate := map[int]uint32{unitFieldHealth: cMotion.Health}
+				if newlyTapped {
+					healthUpdate[unitFieldDynamicFlags] = cMotion.DynamicFlags
+				}
+				s.broadcastCreatureValuesUpdateInInstance(cMotion.Map, cMotion.InstanceID, targetGUID, healthUpdate)
 			}
 		}
 		s.motionMu.Unlock()
@@ -1056,9 +1070,18 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	}
 	s.server.motionMu.Lock()
 	targetMotion := s.server.findCreatureMotionLocked(target.Map, target.InstanceID, target.GUID)
+	newlyTapped := false
 	if targetMotion != nil {
+		// Unit::DealDamage tap block (Unit.cpp:872-876): pet spell
+		// damage taps for the owner (GetCharmerOrOwnerPlayerOrPlayerItself).
+		tapPlayer := s.playerGUID
+		if caster != nil && caster.OwnerGUID != 0 {
+			tapPlayer = caster.OwnerGUID
+		}
+		newlyTapped = s.server.recordCreatureTap(targetMotion, tapPlayer, s.groupID, damage, targetMotion.Health)
 		if damage >= targetMotion.Health {
 			targetMotion.Health = 0
+			targetMotion.DynamicFlags |= unitDynFlagLootable
 			targetMotion.InCombat = false
 			targetMotion.TargetGUID = 0
 			targetMotion.Moving = false
@@ -1079,10 +1102,16 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	}
 	if targetMotion.Health == 0 {
 		s.server.stopCreatureMotionInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, targetMotion.X, targetMotion.Y, targetMotion.Z)
-		s.server.broadcastCreatureValuesUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: 1})
+		// The corpse keeps TAPPED when the tap survived to death
+		// (Unit.cpp:11172-11175), so broadcast the real flags.
+		s.server.broadcastCreatureValuesUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: targetMotion.DynamicFlags})
 		s.onCreatureKilled(ctx, target, caster)
 	} else {
-		s.server.broadcastCreatureValuesUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, map[int]uint32{unitFieldHealth: targetMotion.Health})
+		healthUpdate := map[int]uint32{unitFieldHealth: targetMotion.Health}
+		if newlyTapped {
+			healthUpdate[unitFieldDynamicFlags] = targetMotion.DynamicFlags
+		}
+		s.server.broadcastCreatureValuesUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, healthUpdate)
 		s.server.triggerCreatureAggro(ctx, targetMotion.GUID, caster.OwnerGUID)
 	}
 }

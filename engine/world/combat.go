@@ -641,10 +641,18 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		// Target dies
 		s.server.motionMu.Lock()
 		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
+		corpseFlags := unitDynFlagLootable
 		if motion != nil {
+			// Unit::DealDamage tap block (Unit.cpp:872-876): the killing
+			// blow taps and lowers the damage requirement when untapped.
+			s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, target.Health)
 			s.server.clearInstanceEncounter(motion)
 			motion.Health = 0
 			motion.DynamicFlags |= unitDynFlagLootable
+			// The corpse keeps TAPPED when the tap survived to death
+			// (C++ clears it only on a failed damage requirement,
+			// Unit.cpp:11172-11175), so broadcast the real flags.
+			corpseFlags = motion.DynamicFlags
 			motion.InCombat = false
 			motion.TargetGUID = 0
 			motion.Moving = false
@@ -657,7 +665,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		s.server.stopCreatureMotionInInstance(target.Map, target.InstanceID, target.GUID, target.X, target.Y, target.Z)
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth:       0,
-			unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
+			unitFieldDynamicFlags: corpseFlags,
 		})
 		s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.GUID)
 		_ = s.sendAttackStop(target.GUID, true)
@@ -668,7 +676,16 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		newHealth := target.Health - damage
 		s.server.motionMu.Lock()
 		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
+		newlyTapped := false
+		tappedFlags := uint32(0)
 		if motion != nil {
+			// Unit::DealDamage tap block (Unit.cpp:872-876): first
+			// player-attributed hit claims the loot rights, every hit
+			// lowers the damage requirement.
+			if s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, target.Health) {
+				newlyTapped = true
+				tappedFlags = motion.DynamicFlags
+			}
 			motion.Health = newHealth
 			if motion.ThreatMgr == nil {
 				motion.ThreatMgr = NewThreatManager(target.GUID)
@@ -701,6 +718,12 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth: newHealth,
 		})
+		if newlyTapped {
+			// New tap: the client grays the name via UNIT_DYNFLAG_TAPPED.
+			s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
+				unitFieldDynamicFlags: tappedFlags,
+			})
+		}
 		s.server.procCreatureDamageAuras(creatureAuraKeyForTarget(target), true, damage, target.MaxHealth)
 		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
 	}
@@ -975,10 +998,18 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		// Target dies
 		s.server.motionMu.Lock()
 		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
+		corpseFlags := unitDynFlagLootable
 		if motion != nil {
 			s.server.clearInstanceEncounter(motion)
+			// Unit::DealDamage tap block (Unit.cpp:872-876): the killing
+			// blow taps and lowers the damage requirement when untapped.
+			s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, target.Health)
 			motion.Health = 0
 			motion.DynamicFlags |= unitDynFlagLootable
+			// The corpse keeps TAPPED when the tap survived to death
+			// (C++ clears it only on a failed damage requirement,
+			// Unit.cpp:11172-11175), so broadcast the real flags.
+			corpseFlags = motion.DynamicFlags
 			motion.InCombat = false
 			motion.TargetGUID = 0
 			motion.Moving = false
@@ -991,7 +1022,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		s.server.stopCreatureMotionInInstance(target.Map, target.InstanceID, target.GUID, target.X, target.Y, target.Z)
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth:       0,
-			unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
+			unitFieldDynamicFlags: corpseFlags,
 		})
 		s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.GUID)
 		s.autoRepeatSpell = 0
@@ -1008,7 +1039,14 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		newHealth := target.Health - damage
 		s.server.motionMu.Lock()
 		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
+		newlyTapped := false
+		tappedFlags := uint32(0)
 		if motion != nil {
+			// Unit::DealDamage tap block (Unit.cpp:872-876).
+			if s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, target.Health) {
+				newlyTapped = true
+				tappedFlags = motion.DynamicFlags
+			}
 			motion.Health = newHealth
 			if motion.ThreatMgr == nil {
 				motion.ThreatMgr = NewThreatManager(target.GUID)
@@ -1041,6 +1079,12 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth: newHealth,
 		})
+		if newlyTapped {
+			// New tap: the client grays the name via UNIT_DYNFLAG_TAPPED.
+			s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
+				unitFieldDynamicFlags: tappedFlags,
+			})
+		}
 		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
 	}
 }
@@ -1446,30 +1490,32 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 		}
 	} else {
 		motion := &creatureMotion{
-			GUID:        target.GUID,
-			Entry:       uint32(entry),
-			Map:         target.Map,
-			InstanceID:  s.player.InstanceID,
-			HomeX:       target.X,
-			HomeY:       target.Y,
-			HomeZ:       target.Z,
-			X:           target.X,
-			Y:           target.Y,
-			Z:           target.Z,
-			Speed:       2.5,
-			RunSpeed:    7.0,
-			UnitFlags:   target.UnitFlags,
-			FlagsExtra:  target.FlagsExtra,
-			Health:      target.Health,
-			MaxHealth:   target.MaxHealth,
-			Armor:       target.Armor,
-			Resistances: target.Resistances,
-			MinDamage:   target.MinDamage,
-			MaxDamage:   target.MaxDamage,
-			Level:       uint32(target.Level),
-			AttackTime:  st.AttackTime,
-			CombatReach: target.CombatReach,
-			Refreshed:   time.Now(),
+			GUID:       target.GUID,
+			Entry:      uint32(entry),
+			Map:        target.Map,
+			InstanceID: s.player.InstanceID,
+			HomeX:      target.X,
+			HomeY:      target.Y,
+			HomeZ:      target.Z,
+			X:          target.X,
+			Y:          target.Y,
+			Z:          target.Z,
+			Speed:      2.5,
+			RunSpeed:   7.0,
+			UnitFlags:  target.UnitFlags,
+			FlagsExtra: target.FlagsExtra,
+			Health:     target.Health,
+			// Creature::ResetPlayerDamageReq (Creature.h:324): GetHealth()/2.
+			PlayerDamageReq: target.Health / 2,
+			MaxHealth:       target.MaxHealth,
+			Armor:           target.Armor,
+			Resistances:     target.Resistances,
+			MinDamage:       target.MinDamage,
+			MaxDamage:       target.MaxDamage,
+			Level:           uint32(target.Level),
+			AttackTime:      st.AttackTime,
+			CombatReach:     target.CombatReach,
+			Refreshed:       time.Now(),
 		}
 		motions := s.server.motionMapLocked(target.Map, s.player.InstanceID)
 		motions[target.GUID] = motion
