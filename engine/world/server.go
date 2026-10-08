@@ -1296,6 +1296,14 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 	defer close(closed)
 	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{}), characterNames: make(map[uint64]enumCharacter), auras: make(map[uint32]struct{}), auraSlots: make(map[uint32]uint8), channels: make(map[string]struct{}), timeSyncPending: make(map[uint32]uint32), scale: 1, breathTimer: -1, fatigueTimer: -1, schoolLockouts: make(map[uint32]int64)}
 	state.resetTimeoutTime(false)
+	// WorldSocket::Start/CheckIpCallback (WorldSocket.cpp:49): the connect
+	// handshake rejects a banned source IP with the 1-byte AUTH_REJECT form
+	// before the auth challenge is ever sent (LOGIN_SEL_IP_INFO).
+	if ipBanned(ctx, s.AuthStore, remoteAddress(conn)) {
+		state.debug("world connection rejected", "remote", remoteAddress(conn), "reason", "ip banned")
+		_ = state.write(opcodeAuthResponse, []byte{authReject}, false)
+		return
+	}
 	s.addSession(state)
 	defer s.removeSession(state)
 	defer state.logout()
@@ -3395,6 +3403,11 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		_ = s.write(opcodeAuthResponse, []byte{authUnknownAccount}, false)
 		return false
 	}
+	// WorldSocket.cpp:267 (AccountInfo ctor): an account expansion above the
+	// world's configured expansion is clamped down to it.
+	if worldExpansion := s.server.Config.Expansion; worldExpansion >= 0 && account.Expansion > uint8(worldExpansion) {
+		account.Expansion = uint8(worldExpansion)
+	}
 	_, _ = s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_LAST_ATTEMPT_IP", remoteAddress(s.conn), accountName)
 	if len(account.SessionKey) != crypto.SRP6SessionKeyLength {
 		s.debug("world authentication rejected", "account", debugAccount, "reason", "invalid session key length")
@@ -3987,14 +4000,60 @@ func loadAccount(ctx context.Context, store *database.Store, username string, re
 	} else {
 		result.Expansion = 2 // WotLK default
 	}
-	var security int64
-	err = store.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(SecurityLevel), 0) FROM account_access WHERE AccountID = ? AND RealmID IN (-1, ?)", result.ID, realmID).Scan(&security)
-	if err == nil {
-		result.Security = uint8(security)
-	} else if !strings.Contains(strings.ToLower(err.Error()), "no such table") && !strings.Contains(strings.ToLower(err.Error()), "doesn't exist") && !strings.Contains(strings.ToLower(err.Error()), "unknown table") {
+	// WorldSocket.cpp:267 (AccountInfo ctor): the auth query's ORDER BY
+	// aa.RealmID DESC LIMIT 1 picks the realm-specific access row over the
+	// global (-1) row — MAX would wrongly promote a global GM on a realm
+	// where they were explicitly demoted (or vice versa).
+	security, err := accountSecurityLevel(ctx, store.DB, result.ID, realmID)
+	if err != nil {
 		return nil, err
 	}
+	result.Security = security
 	return &result, nil
+}
+
+// accountSecurityLevel mirrors the account_access arm of
+// LOGIN_SEL_ACCOUNT_INFO_BY_NAME (LoginDatabase.cpp:49): the realm-specific
+// row wins over the global RealmID=-1 row; a missing row or table yields
+// SEC_PLAYER (0), matching C++ GetUInt8 on the NULL LEFT JOIN field.
+func accountSecurityLevel(ctx context.Context, db *sql.DB, accountID uint32, realmID uint32) (uint8, error) {
+	if db == nil {
+		return 0, nil
+	}
+	for _, rid := range []any{realmID, -1} {
+		var level sql.NullInt64
+		err := db.QueryRowContext(ctx, "SELECT SecurityLevel FROM account_access WHERE AccountID = ? AND RealmID = ?", accountID, rid).Scan(&level)
+		if err == nil {
+			if level.Valid {
+				return uint8(level.Int64), nil
+			}
+			return 0, nil
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		lower := strings.ToLower(err.Error())
+		if strings.Contains(lower, "no such table") || strings.Contains(lower, "doesn't exist") || strings.Contains(lower, "unknown table") {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return 0, nil
+}
+
+// ipBanned mirrors WorldSocket::CheckIpCallback (WorldSocket.cpp:56): any
+// ip_banned row for this exact IP whose ban is still live (unbandate > now,
+// or permanent unbandate = bandate) rejects the socket. A failed lookup
+// fails open like the C++ null-result arm.
+func ipBanned(ctx context.Context, store *database.Store, ip string) bool {
+	if store == nil || store.DB == nil || ip == "" {
+		return false
+	}
+	var count int64
+	if err := store.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM ip_banned WHERE ip = ? AND (unbandate > ? OR unbandate = bandate)", ip, timeNow()).Scan(&count); err != nil {
+		return false
+	}
+	return count != 0
 }
 
 func accountBanned(ctx context.Context, store *database.Store, id uint32) (bool, error) {
