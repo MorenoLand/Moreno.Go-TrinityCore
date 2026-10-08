@@ -56,30 +56,34 @@ var applicationStartTime = time.Now()
 func gameTimeMS() uint32 { return uint32(time.Since(applicationStartTime) / time.Millisecond) }
 
 type Server struct {
-	AuthStore                 *database.Store
-	CharactersStore           *database.Store
-	WorldStore                *database.Store
-	Logger                    *slog.Logger
-	worldTimeStartedAt        time.Time
-	TraceRecorder             *protocoltrace.Recorder
-	RealmID                   uint32
-	allowedSecurityLevel      uint8
-	Config                    config.Config
-	clientCacheVersion        uint32
-	Features                  *Features
-	Data                      *wotlk.Store
-	ipLocations               *iplocation.Store
-	worldstatesMu             sync.RWMutex
-	worldstates               map[uint32]uint64
-	sessionsMu                sync.RWMutex
-	sessions                  map[*session]struct{}
-	autoBalanceMu             sync.RWMutex
-	autoBalanceMaps           map[autoBalanceInstanceKey]*autoBalanceMapInfo
-	autoBalanceCreatures      map[uint64]*autoBalanceCreatureInfo
-	autoBalanceLFG            []wotlk.LFGDungeon
-	autoBalanceBosses         map[uint32]struct{}
-	autoBalanceBossesLoaded   bool
-	queuedSessions            []*session
+	AuthStore               *database.Store
+	CharactersStore         *database.Store
+	WorldStore              *database.Store
+	Logger                  *slog.Logger
+	worldTimeStartedAt      time.Time
+	TraceRecorder           *protocoltrace.Recorder
+	RealmID                 uint32
+	allowedSecurityLevel    uint8
+	Config                  config.Config
+	clientCacheVersion      uint32
+	Features                *Features
+	Data                    *wotlk.Store
+	ipLocations             *iplocation.Store
+	worldstatesMu           sync.RWMutex
+	worldstates             map[uint32]uint64
+	sessionsMu              sync.RWMutex
+	sessions                map[*session]struct{}
+	autoBalanceMu           sync.RWMutex
+	autoBalanceMaps         map[autoBalanceInstanceKey]*autoBalanceMapInfo
+	autoBalanceCreatures    map[uint64]*autoBalanceCreatureInfo
+	autoBalanceLFG          []wotlk.LFGDungeon
+	autoBalanceBosses       map[uint32]struct{}
+	autoBalanceBossesLoaded bool
+	queuedSessions          []*session
+	// disconnectTimes mirrors World's m_disconnects (World.cpp:3114): account id
+	// -> unix time of last non-queued session removal, consulted by the
+	// DisconnectToleranceInterval queue-skip arm.
+	disconnectTimes           map[uint32]int64
 	playerLimit               uint32
 	closed                    atomic.Bool
 	ticketsEnabled            atomic.Bool
@@ -528,7 +532,7 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 	if len(settings) != 0 {
 		c = settings[0]
 	}
-	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), playerLimit: c.PlayerLimit, hiddenGameObjects: make(map[uint64]struct{}), auctionGetAllThrottle: make(map[uint64]int64), dynamicGameObjects: make(map[uint64]*dynamicGameObjectState), dynamicSpellObjects: make(map[uint64]*dynamicSpellObjectState), wsgState: make(map[uint32]*wsgBattlegroundState), abState: make(map[uint32]*abBattlegroundState), eotsState: make(map[uint32]*eotsBattlegroundState), avState: make(map[uint32]*avBattlegroundState), saState: make(map[uint32]*saBattlegroundState), icState: make(map[uint32]*icBattlegroundState), activeTotems: make(map[uint64][4]*activeTotem), creatureAuras: make(map[creatureAuraKey]map[uint32]struct{}), activeCreatureAuras: make(map[creatureAuraKey]map[uint32]*activeAura), singleCastAuras: make(map[uint64][]singleCastEntry), channels: make(map[string]*worldChannel), groups: make(map[uint64]*groupState), instanceCreatureMotion: make(map[instanceAdmissionKey]map[uint64]*creatureMotion), creatureRespawns: make(map[uint32]creatureRespawn), transports: make(map[uint32]*continentTransport), creatureLoot: make(map[lootObjectKey]*activeLootState), creatureLootOwners: make(map[lootObjectKey]lootOwnerState), pickpocketLootRestore: make(map[lootObjectKey]int64), creatureStatsCache: make(map[uint32]creatureStats), groupRolls: make(map[lootRollKey]*activeGroupRoll), wardenCheckMgr: newWardenCheckMgr(), vehicleKits: make(map[uint64]*VehicleKit), vehicleSeatAddons: make(map[uint32]*VehicleSeatAddon), vehicleAccessories: make(map[uint32][]VehicleAccessory), terrainTiles: make(map[uint64][]terrainSpawn), terrainTileKnown: make(map[uint64]bool), terrainModels: make(map[string]*terrainModel), worldstates: make(map[uint32]uint64)}
+	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), playerLimit: c.PlayerLimit, disconnectTimes: make(map[uint32]int64), hiddenGameObjects: make(map[uint64]struct{}), auctionGetAllThrottle: make(map[uint64]int64), dynamicGameObjects: make(map[uint64]*dynamicGameObjectState), dynamicSpellObjects: make(map[uint64]*dynamicSpellObjectState), wsgState: make(map[uint32]*wsgBattlegroundState), abState: make(map[uint32]*abBattlegroundState), eotsState: make(map[uint32]*eotsBattlegroundState), avState: make(map[uint32]*avBattlegroundState), saState: make(map[uint32]*saBattlegroundState), icState: make(map[uint32]*icBattlegroundState), activeTotems: make(map[uint64][4]*activeTotem), creatureAuras: make(map[creatureAuraKey]map[uint32]struct{}), activeCreatureAuras: make(map[creatureAuraKey]map[uint32]*activeAura), singleCastAuras: make(map[uint64][]singleCastEntry), channels: make(map[string]*worldChannel), groups: make(map[uint64]*groupState), instanceCreatureMotion: make(map[instanceAdmissionKey]map[uint64]*creatureMotion), creatureRespawns: make(map[uint32]creatureRespawn), transports: make(map[uint32]*continentTransport), creatureLoot: make(map[lootObjectKey]*activeLootState), creatureLootOwners: make(map[lootObjectKey]lootOwnerState), pickpocketLootRestore: make(map[lootObjectKey]int64), creatureStatsCache: make(map[uint32]creatureStats), groupRolls: make(map[lootRollKey]*activeGroupRoll), wardenCheckMgr: newWardenCheckMgr(), vehicleKits: make(map[uint64]*VehicleKit), vehicleSeatAddons: make(map[uint32]*VehicleSeatAddon), vehicleAccessories: make(map[uint32][]VehicleAccessory), terrainTiles: make(map[uint64][]terrainSpawn), terrainTileKnown: make(map[uint64]bool), terrainModels: make(map[string]*terrainModel), worldstates: make(map[uint32]uint64)}
 	server.ticketsEnabled.Store(true)
 	if c.IPLocationFile != "" {
 		locations, err := iplocation.Load(c.IPLocationFile)
@@ -3449,7 +3453,9 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	account.MuteTime = normalizeLoginMuteTime(ctx, s.server.AuthStore.DB, account.ID, account.MuteTime)
-	s.server.kickDuplicateAccountSessions(account.ID, s)
+	if !s.server.kickDuplicateAccountSessions(account.ID, s) {
+		return false
+	}
 	if _, err := s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET last_ip = ? WHERE id = ?", remoteAddress(s.conn), account.ID); err != nil {
 		return false
 	}
@@ -3506,16 +3512,27 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 }
 
 func (s *session) initializeSession(ctx context.Context, account *account) bool {
-	s.inQueue = false
-	authBuf := protocol.NewBuffer(11)
-	authBuf.WriteU8(authOK)
-	authBuf.WriteU32(0)
-	authBuf.WriteU8(0)
-	authBuf.WriteU32(0)
-	authBuf.WriteU8(s.accountExpansion)
-	if err := s.write(opcodeAuthResponse, authBuf.Bytes(), true); err != nil {
-		return false
+	// WorldSession::InitializeSessionCallback (WorldSession.cpp:1325): a session
+	// promoted out of the queue answers with the 1-byte SendAuthWaitQue(0)
+	// form; a fresh login gets the 11-byte short form. inQueue is cleared only
+	// after the response, matching SetInQueue(false) after the send.
+	wasQueued := s.inQueue
+	if wasQueued {
+		if err := s.write(opcodeAuthResponse, []byte{authOK}, true); err != nil {
+			return false
+		}
+	} else {
+		authBuf := protocol.NewBuffer(11)
+		authBuf.WriteU8(authOK)
+		authBuf.WriteU32(0)
+		authBuf.WriteU8(0)
+		authBuf.WriteU32(0)
+		authBuf.WriteU8(s.accountExpansion)
+		if err := s.write(opcodeAuthResponse, authBuf.Bytes(), true); err != nil {
+			return false
+		}
 	}
+	s.inQueue = false
 	if err := s.write(uint16(protocol.OpcodeSMSG_ADDON_INFO), buildAddonInfoResponse(s.pendingAddonInfo), true); err != nil {
 		return false
 	}
@@ -3543,15 +3560,19 @@ func (s *Server) checkQueue(sess *session, ctx context.Context, account *account
 	if s.playerLimit == 0 {
 		return false
 	}
+	// World::AddSession_ (World.cpp:350): Sessions = m_sessions.size() counts
+	// active AND queued sessions, then --Sessions so the newcomer never counts
+	// itself against the limit.
 	s.sessionsMu.RLock()
-	activeCount := 0
+	total := 0
 	for current := range s.sessions {
-		if current.authed && !current.inQueue {
-			activeCount++
+		if current == sess || !current.authed {
+			continue
 		}
+		total++
 	}
 	s.sessionsMu.RUnlock()
-	if uint32(activeCount) < s.playerLimit {
+	if uint32(total) < s.playerLimit {
 		return false
 	}
 	skipQueue, err := accountHasPermission(ctx, s.AuthStore.DB, account.ID, s.RealmID, account.Security, permissionSkipQueue)
@@ -3560,25 +3581,71 @@ func (s *Server) checkQueue(sess *session, ctx context.Context, account *account
 	} else if skipQueue {
 		return false
 	}
+	// World::HasRecentlyDisconnected (World.cpp:382): an account that dropped
+	// within DisconnectToleranceInterval skips the queue on re-login.
+	if s.recentlyDisconnected(account.ID) {
+		sess.debug("queue skipped: recent disconnect", "account", account.ID)
+		return false
+	}
 	s.sessionsMu.Lock()
 	sess.inQueue = true
 	s.queuedSessions = append(s.queuedSessions, sess)
 	pos := uint32(len(s.queuedSessions))
 	s.sessionsMu.Unlock()
 	sess.debug("player queued", "account", account.ID, "position", pos)
-	buf := protocol.NewBuffer(6)
+	// World::AddQueuedPlayer (World.cpp:415): the FIRST queue response is the
+	// full SendAuthResponse(AUTH_WAIT_QUEUE, shortForm=false) form — billing
+	// fields + expansion + queue position + migration flag. The 6-byte form is
+	// only used for later position updates (SendAuthWaitQue).
+	buf := protocol.NewBuffer(16)
 	buf.WriteU8(authWaitQueue)
+	buf.WriteU32(0)
+	buf.WriteU8(0)
+	buf.WriteU32(0)
+	buf.WriteU8(account.Expansion)
 	buf.WriteU32(pos)
 	buf.WriteU8(0)
 	_ = sess.write(opcodeAuthResponse, buf.Bytes(), true)
 	return true
 }
 
+// recentlyDisconnected mirrors World::HasRecentlyDisconnected (World.cpp:382):
+// expired entries are pruned, then a live entry for the account skips the queue.
+func (s *Server) recentlyDisconnected(accountID uint32) bool {
+	tolerance := s.Config.DisconnectToleranceInterval
+	if tolerance == 0 || accountID == 0 {
+		return false
+	}
+	now := time.Now().Unix()
+	s.sessionsMu.Lock()
+	defer s.sessionsMu.Unlock()
+	for id, t := range s.disconnectTimes {
+		if now-t >= int64(tolerance) {
+			delete(s.disconnectTimes, id)
+		}
+	}
+	_, ok := s.disconnectTimes[accountID]
+	return ok
+}
+
 func (s *Server) promoteQueuedPlayers() {
+	promotedAny := false
+	for s.tryPromoteQueueFront() {
+		promotedAny = true
+	}
+	if promotedAny {
+		s.updateQueuePositions()
+	}
+}
+
+// tryPromoteQueueFront mirrors the promotion arm of World::RemoveQueuedPlayer
+// (World.cpp:424): while a slot is free the queue head is initialized. A failed
+// account load re-queues the session at the front instead of dropping it.
+func (s *Server) tryPromoteQueueFront() bool {
 	s.sessionsMu.Lock()
 	if len(s.queuedSessions) == 0 {
 		s.sessionsMu.Unlock()
-		return
+		return false
 	}
 	activeCount := 0
 	for current := range s.sessions {
@@ -3588,7 +3655,7 @@ func (s *Server) promoteQueuedPlayers() {
 	}
 	if s.playerLimit > 0 && uint32(activeCount) >= s.playerLimit {
 		s.sessionsMu.Unlock()
-		return
+		return false
 	}
 	promoted := s.queuedSessions[0]
 	s.queuedSessions = s.queuedSessions[1:]
@@ -3597,9 +3664,41 @@ func (s *Server) promoteQueuedPlayers() {
 	account, err := loadAccount(context.Background(), s.AuthStore, promoted.accountName, s.RealmID)
 	if err != nil || account == nil {
 		promoted.debug("queue promotion failed: account not found", "account", promoted.accountName)
-		return
+		s.sessionsMu.Lock()
+		s.queuedSessions = append([]*session{promoted}, s.queuedSessions...)
+		s.sessionsMu.Unlock()
+		return false
 	}
 	promoted.initializeSession(context.Background(), account)
+	return true
+}
+
+// removeQueuedSessionLocked splices a session out of the login queue.
+// Callers must hold sessionsMu.
+func (s *Server) removeQueuedSessionLocked(sess *session) bool {
+	for i, queued := range s.queuedSessions {
+		if queued == sess {
+			s.queuedSessions = append(s.queuedSessions[:i], s.queuedSessions[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// updateQueuePositions mirrors the tail of World::RemoveQueuedPlayer
+// (World.cpp:424): every remaining queued session gets its new 1-based
+// position via the 6-byte SendAuthWaitQue form.
+func (s *Server) updateQueuePositions() {
+	s.sessionsMu.RLock()
+	queued := append([]*session(nil), s.queuedSessions...)
+	s.sessionsMu.RUnlock()
+	for i, qs := range queued {
+		buf := protocol.NewBuffer(6)
+		buf.WriteU8(authWaitQueue)
+		buf.WriteU32(uint32(i + 1))
+		buf.WriteU8(0)
+		_ = qs.write(opcodeAuthResponse, buf.Bytes(), true)
+	}
 }
 
 func wardenOSAllowed(osName string) bool { return osName == "Win" || osName == "OSX" }
@@ -3615,25 +3714,47 @@ func normalizeLoginMuteTime(ctx context.Context, db *sql.DB, accountID uint32, m
 	return absolute
 }
 
-func (s *Server) kickDuplicateAccountSessions(accountID uint32, current *session) {
+// kickDuplicateAccountSessions mirrors the old-session arms of World::AddSession_
+// (World.cpp:320): the previous session for the account is kicked so the new
+// login can take its place. It returns false when the new session must be kicked
+// instead — World::RemoveSession refuses to replace a session whose player is
+// still loading.
+func (s *Server) kickDuplicateAccountSessions(accountID uint32, current *session) bool {
 	if s == nil || accountID == 0 {
-		return
+		return true
 	}
 	s.sessionsMu.RLock()
 	duplicates := make([]*session, 0)
 	for sess := range s.sessions {
 		if sess != current && sess.authed && sess.accountID == accountID {
+			if sess.playerLoading {
+				s.sessionsMu.RUnlock()
+				current.debug("new login rejected: previous session still loading player", "account", current.accountName)
+				if current.conn != nil {
+					_ = current.conn.Close()
+				}
+				return false
+			}
 			duplicates = append(duplicates, sess)
 		}
 	}
 	s.sessionsMu.RUnlock()
 	if len(duplicates) > 0 {
 		s.sessionsMu.Lock()
+		queuedRemoved := false
 		for _, sess := range duplicates {
 			sess.superseded = true
 			delete(s.sessions, sess)
+			// World::AddSession_ removes a queued old session from the login
+			// queue synchronously via RemoveQueuedPlayer, not on socket close.
+			if s.removeQueuedSessionLocked(sess) {
+				queuedRemoved = true
+			}
 		}
 		s.sessionsMu.Unlock()
+		if queuedRemoved {
+			s.updateQueuePositions()
+		}
 	}
 	for _, sess := range duplicates {
 		sess.debug("session replaced by new login", "account", sess.accountName)
@@ -3641,6 +3762,7 @@ func (s *Server) kickDuplicateAccountSessions(accountID uint32, current *session
 			_ = sess.conn.Close()
 		}
 	}
+	return true
 }
 
 func (s *session) loadTutorials(ctx context.Context) {

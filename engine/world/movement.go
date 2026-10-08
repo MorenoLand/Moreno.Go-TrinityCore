@@ -827,12 +827,15 @@ func (s *Server) removeSession(session *session) {
 	s.sessionsMu.Lock()
 	delete(s.sessions, session)
 	if wasQueued {
-		for i, queued := range s.queuedSessions {
-			if queued == session {
-				s.queuedSessions = append(s.queuedSessions[:i], s.queuedSessions[i+1:]...)
-				break
-			}
+		s.removeQueuedSessionLocked(session)
+	} else if s.Config.DisconnectToleranceInterval > 0 && session.accountID != 0 {
+		// World::UpdateSessions sweep (World.cpp:3114): a dead non-queued
+		// session is recorded so HasRecentlyDisconnected can skip the queue
+		// on a fast re-login.
+		if s.disconnectTimes == nil {
+			s.disconnectTimes = make(map[uint32]int64)
 		}
+		s.disconnectTimes[session.accountID] = time.Now().Unix()
 	}
 	s.sessionsMu.Unlock()
 	// AutoBalance_AllMapScript::OnPlayerLeaveAll (AutoBalance.cpp): the
@@ -840,7 +843,9 @@ func (s *Server) removeSession(session *session) {
 	if session != nil && session.player != nil {
 		s.autoBalancePlayerLeave(session, session.player.Map, session.player.InstanceID)
 	}
-	if !wasQueued {
+	if wasQueued {
+		s.updateQueuePositions()
+	} else {
 		s.promoteQueuedPlayers()
 	}
 }
