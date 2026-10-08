@@ -2004,8 +2004,8 @@ func (s *session) handleSplitItem(ctx context.Context, payload []byte) bool {
 			return true
 		}
 	} else {
-		var newGUID int64
-		if err = tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&newGUID); err != nil || newGUID <= 0 {
+		newGUID := int64(s.server.generateItemGUID())
+		if newGUID <= 0 {
 			_ = tx.Rollback()
 			return true
 		}
@@ -2387,7 +2387,13 @@ func (s *session) storeOrStackItemCore(ctx context.Context, playerGUID uint64, i
 		}
 	}
 	var baseGUID int64
-	_ = tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) FROM item_instance").Scan(&baseGUID)
+	if reserved, ok := s.server.generateItemGUIDRange(uint64(len(newStacks))); ok {
+		baseGUID = int64(reserved)
+	} else {
+		// Counter overflow: fall back to the legacy MAX(guid) read so the
+		// stacks still land, matching the old behavior exactly.
+		_ = tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) FROM item_instance").Scan(&baseGUID)
+	}
 	if baseGUID < 0 {
 		baseGUID = 0
 	}

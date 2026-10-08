@@ -524,8 +524,7 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	// item sold whole is moved onto the auction; otherwise the stacks are
 	// cloned into one merged item (AuctionHouseHandler.cpp:343-425).
 	if itemCount != 1 || itemCounts[0] != int64(stackCounts[0]) {
-		var newGUID int64
-		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&newGUID)
+		newGUID := int64(s.server.generateItemGUID())
 		if newGUID <= 0 {
 			return sellFail(errAuctionDatabaseError)
 		}

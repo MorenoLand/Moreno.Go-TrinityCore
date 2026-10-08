@@ -62,8 +62,7 @@ func (srv *Server) rollMailTemplateItems(ctx context.Context, templateID uint32,
 		if err := srv.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM item_template WHERE entry = ?", item).Scan(&one); err != nil {
 			continue
 		}
-		var nextItemGUID int64
-		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextItemGUID)
+		nextItemGUID := int64(srv.generateItemGUID())
 		if nextItemGUID <= 0 {
 			nextItemGUID = 1
 		}
@@ -192,6 +191,23 @@ func (s *session) loadMailState(ctx context.Context) {
 	}
 }
 
+// loadMailTemplateID mirrors Player::_LoadMail (Player.cpp:18661-18664): a
+// mail row carrying a MailTemplateId with no MailTemplate.dbc entry has the
+// id zeroed at load time, so downstream template lookups see 0 instead of a
+// dangling id (Go used to carry the id through and gate only at send time).
+func (s *session) loadMailTemplateID(tmpl int64) uint32 {
+	if tmpl == 0 || s.server == nil || s.server.Data == nil {
+		return uint32(tmpl)
+	}
+	if _, ok, _ := s.server.Data.MailTemplate(uint32(tmpl)); !ok {
+		if s.server.Logger != nil {
+			s.server.Logger.Error("entities.player: mail has nonexistent MailTemplateId, zeroed at load", "mailTemplateId", tmpl)
+		}
+		return 0
+	}
+	return uint32(tmpl)
+}
+
 func (s *session) updateMailDeliveries(ctx context.Context, now int64) {
 	if s == nil || !s.playerLoaded || s.nextMailDelivery == 0 || now < s.nextMailDelivery {
 		return
@@ -294,7 +310,7 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 			Money:        uint32(money),
 			COD:          uint32(cod),
 			Checked:      uint32(checked),
-			MailTemplate: uint32(tmpl),
+			MailTemplate: s.loadMailTemplateID(tmpl),
 		}
 		if m.Stationery == 0 {
 			m.Stationery = 41 // Standard default letter stationery
@@ -1259,6 +1275,10 @@ func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) 
 		// body item's creator term.
 		now := time.Now().Unix()
 		mailErr := cdb.QueryRowContext(ctx, "SELECT COALESCE(body, ''), mailTemplateId, deliver_time, checked, sender, messageType FROM mail WHERE id = ? AND receiver = ?", mailID, s.playerGUID).Scan(&body, &mailTemplateId, &deliverTime, &checked, &mailSender, &messageType)
+		// Player::_LoadMail (Player.cpp:18661-18664) zeroes a nonexistent
+		// MailTemplateId at load, so the (body.empty() && !mailTemplateId)
+		// refused term below sees the zeroed id like C++ does.
+		mailTemplateId = s.loadMailTemplateID(int64(mailTemplateId))
 		if mailCreateTextItemRefused(mailErr != nil, body, mailTemplateId, deliverTime, now, checked) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailMadePermanent, mailErrInternalError, 0, 0, 0), true)
 			return true
@@ -1303,8 +1323,7 @@ func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) 
 			return true
 		}
 
-		var nextGUID uint64
-		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextGUID)
+		nextGUID := uint64(s.server.generateItemGUID())
 		if nextGUID == 0 {
 			nextGUID = uint64(time.Now().UnixNano())
 		}

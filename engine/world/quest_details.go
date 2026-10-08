@@ -378,8 +378,8 @@ func (s *session) grantQuestStartItem(ctx context.Context, itemEntry uint32) {
 	if freeSlot == 0xFF {
 		return
 	}
-	var nextGUID uint64
-	if err := cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextGUID); err != nil || nextGUID == 0 {
+	nextGUID := uint64(s.server.generateItemGUID())
+	if nextGUID == 0 {
 		nextGUID = uint64(time.Now().UnixNano())
 	}
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, 1, 0, 0, 0, '', 0, 100, 0, '')", nextGUID, itemEntry, s.playerGUID)

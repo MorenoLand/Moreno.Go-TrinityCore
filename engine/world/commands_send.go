@@ -256,8 +256,7 @@ func (s *session) handleSendItems(ctx context.Context, args []string) {
 	}
 	var itemGUIDs []uint64
 	for _, it := range items {
-		var nextItemGUID int64
-		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextItemGUID)
+		nextItemGUID := int64(s.server.generateItemGUID())
 		if _, err := cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count) VALUES (?, ?, ?, ?)", nextItemGUID, it.entry, guid, it.count); err != nil {
 			continue // Item::CreateItem failing drops the item, like C++
 		}

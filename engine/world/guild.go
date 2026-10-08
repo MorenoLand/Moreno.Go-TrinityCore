@@ -3007,8 +3007,8 @@ func (s *session) guildCloneMoveItem(ctx context.Context, tx *sql.Tx, sourceGUID
 		COALESCE(spellcharges_3, 0), COALESCE(spellcharges_4, 0), COALESCE(spellcharges_5, 0) FROM item_template WHERE entry = ?`, entry).Scan(&maxDurability, &charge1, &charge2, &charge3, &charge4, &charge5); err != nil {
 		return 0, err
 	}
-	var nextGUID int64
-	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextGUID); err != nil || nextGUID <= 0 || nextGUID > int64(^uint32(0)) {
+	nextGUID := int64(s.server.generateItemGUID())
+	if nextGUID <= 0 {
 		return 0, fmt.Errorf("item guid space exhausted")
 	}
 	charges := fmt.Sprintf("%d %d %d %d %d ", charge1, charge2, charge3, charge4, charge5)
@@ -4429,8 +4429,7 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	var nextItemGUID int64
-	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextItemGUID)
+	nextItemGUID := int64(s.server.generateItemGUID())
 	if nextItemGUID <= 0 {
 		nextItemGUID = 1
 	}

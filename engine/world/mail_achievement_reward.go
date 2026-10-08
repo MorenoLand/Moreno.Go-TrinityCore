@@ -41,8 +41,10 @@ func (s *session) sendAchievementRewardMail(achievementID uint32) {
 	// is unknown; the mail still goes out without it.
 	var itemExists int
 	if itemID != 0 && wdb.QueryRowContext(ctx, "SELECT 1 FROM item_template WHERE entry = ?", itemID).Scan(&itemExists) == nil {
-		var nextItemGUID int64
-		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextItemGUID)
+		var nextItemGUID = int64(s.server.generateItemGUID())
+		if nextItemGUID == 0 {
+			return
+		}
 		if _, err := cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count) VALUES (?, ?, ?, 1)",
 			nextItemGUID, itemID, s.playerGUID); err == nil {
 			itemGUIDs = append(itemGUIDs, uint64(nextItemGUID))

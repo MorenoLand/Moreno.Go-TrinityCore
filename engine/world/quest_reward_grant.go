@@ -604,10 +604,6 @@ type rewardSlotLocation struct {
 
 func (s *session) storeQuestRewardItems(ctx context.Context, tx *sql.Tx, inventory []inventoryRewardRecord, items []questRewardItem, equippedBags []equippedBagInfo, stackables map[uint32]int64) ([]questItemGrant, error) {
 	grants := make([]questItemGrant, 0, len(items))
-	var nextGUID uint32
-	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) FROM item_instance").Scan(&nextGUID); err != nil {
-		return nil, err
-	}
 	for _, item := range items {
 		if item.ID == 0 || item.Quantity == 0 {
 			continue
@@ -651,7 +647,7 @@ func (s *session) storeQuestRewardItems(ctx context.Context, tx *sql.Tx, invento
 			if add > uint64(stackable) {
 				add = uint64(stackable)
 			}
-			nextGUID++
+			nextGUID := s.server.generateItemGUID()
 			if nextGUID == 0 {
 				return nil, errors.New("item guid space exhausted")
 			}

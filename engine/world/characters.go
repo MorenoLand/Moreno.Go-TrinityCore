@@ -2181,8 +2181,8 @@ func (s *session) createStarterOutfit(ctx context.Context, guid uint64, race, cl
 			count = buyCount
 		}
 
-		var nextItemGUID uint64
-		if err := cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextItemGUID); err != nil || nextItemGUID == 0 {
+		nextItemGUID := uint64(s.server.generateItemGUID())
+		if nextItemGUID == 0 {
 			nextItemGUID = uint64(time.Now().UnixNano())
 		}
 

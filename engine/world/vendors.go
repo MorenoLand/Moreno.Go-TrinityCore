@@ -1120,8 +1120,8 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = ? WHERE guid = ?", count, itemGUID)
 	} else {
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", count, itemGUID)
-		var newGUID int64
-		if err := cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&newGUID); err == nil && newGUID > 0 {
+		newGUID := int64(s.server.generateItemGUID())
+		if newGUID > 0 {
 			bbItemGUID = uint64(newGUID)
 		} else {
 			bbItemGUID = uint64(time.Now().UnixNano() & 0x7FFFFFFF)

@@ -98,9 +98,18 @@ type Server struct {
 	// 7366-7374): the in-memory mail-ID generator seeded once from
 	// MAX(id)+1 at startup, so concurrent sends can never race on the same
 	// row id the way per-send MAX(id)+1 queries could.
-	mailIDMu                  sync.Mutex
-	mailIDNext                uint32
-	mailIDReady               bool
+	mailIDMu    sync.Mutex
+	mailIDNext  uint32
+	mailIDReady bool
+	// itemGUIDMu/itemGUIDNext mirror sObjectMgr's item GUID generator
+	// (ObjectGuidGenerator<HighGuid::Item>, seeded from MAX(guid)+1 at
+	// ObjectMgr::SetHighestGuids, ObjectMgr.cpp:7293-7301): the in-memory
+	// counter hands out consecutive item_instance guids, so concurrent item
+	// creates can never race on the same row guid the way per-create
+	// MAX(guid)+1 queries could.
+	itemGUIDMu                sync.Mutex
+	itemGUIDNext              uint32
+	itemGUIDReady             bool
 	instanceIDMu              sync.Mutex
 	reservedInstanceIDs       map[uint32]struct{}
 	instanceAdmissionMu       sync.Mutex
@@ -588,6 +597,7 @@ func (s *Server) Initialize(ctx context.Context) error {
 	s.loadContinentTransports(ctx)
 	s.loadWorldStates(ctx)
 	s.initializeMailState(ctx)
+	s.seedItemGUID(ctx)
 	go s.runWorldTick(ctx)
 	go s.runMailSweepLoop(ctx)
 	return nil
@@ -653,6 +663,75 @@ func (s *Server) generateMailID() uint32 {
 	id := s.mailIDNext
 	s.mailIDNext++
 	return id
+}
+
+// seedItemGUID loads the item-GUID generator seed from the characters
+// database, mirroring ObjectMgr::SetHighestGuids (ObjectMgr.cpp:7293-7301):
+// the item counter starts one past the highest item_instance row guid seen
+// at startup.
+func (s *Server) seedItemGUID(ctx context.Context) {
+	s.itemGUIDMu.Lock()
+	defer s.itemGUIDMu.Unlock()
+	if s.itemGUIDReady {
+		return
+	}
+	var highest uint32
+	if s.CharactersStore != nil && s.CharactersStore.DB != nil {
+		_ = s.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) FROM item_instance").Scan(&highest)
+	}
+	if highest >= s.itemGUIDNext {
+		s.itemGUIDNext = highest + 1
+	}
+	if s.itemGUIDNext == 0 {
+		s.itemGUIDNext = 1
+	}
+	s.itemGUIDReady = true
+}
+
+// generateItemGUID mirrors ObjectGuidGenerator<HighGuid::Item>::Generate
+// (ObjectGuid.h:300-309): the next item_instance guid from the in-memory
+// counter. At GetMaxCounter(HighGuid::Item)-1 (0xFFFFFFFF-1, no entry bits)
+// the C++ side runs HandleCounterOverflow; the Go side logs and returns 0.
+func (s *Server) generateItemGUID() uint32 {
+	s.itemGUIDMu.Lock()
+	defer s.itemGUIDMu.Unlock()
+	if !s.itemGUIDReady {
+		s.itemGUIDReady = true
+		s.itemGUIDNext = 1
+	}
+	if s.itemGUIDNext >= 0xFFFFFFFE {
+		if s.Logger != nil {
+			s.Logger.Error("object: item GUID counter overflow, cannot generate new item GUIDs")
+		}
+		return 0
+	}
+	guid := s.itemGUIDNext
+	s.itemGUIDNext++
+	return guid
+}
+
+// generateItemGUIDRange reserves count consecutive item_instance guids and
+// returns the first one, for multi-stack creates that need a guid block up
+// front (the old code read MAX(guid) once and added offsets).
+func (s *Server) generateItemGUIDRange(count uint64) (uint32, bool) {
+	if count == 0 {
+		return 0, true
+	}
+	s.itemGUIDMu.Lock()
+	defer s.itemGUIDMu.Unlock()
+	if !s.itemGUIDReady {
+		s.itemGUIDReady = true
+		s.itemGUIDNext = 1
+	}
+	if count > uint64(0xFFFFFFFE-s.itemGUIDNext) {
+		if s.Logger != nil {
+			s.Logger.Error("object: item GUID counter overflow, cannot reserve item GUID range")
+		}
+		return 0, false
+	}
+	base := s.itemGUIDNext
+	s.itemGUIDNext += uint32(count)
+	return base, true
 }
 
 // runMailSweepLoop mirrors the WUPDATE_AUCTIONS mail arm (World.cpp:2374-2385):
