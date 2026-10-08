@@ -308,13 +308,20 @@ func (s *Server) storeCreatureMotion(mapID, instanceID uint32, guid uint64, moti
 	s.motionMu.Unlock()
 }
 
-func (s *Server) motionFor(ctx context.Context, guid, entry, mapID, instanceID uint32, x, y, z, orientation float32, moveType uint32, wander float64, walkSpeed float32, currentHealth uint32) *creatureMotion {
+// motionFor/motionForLocked take creature_template speed RATES (speed_walk,
+// speed_run — the C++ SetSpeedRate multipliers, Creature.cpp:529-530) and
+// convert them to absolute yd/s via creatureWalkVelocity/creatureRunVelocity,
+// mirroring GetSpeed = rate * baseMoveSpeed (Unit.cpp:86-96). A previous
+// revision mixed the two conventions: the transport-passenger caller passed
+// the raw rate (1.0) into Speed, so wander splines ran at 1.0 yd/s instead of
+// 2.5, and RunSpeed stayed a flat 7.0 instead of 7*speed_run (8.0 default).
+func (s *Server) motionFor(ctx context.Context, guid, entry, mapID, instanceID uint32, x, y, z, orientation float32, moveType uint32, wander float64, walkSpeedRate, runSpeedRate float32, currentHealth uint32) *creatureMotion {
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
-	return s.motionForLocked(ctx, guid, entry, mapID, instanceID, x, y, z, orientation, moveType, wander, walkSpeed, currentHealth)
+	return s.motionForLocked(ctx, guid, entry, mapID, instanceID, x, y, z, orientation, moveType, wander, walkSpeedRate, runSpeedRate, currentHealth)
 }
 
-func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instanceID uint32, x, y, z, orientation float32, moveType uint32, wander float64, walkSpeed float32, currentHealth uint32) *creatureMotion {
+func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instanceID uint32, x, y, z, orientation float32, moveType uint32, wander float64, walkSpeedRate, runSpeedRate float32, currentHealth uint32) *creatureMotion {
 	motions := s.motionMapLocked(mapID, instanceID)
 	key := creatureWorldGUID(guid, entry)
 	motion := motions[key]
@@ -340,8 +347,8 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			X:               x,
 			Y:               y,
 			Z:               z,
-			Speed:           walkSpeed,
-			RunSpeed:        creatureBaseRunSpeed,
+			Speed:           creatureWalkVelocity(float64(walkSpeedRate)),
+			RunSpeed:        creatureRunVelocity(float64(runSpeedRate)),
 			MoveType:        moveType,
 			Wander:          wander,
 			WanderSteps:     2 + rand.Intn(9), // urand(2,10), RandomMovementGenerator.cpp:DoInitialize
@@ -365,9 +372,6 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			motion.Powers[0] = st.Mana
 			motion.MaxMana = st.Mana
 			motion.Mana = st.Mana
-		}
-		if walkSpeed <= 0 {
-			motion.Speed = creatureBaseWalkSpeed
 		}
 		if motion.ThreatMgr == nil {
 			motion.ThreatMgr = NewThreatManager(key)
@@ -404,7 +408,7 @@ func (s *Server) relocateTransportCreatureMotions(ctx context.Context, passenger
 		}
 		key := creatureWorldGUID(passenger.GUID, passenger.Entry)
 		isNew := s.motionMapLocked(passenger.Map, 0)[key] == nil
-		motion := s.motionForLocked(ctx, passenger.GUID, passenger.Entry, passenger.Map, 0, passenger.X, passenger.Y, passenger.Z, passenger.Orientation, 0, 0, passenger.WalkSpeed, passenger.Health)
+		motion := s.motionForLocked(ctx, passenger.GUID, passenger.Entry, passenger.Map, 0, passenger.X, passenger.Y, passenger.Z, passenger.Orientation, 0, 0, passenger.WalkSpeed, passenger.RunSpeed, passenger.Health)
 		motion.TransportGUID = passenger.TransportGUID
 		motion.Map, motion.InstanceID = passenger.Map, 0
 		motion.HomeX, motion.HomeY, motion.HomeZ = passenger.X, passenger.Y, passenger.Z
@@ -864,8 +868,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 			if curHealth <= 0 {
 				continue
 			}
-			walkVelocity := creatureWalkVelocity(walkSpeed)
-			motion := s.motionFor(ctx, uint32(guid), uint32(entry), p.Map, p.InstanceID, float32(x), float32(y), float32(z), float32(orientation), uint32(moveType), wander, walkVelocity, uint32(curHealth))
+			motion := s.motionFor(ctx, uint32(guid), uint32(entry), p.Map, p.InstanceID, float32(x), float32(y), float32(z), float32(orientation), uint32(moveType), wander, float32(walkSpeed), float32(runSpeed), uint32(curHealth))
 			motion.Faction = uint32(faction)
 			motion.Level = uint32(level)
 			motion.UnitFlags = uint32(unitFlags)
@@ -878,6 +881,10 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 				}
 			}
 			motion.AttackTime = uint32(attackTime)
+			// Re-affirm absolute velocities on every sweep: motions created by
+			// older builds may still hold the raw template rate in Speed
+			// (see the motionFor rate/absolute fix) or a flat RunSpeed.
+			motion.Speed = creatureWalkVelocity(walkSpeed)
 			motion.RunSpeed = creatureRunVelocity(runSpeed)
 			if motion.MaxHealth == 0 {
 				health := uint32(curHealth)
