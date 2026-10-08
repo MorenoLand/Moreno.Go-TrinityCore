@@ -1369,7 +1369,12 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 	} else {
 		s.player.Health -= damage
 		if damage > 0 {
-			s.procDamageAuras(true)
+			// Unit::DealDamage (Unit.cpp:896-897): the DIRECT_DAMAGE aura
+			// interrupt runs only for damagetype DIRECT_DAMAGE /
+			// SPELL_DIRECT_DAMAGE — environmental damage is SELF_DAMAGE
+			// (Player.cpp:792), so it strips TAKE_DAMAGE-interrupt auras
+			// only, not DIRECT_DAMAGE ones.
+			s.procDamageAuras(false)
 		}
 	}
 

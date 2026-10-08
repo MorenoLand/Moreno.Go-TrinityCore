@@ -569,6 +569,12 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			s.fireCreatureTargetDied(ctx, motion, targetSess.luaPlayer())
 		} else {
 			targetSess.player.Health -= damage
+			// Unit::DealDamage (Unit.cpp:896-897): pet melee lands as
+			// DIRECT_DAMAGE (DealMeleeDamage, Unit.cpp:1520), so a non-lethal
+			// hit strips DIRECT_DAMAGE-interrupt auras alongside the
+			// TAKE_DAMAGE strip — the absorbed arm above (742-747) only ran
+			// the TAKE_DAMAGE half.
+			targetSess.procDamageAuras(true, damage)
 			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
 			targetSess.grantRageFromDamageTaken(ctx, damage)
 			// Unit::DealDamage (Unit.cpp:906-913): random durability loss on
@@ -1109,6 +1115,12 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			s.server.fireCreatureTargetDied(ctx, caster, victim.luaPlayer())
 		} else {
 			victim.player.Health -= damage
+			// Unit::DealDamage (Unit.cpp:896-897): pet spells land as
+			// SPELL_DIRECT_DAMAGE (DealSpellDamage, Unit.cpp:1157), so a
+			// non-lethal hit strips DIRECT_DAMAGE-interrupt auras alongside
+			// the TAKE_DAMAGE strip — the absorbed arm above (742-747) only
+			// ran the TAKE_DAMAGE half.
+			victim.procDamageAuras(true, damage)
 			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
 			victim.grantRageFromDamageTaken(ctx, damage)
 			// Unit::DealDamage (Unit.cpp:906-913): random durability loss on
