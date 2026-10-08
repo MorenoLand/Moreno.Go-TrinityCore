@@ -1237,8 +1237,18 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 		return s.sendLootResponse(ctx, loot) == nil
 	}
 	var zoneSkill int64
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT skill FROM skill_fishing_base_level WHERE entry = ?", s.player.Zone).Scan(&zoneSkill); err != nil && !missingTable(err) {
-		zoneSkill = 0
+	fishingZoneSkill := func(entry uint32) int64 {
+		var v int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT skill FROM skill_fishing_base_level WHERE entry = ?", entry).Scan(&v); err != nil && !missingTable(err) {
+			return 0
+		}
+		return v
+	}
+	// GameObject.cpp:1737-1739: the fishing base skill level is looked up for
+	// the subzone first, falling back to the zone.
+	zoneSkill = fishingZoneSkill(s.areaID)
+	if zoneSkill == 0 {
+		zoneSkill = fishingZoneSkill(s.player.Zone)
 	}
 	fishingSkill := uint16(0)
 	fishingMax := uint16(0)
@@ -1274,7 +1284,9 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 	}
 	chance := 100
 	if zoneSkill > 0 && int64(fishingSkill) < zoneSkill {
-		chance = int(float64(fishingSkill) / float64(zoneSkill) * 100)
+		// GameObject.cpp:1748: chance = int32(pow((double)skill/zone_skill, 2) * 100).
+		ratio := float64(fishingSkill) / float64(zoneSkill)
+		chance = int(ratio * ratio * 100)
 		if chance < 1 {
 			chance = 1
 		}
@@ -1315,8 +1327,16 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 	if !success {
 		lootMode = 0x8000
 	}
-	if err := loadRows(s.player.Zone, lootMode); err != nil && !missingTable(err) {
+	// GameObject::getFishLoot / getFishLootJunk (GameObject.cpp:943-980): the
+	// fishing loot template entry is resolved subzone first, then zone, then
+	// zone 1 as the default.
+	if err := loadRows(s.areaID, lootMode); err != nil && !missingTable(err) {
 		return true
+	}
+	if len(loot.Items) == 0 && s.areaID != s.player.Zone {
+		if err := loadRows(s.player.Zone, lootMode); err != nil && !missingTable(err) {
+			return true
+		}
 	}
 	if len(loot.Items) == 0 && s.player.Zone != 1 {
 		_ = loadRows(1, lootMode)
@@ -1350,7 +1370,8 @@ func (s *session) fishingHoleNearby(ctx context.Context, bobber *dynamicGameObje
 	}
 	s.server.objectsMu.RLock()
 	for _, object := range s.server.dynamicGameObjects {
-		if object != nil && object.Type == GameObjectTypeFishingHole && object.Map == bobber.Map && distance3D(object.X, object.Y, object.Z, bobber.X, bobber.Y, bobber.Z) <= 20.0 {
+		// GameObject.cpp:1763: LookupFishingHoleAround(20.0f + CONTACT_DISTANCE).
+		if object != nil && object.Type == GameObjectTypeFishingHole && object.Map == bobber.Map && distance3D(object.X, object.Y, object.Z, bobber.X, bobber.Y, bobber.Z) <= 20.5 {
 			s.server.objectsMu.RUnlock()
 			return true
 		}
@@ -1363,7 +1384,7 @@ func (s *session) fishingHoleNearby(ctx context.Context, bobber *dynamicGameObje
 	err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT 1
 		FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id
 		WHERE g.map = ? AND t.type = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ?
-		LIMIT 1`, bobber.Map, GameObjectTypeFishingHole, bobber.X-20, bobber.X+20, bobber.Y-20, bobber.Y+20).Scan(&found)
+		LIMIT 1`, bobber.Map, GameObjectTypeFishingHole, bobber.X-20.5, bobber.X+20.5, bobber.Y-20.5, bobber.Y+20.5).Scan(&found)
 	return err == nil && found == 1
 }
 
