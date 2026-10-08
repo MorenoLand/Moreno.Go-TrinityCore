@@ -1448,7 +1448,13 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 		_ = s.write(uint16(protocol.OpcodeSMSG_FISH_NOT_HOOKED), nil, true)
 		return true
 	}
-	if goState.Map != s.player.Map || goState.InstanceID != s.player.InstanceID || distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > 10.0 {
+	// Player::SendLoot's distance gate (Player.cpp:8553) is skipped for the
+	// owned bobber's LOOT_FISHING/LOOT_FISHING_JUNK arms and for
+	// LOOT_FISHINGHOLE entirely, and the FISHINGNODE/FISHINGHOLE arms of
+	// GameObject::Use (GameObject.cpp:1720-1789, 1990-2000) carry no further
+	// distance check — the only range gate is the per-type interaction
+	// distance at the useGameObject head.
+	if goState.Map != s.player.Map || goState.InstanceID != s.player.InstanceID {
 		return s.sendLootError(targetGUID, 4) == nil
 	}
 	if !requireOwner && goState.FishingMaxOpens > 0 && goState.FishingUses >= goState.FishingMaxOpens {

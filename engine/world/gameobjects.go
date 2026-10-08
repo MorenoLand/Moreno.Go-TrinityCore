@@ -489,8 +489,18 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		return false
 	}
 
-	// Range check (10.0 yards standard interaction distance)
-	if goState.Map != s.player.Map || goState.InstanceID != s.player.InstanceID || distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > 10.0 {
+	// Range check: GameObject::GetInteractionDistance (GameObject.cpp:2639)
+	// grants the fishing node (bobber, up to ~30y cast range) 100 yards and
+	// the fishing hole 20.0+CONTACT_DISTANCE (20.5); every other type keeps
+	// the 10.0-yard standard interaction distance.
+	maxUseDist := 10.0
+	switch goState.Type {
+	case GameObjectTypeFishingNode:
+		maxUseDist = 100.0
+	case GameObjectTypeFishingHole:
+		maxUseDist = 20.5
+	}
+	if goState.Map != s.player.Map || goState.InstanceID != s.player.InstanceID || distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > maxUseDist {
 		return true
 	}
 
@@ -536,10 +546,13 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		return s.openGameObjectLoot(ctx, guid, lootTypeSkinning, 20.0)
 
 	case GameObjectTypeFishingNode, GameObjectTypeFishingHole:
-		s.updateAchievementCriteria(criteriaTypeFishInGameObject, entry, 1)
 		if goState.Type == GameObjectTypeFishingNode {
 			return s.handleFishingNodeUse(ctx, payload, goState)
 		}
+		// GameObject::Use GAMEOBJECT_TYPE_FISHINGHOLE arm (GameObject.cpp:1998):
+		// only the pool use fires ACHIEVEMENT_CRITERIA_TYPE_FISH_IN_GAMEOBJECT —
+		// the fishing-node arm never does.
+		s.updateAchievementCriteria(criteriaTypeFishInGameObject, entry, 1)
 		return s.handleFishingHoleUse(ctx, payload, goState)
 
 	case GameObjectTypeGoober:
