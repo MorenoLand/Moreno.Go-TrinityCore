@@ -930,19 +930,20 @@ func (s *session) rollbackVendorStoredItem(ctx context.Context, result *inventor
 		return
 	}
 	cdb := s.server.CharactersStore.DB
-	if result.IsStack {
-		var itemEntry int64
-		_ = cdb.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", result.ItemGUID).Scan(&itemEntry)
-		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ? AND count >= ?", count, result.ItemGUID, count)
-		if itemEntry > 0 {
-			s.adjustQuestItemCount(ctx, uint32(itemEntry), count, false)
-		}
-		return
-	}
 	var itemEntry int64
 	_ = cdb.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", result.ItemGUID).Scan(&itemEntry)
-	_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, result.ItemGUID)
-	_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", result.ItemGUID)
+	// Undo a partial merge into a pre-existing pile first (C++ never placed
+	// anything on the failed path — CanStoreNewItem is feasibility-only).
+	if result.StackFillGUID != 0 && result.StackFillAmount > 0 {
+		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ? AND count >= ?", result.StackFillAmount, result.StackFillGUID, result.StackFillAmount)
+	}
+	if !result.IsStack {
+		// Delete every new stack the grant created.
+		for _, g := range append([]uint64{result.ItemGUID}, result.ExtraItemGUIDs...) {
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, g)
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", g)
+		}
+	}
 	if itemEntry > 0 {
 		s.adjustQuestItemCount(ctx, uint32(itemEntry), count, false)
 	}
@@ -1117,7 +1118,12 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 		} else {
 			bbItemGUID = uint64(time.Now().UnixNano() & 0x7FFFFFFF)
 		}
-		_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count) VALUES (?, ?, ?, ?)", bbItemGUID, itemEntry, s.playerGUID, count)
+		// Item::CloneItem semantics: the split-off stack copies every field of
+		// the source item — only the guid and the split count differ.
+		_, _ = cdb.ExecContext(ctx, `INSERT INTO item_instance
+			(guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text)
+			SELECT ?, itemEntry, owner_guid, creatorGuid, ?, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text
+			FROM item_instance WHERE guid = ?`, bbItemGUID, count, itemGUID)
 	}
 	s.adjustQuestItemCount(ctx, uint32(itemEntry), uint32(count), false)
 
@@ -1214,10 +1220,40 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	res, err := s.storeOrStackItemCore(ctx, s.playerGUID, entry.ItemEntry, entry.Count)
-	if err != nil {
-		s.sendEquipError(equipErrInvFull, entry.ItemGUID)
-		return true // Inventory full
+	merged, abort := func() (bool, bool) {
+		// ItemHandler.cpp:517-533: the SAME item object is stored back into the
+		// inventory (Player::StoreItem(dest, pItem, true)) — enchantments,
+		// durability and all other fields survive the round trip. A stackable
+		// buyback item merges into an existing partial pile when it fits fully,
+		// per the CanStoreItem merge arm.
+		cdb := s.server.CharactersStore.DB
+		if cdb == nil {
+			s.sendEquipError(equipErrInvFull, entry.ItemGUID)
+			return false, true
+		}
+		var bbRowGUID int64
+		_ = cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ?", s.playerGUID, 74+eslot).Scan(&bbRowGUID)
+		if bbRowGUID <= 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, 0, buyErrCantFindItem), true)
+			return false, true
+		}
+		if _, _, _, pileGUID, pileCount, pileMax, ok := s.findStackableInventorySlot(ctx, s.playerGUID, entry.ItemEntry); ok && pileCount+entry.Count <= pileMax {
+			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count + ? WHERE guid = ?", entry.Count, pileGUID)
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ?", s.playerGUID, 74+eslot)
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", bbRowGUID)
+			return true, false
+		}
+		freeBagKey, _, freeSlot, ok := s.findFreeInventorySlot(ctx, s.playerGUID)
+		if !ok {
+			s.sendEquipError(equipErrInvFull, entry.ItemGUID)
+			return false, true
+		}
+		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND bag = 0 AND slot = ? AND item = ?",
+			freeBagKey, freeSlot, s.playerGUID, 74+eslot, bbRowGUID)
+		return false, false
+	}()
+	if abort {
+		return true
 	}
 
 	oldItemGUID := entry.ItemGUID
@@ -1231,14 +1267,11 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 	s.player.Money -= entry.Price
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ?", s.playerGUID, 74+eslot)
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", int64(oldItemGUID&0xFFFFFFFF))
 	}
 	s.adjustQuestItemCount(ctx, entry.ItemEntry, entry.Count, true)
 
-	// Destroy temporary buyback item if stored GUID is different
-	newFullGUID := uint64(res.ItemGUID) | (uint64(0x4000) << 48)
-	if oldItemGUID != newFullGUID {
+	// A merged-away buyback item no longer exists client-side.
+	if merged {
 		s.sendDestroyObject(oldItemGUID, false)
 		s.despawnItem(oldItemGUID)
 	}
@@ -1246,7 +1279,7 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 	_ = s.write(uint16(protocol.OpcodeSMSG_BUY_ITEM), buildBuySucceeded(vendorGUID, entry.ItemEntry, entry.Count, entry.Count), true)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
-	s.debug("buyback item purchased", "account", s.accountName, "item", entry.ItemEntry, "slot", res.Slot, "bag", res.ClientBag, "stacked", res.IsStack)
+	s.debug("buyback item purchased", "account", s.accountName, "item", entry.ItemEntry, "merged", merged)
 	return true
 }
 
