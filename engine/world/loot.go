@@ -1501,14 +1501,20 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 		s.cancelFishingBobber()
 		return true
 	}
-	// Player::SendLoot's distance gate (Player.cpp:8553) is skipped for the
-	// owned bobber's LOOT_FISHING/LOOT_FISHING_JUNK arms and for
-	// LOOT_FISHINGHOLE entirely, and the FISHINGNODE/FISHINGHOLE arms of
-	// GameObject::Use (GameObject.cpp:1720-1789, 1990-2000) carry no further
-	// distance check — the only range gate is the per-type interaction
-	// distance at the useGameObject head.
+	// Player::SendLoot's shouldLootRelease lambda (Player.cpp:8538-8543): a
+	// GO the player's map no longer holds (!go) answers a silent
+	// SMSG_LOOT_RELEASE_RESPONSE, not a loot error. A bobber/pool dynamic
+	// state recorded on a different map than the player's current one is
+	// exactly that case (C++'s GetGameObject on the player's map returns
+	// null), so the release goes out here instead of LOOT_ERROR_TOO_FAR.
+	// The owned bobber's LOOT_FISHING/LOOT_FISHING_JUNK arms and the whole
+	// LOOT_FISHINGHOLE arm skip the distance gate entirely (Player.cpp:8553),
+	// and the FISHINGNODE/FISHINGHOLE arms of GameObject::Use
+	// (GameObject.cpp:1720-1789, 1990-2000) carry no further distance check —
+	// the only range gate is the per-type interaction distance at the
+	// useGameObject head.
 	if goState.Map != s.player.Map || goState.InstanceID != s.player.InstanceID {
-		return s.sendLootError(targetGUID, 4) == nil
+		return s.sendLootReleaseResponse(targetGUID) == nil
 	}
 	if !requireOwner && goState.FishingMaxOpens > 0 && goState.FishingUses >= goState.FishingMaxOpens {
 		return true
