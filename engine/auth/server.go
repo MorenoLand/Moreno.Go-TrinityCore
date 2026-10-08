@@ -361,7 +361,9 @@ func (s *session) handleLogonChallenge(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	login = strings.TrimSpace(upperOnlyLatin(login))
+	// AuthSession::HandleLogonChallenge (AuthSession.cpp:285) queries with the raw
+	// client bytes: a padded login fails lookup there, so no TrimSpace.
+	login = upperOnlyLatin(login)
 	s.build = build
 	s.postBC = s.build > preBCMaxBuild
 	s.login = login
@@ -370,7 +372,11 @@ func (s *session) handleLogonChallenge(ctx context.Context) error {
 	s.debug("logon challenge received", "account", login, "build", build, "remote", s.remoteIP)
 	loaded, err := loadAccount(ctx, s.server.Store, s.login, s.remoteIP)
 	if err != nil {
-		return err
+		// AuthSession::LogonChallengeCallback (AuthSession.cpp:316): a failed
+		// challenge query surfaces as a null result, so the client still gets
+		// the unknown-account answer instead of a silent close.
+		s.debug("logon rejected", "account", s.login, "reason", "account query failed", "error", err)
+		return writePacket(s.conn, []byte{logonChallenge, 0, wowUnknownAccount})
 	}
 	if loaded == nil {
 		s.debug("logon rejected", "account", s.login, "reason", "unknown account")
@@ -490,8 +496,10 @@ func (s *session) handleLogonProof(ctx context.Context) error {
 		_ = writePacket(s.conn, []byte{logonProof, wowVersionInvalid})
 		return nil
 	}
+	// AuthSession::HandleLogonProof (AuthSession.cpp:510): LOGIN_UPD_LOGONPROOF is a
+	// DirectExecute whose failure is ignored — the proof packet still goes out.
 	if err := updateAuthenticatedAccount(ctx, s.server.Store, s.account.Login, s.sessionKey[:], s.remoteIP, s.locale, s.os); err != nil {
-		return err
+		s.debug("logon proof account update failed", "account", s.account.Login, "error", err)
 	}
 	m2 := crypto.SessionVerifier(A, clientM, s.sessionKey)
 	var packet *protocol.Buffer
@@ -553,7 +561,7 @@ func (s *session) handleReconnectChallenge(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	login = strings.TrimSpace(upperOnlyLatin(login))
+	login = upperOnlyLatin(login)
 	s.build = build
 	s.postBC = build > preBCMaxBuild
 	s.login = login
@@ -567,10 +575,13 @@ func (s *session) handleReconnectChallenge(ctx context.Context) error {
 	var locked, failed, banned, permanent, security uint64
 	var sessionKey []byte
 	if err := row.Scan(&loaded.ID, &loaded.Login, &locked, &loaded.LockCountry, &loaded.LastIP, &failed, &banned, &permanent, &security, &sessionKey); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return writePacket(s.conn, []byte{reconnectChallenge, wowUnknownAccount})
+		// AuthSession::ReconnectChallengeCallback (AuthSession.cpp:647): a failed
+		// reconnect-challenge query surfaces as a null result, answered with
+		// the unknown-account packet rather than a silent close.
+		if !errors.Is(err, sql.ErrNoRows) {
+			s.debug("reconnect rejected", "account", login, "reason", "account query failed", "error", err)
 		}
-		return err
+		return writePacket(s.conn, []byte{reconnectChallenge, wowUnknownAccount})
 	}
 	loaded.Locked = locked != 0
 	loaded.FailedLogins = uint32(failed)
@@ -644,7 +655,10 @@ func (s *session) handleRealmList(ctx context.Context) error {
 	}
 	counts, err := loadCharacterCounts(ctx, s.server.Store, s.account.ID)
 	if err != nil {
-		return err
+		// AuthSession::RealmListCallback (AuthSession.cpp:734): a failed counts
+		// query still sends the realm list, with zero character counts.
+		s.debug("realm list character counts unavailable", "account", s.account.Login, "error", err)
+		counts = nil
 	}
 	builds, err := loadBuilds(ctx, s.server.Store)
 	if err != nil {

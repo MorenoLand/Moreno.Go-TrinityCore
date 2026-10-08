@@ -1391,7 +1391,10 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_KEEP_ALIVE):
-			if !state.authed || !state.handleKeepAlive() {
+			// WorldSocket::ReadDataHandler (WorldSocket.cpp:348): CMSG_KEEP_ALIVE
+			// is tolerated before auth; it only refreshes the in-world timer
+			// when a session exists (handleKeepAlive is a no-op otherwise).
+			if !state.handleKeepAlive() {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_CHAR_ENUM):
@@ -3326,10 +3329,11 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			state.debug("handle_null client opcode ignored", "account", state.accountName, "opcode", opcodeName(header.Opcode))
 
 		default:
-			if !state.authed {
-				return
-			}
-			state.debug("world packet ignored", "account", state.accountName, "opcode", opcodeName(header.Opcode), "size", len(payload))
+			// WorldSocket::ReadDataHandler (WorldSocket.cpp:378): a client opcode
+			// with no registered handler (or out of range) closes the connection.
+			// Opcodes the reference explicitly null-handles are listed above.
+			state.debug("world unknown opcode, closing connection", "account", state.accountName, "opcode", opcodeName(header.Opcode), "size", len(payload))
+			return
 		}
 	}
 }
@@ -3398,6 +3402,12 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	}
 	digestBytes, err := b.Read(sha1.Size)
 	if err != nil {
+		return false
+	}
+	// WorldSocket::HandleAuthSession (WorldSocket.cpp:441): ByteBuffer::contents()
+	// throws on an empty addon-info block — the reference drops the connection.
+	if len(b.Bytes())-b.Position() == 0 {
+		s.debug("world authentication rejected", "account", debugAccount, "reason", "empty addon info")
 		return false
 	}
 	account, err := loadAccount(ctx, s.server.AuthStore, accountName, s.server.RealmID)
@@ -3524,13 +3534,25 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	s.loadTutorials(ctx)
 	s.pendingAddonInfo = append([]byte(nil), b.Bytes()[b.Position():]...)
 
+	// WorldSocket::HandleAuthSessionCallback (WorldSocket.cpp:600): the warden
+	// session initializes before the queue-admission decision, so queued
+	// players receive the module handshake while waiting.
+	if s.server.Config.WardenEnabled && len(account.SessionKey) == crypto.SRP6SessionKeyLength {
+		w, err := newWardenSession(s, account.SessionKey)
+		if err != nil {
+			s.server.Logger.Error("failed to initialize warden for session", "account", s.accountName, "error", err)
+		} else {
+			s.warden = w
+		}
+	}
+
 	if s.server.checkQueue(s, ctx, account) {
 		return true
 	}
-	return s.initializeSession(ctx, account)
+	return s.initializeSession(ctx)
 }
 
-func (s *session) initializeSession(ctx context.Context, account *account) bool {
+func (s *session) initializeSession(ctx context.Context) bool {
 	// WorldSession::InitializeSessionCallback (WorldSession.cpp:1325): a session
 	// promoted out of the queue answers with the 1-byte SendAuthWaitQue(0)
 	// form; a fresh login gets the 11-byte short form. inQueue is cleared only
@@ -3563,14 +3585,6 @@ func (s *session) initializeSession(ctx context.Context, account *account) bool 
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_TUTORIAL_FLAGS), buildTutorialFlags(s.tutorials), true); err != nil {
 		return false
-	}
-	if s.server.Config.WardenEnabled && len(account.SessionKey) == crypto.SRP6SessionKeyLength {
-		w, err := newWardenSession(s, account.SessionKey)
-		if err != nil {
-			s.server.Logger.Error("failed to initialize warden for session", "account", s.accountName, "error", err)
-		} else {
-			s.warden = w
-		}
 	}
 	return true
 }
@@ -3688,7 +3702,7 @@ func (s *Server) tryPromoteQueueFront() bool {
 		s.sessionsMu.Unlock()
 		return false
 	}
-	promoted.initializeSession(context.Background(), account)
+	promoted.initializeSession(context.Background())
 	return true
 }
 
@@ -3866,10 +3880,11 @@ func (s *session) handlePing(ctx context.Context, payload []byte) bool {
 				}
 				skip, permErr := accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionSkipCheckOverSpeedPing)
 				if permErr != nil {
+					// WorldSocket::HandlePing (WorldSocket.cpp:655): the reference
+					// consults in-memory RBAC, which has no failure mode — a lookup
+					// failure must not kick the way a missing permission does.
 					s.debug("over-speed ping permission lookup failed", "account", s.accountName, "error", permErr)
-					return false
-				}
-				if !skip {
+				} else if !skip {
 					s.debug("session kicked for over-speed pings", "account", s.accountName)
 					return false
 				}
@@ -4001,10 +4016,10 @@ func loadAccount(ctx context.Context, store *database.Store, username string, re
 		result.MuteTime = muteTime.Int64
 	}
 	result.Locked = locked != 0
-	if expansion.Valid && expansion.Int64 > 0 {
+	// WorldSocket.cpp:283 (AccountInfo ctor): the expansion column is taken raw —
+	// a stored 0 (classic) stays 0; only values above the world's expansion clamp down.
+	if expansion.Valid {
 		result.Expansion = uint8(expansion.Int64)
-	} else {
-		result.Expansion = 2 // WotLK default
 	}
 	// WorldSocket.cpp:267 (AccountInfo ctor): the auth query's ORDER BY
 	// aa.RealmID DESC LIMIT 1 picks the realm-specific access row over the
