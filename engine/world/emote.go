@@ -31,7 +31,10 @@ func (s *session) handleEmote(ctx context.Context, payload []byte) bool {
 	}
 	reader := protocol.NewReader(payload)
 	emote, err := reader.ReadU32()
-	if err != nil || (emote != 0 && emote != 17) {
+	// Reference: WorldSession::HandleEmoteOpcode (ChatHandler.cpp:631-637) —
+	// the client hardcodes only EMOTE_ONESHOT_NONE (0) and EMOTE_ONESHOT_WAVE
+	// (3); 17 is EMOTE_ONESHOT_KISS and is not a valid CMSG_EMOTE id.
+	if err != nil || (emote != 0 && emote != 3) {
 		return true
 	}
 	// C++ (ChatHandler.cpp:636-647): Eluna PLAYER_EVENT_ON_EMOTE (23) fires
@@ -87,13 +90,32 @@ func (s *session) handleTextEmote(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	entry, found := file.Find(textEmote)
-	s.updateAchievementCriteria(criteriaTypeDoEmote, textEmote, 1)
 	if !found {
 		return true
 	}
+	// Reference: WorldSession::HandleTextEmoteOpcode (ChatHandler.cpp:696-698
+	// then the criteria call after the broadcast) — the
+	// ACHIEVEMENT_CRITERIA_TYPE_DO_EMOTE update runs only after the EmotesText
+	// lookup succeeds; C++ returns early on an invalid text emote id before
+	// the criteria update. The quantity stays 1: Go's additive progress model
+	// has no SET-type analog, and the C++ quantity 0 is ignored there (C++
+	// sets the counter to 1 via miscValue1 != 0 in AchievementMgr.cpp).
+	s.updateAchievementCriteria(criteriaTypeDoEmote, textEmote, 1)
 	visualEmote, err := entry.Uint32(2)
 	if err != nil {
 		return true
+	}
+	// Reference: WorldSession::HandleTextEmoteOpcode (ChatHandler.cpp:700-714)
+	// — the state emotes (SLEEP=12, SIT=13, KNEEL=68) and NONE=0 skip
+	// HandleEmoteCommand entirely; only the default arm sends the visual
+	// SMSG_EMOTE. The dead-entity arm (UNIT_STATE_DIED) is unreachable here:
+	// the handler returns early when the player is dead, like C++'s
+	// !IsAlive() gate.
+	sendVisual := false
+	switch visualEmote {
+	case 12, 13, 68:
+	default:
+		sendVisual = visualEmote != 0
 	}
 	targetName := ""
 	if targetGUID != 0 && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
@@ -122,17 +144,28 @@ func (s *session) handleTextEmote(ctx context.Context, payload []byte) bool {
 	}
 
 	var visPacket []byte
-	if visualEmote > 0 {
+	if sendVisual {
 		buf := protocol.NewBuffer(12)
 		buf.WriteU32(visualEmote)
 		buf.WriteU64(s.playerGUID)
 		visPacket = buf.Bytes()
 	}
 
+	// Reference: WorldSession::HandleTextEmoteOpcode (ChatHandler.cpp:718-723)
+	// — the text emote packet goes to the sender's cell visit with
+	// CONFIG_LISTEN_RANGE_TEXTEMOTE, not to the whole map (unlike the oneshot
+	// CMSG_EMOTE path, which is map-wide via SendMessageToSet).
+	listenRange := float64(40)
+	if s.server != nil && s.server.Config.ChatListenRangeTextEmote > 0 {
+		listenRange = s.server.Config.ChatListenRangeTextEmote
+	}
 	s.server.sessionsMu.RLock()
 	defer s.server.sessionsMu.RUnlock()
 	for member := range s.server.sessions {
-		if !member.worldReady.Load() || member.player == nil || member.player.Map != s.player.Map {
+		if !member.worldReady.Load() || member.player == nil || member.player.Map != s.player.Map || member.player.InstanceID != s.player.InstanceID {
+			continue
+		}
+		if distance3D(s.player.X, s.player.Y, s.player.Z, member.player.X, member.player.Y, member.player.Z) > listenRange {
 			continue
 		}
 		_ = member.write(uint16(protocol.OpcodeSMSG_TEXT_EMOTE), packet.Bytes(), true)
