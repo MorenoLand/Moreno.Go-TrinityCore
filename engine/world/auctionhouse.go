@@ -555,9 +555,6 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	expire := now + int64(auctionTime)
 	var nextID int64
 	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM auctionhouse").Scan(&nextID)
-	if nextID <= 0 {
-		nextID = 1
-	}
 	// C++ AuctionEntry::SaveToDB (AuctionHouseMgr.cpp:899-912): the auction
 	// row carries no item columns — entry and count resolve from the
 	// item_instance join (CHAR_SEL_AUCTIONS); Flags starts at
@@ -685,8 +682,7 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 
 		// 1. If previous bidder existed and was not current buyer, refund them
 		if bidderGUID > 0 && bidderGUID != int64(s.playerGUID) && lastBid > 0 {
-			var refundMailID int64
-			_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&refundMailID)
+			refundMailID := s.server.generateMailID()
 			outbidSubj := fmt.Sprintf("%d:0:%d:%d:%d", itemEntry, auctionOutbidded, auctionID, itemCount)
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 4)",
 				refundMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, bidderGUID, outbidSubj, now+30*86400, now, lastBid)
@@ -707,8 +703,7 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 
 		// 1. Send auction invoice / sale pending notice mail to seller (immediate delivery, expires in MailDeliveryDelay)
 		if s.auctionCharExists(ctx, uint64(ownerGUID)) {
-			var invoiceMailID int64
-			_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&invoiceMailID)
+			invoiceMailID := s.server.generateMailID()
 			pendingSubj := fmt.Sprintf("%d:0:%d:%d:%d", itemEntry, auctionSalePending, auctionID, itemCount)
 			// C++ AuctionHouseMgr::SendAuctionSalePendingMail (AuctionHouseMgr.cpp:199,203):
 			// the trailing eta field is timePacker.read<uint32>() after
@@ -725,8 +720,7 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 
 		// 2. Send profit mail to seller (delayed by MailDeliveryDelay, default 1 hour)
 		if s.auctionCharExists(ctx, uint64(ownerGUID)) {
-			var sellerMailID int64
-			_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&sellerMailID)
+			sellerMailID := s.server.generateMailID()
 			succSubj := fmt.Sprintf("%d:0:%d:%d:%d", itemEntry, auctionSuccessful, auctionID, itemCount)
 			succBody := fmt.Sprintf("%X:%d:%d:%d:%d", s.playerGUID, buyout, buyout, deposit, consignment)
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, ?, 0, ?, ?, ?, 0, 4)",
@@ -741,8 +735,7 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		// 3. Send won mail with item to buyer (immediate delivery)
 		var itemProbe int
 		if err := cdb.QueryRowContext(ctx, "SELECT 1 FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemProbe); err == nil {
-			var nextMailID int64
-			_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&nextMailID)
+			nextMailID := s.server.generateMailID()
 			wonSubj := fmt.Sprintf("%d:0:%d:%d:%d", itemEntry, auctionWon, auctionID, itemCount)
 			wonBody := fmt.Sprintf("%X:%d:%d", ownerGUID, buyout, buyout)
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, ?, 1, ?, ?, 0, 0, 4)",
@@ -772,8 +765,7 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 
 		if bidderGUID != 0 && lastBid > 0 && bidderGUID != int64(s.playerGUID) {
 			// Refund previous bidder via mail
-			var refundMailID int64
-			_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&refundMailID)
+			refundMailID := s.server.generateMailID()
 			outbidSubj := fmt.Sprintf("%d:0:%d:%d:%d", itemEntry, auctionOutbidded, auctionID, itemCount)
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 4)",
 				refundMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, bidderGUID, outbidSubj, now+30*86400, now, lastBid)
@@ -1013,8 +1005,7 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 		if s.player.Money < auctionCut {
 			return true
 		}
-		var bidderMailID int64
-		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&bidderMailID)
+		bidderMailID := s.server.generateMailID()
 		bidderSubj := fmt.Sprintf("%d:0:%d:%d:%d", itemEntry, auctionCancelledToBidder, auctionID, itemCount)
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 4)",
 			bidderMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, bidderGUID, bidderSubj, now+30*86400, now, lastBid)
@@ -1026,8 +1017,7 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 	}
 
 	// Mail item back to owner
-	var nextMailID int64
-	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&nextMailID)
+	nextMailID := s.server.generateMailID()
 	cancelSubj := fmt.Sprintf("%d:0:%d:%d:%d", itemEntry, auctionCanceled, auctionID, itemCount)
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, '', 1, ?, ?, 0, 0, 4)",
 		nextMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, ownerGUID, cancelSubj, now+30*86400, now)
@@ -1101,8 +1091,7 @@ func (s *session) expireAuctions(ctx context.Context) {
 			// 1. Profit mail to seller (delayed by MailDeliveryDelay, default 1 hour),
 			// gated on the owner existing (SendAuctionSuccessfulMail, AuctionHouseMgr.cpp:230).
 			if s.auctionCharExists(ctx, uint64(a.owner)) {
-				var sellerMailID int64
-				_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&sellerMailID)
+				sellerMailID := s.server.generateMailID()
 				succSubj := fmt.Sprintf("%d:0:%d:%d:%d", a.itemTmpl, auctionSuccessful, a.id, a.count)
 				succBody := fmt.Sprintf("%X:%d:%d:%d:%d", a.bidder, a.lastBid, a.buyout, a.deposit, consignment)
 				_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, ?, 0, ?, ?, ?, 0, 4)",
@@ -1128,8 +1117,7 @@ func (s *session) expireAuctions(ctx context.Context) {
 			var itemProbe int
 			if err := cdb.QueryRowContext(ctx, "SELECT 1 FROM item_instance WHERE guid = ? LIMIT 1", a.itemGUID).Scan(&itemProbe); err == nil {
 				if s.auctionCharExists(ctx, uint64(a.bidder)) {
-					var wonMailID int64
-					_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&wonMailID)
+					wonMailID := s.server.generateMailID()
 					wonSubj := fmt.Sprintf("%d:0:%d:%d:%d", a.itemTmpl, auctionWon, a.id, a.count)
 					wonBody := fmt.Sprintf("%X:%d:%d", a.owner, a.lastBid, a.buyout)
 					_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, ?, 1, ?, ?, 0, 0, 4)",
@@ -1167,8 +1155,7 @@ func (s *session) expireAuctions(ctx context.Context) {
 				_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", a.itemGUID)
 				continue
 			}
-			var expMailID int64
-			_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&expMailID)
+			expMailID := s.server.generateMailID()
 			expSubj := fmt.Sprintf("%d:0:%d:%d:%d", a.itemTmpl, auctionExpired, a.id, a.count)
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, '', 1, ?, ?, 0, 0, 4)",
 				expMailID, mailAuctionType, mailStationeryAuction, a.houseID, a.owner, expSubj, now+30*86400, now)
@@ -1226,17 +1213,27 @@ func (s *session) notifyAuctionOwner(ownerGUID uint64, auctionID, bid uint32, it
 	}
 }
 
-func (s *session) sendMailNotify(receiverGUID uint64) {
-	if s.server == nil {
+// notifyMailAvailable is the Server half of the mail-arrival notify used by
+// the mail sweep and send paths: the online receiver's unread count is
+// refreshed and SMSG_RECEIVED_MAIL fires when something is actually waiting.
+func (srv *Server) notifyMailAvailable(receiverGUID uint64) {
+	if srv == nil {
 		return
 	}
-	targetSess := s.server.findSessionByGUID(receiverGUID)
+	targetSess := srv.findSessionByGUID(receiverGUID)
 	if targetSess != nil {
 		targetSess.loadMailState(context.Background())
 		if targetSess.unreadMails > 0 {
 			targetSess.sendNewMailNotification(context.Background())
 		}
 	}
+}
+
+func (s *session) sendMailNotify(receiverGUID uint64) {
+	if s.server == nil {
+		return
+	}
+	s.server.notifyMailAvailable(receiverGUID)
 }
 
 // scanAuctionRows runs an auctionhouse row query and converts the rows to

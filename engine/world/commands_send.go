@@ -65,11 +65,7 @@ func (s *session) sendMailInsert(ctx context.Context, receiverGUID uint64, subje
 	if cdb == nil {
 		return false
 	}
-	var nextMailID int64
-	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&nextMailID)
-	if nextMailID <= 0 {
-		nextMailID = 1
-	}
+	nextMailID := s.server.generateMailID()
 	now := time.Now().Unix()
 	hasItems := 0
 	if len(itemGUIDs) > 0 {
@@ -262,9 +258,6 @@ func (s *session) handleSendItems(ctx context.Context, args []string) {
 	for _, it := range items {
 		var nextItemGUID int64
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextItemGUID)
-		if nextItemGUID <= 0 {
-			nextItemGUID = 1
-		}
 		if _, err := cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count) VALUES (?, ?, ?, ?)", nextItemGUID, it.entry, guid, it.count); err != nil {
 			continue // Item::CreateItem failing drops the item, like C++
 		}

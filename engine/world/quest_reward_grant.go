@@ -255,14 +255,20 @@ func (s *session) sendQuestRewardMail(ctx context.Context, questID uint32, giver
 	if templateID == 123 {
 		money = 1000000
 	}
-	var nextMailID int64
-	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&nextMailID)
-	if nextMailID <= 0 {
-		nextMailID = 1
+	// MailDraft::prepareItems (Mail.cpp:106-121): roll the template's
+	// mail_loot_template items for the receiver.
+	itemGUIDs := s.server.rollMailTemplateItems(ctx, templateID, s.playerGUID)
+	hasItems := 0
+	if len(itemGUIDs) > 0 {
+		hasItems = 1
 	}
+	nextMailID := s.server.generateMailID()
 	_, _ = cdb.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
-		VALUES (?, ?, 41, ?, ?, ?, '', '', 0, ?, ?, ?, 0, 16)`,
-		nextMailID, messageType, templateID, senderEntry, s.playerGUID, expireTime, deliverTime, money)
+		VALUES (?, ?, 41, ?, ?, ?, '', '', ?, ?, ?, ?, 0, 16)`,
+		nextMailID, messageType, templateID, senderEntry, s.playerGUID, hasItems, expireTime, deliverTime, money)
+	for _, ig := range itemGUIDs {
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, receiver) VALUES (?, ?, ?)", nextMailID, ig, s.playerGUID)
+	}
 	s.sendMailNotify(s.playerGUID)
 }
 

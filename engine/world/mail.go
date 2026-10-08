@@ -3,12 +3,78 @@ package world
 import (
 	"context"
 	"database/sql"
+	"math/rand"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
+
+// maxMailItems mirrors MAX_MAIL_ITEMS (Mail.h:33): a mail draft carries at
+// most 12 attached items.
+const maxMailItems = 12
+
+// rollMailTemplateItems mirrors MailDraft::prepareItems (Mail.cpp:95-122): for
+// a template mail it rolls the mail_loot_template rows of that template and
+// creates one item_instance row per rolled item (Item::CreateItem +
+// SaveToDB), returning the new GUIDs for the mail_items insert. Each row
+// rolls its own Chance with the count drawn uniformly from
+// [MinCount, MaxCount]; rows with a Reference entry (reference_loot_template
+// recursion) and QuestRequired rows (Go has no quest-loot eligibility model
+// on this path) are skipped, and grouped rows (GroupId != 0) are rolled
+// independently rather than as exclusive group picks — documented
+// simplifications. The result caps at MAX_MAIL_ITEMS like the C++ slot loop.
+func (srv *Server) rollMailTemplateItems(ctx context.Context, templateID uint32, receiverGUID uint64) []uint64 {
+	if srv == nil || templateID == 0 || srv.WorldStore == nil || srv.WorldStore.DB == nil ||
+		srv.CharactersStore == nil || srv.CharactersStore.DB == nil {
+		return nil
+	}
+	rows, err := srv.WorldStore.DB.QueryContext(ctx,
+		`SELECT Item, Chance, MinCount, MaxCount FROM mail_loot_template WHERE Entry = ? AND Reference = 0 AND QuestRequired = 0`,
+		templateID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	cdb := srv.CharactersStore.DB
+	var guids []uint64
+	for rows.Next() && len(guids) < maxMailItems {
+		var item uint32
+		var chance float64
+		var minCount, maxCount uint32
+		if err := rows.Scan(&item, &chance, &minCount, &maxCount); err != nil {
+			continue
+		}
+		if rand.Float64()*100 >= chance {
+			continue
+		}
+		count := minCount
+		if maxCount > minCount {
+			count += uint32(rand.Intn(int(maxCount - minCount + 1)))
+		}
+		if count == 0 {
+			continue
+		}
+		// Item::CreateItem returns null for an unknown template; the
+		// achievement path zeroes the same way (AchievementMgr.cpp:2596).
+		var one int
+		if err := srv.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM item_template WHERE entry = ?", item).Scan(&one); err != nil {
+			continue
+		}
+		var nextItemGUID int64
+		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextItemGUID)
+		if nextItemGUID <= 0 {
+			nextItemGUID = 1
+		}
+		if _, err := cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count) VALUES (?, ?, ?, ?)",
+			nextItemGUID, item, receiverGUID, count); err != nil {
+			continue
+		}
+		guids = append(guids, uint64(nextItemGUID))
+	}
+	return guids
+}
 
 // Reference: SharedDefines.h:3533 (enum MailResponseType)
 const (
@@ -719,11 +785,7 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	if len(attachments) > 0 {
 		hasItems = 1
 	}
-	var nextMailID int64
-	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&nextMailID)
-	if nextMailID <= 0 {
-		nextMailID = 1
-	}
+	nextMailID := s.server.generateMailID()
 	// TrinityCore MailDraft::SendMailTo stores checked as MAIL_CHECK_MASK_HAS_BODY (0x10)
 	// when a body text is present and MAIL_CHECK_MASK_COPIED (0x04) otherwise.
 	checked := uint32(0x04)
@@ -844,9 +906,6 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailItemTaken, mailErrInternalError, 0, 0, 0), true)
 		return true
 	}
-	if itemCount <= 0 {
-		itemCount = 1
-	}
 	// Check COD (Cash On Delivery) payment
 	if cod > 0 {
 		if s.player.Money < uint32(cod) {
@@ -878,11 +937,7 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 
 		if s.server.findSessionByGUID(uint64(senderGUID)) != nil || s.mailSenderCharacterExists(ctx, uint64(senderGUID)) {
 			now := time.Now().Unix()
-			var nextMailID int64
-			_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&nextMailID)
-			if nextMailID <= 0 {
-				nextMailID = 1
-			}
+			nextMailID := s.server.generateMailID()
 			// C++ MailDraft::SendMailTo (Mail.cpp:211-215): the COD-payment draft
 			// carries no COD, so expiry is 90 days when the taker is a game
 			// master, 30 days otherwise.
@@ -1495,13 +1550,7 @@ func (s *session) deleteCharacterReturnMails(ctx context.Context, tx *sql.Tx, gu
 		}
 		expireTime := deliverTime + mailSendExpireDelay(gmSender, 0)
 
-		var nextMailID int64
-		if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&nextMailID); err != nil {
-			return err
-		}
-		if nextMailID <= 0 {
-			nextMailID = 1
-		}
+		nextMailID := s.server.generateMailID()
 		hasItems := 0
 		if len(itemGUIDs) > 0 {
 			hasItems = 1
@@ -1542,10 +1591,23 @@ func (s *session) deleteCharacterReturnMails(ctx context.Context, tx *sql.Tx, gu
 // expireOldMails sweeps expired mails in characters DB.
 // Reference: ObjectMgr::ReturnOrDeleteOldMails (ObjectMgr.cpp:6308).
 func (s *session) expireOldMails(ctx context.Context) {
-	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+	if s.server == nil {
 		return
 	}
-	cdb := s.server.CharactersStore.DB
+	s.server.sweepExpiredMails(ctx)
+}
+
+// sweepExpiredMails is the server-wide ObjectMgr::ReturnOrDeleteOldMails(true)
+// sweep (ObjectMgr.cpp:6245-6308): every expired mail whose receiver is not
+// connected is returned to its sender (normal player mail with items) or
+// deleted. It runs at startup, once a day at CleanOldMailTime, and from every
+// login/mailbox-open (the per-session call sites), so offline receivers are
+// covered even on servers where the daily sweep is disabled.
+func (srv *Server) sweepExpiredMails(ctx context.Context) {
+	if srv == nil || srv.CharactersStore == nil || srv.CharactersStore.DB == nil {
+		return
+	}
+	cdb := srv.CharactersStore.DB
 	now := time.Now().Unix()
 	rows, err := cdb.QueryContext(ctx, `SELECT id, messageType, sender, receiver, has_items, checked FROM mail WHERE expire_time < ?`, now)
 	if err != nil {
@@ -1566,7 +1628,7 @@ func (s *session) expireOldMails(ctx context.Context) {
 	for _, em := range expired {
 		// ObjectMgr.cpp:6295: the serverUp sweep never touches mails of
 		// connected receivers; Go's sweep always runs while the server is up.
-		if s.server.findSessionByGUID(uint64(em.receiver)) != nil {
+		if srv.findSessionByGUID(uint64(em.receiver)) != nil {
 			continue
 		}
 		if em.hasItems > 0 {
@@ -1591,7 +1653,7 @@ func (s *session) expireOldMails(ctx context.Context) {
 					deliver_time = ?,
 					expire_time = ?
 					WHERE id = ?`, em.sender, em.receiver, now, expireTime, em.id)
-				s.sendMailNotify(uint64(em.sender))
+				srv.notifyMailAvailable(uint64(em.sender))
 			}
 		} else {
 			// No items attached, delete expired mail

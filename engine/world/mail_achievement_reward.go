@@ -35,11 +35,7 @@ func (s *session) sendAchievementRewardMail(achievementID uint32) {
 		subject, body = "", ""
 	}
 	now := time.Now().Unix()
-	var nextMailID int64
-	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&nextMailID)
-	if nextMailID <= 0 {
-		nextMailID = 1
-	}
+	nextMailID := s.server.generateMailID()
 	var itemGUIDs []uint64
 	// LoadRewards (AchievementMgr.cpp:2596) zeroes the item when its template
 	// is unknown; the mail still goes out without it.
@@ -47,14 +43,14 @@ func (s *session) sendAchievementRewardMail(achievementID uint32) {
 	if itemID != 0 && wdb.QueryRowContext(ctx, "SELECT 1 FROM item_template WHERE entry = ?", itemID).Scan(&itemExists) == nil {
 		var nextItemGUID int64
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextItemGUID)
-		if nextItemGUID <= 0 {
-			nextItemGUID = 1
-		}
 		if _, err := cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count) VALUES (?, ?, ?, 1)",
 			nextItemGUID, itemID, s.playerGUID); err == nil {
 			itemGUIDs = append(itemGUIDs, uint64(nextItemGUID))
 		}
 	}
+	// MailDraft::prepareItems (Mail.cpp:106-121): a MailDraft(mailTemplateId)
+	// also rolls the template's mail_loot_template items for the receiver.
+	itemGUIDs = append(itemGUIDs, s.server.rollMailTemplateItems(ctx, templateID, s.playerGUID)...)
 	hasItems := 0
 	if len(itemGUIDs) > 0 {
 		hasItems = 1

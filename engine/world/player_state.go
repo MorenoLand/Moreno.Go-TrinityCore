@@ -1346,17 +1346,12 @@ func (s *session) removeInvalidInventoryItems(ctx context.Context, state *player
 	defer tx.Rollback()
 	if len(mailItems) > 0 {
 		now := time.Now().Unix()
-		var nextMailID int64
-		if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&nextMailID); err != nil {
-			return false
-		}
 		for start := 0; start < len(mailItems); start += mailItemsPerMessage {
 			end := start + mailItemsPerMessage
 			if end > len(mailItems) {
 				end = len(mailItems)
 			}
-			mailID := nextMailID
-			nextMailID++
+			mailID := s.server.generateMailID()
 			if _, err := tx.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
 				VALUES (?, 0, ?, 0, ?, ?, ?, ?, 1, ?, ?, 0, 0, ?)`, mailID, gmStationery, state.GUID, state.GUID, subject, "There were problems with equipping item(s).", now+mailExpiration, now, mailCheckCopied); err != nil {
 				return false
@@ -4389,9 +4384,6 @@ func (s *session) sendInventoryItemsMode(ctx context.Context, mode uint8) error 
 	enchantDurations := make([]enchantDurationUpdate, 0)
 	for _, item := range orderedItems {
 		bag, slot, itemGUID, itemEntry, count := item.bag, item.slot, item.itemGUID, item.itemEntry, item.count
-		if count <= 0 {
-			count = 1
-		}
 		fullGUID := uint64(itemGUID) | (uint64(0x4000) << 48)
 		containedGUID := uint64(s.playerGUID)
 		if bag != 0 {

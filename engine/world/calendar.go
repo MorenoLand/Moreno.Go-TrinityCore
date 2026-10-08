@@ -1058,11 +1058,7 @@ func (s *session) handleCalendarRemoveEvent(ctx context.Context, payload []byte)
 				if err := mailRows.Scan(&inviteeGUID); err != nil || inviteeGUID == s.playerGUID {
 					continue
 				}
-				var nextMailID int64
-				_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&nextMailID)
-				if nextMailID <= 0 {
-					nextMailID = 1
-				}
+				nextMailID := s.server.generateMailID()
 				subject := strconv.FormatUint(s.playerGUID, 10) + ":" + evTitle
 				_, _ = cdb.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
 					VALUES (?, 5, 41, 0, ?, ?, ?, ?, 0, ?, ?, 0, 0, 4)`,

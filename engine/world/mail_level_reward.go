@@ -42,16 +42,22 @@ func (s *session) sendLevelUpMail(ctx context.Context, level uint8) {
 	if templateID == 123 {
 		money = 1000000
 	}
-	var nextMailID int64
-	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&nextMailID)
-	if nextMailID <= 0 {
-		nextMailID = 1
+	// MailDraft::prepareItems (Mail.cpp:106-121): roll the template's
+	// mail_loot_template items for the receiver.
+	itemGUIDs := s.server.rollMailTemplateItems(ctx, templateID, s.playerGUID)
+	hasItems := 0
+	if len(itemGUIDs) > 0 {
+		hasItems = 1
 	}
+	nextMailID := s.server.generateMailID()
 	// MailDraft::SendMailTo (Mail.cpp:187-230): MAIL_CREATURE sender that is
 	// not an online GM player gets the 30-day expiry arm; subject/body are
 	// stored empty and rendered from MailTemplate.dbc; checked is 0.
 	_, _ = cdb.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
-		VALUES (?, 3, 41, ?, ?, ?, '', '', 0, ?, ?, ?, 0, 0)`,
-		nextMailID, templateID, senderEntry, s.playerGUID, now+mailSendExpireDelay(false, 0), now, money)
+		VALUES (?, 3, 41, ?, ?, ?, '', '', ?, ?, ?, ?, 0, 0)`,
+		nextMailID, templateID, senderEntry, s.playerGUID, hasItems, now+mailSendExpireDelay(false, 0), now, money)
+	for _, ig := range itemGUIDs {
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, receiver) VALUES (?, ?, ?)", nextMailID, ig, s.playerGUID)
+	}
 	s.sendMailNotify(s.playerGUID)
 }

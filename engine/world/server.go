@@ -86,14 +86,21 @@ type Server struct {
 	// disconnectTimes mirrors World's m_disconnects (World.cpp:3114): account id
 	// -> unix time of last non-queued session removal, consulted by the
 	// DisconnectToleranceInterval queue-skip arm.
-	disconnectTimes           map[uint32]int64
-	playerLimit               uint32
-	closed                    atomic.Bool
-	ticketsEnabled            atomic.Bool
-	objectsMu                 sync.RWMutex
-	characterGUIDMu           sync.Mutex
-	characterGUIDNext         uint64
-	characterGUIDReady        bool
+	disconnectTimes    map[uint32]int64
+	playerLimit        uint32
+	closed             atomic.Bool
+	ticketsEnabled     atomic.Bool
+	objectsMu          sync.RWMutex
+	characterGUIDMu    sync.Mutex
+	characterGUIDNext  uint64
+	characterGUIDReady bool
+	// mailIDMu/mailIDNext mirror ObjectMgr::_mailId (ObjectMgr.cpp:232, 7319,
+	// 7366-7374): the in-memory mail-ID generator seeded once from
+	// MAX(id)+1 at startup, so concurrent sends can never race on the same
+	// row id the way per-send MAX(id)+1 queries could.
+	mailIDMu                  sync.Mutex
+	mailIDNext                uint32
+	mailIDReady               bool
 	instanceIDMu              sync.Mutex
 	reservedInstanceIDs       map[uint32]struct{}
 	instanceAdmissionMu       sync.Mutex
@@ -580,8 +587,99 @@ func (s *Server) Initialize(ctx context.Context) error {
 	s.loadVehicleAccessories(ctx)
 	s.loadContinentTransports(ctx)
 	s.loadWorldStates(ctx)
+	s.initializeMailState(ctx)
 	go s.runWorldTick(ctx)
+	go s.runMailSweepLoop(ctx)
 	return nil
+}
+
+// initializeMailState mirrors the mail arms of worldserver startup
+// (World.cpp:2048): ObjectMgr::ReturnOrDeleteOldMails(false) — the
+// CHAR_DEL_EMPTY_EXPIRED_MAIL purge (ObjectMgr.cpp:6258) of mails that expired
+// with no items and an empty body, followed by the full return-or-delete sweep
+// over every receiver. No sessions are connected yet, so the sweep's
+// connected-receiver skip is a no-op. It also seeds the in-memory mail-ID
+// generator (ObjectMgr::GenerateMailID, ObjectMgr.cpp:7319).
+func (s *Server) initializeMailState(ctx context.Context) {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return
+	}
+	cdb := s.CharactersStore.DB
+	if _, err := cdb.ExecContext(ctx, "DELETE FROM mail WHERE expire_time < ? AND has_items = 0 AND body = ''", time.Now().Unix()); err != nil && s.Logger != nil {
+		s.Logger.Warn("mail: startup empty-expired purge failed", "error", err)
+	}
+	s.seedMailID(ctx)
+	s.sweepExpiredMails(ctx)
+}
+
+// seedMailID loads the mail-ID generator seed from the characters database,
+// mirroring ObjectMgr::LoadMailIDs (ObjectMgr.cpp:7319): _mailId starts one
+// past the highest mail row id seen at startup.
+func (s *Server) seedMailID(ctx context.Context) {
+	s.mailIDMu.Lock()
+	defer s.mailIDMu.Unlock()
+	if s.mailIDReady {
+		return
+	}
+	var highest uint32
+	if s.CharactersStore != nil && s.CharactersStore.DB != nil {
+		_ = s.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) FROM mail").Scan(&highest)
+	}
+	if highest >= s.mailIDNext {
+		s.mailIDNext = highest + 1
+	}
+	if s.mailIDNext == 0 {
+		s.mailIDNext = 1
+	}
+	s.mailIDReady = true
+}
+
+// generateMailID mirrors ObjectMgr::GenerateMailID (ObjectMgr.cpp:7366-7374):
+// the next mail row id from the in-memory counter. At 0xFFFFFFFE the C++ side
+// logs an error and returns 0; the Go side does the same.
+func (s *Server) generateMailID() uint32 {
+	s.mailIDMu.Lock()
+	defer s.mailIDMu.Unlock()
+	if !s.mailIDReady {
+		s.mailIDReady = true
+		s.mailIDNext = 1
+	}
+	if s.mailIDNext >= 0xFFFFFFFE {
+		if s.Logger != nil {
+			s.Logger.Error("mail: mail ID overflow, cannot generate new mail IDs")
+		}
+		return 0
+	}
+	id := s.mailIDNext
+	s.mailIDNext++
+	return id
+}
+
+// runMailSweepLoop mirrors the WUPDATE_AUCTIONS mail arm (World.cpp:2374-2385):
+// ReturnOrDeleteOldMails(true) fires every 24 hours, first at the next
+// CleanOldMailTime hour (default 04:00 local, clamped to 0-23 like the C++
+// config load at World.cpp:1032-1036).
+func (s *Server) runMailSweepLoop(ctx context.Context) {
+	if s == nil {
+		return
+	}
+	hour := int(s.Config.CleanOldMailTime) % 24
+	now := time.Now()
+	next := time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, now.Location())
+	if !next.After(now) {
+		next = next.Add(24 * time.Hour)
+	}
+	timer := time.NewTimer(next.Sub(now))
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			s.sweepExpiredMails(ctx)
+			timer.Reset(24 * time.Hour)
+		}
+	}
 }
 
 // repairGuildRankOverrides mirrors the tail of Guild::Load
