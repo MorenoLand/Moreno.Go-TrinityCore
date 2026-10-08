@@ -1103,7 +1103,7 @@ func isFishingSpell(spellID uint32) bool {
 	}
 }
 
-func (s *session) spawnFishingBobber(ctx context.Context, target protocol.SpellTargetData, spellID uint32) {
+func (s *session) spawnFishingBobber(ctx context.Context, target protocol.SpellTargetData, spellID uint32, durationMs int64) {
 	if s == nil || s.server == nil || s.player == nil || target.Flags&protocol.SpellTargetFlagDestLocation == 0 {
 		return
 	}
@@ -1121,12 +1121,61 @@ func (s *session) spawnFishingBobber(ctx context.Context, target protocol.SpellT
 	}
 	lowGUID := s.server.nextDynamicGameObjectLowGUID()
 	dyn := &dynamicGameObjectState{GUID: gameObjectGUID(lowGUID, entry), LowGUID: lowGUID, Entry: entry, OwnerGUID: s.playerGUID, SpellID: spellID, Map: s.player.Map, InstanceID: s.player.InstanceID, X: target.Destination.X, Y: target.Destination.Y, Z: target.Destination.Z, Orientation: s.player.Orientation, State: GameObjectStateActive, Type: GameObjectTypeFishingNode, DisplayID: displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, IsRuntimeSpawn: true}
-	dyn.AutoCloseTimer = time.AfterFunc(5*time.Second, func() {
+	// SpellEffects.cpp:4982-4999: the bobber's lifetime is the spell
+	// duration shortened by a lastSec roll (urand(0,2) -> {3,7,13}s), and
+	// the bite lands FISHING_BOBBER_READY_TIME (5s, GameObject.h:77) before
+	// the timeout (GameObject.cpp:510-534) — the catch window is exactly
+	// those 5s; a use before the bite answers FISH_NOT_HOOKED
+	// (GameObject.cpp:1798-1803).
+	lifetime := durationMs
+	if shortened := durationMs - int64([]int32{3, 7, 13}[rand.Intn(3)])*1000 + 5000; shortened < lifetime {
+		lifetime = shortened
+	}
+	if lifetime < 6000 {
+		lifetime = 6000
+	}
+	biteAt := lifetime - 5000
+	dyn.AutoCloseTimer = time.AfterFunc(time.Duration(biteAt)*time.Millisecond, func() {
 		s.server.setGameObjectStateInInstance(dyn.Map, dyn.InstanceID, dyn.GUID, GameObjectStateReady)
 		s.server.broadcastGameObjectCustomAnimInInstance(dyn.Map, dyn.InstanceID, dyn.GUID, 0)
 	})
-	dyn.DespawnTimer = time.AfterFunc(30*time.Second, func() { s.server.despawnDynamicGameObjectInInstance(dyn.Map, dyn.InstanceID, dyn.GUID) })
+	dyn.DespawnTimer = time.AfterFunc(time.Duration(lifetime)*time.Millisecond, func() {
+		if s.fishingBobberGUID == dyn.GUID {
+			s.fishingBobberGUID = 0
+		}
+		s.server.despawnDynamicGameObjectInInstance(dyn.Map, dyn.InstanceID, dyn.GUID)
+	})
+	s.fishingBobberGUID = dyn.GUID
 	s.server.spawnDynamicGameObject(dyn)
+}
+
+// cancelFishingBobber mirrors the channeled arm of Spell::cancel
+// (Spell.cpp:3251-3258) for fishing: cancelling the fishing channel
+// deletes the bobber (Unit::RemoveGameObject(spellId, true),
+// Unit.cpp:5263-5284 — the owner link is cleared before Delete, so no
+// SMSG_FISH_ESCAPED goes out; that packet only fires on the bobber's
+// bite-timeout arm, GameObject.cpp:585). Go arms no activeChannel for
+// fishing (finishSpellCast returns before startChannel), so the
+// channel-break paths never reach removeChannelGameObjects for it — the
+// live bobber is tracked on the session and cancelled explicitly here.
+func (s *session) cancelFishingBobber() {
+	if s == nil || s.server == nil || s.fishingBobberGUID == 0 {
+		return
+	}
+	guid := s.fishingBobberGUID
+	s.fishingBobberGUID = 0
+	var mapID, instanceID uint32
+	found := false
+	s.server.objectsMu.Lock()
+	if st := s.server.gameObjectStateLocked(s.player.Map, s.player.InstanceID, guid); st != nil {
+		st.FishingHandled = true
+		mapID, instanceID = st.Map, st.InstanceID
+		found = true
+	}
+	s.server.objectsMu.Unlock()
+	if found {
+		s.server.despawnDynamicGameObjectInInstance(mapID, instanceID, guid)
+	}
 }
 
 // removeChannelGameObjects mirrors the channeled-spell arm of Spell::cancel

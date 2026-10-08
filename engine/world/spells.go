@@ -2213,6 +2213,10 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if spellID != 75 {
 		s.interruptCurrentCast()
 		s.interruptCurrentChannel()
+		// A new cast breaks the fishing channel like any other channel
+		// (Spell::cancel arm, Spell.cpp:3251-3258); Go arms no channel
+		// for fishing, so the bobber is cancelled explicitly.
+		s.cancelFishingBobber()
 	}
 	if s.autoRepeatSpell != 0 && s.autoRepeatSpell != 75 {
 		s.autoRepeatSpell = 0
@@ -5723,7 +5727,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 	}
 	if isFishingSpell(spellID) {
-		s.spawnFishingBobber(ctx, target, spell.ID)
+		// SpellEffects.cpp:4979: the bobber lifetime derives from the
+		// spell's DBC duration (30s fallback when the DBC is unavailable).
+		durationMs := int64(30000)
+		if s.server != nil && s.server.Data != nil && spell.DurationIndex > 0 {
+			lvl := uint32(80)
+			if s.player != nil && s.player.Level > 0 {
+				lvl = uint32(s.player.Level)
+			}
+			if dur, ok, err := s.server.Data.SpellDuration(spell.DurationIndex, lvl); err == nil && ok && dur > 0 {
+				durationMs = int64(dur)
+			}
+		}
+		s.spawnFishingBobber(ctx, target, spell.ID, durationMs)
 		return
 	}
 
@@ -10517,6 +10533,12 @@ func (s *session) interruptSpellsOnMovement() {
 	if channelBreaks {
 		s.interruptCurrentChannel()
 	}
+	// Movement breaks the fishing channel (Spell::update movement leg,
+	// Spell.cpp:3814-3831 -> Spell::cancel arm). Go arms no activeChannel
+	// for fishing, so the movement break above never fires for it — the
+	// bobber is cancelled explicitly, otherwise it lingered the full
+	// lifetime, still catchable after the fisher walked away.
+	s.cancelFishingBobber()
 }
 
 func (s *session) stopSpellLifecycle() {
@@ -10631,6 +10653,13 @@ func (s *session) handleCancelChanneling(payload []byte) bool {
 		return true
 	}
 	if spell.Attributes&spellAttr0CantCancel != 0 {
+		return true
+	}
+	// CMSG_CANCEL_CAST on the fishing spell ends the channel and deletes
+	// the bobber (Spell::cancel arm); Go arms no activeChannel for
+	// fishing, so the match below never fires for it.
+	if isFishingSpell(channelSpell) {
+		s.cancelFishingBobber()
 		return true
 	}
 	s.castMu.Lock()

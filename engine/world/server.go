@@ -453,6 +453,7 @@ type session struct {
 	summonO                   float32
 	summonLocSet              bool
 	activeChannel             *activeChannelState
+	fishingBobberGUID         uint64 // live fishing bobber: Go arms no activeChannel for fishing, so the channel-cancel paths clear it via cancelFishingBobber
 	runes                     *dkRuneState
 	castMu                    sync.Mutex
 	schoolLockouts            map[uint32]int64

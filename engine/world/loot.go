@@ -1446,6 +1446,12 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 	}
 	if !forceSuccess && goState.State != GameObjectStateReady {
 		_ = s.write(uint16(protocol.OpcodeSMSG_FISH_NOT_HOOKED), nil, true)
+		// GameObject.cpp:1798-1803: a too-early use deactivates the bobber
+		// (GO_JUST_DEACTIVATED — deleted at the next update with the owner
+		// link cleared, no FISH_ESCAPED) and finishes the channel. Without
+		// the despawn the bobber lingered, still catchable once the bite
+		// timer fired.
+		s.cancelFishingBobber()
 		return true
 	}
 	// Player::SendLoot's distance gate (Player.cpp:8553) is skipped for the
@@ -1593,6 +1599,9 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 	// The bobber despawn stays at open — it matches the release-time
 	// GO_JUST_DEACTIVATED terminal state a release away from the window.
 	if requireOwner {
+		if s.fishingBobberGUID == targetGUID {
+			s.fishingBobberGUID = 0
+		}
 		s.server.despawnDynamicGameObjectInInstance(goState.Map, goState.InstanceID, targetGUID)
 	}
 	return true
