@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/service"
@@ -73,6 +74,10 @@ func Run(kind *service.Kind) int {
 	}
 	if len(c.UnrecognizedKeys) > 0 {
 		logger.Warn("configuration contains unrecognized or unmapped keys", "unmapped_count", len(c.UnrecognizedKeys))
+	}
+	if err := writePidFile(c.PidFile, logger); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
 	}
 	if err := service.RunSingle(context.Background(), c, *kind, logger); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -151,6 +156,10 @@ func RunCombined() int {
 	if len(c.UnrecognizedKeys) > 0 {
 		logger.Warn("configuration contains unrecognized or unmapped keys", "unmapped_count", len(c.UnrecognizedKeys))
 	}
+	if err := writePidFile(c.PidFile, logger); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	if *authOnly && *worldOnly {
 		fmt.Fprintln(os.Stderr, "--auth and --world cannot be used together")
 		return 2
@@ -184,6 +193,20 @@ func newLogger(debug bool) *slog.Logger {
 		level = slog.LevelDebug
 	}
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+}
+
+// writePidFile mirrors the authserver/worldserver Main.cpp PidFile arm:
+// when a PID file path is configured it is created at startup holding the
+// process ID; a creation failure aborts startup like the C++ return 1.
+func writePidFile(path string, logger *slog.Logger) error {
+	if path == "" {
+		return nil
+	}
+	if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o644); err != nil {
+		return fmt.Errorf("cannot create PID file %s: %w", path, err)
+	}
+	logger.Info("daemon PID file created", "path", path, "pid", os.Getpid())
+	return nil
 }
 
 func discoverConfig(explicit string, kind service.Kind, workDir string) string {

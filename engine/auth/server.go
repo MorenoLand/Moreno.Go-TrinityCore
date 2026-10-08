@@ -179,19 +179,48 @@ func NewServer(store *database.Store, logger *slog.Logger, realmID uint32, setti
 		address = "127.0.0.1"
 	}
 	server.RealmAddress = address
-	if store != nil {
-		// Expired ban cleanup mirrors authserver Main.cpp:284-285: purge
-		// expired IP bans and deactivate expired account bans at startup.
-		// C++ fires these as async fire-and-forget; failures are logged here
-		// without failing startup.
-		if _, err := store.ExecStatement(context.Background(), "LOGIN_DEL_EXPIRED_IP_BANS"); err != nil && logger != nil {
-			logger.Error("expired IP ban cleanup failed", "error", err)
-		}
-		if _, err := store.ExecStatement(context.Background(), "LOGIN_UPD_EXPIRED_ACCOUNT_BANS"); err != nil && logger != nil {
-			logger.Error("expired account ban cleanup failed", "error", err)
-		}
-	}
+	server.purgeExpiredBans()
 	return server
+}
+
+// purgeExpiredBans mirrors the ban-expiry arms of authserver Main.cpp's
+// BanExpiryHandler: it purges expired IP bans and deactivates expired
+// account bans. C++ fires these as async fire-and-forget statements;
+// failures are logged here without failing startup.
+func (s *Server) purgeExpiredBans() {
+	if s == nil || s.Store == nil {
+		return
+	}
+	ctx := context.Background()
+	if _, err := s.Store.ExecStatement(ctx, "LOGIN_DEL_EXPIRED_IP_BANS"); err != nil && s.Logger != nil {
+		s.Logger.Error("expired IP ban cleanup failed", "error", err)
+	}
+	if _, err := s.Store.ExecStatement(ctx, "LOGIN_UPD_EXPIRED_ACCOUNT_BANS"); err != nil && s.Logger != nil {
+		s.Logger.Error("expired account ban cleanup failed", "error", err)
+	}
+}
+
+// StartBanExpirySweeper mirrors authserver Main.cpp's BanExpiryHandler timer:
+// every BanExpiryCheckInterval seconds it purges expired IP bans and
+// deactivates expired account bans. The C++ timer first fires after the
+// interval elapses; the startup purge in NewServer covers anything that
+// expired while the server was down. An interval <= 0 disables the sweeper.
+func (s *Server) StartBanExpirySweeper(ctx context.Context, intervalSeconds int) {
+	if intervalSeconds <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(time.Duration(intervalSeconds) * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.purgeExpiredBans()
+			}
+		}
+	}()
 }
 
 func (s *Server) StartupError() error { return s.totpMasterKeyError }

@@ -58,10 +58,11 @@ func RunCombined(ctx context.Context, c config.Config, logger *slog.Logger) erro
 	if err := worldServer.Initialize(ctx); err != nil {
 		return err
 	}
-	authService := &Service{Kind: Auth, Address: fmt.Sprintf(":%d", c.RealmServerPort), Store: stores.Auth, Handler: authServer.Handle}
-	worldService := &Service{Kind: World, Address: fmt.Sprintf(":%d", c.WorldServerPort), Store: stores.World, Handler: worldServer.Handle, Stop: worldServer.Stop}
+	authService := &Service{Kind: Auth, Address: net.JoinHostPort(c.BindIP, fmt.Sprintf("%d", c.RealmServerPort)), Store: stores.Auth, Handler: authServer.Handle}
+	worldService := &Service{Kind: World, Address: net.JoinHostPort(c.BindIP, fmt.Sprintf("%d", c.WorldServerPort)), Store: stores.World, Handler: worldServer.Handle, Stop: worldServer.Stop}
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	authServer.StartBanExpirySweeper(ctx, c.BanExpiryCheckInterval)
 	errs := make(chan error, 2)
 	go func() { errs <- authService.Run(ctx, logger) }()
 	go func() { errs <- worldService.Run(ctx, logger) }()
@@ -98,7 +99,8 @@ func RunSingle(ctx context.Context, c config.Config, kind Kind, logger *slog.Log
 		stores.Characters.TraceRecorder = traceRecorder
 		stores.World.TraceRecorder = traceRecorder
 		defer persistProtocolTrace(c.ProtocolTracePath, traceRecorder)
-		return (&Service{Kind: kind, Address: fmt.Sprintf(":%d", c.RealmServerPort), Store: stores.Auth, Handler: server.Handle}).Run(ctx, logger)
+		server.StartBanExpirySweeper(ctx, c.BanExpiryCheckInterval)
+		return (&Service{Kind: kind, Address: net.JoinHostPort(c.BindIP, fmt.Sprintf("%d", c.RealmServerPort)), Store: stores.Auth, Handler: server.Handle}).Run(ctx, logger)
 	}
 	server := world.NewServer(stores, logger, c.RealmID, c)
 	traceRecorder, err := configureProtocolTrace(c.ProtocolTracePath)
@@ -110,7 +112,7 @@ func RunSingle(ctx context.Context, c config.Config, kind Kind, logger *slog.Log
 	if err := server.Initialize(ctx); err != nil {
 		return err
 	}
-	return (&Service{Kind: kind, Address: fmt.Sprintf(":%d", c.WorldServerPort), Store: stores.World, Handler: server.Handle, Stop: server.Stop}).Run(ctx, logger)
+	return (&Service{Kind: kind, Address: net.JoinHostPort(c.BindIP, fmt.Sprintf("%d", c.WorldServerPort)), Store: stores.World, Handler: server.Handle, Stop: server.Stop}).Run(ctx, logger)
 }
 
 func configureProtocolTrace(path string) (*protocoltrace.Recorder, error) {
