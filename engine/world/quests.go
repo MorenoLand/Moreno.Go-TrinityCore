@@ -15,6 +15,7 @@ import (
 const (
 	questStatusComplete            = 1
 	questStatusIncomplete          = 3
+	questStatusRewarded            = 6 // Player::GetQuestStatus reports QUEST_STATUS_REWARDED, never NONE, for rewarded quests
 	QuestTypeRaid           uint32 = 62
 	QuestTypeRaid10         uint32 = 88
 	QuestTypeRaid25         uint32 = 89
@@ -474,6 +475,18 @@ func (s *session) characterQuestStatus(ctx context.Context, questID uint32) (int
 				}
 				return questStatusIncomplete, nil
 			}
+		}
+	}
+	// Player::GetQuestStatus (Player.cpp:16131-16143): a quest missing from
+	// the active status map but present in the rewarded set reports
+	// QUEST_STATUS_REWARDED, not NONE. The rewarded-row predicate
+	// (quest_reward_grant.go state.Rewarded) already mirrors
+	// Quest::CanIncreaseRewardedQuestCounters, so the repeatable/daily/DF
+	// exclusions from GetQuestRewardStatus hold without a template read.
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var rewarded int64
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM character_queststatus_rewarded WHERE guid = ? AND quest = ? AND active = 1", s.playerGUID, questID).Scan(&rewarded); err == nil && rewarded > 0 {
+			return questStatusRewarded, nil
 		}
 	}
 	return 0, nil

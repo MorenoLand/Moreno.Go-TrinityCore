@@ -1844,7 +1844,7 @@ func (s *session) replayQuestRewardTwice(ctx context.Context, questID uint32) er
 		return fmt.Errorf("quest %d first reward choice was rejected", questID)
 	}
 	status, err := s.characterQuestStatus(ctx, questID)
-	if err != nil || status != 0 {
+	if err != nil || (status != 0 && status != questStatusRewarded) {
 		return fmt.Errorf("quest %d remained active after reward: status=%d err=%v", questID, status, err)
 	}
 	for _, entry := range s.player.QuestLog {

@@ -110,7 +110,7 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 	// requirement checks reply with SMSG_QUESTGIVER_QUEST_INVALID instead of the
 	// details, and the opcode never routes into the CompleteQuest path.
 	status, _ := s.characterQuestStatus(ctx, questID)
-	if status != 0 {
+	if status != 0 && status != questStatusRewarded {
 		return s.sendQuestGiverQuestInvalid(questInvalidAlreadyOn)
 	}
 	if s.isQuestRewarded(ctx, questID) {
