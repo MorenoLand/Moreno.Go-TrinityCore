@@ -535,6 +535,7 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 		for j, itemGUID := range itemGUIDs {
 			if itemCounts[j] == int64(stackCounts[j]) {
 				_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM item_refund_instance WHERE item_guid = ?", itemGUID)
 				_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, itemGUID)
 				s.despawnItem(uint64(itemGUID))
 			} else {
@@ -545,6 +546,11 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	} else {
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, auctionItemGUID)
 		s.despawnItem(uint64(auctionItemGUID))
+		// Player::MoveItemFromInventory (Player.cpp:12588-12595): posting to
+		// the auction runs Item::SetNotRefundable — flag cleared, refund row
+		// deleted.
+		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET flags = flags & ? WHERE guid = ?", ^int64(itemInstanceFlagRefundable), auctionItemGUID)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_refund_instance WHERE item_guid = ?", auctionItemGUID)
 	}
 	s.adjustQuestItemCount(ctx, uint32(itemEntry), finalCount, false)
 	now := time.Now().Unix()

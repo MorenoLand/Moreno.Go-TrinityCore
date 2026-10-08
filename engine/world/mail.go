@@ -808,8 +808,10 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 		s.despawnItem(att.ItemGUID)
 		// Reference: MailHandler.cpp:254 — item->SetNotRefundable(GetPlayer())
 		// clears the ITEM_FIELD_FLAG_REFUNDABLE (0x1000) flag on the mailed
-		// item (Item.cpp:1113-1118).
+		// item (Item.cpp:1113-1118) and deletes its item_refund_instance row
+		// (DeleteRefundDataFromDB).
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET flags = flags & ? WHERE guid = ?", ^int64(itemInstanceFlagRefundable), att.ItemGUID)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_refund_instance WHERE item_guid = ?", att.ItemGUID)
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", receiverGUID, att.ItemGUID)
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, receiver) VALUES (?, ?, ?)", nextMailID, att.ItemGUID, receiverGUID)
 	}

@@ -658,7 +658,11 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	cdb := s.server.CharactersStore.DB
 	if cdb != nil {
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ?, arenaPoints = ?, totalHonorPoints = ? WHERE guid = ?", s.player.Money, s.player.ArenaPoints, s.player.TotalHonorPoints, s.playerGUID)
-		if extendedCost.ID != 0 && uint32(amount) == 1 {
+		// Player.cpp:21888-21896 — the refundable arm has no amount gate: any
+		// ExtendedCost + ITEM_FLAG_ITEM_PURCHASE_RECORD + maxstack-1 buy flags the
+		// created item refundable (the template/stackable gates live inside
+		// recordVendorRefund).
+		if extendedCost.ID != 0 {
 			s.recordVendorRefund(ctx, cdb, res.ItemGUID, itemEntry, totalCost, uint32(extCost))
 		}
 	}
@@ -691,6 +695,10 @@ func (s *session) recordVendorRefund(ctx context.Context, cdb *sql.DB, itemGUID 
 		return
 	}
 	_, _ = cdb.ExecContext(ctx, "REPLACE INTO item_refund_instance (item_guid, player_guid, paidMoney, paidExtendedCost) VALUES (?, ?, ?, ?)", itemGUID, s.playerGUID, paidMoney, extendedCost)
+	// Player.cpp:21892 — it->SetFlag(ITEM_FIELD_FLAGS, ITEM_FIELD_FLAG_REFUNDABLE):
+	// the bit is client-visible ("Refundable") and is what the sell silent-return,
+	// mail, guild-bank and load-time arms key off; the refund row alone never set it.
+	_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET flags = flags | ? WHERE guid = ?", int64(itemInstanceFlagRefundable), itemGUID)
 }
 
 // vendorItemListable mirrors the SendListInventory visibility filters

@@ -1252,6 +1252,15 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 			if !execTx("UPDATE item_instance SET owner_guid = ?, giftCreatorGuid = ? WHERE guid = ?", partner.playerGUID, s.playerGUID, it.ItemGUID) {
 				return
 			}
+			// Player::MoveItemFromInventory (Player.cpp:12588-12595) runs
+			// Item::SetNotRefundable on every traded item: the refundable
+			// flag is cleared and the refund DB row deleted.
+			if !execTx("UPDATE item_instance SET flags = flags & ? WHERE guid = ?", ^int64(itemInstanceFlagRefundable), it.ItemGUID) {
+				return
+			}
+			if !execTx("DELETE FROM item_refund_instance WHERE item_guid = ?", it.ItemGUID) {
+				return
+			}
 			if !execTx("INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", partner.playerGUID, targetLoc.bagKey, targetLoc.slot, it.ItemGUID) {
 				return
 			}
@@ -1262,6 +1271,15 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 			// Execute trade: C++ stamps the giver's GUID as ITEM_FIELD_GIFTCREATOR
 			// on each traded item (TradeHandler.cpp:488).
 			if !execTx("UPDATE item_instance SET owner_guid = ?, giftCreatorGuid = ? WHERE guid = ?", s.playerGUID, partner.playerGUID, it.ItemGUID) {
+				return
+			}
+			// Player::MoveItemFromInventory (Player.cpp:12588-12595) runs
+			// Item::SetNotRefundable on every traded item: the refundable
+			// flag is cleared and the refund DB row deleted.
+			if !execTx("UPDATE item_instance SET flags = flags & ? WHERE guid = ?", ^int64(itemInstanceFlagRefundable), it.ItemGUID) {
+				return
+			}
+			if !execTx("DELETE FROM item_refund_instance WHERE item_guid = ?", it.ItemGUID) {
 				return
 			}
 			if !execTx("INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, targetLoc.bagKey, targetLoc.slot, it.ItemGUID) {

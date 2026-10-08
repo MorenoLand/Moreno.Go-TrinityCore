@@ -3359,7 +3359,13 @@ func (s *session) guildApplyMovePlan(ctx context.Context, tx *sql.Tx, guildID, p
 		var guid uint64
 		if i == lastNew {
 			guid = source.GUID
-			if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET count = ?, owner_guid = ? WHERE guid = ?", placement.Count, guildMoveOwner(placement.Location, playerGUID), guid); err != nil {
+			// Like guildCloneMoveItem above (and C++ MoveItemFromInventory ->
+			// SetNotRefundable), a full-stack move out of player inventory
+			// clears the refundable/BoP-tradeable bits and drops the refund row.
+			if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET count = ?, owner_guid = ?, flags = flags & ? WHERE guid = ?", placement.Count, guildMoveOwner(placement.Location, playerGUID), ^int64(itemInstanceFlagRefundable|itemInstanceFlagBOPTradeable), guid); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, "DELETE FROM item_refund_instance WHERE item_guid = ?", guid); err != nil {
 				return err
 			}
 		} else {

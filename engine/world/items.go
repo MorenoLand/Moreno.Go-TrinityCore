@@ -1354,9 +1354,15 @@ func (s *session) handleItemRefundInfo(ctx context.Context, payload []byte) bool
 	}
 
 	var itemEntry, paidMoney, paidExtendedCost int64
+	// WorldSession::HandleItemRefundInfoRequest (ItemHandler.cpp:1169-1179)
+	// resolves the item with Player::GetItemByGuid — the item must be in the
+	// player's possession (inventory/bank/equipped); a bare refund row for an
+	// item the player no longer holds gets no answer. Same
+	// character_inventory JOIN as handleItemRefund.
 	err = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT ii.itemEntry, iri.paidMoney, iri.paidExtendedCost
 		FROM item_instance AS ii JOIN item_refund_instance AS iri ON iri.item_guid = ii.guid AND iri.player_guid = ?
-		WHERE ii.guid = ? LIMIT 1`, s.playerGUID, itemGUID).Scan(&itemEntry, &paidMoney, &paidExtendedCost)
+		JOIN character_inventory AS ci ON ci.item = ii.guid AND ci.guid = ?
+		WHERE ii.guid = ? LIMIT 1`, s.playerGUID, s.playerGUID, itemGUID).Scan(&itemEntry, &paidMoney, &paidExtendedCost)
 	if err != nil || itemEntry == 0 {
 		return true
 	}
