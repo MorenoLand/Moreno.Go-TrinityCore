@@ -1212,6 +1212,21 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 		s.interruptCurrentCast()
 		return s.sendLootReleaseResponse(targetGUID) == nil
 	}
+	// Player::SendLoot exploit fix (Player.cpp:8792-8796): a corpse whose
+	// UNIT_DYNFLAG_LOOTABLE was stripped — fully-looted release
+	// (LootHandler.cpp:364-365, WorldSession::DoLootRelease) or a failed
+	// damage requirement (Creature.cpp:1338, Unit::Kill) — answers
+	// LOOT_ERROR_DIDNT_KILL instead of opening a fresh window. Go keeps
+	// no per-creature dynamic-flags store; motion.Looted is the exact
+	// analog: clearCreatureLoot sets it precisely when C++ strips the
+	// flag, onCreatureKilled resets it for the fresh corpse, and respawn
+	// clears it (kill.go). The pickpocket arm is exempt from the C++
+	// gate (it sits in the non-pickpocket else) and pickpocket opens
+	// never reach this handler, so no exemption is needed here.
+	if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); motion != nil && motion.Looted {
+		s.interruptCurrentCast()
+		return s.sendLootError(targetGUID, 0) == nil
+	}
 	guid := uint32(targetGUID & 0x00FFFFFF)
 	creatureEntry := uint32((targetGUID >> 24) & 0x00FFFFFF)
 	stdKey := creatureWorldGUID(guid, creatureEntry)

@@ -554,6 +554,22 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 		}
 	}
 
+	if s.server != nil {
+		standardGUID := creatureWorldGUID(guid, creatureEntry)
+		// Unit::Kill (Unit.cpp:11244, 11376-11381): the kill-time fill
+		// starts from a cleared loot — a stale pickpocket window's state
+		// must not survive into the corpse window — and the
+		// UNIT_DYNFLAG_LOOTABLE decision is re-evaluated from the fresh
+		// fill, so motion.Looted resets for the new corpse. The loot
+		// owner is (re)written below, after this clear.
+		s.server.clearLootState(target.Map, target.InstanceID, target.GUID, standardGUID)
+		if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
+			s.server.motionMu.Lock()
+			motion.Looted = false
+			s.server.motionMu.Unlock()
+		}
+	}
+
 	// XP with the reference gray/zero-difference curve.
 	mobLevel := uint32(target.Level)
 	if mobLevel == 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
