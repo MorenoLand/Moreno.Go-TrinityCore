@@ -621,6 +621,23 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 			s.server.creatureLootOwners[lootObjectKey{MapID: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}] = owner
 			s.server.creatureLootOwners[lootObjectKey{MapID: target.Map, InstanceID: target.InstanceID, GUID: standardGUID}] = owner
 			s.server.lootMu.Unlock()
+		} else {
+			// Player::SendLoot (Player.cpp:8805-8810): with the recipient
+			// cleared, every open answers LOOT_ERROR_DIDNT_KILL. Go's
+			// creatureLootAllowed defaults an absent owner record to
+			// allowed, so the denial is recorded explicitly — a zero
+			// owner matches no player GUID and hides the sparkle via
+			// creatureLootSparkleVisible, mirroring the missing
+			// UNIT_DYNFLAG_LOOTABLE. Skinning still works: openSkinningLoot
+			// overwrites the owner with the skinner (SetLootRecipient, Player.cpp:8841).
+			s.server.lootMu.Lock()
+			if s.server.creatureLootOwners == nil {
+				s.server.creatureLootOwners = make(map[lootObjectKey]lootOwnerState)
+			}
+			denied := lootOwnerState{}
+			s.server.creatureLootOwners[lootObjectKey{MapID: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}] = denied
+			s.server.creatureLootOwners[lootObjectKey{MapID: target.Map, InstanceID: target.InstanceID, GUID: standardGUID}] = denied
+			s.server.lootMu.Unlock()
 		}
 		if damageReqMet && !petVictim {
 			s.rewardCreatureKillXP(ctx, target, creatureEntry, mobLevel)
