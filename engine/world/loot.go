@@ -561,18 +561,33 @@ func (s *session) hasQuestForItem(ctx context.Context, itemID uint32) bool {
 	return false
 }
 
-// lootQuestItemAllowed mirrors the master-looter visibility arm and the
-// quest-requirement arm of LootItem::AllowedForPlayer (Loot.cpp:57-95). The
-// DB-conditions, faction-flag and recipe arms have no model on this path and
-// stay unmodeled (documented delta).
-func (s *session) lootQuestItemAllowed(ctx context.Context, item lootItem, givenByMasterLooter bool) bool {
-	if s == nil {
+// lootItemAllowedForPlayer mirrors LootItem::AllowedForPlayer (Loot.cpp:57-95)
+// minus the DB-conditions arm (no Go model). The faction arm precedes the
+// master-looter leg: faction-flagged items hide from the opposite team
+// outright. The master looter sees every non-quest-gated item (the recipe
+// arms sit after that early-true leg), and givenByMasterLooter skips the
+// master-looter leg per HandleLootMasterGiveOpcode (LootHandler.cpp:454).
+// Recipe items hide from players lacking the profession skill or who already
+// know the spell, and quest-gated items hide unless the player has a quest
+// for the item. A template-lookup failure keeps the item visible: C++
+// returns false there, but Go's lookup is a live DB query and a transient
+// failure must not delete legit loot (documented delta).
+func (s *session) lootItemAllowedForPlayer(ctx context.Context, item lootItem, givenByMasterLooter bool) bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	tmpl, err := s.loadItemQueryData(ctx, item.ItemEntry)
+	if err != nil {
+		return true
+	}
+	// Loot.cpp:65-70: not show loot for not own team.
+	team := playerTeam(s.player.Race)
+	if (tmpl.Flags2&0x01 != 0 && team != teamHorde) || (tmpl.Flags2&0x02 != 0 && team != teamAlliance) {
 		return false
 	}
 	ignoreQuest := item.CustomFlags&itemFlagsCuIgnoreQuestStatus != 0
-	// Loot.cpp:73-81: the master looter can see non-quest items but never
-	// quest-gated ones; the master-give target arm (isGivenByMasterLooter)
-	// skips this early-true leg.
+	// Loot.cpp:73-81: the master looter can see certain items even if the
+	// character can't loot them — everything but quest-gated items.
 	if !givenByMasterLooter && s.groupID != 0 && s.server != nil {
 		s.server.groupsMu.Lock()
 		grp := s.server.groups[s.groupID]
@@ -584,6 +599,33 @@ func (s *session) lootQuestItemAllowed(ctx context.Context, item lootItem, given
 			return true
 		}
 	}
+	// Loot.cpp:83-84: don't allow loot for players without the profession or
+	// those who already know the recipe.
+	var recipeSpell uint32
+	if len(tmpl.Spells) > 1 && tmpl.Spells[1].ID > 0 {
+		recipeSpell = uint32(tmpl.Spells[1].ID)
+	}
+	hasSkill := func(skillID uint32) bool {
+		if skillID == 0 {
+			return false
+		}
+		for _, skill := range s.player.Skills {
+			if uint32(skill.Skill) == skillID {
+				return true
+			}
+		}
+		return false
+	}
+	if tmpl.Flags&0x02000000 != 0 { // ITEM_FLAG_HIDE_UNUSABLE_RECIPE
+		if !hasSkill(tmpl.RequiredSkill) || playerHasSpell(s.player, recipeSpell) {
+			return false
+		}
+	}
+	// Loot.cpp:87-88: don't allow to loot soulbound recipes the player has
+	// already learned.
+	if tmpl.Class == 9 && tmpl.Bonding == 1 && recipeSpell != 0 && playerHasSpell(s.player, recipeSpell) {
+		return false
+	}
 	// Loot.cpp:92-93: quest-gated items (needs_quest, or StartQuest items for
 	// a quest the player has started) are hidden unless the player has a
 	// quest that needs the item.
@@ -591,6 +633,13 @@ func (s *session) lootQuestItemAllowed(ctx context.Context, item lootItem, given
 		return false
 	}
 	return true
+}
+
+// lootQuestItemAllowed keeps the old entry point for the quest-item paths;
+// it now carries the full AllowedForPlayer model (faction, master-looter,
+// recipe, quest arms).
+func (s *session) lootQuestItemAllowed(ctx context.Context, item lootItem, givenByMasterLooter bool) bool {
+	return s.lootItemAllowedForPlayer(ctx, item, givenByMasterLooter)
 }
 
 // questStatusNotNone mirrors the GetQuestStatus(...) != QUEST_STATUS_NONE
@@ -1146,11 +1195,6 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 	// items at slots items.size() + position-in-the-viewer's-quest-list.
 	questList := s.viewerQuestLootList(ctx, loot)
 
-	packet := protocol.NewBuffer(8 + 1 + 4 + 1 + (len(loot.Items)+len(questList))*22)
-	packet.WriteU64(loot.TargetGUID)
-	packet.WriteU8(loot.LootType)
-	packet.WriteU32(loot.Money)
-	packet.WriteU8(uint8(len(loot.Items) + len(questList)))
 	items := sortedLootItems(loot.Items)
 	// Player::SendLoot permission model (Player.cpp:8784-8862, Loot.cpp:672):
 	// solo creature/item loot carries OWNER_PERMISSION, rendered as
@@ -1173,7 +1217,19 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 	if groupLadder {
 		baseSlot = 0
 	}
+	type renderedLootRow struct {
+		item     lootItem
+		slotType uint8
+	}
+	// LootView (Loot.cpp:618-703): rows failing AllowedForPlayer are not
+	// displayed at all, and a completed roll's item only shows to its
+	// winner (Loot.cpp:652-658) — so the window is decided in one pass and
+	// the item count is written after, matching C++'s count_pos patch.
+	var shown []renderedLootRow
 	for _, it := range items {
+		if !s.lootItemAllowedForPlayer(ctx, it, false) {
+			continue
+		}
 		var slotType uint8 = baseSlot
 		if groupLadder {
 			isOverThreshold := it.Quality >= uint32(grp.LootThreshold)
@@ -1205,20 +1261,31 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 						if it.RollWinner == s.playerGUID {
 							slotType = 4 // LOOT_SLOT_TYPE_OWNER
 						} else {
-							slotType = 3 // LOOT_SLOT_TYPE_LOCKED
+							// Loot.cpp:652-658: a completed roll hides the
+							// item from everyone but the winner.
+							continue
 						}
 					}
 				}
 				// Under-threshold: ALLOW_LOOT for every viewer (same arm).
 			}
 		}
+		shown = append(shown, renderedLootRow{item: it, slotType: slotType})
+	}
+	packet := protocol.NewBuffer(8 + 1 + 4 + 1 + (len(shown)+len(questList))*22)
+	packet.WriteU64(loot.TargetGUID)
+	packet.WriteU8(loot.LootType)
+	packet.WriteU32(loot.Money)
+	packet.WriteU8(uint8(len(shown) + len(questList)))
+	for _, row := range shown {
+		it := row.item
 		packet.WriteU8(it.Slot)
 		packet.WriteU32(it.ItemEntry)
 		packet.WriteU32(it.Count)
 		packet.WriteU32(it.DisplayInfoID)
 		packet.WriteU32(0) // RandomSuffix (Loot.cpp:589: randomSuffix before randomPropertyId)
 		packet.WriteU32(0) // RandomPropertyId
-		packet.WriteU8(slotType)
+		packet.WriteU8(row.slotType)
 	}
 	// LootView quest arm (Loot.cpp:703-745): the viewer's quest items follow
 	// the normal items. follow_loot_rules items take the master/locked arms
