@@ -49,8 +49,40 @@ type groupState struct {
 	MaxEnchantingLevel uint16
 }
 
-func (g *groupState) updateLooter(srv *Server, mapID uint32, x, y, z float32) {
+// dungeonMapID mirrors the DBC lookup behind (*session).isDungeonMap for
+// callers that only hold the Server.
+func dungeonMapID(srv *Server, mapID uint32) bool {
+	if srv != nil && srv.Data != nil {
+		if m, ok, err := srv.Data.Map(mapID); ok && err == nil {
+			return m.IsDungeon()
+		}
+	}
+	// Fallback when DBC is not loaded (continents: 0 Eastern Kingdoms, 1 Kalimdor, 530 Outland, 571 Northrend)
+	return mapID != 0 && mapID != 1 && mapID != 530 && mapID != 571
+}
+
+// updateLooter mirrors Group::UpdateLooterGuid (Group.cpp:1962) with
+// ifneed=true: the current looter keeps the role while they are still at
+// Player::IsAtGroupRewardDistance (Player.cpp:24160) of the looted object
+// (same map and instance, dungeon-always, else within MaxGroupXPDistance /
+// CONFIG_GROUP_XP_DISTANCE, default 74) — the role advances to the next
+// in-range member only when the current looter left range or is gone, and
+// clears when nobody is in range (Group.cpp:2017-2020). FREE_FOR_ALL never
+// rotates (Group.cpp:1965-1966). Timing delta: C++ runs this at kill
+// (Unit.cpp:11224) while Go runs it at loot open, so a corpse that is never
+// opened never advances the role; like the rest of the group state, the
+// role is kept in memory only (no groups.looterGuid write).
+func (g *groupState) updateLooter(srv *Server, mapID, instanceID uint32, x, y, z float32) {
 	if g.LootMethod == 0 || len(g.Members) == 0 {
+		return
+	}
+	atRewardDistance := func(sess *session) bool {
+		return sess != nil && sess.player != nil && sess.player.Map == mapID &&
+			sess.player.InstanceID == instanceID &&
+			(dungeonMapID(srv, mapID) || distance3D(sess.player.X, sess.player.Y, sess.player.Z, x, y, z) <= srv.Config.MaxGroupXPDistance)
+	}
+	// ifneed arm (Group.cpp:1972-1978): keep the current looter.
+	if atRewardDistance(srv.findSessionByGUID(g.LooterGUID)) {
 		return
 	}
 	currIdx := -1
@@ -63,15 +95,12 @@ func (g *groupState) updateLooter(srv *Server, mapID uint32, x, y, z float32) {
 	for step := 1; step <= len(g.Members); step++ {
 		idx := (currIdx + step) % len(g.Members)
 		mGUID := g.Members[idx].GUID
-		sess := srv.findSessionByGUID(mGUID)
-		if sess != nil && sess.player != nil && sess.player.Map == mapID && distance3D(sess.player.X, sess.player.Y, sess.player.Z, x, y, z) <= 100.0 {
+		if atRewardDistance(srv.findSessionByGUID(mGUID)) {
 			g.LooterGUID = mGUID
 			return
 		}
 	}
-	if g.LooterGUID == 0 && len(g.Members) > 0 {
-		g.LooterGUID = g.Members[0].GUID
-	}
+	g.LooterGUID = 0
 }
 
 func (g *groupState) isLeader(guid uint64) bool {
@@ -1788,13 +1817,11 @@ func (s *session) handleSetRaidDifficulty(ctx context.Context, payload []byte) b
 }
 
 func (s *session) isDungeonMap(mapID uint32) bool {
-	if s.server != nil && s.server.Data != nil {
-		if m, ok, err := s.server.Data.Map(mapID); ok && err == nil {
-			return m.IsDungeon()
-		}
+	var srv *Server
+	if s != nil {
+		srv = s.server
 	}
-	// Fallback when DBC is not loaded (continents: 0 Eastern Kingdoms, 1 Kalimdor, 530 Outland, 571 Northrend)
-	return mapID != 0 && mapID != 1 && mapID != 530 && mapID != 571
+	return dungeonMapID(srv, mapID)
 }
 
 func (s *session) setPendingBind(instanceID uint64, mapID, diff, timer uint32) {

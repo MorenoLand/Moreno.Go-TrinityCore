@@ -1052,7 +1052,7 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 		s.server.groupsMu.Lock()
 		grp := s.server.groups[s.groupID]
 		if grp != nil && loot.RoundRobinPlayer == 0 && grp.LootMethod != 0 {
-			grp.updateLooter(s.server, goMap, goX, goY, goZ)
+			grp.updateLooter(s.server, goMap, s.player.InstanceID, goX, goY, goZ)
 			loot.RoundRobinPlayer = grp.LooterGUID
 		}
 		s.server.groupsMu.Unlock()
@@ -1191,7 +1191,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 		s.server.groupsMu.Lock()
 		grp := s.server.groups[s.groupID]
 		if grp != nil && loot.RoundRobinPlayer == 0 && grp.LootMethod != 0 {
-			grp.updateLooter(s.server, target.Map, target.X, target.Y, target.Z)
+			grp.updateLooter(s.server, target.Map, target.InstanceID, target.X, target.Y, target.Z)
 			loot.RoundRobinPlayer = grp.LooterGUID
 		}
 		s.server.groupsMu.Unlock()
@@ -1639,7 +1639,11 @@ func (s *session) sendLootMasterList(loot *activeLootState) {
 	members := s.server.getGroupSessions(s.groupID)
 	var nearMembers []*session
 	for _, m := range members {
-		if m.player != nil && m.player.Map == s.player.Map && distance3D(s.player.X, s.player.Y, s.player.Z, m.player.X, m.player.Y, m.player.Z) <= 100.0 {
+		// Group::MasterLoot (Group.cpp:1435-1447): the master-looter list
+		// carries the members at Player::IsAtGroupRewardDistance
+		// (Player.cpp:24160) of the looted object — same map and instance,
+		// within MaxGroupXPDistance (default 74, not 100).
+		if m.player != nil && m.player.Map == s.player.Map && m.player.InstanceID == s.player.InstanceID && distance3D(s.player.X, s.player.Y, s.player.Z, m.player.X, m.player.Y, m.player.Z) <= s.server.Config.MaxGroupXPDistance {
 			nearMembers = append(nearMembers, m)
 		}
 	}
@@ -1981,10 +1985,11 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 	if s.groupID != 0 && s.server != nil {
 		allGroupSess := s.server.getGroupSessions(s.groupID)
 		// Player::IsAtGroupRewardDistance (Player.cpp:24160): same map and
-		// (dungeon, always) or within CONFIG_GROUP_XP_DISTANCE (default 100).
+		// instance, then dungeon-always, else within MaxGroupXPDistance
+		// (CONFIG_GROUP_XP_DISTANCE, default 74).
 		inDungeon := s.isDungeonMap(s.player.Map)
 		for _, m := range allGroupSess {
-			if m.player != nil && m.player.Map == s.player.Map && m.player.InstanceID == s.player.InstanceID && (inDungeon || distance3D(s.player.X, s.player.Y, s.player.Z, m.player.X, m.player.Y, m.player.Z) <= 100.0) {
+			if m.player != nil && m.player.Map == s.player.Map && m.player.InstanceID == s.player.InstanceID && (inDungeon || distance3D(s.player.X, s.player.Y, s.player.Z, m.player.X, m.player.Y, m.player.Z) <= s.server.Config.MaxGroupXPDistance) {
 				nearMembers = append(nearMembers, m)
 			}
 		}
@@ -2237,10 +2242,13 @@ func (s *session) storeTakenLootRow(ctx context.Context, loot *activeLootState, 
 // (ItemTemplate::IsCurrencyToken = BagFamily & BAG_FAMILY_MASK_CURRENCY_TOKENS,
 // ItemTemplate.h:684) and pass LootItem::AllowedForPlayer for a present
 // looter are stored straight into that player's bags via the normal take
-// path — the currency never renders in the loot window for them.
+// path — the currency never renders in the loot window for them. The C++
+// scan covers GetMaxSlotInLootFor (normal rows plus the player's
+// quest-item list), so quest rows are scanned too.
 // presentAtLooting is true for the opener; grouped members qualify through
 // Player::IsAtGroupRewardDistance (Player.cpp:24160): same map and instance,
-// then dungeon-always, else within CONFIG_GROUP_XP_DISTANCE of the looter
+// then dungeon-always, else within MaxGroupXPDistance
+// (CONFIG_GROUP_XP_DISTANCE, default 74) of the looter
 // (Go proxies the corpse position with the opener's, as the roll-start code
 // does). Deltas: the tokens land through Go's normal inventory store (no
 // currency-tab placement model), and members who never open the window get
@@ -2257,7 +2265,7 @@ func (s *Server) autoStoreLootCurrencyTokens(ctx context.Context, loot *activeLo
 			if m == nil || m == opener || m.player == nil || m.player.Map != loot.MapID || m.player.InstanceID != loot.InstanceID {
 				continue
 			}
-			if !inDungeon && distance3D(opener.player.X, opener.player.Y, opener.player.Z, m.player.X, m.player.Y, m.player.Z) > 100.0 {
+			if !inDungeon && distance3D(opener.player.X, opener.player.Y, opener.player.Z, m.player.X, m.player.Y, m.player.Z) > s.Config.MaxGroupXPDistance {
 				continue
 			}
 			present = append(present, m)
@@ -2282,6 +2290,29 @@ func (s *Server) autoStoreLootCurrencyTokens(ctx context.Context, loot *activeLo
 				continue
 			}
 			member.storeTakenLootRow(ctx, loot, slot, it, false, 0)
+		}
+	}
+	// Loot::FillNotNormalLootFor scans GetMaxSlotInLootFor(player) — the
+	// normal rows plus the player's quest-item list — so free-for-all
+	// currency-token quest rows auto-store too. Go's quest take arm deletes
+	// the row for everyone (no per-player FFA quest copies), so row
+	// presence alone means untaken.
+	for qidx, it := range loot.QuestItems {
+		if !it.FreeForAll || it.ItemEntry == 0 {
+			continue
+		}
+		data, err := opener.loadItemQueryData(ctx, it.ItemEntry)
+		if err != nil || data.BagFamily&itemBagFamilyCurrency == 0 {
+			continue
+		}
+		for _, member := range present {
+			if member == nil || member.player == nil {
+				continue
+			}
+			if !member.lootItemAllowedForPlayer(ctx, it, false) {
+				continue
+			}
+			member.storeTakenLootRow(ctx, loot, qidx, it, true, qidx)
 		}
 	}
 }
@@ -2580,17 +2611,18 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 		return
 	}
 	// Player::IsAtGroupRewardDistance (Player.cpp:24160): same map instance,
-	// then dungeon-always, else within CONFIG_GROUP_XP_DISTANCE (100yd) of
-	// the looted object. Go proxies the object position with the looter's —
-	// the looter opened the window within ~5yd of the corpse, and
-	// sendLootMasterList uses the same proxy for the MasterLoot list.
+	// then dungeon-always, else within MaxGroupXPDistance
+	// (CONFIG_GROUP_XP_DISTANCE, default 74) of the looted object. Go
+	// proxies the object position with the looter's — the looter opened the
+	// window within ~5yd of the corpse, and sendLootMasterList uses the same
+	// proxy for the MasterLoot list.
 	inDungeon := looter.isDungeonMap(mapID)
 	var eligible []*session
 	for _, m := range members {
 		if m.player == nil || m.player.Map != mapID || m.player.InstanceID != instanceID {
 			continue
 		}
-		if !inDungeon && looter.player != nil && distance3D(m.player.X, m.player.Y, m.player.Z, looter.player.X, looter.player.Y, looter.player.Z) > 100.0 {
+		if !inDungeon && looter.player != nil && distance3D(m.player.X, m.player.Y, m.player.Z, looter.player.X, looter.player.Y, looter.player.Z) > s.Config.MaxGroupXPDistance {
 			continue
 		}
 		eligible = append(eligible, m)
@@ -2742,7 +2774,7 @@ func (s *Server) startGroupQuestLootRoll(sourceGUID uint64, qslot uint32, qidx u
 		if m.player == nil || m.player.Map != mapID || m.player.InstanceID != instanceID {
 			continue
 		}
-		if !inDungeon && looter.player != nil && distance3D(m.player.X, m.player.Y, m.player.Z, looter.player.X, looter.player.Y, looter.player.Z) > 100.0 {
+		if !inDungeon && looter.player != nil && distance3D(m.player.X, m.player.Y, m.player.Z, looter.player.X, looter.player.Y, looter.player.Z) > s.Config.MaxGroupXPDistance {
 			continue
 		}
 		eligible = append(eligible, m)
