@@ -1898,7 +1898,7 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 				// Group::GroupLoot / NeedBeforeGreed (Group.cpp:1106/1261):
 				// free-for-all rows never start rolls.
 				if !it.FreeForAll && it.Quality >= uint32(grp.LootThreshold) {
-					s.server.startGroupLootRoll(loot.TargetGUID, uint32(it.Slot), it.ItemEntry, it.Count, loot.MapID, loot.InstanceID, s.groupID, s)
+					s.server.startGroupLootRoll(ctx, loot.TargetGUID, uint32(it.Slot), it.ItemEntry, it.Count, loot.MapID, loot.InstanceID, s.groupID, s)
 				}
 			}
 			// Group::GroupLoot / NeedBeforeGreed quest-item loops
@@ -1915,7 +1915,7 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 				if qit.CustomFlags&itemFlagsCuFollowLootRules == 0 {
 					continue
 				}
-				s.server.startGroupQuestLootRoll(loot.TargetGUID, uint32(loot.NormalSlotCount)+uint32(qidx), qidx, qit.ItemEntry, qit.Count, loot.MapID, loot.InstanceID, s.groupID, s)
+				s.server.startGroupQuestLootRoll(ctx, loot.TargetGUID, uint32(loot.NormalSlotCount)+uint32(qidx), qidx, qit.ItemEntry, qit.Count, loot.MapID, loot.InstanceID, s.groupID, s)
 			}
 		}
 	}
@@ -3266,7 +3266,7 @@ func buildLootStartRollPacket(rollItemGUID uint64, mapID, slot, itemEntry, rando
 	return buf.Bytes()
 }
 
-func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry uint32, itemCount uint32, mapID, instanceID uint32, groupID uint64, looter *session) {
+func (s *Server) startGroupLootRoll(ctx context.Context, sourceGUID uint64, slot uint32, itemEntry uint32, itemCount uint32, mapID, instanceID uint32, groupID uint64, looter *session) {
 	if groupID == 0 {
 		return
 	}
@@ -3447,11 +3447,8 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 		}
 		memberMask := baseMask
 		if grp != nil && grp.LootMethod == 4 { // Need Before Greed
-			if allowableClass > 0 && allowableClass != 0xFFFFFFFF && m.player != nil && m.player.Class > 0 {
-				playerClassMask := uint32(1 << (m.player.Class - 1))
-				if (allowableClass & playerClassMask) == 0 {
-					memberMask &= ^rollFlagTypeNeed // Ineligible to roll Need
-				}
+			if !canRollForItemInLFG(ctx, m, grp, itemEntry) {
+				memberMask &= ^rollFlagTypeNeed // Ineligible to roll Need
 			}
 		}
 
@@ -3490,7 +3487,7 @@ func questRollSlot(cLoot *activeLootState, slot uint32) (lootItem, uint8, bool) 
 // clear — the quest loops never touch the mask), and a missing item template
 // skips the roll under GroupLoot (Group.cpp:1196-1203) but not under NBG
 // (no null check in the NBG quest loop).
-func (s *Server) startGroupQuestLootRoll(sourceGUID uint64, qslot uint32, qidx uint8, itemEntry, itemCount, mapID, instanceID uint32, groupID uint64, looter *session) {
+func (s *Server) startGroupQuestLootRoll(ctx context.Context, sourceGUID uint64, qslot uint32, qidx uint8, itemEntry, itemCount, mapID, instanceID uint32, groupID uint64, looter *session) {
 	if groupID == 0 {
 		return
 	}
@@ -3634,11 +3631,8 @@ func (s *Server) startGroupQuestLootRoll(sourceGUID uint64, qslot uint32, qidx u
 		}
 		memberMask := baseMask
 		if grp != nil && grp.LootMethod == 4 { // Need Before Greed
-			if allowableClass > 0 && allowableClass != 0xFFFFFFFF && m.player != nil && m.player.Class > 0 {
-				playerClassMask := uint32(1 << (m.player.Class - 1))
-				if (allowableClass & playerClassMask) == 0 {
-					memberMask &= ^rollFlagTypeNeed // Ineligible to roll Need
-				}
+			if !canRollForItemInLFG(ctx, m, grp, itemEntry) {
+				memberMask &= ^rollFlagTypeNeed // Ineligible to roll Need
 			}
 		}
 
@@ -3650,6 +3644,98 @@ func (s *Server) startGroupQuestLootRoll(sourceGUID uint64, qslot uint32, qidx u
 	roll.Timer = time.AfterFunc(60*time.Second, func() {
 		s.resolveGroupLootRoll(rollKey, true)
 	})
+}
+
+// canRollForItemInLFG mirrors Player::CanRollForItemInLFG (Player.cpp:11989-12061):
+// in LFG groups the NEED option is masked off for members who can't use the
+// item (class/race, required spell/skill, weapon proficiency, armor
+// progression). Non-LFG groups get no restriction. The inLfgDungeonMap gate
+// has no Go model (Go has no per-dungeon LFG map registry), so an IsLFG group
+// always applies the restriction; a missing item_template keeps needable,
+// matching Go's lootItemAllowedForPlayer keeps-visible delta.
+func canRollForItemInLFG(ctx context.Context, m *session, grp *groupState, itemEntry uint32) bool {
+	if grp == nil || !grp.IsLFG {
+		return true
+	}
+	if m == nil || m.player == nil {
+		return false
+	}
+	data, err := m.loadItemQueryData(ctx, itemEntry)
+	if err != nil {
+		return true
+	}
+	classMask, raceMask := uint32(0), uint32(0)
+	if m.player.Class > 0 {
+		classMask = uint32(1) << uint(m.player.Class-1)
+	}
+	if m.player.Race > 0 {
+		raceMask = uint32(1) << uint(m.player.Race-1)
+	}
+	if data.AllowableClass&classMask == 0 || data.AllowableRace&raceMask == 0 {
+		return false
+	}
+	if data.RequiredSpell != 0 && !playerHasSpell(m.player, data.RequiredSpell) {
+		return false
+	}
+	if data.RequiredSkill != 0 {
+		value := uint32(0)
+		for _, skill := range m.player.Skills {
+			if uint32(skill.Skill) == data.RequiredSkill {
+				value = uint32(skill.Value)
+				break
+			}
+		}
+		if value == 0 || value < data.RequiredSkillRank {
+			return false
+		}
+	}
+	if data.Class == itemClassWeapon {
+		weaponSkills := [...]uint32{44, 172, 45, 46, 54, 160, 229, 43, 55, 0, 136, 0, 0, 473, 0, 173, 176, 253, 226, 228, 356}
+		var skillID uint32
+		if int(data.SubClass) < len(weaponSkills) {
+			skillID = weaponSkills[data.SubClass]
+		}
+		skillValue := uint32(0)
+		for _, skill := range m.player.Skills {
+			if uint32(skill.Skill) == skillID {
+				skillValue = uint32(skill.Value)
+				break
+			}
+		}
+		if skillValue == 0 {
+			return false
+		}
+	}
+	if data.Class == itemClassArmor && data.SubClass > 0 && data.SubClass < 5 && data.InventoryType != 16 {
+		class := m.player.Class
+		switch {
+		case class == 1 || class == 2 || class == 6: // CLASS_WARRIOR, CLASS_PALADIN, CLASS_DEATH_KNIGHT
+			if m.player.Level < 40 {
+				if data.SubClass != 3 {
+					return false
+				}
+			} else if data.SubClass != 4 {
+				return false
+			}
+		case class == 3 || class == 7: // CLASS_HUNTER, CLASS_SHAMAN
+			if m.player.Level < 40 {
+				if data.SubClass != 2 {
+					return false
+				}
+			} else if data.SubClass != 3 {
+				return false
+			}
+		case class == 4 || class == 11: // CLASS_ROGUE, CLASS_DRUID
+			if data.SubClass != 2 {
+				return false
+			}
+		case class == 8 || class == 5 || class == 9: // CLASS_MAGE, CLASS_PRIEST, CLASS_WARLOCK
+			if data.SubClass != 1 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // canRollOnItem mirrors the file-static CanRollOnItem (Group.cpp:1081-1095):
