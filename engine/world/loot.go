@@ -579,15 +579,26 @@ func lootHasItemForAll(loot *activeLootState) bool {
 	return false
 }
 
-// lootHasItemForViewer mirrors Loot::hasItemFor (Loot.cpp:529-564): any
-// free-for-all row the viewer hasn't taken, or any quest row. Per-viewer quest
-// visibility (AllowedForPlayer) is approximated by row presence — the real check
-// needs a DB-backed quest evaluation per broadcast viewer.
+// lootHasItemForViewer mirrors Loot::hasItemFor (Loot.cpp:529-564): the
+// viewer's own free-for-all copies they have not taken yet, or any quest
+// row. Per-viewer quest visibility (AllowedForPlayer) is approximated by
+// row presence — the real check needs a DB-backed quest evaluation per
+// broadcast viewer.
 func lootHasItemForViewer(loot *activeLootState, viewerGUID uint64) bool {
 	if loot == nil {
 		return false
 	}
-	if len(loot.QuestItems) != 0 {
+	for idx, it := range loot.QuestItems {
+		// Loot::hasItemFor (Loot.cpp:533-543): the quest leg counts only
+		// the viewer's own qitem copy — a free-for-all quest row the
+		// viewer already took (qitem->is_looted, mirrored by
+		// QuestFFATaken) no longer counts for them, even though the
+		// shared row survives for the other viewers. Non-free-for-all
+		// quest rows are deleted on take, so presence is the take check
+		// there.
+		if it.FreeForAll && loot.QuestFFATaken[idx] != nil && loot.QuestFFATaken[idx][viewerGUID] {
+			continue
+		}
 		return true
 	}
 	for slot, it := range loot.Items {
