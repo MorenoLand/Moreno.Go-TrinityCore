@@ -1308,25 +1308,10 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	}
 	high := uint16(targetGUID >> 48)
 
-	// Player::SendLoot (Player.cpp:8526-8527): opening new loot releases the
-	// previously open loot first (DoLootRelease legs) — unconditionally,
-	// including a same-target re-open: C++ has no exemption, and the
-	// creature-arm release resets roundRobinPlayer and re-broadcasts the
-	// group looter (Group::SendLooter, LootHandler.cpp:376-381) before the
-	// window is re-sent. Player-corpse GUIDs never reach SendLoot in C++
-	// (dropped by the HandleLootOpcode cheat gate above).
-	if high != 0xF101 {
-		if prev := s.activeLoot; prev != nil {
-			s.doLootRelease(prev)
-		}
-	}
-
-	if high == 0xF110 {
-		return s.openGameObjectLoot(ctx, targetGUID, lootTypeCorpse, 10.0)
-	}
-
-	// HandleLootOpcode cheat gate (LootHandler.cpp:229-239): CMSG_LOOT with a
-	// non creature/vehicle GUID is dropped silently — no release response.
+	// HandleLootOpcode cheat gate (LootHandler.cpp:229-233): CMSG_LOOT with a
+	// non creature/vehicle GUID is dropped silently — the packet never reaches
+	// SendLoot, so neither a new window opens nor the previously open loot is
+	// released (the release runs inside SendLoot, Player.cpp:8526-8527).
 	// Player-corpse (bones) GUIDs (0xF101, ObjectGuid.h HighGuid::Corpse)
 	// fall here: the SendLoot LOOT_CORPSE/LOOT_INSIGNIA arm
 	// (Player.cpp:8712-8749) is server-driven only, via
@@ -1342,21 +1327,23 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	// DoLootRelease corpse arm LootHandler.cpp:311-322 clearing loot and
 	// CORPSE_DYNFLAG_LOOTABLE) has no bridge until a bones-loot trigger
 	// exists; the cheat-gate silent return is the only reachable arm.
-	if high == 0xF101 {
+	if high != 0xF130 && high != 0xF150 {
 		return true
+	}
+
+	// Player::SendLoot (Player.cpp:8526-8527): opening new loot releases the
+	// previously open loot first (DoLootRelease legs) — unconditionally,
+	// including a same-target re-open: C++ has no exemption, and the
+	// creature-arm release resets roundRobinPlayer and re-broadcasts the
+	// group looter (Group::SendLooter, LootHandler.cpp:376-381) before the
+	// window is re-sent.
+	if prev := s.activeLoot; prev != nil {
+		s.doLootRelease(prev)
 	}
 
 	target, ok := s.getCombatTarget(ctx, targetGUID)
 	// DIAGNOSTIC: log loot attempts to diagnose window-not-opening
 	s.debug("loot attempt", "account", s.accountName, "guid", targetGUID, "found", ok, "target_health", target.Health, "player_map", s.player.Map, "target_map", target.Map)
-	// HandleLootOpcode cheat gate, second half (LootHandler.cpp:232-233):
-	// CMSG_LOOT with a non creature/vehicle GUID is dropped silently. The
-	// gameobject (0xF110) and corpse (0xF101) arms above are Go-routed entry
-	// points; anything else that is not a creature (0xF130) or vehicle
-	// (0xF150) GUID never reaches SendLoot in C++.
-	if high != 0xF130 && high != 0xF150 {
-		return true
-	}
 	if !ok || target.Map != s.player.Map || target.InstanceID != s.player.InstanceID || !withinLootDistance(s, target) {
 		s.debug("loot rejected", "account", s.accountName, "reason", "target-not-found-or-invalid")
 		// HandleLootOpcode (LootHandler.cpp:237-239) interrupts the current
@@ -2408,8 +2395,16 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 	}
 	high := uint16(s.activeLoot.TargetGUID >> 48)
 	if high == 0xF110 {
-		if s.activeLoot.MapID != s.player.Map || s.activeLoot.InstanceID != s.player.InstanceID {
-			return s.sendLootError(s.activeLoot.TargetGUID, 4) == nil
+		// LootHandler.cpp (HandleAutostoreLootItemOpcode): the GameObject arm
+		// resolves the GO on the player's map; a missing GO, or a non-owned,
+		// non-fishing-hole GO beyond INTERACTION_DISTANCE (5.0), answers
+		// SendLootRelease — owned GOs (fishing bobbers) and fishing holes
+		// skip the distance check entirely. A GO recorded on a map the
+		// player has since left is the C++ !go case (GetGameObject on the
+		// player's map returns null), so the answer is the release, not
+		// LOOT_ERROR_TOO_FAR.
+		if !s.gameObjectLootTakeAllowed(ctx) {
+			return s.sendLootReleaseResponse(s.activeLoot.TargetGUID) == nil
 		}
 	} else if s.activeLoot.LootItemGUID == 0 {
 		target, validTarget := s.getCombatTarget(ctx, s.activeLoot.TargetGUID)
@@ -2439,11 +2434,16 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 			return s.sendLootReleaseResponse(s.activeLoot.TargetGUID) == nil
 		}
 	}
-	// LootHandler.cpp:60-66 (HandleAutostoreLootItem): the IsItem arm
-	// resolves the item and proceeds straight to StoreLootItem — the
-	// alive/distance gates of the Unit/Vehicle arm above don't apply to
-	// item loot (containers, disenchant/prospect/mill windows), which
-	// reaches the take with no target gate.
+	// LootHandler.cpp (HandleAutostoreLootItemOpcode): the IsItem arm resolves
+	// the item with Player::GetItemByGuid — an item the player no longer
+	// holds (destroyed or moved out of the inventory since the window opened)
+	// answers SendLootRelease instead of reaching StoreLootItem. The
+	// alive/distance gates of the Unit/Vehicle arm above don't apply to item
+	// loot (containers, disenchant/prospect/mill windows); only the
+	// possession check does.
+	if s.activeLoot.LootItemGUID != 0 && !s.lootItemStillHeld(ctx, s.activeLoot.LootItemGUID) {
+		return s.sendLootReleaseResponse(s.activeLoot.TargetGUID) == nil
+	}
 
 	// Player::StoreLootItem (Player.cpp:25071-25075): the AllowedForPlayer
 	// gate is re-checked at take time for every item, not just quest
@@ -2504,6 +2504,73 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 	}
 
 	return s.storeTakenLootRow(ctx, s.activeLoot, lootSlot, it, isQuestItem, questIndex)
+}
+
+// gameObjectLootTakeAllowed mirrors the GameObject arm of
+// WorldSession::HandleAutostoreLootItemOpcode (LootHandler.cpp): the take
+// resolves the GO on the player's map. A missing GO — including one recorded
+// on a map the player has since left (C++'s GetGameObject on the player's map
+// returns null) — answers false, as does a GO that is neither owned by the
+// player nor a fishing hole and sits beyond INTERACTION_DISTANCE (5.0).
+// Owned GOs (fishing bobbers) and fishing holes skip the distance check
+// entirely.
+func (s *session) gameObjectLootTakeAllowed(ctx context.Context) bool {
+	if s == nil || s.player == nil || s.server == nil || s.activeLoot == nil {
+		return false
+	}
+	loot := s.activeLoot
+	if dyn := s.server.gameObjectState(s.player.Map, s.player.InstanceID, loot.TargetGUID); dyn != nil {
+		if dyn.OwnerGUID != s.playerGUID && dyn.Type != GameObjectTypeFishingHole &&
+			distance3D(s.player.X, s.player.Y, s.player.Z, dyn.X, dyn.Y, dyn.Z) > 5.0 {
+			return false
+		}
+		return true
+	}
+	wdb := s.server.WorldStore.DB
+	if wdb == nil {
+		return false
+	}
+	lowGUID := uint32(loot.TargetGUID & 0x00FFFFFF)
+	entry := uint32((loot.TargetGUID >> 24) & 0x00FFFFFF)
+	var goMap uint32
+	var goX, goY, goZ float32
+	var goType uint8
+	err := wdb.QueryRowContext(ctx, `SELECT g.map, g.position_x, g.position_y, g.position_z, COALESCE(t.type, 0)
+		FROM gameobject AS g
+		JOIN gameobject_template AS t ON t.entry = g.id
+		WHERE g.guid = ? AND g.id = ? LIMIT 1`, lowGUID, entry).Scan(&goMap, &goX, &goY, &goZ, &goType)
+	if err != nil {
+		err = wdb.QueryRowContext(ctx, `SELECT g.map, g.position_x, g.position_y, g.position_z, COALESCE(t.type, 0)
+			FROM gameobject AS g
+			JOIN gameobject_template AS t ON t.entry = g.id
+			WHERE g.guid = ? LIMIT 1`, lowGUID).Scan(&goMap, &goX, &goY, &goZ, &goType)
+	}
+	if err != nil || goMap != s.player.Map {
+		return false
+	}
+	// Static GOs have no owner, so they are never distance-exempt unless
+	// they are fishing holes.
+	if goType != GameObjectTypeFishingHole &&
+		distance3D(s.player.X, s.player.Y, s.player.Z, goX, goY, goZ) > 5.0 {
+		return false
+	}
+	return true
+}
+
+// lootItemStillHeld mirrors the IsItem arm of
+// WorldSession::HandleAutostoreLootItemOpcode (LootHandler.cpp):
+// Player::GetItemByGuid resolves the item across the player's whole
+// inventory (inventory/bank/equipped); an item the player no longer holds
+// since the loot window opened makes the take answer SendLootRelease.
+func (s *session) lootItemStillHeld(ctx context.Context, itemGUID uint64) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return false
+	}
+	var held int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_inventory WHERE guid = ? AND item = ? LIMIT 1", s.playerGUID, itemGUID).Scan(&held); err != nil {
+		return false
+	}
+	return held > 0
 }
 
 // storeTakenLootRow runs the post-gate take of one loot row
