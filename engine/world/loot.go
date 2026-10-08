@@ -2114,10 +2114,13 @@ func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool
 	}
 
 	// HandleLootMasterGiveOpcode (LootHandler.cpp:454-458): the recipient is
-	// gated by AllowedForPlayer with isGivenByMasterLooter=true; a quest
-	// item the target has no quest for maps
-	// EQUIP_ERR_YOU_CAN_NEVER_USE_THAT_ITEM to LOOT_ERROR_MASTER_OTHER (14).
-	if isQuestItem && !targetSess.lootQuestItemAllowed(ctx, it, true) {
+	// gated by LootItem::AllowedForPlayer(target, isGivenByMasterLooter=true)
+	// for EVERY item — normal items included, not just quest items (C++ runs
+	// the check on LootItem& item before the error mapping, so a faction or
+	// recipe gate on a normal item answers LOOT_ERROR_MASTER_OTHER and the
+	// item stays). A failing check maps EQUIP_ERR_YOU_CAN_NEVER_USE_THAT_ITEM
+	// to LOOT_ERROR_MASTER_OTHER (14).
+	if !targetSess.lootItemAllowedForPlayer(ctx, it, true) {
 		_ = s.sendLootError(lootGUID, 14)
 		return true
 	}
