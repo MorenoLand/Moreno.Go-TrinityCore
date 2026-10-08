@@ -105,6 +105,13 @@ type activeLootState struct {
 	// slot. Viewers who release without taking drop out of the map with
 	// removeViewer.
 	FFATaken map[uint8]map[uint64]bool
+	// QuestFFATaken is the same per-viewer take model for free-for-all
+	// quest rows, keyed by quest index into QuestItems: a free-for-all
+	// quest row survives a take (Player::StoreLootItem, Player.cpp:25097,
+	// item->is_looted stays false for freeforall) so every other viewer
+	// keeps their own copy (Loot::NotifyQuestItemRemoved stays the
+	// taker-only SMSG_LOOT_REMOVED in that arm, Player.cpp:25099).
+	QuestFFATaken map[uint8]map[uint64]bool
 }
 
 // storeLootTemplateRow routes one rolled loot-template row into Items or
@@ -816,6 +823,12 @@ func (s *session) viewerQuestLootList(ctx context.Context, loot *activeLootState
 	}
 	indices := make([]uint8, 0, len(loot.QuestItems))
 	for idx, item := range loot.QuestItems {
+		// A free-for-all quest row stays in QuestItems after a take; the
+		// viewer's own copy is gone once QuestFFATaken records it
+		// (Player.cpp:25097-25104), so it must not render for them again.
+		if item.FreeForAll && loot.QuestFFATaken[idx] != nil && loot.QuestFFATaken[idx][s.playerGUID] {
+			continue
+		}
 		if s.lootQuestItemAllowed(ctx, item, false) {
 			indices = append(indices, idx)
 			continue
@@ -880,8 +893,24 @@ func (l *activeLootState) hasOverThresholdItem(threshold uint8) bool {
 // PlayerFFAItems entries past release — a latent leak there — so Go clears
 // slightly earlier than C++ in that corner).
 func lootFullyLooted(l *activeLootState) bool {
-	if l == nil || l.Money != 0 || len(l.QuestItems) != 0 {
+	if l == nil || l.Money != 0 {
 		return false
+	}
+	for qidx, qit := range l.QuestItems {
+		if !qit.FreeForAll {
+			return false
+		}
+		// Loot::isLooted via the FillQuestLoot per-viewer count
+		// (Loot.cpp:306-313, `item.freeforall || !item.is_blocked`): a
+		// free-for-all quest row keeps the loot open until every current
+		// viewer has taken their own copy (QuestFFATaken), exactly like
+		// the per-viewer counting for normal FFA rows below.
+		taken := l.QuestFFATaken[qidx]
+		for guid := range l.Viewers {
+			if !taken[guid] {
+				return false
+			}
+		}
 	}
 	for slot, it := range l.Items {
 		if !it.FreeForAll {
@@ -1054,6 +1083,16 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 		if grp != nil && loot.RoundRobinPlayer == 0 && grp.LootMethod != 0 {
 			grp.updateLooter(s.server, goMap, s.player.InstanceID, goX, goY, goZ)
 			loot.RoundRobinPlayer = grp.LooterGUID
+			// Unit.cpp:11270-11271 / Player.cpp:8603 (the !loot->empty()
+			// gate): after the fill, C++ unconditionally advances the
+			// group looter for the next loot, so consecutive loots rotate
+			// even while the current looter stays in range. Go fills
+			// lazily at first open, so the advance runs here, right after
+			// this loot's looter is captured; a loot that is never opened
+			// never advances the role.
+			if loot.Money != 0 || len(loot.Items) != 0 {
+				grp.advanceLooter(s.server, goMap, s.player.InstanceID, goX, goY, goZ)
+			}
 		}
 		s.server.groupsMu.Unlock()
 	}
@@ -1193,6 +1232,16 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 		if grp != nil && loot.RoundRobinPlayer == 0 && grp.LootMethod != 0 {
 			grp.updateLooter(s.server, target.Map, target.InstanceID, target.X, target.Y, target.Z)
 			loot.RoundRobinPlayer = grp.LooterGUID
+			// Unit.cpp:11270-11271 (the !loot->empty() gate): after the
+			// kill-time fill, C++ unconditionally advances the group
+			// looter for the next kill's loot, so consecutive loots
+			// rotate even while the current looter stays in range. Go
+			// fills lazily at first open, so the advance runs here,
+			// right after this loot's looter is captured; a loot that is
+			// never opened never advances the role.
+			if loot.Money != 0 || len(loot.Items) != 0 {
+				grp.advanceLooter(s.server, target.Map, target.InstanceID, target.X, target.Y, target.Z)
+			}
 		}
 		s.server.groupsMu.Unlock()
 	}
@@ -1776,6 +1825,7 @@ func (s *session) openSkinningLoot(ctx context.Context, targetGUID uint64, entry
 	loot.Items = make(map[uint8]lootItem)
 	loot.QuestItems = nil
 	loot.FFATaken = nil
+	loot.QuestFFATaken = nil
 	loot.Money = 0
 	loot.LootType = lootTypeSkinning
 	loot.NormalSlotCount = 0
@@ -1864,6 +1914,7 @@ func (s *session) openPickpocketLoot(ctx context.Context, targetGUID uint64, ent
 	loot.Items = make(map[uint8]lootItem)
 	loot.QuestItems = nil
 	loot.FFATaken = nil
+	loot.QuestFFATaken = nil
 	loot.Money = 0
 	loot.LootType = lootTypePickpocketing
 	loot.NormalSlotCount = 0
@@ -2163,12 +2214,26 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 // (Player::StoreLootItem, Player.cpp:25057-25136): the inventory store,
 // the loot achievement criteria, the free-for-all / quest / normal
 // mark-and-notify arm, the item push result, and the fully-looted close.
-// The free-for-all repeat-take answers EQUIP_ERR_ALREADY_LOOTED like the
-// null return of Loot::LootItemInSlot (Loot.cpp:491-494).
 func (s *session) storeTakenLootRow(ctx context.Context, loot *activeLootState, lootSlot uint8, it lootItem, isQuestItem bool, questIndex uint8) bool {
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
+	}
+	// Loot::LootItemInSlot (Loot.cpp:466-480/491-494): a repeat take on an
+	// already-taken free-for-all copy (qitem->is_looted on the quest leg,
+	// ffaitem->is_looted on the normal leg, both per-viewer) returns
+	// nullptr, so StoreLootItem answers EQUIP_ERR_ALREADY_LOOTED before any
+	// inventory store — the check must precede the store, never follow it.
+	if it.FreeForAll {
+		if isQuestItem {
+			if loot.QuestFFATaken[questIndex][s.playerGUID] {
+				s.sendEquipError(equipErrAlreadyLooted, 0)
+				return true
+			}
+		} else if loot.FFATaken[lootSlot][s.playerGUID] {
+			s.sendEquipError(equipErrAlreadyLooted, 0)
+			return true
+		}
 	}
 	res, err := s.storeOrStackItem(ctx, s.playerGUID, it.ItemEntry, it.Count)
 	if err != nil {
@@ -2183,23 +2248,17 @@ func (s *session) storeTakenLootRow(ctx context.Context, loot *activeLootState, 
 		s.updateAchievementCriteria(criteriaTypeLootEpicItem, it.ItemEntry, it.Count)
 		s.updateAchievementCriteria(criteriaTypeReceiveEpicItem, it.ItemEntry, it.Count)
 	}
-	// Player::StoreLootItem (Player.cpp:25122-25124): a taken quest item is
-	// marked looted for everyone (Go has no ITEM_FLAG_MULTI_DROP free-for-all
-	// quest model, so the per-player qitem copy leg is a documented delta).
-	// The removal broadcast goes out before the delete because each viewer
-	// gets the slot from their own quest list.
+	// Player::StoreLootItem (Player.cpp:25097-25124): the quest take arm
+	// marks the taker's per-viewer qitem copy; a non-free-for-all quest
+	// row is gone for everyone (Go deletes the shared row), while a
+	// free-for-all quest row survives the take so the other viewers keep
+	// their own copies.
 	if it.FreeForAll && !isQuestItem {
 		// Player::StoreLootItem free-for-all arm (Player.cpp:25107-25113):
 		// the take marks only the taker's PlayerFFAItems entry
 		// (Loot::LootItemInSlot, Loot.cpp:466-480); the shared row stays
 		// for the other viewers and SMSG_LOOT_REMOVED goes to the taker
-		// alone. A repeat take on an already-taken copy answers
-		// EQUIP_ERR_ALREADY_LOOTED like the null return of LootItemInSlot
-		// (Loot.cpp:491-494).
-		if loot.FFATaken[lootSlot][s.playerGUID] {
-			s.sendEquipError(equipErrAlreadyLooted, 0)
-			return true
-		}
+		// alone. The repeat-take guard runs before the store above.
 		if loot.FFATaken == nil {
 			loot.FFATaken = make(map[uint8]map[uint64]bool)
 		}
@@ -2213,8 +2272,33 @@ func (s *session) storeTakenLootRow(ctx context.Context, loot *activeLootState, 
 		notify.WriteU8(lootSlot)
 		_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_REMOVED), notify.Bytes(), true)
 	} else if isQuestItem {
-		loot.broadcastQuestRemoved(ctx, questIndex)
-		delete(loot.QuestItems, questIndex)
+		if it.FreeForAll {
+			// Player::StoreLootItem free-for-all quest arm
+			// (Player.cpp:25097-25104): the take marks only the taker's
+			// per-viewer qitem copy (qitem->is_looted); the shared quest
+			// row stays so the other viewers keep their copies, and the
+			// row only leaves the window when everyone has taken it
+			// (lootFullyLooted's per-viewer count). The removal goes to
+			// the taker alone at the requested slot; a repeat take on an
+			// already-taken copy is answered above.
+			if loot.QuestFFATaken == nil {
+				loot.QuestFFATaken = make(map[uint8]map[uint64]bool)
+			}
+			taken := loot.QuestFFATaken[questIndex]
+			if taken == nil {
+				taken = make(map[uint64]bool)
+				loot.QuestFFATaken[questIndex] = taken
+			}
+			taken[s.playerGUID] = true
+			notify := protocol.NewBuffer(1)
+			notify.WriteU8(lootSlot)
+			_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_REMOVED), notify.Bytes(), true)
+		} else {
+			// The removal broadcast goes out before the delete because
+			// each viewer gets the slot from their own quest list.
+			loot.broadcastQuestRemoved(ctx, questIndex)
+			delete(loot.QuestItems, questIndex)
+		}
 	} else {
 		delete(loot.Items, lootSlot)
 		loot.broadcastRemoved(lootSlot)
@@ -2294,9 +2378,8 @@ func (s *Server) autoStoreLootCurrencyTokens(ctx context.Context, loot *activeLo
 	}
 	// Loot::FillNotNormalLootFor scans GetMaxSlotInLootFor(player) — the
 	// normal rows plus the player's quest-item list — so free-for-all
-	// currency-token quest rows auto-store too. Go's quest take arm deletes
-	// the row for everyone (no per-player FFA quest copies), so row
-	// presence alone means untaken.
+	// currency-token quest rows auto-store too, each member storing their
+	// own per-viewer copy (Player::StoreLootItem, Player.cpp:25097-25104).
 	for qidx, it := range loot.QuestItems {
 		if !it.FreeForAll || it.ItemEntry == 0 {
 			continue
@@ -2309,10 +2392,24 @@ func (s *Server) autoStoreLootCurrencyTokens(ctx context.Context, loot *activeLo
 			if member == nil || member.player == nil {
 				continue
 			}
+			if loot.QuestFFATaken[qidx] != nil && loot.QuestFFATaken[qidx][member.playerGUID] {
+				continue
+			}
 			if !member.lootItemAllowedForPlayer(ctx, it, false) {
 				continue
 			}
-			member.storeTakenLootRow(ctx, loot, qidx, it, true, qidx)
+			// The taker-only removal needs the member's own display
+			// slot (NormalSlotCount + position in their quest list),
+			// not the raw quest index.
+			questList := member.viewerQuestLootList(ctx, loot)
+			displaySlot := loot.NormalSlotCount + qidx
+			for pos, idx := range questList {
+				if idx == qidx {
+					displaySlot = loot.NormalSlotCount + uint8(pos)
+					break
+				}
+			}
+			member.storeTakenLootRow(ctx, loot, displaySlot, it, true, qidx)
 		}
 	}
 }

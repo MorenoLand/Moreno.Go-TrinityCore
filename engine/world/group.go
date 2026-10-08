@@ -61,18 +61,38 @@ func dungeonMapID(srv *Server, mapID uint32) bool {
 	return mapID != 0 && mapID != 1 && mapID != 530 && mapID != 571
 }
 
-// updateLooter mirrors Group::UpdateLooterGuid (Group.cpp:1962) with
-// ifneed=true: the current looter keeps the role while they are still at
-// Player::IsAtGroupRewardDistance (Player.cpp:24160) of the looted object
-// (same map and instance, dungeon-always, else within MaxGroupXPDistance /
-// CONFIG_GROUP_XP_DISTANCE, default 74) — the role advances to the next
-// in-range member only when the current looter left range or is gone, and
-// clears when nobody is in range (Group.cpp:2017-2020). FREE_FOR_ALL never
-// rotates (Group.cpp:1965-1966). Timing delta: C++ runs this at kill
-// (Unit.cpp:11224) while Go runs it at loot open, so a corpse that is never
-// opened never advances the role; like the rest of the group state, the
-// role is kept in memory only (no groups.looterGuid write).
+// updateLooter mirrors Group::UpdateLooterGuid with ifneed=true
+// (Group.cpp:1962-1994, ifneed arm at 1972-1978): keep the current looter
+// while still at reward distance, else advance to the next in-range
+// member. See rotateLooter for the shared mechanics and timing deltas.
 func (g *groupState) updateLooter(srv *Server, mapID, instanceID uint32, x, y, z float32) {
+	g.rotateLooter(srv, mapID, instanceID, x, y, z, true)
+}
+
+// advanceLooter is the ifneed=false arm of Group::UpdateLooterGuid
+// (Group.cpp:1962-1994): it unconditionally advances the group's looter
+// to the next in-range member. C++ runs it after every kill-time fill
+// (Unit.cpp:11270-11271) and after every chest fill (Player.cpp:8603) so
+// consecutive loots rotate even when the current looter is still valid;
+// the ifneed arm alone would keep reusing the same looter while they
+// stay near the corpses. Timing delta (same as updateLooter): C++ runs
+// this at kill/fill time, Go at first loot open, so a loot that is never
+// opened never advances the role.
+func (g *groupState) advanceLooter(srv *Server, mapID, instanceID uint32, x, y, z float32) {
+	g.rotateLooter(srv, mapID, instanceID, x, y, z, false)
+}
+
+// rotateLooter implements Group::UpdateLooterGuid (Group.cpp:1962-1994).
+// With ifneed=true (the 08:54 strip's arm) the current looter keeps the
+// role while they are still at Player::IsAtGroupRewardDistance
+// (Player.cpp:24160) of the looted object (same map and instance,
+// dungeon-always, else within MaxGroupXPDistance / CONFIG_GROUP_XP_DISTANCE,
+// default 74) — the role advances only when the current looter left range
+// or is gone, and clears when nobody is in range (Group.cpp:2017-2020).
+// With ifneed=false the advance is unconditional. FREE_FOR_ALL never
+// rotates (Group.cpp:1965-1966). Like the rest of the group state, the
+// role is kept in memory only (no groups.looterGuid write).
+func (g *groupState) rotateLooter(srv *Server, mapID, instanceID uint32, x, y, z float32, ifneed bool) {
 	if g.LootMethod == 0 || len(g.Members) == 0 {
 		return
 	}
@@ -82,7 +102,7 @@ func (g *groupState) updateLooter(srv *Server, mapID, instanceID uint32, x, y, z
 			(dungeonMapID(srv, mapID) || distance3D(sess.player.X, sess.player.Y, sess.player.Z, x, y, z) <= srv.Config.MaxGroupXPDistance)
 	}
 	// ifneed arm (Group.cpp:1972-1978): keep the current looter.
-	if atRewardDistance(srv.findSessionByGUID(g.LooterGUID)) {
+	if ifneed && atRewardDistance(srv.findSessionByGUID(g.LooterGUID)) {
 		return
 	}
 	currIdx := -1
