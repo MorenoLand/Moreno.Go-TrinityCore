@@ -1309,12 +1309,14 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	high := uint16(targetGUID >> 48)
 
 	// Player::SendLoot (Player.cpp:8526-8527): opening new loot releases the
-	// previously open loot first (DoLootRelease legs). Skipped for a
-	// same-target re-open so the round-robin owner assigned at first open
-	// survives the refresh, and for player-corpse GUIDs, which never reach
-	// SendLoot in C++ (dropped by the HandleLootOpcode cheat gate above).
+	// previously open loot first (DoLootRelease legs) — unconditionally,
+	// including a same-target re-open: C++ has no exemption, and the
+	// creature-arm release resets roundRobinPlayer and re-broadcasts the
+	// group looter (Group::SendLooter, LootHandler.cpp:376-381) before the
+	// window is re-sent. Player-corpse GUIDs never reach SendLoot in C++
+	// (dropped by the HandleLootOpcode cheat gate above).
 	if high != 0xF101 {
-		if prev := s.activeLoot; prev != nil && prev.TargetGUID != targetGUID {
+		if prev := s.activeLoot; prev != nil {
 			s.doLootRelease(prev)
 		}
 	}
@@ -2062,9 +2064,10 @@ func (s *session) openSkinningLoot(ctx context.Context, targetGUID uint64, entry
 	guid := uint32(targetGUID & 0x00FFFFFF)
 	stdKey := creatureWorldGUID(guid, entry)
 	// Player::SendLoot head (Player.cpp:8526-8527): opening new loot releases
-	// the previously open window first; skipped for a same-target re-open so
-	// the state object the skinning arm reuses survives.
-	if prev := s.activeLoot; prev != nil && prev.TargetGUID != targetGUID {
+	// the previously open window first — unconditionally, including a
+	// same-target re-open (C++ has no exemption); the skinning arm
+	// re-clears and re-fills below exactly like the C++ arm.
+	if prev := s.activeLoot; prev != nil {
 		s.doLootRelease(prev)
 	}
 	s.server.lootMu.Lock()
@@ -2148,9 +2151,10 @@ func (s *session) openPickpocketLoot(ctx context.Context, targetGUID uint64, ent
 	guid := uint32(targetGUID & 0x00FFFFFF)
 	stdKey := creatureWorldGUID(guid, entry)
 	// Player::SendLoot head (Player.cpp:8526-8527): opening new loot releases
-	// the previously open window first; skipped for a same-target re-open so
-	// the state object the pickpocket arm reuses survives.
-	if prev := s.activeLoot; prev != nil && prev.TargetGUID != targetGUID {
+	// the previously open window first — unconditionally, including a
+	// same-target re-open (C++ has no exemption); the still-generated
+	// window below is kept as-is exactly like the C++ arm.
+	if prev := s.activeLoot; prev != nil {
 		s.doLootRelease(prev)
 	}
 	s.server.lootMu.Lock()
@@ -2762,13 +2766,37 @@ func (s *session) handleLootRelease(payload []byte) bool {
 // LootTemplates_Milling keyed by the item entry). The C++ SendLoot item arm
 // has no empty-fill bail, so the window renders even when the fill rolls
 // nothing. The previously open loot is released first
-// (Player.cpp:8526-8527), skipped for a same-target re-open.
+// (Player.cpp:8526-8527) — unconditionally, including a same-target
+// re-open (C++ has no exemption): the release legs run first, and only
+// then does the item arm decide whether to re-fill.
 func (s *session) openTradeSkillItemLoot(ctx context.Context, itemGUID uint64, lootType uint8, table string, lootID uint32) {
 	if s == nil || s.player == nil || s.server == nil || itemGUID == 0 {
 		return
 	}
-	if prev := s.activeLoot; prev != nil && prev.TargetGUID != itemGUID {
+	if prev := s.activeLoot; prev != nil {
 		s.doLootRelease(prev)
+	}
+	// Player::SendLoot item arm (Player.cpp:8675-8690): the window reuses
+	// item->loot — the fill runs only when the item has no generated loot
+	// yet (!item->m_lootGenerated && !LoadStoredLoot). Go's
+	// generatedContainerLoot marker is the m_lootGenerated analog: a
+	// same-target re-open (or a second cast) re-shows the existing window
+	// instead of re-rolling the disenchant/prospect/mill loot. The
+	// prospecting/milling release arm clears the marker
+	// (LootHandler.cpp:328-339, clearContainerLootGenerated), and a
+	// fully-looted release deletes the state row, so both fall through to
+	// a fresh fill exactly like C++.
+	if s.server.containerLootGenerated(itemGUID) {
+		s.server.lootMu.Lock()
+		existing := s.server.creatureLoot[lootObjectKey{MapID: s.player.Map, InstanceID: s.player.InstanceID, GUID: itemGUID}]
+		s.server.lootMu.Unlock()
+		if existing != nil {
+			existing.addViewer(s)
+			s.activeLoot = existing
+			s.interruptCurrentCast()
+			s.finishLootOpen(ctx, existing)
+			return
+		}
 	}
 	var lootSource *sql.DB
 	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {

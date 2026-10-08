@@ -2847,8 +2847,9 @@ func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.Spel
 		}
 	}
 	// Player::SendLoot head (Player.cpp:8526-8527): opening new loot releases
-	// the previously open window first; skipped for a same-target re-open.
-	if prev := s.activeLoot; prev != nil && prev.TargetGUID != goGUID {
+	// the previously open window first — unconditionally, including a
+	// same-target re-open (C++ has no exemption).
+	if prev := s.activeLoot; prev != nil {
 		s.doLootRelease(prev)
 	}
 	s.openGameObjectLoot(ctx, goGUID, lootTypeSkinning, 20.0)

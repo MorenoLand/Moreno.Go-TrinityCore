@@ -541,7 +541,7 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		if s.isDeadOrGhost() {
 			return true
 		}
-		if prev := s.activeLoot; prev != nil && prev.TargetGUID != guid {
+		if prev := s.activeLoot; prev != nil {
 			s.doLootRelease(prev)
 		}
 		return s.openGameObjectLoot(ctx, guid, lootTypeSkinning, 20.0)
