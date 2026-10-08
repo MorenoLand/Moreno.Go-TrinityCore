@@ -330,8 +330,11 @@ func addLootTemplateRow(loot *activeLootState, slot, qidx *uint8, row *lootTempl
 	if row.maxCount > row.minCount {
 		count += uint32(rand.Intn(int(row.maxCount - row.minCount + 1)))
 	}
+	// Loot::AddItem (Loot.cpp:143-149): count = urand(mincount, maxcount)
+	// with no minimum-1 clamp — a zero roll yields zero stacks and the row
+	// is dropped entirely.
 	if count == 0 {
-		count = 1
+		return
 	}
 	stacks := uint32(1)
 	if row.maxStack > 1 && count > row.maxStack {
@@ -839,6 +842,18 @@ func (s *session) viewerQuestLootList(ctx context.Context, loot *activeLootState
 		}
 	}
 	sort.Slice(indices, func(i, j int) bool { return indices[i] < indices[j] })
+	// Loot::FillQuestLoot (Loot.cpp:296-315): no quest rows render once the
+	// normal rows fill the 18-row window, and the per-viewer quest list
+	// stops once normal + quest rows hit 18. NormalSlotCount mirrors
+	// C++ items.size() (captured at fill time; the C++ vector never shrinks
+	// on take either).
+	room := int(maxNormalLootItems) - int(loot.NormalSlotCount)
+	if room <= 0 {
+		return nil
+	}
+	if len(indices) > room {
+		indices = indices[:room]
+	}
 	return indices
 }
 
@@ -1344,13 +1359,13 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 	loadRows := func(entry uint32, lootMode uint32) error {
 		rows, queryErr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0), COALESCE(t.Flags, 0)
 			FROM fishing_loot_template AS l LEFT JOIN item_template AS t ON t.entry = l.Item
-			WHERE l.Entry = ? AND (COALESCE(l.LootMode, 1) & ?) <> 0 ORDER BY l.Item LIMIT 16`, entry, lootMode)
+			WHERE l.Entry = ? AND (COALESCE(l.LootMode, 1) & ?) <> 0 ORDER BY l.Item LIMIT 18`, entry, lootMode)
 		if queryErr != nil {
 			return queryErr
 		}
 		defer rows.Close()
 		var slot uint8
-		for rows.Next() && slot < 16 {
+		for rows.Next() && slot < maxNormalLootItems {
 			var itemID int64
 			var chance float64
 			var minCount, maxCount, displayID, quality, flags int64
@@ -1364,8 +1379,10 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 			if maxCount > minCount {
 				count += uint32(rand.Intn(int(maxCount - minCount + 1)))
 			}
+			// Loot::AddItem (Loot.cpp:143-149): no minimum-1 clamp — a zero
+			// count roll drops the row entirely instead of forcing one.
 			if count == 0 {
-				count = 1
+				continue
 			}
 			loot.Items[slot] = lootItem{Slot: slot, ItemEntry: uint32(itemID), Count: count, DisplayInfoID: uint32(displayID), Quality: uint32(quality), FreeForAll: uint32(flags)&itemFlagMultiDrop != 0}
 			slot++
@@ -3306,8 +3323,10 @@ func (s *Server) deliverDisenchantMats(ctx context.Context, roll *activeGroupRol
 					if maxCount > minCount {
 						count += uint32(rand.Intn(int(maxCount-minCount) + 1))
 					}
+					// Loot::AddItem (Loot.cpp:143-149): no minimum-1 clamp —
+					// a zero count roll yields no row at all.
 					if count == 0 {
-						count = 1
+						continue
 					}
 					mats = append(mats, deMat{item: item, count: count})
 				}
