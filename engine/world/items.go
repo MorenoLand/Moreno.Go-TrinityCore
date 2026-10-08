@@ -2509,7 +2509,7 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 		}
 
 		if lootSource != nil {
-			rows, qErr := lootSource.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0)
+			rows, qErr := lootSource.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Flags, 0)
 				FROM item_loot_template AS l
 				LEFT JOIN item_template AS t ON t.entry = l.Item
 				WHERE l.Entry = ? ORDER BY l.Item LIMIT 16`, itemEntry)
@@ -2525,8 +2525,8 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 				for rows.Next() {
 					var itemID int64
 					var chance float64
-					var minCount, maxCount, displayID int64
-					if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID); err == nil {
+					var minCount, maxCount, displayID, flags int64
+					if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &flags); err == nil {
 						roll := rand.Float64() * 100.0
 						if chance <= 0 || roll <= chance {
 							count := uint32(minCount)
@@ -2541,6 +2541,7 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 								ItemEntry:     uint32(itemID),
 								Count:         count,
 								DisplayInfoID: uint32(displayID),
+								FreeForAll:    uint32(flags)&itemFlagMultiDrop != 0,
 							}
 							lSlot++
 							if lSlot >= 16 {

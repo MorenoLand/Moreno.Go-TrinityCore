@@ -27,6 +27,15 @@ type lootItem struct {
 	NeedsQuest  bool
 	StartQuest  uint32
 	CustomFlags uint32
+	// FreeForAll mirrors LootItem::freeforall (Loot.h:136), set from the
+	// item template's ITEM_FLAG_MULTI_DROP (ItemTemplate.h:163) in the
+	// LootItem constructor (Loot.cpp:41): looting the row does not remove
+	// it for other viewers. Free-for-all rows are excluded from the
+	// permission-ladder arms of LootView and rendered separately
+	// (Loot.cpp:624/679/698 vs 743-757), never start group rolls and are
+	// never blocked (Group.cpp:1106/1261/1410), and each viewer's take
+	// marks only their own PlayerFFAItems entry (Player.cpp:25107-25113).
+	FreeForAll bool
 }
 
 // itemFlagsCuIgnoreQuestStatus / itemFlagsCuFollowLootRules mirror
@@ -36,6 +45,10 @@ const (
 	itemFlagsCuIgnoreQuestStatus uint32 = 0x0002
 	itemFlagsCuFollowLootRules   uint32 = 0x0004
 )
+
+// itemFlagMultiDrop mirrors ITEM_FLAG_MULTI_DROP (ItemTemplate.h:163):
+// looting the item does not remove it from available loot.
+const itemFlagMultiDrop uint32 = 0x00000800
 
 // lootTypeSkinning mirrors LOOT_SKINNING (Loot.h:89).
 const lootTypeSkinning uint8 = 6
@@ -85,12 +98,19 @@ type activeLootState struct {
 	NormalSlotCount  uint8
 	RoundRobinPlayer uint64
 	Viewers          map[uint64]*session
+	// FFATaken records per-viewer takes of free-for-all (multi-drop) rows,
+	// mirroring the per-viewer is_looted in Loot::PlayerFFAItems
+	// (Loot.cpp:271-293, Player.cpp:25107-25113): the shared Items row is
+	// never deleted by a take, so each viewer's copy is tracked here by
+	// slot. Viewers who release without taking drop out of the map with
+	// removeViewer.
+	FFATaken map[uint8]map[uint64]bool
 }
 
 // storeLootTemplateRow routes one rolled loot-template row into Items or
 // QuestItems, mirroring Loot::AddItem (Loot.cpp:141-152) where needs_quest
 // rows go to quest_items with the MAX_NR_QUEST_ITEMS cap.
-func storeLootTemplateRow(loot *activeLootState, slot, qidx *uint8, itemID, count, displayID, quality, startQuest, customFlags uint32, questRequired bool) {
+func storeLootTemplateRow(loot *activeLootState, slot, qidx *uint8, itemID, count, displayID, quality, startQuest, customFlags uint32, questRequired, freeForAll bool) {
 	if questRequired {
 		if *qidx >= maxQuestLootItems {
 			return
@@ -107,6 +127,7 @@ func storeLootTemplateRow(loot *activeLootState, slot, qidx *uint8, itemID, coun
 			NeedsQuest:    true,
 			StartQuest:    startQuest,
 			CustomFlags:   customFlags,
+			FreeForAll:    freeForAll,
 		}
 		*qidx++
 		return
@@ -122,6 +143,7 @@ func storeLootTemplateRow(loot *activeLootState, slot, qidx *uint8, itemID, coun
 		Quality:       quality,
 		StartQuest:    startQuest,
 		CustomFlags:   customFlags,
+		FreeForAll:    freeForAll,
 	}
 	*slot++
 }
@@ -147,6 +169,7 @@ type lootTemplateRow struct {
 	lootMode      uint32
 	groupID       uint8
 	maxStack      uint32
+	flags         uint32
 }
 
 // fillLootTemplate mirrors LootTemplate::Process (LootMgr.cpp:562-600) driving
@@ -315,7 +338,7 @@ func addLootTemplateRow(loot *activeLootState, slot, qidx *uint8, row *lootTempl
 		if row.maxStack > 0 && c > row.maxStack {
 			c = row.maxStack
 		}
-		storeLootTemplateRow(loot, slot, qidx, row.itemID, c, row.displayID, row.quality, row.startQuest, row.customFlags, row.questRequired)
+		storeLootTemplateRow(loot, slot, qidx, row.itemID, c, row.displayID, row.quality, row.startQuest, row.customFlags, row.questRequired, row.flags&itemFlagMultiDrop != 0)
 	}
 }
 
@@ -326,7 +349,7 @@ func addLootTemplateRow(loot *activeLootState, slot, qidx *uint8, row *lootTempl
 func loadLootTemplateRows(ctx context.Context, wdb *sql.DB, table string, lootID int64, lootMode uint32) []lootTemplateRow {
 	full := `SELECT l.Item, l.Reference, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0),
 			COALESCE(l.QuestRequired, 0), COALESCE(t.StartQuest, 0), COALESCE(t.flagsCustom, 0),
-			COALESCE(l.LootMode, 1), COALESCE(l.GroupId, 0), COALESCE(t.Stackable, 0)
+			COALESCE(l.LootMode, 1), COALESCE(l.GroupId, 0), COALESCE(t.Stackable, 0), COALESCE(t.Flags, 0)
 		FROM ` + table + ` AS l
 		LEFT JOIN item_template AS t ON t.entry = l.Item
 		WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`
@@ -353,16 +376,16 @@ func loadLootTemplateRows(ctx context.Context, wdb *sql.DB, table string, lootID
 	for rows.Next() {
 		var r lootTemplateRow
 		var itemID, reference, minCount, maxCount, displayID, quality int64
-		var questRequired, startQuest, customFlags, lootModeRow, groupID, maxStack int64
+		var questRequired, startQuest, customFlags, lootModeRow, groupID, maxStack, flags int64
 		var chance float64
 		cols, colErr := rows.Columns()
 		if colErr != nil {
 			continue
 		}
 		var scanErr error
-		if len(cols) >= 13 {
+		if len(cols) >= 14 {
 			scanErr = rows.Scan(&itemID, &reference, &chance, &minCount, &maxCount, &displayID, &quality,
-				&questRequired, &startQuest, &customFlags, &lootModeRow, &groupID, &maxStack)
+				&questRequired, &startQuest, &customFlags, &lootModeRow, &groupID, &maxStack, &flags)
 		} else {
 			// Either historical fallback shape (9 selected columns); the
 			// unselected generation columns keep their neutral defaults.
@@ -386,6 +409,7 @@ func loadLootTemplateRows(ctx context.Context, wdb *sql.DB, table string, lootID
 		r.lootMode = uint32(lootModeRow)
 		r.groupID = uint8(groupID)
 		r.maxStack = uint32(maxStack)
+		r.flags = uint32(flags)
 		out = append(out, r)
 	}
 	return out
@@ -711,11 +735,40 @@ func (l *activeLootState) broadcastMoneyRemoved() {
 
 func (l *activeLootState) hasOverThresholdItem(threshold uint8) bool {
 	for _, item := range l.Items {
-		if item.Quality >= uint32(threshold) {
+		// Loot::hasOverThresholdItem (Loot.cpp:573-580): free-for-all rows
+		// never count as over-threshold.
+		if !item.FreeForAll && item.Quality >= uint32(threshold) {
 			return true
 		}
 	}
 	return false
+}
+
+// lootFullyLooted mirrors Loot::isLooted (Loot.h:236): gold == 0 and
+// unlootedCount == 0. unlootedCount counts one entry per viewer per
+// free-for-all row (Loot::FillFFALoot, Loot.cpp:271-293), so a multi-drop
+// row keeps the loot open until every current viewer has taken their copy;
+// non-free-for-all rows are deleted from Items at take time, so any that
+// remain mean the loot is not fully taken. Viewers who released without
+// taking drop out of the check with removeViewer (C++ keeps their
+// PlayerFFAItems entries past release — a latent leak there — so Go clears
+// slightly earlier than C++ in that corner).
+func lootFullyLooted(l *activeLootState) bool {
+	if l == nil || l.Money != 0 || len(l.QuestItems) != 0 {
+		return false
+	}
+	for slot, it := range l.Items {
+		if !it.FreeForAll {
+			return false
+		}
+		taken := l.FFATaken[slot]
+		for guid := range l.Viewers {
+			if !taken[guid] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func sortedLootItems(items map[uint8]lootItem) []lootItem {
@@ -1080,7 +1133,7 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 	}
 	success := forceSuccess || s.fishingHoleNearby(ctx, goState) || rand.Intn(100)+1 <= chance
 	loadRows := func(entry uint32, lootMode uint32) error {
-		rows, queryErr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0)
+		rows, queryErr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0), COALESCE(t.Flags, 0)
 			FROM fishing_loot_template AS l LEFT JOIN item_template AS t ON t.entry = l.Item
 			WHERE l.Entry = ? AND (COALESCE(l.LootMode, 1) & ?) <> 0 ORDER BY l.Item LIMIT 16`, entry, lootMode)
 		if queryErr != nil {
@@ -1091,8 +1144,8 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 		for rows.Next() && slot < 16 {
 			var itemID int64
 			var chance float64
-			var minCount, maxCount, displayID, quality int64
-			if scanErr := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality); scanErr != nil {
+			var minCount, maxCount, displayID, quality, flags int64
+			if scanErr := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality, &flags); scanErr != nil {
 				continue
 			}
 			if chance > 0 && rand.Float64()*100 > chance {
@@ -1105,7 +1158,7 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 			if count == 0 {
 				count = 1
 			}
-			loot.Items[slot] = lootItem{Slot: slot, ItemEntry: uint32(itemID), Count: count, DisplayInfoID: uint32(displayID), Quality: uint32(quality)}
+			loot.Items[slot] = lootItem{Slot: slot, ItemEntry: uint32(itemID), Count: count, DisplayInfoID: uint32(displayID), Quality: uint32(quality), FreeForAll: uint32(flags)&itemFlagMultiDrop != 0}
 			slot++
 		}
 		return rows.Err()
@@ -1227,6 +1280,12 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 	// the item count is written after, matching C++'s count_pos patch.
 	var shown []renderedLootRow
 	for _, it := range items {
+		// LootView (Loot.cpp:624/679/698): free-for-all (multi-drop) rows
+		// are excluded from every permission-ladder arm and rendered in
+		// the FFA section below (Loot.cpp:743-757).
+		if it.FreeForAll {
+			continue
+		}
 		if !s.lootItemAllowedForPlayer(ctx, it, false) {
 			continue
 		}
@@ -1272,11 +1331,30 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 		}
 		shown = append(shown, renderedLootRow{item: it, slotType: slotType})
 	}
-	packet := protocol.NewBuffer(8 + 1 + 4 + 1 + (len(shown)+len(questList))*22)
+	// LootView FFA arm (Loot.cpp:743-757): multi-drop rows render after the
+	// quest section at their raw slot with the permission default
+	// (OWNER/ALLOW_LOOT — never the ladder's locked/roll types), one copy
+	// per viewer; a viewer who already took their copy (FFATaken) no
+	// longer sees the row, mirroring the per-viewer is_looted in
+	// Loot::PlayerFFAItems.
+	var ffaShown []lootItem
+	for _, it := range items {
+		if !it.FreeForAll {
+			continue
+		}
+		if taken := loot.FFATaken[it.Slot]; taken[s.playerGUID] {
+			continue
+		}
+		if !s.lootItemAllowedForPlayer(ctx, it, false) {
+			continue
+		}
+		ffaShown = append(ffaShown, it)
+	}
+	packet := protocol.NewBuffer(8 + 1 + 4 + 1 + (len(shown)+len(questList)+len(ffaShown))*22)
 	packet.WriteU64(loot.TargetGUID)
 	packet.WriteU8(loot.LootType)
 	packet.WriteU32(loot.Money)
-	packet.WriteU8(uint8(len(shown) + len(questList)))
+	packet.WriteU8(uint8(len(shown) + len(questList) + len(ffaShown)))
 	for _, row := range shown {
 		it := row.item
 		packet.WriteU8(it.Slot)
@@ -1328,6 +1406,20 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 		packet.WriteU32(0) // RandomPropertyId
 		packet.WriteU8(qSlotType)
 	}
+	// LootView FFA arm rows (Loot.cpp:743-757): raw slot, the LootItem row,
+	// then the permission default — baseSlot rides the group ladder
+	// (ALLOW_LOOT under GROUP/MASTER/RESTRICTED/ROUND_ROBIN, matching
+	// Loot.cpp:701's OWNER_PERMISSION ? OWNER : ALLOW_LOOT) and is OWNER
+	// for solo creature loot.
+	for _, it := range ffaShown {
+		packet.WriteU8(it.Slot)
+		packet.WriteU32(it.ItemEntry)
+		packet.WriteU32(it.Count)
+		packet.WriteU32(it.DisplayInfoID)
+		packet.WriteU32(0) // RandomSuffix (Loot.cpp:589: randomSuffix before randomPropertyId)
+		packet.WriteU32(0) // RandomPropertyId
+		packet.WriteU8(baseSlot)
+	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_LOOT_RESPONSE), packet.Bytes(), true); err != nil {
 		return err
 	}
@@ -1338,7 +1430,9 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 			s.sendLootMasterList(loot)
 		} else if grp.LootMethod == 3 || grp.LootMethod == 4 { // Group Loot / Need Before Greed
 			for _, it := range sortedLootItems(loot.Items) {
-				if it.Quality >= uint32(grp.LootThreshold) {
+				// Group::GroupLoot / NeedBeforeGreed (Group.cpp:1106/1261):
+				// free-for-all rows never start rolls.
+				if !it.FreeForAll && it.Quality >= uint32(grp.LootThreshold) {
 					s.server.startGroupLootRoll(loot.TargetGUID, uint32(it.Slot), it.ItemEntry, it.Count, loot.MapID, loot.InstanceID, s.groupID, s)
 				}
 			}
@@ -1751,8 +1845,8 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 	// Loot::isLooted (Loot.h:236) is gold == 0 && unlootedCount == 0, and the
 	// quest-item fill arm counts quest items into unlootedCount
 	// (Loot.cpp:316): money-take with quest loot remaining must not clear
-	// the corpse.
-	if s.activeLoot.Money == 0 && len(s.activeLoot.Items) == 0 && len(s.activeLoot.QuestItems) == 0 {
+	// the corpse. lootFullyLooted extends the check to multi-drop rows.
+	if lootFullyLooted(s.activeLoot) {
 		s.clearCreatureLoot(s.activeLoot)
 	}
 	s.debug("loot money collected", "account", s.accountName, "copper", copper)
@@ -1842,7 +1936,9 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 			// master-distributed; plain quest items stay directly lootable
 			// by quest-holding members under master loot. (Go anti-cheat
 			// gate: C++ hides these slots instead of rejecting the take.)
-			if grp.LootMethod == 2 && isOverThreshold &&
+			// Group::MasterLoot (Group.cpp:1408-1413) never blocks
+			// free-for-all rows, so they stay takeable by everyone.
+			if grp.LootMethod == 2 && isOverThreshold && !it.FreeForAll &&
 				!(isQuestItem && it.CustomFlags&itemFlagsCuFollowLootRules == 0) {
 				// Player::StoreLootItem (Player.cpp:25076-25080): a blocked
 				// item answers with SendLootRelease, not a silent drop.
@@ -1869,8 +1965,9 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 				// round-robin loot owner may take; under group/need-greed
 				// (GROUP_PERMISSION, Loot.cpp:657) under-threshold items
 				// are ALLOW_LOOT for every viewer, so the gate must not
-				// fire for methods 3/4.
-				if s.activeLoot.RoundRobinPlayer != 0 && s.activeLoot.RoundRobinPlayer != s.playerGUID {
+				// fire for methods 3/4. Free-for-all rows ignore the
+				// round-robin owner (LootView FFA arm, Loot.cpp:743-757).
+				if !it.FreeForAll && s.activeLoot.RoundRobinPlayer != 0 && s.activeLoot.RoundRobinPlayer != s.playerGUID {
 					return true
 				}
 			}
@@ -1899,7 +1996,31 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 	// quest model, so the per-player qitem copy leg is a documented delta).
 	// The removal broadcast goes out before the delete because each viewer
 	// gets the slot from their own quest list.
-	if isQuestItem {
+	if it.FreeForAll && !isQuestItem {
+		// Player::StoreLootItem free-for-all arm (Player.cpp:25107-25113):
+		// the take marks only the taker's PlayerFFAItems entry
+		// (Loot::LootItemInSlot, Loot.cpp:466-480); the shared row stays
+		// for the other viewers and SMSG_LOOT_REMOVED goes to the taker
+		// alone. A repeat take on an already-taken copy answers
+		// EQUIP_ERR_ALREADY_LOOTED like the null return of LootItemInSlot
+		// (Loot.cpp:491-494).
+		if s.activeLoot.FFATaken[lootSlot][s.playerGUID] {
+			s.sendEquipError(equipErrAlreadyLooted, 0)
+			return true
+		}
+		if s.activeLoot.FFATaken == nil {
+			s.activeLoot.FFATaken = make(map[uint8]map[uint64]bool)
+		}
+		taken := s.activeLoot.FFATaken[lootSlot]
+		if taken == nil {
+			taken = make(map[uint64]bool)
+			s.activeLoot.FFATaken[lootSlot] = taken
+		}
+		taken[s.playerGUID] = true
+		notify := protocol.NewBuffer(1)
+		notify.WriteU8(lootSlot)
+		_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_REMOVED), notify.Bytes(), true)
+	} else if isQuestItem {
 		s.activeLoot.broadcastQuestRemoved(ctx, questIndex)
 		delete(s.activeLoot.QuestItems, questIndex)
 	} else {
@@ -1914,7 +2035,9 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(s.playerGUID, res.ClientBag, slotForPush, it.ItemEntry, it.Count, res.InventoryCount), true)
 	s.sendPlayerUpdate()
-	if s.activeLoot.Money == 0 && len(s.activeLoot.Items) == 0 && len(s.activeLoot.QuestItems) == 0 {
+	// Loot::isLooted (Loot.h:236) via lootFullyLooted: a multi-drop row
+	// keeps the loot open until every current viewer takes their copy.
+	if lootFullyLooted(s.activeLoot) {
 		s.clearCreatureLoot(s.activeLoot)
 	}
 	s.debug("loot item stored", "account", s.accountName, "item", it.ItemEntry, "slot", res.Slot, "bag", res.ClientBag, "stacked", res.IsStack)
@@ -1981,8 +2104,9 @@ func (s *session) doLootRelease(loot *activeLootState) {
 	}
 	// DoLootRelease (LootHandler.cpp:349-368): Group::SendLooter fires only
 	// on the not-fully-looted arm — a fully-looted or blocked release
-	// clears instead of announcing a looter.
-	fullyLooted := loot.Money == 0 && len(loot.Items) == 0 && len(loot.QuestItems) == 0
+	// clears instead of announcing a looter. lootFullyLooted mirrors
+	// Loot::isLooted (Loot.h:236) including the multi-drop rows.
+	fullyLooted := lootFullyLooted(loot)
 	s.releaseActiveLootCleanup(cleanupAllowed)
 	if releasedRoundRobin && cleanupAllowed && !fullyLooted && s.server != nil && s.groupID != 0 && uint16(loot.TargetGUID>>48) != 0xF110 {
 		s.server.groupsMu.Lock()
