@@ -3643,6 +3643,19 @@ func canRollOnItem(m *session, itemEntry, itemCount, maxCount uint32) bool {
 	return m.lootItemAllowedForPlayer(context.Background(), lootItem{ItemEntry: itemEntry, Count: itemCount}, false)
 }
 
+// sendGroupRollToEligible mirrors the recipient filter shared by
+// Group::SendLootRoll, Group::SendLootRollWon and Group::SendLootAllPassed
+// (Group.cpp:1015, 1035, 1055): each packet goes to connected voters whose
+// vote is not NOT_VALID — i.e. the eligible members who entered the roll —
+// never to group members who were never eligible for it.
+func (s *Server) sendGroupRollToEligible(roll *activeGroupRoll, opcode uint16, payload []byte) {
+	for guid := range roll.EligiblePlayers {
+		if sess := s.findSessionByGUID(guid); sess != nil {
+			_ = sess.write(opcode, payload, true)
+		}
+	}
+}
+
 // resolveGroupLootRoll mirrors Group::CountTheRoll (Group.cpp:1510-1690).
 // enforceMap mirrors the allowedMap parameter: the vote-completion path
 // (Group::CountRollVote, Group.cpp:1493) passes nullptr, while the
@@ -3715,7 +3728,7 @@ func (s *Server) resolveGroupLootRoll(rollKey lootRollKey, enforceMap bool) {
 			rBuf.WriteU8(rNum)
 			rBuf.WriteU8(rollNeed)
 			rBuf.WriteU8(0)
-			s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL), rBuf.Bytes())
+			s.sendGroupRollToEligible(roll, uint16(protocol.OpcodeSMSG_LOOT_ROLL), rBuf.Bytes())
 			if rNum > maxRoll {
 				maxRoll = rNum
 				winnerGUID = guid
@@ -3738,7 +3751,7 @@ func (s *Server) resolveGroupLootRoll(rollKey lootRollKey, enforceMap bool) {
 			rBuf.WriteU8(rNum)
 			rBuf.WriteU8(vote)
 			rBuf.WriteU8(0)
-			s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL), rBuf.Bytes())
+			s.sendGroupRollToEligible(roll, uint16(protocol.OpcodeSMSG_LOOT_ROLL), rBuf.Bytes())
 			if rNum > maxRoll {
 				maxRoll = rNum
 				winnerGUID = guid
@@ -3757,7 +3770,7 @@ func (s *Server) resolveGroupLootRoll(rollKey lootRollKey, enforceMap bool) {
 		wonBuf.WriteU64(winnerGUID)
 		wonBuf.WriteU8(maxRoll)
 		wonBuf.WriteU8(winningType)
-		s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL_WON), wonBuf.Bytes())
+		s.sendGroupRollToEligible(roll, uint16(protocol.OpcodeSMSG_LOOT_ROLL_WON), wonBuf.Bytes())
 
 		// Reference Group.cpp:1557/1621: the roll winner is credited with the
 		// winning roll value against the minimum-roll threshold.
@@ -3776,7 +3789,7 @@ func (s *Server) resolveGroupLootRoll(rollKey lootRollKey, enforceMap bool) {
 		passBuf.WriteU32(roll.ItemEntry)
 		passBuf.WriteU32(roll.RandomPropID)
 		passBuf.WriteU32(roll.RandomSuffix)
-		s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_ALL_PASSED), passBuf.Bytes())
+		s.sendGroupRollToEligible(roll, uint16(protocol.OpcodeSMSG_LOOT_ALL_PASSED), passBuf.Bytes())
 
 		// Group.cpp:1683-1688: remove is_blocked so the item is lootable
 		// by all players.
@@ -4191,7 +4204,7 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 	buf.WriteU8(voteRollNumber)
 	buf.WriteU8(voteRollType)
 	buf.WriteU8(0) // autoPass
-	s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL), buf.Bytes())
+	s.server.sendGroupRollToEligible(roll, uint16(protocol.OpcodeSMSG_LOOT_ROLL), buf.Bytes())
 
 	if totalDone {
 		// Group::CountRollVote passes nullptr for allowedMap (Group.cpp:1493).

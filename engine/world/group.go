@@ -519,6 +519,9 @@ func (s *Server) removeSessionFromGroup(member *session) {
 	if index >= 0 {
 		g.Members = append(g.Members[:index], g.Members[index+1:]...)
 	}
+	// WorldSession logout (WorldSession.cpp:604) recomputes m_maxEnchantingLevel
+	// over the remaining online members; the full recompute matches.
+	refreshGroupMaxEnchantingLevel(s, g)
 	member.groupID = 0
 	member.pendingGroupLeader = 0
 	s.onPlayerLeaveGroupRolls(member.playerGUID, g.ID)
@@ -1145,6 +1148,10 @@ func (s *session) handleGroupDisband(_ context.Context, _ []byte) bool {
 				break
 			}
 		}
+		// Group::RemoveMember (Group.cpp:677) reevaluates m_maxEnchantingLevel
+		// when the leaving player had enchanting skill or was offline; the
+		// full recompute is equivalent unconditionally.
+		refreshGroupMaxEnchantingLevel(srv, g)
 		s.groupID = 0
 		srv.onPlayerLeaveGroupRolls(s.playerGUID, g.ID)
 		disbanded := len(g.Members) <= 1
