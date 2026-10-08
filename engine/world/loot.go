@@ -4267,35 +4267,42 @@ func (s *session) handleOptOutOfLoot(ctx context.Context, payload []byte) bool {
 	return true
 }
 
-// onPlayerLeaveGroupRolls automatically records a pass vote for a player who leaves,
-// gets kicked from, or disbands a group during active loot rolls, preventing stalled roll countdowns.
-// Mirrors TrinityCore Group::CountRollVote and Group::RemoveMember (Group.cpp:780-810, 1450-1490).
+// onPlayerLeaveGroupRolls erases a leaving/kicked/disbanded player from every
+// pending roll of their group.
+// Reference: Group::RemoveMember (Group.cpp:681-699): the leaver is removed
+// from the roll's voter list, a cast vote is withdrawn from its total (GREED
+// and DISENCHANT share totalGreed), and totalPlayersRolling shrinks — live
+// rolls never hold NOT_VALID entries, so the denominator always shrinks. No
+// synthetic pass vote is recorded: the follow-up CountRollVote call is a no-op
+// once the voter is erased (Group.cpp:699, 1452-1460), so completion waits on
+// the remaining voters or the 60s timer, never on the leaver. Erasing also
+// keeps a kicked (still-online) member's need/greed vote out of the winner
+// tiers at resolution.
 func (s *Server) onPlayerLeaveGroupRolls(leavingGUID uint64, groupID uint64) {
 	if s == nil || leavingGUID == 0 || groupID == 0 {
 		return
 	}
 	s.lootMu.Lock()
-	var keysToResolve []lootRollKey
-	for key, roll := range s.groupRolls {
-		if roll != nil && roll.GroupID == groupID {
-			if _, eligible := roll.EligiblePlayers[leavingGUID]; !eligible {
-				continue
-			}
-			if _, voted := roll.Votes[leavingGUID]; !voted {
-				roll.Votes[leavingGUID] = rollPass
-				roll.TotalPass++
-			}
-			if (roll.TotalPass + roll.TotalNeed + roll.TotalGreed) >= roll.TotalPlayersRolling {
-				keysToResolve = append(keysToResolve, key)
+	defer s.lootMu.Unlock()
+	for _, roll := range s.groupRolls {
+		if roll == nil || roll.GroupID != groupID {
+			continue
+		}
+		if _, eligible := roll.EligiblePlayers[leavingGUID]; !eligible {
+			continue
+		}
+		if vote, voted := roll.Votes[leavingGUID]; voted {
+			switch vote {
+			case rollNeed:
+				roll.TotalNeed--
+			case rollGreed, rollDisenchant:
+				roll.TotalGreed--
+			default: // rollPass
+				roll.TotalPass--
 			}
 		}
-	}
-	s.lootMu.Unlock()
-
-	for _, key := range keysToResolve {
-		// Mirrors the Group::Update member-removal path: the leaver's vote is
-		// gone and CountRollVote re-checks totals with allowedMap=nullptr
-		// (Group.cpp:699, 1493).
-		s.resolveGroupLootRoll(key, false)
+		delete(roll.EligiblePlayers, leavingGUID)
+		delete(roll.Votes, leavingGUID)
+		roll.TotalPlayersRolling--
 	}
 }
