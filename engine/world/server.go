@@ -179,6 +179,13 @@ type Server struct {
 	// the container item's instance GUID, loaded at startup and kept in
 	// sync by takes, money looting and item destruction.
 	storedContainerLoot map[uint64]*storedContainerLoot
+	// generatedContainerLoot mirrors Item::m_lootGenerated for containers
+	// (Player.cpp:8683-8685, Loot/LootItemStorage.cpp:133-185): once a
+	// container's loot is generated its stack cannot be split
+	// (Player::SplitItem, Player.cpp:13047). The store above only tracks
+	// non-empty loot, but C++ sets m_lootGenerated even for an empty roll,
+	// so generation needs its own marker, keyed by item instance GUID.
+	generatedContainerLoot map[uint64]struct{}
 	// pickpocketLootRestore mirrors Creature::_pickpocketLootRestore
 	// (Creature.h): the game-time after which the creature instance's
 	// pickpocket loot may be generated again, keyed per loot object.

@@ -2794,6 +2794,11 @@ func (s *session) openTradeSkillItemLoot(ctx context.Context, itemGUID uint64, l
 	// FillNotNormalLootFor (Loot.cpp:246-266) auto-stores currency-token
 	// rows straight into the filler's bags.
 	s.server.autoStoreLootCurrencyTokens(ctx, loot, s)
+	// The disenchant/prospect/mill fills run through Player::SendLoot's
+	// item arm too (Player.cpp:8675-8710), so the item's loot counts as
+	// generated (Item::m_lootGenerated) — its stack cannot be split while
+	// the window's loot exists.
+	s.server.markContainerLootGenerated(itemGUID)
 	s.server.lootMu.Lock()
 	if s.server.creatureLoot == nil {
 		s.server.creatureLoot = make(map[lootObjectKey]*activeLootState)
@@ -2822,6 +2827,11 @@ func (s *session) releaseItemLoot(loot *activeLootState) {
 	cdb := s.server.CharactersStore.DB
 	switch loot.LootType {
 	case lootTypeProspecting, lootTypeMilling:
+		// LootHandler.cpp:328-339: the release resets the item's generated
+		// loot (Item::m_lootGenerated = false) after destroying 5 from the
+		// stack, so the remainder can be prospected/milled again — and
+		// split.
+		s.server.clearContainerLootGenerated(loot.LootItemGUID)
 		var count uint32
 		if err := cdb.QueryRowContext(ctx, "SELECT `count` FROM item_instance WHERE guid = ?", loot.LootItemGUID).Scan(&count); err != nil {
 			return

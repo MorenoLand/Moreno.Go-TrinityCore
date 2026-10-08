@@ -1546,7 +1546,8 @@ const (
 	equipErrUniqueCantBeWrapped               = 47
 	equipErrBagsCantBeWrapped                 = 48
 	equipErrInvFull                           = 50
-	equipErrAlreadyLooted                     = 26 // C++ EQUIP_ERR_ALREADY_LOOTED (ItemDefines.h:53)
+	equipErrCouldntSplitItems                 = 27 // C++ EQUIP_ERR_COULDNT_SPLIT_ITEMS (ItemDefines.h:53)
+	equipErrAlreadyLooted                     = 49 // C++ EQUIP_ERR_ALREADY_LOOTED (ItemDefines.h:75)
 	equipErrTooMuchGold                       = 77
 	equipErrItemMaxLimitCategoryCountExceeded = 84
 	equipErrCantEquipRank                     = 63
@@ -1976,7 +1977,18 @@ func (s *session) handleSplitItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	srcGUID, srcEntry, srcCount, err := s.inventoryItemAt(ctx, srcBag, srcSlot)
-	if err != nil || srcGUID == 0 || count >= uint32(srcCount) {
+	if err != nil || srcGUID == 0 {
+		return true
+	}
+	// Player::SplitItem (Player.cpp:13047): an item whose loot was generated
+	// (Item::m_lootGenerated) cannot be split — the split would strand the
+	// stored remainder on the wrong stack. Go tracks generation per
+	// container instance GUID (generatedContainerLoot).
+	if s.server.containerLootGenerated(uint64(srcGUID)) {
+		s.sendEquipError(equipErrCouldntSplitItems, uint64(srcGUID))
+		return true
+	}
+	if count >= uint32(srcCount) {
 		return true
 	}
 	dstKey, ok := s.inventoryBagKey(ctx, dstBag)
@@ -2550,6 +2562,11 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 				// remainder. Tokens are already gone from the fill above.
 				s.server.storeNewContainerLoot(ctx, uint64(itemGUID), loot, s)
 			}
+			// Player.cpp:8683-8685: the item's loot is generated from here on
+			// (Item::m_lootGenerated), even for an empty roll — the
+			// container's stack can no longer be split (Player::SplitItem,
+			// Player.cpp:13047).
+			s.server.markContainerLootGenerated(uint64(itemGUID))
 			loot.addViewer(s)
 
 			if len(loot.Items) > 0 || len(loot.QuestItems) > 0 || loot.Money > 0 {

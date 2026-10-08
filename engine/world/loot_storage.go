@@ -277,6 +277,47 @@ func (s *Server) removeStoredContainerLootMoney(ctx context.Context, containerGU
 	}
 }
 
+// markContainerLootGenerated, containerLootGenerated and
+// clearContainerLootGenerated mirror Item::m_lootGenerated for container
+// items (Player.cpp:8683-8685, Loot/LootItemStorage.cpp:133-185): once a
+// container's loot is generated its stack cannot be split
+// (Player::SplitItem, Player.cpp:13047 answers
+// EQUIP_ERR_COULDNT_SPLIT_ITEMS). The persisted store only tracks
+// non-empty loot, but C++ sets m_lootGenerated even for an empty roll, so
+// generation needs its own marker. The prospecting/milling release arm
+// resets it (LootHandler.cpp:328-339) so the remainder can be worked and
+// split again; item destruction clears it via removeStoredContainerLoot.
+func (s *Server) markContainerLootGenerated(containerGUID uint64) {
+	if s == nil || containerGUID == 0 {
+		return
+	}
+	s.lootMu.Lock()
+	if s.generatedContainerLoot == nil {
+		s.generatedContainerLoot = make(map[uint64]struct{})
+	}
+	s.generatedContainerLoot[containerGUID] = struct{}{}
+	s.lootMu.Unlock()
+}
+
+func (s *Server) containerLootGenerated(containerGUID uint64) bool {
+	if s == nil || containerGUID == 0 {
+		return false
+	}
+	s.lootMu.Lock()
+	_, ok := s.generatedContainerLoot[containerGUID]
+	s.lootMu.Unlock()
+	return ok
+}
+
+func (s *Server) clearContainerLootGenerated(containerGUID uint64) {
+	if s == nil || containerGUID == 0 {
+		return
+	}
+	s.lootMu.Lock()
+	delete(s.generatedContainerLoot, containerGUID)
+	s.lootMu.Unlock()
+}
+
 // removeStoredContainerLoot mirrors
 // LootItemStorage::RemoveStoredLootForContainer
 // (Loot/LootItemStorage.cpp:200): the whole persisted container loot is
@@ -288,6 +329,7 @@ func (s *Server) removeStoredContainerLoot(ctx context.Context, containerGUID ui
 	}
 	s.lootMu.Lock()
 	delete(s.storedContainerLoot, containerGUID)
+	delete(s.generatedContainerLoot, containerGUID)
 	s.lootMu.Unlock()
 	if s.CharactersStore != nil && s.CharactersStore.DB != nil {
 		_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_DEL_ITEMCONTAINER_ITEMS", containerGUID)
