@@ -2212,9 +2212,11 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 
 	var disenchantID uint32
 	var requiredDisenchantSkill uint32
+	var maxCount uint32
+	var flagsExtra uint32
 	var allowableClass uint32 = 0xFFFFFFFF
 	if s.WorldStore != nil && s.WorldStore.DB != nil {
-		_ = s.WorldStore.DB.QueryRowContext(context.Background(), "SELECT DisenchantID, RequiredDisenchantSkill, AllowableClass FROM item_template WHERE entry = ?", itemEntry).Scan(&disenchantID, &requiredDisenchantSkill, &allowableClass)
+		_ = s.WorldStore.DB.QueryRowContext(context.Background(), "SELECT DisenchantID, RequiredDisenchantSkill, AllowableClass, MaxCount, FlagsExtra FROM item_template WHERE entry = ?", itemEntry).Scan(&disenchantID, &requiredDisenchantSkill, &allowableClass, &maxCount, &flagsExtra)
 	}
 
 	baseMask := rollFlagTypePass | rollFlagTypeNeed | rollFlagTypeGreed
@@ -2224,6 +2226,11 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 	// group join/leave in group.go).
 	if disenchantID > 0 && grp != nil && grp.MaxEnchantingLevel >= uint16(requiredDisenchantSkill) {
 		baseMask |= rollFlagTypeDisenchant
+	}
+	// Group::NeedBeforeGreed (Group.cpp:1299): ITEM_FLAG2_CAN_ONLY_ROLL_GREED
+	// (ItemTemplate.h:196) clears the NEED bit from the roll vote mask.
+	if grp != nil && grp.LootMethod == 4 && flagsExtra&0x100 != 0 {
+		baseMask &^= rollFlagTypeNeed
 	}
 
 	roll := &activeGroupRoll{
@@ -2269,8 +2276,18 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 		buf := buildLootStartRollPacket(sourceGUID, mapID, slot, itemEntry, 0, 0, itemCount, 60000, memberMask)
 		_ = m.write(uint16(protocol.OpcodeSMSG_LOOT_START_ROLL), buf, true)
 
-		// Auto-pass check for players with PassOnGroupLoot
-		if m.player != nil && m.player.PassOnGroupLoot {
+		// Auto-pass check: PassOnGroupLoot, plus the CanRollOnItem gate
+		// (Group.cpp:1081-1095, applied at Group.cpp:1133-1136 / 1283-1286) —
+		// unique-max holders and AllowedForPlayer failures are recorded PASS
+		// at roll start. Documented delta: C++ GroupLoot broadcasts these
+		// auto-passes with autoPass=1 before the start-roll; Go records them
+		// through the vote path (autoPass=0), matching NBG's post-start
+		// broadcast order exactly and GroupLoot's packet shape only.
+		autoPass := m.player != nil && m.player.PassOnGroupLoot
+		if !autoPass {
+			autoPass = !canRollOnItem(m, itemEntry, itemCount, maxCount)
+		}
+		if autoPass {
 			m.handleLootRoll(context.Background(), buildLootRollPayload(sourceGUID, slot, rollPass))
 		}
 	}
@@ -2279,6 +2296,28 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 	roll.Timer = time.AfterFunc(60*time.Second, func() {
 		s.resolveGroupLootRoll(rollKey)
 	})
+}
+
+// canRollOnItem mirrors the file-static CanRollOnItem (Group.cpp:1081-1095):
+// players can't roll on a unique item once they already hold the max, and
+// LootItem::AllowedForPlayer applies (Go's template-lookup-failure
+// keeps-visible delta applies here too, per lootItemAllowedForPlayer). The
+// owned-count model is the same character_inventory/item_instance join Go
+// already uses for unique checks elsewhere.
+func canRollOnItem(m *session, itemEntry, itemCount, maxCount uint32) bool {
+	if m == nil || m.player == nil {
+		return false
+	}
+	if maxCount > 0 && m.server != nil && m.server.CharactersStore != nil && m.server.CharactersStore.DB != nil {
+		var owned uint32
+		_ = m.server.CharactersStore.DB.QueryRowContext(context.Background(), `SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory AS ci
+			JOIN item_instance AS ii ON ii.guid = ci.item
+			WHERE ci.guid = ? AND ii.itemEntry = ?`, m.playerGUID, itemEntry).Scan(&owned)
+		if owned >= maxCount {
+			return false
+		}
+	}
+	return m.lootItemAllowedForPlayer(context.Background(), lootItem{ItemEntry: itemEntry, Count: itemCount}, false)
 }
 
 func (s *Server) resolveGroupLootRoll(rollKey lootRollKey) {
@@ -2641,6 +2680,14 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 				}
 			}
 		}
+	}
+
+	// Group::NeedBeforeGreed (Group.cpp:1299): ITEM_FLAG2_CAN_ONLY_ROLL_GREED
+	// clears NEED from the roll vote mask, so a NEED vote on such a roll
+	// drops to pass (the client UI can't offer need, and the server follows
+	// the mask). Kept next to the class-eligibility downgrade above.
+	if rollType == rollNeed && roll.RollVoteMask&rollFlagTypeNeed == 0 {
+		rollType = rollPass
 	}
 
 	roll.Votes[s.playerGUID] = rollType
