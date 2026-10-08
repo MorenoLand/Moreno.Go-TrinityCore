@@ -970,6 +970,21 @@ func rollLootObjectKey(roll *activeGroupRoll) lootObjectKey {
 // re-roll, Player.cpp:8574-8578), the chest groupLootRules distribution
 // (GroupLoot/NeedBeforeGreed/MasterLoot), the battleground CanActivateGO
 // gate, and the fishing/fishing-hole/fishing-junk arms have no Go model.
+// generateMoneyLootValue mirrors Loot::generateMoneyLoot (Loot.cpp:433):
+// the maxAmount<=minAmount arm takes maxAmount (not minAmount), and a zero
+// max means no money at all. The (maxAmount-minAmount)>=32700 arm is a
+// 32-bit urand overflow guard with no Go analog (rand.Intn runs on 64-bit
+// ints), and RATE_DROP_MONEY has no Go model (rate 1).
+func generateMoneyLootValue(minGold, maxGold int64) uint32 {
+	if maxGold <= 0 {
+		return 0
+	}
+	if maxGold > minGold {
+		return uint32(minGold + int64(rand.Intn(int(maxGold-minGold+1))))
+	}
+	return uint32(maxGold)
+}
+
 func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, lootType uint8, maxDist float64) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
@@ -1023,6 +1038,16 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 	}
 
 	s.server.fillLootTemplate(ctx, wdb, "gameobject_loot_template", lootID, lootModeDefault, loot)
+	// Player::SendLoot GO arm (Player.cpp:8607-8609): Loot::generateMoneyLoot
+	// rolls the gameobject_template_addon min/max gold once the loot exists
+	// (the C++ lootMode>0 gate has no Go model; lootable GOs always qualify).
+	var addonMinGold, addonMaxGold int64
+	if err = wdb.QueryRowContext(ctx, `SELECT COALESCE(mingold, 0), COALESCE(maxgold, 0) FROM gameobject_template_addon WHERE entry = ?`, entry).Scan(&addonMinGold, &addonMaxGold); err == nil {
+		if money := generateMoneyLootValue(addonMinGold, addonMaxGold); money != 0 {
+			loot.Money = money
+		}
+	}
+	s.server.autoStoreLootCurrencyTokens(ctx, loot, s)
 	if s.server != nil && s.groupID != 0 {
 		s.server.groupsMu.Lock()
 		grp := s.server.groups[s.groupID]
@@ -1156,15 +1181,12 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	if lootID == 0 {
 		lootID = int64(creatureEntry)
 	}
-	if maxGold > minGold && maxGold > 0 {
-		loot.Money = uint32(minGold + int64(rand.Intn(int(maxGold-minGold+1))))
-	} else if minGold > 0 {
-		loot.Money = uint32(minGold)
-	}
+	loot.Money = generateMoneyLootValue(minGold, maxGold)
 	// Loot::FillLoot (Loot.cpp:188) drives LootTemplate::Process over the
 	// creature template; Go has no creature loot modes, so the default mode
 	// (Unit.cpp:11250 passes creature->GetLootMode() in C++).
 	s.server.fillLootTemplate(ctx, wdb, "creature_loot_template", lootID, lootModeDefault, loot)
+	s.server.autoStoreLootCurrencyTokens(ctx, loot, s)
 	if s.server != nil && s.groupID != 0 {
 		s.server.groupsMu.Lock()
 		grp := s.server.groups[s.groupID]
@@ -1724,8 +1746,11 @@ func (s *session) openSkinningLoot(ctx context.Context, targetGUID uint64, entry
 		s.server.creatureLoot[standardKey] = loot
 	}
 	// Loot::clear() + SendLoot's loot->loot_type = LOOT_SKINNING (Player.cpp:8894).
+	// Loot::clear (Loot.cpp:117-138) also drops the per-viewer FFA takes —
+	// the old corpse loot's FFATaken must not leak into the skinning window.
 	loot.Items = make(map[uint8]lootItem)
 	loot.QuestItems = nil
+	loot.FFATaken = nil
 	loot.Money = 0
 	loot.LootType = lootTypeSkinning
 	loot.NormalSlotCount = 0
@@ -1742,6 +1767,7 @@ func (s *session) openSkinningLoot(ctx context.Context, targetGUID uint64, entry
 	_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(SkinLootId, 0) FROM creature_template WHERE entry = ? LIMIT 1", entry).Scan(&skinLootID)
 	if skinLootID != 0 {
 		s.server.fillLootTemplate(ctx, wdb, "skinning_loot_template", skinLootID, lootModeDefault, loot)
+		s.server.autoStoreLootCurrencyTokens(ctx, loot, s)
 	}
 	loot.addViewer(s)
 	s.activeLoot = loot
@@ -1807,9 +1833,12 @@ func (s *session) openPickpocketLoot(ctx context.Context, targetGUID uint64, ent
 	}
 	// Loot::clear() + loot->loot_type = LOOT_PICKPOCKETING
 	// (Player.cpp:8894); Creature::StartPickPocketRefillTimer
-	// (Creature.cpp:3379).
+	// (Creature.cpp:3379). Loot::clear (Loot.cpp:117-138) also drops the
+	// per-viewer FFA takes — the old loot's FFATaken must not leak into
+	// the pickpocket window.
 	loot.Items = make(map[uint8]lootItem)
 	loot.QuestItems = nil
+	loot.FFATaken = nil
 	loot.Money = 0
 	loot.LootType = lootTypePickpocketing
 	loot.NormalSlotCount = 0
@@ -1830,6 +1859,7 @@ func (s *session) openPickpocketLoot(ctx context.Context, targetGUID uint64, ent
 	_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(pickpocketLootId, 0) FROM creature_template WHERE entry = ? LIMIT 1", entry).Scan(&pickpocketLootID)
 	if pickpocketLootID != 0 {
 		s.server.fillLootTemplate(ctx, wdb, "pickpocketing_loot_template", pickpocketLootID, lootModeDefault, loot)
+		s.server.autoStoreLootCurrencyTokens(ctx, loot, s)
 	}
 	// Player.cpp:8781-8783: gold = 10 * (urand(0, creatureLvl/2) +
 	// urand(0, playerLvl/2)) * RATE_DROP_MONEY; the rate has no Go model.
@@ -2100,6 +2130,16 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 		}
 	}
 
+	return s.storeTakenLootRow(ctx, s.activeLoot, lootSlot, it, isQuestItem, questIndex)
+}
+
+// storeTakenLootRow runs the post-gate take of one loot row
+// (Player::StoreLootItem, Player.cpp:25057-25136): the inventory store,
+// the loot achievement criteria, the free-for-all / quest / normal
+// mark-and-notify arm, the item push result, and the fully-looted close.
+// The free-for-all repeat-take answers EQUIP_ERR_ALREADY_LOOTED like the
+// null return of Loot::LootItemInSlot (Loot.cpp:491-494).
+func (s *session) storeTakenLootRow(ctx context.Context, loot *activeLootState, lootSlot uint8, it lootItem, isQuestItem bool, questIndex uint8) bool {
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
@@ -2112,7 +2152,7 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 		return true
 	}
 	s.updateAchievementCriteria(criteriaTypeLootItem, it.ItemEntry, it.Count)
-	s.updateAchievementCriteria(criteriaTypeLootType, uint32(s.activeLoot.LootType), it.Count)
+	s.updateAchievementCriteria(criteriaTypeLootType, uint32(loot.LootType), it.Count)
 	if it.Quality >= 4 {
 		s.updateAchievementCriteria(criteriaTypeLootEpicItem, it.ItemEntry, it.Count)
 		s.updateAchievementCriteria(criteriaTypeReceiveEpicItem, it.ItemEntry, it.Count)
@@ -2130,28 +2170,28 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 		// alone. A repeat take on an already-taken copy answers
 		// EQUIP_ERR_ALREADY_LOOTED like the null return of LootItemInSlot
 		// (Loot.cpp:491-494).
-		if s.activeLoot.FFATaken[lootSlot][s.playerGUID] {
+		if loot.FFATaken[lootSlot][s.playerGUID] {
 			s.sendEquipError(equipErrAlreadyLooted, 0)
 			return true
 		}
-		if s.activeLoot.FFATaken == nil {
-			s.activeLoot.FFATaken = make(map[uint8]map[uint64]bool)
+		if loot.FFATaken == nil {
+			loot.FFATaken = make(map[uint8]map[uint64]bool)
 		}
-		taken := s.activeLoot.FFATaken[lootSlot]
+		taken := loot.FFATaken[lootSlot]
 		if taken == nil {
 			taken = make(map[uint64]bool)
-			s.activeLoot.FFATaken[lootSlot] = taken
+			loot.FFATaken[lootSlot] = taken
 		}
 		taken[s.playerGUID] = true
 		notify := protocol.NewBuffer(1)
 		notify.WriteU8(lootSlot)
 		_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_REMOVED), notify.Bytes(), true)
 	} else if isQuestItem {
-		s.activeLoot.broadcastQuestRemoved(ctx, questIndex)
-		delete(s.activeLoot.QuestItems, questIndex)
+		loot.broadcastQuestRemoved(ctx, questIndex)
+		delete(loot.QuestItems, questIndex)
 	} else {
-		delete(s.activeLoot.Items, lootSlot)
-		s.activeLoot.broadcastRemoved(lootSlot)
+		delete(loot.Items, lootSlot)
+		loot.broadcastRemoved(lootSlot)
 	}
 	_ = s.sendInventoryItems(ctx)
 
@@ -2163,11 +2203,66 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 	s.sendPlayerUpdate()
 	// Loot::isLooted (Loot.h:236) via lootFullyLooted: a multi-drop row
 	// keeps the loot open until every current viewer takes their copy.
-	if lootFullyLooted(s.activeLoot) {
-		s.clearCreatureLoot(s.activeLoot)
+	if lootFullyLooted(loot) {
+		s.clearCreatureLoot(loot)
 	}
 	s.debug("loot item stored", "account", s.accountName, "item", it.ItemEntry, "slot", res.Slot, "bag", res.ClientBag, "stacked", res.IsStack)
 	return true
+}
+
+// autoStoreLootCurrencyTokens mirrors the auto-store leg of
+// Loot::FillNotNormalLootFor (Loot.cpp:246-266): right after the loot is
+// filled, unlooted free-for-all rows that are currency tokens
+// (ItemTemplate::IsCurrencyToken = BagFamily & BAG_FAMILY_MASK_CURRENCY_TOKENS,
+// ItemTemplate.h:684) and pass LootItem::AllowedForPlayer for a present
+// looter are stored straight into that player's bags via the normal take
+// path — the currency never renders in the loot window for them.
+// presentAtLooting is true for the opener; grouped members qualify through
+// Player::IsAtGroupRewardDistance (Player.cpp:24160): same map and instance,
+// then dungeon-always, else within CONFIG_GROUP_XP_DISTANCE of the looter
+// (Go proxies the corpse position with the opener's, as the roll-start code
+// does). Deltas: the tokens land through Go's normal inventory store (no
+// currency-tab placement model), and members who never open the window get
+// their tokens at their own open, not at fill time.
+func (s *Server) autoStoreLootCurrencyTokens(ctx context.Context, loot *activeLootState, opener *session) {
+	if s == nil || loot == nil || opener == nil || opener.player == nil {
+		return
+	}
+	var present []*session
+	present = append(present, opener)
+	if opener.groupID != 0 {
+		inDungeon := opener.isDungeonMap(opener.player.Map)
+		for _, m := range s.getGroupSessions(opener.groupID) {
+			if m == nil || m == opener || m.player == nil || m.player.Map != loot.MapID || m.player.InstanceID != loot.InstanceID {
+				continue
+			}
+			if !inDungeon && distance3D(opener.player.X, opener.player.Y, opener.player.Z, m.player.X, m.player.Y, m.player.Z) > 100.0 {
+				continue
+			}
+			present = append(present, m)
+		}
+	}
+	for slot, it := range loot.Items {
+		if !it.FreeForAll || it.ItemEntry == 0 {
+			continue
+		}
+		data, err := opener.loadItemQueryData(ctx, it.ItemEntry)
+		if err != nil || data.BagFamily&itemBagFamilyCurrency == 0 {
+			continue
+		}
+		for _, member := range present {
+			if member == nil || member.player == nil {
+				continue
+			}
+			if loot.FFATaken[slot] != nil && loot.FFATaken[slot][member.playerGUID] {
+				continue
+			}
+			if !member.lootItemAllowedForPlayer(ctx, it, false) {
+				continue
+			}
+			member.storeTakenLootRow(ctx, loot, slot, it, false, 0)
+		}
+	}
 }
 
 func buildLootItemPushResult(playerGUID uint64, bag uint8, slot, entry, count, inventoryCount uint32) []byte {
