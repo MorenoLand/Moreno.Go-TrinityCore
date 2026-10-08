@@ -71,7 +71,10 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	if s.muteTime > 0 && s.muteTime <= now {
 		s.muteTime = 0
 		if s.server != nil && s.server.AuthStore != nil && s.server.AuthStore.DB != nil && s.accountID != 0 {
-			_, _ = s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET mutetime = 0 WHERE id = ?", s.accountID)
+			// Player::Update (Player.cpp:1085-1094): expiry clears the session
+			// mute AND the login row, including reason/by (LOGIN_UPD_MUTE_TIME
+			// with mutetime=0, mutereason="", muteby="").
+			_, _ = s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET mutetime = 0, mutereason = '', muteby = '' WHERE id = ?", s.accountID)
 		}
 	}
 	b := protocol.NewReader(payload)

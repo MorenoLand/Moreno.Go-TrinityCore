@@ -6290,6 +6290,10 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("notify", func(ctx context.Context, args []string) bool { s.handleCmdNotifyCommand(ctx, args); return true }, nil, nil)
 	root.add("gmnotify", func(ctx context.Context, args []string) bool { s.handleCmdGMNotifyCommand(ctx, args); return true }, nil, nil)
 	root.add("whispers", func(ctx context.Context, args []string) bool { s.handleCmdWhispers(ctx, args); return true }, nil, nil)
+	worldChatInvoke := func(ctx context.Context, args []string) bool { return s.handleCmdWorldChat(ctx, args) }
+	root.add("chat", worldChatInvoke, nil, nil)
+	root.add("c", worldChatInvoke, nil, nil)
+	root.add("world", worldChatInvoke, nil, nil)
 	root.add("unlearn", func(ctx context.Context, args []string) bool { s.handleCmdUnLearn(ctx, args); return true }, nil, nil)
 	root.add("appear", func(ctx context.Context, args []string) bool { s.handleCmdAppear(ctx, args); return true }, nil, nil)
 	root.add("aura", func(ctx context.Context, args []string) bool { s.handleCmdAura(ctx, args); return true }, nil, nil)

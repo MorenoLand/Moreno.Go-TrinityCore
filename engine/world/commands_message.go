@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -305,4 +306,76 @@ func (s *session) handleCmdWhispers(ctx context.Context, args []string) {
 		return
 	}
 	s.sendSysMessage("Whisper control is unavailable: the Go tree has no accept-whispers flag or whisper white list model.")
+}
+
+// worldChatRaceIcons maps race id to the Achievement_Character_* icon token
+// used by Custom/cs_world_chat.cpp GetNameLink; gender picks Male/Female.
+var worldChatRaceIcons = map[uint8]string{
+	1: "Human", 2: "Orc", 3: "Dwarf", 4: "Nightelf", 5: "Undead",
+	6: "Tauren", 7: "Gnome", 8: "Troll", 10: "Bloodelf", 11: "Draenei",
+}
+
+// worldChatClassColors maps class id to the GetNameLink class color.
+var worldChatClassColors = map[uint8]string{
+	1: "|cffC79C6E", 2: "|cffF58CBA", 3: "|cffABD473", 4: "|cffFFF569",
+	5: "|cffFFFFFF", 6: "|cffC41F3B", 7: "|cff0070DE", 8: "|cff69CCF0",
+	9: "|cff9482C9", 11: "|cffFF7D0A",
+}
+
+// worldChatNameLink mirrors Custom/cs_world_chat.cpp GetNameLink: the player
+// link with the class-colored name and the race icon. Races outside the C++
+// switch leave the RACE_ICON global untouched there (whatever a previous call
+// left, which is unknowable); Go renders it empty, the honest equivalent.
+func worldChatNameLink(name string, race, class, gender uint8) string {
+	icon := ""
+	if token, ok := worldChatRaceIcons[race]; ok {
+		sex := "Male"
+		if gender == 1 { // GENDER_FEMALE
+			sex = "Female"
+		}
+		icon = "|TInterface/ICONS/Achievement_Character_" + token + "_" + sex + ":15|t"
+	}
+	return "|Hplayer:" + name + "|h|cffFFFFFF[" + worldChatClassColors[class] + name + "|r|h|cffFFFFFF] [|r" + icon + "|h|cffFFFFFF]|r"
+}
+
+// handleCmdWorldChat mirrors HandleWorldChatCommand (Custom/cs_world_chat.cpp:176-188,
+// RBAC_PERM_COMMAND_SAVE 525) under its .chat/.c/.world aliases:
+// empty args shows usage (C++ returns false, which shows the help text);
+// the censor arm ("unixmad") reports to GMs via SendGMText(17000) and mutes
+// the session one second (mutetimecensor); the played-time gate blocks
+// accounts under one second of played time (Playedtimetochat) with the
+// secsToTimeString remainder; the broadcast is the [World] name-link line via
+// SendGlobalText (CHAT_MSG_SYSTEM to every session). The SEC_MODERATOR..
+// SEC_CONSOLE switch in _SendWorldChat builds the identical message on every
+// arm, so there is no branch to port. The per-command antispam mute write
+// (mutetimeantispam = 0) is a session no-op in C++ (m_muteTime = now is not
+// > now) and its login-DB statement binds no account id, so it is not
+// ported. The FACTION_SPECIFIC branch is compiled out (FACTION_SPECIFIC 0),
+// leaving the global broadcast. The 1024-char snprintf truncation is kept.
+func (s *session) handleCmdWorldChat(ctx context.Context, args []string) bool {
+	msg, ok := s.messageTailGate(ctx, "Syntax: .chat $message", permissionCommandSave, args)
+	if !ok {
+		return true
+	}
+	s.updatePlayedTime(time.Now())
+	now := time.Now().Unix()
+	if strings.Contains(msg, "unixmad") {
+		// Broadcast-text 17000's exact format lives in BroadcastText.dbc,
+		// which is not in the tree; the name + offending message is the
+		// faithful rendering the Go SendGMText analog can carry.
+		s.server.broadcastMessageChatGM(ctx, s.player.Name+": "+msg)
+		s.sendSysMessage("That word is not allowed on the server.")
+		s.muteTime = now + 1
+		return true
+	}
+	if s.player.TotalPlayedTime <= 1 {
+		s.sendNotification("You must wait until you've played " + secsToTimeStringFull(uint64(1-s.player.TotalPlayedTime)) + " seconds to use world chat!")
+		return true
+	}
+	line := "|h|cffFFFFFF[|r|cffC67171World|r|h|cffFFFFFF]|r " + worldChatNameLink(s.player.Name, s.player.Race, s.player.Class, s.player.Gender) + "|r:  " + msg + " |r"
+	if len(line) > 1023 {
+		line = line[:1023]
+	}
+	s.server.broadcastMessageChatAll(line)
+	return true
 }

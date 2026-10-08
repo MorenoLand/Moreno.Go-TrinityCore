@@ -558,6 +558,7 @@ func (s *Server) Initialize(ctx context.Context) error {
 		return err
 	}
 	s.loadClientCacheVersion(ctx)
+	s.repairGuildRankOverrides(ctx)
 	if err := s.Features.Initialize(ctx); err != nil {
 		return err
 	}
@@ -573,6 +574,36 @@ func (s *Server) Initialize(ctx context.Context) error {
 	s.loadWorldStates(ctx)
 	go s.runWorldTick(ctx)
 	return nil
+}
+
+// repairGuildRankOverrides mirrors the tail of Guild::Load
+// (Guild.cpp:2118-2124): when Guild.AllowMultipleGuildMaster is false (the
+// default), every member holding GR_GUILDMASTER (rank 0) who is not the
+// recorded leader is demoted to GR_OFFICER (rank 1). C++ applies this per
+// guild at startup while loading all guilds; the Go server keeps no
+// in-memory guild registry, so the same demotion runs as a single startup
+// pass over the character database before any session attaches (no players
+// are connected yet, so the in-memory SetRank side of
+// Guild::Member::ChangeRank has nothing to update). A failure here must not
+// fail startup, so it only logs.
+func (s *Server) repairGuildRankOverrides(ctx context.Context) {
+	if s == nil || s.Config.AllowMultipleGuildMaster {
+		return
+	}
+	if s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return
+	}
+	res, err := s.CharactersStore.DB.ExecContext(ctx,
+		"UPDATE guild_member SET `rank` = 1 WHERE `rank` = 0 AND guid <> (SELECT leaderguid FROM guild WHERE guild.guildid = guild_member.guildid)")
+	if err != nil {
+		if s.Logger != nil {
+			s.Logger.Warn("guild rank repair failed", "error", err)
+		}
+		return
+	}
+	if n, err := res.RowsAffected(); err == nil && n > 0 && s.Logger != nil {
+		s.Logger.Info("demoted non-leader guildmasters", "count", n)
+	}
 }
 
 func (s *Server) loadPlayerSecurityLimit(ctx context.Context) error {
