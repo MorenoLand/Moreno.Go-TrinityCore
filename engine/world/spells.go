@@ -6612,7 +6612,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						}
 						tgtDurationMs, tgtPeriodMs, tgtAmount = s.auraEffectParams(effSpell, effEff)
 					}
-					s.applyAuraToTarget(effCtx, auraTarget, effSpell, effEff, tgtDurationMs, tgtPeriodMs, tgtAmount, schoolMask, castMerged, false, s.playerGUID)
+					s.applyAuraToTarget(effCtx, auraTarget, effSpell, effEff, tgtDurationMs, tgtPeriodMs, tgtAmount, schoolMask, castMerged, false, s.playerGUID, false)
 				}
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
 				s.applySelfResurrectEffect(spell)
@@ -8160,7 +8160,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			if schoolMask == 0 {
 				schoolMask = 1
 			}
-			s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false, s.playerGUID)
+			s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false, s.playerGUID, false)
 		} else if eff.Effect == 10 { // SPELL_EFFECT_HEAL
 			healAmount := uint32(eff.BasePoints + 1)
 			if healAmount == 0 && spellID == ProcSpellCrusader {
@@ -8210,7 +8210,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 
 	if !hasExplicitEffects {
 		eff := wotlk.SpellEffect{Effect: 6, Aura: 4}
-		s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, 0, 0, 1, nil, false, s.playerGUID)
+		s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, 0, 0, 1, nil, false, s.playerGUID, false)
 	}
 
 	// Spell::handle_immediate (Spell.cpp:3493, 3613-3626): Go's triggered
@@ -10492,9 +10492,14 @@ type activeAura struct {
 	OwnerPetAuraSourceEffect   uint8
 	OwnerPetAuraSourceDamage   int32
 	OwnerPetAuraRemoveOnChange bool
-	Timer                      *time.Timer
-	TickTimer                  *time.Timer
-	Stopped                    bool
+	// PersistentAreaAura marks auras applied by a persistent-area-aura
+	// (dynobj) effect (dynamic_spells.go): C++ rolls
+	// caster->SpellHitResult per tick for those auras and skips the
+	// tick on a miss (SpellAuraEffects.cpp:5121/5241/5454).
+	PersistentAreaAura bool
+	Timer              *time.Timer
+	TickTimer          *time.Timer
+	Stopped            bool
 }
 
 func isHarmfulAura(auraType uint32) bool {
@@ -10575,6 +10580,23 @@ func magicSpellHitResult(casterLevel, victimLevel uint8, isPlayerVictim bool, bo
 		return protocol.SpellMissMiss
 	}
 	return protocol.SpellMissNone
+}
+
+// persistentAreaTickMissed rolls the per-tick miss for auras applied by a
+// persistent-area-aura (dynobj) effect. C++ skips the tick (and never logs
+// it) when caster->SpellHitResult(target, spell, false) != SPELL_MISS_NONE:
+// SpellAuraEffects.cpp:5121 (periodic damage 3), 5241 (periodic leech 53),
+// and 5454 (mana leech 64) — "Consecrate ticks can miss". Health funnel
+// (62) and power burn (162) carry no such gate in C++ and are excluded.
+// Only the base level-diff miss term is bridged: AOE-avoidance, attacker
+// and victim hit-chance auras, victim CR_HIT_TAKEN_SPELL, spellmods, the
+// mechanic/debuff-resist and deflect rolls, and SPELL_ATTR3_IGNORE_HIT_RESULT
+// have no Go model and stay unbridged.
+func persistentAreaTickMissed(aura *activeAura, victimLevel uint8, isPlayerVictim bool) bool {
+	if aura == nil || !aura.PersistentAreaAura || aura.CasterLevel == 0 {
+		return false
+	}
+	return magicSpellHitResult(aura.CasterLevel, victimLevel, isPlayerVictim) != protocol.SpellMissNone
 }
 
 // isBinarySpell checks whether a spell is binary (i.e. does not deal direct damage,
@@ -12558,7 +12580,7 @@ func isExistingAreaAuraOfTarget(aura *activeAura, exSpell wotlk.Spell, targetGUI
 // (Unit::RemoveAurasDueToSpellBySteal, Unit.cpp:4020:
 // createInfo.SetCasterGUID(aura->GetCasterGUID())) — the no-stack purge's
 // same-caster terms and the wire caster field key on it, not on the stealer.
-func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}, skipSingleCastReg bool, casterGUID uint64) {
+func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}, skipSingleCastReg bool, casterGUID uint64, persistentAreaAura bool) {
 	if s.player == nil {
 		return
 	}
@@ -12789,6 +12811,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			CasterGUID:         casterGUID,
 			TargetGUID:         targetGUID,
 			ChannelTargetGUID:  channelTargetGUID,
+			PersistentAreaAura: persistentAreaAura,
 			SchoolMask:         schoolMask,
 			MiscValue:          eff.MiscValue,
 			Amount:             amount,
@@ -13110,29 +13133,30 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 
 	slot := uint8(len(s.server.activeCreatureAuras[targetKey]) % 64)
 	aura := &activeAura{
-		SpellID:           spell.ID,
-		DispelType:        spell.DispelType,
-		Mechanic:          spell.Mechanic,
-		AuraType:          eff.Aura,
-		EffectMask:        spellEffectMask(spell, eff),
-		CasterGUID:        s.playerGUID,
-		TargetGUID:        targetGUID,
-		TargetKey:         targetKey,
-		SchoolMask:        schoolMask,
-		MiscValue:         eff.MiscValue,
-		Amount:            amount,
-		DurationMs:        durationMs,
-		PeriodMs:          periodMs,
-		RemainingMs:       durationMs,
-		DurationUpdatedAt: time.Now(),
-		Slot:              slot,
-		Positive:          positive,
-		CasterLevel:       s.player.Level,
-		SingleTarget:      isSingleTargetAuraSpell(spell),
-		TriggerSpell:      eff.TriggerSpell,
-		StackAmount:       spell.StackAmount,
-		HideDuration:      spell.AttributesEx5&spellAttr5HideDuration != 0,
-		RemainingCharges:  uint8(spell.ProcCharges),
+		SpellID:            spell.ID,
+		DispelType:         spell.DispelType,
+		Mechanic:           spell.Mechanic,
+		AuraType:           eff.Aura,
+		EffectMask:         spellEffectMask(spell, eff),
+		CasterGUID:         s.playerGUID,
+		TargetGUID:         targetGUID,
+		TargetKey:          targetKey,
+		PersistentAreaAura: persistentAreaAura,
+		SchoolMask:         schoolMask,
+		MiscValue:          eff.MiscValue,
+		Amount:             amount,
+		DurationMs:         durationMs,
+		PeriodMs:           periodMs,
+		RemainingMs:        durationMs,
+		DurationUpdatedAt:  time.Now(),
+		Slot:               slot,
+		Positive:           positive,
+		CasterLevel:        s.player.Level,
+		SingleTarget:       isSingleTargetAuraSpell(spell),
+		TriggerSpell:       eff.TriggerSpell,
+		StackAmount:        spell.StackAmount,
+		HideDuration:       spell.AttributesEx5&spellAttr5HideDuration != 0,
+		RemainingCharges:   uint8(spell.ProcCharges),
 	}
 	s.server.activeCreatureAuras[targetKey][spell.ID] = aura
 	// Unit::_AddAura single-target dance (Unit.cpp:3397-3420): a fresh
@@ -13252,6 +13276,11 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 
 	switch aura.AuraType {
 	case 3, 89: // SPELL_AURA_PERIODIC_DAMAGE, SPELL_AURA_PERIODIC_DAMAGE_PERCENT
+		// SpellAuraEffects.cpp:5121 — persistent-area-aura (dynobj) DoT
+		// ticks roll SpellHitResult per tick; missed ticks skip and log nothing.
+		if persistentAreaTickMissed(aura, ts.player.Level, true) {
+			return
+		}
 		dmg := aura.Amount
 		var tickSpell wotlk.Spell
 		tickKnown := false
@@ -13450,6 +13479,11 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		ts.adjustSpellPower(context.Background(), aura.TargetGUID, aura.MiscValue, int64(aura.Amount))
 
 	case 53: // SPELL_AURA_PERIODIC_LEECH
+		// SpellAuraEffects.cpp:5241 — the same persistent-area-aura
+		// per-tick miss gate as case 3.
+		if persistentAreaTickMissed(aura, ts.player.Level, true) {
+			return
+		}
 		// SpellAuraEffects.cpp:5232-5321 (HandlePeriodicHealthLeechAuraTick):
 		// the leech damage side runs the same taken->crit->armor->resilience->
 		// absorb/resist funnel as damage ticks; the dynobj done leg is already
@@ -13573,6 +13607,11 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 
 	case 64: // SPELL_AURA_PERIODIC_MANA_LEECH
+		// SpellAuraEffects.cpp:5454 — the same persistent-area-aura
+		// per-tick miss gate as case 3.
+		if persistentAreaTickMissed(aura, ts.player.Level, true) {
+			return
+		}
 		// SpellAuraEffects.cpp:5441-5504 (HandlePeriodicManaLeechAuraTick):
 		// the target loses drainAmount power and the caster gains it back.
 		powerType := aura.MiscValue
@@ -13715,6 +13754,16 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if int(burnPowerType) >= len(ts.player.MaxPowers) || ts.player.MaxPowers[burnPowerType] == 0 {
 			break
 		}
+		// Unit::CalculateSpellDamageTaken (Unit.cpp:999-1000): FIXED_DAMAGE
+		// spells skip armor and the resilience leg; absorb/resist still run.
+		// No 3.3.5 power-burn spell carries the flag, but the gate is
+		// structural parity for custom data.
+		burnFixedDamage := false
+		if ts.server != nil && ts.server.Data != nil {
+			if burnSpell, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
+				burnFixedDamage = burnSpell.AttributesEx4&spellAttr4FixedDamage != 0
+			}
+		}
 		burnDamage := aura.Amount
 		// SpellAuraEffects.cpp:5596-5598 — resilience cuts mana burns at
 		// the spell-crit-damage reduction rate (added in 2.4).
@@ -13737,7 +13786,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// ValueMultiplier DBC field has no Go model; burn spells carry
 		// 1.0, so the damage equals the drained amount.
 		dmg := burnDealt
-		if aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
+		if !burnFixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
 			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, dmg)
 		}
 		burnResisted := uint32(0)
@@ -13985,6 +14034,12 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 
 	switch aura.AuraType {
 	case 3, 89: // SPELL_AURA_PERIODIC_DAMAGE, SPELL_AURA_PERIODIC_DAMAGE_PERCENT
+		// SpellAuraEffects.cpp:5121 — persistent-area-aura (dynobj) DoT
+		// ticks roll SpellHitResult per tick; a miss skips the tick but
+		// keeps the chain alive (true).
+		if persistentAreaTickMissed(aura, target.Level, false) {
+			return true
+		}
 		dmg := aura.Amount
 		var tickSpell wotlk.Spell
 		tickKnown := false
@@ -14222,6 +14277,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		return true
 
 	case 53: // SPELL_AURA_PERIODIC_LEECH
+		// SpellAuraEffects.cpp:5241 — the same persistent-area-aura
+		// per-tick miss gate as case 3; a miss keeps the chain alive.
+		if persistentAreaTickMissed(aura, target.Level, false) {
+			return true
+		}
 		// SpellAuraEffects.cpp:5232-5321 (HandlePeriodicHealthLeechAuraTick):
 		// the leech damage side runs the same taken->crit->armor->resilience->
 		// absorb/resist funnel as damage ticks; the dynobj done leg is already
@@ -14365,6 +14425,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		return true
 
 	case 64: // SPELL_AURA_PERIODIC_MANA_LEECH
+		// SpellAuraEffects.cpp:5454 — the same persistent-area-aura
+		// per-tick miss gate as case 3; a miss keeps the chain alive.
+		if persistentAreaTickMissed(aura, target.Level, false) {
+			return true
+		}
 		// SpellAuraEffects.cpp:5441-5504 (HandlePeriodicManaLeechAuraTick) on
 		// a creature target. Creature power lives on the motion
 		// (Powers/MaxPowers) and drains directly under motionMu —
@@ -14555,8 +14620,16 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		}
 		// gainMultiplier = 1.0 (no Go ValueMultiplier model); the damage
 		// equals the drained amount.
+		// Unit::CalculateSpellDamageTaken (Unit.cpp:999-1000): FIXED_DAMAGE
+		// spells skip the armor leg; absorb/resist still run (below).
+		burnFixedDamage := false
+		if s.server != nil && s.server.Data != nil {
+			if burnSpell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+				burnFixedDamage = burnSpell.AttributesEx4&spellAttr4FixedDamage != 0
+			}
+		}
 		dmg := drained
-		if aura.SchoolMask&1 != 0 && target.Armor > 0 {
+		if !burnFixedDamage && aura.SchoolMask&1 != 0 && target.Armor > 0 {
 			dmg = calcArmorReducedDamage(float64(target.Armor), aura.CasterLevel, dmg)
 		}
 		burnResisted := uint32(0)
