@@ -2803,13 +2803,19 @@ func (s *session) handleEffectPickpocket(ctx context.Context, targetGUID uint64,
 }
 
 // handleEffectOpenLock mirrors the gameobject arm of Spell::EffectOpenLock
-// (SpellEffects.cpp:2020-2042): after CanOpenLock (already enforced by
-// checkOpenLockCast), a gameobject target opens its loot window as
-// LOOT_SKINNING — the disarm-trap arm. The itemTarget arm
-// (ITEM_FIELD_FLAG_UNLOCKED, SpellEffects.cpp:2032-2035) has no Go model:
-// nothing in the Go item path sets per-item lock state (the open-item leg
-// refuses any LockID outright), so there is no unlockable item to flag —
-// documented no-bridge.
+// (SpellEffects.cpp:1948-2042) as routed through Spell::SendLoot
+// (SpellEffects.cpp:1875-1946): after CanOpenLock (already enforced by
+// checkOpenLockCast), a door or button target opens via UseDoorOrButton with
+// no loot window (Spell::SendLoot, SpellEffects.cpp:1908-1911); every other
+// lockable GO target opens its loot window as LOOT_SKINNING — the disarm-trap
+// arm. The itemTarget arm (ITEM_FIELD_FLAG_UNLOCKED, SpellEffects.cpp:2032-2035)
+// has no Go model: nothing in the Go item path sets per-item lock state (the
+// open-item leg refuses any LockID outright), so there is no unlockable item
+// to flag — documented no-bridge. The spell-1842 owned-trap deactivation arm
+// (SpellEffects.cpp:1994-1998) is unreachable: Go spawns no player-owned trap
+// GOs. The despawned-GO cheat gate (SpellEffects.cpp:1883-1889) is moot: Go
+// never despawns static GOs. The GOOBER Use arm, QUESTGIVER gossip arm, and
+// SPELL_FOCUS linked-trap arm have no Go trigger on this path.
 func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.SpellTargetData, spell wotlk.Spell, eff wotlk.SpellEffect) {
 	if s == nil || s.player == nil || s.server == nil {
 		return
@@ -2820,6 +2826,25 @@ func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.Spel
 	}
 	if goGUID == 0 {
 		return
+	}
+	// Spell::SendLoot DOOR/BUTTON arm: a pick-locked door or button opens
+	// instead of showing a loot window. The arm returns before
+	// Player::SendLoot, so no previous-loot release runs here.
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		entry := uint32((goGUID >> 24) & 0xFFFFFF)
+		var goType int64
+		if err := s.server.WorldStore.DB.QueryRowContext(context.Background(),
+			"SELECT COALESCE(type, 0) FROM gameobject_template WHERE entry = ? LIMIT 1", entry).Scan(&goType); err == nil {
+			if uint8(goType) == GameObjectTypeDoor || uint8(goType) == GameObjectTypeButton {
+				s.server.useDoorOrButton(s.player.Map, s.player.InstanceID, goGUID)
+				return
+			}
+		}
+	}
+	// Player::SendLoot head (Player.cpp:8526-8527): opening new loot releases
+	// the previously open window first; skipped for a same-target re-open.
+	if prev := s.activeLoot; prev != nil && prev.TargetGUID != goGUID {
+		s.doLootRelease(prev)
 	}
 	s.openGameObjectLoot(ctx, goGUID, lootTypeSkinning, 20.0)
 }

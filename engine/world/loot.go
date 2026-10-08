@@ -1920,6 +1920,12 @@ func (s *session) openSkinningLoot(ctx context.Context, targetGUID uint64, entry
 	wdb := s.server.WorldStore.DB
 	guid := uint32(targetGUID & 0x00FFFFFF)
 	stdKey := creatureWorldGUID(guid, entry)
+	// Player::SendLoot head (Player.cpp:8526-8527): opening new loot releases
+	// the previously open window first; skipped for a same-target re-open so
+	// the state object the skinning arm reuses survives.
+	if prev := s.activeLoot; prev != nil && prev.TargetGUID != targetGUID {
+		s.doLootRelease(prev)
+	}
 	s.server.lootMu.Lock()
 	key := lootObjectKey{MapID: s.player.Map, InstanceID: s.player.InstanceID, GUID: targetGUID}
 	standardKey := lootObjectKey{MapID: s.player.Map, InstanceID: s.player.InstanceID, GUID: stdKey}
@@ -1999,6 +2005,12 @@ func (s *session) openPickpocketLoot(ctx context.Context, targetGUID uint64, ent
 	wdb := s.server.WorldStore.DB
 	guid := uint32(targetGUID & 0x00FFFFFF)
 	stdKey := creatureWorldGUID(guid, entry)
+	// Player::SendLoot head (Player.cpp:8526-8527): opening new loot releases
+	// the previously open window first; skipped for a same-target re-open so
+	// the state object the pickpocket arm reuses survives.
+	if prev := s.activeLoot; prev != nil && prev.TargetGUID != targetGUID {
+		s.doLootRelease(prev)
+	}
 	s.server.lootMu.Lock()
 	key := lootObjectKey{MapID: s.player.Map, InstanceID: s.player.InstanceID, GUID: targetGUID}
 	standardKey := lootObjectKey{MapID: s.player.Map, InstanceID: s.player.InstanceID, GUID: stdKey}
