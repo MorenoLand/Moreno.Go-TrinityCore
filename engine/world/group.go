@@ -1722,10 +1722,15 @@ func (s *session) handleResetInstances(ctx context.Context, payload []byte) bool
 				}
 			}
 
-			// Clean up non-permanent instance bindings for group members in DB
+			// Clean up non-permanent instance bindings for group members in DB.
+			// InstanceSaveMgr::DeleteInstanceSaveIfNeeded / InstanceMap::UnloadAll
+			// (InstanceSaveMgr.cpp:618, Map.cpp:4182): resetting an instance also
+			// deletes its corpse rows (Map::DeleteCorpseData — DELETE FROM corpse
+			// WHERE mapId = ? AND instanceId = ?) so no corpse survives the reset.
 			if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 				cdb := s.server.CharactersStore.DB
 				for _, mem := range grp.Members {
+					s.deleteCorpseDataForResetBinds(ctx, mem.GUID)
 					_, _ = cdb.ExecContext(ctx, "DELETE FROM character_instance WHERE guid = ? AND permanent = 0", mem.GUID)
 				}
 			}
@@ -1753,6 +1758,7 @@ func (s *session) handleResetInstances(ctx context.Context, payload []byte) bool
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
+		s.deleteCorpseDataForResetBinds(ctx, s.playerGUID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_instance WHERE guid = ? AND permanent = 0", s.playerGUID)
 	}
 
