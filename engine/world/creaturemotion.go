@@ -1446,7 +1446,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		} else if aggroDist > 45.0 {
 			aggroDist = 45.0
 		}
-		if !isCreaturePassive(motion) && s.isAttackableFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) {
+		if !isCreaturePassive(motion) && s.isAttackableFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist) && !noGrayAggroBlocked(uint32(p.Level), motion.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) {
 			s.debug("creature aggro", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "player_guid", p.GUID, "player_zone", p.Sess.player.Zone)
 			// Eluna CREATURE_EVENT_ON_MOVE_IN_LOS (27): a boolean true vetoes
 			// the default aggro engage, mirroring ElunaCreatureAI::
@@ -1473,8 +1473,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// non-dungeon victim must sit within visibility-range/2-cell of
 			// home unless recently damaged or taunted; Go puts no
 			// home-proximity limit on acquisition); the gray-aggro config
-			// (CheckNoGrayAggroConfig, Creature.cpp:2006-2019 — vacuous under
-			// the default NoGrayAggro.Above/Below = 0 config, World.cpp:1299);
+			// (CheckNoGrayAggroConfig, Creature.cpp:2000-2013) is bridged in
+			// the guard above via noGrayAggroBlocked — vacuous under the
+			// default NoGrayAggro.Above/Below = 0 config (World.cpp:1299);
 			// the immune-to-NPC/PC target pairing of CanStartAttack
 			// (Creature.cpp:1964-1970 — creatureCombatDisabled only models the
 			// creature-side IMMUNE_TO_PC bit, not the target-side pairing);
@@ -1645,12 +1646,30 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	motion.WaitUntil = motion.MoveEnds.Add(wait)
 }
 
+// noGrayAggroBlocked ports Creature::CheckNoGrayAggroConfig
+// (Creature.cpp:2000-2013): a creature never starts an attack on a player
+// whose level renders it gray (mob_level <= GetGrayLevel(player_level),
+// the XP_GRAY fallthrough of Formulas::XP::GetColorCode) when the
+// NoGrayAggro.Above/Below custom switches say so — vacuous when both are 0
+// (the default). The OnColorCodeCalculation script hook has no Go model.
+func noGrayAggroBlocked(playerLevel, creatureLevel uint32, above, below uint32) bool {
+	if creatureLevel > grayLevel(playerLevel) {
+		return false
+	}
+	if above == 0 && below == 0 {
+		return false
+	}
+	return playerLevel <= below || (playerLevel >= above && above > 0)
+}
+
 // canCreatureStartAttack mirrors the range arms of Creature::CanStartAttack
 // (Creature.cpp:1960-2004): the non-flyer Z check (CREATURE_Z_ATTACK_RANGE,
 // Creature.h:57 — the + m_CombatDistance term is unmodeled) and the
 // GetAttackDistance distance check (C++ also adds m_CombatDistance there).
-// The civilian, immunity, _IsTargetAcceptable, and gray-aggro arms live in
-// the aggro scan's guard and its audit note above.
+// The civilian, immunity, and _IsTargetAcceptable arms live in the aggro
+// scan's guard and its audit note above; the gray-aggro arm
+// (CheckNoGrayAggroConfig) is wired in the scan guard before the LOS check,
+// matching the C++ position ahead of IsWithinLOSInMap.
 func canCreatureStartAttack(motion *creatureMotion, target playerPos, distance, attackDistance float32) bool {
 	return motion != nil && (motion.CanFly || math.Abs(float64(target.Z-motion.Z)) <= 3.0) && distance <= attackDistance
 }

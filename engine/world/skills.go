@@ -430,7 +430,10 @@ func (s *session) resetTalents(ctx context.Context, free bool) bool {
 		return true // nothing spent, nothing to reset
 	}
 	cost := uint32(0)
-	if !free {
+	// Player::ResetTalents (Player.cpp:4008): the escalating cost is skipped
+	// when the reset is free OR the NoResetTalentsCost custom switch is on
+	// (World.cpp:1408, default false).
+	if !free && !s.server.Config.NoResetTalentsCost {
 		cost = s.resetTalentsCost()
 		if s.player.Money < cost {
 			return false

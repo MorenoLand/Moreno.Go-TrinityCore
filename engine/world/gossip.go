@@ -330,10 +330,13 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			wipeBuf := protocol.NewBuffer(12)
 			wipeBuf.WriteU64(guid)
 			// Player::SendTalentWipeConfirm (Player.cpp:9605): the prompt shows
-			// the same escalating ResetTalentsCost the confirm handler charges;
-			// the CONFIG_NO_RESET_TALENT_COST zero-cost config arm has no Go
-			// model.
-			wipeBuf.WriteU32(s.resetTalentsCost())
+			// the same escalating ResetTalentsCost the confirm handler charges,
+			// zeroed by the NoResetTalentsCost custom switch (Player.cpp:9607).
+			wipeCost := s.resetTalentsCost()
+			if s.server.Config.NoResetTalentsCost {
+				wipeCost = 0
+			}
+			wipeBuf.WriteU32(wipeCost)
 			if err := s.write(uint16(protocol.OpcodeMSG_TALENT_WIPE_CONFIRM), wipeBuf.Bytes(), true); err != nil {
 				return false
 			}

@@ -168,6 +168,13 @@ func grayLevel(playerLevel uint32) uint32 {
 	}
 }
 
+// xpBoostActiveToday ports the IsXPBoostActive gate of boosted_xp.cpp: the
+// XP.Boost.Daymask bit for today's weekday must be set (1 = Sunday, matching
+// tm_wday from TimeBreakdown, i.e. Go's time.Weekday numbering).
+func xpBoostActiveToday(daymask uint32) bool {
+	return daymask&(1<<uint(time.Now().Weekday())) != 0
+}
+
 // zeroDifference ports Formulas::XP::GetZeroDifference.
 func zeroDifference(playerLevel uint32) uint32 {
 	switch {
@@ -734,6 +741,18 @@ func (s *session) grantXPWithVictimGroup(ctx context.Context, amount uint32, vic
 	// AutoBalance.enable, only on victim && DungeonScaleDownXP.
 	if victimGUID != 0 && s.server.Config.AutoBalance.DungeonScaleDownXP {
 		amount = s.server.autoBalanceScaleDungeonXP(ctx, s, amount)
+		if amount == 0 {
+			return
+		}
+	}
+	// xp_boost_PlayerScript::OnGiveXP (boosted_xp.cpp:40-46): when the
+	// XP.Boost.Daymask bit for today's weekday is set (1 = Sunday, matching
+	// tm_wday), the XP amount is multiplied by XP.Boost.Rate with the C++
+	// uint32 *= float truncation. Fires after the AutoBalance hook: the
+	// CMake script-module glob orders Custom before World, so the Custom
+	// module's OnGiveXP runs first in FOREACH_SCRIPT order.
+	if daymask := s.server.Config.XPBoostDaymask; daymask != 0 && xpBoostActiveToday(daymask) {
+		amount = uint32(float64(amount) * s.server.Config.XPBoostRate)
 		if amount == 0 {
 			return
 		}

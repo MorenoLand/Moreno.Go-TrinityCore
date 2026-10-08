@@ -2158,6 +2158,16 @@ func (s *session) endDuel(won bool, winnerGUID uint64, fled bool) {
 		if winnerSess != nil {
 			winnerSess.castVisualSpell(52852)
 			winnerSess.updateAchievementCriteria(criteriaTypeWinDuel, 0, 1)
+			// Honor points after duel (Player.cpp:7388-7390): the DUEL_WON
+			// arm (not DUEL_FLED) grants the winner HonorPointsAfterDuel
+			// honor via RewardHonor(nullptr, 1, amount). The /forfeit path
+			// above completes as DUEL_WON (DuelHandler.cpp:71), so the
+			// winner takes the honor there too.
+			if !fled && s.server != nil {
+				if amount := s.server.Config.HonorPointsAfterDuel; amount > 0 {
+					winnerSess.rewardHonorPoints(context.Background(), amount)
+				}
+			}
 		}
 		// Loser casts 7267 (Beg / surrender kneel) if won normally
 		if !fled && loserSess != nil {
