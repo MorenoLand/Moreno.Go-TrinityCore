@@ -215,7 +215,7 @@ func (s *Server) fillLootTemplate(ctx context.Context, wdb *sql.DB, table string
 func (s *Server) fillLootTemplateDepth(ctx context.Context, wdb *sql.DB, table string, lootID int64, lootMode uint32, loot *activeLootState, slot, qidx *uint8, depth int) {
 	switch table {
 	case "creature_loot_template", "gameobject_loot_template", "skinning_loot_template",
-		"pickpocketing_loot_template", "reference_loot_template":
+		"pickpocketing_loot_template", "reference_loot_template", "spell_loot_template":
 	default:
 		return
 	}
@@ -3534,6 +3534,73 @@ func (s *Server) deliverDisenchantMats(ctx context.Context, roll *activeGroupRol
 		remBuf := protocol.NewBuffer(1)
 		remBuf.WriteU8(uint8(roll.Slot))
 		s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_REMOVED), remBuf.Bytes())
+	}
+}
+
+// autoStoreSpellLoot mirrors Player::AutoStoreLoot (Player.cpp:25030-25057)
+// for the spell_loot_template arms: Spell::EffectCreateItem2's loot-crafting
+// path (SpellEffects.cpp:1701, broadcast=false, createdByPlayer=true) and
+// Spell::EffectCreateRandomItem (SpellEffects.cpp:1725, broadcast=false,
+// createdByPlayer=false). The template rolls once (LootTemplates_Spell),
+// then every rolled row is stored with the per-row equip-error skip
+// (Player.cpp:25038-25045); each stored row sends SendNewItem(pItem, count,
+// received=false, created=createdByPlayer, broadcast=false)
+// (Player.cpp:25051). Rows land in slot order, quest rows after normal rows,
+// matching LootItemInSlot's walk over GetMaxSlotInLootFor.
+func (s *session) autoStoreSpellLoot(ctx context.Context, playerGUID uint64, spellID uint32, createdByPlayer bool) {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	ps := s
+	if ts := s.server.findSessionByGUID(playerGUID); ts != nil {
+		ps = ts
+	}
+	loot := &activeLootState{Items: make(map[uint8]lootItem), QuestItems: make(map[uint8]lootItem)}
+	s.server.fillLootTemplate(ctx, s.server.WorldStore.DB, "spell_loot_template", int64(spellID), lootModeDefault, loot)
+	created := uint32(0)
+	if createdByPlayer {
+		created = 1
+	}
+	store := func(item, count uint32) {
+		res, err := ps.storeOrStackItem(ctx, playerGUID, item, count)
+		if err != nil {
+			ps.sendEquipError(equipErrInvFull, 0)
+			return
+		}
+		_ = ps.sendInventoryItems(ctx)
+		ps.sendPlayerUpdate()
+		slotForPush := uint32(res.Slot)
+		if res.IsStack {
+			slotForPush = 0xFFFFFFFF
+		}
+		packet := protocol.NewBuffer(48)
+		packet.WriteU64(playerGUID)
+		packet.WriteU32(0) // received
+		packet.WriteU32(created)
+		packet.WriteU32(0) // chat
+		packet.WriteU8(res.ClientBag)
+		packet.WriteU32(slotForPush)
+		packet.WriteU32(item)
+		packet.WriteU32(0)
+		packet.WriteI32(0)
+		packet.WriteU32(count)
+		packet.WriteU32(res.InventoryCount)
+		_ = ps.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), packet.Bytes(), true)
+	}
+	for i := uint8(0); i < loot.NormalSlotCount; i++ {
+		if li, ok := loot.Items[i]; ok && li.Count > 0 {
+			store(li.ItemEntry, li.Count)
+		}
+	}
+	qindices := make([]uint8, 0, len(loot.QuestItems))
+	for qidx := range loot.QuestItems {
+		qindices = append(qindices, qidx)
+	}
+	sort.Slice(qindices, func(i, j int) bool { return qindices[i] < qindices[j] })
+	for _, qidx := range qindices {
+		if qi, ok := loot.QuestItems[qidx]; ok && qi.Count > 0 {
+			store(qi.ItemEntry, qi.Count)
+		}
 	}
 }
 

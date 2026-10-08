@@ -269,6 +269,7 @@ const (
 	spellEffectHealMaxHealth           = 67
 	spellEffectCreateItem              = 24
 	spellEffectCreateItem2             = 70
+	spellEffectCreateRandomItem        = 59 // SPELL_EFFECT_CREATE_RANDOM_ITEM (SpellEffects.cpp:128)
 	spellEffectLearnSpell              = 36
 	spellEffectLearnPetSpell           = 57 // SPELL_EFFECT_LEARN_PET_SPELL (SharedDefines.h:868)
 	spellEffectAddExtraAttacks         = 19 // SPELL_EFFECT_ADD_EXTRA_ATTACKS (SharedDefines.h:830)
@@ -6687,6 +6688,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff)
 			case spellEffectCreateItem2: // 70: SPELL_EFFECT_CREATE_ITEM_2
 				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff)
+			case spellEffectCreateRandomItem: // 59: SPELL_EFFECT_CREATE_RANDOM_ITEM
+				s.handleEffectCreateRandomItem(effCtx, targetGUID, spell, eff)
 			case spellEffectSkinning: // 95: SPELL_EFFECT_SKINNING
 				s.handleEffectSkinning(effCtx, targetGUID, spell, eff)
 			case spellEffectPickpocket: // 71: SPELL_EFFECT_PICKPOCKET
@@ -17935,6 +17938,25 @@ func (s *session) checkSpellEquippedItemRequirements(ctx context.Context, spell 
 }
 
 func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
+	// Spell::EffectCreateItem2 (SpellEffects.cpp:1697-1711): loot-crafting
+	// spells (SpellInfo::IsLootCrafting, SpellInfo.cpp:939) roll their
+	// result from spell_loot_template via Player::AutoStoreLoot instead of
+	// creating the effect's ItemType directly. Spell::EffectCreateItem (24)
+	// never takes this arm.
+	if eff.Effect == spellEffectCreateItem2 && spellIsLootCrafting(spell) {
+		playerGUID := targetGUID
+		if playerGUID == 0 {
+			playerGUID = s.playerGUID
+		}
+		if playerGUID == 0 {
+			return
+		}
+		s.autoStoreSpellLoot(ctx, playerGUID, spell.ID, true)
+		// Player::UpdateCraftSkill (Player.cpp:5789) has no Go model: it
+		// needs the skill_line_ability DBC mapping plus the profession
+		// skill-gain formula, neither of which exists in Go.
+		return
+	}
 	if eff.ItemType == 0 {
 		return
 	}
@@ -17952,6 +17974,34 @@ func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64,
 	if _, err := s.storeOrStackItem(ctx, playerGUID, eff.ItemType, uint32(count)); err != nil {
 		return
 	}
+}
+
+// handleEffectCreateRandomItem mirrors Spell::EffectCreateRandomItem
+// (SpellEffects.cpp:1713-1725): the effect fires only with a player unit
+// target, and the created item is rolled from spell_loot_template via
+// Player::AutoStoreLoot (Player.cpp:25030).
+func (s *session) handleEffectCreateRandomItem(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
+	playerGUID := targetGUID
+	if playerGUID == 0 {
+		playerGUID = s.playerGUID
+	}
+	if playerGUID == 0 {
+		return
+	}
+	s.autoStoreSpellLoot(ctx, playerGUID, spell.ID, false)
+}
+
+// spellIsLootCrafting mirrors SpellInfo::IsLootCrafting (SpellInfo.cpp:939):
+// effect 59 (SPELL_EFFECT_CREATE_RANDOM_ITEM), or effect 70
+// (SPELL_EFFECT_CREATE_ITEM_2) with a totem category, a totem + icon 1
+// (the different random cards from Inscription), or no explicit item.
+func spellIsLootCrafting(spell wotlk.Spell) bool {
+	e0 := spell.Effects[0]
+	if e0.Effect == spellEffectCreateRandomItem {
+		return true
+	}
+	return e0.Effect == spellEffectCreateItem2 &&
+		(spell.RequiredTotemCategory[0] != 0 || (spell.Totem[0] != 0 && spell.SpellIconID == 1) || e0.ItemType == 0)
 }
 
 func (s *session) handleEffectResurrect(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
