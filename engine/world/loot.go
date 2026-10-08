@@ -236,7 +236,8 @@ func (s *Server) lootMaxDuplicates(mapID uint32, raidDifficulty uint8) uint8 {
 func (s *Server) fillLootTemplateDepth(ctx context.Context, wdb *sql.DB, table string, lootID int64, lootMode uint32, loot *activeLootState, slot, qidx *uint8, groupSel uint8, depth int) {
 	switch table {
 	case "creature_loot_template", "gameobject_loot_template", "skinning_loot_template",
-		"pickpocketing_loot_template", "reference_loot_template", "spell_loot_template":
+		"pickpocketing_loot_template", "reference_loot_template", "spell_loot_template",
+		"item_loot_template":
 	default:
 		return
 	}

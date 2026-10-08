@@ -2500,7 +2500,12 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 			return true
 		}
 
-		// Container opening: check item_loot_template
+		// Container opening (Player::SendLoot item arm, Player.cpp:8665-8710):
+		// OWNER_PERMISSION, per-item stored loot, money rolled from the item
+		// template BEFORE the template fill (Player.cpp:8699), and the
+		// default arm's personal FillLoot(item_loot_template) — the
+		// disenchant/prospect/mill arms never apply here (Go has no
+		// EffectDisenchant/EffectProspecting/EffectMilling handlers).
 		var lootSource *sql.DB
 		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 			lootSource = s.server.WorldStore.DB
@@ -2509,59 +2514,37 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 		}
 
 		if lootSource != nil {
-			rows, qErr := lootSource.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Flags, 0)
-				FROM item_loot_template AS l
-				LEFT JOIN item_template AS t ON t.entry = l.Item
-				WHERE l.Entry = ? ORDER BY l.Item LIMIT 16`, itemEntry)
-			if qErr == nil {
-				loot := &activeLootState{
-					TargetGUID: uint64(itemGUID),
-					MapID:      s.player.Map,
-					InstanceID: s.player.InstanceID,
-					LootType:   1,
-					Items:      make(map[uint8]lootItem),
-				}
-				var lSlot uint8 = 0
-				for rows.Next() {
-					var itemID int64
-					var chance float64
-					var minCount, maxCount, displayID, flags int64
-					if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &flags); err == nil {
-						roll := rand.Float64() * 100.0
-						if chance <= 0 || roll <= chance {
-							count := uint32(minCount)
-							if maxCount > minCount {
-								count += uint32(rand.Intn(int(maxCount - minCount + 1)))
-							}
-							if count == 0 {
-								count = 1
-							}
-							loot.Items[lSlot] = lootItem{
-								Slot:          lSlot,
-								ItemEntry:     uint32(itemID),
-								Count:         count,
-								DisplayInfoID: uint32(displayID),
-								FreeForAll:    uint32(flags)&itemFlagMultiDrop != 0,
-							}
-							lSlot++
-							if lSlot >= 16 {
-								break
-							}
-						}
-					}
-				}
-				rows.Close()
+			loot := &activeLootState{
+				TargetGUID: uint64(itemGUID),
+				MapID:      s.player.Map,
+				InstanceID: s.player.InstanceID,
+				LootType:   1,
+				Items:      make(map[uint8]lootItem),
+				// Loot::FillLoot personal arm (Loot.cpp:214-232): the item
+				// fill passes personal=true, so quest rows belong to the
+				// opener alone (viewerQuestLootList pins on this).
+				QuestPersonalGUID: s.playerGUID,
+			}
+			// Player.cpp:8699: generateMoneyLoot(MinMoneyLoot, MaxMoneyLoot)
+			// runs before the template fill; the fill's noEmptyError arm is
+			// (gold != 0), so money alone still opens a window.
+			var minMoney, maxMoney int64
+			_ = lootSource.QueryRowContext(ctx, "SELECT MinMoneyLoot, MaxMoneyLoot FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&minMoney, &maxMoney)
+			loot.Money = generateMoneyLootValue(minMoney, maxMoney)
+			s.server.fillLootTemplate(ctx, lootSource, "item_loot_template", int64(itemEntry), lootModeDefault, loot)
+			// FillNotNormalLootFor (Loot.cpp:246-266) auto-stores
+			// currency-token rows straight into the opener's bags.
+			s.server.autoStoreLootCurrencyTokens(ctx, loot, s)
 
-				if len(loot.Items) > 0 {
-					s.server.lootMu.Lock()
-					if s.server.creatureLoot == nil {
-						s.server.creatureLoot = make(map[lootObjectKey]*activeLootState)
-					}
-					s.server.creatureLoot[loot.objectKey()] = loot
-					s.server.lootMu.Unlock()
-					s.activeLoot = loot
-					return s.sendLootResponse(ctx, loot) == nil
+			if len(loot.Items) > 0 || len(loot.QuestItems) > 0 || loot.Money > 0 {
+				s.server.lootMu.Lock()
+				if s.server.creatureLoot == nil {
+					s.server.creatureLoot = make(map[lootObjectKey]*activeLootState)
 				}
+				s.server.creatureLoot[loot.objectKey()] = loot
+				s.server.lootMu.Unlock()
+				s.activeLoot = loot
+				return s.sendLootResponse(ctx, loot) == nil
 			}
 		}
 	}
