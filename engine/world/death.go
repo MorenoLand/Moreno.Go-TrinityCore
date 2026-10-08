@@ -657,8 +657,9 @@ func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 	s.pvpDeath = false
 	// Player::CreateCorpse (Player.cpp:4845-4846): the LOOTABLE flag is a
 	// battleground arm (InBattleground(), Player.h:1906); Go mirrors it with
-	// the session BG instance id. Both the DB row and the visible corpse
-	// object carry the same flags.
+	// the session BG instance id. The visible corpse object always carries
+	// these flags; the DB row only exists outside battlegrounds (the
+	// BG/arena save-skip at Player.cpp:4867-4868, gated in buildPlayerRepop).
 	bgLootable := s.bgData.InstanceID != 0
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		// Reference Corpse::SaveToDB deletes any previous record first.
@@ -667,11 +668,21 @@ func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 		// on a fresh corpse — and instanceId is the map's instance id
 		// (Corpse::SaveToDB writes GetInstanceId(), Object.cpp:1846), 0 on
 		// world maps, the dungeon/BG instance id elsewhere.
+		// Player::CreateCorpse (Player.cpp:4867-4868) skips the DB save when
+		// the map is a battleground or arena — "we do not need to save
+		// corpses for BG/arenas" — while still creating the in-memory corpse
+		// object (with the LOOTABLE flag for the insignia). Go has no arena
+		// system, so the gate is the battleground leg only: the old row is
+		// still deleted (C++ ConvertCorpseToBones deletes it outside the
+		// gate), but no new row is written, so BG deaths leave no stale
+		// corpse row behind for the reclaim / map-admission / login loaders.
 		bytes1, bytes2 := corpseAppearance(s.player)
 		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_DEL_CORPSE", s.playerGUID)
-		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_CORPSE",
-			s.playerGUID, s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.Map,
-			displayID, s.player.Equipment, bytes1, bytes2, s.player.GuildID, corpseFlags(s.player, bgLootable), 0, time.Now().Unix(), corpseType, s.player.InstanceID, s.currentPlayerPhaseMask())
+		if !bgLootable {
+			_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_CORPSE",
+				s.playerGUID, s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.Map,
+				displayID, s.player.Equipment, bytes1, bytes2, s.player.GuildID, corpseFlags(s.player, bgLootable), 0, time.Now().Unix(), corpseType, s.player.InstanceID, s.currentPlayerPhaseMask())
+		}
 	}
 
 	s.player.PlayerFlags |= playerFlagGhost
