@@ -1620,8 +1620,9 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 			// gate: C++ hides these slots instead of rejecting the take.)
 			if grp.LootMethod == 2 && isOverThreshold &&
 				!(isQuestItem && it.CustomFlags&itemFlagsCuFollowLootRules == 0) {
-				// Master loot item must be given by master looter
-				return true
+				// Player::StoreLootItem (Player.cpp:25076-25080): a blocked
+				// item answers with SendLootRelease, not a silent drop.
+				return s.sendLootReleaseResponse(s.activeLoot.TargetGUID) == nil
 			}
 			if (grp.LootMethod == 3 || grp.LootMethod == 4) && isOverThreshold {
 				rollKey := lootRollKey{Object: s.activeLoot.objectKey(), Slot: uint32(it.Slot)}
