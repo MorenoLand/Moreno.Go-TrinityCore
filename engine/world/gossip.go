@@ -111,7 +111,7 @@ func (s *session) helloCreatureNPC(ctx context.Context, payload []byte, required
 		}
 	}
 	if s.gossip == nil && !s.gossipClosed {
-		defaultMenu, err := s.prepareCreatureGossip(ctx, guid, entry, npcFlags, objectUint32OrZero(creature, "GossipMenuID"))
+		defaultMenu, err := s.prepareCreatureGossip(ctx, guid, entry, npcFlags, objectUint32OrZero(creature, "GossipMenuID"), true)
 		if err != nil {
 			s.debug("default gossip load failed", "account", s.accountName, "entry", entry, "error", err)
 			s.gossipClosed = true
@@ -179,7 +179,12 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 	reader := protocol.NewReader(payload)
 	guid, err := reader.ReadU64()
 	if err != nil {
-		return false
+		// HandleGossipSelectOptionOpcode (MiscHandler.cpp:94) never drops the
+		// session for a malformed select — it silently ignores it. A false
+		// return here ends the packet loop (server.go), i.e. a client
+		// disconnect on a short packet; C++ has no such disconnect.
+		s.debug("gossip selection malformed", "account", s.accountName, "error", err)
+		return true
 	}
 	menuID, err := reader.ReadU32()
 	if err != nil {
@@ -248,24 +253,26 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 	}
 	if s.gossip == nil && !s.gossipClosed {
 		// Player::OnGossipSelect (Player.cpp:14595-14601): the option's
-		// BoxMoney is charged; insufficient funds send BUY_ERR_NOT_ENOUGHT_MONEY
-		// and close the menu, and the charge applies to every option arm.
-		if cost := item.BoxMoney; cost > 0 {
-			if s.player == nil || s.player.Money < cost {
+		// BoxMoney is checked for sufficiency up front — insufficient funds
+		// send BUY_ERR_NOT_ENOUGHT_MONEY and close the menu — but the charge
+		// itself (ModifyMoney(-cost), Player.cpp:14699) lands AFTER the
+		// option arms, so arms that return early never charge.
+		boxCost := item.BoxMoney
+		if boxCost > 0 {
+			if s.player == nil || s.player.Money < boxCost {
 				_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(0, 0, buyErrNotEnoughMoney), true)
 				s.sendGossipComplete()
 				return true
 			}
-			s.player.Money -= cost
-			if cdb := s.server.CharactersStore.DB; cdb != nil {
-				_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
-			}
-			s.sendPlayerUpdate()
 		}
-		// TrinityCore Gossip_Option: 1 gossip submenu, 2 questgiver (quest
-		// menu), 3 vendor, 4 taxivendor, 5 trainer, 8 innkeeper, 9 banker,
-		// 13 auctioneer. The old code treated 2/3/4 as vendor/taxi/trainer,
-		// so selecting a vendor (3) opened the flight map instead.
+		// TrinityCore Gossip_Option (GossipDef.h:34-54): 0 none, 1 gossip
+		// submenu, 2 questgiver (quest menu), 3 vendor, 4 taxivendor,
+		// 5 trainer, 6 spirithealer, 7 spiritguide, 8 innkeeper, 9 banker,
+		// 10 petitioner, 11 tabarddesigner, 12 battlefield, 13 auctioneer,
+		// 14 stablepet, 15 armorer, 16 unlearntalents, 17 unlearnpettalents,
+		// 18 learndualspec, 19 outdoorpvp, 20 dualspec_info. Note 19 is
+		// OUTDOORPVP, not DUALSPEC_INFO — an earlier revision mapped 19 to
+		// the submenu arm.
 		if item.Action == 3 || item.Action == 15 { // GOSSIP_OPTION_VENDOR / GOSSIP_OPTION_ARMORER
 			s.sendVendorList(ctx, guid)
 			s.gossipClosed = true
@@ -330,14 +337,14 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			if err := s.write(uint16(protocol.OpcodeMSG_TALENT_WIPE_CONFIRM), wipeBuf.Bytes(), true); err != nil {
 				return false
 			}
-		} else if item.Action == 1 || item.Action == 19 { // GOSSIP_OPTION_GOSSIP / GOSSIP_OPTION_DUALSPEC_INFO
+		} else if item.Action == 1 || item.Action == 20 { // GOSSIP_OPTION_GOSSIP / GOSSIP_OPTION_DUALSPEC_INFO
 			// Player::OnGossipSelect (Player.cpp:14604-14615): the POI fires
 			// before the submenu, for both option types.
 			if item.ActionPoiID != 0 {
 				s.sendGossipPOI(ctx, item.ActionPoiID)
 			}
 			if item.ActionMenuID != 0 {
-				defaultMenu, loadErr := s.prepareCreatureGossip(ctx, guid, entry, objectUint32OrZero(creature, "NPCFlags"), item.ActionMenuID)
+				defaultMenu, loadErr := s.prepareCreatureGossip(ctx, guid, entry, objectUint32OrZero(creature, "NPCFlags"), item.ActionMenuID, false)
 				if loadErr != nil {
 					s.debug("gossip submenu load failed", "account", s.accountName, "entry", entry, "menu", item.ActionMenuID, "error", loadErr)
 					s.gossipClosed = true
@@ -354,7 +361,7 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			// Player::OnGossipSelect (Player.cpp:14677-14680): re-prepare the
 			// creature's default gossip menu without the quest list
 			// (PrepareGossipMenu(source) passes showQuests=false).
-			defaultMenu, loadErr := s.prepareCreatureGossip(ctx, guid, entry, npcFlags, 0)
+			defaultMenu, loadErr := s.prepareCreatureGossip(ctx, guid, entry, npcFlags, 0, false)
 			if loadErr != nil {
 				s.debug("gossip spiritguide menu load failed", "account", s.accountName, "entry", entry, "error", loadErr)
 				s.gossipClosed = true
@@ -367,6 +374,65 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 				s.debug("gossip spiritguide response failed", "account", s.accountName, "entry", entry, "error", sendErr)
 				return true
 			}
+		} else if item.Action == 10 { // GOSSIP_OPTION_PETITIONER
+			// Player::OnGossipSelect (Player.cpp:14660-14663): the menu closes
+			// and the petition list opens. Go has no petition-show model
+			// (only arena-charter deletion), so the menu closes with no list.
+			s.gossipClosed = true
+		} else if item.Action == 12 { // GOSSIP_OPTION_BATTLEFIELD
+			// Player::OnGossipSelect (Player.cpp:14684-14696): the battleground
+			// type is derived from the creature entry via
+			// BattlegroundMgr::GetBattleMasterBG; an unknown entry logs and
+			// returns before the BoxMoney charge below.
+			bgTypeID := s.battlemasterBGType(ctx, entry)
+			if bgTypeID == battlegroundTypeNone {
+				s.debug("gossip battlefield invalid creature", "account", s.accountName, "entry", entry)
+				return true
+			}
+			s.gossipClosed = true
+			s.sendBattlefieldList(guid, 0, bgTypeID)
+		} else if item.Action == 17 { // GOSSIP_OPTION_UNLEARNPETTALENTS
+			// Player::OnGossipSelect (Player.cpp:14653-14656): the menu closes
+			// and pet talents reset. Go's pet talents reset only at login —
+			// no interactive model — so the menu closes with no reset.
+			s.gossipClosed = true
+		} else if item.Action == 18 { // GOSSIP_OPTION_LEARNDUALSPEC
+			// Player::OnGossipSelect (Player.cpp:14636-14646): gated on a
+			// single spec and CONFIG_MIN_DUALSPEC_LEVEL (40, World.cpp
+			// default); the two casts teach dual spec (the spells.go
+			// 63624/63680 arm flips talentGroupsCount to 2 and refreshes the
+			// talent frame) and the menu re-prepares to the option's action
+			// menu.
+			if s.player != nil && s.player.TalentGroupsCount == 1 && s.player.Level >= 40 {
+				s.castSpellDirect(ctx, 63680, s.playerGUID)
+				s.castSpellDirect(ctx, 63624, s.playerGUID)
+				defaultMenu, loadErr := s.prepareCreatureGossip(ctx, guid, entry, npcFlags, item.ActionMenuID, false)
+				if loadErr != nil {
+					s.debug("gossip dualspec menu load failed", "account", s.accountName, "entry", entry, "menu", item.ActionMenuID, "error", loadErr)
+					s.gossipClosed = true
+					_ = s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true)
+					return true
+				}
+				s.gossip = defaultMenu
+				if sendErr := s.sendGossipMenu(); sendErr != nil {
+					s.debug("gossip dualspec menu response failed", "account", s.accountName, "entry", entry, "menu", item.ActionMenuID, "error", sendErr)
+					return true
+				}
+			}
+		} else if item.Action == 19 { // GOSSIP_OPTION_OUTDOORPVP
+			// Player::OnGossipSelect (Player.cpp:14618-14620): routed to the
+			// OutdoorPvP manager, which has no Go model — the menu closes.
+			s.gossipClosed = true
+		}
+		// Player::OnGossipSelect (Player.cpp:14699): the BoxMoney charge lands
+		// after the option arms — early-return arms (invalid battlemaster
+		// above) never charge.
+		if boxCost > 0 && s.player != nil {
+			s.player.Money -= boxCost
+			if cdb := s.server.CharactersStore.DB; cdb != nil {
+				_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+			}
+			s.sendPlayerUpdate()
 		}
 	}
 	if s.gossip == nil && !s.gossipClosed {
@@ -420,7 +486,7 @@ func (s *session) handleItemGossipSelectOption(ctx context.Context, reader *prot
 	return true
 }
 
-func (s *session) prepareCreatureGossip(ctx context.Context, guid uint64, entry, npcFlags, menuID uint32) (*gossipMenuState, error) {
+func (s *session) prepareCreatureGossip(ctx context.Context, guid uint64, entry, npcFlags, menuID uint32, isDefaultMenu bool) (*gossipMenuState, error) {
 	// TrinityCore PrepareGossipMenu learns an unknown flight node and aborts
 	// the menu build; the map itself opens through the taxi option afterwards.
 	if npcFlags&unitNPCFlagFlightmaster != 0 && s.learnNewTaxiNode(ctx, guid) {
@@ -436,7 +502,10 @@ func (s *session) prepareCreatureGossip(ctx context.Context, guid uint64, entry,
 	if err != nil {
 		return nil, err
 	}
-	if len(options) == 0 && menuID != 0 {
+	// Player::PrepareGossipMenu (Player.cpp:14371): the menu-0 fallback applies
+	// only when the requested menu IS the source's default menu — an explicit
+	// submenu (ActionMenuID) with no rows shows empty in C++.
+	if len(options) == 0 && isDefaultMenu {
 		options, err = s.loadCreatureGossipOptions(ctx, 0, npcFlags, entry, guid)
 		if err != nil {
 			return nil, err
@@ -530,6 +599,26 @@ type loadedGossipOption struct {
 	Item gossipMenuItem
 }
 
+// trainerValidForCreature mirrors the GOSSIP_OPTION_TRAINER visibility gate in
+// Player::PrepareGossipMenu (Player.cpp:14478-14489): the option is hidden (and
+// C++ logs a sql error) when the creature has no trainer row or the trainer is
+// not valid for the player. Same lookup as sendTrainerList.
+func (s *session) trainerValidForCreature(ctx context.Context, creatureEntry uint32) bool {
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	var tType, tReq int64
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(t.Type, 0), COALESCE(t.Requirement, 0)
+		FROM trainer AS t
+		WHERE t.Id IN (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ?)
+		   OR t.Id = ?
+		LIMIT 1`, creatureEntry, creatureEntry).Scan(&tType, &tReq)
+	if err != nil {
+		return false
+	}
+	return s.isTrainerValidForPlayer(uint32(tType), uint32(tReq))
+}
+
 func (s *session) loadCreatureGossipOptions(ctx context.Context, menuID, npcFlags, creatureEntry uint32, creatureGUID uint64) ([]loadedGossipOption, error) {
 	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT gmo.OptionID, gmo.OptionIcon,
 		COALESCE(NULLIF(gmo.OptionText, ''), bt.Text, ''),
@@ -560,6 +649,39 @@ func (s *session) loadCreatureGossipOptions(ctx context.Context, menuID, npcFlag
 			continue
 		}
 		if optionType == 2 { // GOSSIP_OPTION_QUESTGIVER is handled via QuestMenu, not as a gossip text item
+			continue
+		}
+		// Player::PrepareGossipMenu (Player.cpp:14404-14491) hides options
+		// whose per-type conditions fail:
+		if optionType == 15 { // GOSSIP_OPTION_ARMORER is "added in special mode" — never menu-listed
+			continue
+		}
+		if optionType == 17 { // GOSSIP_OPTION_UNLEARNPETTALENTS needs a hunter pet with talents; no interactive pet-talent model in Go
+			continue
+		}
+		if optionType == 19 { // GOSSIP_OPTION_OUTDOORPVP: no OutdoorPvP manager in Go
+			continue
+		}
+		if optionType == 12 { // GOSSIP_OPTION_BATTLEFIELD
+			// Creature::isCanInteractWithBattleMaster (Creature.cpp:1271): the
+			// entry must map to a battleground template and the player must
+			// pass the level gate.
+			if bgTypeID := s.battlemasterBGType(ctx, creatureEntry); bgTypeID == battlegroundTypeNone || !s.bgAccessByLevel(ctx, bgTypeID) {
+				continue
+			}
+		}
+		if optionType == 14 && (s.player == nil || s.player.Class != 3) { // GOSSIP_OPTION_STABLEPET: hunters only (ChrClasses.dbc 3)
+			continue
+		}
+		if optionType == 3 && len(s.expandedVendorRows(ctx, creatureEntry)) == 0 { // GOSSIP_OPTION_VENDOR: hidden with an empty list (Player.cpp:14440)
+			s.debug("gossip vendor option hidden: empty vendor list", "account", s.accountName, "entry", creatureEntry, "menu", menuID)
+			continue
+		}
+		if optionType == 5 && !s.trainerValidForCreature(ctx, creatureEntry) { // GOSSIP_OPTION_TRAINER: hidden for invalid trainers (Player.cpp:14478)
+			continue
+		}
+		if (optionType == 18 || optionType == 20) && // GOSSIP_OPTION_LEARNDUALSPEC / DUALSPEC_INFO (Player.cpp:14456)
+			(s.player == nil || s.player.TalentGroupsCount != 1 || s.player.Level < 40 || !s.canResetTalents(ctx, creatureGUID)) {
 			continue
 		}
 		// ConditionMgr gate (SourceType 14): seasonal/event/class/race/
