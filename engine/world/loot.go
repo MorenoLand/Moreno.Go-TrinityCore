@@ -157,6 +157,12 @@ type activeLootState struct {
 	// item leg (LootHandler.cpp:60-66), which skip the creature
 	// alive/distance gates for item targets.
 	LootItemGUID uint64
+	// GeneratedAt mirrors GameObject::m_lootGenerationTime (GameObject.cpp:2402),
+	// stamped at every loot fill (Player.cpp:8599). Player::SendLoot's GO arm
+	// (Player.cpp:8568-8570) re-rolls a default-spawned chest's loot on the
+	// next open once its respawn delay has elapsed since generation instead
+	// of re-showing the stale partially-looted remainder. Unix seconds.
+	GeneratedAt int64
 }
 
 // storeLootTemplateRow routes one rolled loot-template row into Items or
@@ -1151,15 +1157,16 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 	var data1 int64
 	var goType uint8
 	var goData15 int64
-	err := wdb.QueryRowContext(ctx, `SELECT g.map, g.position_x, g.position_y, g.position_z, COALESCE(t.data1, 0), COALESCE(t.type, 0), COALESCE(t.data15, 0)
+	var respawnDelay int64
+	err := wdb.QueryRowContext(ctx, `SELECT g.map, g.position_x, g.position_y, g.position_z, COALESCE(t.data1, 0), COALESCE(t.type, 0), COALESCE(t.data15, 0), COALESCE(g.spawntimesecs, 0)
 		FROM gameobject AS g
 		JOIN gameobject_template AS t ON t.entry = g.id
-		WHERE g.guid = ? AND g.id = ? LIMIT 1`, lowGUID, entry).Scan(&goMap, &goX, &goY, &goZ, &data1, &goType, &goData15)
+		WHERE g.guid = ? AND g.id = ? LIMIT 1`, lowGUID, entry).Scan(&goMap, &goX, &goY, &goZ, &data1, &goType, &goData15, &respawnDelay)
 	if err != nil {
-		_ = wdb.QueryRowContext(ctx, `SELECT g.map, g.position_x, g.position_y, g.position_z, COALESCE(t.data1, 0), COALESCE(t.type, 0), COALESCE(t.data15, 0)
+		_ = wdb.QueryRowContext(ctx, `SELECT g.map, g.position_x, g.position_y, g.position_z, COALESCE(t.data1, 0), COALESCE(t.type, 0), COALESCE(t.data15, 0), COALESCE(g.spawntimesecs, 0)
 			FROM gameobject AS g
 			JOIN gameobject_template AS t ON t.entry = g.id
-			WHERE g.guid = ? LIMIT 1`, lowGUID).Scan(&goMap, &goX, &goY, &goZ, &data1, &goType, &goData15)
+			WHERE g.guid = ? LIMIT 1`, lowGUID).Scan(&goMap, &goX, &goY, &goZ, &data1, &goType, &goData15, &respawnDelay)
 	}
 	if goMap != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, goX, goY, goZ) > maxDist {
 		return s.sendLootReleaseResponse(targetGUID) == nil
@@ -1176,6 +1183,7 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 	if newLoot {
 		loot = &activeLootState{TargetGUID: targetGUID, MapID: goMap, InstanceID: s.player.InstanceID, LootType: lootType, Items: make(map[uint8]lootItem),
 			MaxDuplicates: s.server.lootMaxDuplicates(goMap, s.player.RaidDifficulty),
+			GeneratedAt:   time.Now().Unix(),
 			// Player.cpp:8590: the group distribution/round-robin arms run
 			// only for chests with chest.groupLootRules (data15).
 			GOLootRules: goType == GameObjectTypeChest && goData15 != 0}
@@ -1184,10 +1192,32 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 	s.server.lootMu.Unlock()
 
 	if !newLoot {
-		loot.addViewer(s)
-		s.activeLoot = loot
-		s.interruptCurrentCast()
-		return s.finishLootOpen(ctx, loot)
+		// Player::SendLoot GO arm (Player.cpp:8568-8570): a default-spawned
+		// chest left partially looted (GO_ACTIVATED) re-rolls its loot once
+		// its respawn delay has elapsed since generation — the stale
+		// remainder is not re-shown. Rows in the gameobject table are
+		// default spawns (isSpawnedByDefault); instances are excluded (C++
+		// avoids duplicate boss-loot exploits there). The same open fills
+		// the fresh loot.
+		if goType == GameObjectTypeChest && !lootFullyLooted(loot) && respawnDelay > 0 &&
+			loot.GeneratedAt > 0 && loot.GeneratedAt+respawnDelay < time.Now().Unix() &&
+			!s.isDungeonMap(goMap) {
+			loot.Items = make(map[uint8]lootItem)
+			loot.QuestItems = nil
+			loot.FFATaken = nil
+			loot.QuestFFATaken = nil
+			loot.Money = 0
+			loot.NormalSlotCount = 0
+			loot.RoundRobinPlayer = 0
+			loot.QuestPersonalGUID = 0
+			loot.GeneratedAt = time.Now().Unix()
+			newLoot = true
+		} else {
+			loot.addViewer(s)
+			s.activeLoot = loot
+			s.interruptCurrentCast()
+			return s.finishLootOpen(ctx, loot)
+		}
 	}
 
 	// Player::SendLoot GO arm (Player.cpp:8579-8606): the loot clear+fill,
