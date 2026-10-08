@@ -3069,7 +3069,10 @@ func (s *session) releaseActiveLootCleanup(cleanupAllowed bool) {
 	}
 	loot.removeViewer(s.playerGUID)
 	s.activeLoot = nil
-	if loot.Money == 0 && len(loot.Items) == 0 && cleanupAllowed {
+	// WorldSession::DoLootRelease (LootHandler.cpp:349-352): the corpse is
+	// only stripped when Loot::isLooted (Loot.h:236) — gold == 0 and
+	// unlootedCount == 0, which counts the quest items (Loot.cpp:316).
+	if loot.Money == 0 && len(loot.Items) == 0 && len(loot.QuestItems) == 0 && cleanupAllowed {
 		s.clearCreatureLoot(loot)
 	}
 }

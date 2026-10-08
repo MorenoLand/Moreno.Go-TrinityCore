@@ -591,6 +591,17 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	}
 	high := uint16(targetGUID >> 48)
 
+	// Player::SendLoot (Player.cpp:8526-8527): opening new loot releases the
+	// previously open loot first (DoLootRelease legs). Skipped for a
+	// same-target re-open so the round-robin owner assigned at first open
+	// survives the refresh, and for player-corpse GUIDs, which never reach
+	// SendLoot in C++ (dropped by the HandleLootOpcode cheat gate above).
+	if high != 0xF101 {
+		if prev := s.activeLoot; prev != nil && prev.TargetGUID != targetGUID {
+			s.doLootRelease(prev)
+		}
+	}
+
 	if high == 0xF110 {
 		return s.openGameObjectLoot(ctx, targetGUID, lootTypeCorpse, 10.0)
 	}
@@ -1468,7 +1479,6 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 	// before the split — viewers see SMSG_LOOT_CLEAR_MONEY ahead of the
 	// SMSG_LOOT_MONEY_NOTIFY distribution, not after.
 	s.activeLoot.broadcastMoneyRemoved()
-
 	// LootHandler.cpp:157 (HandleLootMoneyOpcode): shareMoney is false for
 	// item, pickpocket, and player-corpse loot — the split below only runs
 	// for shared money.
@@ -1514,7 +1524,11 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 		s.sendPlayerUpdate()
 	}
 
-	if s.activeLoot.Money == 0 && len(s.activeLoot.Items) == 0 {
+	// Loot::isLooted (Loot.h:236) is gold == 0 && unlootedCount == 0, and the
+	// quest-item fill arm counts quest items into unlootedCount
+	// (Loot.cpp:316): money-take with quest loot remaining must not clear
+	// the corpse.
+	if s.activeLoot.Money == 0 && len(s.activeLoot.Items) == 0 && len(s.activeLoot.QuestItems) == 0 {
 		s.clearCreatureLoot(s.activeLoot)
 	}
 	s.debug("loot money collected", "account", s.accountName, "copper", copper)
@@ -1710,7 +1724,21 @@ func (s *session) handleLootRelease(payload []byte) bool {
 	if s.activeLoot == nil || s.activeLoot.TargetGUID != targetGUID {
 		return true
 	}
-	loot := s.activeLoot
+	s.doLootRelease(s.activeLoot)
+	return true
+}
+
+// doLootRelease runs the WorldSession::DoLootRelease (LootHandler.cpp:258)
+// legs for an already-open loot: the unconditional release (loot-GUID
+// clear, release response, UNIT_FLAG_LOOTING removal), the type-specific
+// cleanup gate, and the round-robin looter broadcast on the
+// not-fully-looted creature arm. Player::SendLoot (Player.cpp:8526-8527)
+// runs this for the previously open loot before opening a new one.
+func (s *session) doLootRelease(loot *activeLootState) {
+	if s == nil || loot == nil {
+		return
+	}
+	targetGUID := loot.TargetGUID
 	// WorldSession::DoLootRelease (LootHandler.cpp:258-264): the loot-GUID
 	// clear, the release response, and the UNIT_FLAG_LOOTING removal run
 	// unconditionally — the map/instance/distance checks only gate the
@@ -1726,8 +1754,12 @@ func (s *session) handleLootRelease(payload []byte) bool {
 		// legs above still run on a blocked release.
 		cleanupAllowed = s.releaseGameObjectLoot(loot, targetGUID)
 	}
+	// DoLootRelease (LootHandler.cpp:349-368): Group::SendLooter fires only
+	// on the not-fully-looted arm — a fully-looted or blocked release
+	// clears instead of announcing a looter.
+	fullyLooted := loot.Money == 0 && len(loot.Items) == 0 && len(loot.QuestItems) == 0
 	s.releaseActiveLootCleanup(cleanupAllowed)
-	if releasedRoundRobin && s.server != nil && s.groupID != 0 && uint16(loot.TargetGUID>>48) != 0xF110 {
+	if releasedRoundRobin && cleanupAllowed && !fullyLooted && s.server != nil && s.groupID != 0 && uint16(loot.TargetGUID>>48) != 0xF110 {
 		s.server.groupsMu.Lock()
 		grp := s.server.groups[s.groupID]
 		s.server.groupsMu.Unlock()
@@ -1740,7 +1772,6 @@ func (s *session) handleLootRelease(payload []byte) bool {
 	release.WriteU8(1)
 	_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_RELEASE_RESPONSE), release.Bytes(), true)
 	s.debug("loot released", "account", s.accountName, "target", targetGUID)
-	return true
 }
 
 // releaseGameObjectLoot mirrors the GameObject arm of WorldSession::DoLootRelease
