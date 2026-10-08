@@ -276,7 +276,7 @@ func (s *session) handleGroupDisbandCommand(ctx context.Context, args []string) 
 		s.sendSysMessage(fmt.Sprintf("%s is not in a group.", t.name)) // LANG_GROUP_NOT_IN_GROUP (1147)
 		return
 	}
-	s.server.disbandGroup(ctx, g)
+	s.server.disbandGroup(ctx, g, false)
 }
 
 // handleGroupRemoveCommand mirrors HandleGroupRemoveCommand

@@ -788,7 +788,7 @@ func (s *session) handleGroupAccept(_ context.Context, _ []byte) bool {
 
 // handleGroupDecline processes CMSG_GROUP_DECLINE (0x073).
 // TrinityCore: WorldSession::HandleGroupDeclineOpcode.
-func (s *session) handleGroupDecline(_ context.Context, _ []byte) bool {
+func (s *session) handleGroupDecline(ctx context.Context, _ []byte) bool {
 	if !s.playerLoaded || s.pendingGroupLeader == 0 {
 		return false
 	}
@@ -807,6 +807,32 @@ func (s *session) handleGroupDecline(_ context.Context, _ []byte) bool {
 	b := protocol.NewBuffer(len(name) + 1)
 	b.WriteCString(name)
 	_ = leaderSess.write(uint16(protocol.OpcodeSMSG_GROUP_DECLINE), b.Bytes(), true)
+	// Player::UninviteFromGroup (Player.cpp:2549-2563): the decline withdraws
+	// the invite (RemoveInvite — pendingGroupLeader was cleared above); a
+	// created group left with one member or fewer disbands silently via
+	// Disband(true), which skips SMSG_GROUP_DESTROYED.
+	var inviteGroup *groupState
+	if leaderSess.groupID != 0 {
+		inviteGroup = s.server.findGroupByID(leaderSess.groupID)
+	} else {
+		// Inviter offline: locate their group by membership scan.
+		s.server.groupsMu.RLock()
+		for _, g := range s.server.groups {
+			for _, m := range g.Members {
+				if m.GUID == leaderGUID {
+					inviteGroup = g
+					break
+				}
+			}
+			if inviteGroup != nil {
+				break
+			}
+		}
+		s.server.groupsMu.RUnlock()
+	}
+	if inviteGroup != nil && len(inviteGroup.Members) <= 1 {
+		s.server.disbandGroup(ctx, inviteGroup, true)
+	}
 	return true
 }
 
@@ -1073,28 +1099,48 @@ func (s *Server) setGroupLeader(g *groupState, guid uint64) bool {
 }
 
 // disbandGroup dissolves the whole group: every online member session is
-// detached and notified, the persisted member/leader rows are removed, and
-// the in-memory group is dropped. Mirrors Group::Disband as used by
-// HandleGroupDisbandCommand (cs_group.cpp:246).
-func (s *Server) disbandGroup(ctx context.Context, g *groupState) {
+// detached and notified, pending invites are withdrawn, the persisted
+// member/leader/LFG rows are removed, and the in-memory group is dropped.
+// Mirrors Group::Disband (Group.cpp:857-938) as used by
+// HandleGroupDisbandCommand (cs_group.cpp:246). hideDestroy is the
+// Disband(true) arm from Player::UninviteFromGroup (Player.cpp:2560):
+// no SMSG_GROUP_DESTROYED when a declined invite drops a forming group to
+// one member.
+func (s *Server) disbandGroup(ctx context.Context, g *groupState, hideDestroy bool) {
 	s.groupsMu.Lock()
 	groupObj := groupLuaObject(g)
 	members := make([]uint64, len(g.Members))
+	memberSet := make(map[uint64]struct{}, len(g.Members))
 	for i, m := range g.Members {
 		members[i] = m.GUID
+		memberSet[m.GUID] = struct{}{}
 	}
 	delete(s.groups, g.ID)
 	s.groupsMu.Unlock()
 	// Eluna GROUP_EVENT_ON_DISBAND (5): C++ Group::Disband fires
 	// OnGroupDisband first, before the per-member detach (Group.cpp:859).
 	s.triggerGroupEvent(scripting.GroupEventOnDisband, groupObj)
+	// Group::RemoveAllInvites (Group.cpp:375-382): pendingGroupLeader points
+	// at the inviter, so any invite issued by a member of the disbanded group
+	// is withdrawn — accepting afterwards would otherwise form a new group
+	// with the former leader, while C++ finds no invite (HandleGroupDeclineOpcode
+	// returns early when GetGroupInvite is null).
+	s.sessionsMu.Lock()
+	for sess := range s.sessions {
+		if _, ok := memberSet[sess.pendingGroupLeader]; ok {
+			sess.pendingGroupLeader = 0
+		}
+	}
+	s.sessionsMu.Unlock()
 	for _, guid := range members {
 		sess := s.findSessionByGUID(guid)
 		if sess == nil {
 			continue
 		}
 		sess.groupID = 0
-		_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_DESTROYED), nil, true)
+		if !hideDestroy {
+			_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_DESTROYED), nil, true)
+		}
 		empty := buildGroupList(s, &groupState{ID: g.ID, LeaderGUID: guid}, guid, 0)
 		_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), empty, true)
 	}
@@ -1102,13 +1148,15 @@ func (s *Server) disbandGroup(ctx context.Context, g *groupState) {
 		if s.CharactersStore.DB != nil {
 			_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER_ALL"), g.DBID)
 			_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP"), g.DBID)
+			// CHAR_DEL_LFG_DATA (Group.cpp:932-934): the group's LFG row dies with it.
+			_, _ = s.CharactersStore.DB.ExecContext(ctx, "DELETE FROM lfg_data WHERE guid = ?", g.DBID)
 		}
 	}
 }
 
 // handleGroupDisband processes CMSG_GROUP_DISBAND (0x07B).
 // TrinityCore: WorldSession::HandleGroupDisbandOpcode.
-func (s *session) handleGroupDisband(_ context.Context, _ []byte) bool {
+func (s *session) handleGroupDisband(ctx context.Context, _ []byte) bool {
 	if !s.playerLoaded {
 		return false
 	}
@@ -1140,27 +1188,14 @@ func (s *session) handleGroupDisband(_ context.Context, _ []byte) bool {
 	}
 
 	if g.LeaderGUID == s.playerGUID {
-		// Leader disbands entire group
-		groupObj := groupLuaObject(g)
-		members := make([]uint64, len(g.Members))
-		for i, m := range g.Members {
-			members[i] = m.GUID
-		}
-		delete(srv.groups, g.ID)
+		// Leader disbands the entire group. C++ HandleGroupDisbandOpcode
+		// routes this through RemoveFromGroup(GROUP_REMOVEMETHOD_LEAVE)
+		// (GroupHandler.cpp:424), whose RemoveMember tail disbands via
+		// Group::Disband (Group.cpp:857) — the shared disbandGroup covers
+		// the per-member detach, invite withdrawal, DB and LFG cleanup in
+		// C++ order (OnGroupDisband before the detach).
 		srv.groupsMu.Unlock()
-		for _, guid := range members {
-			sess := srv.findSessionByGUID(guid)
-			if sess == nil {
-				continue
-			}
-			sess.groupID = 0
-			_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_DESTROYED), nil, true)
-			empty := buildGroupList(srv, &groupState{ID: g.ID, LeaderGUID: guid}, guid, 0)
-			_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), empty, true)
-		}
-		// Eluna GROUP_EVENT_ON_DISBAND (5): C++ Group::Disband fires
-		// OnGroupDisband first (Group.cpp:859).
-		srv.triggerGroupEvent(scripting.GroupEventOnDisband, groupObj)
+		srv.disbandGroup(ctx, g, false)
 	} else {
 		// Non-leader leaves: C++ HandleGroupDisbandOpcode calls
 		// Player::RemoveFromGroup(GROUP_REMOVEMETHOD_LEAVE) (GroupHandler.cpp:424).

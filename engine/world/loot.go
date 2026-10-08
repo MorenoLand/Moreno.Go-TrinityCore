@@ -1066,7 +1066,7 @@ func sortedLootItems(items map[uint8]lootItem) []lootItem {
 	return result
 }
 
-func buildLootLooterPacket(loot *activeLootState, grp *groupState) []byte {
+func buildLootLooterPacket(loot *activeLootState, grp *groupState, looterGUID uint64) []byte {
 	packet := protocol.NewBuffer(24)
 	packet.WriteU64(loot.TargetGUID)
 	if grp != nil && grp.LootMethod == 2 && grp.MasterLooter != 0 && loot.hasOverThresholdItem(grp.LootThreshold) {
@@ -1074,7 +1074,14 @@ func buildLootLooterPacket(loot *activeLootState, grp *groupState) []byte {
 	} else {
 		packet.WriteU8(0)
 	}
-	packet.WriteU8(0)
+	// Group::SendLooter (Group.cpp:1061-1076): the group's current looter as
+	// a packed GUID, or a single zero byte when there is none (the release
+	// arm passes nullptr; a packed empty GUID would encode identically).
+	if looterGUID != 0 {
+		packet.WritePackedGUID(looterGUID)
+	} else {
+		packet.WriteU8(0)
+	}
 	return packet.Bytes()
 }
 
@@ -1434,6 +1441,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	}
 	s.server.autoStoreLootCurrencyTokens(ctx, loot, s)
 	if s.server != nil && s.groupID != 0 {
+		var looterAnnounce []byte
 		s.server.groupsMu.Lock()
 		grp := s.server.groups[s.groupID]
 		if grp != nil && loot.RoundRobinPlayer == 0 {
@@ -1445,6 +1453,16 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 			// FREE_FOR_ALL (the old LootMethod != 0 gate dropped the
 			// release-time SendLooter broadcast under FFA).
 			loot.RoundRobinPlayer = grp.LooterGUID
+			// Unit.cpp:11261-11267: the kill-time fill broadcasts
+			// Group::SendLooter(creature, looter) to the group — SMSG_LOOT_LIST
+			// with the rotating looter — before the empty-loot advance below.
+			// Go fills lazily at first open, so the broadcast runs here; the
+			// release-time arm (SendLooter with nullptr, LootHandler.cpp:381)
+			// keeps passing a zero looter. Creature targets only
+			// (Group::SendLooter asserts a creature).
+			if uint16(targetGUID>>48) == 0xF130 {
+				looterAnnounce = buildLootLooterPacket(loot, grp, loot.RoundRobinPlayer)
+			}
 			// Unit.cpp:11270-11271 (the !loot->empty() gate): after the
 			// kill-time fill, C++ unconditionally advances the group
 			// looter for the next kill's loot, so consecutive loots
@@ -1457,6 +1475,9 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 			}
 		}
 		s.server.groupsMu.Unlock()
+		if looterAnnounce != nil {
+			s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LOOT_LIST), looterAnnounce)
+		}
 	}
 	loot.addViewer(s)
 	s.activeLoot = loot
@@ -3024,7 +3045,7 @@ func (s *session) doLootRelease(loot *activeLootState) {
 		grp := s.server.groups[s.groupID]
 		s.server.groupsMu.Unlock()
 		if grp != nil {
-			s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LOOT_LIST), buildLootLooterPacket(loot, grp))
+			s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LOOT_LIST), buildLootLooterPacket(loot, grp, 0))
 		}
 	}
 	// WorldSession::DoLootRelease creature arm (LootHandler.cpp:372-373): the
