@@ -2294,7 +2294,9 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 
 	// Arm 60s countdown
 	roll.Timer = time.AfterFunc(60*time.Second, func() {
-		s.resolveGroupLootRoll(rollKey)
+		// The per-roll timer stands in for Group::EndRoll (Creature.cpp:793),
+		// which passes the loot's map as allowedMap.
+		s.resolveGroupLootRoll(rollKey, true)
 	})
 }
 
@@ -2320,7 +2322,13 @@ func canRollOnItem(m *session, itemEntry, itemCount, maxCount uint32) bool {
 	return m.lootItemAllowedForPlayer(context.Background(), lootItem{ItemEntry: itemEntry, Count: itemCount}, false)
 }
 
-func (s *Server) resolveGroupLootRoll(rollKey lootRollKey) {
+// resolveGroupLootRoll mirrors Group::CountTheRoll (Group.cpp:1510-1690).
+// enforceMap mirrors the allowedMap parameter: the vote-completion path
+// (Group::CountRollVote, Group.cpp:1493) passes nullptr, while the
+// corpse-timer path (Group::EndRoll via Creature/GameObject Update,
+// Creature.cpp:793, GameObject.cpp:721) passes the loot's map, excluding
+// voters who left it.
+func (s *Server) resolveGroupLootRoll(rollKey lootRollKey, enforceMap bool) {
 	s.lootMu.Lock()
 	roll := s.groupRolls[rollKey]
 	if roll == nil {
@@ -2333,67 +2341,94 @@ func (s *Server) resolveGroupLootRoll(rollKey lootRollKey) {
 	}
 	s.lootMu.Unlock()
 
+	// Group.cpp:1527-1531, 1589-1593: voters whose player object is gone
+	// (and, on the EndRoll path, who left the loot's map) are skipped from
+	// the tier — they roll no number and cannot win, so an emptied tier
+	// falls through to greed, then to all-passed.
+	present := func(guid uint64) bool {
+		sess := s.findSessionByGUID(guid)
+		if sess == nil || sess.player == nil {
+			return false
+		}
+		if enforceMap && (sess.player.Map != roll.MapID || sess.player.InstanceID != roll.InstanceID) {
+			return false
+		}
+		return true
+	}
+
+	// Roll::PlayerVote is std::map<ObjectGuid, RollVote> (Group.h:141), so
+	// C++ iterates GUID-ascending and the strict maxresul < randomN keeps
+	// the lowest GUID on ties; Go map order is random, so sort first.
+	var needVoters, greedVoters []uint64
+	for guid, vote := range roll.Votes {
+		if !present(guid) {
+			continue
+		}
+		switch vote {
+		case rollNeed:
+			needVoters = append(needVoters, guid)
+		case rollGreed, rollDisenchant:
+			greedVoters = append(greedVoters, guid)
+		}
+	}
+	sort.Slice(needVoters, func(i, j int) bool { return needVoters[i] < needVoters[j] })
+	sort.Slice(greedVoters, func(i, j int) bool { return greedVoters[i] < greedVoters[j] })
+
 	var winnerGUID uint64
 	var maxRoll uint8
 	var winningType uint8
 
-	if roll.TotalNeed > 0 {
-		for guid, vote := range roll.Votes {
-			if vote == 1 { // NEED
-				rNum := roll.Rolls[guid]
-				if rNum == 0 {
-					rNum = uint8(rand.Intn(100) + 1)
-					roll.Rolls[guid] = rNum
-					rBuf := protocol.NewBuffer(35)
-					rBuf.WriteU64(roll.SourceGUID)
-					rBuf.WriteU32(roll.Slot)
-					rBuf.WriteU64(guid)
-					rBuf.WriteU32(roll.ItemEntry)
-					rBuf.WriteU32(roll.RandomSuffix)
-					rBuf.WriteU32(roll.RandomPropID)
-					rBuf.WriteU8(rNum)
-					rBuf.WriteU8(1) // NEED
-					rBuf.WriteU8(0)
-					s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL), rBuf.Bytes())
-				}
-				if rNum > maxRoll || winnerGUID == 0 {
-					maxRoll = rNum
-					winnerGUID = guid
-					winningType = 1
-				}
+	// Note the if/if, not if/else-if (Group.cpp:1577): a need tier emptied
+	// by the presence skip above falls into the greed tier.
+	if len(needVoters) > 0 {
+		for _, guid := range needVoters {
+			rNum := uint8(rand.Intn(100) + 1)
+			roll.Rolls[guid] = rNum
+			rBuf := protocol.NewBuffer(35)
+			rBuf.WriteU64(0) // Group.cpp:1542 — ObjectGuid::Empty, not the item guid
+			rBuf.WriteU32(roll.Slot)
+			rBuf.WriteU64(guid)
+			rBuf.WriteU32(roll.ItemEntry)
+			rBuf.WriteU32(roll.RandomSuffix)
+			rBuf.WriteU32(roll.RandomPropID)
+			rBuf.WriteU8(rNum)
+			rBuf.WriteU8(rollNeed)
+			rBuf.WriteU8(0)
+			s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL), rBuf.Bytes())
+			if rNum > maxRoll {
+				maxRoll = rNum
+				winnerGUID = guid
+				winningType = rollNeed
 			}
 		}
-	} else if roll.TotalGreed > 0 {
-		for guid, vote := range roll.Votes {
-			if vote == 2 || vote == 3 { // GREED or DISENCHANT
-				rNum := roll.Rolls[guid]
-				if rNum == 0 {
-					rNum = uint8(rand.Intn(100) + 1)
-					roll.Rolls[guid] = rNum
-					rBuf := protocol.NewBuffer(35)
-					rBuf.WriteU64(roll.SourceGUID)
-					rBuf.WriteU32(roll.Slot)
-					rBuf.WriteU64(guid)
-					rBuf.WriteU32(roll.ItemEntry)
-					rBuf.WriteU32(roll.RandomSuffix)
-					rBuf.WriteU32(roll.RandomPropID)
-					rBuf.WriteU8(rNum)
-					rBuf.WriteU8(vote)
-					rBuf.WriteU8(0)
-					s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL), rBuf.Bytes())
-				}
-				if rNum > maxRoll || winnerGUID == 0 {
-					maxRoll = rNum
-					winnerGUID = guid
-					winningType = vote
-				}
+	}
+	if winnerGUID == 0 && len(greedVoters) > 0 {
+		for _, guid := range greedVoters {
+			vote := roll.Votes[guid]
+			rNum := uint8(rand.Intn(100) + 1)
+			roll.Rolls[guid] = rNum
+			rBuf := protocol.NewBuffer(35)
+			rBuf.WriteU64(0) // Group.cpp:1605 — ObjectGuid::Empty, not the item guid
+			rBuf.WriteU32(roll.Slot)
+			rBuf.WriteU64(guid)
+			rBuf.WriteU32(roll.ItemEntry)
+			rBuf.WriteU32(roll.RandomSuffix)
+			rBuf.WriteU32(roll.RandomPropID)
+			rBuf.WriteU8(rNum)
+			rBuf.WriteU8(vote)
+			rBuf.WriteU8(0)
+			s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL), rBuf.Bytes())
+			if rNum > maxRoll {
+				maxRoll = rNum
+				winnerGUID = guid
+				winningType = vote
 			}
 		}
 	}
 
 	if winnerGUID != 0 {
 		wonBuf := protocol.NewBuffer(34)
-		wonBuf.WriteU64(roll.SourceGUID)
+		wonBuf.WriteU64(0) // Group.cpp:1552,1616 — ObjectGuid::Empty, not the item guid
 		wonBuf.WriteU32(roll.Slot)
 		wonBuf.WriteU32(roll.ItemEntry)
 		wonBuf.WriteU32(roll.RandomSuffix)
@@ -2406,7 +2441,7 @@ func (s *Server) resolveGroupLootRoll(rollKey lootRollKey) {
 		// Reference Group.cpp:1557/1621: the roll winner is credited with the
 		// winning roll value against the minimum-roll threshold.
 		if winnerSess := s.findSessionByGUID(winnerGUID); winnerSess != nil {
-			if winningType == 1 { // need
+			if winningType == rollNeed {
 				winnerSess.setAchievementCriteria(criteriaTypeRollNeed, roll.ItemEntry, uint32(maxRoll))
 			} else {
 				winnerSess.setAchievementCriteria(criteriaTypeRollGreed, roll.ItemEntry, uint32(maxRoll))
@@ -2422,6 +2457,8 @@ func (s *Server) resolveGroupLootRoll(rollKey lootRollKey) {
 		passBuf.WriteU32(roll.RandomSuffix)
 		s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_ALL_PASSED), passBuf.Bytes())
 
+		// Group.cpp:1683-1688: remove is_blocked so the item is lootable
+		// by all players.
 		s.lootMu.Lock()
 		if cLoot := s.creatureLoot[rollLootObjectKey(roll)]; cLoot != nil {
 			if li, ok := cLoot.Items[uint8(roll.Slot)]; ok {
@@ -2728,7 +2765,7 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 	}
 
 	buf := protocol.NewBuffer(35)
-	buf.WriteU64(itemGUID)
+	buf.WriteU64(0) // Group.cpp:1471-1486 — CountRollVote broadcasts ObjectGuid::Empty
 	buf.WriteU32(itemSlot)
 	buf.WriteU64(s.playerGUID)
 	buf.WriteU32(itemEntry)
@@ -2740,7 +2777,8 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 	s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL), buf.Bytes())
 
 	if totalDone {
-		s.server.resolveGroupLootRoll(rollKey)
+		// Group::CountRollVote passes nullptr for allowedMap (Group.cpp:1493).
+		s.server.resolveGroupLootRoll(rollKey, false)
 	}
 
 	return true
@@ -2784,6 +2822,9 @@ func (s *Server) onPlayerLeaveGroupRolls(leavingGUID uint64, groupID uint64) {
 	s.lootMu.Unlock()
 
 	for _, key := range keysToResolve {
-		s.resolveGroupLootRoll(key)
+		// Mirrors the Group::Update member-removal path: the leaver's vote is
+		// gone and CountRollVote re-checks totals with allowedMap=nullptr
+		// (Group.cpp:699, 1493).
+		s.resolveGroupLootRoll(key, false)
 	}
 }
