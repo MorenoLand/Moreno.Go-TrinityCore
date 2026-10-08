@@ -430,7 +430,10 @@ func (s *session) fireAddonMessageHook(ctx context.Context, typeID uint32, messa
 	if s.server.Features == nil || s.server.Features.Scripts == nil {
 		return false
 	}
-	prefix, content := message, ""
+	prefix := message
+	// Reference: Eluna::OnAddonMessage (LuaEngine/ServerHooks.cpp:33-64) — with
+	// no '\t' delimiter the content argument is pushed as Lua nil, not "".
+	var content any
 	if i := strings.IndexByte(message, '\t'); i >= 0 {
 		prefix, content = message[:i], message[i+1:]
 	}
@@ -1084,9 +1087,13 @@ func (s *session) chatTag() uint8 {
 	if s.player == nil {
 		return 0
 	}
-	isGM := (s.player.ExtraFlags&playerExtraGMOn != 0) || (s.player.PlayerFlags&playerFlagGM != 0) || (s.player.ExtraFlags&playerExtraGMChat != 0) || s.gmChat
+	// Reference: Player::GetChatTag (Player.cpp:1642-1654) — CHAT_TAG_GM (0x04)
+	// is stamped only when isGMChat() (PLAYER_EXTRA_GM_CHAT, the `.gm chat`
+	// toggle), never for a merely visible GM (`.gm on` / PLAYER_FLAGS_GM).
+	// CHAT_TAG_DEV (0x10, IsDeveloper = PLAYER_FLAGS_DEVELOPER) has no Go
+	// model and is never set.
 	var tag uint8
-	if isGM {
+	if s.player.ExtraFlags&playerExtraGMChat != 0 || s.gmChat {
 		tag |= 0x04
 	}
 	if s.player.PlayerFlags&playerFlagDND != 0 {

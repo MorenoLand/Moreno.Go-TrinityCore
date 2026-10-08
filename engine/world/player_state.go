@@ -426,9 +426,12 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 		} else {
 			state.ExtraFlags &= ^playerExtraGMInvisible
 		}
-		if state.ExtraFlags&(playerExtraGMChat|playerExtraGMOn) != 0 {
+		// Reference: Player::LoadFromDB GM_CHAT restore (Player.cpp:18062-18071):
+		// case 2 (save state) restores SetGMChat(true) ONLY from the saved
+		// PLAYER_EXTRA_GM_CHAT bit — a saved GM_ON bit never promotes to
+		// GM_CHAT. (GM.LoginState/visible-state arms above.)
+		if state.ExtraFlags&playerExtraGMChat != 0 {
 			s.gmChat = true
-			state.ExtraFlags |= playerExtraGMChat
 		}
 		if state.ExtraFlags&playerExtraGMOn != 0 {
 			// SetGameMaster(true) during the login-state restore sets the GM

@@ -81,25 +81,15 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 	// already in a guild. Channel IDs are ChatChannels.dbc rows:
 	// 1 General, 2 Trade, 3 LocalDefense, 22 WorldDefense, 23
 	// GuildRecruitment, 24 LookingForGroup.
-	if channelID != 0 {
-		switch channelID {
-		case 1, 2, 3, 22, 23, 24:
-		default:
-			s.debug("channel join rejected: unknown channel id", "account", s.accountName, "id", channelID)
-			return true
-		}
-		if _, _, inArena, _ := battlegroundTypeForMap(s.player.Map); inArena &&
-			(channelID == 1 || channelID == 2 || channelID == 3 || channelID == 23) {
-			s.debug("channel join rejected: zone-dependent channel in arena", "account", s.accountName, "id", channelID)
-			return true
-		}
-		if channelID == 23 && s.player.GuildID != 0 {
-			s.debug("channel join rejected: guild-recruitment requires guildless", "account", s.accountName)
-			return true
-		}
-	}
-	if flags&channelFlagCity != 0 && !s.isCityZone(s.player.Zone) {
-		s.debug("city channel join rejected: outside city zone", "account", s.accountName, "zone", s.player.Zone, "channel", name)
+	// Reference: Player::CanJoinConstantChannelInZone (Player.cpp:5159-5171) —
+	// zone-dependent channels (General/Trade/LocalDefense/GuildRecruitment)
+	// are refused inside arena instances, city-only channels
+	// (Trade/GuildRecruitment/LFG) outside cities, and GuildRecruitment for
+	// players already in a guild; unknown channel IDs are refused.
+	// ChannelHandler.cpp gates both join (:46-49) and leave (:112-115) on it,
+	// silently in both cases.
+	if channelID != 0 && (s.player == nil || !s.constantChannelZoneAllowed(channelID)) {
+		s.debug("channel join rejected: zone gate", "account", s.accountName, "id", channelID)
 		return true
 	}
 	s.server.channelsMu.Lock()
@@ -163,6 +153,7 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 		}
 	}
 	channelName, channelFlagsValue, channelIDValue, announce := channel.Name, channel.Flags, channel.ID, channel.Announce
+	joinerFlags, numPlayers := channel.memberFlags(s.playerGUID), uint32(len(channel.Members))
 	s.server.channelsMu.Unlock()
 	// Reference: Channel::JoinChannel (Channel.cpp) - the joined broadcast
 	// is suppressed when the session holds
@@ -175,6 +166,11 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 	if err := s.sendChannelNotify(channelYouJoinedNotice, channelName, &channelNotifyChannel{Flags: channelFlagsValue, ID: channelIDValue}); err != nil {
 		return false
 	}
+	// Reference: Channel::JoinNotify (Channel.cpp:822-840) — constant channels
+	// broadcast SMSG_USERLIST_ADD to all-but-one, custom channels
+	// SMSG_USERLIST_UPDATE to all (the joiner is already in the member set,
+	// so they receive their own update on custom channels).
+	s.broadcastUserlist(channelIDValue != 0, s.playerGUID, joinerFlags, channelFlagsValue, numPlayers, channelName, others)
 	s.debug("channel joined", "account", s.accountName, "channel", channelName, "id", channelIDValue)
 	return true
 }
@@ -193,6 +189,13 @@ func (s *session) handleLeaveChannel(payload []byte) bool {
 		return false
 	}
 	if channelID == 0 && name == "" {
+		return true
+	}
+	// Reference: ChannelHandler.cpp:112-115 — constant-channel leaves are
+	// zone-gated exactly like joins (silent drop when the player may not be
+	// on the channel in their current zone).
+	if channelID != 0 && !s.constantChannelZoneAllowed(channelID) {
+		s.debug("channel leave rejected: zone gate", "account", s.accountName, "id", channelID)
 		return true
 	}
 	key := s.scopedChannelKey(name)
@@ -221,6 +224,7 @@ func (s *session) handleLeaveChannel(payload []byte) bool {
 		others = append(others, member)
 	}
 	channelName, channelFlagsValue, channelIDValue, announce := channel.Name, channel.Flags, channel.ID, channel.Announce
+	numPlayers := uint32(len(channel.Members))
 	// Reference: Channel::LeaveChannel - when the owner leaves a custom
 	// channel with members left, the next member becomes owner+moderator.
 	var newOwner *session
@@ -248,6 +252,18 @@ func (s *session) handleLeaveChannel(payload []byte) bool {
 	}
 	if err := s.sendChannelNotify(channelYouLeftNotice, channelName, &channelNotifyChannel{Flags: channelFlagsValue, ID: channelIDValue}); err != nil {
 		return false
+	}
+	// Reference: Channel::LeaveNotify (Channel.cpp:842-860) — SMSG_USERLIST_REMOVE
+	// to all-but-one (constant) or all (custom); the leaver is already erased
+	// from the member set in both cases, so the recipients are the remaining
+	// members either way.
+	removePkt := protocol.NewBuffer(8 + 1 + 4 + len(channelName) + 1)
+	removePkt.WriteU64(s.playerGUID)
+	removePkt.WriteU8(channelFlagsValue)
+	removePkt.WriteU32(numPlayers)
+	removePkt.WriteCString(channelName)
+	for _, member := range others {
+		_ = member.write(uint16(protocol.OpcodeSMSG_USERLIST_REMOVE), removePkt.Bytes(), true)
 	}
 	s.debug("channel left", "account", s.accountName, "channel", channelName, "id", channelIDValue)
 	return true
@@ -298,6 +314,33 @@ func (s *session) handleChannelList(payload []byte) bool {
 
 func (s *session) sendChannelNotify(notice uint8, name string, extra any) error {
 	return s.write(uint16(protocol.OpcodeSMSG_CHANNEL_NOTIFY), buildChannelNotify(notice, name, extra), true)
+}
+
+// broadcastUserlist emits the roster live-update for a channel join:
+// SMSG_USERLIST_ADD on constant channels (to all-but-one) or
+// SMSG_USERLIST_UPDATE on custom channels (to all, joiner included).
+// Payload per Channel::JoinNotify (Channel.cpp:822-840): joiner GUID, joiner
+// member flags, channel flags, member count (joiner included), channel name.
+func (s *session) broadcastUserlist(constant bool, joinerGUID uint64, joinerFlags, channelFlags uint8, numPlayers uint32, name string, others []*session) {
+	packet := protocol.NewBuffer(8 + 1 + 1 + 4 + len(name) + 1)
+	packet.WriteU64(joinerGUID)
+	packet.WriteU8(joinerFlags)
+	packet.WriteU8(channelFlags)
+	packet.WriteU32(numPlayers)
+	packet.WriteCString(name)
+	payload := packet.Bytes()
+	var opcode protocol.Opcode
+	if constant {
+		opcode = protocol.OpcodeSMSG_USERLIST_ADD
+	} else {
+		opcode = protocol.OpcodeSMSG_USERLIST_UPDATE
+	}
+	for _, member := range others {
+		_ = member.write(uint16(opcode), payload, true)
+	}
+	if !constant && s != nil {
+		_ = s.write(uint16(opcode), payload, true)
+	}
 }
 
 type channelNotifyGUID struct{ GUID uint64 }
@@ -511,7 +554,13 @@ func channelFlags(id uint32, name string) uint8 {
 	case "trade":
 		return channelFlagGeneral | channelFlagNotLFG | channelFlagTrade | channelFlagCity
 	case "lookingforgroup":
-		return channelFlagGeneral | channelFlagLFG | channelFlagCity
+		// Reference: Channel.h documents the LFG runtime flags as
+		// 0x50 = 0x40 | 0x10 — CHANNEL_FLAG_CITY comes only from
+		// CHANNEL_DBC_FLAG_CITY_ONLY2 (Channel.cpp:54-55), which the LFG DBC
+		// row lacks. City gating for LFG rides its LFG bit (see the join
+		// gate and updateLocalChannels), matching CanJoinConstantChannelInZone
+		// (Player.cpp:5164-5165, CITY_ONLY covers Trade/GuildRecruitment/LFG).
+		return channelFlagGeneral | channelFlagLFG
 	case "guildrecruitment":
 		return channelFlagGeneral | channelFlagNotLFG | channelFlagCity
 	default:
@@ -585,13 +634,43 @@ func (s *session) isCityZone(zone uint32) bool {
 	return area.Flags&wotlk.AreaFlagSlaveCapital != 0
 }
 
+// constantChannelZoneAllowed mirrors Player::CanJoinConstantChannelInZone
+// (Player.cpp:5159-5171): zone-dependent channels (General/Trade/LocalDefense/
+// GuildRecruitment) are refused inside arena instances, city-only channels
+// (Trade/GuildRecruitment/LFG per CHANNEL_DBC_FLAG_CITY_ONLY) outside cities,
+// and GuildRecruitment for players already in a guild; unknown channel IDs
+// are refused. ChannelHandler.cpp gates both join (:46-49) and leave
+// (:112-115) on it, silently in both cases.
+func (s *session) constantChannelZoneAllowed(channelID uint32) bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	switch channelID {
+	case 1, 2, 3, 22, 23, 24:
+	default:
+		return false
+	}
+	if _, _, inArena, _ := battlegroundTypeForMap(s.player.Map); inArena &&
+		(channelID == 1 || channelID == 2 || channelID == 3 || channelID == 23) {
+		return false
+	}
+	if channelID == 23 && s.player.GuildID != 0 {
+		return false
+	}
+	if (channelID == 2 || channelID == 23 || channelID == 24) && !s.isCityZone(s.player.Zone) {
+		return false
+	}
+	return true
+}
+
 func (s *session) updateLocalChannels(newZone uint32) {
 	if !s.playerLoaded || s.player == nil || s.server == nil {
 		return
 	}
 	s.player.Zone = newZone
 	if !s.isCityZone(newZone) {
-		// Player left city: remove from all city-only channels (Trade, GuildRecruitment)
+		// Player left city: remove from all city-only channels (Trade,
+		// GuildRecruitment, LFG — CHANNEL_DBC_FLAG_CITY_ONLY, Channel.h).
 		type departure struct {
 			name     string
 			flags    uint8
@@ -608,7 +687,11 @@ func (s *session) updateLocalChannels(newZone uint32) {
 			return
 		}
 		for key := range s.channels {
-			if ch := s.server.channels[key]; ch != nil && ch.Flags&channelFlagCity != 0 {
+			// City-only channels carry the City runtime flag (Trade,
+			// GuildRecruitment); LFG is city-only per CHANNEL_DBC_FLAG_CITY_ONLY
+			// but its runtime flags byte is 0x50 (Channel.h), so it is matched
+			// on its LFG bit.
+			if ch := s.server.channels[key]; ch != nil && ch.Flags&(channelFlagCity|channelFlagLFG) != 0 {
 				delete(ch.Members, s)
 				delete(s.channels, key)
 				var newOwner *session

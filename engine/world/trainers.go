@@ -313,10 +313,13 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 	if err != nil {
 		return false
 	}
-	if s.hasLearnedSpell(spellID) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 2), true) // C++ FailReason: Known -> CanTeachSpell false -> NotEnoughSkill
-		return true
-	}
+	// Reference: WorldSession::HandleTrainerBuySpellOpcode (NPCHandler.cpp:125-148)
+	// gates interaction first (silent return), then Trainer::TeachSpell
+	// (Trainer.cpp:80-98) checks trainer validity silently BEFORE the spell
+	// lookup/CanTeachSpell arms. A known spell on an invalid trainer (or via a
+	// bad GUID) therefore produces NO packet in C++; the known-spell
+	// NotEnoughSkill(2) arm lives in CanTeachSpell/GetSpellState and only fires
+	// for valid trainers (the state check below).
 	wdb := s.server.WorldStore.DB
 	cdb := s.server.CharactersStore.DB
 	if wdb == nil || cdb == nil {
@@ -455,16 +458,21 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PLAY_SPELL_IMPACT), impactBuf.Bytes(), s)
 	}
 
-	// 9. Check if trainerSpell is castable (HasEffect SPELL_EFFECT_LEARN_SPELL = 36)
+	// 9. Check if trainerSpell is castable (C++ Trainer::Spell::IsCastable =
+	// HasEffect(SPELL_EFFECT_LEARN_SPELL), Trainer.cpp:27-30). A cast executes
+	// the spell server-side and each LEARN_SPELL effect teaches its trigger;
+	// a trigger of 0 teaches nothing (malformed data converges to no-op).
+	// Non-castable spells are learned directly (Trainer.cpp:111-116).
 	isCastable := false
-	var triggerSpell uint32
+	var triggerSpells []uint32
 	if s.server != nil && s.server.Data != nil {
 		if sp, ok, err := s.server.Data.Spell(spellID); err == nil && ok {
 			for _, eff := range sp.Effects {
 				if eff.Effect == 36 { // SPELL_EFFECT_LEARN_SPELL
 					isCastable = true
-					triggerSpell = eff.TriggerSpell
-					break
+					if eff.TriggerSpell > 0 {
+						triggerSpells = append(triggerSpells, eff.TriggerSpell)
+					}
 				}
 			}
 		}
@@ -479,10 +487,8 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		if s.server != nil {
 			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
 		}
-		if triggerSpell > 0 {
+		for _, triggerSpell := range triggerSpells {
 			s.learnSpell(ctx, triggerSpell)
-		} else {
-			s.learnSpell(ctx, spellID)
 		}
 	} else {
 		s.learnSpell(ctx, spellID)
@@ -872,8 +878,10 @@ func (s *session) isSpellFitByClassAndRace(spellID uint32) bool {
 			continue
 		}
 		// skip wrong class and race skill saved in SkillRaceClassInfo.dbc (Player.cpp:23713)
+		// C++ GetSkillRaceClassInfo returns null (skip) on missing rows; the Go
+		// lookup has no null arm, so a lookup error skips too.
 		if s.server != nil && s.server.Data != nil {
-			if _, found, err := s.server.Data.SkillRaceClassInfo(entry.SkillLine, s.player.Race, s.player.Class); err == nil && !found {
+			if _, found, err := s.server.Data.SkillRaceClassInfo(entry.SkillLine, s.player.Race, s.player.Class); err != nil || !found {
 				continue
 			}
 		}
@@ -997,7 +1005,11 @@ func (s *session) getTrainerSpellState(ctx context.Context, spellID uint32, reqL
 					continue
 				}
 				hasLearnSpellEffect = true
-				if trig := eff.TriggerSpell; trig > 0 && !s.hasLearnedSpell(trig) {
+				// Reference: Trainer::GetSpellState (Trainer.cpp) has no zero
+				// guard — HasSpell(0) is false, so a LEARN_SPELL effect with
+				// trigger 0 clears knowsAllLearnedSpells (malformed data stays
+				// Available rather than flipping to Known).
+				if !s.hasLearnedSpell(eff.TriggerSpell) {
 					knowsAllLearnedSpells = false
 				}
 				if prev := s.server.getPrevSpellInChain(eff.TriggerSpell); prev > 0 && !s.hasLearnedSpell(prev) {
