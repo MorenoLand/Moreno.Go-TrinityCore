@@ -1118,6 +1118,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				if !godNegated && damage > 0 {
 					target.Sess.splitShareDamagePct(ctx, target.GUID, true, creatureAuraKey{}, motion.GUID, damage, uint32(schoolMask))
 				}
+				// Unit::DealDamage (Unit.cpp:869-870): HIGHEST_HIT_RECEIVED
+				// fires for any damage to a player victim, creature-caster
+				// spells included.
+				target.Sess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
 				if !godNegated && damage >= target.Sess.player.Health {
 					overkill = damage - target.Sess.player.Health
 					target.Sess.player.Health = 0
@@ -1314,6 +1318,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// Unit::DealDamage (Unit.cpp:766-788):
 				// SPELL_AURA_SHARE_DAMAGE_PCT.
 				target.Sess.splitShareDamagePct(ctx, target.GUID, true, creatureAuraKey{}, motion.GUID, damage, 1)
+				// Unit::DealDamage (Unit.cpp:869-870): HIGHEST_HIT_RECEIVED
+				// fires for any damage to a player victim, wild-creature
+				// attackers included.
+				target.Sess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
 				if damage >= target.Sess.player.Health {
 					overkill = damage - target.Sess.player.Health
 					target.Sess.player.Health = 0

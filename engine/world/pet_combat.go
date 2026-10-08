@@ -539,6 +539,9 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		if owner != nil && damage > 0 {
 			owner.splitShareDamagePct(ctx, targetGUID, true, creatureAuraKey{}, motion.GUID, damage, 1)
 		}
+		// Unit::DealDamage (Unit.cpp:869-870): HIGHEST_HIT_RECEIVED fires
+		// for any damage to a player victim, pet attackers included.
+		targetSess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
 		// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled
 		// creatures are signaled OwnerAttackedBy on any non-DoT damage.
 		s.triggerPetDefensive(targetSess.player.Map, targetSess.player.InstanceID, targetGUID, motion.GUID)
@@ -1056,6 +1059,9 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		if damage > 0 {
 			s.splitShareDamagePct(ctx, target.GUID, true, creatureAuraKey{}, caster.GUID, damage, uint32(schoolMask))
 		}
+		// Unit::DealDamage (Unit.cpp:869-870): HIGHEST_HIT_RECEIVED fires
+		// for any damage to a player victim, pet-caster spells included.
+		victim.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
 		// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled
 		// creatures are signaled OwnerAttackedBy on any non-DoT damage.
 		s.server.triggerPetDefensive(victim.player.Map, victim.player.InstanceID, target.GUID, caster.GUID)
@@ -1072,6 +1078,9 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		} else if damage >= victim.player.Health {
 			victim.player.Health = 0
 			victim.sendPlayerUpdate()
+			// Unit::Kill (Unit.cpp:11455-11458): attacker is a creature (the
+			// pet) → KILLED_BY_CREATURE with the pet's entry.
+			victim.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((caster.GUID>>24)&0xFFFFFF), 1)
 			// The pet spell's killer resolves to the pet's owner player.
 			victim.killPlayer(ctx, s, true)
 			// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): the attacker is the
