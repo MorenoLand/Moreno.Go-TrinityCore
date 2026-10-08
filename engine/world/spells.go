@@ -7607,6 +7607,116 @@ func creatureSpellDamageBonusTaken(server *Server, damage uint32, spell wotlk.Sp
 	return uint32(result)
 }
 
+// creatureHealingTakenBonus mirrors TrinityCore Unit::SpellHealingBonusTaken
+// (Unit.cpp:7714-7759) for creature victims of periodic-heal ticks
+// (SpellAuraEffects.cpp:5386): SPELL_AURA_MOD_HEALING_PCT (max negative +
+// max positive, misc-unfiltered like the C++ GetMaxNegativeAuraModifier /
+// GetMaxPositiveAuraModifier), the Nourish 1.2x leg (druid periodic-heal
+// aura on the target), MOD_HOT_PCT (DOT type only) and
+// MOD_HEALING_RECEIVED (multiplicative per aura whose caster matches the
+// healer and whose spell is affected on the heal spell, per
+// AuraEffect::IsAffectedOnSpell).
+func creatureHealingTakenBonus(server *Server, key creatureAuraKey, caster *session, healSpell wotlk.Spell, spellKnown bool, heal uint32, dotType bool) uint32 {
+	if server == nil || server.Data == nil || key.GUID == 0 {
+		return heal
+	}
+	server.auraMu.Lock()
+	auras := server.activeCreatureAuras[key]
+	copies := make([]*activeAura, 0, len(auras))
+	for _, aura := range auras {
+		copies = append(copies, aura)
+	}
+	server.auraMu.Unlock()
+
+	casterGUID := uint64(0)
+	if caster != nil {
+		casterGUID = caster.playerGUID
+	}
+	nourishWanted := [3]uint32{0x50, 0x4000010, 0}
+	minPct, maxPct := int32(0), int32(0)
+	minHot, maxHot := int32(0), int32(0)
+	nourish := false
+	receivedMult := 1.0
+	for _, aura := range copies {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
+			continue
+		}
+		auraSpell, found, err := server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount == 0 {
+				amount = effect.BasePoints + 1
+			}
+			switch effect.Aura {
+			case spellAuraModHealingPct:
+				if amount < 0 && amount < minPct {
+					minPct = amount
+				}
+				if amount > 0 && amount > maxPct {
+					maxPct = amount
+				}
+			case spellAuraModHotPct:
+				if !dotType {
+					break
+				}
+				if amount < 0 && amount < minHot {
+					minHot = amount
+				}
+				if amount > 0 && amount > maxHot {
+					maxHot = amount
+				}
+			case spellAuraModHealingReceived:
+				if spellKnown && casterGUID != 0 && aura.CasterGUID == casterGUID &&
+					spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, healSpell) {
+					receivedMult *= float64(100+amount) / 100
+				}
+			case spellAuraPeriodicHeal:
+				if spellKnown && !nourish &&
+					healSpell.SpellFamilyName == spellFamilyDruid &&
+					healSpell.SpellFamilyFlags[1]&0x2000000 != 0 &&
+					auraSpell.SpellFamilyName == spellFamilyDruid {
+					for i := 0; i < 3; i++ {
+						if nourishWanted[i] != 0 && auraSpell.SpellFamilyFlags[i]&nourishWanted[i] != 0 {
+							nourish = true
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
+	takenMult := 1.0
+	if minPct != 0 {
+		takenMult *= float64(100+minPct) / 100
+	}
+	if maxPct != 0 {
+		takenMult *= float64(100+maxPct) / 100
+	}
+	if nourish {
+		takenMult *= 1.2
+	}
+	if dotType {
+		if minHot != 0 {
+			takenMult *= float64(100+minHot) / 100
+		}
+		if maxHot != 0 {
+			takenMult *= float64(100+maxHot) / 100
+		}
+	}
+	takenMult *= receivedMult
+	if takenMult == 1.0 {
+		return heal
+	}
+	return uint32(math.Max(float64(heal)*takenMult, 0))
+}
+
 // spellDamagePushesBack mirrors the pushback half of Unit::DealDamage
 // (Unit.cpp:937): damage dealt by a spell carrying
 // SPELL_ATTR7_NO_PUSHBACK_ON_DAMAGE or SPELL_ATTR3_TREAT_AS_PERIODIC never
@@ -13398,6 +13508,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if healthFunnel && (healCaster == nil || healCaster.player == nil || healCaster.player.Health == 0) {
 			break
 		}
+		// SpellAuraEffects.cpp:5371 — permanent auras skip the tick when
+		// the target is already at full health (the case-21 obs-mod-power
+		// arm carries the same skip for full power).
+		if aura.DurationMs == 0 && ts.player.Health == ts.player.MaxHealth {
+			break
+		}
 		// SpellAuraEffects.cpp:5371-5372 — OBS_MOD_HEALTH ticks heal a
 		// percentage of the target's max health, not the stored amount
 		// (Unit::CountPctFromMaxHealth = CalculatePct truncation), before
@@ -13416,11 +13532,17 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			heal = ts.healingTakenBonus(ts, aura.SpellID, heal, true)
 		}
 		// Tick crit roll (roll_chance_f(GetCritChanceFor),
-		// SpellAuraEffects.cpp:5388-5390): heals are positive, so the
-		// victim-side taken crit modifier does not apply.
+		// SpellAuraEffects.cpp:5388-5390): the victim-side
+		// MOD_ATTACKER_SPELL_CRIT_CHANCE (179) term applies only to
+		// non-positive spells (Unit::SpellCritChanceTaken, Unit.cpp:7216),
+		// so periodic heals roll on the caster chance alone.
 		healCrit := false
 		if healCaster != nil {
-			if rand.Float64() < healCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), 0) {
+			takenCritBonus := 0.0
+			if healKnown && !spellIsPositive(healSpell) {
+				takenCritBonus = float64(ts.playerAuraModifierByMiscMask(spellAuraModAttackerSpellCritChance, int32(aura.SchoolMask)))
+			}
+			if rand.Float64() < healCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
 				healCrit = true
 				mult := 1.5
 				if healKnown {
@@ -14175,25 +14297,36 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		if healthFunnel && (tickCaster == nil || tickCaster.player == nil || tickCaster.player.Health == 0) {
 			return true
 		}
+		// SpellAuraEffects.cpp:5371 — permanent auras skip the tick when
+		// the target is already at full health; the tick chain keeps
+		// running (true).
+		if aura.DurationMs == 0 && target.Health == target.MaxHealth {
+			return true
+		}
 		heal := aura.Amount
 		// SpellAuraEffects.cpp:5371-5372 — OBS_MOD_HEALTH ticks heal a
 		// percentage of the target's max health, not the stored amount
 		// (Unit::CountPctFromMaxHealth = CalculatePct truncation), before
-		// the crit roll below.
+		// the taken leg below.
 		if aura.AuraType == 20 {
 			heal = uint32(float32(target.MaxHealth) * float32(heal) / 100.0)
 		}
+		// Unit::SpellHealingBonusTaken with DOT type (Unit.cpp:7714-7759,
+		// called at SpellAuraEffects.cpp:5386): MOD_HEALING_PCT, the
+		// Nourish 1.2x leg, MOD_HOT_PCT and MOD_HEALING_RECEIVED run on
+		// the tick before the crit roll.
+		heal = creatureHealingTakenBonus(s.server, key, tickCaster, tickSpell, tickKnown, heal, true)
 		// Tick crit roll (roll_chance_f(GetCritChanceFor),
-		// SpellAuraEffects.cpp:5388-5390), mirroring the player-target
-		// path. Creature casters have no Go spell-crit model, so only
-		// player-caster ticks roll; the taken-side bonus comes from the
-		// target's MOD_ATTACKER_SPELL_CRIT_CHANCE (179) auras. The
-		// Unit::SpellHealingBonusTaken taken leg has no Go creature model
-		// and stays unbridged — the earlier path healed the raw amount.
+		// SpellAuraEffects.cpp:5388-5390). Creature casters have no Go
+		// spell-crit model, so only player-caster ticks roll; the
+		// victim-side MOD_ATTACKER_SPELL_CRIT_CHANCE (179) term applies
+		// only to non-positive spells (Unit::SpellCritChanceTaken,
+		// Unit.cpp:7216), so periodic heals roll on the caster chance
+		// alone.
 		healCrit := false
 		if tickCaster != nil && tickCaster.player != nil {
 			takenCritBonus := 0.0
-			if s.server != nil {
+			if tickKnown && !spellIsPositive(tickSpell) && s.server != nil {
 				for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, spellAuraModAttackerSpellCritChance, aura.SchoolMask) {
 					takenCritBonus += float64(amt)
 				}
