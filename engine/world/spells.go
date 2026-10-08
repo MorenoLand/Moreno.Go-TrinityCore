@@ -5723,7 +5723,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 	}
 	if isFishingSpell(spellID) {
-		s.spawnFishingBobber(ctx, target)
+		s.spawnFishingBobber(ctx, target, spell.ID)
 		return
 	}
 
@@ -16477,6 +16477,11 @@ func (s *session) interruptCurrentChannel() {
 	}
 	channel.Stopped = true
 	s.castMu.Unlock()
+
+	// Spell::cancel (Spell.cpp:3251-3258): cancelling a channeled spell
+	// removes the game objects the channel summoned
+	// (Unit::RemoveGameObject(spellId, true)).
+	s.removeChannelGameObjects(channel.SpellID)
 
 	s.expireChannelAuras(channel)
 	s.sendChannelUpdate(0)

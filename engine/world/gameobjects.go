@@ -76,6 +76,7 @@ type dynamicGameObjectState struct {
 	LowGUID         uint32
 	Entry           uint32
 	OwnerGUID       uint64
+	SpellID         uint32 // creating spell, for Spell::cancel's RemoveGameObject(spellId) sweep (Spell.cpp:3255)
 	FishingHandled  bool
 	FishingUses     uint32
 	FishingMaxOpens uint32
@@ -1102,7 +1103,7 @@ func isFishingSpell(spellID uint32) bool {
 	}
 }
 
-func (s *session) spawnFishingBobber(ctx context.Context, target protocol.SpellTargetData) {
+func (s *session) spawnFishingBobber(ctx context.Context, target protocol.SpellTargetData, spellID uint32) {
 	if s == nil || s.server == nil || s.player == nil || target.Flags&protocol.SpellTargetFlagDestLocation == 0 {
 		return
 	}
@@ -1119,13 +1120,56 @@ func (s *session) spawnFishingBobber(ctx context.Context, target protocol.SpellT
 		}
 	}
 	lowGUID := s.server.nextDynamicGameObjectLowGUID()
-	dyn := &dynamicGameObjectState{GUID: gameObjectGUID(lowGUID, entry), LowGUID: lowGUID, Entry: entry, OwnerGUID: s.playerGUID, Map: s.player.Map, InstanceID: s.player.InstanceID, X: target.Destination.X, Y: target.Destination.Y, Z: target.Destination.Z, Orientation: s.player.Orientation, State: GameObjectStateActive, Type: GameObjectTypeFishingNode, DisplayID: displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, IsRuntimeSpawn: true}
+	dyn := &dynamicGameObjectState{GUID: gameObjectGUID(lowGUID, entry), LowGUID: lowGUID, Entry: entry, OwnerGUID: s.playerGUID, SpellID: spellID, Map: s.player.Map, InstanceID: s.player.InstanceID, X: target.Destination.X, Y: target.Destination.Y, Z: target.Destination.Z, Orientation: s.player.Orientation, State: GameObjectStateActive, Type: GameObjectTypeFishingNode, DisplayID: displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, IsRuntimeSpawn: true}
 	dyn.AutoCloseTimer = time.AfterFunc(5*time.Second, func() {
 		s.server.setGameObjectStateInInstance(dyn.Map, dyn.InstanceID, dyn.GUID, GameObjectStateReady)
 		s.server.broadcastGameObjectCustomAnimInInstance(dyn.Map, dyn.InstanceID, dyn.GUID, 0)
 	})
 	dyn.DespawnTimer = time.AfterFunc(30*time.Second, func() { s.server.despawnDynamicGameObjectInInstance(dyn.Map, dyn.InstanceID, dyn.GUID) })
 	s.server.spawnDynamicGameObject(dyn)
+}
+
+// removeChannelGameObjects mirrors the channeled-spell arm of Spell::cancel
+// (Spell.cpp:3251-3258): cancelling a channeled spell removes the game
+// objects the channel summoned (Unit::RemoveGameObject(spellId, true),
+// Unit.cpp:5263-5284). The owner link is cleared before the delete, so no
+// SMSG_FISH_ESCAPED goes out on this path (that packet only fires on the
+// bobber's bite-timeout arm, GameObject.cpp:585). The fishing bobber
+// (EffectTransmitted FISHINGNODE arm, SpellEffects.cpp:4982-5000) is the
+// only runtime GO a player channel summons in Go; without this an
+// interrupted fishing channel (movement, new cast, damage abort) left the
+// bobber in the world, still catchable at the 100-yard bobber use range.
+func (s *session) removeChannelGameObjects(spellID uint32) {
+	if s == nil || s.server == nil || spellID == 0 {
+		return
+	}
+	type goRef struct {
+		mapID      uint32
+		instanceID uint32
+		guid       uint64
+	}
+	var refs []goRef
+	s.server.objectsMu.Lock()
+	collect := func(state *dynamicGameObjectState) {
+		if state != nil && state.IsRuntimeSpawn && state.OwnerGUID == s.playerGUID && state.SpellID == spellID {
+			state.OwnerGUID = 0 // C++ clears the owner link before Delete (Unit.cpp:5273)
+			refs = append(refs, goRef{mapID: state.Map, instanceID: state.InstanceID, guid: state.GUID})
+		}
+	}
+	for _, state := range s.server.dynamicGameObjects {
+		collect(state)
+	}
+	for _, byGUID := range s.server.instanceGameObjects {
+		for _, state := range byGUID {
+			collect(state)
+		}
+	}
+	s.server.objectsMu.Unlock()
+	for _, ref := range refs {
+		// OwnerGUID was cleared above, so the despawn skips SMSG_FISH_ESCAPED
+		// exactly like C++'s silent Delete.
+		s.server.despawnDynamicGameObjectInInstance(ref.mapID, ref.instanceID, ref.guid)
+	}
 }
 
 func (s *Server) despawnDynamicGameObject(guid uint64) {
