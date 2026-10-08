@@ -1402,45 +1402,93 @@ func (s *session) handleItemRefund(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// WorldSession::HandleItemRefund (ItemHandler.cpp:1186-1204): an item
+	// currently being disenchanted is silently ignored, exactly like a
+	// missing item.
+	if loot := s.activeLoot; loot != nil && loot.TargetGUID == rawItemGUID {
+		return true
+	}
+
 	var itemEntry, itemCount, paidMoney, paidExtendedCost int64
 	err = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT ii.itemEntry, ii.count, iri.paidMoney, iri.paidExtendedCost FROM item_instance AS ii
 		JOIN character_inventory AS ci ON ci.item = ii.guid
 		JOIN item_refund_instance AS iri ON iri.item_guid = ii.guid AND iri.player_guid = ci.guid
 		WHERE ii.guid = ? AND ci.guid = ? LIMIT 1`, itemGUID, s.playerGUID).Scan(&itemEntry, &itemCount, &paidMoney, &paidExtendedCost)
-
-	buf := protocol.NewBuffer(64)
-	buf.WriteU64(rawItemGUID)
+	// Player::RefundItem (Player.cpp:26576-26580): a missing or non-refundable
+	// item (no refund row, or a traded-away recipient) is a silent return —
+	// no SMSG_ITEM_REFUND_RESULT reaches the client.
 	if err != nil || itemEntry == 0 {
-		buf.WriteU32(10) // error (expired or not refundable)
-		return s.write(uint16(protocol.OpcodeSMSG_ITEM_REFUND_RESULT), buf.Bytes(), true) == nil
+		return true
 	}
 	extendedCost := wotlk.ItemExtendedCostEntry{}
 	if paidExtendedCost != 0 {
 		if s.server.Data == nil {
-			buf.WriteU32(10)
-			return s.write(uint16(protocol.OpcodeSMSG_ITEM_REFUND_RESULT), buf.Bytes(), true) == nil
+			return true
 		}
 		var found bool
 		extendedCost, found, err = s.server.Data.ItemExtendedCost(uint32(paidExtendedCost))
+		// Player.cpp:26599-26605: a missing extended-cost entry only logs and
+		// returns — the client gets no result packet.
 		if err != nil || !found {
-			buf.WriteU32(10)
-			return s.write(uint16(protocol.OpcodeSMSG_ITEM_REFUND_RESULT), buf.Bytes(), true) == nil
+			return true
 		}
 	}
+	// Player.cpp:26607-26623: the extended-cost item space is feasibility-
+	// checked for ALL requirements before anything is granted — a failure
+	// answers SMSG_ITEM_REFUND_RESULT error 10 with zero side effects. The
+	// old code granted items first, so a mid-loop failure left a partial
+	// grant with no refund recorded.
+	type refundGrant struct{ entry, count uint32 }
+	var grants []refundGrant
 	for i := 0; i < len(extendedCost.ItemIDs); i++ {
 		if extendedCost.ItemIDs[i] == 0 || extendedCost.ItemCounts[i] == 0 {
 			continue
 		}
-		if _, err := s.storeOrStackItem(ctx, s.playerGUID, extendedCost.ItemIDs[i], extendedCost.ItemCounts[i]); err != nil {
-			buf.WriteU32(10)
+		if s.canStoreNewItem(ctx, s.playerGUID, extendedCost.ItemIDs[i], extendedCost.ItemCounts[i]) != equipErrOk {
+			buf := protocol.NewBuffer(64)
+			buf.WriteU64(rawItemGUID)
+			buf.WriteU32(10) // error
 			return s.write(uint16(protocol.OpcodeSMSG_ITEM_REFUND_RESULT), buf.Bytes(), true) == nil
 		}
+		grants = append(grants, refundGrant{entry: extendedCost.ItemIDs[i], count: extendedCost.ItemCounts[i]})
 	}
 
+	// Player.cpp:26625-26635: the success result is sent BEFORE the refund
+	// data is cleared, the item destroyed and the costs granted back.
+	buf := protocol.NewBuffer(64)
+	buf.WriteU64(rawItemGUID)
+	buf.WriteU32(0)
+	buf.WriteU32(uint32(paidMoney))
+	buf.WriteU32(extendedCost.HonorPoints)
+	buf.WriteU32(extendedCost.ArenaPoints)
+	for i := 0; i < len(extendedCost.ItemIDs); i++ {
+		buf.WriteU32(extendedCost.ItemIDs[i])
+		buf.WriteU32(extendedCost.ItemCounts[i])
+	}
+	if s.write(uint16(protocol.OpcodeSMSG_ITEM_REFUND_RESULT), buf.Bytes(), true) != nil {
+		return false
+	}
+
+	// Player::RefundItem tail (Player.cpp:26639-26686): SetNotRefundable,
+	// DestroyItem, then the extended-cost items (each with
+	// SendNewItem(it, count, received=true, created=false, broadcast=true)),
+	// money, honor and arena grants.
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ? AND guid = ?", itemGUID, s.playerGUID)
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_refund_instance WHERE item_guid = ? AND player_guid = ?", itemGUID, s.playerGUID)
 	s.adjustQuestItemCount(ctx, uint32(itemEntry), uint32(itemCount), false)
+
+	for _, g := range grants {
+		res, storeErr := s.storeOrStackItem(ctx, s.playerGUID, g.entry, g.count)
+		if storeErr != nil || res == nil {
+			continue
+		}
+		slotForPush := uint32(res.Slot)
+		if res.IsStack {
+			slotForPush = 0xFFFFFFFF
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildItemPushResult(s.playerGUID, res.ClientBag, slotForPush, g.entry, g.count, res.InventoryCount, res.IsStack), true)
+	}
 
 	s.player.Money += uint32(paidMoney)
 	s.player.TotalHonorPoints += extendedCost.HonorPoints
@@ -1456,15 +1504,7 @@ func (s *session) handleItemRefund(ctx context.Context, payload []byte) bool {
 	}
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
-	buf.WriteU32(0)
-	buf.WriteU32(uint32(paidMoney))
-	buf.WriteU32(extendedCost.HonorPoints)
-	buf.WriteU32(extendedCost.ArenaPoints)
-	for i := 0; i < len(extendedCost.ItemIDs); i++ {
-		buf.WriteU32(extendedCost.ItemIDs[i])
-		buf.WriteU32(extendedCost.ItemCounts[i])
-	}
-	return s.write(uint16(protocol.OpcodeSMSG_ITEM_REFUND_RESULT), buf.Bytes(), true) == nil
+	return true
 }
 
 const (
