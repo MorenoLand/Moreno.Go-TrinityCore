@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -59,6 +60,10 @@ const (
 	preBCMaxBuild         uint32 = 6141
 	realmFlagOffline      uint32 = 0x02
 	realmFlagSpecifyBuild uint32 = 0x04
+	realmTypeNormal       uint8  = 0
+	realmTypePvP          uint8  = 1
+	realmTypeFFAPvP       uint8  = 16
+	maxClientRealmType    uint8  = 14
 )
 
 var versionChallenge = [16]byte{0xBA, 0xA3, 0x1E, 0x99, 0xA0, 0x0B, 0x21, 0x57, 0xFC, 0x37, 0x3F, 0xB3, 0x69, 0xCD, 0xD2, 0xF1}
@@ -216,9 +221,13 @@ func parseTOTPMasterSecret(value string) ([crypto.AESKeySize]byte, error) {
 
 func (s *Server) decryptTOTPSecret(secret []byte) ([]byte, error) {
 	result := append([]byte(nil), secret...)
-	if s == nil || !s.hasTotpMasterKey || len(result) == 0 {
+	if s == nil || !s.hasTotpMasterKey {
 		return result, nil
 	}
+	// AuthSession.cpp:388-396: with the TOTP master key configured the stored
+	// secret is always run through AEDecrypt and a failure (including an empty
+	// non-NULL blob, which cannot hold the trailing IV+tag) answers
+	// WOW_FAIL_DB_BUSY at challenge time.
 	if err := crypto.DecryptWithTrailingIVAndTag(&result, s.totpMasterKey); err != nil {
 		return nil, err
 	}
@@ -837,8 +846,21 @@ func loadRealms(ctx context.Context, store *database.Store) ([]realm, error) {
 		if population.Valid {
 			r.Population = float32(population.Float64)
 		}
+		// RealmList::UpdateRealms (shared/Realm/RealmList.cpp:164-167) normalizes
+		// the icon at load: FFA_PVP collapses to PVP and anything at or above
+		// MAX_CLIENT_REALM_TYPE falls back to NORMAL.
+		if r.Icon == realmTypeFFAPvP {
+			r.Icon = realmTypePvP
+		}
+		if r.Icon >= maxClientRealmType {
+			r.Icon = realmTypeNormal
+		}
 		result = append(result, r)
 	}
+	// _realms is std::map<RealmHandle, Realm> (shared/Realm/RealmList.h:51), so
+	// RealmListCallback iterates realms in ascending realm-ID order regardless
+	// of the SQL ORDER BY name; match that wire order.
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result, rows.Err()
 }
 

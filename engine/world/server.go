@@ -44,7 +44,10 @@ const (
 	authBanned          byte   = 28
 	authUnavailable     byte   = 16
 	authWaitQueue       byte   = 27
-	loginServerNotFound byte   = 26
+	// WorldSocket.cpp:487 answers a realm-ID mismatch with
+	// REALM_LIST_REALM_NOT_FOUND (SharedDefines.h:3400), not
+	// AUTH_LOGIN_SERVER_NOT_FOUND.
+	realmListRealmNotFound byte = 39
 )
 
 // overspeedPingWindow mirrors the fixed 27 second threshold in
@@ -3425,7 +3428,7 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	}
 	if realmID != s.server.RealmID {
 		s.debug("world authentication rejected", "account", debugAccount, "reason", "realm mismatch", "realm", realmID)
-		_ = s.write(opcodeAuthResponse, []byte{loginServerNotFound}, true)
+		_ = s.write(opcodeAuthResponse, []byte{realmListRealmNotFound}, true)
 		return false
 	}
 	if s.server.Config.WardenEnabled && !wardenOSAllowed(account.OS) {
@@ -3455,6 +3458,10 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		_ = s.write(opcodeAuthResponse, []byte{authFailed}, true)
 		return false
 	}
+	// WorldSocket.cpp:555-562: the negative-mutetime arm runs before the ban
+	// and security checks, so a banned account still gets its pending mute
+	// persisted via LOGIN_UPD_MUTE_TIME_LOGIN.
+	account.MuteTime = normalizeLoginMuteTime(ctx, s.server.AuthStore.DB, account.ID, account.MuteTime)
 	if banned, err := accountBanned(ctx, s.server.AuthStore, account.ID); err != nil || banned {
 		s.debug("world authentication rejected", "account", debugAccount, "reason", "account ban")
 		_ = s.write(opcodeAuthResponse, []byte{authBanned}, true)
@@ -3465,7 +3472,6 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		_ = s.write(opcodeAuthResponse, []byte{authUnavailable}, true)
 		return false
 	}
-	account.MuteTime = normalizeLoginMuteTime(ctx, s.server.AuthStore.DB, account.ID, account.MuteTime)
 	if !s.server.kickDuplicateAccountSessions(account.ID, s) {
 		return false
 	}

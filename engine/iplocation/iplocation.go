@@ -17,7 +17,7 @@ type Range struct{ From, To uint32; Country string }
 type Store struct{ ranges []Range }
 
 func CountryLockMismatch(ipLocked bool, lockCountry, ipCountry string) bool {
-	return !ipLocked && lockCountry != "" && lockCountry != "00" && ipCountry != "" && !strings.EqualFold(lockCountry, ipCountry)
+	return !ipLocked && lockCountry != "" && lockCountry != "00" && ipCountry != "" && lockCountry != ipCountry
 }
 
 func Load(path string) (*Store, error) {
@@ -49,7 +49,7 @@ func ParseCSV(source io.Reader) (*Store, error) {
 		if err != nil || from > to {
 			return nil, errors.New("invalid IP location range")
 		}
-		ranges = append(ranges, Range{From: uint32(from), To: uint32(to), Country: strings.ToLower(strings.TrimSpace(row[2]))})
+		ranges = append(ranges, Range{From: uint32(from), To: uint32(to), Country: strings.ToUpper(strings.TrimSpace(row[2]))})
 	}
 	sort.Slice(ranges, func(i, j int) bool { return ranges[i].From < ranges[j].From })
 	for i := 1; i < len(ranges); i++ {
