@@ -1208,9 +1208,14 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 		if s.server != nil && s.groupID != 0 && loot.GOLootRules {
 			s.server.groupsMu.Lock()
 			grp := s.server.groups[s.groupID]
-			if grp != nil && loot.RoundRobinPlayer == 0 && grp.LootMethod != 0 {
+			if grp != nil && loot.RoundRobinPlayer == 0 {
 				grp.updateLooter(s.server, goMap, s.player.InstanceID, goX, goY, goZ)
-				loot.RoundRobinPlayer = grp.LooterGUID
+				// Player::SendLoot GO arm (Player.cpp:8597): the fill passes
+				// the opener as lootOwner, so Loot::FillLoot (Loot.cpp:214)
+				// sets roundRobinPlayer to the OPENER, not the rotating
+				// group looter. The update/advance pair above still mirrors
+				// Player.cpp:8595/8603 (groupRules only).
+				loot.RoundRobinPlayer = s.playerGUID
 				// Unit.cpp:11270-11271 / Player.cpp:8603 (the !loot->empty()
 				// gate): after the fill, C++ unconditionally advances the
 				// group looter for the next loot, so consecutive loots rotate
@@ -1405,8 +1410,14 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	if s.server != nil && s.groupID != 0 {
 		s.server.groupsMu.Lock()
 		grp := s.server.groups[s.groupID]
-		if grp != nil && loot.RoundRobinPlayer == 0 && grp.LootMethod != 0 {
+		if grp != nil && loot.RoundRobinPlayer == 0 {
 			grp.updateLooter(s.server, target.Map, target.InstanceID, target.X, target.Y, target.Z)
+			// Unit.cpp:11214-11257: the kill-time fill passes the (ifneed-
+			// updated) group looter as lootOwner, so Loot::FillLoot
+			// (Loot.cpp:214) sets roundRobinPlayer to the rotating group
+			// looter — unconditionally for grouped fills, including
+			// FREE_FOR_ALL (the old LootMethod != 0 gate dropped the
+			// release-time SendLooter broadcast under FFA).
 			loot.RoundRobinPlayer = grp.LooterGUID
 			// Unit.cpp:11270-11271 (the !loot->empty() gate): after the
 			// kill-time fill, C++ unconditionally advances the group
@@ -1706,8 +1717,11 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 			isOverThreshold := it.Quality >= uint32(grp.LootThreshold)
 			switch grp.LootMethod {
 			case 1: // Round Robin
+				// Loot.cpp:679-689 (ROUND_ROBIN_PERMISSION): rows are hidden
+				// from every viewer but the round-robin owner — C++ `continue`s
+				// past them, it does not render them LOCKED.
 				if loot.RoundRobinPlayer != 0 && s.playerGUID != loot.RoundRobinPlayer {
-					slotType = 3 // LOOT_SLOT_TYPE_LOCKED
+					continue
 				}
 			case 2: // Master Loot
 				if isOverThreshold {
