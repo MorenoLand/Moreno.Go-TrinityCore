@@ -131,6 +131,12 @@ type activeLootState struct {
 	// fills. 0 means a shared (non-personal) fill: creature kills and
 	// groupRules chests.
 	QuestPersonalGUID uint64
+	// MaxDuplicates mirrors Loot::maxDuplicates (Loot.h:218, Loot.cpp:108):
+	// the cap on same-entry copies a group roll may add, default 1, raised
+	// to 3 on 25-man raids (Creature.cpp:485, GameObject.cpp:404). The
+	// zero value means the default 1; the group-roll exclusion treats it
+	// that way so only the raid fills need to set it.
+	MaxDuplicates uint8
 }
 
 // storeLootTemplateRow routes one rolled loot-template row into Items or
@@ -208,11 +214,26 @@ type lootTemplateRow struct {
 // NormalSlotCount is set on return.
 func (s *Server) fillLootTemplate(ctx context.Context, wdb *sql.DB, table string, lootID int64, lootMode uint32, loot *activeLootState) {
 	var slot, qidx uint8
-	s.fillLootTemplateDepth(ctx, wdb, table, lootID, lootMode, loot, &slot, &qidx, 0)
+	s.fillLootTemplateDepth(ctx, wdb, table, lootID, lootMode, loot, &slot, &qidx, 0, 0)
 	loot.NormalSlotCount = slot
 }
 
-func (s *Server) fillLootTemplateDepth(ctx context.Context, wdb *sql.DB, table string, lootID int64, lootMode uint32, loot *activeLootState, slot, qidx *uint8, depth int) {
+// lootMaxDuplicates mirrors the Creature.cpp:485 / GameObject.cpp:404 gate:
+// loot.maxDuplicates is 3 when the loot's map Is25ManRaid(), else the
+// Loot.cpp:108 default of 1. raidDifficulty is the opener's RaidDifficulty
+// (DBCEnums.h:287: RAID_DIFFICULTY_25MAN_NORMAL=1, _25MAN_HEROIC=3 — bit 0
+// set, matching RaidDifficulty25ManMask).
+func (s *Server) lootMaxDuplicates(mapID uint32, raidDifficulty uint8) uint8 {
+	if raidDifficulty&RaidDifficulty25ManMask == 0 || s == nil || s.Data == nil {
+		return 1
+	}
+	if entry, ok, err := s.Data.Map(mapID); err == nil && ok && entry.IsRaid() {
+		return 3
+	}
+	return 1
+}
+
+func (s *Server) fillLootTemplateDepth(ctx context.Context, wdb *sql.DB, table string, lootID int64, lootMode uint32, loot *activeLootState, slot, qidx *uint8, groupSel uint8, depth int) {
 	switch table {
 	case "creature_loot_template", "gameobject_loot_template", "skinning_loot_template",
 		"pickpocketing_loot_template", "reference_loot_template", "spell_loot_template":
@@ -225,7 +246,11 @@ func (s *Server) fillLootTemplateDepth(ctx context.Context, wdb *sql.DB, table s
 	rows := loadLootTemplateRows(ctx, wdb, table, lootID, lootMode)
 
 	// Rolling non-grouped items first (LootMgr.cpp:574-597); references never
-	// join groups (LootTemplate::AddEntry, LootMgr.cpp:522-535).
+	// join groups (LootTemplate::AddEntry, LootMgr.cpp:522-535). A non-zero
+	// groupSel selects a single group of the referenced template and skips
+	// the non-grouped entries entirely (LootTemplate::Process,
+	// LootMgr.cpp:562-572: Groups[groupId-1]->Process): a reference row's
+	// own groupid is the selector, not a group membership.
 	var groups []*lootGroup
 	groupIndex := make(map[uint8]*lootGroup)
 	for i := range rows {
@@ -233,19 +258,30 @@ func (s *Server) fillLootTemplateDepth(ctx context.Context, wdb *sql.DB, table s
 		if row.lootMode&lootMode == 0 {
 			continue
 		}
-		if row.groupID == 0 {
-			if row.reference > 0 {
-				if !lootRowTakesChance(row.chance) {
-					continue
-				}
-				// Reference multiplicator: maxcount loops over the referenced
-				// template (LootMgr.cpp:587-591); RATE_DROP_ITEM_REFERENCED and
-				// RATE_DROP_ITEM_REFERENCED_AMOUNT have no Go model.
-				for n := uint32(0); n < row.maxCount; n++ {
-					s.fillLootTemplateDepth(ctx, wdb, "reference_loot_template", int64(row.reference), lootMode, loot, slot, qidx, depth+1)
-				}
+		// Reference rows always live in Entries, never in groups
+		// (LootTemplate::AddEntry, LootMgr.cpp:522-535); a group-selected
+		// Process skips Entries entirely (LootMgr.cpp:562-572).
+		if row.reference > 0 {
+			if groupSel != 0 {
 				continue
 			}
+			if !lootRowTakesChance(row.chance) {
+				continue
+			}
+			// Reference multiplicator: maxcount loops over the referenced
+			// template (LootMgr.cpp:587-591); the reference row's own groupid
+			// selects the group inside the referenced template.
+			// RATE_DROP_ITEM_REFERENCED and
+			// RATE_DROP_ITEM_REFERENCED_AMOUNT have no Go model.
+			for n := uint32(0); n < row.maxCount; n++ {
+				s.fillLootTemplateDepth(ctx, wdb, "reference_loot_template", int64(row.reference), lootMode, loot, slot, qidx, row.groupID, depth+1)
+			}
+			continue
+		}
+		if groupSel != 0 && row.groupID != groupSel {
+			continue
+		}
+		if row.groupID == 0 {
 			if !lootRowTakesChance(row.chance) {
 				continue
 			}
@@ -287,15 +323,19 @@ type lootGroup struct {
 // roll mirrors LootTemplate::LootGroup::Roll (LootMgr.cpp:375-397): the first
 // explicitly-chanced entry whose running chance subtraction drops below zero
 // wins (chance >= 100 wins immediately); otherwise one equal-chanced entry is
-// picked at random. Entries already present maxDuplicates (1) times in the
-// loot are excluded, mirroring LootGroupInvalidSelector (LootMgr.cpp:58-76);
+// picked at random. Entries already present maxDuplicates times in the loot
+// are excluded, mirroring LootGroupInvalidSelector (LootMgr.cpp:58-76);
 // the lootmode arm of that selector is applied at load time and conditions
 // have no Go model.
 func (g *lootGroup) roll(loot *activeLootState) *lootTemplateRow {
+	maxDup := loot.MaxDuplicates
+	if maxDup < 1 {
+		maxDup = 1 // Loot::Loot (Loot.cpp:108): maxDuplicates defaults to 1
+	}
 	if len(g.explicit) > 0 {
 		roll := rand.Float64() * 100
 		for _, row := range g.explicit {
-			if lootHasItem(loot, row.itemID) {
+			if lootItemCopies(loot, row.itemID) >= maxDup {
 				continue
 			}
 			if row.chance >= 100 {
@@ -309,7 +349,7 @@ func (g *lootGroup) roll(loot *activeLootState) *lootTemplateRow {
 	}
 	var candidates []*lootTemplateRow
 	for _, row := range g.equal {
-		if !lootHasItem(loot, row.itemID) {
+		if lootItemCopies(loot, row.itemID) < maxDup {
 			candidates = append(candidates, row)
 		}
 	}
@@ -319,15 +359,17 @@ func (g *lootGroup) roll(loot *activeLootState) *lootTemplateRow {
 	return nil
 }
 
-// lootHasItem reports whether itemID already occupies a normal loot slot,
-// for the LootGroupInvalidSelector maxDuplicates arm (LootMgr.cpp:66-71).
-func lootHasItem(loot *activeLootState, itemID uint32) bool {
+// lootItemCopies counts normal-slot copies of itemID already in the loot,
+// for the LootGroupInvalidSelector maxDuplicates arm (LootMgr.cpp:66-71):
+// an entry is excluded once foundDuplicates reaches maxDuplicates.
+func lootItemCopies(loot *activeLootState, itemID uint32) uint8 {
+	var n uint8
 	for _, it := range loot.Items {
 		if it.ItemEntry == itemID {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
 }
 
 // lootRowTakesChance mirrors LootStoreItem::Roll (LootMgr.cpp:281-295) minus
@@ -381,21 +423,21 @@ func loadLootTemplateRows(ctx context.Context, wdb *sql.DB, table string, lootID
 			COALESCE(l.LootMode, 1), COALESCE(l.GroupId, 0), COALESCE(t.Stackable, 0), COALESCE(t.Flags, 0)
 		FROM ` + table + ` AS l
 		LEFT JOIN item_template AS t ON t.entry = l.Item
-		WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`
+		WHERE l.Entry = ? ORDER BY l.Item`
 	rows, err := wdb.QueryContext(ctx, full, lootID)
 	if err != nil && isMissingColumn(err) {
 		rows, err = wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0),
 				COALESCE(l.QuestRequired, 0), COALESCE(t.StartQuest, 0), COALESCE(t.flagsCustom, 0)
 			FROM `+table+` AS l
 			LEFT JOIN item_template AS t ON t.entry = l.Item
-			WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, lootID)
+			WHERE l.Entry = ? ORDER BY l.Item`, lootID)
 	}
 	if err != nil && isMissingColumn(err) {
 		rows, err = wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), 0,
 					0, 0, 0
 			FROM `+table+` AS l
 			LEFT JOIN item_template AS t ON t.entry = l.Item
-			WHERE l.Entry = ? ORDER BY l.Item LIMIT 48`, lootID)
+			WHERE l.Entry = ? ORDER BY l.Item`, lootID)
 	}
 	if err != nil {
 		return nil
@@ -1111,6 +1153,7 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 	newLoot := loot == nil
 	if newLoot {
 		loot = &activeLootState{TargetGUID: targetGUID, MapID: goMap, InstanceID: s.player.InstanceID, LootType: lootType, Items: make(map[uint8]lootItem),
+			MaxDuplicates: s.server.lootMaxDuplicates(goMap, s.player.RaidDifficulty),
 			// Player.cpp:8590: the group distribution/round-robin arms run
 			// only for chests with chest.groupLootRules (data15).
 			GOLootRules: goType == GameObjectTypeChest && goData15 != 0}
@@ -1302,7 +1345,8 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	}
 	newLoot := loot == nil
 	if newLoot {
-		loot = &activeLootState{TargetGUID: targetGUID, MapID: target.Map, InstanceID: target.InstanceID, LootType: 1, Items: make(map[uint8]lootItem)}
+		loot = &activeLootState{TargetGUID: targetGUID, MapID: target.Map, InstanceID: target.InstanceID, LootType: 1, Items: make(map[uint8]lootItem),
+			MaxDuplicates: s.server.lootMaxDuplicates(target.Map, s.player.RaidDifficulty)}
 		s.server.creatureLoot[key] = loot
 		s.server.creatureLoot[standardKey] = loot
 	}
@@ -1388,7 +1432,8 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 	if requireOwner {
 		goState.FishingHandled = true
 	}
-	loot := &activeLootState{TargetGUID: targetGUID, MapID: goState.Map, InstanceID: goState.InstanceID, LootType: 3, Items: make(map[uint8]lootItem)}
+	loot := &activeLootState{TargetGUID: targetGUID, MapID: goState.Map, InstanceID: goState.InstanceID, LootType: 3, Items: make(map[uint8]lootItem),
+		MaxDuplicates: s.server.lootMaxDuplicates(goState.Map, s.player.RaidDifficulty)}
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return s.sendLootResponse(ctx, loot) == nil
 	}
@@ -1937,7 +1982,8 @@ func (s *session) openSkinningLoot(ctx context.Context, targetGUID uint64, entry
 		loot = s.server.creatureLoot[standardKey]
 	}
 	if loot == nil {
-		loot = &activeLootState{TargetGUID: targetGUID, MapID: s.player.Map, InstanceID: s.player.InstanceID, Items: make(map[uint8]lootItem)}
+		loot = &activeLootState{TargetGUID: targetGUID, MapID: s.player.Map, InstanceID: s.player.InstanceID, Items: make(map[uint8]lootItem),
+			MaxDuplicates: s.server.lootMaxDuplicates(s.player.Map, s.player.RaidDifficulty)}
 		s.server.creatureLoot[key] = loot
 		s.server.creatureLoot[standardKey] = loot
 	}
@@ -2034,7 +2080,8 @@ func (s *session) openPickpocketLoot(ctx context.Context, targetGUID uint64, ent
 		return s.sendLootError(targetGUID, lootErrorAlreadyPickpocketed) == nil
 	}
 	if loot == nil {
-		loot = &activeLootState{TargetGUID: targetGUID, MapID: s.player.Map, InstanceID: s.player.InstanceID, Items: make(map[uint8]lootItem)}
+		loot = &activeLootState{TargetGUID: targetGUID, MapID: s.player.Map, InstanceID: s.player.InstanceID, Items: make(map[uint8]lootItem),
+			MaxDuplicates: s.server.lootMaxDuplicates(s.player.Map, s.player.RaidDifficulty)}
 		s.server.creatureLoot[key] = loot
 		s.server.creatureLoot[standardKey] = loot
 	}
