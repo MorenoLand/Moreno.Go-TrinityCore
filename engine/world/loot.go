@@ -619,17 +619,30 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	target, ok := s.getCombatTarget(ctx, targetGUID)
 	// DIAGNOSTIC: log loot attempts to diagnose window-not-opening
 	s.debug("loot attempt", "account", s.accountName, "guid", targetGUID, "found", ok, "target_health", target.Health, "player_map", s.player.Map, "target_map", target.Map)
+	// HandleLootOpcode cheat gate, second half (LootHandler.cpp:232-233):
+	// CMSG_LOOT with a non creature/vehicle GUID is dropped silently. The
+	// gameobject (0xF110) and corpse (0xF101) arms above are Go-routed entry
+	// points; anything else that is not a creature (0xF130) or vehicle
+	// (0xF150) GUID never reaches SendLoot in C++.
+	if high != 0xF130 && high != 0xF150 {
+		return true
+	}
 	if !ok || target.Map != s.player.Map || target.InstanceID != s.player.InstanceID || !withinLootDistance(s, target) {
 		s.debug("loot rejected", "account", s.accountName, "reason", "target-not-found-or-invalid")
+		// HandleLootOpcode (LootHandler.cpp:237-239) interrupts the current
+		// cast after SendLoot returns, whatever its internal outcome was.
+		s.interruptCurrentCast()
 		return s.sendLootReleaseResponse(targetGUID) == nil
 	}
 	if target.Health != 0 {
+		s.interruptCurrentCast()
 		return s.sendLootReleaseResponse(targetGUID) == nil
 	}
 	guid := uint32(targetGUID & 0x00FFFFFF)
 	creatureEntry := uint32((targetGUID >> 24) & 0x00FFFFFF)
 	stdKey := creatureWorldGUID(guid, creatureEntry)
 	if !s.server.creatureLootAllowed(target.Map, target.InstanceID, targetGUID, stdKey, s.playerGUID, s.groupID) {
+		s.interruptCurrentCast()
 		return s.sendLootError(targetGUID, 0) == nil
 	}
 
@@ -652,6 +665,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	s.server.lootMu.Unlock()
 	if !newLoot {
 		if !s.server.creatureLootAllowed(target.Map, target.InstanceID, targetGUID, stdKey, s.playerGUID, s.groupID) {
+			s.interruptCurrentCast()
 			return s.sendLootError(targetGUID, 0) == nil
 		}
 		loot.addViewer(s)
@@ -927,13 +941,17 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 	packet.WriteU32(loot.Money)
 	packet.WriteU8(uint8(len(loot.Items) + len(questList)))
 	items := sortedLootItems(loot.Items)
+	// Player::SendLoot permission model (Player.cpp:8784-8862, Loot.cpp:672):
+	// solo creature/item loot carries OWNER_PERMISSION, rendered as
+	// LOOT_SLOT_TYPE_OWNER; ungrouped gameobject loot carries ALL_PERMISSION
+	// (plain allow-loot). The skinning/pickpocket arms set OWNER explicitly
+	// and skip the group ladder entirely.
+	ownerSlot := uint8(0) // LOOT_SLOT_TYPE_ALLOW_LOOT
+	if uint16(loot.TargetGUID>>48) != 0xF110 {
+		ownerSlot = 4 // LOOT_SLOT_TYPE_OWNER
+	}
 	for _, it := range items {
-		var slotType uint8 = 0 // LOOT_SLOT_TYPE_ALLOW_LOOT
-		// Player::SendLoot (Player.cpp:8784, 8849): the pickpocket arm sets
-		// OWNER_PERMISSION without touching the group ladder, and group
-		// rights are set only for loot_type != LOOT_SKINNING, so skinning
-		// and pickpocket loot always show plain allow-loot slots even when
-		// the looter is grouped.
+		var slotType uint8 = ownerSlot
 		if grp != nil && loot.LootType != lootTypeSkinning && loot.LootType != lootTypePickpocketing {
 			isOverThreshold := it.Quality >= uint32(grp.LootThreshold)
 			switch grp.LootMethod {
@@ -981,22 +999,24 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 		packet.WriteU32(it.ItemEntry)
 		packet.WriteU32(it.Count)
 		packet.WriteU32(it.DisplayInfoID)
+		packet.WriteU32(0) // RandomSuffix (Loot.cpp:589: randomSuffix before randomPropertyId)
 		packet.WriteU32(0) // RandomPropertyId
-		packet.WriteU32(0) // RandomSuffix
 		packet.WriteU8(slotType)
 	}
 	// LootView quest arm (Loot.cpp:703-745): the viewer's quest items follow
 	// the normal items. follow_loot_rules items take the master/locked arms
-	// under master loot; otherwise they ride the permission default (Go's
-	// solo/group default is ALLOW_LOOT, matching the normal-item legs above).
-	// Go has no quest-item block model, so the GROUP/NBG ROLL_ONGOING leg has
+	// under master loot; otherwise they ride the permission default
+	// (ownerSlot, matching the normal-item legs above). Go has no
+	// quest-item block model, so the GROUP/NBG ROLL_ONGOING leg has
 	// no bridge: follow_loot_rules quest items under group/nbg stay directly
 	// lootable (documented delta).
 	for pos, qidx := range questList {
 		qit := loot.QuestItems[qidx]
-		var qSlotType uint8 = 0 // LOOT_SLOT_TYPE_ALLOW_LOOT
-		if qit.CustomFlags&itemFlagsCuFollowLootRules != 0 && grp != nil && grp.LootMethod == 2 &&
-			qit.Quality >= uint32(grp.LootThreshold) {
+		// Loot.cpp:709-711: the quest section rides the permission default
+		// (OWNER/ALLOW) unless follow_loot_rules pulls it into the master
+		// arm, which always renders MASTER for the master looter's view.
+		var qSlotType uint8 = ownerSlot
+		if qit.CustomFlags&itemFlagsCuFollowLootRules != 0 && grp != nil && grp.LootMethod == 2 {
 			if s.playerGUID == grp.MasterLooter {
 				qSlotType = 2 // LOOT_SLOT_TYPE_MASTER
 			} else {
@@ -1007,8 +1027,8 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 		packet.WriteU32(qit.ItemEntry)
 		packet.WriteU32(qit.Count)
 		packet.WriteU32(qit.DisplayInfoID)
+		packet.WriteU32(0) // RandomSuffix (Loot.cpp:589: randomSuffix before randomPropertyId)
 		packet.WriteU32(0) // RandomPropertyId
-		packet.WriteU32(0) // RandomSuffix
 		packet.WriteU8(qSlotType)
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_LOOT_RESPONSE), packet.Bytes(), true); err != nil {
