@@ -151,11 +151,6 @@ func (s *Server) storeNewContainerLoot(ctx context.Context, containerGUID uint64
 	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil || containerGUID == 0 || loot == nil {
 		return
 	}
-	// Loot::isLooted (Loot.h:236): nothing to persist when the fill rolled
-	// neither money nor items.
-	if loot.Money == 0 && len(loot.Items) == 0 {
-		return
-	}
 	s.lootMu.Lock()
 	if s.storedContainerLoot == nil {
 		s.storedContainerLoot = make(map[uint64]*storedContainerLoot)
@@ -185,6 +180,22 @@ func (s *Server) storeNewContainerLoot(ctx context.Context, containerGUID uint64
 			DisplayInfoID: data.DisplayInfoID,
 			Quality:       data.Quality,
 		})
+	}
+	// LootItemStorage::AddNewStoredLoot's isLooted gate (Loot.h:236) +
+	// Player.cpp:8705: the store fires only when gold > 0 or
+	// unlootedCount > 0. unlootedCount counts opener/group-visible normal
+	// and FFA rows (quest rows are never counted, Loot.cpp:176-183), so
+	// the Go analog is: money, or at least one opener-eligible non-currency
+	// row surviving the AllowedForPlayer filter above. Registering an
+	// empty entry here would make applyStoredContainerLoot return true on
+	// the next open and swallow the re-roll, where C++ (no AddNewStoredLoot
+	// call at all) re-fills — e.g. a container that rolled only recipes
+	// the opener already knows. C++'s canSeeItemInLootWindow group-member
+	// leg (a groupmate could see a row the opener cannot) stays unmodeled:
+	// Go's store filter is opener-scoped.
+	if st.Money == 0 && len(st.Items) == 0 {
+		s.lootMu.Unlock()
+		return
 	}
 	s.storedContainerLoot[containerGUID] = st
 	s.lootMu.Unlock()
