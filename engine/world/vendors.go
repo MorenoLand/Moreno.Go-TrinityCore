@@ -540,7 +540,13 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 			validRows = append(validRows, r)
 		}
 	}
-	if slot == 0 || int(slot) > len(validRows) {
+	// ItemHandler.cpp:585-589 / 546-549: "client expects count starting at 1 ...
+	// if (slot > 0) --slot; else return; // cheating" — a 0 slot is a
+	// cheating attempt answered with silence, not BUY_ERR_CANT_FIND_ITEM.
+	if slot == 0 {
+		return true
+	}
+	if int(slot) > len(validRows) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrCantFindItem), true)
 		return true
 	}
@@ -658,6 +664,18 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	}
 	newCount := vendorPacketStock(remainingStock)
 	_ = s.write(uint16(protocol.OpcodeSMSG_BUY_ITEM), buildBuySucceeded(vendorGUID, slot, newCount, count), true)
+	// Player::_StoreOrEquipNewItem (Player.cpp:21885-21892): every vendor
+	// purchase answers SMSG_ITEM_PUSH_RESULT via SendNewItem(it,
+	// BuyCount*count, received=true, created=false, sendChatMessage=false)
+	// — received=1 "from npc", the (1,0,0) header buildItemPushResult
+	// writes; the slot is 0xFFFFFFFF when the items stacked onto an
+	// existing pile (item->GetCount() != count arm), matching the loot
+	// path's slotForPush convention.
+	slotForPush := uint32(res.Slot)
+	if res.IsStack {
+		slotForPush = 0xFFFFFFFF
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildItemPushResult(s.playerGUID, res.ClientBag, slotForPush, itemEntry, uint32(amount), res.InventoryCount, res.IsStack), true)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	s.debug("item bought from vendor", "account", s.accountName, "item", itemEntry, "count", count, "cost", totalCost, "extended_cost", extCost, "slot", res.Slot, "bag", res.ClientBag, "stacked", res.IsStack)
