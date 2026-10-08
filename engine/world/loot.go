@@ -120,6 +120,17 @@ type activeLootState struct {
 	// (Player.cpp:8641-8662) but never start rolls or receive the
 	// master-loot list. Non-GO loot leaves this false and is unaffected.
 	GOLootRules bool
+	// QuestPersonalGUID mirrors the personal flag of Loot::FillLoot
+	// (Loot.cpp:188-232): every fill except creature kills (Unit.cpp:11257,
+	// personal=false) and groupRules chests (Player.cpp:8598, personal=
+	// !groupRules) passes personal=true, so quest rows are generated for
+	// the filler alone — the render looks the quest list up by viewer GUID
+	// (Loot.cpp:712-718), meaning no other viewer sees a quest section.
+	// Go fills quest rows into the shared QuestItems and filters per viewer
+	// at render; this field pins the visibility to the filler for personal
+	// fills. 0 means a shared (non-personal) fill: creature kills and
+	// groupRules chests.
+	QuestPersonalGUID uint64
 }
 
 // storeLootTemplateRow routes one rolled loot-template row into Items or
@@ -837,6 +848,16 @@ func (s *session) viewerQuestLootList(ctx context.Context, loot *activeLootState
 	if s == nil || loot == nil || len(loot.QuestItems) == 0 {
 		return nil
 	}
+	// Loot::FillLoot personal arm (Loot.cpp:214-232): a personal fill (every
+	// fill except creature kills and groupRules chests) generates quest rows
+	// for the filler alone — the render looks the quest list up by viewer
+	// GUID (Loot.cpp:712-718), so non-fillers see no quest section. This
+	// also suppresses the follow-loot-rules master-looter arm for them:
+	// non-groupRules chests never run the group distribution calls that
+	// would surface those rows (Player.cpp:8614-8627).
+	if loot.QuestPersonalGUID != 0 && loot.QuestPersonalGUID != s.playerGUID {
+		return nil
+	}
 	var grp *groupState
 	if s.server != nil && s.groupID != 0 {
 		s.server.groupsMu.Lock()
@@ -1080,9 +1101,6 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 		return s.sendLootReleaseResponse(targetGUID) == nil
 	}
 	lootID := data1
-	if lootID == 0 {
-		lootID = int64(entry)
-	}
 
 	key := lootObjectKey{MapID: goMap, InstanceID: s.player.InstanceID, GUID: targetGUID}
 	s.server.lootMu.Lock()
@@ -1107,7 +1125,50 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 		return s.finishLootOpen(ctx, loot)
 	}
 
-	s.server.fillLootTemplate(ctx, wdb, "gameobject_loot_template", lootID, lootModeDefault, loot)
+	// Player::SendLoot GO arm (Player.cpp:8579-8606): the loot clear+fill,
+	// the round-robin looter update before it and the unconditional advance after
+	// it run only when lootid != 0 - GameObjectTemplate::GetLootId
+	// (GameObjectData.h:551) returns chest.lootId (== data1) for chests,
+	// fishinghole.lootId for fishing holes, and 0 for every other GO type,
+	// so a 0 loot id means no template fill at all. The money roll below
+	// stays outside the gate: Player.cpp:8607-8609 rolls it even when
+	// lootid == 0.
+	if lootID != 0 {
+		s.server.fillLootTemplate(ctx, wdb, "gameobject_loot_template", lootID, lootModeDefault, loot)
+		s.server.autoStoreLootCurrencyTokens(ctx, loot, s)
+		// Player::SendLoot GO arm (Player.cpp:8592-8606): the round-robin looter
+		// update before the fill and the unconditional advance after it run only
+		// when groupRules holds (chest with chest.groupLootRules); a chest
+		// without the flag never rotates the group looter.
+		if s.server != nil && s.groupID != 0 && loot.GOLootRules {
+			s.server.groupsMu.Lock()
+			grp := s.server.groups[s.groupID]
+			if grp != nil && loot.RoundRobinPlayer == 0 && grp.LootMethod != 0 {
+				grp.updateLooter(s.server, goMap, s.player.InstanceID, goX, goY, goZ)
+				loot.RoundRobinPlayer = grp.LooterGUID
+				// Unit.cpp:11270-11271 / Player.cpp:8603 (the !loot->empty()
+				// gate): after the fill, C++ unconditionally advances the
+				// group looter for the next loot, so consecutive loots rotate
+				// even while the current looter stays in range. Go fills
+				// lazily at first open, so the advance runs here, right after
+				// this loot's looter is captured; a loot that is never opened
+				// never advances the role.
+				if loot.Money != 0 || len(loot.Items) != 0 {
+					grp.advanceLooter(s.server, goMap, s.player.InstanceID, goX, goY, goZ)
+				}
+			}
+			s.server.groupsMu.Unlock()
+		}
+	}
+	// Loot::FillLoot personal arm (Loot.cpp:214-232): the GO fill passes
+	// personal = !groupRules (Player.cpp:8598), so quest rows of a plain
+	// (non-groupRules) chest are generated for the opener alone - other
+	// viewers get no quest section (Loot.cpp:712-718 looks the quest list
+	// up by viewer GUID). GroupRules chests fill for every member in the map
+	// (Loot.cpp:216-221), matching the shared QuestItems default.
+	if newLoot && !loot.GOLootRules {
+		loot.QuestPersonalGUID = s.playerGUID
+	}
 	// Player::SendLoot GO arm (Player.cpp:8607-8609): Loot::generateMoneyLoot
 	// rolls the gameobject_template_addon min/max gold once the loot exists
 	// (the C++ lootMode>0 gate has no Go model; lootable GOs always qualify).
@@ -1116,30 +1177,6 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 		if money := generateMoneyLootValue(addonMinGold, addonMaxGold); money != 0 {
 			loot.Money = money
 		}
-	}
-	s.server.autoStoreLootCurrencyTokens(ctx, loot, s)
-	// Player::SendLoot GO arm (Player.cpp:8592-8606): the round-robin looter
-	// update before the fill and the unconditional advance after it run only
-	// when groupRules holds (chest with chest.groupLootRules); a chest
-	// without the flag never rotates the group looter.
-	if s.server != nil && s.groupID != 0 && loot.GOLootRules {
-		s.server.groupsMu.Lock()
-		grp := s.server.groups[s.groupID]
-		if grp != nil && loot.RoundRobinPlayer == 0 && grp.LootMethod != 0 {
-			grp.updateLooter(s.server, goMap, s.player.InstanceID, goX, goY, goZ)
-			loot.RoundRobinPlayer = grp.LooterGUID
-			// Unit.cpp:11270-11271 / Player.cpp:8603 (the !loot->empty()
-			// gate): after the fill, C++ unconditionally advances the
-			// group looter for the next loot, so consecutive loots rotate
-			// even while the current looter stays in range. Go fills
-			// lazily at first open, so the advance runs here, right after
-			// this loot's looter is captured; a loot that is never opened
-			// never advances the role.
-			if loot.Money != 0 || len(loot.Items) != 0 {
-				grp.advanceLooter(s.server, goMap, s.player.InstanceID, goX, goY, goZ)
-			}
-		}
-		s.server.groupsMu.Unlock()
 	}
 	loot.addViewer(s)
 	s.activeLoot = loot
@@ -1907,6 +1944,10 @@ func (s *session) openSkinningLoot(ctx context.Context, targetGUID uint64, entry
 	loot.QuestFFATaken = nil
 	loot.Money = 0
 	loot.LootType = lootTypeSkinning
+	// Loot::FillLoot personal arm (Loot.cpp:214-232): the skinning fill
+	// passes personal=true (Player.cpp:8843), so skinning quest rows
+	// belong to the skinner alone.
+	loot.QuestPersonalGUID = s.playerGUID
 	loot.NormalSlotCount = 0
 	loot.RoundRobinPlayer = 0
 	loot.Viewers = make(map[uint64]*session)
@@ -1996,6 +2037,10 @@ func (s *session) openPickpocketLoot(ctx context.Context, targetGUID uint64, ent
 	loot.QuestFFATaken = nil
 	loot.Money = 0
 	loot.LootType = lootTypePickpocketing
+	// Loot::FillLoot personal arm (Loot.cpp:214-232): the pickpocket fill
+	// passes personal=true (Player.cpp:8778), so pickpocket quest rows
+	// belong to the pickpocketer alone.
+	loot.QuestPersonalGUID = s.playerGUID
 	loot.NormalSlotCount = 0
 	loot.RoundRobinPlayer = 0
 	loot.Viewers = make(map[uint64]*session)
