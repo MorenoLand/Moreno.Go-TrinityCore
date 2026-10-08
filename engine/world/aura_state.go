@@ -305,6 +305,34 @@ func (s *session) targetHasAuraState(ctx context.Context, targetGUID uint64, sta
 	return mask&bit != 0
 }
 
+// creatureAuraStateMask mirrors the creature-target branch of
+// targetHasAuraState for a tick whose target is already resolved: the
+// health mask plus spell-granted states from the server creature aura
+// maps. C++ Unit::HasAuraState(flag) with no spellProto/caster skips the
+// SPELL_AURA_ABILITY_IGNORE_AURASTATE bypass (Unit.cpp:5946-5954) and the
+// per-caster filter, so those legs are omitted here.
+func (s *session) creatureAuraStateMask(key creatureAuraKey, target combatTarget) uint32 {
+	mask := auraStateHealthMask(target.Health, target.MaxHealth)
+	if s.server == nil {
+		return mask
+	}
+	s.server.auraMu.Lock()
+	spellIDs := make([]uint32, 0, len(s.server.creatureAuras[key])+len(s.server.activeCreatureAuras[key]))
+	for spellID := range s.server.creatureAuras[key] {
+		spellIDs = append(spellIDs, spellID)
+	}
+	for spellID := range s.server.activeCreatureAuras[key] {
+		spellIDs = append(spellIDs, spellID)
+	}
+	s.server.auraMu.Unlock()
+	for _, spellID := range spellIDs {
+		if state := s.lookupAuraState(spellID); state != auraStateNone {
+			mask |= uint32(1) << (state - 1)
+		}
+	}
+	return mask
+}
+
 // casterIgnoresAuraState reports whether the casting session carries an aura
 // effect of type SPELL_AURA_ABILITY_IGNORE_AURASTATE whose spell affects the
 // spell being cast, mirroring the bypass term at the top of

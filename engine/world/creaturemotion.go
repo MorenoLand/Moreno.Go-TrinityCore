@@ -1519,6 +1519,21 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			facing, hasFacing = point.Orientation, true
 		}
 		motion.NextIdx = (motion.NextIdx + 1) % len(motion.Points)
+		// WaypointMovementGenerator::DoUpdate (WaypointMovementGenerator.cpp:169-175):
+		// while the spline is in motion, every update sets the home position
+		// to the creature's current position ("set home position at place").
+		// The transport guard (MOVEMENTFLAG_ONTRANSPORT with a trans GUID)
+		// has no Go model — Go creatures never move on transports — so the
+		// arm is unconditional. Go's model jumps to the leg destination at
+		// launch, so the "current position" for the rest of the leg is the
+		// destination: a creature that aggros mid-patrol and then evades
+		// returns to where it was patrolling, not to its original spawn.
+		// (RandomMovementGenerator carries no such arm. The orientation in
+		// C++ SetHomePosition(x,y,z,o) has no Go HomeO model and stays
+		// unmodeled, as does the non-repeating-path end-of-path arm,
+		// WaypointMovementGenerator.cpp:297-309 — Go paths repeat by
+		// default.)
+		motion.HomeX, motion.HomeY, motion.HomeZ = destX, destY, destZ
 	} else if motion.MoveType == 1 {
 		// RandomMovementGenerator<Creature>::SetRandomLocation
 		// (RandomMovementGenerator.cpp): frand(0, _wanderDistance) around the

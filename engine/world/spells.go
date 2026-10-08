@@ -13430,6 +13430,16 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if aura.AuraType == 3 && isUnboundPlagueSpell(aura.SpellID) {
 			dmg *= uint32(math.Pow(1.25, float64(aura.TickCount)))
 		}
+		// SpellAuraEffects.cpp:5136-5144 — Black Arrow (Warlock family,
+		// SpellFamilyFlags[1] & 0x4) ticks for 5x on targets with
+		// AURA_STATE_HEALTHLESS_20_PERCENT. Gated on PERIODIC_DAMAGE only
+		// like C++; Black Arrow is never a dynobj aura, so the done leg
+		// (baked into the stored amount at spawn) ordering is moot.
+		if aura.AuraType == 3 && tickKnown && tickSpell.SpellFamilyName == spellFamilyWarlock &&
+			tickSpell.SpellFamilyFlags[1]&0x4 != 0 &&
+			ts.unitAuraStateMask()&(1<<(auraStateHealthless20Pct-1)) != 0 {
+			dmg *= 5
+		}
 		var tickCaster *session
 		if ts.server != nil {
 			tickCaster = ts.server.findSessionByGUID(aura.CasterGUID)
@@ -13458,9 +13468,11 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			}
 		}
 		// Armor mitigation (SpellAuraEffects.cpp:5177-5182) — physical
-		// schools only; the AOE-avoidance leg (5184-5188) has no Go model
-		// and stays unbridged.
-		if aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
+		// schools only; Unit::CalculateSpellDamageTaken (Unit.cpp:999-1000)
+		// skips the armor leg for FIXED_DAMAGE spells, as the resilience
+		// leg below already does. The AOE-avoidance leg (5184-5188) has no
+		// Go model and stays unbridged.
+		if !fixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
 			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, dmg)
 		}
 		// Resilience (SpellAuraEffects.cpp:5190-5192): skipped for fixed
@@ -13668,7 +13680,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 				dmg = uint32(math.Round(float64(dmg) * mult))
 			}
 		}
-		if aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
+		if !fixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
 			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, dmg)
 		}
 		if !fixedDamage && aura.CasterGUID != aura.TargetGUID {
@@ -14201,6 +14213,16 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		if aura.AuraType == 3 && isUnboundPlagueSpell(aura.SpellID) {
 			dmg *= uint32(math.Pow(1.25, float64(aura.TickCount)))
 		}
+		// SpellAuraEffects.cpp:5136-5144 — Black Arrow (Warlock family,
+		// SpellFamilyFlags[1] & 0x4) ticks for 5x on targets with
+		// AURA_STATE_HEALTHLESS_20_PERCENT. Gated on PERIODIC_DAMAGE only
+		// like C++; Black Arrow is never a dynobj aura, so the done leg
+		// (baked into the stored amount at spawn) ordering is moot.
+		if aura.AuraType == 3 && tickKnown && tickSpell.SpellFamilyName == spellFamilyWarlock &&
+			tickSpell.SpellFamilyFlags[1]&0x4 != 0 &&
+			s.creatureAuraStateMask(key, target)&(1<<(auraStateHealthless20Pct-1)) != 0 {
+			dmg *= 5
+		}
 		var tickCaster *session
 		if s.server != nil {
 			tickCaster = s.server.findSessionByGUID(aura.CasterGUID)
@@ -14234,10 +14256,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				dmg = uint32(math.Round(float64(dmg) * mult))
 			}
 		}
-		// Armor mitigation (SpellAuraEffects.cpp:5177-5182); resilience has
-		// no Go creature-victim model (Unit.cpp:12345-12355: owner-is-player
-		// only) and stays unbridged, as does AOE-avoidance.
-		if aura.SchoolMask&1 != 0 && target.Armor > 0 {
+		// Armor mitigation (SpellAuraEffects.cpp:5177-5182); skipped for
+		// FIXED_DAMAGE spells (Unit.cpp:999-1000). Resilience has no Go
+		// creature-victim model (Unit.cpp:12345-12355: owner-is-player only)
+		// and stays unbridged, as does AOE-avoidance.
+		if !fixedDamage && aura.SchoolMask&1 != 0 && target.Armor > 0 {
 			dmg = calcArmorReducedDamage(float64(target.Armor), aura.CasterLevel, dmg)
 		}
 		// Unit::CalcAbsorbResist (Unit.cpp:1828): resist then absorb at the
@@ -14480,7 +14503,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				dmg = uint32(math.Round(float64(dmg) * mult))
 			}
 		}
-		if aura.SchoolMask&1 != 0 && target.Armor > 0 {
+		if !fixedDamage && aura.SchoolMask&1 != 0 && target.Armor > 0 {
 			dmg = calcArmorReducedDamage(float64(target.Armor), aura.CasterLevel, dmg)
 		}
 		resisted := uint32(0)
