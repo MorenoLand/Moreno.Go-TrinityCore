@@ -4353,11 +4353,19 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	_, _ = r.ReadU64() // npc GUID
+	npcGUID, _ := r.ReadU64()
 	_, _ = r.ReadU32() // 0
 	_, _ = r.ReadU64() // 0
 	name, err := r.ReadCString()
 	if err != nil || name == "" {
+		return true
+	}
+
+	// PetitionsHandler.cpp:94-100: the seller must be an interactable
+	// petitioner NPC. Guild charters are sold only by tabard designers
+	// (the IsTabardDesigner branch); the arena-charter branch has no Go
+	// model, so a non-tabard petitioner cannot sell here.
+	if !s.canInteractWithNPC(ctx, npcGUID, uint64(unitNPCFlagTabardDesigner)) {
 		return true
 	}
 
@@ -4373,8 +4381,23 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	cost := uint32(1000) // 10 silver guild charter cost
+	// PetitionsHandler.cpp:146-158: guild-name-exists and reserved/invalid
+	// name gates. IsReservedName has no Go bridge (standing delta, same as
+	// the rename path); the exists check rides the guild table.
+	var nameTaken int64
+	_ = cdb.QueryRowContext(ctx, "SELECT guildid FROM guild WHERE UPPER(name) = UPPER(?) LIMIT 1", name).Scan(&nameTaken)
+	if nameTaken > 0 {
+		s.sendGuildCommandResult(guildCmdCreate, name, errGuildNameExists)
+		return true
+	}
+
+	cost := uint32(guildCharterCost)
+	if s.server != nil {
+		cost = s.server.Config.GuildCharterCost
+	}
 	if s.player.Money < cost {
+		// PetitionsHandler.cpp:175: SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY).
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(npcGUID, guildCharterItemID, buyErrNotEnoughMoney), true)
 		return true
 	}
 
@@ -4411,6 +4434,11 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, 5863, ?, ?, 1, 0, '', 0, '', 0, 0, 0, '')", nextItemGUID, s.playerGUID, s.playerGUID)
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextItemGUID)
+	// PetitionsHandler.cpp:197-204: buying a new charter invalidates the
+	// owner's previous petition of the same type (RemovePetition). The
+	// REPLACE covers the petition row (PK is ownerguid+type); the old
+	// petition's signature rows are removed explicitly.
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition_sign WHERE ownerguid = ? AND type = 9", s.playerGUID)
 	_, _ = cdb.ExecContext(ctx, "REPLACE INTO petition (ownerguid, petitionguid, name, type) VALUES (?, ?, ?, 9)",
 		s.playerGUID, petitionGUID, name)
 
@@ -4484,7 +4512,7 @@ func (s *session) handlePetitionQuery(ctx context.Context, payload []byte) bool 
 		return true
 	}
 	r := protocol.NewReader(payload)
-	guildGUID, _ := r.ReadU32()
+	_, _ = r.ReadU32() // guild GUID (client echo; the reference answers the petition GUID low32)
 	petitionGUID, err := r.ReadU64()
 	if err != nil {
 		return false
@@ -4503,19 +4531,39 @@ func (s *session) handlePetitionQuery(ctx context.Context, payload []byte) bool 
 		return true
 	}
 
+	// SendPetitionQueryOpcode (PetitionsHandler.cpp:272): field 1 is the
+	// petition GUID's low 32 bits (not the client-echoed guild GUID), and
+	// the guild arm writes (needed, needed, 0) followed by the zero block
+	// (u32x4, u16, u32x3), ten empty strings, u32(0), then
+	// u32(type != GUILD_CHARTER_TYPE) == 0 for guild charters.
+	needed := uint32(9)
+	if s.server != nil {
+		needed = s.server.Config.MinPetitionSigns
+		if needed > 9 {
+			needed = 9
+		}
+	}
 	buf := protocol.NewBuffer(128 + len(name))
-	buf.WriteU32(guildGUID)
+	buf.WriteU32(uint32(petitionGUID & 0xFFFFFFFF))
 	buf.WriteU64(uint64(ownerGUID))
 	buf.WriteCString(name)
 	buf.WriteU8(0)
-	buf.WriteU32(9) // 9 signs needed for guild
-	buf.WriteU32(9)
+	buf.WriteU32(needed)
+	buf.WriteU32(needed)
+	buf.WriteU32(0)
+	buf.WriteU32(0)
+	buf.WriteU32(0)
+	buf.WriteU32(0)
+	buf.WriteU32(0)
+	buf.WriteU16(0)
+	buf.WriteU32(0)
+	buf.WriteU32(0)
 	buf.WriteU32(0)
 	for i := 0; i < 10; i++ {
-		buf.WriteCString("")
+		buf.WriteU8(0)
 	}
-	buf.WriteU32(uint32(pType))
 	buf.WriteU32(0)
+	buf.WriteU32(0) // type != GUILD_CHARTER_TYPE -> 0 (guild only)
 	_ = s.write(uint16(protocol.OpcodeSMSG_PETITION_QUERY_RESPONSE), buf.Bytes(), true)
 	return true
 }
@@ -4544,31 +4592,38 @@ func (s *session) handlePetitionSign(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	// Cannot sign own petition
+	// PetitionsHandler.cpp:401: the owner cannot sign their own petition —
+	// silent return, no result packet is sent on this arm.
 	if uint64(ownerGUID) == s.playerGUID {
-		buf := protocol.NewBuffer(20)
-		buf.WriteU64(petitionGUID)
-		buf.WriteU64(s.playerGUID)
-		buf.WriteU32(petitionSignCantSignOwn)
-		_ = s.write(uint16(protocol.OpcodeSMSG_PETITION_SIGN_RESULTS), buf.Bytes(), true)
 		return true
 	}
 
-	// Cross-faction check
+	// Cross-faction check (PetitionsHandler.cpp:404): skipped when
+	// AllowTwoSide.Interaction.Guild is enabled.
 	var ownerRace int64
 	_ = cdb.QueryRowContext(ctx, "SELECT race FROM characters WHERE guid = ?", ownerGUID).Scan(&ownerRace)
-	if s.player.Race != 0 && ownerRace != 0 && teamForRace(s.player.Race) != teamForRace(uint8(ownerRace)) {
+	if s.server != nil && !s.server.Config.AllowTwoSideInteractionGuild &&
+		s.player.Race != 0 && ownerRace != 0 && teamForRace(s.player.Race) != teamForRace(uint8(ownerRace)) {
 		s.sendGuildCommandResult(guildCmdCreate, "", errGuildNotAllied)
 		return true
 	}
 
-	// Already in guild check
+	// Already-in-guild / invited arms (PetitionsHandler.cpp:430-438): the
+	// reference answers guild command results, not sign results.
 	if s.player.GuildID != 0 {
-		buf := protocol.NewBuffer(20)
-		buf.WriteU64(petitionGUID)
-		buf.WriteU64(s.playerGUID)
-		buf.WriteU32(petitionSignAlreadyInGuild)
-		_ = s.write(uint16(protocol.OpcodeSMSG_PETITION_SIGN_RESULTS), buf.Bytes(), true)
+		s.sendGuildCommandResult(guildCmdInvite, s.player.Name, errAlreadyInGuildS)
+		return true
+	}
+	if s.guildInvitedID != 0 {
+		s.sendGuildCommandResult(guildCmdInvite, s.player.Name, errAlreadyInvitedToGuildS)
+		return true
+	}
+
+	// PetitionsHandler.cpp:441: a guild charter (type 9) accepts at most
+	// 9 signatures; further signs are silently dropped.
+	var signCount int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM petition_sign WHERE petitionguid = ?", petitionGUID).Scan(&signCount)
+	if signCount+1 > 9 {
 		return true
 	}
 
@@ -4631,6 +4686,14 @@ func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool
 
 	// Only owner can turn in petition
 	if uint64(ownerGUID) != s.playerGUID {
+		return true
+	}
+
+	// PetitionsHandler.cpp:596: the owner must actually hold the charter
+	// item — turning in a petition row without the item is rejected.
+	var hasCharter int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, petitionGUID).Scan(&hasCharter)
+	if hasCharter == 0 {
 		return true
 	}
 
@@ -4760,15 +4823,22 @@ func (s *session) handleOfferPetition(ctx context.Context, payload []byte) bool 
 			return true
 		}
 
-		// Cross-faction check
-		if s.player.Race != 0 && targetSess.player.Race != 0 && teamForRace(s.player.Race) != teamForRace(targetSess.player.Race) {
+		// Cross-faction check (PetitionsHandler.cpp:541): skipped when
+		// AllowTwoSide.Interaction.Guild is enabled.
+		if s.server != nil && !s.server.Config.AllowTwoSideInteractionGuild &&
+			s.player.Race != 0 && targetSess.player.Race != 0 && teamForRace(s.player.Race) != teamForRace(targetSess.player.Race) {
 			s.sendGuildCommandResult(guildCmdCreate, "", errGuildNotAllied)
 			return true
 		}
 
-		// Target already in guild
+		// Target already in guild (PetitionsHandler.cpp:576): the reference
+		// reports the offerer's name, and also covers the invited arm.
 		if targetSess.player.GuildID != 0 {
-			s.sendGuildCommandResult(guildCmdInvite, targetSess.player.Name, errAlreadyInGuildS)
+			s.sendGuildCommandResult(guildCmdInvite, s.player.Name, errAlreadyInGuildS)
+			return true
+		}
+		if targetSess.guildInvitedID != 0 {
+			s.sendGuildCommandResult(guildCmdInvite, s.player.Name, errAlreadyInvitedToGuildS)
 			return true
 		}
 
@@ -4786,11 +4856,23 @@ func (s *session) handlePetitionShowList(ctx context.Context, payload []byte) bo
 	r := protocol.NewReader(payload)
 	npcGUID, _ := r.ReadU64()
 
+	// PetitionsHandler.cpp:743-749: the list is served only by an
+	// interactable petitioner NPC. Go lists only the guild charter row;
+	// the C++ arena-charter rows for non-tabard petitioners have no Go
+	// model (documented delta).
+	if !s.canInteractWithNPC(ctx, npcGUID, uint64(unitNPCFlagPetitioner)) {
+		return true
+	}
+
 	reqSigns := uint32(9)
 	if s.server != nil && s.server.Config.MinPetitionSigns > 0 {
 		reqSigns = s.server.Config.MinPetitionSigns
 	} else if s.server != nil && s.server.Config.MinPetitionSigns == 0 {
 		reqSigns = 0
+	}
+	charterCost := uint32(guildCharterCost)
+	if s.server != nil {
+		charterCost = s.server.Config.GuildCharterCost
 	}
 
 	buf := protocol.NewBuffer(24)
@@ -4799,7 +4881,7 @@ func (s *session) handlePetitionShowList(ctx context.Context, payload []byte) bo
 	buf.WriteU32(1)                  // index = 1
 	buf.WriteU32(guildCharterItemID) // 5863 Guild Charter
 	buf.WriteU32(CHARTER_DISPLAY_ID) // 16161
-	buf.WriteU32(guildCharterCost)   // 1000 copper
+	buf.WriteU32(charterCost)        // Guild.CharterCost copper
 	buf.WriteU32(0)                  // 0
 	buf.WriteU32(reqSigns)           // required signs
 	_ = s.write(uint16(protocol.OpcodeSMSG_PETITION_SHOWLIST), buf.Bytes(), true)
@@ -4828,9 +4910,8 @@ func (s *session) handlePetitionDecline(ctx context.Context, payload []byte) boo
 		}
 	}
 
-	buf := protocol.NewBuffer(8)
-	buf.WriteU64(s.playerGUID)
-	_ = s.write(uint16(protocol.OpcodeMSG_PETITION_DECLINE), buf.Bytes(), true)
+	// PetitionsHandler.cpp:493: the decline is only forwarded to the
+	// online owner — the decliner gets no echo.
 	return true
 }
 
@@ -4852,6 +4933,13 @@ func (s *session) handlePetitionRename(ctx context.Context, payload []byte) bool
 
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
+		return true
+	}
+
+	// PetitionsHandler.cpp:330: the renamer must hold the charter item.
+	var hasCharter int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, petitionGUID).Scan(&hasCharter)
+	if hasCharter == 0 {
 		return true
 	}
 

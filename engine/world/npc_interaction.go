@@ -17,6 +17,9 @@ const unitNPCFlagInnkeeper uint32 = 0x00010000
 // unitNPCFlagBanker mirrors UNIT_NPC_FLAG_BANKER (UnitDefines.h:203).
 const unitNPCFlagBanker uint32 = 0x00020000
 
+// unitNPCFlagPetitioner mirrors UNIT_NPC_FLAG_PETITIONER (UnitDefines.h:204).
+const unitNPCFlagPetitioner uint32 = 0x00040000
+
 // unitNPCFlagTabardDesigner mirrors UNIT_NPC_FLAG_TABARDDESIGNER (UnitDefines.h:205).
 const unitNPCFlagTabardDesigner uint32 = 0x00080000
 

@@ -43,6 +43,11 @@ const (
 	LFGUpdateStatus             uint8 = 14
 	LFGUpdateGroupMemberOffline uint8 = 15
 
+	// LFG option bits (LFGMgr.h:41): the dungeon-finder/raid-browser join
+	// gate in HandleLfgJoinOpcode.
+	LFGOptionEnableDungeonFinder uint32 = 0x01
+	LFGOptionEnableRaidBrowser   uint32 = 0x02
+
 	LFGRoleCheckDefault      uint32 = 0
 	LFGRoleCheckFinished     uint32 = 1
 	LFGRoleCheckInitializing uint32 = 2
@@ -362,6 +367,15 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
+	// HandleLfgJoinOpcode (LFGHandler.cpp:51): joining requires the
+	// dungeon-finder or raid-browser option enabled. The group-leader
+	// cheating gate has no Go counterpart — the queue here is per-player
+	// by design, so grouped non-leaders may still queue (documented
+	// model delta).
+	if s.server != nil && s.server.Features != nil && s.server.Features.LFG != nil &&
+		s.server.Features.LFG.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) == 0 {
+		return true
+	}
 	b := protocol.NewReader(payload)
 	roles, err := b.ReadU32()
 	if err != nil {
@@ -428,10 +442,24 @@ func (s *session) handleLFGGetStatus() bool {
 		return true
 	}
 	entry, _ := s.server.Features.LFG.Status(s.playerGUID)
+	// HandleLfgGetStatus (LFGHandler.cpp:277): grouped players receive the
+	// party update first, then the player update with dungeons cleared;
+	// solo players receive the player update first, then the cleared party
+	// update. The group-queue model has no Go counterpart, so the party
+	// send carries the player's own queue entry (documented delta).
+	cleared := entry
+	cleared.Dungeons = nil
+	cleared.Comment = ""
+	if s.groupID != 0 {
+		if err := s.sendLFGUpdateParty(LFGUpdateStatus, entry); err != nil {
+			return false
+		}
+		return s.sendLFGUpdatePlayer(LFGUpdateStatus, cleared) == nil
+	}
 	if err := s.sendLFGUpdatePlayer(LFGUpdateStatus, entry); err != nil {
 		return false
 	}
-	return s.sendLFGUpdateParty(LFGUpdateStatus) == nil
+	return s.sendLFGUpdateParty(LFGUpdateStatus, cleared) == nil
 }
 
 func (s *session) sendLFGJoinResult(result uint32, state uint32) error {
@@ -442,13 +470,22 @@ func (s *session) sendLFGJoinResult(result uint32, state uint32) error {
 }
 
 func (s *session) sendLFGUpdatePlayer(updateType uint8, entry LFGQueueEntry) error {
+	// SendLfgUpdatePlayer (LFGHandler.cpp:293): the queued flag derives
+	// from the update type and state, it is not a constant.
+	queued := false
+	switch updateType {
+	case LFGUpdateJoinQueue, LFGUpdateAddedToQueue:
+		queued = true
+	case LFGUpdateStatus:
+		queued = entry.State == LFGStateQueued
+	}
 	packet := protocol.NewBuffer(16 + len(entry.Dungeons)*4 + len(entry.Comment))
 	packet.WriteU8(updateType)
 	if len(entry.Dungeons) == 0 || entry.State == LFGStateNone {
 		packet.WriteU8(0)
 	} else {
 		packet.WriteU8(1)
-		packet.WriteU8(1)
+		packet.WriteU8(boolToU8(queued))
 		packet.WriteU8(0)
 		packet.WriteU8(0)
 		packet.WriteU8(uint8(len(entry.Dungeons)))
@@ -460,11 +497,47 @@ func (s *session) sendLFGUpdatePlayer(updateType uint8, entry LFGQueueEntry) err
 	return s.write(uint16(protocol.OpcodeSMSG_LFG_UPDATE_PLAYER), packet.Bytes(), true)
 }
 
-func (s *session) sendLFGUpdateParty(updateType uint8) error {
-	packet := protocol.NewBuffer(2)
+// buildLFGUpdateParty mirrors WorldSession::SendLfgUpdateParty
+// (LFGHandler.cpp:334): the join/queued flags derive from the update type
+// and state, followed by the two zero bytes, three needs bytes, the
+// dungeon list and the comment.
+func buildLFGUpdateParty(updateType uint8, entry LFGQueueEntry) []byte {
+	join := false
+	queued := false
+	switch updateType {
+	case LFGUpdateAddedToQueue:
+		queued = true
+		join = true
+	case LFGUpdateProposalBegin:
+		join = true
+	case LFGUpdateStatus:
+		join = entry.State != LFGStateRoleCheck && entry.State != LFGStateNone
+		queued = entry.State == LFGStateQueued
+	}
+	packet := protocol.NewBuffer(16 + len(entry.Dungeons)*4 + len(entry.Comment))
 	packet.WriteU8(updateType)
+	if len(entry.Dungeons) == 0 {
+		packet.WriteU8(0)
+		return packet.Bytes()
+	}
+	packet.WriteU8(1)
+	packet.WriteU8(boolToU8(join))
+	packet.WriteU8(boolToU8(queued))
 	packet.WriteU8(0)
-	return s.write(uint16(protocol.OpcodeSMSG_LFG_UPDATE_PARTY), packet.Bytes(), true)
+	packet.WriteU8(0)
+	packet.WriteU8(0)
+	packet.WriteU8(0)
+	packet.WriteU8(0)
+	packet.WriteU8(uint8(len(entry.Dungeons)))
+	for _, dungeon := range entry.Dungeons {
+		packet.WriteU32(dungeon)
+	}
+	packet.WriteCString(entry.Comment)
+	return packet.Bytes()
+}
+
+func (s *session) sendLFGUpdateParty(updateType uint8, entry LFGQueueEntry) error {
+	return s.write(uint16(protocol.OpcodeSMSG_LFG_UPDATE_PARTY), buildLFGUpdateParty(updateType, entry), true)
 }
 
 func (s *session) getLFGDungeonEntrance(dungeonID uint32) (mapID uint32, x, y, z, ori float32) {
@@ -737,18 +810,14 @@ func (s *session) getLockedDungeons(guid uint64) map[uint32]uint32 {
 // handleLfdPartyLockInfoRequest processes CMSG_LFD_PARTY_LOCK_INFO_REQUEST (0x371).
 // Reference: WorldSession::HandleLfdPartyLockInfoRequestOpcode (LFGHandler.cpp:115).
 func (s *session) handleLfdPartyLockInfoRequest(ctx context.Context, payload []byte) bool {
+	// HandleLfgPartyLockInfoRequestOpcode (LFGHandler.cpp:225): without a
+	// group the reference sends nothing at all.
 	if !s.playerLoaded || s.server == nil || s.groupID == 0 {
-		buf := protocol.NewBuffer(1)
-		buf.WriteU8(0) // count = 0 players
-		_ = s.write(uint16(protocol.OpcodeSMSG_LFG_PARTY_INFO), buf.Bytes(), true)
 		return true
 	}
 
 	grp := s.server.getGroup(s.groupID)
 	if grp == nil {
-		buf := protocol.NewBuffer(1)
-		buf.WriteU8(0)
-		_ = s.write(uint16(protocol.OpcodeSMSG_LFG_PARTY_INFO), buf.Bytes(), true)
 		return true
 	}
 
@@ -918,8 +987,8 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 	return true
 }
 
-// handleLfgSetBootVote processes CMSG_LFG_SET_BOOT_VOTE (0x367).
-// Reference: WorldSession::HandleLfgSetBootVoteOpcode (LFGHandler.cpp:80).
+// handleLfgSetBootVote processes CMSG_LFG_SET_BOOT_VOTE (0x36C).
+// Reference: WorldSession::HandleLfgSetBootVoteOpcode (LFGHandler.cpp:133).
 func (s *session) handleLfgSetBootVote(ctx context.Context, payload []byte) bool {
 	if len(payload) < 1 {
 		return true
@@ -930,8 +999,8 @@ func (s *session) handleLfgSetBootVote(ctx context.Context, payload []byte) bool
 	return true
 }
 
-// handleLfgSetRoles processes CMSG_LFG_SET_ROLES (0x35E).
-// Reference: WorldSession::HandleLfgSetRolesOpcode (LFGHandler.cpp:52).
+// handleLfgSetRoles processes CMSG_LFG_SET_ROLES (0x36A).
+// Reference: WorldSession::HandleLfgSetRolesOpcode (LFGHandler.cpp:104).
 func (s *session) handleLfgSetRoles(ctx context.Context, payload []byte) bool {
 	if len(payload) < 1 {
 		return true
@@ -963,7 +1032,8 @@ func (s *session) handleLfgSetRoles(ctx context.Context, payload []byte) bool {
 					}
 				}
 				if rc.State == LFGRoleCheckFinished {
-					s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LFG_UPDATE_PARTY), []byte{LFGUpdateAddedToQueue, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0})
+					s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LFG_UPDATE_PARTY),
+						buildLFGUpdateParty(LFGUpdateAddedToQueue, LFGQueueEntry{Dungeons: rc.Dungeons, State: LFGStateQueued}))
 				}
 			}
 		}
@@ -986,8 +1056,8 @@ func (s *session) handleLfgSetRoles(ctx context.Context, payload []byte) bool {
 	return true
 }
 
-// handleLfgTeleport processes CMSG_LFG_TELEPORT (0x369).
-// Reference: WorldSession::HandleLfgTeleportOpcode (LFGHandler.cpp:125).
+// handleLfgTeleport processes CMSG_LFG_TELEPORT (0x370).
+// Reference: WorldSession::HandleLfgTeleportOpcode (LFGHandler.cpp:144).
 func (s *session) handleLfgTeleport(ctx context.Context, payload []byte) bool {
 	if len(payload) < 1 || s.player == nil {
 		return true
@@ -1067,8 +1137,8 @@ func (s *session) handleLfgTeleport(ctx context.Context, payload []byte) bool {
 	return true
 }
 
-// handleSearchLfgJoin processes CMSG_SEARCH_LFG_JOIN (0x35C).
-// Reference: WorldSession::HandleSearchLfgJoinOpcode (LFGHandler.cpp:145).
+// handleSearchLfgJoin processes CMSG_SEARCH_LFG_JOIN (0x35E).
+// Reference: WorldSession::HandleLfrJoinOpcode (LFGHandler.cpp:259).
 func (s *session) handleSearchLfgJoin(ctx context.Context, payload []byte) bool {
 	if len(payload) < 4 {
 		return true
@@ -1079,8 +1149,8 @@ func (s *session) handleSearchLfgJoin(ctx context.Context, payload []byte) bool 
 	return true
 }
 
-// handleSearchLfgLeave processes CMSG_SEARCH_LFG_LEAVE (0x35D).
-// Reference: WorldSession::HandleSearchLfgLeaveOpcode (LFGHandler.cpp:160).
+// handleSearchLfgLeave processes CMSG_SEARCH_LFG_LEAVE (0x35F).
+// Reference: WorldSession::HandleLfrLeaveOpcode (LFGHandler.cpp:268).
 func (s *session) handleSearchLfgLeave(ctx context.Context, payload []byte) bool {
 	if len(payload) < 4 {
 		return true
@@ -1091,8 +1161,8 @@ func (s *session) handleSearchLfgLeave(ctx context.Context, payload []byte) bool
 	return true
 }
 
-// handleSetLfgComment processes CMSG_SET_LFG_COMMENT (0x368).
-// Reference: WorldSession::HandleLfgSetCommentOpcode (LFGHandler.cpp:60).
+// handleSetLfgComment processes CMSG_SET_LFG_COMMENT (0x366).
+// Reference: WorldSession::HandleLfgSetCommentOpcode (LFGHandler.cpp:122).
 func (s *session) handleSetLfgComment(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	comment, _ := r.ReadCString()
