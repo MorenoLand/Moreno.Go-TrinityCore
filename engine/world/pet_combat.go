@@ -571,6 +571,16 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			targetSess.player.Health -= damage
 			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
 			targetSess.grantRageFromDamageTaken(ctx, damage)
+			// Unit::DealDamage (Unit.cpp:906-913): random durability loss on
+			// HIT TAKEN — the victim is a player.
+			targetSess.rollDurabilityLossOnHit(ctx, damage)
+			// Unit::DealDamage (Unit.cpp:934-952): pushback — pet melee
+			// carries no spellProto, so the victim's cast/channel is always
+			// delayed on damage > 0, like the C++ null-spellProto path.
+			if damage > 0 {
+				targetSess.delayCurrentCast()
+				targetSess.delayCurrentChannel()
+			}
 			targetSess.sendPlayerUpdate()
 		}
 	} else {
@@ -1093,6 +1103,15 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			victim.player.Health -= damage
 			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
 			victim.grantRageFromDamageTaken(ctx, damage)
+			// Unit::DealDamage (Unit.cpp:906-913): random durability loss on
+			// HIT TAKEN — the victim is a player.
+			victim.rollDurabilityLossOnHit(ctx, damage)
+			// Unit::DealDamage (Unit.cpp:934-952): pushback — the pet spell's
+			// attributes gate the delay like any direct-damage spell.
+			if damage > 0 && s.spellDamagePushesBack(spellID, victim.playerGUID) {
+				victim.delayCurrentCast()
+				victim.delayCurrentChannel()
+			}
 			victim.sendPlayerUpdate()
 		}
 		return

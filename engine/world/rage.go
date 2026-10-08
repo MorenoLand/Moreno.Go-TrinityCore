@@ -266,6 +266,14 @@ func (s *session) applySharedDamageToPlayer(ctx context.Context, victimGUID, att
 	// Rage from damage received runs on NODAMAGE hits (Unit.cpp:915-924 is not
 	// damagetype-gated).
 	ts.grantRageFromDamageTaken(ctx, share)
+	// Unit::DealDamage (Unit.cpp:906-913, 925-931): the recursive NODAMAGE
+	// split is a full DealDamage — HIT TAKEN on the player victim, HIT DONE
+	// on the attacker when it is a player (findSessionByGUID only resolves
+	// player sessions).
+	ts.rollDurabilityLossOnHit(ctx, share)
+	if as := s.server.findSessionByGUID(attackerGUID); as != nil {
+		as.rollDurabilityLossOnHit(ctx, share)
+	}
 	ts.sendPlayerUpdate()
 }
 
@@ -308,6 +316,12 @@ func (s *session) applySharedDamageToCreature(ctx context.Context, key creatureA
 	x, y, z := motion.X, motion.Y, motion.Z
 	newHealth := motion.Health
 	s.server.motionMu.Unlock()
+	// Unit::DealDamage (Unit.cpp:925-931): the recursive NODAMAGE split is a
+	// full DealDamage — HIT DONE rolls for the attacker when it is a player
+	// (findSessionByGUID only resolves player sessions).
+	if as := s.server.findSessionByGUID(attackerGUID); as != nil {
+		as.rollDurabilityLossOnHit(ctx, share)
+	}
 	if killed {
 		s.server.stopCreatureMotionInInstance(mapID, instanceID, guid, x, y, z)
 		s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{

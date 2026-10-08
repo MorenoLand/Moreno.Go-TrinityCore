@@ -648,6 +648,11 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 					// Unit::DealDamage (Unit.cpp:915-924): rage from damage
 					// received — damage + absorbed for the conversion.
 					playerSess.grantRageFromDamageTaken(ctx, damage+absorbedDmg)
+					// Unit::DealDamage (Unit.cpp:906-913, 925-931): random
+					// durability loss — HIT TAKEN on the player victim and
+					// HIT DONE on the player attacker, rolled independently.
+					playerSess.rollDurabilityLossOnHit(ctx, damage)
+					s.rollDurabilityLossOnHit(ctx, damage)
 					playerSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, damage)
 					playerSess.delayCurrentCast()
 					playerSess.delayCurrentChannel()
@@ -720,6 +725,9 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		s.debug("target slain by auto-attack", "account", s.accountName, "guid", target.GUID)
 	} else {
 		newHealth := target.Health - damage
+		// Unit::DealDamage (Unit.cpp:925-931): random durability loss on
+		// HIT DONE — the attacker is the player.
+		s.rollDurabilityLossOnHit(ctx, damage)
 		rageChanged := false
 		var rageNext, rageMapID, rageInstanceID uint32
 		var rageGUID uint64
@@ -1041,6 +1049,11 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 					// Unit::DealDamage (Unit.cpp:915-924): rage from damage
 					// received — damage + absorbed for the conversion.
 					vicSess.grantRageFromDamageTaken(ctx, damage+absorbed)
+					// Unit::DealDamage (Unit.cpp:906-913, 925-931): random
+					// durability loss — HIT TAKEN on the player victim and
+					// HIT DONE on the player attacker, rolled independently.
+					vicSess.rollDurabilityLossOnHit(ctx, damage)
+					s.rollDurabilityLossOnHit(ctx, damage)
 					vicSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, damage)
 					vicSess.delayCurrentCast()
 					vicSess.delayCurrentChannel()
@@ -1115,6 +1128,9 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			return
 		}
 		newHealth := target.Health - damage
+		// Unit::DealDamage (Unit.cpp:925-931): random durability loss on
+		// HIT DONE — the attacker is the player.
+		s.rollDurabilityLossOnHit(ctx, damage)
 		rageChanged := false
 		var rageNext, rageMapID, rageInstanceID uint32
 		var rageGUID uint64

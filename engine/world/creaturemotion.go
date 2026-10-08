@@ -1147,6 +1147,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					target.Sess.player.Health -= damage
 					// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
 					target.Sess.grantRageFromDamageTaken(ctx, damage)
+					// Unit::DealDamage (Unit.cpp:906-913): random durability
+					// loss on HIT TAKEN — the victim is a player.
+					target.Sess.rollDurabilityLossOnHit(ctx, damage)
 					// Reference Unit::DealDamage -> Spell::Delayed / DelayedChannel
 					target.Sess.delayCurrentCast()
 					target.Sess.delayCurrentChannel()
@@ -1343,6 +1346,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// Unit::DealDamage (Unit.cpp:915-924): rage from damage
 					// received — damage + absorbed for the conversion.
 					target.Sess.grantRageFromDamageTaken(ctx, damage+absorbedDmg)
+					// Unit::DealDamage (Unit.cpp:906-913): random durability
+					// loss on HIT TAKEN — the victim is a player.
+					target.Sess.rollDurabilityLossOnHit(ctx, damage)
 					// Reference Unit::DealDamage -> Spell::Delayed / DelayedChannel
 					target.Sess.delayCurrentCast()
 					target.Sess.delayCurrentChannel()

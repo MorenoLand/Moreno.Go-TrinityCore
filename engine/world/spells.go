@@ -7984,6 +7984,11 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				playerSess.player.Health -= damage
 				// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
 				playerSess.grantRageFromDamageTaken(ctx, damage+absorbed)
+				// Unit::DealDamage (Unit.cpp:906-913, 925-931): random
+				// durability loss — HIT TAKEN on the player victim and HIT
+				// DONE on the player attacker, rolled independently.
+				playerSess.rollDurabilityLossOnHit(ctx, damage)
+				s.rollDurabilityLossOnHit(ctx, damage)
 				if s.spellDamagePushesBack(spellID, playerSess.playerGUID) {
 					playerSess.delayCurrentCast()
 					playerSess.delayCurrentChannel()
@@ -8054,6 +8059,9 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		s.debug("target slain by spell", "account", s.accountName, "spell", spellID, "guid", target.GUID)
 	} else {
 		newHealth := target.Health - damage
+		// Unit::DealDamage (Unit.cpp:925-931): random durability loss on
+		// HIT DONE — the attacker is the player.
+		s.rollDurabilityLossOnHit(ctx, damage)
 		rageChanged := false
 		var rageNext, rageMapID, rageInstanceID uint32
 		var rageGUID uint64
@@ -14066,6 +14074,16 @@ func (ts *session) applyPeriodicTickDamageToPlayer(dmg, targetHealth uint32, aur
 		ts.player.Health -= dmg
 		// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
 		ts.grantRageFromDamageTaken(context.Background(), dmg)
+		// Unit::DealDamage (Unit.cpp:906-913, 925-931): random durability
+		// loss — HIT TAKEN on the player victim; HIT DONE on the caster when
+		// it is the player itself (findSessionByGUID only resolves player
+		// sessions, so pet-caster ticks correctly roll nothing).
+		ts.rollDurabilityLossOnHit(context.Background(), dmg)
+		if ts.server != nil {
+			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
+				casterSess.rollDurabilityLossOnHit(context.Background(), dmg)
+			}
+		}
 		ts.procDamageAuras(false, dmg)
 		ts.sendPlayerUpdate()
 		return dmg
@@ -15069,6 +15087,13 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 		return dmg, false
 	}
 	newHealth := targetHealth - dmg
+	// Unit::DealDamage (Unit.cpp:925-931): random durability loss on HIT DONE
+	// — the tick runs on the caster/owner session, so the roll fires only
+	// when the caster is the player itself (a pet-caster tick's attacker is
+	// the pet, TYPEID_UNIT, which rolls nothing in C++).
+	if aura.CasterGUID != 0 && s.player != nil && aura.CasterGUID == s.playerGUID {
+		s.rollDurabilityLossOnHit(ctx, dmg)
+	}
 	rageChanged := false
 	var rageNext, rageMapID, rageInstanceID uint32
 	var rageGUID uint64

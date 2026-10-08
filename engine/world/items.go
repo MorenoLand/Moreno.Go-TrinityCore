@@ -2821,6 +2821,57 @@ func (s *session) durabilityLossAll(ctx context.Context, percent float64, invent
 	}
 }
 
+// durabilityLossChanceOnHit folds TrinityCore's DurabilityLossChance.Damage
+// config (World.cpp:619, default 0.5): roll_chance_f(rate) is a percent roll,
+// so 0.5 means a 0.5% chance per hit. There is no Go rate config (runes.go
+// precedent), so the default is folded as a constant.
+const durabilityLossChanceOnHit = 0.005
+
+// rollDurabilityLossOnHit mirrors the two random-durability arms of
+// Unit::DealDamage (Unit.cpp:906-913 HIT TAKEN on a player victim, 925-931 HIT
+// DONE by a player attacker): on a non-lethal hit with damage > 0 the side
+// rolls DurabilityLossChance.Damage and loses 1 durability point on a random
+// equipment slot (urand(0, EQUIPMENT_SLOT_END-1)). The two arms roll
+// independently — call once per side.
+// Documented no-bridge arms: SPELL_AURA_PREVENT_DURABILITY_LOSS (aura 402 has
+// no Go aura-type model) and the _ApplyItemMods stat strip on the 0-crossing
+// (Go's durability model is DB-backed with a full inventory refresh, the
+// durabilityLossAll precedent — stats are not re-derived on durability
+// changes).
+func (s *session) rollDurabilityLossOnHit(ctx context.Context, damage uint32) {
+	if s == nil || s.player == nil || damage == 0 || ctx == nil {
+		return
+	}
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	// roll_chance_f(rate): percent roll against DurabilityLossChance.Damage.
+	if rand.Float64() >= durabilityLossChanceOnHit {
+		return
+	}
+	// DurabilityPointLossForEquipSlot: GetItemByPos(INVENTORY_SLOT_BAG_0,
+	// slot) — a random equipment slot 0..EQUIPMENT_SLOT_END-1; no item in
+	// the slot is a silent no-op.
+	slot := uint32(rand.Intn(int(equipmentSlotEnd)))
+	cdb := s.server.CharactersStore.DB
+	var itemGUID uint64
+	var curDur uint32
+	err := cdb.QueryRowContext(ctx, `SELECT ci.item, ii.durability
+		FROM character_inventory AS ci
+		JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot = ? LIMIT 1`,
+		s.playerGUID, slot).Scan(&itemGUID, &curDur)
+	if err != nil || curDur == 0 {
+		return
+	}
+	// DurabilityPointsLoss(item, 1): clamped at zero; an unchanged value
+	// (already zero) writes nothing.
+	newDur := curDur - 1
+	_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET durability = ? WHERE guid = ?", newDur, itemGUID)
+	_ = s.sendInventoryItems(ctx)
+	s.sendPlayerUpdate()
+}
+
 // handleSocketGems processes CMSG_SOCKET_GEMS (0x347).
 // Reference: WorldSession::HandleSocketOpcode (ItemHandler.cpp:947).
 func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
