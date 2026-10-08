@@ -219,6 +219,28 @@ func (s *session) hasQuestRequiredItems(ctx context.Context, items []questReward
 	return true, nil
 }
 
+// canCompleteRepeatableQuest mirrors Player::CanCompleteRepeatableQuest
+// (Player.cpp:15040): the receiver must be able to take the quest, hold the
+// required items when the quest is repeatable, and satisfy the modeled
+// CanRewardQuest arms (reward state is folded into canTakeQuest; required
+// money comes from the quest view).
+func (s *session) canCompleteRepeatableQuest(ctx context.Context, questID uint32, view questRewardView, repeatable bool) bool {
+	canTake, err := s.canTakeQuest(ctx, questID)
+	if err != nil || !canTake {
+		return false
+	}
+	if repeatable && len(view.RequiredItems) != 0 {
+		ok, err := s.hasQuestRequiredItems(ctx, view.RequiredItems)
+		if err != nil || !ok {
+			return false
+		}
+	}
+	if view.Detail.RequiredMoney > 0 && (s.player == nil || s.player.Money < view.Detail.RequiredMoney) {
+		return false
+	}
+	return true
+}
+
 func (s *session) sendQuestRequestItems(view questRewardView, giverGUID uint64, canComplete, closeOnCancel bool) bool {
 	emote := view.IncompleteEmote
 	if canComplete {

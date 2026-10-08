@@ -215,6 +215,12 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 	s.fireItemQuestHook(ctx, guid, questID)
 	s.debug("quest accepted", "account", s.accountName, "quest", questID)
 
+	// QuestHandler.cpp:155-173 — QUEST_FLAGS_PARTY_ACCEPT: every group member
+	// that can take the quest gets a confirm-accept prompt.
+	s.broadcastQuestPartyAccept(ctx, questID)
+	// QuestHandler.cpp:176-177 — the quest's source spell is cast triggered.
+	s.castQuestSourceSpell(ctx, questID)
+
 	// Refresh questgiver overhead status (Player::AddQuestAndCheckCompletion)
 	if guid != 0 {
 		var entry uint32
@@ -241,6 +247,61 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 	}
 
 	return s.sendGossipComplete()
+}
+
+// broadcastQuestPartyAccept mirrors the QUEST_FLAGS_PARTY_ACCEPT arm of
+// WorldSession::HandleQuestgiverAcceptQuestOpcode (QuestHandler.cpp:155-173):
+// every group member (not self) that CanTakeQuest(quest, true) gets the quest
+// sharing info, a gossip close, and SMSG_QUEST_CONFIRM_ACCEPT (questID, title,
+// quester GUID — Player::SendQuestConfirmAccept, Player.cpp:17062).
+func (s *session) broadcastQuestPartyAccept(ctx context.Context, questID uint32) {
+	data, err := s.loadQuestDetailData(ctx, questID)
+	if err != nil || data.Flags&questFlagsPartyAccept == 0 {
+		return
+	}
+	if s.groupID == 0 || s.server == nil {
+		return
+	}
+	for _, member := range s.server.getGroupSessions(s.groupID) {
+		if member == nil || member == s || member.player == nil || !member.worldReady.Load() {
+			continue
+		}
+		canTake, err := member.canTakeQuest(ctx, questID)
+		if err != nil || !canTake {
+			continue
+		}
+		member.sharingQuestID = questID
+		member.sharingQuestSender = s.playerGUID
+		member.sendGossipComplete()
+		packet := protocol.NewBuffer(64)
+		packet.WriteU32(questID)
+		packet.WriteCString(data.Title)
+		packet.WriteU64(s.playerGUID)
+		_ = member.write(uint16(protocol.OpcodeSMSG_QUEST_CONFIRM_ACCEPT), packet.Bytes(), true)
+	}
+}
+
+// castQuestSourceSpell mirrors the source-spell arm of
+// WorldSession::HandleQuestgiverAcceptQuestOpcode (QuestHandler.cpp:176-177)
+// and WorldSession::HandleQuestConfirmAccept (QuestHandler.cpp:501-503): the
+// quest_template_addon SrcSpell is cast triggered on the player. The packet
+// bridge follows the trainer teach-spell arm; spell effects resolve
+// server-side only where modeled.
+func (s *session) castQuestSourceSpell(ctx context.Context, questID uint32) {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	var srcSpell int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(SrcSpell, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&srcSpell); err != nil || srcSpell <= 0 {
+		return
+	}
+	castTimeStamp := uint32(time.Now().UnixMilli())
+	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: s.playerGUID}
+	goPkt := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 1, uint32(srcSpell), spellCastFlagGo, castTimeStamp, []uint64{s.playerGUID}, nil, target)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
+	}
 }
 
 func (s *session) addQuestToPlayer(ctx context.Context, questID uint32) bool {

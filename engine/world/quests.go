@@ -618,6 +618,8 @@ func (s *session) handleQuestConfirmAccept(ctx context.Context, payload []byte) 
 	}
 	if activeCount < 25 {
 		s.addQuestToPlayer(ctx, questID)
+		// QuestHandler.cpp:501-503 — the quest's source spell is cast triggered.
+		s.castQuestSourceSpell(ctx, questID)
 	}
 	s.sharingQuestID = 0
 	s.sharingQuestSender = 0
@@ -730,6 +732,21 @@ func (s *session) handlePushQuestToParty(ctx context.Context, payload []byte) bo
 	}
 
 	members := s.server.getGroupSessions(s.groupID)
+
+	// QuestHandler.cpp:610-613 — auto-complete quests are offered the
+	// RequestItems screen instead of the share prompt:
+	// (IsAutoComplete && IsRepeatable && !IsDailyOrWeekly) ||
+	// QUEST_FLAGS_AUTOCOMPLETE, where IsAutoComplete = Method == 0 ||
+	// AUTOCOMPLETE flag (QuestDef.cpp:315), IsRepeatable = SpecialFlags & 1.
+	var method, specialFlags int64
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(Method, 0) FROM quest_template WHERE ID = ?", questID).Scan(&method)
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
+	}
+	isAutoComplete := method == 0 || data.Flags&questAutoCompleteFlags != 0
+	isRepeatable := specialFlags&questSpecialRepeatable != 0
+	autoCompleteShare := (isAutoComplete && isRepeatable && data.Flags&(questFlagsDaily|questFlagsWeekly) == 0) || data.Flags&questAutoCompleteFlags != 0
+
 	for _, receiver := range members {
 		if receiver == nil || receiver == s || !receiver.worldReady.Load() || receiver.player == nil {
 			continue
@@ -776,11 +793,17 @@ func (s *session) handlePushQuestToParty(ctx context.Context, payload []byte) bo
 		// Sharing initiated
 		s.sendPushToPartyResponse(receiver.playerGUID, QuestPartyMsgSharingQuest)
 
-		// Check AutoAccept
-		var specialFlags int64
-		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT SpecialFlags FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
+		if autoCompleteShare {
+			// QuestHandler.cpp:610-613 — auto-complete quests skip the share
+			// prompt: the receiver gets the RequestItems screen with the
+			// repeatable-completion state (CanCompleteRepeatableQuest).
+			if view, err := s.loadQuestRewardView(ctx, questID); err == nil {
+				receiver.sendQuestRequestItems(view, s.playerGUID, receiver.canCompleteRepeatableQuest(ctx, questID, view, isRepeatable), true)
+			}
+			continue
 		}
+
+		// Check AutoAccept
 		if specialFlags&4 != 0 {
 			receiver.addQuestToPlayer(ctx, questID)
 			s.sendPushToPartyResponse(receiver.playerGUID, QuestPartyMsgAcceptQuest)
@@ -802,23 +825,28 @@ func (s *session) handleQuestPushResult(ctx context.Context, payload []byte) boo
 	}
 	r := protocol.NewReader(payload)
 	sharerGUID, _ := r.ReadU64()
-	questID, _ := r.ReadU32()
+	_, _ = r.ReadU32()
 	msg, _ := r.ReadU8()
 
-	if s.server != nil {
-		sharerSess := s.server.findSessionByGUID(sharerGUID)
-		if s.sharingQuestSender == sharerGUID && s.sharingQuestID == questID {
-			if msg == QuestPartyMsgAcceptQuest {
-				s.addQuestToPlayer(ctx, questID)
-			}
-			if sharerSess != nil {
+	// QuestHandler.cpp:647-665 — MSG_QUEST_PUSH_RESULT only relays the client's
+	// accept/decline message to the sharer; the quest itself is added by
+	// CMSG_QUEST_CONFIRM_ACCEPT with its full gate set (party-accept flag, same
+	// raid, sharer still active, CanTakeQuest). Go previously added the quest
+	// here with no gates at all, so the sharer could grant quests to players
+	// outside the raid, players already rewarded, or quests that fail
+	// CanTakeQuest — and the follow-up confirm-accept then no-op'd on the
+	// already-cleared sharing info.
+	if s.sharingQuestSender == 0 {
+		return true
+	}
+	if s.sharingQuestSender == sharerGUID {
+		if s.server != nil {
+			if sharerSess := s.server.findSessionByGUID(sharerGUID); sharerSess != nil {
 				sharerSess.sendPushToPartyResponse(s.playerGUID, msg)
 			}
-			s.sharingQuestID = 0
-			s.sharingQuestSender = 0
-		} else if sharerSess != nil {
-			sharerSess.sendPushToPartyResponse(s.playerGUID, msg)
 		}
+		s.sharingQuestID = 0
+		s.sharingQuestSender = 0
 	}
 	return true
 }
