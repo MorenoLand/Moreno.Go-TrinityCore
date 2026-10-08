@@ -31,6 +31,7 @@ const (
 	LFGStateRaidBrowser     uint8 = 7
 
 	LFGUpdateDefault            uint8 = 0
+	LFGUpdateLeaderUnk1         uint8 = 1 // LFG_UPDATETYPE_LEADER_UNK1 (LFG.h:50, "FIXME: At group leave")
 	LFGUpdateRoleCheckAborted   uint8 = 4
 	LFGUpdateJoinQueue          uint8 = 5
 	LFGUpdateRoleCheckFailed    uint8 = 6
@@ -94,6 +95,14 @@ const (
 	LFGJoinOK             uint32 = 0
 	LFGJoinNotMeetReqs    uint32 = 5
 	LFGJoinInvalidDungeon uint32 = 11
+
+	// LFG script auras (LFGMgr.h:51-54,61): cast by the LFGPlayerScript /
+	// LFGGroupScript arms in LFGScripts.cpp.
+	lfgSpellDungeonCooldown = 71328 // LFG_SPELL_DUNGEON_COOLDOWN
+	lfgSpellDungeonDeserter = 71041 // LFG_SPELL_DUNGEON_DESERTER
+	lfgSpellLuckOfTheDraw   = 72221 // LFG_SPELL_LUCK_OF_THE_DRAW
+	lfgGroupKickVotesNeeded = 3     // LFG_GROUP_KICK_VOTES_NEEDED
+	lfgFlagSeasonal         = 0x4   // LFG_FLAG_SEASONAL
 )
 
 type LFGQueueEntry struct {
@@ -561,6 +570,68 @@ func (s *session) getLFGDungeonEntrance(dungeonID uint32) (mapID uint32, x, y, z
 	return mapID, 0, 0, 0, 0
 }
 
+// lfgSelectedRandomDungeon mirrors LFGMgr::selectedRandomLfgDungeon
+// (LFGMgr.cpp:2250-2262): true when the player's queued LFG selection starts
+// with a random or seasonal dungeon entry.
+func (s *Server) lfgSelectedRandomDungeon(guid uint64) bool {
+	if s == nil || s.Features == nil || s.Features.LFG == nil || s.Data == nil {
+		return false
+	}
+	entry, ok := s.Features.LFG.Status(guid)
+	if !ok || entry.State == LFGStateNone || len(entry.Dungeons) == 0 {
+		return false
+	}
+	dungeon, found, err := s.Data.LFGDungeon(entry.Dungeons[0] & 0x00FFFFFF)
+	if err != nil || !found {
+		return false
+	}
+	return dungeon.TypeID == LFGDungeonTypeRandom || dungeon.Flags&lfgFlagSeasonal != 0
+}
+
+// lfgGroupMemberRemoved mirrors the LFGMgr-state-free arms of
+// LFGGroupScript::OnRemoveMember (LFGScripts.cpp:183-228): the Dungeon
+// Deserter cast on mid-dungeon leaves, the SMSG_LFG_UPDATE_PARTY ping, and
+// the teleport-out of the dungeon. The InitBoot kick-vote start, the
+// per-group data writes (SetGroup/RemovePlayerFromGroup/RemoveGroupData) and
+// SendLfgOfferContinue have no Go counterpart and stay documented no-bridge:
+// Go keeps no per-group LFG data and its boot vote is client-driven only.
+func (s *Server) lfgGroupMemberRemoved(g *groupState, target *session, method uint8) {
+	if s == nil || g == nil || !g.IsLFG || target == nil || target.player == nil {
+		return
+	}
+	if method == groupRemoveMethodLeave && g.LFGState == LFGStateDungeon &&
+		len(g.Members) >= lfgGroupKickVotesNeeded {
+		target.applyAura(lfgSpellDungeonDeserter)
+	}
+	_ = target.sendLFGUpdateParty(LFGUpdateLeaderUnk1, LFGQueueEntry{})
+	if target.isDungeonMap(target.player.Map) {
+		target.teleportToLFGEntryPoint()
+	}
+}
+
+// teleportToLFGEntryPoint mirrors the out=true leg of
+// WorldSession::HandleLfgTeleportOpcode, i.e. LFGMgr::TeleportPlayer(player,
+// true) (LFGMgr.cpp:1529-1582): returns the player to the stored LFG entry
+// point, falling back to the Stormwind gates when none was recorded.
+func (s *session) teleportToLFGEntryPoint() {
+	if s.player == nil {
+		return
+	}
+	destMap := s.player.LfgEntryPointMap
+	destX := s.player.LfgEntryPointX
+	destY := s.player.LfgEntryPointY
+	destZ := s.player.LfgEntryPointZ
+	destOri := s.player.LfgEntryPointO
+
+	if destMap == 0 && destX == 0 && destY == 0 {
+		destMap = 0
+		destX = -8949.95
+		destY = 512.28
+		destZ = 96.35
+	}
+	s.teleportTo(destMap, destX, destY, destZ, destOri)
+}
+
 func (s *session) teleportToLFGDungeon(dungeonID uint32) {
 	if s.player == nil {
 		return
@@ -582,7 +653,15 @@ func (s *session) teleportToLFGDungeon(dungeonID uint32) {
 	s.player.LfgEntryPointO = s.player.Orientation
 
 	mapID, x, y, z, ori := s.getLFGDungeonEntrance(dungeonID)
-	s.teleportTo(mapID, x, y, z, ori)
+	// LFGPlayerScript::OnMapChanged (LFGScripts.cpp:93-131): arriving in the
+	// LFG dungeon map casts Luck of the Draw when the player queued for a
+	// random dungeon (LFGMgr::selectedRandomLfgDungeon, LFGMgr.cpp:2250-2262).
+	// C++ carries no fixed duration — the aura is stripped on map change —
+	// and Go has no map-change hook, so a 2h practical cap stands in.
+	luck := s.server.lfgSelectedRandomDungeon(s.playerGUID)
+	if s.teleportTo(mapID, x, y, z, ori) && luck {
+		s.applyAuraWithDuration(lfgSpellLuckOfTheDraw, 7200000)
+	}
 }
 
 func (s *session) sendLFGRoleCheckUpdate(roleCheck *LfgRoleCheck) error {
@@ -972,6 +1051,12 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 
 		for pguid := range proposal.Players {
 			if ps := s.server.findSessionByGUID(pguid); ps != nil {
+				// LFGMgr::UpdateProposal (LFGMgr.cpp:1127-1141): players who
+				// queued for a random dungeon take the Dungeon Cooldown aura
+				// on proposal accept.
+				if s.server.lfgSelectedRandomDungeon(pguid) {
+					ps.applyAura(lfgSpellDungeonCooldown)
+				}
 				ps.teleportToLFGDungeon(proposal.DungeonID)
 			}
 		}
@@ -1088,19 +1173,7 @@ func (s *session) handleLfgTeleport(ctx context.Context, payload []byte) bool {
 	}
 
 	if out {
-		destMap := s.player.LfgEntryPointMap
-		destX := s.player.LfgEntryPointX
-		destY := s.player.LfgEntryPointY
-		destZ := s.player.LfgEntryPointZ
-		destOri := s.player.LfgEntryPointO
-
-		if destMap == 0 && destX == 0 && destY == 0 {
-			destMap = 0
-			destX = -8949.95
-			destY = 512.28
-			destZ = 96.35
-		}
-		s.teleportTo(destMap, destX, destY, destZ, destOri)
+		s.teleportToLFGEntryPoint()
 		return true
 	}
 

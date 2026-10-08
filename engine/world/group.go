@@ -636,6 +636,12 @@ func (s *session) handleGroupInvite(_ context.Context, payload []byte) bool {
 		ephemeral := scripting.NewGroupObject(groupGUID(0), s.playerGUID, []uint64{s.playerGUID})
 		s.server.triggerGroupEvent(scripting.GroupEventOnMemberInvite, ephemeral, s.playerGUID)
 		s.server.triggerGroupEvent(scripting.GroupEventOnMemberInvite, ephemeral, invitedSess.playerGUID)
+		// LFGGroupScript::OnInviteMember (LFGScripts.cpp:231-245): a queued
+		// leader forming a new group via invite leaves the LFG queue.
+		if s.server.Features != nil && s.server.Features.LFG != nil &&
+			s.server.Features.LFG.Leave(s.playerGUID) {
+			_ = s.sendLFGUpdatePlayer(LFGUpdateRemovedFromQueue, LFGQueueEntry{GUID: s.playerGUID, State: LFGStateNone})
+		}
 	}
 
 	// Send SMSG_GROUP_INVITE to invited player
@@ -703,6 +709,15 @@ func (s *session) handleGroupAccept(_ context.Context, _ []byte) bool {
 	s.groupID = g.ID
 	groupObj := groupLuaObject(g)
 	srv.groupsMu.Unlock()
+
+	// LFGGroupScript::OnAddMember (LFGScripts.cpp:143-181): a queued player
+	// joining a group leaves the LFG queue. The per-group bookkeeping
+	// (SetGroup/AddPlayerToGroup/SetLeader) has no Go counterpart — Go keeps
+	// no per-group LFG data.
+	if srv.Features != nil && srv.Features.LFG != nil &&
+		srv.Features.LFG.Leave(s.playerGUID) {
+		_ = s.sendLFGUpdatePlayer(LFGUpdateRemovedFromQueue, LFGQueueEntry{GUID: s.playerGUID, State: LFGStateNone})
+	}
 
 	srv.broadcastGroupList(g)
 	// Eluna GROUP_EVENT_ON_MEMBER_ADD (1): C++ Group::AddMember fires
@@ -845,6 +860,9 @@ func (s *session) removeFromGroup(g *groupState, target *session, method uint8) 
 		}
 	}
 	srv.groupsMu.Unlock()
+
+	// LFGGroupScript::OnRemoveMember native arms (LFGScripts.cpp:183-228).
+	srv.lfgGroupMemberRemoved(g, target, method)
 
 	srv.triggerGroupEvent(scripting.GroupEventOnMemberRemove, groupObj, target.playerGUID, method)
 	if disbanded {
@@ -1103,6 +1121,8 @@ func (s *session) handleGroupDisband(_ context.Context, _ []byte) bool {
 		// C++ Group::RemoveMember fires OnGroupRemoveMember (Group.cpp:569);
 		// its tail disbands the group (firing OnGroupDisband) when the
 		// member count drops to 1 or fewer.
+		// LFGGroupScript::OnRemoveMember native arms (LFGScripts.cpp:183-228).
+		srv.lfgGroupMemberRemoved(g, s, groupRemoveMethodLeave)
 		srv.triggerGroupEvent(scripting.GroupEventOnMemberRemove, groupObj, s.playerGUID, uint8(groupRemoveMethodLeave))
 		if disbanded {
 			srv.triggerGroupEvent(scripting.GroupEventOnDisband, groupObj)
