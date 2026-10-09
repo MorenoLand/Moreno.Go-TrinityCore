@@ -118,10 +118,17 @@ type creatureMotion struct {
 	// Creature::CanCreatureAttack (Creature.cpp:2560-2603) skips the
 	// home-distance check while it is fresh (or while the creature is
 	// taunted) — except for world bosses (isWorldBoss, Creature.cpp:2353).
-	LastDamaged               time.Time
-	LastSpell                 time.Time
-	Spells                    []uint32
-	NextSpellIdx              int
+	LastDamaged  time.Time
+	LastSpell    time.Time
+	Spells       []uint32
+	NextSpellIdx int
+	// SpellEventTimes is the per-spell event schedule for CombatAI/CasterAI
+	// template-spell casts (CombatAI.cpp _events EventMap): each AICOND_COMBAT
+	// template spell's next fire time. Armed at engage
+	// (CombatAI::JustEngagedWith / CasterAI::JustEngagedWith), fired and
+	// re-armed by the combat tick (CombatAI::UpdateAI / CasterAI::UpdateAI),
+	// reset on evade (CombatAI::Reset).
+	SpellEventTimes           map[uint32]time.Time
 	SpellCooldowns            map[uint32]time.Time
 	SpellCategoryCooldowns    map[uint32]time.Time
 	SpellCooldownCategories   map[uint32]uint32
@@ -595,6 +602,16 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
 		motion.InCombat = true
 		motion.Moving = false
+		// CombatAI::JustEngagedWith / CasterAI::JustEngagedWith pre-arm
+		// (CombatAI.cpp:76-88, 139-162): AICOND_COMBAT template spells get
+		// their first event scheduled here, inside the motion lock.
+		if enteredCombat {
+			if motion.AIName == "CasterAI" {
+				s.scheduleCasterAISpellEvents(ctx, motion, motion.TargetGUID, time.Now())
+			} else {
+				s.scheduleAISpellEvents(motion, time.Now())
+			}
+		}
 	}
 	// The Lua enter-combat hook must run outside the motion lock: hook
 	// handlers call back into creature methods that take it themselves.
@@ -614,16 +631,10 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 	}
 	if enteredCombat && fireMotion != nil {
 		// CombatAI::JustEngagedWith / CasterAI::JustEngagedWith
-		// (CombatAI.cpp:76-88, 145-164): AICOND_AGGRO template spells are
-		// cast once at the engage victim, non-triggered.
+		// (CombatAI.cpp:76-88, 139-162): AICOND_AGGRO template spells are
+		// cast once at the engage victim, non-triggered; the AICOND_COMBAT
+		// event pre-arm ran inside the motion lock above.
 		s.castAggroConditionSpells(ctx, fireMotion, firePlayerGUID)
-		if fireMotion.AIName == "CasterAI" {
-			// CasterAI::JustEngagedWith random immediate combat-cast
-			// (CombatAI.cpp:145-164): one randomly chosen AICOND_COMBAT
-			// spell is cast at once via DoCast; its cooldown re-arms with
-			// the cast time added.
-			s.castCasterEngageSpell(ctx, fireMotion, firePlayerGUID)
-		}
 	}
 }
 
@@ -667,20 +678,214 @@ func (s *Server) castAggroConditionSpells(ctx context.Context, m *creatureMotion
 	}
 }
 
-// castCasterEngageSpell bridges the immediate-cast arm of
-// CasterAI::JustEngagedWith (CombatAI.cpp:145-164): one spell is chosen at
-// random from the creature's valid template spells (the C++ _spells list,
-// CombatAI::InitializeAI — spells with DBC data only) and, if it classifies
-// AICOND_COMBAT per UnitAI::FillAISpellInfo (UnitAI.cpp:188-206), it is cast
-// at once at the engage victim via the DoCast analog. When the random pick
-// lands on an AGGRO/DIE spell nothing extra fires — matching C++.
-// LastSpell is stamped so the combat-tick rotation does not double-fire:
-// the C++ re-arms the chosen spell's cooldown with its cast time added.
-func (s *Server) castCasterEngageSpell(ctx context.Context, m *creatureMotion, victimGUID uint64) {
+// AI-spell condition classes from UnitAI::FillAISpellInfo (UnitAI.cpp:188-206),
+// mirroring enum AICondition (CreatureAIImpl.h:43-48): AICOND_AGGRO,
+// AICOND_COMBAT, AICOND_DIE.
+const (
+	aiSpellCondAggro = iota
+	aiSpellCondCombat
+	aiSpellCondDie
+)
+
+// AI-spell target classes from UnitAI::FillAISpellInfo + UnitAI::DoCast
+// (UnitAI.cpp:113-163, 210-226), mirroring enum AITarget
+// (CreatureAIImpl.h:33-41). The numeric order matters: FillAISpellInfo's
+// UPDATE_TARGET only ever raises the target, so the Go consts keep the C++
+// order SELF < VICTIM < ENEMY < ALLY < BUFF < DEBUFF.
+const (
+	aiSpellTargetSelf = iota
+	aiSpellTargetVictim
+	aiSpellTargetEnemy
+	aiSpellTargetAlly
+	aiSpellTargetBuff
+	aiSpellTargetDebuff
+)
+
+// aiSpellCondition classifies a creature-template spell per
+// UnitAI::FillAISpellInfo (UnitAI.cpp:188-206): castable-while-dead ->
+// AICOND_DIE, passive or infinite-duration -> AICOND_AGGRO, else
+// AICOND_COMBAT. The DBC-validity gate of CombatAI::InitializeAI
+// (CombatAI.cpp:58) is the caller's responsibility: only DBC-found spells
+// are classified here.
+func (s *Server) aiSpellCondition(spell wotlk.Spell) int {
+	if spell.Attributes&spellAttr0CastableWhileDead != 0 {
+		return aiSpellCondDie
+	}
+	if spell.Attributes&spellAttr0Passive != 0 {
+		return aiSpellCondAggro
+	}
+	if spell.DurationIndex != 0 && s != nil && s.Data != nil {
+		if dur, ok, derr := s.Data.SpellDuration(spell.DurationIndex, 1); derr == nil && ok && dur < 0 {
+			return aiSpellCondAggro
+		}
+	}
+	return aiSpellCondCombat
+}
+
+// aiSpellCooldownMs mirrors the AISpellInfo cooldown used by
+// CombatAI::JustEngagedWith / CombatAI::UpdateAI (CombatAI.cpp:76-106):
+// AISpellInfoType defaults cooldown to AI_DEFAULT_COOLDOWN (5000ms,
+// CreatureAIImpl.h:55) and FillAISpellInfo raises it to the spell's
+// RecoveryTime when higher (UnitAI.cpp:208-209).
+func aiSpellCooldownMs(spell wotlk.Spell) uint32 {
+	if spell.RecoveryTime > 5000 {
+		return spell.RecoveryTime
+	}
+	return 5000
+}
+
+// aiSpellRealCooldownMs mirrors AISpellInfo::realCooldown (UnitAI.cpp:227:
+// RecoveryTime + StartRecoveryTime), used by CasterAI::JustEngagedWith /
+// CasterAI::UpdateAI (CombatAI.cpp:139-166).
+func aiSpellRealCooldownMs(spell wotlk.Spell) uint32 {
+	return spell.RecoveryTime + spell.StartRecoveryTime
+}
+
+// aiSpellCastTimeMs mirrors Unit::GetCurrentSpellCastTime for the CasterAI
+// re-arm (CombatAI.cpp:157-158, 163): the DBC SpellCastTimes row for the
+// spell's CastingTimeIndex; 0 when the DBC row is absent.
+func (s *Server) aiSpellCastTimeMs(spell wotlk.Spell) uint32 {
+	if s == nil || s.Data == nil || spell.CastingTimeIndex == 0 {
+		return 0
+	}
+	if value, ok, err := s.Data.SpellCastTime(spell.CastingTimeIndex); err == nil && ok && value > 0 {
+		return uint32(value)
+	}
+	return 0
+}
+
+// aiSpellTargetClass mirrors the target-classification leg of
+// UnitAI::FillAISpellInfo (UnitAI.cpp:210-226): only when the spell has a
+// non-zero max range, implicit-target hits upgrade the default AITARGET_SELF:
+// TARGET_UNIT_TARGET_ENEMY (6) or TARGET_DEST_TARGET_ENEMY (53) -> VICTIM,
+// TARGET_UNIT_DEST_AREA_ENEMY (16) -> ENEMY; a SPELL_EFFECT_APPLY_AURA (6)
+// effect on TARGET_UNIT_TARGET_ENEMY -> DEBUFF, and a positive aura ->
+// BUFF (SharedDefines.h:1447, 1452, 1489).
+func (s *Server) aiSpellTargetClass(spell wotlk.Spell) int {
+	target := aiSpellTargetSelf
+	if s == nil || s.Data == nil {
+		return target
+	}
+	maxRange := float32(0)
+	if spellRange, rangeFound, rangeErr := s.Data.SpellRange(spell.RangeIndex); rangeErr == nil && rangeFound {
+		maxRange = spellRange.MaxHostile
+	}
+	if maxRange == 0 {
+		return target
+	}
+	for i := range spell.Effects {
+		eff := spell.Effects[i]
+		targetType := eff.ImplicitTargetA
+		switch targetType {
+		case 6, 53: // TARGET_UNIT_TARGET_ENEMY, TARGET_DEST_TARGET_ENEMY
+			if target < aiSpellTargetVictim {
+				target = aiSpellTargetVictim
+			}
+		case 16: // TARGET_UNIT_DEST_AREA_ENEMY
+			if target < aiSpellTargetEnemy {
+				target = aiSpellTargetEnemy
+			}
+		}
+		if eff.Effect == 6 { // SPELL_EFFECT_APPLY_AURA
+			if targetType == 6 {
+				if target < aiSpellTargetDebuff {
+					target = aiSpellTargetDebuff
+				}
+			} else if spellIsPositive(spell) {
+				if target < aiSpellTargetBuff {
+					target = aiSpellTargetBuff
+				}
+			}
+		}
+	}
+	return target
+}
+
+// resolveAISpellTargetGUID mirrors UnitAI::DoCast target selection
+// (UnitAI.cpp:113-163): SELF/ALLY/BUFF -> me; VICTIM -> the current
+// victim; DEBUFF -> the victim (Go has no aura model, so the C++
+// victim-else-random arm reduces to the victim); ENEMY -> a random threat
+// entry other than the victim (C++ SelectTarget RANDOM within the spell's
+// max range, player-only when SPELL_ATTR3_ONLY_TARGET_PLAYERS — Go threat
+// entries carry no positions, so the range filter has no model and is
+// documented, not invented).
+func (s *Server) resolveAISpellTargetGUID(m *creatureMotion, spell wotlk.Spell, victimGUID uint64) uint64 {
+	if m == nil {
+		return victimGUID
+	}
+	switch s.aiSpellTargetClass(spell) {
+	case aiSpellTargetVictim, aiSpellTargetDebuff:
+		if victimGUID == 0 {
+			return m.GUID
+		}
+		return victimGUID
+	case aiSpellTargetEnemy:
+		if m.ThreatMgr != nil {
+			var others []uint64
+			for _, e := range m.ThreatMgr.SortedEntries() {
+				if e.VictimGUID != 0 && e.VictimGUID != victimGUID {
+					others = append(others, e.VictimGUID)
+				}
+			}
+			if len(others) > 0 {
+				return others[rand.Intn(len(others))]
+			}
+		}
+		if victimGUID == 0 {
+			return m.GUID
+		}
+		return victimGUID
+	default:
+		return m.GUID
+	}
+}
+
+// scheduleAISpellEvents bridges the pre-arm of CombatAI::JustEngagedWith
+// (CombatAI.cpp:76-88): every AICOND_COMBAT template spell gets its first
+// event at now + cooldown + rand32() % cooldown. The jitter leg is skipped
+// when the cooldown is 0 (rand32() % 0 is undefined in C++; RecoveryTime is
+// 0 only for instant-cooldown DBC rows).
+func (s *Server) scheduleAISpellEvents(m *creatureMotion, now time.Time) {
+	if s == nil || m == nil || s.Data == nil {
+		return
+	}
+	if m.SpellEventTimes == nil {
+		m.SpellEventTimes = make(map[uint32]time.Time)
+	}
+	for _, spellID := range m.Spells {
+		spellInfo, found, err := s.Data.Spell(spellID)
+		if err != nil || !found {
+			continue
+		}
+		if s.aiSpellCondition(spellInfo) != aiSpellCondCombat {
+			continue
+		}
+		cooldown := aiSpellCooldownMs(spellInfo)
+		delay := cooldown
+		if cooldown > 0 {
+			delay += uint32(rand.Intn(int(cooldown)))
+		}
+		m.SpellEventTimes[spellID] = now.Add(time.Duration(delay) * time.Millisecond)
+	}
+}
+
+// scheduleCasterAISpellEvents bridges CasterAI::JustEngagedWith
+// (CombatAI.cpp:139-162): every AICOND_COMBAT template spell schedules at
+// realCooldown (RecoveryTime + StartRecoveryTime, UnitAI.cpp:227); the
+// randomly picked spell (rand32() % _spells.size() over the DBC-valid list,
+// i.e. the CombatAI::InitializeAI gate) is cast immediately via the DoCast
+// analog and its schedule additionally absorbs the current cast time. When
+// the pick lands on an AGGRO/DIE spell nothing extra fires — the AGGRO arm
+// is cast separately by castAggroConditionSpells.
+func (s *Server) scheduleCasterAISpellEvents(ctx context.Context, m *creatureMotion, victimGUID uint64, now time.Time) {
 	if s == nil || m == nil || victimGUID == 0 || len(m.Spells) == 0 || s.Data == nil {
 		return
 	}
+	if m.SpellEventTimes == nil {
+		m.SpellEventTimes = make(map[uint32]time.Time)
+	}
 	var valid []uint32
+	var infos []wotlk.Spell
 	var combat []bool
 	for _, spellID := range m.Spells {
 		spellInfo, found, err := s.Data.Spell(spellID)
@@ -688,22 +893,98 @@ func (s *Server) castCasterEngageSpell(ctx context.Context, m *creatureMotion, v
 			continue
 		}
 		valid = append(valid, spellID)
-		die := spellInfo.Attributes&spellAttr0CastableWhileDead != 0
-		aggro := spellInfo.Attributes&spellAttr0Passive != 0
-		if !aggro && spellInfo.DurationIndex != 0 {
-			if dur, ok, derr := s.Data.SpellDuration(spellInfo.DurationIndex, 1); derr == nil && ok && dur < 0 {
-				aggro = true
-			}
-		}
-		combat = append(combat, !die && !aggro)
+		infos = append(infos, spellInfo)
+		combat = append(combat, s.aiSpellCondition(spellInfo) == aiSpellCondCombat)
 	}
 	if len(valid) == 0 {
 		return
 	}
-	if pick := rand.Intn(len(valid)); combat[pick] {
-		s.castCreatureSpell(ctx, m, valid[pick], victimGUID)
-		m.LastSpell = time.Now()
+	pick := rand.Intn(len(valid))
+	for i, spellID := range valid {
+		if !combat[i] {
+			continue
+		}
+		delay := aiSpellRealCooldownMs(infos[i])
+		if i == pick {
+			s.castCreatureSpell(ctx, m, spellID, s.resolveAISpellTargetGUID(m, infos[i], victimGUID))
+			delay += s.aiSpellCastTimeMs(infos[i])
+		}
+		m.SpellEventTimes[spellID] = now.Add(time.Duration(delay) * time.Millisecond)
 	}
+}
+
+// dueAISpell bridges the event-execution arm of CombatAI::UpdateAI /
+// CasterAI::UpdateAI (CombatAI.cpp:90-106, 153-166): it returns the first
+// due AICOND_COMBAT template spell in _spells order (EventMap pops the
+// earliest scheduled event; _spells order is the m_spells[8] array order,
+// CreatureData.h:144), with its DoCast target. A creature whose schedule
+// was never armed (an engage path that predates the scheduler) arms lazily
+// here via the CombatAI/CasterAI engage pre-arm, matching the C++ invariant
+// that _events is always armed by JustEngagedWith.
+func (s *Server) dueAISpell(ctx context.Context, m *creatureMotion, victimGUID uint64, now time.Time) (uint32, wotlk.Spell, uint64, bool) {
+	if s == nil || m == nil || s.Data == nil || len(m.Spells) == 0 {
+		return 0, wotlk.Spell{}, 0, false
+	}
+	armed := false
+	if m.SpellEventTimes != nil {
+		for _, spellID := range m.Spells {
+			if t, ok := m.SpellEventTimes[spellID]; ok && !t.IsZero() {
+				armed = true
+				break
+			}
+		}
+	}
+	if !armed {
+		if m.AIName == "CasterAI" {
+			s.scheduleCasterAISpellEvents(ctx, m, victimGUID, now)
+		} else {
+			s.scheduleAISpellEvents(m, now)
+		}
+	}
+	for _, spellID := range m.Spells {
+		spellInfo, found, err := s.Data.Spell(spellID)
+		if err != nil || !found {
+			continue
+		}
+		if s.aiSpellCondition(spellInfo) != aiSpellCondCombat {
+			continue
+		}
+		if fireAt, ok := m.SpellEventTimes[spellID]; ok && !fireAt.After(now) {
+			return spellID, spellInfo, s.resolveAISpellTargetGUID(m, spellInfo, victimGUID), true
+		}
+	}
+	return 0, wotlk.Spell{}, 0, false
+}
+
+// rearmAISpell schedules a fired spell's next event: CombatAI::UpdateAI
+// (CombatAI.cpp:96-99) re-arms with cooldown + rand32() % cooldown
+// (cooldown = max(5000, RecoveryTime), CreatureAIImpl.h:55, UnitAI.cpp:208-209);
+// CasterAI::UpdateAI (CombatAI.cpp:163-166) re-arms with
+// (casttime ? casttime : 500ms) + realCooldown. The UNIT_STATE_CASTING
+// early-out has no Go model (no creature cast-state), so the event arm is
+// unconditional once the spell is due.
+func (s *Server) rearmAISpell(m *creatureMotion, spell wotlk.Spell, spellID uint32, now time.Time) {
+	if m == nil {
+		return
+	}
+	if m.SpellEventTimes == nil {
+		m.SpellEventTimes = make(map[uint32]time.Time)
+	}
+	var delay uint32
+	if m.AIName == "CasterAI" {
+		castTime := s.aiSpellCastTimeMs(spell)
+		if castTime == 0 {
+			castTime = 500
+		}
+		delay = castTime + aiSpellRealCooldownMs(spell)
+	} else {
+		cooldown := aiSpellCooldownMs(spell)
+		delay = cooldown
+		if cooldown > 0 {
+			delay += uint32(rand.Intn(int(cooldown)))
+		}
+	}
+	m.SpellEventTimes[spellID] = now.Add(time.Duration(delay) * time.Millisecond)
 }
 
 func (s *Server) charmCreature(ctx context.Context, key creatureAuraKey, charmerGUID uint64, charmerRace uint8) ([]uint32, uint8, uint8, bool) {
@@ -988,6 +1269,9 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	}
 	motion.InCombat = false
 	motion.TargetGUID = 0
+	// CombatAI::Reset (CombatAI.cpp:64-67): evade clears the AI event
+	// schedule; the next engage re-arms it via the JustEngagedWith pre-arm.
+	motion.SpellEventTimes = nil
 	motion.Health = motion.MaxHealth
 	// CreatureAI::_EnterEvadeMode (CreatureAI.cpp:311): the leash's
 	// last-damaged timer resets with the evade.
@@ -1429,18 +1713,33 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			cReach = 1.5
 		}
 		contactDist := float32(calcMeleeRange(cReach, victimReach))
+		// CombatAI::UpdateAI / CasterAI::UpdateAI (CombatAI.cpp:90-106,
+		// 153-166): the first due AICOND_COMBAT spell event fires and
+		// re-arms; a fired spell preempts the melee swing below on this
+		// tick (spell/melee exclusivity, bridged 08:14). Range gating uses
+		// the due spell's own range band; self/buff-targeted spells cast
+		// packet-only regardless of range (C++ CastSpell at me).
+		spellID, dueSpell, dueTargetGUID, dueOK := s.dueAISpell(ctx, motion, target.GUID, now)
 		spellMinDist, spellMaxDist := contactDist, contactDist
-		if len(motion.Spells) > 0 && s != nil && s.Data != nil {
-			if spellInfo, found, err := s.Data.Spell(motion.Spells[motion.NextSpellIdx%len(motion.Spells)]); err == nil && found {
-				if spellRange, rangeFound, rangeErr := s.Data.SpellRange(spellInfo.RangeIndex); rangeErr == nil && rangeFound {
-					spellMinDist += spellRange.MinHostile
-					spellMaxDist += spellRange.MaxHostile
-				}
+		if dueOK && dueTargetGUID == target.GUID && s != nil && s.Data != nil {
+			if spellRange, rangeFound, rangeErr := s.Data.SpellRange(dueSpell.RangeIndex); rangeErr == nil && rangeFound {
+				spellMinDist += spellRange.MinHostile
+				spellMaxDist += spellRange.MaxHostile
 			}
 		}
-		if len(motion.Spells) > 0 && dist >= spellMinDist && dist <= spellMaxDist && (motion.LastSpell.IsZero() || now.Sub(motion.LastSpell) >= 6*time.Second) {
-			spellID := motion.Spells[motion.NextSpellIdx%len(motion.Spells)]
-			motion.NextSpellIdx++
+		if dueOK && (dueTargetGUID != target.GUID || (dist >= spellMinDist && dist <= spellMaxDist)) {
+			if dueTargetGUID != target.GUID {
+				// DoCast at a non-victim target (UnitAI.cpp:113-163): self
+				// buffs, ally heals, or random-enemy picks — packet-only
+				// (the damage/log legs below are victim-player specific and
+				// have no C++ DoCast arm here).
+				if target.Sess != nil {
+					target.Sess.debug("creature spell attack", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "target_guid", dueTargetGUID)
+				}
+				s.castCreatureSpell(ctx, motion, spellID, dueTargetGUID)
+				s.rearmAISpell(motion, dueSpell, spellID, now)
+				return
+			}
 			if target.Sess != nil {
 				target.Sess.debug("creature spell attack", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "target_guid", target.GUID)
 			}
@@ -1577,6 +1876,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 			}
 			motion.LastSpell = now
+			s.rearmAISpell(motion, dueSpell, spellID, now)
 			// CombatAI::UpdateAI (CombatAI.cpp:90-106): a fired spell event
 			// and the melee swing are mutually exclusive per tick — the
 			// event arm runs instead of DoMeleeAttackIfReady, so a spell
@@ -1961,8 +2261,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 			// CombatAI::JustEngagedWith AICOND_AGGRO arm (CombatAI.cpp:76-88):
 			// aggro-condition template spells are cast once at the engage
-			// victim, non-triggered.
+			// victim, non-triggered; the AICOND_COMBAT event pre-arm
+			// (CombatAI::JustEngagedWith / CasterAI::JustEngagedWith,
+			// CombatAI.cpp:76-88, 139-162) is scheduled here too.
 			s.castAggroConditionSpells(ctx, motion, p.GUID)
+			if motion.AIName == "CasterAI" {
+				s.scheduleCasterAISpellEvents(ctx, motion, p.GUID, now)
+			} else {
+				s.scheduleAISpellEvents(motion, now)
+			}
 			return
 		}
 	}
