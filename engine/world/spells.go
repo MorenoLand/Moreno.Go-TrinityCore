@@ -5610,8 +5610,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// resolves and falls through to the TARGETS_DEAD gate below.
 		if _, ok := s.getCombatTarget(ctx, target.UnitGUID); !ok {
 			s.cancelGlobalCooldown(spellID)
+			s.sendInterrupted(castID, spellID, 0) // Spell::cancel (Spell.cpp:3220-3225): CancelGlobalCooldown -> SendInterrupted(0) -> SendCastResult(INTERRUPTED); SendInterrupted always carries 0, never the failure code
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedInterrupted), true)
-			s.sendInterrupted(castID, spellID, 0) // Spell::cancel (Spell.cpp:3220-3225): SendInterrupted always carries 0, never the failure code
 			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target removed")
 			return
 		}
@@ -11399,13 +11399,14 @@ func (s *session) interruptCurrentCast() {
 		castID := s.activeCast.CastID
 		spellID := s.activeCast.SpellID
 		s.activeCast = nil
-		// Spell::cancel (Spell.cpp:3210-3225) calls CancelGlobalCooldown() when
-		// cancelled in SPELL_STATE_PREPARING.
+		// Spell::cancel (Spell.cpp:3210-3225): CancelGlobalCooldown() when
+		// cancelled in SPELL_STATE_PREPARING, then SendInterrupted(0),
+		// then SendCastResult(SPELL_FAILED_INTERRUPTED).
 		s.castMu.Unlock()
 		s.cancelGlobalCooldown(spellID)
 
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedInterrupted), true)
 		s.sendInterrupted(castID, spellID, 0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedInterrupted), true)
 		return
 	}
 	s.castMu.Unlock()
@@ -11493,8 +11494,10 @@ func (s *session) stopSpellLifecycle() {
 // false) (Unit.cpp:3212-3222) -> Spell::cancel (Spell.cpp:3210-3254) for the
 // SPELL_STATE_PREPARING leg: the cancel only lands when the active cast is the
 // spell the client named, the interrupted spell's global cooldown is refunded
-// (CancelGlobalCooldown), and both the caster result and the set-wide
-// interrupted broadcast go out (SendCastResult + SendInterrupted).
+// (CancelGlobalCooldown), and the set-wide interrupted broadcast goes out
+// before the caster result (SendInterrupted -> SendCastResult). The
+// InterruptNonMeleeSpells CURRENT_AUTOREPEAT_SPELL arm is bridged below: a
+// cancel naming the auto-repeat spell stops it with SMSG_CANCEL_AUTO_REPEAT.
 func (s *session) handleCancelCast(payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	castID, _ := reader.ReadU8()
@@ -11512,8 +11515,27 @@ func (s *session) handleCancelCast(payload []byte) bool {
 		s.castMu.Unlock()
 
 		s.cancelGlobalCooldown(curSpellID)
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(curCastID, curSpellID, spellFailedInterrupted), true)
 		s.sendInterrupted(curCastID, curSpellID, 0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(curCastID, curSpellID, spellFailedInterrupted), true)
+		return true
+	}
+	s.castMu.Unlock()
+
+	// Unit::InterruptNonMeleeSpells (Unit.cpp:3212-3222) also checks
+	// CURRENT_AUTOREPEAT_SPELL: a CMSG_CANCEL_CAST naming the auto-repeat
+	// spell stops it. Unit::InterruptSpell (Unit.cpp:3140-3168) answers
+	// with SMSG_CANCEL_AUTO_REPEAT for autorepeat spells before clearing
+	// the slot; no cast-failed result goes out on that arm (the
+	// autorepeat spell object is already finished, so cancel() emits
+	// nothing).
+	s.castMu.Lock()
+	if s.autoRepeatSpell != 0 && s.autoRepeatSpell == spellID {
+		s.autoRepeatSpell = 0
+		s.autoRepeatTarget = 0
+		s.castMu.Unlock()
+		buf := protocol.NewBuffer(9)
+		buf.WritePackedGUID(s.playerGUID)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
 		return true
 	}
 	s.castMu.Unlock()
@@ -17436,13 +17458,14 @@ func (s *session) interruptCurrentChannel() {
 	s.expireChannelAuras(channel)
 	s.sendChannelUpdate(0)
 	// Spell::cancel (Spell.cpp:3227-3238): the CASTING-state arm follows
-	// SendChannelUpdate(0) with SendInterrupted(0) and
-	// SendCastResult(SPELL_FAILED_INTERRUPTED). Every Go caller of
-	// interruptCurrentChannel is a genuine interrupt (movement, new-cast
-	// break, CMSG_CANCEL_CHANNELLING, damage abort, drain failure), so the
-	// two broadcast packets go out here exactly where C++ sends them.
-	_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(channel.CastID, channel.SpellID, spellFailedInterrupted), true)
+	// SendChannelUpdate(0) with SendInterrupted(0) and then
+	// SendCastResult(SPELL_FAILED_INTERRUPTED) — the code below emits in
+	// that C++ order. Every Go caller of interruptCurrentChannel is a
+	// genuine interrupt (movement, new-cast break, CMSG_CANCEL_CHANNELLING,
+	// damage abort, drain failure), so the broadcast packets go out here
+	// exactly where C++ sends them.
 	s.sendInterrupted(channel.CastID, channel.SpellID, 0)
+	_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(channel.CastID, channel.SpellID, spellFailedInterrupted), true)
 }
 
 // channelTargetAlive answers Spell::update's UpdateChanneledTargetList

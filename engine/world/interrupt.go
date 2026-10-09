@@ -92,8 +92,10 @@ func (s *session) handleEffectInterruptCast(ctx context.Context, targetGUID uint
 	// activeCast != nil, and instant casts have no preparing state in C++
 	// either.)
 	type interruptedCast struct {
-		schoolMask uint32
+		castID     uint8
 		spellID    uint32
+		schoolMask uint32
+		channeled  bool
 	}
 	var interrupted []interruptedCast
 
@@ -131,16 +133,16 @@ func (s *session) handleEffectInterruptCast(ctx context.Context, targetGUID uint
 			}
 			targetSess.activeCast.Cancelled = true
 			targetSess.activeCast = nil
-			interrupted = append(interrupted, interruptedCast{schoolMask: schoolMask, spellID: curSpellID})
-			_ = targetSess.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(curCastID, curSpellID, spellFailedInterrupted), true)
-			targetSess.sendInterrupted(curCastID, curSpellID, 0)
+			// The packets ride the deferred per-spell loop below, in
+			// SpellEffects.cpp:3536-3548 order (lockout -> log -> the
+			// cancel's own packets).
+			interrupted = append(interrupted, interruptedCast{castID: curCastID, spellID: curSpellID, schoolMask: schoolMask})
 		}
 	}
 	targetSess.castMu.Unlock()
 
 	// 2. Check target's active channel (CURRENT_CHANNELED_SPELL), independent
 	// of the generic arm above.
-	interruptedChannel := false
 	targetSess.castMu.Lock()
 	if targetSess.activeChannel != nil {
 		curCastID := targetSess.activeChannel.CastID
@@ -174,35 +176,44 @@ func (s *session) handleEffectInterruptCast(ctx context.Context, targetGUID uint
 				channel.TickTimer.Stop()
 			}
 			channel.Stopped = true
-			interrupted = append(interrupted, interruptedCast{schoolMask: schoolMask, spellID: curSpellID})
-			interruptedChannel = true
-			_ = targetSess.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(curCastID, curSpellID, spellFailedInterrupted), true)
-			targetSess.sendInterrupted(curCastID, curSpellID, 0)
+			// Packets ride the deferred per-spell loop below (lockout ->
+			// log -> cancel packets), like the generic arm above.
+			interrupted = append(interrupted, interruptedCast{castID: curCastID, spellID: curSpellID, schoolMask: schoolMask, channeled: true})
 		}
 	}
 	targetSess.castMu.Unlock()
-	if interruptedChannel {
-		targetSess.sendChannelUpdate(0)
-	}
 
-	// 3. Log and lock the school of each interrupted spell
-	// (SpellEffects.cpp:3536-3537, 3547-3549). Not bridged: the lockout
-	// duration's victim-side mechanic/dispel duration mods
-	// (unitTarget->ModSpellDuration, Object.cpp:2354-2400) — Go has no
-	// victim-side duration-mod application model (applySpellMod is the
-	// caster-side Player::ApplySpellMod, the wrong model here); and the
-	// ProcSkillsAndAuras interrupt procs (SpellEffects.cpp:3540-3545) — Go
-	// has no unit-aura proc trigger model (procs.go is item/enchant only;
-	// procHitInterrupt is defined but unwired).
+	// 3. Per interrupted spell, in SpellEffects.cpp:3536-3548 order:
+	// SpellHistory::LockSpellSchool (the cooldown packet), the interrupt
+	// log, then Unit::InterruptSpell -> Spell::cancel's own packets.
+	// cancel() (Spell.cpp:3210-3238): the PREPARING arm refunds the
+	// interrupted spell's global cooldown (CancelGlobalCooldown) before
+	// SendInterrupted(0); the CASTING (channeled) arm starts with
+	// SendChannelUpdate(0) and refunds nothing; both arms then send
+	// SendInterrupted(0) before SendCastResult(SPELL_FAILED_INTERRUPTED).
 	if len(interrupted) > 0 {
 		durationMs := s.getInterruptDuration(interruptSpell)
 		for _, in := range interrupted {
-			s.sendInterruptCastLog(interruptSpell.ID, targetGUID, in.spellID)
 			if in.schoolMask != 0 && durationMs > 0 {
 				targetSess.prohibitSpellSchool(ctx, in.schoolMask, durationMs)
 			}
+			s.sendInterruptCastLog(interruptSpell.ID, targetGUID, in.spellID)
+			if in.channeled {
+				targetSess.sendChannelUpdate(0)
+			} else {
+				targetSess.cancelGlobalCooldown(in.spellID)
+			}
+			targetSess.sendInterrupted(in.castID, in.spellID, 0)
+			_ = targetSess.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(in.castID, in.spellID, spellFailedInterrupted), true)
 		}
 	}
+	// Not bridged: the lockout duration's victim-side mechanic/dispel
+	// duration mods (unitTarget->ModSpellDuration, Object.cpp:2354-2400) —
+	// Go has no victim-side duration-mod application model (applySpellMod
+	// is the caster-side Player::ApplySpellMod, the wrong model here); and
+	// the ProcSkillsAndAuras interrupt procs (SpellEffects.cpp:3540-3545) —
+	// Go has no unit-aura proc trigger model (procs.go is item/enchant
+	// only; procHitInterrupt is defined but unwired).
 }
 
 // sendInterruptCastLog mirrors Spell::ExecuteLogEffectInterruptCast
