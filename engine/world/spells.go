@@ -525,13 +525,15 @@ const (
 
 // spellStartCastFlags mirrors the castFlags computation in
 // Spell::SendSpellStart (Spell.cpp:4220-4252): base CAST_FLAG_UNKNOWN_2,
-// CAST_FLAG_NO_GCD for rune spells (RuneCostID + POWER_RUNE), and
-// CAST_FLAG_POWER_LEFT_SELF for casters with PowerType != POWER_HEALTH.
+// CAST_FLAG_NO_GCD for rune spells (RuneCostID + POWER_RUNE),
+// CAST_FLAG_POWER_LEFT_SELF for casters with PowerType != POWER_HEALTH, and
+// CAST_FLAG_AMMO for SPELL_ATTR0_REQ_AMMO / SPELL_ATTR0_CU_NEEDS_AMMO_DATA
+// (Spell.cpp:4237-4239) — the trailing 8-byte Ammo block rides
+// spellGoAmmoData (UpdateSpellCastDataAmmo parity) via spellStartAmmoData.
 // CAST_FLAG_IMMUNITY needs the caster's school/mechanic immunity masks (Go
-// has no m_spellImmune model — ApplySpellImmune is unbridged) and
-// CAST_FLAG_AMMO needs the 8-byte ammo display block Go cannot build; both
-// stay unbridged. CAST_FLAG_PENDING is vacuous: every START site serves
-// client casts, never triggered ones.
+// has no m_spellImmune model — ApplySpellImmune is unbridged) and stays
+// unbridged. CAST_FLAG_PENDING is vacuous: every START site serves client
+// casts, never triggered ones.
 // sendSpellStart mirrors the delivery tail of Spell::SendSpellStart
 // (Spell.cpp:4283): m_caster->SendMessageToSet(packet.Write(), true) puts
 // the cast-start packet in front of everyone in range, self included —
@@ -559,6 +561,11 @@ func spellStartCastFlags(spell wotlk.Spell) uint32 {
 	if spell.PowerType != 0xFFFFFFFE /* POWER_HEALTH = -2 in C++ */ {
 		flags |= protocol.SpellCastFlagPowerLeftSelf
 	}
+	// Spell::SendSpellStart (Spell.cpp:4237-4239): CAST_FLAG_AMMO for
+	// SPELL_ATTR0_REQ_AMMO or SPELL_ATTR0_CU_NEEDS_AMMO_DATA.
+	if spell.Attributes&spellAttr0ReqAmmo != 0 || spell.AttributesCu&spellAttr0CUNeedsAmmoData != 0 {
+		flags |= protocol.SpellCastFlagAmmo
+	}
 	return flags
 }
 
@@ -574,6 +581,16 @@ func (s *session) spellStartRemainingPower(spell wotlk.Spell, flags uint32) *uin
 		return &power
 	}
 	return nil
+}
+
+// spellStartAmmoData mirrors the Ammo write in Spell::SendSpellStart
+// (Spell.cpp:4261-4265): the UpdateSpellCastDataAmmo block when
+// CAST_FLAG_AMMO is set, nil otherwise.
+func (s *session) spellStartAmmoData(ctx context.Context, flags uint32) *protocol.SpellGoAmmo {
+	if flags&protocol.SpellCastFlagAmmo == 0 {
+		return nil
+	}
+	return s.spellGoAmmoData(ctx)
 }
 
 // Gather-skill config defaults from worldserver.conf (World.cpp:1067-1082):
@@ -2770,7 +2787,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		// Spell::cancel PREPARING arm inside queueNextSwingSpell.
 		s.queueNextSwingSpell(castID, spellID, spell, target, 0, 0)
 		startFlags := spellStartCastFlags(spell)
-		if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags))); err != nil {
+		if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags))); err != nil {
 			return false
 		}
 		s.triggerGlobalCooldown(spell)
@@ -2778,7 +2795,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	startFlags := spellStartCastFlags(spell)
-	if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags))); err != nil {
+	if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags))); err != nil {
 		return false
 	}
 
@@ -7154,6 +7171,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if spell.StartRecoveryTime == 0 {
 		castFlags |= protocol.SpellCastFlagNoGCD
 	}
+	// Spell::SendSpellGo (Spell.cpp:4294-4296): CAST_FLAG_AMMO for
+	// SPELL_ATTR0_REQ_AMMO or SPELL_ATTR0_CU_NEEDS_AMMO_DATA. The flag arm
+	// was never set on this path (the goExtras.Ammo assignment below was
+	// dead code); the trailing 8-byte Ammo block rides spellGoAmmoData
+	// (UpdateSpellCastDataAmmo parity).
+	if spell.Attributes&spellAttr0ReqAmmo != 0 || spell.AttributesCu&spellAttr0CUNeedsAmmoData != 0 {
+		castFlags |= protocol.SpellCastFlagAmmo
+	}
 	var remainingPower *uint32
 	if pType < 7 {
 		castFlags |= protocol.SpellCastFlagPowerLeftSelf
@@ -10834,11 +10859,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// non-health powers (Spell.cpp:4297), NO_GCD when the spell has no start
 	// recovery time (Spell.cpp:4325). RUNE_LIST never applies to triggered
 	// casts (FULL_MASK carries TRIGGERED_IGNORE_POWER_AND_REAGENT_COST).
-	// AMMO (Spell.cpp:4295) is skipped: Go has no ammo display data, and the
-	// flag without the 8-byte Ammo block would corrupt the packet.
+	// AMMO (Spell.cpp:4294-4296) sets for SPELL_ATTR0_REQ_AMMO or
+	// SPELL_ATTR0_CU_NEEDS_AMMO_DATA; the trailing 8-byte block rides
+	// spellGoAmmoData (UpdateSpellCastDataAmmo parity).
 	castFlags := uint32(spellCastFlagGo)
 	if spell.AttributesEx1&spellAttr2AutorepeatFlag == 0 {
 		castFlags |= spellCastFlagPending
+	}
+	if spell.Attributes&spellAttr0ReqAmmo != 0 || spell.AttributesCu&spellAttr0CUNeedsAmmoData != 0 {
+		castFlags |= protocol.SpellCastFlagAmmo
 	}
 	var remainingPower *uint32
 	if spell.PowerType != 0xFFFFFFFE /* POWER_HEALTH = -2 in C++ */ && int(spell.PowerType) < len(s.player.Powers) {
@@ -10855,7 +10884,11 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// augmentation (Spell.cpp:772-775), same as the client path above.
 	goTarget := spellGoPacketTarget(spell, spellTarget)
 	if spell.SpellVisual[0] != 0 || spell.SpellVisual[1] != 0 || isChanneledSpell(spell) || spell.Speed > 0 {
-		goPkt := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, nil, goTarget, remainingPower)
+		var goExtras protocol.SpellGoTrailerExtras
+		if castFlags&protocol.SpellCastFlagAmmo != 0 {
+			goExtras.Ammo = s.spellGoAmmoData(ctx)
+		}
+		goPkt := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, nil, goTarget, remainingPower, goExtras)
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 		if s.server != nil {
 			// C++ sends the caster a self-only packet carrying POWER_LEFT_SELF
@@ -10863,7 +10896,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// (Spell.cpp:4353-4366).
 			nearbyPacket := goPkt
 			if castFlags&protocol.SpellCastFlagPowerLeftSelf != 0 {
-				nearbyPacket = protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, castTimeStamp, hitTargets, nil, goTarget)
+				nearbyPacket = protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, castTimeStamp, hitTargets, nil, goTarget, nil, goExtras)
 			}
 			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 		}

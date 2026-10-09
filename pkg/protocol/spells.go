@@ -172,21 +172,26 @@ func readSpellTargetLocation(reader *Buffer) (SpellTargetLocation, error) {
 }
 
 func BuildSpellStart(casterGUID, casterUnitGUID uint64, castID uint8, spellID, castFlags, castTime uint32, target SpellTargetData) []byte {
-	return BuildSpellStartWithPower(casterGUID, casterUnitGUID, castID, spellID, castFlags, castTime, target, nil)
+	return BuildSpellStartWithPower(casterGUID, casterUnitGUID, castID, spellID, castFlags, castTime, target, nil, nil)
 }
 
 // BuildSpellStartWithPower mirrors BuildSpellGoWithPower for SMSG_SPELL_START:
 // Spell::SendSpellStart (Spell.cpp:4260-4265) writes RemainingPower after the
-// target data when CAST_FLAG_POWER_LEFT_SELF is set. The Immunities and Ammo
-// blocks C++ emits on the same packet have no Go bridge (no caster
-// immunity-mask model — ApplySpellImmune is unbridged; no ammo display data —
-// the flag without the block would corrupt the packet).
-func BuildSpellStartWithPower(casterGUID, casterUnitGUID uint64, castID uint8, spellID, castFlags, castTime uint32, target SpellTargetData, remainingPower *uint32) []byte {
+// target data when CAST_FLAG_POWER_LEFT_SELF is set, then the 8-byte Ammo
+// block when CAST_FLAG_AMMO is set (SpellPackets.cpp SpellCastData writer
+// order: RemainingPower, Ammo, Immunities). A block is written only when its
+// flag is set and its data is present. The Immunities block has no Go bridge
+// (no caster immunity-mask model — ApplySpellImmune is unbridged).
+func BuildSpellStartWithPower(casterGUID, casterUnitGUID uint64, castID uint8, spellID, castFlags, castTime uint32, target SpellTargetData, remainingPower *uint32, ammo *SpellGoAmmo) []byte {
 	packet := NewBuffer(64)
 	writeSpellCastHeader(packet, casterGUID, casterUnitGUID, castID, spellID, castFlags, castTime)
 	writeSpellTargetData(packet, target)
 	if remainingPower != nil && castFlags&SpellCastFlagPowerLeftSelf != 0 {
 		packet.WriteU32(*remainingPower)
+	}
+	if ammo != nil && castFlags&SpellCastFlagAmmo != 0 {
+		packet.WriteU32(ammo.DisplayID)
+		packet.WriteU32(ammo.InventoryType)
 	}
 	writeSpellCastTrailer(packet, castFlags, target.Flags)
 	return packet.Bytes()
