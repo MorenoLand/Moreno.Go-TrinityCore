@@ -1231,8 +1231,8 @@ func (s *session) takeSpellReagents(ctx context.Context, spell wotlk.Spell, cast
 		// is consumed as a reagent and does not count as one. When the
 		// cast item is expendable (negative template SpellCharges) with
 		// its last charge being spent (abs(charges) < 2), one extra
-		// reagent is destroyed from inventory. handleUseItem skips
-		// takeCastItemSpellCharges on the coincidence (mirroring
+		// reagent is destroyed from inventory. spendCastItemCharges skips
+		// the completion-time charge on the coincidence (mirroring
 		// m_CastItem = nullptr), so the charge path never double-consumes
 		// the item.
 		if castItemEntry != 0 && uint32(itemID) == castItemEntry && s.castItemReagentTakesExtra(ctx, castItemGUID, castItemEntry) {
@@ -6286,6 +6286,37 @@ func (s *session) implicitCasterUnitTarget(spell wotlk.Spell) (uint64, bool) {
 	return 0, false
 }
 
+// revalidateDelayedHitTargets mirrors handle_delayed's per-wave target
+// revalidation (Spell.cpp:3645-3663, DoProcessTargetContainer over the
+// delayed targets): a target that vanished, died mid-flight
+// (DoTargetSpellHit's unit->IsAlive() != IsAlive arm, Spell.cpp:2430), or
+// gained spell immunity (PreprocessTarget -> PreprocessSpellHit ->
+// DoSpellHitOnUnit's immune arm) is not hit at missile arrival. C++ sends
+// no new SMSG_SPELL_GO for these, so missStatus is untouched. Reflect
+// gained mid-flight is not re-rolled — C++ procs the reflect aura at
+// arrival (ProcReflectDelayed, Spell.cpp:2181) while Go resolves reflect
+// at cast time (the isReflected arm above); that timing delta is
+// documented, not bridged.
+func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.Spell, targets []uint64) []uint64 {
+	if len(targets) == 0 {
+		return targets
+	}
+	live := make([]uint64, 0, len(targets))
+	for _, guid := range targets {
+		tgt, ok := s.getCombatTarget(ctx, guid)
+		if !ok || tgt.Health == 0 {
+			continue
+		}
+		if s.server != nil {
+			if ts := s.server.findSessionByGUID(guid); ts != nil && ts.isImmuneToSpell(spell) {
+				continue
+			}
+		}
+		live = append(live, guid)
+	}
+	return live
+}
+
 func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, castItemGUID uint64, castItemEntry uint32, queuedSwing *activeCastState) {
 	if s.player == nil {
 		return
@@ -8936,12 +8967,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// spell", SharedDefines.h:564) takes the delayed path: TakeCastItem(),
 	// m_spellState = SPELL_STATE_DELAYED + SetDelayStart(0), and the
 	// UNIT_STATE_CASTING clear (unless another spell is being cast).
-	// Go has no bridge for those legs: TakeCastItem (Spell::TakeCastItem,
-	// Spell.cpp:4711-4781) runs at cast start in handleUseItem via
-	// takeCastItemSpellCharges (items.go: charge decrement, Stackable-gated
-	// persistence, expendable destroy); consumables are likewise
-	// decremented at cast start in handleUseItem; there is no SPELL_STATE
-	// machine or unit-state model. The observable
+	// TakeCastItem (Spell::TakeCastItem, Spell.cpp:4711-4781) is bridged as
+	// spendCastItemCharges at the delay-start site below (items.go: charge
+	// decrement, Stackable-gated persistence, expendable destroy); there is
+	// no SPELL_STATE machine or unit-state model. The observable
 	// part — deferring effect execution to missile arrival — is this
 	// branch (the pre-existing travel-delay code; Spell.cpp:2156-2169).
 	// A UNK4-only spell (Speed == 0) still takes the delayed path in C++,
@@ -8967,6 +8996,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// (ProcReflectDelayed, Spell.cpp:2181) instead of consuming it at cast
 	// time. Timing-only delta, unmodeled.
 	if isDelayedBranch && targetGUID != 0 && targetGUID != s.playerGUID && spell.Speed > 0 {
+		// Spell::_cast (Spell.cpp:3473-3479): the delayed branch spends the
+		// cast-item charge at delay start — after SendSpellGo, before the
+		// missile timer arms — so a cast that survived its bar spends the
+		// charge while the missile is still in flight. handle_delayed
+		// carries no TakeCastItem call, so this is the branch's only spend;
+		// an interrupted bar never reaches finishSpellCast, so it spends
+		// nothing.
+		s.spendCastItemCharges(ctx, spell, castItemGUID, castItemEntry)
 		// SpellEvent::Execute's first DELAYED tick re-plans at
 		// GetDelayStart() + GetDelayMoment() (Spell.cpp:7640-7646), where
 		// GetDelayMoment is the minimum targetInfo.TimeDelay across ALL
@@ -9006,6 +9043,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				prevProcHitMask := s.castProcHitMask
 				s.castProcHitMask = 0
 				defer func() { s.castProcHitMask = prevProcHitMask }()
+				// Spell::handle_delayed (Spell.cpp:3645-3663): revalidate the
+				// cast-time hit list at missile arrival — immunity gained
+				// mid-flight, death, or a vanished target drops the hit.
+				hitTargets = s.revalidateDelayedHitTargets(context.Background(), spell, hitTargets)
 				applyEffects(context.Background())
 				// Spell::_handle_finish_phase (Spell.cpp:3737-3752): the
 				// combo legs run at the last delayed tick (next_time == 0)
@@ -9047,10 +9088,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.updatePotionCooldown(spell)
 			})
 			// Spell::handle_delayed (Spell.cpp:3629) no-bridge legs, noted:
-			//   - UpdatePointers() fail -> finish(false): targets are
-			//     resolved at cast start; the arrival closure does not
-			//     re-resolve or fail the cast when a target vanished
-			//     mid-flight (no pointer model).
+			//   - UpdatePointers() fail -> finish(false): the arrival closure
+			//     revalidates hitTargets (revalidateDelayedHitTargets:
+			//     vanished/dead/immune drop out) but never fails the whole
+			//     cast when a target vanished mid-flight (no pointer model).
 			//   - SetSpellModTakingSpell(true/false) around the delayed
 			//     ticks (Spell.cpp:3640/3697): bridged — the arrival closure
 			//     pushes the captured cast-phase taking context (spellmod.go),
@@ -9168,8 +9209,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	s.procSpellFinishAuraTriggers(ctx, spell)
 
 	// Spell::handle_immediate tail (Spell.cpp:3616-3625):
-	//   - TakeCastItem: bridged at cast start in handleUseItem via
-	//     takeCastItemSpellCharges (items.go), matching C++ _cast order.
+	//   - TakeCastItem: spendCastItemCharges (items.go) runs here, after the
+	//     finish-phase legs above — C++ spends the charge at 3619, once the
+	//     cast has fully completed; an interrupted or failed cast returns
+	//     before this tail and spends nothing.
 	//   - Volley ammo: IsRangedWeaponSpell() && IsChanneled() -> TakeAmmo().
 	//     This is a second ammo on top of the HandleLaunchPhase REQ_AMMO
 	//     consumption bridged at SendSpellGo above (C++ consumes once at
@@ -9184,6 +9227,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if isChanneledSpell(spell) && isRangedWeaponSpell(spell) {
 		s.consumeRangedAmmo(ctx)
 	}
+	// Spell::handle_immediate tail (Spell.cpp:3619): the cast-item charge is
+	// spent here, after the finish-phase legs and (for Volley) the tail
+	// TakeAmmo, matching C++ TakeCastItem-then-TakeAmmo order. The delayed
+	// branch spends at delay start above and returns before this tail, so
+	// there is no double spend.
+	s.spendCastItemCharges(ctx, spell, castItemGUID, castItemEntry)
 	// Spell::handle_immediate (Spell.cpp:3625): finish(true) runs only when
 	// m_spellState != SPELL_STATE_CASTING — channeled spells skip it at cast
 	// completion and run these legs at natural channel end instead (Go's

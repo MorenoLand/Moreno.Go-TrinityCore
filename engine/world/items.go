@@ -1580,7 +1580,8 @@ func (s *session) sendEquipError(errCode uint8, itemGUID uint64) {
 // toward zero (abs(charges) - 1 per use); expendable items (negative template
 // charges) are destroyed once the last charge is spent. Returns true when the
 // item was destroyed. The TRIGGERED_IGNORE_CAST_ITEM gate is vacuous here —
-// handleUseItem serves only player-initiated (TRIGGERED_NONE) casts.
+// spendCastItemCharges runs only from finishSpellCast, which serves only
+// player-initiated (TRIGGERED_NONE) casts.
 func (s *session) takeCastItemSpellCharges(ctx context.Context, dbItemGUID, itemEntry, bagKey int64, slot uint8) bool {
 	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return false
@@ -1669,6 +1670,108 @@ func (s *session) takeCastItemSpellCharges(ctx context.Context, dbItemGUID, item
 		return true
 	}
 	return false
+}
+
+// castItemIsSpellReagent mirrors the TakeReagents cast-item-as-reagent arm
+// (Spell.cpp:5062-5081): when the cast item's own template entry is one of
+// the spell's reagents, TakeReagents nulls m_CastItem, so the completion-time
+// TakeCastItem never runs on it — the item is consumed as a reagent instead.
+func castItemIsSpellReagent(spell wotlk.Spell, itemEntry uint32) bool {
+	for _, r := range spell.Reagent {
+		if r > 0 && uint32(r) == itemEntry {
+			return true
+		}
+	}
+	return false
+}
+
+// spendCastItemCharges is the completion-time Spell::TakeCastItem
+// (Spell.cpp:4711-4781) for item casts, called from finishSpellCast: on the
+// immediate branch it runs after _handle_finish_phase (Spell.cpp:3616-3619),
+// on the delayed branch at delay start after SendSpellGo (Spell.cpp:3473-3479).
+// The bag/slot are re-resolved from character_inventory at completion — C++
+// operates on the live m_CastItem pointer, not the cast-start slot — and an
+// item moved or gone since cast start spends nothing.
+func (s *session) spendCastItemCharges(ctx context.Context, spell wotlk.Spell, castItemGUID uint64, castItemEntry uint32) {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	if castItemGUID == 0 || castItemIsSpellReagent(spell, castItemEntry) {
+		return
+	}
+	var bag, slot int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT bag, slot FROM character_inventory WHERE guid = ? AND item = ? LIMIT 1`, s.playerGUID, int64(castItemGUID)).Scan(&bag, &slot); err != nil {
+		return
+	}
+	s.takeCastItemSpellCharges(ctx, int64(castItemGUID), int64(castItemEntry), bag, uint8(slot))
+}
+
+// resolveItemUseSpell mirrors Player::CastItemUseSpell's spell selection
+// (Player.cpp:8232-8303): the packet's spellId is ignored — the cast spell
+// comes from the item template. The special learning case runs first
+// (Spells[0] == 483/55884): the spell itself is cast, carrying the taught
+// spell (Spells[1]) as its SPELLVALUE_BASE_POINT0 override, returned
+// alongside for the effect-0 base points. Otherwise the first template
+// spell with SpellTrigger == ITEM_SPELLTRIGGER_ON_USE casts. When no
+// template spell qualifies, the enchantment leg runs: the first of the 12
+// enchantment slots whose SpellItemEnchantment entry carries an
+// ITEM_ENCHANTMENT_TYPE_USE_SPELL effect casts its EffectArg. Corrupt rows
+// (spell missing from the DBC) are skipped like C++'s continue arms.
+// Returns 0 when nothing casts.
+func (s *session) resolveItemUseSpell(ctx context.Context, itemEntry uint32, dbItemGUID int64) (uint32, *int32) {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.Data == nil {
+		return 0, nil
+	}
+	var spellIDs, spellTriggers [5]int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT spellid_1, spelltrigger_1, spellid_2, spelltrigger_2, spellid_3, spelltrigger_3, spellid_4, spelltrigger_4, spellid_5, spelltrigger_5 FROM item_template WHERE entry = ? LIMIT 1`, itemEntry).Scan(
+		&spellIDs[0], &spellTriggers[0], &spellIDs[1], &spellTriggers[1], &spellIDs[2], &spellTriggers[2],
+		&spellIDs[3], &spellTriggers[3], &spellIDs[4], &spellTriggers[4]); err != nil {
+		return 0, nil
+	}
+	// Special learning case (Player.cpp:8235-8250).
+	if spellIDs[0] == 483 || spellIDs[0] == 55884 {
+		bp := int32(spellIDs[1]) - 1
+		return uint32(spellIDs[0]), &bp
+	}
+	spellKnown := func(id uint32) bool {
+		_, found, err := s.server.Data.Spell(id)
+		return err == nil && found
+	}
+	// Item spells cast at use (Player.cpp:8252-8276).
+	for i := 0; i < 5; i++ {
+		if spellIDs[i] > 0 && spellTriggers[i] == itemSpellTriggerOnUse && spellKnown(uint32(spellIDs[i])) {
+			return uint32(spellIDs[i]), nil
+		}
+	}
+	// Item enchantment spells cast at use (Player.cpp:8278-8302).
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0, nil
+	}
+	var enchantments string
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(enchantments, '') FROM item_instance WHERE guid = ? LIMIT 1`, dbItemGUID).Scan(&enchantments); err != nil {
+		return 0, nil
+	}
+	fields := strings.Fields(enchantments)
+	for slot := 0; slot < 12; slot++ {
+		idx := slot * 3
+		if idx >= len(fields) {
+			break
+		}
+		enchantID, err := strconv.ParseUint(fields[idx], 10, 32)
+		if err != nil || enchantID == 0 {
+			continue
+		}
+		enchant, found, err := s.server.Data.SpellItemEnchantment(uint32(enchantID))
+		if err != nil || !found {
+			continue
+		}
+		for e := range enchant.Effects {
+			if enchant.Effects[e] == itemEnchantTypeUseSpell && enchant.EffectArg[e] != 0 && spellKnown(enchant.EffectArg[e]) {
+				return enchant.EffectArg[e], nil
+			}
+		}
+	}
+	return 0, nil
 }
 
 // castItemReagentTakesExtra mirrors the inner arm of Spell::TakeReagents'
@@ -1768,7 +1871,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
-	spellID, err := r.ReadU32()
+	spellID, err := r.ReadU32() // packet spellId: read for protocol, ignored for casting (Player::CastItemUseSpell resolves server-side)
 	if err != nil {
 		return false
 	}
@@ -1920,9 +2023,21 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	// Cast spell
+	// Cast spell. Player::CastItemUseSpell (Player.cpp:8232-8303) resolves the
+	// cast spell server-side from the item template — the packet's spellId is
+	// read but never used for casting. The learning case returns its
+	// SPELLVALUE_BASE_POINT0 override (the taught spell) alongside.
+	spellID, learnBasePoint := s.resolveItemUseSpell(ctx, uint32(itemEntry), dbItemGUID)
 	if spellID != 0 && s.server != nil && s.server.Data != nil {
 		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			if learnBasePoint != nil {
+				// Player::CastItemUseSpell (Player.cpp:8245): the learning
+				// spell (483/55884) carries the taught spell in
+				// SPELLVALUE_BASE_POINT0. Go's EffectLearnSpell reads
+				// eff.BasePoints+1, so the override lands on this cast's
+				// spell copy (Store.Spell returns a value).
+				spell.Effects[0].BasePoints = *learnBasePoint
+			}
 			// Spell::CheckCast cooldown block (Spell.cpp:5187-5221) on the
 			// m_CastItem path: SpellHistory::IsReady/HasCooldown
 			// (SpellHistory.cpp:190-200/473-487) fails with
@@ -2085,31 +2200,18 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		}
 	}
 
-	// Spell::TakeCastItem (Spell.cpp:4711-4781): the charge leg runs on the
-	// item cast — skipped when the cast item's own template entry is one
-	// of the spell's reagents (Spell::TakeReagents, Spell.cpp:5062-5081:
-	// m_CastItem is nulled, so TakeCastItem never runs on it; the item is
-	// consumed as a reagent in takeSpellReagents instead).
+	// Spell::TakeCastItem (Spell.cpp:4711-4781) runs at cast COMPLETION,
+	// not here: on the immediate branch C++ spends the charge after
+	// _handle_finish_phase (Spell.cpp:3616-3619), and on the delayed branch
+	// at delay start after SendSpellGo (Spell.cpp:3473-3479) — an
+	// interrupted or failed cast never reaches either point. The spend
+	// lives in finishSpellCast's completion sites (spells.go) via
+	// spendCastItemCharges; the CheckItems no-charges pre-check above stays
+	// at prepare, matching C++ CheckCast order.
 	// There is no C++ counterpart to a cast-start consumable decrement:
-	// charge-less consumables are consumed through the reagent arm above
-	// (their spell lists the item itself as a reagent). The old decrement
-	// here consumed every potion twice — once at cast start, once in
-	// takeSpellReagents at completion.
-	castItemIsReagent := false
-	if s.server != nil && s.server.Data != nil {
-		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
-			for _, r := range spell.Reagent {
-				if r > 0 && uint32(r) == uint32(itemEntry) {
-					castItemIsReagent = true
-					break
-				}
-			}
-		}
-	}
-	if !castItemIsReagent {
-		s.takeCastItemSpellCharges(ctx, dbItemGUID, itemEntry, bagKey, slot)
-	}
-
+	// charge-less consumables are consumed through the reagent arm
+	// (their spell lists the item itself as a reagent) in takeSpellReagents
+	// at completion.
 	return true
 }
 
