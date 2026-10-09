@@ -621,7 +621,9 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		// their first event scheduled here, inside the motion lock.
 		if enteredCombat {
 			if motion.AIName == "CasterAI" {
-				s.scheduleCasterAISpellEvents(ctx, motion, motion.TargetGUID, time.Now())
+				// motionMu is held here: no creature-motion lookup for
+				// target positions (see resolveAISpellTargetGUID).
+				s.scheduleCasterAISpellEvents(ctx, motion, motion.TargetGUID, time.Now(), nil, false)
 			} else {
 				s.scheduleAISpellEvents(motion, time.Now())
 			}
@@ -815,40 +817,187 @@ func (s *Server) aiSpellTargetClass(spell wotlk.Spell) int {
 	return target
 }
 
+// combatReachOrDefault mirrors the engine's default combat reach (1.5,
+// the C++ UNIT_FIELD_COMBATREACH default for units without model data).
+func (m *creatureMotion) combatReachOrDefault() float32 {
+	if m == nil || m.CombatReach <= 0 {
+		return 1.5
+	}
+	return m.CombatReach
+}
+
+// spellRangeFlagMelee / spellRangeFlagRanged mirror SpellRangeFlags
+// (Spell.h:112-113).
+const (
+	spellRangeFlagMelee  = 1
+	spellRangeFlagRanged = 2
+)
+
+// aiDoCastVictimInRange mirrors Spell::CheckRange (Spell.cpp:6540-6575,
+// strict=true via Spell::prepare:3100) with GetMinMaxRange(strict=true)
+// for the UnitAI::DoCast victim arm: the exact 3D center distance must sit
+// inside [minRange, maxRange]. A MELEE-flagged range collapses to the
+// caster's melee range (Unit::GetMeleeRange, Unit.cpp:614-618); otherwise
+// maxRange = MaxHostile + both combat reaches, and minRange = MinHostile
+// (+ melee range for SPELL_RANGE_RANGED) plus both reaches only when
+// MinHostile > 0 and the range is not RANGED-flagged — a 0-min spell casts
+// at melee range in C++. Deltas: the both-moving +8/3 arm has no Go model
+// (motions carry no walk/run flag distinction), and SPELLMOD_RANGE / the
+// REQ_AMMO ranged-weapon arm are player-side; a missing DBC range row stays
+// permissive per the unknown-data convention.
+func (s *Server) aiDoCastVictimInRange(motion *creatureMotion, target *playerPos, spell wotlk.Spell, cReach, victimReach float32) bool {
+	if s == nil || s.Data == nil || motion == nil || target == nil {
+		return true
+	}
+	rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex)
+	if err != nil || !ok {
+		return true
+	}
+	dist := float32(distance3D(motion.X, motion.Y, motion.Z, target.X, target.Y, target.Z))
+	var minRange, maxRange float32
+	if rangeEntry.Flags&spellRangeFlagMelee != 0 {
+		maxRange = float32(calcMeleeRange(cReach, victimReach))
+	} else {
+		minRange = rangeEntry.MinHostile
+		maxRange = rangeEntry.MaxHostile
+		if rangeEntry.Flags&spellRangeFlagRanged != 0 {
+			minRange += float32(calcMeleeRange(cReach, victimReach))
+		} else if minRange > 0 {
+			minRange += cReach + victimReach
+		}
+		maxRange += cReach + victimReach
+	}
+	if dist > maxRange {
+		return false
+	}
+	if minRange > 0 && dist < minRange {
+		return false
+	}
+	return true
+}
+
+// aiThreatUnitPos resolves a threat entry's live position and combat reach:
+// players via the tick's player list or their session, other units (pets)
+// via the creature motion map. allowMotionLookup=false is for callers
+// holding motionMu (the engage path), where the motion map cannot be
+// consulted — the C++ IsInMap/InSamePhase gate (Unit.cpp:585) then
+// excludes them, documented. isPlayer mirrors DefaultTargetSelector's
+// _playerOnly arm (UnitAI.cpp:270: TYPEID_PLAYER).
+func (s *Server) aiThreatUnitPos(m *creatureMotion, guid uint64, players []playerPos, allowMotionLookup bool) (x, y, z, reach float32, isPlayer, ok bool) {
+	if s == nil || m == nil || guid == 0 {
+		return 0, 0, 0, 0, false, false
+	}
+	for i := range players {
+		if players[i].GUID == guid && players[i].Sess != nil && players[i].Sess.player != nil {
+			reach = players[i].Sess.player.CombatReach
+			if reach <= 0 {
+				reach = 1.5
+			}
+			return players[i].X, players[i].Y, players[i].Z, reach, true, true
+		}
+	}
+	if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil {
+		reach = sess.player.CombatReach
+		if reach <= 0 {
+			reach = 1.5
+		}
+		return sess.player.X, sess.player.Y, sess.player.Z, reach, true, true
+	}
+	if allowMotionLookup {
+		if cm := s.findCreatureMotion(m.Map, m.InstanceID, guid); cm != nil {
+			reach = cm.CombatReach
+			if reach <= 0 {
+				reach = 1.5
+			}
+			return cm.X, cm.Y, cm.Z, reach, false, true
+		}
+	}
+	return 0, 0, 0, 0, false, false
+}
+
+// aiSpellThreatCandidates mirrors the SelectTarget threat-list scan behind
+// UnitAI::DoCast's ENEMY/DEBUFF arms (UnitAI.cpp:126-147): every threat
+// entry within GetMaxRange(false) of the caster, player-only via
+// SPELL_ATTR3_ONLY_TARGET_PLAYERS, the victim included (withTank=true).
+// Range is DefaultTargetSelector's (UnitAI.cpp:273): 3D distance strictly
+// below maxRange plus both combat reaches (Unit::IsWithinCombatRange,
+// Unit.cpp:583-597); maxRange<=0 disables the filter (dist 0 is ignored).
+func (s *Server) aiSpellThreatCandidates(m *creatureMotion, maxRange float32, playerOnly bool, players []playerPos, allowMotionLookup bool) []uint64 {
+	if m == nil || m.ThreatMgr == nil {
+		return nil
+	}
+	reach := m.combatReachOrDefault()
+	var candidates []uint64
+	for _, e := range m.ThreatMgr.SortedEntries() {
+		if e.VictimGUID == 0 {
+			continue
+		}
+		x, y, z, vreach, isPlayer, ok := s.aiThreatUnitPos(m, e.VictimGUID, players, allowMotionLookup)
+		if !ok {
+			continue
+		}
+		if playerOnly && !isPlayer {
+			continue
+		}
+		if maxRange > 0 && distance3D(m.X, m.Y, m.Z, x, y, z) >= float64(maxRange+reach+vreach) {
+			continue
+		}
+		candidates = append(candidates, e.VictimGUID)
+	}
+	return candidates
+}
+
+// aiDoCastMaxRange mirrors the range term of UnitAI::DoCast's ENEMY/DEBUFF
+// arms (UnitAI.cpp:129, 137): spellInfo->GetMaxRange(false).
+func (s *Server) aiDoCastMaxRange(spell wotlk.Spell) float32 {
+	if s != nil && s.Data != nil {
+		if rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex); err == nil && ok {
+			return rangeEntry.MaxHostile
+		}
+	}
+	return 0
+}
+
 // resolveAISpellTargetGUID mirrors UnitAI::DoCast target selection
 // (UnitAI.cpp:113-163): SELF/ALLY/BUFF -> me; VICTIM -> the current
-// victim; DEBUFF -> the victim (Go has no aura model, so the C++
-// victim-else-random arm reduces to the victim); ENEMY -> a random threat
-// entry other than the victim (C++ SelectTarget RANDOM within the spell's
-// max range, player-only when SPELL_ATTR3_ONLY_TARGET_PLAYERS — Go threat
-// entries carry no positions, so the range filter has no model and is
-// documented, not invented).
-func (s *Server) resolveAISpellTargetGUID(m *creatureMotion, spell wotlk.Spell, victimGUID uint64) uint64 {
+// victim; DEBUFF -> the victim when it passes DefaultTargetSelector
+// (in range, playerOnly; the -spellId aura arm has no Go creature-aura
+// model so it always passes), else a random in-range threat entry;
+// ENEMY -> a random in-range threat entry, victim included
+// (withTank=true), player-only when SPELL_ATTR3_ONLY_TARGET_PLAYERS.
+// A null pick returns 0: C++ returns SPELL_FAILED_BAD_TARGETS without
+// casting, and callers must skip the cast (the event still re-arms).
+func (s *Server) resolveAISpellTargetGUID(m *creatureMotion, spell wotlk.Spell, victimGUID uint64, players []playerPos, allowMotionLookup bool) uint64 {
 	if m == nil {
 		return victimGUID
 	}
 	switch s.aiSpellTargetClass(spell) {
-	case aiSpellTargetVictim, aiSpellTargetDebuff:
+	case aiSpellTargetVictim:
 		if victimGUID == 0 {
 			return m.GUID
 		}
 		return victimGUID
+	case aiSpellTargetDebuff:
+		maxRange := s.aiDoCastMaxRange(spell)
+		playerOnly := spell.AttributesEx3&spellAttr3OnlyTargetPlayers != 0
+		if victimGUID != 0 {
+			if x, y, z, vreach, isPlayer, ok := s.aiThreatUnitPos(m, victimGUID, players, allowMotionLookup); ok &&
+				(!playerOnly || isPlayer) &&
+				(maxRange <= 0 || distance3D(m.X, m.Y, m.Z, x, y, z) < float64(maxRange+m.combatReachOrDefault()+vreach)) {
+				return victimGUID
+			}
+		}
+		if candidates := s.aiSpellThreatCandidates(m, maxRange, playerOnly, players, allowMotionLookup); len(candidates) > 0 {
+			return candidates[rand.Intn(len(candidates))]
+		}
+		return 0
 	case aiSpellTargetEnemy:
-		if m.ThreatMgr != nil {
-			var others []uint64
-			for _, e := range m.ThreatMgr.SortedEntries() {
-				if e.VictimGUID != 0 && e.VictimGUID != victimGUID {
-					others = append(others, e.VictimGUID)
-				}
-			}
-			if len(others) > 0 {
-				return others[rand.Intn(len(others))]
-			}
+		maxRange := s.aiDoCastMaxRange(spell)
+		playerOnly := spell.AttributesEx3&spellAttr3OnlyTargetPlayers != 0
+		if candidates := s.aiSpellThreatCandidates(m, maxRange, playerOnly, players, allowMotionLookup); len(candidates) > 0 {
+			return candidates[rand.Intn(len(candidates))]
 		}
-		if victimGUID == 0 {
-			return m.GUID
-		}
-		return victimGUID
+		return 0
 	default:
 		return m.GUID
 	}
@@ -922,7 +1071,7 @@ func (s *Server) scheduleAISpellEvents(m *creatureMotion, now time.Time) {
 // analog and its schedule additionally absorbs the current cast time. When
 // the pick lands on an AGGRO/DIE spell nothing extra fires — the AGGRO arm
 // is cast separately by castAggroConditionSpells.
-func (s *Server) scheduleCasterAISpellEvents(ctx context.Context, m *creatureMotion, victimGUID uint64, now time.Time) {
+func (s *Server) scheduleCasterAISpellEvents(ctx context.Context, m *creatureMotion, victimGUID uint64, now time.Time, players []playerPos, allowMotionLookup bool) {
 	if s == nil || m == nil || victimGUID == 0 || len(m.Spells) == 0 || s.Data == nil {
 		return
 	}
@@ -951,7 +1100,12 @@ func (s *Server) scheduleCasterAISpellEvents(ctx context.Context, m *creatureMot
 		}
 		delay := aiSpellRealCooldownMs(infos[i])
 		if i == pick {
-			s.castCreatureSpell(ctx, m, spellID, s.resolveAISpellTargetGUID(m, infos[i], victimGUID))
+			// UnitAI::DoCast (UnitAI.cpp:113-163): a null target pick
+			// (ENEMY/DEBUFF with no in-range candidate) casts nothing
+			// (SPELL_FAILED_BAD_TARGETS) but still consumes the event.
+			if tgt := s.resolveAISpellTargetGUID(m, infos[i], victimGUID, players, allowMotionLookup); tgt != 0 {
+				s.castCreatureSpell(ctx, m, spellID, tgt)
+			}
 			delay += s.aiSpellCastTimeMs(infos[i])
 		}
 		m.SpellEventTimes[spellID] = now.Add(time.Duration(delay) * time.Millisecond)
@@ -966,7 +1120,7 @@ func (s *Server) scheduleCasterAISpellEvents(ctx context.Context, m *creatureMot
 // was never armed (an engage path that predates the scheduler) arms lazily
 // here via the CombatAI/CasterAI engage pre-arm, matching the C++ invariant
 // that _events is always armed by JustEngagedWith.
-func (s *Server) dueAISpell(ctx context.Context, m *creatureMotion, victimGUID uint64, now time.Time) (uint32, wotlk.Spell, uint64, bool) {
+func (s *Server) dueAISpell(ctx context.Context, m *creatureMotion, victimGUID uint64, now time.Time, players []playerPos, allowMotionLookup bool) (uint32, wotlk.Spell, uint64, bool) {
 	if s == nil || m == nil || s.Data == nil || len(m.Spells) == 0 {
 		return 0, wotlk.Spell{}, 0, false
 	}
@@ -981,7 +1135,7 @@ func (s *Server) dueAISpell(ctx context.Context, m *creatureMotion, victimGUID u
 	}
 	if !armed {
 		if m.AIName == "CasterAI" {
-			s.scheduleCasterAISpellEvents(ctx, m, victimGUID, now)
+			s.scheduleCasterAISpellEvents(ctx, m, victimGUID, now, players, allowMotionLookup)
 		} else {
 			s.scheduleAISpellEvents(m, now)
 		}
@@ -995,7 +1149,7 @@ func (s *Server) dueAISpell(ctx context.Context, m *creatureMotion, victimGUID u
 			continue
 		}
 		if fireAt, ok := m.SpellEventTimes[spellID]; ok && !fireAt.After(now) {
-			return spellID, spellInfo, s.resolveAISpellTargetGUID(m, spellInfo, victimGUID), true
+			return spellID, spellInfo, s.resolveAISpellTargetGUID(m, spellInfo, victimGUID, players, allowMotionLookup), true
 		}
 	}
 	return 0, wotlk.Spell{}, 0, false
@@ -1786,15 +1940,22 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if now.Before(motion.CastingUntil) {
 			return
 		}
-		spellID, dueSpell, dueTargetGUID, dueOK := s.dueAISpell(ctx, motion, target.GUID, now)
-		spellMinDist, spellMaxDist := contactDist, contactDist
-		if dueOK && dueTargetGUID == target.GUID && s != nil && s.Data != nil {
-			if spellRange, rangeFound, rangeErr := s.Data.SpellRange(dueSpell.RangeIndex); rangeErr == nil && rangeFound {
-				spellMinDist += spellRange.MinHostile
-				spellMaxDist += spellRange.MaxHostile
-			}
+		spellID, dueSpell, dueTargetGUID, dueOK := s.dueAISpell(ctx, motion, target.GUID, now, players, true)
+		if dueOK && dueTargetGUID == 0 {
+			// UnitAI::DoCast (UnitAI.cpp:113-163): a null SelectTarget pick
+			// (ENEMY/DEBUFF with no in-range candidate) returns
+			// SPELL_FAILED_BAD_TARGETS — nothing casts, but
+			// CombatAI::UpdateAI still consumes and re-arms the event.
+			s.rearmAISpell(motion, dueSpell, spellID, now)
+			return
 		}
-		if dueOK && (dueTargetGUID != target.GUID || (dist >= spellMinDist && dist <= spellMaxDist)) {
+		// The DoCast victim arm's range gate is Spell::CheckRange, not the
+		// tick's 2D dist with the melee fudge (see aiDoCastVictimInRange).
+		victimInRange := true
+		if dueOK && dueTargetGUID == target.GUID {
+			victimInRange = s.aiDoCastVictimInRange(motion, target, dueSpell, cReach, victimReach)
+		}
+		if dueOK && (dueTargetGUID != target.GUID || victimInRange) {
 			if dueTargetGUID != target.GUID {
 				// DoCast at a non-victim target (UnitAI.cpp:113-163): self
 				// buffs, ally heals, or random-enemy picks — packet-only
@@ -2339,7 +2500,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// CombatAI.cpp:76-88, 139-162) is scheduled here too.
 			s.castAggroConditionSpells(ctx, motion, p.GUID)
 			if motion.AIName == "CasterAI" {
-				s.scheduleCasterAISpellEvents(ctx, motion, p.GUID, now)
+				s.scheduleCasterAISpellEvents(ctx, motion, p.GUID, now, players, true)
 			} else {
 				s.scheduleAISpellEvents(motion, now)
 			}

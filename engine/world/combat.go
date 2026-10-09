@@ -80,9 +80,10 @@ type combatTarget struct {
 // block Player.cpp:1116-1180):
 //   - Unit::IsWithinCombatRange (dist2compare + both combat reaches, 3D,
 //     strict <) is the AI spell-range predicate (UnitAI::DoSpellAttackIfReady,
-//     UnitAI.cpp:88-100). The Go creature spell-cast gate (creaturemotion.go)
-//     uses calcMeleeRange as the sizefactor instead, so it carries the +4/3
-//     and the 5.0 floor that C++ omits there — a documented range overshoot.
+//     UnitAI.cpp:88-100). The DoCast victim arm instead runs Spell::CheckRange
+//     (exact 3D center distance vs GetMinMaxRange), bridged by
+//     aiDoCastVictimInRange (creaturemotion.go) — the old gate's
+//     calcMeleeRange +4/3 and 5.0 floor overshoot is closed.
 //   - IsWithinMeleeRangeAt's Position overload (predicted-position test) has
 //     no Go analog; Go always measures from live positions.
 //   - C++ applies no range slop on the swing gate; Go adds +2.0 (updatePlayerCombat,
