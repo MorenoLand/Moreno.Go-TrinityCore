@@ -1177,10 +1177,27 @@ func (s *session) hasSpellReagents(ctx context.Context, spell wotlk.Spell) bool 
 	return true
 }
 
-func (s *session) takeSpellReagents(ctx context.Context, spell wotlk.Spell) {
+// takeSpellReagents mirrors Spell::TakeReagents (Spell.cpp:5046-5092): the
+// reagent skip gates, the per-reagent inventory destruction (largest stacks
+// first), the cast-item-as-reagent arm, and the quest-progress and client
+// updates of Player::DestroyItemCount.
+func (s *session) takeSpellReagents(ctx context.Context, spell wotlk.Spell, castItemGUID uint64, castItemEntry uint32) {
 	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return
 	}
+	// do not take reagents for these item casts (Spell.cpp:5049-5051): the
+	// cast item carries ITEM_FLAG_NO_REAGENT_COST (ItemTemplate.h:180).
+	if castItemEntry != 0 {
+		if info, ok := s.server.getItemStoreTemplateInfo(ctx, castItemEntry); ok && info.Flags&itemFlagNoReagentCost != 0 {
+			return
+		}
+	}
+	// Player::CanNoReagentCast (Spell.cpp:5053-5055): spells cost no
+	// reagents while UNIT_FLAG_PREPARATION is set (arena preparation).
+	if s.canNoReagentCast(spell) {
+		return
+	}
+	destroyedAny := false
 	for i := range spell.Reagent {
 		if spell.Reagent[i] <= 0 {
 			continue
@@ -1189,6 +1206,17 @@ func (s *session) takeSpellReagents(ctx context.Context, spell wotlk.Spell) {
 		need := int64(spell.ReagentCount[i])
 		if need == 0 {
 			need = 1
+		}
+		// Spell.cpp:5062-5081 — the cast item is also a spell reagent: it
+		// is consumed as a reagent and does not count as one. When the
+		// cast item is expendable (negative template SpellCharges) with
+		// its last charge being spent (abs(charges) < 2), one extra
+		// reagent is destroyed from inventory. handleUseItem skips
+		// takeCastItemSpellCharges on the coincidence (mirroring
+		// m_CastItem = nullptr), so the charge path never double-consumes
+		// the item.
+		if castItemEntry != 0 && uint32(itemID) == castItemEntry && s.castItemReagentTakesExtra(ctx, castItemGUID, castItemEntry) {
+			need++
 		}
 		rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.item, ii.count FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ? ORDER BY ii.count DESC`, s.playerGUID, int64(itemID))
 		if err != nil {
@@ -1206,20 +1234,36 @@ func (s *session) takeSpellReagents(ctx context.Context, spell wotlk.Spell) {
 			}
 		}
 		rows.Close()
+		want := need
 		for _, st := range stacks {
-			if need <= 0 {
+			if want <= 0 {
 				break
 			}
-			if st.count <= need {
+			if st.count <= want {
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, `DELETE FROM character_inventory WHERE guid = ? AND item = ?`, s.playerGUID, st.guid)
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, `DELETE FROM item_instance WHERE guid = ?`, st.guid)
-				need -= st.count
+				want -= st.count
 			} else {
-				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, `UPDATE item_instance SET count = count - ? WHERE guid = ?`, need, st.guid)
-				need = 0
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, `UPDATE item_instance SET count = count - ? WHERE guid = ?`, want, st.guid)
+				want = 0
 			}
 		}
+		if destroyed := need - want; destroyed > 0 {
+			// Player::DestroyItemCount feeds ItemRemovedQuestCheck
+			// (Player.cpp:12752).
+			s.adjustQuestItemCount(ctx, uint32(itemID), uint32(destroyed), false)
+			destroyedAny = true
+		}
 	}
+	if destroyedAny {
+		// Player::DestroyItemCount(..., update=true) refreshes the client.
+		_ = s.sendInventoryItems(ctx)
+		s.sendPlayerUpdate()
+	}
+	// The item-target clear (Spell.cpp:5084-5086 — m_targets.SetItemTarget
+	// (nullptr) when the target item is a reagent) has no Go counterpart:
+	// item targets resolve from the DB per call site, so a reagent-
+	// destroyed target degrades to ITEM_GONE instead of dangling.
 }
 
 const (
@@ -1961,16 +2005,22 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// (PowerType == POWER_HEALTH, -2 in C++, 0xFFFFFFFE in Go's uint32
 	// field) fail with SPELL_FAILED_CASTER_AURASTATE when the caster's
 	// health is at or below the cost — and pass outright otherwise,
-	// without reaching the rune/power arms below. Runs ahead of the
-	// rune arm, matching C++ relative order (health 6651 → unknown-type
-	// 6659 → rune 6665 → power amount 6673). The unknown-power-type
-	// arm (Spell.cpp:6659-6663 — error log + SPELL_FAILED_UNKNOWN) is
-	// unbridged: spell data never carries a PowerType >= MAX_POWERS
-	// other than POWER_HEALTH, so the pType < 7 guard below silently
-	// accepts the impossible case instead of logging.
-	if spell.PowerType == 0xFFFFFFFE && cost > 0 && s.player.Health <= cost {
+	// without reaching the rune/power arms below. C++ applies the gate
+	// unconditionally (no cost > 0 guard). Runs ahead of the unknown-type
+	// arm, matching C++ relative order (health 6651 → unknown-type
+	// 6659 → rune 6665 → power amount 6673).
+	if spell.PowerType == 0xFFFFFFFE && s.player.Health <= cost {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAurastate), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not enough health for health-cost spell", "failReason", spellFailedCasterAurastate)
+		return true
+	}
+	// Spell::CheckPower (Spell.cpp:6659-6663): a PowerType >= MAX_POWERS
+	// (7, SharedDefines.h:302) logs the TC error and fails with
+	// SPELL_FAILED_UNKNOWN (187 — "actually doesn't exist in client",
+	// SharedDefines.h:1169; C++ sends it anyway).
+	if pType != 0xFFFFFFFE && pType >= 7 {
+		s.debug("spells", "Spell::CheckPower: Unknown power type", "powerType", pType, "spell", spellID)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 187), true) // SPELL_FAILED_UNKNOWN = 187
 		return true
 	}
 	// Spell::CheckPower (Spell.cpp:6665-6670) checks rune costs when
@@ -5043,10 +5093,27 @@ func (s *session) addSessionComboPoints(targetGUID uint64, count int8) {
 	s.sendComboPointsUpdate()
 }
 
+// removeAurasByType mirrors Unit::RemoveAurasByType (Unit.cpp): every
+// applied aura of the given aura type is removed from the player.
+func (s *session) removeAurasByType(auraType uint32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	var ids []uint32
+	s.castMu.Lock()
+	for _, aura := range s.activeAuras {
+		if aura != nil && aura.AuraType == auraType {
+			ids = append(ids, aura.SpellID)
+		}
+	}
+	s.castMu.Unlock()
+	for _, id := range ids {
+		s.removeAura(id)
+	}
+}
+
 // clearSessionComboPoints mirrors Unit::ClearComboPoints
-// (Unit.cpp:10674-10687): the bank empties and the client is notified. The
-// SPELL_AURA_RETAIN_COMBO_POINTS removal has no Go bridge — the Go aura
-// model tracks no retain-combo-points aura type.
+// (Unit.cpp:10674-10687): the bank empties and the client is notified.
 func (s *session) clearSessionComboPoints() {
 	if s == nil || s.player == nil || s.comboTargetGUID == 0 {
 		return
@@ -6286,6 +6353,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// finishes; power drained mid-cast must fail the cast, not clamp to zero.
 	pType := spell.PowerType
 	cost := s.calculateSpellPowerCost(spell)
+	// The health arm of CheckPower (Spell.cpp:6651-6656) is part of that
+	// revalidation: a health cost drained mid-cast fails with
+	// SPELL_FAILED_CASTER_AURASTATE, ahead of the rune/power arms per C++
+	// arm order.
+	if spell.PowerType == 0xFFFFFFFE && s.player.Health <= cost {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAurastate), true)
+		s.sendInterrupted(castID, spellID, 0)
+		return
+	}
 	if pType < 7 && cost > 0 && s.player.Powers[pType] < cost {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 85), true) // SPELL_FAILED_NO_POWER = 85
 		s.sendInterrupted(castID, spellID, 0)                                                            // Spell::_cast cleanupSpell (Spell.cpp:3330-3334): CheckCast failure at completion sends SendCastResult + SendInterrupted(0)
@@ -6459,13 +6535,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	//     triggered cast whose item target is not owned by the caster still
 	//     takes reagents. finishSpellCast only serves non-triggered casts
 	//     (C++ TRIGGERED_NONE), so power (deducted below before SendSpellGo,
-	//     matching "Powers have to be taken before SendSpellGo") and
-	//     reagents (takeSpellReagents) always run here. Triggered casts never
-	//     enter finishSpellCast — the flag exemption is structural (see
-	//     castSpellDirectWithOverrides). The non-owned item-target arm has no
-	//     bridge: Go parses the wire item GUID but has no
-	//     m_targets.GetItemTarget() model in the cast flow (unit targets
-	//     only), so a triggered cast can never carry a non-owned item target.
+	//     matching "Powers have to be taken before SendSpellGo") always
+	//     runs here; reagents run through takeSpellReagents' own C++ skip
+	//     gates (cast-item NO_REAGENT_COST flag, CanNoReagentCast).
+	//     Triggered casts never enter finishSpellCast — the flag exemption
+	//     is structural (see castSpellDirectWithOverrides). The non-owned
+	//     item-target arm has no bridge: Go parses the wire item GUID but
+	//     has no m_targets.GetItemTarget() model in the cast flow (unit
+	//     targets only), so a triggered cast can never carry a non-owned
+	//     item target.
 	//
 	// Spell::_cast (Spell.cpp:3438-3444): a player cast from an item
 	// (CMSG_USE_ITEM, m_CastItem) starts the item-use timed achievement and
@@ -7008,7 +7086,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ? WHERE guid = ?", s.player.Health, s.playerGUID)
 		}
 	}
-	s.takeSpellReagents(ctx, spell)
+	s.takeSpellReagents(ctx, spell, castItemGUID, castItemEntry)
 
 	// Spell::_cast (Spell.cpp:3416-3420): SPELL_ATTR1_DISMISS_PET dismisses
 	// the caster's active pet at cast time, before the cooldown packet and
@@ -8838,10 +8916,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// spell", SharedDefines.h:564) takes the delayed path: TakeCastItem(),
 	// m_spellState = SPELL_STATE_DELAYED + SetDelayStart(0), and the
 	// UNIT_STATE_CASTING clear (unless another spell is being cast).
-	// Go has no bridge for those legs: TakeCastItem only decrements
-	// SpellCharges on the held cast item and Go has no item spell-charge
-	// model (consumables are decremented at cast start in handleUseItem);
-	// there is no SPELL_STATE machine or unit-state model. The observable
+	// Go has no bridge for those legs: TakeCastItem (Spell::TakeCastItem,
+	// Spell.cpp:4711-4781) runs at cast start in handleUseItem via
+	// takeCastItemSpellCharges (items.go: charge decrement, Stackable-gated
+	// persistence, expendable destroy); consumables are likewise
+	// decremented at cast start in handleUseItem; there is no SPELL_STATE
+	// machine or unit-state model. The observable
 	// part — deferring effect execution to missile arrival — is this
 	// branch (the pre-existing travel-delay code; Spell.cpp:2156-2169).
 	// A UNK4-only spell (Speed == 0) still takes the delayed path in C++,
@@ -8854,6 +8934,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// only and Go has no npcbot model, so the leg is a no-op here.
 	// CallScriptAfterCastHandlers is a no-op (no SpellScript bridge).
 	isDelayedBranch := (spell.Speed > 0 && !isChanneledSpell(spell)) || spell.AttributesEx4&spellAttr4TreatAsDelayed != 0
+	// Spell::handle_delayed (Spell.cpp:3640) re-arms SetSpellModTakingSpell
+	// on the SAME Spell object, so its m_appliedMods registrations from
+	// the cast phase survive into the arrival tick. Capture the cast's
+	// taking context for the arrival closure below (nil when no cast holds
+	// the window — the closure then opens a fresh registry, matching the
+	// C++ no-taking-spell state).
+	castTaking := s.spellModTakingCurrent()
 	// A reflected primary retargets to the caster above, so it falls through
 	// to the immediate path; C++ keeps it DELAYED with TimeDelay *= 1.5
 	// (Spell.cpp:2181) and procs the reflect aura at missile arrival
@@ -8884,9 +8971,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		if timeDelayMs > 0 {
 			time.AfterFunc(time.Duration(timeDelayMs)*time.Millisecond, func() {
 				// Spell::handle_delayed (Spell.cpp:3640): the delayed phase
-				// holds the taking window around target processing; the
-				// deferred end mirrors the tail (Spell.cpp:3697).
-				s.beginSpellModTaking()
+				// re-arms the taking window on the SAME Spell object — the
+				// cast-phase m_appliedMods registrations survive, so the
+				// arrival tick pushes the captured cast context instead of
+				// opening a fresh registry (REQ_SPELLMOD procs at missile
+				// arrival see the cast-time registrations). The deferred
+				// end mirrors the tail (Spell.cpp:3697).
+				s.pushSpellModTaking(castTaking)
 				defer s.endSpellModTaking()
 				// Spell::m_hitMask (Spell.cpp:2603): the arrival tick is the
 				// delayed leg of the same Spell object, so the accumulator
@@ -8910,6 +9001,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.clearSessionComboPoints()
 				}
 				if comboGainTarget != 0 && comboGain > 0 {
+					// Spell::_handle_finish_phase (Spell.cpp:3747-3750):
+					// the RETAIN_COMBO_POINTS removal runs on the delayed
+					// branch too (last delayed tick calls _handle_finish_phase).
+					if !spellHasAura(spell, spellAuraRetainComboPoints) {
+						s.removeAurasByType(spellAuraRetainComboPoints)
+					}
 					s.addSessionComboPoints(comboGainTarget, comboGain)
 				}
 				// The extra-attacks spend runs only for spells carrying
@@ -8936,11 +9033,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			//     mid-flight (no pointer model).
 			//   - SetSpellModTakingSpell(true/false) around the delayed
 			//     ticks (Spell.cpp:3640/3697): bridged — the arrival closure
-			//     opens its own taking context (spellmod.go); it starts
-			//     fresh rather than inheriting the _cast registrations
-			//     because Go has no single cast object spanning the phases
-			//     (C++ keeps Spell::m_appliedMods for the Spell's whole
-			//     lifetime). Noted delta.
+			//     pushes the captured cast-phase taking context (spellmod.go),
+			//     mirroring C++ re-arming the window on the same Spell
+			//     object whose m_appliedMods survives the cast phase.
 			//   - SpellEvent::Execute's DELAYED two-step (Spell.cpp:7596-7650):
 			//     the first event tick is SetDelayStart(e_time) + re-plan at
 			//     e_time + GetDelayMoment() (the minimum target TimeDelay,
@@ -9013,9 +9108,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// latch computed from the miss filter above — the single-target case is
 	// also covered by the empty-hitTargets early return, but a chain spell
 	// whose explicit target missed while jumps hit still reaches this take.
-	// The RETAIN_COMBO_POINTS aura removal
-	// (Spell.cpp:3747-3750) has no Go bridge — the Go aura model tracks
-	// no such aura type. The ABILITY_IGNORE_AURASTATE override
+	// The RETAIN_COMBO_POINTS aura removal (Spell.cpp:3747-3750) runs
+	// below: Premed-like auras are removed before the gain lands unless
+	// the cast spell itself carries SPELL_AURA_RETAIN_COMBO_POINTS. The
+	// ABILITY_IGNORE_AURASTATE override
 	// (Spell.cpp:5286, m_needComboPoints=false) is bridged below via
 	// casterIgnoresAuraState — the same 262-effect/affect-mask predicate
 	// the CheckCast loop uses, re-evaluated at finish time (C++ latches
@@ -9024,6 +9120,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		s.clearSessionComboPoints()
 	}
 	if comboGainTarget != 0 && comboGain > 0 {
+		// Spell::_handle_finish_phase (Spell.cpp:3747-3750): remove
+		// Premed-like effects unless they were caused by the cast spell
+		// itself — the aura removes the already-added CP when it expires,
+		// so it must not survive the gain it was meant to protect.
+		if !spellHasAura(spell, spellAuraRetainComboPoints) {
+			s.removeAurasByType(spellAuraRetainComboPoints)
+		}
 		s.addSessionComboPoints(comboGainTarget, comboGain)
 	}
 	// Spell::_handle_finish_phase (Spell.cpp:3738) no-bridge legs, noted:
@@ -9045,10 +9148,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	s.procSpellFinishAuraTriggers(ctx, spell)
 
 	// Spell::handle_immediate tail (Spell.cpp:3616-3625):
-	//   - TakeCastItem: no Go bridge — Go has no item spell-charge model;
-	//     consumables are decremented at cast start in handleUseItem and
-	//     the spell-charge decrement / expendable-destroy is unmodeled
-	//     (standing gap, noted at the delayed-branch call above).
+	//   - TakeCastItem: bridged at cast start in handleUseItem via
+	//     takeCastItemSpellCharges (items.go), matching C++ _cast order.
 	//   - Volley ammo: IsRangedWeaponSpell() && IsChanneled() -> TakeAmmo().
 	//     This is a second ammo on top of the HandleLaunchPhase REQ_AMMO
 	//     consumption bridged at SendSpellGo above (C++ consumes once at
@@ -9146,10 +9247,10 @@ func (s *session) fireSpellLinkedTriggers(ctx context.Context, spellID uint32, t
 	rows.Close()
 	for _, id := range effects {
 		if id < 0 {
-			// Unit::RemoveAurasDueToSpell(-id) on the caster: Go has no
-			// caster aura-removal machine (documented as the missing
-			// bridge in boss_ai.go), so the negative leg is noted here,
-			// not fired.
+			// Spell::_cast (Spell.cpp:3505-3508): negative ids remove the
+			// caster's auras of -id (Unit::RemoveAurasDueToSpell); the
+			// caster here is always the player session.
+			s.removeAura(uint32(-id))
 			continue
 		}
 		if id == 0 {
@@ -10635,9 +10736,8 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	//     SpellDefines.h:140, carried by TRIGGERED_FULL_MASK at :153),
 	//     which this path always uses. Only the give leg runs — the
 	//     banked per-cast gain from ADD_COMBO_POINTS effects. The
-	//     RETAIN_COMBO_POINTS aura removal (Spell.cpp:3747-3750) has no
-	//     Go bridge — the Go aura model tracks no such aura type (same
-	//     no-bridge as the client path).
+	//     RETAIN_COMBO_POINTS aura removal (Spell.cpp:3747-3750) runs via
+	//     removeAurasByType, same as the client path.
 	//   - TakeCastItem: vacuous — this path never carries a cast item
 	//     (item casts run finishSpellCast).
 	//   - TakeAmmo (Volley): documented delta (see the finishSpellCast
@@ -10659,6 +10759,11 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	//     clearing (Player.cpp:22233-22236).
 	//   - SPELL_ATTR0_STOP_ATTACK_TARGET -> AttackStop: bridged below.
 	if comboGainTarget != 0 && comboGain > 0 {
+		// Spell::_handle_finish_phase (Spell.cpp:3747-3750): the
+		// RETAIN_COMBO_POINTS removal runs for triggered casts too.
+		if !spellHasAura(spell, spellAuraRetainComboPoints) {
+			s.removeAurasByType(spellAuraRetainComboPoints)
+		}
 		s.addSessionComboPoints(comboGainTarget, comboGain)
 	}
 	// Spell::_handle_finish_phase (Spell.cpp:3753-3758): a triggered
@@ -15134,14 +15239,15 @@ const (
 	// CREATE_ITEM check).
 	spellFamilyFlagConjureRefreshment = 0x40000000
 
-	spellAuraModPossess       = 2
-	spellAuraTrackCreatures   = 44
-	spellAuraTrackResources   = 45
-	spellAuraModRegen         = 84
-	spellAuraModPowerRegen    = 85
-	spellAuraModPossessPet    = 128
-	spellAuraAoeCharm         = 177
-	spellAuraAllowOnlyAbility = 263
+	spellAuraModPossess        = 2
+	spellAuraTrackCreatures    = 44
+	spellAuraTrackResources    = 45
+	spellAuraModRegen          = 84
+	spellAuraModPowerRegen     = 85
+	spellAuraModPossessPet     = 128
+	spellAuraAoeCharm          = 177
+	spellAuraAllowOnlyAbility  = 263
+	spellAuraRetainComboPoints = 148 // SPELL_AURA_RETAIN_COMBO_POINTS (SpellAuraDefines.h:228)
 
 	spellEffectApplyAura           = 6
 	spellEffectPersistentAreaAura  = 27

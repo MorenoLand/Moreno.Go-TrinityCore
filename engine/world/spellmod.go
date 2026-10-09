@@ -98,6 +98,21 @@ func (s *session) beginSpellModTaking() {
 	s.spellModTaking = append(s.spellModTaking, &spellModTakingContext{applied: make(map[*activeAura]struct{})})
 }
 
+// pushSpellModTaking pushes an EXISTING taking context onto the stack —
+// the delayed-arrival leg (Spell::handle_delayed, Spell.cpp:3640)
+// re-arms SetSpellModTakingSpell on the same Spell object, so the
+// cast-phase m_appliedMods registrations survive into the arrival tick.
+// A nil context is a no-op: the arrival tick then runs with whatever the
+// stack holds (matching the C++ no-taking-spell state).
+func (s *session) pushSpellModTaking(taking *spellModTakingContext) {
+	if s == nil || taking == nil {
+		return
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	s.spellModTaking = append(s.spellModTaking, taking)
+}
+
 // endSpellModTaking mirrors the SetSpellModTakingSpell(spell, false) legs:
 // the _cast tail and failure exits (Spell.cpp:3418, 3519), the
 // handle_delayed tail (3697), and the event-processor branch tail (7621).
