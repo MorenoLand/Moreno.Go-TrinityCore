@@ -1037,6 +1037,21 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 	if !ok || target.Health == 0 {
 		return
 	}
+	// Unit::SpellHealingBonusTaken (Unit.cpp:7714-7759) runs on every
+	// EffectHeal ahead of the crit roll (SpellEffects.cpp:1466):
+	// MOD_HEALING_PCT, the Nourish 1.2x leg and MOD_HEALING_RECEIVED
+	// (caster-matched against the pet's GUID) — previously the raw amount
+	// healed. Direct heals are HEAL type, so the MOD_HOT_PCT leg is off
+	// (dotType=false). Pets carry no Go spellpower model, so the
+	// SpellHealingBonusDone leg is identity here.
+	targetSess := s.server.findSessionByGUID(target.GUID)
+	if targetSess != nil && targetSess.player != nil {
+		heal = s.healingTakenBonus(targetSess, caster.GUID, spellID, heal, false)
+	} else if s.server.Data != nil {
+		if hs, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			heal = creatureHealingTakenBonus(s.server, creatureAuraKeyForTarget(target), caster.GUID, hs, true, heal, false)
+		}
+	}
 	overheal := uint32(0)
 	if uint64(target.Health)+uint64(heal) > uint64(target.MaxHealth) {
 		overheal = uint32(uint64(target.Health) + uint64(heal) - uint64(target.MaxHealth))
@@ -1044,7 +1059,7 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 	packet := buildSpellHealLog(target.GUID, caster.GUID, spellID, heal, overheal, 0, false)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, true)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, s)
-	if targetSess := s.server.findSessionByGUID(target.GUID); targetSess != nil && targetSess.player != nil {
+	if targetSess != nil && targetSess.player != nil {
 		newHealth := targetSess.player.Health + heal
 		if newHealth > targetSess.player.MaxHealth {
 			newHealth = targetSess.player.MaxHealth

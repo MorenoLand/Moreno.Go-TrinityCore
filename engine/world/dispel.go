@@ -799,14 +799,18 @@ func (s *session) healDevourMagicPet(ctx context.Context, petCaster *creatureMot
 	}
 	s.executePetSpellHeal(ctx, petCaster, petCaster.GUID, 19658, healAmount)
 	if s.player != nil && s.playerHasAura(56249) {
+		// Unit::SpellHealingBonusTaken (Unit.cpp:7714-7759) on the owner
+		// self-heal: the C++ EffectHeal runs the taken leg with the pet as
+		// caster, so MOD_HEALING_RECEIVED matches auras the pet cast.
+		ownerHeal := s.healingTakenBonus(s, petCaster.GUID, 19658, healAmount, false)
 		overheal := uint32(0)
-		if uint64(s.player.Health)+uint64(healAmount) > uint64(s.player.MaxHealth) {
-			overheal = uint32(uint64(s.player.Health) + uint64(healAmount) - uint64(s.player.MaxHealth))
+		if uint64(s.player.Health)+uint64(ownerHeal) > uint64(s.player.MaxHealth) {
+			overheal = uint32(uint64(s.player.Health) + uint64(ownerHeal) - uint64(s.player.MaxHealth))
 		}
-		packet := buildSpellHealLog(s.playerGUID, s.playerGUID, 19658, healAmount, overheal, 0, false)
+		packet := buildSpellHealLog(s.playerGUID, petCaster.GUID, 19658, ownerHeal, overheal, 0, false)
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, true)
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, s)
-		s.player.Health += healAmount
+		s.player.Health += ownerHeal
 		if s.player.Health > s.player.MaxHealth {
 			s.player.Health = s.player.MaxHealth
 		}

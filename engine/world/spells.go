@@ -11340,8 +11340,10 @@ func creatureSpellDamageBonusTaken(server *Server, damage uint32, spell wotlk.Sp
 // aura on the target), MOD_HOT_PCT (DOT type only) and
 // MOD_HEALING_RECEIVED (multiplicative per aura whose caster matches the
 // healer and whose spell is affected on the heal spell, per
-// AuraEffect::IsAffectedOnSpell).
-func creatureHealingTakenBonus(server *Server, key creatureAuraKey, caster *session, healSpell wotlk.Spell, spellKnown bool, heal uint32, dotType bool) uint32 {
+// AuraEffect::IsAffectedOnSpell). casterGUID is the heal's caster unit
+// (player or creature) — passed explicitly so creature casters without a
+// session still match MOD_HEALING_RECEIVED auras they cast.
+func creatureHealingTakenBonus(server *Server, key creatureAuraKey, casterGUID uint64, healSpell wotlk.Spell, spellKnown bool, heal uint32, dotType bool) uint32 {
 	if server == nil || server.Data == nil || key.GUID == 0 {
 		return heal
 	}
@@ -11353,10 +11355,6 @@ func creatureHealingTakenBonus(server *Server, key creatureAuraKey, caster *sess
 	}
 	server.auraMu.Unlock()
 
-	casterGUID := uint64(0)
-	if caster != nil {
-		casterGUID = caster.playerGUID
-	}
 	nourishWanted := [3]uint32{0x50, 0x4000010, 0}
 	minPct, maxPct := int32(0), int32(0)
 	minHot, maxHot := int32(0), int32(0)
@@ -13350,8 +13348,12 @@ func (s *session) hasAuraOfType(auraType, familyName, flag0, flag1, flag2 uint32
 // the periodic-heal tick and HealthLeech callers pass dotType=true), and
 // SPELL_AURA_MOD_HEALING_RECEIVED (multiplicative per matching aura: caster
 // GUID matches and the aura's spell is affected on the heal spell per
-// AuraEffect::IsAffectedOnSpell).
-func (s *session) healingTakenBonus(target *session, spellID uint32, heal uint32, dotType bool) uint32 {
+// AuraEffect::IsAffectedOnSpell). casterGUID is the heal's caster unit —
+// callers pass it explicitly because the aura caster may be a creature (or
+// an offline player) with no session to derive it from; using the target's
+// GUID there would false-match MOD_HEALING_RECEIVED auras the target cast
+// on itself (Unit.cpp:7746-7754 compares against the caster unit).
+func (s *session) healingTakenBonus(target *session, casterGUID uint64, spellID uint32, heal uint32, dotType bool) uint32 {
 	if target == nil {
 		return heal
 	}
@@ -13381,7 +13383,7 @@ func (s *session) healingTakenBonus(target *session, spellID uint32, heal uint32
 			}
 			// SPELL_AURA_MOD_HEALING_RECEIVED (Unit.cpp:7746-7754).
 			for _, aura := range target.loadedAuras() {
-				if aura == nil || aura.Stopped || aura.CasterGUID != s.playerGUID {
+				if aura == nil || aura.Stopped || aura.CasterGUID != casterGUID {
 					continue
 				}
 				auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
@@ -13508,7 +13510,7 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 	// crits m_healing, which already carries the taken modifiers
 	// (Spell.cpp:2500-2515). Direct heals are HEAL type, so the MOD_HOT_PCT
 	// leg is off (dotType=false).
-	heal = s.healingTakenBonus(targetSess, spellID, heal, false)
+	heal = s.healingTakenBonus(targetSess, s.playerGUID, spellID, heal, false)
 
 	// Roll healing critical strike (TrinityCore: 150% healing on crit, modified by metagem)
 	isCrit := s.rollSpellCrit(0, 2)
@@ -18398,9 +18400,13 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// crit roll — the earlier Go path healed the raw aura amount.
 		// CalcHealAbsorb has no Go model and stays unbridged.
 		if healCaster != nil {
-			heal = healCaster.healingTakenBonus(ts, aura.SpellID, heal, true)
+			heal = healCaster.healingTakenBonus(ts, aura.CasterGUID, aura.SpellID, heal, true)
 		} else {
-			heal = ts.healingTakenBonus(ts, aura.SpellID, heal, true)
+			// Creature (or offline-player) caster: the caster GUID comes
+			// from the aura, not the target session — using ts.playerGUID
+			// here false-matched MOD_HEALING_RECEIVED auras the target cast
+			// on itself (Unit.cpp:7746-7754).
+			heal = ts.healingTakenBonus(ts, aura.CasterGUID, aura.SpellID, heal, true)
 		}
 		// Tick crit roll (roll_chance_f(GetCritChanceFor),
 		// SpellAuraEffects.cpp:5388-5390): the victim-side
@@ -18941,7 +18947,7 @@ func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, 
 		}
 		heal += uint32(math.Round(float64(casterSess.player.SpellPower) * casterSess.spellBonusMultiplier(aura.SpellID, leechEffIndex, true) * float64(stack)))
 	}
-	heal = casterSess.healingTakenBonus(casterSess, aura.SpellID, heal, true)
+	heal = casterSess.healingTakenBonus(casterSess, aura.CasterGUID, aura.SpellID, heal, true)
 	if heal == 0 {
 		return
 	}
@@ -19233,7 +19239,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// called at SpellAuraEffects.cpp:5386): MOD_HEALING_PCT, the
 		// Nourish 1.2x leg, MOD_HOT_PCT and MOD_HEALING_RECEIVED run on
 		// the tick before the crit roll.
-		heal = creatureHealingTakenBonus(s.server, key, tickCaster, tickSpell, tickKnown, heal, true)
+		heal = creatureHealingTakenBonus(s.server, key, aura.CasterGUID, tickSpell, tickKnown, heal, true)
 		// Tick crit roll (roll_chance_f(GetCritChanceFor),
 		// SpellAuraEffects.cpp:5388-5390). Creature casters have no Go
 		// spell-crit model, so only player-caster ticks roll; the
