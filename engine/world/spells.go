@@ -7061,6 +7061,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// cast marks the spell item-based and skips the
 				// lockpicking skill-up.
 				s.handleEffectOpenLock(effCtx, target, spell, eff, castItemGUID != 0 || castItemEntry != 0)
+			case spellEffectEnchantItem: // 53: SPELL_EFFECT_ENCHANT_ITEM
+				// The cast item's entry gates the skill-up arm
+				// (SpellEffects.cpp:2733: m_CastItem with
+				// ITEM_FLAG_NO_REAGENT_COST suppresses UpdateCraftSkill).
+				s.handleEffectEnchantItemPerm(effCtx, target, spell, eff, castItemEntry)
+			case spellEffectEnchantItemTemporary: // 54: SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY
+				s.handleEffectEnchantItemTmp(effCtx, target, spell, eff)
+			case spellEffectEnchantItemPrismatic: // 156: SPELL_EFFECT_ENCHANT_ITEM_PRISMATIC
+				s.handleEffectEnchantItemPrismatic(effCtx, target, spell, eff)
 			case spellEffectLearnSpell: // 36: SPELL_EFFECT_LEARN_SPELL
 				if eff.TriggerSpell != 0 {
 					s.learnSpell(effCtx, eff.TriggerSpell)
@@ -17856,6 +17865,275 @@ func (s *session) checkSpellEnchantItemTemporaryCast(ctx context.Context, spell 
 		// which runs no CheckCast gates).
 	}
 	return 0
+}
+
+// itemFlagNoReagentCost mirrors ITEM_FLAG_NO_REAGENT_COST
+// (ItemTemplate.h:180): spells cast from such items ignore reagents.
+const itemFlagNoReagentCost = 0x10000000
+
+// writeItemEnchantmentSlot mirrors the persistence half of
+// Item::SetEnchantment for the ENCHANT_ITEM arms (SpellEffects.cpp): the
+// item_instance enchantments column holds 36 space-separated ints, 3 per
+// slot (id, duration, charges) — the trade.go applyDeferredTradeEnchant
+// layout. The caster-GUID C++ passes (SetEnchantment(slot, id, duration,
+// charges, casterGUID)) has no item_instance column in Go, so only the
+// id/duration/charges triplet is persisted (documented).
+func (s *session) writeItemEnchantmentSlot(ctx context.Context, instanceGUID uint64, slot uint32, enchantID uint32, durationMs uint32) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || instanceGUID == 0 {
+		return
+	}
+	var raw string
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		`SELECT COALESCE(enchantments, '') FROM item_instance WHERE guid = ? LIMIT 1`, int64(instanceGUID)).Scan(&raw); err != nil {
+		return
+	}
+	var enchants [36]uint32
+	for i, f := range strings.Fields(raw) {
+		if i >= 36 {
+			break
+		}
+		if v, err := strconv.ParseUint(f, 10, 32); err == nil {
+			enchants[i] = uint32(v)
+		}
+	}
+	base := slot * 3
+	if base+2 >= 36 {
+		return
+	}
+	enchants[base] = enchantID
+	enchants[base+1] = durationMs
+	enchants[base+2] = 0
+	parts := make([]string, 36)
+	for i := 0; i < 36; i++ {
+		parts[i] = strconv.FormatUint(uint64(enchants[i]), 10)
+	}
+	_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+		`UPDATE item_instance SET enchantments = ? WHERE guid = ?`, strings.Join(parts, " "), int64(instanceGUID))
+}
+
+// equippedWeaponInstance mirrors the Player::GetWeaponForAttack(useable=true)
+// lookup for an equipment slot: the item_instance GUID and entry of the
+// equipped weapon, or (0, 0) when the slot holds no unbroken weapon
+// (Item::IsBroken: MaxDurability > 0 and Durability == 0, Item.cpp).
+func (s *session) equippedWeaponInstance(ctx context.Context, slot uint8) (uint64, uint32) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0, 0
+	}
+	var instanceGUID, itemEntry int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		`SELECT ii.guid, ii.itemEntry FROM character_inventory ci
+		JOIN item_instance ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot = ? LIMIT 1`,
+		s.playerGUID, int64(slot)).Scan(&instanceGUID, &itemEntry); err != nil || itemEntry <= 0 {
+		return 0, 0
+	}
+	weapon, ok := s.server.getItemStoreTemplateInfo(ctx, uint32(itemEntry))
+	if !ok || weapon.Class != itemClassWeapon {
+		return 0, 0
+	}
+	var durability int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		`SELECT COALESCE(durability, 0) FROM item_instance WHERE guid = ? LIMIT 1`,
+		instanceGUID).Scan(&durability); err == nil && weapon.MaxDurability > 0 && durability == 0 {
+		return 0, 0
+	}
+	return uint64(instanceGUID), uint32(itemEntry)
+}
+
+// handleEffectEnchantItemPerm mirrors Spell::EffectEnchantItemPerm
+// (SpellEffects.cpp:2704-2766). The vellum sub-arm (2718-2729): a weapon or
+// armor vellum target (ItemTemplate.h:701-702) is consumed — one from the
+// stack — and the effect's ItemType scroll is created instead; the item
+// target is cleared (m_targets.SetItemTarget(nullptr)), so no enchant is
+// written. Otherwise the crafter's profession skill grows (2732-2734) unless
+// the cast item carries ITEM_FLAG_NO_REAGENT_COST (ItemTemplate.h:180), the
+// MiscValue enchantment is validated against the DBC (2736-2741) and
+// written to PERM_ENCHANTMENT_SLOT (slot 0, ItemDefines.h:146). The
+// GM-trade command log (2746-2751) has no RBAC/log model in Go
+// (documented); the RemoveTradeableItem / ClearSoulboundTradeable arms
+// (2761-2762) have no tradeable-item model (documented). The
+// ApplyEnchantment remove/apply pair (2755/2759) is covered by
+// syncEquipmentCache for an equipped target.
+func (s *session) handleEffectEnchantItemPerm(ctx context.Context, target protocol.SpellTargetData, spell wotlk.Spell, eff wotlk.SpellEffect, castItemEntry uint32) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	t, ok := s.resolveEnchantItemTarget(ctx, target)
+	if !ok {
+		return
+	}
+	if classInfo, ok := s.getItemTemplateClassInfo(ctx, t.entry); ok &&
+		classInfo.Class == itemClassTradeGoods &&
+		(classInfo.SubClass == itemSubclassWeaponEnchantment || classInfo.SubClass == itemSubclassArmorEnchantment) {
+		s.destroyItemInstanceCount(ctx, t.instanceGUID, 1)
+		if eff.ItemType != 0 {
+			_, _ = s.storeOrStackItem(ctx, s.playerGUID, eff.ItemType, 1)
+		}
+		return
+	}
+	noReagent := false
+	if castItemEntry != 0 {
+		if info, ok := s.server.getItemStoreTemplateInfo(ctx, castItemEntry); ok && info.Flags&itemFlagNoReagentCost != 0 {
+			noReagent = true
+		}
+	}
+	if !noReagent {
+		s.updateCraftSkill(ctx, spell.ID)
+	}
+	if eff.MiscValue == 0 || s.server.Data == nil {
+		return
+	}
+	enchantID := uint32(eff.MiscValue)
+	if _, found, err := s.server.Data.SpellItemEnchantment(enchantID); err != nil || !found {
+		return
+	}
+	s.writeItemEnchantmentSlot(ctx, t.instanceGUID, 0, enchantID, 0)
+	if t.ownedByCaster {
+		s.syncEquipmentCache(ctx)
+	}
+}
+
+// handleEffectEnchantItemTmp mirrors Spell::EffectEnchantItemTmp
+// (SpellEffects.cpp:2832-2951). The Rockbiter arm (2842-2881): a shaman
+// weapon-imbue cast (SpellFamilyName SHAMAN, family flags 0x400000) selects
+// the rank spell from the Effect[1] damage value and enchants both weapons
+// via triggered casts. Go has no item-targeted triggered-cast path, so the
+// rank spell is resolved from the DBC and its ENCHANT_ITEM_TEMPORARY
+// MiscValue is written to each equipped weapon that fits the cast spell
+// (Player::GetWeaponForAttack(useable=true) + IsFitToSpellRequirements) —
+// the CheckCast is skipped for triggered casts in C++ too. The normal arm
+// (2883-2951): the MiscValue enchantment is validated against the DBC and
+// written to TEMP_ENCHANTMENT_SLOT (slot 1) with the C++-exact duration
+// selection (tempTradeEnchantDurationMs). The GM-trade command log
+// (2932-2937) has no RBAC/log model in Go (documented).
+func (s *session) handleEffectEnchantItemTmp(ctx context.Context, target protocol.SpellTargetData, spell wotlk.Spell, eff wotlk.SpellEffect) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	if spell.SpellFamilyName == spellFamilyShaman && len(spell.SpellFamilyFlags) > 0 && spell.SpellFamilyFlags[0]&0x400000 != 0 {
+		s.applyRockbiterEnchant(ctx, spell)
+		return
+	}
+	t, ok := s.resolveEnchantItemTarget(ctx, target)
+	if !ok {
+		return
+	}
+	if eff.MiscValue == 0 || s.server.Data == nil {
+		return
+	}
+	enchantID := uint32(eff.MiscValue)
+	if _, found, err := s.server.Data.SpellItemEnchantment(enchantID); err != nil || !found {
+		return
+	}
+	s.writeItemEnchantmentSlot(ctx, t.instanceGUID, 1, enchantID, tempTradeEnchantDurationMs(spell))
+	if t.ownedByCaster {
+		s.syncEquipmentCache(ctx)
+	}
+}
+
+// applyRockbiterEnchant mirrors the Rockbiter sub-arm of
+// Spell::EffectEnchantItemTmp (SpellEffects.cpp:2842-2881): the rank spell
+// is selected from the rounded Effect[1] damage value, and each equipped
+// main/off-hand weapon that fits the cast spell receives the rank spell's
+// temp enchant with the cast spell's duration selection.
+func (s *session) applyRockbiterEnchant(ctx context.Context, spell wotlk.Spell) {
+	var damage int32
+	if len(spell.Effects) > 1 {
+		damage = spell.Effects[1].BasePoints + 1
+	}
+	var spellID uint32
+	switch damage {
+	case 2:
+		spellID = 36744
+	case 4:
+		spellID = 36753
+	case 5:
+		spellID = 36751
+	case 6:
+		spellID = 36754
+	case 7:
+		spellID = 36755
+	case 9:
+		spellID = 36761
+	case 10:
+		spellID = 36758
+	case 11:
+		spellID = 36760
+	default:
+		return
+	}
+	if s.server.Data == nil {
+		return
+	}
+	rankSpell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		return
+	}
+	var enchantID uint32
+	for _, e := range rankSpell.Effects {
+		if e.Effect == spellEffectEnchantItemTemporary && e.MiscValue != 0 {
+			enchantID = uint32(e.MiscValue)
+			break
+		}
+	}
+	if enchantID == 0 {
+		return
+	}
+	if _, found, err := s.server.Data.SpellItemEnchantment(enchantID); err != nil || !found {
+		return
+	}
+	durationMs := tempTradeEnchantDurationMs(spell)
+	for _, slot := range []uint8{equipSlotMainhand, equipSlotOffhand} {
+		instanceGUID, entry := s.equippedWeaponInstance(ctx, slot)
+		if instanceGUID == 0 || entry == 0 {
+			continue
+		}
+		if classInfo, ok := s.getItemTemplateClassInfo(ctx, entry); ok &&
+			isItemFitToSpell(spell, classInfo.Class, classInfo.SubClass, classInfo.InvType) {
+			s.writeItemEnchantmentSlot(ctx, instanceGUID, 1, enchantID, durationMs)
+		}
+	}
+	s.syncEquipmentCache(ctx)
+}
+
+// handleEffectEnchantItemPrismatic mirrors Spell::EffectEnchantItemPrismatic
+// (SpellEffects.cpp:2768-2830): only enchantments carrying an
+// ITEM_ENCHANTMENT_TYPE_PRISMATIC_SOCKET (=8) effect are supported
+// (2788-2804); the MiscValue enchantment is written to
+// PRISMATIC_ENCHANTMENT_SLOT (slot 6, ItemDefines.h:152). The GM-trade
+// command log (2815-2820) has no RBAC/log model in Go (documented); the
+// RemoveTradeableItem / ClearSoulboundTradeable arms (2828-2829) have no
+// tradeable-item model (documented).
+func (s *session) handleEffectEnchantItemPrismatic(ctx context.Context, target protocol.SpellTargetData, spell wotlk.Spell, eff wotlk.SpellEffect) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	t, ok := s.resolveEnchantItemTarget(ctx, target)
+	if !ok {
+		return
+	}
+	if eff.MiscValue == 0 || s.server.Data == nil {
+		return
+	}
+	enchantID := uint32(eff.MiscValue)
+	entry, found, err := s.server.Data.SpellItemEnchantment(enchantID)
+	if err != nil || !found {
+		return
+	}
+	addSocket := false
+	for _, e := range entry.Effects {
+		if e == 8 { // ITEM_ENCHANTMENT_TYPE_PRISMATIC_SOCKET (DBCEnums.h)
+			addSocket = true
+			break
+		}
+	}
+	if !addSocket {
+		return
+	}
+	s.writeItemEnchantmentSlot(ctx, t.instanceGUID, 6, enchantID, 0)
+	if t.ownedByCaster {
+		s.syncEquipmentCache(ctx)
+	}
 }
 
 // checkSpellDisenchantCast mirrors the SPELL_EFFECT_DISENCHANT arm of the
