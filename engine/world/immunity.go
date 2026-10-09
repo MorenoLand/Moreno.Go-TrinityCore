@@ -54,7 +54,14 @@ func (s *session) isTotalImmune() bool {
 }
 
 // isImmuneToDamage determines whether the player is immune to damage of the given schoolMask.
-// Mirrors TrinityCore Unit::IsImmuneToDamage (Unit.cpp:8950-9050).
+// Mirrors TrinityCore Unit::IsImmunedToDamage(SpellSchoolMask) (Unit.cpp:7800-7816):
+// full-coverage OR over the live SPELL_AURA_SCHOOL_IMMUNITY (39) misc values
+// (m_spellImmune[IMMUNITY_SCHOOL]), then the SPELL_AURA_DAMAGE_IMMUNITY (4)
+// misc OR (m_spellImmune[IMMUNITY_DAMAGE]). The misc value — not the granting
+// spell's school — is the immune mask (ApplyAllSpellImmunitiesTo,
+// SpellInfo.cpp:2860-2910). The hardcoded spell-ID arms below predate the
+// live-aura fold and stay as belt-and-braces for auras whose rows may not
+// have been recorded; they agree with the fold for non-piercing spells.
 func (s *session) isImmuneToDamage(schoolMask uint32) bool {
 	if s == nil || s.player == nil {
 		return false
@@ -89,21 +96,110 @@ func (s *session) isImmuneToDamage(schoolMask uint32) bool {
 		}
 	}
 
-	// 3. Aura effect check: SPELL_AURA_DAMAGE_IMMUNITY (4) and SPELL_AURA_SCHOOL_IMMUNITY (39)
+	// 3. Live-aura folds, C++-exact: misc-based full coverage, no pierce
+	// filter (the mask overload has no spell to pierce with).
+	// Unit.cpp:7806-7813.
+	if s.immuneSchoolMaskLocked(wotlk.Spell{}, schoolMask)&schoolMask == schoolMask && schoolMask != 0 {
+		return true
+	}
+	if s.immuneDamageMaskLocked()&schoolMask == schoolMask && schoolMask != 0 {
+		return true
+	}
+
+	return false
+}
+
+// immuneSchoolMaskLocked is the Unit.cpp:7831-7841 fold over live aura-39
+// rows: each entry whose misc overlaps schoolMask contributes its misc,
+// unless the incoming spell pierces that entry's granting aura
+// (SpellInfo::CanPierceImmuneAura per entry). Caller holds castMu.
+func (s *session) immuneSchoolMaskLocked(spell wotlk.Spell, schoolMask uint32) uint32 {
+	var mask uint32
 	for _, aura := range s.activeAuras {
-		if aura == nil {
+		if aura == nil || aura.AuraType != spellAuraSchoolImmunity {
 			continue
 		}
-		if aura.AuraType == spellAuraDamageImmunity {
+		misc := uint32(aura.MiscValue)
+		if misc&schoolMask == 0 {
+			continue
+		}
+		if s.server != nil && s.server.Data != nil {
+			if immuneSpell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found && canSpellPierceImmuneAura(spell, immuneSpell) {
+				continue
+			}
+		}
+		mask |= misc
+	}
+	return mask
+}
+
+// immuneDamageMaskLocked is the Unit.cpp:7844-7847 fold: the OR of the live
+// aura-4 (SPELL_AURA_DAMAGE_IMMUNITY) misc school masks. Caller holds castMu.
+func (s *session) immuneDamageMaskLocked() uint32 {
+	var mask uint32
+	for _, aura := range s.activeAuras {
+		if aura == nil || aura.AuraType != spellAuraDamageImmunity {
+			continue
+		}
+		mask |= uint32(aura.MiscValue)
+	}
+	return mask
+}
+
+// isImmuneToDamageSpell mirrors Unit::IsImmunedToDamage(SpellInfo const*)
+// (Unit.cpp:7818-7860): the attribute gates run before any aura fold, and
+// the school-immunity fold applies the per-entry CanPierceImmuneAura filter.
+// A spell with zero school mask never immunizes via this path
+// (Unit.cpp:7830).
+func (s *session) isImmuneToDamageSpell(spell wotlk.Spell, schoolMask uint32) bool {
+	if s == nil || s.player == nil || schoolMask == 0 {
+		return false
+	}
+	// Unit.cpp:7824-7825 — e.g. 40175.
+	if spell.Attributes&spellAttr0UnaffectedByInvulnerability != 0 &&
+		spell.AttributesEx3&spellAttr3IgnoreHitResult != 0 {
+		return false
+	}
+	// Unit.cpp:7827-7828.
+	if spell.AttributesEx&spellAttr1UnaffectedBySchoolImmune != 0 ||
+		spell.AttributesEx1&spellAttr2UnaffectedByAuraSchoolImmune != 0 {
+		return false
+	}
+
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+
+	// Hardcoded total/physical arms agree with the folds below for
+	// non-piercing spells (Divine Shield etc. grant all-school misc rows);
+	// the attribute gates above already handled the piercing case.
+	totalImmunitySpells := []uint32{642, 45438, 33786, 710, 18647}
+	for _, id := range totalImmunitySpells {
+		if _, ok := s.auras[id]; ok {
 			return true
 		}
-		if aura.AuraType == spellAuraSchoolImmunity {
-			if aura.SchoolMask == 0 || (aura.SchoolMask&schoolMask != 0) {
+		if _, ok := s.activeAuras[id]; ok {
+			return true
+		}
+	}
+	if schoolMask&1 != 0 {
+		for _, id := range []uint32{1022, 5599, 10278} {
+			if _, ok := s.auras[id]; ok {
+				return true
+			}
+			if _, ok := s.activeAuras[id]; ok {
 				return true
 			}
 		}
 	}
 
+	// Unit.cpp:7831-7841 — full coverage required.
+	if s.immuneSchoolMaskLocked(spell, schoolMask)&schoolMask == schoolMask {
+		return true
+	}
+	// Unit.cpp:7844-7847.
+	if s.immuneDamageMaskLocked()&schoolMask == schoolMask {
+		return true
+	}
 	return false
 }
 
@@ -368,6 +464,24 @@ func spellCanBeReflected(spell wotlk.Spell) bool {
 		return false
 	}
 	return spell.AttributesEx&spellAttr1CantBeReflected == 0
+}
+
+// spellReflectOffered mirrors the canReflect argument Spell::AddUnitTarget
+// passes to WorldObject::SpellHitResult (Spell.cpp:2152):
+// m_canReflect && !(IsPositive() && m_caster->IsFriendlyTo(target)).
+// SpellInfo::IsPositive (SpellInfo.cpp:1205) is !SPELL_ATTR0_CU_NEGATIVE,
+// i.e. none of the three load-computed CU_NEGATIVE_EFF bits is set. Without
+// this gate a positive harmful spell (e.g. an AoE heal/damage hybrid) cast
+// on a friendly target could be reflected back at the caster.
+// checkSpellReflection keeps the C++ roll itself (Object.cpp:2641-2648).
+func spellReflectOffered(spell wotlk.Spell, caster *session, targetGUID uint64, targetSess *session) bool {
+	if !spellCanBeReflected(spell) {
+		return false
+	}
+	if spell.AttributesCu&spellAttr0CuNegativeMask == 0 && caster.isFriendlyToTarget(targetGUID, targetSess) {
+		return false
+	}
+	return true
 }
 
 // checkSpellReflection checks if the incoming harmful spell is reflected by the target.
@@ -831,6 +945,58 @@ func (s *session) spellTargetFullyEffectImmune(spell wotlk.Spell, targetSess *se
 		}
 	}
 	return anyEffect
+}
+
+// creatureImmuneToDamageSpell is the creature-target analog of
+// isImmuneToDamageSpell: Unit::IsImmunedToDamage(SpellInfo const*)
+// (Unit.cpp:7818-7860) applies to any Unit, but Go's player-only
+// isImmuneToDamage skipped creature victims entirely, so a creature with
+// live aura-39/aura-4 rows took full spell damage. Fold is the same
+// misc-based full-coverage OR with the per-entry CanPierceImmuneAura filter
+// and the attribute gates; the school/damage masks come from the target's
+// live creature auras (m_spellImmune[IMMUNITY_SCHOOL/IMMUNITY_DAMAGE]).
+func creatureImmuneToDamageSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, schoolMask uint32) bool {
+	if srv == nil || schoolMask == 0 {
+		return false
+	}
+	// Unit.cpp:7824-7828 attribute gates.
+	if spell.Attributes&spellAttr0UnaffectedByInvulnerability != 0 &&
+		spell.AttributesEx3&spellAttr3IgnoreHitResult != 0 {
+		return false
+	}
+	if spell.AttributesEx&spellAttr1UnaffectedBySchoolImmune != 0 ||
+		spell.AttributesEx1&spellAttr2UnaffectedByAuraSchoolImmune != 0 {
+		return false
+	}
+	srv.auraMu.Lock()
+	defer srv.auraMu.Unlock()
+	var schoolImmunityMask uint32
+	for _, aura := range srv.activeCreatureAuras[key] {
+		if aura == nil || aura.AuraType != spellAuraSchoolImmunity {
+			continue
+		}
+		misc := uint32(aura.MiscValue)
+		if misc&schoolMask == 0 {
+			continue
+		}
+		if srv.Data != nil {
+			if immuneSpell, found, err := srv.Data.Spell(aura.SpellID); err == nil && found && canSpellPierceImmuneAura(spell, immuneSpell) {
+				continue
+			}
+		}
+		schoolImmunityMask |= misc
+	}
+	if schoolImmunityMask&schoolMask == schoolMask {
+		return true
+	}
+	var damageImmunityMask uint32
+	for _, aura := range srv.activeCreatureAuras[key] {
+		if aura == nil || aura.AuraType != spellAuraDamageImmunity {
+			continue
+		}
+		damageImmunityMask |= uint32(aura.MiscValue)
+	}
+	return damageImmunityMask&schoolMask == schoolMask
 }
 
 // creatureImmuneAuraApplySchoolMask is the creature-target analog of the

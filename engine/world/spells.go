@@ -78,6 +78,7 @@ const (
 	spellAttr0NotShapeshift                uint32 = 0x00010000 // SPELL_ATTR0_NOT_SHAPESHIFT (SharedDefines.h:428)
 	spellAttr0OnlyStealthed                uint32 = 0x00020000 // SPELL_ATTR0_ONLY_STEALTHED (SharedDefines.h:429)
 	spellAttr0CuPickpocket                 uint32 = 0x00000400 // SPELL_ATTR0_CU_PICKPOCKET (SpellInfo.h:188) — custom attr, tested against AttributesCu
+	spellAttr0CuNegativeMask               uint32 = 0x00007000 // SPELL_ATTR0_CU_NEGATIVE (SpellInfo.h:203) = CU_NEGATIVE_EFF0|EFF1|EFF2 — custom attrs, tested against AttributesCu
 	spellAttr0OnNextSwing2                 uint32 = 0x00000400 // SPELL_ATTR0_ON_NEXT_SWING_2 (SharedDefines.h:422) — tested against Attributes (DBC attr0), no clash with the custom-attr const above
 	spellAttr2NotNeedShapeshift            uint32 = 0x00080000 // SPELL_ATTR2_NOT_NEED_SHAPESHIFT (SharedDefines.h:505) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr1CantBeReflected              uint32 = 0x00000080 // SPELL_ATTR1_CANT_BE_REFLECTED (SharedDefines.h:456)
@@ -7178,7 +7179,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		if s.server != nil {
 			targetSess = s.server.findSessionByGUID(targetGUID)
 		}
-		if targetSess != nil && targetSess.checkSpellReflection(spell) {
+		if targetSess != nil && targetSess.isImmuneToSpell(spell, s) {
+			// WorldObject::SpellHitResult (Object.cpp:2620-2648) checks
+			// IsImmunedToSpell (SPELL_MISS_IMMUNE) ahead of the canReflect
+			// arm, so a target that is both immune and reflecting reports
+			// IMMUNE and the reflection aura is not consumed.
+			hitTargets = nil
+			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
+			// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2354-2357): an
+			// immune player target is still put in combat with the player
+			// caster when the caster could validly attack it (the
+			// taunt-vs-immune case). The harmful path implies
+			// IsValidAttackTarget; the caster is always the player here.
+			if targetSess.player != nil {
+				targetSess.player.UnitFlags |= unitFlagInCombat
+				targetSess.lastCombatTime = time.Now()
+			}
+		} else if targetSess != nil && spellReflectOffered(spell, s, targetGUID, targetSess) && targetSess.checkSpellReflection(spell) {
 			isReflected = true
 			reflectSourceGUID = targetGUID
 			// Spell::SendSpellGo (Spell.cpp:4504-4506): ReflectStatus is the
@@ -7193,18 +7210,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}}
 			targetGUID = s.playerGUID
 			hitTargets = []uint64{s.playerGUID}
-		} else if targetSess != nil && targetSess.isImmuneToSpell(spell, s) {
-			hitTargets = nil
-			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
-			// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2354-2357): an
-			// immune player target is still put in combat with the player
-			// caster when the caster could validly attack it (the
-			// taunt-vs-immune case). The harmful path implies
-			// IsValidAttackTarget; the caster is always the player here.
-			if targetSess.player != nil {
-				targetSess.player.UnitFlags |= unitFlagInCombat
-				targetSess.lastCombatTime = time.Now()
-			}
 		} else {
 			// Creature::IsImmunedToSpell (Creature.cpp:2315-2333) at hit
 			// resolution: creature targets had no immunity gate in Go —
@@ -10608,7 +10613,23 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				playerSess.updateAchievementCriteria(criteriaTypeBeSpellTarget, spellID, 1)
 				playerSess.updateAchievementCriteria(criteriaTypeBeSpellTarget2, spellID, 1)
 				playerSess.startTimedAchievement(timedTypeSpellTarget, spellID)
-				if !instantKill && playerSess.isImmuneToDamage(uint32(schoolMask)) {
+				// Unit::IsImmunedToDamage(SpellInfo const*) (Unit.cpp:7818-7860):
+				// the attribute gates (e.g. 40175) and the per-entry pierce
+				// filter need the spell; an unresolvable spell falls back to
+				// the mask-only fold.
+				dmgSpell, dmgSpellKnown := wotlk.Spell{}, false
+				if s.server != nil && s.server.Data != nil {
+					if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
+						dmgSpell, dmgSpellKnown = sp, true
+					}
+				}
+				immuneToDmg := false
+				if dmgSpellKnown {
+					immuneToDmg = playerSess.isImmuneToDamageSpell(dmgSpell, uint32(schoolMask))
+				} else {
+					immuneToDmg = playerSess.isImmuneToDamage(uint32(schoolMask))
+				}
+				if !instantKill && immuneToDmg {
 					damage = 0
 					immune = true
 				}
@@ -10635,6 +10656,15 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				}
 			}
 		} else if !instantKill && s.server != nil && damage > 0 {
+			// Unit::IsImmunedToDamage on creature victims (Unit.cpp:7818-7860
+			// applies to any Unit): a creature with live aura-39/aura-4 rows
+			// zeroes the spell damage, mirroring the player gate above.
+			if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
+				if creatureImmuneToDamageSpell(s.server, creatureAuraKeyForTarget(target), sp, uint32(schoolMask)) {
+					damage = 0
+					immune = true
+				}
+			}
 			// Victim-side damage-taken multiplier for creature victims
 			// (TrinityCore Unit::SpellDamageBonusTaken, Unit.cpp:7052):
 			// EffectSchoolDMG (SpellEffects.cpp:365-366) runs the taken leg
