@@ -7034,9 +7034,24 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case 135: // SPELL_EFFECT_CALL_PET
 				s.handleSummonPet(effCtx, spellID, 0)
 			case 38: // SPELL_EFFECT_DISPEL
-				s.handleEffectDispel(effCtx, targetGUID, spell, eff)
+				// Spell::EffectDispel (SpellEffects.cpp:2429) runs per unit
+				// target: a multi-target dispel (e.g. Mass Dispel 32375, 15yd
+				// radius) dispels every hit target, not just hitTargets[0].
+				for _, effectTarget := range hitTargets {
+					if effectTarget == 0 {
+						continue
+					}
+					s.handleEffectDispel(effCtx, effectTarget, spell, eff)
+				}
 			case 108: // SPELL_EFFECT_DISPEL_MECHANIC
-				s.handleEffectDispelMechanic(effCtx, targetGUID, spell, eff)
+				// Spell::EffectDispelMechanic (SpellEffects.cpp:4733) is also
+				// per unit target.
+				for _, effectTarget := range hitTargets {
+					if effectTarget == 0 {
+						continue
+					}
+					s.handleEffectDispelMechanic(effCtx, effectTarget, spell, eff)
+				}
 			case spellEffectKillCredit: // 90: SPELL_EFFECT_KILL_CREDIT (EffectKillCreditPersonal)
 				for _, effectTarget := range hitTargets {
 					if effectTarget == 0 {
