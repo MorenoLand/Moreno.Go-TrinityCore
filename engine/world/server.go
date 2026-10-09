@@ -82,7 +82,12 @@ type Server struct {
 	autoBalanceLFG          []wotlk.LFGDungeon
 	autoBalanceBosses       map[uint32]struct{}
 	autoBalanceBossesLoaded bool
-	queuedSessions          []*session
+	// spellBonusOnce/spellBonus mirror SpellMgr::mSpellBonusMap
+	// (SpellMgr.cpp:1888): spell_bonus_data rows cached on first use by
+	// Server.spellBonusData, for the damage-done coefficient leg.
+	spellBonusOnce sync.Once
+	spellBonus     map[uint32]spellBonusEntry
+	queuedSessions []*session
 	// disconnectTimes mirrors World's m_disconnects (World.cpp:3114): account id
 	// -> unix time of last non-queued session removal, consulted by the
 	// DisconnectToleranceInterval queue-skip arm.

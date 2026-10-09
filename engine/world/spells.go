@@ -95,6 +95,7 @@ const (
 	spellAttr5UsableWhileConfused          uint32 = 0x00040000 // SPELL_ATTR5_USABLE_WHILE_CONFUSED (SharedDefines.h:615) — ATTR5 is Go's AttributesEx5
 	spellAttr5NoReagentWhilePrep           uint32 = 0x00000002 // SPELL_ATTR5_NO_REAGENT_WHILE_PREP (SharedDefines.h:598) — ATTR5 is Go's AttributesEx5
 	spellAttr6IgnoreCasterAuras            uint32 = 0x00000004 // SPELL_ATTR6_IGNORE_CASTER_AURAS (SharedDefines.h:636) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
+	spellAttr6LimitPctDamageMods           uint32 = 0x20000000 // SPELL_ATTR6_LIMIT_PCT_DAMAGE_MODS (SharedDefines.h:663) — ATTR6 is Go's AttributesEx6
 	spellAttr1DispelAurasOnImmunity        uint32 = 0x00008000 // SPELL_ATTR1_DISPEL_AURAS_ON_IMMUNITY (SharedDefines.h:464) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr2UnaffectedByAuraSchoolImmune uint32 = 0x04000000 // SPELL_ATTR2_UNAFFECTED_BY_AURA_SCHOOL_IMMUNE (SharedDefines.h:512) — ATTR2 is Go's AttributesEx1
 
@@ -10112,6 +10113,470 @@ func (s *session) spellBonusMultiplier(spellID uint32, effIndex int, heal bool) 
 	return mult
 }
 
+// Aura types feeding the damage-done legs (SpellAuraDefines.h).
+const (
+	auraModDamageTaken               uint32 = 14  // SPELL_AURA_MOD_DAMAGE_TAKEN — Amplify/Dampen Magic arm of DoneAdvertisedBenefit (Unit.cpp:6682-6683)
+	auraModDamagePercentDone         uint32 = 79  // SPELL_AURA_MOD_DAMAGE_PERCENT_DONE (Unit.cpp:6771-6779)
+	auraOverrideClassScripts         uint32 = 112 // SPELL_AURA_OVERRIDE_CLASS_SCRIPTS (Unit.cpp:6613-6643, 6797-6876)
+	auraModDamageDoneVersus          uint32 = 168 // SPELL_AURA_MOD_DAMAGE_DONE_VERSUS (Unit.cpp:6783)
+	auraModFlatSpellDamageVersus     uint32 = 180 // SPELL_AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS (Unit.cpp:6646-6647)
+	auraModDamageDoneVersusAurastate uint32 = 303 // SPELL_AURA_MOD_DAMAGE_DONE_VERSUS_AURASTATE (Unit.cpp:6786-6791)
+)
+
+// spellBonusEntry mirrors SpellBonusEntry (SpellMgr.h:284): one spell_bonus_data
+// row. The ap_bonus/ap_dot_bonus legs need the caster's total attack power, which
+// Go does not model, so only the spellpower coefficients are cached.
+type spellBonusEntry struct {
+	direct float64
+	dot    float64
+}
+
+// spellBonusData mirrors SpellMgr::GetSpellBonusData (SpellMgr.cpp:1888): the
+// spell_bonus_data table is loaded once per server lifetime; a missing table or
+// DB failure degrades to no rows (DBC coefficient path), never an error.
+func (srv *Server) spellBonusData(spellID uint32) (spellBonusEntry, bool) {
+	if srv == nil {
+		return spellBonusEntry{}, false
+	}
+	srv.spellBonusOnce.Do(func() {
+		srv.spellBonus = make(map[uint32]spellBonusEntry)
+		if srv.WorldStore == nil || srv.WorldStore.DB == nil {
+			return
+		}
+		rows, err := srv.WorldStore.DB.Query(`SELECT entry, direct_bonus, dot_bonus FROM spell_bonus_data`)
+		if err != nil {
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id uint32
+			var direct, dot float64
+			if err := rows.Scan(&id, &direct, &dot); err != nil {
+				continue
+			}
+			srv.spellBonus[id] = spellBonusEntry{direct: direct, dot: dot}
+		}
+	})
+	e, ok := srv.spellBonus[spellID]
+	return e, ok
+}
+
+// defaultSpellDamageCoefficient mirrors Unit::CalculateDefaultCoefficient
+// (Unit.cpp:11012) in its cast-time form: C = (Cast Time / 3.5), capped at 1.0,
+// the fallback when the DBC bonus coefficient is negative. The C++ DoT-factor,
+// AoE-penalty and effect-distribution refinements (Unit.cpp:11012-11040) have no
+// Go model — documented gap.
+func (s *session) defaultSpellDamageCoefficient(spell wotlk.Spell) float64 {
+	coeff := 1.5 / 3.5 // instant cast coefficient ~0.4286
+	if spell.CastingTimeIndex > 0 && s.server != nil && s.server.Data != nil {
+		if ct, ok, _ := s.server.Data.SpellCastTime(spell.CastingTimeIndex); ok && ct > 0 {
+			coeff = float64(ct) / 3500.0
+			if coeff > 1.0 {
+				coeff = 1.0
+			}
+		}
+	}
+	return coeff
+}
+
+// spellDoneCoefficient mirrors the coeff selection in Unit::SpellDamageBonusDone
+// (Unit.cpp:6693-6724): the spell_bonus_data direct_bonus/dot_bonus row wins over
+// the DBC EffectBonusCoefficient; a negative value falls back to the default
+// (Cast Time / 3.5) coefficient; the result is scaled by the spellpower
+// coefficient level penalty (Unit.cpp:2386-2392) and the SPELLMOD_BONUS_MULTIPLIER
+// spellmod (Unit.cpp:6718-6723).
+func (s *session) spellDoneCoefficient(spell wotlk.Spell, effIndex int, isDot bool) float64 {
+	coeff := s.spellBonusMultiplier(spell.ID, effIndex, false)
+	if s.server != nil {
+		if bonus, ok := s.server.spellBonusData(spell.ID); ok {
+			c := bonus.direct
+			if isDot {
+				c = bonus.dot
+			}
+			if c < 0 {
+				c = s.defaultSpellDamageCoefficient(spell)
+			}
+			coeff = c
+		}
+	}
+	factor := 1.0
+	if spell.MaxLevel != 0 && s.player != nil && uint32(s.player.Level) >= spell.MaxLevel {
+		factor = math.Max(0, math.Min(1, (22.0+float64(spell.MaxLevel)-float64(s.player.Level))/20.0))
+	}
+	coeff = s.applySpellModFloat(spell, spellModDamageMultiplier, coeff*100) / 100
+	return coeff * factor
+}
+
+// classScriptAura is one live aura effect of the queried type on the caster,
+// carrying the misc value and amount the C++ scripted arms switch on.
+type classScriptAura struct {
+	spellID uint32
+	misc    int32
+	amount  int32
+	eff0    int32 // granting spell's effect-0 amount (Dirty Deeds reads it, Unit.cpp:6872)
+}
+
+// overrideClassScriptAuras returns the caster's live SPELL_AURA_OVERRIDE_CLASS_SCRIPTS
+// effects whose granting spell is affected on spell (AuraEffect::IsAffectedOnSpell),
+// mirroring the scripted-mod scans in SpellDamageBonusDone (Unit.cpp:6613-6643) and
+// SpellDamagePctDone (Unit.cpp:6797-6876). The totem-owner redirect (Unit.cpp:6606-6610)
+// has no Go model — totem pulses cast through the owner's session.
+func (s *session) overrideClassScriptAuras(spell wotlk.Spell) []classScriptAura {
+	var out []classScriptAura
+	if s.server == nil || s.server.Data == nil {
+		return nil
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || auraSpell.SpellFamilyName == 0 {
+			continue
+		}
+		if !spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, auraSpell.SpellFamilyFlags, spell) {
+			continue
+		}
+		eff0 := int32(0)
+		if len(auraSpell.Effects) > 0 {
+			eff0 = auraSpell.Effects[0].BasePoints + 1
+		}
+		for index, eff := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || index >= 8 || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellEffectIsAuraEffect(eff) || eff.Aura != auraOverrideClassScripts {
+				continue
+			}
+			out = append(out, classScriptAura{spellID: aura.SpellID, misc: eff.MiscValue, amount: aura.Amounts[index], eff0: eff0})
+		}
+	}
+	return out
+}
+
+// auraTypeMiscAmounts returns live (misc, amount) pairs for every effect of the
+// given aura type on the caster, for the arms that switch on misc values.
+func (s *session) auraTypeMiscAmounts(auraType uint32) []classScriptAura {
+	var out []classScriptAura
+	if s.server == nil || s.server.Data == nil {
+		return nil
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, eff := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || index >= 8 || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellEffectIsAuraEffect(eff) || eff.Aura != auraType {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount == 0 {
+				amount = eff.BasePoints + 1
+			}
+			out = append(out, classScriptAura{spellID: aura.SpellID, misc: eff.MiscValue, amount: amount})
+		}
+	}
+	return out
+}
+
+// auraEffectAmount returns the live amount of the given effect of an active aura
+// spell on the caster (Unit::GetAuraEffect analog), for the family scripted arms
+// that read glyph/talent auras by spell ID.
+func (s *session) auraEffectAmount(spellID uint32, effIndex int) (int32, bool) {
+	if s.server == nil || s.server.Data == nil || effIndex < 0 {
+		return 0, false
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.SpellID != spellID {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(spellID)
+		if err != nil || !found || effIndex >= len(aura.Amounts) || effIndex >= len(auraSpell.Effects) {
+			continue
+		}
+		if aura.EffectMask&(1<<uint(effIndex)) == 0 {
+			continue
+		}
+		amount := aura.Amounts[effIndex]
+		if amount == 0 {
+			amount = auraSpell.Effects[effIndex].BasePoints + 1
+		}
+		return amount, true
+	}
+	return 0, false
+}
+
+// dummyAuraAmountByIcon mirrors Unit::GetDummyAuraEffect(family, icon, 0): the
+// first live DUMMY aura on the caster whose spell matches the family and icon.
+func (s *session) dummyAuraAmountByIcon(family, iconID uint32) (int32, bool) {
+	if s.server == nil || s.server.Data == nil {
+		return 0, false
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || auraSpell.SpellFamilyName != family || auraSpell.SpellIconID != iconID {
+			continue
+		}
+		for index, eff := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || index >= 8 || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellEffectIsAuraEffect(eff) || eff.Aura != spellAuraDummy {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount == 0 {
+				amount = eff.BasePoints + 1
+			}
+			return amount, true
+		}
+	}
+	return 0, false
+}
+
+// victimDamageTakenFlat mirrors the DoneAdvertisedBenefit arm at Unit.cpp:6682-6683:
+// the victim's SPELL_AURA_MOD_DAMAGE_TAKEN (Amplify/Dampen Magic) auras modify the
+// caster's advertised spellpower benefit, per school mask.
+func (s *session) victimDamageTakenFlat(spell wotlk.Spell, targetGUID uint64, target combatTarget) int32 {
+	var total int32
+	if spell.SchoolMask == 0 || s.server == nil {
+		return 0
+	}
+	if vs := s.server.findSessionByGUID(targetGUID); vs != nil && vs.player != nil {
+		for _, amt := range vs.auraTypeModifiersByMiscMask(auraModDamageTaken, spell.SchoolMask) {
+			total += amt
+		}
+		return total
+	}
+	if target.GUID != 0 {
+		for _, amt := range creatureAuraModifiersByMiscMask(s.server, creatureAuraKeyForTarget(target), auraModDamageTaken, spell.SchoolMask) {
+			total += amt
+		}
+	}
+	return total
+}
+
+// spellDamageDoneFlat mirrors the DoneTotal accumulation in Unit::SpellDamageBonusDone
+// (Unit.cpp:6612-6728): the spell-power advertised benefit (scaled by the done
+// coefficient) plus the flat OVERRIDE_CLASS_SCRIPTS scripted arms and
+// MOD_FLAT_SPELL_DAMAGE_VERSUS. The Impurity AP-coefficient arm (Unit.cpp:6650-6678)
+// needs the caster's total attack power, which Go does not model — documented gap.
+func (s *session) spellDamageDoneFlat(ctx context.Context, spell wotlk.Spell, targetGUID uint64, target combatTarget, effIndex int, isDot bool) int32 {
+	advertised := int32(0)
+	if s.player != nil {
+		advertised = int32(s.player.SpellPower)
+	}
+	advertised += s.victimDamageTakenFlat(spell, targetGUID, target)
+	flat := int32(0)
+	if advertised != 0 {
+		// C++ int32(DoneAdvertisedBenefit * coeff * factorMod) truncates (Unit.cpp:6727).
+		flat += int32(float64(advertised) * s.spellDoneCoefficient(spell, effIndex, isDot))
+	}
+	// Done scripted mod (Unit.cpp:6613-6643): flat OVERRIDE_CLASS_SCRIPTS arms.
+	for _, ae := range s.overrideClassScriptAuras(spell) {
+		switch ae.misc {
+		case 4418, 4554, 4555, 5142, 5147, 5148, 6008, 8627: // Increased Shock/Lightning/Moonfire/Consecration damage, Totem of Hex etc.
+			flat += ae.amount
+		}
+	}
+	// MOD_FLAT_SPELL_DAMAGE_VERSUS (Unit.cpp:6646-6647), skipped under LIMIT_PCT_DAMAGE_MODS.
+	if spell.AttributesEx6&spellAttr6LimitPctDamageMods == 0 {
+		if typMask, ok := s.targetCreatureTypeMask(ctx, targetGUID); ok && typMask != 0 {
+			for _, amt := range s.auraTypeModifiersByMiscMask(auraModFlatSpellDamageVersus, typMask) {
+				flat += amt
+			}
+		}
+	}
+	return flat
+}
+
+// spellDamagePctDone mirrors Unit::SpellDamagePctDone (Unit.cpp:6738-7050): the
+// DoneTotalMod percent multiplier over school auras, versus auras, versus-aurastate
+// auras and the OVERRIDE_CLASS_SCRIPTS / family scripted arms. Spells with
+// SPELL_ATTR6_LIMIT_PCT_DAMAGE_MODS skip it entirely (Unit.cpp:6747-6750).
+func (s *session) spellDamagePctDone(ctx context.Context, spell wotlk.Spell, targetGUID uint64, target combatTarget) float64 {
+	if spell.AttributesEx6&spellAttr6LimitPctDamageMods != 0 {
+		return 1.0
+	}
+	mod := 1.0
+	// MOD_DAMAGE_PERCENT_DONE (Unit.cpp:6771-6779): C++ reads the player's baked
+	// PLAYER_FIELD_MOD_DAMAGE_DONE_PCT for players; Go has no baked field, so the
+	// live aura fold (the field's only source) serves both unit kinds.
+	for _, amt := range s.auraTypeModifiersByMiscMask(auraModDamagePercentDone, spell.SchoolMask) {
+		mod *= 1 + float64(amt)/100
+	}
+	// MOD_DAMAGE_DONE_VERSUS (Unit.cpp:6783).
+	if typMask, ok := s.targetCreatureTypeMask(ctx, targetGUID); ok && typMask != 0 {
+		for _, amt := range s.auraTypeModifiersByMiscMask(auraModDamageDoneVersus, typMask) {
+			mod *= 1 + float64(amt)/100
+		}
+	}
+	// MOD_DAMAGE_DONE_VERSUS_AURASTATE (Unit.cpp:6786-6791): each 303 effect whose
+	// misc aura state is active on the victim contributes its percent.
+	for _, ae := range s.auraTypeMiscAmounts(auraModDamageDoneVersusAurastate) {
+		if s.targetHasAuraState(ctx, targetGUID, uint32(ae.misc), spell) {
+			mod *= 1 + float64(ae.amount)/100
+		}
+	}
+	return s.spellDamagePctClassScripts(ctx, spell, targetGUID, target, mod)
+}
+
+// spellDamagePctClassScripts mirrors the scripted percent arms of
+// Unit::SpellDamagePctDone: the OVERRIDE_CLASS_SCRIPTS table (Unit.cpp:6797-6876)
+// and the per-family custom damage (Unit.cpp:6879-7047). Residuals with no Go
+// model stay documented: Soul Siphon (victim affliction-dot enumeration),
+// Torment the Weak (victim snare-mechanic query), Judgement of Vengeance (victim
+// aura stacks by caster), Shadow Bite (pet-only), Glacier Rot (victim diseases by
+// caster), Smite/Steady Shot glyphs (victim aura caster-match).
+func (s *session) spellDamagePctClassScripts(ctx context.Context, spell wotlk.Spell, targetGUID uint64, target combatTarget, mod float64) float64 {
+	addPct := func(amt int32) { mod *= 1 + float64(amt)/100 } // AddPct fold (Unit.cpp:6807)
+	victimHealthless35 := s.targetHasAuraState(ctx, targetGUID, auraStateHealthless35Pct, spell)
+	for _, ae := range s.overrideClassScriptAuras(spell) {
+		switch ae.misc {
+		case 4920, 4919, 6917, 6926, 6928: // Molten Fury / Death's Embrace (victim side)
+			if victimHealthless35 {
+				addPct(ae.amount)
+			}
+		case 6916, 6925, 6927: // Death's Embrace (caster side)
+			if s.hasAuraState(auraStateHealthless20Pct, spell) {
+				addPct(ae.amount)
+			}
+		case 5481: // Starfire Bonus: Moonfire on the victim
+			if s.targetHasFamilyAuraEffect(ctx, targetGUID, spellAuraPeriodicDamage, spellFamilyDruid, 0x200002) {
+				addPct(ae.amount)
+			}
+		case 7277: // Tundra Stalker / Merciless Combat
+			iconID := uint32(0)
+			if asp, found, err := s.server.Data.Spell(ae.spellID); err == nil && found {
+				iconID = asp.SpellIconID
+			}
+			if iconID == 2656 { // Merciless Combat
+				if victimHealthless35 {
+					addPct(ae.amount)
+				}
+			} else if s.targetHasAura(ctx, targetGUID, 55095) { // Tundra Stalker: Frost Fever
+				addPct(ae.amount)
+			}
+		case 7377: // Twisted Faith: Shadow Word: Pain on the victim
+			if s.targetHasFamilyAuraEffect(ctx, targetGUID, spellAuraPeriodicDamage, spellFamilyPriest, 0x8000) {
+				addPct(ae.amount)
+			}
+		case 7598, 7599, 7600, 7601, 7602: // Marked for Death: Hunter's Mark
+			if s.targetHasFamilyAuraEffect(ctx, targetGUID, spellAuraModStalked, spellFamilyHunter, 0x400) {
+				addPct(ae.amount)
+			}
+		case 6427, 6428, 6579, 6580: // Dirty Deeds: effect 0 carries the expected value in negative state
+			if victimHealthless35 {
+				addPct(-ae.eff0)
+			}
+		}
+	}
+	switch spell.SpellFamilyName {
+	case spellFamilyMage:
+		if spell.SpellIconID == 186 { // Ice Lance
+			if s.targetHasAuraState(ctx, targetGUID, auraStateFrozen, spell) {
+				// Glyph of Ice Lance (56377): x4 when the victim out-levels the caster.
+				if s.player != nil && s.hasAura(56377) && target.GUID != 0 && target.Level > s.player.Level {
+					mod *= 4.0
+				} else {
+					mod *= 3.0
+				}
+			}
+		}
+	case spellFamilyPriest:
+		if spell.SpellFamilyFlags[0]&0x800000 != 0 { // Mind Flay
+			if amt, ok := s.auraEffectAmount(55687, 0); ok && // Glyph of Shadow Word: Pain
+				s.targetHasFamilyAuraEffect(ctx, targetGUID, spellAuraPeriodicDamage, spellFamilyPriest, 0x8000) {
+				addPct(amt)
+			}
+			if ae, ok2 := s.classScriptAuraByMisc(spell, 2848); ok2 && // Twisted Faith, Mind Flay part
+				s.targetHasFamilyAuraEffect(ctx, targetGUID, spellAuraPeriodicDamage, spellFamilyPriest, 0x8000) {
+				addPct(ae.amount)
+			}
+		} else if spell.SpellFamilyFlags[1]&0x2 != 0 { // Shadow Word: Death
+			if amt, ok := s.auraEffectAmount(55682, 1); ok && victimHealthless35 { // Glyph of Shadow Word: Death
+				addPct(amt)
+			}
+		}
+	case spellFamilyDruid:
+		if spell.SpellFamilyFlags[0]&0x100 != 0 { // Thorns
+			if amt, ok := s.auraEffectAmount(16836, 0); ok { // Brambles
+				addPct(amt)
+			}
+		}
+	case spellFamilyWarlock:
+		if spell.SpellFamilyFlags[1]&0x20040 != 0 { // Fire and Brimstone
+			if s.targetHasAuraState(ctx, targetGUID, auraStateConflagrate, spell) {
+				if amt, ok := s.dummyAuraAmountByIcon(spellFamilyWarlock, 3173); ok {
+					addPct(amt)
+				}
+			}
+		}
+		if spell.SpellFamilyFlags[0]&0x4000 != 0 && target.GUID != 0 && target.MaxHealth > 0 && // Drain Soul
+			float64(target.Health)/float64(target.MaxHealth) <= 0.25 {
+			mod *= 4.0
+		}
+	case spellFamilyDeathKnight:
+		if spell.SpellFamilyFlags[0]&0x2 != 0 { // Icy Touch
+			if amt, ok := s.dummyAuraAmountByIcon(spellFamilyDeathKnight, 2721); ok { // Improved Icy Touch
+				addPct(amt)
+			}
+		}
+	}
+	return mod
+}
+
+// classScriptAuraByMisc returns the caster's live OVERRIDE_CLASS_SCRIPTS effect with
+// the given misc value affecting spell, for the arms that look one entry up by
+// misc (e.g. Twisted Faith's Mind Flay part, Unit.cpp:6924).
+func (s *session) classScriptAuraByMisc(spell wotlk.Spell, misc int32) (classScriptAura, bool) {
+	for _, ae := range s.overrideClassScriptAuras(spell) {
+		if ae.misc == misc {
+			return ae, true
+		}
+	}
+	return classScriptAura{}, false
+}
+
+// spellDamageBonusDone mirrors Unit::SpellDamageBonusDone (Unit.cpp:6598-6736):
+// tmpDamage = (pdamage + DoneTotal) * DoneTotalMod, then the SPELLMOD_DAMAGE /
+// SPELLMOD_DOT spellmod applies to the total (Unit.cpp:6730-6733). Spells with
+// SPELL_ATTR3_NO_DONE_BONUS skip the whole leg (Unit.cpp:6603-6604). isDot selects
+// the DOT coefficient/spellmod like C++'s DamageEffectType. The DmgClass NONE
+// early-out (Unit.cpp:6705-6707) has no Go model — wotlk.Spell carries no DmgClass.
+func (s *session) spellDamageBonusDone(ctx context.Context, spell wotlk.Spell, spellKnown bool, damage uint32, targetGUID uint64, effIndex int, isDot bool) uint32 {
+	if !spellKnown || spell.AttributesEx3&spellAttr3NoDoneBonus != 0 {
+		return damage
+	}
+	target, _ := s.getCombatTarget(ctx, targetGUID)
+	flat := s.spellDamageDoneFlat(ctx, spell, targetGUID, target, effIndex, isDot)
+	pct := s.spellDamagePctDone(ctx, spell, targetGUID, target)
+	tmp := float64(int32(damage)+flat) * pct
+	if tmp < 0 {
+		tmp = 0
+	}
+	out := int32(tmp)
+	op := uint8(spellModDamage)
+	if isDot {
+		op = spellModDot
+	}
+	out = s.applySpellMod(spell, op, out)
+	if out < 0 {
+		out = 0
+	}
+	return uint32(out)
+}
+
 func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spellID, damage uint32, effIndex int) uint32 {
 	return s.executeSpellDamageWithFlags(ctx, targetGUID, spellID, damage, effIndex, false)
 }
@@ -10140,17 +10605,25 @@ func (s *session) executeSpellDamageWithFlags(ctx context.Context, targetGUID ui
 		return 0
 	}
 
-	// Apply Spell Power bonus (TrinityCore Unit::SpellDamageBonusDone)
-	if s.player != nil && s.player.SpellPower > 0 {
-		damage += uint32(math.Round(float64(s.player.SpellPower) * s.spellBonusMultiplier(spellID, effIndex, false)))
+	// Resolve the spell once for the done leg and the school mask below.
+	var spell wotlk.Spell
+	spellKnown := false
+	if s.server != nil && s.server.Data != nil {
+		if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			spell, spellKnown = sp, true
+		}
 	}
+
+	// Unit::SpellDamageBonusDone (Unit.cpp:6598-6736): the spell-power flat
+	// benefit, the percent-done multiplier (Unit::SpellDamagePctDone,
+	// Unit.cpp:6738-7050) and the SPELLMOD_DAMAGE/SPELLMOD_DOT spellmod on the
+	// final total.
+	damage = s.spellDamageBonusDone(ctx, spell, spellKnown, damage, targetGUID, effIndex, false)
 
 	// Use the school mask from the Spell DBC (field 17). Fallback to physical (1).
 	schoolMask := uint8(1)
-	if s.server != nil && s.server.Data != nil {
-		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found && spell.SchoolMask != 0 {
-			schoolMask = uint8(spell.SchoolMask)
-		}
+	if spellKnown && spell.SchoolMask != 0 {
+		schoolMask = uint8(spell.SchoolMask)
 	}
 
 	if procDamage {
