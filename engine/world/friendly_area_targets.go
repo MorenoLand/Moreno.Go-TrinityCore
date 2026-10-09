@@ -113,8 +113,7 @@ func (s *session) spellFriendlyAreaTargets(ctx context.Context, spell wotlk.Spel
 	// same split per isHarmfulSpell).
 	var maxRange float32
 	if rangeEntry, ok, err := s.server.Data.SpellRange(spell.RangeIndex); err == nil && ok {
-		_, mr := spellRangeBounds(spell, rangeEntry)
-		maxRange = float32(mr)
+		maxRange = float32(spellDBCMaxRange(spell, rangeEntry))
 	}
 	for _, eff := range spell.Effects {
 		if eff.Effect == 0 {

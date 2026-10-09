@@ -467,8 +467,7 @@ func (s *session) spellFriendlyConeTargets(ctx context.Context, spell wotlk.Spel
 	// Spell.cpp:1194-1196: zero-radius fallback to the spell's max range.
 	var maxRange float32
 	if rangeEntry, ok, err := s.server.Data.SpellRange(spell.RangeIndex); err == nil && ok {
-		_, mr := spellRangeBounds(spell, rangeEntry)
-		maxRange = float32(mr)
+		maxRange = float32(spellDBCMaxRange(spell, rangeEntry))
 	}
 	for _, eff := range spell.Effects {
 		if eff.Effect == 0 {
@@ -586,8 +585,7 @@ func (s *session) spellFriendlyRefCenteredAreaTargets(ctx context.Context, spell
 	// Spell.cpp:1249-1251: zero-radius fallback to the spell's max range.
 	var maxRange float32
 	if rangeEntry, ok, err := s.server.Data.SpellRange(spell.RangeIndex); err == nil && ok {
-		_, mr := spellRangeBounds(spell, rangeEntry)
-		maxRange = float32(mr)
+		maxRange = float32(spellDBCMaxRange(spell, rangeEntry))
 	}
 	for _, eff := range spell.Effects {
 		if eff.Effect == 0 {

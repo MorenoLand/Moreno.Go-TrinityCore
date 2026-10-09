@@ -50,6 +50,8 @@ const (
 	spellAttr3NoDoneBonus                  uint32 = 0x20000000 // SPELL_ATTR3_NO_DONE_BONUS (SharedDefines.h:552) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 	spellAttr3TreatAsPeriodic              uint32 = 0x02000000 // SPELL_ATTR3_TREAT_AS_PERIODIC (SharedDefines.h:548) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 	spellAttr3StackForDiffCasters          uint32 = 0x00000080 // SPELL_ATTR3_STACK_FOR_DIFF_CASTERS (SharedDefines.h:530) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
+	spellRangeMelee                        uint32 = 1          // SPELL_RANGE_MELEE (Spell.h:112)
+	spellRangeRanged                       uint32 = 2          // SPELL_RANGE_RANGED (Spell.h:113)
 	spellAttr7NoPushbackOnDamage           uint32 = 0x00000040 // SPELL_ATTR7_NO_PUSHBACK_ON_DAMAGE (SharedDefines.h:677) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr7DispelCharges                uint32 = 0x00000400 // SPELL_ATTR7_DISPEL_CHARGES (SharedDefines.h:681) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr7CanRestoreSecondaryPower     uint32 = 0x00010000 // SPELL_ATTR7_CAN_RESTORE_SECONDARY_POWER (SharedDefines.h:687) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
@@ -825,13 +827,12 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 	destinationCenter := false
 	// Spell.cpp:1194-1196 / 1249-1251: when an effect has no radius entry
 	// (CalcRadius == 0), the area radius falls back to the spell's max range
-	// (hostile/friendly per IsPositiveEffect — Go's spellRangeBounds mirrors
-	// the same split per isHarmfulSpell; the SPELLMOD_RANGE arm of
-	// GetMaxRange has no Go spell-mod model, like SPELLMOD_RADIUS).
+	// (hostile/friendly per IsPositiveEffect — spellDBCMaxRange mirrors the
+	// same split per isHarmfulSpell; this is GetMaxRange, not GetMinMaxRange,
+	// so no reach/REQ_AMMO/spellmod terms apply).
 	var maxRange float32
 	if rangeEntry, ok, err := s.server.Data.SpellRange(spell.RangeIndex); err == nil && ok {
-		_, mr := spellRangeBounds(spell, rangeEntry)
-		maxRange = float32(mr)
+		maxRange = float32(spellDBCMaxRange(spell, rangeEntry))
 	}
 	for _, eff := range spell.Effects {
 		areaTargetA := isAreaEnemyTargetType(eff.ImplicitTargetA) || (eff.Effect == 27 && eff.ImplicitTargetA == 18)
@@ -2327,7 +2328,10 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 97), true) // SPELL_FAILED_OUT_OF_RANGE = 97
 					return true
 				}
-				if dist > 35.0 {
+				// Spell::GetMinMaxRange REQ_AMMO leg (Spell.cpp:6628-6630):
+				// the max scales with the equipped ranged weapon's
+				// RangedModRange.
+				if dist > 35.0*s.rangedWeaponRangeMod(ctx, spell) {
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 97), true) // SPELL_FAILED_OUT_OF_RANGE = 97
 					return true
 				}
@@ -2336,25 +2340,22 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 					return true
 				}
 			} else if spellID == 5019 { // Shoot wand (Range 4)
-				if dist > 30.0 {
+				// Spell::GetMinMaxRange REQ_AMMO leg (Spell.cpp:6628-6630).
+				if dist > 30.0*s.rangedWeaponRangeMod(ctx, spell) {
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 97), true) // SPELL_FAILED_OUT_OF_RANGE = 97
 					return true
 				}
 			} else if rangeEntry, ok, _ := s.server.Data.SpellRange(spell.RangeIndex); ok {
-				// DBC-driven range check (TC Spell::CheckRange)
-				harmful := isHarmfulSpell(spell)
-				maxRange := rangeEntry.MaxFriendly
-				minRange := rangeEntry.MinFriendly
-				if harmful {
-					maxRange = rangeEntry.MaxHostile
-					minRange = rangeEntry.MinHostile
-				}
-				if maxRange > 0 && dist > float64(maxRange) {
+				// DBC-driven range check (TC Spell::CheckRange, strict=true):
+				// the GetMinMaxRange reach / REQ_AMMO / spellmod terms apply
+				// here exactly as at completion.
+				minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, true, float64(tgt.CombatReach), true, false, false, uint16(targetGUID>>48) == 0)
+				if maxRange > 0 && dist > maxRange {
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 97), true) // SPELL_FAILED_OUT_OF_RANGE = 97
 					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "out of range", "dist", dist, "max", maxRange)
 					return true
 				}
-				if minRange > 0 && dist < float64(minRange) {
+				if minRange > 0 && dist < minRange {
 					// Spell::CheckRange (Spell.cpp:6567-6569): min-range
 					// violations fail with SPELL_FAILED_OUT_OF_RANGE, not
 					// TOO_CLOSE — this C++ tree's engine never emits
@@ -2364,6 +2365,15 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "too close", "dist", dist, "min", minRange)
 					return true
 				}
+			}
+
+			// Gameobject-target leg (Spell::CheckRange, Spell.cpp:6565-6569):
+			// sits between the unit-target and dest legs in C++ order. A GO
+			// target outside interact distance fails SPELL_FAILED_OUT_OF_RANGE.
+			if failCode := s.validateSpellGORange(ctx, spell, target); failCode != 0 {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failCode), true)
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "go out of range", "code", failCode)
+				return true
 			}
 
 			// Positional and facing checks (TrinityCore Spell::CheckCast, Spell.cpp:5200-5300)
@@ -2438,7 +2448,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// CheckCast(true) recheck (Spell::cast, Spell.cpp:3100), so no tolerance
 	// applies. Implicit dest targets (filled by SetTargetMap) have no Go
 	// model at cast time — only the explicit wire dest is checked.
-	if failCode := s.validateSpellDestRange(spell, target, true); failCode != 0 {
+	if failCode := s.validateSpellDestRange(ctx, spell, target, true); failCode != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failCode), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "dest out of range", "code", failCode)
 		return true
@@ -2812,25 +2822,107 @@ func (s *session) autoShotNonBlockingCast(spellID uint32) bool {
 	return found && cur.AttributesEx1&spellAttr2NotResetAutoActions != 0
 }
 
-// spellRangeBounds mirrors the friendly/hostile range-entry selection inside
-// Spell::GetMinMaxRange (Spell.cpp:6595-6612): harmful spells use the hostile
-// min/max, others the friendly pair. This is the DBC-only core; the combat
-// reach / moving rangeMod terms of GetMinMaxRange remain unbridged.
-func spellRangeBounds(spell wotlk.Spell, rangeEntry wotlk.SpellRangeEntry) (minRange, maxRange float64) {
+// spellDBCMaxRange mirrors the SpellInfo::GetMaxRange DBC read (the
+// friendly/hostile split only). The area-target zero-radius fallbacks
+// (Spell.cpp:1194-1196, 1249-1251) read GetMaxRange, not GetMinMaxRange,
+// so no combat-reach, REQ_AMMO, or spellmod terms apply there.
+func spellDBCMaxRange(spell wotlk.Spell, rangeEntry wotlk.SpellRangeEntry) float64 {
+	if isHarmfulSpell(spell) {
+		return float64(rangeEntry.MaxHostile)
+	}
+	return float64(rangeEntry.MaxFriendly)
+}
+
+// spellRangeBounds mirrors Spell::GetMinMaxRange (Spell.cpp:6584-6630): the
+// friendly/hostile DBC pair plus the combat-reach, moving-target, REQ_AMMO
+// ranged-weapon, and SPELLMOD_RANGE rangeMod terms. strict selects the
+// CheckCast(true) path — a next-melee-swing spell returns {0, 100}
+// (Spell.cpp:6588-6589), disabling the range model. targetReach is the unit
+// target's combat reach; hasCorpseTarget covers the C++ corpse-target arm
+// (rangeMod = 2x caster reach, Spell.cpp:6616). The both-moving +8/3 term
+// (Spell.cpp:6622-6625) drops C++'s !IsWalking() gates — Go models no
+// walk/run movement state, so the term applies slightly more often than in
+// C++. The REQ_AMMO multiplier reads the equipped ranged weapon raw
+// (Spell.cpp:6630, no zero guard in C++). NPCBOT's
+// ApplyCreatureSpellRangeMods has no Go creature-cast counterpart — this is
+// the player session path only.
+func (s *session) spellRangeBounds(ctx context.Context, spell wotlk.Spell, rangeEntry wotlk.SpellRangeEntry, strict bool, targetReach float64, hasUnitTarget, hasCorpseTarget, targetMoving, targetIsPlayer bool) (minRange, maxRange float64) {
+	if strict && isNextMeleeSwingSpell(spell) {
+		return 0, 100
+	}
 	maxRange = float64(rangeEntry.MaxFriendly)
 	minRange = float64(rangeEntry.MinFriendly)
 	if isHarmfulSpell(spell) {
 		maxRange = float64(rangeEntry.MaxHostile)
 		minRange = float64(rangeEntry.MinHostile)
 	}
+	casterReach := 1.5
+	if s != nil && s.player != nil && s.player.CombatReach > 0 {
+		casterReach = float64(s.player.CombatReach)
+	}
+	effTargetReach := targetReach
+	if !hasUnitTarget {
+		// Spell.cpp:6598/6607: "when the target is not a unit, take the
+		// caster's combat reach as the target's combat reach."
+		effTargetReach = casterReach
+	}
+	meleeRange := calcMeleeRange(float32(casterReach), float32(effTargetReach))
+	var rangeMod float64
+	if rangeEntry.Flags&spellRangeMelee != 0 {
+		// Spell.cpp:6594-6600: melee range entries ignore the DBC pair;
+		// the reach term IS the max range.
+		rangeMod = meleeRange
+	} else {
+		if rangeEntry.Flags&spellRangeRanged != 0 {
+			// Spell.cpp:6603-6609: hunter-range entries add the melee
+			// range to the DBC min.
+			minRange += meleeRange
+		}
+		if hasUnitTarget || hasCorpseTarget {
+			tr := targetReach
+			if !hasUnitTarget {
+				tr = casterReach
+			}
+			rangeMod = casterReach + tr
+			if minRange > 0 && rangeEntry.Flags&spellRangeRanged == 0 {
+				minRange += rangeMod
+			}
+		}
+	}
+	if hasUnitTarget && s != nil && s.isMoving && targetMoving &&
+		(rangeEntry.Flags&spellRangeMelee != 0 || targetIsPlayer) {
+		rangeMod += 8.0 / 3.0
+	}
+	maxRange *= s.rangedWeaponRangeMod(ctx, spell)
+	maxRange = s.applySpellModFloat(spell, spellModRange, maxRange)
+	maxRange += rangeMod
 	return minRange, maxRange
+}
+
+// rangedWeaponRangeMod mirrors the SPELL_ATTR0_REQ_AMMO leg of
+// Spell::GetMinMaxRange (Spell.cpp:6628-6630): for player casters the max
+// range scales by the equipped ranged weapon's RangedModRange * 0.01
+// (Player::GetWeaponForAttack(RANGED_ATTACK, true)). Returns 1.0 when the
+// spell needs no ammo or no usable ranged weapon is equipped — the
+// equippedWeaponInstance lookup already applies the Item::IsBroken gate.
+// The C++ multiply is raw (no zero guard); this port matches.
+func (s *session) rangedWeaponRangeMod(ctx context.Context, spell wotlk.Spell) float64 {
+	if spell.Attributes&spellAttr0ReqAmmo == 0 {
+		return 1.0
+	}
+	if _, entry := s.equippedWeaponInstance(ctx, equipSlotRanged); entry != 0 {
+		if info, ok := s.server.getItemStoreTemplateInfo(ctx, entry); ok {
+			return float64(info.RangedModRange) * 0.01
+		}
+	}
+	return 1.0
 }
 
 // spellRangeTolerance mirrors the CheckRange non-strict slack
 // (Spell.cpp:6543-6546): 10% of max range, capped at MAX_SPELL_RANGE_TOLERANCE
 // (3.0, Spell.h:69), skipped for melee range entries and for strict checks.
 func spellRangeTolerance(rangeFlags uint32, maxRange float64, strict bool) float64 {
-	if strict || rangeFlags == 1 /* SPELL_RANGE_MELEE (Spell.h:112) */ {
+	if strict || rangeFlags == spellRangeMelee {
 		return 0
 	}
 	tol := maxRange * 0.1
@@ -2883,13 +2975,15 @@ func (s *session) validateSpellRange(ctx context.Context, spellID uint32, spell 
 			// emitter is the Death Grip script leg, spell_dk.cpp:2760).
 			return 97 // SPELL_FAILED_OUT_OF_RANGE
 		}
-		if dist > 35.0 {
+		// Spell::GetMinMaxRange REQ_AMMO leg (Spell.cpp:6628-6630).
+		if dist > 35.0*s.rangedWeaponRangeMod(ctx, spell) {
 			return 97 // SPELL_FAILED_OUT_OF_RANGE
 		}
 		return 0
 	}
 	if spellID == 5019 { // Shoot
-		if dist > 30.0 {
+		// Spell::GetMinMaxRange REQ_AMMO leg (Spell.cpp:6628-6630).
+		if dist > 30.0*s.rangedWeaponRangeMod(ctx, spell) {
 			return 97 // SPELL_FAILED_OUT_OF_RANGE
 		}
 		return 0
@@ -2898,7 +2992,7 @@ func (s *session) validateSpellRange(ctx context.Context, spellID uint32, spell 
 	if !ok {
 		return 0
 	}
-	minRange, maxRange := spellRangeBounds(spell, rangeEntry)
+	minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, false, float64(tgt.CombatReach), true, false, false, uint16(targetGUID>>48) == 0)
 	// Spell::CheckRange (Spell.cpp:6543-6546): the non-strict completion
 	// recheck allows 10% (capped at 3.0) beyond max range for non-melee
 	// range entries.
@@ -2926,7 +3020,7 @@ func (s *session) validateSpellRange(ctx context.Context, spellID uint32, spell 
 // targets filled by SetTargetMap have no Go model at cast time — only the
 // explicit wire dest is checked. Returns 0 on success or a SPELL_FAILED_*
 // code.
-func (s *session) validateSpellDestRange(spell wotlk.Spell, target protocol.SpellTargetData, strict bool) uint8 {
+func (s *session) validateSpellDestRange(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData, strict bool) uint8 {
 	if target.Flags&protocol.SpellTargetFlagDestLocation == 0 || spell.Speed != 0 {
 		return 0
 	}
@@ -2940,13 +3034,87 @@ func (s *session) validateSpellDestRange(spell wotlk.Spell, target protocol.Spel
 	if !ok {
 		return 0
 	}
-	minRange, maxRange := spellRangeBounds(spell, rangeEntry)
+	minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, strict, 0, false, false, false, false)
 	maxRange += spellRangeTolerance(rangeEntry.Flags, maxRange, strict)
 	dist := distance3D(s.player.X, s.player.Y, s.player.Z, target.Destination.X, target.Destination.Y, target.Destination.Z)
 	if maxRange > 0 && dist > maxRange {
 		return 97 // SPELL_FAILED_OUT_OF_RANGE
 	}
 	if minRange > 0 && dist < minRange {
+		return 97 // SPELL_FAILED_OUT_OF_RANGE
+	}
+	return 0
+}
+
+// goInteractDistance mirrors GameObject::GetInteractionDistance
+// (GameObject.cpp:2639-2675): the per-type distance at which a player may
+// interact with a gameobject. The mailbox/guild-bank 10.0 values are the
+// C++ non-blizzlike overrides (blizzlike 5.0); the fishing-hole value is
+// 20.0 + CONTACT_DISTANCE (0.5, ObjectDefines.h:23).
+func goInteractDistance(goType uint8) float64 {
+	switch goType {
+	case GameObjectTypeAreaDamage:
+		return 0.0
+	case GameObjectTypeQuestGiver, GameObjectTypeText, GameObjectTypeFlagStand,
+		GameObjectTypeFlagDrop, GameObjectTypeMiniGame:
+		return 5.5555553
+	case GameObjectTypeBinder:
+		return 10.0
+	case GameObjectTypeChair, GameObjectTypeBarberChair:
+		return 3.0
+	case GameObjectTypeFishingNode:
+		return 100.0
+	case GameObjectTypeFishingHole:
+		return 20.5
+	case GameObjectTypeCamera, GameObjectTypeMapObject, GameObjectTypeDungeonDifficulty,
+		GameObjectTypeDestructibleBuilding, GameObjectTypeDoor:
+		return 5.0
+	case GameObjectTypeGuildBank, GameObjectTypeMailbox:
+		return 10.0
+	default:
+		return 5.0 // INTERACTION_DISTANCE (ObjectDefines.h:24)
+	}
+}
+
+// validateSpellGORange mirrors the gameobject-target leg of
+// Spell::CheckRange (Spell.cpp:6565-6569) via
+// GameObject::IsAtInteractDistance (GameObject.cpp:2720-2735). A GO target
+// outside range fails SPELL_FAILED_OUT_OF_RANGE (97); no GO target is a
+// pass. Spell-focus GOs check against the spell's DBC max range; all other
+// types check the per-type interaction distance. Documented no-bridge:
+// the display-scale GeoBox containment arm (GameObject.cpp:2738-2758) — Go
+// has no GameObjectDisplayInfo DBC reader, so the distance fallback covers
+// it — and GetSpellForLock (no lock-spell model), which falls back to the
+// interaction distance exactly like C++ does when no spell is found.
+func (s *session) validateSpellGORange(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+	goGUID := spellGameObjectTargetGUID(target)
+	if goGUID == 0 || s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	entry := uint32(goGUID>>24) & 0xFFFFFF
+	state, err := s.server.getOrLoadGameObjectState(ctx, goGUID, uint32(goGUID), entry, s.player.Map, s.player.InstanceID)
+	if err != nil || state == nil {
+		return 0
+	}
+	dist := distance3D(s.player.X, s.player.Y, s.player.Z, state.X, state.Y, state.Z)
+	if state.Type == GameObjectTypeSpellFocus {
+		rangeEntry, ok, _ := s.server.Data.SpellRange(spell.RangeIndex)
+		if !ok {
+			return 0
+		}
+		// IsAtInteractDistance (GameObject.cpp:2723-2726): spell max range
+		// vs squared distance — the GetMinMaxRange reach terms do not
+		// apply here, C++ reads SpellInfo::GetMaxRange directly.
+		maxRange := float64(rangeEntry.MaxFriendly)
+		if isHarmfulSpell(spell) {
+			maxRange = float64(rangeEntry.MaxHostile)
+		}
+		if dist > maxRange {
+			return 97 // SPELL_FAILED_OUT_OF_RANGE
+		}
+		return 0
+	}
+	if dist > goInteractDistance(state.Type) {
 		return 97 // SPELL_FAILED_OUT_OF_RANGE
 	}
 	return 0
@@ -6191,12 +6359,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
+	// Spell::CheckRange gameobject-target leg (Spell.cpp:6565-6569) on the
+	// strict=false completion recheck (Spell::_cast, Spell.cpp:3349): the
+	// GO target must still be within interact distance when the bar
+	// finishes. No tolerance applies in C++.
+	if failCode := s.validateSpellGORange(ctx, spell, target); failCode != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failCode), true)
+		s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+		s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "go range", "code", failCode)
+		return
+	}
+
 	// Spell::CheckRange dest leg (Spell.cpp:6571-6578) on the strict=false
 	// completion recheck (Spell::_cast, Spell.cpp:3349): the dest point is
 	// revalidated against DBC range with the 10% tolerance, instant casts
 	// skip it. Implicit dest targets have no Go model — only the explicit
 	// wire dest is checked.
-	if failCode := s.validateSpellDestRange(spell, target, false); failCode != 0 {
+	if failCode := s.validateSpellDestRange(ctx, spell, target, false); failCode != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failCode), true)
 		s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
 		s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "dest range", "code", failCode)
@@ -19961,6 +20140,7 @@ type itemStoreTemplateInfo struct {
 	SpellIDs                [5]uint32
 	SpellTriggers           [5]uint32
 	SpellCharges            [5]uint32
+	RangedModRange          float32
 }
 
 // getItemStoreTemplateInfo is a cached item_template lookup for the
@@ -19992,6 +20172,7 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 	var requiredDisenchantSkill int32
 	var socketColors [3]uint32
 	var spellIDs, spellTriggers, spellCharges [5]uint32
+	var rangedModRange float64
 	err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(stackable, 1), COALESCE(ItemLimitCategory, 0),
 		COALESCE(ItemLevel, 0), COALESCE(RequiredLevel, 0),
 		COALESCE(class, 0), COALESCE(subclass, 0), COALESCE(Quality, 0),
@@ -20006,7 +20187,7 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 		COALESCE(spellid_5, 0), COALESCE(spelltrigger_5, 0),
 		COALESCE(spellcharges_1, 0), COALESCE(spellcharges_2, 0),
 		COALESCE(spellcharges_3, 0), COALESCE(spellcharges_4, 0),
-		COALESCE(spellcharges_5, 0)
+		COALESCE(spellcharges_5, 0), COALESCE(RangedModRange, 0)
 		FROM item_template WHERE entry = ? LIMIT 1`, entry).Scan(
 		&stackable, &limitCategory, &itemLevel, &requiredLevel,
 		&class, &subclass, &quality, &requiredDisenchantSkill, &disenchantID,
@@ -20018,7 +20199,7 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 		&spellIDs[3], &spellTriggers[3],
 		&spellIDs[4], &spellTriggers[4],
 		&spellCharges[0], &spellCharges[1], &spellCharges[2],
-		&spellCharges[3], &spellCharges[4])
+		&spellCharges[3], &spellCharges[4], &rangedModRange)
 	if err != nil {
 		return itemStoreTemplateInfo{}, false
 	}
@@ -20028,7 +20209,7 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 		RequiredDisenchantSkill: uint32(requiredDisenchantSkill), DisenchantID: disenchantID,
 		Flags: flags, RequiredSkillRank: requiredSkillRank, MaxDurability: maxDurability,
 		SocketColors: socketColors, SpellIDs: spellIDs, SpellTriggers: spellTriggers,
-		SpellCharges: spellCharges}
+		SpellCharges: spellCharges, RangedModRange: float32(rangedModRange)}
 	s.itemStoreTemplateMu.Lock()
 	if s.itemStoreTemplates == nil {
 		s.itemStoreTemplates = make(map[uint32]itemStoreTemplateInfo)
