@@ -504,6 +504,40 @@ const (
 	playerFieldByteTrackStealthed           uint32 = 0x00000002
 )
 
+// spellStartCastFlags mirrors the castFlags computation in
+// Spell::SendSpellStart (Spell.cpp:4220-4252): base CAST_FLAG_UNKNOWN_2,
+// CAST_FLAG_NO_GCD for rune spells (RuneCostID + POWER_RUNE), and
+// CAST_FLAG_POWER_LEFT_SELF for casters with PowerType != POWER_HEALTH.
+// CAST_FLAG_IMMUNITY needs the caster's school/mechanic immunity masks (Go
+// has no m_spellImmune model — ApplySpellImmune is unbridged) and
+// CAST_FLAG_AMMO needs the 8-byte ammo display block Go cannot build; both
+// stay unbridged. CAST_FLAG_PENDING is vacuous: every START site serves
+// client casts, never triggered ones.
+func spellStartCastFlags(spell wotlk.Spell) uint32 {
+	flags := spellCastFlagStart
+	if spell.RuneCostID != 0 && spell.PowerType == powerRune {
+		flags |= protocol.SpellCastFlagNoGCD
+	}
+	if spell.PowerType != 0xFFFFFFFE /* POWER_HEALTH = -2 in C++ */ {
+		flags |= protocol.SpellCastFlagPowerLeftSelf
+	}
+	return flags
+}
+
+// spellStartRemainingPower mirrors the RemainingPower write in
+// Spell::SendSpellStart (Spell.cpp:4260): the caster's current power when
+// CAST_FLAG_POWER_LEFT_SELF is set, nil otherwise.
+func (s *session) spellStartRemainingPower(spell wotlk.Spell, flags uint32) *uint32 {
+	if s == nil || s.player == nil || flags&protocol.SpellCastFlagPowerLeftSelf == 0 {
+		return nil
+	}
+	if int(spell.PowerType) < len(s.player.Powers) {
+		power := s.player.Powers[spell.PowerType]
+		return &power
+	}
+	return nil
+}
+
 // Gather-skill config defaults from worldserver.conf (World.cpp:1067-1082):
 // SkillChance.{Orange,Yellow,Green,Grey}, SkillChance.{SkinningSteps,
 // MiningSteps}, and SkillGain.Gathering. SkillChance.Prospecting and
@@ -2594,14 +2628,16 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		// time. Replacing the queued spell cancels the old one with the
 		// Spell::cancel PREPARING arm inside queueNextSwingSpell.
 		s.queueNextSwingSpell(castID, spellID, spell, target, 0, 0)
-		if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_START), protocol.BuildSpellStart(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagStart, castTime, target), true); err != nil {
+		startFlags := spellStartCastFlags(spell)
+		if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_START), protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags)), true); err != nil {
 			return false
 		}
 		s.triggerGlobalCooldown(spell)
 		s.debug("spell queued for next swing", "account", s.accountName, "spell", spellID, "cast_id", castID)
 		return true
 	}
-	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_START), protocol.BuildSpellStart(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagStart, castTime, target), true); err != nil {
+	startFlags := spellStartCastFlags(spell)
+	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_START), protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags)), true); err != nil {
 		return false
 	}
 
@@ -6598,6 +6634,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 
 	castTimeStamp := uint32(time.Now().UnixMilli())
 	castFlags := spellCastFlagGo
+	// Spell::SendSpellGo (Spell.cpp:4325): !StartRecoveryTime sets
+	// CAST_FLAG_NO_GCD. The triggered path (castSpellDirectWithOverrides)
+	// and the pet/login sends already carry it; the main client path did not.
+	if spell.StartRecoveryTime == 0 {
+		castFlags |= protocol.SpellCastFlagNoGCD
+	}
 	var remainingPower *uint32
 	if pType < 7 {
 		castFlags |= protocol.SpellCastFlagPowerLeftSelf
@@ -6774,11 +6816,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// ride the per-target loop in applyEffects below.
 	s.triggerLaunchSpellEffects(ctx, spell, spellID, target)
 
-	goPacket := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, missStatus, target, remainingPower)
+	// Spell::SendSpellGo (Spell.cpp:4286-4366) castFlags arms:
+	//   - CAST_FLAG_PENDING: vacuous — finishSpellCast serves the client
+	//     path only, never triggered casts.
+	//   - CAST_FLAG_AMMO: no bridge — Go has no ammo display data, and the
+	//     flag without the trailing 8-byte Ammo block would corrupt the packet.
+	//   - CAST_FLAG_RUNE_LIST: no bridge — Go has no rune bitmask/cooldown
+	//     list model for the visual block (the rune spend itself is bridged).
+	//   - CAST_FLAG_ADJUST_MISSILE: no bridge — no trajectory model.
+	// CasterGUID (Spell.cpp:4336-4340): the cast item's GUID for item casts,
+	// the caster otherwise; CasterUnit is always the caster. Item GUIDs carry
+	// the 0x4000 high bits on the wire (items.go:1654 convention);
+	// castItemGUID is the raw instance guid (handleUseItem).
+	casterGUID := s.playerGUID
+	if castItemGUID != 0 {
+		casterGUID = castItemGUID | (uint64(0x4000) << 48)
+	}
+	goPacket := protocol.BuildSpellGoWithPower(casterGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, missStatus, target, remainingPower)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true)
 	if s.server != nil {
 		nearbyFlags := castFlags &^ protocol.SpellCastFlagPowerLeftSelf
-		nearbyPacket := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, nearbyFlags, castTimeStamp, hitTargets, missStatus, target)
+		nearbyPacket := protocol.BuildSpellGo(casterGUID, s.playerGUID, castID, spellID, nearbyFlags, castTimeStamp, hitTargets, missStatus, target)
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 	}
 	if isFishingSpell(spellID) {

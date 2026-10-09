@@ -1880,7 +1880,13 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			if value, ok, castErr := s.server.Data.SpellCastTime(spell.CastingTimeIndex); castErr == nil && ok && value > 0 {
 				castTime = uint32(value)
 			}
-			if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_START), protocol.BuildSpellStart(s.playerGUID, s.playerGUID, castCount, spellID, spellCastFlagStart, castTime, target), true); err != nil {
+			// Spell::SendSpellStart (Spell.cpp:4253-4259): item casts carry the
+			// cast item's GUID as CasterGUID (0x4000 high bits on the wire;
+			// castItemGUID is the raw instance guid) with the player as
+			// CasterUnit; flags/powers follow the same arms as the client path.
+			itemGUID := rawItemGUID | (uint64(0x4000) << 48)
+			startFlags := spellStartCastFlags(spell)
+			if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_START), protocol.BuildSpellStartWithPower(itemGUID, s.playerGUID, castCount, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags)), true); err != nil {
 				return false
 			}
 			// Spell::prepare (Spell.cpp:3188-3196) sends SMSG_SPELL_START
