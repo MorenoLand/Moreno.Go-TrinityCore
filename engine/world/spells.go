@@ -5798,6 +5798,50 @@ func (s *session) isLaunchTargetEngaged(targetGUID uint64) bool {
 	return false
 }
 
+// breakHitBySpellAuras mirrors the AURA_INTERRUPT_FLAG_HITBYSPELL arm of
+// Spell::PreprocessSpellHit (Spell.cpp:2747-2749): when the caster can
+// validly attack the target, the target loses its HITBYSPELL-flagged auras
+// on any spell hit — not only when damage lands (the damage pipeline breaks
+// these through procDamageAuras; this leg covers non-damaging hits such as
+// debuffs and fully absorbed hits). The m_caster != unit outer gate
+// (Spell.cpp:2737) skips self-hits. Unit::IsValidAttackTarget has no full Go
+// bridge; the gate rides isFriendlyLaunchTarget (the !IsFriendlyTo core the
+// launch engage uses), which covers player targets (team + duel + own pet)
+// and creature targets (faction-template reaction). Enemy pets (0xF140) have
+// no aura-interrupt sweep in Go's pet model and stay a documented residual.
+func (s *session) breakHitBySpellAuras(ctx context.Context, spell wotlk.Spell, targetGUID uint64) {
+	if s == nil || s.server == nil || s.player == nil || targetGUID == 0 || targetGUID == s.playerGUID {
+		return
+	}
+	if s.isFriendlyLaunchTarget(ctx, targetGUID) {
+		return
+	}
+	if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+		targetSess.removeAurasWithInterruptFlags(auraInterruptFlagHitBySpell)
+		return
+	}
+	if uint16(targetGUID>>48) != 0xF130 {
+		return
+	}
+	key := creatureAuraKeyForPlayer(*s.player, targetGUID)
+	s.server.auraMu.Lock()
+	var toRemove []uint32
+	if auras := s.server.activeCreatureAuras[key]; auras != nil {
+		for spellID, aura := range auras {
+			if aura == nil || aura.Stopped {
+				continue
+			}
+			if getSpellAuraInterruptFlags(spellID, aura.AuraInterruptFlags)&auraInterruptFlagHitBySpell != 0 {
+				toRemove = append(toRemove, spellID)
+			}
+		}
+	}
+	s.server.auraMu.Unlock()
+	for _, spellID := range toRemove {
+		s.server.removeCreatureAura(key, spellID)
+	}
+}
+
 func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, castItemGUID uint64, castItemEntry uint32, queuedSwing *activeCastState) {
 	if s.player == nil {
 		return
@@ -6443,6 +6487,25 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
+	// Spell::GOTargetInfo (Spell.cpp:2663): the explicit gameobject wire target
+	// joins the GO target container the same way the implicit GO selections
+	// above do (AddGOTarget). Without this, a harmful gameobject-targeted
+	// cast fizzles at the empty-hitTargets return below while C++ runs
+	// GOTargetInfo::DoTargetSpellHit for it. Placed after the hit roll: GO
+	// targets never roll SpellHitResult in C++.
+	if wireGO := spellGameObjectTargetGUID(target); wireGO != 0 {
+		seenGO := false
+		for _, guid := range hitTargets {
+			if guid == wireGO {
+				seenGO = true
+				break
+			}
+		}
+		if !seenGO {
+			hitTargets = append(hitTargets, wireGO)
+		}
+	}
+
 	castTimeStamp := uint32(time.Now().UnixMilli())
 	castFlags := spellCastFlagGo
 	var remainingPower *uint32
@@ -6744,6 +6807,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			}
 			hitTargets = liveTargets
+		}
+		// Spell::PreprocessSpellHit (Spell.cpp:2747-2749): the
+		// AURA_INTERRUPT_FLAG_HITBYSPELL arm runs per target here, ahead of
+		// the effect loops — the PreprocessTarget position, before
+		// DoTargetSpellHit/HandleEffects. Missed targets carry no hit (the
+		// filter above), matching C++'s _spellHitTarget null gate.
+		for _, guid := range hitTargets {
+			s.breakHitBySpellAuras(effCtx, spell, guid)
 		}
 		// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2563-2579): failed
 		// pickpocket reveal. A SPELL_ATTR0_CU_PICKPOCKET spell resisted by a
@@ -8085,24 +8156,31 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleEffectSummonObjectWild(effCtx, spell, eff, target)
 			case spellEffectActivateObject: // 86: SPELL_EFFECT_ACTIVATE_OBJECT (EffectActivateObject, SpellEffects.cpp:3938)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per
-				// gameobject target; the action comes from eff.MiscValue
-				// (GameObjectActions, GameObjectData.h:675).
-				s.handleEffectActivateObject(effCtx, eff, target)
+				// gameobject target (GOTargetInfo::DoTargetSpellHit,
+				// Spell.cpp:2663); the action comes from eff.MiscValue
+				// (GameObjectActions, GameObjectData.h:675). The wire GO
+				// target plus every implicit GO target in hitTargets is
+				// served, matching the per-GO HandleEffects iteration.
+				s.handleEffectActivateObject(effCtx, eff, target, hitTargets)
 			case spellEffectGameObjectDamage: // 87: SPELL_EFFECT_GAMEOBJECT_DAMAGE (EffectGameObjectDamage, SpellEffects.cpp:5424)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per
-				// gameobject target: the friendly-faction gate, then
-				// ModifyHealth(-damage, caster, spellId).
-				s.handleEffectGameObjectDamage(effCtx, spellID, eff, target)
+				// gameobject target (GOTargetInfo::DoTargetSpellHit,
+				// Spell.cpp:2663): the friendly-faction gate, then
+				// ModifyHealth(-damage, caster, spellId). Every GO in the
+				// target container is served, not just the wire target.
+				s.handleEffectGameObjectDamage(effCtx, spellID, eff, target, hitTargets)
 			case spellEffectGameObjectRepair: // 88: SPELL_EFFECT_GAMEOBJECT_REPAIR (EffectGameObjectRepair, SpellEffects.cpp:5439)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per
-				// gameobject target: ModifyHealth(+damage, caster), no
-				// faction gate.
-				s.handleEffectGameObjectRepair(effCtx, spellID, eff, target)
+				// gameobject target (GOTargetInfo::DoTargetSpellHit,
+				// Spell.cpp:2663): ModifyHealth(+damage, caster), no
+				// faction gate. Every GO in the target container is served.
+				s.handleEffectGameObjectRepair(effCtx, spellID, eff, target, hitTargets)
 			case spellEffectGameObjectSetDestructionState: // 89: SPELL_EFFECT_GAMEOBJECT_SET_DESTRUCTION_STATE (EffectGameObjectSetDestructionState, SpellEffects.cpp:5450)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per
-				// gameobject target: SetDestructibleState(MiscValue, caster,
-				// true).
-				s.handleEffectGameObjectSetDestructionState(effCtx, eff, target)
+				// gameobject target (GOTargetInfo::DoTargetSpellHit,
+				// Spell.cpp:2663): SetDestructibleState(MiscValue, caster,
+				// true). Every GO in the target container is served.
+				s.handleEffectGameObjectSetDestructionState(effCtx, eff, target, hitTargets)
 			case spellEffectEnchantHeldItem: // 92: SPELL_EFFECT_ENCHANT_HELD_ITEM (EffectEnchantHeldItem, SpellEffects.cpp:4078)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per player
 				// target: the target's equipped main-hand weapon gains the
@@ -9853,6 +9931,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// (Spell.cpp:2606) is structural — this path has no miss model.
 	var comboGainTarget uint64
 	var comboGain int8
+	// Spell::PreprocessSpellHit (Spell.cpp:2747-2749) runs on the triggered
+	// path too — triggered casts go through the same per-target processing
+	// (PreprocessTarget ahead of the effect loop).
+	s.breakHitBySpellAuras(ctx, spell, targetGUID)
 	// Per-(cast, target) first-merge marker for the aura re-apply path
 	// (Spell.cpp:2842): only the first aura effect per target runs the
 	// ModStackAmount(+1) merge, later effects only refresh their amounts.
@@ -22188,27 +22270,15 @@ const (
 	goFlagNotSelectable uint32 = 0x00000010 // GO_FLAG_NOT_SELECTABLE (SharedDefines.h:1641)
 )
 
-// handleEffectActivateObject mirrors Spell::EffectActivateObject
-// (SpellEffects.cpp:3938), which runs at SPELL_EFFECT_HANDLE_HIT_TARGET per
-// gameobject target. The action comes from eff.MiscValue (GameObjectActions,
-// GameObjectData.h:675); the GO target rides target.UnitGUID with the 0xF110
-// high bits (the same extraction handleEffectOpenLock uses). The Disturb/Open
-// arm (GameObject::Use) has no Go trigger — Go models no generic GO Use
-// dispatch — and ToggleOpen/Creation/SetTapList/None have no C++ arm
-// (documented no-bridge).
-func (s *session) handleEffectActivateObject(ctx context.Context, eff wotlk.SpellEffect, target protocol.SpellTargetData) {
-	if s == nil || s.server == nil || s.player == nil {
-		return
-	}
-	var goGUID uint64
-	if target.Flags&protocol.SpellTargetFlagGameObject != 0 && target.UnitGUID != 0 && uint16(target.UnitGUID>>48) == 0xF110 {
-		goGUID = target.UnitGUID
-	}
-	if goGUID == 0 {
+// handleEffectActivateObjectGO is the per-gameobject core of
+// handleEffectActivateObject: Spell::EffectActivateObject runs at
+// SPELL_EFFECT_HANDLE_HIT_TARGET per gameobject target
+// (GOTargetInfo::DoTargetSpellHit, Spell.cpp:2663).
+func (s *session) handleEffectActivateObjectGO(ctx context.Context, goGUID uint64, action uint32) {
+	if s == nil || s.server == nil || s.player == nil || goGUID == 0 {
 		return
 	}
 	mapID, instanceID := s.player.Map, s.player.InstanceID
-	action := uint32(eff.MiscValue)
 	switch {
 	case action >= goActionAnimateCustom0 && action <= goActionAnimateCustom3:
 		// GameObject::SendCustomAnim(action - AnimateCustom0)
@@ -22251,6 +22321,17 @@ func (s *session) handleEffectActivateObject(ctx context.Context, eff wotlk.Spel
 		s.applyGameObjectArtKit(ctx, goGUID, action-goActionUseArtKit0)
 	}
 	_ = ctx
+}
+
+// handleEffectActivateObject mirrors Spell::EffectActivateObject
+// (SpellEffects.cpp:3938), which runs at SPELL_EFFECT_HANDLE_HIT_TARGET per
+// gameobject target; the action comes from eff.MiscValue (GameObjectActions,
+// GameObjectData.h:675).
+func (s *session) handleEffectActivateObject(ctx context.Context, eff wotlk.SpellEffect, target protocol.SpellTargetData, hitTargets []uint64) {
+	action := uint32(eff.MiscValue)
+	for _, goGUID := range spellEffectGOTargets(target, hitTargets) {
+		s.handleEffectActivateObjectGO(ctx, goGUID, action)
+	}
 }
 
 // applyGameObjectArtKit mirrors the UseArtKit arms of

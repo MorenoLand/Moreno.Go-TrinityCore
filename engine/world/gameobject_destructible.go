@@ -331,16 +331,40 @@ func spellGameObjectTargetGUID(target protocol.SpellTargetData) uint64 {
 	return 0
 }
 
-// handleEffectGameObjectDamage mirrors Spell::EffectGameObjectDamage
-// (SpellEffects.cpp:5424), which runs at SPELL_EFFECT_HANDLE_HIT_TARGET per
-// gameobject target: the friendly-faction gate (Wintergrasp walls, Ulduar
-// storm beacons) then ModifyHealth(-damage, caster, spellId).
-func (s *session) handleEffectGameObjectDamage(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, target protocol.SpellTargetData) {
-	if s == nil || s.server == nil || s.player == nil {
-		return
+// spellEffectGOTargets mirrors the Spell::GOTargetInfo::DoTargetSpellHit
+// iteration (Spell.cpp:2663): HandleEffects runs once per gameobject target
+// — the explicit wire target plus every implicit GO target riding hitTargets
+// (TARGET_GAMEOBJECT_NEARBY_ENTRY / SRC_AREA / CONE selections land there;
+// Go previously had no consumer for them downstream). Deduped on GUID so an
+// explicit GO target that also sits in hitTargets is hit once.
+func spellEffectGOTargets(target protocol.SpellTargetData, hitTargets []uint64) []uint64 {
+	var out []uint64
+	seen := make(map[uint64]struct{})
+	add := func(guid uint64) {
+		if guid == 0 {
+			return
+		}
+		if _, ok := seen[guid]; ok {
+			return
+		}
+		seen[guid] = struct{}{}
+		out = append(out, guid)
 	}
-	goGUID := spellGameObjectTargetGUID(target)
-	if goGUID == 0 {
+	add(spellGameObjectTargetGUID(target))
+	for _, guid := range hitTargets {
+		if uint16(guid>>48) == 0xF110 {
+			add(guid)
+		}
+	}
+	return out
+}
+
+// handleEffectGameObjectDamageGO is the per-gameobject core of
+// handleEffectGameObjectDamage: Spell::EffectGameObjectDamage runs at
+// SPELL_EFFECT_HANDLE_HIT_TARGET per gameobject target
+// (GOTargetInfo::DoTargetSpellHit, Spell.cpp:2663).
+func (s *session) handleEffectGameObjectDamageGO(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, goGUID uint64) {
+	if s == nil || s.server == nil || s.player == nil || goGUID == 0 {
 		return
 	}
 	mapID, instanceID := s.player.Map, s.player.InstanceID
@@ -358,31 +382,51 @@ func (s *session) handleEffectGameObjectDamage(ctx context.Context, spellID uint
 	s.server.modifyDestructibleHealth(ctx, mapID, instanceID, goGUID, -damage, s.playerGUID, spellID, s)
 }
 
+// handleEffectGameObjectDamage mirrors Spell::EffectGameObjectDamage
+// (SpellEffects.cpp:5424), which runs at SPELL_EFFECT_HANDLE_HIT_TARGET per
+// gameobject target: the friendly-faction gate (Wintergrasp walls, Ulduar
+// storm beacons) then ModifyHealth(-damage, caster, spellId).
+func (s *session) handleEffectGameObjectDamage(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, target protocol.SpellTargetData, hitTargets []uint64) {
+	for _, goGUID := range spellEffectGOTargets(target, hitTargets) {
+		s.handleEffectGameObjectDamageGO(ctx, spellID, eff, goGUID)
+	}
+}
+
 // handleEffectGameObjectRepair mirrors Spell::EffectGameObjectRepair
 // (SpellEffects.cpp:5439), which runs at SPELL_EFFECT_HANDLE_HIT_TARGET per
 // gameobject target: ModifyHealth(+damage, caster) with no faction gate.
-func (s *session) handleEffectGameObjectRepair(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, target protocol.SpellTargetData) {
-	if s == nil || s.server == nil || s.player == nil {
-		return
-	}
-	goGUID := spellGameObjectTargetGUID(target)
-	if goGUID == 0 {
+// handleEffectGameObjectRepairGO is the per-gameobject core of
+// handleEffectGameObjectRepair: Spell::EffectGameObjectRepair runs at
+// SPELL_EFFECT_HANDLE_HIT_TARGET per gameobject target
+// (GOTargetInfo::DoTargetSpellHit, Spell.cpp:2663).
+func (s *session) handleEffectGameObjectRepairGO(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, goGUID uint64) {
+	if s == nil || s.server == nil || s.player == nil || goGUID == 0 {
 		return
 	}
 	damage := eff.BasePoints + 1
 	s.server.modifyDestructibleHealth(ctx, s.player.Map, s.player.InstanceID, goGUID, damage, s.playerGUID, spellID, s)
 }
 
+// handleEffectGameObjectRepair mirrors Spell::EffectGameObjectRepair
+// (SpellEffects.cpp:5439), which runs at SPELL_EFFECT_HANDLE_HIT_TARGET per
+// gameobject target: ModifyHealth(+damage, caster), no faction gate.
+func (s *session) handleEffectGameObjectRepair(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, target protocol.SpellTargetData, hitTargets []uint64) {
+	for _, goGUID := range spellEffectGOTargets(target, hitTargets) {
+		s.handleEffectGameObjectRepairGO(ctx, spellID, eff, goGUID)
+	}
+}
+
 // handleEffectGameObjectSetDestructionState mirrors
 // Spell::EffectGameObjectSetDestructionState (SpellEffects.cpp:5450), which
 // runs at SPELL_EFFECT_HANDLE_HIT_TARGET per gameobject target:
 // SetDestructibleState(MiscValue, caster, true).
-func (s *session) handleEffectGameObjectSetDestructionState(ctx context.Context, eff wotlk.SpellEffect, target protocol.SpellTargetData) {
-	if s == nil || s.server == nil || s.player == nil {
-		return
-	}
-	goGUID := spellGameObjectTargetGUID(target)
-	if goGUID == 0 {
+// handleEffectGameObjectSetDestructionStateGO is the per-gameobject core of
+// handleEffectGameObjectSetDestructionState:
+// Spell::EffectGameObjectSetDestructionState runs at
+// SPELL_EFFECT_HANDLE_HIT_TARGET per gameobject target
+// (GOTargetInfo::DoTargetSpellHit, Spell.cpp:2663).
+func (s *session) handleEffectGameObjectSetDestructionStateGO(ctx context.Context, eff wotlk.SpellEffect, goGUID uint64) {
+	if s == nil || s.server == nil || s.player == nil || goGUID == 0 {
 		return
 	}
 	state := uint8(eff.MiscValue)
@@ -392,4 +436,14 @@ func (s *session) handleEffectGameObjectSetDestructionState(ctx context.Context,
 		return
 	}
 	s.server.setDestructibleBuildingState(ctx, s.player.Map, s.player.InstanceID, goGUID, state, true)
+}
+
+// handleEffectGameObjectSetDestructionState mirrors
+// Spell::EffectGameObjectSetDestructionState (SpellEffects.cpp:5450), which
+// runs at SPELL_EFFECT_HANDLE_HIT_TARGET per gameobject target:
+// SetDestructibleState(MiscValue, caster, true).
+func (s *session) handleEffectGameObjectSetDestructionState(ctx context.Context, eff wotlk.SpellEffect, target protocol.SpellTargetData, hitTargets []uint64) {
+	for _, goGUID := range spellEffectGOTargets(target, hitTargets) {
+		s.handleEffectGameObjectSetDestructionStateGO(ctx, eff, goGUID)
+	}
 }
