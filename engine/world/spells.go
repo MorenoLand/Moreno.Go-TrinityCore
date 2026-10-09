@@ -2049,16 +2049,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// path). Unknown/zero masks fail NO_POCKETS, like C++'s zero-mask & test.
 	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
 	if targetGUID != 0 && targetGUID != s.playerGUID {
-		pickpocket := s.server != nil && s.server.getSpellCustomAttr(spell.ID)&spellAttr0CuPickpocket != 0
-		if !pickpocket {
-			for _, eff := range spell.Effects {
-				if eff.Effect == spellEffectPickpocket {
-					pickpocket = true
-					break
-				}
-			}
-		}
-		if pickpocket {
+		if s.spellIsPickpocket(spell) {
 			failReason := spellFailedTargetNoPockets
 			if mask, isPlayer := s.targetCreatureTypeMask(ctx, targetGUID); isPlayer {
 				failReason = spellFailedBadTargets
@@ -6337,6 +6328,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		} else if targetSess != nil && targetSess.isImmuneToSpell(spell) {
 			hitTargets = nil
 			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
+			// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2354-2357): an
+			// immune player target is still put in combat with the player
+			// caster when the caster could validly attack it (the
+			// taunt-vs-immune case). The harmful path implies
+			// IsValidAttackTarget; the caster is always the player here.
+			if targetSess.player != nil {
+				targetSess.player.UnitFlags |= unitFlagInCombat
+				targetSess.lastCombatTime = time.Now()
+			}
 		} else {
 			targetLevel := uint8(1)
 			if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
@@ -6744,6 +6744,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			}
 			hitTargets = liveTargets
+		}
+		// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2563-2579): failed
+		// pickpocket reveal. A SPELL_ATTR0_CU_PICKPOCKET spell resisted by a
+		// creature removes the caster's TALK-interrupt-flag auras (stealth
+		// carries AURA_INTERRUPT_FLAG_TALK in the DBC, cc_break.go:45) and the
+		// victim engages the caster. The resisted target is already filtered
+		// from hitTargets above, so this runs on the miss entries, outside
+		// the per-effect loop.
+		if s.spellIsPickpocket(spell) {
+			for _, miss := range missStatus {
+				if miss.Reason == protocol.SpellMissResist && uint16(miss.TargetGUID>>48) == 0xF130 {
+					s.removeAurasWithInterruptFlags(auraInterruptFlagTalk)
+					if s.server != nil {
+						s.server.triggerCreatureAggro(effCtx, miss.TargetGUID, s.playerGUID)
+					}
+				}
+			}
 		}
 		if len(hitTargets) == 0 && !isReflected {
 			return
@@ -12487,6 +12504,22 @@ func isHarmfulAura(auraType uint32) bool {
 	default:
 		return false
 	}
+}
+
+// spellIsPickpocket reports whether the spell carries SPELL_ATTR0_CU_PICKPOCKET.
+// C++ fills the custom attribute at load from SPELL_EFFECT_PICKPOCKET
+// (SpellMgr.cpp:2719-2720); Go checks the spell_custom_attr row alongside the
+// effect scan as the load-time equivalent.
+func (s *session) spellIsPickpocket(spell wotlk.Spell) bool {
+	if s.server != nil && s.server.getSpellCustomAttr(spell.ID)&spellAttr0CuPickpocket != 0 {
+		return true
+	}
+	for _, eff := range spell.Effects {
+		if eff.Effect == spellEffectPickpocket {
+			return true
+		}
+	}
+	return false
 }
 
 func isHarmfulSpell(spell wotlk.Spell) bool {
