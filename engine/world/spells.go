@@ -111,6 +111,8 @@ const (
 	spellAttr3DrainSoul                 uint32 = 0x08000000 // SPELL_ATTR3_DRAIN_SOUL (SharedDefines.h:550) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 	spellAttr3BlockableSpell            uint32 = 0x00000008 // SPELL_ATTR3_BLOCKABLE_SPELL (SharedDefines.h:526) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 
+	spellAuraIgnoreHitDirection uint32 = 288 // SPELL_AURA_IGNORE_HIT_DIRECTION (SpellAuraDefines.h) — Deterrence is the only 3.3.5a source
+
 	spellFailedEquippedItemClass         uint8  = 29  // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
 	spellFailedEquippedItemClassMainhand uint8  = 30  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
 	spellFailedEquippedItemClassOffhand  uint8  = 31  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND (SharedDefines.h:1013)
@@ -13114,18 +13116,37 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 
 	// Behind-arc legs (Unit.cpp:2529-2553): attackers outside the victim's
 	// front 180° arc cannot be parried or blocked, and player victims cannot
-	// dodge (creatures keep dodge vs behind attacks). The
-	// SPELL_AURA_IGNORE_HIT_DIRECTION exemption and the
-	// ATTR0_CU_REQ_CASTER_BEHIND_TARGET carve-out have no Go model.
+	// dodge (creatures keep dodge vs behind attacks). SPELL_AURA_IGNORE_HIT_DIRECTION
+	// (288; Deterrence is the only 3.3.5a source) exempts the victim from the
+	// behind-arc kill — only ATTR0_CU_REQ_CASTER_BEHIND_TARGET spells stay
+	// unparryable from behind (Unit.cpp:2551-2553).
 	attackerInFront := true
 	if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
 		attackerInFront = hasInArc(tgt.Orientation, tgt.X, tgt.Y, s.player.X, s.player.Y, math.Pi)
 	}
 	if !attackerInFront {
-		canParry = false
-		canBlock = false
-		if isPlayerVictim {
-			canDodge = false
+		ignoreHitDirection := false
+		if isPlayerVictim && targetSess != nil {
+			ignoreHitDirection = targetSess.hasAuraType(spellAuraIgnoreHitDirection)
+		} else if s.server != nil && s.player != nil {
+			key := creatureAuraKeyForPlayer(*s.player, targetGUID)
+			s.server.auraMu.Lock()
+			for _, aura := range s.server.activeCreatureAuras[key] {
+				if aura != nil && !aura.Stopped && aura.AuraType == spellAuraIgnoreHitDirection {
+					ignoreHitDirection = true
+					break
+				}
+			}
+			s.server.auraMu.Unlock()
+		}
+		if !ignoreHitDirection {
+			canParry = false
+			canBlock = false
+			if isPlayerVictim {
+				canDodge = false
+			}
+		} else if s.server != nil && s.server.getSpellCustomAttr(spell.ID)&SpellCustomAttrReqCasterBehindTarget != 0 {
+			canParry = false
 		}
 	}
 
