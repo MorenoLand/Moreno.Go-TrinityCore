@@ -1083,26 +1083,33 @@ func (s *session) handleForceSpeedChangeAck(opcode uint16, ctx context.Context, 
 			return true
 		}
 	}
-	if !s.forcedSpeedSent[moveType] || s.player.TransportGUID != 0 {
+	// WorldSession::HandleForceSpeedChangeAck (MovementHandler.cpp:505-517)
+	// compares the ACK against the player's CURRENT speed
+	// (_player->GetSpeed(move_type)), not the last sent value: an aura-driven
+	// speed change between the forced send and the ACK must not trip the
+	// anti-cheat, and C++ runs the check unconditionally (no sent-packet
+	// gate). GetSpeed = rate * base is movementSpeeds()[moveType] here
+	// (absolute speeds in UnitMoveType order).
+	if s.player.TransportGUID != 0 {
 		return true
 	}
-	expected := s.forcedSpeedExpected[moveType]
-	if math.Abs(float64(expected-newspeed)) > 0.01 {
-		if expected > newspeed {
+	current := s.movementSpeeds()[moveType]
+	if math.Abs(float64(current-newspeed)) > 0.01 {
+		if current > newspeed {
 			// client under-reports: re-send the correct speed
 			// (Unit::SetSpeedRate leg, MovementHandler.cpp:505-509)
-			s.debug("force speed change corrected", "account", s.accountName, "moveType", moveType, "expected", expected, "acked", newspeed)
+			s.debug("force speed change corrected", "account", s.accountName, "moveType", moveType, "expected", current, "acked", newspeed)
 			// C++ re-sends via SetSpeedRate(move_type, GetSpeedRate(move_type)):
 			// same type, same rate. The GM-override store holds the last
 			// rate the server forced for walk/run/runBack/swim/flight.
 			if moveType >= 0 && moveType < len(speedForceOpcodes) {
 				if opcodes := speedForceOpcodes[moveType]; opcodes[0] != 0 {
-					s.sendRuntimeMovementSpeed(opcodes[0], opcodes[1], expected, moveType == moveTypeRun)
+					s.sendRuntimeMovementSpeed(opcodes[0], opcodes[1], current, moveType == moveTypeRun)
 				}
 			}
 		} else {
 			// client over-reports its speed: cheating
-			s.debug("force speed change mismatch, kicking", "account", s.accountName, "moveType", moveType, "expected", expected, "acked", newspeed)
+			s.debug("force speed change mismatch, kicking", "account", s.accountName, "moveType", moveType, "expected", current, "acked", newspeed)
 			s.kickSession(s)
 		}
 	}

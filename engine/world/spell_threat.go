@@ -220,6 +220,57 @@ func (s *session) loadSpellThreatEntry(ctx context.Context, spellID uint32) (spe
 	return row, true
 }
 
+// damageThreatAmount folds ThreatManager::CalculateModifiedThreat
+// (ThreatManager.cpp:606-659) onto a damaging spell's DealDamage threat.
+// Unit::DealDamage (Unit.cpp:900-907) calls AddThreat(attacker, damage,
+// spellProto) with the default args (ignoreModifiers=false,
+// ignoreRedirects=false), so a damaging spell's threat folds the
+// spell_threat-row pctMod, the attacker's SPELLMOD_THREAT spell mods, then
+// the attacker's own school threat multipliers — in that C++ order. (The
+// redirect consumption, also a default-false leg, is applied separately by
+// splitThreatRedirects at each damage site.) Damage from melee swings and
+// auto-shots passes a null spell, which skips the row and mod legs, so those
+// funnels keep folding only the physical-school multiplier. Damage spells
+// carrying SPELL_ATTR1_NO_THREAT add nothing at all (AddThreat's step-1
+// early return, ThreatManager.cpp:311-314), and SPELL_ATTR3_NO_INITIAL_AGGRO
+// adds nothing while the target is not yet engaged
+// (ThreatManager.cpp:315-317; engaged is the victim's combat state as seen
+// before this damage). A zero return skips the threat add entirely.
+func (s *session) damageThreatAmount(ctx context.Context, spellID uint32, schoolMask uint32, damage float32, engaged bool) float32 {
+	if s == nil || s.server == nil || damage <= 0 {
+		return 0
+	}
+	var spell wotlk.Spell
+	spellKnown := false
+	if spellID != 0 {
+		if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			spell, spellKnown = sp, true
+		}
+	}
+	if spellKnown {
+		if spell.AttributesEx&spellAttr1NoThreat != 0 {
+			return 0
+		}
+		if spell.AttributesEx3&spellAttr3NoInitialAggro != 0 && !engaged {
+			return 0
+		}
+	}
+	// ThreatManager::CalculateModifiedThreat (ThreatManager.cpp:606-659):
+	// the spell_threat-row pctMod applies even though its flatMod/apPctMod
+	// arms stay on the cast-threat path, then the attacker's SPELLMOD_THREAT
+	// mods, then the attacker's own school multipliers — the C++ order.
+	t := float64(damage)
+	if spellID != 0 {
+		if entry, ok := s.loadSpellThreatEntry(ctx, spellID); ok && entry.pctMod != 1.0 {
+			t *= float64(entry.pctMod)
+		}
+		if spellKnown {
+			t = s.applySpellModFloat(spell, spellModThreat, t)
+		}
+	}
+	return float32(t) * s.getThreatMultiplier(schoolMask)
+}
+
 // spellHasInitialThreat mirrors SpellInfo::HasInitialAggro (SpellInfo.cpp:1261).
 func spellHasInitialThreat(spell wotlk.Spell) bool {
 	return spell.AttributesEx&spellAttr1NoThreat == 0 && spell.AttributesEx3&spellAttr3NoInitialAggro == 0

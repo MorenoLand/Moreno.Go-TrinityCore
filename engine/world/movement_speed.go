@@ -176,7 +176,7 @@ func (s *session) mountedRunSpeed() float32 {
 	if main != 0 {
 		multiplier *= 1 + float32(main)/100
 	}
-	return s.adjustMovementSpeed(7 * multiplier)
+	return s.adjustMovementSpeed(7, 7*multiplier, true)
 }
 
 // Mounted flight speed mirrors Unit::UpdateSpeed's MOVE_FLIGHT mounted branch (Unit.cpp:8714-8722):
@@ -203,14 +203,32 @@ func (s *session) mountedFlightSpeed() float32 {
 	if main != 0 {
 		multiplier *= 1 + float32(main)/100
 	}
-	return s.adjustMovementSpeed(7 * multiplier)
+	return s.adjustMovementSpeed(7, 7*multiplier, true)
 }
 
-func (s *session) adjustMovementSpeed(speed float32) float32 {
-	if normalization := float32(s.maxPositiveAuraModifier(spellAuraUseNormalMovementSpeed)); normalization > 0 && speed > normalization {
-		speed = normalization
+// adjustMovementSpeed mirrors the tail of Unit::UpdateSpeed
+// (Unit.cpp:8756-8808) for one move type: the
+// SPELL_AURA_USE_NORMAL_MOVEMENT_SPEED normalization applies only to
+// RUN/SWIM/FLIGHT (the back-speed arms skip it, Unit.cpp:8718-8723), then
+// the strongest slow, then the minimum-speed floor. C++ floors the speed
+// RATE (min_speed = baseMinSpeed * minSpeedMod/100, baseMinSpeed = 1.0 for
+// players — Unit.cpp:8797-8806), so the absolute floor scales with the
+// type's base speed; and Unit::SetSpeedRate (Unit.cpp:8821-8824) clamps a
+// negative rate to 0.
+func (s *session) adjustMovementSpeed(base, speed float32, normalize bool) float32 {
+	if normalize {
+		if normalization := float32(s.maxPositiveAuraModifier(spellAuraUseNormalMovementSpeed)); normalization > 0 && speed > normalization {
+			speed = normalization
+		}
 	}
-	return ResolveMovementSpeed(speed, s.maxNegativeAuraModifier(spellAuraDecreaseSpeed), s.maxPositiveAuraModifier(spellAuraMinimumSpeed))
+	speed *= 1 + float32(s.maxNegativeAuraModifier(spellAuraDecreaseSpeed))/100
+	if minimum := float32(s.maxPositiveAuraModifier(spellAuraMinimumSpeed)) / 100 * base; speed < minimum {
+		speed = minimum
+	}
+	if speed < 0 {
+		speed = 0
+	}
+	return speed
 }
 
 func ResolveMovementSpeed(speed float32, slowPercent, minimumPercent int32) float32 {
@@ -228,15 +246,15 @@ func (s *session) movementSpeeds() [9]float32 {
 	// turnRate, flight, flightBack, pitchRate. (Previously flight/flightBack
 	// sat at 5/6 with turnRate at 7 — misordered vs the client's parse.)
 	speeds := [9]float32{
-		walk,                              // MOVE_WALK
-		s.mountedRunSpeed(),               // MOVE_RUN
-		s.adjustMovementSpeed(runBack),    // MOVE_RUN_BACK
-		s.adjustMovementSpeed(swimSpeed),  // MOVE_SWIM
-		s.adjustMovementSpeed(swimBack),   // MOVE_SWIM_BACK
-		3.141594,                          // MOVE_TURN_RATE
-		s.mountedFlightSpeed(),            // MOVE_FLIGHT
-		s.adjustMovementSpeed(flightBack), // MOVE_FLIGHT_BACK
-		3.14,                              // MOVE_PITCH_RATE
+		walk,                // MOVE_WALK
+		s.mountedRunSpeed(), // MOVE_RUN
+		s.adjustMovementSpeed(runBack, runBack, false),   // MOVE_RUN_BACK
+		s.adjustMovementSpeed(swim, swimSpeed, true),     // MOVE_SWIM
+		s.adjustMovementSpeed(swimBack, swimBack, false), // MOVE_SWIM_BACK
+		3.141594,               // MOVE_TURN_RATE
+		s.mountedFlightSpeed(), // MOVE_FLIGHT
+		s.adjustMovementSpeed(flightBack, flightBack, false), // MOVE_FLIGHT_BACK
+		3.14, // MOVE_PITCH_RATE
 	}
 	// .modify speed overrides shadow the aura-derived values while active
 	// (Unit::GetSpeed = m_speed_rate * base, Unit.cpp:8811).
@@ -550,8 +568,6 @@ func (s *session) sendRuntimeMovementSpeed(opcode protocol.Opcode, nearbyOpcode 
 		if s.forcedSpeedChanges[mt] < 255 {
 			s.forcedSpeedChanges[mt]++
 		}
-		s.forcedSpeedExpected[mt] = speed
-		s.forcedSpeedSent[mt] = true
 	}
 	self := protocol.NewBuffer(packedGUIDSize(s.playerGUID) + 9)
 	self.WritePackedGUID(s.playerGUID)

@@ -9850,6 +9850,13 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				rageChanged, rageNext = true, next
 				rageMapID, rageInstanceID, rageGUID = motion.Map, motion.InstanceID, motion.GUID
 			}
+			// Unit::DealDamage's threat add runs on the victim's pre-damage
+			// engagement state for the SPELL_ATTR3_NO_INITIAL_AGGRO gate
+			// (ThreatManager.cpp:315-317): capture it before the funnel's
+			// own engagement set. (C++ also skips engagement on that gate;
+			// Go's engagement model sets InCombat unconditionally — the
+			// skip here is threat-only.)
+			wasInCombat := motion.InCombat
 			motion.InCombat = true
 			if motion.ThreatMgr == nil {
 				motion.ThreatMgr = NewThreatManager(target.GUID)
@@ -9859,14 +9866,30 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			}
 			dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
 			inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
-			threat := float32(damage) * s.getThreatMultiplier(uint32(schoolMask))
-			switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
-			if switched && newVictim != motion.TargetGUID {
-				motion.TargetGUID = newVictim
-				entries := motion.ThreatMgr.SortedEntries()
-				s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, entries)
-			} else {
-				motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
+			// Unit::DealDamage (Unit.cpp:906) calls AddThreat with the
+			// default args (ignoreModifiers=false, ignoreRedirects=false):
+			// the amount folds the spell_threat-row pctMod, the attacker's
+			// SPELLMOD_THREAT mods and school multipliers
+			// (ThreatManager::CalculateModifiedThreat, ThreatManager.cpp:606),
+			// and the caster's redirect registry applies on top
+			// (splitThreatRedirects). A zero amount is a gated spell
+			// (SPELL_ATTR1_NO_THREAT, or SPELL_ATTR3_NO_INITIAL_AGGRO on an
+			// unengaged target — ThreatManager.cpp:311-317): the add is
+			// skipped, matching C++'s early return before ref creation.
+			threat := s.damageThreatAmount(ctx, spellID, uint32(schoolMask), float32(damage), wasInCombat)
+			if threat > 0 {
+				threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
+				switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
+				if rSwitched {
+					switched, newVictim = true, rVictim
+				}
+				if switched && newVictim != motion.TargetGUID {
+					motion.TargetGUID = newVictim
+					entries := motion.ThreatMgr.SortedEntries()
+					s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, entries)
+				} else {
+					motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
+				}
 			}
 			if motion.BossAI != nil {
 				motion.BossAI.OnDamageTaken(ctx, s.server, motion, s.playerGUID, damage)
@@ -17271,6 +17294,13 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 				rageChanged, rageNext = true, next
 				rageMapID, rageInstanceID, rageGUID = motion.Map, motion.InstanceID, motion.GUID
 			}
+			// Unit::DealDamage's threat add runs on the victim's pre-damage
+			// engagement state for the SPELL_ATTR3_NO_INITIAL_AGGRO gate
+			// (ThreatManager.cpp:315-317): capture it before the funnel's
+			// own engagement set. (C++ also skips engagement on that gate;
+			// Go's engagement model sets InCombat unconditionally — the
+			// skip here is threat-only.)
+			wasInCombat := motion.InCombat
 			motion.InCombat = true
 			if motion.ThreatMgr == nil {
 				motion.ThreatMgr = NewThreatManager(target.GUID)
@@ -17279,10 +17309,19 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 			inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
 			// Periodic damage ticks route through Unit::DealDamage
 			// (SpellAuraEffects.cpp:5224, damagetype DOT) whose AddThreat
-			// (Unit.cpp:906) leaves ignoreRedirects=false: the caster's
-			// redirect registry applies.
-			dmgThreat, _, _ := s.splitThreatRedirects(motion, float32(dmg))
-			motion.ThreatMgr.AddThreat(s.playerGUID, dmgThreat, inMelee)
+			// (Unit.cpp:906) uses the default args (ignoreModifiers=false,
+			// ignoreRedirects=false): the amount folds the spell_threat-row
+			// pctMod, the caster's SPELLMOD_THREAT mods and the DoT school's
+			// threat multipliers (ThreatManager::CalculateModifiedThreat —
+			// the DoT school leg was previously unfolded), and the caster's
+			// redirect registry applies on top. A zero amount is a gated
+			// spell: the add is skipped, matching C++'s early return
+			// (ThreatManager.cpp:311-317).
+			dmgThreat := s.damageThreatAmount(ctx, aura.SpellID, aura.SchoolMask, float32(dmg), wasInCombat)
+			if dmgThreat > 0 {
+				dmgThreat, _, _ = s.splitThreatRedirects(motion, dmgThreat)
+				motion.ThreatMgr.AddThreat(s.playerGUID, dmgThreat, inMelee)
+			}
 			motion.Moving = true
 		}
 		s.server.motionMu.Unlock()
