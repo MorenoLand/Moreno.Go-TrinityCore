@@ -8,6 +8,7 @@ import (
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // gameEvent mirrors the world `game_event` scheduling columns used by
@@ -164,6 +165,8 @@ func (s *Server) loadGameEventDataMap(ctx context.Context) map[int64]gameEventFu
 
 // conditionRow is one `conditions` row; rows sharing an ElseGroup are AND'ed
 // while distinct ElseGroups OR together, exactly like ConditionMgr.
+// ErrorType/ErrorTextId feed the spell-cast conditions failure mapping
+// (Spell.cpp:5340-5348); loaders that don't need them leave them zero.
 type conditionRow struct {
 	ElseGroup       int64
 	ConditionType   int64
@@ -172,9 +175,13 @@ type conditionRow struct {
 	Value2          int64
 	Value3          int64
 	Negative        bool
+	ErrorType       int64
+	ErrorTextId     int64
 }
 
 const conditionSourceGossipMenuOption = 15
+
+const conditionSourceSpellCast = 17 // CONDITION_SOURCE_TYPE_SPELL (ConditionMgr.h:140)
 
 const conditionSourceSpellImplicitTarget = 13 // CONDITION_SOURCE_TYPE_SPELL_IMPLICIT_TARGET (ConditionMgr.h:136)
 
@@ -237,6 +244,109 @@ func (s *session) loadImplicitTargetConditions(ctx context.Context, spellID uint
 		result = append(result, row)
 	}
 	return result
+}
+
+// loadSpellCastConditions fetches the `conditions` rows attached to a
+// spell's cast itself (SourceEntry = spell id; no SourceGroup filter —
+// this is the NotGrouped variant, ConditionMgr.cpp:978-991). A missing
+// table or query error degrades to no rows, matching C++ behavior with
+// no conditions (IsObjectMeetingNotGroupedConditions returns true when
+// no entry exists for the source type).
+func (s *session) loadSpellCastConditions(ctx context.Context, spellID uint32) []conditionRow {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return nil
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT ElseGroup, ConditionTypeOrReference, ConditionTarget, ConditionValue1, ConditionValue2, ConditionValue3, NegativeCondition, ErrorType, ErrorTextId FROM conditions WHERE SourceTypeOrReferenceId = ? AND SourceEntry = ? ORDER BY ElseGroup", conditionSourceSpellCast, spellID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	result := make([]conditionRow, 0, 2)
+	for rows.Next() {
+		var row conditionRow
+		if err := rows.Scan(&row.ElseGroup, &row.ConditionType, &row.ConditionTarget, &row.Value1, &row.Value2, &row.Value3, &row.Negative, &row.ErrorType, &row.ErrorTextId); err != nil {
+			return nil
+		}
+		result = append(result, row)
+	}
+	return result
+}
+
+// checkSpellCastConditions mirrors the CheckCast conditions block
+// (Spell.cpp:5337-5348): sConditionMgr->IsObjectMeetingNotGroupedConditions
+// (CONDITION_SOURCE_TYPE_SPELL, spell id, ConditionSourceInfo(caster,
+// object target)). Unlike evalConditionGroups this does NOT break out of
+// a failing group: C++ IsObjectMeetToConditionList evaluates every row
+// (ConditionMgr.cpp:883-926) and Condition::Meets overwrites
+// mLastFailedCondition on each failure (ConditionMgr.cpp:593), so the
+// last-failed condition is the last failing row in scan order. Condition
+// target 0 is the caster (the session player); target 1 is the wire
+// object target, passed as the creature context of evalCondition —
+// player/gameobject targets have no Go resolution there, so target-1
+// conditions against them degrade to unmet (documented delta). Reference
+// rows (ConditionTypeOrReference < 0) have no Go model (no
+// ConditionReferenceStore); they are skipped. Returns the
+// SPELL_FAILED_* result and, for SPELL_FAILED_CUSTOM_ERROR, the
+// ErrorTextId carried as the extended packet param.
+func (s *session) checkSpellCastConditions(ctx context.Context, spellID uint32, target protocol.SpellTargetData) (uint8, uint32) {
+	rows := s.loadSpellCastConditions(ctx, spellID)
+	if len(rows) == 0 {
+		return 0, 0
+	}
+	var creatureEntry uint32
+	var creatureGUID uint64
+	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+		creatureGUID = target.UnitGUID
+		if s.server != nil {
+			s.server.motionMu.Lock()
+			motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.UnitGUID)
+			s.server.motionMu.Unlock()
+			if motion != nil {
+				creatureEntry = motion.Entry
+			}
+		}
+	}
+	groupMet := make(map[int64]bool)
+	var lastFailed *conditionRow
+	for i := range rows {
+		row := &rows[i]
+		met, known := groupMet[row.ElseGroup]
+		if known && !met {
+			continue
+		}
+		if !known {
+			groupMet[row.ElseGroup] = true
+		}
+		if row.ConditionType < 0 {
+			continue
+		}
+		ok, err := s.evalCondition(ctx, *row, creatureEntry, creatureGUID)
+		if err != nil {
+			ok = false
+		}
+		if row.Negative {
+			ok = !ok
+		}
+		if !ok {
+			groupMet[row.ElseGroup] = false
+			lastFailed = row
+		}
+	}
+	for _, met := range groupMet {
+		if met {
+			return 0, 0
+		}
+	}
+	if lastFailed != nil && lastFailed.ErrorType != 0 {
+		if lastFailed.ErrorType == int64(spellFailedCustomError) {
+			return spellFailedCustomError, uint32(lastFailed.ErrorTextId)
+		}
+		return uint8(lastFailed.ErrorType), 0
+	}
+	if lastFailed == nil || lastFailed.ConditionTarget == 0 {
+		return spellFailedCasterAurastate, 0
+	}
+	return spellFailedBadTargets, 0
 }
 
 // loadGossipMenuConditions fetches conditions attached to a gossip menu title

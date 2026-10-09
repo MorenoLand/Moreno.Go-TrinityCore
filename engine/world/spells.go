@@ -1470,15 +1470,21 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// conditions on the cast itself (distinct from
 	// CONDITION_SOURCE_TYPE_SPELL_IMPLICIT_TARGET (13), which Go evaluates
 	// in the implicit-target scan). On failure the last-failed condition's
-	// ErrorType wins (SPELL_FAILED_CUSTOM_ERROR (172) also fills
-	// m_customError from ErrorTextId), else SPELL_FAILED_CASTER_AURASTATE
-	// (22) when there is no failed condition or no ConditionTarget, else
-	// SPELL_FAILED_BAD_TARGETS (12). Documented no-bridge: Go has no
-	// ConditionSourceInfo, no last-failed-condition tracking, and no
-	// NotGrouped evaluation — conditions.go models only source type 13 for
-	// the target scan. Revisit if spell-source condition evaluation lands.
+	// ErrorType wins (SPELL_FAILED_CUSTOM_ERROR (172) also carries
+	// ErrorTextId as the extended packet param, the m_customError arm),
+	// else SPELL_FAILED_CASTER_AURASTATE (22) when there is no failed
+	// condition or no ConditionTarget, else SPELL_FAILED_BAD_TARGETS (12).
 	// C++ relative order: right after the vehicle arm, ahead of the
 	// CheckExplicitTarget block (5353-5367).
+	if failReason, customErr := s.checkSpellCastConditions(ctx, spellID, target); failReason != 0 {
+		payload := buildCastFailed(castID, spellID, failReason)
+		if failReason == spellFailedCustomError {
+			payload = buildCastFailedParams(castID, spellID, failReason, customErr)
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), payload, true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell cast conditions not met", "failReason", failReason)
+		return true
+	}
 	// CheckCast pet-presence gate (Spell::CheckCast, Spell.cpp:5413-5431):
 	// any effect with TargetA == TARGET_UNIT_PET (5) requires the caster's
 	// guardian pet (Unit::GetGuardianPet); without one the cast fails with
