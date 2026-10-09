@@ -1,6 +1,8 @@
 package world
 
 import (
+	"context"
+
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
 
@@ -69,6 +71,69 @@ func spellExplicitUnitTargetMask(spell wotlk.Spell) uint32 {
 		}
 	}
 	return mask
+}
+
+// spellExplicitObjectTargetMask mirrors the object-target half of
+// SpellInfo::GetExplicitTargetMask (SpellInfo.cpp:1956;
+// _InitializeExplicitTargetMask, SpellInfo.cpp:3344-3370) as tested by
+// CheckExplicitTarget's null-target arm (SpellInfo.cpp:1784-1790):
+// (mask & (TARGET_FLAG_UNIT_MASK | TARGET_FLAG_GAMEOBJECT_MASK |
+// TARGET_FLAG_CORPSE_MASK)) != 0. The DBC Targets field is OR'd in first
+// (SpellInfo.cpp:3347), then the per-effect GetExplicitTargetMask bits
+// (SpellInfo.cpp:134-210): the unit half via spellNeedsExplicitUnitTarget
+// (the named check types plus the plain-TARGET_FLAG_UNIT fall-through for
+// TARGET-reference UNIT/UNIT_AND_DEST/DEST rows), TARGET_FLAG_GAMEOBJECT
+// from target 23 (TARGET_GAMEOBJECT_TARGET — the only TARGET-reference GOBJ
+// row; 40/51/52/108 use CASTER/SRC/DEST references and contribute nothing),
+// and TARGET_FLAG_GAMEOBJECT_ITEM from target 26
+// (TARGET_GAMEOBJECT_ITEM_TARGET). The CORPSE bits never survive
+// GetExplicitTargetMask (TARGET_OBJECT_TYPE_CORPSE hits the default arm),
+// so the null arm's CORPSE leg is dead in C++. The SRC/DEST-location and
+// TRAJ legs are irrelevant to the null arm. Documented delta: the
+// GetMissingTargetMask extension (SpellInfo.cpp:3364) for
+// EFFECT_IMPLICIT_TARGET_EXPLICIT effects is unmodeled.
+func spellExplicitObjectTargetMask(spell wotlk.Spell) uint32 {
+	mask := spell.Targets & (targetFlagUnitMask | targetFlagGameObject | targetFlagGameObjectItem)
+	if spellNeedsExplicitUnitTarget(spell) {
+		mask |= targetFlagUnit
+	}
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		for _, target := range [2]uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			switch target {
+			case 23:
+				mask |= targetFlagGameObject
+			case 26:
+				mask |= targetFlagGameObjectItem
+			}
+		}
+	}
+	return mask
+}
+
+// explicitSelectionTargetOK mirrors the selection-adoption gate in
+// Spell::SetTargetMap (Spell.cpp:684-690): the caster's current selection
+// becomes the fallback explicit target only when it resolves to a unit in
+// the world (ObjectAccessor::GetUnit) and passes
+// SpellInfo::CheckExplicitTarget (SpellInfo.cpp:1793-1816) — the
+// IsValidAttackTarget/IsValidAssistTarget flag gates
+// (spellTargetUnitBlocked) and the hostility/faction gates
+// (explicitTargetFactionBlocked). The GM-invisibility arm is a CheckTarget
+// leg (SpellInfo.cpp:1736-1743), not a CheckExplicitTarget leg, so it does
+// not participate here.
+func (s *session) explicitSelectionTargetOK(ctx context.Context, spell wotlk.Spell, guid uint64) bool {
+	tgt, ok := s.getCombatTarget(ctx, guid)
+	if !ok {
+		return false
+	}
+	explicitMask := spellExplicitUnitTargetMask(spell)
+	assist := explicitMask&(targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid) != 0
+	if spellTargetUnitBlocked(spell, tgt.UnitFlags, tgt.FlagsExtra, assist) {
+		return false
+	}
+	return !s.explicitTargetFactionBlocked(explicitMask, guid, tgt)
 }
 
 // explicitTargetFactionBlocked mirrors the hostility terms that

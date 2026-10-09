@@ -5946,13 +5946,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// the TARGET_FLAG_UNIT_MINIPET arm (1806-1808) is dead —
 	// GetExplicitTargetMask never produces the MINIPET bit (target 90 falls
 	// through to plain TARGET_FLAG_UNIT, SpellInfo.cpp:184-210). The
-	// null-target arm (1784-1790 — BAD_TARGETS when the unit/GO/corpse mask
-	// needs a target and none is sent, with the GAMEOBJECT_ITEM + itemTarget
-	// escape) is only partially covered: spellNeedsExplicitUnitTarget
-	// models the unit half of the mask, and the completion path defaults
-	// missing targets to self for self-cast-only and non-harmful spells,
-	// but a missing explicit target on a mask-needing spell does not fail
-	// BAD_TARGETS here. The IsPassive wrapper (Spell.cpp:5353-5360) is
+	// null-target arm (1784-1790 — BAD_TARGETS when the unit/GO mask needs a
+	// target and none is sent, with the GAMEOBJECT_ITEM + itemTarget escape)
+	// is bridged below via spellExplicitObjectTargetMask, evaluated after the
+	// wire/selection/self-default fallbacks that mirror Spell::SetTargetMap
+	// (Spell.cpp:668-700). Remaining deltas: the CORPSE leg is dead in C++
+	// (GetExplicitTargetMask never produces corpse bits); the
+	// GetMissingTargetMask extension (SpellInfo.cpp:3364) is unmodeled; the
+	// selection fallback is validated through the CheckExplicitTarget unit
+	// gates (explicitSelectionTargetOK, Spell.cpp:684-690); Go's non-harmful
+	// self default is wider than C++'s
+	// ALLY/PARTY/RAID-only self fallback. The IsPassive wrapper (Spell.cpp:5353-5360) is
 	// vacuous (passive spells are rejected at the lookup) and the
 	// m_originalCaster / GO-caster arm (5360-5364) is vacuous on the
 	// client-initiated path (the caster is always the session player; no
@@ -5962,42 +5966,71 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		hitTargets = append(hitTargets, s.playerGUID)
 	} else if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
 		explicitUnitGUID = target.UnitGUID
-	} else if s.selection != 0 {
+	} else if s.selection != 0 && s.explicitSelectionTargetOK(ctx, spell, s.selection) {
+		// Spell::SetTargetMap (Spell.cpp:684-690): the caster's selection is
+		// adopted as the fallback explicit target only when it passes
+		// CheckExplicitTarget; otherwise the fallbacks continue below.
 		explicitUnitGUID = s.selection
 	} else if !isHarmfulSpell(spell) {
 		hitTargets = append(hitTargets, s.playerGUID)
 	}
-	if explicitUnitGUID != 0 && explicitUnitGUID != s.playerGUID {
-		if tgt, ok := s.getCombatTarget(ctx, explicitUnitGUID); ok {
-			// SpellInfo.cpp:1799-1816: the ENEMY explicit mask runs the
-			// Unit::IsValidAttackTarget flag gates (bundle always rejects,
-			// Object.cpp:2980) and the ALLY/PARTY/RAID masks run the
-			// WorldObject::IsValidAssistTarget gates (bundle only for
-			// negative spells, Object.cpp:3131).
-			explicitMask := spellExplicitUnitTargetMask(spell)
-			assist := explicitMask&(targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid) != 0
-			if spellTargetUnitBlocked(spell, tgt.UnitFlags, tgt.FlagsExtra, assist) {
+	// SpellInfo::CheckExplicitTarget null-target arm (SpellInfo.cpp:1784-1790):
+	// the wire target, the caster's selection, and the self default above are
+	// the Go mirrors of the targets Spell::SetTargetMap fills in before
+	// CheckCast runs (Spell.cpp:668-700 — selection, creature victim, self for
+	// ALLY/PARTY/RAID masks). When none of them produced a target and the
+	// spell's explicit mask needs a unit or gameobject target, the cast fails
+	// with SPELL_FAILED_BAD_TARGETS — unless the mask carries
+	// TARGET_FLAG_GAMEOBJECT_ITEM and the cast names an item target (the
+	// SpellInfo.cpp:1787 escape). Go's non-harmful self default is wider than
+	// C++'s (ALLY/PARTY/RAID only), so the arm only fires for spells that fell
+	// through every fallback.
+	if explicitUnitGUID == 0 && len(hitTargets) == 0 {
+		if needed := spellExplicitObjectTargetMask(spell); needed&(targetFlagUnitMask|targetFlagGameObject|targetFlagGameObjectItem) != 0 {
+			if needed&targetFlagGameObjectItem == 0 || target.Flags&protocol.SpellTargetFlagItemWireMask == 0 || target.ItemGUID == 0 {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
-				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "explicit target blocked")
-				return
-			}
-			// SpellInfo.cpp:1799-1816: the ENEMY/ALLY/PARTY/RAID explicit
-			// masks carry the hostility/faction gates.
-			if s.explicitTargetFactionBlocked(explicitMask, explicitUnitGUID, tgt) {
-				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
-				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "explicit target faction mismatch")
-				return
-			}
-			// SpellInfo.cpp:1736-1743: GM-invisible or GM-mode player targets
-			// reject the cast with SPELL_FAILED_BM_OR_INVISGOD; self is
-			// exempt (this block only runs when explicitUnitGUID != s.playerGUID).
-			if s.explicitTargetGMBlocked(explicitUnitGUID) {
-				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBmOrInvisGod), true)
-				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "explicit target GM/invisible")
+				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no explicit target for mask-needing spell")
 				return
 			}
 		}
-		hitTargets = append(hitTargets, explicitUnitGUID)
+	}
+	if explicitUnitGUID != 0 {
+		if explicitUnitGUID != s.playerGUID {
+			if tgt, ok := s.getCombatTarget(ctx, explicitUnitGUID); ok {
+				// SpellInfo.cpp:1799-1816: the ENEMY explicit mask runs the
+				// Unit::IsValidAttackTarget flag gates (bundle always rejects,
+				// Object.cpp:2980) and the ALLY/PARTY/RAID masks run the
+				// WorldObject::IsValidAssistTarget gates (bundle only for
+				// negative spells, Object.cpp:3131).
+				explicitMask := spellExplicitUnitTargetMask(spell)
+				assist := explicitMask&(targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid) != 0
+				if spellTargetUnitBlocked(spell, tgt.UnitFlags, tgt.FlagsExtra, assist) {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
+					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "explicit target blocked")
+					return
+				}
+				// SpellInfo.cpp:1799-1816: the ENEMY/ALLY/PARTY/RAID explicit
+				// masks carry the hostility/faction gates.
+				if s.explicitTargetFactionBlocked(explicitMask, explicitUnitGUID, tgt) {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
+					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "explicit target faction mismatch")
+					return
+				}
+				// SpellInfo.cpp:1736-1743: GM-invisible or GM-mode player targets
+				// reject the cast with SPELL_FAILED_BM_OR_INVISGOD; self is
+				// exempt (this block only runs when explicitUnitGUID != s.playerGUID).
+				if s.explicitTargetGMBlocked(explicitUnitGUID) {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBmOrInvisGod), true)
+					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "explicit target GM/invisible")
+					return
+				}
+			}
+			// Self is exempt from the gates above (CheckTarget's
+			// `unitTarget != caster` arm, SpellInfo.cpp:1738) and is a valid
+			// explicit target, so it lands in hitTargets too — previously an
+			// explicitly self-targeted cast fizzled with an empty hit list.
+			hitTargets = append(hitTargets, explicitUnitGUID)
+		}
 	}
 	areaSpell := isAreaEnemySpell(spell)
 	friendlyAreaSpell := isFriendlyAreaSpell(spell)
