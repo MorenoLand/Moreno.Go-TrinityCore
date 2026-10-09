@@ -235,6 +235,37 @@ func (s *session) ghostAttackTargetBlocked(guid uint64) bool {
 	return false
 }
 
+// startAttackOn mirrors the tail of C++ Unit::Attack (Unit.cpp:5650-5760) as
+// bridged in handleAttackSwing: it records the victim and emits
+// SMSG_ATTACK_START to the caster and nearby players. It is for
+// server-driven attack starts (e.g. Spell::EffectCharge's HIT_TARGET arm,
+// SpellEffects.cpp:4520-4525) where the target has already passed spell
+// target validation, so the CMSG gates are not re-run.
+func (s *session) startAttackOn(victim uint64) {
+	if s == nil || s.player == nil || victim == 0 {
+		return
+	}
+	if s.attackTarget != 0 && s.attackTarget == victim {
+		return
+	}
+	if s.attackTarget != 0 {
+		if err := s.sendAttackStop(s.attackTarget, false); err != nil {
+			return
+		}
+	}
+	s.attackTarget = victim
+	s.lastCombatTime = time.Now()
+	if s.player.UnitFlags&unitFlagInCombat == 0 {
+		s.player.UnitFlags |= unitFlagInCombat
+		s.sendPlayerUpdate()
+	}
+	startPayload := buildAttackStart(s.playerGUID, victim)
+	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPayload, true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPayload, s)
+	}
+}
+
 func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true

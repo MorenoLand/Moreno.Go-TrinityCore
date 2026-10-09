@@ -123,6 +123,38 @@ func (s *Server) broadcastTeleportMovement(source *session, payload []byte) {
 	}
 }
 
+// nearTeleportMove performs a server-initiated same-map near teleport: it
+// stages the destination for the client's MSG_MOVE_TELEPORT ack (which
+// applies the position, mirroring handleMoveTeleportAck) and pushes the
+// movement packets to the caster and nearby players. It is the same-map
+// branch of teleportTo (commands.go) without its combat, selection, pet,
+// and zone side effects, for spell effects that reposition the caster
+// without a full teleport (e.g. Spell::EffectCharge).
+func (s *session) nearTeleportMove(x, y, z, orientation float32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	movement := s.movementInfoForCreate(*s.player)
+	movement.GUID = s.playerGUID
+	movement.Flags &= movementPlayerStatusMask
+	if s.server != nil {
+		movement.Time = s.server.gameTimeMilliseconds()
+	}
+	movement.X, movement.Y, movement.Z, movement.Orientation = x, y, z, orientation
+	movement.FallTime, movement.Jump, movement.HasJump = 0, [4]float32{}, false
+	movement.SplineElevation, movement.HasSpline = 0, false
+	movement.HasPitch = movement.Flags&(movementSwimming|movementFlying) != 0 || movement.Flags2&movement2Pitch != 0
+	movement.Flags &^= movementOnTransport
+	movement.Transport = nil
+	s.nearTeleportPending = true
+	s.nearTeleportDest = nearTeleportDestination{X: x, Y: y, Z: z, Orientation: orientation, Movement: movement}
+	selfPacket, nearbyPacket := buildTeleportMovementPackets(s.playerGUID, movement)
+	_ = s.write(uint16(protocol.OpcodeMSG_MOVE_TELEPORT_ACK), selfPacket, true)
+	if s.server != nil {
+		s.server.broadcastTeleportMovement(s, nearbyPacket)
+	}
+}
+
 func (s *session) handleMoveTeleportAck(ctx context.Context, payload []byte) bool {
 	if s == nil || !s.playerLoaded || s.player == nil {
 		return true

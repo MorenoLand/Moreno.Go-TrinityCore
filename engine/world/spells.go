@@ -7075,6 +7075,26 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleEffectDiscoverTaxi(effCtx, eff)
 			case 114: // SPELL_EFFECT_ATTACK_ME (EffectTaunt)
 				s.handleEffectTaunt(effCtx, targetGUID, spellID)
+			case 96: // SPELL_EFFECT_CHARGE (EffectCharge, SpellEffects.cpp:4493)
+				s.handleEffectCharge(effCtx, targetGUID, spell)
+			case 85: // SPELL_EFFECT_SUMMON_PLAYER (EffectSummonPlayer, SpellEffects.cpp:3922)
+				// C++ runs at SPELL_EFFECT_HANDLE_HIT_TARGET per unit target: a
+				// player target gets SendSummonRequestFrom(caster). Only online
+				// players have sessions, which is the TYPEID_PLAYER gate; the
+				// HasSummonPending / Evil Twin gates live in sendSummonRequest
+				// (movement.go).
+				for _, effectTarget := range hitTargets {
+					if effectTarget == 0 {
+						continue
+					}
+					if s.server != nil && s.player != nil {
+						if targetSess := s.server.findSessionByGUID(effectTarget); targetSess != nil {
+							targetSess.sendSummonRequest(s.playerGUID, s.player.Zone)
+						}
+					}
+				}
+			case 66: // SPELL_EFFECT_CREATE_MANA_GEM (EffectRechargeManaGem, SpellEffects.cpp:5665)
+				s.handleEffectRechargeManaGem(effCtx, spell)
 			case 126: // SPELL_EFFECT_STEAL_BENEFICIAL_BUFF
 				s.handleEffectSpellsteal(effCtx, targetGUID, spell, eff)
 			case spellEffectInterruptCast: // 68: SPELL_EFFECT_INTERRUPT_CAST
@@ -18718,6 +18738,74 @@ func spellIsLootCrafting(spell wotlk.Spell) bool {
 	}
 	return e0.Effect == spellEffectCreateItem2 &&
 		(spell.RequiredTotemCategory[0] != 0 || (spell.Totem[0] != 0 && spell.SpellIconID == 1) || e0.ItemType == 0)
+}
+
+// handleEffectCharge mirrors Spell::EffectCharge (SpellEffects.cpp:4493-4526).
+// The caster is always the player session on this cast path, so the
+// !unitCaster gate is vacuous. LAUNCH_TARGET arm: a player caster resets
+// fall info (Player::SetFallInformation(0, z)) and charges to the target's
+// first-collision position at its combat reach along the caster-relative
+// angle (Unit::GetFirstCollisionPosition / GetRelativeAngle). Go has no
+// MotionMaster/MoveCharge spline model (documented no-bridge, boss_ai.go),
+// so the move lands as a server-initiated near teleport to that contact
+// point, facing the target; the spell-Speed-vs-SPEED_CHARGE selection has
+// no consumer without splines. HIT_TARGET arm: a non-positive charge spell
+// makes a player caster attack the target (Unit::Attack(target, true)).
+// The m_preGeneratedPath arm has no Go consumer (no path model).
+func (s *session) handleEffectCharge(ctx context.Context, targetGUID uint64, spell wotlk.Spell) {
+	if targetGUID == 0 || s == nil || s.player == nil {
+		return
+	}
+	s.lastFallTime, s.lastFallZ = 0, s.player.Z
+	target, ok := s.getCombatTarget(ctx, targetGUID)
+	if !ok {
+		return
+	}
+	reach := target.CombatReach
+	if reach <= 0 {
+		reach = 1.5
+	}
+	angle := math.Atan2(float64(s.player.Y-target.Y), float64(s.player.X-target.X))
+	destX := target.X + reach*float32(math.Cos(angle))
+	destY := target.Y + reach*float32(math.Sin(angle))
+	facing := float32(math.Atan2(float64(target.Y-destY), float64(target.X-destX)))
+	s.nearTeleportMove(destX, destY, target.Z, facing)
+	if !spellIsPositive(spell) && target.Health != 0 {
+		s.startAttackOn(targetGUID)
+	}
+}
+
+// handleEffectRechargeManaGem mirrors Spell::EffectRechargeManaGem
+// (SpellEffects.cpp:5665-5693), the SPELL_EFFECT_CREATE_MANA_GEM (66)
+// HIT_TARGET arm. The caster must be a player; the recharged item is
+// Effects[EFFECT_0].ItemType (the effect-0 entry, not the current effect
+// index). A missing item template answers EQUIP_ERR_ITEM_NOT_FOUND; a
+// carried gem gets its per-spell charges reset to the template values
+// (Item::SetSpellCharges + SetState(ITEM_CHANGED, player)), persisted to
+// item_instance and pushed to the client via the inventory resync.
+func (s *session) handleEffectRechargeManaGem(ctx context.Context, spell wotlk.Spell) {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || len(spell.Effects) == 0 {
+		return
+	}
+	itemID := spell.Effects[0].ItemType
+	proto, ok := s.server.getItemStoreTemplateInfo(ctx, itemID)
+	if !ok {
+		s.sendEquipError(equipErrItemNotFound, 0)
+		return
+	}
+	db := s.server.CharactersStore.DB
+	var itemGUID int64
+	if err := db.QueryRowContext(ctx, `SELECT ci.item FROM character_inventory ci
+		JOIN item_instance ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ii.itemEntry = ? LIMIT 1`, s.playerGUID, itemID).Scan(&itemGUID); err != nil || itemGUID == 0 {
+		return
+	}
+	charges := fmt.Sprintf("%d %d %d %d %d",
+		int32(proto.SpellCharges[0]), int32(proto.SpellCharges[1]), int32(proto.SpellCharges[2]),
+		int32(proto.SpellCharges[3]), int32(proto.SpellCharges[4]))
+	_, _ = db.ExecContext(ctx, "UPDATE item_instance SET charges = ? WHERE guid = ?", charges, itemGUID)
+	_ = s.sendInventoryItems(ctx)
+	s.sendPlayerUpdate()
 }
 
 func (s *session) handleEffectResurrect(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
