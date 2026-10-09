@@ -1169,7 +1169,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		} else {
 			targetMotion.Health -= damage
 			if targetMotion.ThreatMgr == nil {
-				targetMotion.ThreatMgr = NewThreatManager(targetMotion.GUID)
+				targetMotion.ThreatMgr = NewThreatManager(targetMotion)
 			}
 			targetMotion.ThreatMgr.AddThreat(caster.OwnerGUID, float32(damage), false)
 			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.

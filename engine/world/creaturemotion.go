@@ -414,7 +414,7 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			motion.Mana = st.Mana
 		}
 		if motion.ThreatMgr == nil {
-			motion.ThreatMgr = NewThreatManager(key)
+			motion.ThreatMgr = NewThreatManager(motion)
 		}
 		if motion.BossAI == nil {
 			motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
@@ -553,7 +553,7 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 			return
 		}
 		if motion.ThreatMgr == nil {
-			motion.ThreatMgr = NewThreatManager(creatureGUID)
+			motion.ThreatMgr = NewThreatManager(motion)
 		}
 		if motion.BossAI == nil {
 			motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
@@ -651,6 +651,7 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 		s.motionMu.Unlock()
 		return
 	}
+	lastCharmer := motion.CharmerGUID
 	motion.Charmed = false
 	motion.CharmerGUID = 0
 	motion.UnitFlags = motion.CharmUnitFlags
@@ -661,10 +662,37 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 	motion.CharmUnitFlags = 0
 	motion.CharmFaction = 0
 	motion.CharmOwnerGUID = 0
-	mapID, rawGUID := motion.Map, motion.GUID
+	// Unit::RemoveCharmedBy ends charm with CombatStop() (Unit.cpp:11940+):
+	// the unit leaves combat before the restored AI's OnCharmed runs.
+	// Threat is kept — C++ CombatStop does not clear the threat table.
+	motion.TargetGUID = 0
+	motion.InCombat = false
+	motion.Moving = false
+	// CreatureAI::OnCharmed (CreatureAI.cpp:54-70): the restored AI engages
+	// the last charmer unless passive (the EngageWithTarget 0.0f threat seed,
+	// Unit.cpp:8429-8438). A stale/gone charmer GUID resolves to the combat
+	// tick's target-gone site next pass, which evades
+	// (EVADE_REASON_NO_HOSTILES) — outcome-equivalent within one tick, so no
+	// ctx/now threading is needed here. Creature charmers are an accepted
+	// edge: the tick only resolves player targets.
+	engaged := false
+	if lastCharmer != 0 && !isCreaturePassive(motion) {
+		if motion.ThreatMgr == nil {
+			motion.ThreatMgr = NewThreatManager(motion)
+		}
+		motion.ThreatMgr.AddThreat(lastCharmer, 0, true)
+		motion.TargetGUID = lastCharmer
+		motion.InCombat = true
+		engaged = true
+	}
+	mapID, instanceID, rawGUID := motion.Map, motion.InstanceID, motion.GUID
 	flags, faction := motion.UnitFlags, motion.Faction
 	s.motionMu.Unlock()
-	s.broadcastCreatureValuesUpdateInInstance(mapID, motion.InstanceID, rawGUID, map[int]uint32{unitFieldFlags: flags, unitFieldFaction: faction})
+	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, rawGUID, map[int]uint32{unitFieldFlags: flags, unitFieldFaction: faction})
+	if engaged {
+		startPkt := buildAttackStart(rawGUID, lastCharmer)
+		s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, nil)
+	}
 }
 
 // triggerCreatureEvade resets a creature's combat state, clears threat & auras,
@@ -1550,7 +1578,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// leg on a zero add (ThreatManager::AddThreat new-target arm).
 			motion.InCombat = true
 			if motion.ThreatMgr == nil {
-				motion.ThreatMgr = NewThreatManager(motion.GUID)
+				motion.ThreatMgr = NewThreatManager(motion)
 			}
 			if motion.BossAI == nil {
 				motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)

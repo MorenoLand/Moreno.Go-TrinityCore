@@ -410,12 +410,13 @@ func (s *session) addInitialNegativeThreatLocked(targetGUID uint64, amount float
 		return
 	}
 	// Spell.cpp:5143-5144: the negative path skips targets that cannot
-	// have a threat list.
-	if motion.OwnerGUID != 0 {
+	// have a threat list (ThreatManager::CanHaveThreatList,
+	// ThreatManager.cpp:156-179 — charmed creatures keep their lists).
+	if !motionCanHaveThreatList(motion) {
 		return
 	}
 	if motion.ThreatMgr == nil {
-		motion.ThreatMgr = NewThreatManager(motion.GUID)
+		motion.ThreatMgr = NewThreatManager(motion)
 	}
 	dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
 	inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)

@@ -297,7 +297,7 @@ func (s *session) applySharedDamageToCreature(ctx context.Context, key creatureA
 	// Unit::DealDamage tap block (Unit.cpp:872-876) is not damagetype-gated.
 	s.server.recordCreatureTap(motion, attackerGUID, groupID, share, motion.Health)
 	if motion.ThreatMgr == nil {
-		motion.ThreatMgr = NewThreatManager(motion.GUID)
+		motion.ThreatMgr = NewThreatManager(motion)
 	}
 	motion.ThreatMgr.AddThreat(attackerGUID, float32(share), false)
 	killed := share >= motion.Health

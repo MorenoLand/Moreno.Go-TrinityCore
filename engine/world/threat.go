@@ -18,6 +18,13 @@ type ThreatManager struct {
 	currentVictim  uint64
 	entries        map[uint64]float32
 	lastClientSync time.Time
+	// ownerCanHaveThreatList caches ThreatManager::CanHaveThreatList
+	// (ThreatManager.cpp:156-179) for the owner at construction, mirroring
+	// C++'s _ownerCanHaveThreatList (ThreatManager.cpp:196). Pets, totems,
+	// triggers and player-summoned minions/guardians never create threat
+	// refs — ThreatManager::AddThreat's !CanHaveThreatList() early leg
+	// (ThreatManager.cpp:328-339) keeps combat state only.
+	ownerCanHaveThreatList bool
 	// updateTimerMs counts down to the next ThreatManager::Update
 	// (ThreatManager.cpp:199-209, THREAT_UPDATE_INTERVAL = 1000ms).
 	updateTimerMs int64
@@ -31,13 +38,45 @@ type ThreatManager struct {
 	tauntExpiry map[uint64]time.Time
 }
 
-// NewThreatManager initializes a ThreatManager for a creature.
-func NewThreatManager(ownerGUID uint64) *ThreatManager {
-	return &ThreatManager{
-		ownerGUID:   ownerGUID,
-		entries:     make(map[uint64]float32),
-		tauntExpiry: make(map[uint64]time.Time),
+// motionCanHaveThreatList mirrors ThreatManager::CanHaveThreatList
+// (ThreatManager.cpp:156-179): only creatures that are not pets, totems or
+// triggers — and not player-summoned minions/guardians — keep a threat list.
+// Go models pets as creatureMotions with a nonzero OwnerGUID (totems are not
+// motions at all; triggers carry no type flag on the motion and their threat
+// is never read); charmed creatures also carry OwnerGUID (charmCreature) but
+// C++ keeps their threat lists, so they are carved out explicitly.
+func motionCanHaveThreatList(motion *creatureMotion) bool {
+	if motion == nil {
+		return true
 	}
+	return motion.OwnerGUID == 0 || motion.Charmed
+}
+
+// NewThreatManager initializes a ThreatManager for a creature motion,
+// caching the owner's CanHaveThreatList answer like C++'s Initialize()
+// (ThreatManager.cpp:194-197). A nil motion keeps the historical default.
+func NewThreatManager(motion *creatureMotion) *ThreatManager {
+	var ownerGUID uint64
+	if motion != nil {
+		ownerGUID = motion.GUID
+	}
+	return &ThreatManager{
+		ownerGUID:              ownerGUID,
+		ownerCanHaveThreatList: motionCanHaveThreatList(motion),
+		entries:                make(map[uint64]float32),
+		tauntExpiry:            make(map[uint64]time.Time),
+	}
+}
+
+// OwnerCanHaveThreatList reports the cached ThreatManager::CanHaveThreatList
+// answer for the owner. Damage funnels consult it before consuming redirect
+// registries or switching victims: C++ runs those arms inside AddThreat,
+// after the !CanHaveThreatList() early return (ThreatManager.cpp:328-339).
+func (tm *ThreatManager) OwnerCanHaveThreatList() bool {
+	if tm == nil {
+		return true
+	}
+	return tm.ownerCanHaveThreatList
 }
 
 // FixateTarget mirrors ThreatManager::FixateTarget (ThreatManager.cpp:494-506):
@@ -340,6 +379,16 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 // (spell_threat.go: handleSpellInitialThreat).
 func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) (switched bool, newVictim uint64) {
 	if victim == 0 {
+		return false, tm.currentVictim
+	}
+	// ThreatManager::AddThreat (ThreatManager.cpp:328-339): a unit that
+	// cannot have a threat list (pets, totems, triggers, player-summoned
+	// minions/guardians) never creates threat refs — combat state only,
+	// which the callers' engagement path already maintains. The redirect
+	// consumption below is likewise skipped: in C++ it runs inside AddThreat
+	// after this early return, so callers must also guard the redirect arm
+	// (see OwnerCanHaveThreatList).
+	if !tm.ownerCanHaveThreatList {
 		return false, tm.currentVictim
 	}
 	tm.mu.Lock()
@@ -951,14 +1000,15 @@ func (s *session) handleEffectTaunt(ctx context.Context, targetGUID uint64, spel
 		return
 	}
 	// Spell::EffectTaunt (SpellEffects.cpp:3153-3157): entities that cannot
-	// have a threat list (ThreatManager.cpp:156-168 — pets, totems, triggers,
-	// player-summoned minions/guardians) reject the taunt silently; Go marks
-	// all of those with a nonzero OwnerGUID.
-	if motion.OwnerGUID != 0 {
+	// have a threat list (ThreatManager::CanHaveThreatList,
+	// ThreatManager.cpp:156-179 — pets, totems, triggers, player-summoned
+	// minions/guardians) reject the taunt silently. Charmed creatures keep
+	// their lists, so they are not rejected.
+	if !motionCanHaveThreatList(motion) {
 		return
 	}
 	if motion.ThreatMgr == nil {
-		motion.ThreatMgr = NewThreatManager(targetGUID)
+		motion.ThreatMgr = NewThreatManager(motion)
 	}
 	// Spell::EffectTaunt (SpellEffects.cpp:3155-3159): taunting a target
 	// already attacking the caster is a silent no-op.
@@ -1024,7 +1074,7 @@ func (s *Server) distributeHealingThreat(ctx context.Context, healerGUID, target
 	threatPerCreature := totalThreat / float32(len(engaged))
 	for _, m := range engaged {
 		if m.ThreatMgr == nil {
-			m.ThreatMgr = NewThreatManager(m.GUID)
+			m.ThreatMgr = NewThreatManager(m)
 		}
 		dist := distance3D(healerSess.player.X, healerSess.player.Y, healerSess.player.Z, m.X, m.Y, m.Z)
 		inMelee := inMeleeThreatRange(m.CombatReach, healerSess.player.CombatReach, dist)

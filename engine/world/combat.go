@@ -803,7 +803,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 				rageMapID, rageInstanceID, rageGUID = motion.Map, motion.InstanceID, motion.GUID
 			}
 			if motion.ThreatMgr == nil {
-				motion.ThreatMgr = NewThreatManager(target.GUID)
+				motion.ThreatMgr = NewThreatManager(motion)
 			}
 			if motion.BossAI == nil {
 				motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
@@ -813,16 +813,23 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			threat := float32(damage) * s.getThreatMultiplier(1)
 			// Unit::DealDamage (Unit.cpp:906) calls AddThreat with default
 			// args (ignoreRedirects=false): the caster's redirect registry
-			// applies to damage threat.
-			threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
-			switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
-			if rSwitched {
-				switched, newVictim = true, rVictim
-			}
-			if switched && newVictim != motion.TargetGUID {
-				motion.TargetGUID = newVictim
-				entries := motion.ThreatMgr.SortedEntries()
-				s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, entries)
+			// applies to damage threat. The whole arm is skipped for units
+			// that cannot have a threat list — ThreatManager::AddThreat's
+			// !CanHaveThreatList() early leg (ThreatManager.cpp:328-339)
+			// runs before redirect consumption in C++, so the redirect
+			// split and the victim switch are gated here too; combat state
+			// alone is kept (the aggro path below sets InCombat).
+			if motion.ThreatMgr.OwnerCanHaveThreatList() {
+				threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
+				switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
+				if rSwitched {
+					switched, newVictim = true, rVictim
+				}
+				if switched && newVictim != motion.TargetGUID {
+					motion.TargetGUID = newVictim
+					entries := motion.ThreatMgr.SortedEntries()
+					s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, entries)
+				}
 			}
 			if motion.BossAI != nil {
 				motion.BossAI.OnDamageTaken(ctx, s.server, motion, s.playerGUID, damage)
@@ -1221,7 +1228,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				rageMapID, rageInstanceID, rageGUID = motion.Map, motion.InstanceID, motion.GUID
 			}
 			if motion.ThreatMgr == nil {
-				motion.ThreatMgr = NewThreatManager(target.GUID)
+				motion.ThreatMgr = NewThreatManager(motion)
 			}
 			if motion.BossAI == nil {
 				motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
@@ -1229,18 +1236,24 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			threat := float32(damage) * s.getThreatMultiplier(uint32(schoolMask))
 			// Unit::DealDamage (Unit.cpp:906) calls AddThreat with default
 			// args (ignoreRedirects=false): the caster's redirect registry
-			// applies to damage threat.
-			threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
-			dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
-			inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
-			switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
-			if rSwitched {
-				switched, newVictim = true, rVictim
-			}
-			if switched && newVictim != motion.TargetGUID {
-				motion.TargetGUID = newVictim
-				entries := motion.ThreatMgr.SortedEntries()
-				s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, entries)
+			// applies to damage threat. The whole arm is skipped for units
+			// that cannot have a threat list — ThreatManager::AddThreat's
+			// !CanHaveThreatList() early leg (ThreatManager.cpp:328-339)
+			// runs before redirect consumption in C++; combat state alone
+			// is kept (the aggro path below sets InCombat).
+			if motion.ThreatMgr.OwnerCanHaveThreatList() {
+				threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
+				dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
+				inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
+				switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
+				if rSwitched {
+					switched, newVictim = true, rVictim
+				}
+				if switched && newVictim != motion.TargetGUID {
+					motion.TargetGUID = newVictim
+					entries := motion.ThreatMgr.SortedEntries()
+					s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, entries)
+				}
 			}
 			if motion.BossAI != nil {
 				motion.BossAI.OnDamageTaken(ctx, s.server, motion, s.playerGUID, damage)

@@ -9868,7 +9868,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			wasInCombat := motion.InCombat
 			motion.InCombat = true
 			if motion.ThreatMgr == nil {
-				motion.ThreatMgr = NewThreatManager(target.GUID)
+				motion.ThreatMgr = NewThreatManager(motion)
 			}
 			if motion.BossAI == nil {
 				motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
@@ -9886,7 +9886,11 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			// unengaged target — ThreatManager.cpp:311-317): the add is
 			// skipped, matching C++'s early return before ref creation.
 			threat := s.damageThreatAmount(ctx, spellID, uint32(schoolMask), float32(damage), wasInCombat)
-			if threat > 0 {
+			// The threat arm is skipped for units that cannot have a threat
+			// list (ThreatManager::AddThreat's !CanHaveThreatList() early leg,
+			// ThreatManager.cpp:328-339): no redirect consumption, no victim
+			// switch — combat state alone is kept (InCombat was set above).
+			if threat > 0 && motion.ThreatMgr.OwnerCanHaveThreatList() {
 				threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
 				switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
 				if rSwitched {
@@ -11092,17 +11096,25 @@ func (s *session) applySpellThreat(ctx context.Context, spell wotlk.Spell, targe
 		return
 	}
 	if motion.ThreatMgr == nil {
-		motion.ThreatMgr = NewThreatManager(motion.GUID)
+		motion.ThreatMgr = NewThreatManager(motion)
 	}
 	wasInCombat := motion.InCombat
 	inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z))
-	threat := float32(amount)
-	threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
-	switched, victim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
-	if rSwitched {
-		switched, victim = true, rVictim
+	// Units that cannot have a threat list skip the whole arm
+	// (ThreatManager::AddThreat's !CanHaveThreatList() early leg,
+	// ThreatManager.cpp:328-339): no redirect consumption, no victim set —
+	// combat state alone is kept.
+	switched := false
+	var victim uint64
+	if motion.ThreatMgr.OwnerCanHaveThreatList() {
+		threat := float32(amount)
+		threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
+		switched, victim = motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
+		if rSwitched {
+			switched, victim = true, rVictim
+		}
+		motion.TargetGUID = victim
 	}
-	motion.TargetGUID = victim
 	motion.InCombat = true
 	motion.Moving = false
 	mapID := motion.Map
@@ -17312,7 +17324,7 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 			wasInCombat := motion.InCombat
 			motion.InCombat = true
 			if motion.ThreatMgr == nil {
-				motion.ThreatMgr = NewThreatManager(target.GUID)
+				motion.ThreatMgr = NewThreatManager(motion)
 			}
 			dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
 			inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
@@ -17327,7 +17339,11 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 			// spell: the add is skipped, matching C++'s early return
 			// (ThreatManager.cpp:311-317).
 			dmgThreat := s.damageThreatAmount(ctx, aura.SpellID, aura.SchoolMask, float32(dmg), wasInCombat)
-			if dmgThreat > 0 {
+			// The threat arm is skipped for units that cannot have a threat
+			// list (ThreatManager::AddThreat's !CanHaveThreatList() early leg,
+			// ThreatManager.cpp:328-339): no redirect consumption, no add —
+			// combat state alone is kept (InCombat was set above).
+			if dmgThreat > 0 && motion.ThreatMgr.OwnerCanHaveThreatList() {
 				dmgThreat, _, _ = s.splitThreatRedirects(motion, dmgThreat)
 				motion.ThreatMgr.AddThreat(s.playerGUID, dmgThreat, inMelee)
 			}
