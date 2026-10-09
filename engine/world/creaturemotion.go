@@ -1456,9 +1456,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// (Unit.cpp:815-924): the received leg converts damage + absorbed.
 			absorbedDmg := uint32(0)
 			if damage > 0 && isPlayerVictim {
-				absorbed, rem := target.Sess.applyAbsorptionShields(damage, 1)
+				// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the creature
+				// attacker's MOD_TARGET_ABSORB_SCHOOL (194) pct bypasses absorbs.
+				bypass := absorbIgnoreBypass(damage, s.creatureAbsorbIgnorePct(creatureAuraKeyForMotion(motion), 1))
+				absorbed, rem := target.Sess.applyAbsorptionShields(damage-bypass, 1)
 				absorbedDmg = absorbed
-				damage = rem
+				damage = rem + bypass
 				if rem == 0 && absorbed > 0 {
 					hitInfo |= protocol.HitInfoFullAbsorb
 				} else if absorbed > 0 {

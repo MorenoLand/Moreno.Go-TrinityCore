@@ -111,7 +111,12 @@ const (
 	spellAttr3DrainSoul                 uint32 = 0x08000000 // SPELL_ATTR3_DRAIN_SOUL (SharedDefines.h:550) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 	spellAttr3BlockableSpell            uint32 = 0x00000008 // SPELL_ATTR3_BLOCKABLE_SPELL (SharedDefines.h:526) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 
-	spellAuraIgnoreHitDirection uint32 = 288 // SPELL_AURA_IGNORE_HIT_DIRECTION (SpellAuraDefines.h) — Deterrence is the only 3.3.5a source
+	spellAuraIgnoreHitDirection    uint32 = 288 // SPELL_AURA_IGNORE_HIT_DIRECTION (SpellAuraDefines.h) — Deterrence is the only 3.3.5a source
+	spellAuraModRegenDuringCombat  uint32 = 116 // SPELL_AURA_MOD_REGEN_DURING_COMBAT (SpellAuraDefines.h) — health regen keeps running in combat (Second Wind)
+	spellAuraModCombatResultChance uint32 = 248 // SPELL_AURA_MOD_COMBAT_RESULT_CHANCE (SpellAuraDefines.h) — attacker auras reducing victim dodge (MiscValue == VICTIMSTATE_DODGE)
+	spellAuraModTargetAbsorbSchool uint32 = 194 // SPELL_AURA_MOD_TARGET_ABSORB_SCHOOL (SpellAuraDefines.h) — attacker's pct of damage bypassing victim absorbs
+
+	victimStateDodge = 2 // VICTIMSTATE_DODGE (Unit.h:47) — MiscValue for MOD_COMBAT_RESULT_CHANCE dodge reduction
 
 	spellFailedEquippedItemClass         uint8  = 29  // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
 	spellFailedEquippedItemClassMainhand uint8  = 30  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
@@ -9738,7 +9743,11 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 					playerSess.applyResilienceToDamage(true, &damage, isCrit, CombatRatingCritTakenSpell)
 				}
 				if !instantKill && damage > 0 {
-					absorbed, damage = playerSess.applyAbsorptionShields(damage, schoolMask)
+					// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
+					// MOD_TARGET_ABSORB_SCHOOL (194) pct of damage bypasses absorbs.
+					bypass := absorbIgnoreBypass(damage, s.absorbIgnorePct(uint32(schoolMask)))
+					absorbed, damage = playerSess.applyAbsorptionShields(damage-bypass, schoolMask)
+					damage += bypass
 				}
 			}
 		} else if !instantKill && s.server != nil && damage > 0 {
@@ -9750,7 +9759,11 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
 				damage = creatureSpellDamageBonusTaken(s.server, damage, spell, uint32(schoolMask), creatureAuraKeyForTarget(target), s)
 			}
-			absorbed, damage = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage, schoolMask)
+			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
+			// MOD_TARGET_ABSORB_SCHOOL (194) pct of damage bypasses absorbs.
+			bypass := absorbIgnoreBypass(damage, s.absorbIgnorePct(uint32(schoolMask)))
+			absorbed, damage = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage-bypass, schoolMask)
+			damage += bypass
 		}
 	}
 
@@ -13176,6 +13189,10 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 			}
 		}
 		dodgeChance -= expertiseBP
+		// Reduce the victim's dodge chance by the attacker's
+		// SPELL_AURA_MOD_COMBAT_RESULT_CHANCE (248) auras with
+		// MiscValue == VICTIMSTATE_DODGE (Unit.cpp:2694-2695).
+		dodgeChance += s.totalAuraModifierByMiscValue(spellAuraModCombatResultChance, victimStateDodge)
 		if dodgeChance < 0 {
 			dodgeChance = 0
 		}
@@ -16128,7 +16145,11 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 		absorbed := uint32(0)
 		if dmg > 0 {
-			absorbed, dmg = ts.applyAbsorptionShields(dmg, uint8(aura.SchoolMask))
+			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the caster's
+			// MOD_TARGET_ABSORB_SCHOOL (194) pct of damage bypasses absorbs.
+			bypass := absorbIgnoreBypass(dmg, ts.server.tickCasterAbsorbIgnorePct(tickCaster, aura.CasterGUID, ts.player.Map, ts.player.InstanceID, uint32(aura.SchoolMask)))
+			absorbed, dmg = ts.applyAbsorptionShields(dmg-bypass, uint8(aura.SchoolMask))
+			dmg += bypass
 		}
 		targetHealth := ts.player.Health
 		overkill := uint32(0)
@@ -16330,7 +16351,11 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 		absorbed := uint32(0)
 		if dmg > 0 {
-			absorbed, dmg = ts.applyAbsorptionShields(dmg, uint8(aura.SchoolMask))
+			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the caster's
+			// MOD_TARGET_ABSORB_SCHOOL (194) pct of damage bypasses absorbs.
+			bypass := absorbIgnoreBypass(dmg, ts.server.tickCasterAbsorbIgnorePct(tickCaster, aura.CasterGUID, ts.player.Map, ts.player.InstanceID, uint32(aura.SchoolMask)))
+			absorbed, dmg = ts.applyAbsorptionShields(dmg-bypass, uint8(aura.SchoolMask))
+			dmg += bypass
 		}
 		targetHealth := ts.player.Health
 		overkill := uint32(0)
@@ -16585,7 +16610,11 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 		burnAbsorbed := uint32(0)
 		if dmg > 0 {
-			burnAbsorbed, dmg = ts.applyAbsorptionShields(dmg, uint8(aura.SchoolMask))
+			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the caster's
+			// MOD_TARGET_ABSORB_SCHOOL (194) pct of damage bypasses absorbs.
+			bypass := absorbIgnoreBypass(dmg, ts.server.tickCasterAbsorbIgnorePct(burnCaster, aura.CasterGUID, ts.player.Map, ts.player.InstanceID, uint32(aura.SchoolMask)))
+			burnAbsorbed, dmg = ts.applyAbsorptionShields(dmg-bypass, uint8(aura.SchoolMask))
+			dmg += bypass
 		}
 		burnTargetHealth := ts.player.Health
 		burnOverkill := uint32(0)
@@ -16925,7 +16954,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		}
 		absorbed := uint32(0)
 		if dmg > 0 && s.server != nil {
-			absorbed, dmg = s.server.applyCreatureAbsorptionShields(key, dmg, uint8(aura.SchoolMask))
+			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the caster's
+			// MOD_TARGET_ABSORB_SCHOOL (194) pct of damage bypasses absorbs.
+			bypass := absorbIgnoreBypass(dmg, s.server.tickCasterAbsorbIgnorePct(tickCaster, aura.CasterGUID, key.Map, key.InstanceID, uint32(aura.SchoolMask)))
+			absorbed, dmg = s.server.applyCreatureAbsorptionShields(key, dmg-bypass, uint8(aura.SchoolMask))
+			dmg += bypass
 		}
 		targetHealth := target.Health
 		overkill := uint32(0)
@@ -17165,7 +17198,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		}
 		absorbed := uint32(0)
 		if dmg > 0 && s.server != nil {
-			absorbed, dmg = s.server.applyCreatureAbsorptionShields(key, dmg, uint8(aura.SchoolMask))
+			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the caster's
+			// MOD_TARGET_ABSORB_SCHOOL (194) pct of damage bypasses absorbs.
+			bypass := absorbIgnoreBypass(dmg, s.server.tickCasterAbsorbIgnorePct(tickCaster, aura.CasterGUID, key.Map, key.InstanceID, uint32(aura.SchoolMask)))
+			absorbed, dmg = s.server.applyCreatureAbsorptionShields(key, dmg-bypass, uint8(aura.SchoolMask))
+			dmg += bypass
 		}
 		targetHealth := target.Health
 		overkill := uint32(0)
@@ -17465,7 +17502,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		}
 		burnAbsorbed := uint32(0)
 		if dmg > 0 && s.server != nil {
-			burnAbsorbed, dmg = s.server.applyCreatureAbsorptionShields(key, dmg, uint8(aura.SchoolMask))
+			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the caster's
+			// MOD_TARGET_ABSORB_SCHOOL (194) pct of damage bypasses absorbs.
+			bypass := absorbIgnoreBypass(dmg, s.server.tickCasterAbsorbIgnorePct(burnCaster, aura.CasterGUID, key.Map, key.InstanceID, uint32(aura.SchoolMask)))
+			burnAbsorbed, dmg = s.server.applyCreatureAbsorptionShields(key, dmg-bypass, uint8(aura.SchoolMask))
+			dmg += bypass
 		}
 		burnTargetHealth := target.Health
 		burnOverkill := uint32(0)

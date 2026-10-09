@@ -37,6 +37,90 @@ func getAbsorptionPriority(aura *activeAura) int {
 	}
 }
 
+// absorbIgnorePct mirrors the Unit::CalcAbsorbResist absorb-ignore arm
+// (Unit.cpp:1839-1857): the attacker's max positive
+// SPELL_AURA_MOD_TARGET_ABSORB_SCHOOL (194) amount whose MiscValue overlaps
+// the school mask, clamped to 0..100. That percent of the post-resist damage
+// bypasses the victim's absorb shields. The sibling 245
+// (MOD_TARGET_ABILITY_ABSORB_SCHOOL, spell-specific) has no Go model and
+// stays unbridged.
+func (s *session) absorbIgnorePct(schoolMask uint32) float64 {
+	if s == nil {
+		return 0
+	}
+	pct := s.maxPositiveAuraModifierByMiscMask(spellAuraModTargetAbsorbSchool, int32(schoolMask))
+	if pct > 100 {
+		pct = 100
+	}
+	return float64(pct)
+}
+
+// creatureAbsorbIgnorePct is the creature-attacker analog of absorbIgnorePct,
+// scanning activeCreatureAuras for SPELL_AURA_MOD_TARGET_ABSORB_SCHOOL (194)
+// amounts whose effect MiscValue overlaps the school mask.
+func (s *Server) creatureAbsorbIgnorePct(key creatureAuraKey, schoolMask uint32) float64 {
+	if s == nil || key.GUID == 0 {
+		return 0
+	}
+	maxValue := int32(0)
+	s.auraMu.Lock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		matched := false
+		if s.Data != nil {
+			if spell, found, err := s.Data.Spell(aura.SpellID); err == nil && found {
+				for index, effect := range spell.Effects {
+					if effect.Aura != spellAuraModTargetAbsorbSchool || aura.EffectMask&(1<<uint(index)) == 0 {
+						continue
+					}
+					if effect.MiscValue&int32(schoolMask) == 0 {
+						continue
+					}
+					if amount := aura.Amounts[index]; amount > maxValue {
+						maxValue = amount
+					}
+					matched = true
+				}
+			}
+		}
+		if !matched && aura.AuraType == spellAuraModTargetAbsorbSchool && aura.MiscValue&int32(schoolMask) != 0 {
+			if amount := int32(aura.Amount); amount > maxValue {
+				maxValue = amount
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	if maxValue > 100 {
+		maxValue = 100
+	}
+	return float64(maxValue)
+}
+
+// absorbIgnoreBypass returns the portion of damage that runs past the
+// victim's absorb shields under the attacker's absorb-ignore pct (the
+// CalculatePct arm of Unit::CalcAbsorbResist, Unit.cpp:1853-1855).
+func absorbIgnoreBypass(damage uint32, ignorePct float64) uint32 {
+	if damage == 0 || ignorePct <= 0 {
+		return 0
+	}
+	return uint32(float64(damage) * ignorePct / 100)
+}
+
+// tickCasterAbsorbIgnorePct resolves the Unit::CalcAbsorbResist 194 arm for a
+// periodic tick: the caster session's auras when the caster is a known player,
+// else the creature caster's auras via its creature aura key.
+func (s *Server) tickCasterAbsorbIgnorePct(casterSess *session, casterGUID uint64, mapID, instanceID uint32, schoolMask uint32) float64 {
+	if casterSess != nil {
+		return casterSess.absorbIgnorePct(schoolMask)
+	}
+	if s == nil || casterGUID == 0 {
+		return 0
+	}
+	return s.creatureAbsorbIgnorePct(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: casterGUID}, schoolMask)
+}
+
 // applyAbsorptionShields applies active absorption shields (Power Word: Shield, Ice Barrier, etc.)
 // to mitigate incoming damage of the given school mask according to TrinityCore priority order.
 // Returns absorbed damage and remaining unabsorbed damage.

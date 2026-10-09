@@ -1053,6 +1053,9 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil {
 			victim.applyResilienceToDamage(true, &damage, false, CombatRatingCritTakenSpell)
 			if damage > 0 {
+				// Pet attackers carry no Go aura model, so the
+				// MOD_TARGET_ABSORB_SCHOOL (194) absorb-ignore arm
+				// (Unit.cpp:1839-1857) stays unbridged here.
 				absorbed, damage = victim.applyAbsorptionShields(damage, schoolMask)
 			}
 		}

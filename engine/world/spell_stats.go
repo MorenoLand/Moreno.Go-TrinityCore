@@ -257,6 +257,90 @@ func (s *session) playerAuraModifierByMiscMask(auraType uint32, miscMask int32) 
 	return total
 }
 
+// auraTypeModifiersFiltered returns per-effect amounts of the given aura type
+// for which match(effect MiscValue) is true. It mirrors
+// Unit::GetTotalAuraModifierByMiscMask (Unit.cpp:4937) when match tests the
+// mask overlap, and Unit::GetTotalAuraModifierByMiscValue (Unit.cpp:4977-4985)
+// when match tests equality. The structure follows auraTypeModifiers in
+// movement_speed.go: per-effect amounts from loadedAuras via the DBC spell
+// effects, with the stored single-amount fallback.
+func (s *session) auraTypeModifiersFiltered(auraType uint32, match func(miscValue int32) bool) []int32 {
+	if s == nil {
+		return nil
+	}
+	result := make([]int32, 0)
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		matched := false
+		usedStoredAmount := false
+		if s.server != nil && s.server.Data != nil {
+			if spell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+				for index, effect := range spell.Effects {
+					if effect.Aura != auraType || aura.EffectMask&(1<<uint(index)) == 0 {
+						continue
+					}
+					if !match(effect.MiscValue) {
+						continue
+					}
+					amount := aura.Amounts[index]
+					if amount == 0 && aura.AuraType == auraType && !usedStoredAmount {
+						amount = int32(aura.Amount)
+						usedStoredAmount = true
+					}
+					if amount == 0 {
+						amount = effect.BasePoints + 1
+					}
+					result = append(result, amount)
+					matched = true
+				}
+			}
+		}
+		if !matched && aura.AuraType == auraType && match(aura.MiscValue) {
+			amount := int32(aura.Amount)
+			if amount == 0 {
+				for _, storedAmount := range aura.Amounts {
+					if storedAmount != 0 {
+						amount = storedAmount
+						break
+					}
+				}
+			}
+			result = append(result, amount)
+		}
+	}
+	return result
+}
+
+// maxPositiveAuraModifierByMiscMask mirrors Unit::GetMaxPositiveAuraModifierByMiscMask
+// (Unit.cpp:4945): the largest positive amount of the given aura type whose
+// effect MiscValue overlaps miscMask, 0 when none.
+func (s *session) maxPositiveAuraModifierByMiscMask(auraType uint32, miscMask int32) int32 {
+	maxValue := int32(0)
+	for _, amount := range s.auraTypeModifiersFiltered(auraType, func(miscValue int32) bool {
+		return miscValue&miscMask != 0
+	}) {
+		if amount > maxValue {
+			maxValue = amount
+		}
+	}
+	return maxValue
+}
+
+// totalAuraModifierByMiscValue mirrors Unit::GetTotalAuraModifierByMiscValue
+// (Unit.cpp:4977-4985): the sum of amounts of the given aura type whose effect
+// MiscValue equals miscValue.
+func (s *session) totalAuraModifierByMiscValue(auraType uint32, miscValue int32) int32 {
+	var total int32
+	for _, amount := range s.auraTypeModifiersFiltered(auraType, func(mv int32) bool {
+		return mv == miscValue
+	}) {
+		total += amount
+	}
+	return total
+}
+
 // rollSpellCrit rolls whether the spell achieves a critical strike.
 func (s *session) rollSpellCrit(targetGUID uint64, schoolMask uint8) bool {
 	chance := s.calculateSpellCritChance(targetGUID, schoolMask)

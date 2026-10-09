@@ -519,9 +519,12 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
 			vicSess.applyResilienceToDamage(true, &damage, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenMelee)
 			if damage > 0 {
-				absorbed, remaining := vicSess.applyAbsorptionShields(damage, 1)
+				// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
+				// MOD_TARGET_ABSORB_SCHOOL (194) pct of damage bypasses absorbs.
+				bypass := absorbIgnoreBypass(damage, s.absorbIgnorePct(1))
+				absorbed, remaining := vicSess.applyAbsorptionShields(damage-bypass, 1)
 				absorbedDmg = absorbed
-				damage = remaining
+				damage = remaining + bypass
 				if remaining == 0 && absorbed > 0 {
 					hitInfo |= protocol.HitInfoFullAbsorb
 				} else if absorbed > 0 {
@@ -530,8 +533,11 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			}
 		}
 	} else if !isPlayerVictim && s.server != nil && damage > 0 {
-		absorbed, remaining := s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage, 1)
-		damage = remaining
+		// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
+		// MOD_TARGET_ABSORB_SCHOOL (194) pct of damage bypasses absorbs.
+		bypass := absorbIgnoreBypass(damage, s.absorbIgnorePct(1))
+		absorbed, remaining := s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage-bypass, 1)
+		damage = remaining + bypass
 		if remaining == 0 && absorbed > 0 {
 			hitInfo |= protocol.HitInfoFullAbsorb
 		} else if absorbed > 0 {
@@ -1013,10 +1019,18 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	absorbed := uint32(0)
 	if isPlayerVictim && s.server != nil && damage > 0 {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
-			absorbed, damage = vicSess.applyAbsorptionShields(damage, schoolMask)
+			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
+			// MOD_TARGET_ABSORB_SCHOOL (194) pct of damage bypasses absorbs.
+			bypass := absorbIgnoreBypass(damage, s.absorbIgnorePct(uint32(schoolMask)))
+			absorbed, damage = vicSess.applyAbsorptionShields(damage-bypass, schoolMask)
+			damage += bypass
 		}
 	} else if !isPlayerVictim && s.server != nil && damage > 0 {
-		absorbed, damage = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage, schoolMask)
+		// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
+		// MOD_TARGET_ABSORB_SCHOOL (194) pct of damage bypasses absorbs.
+		bypass := absorbIgnoreBypass(damage, s.absorbIgnorePct(uint32(schoolMask)))
+		absorbed, damage = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage-bypass, schoolMask)
+		damage += bypass
 	}
 
 	overkill := uint32(0)
