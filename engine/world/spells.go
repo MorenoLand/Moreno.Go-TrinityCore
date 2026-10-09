@@ -123,6 +123,10 @@ const (
 	spellAttr3BlockableSpell            uint32 = 0x00000008 // SPELL_ATTR3_BLOCKABLE_SPELL (SharedDefines.h:526) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 
 	spellAuraIgnoreHitDirection           uint32 = 288 // SPELL_AURA_IGNORE_HIT_DIRECTION (SpellAuraDefines.h) — Deterrence is the only 3.3.5a source
+	spellAuraModBlockPercent              uint32 = 51  // SPELL_AURA_MOD_BLOCK_PERCENT (SpellAuraDefines.h) — creature block chance bonus
+	spellAuraModShieldBlockvaluePct       uint32 = 150 // SPELL_AURA_MOD_SHIELD_BLOCKVALUE_PCT (SpellAuraDefines.h)
+	spellAuraModShieldBlockvalue          uint32 = 158 // SPELL_AURA_MOD_SHIELD_BLOCKVALUE (SpellAuraDefines.h)
+	spellAuraModBlockCritChance           uint32 = 253 // SPELL_AURA_MOD_BLOCK_CRIT_CHANCE (SpellAuraDefines.h)
 	spellAuraModTotalThreat               uint32 = 103 // SPELL_AURA_MOD_TOTAL_THREAT (SpellAuraDefines.h) — additive temp threat modifier, bridged on ThreatManager
 	spellAuraModRegenDuringCombat         uint32 = 116 // SPELL_AURA_MOD_REGEN_DURING_COMBAT (SpellAuraDefines.h) — health regen keeps running in combat (Second Wind)
 	spellAuraModHealthRegenInCombat       uint32 = 161 // SPELL_AURA_MOD_HEALTH_REGEN_IN_COMBAT (SpellAuraDefines.h) — flat health-regen bonus that also runs in combat (Player.cpp:2265)
@@ -11592,6 +11596,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	hitInfo := uint32(0)
 	resisted := uint32(0)
 	absorbed := uint32(0)
+	blocked := uint32(0)
 	fullyResisted := false
 	immune := false
 
@@ -11615,7 +11620,16 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		if crit {
 			if s.server != nil && s.server.Data != nil {
 				if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
-					damage = s.spellCriticalDamageBonus(ctx, sp, damage, targetGUID)
+					// Unit::CalculateSpellDamageTaken (Unit.cpp:1014-1040):
+					// melee/ranged-DmgClass spells take their own crit arm
+					// (flat 100% bonus plus the 203/204 victim auras), not
+					// the magic leg's SpellCriticalDamageBonus.
+					if (sp.DefenseType == spellDamageClassMelee || sp.DefenseType == spellDamageClassRanged) &&
+						sp.AttributesEx4&spellAttr4FixedDamage == 0 {
+						damage = s.spellWeaponCritDamageBonus(ctx, sp, damage, target, isPlayerVictim)
+					} else {
+						damage = s.spellCriticalDamageBonus(ctx, sp, damage, targetGUID)
+					}
 				} else {
 					damage = s.spellCriticalDamageBonus(ctx, wotlk.Spell{ID: spellID, SchoolMask: uint32(schoolMask)}, damage, targetGUID)
 				}
@@ -11696,8 +11710,29 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 					}
 				}
 				isCrit := (hitInfo & 0x02) != 0 // SPELL_HIT_TYPE_CRIT
+				// Unit::CalculateSpellDamageTaken block arm (Unit.cpp:1013-1062):
+				// after the crit fold and before resilience.
+				if !instantKill && damage > 0 && dmgSpellKnown {
+					if b, ok := s.spellTakenBlockAmount(target, isPlayerVictim, playerSess, dmgSpell, damage); ok {
+						blocked = b
+						damage -= b
+					}
+				}
 				if !instantKill {
-					playerSess.applyResilienceToDamage(true, &damage, isCrit, CombatRatingCritTakenSpell)
+					// Unit::CalculateSpellDamageTaken (Unit.cpp:1060-1066):
+					// the melee/ranged-DmgClass arm applies CR_CRIT_TAKEN_MELEE
+					// / CR_CRIT_TAKEN_RANGED, not the CR_CRIT_TAKEN_SPELL the
+					// magic arm (:1098) uses.
+					resilCR := CombatRatingCritTakenSpell
+					if dmgSpellKnown {
+						switch dmgSpell.DefenseType {
+						case spellDamageClassMelee:
+							resilCR = CombatRatingCritTakenMelee
+						case spellDamageClassRanged:
+							resilCR = CombatRatingCritTakenRanged
+						}
+					}
+					playerSess.applyResilienceToDamage(true, &damage, isCrit, resilCR)
 				}
 				if !instantKill && damage > 0 {
 					// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
@@ -11726,6 +11761,14 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
 				damage = creatureSpellDamageBonusTaken(s.server, damage, spell, uint32(schoolMask), creatureAuraKeyForTarget(target), s)
 			}
+			// Unit::CalculateSpellDamageTaken block arm (Unit.cpp:1013-1062):
+			// after the crit fold and before absorb/resist.
+			if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+				if b, ok := s.spellTakenBlockAmount(target, isPlayerVictim, nil, spell, damage); ok {
+					blocked = b
+					damage -= b
+				}
+			}
 			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
 			// MOD_TARGET_ABSORB_SCHOOL (194) / MOD_TARGET_ABILITY_ABSORB_SCHOOL
 			// (245, affecting this spell) pct of damage bypasses absorbs.
@@ -11749,7 +11792,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	s.updateAchievementCriteria(criteriaTypeDamageDone, 0, damageDone)
 	s.setAchievementCriteria(criteriaTypeHighestHitDealt, 0, damage)
 
-	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo), true)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked), true)
 
 	// Trigger spell cast/hit procs (TrinityCore Unit::ProcDamageAndSpellFor);
 	// suppressed for triggered casts (TRIGGERED_DISALLOW_PROC_EVENTS parity).
@@ -11834,7 +11877,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			if playerSess.player.UnitFlags&unitFlagInCombat == 0 {
 				playerSess.player.UnitFlags |= unitFlagInCombat
 			}
-			_ = playerSess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo), true)
+			_ = playerSess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked), true)
 			victimHealth := playerSess.player.Health
 			// Duel defeat (Unit.cpp:825-853, 957-973): any damage >= health-1
 			// on a duelist ends the duel — the clamped hit leaves the loser
@@ -14603,6 +14646,7 @@ func buildSpellNonMeleeDamageLog(targetGUID, attackerGUID uint64, spellID, damag
 	absorb := uint32(0)
 	resist := uint32(0)
 	hitInfo := uint32(0)
+	blocked := uint32(0)
 	if len(extra) > 0 {
 		absorb = extra[0]
 	}
@@ -14611,6 +14655,9 @@ func buildSpellNonMeleeDamageLog(targetGUID, attackerGUID uint64, spellID, damag
 	}
 	if len(extra) > 2 {
 		hitInfo = extra[2]
+	}
+	if len(extra) > 3 {
+		blocked = extra[3]
 	}
 	buf := protocol.NewBuffer(64)
 	buf.WritePackedGUID(targetGUID)
@@ -14623,7 +14670,7 @@ func buildSpellNonMeleeDamageLog(targetGUID, attackerGUID uint64, spellID, damag
 	buf.WriteU32(resist)  // Resist
 	buf.WriteU8(0)        // periodicLog (0 = show spell name prefix)
 	buf.WriteU8(0)        // unused
-	buf.WriteU32(0)       // blocked
+	buf.WriteU32(blocked) // blocked (Unit::SendSpellNonMeleeDamageLog damageInfo->blocked)
 	buf.WriteU32(hitInfo) // HitInfo flags (0 = normal hit, 2 = SPELL_HIT_TYPE_CRIT)
 	buf.WriteU8(0)        // HitInfo & debugMask (always 0, no crit/hit debug)
 	return buf.Bytes()
@@ -15240,6 +15287,120 @@ func magicSpellHitResult(casterLevel, victimLevel uint8, isPlayerVictim bool, bo
 // meleeSpellHitResult mirrors Unit::MeleeSpellHitResult (Unit.cpp:2478-2619):
 // the single roll table MISS > DODGE > PARRY > BLOCK for melee spells, and
 // MISS > DEFLECT for ranged spells. WorldObject::SpellHitResult
+// spellTakenBlockAmount mirrors the block arm of Unit::CalculateSpellDamageTaken
+// (Unit.cpp:1013-1062) with Unit::isSpellBlocked (Unit.cpp:2412-2430): for
+// SPELL_DAMAGE_CLASS_MELEE/RANGED physical-school spells that are NOT
+// ATTR3_BLOCKABLE_SPELL (blockables resolve at hit-roll time in
+// Unit::MeleeSpellHitResult, which Go's meleeSpellHitResult covers), the
+// victim rolls to block. IMPOSSIBLE_DODGE_PARRY_BLOCK and IGNORE_HIT_RESULT
+// spells never block; a mid-cast-bar player victim cannot block; the attack
+// must come from the victim's front 180° arc unless the victim carries aura
+// 288. The chance is the player's BlockPercentage (GetUnitBlockChance
+// Unit.cpp:2788-2798 — the defense-skill diff already folds into Go's
+// BlockPercentage) or a creature's 5% plus aura 51. The blocked amount is
+// the victim's shield block value — doubled on a block-critical (victim aura
+// 253, Unit::isBlockCritical Unit.cpp:2432-2437) — clamped to the damage
+// (fullBlock). Gaps: the skillDiff arm of the creature block chance has no
+// Go weapon/defense-skill model; creature shield-block strength (STR/20) has
+// no combatTarget model, so creatures block level/2 only; the
+// UNIT_STATE_CONTROLLED gate has no Go unit-state model.
+func (s *session) spellTakenBlockAmount(target combatTarget, isPlayerVictim bool, vicSess *session, spell wotlk.Spell, damage uint32) (uint32, bool) {
+	if s == nil || s.player == nil || damage == 0 {
+		return 0, false
+	}
+	if spell.DefenseType != spellDamageClassMelee && spell.DefenseType != spellDamageClassRanged {
+		return 0, false
+	}
+	if spell.SchoolMask&1 == 0 {
+		return 0, false
+	}
+	if spell.Attributes&spellAttr0ImpossibleDodgeParryBlock != 0 || spell.AttributesEx3&spellAttr3IgnoreHitResult != 0 {
+		return 0, false
+	}
+	if spell.AttributesEx4&spellAttr4FixedDamage != 0 || spell.AttributesEx3&spellAttr3BlockableSpell != 0 {
+		return 0, false
+	}
+	if isPlayerVictim {
+		if vicSess == nil || vicSess.player == nil {
+			return 0, false
+		}
+		if !vicSess.player.CanBlock || vicSess.player.Block <= 0 {
+			return 0, false
+		}
+		// IsNonMeleeSpellCast(false): a victim mid cast-bar cannot block
+		// (Unit.cpp:2418 — the CONTROLLED half has no Go model).
+		if vicSess.genericCastInProgress() {
+			return 0, false
+		}
+	}
+	inFront := hasInArc(target.Orientation, target.X, target.Y, s.player.X, s.player.Y, math.Pi)
+	if !inFront {
+		dirOK := false
+		if isPlayerVictim {
+			dirOK = vicSess.hasAuraType(spellAuraIgnoreHitDirection)
+		} else if s.server != nil {
+			key := creatureAuraKeyForTarget(target)
+			s.server.auraMu.Lock()
+			for _, aura := range s.server.activeCreatureAuras[key] {
+				if aura != nil && !aura.Stopped && aura.AuraType == spellAuraIgnoreHitDirection {
+					dirOK = true
+					break
+				}
+			}
+			s.server.auraMu.Unlock()
+		}
+		if !dirOK {
+			return 0, false
+		}
+	}
+	var blockChanceBP int32
+	if isPlayerVictim {
+		blockChanceBP = int32(math.Round(float64(vicSess.player.BlockPercentage) * 100))
+	} else {
+		blockChanceBP = 500 + creatureAuraModifierSum(s.server, creatureAuraKeyForTarget(target), spellAuraModBlockPercent)
+	}
+	if blockChanceBP <= 0 || rand.IntN(10000) >= int(blockChanceBP) {
+		return 0, false
+	}
+	var blocked uint32
+	if isPlayerVictim {
+		// Player::GetShieldBlockValue (Player.cpp:5426-5430):
+		// max(0, (flatMod + STR*0.5 - 10) * pctMod).
+		flat := float64(vicSess.player.Block)
+		for _, amount := range vicSess.auraTypeModifiersFiltered(spellAuraModShieldBlockvalue, func(int32) bool { return true }) {
+			flat += float64(amount)
+		}
+		pctMult := 1.0
+		for _, amount := range vicSess.auraTypeModifiersFiltered(spellAuraModShieldBlockvaluePct, func(int32) bool { return true }) {
+			pctMult *= 1.0 + float64(amount)/100.0
+		}
+		str := 0.0
+		if len(vicSess.player.Stats) > 0 {
+			str = float64(vicSess.player.Stats[0])
+		}
+		if value := (flat + str*0.5 - 10) * pctMult; value > 0 {
+			blocked = uint32(value)
+		}
+	} else {
+		blocked = uint32(target.Level) / 2
+	}
+	critChance := int32(0)
+	if isPlayerVictim {
+		for _, amount := range vicSess.auraTypeModifiersFiltered(spellAuraModBlockCritChance, func(int32) bool { return true }) {
+			critChance += amount
+		}
+	} else {
+		critChance = creatureAuraModifierSum(s.server, creatureAuraKeyForTarget(target), spellAuraModBlockCritChance)
+	}
+	if critChance > 0 && rand.IntN(100) < int(critChance) {
+		blocked += blocked
+	}
+	if blocked >= damage {
+		return damage, true
+	}
+	return blocked, true
+}
+
 // (Object.cpp:2656-2660) routes DmgClass MELEE/RANGED spells here instead of
 // the magic hit table.
 func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, targetSess *session, spell wotlk.Spell, targetLevel uint8, isPlayerVictim bool) uint8 {

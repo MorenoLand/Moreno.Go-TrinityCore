@@ -847,11 +847,13 @@ func (s *session) tickScriptedTakenCritBonus(ctx context.Context, targetGUID uin
 	return bonus, false
 }
 
-// Crit-bonus aura types (SpellAuraDefines.h:50,243,249).
+// Crit-bonus aura types (SpellAuraDefines.h:50,243,249,283,284).
 const (
 	spellAuraModCriticalHealingAmount uint32 = 50  // SPELL_AURA_MOD_CRITICAL_HEALING_AMOUNT
 	spellAuraModCritDamageBonus       uint32 = 163 // SPELL_AURA_MOD_CRIT_DAMAGE_BONUS
 	spellAuraModCritPercentVersus     uint32 = 169 // SPELL_AURA_MOD_CRIT_PERCENT_VERSUS
+	spellAuraModAttackerMeleeCritDmg  uint32 = 203 // SPELL_AURA_MOD_ATTACKER_MELEE_CRIT_DAMAGE (victim auras)
+	spellAuraModAttackerRangedCritDmg uint32 = 204 // SPELL_AURA_MOD_ATTACKER_RANGED_CRIT_DAMAGE (victim auras)
 )
 
 // critDamageTalentRanks lists every rank of the passive crit-damage talents.
@@ -958,8 +960,8 @@ func (s *session) casterVersusAuras() []versusAuraAmount {
 
 // spellCriticalDamageBonus mirrors Unit::SpellCriticalDamageBonus
 // (Unit.cpp:7410-7449): base 50% bonus on the default DmgClass (melee/ranged
-// DmgClass spells take 100% — wotlk.Spell has no DmgClass field, so the
-// default leg always applies), the 163 aura product by school misc mask, the
+// DmgClass spells take the 100% weapon arm in spellWeaponCritDamageBonus —
+// callers route DefenseType 2/3 away from this function), the 163 aura product by school misc mask, the
 // additive 169 versus arm by victim creature-type mask, then
 // SPELLMOD_CRIT_DAMAGE_BONUS on the bonus when it is non-negative but below
 // the base damage (Unit.cpp:7438-7442; the C++ uint32 cast means a negative
@@ -991,6 +993,55 @@ func (s *session) spellCriticalDamageBonus(ctx context.Context, spell wotlk.Spel
 		return uint32(total)
 	}
 	return 0
+}
+
+// spellWeaponCritDamageBonus mirrors the melee/ranged arm of
+// Unit::CalculateSpellDamageTaken (Unit.cpp:1023-1040): for
+// SPELL_DAMAGE_CLASS_MELEE/RANGED spells the crit bonus is the full damage
+// again (100%), unlike the magic leg's SpellCriticalDamageBonus half. The
+// SPELLMOD_CRIT_DAMAGE_BONUS lands on the bonus (no uint32-cast gate here —
+// that gate belongs to SpellCriticalDamageBonus only), then the victim's 203
+// (melee) / 204 (ranged) auras, the caster's 163 multiplier by school mask,
+// and the caster's 169 sum by victim creature-type mask fold in as one
+// percent add over the total (AddPct). Callers must have already gated on
+// DefenseType 2/3 and no SPELL_ATTR4_FIXED_DAMAGE.
+func (s *session) spellWeaponCritDamageBonus(ctx context.Context, spell wotlk.Spell, damage uint32, target combatTarget, isPlayerVictim bool) uint32 {
+	if s == nil || s.player == nil {
+		return damage + damage
+	}
+	critBonus := int64(s.applySpellMod(spell, spellModCritDamageBonus, int32(damage)))
+	total := int64(damage) + critBonus
+	var critPctDamageMod float64
+	auraType := spellAuraModAttackerMeleeCritDmg
+	if spellWeaponAttackType(spell) == protocol.RangedAttack {
+		auraType = spellAuraModAttackerRangedCritDmg
+	}
+	if isPlayerVictim {
+		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
+			for _, amount := range vicSess.auraTypeModifiersFiltered(auraType, func(int32) bool { return true }) {
+				critPctDamageMod += float64(amount)
+			}
+		}
+	} else {
+		critPctDamageMod += float64(creatureAuraModifierSum(s.server, creatureAuraKeyForTarget(target), auraType))
+	}
+	critPctDamageMod += (s.critDamageAuraMultiplier(spell.SchoolMask) - 1.0) * 100.0
+	if versus := s.casterVersusAuras(); len(versus) > 0 {
+		mask, _ := s.targetCreatureTypeMask(ctx, target.GUID)
+		for _, a := range versus {
+			if mask != 0 && uint32(a.misc)&mask != 0 {
+				critPctDamageMod += float64(a.amount)
+			}
+		}
+	}
+	if critPctDamageMod != 0 {
+		// AddPct(int32 base, float pct): base += int32(float32(base) * pct / 100).
+		total += int64(float32(total) * float32(critPctDamageMod) / 100.0)
+	}
+	if total < 0 {
+		return 0
+	}
+	return uint32(total)
 }
 
 // criticalHealingAmountMultiplier mirrors the GetTotalAuraMultiplier
