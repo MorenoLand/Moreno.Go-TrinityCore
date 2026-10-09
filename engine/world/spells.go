@@ -6115,10 +6115,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 		if targetSess != nil && targetSess.checkSpellReflection(spell) {
 			isReflected = true
+			// Spell::SendSpellGo (Spell.cpp:4504-4506): ReflectStatus is the
+			// caster's own SpellHitResult (Spell.cpp:2178), which is always
+			// SPELL_MISS_NONE — WorldObject::SpellHitResult returns NONE when
+			// caster == victim before any other arm (the immune-self edge
+			// case has no Go model).
 			missStatus = []protocol.SpellMissStatus{{
 				TargetGUID:    targetGUID,
 				Reason:        protocol.SpellMissReflect,
-				ReflectStatus: 2,
+				ReflectStatus: protocol.SpellMissNone,
 			}}
 			targetGUID = s.playerGUID
 			hitTargets = []uint64{s.playerGUID}
@@ -6178,15 +6183,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// while the remaining jumps still resolve. The exponent counts hit
 	// jumps only — missed targets return before the multiplier accumulation
 	// (Spell.cpp:7771-7774) — so the index below is hit-counted, not
-	// selection-counted. Chain-target reflect (the m_canReflect arm of
-	// Spell.cpp:2152) has no Go model; only the primary target reflects.
+	// selection-counted. A reflected jump (Spell.cpp:7740) resolves its unit
+	// to the caster: its effects land on the caster with its own jump index.
 	chainJumpIndex := make(map[uint64]int)
+	reflectedJumpIndexes := make([]int, 0, 1)
 	if !areaSpell && !friendlyListSpell && targetGUID != 0 {
 		if jumps, isChainHeal := chainSpellJumps(spell); jumps > 0 {
 			jump := 0
 			for _, extraGUID := range s.spellSearchChainTargets(ctx, spell, targetGUID, jumps, isChainHeal) {
 				if missInfo := s.spellTargetMissResult(ctx, extraGUID, spell); missInfo != protocol.SpellMissNone {
 					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: extraGUID, Reason: missInfo})
+					if missInfo == protocol.SpellMissReflect {
+						jump++
+						reflectedJumpIndexes = append(reflectedJumpIndexes, jump)
+					}
 					continue
 				}
 				jump++
@@ -7236,6 +7246,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						s.executeSpellDamage(effCtx, effectTarget, spellID, targetDamage, effectIndex)
 					}
 				}
+				// Spell::DoEffectOnLaunchTarget (Spell.cpp:7736-7744): a
+				// reflected chain jump resolves its unit to the caster, so
+				// each reflected jump deals its own jump-index-scaled damage
+				// to the caster. The C++ multiplier arm (7771-7774) runs for
+				// reflected jumps too, hence the hit-counted index above.
+				for _, rj := range reflectedJumpIndexes {
+					s.executeSpellDamage(effCtx, s.playerGUID, spellID, chainScaledAmount(damage, chainMult, rj), effectIndex)
+				}
 			case spellEffectHeal, spellEffectHealPct: // SPELL_EFFECT_HEAL (10), SPELL_EFFECT_HEAL_PCT (136)
 				heal := uint32(eff.BasePoints + 1)
 				// Spell::EffectHeal (SpellEffects.cpp): the Death Pact arm
@@ -7504,6 +7522,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						tgtDurationMs, tgtPeriodMs, tgtAmount = s.auraEffectParams(effSpell, effEff)
 					}
 					s.applyAuraToTarget(effCtx, auraTarget, effSpell, effEff, tgtDurationMs, tgtPeriodMs, tgtAmount, schoolMask, castMerged, false, s.playerGUID, false)
+				}
+				// Spell::DoEffectOnLaunchTarget (Spell.cpp:7736-7744): a
+				// reflected chain jump resolves its unit to the caster, so a
+				// hostile-targeted aura from a reflected jump lands on the
+				// caster — the same victim-selection arms as the loop above.
+				if len(reflectedJumpIndexes) > 0 && isHarmfulSpell(spell) &&
+					(isAreaEnemySpell(spell) || eff.ImplicitTargetA == 6 || isHarmfulAura(eff.Aura) || eff.ImplicitTargetA == 21) {
+					s.applyAuraToTarget(effCtx, s.playerGUID, spell, eff, durationMs, periodMs, amount, schoolMask, castMerged, false, s.playerGUID, false)
 				}
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
 				s.applySelfResurrectEffect(spell)
@@ -8046,6 +8072,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// only and Go has no npcbot model, so the leg is a no-op here.
 	// CallScriptAfterCastHandlers is a no-op (no SpellScript bridge).
 	isDelayedBranch := (spell.Speed > 0 && !isChanneledSpell(spell)) || spell.AttributesEx4&spellAttr4TreatAsDelayed != 0
+	// A reflected primary retargets to the caster above, so it falls through
+	// to the immediate path; C++ keeps it DELAYED with TimeDelay *= 1.5
+	// (Spell.cpp:2181) and procs the reflect aura at missile arrival
+	// (ProcReflectDelayed, Spell.cpp:2181) instead of consuming it at cast
+	// time. Timing-only delta, unmodeled.
 	if isDelayedBranch && targetGUID != 0 && targetGUID != s.playerGUID && spell.Speed > 0 {
 		dist := float32(20.0) // default 20 yards if positions unknown
 		if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
@@ -12278,9 +12309,9 @@ func magicSpellHitResult(casterLevel, victimLevel uint8, isPlayerVictim bool, bo
 // Spell::AddUnitTarget (Spell.cpp:2152): every target — including chain
 // jumps — gets its own SpellHitResult roll. It folds the same two legs as
 // the primary-target path above: the level/hit roll, then the binary-spell
-// resist roll. The reflect and immunity arms stay on the primary path;
-// chain targets never reflect in Go (the m_canReflect arm of
-// Spell.cpp:2152 is unmodeled).
+// resist roll. The remaining WorldObject::SpellHitResult arms (immune,
+// damage-immune, evade, SPELL_ATTR3_IGNORE_HIT_RESULT) stay on the primary
+// path; chain jumps never carried them in Go.
 func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, spell wotlk.Spell) uint8 {
 	if s == nil || s.player == nil {
 		return protocol.SpellMissNone
@@ -12288,6 +12319,31 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 	var targetSess *session
 	if s.server != nil {
 		targetSess = s.server.findSessionByGUID(targetGUID)
+	}
+	// WorldObject::SpellHitResult (Object.cpp): the canReflect gate is
+	// Spell.cpp:622 (unit caster, magic damage class, non-ability) with the
+	// positive-and-friendly exclusion (Spell.cpp:2152).
+	hostile := true
+	if targetSess != nil {
+		hostile = !s.isFriendlyToPlayer(targetSess)
+	} else if s.server != nil {
+		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+			hostile = s.server.isHostileFaction(tgt.Faction, caster)
+		}
+	}
+	// WorldObject::SpellHitResult (Object.cpp): positive spells can't miss
+	// non-hostile targets — chain-heal jumps never miss or resist.
+	if spellIsPositive(spell) && !hostile {
+		return protocol.SpellMissNone
+	}
+	// WorldObject::SpellHitResult (Object.cpp): the reflect arm rolls before
+	// the hit roll — a jump target carrying reflect auras reflects the jump
+	// (SPELL_MISS_REFLECT), like the primary target does.
+	if spell.DefenseType == spellDamageClassMagic && spell.Attributes&spellAttr0Ability == 0 &&
+		!(spellIsPositive(spell) && !hostile) &&
+		targetSess != nil && targetSess.checkSpellReflection(spell) {
+		return protocol.SpellMissReflect
 	}
 	targetLevel := uint8(1)
 	if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
