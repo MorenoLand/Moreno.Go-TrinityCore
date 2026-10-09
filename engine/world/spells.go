@@ -208,8 +208,10 @@ const (
 	spellFailedOnlyAboveWater            uint8  = 88    // SPELL_FAILED_ONLY_ABOVEWATER (SharedDefines.h:1070)
 	spellFailedTargetFriendly            uint8  = 115   // SPELL_FAILED_TARGET_FRIENDLY (SharedDefines.h:1097)
 	spellFailedNotHere                   uint8  = 60    // SPELL_FAILED_NOT_HERE (SharedDefines.h:1042)
+	spellFailedNoDueling                 uint8  = 79    // SPELL_FAILED_NO_DUELING (SharedDefines.h:1061)
 
-	areaFlagNoFlyZone uint32 = 0x20000000 // AREA_FLAG_NO_FLY_ZONE (DBCEnums.h:275) — AreaTableEntry.Flags bit tested by AreaTableEntry::IsFlyable (DBCStructure.h:209)
+	areaFlagNoFlyZone  uint32 = 0x20000000 // AREA_FLAG_NO_FLY_ZONE (DBCEnums.h:275) — AreaTableEntry.Flags bit tested by AreaTableEntry::IsFlyable (DBCStructure.h:209)
+	areaFlagAllowDuels uint32 = 0x00000040 // AREA_FLAG_ALLOW_DUELS (DBCEnums.h:253) — AreaTableEntry.Flags bit tested by Spell::EffectDuel (SpellEffects.cpp:3812-3823)
 
 	spellImplicitTargetUnitPet uint32 = 5 // TARGET_UNIT_PET (SharedDefines.h:1446)
 
@@ -301,6 +303,11 @@ const (
 	spellEffectJumpDest                = 42  // SPELL_EFFECT_JUMP_DEST (SharedDefines.h:853)
 	spellEffectLeapBack                = 138 // SPELL_EFFECT_LEAP_BACK (SharedDefines.h:949)
 	spellEffectTalentSpecSelect        = 162 // SPELL_EFFECT_TALENT_SPEC_SELECT (SharedDefines.h:973)
+	spellEffectScriptEffect            = 77  // SPELL_EFFECT_SCRIPT_EFFECT (SharedDefines.h:888)
+	spellEffectPullTowards             = 124 // SPELL_EFFECT_PULL_TOWARDS (SharedDefines.h:935)
+	spellEffectPullTowardsDest         = 145 // SPELL_EFFECT_PULL_TOWARDS_DEST (SharedDefines.h:956)
+	spellEffectPlaySound               = 131 // SPELL_EFFECT_PLAY_SOUND (SharedDefines.h:942)
+	spellEffectPlayMusic               = 132 // SPELL_EFFECT_PLAY_MUSIC (SharedDefines.h:943)
 	// Enchant effects for the IsFitToSpellRequirements isEnchantSpell test
 	// (Item.cpp:803: SPELL_EFFECT_ENCHANT_ITEM / _TEMPORARY / _PRISMATIC).
 	spellEffectEnchantItem          = 53  // SPELL_EFFECT_ENCHANT_ITEM (SharedDefines.h:864)
@@ -6053,6 +6060,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// Reference SpellEffects.cpp:3858-3874: Spell 7266 (Duel)
 	if spellID == 7266 && targetGUID != 0 && targetGUID != s.playerGUID && s.server != nil {
 		if partner := s.server.findSessionByGUID(targetGUID); partner != nil && partner.player != nil {
+			// Spell::EffectDuel (SpellEffects.cpp:3805-3823): an already-dueling
+			// caster or target, or a target ignoring the caster, drops the
+			// request silently; zones without AREA_FLAG_ALLOW_DUELS reject
+			// with SPELL_FAILED_NO_DUELING. The duel-flag GameObject spawn
+			// (SpellEffects.cpp:3826-3855) has no Go temp-GO model, so the
+			// arbiter GUID below stays synthetic (documented).
+			if s.duelPartner != 0 || partner.duelPartner != 0 || s.duelTargetIgnored(ctx, targetGUID) {
+				return
+			}
+			if !s.duelAreaAllowsDuels(s.areaID) || !s.duelAreaAllowsDuels(partner.areaID) {
+				s.sendCastFailed(ctx, castID, spell, spellFailedNoDueling)
+				return
+			}
 			s.duelPartner = targetGUID
 			partner.duelPartner = s.playerGUID
 			// Spell::EffectDuel (SpellEffects.cpp:3867-3868): the caster is the
@@ -7136,6 +7156,22 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// spline model (documented no-bridge, boss_ai.go).
 				if s.player != nil {
 					s.lastFallTime, s.lastFallZ = 0, s.player.Z
+				}
+			case spellEffectPullTowards: // 124: SPELL_EFFECT_PULL_TOWARDS (EffectPullTowards, SpellEffects.cpp:4667)
+				s.handleEffectPullTowards(hitTargets)
+			case spellEffectPullTowardsDest: // 145: SPELL_EFFECT_PULL_TOWARDS_DEST (EffectPullTowardsDest, SpellEffects.cpp:4697)
+				s.handleEffectPullTowardsDest(target, hitTargets)
+			case spellEffectPlaySound: // 131: SPELL_EFFECT_PLAY_SOUND (EffectPlaySound, SpellEffects.cpp:5578)
+				s.handleEffectPlaySound(eff, hitTargets)
+			case spellEffectPlayMusic: // 132: SPELL_EFFECT_PLAY_MUSIC (EffectPlayMusic, SpellEffects.cpp:5537)
+				s.handleEffectPlayMusic(eff, hitTargets)
+			case spellEffectScriptEffect: // 77: SPELL_EFFECT_SCRIPT_EFFECT (EffectScriptEffect, SpellEffects.cpp:3604)
+				// C++ runs the generic-family arms at SPELL_EFFECT_HANDLE_HIT_TARGET.
+				for _, effectTarget := range hitTargets {
+					if effectTarget == 0 {
+						continue
+					}
+					s.handleEffectScriptEffect(effCtx, spellID, eff, effectTarget)
 				}
 			case spellEffectSummonRafFriend: // 152: SPELL_EFFECT_SUMMON_RAF_FRIEND (EffectSummonRaFFriend, SpellEffects.cpp:5727)
 				for _, effectTarget := range hitTargets {
@@ -18897,6 +18933,211 @@ func (s *session) handleEffectTeleUnitsFaceCaster(ctx context.Context, targetGUI
 		targetSess.player.Z,
 		-s.player.Orientation,
 	)
+}
+
+// duelTargetIgnored mirrors the ignore leg of Spell::EffectDuel
+// (SpellEffects.cpp:3805): a duel request to a target ignoring the caster is
+// dropped silently. The !target->GetSocial() leg is vacuous for online targets
+// (Go only reaches here with a live session); the ignore list itself lives in
+// character_social with flags & 2 (arena_team.go convention).
+func (s *session) duelTargetIgnored(ctx context.Context, targetGUID uint64) bool {
+	if s == nil || s.server == nil || s.server.CharactersStore.DB == nil || targetGUID == 0 {
+		return false
+	}
+	var ignored int64
+	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_social WHERE guid = ? AND friend = ? AND flags & 2 != 0", targetGUID, s.playerGUID).Scan(&ignored)
+	return ignored > 0
+}
+
+// duelAreaAllowsDuels mirrors the area legs of Spell::EffectDuel
+// (SpellEffects.cpp:3810-3823): both duelists' areas must carry
+// AREA_FLAG_ALLOW_DUELS or the cast fails with SPELL_FAILED_NO_DUELING. A
+// missing AreaTable row skips the gate (the checkFlyCast convention above).
+func (s *session) duelAreaAllowsDuels(areaID uint32) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return true
+	}
+	area, found, err := s.server.Data.Area(areaID)
+	if err != nil || !found {
+		return true
+	}
+	return area.Flags&areaFlagAllowDuels != 0
+}
+
+// handleEffectPlaySound mirrors Spell::EffectPlaySound (SpellEffects.cpp:5578-5607),
+// the SPELL_EFFECT_PLAY_SOUND (131) HIT_TARGET arm: each player hit target
+// hears the MiscValue sound directly (WorldObject::PlayDirectSound with a
+// player target = SMSG_PLAY_SOUND, u32 sound id, sent to the session). The
+// SoundEntries.dbc existence gate has no Go bridge (documented-blocked,
+// commands_misc2.go); a bad id plays nothing client-side. The Restricted
+// Flight Area (58730/58600) notification arm has no lang-string model
+// (documented).
+func (s *session) handleEffectPlaySound(eff wotlk.SpellEffect, hitTargets []uint64) {
+	if s == nil || s.server == nil || eff.MiscValue <= 0 {
+		return
+	}
+	for _, effectTarget := range hitTargets {
+		if effectTarget == 0 {
+			continue
+		}
+		targetSess := s.server.findSessionByGUID(effectTarget)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		_ = targetSess.write(uint16(protocol.OpcodeSMSG_PLAY_SOUND), buildPlaySound(uint32(eff.MiscValue)), true)
+	}
+}
+
+// handleEffectPlayMusic mirrors Spell::EffectPlayMusic (SpellEffects.cpp:5537-5555),
+// the SPELL_EFFECT_PLAY_MUSIC (132) HIT_TARGET arm: each player hit target gets
+// SMSG_PLAY_MUSIC (u32 sound kit id = MiscValue) sent directly. Same
+// SoundEntries.dbc gate note as handleEffectPlaySound.
+func (s *session) handleEffectPlayMusic(eff wotlk.SpellEffect, hitTargets []uint64) {
+	if s == nil || s.server == nil || eff.MiscValue <= 0 {
+		return
+	}
+	pkt := protocol.NewBuffer(4)
+	pkt.WriteU32(uint32(eff.MiscValue))
+	for _, effectTarget := range hitTargets {
+		if effectTarget == 0 {
+			continue
+		}
+		targetSess := s.server.findSessionByGUID(effectTarget)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		_ = targetSess.write(uint16(protocol.OpcodeSMSG_PLAY_MUSIC), pkt.Bytes(), true)
+	}
+}
+
+// handleEffectPullTowards mirrors Spell::EffectPullTowards (SpellEffects.cpp:4667-4694),
+// the SPELL_EFFECT_PULL_TOWARDS (124) HIT_TARGET arm. The MoveJump spline has
+// no Go model; the player hit target is moved to the C++ landing point
+// directly (nearTeleportMove, same as the EffectCharge/EffectLeap bridges):
+// the caster's combat reach out along the caster-to-target angle, keeping the
+// target's Z. The < 0.001 distance early-out is C++-exact (3D GetExactDist);
+// the GetFirstCollisionPosition collision adjustment is collision-only
+// (documented no-bridge). Creature hit targets need a creature teleport
+// (documented, no model).
+func (s *session) handleEffectPullTowards(hitTargets []uint64) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	reach := s.player.CombatReach
+	if reach <= 0 {
+		reach = 1.5
+	}
+	for _, effectTarget := range hitTargets {
+		if effectTarget == 0 {
+			continue
+		}
+		targetSess := s.server.findSessionByGUID(effectTarget)
+		if targetSess == nil || targetSess.player == nil || targetSess.inFlight {
+			continue
+		}
+		dx := targetSess.player.X - s.player.X
+		dy := targetSess.player.Y - s.player.Y
+		dz := targetSess.player.Z - s.player.Z
+		angle := math.Atan2(float64(dy), float64(dx))
+		landX := s.player.X + reach*float32(math.Cos(angle))
+		landY := s.player.Y + reach*float32(math.Sin(angle))
+		lx := targetSess.player.X - landX
+		ly := targetSess.player.Y - landY
+		lz := dz
+		if lx*lx+ly*ly+lz*lz < 0.001*0.001 {
+			continue
+		}
+		targetSess.nearTeleportMove(landX, landY, targetSess.player.Z, targetSess.player.Orientation)
+	}
+}
+
+// handleEffectPullTowardsDest mirrors Spell::EffectPullTowardsDest
+// (SpellEffects.cpp:4697-4731), the SPELL_EFFECT_PULL_TOWARDS_DEST (145)
+// HIT_TARGET arm: each player hit target is pulled to the spell destination.
+// Same MoveJump no-bridge note as handleEffectPullTowards; the < 0.001
+// distance early-out is C++-exact.
+func (s *session) handleEffectPullTowardsDest(target protocol.SpellTargetData, hitTargets []uint64) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	if target.Flags&protocol.SpellTargetFlagDestLocation == 0 {
+		return
+	}
+	for _, effectTarget := range hitTargets {
+		if effectTarget == 0 {
+			continue
+		}
+		targetSess := s.server.findSessionByGUID(effectTarget)
+		if targetSess == nil || targetSess.player == nil || targetSess.inFlight {
+			continue
+		}
+		dx := targetSess.player.X - target.Destination.X
+		dy := targetSess.player.Y - target.Destination.Y
+		dz := targetSess.player.Z - target.Destination.Z
+		if dx*dx+dy*dy+dz*dz < 0.001*0.001 {
+			continue
+		}
+		targetSess.nearTeleportMove(target.Destination.X, target.Destination.Y, target.Destination.Z, targetSess.player.Orientation)
+	}
+}
+
+// handleEffectScriptEffect mirrors the SPELLFAMILY_GENERIC arms of
+// Spell::EffectScriptEffect (SpellEffects.cpp:3612-3749) that have a Go bridge.
+// Onyxia Shadow Flame (22539, 22972, 22975-22985): a living hit target without
+// the Onyxia Scale Cloak aura (22683) is hit by triggered Shadow Flame 22682.
+// Brutallus Burn (45141/45151): a player hit target at or beyond the effect
+// radius without the Burn aura (46394) ignites via triggered 46394. The
+// remaining arms (Mug Transformation item hunt, Scarlet ghoul summons,
+// Wintergrasp RP-GG pickup/drop, Grab Crate vehicle) need item / temp-summon /
+// vehicle models Go lacks, and the sSpellScripts tail has no Go SpellScript
+// bridge (documented).
+func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, targetGUID uint64) {
+	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 {
+		return
+	}
+	switch spellID {
+	case 22539, 22972, 22975, 22976, 22977, 22978, 22979, 22980, 22981, 22982, 22983, 22984, 22985:
+		// Shadow Flame: !unitTarget || !IsAlive() -> return (whole effect arm).
+		alive := false
+		if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+			alive = !targetSess.isDeadOrGhost()
+		} else if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			alive = target.Health > 0
+		} else {
+			return
+		}
+		if !alive {
+			return
+		}
+		// Onyxia Scale Cloak
+		if s.targetHasAura(ctx, targetGUID, 22683) {
+			return
+		}
+		s.castSpellDirect(ctx, 22682, targetGUID)
+	case 45141, 45151:
+		// Brutallus Burn: player targets only, at/beyond radius, without the
+		// Burn aura, and not the caster.
+		targetSess := s.server.findSessionByGUID(targetGUID)
+		if targetSess == nil || targetSess.player == nil || targetGUID == s.playerGUID {
+			return
+		}
+		radius := float32(0)
+		if s.server.Data != nil {
+			if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok {
+				radius = value
+			}
+		}
+		dx := targetSess.player.X - s.player.X
+		dy := targetSess.player.Y - s.player.Y
+		dz := targetSess.player.Z - s.player.Z
+		if dx*dx+dy*dy+dz*dz < radius*radius {
+			return
+		}
+		if targetSess.hasAura(46394) {
+			return
+		}
+		s.castSpellDirect(ctx, 46394, targetGUID)
+	}
 }
 
 // handleEffectForceCast mirrors Spell::EffectForceCast (SpellEffects.cpp:1048-1107),
