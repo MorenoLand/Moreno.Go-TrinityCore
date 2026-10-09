@@ -5203,42 +5203,30 @@ func (s *session) checkComboPointsCast(spell wotlk.Spell, target protocol.SpellT
 const immuneToMovementImpairmentAndLossControlMask uint32 = (1 << 1) | (1 << 2) | (1 << 5) | (1 << 7) | (1 << 10) | (1 << 11) | (1 << 12) | (1 << 13) | (1 << 14) | (1 << 17) | (1 << 18) | (1 << 20) | (1 << 23) | (1 << 24) | (1 << 27) | (1 << 30)
 
 // spellAllowedMechanicMask mirrors SpellInfo::GetAllowedMechanicMask
-// (SpellInfo.cpp:3047-3049): the spell's own SPELL_AURA_MECHANIC_IMMUNITY
-// (77) effects — including the hardcoded spell-id carve-outs
-// (SpellInfo.cpp:2734-2758) — plus the SPELL_ATTR5_USABLE_WHILE_* bits
-// (SpellInfo.cpp:2822-2856). The SPELL_AURA_MECHANIC_IMMUNITY_MASK (147)
-// hardcoded spell-id table (SpellInfo.cpp:2592-2808) has no Go bridge yet —
-// a documented gap; its entries are boss spells the client path never casts.
+// (SpellInfo.cpp:3047-3049): the union of the per-effect mechanic-immunity
+// masks (mechanicImmuneMaskForEffect — the SPELL_AURA_MECHANIC_IMMUNITY (77)
+// spell-id carve-outs and miscVal mapping plus the
+// SPELL_AURA_MECHANIC_IMMUNITY_MASK (147) miscVal table,
+// SpellInfo.cpp:2592-2780) plus the SPELL_ATTR5_USABLE_WHILE_* bits
+// (SpellInfo.cpp:2822-2856). The ATTR5 bits feed _allowedMechanicMask only,
+// not the per-effect ImmunityInfo rows — callers that need the pure
+// per-effect mask use mechanicImmuneMaskForEffect directly.
 func spellAllowedMechanicMask(spell wotlk.Spell) uint32 {
 	var mask uint32
 	for _, eff := range spell.Effects {
-		if eff.Effect != spellEffectApplyAura || eff.Aura != spellAuraMechanicImmunity {
-			continue
-		}
-		switch spell.ID {
-		case 42292, 59752: // PvP trinket, Every Man for Himself
-			mask |= immuneToMovementImpairmentAndLossControlMask
-		case 34471, 19574, 53490: // The Beast Within, Bestial Wrath, Bullheaded
-			mask |= immuneToMovementImpairmentAndLossControlMask
-		case 54508: // Demonic Empowerment
-			mask |= (1 << 11) | (1 << 7) | (1 << 12) // MECHANIC_SNARE | MECHANIC_ROOT | MECHANIC_STUN
-		default:
-			if eff.MiscValue >= 1 {
-				mask |= 1 << uint32(eff.MiscValue)
-			}
-		}
+		mask |= mechanicImmuneMaskForEffect(spell, eff)
 	}
 	if spell.AttributesEx5&spellAttr5UsableWhileStunned != 0 {
 		switch spell.ID {
 		case 22812, 47585: // Barkskin, Dispersion
-			mask |= (1 << 12) | (1 << 13) | (1 << 14) | (1 << 10) // MECHANIC_STUN | MECHANIC_FREEZE | MECHANIC_KNOCKOUT | MECHANIC_SLEEP
+			mask |= (1 << mechanicStun) | (1 << mechanicFreeze) | (1 << 14) | (1 << 10) // MECHANIC_STUN | MECHANIC_FREEZE | MECHANIC_KNOCKOUT | MECHANIC_SLEEP
 		case 49039: // Lichborne, don't allow normal stuns
 		default:
-			mask |= 1 << 12 // MECHANIC_STUN
+			mask |= 1 << mechanicStun // MECHANIC_STUN
 		}
 	}
 	if spell.AttributesEx5&spellAttr5UsableWhileConfused != 0 {
-		mask |= 1 << 2 // MECHANIC_DISORIENTED
+		mask |= 1 << mechanicDisoriented // MECHANIC_DISORIENTED
 	}
 	if spell.AttributesEx5&spellAttr5UsableWhileFeared != 0 {
 		switch spell.ID {
@@ -5249,6 +5237,196 @@ func spellAllowedMechanicMask(spell wotlk.Spell) uint32 {
 		}
 	}
 	return mask
+}
+
+// mechanicImmuneMaskForEffect mirrors the per-effect MechanicImmuneMask
+// computation in SpellInfo::_LoadImmunityInfo (SpellInfo.cpp:2592-2780)
+// for one spell effect: the SPELL_AURA_MECHANIC_IMMUNITY (77) spell-id
+// carve-outs and miscVal mapping (:2750-2778), and the
+// SPELL_AURA_MECHANIC_IMMUNITY_MASK (147) miscVal table (:2594-2724) via
+// mechanicMask147. The SPELL_ATTR5_USABLE_WHILE_* bits are NOT included —
+// C++ ORs those into _allowedMechanicMask only (:2822-2856), never into the
+// per-effect ImmunityInfo the pierce and mechanic eval arms consult.
+func mechanicImmuneMaskForEffect(spell wotlk.Spell, eff wotlk.SpellEffect) uint32 {
+	switch eff.Aura {
+	case spellAuraMechanicImmunity:
+		switch spell.ID {
+		case 42292, 59752: // PvP trinket, Every Man for Himself
+			return immuneToMovementImpairmentAndLossControlMask
+		case 34471, 19574, 53490: // The Beast Within, Bestial Wrath, Bullheaded
+			return immuneToMovementImpairmentAndLossControlMask
+		case 54508: // Demonic Empowerment
+			return (1 << mechanicSnare) | (1 << mechanicRoot) | (1 << mechanicStun) // MECHANIC_SNARE | MECHANIC_ROOT | MECHANIC_STUN
+		default:
+			if eff.MiscValue >= 1 {
+				return 1 << uint32(eff.MiscValue)
+			}
+		}
+	case spellAuraMechanicImmunityMask:
+		return mechanicMask147(spell.ID, eff)
+	}
+	return 0
+}
+
+// mechanicMask147 mirrors the SPELL_AURA_MECHANIC_IMMUNITY_MASK (147)
+// miscVal table in SpellInfo::_LoadImmunityInfo (SpellInfo.cpp:2594-2724):
+// the mechanic bits each hardcoded misc value grants. Unlisted misc values
+// grant no mechanic bits (C++ default: break) — the miscVal&bit fallback
+// there only inserts AuraTypeImmune entries (mechanicMask147Grants).
+func mechanicMask147(spellID uint32, eff wotlk.SpellEffect) uint32 {
+	switch eff.MiscValue {
+	case 96: // Free Friend, Uncontrollable Frenzy, Warlord's Presence
+		return immuneToMovementImpairmentAndLossControlMask
+	case 1615: // Incite Rage, Wolf Spirit, Overload, Lightning Tendrils
+		var mask uint32
+		switch spellID {
+		case 43292, 49172: // Incite Rage, Wolf Spirit
+			mask |= immuneToMovementImpairmentAndLossControlMask
+			fallthrough
+		case 61869, 63481, 61887, 63486: // Overload, Lightning Tendrils
+			mask |= (1 << mechanicInterrupt) | (1 << mechanicSilence) // MECHANIC_INTERRUPT | MECHANIC_SILENCE
+		}
+		return mask
+	case 679: // Mind Control, Avenging Fury
+		if spellID == 57742 { // Avenging Fury
+			return immuneToMovementImpairmentAndLossControlMask
+		}
+	case 1557: // Startling Roar, Warlord Roar, Break Bonds, Stormshield
+		if spellID == 64187 { // Stormshield
+			return 1 << mechanicStun // MECHANIC_STUN
+		}
+		return immuneToMovementImpairmentAndLossControlMask
+	case 1614, 1694: // Fixate, Fixated, Lightning Tendrils — taunt/aura-type grants only
+	case 1630: // Fervor, Berserk
+		if spellID != 64112 { // Berserk grants taunt/aura-type immunity only
+			return immuneToMovementImpairmentAndLossControlMask
+		}
+	case 477, 1733: // Bladestorm, Killing Spree — only while the effect amount is 0
+		if eff.CalcValue() == 0 {
+			return immuneToMovementImpairmentAndLossControlMask
+		}
+	case 878: // Whirlwind, Fog of Corruption, Determination
+		if spellID == 66092 { // Determination
+			return (1 << mechanicSnare) | (1 << mechanicStun) | (1 << mechanicDisoriented) | (1 << mechanicFreeze) // MECHANIC_SNARE | MECHANIC_STUN | MECHANIC_DISORIENTED | MECHANIC_FREEZE
+		}
+	}
+	return 0
+}
+
+// mechanicImmuneMask147 unions the per-effect SPELL_AURA_MECHANIC_IMMUNITY_MASK
+// (147) mechanic tables of a spell — the aura-level view of the per-effect
+// MechanicImmuneMask rows (SpellInfo.cpp:2592-2724) the live immunity evals
+// use when the granting aura's own effect index is not tracked.
+func mechanicImmuneMask147(spell wotlk.Spell) uint32 {
+	var mask uint32
+	for _, eff := range spell.Effects {
+		if eff.Aura == spellAuraMechanicImmunityMask {
+			mask |= mechanicMask147(spell.ID, eff)
+		}
+	}
+	return mask
+}
+
+// mechanicMask147Grants mirrors the AuraTypeImmune and SpellEffectImmune
+// inserts of the SPELL_AURA_MECHANIC_IMMUNITY_MASK (147) miscVal table in
+// SpellInfo::_LoadImmunityInfo (SpellInfo.cpp:2594-2724): the aura types and
+// spell effects one 147 effect grants immunity to. When the special case
+// inserts no aura types, the miscVal&bit fallback applies
+// (SpellInfo.cpp:2726-2742).
+func mechanicMask147Grants(spellID uint32, eff wotlk.SpellEffect) (auraTypes []uint32, spellEffects []uint32) {
+	five := []uint32{spellAuraModStun, spellAuraModDecreaseSpeed, spellAuraModRoot, spellAuraModConfuse, spellAuraModFear}
+	knockbacks := []uint32{spellEffectKnockBack, spellEffectKnockBackDest}
+	switch eff.MiscValue {
+	case 96: // Free Friend, Uncontrollable Frenzy, Warlord's Presence
+		auraTypes = five
+	case 1615: // Incite Rage, Wolf Spirit, Overload, Lightning Tendrils
+		switch spellID {
+		case 43292, 49172: // Incite Rage, Wolf Spirit
+			auraTypes = five
+			fallthrough
+		case 61869, 63481, 61887, 63486: // Overload, Lightning Tendrils
+			spellEffects = knockbacks
+		}
+	case 679: // Mind Control, Avenging Fury
+		if spellID == 57742 { // Avenging Fury
+			auraTypes = five
+		}
+	case 1557: // Startling Roar, Warlord Roar, Break Bonds, Stormshield
+		if spellID == 64187 { // Stormshield
+			auraTypes = []uint32{spellAuraModStun}
+		} else {
+			auraTypes = five
+		}
+	case 1614, 1694: // Fixate, Fixated, Lightning Tendrils
+		spellEffects = []uint32{spellEffectAttackMe}
+		auraTypes = []uint32{spellAuraModTaunt}
+	case 1630: // Fervor, Berserk
+		if spellID == 64112 { // Berserk
+			spellEffects = []uint32{spellEffectAttackMe}
+			auraTypes = []uint32{spellAuraModTaunt}
+		} else {
+			auraTypes = five
+		}
+	case 477, 1733: // Bladestorm, Killing Spree — only while the effect amount is 0
+		if eff.CalcValue() == 0 {
+			spellEffects = knockbacks
+			auraTypes = five
+		}
+	case 878: // Whirlwind, Fog of Corruption, Determination
+		if spellID == 66092 { // Determination
+			auraTypes = []uint32{spellAuraModStun, spellAuraModDecreaseSpeed}
+		}
+	}
+	if len(auraTypes) == 0 {
+		misc := uint32(eff.MiscValue)
+		if misc&(1<<10) != 0 {
+			auraTypes = append(auraTypes, spellAuraModStun)
+		}
+		if misc&(1<<1) != 0 {
+			auraTypes = append(auraTypes, spellAuraTransform)
+		}
+		// These flags can be recognized wrong:
+		if misc&(1<<6) != 0 {
+			auraTypes = append(auraTypes, spellAuraModDecreaseSpeed)
+		}
+		if misc&(1<<0) != 0 {
+			auraTypes = append(auraTypes, spellAuraModRoot)
+		}
+		if misc&(1<<2) != 0 {
+			auraTypes = append(auraTypes, spellAuraModConfuse)
+		}
+		if misc&(1<<9) != 0 {
+			auraTypes = append(auraTypes, spellAuraModFear)
+		}
+		if misc&(1<<7) != 0 {
+			auraTypes = append(auraTypes, spellAuraModDisarm)
+		}
+	}
+	return auraTypes, spellEffects
+}
+
+// mechanicMask147SpellGrants unions mechanicMask147Grants over a spell's 147
+// effects — the aura-level view the live immunity evals use when the granting
+// aura's own effect index is not tracked.
+func mechanicMask147SpellGrants(spell wotlk.Spell) (auraTypes []uint32, spellEffects []uint32) {
+	for _, eff := range spell.Effects {
+		if eff.Aura != spellAuraMechanicImmunityMask {
+			continue
+		}
+		at, se := mechanicMask147Grants(spell.ID, eff)
+		auraTypes = append(auraTypes, at...)
+		spellEffects = append(spellEffects, se...)
+	}
+	return auraTypes, spellEffects
+}
+
+func uint32InSlice(v uint32, s []uint32) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 // spellCancelsAuraEffect mirrors SpellInfo::SpellCancelsAuraEffect
