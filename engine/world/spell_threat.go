@@ -245,9 +245,14 @@ func spellSuppressesInitialThreat(spell wotlk.Spell) bool {
 // (flatMod + apPctMod * base attack power) or, without a row, the spell's
 // SpellLevel, split evenly across ALL unique targets — hits and misses alike
 // (Spell.cpp:5123) — before any effect-damage threat lands; missed shares are
-// wasted, and missed targets carry zero threat (Spell.cpp:5125). Positive
-// spells forward the threat to every creature currently threatening the
-// target (ThreatManager::ForwardThreatForAssistingMe, ThreatManager.cpp:662);
+// wasted, and missed targets carry zero threat (Spell.cpp:5125) but still
+// take the zero-threat add: positive spells forward it to every creature
+// currently threatening the missed target
+// (ThreatManager::ForwardThreatForAssistingMe, ThreatManager.cpp:662), and
+// negative spells AddThreat the caster at 0 on the missed target's list,
+// which still creates the ref and engages combat (ThreatManager.cpp:308-410).
+// Positive spells forward the threat to every creature currently threatening
+// the target (ThreatManager::ForwardThreatForAssistingMe, ThreatManager.cpp:662);
 // negative spells add it to creature targets directly (ignoreModifiers, so
 // no caster multiplier on this path). Only player casts route through this
 // path: C++ runs HandleThreatSpells for any unit caster, but Go creature and
@@ -258,8 +263,8 @@ func spellSuppressesInitialThreat(spell wotlk.Spell) bool {
 // and creature heal forwarding (a creature as the ForwardThreatForAssistingMe
 // assistant) have no Go analog. C++ takes the caster from m_originalCaster
 // when set (Spell.cpp:5098); Go always uses the session player.
-func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spell, hitTargets []uint64, missCount int) {
-	if s == nil || s.server == nil || s.player == nil || len(hitTargets) == 0 {
+func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spell, hitTargets []uint64, missGUIDs []uint64) {
+	if s == nil || s.server == nil || s.player == nil || (len(hitTargets) == 0 && len(missGUIDs) == 0) {
 		return
 	}
 	if !spellHasInitialThreat(spell) {
@@ -281,86 +286,121 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 	}
 	// Spell.cpp:5123: the defined bonus is distributed among all unique
 	// targets, misses included (their shares are wasted, Spell.cpp:5125).
-	totalTargets := len(hitTargets) + missCount
+	totalTargets := len(hitTargets) + len(missGUIDs)
 	if totalTargets <= 0 {
 		return
 	}
 	threat /= float32(totalTargets)
 
 	positive := !isHarmfulSpell(spell)
-	// Caster-side threat modifiers (ThreatManager::CalculateModifiedThreat via
-	// the attacker's own manager, ThreatManager.cpp:606) apply to the assist
-	// path; the negative path passes ignoreModifiers.
-	assistMult := float32(1.0)
+	// The positive path runs through ForwardThreatForAssistingMe without
+	// ignoreModifiers, so each recipient's AddThreat folds
+	// ThreatManager::CalculateModifiedThreat (ThreatManager.cpp:606-659):
+	// spell_threat-row pctMod, the assistant's SPELLMOD_THREAT spell mods,
+	// then the assistant's own school threat multipliers (the C++ order) —
+	// all assistant-constant, so folded once here.
+	assistThreat := float32(0)
 	if positive {
-		assistMult = s.getThreatMultiplier(uint32(spell.SchoolMask))
+		t := float64(threat * pctMod)
+		t = s.applySpellModFloat(spell, spellModThreat, t)
+		assistThreat = float32(t) * s.getThreatMultiplier(uint32(spell.SchoolMask))
 	}
 
 	s.server.motionMu.Lock()
 	defer s.server.motionMu.Unlock()
+	// Missed targets are not in hitTargets, so dedupe them here (C++
+	// iterates m_UniqueTargetInfo, which holds each target once).
+	hitSet := make(map[uint64]struct{}, len(hitTargets))
+	for _, g := range hitTargets {
+		hitSet[g] = struct{}{}
+	}
 	for _, targetGUID := range hitTargets {
 		if targetGUID == 0 {
 			continue
 		}
 		if positive {
-			s.forwardInitialAssistThreatLocked(threat*pctMod*assistMult, targetGUID)
+			s.forwardInitialAssistThreatLocked(assistThreat, targetGUID)
 			continue
 		}
-		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
-		if motion == nil {
-			continue
-		}
-		// Spell.cpp:5143-5144: the negative path skips targets that cannot
-		// have a threat list. ThreatManager::CanHaveThreatList
-		// (ThreatManager.cpp:156-179) excludes pets, totems, triggers,
-		// player-summoned minions and npcbots; in Go, owned creature motions
-		// (OwnerGUID != 0 — pets and player summons) are the modeled members
-		// of that set, so they take no initial threat here.
-		if motion.OwnerGUID != 0 {
-			continue
-		}
-		if motion.ThreatMgr == nil {
-			motion.ThreatMgr = NewThreatManager(motion.GUID)
-		}
-		dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
-		inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
-		// The C++ negative path calls AddThreat(unitCaster, threatToAdd,
-		// m_spellInfo, true) (Spell.cpp:5143): ignoreModifiers=true but
-		// ignoreRedirects stays false, so the caster's redirect registry
-		// applies to initial threat as well.
-		threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
-		switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
-		if rSwitched {
-			switched, newVictim = true, rVictim
-		}
-		if switched && newVictim != motion.TargetGUID {
-			motion.TargetGUID = newVictim
-			entries := motion.ThreatMgr.SortedEntries()
-			s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, entries)
-		} else {
-			motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
-		}
-		motion.InCombat = true
-		motion.Moving = true
+		s.addInitialNegativeThreatLocked(targetGUID, threat)
 	}
+	for _, missGUID := range missGUIDs {
+		if missGUID == 0 {
+			continue
+		}
+		if _, dup := hitSet[missGUID]; dup {
+			continue
+		}
+		// Spell.cpp:5128-5130: a missed target takes a zero-threat add.
+		if positive {
+			s.forwardInitialAssistThreatLocked(0, missGUID)
+			continue
+		}
+		s.addInitialNegativeThreatLocked(missGUID, 0)
+	}
+}
+
+// addInitialNegativeThreatLocked runs the Spell.cpp:5143 negative leg on one
+// creature motion: the CanHaveThreatList skip (ThreatManager.cpp:156-179 —
+// pets, totems, triggers, player-summoned minions, npcbots; in Go, owned
+// creature motions with OwnerGUID != 0 are the modeled members of that set),
+// then AddThreat(unitCaster, threatToAdd, m_spellInfo, true)
+// (Spell.cpp:5143): ignoreModifiers=true so neither the spell_threat-row
+// pctMod, SPELLMOD_THREAT spell mods, nor school multipliers apply, while
+// ignoreRedirects stays false and the caster's redirect registry still
+// consumes (splitThreatRedirects; a no-op at amount <= 0 per the C++
+// amount > 0 gate, ThreatManager.cpp:347). A zero add still creates the
+// threat ref and engages combat (ThreatManager.cpp:308-410). The vehicle
+// redirect leg (ThreatManager.cpp:316-322) has no Go analog — Go models no
+// vehicle threat. Caller holds motionMu.
+func (s *session) addInitialNegativeThreatLocked(targetGUID uint64, amount float32) {
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
+	if motion == nil {
+		return
+	}
+	// Spell.cpp:5143-5144: the negative path skips targets that cannot
+	// have a threat list.
+	if motion.OwnerGUID != 0 {
+		return
+	}
+	if motion.ThreatMgr == nil {
+		motion.ThreatMgr = NewThreatManager(motion.GUID)
+	}
+	dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
+	inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
+	amount, rSwitched, rVictim := s.splitThreatRedirects(motion, amount)
+	switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, amount, inMelee)
+	if rSwitched {
+		switched, newVictim = true, rVictim
+	}
+	if switched && newVictim != motion.TargetGUID {
+		motion.TargetGUID = newVictim
+		entries := motion.ThreatMgr.SortedEntries()
+		s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, entries)
+	} else {
+		motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
+	}
+	motion.InCombat = true
+	motion.Moving = true
 }
 
 // forwardInitialAssistThreatLocked mirrors
 // ThreatManager::ForwardThreatForAssistingMe (ThreatManager.cpp:662-688): the
 // initial threat of a positive spell is split evenly among all creatures
-// currently threatening the target. Caller holds motionMu.
+// currently threatening the target. C++ carries no zero-threat early return —
+// a missed target's zero add still splits (perTarget 0) and runs AddThreat,
+// creating the refs. The caller folds CalculateModifiedThreat
+// (ThreatManager.cpp:606-659) — spell_threat-row pctMod, the assistant's
+// SPELLMOD_THREAT spell mods, then the assistant's own school multipliers —
+// since spell and assistant are constant across recipients. Caller holds
+// motionMu.
 // Documented deltas: creatures under UNIT_STATE_CONTROLLED are excluded from
 // the even split in C++ and receive a zero-threat add instead
 // (ThreatManager.cpp:676-680); Go has no CC-state model, so every recipient
 // takes the full share. C++ builds its recipient set from the target's
 // _threatenedByMe refs, which include zero-threat engaged creatures; Go's
-// scan requires GetThreat > 0. C++ also applies the assistant's
-// SPELLMOD_THREAT spell mods via CalculateModifiedThreat (ThreatManager.cpp:606);
-// Go's getThreatMultiplier covers school/stance auras only.
+// scan requires GetThreat > 0.
 func (s *session) forwardInitialAssistThreatLocked(threat float32, targetGUID uint64) {
-	if threat <= 0 {
-		return
-	}
 	var assisting []*creatureMotion
 	for _, m := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
 		if m == nil || m.GUID == targetGUID || m.ThreatMgr == nil {

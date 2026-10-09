@@ -6797,14 +6797,24 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		return
 	}
 
+	// Spell::_handle_immediate_phase (Spell.cpp:3718): initial spell threat
+	// (HandleThreatSpells, Spell.cpp:5096) lands before any effect handling,
+	// over ALL unique targets — hits and misses alike (Spell.cpp:5123); a
+	// fully-missed cast still runs the zero-threat legs, so this sits above
+	// the hitTargets early return.
+	var missGUIDs []uint64
+	if len(missStatus) > 0 {
+		missGUIDs = make([]uint64, 0, len(missStatus))
+		for _, miss := range missStatus {
+			missGUIDs = append(missGUIDs, miss.TargetGUID)
+		}
+	}
+	s.handleSpellInitialThreat(ctx, spell, hitTargets, missGUIDs)
+
 	if len(hitTargets) == 0 {
 		// Spell missed, do not trigger channel or effects
 		return
 	}
-
-	// Spell::_handle_immediate_phase (Spell.cpp:3718): initial spell threat
-	// (HandleThreatSpells, Spell.cpp:5096) lands before any effect handling.
-	s.handleSpellInitialThreat(ctx, spell, hitTargets, len(missStatus))
 
 	// Reference Spell::handle_immediate: channeled spells begin their timed
 	// channel lifecycle after the cast completes. The resolved destination is
@@ -10019,7 +10029,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// Spell::_handle_immediate_phase (Spell.cpp:3718): initial spell threat
 	// (HandleThreatSpells, Spell.cpp:5096) applies to triggered casts too,
 	// before any effect handling.
-	s.handleSpellInitialThreat(ctx, spell, hitTargets, 0)
+	s.handleSpellInitialThreat(ctx, spell, hitTargets, nil)
 
 	durationMs := uint32(0)
 	if s.server != nil && s.server.Data != nil && spell.DurationIndex > 0 {

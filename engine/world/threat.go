@@ -317,14 +317,15 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 // broadcast instead). FixateTarget and the taunt-state model are bridged:
 // the eager gate above honors fixate preference and taunt precedence, and
 // the Update tick runs the full ReselectVictim every second.
-// Out of scope for this unit: AddThreat's modifier arms
-// (CalculateModifiedThreat's SPELLMOD_THREAT spell mods) and the vehicle
-// redirect (Go has no vehicle model) belong to the HandleThreatSpells
-// cast-threat audit; the threat-redirect registry itself is bridged on the
-// session (spell_threat.go: redirectThreatRegistry, consumed by
+// Out of scope for this unit: the vehicle redirect leg of C++ AddThreat
+// (ThreatManager.cpp:316-322) has no Go analog (Go models no vehicle
+// threat); the threat-redirect registry itself is bridged on the session
+// (spell_threat.go: redirectThreatRegistry, consumed by
 // splitThreatRedirects at every AddThreat site whose C++ call leaves
-// ignoreRedirects=false). getThreatMultiplier already covers stance/aura
-// SPELL_AURA_MOD_THREAT.
+// ignoreRedirects=false). getThreatMultiplier covers stance/aura
+// SPELL_AURA_MOD_THREAT; the CalculateModifiedThreat spell-mod leg
+// (SPELLMOD_THREAT) is bridged on the HandleThreatSpells cast-threat path
+// (spell_threat.go: handleSpellInitialThreat).
 func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) (switched bool, newVictim uint64) {
 	if victim == 0 {
 		return false, tm.currentVictim
