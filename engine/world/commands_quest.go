@@ -212,21 +212,10 @@ func (s *session) handleQuestRemove(ctx context.Context, args []string) {
 		s.sendSysMessage(fmt.Sprintf("Quest %d not found.", entry)) // LANG_COMMAND_QUEST_NOTFOUND 471
 		return
 	}
-	cdb := s.server.CharactersStore.DB
-	if cdb != nil {
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus WHERE guid = ? AND quest = ?", target.playerGUID, entry)
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus_rewarded WHERE guid = ? AND quest = ?", target.playerGUID, entry)
-	}
-	if target.player != nil {
-		for slot := 0; slot < playerQuestLogSlots; slot++ {
-			if target.player.QuestLog[slot].QuestID == entry {
-				target.player.QuestLog[slot] = questLogEntry{}
-				target.sendPlayerQuestLogUpdate(slot)
-			}
-		}
-	}
-	// The TakeQuestSourceItem and PvP-quest legs have no Go bridge; the
-	// quest-log and DB deletes are the full observable state.
+	target.clearQuestLogEntries(ctx, entry)
+	// The TakeQuestSourceItem, PvP-quest-flag and OnQuestStatusChange legs
+	// have no Go bridge; the quest-log and DB deletes are the full
+	// observable state.
 	s.sendSysMessage("Quest removed.") // LANG_COMMAND_QUEST_REMOVED 473
 }
 

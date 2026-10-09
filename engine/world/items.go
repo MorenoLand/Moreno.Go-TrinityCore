@@ -2949,6 +2949,88 @@ func (s *session) durabilityLossAll(ctx context.Context, percent float64, invent
 	}
 }
 
+// durabilityPointsLossAll mirrors Player::DurabilityPointsLossAll
+// (Player.cpp:4934-4958): a flat point loss on every equipped item, or on
+// every item when inventory is true. Negative points restore durability,
+// clamped at max. Follows the Go durability convention (DB-backed + inventory
+// refresh; the _ApplyItemMods stat strip on the 0-crossing and the
+// SPELL_AURA_PREVENT_DURABILITY_LOSS gate are documented no-bridge, same as
+// durabilityLossAll/rollDurabilityLossOnHit).
+func (s *session) durabilityPointsLossAll(ctx context.Context, points int32, inventory bool) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	wdb := s.server.WorldStore.DB
+
+	query := `SELECT ci.item, ii.itemEntry, ii.durability
+		FROM character_inventory AS ci
+		JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ?`
+	if !inventory {
+		query += ` AND ci.bag = 0 AND ci.slot < 19`
+	}
+
+	rows, err := cdb.QueryContext(ctx, query, s.playerGUID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	type itemLoss struct {
+		guid      uint64
+		itemEntry uint32
+		curDur    uint32
+	}
+	var items []itemLoss
+	for rows.Next() {
+		var guid uint64
+		var itemEntry, curDur uint32
+		if err := rows.Scan(&guid, &itemEntry, &curDur); err == nil {
+			items = append(items, itemLoss{guid: guid, itemEntry: itemEntry, curDur: curDur})
+		}
+	}
+
+	maxDurCache := make(map[uint32]uint32)
+	type itemDurUpdate struct {
+		guid   uint64
+		newDur uint32
+	}
+	var updates []itemDurUpdate
+
+	for _, itm := range items {
+		maxDur, ok := maxDurCache[itm.itemEntry]
+		if !ok {
+			_ = wdb.QueryRowContext(ctx, "SELECT MaxDurability FROM item_template WHERE entry = ?", itm.itemEntry).Scan(&maxDur)
+			maxDurCache[itm.itemEntry] = maxDur
+		}
+		if maxDur == 0 {
+			continue
+		}
+		// Player::DurabilityPointsLoss (Player.cpp:4960-4991): clamped at
+		// zero and at max durability.
+		nd := int64(itm.curDur) - int64(points)
+		if nd < 0 {
+			nd = 0
+		}
+		if nd > int64(maxDur) {
+			nd = int64(maxDur)
+		}
+		if uint32(nd) != itm.curDur {
+			updates = append(updates, itemDurUpdate{guid: itm.guid, newDur: uint32(nd)})
+		}
+	}
+
+	for _, up := range updates {
+		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET durability = ? WHERE guid = ?", up.newDur, up.guid)
+	}
+
+	if len(updates) > 0 {
+		_ = s.sendInventoryItems(ctx)
+		s.sendPlayerUpdate()
+	}
+}
+
 // durabilityLossChanceOnHit folds TrinityCore's DurabilityLossChance.Damage
 // config (World.cpp:619, default 0.5): roll_chance_f(rate) is a percent roll,
 // so 0.5 means a 0.5% chance per hit. There is no Go rate config (runes.go

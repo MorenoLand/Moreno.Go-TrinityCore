@@ -15,7 +15,10 @@ import (
 const (
 	questStatusComplete            = 1
 	questStatusIncomplete          = 3
-	questStatusRewarded            = 6 // Player::GetQuestStatus reports QUEST_STATUS_REWARDED, never NONE, for rewarded quests
+	questStatusFailed              = 5      // QUEST_STATUS_FAILED (QuestDef.h:108)
+	questStatusRewarded            = 6      // Player::GetQuestStatus reports QUEST_STATUS_REWARDED, never NONE, for rewarded quests
+	questSlotStateFail      uint32 = 0x0002 // QUEST_STATE_FAIL (Player.h:496)
+	itemBondingQuestItem    uint32 = 4      // BIND_QUEST_ITEM (ItemTemplate.h:102)
 	QuestTypeRaid           uint32 = 62
 	QuestTypeRaid10         uint32 = 88
 	QuestTypeRaid25         uint32 = 89

@@ -314,6 +314,13 @@ const (
 	spellEffectForceCast2           = 160 // SPELL_EFFECT_FORCE_CAST_2 (SharedDefines.h:971)
 	spellEffectChargeDest           = 149 // SPELL_EFFECT_CHARGE_DEST (SharedDefines.h:960)
 	spellEffectSelfResurrect        = 94  // SPELL_EFFECT_SELF_RESURRECT (SharedDefines.h:905)
+	spellEffectKnockBack            = 98  // SPELL_EFFECT_KNOCK_BACK (SharedDefines.h:909)
+	spellEffectKnockBackDest        = 144 // SPELL_EFFECT_KNOCK_BACK_DEST (SharedDefines.h:955)
+	spellEffectDurabilityDamage     = 111 // SPELL_EFFECT_DURABILITY_DAMAGE (SharedDefines.h:922)
+	spellEffectDurabilityDamagePct  = 115 // SPELL_EFFECT_DURABILITY_DAMAGE_PCT (SharedDefines.h:926)
+	spellEffectQuestClear           = 139 // SPELL_EFFECT_CLEAR_QUEST (SharedDefines.h:950)
+	spellEffectQuestFail            = 147 // SPELL_EFFECT_QUEST_FAIL (SharedDefines.h:958)
+	spellEffectQuestStart           = 150 // SPELL_EFFECT_QUEST_START (SharedDefines.h:961)
 
 	// Summon categories for the generic-summon CheckCast leg
 	// (Spell.cpp:5798-5817, SharedDefines.h:3296).
@@ -7234,6 +7241,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectChargeDest: // 149: SPELL_EFFECT_CHARGE_DEST (EffectChargeDest, SpellEffects.cpp:4528)
 				// C++ runs this at SPELL_EFFECT_HANDLE_LAUNCH on the caster.
 				s.handleEffectChargeDest(effCtx, target)
+			case spellEffectKnockBack, spellEffectKnockBackDest: // 98/144: SPELL_EFFECT_KNOCK_BACK* (EffectKnockBack, SpellEffects.cpp:4552)
+				s.handleEffectKnockBack(effCtx, eff, hitTargets, target)
+			case spellEffectDurabilityDamage, spellEffectDurabilityDamagePct: // 111/115: SPELL_EFFECT_DURABILITY_DAMAGE* (EffectDurabilityDamage*, SpellEffects.cpp:4857)
+				s.handleEffectDurabilityDamage(effCtx, spellID, eff, hitTargets)
+			case spellEffectQuestClear: // 139: SPELL_EFFECT_CLEAR_QUEST (EffectQuestClear, SpellEffects.cpp:4611)
+				s.handleEffectQuestClear(effCtx, eff, hitTargets)
+			case spellEffectQuestFail: // 147: SPELL_EFFECT_QUEST_FAIL (EffectQuestFail, SpellEffects.cpp:5283)
+				s.handleEffectQuestFail(effCtx, eff, hitTargets)
+			case spellEffectQuestStart: // 150: SPELL_EFFECT_QUEST_START (EffectQuestStart, SpellEffects.cpp:5294)
+				s.handleEffectQuestStart(effCtx, eff, hitTargets)
 			default:
 				s.debug("unhandled spell effect", "spell", spellID, "effect", eff.Effect, "index", effectIndex)
 			}
@@ -18941,6 +18958,417 @@ func (s *session) handleEffectChargeDest(ctx context.Context, target protocol.Sp
 		return
 	}
 	s.nearTeleportMove(target.Destination.X, target.Destination.Y, target.Destination.Z, s.player.Orientation)
+}
+
+// handleEffectKnockBack mirrors Spell::EffectKnockBack (SpellEffects.cpp:4552-4592),
+// the SPELL_EFFECT_KNOCK_BACK (98) and SPELL_EFFECT_KNOCK_BACK_DEST (144)
+// HIT_TARGET arms. speedxy = MiscValue*0.1 and speedz = damage*0.1, with the
+// both-speeds-<0.01 no-op arm; the knock-from point is the caster for 98 and
+// the spell dest (HasDst gate) for 144. The ROOT/STUNNED gate and the instant
+// non-melee interrupt (Unit::InterruptNonMeleeSpells(true): generic +
+// channeled) land via the target session. Non-player hit targets run the
+// MoveKnockbackFrom spline in C++ and have no Go motion model (documented
+// no-bridge; the affecting-player world-boss/dungeon-boss gate applies only
+// to creature targets, so it is vacuous here). Player hit targets get the
+// client-visible arm of Unit::KnockbackFrom (Unit.cpp:12510-12547):
+// SMSG_MOVE_KNOCK_BACK with the packed GUID, a zero counter, vcos/vsin away
+// from the knock point (Position::GetSinCos, Position.cpp:67-79 — random
+// angle when the target sits on the point), speedXY and -speedZ; a flying
+// target keeps flight via SMSG_MOVE_SET_CAN_FLY (same packet as the login
+// flight state).
+func (s *session) handleEffectKnockBack(ctx context.Context, eff wotlk.SpellEffect, hitTargets []uint64, target protocol.SpellTargetData) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	speedXY := float32(eff.MiscValue) * 0.1
+	speedZ := float32(eff.BasePoints+1) * 0.1
+	if speedXY < 0.01 && speedZ < 0.01 {
+		return
+	}
+	var fromX, fromY float64
+	if eff.Effect == spellEffectKnockBackDest {
+		if target.Flags&protocol.SpellTargetFlagDestLocation == 0 {
+			return
+		}
+		fromX, fromY = float64(target.Destination.X), float64(target.Destination.Y)
+	} else {
+		fromX, fromY = float64(s.player.X), float64(s.player.Y)
+	}
+	for _, targetGUID := range hitTargets {
+		if targetGUID == 0 {
+			continue
+		}
+		targetSess := s.server.findSessionByGUID(targetGUID)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		// Spells with SPELL_EFFECT_KNOCK_BACK (like Thunderstorm) can't
+		// knock back a target with ROOT or STUN.
+		if targetSess.rooted || targetSess.hasAuraType(spellAuraModStun) {
+			continue
+		}
+		// Instantly interrupt non melee spells being cast.
+		targetSess.castMu.Lock()
+		cast := targetSess.activeCast
+		if cast != nil {
+			if cast.Timer != nil {
+				cast.Timer.Stop()
+			}
+			cast.Cancelled = true
+			targetSess.activeCast = nil
+		}
+		targetSess.castMu.Unlock()
+		if cast != nil {
+			_ = targetSess.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(cast.CastID, cast.SpellID, spellFailedInterrupted), true)
+			targetSess.sendInterrupted(cast.CastID, cast.SpellID, 0)
+		}
+		targetSess.interruptCurrentChannel()
+		dx := float64(targetSess.player.X) - fromX
+		dy := float64(targetSess.player.Y) - fromY
+		var vcos, vsin float64
+		if math.Abs(dx) < 0.001 && math.Abs(dy) < 0.001 {
+			angle := rand.Float64() * 2 * math.Pi
+			vcos, vsin = math.Cos(angle), math.Sin(angle)
+		} else {
+			dist := math.Hypot(dx, dy)
+			vcos, vsin = dx/dist, dy/dist
+		}
+		packet := protocol.NewBuffer(32)
+		packet.WritePackedGUID(targetGUID)
+		packet.WriteU32(0)
+		packet.WriteF32(float32(vcos))
+		packet.WriteF32(float32(vsin))
+		packet.WriteF32(speedXY)
+		packet.WriteF32(-speedZ)
+		_ = targetSess.write(uint16(protocol.OpcodeSMSG_MOVE_KNOCK_BACK), packet.Bytes(), true)
+		if targetSess.hasAuraType(spellAuraFly) || targetSess.hasAuraType(spellAuraModIncreaseMountedFlightSpeed) {
+			fly := protocol.NewBuffer(packedGUIDSize(targetGUID) + 4)
+			fly.WritePackedGUID(targetGUID)
+			fly.WriteU32(0)
+			_ = targetSess.write(uint16(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY), fly.Bytes(), true)
+		}
+	}
+	_ = ctx
+}
+
+// handleEffectDurabilityDamage mirrors Spell::EffectDurabilityDamage and
+// Spell::EffectDurabilityDamagePCT (SpellEffects.cpp:4857-4915), the
+// SPELL_EFFECT_DURABILITY_DAMAGE (111) and SPELL_EFFECT_DURABILITY_DAMAGE_PCT
+// (115) HIT_TARGET arms, per player hit target. MiscValue is the equipment
+// slot: negative means all equipped items (-1) or all items (-2, the
+// inventory arm); a slot >= INVENTORY_SLOT_BAG_END (23) is invalid. The 111
+// arm logs via ExecuteLogEffectDurabilityDamage (packed target GUID, item
+// entry, slot; -1/-1 on the all-items arm) flushed as SMSG_SPELLLOGEXECUTE.
+// The PCT arm has no log arm and no-ops on damage <= 0. The
+// SPELL_AURA_PREVENT_DURABILITY_LOSS gate and the _ApplyItemMods stat strip
+// on the 0-crossing follow the Go durability convention (DB-backed +
+// inventory refresh, same as rollDurabilityLossOnHit/durabilityLossAll).
+func (s *session) handleEffectDurabilityDamage(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, hitTargets []uint64) {
+	if s == nil || s.server == nil {
+		return
+	}
+	isPct := eff.Effect == spellEffectDurabilityDamagePct
+	damage := eff.BasePoints + 1
+	slot := eff.MiscValue
+	for _, targetGUID := range hitTargets {
+		if targetGUID == 0 {
+			continue
+		}
+		targetSess := s.server.findSessionByGUID(targetGUID)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		if slot < 0 {
+			if isPct {
+				targetSess.durabilityLossAll(ctx, float64(damage)/100.0, slot < -1)
+			} else {
+				targetSess.durabilityPointsLossAll(ctx, damage, slot < -1)
+				targetSess.sendDurabilityDamageLog(spellID, targetGUID, -1, -1)
+			}
+			continue
+		}
+		if slot >= inventorySlotBagEnd {
+			continue
+		}
+		if isPct && damage <= 0 {
+			continue
+		}
+		// GetItemByPos(INVENTORY_SLOT_BAG_0, slot).
+		cdb := targetSess.server.CharactersStore.DB
+		wdb := targetSess.server.WorldStore.DB
+		if cdb == nil || wdb == nil {
+			continue
+		}
+		var itemGUID uint64
+		var itemEntry, curDur uint32
+		if err := cdb.QueryRowContext(ctx, `SELECT ci.item, ii.itemEntry, ii.durability
+			FROM character_inventory AS ci
+			JOIN item_instance AS ii ON ii.guid = ci.item
+			WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot = ? LIMIT 1`,
+			targetSess.playerGUID, slot).Scan(&itemGUID, &itemEntry, &curDur); err != nil {
+			continue
+		}
+		var maxDur uint32
+		if err := wdb.QueryRowContext(ctx, "SELECT MaxDurability FROM item_template WHERE entry = ?", itemEntry).Scan(&maxDur); err != nil || maxDur == 0 {
+			continue
+		}
+		var newDur uint32
+		if isPct {
+			// Player::DurabilityLoss (Player.cpp:4916-4932): minimum 1 point.
+			loss := uint32(float64(maxDur) * float64(damage) / 100.0)
+			if loss < 1 {
+				loss = 1
+			}
+			if loss >= curDur {
+				newDur = 0
+			} else {
+				newDur = curDur - loss
+			}
+		} else {
+			// Player::DurabilityPointsLoss (Player.cpp:4960-4991): clamped
+			// at zero and at max (negative points restore durability).
+			nd := int64(curDur) - int64(damage)
+			if nd < 0 {
+				nd = 0
+			}
+			if nd > int64(maxDur) {
+				nd = int64(maxDur)
+			}
+			newDur = uint32(nd)
+			targetSess.sendDurabilityDamageLog(spellID, targetGUID, int32(itemEntry), slot)
+		}
+		if newDur != curDur {
+			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET durability = ? WHERE guid = ?", newDur, itemGUID)
+			_ = targetSess.sendInventoryItems(ctx)
+			targetSess.sendPlayerUpdate()
+		}
+	}
+}
+
+// sendDurabilityDamageLog mirrors Spell::ExecuteLogEffectDurabilityDamage
+// (Spell.cpp:4580-4586) as flushed by SendLogExecute (Spell.cpp:4523-4552):
+// SMSG_SPELLLOGEXECUTE carrying the effect id, the InitEffectExecuteData
+// target counter, the victim's packed GUID, the item entry and the slot.
+func (s *session) sendDurabilityDamageLog(spellID uint32, targetGUID uint64, itemID, slot int32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	log := protocol.NewBuffer(40)
+	log.WritePackedGUID(s.playerGUID)
+	log.WriteU32(spellID)
+	log.WriteU32(1)
+	log.WriteU32(spellEffectDurabilityDamage)
+	log.WriteU32(1)
+	log.WritePackedGUID(targetGUID)
+	log.WriteI32(itemID)
+	log.WriteI32(slot)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
+	}
+}
+
+// handleEffectQuestFail mirrors Spell::EffectQuestFail (SpellEffects.cpp:5283-5293)
+// via Player::FailQuest (Player.cpp:15529-15571), the SPELL_EFFECT_QUEST_FAIL
+// (147) HIT_TARGET arm, per player hit target: only an INCOMPLETE quest can
+// fail; the status becomes QUEST_STATUS_FAILED (5), the quest-log slot gets
+// timer 1 and QUEST_STATE_FAIL (0x2), and SMSG_QUESTGIVER_QUEST_FAILED
+// (questId + the default EQUIP_ERR_OK reason) goes out. Required quest items
+// with BIND_QUEST_ITEM bonding are destroyed (DestroyItemCount 9999). The
+// completed-timed-quest special arm needs the timed-quest model, which Go
+// does not track (documented no-bridge).
+func (s *session) handleEffectQuestFail(ctx context.Context, eff wotlk.SpellEffect, hitTargets []uint64) {
+	if s == nil || s.server == nil {
+		return
+	}
+	questID := uint32(eff.MiscValue)
+	if !s.questTemplateGate(ctx, questID) {
+		return
+	}
+	for _, targetGUID := range hitTargets {
+		if targetGUID == 0 {
+			continue
+		}
+		targetSess := s.server.findSessionByGUID(targetGUID)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		// We can only fail an incomplete quest.
+		status, err := targetSess.characterQuestStatus(ctx, questID)
+		if err != nil || status != questStatusIncomplete {
+			continue
+		}
+		if cdb := targetSess.server.CharactersStore.DB; cdb != nil {
+			_, _ = cdb.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusFailed, targetSess.playerGUID, questID)
+		}
+		for slot := 0; slot < playerQuestLogSlots; slot++ {
+			if targetSess.player.QuestLog[slot].QuestID == questID {
+				targetSess.player.QuestLog[slot].Timer = 1
+				targetSess.player.QuestLog[slot].State = questSlotStateFail
+				targetSess.sendPlayerQuestLogUpdate(slot)
+				break
+			}
+		}
+		// Player::SendQuestFailed (Player.cpp:17032-17041).
+		packet := protocol.NewBuffer(8)
+		packet.WriteU32(questID)
+		packet.WriteU32(0)
+		_ = targetSess.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_QUEST_FAILED), packet.Bytes(), true)
+		targetSess.destroyQuestItems(ctx, questID)
+	}
+}
+
+// destroyQuestItems mirrors the quest-item destruction tail of
+// Player::FailQuest (Player.cpp:15563-15568): every RequiredItemId with a
+// positive RequiredItemCount and BIND_QUEST_ITEM (4) bonding is destroyed
+// (DestroyItemCount 9999).
+func (s *session) destroyQuestItems(ctx context.Context, questID uint32) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	wdb := s.server.WorldStore.DB
+	var itemIDs [6]uint32
+	var itemCounts [6]uint32
+	if err := wdb.QueryRowContext(ctx, `SELECT RequiredItemId1, RequiredItemId2, RequiredItemId3, RequiredItemId4, RequiredItemId5, RequiredItemId6,
+		RequiredItemCount1, RequiredItemCount2, RequiredItemCount3, RequiredItemCount4, RequiredItemCount5, RequiredItemCount6
+		FROM quest_template WHERE ID = ?`, questID).Scan(
+		&itemIDs[0], &itemIDs[1], &itemIDs[2], &itemIDs[3], &itemIDs[4], &itemIDs[5],
+		&itemCounts[0], &itemCounts[1], &itemCounts[2], &itemCounts[3], &itemCounts[4], &itemCounts[5]); err != nil {
+		return
+	}
+	for i := 0; i < 6; i++ {
+		if itemIDs[i] == 0 || itemCounts[i] == 0 {
+			continue
+		}
+		var bonding uint32
+		if err := wdb.QueryRowContext(ctx, "SELECT Bonding FROM item_template WHERE entry = ?", itemIDs[i]).Scan(&bonding); err != nil || bonding != itemBondingQuestItem {
+			continue
+		}
+		rows, err := cdb.QueryContext(ctx, `SELECT ci.item FROM character_inventory AS ci
+			JOIN item_instance AS ii ON ii.guid = ci.item
+			WHERE ci.guid = ? AND ii.itemEntry = ?`, s.playerGUID, itemIDs[i])
+		if err != nil {
+			continue
+		}
+		var instances []uint64
+		for rows.Next() {
+			var guid uint64
+			if rows.Scan(&guid) == nil {
+				instances = append(instances, guid)
+			}
+		}
+		rows.Close()
+		for _, guid := range instances {
+			s.destroyItemInstanceCount(ctx, guid, ^uint32(0))
+		}
+	}
+}
+
+// handleEffectQuestClear mirrors Spell::EffectQuestClear (SpellEffects.cpp:4611-4658),
+// the SPELL_EFFECT_CLEAR_QUEST (139) HIT_TARGET arm, per player hit target:
+// the quest must be known (status != NONE); every quest-log entry for it is
+// cleared and the active + rewarded status rows are removed, via the shared
+// clearQuestLogEntries core.
+func (s *session) handleEffectQuestClear(ctx context.Context, eff wotlk.SpellEffect, hitTargets []uint64) {
+	if s == nil || s.server == nil {
+		return
+	}
+	questID := uint32(eff.MiscValue)
+	if !s.questTemplateGate(ctx, questID) {
+		return
+	}
+	for _, targetGUID := range hitTargets {
+		if targetGUID == 0 {
+			continue
+		}
+		targetSess := s.server.findSessionByGUID(targetGUID)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		// Player has never done this quest.
+		if status, err := targetSess.characterQuestStatus(ctx, questID); err != nil || status == int64(questStatusNoneValue) {
+			continue
+		}
+		targetSess.clearQuestLogEntries(ctx, questID)
+	}
+}
+
+// clearQuestLogEntries mirrors the shared core of Player::RemoveActiveQuest +
+// Player::RemoveRewardedQuest plus the quest-log clearing of
+// Spell::EffectQuestClear (SpellEffects.cpp:4611-4658): the
+// character_queststatus and character_queststatus_rewarded rows are deleted
+// and every quest-log slot holding the quest is zeroed. The
+// TakeQuestSourceItem, PvP-quest-flag and OnQuestStatusChange arms have no Go
+// bridge (same verdict as the .quest remove command path).
+func (s *session) clearQuestLogEntries(ctx context.Context, questID uint32) {
+	if s == nil || s.server == nil {
+		return
+	}
+	if cdb := s.server.CharactersStore.DB; cdb != nil {
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus WHERE guid = ? AND quest = ?", s.playerGUID, questID)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus_rewarded WHERE guid = ? AND quest = ?", s.playerGUID, questID)
+	}
+	if s.player != nil {
+		for slot := 0; slot < playerQuestLogSlots; slot++ {
+			if s.player.QuestLog[slot].QuestID == questID {
+				s.player.QuestLog[slot] = questLogEntry{}
+				s.sendPlayerQuestLogUpdate(slot)
+			}
+		}
+	}
+}
+
+// handleEffectQuestStart mirrors Spell::EffectQuestStart (SpellEffects.cpp:5294-5316),
+// the SPELL_EFFECT_QUEST_START (150) HIT_TARGET arm, per player hit target:
+// CanTakeQuest gates; an auto-accept quest (SpecialFlags & 4) is added when a
+// quest-log slot is free (AddQuestAndCheckCompletion); the quest details go
+// out with the target's own GUID as giver and activateAccept=true.
+func (s *session) handleEffectQuestStart(ctx context.Context, eff wotlk.SpellEffect, hitTargets []uint64) {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	questID := uint32(eff.MiscValue)
+	if !s.questTemplateGate(ctx, questID) {
+		return
+	}
+	wdb := s.server.WorldStore.DB
+	for _, targetGUID := range hitTargets {
+		if targetGUID == 0 {
+			continue
+		}
+		targetSess := s.server.findSessionByGUID(targetGUID)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		canTake, err := targetSess.canTakeQuest(ctx, questID)
+		if err != nil || !canTake {
+			continue
+		}
+		var specialFlags int64
+		_ = wdb.QueryRowContext(ctx, "SELECT SpecialFlags FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
+		if specialFlags&4 != 0 {
+			// Player::CanAddQuest (Player.cpp:14946): needs a quest-log
+			// slot; silently skips when the log is full.
+			free := false
+			for slot := 0; slot < playerQuestLogSlots; slot++ {
+				if targetSess.player.QuestLog[slot].QuestID == 0 || targetSess.player.QuestLog[slot].QuestID == questID {
+					free = true
+					break
+				}
+			}
+			if !free {
+				continue
+			}
+			targetSess.addQuestToPlayer(ctx, questID)
+		}
+		data, err := targetSess.loadQuestDetailData(ctx, questID)
+		if err != nil {
+			continue
+		}
+		details := buildQuestGiverDetails(data, targetGUID, 0)
+		_ = targetSess.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), details, true)
+	}
 }
 
 // handleEffectStuck mirrors Spell::EffectStuck (SpellEffects.cpp:3876-3915),
