@@ -1499,12 +1499,13 @@ func (s *session) setResurrectRequestData(casterGUID uint64, mapID uint32, x, y,
 // sendResurrectRequest mirrors Spell::SendResurrectRequest: raw caster GUID,
 // length-prefixed caster name (empty for player casters, the client resolves
 // those by GUID), the spirit healer resurrection sickness flag, and the flag
-// overriding the corpse reclaim delay for spells that ignore the timer.
+// overriding the corpse reclaim delay for spells that ignore the timer. The
+// name is NUL-terminated (ByteBuffer.h:212-218), hence WriteCString.
 func (s *session) sendResurrectRequest(casterGUID uint64, name string, spiritHealer, ignoreReclaimTimer bool) {
-	packet := protocol.NewBuffer(24 + len(name))
+	packet := protocol.NewBuffer(25 + len(name))
 	packet.WriteU64(casterGUID)
 	packet.WriteU32(uint32(len(name)) + 1)
-	packet.WriteString(name)
+	packet.WriteCString(name)
 	packet.WriteU8(boolByte(spiritHealer))
 	packet.WriteU8(boolByte(ignoreReclaimTimer))
 	_ = s.write(uint16(protocol.OpcodeSMSG_RESURRECT_REQUEST), packet.Bytes(), true)
@@ -1706,8 +1707,12 @@ func (s *session) applySelfResurrectEffect(spell wotlk.Spell) {
 		if effect.MiscValue > 0 {
 			mana = uint32(effect.MiscValue)
 		}
+		// EffectResurrectNew (SpellEffects.cpp:246-275) logs the effect,
+		// stores the request at the caster's location, and sends the request
+		// whose reclaim-delay byte is !HasAttribute(IGNORE_RESURRECTION_TIMER).
+		s.sendResurrectLog(spell.ID, s.playerGUID)
 		s.setResurrectRequestData(s.playerGUID, s.player.Map, s.player.X, s.player.Y, s.player.Z, health, mana)
-		s.sendResurrectRequest(s.playerGUID, "", false, false)
+		s.sendResurrectRequest(s.playerGUID, "", false, spell.AttributesEx3&spellAttr3IgnoreResurrectionTimer == 0)
 		return
 	}
 }

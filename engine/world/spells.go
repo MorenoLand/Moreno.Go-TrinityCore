@@ -61,6 +61,7 @@ const (
 	spellAttr4NotUsableInArena             uint32 = 0x00010000 // SPELL_ATTR4_NOT_USABLE_IN_ARENA (SharedDefines.h:576) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4UsableInArena                uint32 = 0x00020000 // SPELL_ATTR4_USABLE_IN_ARENA (SharedDefines.h:577) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr3Battleground                 uint32 = 0x00000800 // SPELL_ATTR3_BATTLEGROUND (SharedDefines.h:534) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
+	spellAttr3IgnoreResurrectionTimer      uint32 = 0x00000010 // SPELL_ATTR3_IGNORE_RESURRECTION_TIMER (SharedDefines.h:527) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 	spellAttr4TreatAsDelayed               uint32 = 0x00000010 // SPELL_ATTR4_UNK4 "Treat as delayed spell" (SharedDefines.h:564) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4ProcOnlyOnCaster             uint32 = 0x00000002 // SPELL_ATTR4_PROC_ONLY_ON_CASTER (SharedDefines.h:561) "Only proc on self-cast" — ATTR4 is Go's AttributesEx4
 	spellAttr4CastOnlyInOutland            uint32 = 0x04000000 // SPELL_ATTR4_CAST_ONLY_IN_OUTLAND (SharedDefines.h:586) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
@@ -7071,8 +7072,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectEnchantItemPrismatic: // 156: SPELL_EFFECT_ENCHANT_ITEM_PRISMATIC
 				s.handleEffectEnchantItemPrismatic(effCtx, target, spell, eff)
 			case spellEffectLearnSpell: // 36: SPELL_EFFECT_LEARN_SPELL
-				if eff.TriggerSpell != 0 {
-					s.learnSpell(effCtx, eff.TriggerSpell)
+				// Spell::EffectLearnSpell (SpellEffects.cpp:2406-2424): spells 483
+				// and 55884 carry the taught spell in the effect value (damage),
+				// not TriggerSpell. Non-player non-pet targets learn nothing;
+				// the pet-teach arm has no Go model (no pet spell persistence —
+				// see commands_pet.go), and creature casters are unmodeled.
+				spellToLearn := eff.TriggerSpell
+				if spellID == 483 || spellID == 55884 {
+					spellToLearn = uint32(eff.BasePoints + 1)
+				}
+				if spellToLearn != 0 {
+					s.learnSpell(effCtx, spellToLearn)
 				}
 			case spellEffectResurrect: // 18: SPELL_EFFECT_RESURRECT
 				s.handleEffectResurrect(effCtx, targetGUID, spell, eff)
@@ -7522,8 +7532,8 @@ func (s *session) grantExtraAttacks(count uint32) bool {
 
 // sendExtraAttacksLog mirrors Spell::ExecuteLogEffectExtraAttacks
 // (Spell.cpp:4566-4571) as flushed by SendLogExecute (Spell.cpp:4523-4552):
-// SMSG_SPELLLOGEXECUTE carrying the effect id, the target, and the banked
-// attack count.
+// SMSG_SPELLLOGEXECUTE carrying the effect id, the InitEffectExecuteData
+// target counter, the target, and the banked attack count.
 func (s *session) sendExtraAttacksLog(spellID uint32, effectIndex int, count uint32) {
 	if s == nil || s.player == nil {
 		return
@@ -7533,6 +7543,7 @@ func (s *session) sendExtraAttacksLog(spellID uint32, effectIndex int, count uin
 	log.WriteU32(spellID)
 	log.WriteU32(1)
 	log.WriteU32(spellEffectAddExtraAttacks)
+	log.WriteU32(1)
 	log.WritePackedGUID(s.playerGUID)
 	log.WriteU32(count)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
@@ -18669,7 +18680,7 @@ func spellIsLootCrafting(spell wotlk.Spell) bool {
 }
 
 func (s *session) handleEffectResurrect(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
-	if targetGUID == 0 || s.server == nil {
+	if targetGUID == 0 || s.server == nil || s.player == nil {
 		return
 	}
 	targetSess := s.server.findSessionByGUID(targetGUID)
@@ -18696,8 +18707,41 @@ func (s *session) handleEffectResurrect(ctx context.Context, targetGUID uint64, 
 	health := uint32(int64(maxHealth) * int64(healthPct) / 100)
 	maxMana := targetSess.player.MaxPowers[0]
 	mana := uint32(int64(maxMana) * int64(healthPct) / 100)
-	targetSess.setResurrectRequestData(s.playerGUID, 0, 0, 0, 0, health, mana)
-	targetSess.sendResurrectRequest(s.playerGUID, "", false, false)
+	// Spell::EffectResurrect (SpellEffects.cpp:4270-4293): the log fires when
+	// the request is created; SetResurrectRequestData WorldRelocates the
+	// CASTER, so the stored location is the resurrector's position (the
+	// accept path teleports the ghost there before resurrecting). Storing
+	// zeros teleported every accepted player resurrection to map 0 (0,0,0).
+	// The m_corpseTarget arm has no Go model (no corpse targets on the client
+	// path — spells.go target check notes); appliedAura is 0 on this path.
+	s.sendResurrectLog(spell.ID, targetGUID)
+	targetSess.setResurrectRequestData(s.playerGUID, s.player.Map, s.player.X, s.player.Y, s.player.Z, health, mana)
+	// Spell::SendResurrectRequest (Spell.cpp:4693-4709): the fourth byte
+	// overrides the corpse-reclaim delay for spells carrying
+	// SPELL_ATTR3_IGNORE_RESURRECTION_TIMER; spiritHealer stays false for
+	// player casters and the name stays empty (client resolves by GUID).
+	targetSess.sendResurrectRequest(s.playerGUID, "", false, spell.AttributesEx3&spellAttr3IgnoreResurrectionTimer == 0)
+}
+
+// sendResurrectLog mirrors Spell::ExecuteLogEffectResurrect
+// (Spell.cpp:4618-4622) as flushed by SendLogExecute (Spell.cpp:4523-4552):
+// SMSG_SPELLLOGEXECUTE carrying the effect id, the InitEffectExecuteData
+// target counter, and the resurrected player's packed GUID.
+func (s *session) sendResurrectLog(spellID uint32, targetGUID uint64) {
+	if s == nil || s.player == nil {
+		return
+	}
+	log := protocol.NewBuffer(32)
+	log.WritePackedGUID(s.playerGUID)
+	log.WriteU32(spellID)
+	log.WriteU32(1)
+	log.WriteU32(spellEffectResurrect)
+	log.WriteU32(1)
+	log.WritePackedGUID(targetGUID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
+	}
 }
 
 func (s *session) handleEffectHealthLeech(ctx context.Context, spellID uint32, hitTargets []uint64, effIndex int, eff wotlk.SpellEffect) {

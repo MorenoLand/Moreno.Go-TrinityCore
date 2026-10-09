@@ -207,8 +207,8 @@ func (s *session) handleEffectInterruptCast(ctx context.Context, targetGUID uint
 
 // sendInterruptCastLog mirrors Spell::ExecuteLogEffectInterruptCast
 // (Spell.cpp:4573-4578) as flushed by SendLogExecute (Spell.cpp:4523-4555):
-// SMSG_SPELLLOGEXECUTE carrying the effect id, the interrupted unit, and the
-// interrupted spell id.
+// SMSG_SPELLLOGEXECUTE carrying the effect id, the InitEffectExecuteData
+// target counter, the interrupted unit, and the interrupted spell id.
 func (s *session) sendInterruptCastLog(interruptSpellID uint32, victimGUID uint64, interruptedSpellID uint32) {
 	if s == nil || s.player == nil {
 		return
@@ -218,6 +218,7 @@ func (s *session) sendInterruptCastLog(interruptSpellID uint32, victimGUID uint6
 	log.WriteU32(interruptSpellID)
 	log.WriteU32(1)
 	log.WriteU32(spellEffectInterruptCast)
+	log.WriteU32(1)
 	log.WritePackedGUID(victimGUID)
 	log.WriteU32(interruptedSpellID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
