@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -198,6 +199,91 @@ func (tm *ThreatManager) RemoveThreat(victim uint64) (switched bool, newVictim u
 		return true, tm.currentVictim
 	}
 	return false, tm.currentVictim
+}
+
+// ScaleThreat multiplies a victim's threat entry by factor.
+// Reference: ThreatReference::ScaleThreat (ThreatManager.cpp:52-61) no-ops on a
+// factor of 1 and clamps negative factors at 0; ThreatManager::ScaleThreat
+// (ThreatManager.cpp:412-417) only touches an existing entry, so a victim with
+// no entry is a no-op. C++ reselects the victim lazily in UpdateVictim; Go
+// reselects eagerly like RemoveThreat.
+func (tm *ThreatManager) ScaleThreat(victim uint64, factor float32) (switched bool, newVictim uint64) {
+	if victim == 0 || factor == 1 {
+		return false, tm.currentVictim
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	threat, ok := tm.entries[victim]
+	if !ok {
+		return false, tm.currentVictim
+	}
+	if factor < 0 {
+		factor = 0
+	}
+	tm.entries[victim] = threat * factor
+
+	var highestGUID uint64
+	var highestThreat float32
+	for guid, t := range tm.entries {
+		if t > highestThreat {
+			highestThreat = t
+			highestGUID = guid
+		}
+	}
+	if highestGUID != tm.currentVictim {
+		tm.currentVictim = highestGUID
+		return true, highestGUID
+	}
+	return false, tm.currentVictim
+}
+
+// handleEffectModifyThreatPercent processes SPELL_EFFECT_MODIFY_THREAT_PERCENT (125).
+// Reference: Spell::EffectModifyThreatPercent (SpellEffects.cpp:4915) runs at
+// SPELL_EFFECT_HANDLE_HIT_TARGET per unit target:
+// unitTarget->GetThreatManager().ModifyThreatByPercent(unitCaster, damage),
+// where ModifyThreatByPercent (ThreatManager.h:143) no-ops on percent 0 and
+// scales by 0.01*(100+percent). Entities that cannot hold a threat list
+// (taunt precedent: totems, pets, triggers, player minions — OwnerGUID != 0)
+// reject silently.
+func (s *session) handleEffectModifyThreatPercent(ctx context.Context, eff wotlk.SpellEffect, hitTargets []uint64) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	damage := eff.BasePoints + 1
+	if damage == 0 {
+		return
+	}
+	factor := float32(0.01 * float64(100+damage))
+	for _, targetGUID := range hitTargets {
+		if targetGUID == 0 {
+			continue
+		}
+		if s.server.isTotemGUID(targetGUID) {
+			continue
+		}
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
+		if motion == nil || motion.Evading || motion.OwnerGUID != 0 || motion.ThreatMgr == nil {
+			s.server.motionMu.Unlock()
+			continue
+		}
+		tm := motion.ThreatMgr
+		s.server.motionMu.Unlock()
+
+		switched, newVictim := tm.ScaleThreat(s.playerGUID, factor)
+		if !switched {
+			continue
+		}
+		// The taunt broadcast tail: announce the new highest-threat victim.
+		s.server.motionMu.Lock()
+		if m := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID); m != nil {
+			m.TargetGUID = newVictim
+			s.server.broadcastHighestThreatUpdateInInstance(m.Map, m.InstanceID, m.GUID, newVictim, tm.SortedEntries())
+		}
+		s.server.motionMu.Unlock()
+	}
+	_ = ctx
 }
 
 // HasVictim reports whether victim holds an entry in the threat table.

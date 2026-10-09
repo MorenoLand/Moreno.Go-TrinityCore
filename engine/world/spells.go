@@ -328,6 +328,9 @@ const (
 	spellEffectQuestClear           = 139 // SPELL_EFFECT_CLEAR_QUEST (SharedDefines.h:950)
 	spellEffectQuestFail            = 147 // SPELL_EFFECT_QUEST_FAIL (SharedDefines.h:958)
 	spellEffectQuestStart           = 150 // SPELL_EFFECT_QUEST_START (SharedDefines.h:961)
+	spellEffectDestroyAllTotems     = 110 // SPELL_EFFECT_DESTROY_ALL_TOTEMS (SharedDefines.h:921)
+	spellEffectModifyThreatPercent  = 125 // SPELL_EFFECT_MODIFY_THREAT_PERCENT (SharedDefines.h:936)
+	spellEffectRemoveAura           = 164 // SPELL_EFFECT_REMOVE_AURA (SharedDefines.h:975)
 
 	// Summon categories for the generic-summon CheckCast leg
 	// (Spell.cpp:5798-5817, SharedDefines.h:3296).
@@ -7287,6 +7290,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleEffectQuestFail(effCtx, eff, hitTargets)
 			case spellEffectQuestStart: // 150: SPELL_EFFECT_QUEST_START (EffectQuestStart, SpellEffects.cpp:5294)
 				s.handleEffectQuestStart(effCtx, eff, hitTargets)
+			case spellEffectRemoveAura: // 164: SPELL_EFFECT_REMOVE_AURA (EffectRemoveAura, SpellEffects.cpp:5611)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
+				// target: RemoveAurasDueToSpell(TriggerSpell) on the target.
+				for _, effectTarget := range hitTargets {
+					if effectTarget == 0 {
+						continue
+					}
+					s.removeTargetAura(effCtx, effectTarget, eff.TriggerSpell)
+				}
+			case spellEffectModifyThreatPercent: // 125: SPELL_EFFECT_MODIFY_THREAT_PERCENT (EffectModifyThreatPercent, SpellEffects.cpp:4915)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
+				// target on the target's threat manager.
+				s.handleEffectModifyThreatPercent(effCtx, eff, hitTargets)
+			case spellEffectDestroyAllTotems: // 110: SPELL_EFFECT_DESTROY_ALL_TOTEMS (EffectDestroyAllTotems, SpellEffects.cpp:4820)
+				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT (caster arm),
+				// not per unit target.
+				s.handleEffectDestroyAllTotems(effCtx, eff)
 			default:
 				s.debug("unhandled spell effect", "spell", spellID, "effect", eff.Effect, "index", effectIndex)
 			}

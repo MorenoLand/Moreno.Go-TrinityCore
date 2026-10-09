@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -443,6 +444,64 @@ func (s *session) runTotemLifecycle(def TotemDef, totem *activeTotem) {
 
 func (s *session) destroyTotem(slotID uint8) {
 	s.destroyTotemGUID(slotID, 0)
+}
+
+// liveTotemSpellID returns the creating spell id of the caster's live totem in
+// the slot, or 0 when the slot is empty. Used by the DestroyAllTotems mana
+// refund arm (SpellEffects.cpp:4820-4842), which sums the totem spells' mana
+// costs before unsummoning them.
+func (s *session) liveTotemSpellID(slotID uint8) uint32 {
+	if s == nil || s.server == nil || slotID >= 4 {
+		return 0
+	}
+	s.server.totemMu.RLock()
+	defer s.server.totemMu.RUnlock()
+	slots := s.server.activeTotems[s.playerGUID]
+	totem := slots[slotID]
+	if totem == nil {
+		return 0
+	}
+	totem.mu.Lock()
+	defer totem.mu.Unlock()
+	if totem.Stopped {
+		return 0
+	}
+	return totem.SpellID
+}
+
+// handleEffectDestroyAllTotems processes SPELL_EFFECT_DESTROY_ALL_TOTEMS (110).
+// Reference: Spell::EffectDestroyAllTotems (SpellEffects.cpp:4820-4842) runs
+// once at SPELL_EFFECT_HANDLE_HIT on the caster: every live totem in the four
+// summon slots is unsummoned, and the summed mana cost of the totem spells
+// (flat ManaCost + ManaCostPercentage of the caster's create mana) is restored
+// via a triggered 39104 cast with the ApplyPct(damage)-scaled amount as base
+// point 0. Go's create-mana model is the session's BaseMana.
+func (s *session) handleEffectDestroyAllTotems(ctx context.Context, eff wotlk.SpellEffect) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	var mana int64
+	for slot := uint8(0); slot < 4; slot++ {
+		spellID := s.liveTotemSpellID(slot)
+		if spellID != 0 {
+			if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
+				mana += int64(sp.ManaCost)
+				// CalculatePct(GetCreateMana(), ManaCostPercentage): integer
+				// truncation matches the C++ float template's cast back.
+				if sp.ManaCostPct > 0 && s.player.BaseMana > 0 {
+					mana += int64(s.player.BaseMana) * int64(sp.ManaCostPct) / 100
+				}
+			}
+		}
+		s.destroyTotem(slot)
+	}
+	// ApplyPct(mana, damage): mana *= (100 + damage) / 100.
+	mana = mana * int64(100+eff.BasePoints+1) / 100
+	if mana > 0 {
+		// TRIGGERED_FULL_MASK in C++: castSpellDirect is Go's triggered-cast
+		// path, with the mana amount carried as SPELLVALUE_BASE_POINT0.
+		s.castSpellDirectWithBasePoint(ctx, 39104, s.playerGUID, uint32(mana))
+	}
 }
 
 // isTotemGUID reports whether guid is a live player totem (C++ Unit::IsTotem,
