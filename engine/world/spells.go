@@ -6503,8 +6503,8 @@ func (s *session) implicitCasterUnitTarget(spell wotlk.Spell) (uint64, bool) {
 // reflectSourceGUID, not the caster. Reflect gained mid-flight is not
 // re-rolled — C++ rolls reflect at AddUnitTarget time (Spell.cpp:2152),
 // matching Go's cast-time roll; the ProcReflectDelayed arrival proc
-// (Spell.cpp:2181) stays a documented delta (Go consumes the reflect aura
-// at cast time via checkSpellReflection).
+// (Spell.cpp:2181) fires via procSpellReflectTakenAuraTriggers, armed at
+// the reflect site.
 func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.Spell, targets []uint64, launchMs uint32, isReflected bool, reflectSourceGUID uint64) []uint64 {
 	if len(targets) == 0 {
 		return targets
@@ -7198,6 +7198,24 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		} else if targetSess != nil && spellReflectOffered(spell, s, targetGUID, targetSess) && targetSess.checkSpellReflection(spell) {
 			isReflected = true
 			reflectSourceGUID = targetGUID
+			// ProcReflectDelayed (Spell.cpp:2181): at outbound-missile
+			// arrival the reflector's taken-side auras proc with
+			// PROC_HIT_REFLECT. C++ schedules it on the target's event list
+			// with delay TimeDelay (0 for instant spells); Go arms the same
+			// timer here and resolves the reflector's session at fire time.
+			reflectorGUID := targetGUID
+			procCasterGUID := s.playerGUID
+			procTriggered := s.triggeredNoProcEvents > 0
+			procSpell := spell
+			procTravelMs := s.spellTargetTimeDelayMs(ctx, spell, reflectSourceGUID)
+			time.AfterFunc(time.Duration(procTravelMs)*time.Millisecond, func() {
+				if s.server == nil {
+					return
+				}
+				if rsess := s.server.findSessionByGUID(reflectorGUID); rsess != nil {
+					rsess.procSpellReflectTakenAuraTriggers(context.Background(), procCasterGUID, procSpell, procTriggered)
+				}
+			})
 			// Spell::SendSpellGo (Spell.cpp:4504-4506): ReflectStatus is the
 			// caster's own SpellHitResult (Spell.cpp:2178), which is always
 			// SPELL_MISS_NONE — WorldObject::SpellHitResult returns NONE when
@@ -9424,8 +9442,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// trip is the outbound TimeDelay plus half (TimeDelay += TimeDelay >> 1,
 	// Spell.cpp:2184), and the arrival-time arms resolve against the
 	// reflector. ProcReflectDelayed (the reflector's aura proc at outbound
-	// arrival, Spell.cpp:2181) stays unmodeled — Go consumes the reflect
-	// aura at cast time via checkSpellReflection.
+	// arrival, Spell.cpp:2181) fires via procSpellReflectTakenAuraTriggers,
+	// armed at the reflect site above.
 	if isDelayedBranch && spell.Speed > 0 && (isReflected || (targetGUID != 0 && targetGUID != s.playerGUID)) {
 		// Spell::_cast (Spell.cpp:3473-3479): the delayed branch spends the
 		// cast-item charge at delay start — after SendSpellGo, before the
@@ -14212,10 +14230,10 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 	}
 	// WorldObject::SpellHitResult (Object.cpp): the reflect arm rolls before
 	// the hit roll — a jump target carrying reflect auras reflects the jump
-	// (SPELL_MISS_REFLECT), like the primary target does.
-	if spell.DefenseType == spellDamageClassMagic && spell.Attributes&spellAttr0Ability == 0 &&
-		!(spellIsPositive(spell) && !hostile) &&
-		targetSess != nil && targetSess.checkSpellReflection(spell) {
+	// (SPELL_MISS_REFLECT), like the primary target does. The offer gate is
+	// the same C++-exact Spell.cpp:622/2152 form as the primary path
+	// (spellReflectOffered), not a narrower local re-check.
+	if targetSess != nil && spellReflectOffered(spell, s, targetGUID, targetSess) && targetSess.checkSpellReflection(spell) {
 		return protocol.SpellMissReflect
 	}
 	targetLevel := uint8(1)

@@ -1560,6 +1560,41 @@ func (s *session) procSpellHitTakenAuraTriggers(ctx context.Context, casterGUID 
 	})
 }
 
+// procSpellReflectTakenAuraTriggers fires the reflector-side proc for a
+// reflected spell: ProcReflectDelayed (Spell.cpp:2069-2090, scheduled at
+// Spell.cpp:2181) runs Unit::ProcSkillsAndAuras(caster, reflector,
+// PROC_FLAG_NONE, PROC_FLAG_TAKEN_SPELL_MAGIC_DMG_CLASS_NEG |
+// PROC_FLAG_TAKEN_SPELL_NONE_DMG_CLASS_NEG, PROC_SPELL_TYPE_DAMAGE |
+// PROC_SPELL_TYPE_NO_DMG_HEAL, PROC_SPELL_PHASE_NONE, PROC_HIT_REFLECT) at
+// outbound-missile arrival. The actor mask is NONE so only the reflector's
+// taken-side auras evaluate, carrying the REFLECT hit bit. Runs on the
+// reflector's session so its own auras gate; the trigger resolves against
+// the original caster, and the triggered state is captured from the
+// reflect-causing cast (Spell::IsTriggered, Spell.cpp:7501-7504).
+func (s *session) procSpellReflectTakenAuraTriggers(ctx context.Context, casterGUID uint64, spell wotlk.Spell, triggered bool) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	if spell.AttributesEx3&spellAttr3CantTriggerProc != 0 {
+		return
+	}
+	schoolMask := spell.SchoolMask
+	if schoolMask == 0 {
+		schoolMask = 1
+	}
+	spellCopy := spell
+	s.procAuraTriggerLoop(ctx, casterGUID, procEventInfo{
+		typeMask:       procFlagTakenSpellMagicDmgClassNeg | procFlagTakenSpellNoneDmgClassNeg,
+		schoolMask:     schoolMask,
+		spellTypeMask:  procSpellTypeDamage | procSpellTypeNoDmgHeal,
+		spellPhaseMask: procSpellPhaseNone,
+		hitMask:        procHitReflect,
+		triggered:      triggered,
+		eventSpell:     &spellCopy,
+		actorGUID:      casterGUID,
+	})
+}
+
 // procSpellHealAuraTriggers evaluates real aura procs on the done side of a
 // direct heal: the heal arm of Unit::ProcDamageAndSpellFor via
 // Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2493-2513, 2581-2586).

@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"math/rand/v2"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
@@ -484,16 +485,30 @@ func spellReflectOffered(spell wotlk.Spell, caster *session, targetGUID uint64, 
 	return true
 }
 
-// checkSpellReflection checks if the incoming harmful spell is reflected by the target.
-// If reflected, the reflection aura is consumed and returns true.
-// Mirrors TrinityCore Unit::CheckSpellReflection (Unit.cpp:8230-8350).
+// checkSpellReflection rolls the target's reflect chance for an incoming
+// spell whose reflect was offered. The offer itself — m_canReflect
+// (Spell.cpp:622) plus the !(IsPositive() && m_caster->IsFriendlyTo(target))
+// carve-out (Spell.cpp:2152) — is decided by the caller via
+// spellReflectOffered; this only performs the WorldObject::SpellHitResult
+// roll (Object.cpp:2641-2648):
+//
+//	reflectchance = GetTotalAuraModifier(SPELL_AURA_REFLECT_SPELLS)
+//	              + GetTotalAuraModifierByMiscMask(SPELL_AURA_REFLECT_SPELLS_SCHOOL, schoolMask)
+//	if (reflectchance > 0 && roll_chance_i(reflectchance)) return SPELL_MISS_REFLECT
+//
+// The flattened activeAura entries carry the aura effect's own amount, so
+// the sums match C++ per-effect GetAmount accumulation. On success the
+// reflect aura is consumed (Go consumes at roll time; C++ spends the aura's
+// charge through the proc system at arrival).
 func (s *session) checkSpellReflection(spell wotlk.Spell) bool {
 	if s == nil || s.player == nil {
 		return false
 	}
 
-	// Can only reflect harmful non-channeled spells
-	if !isHarmfulSpell(spell) || isChanneledSpell(spell) {
+	// Pre-existing Go gate: channeled spells never reflect. C++ offers and
+	// rolls reflect for channeled spells too (no exclusion at Spell.cpp:622
+	// or in SpellHitResult) — documented deviation, kept deliberately.
+	if isChanneledSpell(spell) {
 		return false
 	}
 
@@ -501,43 +516,53 @@ func (s *session) checkSpellReflection(spell wotlk.Spell) bool {
 		return false
 	}
 
-	var reflectSpellID uint32
-
 	s.castMu.Lock()
-	// 1. Warrior Spell Reflection (23920)
-	if _, ok := s.auras[23920]; ok {
-		reflectSpellID = 23920
-	} else if _, ok := s.activeAuras[23920]; ok {
-		reflectSpellID = 23920
-	}
-
-	// 2. Check aura type SPELL_AURA_REFLECT_SPELLS (63) or SPELL_AURA_REFLECT_SPELLS_SCHOOL (64)
-	if reflectSpellID == 0 {
-		for _, aura := range s.activeAuras {
-			if aura == nil {
-				continue
-			}
-			if aura.AuraType == spellAuraReflectSpells {
+	var chance int32
+	var reflectSpellID uint32
+	seen23920 := false
+	for _, aura := range s.activeAuras {
+		if aura == nil {
+			continue
+		}
+		switch aura.AuraType {
+		case spellAuraReflectSpells:
+			chance += int32(aura.Amount)
+			if reflectSpellID == 0 {
 				reflectSpellID = aura.SpellID
-				break
 			}
-			if aura.AuraType == spellAuraReflectSpellsSchool {
-				if aura.SchoolMask == 0 || (spell.SchoolMask != 0 && aura.SchoolMask&spell.SchoolMask != 0) {
+			if aura.SpellID == 23920 {
+				seen23920 = true
+			}
+		case spellAuraReflectSpellsSchool:
+			if aura.SchoolMask == 0 || (spell.SchoolMask != 0 && aura.SchoolMask&spell.SchoolMask != 0) {
+				chance += int32(aura.Amount)
+				if reflectSpellID == 0 {
 					reflectSpellID = aura.SpellID
-					break
 				}
 			}
 		}
 	}
 	s.castMu.Unlock()
 
+	// Warrior Spell Reflection (23920) tracked in the presence set rather
+	// than the per-effect map: its DBC reflect effect carries amount 100.
+	if _, ok := s.auras[23920]; ok && !seen23920 {
+		chance += 100
+		if reflectSpellID == 0 {
+			reflectSpellID = 23920
+		}
+	}
+
+	// roll_chance_i(reflectchance): urand(0, 99) < chance.
+	if chance <= 0 || rand.Float64()*100 >= float64(chance) {
+		return false
+	}
+
 	if reflectSpellID != 0 {
 		// Reflection consumes the buff
 		s.removeAura(reflectSpellID)
-		return true
 	}
-
-	return false
+	return true
 }
 
 // immuneAura is one active aura flattened for the immunity model.
