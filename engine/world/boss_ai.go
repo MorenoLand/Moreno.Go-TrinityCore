@@ -726,6 +726,15 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		// (Spell.cpp:5298-5314 precedes CheckRange at 5491 and CheckPower
 		// at 5495).
 		if !triggered {
+			// Spell::CheckCast shapeshift leg (Spell.cpp:5247-5277) and
+			// SPELL_AURA_BLOCK_SPELL_FAMILY leg (Spell.cpp:5277-5278)
+			// precede the caster-state block, matching C++ order.
+			if !s.checkCreatureSpellShapeshift(m, spellInfo) {
+				return
+			}
+			if !s.checkCreatureSpellFamilyBlocked(m, spellInfo) {
+				return
+			}
 			if !s.checkCreatureSpellCasterState(m, spellInfo) {
 				return
 			}
@@ -734,6 +743,13 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				return
 			}
 			takeCreatureSpellPower(spellInfo, m, cost)
+			// Spell::CheckCasterAuras CC-state gate (Spell.cpp:5509,
+			// gated by TRIGGERED_IGNORE_CASTER_AURAS): after CheckPower,
+			// matching the C++ CheckCast gate order; Go's triggered
+			// models the full mask, so triggered casts skip all three.
+			if !s.checkCreatureCasterAuras(m, spellInfo) {
+				return
+			}
 		}
 		// Unit::CastSpell arms UNIT_STATE_CASTING for a non-triggered
 		// cast's cast time; the combat tick's early-out
@@ -860,6 +876,324 @@ func (s *Server) creatureCasterAuraStateMask(m *creatureMotion) uint32 {
 		}
 	}
 	return mask
+}
+
+// checkCreatureCasterAuras mirrors the CC-state half of
+// Spell::CheckCasterAuras (Spell.cpp:6257-6389) for a creature caster,
+// called from Spell::CheckCast at Spell.cpp:5509 — after CheckPower,
+// matching the gate order in castCreatureSpellInternal. The ATTR6 pass,
+// the ATTR5 usable-while-CC spells (with the Pain Suppression glyph
+// carve-out), the cancel compositions (stun: MOD_STUN + STRANGULATE;
+// silence: MOD_SILENCE + MOD_PACIFY_SILENCE; pacify: MOD_PACIFY +
+// MOD_PACIFY_SILENCE; fear/confuse: single type), the mechanicCheck
+// lambda, and the immune-shield banish arm all follow the player-side
+// bridge (checkCasterAuras, spells.go).
+//
+// Delta: creatures carry no UNIT_FIELD_FLAGS CC bits — nothing sets
+// UNIT_FLAG_STUNNED / SILENCED / PACIFIED / FLEEING / CONFUSED on a
+// creatureMotion — so the CC state is derived from the creature's
+// applied aura effects by type, the exact inverse of how C++ raises
+// the flags (HandleAuraModStun/Fear/Confuse via SetControlled, and
+// HandleAuraModSilence/Pacify directly, SpellAuraEffects.cpp). A
+// fizzle returns false; creature casts have no failure-packet path, so
+// the SPELL_FAILED_* codes and the PREVENTED_BY_MECHANIC param are
+// internal only.
+func (s *Server) checkCreatureCasterAuras(m *creatureMotion, spell wotlk.Spell) bool {
+	if spell.AttributesEx6&spellAttr6IgnoreCasterAuras != 0 {
+		return true
+	}
+	usableWhileStunned := spell.AttributesEx5&spellAttr5UsableWhileStunned != 0
+	usableWhileFeared := spell.AttributesEx5&spellAttr5UsableWhileFeared != 0
+	usableWhileConfused := spell.AttributesEx5&spellAttr5UsableWhileConfused != 0
+	if spell.ID == 33206 && !s.creatureHasAura(m, 63248) { // Pain Suppression without Glyph of Pain Suppression
+		usableWhileStunned = false
+	}
+	allowedMask := spellAllowedMechanicMask(spell)
+	var result uint8
+	var mechanic uint32
+	switch {
+	case len(s.creatureCasterAuraEffectsByType(m, spellAuraModStun)) > 0:
+		if usableWhileStunned {
+			result, mechanic = s.creatureCasterAurasMechanic(m, spell, allowedMask, spellAuraModStun)
+		} else if !(s.creatureSpellCancelsAuraEffect(m, spell, spellAuraModStun, &mechanic) &&
+			s.creatureSpellCancelsAuraEffect(m, spell, spellAuraStrangulate, &mechanic)) {
+			result = spellFailedStunned
+		} else if spell.Mechanic&29 != 0 && s.creatureHasAuraMechanic(m, 1<<18) {
+			// Immune-shield arm (Spell.cpp:6327-6329): C++ ANDs the
+			// mechanic enum value itself against MECHANIC_IMMUNE_SHIELD
+			// (29); a banish mechanic on the caster re-fails the cast.
+			result = spellFailedStunned
+		}
+	case len(s.creatureCasterAuraEffectsByType(m, spellAuraModSilence)) > 0 && spell.PreventionType == spellPreventionTypeSilence:
+		if !(s.creatureSpellCancelsAuraEffect(m, spell, spellAuraModSilence, &mechanic) &&
+			s.creatureSpellCancelsAuraEffect(m, spell, spellAuraModPacifySilence, &mechanic)) {
+			result = spellFailedSilenced
+		}
+	case len(s.creatureCasterAuraEffectsByType(m, spellAuraModPacify)) > 0 && spell.PreventionType == spellPreventionTypePacify:
+		if !(s.creatureSpellCancelsAuraEffect(m, spell, spellAuraModPacify, &mechanic) &&
+			s.creatureSpellCancelsAuraEffect(m, spell, spellAuraModPacifySilence, &mechanic)) {
+			result = spellFailedPacified
+		}
+	case len(s.creatureCasterAuraEffectsByType(m, spellAuraModFear)) > 0:
+		if usableWhileFeared {
+			result, mechanic = s.creatureCasterAurasMechanic(m, spell, allowedMask, spellAuraModFear)
+		} else if !s.creatureSpellCancelsAuraEffect(m, spell, spellAuraModFear, &mechanic) {
+			result = spellFailedFleeing
+		}
+	case len(s.creatureCasterAuraEffectsByType(m, spellAuraModConfuse)) > 0:
+		if usableWhileConfused {
+			result, mechanic = s.creatureCasterAurasMechanic(m, spell, allowedMask, spellAuraModConfuse)
+		} else if !s.creatureSpellCancelsAuraEffect(m, spell, spellAuraModConfuse, &mechanic) {
+			result = spellFailedConfused
+		}
+	}
+	if result != 0 && mechanic != 0 {
+		// SPELL_FAILED_PREVENTED_BY_MECHANIC (Spell.cpp:6385-6387) —
+		// still a fizzle on the creature path.
+		return false
+	}
+	return result == 0
+}
+
+// creatureCasterAuraEffectsByType mirrors the session
+// casterAuraEffectsByType (spells.go) for a creature caster: the
+// creature's applied aura effects of auraType, flattened per effect
+// index, from the server's activeCreatureAuras under auraMu. Per-effect
+// aura types resolve from the DBC spell row (the record's single
+// AuraType carries only the first effect); unresolvable rows fall back
+// to the record's AuraType, matching the grouped model. This feeds the
+// CheckCasterAuras helpers the way Unit::GetAuraEffectsByType feeds
+// them in C++ (Spell.cpp:6257+).
+func (s *Server) creatureCasterAuraEffectsByType(m *creatureMotion, auraType uint32) []casterAuraEffectRef {
+	if s == nil || m == nil {
+		return nil
+	}
+	key := creatureAuraKeyForMotion(m)
+	s.auraMu.Lock()
+	auras := make(map[uint32]*activeAura, len(s.activeCreatureAuras[key]))
+	for id, aura := range s.activeCreatureAuras[key] {
+		auras[id] = aura
+	}
+	s.auraMu.Unlock()
+	var out []casterAuraEffectRef
+	for id, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		for i := 0; i < 3; i++ {
+			if aura.EffectMask&(1<<uint(i)) == 0 {
+				continue
+			}
+			t := aura.AuraType
+			if s.Data != nil {
+				if sp, found, err := s.Data.Spell(id); err == nil && found && i < len(sp.Effects) {
+					t = sp.Effects[i].Aura
+				}
+			}
+			if t != auraType {
+				continue
+			}
+			out = append(out, casterAuraEffectRef{spellID: id, effIndex: i})
+		}
+	}
+	return out
+}
+
+// creatureSpellCancelsAuraEffect mirrors the session
+// checkSpellCancelsAuraEffect (Spell.cpp:6391-6415) for a creature
+// caster: every creature aura effect of auraType must be cancelled by
+// the casting spell; an empty effect list passes outright; on the
+// first non-cancelled effect *mechanic takes the effect's mechanic,
+// else the aura's spell mechanic. Unresolvable spell rows are
+// permissive (the player-side convention).
+func (s *Server) creatureSpellCancelsAuraEffect(m *creatureMotion, spell wotlk.Spell, auraType uint32, mechanic *uint32) bool {
+	effects := s.creatureCasterAuraEffectsByType(m, auraType)
+	if len(effects) == 0 {
+		return true
+	}
+	for _, ref := range effects {
+		if s.Data == nil {
+			continue
+		}
+		auraSpell, found, err := s.Data.Spell(ref.spellID)
+		if err != nil || !found {
+			continue
+		}
+		if spellCancelsAuraEffect(spell, auraSpell, ref.effIndex) {
+			continue
+		}
+		if mechanic != nil {
+			*mechanic = auraSpell.Effects[ref.effIndex].Mechanic
+			if *mechanic == 0 {
+				*mechanic = auraSpell.Mechanic
+			}
+		}
+		return false
+	}
+	return true
+}
+
+// creatureCasterAurasMechanic mirrors the mechanicCheck lambda of
+// Spell::CheckCasterAuras (Spell.cpp:6294-6334) for a creature caster,
+// the same semantics as the session checkCasterAurasMechanic
+// (spells.go): a usable-while-CC spell still fizzles when a CC aura
+// effect's whole-spell mechanic mask (spellMechanicMask, the
+// GetAllEffectsMechanicMask analog) falls outside the casting spell's
+// allowed mask. The first blocker wins; its mechanic (effect mechanic,
+// else the aura's spell mechanic) is the would-be packet param. The
+// C++ ABORT() default is unreachable.
+func (s *Server) creatureCasterAurasMechanic(m *creatureMotion, spell wotlk.Spell, allowedMask, auraType uint32) (uint8, uint32) {
+	var failure uint8
+	switch auraType {
+	case spellAuraModStun:
+		failure = spellFailedStunned
+	case spellAuraModFear:
+		failure = spellFailedFleeing
+	case spellAuraModConfuse:
+		failure = spellFailedConfused
+	default:
+		return 0, 0
+	}
+	for _, ref := range s.creatureCasterAuraEffectsByType(m, auraType) {
+		if s.Data == nil {
+			continue
+		}
+		auraSpell, found, err := s.Data.Spell(ref.spellID)
+		if err != nil || !found {
+			continue
+		}
+		mechanicMask := spellMechanicMask(auraSpell)
+		if mechanicMask == 0 || mechanicMask&allowedMask != 0 {
+			continue
+		}
+		mechanic := auraSpell.Effects[ref.effIndex].Mechanic
+		if mechanic == 0 {
+			mechanic = auraSpell.Mechanic
+		}
+		return failure, mechanic
+	}
+	return 0, 0
+}
+
+// creatureHasAuraMechanic mirrors Unit::HasAuraWithMechanic (Unit.cpp)
+// for a creature caster: true when any of the creature's live auras
+// carries one of the mechanics in mask. Feeds the immune-shield arm of
+// CheckCasterAuras (Spell.cpp:6327-6329).
+func (s *Server) creatureHasAuraMechanic(m *creatureMotion, mask uint32) bool {
+	if s == nil || s.Data == nil || m == nil {
+		return false
+	}
+	key := creatureAuraKeyForMotion(m)
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	for id, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		if sp, found, err := s.Data.Spell(id); err == nil && found && spellMechanicMask(sp)&mask != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// checkCreatureSpellShapeshift mirrors the shapeshift leg of
+// Spell::CheckCast (Spell.cpp:5247-5277, strict=true from prepare,
+// Spell.cpp:3100) for a creature caster. Creatures carry no shapeshift
+// form (no MOD_SHAPESHIFT apply path on creatureMotion), so the form is
+// 0 and SpellInfo::CheckShapeshift (SpellInfo.cpp:1450-1493, the
+// checkShapeshiftCastForm core) reduces to the Stances != 0 arm:
+// SPELL_FAILED_ONLY_SHAPESHIFT unless ATTR2_NOT_NEED_SHAPESHIFT. The
+// MOD_IGNORE_SHAPESHIFT exemption (IsAffectedOnSpell,
+// SpellAuraEffects.cpp:848) and the ATTR0_ONLY_STEALTHED arm (needs a
+// live STEALTH aura effect, the HasStealthAura analog, Unit.cpp) still
+// apply. Triggered casts skip the leg (TRIGGERED_IGNORE_SHAPESHIFT);
+// Go's triggered models the full mask, so the caller gates it.
+func (s *Server) checkCreatureSpellShapeshift(m *creatureMotion, spell wotlk.Spell) bool {
+	if s.creatureHasIgnoreShapeshiftAura(m, spell) {
+		return true
+	}
+	if checkShapeshiftCastForm(s.Data, spell, 0) != 0 {
+		return false
+	}
+	if spell.Attributes&spellAttr0OnlyStealthed != 0 &&
+		len(s.creatureCasterAuraEffectsByType(m, spellAuraStealth)) == 0 {
+		return false
+	}
+	return true
+}
+
+// creatureHasIgnoreShapeshiftAura mirrors the session
+// hasIgnoreShapeshiftAura (shapeshift.go, Spell.cpp:5250-5260) for a
+// creature caster: the shapeshift check is skipped when any
+// SPELL_AURA_MOD_IGNORE_SHAPESHIFT aura effect of the creature is
+// affected on the spell.
+func (s *Server) creatureHasIgnoreShapeshiftAura(m *creatureMotion, spell wotlk.Spell) bool {
+	if s == nil || s.Data == nil || m == nil {
+		return false
+	}
+	key := creatureAuraKeyForMotion(m)
+	s.auraMu.Lock()
+	auras := make(map[uint32]*activeAura, len(s.activeCreatureAuras[key]))
+	for id, aura := range s.activeCreatureAuras[key] {
+		auras[id] = aura
+	}
+	s.auraMu.Unlock()
+	for id, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.Data.Spell(id)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if effect.Aura != spellAuraModIgnoreShapeshift || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// checkCreatureSpellFamilyBlocked mirrors the
+// SPELL_AURA_BLOCK_SPELL_FAMILY leg of Spell::CheckCast
+// (Spell.cpp:5277-5278): a creature carrying a BLOCK_SPELL_FAMILY aura
+// effect whose MiscValue matches the spell's SpellFamilyName cannot
+// cast it (SPELL_FAILED_SPELL_UNAVAILABLE). MiscValue resolves from
+// the DBC effect row, not the record's single MiscValue.
+func (s *Server) checkCreatureSpellFamilyBlocked(m *creatureMotion, spell wotlk.Spell) bool {
+	if s == nil || s.Data == nil || m == nil {
+		return true
+	}
+	key := creatureAuraKeyForMotion(m)
+	s.auraMu.Lock()
+	auras := make(map[uint32]*activeAura, len(s.activeCreatureAuras[key]))
+	for id, aura := range s.activeCreatureAuras[key] {
+		auras[id] = aura
+	}
+	s.auraMu.Unlock()
+	for id, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.Data.Spell(id)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if effect.Aura != spellAuraBlockSpellFamily || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if uint32(effect.MiscValue) == spell.SpellFamilyName {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // creatureCasterIgnoresAuraState mirrors casterIgnoresAuraState for a

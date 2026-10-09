@@ -73,6 +73,7 @@ const (
 	targetDestCaster                       uint32 = 18         // TARGET_DEST_CASTER (SharedDefines.h:1455)
 	spellAttr0UnaffectedByInvulnerability  uint32 = 0x20000000 // SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY (SharedDefines.h:441)
 	spellAttr0NotShapeshift                uint32 = 0x00010000 // SPELL_ATTR0_NOT_SHAPESHIFT (SharedDefines.h:428)
+	spellAttr0OnlyStealthed                uint32 = 0x00020000 // SPELL_ATTR0_ONLY_STEALTHED (SharedDefines.h:429)
 	spellAttr0CuPickpocket                 uint32 = 0x00000400 // SPELL_ATTR0_CU_PICKPOCKET (SpellInfo.h:188) — custom attr, tested against AttributesCu
 	spellAttr0OnNextSwing2                 uint32 = 0x00000400 // SPELL_ATTR0_ON_NEXT_SWING_2 (SharedDefines.h:422) — tested against Attributes (DBC attr0), no clash with the custom-attr const above
 	spellAttr2NotNeedShapeshift            uint32 = 0x00080000 // SPELL_ATTR2_NOT_NEED_SHAPESHIFT (SharedDefines.h:505) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
@@ -502,6 +503,7 @@ const (
 	spellAuraModStun                               = 12  // SPELL_AURA_MOD_STUN (SpellAuraDefines.h:92)
 	spellAuraModStalked                            = 68  // SPELL_AURA_MOD_STALKED (SpellAuraDefines.h:148)
 	spellAuraStrangulate                           = 298 // SPELL_AURA_STRANGULATE (SpellAuraDefines.h:378)
+	spellAuraBlockSpellFamily                      = 297 // SPELL_AURA_BLOCK_SPELL_FAMILY (SpellAuraDefines.h:377)
 	spellAuraModSilence                            = 27  // SPELL_AURA_MOD_SILENCE (SpellAuraDefines.h:107)
 	spellAuraModPacify                             = 25  // SPELL_AURA_MOD_PACIFY (SpellAuraDefines.h:105)
 	spellAuraModPacifySilence                      = 60  // SPELL_AURA_MOD_PACIFY_SILENCE (SpellAuraDefines.h:140)

@@ -175,17 +175,26 @@ func shapeshiftFormDisplayID(data *wotlk.Store, state *playerState, form uint8, 
 	}
 	return shape.CreatureDisplayIDs[1]
 }
+
 // checkShapeshiftCast mirrors SpellInfo::CheckShapeshift (SpellInfo.cpp:1455):
 // validates the caster's current shapeshift form against the spell's
 // ShapeshiftMask (C++ Stances) / ShapeshiftExclude (C++ StancesNot) DBC fields.
 // Returns 0 on success, or a SPELL_FAILED_* cast result otherwise.
 func (s *session) checkShapeshiftCast(spell wotlk.Spell) uint8 {
-	stances := uint64(spell.ShapeshiftMask[0]) | uint64(spell.ShapeshiftMask[1])<<32
-	stancesNot := uint64(spell.ShapeshiftExclude[0]) | uint64(spell.ShapeshiftExclude[1])<<32
 	var form uint64
 	if s.player != nil {
 		form = uint64(s.player.ShapeshiftForm)
 	}
+	return checkShapeshiftCastForm(s.server.Data, spell, form)
+}
+
+// checkShapeshiftCastForm is the form-parameterized core of
+// checkShapeshiftCast (SpellInfo::CheckShapeshift, SpellInfo.cpp:1450):
+// the creature bridge passes form 0 — creatures carry no shapeshift
+// form, so stanceMask is 0 and only the Stances != 0 arm can fire.
+func checkShapeshiftCastForm(data *wotlk.Store, spell wotlk.Spell, form uint64) uint8 {
+	stances := uint64(spell.ShapeshiftMask[0]) | uint64(spell.ShapeshiftMask[1])<<32
+	stancesNot := uint64(spell.ShapeshiftExclude[0]) | uint64(spell.ShapeshiftExclude[1])<<32
 	var stanceMask uint64
 	if form > 0 && form <= 64 {
 		stanceMask = uint64(1) << (form - 1)
@@ -199,8 +208,8 @@ func (s *session) checkShapeshiftCast(spell wotlk.Spell) uint8 {
 	actAsShifted := false
 	shapeKnown := false
 	var shapeFlags uint32
-	if form > 0 {
-		shape, found, err := s.server.Data.ShapeshiftForm(uint32(form))
+	if form > 0 && data != nil {
+		shape, found, err := data.ShapeshiftForm(uint32(form))
 		if err != nil || !found {
 			return 0
 		}
