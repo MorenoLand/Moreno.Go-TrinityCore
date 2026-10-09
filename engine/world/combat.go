@@ -1421,6 +1421,7 @@ type creatureStats struct {
 	CombatReach     float32
 	UnitFlags       uint32
 	FlagsExtra      uint32
+	TypeFlags       uint32
 	CanFly          bool
 	ReactState      uint8
 	ReactStateKnown bool
@@ -1466,7 +1467,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		return stats
 	}
 
-	var maxlevel, unitClass, exp, baseAttackTime, unitFlags, flagsExtra, flight int64
+	var maxlevel, unitClass, exp, baseAttackTime, unitFlags, flagsExtra, typeFlags, flight int64
 	var healthMod, manaMod, armorMod, damageMod float64
 
 	row := s.WorldStore.DB.QueryRowContext(ctx, `SELECT 
@@ -1480,9 +1481,10 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		COALESCE(DamageModifier, 1.0),
 		COALESCE(ct.unit_flags, 0),
 		COALESCE(ct.flags_extra, 0),
+		COALESCE(ct.type_flags, 0),
 		COALESCE(ctm.Flight, 0)
 		FROM creature_template ct LEFT JOIN creature_template_movement ctm ON ctm.CreatureId = ct.entry WHERE ct.entry = ?`, entry)
-	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &flight); err != nil {
+	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &flight); err != nil {
 		return stats
 	}
 	if reactState, known := s.loadCreatureReaction(ctx, entry); known {
@@ -1514,6 +1516,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	stats.AttackTime = uint32(baseAttackTime)
 	stats.UnitFlags = uint32(unitFlags)
 	stats.FlagsExtra = uint32(flagsExtra)
+	stats.TypeFlags = uint32(typeFlags)
 	stats.CanFly = flight != 0
 
 	// Fallback values based on level
@@ -1688,6 +1691,7 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 			RunSpeed:   7.0,
 			UnitFlags:  target.UnitFlags,
 			FlagsExtra: target.FlagsExtra,
+			TypeFlags:  st.TypeFlags,
 			Health:     target.Health,
 			// Creature::ResetPlayerDamageReq (Creature.h:324): GetHealth()/2.
 			PlayerDamageReq: target.Health / 2,

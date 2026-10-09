@@ -68,6 +68,7 @@ type creatureMotion struct {
 	UnitFlags       uint32
 	DynamicFlags    uint32
 	FlagsExtra      uint32
+	TypeFlags       uint32 // creature_template.type_flags (CreatureData.h:180); the BOSS_MOB bit (0x4, SharedDefines.h:2731) feeds Creature::isWorldBoss (Creature.cpp:2353) gates
 	CanFly          bool
 	ReactState      uint8
 	ReactStateKnown bool
@@ -103,8 +104,9 @@ type creatureMotion struct {
 	// evade arm of Unit::DealDamage (Unit.cpp:900-907): direct (melee,
 	// ranged, spell-direct) hits with damage > 0 reset it to now +
 	// MAX_AGGRO_RESET_TIME (10s, Unit.h:40); DoT ticks never stamp it.
-	// Creature::_IsTargetAcceptable (Creature.cpp:2589) skips the leash
-	// while it is fresh (or while the creature is taunted).
+	// Creature::CanCreatureAttack (Creature.cpp:2560-2603) skips the
+	// home-distance check while it is fresh (or while the creature is
+	// taunted) — except for world bosses (isWorldBoss, Creature.cpp:2353).
 	LastDamaged               time.Time
 	LastSpell                 time.Time
 	Spells                    []uint32
@@ -188,6 +190,11 @@ const (
 	creatureBaseRunSpeed    = 7.0
 	creatureBaseFlightSpeed = 7.0
 )
+
+// creatureTypeFlagBossMob is CREATURE_TYPE_FLAG_BOSS_MOB
+// (SharedDefines.h:2731): the type_flags bit behind Creature::isWorldBoss
+// (Creature.cpp:2353-2357).
+const creatureTypeFlagBossMob = 0x4
 
 // creatureSplineVelocity mirrors the velocity selection of
 // MoveSplineInit::Launch (MoveSplineInit.cpp:106-124): without an explicit
@@ -395,6 +402,7 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			CombatReach:     st.CombatReach,
 			UnitFlags:       st.UnitFlags,
 			FlagsExtra:      st.FlagsExtra,
+			TypeFlags:       st.TypeFlags,
 			CanFly:          st.CanFly,
 			ReactState:      st.ReactState,
 			ReactStateKnown: st.ReactStateKnown,
@@ -523,6 +531,7 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				CombatReach:     st.CombatReach,
 				UnitFlags:       st.UnitFlags,
 				FlagsExtra:      st.FlagsExtra,
+				TypeFlags:       st.TypeFlags,
 				CanFly:          st.CanFly,
 				ReactState:      st.ReactState,
 				ReactStateKnown: st.ReactStateKnown,
@@ -671,9 +680,11 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 // reach this function). CombatStop(true) is bridged (threat own-table and
 // victim halves, c3701e6/dc4885d; attack stop). LoadCreaturesAddon has no bridge —
 // Go models only creature_addon/creature_template_addon's path_id (loadCreaturePathID);
-// addon flags/emotes/auras/mount are unmodeled. SetLootRecipient(nullptr),
-// ResetPlayerDamageReq, SetLastDamagedTime(0) have no bridge — Go carries no
-// loot-recipient/tapped-by/damage-req model on creatures. SetCannotReachTarget(false)
+// addon flags/emotes/auras/mount are unmodeled. SetLootRecipient(nullptr) is
+// bridged via the tap reset below (TapPlayerGUID/TapGroupID=0, TAPPED flag
+// clear); ResetPlayerDamageReq is bridged (PlayerDamageReq=MaxHealth/2);
+// SetLastDamagedTime(0) is bridged (LastDamaged zeroed, CreatureAI.cpp:311).
+// SetCannotReachTarget(false)
 // is vacuous (the flag can never be set, see the no-path note below).
 // DoNotReacquireSpellFocusTarget is vacuous (creature casts acquire no spell focus).
 // SetTarget(Empty) is bridged (TargetGUID=0). GetSpellHistory()->ResetAllCooldowns()
@@ -1058,15 +1069,21 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// so the accessible-place predicate cannot be evaluated either. The flag can
 		// never be set, so the timer can never start.
 		if dist > 45.0 {
-			// Creature::_IsTargetAcceptable (Creature.cpp:2589): the leash
+			// Creature::CanCreatureAttack (Creature.cpp:2560-2603): the leash
 			// does not fire while the creature is recently damaged
 			// (MAX_AGGRO_RESET_TIME = 10s after a direct-damage hit,
 			// Unit.h:40 — DoT ticks never stamp LastDamaged, Unit.cpp:903)
-			// or while the victim holds a live taunt. The world-boss
-			// exemption (C++ skips the arm for isWorldBoss) is unmodeled:
-			// creatureMotion carries no world-boss rank.
+			// or while the victim holds a live taunt. The arm is gated on
+			// !isWorldBoss() (Creature.cpp:2353-2357: type_flags &
+			// CREATURE_TYPE_FLAG_BOSS_MOB, SharedDefines.h:2731) — world
+			// bosses leash regardless of recent damage. The charmer/player
+			// gate (!GetCharmerOrOwnerGUID().IsPlayer(), :2583) is vacuous:
+			// OwnerGUID != 0 motions return through updatePetMotion ahead of
+			// the combat tick and never reach this site.
 			taunted := motion.ThreatMgr != nil && motion.ThreatMgr.IsTaunted(motion.TargetGUID)
-			if motion.LastDamaged.IsZero() || (now.Sub(motion.LastDamaged) >= 10*time.Second && !taunted) {
+			recentlyDamaged := !motion.LastDamaged.IsZero() && now.Sub(motion.LastDamaged) < 10*time.Second
+			bossMob := motion.TypeFlags&creatureTypeFlagBossMob != 0
+			if bossMob || (!recentlyDamaged && !taunted) {
 				// Evade / drop combat if player ran too far: reset health, stop attack, and run back home
 				if motion.ThreatMgr != nil {
 					motion.ThreatMgr.RemoveThreat(motion.TargetGUID)

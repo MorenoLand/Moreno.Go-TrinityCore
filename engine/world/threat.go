@@ -148,8 +148,8 @@ func (tm *ThreatManager) isTauntedLocked(victim uint64) bool {
 }
 
 // IsTaunted reports whether the victim holds a live taunt state, the
-// HasAuraType(SPELL_AURA_MOD_TAUNT) leg of Creature::_IsTargetAcceptable
-// (Creature.cpp:2589) as seen through the bridged taunt-state model.
+// HasAuraType(SPELL_AURA_MOD_TAUNT) leg of Creature::CanCreatureAttack
+// (Creature.cpp:2589-2595) as seen through the bridged taunt-state model.
 func (tm *ThreatManager) IsTaunted(victim uint64) bool {
 	if tm == nil || victim == 0 {
 		return false
