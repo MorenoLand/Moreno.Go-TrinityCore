@@ -1385,7 +1385,8 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// Shapeshift/stance requirements (SpellInfo::CheckShapeshift, SpellInfo.cpp:1455;
 	// gated in Spell::CheckCast at Spell.cpp:5247-5275, before the caster-state block):
 	// client-initiated casts only — triggered casts go through castSpellDirect, not this path.
-	// The GetTalentSpellCost talent-learn exception has no Go equivalent (noted gap).
+	// The GetTalentSpellCost talent-learn carve-out (SpellInfo.cpp:1451-1455) is
+	// bridged inside checkShapeshiftCastForm.
 	if !s.hasIgnoreShapeshiftAura(spell) {
 		if shapeResult := s.checkShapeshiftCast(spell); shapeResult != 0 {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, shapeResult), true)

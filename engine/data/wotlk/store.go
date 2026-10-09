@@ -34,6 +34,10 @@ type Store struct {
 	liquidAuraSpells map[uint32]struct{}
 	liquidAuraErr    error
 
+	talentPosOnce sync.Once
+	talentPos     map[uint32]uint32
+	talentPosErr  error
+
 	positivityMu sync.RWMutex
 	positivity   map[uint32]uint32
 }
@@ -1828,6 +1832,52 @@ func (s *Store) TalentBySpell(spellID uint32) (uint32, uint8, bool) {
 		}
 	}
 	return 0, 0, false
+}
+
+// TalentSpellCost mirrors GetTalentSpellCost (DBCStores.cpp:698): when the
+// spell appears in a Talent.dbc SpellRank column, its talent cost is
+// rank+1 (the 0-based rank index plus one); otherwise 0. Built once like
+// the C++ sTalentSpellPosMap so CheckShapeshift doesn't rescan the DBC
+// on every cast.
+func (s *Store) TalentSpellCost(spellID uint32) (uint32, error) {
+	if s == nil || spellID == 0 {
+		return 0, nil
+	}
+	s.talentPosOnce.Do(func() {
+		file, err := s.File("Talent")
+		if err != nil {
+			s.talentPosErr = err
+			return
+		}
+		s.talentPos = make(map[uint32]uint32)
+		for index := 0; index < file.Records(); index++ {
+			record, recordErr := file.Record(index)
+			if recordErr != nil {
+				s.talentPosErr = recordErr
+				return
+			}
+			for r := 0; r < 5; r++ {
+				sp, fieldErr := record.Uint32(4 + r)
+				if fieldErr != nil {
+					s.talentPosErr = fieldErr
+					return
+				}
+				if sp != 0 {
+					if _, dup := s.talentPos[sp]; !dup {
+						s.talentPos[sp] = uint32(r)
+					}
+				}
+			}
+		}
+	})
+	if s.talentPosErr != nil {
+		return 0, s.talentPosErr
+	}
+	rank, ok := s.talentPos[spellID]
+	if !ok {
+		return 0, nil
+	}
+	return rank + 1, nil
 }
 
 func (s *Store) PetTalentSpells() (map[uint32]struct{}, error) {

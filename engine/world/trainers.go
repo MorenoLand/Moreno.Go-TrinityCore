@@ -585,6 +585,26 @@ func (s *session) learnSpell(ctx context.Context, spellID uint32) {
 	learnedBuf.WriteU16(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_LEARNED_SPELL), learnedBuf.Bytes(), true)
 
+	// Talents that learn spells are cast triggered on learn (Player::AddSpell,
+	// Player.cpp:3499-3505): `!loading && GetTalentSpellCost(spellId) > 0 &&
+	// HasEffect(SPELL_EFFECT_LEARN_SPELL)` → CastSpell(this, spellId, true).
+	// The !loading gate is vacuous here — Go's learnSpell is only called for
+	// runtime learns, never for DB load — and the stance requirement that
+	// blocks such spells is waived by the CheckShapeshift carve-out (see
+	// checkShapeshiftCastForm).
+	if s.server != nil && s.server.Data != nil {
+		if talentCost, costErr := s.server.Data.TalentSpellCost(spellID); costErr == nil && talentCost > 0 {
+			if sp, ok, err := s.server.Data.Spell(spellID); err == nil && ok {
+				for _, eff := range sp.Effects {
+					if eff.Effect == spellEffectLearnSpell {
+						s.castSpellDirect(ctx, spellID, s.playerGUID)
+						break
+					}
+				}
+			}
+		}
+	}
+
 	// Check if passive spell (TC: if (spellInfo->IsPassive()) CastSpell(this, spellId, true))
 	if s.server != nil && s.server.Data != nil {
 		if sp, ok, err := s.server.Data.Spell(spellID); err == nil && ok {

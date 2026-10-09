@@ -304,9 +304,12 @@ func (s *session) handleLearnSpell(ctx context.Context, args []string) {
 			target.learnSpell(ctx, next)
 		}
 	}
-	// GetTalentSpellCost has no Go model (spells.go:585), so the
-	// SendTalentsInfoData(false) resend for talent spells is a documented
-	// fidelity gap.
+	// Player::AddSpell (Player.cpp:3499-3505): a runtime-learned spell with
+	// GetTalentSpellCost(spellId) > 0 and SPELL_EFFECT_LEARN_SPELL is cast
+	// triggered on learn — bridged in learnSpell. AddSpell carries no
+	// SendTalentsInfoData resend (that arm lives in Player::LearnTalent,
+	// Player.cpp:2837, which Go's learnTalentDirect mirrors with
+	// sendTalentsInfo(false)); nothing else is missing here.
 }
 
 // handleLearnAll ports the learn-all sub-table (cs_learn.cpp:46-57).
@@ -652,7 +655,10 @@ func (s *session) handleCmdUnLearn(ctx context.Context, args []string) {
 		// LANG_FORGET_SPELL inlined from TDB enUS.
 		s.sendSysMessage("You have forgotten that spell.")
 	}
-	// GetTalentSpellCost has no Go model (spells.go:585), so the
-	// SendTalentsInfoData(false) resend for talent spells is a documented
-	// fidelity gap.
+	// Player::RemoveSpell (Player.cpp:3699+) carries no SendTalentsInfoData
+	// resend (that arm lives in Player::LearnTalent; see the note at
+	// handleLearnSpell). Its talent-point refund arm
+	// (m_usedTalentCount -= GetTalentSpellCost, Player.cpp:3751-3757) is
+	// vacuous in Go — free points are derived from the learned-spell list,
+	// which unlearnSpell already updated.
 }

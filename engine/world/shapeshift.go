@@ -193,6 +193,20 @@ func (s *session) checkShapeshiftCast(spell wotlk.Spell) uint8 {
 // the creature bridge passes form 0 — creatures carry no shapeshift
 // form, so stanceMask is 0 and only the Stances != 0 arm can fire.
 func checkShapeshiftCastForm(data *wotlk.Store, spell wotlk.Spell, form uint64) uint8 {
+	// Talents that learn spells can have stance requirements that need ignore
+	// (this requirement is only for client-side stance show in the talent
+	// description) (SpellInfo.cpp:1451-1455): a talent-ranked spell carrying
+	// SPELL_EFFECT_LEARN_SPELL on any of the first three effects bypasses the
+	// stance gates entirely.
+	if data != nil {
+		if cost, costErr := data.TalentSpellCost(spell.ID); costErr == nil && cost > 0 {
+			for i := 0; i < len(spell.Effects) && i < 3; i++ {
+				if spell.Effects[i].Effect == spellEffectLearnSpell {
+					return 0
+				}
+			}
+		}
+	}
 	stances := uint64(spell.ShapeshiftMask[0]) | uint64(spell.ShapeshiftMask[1])<<32
 	stancesNot := uint64(spell.ShapeshiftExclude[0]) | uint64(spell.ShapeshiftExclude[1])<<32
 	var stanceMask uint64
