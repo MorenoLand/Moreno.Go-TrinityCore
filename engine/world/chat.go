@@ -119,21 +119,6 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "message too long")
 		return true
 	}
-	// C++ (ChatHandler.cpp:253-271): cut at the first newline or carriage
-	// return (drop when the message starts with one), then abort on nasty
-	// (ASCII control, tab allowed) characters.
-	if language != languageAddon {
-		if pos := strings.IndexAny(message, "\r\n"); pos == 0 {
-			s.debug("chat rejected", "account", s.accountName, "reason", "leading newline")
-			return true
-		} else if pos > 0 {
-			message = message[:pos]
-		}
-		if strings.IndexFunc(message, func(r rune) bool { return r < 32 && r != '\t' }) >= 0 {
-			s.debug("chat rejected", "account", s.accountName, "reason", "invalid characters")
-			return true
-		}
-	}
 	// Reference: ChatHandler.cpp:116-139 — the LANG_ADDON type gate and the
 	// CONFIG_ADDON_CHANNEL disabled check run before every other arm (the
 	// mute/speak-time legs, the 1852 GM-silence gate, the warden response):
@@ -164,7 +149,7 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	if language != languageAddon && typeID != chatAFK && typeID != chatDND {
-		s.updateSpeakTime()
+		s.updateSpeakTime(ctx)
 	}
 	if typeID != chatWhisper && s.hasAura(1852) {
 		s.sendNotification(fmt.Sprintf("Silence is ON for %s", s.player.Name))
@@ -177,6 +162,13 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	// response.
 	if typeID == chatGuild && language == languageAddon && s.warden != nil && s.warden.processLuaCheckResponse(message) {
 		s.debug("chat rejected", "account", s.accountName, "reason", "warden check response")
+		return true
+	}
+	// C++ (ChatHandler.cpp:240-248): no chat commands in AFK/DND autoreply, and
+	// the message can be empty there; elsewhere an empty message returns before
+	// any command is attempted (so the addon console never sees "").
+	if message == "" && typeID != chatAFK && typeID != chatDND {
+		s.debug("chat rejected", "account", s.accountName, "reason", "empty message")
 		return true
 	}
 	// Reference: ChatHandler::ParseCommands (Chat.cpp:168-189) +
@@ -218,6 +210,28 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	// target lookup and consume the message.
 	if language == languageAddon && s.parseAddonChannelCommand(ctx, message) {
 		return true
+	}
+	// C++ (ChatHandler.cpp:253-271): message validity checks run after command
+	// parsing, on the text that will actually be delivered — a command
+	// containing a control character executes in C++; cutting or aborting first
+	// would wrongly swallow it. Cut at the first newline or carriage return
+	// (drop when the message starts with one), abort on nasty (ASCII control,
+	// tab allowed) characters, then collapse multiple spaces into one when
+	// ChatFakeMessagePreventing is set (World.cpp:1161, default false).
+	if language != languageAddon {
+		if pos := strings.IndexAny(message, "\r\n"); pos == 0 {
+			s.debug("chat rejected", "account", s.accountName, "reason", "leading newline")
+			return true
+		} else if pos > 0 {
+			message = message[:pos]
+		}
+		if strings.IndexFunc(message, func(r rune) bool { return r < 32 && r != '\t' }) >= 0 {
+			s.debug("chat rejected", "account", s.accountName, "reason", "invalid characters")
+			return true
+		}
+		if s.server != nil && s.server.Config.ChatFakeMessagePreventing {
+			message = collapseChatSpaces(message)
+		}
 	}
 	languageSkillID, languageKnown := languageSkill(language)
 	s.debug("chat language checked", "account", s.accountName, "language", language, "language_skill", languageSkillID, "language_known", languageKnown, "loaded_skill_count", len(s.player.Skills))
@@ -273,9 +287,6 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			s.debug("chat rejected", "account", s.accountName, "reason", "level requirement", "type", typeID, "required", required, "level", s.player.Level)
 			return true
 		}
-	}
-	if message == "" && typeID != chatAFK && typeID != chatDND {
-		return true
 	}
 	// Reference: the non-addon branch of WorldSession::HandleMessagechatOpcode
 	// (ChatHandler.cpp:179-181) — a player in .gm on mode sends in the
@@ -836,12 +847,28 @@ func (s *session) chatLanguageModifier() (uint32, bool) {
 	return 0, false
 }
 
-func (s *session) skipChatFlood() bool {
-	return s.security > 0 || (s.player != nil && (s.player.ExtraFlags&playerExtraGMOn != 0 || s.player.PlayerFlags&playerFlagGM != 0))
+// skipChatSpamCheck mirrors the HasPermission gate in Player::UpdateSpeakTime
+// (Player.cpp:20513-20515), with a security-level fallback when the auth store
+// is unavailable (same pattern as commandNotFoundNotified). C++ keys the
+// exemption on the RBAC permission alone — there is no .gm-on carve-out — so
+// moderator-secLevel (1) accounts are flood-protected unless the RBAC rows say
+// otherwise; the old security>0 blanket skip over-exempted them.
+func (s *session) skipChatSpamCheck(ctx context.Context) bool {
+	if s == nil {
+		return false
+	}
+	if s.server == nil || s.server.AuthStore == nil || s.server.AuthStore.DB == nil {
+		return s.security > 0
+	}
+	has, err := accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionSkipCheckChatSpam)
+	if err != nil {
+		return s.security > 0
+	}
+	return has
 }
 
-func (s *session) updateSpeakTime() {
-	if s.skipChatFlood() || s.server == nil || s.server.Config.ChatFloodMessageCount == 0 {
+func (s *session) updateSpeakTime(ctx context.Context) {
+	if s.skipChatSpamCheck(ctx) || s.server == nil || s.server.Config.ChatFloodMessageCount == 0 {
 		return
 	}
 	now := time.Now().Unix()
@@ -859,6 +886,30 @@ func (s *session) updateSpeakTime() {
 		s.speakCount = 1
 	}
 	s.speakTime = now + int64(s.server.Config.ChatFloodMessageDelay)
+}
+
+// collapseChatSpaces mirrors the CONFIG_CHAT_FAKE_MESSAGE_PREVENTING arm in
+// WorldSession::HandleMessagechatOpcode (ChatHandler.cpp:268-271): when set,
+// std::unique collapses every run of spaces in the delivered message into one.
+func collapseChatSpaces(s string) string {
+	if strings.Index(s, "  ") < 0 {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	prevSpace := false
+	for i := 0; i < len(s); i++ {
+		if s[i] == ' ' {
+			if prevSpace {
+				continue
+			}
+			prevSpace = true
+		} else {
+			prevSpace = false
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 func (s *session) guildChatSpeakAllowed(officer bool) bool {

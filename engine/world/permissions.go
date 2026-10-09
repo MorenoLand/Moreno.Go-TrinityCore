@@ -121,6 +121,11 @@ const permissionSkipCheckOverSpeedPing uint32 = 23
 // permissionSkipCheckChatChannelReq mirrors rbac::RBAC_PERM_SKIP_CHECK_CHAT_CHANNEL_REQ (RBAC.h:72).
 const permissionSkipCheckChatChannelReq uint32 = 19
 
+// permissionSkipCheckChatSpam mirrors rbac::RBAC_PERM_SKIP_CHECK_CHAT_SPAM (RBAC.h:75):
+// Player::UpdateSpeakTime (Player.cpp:20513-20515) skips flood accounting for
+// sessions holding this permission.
+const permissionSkipCheckChatSpam uint32 = 22
+
 const permissionTwoSideInteractionChat uint32 = 25
 
 // permissionTwoSideInteractionChannel mirrors rbac::RBAC_PERM_TWO_SIDE_INTERACTION_CHANNEL (RBAC.h:79).
