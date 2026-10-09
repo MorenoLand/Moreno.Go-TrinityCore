@@ -194,8 +194,10 @@ func (s *session) hasInstantCastAura() bool {
 // Intellect contribution (Player::GetSpellCritFromIntellect, Player.cpp:5502),
 // SPELL_AURA_MOD_SPELL_CRIT_CHANCE (57) and SPELL_AURA_MOD_CRIT_PCT (290),
 // the school-masked SPELL_AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL (71) term, and the
-// CR_CRIT_SPELL rating bonus.
-func (s *session) calculateSpellCritChance(targetGUID uint64, schoolMask uint8) float64 {
+// CR_CRIT_SPELL rating bonus. isPeriodic selects the periodic-tick done side
+// (Aura::CalcPeriodicCritChance, SpellAuras.cpp:494-502); the direct-spell
+// done side runs through Unit::SpellCritChanceDone (Unit.cpp:7167-7214).
+func (s *session) calculateSpellCritChance(targetGUID uint64, schoolMask uint8, spell wotlk.Spell, isPeriodic bool) float64 {
 	if s == nil || s.player == nil {
 		return 0.05
 	}
@@ -231,6 +233,14 @@ func (s *session) calculateSpellCritChance(targetGUID uint64, schoolMask uint8) 
 		}
 		critPct += rating / ratingPerPct
 	}
+
+	// 4b. Caster spell mods (Unit::SpellCritChanceDone, Unit.cpp:7207-7211):
+	// SPELLMOD_CRITICAL_CHANCE folds into the done chance before the taken
+	// side (resilience) runs, so PCT mods multiply the pre-resilience base
+	// exactly as in C++. C++ bakes this once at aura apply for periodic
+	// ticks (Aura::SaveCasterInfo); Go recomputes per tick, which matches
+	// the baked value while the caster's mods are unchanged.
+	critPct = s.applySpellModFloat(spell, spellModCriticalChance, critPct)
 
 	// 5. Defender resilience reduction (in PvP)
 	if targetGUID != 0 && targetGUID != s.playerGUID && s.server != nil {
@@ -366,17 +376,69 @@ func (s *session) totalAuraModifierByMiscValue(auraType uint32, miscValue int32)
 }
 
 // rollSpellCrit rolls whether the spell achieves a critical strike.
-func (s *session) rollSpellCrit(targetGUID uint64, schoolMask uint8) bool {
-	chance := s.calculateSpellCritChance(targetGUID, schoolMask)
-	return rand.Float64() < chance
+// C++ Unit::SpellCritChanceDone (Unit.cpp:7167-7170): direct (non-periodic)
+// spells without SPELL_ATTR0_CU_CAN_CRIT never crit.
+func (s *session) rollSpellCrit(targetGUID uint64, schoolMask uint8, spell wotlk.Spell) bool {
+	if spell.Attributes&spellAttr0CuCanCrit == 0 {
+		return false
+	}
+	return rand.Float64() < s.calculateSpellCritChance(targetGUID, schoolMask, spell, false)
+}
+
+// directSpellCritChance is the full direct-spell crit probability: the
+// CU_CAN_CRIT gate, the done side (calculateSpellCritChance), and the
+// victim-side taken arms below. Mirrors Spell::DoEffectOnLaunchTarget
+// (Spell.cpp:7784-7788): m_spellValue->CriticalChance override, then
+// SpellCritChanceDone, then SpellCritChanceTaken.
+func (s *session) directSpellCritChance(target combatTarget, isPlayerVictim bool, schoolMask uint8, spell wotlk.Spell) float64 {
+	if spell.Attributes&spellAttr0CuCanCrit == 0 {
+		return 0
+	}
+	chance := s.calculateSpellCritChance(target.GUID, schoolMask, spell, false)
+	return chance + s.directSpellTakenCritBonus(target, isPlayerVictim, schoolMask, spell)
+}
+
+// rollDirectSpellCrit rolls a direct-spell crit including the victim taken arms.
+func (s *session) rollDirectSpellCrit(target combatTarget, isPlayerVictim bool, schoolMask uint8, spell wotlk.Spell) bool {
+	return rand.Float64() < s.directSpellCritChance(target, isPlayerVictim, schoolMask, spell)
+}
+
+// directSpellTakenCritBonus mirrors the victim-side arms of
+// Unit::SpellCritChanceTaken (Unit.cpp:7230-7240) for direct (non-periodic)
+// spells: the victim's SPELL_AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE (179,
+// school-masked) and SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE
+// (197, unfiltered), gated on the spell being non-positive like C++. C++
+// applies 179 before resilience and 197 after; both are flat additions and
+// Go's resilience leg already ran inside calculateSpellCritChance, so the
+// post-resilience fold here is arithmetically identical.
+func (s *session) directSpellTakenCritBonus(target combatTarget, isPlayerVictim bool, schoolMask uint8, spell wotlk.Spell) float64 {
+	if spellIsPositive(spell) || s == nil || s.server == nil {
+		return 0
+	}
+	bonus := float64(0)
+	if isPlayerVictim {
+		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
+			bonus += float64(vicSess.playerAuraModifierByMiscMask(spellAuraModAttackerSpellCritChance, int32(schoolMask)))
+			bonus += float64(vicSess.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance))
+		}
+	} else {
+		key := creatureAuraKeyForTarget(target)
+		for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, spellAuraModAttackerSpellCritChance, uint32(schoolMask)) {
+			bonus += float64(amt)
+		}
+		bonus += float64(creatureAuraModifierSum(s.server, key, spellAuraModAttackerSpellAndWeaponCritChance))
+	}
+	return bonus / 100.0
 }
 
 // tickCritChance mirrors the chance arm of AuraEffect::GetCritChanceFor
 // (SpellAuraEffects.cpp:843-846) as used by the periodic tick handlers
 // (HandlePeriodicDamageAurasTick, HandlePeriodicHealAurasTick): the caster's
-// spell-crit chance done (baked into the aura's crit chance in C++) plus the
-// victim's SPELL_AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE taken modifier, minus
-// resilience crit-chance reduction (folded into calculateSpellCritChance).
+// spell-crit chance done (baked into the aura's crit chance in C++ via
+// Aura::CalcPeriodicCritChance, SpellAuras.cpp:494-502 — gated here by
+// canPeriodicTickCrit) plus the victim's SPELL_AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE
+// taken modifier, minus resilience crit-chance reduction (folded into
+// calculateSpellCritChance).
 // takenCritBonusPct carries the victim-side modifier in percent points (0 for
 // positive spells, where C++ skips the taken arm). The scripted taken arms
 // (Shatter, Glyph of Shadowburn, Renewed Hope, Glyph of Fire Blast,
@@ -385,16 +447,59 @@ func (s *session) rollSpellCrit(targetGUID uint64, schoolMask uint8) bool {
 // the remaining arms (Shiv poisons, Flash of Light/Sacred Shield, Rend and
 // Tear, Victory Rush) and SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) have
 // no Go model and stay unbridged.
-func (s *session) tickCritChance(targetGUID uint64, schoolMask uint8, takenCritBonusPct float64) float64 {
+func (s *session) tickCritChance(targetGUID uint64, schoolMask uint8, spell wotlk.Spell, takenCritBonusPct float64) float64 {
 	chance := 0.0
-	if s != nil {
-		chance = s.calculateSpellCritChance(targetGUID, schoolMask)
+	// Aura::CalcPeriodicCritChance (SpellAuras.cpp:494-502): the done side
+	// is zero unless the aura may periodic-crit. The victim-side taken arms
+	// still apply on top — C++ bakes a zero done chance and the scripted
+	// taken arms (Lava Burst, Shatter, ...) can still force the crit.
+	if s != nil && s.canPeriodicTickCrit(spell) {
+		chance = s.calculateSpellCritChance(targetGUID, schoolMask, spell, true)
 	}
 	chance += takenCritBonusPct / 100.0
 	if chance < 0 {
 		chance = 0
 	}
 	return chance
+}
+
+// canPeriodicTickCrit mirrors Aura::CanPeriodicTickCrit (SpellAuras.cpp:475-491):
+// a periodic aura's ticks crit only when the spell allows it.
+// SPELL_ATTR2_CANT_CRIT blocks outright; SPELL_ATTR4_INHERIT_CRIT_FROM_AURA
+// passes through; a SPELL_AURA_ABILITY_PERIODIC_CRIT (286) aura on the caster
+// affecting the spell opens it; Rupture (rogue, icon 500) is hardcoded.
+// C++ evaluates this once at aura apply (Aura::SaveCasterInfo); Go evaluates
+// per tick, matching while the caster's auras are unchanged.
+func (s *session) canPeriodicTickCrit(spell wotlk.Spell) bool {
+	if spell.AttributesEx1&spellAttr2CantCrit != 0 {
+		return false
+	}
+	if spell.AttributesEx4&spellAttr4InheritCritFromAura != 0 {
+		return true
+	}
+	if s != nil && s.server != nil && s.server.Data != nil {
+		for _, aura := range s.loadedAuras() {
+			if aura == nil || aura.Stopped {
+				continue
+			}
+			auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+			if err != nil || !found {
+				continue
+			}
+			for index, effect := range auraSpell.Effects {
+				if effect.Aura != spellAuraAbilityPeriodicCrit || aura.EffectMask&(1<<uint(index)) == 0 {
+					continue
+				}
+				if spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+					return true
+				}
+			}
+		}
+	}
+	if spell.SpellIconID == 500 && spell.SpellFamilyName == spellFamilyRogue {
+		return true
+	}
+	return false
 }
 
 // tickScriptedTakenCritBonus mirrors the scripted taken-side arms of

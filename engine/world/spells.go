@@ -73,6 +73,7 @@ const (
 	spellAttr4ProcOnlyOnCaster             uint32 = 0x00000002 // SPELL_ATTR4_PROC_ONLY_ON_CASTER (SharedDefines.h:561) "Only proc on self-cast" — ATTR4 is Go's AttributesEx4
 	spellAttr4CastOnlyInOutland            uint32 = 0x04000000 // SPELL_ATTR4_CAST_ONLY_IN_OUTLAND (SharedDefines.h:586) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4SpellVsExtendCost            uint32 = 0x00000400 // SPELL_ATTR4_SPELL_VS_EXTEND_COST (SharedDefines.h:570) "Attack speed modifies cost" — ATTR4 is Go's AttributesEx4
+	spellAttr4InheritCritFromAura          uint32 = 0x08000000 // SPELL_ATTR4_INHERIT_CRIT_FROM_AURA (SharedDefines.h:587) — ATTR4 is Go's AttributesEx4
 	targetUnitCaster                       uint32 = 1          // TARGET_UNIT_CASTER (SharedDefines.h:1442)
 	targetDestCaster                       uint32 = 18         // TARGET_DEST_CASTER (SharedDefines.h:1455)
 	spellAttr0UnaffectedByInvulnerability  uint32 = 0x20000000 // SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY (SharedDefines.h:441)
@@ -90,7 +91,8 @@ const (
 	spellAttr1DrainAllPower                uint32 = 0x00000002 // SPELL_ATTR1_DRAIN_ALL_POWER (SharedDefines.h:450) "Drain all power" — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr2CanTargetDead                uint32 = 0x00000001 // SPELL_ATTR2_CAN_TARGET_DEAD (SharedDefines.h:486) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr2AutorepeatFlag               uint32 = 0x00000020 // SPELL_ATTR2_AUTOREPEAT_FLAG (SharedDefines.h:491) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
-	spellAttr2NotResetAutoActions          uint32 = 0x00020000 // SPELL_ATTR2_NOT_RESET_AUTO_ACTIONS (SharedDefines.h:503) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
+	spellAttr2NotResetAutoActions          uint32 = 0x00020000 // SPELL_ATTR2_NOT_RESET_AUTO_ACTIONS (SharedDefines.h:503) — ATTR2 is Go's AttributesEx1
+	spellAttr2CantCrit                     uint32 = 0x20000000 // SPELL_ATTR2_CANT_CRIT (SharedDefines.h:515) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB) (Spell.dbc field 6 = AttributesExB)
 	spellAttr5UsableWhileStunned           uint32 = 0x00000008 // SPELL_ATTR5_USABLE_WHILE_STUNNED (SharedDefines.h:600) — ATTR5 is Go's AttributesEx5 (Spell.dbc field 9 = AttributesExE)
 	spellAttr5UsableWhileFeared            uint32 = 0x00020000 // SPELL_ATTR5_USABLE_WHILE_FEARED (SharedDefines.h:614) — ATTR5 is Go's AttributesEx5
 	spellAttr5UsableWhileConfused          uint32 = 0x00040000 // SPELL_ATTR5_USABLE_WHILE_CONFUSED (SharedDefines.h:615) — ATTR5 is Go's AttributesEx5
@@ -11544,14 +11546,16 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	} else {
 		// Spell crit roll (fixed damage backlash spells do not crit, per TrinityCore SPELL_ATTR4_FIXED_DAMAGE)
 		crit = false
+		dmgSpell := wotlk.Spell{}
 		spellKnown := false
 		if s.server != nil && s.server.Data != nil {
-			if _, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
 				spellKnown = true
+				dmgSpell = sp
 			}
 		}
 		if !instantKill && !procDamage && spellKnown && spellID != 31117 && spellID != 64085 {
-			crit = s.rollSpellCrit(target.GUID, schoolMask)
+			crit = s.rollDirectSpellCrit(target, isPlayerVictim, schoolMask, dmgSpell)
 		}
 		if crit {
 			if s.server != nil && s.server.Data != nil {
@@ -13551,7 +13555,7 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 	heal = s.healingTakenBonus(targetSess, s.playerGUID, spellID, heal, false)
 
 	// Roll healing critical strike (TrinityCore: 150% healing on crit, modified by metagem)
-	isCrit := s.rollSpellCrit(0, 2)
+	isCrit := s.rollSpellCrit(0, 2, healSpell)
 	if isCrit {
 		heal = s.spellCriticalHealingBonus(ctx, heal, targetGUID)
 	}
@@ -16575,6 +16579,7 @@ const (
 	spellAuraLinked                              = 284 // SPELL_AURA_LINKED (SpellAuraDefines.h:364)
 	spellAuraModAttackerSpellCritChance          = 179 // SPELL_AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE (SpellAuraDefines.h:259)
 	spellAuraModAttackerSpellAndWeaponCritChance = 197 // SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (SpellAuraDefines.h:277)
+	spellAuraAbilityPeriodicCrit                 = 286 // SPELL_AURA_ABILITY_PERIODIC_CRIT (SpellAuraDefines.h:366)
 	dispelDisease                                = 3   // DISPEL_DISEASE (SharedDefines.h:1407), matched by Unit::GetDiseasesByCaster
 )
 
@@ -18367,7 +18372,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 				victimStateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
 				victimStateMask&(1<<(auraStateFaerieFire-1)) != 0)
 			takenCritBonus += scriptBonus
-			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
+			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), tickSpell, takenCritBonus) {
 				crit = true
 				if tickKnown {
 					dmg = tickCaster.spellCriticalDamageBonus(context.Background(), tickSpell, dmg, aura.TargetGUID)
@@ -18521,7 +18526,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 				victimStateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
 				victimStateMask&(1<<(auraStateFaerieFire-1)) != 0)
 			takenCritBonus += scriptBonus
-			if forceCrit || rand.Float64() < healCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
+			if forceCrit || rand.Float64() < healCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), healSpell, takenCritBonus) {
 				healCrit = true
 				if healKnown {
 					heal = healCaster.spellCriticalHealingBonus(context.Background(), heal, aura.TargetGUID)
@@ -18637,7 +18642,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 				victimStateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
 				victimStateMask&(1<<(auraStateFaerieFire-1)) != 0)
 			takenCritBonus += scriptBonus
-			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
+			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), tickSpell, takenCritBonus) {
 				crit = true
 				if tickKnown {
 					dmg = tickCaster.spellCriticalDamageBonus(context.Background(), tickSpell, dmg, aura.TargetGUID)
@@ -19264,7 +19269,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				victimStateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
 				victimStateMask&(1<<(auraStateFaerieFire-1)) != 0)
 			takenCritBonus += scriptBonus
-			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
+			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), tickSpell, takenCritBonus) {
 				crit = true
 				if tickKnown {
 					dmg = tickCaster.spellCriticalDamageBonus(ctx, tickSpell, dmg, aura.TargetGUID)
@@ -19409,7 +19414,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				victimStateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
 				victimStateMask&(1<<(auraStateFaerieFire-1)) != 0)
 			takenCritBonus += scriptBonus
-			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
+			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), tickSpell, takenCritBonus) {
 				healCrit = true
 				heal = tickCaster.spellCriticalHealingBonus(ctx, heal, aura.TargetGUID)
 			}
@@ -19558,7 +19563,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				victimStateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
 				victimStateMask&(1<<(auraStateFaerieFire-1)) != 0)
 			takenCritBonus += scriptBonus
-			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
+			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), tickSpell, takenCritBonus) {
 				crit = true
 				if tickKnown {
 					dmg = tickCaster.spellCriticalDamageBonus(ctx, tickSpell, dmg, aura.TargetGUID)
