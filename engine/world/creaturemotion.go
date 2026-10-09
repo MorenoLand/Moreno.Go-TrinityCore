@@ -652,6 +652,7 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 		return
 	}
 	lastCharmer := motion.CharmerGUID
+	passive := isCreaturePassive(motion)
 	motion.Charmed = false
 	motion.CharmerGUID = 0
 	motion.UnitFlags = motion.CharmUnitFlags
@@ -668,31 +669,70 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 	motion.TargetGUID = 0
 	motion.InCombat = false
 	motion.Moving = false
-	// CreatureAI::OnCharmed (CreatureAI.cpp:54-70): the restored AI engages
-	// the last charmer unless passive (the EngageWithTarget 0.0f threat seed,
-	// Unit.cpp:8429-8438). A stale/gone charmer GUID resolves to the combat
-	// tick's target-gone site next pass, which evades
-	// (EVADE_REASON_NO_HOSTILES) — outcome-equivalent within one tick, so no
-	// ctx/now threading is needed here. Creature charmers are an accepted
-	// edge: the tick only resolves player targets.
-	engaged := false
-	if lastCharmer != 0 && !isCreaturePassive(motion) {
-		if motion.ThreatMgr == nil {
-			motion.ThreatMgr = NewThreatManager(motion)
-		}
-		motion.ThreatMgr.AddThreat(lastCharmer, 0, true)
-		motion.TargetGUID = lastCharmer
-		motion.InCombat = true
-		engaged = true
-	}
 	mapID, instanceID, rawGUID := motion.Map, motion.InstanceID, motion.GUID
 	flags, faction := motion.UnitFlags, motion.Faction
 	s.motionMu.Unlock()
 	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, rawGUID, map[int]uint32{unitFieldFlags: flags, unitFieldFaction: faction})
-	if engaged {
-		startPkt := buildAttackStart(rawGUID, lastCharmer)
-		s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, nil)
+	// CreatureAI::OnCharmed (CreatureAI.cpp:54-70): the restored AI engages
+	// the last charmer unless passive (the EngageWithTarget 0.0f threat seed,
+	// Unit.cpp:8429-8438). ObjectAccessor::GetUnit only resolves live units
+	// in the creature's map, so a gone charmer is not engaged — checked
+	// without the motion lock (findSessionByGUID takes sessionsMu, and no
+	// caller holds motionMu across it). The lastCharmer==0 arm needs no
+	// bridge: the C++ gate `me->LastCharmerGUID` is false there, so C++ does
+	// nothing too.
+	engaged := false
+	if lastCharmer != 0 && !passive && s.charmerResolvesInInstance(mapID, instanceID, lastCharmer) {
+		s.motionMu.Lock()
+		m := s.findCreatureMotionLocked(mapID, instanceID, rawGUID)
+		if m != nil && !m.Charmed {
+			if m.ThreatMgr == nil {
+				m.ThreatMgr = NewThreatManager(m)
+			}
+			m.ThreatMgr.AddThreat(lastCharmer, 0, true)
+			m.TargetGUID = lastCharmer
+			m.InCombat = true
+			engaged = true
+		}
+		s.motionMu.Unlock()
+		if engaged {
+			startPkt := buildAttackStart(rawGUID, lastCharmer)
+			s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, nil)
+		}
 	}
+	if lastCharmer != 0 && !engaged {
+		// The no-engage tail: C++ clears LastCharmerGUID and, still out of
+		// combat, evades home (EnterEvadeMode(EVADE_REASON_NO_HOSTILES)) —
+		// the evade clears the threat table CombatStop kept, restores health,
+		// and resets the tap. triggerCreatureEvade locks motionMu itself and
+		// fires Lua hooks, so the motion is re-looked-up and re-checked
+		// unlocked, matching the threat.go:849 pattern; a motion that
+		// re-engaged or despawned in between keeps its current state.
+		s.motionMu.Lock()
+		m := s.findCreatureMotionLocked(mapID, instanceID, rawGUID)
+		evade := m != nil && !m.Charmed && !m.InCombat
+		s.motionMu.Unlock()
+		if evade {
+			s.triggerCreatureEvade(context.Background(), m, time.Now())
+		}
+	}
+}
+
+// charmerResolvesInInstance mirrors ObjectAccessor::GetUnit for the OnCharmed
+// engage leg (CreatureAI.cpp:59): the charmer must be a live unit in the
+// creature's map/instance, player or creature. Call without the motion lock
+// held — findSessionByGUID takes sessionsMu.
+func (s *Server) charmerResolvesInInstance(mapID, instanceID uint32, guid uint64) bool {
+	if s == nil || guid == 0 {
+		return false
+	}
+	if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil &&
+		sess.player.Map == mapID && sess.player.InstanceID == instanceID {
+		return true
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	return s.findCreatureMotionLocked(mapID, instanceID, guid) != nil
 }
 
 // triggerCreatureEvade resets a creature's combat state, clears threat & auras,
@@ -735,10 +775,10 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 // CreatureAI.cpp:261 (UpdateVictim, REACT_PASSIVE && !InCombat) has a lighter Go
 // analog at creaturemotion.go:805-812 (inline ClearThreat + InCombat=false, no
 // home-walk, no health restore, no Eluna hooks); CreatureAI.cpp:67 (OnCharmed —
-// engage the last charmer, evade if still not in combat) has no bridge —
-// uncharmCreature restores flags/faction and clears threat but never engages the
-// charmer; PassiveAI.cpp:51 (engaged && !InCombat) is vacuous as a separate site
-// — in Go engagement is InCombat. BOUNDARY ("the creature has moved outside its
+// engage the last charmer, evade if still not in combat) is bridged in
+// uncharmCreature (resolvable charmers engaged; the restore evades home
+// when it does not engage); PassiveAI.cpp:51 (engaged && !InCombat) is
+// vacuous as a separate site — in Go engagement is InCombat. BOUNDARY ("the creature h
 // evade boundary"): Creature::Update (Creature.cpp:830-838) calls
 // AI()->CheckInRoom() every 2.5s while engaged → EnterEvadeMode at
 // CreatureAI.cpp:425. Go has no boundary model (no SetBoundary/IsInBounds

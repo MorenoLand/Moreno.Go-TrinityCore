@@ -9837,6 +9837,11 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
 		newlyTapped := false
 		tappedFlags := uint32(0)
+		// ThreatManager::AddThreat step-1 gate (ThreatManager.cpp:311-317):
+		// probed pre-lock for the motion==nil tail path (conservative:
+		// NO_INITIAL_AGGRO gates here) and refined in the threat block
+		// below with the true pre-damage engagement state.
+		threatGated := s.spellDamageStep1Gate(spellID, false)
 		if motion != nil {
 			// Unit::DealDamage tap block (Unit.cpp:872-876).
 			if s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, damage, target.Health) {
@@ -9860,13 +9865,9 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				rageMapID, rageInstanceID, rageGUID = motion.Map, motion.InstanceID, motion.GUID
 			}
 			// Unit::DealDamage's threat add runs on the victim's pre-damage
-			// engagement state for the SPELL_ATTR3_NO_INITIAL_AGGRO gate
-			// (ThreatManager.cpp:315-317): capture it before the funnel's
-			// own engagement set. (C++ also skips engagement on that gate;
-			// Go's engagement model sets InCombat unconditionally — the
-			// skip here is threat-only.)
+			// engagement state for the step-1 gate (ThreatManager.cpp:315-317):
+			// capture it before the funnel's own engagement set.
 			wasInCombat := motion.InCombat
-			motion.InCombat = true
 			if motion.ThreatMgr == nil {
 				motion.ThreatMgr = NewThreatManager(motion)
 			}
@@ -9881,20 +9882,37 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			// SPELLMOD_THREAT mods and school multipliers
 			// (ThreatManager::CalculateModifiedThreat, ThreatManager.cpp:606),
 			// and the caster's redirect registry applies on top
-			// (splitThreatRedirects). A zero amount is a gated spell
-			// (SPELL_ATTR1_NO_THREAT, or SPELL_ATTR3_NO_INITIAL_AGGRO on an
-			// unengaged target — ThreatManager.cpp:311-317): the add is
-			// skipped, matching C++'s early return before ref creation.
-			threat := s.damageThreatAmount(ctx, spellID, uint32(schoolMask), float32(damage), wasInCombat)
+			// (splitThreatRedirects).
+			threat, step1Gate := s.damageThreatAmount(ctx, spellID, uint32(schoolMask), float32(damage), wasInCombat)
+			// ThreatManager::AddThreat step 1 (ThreatManager.cpp:311-317)
+			// returns before SetInCombatWith: a gated spell neither adds
+			// threat nor engages the victim. Every other arm — including
+			// zero-damage hits — engages: "threat implies combat"
+			// (ThreatManager.cpp:366-368).
+			threatGated = step1Gate
+			if !step1Gate {
+				motion.InCombat = true
+			}
 			// The threat arm is skipped for units that cannot have a threat
 			// list (ThreatManager::AddThreat's !CanHaveThreatList() early leg,
 			// ThreatManager.cpp:328-339): no redirect consumption, no victim
-			// switch — combat state alone is kept (InCombat was set above).
-			if threat > 0 && motion.ThreatMgr.OwnerCanHaveThreatList() {
-				threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
-				switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
-				if rSwitched {
-					switched, newVictim = true, rVictim
+			// switch — combat state alone is kept. A zero amount still runs
+			// AddThreat (the ref is created with 0 threat and the victim leg
+			// runs — Unit::EngageWithTarget seeds 0.0f the same way); only the
+			// redirect split is skipped (amount > 0.0f gate, ThreatManager.cpp:348).
+			if !step1Gate && motion.ThreatMgr.OwnerCanHaveThreatList() {
+				var switched bool
+				var newVictim uint64
+				if threat > 0 {
+					var rSwitched bool
+					var rVictim uint64
+					threat, rSwitched, rVictim = s.splitThreatRedirects(motion, threat)
+					switched, newVictim = motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
+					if rSwitched {
+						switched, newVictim = true, rVictim
+					}
+				} else {
+					switched, newVictim = motion.ThreatMgr.AddThreat(s.playerGUID, 0, inMelee)
 				}
 				if switched && newVictim != motion.TargetGUID {
 					motion.TargetGUID = newVictim
@@ -9927,7 +9945,12 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldDynamicFlags: tappedFlags})
 		}
 		s.server.procCreatureDamageAuras(creatureAuraKeyForTarget(target), true, damage, target.MaxHealth)
-		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
+		// The step-1 gate skips victim engagement
+		// (ThreatManager.cpp:311-317) — without this guard the tail
+		// aggro call would re-engage a victim C++ leaves unengaged.
+		if !threatGated {
+			s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
+		}
 		s.server.triggerPetDefensive(s.player.Map, s.player.InstanceID, s.playerGUID, targetGUID)
 	}
 	return damage
@@ -17301,6 +17324,11 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 		motion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
 		newlyTapped := false
 		tappedFlags := uint32(0)
+		// ThreatManager::AddThreat step-1 gate (ThreatManager.cpp:311-317):
+		// probed pre-lock for the motion==nil tail path (conservative:
+		// NO_INITIAL_AGGRO gates here) and refined in the threat block
+		// below with the true pre-damage engagement state.
+		dotThreatGated := s.spellDamageStep1Gate(aura.SpellID, false)
 		if motion != nil {
 			// Unit::DealDamage tap block (Unit.cpp:872-876); the tick
 			// runs on the caster/owner session (see the kill arm above).
@@ -17316,13 +17344,9 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 				rageMapID, rageInstanceID, rageGUID = motion.Map, motion.InstanceID, motion.GUID
 			}
 			// Unit::DealDamage's threat add runs on the victim's pre-damage
-			// engagement state for the SPELL_ATTR3_NO_INITIAL_AGGRO gate
-			// (ThreatManager.cpp:315-317): capture it before the funnel's
-			// own engagement set. (C++ also skips engagement on that gate;
-			// Go's engagement model sets InCombat unconditionally — the
-			// skip here is threat-only.)
+			// engagement state for the step-1 gate (ThreatManager.cpp:315-317):
+			// capture it before the funnel's own engagement set.
 			wasInCombat := motion.InCombat
-			motion.InCombat = true
 			if motion.ThreatMgr == nil {
 				motion.ThreatMgr = NewThreatManager(motion)
 			}
@@ -17335,16 +17359,27 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 			// pctMod, the caster's SPELLMOD_THREAT mods and the DoT school's
 			// threat multipliers (ThreatManager::CalculateModifiedThreat —
 			// the DoT school leg was previously unfolded), and the caster's
-			// redirect registry applies on top. A zero amount is a gated
-			// spell: the add is skipped, matching C++'s early return
-			// (ThreatManager.cpp:311-317).
-			dmgThreat := s.damageThreatAmount(ctx, aura.SpellID, aura.SchoolMask, float32(dmg), wasInCombat)
+			// redirect registry applies on top.
+			dmgThreat, step1Gate := s.damageThreatAmount(ctx, aura.SpellID, aura.SchoolMask, float32(dmg), wasInCombat)
+			// ThreatManager::AddThreat step 1 (ThreatManager.cpp:311-317)
+			// returns before SetInCombatWith: a gated spell neither adds
+			// threat nor engages the victim. Every other arm — including
+			// zero-damage ticks — engages: "threat implies combat"
+			// (ThreatManager.cpp:366-368).
+			dotThreatGated = step1Gate
+			if !step1Gate {
+				motion.InCombat = true
+			}
 			// The threat arm is skipped for units that cannot have a threat
 			// list (ThreatManager::AddThreat's !CanHaveThreatList() early leg,
 			// ThreatManager.cpp:328-339): no redirect consumption, no add —
-			// combat state alone is kept (InCombat was set above).
-			if dmgThreat > 0 && motion.ThreatMgr.OwnerCanHaveThreatList() {
-				dmgThreat, _, _ = s.splitThreatRedirects(motion, dmgThreat)
+			// combat state alone is kept. A zero amount still runs AddThreat
+			// (the ref is created with 0 threat); only the redirect split is
+			// skipped (amount > 0.0f gate, ThreatManager.cpp:348).
+			if !step1Gate && motion.ThreatMgr.OwnerCanHaveThreatList() {
+				if dmgThreat > 0 {
+					dmgThreat, _, _ = s.splitThreatRedirects(motion, dmgThreat)
+				}
 				motion.ThreatMgr.AddThreat(s.playerGUID, dmgThreat, inMelee)
 			}
 			motion.Moving = true
@@ -17358,7 +17393,12 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 			// New tap: the client grays the name via UNIT_DYNFLAG_TAPPED.
 			s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldDynamicFlags: tappedFlags})
 		}
-		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
+		// The step-1 gate skips victim engagement
+		// (ThreatManager.cpp:311-317) — without this guard the tail
+		// aggro call would re-engage a victim C++ leaves unengaged.
+		if !dotThreatGated {
+			s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
+		}
 	}
 	return dmg, true
 }

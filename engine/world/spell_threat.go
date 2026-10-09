@@ -235,10 +235,39 @@ func (s *session) loadSpellThreatEntry(ctx context.Context, spellID uint32) (spe
 // early return, ThreatManager.cpp:311-314), and SPELL_ATTR3_NO_INITIAL_AGGRO
 // adds nothing while the target is not yet engaged
 // (ThreatManager.cpp:315-317; engaged is the victim's combat state as seen
-// before this damage). A zero return skips the threat add entirely.
-func (s *session) damageThreatAmount(ctx context.Context, spellID uint32, schoolMask uint32, damage float32, engaged bool) float32 {
+// before this damage). A zero non-gated amount still runs AddThreat (the ref
+// is created with 0 threat and the victim leg runs — Unit::EngageWithTarget
+// seeds 0.0f the same way).
+// spellThreatStep1Gate mirrors ThreatManager::AddThreat's step-1 early return
+// (ThreatManager.cpp:311-317): SPELL_ATTR1_NO_THREAT, or
+// SPELL_ATTR3_NO_INITIAL_AGGRO while the owner is not engaged. On this gate
+// C++ returns before SetInCombatWith, so the victim neither gains threat nor
+// enters combat — the damage itself still lands.
+func spellThreatStep1Gate(spell wotlk.Spell, spellKnown, engaged bool) bool {
+	return spellKnown && (spell.AttributesEx&spellAttr1NoThreat != 0 ||
+		(spell.AttributesEx3&spellAttr3NoInitialAggro != 0 && !engaged))
+}
+
+// spellDamageStep1Gate loads the spell and reports AddThreat's step-1 gate
+// for a damage funnel (ThreatManager.cpp:311-317), for call sites that need
+// the gate before the victim's motion (and pre-damage engagement state) is
+// available. engaged=false is the conservative pre-lock probe: it gates
+// NO_INITIAL_AGGRO spells, which the in-block computation then refines with
+// the true engagement state.
+func (s *session) spellDamageStep1Gate(spellID uint32, engaged bool) bool {
+	if s == nil || s.server == nil || spellID == 0 {
+		return false
+	}
+	sp, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		return false
+	}
+	return spellThreatStep1Gate(sp, true, engaged)
+}
+
+func (s *session) damageThreatAmount(ctx context.Context, spellID uint32, schoolMask uint32, damage float32, engaged bool) (float32, bool) {
 	if s == nil || s.server == nil || damage <= 0 {
-		return 0
+		return 0, false
 	}
 	var spell wotlk.Spell
 	spellKnown := false
@@ -247,13 +276,8 @@ func (s *session) damageThreatAmount(ctx context.Context, spellID uint32, school
 			spell, spellKnown = sp, true
 		}
 	}
-	if spellKnown {
-		if spell.AttributesEx&spellAttr1NoThreat != 0 {
-			return 0
-		}
-		if spell.AttributesEx3&spellAttr3NoInitialAggro != 0 && !engaged {
-			return 0
-		}
+	if spellThreatStep1Gate(spell, spellKnown, engaged) {
+		return 0, true
 	}
 	// ThreatManager::CalculateModifiedThreat (ThreatManager.cpp:606-659):
 	// the spell_threat-row pctMod applies even though its flatMod/apPctMod
@@ -268,7 +292,7 @@ func (s *session) damageThreatAmount(ctx context.Context, spellID uint32, school
 			t = s.applySpellModFloat(spell, spellModThreat, t)
 		}
 	}
-	return float32(t) * s.getThreatMultiplier(schoolMask)
+	return float32(t) * s.getThreatMultiplier(schoolMask), false
 }
 
 // spellHasInitialThreat mirrors SpellInfo::HasInitialAggro (SpellInfo.cpp:1261).
