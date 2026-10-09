@@ -354,6 +354,7 @@ type achievementEntry struct {
 	Points          uint32
 	Flags           uint32
 	MinimumCriteria uint32
+	Title           string // DBC field 4, default locale (hyperlink text validator)
 }
 
 type achievementCriteriaEntry struct {
@@ -510,11 +511,12 @@ func (s *Server) loadAchievementIndex() {
 				}
 				faction, _ := record.Int32(1)
 				instanceID, _ := record.Int32(2)
+				title, _ := record.String(4)
 				category, _ := record.Uint32(38)
 				points, _ := record.Uint32(39)
 				flags, _ := record.Uint32(41)
 				minimum, _ := record.Uint32(60)
-				achievementIndex.achieveByID[id] = achievementEntry{ID: id, Faction: faction, InstanceID: instanceID, Category: category, Points: points, Flags: flags, MinimumCriteria: minimum}
+				achievementIndex.achieveByID[id] = achievementEntry{ID: id, Faction: faction, InstanceID: instanceID, Title: title, Category: category, Points: points, Flags: flags, MinimumCriteria: minimum}
 			}
 		}
 	}

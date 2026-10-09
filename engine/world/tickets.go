@@ -132,6 +132,12 @@ func (s *session) handleGMTicketCreate(ctx context.Context, payload []byte) bool
 	needResponse, _ := r.ReadU32()
 	needMoreHelpBool, _ := r.ReadU8()
 
+	// TicketHandler.cpp:69: an invalid hyperlink in the ticket text drops
+	// the create.
+	if !s.validateHyperlinksAndMaybeKick(ctx, message) {
+		return true
+	}
+
 	// TicketHandler.cpp:38: a disabled ticket queue silently drops the
 	// create — no response packet is sent on this arm.
 	if s.server != nil && !s.server.ticketsEnabled.Load() {
@@ -189,6 +195,12 @@ func (s *session) handleGMTicketCreate(ctx context.Context, payload []byte) bool
 func (s *session) handleGMTicketUpdate(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	message, _ := r.ReadCString()
+
+	// TicketHandler.cpp:135: an invalid hyperlink in the update text drops
+	// the update.
+	if !s.validateHyperlinksAndMaybeKick(ctx, message) {
+		return true
+	}
 
 	// TicketHandler.cpp:135: the update only applies to an existing open
 	// ticket; otherwise the response is UPDATE_ERROR.
@@ -282,11 +294,23 @@ func (s *session) handleGMSurveySubmit(ctx context.Context, payload []byte) bool
 					continue
 				}
 				seen[qID] = true
+				// TicketHandler.cpp:220: an invalid hyperlink in a
+				// sub-survey comment drops the whole submit.
+				if !s.validateHyperlinksAndMaybeKick(ctx, comm) {
+					return true
+				}
 				_, _ = cdb.ExecContext(ctx, "INSERT INTO gm_subsurvey (surveyId, questionId, answer, answerComment) VALUES (?, ?, ?, ?)", surveyID, qID, ans, comm)
 			}
 			// TicketHandler.cpp:228: the trailing comment belongs to the
 			// survey row itself.
 			if finalComment, err := r.ReadCString(); err == nil && finalComment != "" {
+				// TicketHandler.cpp:234: an invalid hyperlink in the
+				// survey comment drops the submit (the sub-survey rows
+				// above already landed, matching C++'s per-comment
+				// return).
+				if !s.validateHyperlinksAndMaybeKick(ctx, finalComment) {
+					return true
+				}
 				_, _ = cdb.ExecContext(ctx, "UPDATE gm_survey SET comment = ? WHERE surveyId = ?", finalComment, surveyID)
 			}
 		}

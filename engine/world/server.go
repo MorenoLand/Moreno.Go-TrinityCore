@@ -223,6 +223,8 @@ type Server struct {
 	enchantProcAttrs       map[uint32]uint32
 	itemTemplateMu         sync.RWMutex
 	itemTemplates          map[uint32]itemTemplateClassInfo
+	itemHyperlinkMu        sync.RWMutex
+	itemHyperlinkTemplates map[uint32]itemHyperlinkTemplate
 	itemStoreTemplateMu    sync.RWMutex
 	itemStoreTemplates     map[uint32]itemStoreTemplateInfo
 	terrainMu              sync.Mutex

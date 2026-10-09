@@ -232,6 +232,15 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		if s.server != nil && s.server.Config.ChatFakeMessagePreventing {
 			message = collapseChatSpaces(message)
 		}
+		// Reference: WorldSession::HandleMessagechatOpcode (ChatHandler.cpp:279)
+		// — hyperlink validation runs on the final message text for every
+		// non-addon chat type (no GM exemption in C++); an invalid link
+		// drops the message and may kick the sender per
+		// ChatStrictLinkChecking.Kick.
+		if !s.validateHyperlinksAndMaybeKick(ctx, message) {
+			s.debug("chat rejected", "account", s.accountName, "reason", "invalid hyperlink")
+			return true
+		}
 	}
 	languageSkillID, languageKnown := languageSkill(language)
 	s.debug("chat language checked", "account", s.accountName, "language", language, "language_skill", languageSkillID, "language_known", languageKnown, "loaded_skill_count", len(s.player.Skills))
