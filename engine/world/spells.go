@@ -11554,17 +11554,15 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			crit = s.rollSpellCrit(target.GUID, schoolMask)
 		}
 		if crit {
-			mult := 1.5
 			if s.server != nil && s.server.Data != nil {
 				if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
-					mult = s.getSpellCritMultiplier(sp)
+					damage = s.spellCriticalDamageBonus(ctx, sp, damage, targetGUID)
 				} else {
-					mult = s.getSpellCritMultiplier(wotlk.Spell{ID: spellID, SchoolMask: uint32(schoolMask)})
+					damage = s.spellCriticalDamageBonus(ctx, wotlk.Spell{ID: spellID, SchoolMask: uint32(schoolMask)}, damage, targetGUID)
 				}
 			} else {
-				mult = s.getSpellCritMultiplier(wotlk.Spell{ID: spellID, SchoolMask: uint32(schoolMask)})
+				damage = s.spellCriticalDamageBonus(ctx, wotlk.Spell{ID: spellID, SchoolMask: uint32(schoolMask)}, damage, targetGUID)
 			}
-			damage = uint32(math.Round(float64(damage) * mult))
 			hitInfo = 0x02 // SPELL_HIT_TYPE_CRIT
 		}
 
@@ -13555,8 +13553,7 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 	// Roll healing critical strike (TrinityCore: 150% healing on crit, modified by metagem)
 	isCrit := s.rollSpellCrit(0, 2)
 	if isCrit {
-		mult := s.getSpellCritMultiplier(wotlk.Spell{ID: spellID, SchoolMask: 2})
-		heal = uint32(math.Round(float64(heal) * mult))
+		heal = s.spellCriticalHealingBonus(ctx, heal, targetGUID)
 	}
 
 	effectiveHeal := heal
@@ -18372,11 +18369,11 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			takenCritBonus += scriptBonus
 			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
 				crit = true
-				mult := 1.5
 				if tickKnown {
-					mult = tickCaster.getSpellCritMultiplier(tickSpell)
+					dmg = tickCaster.spellCriticalDamageBonus(context.Background(), tickSpell, dmg, aura.TargetGUID)
+				} else {
+					dmg += dmg / 2
 				}
-				dmg = uint32(math.Round(float64(dmg) * mult))
 			}
 		}
 		// Armor mitigation (SpellAuraEffects.cpp:5177-5182) — physical
@@ -18526,13 +18523,11 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			takenCritBonus += scriptBonus
 			if forceCrit || rand.Float64() < healCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
 				healCrit = true
-				mult := 1.5
 				if healKnown {
-					mult = healCaster.getSpellCritMultiplier(healSpell)
+					heal = healCaster.spellCriticalHealingBonus(context.Background(), heal, aura.TargetGUID)
 				} else {
-					mult = healCaster.getSpellCritMultiplier(wotlk.Spell{ID: aura.SpellID, SchoolMask: aura.SchoolMask})
+					heal += heal / 2
 				}
-				heal = uint32(math.Round(float64(heal) * mult))
 			}
 		}
 		curHP := ts.player.Health
@@ -18644,11 +18639,11 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			takenCritBonus += scriptBonus
 			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
 				crit = true
-				mult := 1.5
 				if tickKnown {
-					mult = tickCaster.getSpellCritMultiplier(tickSpell)
+					dmg = tickCaster.spellCriticalDamageBonus(context.Background(), tickSpell, dmg, aura.TargetGUID)
+				} else {
+					dmg += dmg / 2
 				}
-				dmg = uint32(math.Round(float64(dmg) * mult))
 			}
 		}
 		if !fixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
@@ -19271,11 +19266,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			takenCritBonus += scriptBonus
 			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
 				crit = true
-				mult := 1.5
 				if tickKnown {
-					mult = tickCaster.getSpellCritMultiplier(tickSpell)
+					dmg = tickCaster.spellCriticalDamageBonus(ctx, tickSpell, dmg, aura.TargetGUID)
+				} else {
+					dmg += dmg / 2
 				}
-				dmg = uint32(math.Round(float64(dmg) * mult))
 			}
 		}
 		// Armor mitigation (SpellAuraEffects.cpp:5177-5182); skipped for
@@ -19414,15 +19409,9 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				victimStateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
 				victimStateMask&(1<<(auraStateFaerieFire-1)) != 0)
 			takenCritBonus += scriptBonus
-			var critSpell wotlk.Spell
-			if tickKnown {
-				critSpell = tickSpell
-			} else {
-				critSpell = wotlk.Spell{ID: aura.SpellID, SchoolMask: aura.SchoolMask}
-			}
 			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
 				healCrit = true
-				heal = uint32(math.Round(float64(heal) * tickCaster.getSpellCritMultiplier(critSpell)))
+				heal = tickCaster.spellCriticalHealingBonus(ctx, heal, aura.TargetGUID)
 			}
 		}
 		curHP := target.Health
@@ -19571,11 +19560,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			takenCritBonus += scriptBonus
 			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
 				crit = true
-				mult := 1.5
 				if tickKnown {
-					mult = tickCaster.getSpellCritMultiplier(tickSpell)
+					dmg = tickCaster.spellCriticalDamageBonus(ctx, tickSpell, dmg, aura.TargetGUID)
+				} else {
+					dmg += dmg / 2
 				}
-				dmg = uint32(math.Round(float64(dmg) * mult))
 			}
 		}
 		if !fixedDamage && aura.SchoolMask&1 != 0 && target.Armor > 0 {

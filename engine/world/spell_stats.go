@@ -523,55 +523,202 @@ func (s *session) tickScriptedTakenCritBonus(ctx context.Context, targetGUID uin
 	return bonus, false
 }
 
-// getSpellCritMultiplier calculates the critical strike damage/healing multiplier for a spell,
-// factoring in the base 150% multiplier, talents/auras modifying critical bonus (AuraType 182),
-// and metagem modifiers (+3% crit damage).
-// Mirrors TrinityCore Unit::SpellCriticalDamageBonus (Unit.cpp:1650-1700).
-func (s *session) getSpellCritMultiplier(spell wotlk.Spell) float64 {
-	baseBonusPct := 50.0 // 1.5x base multiplier (1.0 + 50/100)
-	extraBonusPct := 0.0
-	metaBonusPct := 0.0
+// Crit-bonus aura types (SpellAuraDefines.h:50,243,249).
+const (
+	spellAuraModCriticalHealingAmount uint32 = 50  // SPELL_AURA_MOD_CRITICAL_HEALING_AMOUNT
+	spellAuraModCritDamageBonus       uint32 = 163 // SPELL_AURA_MOD_CRIT_DAMAGE_BONUS
+	spellAuraModCritPercentVersus     uint32 = 169 // SPELL_AURA_MOD_CRIT_PERCENT_VERSUS
+)
 
+// critDamageTalentRanks lists every rank of the passive crit-damage talents.
+// The bonus amounts come from the DBC (Go holds no passive aura instances),
+// misc-matched against the crit spell's school like any other 163 aura.
+var critDamageTalentRanks = map[uint32]bool{
+	17873: true, 17875: true, 17876: true, 17877: true, 17959: true, // Ruin ranks 1-5
+	15047: true, 15062: true, 15061: true, 15059: true, 15058: true, // Ice Shards ranks 1-5
+	16089: true,              // Elemental Fury
+	35578: true, 35581: true, // Spell Power ranks 1-2
+}
+
+// critDamageMetaGemSpells are the +3% critical damage meta-gem bonus spells
+// (Chaotic Skyflare Diamond / Relentless Earthsiege Diamond and kin).
+var critDamageMetaGemSpells = map[uint32]bool{26297: true, 44795: true, 55341: true, 28557: true}
+
+// critDamageAuraMultiplier mirrors the GetTotalAuraMultiplierByMiscMask
+// (SPELL_AURA_MOD_CRIT_DAMAGE_BONUS, schoolMask) leg of
+// Unit::SpellCriticalDamageBonus (Unit.cpp:7428): the product of
+// (1 + amount/100) over the caster's 163 auras whose misc mask intersects the
+// spell school, with the passive crit-damage talents folded in from DBC
+// amounts and each active +3% meta gem folded in multiplicatively.
+// Gaps (not stubs): the SameEffectSpellGroup highest-wins rule (Unit.cpp:4872)
+// has no Go fold — every matching 163 aura multiplies.
+func (s *session) critDamageAuraMultiplier(schoolMask uint32) float64 {
+	mult := 1.0
 	if s == nil || s.player == nil {
-		return 1.5
+		return mult
 	}
-
 	s.castMu.Lock()
 	for _, aura := range s.activeAuras {
 		if aura == nil || aura.Stopped {
 			continue
 		}
-		// SPELL_AURA_MOD_CRIT_DAMAGE_BONUS = 182
-		if aura.AuraType == 182 {
-			if aura.SchoolMask == 0 || (spell.SchoolMask != 0 && aura.SchoolMask&spell.SchoolMask != 0) {
-				extraBonusPct += float64(aura.Amount)
-			}
+		if critDamageMetaGemSpells[aura.SpellID] {
+			mult *= 1.03
+			continue
 		}
-		// Chaotic Skyflare Diamond / Relentless Earthsiege Diamond (3% increased critical damage)
-		if aura.SpellID == 26297 || aura.SpellID == 44795 || aura.SpellID == 55341 || aura.SpellID == 28557 {
-			metaBonusPct += 3.0
+		if aura.AuraType != spellAuraModCritDamageBonus {
+			continue
+		}
+		if schoolMask != 0 && uint32(aura.MiscValue)&schoolMask != 0 {
+			mult *= 1.0 + float64(int32(aura.Amount))/100.0
 		}
 	}
 	s.castMu.Unlock()
+	mult *= s.critDamageTalentMultiplier(schoolMask)
+	return mult
+}
 
-	// Check learned talent spells:
-	// Ruin (Warlock 17959): 100% extra bonus for Destruction (Fire 4 / Shadow 32) spells
-	// Elemental Fury (Shaman 16089): 100% extra bonus for Fire 4 / Nature 8 / Frost 16 spells
-	// Ice Shards (Mage 15058): up to 100% extra bonus for Frost 16 spells
-	// Spell Power (Mage 35581): 25%/50% extra bonus
-	if s.hasActiveSpell(17959) && (spell.SchoolMask&4 != 0 || spell.SchoolMask&32 != 0) { // Ruin
-		extraBonusPct += 50.0
-	} else if s.hasActiveSpell(16089) && (spell.SchoolMask&4 != 0 || spell.SchoolMask&8 != 0 || spell.SchoolMask&16 != 0) { // Elemental Fury
-		extraBonusPct += 50.0
-	} else if s.hasActiveSpell(15058) && (spell.SchoolMask&16 != 0) { // Ice Shards Rank 3
-		extraBonusPct += 50.0
-	} else if s.hasActiveSpell(35581) { // Spell Power Rank 2
-		extraBonusPct += 25.0
+// critDamageTalentMultiplier folds the passive crit-damage talents into the
+// 163 product: each learned rank contributes (1 + DBC amount/100) when its
+// misc mask intersects the spell school, mirroring what C++ reads had the
+// passive aura been applied (Unit.cpp:7428).
+func (s *session) critDamageTalentMultiplier(schoolMask uint32) float64 {
+	mult := 1.0
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return mult
 	}
+	for _, learned := range s.player.Spells {
+		if !learned.Active || learned.Disabled || !critDamageTalentRanks[learned.ID] {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(learned.ID)
+		if err != nil || !found {
+			continue
+		}
+		for i := range spell.Effects {
+			eff := &spell.Effects[i]
+			if eff.Aura != spellAuraModCritDamageBonus {
+				continue
+			}
+			if schoolMask != 0 && uint32(eff.MiscValue)&schoolMask != 0 {
+				mult *= 1.0 + float64(eff.CalcValue())/100.0
+			}
+		}
+	}
+	return mult
+}
 
-	multiplier := 1.0 + (baseBonusPct+extraBonusPct)/100.0
-	if metaBonusPct > 0 {
-		multiplier *= (1.0 + metaBonusPct/100.0)
+type versusAuraAmount struct {
+	misc   int32
+	amount int32
+}
+
+// casterVersusAuras collects the caster's live 169
+// (MOD_CRIT_PERCENT_VERSUS) auras; the victim-mask match happens in the
+// callers so the mask is only resolved when such an aura exists.
+func (s *session) casterVersusAuras() []versusAuraAmount {
+	if s == nil || s.player == nil {
+		return nil
 	}
-	return multiplier
+	var auras []versusAuraAmount
+	s.castMu.Lock()
+	for _, aura := range s.activeAuras {
+		if aura == nil || aura.Stopped || aura.AuraType != spellAuraModCritPercentVersus {
+			continue
+		}
+		auras = append(auras, versusAuraAmount{misc: aura.MiscValue, amount: int32(aura.Amount)})
+	}
+	s.castMu.Unlock()
+	return auras
+}
+
+// spellCriticalDamageBonus mirrors Unit::SpellCriticalDamageBonus
+// (Unit.cpp:7410-7449): base 50% bonus on the default DmgClass (melee/ranged
+// DmgClass spells take 100% — wotlk.Spell has no DmgClass field, so the
+// default leg always applies), the 163 aura product by school misc mask, the
+// additive 169 versus arm by victim creature-type mask, then
+// SPELLMOD_CRIT_DAMAGE_BONUS on the bonus when it is non-negative but below
+// the base damage (Unit.cpp:7438-7442; the C++ uint32 cast means a negative
+// bonus skips the mod).
+func (s *session) spellCriticalDamageBonus(ctx context.Context, spell wotlk.Spell, damage uint32, targetGUID uint64) uint32 {
+	if s == nil || s.player == nil {
+		return damage + damage/2
+	}
+	critBonus := int64(damage) + int64(damage)/2
+	auraMult := s.critDamageAuraMultiplier(spell.SchoolMask)
+	critMod := (auraMult - 1.0) * 100.0
+	if versus := s.casterVersusAuras(); len(versus) > 0 {
+		mask, _ := s.targetCreatureTypeMask(ctx, targetGUID)
+		for _, a := range versus {
+			if mask != 0 && uint32(a.misc)&mask != 0 {
+				critMod += float64(a.amount)
+			}
+		}
+	}
+	if critBonus != 0 {
+		// AddPct(int32 base, float pct): base += int32(float32(base) * pct / 100).
+		critBonus += int64(float32(critBonus) * float32(critMod) / 100.0)
+	}
+	bonus := critBonus - int64(damage)
+	if bonus >= 0 && bonus < int64(damage) {
+		bonus = int64(s.applySpellMod(spell, spellModCritDamageBonus, int32(bonus)))
+	}
+	if total := int64(damage) + bonus; total > 0 {
+		return uint32(total)
+	}
+	return 0
+}
+
+// criticalHealingAmountMultiplier mirrors the GetTotalAuraMultiplier
+// (SPELL_AURA_MOD_CRITICAL_HEALING_AMOUNT) tail of
+// Unit::SpellCriticalHealingBonus (Unit.cpp:7477): every 50 aura multiplies,
+// with no misc-mask gate.
+func (s *session) criticalHealingAmountMultiplier() float64 {
+	mult := 1.0
+	if s == nil || s.player == nil {
+		return mult
+	}
+	s.castMu.Lock()
+	for _, aura := range s.activeAuras {
+		if aura == nil || aura.Stopped || aura.AuraType != spellAuraModCriticalHealingAmount {
+			continue
+		}
+		mult *= 1.0 + float64(int32(aura.Amount))/100.0
+	}
+	s.castMu.Unlock()
+	return mult
+}
+
+// spellCriticalHealingBonus mirrors Unit::SpellCriticalHealingBonus
+// (Unit.cpp:7453-7479): base 50% bonus (default DmgClass; no Go DmgClass
+// model), the 169 versus arm multiplicative on the BONUS half by victim
+// creature-type mask, then the 50 (MOD_CRITICAL_HEALING_AMOUNT) product over
+// the whole. The 163/talent/meta damage arms do NOT apply to heals.
+func (s *session) spellCriticalHealingBonus(ctx context.Context, heal uint32, targetGUID uint64) uint32 {
+	if s == nil || s.player == nil {
+		return heal + heal/2
+	}
+	critBonus := int64(heal) / 2
+	if versus := s.casterVersusAuras(); len(versus) > 0 && targetGUID != 0 {
+		mask, _ := s.targetCreatureTypeMask(ctx, targetGUID)
+		versusMult := 1.0
+		for _, a := range versus {
+			if mask != 0 && uint32(a.misc)&mask != 0 {
+				versusMult *= 1.0 + float64(a.amount)/100.0
+			}
+		}
+		if versusMult != 1.0 {
+			critBonus = int64(float64(critBonus) * versusMult)
+		}
+	}
+	damage := int64(heal)
+	if critBonus > 0 {
+		damage += critBonus
+	}
+	// int32(float(damage) * multiplier), truncation toward zero.
+	damage = int64(float32(damage) * float32(s.criticalHealingAmountMultiplier()))
+	if damage < 0 {
+		return 0
+	}
+	return uint32(damage)
 }
