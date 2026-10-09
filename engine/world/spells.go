@@ -314,6 +314,7 @@ const (
 	spellEffectReputation              = 103
 	spellEffectQuestComplete           = 16
 	spellEffectHealthLeech             = 9
+	spellEffectSchoolDamage            = 2 // SPELL_EFFECT_SCHOOL_DAMAGE (SharedDefines.h:813)
 	spellEffectPowerDrain              = 8
 	spellEffectCharge                  = 96  // SPELL_EFFECT_CHARGE (SharedDefines.h:907)
 	spellEffectSkinning                = 95  // SPELL_EFFECT_SKINNING (SharedDefines.h:906)
@@ -7174,10 +7175,57 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// the return trip's 1.5x TimeDelay and the arrival-time arms resolve
 	// against it).
 	reflectSourceGUID := uint64(0)
+	// doReflect runs the shared WorldObject::SpellHitResult reflect
+	// retarget (Object.cpp:2641-2648, Spell.cpp:2174-2188): the spell
+	// returns to the caster while the reflector stays the TargetInfo
+	// target for the return trip's travel time. The ProcReflectDelayed
+	// arm fires only for player reflectors — creature taken-side procs
+	// have no Go event-list model, so a creature reflector's proc is
+	// skipped (findSessionByGUID finds no session).
+	doReflect := func() {
+		isReflected = true
+		reflectSourceGUID = targetGUID
+		// ProcReflectDelayed (Spell.cpp:2181): at outbound-missile
+		// arrival the reflector's taken-side auras proc with
+		// PROC_HIT_REFLECT. C++ schedules it on the target's event list
+		// with delay TimeDelay (0 for instant spells); Go arms the same
+		// timer here and resolves the reflector's session at fire time.
+		reflectorGUID := targetGUID
+		procCasterGUID := s.playerGUID
+		procTriggered := s.triggeredNoProcEvents > 0
+		procSpell := spell
+		procTravelMs := s.spellTargetTimeDelayMs(ctx, spell, reflectSourceGUID)
+		time.AfterFunc(time.Duration(procTravelMs)*time.Millisecond, func() {
+			if s.server == nil {
+				return
+			}
+			if rsess := s.server.findSessionByGUID(reflectorGUID); rsess != nil {
+				rsess.procSpellReflectTakenAuraTriggers(context.Background(), procCasterGUID, procSpell, procTriggered)
+			}
+		})
+		// Spell::SendSpellGo (Spell.cpp:4504-4506): ReflectStatus is the
+		// caster's own SpellHitResult (Spell.cpp:2178), which is always
+		// SPELL_MISS_NONE — WorldObject::SpellHitResult returns NONE when
+		// caster == victim before any other arm (the immune-self edge
+		// case has no Go model).
+		missStatus = []protocol.SpellMissStatus{{
+			TargetGUID:    targetGUID,
+			Reason:        protocol.SpellMissReflect,
+			ReflectStatus: protocol.SpellMissNone,
+		}}
+		targetGUID = s.playerGUID
+		hitTargets = []uint64{s.playerGUID}
+	}
 	if !areaSpell && targetGUID != 0 && targetGUID != s.playerGUID && isHarmfulSpell(spell) {
 		var targetSess *session
 		if s.server != nil {
 			targetSess = s.server.findSessionByGUID(targetGUID)
+		}
+		targetLevel := uint8(1)
+		targetFaction := uint32(0)
+		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			targetLevel = tgt.Level
+			targetFaction = tgt.Faction
 		}
 		if targetSess != nil && targetSess.isImmuneToSpell(spell, s) {
 			// WorldObject::SpellHitResult (Object.cpp:2620-2648) checks
@@ -7195,113 +7243,93 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				targetSess.player.UnitFlags |= unitFlagInCombat
 				targetSess.lastCombatTime = time.Now()
 			}
+		} else if targetSess != nil && spellHasOnlyDamageEffects(spell) && targetSess.isImmuneToDamageSpell(spell, spell.SchoolMask) {
+			// WorldObject::SpellHitResult (Object.cpp:2624-2627): damage
+			// immunity reports SPELL_MISS_IMMUNE at hit resolution for
+			// spells with only damage effects — for other spells the GO
+			// packet must show a hit, so the immunity only zeroes the
+			// damage at the damage path.
+			hitTargets = nil
+			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
 		} else if targetSess != nil && spellReflectOffered(spell, s, targetGUID, targetSess) && targetSess.checkSpellReflection(spell) {
-			isReflected = true
-			reflectSourceGUID = targetGUID
-			// ProcReflectDelayed (Spell.cpp:2181): at outbound-missile
-			// arrival the reflector's taken-side auras proc with
-			// PROC_HIT_REFLECT. C++ schedules it on the target's event list
-			// with delay TimeDelay (0 for instant spells); Go arms the same
-			// timer here and resolves the reflector's session at fire time.
-			reflectorGUID := targetGUID
-			procCasterGUID := s.playerGUID
-			procTriggered := s.triggeredNoProcEvents > 0
-			procSpell := spell
-			procTravelMs := s.spellTargetTimeDelayMs(ctx, spell, reflectSourceGUID)
-			time.AfterFunc(time.Duration(procTravelMs)*time.Millisecond, func() {
-				if s.server == nil {
-					return
-				}
-				if rsess := s.server.findSessionByGUID(reflectorGUID); rsess != nil {
-					rsess.procSpellReflectTakenAuraTriggers(context.Background(), procCasterGUID, procSpell, procTriggered)
-				}
-			})
-			// Spell::SendSpellGo (Spell.cpp:4504-4506): ReflectStatus is the
-			// caster's own SpellHitResult (Spell.cpp:2178), which is always
-			// SPELL_MISS_NONE — WorldObject::SpellHitResult returns NONE when
-			// caster == victim before any other arm (the immune-self edge
-			// case has no Go model).
-			missStatus = []protocol.SpellMissStatus{{
-				TargetGUID:    targetGUID,
-				Reason:        protocol.SpellMissReflect,
-				ReflectStatus: protocol.SpellMissNone,
-			}}
-			targetGUID = s.playerGUID
-			hitTargets = []uint64{s.playerGUID}
-		} else {
+			doReflect()
+		} else if targetSess == nil && s.creatureTargetImmuneToSpell(ctx, targetGUID, spell, s, targetFaction) {
 			// Creature::IsImmunedToSpell (Creature.cpp:2315-2333) at hit
-			// resolution: creature targets had no immunity gate in Go —
-			// every isImmuneToSpell/isImmunedToSpellEffect call site was
-			// session-gated. Whole-spell immune creatures miss as
-			// SPELL_MISS_IMMUNE, ahead of the hit roll like the player arm.
+			// resolution: whole-spell immune creatures miss as
+			// SPELL_MISS_IMMUNE, ahead of the reflect arm like the player
+			// path (Object.cpp:2621 before :2641), so an immune creature
+			// never consumes its reflect aura.
 			// (No PreprocessTarget combat arm: Go's miss path doesn't aggro
 			// creatures on a missed harmful cast either.)
-			targetLevel := uint8(1)
-			targetFaction := uint32(0)
-			if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
-				targetLevel = tgt.Level
-				targetFaction = tgt.Faction
+			hitTargets = nil
+			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
+		} else if targetSess == nil && spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s.server, creatureAuraKeyForPlayer(*s.player, targetGUID), spell, spell.SchoolMask) {
+			// Object.cpp:2624-2627 for creature victims: damage immunity
+			// reports SPELL_MISS_IMMUNE at hit resolution for spells with
+			// only damage effects.
+			hitTargets = nil
+			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
+		} else if targetSess == nil && s.creatureReflectOffered(spell, targetFaction) && s.server.creatureCheckSpellReflection(creatureAuraKeyForPlayer(*s.player, targetGUID), spell) {
+			// Creature victims roll the same reflect arm over their
+			// activeCreatureAuras (Object.cpp:2641-2648 applies to any
+			// Unit), ahead of the hit roll.
+			doReflect()
+		} else {
+			isPlayerVictim := targetSess != nil
+			bonusHit := 0.0
+			if s.player != nil {
+				bonusHit = s.getSpellHitPct()
 			}
-			if targetSess == nil && s.creatureTargetImmuneToSpell(ctx, targetGUID, spell, s, targetFaction) {
-				hitTargets = nil
-				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
+			var missInfo uint8
+			if spell.DefenseType == spellDamageClassMelee || spell.DefenseType == spellDamageClassRanged {
+				// WorldObject::SpellHitResult (Object.cpp:2656-2660) routes
+				// DmgClass MELEE/RANGED spells through Unit::MeleeSpellHitResult
+				// (Unit.cpp:2478) instead of the magic hit table.
+				missInfo = s.meleeSpellHitResult(ctx, targetGUID, targetSess, spell, targetLevel, isPlayerVictim)
 			} else {
-				isPlayerVictim := targetSess != nil
-				bonusHit := 0.0
+				missInfo = magicSpellHitResult(s.player.Level, targetLevel, isPlayerVictim, bonusHit)
+			}
+			if missInfo != protocol.SpellMissNone {
+				hitTargets = nil
+				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: missInfo}}
+			} else if isBinarySpell(spell) {
+				var resistances [7]uint32
+				if targetSess != nil && targetSess.player != nil {
+					resistances = targetSess.player.Resistances
+				} else if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+					resistances = tgt.Resistances
+				}
+				pen := uint32(0)
 				if s.player != nil {
-					bonusHit = s.getSpellHitPct()
+					pen = s.player.SpellPenetration
 				}
-				var missInfo uint8
-				if spell.DefenseType == spellDamageClassMelee || spell.DefenseType == spellDamageClassRanged {
-					// WorldObject::SpellHitResult (Object.cpp:2656-2660) routes
-					// DmgClass MELEE/RANGED spells through Unit::MeleeSpellHitResult
-					// (Unit.cpp:2478) instead of the magic hit table.
-					missInfo = s.meleeSpellHitResult(ctx, targetGUID, targetSess, spell, targetLevel, isPlayerVictim)
-				} else {
-					missInfo = magicSpellHitResult(s.player.Level, targetLevel, isPlayerVictim, bonusHit)
-				}
-				if missInfo != protocol.SpellMissNone {
+				chaosBolt := spell.SpellFamilyName == spellFamilyWarlock && spell.SpellIconID == 3178
+				if checkBinarySpellResist(resistances, uint8(spell.SchoolMask), pen, s.player.Level, targetLevel, chaosBolt) {
 					hitTargets = nil
-					missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: missInfo}}
-				} else if isBinarySpell(spell) {
-					var resistances [7]uint32
-					if targetSess != nil && targetSess.player != nil {
-						resistances = targetSess.player.Resistances
-					} else if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
-						resistances = tgt.Resistances
-					}
-					pen := uint32(0)
-					if s.player != nil {
-						pen = s.player.SpellPenetration
-					}
-					chaosBolt := spell.SpellFamilyName == spellFamilyWarlock && spell.SpellIconID == 3178
-					if checkBinarySpellResist(resistances, uint8(spell.SchoolMask), pen, s.player.Level, targetLevel, chaosBolt) {
-						hitTargets = nil
-						missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissResist}}
-					}
+					missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissResist}}
 				}
-				// Spell::AddUnitTarget (Spell.cpp:2108-2112) strips per-effect-immune
-				// bits from the target's EffectMask; UpdateSpellCastDataTargets
-				// (Spell.cpp:4491-4492) reports a target whose mask hit zero as
-				// SPELL_MISS_IMMUNE2 even though the spell-level hit was NONE. The
-				// PreprocessTarget immune combat arm (Spell.cpp:2354-2357) covers
-				// IMMUNE2 too, so the target is put in combat like a spell-immune one.
-				if len(missStatus) == 0 && targetSess != nil && s.spellTargetFullyEffectImmune(spell, targetSess) {
-					hitTargets = nil
-					missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune2}}
-					if targetSess.player != nil {
-						targetSess.player.UnitFlags |= unitFlagInCombat
-						targetSess.lastCombatTime = time.Now()
-					}
+			}
+			// Spell::AddUnitTarget (Spell.cpp:2108-2112) strips per-effect-immune
+			// bits from the target's EffectMask; UpdateSpellCastDataTargets
+			// (Spell.cpp:4491-4492) reports a target whose mask hit zero as
+			// SPELL_MISS_IMMUNE2 even though the spell-level hit was NONE. The
+			// PreprocessTarget immune combat arm (Spell.cpp:2354-2357) covers
+			// IMMUNE2 too, so the target is put in combat like a spell-immune one.
+			if len(missStatus) == 0 && targetSess != nil && s.spellTargetFullyEffectImmune(spell, targetSess) {
+				hitTargets = nil
+				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune2}}
+				if targetSess.player != nil {
+					targetSess.player.UnitFlags |= unitFlagInCombat
+					targetSess.lastCombatTime = time.Now()
 				}
-				// Creature-target IMMUNE2: the AddUnitTarget strip
-				// (Spell.cpp:2108-2112) runs per effect through
-				// Creature::IsImmunedToSpellEffect; a zeroed mask reports
-				// SPELL_MISS_IMMUNE2 (Spell.cpp:4491-4492).
-				if len(missStatus) == 0 && targetSess == nil && s.creatureTargetFullyEffectImmune(ctx, targetGUID, spell, s, targetFaction) {
-					hitTargets = nil
-					missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune2}}
-				}
+			}
+			// Creature-target IMMUNE2: the AddUnitTarget strip
+			// (Spell.cpp:2108-2112) runs per effect through
+			// Creature::IsImmunedToSpellEffect; a zeroed mask reports
+			// SPELL_MISS_IMMUNE2 (Spell.cpp:4491-4492).
+			if len(missStatus) == 0 && targetSess == nil && s.creatureTargetFullyEffectImmune(ctx, targetGUID, spell, s, targetFaction) {
+				hitTargets = nil
+				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune2}}
 			}
 		}
 	} else if !areaSpell && !friendlyListSpell && targetGUID != 0 && targetGUID != s.playerGUID && !isHarmfulSpell(spell) {
@@ -7312,6 +7340,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		if targetSess != nil && targetSess.isImmuneToSpell(spell, s) {
 			hitTargets = nil
 			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
+		} else if targetSess != nil && spellReflectOffered(spell, s, targetGUID, targetSess) && targetSess.checkSpellReflection(spell) {
+			// C++ m_canReflect (Spell.cpp:622) does not depend on
+			// harmfulness, so the WorldObject::SpellHitResult reflect arm
+			// (Object.cpp:2641-2648) runs for non-harmful spells too —
+			// ahead of the IMMUNE2 overwrite (Spell.cpp:4491-4492), which
+			// reports IMMUNE2 for a fully-stripped target even when the
+			// roll would have reflected.
+			doReflect()
 		} else if targetSess != nil && s.spellTargetFullyEffectImmune(spell, targetSess) {
 			// Same IMMUNE2 arm as the harmful path above (Spell.cpp:2108-2112,
 			// 4491-4492): a non-harmful spell whose every effect is per-effect
@@ -7330,6 +7366,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if s.creatureTargetImmuneToSpell(ctx, targetGUID, spell, s, targetFaction) {
 				hitTargets = nil
 				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
+			} else if s.creatureReflectOffered(spell, targetFaction) && s.server.creatureCheckSpellReflection(creatureAuraKeyForPlayer(*s.player, targetGUID), spell) {
+				doReflect()
 			} else if s.creatureTargetFullyEffectImmune(ctx, targetGUID, spell, s, targetFaction) {
 				hitTargets = nil
 				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune2}}
@@ -14235,6 +14273,17 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 	// (spellReflectOffered), not a narrower local re-check.
 	if targetSess != nil && spellReflectOffered(spell, s, targetGUID, targetSess) && targetSess.checkSpellReflection(spell) {
 		return protocol.SpellMissReflect
+	}
+	// Creature jump targets roll the same reflect arm over their
+	// activeCreatureAuras (Object.cpp:2641-2648 applies to any Unit); the
+	// offer's positive-and-friendly carve-out resolves through the
+	// creature's faction (creatureReflectOffered).
+	if targetSess == nil && s.server != nil {
+		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok &&
+			s.creatureReflectOffered(spell, tgt.Faction) &&
+			s.server.creatureCheckSpellReflection(creatureAuraKeyForTarget(tgt), spell) {
+			return protocol.SpellMissReflect
+		}
 	}
 	targetLevel := uint8(1)
 	if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {

@@ -565,6 +565,100 @@ func (s *session) checkSpellReflection(spell wotlk.Spell) bool {
 	return true
 }
 
+// creatureReflectOffered is the creature-target form of spellReflectOffered:
+// the same Spell.cpp:622/2152 offer gate, with the positive-and-friendly
+// carve-out resolved through the creature's faction
+// (creatureFriendlyToCaster) since there is no target session.
+func (s *session) creatureReflectOffered(spell wotlk.Spell, targetFaction uint32) bool {
+	if !spellCanBeReflected(spell) {
+		return false
+	}
+	if spell.AttributesCu&spellAttr0CuNegativeMask == 0 && s.creatureFriendlyToCaster(s, targetFaction) {
+		return false
+	}
+	return true
+}
+
+// creatureCheckSpellReflection is the creature-target analog of
+// checkSpellReflection: WorldObject::SpellHitResult's reflect arm
+// (Object.cpp:2641-2648) runs on any Unit, so a creature victim carrying
+// SPELL_AURA_REFLECT_SPELLS (63) / SPELL_AURA_REFLECT_SPELLS_SCHOOL (64)
+// auras rolls the same summed chance. The activeCreatureAuras entries carry
+// the aura effect's own amount, matching the player-side flattened model.
+// On success the reflect aura is consumed. The player-side channeled
+// exclusion applies here too (documented Go-wide deviation: C++ offers
+// reflect for channeled spells as well). The 23920 presence-set fallback
+// is player-session state and has no creature analog.
+func (srv *Server) creatureCheckSpellReflection(key creatureAuraKey, spell wotlk.Spell) bool {
+	if srv == nil || key.GUID == 0 {
+		return false
+	}
+	if isChanneledSpell(spell) {
+		return false
+	}
+	if !spellCanBeReflected(spell) {
+		return false
+	}
+	srv.auraMu.Lock()
+	var chance int32
+	var reflectSpellID uint32
+	for _, aura := range srv.activeCreatureAuras[key] {
+		if aura == nil {
+			continue
+		}
+		switch aura.AuraType {
+		case spellAuraReflectSpells:
+			chance += int32(aura.Amount)
+			if reflectSpellID == 0 {
+				reflectSpellID = aura.SpellID
+			}
+		case spellAuraReflectSpellsSchool:
+			if aura.SchoolMask == 0 || (spell.SchoolMask != 0 && aura.SchoolMask&spell.SchoolMask != 0) {
+				chance += int32(aura.Amount)
+				if reflectSpellID == 0 {
+					reflectSpellID = aura.SpellID
+				}
+			}
+		}
+	}
+	srv.auraMu.Unlock()
+
+	// roll_chance_i(reflectchance): urand(0, 99) < chance.
+	if chance <= 0 || rand.Float64()*100 >= float64(chance) {
+		return false
+	}
+
+	if reflectSpellID != 0 {
+		srv.removeCreatureAura(key, reflectSpellID)
+	}
+	return true
+}
+
+// spellHasOnlyDamageEffects mirrors SpellInfo::HasOnlyDamageEffects
+// (SpellInfo.cpp:906-928): every present effect is a damage effect
+// (weapon/normalized/percent/school/environmental damage or health leech).
+// WorldObject::SpellHitResult (Object.cpp:2624-2627) consults damage
+// immunity at hit resolution only for such spells; for other spells the
+// GO packet must show a hit and the immunity zeroes the damage instead
+// (the isImmuneToDamageSpell arm at the damage path).
+func spellHasOnlyDamageEffects(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		switch eff.Effect {
+		case spellEffectWeaponDamage, spellEffectWeaponDamageNoschool,
+			spellEffectNormalizedWeaponDmg, spellEffectWeaponPercentDamage,
+			spellEffectSchoolDamage, spellEffectEnvironmentalDMG,
+			spellEffectHealthLeech:
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // immuneAura is one active aura flattened for the immunity model.
 type immuneAura struct {
 	auraType uint32
