@@ -1289,9 +1289,25 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// Unit::DealDamage (Unit.cpp:906-913): random durability
 					// loss on HIT TAKEN — the victim is a player.
 					target.Sess.rollDurabilityLossOnHit(ctx, damage)
-					// Reference Unit::DealDamage -> Spell::Delayed / DelayedChannel
-					target.Sess.delayCurrentCast()
-					target.Sess.delayCurrentChannel()
+					// Unit::DealDamage (Unit.cpp:936-937): a damage spell carrying
+					// SPELL_ATTR7_NO_PUSHBACK_ON_DAMAGE or
+					// SPELL_ATTR3_TREAT_AS_PERIODIC never delays the victim's
+					// cast or channel — the !spellProto arm pushes back when the
+					// DBC row is unavailable, and the pushback leg requires
+					// non-zero damage. The victim != attacker arm is vacuous
+					// here (creature caster, player victim).
+					pushesBack := true
+					if s != nil && s.Data != nil {
+						if spellInfo, found, err := s.Data.Spell(spellID); err == nil && found {
+							pushesBack = spellInfo.AttributesEx3&spellAttr3TreatAsPeriodic == 0 &&
+								spellInfo.AttributesEx7&spellAttr7NoPushbackOnDamage == 0
+						}
+					}
+					if damage > 0 && pushesBack {
+						// Reference Unit::DealDamage -> Spell::Delayed / DelayedChannel
+						target.Sess.delayCurrentCast()
+						target.Sess.delayCurrentChannel()
+					}
 					target.Sess.procDamageAuras(true)
 				}
 				logPkt := buildSpellNonMeleeDamageLog(target.GUID, motion.GUID, spellID, damage, overkill, schoolMask)
