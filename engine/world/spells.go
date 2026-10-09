@@ -338,6 +338,9 @@ const (
 	spellEffectDestroyAllTotems     = 110 // SPELL_EFFECT_DESTROY_ALL_TOTEMS (SharedDefines.h:921)
 	spellEffectModifyThreatPercent  = 125 // SPELL_EFFECT_MODIFY_THREAT_PERCENT (SharedDefines.h:936)
 	spellEffectRemoveAura           = 164 // SPELL_EFFECT_REMOVE_AURA (SharedDefines.h:975)
+	spellEffectAddHonor             = 45  // SPELL_EFFECT_ADD_HONOR (SharedDefines.h:856)
+	spellEffectTradeSkill           = 47  // SPELL_EFFECT_TRADE_SKILL (SharedDefines.h:858)
+	spellEffectProficiency          = 60  // SPELL_EFFECT_PROFICIENCY (SharedDefines.h:871)
 
 	// Summon categories for the generic-summon CheckCast leg
 	// (Spell.cpp:5798-5817, SharedDefines.h:3296).
@@ -7462,6 +7465,22 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
 				// target on the target's threat manager.
 				s.handleEffectModifyThreatPercent(effCtx, eff, hitTargets)
+			case spellEffectAddHonor: // 45: SPELL_EFFECT_ADD_HONOR (EffectAddHonor, SpellEffects.cpp:2661)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per player
+				// unit target: Player::RewardHonor(nullptr, 1, honor) — the
+				// same tail as rewardHonorPoints. Item-based casts reward
+				// damage/10 with no scaling; damage<=50 scales via
+				// Trinity::Honor::hk_honor_at_level; larger damage is flat.
+				s.handleEffectAddHonor(effCtx, eff, hitTargets, castItemEntry != 0)
+			case spellEffectTradeSkill: // 47: SPELL_EFFECT_TRADE_SKILL (EffectTradeSkill, SpellEffects.cpp:2692)
+				// The C++ body is entirely commented out — explicit no-op so
+				// the effect stops hitting the unhandled-effect debug arm.
+			case spellEffectProficiency: // 60: SPELL_EFFECT_PROFICIENCY (EffectProficiency, SpellEffects.cpp:2172)
+				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the
+				// caster: the spell's EquippedItemSubClass mask is OR'd into
+				// the caster's weapon/armor proficiency and
+				// SMSG_SET_PROFICIENCY is sent when the mask gains a bit.
+				s.handleEffectProficiency(spell, eff)
 			case spellEffectDestroyAllTotems: // 110: SPELL_EFFECT_DESTROY_ALL_TOTEMS (EffectDestroyAllTotems, SpellEffects.cpp:4820)
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT (caster arm),
 				// not per unit target.
@@ -20222,4 +20241,77 @@ func (s *session) handleEffectHealthLeech(ctx context.Context, spellID uint32, h
 		}
 		s.executeSpellHeal(ctx, s.playerGUID, spellID, effectValueMultiplied(dealt, eff.Amplitude), effIndex)
 	}
+}
+
+// handleEffectAddHonor mirrors Spell::EffectAddHonor (SpellEffects.cpp:2661),
+// which runs at SPELL_EFFECT_HANDLE_HIT_TARGET per player unit target. The
+// honor goes through Player::RewardHonor(nullptr, 1, honor) (Player.cpp:6865),
+// the same tail as rewardHonorPoints. Item-based casts (m_CastItem) reward
+// damage/10 with no scaling (C++ expects /10 values for those); damage<=50
+// scales via Trinity::Honor::hk_honor_at_level (Formulas.h:41-44:
+// ceil(level*1.55*damage)); larger damage is taken as a flat honor amount.
+// Defensive delta: non-positive damage yields 0 honor (C++ would wrap the
+// uint32 conversion); no shipped spell carries such a value.
+func (s *session) handleEffectAddHonor(ctx context.Context, eff wotlk.SpellEffect, hitTargets []uint64, castItemBased bool) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	damage := eff.BasePoints + 1
+	for _, effectTarget := range hitTargets {
+		if effectTarget == 0 {
+			continue
+		}
+		targetSess := s.server.findSessionByGUID(effectTarget)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		var honor uint32
+		switch {
+		case castItemBased:
+			if damage > 0 {
+				honor = uint32(damage / 10)
+			}
+		case damage <= 50:
+			if damage > 0 {
+				honor = uint32(math.Ceil(float64(targetSess.player.Level) * 1.55 * float64(damage)))
+			}
+		default:
+			if damage > 0 {
+				honor = uint32(damage)
+			}
+		}
+		targetSess.rewardHonorPoints(ctx, honor)
+	}
+}
+
+// handleEffectProficiency mirrors Spell::EffectProficiency (SpellEffects.cpp:2172),
+// which runs once at SPELL_EFFECT_HANDLE_HIT on the caster. The spell's
+// EquippedItemSubClass mask is OR'd into the caster's weapon or armor
+// proficiency, and Player::SendProficiency (Player.cpp:21448) sends
+// SMSG_SET_PROFICIENCY (u8 item class, u32 mask) when the mask gains a bit.
+// The proficiency fields are runtime-only in C++ too (zeroed at login,
+// Player.cpp:288-289); no server-side equip leg reads them, so nothing is
+// persisted.
+func (s *session) handleEffectProficiency(spell wotlk.Spell, eff wotlk.SpellEffect) {
+	if s == nil || s.player == nil {
+		return
+	}
+	mask := spell.EquippedItemSubClass
+	if spell.EquippedItemClass == itemClassWeapon && s.player.WeaponProficiency&mask != mask {
+		s.player.WeaponProficiency |= mask
+		_ = s.write(uint16(protocol.OpcodeSMSG_SET_PROFICIENCY), buildSetProficiency(itemClassWeapon, s.player.WeaponProficiency), true)
+	}
+	if spell.EquippedItemClass == itemClassArmor && s.player.ArmorProficiency&mask != mask {
+		s.player.ArmorProficiency |= mask
+		_ = s.write(uint16(protocol.OpcodeSMSG_SET_PROFICIENCY), buildSetProficiency(itemClassArmor, s.player.ArmorProficiency), true)
+	}
+}
+
+// buildSetProficiency builds SMSG_SET_PROFICIENCY: u8 item class, u32
+// subclass mask (Player::SendProficiency, Player.cpp:21448-21453).
+func buildSetProficiency(itemClass uint8, mask uint32) []byte {
+	buf := protocol.NewBuffer(5)
+	buf.WriteU8(itemClass)
+	buf.WriteU32(mask)
+	return buf.Bytes()
 }

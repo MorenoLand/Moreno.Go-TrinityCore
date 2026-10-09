@@ -305,6 +305,8 @@ type playerState struct {
 	DodgePercentage                 float32
 	CanParry                        bool
 	CanBlock                        bool
+	WeaponProficiency               uint32
+	ArmorProficiency                uint32
 	ParryPercentage                 float32
 	Expertise                       uint32
 	OffhandExpertise                uint32
