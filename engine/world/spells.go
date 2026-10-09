@@ -7095,6 +7095,48 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case 66: // SPELL_EFFECT_CREATE_MANA_GEM (EffectRechargeManaGem, SpellEffects.cpp:5665)
 				s.handleEffectRechargeManaGem(effCtx, spell)
+			case spellEffectLeap: // 29: SPELL_EFFECT_LEAP (EffectLeap, SpellEffects.cpp:4334)
+				for _, effectTarget := range hitTargets {
+					if effectTarget == 0 {
+						continue
+					}
+					s.handleEffectLeap(effCtx, effectTarget, target)
+				}
+			case spellEffectJump, spellEffectJumpDest: // 41/42: EffectJump/EffectJumpDest (SpellEffects.cpp:1159-1197)
+				// Both arms are Unit::MoveJump spline motion with no other
+				// effect; Go has no MotionMaster spline model (documented
+				// no-bridge, boss_ai.go), so the dispatch deliberately runs
+				// nothing.
+			case spellEffectTeleportUnitsFaceCaster: // 43: SPELL_EFFECT_TELEPORT_UNITS_FACE_CASTER (EffectTeleUnitsFaceCaster, SpellEffects.cpp:2618)
+				for _, effectTarget := range hitTargets {
+					if effectTarget == 0 {
+						continue
+					}
+					s.handleEffectTeleUnitsFaceCaster(effCtx, effectTarget, eff)
+				}
+			case spellEffectStuck: // 84: SPELL_EFFECT_STUCK (EffectStuck, SpellEffects.cpp:3876)
+				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT (caster arm),
+				// not per unit target.
+				s.handleEffectStuck(effCtx)
+			case spellEffectLeapBack: // 138: SPELL_EFFECT_LEAP_BACK (EffectLeapBack, SpellEffects.cpp:4593)
+				// LAUNCH_TARGET arm: the player caster's fall info resets
+				// (Player::SetFallInformation(0, z)). Unit::JumpTo has no Go
+				// spline model (documented no-bridge, boss_ai.go).
+				if s.player != nil {
+					s.lastFallTime, s.lastFallZ = 0, s.player.Z
+				}
+			case spellEffectSummonRafFriend: // 152: SPELL_EFFECT_SUMMON_RAF_FRIEND (EffectSummonRaFFriend, SpellEffects.cpp:5727)
+				for _, effectTarget := range hitTargets {
+					if effectTarget == 0 {
+						continue
+					}
+					s.handleEffectSummonRafFriend(effCtx, effectTarget, eff)
+				}
+			case spellEffectCreateTamedPet: // 153: SPELL_EFFECT_CREATE_TAMED_PET (EffectCreateTamedPet, SpellEffects.cpp:5362)
+				// CreateTamedPetFrom (new wild-creature-to-pet conversion +
+				// talent init + DB save) has no Go model — existing pets are
+				// only manipulated, never created from a creature entry.
+				// Documented no-bridge.
 			case 126: // SPELL_EFFECT_STEAL_BENEFICIAL_BUFF
 				s.handleEffectSpellsteal(effCtx, targetGUID, spell, eff)
 			case spellEffectInterruptCast: // 68: SPELL_EFFECT_INTERRUPT_CAST
@@ -18773,6 +18815,127 @@ func (s *session) handleEffectCharge(ctx context.Context, targetGUID uint64, spe
 	if !spellIsPositive(spell) && target.Health != 0 {
 		s.startAttackOn(targetGUID)
 	}
+}
+
+// handleEffectLeap mirrors Spell::EffectLeap (SpellEffects.cpp:4334-4346),
+// the SPELL_EFFECT_LEAP (29) HIT_TARGET arm: the leapt unit teleports to the
+// spell destination. Only player hit targets have a Go near-teleport model;
+// creature hit targets need a creature teleport (no model, documented).
+// The packet destination carries no orientation in Go
+// (protocol.SpellTargetLocation has X/Y/Z only), so the target keeps its
+// current orientation instead of destTarget->GetOrientation().
+func (s *session) handleEffectLeap(ctx context.Context, targetGUID uint64, target protocol.SpellTargetData) {
+	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 {
+		return
+	}
+	if target.Flags&protocol.SpellTargetFlagDestLocation == 0 {
+		return
+	}
+	targetSess := s.server.findSessionByGUID(targetGUID)
+	if targetSess == nil || targetSess.player == nil || targetSess.inFlight {
+		return
+	}
+	targetSess.nearTeleportMove(target.Destination.X, target.Destination.Y, target.Destination.Z, targetSess.player.Orientation)
+}
+
+// handleEffectTeleUnitsFaceCaster mirrors Spell::EffectTeleUnitsFaceCaster
+// (SpellEffects.cpp:2618-2632), the SPELL_EFFECT_TELEPORT_UNITS_FACE_CASTER
+// (43) HIT_TARGET arm: the target teleports to a close point at the effect
+// radius from the caster, facing away from the caster (C++ passes
+// -m_caster->GetOrientation()). Unit::GetClosePoint's size/combat-reach leg
+// feeds the collision adjustment only; Go has no collision model, so the
+// point lands at the raw radius along the caster-to-target angle.
+func (s *session) handleEffectTeleUnitsFaceCaster(ctx context.Context, targetGUID uint64, eff wotlk.SpellEffect) {
+	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 {
+		return
+	}
+	targetSess := s.server.findSessionByGUID(targetGUID)
+	if targetSess == nil || targetSess.player == nil || targetSess.inFlight {
+		return
+	}
+	dis := float32(0)
+	if s.server.Data != nil {
+		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok {
+			dis = value
+		}
+	}
+	angle := math.Atan2(float64(targetSess.player.Y-s.player.Y), float64(targetSess.player.X-s.player.X))
+	targetSess.nearTeleportMove(
+		s.player.X+dis*float32(math.Cos(angle)),
+		s.player.Y+dis*float32(math.Sin(angle)),
+		targetSess.player.Z,
+		-s.player.Orientation,
+	)
+}
+
+// handleEffectStuck mirrors Spell::EffectStuck (SpellEffects.cpp:3876-3915),
+// the SPELL_EFFECT_STUCK (84) HANDLE_HIT arm. CONFIG_CAST_UNSTUCK has no Go
+// world-config model; the effect runs unconditionally, matching the C++
+// default (CastUnstuck = 1). Dead: BuildPlayerRepop + RepopAtGraveyard under
+// the ghost and SPELL_AURA_PREVENT_RESURRECTION gates. Alive with a
+// hearthstone (6948) off cooldown (8690): triggered cast of 8690, the C++
+// TRIGGERED_FULL_MASK & ~TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD route via
+// castSpellDirect. Otherwise Unit::MovePositionToFirstCollision's 5yd nudge
+// lands as a plain offset — the first-collision adjustment has no Go
+// collision model (documented).
+func (s *session) handleEffectStuck(ctx context.Context) {
+	if s == nil || s.player == nil || s.server == nil || s.inFlight {
+		return
+	}
+	if s.player.Health == 0 {
+		if s.hasAuraType(spellAuraPreventResurrection) {
+			return
+		}
+		if s.player.PlayerFlags&playerFlagGhost == 0 {
+			s.buildPlayerRepop(ctx, false)
+		}
+		s.repopAtGraveyard(ctx)
+		return
+	}
+	nowUnix := time.Now().Unix()
+	hasHearthstone := false
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var itemGUID int64
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT ci.item FROM character_inventory ci
+			JOIN item_instance ii ON ii.guid = ci.item
+			WHERE ci.guid = ? AND ii.itemEntry = ? LIMIT 1`, s.playerGUID, 6948).Scan(&itemGUID); err == nil && itemGUID != 0 {
+			onCooldown := false
+			for _, cd := range s.player.Cooldowns {
+				if cd.Spell == 8690 && cd.End > nowUnix {
+					onCooldown = true
+					break
+				}
+			}
+			hasHearthstone = !onCooldown
+		}
+	}
+	if hasHearthstone {
+		s.castSpellDirect(ctx, 8690, s.playerGUID)
+		return
+	}
+	angle := rand.Float64() * 2 * math.Pi
+	s.nearTeleportMove(
+		s.player.X+5*float32(math.Cos(angle)),
+		s.player.Y+5*float32(math.Sin(angle)),
+		s.player.Z,
+		s.player.Orientation,
+	)
+}
+
+// handleEffectSummonRafFriend mirrors Spell::EffectSummonRaFFriend
+// (SpellEffects.cpp:5727-5734), the SPELL_EFFECT_SUMMON_RAF_FRIEND (152)
+// HIT_TARGET arm: caster and target must be players, then the effect's
+// trigger spell is cast on the target (C++ CastSpell(..., true) rides
+// castSpellDirect). The caster on this path is always the session player;
+// creature hit targets resolve to no session and are skipped.
+func (s *session) handleEffectSummonRafFriend(ctx context.Context, targetGUID uint64, eff wotlk.SpellEffect) {
+	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 || eff.TriggerSpell == 0 {
+		return
+	}
+	if s.server.findSessionByGUID(targetGUID) == nil {
+		return
+	}
+	s.castSpellDirect(ctx, eff.TriggerSpell, targetGUID)
 }
 
 // handleEffectRechargeManaGem mirrors Spell::EffectRechargeManaGem
