@@ -1436,6 +1436,13 @@ func (s *session) deleteCorpseDataForResetBinds(ctx context.Context, charGUID ui
 // reference health and power restoration applies (half of maximum health and
 // mana, zero rage, half energy).
 func (s *session) resurrectPlayer(ctx context.Context, restorePercent float32) {
+	s.resurrectPlayerWithBones(ctx, restorePercent, false)
+}
+
+// resurrectPlayerWithBones mirrors Player::ResurrectPlayer (Player.cpp:4682);
+// toBones converts the corpse to bones (Player::SpawnCorpseBones, the
+// EffectSelfResurrect arm) instead of despawning it.
+func (s *session) resurrectPlayerWithBones(ctx context.Context, restorePercent float32, toBones bool) {
 	if s.player == nil {
 		return
 	}
@@ -1450,7 +1457,11 @@ func (s *session) resurrectPlayer(ctx context.Context, restorePercent float32) {
 	s.deathTimer = time.Time{}
 	s.removeAura(8326)
 	s.removeAura(20584)
-	s.despawnCorpseObject()
+	if toBones {
+		s.convertCorpseToBones(ctx, false)
+	} else {
+		s.despawnCorpseObject()
+	}
 	if restorePercent > 0 {
 		s.player.Health = uint32(float32(s.player.MaxHealth) * restorePercent)
 		s.player.Powers[0] = uint32(float32(s.player.MaxPowers[0]) * restorePercent) // mana
@@ -1715,6 +1726,35 @@ func (s *session) applySelfResurrectEffect(spell wotlk.Spell) {
 		s.sendResurrectRequest(s.playerGUID, "", false, spell.AttributesEx3&spellAttr3IgnoreResurrectionTimer == 0)
 		return
 	}
+}
+
+// handleEffectSelfResurrect mirrors Spell::EffectSelfResurrect (SpellEffects.cpp:4429-4462),
+// the SPELL_EFFECT_SELF_RESURRECT (94) HANDLE_HIT caster arm: a dead in-world
+// player caster resurrects at once with flat (damage<0) or percent health and
+// mana, rage zeroed, energy restored to full, and the corpse converted to
+// bones (Player::SpawnCorpseBones) rather than despawned.
+func (s *session) handleEffectSelfResurrect(ctx context.Context, eff wotlk.SpellEffect) {
+	if s == nil || s.player == nil || !s.isDeadOrGhost() {
+		return
+	}
+	damage := eff.BasePoints + 1
+	var health, mana uint32
+	if damage < 0 {
+		health = uint32(-damage)
+		mana = uint32(eff.MiscValue)
+	} else {
+		health = uint32(float32(s.player.MaxHealth) * float32(damage) / 100)
+		if s.player.MaxPowers[0] > 0 {
+			mana = uint32(float32(s.player.MaxPowers[0]) * float32(damage) / 100)
+		}
+	}
+	s.resurrectPlayerWithBones(ctx, 0, true)
+	s.player.Health = health
+	s.player.Powers[0] = mana
+	s.player.Powers[1] = 0
+	s.player.Powers[3] = s.player.MaxPowers[3]
+	s.persistResurrectionState(ctx)
+	s.sendPlayerUpdate()
 }
 
 // creatureIsSpiritService resolves the npcflag of a spawned creature and

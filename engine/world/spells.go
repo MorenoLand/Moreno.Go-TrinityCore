@@ -309,6 +309,11 @@ const (
 	spellEffectDisenchant           = 99  // SPELL_EFFECT_DISENCHANT (SharedDefines.h:910)
 	spellEffectProspecting          = 127 // SPELL_EFFECT_PROSPECTING (SharedDefines.h:938)
 	spellEffectMilling              = 158 // SPELL_EFFECT_MILLING (SharedDefines.h:969)
+	spellEffectForceCast            = 140 // SPELL_EFFECT_FORCE_CAST (SharedDefines.h:951)
+	spellEffectForceCastWithValue   = 141 // SPELL_EFFECT_FORCE_CAST_WITH_VALUE (SharedDefines.h:952)
+	spellEffectForceCast2           = 160 // SPELL_EFFECT_FORCE_CAST_2 (SharedDefines.h:971)
+	spellEffectChargeDest           = 149 // SPELL_EFFECT_CHARGE_DEST (SharedDefines.h:960)
+	spellEffectSelfResurrect        = 94  // SPELL_EFFECT_SELF_RESURRECT (SharedDefines.h:905)
 
 	// Summon categories for the generic-summon CheckCast leg
 	// (Spell.cpp:5798-5817, SharedDefines.h:3296).
@@ -7220,6 +7225,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						}
 					}
 				}
+			case spellEffectForceCast, spellEffectForceCastWithValue, spellEffectForceCast2: // 140/141/160: SPELL_EFFECT_FORCE_CAST* (EffectForceCast, SpellEffects.cpp:1048)
+				s.handleEffectForceCast(effCtx, spellID, eff, hitTargets)
+			case spellEffectSelfResurrect: // 94: SPELL_EFFECT_SELF_RESURRECT (EffectSelfResurrect, SpellEffects.cpp:4429)
+				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT (caster arm),
+				// not per unit target.
+				s.handleEffectSelfResurrect(effCtx, eff)
+			case spellEffectChargeDest: // 149: SPELL_EFFECT_CHARGE_DEST (EffectChargeDest, SpellEffects.cpp:4528)
+				// C++ runs this at SPELL_EFFECT_HANDLE_LAUNCH on the caster.
+				s.handleEffectChargeDest(effCtx, target)
 			default:
 				s.debug("unhandled spell effect", "spell", spellID, "effect", eff.Effect, "index", effectIndex)
 			}
@@ -18866,6 +18880,67 @@ func (s *session) handleEffectTeleUnitsFaceCaster(ctx context.Context, targetGUI
 		targetSess.player.Z,
 		-s.player.Orientation,
 	)
+}
+
+// handleEffectForceCast mirrors Spell::EffectForceCast (SpellEffects.cpp:1048-1107),
+// the SPELL_EFFECT_FORCE_CAST (140) / FORCE_CAST_WITH_VALUE (141) / FORCE_CAST_2
+// (160) HIT_TARGET arm: each hit target is forced to cast the effect's
+// TriggerSpell at the original caster, triggered (castSpellDirect is
+// Unit::CastSpell triggered). Only player hit targets have a Go cast model;
+// creature targets are documented no-bridge (no creature cast path).
+func (s *session) handleEffectForceCast(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, hitTargets []uint64) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	triggered := eff.TriggerSpell
+	if triggered == 0 {
+		return // C++ logs a warning and returns (SpellEffects.cpp:1057-1061)
+	}
+	damage := eff.BasePoints + 1
+	for _, targetGUID := range hitTargets {
+		if targetGUID == 0 {
+			continue
+		}
+		targetSess := s.server.findSessionByGUID(targetGUID)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		if eff.Effect == spellEffectForceCast && damage != 0 {
+			switch spellID {
+			case 52588, 48598: // Skeletal Gryphon Escape / Ride Flamebringer Cue
+				targetSess.removeAura(uint32(damage))
+				continue
+			case 52463, 52349: // Hide In Mine Car / Overtake
+				targetSess.castSpellDirectWithBasePoint(ctx, triggered, targetGUID, uint32(damage))
+				continue
+			}
+		}
+		if triggered == 72298 { // Malleable Goo Summon
+			targetSess.castSpellDirect(ctx, triggered, targetGUID)
+			continue
+		}
+		if eff.Effect == spellEffectForceCastWithValue {
+			targetSess.castSpellDirectWithBasePoint(ctx, triggered, s.playerGUID, uint32(damage))
+			continue
+		}
+		targetSess.castSpellDirect(ctx, triggered, s.playerGUID)
+	}
+}
+
+// handleEffectChargeDest mirrors Spell::EffectChargeDest (SpellEffects.cpp:4528-4546),
+// the SPELL_EFFECT_CHARGE_DEST (149) LAUNCH arm: the caster charges to the spell
+// destination. Go has no MotionMaster/MoveCharge spline model and no LOS model
+// for the GetFirstCollisionPosition arm (both documented no-bridge), so the
+// move lands as a server-initiated near teleport to the destination, the same
+// treatment as the EffectCharge bridge.
+func (s *session) handleEffectChargeDest(ctx context.Context, target protocol.SpellTargetData) {
+	if s == nil || s.player == nil {
+		return
+	}
+	if target.Flags&protocol.SpellTargetFlagDestLocation == 0 {
+		return
+	}
+	s.nearTeleportMove(target.Destination.X, target.Destination.Y, target.Destination.Z, s.player.Orientation)
 }
 
 // handleEffectStuck mirrors Spell::EffectStuck (SpellEffects.cpp:3876-3915),
