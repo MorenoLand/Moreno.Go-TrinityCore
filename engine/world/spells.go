@@ -8416,7 +8416,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// order, same as the immediate path below. The
 				// ABILITY_IGNORE_AURASTATE override (Spell.cpp:5286) is
 				// bridged here as well via casterIgnoresAuraState.
-				if spellNeedsComboPoints(spell) && castItemGUID == 0 && !s.casterIgnoresAuraState(spell) {
+				// Spell::TargetInfo::DoTargetSpellHit (Spell.cpp:2605-2607):
+				// no take when the explicit unit target missed/dodged — the
+				// didHit latch from the miss filter above.
+				if didHit && spellNeedsComboPoints(spell) && castItemGUID == 0 && !s.casterIgnoresAuraState(spell) {
 					s.clearSessionComboPoints()
 				}
 				if comboGainTarget != 0 && comboGain > 0 {
@@ -8518,16 +8521,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// m_CastItem arm of the prepare-time reset); the triggered-cast arm
 	// of that reset is structural here — finishSpellCast serves only the
 	// client cast path, triggered casts go through
-	// castSpellDirectWithOverrides. The dodge/miss arm (Spell.cpp:2606:
-	// no take on dodge and miss) is structural too: applyEffects returns
-	// early for missed spells. The RETAIN_COMBO_POINTS aura removal
+	// castSpellDirectWithOverrides. The dodge/miss arm (Spell.cpp:2605-2607:
+	// no take when the explicit unit target dodges/misses) rides the didHit
+	// latch computed from the miss filter above — the single-target case is
+	// also covered by the empty-hitTargets early return, but a chain spell
+	// whose explicit target missed while jumps hit still reaches this take.
+	// The RETAIN_COMBO_POINTS aura removal
 	// (Spell.cpp:3747-3750) has no Go bridge — the Go aura model tracks
 	// no such aura type. The ABILITY_IGNORE_AURASTATE override
 	// (Spell.cpp:5286, m_needComboPoints=false) is bridged below via
 	// casterIgnoresAuraState — the same 262-effect/affect-mask predicate
 	// the CheckCast loop uses, re-evaluated at finish time (C++ latches
 	// m_needComboPoints at CheckCast; the aura set is the same one).
-	if spellNeedsComboPoints(spell) && castItemGUID == 0 && !s.casterIgnoresAuraState(spell) {
+	if didHit && spellNeedsComboPoints(spell) && castItemGUID == 0 && !s.casterIgnoresAuraState(spell) {
 		s.clearSessionComboPoints()
 	}
 	if comboGainTarget != 0 && comboGain > 0 {
@@ -9499,6 +9505,18 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 
 	// Trigger spell cast/hit procs (TrinityCore Unit::ProcDamageAndSpellFor);
 	// suppressed for triggered casts (TRIGGERED_DISALLOW_PROC_EVENTS parity).
+	// Spell::TargetInfo::DoDamageAndTriggers canEffectTrigger arm
+	// (Spell.cpp:2440-2442): a hit whose target sits inside its own proc
+	// evaluation cannot trigger further procs (Unit::CanProc, Unit.h:1609 —
+	// the m_procDeep elevation in Unit::TriggerAurasProcOnEvent,
+	// Unit.cpp:10424-10448). Creature targets have no proc plumbing and can
+	// never be elevated, so only a player session gates.
+	targetCantProc := false
+	if s.server != nil {
+		if ts := s.server.findSessionByGUID(target.GUID); ts != nil {
+			targetCantProc = ts.procDeep > 0
+		}
+	}
 	// Item combat spells fire on spell hits only for melee/ranged
 	// damage-class spells (Spell.cpp:2588-2596); magic-damage-class spells
 	// never qualify. They also require a landed, non-immune, non-fully-
@@ -9506,7 +9524,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// holds (Player.cpp:8109), and a miss (PROC_HIT_MISS), immunity
 	// (PROC_HIT_IMMUNE), or full resist (PROC_HIT_FULL_RESIST) never
 	// intersects the default hit mask.
-	if s.triggeredNoProcEvents == 0 && s.spellHitMayFireItemProcs(spellID) &&
+	if s.triggeredNoProcEvents == 0 && !targetCantProc && s.spellHitMayFireItemProcs(spellID) &&
 		spellHitCanTriggerItemProcs(isHit, immune, fullyResisted, absorbed) {
 		s.procSpellCastAndHitEffects(ctx, target, spellID)
 		s.procWeaponEnchantProcsFromSpellHit(ctx, target, !(damage >= target.Health && target.Health > 0))
@@ -9519,7 +9537,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// gates engage; the triggered-cast suppression is the gate's own job,
 	// not a call-site skip. A zero incoming damage takes the no-damage arm
 	// (PROC_SPELL_TYPE_NO_DMG_HEAL, Spell.cpp:2563-2579), not the damage arm.
-	if hadIncomingDamage {
+	if hadIncomingDamage && !targetCantProc {
 		s.procSpellHitAuraTriggers(ctx, targetGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit, absorbed, damage)
 		// Taken-side aura procs on the victim's own auras (TrinityCore
 		// Unit::TriggerAurasProcOnEvent, Unit.cpp:10413-10418): the done
@@ -9533,7 +9551,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				playerSess.procSpellHitTakenAuraTriggers(ctx, s.playerGUID, spellID, isHit, immune, fullyResisted, absorbed > 0 && damage == 0, crit, absorbed, damage, s.triggeredNoProcEvents > 0)
 			}
 		}
-	} else {
+	} else if !targetCantProc {
 		s.procSpellDamageNoDmgAuraTriggers(ctx, targetGUID, spellID, isHit, immune)
 		// Taken-side no-damage pass on the victim's session, after the
 		// done side, matching the ProcSkillsAndAuras ordering.
@@ -11279,7 +11297,12 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 	// A zero heal does not take the heal arm: C++'s no-damage arm
 	// (Spell.cpp:2563-2579) runs the trigger pass with
 	// PROC_SPELL_TYPE_NO_DMG_HEAL instead, on both sides.
-	if rawHeal > 0 {
+	// DoDamageAndTriggers canEffectTrigger arm (Spell.cpp:2440-2442): the
+	// whole trigger pass is skipped when the heal target sits inside its
+	// own proc evaluation (Unit::CanProc, Unit.h:1609 — the m_procDeep
+	// elevation in Unit::TriggerAurasProcOnEvent, Unit.cpp:10424-10448).
+	targetCantProc := targetSess != nil && targetSess.procDeep > 0
+	if rawHeal > 0 && !targetCantProc {
 		s.procSpellHealAuraTriggers(ctx, targetGUID, spellID, rawHeal, isCrit)
 
 		// Real aura procs on the taken side of a direct heal (TrinityCore
@@ -11291,7 +11314,7 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 		// ProcDamageAndSpellFor's done and taken passes iterate the same aura
 		// list. The trigger spell targets the healer.
 		targetSess.procSpellHealTakenAuraTriggers(ctx, s.playerGUID, spellID, rawHeal, isCrit)
-	} else {
+	} else if !targetCantProc {
 		// No-damage arm (Spell.cpp:2563-2579, 2581-2586): done side first,
 		// then the taken side on the target's session, matching the
 		// ProcSkillsAndAuras ordering.

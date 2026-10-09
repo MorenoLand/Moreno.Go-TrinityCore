@@ -643,6 +643,7 @@ const (
 	spellAttr2TriggeredCanTriggerProc  uint32 = 0x40000000
 	spellAttr3TriggeredCanTriggerProc2 uint32 = 0x00000200
 	spellAttr3CantTriggerProc          uint32 = 0x00010000
+	spellAttr3DisableProc              uint32 = 0x00080000 // SharedDefines.h:542 — no procs while this aura's proc trigger runs
 	spellAttr2AutoRepeatFlag           uint32 = 0x00000020 // SharedDefines.h:491
 )
 
@@ -1965,6 +1966,17 @@ func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uin
 	if s == nil || s.player == nil || len(s.activeAuras) == 0 {
 		return
 	}
+	// Unit::TriggerAurasProcOnEvent (Unit.cpp:10424-10428): when the
+	// triggering spell disallows proc events (Spell::IsProcDisabled —
+	// every Go triggered direct cast carries
+	// TRIGGERED_DISALLOW_PROC_EVENTS, SpellDefines.h:146), the evaluated
+	// unit cannot proc again for the whole evaluation (Unit::CanProc,
+	// Unit.h:1609) — the same-unit recursion guard Spell::DoDamageAndTriggers
+	// consults per hit target (Spell.cpp:2441).
+	if ev.triggered {
+		s.procDeep++
+		defer func() { s.procDeep-- }()
+	}
 	auras := make([]*activeAura, 0, len(s.activeAuras))
 	for _, aura := range s.activeAuras {
 		auras = append(auras, aura)
@@ -2032,6 +2044,14 @@ func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uin
 				s.removeAura(aura.SpellID)
 			}
 		}
+		// Unit::TriggerAurasProcOnEvent (Unit.cpp:10433-10440): an aura
+		// carrying SPELL_ATTR3_DISABLE_PROC elevates the no-proc guard
+		// around its own trigger — a spell it casts cannot proc the same
+		// unit's auras again (Unit::CanProc, Unit.h:1609).
+		disableProc := auraSpell.AttributesEx3&spellAttr3DisableProc != 0
+		if disableProc {
+			s.procDeep++
+		}
 		for _, i := range eligible {
 			eff := &auraSpell.Effects[i]
 			if eff.Aura == spellAuraProcTriggerDamage {
@@ -2058,6 +2078,9 @@ func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uin
 			} else {
 				s.castSpellDirect(ctx, eff.TriggerSpell, triggerTargetGUID)
 			}
+		}
+		if disableProc {
+			s.procDeep--
 		}
 	}
 }
