@@ -863,6 +863,7 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 			}
 		}
 	}
+
 	if maxTargets := spell.MaxTargets; maxTargets > 0 {
 		// Spell.cpp:1207,1293 — cap the area/cone target list to MaxAffectedTargets
 		// plus SPELL_AURA_MOD_MAX_AFFECTED_TARGETS aura modifiers, then
@@ -2193,7 +2194,11 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			if spellID == 75 { // Auto Shot (TC: Range 114, SPELL_RANGE_RANGED)
 				minRange := calcMeleeRange(pReach, tgt.CombatReach)
 				if dist < minRange {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 128), true) // SPELL_FAILED_TOO_CLOSE = 128
+					// Spell::CheckRange (Spell.cpp:6567-6569) fails min-range
+					// violations with SPELL_FAILED_OUT_OF_RANGE — the engine
+					// never emits SPELL_FAILED_TOO_CLOSE (the sole C++ emitter
+					// is the Death Grip script leg in spell_dk.cpp:2760).
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 97), true) // SPELL_FAILED_OUT_OF_RANGE = 97
 					return true
 				}
 				if dist > 35.0 {
@@ -2224,7 +2229,12 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 					return true
 				}
 				if minRange > 0 && dist < float64(minRange) {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 128), true) // SPELL_FAILED_TOO_CLOSE = 128
+					// Spell::CheckRange (Spell.cpp:6567-6569): min-range
+					// violations fail with SPELL_FAILED_OUT_OF_RANGE, not
+					// TOO_CLOSE — this C++ tree's engine never emits
+					// SPELL_FAILED_TOO_CLOSE (sole emitter is the Death Grip
+					// script leg, spell_dk.cpp:2760).
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 97), true) // SPELL_FAILED_OUT_OF_RANGE = 97
 					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "too close", "dist", dist, "min", minRange)
 					return true
 				}
@@ -2254,12 +2264,15 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				}
 			}
 
-			// 3. Caster facing target requirement:
-			// If spell has SPELL_FACING_FLAG_INFRONT (0x1) from Spell.dbc field 19 (or Auto Shot / Shoot Wand):
-			// Target must be within caster's 120° frontal cone (2*pi/3).
-			// Returns SPELL_FAILED_UNIT_NOT_INFRONT = 134 ("Target needs to be in front of you.").
+			// 3. Caster facing target requirement (Spell::CheckRange,
+			// Spell.cpp:6559-6560): with SPELL_FACING_FLAG_INFRONT (0x1) the
+			// target must be within the caster's 180-degree frontal
+			// hemisphere — C++ calls HasInArc(M_PI), which with the default
+			// border of 2.0 spans +/-pi/2 (Position.cpp:120-136).
+			// Returns SPELL_FAILED_UNIT_NOT_INFRONT = 134 ("Target needs to
+			// be in front of you.").
 			if (spell.FacingCasterFlags&SpellFacingFlagInfront != 0) || spellID == 75 || spellID == 5019 {
-				if !hasInArc(s.player.Orientation, s.player.X, s.player.Y, tgt.X, tgt.Y, 2.0*math.Pi/3.0) {
+				if !hasInArc(s.player.Orientation, s.player.X, s.player.Y, tgt.X, tgt.Y, math.Pi) {
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedUnitNotInFront), true)
 					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target not in front")
 					return true
@@ -2291,6 +2304,18 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				}
 			}
 		}
+	}
+
+	// Dest range arm (Spell::CheckRange, Spell.cpp:6571-6578): a destination
+	// target without a trajectory fails SPELL_FAILED_OUT_OF_RANGE when the
+	// dest point is outside the DBC min/max range. This is the strict
+	// CheckCast(true) recheck (Spell::cast, Spell.cpp:3100), so no tolerance
+	// applies. Implicit dest targets (filled by SetTargetMap) have no Go
+	// model at cast time — only the explicit wire dest is checked.
+	if failCode := s.validateSpellDestRange(spell, target, true); failCode != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failCode), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "dest out of range", "code", failCode)
+		return true
 	}
 
 	// Dest line-of-sight arm (Spell::CheckCast, Spell.cpp:5404-5413): spells
@@ -2659,10 +2684,60 @@ func (s *session) autoShotNonBlockingCast(spellID uint32) bool {
 	return found && cur.AttributesEx1&spellAttr2NotResetAutoActions != 0
 }
 
+// spellRangeBounds mirrors the friendly/hostile range-entry selection inside
+// Spell::GetMinMaxRange (Spell.cpp:6595-6612): harmful spells use the hostile
+// min/max, others the friendly pair. This is the DBC-only core; the combat
+// reach / moving rangeMod terms of GetMinMaxRange remain unbridged.
+func spellRangeBounds(spell wotlk.Spell, rangeEntry wotlk.SpellRangeEntry) (minRange, maxRange float64) {
+	maxRange = float64(rangeEntry.MaxFriendly)
+	minRange = float64(rangeEntry.MinFriendly)
+	if isHarmfulSpell(spell) {
+		maxRange = float64(rangeEntry.MaxHostile)
+		minRange = float64(rangeEntry.MinHostile)
+	}
+	return minRange, maxRange
+}
+
+// spellRangeTolerance mirrors the CheckRange non-strict slack
+// (Spell.cpp:6543-6546): 10% of max range, capped at MAX_SPELL_RANGE_TOLERANCE
+// (3.0, Spell.h:69), skipped for melee range entries and for strict checks.
+func spellRangeTolerance(rangeFlags uint32, maxRange float64, strict bool) float64 {
+	if strict || rangeFlags == 1 /* SPELL_RANGE_MELEE (Spell.h:112) */ {
+		return 0
+	}
+	tol := maxRange * 0.1
+	if tol > 3.0 { // MAX_SPELL_RANGE_TOLERANCE
+		tol = 3.0
+	}
+	return tol
+}
+
+// spellCastTimeMs reads the DBC cast time for a spell, 0 when the entry is
+// missing or instant (mirrors Spell::GetCastTime's m_casttime == 0 reads in
+// Spell::CheckRange, Spell.cpp:6531).
+func (s *session) spellCastTimeMs(spell wotlk.Spell) int32 {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	castMs, ok, err := s.server.Data.SpellCastTime(spell.CastingTimeIndex)
+	if err != nil || !ok {
+		return 0
+	}
+	return castMs
+}
+
 // validateSpellRange checks DBC range (plus the Auto Shot / Shoot special
 // cases) against current caster/target positions. Returns 0 on success or a
 // SPELL_FAILED_* code. C++ authority: Spell::CheckRange via Spell::CheckCast.
+// This is the strict=false completion recheck (Spell::_cast, Spell.cpp:3349),
+// so instant casts skip it entirely (Spell.cpp:6531-6533) and the 10%
+// tolerance applies (Spell.cpp:6543-6546).
 func (s *session) validateSpellRange(ctx context.Context, spellID uint32, spell wotlk.Spell, targetGUID uint64) uint8 {
+	// Spell::CheckRange (Spell.cpp:6531-6533): instant casts (m_casttime == 0)
+	// skip the range check entirely on the non-strict completion recheck.
+	if s.spellCastTimeMs(spell) == 0 {
+		return 0
+	}
 	tgt, ok := s.getCombatTarget(ctx, targetGUID)
 	if !ok {
 		return 0
@@ -2675,9 +2750,9 @@ func (s *session) validateSpellRange(ctx context.Context, spellID uint32, spell 
 	if spellID == 75 { // Auto Shot
 		if dist < calcMeleeRange(pReach, tgt.CombatReach) {
 			// Spell::CheckRange (Spell.cpp:6555-6556) returns
-			// SPELL_FAILED_OUT_OF_RANGE for min-range violations —
-			// SPELL_FAILED_TOO_CLOSE is defined but never emitted by
-			// this C++ tree, so the too-close code does not apply here.
+			// SPELL_FAILED_OUT_OF_RANGE for min-range violations — the
+			// engine never emits SPELL_FAILED_TOO_CLOSE (the sole C++
+			// emitter is the Death Grip script leg, spell_dk.cpp:2760).
 			return 97 // SPELL_FAILED_OUT_OF_RANGE
 		}
 		if dist > 35.0 {
@@ -2695,20 +2770,55 @@ func (s *session) validateSpellRange(ctx context.Context, spellID uint32, spell 
 	if !ok {
 		return 0
 	}
-	harmful := isHarmfulSpell(spell)
-	maxRange := rangeEntry.MaxFriendly
-	minRange := rangeEntry.MinFriendly
-	if harmful {
-		maxRange = rangeEntry.MaxHostile
-		minRange = rangeEntry.MinHostile
-	}
-	if maxRange > 0 && dist > float64(maxRange) {
+	minRange, maxRange := spellRangeBounds(spell, rangeEntry)
+	// Spell::CheckRange (Spell.cpp:6543-6546): the non-strict completion
+	// recheck allows 10% (capped at 3.0) beyond max range for non-melee
+	// range entries.
+	maxRange += spellRangeTolerance(rangeEntry.Flags, maxRange, false)
+	if maxRange > 0 && dist > maxRange {
 		return 97 // SPELL_FAILED_OUT_OF_RANGE
 	}
-	if minRange > 0 && dist < float64(minRange) {
+	if minRange > 0 && dist < minRange {
 		// Spell::CheckRange (Spell.cpp:6568-6569): min-range violations
-		// fail with SPELL_FAILED_OUT_OF_RANGE, not TOO_CLOSE — this C++
-		// tree never emits SPELL_FAILED_TOO_CLOSE anywhere in game code.
+		// fail with SPELL_FAILED_OUT_OF_RANGE, not TOO_CLOSE — the engine
+		// never emits SPELL_FAILED_TOO_CLOSE (the sole C++ emitter is the
+		// Death Grip script leg, spell_dk.cpp:2760).
+		return 97 // SPELL_FAILED_OUT_OF_RANGE
+	}
+	return 0
+}
+
+// validateSpellDestRange mirrors the destination-target leg of
+// Spell::CheckRange (Spell.cpp:6571-6578): a destination target without a
+// trajectory (HasTraj() is m_speed != 0, Spell.h:198) fails
+// SPELL_FAILED_OUT_OF_RANGE when the dest point is outside the DBC min/max
+// range. strict=false (the Spell::_cast completion recheck, Spell.cpp:3349)
+// adds the 10% tolerance (Spell.cpp:6543-6546) and skips instant casts
+// (Spell.cpp:6531-6533), exactly like the unit-target path. Implicit dest
+// targets filled by SetTargetMap have no Go model at cast time — only the
+// explicit wire dest is checked. Returns 0 on success or a SPELL_FAILED_*
+// code.
+func (s *session) validateSpellDestRange(spell wotlk.Spell, target protocol.SpellTargetData, strict bool) uint8 {
+	if target.Flags&protocol.SpellTargetFlagDestLocation == 0 || spell.Speed != 0 {
+		return 0
+	}
+	if !strict && s.spellCastTimeMs(spell) == 0 {
+		return 0
+	}
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	rangeEntry, ok, _ := s.server.Data.SpellRange(spell.RangeIndex)
+	if !ok {
+		return 0
+	}
+	minRange, maxRange := spellRangeBounds(spell, rangeEntry)
+	maxRange += spellRangeTolerance(rangeEntry.Flags, maxRange, strict)
+	dist := distance3D(s.player.X, s.player.Y, s.player.Z, target.Destination.X, target.Destination.Y, target.Destination.Z)
+	if maxRange > 0 && dist > maxRange {
+		return 97 // SPELL_FAILED_OUT_OF_RANGE
+	}
+	if minRange > 0 && dist < minRange {
 		return 97 // SPELL_FAILED_OUT_OF_RANGE
 	}
 	return 0
@@ -5822,6 +5932,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			}
 		}
+	}
+
+	// Spell::CheckRange dest leg (Spell.cpp:6571-6578) on the strict=false
+	// completion recheck (Spell::_cast, Spell.cpp:3349): the dest point is
+	// revalidated against DBC range with the 10% tolerance, instant casts
+	// skip it. Implicit dest targets have no Go model — only the explicit
+	// wire dest is checked.
+	if failCode := s.validateSpellDestRange(spell, target, false); failCode != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failCode), true)
+		s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+		s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "dest range", "code", failCode)
+		return
 	}
 
 	// Spell::CheckCast trade-slot gate (Spell.cpp:6167-6171): a spell cast
