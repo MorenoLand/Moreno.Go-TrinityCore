@@ -96,6 +96,7 @@ const (
 	spellAttr5NoReagentWhilePrep           uint32 = 0x00000002 // SPELL_ATTR5_NO_REAGENT_WHILE_PREP (SharedDefines.h:598) — ATTR5 is Go's AttributesEx5
 	spellAttr6IgnoreCasterAuras            uint32 = 0x00000004 // SPELL_ATTR6_IGNORE_CASTER_AURAS (SharedDefines.h:636) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6LimitPctDamageMods           uint32 = 0x20000000 // SPELL_ATTR6_LIMIT_PCT_DAMAGE_MODS (SharedDefines.h:663) — ATTR6 is Go's AttributesEx6
+	spellAttr6LimitPctHealingMods          uint32 = 0x08000000 // SPELL_ATTR6_LIMIT_PCT_HEALING_MODS (SharedDefines.h:661) — ATTR6 is Go's AttributesEx6
 	spellAttr1DispelAurasOnImmunity        uint32 = 0x00008000 // SPELL_ATTR1_DISPEL_AURAS_ON_IMMUNITY (SharedDefines.h:464) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr2UnaffectedByAuraSchoolImmune uint32 = 0x04000000 // SPELL_ATTR2_UNAFFECTED_BY_AURA_SCHOOL_IMMUNE (SharedDefines.h:512) — ATTR2 is Go's AttributesEx1
 
@@ -10121,6 +10122,8 @@ const (
 	auraModDamageDoneVersus          uint32 = 168 // SPELL_AURA_MOD_DAMAGE_DONE_VERSUS (Unit.cpp:6783)
 	auraModFlatSpellDamageVersus     uint32 = 180 // SPELL_AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS (Unit.cpp:6646-6647)
 	auraModDamageDoneVersusAurastate uint32 = 303 // SPELL_AURA_MOD_DAMAGE_DONE_VERSUS_AURASTATE (Unit.cpp:6786-6791)
+	auraModHealing                   uint32 = 115 // SPELL_AURA_MOD_HEALING — Amplify/Dampen Magic arm of heal DoneAdvertisedBenefit (Unit.cpp:7554)
+	auraModHealingDonePercent        uint32 = 136 // SPELL_AURA_MOD_HEALING_DONE_PERCENT (Unit.cpp:7656)
 )
 
 // spellBonusEntry mirrors SpellBonusEntry (SpellMgr.h:284): one spell_bonus_data
@@ -10562,6 +10565,209 @@ func (s *session) spellDamageBonusDone(ctx context.Context, spell wotlk.Spell, s
 	flat := s.spellDamageDoneFlat(ctx, spell, targetGUID, target, effIndex, isDot)
 	pct := s.spellDamagePctDone(ctx, spell, targetGUID, target)
 	tmp := float64(int32(damage)+flat) * pct
+	if tmp < 0 {
+		tmp = 0
+	}
+	out := int32(tmp)
+	op := uint8(spellModDamage)
+	if isDot {
+		op = spellModDot
+	}
+	out = s.applySpellMod(spell, op, out)
+	if out < 0 {
+		out = 0
+	}
+	return uint32(out)
+}
+
+// spellHealingDoneCoefficient mirrors the coeff selection in
+// Unit::SpellHealingBonusDone (Unit.cpp:7582-7600): the spell_bonus_data
+// direct_bonus/dot_bonus row wins over the DBC EffectBonusMultiplier; a negative
+// value falls back to the default healing (Cast Time / 3.5) x 1.88 coefficient
+// (Unit.cpp:7592); the result is scaled by the spellpower coefficient level
+// penalty (Unit.cpp:2386-2392) and the SPELLMOD_BONUS_MULTIPLIER spellmod
+// (Unit.cpp:7593-7598).
+func (s *session) spellHealingDoneCoefficient(spell wotlk.Spell, effIndex int, isDot bool) float64 {
+	coeff := s.spellBonusMultiplier(spell.ID, effIndex, true)
+	if s.server != nil {
+		if bonus, ok := s.server.spellBonusData(spell.ID); ok {
+			c := bonus.direct
+			if isDot {
+				c = bonus.dot
+			}
+			if c < 0 {
+				c = s.defaultSpellDamageCoefficient(spell) * 1.88
+			}
+			coeff = c
+		}
+	}
+	factor := 1.0
+	if spell.MaxLevel != 0 && s.player != nil && uint32(s.player.Level) >= spell.MaxLevel {
+		factor = math.Max(0, math.Min(1, (22.0+float64(spell.MaxLevel)-float64(s.player.Level))/20.0))
+	}
+	coeff = s.applySpellModFloat(spell, spellModDamageMultiplier, coeff*100) / 100
+	return coeff * factor
+}
+
+// spellHealingDoneZeroed mirrors the leech/funnel arm of
+// Unit::SpellHealingBonusDone (Unit.cpp:7601-7610): spells carrying a
+// PERIODIC_LEECH / PERIODIC_HEALTH_FUNNEL aura effect or a HEALTH_LEECH effect
+// get no flat done bonus — DoneTotal is 0. The percent leg still applies
+// (Unit.cpp:7612).
+func spellHealingDoneZeroed(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.Aura == spellAuraPeriodicLeech || eff.Aura == spellAuraPeriodicHealthFunnel {
+			return true
+		}
+		if eff.Effect == spellEffectHealthLeech {
+			return true
+		}
+	}
+	return false
+}
+
+// spellHealingDoneFlat mirrors the DoneTotal accumulation in
+// Unit::SpellHealingBonusDone (Unit.cpp:7505-7600): the spell-power advertised
+// benefit — the caster's spellpower plus the victim's SPELL_AURA_MOD_HEALING
+// (Amplify/Dampen Magic) per-school auras (Unit.cpp:7554) — scaled by the healing
+// done coefficient, plus the flat OVERRIDE_CLASS_SCRIPTS scripted arms
+// (Unit.cpp:7510-7519). C++ int32(DoneAdvertisedBenefit * coeff * factorMod)
+// truncates (Unit.cpp:7603); stack scales the level-penalty factor
+// (Unit.cpp:7595). The Impurity AP-coefficient arm (Unit.cpp:7523-7548) and the
+// guardian bonus-damage arm (Unit.cpp:7558) need the caster's total attack
+// power, which Go does not model — documented gap.
+func (s *session) spellHealingDoneFlat(spell wotlk.Spell, target *session, effIndex int, isDot bool, stack uint32) int32 {
+	if spellHealingDoneZeroed(spell) {
+		return 0
+	}
+	advertised := int32(0)
+	if s.player != nil {
+		advertised = int32(s.player.SpellPower)
+	}
+	// Victim's SPELL_AURA_MOD_HEALING auras (Unit.cpp:7554): Amplify Magic
+	// raises / Dampen Magic lowers the caster's advertised benefit, per school.
+	if target != nil && spell.SchoolMask != 0 {
+		for _, amt := range target.auraTypeModifiersByMiscMask(auraModHealing, spell.SchoolMask) {
+			advertised += amt
+		}
+	}
+	flat := int32(0)
+	if advertised != 0 {
+		if stack == 0 {
+			stack = 1
+		}
+		flat += int32(float64(advertised) * s.spellHealingDoneCoefficient(spell, effIndex, isDot) * float64(stack))
+	}
+	// Done scripted mod (Unit.cpp:7510-7519): flat OVERRIDE_CLASS_SCRIPTS arms —
+	// Increased Rejuvenation Healing (4415), Hateful Totem of the Third Wind /
+	// Increased Lesser Healing Wave (4953), LK Arena Savage Totem of the Third
+	// Wind (3736).
+	for _, ae := range s.overrideClassScriptAuras(spell) {
+		switch ae.misc {
+		case 4415, 4953, 3736:
+			flat += ae.amount
+		}
+	}
+	return flat
+}
+
+// spellHealingPctDone mirrors Unit::SpellHealingPctDone (Unit.cpp:7634-7711): the
+// DoneTotalMod percent multiplier over SPELL_AURA_MOD_HEALING_DONE_PERCENT auras
+// and the OVERRIDE_CLASS_SCRIPTS scripted arms. Spells with
+// SPELL_ATTR3_NO_DONE_BONUS, SPELL_ATTR6_LIMIT_PCT_HEALING_MODS, or of the potion
+// family skip it entirely (Unit.cpp:7642-7651).
+func (s *session) spellHealingPctDone(spell wotlk.Spell, target *session) float64 {
+	if spell.AttributesEx3&spellAttr3NoDoneBonus != 0 ||
+		spell.AttributesEx6&spellAttr6LimitPctHealingMods != 0 ||
+		spell.SpellFamilyName == spellFamilyPotion {
+		return 1.0
+	}
+	mod := 1.0
+	addPct := func(amt int32) { mod *= 1 + float64(amt)/100 } // AddPct fold (Unit.cpp:7668)
+	// SPELL_AURA_MOD_HEALING_DONE_PERCENT (Unit.cpp:7656): C++ reads the baked
+	// total multiplier; Go has no baked field, so the live aura fold (the
+	// field's only source) serves instead. C++ applies no misc mask
+	// (GetTotalAuraMultiplier), so neither does this fold.
+	if s.server != nil && s.server.Data != nil {
+		for _, aura := range s.loadedAuras() {
+			if aura == nil || aura.Stopped {
+				continue
+			}
+			auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+			if err != nil || !found {
+				continue
+			}
+			for index, eff := range auraSpell.Effects {
+				if index >= len(aura.Amounts) || !spellEffectIsAuraEffect(eff) ||
+					eff.Aura != auraModHealingDonePercent || aura.EffectMask&(1<<uint(index)) == 0 {
+					continue
+				}
+				amt := aura.Amounts[index]
+				if amt == 0 {
+					amt = eff.BasePoints + 1
+				}
+				mod *= 1 + float64(amt)/100
+			}
+		}
+	}
+	// done scripted mod (Unit.cpp:7660-7705)
+	for _, ae := range s.overrideClassScriptAuras(spell) {
+		switch ae.misc {
+		case 21, 6935, 6918: // Test of Faith — victim below 50% health
+			if target != nil && target.player != nil && target.player.MaxHealth > 0 &&
+				target.player.Health*2 < target.player.MaxHealth {
+				addPct(ae.amount)
+			}
+		case 7798: // Glyph of Regrowth — victim carries Rejuvenation/Regrowth
+			if target != nil && target.hasAuraOfType(spellAuraPeriodicHeal, spellFamilyDruid, 0x40, 0, 0) {
+				addPct(ae.amount)
+			}
+		case 8477: // Nourish Heal Boost — step percent per own HoT stack on the victim
+			step := ae.amount
+			boost := int32(0)
+			if target != nil && s.server != nil && s.server.Data != nil {
+				for _, aura := range target.loadedAuras() {
+					if aura == nil || aura.Stopped || aura.CasterGUID != s.playerGUID {
+						continue
+					}
+					aspell, found, err := s.server.Data.Spell(aura.SpellID)
+					if err != nil || !found || aspell.SpellFamilyName != spellFamilyDruid {
+						continue
+					}
+					if aspell.SpellFamilyFlags[1]&0x10 == 0 && aspell.SpellFamilyFlags[0]&0x50 == 0 {
+						continue
+					}
+					st := int32(aura.StackCount)
+					if st == 0 {
+						st = 1
+					}
+					boost += step * st
+				}
+			}
+			addPct(boost)
+		case 7871: // Glyph of Lesser Healing Wave — victim carries Earth Shield
+			if target != nil && target.hasAuraOfType(spellAuraDummy, spellFamilyShaman, 0, 0x400, 0) {
+				addPct(ae.amount)
+			}
+		}
+	}
+	return mod
+}
+
+// spellHealingBonusDone mirrors Unit::SpellHealingBonusDone (Unit.cpp:7487-7631):
+// heal = (healamount + DoneTotal) * DoneTotalMod, truncated to uint32, then the
+// SPELLMOD_DAMAGE / SPELLMOD_DOT spellmod applies to the total (Unit.cpp:7612-7617).
+// Potion-family spells return the raw amount (Unit.cpp:7495-7496). The totem
+// redirect (Unit.cpp:7489-7492) has no Go model — Go has no totem units casting
+// heals. The DmgClass NONE early-out (Unit.cpp:7582-7586) has no Go model —
+// wotlk.Spell carries no DmgClass (same documented gap as the damage leg).
+func (s *session) spellHealingBonusDone(spell wotlk.Spell, heal uint32, target *session, effIndex int, isDot bool, stack uint32) uint32 {
+	if spell.SpellFamilyName == spellFamilyPotion {
+		return heal
+	}
+	flat := s.spellHealingDoneFlat(spell, target, effIndex, isDot, stack)
+	pct := s.spellHealingPctDone(spell, target)
+	tmp := float64(int32(heal)+flat) * pct
 	if tmp < 0 {
 		tmp = 0
 	}
@@ -13066,9 +13272,25 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 		}
 	}
 
-	// Apply Spell Power bonus to healing (TrinityCore Unit::SpellHealingBonusDone)
-	if doneBonus && s.player != nil && s.player.SpellPower > 0 {
-		heal += uint32(math.Round(float64(s.player.SpellPower) * s.spellBonusMultiplier(spellID, effIndex, true)))
+	// Unit::SpellHealingBonusDone (Unit.cpp:7487-7631) + SpellHealingPctDone
+	// (Unit.cpp:7634-7711): the flat spell-power leg (truncated int32, never
+	// rounded) times the percent leg, then the SPELLMOD_DAMAGE spellmod on the
+	// total. Direct heals are HEAL type (isDot=false, stack=1). The spell row
+	// lookup below also feeds the potion-family gate; an unresolvable spell
+	// keeps the legacy spellpower-only fallback.
+	var healSpell wotlk.Spell
+	healKnown := false
+	if s.server != nil && s.server.Data != nil {
+		if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			healSpell, healKnown = sp, true
+		}
+	}
+	if doneBonus && s.player != nil {
+		if healKnown {
+			heal = s.spellHealingBonusDone(healSpell, heal, targetSess, effIndex, false, 1)
+		} else if s.player.SpellPower > 0 {
+			heal += uint32(math.Round(float64(s.player.SpellPower) * s.spellBonusMultiplier(spellID, effIndex, true)))
+		}
 	}
 
 	// Unit::SpellHealingBonusTaken (Unit.cpp:7714-7759) runs after
@@ -15901,6 +16123,7 @@ const (
 	spellAuraPeriodicTriggerSpell          = 23  // SPELL_AURA_PERIODIC_TRIGGER_SPELL (SpellAuraDefines.h:103)
 	spellAuraPeriodicEnergize              = 24  // SPELL_AURA_PERIODIC_ENERGIZE (SpellAuraDefines.h:104)
 	spellAuraPeriodicLeech                 = 53  // SPELL_AURA_PERIODIC_LEECH (SpellAuraDefines.h:133)
+	spellAuraPeriodicHealthFunnel          = 62  // SPELL_AURA_PERIODIC_HEALTH_FUNNEL (SpellAuraDefines.h:137)
 	spellAuraPeriodicManaLeech             = 64  // SPELL_AURA_PERIODIC_MANA_LEECH (SpellAuraDefines.h:144)
 	spellAuraPowerBurn                     = 162 // SPELL_AURA_POWER_BURN (SpellAuraDefines.h:242)
 	spellAuraPeriodicDummy                 = 226 // SPELL_AURA_PERIODIC_DUMMY (SpellAuraDefines.h:306)
@@ -17735,9 +17958,28 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// SpellAuraEffects.cpp:5371-5372 — OBS_MOD_HEALTH ticks heal a
 		// percentage of the target's max health, not the stored amount
 		// (Unit::CountPctFromMaxHealth = CalculatePct truncation), before
-		// the taken leg below.
+		// the done leg below.
 		if aura.AuraType == 20 {
 			heal = uint32(float32(ts.player.MaxHealth) * float32(heal) / 100.0)
+		}
+		// SpellAuraEffects.cpp:5384 — the per-tick SpellHealingBonusDone (DOT,
+		// stack-scaled: Unit.cpp:7595 factorMod = penalty * stack) runs on the
+		// tick amount before the taken leg. Gated off persistent-area auras:
+		// their done leg is baked into the stored amount at spawn (see
+		// spawnPersistentAreaAura), so a per-tick pass would double-count.
+		if healCaster != nil && healKnown && !aura.PersistentAreaAura {
+			healEffIndex := 0
+			for i, eff := range healSpell.Effects {
+				if eff.Aura == aura.AuraType {
+					healEffIndex = i
+					break
+				}
+			}
+			stack := uint32(aura.StackCount)
+			if stack == 0 {
+				stack = 1
+			}
+			heal = healCaster.spellHealingBonusDone(healSpell, heal, ts, healEffIndex, true, stack)
 		}
 		// Unit::SpellHealingBonusTaken with DOT type (Unit.cpp:7714-7759,
 		// called at SpellAuraEffects.cpp:5386): MOD_HEALING_PCT, Nourish,
@@ -18259,9 +18501,10 @@ func (ts *session) applyPeriodicTickDamageToPlayer(dmg, targetHealth uint32, aur
 
 // applyPeriodicLeechHeal runs the caster-side heal of a PERIODIC_LEECH tick
 // (SpellAuraEffects.cpp:5304-5316): heal = dealt damage x CalcValueMultiplier,
-// then SpellHealingBonusDone (DOT, per-tick caster spellpower scaled by the
-// aura stack count) and SpellHealingBonusTaken (DOT) on the caster. Leech
-// heals never crit.
+// then SpellHealingBonusDone (DOT) and SpellHealingBonusTaken (DOT) on the
+// caster. Unit::SpellHealingBonusDone zeroes the flat done leg for leech spells
+// (Unit.cpp:7601-7610), so only the percent leg and the SPELLMOD_DOT spellmod
+// apply here — never a spellpower term. Leech heals never crit.
 func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, dealtDamage uint32, leechEffIndex int) {
 	// C++: the caster heal runs only when the caster is in world and alive.
 	if casterSess == nil || casterSess.player == nil || casterSess.player.Health == 0 || dealtDamage == 0 {
@@ -18272,10 +18515,20 @@ func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, 
 	// ValueMultiplier DBC field has no Go model and
 	// SPELLMOD_VALUE_MULTIPLIER is unbridged; leech spells carry 1.0, so the
 	// heal equals the dealt damage.
-	if casterSess.player.SpellPower > 0 {
-		// Unit::SpellHealingBonusDone scales the spellpower coefficient by
-		// the aura stack count (Unit.cpp factorMod = penalty * stack);
-		// StackCount is the C++ GetStackAmount() dose count.
+	var leechSpell wotlk.Spell
+	leechKnown := false
+	if s.server != nil && s.server.Data != nil {
+		if sp, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+			leechSpell, leechKnown = sp, true
+		}
+	}
+	if leechKnown {
+		stack := uint32(aura.StackCount)
+		if stack == 0 {
+			stack = 1
+		}
+		heal = casterSess.spellHealingBonusDone(leechSpell, heal, casterSess, leechEffIndex, true, stack)
+	} else if casterSess.player.SpellPower > 0 {
 		stack := uint32(aura.StackCount)
 		if stack == 0 {
 			stack = 1
