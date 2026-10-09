@@ -447,8 +447,10 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	canDodge := true
 	var critReductionBP int32
 	victimDodgeBP := int32(-1)
+	var vicSess *session
 	if isPlayerVictim && s.server != nil {
-		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil && vicSess.player != nil {
+		vicSess = s.server.findSessionByGUID(target.GUID)
+		if vicSess != nil && vicSess.player != nil {
 			canBlock = vicSess.player.CanBlock && vicSess.player.Block > 0
 			critChanceBP := int32(500)
 			vicSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenMelee, &critChanceBP)
@@ -462,13 +464,41 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	// Positional defense checks (TrinityCore Unit::RollMeleeOutcomeAgainst):
 	// A defender can only parry or block attacks from within their front 180° arc (M_PI).
 	// Player victims cannot dodge attacks from behind. (NPCs can dodge from behind).
+	// SPELL_AURA_IGNORE_HIT_DIRECTION (288) exempts the victim from the
+	// behind-arc kill (Unit.cpp:2213: canParryOrBlock carries the HasAuraType
+	// arm; player-victim dodge from behind rides canParryOrBlock).
 	attackerInFront := hasInArc(target.Orientation, target.X, target.Y, s.player.X, s.player.Y, math.Pi)
-	if !attackerInFront {
+	ignoreHitDirection := false
+	if isPlayerVictim && vicSess != nil {
+		ignoreHitDirection = vicSess.hasAuraType(spellAuraIgnoreHitDirection)
+	} else if !isPlayerVictim && s.server != nil && s.player != nil {
+		key := creatureAuraKeyForPlayer(*s.player, target.GUID)
+		s.server.auraMu.Lock()
+		for _, aura := range s.server.activeCreatureAuras[key] {
+			if aura != nil && !aura.Stopped && aura.AuraType == spellAuraIgnoreHitDirection {
+				ignoreHitDirection = true
+				break
+			}
+		}
+		s.server.auraMu.Unlock()
+	}
+	if !attackerInFront && !ignoreHitDirection {
 		canBlock = false
 		canParry = false
 		if isPlayerVictim {
 			canDodge = false
 		}
+	}
+
+	// A victim mid cast-bar cast cannot dodge/parry/block (Unit.cpp:2219-2224:
+	// victim->IsNonMeleeSpellCast(false); genericCastInProgress is the Go
+	// analog — channeled/autorepeat casts are skipped by construction there.
+	// The UNIT_STATE_CONTROLLED half has no Go unit-state model, stays
+	// unbridged; creature victims have no Go cast model, stays unbridged).
+	if isPlayerVictim && vicSess != nil && vicSess.genericCastInProgress() {
+		canDodge = false
+		canParry = false
+		canBlock = false
 	}
 
 	if s.player.Level > 0 {
@@ -2001,10 +2031,18 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 		critChance = 0
 	}
 
-	// 7. Crushing blow: mob attacking player 4+ levels below mob
+	// 7. Crushing blow: a mob 4+ levels above the victim (Unit.cpp:2314-2331):
+	// tmp = attackerMaxSkillValueForLevel - min(victimDefenseSkill,
+	// victimMaxSkillValueForLevel) clamped to >= 20, then tmp*200 - 1500. Go
+	// models no weapon/defense skill bonuses, so both skills are 5/level and
+	// the min arm is vacuous by construction.
 	crushingChance := int32(0)
 	if !isPlayerAttacker && isPlayerVictim && attackerLevel >= victimLevel+4 {
-		crushingChance = (int32(attackerLevel)-int32(victimLevel)-4)*200 + 1500
+		skillDiff := int32(attackerLevel-victimLevel) * 5
+		if skillDiff < 20 {
+			skillDiff = 20
+		}
+		crushingChance = skillDiff*200 - 1500
 	}
 
 	roll := rand.IntN(10000)

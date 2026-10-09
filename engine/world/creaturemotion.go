@@ -1401,11 +1401,21 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			canDodge := true
 			if isPlayerVictim {
 				// Player defender cannot block, parry, or dodge if creature is attacking from behind
+				// (Unit::RollMeleeOutcomeAgainst, Unit.cpp:2213-2217). SPELL_AURA_IGNORE_HIT_DIRECTION
+				// (288) exempts the victim from the behind-arc kill.
 				attackerInFront := hasInArc(target.Sess.player.Orientation, target.Sess.player.X, target.Sess.player.Y, motion.X, motion.Y, math.Pi)
-				if !attackerInFront {
+				if !attackerInFront && !target.Sess.hasAuraType(spellAuraIgnoreHitDirection) {
 					canBlock = false
 					canParry = false
 					canDodge = false
+				}
+				// A victim mid cast-bar cast cannot avoid (Unit.cpp:2219-2224:
+				// victim->IsNonMeleeSpellCast(false); UNIT_STATE_CONTROLLED has
+				// no Go unit-state model, stays unbridged).
+				if target.Sess.genericCastInProgress() {
+					canDodge = false
+					canParry = false
+					canBlock = false
 				}
 			}
 			victimDodgeBP := int32(-1)

@@ -13171,8 +13171,15 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 		canDodge = false
 	}
 
-	// A victim that is casting or CC'd cannot avoid (Unit.cpp:2510-2515):
-	// Go has no victim cast/CC state on this path — unbridged.
+	// A victim that is casting or CC'd cannot avoid (Unit.cpp:2510-2515).
+	// The cast-bar half bridges via genericCastInProgress (the
+	// IsNonMeleeSpellCast(false) analog); the UNIT_STATE_CONTROLLED half and
+	// creature-victim cast state have no Go model and stay unbridged.
+	if isPlayerVictim && targetSess != nil && targetSess.genericCastInProgress() {
+		canDodge = false
+		canParry = false
+		canBlock = false
+	}
 
 	// Behind-arc legs (Unit.cpp:2529-2553): attackers outside the victim's
 	// front 180° arc cannot be parried or blocked, and player victims cannot
