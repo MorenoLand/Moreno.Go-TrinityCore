@@ -45,6 +45,13 @@ type ThreatManager struct {
 	// map only covers victims with an existing entry — a new entry starts
 	// at 0 and picks the modifier up on the next aura apply/remove/change.
 	tempMods map[uint64]int32
+	// needClientUpdate mirrors ThreatManager::_needClientUpdate
+	// (set at ThreatManager.cpp:49/61/141/793, consumed at 522-525):
+	// any threat value change that does not switch the victim (AddThreat,
+	// ScaleThreat, taunt-state swap, new threat ref) marks the list dirty,
+	// and the next Update tick consumes it (SMSG_THREAT_UPDATE when the
+	// victim is unchanged, SMSG_HIGHEST_THREAT_UPDATE when it switched).
+	needClientUpdate bool
 }
 
 // motionCanHaveThreatList mirrors ThreatManager::CanHaveThreatList
@@ -179,6 +186,9 @@ func (tm *ThreatManager) ApplyTaunt(victim uint64, durationMs uint32) {
 	} else {
 		tm.tauntExpiry[victim] = time.Time{}
 	}
+	// The taunt-state swap marks the client list dirty
+	// (ThreatReference::UpdateTauntState, ThreatManager.cpp:141).
+	tm.needClientUpdate = true
 }
 
 // ClearTaunt drops one caster's taunt state, the remove arm of
@@ -190,6 +200,9 @@ func (tm *ThreatManager) ClearTaunt(victim uint64) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	delete(tm.tauntExpiry, victim)
+	// The taunt-state clear marks the client list dirty
+	// (ThreatReference::UpdateTauntState, ThreatManager.cpp:141).
+	tm.needClientUpdate = true
 }
 
 // applyCreatureTaunt bridges a MOD_TAUNT aura apply on a creature into its
@@ -259,19 +272,19 @@ const threatUpdateIntervalMs = 1000
 // _owner->IsWithinMeleeRange does per candidate; a nil predicate treats every
 // candidate as ranged (conservative: only the 130% gate can switch).
 // Returns switched=true when the current victim changed.
-func (tm *ThreatManager) Update(elapsedMs int64, inMelee func(uint64) bool) (switched bool, newVictim uint64) {
+func (tm *ThreatManager) Update(elapsedMs int64, inMelee func(uint64) bool) (switched bool, newVictim uint64, dirty bool) {
 	if tm == nil {
-		return false, 0
+		return false, 0, false
 	}
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
 	if len(tm.entries) == 0 {
-		return false, tm.currentVictim
+		return false, tm.currentVictim, false
 	}
 	tm.updateTimerMs -= elapsedMs
 	if tm.updateTimerMs > 0 {
-		return false, tm.currentVictim
+		return false, tm.currentVictim, false
 	}
 	tm.updateTimerMs = threatUpdateIntervalMs
 
@@ -286,11 +299,17 @@ func (tm *ThreatManager) Update(elapsedMs int64, inMelee func(uint64) bool) (swi
 	}
 
 	newVictim = tm.reselectVictimLocked(inMelee)
+	// ThreatManager::UpdateVictim (ThreatManager.cpp:522-525): the dirty
+	// flag is consumed on the same cadence tick — broadcast
+	// SMSG_HIGHEST_THREAT_UPDATE on a switch, SMSG_THREAT_UPDATE when the
+	// victim is unchanged but the list moved since the last tick.
+	dirty = tm.needClientUpdate
+	tm.needClientUpdate = false
 	if newVictim != tm.currentVictim {
 		tm.currentVictim = newVictim
-		return true, newVictim
+		return true, newVictim, dirty
 	}
-	return false, tm.currentVictim
+	return false, tm.currentVictim, dirty
 }
 
 // reselectVictimLocked mirrors ThreatManager::ReselectVictim
@@ -457,6 +476,9 @@ func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) 
 		}
 		newThreat = amount
 		tm.entries[victim] = newThreat
+		// ThreatManager::PutThreatListRef (ThreatManager.cpp:793) marks
+		// the client list dirty on every new ref.
+		tm.needClientUpdate = true
 		// With no current victim the new ref becomes the victim outright
 		// (C++ UpdateVictim); otherwise C++ runs ProcessAIUpdates (no
 		// re-selection) — Go keeps its documented eager gate as delta (1).
@@ -472,6 +494,9 @@ func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) 
 		if amount == 0 {
 			return false, tm.currentVictim
 		}
+		// ThreatReference::AddThreat (ThreatManager.cpp:49) marks the
+		// client list dirty on every nonzero add.
+		tm.needClientUpdate = true
 		newThreat = oldThreat + amount
 		if newThreat < 0 {
 			newThreat = 0
@@ -535,7 +560,11 @@ func (tm *ThreatManager) SetThreat(victim uint64, amount float32) (switched bool
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
+	// SetThreat is a Go-only direct write (C++ has no ThreatManager::SetThreat);
+	// the write marks the client list dirty the way every nonzero C++
+	// threat write does (ThreatReference::AddThreat, ThreatManager.cpp:49).
 	tm.entries[victim] = amount
+	tm.needClientUpdate = true
 	if tm.currentVictim == 0 || tm.effectiveThreatLocked(victim) > tm.effectiveThreatLocked(tm.currentVictim) {
 		tm.currentVictim = victim
 		return true, victim
@@ -576,8 +605,10 @@ func (tm *ThreatManager) MatchUnitThreatToHighestThreat(victim uint64) (switched
 	if highestThreat > current {
 		// C++ adds the delta to the victim's _baseAmount
 		// (ThreatManager.cpp:419-437 runs highest->GetThreat() -
-		// GetThreat(target) through ThreatReference::AddThreat).
+		// GetThreat(target) through ThreatReference::AddThreat), which
+		// marks the client list dirty (ThreatManager.cpp:49).
 		tm.entries[victim] += highestThreat - current
+		tm.needClientUpdate = true
 	}
 	tm.currentVictim = victim
 	return true, victim
@@ -634,6 +665,9 @@ func (tm *ThreatManager) ScaleThreat(victim uint64, factor float32) (switched bo
 		factor = 0
 	}
 	tm.entries[victim] = threat * factor
+	// ThreatReference::ScaleThreat (ThreatManager.cpp:61) marks the client
+	// list dirty (the factor==1 early leg above is the C++ no-op).
+	tm.needClientUpdate = true
 
 	var highestGUID uint64
 	var highestThreat float32
@@ -784,6 +818,11 @@ func (s *Server) broadcastThreatUpdate(mapID uint32, creatureGUID uint64, list [
 	}
 	payload := protocol.BuildThreatUpdate(creatureGUID, list)
 	s.broadcastToNearby(uint16(protocol.OpcodeSMSG_THREAT_UPDATE), payload, nil)
+}
+
+func (s *Server) broadcastThreatUpdateInInstance(mapID, instanceID uint32, creatureGUID uint64, list []protocol.ThreatEntry) {
+	payload := protocol.BuildThreatUpdate(creatureGUID, list)
+	s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_THREAT_UPDATE), payload, nil)
 }
 
 func (s *Server) broadcastHighestThreatUpdate(mapID uint32, creatureGUID, highestGUID uint64, list []protocol.ThreatEntry) {

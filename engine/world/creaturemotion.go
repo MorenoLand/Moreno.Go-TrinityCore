@@ -1779,9 +1779,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 			return false
 		}
-		if switched, newVictim := motion.ThreatMgr.Update(100, inMeleeOf); switched && newVictim != 0 {
+		if switched, newVictim, dirty := motion.ThreatMgr.Update(100, inMeleeOf); switched && newVictim != 0 {
 			motion.TargetGUID = newVictim
 			s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, motion.ThreatMgr.SortedEntries())
+		} else if dirty {
+			// The list moved without a victim switch: SendThreatListToClients
+			// sends SMSG_THREAT_UPDATE (ThreatManager.cpp:524, 770-787).
+			s.broadcastThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.ThreatMgr.SortedEntries())
 		}
 	}
 	if motion.Moving {
