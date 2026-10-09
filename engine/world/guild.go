@@ -887,11 +887,11 @@ func (s *session) handleGuildMotd(ctx context.Context, payload []byte) bool {
 		s.sendGuildCommandResult(guildCmdEditMotd, "", errGuildPermissions)
 		return true
 	}
-	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET motd = ? WHERE guildid = ?", motd, guildID)
-
 	// ScriptMgr::OnGuildMOTDChanged (Guild.cpp:1313): fires after the motd
-	// changes and before the broadcast.
+	// changes, before the DB write and the broadcast.
 	s.fireGuildEvent(ctx, scripting.GuildEventOnMotdChange, s.luaGuildObject(ctx, uint32(guildID)), motd)
+
+	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET motd = ? WHERE guildid = ?", motd, guildID)
 
 	// _BroadcastEvent(GE_MOTD, ObjectGuid::Empty, motd) (Guild.cpp:1320):
 	// type 2 with one string param, reaching every online guild member.

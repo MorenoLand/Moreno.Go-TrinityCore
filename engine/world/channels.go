@@ -1664,7 +1664,9 @@ func (s *session) handleGetChannelMemberCount(ctx context.Context, payload []byt
 	return true
 }
 
-// handleDeclineChannelInvite processes CMSG_DECLINE_CHANNEL_INVITE (0x264).
+// handleDeclineChannelInvite processes CMSG_DECLINE_CHANNEL_INVITE (0x410).
+// Reference: WorldSession::HandleChannelDeclineInvite (ChatHandler.cpp:763):
+// the C++ body is a pure no-op (debug log only), so the Go handler is one too.
 func (s *session) handleDeclineChannelInvite(ctx context.Context, payload []byte) bool {
 	s.debug("channel invite declined", "account", s.accountName)
 	return true

@@ -2277,22 +2277,45 @@ func (s *session) handlePetNameQuery(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
-	if _, err := r.ReadPackedGUID(); err != nil {
+	petGUID, err := r.ReadPackedGUID()
+	if err != nil {
 		return false
 	}
 
-	petName := ""
-	var saveTime uint32
-	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_ = s.server.CharactersStore.DB.QueryRowContext(ctx,
-			"SELECT name, savetime FROM character_pet WHERE id = ? LIMIT 1", petNumber).Scan(&petName, &saveTime)
-	}
-
-	buf := protocol.NewBuffer(32 + len(petName))
+	buf := protocol.NewBuffer(64)
 	buf.WriteU32(petNumber)
-	buf.WriteCString(petName)
-	buf.WriteU32(saveTime) // timestamp
-	buf.WriteU8(0)         // declined
+	// PetHandler.cpp:404-418 SendQueryPetNameResponse: the GUID must resolve
+	// to a live creature/pet/vehicle via ObjectAccessor; the session's active
+	// pet is the only resolvable analog in this engine. An unresolvable GUID
+	// writes the empty response: uint32(0) timestamp slot, uint8(0) declined.
+	if resolved := s.petNumberForGUID(petGUID); resolved != 0 && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		var petName string
+		var saveTime uint32
+		if err := cdb.QueryRowContext(ctx,
+			"SELECT name, savetime FROM character_pet WHERE id = ? AND owner = ? LIMIT 1", resolved, s.playerGUID).Scan(&petName, &saveTime); err == nil {
+			buf.WriteCString(petName)
+			buf.WriteU32(saveTime) // pet name timestamp
+			// PetHandler.cpp:424-430: uint8(1) plus the 5 declined names when
+			// the pet carries declined names, else uint8(0).
+			var declined [5]string
+			if err := cdb.QueryRowContext(ctx,
+				"SELECT genitive, dative, accusative, instrumental, prepositional FROM character_pet_declinedname WHERE owner = ? AND id = ? LIMIT 1",
+				s.playerGUID, resolved).Scan(&declined[0], &declined[1], &declined[2], &declined[3], &declined[4]); err == nil {
+				buf.WriteU8(1)
+				for _, d := range declined {
+					buf.WriteCString(d)
+				}
+			} else {
+				buf.WriteU8(0)
+			}
+			_ = s.write(uint16(protocol.OpcodeSMSG_PET_NAME_QUERY_RESPONSE), buf.Bytes(), true)
+			return true
+		}
+	}
+	buf.WriteU8(0)
+	buf.WriteU32(0)
+	buf.WriteU8(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_PET_NAME_QUERY_RESPONSE), buf.Bytes(), true)
 	return true
 }
@@ -2308,6 +2331,14 @@ func (s *session) handlePetRename(ctx context.Context, payload []byte) bool {
 	newName, _ := r.ReadCString()
 	if newName == "" {
 		return true
+	}
+	// PetHandler.cpp:594-596: isdeclined byte, then 5 declined-name strings.
+	isDeclined, _ := r.ReadU8()
+	var declined [5]string
+	if isDeclined != 0 {
+		for i := range declined {
+			declined[i], _ = r.ReadCString()
+		}
 	}
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		petNumber := s.petNumberForGUID(petGUID)
@@ -2333,6 +2364,15 @@ func (s *session) handlePetRename(ctx context.Context, payload []byte) bool {
 			newName, now, petNumber, s.playerGUID)
 		// PetHandler.cpp:624 removes the flag after a successful rename.
 		delete(s.petRenameAllowed, petGUID)
+		// PetHandler.cpp:649-662: declined names persist in
+		// character_pet_declinedname (id, owner, genitive..prepositional).
+		if isDeclined != 0 {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+				"DELETE FROM character_pet_declinedname WHERE id = ?", petNumber)
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+				"INSERT INTO character_pet_declinedname (id, owner, genitive, dative, accusative, instrumental, prepositional) VALUES (?, ?, ?, ?, ?, ?, ?)",
+				petNumber, s.playerGUID, declined[0], declined[1], declined[2], declined[3], declined[4])
+		}
 	}
 	return true
 }
