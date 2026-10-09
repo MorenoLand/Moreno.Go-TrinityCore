@@ -1412,7 +1412,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if isPlayerVictim && target.Sess != nil && target.Sess.player != nil {
 				victimDodgeBP = int32(math.Round(float64(target.Sess.player.DodgePercentage) * 100))
 			}
-			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, canBlock, canParry, canDodge, 0, 0, 0, 0, victimDodgeBP)
+			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, canBlock, canParry, canDodge, 0, 0, 0, 0, victimDodgeBP, s.creatureDodgeReductionBP(creatureAuraKeyForMotion(motion)))
 			if isPlayerVictim && target.Sess != nil {
 				if target.Sess.isImmuneToDamage(1) {
 					outcome = protocol.MeleeHitImmune

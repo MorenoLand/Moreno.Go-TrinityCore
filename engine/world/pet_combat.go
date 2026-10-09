@@ -515,6 +515,8 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		victimDodgeBP = int32(math.Round(float64(targetSess.player.DodgePercentage) * 100))
 	}
 	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isTargetPlayer, false, false, false, true, 0, 0, 0, 0, victimDodgeBP)
+	// Pet attackers carry no Go aura model, so the 248 dodge-reduction arm
+	// (Unit.cpp:2694-2695) stays unbridged on this path.
 	switch outcome {
 	case protocol.MeleeHitMiss, protocol.MeleeHitDodge, protocol.MeleeHitParry, protocol.MeleeHitEvade, protocol.MeleeHitImmune:
 		damage = 0

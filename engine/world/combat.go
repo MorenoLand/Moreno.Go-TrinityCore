@@ -475,7 +475,11 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		hitBonusBP := int32(math.Round(s.getMeleeHitPct() * 100))
 		critBonusBP := int32(math.Round(s.getMeleeCritPct() * 100))
 		expertiseBP := int32(math.Round(s.getExpertiseDodgeParryReductionPct() * 100))
-		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP)
+		// The attacker's SPELL_AURA_MOD_COMBAT_RESULT_CHANCE (248) dodge
+		// reduction (Unit.cpp:2694-2695) — the same arm meleeSpellHitResult
+		// carries for melee spells.
+		dodgeReductionBP := s.totalAuraModifierByMiscValue(spellAuraModCombatResultChance, victimStateDodge) * 100
+		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP)
 	}
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
@@ -1020,15 +1024,17 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	if isPlayerVictim && s.server != nil && damage > 0 {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
 			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
-			// MOD_TARGET_ABSORB_SCHOOL (194) pct of damage bypasses absorbs.
-			bypass := absorbIgnoreBypass(damage, s.absorbIgnorePct(uint32(schoolMask)))
+			// MOD_TARGET_ABSORB_SCHOOL (194) / MOD_TARGET_ABILITY_ABSORB_SCHOOL
+			// (245, affecting this spell) pct of damage bypasses absorbs.
+			bypass := absorbIgnoreBypass(damage, s.absorbIgnorePctForSpell(uint32(schoolMask), spellID))
 			absorbed, damage = vicSess.applyAbsorptionShields(damage-bypass, schoolMask)
 			damage += bypass
 		}
 	} else if !isPlayerVictim && s.server != nil && damage > 0 {
 		// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
-		// MOD_TARGET_ABSORB_SCHOOL (194) pct of damage bypasses absorbs.
-		bypass := absorbIgnoreBypass(damage, s.absorbIgnorePct(uint32(schoolMask)))
+		// MOD_TARGET_ABSORB_SCHOOL (194) / MOD_TARGET_ABILITY_ABSORB_SCHOOL
+		// (245, affecting this spell) pct of damage bypasses absorbs.
+		bypass := absorbIgnoreBypass(damage, s.absorbIgnorePctForSpell(uint32(schoolMask), spellID))
 		absorbed, damage = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage-bypass, schoolMask)
 		damage += bypass
 	}
@@ -1794,6 +1800,45 @@ func distance2D(x1, y1, x2, y2 float32) float64 {
 	return math.Sqrt(dx*dx + dy*dy)
 }
 
+// creatureDodgeReductionBP returns the creature attacker's total
+// SPELL_AURA_MOD_COMBAT_RESULT_CHANCE (248) amount with
+// MiscValue == VICTIMSTATE_DODGE (Unit.cpp:2694-2695), scaled to basis points
+// for rollMeleeOutcome's dodge leg (the C++ arm is percent-scale and both
+// melee roll sites scale the result by 100, Unit.cpp:2206/2589).
+func (s *Server) creatureDodgeReductionBP(key creatureAuraKey) int32 {
+	if s == nil || key.GUID == 0 {
+		return 0
+	}
+	var total int32
+	s.auraMu.Lock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		if s.Data != nil {
+			if spell, found, err := s.Data.Spell(aura.SpellID); err == nil && found {
+				for index, effect := range spell.Effects {
+					if effect.Aura != spellAuraModCombatResultChance || aura.EffectMask&(1<<uint(index)) == 0 {
+						continue
+					}
+					if effect.MiscValue != victimStateDodge {
+						continue
+					}
+					if amount := aura.Amounts[index]; amount != 0 {
+						total += amount
+					}
+				}
+				continue
+			}
+		}
+		if aura.AuraType == spellAuraModCombatResultChance && aura.MiscValue == victimStateDodge {
+			total += int32(aura.Amount)
+		}
+	}
+	s.auraMu.Unlock()
+	return total * 100
+}
+
 // rollMeleeOutcome implements TrinityCore's single-roll melee attack table:
 // MISS > DODGE > PARRY > GLANCING > BLOCK > CRIT > CRUSHING > HIT
 // Reference: Unit::RollMeleeOutcomeAgainst (Unit.cpp:2189-2320).
@@ -1802,6 +1847,13 @@ func distance2D(x1, y1, x2, y2 float32) float64 {
 // [1] hitBonusBP (from attacker hit rating)
 // [2] critBonusBP (from attacker crit rating & agility)
 // [3] expertiseBP (reduces defender dodge and parry)
+// [4] victimDodgeBP (see below)
+// [5] attackerDodgeReductionBP: the attacker's
+// SPELL_AURA_MOD_COMBAT_RESULT_CHANCE (248, MiscValue == VICTIMSTATE_DODGE)
+// total in basis points — C++ GetUnitDodgeChance (Unit.cpp:2694-2695) adds the
+// percent-scale aura amount to the percent-scale chance, and both melee roll
+// sites scale the result by 100 (Unit.cpp:2206, 2589), so the Go basis-point
+// table adds amount*100.
 func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlayerVictim bool, isDualWielding bool, canBlock, canParry, canDodge bool, modifiers ...int32) (protocol.MeleeHitOutcome, uint32, uint8) {
 	if attackerLevel == 0 {
 		attackerLevel = 1
@@ -1829,6 +1881,12 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 	victimDodgeBP := int32(-1)
 	if len(modifiers) > 4 {
 		victimDodgeBP = modifiers[4]
+	}
+	// Optional 6th modifier: the attacker's MOD_COMBAT_RESULT_CHANCE dodge
+	// reduction in basis points (Unit.cpp:2694-2695); absent means none.
+	attackerDodgeReductionBP := int32(0)
+	if len(modifiers) > 5 {
+		attackerDodgeReductionBP = modifiers[5]
 	}
 
 	leveldif := int32(victimLevel) - int32(attackerLevel)
@@ -1887,6 +1945,10 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 		if expertiseBP > 0 {
 			dodgeChance -= expertiseBP
 		}
+		// Reduce the victim's dodge chance by the attacker's
+		// SPELL_AURA_MOD_COMBAT_RESULT_CHANCE (248) auras with
+		// MiscValue == VICTIMSTATE_DODGE (Unit.cpp:2694-2695).
+		dodgeChance += attackerDodgeReductionBP
 		if dodgeChance < 0 {
 			dodgeChance = 0
 		}
