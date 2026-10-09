@@ -134,6 +134,19 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			return true
 		}
 	}
+	// Reference: ChatHandler.cpp:116-139 — the LANG_ADDON type gate and the
+	// CONFIG_ADDON_CHANNEL disabled check run before every other arm (the
+	// mute/speak-time legs, the 1852 GM-silence gate, the warden response):
+	// an addon message with a disallowed type or with addon channel disabled
+	// is dropped here, before any silence notification can fire.
+	if language == languageAddon && !addonChatType(typeID) {
+		s.debug("chat rejected", "account", s.accountName, "reason", "invalid addon language type", "type", typeID)
+		return true
+	}
+	if language == languageAddon && (s.server == nil || !s.server.Config.AddonChannel) {
+		s.debug("chat rejected", "account", s.accountName, "reason", "addon channel disabled")
+		return true
+	}
 	// C++ (ChatHandler.cpp:179-193): the mute gate, speak-time update, and
 	// GM-silence aura gate all run before the warden response and command
 	// parsing; addon messages are exempt from flood control. A muted player
@@ -166,11 +179,19 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "warden check response")
 		return true
 	}
-	if typeID != chatAFK && typeID != chatDND && language != languageAddon && (strings.HasPrefix(message, ".") || strings.HasPrefix(message, "!")) {
+	// Reference: ChatHandler::ParseCommands (Chat.cpp:168-189) +
+	// _ParseCommands (Chat.cpp:147-166) — a command is attempted only when the
+	// message has at least two characters, the first is '.' or '!', the second
+	// differs from the first (so ".." and "!!" stay chat text), and the second
+	// is not the command delimiter (space, so ". " stays chat text). A matched
+	// command consumes the message; an unmatched one fires the Eluna
+	// PLAYER_EVENT_ON_COMMAND hook (ChatCommand.cpp:315, which may consume it)
+	// and otherwise sends LANG_CMD_INVALID (entry 6, "Invalid command: %s") to
+	// sessions holding RBAC_PERM_COMMANDS_NOTIFY_COMMAND_NOT_FOUND_ERROR,
+	// while sessions without the permission fall through to chat delivery
+	// (_ParseCommands returns false).
+	if typeID != chatAFK && typeID != chatDND && language != languageAddon && isChatCommandAttempt(message) {
 		command := strings.TrimSpace(message[1:])
-		if command == "" {
-			return true
-		}
 		if s.executeCommand(ctx, command) {
 			return true
 		}
@@ -179,17 +200,17 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			if hookErr != nil {
 				s.debug("lua command hook failed", "account", s.accountName, "error", hookErr)
 			}
-			return !luaCancelled(values)
+			if luaCancelled(values) {
+				s.debug("chat rejected", "account", s.accountName, "reason", "lua command hook cancelled")
+				return true
+			}
 		}
-		return true
-	}
-	if language == languageAddon && !addonChatType(typeID) {
-		s.debug("chat rejected", "account", s.accountName, "reason", "invalid addon language type", "type", typeID)
-		return true
-	}
-	if language == languageAddon && (s.server == nil || !s.server.Config.AddonChannel) {
-		s.debug("chat rejected", "account", s.accountName, "reason", "addon channel disabled")
-		return true
+		if s.commandNotFoundNotified(ctx) {
+			s.sendSysMessage("Invalid command: " + command)
+			return true
+		}
+		// Unknown command without the notify permission: falls through to
+		// chat delivery.
 	}
 	// Reference: WorldSession::HandleMessagechatOpcode (ChatHandler.cpp:239-248) —
 	// LANG_ADDON messages framed as "TrinityCore\t" are the remote admin console
@@ -486,10 +507,14 @@ func (s *session) parseAddonChannelCommand(ctx context.Context, msg string) bool
 		if len(msg) <= 17 || msg[17] == 0 {
 			return false
 		}
-		// C++ feeds the raw remainder to _ParseCommands, which requires the
-		// '.'/'!' prefix (TryExecuteCommand); Go's executeCommand takes the
-		// bare command, so strip one leading prefix like the chat path does.
-		cmd := strings.TrimPrefix(strings.TrimPrefix(msg[17:], "."), "!")
+		// Reference: AddonChannelCommandHandler::ParseCommands (Chat.cpp:872-896) —
+		// the raw remainder feeds _ParseCommands verbatim: no '.'/'!' prefix is
+		// stripped (TryExecuteCommand takes it as-is, so a prefixed command from
+		// the console answers Invalid exactly like C++), and an unmatched command
+		// always answers "Invalid command" + 'f' — the _ParseCommands permission
+		// arm is bypassed because the console path re-sends the Invalid reply
+		// unconditionally.
+		cmd := msg[17:]
 		if s.executeCommand(ctx, cmd) {
 			if !s.addonCmdHadAck {
 				s.sendAddonChannelAck()
@@ -499,13 +524,7 @@ func (s *session) parseAddonChannelCommand(ctx context.Context, msg string) bool
 			} else {
 				s.sendAddonChannelOK()
 			}
-		} else if s.addonCommandNotFoundNotified(ctx) {
-			// Reference: ChatHandler::_ParseCommands (Chat.cpp:153-166) —
-			// unknown commands are reported only to sessions holding
-			// RBAC_PERM_COMMANDS_NOTIFY_COMMAND_NOT_FOUND_ERROR; everyone
-			// else pretends commands don't exist. C++ routes the
-			// LANG_CMD_INVALID notice through the framed SendSysMessage and
-			// then answers 'f'.
+		} else {
 			s.sendAddonChannelSysMessage("Invalid command: " + cmd)
 			s.sendAddonChannelFailed()
 		}
@@ -515,10 +534,25 @@ func (s *session) parseAddonChannelCommand(ctx context.Context, msg string) bool
 	}
 }
 
-// addonCommandNotFoundNotified mirrors the HasPermission gate in
-// ChatHandler::_ParseCommands (Chat.cpp:159), with a security-level fallback
+// isChatCommandAttempt mirrors the prefix gate of ChatHandler::ParseCommands
+// (Chat.cpp:168-189): '.' or '!' prefix, at least two characters, the second
+// character neither repeats the prefix (so ".."/"!!" stay chat text) nor is the
+// command delimiter ' ' (so ". "/"! " stay chat text).
+func isChatCommandAttempt(message string) bool {
+	if len(message) < 2 {
+		return false
+	}
+	prefix := message[0]
+	if prefix != '.' && prefix != '!' {
+		return false
+	}
+	return message[1] != prefix && message[1] != ' '
+}
+
+// commandNotFoundNotified mirrors the HasPermission gate in
+// ChatHandler::_ParseCommands (Chat.cpp:157-159), with a security-level fallback
 // when the auth store is unavailable (players never see the notice).
-func (s *session) addonCommandNotFoundNotified(ctx context.Context) bool {
+func (s *session) commandNotFoundNotified(ctx context.Context) bool {
 	if s == nil {
 		return false
 	}
@@ -530,6 +564,13 @@ func (s *session) addonCommandNotFoundNotified(ctx context.Context) bool {
 		return s.security > 0
 	}
 	return has
+}
+
+// addonCommandNotFoundNotified mirrors the HasPermission gate in
+// ChatHandler::_ParseCommands (Chat.cpp:159), with a security-level fallback
+// when the auth store is unavailable (players never see the notice).
+func (s *session) addonCommandNotFoundNotified(ctx context.Context) bool {
+	return s.commandNotFoundNotified(ctx)
 }
 
 // sendAddonChannelReply mirrors AddonChannelCommandHandler::Send
