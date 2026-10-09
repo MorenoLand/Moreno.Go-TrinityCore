@@ -1715,12 +1715,14 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "power burn/drain target power-type mismatch", "failure", failure)
 		return true
 	}
-	// Charge gate (Spell::CheckCast per-effect block, Spell.cpp:5661-5695):
+	// Charge gate (Spell::CheckCast per-effect block, Spell.cpp:5662-5706):
 	// a SPELL_EFFECT_CHARGE effect fails with SPELL_FAILED_ROOTED when the
-	// caster is rooted, or SPELL_FAILED_DONT_REPORT when the spell needs an
-	// explicit unit target but carries none. C++ relative order places this
+	// caster is rooted, SPELL_FAILED_DONT_REPORT when the spell needs an
+	// explicit unit target but carries none, or SPELL_FAILED_LINE_OF_SIGHT
+	// when that target is not in line of sight (the PathGenerator NOPATH
+	// arms stay unbridged — no navmesh). C++ relative order places this
 	// right after the burn/drain leg.
-	if failure := s.checkChargeCast(spell, target); failure != 0 {
+	if failure := s.checkChargeCast(ctx, spell, target); failure != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "charge validation", "failure", failure)
 		return true
@@ -3089,22 +3091,28 @@ func spellNeedsToBeTriggeredByCaster(triggered, triggering wotlk.Spell) bool {
 }
 
 // checkChargeCast mirrors the SPELL_EFFECT_CHARGE leg of the CheckCast
-// per-effect switch (Spell.cpp:5661-5695). A charge effect rejects with
-// SPELL_FAILED_ROOTED when the caster is rooted, and with
+// per-effect switch (Spell.cpp:5662-5706). A charge effect rejects with
+// SPELL_FAILED_ROOTED when the caster is rooted, with
 // SPELL_FAILED_DONT_REPORT when the spell needs an explicit unit target but
-// the cast carries none. Arms: the m_caster->ToUnit() null arm is vacuous
-// (client casts always come from a player session); the
-// TRIGGERED_IGNORE_CASTER_AURAS arm of the root check is vacuous on this
-// path (handleCastSpell serves client-initiated casts only; triggered casts
-// go through castSpellDirect). No bridge: the Warbringer script-override arm
-// (Spell.cpp:5667-5673 — Unit::IsScriptOverriden reads
-// SPELL_AURA_OVERRIDE_CLASS_SCRIPTS (112) aura effects with MiscValue 6953,
-// Unit.cpp:4764-4774; Go has no aura-112 model), the LoS arm
-// (IsWithinLOSInMap — no LoS/VMap model), and the path/range arm
-// (PathGenerator/dtNavMesh are unbuilt, commands_mmaps.go:34; the
-// ShortenPathUntilDist back-off has no consumer). Returns the
-// SPELL_FAILED_* result code, 0 on success.
-func (s *session) checkChargeCast(spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+// the cast carries none, and with SPELL_FAILED_LINE_OF_SIGHT when the
+// explicit unit target is not in line of sight (Spell.cpp:5684-5686:
+// IsWithinLOSInMap runs the full VMAP check — "Don't exclude m2").
+// Go's terrain LoS model (hasLineOfSight, terrain.go:703) is the bridge;
+// unresolvable target GUIDs skip, matching C++'s null-target gate. Arms:
+// the m_caster->ToUnit() null arm is vacuous (client casts always come from
+// a player session); the TRIGGERED_IGNORE_CASTER_AURAS arm of the root check
+// is vacuous on this path (handleCastSpell serves client-initiated casts
+// only; triggered casts go through castSpellDirect). No bridge: the
+// Warbringer script-override arm (Spell.cpp:5668-5673 —
+// Unit::IsScriptOverriden reads SPELL_AURA_OVERRIDE_CLASS_SCRIPTS (112)
+// aura effects with MiscValue 6953, Unit.cpp:4764-4774; Go has no aura-112
+// model) and the PathGenerator arms (Spell.cpp:5688-5701:
+// PATHFIND_SHORT/PATHFIND_NOPATH/PATHFIND_INCOMPLETE/
+// IsInvalidDestinationZ → SPELL_FAILED_NOPATH, plus the
+// ShortenPathUntilDist back-off — Go builds no navmesh,
+// commands_mmaps.go:34). Returns the SPELL_FAILED_* result code, 0 on
+// success.
+func (s *session) checkChargeCast(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
 	if s == nil || s.player == nil {
 		return 0
 	}
@@ -3123,6 +3131,18 @@ func (s *session) checkChargeCast(spell wotlk.Spell, target protocol.SpellTarget
 	}
 	if spellNeedsExplicitUnitTarget(spell) && (target.Flags&protocol.SpellTargetFlagUnitWireMask == 0 || target.UnitGUID == 0) {
 		return spellFailedDontReport
+	}
+	// The LoS and path arms live inside the NeedsExplicitUnitTarget block
+	// (Spell.cpp:5678-5702), so they only run once an explicit unit target
+	// is required — the DONT_REPORT arm above guarantees the wire target
+	// exists here. getCombatTarget resolves player and creature targets;
+	// unresolvable GUIDs skip, mirroring C++'s resolved-target gate.
+	if spellNeedsExplicitUnitTarget(spell) && s.server != nil {
+		if tgt, ok := s.getCombatTarget(ctx, target.UnitGUID); ok {
+			if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
+				return spellFailedLineOfSight
+			}
+		}
 	}
 	return 0
 }
