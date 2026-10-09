@@ -442,6 +442,99 @@ const (
 	playerFieldByteTrackStealthed           uint32 = 0x00000002
 )
 
+// Gather-skill config defaults from worldserver.conf (World.cpp:1067-1082):
+// SkillChance.{Orange,Yellow,Green,Grey}, SkillChance.{SkinningSteps,
+// MiningSteps}, and SkillGain.Gathering. SkillChance.Prospecting and
+// SkillChance.Milling default to false (World.cpp:1075-1076), so the
+// prospecting/milling skill-up legs are config-gated off by default,
+// C++-exact.
+const (
+	skillChanceOrange     = 100
+	skillChanceYellow     = 75
+	skillChanceGreen      = 25
+	skillChanceGrey       = 0
+	skillChanceGatherStep = 75
+	skillGainGathering    = 1
+	skillGainProspecting  = false // SkillChance.Prospecting (World.cpp:1075)
+	skillGainMilling      = false // SkillChance.Milling (World.cpp:1076)
+)
+
+// skillGainChance mirrors the SkillGainChance inline (Player.cpp:5778-5787):
+// the skill-up chance in tenths of a percent from the grey/green/yellow
+// difficulty bands of the gathered node.
+func skillGainChance(skillValue, grayLevel, greenLevel, yellowLevel uint32) int32 {
+	switch {
+	case skillValue >= grayLevel:
+		return skillChanceGrey * 10
+	case skillValue >= greenLevel:
+		return skillChanceGreen * 10
+	case skillValue >= yellowLevel:
+		return skillChanceYellow * 10
+	default:
+		return skillChanceOrange * 10
+	}
+}
+
+// updateSkillPro mirrors Player::UpdateSkillPro (Player.cpp:5892-5947): the
+// chance (tenths of a percent) is rolled as irand(1, 1000); on success the
+// pure value grows by step clamped to the skill cap, persists to
+// character_skills, pushes the client update, and sets the reach-skill-level
+// achievement criterion to the new value. Missing, zero, or maxed skills
+// and missed rolls return false; Go's Skills slice holds only live skills,
+// so the C++ SKILL_DELETED gate is vacuous. The bonus-threshold rewarded
+// spells (Player.cpp:5928-5935) and UpdateSkillEnchantments have no Go model
+// (documented deltas).
+func (s *session) updateSkillPro(ctx context.Context, skillID uint32, chance int32, step uint32) bool {
+	if s == nil || s.player == nil || skillID == 0 || chance <= 0 {
+		return false
+	}
+	for i := range s.player.Skills {
+		sk := &s.player.Skills[i]
+		if uint32(sk.Skill) != skillID {
+			continue
+		}
+		if sk.Max == 0 || sk.Value == 0 || sk.Value >= sk.Max {
+			return false
+		}
+		if rand.IntN(1000)+1 > int(chance) {
+			return false
+		}
+		newVal := uint32(sk.Value) + step
+		if newVal > uint32(sk.Max) {
+			newVal = uint32(sk.Max)
+		}
+		sk.Value = uint16(newVal)
+		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_skills SET value = ? WHERE guid = ? AND skill = ?", sk.Value, s.playerGUID, sk.Skill)
+		}
+		s.sendPlayerUpdate()
+		s.setAchievementCriteria(criteriaTypeReachSkillLevel, skillID, newVal)
+		return true
+	}
+	return false
+}
+
+// updateGatherSkill mirrors Player::UpdateGatherSkill (Player.cpp:5822-5853):
+// the skill-up chance is SkillGainChance(skillValue, redLevel+100,
+// redLevel+50, redLevel+25) times the multiplicator, with the difficulty-step
+// shift for skinning and mining; herbalism, lockpicking, jewelcrafting, and
+// inscription use the unshifted chance. The call sites pass the pure
+// (bonus-free) skill value, matching GetPureSkillValue.
+func (s *session) updateGatherSkill(ctx context.Context, skillID, skillValue, redLevel uint32, multiplicator uint32) bool {
+	if multiplicator == 0 {
+		multiplicator = 1
+	}
+	chance := skillGainChance(skillValue, redLevel+100, redLevel+50, redLevel+25) * int32(multiplicator)
+	switch skillID {
+	case skillSkinning, skillMining:
+		chance >>= skillValue / skillChanceGatherStep
+	case skillHerbalism, skillLockpicking, skillJewelcrafting, skillInscription:
+	default:
+		return false
+	}
+	return s.updateSkillPro(ctx, skillID, chance, skillGainGathering)
+}
+
 // isSelfCastOnly checks if all active spell effects target the caster unit.
 func isSelfCastOnly(spell wotlk.Spell) bool {
 	hasEffect := false
@@ -2676,6 +2769,22 @@ func (s *session) checkChargeCast(spell wotlk.Spell, target protocol.SpellTarget
 // row is missing the template-dependent arms are skipped, following the
 // unknown-data-is-permissive convention (terrain.go); that gap is documented
 // in the skill/looted legs below.
+// lootSkillForCreatureTypeFlags mirrors CreatureTemplate::GetRequiredLootSkill
+// (CreatureData.h:213-224): the gather skill a creature is skinned with from
+// its type flags, skinning in the normal case.
+func lootSkillForCreatureTypeFlags(typeFlags int64) uint32 {
+	switch {
+	case typeFlags&int64(creatureTypeFlagHerbSkinningSkill) != 0:
+		return skillHerbalism
+	case typeFlags&int64(creatureTypeFlagMiningSkinningSkill) != 0:
+		return skillMining
+	case typeFlags&int64(creatureTypeFlagEngineeringSkinningSkill) != 0:
+		return skillEngineering
+	default:
+		return skillSkinning
+	}
+}
+
 func (s *session) checkSkinningCast(spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
 	if s == nil || s.player == nil || s.server == nil {
 		return 0
@@ -2711,15 +2820,7 @@ func (s *session) checkSkinningCast(spell wotlk.Spell, target protocol.SpellTarg
 	if cType != int64(creatureTypeCritter) && !motion.Looted {
 		return spellFailedTargetNotLooted
 	}
-	skillID := skillSkinning
-	switch {
-	case typeFlags&int64(creatureTypeFlagHerbSkinningSkill) != 0:
-		skillID = skillHerbalism
-	case typeFlags&int64(creatureTypeFlagMiningSkinningSkill) != 0:
-		skillID = skillMining
-	case typeFlags&int64(creatureTypeFlagEngineeringSkinningSkill) != 0:
-		skillID = skillEngineering
-	}
+	skillID := lootSkillForCreatureTypeFlags(typeFlags)
 	skillValue := playerSkillTotalValue(s.player, skillID)
 	targetLevel := int32(motion.Level)
 	var reqValue int32
@@ -2741,9 +2842,13 @@ func (s *session) checkSkinningCast(spell wotlk.Spell, target protocol.SpellTarg
 // the HIT_TARGET phase) and the caster-is-player arm is vacuous
 // (handleCastSpell only serves player sessions). The target gates
 // (TYPEID_UNIT, skinnable flag, looted corpse, loot skill) already ran in
-// checkSkinningCast. UpdateGatherSkill (SpellEffects.cpp:4489) has no Go
-// model — Go has no gather skill-up roll — so the skill-gain leg is a
-// documented delta.
+// checkSkinningCast. The UpdateGatherSkill leg (SpellEffects.cpp:4489-4491)
+// runs after the loot window opens: reqValue = targetLevel < 10 ? 0 :
+// (targetLevel < 20 ? (targetLevel-10)*10 : targetLevel*5), doubled for
+// elites (Creature::isElite, Creature.cpp:2344: template rank not in
+// {NORMAL, RARE}); the skill is the creature's required loot skill, matching
+// the cast gate. The dead-pet exclusion in Creature::isElite has no Go model
+// (documented delta).
 func (s *session) handleEffectSkinning(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
 	if s == nil || s.player == nil || s.server == nil {
 		return
@@ -2756,6 +2861,7 @@ func (s *session) handleEffectSkinning(ctx context.Context, targetGUID uint64, s
 		return
 	}
 	entry := motion.Entry
+	targetLevel := motion.Level
 	s.server.motionMu.Lock()
 	motion.UnitFlags &^= unitFlagSkinnable
 	motion.DynamicFlags |= unitDynFlagLootable
@@ -2767,6 +2873,24 @@ func (s *session) handleEffectSkinning(ctx context.Context, targetGUID uint64, s
 		unitFieldDynamicFlags: dynFlags,
 	})
 	s.openSkinningLoot(ctx, targetGUID, entry)
+
+	var typeFlags, rank int64
+	if wdb := s.server.WorldStore.DB; wdb != nil {
+		_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(type_flags, 0), COALESCE(rank, 0) FROM creature_template WHERE entry = ? LIMIT 1", entry).Scan(&typeFlags, &rank)
+	}
+	skillID := lootSkillForCreatureTypeFlags(typeFlags)
+	var reqValue uint32
+	switch {
+	case targetLevel >= 20:
+		reqValue = targetLevel * 5
+	case targetLevel >= 10:
+		reqValue = (targetLevel - 10) * 10
+	}
+	multiplicator := uint32(1)
+	if rank != 0 && rank != 4 { // CREATURE_ELITE_NORMAL=0, CREATURE_ELITE_RARE=4
+		multiplicator = 2
+	}
+	s.updateGatherSkill(ctx, skillID, s.getSkillValue(skillID), reqValue, multiplicator)
 }
 
 // handleEffectPickpocket mirrors Spell::EffectPickPocket
@@ -2889,9 +3013,9 @@ func (s *session) handleEffectDisenchant(ctx context.Context, target protocol.Sp
 // missing item target, a missing IS_PROSPECTABLE / IS_MILLABLE flag, or a
 // stack under 5 silently returns — the cast gates already enforced all of
 // these (checkSpellProspectMillingCast). The gather-skill gains
-// (CONFIG_SKILL_PROSPECTING / CONFIG_SKILL_MILLING, Player::UpdateGatherSkill)
-// have no Go model (documented no-bridge, same as the skinning
-// UpdateGatherSkill at 2740); the rest is Player::SendLoot with
+// (SkillChance.Prospecting / SkillChance.Milling, Player::UpdateGatherSkill)
+// are wired but config-gated off by default, C++-exact; the rest is
+// Player::SendLoot with
 // LOOT_PROSPECTING / LOOT_MILLING (Player.cpp:8675-8710): the
 // prospecting_loot_template / milling_loot_template fill keyed by the item
 // entry, personal=true, no money roll. The 5 consumed from the stack are
@@ -2916,11 +3040,26 @@ func (s *session) handleEffectProspectMilling(ctx context.Context, target protoc
 		return
 	}
 	var tplFlags uint32
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(Flags, 0) FROM item_template WHERE entry = ? LIMIT 1", t.entry).Scan(&tplFlags); err != nil || tplFlags&itemFlag == 0 {
+	var reqSkillRank uint32
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(Flags, 0), COALESCE(RequiredSkillRank, 0) FROM item_template WHERE entry = ? LIMIT 1", t.entry).Scan(&tplFlags, &reqSkillRank); err != nil || tplFlags&itemFlag == 0 {
 		return
 	}
 	if s.itemInstanceCount(ctx, t.instanceGUID) < 5 {
 		return
+	}
+	// Spell::EffectProspecting / EffectMilling (SpellEffects.cpp:5059-5065,
+	// 5084-5090): the gather skill-up leg runs before the loot window opens,
+	// gated by SkillChance.Prospecting / SkillChance.Milling (both false by
+	// default, World.cpp:1075-1076); reqSkillValue is the item template's
+	// RequiredSkillRank.
+	allowSkillGain := skillGainProspecting
+	gatherSkillID := skillJewelcrafting
+	if effect == spellEffectMilling {
+		allowSkillGain = skillGainMilling
+		gatherSkillID = skillInscription
+	}
+	if allowSkillGain {
+		s.updateGatherSkill(ctx, gatherSkillID, s.getSkillValue(gatherSkillID), reqSkillRank, 1)
 	}
 	s.openTradeSkillItemLoot(ctx, t.instanceGUID, lootType, table, t.entry)
 }
