@@ -5981,6 +5981,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// tail and failure exits (Spell.cpp:3418, 3519).
 	s.beginSpellModTaking()
 	defer s.endSpellModTaking()
+	// Spell::m_hitMask (Spell.cpp:2603): each Spell object accumulates its
+	// targets' proc hit masks for the FINISH/CAST-phase proc events; the
+	// save/reset/restore mirrors that per-cast lifetime across nested
+	// triggered casts (fireSpellLinkedTriggers runs inside the tail below).
+	prevProcHitMask := s.castProcHitMask
+	s.castProcHitMask = 0
+	defer func() { s.castProcHitMask = prevProcHitMask }()
 	var completedCast *activeCastState
 	if queuedSwing != nil {
 		// On-next-swing consumption (Unit.cpp:2151-2152): the queued spell
@@ -6497,6 +6504,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 
 	// Spell hit check for offensive spells targeting another unit
+	// SMSG_SPELLLOGMISS (WorldObject::SendSpellMiss, Object.cpp:2666) has
+	// deliberately no Go sender: every C++ fire path needs a model Go does
+	// not have. Spell.cpp:2370 fires only from PreprocessTarget's hit-time
+	// leg, which PreprocessSpellHit (Spell.cpp:2710) restricts to delayed
+	// spells (Speed > 0) with late immunity/evade — Go resolves all
+	// effects at cast time with no launch/hit split, and C++ never sends
+	// LOGMISS for AddUnitTarget-time misses (the analog of the rolls
+	// below), which ride the GO trailer only. Unit.cpp:1573 needs the
+	// SPELL_AURA_DAMAGE_SHIELD model and Unit.cpp:2002/2048 the
+	// split-damage model; the bot_bm_ai sites need creature casters.
 	var missStatus []protocol.SpellMissStatus
 	isReflected := false
 	if !areaSpell && targetGUID != 0 && targetGUID != s.playerGUID && isHarmfulSpell(spell) {
@@ -8625,6 +8642,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// deferred end mirrors the tail (Spell.cpp:3697).
 				s.beginSpellModTaking()
 				defer s.endSpellModTaking()
+				// Spell::m_hitMask (Spell.cpp:2603): the arrival tick is the
+				// delayed leg of the same Spell object, so the accumulator
+				// resets here too — the missile may land long after other
+				// casts ran on this session.
+				prevProcHitMask := s.castProcHitMask
+				s.castProcHitMask = 0
+				defer func() { s.castProcHitMask = prevProcHitMask }()
 				applyEffects(context.Background())
 				// Spell::_handle_finish_phase (Spell.cpp:3737-3752): the
 				// combo legs run at the last delayed tick (next_time == 0)
@@ -8793,7 +8817,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if isChanneledSpell(spell) && isRangedWeaponSpell(spell) {
 		s.consumeRangedAmmo(ctx)
 	}
-	s.stopAttackOnSpellFinish(spell)
+	// Spell::handle_immediate (Spell.cpp:3625): finish(true) runs only when
+	// m_spellState != SPELL_STATE_CASTING — channeled spells skip it at cast
+	// completion and run these legs at natural channel end instead (Go's
+	// finishChannel, which already covers both).
+	if !isChanneledSpell(spell) {
+		s.stopAttackOnSpellFinish(spell)
+	}
 
 	// Spell::finish(true) parity (Spell.cpp:3886-3985): two legs have no Go
 	// bridge and are intentionally absent here.
@@ -8826,8 +8856,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// fires PROC_SPELL_PHASE_CAST right after the spell_linked_spell tail,
 	// on both the delayed and immediate branches. The C++ m_originalCaster
 	// early-return gate is vacuous: finishSpellCast always runs on the
-	// casting player session, and Go has no creature casters.
-	s.updatePotionCooldown(spell)
+	// casting player session, and Go has no creature casters. The potion
+	// flush is a finish(true) leg (Spell.cpp:3959-3964), so the same
+	// handle_immediate gate (Spell.cpp:3625) applies: channeled spells run
+	// it at natural channel end (finishChannel), not at cast completion.
+	if !isChanneledSpell(spell) {
+		s.updatePotionCooldown(spell)
+	}
 	s.fireSpellLinkedTriggers(ctx, spellID, targetGUID)
 	s.resetCastCooldownCheat(spellID)
 	s.procSpellCastPhaseAuraTriggers(ctx, spell)
@@ -10103,6 +10138,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// spells (Unit::TriggerAurasProcOnEvent, Unit.cpp:10424, Spell::IsProcDisabled).
 	s.triggeredNoProcEvents++
 	defer func() { s.triggeredNoProcEvents-- }()
+	// Spell::m_hitMask (Spell.cpp:2603): the triggered cast is its own Spell
+	// object with its own accumulating mask; save/reset/restore keeps a
+	// nested triggered cast from polluting the outer cast's FINISH/CAST-phase
+	// proc hit mask.
+	prevProcHitMask := s.castProcHitMask
+	s.castProcHitMask = 0
+	defer func() { s.castProcHitMask = prevProcHitMask }()
 
 	var spell wotlk.Spell
 	found := false
@@ -10383,7 +10425,12 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// s.triggeredNoProcEvents into the event, matching C++'s
 	// CanSpellTriggerProcOnEvent suppression on this path.
 	s.procSpellFinishAuraTriggers(ctx, spell)
-	s.stopAttackOnSpellFinish(spell)
+	// Spell::handle_immediate (Spell.cpp:3625): the STOP_ATTACK_TARGET leg
+	// is a finish(true) leg, skipped for channeled spells at cast time —
+	// same gate as the finishSpellCast tail above.
+	if !isChanneledSpell(spell) {
+		s.stopAttackOnSpellFinish(spell)
+	}
 
 	// Spell::_cast (Spell.cpp:3502-3511): a triggered cast (C++
 	// Unit::CastSpell(id, true)) runs the same _cast tail, so the

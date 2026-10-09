@@ -1016,13 +1016,11 @@ func spellFinishPhaseProcTypeMask(spell wotlk.Spell) uint32 {
 // the same way. The event's triggered state mirrors the hit path
 // (s.triggeredNoProcEvents), and the caster's own session runs the loop
 // (Go has no creature casters; m_originalCaster is the casting player).
-// Documented deltas: the hit mask is PROC_HIT_NORMAL. C++ ORs per-target
-// outcome masks into m_hitMask (Spell.cpp:2603) and defaults an empty
-// target container to PROC_HIT_NORMAL (Spell.cpp:3605); Go computes
-// per-target hit masks inside executeSpellDamage with no cast-level
-// accumulator, so the finish event carries the no-target default — the
-// value the C++ normalization lands on for any non-critical cast
-// (!(m_hitMask & PROC_HIT_CRITICAL) → |= PROC_HIT_NORMAL, Spell.cpp:3744).
+// Documented deltas: the hit mask is the cast's accumulated m_hitMask
+// (s.castProcHitMask, ORed per target in procSpellHitAuraTriggers /
+// procSpellHealAuraTriggers, Spell.cpp:2603), normalized to
+// PROC_HIT_NORMAL when no target crit (Spell.cpp:3744) — the empty-target
+// arm (Spell.cpp:3605) seeds the same value.
 // The generated proc model (spellProcEntryFor, mirroring SpellMgr.cpp:1828)
 // only carries PROC_SPELL_PHASE_HIT, so like a C++ build with no
 // spell_proc DB rows bearing PHASE_FINISH, the event currently triggers
@@ -1041,12 +1039,20 @@ func (s *session) procSpellFinishAuraTriggers(ctx context.Context, spell wotlk.S
 		schoolMask = 1
 	}
 	spellCopy := spell
+	// Spell::_handle_finish_phase (Spell.cpp:3744): the event carries the
+	// cast's accumulated m_hitMask, normalized to PROC_HIT_NORMAL when no
+	// target crit — the empty-target arm (Spell.cpp:3604-3605) seeds the
+	// same value, so a targetless cast lands on NORMAL either way.
+	hitMask := s.castProcHitMask
+	if hitMask&procHitCritical == 0 {
+		hitMask |= procHitNormal
+	}
 	s.procAuraTriggerLoop(ctx, 0, procEventInfo{
 		typeMask:       typeMask,
 		schoolMask:     schoolMask,
 		spellTypeMask:  procSpellTypeMaskAll,
 		spellPhaseMask: procSpellPhaseFinish,
-		hitMask:        procHitNormal,
+		hitMask:        hitMask,
 		triggered:      s.triggeredNoProcEvents > 0,
 		eventSpell:     &spellCopy,
 		actorGUID:      s.playerGUID,
@@ -1062,11 +1068,9 @@ func (s *session) procSpellFinishAuraTriggers(ctx context.Context, spell wotlk.S
 // spellFinishPhaseProcTypeMask: C++ runs the same m_procAttacker fallback
 // (the prepareDataForTriggerSystem fill, else the magic/none positivity
 // split) at both _cast legs (Spell.cpp:3529-3542 vs 3764-3776). The hit mask
-// is PROC_HIT_NORMAL: C++ does `if (!(hitMask & PROC_HIT_CRITICAL)) hitMask
-// |= PROC_HIT_NORMAL` (Spell.cpp:3537-3538); Go has no cast-level m_hitMask
-// accumulator (per-target masks live inside executeSpellDamage), so the
-// event carries the value the C++ normalization lands on for any
-// non-critical cast — the same documented delta as the PHASE_FINISH bridge.
+// is the cast's accumulated m_hitMask (s.castProcHitMask), normalized to
+// PROC_HIT_NORMAL when no target crit (Spell.cpp:3537-3538) — the same
+// bridge as the PHASE_FINISH leg above.
 // The m_originalCaster early-return gate is vacuous here (every cast runs on
 // a player session; Go has no creature casters), and the CreatureAI
 // OnSpellCastFinished hook has no bridge (no creature casters or AI). The
@@ -1089,12 +1093,19 @@ func (s *session) procSpellCastPhaseAuraTriggers(ctx context.Context, spell wotl
 		schoolMask = 1
 	}
 	spellCopy := spell
+	// Spell::_cast (Spell.cpp:3537-3538): the event carries the cast's
+	// accumulated m_hitMask, normalized to PROC_HIT_NORMAL when no target
+	// crit — same normalization as the FINISH-phase leg above.
+	hitMask := s.castProcHitMask
+	if hitMask&procHitCritical == 0 {
+		hitMask |= procHitNormal
+	}
 	s.procAuraTriggerLoop(ctx, 0, procEventInfo{
 		typeMask:       typeMask,
 		schoolMask:     schoolMask,
 		spellTypeMask:  procSpellTypeMaskAll,
 		spellPhaseMask: procSpellPhaseCast,
-		hitMask:        procHitNormal,
+		hitMask:        hitMask,
 		triggered:      s.triggeredNoProcEvents > 0,
 		eventSpell:     &spellCopy,
 		actorGUID:      s.playerGUID,
@@ -1472,6 +1483,12 @@ func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint6
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
+	// Spell::m_hitMask (Spell.cpp:2603): the per-target mask accumulates
+	// unconditionally — the |= sits outside the canEffectTrigger gate, so
+	// even suppressed or CANT_TRIGGER_PROC targets feed the FINISH/CAST
+	// phase mask.
+	hitMask := spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit, absorbed)
+	s.castProcHitMask |= hitMask
 	spell, found, err := s.server.Data.Spell(spellID)
 	if err != nil || !found {
 		return
@@ -1489,7 +1506,7 @@ func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint6
 		schoolMask:     schoolMask,
 		spellTypeMask:  procSpellTypeDamage,
 		spellPhaseMask: procSpellPhaseHit,
-		hitMask:        spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit, absorbed),
+		hitMask:        hitMask,
 		triggered:      s.triggeredNoProcEvents > 0,
 		eventSpell:     &spellCopy,
 		actorGUID:      s.playerGUID,
@@ -1582,6 +1599,10 @@ func (s *session) procSpellHealAuraTriggers(ctx context.Context, targetGUID uint
 	if crit {
 		hitMask = procHitCritical
 	}
+	// Spell::m_hitMask (Spell.cpp:2506-2509): heal crits OR into the same
+	// per-target mask the FINISH/CAST phase events read, so the heal arm
+	// accumulates like the damage arm.
+	s.castProcHitMask |= hitMask
 	spellCopy := spell
 	s.procAuraTriggerLoop(ctx, targetGUID, procEventInfo{
 		typeMask:       typeMask,
