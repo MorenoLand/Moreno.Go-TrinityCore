@@ -265,6 +265,9 @@ const (
 	spellEffectEnergize                = 30
 	spellEffectHeal                    = 10 // SPELL_EFFECT_HEAL (SharedDefines.h:821)
 	spellEffectParry                   = 22
+	spellEffectEnvironmentalDMG        = 7  // SPELL_EFFECT_ENVIRONMENTAL_DAMAGE (SharedDefines.h:818)
+	spellEffectBind                    = 11 // SPELL_EFFECT_BIND (SharedDefines.h:822)
+	spellEffectBlock                   = 23 // SPELL_EFFECT_BLOCK (SharedDefines.h:834)
 	spellEffectPowerBurn               = 62
 	spellEffectThreat                  = 63
 	spellEffectTriggerSpell            = 64
@@ -7307,6 +7310,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT (caster arm),
 				// not per unit target.
 				s.handleEffectDestroyAllTotems(effCtx, eff)
+			case spellEffectEnvironmentalDMG: // 7: SPELL_EFFECT_ENVIRONMENTAL_DAMAGE (EffectEnvironmentalDMG, SpellEffects.cpp:298)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
+				// target: players take Player::EnvironmentalDamage (fire),
+				// unit targets only get the non-melee damage log.
+				s.handleEffectEnvironmentalDamage(effCtx, eff, spellID, uint8(spell.SchoolMask), hitTargets)
+			case spellEffectBind: // 11: SPELL_EFFECT_BIND (EffectBind, SpellEffects.cpp:5695)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per player
+				// target: sets the homebind, sends bind point update +
+				// player-bound packet.
+				s.handleEffectBind(effCtx, eff, target, hitTargets)
+			case spellEffectBlock: // 23: SPELL_EFFECT_BLOCK (EffectBlock, SpellEffects.cpp:4325)
+				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
+				// SetCanBlock(true).
+				s.handleEffectBlock()
 			default:
 				s.debug("unhandled spell effect", "spell", spellID, "effect", eff.Effect, "index", effectIndex)
 			}
@@ -18953,6 +18970,142 @@ func (s *session) handleEffectTeleUnitsFaceCaster(ctx context.Context, targetGUI
 		targetSess.player.Z,
 		-s.player.Orientation,
 	)
+}
+
+// handleEffectEnvironmentalDamage mirrors Spell::EffectEnvironmentalDMG
+// (SpellEffects.cpp:298-318), which runs at SPELL_EFFECT_HANDLE_HIT_TARGET
+// per unit target. Player targets take Player::EnvironmentalDamage with
+// DAMAGE_FIRE through their own session (the alive gate is inside
+// environmentalDamage). Unit targets take NO damage — C++ only computes
+// absorb/resist and sends the non-melee damage log
+// (Unit::SendSpellNonMeleeDamageLog, Unit.cpp:5302) — so only the packet is
+// sent. Go has no creature absorb-aura model on this path; the resistance
+// leg mirrors Unit::CalcSpellResistedDamage via calcMagicSpellResistance.
+func (s *session) handleEffectEnvironmentalDamage(ctx context.Context, eff wotlk.SpellEffect, spellID uint32, schoolMask uint8, hitTargets []uint64) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	damage := uint32(eff.BasePoints + 1)
+	for _, effectTarget := range hitTargets {
+		if effectTarget == 0 {
+			continue
+		}
+		if targetSess := s.server.findSessionByGUID(effectTarget); targetSess != nil && targetSess.player != nil {
+			targetSess.environmentalDamage(ctx, damageFire, damage)
+			continue
+		}
+		if uint16(effectTarget>>48) != 0xF130 {
+			continue
+		}
+		motion := s.findCreatureMotion(effectTarget)
+		if motion == nil {
+			continue
+		}
+		s.server.motionMu.Lock()
+		alive := motion.Health > 0
+		resistances := motion.Resistances
+		level := motion.Level
+		mapID, instanceID := motion.Map, motion.InstanceID
+		s.server.motionMu.Unlock()
+		if !alive {
+			continue
+		}
+		var resisted uint32
+		if schoolMask > 1 {
+			resisted, _ = calcMagicSpellResistance(damage, schoolMask, resistances, s.player.Level, uint8(level), true, false)
+		}
+		logPkt := buildSpellNonMeleeDamageLog(effectTarget, s.playerGUID, spellID, damage, 0, schoolMask, 0, resisted, 0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
+		s.server.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, s)
+	}
+}
+
+// handleEffectBind mirrors Spell::EffectBind (SpellEffects.cpp:5695-5725),
+// which runs at SPELL_EFFECT_HANDLE_HIT_TARGET per player target. The
+// homebind moves to the spell destination when the cast has one, otherwise
+// to the target's position; the area id is the effect MiscValue when set,
+// else the target's zone (Go has no subzone area model, matching the
+// innkeeper bind path's HomebindZone usage). Player::SetHomebind persists
+// via UPDATE character_homebind (Player.cpp:17342-17357); the bind point
+// update and player-bound packets mirror SendBindPointUpdate and the
+// PlayerBound packet, the latter carrying the caster GUID.
+func (s *session) handleEffectBind(ctx context.Context, eff wotlk.SpellEffect, target protocol.SpellTargetData, hitTargets []uint64) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	for _, effectTarget := range hitTargets {
+		if effectTarget == 0 {
+			continue
+		}
+		targetSess := s.server.findSessionByGUID(effectTarget)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		areaID := targetSess.player.Zone
+		if eff.MiscValue != 0 {
+			areaID = uint32(eff.MiscValue)
+		}
+		mapID := targetSess.player.Map
+		bindX, bindY, bindZ := targetSess.player.X, targetSess.player.Y, targetSess.player.Z
+		if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+			// C++ takes destTarget's full WorldLocation; Go's dest carries
+			// no map, so the target's map is kept.
+			bindX, bindY, bindZ = target.Destination.X, target.Destination.Y, target.Destination.Z
+		}
+		targetSess.player.HomebindMap = mapID
+		targetSess.player.HomebindZone = areaID
+		targetSess.player.HomebindX = bindX
+		targetSess.player.HomebindY = bindY
+		targetSess.player.HomebindZ = bindZ
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_homebind SET mapId = ?, zoneId = ?, posX = ?, posY = ?, posZ = ? WHERE guid = ?",
+				mapID, areaID, bindX, bindY, bindZ, effectTarget)
+		}
+		_ = targetSess.write(uint16(protocol.OpcodeSMSG_BIND_POINT_UPDATE), buildBindPointUpdate(targetSess.player), true)
+		_ = targetSess.write(uint16(protocol.OpcodeSMSG_PLAYER_BOUND), buildPlayerBound(s.playerGUID, areaID), true)
+		targetSess.sendPlayerUpdate()
+	}
+}
+
+// handleEffectBlock mirrors Spell::EffectBlock (SpellEffects.cpp:4325-4331),
+// which runs once at SPELL_EFFECT_HANDLE_HIT on the caster:
+// m_caster->ToPlayer()->SetCanBlock(true). The flag is Player::m_canBlock —
+// it gates the block chance in Unit::GetUnitBlockChance (Unit.cpp:2787) and
+// zeroes the block percentage in Player::UpdateBlockPercentage
+// (StatSystem.cpp:601-623) until set. The caster is always the session
+// player on these cast paths. The block percentage recompute mirrors
+// UpdateBlockPercentage with the standing Go deltas (block-rating>0 and
+// shield-class gates approximating GetUnitBlockChance's usable-shield leg;
+// SPELL_AURA_MOD_BLOCK_PERCENT has no Go aura model).
+func (s *session) handleEffectBlock() {
+	if s == nil || s.player == nil {
+		return
+	}
+	if s.player.CanBlock {
+		return
+	}
+	s.player.CanBlock = true
+	defenseSkill := uint32(0)
+	for _, skill := range s.player.Skills {
+		if skill.Skill == 95 {
+			defenseSkill = uint32(skill.Value)
+			break
+		}
+	}
+	maxSkill := uint32(s.player.Level) * 5
+	s.player.BlockPercentage = 0
+	if s.player.Block > 0 && (s.player.Class == 1 || s.player.Class == 2 || s.player.Class == 6 || s.player.Class == 7) {
+		s.player.BlockPercentage = 5 + s.playerCombatRatingBonus(s.player, s.player.Level, int(CombatRatingBlock))
+		if defenseSkill > maxSkill {
+			s.player.BlockPercentage += float32(defenseSkill-maxSkill) * 0.04
+		} else {
+			s.player.BlockPercentage -= float32(maxSkill-defenseSkill) * 0.04
+		}
+		if s.player.BlockPercentage < 0 {
+			s.player.BlockPercentage = 0
+		}
+	}
+	s.sendPlayerUpdate()
 }
 
 // duelTargetIgnored mirrors the ignore leg of Spell::EffectDuel

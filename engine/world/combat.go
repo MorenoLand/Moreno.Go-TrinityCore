@@ -439,7 +439,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	victimDodgeBP := int32(-1)
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil && vicSess.player != nil {
-			canBlock = vicSess.player.Block > 0
+			canBlock = vicSess.player.CanBlock && vicSess.player.Block > 0
 			critChanceBP := int32(500)
 			vicSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenMelee, &critChanceBP)
 			critReductionBP = 500 - critChanceBP
@@ -902,7 +902,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	victimDodgeBP := int32(-1)
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil && vicSess.player != nil {
-			canBlock = vicSess.player.Block > 0
+			canBlock = vicSess.player.CanBlock && vicSess.player.Block > 0
 			critChanceBP := int32(500)
 			vicSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenRanged, &critChanceBP)
 			critReductionBP = 500 - critChanceBP

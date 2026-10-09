@@ -304,6 +304,7 @@ type playerState struct {
 	BlockPercentage                 float32
 	DodgePercentage                 float32
 	CanParry                        bool
+	CanBlock                        bool
 	ParryPercentage                 float32
 	Expertise                       uint32
 	OffhandExpertise                uint32
@@ -2264,7 +2265,7 @@ func (s *session) calculatePlayerCritFields(state *playerState, level uint8) {
 			state.DodgePercentage = 0
 		}
 	}
-	if state.Block > 0 && (state.Class == 1 || state.Class == 2 || state.Class == 6 || state.Class == 7) {
+	if state.CanBlock && state.Block > 0 && (state.Class == 1 || state.Class == 2 || state.Class == 6 || state.Class == 7) {
 		state.BlockPercentage = 5 + ratingBonus(int(CombatRatingBlock))
 		if defenseSkill > maxSkill {
 			state.BlockPercentage += float32(defenseSkill-maxSkill) * 0.04

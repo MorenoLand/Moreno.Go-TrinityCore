@@ -1244,7 +1244,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if isPlayerVictim && target.Sess.player.Level > 0 {
 				targetLevel = target.Sess.player.Level
 			}
-			canBlock := isPlayerVictim && target.Sess.player.Block > 0
+			canBlock := isPlayerVictim && target.Sess.player.CanBlock && target.Sess.player.Block > 0
 			canParry := isPlayerVictim && (target.Sess.player.Level >= 10 || target.Sess.player.Level == 0)
 			canDodge := true
 			if isPlayerVictim {
