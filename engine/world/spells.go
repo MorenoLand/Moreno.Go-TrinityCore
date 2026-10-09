@@ -1493,9 +1493,9 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// TRIGGERED_IGNORE_CASTER_AURASTATE suppression is structural — this path
 	// never carries triggered flags. C++ relative order: first arm inside the
 	// cooldown block, ahead of the SpellHistory::IsReady loop below.
-	// Delta: the aura-side setter has no Go bridge yet, so the flag is never
-	// set today and the gate is live but vacuous — it activates when the aura
-	// bridge lands.
+	// The aura-side setter is bridged: SPELL_AURA_ALLOW_ONLY_ABILITY (263)
+	// sets the flag in applyAuraToTarget and clears it in removeAura when
+	// no other 263 aura remains, so this gate is live.
 	if s.player.PlayerFlags&playerFlagAllowOnlyAbility != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 105), true) // SPELL_FAILED_SPELL_IN_PROGRESS = 105
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "allow-only-ability flag set")
@@ -13860,6 +13860,7 @@ func (s *session) removeAura(spellID uint32) {
 	wasConfused := false
 	wasFleeing := false
 	wasCharmed := false
+	wasAllowOnlyAbility := false
 	wasForcedReaction := false
 	forcedReactionFaction := uint32(0)
 	forcedReactionRank := uint32(0)
@@ -13889,6 +13890,7 @@ func (s *session) removeAura(spellID uint32) {
 			wasConfused = aura.AuraType == spellAuraConfuse
 			wasFleeing = aura.AuraType == spellAuraFear
 			wasCharmed = aura.AuraType == spellAuraCharm
+			wasAllowOnlyAbility = aura.AuraType == spellAuraAllowOnlyAbility
 			wasForcedReaction = aura.AuraType == 139
 			if wasForcedReaction && aura.MiscValue >= 0 {
 				forcedReactionFaction = uint32(aura.MiscValue)
@@ -13982,6 +13984,14 @@ func (s *session) removeAura(spellID uint32) {
 	}
 	if wasTrackStealthed && s.player != nil && !s.hasAuraType(spellAuraTrackStealthed) {
 		s.player.PlayerFieldBytes &^= playerFieldByteTrackStealthed
+	}
+	// AuraEffect::HandleAuraAllowOnlyAbility remove leg
+	// (SpellAuraEffects.cpp:2434-2439): clear PLAYER_ALLOW_ONLY_ABILITY
+	// unless another 263 aura remains (the HasAuraType gate). The apply leg
+	// sits in applyAuraToTarget; the CheckCast gate (handleCastSpell) was
+	// already bridged but live-and-vacuous until this setter landed.
+	if wasAllowOnlyAbility && s.player != nil && !s.hasAuraType(spellAuraAllowOnlyAbility) {
+		s.player.PlayerFlags &^= playerFlagAllowOnlyAbility
 	}
 	if wasMovementControl && !s.hasAuraType(spellAuraStun) && !s.hasAuraType(spellAuraRoot) {
 		s.rooted = false
@@ -14944,13 +14954,14 @@ const (
 	// CREATE_ITEM check).
 	spellFamilyFlagConjureRefreshment = 0x40000000
 
-	spellAuraModPossess     = 2
-	spellAuraTrackCreatures = 44
-	spellAuraTrackResources = 45
-	spellAuraModRegen       = 84
-	spellAuraModPowerRegen  = 85
-	spellAuraModPossessPet  = 128
-	spellAuraAoeCharm       = 177
+	spellAuraModPossess       = 2
+	spellAuraTrackCreatures   = 44
+	spellAuraTrackResources   = 45
+	spellAuraModRegen         = 84
+	spellAuraModPowerRegen    = 85
+	spellAuraModPossessPet    = 128
+	spellAuraAoeCharm         = 177
+	spellAuraAllowOnlyAbility = 263
 
 	spellEffectApplyAura           = 6
 	spellEffectPersistentAreaAura  = 27
@@ -15793,6 +15804,15 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				_ = targetSess.handleAttackStop()
 			}
 			targetSess.sendClientControl(targetSess.playerGUID, false)
+		}
+		// AuraEffect::HandleAuraAllowOnlyAbility apply leg
+		// (SpellAuraEffects.cpp:2432-2433): Bladestorm (46924) and Killing
+		// Spree (51690) set PLAYER_ALLOW_ONLY_ABILITY while the aura is up.
+		// The C++ AURA_EFFECT_HANDLE_SEND_FOR_CLIENT_MASK mode gate has no Go
+		// counterpart — the flag applies unconditionally like the other
+		// player-flag arms in this block.
+		if eff.Aura == spellAuraAllowOnlyAbility {
+			targetSess.player.PlayerFlags |= playerFlagAllowOnlyAbility
 		}
 		if eff.Aura == 139 {
 			_ = targetSess.sendForcedReactions()

@@ -129,8 +129,7 @@ func (s *session) rollSpellHit(targetLevel uint8, isTargetPlayer bool) bool {
 // and, for players, spells with no spell family name (Object.cpp:2462-2468).
 // Player spell mods (SPELLMOD_CASTING_TIME) apply to the base before the
 // haste multiplier (Object.cpp:2455, ahead of Object.cpp:2462).
-// Noted gaps (not stubs): CanInstantCast (SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK amount >= 1000,
-// SpellAuraEffects.cpp:3904) has no cast-speed aura infra; the ranged-attack-speed
+// Noted gaps (not stubs): the ranged-attack-speed
 // branch (m_modAttackSpeedPct[RANGED_ATTACK], Object.cpp:2470) has no Go
 // ranged-haste infra, so that branch is a no-op here.
 func (s *session) calculateSpellCastTime(spell wotlk.Spell) uint32 {
@@ -147,6 +146,16 @@ func (s *session) calculateSpellCastTime(spell wotlk.Spell) uint32 {
 	reqAmmo := spell.Attributes&spellAttr0ReqAmmo != 0 && spell.AttributesEx1&spellAttr2AutorepeatFlag == 0
 	switch {
 	case s.player != nil && spell.Attributes&(spellAttr0Ability|spellAttr0Tradespell) == 0 && spell.AttributesEx3&spellAttr3NoDoneBonus == 0 && spell.SpellFamilyName != 0:
+		// Unit::CanInstantCast (Object.cpp:2468), set by
+		// AuraEffect::HandleModCastingSpeed (SpellAuraEffects.cpp:3904-3919):
+		// an SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK (65) effect with amount
+		// >= 1000 flags the unit for instant casts, ahead of the haste
+		// multiplier. C++ re-evaluates on aura remove (the flag clears
+		// unless another >=1000 effect remains); Go reads the live aura set
+		// on every cast, so no cached flag can go stale.
+		if s.hasInstantCastAura() {
+			return 0
+		}
 		if hastePct := s.getSpellHastePct(); hastePct > 0 {
 			castTime = int32(float64(castTime) / (1.0 + hastePct/100.0))
 		}
@@ -162,6 +171,20 @@ func (s *session) calculateSpellCastTime(spell wotlk.Spell) uint32 {
 		return 0
 	}
 	return uint32(castTime)
+}
+
+// hasInstantCastAura mirrors Unit::CanInstantCast (Unit.h:1674): true when
+// the player carries an SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK (65) effect
+// with amount >= 1000 (AuraEffect::HandleModCastingSpeed,
+// SpellAuraEffects.cpp:3904-3919). Amounts below 1000 take the normal
+// cast-speed percent path and do not trigger the flag.
+func (s *session) hasInstantCastAura() bool {
+	for _, amount := range s.auraTypeModifiers(spellAuraCastingSpeedNotStack) {
+		if amount >= 1000 {
+			return true
+		}
+	}
+	return false
 }
 
 // calculateSpellCritChance resolves the probability [0.0, 1.0] of a spell critical strike.

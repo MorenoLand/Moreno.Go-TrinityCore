@@ -1102,26 +1102,46 @@ func (s *session) getThreatMultiplier(schoolMask uint32) float32 {
 		if a == nil || a.Stopped {
 			continue
 		}
-		// Generic SPELL_AURA_MOD_THREAT (AuraType 10)
+		// Generic SPELL_AURA_MOD_THREAT (AuraType 10) — mirrors
+		// Unit::GetTotalAuraMultiplierByMiscMask (Unit.cpp:4947-4956): only
+		// effects whose MiscValue school mask overlaps the queried school
+		// mask multiply in (AddPct per effect). Righteous Fury (25780) is
+		// aura-10 with MiscValue=2 (holy) and amount 80 — the old ungated arm
+		// applied its +80% to every school, and the hardcoded switch below
+		// doubled it to x3.24 on holy; both deviations are fixed here.
 		if a.AuraType == 10 {
-			mult *= (1.0 + float32(int32(a.Amount))/100.0)
+			if a.MiscValue&int32(schoolMask) != 0 {
+				mult *= (1.0 + float32(int32(a.Amount))/100.0)
+			}
 			continue
 		}
-		// Specific stance / aura threat modifiers
+		// Hardcoded spell-ID threat modifiers for spells whose 3.3.5a DBC
+		// carries no SPELL_AURA_MOD_THREAT effect of its own (verified per
+		// spell against the 3.3.5a Spell.dbc). The SameEffectStackRule
+		// spell-group refinement (Unit.cpp:4871-4880) stays unmodeled — Go
+		// has no spell-group model.
 		switch a.SpellID {
 		case 71: // Warrior: Defensive Stance (+45% threat)
+			// The +45% lives on the separate 7376 (Defensive Stance Passive,
+			// aura-10 MiscValue=127 amount 45), which Go never applies — the
+			// hardcoded x1.45 replicates its exact net effect.
 			mult *= 1.45
-		case 2457, 2458: // Warrior: Battle / Berserker Stance (-20% threat)
-			mult *= 0.80
 		case 5487, 9634: // Druid: Bear Form / Dire Bear Form (+30% threat)
+			// No aura-10 effect on the stance spells in the 3.3.5a DBC; a
+			// possible separate threat passive is unverified for 3.3.5a, so
+			// the x1.30 stands as the approximation (revisit if 21178 or a
+			// 3.3.5a equivalent is confirmed).
 			mult *= 1.30
-		case 25780: // Paladin: Righteous Fury (+80% threat on Holy spells, schoolMask & 0x02 != 0)
-			if schoolMask&0x02 != 0 {
-				mult *= 1.80
-			}
 		case 1038: // Paladin: Hand of Salvation (-20% threat)
+			// No aura-10 effect (per-tick -2% total-threat via triggered
+			// casts, unmodeled); x0.80 approximates the 10s cumulative
+			// (-2%/tick compounds to ~0.817).
 			mult *= 0.80
 		}
+		// Removed: 2457/2458 Battle/Berserker Stance (x0.80) — TBC-era
+		// deviation with no 3.3.5a DBC threat effect; C++ gives 1.0.
+		// Removed: 25780 Righteous Fury — double-applied with the generic
+		// arm; now handled exactly by the MiscValue-gated arm above.
 	}
 	if mult < 0.1 {
 		mult = 0.1
