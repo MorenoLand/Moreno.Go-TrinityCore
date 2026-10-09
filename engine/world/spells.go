@@ -219,6 +219,8 @@ const (
 
 	spellImplicitTargetUnitPet uint32 = 5 // TARGET_UNIT_PET (SharedDefines.h:1446)
 
+	implicitTargetUnitVehicle uint32 = 94 // TARGET_UNIT_VEHICLE (SharedDefines.h:1530)
+
 	itemClassWeapon = 2
 	itemClassArmor  = 4
 	// ITEM_CLASS_TRADE_GOODS (ItemTemplate.h:303): vellum class for the
@@ -5871,6 +5873,41 @@ func (s *session) breakHitBySpellAuras(ctx context.Context, spell wotlk.Spell, t
 	}
 }
 
+// implicitCasterUnitTarget mirrors the CASTER-reference arms of
+// Spell::SelectImplicitCasterObjectTargets (Spell.cpp:1500-1556): the target
+// resolves from the caster itself — the guardian pet for TARGET_UNIT_PET (5,
+// Unit::GetGuardianPet) or the vehicle base for TARGET_UNIT_VEHICLE (94,
+// Unit::GetVehicleBase) — and never from the wire or selection target
+// (SelectEffectImplicitTargets' EFFECT_IMPLICIT_TARGET_CASTER case never
+// consults m_targets.GetUnitTarget()). TARGET_UNIT_MASTER (27) needs the
+// caster's charmer/owner and Go has no player charm model; TARGET_UNIT_SUMMONER
+// (92) is vacuous for player casters; TARGET_UNIT_PASSENGER_0..7 (96+) needs
+// a creature caster, also vacuous on the client path.
+func (s *session) implicitCasterUnitTarget(spell wotlk.Spell) (uint64, bool) {
+	if s == nil || s.player == nil {
+		return 0, false
+	}
+	wantPet, wantVehicle := false, false
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		if eff.ImplicitTargetA == spellImplicitTargetUnitPet || eff.ImplicitTargetB == spellImplicitTargetUnitPet {
+			wantPet = true
+		}
+		if eff.ImplicitTargetA == implicitTargetUnitVehicle || eff.ImplicitTargetB == implicitTargetUnitVehicle {
+			wantVehicle = true
+		}
+	}
+	if wantPet && s.player.PetGUID != 0 {
+		return s.player.PetGUID, true
+	}
+	if wantVehicle && s.player.VehicleGUID != 0 {
+		return s.player.VehicleGUID, true
+	}
+	return 0, false
+}
+
 func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, castItemGUID uint64, castItemEntry uint32, queuedSwing *activeCastState) {
 	if s.player == nil {
 		return
@@ -6202,6 +6239,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	explicitUnitGUID := uint64(0)
 	if isSelfCastOnly(spell) {
 		hitTargets = append(hitTargets, s.playerGUID)
+	} else if casterUnitGUID, ok := s.implicitCasterUnitTarget(spell); ok {
+		// Spell::SelectImplicitCasterObjectTargets (Spell.cpp:1500):
+		// CASTER-reference unit targets (pet 5, vehicle 94) resolve from the
+		// caster and take precedence over the wire/selection/self fallbacks.
+		hitTargets = append(hitTargets, casterUnitGUID)
 	} else if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
 		explicitUnitGUID = target.UnitGUID
 	} else if s.selection != 0 && s.explicitSelectionTargetOK(ctx, spell, s.selection) {

@@ -106,10 +106,14 @@ func (s *session) trajCollideFlags(ctx context.Context, entries []uint32) map[ui
 
 // trajCandidates mirrors the WorldObjectSpellTrajTargetCheck search
 // (Spell.cpp:1640-1643 + 8452-8462): every unit within dist2d of the source
-// that lies in the missile corridor — in the caster's frontal hemisphere
-// (Position::HasInArc(M_PI), Position.cpp:139) with |sin(angle)| * dist <
-// combatReach + TRAJECTORY_MISSILE_SIZE — and passes the target-validity
-// gate. Go has no full SpellInfo::CheckTarget, so the gate is the standing
+// that lies in the missile corridor — the corridor is caster-anchored
+// (Position::HasInLine, Position.cpp:139: the check calls
+// _caster->HasInLine, so the frontal-hemisphere arc and the lateral
+// |sin(angle)| * dist test both use the caster's position and orientation,
+// not the spell source position), with |sin(angle)| * dist <
+// combatReach + TRAJECTORY_MISSILE_SIZE — while the range arm measures the
+// target's 2D distance from the spell source position (Spell.cpp:8460).
+// Go has no full SpellInfo::CheckTarget, so the gate is the standing
 // unit-validity approximation: alive and not combat-disabled.
 func (s *session) trajCandidates(ctx context.Context, srcX, srcY float32, dist2d float32) []trajCandidate {
 	candidates := make([]trajCandidate, 0, 16)
@@ -133,11 +137,16 @@ func (s *session) trajCandidates(ctx context.Context, srcX, srcY float32, dist2d
 		if objDist2d > float64(dist2d) {
 			return
 		}
-		if !hasInArc(s.player.Orientation, srcX, srcY, x, y, math.Pi) {
+		// The HasInLine corridor (Spell.cpp:8458 → Position.cpp:139) is
+		// caster-anchored: the arc test and the lateral offset both use the
+		// caster's position, not the spell source position.
+		cdx, cdy := float64(x-s.player.X), float64(y-s.player.Y)
+		if !hasInArc(s.player.Orientation, s.player.X, s.player.Y, x, y, math.Pi) {
 			return
 		}
-		relAngle := math.Atan2(dy, dx) - ori
-		if math.Abs(math.Sin(relAngle))*objDist2d >= float64(combatReach+trajectoryMissileSize) {
+		relAngle := math.Atan2(cdy, cdx) - ori
+		casterDist2d := math.Sqrt(cdx*cdx + cdy*cdy)
+		if math.Abs(math.Sin(relAngle))*casterDist2d >= float64(combatReach+trajectoryMissileSize) {
 			return
 		}
 		seen[guid] = struct{}{}
@@ -234,10 +243,12 @@ func (s *session) resolveTrajDestination(ctx context.Context, spell wotlk.Spell,
 	}
 	candidates := s.trajCandidates(ctx, sx, sy, dist2d)
 	collideFlags := s.trajCollideFlags(ctx, trajCandidateEntries(candidates))
-	// targets.sort(Trinity::ObjectDistanceOrderPred(m_caster)) (Spell.cpp:1644).
+	// targets.sort(Trinity::ObjectDistanceOrderPred(m_caster)) (Spell.cpp:1644):
+	// Object::GetDistanceOrder takes is3D = true by default (Object.cpp:1306),
+	// so the sort key is the 3D squared distance from the caster — not 2D.
 	sort.Slice(candidates, func(i, j int) bool {
-		di := (candidates[i].x-s.player.X)*(candidates[i].x-s.player.X) + (candidates[i].y-s.player.Y)*(candidates[i].y-s.player.Y)
-		dj := (candidates[j].x-s.player.X)*(candidates[j].x-s.player.X) + (candidates[j].y-s.player.Y)*(candidates[j].y-s.player.Y)
+		di := (candidates[i].x-s.player.X)*(candidates[i].x-s.player.X) + (candidates[i].y-s.player.Y)*(candidates[i].y-s.player.Y) + (candidates[i].z-s.player.Z)*(candidates[i].z-s.player.Z)
+		dj := (candidates[j].x-s.player.X)*(candidates[j].x-s.player.X) + (candidates[j].y-s.player.Y)*(candidates[j].y-s.player.Y) + (candidates[j].z-s.player.Z)*(candidates[j].z-s.player.Z)
 		return di < dj
 	})
 	ori := float64(s.player.Orientation)
