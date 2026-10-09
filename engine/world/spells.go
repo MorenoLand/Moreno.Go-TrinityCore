@@ -47,6 +47,7 @@ const (
 	spellAttr0CantUsedInCombat             uint32 = 0x10000000 // SPELL_ATTR0_CANT_USED_IN_COMBAT (SharedDefines.h:440)
 	spellAttr0ReqAmmo                      uint32 = 0x00000002 // SPELL_ATTR0_REQ_AMMO (SharedDefines.h:413)
 	spellAttr0CUNeedsAmmoData              uint32 = 0x00080000 // SPELL_ATTR0_CU_NEEDS_AMMO_DATA (SpellInfo.h:197)
+	spellAttr0CUIgnoreArmor                uint32 = 0x00008000 // SPELL_ATTR0_CU_IGNORE_ARMOR (SpellInfo.h:193)
 	spellAttr0OnNextSwing                  uint32 = 0x00000004 // SPELL_ATTR0_ON_NEXT_SWING (SharedDefines.h:414)
 	spellAttr0Tradespell                   uint32 = 0x00000020 // SPELL_ATTR0_TRADESPELL (SharedDefines.h:417)
 	spellAttr3NoDoneBonus                  uint32 = 0x20000000 // SPELL_ATTR3_NO_DONE_BONUS (SharedDefines.h:552) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
@@ -7990,10 +7991,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// mirrors C++: IsTargetingArea (spellEffectTargetsArea),
 				// IsAreaAuraEffect, or SPELL_EFFECT_PERSISTENT_AREA_AURA
 				// (27); it applies only when the damage is positive.
-				// CalculateAOEAvoidance has no Go model (standing gap), so
-				// the cap applies to the pre-avoidance damage, matching C++
-				// relative order.
-				if damage > 0 && (spellEffectTargetsArea(eff) || spellEffectIsAreaAura(eff.Effect) || eff.Effect == 27) {
+				// Unit::CalculateAOEAvoidance (Unit.cpp:12397-12404) runs
+				// just ahead of the cap in C++ (7758-7759 vs 7761-7766) —
+				// both are pure per-target multipliers, so Go folds the
+				// victim's avoidance product into targetDamage below,
+				// preserving the C++ relative order.
+				isAreaDamageEffect := spellEffectTargetsArea(eff) || spellEffectIsAreaAura(eff.Effect) || eff.Effect == 27
+				aoeSchoolMask := uint32(spell.SchoolMask)
+				if aoeSchoolMask == 0 {
+					aoeSchoolMask = 1
+				}
+				if damage > 0 && isAreaDamageEffect {
 					count := 0
 					for _, effectTarget := range hitTargets {
 						if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
@@ -8014,6 +8022,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				for _, effectTarget := range hitTargets {
 					if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
 						targetDamage := chainScaledAmount(damage, chainMult, chainJumpIndex[effectTarget])
+						// Unit::CalculateAOEAvoidance (Unit.cpp:12397-12404):
+						// the victim's AOE-avoidance aura product scales the
+						// area-effect damage per target, before the chain
+						// falloff above (multiplication commutes with the
+						// falloff, matching the C++ arm's placement ahead of
+						// the m_applyMultiplierMask accumulation).
+						if isAreaDamageEffect && targetDamage > 0 {
+							if avoid := s.aoeDamageAvoidanceMultiplier(effCtx, effectTarget, aoeSchoolMask); avoid != 1 {
+								targetDamage = uint32(float64(targetDamage) * avoid)
+							}
+						}
 						// Spell::EffectWeaponDmg (SpellEffects.cpp:3171-3498):
 						// the weapon-damage computation itself
 						// (Unit::CalculateDamage, the fixed_bonus /
@@ -8619,7 +8638,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// to the caster. The C++ multiplier arm (7771-7774) runs for
 				// reflected jumps too, hence the hit-counted index above.
 				for _, rj := range reflectedJumpIndexes {
-					s.executeSpellDamage(effCtx, s.playerGUID, spellID, chainScaledAmount(damage, chainMult, rj), effectIndex)
+					reflectedDamage := chainScaledAmount(damage, chainMult, rj)
+					// The C++ avoidance arm (Spell.cpp:7758) runs for
+					// reflected jumps too — the reflected unit is the caster.
+					if isAreaDamageEffect && reflectedDamage > 0 {
+						if avoid := s.aoeDamageAvoidanceMultiplier(effCtx, s.playerGUID, aoeSchoolMask); avoid != 1 {
+							reflectedDamage = uint32(float64(reflectedDamage) * avoid)
+						}
+					}
+					s.executeSpellDamage(effCtx, s.playerGUID, spellID, reflectedDamage, effectIndex)
 				}
 			case spellEffectHeal, spellEffectHealPct: // SPELL_EFFECT_HEAL (10), SPELL_EFFECT_HEAL_PCT (136)
 				heal := uint32(eff.BasePoints + 1)
@@ -11298,6 +11325,34 @@ func creatureAuraModifiersByMiscMask(s *Server, key creatureAuraKey, auraType, m
 	return result
 }
 
+// aoeDamageAvoidanceMultiplier mirrors Unit::CalculateAOEAvoidance
+// (Unit.cpp:12397-12404): the product of (1 + amount/100) over the victim's
+// SPELL_AURA_MOD_AOE_DAMAGE_AVOIDANCE auras whose misc mask intersects the
+// spell school, plus the SPELL_AURA_MOD_CREATURE_AOE_DAMAGE_AVOIDANCE product
+// when the original caster is a creature. Every call site on this path casts
+// as the player session, so only the 229 arm is evaluated here; the 310 arm
+// is documented for the creature-caster call sites that share this helper.
+func (s *session) aoeDamageAvoidanceMultiplier(ctx context.Context, victimGUID uint64, schoolMask uint32) float64 {
+	mult := 1.0
+	if s == nil || schoolMask == 0 || victimGUID == 0 {
+		return mult
+	}
+	var amounts []int32
+	if victimGUID == s.playerGUID {
+		amounts = s.auraTypeModifiersByMiscMask(spellAuraModAoeDamageAvoidance, schoolMask)
+	} else if s.server != nil {
+		if ps := s.server.findSessionByGUID(victimGUID); ps != nil {
+			amounts = ps.auraTypeModifiersByMiscMask(spellAuraModAoeDamageAvoidance, schoolMask)
+		} else if target, ok := s.getCombatTarget(ctx, victimGUID); ok {
+			amounts = creatureAuraModifiersByMiscMask(s.server, creatureAuraKeyForTarget(target), spellAuraModAoeDamageAvoidance, schoolMask)
+		}
+	}
+	for _, amount := range amounts {
+		mult *= 1.0 + float64(amount)/100.0
+	}
+	return mult
+}
+
 // creatureDamageFromCasterMultiplier mirrors the
 // SPELL_AURA_MOD_DAMAGE_FROM_CASTER arm of TrinityCore
 // Unit::SpellDamageBonusTaken (Unit.cpp:7094) for creature victims: the
@@ -11568,6 +11623,20 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				damage = s.spellCriticalDamageBonus(ctx, wotlk.Spell{ID: spellID, SchoolMask: uint32(schoolMask)}, damage, targetGUID)
 			}
 			hitInfo = 0x02 // SPELL_HIT_TYPE_CRIT
+		}
+
+		// Unit::CalculateSpellDamageTaken (Unit.cpp:1004-1006): physical-school
+		// spell damage is reduced by the victim's armor
+		// (Unit::IsDamageReducedByArmor: school bit 0 set and no
+		// SPELL_ATTR0_CU_IGNORE_ARMOR; SPELL_ATTR4_FIXED_DAMAGE skips the
+		// whole taken-mitigation block). C++ applies armor before the crit
+		// bonus; both are pure multiplications, so running it after the
+		// crit fold is arithmetically equivalent modulo rounding, matching
+		// the melee path's existing placement (combat.go).
+		if !instantKill && damage > 0 && schoolMask&1 != 0 && target.Armor > 0 && spellKnown &&
+			dmgSpell.AttributesEx4&spellAttr4FixedDamage == 0 && dmgSpell.Attributes&spellAttr0CUIgnoreArmor == 0 &&
+			s.player != nil {
+			damage = calcArmorReducedDamage(float64(target.Armor), s.player.Level, damage, s.getArmorPenPct())
 		}
 
 		if !instantKill && schoolMask > 1 && s.player != nil && s.player.Level > 0 {
@@ -16584,6 +16653,8 @@ const (
 	spellAuraModCritChanceForCaster              = 308 // SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (SpellAuraDefines.h:388)
 	spellAuraModWeaponCritPercent                = 52  // SPELL_AURA_MOD_WEAPON_CRIT_PERCENT (SpellAuraDefines.h:132)
 	spellAuraAbilityPeriodicCrit                 = 286 // SPELL_AURA_ABILITY_PERIODIC_CRIT (SpellAuraDefines.h:366)
+	spellAuraModAoeDamageAvoidance               = 229 // SPELL_AURA_MOD_AOE_DAMAGE_AVOIDANCE (SpellAuraDefines.h:309)
+	spellAuraModCreatureAoeDamageAvoidance       = 310 // SPELL_AURA_MOD_CREATURE_AOE_DAMAGE_AVOIDANCE (SpellAuraDefines.h:390)
 	dispelDisease                                = 3   // DISPEL_DISEASE (SharedDefines.h:1407), matched by Unit::GetDiseasesByCaster
 )
 
