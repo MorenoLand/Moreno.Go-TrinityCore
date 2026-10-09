@@ -832,8 +832,9 @@ func (s *session) handleCheatCooldown(ctx context.Context, args []string) {
 }
 
 // handleCheatPower mirrors HandlePowerCheatCommand (cs_cheat.cpp:129).
-// Fidelity gap: the CHEAT_POWER consumer (Spell.cpp:4792, power-cost skip)
-// has no Go bridge; the flag is stored and reported only.
+// The CHEAT_POWER consumer (Spell.cpp:4792, power-cost skip) is bridged in
+// finishSpellCast's TakePower legs (spells.go): the flag skips power/rune
+// deduction and the five-second-rule timer there.
 func (s *session) handleCheatPower(ctx context.Context, args []string) {
 	if !s.commandAllowed(ctx, permissionCommandCheatPower) {
 		s.sendNotification("You do not have permission to use that command.")

@@ -4979,6 +4979,16 @@ func (s *session) checkAuraBouncedCast(spell wotlk.Spell, target protocol.SpellT
 	return 0
 }
 
+// spellEffectTargetsArea mirrors SpellEffectInfo::IsTargetingArea
+// (SpellInfo.cpp:380-383) for a single effect: TargetA.IsArea() ||
+// TargetB.IsArea() (SpellInfo.cpp:388-391 — selection category AREA or
+// CONE), via the same target-type lists as spellInfoTargetsArea.
+func spellEffectTargetsArea(eff wotlk.SpellEffect) bool {
+	return isAreaEnemyTargetType(eff.ImplicitTargetA) || isAreaEnemyTargetType(eff.ImplicitTargetB) ||
+		isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB) ||
+		isFriendlyConeTargetType(eff.ImplicitTargetA) || isFriendlyConeTargetType(eff.ImplicitTargetB)
+}
+
 // spellInfoTargetsArea mirrors SpellInfo::IsTargetingArea
 // (SpellInfo.cpp:1039-1045): any non-NONE effect whose implicit target A
 // or B has AREA or CONE selection category, via the same target-type lists
@@ -6117,36 +6127,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		power := s.player.Powers[pType]
 		remainingPower = &power
 	}
-	if pType < 7 && cost > 0 {
-		// Re-validation above guarantees sufficient power; C++ TakePower deducts.
-		s.player.Powers[pType] -= cost
-		// Spell::TakePower (Spell.cpp:4870-4872): set the five second
-		// timer when mana is spent. C++ gates on powerType == POWER_MANA
-		// (0) && m_powerCost > 0; the timer starts at cast completion
-		// (TakePower runs in Spell::cast), not at cast initiation, and
-		// interrupted casts never trigger it.
-		if pType == 0 {
-			s.lastCastTime = time.Now()
-		}
-		powerPacket := protocol.NewBuffer(13)
-		powerPacket.WritePackedGUID(s.playerGUID)
-		powerPacket.WriteU8(uint8(pType))
-		powerPacket.WriteU32(s.player.Powers[pType])
-		_ = s.write(uint16(protocol.OpcodeSMSG_POWER_UPDATE), powerPacket.Bytes(), true)
-		if s.server != nil {
-			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_POWER_UPDATE), powerPacket.Bytes(), s)
-		}
-		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			col := fmt.Sprintf("power%d", pType+1)
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, fmt.Sprintf("UPDATE characters SET %s = ? WHERE guid = ?", col), s.player.Powers[pType], s.playerGUID)
-		}
-	}
-	s.takeSpellReagents(ctx, spell)
-
-	// Spell::TakePower (Spell.cpp:4838-4844) spends runes for POWER_RUNE
-	// spells via TakeRunePower. didHit mirrors C++ (false only when the
-	// primary target missed; chain jumps appended to hitTargets above
-	// must not flip it).
+	// Spell::TakePower (Spell.cpp:4785-4793): item casts (m_CastItem) and
+	// the CHEAT_POWER command both skip power entirely. The triggered-cast
+	// half (m_triggeredByAuraSpell) is structural here — triggered casts
+	// never reach finishSpellCast. Go previously deducted power for item
+	// casts (items.go calls finishSpellCast with castItemGUID != 0) and
+	// under .cheat power.
+	takePower := castItemGUID == 0 && s.player.ActiveCheats&cheatPower == 0
+	// didHit mirrors Spell::TakePower (Spell.cpp:4796-4810): false only
+	// when the explicit unit target missed. It feeds the rune spend and
+	// the rage/energy miss-cost refund below; chain jumps appended to
+	// hitTargets above must not flip it.
 	didHit := true
 	for _, miss := range missStatus {
 		if miss.TargetGUID == targetGUID {
@@ -6154,10 +6145,62 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			break
 		}
 	}
-	if spell.PowerType == 5 {
+	// Spell::TakePower (Spell.cpp:4838-4844) spends runes for POWER_RUNE
+	// spells via TakeRunePower and returns before any ModifyPower arm, so
+	// the generic deduction below excludes POWER_RUNE.
+	if takePower && spell.PowerType == 5 {
 		s.takeRunePower(ctx, spell, didHit, time.Now().UnixMilli())
 		s.sendRuneCooldownUpdate()
 	}
+	if takePower && pType < 7 && pType != 5 && cost > 0 {
+		// Spell::TakePower (Spell.cpp:4807-4810): a miss on the explicit
+		// unit target lowers the cost first via
+		// SPELLMOD_SPELL_COST_REFUND_ON_FAIL (rage/energy; runes ride the
+		// miss arm of TakeRunePower instead).
+		if !didHit && (pType == 1 || pType == 3) { // POWER_RAGE / POWER_ENERGY
+			if refunded := s.applySpellMod(spell, spellModSpellCostRefundOnFail, int32(cost)); refunded >= 0 {
+				cost = uint32(refunded)
+			} else {
+				cost = 0
+			}
+		}
+		if cost > 0 {
+			// Re-validation above guarantees sufficient power; C++ TakePower deducts.
+			s.player.Powers[pType] -= cost
+			// Spell::TakePower (Spell.cpp:4870-4872): set the five second
+			// timer when mana is spent. C++ gates on powerType == POWER_MANA
+			// (0) && m_powerCost > 0; the timer starts at cast completion
+			// (TakePower runs in Spell::cast), not at cast initiation, and
+			// interrupted casts never trigger it.
+			if pType == 0 {
+				s.lastCastTime = time.Now()
+			}
+			powerPacket := protocol.NewBuffer(13)
+			powerPacket.WritePackedGUID(s.playerGUID)
+			powerPacket.WriteU8(uint8(pType))
+			powerPacket.WriteU32(s.player.Powers[pType])
+			_ = s.write(uint16(protocol.OpcodeSMSG_POWER_UPDATE), powerPacket.Bytes(), true)
+			if s.server != nil {
+				s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_POWER_UPDATE), powerPacket.Bytes(), s)
+			}
+			if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				col := fmt.Sprintf("power%d", pType+1)
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, fmt.Sprintf("UPDATE characters SET %s = ? WHERE guid = ?", col), s.player.Powers[pType], s.playerGUID)
+			}
+		}
+	}
+	// Spell::TakePower (Spell.cpp:4852-4856): POWER_HEALTH (-2 in C++,
+	// 0xFFFFFFFE in Go's uint32 field) deducts from health, not the power
+	// array. CheckPower above guarantees health > cost, so the clamp is
+	// unnecessary. Gated on takePower like every other TakePower arm.
+	if takePower && pType == 0xFFFFFFFE && cost > 0 {
+		s.player.Health -= cost
+		s.sendPlayerUpdate()
+		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ? WHERE guid = ?", s.player.Health, s.playerGUID)
+		}
+	}
+	s.takeSpellReagents(ctx, spell)
 
 	// Spell::_cast (Spell.cpp:3416-3420): SPELL_ATTR1_DISMISS_PET dismisses
 	// the caster's active pet at cast time, before the cooldown packet and
@@ -6394,6 +6437,29 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 					if count > 0 {
 						damage /= uint32(count)
+					}
+				}
+				// Spell::DoEffectOnLaunchTarget (Spell.cpp:7756-7766): player
+				// AoE damage caps at 10 targets — damage * 10 / targetAmount
+				// when the target container holds more than 10. targetAmount
+				// is m_UniqueTargetInfo.size() (hits and misses); Go's
+				// effects loop runs only when every target hit, so the
+				// loop's hit set is the same count. The per-effect gate
+				// mirrors C++: IsTargetingArea (spellEffectTargetsArea),
+				// IsAreaAuraEffect, or SPELL_EFFECT_PERSISTENT_AREA_AURA
+				// (27); it applies only when the damage is positive.
+				// CalculateAOEAvoidance has no Go model (standing gap), so
+				// the cap applies to the pre-avoidance damage, matching C++
+				// relative order.
+				if damage > 0 && (spellEffectTargetsArea(eff) || spellEffectIsAreaAura(eff.Effect) || eff.Effect == 27) {
+					count := 0
+					for _, effectTarget := range hitTargets {
+						if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
+							count++
+						}
+					}
+					if count > 10 {
+						damage = damage * 10 / uint32(count)
 					}
 				}
 				for _, effectTarget := range hitTargets {
