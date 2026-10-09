@@ -172,6 +172,53 @@ func (s *Store) NearestTaxiNode(x, y, z float32, mapID uint32, teamAlliance bool
 	return id, nil
 }
 
+// TaxiPathEntry returns the TaxiPath.dbc row for a path id: the from/to
+// taxi nodes and the path price. Used by Spell::EffectSendTaxi
+// (SpellEffects.cpp:4656), which takes the path id from the effect's
+// MiscValue (Player::ActivateTaxiPathTo(taxi_path_id), Player.cpp:21689).
+func (s *Store) TaxiPathEntry(pathID uint32) (from, to, price uint32, found bool, err error) {
+	pathsFile, err := s.File("TaxiPath")
+	if err != nil {
+		return 0, 0, 0, false, err
+	}
+	for i := 0; i < pathsFile.Records(); i++ {
+		record, recErr := pathsFile.Record(i)
+		if recErr != nil {
+			return 0, 0, 0, false, recErr
+		}
+		id := record.Uint32Unchecked(0)
+		if id != pathID {
+			continue
+		}
+		from, err = record.Uint32(1)
+		if err != nil {
+			return 0, 0, 0, false, err
+		}
+		to, err = record.Uint32(2)
+		if err != nil {
+			return 0, 0, 0, false, err
+		}
+		price, err = record.Uint32(3)
+		if err != nil {
+			return 0, 0, 0, false, err
+		}
+		return from, to, price, true, nil
+	}
+	return 0, 0, 0, false, nil
+}
+
+// TaxiNodeExists reports whether a taxi node id has a TaxiNodes.dbc row.
+// Used by Spell::EffectDiscoverTaxi (SpellEffects.cpp:5390), which only
+// discovers nodes the DBC knows (sTaxiNodesStore.LookupEntry).
+func (s *Store) TaxiNodeExists(node uint32) bool {
+	network, err := s.taxiNetwork()
+	if err != nil {
+		return false
+	}
+	_, ok := network.byID[node]
+	return ok
+}
+
 // TaxiPathLinks returns the TaxiPath.dbc row id and price for a direct
 // hop between two nodes (0 when no such path exists).
 func (s *Store) TaxiPathLinks(from, to uint32) (uint32, uint32, bool, error) {

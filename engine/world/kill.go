@@ -1254,3 +1254,78 @@ func (s *session) questObjectivesComplete(ctx context.Context, questID uint32, e
 	}
 	return true
 }
+
+// handleEffectKillCredit processes SPELL_EFFECT_KILL_CREDIT (90).
+// Mirrors TrinityCore Spell::EffectKillCredit (SpellEffects.cpp:5264-5280)
+// plus the Player::RewardPlayerAndGroupAtEvent (Player.cpp:24132-24158) and
+// Player::KilledMonsterCredit (Player.cpp:16636) tails it calls.
+// creatureEntry is the effect's MiscValue, with the Burn Body (42793)
+// special-case entry 24008 (Fallen Combatant). Grouped: every member at
+// Player::IsAtGroupRewardDistance of the target player (same map and
+// instance, dungeon-always, else within MaxGroupXPDistance /
+// CONFIG_GROUP_XP_DISTANCE, dead members anchored on their corpse via
+// groupRewardAnchorPos — Player.cpp:24165-24166) gets the credit, but only
+// while alive or not yet released (Player.cpp:24152). Solo: the target
+// player gets it directly.
+func (s *session) handleEffectKillCredit(ctx context.Context, targetGUID uint64, spellID uint32, miscValue int32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	entry := uint32(0)
+	if miscValue > 0 {
+		entry = uint32(miscValue)
+	}
+	if entry == 0 && spellID == 42793 { // Burn Body
+		entry = 24008 // Fallen Combatant
+	}
+	if entry == 0 {
+		return
+	}
+
+	// Spell::EffectKillCredit requires a player unit target
+	// (SpellEffects.cpp:5269).
+	var targetSess *session
+	if targetGUID == 0 || targetGUID == s.playerGUID {
+		targetSess = s
+	} else if s.server != nil {
+		targetSess = s.server.findSessionByGUID(targetGUID)
+	}
+	if targetSess == nil || targetSess.player == nil {
+		return
+	}
+
+	credit := func(m *session) {
+		// Player::KilledMonsterCredit (Player.cpp:16636): the timed
+		// achievement and the KILL_CREATURE criterion run before the quest
+		// loop; the quest loop itself rides creditQuestKills (the
+		// real_entry-via-creature-GUID arm is vacuous here — C++ passes the
+		// player target as pRewardSource, so creature_guid is empty and
+		// real_entry == entry).
+		m.startTimedAchievement(timedTypeCreature, entry)
+		m.updateAchievementCriteria(criteriaTypeKillCreature, entry, 1)
+		m.creditQuestKills(ctx, entry, targetGUID)
+	}
+
+	if targetSess.groupID == 0 || targetSess.server == nil {
+		credit(targetSess)
+		return
+	}
+	tx, ty, tz := targetSess.player.X, targetSess.player.Y, targetSess.player.Z
+	dungeon := targetSess.isDungeonMap(targetSess.player.Map)
+	for _, m := range targetSess.server.getGroupSessions(targetSess.groupID) {
+		if m == nil || m.player == nil {
+			continue
+		}
+		if m.player.Map != targetSess.player.Map || m.player.InstanceID != targetSess.player.InstanceID {
+			continue
+		}
+		mx, my, mz := groupRewardAnchorPos(m)
+		if !dungeon && distance3D(mx, my, mz, tx, ty, tz) > targetSess.server.Config.MaxGroupXPDistance {
+			continue
+		}
+		if m.isDeadOrGhost() && m.player.hasCorpse {
+			continue
+		}
+		credit(m)
+	}
+}

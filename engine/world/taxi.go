@@ -339,6 +339,7 @@ const (
 	taxiErrTooFarAway     uint32 = 4
 	taxiErrNoVendorNearby uint32 = 5
 	taxiErrNotVisited     uint32 = 6
+	taxiErrPlayerBusy     uint32 = 7 // ERR_TAXIPLAYERBUSY (SharedDefines.h)
 )
 
 func (s *session) handleActivateTaxi(ctx context.Context, payload []byte) bool {
@@ -685,4 +686,110 @@ func (s *session) handleSetTaxiBenchmarkMode(ctx context.Context, payload []byte
 	}
 	s.sendPlayerUpdate()
 	return true
+}
+
+// handleEffectSendTaxi processes SPELL_EFFECT_SEND_TAXI (123).
+// Mirrors TrinityCore Spell::EffectSendTaxi (SpellEffects.cpp:4656-4664),
+// which calls Player::ActivateTaxiPathTo(taxi_path_id, spellid) with the
+// path id from the effect's MiscValue (Player.cpp:21689). The vector
+// overload (Player.cpp:21510) runs with npc == nullptr (spell case): the
+// logout/combat/stun/root gate replies ERR_TAXIPLAYERBUSY, mounted auras
+// are stripped, the source node must exist, trade is cancelled, the
+// single hop resolves through GetTaxiPath, the wide mount lookup applies
+// (npc == nullptr allows it), insufficient money replies
+// ERR_TAXINOTENOUGHMONEY, and the flight starts with the first hop's cost
+// charged. The logout/stun/root arms have no Go model (documented delta);
+// the generic/autorepeat/channeled interrupt arm is vacuous — the effect
+// fires at HIT_TARGET after its own cast completed.
+func (s *session) handleEffectSendTaxi(ctx context.Context, eff wotlk.SpellEffect) {
+	if s == nil || !s.playerLoaded || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	reply := func(code uint32) {
+		packet := protocol.NewBuffer(4)
+		packet.WriteU32(code)
+		_ = s.write(uint16(protocol.OpcodeSMSG_ACTIVATETAXIREPLY), packet.Bytes(), true)
+	}
+	if eff.MiscValue <= 0 {
+		return
+	}
+	pathID := uint32(eff.MiscValue)
+	from, to, price, found, err := s.server.Data.TaxiPathEntry(pathID)
+	if err != nil || !found {
+		return
+	}
+	// Player.cpp:21517: no flight while logging out, in combat, stunned or
+	// rooted. Only the combat arm has a Go model.
+	if s.isInCombat() {
+		reply(taxiErrPlayerBusy)
+		return
+	}
+	// Player.cpp:21542 (spell case): strip mounted auras.
+	if s.player.MountDisplayID != 0 {
+		s.player.MountDisplayID = 0
+		s.sendPlayerMountUpdate()
+	}
+	// Player.cpp:21562: the source node must exist.
+	if !s.server.Data.TaxiNodeExists(from) {
+		reply(taxiErrNoSuchPath)
+		return
+	}
+	s.cancelTrade(true)
+	// Player.cpp:21588: resolve the hop through GetTaxiPath.
+	resolvedPath, _, hopFound, hopErr := s.server.Data.TaxiPathLinks(from, to)
+	if hopErr != nil || !hopFound || resolvedPath == 0 {
+		return
+	}
+	// Player.cpp:21611: wide mount lookup for the spell case (npc == nil).
+	mount := uint32(0)
+	if mountDisplay, err := s.server.Data.TaxiNodeMount(from, s.playerAlliance()); err == nil {
+		mount = mountDisplay
+	}
+	if s.player.Money < price {
+		reply(taxiErrNotEnoughMoney)
+		return
+	}
+	s.updateAchievementCriteria(criteriaTypeFlightPathsTaken, 0, 1)
+	if price > 0 {
+		s.player.Money -= price
+		s.updateAchievementCriteria(criteriaTypeGoldSpentTravel, 0, price)
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+		}
+		s.sendPlayerMoneyUpdate()
+	}
+	// Player.cpp:21645: the spell case records no flight-master faction (0).
+	previousTaxiPath := s.player.TaxiPath
+	s.player.TaxiPath = strings.Join([]string{"0", strconv.FormatUint(uint64(from), 10), strconv.FormatUint(uint64(to), 10)}, " ") + " "
+	if !s.startTaxiFlightFrom(pathID, mount, 0) {
+		s.player.TaxiPath = previousTaxiPath
+		return
+	}
+	reply(taxiErrOK)
+}
+
+// handleEffectDiscoverTaxi processes SPELL_EFFECT_DISCOVER_TAXI (154).
+// Mirrors TrinityCore Spell::EffectDiscoverTaxi (SpellEffects.cpp:5390-5398):
+// when the node id from the effect's MiscValue names a known
+// TaxiNodes.dbc row, WorldSession::SendDiscoverNewTaxiNode sets the mask
+// bit and sends SMSG_NEW_TAXI_PATH (only the path packet — unlike the
+// flight-master greeting path, no SMSG_TAXINODE_STATUS).
+func (s *session) handleEffectDiscoverTaxi(ctx context.Context, eff wotlk.SpellEffect) {
+	if s == nil || !s.playerLoaded || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	if eff.MiscValue <= 0 {
+		return
+	}
+	nodeID := uint32(eff.MiscValue)
+	if !s.server.Data.TaxiNodeExists(nodeID) {
+		return
+	}
+	if s.isTaxiMaskNodeKnown(nodeID) {
+		return
+	}
+	if s.setTaxiMaskNode(nodeID) {
+		s.saveTaxiMask(ctx)
+		_ = s.write(uint16(protocol.OpcodeSMSG_NEW_TAXI_PATH), nil, true)
+	}
 }

@@ -288,6 +288,10 @@ const (
 	spellEffectSummon                  = 28  // SPELL_EFFECT_SUMMON (SharedDefines.h:839)
 	spellEffectSummonPet               = 56  // SPELL_EFFECT_SUMMON_PET (SharedDefines.h:867)
 	spellEffectCreateTamedPet          = 153 // SPELL_EFFECT_CREATE_TAMED_PET (SharedDefines.h:964)
+	spellEffectKillCredit              = 90  // SPELL_EFFECT_KILL_CREDIT (SharedDefines.h:901)
+	spellEffectSpiritHeal              = 117 // SPELL_EFFECT_SPIRIT_HEAL (SharedDefines.h:928)
+	spellEffectSendTaxi                = 123 // SPELL_EFFECT_SEND_TAXI (SharedDefines.h:934)
+	spellEffectDiscoverTaxi            = 154 // SPELL_EFFECT_DISCOVER_TAXI (SharedDefines.h:965)
 	spellEffectSummonPlayer            = 85  // SPELL_EFFECT_SUMMON_PLAYER (SharedDefines.h:896)
 	spellEffectSummonRafFriend         = 152 // SPELL_EFFECT_SUMMON_RAF_FRIEND (SharedDefines.h:963)
 	spellEffectLeap                    = 29  // SPELL_EFFECT_LEAP (SharedDefines.h:840)
@@ -7032,6 +7036,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleEffectDispel(effCtx, targetGUID, spell, eff)
 			case 108: // SPELL_EFFECT_DISPEL_MECHANIC
 				s.handleEffectDispelMechanic(effCtx, targetGUID, spell, eff)
+			case spellEffectKillCredit: // 90: SPELL_EFFECT_KILL_CREDIT
+				for _, effectTarget := range hitTargets {
+					if effectTarget == 0 {
+						continue
+					}
+					s.handleEffectKillCredit(effCtx, effectTarget, spellID, eff.MiscValue)
+				}
+			case spellEffectSpiritHeal: // 117: SPELL_EFFECT_SPIRIT_HEAL
+				// Spell::EffectSpiritHeal (SpellEffects.cpp:5107-5124) is a
+				// fully commented-out no-op in C++ — handled but does nothing.
+			case spellEffectSendTaxi: // 123: SPELL_EFFECT_SEND_TAXI
+				s.handleEffectSendTaxi(effCtx, eff)
+			case spellEffectDiscoverTaxi: // 154: SPELL_EFFECT_DISCOVER_TAXI
+				s.handleEffectDiscoverTaxi(effCtx, eff)
 			case 114: // SPELL_EFFECT_ATTACK_ME (EffectTaunt)
 				s.handleEffectTaunt(effCtx, targetGUID, spellID)
 			case 126: // SPELL_EFFECT_STEAL_BENEFICIAL_BUFF
