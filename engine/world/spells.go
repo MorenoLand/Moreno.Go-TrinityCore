@@ -45,6 +45,7 @@ const (
 	spellAttr0CantCancel                   uint32 = 0x80000000 // SPELL_ATTR0_CANT_CANCEL (SharedDefines.h:443)
 	spellAttr0CantUsedInCombat             uint32 = 0x10000000 // SPELL_ATTR0_CANT_USED_IN_COMBAT (SharedDefines.h:440)
 	spellAttr0ReqAmmo                      uint32 = 0x00000002 // SPELL_ATTR0_REQ_AMMO (SharedDefines.h:413)
+	spellAttr0CUNeedsAmmoData              uint32 = 0x00080000 // SPELL_ATTR0_CU_NEEDS_AMMO_DATA (SpellInfo.h:197)
 	spellAttr0OnNextSwing                  uint32 = 0x00000004 // SPELL_ATTR0_ON_NEXT_SWING (SharedDefines.h:414)
 	spellAttr0Tradespell                   uint32 = 0x00000020 // SPELL_ATTR0_TRADESPELL (SharedDefines.h:417)
 	spellAttr3NoDoneBonus                  uint32 = 0x20000000 // SPELL_ATTR3_NO_DONE_BONUS (SharedDefines.h:552) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
@@ -6355,6 +6356,57 @@ func (s *session) sanctuaryTimeFor(guid uint64) uint32 {
 	return s.server.creatureLastSanctuaryTime(s.player.Map, s.player.InstanceID, guid)
 }
 
+const (
+	invTypeAmmo   uint32 = 24 // INVTYPE_AMMO (ItemTemplate.h:285)
+	invTypeThrown uint32 = 25 // INVTYPE_THROWN (ItemTemplate.h:286)
+)
+
+// playerHasAuraSpell reports whether the player currently carries an active
+// aura from the given spell id (Player::HasAura(spellId) analog over the
+// session's loaded auras).
+func (s *session) playerHasAuraSpell(spellID uint32) bool {
+	if s == nil {
+		return false
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura != nil && !aura.Stopped && aura.SpellID == spellID {
+			return true
+		}
+	}
+	return false
+}
+
+// spellGoAmmoData mirrors Spell::UpdateSpellCastDataAmmo
+// (Spell.cpp:4398-4484) for the player-caster branch: the ranged weapon's
+// template supplies the inventory type (thrown weapons also supply the
+// display id); otherwise PLAYER_AMMO_ID's template does, falling back to
+// the Requires No Ammo aura (46699 -> display 5996, INVTYPE_AMMO) when no
+// ammo is equipped. finishSpellCast only serves player casters, so the
+// creature virtual-item branch is structural here.
+func (s *session) spellGoAmmoData(ctx context.Context) *protocol.SpellGoAmmo {
+	ammo := &protocol.SpellGoAmmo{}
+	if s == nil || s.server == nil {
+		return ammo
+	}
+	if _, entry := s.equippedWeaponInstance(ctx, equipSlotRanged); entry != 0 {
+		if info, err := s.loadItemQueryData(ctx, entry); err == nil {
+			ammo.InventoryType = info.InventoryType
+			if info.InventoryType == invTypeThrown { // INVTYPE_THROWN (ItemTemplate.h:286)
+				ammo.DisplayID = info.DisplayInfoID
+			} else if s.player != nil && s.player.AmmoID != 0 {
+				if ainfo, err := s.loadItemQueryData(ctx, s.player.AmmoID); err == nil {
+					ammo.DisplayID = ainfo.DisplayInfoID
+					ammo.InventoryType = ainfo.InventoryType
+				}
+			} else if s.playerHasAuraSpell(46699) { // Requires No Ammo (Spell.cpp:4427)
+				ammo.DisplayID = 5996
+				ammo.InventoryType = invTypeAmmo // INVTYPE_AMMO (ItemTemplate.h:285)
+			}
+		}
+	}
+	return ammo
+}
+
 func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, castItemGUID uint64, castItemEntry uint32, queuedSwing *activeCastState) {
 	if s.player == nil {
 		return
@@ -7128,9 +7180,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 	// Spell::TakePower (Spell.cpp:4838-4844) spends runes for POWER_RUNE
 	// spells via TakeRunePower and returns before any ModifyPower arm, so
-	// the generic deduction below excludes POWER_RUNE.
+	// the generic deduction below excludes POWER_RUNE. The returned mask is
+	// the pre-spend rune-ready state (Spell.cpp:4966 m_runesState), which
+	// SendSpellGo writes as RuneData.Start.
+	var runeMaskBefore uint8
 	if takePower && spell.PowerType == 5 {
-		s.takeRunePower(ctx, spell, didHit, time.Now().UnixMilli())
+		runeMaskBefore = s.takeRunePower(ctx, spell, didHit, time.Now().UnixMilli())
 		s.sendRuneCooldownUpdate()
 	}
 	if takePower && pType < 7 && pType != 5 && cost > 0 {
@@ -7281,11 +7336,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// Spell::SendSpellGo (Spell.cpp:4286-4366) castFlags arms:
 	//   - CAST_FLAG_PENDING: vacuous — finishSpellCast serves the client
 	//     path only, never triggered casts.
-	//   - CAST_FLAG_AMMO: no bridge — Go has no ammo display data, and the
-	//     flag without the trailing 8-byte Ammo block would corrupt the packet.
-	//   - CAST_FLAG_RUNE_LIST: no bridge — Go has no rune bitmask/cooldown
-	//     list model for the visual block (the rune spend itself is bridged).
-	//   - CAST_FLAG_ADJUST_MISSILE: no bridge — no trajectory model.
+	//   - CAST_FLAG_AMMO (Spell.cpp:4294-4296): SPELL_ATTR0_REQ_AMMO or
+	//     SPELL_ATTR0_CU_NEEDS_AMMO_DATA; the trailing 8-byte Ammo block is
+	//     built by spellGoAmmoData below (UpdateSpellCastDataAmmo parity).
+	//   - CAST_FLAG_RUNE_LIST (Spell.cpp:4302-4315): Death Knight rune-cost
+	//     spells (which also set CAST_FLAG_NO_GCD) plus any spell carrying a
+	//     SPELL_EFFECT_ACTIVATE_RUNE (146) effect; the rune-cooldown list
+	//     block rides in goExtras below.
+	//   - CAST_FLAG_ADJUST_MISSILE (Spell.cpp:4316-4318): the client
+	//     supplied trajectory speed (SpellCastTargets::HasTraj tests
+	//     m_speed != 0, Spell.h:198); the Pitch + TravelTime block rides in
+	//     goExtras below.
 	// CasterGUID (Spell.cpp:4336-4340): the cast item's GUID for item casts,
 	// the caster otherwise; CasterUnit is always the caster. Item GUIDs carry
 	// the 0x4000 high bits on the wire (items.go:1654 convention);
@@ -7294,11 +7355,59 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if castItemGUID != 0 {
 		casterGUID = castItemGUID | (uint64(0x4000) << 48)
 	}
-	goPacket := protocol.BuildSpellGoWithPower(casterGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, missStatus, spellGoPacketTarget(spell, target), remainingPower)
+	// Spell::SendSpellGo (Spell.cpp:4302-4315, 4343-4366): the Death Knight
+	// rune arm sets CAST_FLAG_NO_GCD ("not needed, but Blizzard sends it")
+	// and CAST_FLAG_RUNE_LIST; the block carries Start = pre-spend ready
+	// mask (runeMaskBefore, captured at TakeRunePower), Count = post-spend
+	// ready mask, and one byte per newly-spent rune:
+	// (baseCd - cd)/baseCd*255. The block is skipped when the spell itself
+	// carries a SPELL_AURA_CONVERT_RUNE (249) aura.
+	if s.player != nil && s.player.Class == classDeathKnight && spell.RuneCostID != 0 && spell.PowerType == 5 {
+		castFlags |= protocol.SpellCastFlagNoGCD | protocol.SpellCastFlagRuneList
+	}
+	if spellHasEffect(spell, spellEffectActivateRune) {
+		castFlags |= protocol.SpellCastFlagRuneList
+	}
+	var goExtras protocol.SpellGoTrailerExtras
+	if castFlags&protocol.SpellCastFlagRuneList != 0 && !spellHasAura(spell, spellAuraConvertRune) {
+		nowMs := time.Now().UnixMilli()
+		maskAfter := s.runeReadyMask(nowMs)
+		var cooldowns []uint8
+		if s.runes != nil {
+			for i := 0; i < maxRunes; i++ {
+				bit := uint8(1 << uint(i))
+				if runeMaskBefore&bit != 0 && maskAfter&bit == 0 {
+					var b uint8
+					if base := s.runeBaseCooldownMsForSlot(i); base > 0 {
+						rem := s.runes.runeCooldownRemainingMs(i, nowMs)
+						b = uint8(float64(base-rem) / float64(base) * 255)
+					}
+					cooldowns = append(cooldowns, b)
+				}
+			}
+		}
+		goExtras.Runes = &protocol.SpellGoRuneData{Start: runeMaskBefore, Count: maskAfter, Cooldowns: cooldowns}
+	}
+	if castFlags&protocol.SpellCastFlagAmmo != 0 {
+		goExtras.Ammo = s.spellGoAmmoData(ctx)
+	}
+	// Spell::SendSpellGo (Spell.cpp:4316-4318, 4369-4373): the missile
+	// trajectory block carries Pitch = the client-supplied elevation and
+	// TravelTime = m_delayMoment, mirrored by spellDelayMomentMs below.
+	if target.TrajSpeed != 0 {
+		castFlags |= protocol.SpellCastFlagAdjustMissile
+		goExtras.Trajectory = &protocol.SpellGoMissileTrajectory{
+			Pitch:      target.TrajElevation,
+			TravelTime: uint32(s.spellDelayMomentMs(ctx, spell, target, hitTargets)),
+		}
+	}
+	goPacket := protocol.BuildSpellGoWithPower(casterGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, missStatus, spellGoPacketTarget(spell, target), remainingPower, goExtras)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true)
 	if s.server != nil {
+		// C++ strips only CAST_FLAG_POWER_LEFT_SELF for the nearby copy
+		// (Spell.cpp:4385-4389); the rune/ammo blocks ride along.
 		nearbyFlags := castFlags &^ protocol.SpellCastFlagPowerLeftSelf
-		nearbyPacket := protocol.BuildSpellGo(casterGUID, s.playerGUID, castID, spellID, nearbyFlags, castTimeStamp, hitTargets, missStatus, spellGoPacketTarget(spell, target))
+		nearbyPacket := protocol.BuildSpellGoWithPower(casterGUID, s.playerGUID, castID, spellID, nearbyFlags, castTimeStamp, hitTargets, missStatus, spellGoPacketTarget(spell, target), nil, goExtras)
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 	}
 	if isFishingSpell(spellID) {
@@ -9395,6 +9504,51 @@ func (s *session) fireSpellLinkedTriggers(ctx context.Context, spellID uint32, t
 // stopAttackOnSpellFinish stops the caster's auto-attack for spells carrying
 // SPELL_ATTR0_STOP_ATTACK_TARGET.
 // C++ authority: Spell::finish (Spell.cpp:3978-3983) calls AttackStop().
+// spellDelayMomentMs mirrors Spell::m_delayMoment as written into the
+// SMSG_SPELL_GO missile-trajectory block (Spell.cpp:4369-4373): the
+// CalculateDelayMomentForDst value (Spell.cpp:839-855) minimized across the
+// per-target TimeDelays (Spell.cpp:2166-2168). The traj branch divides the
+// 2D caster->dst distance by the horizontal speed (m_speed * cos(elevation),
+// SpellCastTargets::GetSpeedXY, Spell.h:206); the non-traj branch uses the
+// spell's DBC speed over the 3D caster->dst distance. Per-target delays only
+// apply when the spell has DBC speed (Spell.cpp:2156), and the caster itself
+// is skipped (m_caster != target).
+func (s *session) spellDelayMomentMs(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData, hitTargets []uint64) uint64 {
+	var delayMoment uint64
+	if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+		if target.TrajSpeed != 0 {
+			speedXY := float64(target.TrajSpeed) * math.Cos(float64(target.TrajElevation))
+			if speedXY > 0 {
+				dx := float64(target.Destination.X - s.player.X)
+				dy := float64(target.Destination.Y - s.player.Y)
+				dist2d := math.Sqrt(dx*dx + dy*dy)
+				delayMoment = uint64(math.Floor(dist2d / speedXY * 1000.0))
+			}
+		} else if spell.Speed > 0 {
+			dx := float64(target.Destination.X - s.player.X)
+			dy := float64(target.Destination.Y - s.player.Y)
+			dz := float64(target.Destination.Z - s.player.Z)
+			dist := math.Sqrt(dx*dx + dy*dy + dz*dz)
+			delayMoment = uint64(math.Floor(dist / float64(spell.Speed) * 1000.0))
+		}
+	}
+	if spell.Speed > 0 {
+		for _, ht := range hitTargets {
+			if ht == s.playerGUID {
+				continue
+			}
+			tdm := s.spellTargetTimeDelayMs(ctx, spell, ht)
+			if tdm < 0 {
+				continue
+			}
+			if delayMoment == 0 || uint64(tdm) < delayMoment {
+				delayMoment = uint64(tdm)
+			}
+		}
+	}
+	return delayMoment
+}
+
 // spellTargetTimeDelayMs mirrors Spell::handle_immediate's per-target
 // TimeDelay (Spell.cpp:2156-2169): floor(dist / Speed * 1000) with the
 // 5-yard floor; a target that is the caster itself gets delay 0

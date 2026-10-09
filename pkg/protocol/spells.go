@@ -18,6 +18,8 @@ const (
 	SpellCastFlagVisualChain      uint32 = 0x00080000
 	SpellCastFlagPowerLeftSelf    uint32 = 0x00000800
 	SpellCastFlagNoGCD            uint32 = 0x00040000
+	SpellCastFlagAdjustMissile    uint32 = 0x00020000 // CAST_FLAG_ADJUST_MISSILE (Spell.h:92)
+	SpellCastFlagRuneList         uint32 = 0x00200000 // CAST_FLAG_RUNE_LIST (Spell.h:96)
 
 	SpellMissNone    uint8 = 0
 	SpellMissMiss    uint8 = 1
@@ -48,6 +50,45 @@ const (
 	AuraFlagDuration  uint8 = 0x20
 	AuraFlagNegative  uint8 = 0x80
 )
+
+// SpellGoRuneData mirrors WorldPackets::Spells::RuneData
+// (SpellPackets.h:105): the rune-cooldown list written after RemainingPower
+// in SMSG_SPELL_GO when CAST_FLAG_RUNE_LIST is set. Wire order is Start,
+// Count, then one cooldown byte per rune that went from ready to spent — no
+// length prefix (SpellPackets.cpp RuneData writer).
+type SpellGoRuneData struct {
+	Start     uint8
+	Count     uint8
+	Cooldowns []uint8
+}
+
+// SpellGoAmmo mirrors WorldPackets::Spells::SpellAmmo (SpellPackets.h:117):
+// the 8-byte DisplayID + InventoryType block written after the rune data in
+// SMSG_SPELL_GO when CAST_FLAG_AMMO is set (SpellPackets.cpp SpellAmmo
+// writer).
+type SpellGoAmmo struct {
+	DisplayID     uint32
+	InventoryType uint32
+}
+
+// SpellGoMissileTrajectory mirrors WorldPackets::Spells::MissileTrajectoryResult
+// (SpellPackets.h:111): the Pitch + TravelTime block written after the rune
+// data in SMSG_SPELL_GO when CAST_FLAG_ADJUST_MISSILE is set. Wire order is
+// Pitch (float) then TravelTime (uint32) (SpellPackets.cpp writer).
+type SpellGoMissileTrajectory struct {
+	Pitch      float32
+	TravelTime uint32
+}
+
+// SpellGoTrailerExtras carries the optional SMSG_SPELL_GO trailer blocks.
+// A block is written only when its cast flag is set AND its data is present;
+// the flag without the block would corrupt the packet (Spell.cpp:4343-4378).
+// Wire order: RuneData, MissileTrajectory, Ammo (SpellPackets.cpp).
+type SpellGoTrailerExtras struct {
+	Runes      *SpellGoRuneData
+	Trajectory *SpellGoMissileTrajectory
+	Ammo       *SpellGoAmmo
+}
 
 type SpellTargetLocation struct {
 	Transport uint64
@@ -155,7 +196,7 @@ func BuildSpellGo(casterGUID, casterUnitGUID uint64, castID uint8, spellID, cast
 	return BuildSpellGoWithPower(casterGUID, casterUnitGUID, castID, spellID, castFlags, castTime, hitTargets, missStatus, target, nil)
 }
 
-func BuildSpellGoWithPower(casterGUID, casterUnitGUID uint64, castID uint8, spellID, castFlags, castTime uint32, hitTargets []uint64, missStatus []SpellMissStatus, target SpellTargetData, remainingPower *uint32) []byte {
+func BuildSpellGoWithPower(casterGUID, casterUnitGUID uint64, castID uint8, spellID, castFlags, castTime uint32, hitTargets []uint64, missStatus []SpellMissStatus, target SpellTargetData, remainingPower *uint32, extras ...SpellGoTrailerExtras) []byte {
 	packet := NewBuffer(96)
 	writeSpellCastHeader(packet, casterGUID, casterUnitGUID, castID, spellID, castFlags, castTime)
 	if len(hitTargets) > 255 {
@@ -179,6 +220,26 @@ func BuildSpellGoWithPower(casterGUID, casterUnitGUID uint64, castID uint8, spel
 	writeSpellTargetData(packet, target)
 	if remainingPower != nil && castFlags&SpellCastFlagPowerLeftSelf != 0 {
 		packet.WriteU32(*remainingPower)
+	}
+	// SpellPackets.cpp SpellCastData writer order: RuneData, then
+	// MissileTrajectory, then Ammo. Each block is written only when its
+	// cast flag is set and the data is present.
+	for _, ex := range extras {
+		if ex.Runes != nil && castFlags&SpellCastFlagRuneList != 0 {
+			packet.WriteU8(ex.Runes.Start)
+			packet.WriteU8(ex.Runes.Count)
+			for _, cd := range ex.Runes.Cooldowns {
+				packet.WriteU8(cd)
+			}
+		}
+		if ex.Trajectory != nil && castFlags&SpellCastFlagAdjustMissile != 0 {
+			packet.WriteF32(ex.Trajectory.Pitch)
+			packet.WriteU32(ex.Trajectory.TravelTime)
+		}
+		if ex.Ammo != nil && castFlags&SpellCastFlagAmmo != 0 {
+			packet.WriteU32(ex.Ammo.DisplayID)
+			packet.WriteU32(ex.Ammo.InventoryType)
+		}
 	}
 	writeSpellCastTrailer(packet, castFlags, target.Flags)
 	return packet.Bytes()

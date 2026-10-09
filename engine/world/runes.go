@@ -151,28 +151,33 @@ func (s *session) checkRuneCost(spell wotlk.Spell, nowMs int64) bool {
 // matches a leftover cost, then any remaining death rune. Death runes
 // revert to their base type on a hit (RestoreBaseRune) and keep the death
 // type on a miss. On a hit the spell's RunicPower gain is granted.
-func (s *session) takeRunePower(ctx context.Context, spell wotlk.Spell, didHit bool, nowMs int64) {
+// It returns the rune-ready mask from before the spend, mirroring the
+// m_runesState = player->GetRunesState() capture at Spell.cpp:4966 (0 when
+// the spend is skipped, since C++ captures the state only past the same
+// early returns); Spell::SendSpellGo writes it as RuneData.Start.
+func (s *session) takeRunePower(ctx context.Context, spell wotlk.Spell, didHit bool, nowMs int64) uint8 {
 	if s.player == nil || s.player.Class != classDeathKnight {
-		return
+		return 0
 	}
 	if s.server == nil || s.server.Data == nil {
-		return
+		return 0
 	}
 	runeCostData, found, err := s.server.Data.SpellRuneCost(spell.RuneCostID)
 	if err != nil || !found {
-		return
+		return 0
 	}
 	noRuneCost := runeCostData.RuneCost[0] == 0 && runeCostData.RuneCost[1] == 0 && runeCostData.RuneCost[2] == 0
 	if noRuneCost && runeCostData.RunicPower == 0 {
-		return
+		return 0
 	}
 	if s.runes == nil {
 		s.initRunes()
 	}
 	rs := s.runes
 	if rs == nil {
-		return
+		return 0
 	}
+	maskBefore := s.runeReadyMask(nowMs)
 	setRuneCooldown := func(i int) {
 		if didHit {
 			rs.cooldownEndMs[i] = nowMs + s.runeBaseCooldownMsForSlot(i)
@@ -236,6 +241,22 @@ func (s *session) takeRunePower(ctx context.Context, spell wotlk.Spell, didHit b
 	if didHit && runeCostData.RunicPower > 0 {
 		s.adjustSpellPower(ctx, s.playerGUID, powerRunicPower, int64(runeCostData.RunicPower))
 	}
+	return maskBefore
+}
+
+// runeReadyMask mirrors Player::GetRunesState (Player.h:2117): bit i is set
+// when rune slot i has no cooldown remaining.
+func (s *session) runeReadyMask(nowMs int64) uint8 {
+	if s == nil || s.runes == nil {
+		return 0
+	}
+	var mask uint8
+	for i := 0; i < maxRunes; i++ {
+		if s.runes.runeCooldownRemainingMs(i, nowMs) == 0 {
+			mask |= 1 << uint(i)
+		}
+	}
+	return mask
 }
 
 // sendRuneCooldownUpdate mirrors the per-rune cooldown byte of
