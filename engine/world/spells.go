@@ -531,6 +531,25 @@ const (
 // CAST_FLAG_AMMO needs the 8-byte ammo display block Go cannot build; both
 // stay unbridged. CAST_FLAG_PENDING is vacuous: every START site serves
 // client casts, never triggered ones.
+// sendSpellStart mirrors the delivery tail of Spell::SendSpellStart
+// (Spell.cpp:4283): m_caster->SendMessageToSet(packet.Write(), true) puts
+// the cast-start packet in front of everyone in range, self included —
+// nearby players see the caster's cast bar. Previously Go sent
+// SMSG_SPELL_START self-only; the broadcast rides Go's map+instance-wide
+// grid model, the same path as the SMSG_SPELL_GO broadcast.
+func (s *session) sendSpellStart(packet []byte) error {
+	if s == nil {
+		return nil
+	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_START), packet, true); err != nil {
+		return err
+	}
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_START), packet, s)
+	}
+	return nil
+}
+
 func spellStartCastFlags(spell wotlk.Spell) uint32 {
 	flags := spellCastFlagStart
 	if spell.RuneCostID != 0 && spell.PowerType == powerRune {
@@ -2750,7 +2769,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		// Spell::cancel PREPARING arm inside queueNextSwingSpell.
 		s.queueNextSwingSpell(castID, spellID, spell, target, 0, 0)
 		startFlags := spellStartCastFlags(spell)
-		if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_START), protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags)), true); err != nil {
+		if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags))); err != nil {
 			return false
 		}
 		s.triggerGlobalCooldown(spell)
@@ -2758,7 +2777,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	startFlags := spellStartCastFlags(spell)
-	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_START), protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags)), true); err != nil {
+	if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags))); err != nil {
 		return false
 	}
 

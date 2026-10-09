@@ -2067,7 +2067,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			// CasterUnit; flags/powers follow the same arms as the client path.
 			itemGUID := rawItemGUID | (uint64(0x4000) << 48)
 			startFlags := spellStartCastFlags(spell)
-			if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_START), protocol.BuildSpellStartWithPower(itemGUID, s.playerGUID, castCount, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags)), true); err != nil {
+			if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(itemGUID, s.playerGUID, castCount, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags))); err != nil {
 				return false
 			}
 			// Spell::prepare (Spell.cpp:3188-3196) sends SMSG_SPELL_START
