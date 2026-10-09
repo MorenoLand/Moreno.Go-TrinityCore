@@ -445,6 +445,9 @@ func (s *session) stopPlayerCombat() {
 		s.attackTarget = 0
 		_ = s.sendAttackStop(victim, false)
 	}
+	// Unit::AttackStop (Unit.cpp:5774-5778) interrupts CURRENT_MELEE_SPELL:
+	// a queued on-next-swing spell does not survive leaving combat.
+	s.cancelNextSwingSpell()
 }
 
 // evadeCreaturesTargeting mirrors the RemoveAllAttackers half of

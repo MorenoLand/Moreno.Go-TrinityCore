@@ -378,6 +378,16 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	if s.player == nil || s.isDeadOrGhost() || target.Health == 0 {
 		return
 	}
+	// Unit::AttackerStateUpdate (Unit.cpp:2151-2152): "melee attack spell cast
+	// at main hand attack only - no normal melee dmg dealt" — a queued
+	// on-next-swing spell (CURRENT_MELEE_SPELL slot) fires in place of the
+	// normal main-hand swing damage. Off-hand swings never consume it.
+	if attType == protocol.BaseAttack {
+		if q := s.takeNextSwingSpell(); q != nil {
+			s.finishNextSwingCast(ctx, q)
+			return
+		}
+	}
 	now := time.Now()
 	var minDmg, maxDmg float32
 	var attTime uint32

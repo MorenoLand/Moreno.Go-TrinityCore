@@ -397,6 +397,7 @@ type session struct {
 	autoRepeatTarget          uint64
 	isMoving                  bool
 	isFalling                 bool
+	isFallingFar              bool // MOVEMENTFLAG_FALLING_FAR (UnitDefines.h:236): the STUCK-spell movement exemptions key on this flag exactly (Spell.cpp:3814, 5319)
 	lastMovementInfo          movementInfo
 	lastMovementInfoSet       bool
 	transportContactProbeGUID uint64
@@ -471,6 +472,7 @@ type session struct {
 	afkReportWindowEnd        time.Time // lazy reset point for afkReportedCount (== Player::UpdateAfkReport, Player.cpp:20715)
 	targetGlyphSlot           uint8
 	activeCast                *activeCastState
+	nextSwing                 *queuedNextSwing // CURRENT_MELEE_SPELL slot (Unit.h:572), castMu-guarded like activeCast
 	summonExpire              time.Time
 	summonerGUID              uint64
 	summonMap                 uint32

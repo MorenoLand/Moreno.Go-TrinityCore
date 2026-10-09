@@ -187,7 +187,7 @@ func (s *session) handleMoveTeleportAck(ctx context.Context, payload []byte) boo
 		s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = 0, 0, 0, 0
 		s.player.TransportSeat = 0
 	}
-	s.isMoving, s.isFalling = false, false
+	s.isMoving, s.isFalling, s.isFallingFar = false, false, false
 	s.lastFallZ, s.lastFallTime = dest.Z, 0
 	s.setLastMovementInfo(dest.Movement)
 	s.updateZoneAndArea(ctx, true)
@@ -293,7 +293,13 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	}
 	info.Flags &^= movementRoot
 	info.Flags = s.sanitizeMovementFlags(info.Flags)
-	isMove := info.Flags&(movementForward|movementBackward|movementStrafeLeft|movementStrafeRight|movementFalling) != 0
+	// Unit::isMoving (Unit.h:1641) is HasUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING)
+	// (UnitDefines.h:250-254): forward/backward/strafe/falling/falling-far/
+	// ascending/descending/spline-elevation. Turning alone is not moving
+	// (MASK_TURNING is separate), and a falling-far (knocked-back) or
+	// ascending/descending player counts as moving for the
+	// SPELL_INTERRUPT_FLAG_MOVEMENT legs.
+	isMove := info.Flags&(movementForward|movementBackward|movementStrafeLeft|movementStrafeRight|movementFalling|movementFallingFar|movementAscending|movementDescending|movementSplineElevation) != 0
 	s.isMoving = isMove
 	if isMove {
 		// Break casts/channels with SPELL_INTERRUPT_FLAG_MOVEMENT.
@@ -314,6 +320,7 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		isFalling = true
 	}
 	s.isFalling = isFalling
+	s.isFallingFar = info.Flags&movementFallingFar != 0
 	if isMove {
 		// Movement interrupts land via interruptSpellsOnMovement above,
 		// which gates on SPELL_INTERRUPT_FLAG_MOVEMENT (Spell::update,

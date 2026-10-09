@@ -342,6 +342,7 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath bool
 	if !spiritOfRedemption {
 		s.interruptCurrentCast()
 		s.interruptCurrentChannel()
+		s.cancelNextSwingSpell()
 	}
 	// Player::setDeathState(JUST_DIED), Player.cpp:1412 — RemovePet(nullptr,
 	// PET_SAVE_NOT_IN_SLOT, true) dismisses the pet at death rather than
@@ -518,6 +519,7 @@ func (s *session) completeSpiritOfRedemptionDeath(ctx context.Context) {
 	// lands now, matching Unit::Kill's deferred setDeathState.
 	s.interruptCurrentCast()
 	s.interruptCurrentChannel()
+	s.cancelNextSwingSpell()
 	s.unsummonPet(ctx, petSaveNotInSlot)
 	if s.playerLoaded && s.player.PlayerFieldBytes&playerFieldByteReleaseTimer == 0 {
 		s.player.PlayerFieldBytes |= playerFieldByteReleaseTimer
@@ -1692,7 +1694,7 @@ func (s *session) handleSelfRes(ctx context.Context) bool {
 		s.debug("self resurrect spell lookup failed", "account", s.accountName, "spell", spellID, "found", found, "error", err)
 		return true
 	}
-	s.finishSpellCast(ctx, 0, spellID, spell, protocol.SpellTargetData{}, 0, 0)
+	s.finishSpellCast(ctx, 0, spellID, spell, protocol.SpellTargetData{}, 0, 0, nil)
 	return true
 }
 

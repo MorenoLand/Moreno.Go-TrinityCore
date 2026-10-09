@@ -1890,10 +1890,10 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			s.triggerGlobalCooldown(spell)
 			if castTime > 0 {
 				time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
-					s.finishSpellCast(context.Background(), castCount, spellID, spell, target, rawItemGUID, uint32(itemEntry))
+					s.finishSpellCast(context.Background(), castCount, spellID, spell, target, rawItemGUID, uint32(itemEntry), nil)
 				})
 			} else {
-				s.finishSpellCast(ctx, castCount, spellID, spell, target, rawItemGUID, uint32(itemEntry))
+				s.finishSpellCast(ctx, castCount, spellID, spell, target, rawItemGUID, uint32(itemEntry), nil)
 			}
 		}
 	}

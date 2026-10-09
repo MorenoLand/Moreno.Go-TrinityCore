@@ -44,6 +44,7 @@ const (
 	spellAttr0CantCancel                   uint32 = 0x80000000 // SPELL_ATTR0_CANT_CANCEL (SharedDefines.h:443)
 	spellAttr0CantUsedInCombat             uint32 = 0x10000000 // SPELL_ATTR0_CANT_USED_IN_COMBAT (SharedDefines.h:440)
 	spellAttr0ReqAmmo                      uint32 = 0x00000002 // SPELL_ATTR0_REQ_AMMO (SharedDefines.h:413)
+	spellAttr0OnNextSwing                  uint32 = 0x00000004 // SPELL_ATTR0_ON_NEXT_SWING (SharedDefines.h:414)
 	spellAttr0Tradespell                   uint32 = 0x00000020 // SPELL_ATTR0_TRADESPELL (SharedDefines.h:417)
 	spellAttr3NoDoneBonus                  uint32 = 0x20000000 // SPELL_ATTR3_NO_DONE_BONUS (SharedDefines.h:552) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 	spellAttr3TreatAsPeriodic              uint32 = 0x02000000 // SPELL_ATTR3_TREAT_AS_PERIODIC (SharedDefines.h:548) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
@@ -72,6 +73,7 @@ const (
 	spellAttr0UnaffectedByInvulnerability  uint32 = 0x20000000 // SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY (SharedDefines.h:441)
 	spellAttr0NotShapeshift                uint32 = 0x00010000 // SPELL_ATTR0_NOT_SHAPESHIFT (SharedDefines.h:428)
 	spellAttr0CuPickpocket                 uint32 = 0x00000400 // SPELL_ATTR0_CU_PICKPOCKET (SpellInfo.h:188) — custom attr, tested against AttributesCu
+	spellAttr0OnNextSwing2                 uint32 = 0x00000400 // SPELL_ATTR0_ON_NEXT_SWING_2 (SharedDefines.h:422) — tested against Attributes (DBC attr0), no clash with the custom-attr const above
 	spellAttr2NotNeedShapeshift            uint32 = 0x00080000 // SPELL_ATTR2_NOT_NEED_SHAPESHIFT (SharedDefines.h:505) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr1CantBeReflected              uint32 = 0x00000080 // SPELL_ATTR1_CANT_BE_REFLECTED (SharedDefines.h:456)
 	spellAttr1CantTargetSelf               uint32 = 0x00080000 // SPELL_ATTR1_CANT_TARGET_SELF (SharedDefines.h:468) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
@@ -1234,7 +1236,11 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// cast; channeled and autorepeat casts never trigger
 	// SPELL_FAILED_SPELL_IN_PROGRESS — the new cast breaks them instead
 	// (Unit::SetCurrentCastSpell, Unit.cpp:3064).
-	if s.genericCastInProgress() && !s.autoShotNonBlockingCast(spellID) {
+	// IsNonMeleeSpellCast explicitly excludes the melee container
+	// (Unit.cpp:3182: "We don't do loop here to explicitly show that melee
+	// spell is excluded"), so queuing an on-next-swing spell while a cast
+	// bar runs does not fail SPELL_IN_PROGRESS.
+	if s.genericCastInProgress() && !s.autoShotNonBlockingCast(spellID) && !isNextMeleeSwingSpell(spell) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 105), true) // SPELL_FAILED_SPELL_IN_PROGRESS = 105
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "another spell cast is in progress")
 		return true
@@ -1435,12 +1441,13 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// this one catches zero-cast-time NOT_SEATED and autorepeat casts.
 	// C++ relative order: immediately after the cheat-spell gate, inside the
 	// unit-caster block, ahead of the vehicle arm's no-bridge note.
-	// Delta: Go tracks only a coarse s.isFalling (movementFalling flag, no
-	// FALLING_FAR distinction), so the STUCK exemption rides isFalling alone.
+	// The STUCK exemption keys on MOVEMENTFLAG_FALLING_FAR exactly
+	// (Spell.cpp:5319) — a /stuck cast while merely falling (0x1000) still
+	// fails; only the falling-far (knocked-back, 0x2000) state is exempt.
 	// Delta: the arm also fires on triggered casts in C++ (no
 	// triggered-flags guard); Go's triggered path never runs this gauntlet.
 	if s.isMoving &&
-		!(s.isFalling && len(spell.Effects) > 0 && spell.Effects[0].Effect == spellEffectStuck) &&
+		!(s.isFallingFar && len(spell.Effects) > 0 && spell.Effects[0].Effect == spellEffectStuck) &&
 		(spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0 || spell.AuraInterruptFlags&auraInterruptFlagNotSeated != 0) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedMoving), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "moving autorepeat or not-seated cast")
@@ -2461,8 +2468,13 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// above already rejected while a cast-bar cast runs, so
 	// interruptCurrentCast is the same-container break (SetCurrentCastSpell's
 	// InterruptSpell(CSpellType, false)) and a no-op except in the Auto-Shot
-	// exception path, which is skipped here.
-	if spellID != 75 {
+	// exception path, which is skipped here. Registering a next-melee-swing
+	// spell breaks only the CURRENT_MELEE_SPELL slot ("other spell types
+	// don't break anything now", Unit.cpp:3120) — the cast bar, channel,
+	// fishing bobber and autorepeat all survive the queue, which lands in its
+	// own slot below.
+	nextSwing := isNextMeleeSwingSpell(spell)
+	if spellID != 75 && !nextSwing {
 		s.interruptCurrentCast()
 		s.interruptCurrentChannel()
 		// A new cast breaks the fishing channel like any other channel
@@ -2470,7 +2482,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		// for fishing, so the bobber is cancelled explicitly.
 		s.cancelFishingBobber()
 	}
-	if s.autoRepeatSpell != 0 && s.autoRepeatSpell != 75 {
+	if s.autoRepeatSpell != 0 && s.autoRepeatSpell != 75 && !nextSwing {
 		s.autoRepeatSpell = 0
 		s.autoRepeatTarget = 0
 	}
@@ -2513,6 +2525,23 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				break
 			}
 		}
+	}
+	if nextSwing {
+		// Spell::prepare (Spell.cpp:3200-3201): GetCurrentContainer() returns
+		// CURRENT_MELEE_SPELL for on-next-swing spells, so the instant
+		// cast(true) arm never fires — the spell queues for the next
+		// main-hand melee swing (Unit.cpp:2151-2152) and the PREPARING update
+		// arm (Spell.cpp:3839) never touches it either. SendSpellStart and
+		// the GCD still run at queue time; power is taken by _cast at swing
+		// time. Replacing the queued spell cancels the old one with the
+		// Spell::cancel PREPARING arm inside queueNextSwingSpell.
+		s.queueNextSwingSpell(castID, spellID, spell, target, 0, 0)
+		if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_START), protocol.BuildSpellStart(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagStart, castTime, target), true); err != nil {
+			return false
+		}
+		s.triggerGlobalCooldown(spell)
+		s.debug("spell queued for next swing", "account", s.accountName, "spell", spellID, "cast_id", castID)
+		return true
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_START), protocol.BuildSpellStart(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagStart, castTime, target), true); err != nil {
 		return false
@@ -2557,7 +2586,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				return
 			}
 			s.castMu.Unlock()
-			s.finishSpellCast(context.Background(), castID, spellID, spell, target, 0, 0)
+			s.finishSpellCast(context.Background(), castID, spellID, spell, target, 0, 0, nil)
 		})
 		s.activeCast = castState
 		s.castMu.Unlock()
@@ -2584,7 +2613,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		// (castSpellDirectWithOverrides) runs the _cast tail directly,
 		// skipping SetCurrentCastSpell, SendSpellStart, and the GCD —
 		// matching C++'s direct cast(true).
-		s.finishSpellCast(context.Background(), castID, spellID, spell, target, 0, 0)
+		s.finishSpellCast(context.Background(), castID, spellID, spell, target, 0, 0, nil)
 	}
 
 	s.debug("spell cast accepted", "account", s.accountName, "spell", spellID, "cast_id", castID, "cast_time", castTime, "cost", cost)
@@ -5515,7 +5544,7 @@ func (s *session) hasConsumeNoAmmoAura(spell wotlk.Spell) bool {
 	return false
 }
 
-func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, castItemGUID uint64, castItemEntry uint32) {
+func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, castItemGUID uint64, castItemEntry uint32, queuedSwing *activeCastState) {
 	if s.player == nil {
 		return
 	}
@@ -5525,15 +5554,26 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	s.beginSpellModTaking()
 	defer s.endSpellModTaking()
 	var completedCast *activeCastState
-	s.castMu.Lock()
-	if s.activeCast != nil && s.activeCast.CastID == castID && s.activeCast.SpellID == spellID {
-		if s.activeCast.Cancelled {
-			s.castMu.Unlock()
-			return
+	if queuedSwing != nil {
+		// On-next-swing consumption (Unit.cpp:2151-2152): the queued spell
+		// was never registered in s.activeCast, so there is no cast-bar
+		// bookkeeping to claim; the fabricated state carries only the
+		// PrepareTriggersExecutedOnHit snapshot (Spell.cpp:3430) for the
+		// effects loop below. The deferred activeCast cleanup compares
+		// against s.activeCast, which this pointer can never equal, so a
+		// cast bar running in the generic container is undisturbed.
+		completedCast = queuedSwing
+	} else {
+		s.castMu.Lock()
+		if s.activeCast != nil && s.activeCast.CastID == castID && s.activeCast.SpellID == spellID {
+			if s.activeCast.Cancelled {
+				s.castMu.Unlock()
+				return
+			}
+			completedCast = s.activeCast
 		}
-		completedCast = s.activeCast
+		s.castMu.Unlock()
 	}
-	s.castMu.Unlock()
 	if completedCast != nil {
 		defer func() {
 			s.castMu.Lock()
@@ -11389,6 +11429,84 @@ func (s *session) sendInterrupted(castID uint8, spellID uint32, result uint8) {
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_FAILED_OTHER), payload, true)
 }
 
+// queuedNextSwing is Go's CURRENT_MELEE_SPELL slot (Unit.h:572): an
+// on-next-swing spell queued by the client at cast time, consumed by the
+// next main-hand melee swing (Unit::AttackerStateUpdate, Unit.cpp:2151-2152)
+// instead of firing from the cast bar. Guarded by castMu like activeCast.
+type queuedNextSwing struct {
+	CastID        uint8
+	SpellID       uint32
+	Spell         wotlk.Spell
+	Target        protocol.SpellTargetData
+	CastItemGUID  uint64
+	CastItemEntry uint32
+}
+
+// isNextMeleeSwingSpell mirrors SpellInfo::IsNextMeleeSwingSpell
+// (SpellInfo.cpp:1239-1242): either "on next swing" attr0 bit queues the
+// spell in CURRENT_MELEE_SPELL instead of firing it.
+func isNextMeleeSwingSpell(spell wotlk.Spell) bool {
+	return spell.Attributes&(spellAttr0OnNextSwing|spellAttr0OnNextSwing2) != 0
+}
+
+// queueNextSwingSpell mirrors Unit::SetCurrentCastSpell for the
+// CURRENT_MELEE_SPELL container (Unit.cpp:3064-3125): only the melee slot
+// breaks — the active cast bar, channel and autorepeat are untouched
+// ("other spell types don't break anything now"). A replaced queued spell
+// is cancelled with the Spell::cancel PREPARING arm (Spell.cpp:3218-3224):
+// CancelGlobalCooldown, then SendInterrupted(0), then
+// SendCastResult(SPELL_FAILED_INTERRUPTED).
+func (s *session) queueNextSwingSpell(castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, castItemGUID uint64, castItemEntry uint32) {
+	s.castMu.Lock()
+	old := s.nextSwing
+	s.nextSwing = &queuedNextSwing{CastID: castID, SpellID: spellID, Spell: spell, Target: target, CastItemGUID: castItemGUID, CastItemEntry: castItemEntry}
+	s.castMu.Unlock()
+	if old != nil {
+		s.cancelGlobalCooldown(old.SpellID)
+		s.sendInterrupted(old.CastID, old.SpellID, 0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(old.CastID, old.SpellID, spellFailedInterrupted), true)
+	}
+}
+
+// takeNextSwingSpell removes and returns the queued on-next-swing spell, or
+// nil when the CURRENT_MELEE_SPELL slot is empty.
+func (s *session) takeNextSwingSpell() *queuedNextSwing {
+	s.castMu.Lock()
+	q := s.nextSwing
+	s.nextSwing = nil
+	s.castMu.Unlock()
+	return q
+}
+
+// cancelNextSwingSpell drops a queued on-next-swing spell with the
+// Spell::cancel PREPARING arm packets (Spell.cpp:3218-3224), mirroring the
+// Unit::AttackStop / death InterruptSpell(CURRENT_MELEE_SPELL) legs
+// (Unit.cpp:5774-5778). Silent when nothing is queued.
+func (s *session) cancelNextSwingSpell() {
+	q := s.takeNextSwingSpell()
+	if q == nil {
+		return
+	}
+	s.cancelGlobalCooldown(q.SpellID)
+	s.sendInterrupted(q.CastID, q.SpellID, 0)
+	_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(q.CastID, q.SpellID, spellFailedInterrupted), true)
+}
+
+// finishNextSwingCast consumes a queued on-next-swing spell on the main-hand
+// swing (Unit.cpp:2151-2152: "melee attack spell cast at main hand attack
+// only - no normal melee dmg dealt"), running the C++ cast(false) path —
+// _cast revalidates CheckCast and takes power at swing time, not at queue
+// time. The fabricated activeCastState carries the PrepareTriggersExecutedOnHit
+// snapshot (Spell.cpp:3430) through finishSpellCast; it is never stored in
+// s.activeCast, so the deferred activeCast cleanup is a no-op and a running
+// cast bar in another container is undisturbed. C++ extra attacks (!extra,
+// Unit.cpp:2151) don't consume the slot — Go has no extra-attack model, so
+// every main-hand swing consumes.
+func (s *session) finishNextSwingCast(ctx context.Context, q *queuedNextSwing) {
+	swingCast := &activeCastState{CastID: q.CastID, SpellID: q.SpellID}
+	s.finishSpellCast(ctx, q.CastID, q.SpellID, q.Spell, q.Target, q.CastItemGUID, q.CastItemEntry, swingCast)
+}
+
 func (s *session) interruptCurrentCast() {
 	s.castMu.Lock()
 	if s.activeCast != nil {
@@ -16870,7 +16988,7 @@ func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
 					Flags:    protocol.SpellTargetFlagUnitWireMask,
 					UnitGUID: targetUnit,
 				}
-				s.finishSpellCast(ctx, 0, click.spellID, spell, targetData, 0, 0)
+				s.finishSpellCast(ctx, 0, click.spellID, spell, targetData, 0, 0, nil)
 			}
 		}
 	}
