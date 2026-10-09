@@ -1282,3 +1282,45 @@ func (s *session) handleBattlegroundPlayerPositions(ctx context.Context, payload
 	}
 	return true
 }
+
+// spellRecentlyDroppedFlag is SPELL_RECENTLY_DROPPED_FLAG (18012): the
+// still-has-recently-held-flag debuff that blocks battleground object use
+// (Player::CanUseBattlegroundObject, Player.cpp:24706).
+const spellRecentlyDroppedFlag = 18012
+
+// canUseBattlegroundObject mirrors Player::CanUseBattlegroundObject
+// (Player.cpp:24691-24708). With a null gameobject target the faction check
+// is skipped (the C++ null comment); otherwise the GO's
+// gameobject_template_addon faction must be friendly to the caster's
+// faction template (FactionTemplateEntry::IsFriendlyTo, via the friends-list
+// bridge), and the caster must not be damage-immune, must not carry the
+// recently-dropped-flag debuff, and must be alive. Missing DBC rows skip
+// their check, matching C++'s null-pointer passes.
+func (s *session) canUseBattlegroundObject(goGUID uint64) bool {
+	if s == nil || s.player == nil || s.server == nil {
+		return true // unknown-data-is-permissive (terrain.go convention)
+	}
+	if goGUID != 0 && s.server.WorldStore != nil && s.server.WorldStore.DB != nil && s.server.Data != nil {
+		entry := uint32((goGUID >> 24) & 0xFFFFFF)
+		var faction int64
+		if err := s.server.WorldStore.DB.QueryRowContext(context.Background(),
+			"SELECT COALESCE(faction, 0) FROM gameobject_template_addon WHERE entry = ? LIMIT 1", entry).Scan(&faction); err == nil && faction != 0 {
+			playerFaction := s.server.raceFaction(s.player.Race)
+			_, pfound, perr := s.server.Data.FactionTemplate(playerFaction)
+			_, gfound, gerr := s.server.Data.FactionTemplate(uint32(faction))
+			if pfound && gfound && perr == nil && gerr == nil {
+				caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: playerFaction, Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+				if !s.server.isFriendlyFaction(uint32(faction), caster) {
+					return false
+				}
+			}
+		}
+	}
+	if s.isTotalImmune() {
+		return false
+	}
+	if s.hasAura(spellRecentlyDroppedFlag) {
+		return false
+	}
+	return s.player.Health > 0
+}

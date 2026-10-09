@@ -1734,9 +1734,10 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// a SPELL_EFFECT_OPEN_LOCK effect with a gameobject or gameobject-item
 	// implicit target fails with SPELL_FAILED_BAD_TARGETS when the target is
 	// missing or not openable, SPELL_FAILED_LOW_CASTLEVEL when the caster's
-	// lock skill is too low, and SPELL_FAILED_TRY_AGAIN on the
-	// orange-lockpick fail chance. C++ relative order places this right after
-	// the skinning leg.
+	// lock skill is too low, SPELL_FAILED_TRY_AGAIN on the
+	// orange-lockpick fail chance and on the battleground object arm, and
+	// SPELL_FAILED_BAD_TARGETS when CanOpenLock finds no key. C++ relative
+	// order places this right after the skinning leg.
 	if failure := s.checkOpenLockCast(spell, target); failure != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "open-lock validation", "failure", failure)
@@ -3568,9 +3569,9 @@ func (s *session) checkOpenLockCast(spell wotlk.Spell, target protocol.SpellTarg
 	// permissive (terrain.go convention).
 	var goLockID uint32
 	goKnown := false
+	var goType int64
 	if goGUID != 0 && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		entry := uint32((goGUID >> 24) & 0xFFFFFF)
-		var goType int64
 		var data [5]int64
 		if err := s.server.WorldStore.DB.QueryRowContext(context.Background(),
 			"SELECT type, COALESCE(data0, 0), COALESCE(data1, 0), COALESCE(data2, 0), COALESCE(data3, 0), COALESCE(data4, 0) FROM gameobject_template WHERE entry = ? LIMIT 1",
@@ -3578,6 +3579,17 @@ func (s *session) checkOpenLockCast(spell wotlk.Spell, target protocol.SpellTarg
 			goKnown = true
 			goLockID = uint32(data[goLockDataIndex(uint32(goType))])
 		}
+	}
+	// Battleground arm (Spell.cpp:5755-5758): inside a battleground only
+	// flags and banners are usable, so any other lock cast fails with
+	// SPELL_FAILED_TRY_AGAIN unless Player::CanUseBattlegroundObject
+	// passes. Exempt is spell 1842 (Disarm Trap) on a trap gameobject
+	// (GameObjectTypeTrap, gameobjects.go:34; the 1842 literal is the spell
+	// id in C++). C++ relative order places this right after the
+	// openable-item gate, before the lock-id computation.
+	if !(spell.ID == spellDisarmTrap && goKnown && goType == int64(GameObjectTypeTrap)) &&
+		s.bgData.InstanceID != 0 && !s.canUseBattlegroundObject(goGUID) {
+		return spellFailedTryAgain
 	}
 	// lockId (Spell.cpp:5760-5771): the GO's lock, else the inventory item's
 	// LockID. A GO with no lock is not openable.
@@ -3891,10 +3903,11 @@ func (s *session) checkSummonPlayerCast(ctx context.Context, spell wotlk.Spell, 
 	if spellID != spellSummonReferAFriend && !s.inSameGroupAs(target) {
 		return spellFailedBadTargets
 	}
-	// Player::HasSummonPending has no Go model — no pending-summon state is
-	// tracked anywhere — so the SPELL_FAILED_SUMMON_PENDING arm has no
-	// bridge (documented; never stubbed).
-	//
+	// Player::HasSummonPending (Spell.cpp:5907-5908): a target with an
+	// outstanding summon request fails with SPELL_FAILED_SUMMON_PENDING.
+	if target.hasSummonPending() {
+		return spellFailedSummonPending
+	}
 	// Dungeon leg: the caster's map DBC entry must be a dungeon before the
 	// raid-bind / instance-template / access-requirement arms apply. C++
 	// dereferences the MapStore entry unconditionally; a missing Go entry is
@@ -4253,15 +4266,16 @@ func (s *session) checkCharmCast(spell wotlk.Spell, target protocol.SpellTargetD
 //     SPELL_FAILED_NO_MOUNTS_ALLOWED. Missing map entry, missing row, or a
 //     query error is permissive (terrain.go convention), matching the C++
 //     null-template pass that leaves the computed value standing.
-//   - IsInDisallowedMountForm → SPELL_FAILED_DONT_REPORT: a live shapeshift
-//     form whose SpellShapeshiftForm.dbc flags lack 0x1 rejects
-//     (Unit.cpp:9170-9185); a missing form row rejects too. The
-//     transform-spell carve-out has no bridge (Go tracks no transform-spell
-//     state), and the native/display-ID arms are vacuous on the client path
-//     (Go never changes the player display ID for an aura). C++ also sends
-//     MountResult::Shapeshifted before the cast result; the Go protocol has
-//     no SMSG_MOUNT_RESULT opcode, so the DONT_REPORT cast result is the
-//     only feedback — documented, not stubbed.
+//   - IsInDisallowedMountForm → SPELL_FAILED_DONT_REPORT, preceded by the
+//     SMSG_MOUNT_RESULT MountResult::Shapeshifted packet (Spell.cpp:6107;
+//     "mount result gets sent before the cast result"). The packet carries a
+//     single int32 (MountResult, SharedDefines.h:3827); the Opcode exists in
+//     the Go protocol (0x16E), so it is written here ahead of the caller's
+//     CAST_FAILED. A live shapeshift form whose SpellShapeshiftForm.dbc flags
+//     lack 0x1 rejects (Unit.cpp:9170-9185); a missing form row rejects too.
+//     The transform-spell carve-out has no bridge (Go tracks no
+//     transform-spell state), and the native/display-ID arms are vacuous on
+//     the client path (Go never changes the player display ID for an aura).
 //
 // Returns the SPELL_FAILED_* result code, 0 on success. Neither failure
 // code carries extra WriteCastResultInfo params, so castFailedExtParams
@@ -4299,11 +4313,23 @@ func (s *session) checkMountedCast(ctx context.Context, spell wotlk.Spell) uint8
 	if form := s.player.ShapeshiftForm; form != 0 {
 		shape, found, err := s.server.Data.ShapeshiftForm(uint32(form))
 		if err != nil || !found || shape.Flags&0x1 == 0 {
+			// Spell::SendMountResult(MountResult::Shapeshifted,
+			// Spell.cpp:4199-4212): the single-int32 SMSG_MOUNT_RESULT packet
+			// (WorldPackets::Spells::MountResult::Write, SpellPackets.cpp:195)
+			// goes out before the cast result.
+			buf := protocol.NewBuffer(4)
+			buf.WriteI32(mountResultShapeshifted)
+			_ = s.write(uint16(protocol.OpcodeSMSG_MOUNT_RESULT), buf.Bytes(), true)
 			return spellFailedDontReport
 		}
 	}
 	return 0
 }
+
+// mountResultShapeshifted is MountResult::Shapeshifted (SharedDefines.h:3827),
+// sent as SMSG_MOUNT_RESULT before the cast result when a shapeshifted
+// caster tries to mount (Spell::CheckCast, Spell.cpp:6107).
+const mountResultShapeshifted int32 = 8
 
 // checkRangedAttackPowerAttackerBonusCast mirrors the
 // SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS leg of the CheckCast

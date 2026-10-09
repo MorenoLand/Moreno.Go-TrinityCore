@@ -1210,8 +1210,15 @@ func (s *session) clearSummonPending() {
 	s.summonLocSet = false
 }
 
+// hasSummonPending mirrors Player::HasSummonPending (Player.cpp:23801-23804):
+// a summon request is pending while its expiry time is in the future (an
+// unset expiry is 0, which is never >= now, matching C++).
+func (s *session) hasSummonPending() bool {
+	return s != nil && !s.summonExpire.IsZero() && time.Now().Before(s.summonExpire)
+}
+
 func (s *session) sendSummonRequest(summonerGUID uint64, zoneID uint32) {
-	if !s.summonExpire.IsZero() && time.Now().Before(s.summonExpire) {
+	if s.hasSummonPending() {
 		return
 	}
 	if s.hasAura(23445) {

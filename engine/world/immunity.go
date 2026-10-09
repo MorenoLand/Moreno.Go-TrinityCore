@@ -13,6 +13,26 @@ const (
 	spellAuraModIgnoreShapeshift   uint32 = 275 // SPELL_AURA_MOD_IGNORE_SHAPESHIFT (SpellAuraDefines.h:355)
 )
 
+// isTotalImmune mirrors Player::isTotalImmune (Player.cpp:24785-24798): any
+// SPELL_AURA_SCHOOL_IMMUNITY (39) aura counts — C++ ORs the aura effects'
+// misc values into immuneMask and tests (immuneMask & SPELL_SCHOOL_MASK_ALL)
+// as a boolean, so any covered school (not just full coverage) trips it.
+func (s *session) isTotalImmune() bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+
+	for _, aura := range s.activeAuras {
+		if aura != nil && aura.AuraType == spellAuraSchoolImmunity {
+			return true
+		}
+	}
+	return false
+}
+
 // isImmuneToDamage determines whether the player is immune to damage of the given schoolMask.
 // Mirrors TrinityCore Unit::IsImmuneToDamage (Unit.cpp:8950-9050).
 func (s *session) isImmuneToDamage(schoolMask uint32) bool {
