@@ -1203,6 +1203,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			castTimeStamp := uint32(now.UnixMilli())
 			hitTargets := []uint64{target.GUID}
 			spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: target.GUID}
+			if s != nil && s.Data != nil {
+				if spellInfo, found, err := s.Data.Spell(spellID); err == nil && found {
+					spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
+				}
+			}
 			goPkt := protocol.BuildSpellGo(motion.GUID, motion.GUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, spellTarget)
 			if target.Sess != nil {
 				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)

@@ -652,7 +652,13 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		petNextLevelXP = s.server.xpForLevel(ctx, uint32(level)+1) / 20
 	}
 	if !critter && createdBySpell > 0 && createdBySpell <= int64(^uint32(0)) {
-		packet := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 0, uint32(createdBySpell), spellCastFlagGo, uint32(time.Now().UnixMilli()), nil, nil, protocol.SpellTargetData{})
+		spellTarget := protocol.SpellTargetData{}
+		if s.server != nil && s.server.Data != nil {
+			if spellInfo, found, err := s.server.Data.Spell(uint32(createdBySpell)); err == nil && found {
+				spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
+			}
+		}
+		packet := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 0, uint32(createdBySpell), spellCastFlagGo, uint32(time.Now().UnixMilli()), nil, nil, spellTarget)
 		if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), packet, true); err != nil {
 			s.debug("pet summon effect failed", "account", s.accountName, "petID", petID, "spell", createdBySpell, "error", err)
 		} else if s.server != nil {
@@ -2035,6 +2041,11 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 			if spellOrAction != 0 {
 				castTimeStamp := uint32(time.Now().UnixMilli())
 				spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
+				if s.server != nil && s.server.Data != nil {
+					if spellInfo, found, err := s.server.Data.Spell(spellOrAction); err == nil && found {
+						spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
+					}
+				}
 				goPkt := protocol.BuildSpellGo(petGUID, petGUID, 1, spellOrAction, spellCastFlagGo, castTimeStamp, []uint64{targetGUID}, nil, spellTarget)
 				_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 				if s.server != nil {

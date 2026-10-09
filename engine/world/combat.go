@@ -920,6 +920,11 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	castTimeStamp := uint32(now.UnixMilli())
 	hitTargets := []uint64{target.GUID}
 	spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: target.GUID}
+	if s.server != nil && s.server.Data != nil {
+		if spellInfo, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
+		}
+	}
 	goPkt := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, spellTarget)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 	if s.server != nil {

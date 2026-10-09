@@ -559,6 +559,11 @@ func (s *Server) castCreatureSpell(ctx context.Context, m *creatureMotion, spell
 	castTimeStamp := uint32(now.UnixMilli())
 	hitTargets := []uint64{targetGUID}
 	spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
+	if s != nil && s.Data != nil {
+		if spellInfo, found, err := s.Data.Spell(spellID); err == nil && found {
+			spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
+		}
+	}
 	goPkt := protocol.BuildSpellGo(m.GUID, m.GUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, spellTarget)
 
 	if targetSess := s.findSessionByGUID(targetGUID); targetSess != nil {

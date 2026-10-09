@@ -975,6 +975,11 @@ func (s *session) handleBinderActivate(ctx context.Context, payload []byte) bool
 	// 1. Send visual cast of homebind spell 3286 from NPC to player (TC: npc->CastSpell(_player, 3286, true))
 	castTimeStamp := uint32(time.Now().UnixMilli())
 	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: s.playerGUID}
+	if s.server != nil && s.server.Data != nil {
+		if spellInfo, found, err := s.server.Data.Spell(3286); err == nil && found {
+			target = spellGoPacketTarget(spellInfo, target)
+		}
+	}
 	goPkt := protocol.BuildSpellGo(npcGUID, s.playerGUID, 1, 3286, spellCastFlagGo, castTimeStamp, []uint64{s.playerGUID}, nil, target)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 	if s.server != nil {
