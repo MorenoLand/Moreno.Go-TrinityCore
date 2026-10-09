@@ -7801,10 +7801,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 		}
 		timeDelayMs := int(math.Floor(float64(dist) / float64(spell.Speed) * 1000.0))
+		// No clamp: Spell.cpp:2156-2169 computes TimeDelay as
+		// floor(dist / Speed * 1000) with no upper bound — the delay event
+		// simply re-plans at GetDelayStart() + GetDelayMoment() for the
+		// true minimum (Spell.cpp:7596-7650).
 		if timeDelayMs > 0 {
-			if timeDelayMs > 4000 {
-				timeDelayMs = 4000
-			}
 			time.AfterFunc(time.Duration(timeDelayMs)*time.Millisecond, func() {
 				// Spell::handle_delayed (Spell.cpp:3640): the delayed phase
 				// holds the taking window around target processing; the
@@ -17393,21 +17394,17 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 	if value, ok, err := s.server.Data.SpellDurationBase(spell.DurationIndex); err == nil && ok {
 		durationMs = value
 	}
-	if durationMs == -1 {
-		// Spell::handle_immediate (Spell.cpp:3582-3583): infinite channels
-		// (GetDuration() == -1) SendChannelStart(-1) and enter
-		// SPELL_STATE_CASTING until interrupted — no completion timer. Go
-		// has no infinite-channel state; the cast falls through without
-		// starting one (no channel bar, no per-tick drain). Noted, not bridged.
-		return
-	}
-	if durationMs <= 0 {
+	infinite := durationMs == -1
+	if durationMs <= 0 && !infinite {
 		return // instant channels have no timed lifecycle here
 	}
-	// Spell::handle_immediate (Spell.cpp:3577-3585): "First mod_duration
-	// then haste - see Missile Barrage" — SPELLMOD_DURATION folds flat/pct
-	// duration mods (talents, glyphs) before the haste compression.
-	durationMs = s.applySpellMod(spell, spellModDuration, durationMs)
+	// "First mod_duration then haste - see Missile Barrage" —
+	// SPELLMOD_DURATION folds flat/pct duration mods (talents, glyphs)
+	// before the haste compression; C++ only runs both legs for
+	// duration > 0, so the infinite arm skips them.
+	if !infinite {
+		durationMs = s.applySpellMod(spell, spellModDuration, durationMs)
+	}
 	period := uint32(0)
 	for _, effect := range spell.Effects {
 		if effect.Effect != 0 && effect.AuraPeriod > period {
@@ -17420,7 +17417,11 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 	// the modded duration compresses by (1 + haste), matching the C++ order (mod first, then haste).
 	hastePct := s.getSpellHastePct()
 	if hastePct > 0 {
-		durationMs = int32(math.Round(float64(durationMs) / (1.0 + hastePct/100.0)))
+		// The infinite arm keeps its -1 duration; only the tick period
+		// compresses (C++ runs ModSpellDurationTime on duration > 0 only).
+		if !infinite {
+			durationMs = int32(math.Round(float64(durationMs) / (1.0 + hastePct/100.0)))
+		}
 		if period > 0 {
 			period = uint32(math.Round(float64(period) / (1.0 + hastePct/100.0)))
 		}
@@ -17431,6 +17432,13 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 	// move-allowed-channel exemption (SpellInfo::IsMoveAllowedChannel,
 	// SpellInfo.cpp:1229-1232) is bridged in interruptSpellsOnMovement,
 	// which lets move-allowed channels survive movement.
+	// Spell::handle_immediate (Spell.cpp:3583-3584): the infinite channel
+	// carries no completion timer — it ends only on interrupt — while its
+	// period ticks and mana drain keep running on their own timers.
+	remaining := time.Duration(math.MaxInt64)
+	if !infinite {
+		remaining = time.Duration(durationMs) * time.Millisecond
+	}
 	channel := &activeChannelState{
 		CastID:     castID,
 		SpellID:    spellID,
@@ -17438,7 +17446,7 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 		TargetKey:  creatureAuraKeyForPlayer(*s.player, targetGUID),
 		Spell:      spell,
 		DurationMs: uint32(durationMs),
-		Remaining:  time.Duration(durationMs) * time.Millisecond,
+		Remaining:  remaining,
 		PeriodMs:   period,
 		HasDest:    hasDest,
 		DestX:      destX,
@@ -17459,7 +17467,9 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 	}
 	s.sendPlayerUpdate()
 
-	channel.Timer = time.AfterFunc(channel.Remaining, func() { s.finishChannel() })
+	if !infinite {
+		channel.Timer = time.AfterFunc(channel.Remaining, func() { s.finishChannel() })
+	}
 	if period > 0 && period <= uint32(durationMs) {
 		channel.TickTimer = time.AfterFunc(time.Duration(period)*time.Millisecond, func() { s.channelTick() })
 	}
