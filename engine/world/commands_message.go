@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"strings"
 	"time"
@@ -107,6 +108,30 @@ func (s *Server) broadcastServerMessageAll(messageID int32, stringParam string) 
 	s.sessionsMu.RUnlock()
 	for _, target := range targets {
 		_ = target.write(uint16(protocol.OpcodeSMSG_CHAT_SERVER_MESSAGE), payload, true)
+	}
+}
+
+// broadcastZoneUnderAttack mirrors the team-filtered arm of
+// World::SendGlobalMessage (World.cpp:2584-2606) as used by
+// Creature::SendZoneUnderAttackMessage (Creature.cpp:2706-2712): the
+// SMSG_ZONE_UNDER_ATTACK packet (area id, uint32) goes to every in-game
+// session on the opposite team of the killer.
+func (s *Server) broadcastZoneUnderAttack(killerTeam uint32, areaID uint32) {
+	if s == nil || areaID == 0 {
+		return
+	}
+	payload := make([]byte, 4)
+	binary.LittleEndian.PutUint32(payload, areaID)
+	s.sessionsMu.RLock()
+	targets := make([]*session, 0, len(s.sessions))
+	for sess := range s.sessions {
+		if sess != nil && sess.worldReady.Load() && sess.player != nil && teamForRace(sess.player.Race) != killerTeam {
+			targets = append(targets, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, target := range targets {
+		_ = target.write(uint16(protocol.OpcodeSMSG_ZONE_UNDER_ATTACK), payload, true)
 	}
 }
 

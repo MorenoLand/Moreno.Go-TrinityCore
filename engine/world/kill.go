@@ -17,6 +17,15 @@ const (
 	creatureFlagExtraNoXPAtKill uint32 = 0x00000040
 )
 
+// creatureFlagExtraGuard mirrors CREATURE_FLAG_EXTRA_GUARD
+// (CreatureData.h): the GuardAI::Permissible gate (GuardAI.cpp:29-35).
+const creatureFlagExtraGuard uint32 = 0x00000080
+
+// spellAttr0CastableWhileDead mirrors SPELL_ATTR0_CASTABLE_WHILE_DEAD
+// (SharedDefines.h:435): the UnitAI::FillAISpellInfo AICOND_DIE gate
+// (UnitAI.cpp:196) bridged in onCreatureKilled.
+const spellAttr0CastableWhileDead uint32 = 0x00800000
+
 // unitDynFlagLootable marks a corpse lootable in UNIT_FIELD_DYNAMIC_FLAGS.
 const unitDynFlagLootable uint32 = 0x00000001
 
@@ -550,6 +559,39 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 			// Eluna-first/native-second order used at respawn (kill.go:865).
 			if motion.BossAI != nil {
 				motion.BossAI.OnDied(ctx, s.server, motion)
+			}
+			// CombatAI::JustDied (CombatAI.cpp:68-73): AICOND_DIE spells —
+			// castable-while-dead per UnitAI::FillAISpellInfo
+			// (SPELL_ATTR0_CASTABLE_WHILE_DEAD, UnitAI.cpp:196) — are cast
+			// at the killer, triggered. The passive/infinite-duration
+			// (AICOND_AGGRO) and scheduled (AICOND_COMBAT) arms have no
+			// bridge: Go casts every template spell through the same
+			// combat-tick rotation. Packet-only via castCreatureSpell (no
+			// damage application on this path).
+			if len(motion.Spells) == 0 && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+				motion.Spells = s.server.loadCreatureSpells(ctx, motion.Entry)
+			}
+			if len(motion.Spells) > 0 && s.server.Data != nil {
+				killerGUID := s.playerGUID
+				if killer != nil && killer.GUID != 0 {
+					killerGUID = killer.GUID
+				}
+				for _, spellID := range motion.Spells {
+					if spellInfo, found, err := s.server.Data.Spell(spellID); err == nil && found && spellInfo.Attributes&spellAttr0CastableWhileDead != 0 {
+						s.server.castCreatureSpell(ctx, motion, spellID, killerGUID)
+					}
+				}
+			}
+			// GuardAI::JustDied (GuardAI.cpp:72-76) ->
+			// Creature::SendZoneUnderAttackMessage (Creature.cpp:2706-2712):
+			// a guard slain by a player broadcasts SMSG_ZONE_UNDER_ATTACK
+			// with the guard's area id to the killer's opposite team.
+			// Guards ride CREATURE_FLAG_EXTRA_GUARD (0x80); s is the
+			// kill-attributed session (the C++ charmer/owner-player arm).
+			if motion.FlagsExtra&creatureFlagExtraGuard != 0 && s.player != nil {
+				if _, areaID := s.server.zoneAndAreaID(motion.Map, motion.X, motion.Y, motion.Z, 0); areaID != 0 {
+					s.server.broadcastZoneUnderAttack(teamForRace(s.player.Race), areaID)
+				}
 			}
 		}
 	}
