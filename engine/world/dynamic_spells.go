@@ -33,6 +33,10 @@ type dynamicSpellObjectState struct {
 	AuraSchoolMask            uint8
 	NextAuraTick              time.Time
 	DespawnTimer              *time.Timer
+	// ExpiresAt is the wall-clock deadline the DespawnTimer was armed for;
+	// Spell::DelayedChannel's dynobj->Delay arm (Spell.cpp:7324-7326)
+	// shortens it on channel pushback.
+	ExpiresAt time.Time
 }
 
 func dynamicSpellGUID(low uint32) uint64 { return (dynamicObjectHighGUID << 48) | uint64(low) }
@@ -109,6 +113,7 @@ func (s *Server) spawnDynamicSpellObject(object *dynamicSpellObjectState, durati
 		s.dynamicSpellObjects = make(map[uint64]*dynamicSpellObjectState)
 	}
 	s.dynamicSpellObjects[object.GUID] = object
+	object.ExpiresAt = time.Now().Add(duration)
 	object.DespawnTimer = time.AfterFunc(duration, func() { s.despawnDynamicSpellObject(object.GUID) })
 	s.objectsMu.Unlock()
 	updates := protocol.NewUpdateData()
@@ -197,6 +202,44 @@ func (s *Server) despawnDynamicSpellObject(guid uint64) {
 	packet.WriteU64(object.GUID)
 	packet.WriteU8(0)
 	s.broadcastToInstance(object.Map, object.InstanceID, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), packet.Bytes(), nil)
+}
+
+// delayChannelDynamicObject mirrors the dynobj arm of Spell::DelayedChannel
+// (Spell.cpp:7324-7326): the caster's persistent-area object for the
+// channeled spell has its remaining life shortened by the pushback delay —
+// the "partial interrupt of persistent area auras" (DynamicObject::Delay,
+// DynamicObject.cpp:194-197). A non-positive remainder despawns the object,
+// matching the removal a negative C++ duration produces on the next update.
+func (s *Server) delayChannelDynamicObject(casterGUID uint64, spellID uint32, delayMs int32) {
+	if s == nil || delayMs <= 0 {
+		return
+	}
+	s.objectsMu.Lock()
+	var target *dynamicSpellObjectState
+	for _, object := range s.dynamicSpellObjects {
+		if object == nil || object.IsFarsightFocus || object.ObjectType == dynamicObjectTypeFarsightFocus {
+			continue
+		}
+		if object.CasterGUID == casterGUID && object.SpellID == uint64(spellID) {
+			target = object
+			break
+		}
+	}
+	if target == nil {
+		s.objectsMu.Unlock()
+		return
+	}
+	remaining := time.Until(target.ExpiresAt) - time.Duration(delayMs)*time.Millisecond
+	if remaining <= 0 {
+		s.objectsMu.Unlock()
+		s.despawnDynamicSpellObject(target.GUID)
+		return
+	}
+	target.ExpiresAt = time.Now().Add(remaining)
+	if target.DespawnTimer != nil {
+		target.DespawnTimer.Reset(remaining)
+	}
+	s.objectsMu.Unlock()
 }
 
 func (s *session) streamDynamicSpellObjects() {

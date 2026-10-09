@@ -18520,12 +18520,16 @@ func (s *session) delayCurrentCast() {
 	// int32 arithmetic — a negative reduction lengthens the pushback.
 	delayMs := int32(defaultCastPushbackMs)
 	delayMs += delayMs * -reduction / 100
-	delay := time.Duration(delayMs) * time.Millisecond
-	if delay > remaining {
-		delay = remaining
+	// Spell::Delayed (Spell.cpp:7270-7274): the pushed-back remaining time
+	// is capped at the spell's original cast time — m_timer + delaytime >
+	// m_casttime clamps the added delay so the cast can never be pushed
+	// back past its full duration.
+	remainingMs := int32(remaining / time.Millisecond)
+	if int64(remainingMs)+int64(delayMs) > int64(cast.CastTimeMs) {
+		delayMs = int32(int64(cast.CastTimeMs) - int64(remainingMs))
 	}
 	cast.Pushbacks++
-	newRemaining := remaining + delay
+	newRemaining := time.Duration(remainingMs+delayMs) * time.Millisecond
 	cast.StartAt = time.Now().Add(-(time.Duration(cast.CastTimeMs)*time.Millisecond - newRemaining))
 	if cast.Timer != nil {
 		cast.Timer.Reset(newRemaining)
@@ -18536,9 +18540,9 @@ func (s *session) delayCurrentCast() {
 
 	packet := protocol.NewBuffer(8)
 	packet.WritePackedGUID(s.playerGUID)
-	packet.WriteU32(uint32(delay.Milliseconds()))
+	packet.WriteU32(uint32(delayMs))
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_DELAYED), packet.Bytes(), true)
-	s.debug("cast pushed back", "account", s.accountName, "spell", spellID, "delay_ms", delay.Milliseconds(), "count", pushbacks)
+	s.debug("cast pushed back", "account", s.accountName, "spell", spellID, "delay_ms", delayMs, "count", pushbacks)
 }
 
 // interruptAbsorbedCast mirrors the absorbed-damage arm of Unit::DealDamage
@@ -18603,10 +18607,165 @@ func (s *session) delayCurrentChannel() {
 		channel.Timer.Reset(remaining)
 	}
 	spellID := channel.SpellID
+	spell := channel.Spell
+	targetGUID := channel.TargetGUID
+	targetKey := channel.TargetKey
+	pushbacks := channel.Pushbacks
 	s.castMu.Unlock()
 
+	// Spell::DelayedChannel (Spell.cpp:7316-7320): the pushback partially
+	// interrupts the channel's hit targets — every unit the channel hit
+	// (m_UniqueTargetInfo, SPELL_MISS_NONE) has its owned auras of this
+	// spell, cast by the channel caster, shortened by the (clamped) delay.
+	s.delayChannelOwnedAuras(spell, delayMs, targetGUID, targetKey)
+	// Spell::DelayedChannel (Spell.cpp:7324-7326): the caster's
+	// persistent-area object for the channeled spell is delayed too.
+	if s.server != nil {
+		s.server.delayChannelDynamicObject(s.playerGUID, spellID, delayMs)
+	}
 	s.sendChannelUpdate(uint32(remaining.Milliseconds()))
-	s.debug("channel pushed back", "account", s.accountName, "spell", spellID, "delay_ms", delayMs, "count", channel.Pushbacks)
+	s.debug("channel pushed back", "account", s.accountName, "spell", spellID, "delay_ms", delayMs, "count", pushbacks)
+}
+
+// delayChannelOwnedAuras mirrors the DelayOwnedAuras loop of
+// Spell::DelayedChannel (Spell.cpp:7316-7320): every unit the channel hit
+// (m_UniqueTargetInfo with SPELL_MISS_NONE) has the auras it owns of this
+// spell, cast by the channel caster, shortened by the pushback delay.
+// Go's hit set is the caster, the explicit channel target, and — for
+// persistent-area (dynobj) channels — every unit carrying the channel's
+// persistent-area aura.
+func (s *session) delayChannelOwnedAuras(spell wotlk.Spell, delayMs int32, targetGUID uint64, targetKey creatureAuraKey) {
+	if s == nil || s.player == nil || s.server == nil || delayMs <= 0 {
+		return
+	}
+	spellID := spell.ID
+	casterGUID := s.playerGUID
+	s.delayOwnedAura(spellID, casterGUID, delayMs, false)
+	handledCreature := creatureAuraKey{}
+	if targetGUID != 0 && targetGUID != casterGUID {
+		if target := s.server.findSessionByGUID(targetGUID); target != nil && target.player != nil {
+			target.delayOwnedAura(spellID, casterGUID, delayMs, false)
+		} else {
+			handledCreature = targetKey
+			if handledCreature.GUID == 0 {
+				handledCreature = creatureAuraKeyForPlayer(*s.player, targetGUID)
+			}
+			s.server.delayCreatureOwnedAura(handledCreature, spellID, casterGUID, delayMs, false)
+		}
+	}
+	if !spellHasEffect(spell, spellEffectPersistentAreaAura) {
+		return
+	}
+	// A persistent-area channel hits whoever stands in the area; the
+	// recipients are exactly the units carrying this caster's
+	// persistent-area aura of the spell.
+	s.server.sessionsMu.RLock()
+	var targets []*session
+	for sess := range s.server.sessions {
+		if sess == nil || sess == s || sess.player == nil {
+			continue
+		}
+		if sess.playerGUID == targetGUID {
+			continue
+		}
+		if sess.player.Map != s.player.Map || sess.player.InstanceID != s.player.InstanceID {
+			continue
+		}
+		targets = append(targets, sess)
+	}
+	s.server.sessionsMu.RUnlock()
+	for _, ts := range targets {
+		ts.delayOwnedAura(spellID, casterGUID, delayMs, true)
+	}
+	s.server.auraMu.Lock()
+	var creatureKeys []creatureAuraKey
+	for key, auras := range s.server.activeCreatureAuras {
+		if key == handledCreature {
+			continue
+		}
+		if aura := auras[spellID]; aura != nil && !aura.Stopped && aura.CasterGUID == casterGUID && aura.PersistentAreaAura {
+			creatureKeys = append(creatureKeys, key)
+		}
+	}
+	s.server.auraMu.Unlock()
+	for _, key := range creatureKeys {
+		s.server.delayCreatureOwnedAura(key, spellID, casterGUID, delayMs, true)
+	}
+}
+
+// delayOwnedAura mirrors Unit::DelayOwnedAuras (Unit.cpp:4453-4470) for one
+// player: the owned aura of spellID cast by casterGUID has its remaining
+// duration shortened by delayMs (clamped at 0, never removed early), and the
+// new duration is pushed to the client (SetNeedClientUpdateForTargets).
+func (ts *session) delayOwnedAura(spellID uint32, casterGUID uint64, delayMs int32, persistentOnly bool) {
+	if ts == nil || ts.player == nil || delayMs <= 0 {
+		return
+	}
+	ts.castMu.Lock()
+	aura := ts.activeAuras[spellID]
+	if aura == nil || aura.Stopped || aura.CasterGUID != casterGUID || (persistentOnly && !aura.PersistentAreaAura) {
+		ts.castMu.Unlock()
+		return
+	}
+	remaining := aura.RemainingMs
+	if !aura.DurationUpdatedAt.IsZero() {
+		if elapsed := time.Since(aura.DurationUpdatedAt).Milliseconds(); elapsed > 0 {
+			if uint64(elapsed) < uint64(remaining) {
+				remaining -= uint32(elapsed)
+			} else {
+				remaining = 0
+			}
+		}
+	}
+	// Unit::DelayOwnedAuras: duration < delaytime -> 0, else duration - delaytime.
+	var newRemaining uint32
+	if d := uint32(delayMs); d < remaining {
+		newRemaining = remaining - d
+	}
+	aura.RemainingMs = newRemaining
+	aura.DurationUpdatedAt = time.Now()
+	if aura.Timer != nil {
+		aura.Timer.Reset(time.Duration(newRemaining) * time.Millisecond)
+	}
+	slot, positive, maxDur := aura.Slot, aura.Positive, aura.DurationMs
+	ts.castMu.Unlock()
+	ts.sendAuraUpdate(slot, spellID, false, positive, maxDur, newRemaining)
+}
+
+// delayCreatureOwnedAura mirrors Unit::DelayOwnedAuras (Unit.cpp:4453-4470)
+// for one creature: the owned aura of spellID cast by casterGUID is
+// shortened by delayMs, clamped at 0. Creature auras carry no client
+// duration display, so no update packet is needed.
+func (srv *Server) delayCreatureOwnedAura(key creatureAuraKey, spellID uint32, casterGUID uint64, delayMs int32, persistentOnly bool) {
+	if srv == nil || key.GUID == 0 || delayMs <= 0 {
+		return
+	}
+	srv.auraMu.Lock()
+	aura := srv.activeCreatureAuras[key][spellID]
+	if aura == nil || aura.Stopped || aura.CasterGUID != casterGUID || (persistentOnly && !aura.PersistentAreaAura) {
+		srv.auraMu.Unlock()
+		return
+	}
+	remaining := aura.RemainingMs
+	if !aura.DurationUpdatedAt.IsZero() {
+		if elapsed := time.Since(aura.DurationUpdatedAt).Milliseconds(); elapsed > 0 {
+			if uint64(elapsed) < uint64(remaining) {
+				remaining -= uint32(elapsed)
+			} else {
+				remaining = 0
+			}
+		}
+	}
+	var newRemaining uint32
+	if d := uint32(delayMs); d < remaining {
+		newRemaining = remaining - d
+	}
+	aura.RemainingMs = newRemaining
+	aura.DurationUpdatedAt = time.Now()
+	if aura.Timer != nil {
+		aura.Timer.Reset(time.Duration(newRemaining) * time.Millisecond)
+	}
+	srv.auraMu.Unlock()
 }
 
 type itemTemplateClassInfo struct {
