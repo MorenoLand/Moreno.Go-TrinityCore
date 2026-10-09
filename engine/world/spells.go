@@ -10600,9 +10600,10 @@ func (s *session) spellDamagePctDone(ctx context.Context, spell wotlk.Spell, tar
 // Unit::SpellDamagePctDone: the OVERRIDE_CLASS_SCRIPTS table (Unit.cpp:6797-6876)
 // and the per-family custom damage (Unit.cpp:6879-7047). Residuals with no Go
 // model stay documented: Soul Siphon (victim affliction-dot enumeration),
-// Torment the Weak (victim snare-mechanic query), Judgement of Vengeance (victim
-// aura stacks by caster), Shadow Bite (pet-only), Glacier Rot (victim diseases by
-// caster), Smite/Steady Shot glyphs (victim aura caster-match).
+// Shadow Bite (pet-only), the Glacier Rot MeleeDamageBonusDone twin arm
+// (Unit.cpp:8137-8144 — Go has no melee done leg). Caster-matched victim
+// queries (Smite glyph 55692, JoV 31803/53742 stacks, Steady Shot glyph 56826,
+// Glacier Rot diseases) bridge via the *ByCaster helpers below.
 func (s *session) spellDamagePctClassScripts(ctx context.Context, spell wotlk.Spell, targetGUID uint64, target combatTarget, mod float64) float64 {
 	addPct := func(amt int32) { mod *= 1 + float64(amt)/100 } // AddPct fold (Unit.cpp:6807)
 	victimHealthless35 := s.targetHasAuraState(ctx, targetGUID, auraStateHealthless35Pct, spell)
@@ -10677,6 +10678,14 @@ func (s *session) spellDamagePctClassScripts(ctx context.Context, spell wotlk.Sp
 				s.targetHasFamilyAuraEffect(ctx, targetGUID, spellAuraPeriodicDamage, spellFamilyPriest, 0x8000) {
 				addPct(ae.amount)
 			}
+		} else if spell.SpellFamilyFlags[0]&0x80 != 0 { // Smite
+			// Glyph of Smite (55692): +dmg when the victim carries the caster's
+			// own Holy Fire periodic-damage aura (Unit.cpp:6962-6970 — the
+			// GetAuraEffect victim query takes the caster GUID).
+			if amt, ok := s.auraEffectAmount(55692, 0); ok &&
+				s.targetHasFamilyAuraEffectByCaster(ctx, targetGUID, spellAuraPeriodicDamage, spellFamilyPriest, 0x100000, s.playerGUID) {
+				addPct(amt)
+			}
 		} else if spell.SpellFamilyFlags[1]&0x2 != 0 { // Shadow Word: Death
 			if amt, ok := s.auraEffectAmount(55682, 1); ok && victimHealthless35 { // Glyph of Shadow Word: Death
 				addPct(amt)
@@ -10700,9 +10709,38 @@ func (s *session) spellDamagePctClassScripts(ctx context.Context, spell wotlk.Sp
 			float64(target.Health)/float64(target.MaxHealth) <= 0.25 {
 			mod *= 4.0
 		}
+	case spellFamilyPaladin:
+		// Judgement of Vengeance / Judgement of Corruption
+		// (Unit.cpp:6984-6999): +10% per stack of the caster's own Holy
+		// Vengeance (31803) / Blood Corruption (53742) on the victim.
+		if spell.SpellFamilyFlags[1]&0x400000 != 0 && spell.SpellIconID == 2292 {
+			if stacks := s.targetAuraStacksByCaster(ctx, targetGUID, []uint32{31803, 53742}, s.playerGUID); stacks > 0 {
+				addPct(10 * int32(stacks))
+			}
+		}
+	case spellFamilyHunter:
+		// Steady Shot (Unit.cpp:7028-7034): Glyph of Steady Shot (56826) +dmg
+		// when the victim carries the caster's own Serpent Sting
+		// periodic-damage aura.
+		if spell.SpellFamilyFlags[1]&0x1 != 0 {
+			if amt, ok := s.auraEffectAmount(56826, 0); ok &&
+				s.targetHasFamilyAuraEffectByCaster(ctx, targetGUID, spellAuraPeriodicDamage, spellFamilyHunter, 0x4000, s.playerGUID) {
+				addPct(amt)
+			}
+		}
 	case spellFamilyDeathKnight:
 		if spell.SpellFamilyFlags[0]&0x2 != 0 { // Icy Touch
 			if amt, ok := s.dummyAuraAmountByIcon(spellFamilyDeathKnight, 2721); ok { // Improved Icy Touch
+				addPct(amt)
+			}
+		}
+		// Glacier Rot (Unit.cpp:7040-7045): +dmg when the victim carries any
+		// of the caster's diseases. The MeleeDamageBonusDone twin arm
+		// (Unit.cpp:8137-8144) has no Go model — the melee done leg is
+		// unbridged (see the note at the melee damage call site).
+		if spell.SpellFamilyFlags[0]&0x2 != 0 || spell.SpellFamilyFlags[1]&0x6 != 0 {
+			if amt, ok := s.dummyAuraAmountByIcon(spellFamilyDeathKnight, 196); ok &&
+				s.targetDiseasesByCaster(ctx, targetGUID, s.playerGUID) > 0 {
 				addPct(amt)
 			}
 		}
@@ -13750,6 +13788,117 @@ func (s *session) targetHasFamilyAuraEffect(ctx context.Context, targetGUID uint
 	return false
 }
 
+// victimAurasForLookup collects the victim's live auras for the caster-matched
+// queries below: the player's own loaded auras, another online player's
+// loaded auras, or the creature's activeCreatureAuras snapshot. Mirrors the
+// collection half of targetHasFamilyAuraEffect.
+func (s *session) victimAurasForLookup(ctx context.Context, targetGUID uint64) []*activeAura {
+	if s.server == nil || s.server.Data == nil {
+		return nil
+	}
+	var auras []*activeAura
+	if targetGUID == 0 || targetGUID == s.playerGUID {
+		auras = s.loadedAuras()
+	} else if other := s.server.findSessionByGUID(targetGUID); other != nil && other.player != nil {
+		auras = other.loadedAuras()
+	} else if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
+		key := creatureAuraKeyForTarget(target)
+		s.server.auraMu.Lock()
+		for _, aura := range s.server.activeCreatureAuras[key] {
+			auras = append(auras, aura)
+		}
+		s.server.auraMu.Unlock()
+	}
+	return auras
+}
+
+// targetHasFamilyAuraEffectByCaster mirrors the GetAuraEffect(auraType,
+// family, flags, 0, 0, casterGUID) victim queries in Unit::SpellDamagePctDone
+// (Unit.cpp:6957/6967 Holy Fire for Smite, :7033 Serpent Sting for Steady
+// Shot): the same family/flags fold as targetHasFamilyAuraEffect plus the
+// caster-GUID match C++ takes as its last argument.
+func (s *session) targetHasFamilyAuraEffectByCaster(ctx context.Context, targetGUID uint64, auraType uint32, family uint32, familyFlags0 uint32, casterGUID uint64) bool {
+	for _, aura := range s.victimAurasForLookup(ctx, targetGUID) {
+		if aura == nil || aura.Stopped || aura.CasterGUID != casterGUID {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if auraSpell.SpellFamilyName != family || auraSpell.SpellFamilyFlags[0]&familyFlags0 == 0 {
+			continue
+		}
+		for index, eff := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || index >= 8 || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellEffectIsAuraEffect(eff) || eff.Aura != auraType {
+				continue
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// targetAuraStacksByCaster mirrors the Judgement of Vengeance/Corruption arm
+// (Unit.cpp:6984-6999): the first victim periodic-damage aura whose spell id
+// is one of spellIDs and whose caster matches, returning its live stack
+// count (C++ Aura::GetStackAmount; Go StackCount, defaulting to 1 like the
+// stacking merge does).
+func (s *session) targetAuraStacksByCaster(ctx context.Context, targetGUID uint64, spellIDs []uint32, casterGUID uint64) uint32 {
+	for _, aura := range s.victimAurasForLookup(ctx, targetGUID) {
+		if aura == nil || aura.Stopped || aura.CasterGUID != casterGUID {
+			continue
+		}
+		matched := false
+		for _, id := range spellIDs {
+			if aura.SpellID == id {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		if aura.StackCount == 0 {
+			return 1
+		}
+		return uint32(aura.StackCount)
+	}
+	return 0
+}
+
+// targetDiseasesByCaster mirrors Unit::GetDiseasesByCaster (Unit.cpp:4776):
+// the victim's SPELL_AURA_PERIODIC_DAMAGE / SPELL_AURA_LINKED effects whose
+// spell has DISPEL_DISEASE and whose caster matches. The count is per effect
+// (C++ iterates m_modAuras per aura type).
+func (s *session) targetDiseasesByCaster(ctx context.Context, targetGUID uint64, casterGUID uint64) uint32 {
+	var diseases uint32
+	for _, aura := range s.victimAurasForLookup(ctx, targetGUID) {
+		if aura == nil || aura.Stopped || aura.CasterGUID != casterGUID {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || auraSpell.DispelType != dispelDisease {
+			continue
+		}
+		for index, eff := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || index >= 8 || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellEffectIsAuraEffect(eff) {
+				continue
+			}
+			if eff.Aura == spellAuraPeriodicDamage || eff.Aura == spellAuraLinked {
+				diseases++
+			}
+		}
+	}
+	return diseases
+}
+
 // wrathInsectSwarmBonus mirrors the Improved Insect Swarm lookup in the
 // druid arm of Spell::EffectSchoolDMG (SpellEffects.cpp:515-524):
 // Unit::GetDummyAuraEffect(SPELLFAMILY_DRUID, 1771, 0) on the caster keeps
@@ -16351,7 +16500,9 @@ const (
 	spellAuraModHealingPct                  = 118 // SPELL_AURA_MOD_HEALING_PCT (SpellAuraDefines.h:198)
 	spellAuraModHotPct                      = 259 // SPELL_AURA_MOD_HOT_PCT (SpellAuraDefines.h:339)
 	spellAuraModHealingReceived             = 283 // SPELL_AURA_MOD_HEALING_RECEIVED (SpellAuraDefines.h:363)
+	spellAuraLinked                         = 284 // SPELL_AURA_LINKED (SpellAuraDefines.h:364)
 	spellAuraModAttackerSpellCritChance     = 179 // SPELL_AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE (SpellAuraDefines.h:259)
+	dispelDisease                           = 3   // DISPEL_DISEASE (SharedDefines.h:1407), matched by Unit::GetDiseasesByCaster
 )
 
 // rankChainNoStackPurge mirrors the rank-chain term of
