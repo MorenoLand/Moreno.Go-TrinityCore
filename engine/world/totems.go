@@ -28,6 +28,12 @@ const (
 	TotemPulseSingleTarget
 	TotemPulseDispel
 	TotemPulseSlow
+	// TotemPulseSentry bridges the sentry totem (entry 3968) minimap ping:
+	// TotemAI::AttackStart (TotemAI.cpp:84-96) sends MSG_MINIMAP_PING with the
+	// totem's position to the owner when a hostile unit enters aggro range
+	// (the sentry totem is REACT_AGGRESSIVE, Totem.cpp:103-104, so sighting a
+	// hostile drives MoveInLineOfSight -> AttackStart).
+	TotemPulseSentry
 )
 
 type TotemDef struct {
@@ -57,6 +63,11 @@ type activeTotem struct {
 	CreatedAt  time.Time
 	StopChan   chan struct{}
 	Stopped    bool
+	// LastPingVictim is the sentry-totem ping arm's acquisition memory
+	// (TotemAI::AttackStart, TotemAI.cpp:84-96): the ping fires once per
+	// newly acquired hostile, so the GUID is remembered until the totem
+	// has no hostile in range again.
+	LastPingVictim uint64
 }
 
 var totemDefinitions = map[uint32]TotemDef{
@@ -167,6 +178,10 @@ var totemDefinitions = map[uint32]TotemDef{
 
 	// Nature Resistance Totem
 	10595: {SpellID: 10595, SlotID: TotemSlotAir, Entry: 5926, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 10596, Radius: 30.0, PulseSecs: 2},
+
+	// Sentry Totem (Totem::Summon sets REACT_AGGRESSIVE, Totem.cpp:103-104;
+	// 5-minute duration; the ping arm scans the standard aggro radius).
+	6495: {SpellID: 6495, SlotID: TotemSlotAir, Entry: 3968, DurationMs: 300000, PulseType: TotemPulseSentry, Radius: 20.0, PulseSecs: 2},
 }
 
 func isTotemSpell(spellID uint32) bool {
@@ -385,7 +400,70 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 			}
 			s.server.sessionsMu.RUnlock()
 		}
+
+	case TotemPulseSentry:
+		s.sentryTotemPing(def, totem)
 	}
+}
+
+// sentryTotemPing bridges the sentry-totem arm of TotemAI::AttackStart
+// (TotemAI.cpp:84-96): when a hostile unit enters the sentry totem's aggro
+// range, the totem's owner receives MSG_MINIMAP_PING carrying the totem's
+// GUID and X/Y. The sentry totem is REACT_AGGRESSIVE (Totem::Summon,
+// Totem.cpp:103-104), so acquisition runs the standard
+// Creature::GetAttackDistance radius (Creature.cpp:2022-2058: 20yd at equal
+// level, +/-1yd per level difference, clamped [5,45]) with the totem at the
+// owner's level (Totem::Summon sets level from the owner, Totem.cpp:99);
+// the RATE_CREATURE_AGGRO multiplier and aura detect-range terms are
+// unmodeled, matching the aggro scan's documented deltas. The ping fires
+// once per newly acquired hostile (the AttackStart-per-acquisition analog),
+// so the victim GUID is remembered until the totem sees no hostile again.
+// Go scans creature motions only — hostile players near the totem have no
+// bridge (no enemy-player proximity model on totems).
+func (s *session) sentryTotemPing(def TotemDef, totem *activeTotem) {
+	if s == nil || s.player == nil || totem == nil || s.server == nil {
+		return
+	}
+	owner := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	var nearest *creatureMotion
+	minDist := float64(math.MaxFloat64)
+	for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {
+		if m == nil || m.Health == 0 || !s.server.isHostileFaction(m.Faction, owner) {
+			continue
+		}
+		// Creature::GetAttackDistance from the totem's side (totem level =
+		// owner level; 1.5yd default combat reach, no reach data on totems).
+		levelDiff := int32(s.player.Level) - int32(m.Level)
+		aggroDist := float32(20.0) - 1.5 + float32(levelDiff)
+		if aggroDist < 5.0 {
+			aggroDist = 5.0
+		} else if aggroDist > 45.0 {
+			aggroDist = 45.0
+		}
+		d := distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z)
+		if float32(d) > aggroDist {
+			continue
+		}
+		if d < minDist {
+			minDist = d
+			nearest = m
+		}
+	}
+	totem.mu.Lock()
+	defer totem.mu.Unlock()
+	if nearest == nil {
+		totem.LastPingVictim = 0
+		return
+	}
+	if nearest.GUID == totem.LastPingVictim {
+		return
+	}
+	totem.LastPingVictim = nearest.GUID
+	buf := protocol.NewBuffer(16)
+	buf.WriteU64(totem.TotemGUID)
+	buf.WriteF32(totem.X)
+	buf.WriteF32(totem.Y)
+	_ = s.write(uint16(protocol.OpcodeMSG_MINIMAP_PING), buf.Bytes(), true)
 }
 
 func (s *session) removeHarmfulDebuffs(count int) {

@@ -72,8 +72,19 @@ type creatureMotion struct {
 	CanFly          bool
 	ReactState      uint8
 	ReactStateKnown bool
-	AttackTime      uint32
-	CombatReach     float32
+	// CreatureType mirrors creature_template.type (8 = critter,
+	// CritterAI::Permissible, PassiveAI.cpp:95-100).
+	CreatureType uint32
+	// AIName mirrors creature_template.AIName (TurretAI, CombatAI.cpp:231-265).
+	AIName string
+	// FleeingUntil is the CritterAI flee timer (TimedFleeingMovementGenerator,
+	// CONFIG_CREATURE_FAMILY_FLEE_DELAY 7000ms, Unit.cpp:11712): while in the
+	// future the critter is fleeing and the step tick skips combat/wander;
+	// on expiry it evades home (CritterAI::OnMovementGeneratorFinalized,
+	// PassiveAI.cpp:81-86). Zero when not fleeing.
+	FleeingUntil time.Time
+	AttackTime   uint32
+	CombatReach  float32
 
 	Armor       uint32
 	Resistances [7]uint32
@@ -406,6 +417,8 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			CanFly:          st.CanFly,
 			ReactState:      st.ReactState,
 			ReactStateKnown: st.ReactStateKnown,
+			CreatureType:    st.CreatureType,
+			AIName:          st.AIName,
 		}
 		if st.UnitClass == 2 || st.UnitClass == 8 {
 			motion.MaxPowers[0] = st.Mana
@@ -840,6 +853,55 @@ func (s *Server) charmerResolvesInInstance(mapID, instanceID uint32, guid uint64
 // funnel for all unreasoned calls — covered; the CritterAI flee-done site
 // (PassiveAI.cpp:85) can never fire — Go has no UNIT_STATE_FLEEING model
 // (critter fleeing is unmodeled; item 6's critter bullet stays open).
+// triggerCritterFlee bridges CritterAI::JustEngagedWith (PassiveAI.cpp:76-79):
+// a critter (creature_template.type 8, non-guardian) attacked by a player
+// flees — SetControlled(true, UNIT_STATE_FLEEING) -> SetFeared(true) ->
+// MoveFleeing(caster, CONFIG_CREATURE_FAMILY_FLEE_DELAY = 7000ms, Unit.cpp:11712).
+// Go has no fleeing movement generator: the bridge launches a single
+// straight-line run spline away from the attacker and arms FleeingUntil;
+// the step tick skips combat/wander while it runs and evades home on expiry
+// (CritterAI::OnMovementGeneratorFinalized, PassiveAI.cpp:81-86). The 24yd
+// leg approximates the generator's first repath at melee range
+// (frand(0.4,1.3) * (MIN_QUIET_DISTANCE 28 - casterDistance),
+// FleeingMovementGenerator.cpp:204-208); the continuous repathing, the
+// UNIT_FLAG_FLEEING cosmetic, and spell-damage engages (Go never engages
+// creatures on damage) are documented deltas. Re-attacks while fleeing are
+// no-ops, matching the HasUnitState(FLEEING) return in JustEngagedWith.
+func (s *Server) triggerCritterFlee(ctx context.Context, target combatTarget, attackerX, attackerY float32) {
+	if s == nil || target.GUID == 0 {
+		return
+	}
+	now := time.Now()
+	s.motionMu.Lock()
+	motion := s.findCreatureMotionLocked(target.Map, target.InstanceID, target.GUID)
+	if motion == nil || motion.CreatureType != 8 || motion.OwnerGUID != 0 || motion.Health == 0 || now.Before(motion.FleeingUntil) {
+		s.motionMu.Unlock()
+		return
+	}
+	dx := float64(motion.X - attackerX)
+	dy := float64(motion.Y - attackerY)
+	dist := math.Hypot(dx, dy)
+	if dist < 0.2 {
+		dx, dy, dist = 1, 0, 1
+	}
+	const fleeDist = 24.0
+	destX := motion.X + float32(dx/dist*fleeDist)
+	destY := motion.Y + float32(dy/dist*fleeDist)
+	speed := creatureSplineVelocity(motion, false)
+	if speed <= 0 {
+		speed = creatureBaseRunSpeed
+	}
+	duration := splineDurationMs(fleeDist, speed)
+	mapID, instanceID, rawGUID := motion.Map, motion.InstanceID, motion.GUID
+	fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
+	motion.X, motion.Y = destX, destY
+	motion.Moving = true
+	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+	motion.FleeingUntil = now.Add(7 * time.Second)
+	s.motionMu.Unlock()
+	s.broadcastMonsterMoveInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, fromZ, duration, false, 0, false)
+}
+
 func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotion, now time.Time) {
 	if motion == nil {
 		return
@@ -1045,9 +1107,10 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 			motion.DynamicFlags = uint32(dynamicFlags)
 			motion.FlagsExtra = uint32(flagsExtra)
 			if !motion.ReactStateKnown {
-				if reactState, known := s.loadCreatureReaction(ctx, uint32(entry)); known {
+				if reactState, known, aiName := s.loadCreatureReaction(ctx, uint32(entry)); known {
 					motion.ReactState = reactState
 					motion.ReactStateKnown = true
+					motion.AIName = aiName
 				}
 			}
 			motion.AttackTime = uint32(attackTime)
@@ -1195,6 +1258,35 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		motion.Moving = false
 	}
 
+	// CritterAI flee (PassiveAI.cpp:76-93): while the flee timer runs the
+	// critter keeps fleeing (combat/wander skipped); on expiry the timed
+	// fleeing generator finalizes and CritterAI::OnMovementGeneratorFinalized
+	// evades — the light analog here walks home (the critter was never
+	// engaged in Go's model, so the full evade funnel's threat/aura/combat
+	// resets are vacuous; the home walk below mirrors triggerCreatureEvade's
+	// tail exactly). Killed mid-flee is handled by the Health==0 gate above.
+	if !motion.FleeingUntil.IsZero() {
+		if now.Before(motion.FleeingUntil) {
+			return
+		}
+		motion.FleeingUntil = time.Time{}
+		homeDist := float32(math.Hypot(float64(motion.HomeX-motion.X), float64(motion.HomeY-motion.Y)))
+		if homeDist > 0.5 {
+			speed := creatureSplineVelocity(motion, false)
+			if speed <= 0 {
+				speed = creatureBaseRunSpeed
+			}
+			duration := splineDurationMs(float64(homeDist), speed)
+			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, 0, false)
+			motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
+			motion.Moving = true
+			motion.Evading = true
+			motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+			motion.WaitUntil = motion.MoveEnds
+			return
+		}
+	}
+
 	// 1. If currently in combat with a target:
 	if motion.InCombat && motion.TargetGUID != 0 {
 		var target *playerPos
@@ -1235,7 +1327,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// (no CanSwim/CanWalk flags) while player positions carry no liquid status,
 		// so the accessible-place predicate cannot be evaluated either. The flag can
 		// never be set, so the timer can never start.
-		if dist > 45.0 {
+		// TurretAI (CombatAI.cpp:253-258): AttackStart(who) calls
+		// me->Attack(who, false) — no chase (meleePossible=false) — and the
+		// turret only ever casts spell[0] inside its range band. It
+		// legitimately engages as far out as the CanStartAttack arm above,
+		// so the 45yd open-world leash is extended by its spell max range.
+		leashDist := float32(45.0)
+		if motion.AIName == "TurretAI" {
+			leashDist += turretSpellMaxRange(s, motion)
+		}
+		if dist > leashDist {
 			// Creature::CanCreatureAttack (Creature.cpp:2560-2603): the leash
 			// does not fire while the creature is recently damaged
 			// (MAX_AGGRO_RESET_TIME = 10s after a direct-damage hit,
@@ -1437,17 +1538,29 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		}
 
 		if dist > contactDist {
-			// Pursue player: move towards target at run speed
-			if !motion.Moving || now.After(motion.MoveEnds) {
-				duration := splineDurationMs(float64(dist), creatureSplineVelocity(motion, false))
-				s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, target.X, target.Y, target.Z, duration, false, 0, false)
-				motion.X, motion.Y, motion.Z = target.X, target.Y, target.Z
-				motion.Moving = true
-				motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+			// Pursue player: move towards target at run speed.
+			// TurretAI never pursues (CombatAI.cpp:253-258: AttackStart ->
+			// me->Attack(who, false), meleePossible=false); it stands and
+			// casts spell[0] when the victim sits in the range band, so an
+			// out-of-band victim just ends the tick here.
+			if motion.AIName != "TurretAI" {
+				if !motion.Moving || now.After(motion.MoveEnds) {
+					duration := splineDurationMs(float64(dist), creatureSplineVelocity(motion, false))
+					s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, target.X, target.Y, target.Z, duration, false, 0, false)
+					motion.X, motion.Y, motion.Z = target.X, target.Y, target.Z
+					motion.Moving = true
+					motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+				}
 			}
 			return
 		}
-		// In melee range: attack player
+		// In melee range: attack player.
+		// TurretAI::UpdateAI (CombatAI.cpp:259-265) has no melee arm — it
+		// only casts spell[0] via DoSpellAttackIfReady inside the range
+		// band (already gated above) — so a turret never swings.
+		if motion.AIName == "TurretAI" {
+			return
+		}
 		motion.Moving = false
 		attackTime := time.Duration(motion.AttackTime) * time.Millisecond
 		if attackTime <= 0 {
@@ -1707,6 +1820,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		} else if aggroDist > 45.0 {
 			aggroDist = 45.0
 		}
+		// TurretAI (CombatAI.cpp:239-242): m_SightDistance = m_CombatDistance
+		// = spell[0]'s max range, and Creature::CanStartAttack acquires at
+		// GetAttackDistance + m_CombatDistance (Creature.cpp:1986), so a
+		// turret sights far beyond the standard aggro radius.
+		if motion.AIName == "TurretAI" {
+			if len(motion.Spells) == 0 && s != nil && s.WorldStore != nil && s.WorldStore.DB != nil {
+				motion.Spells = s.loadCreatureSpells(ctx, motion.Entry)
+			}
+			aggroDist += turretSpellMaxRange(s, motion)
+		}
 		if !canCreatureDetectStealthOfPlayer(motion, p.Sess, dist) {
 			// CreatureAI::TriggerAlert (CreatureAI.cpp) via
 			// CreatureUnitRelocationWorker (GridNotifiers.cpp:139): a stealthed
@@ -1952,6 +2075,27 @@ func noGrayAggroBlocked(playerLevel, creatureLevel uint32, above, below uint32) 
 // scan's guard and its audit note above; the gray-aggro arm
 // (CheckNoGrayAggroConfig) is wired in the scan guard before the LOS check,
 // matching the C++ position ahead of IsWithinLOSInMap.
+// turretSpellMaxRange mirrors the m_CombatDistance arm of the TurretAI
+// constructor (CombatAI.cpp:239-242): spell[0]'s max range, expressed in the
+// same contactDist-relative terms as the combat tick's spell band
+// (spellMaxDist = contactDist + MaxHostile).
+func turretSpellMaxRange(s *Server, motion *creatureMotion) float32 {
+	if s == nil || s.Data == nil || motion == nil || len(motion.Spells) == 0 {
+		return 0
+	}
+	cReach := motion.CombatReach
+	if cReach <= 0 {
+		cReach = 1.5
+	}
+	maxDist := float32(calcMeleeRange(cReach, 1.5))
+	if spellInfo, found, err := s.Data.Spell(motion.Spells[0]); err == nil && found {
+		if spellRange, rangeFound, rangeErr := s.Data.SpellRange(spellInfo.RangeIndex); rangeErr == nil && rangeFound {
+			maxDist += spellRange.MaxHostile
+		}
+	}
+	return maxDist
+}
+
 func canCreatureStartAttack(motion *creatureMotion, target playerPos, distance, attackDistance float32) bool {
 	return motion != nil && (motion.CanFly || math.Abs(float64(target.Z-motion.Z)) <= 3.0) && distance <= attackDistance
 }

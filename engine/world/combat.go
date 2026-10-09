@@ -347,6 +347,12 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	if s.server != nil {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPayload, s)
 	}
+	// Unit::Attack (Unit.cpp:5650-5760) engages the victim; on a critter
+	// that engagement fires CritterAI::JustEngagedWith -> flee
+	// (PassiveAI.cpp:76-79), bridged in triggerCritterFlee.
+	if s.server != nil && s.player != nil {
+		s.server.triggerCritterFlee(ctx, target, s.player.X, s.player.Y)
+	}
 	return true
 }
 
@@ -1493,6 +1499,12 @@ type creatureStats struct {
 	CanFly          bool
 	ReactState      uint8
 	ReactStateKnown bool
+	// CreatureType mirrors creature_template.type (SharedDefines.h creature
+	// types; 8 = critter, CritterAI::Permissible, PassiveAI.cpp:95-100).
+	CreatureType uint32
+	// AIName mirrors creature_template.AIName, used by the TurretAI arms
+	// (CombatAI.cpp:231-265) and the critter/passive react mapping.
+	AIName string
 }
 
 func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureStats {
@@ -1536,6 +1548,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	}
 
 	var maxlevel, unitClass, exp, baseAttackTime, unitFlags, flagsExtra, typeFlags, flight int64
+	var creatureType int64
 	var healthMod, manaMod, armorMod, damageMod float64
 
 	row := s.WorldStore.DB.QueryRowContext(ctx, `SELECT 
@@ -1550,15 +1563,18 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		COALESCE(ct.unit_flags, 0),
 		COALESCE(ct.flags_extra, 0),
 		COALESCE(ct.type_flags, 0),
-		COALESCE(ctm.Flight, 0)
+		COALESCE(ctm.Flight, 0),
+		COALESCE(ct.type, 0)
 		FROM creature_template ct LEFT JOIN creature_template_movement ctm ON ctm.CreatureId = ct.entry WHERE ct.entry = ?`, entry)
-	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &flight); err != nil {
+	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &flight, &creatureType); err != nil {
 		return stats
 	}
-	if reactState, known := s.loadCreatureReaction(ctx, entry); known {
+	if reactState, known, aiName := s.loadCreatureReaction(ctx, entry); known {
 		stats.ReactState = reactState
 		stats.ReactStateKnown = true
+		stats.AIName = aiName
 	}
+	stats.CreatureType = uint32(creatureType)
 
 	if maxlevel < 1 {
 		maxlevel = 1
@@ -1667,16 +1683,16 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	return stats
 }
 
-func (s *Server) loadCreatureReaction(ctx context.Context, entry uint32) (uint8, bool) {
+func (s *Server) loadCreatureReaction(ctx context.Context, entry uint32) (uint8, bool, string) {
 	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
-		return creatureReactAggressive, false
+		return creatureReactAggressive, false, ""
 	}
 	var creatureType, npcFlags, flagsExtra int64
 	var aiName string
 	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(type, 0), COALESCE(npcflag, 0), COALESCE(flags_extra, 0), COALESCE(AIName, '') FROM creature_template WHERE entry = ?", entry).Scan(&creatureType, &npcFlags, &flagsExtra, &aiName); err != nil {
-		return creatureReactAggressive, false
+		return creatureReactAggressive, false, ""
 	}
-	return creatureReactState(uint32(creatureType), uint32(npcFlags), uint32(flagsExtra), aiName), true
+	return creatureReactState(uint32(creatureType), uint32(npcFlags), uint32(flagsExtra), aiName), true, aiName
 }
 
 func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarget, error) {
