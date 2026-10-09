@@ -77,6 +77,24 @@ func (g *groupState) updateLooter(srv *Server, mapID, instanceID uint32, x, y, z
 // the ifneed arm alone would keep reusing the same looter while they
 // stay near the corpses. Timing delta (same as updateLooter): C++ runs
 // this at kill/fill time, Go at first loot open, so a loot that is never
+// groupRewardAnchorPos mirrors the corpse anchor inside
+// Player::IsAtGroupRewardDistance (Player.cpp:24165-24166): the distance is
+// measured from the caller's corpse when the caller is dead, not from the
+// ghost position. Every Group.cpp/Loot.cpp call site passes the group MEMBER
+// as the caller (member->IsAtGroupRewardDistance(pLootedObject)), so the
+// member's corpse anchors. The one exception is HandleLootMoneyOpcode
+// (LootHandler.cpp:182), which passes the looter as the caller and anchors
+// on the looter's corpse instead — handleLootMoney passes its own session.
+func groupRewardAnchorPos(m *session) (float32, float32, float32) {
+	if m != nil && m.player != nil {
+		if m.isDeadOrGhost() && m.player.hasCorpse {
+			return m.player.corpseX, m.player.corpseY, m.player.corpseZ
+		}
+		return m.player.X, m.player.Y, m.player.Z
+	}
+	return 0, 0, 0
+}
+
 // opened never advances the role.
 func (g *groupState) advanceLooter(srv *Server, mapID, instanceID uint32, x, y, z float32) {
 	g.rotateLooter(srv, mapID, instanceID, x, y, z, false)
@@ -97,9 +115,10 @@ func (g *groupState) rotateLooter(srv *Server, mapID, instanceID uint32, x, y, z
 		return
 	}
 	atRewardDistance := func(sess *session) bool {
+		ax, ay, az := groupRewardAnchorPos(sess)
 		return sess != nil && sess.player != nil && sess.player.Map == mapID &&
 			sess.player.InstanceID == instanceID &&
-			(dungeonMapID(srv, mapID) || distance3D(sess.player.X, sess.player.Y, sess.player.Z, x, y, z) <= srv.Config.MaxGroupXPDistance)
+			(dungeonMapID(srv, mapID) || distance3D(ax, ay, az, x, y, z) <= srv.Config.MaxGroupXPDistance)
 	}
 	// ifneed arm (Group.cpp:1972-1978): keep the current looter.
 	if ifneed && atRewardDistance(srv.findSessionByGUID(g.LooterGUID)) {

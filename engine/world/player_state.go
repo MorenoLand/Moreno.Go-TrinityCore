@@ -174,56 +174,64 @@ type playerSkill struct {
 }
 
 type playerState struct {
-	GUID                            uint64
-	Selection                       uint64
-	PetGUID                         uint64
-	PetNumber                       uint32
-	CritterGUID                     uint64
-	CritterPetID                    uint32
-	Name                            string
-	Race                            uint8
-	Class                           uint8
-	Gender                          uint8
-	Skin                            uint8
-	Face                            uint8
-	HairStyle                       uint8
-	HairColor                       uint8
-	FacialStyle                     uint8
-	BankBagSlots                    uint8
-	RestState                       uint8
-	Level                           uint8
-	TotalPlayedTime                 uint32
-	LevelPlayedTime                 uint32
-	RestBonus                       float32
-	LogoutTime                      int64
-	LogoutResting                   bool
-	StableSlots                     uint8
-	TaxiPath                        string
-	XP                              uint32
-	Money                           uint32
-	PlayerFlags                     uint32
-	GuildID                         uint32
-	GuildRank                       uint8
-	Map                             uint32
-	InstanceID                      uint32
-	InstanceModeMask                uint32
-	X                               float32
-	Y                               float32
-	Z                               float32
-	Orientation                     float32
-	LfgEntryPointMap                uint32
-	LfgEntryPointX                  float32
-	LfgEntryPointY                  float32
-	LfgEntryPointZ                  float32
-	LfgEntryPointO                  float32
-	ExtraFlags                      uint32
-	ActiveCheats                    uint32
-	AtLogin                         uint32
-	Zone                            uint32
-	Health                          uint32
-	MaxHealth                       uint32
-	HealthLoaded                    bool
-	repopOnLogin                    bool
+	GUID             uint64
+	Selection        uint64
+	PetGUID          uint64
+	PetNumber        uint32
+	CritterGUID      uint64
+	CritterPetID     uint32
+	Name             string
+	Race             uint8
+	Class            uint8
+	Gender           uint8
+	Skin             uint8
+	Face             uint8
+	HairStyle        uint8
+	HairColor        uint8
+	FacialStyle      uint8
+	BankBagSlots     uint8
+	RestState        uint8
+	Level            uint8
+	TotalPlayedTime  uint32
+	LevelPlayedTime  uint32
+	RestBonus        float32
+	LogoutTime       int64
+	LogoutResting    bool
+	StableSlots      uint8
+	TaxiPath         string
+	XP               uint32
+	Money            uint32
+	PlayerFlags      uint32
+	GuildID          uint32
+	GuildRank        uint8
+	Map              uint32
+	InstanceID       uint32
+	InstanceModeMask uint32
+	X                float32
+	Y                float32
+	Z                float32
+	Orientation      float32
+	LfgEntryPointMap uint32
+	LfgEntryPointX   float32
+	LfgEntryPointY   float32
+	LfgEntryPointZ   float32
+	LfgEntryPointO   float32
+	ExtraFlags       uint32
+	ActiveCheats     uint32
+	AtLogin          uint32
+	Zone             uint32
+	Health           uint32
+	MaxHealth        uint32
+	HealthLoaded     bool
+	repopOnLogin     bool
+	// corpseX/Y/Z mirror Player::GetCorpse() (m_corpse): while the player is
+	// dead, C++ distance checks that anchor on the player (e.g.
+	// Player::IsAtGroupRewardDistance, Player.cpp:24160-24173) measure from
+	// the corpse position, not the ghost position. hasCorpse is false when
+	// no corpse exists (never died / corpse reclaimed), mirroring the
+	// !GetCorpse() fallback to the player itself.
+	hasCorpse                       bool
+	corpseX, corpseY, corpseZ       float32
 	BaseMana                        uint32
 	ItemHealthBonus                 uint32
 	ItemManaBonus                   uint32

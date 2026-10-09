@@ -1959,8 +1959,14 @@ func (s *session) sendLootMasterList(loot *activeLootState) {
 		// Group::MasterLoot (Group.cpp:1435-1447): the master-looter list
 		// carries the members at Player::IsAtGroupRewardDistance
 		// (Player.cpp:24160) of the looted object — same map and instance,
-		// within MaxGroupXPDistance (default 74, not 100).
-		if m.player != nil && m.player.Map == s.player.Map && m.player.InstanceID == s.player.InstanceID && distance3D(s.player.X, s.player.Y, s.player.Z, m.player.X, m.player.Y, m.player.Z) <= s.server.Config.MaxGroupXPDistance {
+		// within MaxGroupXPDistance (default 74, not 100). The caller is the
+		// member, so a dead member's distance is measured from their corpse
+		// (groupRewardAnchorPos), not the ghost.
+		if m.player == nil || m.player.Map != s.player.Map || m.player.InstanceID != s.player.InstanceID {
+			continue
+		}
+		mx, my, mz := groupRewardAnchorPos(m)
+		if distance3D(mx, my, mz, s.player.X, s.player.Y, s.player.Z) <= s.server.Config.MaxGroupXPDistance {
 			nearMembers = append(nearMembers, m)
 		}
 	}
@@ -2334,10 +2340,14 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 		allGroupSess := s.server.getGroupSessions(s.groupID)
 		// Player::IsAtGroupRewardDistance (Player.cpp:24160): same map and
 		// instance, then dungeon-always, else within MaxGroupXPDistance
-		// (CONFIG_GROUP_XP_DISTANCE, default 74).
+		// (CONFIG_GROUP_XP_DISTANCE, default 74). The distance anchor is the
+		// looter's CORPSE when the looter is dead (Player.cpp:24165-24166:
+		// WorldObject const* player = GetCorpse(); if (!player || IsAlive())
+		// player = this) — never the member's position variant.
+		lx, ly, lz := groupRewardAnchorPos(s)
 		inDungeon := s.isDungeonMap(s.player.Map)
 		for _, m := range allGroupSess {
-			if m.player != nil && m.player.Map == s.player.Map && m.player.InstanceID == s.player.InstanceID && (inDungeon || distance3D(s.player.X, s.player.Y, s.player.Z, m.player.X, m.player.Y, m.player.Z) <= s.server.Config.MaxGroupXPDistance) {
+			if m.player != nil && m.player.Map == s.player.Map && m.player.InstanceID == s.player.InstanceID && (inDungeon || distance3D(lx, ly, lz, m.player.X, m.player.Y, m.player.Z) <= s.server.Config.MaxGroupXPDistance) {
 				nearMembers = append(nearMembers, m)
 			}
 		}
@@ -2731,9 +2741,8 @@ func (s *session) storeTakenLootRow(ctx context.Context, loot *activeLootState, 
 // presentAtLooting is true for the opener; grouped members qualify through
 // Player::IsAtGroupRewardDistance (Player.cpp:24160): same map and instance,
 // then dungeon-always, else within MaxGroupXPDistance
-// (CONFIG_GROUP_XP_DISTANCE, default 74) of the looter
-// (Go proxies the corpse position with the opener's, as the roll-start code
-// does). Deltas: the tokens land through Go's normal inventory store (no
+// (CONFIG_GROUP_XP_DISTANCE, default 74) of the looter; a dead member's
+// distance anchors on their corpse (groupRewardAnchorPos). Deltas: the tokens land through Go's normal inventory store (no
 // currency-tab placement model), and members who never open the window get
 // their tokens at their own open, not at fill time.
 func (s *Server) autoStoreLootCurrencyTokens(ctx context.Context, loot *activeLootState, opener *session) {
@@ -2748,7 +2757,11 @@ func (s *Server) autoStoreLootCurrencyTokens(ctx context.Context, loot *activeLo
 			if m == nil || m == opener || m.player == nil || m.player.Map != loot.MapID || m.player.InstanceID != loot.InstanceID {
 				continue
 			}
-			if !inDungeon && distance3D(opener.player.X, opener.player.Y, opener.player.Z, m.player.X, m.player.Y, m.player.Z) > s.Config.MaxGroupXPDistance {
+			// Loot::FillLoot (Loot.cpp:207-222): presentAtLooting is
+			// player->IsAtGroupRewardDistance(lootOwner) with the member as
+			// the caller — a dead member's distance anchors on their corpse.
+			mx, my, mz := groupRewardAnchorPos(m)
+			if !inDungeon && distance3D(opener.player.X, opener.player.Y, opener.player.Z, mx, my, mz) > s.Config.MaxGroupXPDistance {
 				continue
 			}
 			present = append(present, m)
@@ -3300,14 +3313,17 @@ func (s *Server) startGroupLootRoll(ctx context.Context, sourceGUID uint64, slot
 	// (CONFIG_GROUP_XP_DISTANCE, default 74) of the looted object. Go
 	// proxies the object position with the looter's — the looter opened the
 	// window within ~5yd of the corpse, and sendLootMasterList uses the same
-	// proxy for the MasterLoot list.
+	// proxy for the MasterLoot list. The caller is the rolling member
+	// (Group.cpp:1129/1215/1279/1353), so a dead member's distance anchors
+	// on their corpse (groupRewardAnchorPos), not the ghost.
 	inDungeon := looter.isDungeonMap(mapID)
 	var eligible []*session
 	for _, m := range members {
 		if m.player == nil || m.player.Map != mapID || m.player.InstanceID != instanceID {
 			continue
 		}
-		if !inDungeon && looter.player != nil && distance3D(m.player.X, m.player.Y, m.player.Z, looter.player.X, looter.player.Y, looter.player.Z) > s.Config.MaxGroupXPDistance {
+		mx, my, mz := groupRewardAnchorPos(m)
+		if !inDungeon && looter.player != nil && distance3D(mx, my, mz, looter.player.X, looter.player.Y, looter.player.Z) > s.Config.MaxGroupXPDistance {
 			continue
 		}
 		eligible = append(eligible, m)
@@ -3516,14 +3532,17 @@ func (s *Server) startGroupQuestLootRoll(ctx context.Context, sourceGUID uint64,
 	if len(members) == 0 {
 		return
 	}
-	// Same IsAtGroupRewardDistance proxy as startGroupLootRoll.
+	// Same IsAtGroupRewardDistance proxy as startGroupLootRoll; the caller is
+	// the rolling member, so a dead member's distance anchors on their
+	// corpse (groupRewardAnchorPos), not the ghost.
 	inDungeon := looter.isDungeonMap(mapID)
 	var eligible []*session
 	for _, m := range members {
 		if m.player == nil || m.player.Map != mapID || m.player.InstanceID != instanceID {
 			continue
 		}
-		if !inDungeon && looter.player != nil && distance3D(m.player.X, m.player.Y, m.player.Z, looter.player.X, looter.player.Y, looter.player.Z) > s.Config.MaxGroupXPDistance {
+		mx, my, mz := groupRewardAnchorPos(m)
+		if !inDungeon && looter.player != nil && distance3D(mx, my, mz, looter.player.X, looter.player.Y, looter.player.Z) > s.Config.MaxGroupXPDistance {
 			continue
 		}
 		eligible = append(eligible, m)

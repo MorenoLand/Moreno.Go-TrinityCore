@@ -730,6 +730,10 @@ func (s *session) spawnCorpseObject(ctx context.Context, displayID uint32, battl
 		return
 	}
 	corpseGUID := s.playerGUID | (uint64(0xF101) << 48)
+	// Player::BuildPlayerRepop (Player.cpp:4640+): m_corpse anchors corpse-based
+	// distance checks while dead (Player::IsAtGroupRewardDistance).
+	s.player.hasCorpse = true
+	s.player.corpseX, s.player.corpseY, s.player.corpseZ = s.player.X, s.player.Y, s.player.Z
 	bytes1, bytes2 := corpseAppearance(s.player)
 	var worldDB *sql.DB
 	if s.server != nil && s.server.WorldStore != nil {
@@ -749,6 +753,11 @@ func (s *session) spawnCorpseObject(ctx context.Context, displayID uint32, battl
 }
 
 func (s *session) despawnCorpseObject() {
+	// Mirror of the m_corpse clear on reclaim/resurrect: corpse-anchored
+	// distance checks fall back to the player position.
+	if s.player != nil {
+		s.player.hasCorpse = false
+	}
 	corpseGUID := s.playerGUID | (uint64(0xF101) << 48)
 	updates := protocol.NewUpdateData()
 	updates.AddOutOfRangeGUID(corpseGUID)
