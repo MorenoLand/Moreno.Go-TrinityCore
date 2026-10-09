@@ -199,6 +199,15 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 		if dyn := s.gameObjectState(state.Map, state.InstanceID, gameObjectGUID(spawn.GUID, spawn.Entry)); dyn != nil {
 			spawn.State = dyn.State
 		}
+		// Destructible-building runtime overrides (damage/repair/
+		// destruction-state spell effects): static GOs have no live state
+		// object, so their flags/display/anim-progress live in the
+		// destructible health record.
+		if over := s.destructibleSpawnOverride(state.Map, state.InstanceID, spawn.GUID); over != nil {
+			spawn.Flags = over.Flags
+			spawn.DisplayID = over.DisplayID
+			spawn.AnimProgress = over.AnimProgress
+		}
 		// Server-side visibility: script-hidden objects stay visible to
 		// GMs the way SetVisible(false) units remain visible to GM seers.
 		if !isGM && s.isGameObjectHiddenInInstance(state.Map, state.InstanceID, gameObjectGUID(spawn.GUID, spawn.Entry)) {
@@ -234,9 +243,13 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 			Orientation:    dyn.Orientation,
 			RotationW:      1.0,
 			State:          dyn.State,
+			AnimProgress:   dyn.AnimProgress,
+			ArtKit:         dyn.ArtKit,
 			Type:           dyn.Type,
 			DisplayID:      dyn.DisplayID,
 			Size:           dyn.Size,
+			Flags:          dyn.Flags,
+			Faction:        dyn.Faction,
 			ParentRotation: [4]float32{0, 0, 0, 1},
 		}
 		updates.AddUpdateBlock(buildGameObjectUpdate(spawn))

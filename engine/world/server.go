@@ -122,6 +122,7 @@ type Server struct {
 	instanceHiddenGameObjects map[instanceAdmissionKey]map[uint64]struct{}
 	dynamicGameObjects        map[uint64]*dynamicGameObjectState
 	instanceGameObjects       map[instanceAdmissionKey]map[uint64]*dynamicGameObjectState
+	destructibleHealth        map[destructibleKey]goDestructibleHealth
 	nextDynamicGOGUID         uint32
 	dynamicSpellObjects       map[uint64]*dynamicSpellObjectState
 	nextDynamicSpellGUID      uint32

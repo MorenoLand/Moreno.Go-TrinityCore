@@ -317,36 +317,40 @@ const (
 	spellEffectPlayMusic               = 132 // SPELL_EFFECT_PLAY_MUSIC (SharedDefines.h:943)
 	// Enchant effects for the IsFitToSpellRequirements isEnchantSpell test
 	// (Item.cpp:803: SPELL_EFFECT_ENCHANT_ITEM / _TEMPORARY / _PRISMATIC).
-	spellEffectEnchantItem          = 53  // SPELL_EFFECT_ENCHANT_ITEM (SharedDefines.h:864)
-	spellEffectEnchantItemTemporary = 54  // SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY (SharedDefines.h:865)
-	spellEffectEnchantItemPrismatic = 156 // SPELL_EFFECT_ENCHANT_ITEM_PRISMATIC (SharedDefines.h:967)
-	spellEffectDisenchant           = 99  // SPELL_EFFECT_DISENCHANT (SharedDefines.h:910)
-	spellEffectProspecting          = 127 // SPELL_EFFECT_PROSPECTING (SharedDefines.h:938)
-	spellEffectMilling              = 158 // SPELL_EFFECT_MILLING (SharedDefines.h:969)
-	spellEffectForceCast            = 140 // SPELL_EFFECT_FORCE_CAST (SharedDefines.h:951)
-	spellEffectForceCastWithValue   = 141 // SPELL_EFFECT_FORCE_CAST_WITH_VALUE (SharedDefines.h:952)
-	spellEffectForceCast2           = 160 // SPELL_EFFECT_FORCE_CAST_2 (SharedDefines.h:971)
-	spellEffectChargeDest           = 149 // SPELL_EFFECT_CHARGE_DEST (SharedDefines.h:960)
-	spellEffectSelfResurrect        = 94  // SPELL_EFFECT_SELF_RESURRECT (SharedDefines.h:905)
-	spellEffectKnockBack            = 98  // SPELL_EFFECT_KNOCK_BACK (SharedDefines.h:909)
-	spellEffectKnockBackDest        = 144 // SPELL_EFFECT_KNOCK_BACK_DEST (SharedDefines.h:955)
-	spellEffectDurabilityDamage     = 111 // SPELL_EFFECT_DURABILITY_DAMAGE (SharedDefines.h:922)
-	spellEffectDurabilityDamagePct  = 115 // SPELL_EFFECT_DURABILITY_DAMAGE_PCT (SharedDefines.h:926)
-	spellEffectQuestClear           = 139 // SPELL_EFFECT_CLEAR_QUEST (SharedDefines.h:950)
-	spellEffectQuestFail            = 147 // SPELL_EFFECT_QUEST_FAIL (SharedDefines.h:958)
-	spellEffectQuestStart           = 150 // SPELL_EFFECT_QUEST_START (SharedDefines.h:961)
-	spellEffectDestroyAllTotems     = 110 // SPELL_EFFECT_DESTROY_ALL_TOTEMS (SharedDefines.h:921)
-	spellEffectModifyThreatPercent  = 125 // SPELL_EFFECT_MODIFY_THREAT_PERCENT (SharedDefines.h:936)
-	spellEffectRemoveAura           = 164 // SPELL_EFFECT_REMOVE_AURA (SharedDefines.h:975)
-	spellEffectAddHonor             = 45  // SPELL_EFFECT_ADD_HONOR (SharedDefines.h:856)
-	spellEffectTradeSkill           = 47  // SPELL_EFFECT_TRADE_SKILL (SharedDefines.h:858)
-	spellEffectProficiency          = 60  // SPELL_EFFECT_PROFICIENCY (SharedDefines.h:871)
-	spellEffectDistract             = 69  // SPELL_EFFECT_DISTRACT (SharedDefines.h:880)
-	spellEffectAddFarsight          = 72  // SPELL_EFFECT_ADD_FARSIGHT (SharedDefines.h:883)
-	spellEffectUntrainTalents       = 73  // SPELL_EFFECT_UNTRAIN_TALENTS (SharedDefines.h:884)
-	spellEffectSummonObjectWild     = 76  // SPELL_EFFECT_SUMMON_OBJECT_WILD (SharedDefines.h:887)
-	spellEffectSanctuary            = 79  // SPELL_EFFECT_SANCTUARY (SharedDefines.h:890)
-	spellEffectActivateObject       = 86  // SPELL_EFFECT_ACTIVATE_OBJECT (SharedDefines.h:897)
+	spellEffectEnchantItem                   = 53  // SPELL_EFFECT_ENCHANT_ITEM (SharedDefines.h:864)
+	spellEffectEnchantItemTemporary          = 54  // SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY (SharedDefines.h:865)
+	spellEffectEnchantItemPrismatic          = 156 // SPELL_EFFECT_ENCHANT_ITEM_PRISMATIC (SharedDefines.h:967)
+	spellEffectDisenchant                    = 99  // SPELL_EFFECT_DISENCHANT (SharedDefines.h:910)
+	spellEffectProspecting                   = 127 // SPELL_EFFECT_PROSPECTING (SharedDefines.h:938)
+	spellEffectMilling                       = 158 // SPELL_EFFECT_MILLING (SharedDefines.h:969)
+	spellEffectForceCast                     = 140 // SPELL_EFFECT_FORCE_CAST (SharedDefines.h:951)
+	spellEffectForceCastWithValue            = 141 // SPELL_EFFECT_FORCE_CAST_WITH_VALUE (SharedDefines.h:952)
+	spellEffectForceCast2                    = 160 // SPELL_EFFECT_FORCE_CAST_2 (SharedDefines.h:971)
+	spellEffectChargeDest                    = 149 // SPELL_EFFECT_CHARGE_DEST (SharedDefines.h:960)
+	spellEffectSelfResurrect                 = 94  // SPELL_EFFECT_SELF_RESURRECT (SharedDefines.h:905)
+	spellEffectKnockBack                     = 98  // SPELL_EFFECT_KNOCK_BACK (SharedDefines.h:909)
+	spellEffectKnockBackDest                 = 144 // SPELL_EFFECT_KNOCK_BACK_DEST (SharedDefines.h:955)
+	spellEffectDurabilityDamage              = 111 // SPELL_EFFECT_DURABILITY_DAMAGE (SharedDefines.h:922)
+	spellEffectDurabilityDamagePct           = 115 // SPELL_EFFECT_DURABILITY_DAMAGE_PCT (SharedDefines.h:926)
+	spellEffectQuestClear                    = 139 // SPELL_EFFECT_CLEAR_QUEST (SharedDefines.h:950)
+	spellEffectQuestFail                     = 147 // SPELL_EFFECT_QUEST_FAIL (SharedDefines.h:958)
+	spellEffectQuestStart                    = 150 // SPELL_EFFECT_QUEST_START (SharedDefines.h:961)
+	spellEffectDestroyAllTotems              = 110 // SPELL_EFFECT_DESTROY_ALL_TOTEMS (SharedDefines.h:921)
+	spellEffectModifyThreatPercent           = 125 // SPELL_EFFECT_MODIFY_THREAT_PERCENT (SharedDefines.h:936)
+	spellEffectRemoveAura                    = 164 // SPELL_EFFECT_REMOVE_AURA (SharedDefines.h:975)
+	spellEffectAddHonor                      = 45  // SPELL_EFFECT_ADD_HONOR (SharedDefines.h:856)
+	spellEffectTradeSkill                    = 47  // SPELL_EFFECT_TRADE_SKILL (SharedDefines.h:858)
+	spellEffectProficiency                   = 60  // SPELL_EFFECT_PROFICIENCY (SharedDefines.h:871)
+	spellEffectDistract                      = 69  // SPELL_EFFECT_DISTRACT (SharedDefines.h:880)
+	spellEffectAddFarsight                   = 72  // SPELL_EFFECT_ADD_FARSIGHT (SharedDefines.h:883)
+	spellEffectUntrainTalents                = 73  // SPELL_EFFECT_UNTRAIN_TALENTS (SharedDefines.h:884)
+	spellEffectSummonObjectWild              = 76  // SPELL_EFFECT_SUMMON_OBJECT_WILD (SharedDefines.h:887)
+	spellEffectSanctuary                     = 79  // SPELL_EFFECT_SANCTUARY (SharedDefines.h:890)
+	spellEffectActivateObject                = 86  // SPELL_EFFECT_ACTIVATE_OBJECT (SharedDefines.h:897)
+	spellEffectGameObjectDamage              = 87  // SPELL_EFFECT_GAMEOBJECT_DAMAGE (SharedDefines.h:898)
+	spellEffectGameObjectRepair              = 88  // SPELL_EFFECT_GAMEOBJECT_REPAIR (SharedDefines.h:899)
+	spellEffectGameObjectSetDestructionState = 89  // SPELL_EFFECT_GAMEOBJECT_SET_DESTRUCTION_STATE (SharedDefines.h:900)
+	spellEffectEnchantHeldItem               = 92  // SPELL_EFFECT_ENCHANT_HELD_ITEM (SharedDefines.h:903)
 
 	// Summon categories for the generic-summon CheckCast leg
 	// (Spell.cpp:5798-5817, SharedDefines.h:3296).
@@ -6320,7 +6324,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						s.executeSpellInstantKill(effCtx, effectTarget, spellID)
 					}
 				}
-			case 2, 17, 31, 58, 87: // Damage effects (School damage, Weapon damage, etc.)
+			case 2, 17, 31, 58: // Damage effects (School damage, Weapon damage, etc.)
 				damageEffectSeen = true
 				damage := uint32(eff.BasePoints + 1)
 				// Spell::EffectSchoolDMG (SpellEffects.cpp:334-348): Meteor-like
@@ -7527,6 +7531,26 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// gameobject target; the action comes from eff.MiscValue
 				// (GameObjectActions, GameObjectData.h:675).
 				s.handleEffectActivateObject(effCtx, eff, target)
+			case spellEffectGameObjectDamage: // 87: SPELL_EFFECT_GAMEOBJECT_DAMAGE (EffectGameObjectDamage, SpellEffects.cpp:5424)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per
+				// gameobject target: the friendly-faction gate, then
+				// ModifyHealth(-damage, caster, spellId).
+				s.handleEffectGameObjectDamage(effCtx, spellID, eff, target)
+			case spellEffectGameObjectRepair: // 88: SPELL_EFFECT_GAMEOBJECT_REPAIR (EffectGameObjectRepair, SpellEffects.cpp:5439)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per
+				// gameobject target: ModifyHealth(+damage, caster), no
+				// faction gate.
+				s.handleEffectGameObjectRepair(effCtx, spellID, eff, target)
+			case spellEffectGameObjectSetDestructionState: // 89: SPELL_EFFECT_GAMEOBJECT_SET_DESTRUCTION_STATE (EffectGameObjectSetDestructionState, SpellEffects.cpp:5450)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per
+				// gameobject target: SetDestructibleState(MiscValue, caster,
+				// true).
+				s.handleEffectGameObjectSetDestructionState(effCtx, eff, target)
+			case spellEffectEnchantHeldItem: // 92: SPELL_EFFECT_ENCHANT_HELD_ITEM (EffectEnchantHeldItem, SpellEffects.cpp:4078)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per player
+				// target: the target's equipped main-hand weapon gains the
+				// MiscValue enchantment in the temp slot.
+				s.handleEffectEnchantHeldItem(effCtx, spell, eff, hitTargets)
 			case spellEffectEnvironmentalDMG: // 7: SPELL_EFFECT_ENVIRONMENTAL_DAMAGE (EffectEnvironmentalDMG, SpellEffects.cpp:298)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
 				// target: players take Player::EnvironmentalDamage (fire),
@@ -18207,6 +18231,90 @@ func (s *session) resolveEnchantItemTarget(ctx context.Context, target protocol.
 		return enchantItemTarget{entry: slotItem.ItemEntry, instanceGUID: slotItem.ItemGUID, ownedByCaster: false}, true
 	}
 	return enchantItemTarget{}, false
+}
+
+// itemEnchantmentIDAtSlot reads the item_instance enchantments column and
+// returns the enchantment id stored at the given slot (3 ints per slot: id,
+// duration, charges — the writeItemEnchantmentSlot layout). An unreadable
+// column behaves as no enchantment (terrain.go convention).
+func (s *session) itemEnchantmentIDAtSlot(ctx context.Context, instanceGUID uint64, slot uint32) uint32 {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil ||
+		s.server.CharactersStore.DB == nil || instanceGUID == 0 {
+		return 0
+	}
+	var raw string
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		`SELECT COALESCE(enchantments, '') FROM item_instance WHERE guid = ? LIMIT 1`,
+		int64(instanceGUID)).Scan(&raw); err != nil {
+		return 0
+	}
+	fields := strings.Fields(raw)
+	index := int(slot * 3)
+	if index >= len(fields) {
+		return 0
+	}
+	if id, err := strconv.ParseUint(fields[index], 10, 32); err == nil {
+		return uint32(id)
+	}
+	return 0
+}
+
+// handleEffectEnchantHeldItem mirrors Spell::EffectEnchantHeldItem
+// (SpellEffects.cpp:4078), which runs at SPELL_EFFECT_HANDLE_HIT_TARGET per
+// player target: the target's equipped main-hand weapon gains the MiscValue
+// enchantment in the TEMP_ENCHANTMENT_SLOT (slot 1). Duration: the spell
+// duration, else the effect damage, else 10 seconds; spell 14792 (Venomhide
+// Poison) is hardcoded to 5 minutes. A different existing temp enchantment
+// blocks the apply. The ApplyEnchantment stat arm rides Go's existing
+// equipment stat calc (applyPlayerItemStatEnchants reads slot 1) once the
+// enchant is persisted and the equipment cache resyncs.
+func (s *session) handleEffectEnchantHeldItem(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	if eff.MiscValue == 0 {
+		return
+	}
+	enchantID := uint32(eff.MiscValue)
+	if _, found, err := s.server.Data.SpellItemEnchantment(enchantID); err != nil || !found {
+		return
+	}
+	var durationMs uint32
+	if d, found, err := s.server.Data.SpellDuration(spell.DurationIndex, 1); err == nil && found && d > 0 {
+		durationMs = uint32(d)
+	}
+	if durationMs == 0 {
+		if dmg := eff.BasePoints + 1; dmg != 0 {
+			durationMs = uint32(dmg)
+		}
+	}
+	if durationMs == 0 {
+		durationMs = 10 * 1000
+	}
+	if spell.ID == 14792 { // Venomhide Poison
+		durationMs = 5 * 60 * 1000
+	}
+	for _, effectTarget := range hitTargets {
+		if effectTarget == 0 {
+			continue
+		}
+		targetSess := s.server.findSessionByGUID(effectTarget)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		// GetItemByPos(mainhand) + IsEquipped: equippedWeaponInstance
+		// returns 0 for a missing or broken weapon.
+		instanceGUID, _ := targetSess.equippedWeaponInstance(ctx, equipSlotMainhand)
+		if instanceGUID == 0 {
+			continue
+		}
+		// Enchantment will not be applied if a different one already exists.
+		if existing := targetSess.itemEnchantmentIDAtSlot(ctx, instanceGUID, 1); existing != 0 && existing != enchantID {
+			continue
+		}
+		targetSess.writeItemEnchantmentSlot(ctx, instanceGUID, 1, enchantID, durationMs)
+		targetSess.syncEquipmentCache(ctx)
+	}
 }
 
 // enchantTargetPrismaticID reads the item_instance enchantments column and
