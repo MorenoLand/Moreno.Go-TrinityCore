@@ -31,6 +31,7 @@ const (
 	spellAttr5CanChannelWhenMoving  uint32 = 0x00000001 // SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING (SharedDefines.h:597)
 	spellAttr5SingleTarget          uint32 = 0x00000020 // SPELL_ATTR5_SINGLE_TARGET_SPELL (SharedDefines.h:602)
 	spellAttr5SkipCheckcastLosCheck uint32 = 0x04000000 // SPELL_ATTR5_SKIP_CHECKCAST_LOS_CHECK (SharedDefines.h:623) — ATTR5 is Go's AttributesEx5
+	spellAttr5HasteAffectDuration   uint32 = 0x00002000 // SPELL_ATTR5_HASTE_AFFECT_DURATION (SharedDefines.h:610) — ATTR5 is Go's AttributesEx5
 
 	spellInterruptFlagMovement uint32 = 0x01 // SPELL_INTERRUPT_FLAG_MOVEMENT (SpellDefines.h:30)
 
@@ -13928,6 +13929,31 @@ func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (du
 	if spell.DurationIndex > 0 && s.server != nil && s.server.Data != nil && s.player != nil {
 		if val, ok, err := s.server.Data.SpellDuration(spell.DurationIndex, uint32(s.player.Level)); err == nil && ok && val > 0 {
 			durationMs = uint32(val)
+		}
+	}
+	// Aura::CalcMaxDuration (SpellAuras.cpp:871-886): the DBC duration folds
+	// the caster's SPELLMOD_DURATION mods (talents, glyphs) before anything
+	// else — maxDuration != -1 is the val > 0 gate above, the modOwner is the
+	// casting player, and the IsPassive no-DurationEntry carve-out has no Go
+	// passive-aura path to reach this function.
+	if durationMs > 0 {
+		if modded := s.applySpellMod(spell, spellModDuration, int32(durationMs)); modded > 0 {
+			durationMs = uint32(modded)
+		} else {
+			durationMs = 0
+		}
+	}
+	// Spell::DoSpellEffectHit (Spell.cpp:2888-2891): haste compresses the
+	// applied aura's duration — ModSpellDurationTime for auras of channeled
+	// spells, and the UNIT_MOD_CAST_SPEED multiply for auras of spells
+	// carrying SPELL_ATTR5_HASTE_AFFECT_DURATION or affected by a
+	// SPELL_AURA_PERIODIC_HASTE (316) aura on the caster. Go has no 316
+	// aura-type model, so that arm is vacuous here; the compression math
+	// (divide by 1+hastePct/100) is the same ModSpellDurationTime fold
+	// startChannel uses.
+	if durationMs > 0 && (isChanneledSpell(spell) || spell.AttributesEx5&spellAttr5HasteAffectDuration != 0) {
+		if hastePct := s.getSpellHastePct(); hastePct > 0 {
+			durationMs = uint32(math.Round(float64(durationMs) / (1.0 + hastePct/100.0)))
 		}
 	}
 	if durationMs == 0 && eff.AuraPeriod > 0 {
