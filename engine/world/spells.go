@@ -451,6 +451,7 @@ const (
 	// (World.h:641) — the orange-lockpick fail-chance ceiling.
 	configMaxSkillValue                     int32  = 450
 	spellEffectHealMechanical                      = 75  // SPELL_EFFECT_HEAL_MECHANICAL (SharedDefines.h:886)
+	spellEffectAttackMe                            = 114 // SPELL_EFFECT_ATTACK_ME (SharedDefines.h:925)
 	spellEffectHealPct                             = 136 // SPELL_EFFECT_HEAL_PCT (SharedDefines.h:947)
 	spellEffectEnergizePct                         = 137 // SPELL_EFFECT_ENERGIZE_PCT (SharedDefines.h:948)
 	spellAuraMounted                               = 78
@@ -513,6 +514,7 @@ const (
 	spellAuraModPacify                             = 25  // SPELL_AURA_MOD_PACIFY (SpellAuraDefines.h:105)
 	spellAuraModPacifySilence                      = 60  // SPELL_AURA_MOD_PACIFY_SILENCE (SpellAuraDefines.h:140)
 	spellAuraStateImmunity                         = 38  // SPELL_AURA_STATE_IMMUNITY (SpellAuraDefines.h:118)
+	spellAuraEffectImmunity                        = 37  // SPELL_AURA_EFFECT_IMMUNITY (SpellAuraDefines.h:117)
 	spellAuraDispelImmunity                        = 41  // SPELL_AURA_DISPEL_IMMUNITY (SpellAuraDefines.h:121)
 	spellAuraModImmuneAuraApplySchool              = 267 // SPELL_AURA_MOD_IMMUNE_AURA_APPLY_SCHOOL (SpellAuraDefines.h:347)
 	spellAuraMechanicImmunityMask                  = 147 // SPELL_AURA_MECHANIC_IMMUNITY_MASK (SpellAuraDefines.h:227)
@@ -7066,6 +7068,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissResist}}
 				}
 			}
+			// Spell::AddUnitTarget (Spell.cpp:2108-2112) strips per-effect-immune
+			// bits from the target's EffectMask; UpdateSpellCastDataTargets
+			// (Spell.cpp:4491-4492) reports a target whose mask hit zero as
+			// SPELL_MISS_IMMUNE2 even though the spell-level hit was NONE. The
+			// PreprocessTarget immune combat arm (Spell.cpp:2354-2357) covers
+			// IMMUNE2 too, so the target is put in combat like a spell-immune one.
+			if len(missStatus) == 0 && targetSess != nil && s.spellTargetFullyEffectImmune(spell, targetSess) {
+				hitTargets = nil
+				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune2}}
+				if targetSess.player != nil {
+					targetSess.player.UnitFlags |= unitFlagInCombat
+					targetSess.lastCombatTime = time.Now()
+				}
+			}
 		}
 	} else if !areaSpell && !friendlyListSpell && targetGUID != 0 && targetGUID != s.playerGUID && !isHarmfulSpell(spell) {
 		var targetSess *session
@@ -7075,6 +7091,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		if targetSess != nil && targetSess.isImmuneToSpell(spell) {
 			hitTargets = nil
 			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
+		} else if targetSess != nil && s.spellTargetFullyEffectImmune(spell, targetSess) {
+			// Same IMMUNE2 arm as the harmful path above (Spell.cpp:2108-2112,
+			// 4491-4492): a non-harmful spell whose every effect is per-effect
+			// immune reports IMMUNE2 rather than landing.
+			hitTargets = nil
+			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune2}}
 		}
 	}
 
@@ -9099,6 +9121,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 			for _, effectTarget := range hitTargets {
 				s.fireHitTriggerSpells(effCtx, spell, spellID, hitEffMask, completedCast.HitTriggers, effectTarget)
+			}
+			// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2442): the
+			// trigger gate is CanExecuteTriggersOnHit OR MissCondition
+			// IMMUNE/IMMUNE2 — immune targets still fire on-hit triggers.
+			// Go's hitTargets exclude misses, so the immune miss entries
+			// fire here with the full effect mask.
+			for _, miss := range missStatus {
+				if miss.Reason == protocol.SpellMissImmune || miss.Reason == protocol.SpellMissImmune2 {
+					s.fireHitTriggerSpells(effCtx, spell, spellID, hitEffMask, completedCast.HitTriggers, miss.TargetGUID)
+				}
 			}
 		}
 		if s.server != nil && isHarmfulSpell(spell) && !damageEffectSeen {
