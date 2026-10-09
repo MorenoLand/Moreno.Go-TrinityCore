@@ -11555,7 +11555,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			}
 		}
 		if !instantKill && !procDamage && spellKnown && spellID != 31117 && spellID != 64085 {
-			crit = s.rollDirectSpellCrit(target, isPlayerVictim, schoolMask, dmgSpell)
+			crit = s.rollDirectSpellCrit(ctx, target, isPlayerVictim, schoolMask, dmgSpell)
 		}
 		if crit {
 			if s.server != nil && s.server.Data != nil {
@@ -16579,6 +16579,10 @@ const (
 	spellAuraLinked                              = 284 // SPELL_AURA_LINKED (SpellAuraDefines.h:364)
 	spellAuraModAttackerSpellCritChance          = 179 // SPELL_AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE (SpellAuraDefines.h:259)
 	spellAuraModAttackerSpellAndWeaponCritChance = 197 // SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (SpellAuraDefines.h:277)
+	spellAuraModAttackerMeleeCritChance          = 187 // SPELL_AURA_MOD_ATTACKER_MELEE_CRIT_CHANCE (SpellAuraDefines.h:267)
+	spellAuraModAttackerRangedCritChance         = 188 // SPELL_AURA_MOD_ATTACKER_RANGED_CRIT_CHANCE (SpellAuraDefines.h:268)
+	spellAuraModCritChanceForCaster              = 308 // SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (SpellAuraDefines.h:388)
+	spellAuraModWeaponCritPercent                = 52  // SPELL_AURA_MOD_WEAPON_CRIT_PERCENT (SpellAuraDefines.h:132)
 	spellAuraAbilityPeriodicCrit                 = 286 // SPELL_AURA_ABILITY_PERIODIC_CRIT (SpellAuraDefines.h:366)
 	dispelDisease                                = 3   // DISPEL_DISEASE (SharedDefines.h:1407), matched by Unit::GetDiseasesByCaster
 )

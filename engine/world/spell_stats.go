@@ -6,6 +6,7 @@ import (
 	"math/rand"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // Combat rating indices for spells matching TrinityCore SharedDefines.h:1760-1790
@@ -388,27 +389,243 @@ func (s *session) rollSpellCrit(targetGUID uint64, schoolMask uint8, spell wotlk
 // directSpellCritChance is the full direct-spell crit probability: the
 // CU_CAN_CRIT gate, the done side (calculateSpellCritChance), and the
 // victim-side taken arms below. Mirrors Spell::DoEffectOnLaunchTarget
-// (Spell.cpp:7784-7788): m_spellValue->CriticalChance override, then
-// SpellCritChanceDone, then SpellCritChanceTaken.
-func (s *session) directSpellCritChance(target combatTarget, isPlayerVictim bool, schoolMask uint8, spell wotlk.Spell) float64 {
+// (Spell.cpp:7784-7788): m_spellValue->CriticalChance override (no Go
+// model), then SpellCritChanceDone, then SpellCritChanceTaken. The
+// m_attackType routing from SpellInfo::GetAttackType (SpellInfo.cpp:1266)
+// applies: melee/ranged-DmgClass spells use the weapon-crit done leg
+// (Unit::GetUnitCriticalChanceDone, Unit.cpp:2819) and the
+// GetUnitCriticalChanceTaken victim leg (Unit.cpp:2846); SPELL_DAMAGE_CLASS_NONE
+// spells never crit (both legs return 0).
+func (s *session) directSpellCritChance(ctx context.Context, target combatTarget, isPlayerVictim bool, schoolMask uint8, spell wotlk.Spell) float64 {
 	if spell.Attributes&spellAttr0CuCanCrit == 0 {
 		return 0
 	}
-	chance := s.calculateSpellCritChance(target.GUID, schoolMask, spell, false)
-	return chance + s.directSpellTakenCritBonus(target, isPlayerVictim, schoolMask, spell)
+	switch spell.DefenseType {
+	case spellDamageClassMelee, spellDamageClassRanged:
+		return s.directWeaponCritChance(ctx, target, isPlayerVictim, schoolMask, spell)
+	case spellDamageClassMagic:
+		chance := s.calculateSpellCritChance(target.GUID, schoolMask, spell, false)
+		return chance + s.directSpellTakenCritBonus(target, isPlayerVictim, schoolMask, spell)
+	default:
+		return 0
+	}
 }
 
 // rollDirectSpellCrit rolls a direct-spell crit including the victim taken arms.
-func (s *session) rollDirectSpellCrit(target combatTarget, isPlayerVictim bool, schoolMask uint8, spell wotlk.Spell) bool {
-	return rand.Float64() < s.directSpellCritChance(target, isPlayerVictim, schoolMask, spell)
+func (s *session) rollDirectSpellCrit(ctx context.Context, target combatTarget, isPlayerVictim bool, schoolMask uint8, spell wotlk.Spell) bool {
+	return rand.Float64() < s.directSpellCritChance(ctx, target, isPlayerVictim, schoolMask, spell)
+}
+
+// spellWeaponAttackType mirrors SpellInfo::GetAttackType (SpellInfo.cpp:1266-1290),
+// the m_attackType the spell constructor derives for DoEffectOnLaunchTarget's
+// crit legs (Spell.cpp:7786-7787). MELEE-DmgClass spells use the offhand when
+// SPELL_ATTR3_REQ_OFFHAND is set; RANGED-DmgClass spells use the ranged attack
+// when they are ranged-weapon spells; other spells use the ranged attack only
+// for auto-repeat (wands), else the base attack.
+func spellWeaponAttackType(spell wotlk.Spell) protocol.WeaponAttackType {
+	switch spell.DefenseType {
+	case spellDamageClassMelee:
+		if spell.AttributesEx3&spellAttr3ReqOffhand != 0 {
+			return protocol.OffAttack
+		}
+		return protocol.BaseAttack
+	case spellDamageClassRanged:
+		if isRangedWeaponSpell(spell) {
+			return protocol.RangedAttack
+		}
+		return protocol.BaseAttack
+	default:
+		if spell.AttributesEx1&spellAttr2AutorepeatFlag != 0 {
+			return protocol.RangedAttack
+		}
+		return protocol.BaseAttack
+	}
+}
+
+// directWeaponCritChance is the full direct-spell crit probability for
+// SPELL_DAMAGE_CLASS_MELEE/RANGED spells: the weapon-crit done leg plus the
+// GetUnitCriticalChanceTaken victim leg (Unit.cpp:7200-7201, 7378-7386).
+func (s *session) directWeaponCritChance(ctx context.Context, target combatTarget, isPlayerVictim bool, schoolMask uint8, spell wotlk.Spell) float64 {
+	if s == nil {
+		return 0
+	}
+	attackType := spellWeaponAttackType(spell)
+	chance := s.directWeaponCritChanceDone(spell, schoolMask, attackType)
+	return s.directWeaponCritChanceTaken(ctx, target, isPlayerVictim, spell, attackType, chance)
+}
+
+// directWeaponCritChanceDone mirrors the MELEE/RANGED arms of
+// Unit::SpellCritChanceDone (Unit.cpp:7196-7211): GetUnitCriticalChanceDone
+// (Unit.cpp:2819-2844) plus the school-masked
+// SPELL_AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL (71) term, then
+// SPELLMOD_CRITICAL_CHANCE via the spell-mod owner, clamped at zero.
+// For players the weapon-crit basis is the derived PLAYER_*_CRIT_PERCENTAGE
+// field selected by attack type; the flat aura terms (52/290) that
+// UpdateCritPercentage (StatSystem.cpp:624) folds into those fields are not
+// part of Go's stored fields, so they are added here. The weapon-skill term
+// (0.04%/skill vs max for level) has no Go model and stays a residual.
+func (s *session) directWeaponCritChanceDone(spell wotlk.Spell, schoolMask uint8, attackType protocol.WeaponAttackType) float64 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	var chance float64
+	switch attackType {
+	case protocol.OffAttack:
+		chance = float64(s.player.OffhandCrit)
+	case protocol.RangedAttack:
+		chance = float64(s.player.RangedCrit)
+	default:
+		chance = float64(s.player.MeleeCrit)
+	}
+	chance += float64(s.playerAuraModifier(spellAuraModWeaponCritPercent))
+	chance += float64(s.playerAuraModifier(spellAuraModCritPct))
+	chance += float64(s.playerAuraModifierByMiscMask(spellAuraModSpellCritChanceSchool, int32(schoolMask)))
+	chance = s.applySpellModFloat(spell, spellModCriticalChance, chance)
+	if chance < 0 {
+		chance = 0
+	}
+	return chance / 100.0
+}
+
+// directWeaponCritChanceTaken mirrors the MELEE/RANGED arms of
+// Unit::SpellCritChanceTaken for direct spells: the Rend and Tear /
+// Victory Rush caster class arms (Unit.cpp:7353-7376), then
+// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2846-2880) — flat victim
+// SPELL_AURA_MOD_ATTACKER_MELEE/RANGED_CRIT_CHANCE (187/188) by attack type,
+// SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) caster-matched (no
+// IsAffectedOnSpell gate on this path, per the C++ lambda), resilience with
+// the melee/ranged taken rating, then SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE
+// (197) applied after resilience with no positivity gate (unlike the MAGIC
+// leg). The defense-skill vs weapon-skill bonus has no Go weapon-skill model
+// and stays a residual; the chance is clamped at zero like C++.
+func (s *session) directWeaponCritChanceTaken(ctx context.Context, target combatTarget, isPlayerVictim bool, spell wotlk.Spell, attackType protocol.WeaponAttackType, doneChance float64) float64 {
+	if s == nil || s.server == nil {
+		return doneChance
+	}
+	chance := doneChance * 100.0
+	// Custom crit by class (Unit.cpp:7353-7376) — MELEE DmgClass only.
+	if spell.DefenseType == spellDamageClassMelee {
+		switch spell.SpellFamilyName {
+		case spellFamilyDruid:
+			// Rend and Tear (Unit.cpp:7357-7364): Ferocious Bite
+			// (family flags[0] & 0x800000, icon 1680) on a bleeding target
+			// gains the caster's eff-1 dummy aura amount (icon 2859).
+			if spell.SpellFamilyFlags[0]&0x00800000 != 0 && spell.SpellIconID == 1680 &&
+				s.targetHasAuraState(ctx, target.GUID, auraStateBleeding, spell) {
+				if amt, ok := s.dummyAuraAmountByIconEffIndex(spellFamilyDruid, 2859, 1); ok {
+					chance += float64(amt)
+				}
+			}
+		case spellFamilyWarrior:
+			// Victory Rush (Unit.cpp:7368-7375): glyph 58382 eff 0.
+			if spell.SpellFamilyFlags[1]&0x100 != 0 {
+				if amt, ok := s.auraEffectAmount(58382, 0); ok {
+					chance += float64(amt)
+				}
+			}
+		}
+	}
+	var flatAura uint32 = spellAuraModAttackerMeleeCritChance
+	if attackType == protocol.RangedAttack {
+		flatAura = spellAuraModAttackerRangedCritChance
+	}
+	if isPlayerVictim {
+		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
+			chance += float64(vicSess.playerAuraModifier(flatAura))
+			chance += s.casterMatchedCritChanceForCaster(spell)
+			bp := int32(math.Round(chance * 100))
+			cr := CombatRatingCritTakenMelee
+			if attackType == protocol.RangedAttack {
+				cr = CombatRatingCritTakenRanged
+			}
+			vicSess.applyResilienceToMeleeCritChance(true, cr, &bp)
+			chance = float64(bp) / 100.0
+			chance += float64(vicSess.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance))
+		}
+	} else {
+		key := creatureAuraKeyForTarget(target)
+		chance += float64(creatureAuraModifierSum(s.server, key, flatAura))
+		chance += s.casterMatchedCritChanceForCaster(spell)
+		chance += float64(creatureAuraModifierSum(s.server, key, spellAuraModAttackerSpellAndWeaponCritChance))
+	}
+	if chance < 0 {
+		chance = 0
+	}
+	return chance / 100.0
+}
+
+// casterMatchedCritChanceForCaster mirrors the SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER
+// (308) arm inside Unit::GetUnitCriticalChanceTaken (Unit.cpp:2862-2866): the
+// sum of the caster's 308-aura amounts whose CasterGUID is the caster's own.
+// This path has no IsAffectedOnSpell gate (the magic leg's post-switch arm at
+// Unit.cpp:7390-7397 does, and stays unbridged).
+func (s *session) casterMatchedCritChanceForCaster(spell wotlk.Spell) float64 {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil {
+		return 0
+	}
+	var total float64
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 || aura.CasterGUID != s.playerGUID {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 || effect.Aura != spellAuraModCritChanceForCaster {
+				continue
+			}
+			total += float64(aura.Amounts[index])
+		}
+	}
+	return total
+}
+
+// dummyAuraAmountByIconEffIndex mirrors Unit::GetDummyAuraEffect(family,
+// icon, effIndex) (Unit.cpp:4540-4543 -> 4510-4522): the first live DUMMY
+// aura on the caster whose spell matches family+icon (with no family flags
+// set) at exactly the given effect index.
+func (s *session) dummyAuraAmountByIconEffIndex(family, iconID uint32, effIndex int) (int32, bool) {
+	if s.server == nil || s.server.Data == nil || effIndex < 0 {
+		return 0, false
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || auraSpell.SpellFamilyName != family || auraSpell.SpellIconID != iconID {
+			continue
+		}
+		if auraSpell.SpellFamilyFlags[0] != 0 || auraSpell.SpellFamilyFlags[1] != 0 || auraSpell.SpellFamilyFlags[2] != 0 {
+			continue
+		}
+		if effIndex >= len(aura.Amounts) || effIndex >= len(auraSpell.Effects) || aura.EffectMask&(1<<uint(effIndex)) == 0 {
+			continue
+		}
+		eff := auraSpell.Effects[effIndex]
+		if !spellEffectIsAuraEffect(eff) || eff.Aura != spellAuraDummy {
+			continue
+		}
+		amount := aura.Amounts[effIndex]
+		if amount == 0 {
+			amount = eff.BasePoints + 1
+		}
+		return amount, true
+	}
+	return 0, false
 }
 
 // directSpellTakenCritBonus mirrors the victim-side arms of
 // Unit::SpellCritChanceTaken (Unit.cpp:7230-7240) for direct (non-periodic)
-// spells: the victim's SPELL_AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE (179,
-// school-masked) and SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE
-// (197, unfiltered), gated on the spell being non-positive like C++. C++
-// applies 179 before resilience and 197 after; both are flat additions and
+// SPELL_DAMAGE_CLASS_MAGIC spells: the victim's
+// SPELL_AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE (179, school-masked) and
+// SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (197, unfiltered),
+// gated on the spell being non-positive like C++. The MELEE/RANGED DmgClass
+// arms live in directWeaponCritChanceTaken instead (C++ takes the
+// GetUnitCriticalChanceTaken leg there, never the 179/197 magic arms).
+// C++ applies 179 before resilience and 197 after; both are flat additions and
 // Go's resilience leg already ran inside calculateSpellCritChance, so the
 // post-resilience fold here is arithmetically identical.
 func (s *session) directSpellTakenCritBonus(target combatTarget, isPlayerVictim bool, schoolMask uint8, spell wotlk.Spell) float64 {
@@ -532,10 +749,12 @@ func (s *session) canPeriodicTickCrit(spell wotlk.Spell) bool {
 //
 // Returns the bonus in percent points and whether the tick is a forced
 // crit. The remaining arms (Shiv poisons — no Go current-spell model;
-// Flash of Light/Sacred Shield — the tick-spell gate is a direct heal;
-// Rend and Tear / Victory Rush — SPELL_DAMAGE_CLASS_MELEE, never
-// periodic; SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308)) have no Go model
-// and stay unbridged.
+// Flash of Light/Sacred Shield — the tick-spell gate is a direct heal)
+// have no Go model and stay unbridged. Rend and Tear / Victory Rush and
+// SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) are bridged on the direct
+// melee-DmgClass path (directWeaponCritChanceTaken); they never fire for
+// periodic ticks in C++ (DmgClass gate at Unit.cpp:7347-7386), so they stay
+// unbridged here by design.
 func (s *session) tickScriptedTakenCritBonus(ctx context.Context, targetGUID uint64, spell wotlk.Spell, tickKnown bool, victimFrozen, victimHasFlameShock bool, victimAura197Total int32, victimHealthless35, victimFaerieFire bool) (float64, bool) {
 	bonus := 0.0
 	if s == nil || s.server == nil || s.server.Data == nil || !tickKnown {
