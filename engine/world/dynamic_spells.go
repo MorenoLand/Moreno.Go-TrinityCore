@@ -188,6 +188,10 @@ func (s *Server) despawnDynamicSpellObject(guid uint64) {
 	if !ok || object == nil {
 		return
 	}
+	// DynamicObject::RemoveFromWorld (DynamicObject.cpp:63-83): the dynobj's
+	// own aura is removed first, which strips it from every target
+	// (Aura::_Remove) — target auras never linger past the dynobj.
+	s.removeDynamicAreaAuras(object)
 	// DynamicObject::RemoveCasterViewpoint (DynamicObject.cpp:223): when a
 	// farsight-focus object despawns, the caster's viewpoint is removed
 	// (Player::SetViewpoint false arm, Player.cpp:24618) — but only if the
@@ -198,10 +202,71 @@ func (s *Server) despawnDynamicSpellObject(guid uint64) {
 			caster.sendPlayerUpdate()
 		}
 	}
-	packet := protocol.NewBuffer(9)
+	// DynamicObject::Remove (DynamicObject.cpp:176-182) despawns through
+	// WorldObject::SendObjectDeSpawnAnim (Object.cpp:1826-1831):
+	// SMSG_GAMEOBJECT_DESPAWN_ANIM carrying only the GUID — never
+	// SMSG_DESTROY_OBJECT.
+	packet := protocol.NewBuffer(8)
 	packet.WriteU64(object.GUID)
-	packet.WriteU8(0)
-	s.broadcastToInstance(object.Map, object.InstanceID, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), packet.Bytes(), nil)
+	s.broadcastToInstance(object.Map, object.InstanceID, uint16(protocol.OpcodeSMSG_GAMEOBJECT_DESPAWN_ANIM), packet.Bytes(), nil)
+}
+
+// removeDynamicAreaAuras mirrors DynamicObject::RemoveFromWorld's RemoveAura
+// leg (DynamicObject.cpp:63-83, 206-213): when the dynobj goes away its
+// aura is _Remove'd, stripping it from every target immediately — target
+// auras never linger past the dynobj. The sweep is scoped to this dynobj's
+// spell, caster, and persistent-area-aura flag so same-spell auras from
+// other sources survive.
+func (s *Server) removeDynamicAreaAuras(object *dynamicSpellObjectState) {
+	if s == nil || object == nil {
+		return
+	}
+	spellID := uint32(object.SpellID)
+	casterGUID := object.CasterGUID
+	s.sessionsMu.RLock()
+	var targets []*session
+	for sess := range s.sessions {
+		if sess == nil || sess.player == nil {
+			continue
+		}
+		if sess.player.Map != object.Map || sess.player.InstanceID != object.InstanceID {
+			continue
+		}
+		targets = append(targets, sess)
+	}
+	s.sessionsMu.RUnlock()
+	for _, ts := range targets {
+		ts.removeDynobjAura(spellID, casterGUID)
+	}
+	s.auraMu.Lock()
+	var creatureKeys []creatureAuraKey
+	for key, auras := range s.activeCreatureAuras {
+		if key.Map != object.Map || key.InstanceID != object.InstanceID {
+			continue
+		}
+		if aura := auras[spellID]; aura != nil && !aura.Stopped && aura.CasterGUID == casterGUID && aura.PersistentAreaAura {
+			creatureKeys = append(creatureKeys, key)
+		}
+	}
+	s.auraMu.Unlock()
+	for _, key := range creatureKeys {
+		s.removeCreatureAura(key, spellID)
+	}
+}
+
+// removeDynobjAura drops the session's persistent-area aura of spellID when
+// it came from casterGUID's dynobj; other auras of the same spell survive.
+func (s *session) removeDynobjAura(spellID uint32, casterGUID uint64) {
+	if s == nil || s.player == nil || spellID == 0 {
+		return
+	}
+	s.castMu.Lock()
+	aura := s.activeAuras[spellID]
+	match := aura != nil && !aura.Stopped && aura.CasterGUID == casterGUID && aura.PersistentAreaAura
+	s.castMu.Unlock()
+	if match {
+		s.removeAura(spellID)
+	}
 }
 
 // delayChannelDynamicObject mirrors the dynobj arm of Spell::DelayedChannel

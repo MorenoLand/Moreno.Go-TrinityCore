@@ -8801,8 +8801,11 @@ func (s *session) spawnPersistentAreaAura(ctx context.Context, spell wotlk.Spell
 	found := false
 	for _, effect := range spell.Effects {
 		if effect.Effect == 27 {
+			// Spell::EffectPersistentAA (SpellEffects.cpp:1738-1741) only
+			// handles the LAST persistent-area-aura effect in the list —
+			// earlier ones return without spawning. Keep scanning so the
+			// final one wins, matching C++ arm order and radius.
 			persistent, found = effect, true
-			break
 		}
 	}
 	if !found || spell.DurationIndex == 0 || s.server.Data == nil {
