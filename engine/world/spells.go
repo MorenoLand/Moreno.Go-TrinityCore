@@ -11213,6 +11213,46 @@ func spellDamageBonusTaken(damage uint32, spell wotlk.Spell, schoolMask uint32, 
 	return uint32(result)
 }
 
+// creatureAuraModifierSum mirrors Unit::GetTotalAuraModifier (Unit.cpp:4883):
+// the sum of amounts of all live effects of the given aura type on the
+// creature, with no misc-mask filter (the periodic-tick aura-197 term in
+// Unit::SpellCritChanceTaken, Unit.cpp:7228-7234, is unfiltered).
+func creatureAuraModifierSum(s *Server, key creatureAuraKey, auraType uint32) int32 {
+	if s == nil || s.Data == nil || key.GUID == 0 {
+		return 0
+	}
+	s.auraMu.Lock()
+	auras := s.activeCreatureAuras[key]
+	copies := make([]*activeAura, 0, len(auras))
+	for _, aura := range auras {
+		copies = append(copies, aura)
+	}
+	s.auraMu.Unlock()
+	var total int32
+	for _, aura := range copies {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		usedStoredAmount := false
+		for index, effect := range spell.Effects {
+			if index >= len(aura.Amounts) || effect.Aura != auraType || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount == 0 && aura.AuraType == auraType && !usedStoredAmount {
+				amount = int32(aura.Amount)
+				usedStoredAmount = true
+			}
+			total += amount
+		}
+	}
+	return total
+}
+
 // creatureAuraModifiersByMiscMask mirrors the creature half of the session
 // auraTypeModifiersByMiscMask (movement_speed.go): it collects per-effect
 // amounts of the creature's active auras whose DBC row carries an effect of
@@ -13836,6 +13876,39 @@ func (s *session) targetHasFamilyAuraEffectByCaster(ctx context.Context, targetG
 				continue
 			}
 			if !spellEffectIsAuraEffect(eff) || eff.Aura != auraType {
+				continue
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// victimHasFlameShockByCaster mirrors the Lava Burst arm of
+// Unit::SpellCritChanceTaken (Unit.cpp:7315-7321): GetAuraEffect(
+// SPELL_AURA_PERIODIC_DAMAGE, SPELLFAMILY_SHAMAN, 0x10000000, 0, 0,
+// casterGUID) — the victim carries the caster's own Flame Shock
+// periodic-damage aura.
+func (s *session) victimHasFlameShockByCaster(ctx context.Context, targetGUID uint64, casterGUID uint64) bool {
+	if s.server == nil || s.server.Data == nil {
+		return false
+	}
+	for _, aura := range s.victimAurasForLookup(ctx, targetGUID) {
+		if aura == nil || aura.Stopped || aura.CasterGUID != casterGUID {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if auraSpell.SpellFamilyName != spellFamilyShaman || auraSpell.SpellFamilyFlags[0]&0x10000000 == 0 {
+			continue
+		}
+		for index, eff := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || index >= 8 || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellEffectIsAuraEffect(eff) || eff.Aura != spellAuraPeriodicDamage {
 				continue
 			}
 			return true
@@ -16484,27 +16557,28 @@ type rankPurgeTarget struct {
 // Periodic aura types exempted from the different-caster rank-chain purge
 // (Aura::CanStackWith, SpellAuras.cpp:1955-1976).
 const (
-	spellAuraPeriodicDamage                 = 3   // SPELL_AURA_PERIODIC_DAMAGE (SpellAuraDefines.h:83)
-	spellAuraPeriodicHeal                   = 8   // SPELL_AURA_PERIODIC_HEAL (SpellAuraDefines.h:88)
-	spellAuraObsModHealth                   = 20  // SPELL_AURA_OBS_MOD_HEALTH (SpellAuraDefines.h:100)
-	spellAuraObsModPower                    = 21  // SPELL_AURA_OBS_MOD_POWER (SpellAuraDefines.h:101)
-	spellAuraPeriodicTriggerSpell           = 23  // SPELL_AURA_PERIODIC_TRIGGER_SPELL (SpellAuraDefines.h:103)
-	spellAuraPeriodicTriggerSpellFromClient = 48  // SPELL_AURA_PERIODIC_TRIGGER_SPELL_FROM_CLIENT (SpellAuraDefines.h:128)
-	spellAuraPeriodicDamagePercent          = 89  // SPELL_AURA_PERIODIC_DAMAGE_PERCENT (SpellAuraDefines.h:169)
-	spellAuraPeriodicTriggerSpellWithValue  = 227 // SPELL_AURA_PERIODIC_TRIGGER_SPELL_WITH_VALUE (SpellAuraDefines.h:307)
-	spellAuraModAttackPowerOfArmor          = 285 // SPELL_AURA_MOD_ATTACK_POWER_OF_ARMOR (SpellAuraDefines.h:365)
-	spellAuraPeriodicEnergize               = 24  // SPELL_AURA_PERIODIC_ENERGIZE (SpellAuraDefines.h:104)
-	spellAuraPeriodicLeech                  = 53  // SPELL_AURA_PERIODIC_LEECH (SpellAuraDefines.h:133)
-	spellAuraPeriodicHealthFunnel           = 62  // SPELL_AURA_PERIODIC_HEALTH_FUNNEL (SpellAuraDefines.h:137)
-	spellAuraPeriodicManaLeech              = 64  // SPELL_AURA_PERIODIC_MANA_LEECH (SpellAuraDefines.h:144)
-	spellAuraPowerBurn                      = 162 // SPELL_AURA_POWER_BURN (SpellAuraDefines.h:242)
-	spellAuraPeriodicDummy                  = 226 // SPELL_AURA_PERIODIC_DUMMY (SpellAuraDefines.h:306)
-	spellAuraModHealingPct                  = 118 // SPELL_AURA_MOD_HEALING_PCT (SpellAuraDefines.h:198)
-	spellAuraModHotPct                      = 259 // SPELL_AURA_MOD_HOT_PCT (SpellAuraDefines.h:339)
-	spellAuraModHealingReceived             = 283 // SPELL_AURA_MOD_HEALING_RECEIVED (SpellAuraDefines.h:363)
-	spellAuraLinked                         = 284 // SPELL_AURA_LINKED (SpellAuraDefines.h:364)
-	spellAuraModAttackerSpellCritChance     = 179 // SPELL_AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE (SpellAuraDefines.h:259)
-	dispelDisease                           = 3   // DISPEL_DISEASE (SharedDefines.h:1407), matched by Unit::GetDiseasesByCaster
+	spellAuraPeriodicDamage                      = 3   // SPELL_AURA_PERIODIC_DAMAGE (SpellAuraDefines.h:83)
+	spellAuraPeriodicHeal                        = 8   // SPELL_AURA_PERIODIC_HEAL (SpellAuraDefines.h:88)
+	spellAuraObsModHealth                        = 20  // SPELL_AURA_OBS_MOD_HEALTH (SpellAuraDefines.h:100)
+	spellAuraObsModPower                         = 21  // SPELL_AURA_OBS_MOD_POWER (SpellAuraDefines.h:101)
+	spellAuraPeriodicTriggerSpell                = 23  // SPELL_AURA_PERIODIC_TRIGGER_SPELL (SpellAuraDefines.h:103)
+	spellAuraPeriodicTriggerSpellFromClient      = 48  // SPELL_AURA_PERIODIC_TRIGGER_SPELL_FROM_CLIENT (SpellAuraDefines.h:128)
+	spellAuraPeriodicDamagePercent               = 89  // SPELL_AURA_PERIODIC_DAMAGE_PERCENT (SpellAuraDefines.h:169)
+	spellAuraPeriodicTriggerSpellWithValue       = 227 // SPELL_AURA_PERIODIC_TRIGGER_SPELL_WITH_VALUE (SpellAuraDefines.h:307)
+	spellAuraModAttackPowerOfArmor               = 285 // SPELL_AURA_MOD_ATTACK_POWER_OF_ARMOR (SpellAuraDefines.h:365)
+	spellAuraPeriodicEnergize                    = 24  // SPELL_AURA_PERIODIC_ENERGIZE (SpellAuraDefines.h:104)
+	spellAuraPeriodicLeech                       = 53  // SPELL_AURA_PERIODIC_LEECH (SpellAuraDefines.h:133)
+	spellAuraPeriodicHealthFunnel                = 62  // SPELL_AURA_PERIODIC_HEALTH_FUNNEL (SpellAuraDefines.h:137)
+	spellAuraPeriodicManaLeech                   = 64  // SPELL_AURA_PERIODIC_MANA_LEECH (SpellAuraDefines.h:144)
+	spellAuraPowerBurn                           = 162 // SPELL_AURA_POWER_BURN (SpellAuraDefines.h:242)
+	spellAuraPeriodicDummy                       = 226 // SPELL_AURA_PERIODIC_DUMMY (SpellAuraDefines.h:306)
+	spellAuraModHealingPct                       = 118 // SPELL_AURA_MOD_HEALING_PCT (SpellAuraDefines.h:198)
+	spellAuraModHotPct                           = 259 // SPELL_AURA_MOD_HOT_PCT (SpellAuraDefines.h:339)
+	spellAuraModHealingReceived                  = 283 // SPELL_AURA_MOD_HEALING_RECEIVED (SpellAuraDefines.h:363)
+	spellAuraLinked                              = 284 // SPELL_AURA_LINKED (SpellAuraDefines.h:364)
+	spellAuraModAttackerSpellCritChance          = 179 // SPELL_AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE (SpellAuraDefines.h:259)
+	spellAuraModAttackerSpellAndWeaponCritChance = 197 // SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (SpellAuraDefines.h:277)
+	dispelDisease                                = 3   // DISPEL_DISEASE (SharedDefines.h:1407), matched by Unit::GetDiseasesByCaster
 )
 
 // rankChainNoStackPurge mirrors the rank-chain term of
@@ -18277,7 +18351,22 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		crit := false
 		if !fixedDamage && tickCaster != nil {
 			takenCritBonus := float64(ts.playerAuraModifierByMiscMask(spellAuraModAttackerSpellCritChance, int32(aura.SchoolMask)))
-			if rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
+			// Unit::SpellCritChanceTaken (Unit.cpp:7232-7234): the victim's
+			// SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (197)
+			// adds unfiltered (no school mask) AFTER the resilience leg —
+			// Go applies resilience inside calculateSpellCritChance, so a
+			// post-hoc addition preserves the C++ order.
+			takenCritBonus += float64(ts.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance))
+			// Unit::SpellCritChanceTaken (Unit.cpp:7236-7322): scripted
+			// taken arms — Shatter/Renewed Hope/Lava Burst. Frozen state
+			// reads the victim's unit mask; the flame-shock query is
+			// caster-matched like C++ GetAuraEffect(..., casterGUID).
+			scriptBonus, forceCrit := tickCaster.tickScriptedTakenCritBonus(tickSpell, tickKnown,
+				ts.unitAuraStateMask()&(1<<(auraStateFrozen-1)) != 0,
+				tickCaster.victimHasFlameShockByCaster(context.Background(), aura.TargetGUID, aura.CasterGUID),
+				int32(ts.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance)))
+			takenCritBonus += scriptBonus
+			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
 				crit = true
 				mult := 1.5
 				if tickKnown {
@@ -18419,7 +18508,15 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			if healKnown && !spellIsPositive(healSpell) {
 				takenCritBonus = float64(ts.playerAuraModifierByMiscMask(spellAuraModAttackerSpellCritChance, int32(aura.SchoolMask)))
 			}
-			if rand.Float64() < healCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
+			// Unit::SpellCritChanceTaken (Unit.cpp:7236-7322): the scripted
+			// taken arms (Shatter, Renewed Hope) are NOT gated on
+			// IsPositive, unlike the 179/197 taken terms above.
+			scriptBonus, forceCrit := healCaster.tickScriptedTakenCritBonus(healSpell, healKnown,
+				ts.unitAuraStateMask()&(1<<(auraStateFrozen-1)) != 0,
+				healCaster.victimHasFlameShockByCaster(context.Background(), aura.TargetGUID, aura.CasterGUID),
+				int32(ts.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance)))
+			takenCritBonus += scriptBonus
+			if forceCrit || rand.Float64() < healCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
 				healCrit = true
 				mult := 1.5
 				if healKnown {
@@ -18518,7 +18615,22 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		crit := false
 		if !fixedDamage && tickCaster != nil {
 			takenCritBonus := float64(ts.playerAuraModifierByMiscMask(spellAuraModAttackerSpellCritChance, int32(aura.SchoolMask)))
-			if rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
+			// Unit::SpellCritChanceTaken (Unit.cpp:7232-7234): the victim's
+			// SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (197)
+			// adds unfiltered (no school mask) AFTER the resilience leg —
+			// Go applies resilience inside calculateSpellCritChance, so a
+			// post-hoc addition preserves the C++ order.
+			takenCritBonus += float64(ts.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance))
+			// Unit::SpellCritChanceTaken (Unit.cpp:7236-7322): scripted
+			// taken arms — Shatter/Renewed Hope/Lava Burst. Frozen state
+			// reads the victim's unit mask; the flame-shock query is
+			// caster-matched like C++ GetAuraEffect(..., casterGUID).
+			scriptBonus, forceCrit := tickCaster.tickScriptedTakenCritBonus(tickSpell, tickKnown,
+				ts.unitAuraStateMask()&(1<<(auraStateFrozen-1)) != 0,
+				tickCaster.victimHasFlameShockByCaster(context.Background(), aura.TargetGUID, aura.CasterGUID),
+				int32(ts.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance)))
+			takenCritBonus += scriptBonus
+			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
 				crit = true
 				mult := 1.5
 				if tickKnown {
@@ -19125,7 +19237,23 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, spellAuraModAttackerSpellCritChance, aura.SchoolMask) {
 				takenCritBonus += float64(amt)
 			}
-			if rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
+			// Unit::SpellCritChanceTaken (Unit.cpp:7232-7234): the victim's
+			// SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (197)
+			// adds unfiltered AFTER the resilience leg.
+			victim197 := creatureAuraModifierSum(s.server, key, spellAuraModAttackerSpellAndWeaponCritChance)
+			takenCritBonus += float64(victim197)
+			// Unit::SpellCritChanceTaken (Unit.cpp:7333-7339): creature
+			// victims suppress crit by 0.7% per level above the caster
+			// (negative levelDiff boosts it, like C++).
+			takenCritBonus -= float64(int32(target.Level)-int32(tickCaster.player.Level)) * 0.7
+			// Unit::SpellCritChanceTaken (Unit.cpp:7236-7322): scripted
+			// taken arms — Shatter/Renewed Hope/Lava Burst.
+			scriptBonus, forceCrit := tickCaster.tickScriptedTakenCritBonus(tickSpell, tickKnown,
+				s.creatureAuraStateMask(key, target)&(1<<(auraStateFrozen-1)) != 0,
+				tickCaster.victimHasFlameShockByCaster(ctx, aura.TargetGUID, aura.CasterGUID),
+				victim197)
+			takenCritBonus += scriptBonus
+			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
 				crit = true
 				mult := 1.5
 				if tickKnown {
@@ -19255,13 +19383,24 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 					takenCritBonus += float64(amt)
 				}
 			}
+			// Unit::SpellCritChanceTaken (Unit.cpp:7333-7339): creature
+			// victims suppress crit by 0.7% per level above the caster.
+			takenCritBonus -= float64(int32(target.Level)-int32(tickCaster.player.Level)) * 0.7
+			// Unit::SpellCritChanceTaken (Unit.cpp:7236-7322): the scripted
+			// taken arms (Shatter, Renewed Hope) are NOT gated on
+			// IsPositive, unlike the 179/197 taken terms above.
+			scriptBonus, forceCrit := tickCaster.tickScriptedTakenCritBonus(tickSpell, tickKnown,
+				s.creatureAuraStateMask(key, target)&(1<<(auraStateFrozen-1)) != 0,
+				tickCaster.victimHasFlameShockByCaster(ctx, aura.TargetGUID, aura.CasterGUID),
+				creatureAuraModifierSum(s.server, key, spellAuraModAttackerSpellAndWeaponCritChance))
+			takenCritBonus += scriptBonus
 			var critSpell wotlk.Spell
 			if tickKnown {
 				critSpell = tickSpell
 			} else {
 				critSpell = wotlk.Spell{ID: aura.SpellID, SchoolMask: aura.SchoolMask}
 			}
-			if rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
+			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
 				healCrit = true
 				heal = uint32(math.Round(float64(heal) * tickCaster.getSpellCritMultiplier(critSpell)))
 			}
@@ -19390,7 +19529,23 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, spellAuraModAttackerSpellCritChance, aura.SchoolMask) {
 				takenCritBonus += float64(amt)
 			}
-			if rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
+			// Unit::SpellCritChanceTaken (Unit.cpp:7232-7234): the victim's
+			// SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (197)
+			// adds unfiltered AFTER the resilience leg.
+			victim197 := creatureAuraModifierSum(s.server, key, spellAuraModAttackerSpellAndWeaponCritChance)
+			takenCritBonus += float64(victim197)
+			// Unit::SpellCritChanceTaken (Unit.cpp:7333-7339): creature
+			// victims suppress crit by 0.7% per level above the caster
+			// (negative levelDiff boosts it, like C++).
+			takenCritBonus -= float64(int32(target.Level)-int32(tickCaster.player.Level)) * 0.7
+			// Unit::SpellCritChanceTaken (Unit.cpp:7236-7322): scripted
+			// taken arms — Shatter/Renewed Hope/Lava Burst.
+			scriptBonus, forceCrit := tickCaster.tickScriptedTakenCritBonus(tickSpell, tickKnown,
+				s.creatureAuraStateMask(key, target)&(1<<(auraStateFrozen-1)) != 0,
+				tickCaster.victimHasFlameShockByCaster(ctx, aura.TargetGUID, aura.CasterGUID),
+				victim197)
+			takenCritBonus += scriptBonus
+			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
 				crit = true
 				mult := 1.5
 				if tickKnown {

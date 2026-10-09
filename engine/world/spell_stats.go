@@ -377,9 +377,13 @@ func (s *session) rollSpellCrit(targetGUID uint64, schoolMask uint8) bool {
 // victim's SPELL_AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE taken modifier, minus
 // resilience crit-chance reduction (folded into calculateSpellCritChance).
 // takenCritBonusPct carries the victim-side modifier in percent points (0 for
-// positive spells, where C++ skips the taken arm). Scripted overrides
-// (Shatter, Glyph of Shadowburn, Renewed Hope, Improved Faerie Fire,
-// Ferocious Bite on bleeding targets) have no Go model and stay unbridged.
+// positive spells, where C++ skips the taken arm). The scripted taken arms
+// (Shatter, Renewed Hope, Lava Burst) ride in takenCritBonusPct via
+// tickScriptedTakenCritBonus at the tick call sites; the remaining class
+// arms (Glyph of Shadowburn, Glyph of Fire Blast, Improved Faerie Fire,
+// Starfire/Insect Swarm, Shiv poisons, Flash of Light/Sacred Shield,
+// Exorcism, Rend and Tear, Victory Rush) have no Go model and stay
+// unbridged.
 func (s *session) tickCritChance(targetGUID uint64, schoolMask uint8, takenCritBonusPct float64) float64 {
 	chance := 0.0
 	if s != nil {
@@ -390,6 +394,73 @@ func (s *session) tickCritChance(targetGUID uint64, schoolMask uint8, takenCritB
 		chance = 0
 	}
 	return chance
+}
+
+// tickScriptedTakenCritBonus mirrors the scripted taken-side arms of
+// Unit::SpellCritChanceTaken (Unit.cpp:7236-7339) that fire for periodic
+// ticks via AuraEffect::GetCritChanceFor (SpellAuraEffects.cpp:843-846):
+//   - Shatter (caster OVERRIDE_CLASS_SCRIPTS miscValue 849/910/911
+//     affecting the tick spell + victim AURA_STATE_FROZEN): +17/34/50
+//     (Unit.cpp:7253-7264)
+//   - Renewed Hope (caster OVERRIDE_CLASS_SCRIPTS 7997/7998 + caster
+//     carries Weakened Soul 6788): +aurEff->GetAmount() (Unit.cpp:7269-7273)
+//   - Lava Burst (SHAMAN family, SpellFamilyFlags[1] & 0x1000): victim
+//     carries the caster's Flame Shock and victim aura-197 > -100 -> the
+//     tick crits outright (Unit.cpp:7314-7322)
+//
+// Returns the bonus in percent points and whether the tick is a forced
+// crit. The remaining class arms (Glyph of Shadowburn, Glyph of Fire
+// Blast, Improved Faerie Fire, Starfire/Insect Swarm, Shiv poisons, Flash
+// of Light/Sacred Shield, Exorcism, Rend and Tear, Victory Rush) and
+// SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) have no Go model and stay
+// unbridged.
+func (s *session) tickScriptedTakenCritBonus(spell wotlk.Spell, tickKnown bool, victimFrozen bool, victimHasFlameShock bool, victimAura197Total int32) (float64, bool) {
+	bonus := 0.0
+	if s == nil || s.server == nil || s.server.Data == nil || !tickKnown {
+		return bonus, false
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 || effect.Aura != auraOverrideClassScripts {
+				continue
+			}
+			switch effect.MiscValue {
+			case 849, 910, 911: // Shatter
+				// AuraEffect::IsAffectedOnSpell gate (Unit.cpp:7242-7244)
+				// plus the frozen-state check (Unit.cpp:7262-7264).
+				if !victimFrozen || !spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+					continue
+				}
+				switch effect.MiscValue {
+				case 911:
+					bonus += 50
+				case 910:
+					bonus += 34
+				default:
+					bonus += 17
+				}
+			case 7997, 7998: // Renewed Hope
+				if spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) && s.hasAura(6788) {
+					bonus += float64(aura.Amounts[index])
+				}
+			}
+		}
+	}
+	// Lava Burst (Unit.cpp:7314-7322): guaranteed crit when the victim
+	// carries the caster's Flame Shock and the victim's
+	// MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE total exceeds -100.
+	if spell.SpellFamilyName == spellFamilyShaman && spell.SpellFamilyFlags[1]&0x1000 != 0 &&
+		victimHasFlameShock && victimAura197Total > -100 {
+		return bonus, true
+	}
+	return bonus, false
 }
 
 // getSpellCritMultiplier calculates the critical strike damage/healing multiplier for a spell,
