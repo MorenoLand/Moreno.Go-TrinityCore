@@ -450,6 +450,7 @@ const (
 	spellAuraModIncreaseMountedFlightSpeed         = 207 // SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED (SpellAuraDefines.h:287)
 	spellAuraConfuse                               = 5
 	spellAuraCharm                                 = 6
+	spellAuraModTaunt                              = 11 // SPELL_AURA_MOD_TAUNT (SpellAuraDefines.h)
 	spellAuraFear                                  = 7
 	spellAuraStun                                  = 12
 	spellAuraRoot                                  = 26
@@ -15382,6 +15383,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		slot, effectMask := existing.Slot, existing.EffectMask
 		s.server.auraMu.Unlock()
+		// AuraEffect::HandleModTaunt (SpellAuraEffects.cpp:2772-2781): a
+		// re-applied MOD_TAUNT aura refreshes the creature's taunt state
+		// (ThreatManager::TauntUpdate, ThreatManager.cpp:439-458).
+		if eff.Aura == spellAuraModTaunt {
+			s.server.applyCreatureTaunt(targetKey, s.playerGUID, durationMs)
+		}
 		if resetPeriodic && periodMs > 0 {
 			s.scheduleCreaturePeriodicTick(existing, periodMs)
 		}
@@ -15480,6 +15487,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	}
 	for _, e := range scPurge {
 		s.expireSingleCastEntry(e)
+	}
+	// AuraEffect::HandleModTaunt (SpellAuraEffects.cpp:2772-2781): a fresh
+	// MOD_TAUNT aura on a creature registers its caster's taunt state
+	// (ThreatManager::TauntUpdate, ThreatManager.cpp:439-458).
+	if eff.Aura == spellAuraModTaunt {
+		s.server.applyCreatureTaunt(targetKey, aura.CasterGUID, durationMs)
 	}
 	if eff.Aura == spellAuraCharm {
 		spells, reactState, commandState, controlled := s.server.charmCreature(ctx, targetKey, s.playerGUID, s.player.Race)
@@ -17282,12 +17295,20 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 	}
 	wasCharm := false
 	charmerGUID := uint64(0)
+	wasTaunt := false
+	taunterGUID := uint64(0)
 	s.server.auraMu.Lock()
 	if s.server.activeCreatureAuras != nil {
 		if auras, ok := s.server.activeCreatureAuras[key]; ok {
 			if aura, exists := auras[spellID]; exists && aura != nil {
 				wasCharm = aura.AuraType == spellAuraCharm
 				charmerGUID = aura.CasterGUID
+				// The remove arm of AuraEffect::HandleModTaunt
+				// (SpellAuraEffects.cpp:2772-2781): dropping the MOD_TAUNT
+				// aura clears the caster's taunt state
+				// (ThreatManager::TauntUpdate, ThreatManager.cpp:439-458).
+				wasTaunt = aura.AuraType == spellAuraModTaunt
+				taunterGUID = aura.CasterGUID
 				aura.Stopped = true
 				if aura.TickTimer != nil {
 					aura.TickTimer.Stop()
@@ -17303,6 +17324,9 @@ func (s *session) expireCreatureAura(key creatureAuraKey, spellID uint32, slot u
 		}
 	}
 	s.server.auraMu.Unlock()
+	if wasTaunt {
+		s.server.clearCreatureTaunt(key, taunterGUID)
+	}
 	if wasCharm {
 		s.server.uncharmCreature(key, charmerGUID)
 		if charmer := s.server.findSessionByGUID(charmerGUID); charmer != nil && charmer.player != nil && charmer.player.Map == key.Map && charmer.player.InstanceID == key.InstanceID {
@@ -17321,6 +17345,8 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 	}
 	wasCharm := false
 	charmerGUID := uint64(0)
+	wasTaunt := false
+	taunterGUID := uint64(0)
 	s.auraMu.Lock()
 	var slot uint8
 	if s.activeCreatureAuras != nil {
@@ -17328,6 +17354,8 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 			if aura, exists := auras[spellID]; exists && aura != nil {
 				wasCharm = aura.AuraType == spellAuraCharm
 				charmerGUID = aura.CasterGUID
+				wasTaunt = aura.AuraType == spellAuraModTaunt
+				taunterGUID = aura.CasterGUID
 				aura.Stopped = true
 				slot = aura.Slot
 				if aura.Timer != nil {
@@ -17347,6 +17375,9 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 		}
 	}
 	s.auraMu.Unlock()
+	if wasTaunt {
+		s.clearCreatureTaunt(key, taunterGUID)
+	}
 	if wasCharm {
 		s.uncharmCreature(key, charmerGUID)
 		if charmer := s.findSessionByGUID(charmerGUID); charmer != nil && charmer.player != nil && charmer.player.Map == key.Map && charmer.player.InstanceID == key.InstanceID {

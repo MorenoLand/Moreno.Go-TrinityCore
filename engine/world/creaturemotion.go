@@ -979,6 +979,27 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		s.updatePetMotion(ctx, motion, players, now)
 		return
 	}
+	// ThreatManager::Update (ThreatManager.cpp:199-209): the 1s AI-tick
+	// re-runs victim selection (UpdateVictim -> ReselectVictim, 516-585).
+	// The tick is the only C++ path that re-gates the whole list, so it
+	// catches current-victim threat decay, taunt-aura expiry, and fixate
+	// changes the eager AddThreat gate never revisits.
+	if motion.InCombat && motion.ThreatMgr != nil {
+		inMeleeOf := func(victimGUID uint64) bool {
+			for i := range players {
+				if players[i].GUID != victimGUID || players[i].Sess == nil || players[i].Sess.player == nil {
+					continue
+				}
+				dist := distance3D(motion.X, motion.Y, motion.Z, players[i].X, players[i].Y, players[i].Z)
+				return inMeleeThreatRange(motion.CombatReach, players[i].Sess.player.CombatReach, dist)
+			}
+			return false
+		}
+		if switched, newVictim := motion.ThreatMgr.Update(100, inMeleeOf); switched && newVictim != 0 {
+			motion.TargetGUID = newVictim
+			s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, motion.ThreatMgr.SortedEntries())
+		}
+	}
 	if motion.Moving {
 		if now.Before(motion.MoveEnds) {
 			return

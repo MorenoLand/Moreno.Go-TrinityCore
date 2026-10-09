@@ -18,14 +18,270 @@ type ThreatManager struct {
 	currentVictim  uint64
 	entries        map[uint64]float32
 	lastClientSync time.Time
+	// updateTimerMs counts down to the next ThreatManager::Update
+	// (ThreatManager.cpp:199-209, THREAT_UPDATE_INTERVAL = 1000ms).
+	updateTimerMs int64
+	// fixateGUID mirrors _fixateRef (ThreatManager.cpp:494-511): the
+	// script-fixated victim, always preferred by victim selection.
+	fixateGUID uint64
+	// tauntExpiry mirrors the per-reference taunt state maintained by
+	// ThreatManager::TauntUpdate (ThreatManager.cpp:439-458): victim GUID
+	// -> taunt-aura expiry. A zero expiry means the aura carries no
+	// duration and the state lives until the aura is removed.
+	tauntExpiry map[uint64]time.Time
 }
 
 // NewThreatManager initializes a ThreatManager for a creature.
 func NewThreatManager(ownerGUID uint64) *ThreatManager {
 	return &ThreatManager{
-		ownerGUID: ownerGUID,
-		entries:   make(map[uint64]float32),
+		ownerGUID:   ownerGUID,
+		entries:     make(map[uint64]float32),
+		tauntExpiry: make(map[uint64]time.Time),
 	}
+}
+
+// FixateTarget mirrors ThreatManager::FixateTarget (ThreatManager.cpp:494-506):
+// a script-fixated victim already on the threat list becomes the preferred
+// victim; a zero or unknown victim clears the fixate.
+func (tm *ThreatManager) FixateTarget(victim uint64) {
+	if tm == nil {
+		return
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	if victim != 0 {
+		if _, ok := tm.entries[victim]; ok {
+			tm.fixateGUID = victim
+			return
+		}
+	}
+	tm.fixateGUID = 0
+}
+
+// GetFixateTarget mirrors ThreatManager::GetFixateTarget (ThreatManager.cpp:508-513).
+func (tm *ThreatManager) GetFixateTarget() uint64 {
+	if tm == nil {
+		return 0
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	return tm.fixateGUID
+}
+
+// ApplyTaunt records a MOD_TAUNT aura apply on the owner by the given caster,
+// the Go half of AuraEffect::HandleModTaunt -> ThreatManager::TauntUpdate
+// (SpellAuraEffects.cpp:2772-2781, ThreatManager.cpp:439-458). C++ keys the
+// taunt state per threat reference and rebuilds it from the owner's live
+// MOD_TAUNT aura effects; Go keys it per victim GUID with the aura's expiry,
+// which the Update tick re-evaluates (the EvaluateSuppressed(true) tail of
+// TauntUpdate has no Go model — suppressed/offline ref states are unmodeled).
+// A non-positive duration means the aura carries no duration: the state lives
+// until the aura is removed.
+func (tm *ThreatManager) ApplyTaunt(victim uint64, durationMs uint32) {
+	if tm == nil || victim == 0 {
+		return
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	if tm.tauntExpiry == nil {
+		tm.tauntExpiry = make(map[uint64]time.Time)
+	}
+	if durationMs > 0 {
+		tm.tauntExpiry[victim] = time.Now().Add(time.Duration(durationMs) * time.Millisecond)
+	} else {
+		tm.tauntExpiry[victim] = time.Time{}
+	}
+}
+
+// ClearTaunt drops one caster's taunt state, the remove arm of
+// AuraEffect::HandleModTaunt -> ThreatManager::TauntUpdate.
+func (tm *ThreatManager) ClearTaunt(victim uint64) {
+	if tm == nil || victim == 0 {
+		return
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	delete(tm.tauntExpiry, victim)
+}
+
+// applyCreatureTaunt bridges a MOD_TAUNT aura apply on a creature into its
+// threat manager's taunt state (AuraEffect::HandleModTaunt,
+// SpellAuraEffects.cpp:2772-2781 -> ThreatManager::TauntUpdate,
+// ThreatManager.cpp:439-458). A creature with no threat manager is a no-op,
+// matching C++ (TauntUpdate over an empty threat list records nothing).
+func (s *Server) applyCreatureTaunt(key creatureAuraKey, casterGUID uint64, durationMs uint32) {
+	if s == nil || key.GUID == 0 || casterGUID == 0 {
+		return
+	}
+	motion := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID)
+	if motion == nil || motion.ThreatMgr == nil {
+		return
+	}
+	motion.ThreatMgr.ApplyTaunt(casterGUID, durationMs)
+}
+
+// clearCreatureTaunt bridges a MOD_TAUNT aura removal into the threat
+// manager, the remove arm of AuraEffect::HandleModTaunt.
+func (s *Server) clearCreatureTaunt(key creatureAuraKey, casterGUID uint64) {
+	if s == nil || key.GUID == 0 || casterGUID == 0 {
+		return
+	}
+	motion := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID)
+	if motion == nil || motion.ThreatMgr == nil {
+		return
+	}
+	motion.ThreatMgr.ClearTaunt(casterGUID)
+}
+
+// isTauntedLocked reports whether the victim holds a live taunt state,
+// lazily expiring elapsed auras. Callers hold tm.mu.
+func (tm *ThreatManager) isTauntedLocked(victim uint64) bool {
+	exp, ok := tm.tauntExpiry[victim]
+	if !ok {
+		return false
+	}
+	if !exp.IsZero() && time.Now().After(exp) {
+		delete(tm.tauntExpiry, victim)
+		return false
+	}
+	return true
+}
+
+// threatUpdateIntervalMs mirrors THREAT_UPDATE_INTERVAL (ThreatManager.h:86).
+const threatUpdateIntervalMs = 1000
+
+// Update mirrors ThreatManager::Update (ThreatManager.cpp:199-209): every
+// THREAT_UPDATE_INTERVAL ms of accumulated combat time it re-runs victim
+// selection (UpdateVictim -> ReselectVictim, ThreatManager.cpp:516-585).
+// The tick is the only C++ path that re-gates the whole list, so it catches
+// current-victim threat decay, taunt-aura expiry, and fixate changes that the
+// eager AddThreat gate never revisits. inMelee classifies a candidate the way
+// _owner->IsWithinMeleeRange does per candidate; a nil predicate treats every
+// candidate as ranged (conservative: only the 130% gate can switch).
+// Returns switched=true when the current victim changed.
+func (tm *ThreatManager) Update(elapsedMs int64, inMelee func(uint64) bool) (switched bool, newVictim uint64) {
+	if tm == nil {
+		return false, 0
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	if len(tm.entries) == 0 {
+		return false, tm.currentVictim
+	}
+	tm.updateTimerMs -= elapsedMs
+	if tm.updateTimerMs > 0 {
+		return false, tm.currentVictim
+	}
+	tm.updateTimerMs = threatUpdateIntervalMs
+
+	// TauntUpdate's EvaluateSuppressed(true) tail re-evaluates aura-driven
+	// states; Go re-evaluates taunt expiries here (suppressed/offline ref
+	// states have no Go model).
+	now := time.Now()
+	for victim, exp := range tm.tauntExpiry {
+		if !exp.IsZero() && now.After(exp) {
+			delete(tm.tauntExpiry, victim)
+		}
+	}
+
+	newVictim = tm.reselectVictimLocked(inMelee)
+	if newVictim != tm.currentVictim {
+		tm.currentVictim = newVictim
+		return true, newVictim
+	}
+	return false, tm.currentVictim
+}
+
+// reselectVictimLocked mirrors ThreatManager::ReselectVictim
+// (ThreatManager.cpp:531-585) with the CompareReferencesLT comparator
+// (593-601). Callers hold tm.mu. The online/suppressed/offline leg of the
+// comparator has no Go model (refs are removed explicitly on death/evade),
+// and DETAUNT has no Go aura model, so the state precedence reduces to
+// TAUNT > NONE; among equal states the 110%/130% + melee dance is exact,
+// including the sorted-walk early-outs.
+func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 {
+	if len(tm.entries) == 0 {
+		return 0
+	}
+	// Fixated target is always preferred (ReselectVictim:540-541); a stale
+	// fixate whose entry is gone falls through like !IsAvailable().
+	if tm.fixateGUID != 0 {
+		if _, ok := tm.entries[tm.fixateGUID]; ok {
+			return tm.fixateGUID
+		}
+		tm.fixateGUID = 0
+	}
+
+	type candidate struct {
+		guid    uint64
+		threat  float32
+		taunted bool
+	}
+	cands := make([]candidate, 0, len(tm.entries))
+	for guid, threat := range tm.entries {
+		cands = append(cands, candidate{guid: guid, threat: threat, taunted: tm.isTauntedLocked(guid)})
+	}
+	// Comparator order: taunt state precedence (TAUNT > NONE), then threat
+	// descending — the heap order ReselectVictim walks.
+	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].taunted != cands[j].taunted {
+			return cands[i].taunted
+		}
+		return cands[i].threat > cands[j].threat
+	})
+
+	old := tm.currentVictim
+	if _, ok := tm.entries[old]; !ok {
+		old = 0
+	}
+	highest := cands[0]
+	// If we have no old victim, or the old victim is still highest, it wins.
+	if old == 0 || highest.guid == old {
+		return highest.guid
+	}
+	oldTaunted := tm.isTauntedLocked(old)
+	// Taunt-state precedence (CompareReferencesLT:593-601): a taunted
+	// highest beats a non-taunted old victim regardless of threat, and a
+	// taunted old victim keeps aggro against non-taunted candidates.
+	if highest.taunted != oldTaunted {
+		if highest.taunted {
+			return highest.guid
+		}
+		return old
+	}
+	oldThreat := tm.entries[old]
+	// If the highest doesn't break 110% of the old victim, nothing below it
+	// can either — old victim stays.
+	if !(oldThreat*1.1 < highest.threat) {
+		return old
+	}
+	// Above 130% it wins regardless of range.
+	if oldThreat*1.3 < highest.threat {
+		return highest.guid
+	}
+	// Between 110% and 130% it needs melee range.
+	if inMelee != nil && inMelee(highest.guid) {
+		return highest.guid
+	}
+	// The highest is ranged and below 130%: walk the sorted list for a
+	// melee candidate above 110% beneath it.
+	for _, c := range cands[1:] {
+		if c.guid == old {
+			return old
+		}
+		if c.taunted != oldTaunted {
+			return old
+		}
+		if !(oldThreat*1.1 < c.threat) {
+			return old
+		}
+		if inMelee != nil && inMelee(c.guid) {
+			return c.guid
+		}
+	}
+	// C++ ABORTs here ("manager desync"); Go keeps the old victim.
+	return old
 }
 
 // AddThreat adds threat for a victim and evaluates target switching.
@@ -52,15 +308,15 @@ func NewThreatManager(ownerGUID uint64) *ThreatManager {
 // The melee gate is per add, combat-reach-based via inMeleeThreatRange
 // (Unit::IsWithinMeleeRange -> GetMeleeRange, Unit.cpp:599-618), matching the
 // C++ per-candidate test positionally.
-// Documented no-bridge: FixateTarget/_fixateRef (always preferred in
-// ReselectVictim); taunt-state precedence in the comparator (TAUNT > NONE >
-// DETAUNT) with TauntUpdate driven by SPELL_AURA_MOD_TAUNT (Go taunt is the
-// one-shot MatchUnitThreatToHighestThreat in handleEffectTaunt); the
-// online/suppressed/offline ref states (ShouldBeOffline/ShouldBeSuppressed:
-// CanSeeOrDetect, _IsTargetAcceptable, CanCreatureAttack, immune flags,
-// melee-school immunity, confuse, breakable stun) - Go refs are removed only
-// via RemoveThreat/ClearThreat; ProcessAIUpdates/JustStartedThreateningMe
-// (boss hooks ride the new-victim broadcast instead).
+// Documented no-bridge: the online/suppressed/offline ref states
+// (ShouldBeOffline/ShouldBeSuppressed: CanSeeOrDetect, _IsTargetAcceptable,
+// CanCreatureAttack, immune flags, melee-school immunity, confuse,
+// breakable stun) - Go refs are removed only via RemoveThreat/ClearThreat;
+// DETAUNT (SPELL_AURA_MOD_DETAUNT, no Go aura model);
+// ProcessAIUpdates/JustStartedThreateningMe (boss hooks ride the new-victim
+// broadcast instead). FixateTarget and the taunt-state model are bridged:
+// the eager gate above honors fixate preference and taunt precedence, and
+// the Update tick runs the full ReselectVictim every second.
 // Out of scope for this unit: AddThreat's modifier arms
 // (CalculateModifiedThreat's SPELLMOD_THREAT spell mods) and the vehicle
 // redirect (Go has no vehicle model) belong to the HandleThreatSpells
@@ -111,9 +367,38 @@ func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) 
 		tm.entries[victim] = newThreat
 	}
 
+	// FixateTarget (ThreatManager.cpp:494-506) + ReselectVictim:540: the
+	// fixated victim is always preferred — the eager gate never switches
+	// away from it, and any add re-affirms it. A stale fixate whose entry
+	// is gone is dropped like C++'s !IsAvailable() fall-through.
+	if tm.fixateGUID != 0 {
+		if _, ok := tm.entries[tm.fixateGUID]; ok {
+			switched := tm.currentVictim != tm.fixateGUID
+			tm.currentVictim = tm.fixateGUID
+			return switched, tm.fixateGUID
+		}
+		tm.fixateGUID = 0
+	}
+
 	if tm.currentVictim == 0 || tm.currentVictim == victim {
 		tm.currentVictim = victim
 		return false, victim
+	}
+
+	// Taunt-state precedence (CompareReferencesLT, ThreatManager.cpp:593-601
+	// — TAUNT > NONE; DETAUNT has no Go aura model): a taunted adding victim
+	// outranks a non-taunted current victim regardless of the 110%/130%
+	// gate, and a taunted current victim keeps aggro against non-taunted
+	// adds — the aura-stickiness TauntUpdate maintains for the MOD_TAUNT
+	// duration. The Update tick re-affirms this every second.
+	addTaunted := tm.isTauntedLocked(victim)
+	currTaunted := tm.isTauntedLocked(tm.currentVictim)
+	if addTaunted != currTaunted {
+		if addTaunted {
+			tm.currentVictim = victim
+			return true, victim
+		}
+		return false, tm.currentVictim
 	}
 
 	currThreat := tm.entries[tm.currentVictim]
@@ -189,6 +474,12 @@ func (tm *ThreatManager) RemoveThreat(victim uint64) (switched bool, newVictim u
 	defer tm.mu.Unlock()
 
 	delete(tm.entries, victim)
+	// ThreatManager.cpp:809-810: purging the fixated reference clears the
+	// fixate; the victim's taunt state dies with its reference.
+	if tm.fixateGUID == victim {
+		tm.fixateGUID = 0
+	}
+	delete(tm.tauntExpiry, victim)
 	if tm.currentVictim == victim {
 		tm.currentVictim = 0
 		var highestGUID uint64
@@ -308,12 +599,25 @@ func (tm *ThreatManager) ClearThreat() {
 	defer tm.mu.Unlock()
 	tm.entries = make(map[uint64]float32)
 	tm.currentVictim = 0
+	tm.fixateGUID = 0
+	tm.tauntExpiry = make(map[uint64]time.Time)
+	tm.updateTimerMs = 0
 }
 
 // GetCurrentVictim returns the current primary threat target.
+// Reference: TrinityCore ThreatManager::GetCurrentVictim
+// (ThreatManager.cpp:210-217), which re-runs UpdateVictim when the current
+// reference went offline — Go re-selects when the current victim no longer
+// holds an entry (offline/suppressed ref states have no Go model; entries
+// are removed explicitly on death/evade).
 func (tm *ThreatManager) GetCurrentVictim() uint64 {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
+	if tm.currentVictim != 0 {
+		if _, ok := tm.entries[tm.currentVictim]; !ok {
+			tm.currentVictim = tm.reselectVictimLocked(nil)
+		}
+	}
 	return tm.currentVictim
 }
 
@@ -642,6 +946,11 @@ func (s *session) handleEffectTaunt(ctx context.Context, targetGUID uint64, spel
 	}
 	if motion.ThreatMgr == nil {
 		motion.ThreatMgr = NewThreatManager(targetGUID)
+	}
+	// Spell::EffectTaunt (SpellEffects.cpp:3155-3159): taunting a target
+	// already attacking the caster is a silent no-op.
+	if motion.ThreatMgr.GetCurrentVictim() == s.playerGUID {
+		return
 	}
 	switched, newVictim := motion.ThreatMgr.MatchUnitThreatToHighestThreat(s.playerGUID)
 	if switched || newVictim != motion.TargetGUID {
