@@ -599,6 +599,53 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		}
 		s.fireCreatureLuaEvent(ctx, fireMotion, scripting.CreatureEventOnEnterCombat, target)
 	}
+	if enteredCombat && fireMotion != nil {
+		// CombatAI::JustEngagedWith / CasterAI::JustEngagedWith
+		// (CombatAI.cpp:76-88, 145-164): AICOND_AGGRO template spells are
+		// cast once at the engage victim, non-triggered. The CasterAI
+		// random immediate combat-cast stays unbridged: Go has no AIName
+		// model to select CasterAI over CombatAI.
+		s.castAggroConditionSpells(ctx, fireMotion, firePlayerGUID)
+	}
+}
+
+// castAggroConditionSpells bridges the AICOND_AGGRO arm of
+// CombatAI::JustEngagedWith (CombatAI.cpp:76-88, inherited by CasterAI):
+// template spells classified AICOND_AGGRO by UnitAI::FillAISpellInfo
+// (UnitAI.cpp:189-196) — not castable-while-dead, and passive
+// (SPELL_ATTR0_PASSIVE) or infinite-duration (GetDuration() == -1) — are
+// cast once at the engage victim, non-triggered. Packet-only via
+// castCreatureSpell, matching the AICOND_DIE death-cast bridge in kill.go.
+// Spells whose DBC data is unavailable keep the existing rotation
+// behavior, so a missing DBC never silences a creature's spells.
+func (s *Server) castAggroConditionSpells(ctx context.Context, m *creatureMotion, victimGUID uint64) {
+	if s == nil || m == nil || victimGUID == 0 {
+		return
+	}
+	if len(m.Spells) == 0 && s.WorldStore != nil && s.WorldStore.DB != nil {
+		m.Spells = s.loadCreatureSpells(ctx, m.Entry)
+	}
+	if len(m.Spells) == 0 || s.Data == nil {
+		return
+	}
+	for _, spellID := range m.Spells {
+		spellInfo, found, err := s.Data.Spell(spellID)
+		if err != nil || !found {
+			continue
+		}
+		if spellInfo.Attributes&spellAttr0CastableWhileDead != 0 {
+			continue
+		}
+		aggro := spellInfo.Attributes&spellAttr0Passive != 0
+		if !aggro && spellInfo.DurationIndex != 0 {
+			if dur, ok, derr := s.Data.SpellDuration(spellInfo.DurationIndex, 1); derr == nil && ok && dur < 0 {
+				aggro = true
+			}
+		}
+		if aggro {
+			s.castCreatureSpell(ctx, m, spellID, victimGUID)
+		}
+	}
 }
 
 func (s *Server) charmCreature(ctx context.Context, key creatureAuraKey, charmerGUID uint64, charmerRace uint8) ([]uint32, uint8, uint8, bool) {
@@ -1739,6 +1786,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 				motion.BossAI.OnAggro(ctx, s, motion, p.GUID)
 			}
+			// CombatAI::JustEngagedWith AICOND_AGGRO arm (CombatAI.cpp:76-88):
+			// aggro-condition template spells are cast once at the engage
+			// victim, non-triggered.
+			s.castAggroConditionSpells(ctx, motion, p.GUID)
 			return
 		}
 	}
