@@ -9,12 +9,19 @@ import (
 // SpellCastTargetFlags unit bits (SpellInfo.h:41-47). ENEMY/ALLY/PARTY/RAID
 // are never sent by the client; they only validate the explicit unit target.
 const (
-	targetFlagUnit          uint32 = 0x2
-	targetFlagUnitRaid      uint32 = 0x4
-	targetFlagUnitParty     uint32 = 0x8
-	targetFlagUnitEnemy     uint32 = 0x80
-	targetFlagUnitAlly      uint32 = 0x100
-	targetFlagUnitPassenger uint32 = 0x100000 // TARGET_FLAG_UNIT_PASSENGER (SpellInfo.h:68)
+	targetFlagUnit           uint32 = 0x2
+	targetFlagUnitRaid       uint32 = 0x4
+	targetFlagUnitParty      uint32 = 0x8
+	targetFlagUnitEnemy      uint32 = 0x80
+	targetFlagUnitAlly       uint32 = 0x100
+	targetFlagUnitPassenger  uint32 = 0x100000 // TARGET_FLAG_UNIT_PASSENGER (SpellInfo.h:68)
+	targetFlagSourceLocation uint32 = 0x20     // TARGET_FLAG_SOURCE_LOCATION (SpellInfo.h:44)
+	targetFlagDestLocation   uint32 = 0x40     // TARGET_FLAG_DEST_LOCATION (SpellInfo.h:45)
+	targetFlagGameObject     uint32 = 0x800    // TARGET_FLAG_GAMEOBJECT (SpellInfo.h:54)
+	targetFlagGameObjectItem uint32 = 0x4000   // TARGET_FLAG_GAMEOBJECT_ITEM (SpellInfo.h:58)
+	targetFlagUnitMinipet    uint32 = 0x10000  // TARGET_FLAG_UNIT_MINIPET (SpellInfo.h:60)
+	// targetFlagUnitMask mirrors TARGET_FLAG_UNIT_MASK (SpellInfo.h:70-71).
+	targetFlagUnitMask uint32 = targetFlagUnit | targetFlagUnitRaid | targetFlagUnitParty | targetFlagUnitEnemy | targetFlagUnitAlly | targetFlagUnitDead | targetFlagUnitMinipet | targetFlagUnitPassenger
 )
 
 // UNIT_FIELD_BYTES_2 PvP-flag byte values (UnitDefines.h:103-106); Go's

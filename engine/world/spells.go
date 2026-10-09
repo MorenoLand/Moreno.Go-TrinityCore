@@ -67,6 +67,7 @@ const (
 	spellAttr4CastOnlyInOutland            uint32 = 0x04000000 // SPELL_ATTR4_CAST_ONLY_IN_OUTLAND (SharedDefines.h:586) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4SpellVsExtendCost            uint32 = 0x00000400 // SPELL_ATTR4_SPELL_VS_EXTEND_COST (SharedDefines.h:570) "Attack speed modifies cost" — ATTR4 is Go's AttributesEx4
 	targetUnitCaster                       uint32 = 1          // TARGET_UNIT_CASTER (SharedDefines.h:1442)
+	targetDestCaster                       uint32 = 18         // TARGET_DEST_CASTER (SharedDefines.h:1455)
 	spellAttr0UnaffectedByInvulnerability  uint32 = 0x20000000 // SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY (SharedDefines.h:441)
 	spellAttr0NotShapeshift                uint32 = 0x00010000 // SPELL_ATTR0_NOT_SHAPESHIFT (SharedDefines.h:428)
 	spellAttr0CuPickpocket                 uint32 = 0x00000400 // SPELL_ATTR0_CU_PICKPOCKET (SpellInfo.h:188) — custom attr, tested against AttributesCu
@@ -272,6 +273,9 @@ const (
 	spellEffectThreat                  = 63
 	spellEffectTriggerSpell            = 64
 	spellEffectTriggerSpellWithValue   = 142 // SPELL_EFFECT_TRIGGER_SPELL_WITH_VALUE (SpellEffects.cpp:211)
+	spellEffectTriggerMissile          = 32  // SPELL_EFFECT_TRIGGER_MISSILE (SpellEffects.cpp:101)
+	spellEffectTriggerMissileWithValue = 148 // SPELL_EFFECT_TRIGGER_MISSILE_SPELL_WITH_VALUE (SpellEffects.cpp:217)
+	spellEffectSkillStep               = 44  // SPELL_EFFECT_SKILL_STEP (SpellEffects.cpp:113)
 	spellEffectHealMaxHealth           = 67
 	spellEffectCreateItem              = 24
 	spellEffectCreateItem2             = 70
@@ -565,6 +569,81 @@ func (s *session) updateGatherSkill(ctx context.Context, skillID, skillValue, re
 		return false
 	}
 	return s.updateSkillPro(ctx, skillID, chance, skillGainGathering)
+}
+
+// applySkillStepEffect mirrors Spell::EffectLearnSkill
+// (SpellEffects.cpp:2637-2654): per player hit target, a non-negative damage
+// teaches the MiscValue skill line at the SkillTiers rank the damage names,
+// with the effect's calculated value as the step and the current pure skill
+// value (floored at 1) as the value. The TYPEID_PLAYER gate
+// (SpellEffects.cpp:2641-2642) is the session lookup below.
+func (s *session) applySkillStepEffect(ctx context.Context, eff wotlk.SpellEffect, effectTarget uint64) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	damage := eff.BasePoints + 1 // tree-wide flat convention for the handler damage
+	if damage < 0 {
+		return // SpellEffects.cpp:2644
+	}
+	targetSess := s.server.findSessionByGUID(effectTarget)
+	if targetSess == nil || targetSess.player == nil {
+		return
+	}
+	skillID := uint32(eff.MiscValue)
+	if _, found, err := s.server.Data.SkillRaceClassInfo(skillID, targetSess.player.Race, targetSess.player.Class); err != nil || !found {
+		return // SpellEffects.cpp:2648-2650: no race/class row for the skill
+	}
+	// SkillTierValue reads SkillTiers field 16+rank = tier->Value[rank-1]
+	// (SpellEffects.cpp:2653); rank 0 or >16 has no row, matching the C++
+	// damage-1 index on the 16-entry tier array.
+	tierMax, found, err := s.server.Data.SkillTierValue(skillID, targetSess.player.Race, targetSess.player.Class, uint16(damage))
+	if err != nil || !found {
+		return
+	}
+	step := eff.CalcValue() // SpellEffects.cpp:2656: Effects[effIndex].CalcValue()
+	if step < 0 {
+		step = 0
+	}
+	value := playerPureSkillValue(targetSess.player, skillID)
+	if value < 1 {
+		value = 1
+	}
+	targetSess.setSkillWithStep(ctx, uint16(skillID), uint16(step), value, tierMax)
+}
+
+// setSkillWithStep mirrors the add/update legs of Player::SetSkill
+// (Player.cpp: SetSkill): an existing skill takes the new step, value, and
+// max; a missing skill is appended. Documented no-bridge: UpdateSkillEnchantments
+// (the 21:32 run's standing delta), LearnSkillRewardedSpells (Go only runs
+// the rewarded-spell pass at login via loadSkillRewardedSpells), and the
+// SKILL_DELETED/uState bookkeeping (Go persists immediately).
+func (s *session) setSkillWithStep(ctx context.Context, skillID, step, value, maxVal uint16) {
+	if s == nil || s.player == nil {
+		return
+	}
+	for i := range s.player.Skills {
+		if s.player.Skills[i].Skill != skillID {
+			continue
+		}
+		s.player.Skills[i].Step = step
+		s.player.Skills[i].Value = value
+		s.player.Skills[i].Max = maxVal
+		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_skills SET value = ?, max = ? WHERE guid = ? AND skill = ?", value, maxVal, s.playerGUID, skillID)
+		}
+		s.sendPlayerUpdate()
+		s.setAchievementCriteria(criteriaTypeReachSkillLevel, uint32(skillID), uint32(value))
+		s.setAchievementCriteria(criteriaTypeLearnSkillLevel, uint32(skillID), uint32(maxVal))
+		return
+	}
+	s.player.Skills = append(s.player.Skills, playerSkill{Skill: skillID, Step: step, Value: value, Max: maxVal})
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", s.playerGUID, skillID, value, maxVal)
+	}
+	s.sendPlayerUpdate()
+	s.updateAchievementCriteria(criteriaTypeLearnSkillLine, uint32(skillID), 1)
+	s.setAchievementCriteria(criteriaTypeReachSkillLevel, uint32(skillID), uint32(value))
+	s.setAchievementCriteria(criteriaTypeLearnSkillLevel, uint32(skillID), uint32(maxVal))
 }
 
 // updateCraftSkill mirrors Player::UpdateCraftSkill (Player.cpp:5789-5818):
@@ -2773,6 +2852,73 @@ func spellNeedsExplicitUnitTarget(spell wotlk.Spell) bool {
 		}
 	}
 	return false
+}
+
+// spellEffectProvidedTargetMask mirrors SpellEffectInfo::GetProvidedTargetMask
+// (SpellInfo.cpp:576-579): the OR of the target-flag masks of the effect's
+// implicit targets' object types (GetTargetFlagMask, SpellInfo.cpp:38-64).
+func spellEffectProvidedTargetMask(eff wotlk.SpellEffect) uint32 {
+	return spellImplicitTargetObjectFlag(eff.ImplicitTargetA) | spellImplicitTargetObjectFlag(eff.ImplicitTargetB)
+}
+
+// spellImplicitTargetObjectFlag mirrors the object-type leg of
+// GetTargetFlagMask (SpellInfo.cpp:38-64) for the ObjectType column of the
+// SpellImplicitTargetInfo _data table (SpellInfo.cpp:216-340). Target numbers
+// absent from the table (0 and the NYI rows) carry TARGET_OBJECT_TYPE_NONE.
+func spellImplicitTargetObjectFlag(target uint32) uint32 {
+	switch target {
+	case 22:
+		return targetFlagSourceLocation // TARGET_OBJECT_TYPE_SRC
+	case 23, 40, 51, 52, 108:
+		return targetFlagGameObject // TARGET_OBJECT_TYPE_GOBJ
+	case 26:
+		return targetFlagGameObjectItem // TARGET_OBJECT_TYPE_GOBJ_ITEM
+	case 93:
+		return targetFlagCorpseAlly | targetFlagCorpseEnemy // TARGET_OBJECT_TYPE_CORPSE
+	case 0, 10, 12, 13, 14, 19, 62, 107, 109:
+		return 0 // TARGET_OBJECT_TYPE_NONE
+	}
+	if isDestImplicitTarget(target) {
+		return targetFlagDestLocation // TARGET_OBJECT_TYPE_DEST
+	}
+	return targetFlagUnit // TARGET_OBJECT_TYPE_UNIT (all other tabled numbers)
+}
+
+// isDestImplicitTarget lists the implicit target numbers whose _data row
+// carries TARGET_OBJECT_TYPE_DEST (SpellInfo.cpp:216-340).
+func isDestImplicitTarget(target uint32) bool {
+	switch target {
+	case 9, 17, 18, 28, 29, 32, 36, 39, 41, 42, 43, 44, 46, 47, 48, 49,
+		50, 53, 55, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75,
+		76, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 91, 106, 110:
+		return true
+	default:
+		return false
+	}
+}
+
+// spellNeedsToBeTriggeredByCaster mirrors SpellInfo::NeedsToBeTriggeredByCaster
+// (SpellInfo.cpp:1052-1086): true when the triggered spell needs an explicit
+// unit target, or when the triggering spell is channeled and any of the
+// triggered spell's effects that is not caster-targeted provides a unit
+// target. The commented-out channel-selection-category leg
+// (SpellInfo.cpp:1058-1069) is dead in C++ and stays unmodeled.
+func spellNeedsToBeTriggeredByCaster(triggered, triggering wotlk.Spell) bool {
+	if spellNeedsExplicitUnitTarget(triggered) {
+		return true
+	}
+	if !isChanneledSpell(triggering) {
+		return false
+	}
+	var mask uint32
+	for _, eff := range triggered.Effects {
+		if eff.ImplicitTargetA == targetUnitCaster || eff.ImplicitTargetA == targetDestCaster ||
+			eff.ImplicitTargetB == targetUnitCaster || eff.ImplicitTargetB == targetDestCaster {
+			continue
+		}
+		mask |= spellEffectProvidedTargetMask(eff)
+	}
+	return mask&targetFlagUnitMask != 0
 }
 
 // checkChargeCast mirrors the SPELL_EFFECT_CHARGE leg of the CheckCast
@@ -6952,6 +7098,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.triggerSpellEffectTarget(effCtx, spellID, eff, effectTarget)
 				}
 			case spellEffectAddExtraAttacks: // 19: SPELL_EFFECT_ADD_EXTRA_ATTACKS
+			case spellEffectTriggerMissile, spellEffectTriggerMissileWithValue:
+				// Spell::EffectTriggerMissileSpell (SpellEffects.cpp:996-1043)
+				// — per-target legs ride runTriggerMissileEffect (the
+				// HIT_TARGET / HIT handle-mode split is structural there).
+				s.runTriggerMissileEffect(ctx, spell, eff, hitTargets)
+			case spellEffectSkillStep: // 44: SPELL_EFFECT_SKILL_STEP
+				// Spell::EffectLearnSkill (SpellEffects.cpp:2637-2654).
+				for _, effectTarget := range hitTargets {
+					s.applySkillStepEffect(ctx, eff, effectTarget)
+				}
 				// Spell::EffectAddExtraAttacks (SpellEffects.cpp:4301-4314)
 				// banks the effect's damage as pending extra swings on the
 				// effect's unit target when none are pending. The known
@@ -8780,10 +8936,17 @@ func (s *session) castSpellDirectWithOptions(ctx context.Context, spellID uint32
 
 func (s *session) castSpellDirectWithBasePoint(ctx context.Context, spellID uint32, targetGUID uint64, basePoint uint32) {
 	value := int32(basePoint)
-	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, &value)
+	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, []int32{value})
 }
 
-func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint32, targetGUID uint64, firstLogin bool, basePoint0 *int32) {
+// castSpellDirectWithBasePoints overrides every listed effect's base points
+// (C++ CastSpellExtraArgs sets SPELLVALUE_BASE_POINT0+i for i in
+// 0..MAX_SPELL_EFFECTS-1, SpellEffects.cpp:989-992, 1037-1040).
+func (s *session) castSpellDirectWithBasePoints(ctx context.Context, spellID uint32, targetGUID uint64, basePoints []int32) {
+	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, basePoints)
+}
+
+func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint32, targetGUID uint64, firstLogin bool, basePoints []int32) {
 	if s == nil || s.player == nil || spellID == 0 {
 		return
 	}
@@ -8817,8 +8980,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	if !found {
 		spell = wotlk.Spell{ID: spellID}
 	}
-	if basePoint0 != nil && len(spell.Effects) != 0 {
-		spell.Effects[0].BasePoints = *basePoint0 - 1
+	if basePoints != nil && len(spell.Effects) != 0 {
+		// The override lands on the tree-wide flat convention (BasePoints+1
+		// is the effect damage), so each entry is stored minus one.
+		for i, bp := range basePoints {
+			if i < len(spell.Effects) {
+				spell.Effects[i].BasePoints = bp - 1
+			}
+		}
 	}
 
 	castID := uint8(0) // C++ m_cast_count stays 0 for triggered casts (Spell.cpp:602; set nonzero only for client-initiated casts, Player.cpp:8251)
@@ -8980,6 +9149,12 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// special cases are per-target LAUNCH_TARGET legs; the
 			// handle-mode split is structural on both paths).
 			s.triggerSpellEffectTarget(ctx, spellID, eff, targetGUID)
+		} else if eff.Effect == spellEffectTriggerMissile || eff.Effect == spellEffectTriggerMissileWithValue {
+			// Spell::EffectTriggerMissileSpell per-target legs ride
+			// runTriggerMissileEffect on the triggered path too (the HIT
+			// arm needs an empty target list, which this path never
+			// produces — targetGUID is always resolved here).
+			s.runTriggerMissileEffect(ctx, spell, eff, []uint64{targetGUID})
 		} else if eff.Effect == spellEffectThreat {
 			s.applySpellThreat(ctx, spell, targetGUID, eff.BasePoints+1)
 		} else if eff.Effect == spellEffectHealMaxHealth {
@@ -9238,8 +9413,8 @@ const (
 
 // triggerSpellEffectTarget mirrors one target invocation of
 // Spell::EffectTriggerSpell (SpellEffects.cpp:823-996): the zero-trigger and
-// unknown-spell gates, the TRIGGER_SPELL_WITH_VALUE base-point override, the
-// effect-64 special cases, and the normal triggered cast. Both dispatch sites
+// unknown-spell gates, the TRIGGER_SPELL_WITH_VALUE multi-base-point
+// override, the effect-64 special cases, and the normal triggered cast. Both dispatch sites
 // (the client-cast hit loop and the triggered-cast path) share it.
 // Already-covered legs: the effectHandleMode gate (823-826, LAUNCH_TARGET /
 // LAUNCH) is structural — both Go sites run in the hit phase (the
@@ -9263,11 +9438,9 @@ func (s *session) triggerSpellEffectTarget(ctx context.Context, spellID uint32, 
 		return
 	}
 	if eff.Effect == spellEffectTriggerSpellWithValue {
-		// SpellEffects.cpp:989-992: TRIGGER_SPELL_WITH_VALUE overrides the
-		// triggered spell's base points with the effect damage. Go's
-		// override machinery (castSpellDirectWithOverrides) covers effect 0
-		// only — C++ sets all MAX_SPELL_EFFECTS — documented delta. The
-		// effect damage lands on the tree-wide flat convention
+		// SpellEffects.cpp:989-992: TRIGGER_SPELL_WITH_VALUE sets every base
+		// point (MAX_SPELL_EFFECTS = 3, SharedDefines.h) to the effect damage.
+		// The effect damage lands on the tree-wide flat convention
 		// (BasePoints+1), clamped at zero like the damage model.
 		bp := eff.BasePoints + 1
 		if bp < 0 {
@@ -9276,7 +9449,7 @@ func (s *session) triggerSpellEffectTarget(ctx context.Context, spellID uint32, 
 		if _, found, err := s.server.Data.Spell(eff.TriggerSpell); err != nil || !found {
 			return
 		}
-		s.castSpellDirectWithBasePoint(ctx, eff.TriggerSpell, effectTarget, uint32(bp))
+		s.castSpellDirectWithBasePoints(ctx, eff.TriggerSpell, effectTarget, []int32{bp, bp, bp})
 		return
 	}
 	if s.triggerSpellSpecialCase(ctx, spellID, eff, effectTarget) {
@@ -9334,7 +9507,7 @@ func (s *session) triggerSpellSpecialCase(ctx context.Context, spellID uint32, e
 		// (unitTarget->CastSpell(unitTarget, ...)); every Go cast runs on
 		// the player session, so the heal lands with the right amount but
 		// the caster attribution differs — documented delta.
-		s.castSpellDirectWithOverrides(ctx, triggerReplenishLifeSpell, effectTarget, false, &bp0)
+		s.castSpellDirectWithOverrides(ctx, triggerReplenishLifeSpell, effectTarget, false, []int32{bp0})
 		return true
 	case triggerReplenishManaSpell:
 		// SpellEffects.cpp:865-889: Replenish Mana (33394) — cannot target
@@ -9350,7 +9523,7 @@ func (s *session) triggerSpellSpecialCase(ctx context.Context, spellID uint32, e
 			return true
 		}
 		bp0 := eff.BasePoints
-		s.castSpellDirectWithOverrides(ctx, triggerReplenishManaSpell, effectTarget, false, &bp0)
+		s.castSpellDirectWithOverrides(ctx, triggerReplenishManaSpell, effectTarget, false, []int32{bp0})
 		return true
 	case triggerDemonicEmpowerSuccub:
 		// SpellEffects.cpp:900-908: Demonic Empowerment (succubus) — strip
@@ -9381,6 +9554,76 @@ func (s *session) triggerSpellSpecialCase(ctx context.Context, spellID uint32, e
 		return true
 	}
 	return false
+}
+
+// runTriggerMissileEffect mirrors Spell::EffectTriggerMissileSpell
+// (SpellEffects.cpp:996-1043), the handler behind SPELL_EFFECT_TRIGGER_MISSILE
+// (32) and SPELL_EFFECT_TRIGGER_MISSILE_SPELL_WITH_VALUE (148). The C++
+// handle-mode split is structural: the per-unit-target loop is the
+// SPELL_EFFECT_HANDLE_HIT_TARGET arm (1017-1022) and the empty-target leg is
+// the SPELL_EFFECT_HANDLE_HIT arm (1024-1034). The effectHandleMode gate
+// itself (998-1000) is vacuous — both Go dispatch sites run in the hit phase.
+func (s *session) runTriggerMissileEffect(ctx context.Context, parent wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	if eff.TriggerSpell == 0 {
+		// SpellEffects.cpp:1002-1008: no triggered spell — warn and return
+		// (the warn log has no Go equivalent).
+		return
+	}
+	triggered, found, err := s.server.Data.Spell(eff.TriggerSpell)
+	if err != nil || !found {
+		// SpellEffects.cpp:1010-1015: unknown triggered spell — log error
+		// and return.
+		return
+	}
+	if len(hitTargets) == 0 {
+		// SPELL_EFFECT_HANDLE_HIT arm (SpellEffects.cpp:1024-1034): with no
+		// unit targets the trigger fires on the caster unless the triggered
+		// spell needs to be triggered by the caster AND the parent effect
+		// provides a unit target (then it waits for HIT_TARGET).
+		if spellNeedsToBeTriggeredByCaster(triggered, parent) &&
+			spellEffectProvidedTargetMask(eff)&targetFlagUnitMask != 0 {
+			return
+		}
+		// The triggered spell's explicit-dest leg (1030-1031, targets.SetDst)
+		// has no Go model (triggered casts carry no dest target; the
+		// channel-dest spells resolve inside castSpellDirectWithOverrides),
+		// and the GO-caster leg (1033-1034) is unmodeled tree-wide — the
+		// cast lands on the caster, matching the unit-caster leg (1032).
+		s.castTriggerMissile(ctx, eff, s.playerGUID)
+		return
+	}
+	for _, effectTarget := range hitTargets {
+		// SPELL_EFFECT_HANDLE_HIT_TARGET arm (SpellEffects.cpp:1017-1022):
+		// per unit target the trigger fires only when the triggered spell
+		// needs to be triggered by the caster.
+		if !spellNeedsToBeTriggeredByCaster(triggered, parent) {
+			continue
+		}
+		s.castTriggerMissile(ctx, eff, effectTarget)
+	}
+}
+
+// castTriggerMissile runs the CastSpell tail of Spell::EffectTriggerMissileSpell
+// (SpellEffects.cpp:1036-1043) for one resolved target.
+func (s *session) castTriggerMissile(ctx context.Context, eff wotlk.SpellEffect, targetGUID uint64) {
+	if eff.Effect == spellEffectTriggerMissileWithValue {
+		// SpellEffects.cpp:1037-1040: the with-value arm sets every base
+		// point (MAX_SPELL_EFFECTS = 3, SharedDefines.h) to the effect
+		// damage (the tree-wide flat convention: BasePoints+1, clamped at
+		// zero like the damage model).
+		bp := eff.BasePoints + 1
+		if bp < 0 {
+			bp = 0
+		}
+		s.castSpellDirectWithBasePoints(ctx, eff.TriggerSpell, targetGUID, []int32{bp, bp, bp})
+		return
+	}
+	// SpellEffects.cpp:1042-1043: m_caster->CastSpell(targets, id, args) —
+	// the original-caster GUID is a GO-cast leg, unmodeled tree-wide.
+	s.castSpellDirect(ctx, eff.TriggerSpell, targetGUID)
 }
 
 // triggerTargetMaxHealth resolves the target's max health for the Replenish
