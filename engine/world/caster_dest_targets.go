@@ -1,6 +1,7 @@
 package world
 
 import (
+	"context"
 	"math"
 	"math/rand/v2"
 
@@ -133,4 +134,32 @@ func totemSpellDestTarget(spell wotlk.Spell) (uint32, uint32, bool) {
 		}
 	}
 	return 0, 0, false
+}
+
+// spellTargetPositionDest ports the TARGET_DEST_DB (17) arm of
+// Spell::SelectImplicitCasterDestTargets (Spell.cpp:1342-1357): the
+// destination comes from `spell_target_position` for (spellID, effIndex).
+// Spells with a TELEPORT_UNITS (5) or BIND (11) effect take the row's map
+// and coordinates; other spells only when the row sits on the caster's
+// map. A zero row orientation falls back to the caster's orientation,
+// mirroring Spell::EffectTeleportUnits (SpellEffects.cpp:1219-1221) where
+// the unit target is the caster. No row returns false — C++ falls back to
+// the object target (the caster), a self-teleport no-op.
+func (s *session) spellTargetPositionDest(ctx context.Context, spell wotlk.Spell, spellID uint32, effIndex uint32) (x, y, z, orientation float32, mapID uint32, ok bool) {
+	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return 0, 0, 0, 0, 0, false
+	}
+	var rowMap int64
+	var rx, ry, rz, rOri float64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT MapID, PositionX, PositionY, PositionZ, Orientation FROM spell_target_position WHERE ID = ? AND EffectIndex = ?", spellID, effIndex).Scan(&rowMap, &rx, &ry, &rz, &rOri); err != nil {
+		return 0, 0, 0, 0, 0, false
+	}
+	if !spellHasEffect(spell, 5) && !spellHasEffect(spell, spellEffectBind) && uint32(rowMap) != s.player.Map {
+		return 0, 0, 0, 0, 0, false
+	}
+	ori := float32(rOri)
+	if ori == 0 {
+		ori = s.player.Orientation
+	}
+	return float32(rx), float32(ry), float32(rz), ori, uint32(rowMap), true
 }

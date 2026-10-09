@@ -10,6 +10,7 @@ import (
 )
 
 const (
+	implicitTargetNearbyEnemy         uint32 = 2  // TARGET_UNIT_NEARBY_ENEMY (SharedDefines.h:1443)
 	implicitTargetNearbyParty         uint32 = 3  // TARGET_UNIT_NEARBY_PARTY (SharedDefines.h:1443)
 	implicitTargetNearbyAlly          uint32 = 4  // TARGET_UNIT_NEARBY_ALLY
 	implicitTargetLastTargetAreaParty uint32 = 37 // TARGET_UNIT_LASTTARGET_AREA_PARTY
@@ -58,6 +59,76 @@ func isFriendlyNearbySpell(spell wotlk.Spell) bool {
 		}
 	}
 	return false
+}
+
+// isHostileNearbySpell reports the spells Spell::SelectImplicitNearbyTargets
+// (Spell.cpp:1036) resolves with TARGET_CHECK_ENEMY: any effect carrying
+// TARGET_UNIT_NEARBY_ENEMY (2).
+func isHostileNearbySpell(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		if eff.ImplicitTargetA == implicitTargetNearbyEnemy || eff.ImplicitTargetB == implicitTargetNearbyEnemy {
+			return true
+		}
+	}
+	return false
+}
+
+// spellHostileNearbyTarget ports Spell::SelectImplicitNearbyTargets
+// (Spell.cpp:1036) + Spell::SearchNearbyTarget (Spell.cpp:1869) for
+// TARGET_UNIT_NEARBY_ENEMY (2): the single nearest hostile unit within
+// GetMaxRange(false) — the spell's hostile max range — passing
+// SpellInfo::CheckTarget and TARGET_CHECK_ENEMY (Spell.cpp:8323-8328:
+// totem rejection + IsValidAttackTarget, proxied by isAttackableFaction
+// for creatures and the alliance split for players, like the area-enemy
+// path). The nearby check is a 3D distance with strict less-than,
+// shrinking to the nearest match (WorldObjectSpellNearbyTargetCheck,
+// Spell.cpp:8389-8399). The caster fails its own IsValidAttackTarget, so
+// it is never selected. No match returns false and the caller fails the
+// cast with SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993;
+// Spell.cpp:1111). Documented deltas: the ImplicitTargetConditions arm
+// (base WorldObjectSpellTargetCheck tail, Spell.cpp:8380-8387) is not
+// wired — Go's condition evaluator is entry-oriented (entry_targets.go);
+// corpse-type candidates have no Go model.
+func (s *session) spellHostileNearbyTarget(ctx context.Context, spell wotlk.Spell) (uint64, bool) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return 0, false
+	}
+	rangeEntry, ok, err := s.server.Data.SpellRange(spell.RangeIndex)
+	if err != nil || !ok || rangeEntry.MaxHostile <= 0 {
+		return 0, false
+	}
+	maxRange := float64(rangeEntry.MaxHostile)
+	player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	bestGUID := uint64(0)
+	bestDist := maxRange
+	s.friendlyScanCandidates(ctx, s.player.X, s.player.Y, float32(maxRange), func(c friendlyCandidate) {
+		if c.guid == s.playerGUID || c.mapID != player.Map || c.instanceID != player.InstanceID ||
+			c.health == 0 || spellTargetUnitBlocked(spell, c.unitFlags, c.flagsExtra, false) ||
+			s.server.isTotemGUID(c.guid) {
+			return
+		}
+		if c.isPlayer {
+			if c.alliance {
+				return
+			}
+		} else if !s.server.isAttackableFaction(c.faction, player) {
+			return
+		}
+		dist := distance3D(c.x, c.y, c.z, s.player.X, s.player.Y, s.player.Z)
+		// WorldObjectSpellNearbyTargetCheck (Spell.cpp:8394): strict
+		// less-than, shrinking to the nearest match.
+		if dist < bestDist {
+			bestDist = dist
+			bestGUID = c.guid
+		}
+	})
+	if bestGUID == 0 {
+		return 0, false
+	}
+	return bestGUID, true
 }
 
 func isFriendlyConeSpell(spell wotlk.Spell) bool {

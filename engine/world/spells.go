@@ -6273,6 +6273,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	areaSpell := isAreaEnemySpell(spell)
 	friendlyAreaSpell := isFriendlyAreaSpell(spell)
 	friendlyNearbySpell := isFriendlyNearbySpell(spell)
+	hostileNearbySpell := isHostileNearbySpell(spell)
 	entryNearbySpell := isEntryNearbySpell(spell)
 	goNearbyEntrySpell := isGONearbyEntrySpell(spell)
 	entryAreaSpell := isEntryAreaSpell(spell)
@@ -6315,6 +6316,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993).
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 11), true)
 			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no entry target")
+			return
+		}
+	} else if hostileNearbySpell {
+		// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036):
+		// TARGET_UNIT_NEARBY_ENEMY (2) — the single nearest hostile unit
+		// becomes the target; no match fails the cast.
+		if nearby, ok := s.spellHostileNearbyTarget(ctx, spell); ok {
+			hitTargets = []uint64{nearby}
+		} else {
+			// Spell.cpp:1111: no target found ->
+			// SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993).
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 11), true)
+			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no hostile nearby target")
 			return
 		}
 	} else if entryAreaSpell {
@@ -7857,13 +7871,32 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
 				s.applySelfResurrectEffect(spell)
-			case 5: // SPELL_EFFECT_TELEPORT_UNITS (e.g. Hearthstone 8690, Astral Recall 556)
-				if (spellID == 8690 || spellID == 556) && s.player != nil {
+			case 5: // SPELL_EFFECT_TELEPORT_UNITS
+				if s.player == nil {
+					break
+				}
+				if spellID == 8690 || spellID == 556 {
+					// Spell::SelectImplicitCasterDestTargets
+					// (Spell.cpp:1339-1341): TARGET_DEST_HOME (9) — Hearthstone
+					// 8690 and Astral Recall 556 resolve to the player's
+					// homebind with the caster's CURRENT orientation (not the
+					// bind orientation) and the bind map. EffectTeleportUnits
+					// (SpellEffects.cpp:1219-1221) only substitutes the unit
+					// target's orientation when the dest orientation is zero;
+					// with the selection-time orientation set it is preserved.
 					hbMap, hbX, hbY, hbZ := s.player.HomebindMap, s.player.HomebindX, s.player.HomebindY, s.player.HomebindZ
 					if hbX == 0 && hbY == 0 && hbZ == 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 						_ = s.server.WorldStore.DB.QueryRowContext(effCtx, "SELECT map, position_x, position_y, position_z FROM playercreateinfo WHERE race = ? AND class = ? LIMIT 1", s.player.Race, s.player.Class).Scan(&hbMap, &hbX, &hbY, &hbZ)
 					}
-					s.teleportTo(hbMap, hbX, hbY, hbZ, 0)
+					s.teleportTo(hbMap, hbX, hbY, hbZ, s.player.Orientation)
+				} else if x, y, z, ori, mapID, ok := s.spellTargetPositionDest(effCtx, spell, spellID, uint32(effectIndex)); ok {
+					// Spell::SelectImplicitCasterDestTargets
+					// (Spell.cpp:1342-1357): TARGET_DEST_DB (17) — fixed
+					// teleports (e.g. 3561 Teleport: Stormwind) resolve the
+					// destination from `spell_target_position`. No row falls
+					// back to the object target (the caster) in C++ — a
+					// self-teleport no-op — so Go does nothing.
+					s.teleportTo(mapID, x, y, z, ori)
 				}
 			case 162: // SPELL_EFFECT_TALENT_SPEC_SELECT
 				targetSpec := uint8(0)
