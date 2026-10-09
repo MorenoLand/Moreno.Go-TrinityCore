@@ -18876,19 +18876,32 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldHealth: newHP})
 			// Unit::DealHeal -> ForwardThreatForAssistingMe(caster,
 			// effectiveHeal * 0.5f, SpellAuraEffects.cpp:5411): healing a
-			// creature pulls threat on the engaged attackers.
+			// creature pulls threat on the engaged attackers — creature
+			// casters too (the player-only helper no-ops without a session,
+			// so creature healers take the motion-map path).
 			if heal > overheal {
-				s.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, heal-overheal)
+				effectiveHeal := heal - overheal
+				if tickCaster != nil {
+					s.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, effectiveHeal)
+				} else {
+					s.server.distributeCreatureHealingThreat(context.Background(), key.Map, key.InstanceID, aura.CasterGUID, aura.TargetGUID, effectiveHeal)
+				}
 			}
 		}
 		// SpellAuraEffects.cpp:5411-5433 — Health Funnel caster cost, after
 		// the heal (C++ order).
-		if healthFunnel && tickCaster != nil {
+		if healthFunnel {
 			effectiveHeal := uint32(0)
 			if heal > overheal {
 				effectiveHeal = heal - overheal
 			}
-			tickCaster.applyHealthFunnelSelfDamage(aura.SpellID, tickSpell.ManaPerSecond, effectiveHeal, uint8(aura.SchoolMask))
+			if tickCaster != nil {
+				tickCaster.applyHealthFunnelSelfDamage(aura.SpellID, tickSpell.ManaPerSecond, effectiveHeal, uint8(aura.SchoolMask))
+			} else {
+				// Creature casters pay the ManaPerSecond cost too; no
+				// session exists to hold it.
+				s.applyCreatureHealthFunnelSelfDamage(ctx, aura.CasterGUID, key.Map, key.InstanceID, aura.SpellID, tickSpell.ManaPerSecond, effectiveHeal, uint8(aura.SchoolMask))
+			}
 		}
 		return true
 
@@ -19413,6 +19426,79 @@ func (s *session) applyHealthFunnelSelfDamage(spellID, manaPerSecond, effectiveH
 	} else {
 		s.player.Health -= funnelDamage
 		s.sendPlayerUpdate()
+	}
+}
+
+// applyCreatureHealthFunnelSelfDamage runs the Health Funnel caster cost
+// (SpellAuraEffects.cpp:5414-5433) when the funnel's caster is a creature:
+// uint32 funnelDamage = ManaPerSecond — never spell-power-scaled — clamped to
+// the effective heal, DealDamageMods absorb has no Go creature model, then
+// Unit::DealDamage(caster, caster, funnelDamage, cleanDamage, SELF_DAMAGE,
+// school, spellInfo, true): no procs, and the kill leg runs with the caster
+// as its own killer. Rage-from-damage-received needs attacker != victim
+// (Unit.cpp:921), so self-damage generates none.
+func (s *session) applyCreatureHealthFunnelSelfDamage(ctx context.Context, casterGUID uint64, mapID, instanceID uint32, spellID, manaPerSecond, effectiveHeal uint32, schoolMask uint8) {
+	if s == nil || s.server == nil || casterGUID == 0 {
+		return
+	}
+	funnelDamage := manaPerSecond
+	if funnelDamage > effectiveHeal && effectiveHeal > 0 {
+		funnelDamage = effectiveHeal
+	}
+	if funnelDamage == 0 {
+		return
+	}
+	srv := s.server
+	srv.motionMu.Lock()
+	motion := srv.findCreatureMotionLocked(mapID, instanceID, casterGUID)
+	if motion == nil || motion.Health == 0 {
+		srv.motionMu.Unlock()
+		return
+	}
+	casterHealth := motion.Health
+	overkill := uint32(0)
+	if funnelDamage >= casterHealth {
+		overkill = funnelDamage - casterHealth
+	}
+	logPkt := buildHealthFunnelDamageLog(casterGUID, casterGUID, spellID, funnelDamage, overkill, schoolMask)
+	newHealth := casterHealth
+	if funnelDamage < casterHealth {
+		newHealth = casterHealth - funnelDamage
+		motion.Health = newHealth
+	}
+	casterDead := funnelDamage >= casterHealth
+	var corpseFlags uint32
+	var cx, cy, cz float32
+	if casterDead {
+		motion.Health = 0
+		motion.DynamicFlags |= unitDynFlagLootable
+		corpseFlags = motion.DynamicFlags
+		motion.InCombat = false
+		motion.TargetGUID = 0
+		motion.Moving = false
+		if motion.ThreatMgr != nil {
+			motion.ThreatMgr.ClearThreat()
+		}
+		cx, cy, cz = motion.X, motion.Y, motion.Z
+	}
+	srv.motionMu.Unlock()
+	srv.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, nil)
+	if !casterDead {
+		srv.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, casterGUID, map[int]uint32{unitFieldHealth: newHealth})
+		return
+	}
+	srv.stopCreatureMotionInInstance(mapID, instanceID, casterGUID, cx, cy, cz)
+	srv.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, casterGUID, map[int]uint32{
+		unitFieldHealth:       0,
+		unitFieldDynamicFlags: corpseFlags,
+	})
+	srv.broadcastThreatClearInInstance(mapID, instanceID, casterGUID)
+	srv.clearCreatureAuras(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: casterGUID})
+	if s.player != nil {
+		// C++ Unit::Kill runs with the caster as its own killer; no player
+		// tap or XP (attacker is a creature), so onCreatureKilled carries the
+		// Eluna/respawn dispatch with the motion as its own killer.
+		s.onCreatureKilled(ctx, combatTarget{GUID: casterGUID, Map: mapID, InstanceID: instanceID}, motion)
 	}
 }
 

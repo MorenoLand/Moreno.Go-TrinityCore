@@ -1249,11 +1249,43 @@ func (s *Server) distributeHealingThreat(ctx context.Context, healerGUID, target
 		return
 	}
 
+	s.distributeHealingThreatLocked(healerSess.player.Map, healerSess.player.InstanceID,
+		healerSess.player.X, healerSess.player.Y, healerSess.player.Z, healerSess.player.CombatReach,
+		healerGUID, targetGUID, totalThreat)
+
+	if healerSess.player.UnitFlags&unitFlagInCombat == 0 {
+		healerSess.player.UnitFlags |= unitFlagInCombat
+		healerSess.sendPlayerUpdate()
+	}
+}
+
+// distributeCreatureHealingThreat runs the same ForwardThreatForAssistingMe
+// distribution for a creature healer (SpellAuraEffects.cpp:5411-5412 fires for
+// creature casters too). Creature healers carry no healing-threat-multiplier
+// model, so the factor is 1.0 and there is no in-combat flag leg.
+func (s *Server) distributeCreatureHealingThreat(ctx context.Context, mapID, instanceID uint32, healerGUID, targetGUID uint64, effectiveHeal uint32) {
+	if s == nil || healerGUID == 0 || effectiveHeal == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	healer := s.findCreatureMotionLocked(mapID, instanceID, healerGUID)
+	if healer == nil || healer.Health == 0 {
+		s.motionMu.Unlock()
+		return
+	}
+	hx, hy, hz, hReach := healer.X, healer.Y, healer.Z, healer.CombatReach
+	s.motionMu.Unlock()
+	s.distributeHealingThreatLocked(mapID, instanceID, hx, hy, hz, hReach, healerGUID, targetGUID, float32(effectiveHeal)*0.5)
+}
+
+// distributeHealingThreatLocked fans totalThreat out to every engaged creature
+// on the map. Callers hold no locks.
+func (s *Server) distributeHealingThreatLocked(mapID, instanceID uint32, healerX, healerY, healerZ, healerReach float32, healerGUID, targetGUID uint64, totalThreat float32) {
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
 
 	var engaged []*creatureMotion
-	for _, m := range s.motionMapLocked(healerSess.player.Map, healerSess.player.InstanceID) {
+	for _, m := range s.motionMapLocked(mapID, instanceID) {
 		if m == nil || m.Health == 0 || !m.InCombat || m.Evading {
 			continue
 		}
@@ -1279,8 +1311,8 @@ func (s *Server) distributeHealingThreat(ctx context.Context, healerGUID, target
 		if m.ThreatMgr == nil {
 			m.ThreatMgr = NewThreatManager(m)
 		}
-		dist := distance3D(healerSess.player.X, healerSess.player.Y, healerSess.player.Z, m.X, m.Y, m.Z)
-		inMelee := inMeleeThreatRange(m.CombatReach, healerSess.player.CombatReach, dist)
+		dist := distance3D(healerX, healerY, healerZ, m.X, m.Y, m.Z)
+		inMelee := inMeleeThreatRange(m.CombatReach, healerReach, dist)
 		switched, newVictim := m.ThreatMgr.AddThreat(healerGUID, threatPerCreature, inMelee)
 		if switched && newVictim != m.TargetGUID {
 			m.TargetGUID = newVictim
@@ -1288,10 +1320,5 @@ func (s *Server) distributeHealingThreat(ctx context.Context, healerGUID, target
 			s.broadcastHighestThreatUpdateInInstance(m.Map, m.InstanceID, m.GUID, newVictim, entries)
 		}
 		m.Moving = true
-	}
-
-	if healerSess.player.UnitFlags&unitFlagInCombat == 0 {
-		healerSess.player.UnitFlags |= unitFlagInCombat
-		healerSess.sendPlayerUpdate()
 	}
 }
