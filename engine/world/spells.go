@@ -1390,16 +1390,13 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterDead), true)
 		return true
 	}
-	if s.player.UnitFlags&(unitFlagConfused|unitFlagFleeing) != 0 || s.hasAuraType(spellAuraCharm) {
-		failure := spellFailedCharmed
-		if s.player.UnitFlags&unitFlagConfused != 0 {
-			failure = spellFailedConfused
-		} else if s.player.UnitFlags&unitFlagFleeing != 0 {
-			failure = spellFailedFleeing
-		}
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		return true
-	}
+	// Confused/fleeing/charmed casters are NOT rejected here: C++ has no
+	// blanket gate for these states. Spell::CheckCasterAuras
+	// (Spell.cpp:6257-6389, called below at the C++ CheckCast position)
+	// handles confused/fleeing with the usable-while-CC refinements, and the
+	// charm block there is commented out (Spell.cpp:6281-6291) —
+	// SPELL_FAILED_CHARMED only comes from the per-effect CheckTarget arms
+	// (Spell.cpp:6043-6076).
 	clientCastFlags, err := reader.ReadU8()
 	if err != nil {
 		return false
@@ -5627,10 +5624,10 @@ func (s *session) hasAuraMechanic(mask uint32) bool {
 // ToUnit-null and original-caster arms are vacuous; the commented-out
 // charmer block (Spell.cpp:6281-6291) has no Go model; the
 // TRIGGERED_IGNORE_CASTER_AURAS gate is structural (handleCastSpell serves
-// CMSG_CAST_SPELL only). The fleeing/confused arms are shadowed on this path:
-// handleCastSpell's early pre-gate already rejects confused/fleeing casters,
-// so the usable-while-feared/confused refinements never apply here — a
-// pre-existing divergence, not introduced by this unit.
+// CMSG_CAST_SPELL only). The fleeing/confused arms apply on this path —
+// handleCastSpell no longer pre-rejects confused/fleeing/charm casters, so
+// the usable-while-feared/confused refinements reach the mechanic check as
+// in C++.
 func (s *session) checkCasterAuras(spell wotlk.Spell) (uint8, uint32) {
 	if spell.AttributesEx6&spellAttr6IgnoreCasterAuras != 0 {
 		return 0, 0
@@ -16582,6 +16579,13 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		for _, e := range scPurge {
 			s.expireSingleCastEntry(e)
 		}
+		// SpellInfo::ApplyAllSpellImmunitiesTo dispel arms
+		// (SpellInfo.cpp:2860-2920): an immunity-granting aura effect whose
+		// spell carries ATTR1_DISPEL_AURAS_ON_IMMUNITY dispels the target's
+		// existing auras per the granted row. Runs per effect after the
+		// no-stack purge (C++ _AddAura order: RemoveAurasDueToAura, then the
+		// aura-apply handlers that call ApplyAllSpellImmunitiesTo).
+		dispelAurasOnImmunityApply(targetSess, spell, eff)
 		if eff.Aura == spellAuraModParryPercent {
 			targetSess.updatePlayerParryPercentage(targetSess.player, targetSess.player.Level)
 		}

@@ -99,6 +99,27 @@ func (s *session) isImmuneToDamage(schoolMask uint32) bool {
 	return false
 }
 
+// mechanicImmuneMaskGranted mirrors the per-effect MechanicImmuneMask rows
+// (SpellInfo::_LoadImmunityInfo, SpellInfo.cpp:2592-2818) exactly as
+// SpellInfo::ApplyAllSpellImmunitiesTo writes them into
+// m_spellImmune[IMMUNITY_MECHANIC] (SpellInfo.cpp:2883-2891): the union of
+// mechanicImmuneMaskForEffect over every effect of the spell. The
+// SPELL_ATTR5_USABLE_WHILE_* bits are deliberately EXCLUDED — C++ ORs those
+// into _allowedMechanicMask only (SpellInfo.cpp:2822-2856), never into the
+// per-effect ImmunityInfo rows the live immunity evals consult. The live
+// evals below must use this, not spellAllowedMechanicMask (whose ATTR5 bits
+// would wrongly grant mechanic immunity — e.g. a USABLE_WHILE_STUNNED spell
+// reporting stun immunity); spellAllowedMechanicMask stays the correct mask
+// for the CheckCast mechanicCheck path (Spell.cpp:6309), the one C++
+// consumer of GetAllowedMechanicMask.
+func mechanicImmuneMaskGranted(spell wotlk.Spell) uint32 {
+	var mask uint32
+	for _, eff := range spell.Effects {
+		mask |= mechanicImmuneMaskForEffect(spell, eff)
+	}
+	return mask
+}
+
 // isImmuneToSpell determines whether the player is immune to the effects of an incoming spell.
 // Mirrors TrinityCore Unit::IsImmunedToSpell (Unit.cpp:7852-7922), the
 // whole-spell immunity gate C++ consults in Unit::AddAura (Unit.cpp:12282)
@@ -215,10 +236,12 @@ func (s *session) isImmuneToSpell(spell wotlk.Spell, caster *session) bool {
 
 	// Unit.cpp:7871-7876 — IMMUNITY_MECHANIC (spell-level mechanic): writers
 	// are the SPELL_AURA_MECHANIC_IMMUNITY (77) effects (the
-	// _LoadImmunityInfo carve-outs SpellInfo.cpp:2750-2780, mirrored by
-	// spellAllowedMechanicMask) and the SPELL_AURA_MECHANIC_IMMUNITY_MASK
-	// (147) miscVal table (SpellInfo.cpp:2594-2724, mechanicImmuneMask147) —
-	// the raw misc bits are NOT a mechanic mask in C++.
+	// _LoadImmunityInfo carve-outs SpellInfo.cpp:2750-2780) and the
+	// SPELL_AURA_MECHANIC_IMMUNITY_MASK (147) miscVal table
+	// (SpellInfo.cpp:2594-2724, mechanicImmuneMask147) — the raw misc bits
+	// are NOT a mechanic mask in C++, and the ATTR5 usable-while bits never
+	// enter these rows (they feed _allowedMechanicMask only), so the eval
+	// uses mechanicImmuneMaskGranted, not spellAllowedMechanicMask.
 	if spell.Mechanic != 0 && s.server != nil && s.server.Data != nil {
 		mechanicImmune := false
 		for _, aura := range s.activeAuras {
@@ -231,7 +254,7 @@ func (s *session) isImmuneToSpell(spell wotlk.Spell, caster *session) bool {
 				if err != nil || !found {
 					continue
 				}
-				if spellAllowedMechanicMask(auraSpell)&(1<<spell.Mechanic) != 0 {
+				if mechanicImmuneMaskGranted(auraSpell)&(1<<spell.Mechanic) != 0 {
 					mechanicImmune = true
 				}
 			case spellAuraMechanicImmunityMask:
@@ -411,8 +434,10 @@ type immuneAura struct {
 // SpellInfo::ApplyAllSpellImmunitiesTo (SpellInfo.cpp:2860-2920):
 //   - IMMUNITY_EFFECT <- SPELL_AURA_EFFECT_IMMUNITY (37) misc (:2920)
 //   - IMMUNITY_MECHANIC <- SPELL_AURA_MECHANIC_IMMUNITY (77) via
-//     spellAllowedMechanicMask (the _LoadImmunityInfo carve-outs + misc
-//     mapping, :2877) and SPELL_AURA_MECHANIC_IMMUNITY_MASK (147) via the
+//     mechanicImmuneMaskGranted (the _LoadImmunityInfo carve-outs + misc
+//     mapping, :2877 — the ATTR5 _allowedMechanicMask bits are excluded,
+//     they never enter the per-effect rows) and
+//     SPELL_AURA_MECHANIC_IMMUNITY_MASK (147) via the
 //     miscVal table (mechanicImmuneMask147 / mechanicMask147Grants,
 //     :2594-2742)
 //   - IMMUNITY_STATE <- SPELL_AURA_STATE_IMMUNITY (38) misc (:2913) plus
@@ -482,7 +507,7 @@ func immunedToSpellEffectEval(spell wotlk.Spell, effIndex int, target, caster *s
 			if a.misc == int32(eff.Effect) {
 				return true
 			}
-		case spellAuraMechanicImmunity: // IMMUNITY_MECHANIC (SpellInfo.cpp:2877)
+		case spellAuraMechanicImmunity: // IMMUNITY_MECHANIC (SpellInfo.cpp:2877) — the granting spell's per-effect rows only, no ATTR5 bits
 			if eff.Mechanic == 0 {
 				continue
 			}
@@ -493,7 +518,7 @@ func immunedToSpellEffectEval(spell wotlk.Spell, effIndex int, target, caster *s
 			if err != nil || !found {
 				continue
 			}
-			if spellAllowedMechanicMask(auraSpell)&(1<<eff.Mechanic) != 0 {
+			if mechanicImmuneMaskGranted(auraSpell)&(1<<eff.Mechanic) != 0 {
 				return true
 			}
 		case spellAuraMechanicImmunityMask: // IMMUNITY_MECHANIC/EFFECT via the 147 miscVal table (SpellInfo.cpp:2594-2724)
@@ -684,6 +709,100 @@ func canSpellPierceImmuneAura(spell, immuneSpell wotlk.Spell) bool {
 		return true
 	}
 	return false
+}
+
+// spellCanDispelAura mirrors SpellInfo::CanDispelAura
+// (SpellInfo.cpp:1363-1381): whether the applying spell may dispel the
+// already-applied aura spell.
+func spellCanDispelAura(spell, auraSpell wotlk.Spell) bool {
+	// These auras (like Divine Shield) can't be dispelled.
+	if auraSpell.Attributes&spellAttr0UnaffectedByInvulnerability != 0 {
+		return false
+	}
+	// These spells (like Mass Dispel) can dispel all auras.
+	if spell.Attributes&spellAttr0UnaffectedByInvulnerability != 0 {
+		return true
+	}
+	// These auras (Cyclone for example) are not dispelable.
+	if (auraSpell.AttributesEx&spellAttr1UnaffectedBySchoolImmune != 0 && auraSpell.Mechanic != 0) ||
+		auraSpell.AttributesEx1&spellAttr2UnaffectedByAuraSchoolImmune != 0 {
+		return false
+	}
+	return true
+}
+
+// dispelAurasOnImmunityApply mirrors the ATTR1_DISPEL_AURAS_ON_IMMUNITY
+// removal arms of SpellInfo::ApplyAllSpellImmunitiesTo
+// (SpellInfo.cpp:2860-2920): when the just-applied aura effect grants
+// immunity and its spell carries the attribute, the target's existing auras
+// are dispelled per the granted row — school mask (RemoveAppliedAuras
+// predicate, SpellInfo.cpp:2866-2875), mechanic mask
+// (Unit::RemoveAurasWithMechanic, Unit.cpp:4217-4232), dispel type
+// (SpellInfo.cpp:2894-2903), and aura-type list (RemoveAurasByType,
+// SpellInfo.cpp:2908-2916). C++ runs this per aura effect from the immunity
+// aura handlers (SpellAuraEffects.cpp:3108-3221); the IMMUNITY_DAMAGE row
+// has no dispel arm. The school arm skips the applying spell itself and the
+// mechanic arm passes it as except (C++); the self-skip on the dispel arm is
+// a harmless guard (C++ has none, but self-match needs pathological data).
+func dispelAurasOnImmunityApply(target *session, spell wotlk.Spell, eff wotlk.SpellEffect) {
+	if target == nil || target.player == nil {
+		return
+	}
+	if spell.AttributesEx&spellAttr1DispelAurasOnImmunity == 0 {
+		return
+	}
+	if target.server == nil || target.server.Data == nil {
+		return
+	}
+	var schoolMask uint32
+	if eff.Aura == spellAuraSchoolImmunity {
+		schoolMask = uint32(eff.MiscValue)
+	}
+	mechanicMask := mechanicImmuneMaskForEffect(spell, eff)
+	var dispelImmune uint32
+	if eff.Aura == spellAuraDispelImmunity {
+		dispelImmune = uint32(eff.MiscValue)
+	}
+	var auraTypes []uint32
+	switch eff.Aura {
+	case spellAuraStateImmunity:
+		auraTypes = append(auraTypes, uint32(eff.MiscValue))
+	case spellAuraMechanicImmunityMask:
+		types, _ := mechanicMask147Grants(spell.ID, eff)
+		auraTypes = append(auraTypes, types...)
+	}
+	if schoolMask == 0 && mechanicMask == 0 && dispelImmune == 0 && len(auraTypes) == 0 {
+		return
+	}
+	spellPositive := spellIsPositive(spell)
+	for _, aura := range target.loadedAuras() {
+		if aura == nil || aura.SpellID == spell.ID {
+			continue
+		}
+		auraSpell, found, err := target.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		remove := false
+		if schoolMask != 0 && auraSpell.SchoolMask&schoolMask != 0 &&
+			spellCanDispelAura(spell, auraSpell) &&
+			spellPositive != aura.Positive &&
+			auraSpell.Attributes&spellAttributePassive == 0 {
+			remove = true
+		}
+		if !remove && mechanicMask != 0 && spellMechanicMask(auraSpell)&mechanicMask != 0 {
+			remove = true
+		}
+		if !remove && dispelImmune != 0 && auraSpell.DispelType == dispelImmune {
+			remove = true
+		}
+		if remove {
+			target.removeAura(aura.SpellID)
+		}
+	}
+	for _, auraType := range auraTypes {
+		target.removeAurasByType(auraType)
+	}
 }
 
 // spellTargetFullyEffectImmune reduces the AddUnitTarget effect-immune
