@@ -728,11 +728,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		castFlags |= protocol.SpellCastFlagPowerLeftSelf
 		power = &remainingPower
 	}
-	goPacket := protocol.BuildSpellGoWithPower(motion.GUID, motion.GUID, castCount, spell.ID, castFlags, stamp, hitTargets, nil, target, power)
+	goPacket := protocol.BuildSpellGoWithPower(motion.GUID, motion.GUID, castCount, spell.ID, castFlags, stamp, hitTargets, nil, spellGoPacketTarget(spell, target), power)
 	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true); err != nil {
 		return false
 	}
-	nearbyPacket := protocol.BuildSpellGo(motion.GUID, motion.GUID, castCount, spell.ID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, stamp, hitTargets, nil, target)
+	nearbyPacket := protocol.BuildSpellGo(motion.GUID, motion.GUID, castCount, spell.ID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, stamp, hitTargets, nil, spellGoPacketTarget(spell, target))
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 	damage, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true)
 	handledEffect := false

@@ -3083,6 +3083,31 @@ func spellNeedsExplicitUnitTarget(spell wotlk.Spell) bool {
 	return false
 }
 
+// spellGoPacketTarget mirrors the target-mask arm of Spell::SelectSpellTargets
+// (Spell.cpp:772-775): each non-empty effect's implicit target object types
+// set TARGET_FLAG_UNIT / TARGET_FLAG_GAMEOBJECT on the target mask written
+// into the SMSG_SPELL_GO target data. SendSpellStart runs in prepare
+// (Spell.cpp:3194), before SelectSpellTargets, so the START packet keeps the
+// raw client flags — only the GO packet carries the augmented mask. The
+// (possibly empty) unit GUID rides the UNIT-family flag per
+// SpellCastTargets::Write (Spell.cpp:184-185), which Go's writer already
+// mirrors: an empty GUID packs to a single zero byte, exactly like C++.
+func spellGoPacketTarget(spell wotlk.Spell, target protocol.SpellTargetData) protocol.SpellTargetData {
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		provided := spellEffectProvidedTargetMask(eff)
+		if provided&targetFlagUnit != 0 {
+			target.Flags |= protocol.SpellTargetFlagUnit
+		}
+		if provided&(targetFlagGameObject|targetFlagGameObjectItem) != 0 {
+			target.Flags |= protocol.SpellTargetFlagGameObject
+		}
+	}
+	return target
+}
+
 // spellEffectProvidedTargetMask mirrors SpellEffectInfo::GetProvidedTargetMask
 // (SpellInfo.cpp:576-579): the OR of the target-flag masks of the effect's
 // implicit targets' object types (GetTargetFlagMask, SpellInfo.cpp:38-64).
@@ -6832,11 +6857,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if castItemGUID != 0 {
 		casterGUID = castItemGUID | (uint64(0x4000) << 48)
 	}
-	goPacket := protocol.BuildSpellGoWithPower(casterGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, missStatus, target, remainingPower)
+	goPacket := protocol.BuildSpellGoWithPower(casterGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, missStatus, spellGoPacketTarget(spell, target), remainingPower)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true)
 	if s.server != nil {
 		nearbyFlags := castFlags &^ protocol.SpellCastFlagPowerLeftSelf
-		nearbyPacket := protocol.BuildSpellGo(casterGUID, s.playerGUID, castID, spellID, nearbyFlags, castTimeStamp, hitTargets, missStatus, target)
+		nearbyPacket := protocol.BuildSpellGo(casterGUID, s.playerGUID, castID, spellID, nearbyFlags, castTimeStamp, hitTargets, missStatus, spellGoPacketTarget(spell, target))
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 	}
 	if isFishingSpell(spellID) {
@@ -10129,8 +10154,11 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	}
 	// Spell::IsNeedSendToClient (Spell.cpp:7543): triggered casts only send
 	// SMSG_SPELL_GO when the spell has a visual, is channeled, or has speed.
+	// The target data carries the SelectSpellTargets per-effect UNIT/GAMEOBJECT
+	// augmentation (Spell.cpp:772-775), same as the client path above.
+	goTarget := spellGoPacketTarget(spell, spellTarget)
 	if spell.SpellVisual[0] != 0 || spell.SpellVisual[1] != 0 || isChanneledSpell(spell) || spell.Speed > 0 {
-		goPkt := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, nil, spellTarget, remainingPower)
+		goPkt := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, nil, goTarget, remainingPower)
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 		if s.server != nil {
 			// C++ sends the caster a self-only packet carrying POWER_LEFT_SELF
@@ -10138,7 +10166,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// (Spell.cpp:4353-4366).
 			nearbyPacket := goPkt
 			if castFlags&protocol.SpellCastFlagPowerLeftSelf != 0 {
-				nearbyPacket = protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, castTimeStamp, hitTargets, nil, spellTarget)
+				nearbyPacket = protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, castTimeStamp, hitTargets, nil, goTarget)
 			}
 			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 		}
