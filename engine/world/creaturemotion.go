@@ -118,10 +118,16 @@ type creatureMotion struct {
 	// Creature::CanCreatureAttack (Creature.cpp:2560-2603) skips the
 	// home-distance check while it is fresh (or while the creature is
 	// taunted) — except for world bosses (isWorldBoss, Creature.cpp:2353).
-	LastDamaged  time.Time
-	LastSpell    time.Time
-	Spells       []uint32
-	NextSpellIdx int
+	LastDamaged time.Time
+	// LastSanctuaryTime mirrors Unit::m_lastSanctuaryTime (Unit.h:1459),
+	// stamped by Spell::EffectSanctuary (SpellEffects.cpp:3778): in-flight
+	// (delayed) non-positive missiles launched at or before this time
+	// fizzle on this creature (DoTargetSpellHit, Spell.cpp:2403). Game ms
+	// from gameTimeMS; zero means no sanctuary recorded.
+	LastSanctuaryTime uint32
+	LastSpell         time.Time
+	Spells            []uint32
+	NextSpellIdx      int
 	// SpellEventTimes is the per-spell event schedule for CombatAI/CasterAI
 	// template-spell casts (CombatAI.cpp _events EventMap): each AICOND_COMBAT
 	// template spell's next fire time. Armed at engage

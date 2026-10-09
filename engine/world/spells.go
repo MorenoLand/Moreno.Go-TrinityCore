@@ -6288,16 +6288,27 @@ func (s *session) implicitCasterUnitTarget(spell wotlk.Spell) (uint64, bool) {
 
 // revalidateDelayedHitTargets mirrors handle_delayed's per-wave target
 // revalidation (Spell.cpp:3645-3663, DoProcessTargetContainer over the
-// delayed targets): a target that vanished, died mid-flight
-// (DoTargetSpellHit's unit->IsAlive() != IsAlive arm, Spell.cpp:2430), or
-// gained spell immunity (PreprocessTarget -> PreprocessSpellHit ->
-// DoSpellHitOnUnit's immune arm) is not hit at missile arrival. C++ sends
-// no new SMSG_SPELL_GO for these, so missStatus is untouched. Reflect
-// gained mid-flight is not re-rolled — C++ procs the reflect aura at
-// arrival (ProcReflectDelayed, Spell.cpp:2181) while Go resolves reflect
-// at cast time (the isReflected arm above); that timing delta is
-// documented, not bridged.
-func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.Spell, targets []uint64) []uint64 {
+// delayed targets):
+//   - a target that vanished or died mid-flight (DoTargetSpellHit's
+//     unit->IsAlive() != IsAlive arm, Spell.cpp:2430);
+//   - a delayed non-positive spell whose target was sanctuaried at or after
+//     launch (DoTargetSpellHit, Spell.cpp:2402-2404: (now - TimeDelay) <=
+//     unit->m_lastSanctuaryTime — Vanish dropping missiles already in
+//     flight; launchMs carries the cast-time anchor);
+//   - a creature that began evading between launch and hit
+//     (PreprocessSpellHit, Spell.cpp:2715-2717 -> SPELL_MISS_EVADE);
+//   - a player target that gained spell immunity mid-flight (PreprocessTarget
+//     -> PreprocessSpellHit -> DoSpellHitOnUnit's immune arm, Spell.cpp:2720).
+//
+// C++ sends no new SMSG_SPELL_GO for these, so missStatus is untouched.
+// For a reflected cast the C++ arrival arms run on the reflector (the
+// TargetInfo target), so sanctuary/immunity resolve against
+// reflectSourceGUID, not the caster. Reflect gained mid-flight is not
+// re-rolled — C++ rolls reflect at AddUnitTarget time (Spell.cpp:2152),
+// matching Go's cast-time roll; the ProcReflectDelayed arrival proc
+// (Spell.cpp:2181) stays a documented delta (Go consumes the reflect aura
+// at cast time via checkSpellReflection).
+func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.Spell, targets []uint64, launchMs uint32, isReflected bool, reflectSourceGUID uint64) []uint64 {
 	if len(targets) == 0 {
 		return targets
 	}
@@ -6307,14 +6318,41 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 		if !ok || tgt.Health == 0 {
 			continue
 		}
+		checkGUID := guid
+		if isReflected && guid == s.playerGUID {
+			checkGUID = reflectSourceGUID
+		}
+		if !spellIsPositive(spell) && s.sanctuaryTimeFor(checkGUID) >= launchMs {
+			continue
+		}
+		if s.server != nil && s.player != nil && uint16(checkGUID>>48) == 0xF130 &&
+			s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, checkGUID) {
+			continue
+		}
 		if s.server != nil {
-			if ts := s.server.findSessionByGUID(guid); ts != nil && ts.isImmuneToSpell(spell) {
+			if ts := s.server.findSessionByGUID(checkGUID); ts != nil && ts.isImmuneToSpell(spell) {
 				continue
 			}
 		}
 		live = append(live, guid)
 	}
 	return live
+}
+
+// sanctuaryTimeFor reads the Unit::m_lastSanctuaryTime analog for a player
+// or creature target (playerState.LastSanctuaryTime /
+// creatureMotion.LastSanctuaryTime), stamped by handleEffectSanctuary.
+func (s *session) sanctuaryTimeFor(guid uint64) uint32 {
+	if s == nil || s.server == nil {
+		return 0
+	}
+	if ts := s.server.findSessionByGUID(guid); ts != nil && ts.player != nil {
+		return ts.player.LastSanctuaryTime
+	}
+	if s.player == nil {
+		return 0
+	}
+	return s.server.creatureLastSanctuaryTime(s.player.Map, s.player.InstanceID, guid)
 }
 
 func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, castItemGUID uint64, castItemEntry uint32, queuedSwing *activeCastState) {
@@ -6883,6 +6921,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// split-damage model; the bot_bm_ai sites need creature casters.
 	var missStatus []protocol.SpellMissStatus
 	isReflected := false
+	// reflectSourceGUID is the pre-retarget unit target of a reflected cast
+	// (Spell.cpp:2174-2188 keeps the reflector as the TargetInfo target;
+	// the return trip's 1.5x TimeDelay and the arrival-time arms resolve
+	// against it).
+	reflectSourceGUID := uint64(0)
 	if !areaSpell && targetGUID != 0 && targetGUID != s.playerGUID && isHarmfulSpell(spell) {
 		var targetSess *session
 		if s.server != nil {
@@ -6890,6 +6933,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 		if targetSess != nil && targetSess.checkSpellReflection(spell) {
 			isReflected = true
+			reflectSourceGUID = targetGUID
 			// Spell::SendSpellGo (Spell.cpp:4504-4506): ReflectStatus is the
 			// caster's own SpellHitResult (Spell.cpp:2178), which is always
 			// SPELL_MISS_NONE — WorldObject::SpellHitResult returns NONE when
@@ -8990,12 +9034,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// the window — the closure then opens a fresh registry, matching the
 	// C++ no-taking-spell state).
 	castTaking := s.spellModTakingCurrent()
-	// A reflected primary retargets to the caster above, so it falls through
-	// to the immediate path; C++ keeps it DELAYED with TimeDelay *= 1.5
-	// (Spell.cpp:2181) and procs the reflect aura at missile arrival
-	// (ProcReflectDelayed, Spell.cpp:2181) instead of consuming it at cast
-	// time. Timing-only delta, unmodeled.
-	if isDelayedBranch && targetGUID != 0 && targetGUID != s.playerGUID && spell.Speed > 0 {
+	// A reflected primary retargets to the caster above but stays on the
+	// delayed branch (Spell.cpp:2174-2188): the reflected missile's return
+	// trip is the outbound TimeDelay plus half (TimeDelay += TimeDelay >> 1,
+	// Spell.cpp:2184), and the arrival-time arms resolve against the
+	// reflector. ProcReflectDelayed (the reflector's aura proc at outbound
+	// arrival, Spell.cpp:2181) stays unmodeled — Go consumes the reflect
+	// aura at cast time via checkSpellReflection.
+	if isDelayedBranch && spell.Speed > 0 && (isReflected || (targetGUID != 0 && targetGUID != s.playerGUID)) {
 		// Spell::_cast (Spell.cpp:3473-3479): the delayed branch spends the
 		// cast-item charge at delay start — after SendSpellGo, before the
 		// missile timer arms — so a cast that survived its bar spends the
@@ -9021,11 +9067,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// travel time.
 			timeDelayMs = s.spellTargetTimeDelayMs(ctx, spell, targetGUID)
 		}
+		if isReflected {
+			// Spell.cpp:2184 — the reflected missile's return trip is the
+			// outbound TimeDelay plus half; hitTargets holds the caster, so
+			// the outbound leg measures against the reflector.
+			travelMs := s.spellTargetTimeDelayMs(ctx, spell, reflectSourceGUID)
+			timeDelayMs = travelMs + (travelMs >> 1)
+		}
 		// No clamp: Spell.cpp:2156-2169 computes TimeDelay as
 		// floor(dist / Speed * 1000) with no upper bound — the delay event
 		// simply re-plans at GetDelayStart() + GetDelayMoment() for the
 		// true minimum (Spell.cpp:7596-7650).
 		if timeDelayMs > 0 {
+			// DoTargetSpellHit (Spell.cpp:2403) reconstructs the launch time
+			// as GameTimeMS - TimeDelay; capture it here so the arrival
+			// tick compares against the cast-time anchor, not the (slightly
+			// later) timer-fire time.
+			launchMs := gameTimeMS() - uint32(timeDelayMs)
 			time.AfterFunc(time.Duration(timeDelayMs)*time.Millisecond, func() {
 				// Spell::handle_delayed (Spell.cpp:3640): the delayed phase
 				// re-arms the taking window on the SAME Spell object — the
@@ -9045,8 +9103,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				defer func() { s.castProcHitMask = prevProcHitMask }()
 				// Spell::handle_delayed (Spell.cpp:3645-3663): revalidate the
 				// cast-time hit list at missile arrival — immunity gained
-				// mid-flight, death, or a vanished target drops the hit.
-				hitTargets = s.revalidateDelayedHitTargets(context.Background(), spell, hitTargets)
+				// mid-flight, death, sanctuary, or a vanished/evading target
+				// drops the hit.
+				hitTargets = s.revalidateDelayedHitTargets(context.Background(), spell, hitTargets, launchMs, isReflected, reflectSourceGUID)
 				applyEffects(context.Background())
 				// Spell::_handle_finish_phase (Spell.cpp:3737-3752): the
 				// combo legs run at the last delayed tick (next_time == 0)
@@ -23367,7 +23426,11 @@ func (s *session) handleEffectSanctuary(ctx context.Context, hitTargets []uint64
 		if targetGUID == 0 {
 			continue
 		}
+		// Spell::EffectSanctuary (SpellEffects.cpp:3778): the timestamp
+		// lands on every unit target unconditionally, before the
+		// player-outside-dungeon / threat-zero split.
 		if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+			targetSess.player.LastSanctuaryTime = gameTimeMS()
 			isDungeon := false
 			if entry, found, err := s.server.Data.Map(targetSess.player.Map); err == nil && found {
 				isDungeon = entry.IsDungeon()
@@ -23385,6 +23448,7 @@ func (s *session) handleEffectSanctuary(ctx context.Context, hitTargets []uint64
 		mapID, instanceID := s.player.Map, s.player.InstanceID
 		s.server.motionMu.Lock()
 		if motion := s.server.findCreatureMotionLocked(mapID, instanceID, targetGUID); motion != nil {
+			motion.LastSanctuaryTime = gameTimeMS()
 			mapID, instanceID = motion.Map, motion.InstanceID
 		}
 		s.server.motionMu.Unlock()

@@ -228,7 +228,13 @@ type playerState struct {
 	Health           uint32
 	MaxHealth        uint32
 	HealthLoaded     bool
-	repopOnLogin     bool
+	// LastSanctuaryTime mirrors Unit::m_lastSanctuaryTime (Unit.h:1459),
+	// stamped by Spell::EffectSanctuary (SpellEffects.cpp:3778): in-flight
+	// (delayed) non-positive missiles launched at or before this time
+	// fizzle on this player (DoTargetSpellHit, Spell.cpp:2403). Game ms
+	// from gameTimeMS; zero means no sanctuary recorded.
+	LastSanctuaryTime uint32
+	repopOnLogin      bool
 	// corpseX/Y/Z mirror Player::GetCorpse() (m_corpse): while the player is
 	// dead, C++ distance checks that anchor on the player (e.g.
 	// Player::IsAtGroupRewardDistance, Player.cpp:24160-24173) measure from
