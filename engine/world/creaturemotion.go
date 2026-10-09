@@ -152,6 +152,11 @@ type creatureMotion struct {
 	MoveEnds  time.Time
 	WaitUntil time.Time
 	Refreshed time.Time
+	// DistractedUntil is the DistractMovementGenerator hold
+	// (Spell::EffectDistract, SpellEffects.cpp:2547): the creature turned to
+	// face the distraction and pauses wandering until this time. Zero when
+	// not distracted.
+	DistractedUntil time.Time
 }
 
 type waypointPoint struct {
@@ -1521,6 +1526,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	}
 
 	// 3. Normal wandering or waypoint patrolling
+	// Distract hold (Spell::EffectDistract, SpellEffects.cpp:2547): the
+	// creature stands facing the distraction until the timer expires; the
+	// C++ DistractMovementGenerator replaces the idle-slot generator for the
+	// duration, so wandering/waypoint movement pauses here. Aggro acquisition
+	// above still runs — the C++ generator does not suppress it.
+	if now.Before(motion.DistractedUntil) {
+		return
+	}
 	if motion.Moving {
 		if now.Before(motion.MoveEnds) {
 			return

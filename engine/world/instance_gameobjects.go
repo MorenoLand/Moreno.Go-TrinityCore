@@ -209,6 +209,91 @@ func (s *Server) broadcastGameObjectDespawnInInstance(mapID, instanceID uint32, 
 	s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_GAMEOBJECT_DESPAWN_ANIM), buf.Bytes(), nil)
 }
 
+// broadcastGameObjectValuesUpdateInInstance mirrors the values-update half of
+// the runtime GameObject field writes (e.g. GameObject::ApplyModFlag,
+// GameObject::SetGoArtKit): an SMSG_UPDATE_OBJECT values block carrying only
+// the changed fields. Go previously never updated GO fields at runtime
+// (flags/artkit only rode the create block), so flag and artkit arms had no
+// client-visible path.
+func (s *Server) broadcastGameObjectValuesUpdateInInstance(mapID, instanceID uint32, guid uint64, fields map[int]uint32) {
+	if s == nil || len(fields) == 0 {
+		return
+	}
+	values := make([]uint32, gameObjectValuesCount)
+	mask := protocol.NewUpdateMask(gameObjectValuesCount)
+	for index, value := range fields {
+		if index < 0 || index >= gameObjectValuesCount {
+			continue
+		}
+		values[index] = value
+		_ = mask.Set(index)
+	}
+	block := protocol.NewBuffer(64 + len(fields)*4)
+	block.WriteU8(protocol.UpdateValues)
+	block.WritePackedGUID(guid)
+	block.WriteU8(uint8(mask.BlockCount()))
+	mask.AppendTo(block)
+	for index := 0; index < gameObjectValuesCount; index++ {
+		if mask.Has(index) {
+			block.WriteU32(values[index])
+		}
+	}
+	updates := protocol.NewUpdateData()
+	updates.AddUpdateBlock(block.Bytes())
+	packet, err := updates.BuildPacket(0)
+	if err != nil || packet == nil {
+		return
+	}
+	s.broadcastToInstance(mapID, instanceID, packet.Opcode, packet.Payload.Bytes(), nil)
+}
+
+// broadcastGameObjectBytes1InInstance pushes the recomputed GAMEOBJECT_BYTES_1
+// dword (state | type<<8 | artkit<<16 | animprogress<<24, gameobjects.go) after
+// a runtime state/artkit change such as the Destroy or UseArtKit activate
+// arms, which have no dedicated anim packet.
+func (s *Server) broadcastGameObjectBytes1InInstance(mapID, instanceID uint32, guid uint64) {
+	if s == nil || guid == 0 {
+		return
+	}
+	var bytes1 uint32
+	found := false
+	s.objectsMu.Lock()
+	if st := s.gameObjectStateLocked(mapID, instanceID, guid); st != nil {
+		bytes1 = uint32(st.State) | uint32(st.Type)<<8 | uint32(st.ArtKit)<<16 | uint32(st.AnimProgress)<<24
+		found = true
+	}
+	s.objectsMu.Unlock()
+	if found {
+		s.broadcastGameObjectValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{gameObjectBytes1: bytes1})
+	}
+}
+
+// applyGameObjectFlag mirrors GameObject::ApplyModFlag(GAMEOBJECT_FLAGS, flag,
+// apply): it flips the bit on the live GO state and pushes the flags field to
+// clients. Static GOs with no live state object are skipped — Go has no
+// runtime record for them.
+func (s *Server) applyGameObjectFlag(mapID, instanceID uint32, guid uint64, flag uint32, set bool) {
+	if s == nil || guid == 0 {
+		return
+	}
+	var flags uint32
+	found := false
+	s.objectsMu.Lock()
+	if st := s.gameObjectStateLocked(mapID, instanceID, guid); st != nil {
+		if set {
+			st.Flags |= flag
+		} else {
+			st.Flags &^= flag
+		}
+		flags = st.Flags
+		found = true
+	}
+	s.objectsMu.Unlock()
+	if found {
+		s.broadcastGameObjectValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{gameObjectFlags: flags})
+	}
+}
+
 func (s *Server) despawnDynamicGameObjectInInstance(mapID, instanceID uint32, guid uint64) {
 	if s == nil || guid == 0 {
 		return

@@ -447,6 +447,75 @@ func (s *session) stopPlayerCombat() {
 	}
 }
 
+// evadeCreaturesTargeting mirrors the RemoveAllAttackers half of
+// Unit::CombatStop (Unit.cpp:5815): every creature in the map/instance
+// actively targeting the given unit drops combat through the evade path
+// (attack-stop + threat-clear broadcasts, state reset).
+func (s *Server) evadeCreaturesTargeting(ctx context.Context, mapID, instanceID uint32, targetGUID uint64) {
+	if s == nil || targetGUID == 0 {
+		return
+	}
+	var guids []uint64
+	s.motionMu.Lock()
+	for guid, motion := range s.motionMapLocked(mapID, instanceID) {
+		if motion == nil || !motion.InCombat || motion.TargetGUID != targetGUID {
+			continue
+		}
+		guids = append(guids, guid)
+	}
+	s.motionMu.Unlock()
+	now := time.Now()
+	for _, guid := range guids {
+		s.motionMu.Lock()
+		motion := s.findCreatureMotionLocked(mapID, instanceID, guid)
+		if motion == nil || !motion.InCombat || motion.TargetGUID != targetGUID {
+			s.motionMu.Unlock()
+			continue
+		}
+		s.motionMu.Unlock()
+		s.triggerCreatureEvade(ctx, motion, now)
+	}
+}
+
+// zeroThreatOnAllLists mirrors the dungeon/non-player arm of
+// Spell::EffectSanctuary (SpellEffects.cpp:3767-3770): every threat list in
+// the map/instance carrying the unit scales its entry to 0
+// (ThreatReference::ScaleThreat, ThreatManager.cpp:52-61 — the entry stays,
+// the value zeroes), with the eager victim reselect Go uses for threat
+// changes.
+func (s *Server) zeroThreatOnAllLists(mapID, instanceID uint32, targetGUID uint64) {
+	if s == nil || targetGUID == 0 {
+		return
+	}
+	var owners []uint64
+	s.motionMu.Lock()
+	for guid, motion := range s.motionMapLocked(mapID, instanceID) {
+		if motion == nil || motion.ThreatMgr == nil {
+			continue
+		}
+		if motion.ThreatMgr.HasVictim(targetGUID) {
+			owners = append(owners, guid)
+		}
+	}
+	s.motionMu.Unlock()
+	for _, ownerGUID := range owners {
+		motion := s.findCreatureMotion(mapID, instanceID, ownerGUID)
+		if motion == nil || motion.ThreatMgr == nil {
+			continue
+		}
+		switched, newVictim := motion.ThreatMgr.ScaleThreat(targetGUID, 0)
+		if !switched {
+			continue
+		}
+		s.motionMu.Lock()
+		if m := s.findCreatureMotionLocked(mapID, instanceID, ownerGUID); m != nil {
+			m.TargetGUID = newVictim
+			s.broadcastHighestThreatUpdateInInstance(m.Map, m.InstanceID, m.GUID, newVictim, motion.ThreatMgr.SortedEntries())
+		}
+		s.motionMu.Unlock()
+	}
+}
+
 func (s *Server) broadcastThreatClear(mapID uint32, creatureGUID uint64) {
 	if s == nil {
 		return

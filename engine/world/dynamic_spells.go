@@ -10,10 +10,11 @@ import (
 )
 
 const (
-	dynamicObjectTypeMask uint32 = 0x0041
-	dynamicObjectHighGUID uint64 = 0xF100
-	dynamicObjectTypeArea uint8  = 1
-	dynamicObjectFlags           = uint16(0x0150)
+	dynamicObjectTypeMask          uint32 = 0x0041
+	dynamicObjectHighGUID          uint64 = 0xF100
+	dynamicObjectTypeArea          uint8  = 1 // DYNAMIC_OBJECT_AREA_SPELL (DynamicObject.h:31)
+	dynamicObjectTypeFarsightFocus uint8  = 2 // DYNAMIC_OBJECT_FARSIGHT_FOCUS (DynamicObject.h:32)
+	dynamicObjectFlags                    = uint16(0x0150)
 )
 
 type dynamicSpellObjectState struct {
@@ -22,6 +23,8 @@ type dynamicSpellObjectState struct {
 	X, Y, Z, Orientation      float32
 	Radius                    float32
 	CastTime                  uint32
+	ObjectType                uint8 // DYNAMICOBJECT_BYTES type: area spell vs farsight focus
+	IsFarsightFocus           bool  // SetCasterViewpoint viewpoint; cleared on despawn
 	SpellData                 wotlk.Spell
 	AuraEffect                wotlk.SpellEffect
 	AuraDurationMs            uint32
@@ -54,6 +57,12 @@ func buildDynamicSpellObjectUpdate(object *dynamicSpellObjectState) []byte {
 	values[6] = uint32(object.CasterGUID)
 	values[7] = uint32(object.CasterGUID >> 32)
 	values[8] = uint32(dynamicObjectTypeArea)
+	if object.ObjectType != 0 {
+		// DYNAMICOBJECT_BYTES carries the dynobj type (DynamicObject.h:31-32);
+		// area-spell objects are the historical default, farsight-focus
+		// objects set it explicitly (EffectAddFarsight).
+		values[8] = uint32(object.ObjectType)
+	}
 	values[9] = uint32(object.SpellID)
 	values[10] = math.Float32bits(object.Radius)
 	values[11] = object.CastTime
@@ -173,6 +182,16 @@ func (s *Server) despawnDynamicSpellObject(guid uint64) {
 	s.objectsMu.Unlock()
 	if !ok || object == nil {
 		return
+	}
+	// DynamicObject::RemoveCasterViewpoint (DynamicObject.cpp:223): when a
+	// farsight-focus object despawns, the caster's viewpoint is removed
+	// (Player::SetViewpoint false arm, Player.cpp:24618) — but only if the
+	// caster is still looking through this object.
+	if object.IsFarsightFocus {
+		if caster := s.findSessionByGUID(object.CasterGUID); caster != nil && caster.player != nil && caster.player.FarsightGUID == guid {
+			caster.player.FarsightGUID = 0
+			caster.sendPlayerUpdate()
+		}
 	}
 	packet := protocol.NewBuffer(9)
 	packet.WriteU64(object.GUID)

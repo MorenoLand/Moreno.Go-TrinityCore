@@ -341,6 +341,12 @@ const (
 	spellEffectAddHonor             = 45  // SPELL_EFFECT_ADD_HONOR (SharedDefines.h:856)
 	spellEffectTradeSkill           = 47  // SPELL_EFFECT_TRADE_SKILL (SharedDefines.h:858)
 	spellEffectProficiency          = 60  // SPELL_EFFECT_PROFICIENCY (SharedDefines.h:871)
+	spellEffectDistract             = 69  // SPELL_EFFECT_DISTRACT (SharedDefines.h:880)
+	spellEffectAddFarsight          = 72  // SPELL_EFFECT_ADD_FARSIGHT (SharedDefines.h:883)
+	spellEffectUntrainTalents       = 73  // SPELL_EFFECT_UNTRAIN_TALENTS (SharedDefines.h:884)
+	spellEffectSummonObjectWild     = 76  // SPELL_EFFECT_SUMMON_OBJECT_WILD (SharedDefines.h:887)
+	spellEffectSanctuary            = 79  // SPELL_EFFECT_SANCTUARY (SharedDefines.h:890)
+	spellEffectActivateObject       = 86  // SPELL_EFFECT_ACTIVATE_OBJECT (SharedDefines.h:897)
 
 	// Summon categories for the generic-summon CheckCast leg
 	// (Spell.cpp:5798-5817, SharedDefines.h:3296).
@@ -7485,6 +7491,42 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT (caster arm),
 				// not per unit target.
 				s.handleEffectDestroyAllTotems(effCtx, eff)
+			case spellEffectDistract: // 69: SPELL_EFFECT_DISTRACT (EffectDistract, SpellEffects.cpp:2547)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
+				// target: an unengaged, non-confused/stunned/fleeing target
+				// turns to face the spell destination for damage ms.
+				s.handleEffectDistract(effCtx, eff, hitTargets, target)
+			case spellEffectAddFarsight: // 72: SPELL_EFFECT_ADD_FARSIGHT (EffectAddFarsight, SpellEffects.cpp:2580)
+				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
+				// a DYNAMIC_OBJECT_FARSIGHT_FOCUS dynamic object at the spell
+				// destination becomes the caster's viewpoint.
+				s.handleEffectAddFarsight(effCtx, spell, eff, target)
+			case spellEffectUntrainTalents: // 73: SPELL_EFFECT_UNTRAIN_TALENTS (EffectUntrainTalents, SpellEffects.cpp:2606)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET, but only
+				// when the caster is a trainer NPC (m_caster->GetTypeId() !=
+				// TYPEID_PLAYER). Go's effect dispatch runs exclusively for
+				// player casters (finishSpellCast; creature casts never reach
+				// the effect loop), so the gate always returns here — the live
+				// gameplay path (the trainer gossip "unlearn talents" option)
+				// already sends the same SMSG_TALENT_WIPE_CONFIRM via the
+				// gossip arm. Explicit no-op so the effect stops hitting the
+				// unhandled-effect debug arm.
+			case spellEffectSanctuary: // 79: SPELL_EFFECT_SANCTUARY (EffectSanctuary, SpellEffects.cpp:3757)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
+				// target: player targets outside dungeons stop all PvE combat
+				// (CombatStop); otherwise the unit's threat is zeroed on every
+				// enemy threat list carrying it.
+				s.handleEffectSanctuary(effCtx, hitTargets)
+			case spellEffectSummonObjectWild: // 76: SPELL_EFFECT_SUMMON_OBJECT_WILD (EffectSummonObjectWild, SpellEffects.cpp:3552)
+				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
+				// a wild (ownerless) game object spawns at the spell
+				// destination for the spell's duration.
+				s.handleEffectSummonObjectWild(effCtx, spell, eff, target)
+			case spellEffectActivateObject: // 86: SPELL_EFFECT_ACTIVATE_OBJECT (EffectActivateObject, SpellEffects.cpp:3938)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per
+				// gameobject target; the action comes from eff.MiscValue
+				// (GameObjectActions, GameObjectData.h:675).
+				s.handleEffectActivateObject(effCtx, eff, target)
 			case spellEffectEnvironmentalDMG: // 7: SPELL_EFFECT_ENVIRONMENTAL_DAMAGE (EffectEnvironmentalDMG, SpellEffects.cpp:298)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
 				// target: players take Player::EnvironmentalDamage (fire),
@@ -20314,4 +20356,386 @@ func buildSetProficiency(itemClass uint8, mask uint32) []byte {
 	buf.WriteU8(itemClass)
 	buf.WriteU32(mask)
 	return buf.Bytes()
+}
+
+// handleEffectDistract mirrors Spell::EffectDistract (SpellEffects.cpp:2547),
+// which runs at SPELL_EFFECT_HANDLE_HIT_TARGET per unit target. The target
+// must exist, not be engaged (IsEngaged = IsInCombat, Unit.h:1031), and not
+// be confused, stunned, or fleeing; it then turns to face the spell
+// destination for damage ms via MotionMaster::MoveDistract, whose
+// DistractMovementGenerator (IdleMovementGenerator.cpp:162) stands the
+// creature, turns it in place toward the angle, and holds it for the timer.
+// Go has no spline model, so the hold lands as a DistractedUntil timestamp on
+// the creature motion (honored in stepCreatureMotion before the wander leg;
+// aggro still works, matching C++ where the generator does not suppress
+// acquisition), and the turn-in-place rides the Final_Angle arm of
+// SMSG_MONSTER_MOVE. Player hit targets have no Go motion model (documented
+// no-bridge); the stand-up arm has no Go stand-state model (documented).
+func (s *session) handleEffectDistract(ctx context.Context, eff wotlk.SpellEffect, hitTargets []uint64, target protocol.SpellTargetData) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	duration := eff.BasePoints + 1
+	if duration <= 0 {
+		return
+	}
+	if target.Flags&protocol.SpellTargetFlagDestLocation == 0 {
+		return
+	}
+	destX, destY := float64(target.Destination.X), float64(target.Destination.Y)
+	for _, targetGUID := range hitTargets {
+		if targetGUID == 0 {
+			continue
+		}
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
+		if motion == nil || motion.InCombat {
+			s.server.motionMu.Unlock()
+			continue
+		}
+		key := creatureAuraKeyForMotion(motion)
+		s.server.motionMu.Unlock()
+		// Unit::HasUnitState(UNIT_STATE_CONFUSED | UNIT_STATE_STUNNED |
+		// UNIT_STATE_FLEEING) (SpellEffects.cpp:2555), read off the
+		// creature's live auras.
+		if s.server.creatureHasControlLossAura(key) {
+			continue
+		}
+		s.server.motionMu.Lock()
+		motion = s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
+		if motion == nil || motion.InCombat {
+			s.server.motionMu.Unlock()
+			continue
+		}
+		// Unit::GetAbsoluteAngle(destTarget): atan2 normalized to [0, 2pi).
+		angle := float32(math.Atan2(destY-float64(motion.Y), destX-float64(motion.X)))
+		if angle < 0 {
+			angle += 2 * math.Pi
+		}
+		motion.Orientation = angle
+		motion.DistractedUntil = time.Now().Add(time.Duration(duration) * time.Millisecond)
+		motion.Moving = false
+		s.server.motionMu.Unlock()
+		// DistractMovementGenerator::Initialize launches an in-place
+		// MoveTo+SetFacing spline; Go reuses the facing arm of the monster
+		// move packet for the client-side turn.
+		s.server.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.X, motion.Y, motion.Z, 1000, false, angle, true)
+	}
+	_ = ctx
+}
+
+// creatureHasControlLossAura reports whether the creature carries a confuse,
+// stun, or fear aura — the UNIT_STATE_CONFUSED | UNIT_STATE_STUNNED |
+// UNIT_STATE_FLEEING gate of Spell::EffectDistract (SpellEffects.cpp:2555).
+func (s *Server) creatureHasControlLossAura(key creatureAuraKey) bool {
+	if s == nil {
+		return false
+	}
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil {
+			continue
+		}
+		switch aura.AuraType {
+		case spellAuraModConfuse, spellAuraModStun, spellAuraModFear:
+			return true
+		}
+	}
+	return false
+}
+
+// handleEffectAddFarsight mirrors Spell::EffectAddFarsight
+// (SpellEffects.cpp:2580), which runs once at SPELL_EFFECT_HANDLE_HIT on the
+// caster. The caster must be a player in the world; a
+// DYNAMIC_OBJECT_FARSIGHT_FOCUS dynamic object is created at the spell
+// destination with the effect's radius (CalcRadius() with no caster skips the
+// per-level term, SpellInfo.cpp:551) and the spell's duration, and
+// DynamicObject::SetCasterViewpoint makes it the caster's viewpoint
+// (Player::SetViewpoint, Player.cpp:24618 → the PLAYER_FARSIGHT update
+// field). The UpdateVisibilityOf leg rides Go's instance-wide create
+// broadcast; the server-side SetSeer/AddPlayerToVision legs have no Go model
+// (documented); the despawn clears the viewpoint like
+// DynamicObject::RemoveCasterViewpoint.
+func (s *session) handleEffectAddFarsight(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, target protocol.SpellTargetData) {
+	if s == nil || s.server == nil || s.player == nil || !s.playerLoaded {
+		return
+	}
+	if target.Flags&protocol.SpellTargetFlagDestLocation == 0 {
+		return
+	}
+	radius, radiusFound, radiusErr := s.server.Data.SpellRadius(eff.RadiusIndex, 0)
+	if radiusErr != nil || !radiusFound {
+		return
+	}
+	duration, durationFound, durationErr := s.server.Data.SpellDuration(spell.DurationIndex, 1)
+	if durationErr != nil || !durationFound || duration <= 0 {
+		return
+	}
+	object := &dynamicSpellObjectState{
+		GUID:            dynamicSpellGUID(s.server.nextDynamicSpellLowGUID()),
+		CasterGUID:      s.playerGUID,
+		SpellID:         uint64(spell.ID),
+		Map:             s.player.Map,
+		InstanceID:      s.player.InstanceID,
+		X:               target.Destination.X,
+		Y:               target.Destination.Y,
+		Z:               target.Destination.Z,
+		Orientation:     s.player.Orientation,
+		Radius:          radius,
+		CastTime:        uint32(time.Now().UnixMilli()),
+		ObjectType:      dynamicObjectTypeFarsightFocus,
+		IsFarsightFocus: true,
+	}
+	s.server.spawnDynamicSpellObject(object, time.Duration(duration)*time.Millisecond)
+	// Player::SetViewpoint apply arm (Player.cpp:24618-24631): PLAYER_FARSIGHT
+	// takes the dynobj GUID, pushed through the player's own update.
+	s.player.FarsightGUID = object.GUID
+	s.sendPlayerUpdate()
+	_ = ctx
+}
+
+// handleEffectSanctuary mirrors Spell::EffectSanctuary (SpellEffects.cpp:3757),
+// which runs at SPELL_EFFECT_HANDLE_HIT_TARGET per unit target. Player targets
+// outside dungeons stop all PvE combat (Unit::CombatStop(false, false),
+// Unit.cpp:5809 — AttackStop, RemoveAllAttackers, EndAllPvECombat,
+// SuppressPvPCombat); in dungeons, and for non-player targets, the unit's
+// threat is instead zeroed on every enemy threat list carrying it
+// (ThreatReference::ScaleThreat(0), ThreatManager.cpp:52-61). The PvP
+// suppression timer (CombatManager::SuppressPvPCombat) has no Go model
+// (documented); the player's own in-combat flag clear rides sendPlayerUpdate.
+func (s *session) handleEffectSanctuary(ctx context.Context, hitTargets []uint64) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	for _, targetGUID := range hitTargets {
+		if targetGUID == 0 {
+			continue
+		}
+		if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+			isDungeon := false
+			if entry, found, err := s.server.Data.Map(targetSess.player.Map); err == nil && found {
+				isDungeon = entry.IsDungeon()
+			}
+			if !isDungeon {
+				targetSess.stopPlayerCombat()
+				s.server.evadeCreaturesTargeting(ctx, targetSess.player.Map, targetSess.player.InstanceID, targetGUID)
+				if targetSess.player.UnitFlags&unitFlagInCombat != 0 {
+					targetSess.player.UnitFlags &^= unitFlagInCombat
+					targetSess.sendPlayerUpdate()
+				}
+				continue
+			}
+		}
+		mapID, instanceID := s.player.Map, s.player.InstanceID
+		s.server.motionMu.Lock()
+		if motion := s.server.findCreatureMotionLocked(mapID, instanceID, targetGUID); motion != nil {
+			mapID, instanceID = motion.Map, motion.InstanceID
+		}
+		s.server.motionMu.Unlock()
+		s.server.zeroThreatOnAllLists(mapID, instanceID, targetGUID)
+	}
+	_ = ctx
+}
+
+// handleEffectSummonObjectWild mirrors Spell::EffectSummonObjectWild
+// (SpellEffects.cpp:3552), which runs once at SPELL_EFFECT_HANDLE_HIT on the
+// caster. A game object of entry eff.MiscValue is created at the spell
+// destination (or a close point in front of the caster when the cast has no
+// dest), with the spell's duration as its lifetime, no owner, GO_STATE_READY,
+// and an SMSG_SPELLLOGEXECUTE summon entry (Spell.cpp:4606). The orientation
+// uses the caster's — C++ uses the focus object when present, which has no Go
+// model. The battleground flagdrop leg has no Go bridge (BG flags spawn
+// through the battleground logic); the linked-trap leg has no Go model
+// (documented).
+func (s *session) handleEffectSummonObjectWild(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, target protocol.SpellTargetData) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	if eff.MiscValue <= 0 {
+		return
+	}
+	entry := uint32(eff.MiscValue)
+	// GameObject::Create fails on an unknown entry (SpellEffects.cpp:3572) —
+	// the template lookup is the Go equivalent of that gate.
+	var goType, displayID int64
+	size := 1.0
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	var sizeValue float64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT type, displayId, size FROM gameobject_template WHERE entry = ? LIMIT 1", entry).Scan(&goType, &displayID, &sizeValue); err != nil {
+		return
+	}
+	if sizeValue > 0 {
+		size = sizeValue
+	}
+	var x, y, z float32
+	if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+		x, y, z = target.Destination.X, target.Destination.Y, target.Destination.Z
+	} else {
+		// WorldObject::GetClosePoint(DEFAULT_PLAYER_BOUNDING_RADIUS)
+		// (Object.cpp:3307, ObjectDefines.h:39): 0.389 in front of the caster.
+		x = s.player.X + 0.389*float32(math.Cos(float64(s.player.Orientation)))
+		y = s.player.Y + 0.389*float32(math.Sin(float64(s.player.Orientation)))
+		z = s.player.Z
+	}
+	lowGUID := s.server.nextDynamicGameObjectLowGUID()
+	dyn := &dynamicGameObjectState{GUID: gameObjectGUID(lowGUID, entry), LowGUID: lowGUID, Entry: entry, SpellID: spell.ID, Map: s.player.Map, InstanceID: s.player.InstanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, State: GameObjectStateReady, Type: uint8(goType), DisplayID: uint32(displayID), Size: float32(size), ParentRotation: [4]float32{0, 0, 0, 1}, IsRuntimeSpawn: true}
+	// GameObject::SetRespawnTime(duration/IN_MILLISECONDS)
+	// (SpellEffects.cpp:3579): the wild object's lifetime is the spell
+	// duration; a non-positive duration leaves it persistent like C++.
+	if duration, found, err := s.server.Data.SpellDuration(spell.DurationIndex, 1); err == nil && found && duration > 0 {
+		dyn.DespawnTimer = time.AfterFunc(time.Duration(duration)*time.Millisecond, func() {
+			s.server.despawnDynamicGameObjectInInstance(dyn.Map, dyn.InstanceID, dyn.GUID)
+		})
+	}
+	s.server.spawnDynamicGameObject(dyn)
+	s.sendSummonObjectLog(spell.ID, dyn.GUID)
+	_ = ctx
+}
+
+// GameObjectActions for SPELL_EFFECT_ACTIVATE_OBJECT (GameObjectData.h:675-698);
+// the MiscValue of the effect selects the action.
+const (
+	goActionAnimateCustom0 = 1
+	goActionAnimateCustom3 = 4
+	goActionDisturb        = 5
+	goActionUnlock         = 6
+	goActionLock           = 7
+	goActionOpen           = 8
+	goActionOpenAndUnlock  = 9
+	goActionClose          = 10
+	goActionDestroy        = 12
+	goActionRebuild        = 13
+	goActionDespawn        = 15
+	goActionMakeInert      = 16
+	goActionMakeActive     = 17
+	goActionCloseAndLock   = 18
+	goActionUseArtKit0     = 19
+	goActionUseArtKit3     = 22
+)
+
+const (
+	goFlagLocked        uint32 = 0x00000002 // GO_FLAG_LOCKED (SharedDefines.h:1638)
+	goFlagNotSelectable uint32 = 0x00000010 // GO_FLAG_NOT_SELECTABLE (SharedDefines.h:1641)
+)
+
+// handleEffectActivateObject mirrors Spell::EffectActivateObject
+// (SpellEffects.cpp:3938), which runs at SPELL_EFFECT_HANDLE_HIT_TARGET per
+// gameobject target. The action comes from eff.MiscValue (GameObjectActions,
+// GameObjectData.h:675); the GO target rides target.UnitGUID with the 0xF110
+// high bits (the same extraction handleEffectOpenLock uses). The Disturb/Open
+// arm (GameObject::Use) has no Go trigger — Go models no generic GO Use
+// dispatch — and ToggleOpen/Creation/SetTapList/None have no C++ arm
+// (documented no-bridge).
+func (s *session) handleEffectActivateObject(ctx context.Context, eff wotlk.SpellEffect, target protocol.SpellTargetData) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	var goGUID uint64
+	if target.Flags&protocol.SpellTargetFlagGameObject != 0 && target.UnitGUID != 0 && uint16(target.UnitGUID>>48) == 0xF110 {
+		goGUID = target.UnitGUID
+	}
+	if goGUID == 0 {
+		return
+	}
+	mapID, instanceID := s.player.Map, s.player.InstanceID
+	action := uint32(eff.MiscValue)
+	switch {
+	case action >= goActionAnimateCustom0 && action <= goActionAnimateCustom3:
+		// GameObject::SendCustomAnim(action - AnimateCustom0)
+		// (SpellEffects.cpp:3954).
+		s.server.broadcastGameObjectCustomAnimInInstance(mapID, instanceID, goGUID, action-goActionAnimateCustom0)
+	case action == goActionOpenAndUnlock:
+		// GameObject::UseDoorOrButton(0, false) then the fallthrough Unlock
+		// arm clears GO_FLAG_LOCKED (SpellEffects.cpp:3961-3967).
+		s.server.useDoorOrButton(mapID, instanceID, goGUID)
+		s.server.applyGameObjectFlag(mapID, instanceID, goGUID, goFlagLocked, false)
+	case action == goActionUnlock:
+		s.server.applyGameObjectFlag(mapID, instanceID, goGUID, goFlagLocked, false)
+	case action == goActionLock:
+		s.server.applyGameObjectFlag(mapID, instanceID, goGUID, goFlagLocked, true)
+	case action == goActionClose || action == goActionRebuild:
+		// GameObject::ResetDoorOrButton (GameObject.cpp:1422): back to the
+		// ready state; the reset-state packet is Go's equivalent.
+		s.server.setGameObjectStateInInstance(mapID, instanceID, goGUID, GameObjectStateReady)
+		s.server.broadcastGameObjectResetStateInInstance(mapID, instanceID, goGUID)
+	case action == goActionDespawn:
+		// GameObject::DespawnOrUnsummon (SpellEffects.cpp:3978).
+		s.server.despawnDynamicGameObjectInInstance(mapID, instanceID, goGUID)
+	case action == goActionMakeInert:
+		s.server.applyGameObjectFlag(mapID, instanceID, goGUID, goFlagNotSelectable, true)
+	case action == goActionMakeActive:
+		s.server.applyGameObjectFlag(mapID, instanceID, goGUID, goFlagNotSelectable, false)
+	case action == goActionCloseAndLock:
+		// GameObject::ResetDoorOrButton + SetFlag(GO_FLAG_LOCKED)
+		// (SpellEffects.cpp:3985-3988).
+		s.server.setGameObjectStateInInstance(mapID, instanceID, goGUID, GameObjectStateReady)
+		s.server.broadcastGameObjectResetStateInInstance(mapID, instanceID, goGUID)
+		s.server.applyGameObjectFlag(mapID, instanceID, goGUID, goFlagLocked, true)
+	case action == goActionDestroy:
+		// GameObject::UseDoorOrButton(0, true): GO_STATE_DESTROYED
+		// (SpellEffects.cpp:3990-3993); the bytes1 values update carries the
+		// destroyed state since no anim packet covers it.
+		s.server.setGameObjectStateInInstance(mapID, instanceID, goGUID, GameObjectStateActiveAlternative)
+		s.server.broadcastGameObjectBytes1InInstance(mapID, instanceID, goGUID)
+	case action >= goActionUseArtKit0 && action <= goActionUseArtKit3:
+		s.applyGameObjectArtKit(ctx, goGUID, action-goActionUseArtKit0)
+	}
+	_ = ctx
+}
+
+// applyGameObjectArtKit mirrors the UseArtKit arms of
+// Spell::EffectActivateObject (SpellEffects.cpp:3989-4008): the artkit comes
+// from gameobject_template_addon (ObjectMgr.cpp:7711) and lands via
+// GameObject::SetGoArtKit (GameObject.cpp:1448 — byte 2 of GAMEOBJECT_BYTES_1).
+// A zero artkit logs the C++ sql error and changes nothing.
+func (s *session) applyGameObjectArtKit(ctx context.Context, goGUID uint64, artKitIndex uint32) {
+	if s == nil || s.server == nil || s.player == nil || artKitIndex > 3 {
+		return
+	}
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	entry := uint32((goGUID >> 24) & 0xFFFFFF)
+	var artkits [4]uint32
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(artkit0,0), COALESCE(artkit1,0), COALESCE(artkit2,0), COALESCE(artkit3,0) FROM gameobject_template_addon WHERE entry = ?", entry).Scan(&artkits[0], &artkits[1], &artkits[2], &artkits[3]); err != nil {
+		return
+	}
+	if artkits[artKitIndex] == 0 {
+		s.debug("activate object artkit missing", "account", s.accountName, "entry", entry, "index", artKitIndex)
+		return
+	}
+	mapID, instanceID := s.player.Map, s.player.InstanceID
+	s.server.objectsMu.Lock()
+	st := s.server.gameObjectStateLocked(mapID, instanceID, goGUID)
+	if st != nil {
+		st.ArtKit = uint8(artkits[artKitIndex])
+	}
+	s.server.objectsMu.Unlock()
+	if st != nil {
+		s.server.broadcastGameObjectBytes1InInstance(mapID, instanceID, goGUID)
+	}
+}
+
+// sendSummonObjectLog mirrors Spell::ExecuteLogEffectSummonObject
+// (Spell.cpp:4606): SMSG_SPELLLOGEXECUTE carrying the summoned object's GUID
+// under the summon effect ID (Spell.cpp:4547), sent to the caster and nearby
+// players like the other spell-log builders.
+func (s *session) sendSummonObjectLog(spellID uint32, goGUID uint64) {
+	if s == nil || s.player == nil {
+		return
+	}
+	log := protocol.NewBuffer(32)
+	log.WritePackedGUID(s.playerGUID)
+	log.WriteU32(spellID)
+	log.WriteU32(1)
+	log.WriteU32(spellEffectSummonObjectWild)
+	log.WriteU32(1)
+	log.WritePackedGUID(goGUID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
+	}
 }

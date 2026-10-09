@@ -70,6 +70,7 @@ const (
 	playerFieldArenaTeamInfoStart                 = 1256 // PLAYER_FIELD_ARENA_TEAM_INFO_1_1 = UNIT_END + 0x0454
 	playerFieldDuelArbiter                        = 148  // PLAYER_DUEL_ARBITER = UNIT_END + 0x0000 (Size 2)
 	playerFieldDuelTeam                           = 156  // PLAYER_DUEL_TEAM = UNIT_END + 0x0008 (Size 1)
+	playerFieldFarsight                           = 624  // PLAYER_FARSIGHT = UNIT_END + 0x01DC (Size 2, PRIVATE)
 	playerExploredZonesStart                      = 1041 // PLAYER_EXPLORED_ZONES_1 = UNIT_END + 0x037D
 	playerExploredZonesCount                      = 128
 	playerQuestLogStart                           = 158 // PLAYER_QUEST_LOG_1_1; stride 5 per TC MAX_QUEST_OFFSET
@@ -269,6 +270,7 @@ type playerState struct {
 	ExploredZones                   [playerExploredZonesCount]uint32
 	DuelArbiter                     uint64
 	DuelTeam                        uint32
+	FarsightGUID                    uint64 // PLAYER_FARSIGHT viewpoint GUID (EffectAddFarsight); runtime-only like C++
 	UnitFlags                       uint32
 	HomebindMap                     uint32
 	HomebindZone                    uint32
