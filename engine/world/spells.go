@@ -6350,7 +6350,7 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 			continue
 		}
 		if s.server != nil {
-			if ts := s.server.findSessionByGUID(checkGUID); ts != nil && ts.isImmuneToSpell(spell) {
+			if ts := s.server.findSessionByGUID(checkGUID); ts != nil && ts.isImmuneToSpell(spell, s) {
 				continue
 			}
 		}
@@ -7017,7 +7017,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}}
 			targetGUID = s.playerGUID
 			hitTargets = []uint64{s.playerGUID}
-		} else if targetSess != nil && targetSess.isImmuneToSpell(spell) {
+		} else if targetSess != nil && targetSess.isImmuneToSpell(spell, s) {
 			hitTargets = nil
 			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
 			// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2354-2357): an
@@ -7088,7 +7088,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		if s.server != nil {
 			targetSess = s.server.findSessionByGUID(targetGUID)
 		}
-		if targetSess != nil && targetSess.isImmuneToSpell(spell) {
+		if targetSess != nil && targetSess.isImmuneToSpell(spell, s) {
 			hitTargets = nil
 			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
 		} else if targetSess != nil && s.spellTargetFullyEffectImmune(spell, targetSess) {
@@ -16100,7 +16100,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		if targetSess.player.Health == 0 {
 			return
 		}
-		if targetSess.isImmuneToSpell(spell) {
+		if targetSess.isImmuneToSpell(spell, s) {
 			return
 		}
 		if eff.Aura == 36 {
