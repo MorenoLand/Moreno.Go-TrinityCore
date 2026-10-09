@@ -37,6 +37,12 @@ type dynamicSpellObjectState struct {
 	// Spell::DelayedChannel's dynobj->Delay arm (Spell.cpp:7324-7326)
 	// shortens it on channel pushback.
 	ExpiresAt time.Time
+	// AuraHolders tracks the target GUIDs currently holding this object's
+	// persistent-area aura — the Go analog of Aura::UpdateTargetMap's
+	// application set (SpellAuras.cpp:643). Targets that leave the radius
+	// lose the aura on the next update pass, and the set scopes the
+	// despawn strip to this object's applications.
+	AuraHolders map[uint64]struct{}
 }
 
 func dynamicSpellGUID(low uint32) uint64 { return (dynamicObjectHighGUID << 48) | uint64(low) }
@@ -144,13 +150,119 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 			continue
 		}
 		target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagDestLocation, Destination: protocol.SpellTargetLocation{X: object.X, Y: object.Y, Z: object.Z}}
-		for _, targetGUID := range caster.spellAreaEnemyTargets(ctx, object.SpellData, target) {
+		areaTargets := caster.spellAreaEnemyTargets(ctx, object.SpellData, target)
+		inRadius := make(map[uint64]struct{}, len(areaTargets))
+		for _, targetGUID := range areaTargets {
+			// Aura::UpdateTargetMap (SpellAuras.cpp:700-701): dynobj auras
+			// don't hit flying targets.
+			if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.inFlight {
+				continue
+			}
+			inRadius[targetGUID] = struct{}{}
+		}
+		spellID := uint32(object.SpellID)
+		// Aura::UpdateTargetMap's removal arm (SpellAuras.cpp:663-684):
+		// applications whose targets left the area are removed. The 500ms
+		// C++ cadence is coarser here — removal rides the aura period tick.
+		for holderGUID := range object.AuraHolders {
+			if _, ok := inRadius[holderGUID]; ok {
+				continue
+			}
+			s.expireDynobjHolderAura(object, holderGUID, spellID)
+			delete(object.AuraHolders, holderGUID)
+		}
+		for _, targetGUID := range areaTargets {
+			if _, ok := inRadius[targetGUID]; !ok {
+				continue
+			}
 			if caster.hasDynamicAreaAura(targetGUID, object.SpellData.ID) {
 				continue
 			}
 			caster.applyAuraToTarget(ctx, targetGUID, object.SpellData, object.AuraEffect, object.AuraDurationMs, object.AuraPeriodMs, object.AuraAmount, uint32(object.AuraSchoolMask), nil, false, object.CasterGUID, true)
+			if object.AuraHolders == nil {
+				object.AuraHolders = make(map[uint64]struct{})
+			}
+			object.AuraHolders[targetGUID] = struct{}{}
 		}
 	}
+}
+
+// expireDynobjHolderAura removes a persistent-area aura from a holder that
+// left the dynobj radius — the Aura::UpdateTargetMap removal arm
+// (SpellAuras.cpp:663-684). The dynobj match gates (persistent-area flag +
+// caster GUID) mirror removeDynobjAura so a same-spell aura from another
+// source is never stripped.
+func (s *Server) expireDynobjHolderAura(object *dynamicSpellObjectState, holderGUID uint64, spellID uint32) {
+	if s == nil || object == nil || holderGUID == 0 || spellID == 0 {
+		return
+	}
+	if ts := s.findSessionByGUID(holderGUID); ts != nil {
+		ts.removeDynobjAura(spellID, object.CasterGUID)
+		return
+	}
+	s.stripDynobjCreatureAura(creatureAuraKey{Map: object.Map, InstanceID: object.InstanceID, GUID: holderGUID}, spellID, object.CasterGUID)
+}
+
+// stripDynobjCreatureAura removes the persistent-area aura (spellID, dynobj
+// caster) from a creature target — the creature half of
+// DynamicObject::RemoveFromWorld's RemoveAura leg (DynamicObject.cpp:63-83,
+// 205-213) and of the Aura::UpdateTargetMap removal arm
+// (SpellAuras.cpp:663-684). The match on the persistent-area flag and the
+// dynobj caster GUID runs atomically with the removal under auraMu, so a
+// same-spell aura from another source is never stripped. Removal mirrors
+// removeCreatureAura's charm/taunt/packet tail.
+func (s *Server) stripDynobjCreatureAura(key creatureAuraKey, spellID uint32, casterGUID uint64) {
+	if s == nil || key.GUID == 0 || spellID == 0 {
+		return
+	}
+	var removed bool
+	var wasCharm, wasTaunt bool
+	var charmerGUID, taunterGUID uint64
+	var slot uint8
+	s.auraMu.Lock()
+	if s.activeCreatureAuras != nil {
+		if auras, ok := s.activeCreatureAuras[key]; ok {
+			if aura, exists := auras[spellID]; exists && aura != nil &&
+				!aura.Stopped && aura.CasterGUID == casterGUID && aura.PersistentAreaAura {
+				wasCharm = aura.AuraType == spellAuraCharm
+				charmerGUID = aura.CasterGUID
+				wasTaunt = aura.AuraType == spellAuraModTaunt
+				taunterGUID = aura.CasterGUID
+				aura.Stopped = true
+				slot = aura.Slot
+				if aura.Timer != nil {
+					aura.Timer.Stop()
+				}
+				if aura.TickTimer != nil {
+					aura.TickTimer.Stop()
+				}
+				delete(auras, spellID)
+				s.unregisterSingleCastAura(aura)
+				removed = true
+			}
+		}
+	}
+	if removed && s.creatureAuras != nil {
+		if auras, ok := s.creatureAuras[key]; ok {
+			delete(auras, spellID)
+		}
+	}
+	s.auraMu.Unlock()
+	if !removed {
+		return
+	}
+	if wasTaunt {
+		s.clearCreatureTaunt(key, taunterGUID)
+	}
+	if wasCharm {
+		s.uncharmCreature(key, charmerGUID)
+		if charmer := s.findSessionByGUID(charmerGUID); charmer != nil && charmer.player != nil && charmer.player.Map == key.Map && charmer.player.InstanceID == key.InstanceID {
+			charmer.sendClientControl(key.GUID, false)
+			charmer.sendVehiclePetSpells(0, nil)
+		}
+	}
+	removePkt := protocol.BuildAuraUpdate(key.GUID, 0, slot, 0, true, false, 0, 0, 1)
+	s.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, nil)
 }
 
 func (s *session) hasDynamicAreaAura(targetGUID uint64, spellID uint32) bool {
