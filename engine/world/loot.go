@@ -1633,17 +1633,68 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 	}
 	// GameObject::getFishLoot / getFishLootJunk (GameObject.cpp:943-980): the
 	// fishing loot template entry is resolved subzone first, then zone, then
-	// zone 1 as the default.
-	if err := loadRows(s.areaID, lootMode); err != nil && !missingTable(err) {
+	// zone 1 as the default. Loot::empty (Loot.h:235) is items.empty() &&
+	// gold == 0 — quest rows don't count — so the fallthrough keys off the
+	// normal fill alone, matching Go's len(Items) check.
+	resolvedEntry := uint32(0)
+	tryEntry := func(entry uint32) error {
+		before := len(loot.Items)
+		if err := loadRows(entry, lootMode); err != nil {
+			return err
+		}
+		if len(loot.Items) > before && resolvedEntry == 0 {
+			resolvedEntry = entry
+		}
+		return nil
+	}
+	if err := tryEntry(s.areaID); err != nil && !missingTable(err) {
 		return true
 	}
 	if len(loot.Items) == 0 && s.areaID != s.player.Zone {
-		if err := loadRows(s.player.Zone, lootMode); err != nil && !missingTable(err) {
+		if err := tryEntry(s.player.Zone); err != nil && !missingTable(err) {
 			return true
 		}
 	}
 	if len(loot.Items) == 0 && s.player.Zone != 1 {
-		_ = loadRows(1, lootMode)
+		_ = tryEntry(1)
+	}
+	// GameObject::getFishLoot / getFishLootJunk run their fills with
+	// personal=true (GameObject.cpp:950-960 -> Loot::FillLoot, Loot.cpp:230-232:
+	// FillNotNormalLootFor(lootOwner, true)), so the resolved entry's
+	// quest-required rows are generated for the fisher alone — the same
+	// QuestPersonalGUID pin the GO-chest, skinning, and pickpocket fills use.
+	if resolvedEntry != 0 {
+		loot.QuestPersonalGUID = s.playerGUID
+		var qslot, qidx uint8
+		rows := loadLootTemplateRows(ctx, s.server.WorldStore.DB, "fishing_loot_template", int64(resolvedEntry), lootMode)
+		for i := range rows {
+			row := &rows[i]
+			if row.lootMode&lootMode == 0 || !row.questRequired {
+				continue
+			}
+			if row.reference > 0 {
+				if !lootRowTakesChance(row.chance) {
+					continue
+				}
+				// LootTemplate::Process (LootMgr.cpp:587-591): the reference
+				// row's maxcount loops the referenced template, the row's
+				// groupid selecting the group inside it.
+				for n := uint32(0); n < row.maxCount; n++ {
+					s.server.fillLootTemplateDepth(ctx, s.server.WorldStore.DB, "reference_loot_template", int64(row.reference), lootMode, loot, &qslot, &qidx, row.groupID, 0)
+				}
+				continue
+			}
+			if row.groupID != 0 {
+				// Documented delta: the fishing normal fill has no group
+				// model (flat ORDER BY Item LIMIT 18 load), so grouped quest
+				// rows share it; no shipped fishing template uses groups.
+				continue
+			}
+			if !lootRowTakesChance(row.chance) {
+				continue
+			}
+			addLootTemplateRow(loot, &qslot, &qidx, row)
+		}
 	}
 	s.server.lootMu.Lock()
 	if s.server.creatureLoot == nil {
