@@ -29,6 +29,7 @@ const (
 	spellAttr3OnlyTargetGhosts      uint32 = 0x00001000 // SPELL_ATTR3_ONLY_TARGET_GHOSTS: Can only target ghost players (SharedDefines.h:535)
 	spellAttr5HideDuration          uint32 = 0x00000400 // SPELL_ATTR5_HIDE_DURATION (SharedDefines.h:607)
 	spellAttr5CanChannelWhenMoving  uint32 = 0x00000001 // SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING (SharedDefines.h:597)
+	spellAttr5StartPeriodicAtApply  uint32 = 0x00000200 // SPELL_ATTR5_START_PERIODIC_AT_APPLY (SharedDefines.h:606) — ATTR5 is Go's AttributesEx5
 	spellAttr5SingleTarget          uint32 = 0x00000020 // SPELL_ATTR5_SINGLE_TARGET_SPELL (SharedDefines.h:602)
 	spellAttr5SkipCheckcastLosCheck uint32 = 0x04000000 // SPELL_ATTR5_SKIP_CHECKCAST_LOS_CHECK (SharedDefines.h:623) — ATTR5 is Go's AttributesEx5
 	spellAttr5HasteAffectDuration   uint32 = 0x00002000 // SPELL_ATTR5_HASTE_AFFECT_DURATION (SharedDefines.h:610) — ATTR5 is Go's AttributesEx5
@@ -316,6 +317,7 @@ const (
 	spellEffectReputation              = 103
 	spellEffectQuestComplete           = 16
 	spellEffectHealthLeech             = 9
+	spellEffectEnvironmentalDamage     = 7 // SPELL_EFFECT_ENVIRONMENTAL_DAMAGE (SharedDefines.h:818)
 	spellEffectSchoolDamage            = 2 // SPELL_EFFECT_SCHOOL_DAMAGE (SharedDefines.h:813)
 	spellEffectPowerDrain              = 8
 	spellEffectCharge                  = 96  // SPELL_EFFECT_CHARGE (SharedDefines.h:907)
@@ -10094,16 +10096,11 @@ func (s *session) spellBonusMultiplier(spellID uint32, effIndex int, heal bool) 
 				coeff = float64(spell.Effects[effIndex].BonusCoefficient)
 			}
 			if coeff < 0 {
-				if spell.CastingTimeIndex > 0 {
-					if ct, ok, _ := s.server.Data.SpellCastTime(spell.CastingTimeIndex); ok && ct > 0 {
-						coeff = float64(ct) / 3500.0
-						if coeff > 1.0 {
-							coeff = 1.0
-						}
-					}
-				} else {
-					coeff = 1.5 / 3.5 // instant cast coefficient ~0.4286
-				}
+				// Unit.cpp:6713 — a negative DBC coefficient falls back to
+				// CalculateDefaultCoefficient; the damagetype is derived
+				// from the effect when the caller passes no explicit leg.
+				isDot := effIndex >= 0 && effIndex < len(spell.Effects) && isPeriodicDamageEffect(spell.Effects[effIndex])
+				coeff = s.defaultSpellDamageCoefficient(spell, isDot)
 				if heal {
 					coeff *= 1.88
 				}
@@ -10164,22 +10161,187 @@ func (srv *Server) spellBonusData(spellID uint32) (spellBonusEntry, bool) {
 	return e, ok
 }
 
-// defaultSpellDamageCoefficient mirrors Unit::CalculateDefaultCoefficient
-// (Unit.cpp:11012) in its cast-time form: C = (Cast Time / 3.5), capped at 1.0,
-// the fallback when the DBC bonus coefficient is negative. The C++ DoT-factor,
-// AoE-penalty and effect-distribution refinements (Unit.cpp:11012-11040) have no
-// Go model — documented gap.
-func (s *session) defaultSpellDamageCoefficient(spell wotlk.Spell) float64 {
-	coeff := 1.5 / 3.5 // instant cast coefficient ~0.4286
-	if spell.CastingTimeIndex > 0 && s.server != nil && s.server.Data != nil {
-		if ct, ok, _ := s.server.Data.SpellCastTime(spell.CastingTimeIndex); ok && ct > 0 {
-			coeff = float64(ct) / 3500.0
-			if coeff > 1.0 {
-				coeff = 1.0
+// spellMaxTicks mirrors SpellInfo::GetMaxTicks (SpellInfo.cpp:3108): the
+// periodic-aura effect's tick count = duration / amplitude, skipping infinite
+// periodics, +1 with ATTR5_START_PERIODIC_AT_APPLY. The last periodic effect
+// wins, matching the C++ assignment.
+func (s *session) spellMaxTicks(spell wotlk.Spell) uint32 {
+	var total uint32
+	if s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	dur, ok, err := s.server.Data.SpellDuration(spell.DurationIndex, 1)
+	if err != nil || !ok || dur <= 0 {
+		return 0
+	}
+	for _, eff := range spell.Effects {
+		if eff.Effect != spellEffectApplyAura {
+			continue
+		}
+		switch eff.Aura {
+		case spellAuraPeriodicDamage, spellAuraPeriodicDamagePercent, spellAuraPeriodicHeal,
+			spellAuraObsModHealth, spellAuraObsModPower, spellAuraPeriodicTriggerSpellFromClient,
+			spellAuraPowerBurn, spellAuraPeriodicLeech, spellAuraPeriodicManaLeech,
+			spellAuraPeriodicEnergize, spellAuraPeriodicDummy, spellAuraPeriodicTriggerSpell,
+			spellAuraPeriodicTriggerSpellWithValue, spellAuraPeriodicHealthFunnel,
+			spellAuraModAttackPowerOfArmor:
+			if eff.AuraPeriod > 0 {
+				total = uint32(dur) / eff.AuraPeriod
+				if spell.AttributesEx5&spellAttr5StartPeriodicAtApply != 0 {
+					total++
+				}
 			}
 		}
 	}
-	return coeff
+	return total
+}
+
+// spellCastingTimeForBonus mirrors Unit::GetCastingTimeForBonus
+// (Unit.cpp:10879-10976): the cast-time distribution over direct/DoT
+// portions, the AoE halving, the leech halving, and the -5%-per-extra-effect
+// decay, in C++ uint32 arithmetic. The creature instant-cast arm
+// (casttime 0 on a non-pet creature -> 3500) never fires on this call graph —
+// the coefficient legs only run for player casters — and the npcbot carve-out
+// has no Go model.
+func (s *session) spellCastingTimeForBonus(spell wotlk.Spell, isDot bool, castingTime uint32) uint32 {
+	if castingTime > 7000 {
+		castingTime = 7000
+	}
+	if castingTime < 1500 {
+		castingTime = 1500
+	}
+	if isDot && !isChanneledSpell(spell) {
+		castingTime = 3500
+	}
+
+	var overTime int32
+	var effects uint8
+	directDamage := false
+	areaEffect := false
+	var duration int32
+	if s.server != nil && s.server.Data != nil {
+		if dur, ok, err := s.server.Data.SpellDuration(spell.DurationIndex, 1); err == nil && ok {
+			duration = dur
+		}
+	}
+
+	for _, eff := range spell.Effects {
+		switch eff.Effect {
+		case spellEffectSchoolDamage, spellEffectPowerDrain, spellEffectHealthLeech,
+			spellEffectEnvironmentalDamage, spellEffectPowerBurn, spellEffectHeal:
+			directDamage = true
+		case spellEffectApplyAura:
+			switch eff.Aura {
+			case spellAuraPeriodicDamage, spellAuraPeriodicHeal, spellAuraPeriodicLeech:
+				if duration != 0 {
+					overTime = duration
+				}
+			default:
+				effects++
+			}
+		}
+		if spellEffectTargetsArea(eff) {
+			areaEffect = true
+		}
+	}
+
+	// Combined spells with both over-time and direct damage
+	// (Unit.cpp:10936-10951): split the cast time by the portion of the
+	// bonus belonging to each leg.
+	if overTime > 0 && directDamage {
+		originalCastTime := castingTime
+		if s.server != nil && s.server.Data != nil {
+			if ct, ok, _ := s.server.Data.SpellCastTime(spell.CastingTimeIndex); ok && ct > 0 {
+				originalCastTime = uint32(ct)
+			}
+		}
+		if originalCastTime > 7000 {
+			originalCastTime = 7000
+		}
+		if originalCastTime < 1500 {
+			originalCastTime = 1500
+		}
+		ptOT := (float64(overTime) / 15000.0) / ((float64(overTime) / 15000.0) + (float64(originalCastTime) / 3500.0))
+		if isDot {
+			castingTime = uint32(float64(castingTime) * ptOT)
+		} else if ptOT < 1.0 {
+			castingTime = uint32(float64(castingTime) * (1 - ptOT))
+		} else {
+			castingTime = 0
+		}
+	}
+
+	// Area effect spells receive only half of bonus (Unit.cpp:10954-10955).
+	if areaEffect {
+		castingTime /= 2
+	}
+
+	// 50% for leech spells from the damage bonus
+	// (Unit.cpp:10958-10966).
+	for _, eff := range spell.Effects {
+		if eff.Effect == spellEffectHealthLeech ||
+			(eff.Effect == spellEffectApplyAura && eff.Aura == spellAuraPeriodicLeech) {
+			castingTime /= 2
+			break
+		}
+	}
+
+	// -5% of total per any additional effect (Unit.cpp:10969-10970).
+	for i := uint8(0); i < effects; i++ {
+		castingTime = uint32(float64(castingTime) * 0.95)
+	}
+	return castingTime
+}
+
+// defaultSpellDamageCoefficient mirrors Unit::CalculateDefaultCoefficient
+// (Unit.cpp:11012-11040): C = (Cast Time / 3.5) x DotFactor, where the cast
+// time runs through GetCastingTimeForBonus and DotFactor spreads the bonus
+// over the DoT's duration and tick count. Unlike the old stub there is no
+// 1.0 cap — C++ clamps the cast time at 7000ms instead, so long casts scale
+// up to 2.0.
+func (s *session) defaultSpellDamageCoefficient(spell wotlk.Spell, isDot bool) float64 {
+	dotFactor := 1.0
+	var duration int32
+	if s.server != nil && s.server.Data != nil {
+		if dur, ok, err := s.server.Data.SpellDuration(spell.DurationIndex, 1); err == nil && ok {
+			duration = dur
+		}
+	}
+	if isDot {
+		if !isChanneledSpell(spell) && duration > 0 {
+			dotFactor = float64(duration) / 15000.0
+		}
+		if ticks := s.spellMaxTicks(spell); ticks > 0 {
+			dotFactor /= float64(ticks)
+		}
+	}
+
+	var castingTime uint32
+	if isChanneledSpell(spell) {
+		if duration > 0 {
+			castingTime = uint32(duration)
+		}
+	} else if s.server != nil && s.server.Data != nil {
+		if ct, ok, _ := s.server.Data.SpellCastTime(spell.CastingTimeIndex); ok && ct > 0 {
+			castingTime = uint32(ct)
+		}
+	}
+	castingTime = s.spellCastingTimeForBonus(spell, isDot, castingTime)
+	return (float64(castingTime) / 3500.0) * dotFactor
+}
+
+// isPeriodicDamageEffect reports whether the effect carries an over-time
+// aura, for damagetype derivation where the caller has no explicit isDot.
+func isPeriodicDamageEffect(eff wotlk.SpellEffect) bool {
+	if eff.Effect != spellEffectApplyAura {
+		return false
+	}
+	switch eff.Aura {
+	case spellAuraPeriodicDamage, spellAuraPeriodicDamagePercent,
+		spellAuraPeriodicHeal, spellAuraPeriodicLeech:
+		return true
+	}
+	return false
 }
 
 // spellDoneCoefficient mirrors the coeff selection in Unit::SpellDamageBonusDone
@@ -10197,7 +10359,7 @@ func (s *session) spellDoneCoefficient(spell wotlk.Spell, effIndex int, isDot bo
 				c = bonus.dot
 			}
 			if c < 0 {
-				c = s.defaultSpellDamageCoefficient(spell)
+				c = s.defaultSpellDamageCoefficient(spell, isDot)
 			}
 			coeff = c
 		}
@@ -10496,6 +10658,15 @@ func (s *session) spellDamagePctClassScripts(ctx context.Context, spell wotlk.Sp
 				}
 			}
 		}
+		// Torment the Weak (Unit.cpp:6922-6938): victim slowed/snared and the
+		// caster carries the icon-3263 DUMMY aura — first match only.
+		if spell.SpellFamilyFlags[0]&0x20600021 != 0 || spell.SpellFamilyFlags[1]&0x9000 != 0 {
+			if s.targetHasAuraWithMechanic(ctx, targetGUID, (1<<mechanicSnare)|(1<<mechanicSlowAttack)) {
+				if amt, ok := s.dummyAuraAmountByIcon(spellFamilyMage, 3263); ok {
+					addPct(amt)
+				}
+			}
+		}
 	case spellFamilyPriest:
 		if spell.SpellFamilyFlags[0]&0x800000 != 0 { // Mind Flay
 			if amt, ok := s.auraEffectAmount(55687, 0); ok && // Glyph of Shadow Word: Pain
@@ -10596,7 +10767,7 @@ func (s *session) spellHealingDoneCoefficient(spell wotlk.Spell, effIndex int, i
 				c = bonus.dot
 			}
 			if c < 0 {
-				c = s.defaultSpellDamageCoefficient(spell) * 1.88
+				c = s.defaultSpellDamageCoefficient(spell, isDot) * 1.88
 			}
 			coeff = c
 		}
@@ -12283,9 +12454,10 @@ const (
 	spellBrittleArmorAura    = 24575 // aura stacked by triggerBrittleArmorSpell
 	spellMercurialShieldAura = 26464 // aura stacked by triggerMercurialShieldSpell
 
-	mechanicRoot   = 7  // MECHANIC_ROOT (SharedDefines.h:1364)
-	mechanicSnare  = 11 // MECHANIC_SNARE (SharedDefines.h:1368)
-	mechanicDisarm = 3  // MECHANIC_DISARM (SharedDefines.h:1360)
+	mechanicRoot       = 7  // MECHANIC_ROOT (SharedDefines.h:1364)
+	mechanicSnare      = 11 // MECHANIC_SNARE (SharedDefines.h:1368)
+	mechanicSlowAttack = 8  // MECHANIC_SLOW_ATTACK (SharedDefines.h:1365)
+	mechanicDisarm     = 3  // MECHANIC_DISARM (SharedDefines.h:1360)
 )
 
 // triggerSpellEffectTarget mirrors one target invocation of
@@ -13479,6 +13651,51 @@ func (s *session) swiftmendConsumedTick(ctx context.Context, targetGUID uint64) 
 		remove(best.SpellID)
 	}
 	return uint32(bestTick) * tickCount, true
+}
+
+// targetHasAuraWithMechanic mirrors Unit::HasAuraWithMechanic
+// (Unit.cpp:4727-4740): true when any live aura on the target carries a
+// spell-level or applied-effect mechanic inside the mask.
+func (s *session) targetHasAuraWithMechanic(ctx context.Context, targetGUID uint64, mechanicMask uint32) bool {
+	if s.server == nil || s.server.Data == nil {
+		return false
+	}
+	var auras []*activeAura
+	if targetGUID == 0 || targetGUID == s.playerGUID {
+		auras = s.loadedAuras()
+	} else if other := s.server.findSessionByGUID(targetGUID); other != nil && other.player != nil {
+		auras = other.loadedAuras()
+	} else if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
+		key := creatureAuraKeyForTarget(target)
+		s.server.auraMu.Lock()
+		for _, aura := range s.server.activeCreatureAuras[key] {
+			auras = append(auras, aura)
+		}
+		s.server.auraMu.Unlock()
+	} else {
+		return false
+	}
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		if aura.Mechanic != 0 && mechanicMask&(1<<aura.Mechanic) != 0 {
+			return true
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, eff := range auraSpell.Effects {
+			if aura.EffectMask&(1<<uint(index)) == 0 || eff.Effect == 0 || eff.Mechanic == 0 {
+				continue
+			}
+			if mechanicMask&(1<<eff.Mechanic) != 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // targetHasFamilyAuraEffect mirrors the confirming
@@ -16116,22 +16333,25 @@ type rankPurgeTarget struct {
 // Periodic aura types exempted from the different-caster rank-chain purge
 // (Aura::CanStackWith, SpellAuras.cpp:1955-1976).
 const (
-	spellAuraPeriodicDamage                = 3   // SPELL_AURA_PERIODIC_DAMAGE (SpellAuraDefines.h:83)
-	spellAuraPeriodicHeal                  = 8   // SPELL_AURA_PERIODIC_HEAL (SpellAuraDefines.h:88)
-	spellAuraObsModHealth                  = 20  // SPELL_AURA_OBS_MOD_HEALTH (SpellAuraDefines.h:100)
-	spellAuraObsModPower                   = 21  // SPELL_AURA_OBS_MOD_POWER (SpellAuraDefines.h:101)
-	spellAuraPeriodicTriggerSpell          = 23  // SPELL_AURA_PERIODIC_TRIGGER_SPELL (SpellAuraDefines.h:103)
-	spellAuraPeriodicEnergize              = 24  // SPELL_AURA_PERIODIC_ENERGIZE (SpellAuraDefines.h:104)
-	spellAuraPeriodicLeech                 = 53  // SPELL_AURA_PERIODIC_LEECH (SpellAuraDefines.h:133)
-	spellAuraPeriodicHealthFunnel          = 62  // SPELL_AURA_PERIODIC_HEALTH_FUNNEL (SpellAuraDefines.h:137)
-	spellAuraPeriodicManaLeech             = 64  // SPELL_AURA_PERIODIC_MANA_LEECH (SpellAuraDefines.h:144)
-	spellAuraPowerBurn                     = 162 // SPELL_AURA_POWER_BURN (SpellAuraDefines.h:242)
-	spellAuraPeriodicDummy                 = 226 // SPELL_AURA_PERIODIC_DUMMY (SpellAuraDefines.h:306)
-	spellAuraPeriodicTriggerSpellWithValue = 227 // SPELL_AURA_PERIODIC_TRIGGER_SPELL_WITH_VALUE (SpellAuraDefines.h:307)
-	spellAuraModHealingPct                 = 118 // SPELL_AURA_MOD_HEALING_PCT (SpellAuraDefines.h:198)
-	spellAuraModHotPct                     = 259 // SPELL_AURA_MOD_HOT_PCT (SpellAuraDefines.h:339)
-	spellAuraModHealingReceived            = 283 // SPELL_AURA_MOD_HEALING_RECEIVED (SpellAuraDefines.h:363)
-	spellAuraModAttackerSpellCritChance    = 179 // SPELL_AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE (SpellAuraDefines.h:259)
+	spellAuraPeriodicDamage                 = 3   // SPELL_AURA_PERIODIC_DAMAGE (SpellAuraDefines.h:83)
+	spellAuraPeriodicHeal                   = 8   // SPELL_AURA_PERIODIC_HEAL (SpellAuraDefines.h:88)
+	spellAuraObsModHealth                   = 20  // SPELL_AURA_OBS_MOD_HEALTH (SpellAuraDefines.h:100)
+	spellAuraObsModPower                    = 21  // SPELL_AURA_OBS_MOD_POWER (SpellAuraDefines.h:101)
+	spellAuraPeriodicTriggerSpell           = 23  // SPELL_AURA_PERIODIC_TRIGGER_SPELL (SpellAuraDefines.h:103)
+	spellAuraPeriodicTriggerSpellFromClient = 48  // SPELL_AURA_PERIODIC_TRIGGER_SPELL_FROM_CLIENT (SpellAuraDefines.h:128)
+	spellAuraPeriodicDamagePercent          = 89  // SPELL_AURA_PERIODIC_DAMAGE_PERCENT (SpellAuraDefines.h:169)
+	spellAuraPeriodicTriggerSpellWithValue  = 227 // SPELL_AURA_PERIODIC_TRIGGER_SPELL_WITH_VALUE (SpellAuraDefines.h:307)
+	spellAuraModAttackPowerOfArmor          = 285 // SPELL_AURA_MOD_ATTACK_POWER_OF_ARMOR (SpellAuraDefines.h:365)
+	spellAuraPeriodicEnergize               = 24  // SPELL_AURA_PERIODIC_ENERGIZE (SpellAuraDefines.h:104)
+	spellAuraPeriodicLeech                  = 53  // SPELL_AURA_PERIODIC_LEECH (SpellAuraDefines.h:133)
+	spellAuraPeriodicHealthFunnel           = 62  // SPELL_AURA_PERIODIC_HEALTH_FUNNEL (SpellAuraDefines.h:137)
+	spellAuraPeriodicManaLeech              = 64  // SPELL_AURA_PERIODIC_MANA_LEECH (SpellAuraDefines.h:144)
+	spellAuraPowerBurn                      = 162 // SPELL_AURA_POWER_BURN (SpellAuraDefines.h:242)
+	spellAuraPeriodicDummy                  = 226 // SPELL_AURA_PERIODIC_DUMMY (SpellAuraDefines.h:306)
+	spellAuraModHealingPct                  = 118 // SPELL_AURA_MOD_HEALING_PCT (SpellAuraDefines.h:198)
+	spellAuraModHotPct                      = 259 // SPELL_AURA_MOD_HOT_PCT (SpellAuraDefines.h:339)
+	spellAuraModHealingReceived             = 283 // SPELL_AURA_MOD_HEALING_RECEIVED (SpellAuraDefines.h:363)
+	spellAuraModAttackerSpellCritChance     = 179 // SPELL_AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE (SpellAuraDefines.h:259)
 )
 
 // rankChainNoStackPurge mirrors the rank-chain term of
@@ -17794,6 +18014,46 @@ func (ts *session) schedulePlayerPeriodicTickLocked(aura *activeAura, periodMs u
 	})
 }
 
+// funnelDonatorCost resolves a PERIODIC_HEALTH_FUNNEL tick donator (player
+// session or live creature — C++ HandlePeriodicHealthFunnelAuraTick takes a
+// Unit* caster, and Go's findSessionByGUID is player-only) and charges it the
+// tick amount without killing it (SpellAuraEffects.cpp:5333-5339:
+// caster health < damage -> damage = health-1). Returns the paid amount,
+// whether the donator was a creature, and whether a live donator was found.
+func (s *Server) funnelDonatorCost(mapID, instanceID uint32, casterGUID uint64, amount uint32) (uint32, bool, bool) {
+	if sess := s.findSessionByGUID(casterGUID); sess != nil && sess.player != nil && sess.player.Health > 0 {
+		damage := amount
+		if sess.player.Health < damage {
+			damage = sess.player.Health - 1
+		}
+		if damage == 0 {
+			return 0, false, false
+		}
+		sess.player.Health -= damage
+		sess.sendPlayerUpdate()
+		return damage, false, true
+	}
+	s.motionMu.Lock()
+	motion := s.findCreatureMotionLocked(mapID, instanceID, casterGUID)
+	if motion == nil || motion.Health == 0 {
+		s.motionMu.Unlock()
+		return 0, false, false
+	}
+	damage := amount
+	if motion.Health < damage {
+		damage = motion.Health - 1
+	}
+	if damage == 0 {
+		s.motionMu.Unlock()
+		return 0, false, false
+	}
+	motion.Health -= damage
+	newHP := motion.Health
+	s.motionMu.Unlock()
+	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, casterGUID, map[int]uint32{unitFieldHealth: newHP})
+	return damage, true, true
+}
+
 func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 	// SpellAuraEffects.cpp:827-830 — _ticksDone increments before the tick
 	// handler runs, even when the handler early-returns on a dead target.
@@ -18159,26 +18419,17 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// target is healed for the paid amount x CalcValueMultiplier. No bonus
 		// legs, no crit, no absorb; C++ sends no periodic log for the funnel
 		// heal, so none is sent here either.
-		var funnelCaster *session
-		if ts.server != nil {
-			funnelCaster = ts.server.findSessionByGUID(aura.CasterGUID)
-		}
-		if funnelCaster == nil || funnelCaster.player == nil || funnelCaster.player.Health == 0 || ts.player.Health == 0 {
+		if ts.server == nil || ts.player.Health == 0 {
 			break
 		}
-		damage := aura.Amount
-		if funnelCaster.player.Health < damage {
-			damage = funnelCaster.player.Health - 1
-		}
-		if damage == 0 {
+		paid, creatureCaster, ok := ts.server.funnelDonatorCost(ts.player.Map, ts.player.InstanceID, aura.CasterGUID, aura.Amount)
+		if !ok {
 			break
 		}
-		funnelCaster.player.Health -= damage
-		funnelCaster.sendPlayerUpdate()
 		// gainMultiplier = SpellEffectInfo::CalcValueMultiplier — the
 		// ValueMultiplier DBC field has no Go model and
 		// SPELLMOD_VALUE_MULTIPLIER is unbridged; funnel spells carry 1.0.
-		heal := damage
+		heal := paid
 		curHP := ts.player.Health
 		maxHP := ts.player.MaxHealth
 		newHP := curHP + heal
@@ -18189,8 +18440,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 		ts.player.Health = newHP
 		ts.sendPlayerUpdate()
-		if ts.server != nil && effectiveHeal > 0 {
-			ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, effectiveHeal)
+		if effectiveHeal > 0 {
+			if creatureCaster {
+				ts.server.distributeCreatureHealingThreat(context.Background(), ts.player.Map, ts.player.InstanceID, aura.CasterGUID, aura.TargetGUID, effectiveHeal)
+			} else {
+				ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, effectiveHeal)
+			}
 		}
 
 	case 64: // SPELL_AURA_PERIODIC_MANA_LEECH
@@ -19045,26 +19300,17 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// target is healed for the paid amount x CalcValueMultiplier. No bonus
 		// legs, no crit, no absorb; C++ sends no periodic log for the funnel
 		// heal, so none is sent here either.
-		var funnelCaster *session
-		if s.server != nil {
-			funnelCaster = s.server.findSessionByGUID(aura.CasterGUID)
-		}
-		if funnelCaster == nil || funnelCaster.player == nil || funnelCaster.player.Health == 0 || target.Health == 0 {
+		if s.server == nil {
 			return true
 		}
-		damage := aura.Amount
-		if funnelCaster.player.Health < damage {
-			damage = funnelCaster.player.Health - 1
-		}
-		if damage == 0 {
+		paid, creatureCaster, ok := s.server.funnelDonatorCost(key.Map, key.InstanceID, aura.CasterGUID, aura.Amount)
+		if !ok {
 			return true
 		}
-		funnelCaster.player.Health -= damage
-		funnelCaster.sendPlayerUpdate()
 		// gainMultiplier = SpellEffectInfo::CalcValueMultiplier — the
 		// ValueMultiplier DBC field has no Go model and
 		// SPELLMOD_VALUE_MULTIPLIER is unbridged; funnel spells carry 1.0.
-		heal := damage
+		heal := paid
 		curHP := target.Health
 		maxHP := target.MaxHealth
 		newHP := curHP + heal
@@ -19073,17 +19319,19 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			effectiveHeal = maxHP - curHP
 			newHP = maxHP
 		}
-		if s.server != nil {
-			s.server.motionMu.Lock()
-			motion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
-			if motion != nil {
-				motion.Health = newHP
-			}
-			s.server.motionMu.Unlock()
-			s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldHealth: newHP})
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
+		if motion != nil {
+			motion.Health = newHP
 		}
-		if s.server != nil && effectiveHeal > 0 {
-			s.server.distributeHealingThreat(ctx, aura.CasterGUID, aura.TargetGUID, effectiveHeal)
+		s.server.motionMu.Unlock()
+		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldHealth: newHP})
+		if effectiveHeal > 0 {
+			if creatureCaster {
+				s.server.distributeCreatureHealingThreat(ctx, key.Map, key.InstanceID, aura.CasterGUID, aura.TargetGUID, effectiveHeal)
+			} else {
+				s.server.distributeHealingThreat(ctx, aura.CasterGUID, aura.TargetGUID, effectiveHeal)
+			}
 		}
 		return true
 
