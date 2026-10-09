@@ -108,6 +108,14 @@ func (s *session) spellFriendlyAreaTargets(ctx context.Context, spell wotlk.Spel
 	radius := float32(0)
 	destinationCenter := false
 	checks := make(map[uint8]struct{})
+	// Spell.cpp:1249-1251: zero-radius fallback to the spell's max range
+	// (friendly/hostile per IsPositiveEffect — spellRangeBounds mirrors the
+	// same split per isHarmfulSpell).
+	var maxRange float32
+	if rangeEntry, ok, err := s.server.Data.SpellRange(spell.RangeIndex); err == nil && ok {
+		_, mr := spellRangeBounds(spell, rangeEntry)
+		maxRange = float32(mr)
+	}
 	for _, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
@@ -121,8 +129,13 @@ func (s *session) spellFriendlyAreaTargets(ctx context.Context, spell wotlk.Spel
 			}
 			checks[friendlyAreaCheck(targetType)] = struct{}{}
 		}
-		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok && value > radius {
-			radius = value
+		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok && value > 0 {
+			if value > radius {
+				radius = value
+			}
+		} else if maxRange > radius {
+			// Spell.cpp:1249-1251: zero-radius fallback.
+			radius = maxRange
 		}
 	}
 	if radius <= 0 || len(checks) == 0 {
@@ -165,7 +178,10 @@ func (s *session) spellFriendlyAreaTargets(ctx context.Context, spell wotlk.Spel
 	targets := make([]uint64, 0)
 	seen := make(map[uint64]struct{})
 	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, unitFlags, flagsExtra, health uint32, ally, party, raid bool) {
-		if guid == 0 || mapID != caster.Map || instanceID != caster.InstanceID || health == 0 || spellTargetUnitBlocked(spell, unitFlags, flagsExtra, true) {
+		// WorldObjectSpellTargetCheck::operator() (Spell.cpp:8316): TARGET_CHECK_ALLY,
+		// TARGET_CHECK_PARTY and TARGET_CHECK_RAID all reject totems
+		// (Spell.cpp:8333/8342/8354).
+		if guid == 0 || mapID != caster.Map || instanceID != caster.InstanceID || health == 0 || spellTargetUnitBlocked(spell, unitFlags, flagsExtra, true) || s.server.isTotemGUID(guid) {
 			return
 		}
 		dx, dy := float64(x-centerX), float64(y-centerY)

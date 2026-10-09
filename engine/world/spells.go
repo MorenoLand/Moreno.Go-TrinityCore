@@ -770,6 +770,16 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 	radius := float32(0)
 	cone := false
 	destinationCenter := false
+	// Spell.cpp:1194-1196 / 1249-1251: when an effect has no radius entry
+	// (CalcRadius == 0), the area radius falls back to the spell's max range
+	// (hostile/friendly per IsPositiveEffect — Go's spellRangeBounds mirrors
+	// the same split per isHarmfulSpell; the SPELLMOD_RANGE arm of
+	// GetMaxRange has no Go spell-mod model, like SPELLMOD_RADIUS).
+	var maxRange float32
+	if rangeEntry, ok, err := s.server.Data.SpellRange(spell.RangeIndex); err == nil && ok {
+		_, mr := spellRangeBounds(spell, rangeEntry)
+		maxRange = float32(mr)
+	}
 	for _, eff := range spell.Effects {
 		areaTargetA := isAreaEnemyTargetType(eff.ImplicitTargetA) || (eff.Effect == 27 && eff.ImplicitTargetA == 18)
 		areaTargetB := isAreaEnemyTargetType(eff.ImplicitTargetB) || (eff.Effect == 27 && eff.ImplicitTargetB == 18)
@@ -784,8 +794,13 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 				destinationCenter = true
 			}
 		}
-		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok && value > radius {
-			radius = value
+		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok && value > 0 {
+			if value > radius {
+				radius = value
+			}
+		} else if maxRange > radius {
+			// Spell.cpp:1194-1196 / 1249-1251: zero-radius fallback.
+			radius = maxRange
 		}
 	}
 	if radius <= 0 {
@@ -803,7 +818,18 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 	targets := make([]uint64, 0)
 	seen := make(map[uint64]struct{})
 	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, faction, unitFlags, flagsExtra, health uint32) {
-		if mapID != player.Map || instanceID != player.InstanceID || health == 0 || spellTargetUnitBlocked(spell, unitFlags, flagsExtra, false) || distance3D(x, y, z, centerX, centerY, centerZ) > float64(radius) || !s.server.isAttackableFaction(faction, player) {
+		// WorldObjectSpellTargetCheck::operator() (Spell.cpp:8316): TARGET_CHECK_ENEMY
+		// rejects totems (Spell.cpp:8324) — live player totems are visible to the
+		// sweep via motionMap (totems.go registers them there).
+		if mapID != player.Map || instanceID != player.InstanceID || health == 0 || spellTargetUnitBlocked(spell, unitFlags, flagsExtra, false) || !s.server.isAttackableFaction(faction, player) || s.server.isTotemGUID(guid) {
+			return
+		}
+		// WorldObjectSpellAreaTargetCheck::operator() (Spell.cpp:8409): the area
+		// is a cylinder — 2D distance within the radius AND |dz| within the
+		// radius — not a 3D sphere. (Go's friendly-area path already mirrors
+		// this; the combat-reach term inside IsWithinDist2d has no Go model.)
+		dx, dy := float64(x-centerX), float64(y-centerY)
+		if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(z-centerZ)) > float64(radius) {
 			return
 		}
 		if cone && !hasInArc(s.player.Orientation, s.player.X, s.player.Y, x, y, math.Pi/2) {
@@ -834,7 +860,10 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 		if targetSession == s || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil || targetSession.player.Health == 0 || targetSession.player.Map != player.Map || targetSession.player.InstanceID != player.InstanceID || targetSession.playerAlliance() == s.playerAlliance() {
 			continue
 		}
-		if distance3D(targetSession.player.X, targetSession.player.Y, targetSession.player.Z, centerX, centerY, centerZ) > float64(radius) {
+		// WorldObjectSpellAreaTargetCheck::operator() (Spell.cpp:8409): cylinder,
+		// not a 3D sphere — 2D distance within the radius AND |dz| within the radius.
+		dx, dy := float64(targetSession.player.X-centerX), float64(targetSession.player.Y-centerY)
+		if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(targetSession.player.Z-centerZ)) > float64(radius) {
 			continue
 		}
 		if cone && !hasInArc(s.player.Orientation, s.player.X, s.player.Y, targetSession.player.X, targetSession.player.Y, math.Pi/2) {

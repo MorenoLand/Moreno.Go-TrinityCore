@@ -393,6 +393,12 @@ func (s *session) spellFriendlyConeTargets(ctx context.Context, spell wotlk.Spel
 	}
 	radius := float32(0)
 	checks := make(map[uint8]struct{})
+	// Spell.cpp:1194-1196: zero-radius fallback to the spell's max range.
+	var maxRange float32
+	if rangeEntry, ok, err := s.server.Data.SpellRange(spell.RangeIndex); err == nil && ok {
+		_, mr := spellRangeBounds(spell, rangeEntry)
+		maxRange = float32(mr)
+	}
 	for _, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
@@ -407,8 +413,13 @@ func (s *session) spellFriendlyConeTargets(ctx context.Context, spell wotlk.Spel
 				continue
 			}
 		}
-		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok && value > radius {
-			radius = value
+		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok && value > 0 {
+			if value > radius {
+				radius = value
+			}
+		} else if maxRange > radius {
+			// Spell.cpp:1194-1196: zero-radius fallback.
+			radius = maxRange
 		}
 	}
 	if radius <= 0 || len(checks) == 0 {
@@ -433,7 +444,9 @@ func (s *session) spellFriendlyConeTargets(ctx context.Context, spell wotlk.Spel
 		_, wantEntry := checks[friendlyCheckEntry]
 		pass := wantEntry
 		if !pass && wantAlly {
-			pass = s.friendlyAssistOK(spell, c, caster, allyOf)
+			// TARGET_CHECK_ALLY rejects totems (Spell.cpp:8333); TARGET_CHECK_ENTRY
+			// (target 60) carries no such exclusion, so the gate sits on the ally path only.
+			pass = s.friendlyAssistOK(spell, c, caster, allyOf) && !s.server.isTotemGUID(c.guid)
 		}
 		if !pass {
 			return
@@ -499,12 +512,23 @@ func (s *session) spellFriendlyRefCenteredAreaTargets(ctx context.Context, spell
 		return nil
 	}
 	radius := float32(0)
+	// Spell.cpp:1249-1251: zero-radius fallback to the spell's max range.
+	var maxRange float32
+	if rangeEntry, ok, err := s.server.Data.SpellRange(spell.RangeIndex); err == nil && ok {
+		_, mr := spellRangeBounds(spell, rangeEntry)
+		maxRange = float32(mr)
+	}
 	for _, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
 		}
-		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok && value > radius {
-			radius = value
+		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok && value > 0 {
+			if value > radius {
+				radius = value
+			}
+		} else if maxRange > radius {
+			// Spell.cpp:1249-1251: zero-radius fallback.
+			radius = maxRange
 		}
 	}
 	if radius <= 0 {
@@ -520,7 +544,9 @@ func (s *session) spellFriendlyRefCenteredAreaTargets(ctx context.Context, spell
 			continue
 		}
 		s.friendlyScanCandidates(ctx, referer.x, referer.y, radius, func(c friendlyCandidate) {
-			if c.guid == 0 || c.mapID != caster.Map || c.instanceID != caster.InstanceID {
+			// TARGET_CHECK_PARTY and TARGET_CHECK_RAID_CLASS both reject totems
+			// (Spell.cpp:8342/8354).
+			if c.guid == 0 || c.mapID != caster.Map || c.instanceID != caster.InstanceID || s.server.isTotemGUID(c.guid) {
 				return
 			}
 			if !s.friendlyAssistOK(spell, c, caster, allyOf) {
