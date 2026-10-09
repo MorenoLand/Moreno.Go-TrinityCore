@@ -288,6 +288,7 @@ const (
 	itemSubclassMaskWeaponRanged uint32 = (1 << 2) | (1 << 3) | (1 << 18) | (1 << 16)
 
 	spellEffectEnergize                = 30
+	spellEffectDummy                   = 3  // SPELL_EFFECT_DUMMY (SharedDefines.h:814)
 	spellEffectHeal                    = 10 // SPELL_EFFECT_HEAL (SharedDefines.h:821)
 	spellEffectParry                   = 22
 	spellEffectEnvironmentalDMG        = 7  // SPELL_EFFECT_ENVIRONMENTAL_DAMAGE (SharedDefines.h:818)
@@ -7205,56 +7206,78 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				targetSess.lastCombatTime = time.Now()
 			}
 		} else {
+			// Creature::IsImmunedToSpell (Creature.cpp:2315-2333) at hit
+			// resolution: creature targets had no immunity gate in Go —
+			// every isImmuneToSpell/isImmunedToSpellEffect call site was
+			// session-gated. Whole-spell immune creatures miss as
+			// SPELL_MISS_IMMUNE, ahead of the hit roll like the player arm.
+			// (No PreprocessTarget combat arm: Go's miss path doesn't aggro
+			// creatures on a missed harmful cast either.)
 			targetLevel := uint8(1)
+			targetFaction := uint32(0)
 			if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
 				targetLevel = tgt.Level
+				targetFaction = tgt.Faction
 			}
-			isPlayerVictim := targetSess != nil
-			bonusHit := 0.0
-			if s.player != nil {
-				bonusHit = s.getSpellHitPct()
-			}
-			var missInfo uint8
-			if spell.DefenseType == spellDamageClassMelee || spell.DefenseType == spellDamageClassRanged {
-				// WorldObject::SpellHitResult (Object.cpp:2656-2660) routes
-				// DmgClass MELEE/RANGED spells through Unit::MeleeSpellHitResult
-				// (Unit.cpp:2478) instead of the magic hit table.
-				missInfo = s.meleeSpellHitResult(ctx, targetGUID, targetSess, spell, targetLevel, isPlayerVictim)
+			if targetSess == nil && s.creatureTargetImmuneToSpell(ctx, targetGUID, spell, s, targetFaction) {
+				hitTargets = nil
+				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
 			} else {
-				missInfo = magicSpellHitResult(s.player.Level, targetLevel, isPlayerVictim, bonusHit)
-			}
-			if missInfo != protocol.SpellMissNone {
-				hitTargets = nil
-				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: missInfo}}
-			} else if isBinarySpell(spell) {
-				var resistances [7]uint32
-				if targetSess != nil && targetSess.player != nil {
-					resistances = targetSess.player.Resistances
-				} else if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
-					resistances = tgt.Resistances
-				}
-				pen := uint32(0)
+				isPlayerVictim := targetSess != nil
+				bonusHit := 0.0
 				if s.player != nil {
-					pen = s.player.SpellPenetration
+					bonusHit = s.getSpellHitPct()
 				}
-				chaosBolt := spell.SpellFamilyName == spellFamilyWarlock && spell.SpellIconID == 3178
-				if checkBinarySpellResist(resistances, uint8(spell.SchoolMask), pen, s.player.Level, targetLevel, chaosBolt) {
+				var missInfo uint8
+				if spell.DefenseType == spellDamageClassMelee || spell.DefenseType == spellDamageClassRanged {
+					// WorldObject::SpellHitResult (Object.cpp:2656-2660) routes
+					// DmgClass MELEE/RANGED spells through Unit::MeleeSpellHitResult
+					// (Unit.cpp:2478) instead of the magic hit table.
+					missInfo = s.meleeSpellHitResult(ctx, targetGUID, targetSess, spell, targetLevel, isPlayerVictim)
+				} else {
+					missInfo = magicSpellHitResult(s.player.Level, targetLevel, isPlayerVictim, bonusHit)
+				}
+				if missInfo != protocol.SpellMissNone {
 					hitTargets = nil
-					missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissResist}}
+					missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: missInfo}}
+				} else if isBinarySpell(spell) {
+					var resistances [7]uint32
+					if targetSess != nil && targetSess.player != nil {
+						resistances = targetSess.player.Resistances
+					} else if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+						resistances = tgt.Resistances
+					}
+					pen := uint32(0)
+					if s.player != nil {
+						pen = s.player.SpellPenetration
+					}
+					chaosBolt := spell.SpellFamilyName == spellFamilyWarlock && spell.SpellIconID == 3178
+					if checkBinarySpellResist(resistances, uint8(spell.SchoolMask), pen, s.player.Level, targetLevel, chaosBolt) {
+						hitTargets = nil
+						missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissResist}}
+					}
 				}
-			}
-			// Spell::AddUnitTarget (Spell.cpp:2108-2112) strips per-effect-immune
-			// bits from the target's EffectMask; UpdateSpellCastDataTargets
-			// (Spell.cpp:4491-4492) reports a target whose mask hit zero as
-			// SPELL_MISS_IMMUNE2 even though the spell-level hit was NONE. The
-			// PreprocessTarget immune combat arm (Spell.cpp:2354-2357) covers
-			// IMMUNE2 too, so the target is put in combat like a spell-immune one.
-			if len(missStatus) == 0 && targetSess != nil && s.spellTargetFullyEffectImmune(spell, targetSess) {
-				hitTargets = nil
-				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune2}}
-				if targetSess.player != nil {
-					targetSess.player.UnitFlags |= unitFlagInCombat
-					targetSess.lastCombatTime = time.Now()
+				// Spell::AddUnitTarget (Spell.cpp:2108-2112) strips per-effect-immune
+				// bits from the target's EffectMask; UpdateSpellCastDataTargets
+				// (Spell.cpp:4491-4492) reports a target whose mask hit zero as
+				// SPELL_MISS_IMMUNE2 even though the spell-level hit was NONE. The
+				// PreprocessTarget immune combat arm (Spell.cpp:2354-2357) covers
+				// IMMUNE2 too, so the target is put in combat like a spell-immune one.
+				if len(missStatus) == 0 && targetSess != nil && s.spellTargetFullyEffectImmune(spell, targetSess) {
+					hitTargets = nil
+					missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune2}}
+					if targetSess.player != nil {
+						targetSess.player.UnitFlags |= unitFlagInCombat
+						targetSess.lastCombatTime = time.Now()
+					}
+				}
+				// Creature-target IMMUNE2: the AddUnitTarget strip
+				// (Spell.cpp:2108-2112) runs per effect through
+				// Creature::IsImmunedToSpellEffect; a zeroed mask reports
+				// SPELL_MISS_IMMUNE2 (Spell.cpp:4491-4492).
+				if len(missStatus) == 0 && targetSess == nil && s.creatureTargetFullyEffectImmune(ctx, targetGUID, spell, s) {
+					hitTargets = nil
+					missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune2}}
 				}
 			}
 		}
@@ -7272,6 +7295,22 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// immune reports IMMUNE2 rather than landing.
 			hitTargets = nil
 			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune2}}
+		} else if targetSess == nil && s.server != nil {
+			// Creature-target gates for non-harmful spells
+			// (Creature::IsImmunedToSpell, Creature.cpp:2315-2333, then the
+			// IMMUNE2 strip): this is where the totem positive-spell arm
+			// (Totem.cpp:183-194) fires.
+			var targetFaction uint32
+			if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+				targetFaction = tgt.Faction
+			}
+			if s.creatureTargetImmuneToSpell(ctx, targetGUID, spell, s, targetFaction) {
+				hitTargets = nil
+				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
+			} else if s.creatureTargetFullyEffectImmune(ctx, targetGUID, spell, s) {
+				hitTargets = nil
+				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune2}}
+			}
 		}
 	}
 

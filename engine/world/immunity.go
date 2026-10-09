@@ -1,6 +1,8 @@
 package world
 
 import (
+	"context"
+
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
 
@@ -23,6 +25,12 @@ const (
 	mechanicInterrupt                  uint32 = 26         // MECHANIC_INTERRUPT (SharedDefines.h:1383)
 	spellAuraModDecreaseSpeed          uint32 = 33         // SPELL_AURA_MOD_DECREASE_SPEED (SpellAuraDefines.h:113)
 	spellAuraModDisarm                 uint32 = 67         // SPELL_AURA_MOD_DISARM (SpellAuraDefines.h:147)
+	// Creature-side immunity writers (Creature::LoadTemplateImmunities,
+	// Creature.cpp:2279-2313; flags_extra arms, Creature.cpp:634-638 /
+	// 1184-1187; Totem::IsImmunedToSpellEffect, Totem.cpp:183-204).
+	creatureTypeMechanical uint32 = 9     // CREATURE_TYPE_MECHANICAL (UnitMethods.h:1115)
+	sentryStoneclawSpellID uint32 = 55277 // SENTRY_STONECLAW_SPELLID (Totem.h:35)
+	sentryBindSightSpellID uint32 = 6277  // SENTRY_BIND_SIGHT_SPELLID (Totem.h:36)
 )
 
 // isTotalImmune mirrors Player::isTotalImmune (Player.cpp:24785-24798): any
@@ -819,6 +827,190 @@ func (s *session) spellTargetFullyEffectImmune(spell wotlk.Spell, targetSess *se
 		}
 		anyEffect = true
 		if !targetSess.isImmunedToSpellEffect(spell, i, s) {
+			return false
+		}
+	}
+	return anyEffect
+}
+
+// creatureImmuneToSpellEffect mirrors the creature-target per-effect
+// immunity chain: Totem::IsImmunedToSpellEffect (Totem.cpp:183-204),
+// Creature::IsImmunedToSpellEffect (Creature.cpp:2336-2341), then
+// Unit::IsImmunedToSpellEffect (Unit.cpp:7952-7994) fed by the
+// Creature::LoadTemplateImmunities (Creature.cpp:2279-2313) and
+// flags_extra (Creature.cpp:634-638, 1184-1187) ApplySpellImmune writers.
+// stats carries the template rows; isTotem marks a live player totem.
+// The SPELL_AURA_MOD_IMMUNE_AURA_APPLY_SCHOOL (267) arm (Unit.cpp:7983)
+// is unmodeled: it needs the target's live aura-effect scan, which Go has
+// no reader for on creature targets.
+func creatureImmuneToSpellEffect(spell wotlk.Spell, effIndex int, stats creatureStats, isTotem bool, caster *session) bool {
+	if effIndex < 0 || effIndex >= len(spell.Effects) {
+		return false
+	}
+	eff := spell.Effects[effIndex]
+	if eff.Effect == 0 {
+		return false
+	}
+	// Unit::IsImmunedToSpellEffect (Unit.cpp:7958-7959).
+	if spell.Attributes&spellAttr0UnaffectedByInvulnerability != 0 {
+		return false
+	}
+	// Totem::IsImmunedToSpellEffect (Totem.cpp:183-194): immune to all
+	// positive spells except DUMMY/SCRIPT_EFFECT effects, effects whose
+	// first implicit target is the caster, TARGET_CHECK_ENTRY area effects
+	// (Go models the entry-area target ids 7/8 via isEntryAreaTargetType),
+	// and the stoneclaw-absorb / sentry-bind-sight spells.
+	if isTotem {
+		if eff.Effect != spellEffectDummy && eff.Effect != spellEffectScriptEffect &&
+			spellIsPositive(spell) && eff.ImplicitTargetA != targetUnitCaster &&
+			!isEntryAreaTargetType(eff.ImplicitTargetA) &&
+			spell.ID != sentryStoneclawSpellID && spell.ID != sentryBindSightSpellID {
+			return true
+		}
+		switch eff.Aura {
+		case spellAuraPeriodicDamage, spellAuraPeriodicLeech, spellAuraModFear, spellAuraTransform:
+			return true
+		}
+	}
+	// Creature::IsImmunedToSpellEffect (Creature.cpp:2336-2341):
+	// mechanical creatures are immune to SPELL_EFFECT_HEAL.
+	if stats.CreatureType == creatureTypeMechanical && eff.Effect == spellEffectHeal {
+		return true
+	}
+	// IMMUNITY_EFFECT (Unit.cpp:7962-7966): the NO_TAUNT flags_extra arm
+	// (Creature.cpp:634-638) and the knockback-immunity arm
+	// (Creature.cpp:1184-1187).
+	if stats.FlagsExtra&creatureFlagExtraNoTaunt != 0 && eff.Effect == spellEffectAttackMe {
+		return true
+	}
+	if stats.FlagsExtra&creatureFlagExtraImmunityKnockback != 0 &&
+		(eff.Effect == spellEffectKnockBack || eff.Effect == spellEffectKnockBackDest) {
+		return true
+	}
+	// IMMUNITY_MECHANIC (Unit.cpp:7968-7973): the template mask stores bit
+	// (i-1) for mechanic i (Creature.cpp:2299-2301).
+	if eff.Mechanic != 0 && stats.MechanicImmuneMask&(1<<(eff.Mechanic-1)) != 0 {
+		return true
+	}
+	// IMMUNITY_STATE (Unit.cpp:7977-7989): the NO_TAUNT arm's MOD_TAUNT row.
+	if spell.AttributesEx3&spellAttr3IgnoreHitResult == 0 && eff.Aura != 0 {
+		if stats.FlagsExtra&creatureFlagExtraNoTaunt != 0 && eff.Aura == spellAuraModTaunt {
+			return true
+		}
+	}
+	return false
+}
+
+// creatureImmuneToSpell mirrors Creature::IsImmunedToSpell
+// (Creature.cpp:2315-2333): the all-effects per-effect fold, then the
+// Unit::IsImmunedToSpell arms (Unit.cpp:7852-7922) reachable from the
+// template writers — spell-level mechanic and the school fold. IMMUNITY_ID
+// has no writer model (spell_linked_spell negative rows unbridged) and
+// IMMUNITY_DISPEL has no template writer, so both arms are vacuous here.
+func creatureImmuneToSpell(spell wotlk.Spell, stats creatureStats, isTotem bool, caster *session, targetFaction uint32, friendlyToCaster func(uint32) bool) bool {
+	if spell.Attributes&spellAttr0UnaffectedByInvulnerability != 0 {
+		return false
+	}
+	anyEffect := false
+	immunedToAllEffects := true
+	for i := range spell.Effects {
+		if spell.Effects[i].Effect == 0 {
+			continue
+		}
+		anyEffect = true
+		if !creatureImmuneToSpellEffect(spell, i, stats, isTotem, caster) {
+			immunedToAllEffects = false
+			break
+		}
+	}
+	if anyEffect && immunedToAllEffects {
+		return true
+	}
+	// Spell-level mechanic (Unit.cpp:7870-7876) vs the template
+	// IMMUNITY_MECHANIC rows.
+	if spell.Mechanic != 0 && stats.MechanicImmuneMask&(1<<(spell.Mechanic-1)) != 0 {
+		return true
+	}
+	// School fold (Unit.cpp:7888-7919): each template IMMUNITY_SCHOOL row
+	// is a single-school bit (Creature.cpp:2303-2312) with the placeholder
+	// spell id, so immuneSpellInfo is nil — the row grants immunity unless
+	// the spell is positive AND has a caster AND the target is friendly to
+	// the caster, and the spell cannot pierce it (nil immuneSpellInfo
+	// behaves like Go's zero-value immune spell in
+	// canSpellPierceImmuneAura).
+	if schoolMask := spell.SchoolMask; schoolMask != 0 {
+		var schoolImmunityMask uint32
+		for row := stats.SpellSchoolImmuneMask; row != 0; row &= row - 1 {
+			bit := row & -row
+			if bit&schoolMask == 0 {
+				continue
+			}
+			friendly := caster != nil && friendlyToCaster != nil && friendlyToCaster(targetFaction)
+			if !spellIsPositive(spell) || caster == nil || !friendly {
+				if !canSpellPierceImmuneAura(spell, wotlk.Spell{}) {
+					schoolImmunityMask |= bit
+				}
+			}
+		}
+		if schoolImmunityMask&schoolMask == schoolMask {
+			return true
+		}
+	}
+	return false
+}
+
+// creatureTargetImmunityStats resolves the template rows for a creature
+// hit target: entry via the live creature motion, masks via the cached
+// per-entry loadCreatureStats. Reports false when the GUID is not a live
+// creature (player targets and unresolvable GUIDs use the session-side
+// immunity evals instead).
+func (s *session) creatureTargetImmunityStats(ctx context.Context, targetGUID uint64) (creatureStats, bool) {
+	if s == nil || s.server == nil || s.player == nil {
+		return creatureStats{}, false
+	}
+	s.server.motionMu.Lock()
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
+	s.server.motionMu.Unlock()
+	if motion == nil {
+		return creatureStats{}, false
+	}
+	return s.server.loadCreatureStats(ctx, motion.Entry), true
+}
+
+// creatureTargetImmuneToSpell is the creature-target whole-spell gate
+// (Creature::IsImmunedToSpell) at hit resolution; caster is the casting
+// session for the school fold's friendliness gate.
+func (s *session) creatureTargetImmuneToSpell(ctx context.Context, targetGUID uint64, spell wotlk.Spell, caster *session, targetFaction uint32) bool {
+	stats, ok := s.creatureTargetImmunityStats(ctx, targetGUID)
+	if !ok {
+		return false
+	}
+	isTotem := s.server.isTotemGUID(targetGUID)
+	friendly := func(faction uint32) bool {
+		if caster == nil || caster.player == nil || s.server == nil {
+			return false
+		}
+		pos := playerPos{Map: caster.player.Map, InstanceID: caster.player.InstanceID, X: caster.player.X, Y: caster.player.Y, Z: caster.player.Z, GUID: caster.playerGUID, Race: caster.player.Race, Class: caster.player.Class, Level: caster.player.Level, FactionTemplate: s.server.raceFaction(caster.player.Race), Reputations: playerReputationMap(caster.player.Reputations), Sess: caster}
+		return !s.server.isAttackableFaction(faction, pos)
+	}
+	return creatureImmuneToSpell(spell, stats, isTotem, caster, targetFaction, friendly)
+}
+
+// creatureTargetFullyEffectImmune is the creature-target IMMUNE2 gate:
+// every non-zero effect per-effect immune (Spell.cpp:2108-2112, 4491-4492).
+func (s *session) creatureTargetFullyEffectImmune(ctx context.Context, targetGUID uint64, spell wotlk.Spell, caster *session) bool {
+	stats, ok := s.creatureTargetImmunityStats(ctx, targetGUID)
+	if !ok {
+		return false
+	}
+	isTotem := s.server.isTotemGUID(targetGUID)
+	anyEffect := false
+	for i := range spell.Effects {
+		if spell.Effects[i].Effect == 0 {
+			continue
+		}
+		anyEffect = true
+		if !creatureImmuneToSpellEffect(spell, i, stats, isTotem, caster) {
 			return false
 		}
 	}

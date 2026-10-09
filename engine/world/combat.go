@@ -13,7 +13,15 @@ import (
 
 const (
 	creatureFlagExtraNoParryHasten = 0x00000008
-	attackDisplayDelay             = 200 * time.Millisecond
+	// CREATURE_FLAG_EXTRA_NO_TAUNT (CreatureData.h:45): creature is immune
+	// to taunt auras and the ATTACK_ME effect — Creature::ApplySpellImmune
+	// rows at Creature.cpp:634-638.
+	creatureFlagExtraNoTaunt = 0x00000100
+	// CREATURE_FLAG_EXTRA_IMMUNITY_KNOCKBACK (CreatureData.h:67):
+	// Creature.cpp:1184-1187 applies IMMUNITY_EFFECT KNOCK_BACK +
+	// KNOCK_BACK_DEST.
+	creatureFlagExtraImmunityKnockback = 0x40000000
+	attackDisplayDelay                 = 200 * time.Millisecond
 )
 
 // haveOffhandWeapon checks if the player has an offhand weapon equipped.
@@ -1511,6 +1519,13 @@ type creatureStats struct {
 	// AIName mirrors creature_template.AIName, used by the TurretAI arms
 	// (CombatAI.cpp:231-265) and the critter/passive react mapping.
 	AIName string
+	// MechanicImmuneMask / SpellSchoolImmuneMask mirror the
+	// creature_template columns feeding Creature::LoadTemplateImmunities
+	// (Creature.cpp:2279-2313): bit (i-1) of MechanicImmuneMask is an
+	// IMMUNITY_MECHANIC row for mechanic i; bit i of SpellSchoolImmuneMask
+	// is an IMMUNITY_SCHOOL row for school i.
+	MechanicImmuneMask    uint32
+	SpellSchoolImmuneMask uint32
 }
 
 func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureStats {
@@ -1555,6 +1570,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 
 	var maxlevel, unitClass, exp, baseAttackTime, unitFlags, flagsExtra, typeFlags, flight int64
 	var creatureType int64
+	var mechanicImmuneMask, spellSchoolImmuneMask int64
 	var healthMod, manaMod, armorMod, damageMod float64
 
 	row := s.WorldStore.DB.QueryRowContext(ctx, `SELECT 
@@ -1570,9 +1586,11 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		COALESCE(ct.flags_extra, 0),
 		COALESCE(ct.type_flags, 0),
 		COALESCE(ctm.Flight, 0),
-		COALESCE(ct.type, 0)
+		COALESCE(ct.type, 0),
+		COALESCE(ct.MechanicImmuneMask, 0),
+		COALESCE(ct.SpellSchoolImmuneMask, 0)
 		FROM creature_template ct LEFT JOIN creature_template_movement ctm ON ctm.CreatureId = ct.entry WHERE ct.entry = ?`, entry)
-	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &flight, &creatureType); err != nil {
+	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &flight, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask); err != nil {
 		return stats
 	}
 	if reactState, known, aiName := s.loadCreatureReaction(ctx, entry); known {
@@ -1608,6 +1626,8 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	stats.FlagsExtra = uint32(flagsExtra)
 	stats.TypeFlags = uint32(typeFlags)
 	stats.CanFly = flight != 0
+	stats.MechanicImmuneMask = uint32(mechanicImmuneMask)
+	stats.SpellSchoolImmuneMask = uint32(spellSchoolImmuneMask)
 
 	// Fallback values based on level
 	fallbackHealth := uint32(maxlevel * 30)
