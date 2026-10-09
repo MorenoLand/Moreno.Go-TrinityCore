@@ -1,6 +1,7 @@
 package world
 
 import (
+	"context"
 	"math"
 	"math/rand"
 
@@ -378,12 +379,12 @@ func (s *session) rollSpellCrit(targetGUID uint64, schoolMask uint8) bool {
 // resilience crit-chance reduction (folded into calculateSpellCritChance).
 // takenCritBonusPct carries the victim-side modifier in percent points (0 for
 // positive spells, where C++ skips the taken arm). The scripted taken arms
-// (Shatter, Renewed Hope, Lava Burst) ride in takenCritBonusPct via
-// tickScriptedTakenCritBonus at the tick call sites; the remaining class
-// arms (Glyph of Shadowburn, Glyph of Fire Blast, Improved Faerie Fire,
-// Starfire/Insect Swarm, Shiv poisons, Flash of Light/Sacred Shield,
-// Exorcism, Rend and Tear, Victory Rush) have no Go model and stay
-// unbridged.
+// (Shatter, Glyph of Shadowburn, Renewed Hope, Glyph of Fire Blast,
+// Improved Faerie Fire, Starfire/Insect Swarm, Exorcism, Lava Burst) ride in
+// takenCritBonusPct via tickScriptedTakenCritBonus at the tick call sites;
+// the remaining arms (Shiv poisons, Flash of Light/Sacred Shield, Rend and
+// Tear, Victory Rush) and SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) have
+// no Go model and stay unbridged.
 func (s *session) tickCritChance(targetGUID uint64, schoolMask uint8, takenCritBonusPct float64) float64 {
 	chance := 0.0
 	if s != nil {
@@ -397,24 +398,40 @@ func (s *session) tickCritChance(targetGUID uint64, schoolMask uint8, takenCritB
 }
 
 // tickScriptedTakenCritBonus mirrors the scripted taken-side arms of
-// Unit::SpellCritChanceTaken (Unit.cpp:7236-7339) that fire for periodic
+// Unit::SpellCritChanceTaken (Unit.cpp:7236-7341) that fire for periodic
 // ticks via AuraEffect::GetCritChanceFor (SpellAuraEffects.cpp:843-846):
 //   - Shatter (caster OVERRIDE_CLASS_SCRIPTS miscValue 849/910/911
 //     affecting the tick spell + victim AURA_STATE_FROZEN): +17/34/50
 //     (Unit.cpp:7253-7264)
+//   - Glyph of Shadowburn (caster OVERRIDE_CLASS_SCRIPTS miscValue 7917
+//     affecting the tick spell + victim AURA_STATE_HEALTHLESS_35_PERCENT):
+//     +aurEff->GetAmount() (Unit.cpp:7266-7269)
 //   - Renewed Hope (caster OVERRIDE_CLASS_SCRIPTS 7997/7998 + caster
-//     carries Weakened Soul 6788): +aurEff->GetAmount() (Unit.cpp:7269-7273)
+//     carries Weakened Soul 6788): +aurEff->GetAmount() (Unit.cpp:7271-7275)
+//   - Glyph of Fire Blast (MAGE family, SpellFamilyFlags[0] == 0x2,
+//     SpellIconID == 12; victim stunned or knocked out; caster aura 56369
+//     effect 0): +aurEff->GetAmount() (Unit.cpp:7283-7288)
+//   - Improved Faerie Fire (DRUID family; victim AURA_STATE_FAERIE_FIRE;
+//     caster DUMMY aura family-DRUID icon 109): +aurEff->GetAmount()
+//     (Unit.cpp:7293-7296)
+//   - Starfire / Improved Insect Swarm (DRUID family,
+//     SpellFamilyFlags[0] & 0x4, SpellIconID == 1485; caster DUMMY aura
+//     family-DRUID icon 1771; victim carries a DRUID PERIODIC_DAMAGE aura
+//     with SpellFamilyFlags[0] & 0x2): +aurEff->GetAmount()
+//     (Unit.cpp:7300-7306)
+//   - Exorcism (PALADIN family, Category == 19; victim demon or undead):
+//     the tick crits outright (Unit.cpp:7308-7313)
 //   - Lava Burst (SHAMAN family, SpellFamilyFlags[1] & 0x1000): victim
 //     carries the caster's Flame Shock and victim aura-197 > -100 -> the
-//     tick crits outright (Unit.cpp:7314-7322)
+//     tick crits outright (Unit.cpp:7316-7324)
 //
 // Returns the bonus in percent points and whether the tick is a forced
-// crit. The remaining class arms (Glyph of Shadowburn, Glyph of Fire
-// Blast, Improved Faerie Fire, Starfire/Insect Swarm, Shiv poisons, Flash
-// of Light/Sacred Shield, Exorcism, Rend and Tear, Victory Rush) and
-// SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) have no Go model and stay
-// unbridged.
-func (s *session) tickScriptedTakenCritBonus(spell wotlk.Spell, tickKnown bool, victimFrozen bool, victimHasFlameShock bool, victimAura197Total int32) (float64, bool) {
+// crit. The remaining arms (Shiv poisons — no Go current-spell model;
+// Flash of Light/Sacred Shield — the tick-spell gate is a direct heal;
+// Rend and Tear / Victory Rush — SPELL_DAMAGE_CLASS_MELEE, never
+// periodic; SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308)) have no Go model
+// and stay unbridged.
+func (s *session) tickScriptedTakenCritBonus(ctx context.Context, targetGUID uint64, spell wotlk.Spell, tickKnown bool, victimFrozen, victimHasFlameShock bool, victimAura197Total int32, victimHealthless35, victimFaerieFire bool) (float64, bool) {
 	bonus := 0.0
 	if s == nil || s.server == nil || s.server.Data == nil || !tickKnown {
 		return bonus, false
@@ -446,6 +463,12 @@ func (s *session) tickScriptedTakenCritBonus(spell wotlk.Spell, tickKnown bool, 
 				default:
 					bonus += 17
 				}
+			case 7917: // Glyph of Shadowburn
+				// IsAffectedOnSpell gate (Unit.cpp:7242-7244) plus the
+				// healthless-35% state check (Unit.cpp:7267-7268).
+				if victimHealthless35 && spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+					bonus += float64(aura.Amounts[index])
+				}
 			case 7997, 7998: // Renewed Hope
 				if spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) && s.hasAura(6788) {
 					bonus += float64(aura.Amounts[index])
@@ -453,7 +476,44 @@ func (s *session) tickScriptedTakenCritBonus(spell wotlk.Spell, tickKnown bool, 
 			}
 		}
 	}
-	// Lava Burst (Unit.cpp:7314-7322): guaranteed crit when the victim
+	// Custom crit by class (Unit.cpp:7279-7313).
+	switch spell.SpellFamilyName {
+	case spellFamilyMage:
+		// Glyph of Fire Blast (Unit.cpp:7283-7288): the tick spell is Fire
+		// Blast (SpellFamilyFlags[0] == 0x2 exactly, SpellIconID 12) and the
+		// victim is stunned or knocked out.
+		if spell.SpellFamilyFlags[0] == 0x2 && spell.SpellIconID == 12 &&
+			s.targetHasAuraWithMechanic(ctx, targetGUID, (1<<mechanicStun)|(1<<mechanicKnockout)) {
+			if amt, ok := s.auraEffectAmount(56369, 0); ok {
+				bonus += float64(amt)
+			}
+		}
+	case spellFamilyDruid:
+		// Improved Faerie Fire (Unit.cpp:7293-7296): cumulative with the
+		// Starfire arm below — C++ does not break between them.
+		if victimFaerieFire {
+			if amt, ok := s.dummyAuraAmountByIcon(spellFamilyDruid, 109); ok {
+				bonus += float64(amt)
+			}
+		}
+		// Starfire / Improved Insect Swarm (Unit.cpp:7300-7306).
+		if spell.SpellFamilyFlags[0]&0x4 != 0 && spell.SpellIconID == 1485 {
+			if amt, ok := s.dummyAuraAmountByIcon(spellFamilyDruid, 1771); ok &&
+				s.targetHasFamilyAuraEffect(ctx, targetGUID, spellAuraPeriodicDamage, spellFamilyDruid, 0x2) {
+				bonus += float64(amt)
+			}
+		}
+	case spellFamilyPaladin:
+		// Exorcism (Unit.cpp:7308-7313): guaranteed crit against demons
+		// and undead. The creature-type mask resolves lazily — only a
+		// Category-19 tick spell can reach it.
+		if spell.Category == 19 {
+			if mask, _ := s.targetCreatureTypeMask(ctx, targetGUID); mask&creatureTypeMaskDemonOrUndead != 0 {
+				return bonus, true
+			}
+		}
+	}
+	// Lava Burst (Unit.cpp:7316-7324): guaranteed crit when the victim
 	// carries the caster's Flame Shock and the victim's
 	// MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE total exceeds -100.
 	if spell.SpellFamilyName == spellFamilyShaman && spell.SpellFamilyFlags[1]&0x1000 != 0 &&

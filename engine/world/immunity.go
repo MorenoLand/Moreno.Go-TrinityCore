@@ -23,6 +23,7 @@ const (
 	mechanicSilence                    uint32 = 9          // MECHANIC_SILENCE (SharedDefines.h:1366)
 	mechanicStun                       uint32 = 12         // MECHANIC_STUN (SharedDefines.h:1369)
 	mechanicFreeze                     uint32 = 13         // MECHANIC_FREEZE (SharedDefines.h:1370)
+	mechanicKnockout                   uint32 = 14         // MECHANIC_KNOCKOUT (SharedDefines.h:1371)
 	mechanicInterrupt                  uint32 = 26         // MECHANIC_INTERRUPT (SharedDefines.h:1383)
 	spellAuraModDecreaseSpeed          uint32 = 33         // SPELL_AURA_MOD_DECREASE_SPEED (SpellAuraDefines.h:113)
 	spellAuraModDisarm                 uint32 = 67         // SPELL_AURA_MOD_DISARM (SpellAuraDefines.h:147)

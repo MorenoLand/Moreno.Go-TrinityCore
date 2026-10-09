@@ -26,6 +26,10 @@ const (
 	// (SharedDefines.h:2677): (1 << (CREATURE_TYPE_HUMANOID-1)) | (1 << (CREATURE_TYPE_UNDEAD-1)).
 	creatureTypeMaskHumanoidOrUndead uint32 = (1 << (creatureTypeHumanoid - 1)) | (1 << (creatureTypeUndead - 1))
 
+	// creatureTypeMaskDemonOrUndead mirrors CREATURE_TYPEMASK_DEMON_OR_UNDEAD
+	// (SharedDefines.h:2678): (1 << (CREATURE_TYPE_DEMON-1)) | (1 << (CREATURE_TYPE_UNDEAD-1)).
+	creatureTypeMaskDemonOrUndead uint32 = (1 << (creatureTypeDemon - 1)) | (1 << (creatureTypeUndead - 1))
+
 	petActionPassive   uint8  = 0x01
 	petActionDisabled  uint8  = 0x81
 	petActionEnabled   uint8  = 0xC1

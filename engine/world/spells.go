@@ -18357,14 +18357,18 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			// Go applies resilience inside calculateSpellCritChance, so a
 			// post-hoc addition preserves the C++ order.
 			takenCritBonus += float64(ts.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance))
-			// Unit::SpellCritChanceTaken (Unit.cpp:7236-7322): scripted
-			// taken arms — Shatter/Renewed Hope/Lava Burst. Frozen state
-			// reads the victim's unit mask; the flame-shock query is
-			// caster-matched like C++ GetAuraEffect(..., casterGUID).
-			scriptBonus, forceCrit := tickCaster.tickScriptedTakenCritBonus(tickSpell, tickKnown,
-				ts.unitAuraStateMask()&(1<<(auraStateFrozen-1)) != 0,
+			// Unit::SpellCritChanceTaken (Unit.cpp:7236-7341): scripted
+			// taken arms — Shatter/Shadowburn/Renewed Hope/Fire Blast/
+			// Faerie Fire/Insect Swarm/Exorcism/Lava Burst. Victim aura
+			// states read the victim's unit mask; the flame-shock query
+			// is caster-matched like C++ GetAuraEffect(..., casterGUID).
+			victimStateMask := ts.unitAuraStateMask()
+			scriptBonus, forceCrit := tickCaster.tickScriptedTakenCritBonus(context.Background(), aura.TargetGUID, tickSpell, tickKnown,
+				victimStateMask&(1<<(auraStateFrozen-1)) != 0,
 				tickCaster.victimHasFlameShockByCaster(context.Background(), aura.TargetGUID, aura.CasterGUID),
-				int32(ts.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance)))
+				int32(ts.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance)),
+				victimStateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
+				victimStateMask&(1<<(auraStateFaerieFire-1)) != 0)
 			takenCritBonus += scriptBonus
 			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
 				crit = true
@@ -18508,13 +18512,17 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			if healKnown && !spellIsPositive(healSpell) {
 				takenCritBonus = float64(ts.playerAuraModifierByMiscMask(spellAuraModAttackerSpellCritChance, int32(aura.SchoolMask)))
 			}
-			// Unit::SpellCritChanceTaken (Unit.cpp:7236-7322): the scripted
-			// taken arms (Shatter, Renewed Hope) are NOT gated on
-			// IsPositive, unlike the 179/197 taken terms above.
-			scriptBonus, forceCrit := healCaster.tickScriptedTakenCritBonus(healSpell, healKnown,
-				ts.unitAuraStateMask()&(1<<(auraStateFrozen-1)) != 0,
+			// Unit::SpellCritChanceTaken (Unit.cpp:7236-7341): the scripted
+			// taken arms (Shatter/Shadowburn/Renewed Hope/Fire Blast/
+			// Faerie Fire/Insect Swarm/Exorcism/Lava Burst) are NOT gated
+			// on IsPositive, unlike the 179/197 taken terms above.
+			victimStateMask := ts.unitAuraStateMask()
+			scriptBonus, forceCrit := healCaster.tickScriptedTakenCritBonus(context.Background(), aura.TargetGUID, healSpell, healKnown,
+				victimStateMask&(1<<(auraStateFrozen-1)) != 0,
 				healCaster.victimHasFlameShockByCaster(context.Background(), aura.TargetGUID, aura.CasterGUID),
-				int32(ts.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance)))
+				int32(ts.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance)),
+				victimStateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
+				victimStateMask&(1<<(auraStateFaerieFire-1)) != 0)
 			takenCritBonus += scriptBonus
 			if forceCrit || rand.Float64() < healCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
 				healCrit = true
@@ -18621,14 +18629,18 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			// Go applies resilience inside calculateSpellCritChance, so a
 			// post-hoc addition preserves the C++ order.
 			takenCritBonus += float64(ts.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance))
-			// Unit::SpellCritChanceTaken (Unit.cpp:7236-7322): scripted
-			// taken arms — Shatter/Renewed Hope/Lava Burst. Frozen state
-			// reads the victim's unit mask; the flame-shock query is
-			// caster-matched like C++ GetAuraEffect(..., casterGUID).
-			scriptBonus, forceCrit := tickCaster.tickScriptedTakenCritBonus(tickSpell, tickKnown,
-				ts.unitAuraStateMask()&(1<<(auraStateFrozen-1)) != 0,
+			// Unit::SpellCritChanceTaken (Unit.cpp:7236-7341): scripted
+			// taken arms — Shatter/Shadowburn/Renewed Hope/Fire Blast/
+			// Faerie Fire/Insect Swarm/Exorcism/Lava Burst. Victim aura
+			// states read the victim's unit mask; the flame-shock query
+			// is caster-matched like C++ GetAuraEffect(..., casterGUID).
+			victimStateMask := ts.unitAuraStateMask()
+			scriptBonus, forceCrit := tickCaster.tickScriptedTakenCritBonus(context.Background(), aura.TargetGUID, tickSpell, tickKnown,
+				victimStateMask&(1<<(auraStateFrozen-1)) != 0,
 				tickCaster.victimHasFlameShockByCaster(context.Background(), aura.TargetGUID, aura.CasterGUID),
-				int32(ts.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance)))
+				int32(ts.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance)),
+				victimStateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
+				victimStateMask&(1<<(auraStateFaerieFire-1)) != 0)
 			takenCritBonus += scriptBonus
 			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
 				crit = true
@@ -19246,12 +19258,16 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			// victims suppress crit by 0.7% per level above the caster
 			// (negative levelDiff boosts it, like C++).
 			takenCritBonus -= float64(int32(target.Level)-int32(tickCaster.player.Level)) * 0.7
-			// Unit::SpellCritChanceTaken (Unit.cpp:7236-7322): scripted
-			// taken arms — Shatter/Renewed Hope/Lava Burst.
-			scriptBonus, forceCrit := tickCaster.tickScriptedTakenCritBonus(tickSpell, tickKnown,
-				s.creatureAuraStateMask(key, target)&(1<<(auraStateFrozen-1)) != 0,
+			// Unit::SpellCritChanceTaken (Unit.cpp:7236-7341): scripted
+			// taken arms — Shatter/Shadowburn/Renewed Hope/Fire Blast/
+			// Faerie Fire/Insect Swarm/Exorcism/Lava Burst.
+			victimStateMask := s.creatureAuraStateMask(key, target)
+			scriptBonus, forceCrit := tickCaster.tickScriptedTakenCritBonus(ctx, aura.TargetGUID, tickSpell, tickKnown,
+				victimStateMask&(1<<(auraStateFrozen-1)) != 0,
 				tickCaster.victimHasFlameShockByCaster(ctx, aura.TargetGUID, aura.CasterGUID),
-				victim197)
+				victim197,
+				victimStateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
+				victimStateMask&(1<<(auraStateFaerieFire-1)) != 0)
 			takenCritBonus += scriptBonus
 			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
 				crit = true
@@ -19386,13 +19402,17 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			// Unit::SpellCritChanceTaken (Unit.cpp:7333-7339): creature
 			// victims suppress crit by 0.7% per level above the caster.
 			takenCritBonus -= float64(int32(target.Level)-int32(tickCaster.player.Level)) * 0.7
-			// Unit::SpellCritChanceTaken (Unit.cpp:7236-7322): the scripted
-			// taken arms (Shatter, Renewed Hope) are NOT gated on
-			// IsPositive, unlike the 179/197 taken terms above.
-			scriptBonus, forceCrit := tickCaster.tickScriptedTakenCritBonus(tickSpell, tickKnown,
-				s.creatureAuraStateMask(key, target)&(1<<(auraStateFrozen-1)) != 0,
+			// Unit::SpellCritChanceTaken (Unit.cpp:7236-7341): the scripted
+			// taken arms (Shatter/Shadowburn/Renewed Hope/Fire Blast/
+			// Faerie Fire/Insect Swarm/Exorcism/Lava Burst) are NOT gated
+			// on IsPositive, unlike the 179/197 taken terms above.
+			victimStateMask := s.creatureAuraStateMask(key, target)
+			scriptBonus, forceCrit := tickCaster.tickScriptedTakenCritBonus(ctx, aura.TargetGUID, tickSpell, tickKnown,
+				victimStateMask&(1<<(auraStateFrozen-1)) != 0,
 				tickCaster.victimHasFlameShockByCaster(ctx, aura.TargetGUID, aura.CasterGUID),
-				creatureAuraModifierSum(s.server, key, spellAuraModAttackerSpellAndWeaponCritChance))
+				creatureAuraModifierSum(s.server, key, spellAuraModAttackerSpellAndWeaponCritChance),
+				victimStateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
+				victimStateMask&(1<<(auraStateFaerieFire-1)) != 0)
 			takenCritBonus += scriptBonus
 			var critSpell wotlk.Spell
 			if tickKnown {
@@ -19538,12 +19558,16 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			// victims suppress crit by 0.7% per level above the caster
 			// (negative levelDiff boosts it, like C++).
 			takenCritBonus -= float64(int32(target.Level)-int32(tickCaster.player.Level)) * 0.7
-			// Unit::SpellCritChanceTaken (Unit.cpp:7236-7322): scripted
-			// taken arms — Shatter/Renewed Hope/Lava Burst.
-			scriptBonus, forceCrit := tickCaster.tickScriptedTakenCritBonus(tickSpell, tickKnown,
-				s.creatureAuraStateMask(key, target)&(1<<(auraStateFrozen-1)) != 0,
+			// Unit::SpellCritChanceTaken (Unit.cpp:7236-7341): scripted
+			// taken arms — Shatter/Shadowburn/Renewed Hope/Fire Blast/
+			// Faerie Fire/Insect Swarm/Exorcism/Lava Burst.
+			victimStateMask := s.creatureAuraStateMask(key, target)
+			scriptBonus, forceCrit := tickCaster.tickScriptedTakenCritBonus(ctx, aura.TargetGUID, tickSpell, tickKnown,
+				victimStateMask&(1<<(auraStateFrozen-1)) != 0,
 				tickCaster.victimHasFlameShockByCaster(ctx, aura.TargetGUID, aura.CasterGUID),
-				victim197)
+				victim197,
+				victimStateMask&(1<<(auraStateHealthless35Pct-1)) != 0,
+				victimStateMask&(1<<(auraStateFaerieFire-1)) != 0)
 			takenCritBonus += scriptBonus
 			if forceCrit || rand.Float64() < tickCaster.tickCritChance(aura.TargetGUID, uint8(aura.SchoolMask), takenCritBonus) {
 				crit = true
