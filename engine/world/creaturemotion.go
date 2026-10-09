@@ -1033,6 +1033,58 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 
 // stepCreatureMotion advances one creature: handles combat pursuit/attacks,
 // finishes in-flight moves, honors waypoint delays, or wanders randomly.
+// triggerCreatureAlert mirrors CreatureAI::TriggerAlert (CreatureAI.cpp),
+// which CreatureUnitRelocationWorker (GridNotifiers.cpp:139) fires when a
+// stealthed player sits inside the alert band but outside normal detect
+// range. Gates: the target is a player (the scan only iterates players);
+// the creature is an NPC not currently engaged (!InCombat — the scan only
+// runs there); not confused, stunned, fleeing, or distracted — distracted
+// rides DistractedUntil, confuse/stun/fear ride creatureHasControlLossAura
+// (the same aura-gate the Distract effect bridge uses), fleeing has no Go
+// model; civilian and REACT_PASSIVE ride the scan's isCreaturePassive guard
+// (civilian maps to passive in creatureReactState); hostility rides
+// isAttackableFaction (the _IsTargetAcceptable friendly/targetable arms ride
+// the scan guard's GM/dead/ghost-visibility skips; the vehicle arm is
+// vacuous). The UNIT_STATE_SIGHTLESS pre-check of the relocation worker has
+// no Go model. Effect: the pre-aggro AI_REACTION_ALERT sound (AiReaction 0,
+// SharedDefines.h:3253) plus MoveDistract(5s, facing the player). The
+// distracted gate also rate-limits: re-alerts during the 5s hold are
+// no-ops, matching C++ re-fires on every relocation tick while distracted.
+func (s *Server) triggerCreatureAlert(ctx context.Context, motion *creatureMotion, p playerPos, dist, aggroDist float32, now time.Time) {
+	if s == nil || motion == nil || p.Sess == nil || p.Sess.player == nil {
+		return
+	}
+	inBand, alertRange := creatureStealthAlertBand(motion, p.Sess, dist)
+	// WorldObject::CanDetectStealthOf (Object.cpp:1782-1784): no alert when
+	// the alert range reaches the creature's attack distance.
+	if !inBand || alertRange >= aggroDist {
+		return
+	}
+	if !s.isAttackableFaction(motion.Faction, p) {
+		return
+	}
+	if now.Before(motion.DistractedUntil) {
+		return
+	}
+	if s.creatureHasControlLossAura(creatureAuraKeyForMotion(motion)) {
+		return
+	}
+	// Unit::GetAbsoluteAngle(who): atan2 normalized to [0, 2pi).
+	angle := float32(math.Atan2(float64(p.Y-motion.Y), float64(p.X-motion.X)))
+	if angle < 0 {
+		angle += 2 * math.Pi
+	}
+	motion.Orientation = angle
+	motion.DistractedUntil = now.Add(5 * time.Second)
+	motion.Moving = false
+	s.broadcastAIReactionInInstance(motion.Map, motion.InstanceID, motion.GUID, 0)
+	// DistractMovementGenerator::Initialize launches an in-place MoveTo+SetFacing
+	// spline; Go reuses the facing arm of the monster move packet for the
+	// client-side turn, matching the Distract effect bridge.
+	s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.X, motion.Y, motion.Z, 1000, false, angle, true)
+	_ = ctx
+}
+
 func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion, players []playerPos, now time.Time) {
 	if motion == nil {
 		return
@@ -1591,9 +1643,6 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			continue
 		}
 		dist := float32(distance3D(p.X, p.Y, p.Z, motion.X, motion.Y, motion.Z))
-		if !canCreatureDetectStealthOfPlayer(motion, p.Sess, dist) {
-			continue
-		}
 		// Creature::GetAttackDistance (Creature.cpp:2022-2058): 20 yards at equal
 		// level, minus combat reach, +/-1 yard per creature-minus-player level
 		// difference, clamped to [5, 45]. (Creature::GetAggroRange, 3130-3168,
@@ -1610,6 +1659,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			aggroDist = 5.0
 		} else if aggroDist > 45.0 {
 			aggroDist = 45.0
+		}
+		if !canCreatureDetectStealthOfPlayer(motion, p.Sess, dist) {
+			// CreatureAI::TriggerAlert (CreatureAI.cpp) via
+			// CreatureUnitRelocationWorker (GridNotifiers.cpp:139): a stealthed
+			// player inside the alert band but outside normal detect range
+			// makes the creature play the pre-aggro alert sound and turn to
+			// face them for 5 seconds instead of engaging.
+			s.triggerCreatureAlert(ctx, motion, p, dist, aggroDist, now)
+			continue
 		}
 		if !isCreaturePassive(motion) && s.isAttackableFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist) && !noGrayAggroBlocked(uint32(p.Level), motion.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) {
 			s.debug("creature aggro", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "player_guid", p.GUID, "player_zone", p.Sess.player.Zone)

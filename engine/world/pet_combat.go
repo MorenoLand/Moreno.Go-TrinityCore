@@ -452,10 +452,51 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 		return
 	}
 
+	// PetAI::NeedToStop owner-distance arm (PetAI.cpp:575-578): a pet stops
+	// attacking when it strays beyond the owner's visibility range minus 10
+	// yards. C++ GetVisibilityRange on continents is 100 (ObjectDefines.h:35),
+	// matching Go's VisibilityDistanceContinents default; the per-map-type
+	// C++ ranges (instances/BGs) have no Go config analog. The charmed-victim
+	// arm (PetAI.cpp:572-573) is unmodeled — charmed creatures are
+	// player-driven in Go with no victim-vs-charmer tracking.
+	if owner != nil {
+		visRange := float32(100)
+		if s != nil && s.Config.VisibilityDistanceContinents > 0 {
+			visRange = float32(s.Config.VisibilityDistanceContinents)
+		}
+		if ownerDist := float32(distance3D(owner.X, owner.Y, owner.Z, motion.X, motion.Y, motion.Z)); ownerDist >= visRange-10.0 {
+			// PetAI::StopAttack (PetAI.cpp:583-601): clear the victim and
+			// combat state, drop a command-attack order, and let the next
+			// tick's follow arm return the pet (HandleReturnMovement analog).
+			motion.TargetGUID = 0
+			motion.InCombat = false
+			motion.Moving = false
+			if motion.PetCommand == PetCommandAttack {
+				motion.PetCommand = PetCommandFollow
+			}
+			stopPkt := buildAttackStop(motion.GUID, targetGUID, false)
+			s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+			return
+		}
+	}
+
 	dist := float32(math.Hypot(float64(targetX-motion.X), float64(targetY-motion.Y)))
 	meleeRange := float32(3.5)
 
-	if dist > meleeRange && motion.PetCommand != PetCommandStay {
+	if dist > meleeRange {
+		if motion.PetCommand == PetCommandStay {
+			// PetAI::UpdateAI COMMAND_STAY arm (PetAI.cpp:84-89): a
+			// stay-commanded pet only swings when the victim is within
+			// melee range — out of range it holds position with no swing,
+			// no chase, and no enemy autocast (C++ enemy-targeted autocast
+			// also gates on CanAttack, PetAI.cpp:144-150). An explicit
+			// attack order replaces Stay with PetCommandAttack in Go, so
+			// the C++ stay+command-attack chase arm is subsumed by the
+			// chase leg below. The victim is kept: C++ keeps it until
+			// NeedToStop or death clears it.
+			motion.Moving = false
+			return
+		}
 		// Run towards target
 		dx := targetX - motion.X
 		dy := targetY - motion.Y

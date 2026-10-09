@@ -154,3 +154,54 @@ func canCreatureDetectStealthOfPlayer(motion *creatureMotion, targetSess *sessio
 
 	return dist <= visibilityRange
 }
+
+// creatureStealthAlertBand mirrors the checkAlert=true arm of
+// WorldObject::CanDetectStealthOf (Object.cpp:1719-1790): when a stealthed
+// player sits outside the normal detect range, the creature still "hears"
+// them 8% further out plus 1.5 yards (Object.cpp:1779-1781) — the band that
+// fires CreatureAI::TriggerAlert (CreatureAI.cpp) from
+// CreatureUnitRelocationWorker (GridNotifiers.cpp:139). The behind-arc gate
+// (Object.cpp:1739-1740) applies to the alert check as well. Returns
+// (inBand, alertRange): inBand is true when the player is stealthed, not
+// normally detectable, but within the alert band. The "no alert when the
+// alert range reaches aggro distance" arm (Object.cpp:1782-1784) is applied
+// by the caller, which owns the creature's attack distance; the DETECT_STEALTH
+// aura always-detect arm (Object.cpp:1754-1755) and the stealth-detect value
+// modifiers ride the same documented deltas as canCreatureDetectStealthOfPlayer.
+func creatureStealthAlertBand(motion *creatureMotion, targetSess *session, dist float32) (bool, float32) {
+	if targetSess == nil || targetSess.player == nil || !targetSess.isStealthed() {
+		return false, 0
+	}
+
+	combatReach := float32(1.5)
+	if motion != nil && motion.CombatReach > 0 {
+		combatReach = motion.CombatReach
+	}
+	// Inside combat reach the player is always detected outright — no alert.
+	if dist < combatReach {
+		return false, 0
+	}
+
+	if motion != nil && !hasInArc(motion.Orientation, motion.X, motion.Y, targetSess.player.X, targetSess.player.Y, math.Pi) {
+		return false, 0
+	}
+
+	cLevel := uint32(1)
+	if motion != nil && motion.Level > 0 {
+		cLevel = motion.Level
+	}
+
+	detectionValue := int32(30) + int32(cLevel-1)*5
+	detectionValue -= targetSess.getStealthValue()
+
+	visibilityRange := float32(detectionValue)*0.3 + combatReach
+	if visibilityRange <= 0 {
+		return false, 0
+	}
+
+	alertRange := visibilityRange*1.08 + 1.5
+	if dist <= visibilityRange || dist > alertRange {
+		return false, 0
+	}
+	return true, alertRange
+}
