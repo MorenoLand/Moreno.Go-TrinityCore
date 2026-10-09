@@ -128,7 +128,21 @@ type creatureMotion struct {
 	// (CombatAI::JustEngagedWith / CasterAI::JustEngagedWith), fired and
 	// re-armed by the combat tick (CombatAI::UpdateAI / CasterAI::UpdateAI),
 	// reset on evade (CombatAI::Reset).
-	SpellEventTimes           map[uint32]time.Time
+	SpellEventTimes map[uint32]time.Time
+	// CastingUntil bridges the UNIT_STATE_CASTING window set by
+	// Unit::CastSpell for non-triggered casts: CombatAI::UpdateAI and
+	// CasterAI::UpdateAI (CombatAI.cpp:97, 159) skip both the spell event
+	// and the melee swing while it is armed. Stamped at cast start to
+	// now + the DBC cast time; cleared by the CasterAI breakable-CC
+	// interrupt arm and on evade (CreatureAI::_EnterEvadeMode ->
+	// Unit::CombatStop(true) -> InterruptNonMeleeSpells(false), Unit.cpp
+	// 5809-5812). Triggered casts never set it (Unit::CastSpell with
+	// triggered=true skips UNIT_STATE_CASTING); the AICOND_DIE death cast
+	// stamps it only on an already-dead motion, which the tick's
+	// Health==0 gate never reaches. No SMSG_SPELL_START is modeled — Go
+	// creature casts stay packet-only SPELL_GO; this field is the
+	// scheduling gate only.
+	CastingUntil              time.Time
 	SpellCooldowns            map[uint32]time.Time
 	SpellCategoryCooldowns    map[uint32]time.Time
 	SpellCooldownCategories   map[uint32]uint32
@@ -840,6 +854,37 @@ func (s *Server) resolveAISpellTargetGUID(m *creatureMotion, spell wotlk.Spell, 
 	}
 }
 
+// aiVictimHasBreakableCC bridges the CasterAI::UpdateAI guard
+// (CombatAI.cpp:155):
+// me->EnsureVictim()->HasBreakableByDamageCrowdControlAura(me)
+// (Unit.cpp:673-683). True when the victim carries a CONFUSE/FEAR/STUN/
+// ROOT/TRANSFORM aura (HasBreakableByDamageAuraType, Unit.cpp:663-671)
+// whose AuraInterruptFlags include AURA_INTERRUPT_FLAG_TAKE_DAMAGE and
+// whose caster is this creature. C++ checks aura EFFECTS by type; Go's
+// activeAura carries only the first effect's AuraType, so a multi-effect
+// aura whose CC effect is not first is missed — noted, not bridged. The
+// channeled-CC self-exclusion (Unit.cpp:676) has no Go model (creatures
+// carry no channeled-spell state) and is noted, not bridged.
+func (s *Server) aiVictimHasBreakableCC(m *creatureMotion, sess *session) bool {
+	if m == nil || sess == nil {
+		return false
+	}
+	for _, aura := range sess.activeAuras {
+		if aura == nil || aura.CasterGUID != m.GUID {
+			continue
+		}
+		switch aura.AuraType {
+		case spellAuraModConfuse, spellAuraModFear, spellAuraModStun, spellAuraModRoot, spellAuraTransform:
+		default:
+			continue
+		}
+		if getSpellAuraInterruptFlags(aura.SpellID, aura.AuraInterruptFlags)&auraInterruptFlagTakeDamage != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // scheduleAISpellEvents bridges the pre-arm of CombatAI::JustEngagedWith
 // (CombatAI.cpp:76-88): every AICOND_COMBAT template spell gets its first
 // event at now + cooldown + rand32() % cooldown. The jitter leg is skipped
@@ -961,8 +1006,9 @@ func (s *Server) dueAISpell(ctx context.Context, m *creatureMotion, victimGUID u
 // (cooldown = max(5000, RecoveryTime), CreatureAIImpl.h:55, UnitAI.cpp:208-209);
 // CasterAI::UpdateAI (CombatAI.cpp:163-166) re-arms with
 // (casttime ? casttime : 500ms) + realCooldown. The UNIT_STATE_CASTING
-// early-out has no Go model (no creature cast-state), so the event arm is
-// unconditional once the spell is due.
+// early-out is bridged by motion.CastingUntil, gated in the combat tick
+// above (CombatAI.cpp:97, 159) — the schedule keeps ticking during the
+// cast exactly as C++'s EventMap does past the early-out return.
 func (s *Server) rearmAISpell(m *creatureMotion, spell wotlk.Spell, spellID uint32, now time.Time) {
 	if m == nil {
 		return
@@ -1272,6 +1318,10 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	// CombatAI::Reset (CombatAI.cpp:64-67): evade clears the AI event
 	// schedule; the next engage re-arms it via the JustEngagedWith pre-arm.
 	motion.SpellEventTimes = nil
+	// CreatureAI::_EnterEvadeMode -> Unit::CombatStop(true) interrupts a
+	// non-melee cast in flight (Unit.cpp:5809-5812), so the cast-state
+	// gate clears with the event schedule.
+	motion.CastingUntil = time.Time{}
 	motion.Health = motion.MaxHealth
 	// CreatureAI::_EnterEvadeMode (CreatureAI.cpp:311): the leash's
 	// last-damaged timer resets with the evade.
@@ -1719,6 +1769,23 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// tick (spell/melee exclusivity, bridged 08:14). Range gating uses
 		// the due spell's own range band; self/buff-targeted spells cast
 		// packet-only regardless of range (C++ CastSpell at me).
+		// CasterAI::UpdateAI (CombatAI.cpp:155-159): the victim's
+		// breakable-by-damage crowd-control check runs BEFORE the
+		// cast-state gate — an AI-held breakable CC aura on the victim
+		// interrupts the creature's non-melee casts
+		// (InterruptNonMeleeSpells(false)) and suppresses the whole
+		// spell/melee tick, so the creature never breaks its own crowd
+		// control.
+		if motion.AIName == "CasterAI" && target.Sess != nil && s != nil && s.aiVictimHasBreakableCC(motion, target.Sess) {
+			motion.CastingUntil = time.Time{}
+			return
+		}
+		// CombatAI::UpdateAI / CasterAI::UpdateAI (CombatAI.cpp:97, 159):
+		// UNIT_STATE_CASTING early-out — no spell event fires and no
+		// melee swing starts while a non-triggered cast is in flight.
+		if now.Before(motion.CastingUntil) {
+			return
+		}
 		spellID, dueSpell, dueTargetGUID, dueOK := s.dueAISpell(ctx, motion, target.GUID, now)
 		spellMinDist, spellMaxDist := contactDist, contactDist
 		if dueOK && dueTargetGUID == target.GUID && s != nil && s.Data != nil {
@@ -1876,6 +1943,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 			}
 			motion.LastSpell = now
+			// Unit::CastSpell: a non-triggered cast holds UNIT_STATE_CASTING
+			// for its DBC cast time; the tick's early-out above bridges
+			// CombatAI.cpp:97 / CasterAI.cpp:159.
+			if castMs := s.aiSpellCastTimeMs(dueSpell); castMs > 0 {
+				motion.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
+			}
 			s.rearmAISpell(motion, dueSpell, spellID, now)
 			// CombatAI::UpdateAI (CombatAI.cpp:90-106): a fired spell event
 			// and the melee swing are mutually exclusive per tick — the

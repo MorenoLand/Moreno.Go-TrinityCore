@@ -562,6 +562,15 @@ func (s *Server) castCreatureSpell(ctx context.Context, m *creatureMotion, spell
 	if s != nil && s.Data != nil {
 		if spellInfo, found, err := s.Data.Spell(spellID); err == nil && found {
 			spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
+			// Unit::CastSpell arms UNIT_STATE_CASTING for a non-triggered
+			// cast's cast time; the combat tick's early-out
+			// (CombatAI.cpp:97, 159) reads it via motion.CastingUntil.
+			// Every castCreatureSpell caller models a non-triggered cast
+			// (the kill.go AICOND_DIE death cast is C++-triggered, but its
+			// motion is dead and never ticks again).
+			if castMs := s.aiSpellCastTimeMs(spellInfo); castMs > 0 {
+				m.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
+			}
 		}
 	}
 	goPkt := protocol.BuildSpellGo(m.GUID, m.GUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, spellTarget)
