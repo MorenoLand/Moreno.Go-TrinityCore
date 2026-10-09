@@ -112,6 +112,7 @@ const (
 	spellAttr3BlockableSpell            uint32 = 0x00000008 // SPELL_ATTR3_BLOCKABLE_SPELL (SharedDefines.h:526) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 
 	spellAuraIgnoreHitDirection           uint32 = 288 // SPELL_AURA_IGNORE_HIT_DIRECTION (SpellAuraDefines.h) — Deterrence is the only 3.3.5a source
+	spellAuraModTotalThreat               uint32 = 103 // SPELL_AURA_MOD_TOTAL_THREAT (SpellAuraDefines.h) — additive temp threat modifier, bridged on ThreatManager
 	spellAuraModRegenDuringCombat         uint32 = 116 // SPELL_AURA_MOD_REGEN_DURING_COMBAT (SpellAuraDefines.h) — health regen keeps running in combat (Second Wind)
 	spellAuraModCombatResultChance        uint32 = 248 // SPELL_AURA_MOD_COMBAT_RESULT_CHANCE (SpellAuraDefines.h) — attacker auras reducing victim dodge (MiscValue == VICTIMSTATE_DODGE)
 	spellAuraModTargetAbsorbSchool        uint32 = 194 // SPELL_AURA_MOD_TARGET_ABSORB_SCHOOL (SpellAuraDefines.h) — attacker's pct of damage bypassing victim absorbs
@@ -13841,6 +13842,13 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	if mounted {
 		s.sendRuntimeMovementUpdates(spellAuraMounted)
 	}
+	// AuraEffect::HandleAuraModTotalThreat (SpellAuraEffects.cpp:2746): a
+	// 103-effect self aura recomputes the caster's (own) temp threat modifier.
+	if s.server != nil && s.server.Data != nil && s.player != nil {
+		if sp, found, _ := s.server.Data.Spell(spellID); found && spellHasAura(sp, spellAuraModTotalThreat) {
+			s.server.refreshThreatTempModifier(s.player.Map, s.player.InstanceID, s.playerGUID)
+		}
+	}
 }
 
 func (s *session) removeAura(spellID uint32) {
@@ -14032,6 +14040,20 @@ func (s *session) removeAura(spellID uint32) {
 	}
 	if wasMountedFlight {
 		s.sendRuntimeMovementUpdates(spellAuraMountedFlightSpeed)
+	}
+	// AuraEffect::HandleAuraModTotalThreat on removal (the
+	// AURA_EFFECT_HANDLE_CHANGE_AMOUNT_MASK arm, SpellAuraEffects.cpp:2748):
+	// the aura is already off the unit (Unit::_UnapplyAura erases before the
+	// effect handlers, Unit.cpp:3548), so the recompute sums the aura
+	// caster's REMAINING 103 auras — the mod drops cleanly on expiry.
+	if s.server != nil && s.server.Data != nil && s.player != nil {
+		if sp, found, _ := s.server.Data.Spell(spellID); found && spellHasAura(sp, spellAuraModTotalThreat) {
+			caster := removedCasterGUID
+			if caster == 0 {
+				caster = s.playerGUID
+			}
+			s.server.refreshThreatTempModifier(s.player.Map, s.player.InstanceID, caster)
+		}
 	}
 }
 
@@ -15824,6 +15846,16 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				targetSess.expirePlayerAura(spell.ID)
 			})
 			targetSess.castMu.Unlock()
+		}
+		// AuraEffect::HandleAuraModTotalThreat (SpellAuraEffects.cpp:2746):
+		// a 103-effect aura applied to a player recomputes the AURA CASTER's
+		// temp threat modifier over the caster's own 103 auras.
+		if spellHasAura(spell, spellAuraModTotalThreat) && s.server != nil {
+			caster := casterGUID
+			if caster == 0 {
+				caster = s.playerGUID
+			}
+			s.server.refreshThreatTempModifier(targetSess.player.Map, targetSess.player.InstanceID, caster)
 		}
 		return
 	}

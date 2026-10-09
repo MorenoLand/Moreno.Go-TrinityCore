@@ -578,7 +578,7 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 				}
 				for _, spellID := range motion.Spells {
 					if spellInfo, found, err := s.server.Data.Spell(spellID); err == nil && found && spellInfo.Attributes&spellAttr0CastableWhileDead != 0 {
-						s.server.castCreatureSpell(ctx, motion, spellID, killerGUID)
+						s.server.castCreatureSpellTriggered(ctx, motion, spellID, killerGUID)
 					}
 				}
 			}

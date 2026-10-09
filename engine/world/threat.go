@@ -36,6 +36,15 @@ type ThreatManager struct {
 	// -> taunt-aura expiry. A zero expiry means the aura carries no
 	// duration and the state lives until the aura is removed.
 	tauntExpiry map[uint64]time.Time
+	// tempMods mirrors ThreatReference::_tempModifier (ThreatManager.h:299):
+	// the additive-constant from SPELL_AURA_MOD_TOTAL_THREAT (aura 103)
+	// effects on the victim, summed by ThreatManager::UpdateMyTempModifiers
+	// (ThreatManager.cpp:699-718). entries holds the _baseAmount; every
+	// threat read compares max(base + tempMods[victim], 0), the
+	// ThreatReference::GetThreat floor (ThreatManager.h:260). Like C++ the
+	// map only covers victims with an existing entry — a new entry starts
+	// at 0 and picks the modifier up on the next aura apply/remove/change.
+	tempMods map[uint64]int32
 }
 
 // motionCanHaveThreatList mirrors ThreatManager::CanHaveThreatList
@@ -65,7 +74,47 @@ func NewThreatManager(motion *creatureMotion) *ThreatManager {
 		ownerCanHaveThreatList: motionCanHaveThreatList(motion),
 		entries:                make(map[uint64]float32),
 		tauntExpiry:            make(map[uint64]time.Time),
+		tempMods:               make(map[uint64]int32),
 	}
+}
+
+// effectiveThreatLocked returns the victim's effective threat —
+// ThreatReference::GetThreat (ThreatManager.h:260): the base amount plus
+// the SPELL_AURA_MOD_TOTAL_THREAT temp modifier, floored at zero. The
+// modifier is an additive constant per victim (all of the victim's refs on
+// this list share it — ThreatManager::UpdateMyTempModifiers sets every
+// _threatenedByMe ref to the same mod), so it re-ranks victims only via
+// the floor. Callers hold tm.mu.
+func (tm *ThreatManager) effectiveThreatLocked(victim uint64) float32 {
+	threat := tm.entries[victim] + float32(tm.tempMods[victim])
+	if threat < 0 {
+		return 0
+	}
+	return threat
+}
+
+// SetTempModifier sets the victim's SPELL_AURA_MOD_TOTAL_THREAT additive
+// modifier (ThreatReference::_tempModifier). Mirrors
+// ThreatManager::UpdateMyTempModifiers (ThreatManager.cpp:699-718): it runs
+// only over existing refs, so a victim with no entry keeps the constructor
+// default 0 until an aura apply/remove/change recomputes it. C++ re-heapifies
+// the sorted list on change (HeapNotifyIncreased/Decreased); Go's Update tick
+// re-runs reselectVictimLocked every second, which is the same cadence as
+// C++'s UpdateVictim-driven ReselectVictim, so no eager switch is needed.
+func (tm *ThreatManager) SetTempModifier(victim uint64, mod int32) {
+	if victim == 0 {
+		return
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	if _, ok := tm.entries[victim]; !ok {
+		return
+	}
+	if mod == 0 {
+		delete(tm.tempMods, victim)
+		return
+	}
+	tm.tempMods[victim] = mod
 }
 
 // OwnerCanHaveThreatList reports the cached ThreatManager::CanHaveThreatList
@@ -270,8 +319,8 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 		taunted bool
 	}
 	cands := make([]candidate, 0, len(tm.entries))
-	for guid, threat := range tm.entries {
-		cands = append(cands, candidate{guid: guid, threat: threat, taunted: tm.isTauntedLocked(guid)})
+	for guid := range tm.entries {
+		cands = append(cands, candidate{guid: guid, threat: tm.effectiveThreatLocked(guid), taunted: tm.isTauntedLocked(guid)})
 	}
 	// Comparator order: taunt state precedence (TAUNT > NONE), then threat
 	// descending — the heap order ReselectVictim walks.
@@ -301,7 +350,7 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 		}
 		return old
 	}
-	oldThreat := tm.entries[old]
+	oldThreat := tm.effectiveThreatLocked(old)
 	// If the highest doesn't break 110% of the old victim, nothing below it
 	// can either — old victim stays.
 	if !(oldThreat*1.1 < highest.threat) {
@@ -418,7 +467,8 @@ func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) 
 	} else {
 		// ThreatReference::AddThreat: zero is a no-op on an existing entry;
 		// negatives reduce, floored at zero. A decrease never clears the
-		// 110%/130% switch gate for the adding victim.
+		// 110%/130% switch gate for the adding victim. The switch gate
+		// compares GetThreat — base plus the temp modifier, floored.
 		if amount == 0 {
 			return false, tm.currentVictim
 		}
@@ -427,6 +477,7 @@ func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) 
 			newThreat = 0
 		}
 		tm.entries[victim] = newThreat
+		newThreat = tm.effectiveThreatLocked(victim)
 	}
 
 	// FixateTarget (ThreatManager.cpp:494-506) + ReselectVictim:540: the
@@ -463,7 +514,7 @@ func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) 
 		return false, tm.currentVictim
 	}
 
-	currThreat := tm.entries[tm.currentVictim]
+	currThreat := tm.effectiveThreatLocked(tm.currentVictim)
 	threshold := currThreat * 1.30
 	if inMelee {
 		threshold = currThreat * 1.10
@@ -485,7 +536,7 @@ func (tm *ThreatManager) SetThreat(victim uint64, amount float32) (switched bool
 	defer tm.mu.Unlock()
 
 	tm.entries[victim] = amount
-	if tm.currentVictim == 0 || amount > tm.entries[tm.currentVictim] {
+	if tm.currentVictim == 0 || tm.effectiveThreatLocked(victim) > tm.effectiveThreatLocked(tm.currentVictim) {
 		tm.currentVictim = victim
 		return true, victim
 	}
@@ -516,14 +567,17 @@ func (tm *ThreatManager) MatchUnitThreatToHighestThreat(victim uint64) (switched
 	}
 
 	var highestThreat float32
-	for _, threat := range tm.entries {
-		if threat > highestThreat {
-			highestThreat = threat
+	for guid := range tm.entries {
+		if eff := tm.effectiveThreatLocked(guid); eff > highestThreat {
+			highestThreat = eff
 		}
 	}
-	current := tm.entries[victim]
+	current := tm.effectiveThreatLocked(victim)
 	if highestThreat > current {
-		tm.entries[victim] = highestThreat
+		// C++ adds the delta to the victim's _baseAmount
+		// (ThreatManager.cpp:419-437 runs highest->GetThreat() -
+		// GetThreat(target) through ThreatReference::AddThreat).
+		tm.entries[victim] += highestThreat - current
 	}
 	tm.currentVictim = victim
 	return true, victim
@@ -536,6 +590,7 @@ func (tm *ThreatManager) RemoveThreat(victim uint64) (switched bool, newVictim u
 	defer tm.mu.Unlock()
 
 	delete(tm.entries, victim)
+	delete(tm.tempMods, victim)
 	// ThreatManager.cpp:809-810: purging the fixated reference clears the
 	// fixate; the victim's taunt state dies with its reference.
 	if tm.fixateGUID == victim {
@@ -546,9 +601,9 @@ func (tm *ThreatManager) RemoveThreat(victim uint64) (switched bool, newVictim u
 		tm.currentVictim = 0
 		var highestGUID uint64
 		var highestThreat float32
-		for guid, threat := range tm.entries {
-			if threat > highestThreat {
-				highestThreat = threat
+		for guid := range tm.entries {
+			if eff := tm.effectiveThreatLocked(guid); eff > highestThreat {
+				highestThreat = eff
 				highestGUID = guid
 			}
 		}
@@ -582,9 +637,9 @@ func (tm *ThreatManager) ScaleThreat(victim uint64, factor float32) (switched bo
 
 	var highestGUID uint64
 	var highestThreat float32
-	for guid, t := range tm.entries {
-		if t > highestThreat {
-			highestThreat = t
+	for guid := range tm.entries {
+		if eff := tm.effectiveThreatLocked(guid); eff > highestThreat {
+			highestThreat = eff
 			highestGUID = guid
 		}
 	}
@@ -660,6 +715,7 @@ func (tm *ThreatManager) ClearThreat() {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	tm.entries = make(map[uint64]float32)
+	tm.tempMods = make(map[uint64]int32)
 	tm.currentVictim = 0
 	tm.fixateGUID = 0
 	tm.tauntExpiry = make(map[uint64]time.Time)
@@ -684,10 +740,12 @@ func (tm *ThreatManager) GetCurrentVictim() uint64 {
 }
 
 // GetThreat returns the threat value for a victim.
+// ThreatReference::GetThreat (ThreatManager.h:260): the base amount plus the
+// SPELL_AURA_MOD_TOTAL_THREAT temp modifier, floored at zero.
 func (tm *ThreatManager) GetThreat(victim uint64) float32 {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
-	return tm.entries[victim]
+	return tm.effectiveThreatLocked(victim)
 }
 
 // IsEmpty returns true if there are no targets threatening the creature.
@@ -704,7 +762,10 @@ func (tm *ThreatManager) SortedEntries() []protocol.ThreatEntry {
 	defer tm.mu.Unlock()
 
 	list := make([]protocol.ThreatEntry, 0, len(tm.entries))
-	for guid, threat := range tm.entries {
+	for guid := range tm.entries {
+		// Client threat packets carry GetThreat (ThreatManager.cpp:212-213
+		// SendThreatListToClients) — base plus the temp modifier.
+		threat := tm.effectiveThreatLocked(guid)
 		list = append(list, protocol.ThreatEntry{
 			VictimGUID: guid,
 			Threat:     uint32(threat * 100),
@@ -744,6 +805,89 @@ func (s *Server) broadcastThreatRemove(mapID uint32, creatureGUID, victimGUID ui
 	}
 	payload := protocol.BuildThreatRemove(creatureGUID, victimGUID)
 	s.broadcastToNearby(uint16(protocol.OpcodeSMSG_THREAT_REMOVE), payload, nil)
+}
+
+// sumThreatTempModifier sums the SPELL_AURA_MOD_TOTAL_THREAT (aura 103)
+// effect amounts over a unit's active auras — the mod computed by
+// ThreatManager::UpdateMyTempModifiers (ThreatManager.cpp:699-704). The
+// per-effect amounts ride aura.Amounts aligned with the spell's effect
+// indices, the same alignment activeAuraHasEffect uses for its type check.
+func sumThreatTempModifier(data *wotlk.Store, auras map[uint32]*activeAura) int32 {
+	if data == nil {
+		return 0
+	}
+	var mod int32
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if index >= len(aura.Amounts) {
+				break
+			}
+			if aura.EffectMask&(1<<uint(index)) != 0 && effect.Aura == spellAuraModTotalThreat {
+				mod += aura.Amounts[index]
+			}
+		}
+	}
+	return mod
+}
+
+// threatTempModifierForUnit computes the unit's current
+// SPELL_AURA_MOD_TOTAL_THREAT additive modifier. Player casters resolve
+// through their session's activeAuras (castMu); creature casters through the
+// server's activeCreatureAuras (auraMu).
+func (s *Server) threatTempModifierForUnit(unitGUID uint64, mapID, instanceID uint32) int32 {
+	if s == nil || unitGUID == 0 {
+		return 0
+	}
+	if sess := s.findSessionByGUID(unitGUID); sess != nil {
+		sess.castMu.Lock()
+		defer sess.castMu.Unlock()
+		return sumThreatTempModifier(s.Data, sess.activeAuras)
+	}
+	motion := s.findCreatureMotion(mapID, instanceID, unitGUID)
+	if motion == nil {
+		return 0
+	}
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	return sumThreatTempModifier(s.Data, s.activeCreatureAuras[creatureAuraKeyForMotion(motion)])
+}
+
+// refreshThreatTempModifier recomputes the unit's SPELL_AURA_MOD_TOTAL_THREAT
+// additive modifier and pushes it onto every creature threat list holding the
+// unit — the Go analog of AuraEffect::HandleAuraModTotalThreat
+// (SpellAuraEffects.cpp:2746-2772) driving
+// ThreatManager::UpdateMyTempModifiers (ThreatManager.cpp:699-718) over the
+// caster's _threatenedByMe refs. C++ fires the handler on 103-aura
+// apply/change-amount with a player target and updates the AURA CASTER's
+// manager, so callers pass the caster GUID, not the target's. Like C++ the
+// push touches only existing entries (new refs start at 0) and does not
+// switch victims eagerly — the 1s Update tick reselects on the new values.
+func (s *Server) refreshThreatTempModifier(mapID, instanceID uint32, unitGUID uint64) {
+	if s == nil || unitGUID == 0 {
+		return
+	}
+	mod := s.threatTempModifierForUnit(unitGUID, mapID, instanceID)
+	var managers []*ThreatManager
+	s.motionMu.Lock()
+	for _, motion := range s.motionMapLocked(mapID, instanceID) {
+		if motion == nil || motion.ThreatMgr == nil {
+			continue
+		}
+		if motion.ThreatMgr.HasVictim(unitGUID) {
+			managers = append(managers, motion.ThreatMgr)
+		}
+	}
+	s.motionMu.Unlock()
+	for _, tm := range managers {
+		tm.SetTempModifier(unitGUID, mod)
+	}
 }
 
 func (s *Server) broadcastThreatRemoveInInstance(mapID, instanceID uint32, creatureGUID, victimGUID uint64) {

@@ -74,7 +74,20 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if targetGUID == 0 {
 			return nil, nil
 		}
-		s.castCreatureSpell(ctx, motion, spellID, targetGUID)
+		// Eluna's third arg selects the triggered cast
+		// (TRIGGERED_IGNORE_POWER_AND_REAGENT_COST, Spell.cpp:3449) —
+		// a triggered cast skips the CheckPower/TakePower legs.
+		triggered := false
+		if len(args) >= 3 {
+			if b, ok := args[2].(bool); ok {
+				triggered = b
+			}
+		}
+		if triggered {
+			s.castCreatureSpellTriggered(ctx, motion, spellID, targetGUID)
+		} else {
+			s.castCreatureSpell(ctx, motion, spellID, targetGUID)
+		}
 		return nil, nil
 	}
 	// Talk(textId) mirrors the C++ CreatureAI::Talk(textId) used by boss

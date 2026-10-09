@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -551,6 +552,154 @@ func (ai *kreshAI) OnUpdate(ctx context.Context, s *Server, m *creatureMotion, d
 
 // castCreatureSpell casts a spell from creature to target or self
 func (s *Server) castCreatureSpell(ctx context.Context, m *creatureMotion, spellID uint32, targetGUID uint64) {
+	s.castCreatureSpellInternal(ctx, m, spellID, targetGUID, false)
+}
+
+// castCreatureSpellTriggered is the TRIGGERED_IGNORE_POWER_AND_REAGENT_COST
+// path (Spell.cpp:3449-3453): a triggered cast skips CheckPower/TakePower.
+// The AICOND_DIE death cast (CombatAI.cpp:68-73, kill.go) rides this.
+func (s *Server) castCreatureSpellTriggered(ctx context.Context, m *creatureMotion, spellID uint32, targetGUID uint64) {
+	s.castCreatureSpellInternal(ctx, m, spellID, targetGUID, true)
+}
+
+const (
+	creaturePowerHealth uint32 = 0xFFFFFFFE // POWER_HEALTH (-2 as signed, Powers enum)
+	creaturePowerMana   uint32 = 0          // POWER_MANA
+	creaturePowerRage   uint32 = 1          // POWER_RAGE
+	creaturePowerFocus  uint32 = 2          // POWER_FOCUS
+	creaturePowerEnergy uint32 = 3          // POWER_ENERGY
+	creaturePowerRune   uint32 = 5          // POWER_RUNE
+	creatureMaxPowers   uint32 = 7          // MAX_POWERS
+)
+
+// creaturePower reads the motion's current power for a 0..MAX_POWERS type.
+func creaturePower(m *creatureMotion, powerType uint32) uint32 {
+	if m == nil || powerType >= uint32(len(m.Powers)) {
+		return 0
+	}
+	return m.Powers[powerType]
+}
+
+// creatureSpellPowerCost mirrors SpellInfo::CalcPowerCost
+// (SpellInfo.cpp:3154-3241) for creature casters: base ManaCost, the
+// ManaCostPercentage of the power's max (POWER_HEALTH from max health,
+// POWER_MANA from create mana, rage/focus/energy/happiness from max power),
+// and the SPELL_ATTR0_LEVEL_DAMAGE_CALCULATION GtNPCManaCostScaler for
+// non-player-controlled casters. The UNIT_FIELD_POWER_COST_MODIFIER flat add,
+// the Shiv energy leg, SPELLMOD_COST, the cost multiplier, and the npcbot
+// legs are player/aura-side and stay 0 for creatures; RUNE/RUNIC_POWER pct
+// costs are unimplemented in C++ too ("Not implemented yet!").
+func (s *Server) creatureSpellPowerCost(spell wotlk.Spell, m *creatureMotion) int32 {
+	powerType := spell.PowerType
+	if spell.AttributesEx&spellAttr1DrainAllPower != 0 {
+		if powerType == creaturePowerHealth {
+			if m == nil {
+				return 0
+			}
+			return int32(m.Health)
+		}
+		if powerType < creatureMaxPowers {
+			return int32(creaturePower(m, powerType))
+		}
+		return 0
+	}
+	powerCost := int32(spell.ManaCost)
+	if spell.ManaCostPct != 0 && m != nil {
+		var base uint32
+		switch powerType {
+		case creaturePowerHealth:
+			base = m.MaxHealth
+		case creaturePowerMana:
+			if len(m.MaxPowers) > 0 {
+				base = m.MaxPowers[0]
+			}
+		case creaturePowerRage, creaturePowerFocus, creaturePowerEnergy, 4: // POWER_HAPPINESS
+			if powerType < uint32(len(m.MaxPowers)) {
+				base = m.MaxPowers[powerType]
+			}
+		}
+		powerCost += int32(uint64(base) * uint64(spell.ManaCostPct) / 100)
+	}
+	// GtNPCManaCostScaler (SpellInfo.cpp:3228-3235): NPC spells carrying
+	// SPELL_ATTR0_LEVEL_DAMAGE_CALCULATION scale by the caster/spell level
+	// ratio. C++ gates on !IsControlledByPlayer — pets and charmed
+	// creatures skip it.
+	if !creatureIsPlayerControlled(m) && spell.Attributes&spellAttr0LevelDamageCalculation != 0 && s != nil && s.Data != nil && m != nil {
+		if spellScaler, ok, err := s.Data.GtNPCManaCostScaler(spell.SpellLevel); err == nil && ok && spellScaler != 0 {
+			if casterScaler, ok, err := s.Data.GtNPCManaCostScaler(uint32(m.Level)); err == nil && ok {
+				powerCost = int32(float32(powerCost) * (casterScaler / spellScaler))
+			}
+		}
+	}
+	if powerCost < 0 {
+		powerCost = 0
+	}
+	return powerCost
+}
+
+// creatureIsPlayerControlled mirrors Unit::IsControlledByPlayer for
+// the CalcPowerCost NPC gate: pets (OwnerGUID) and charmed creatures are
+// player-controlled.
+func creatureIsPlayerControlled(m *creatureMotion) bool {
+	return m != nil && (m.OwnerGUID != 0 || m.Charmed)
+}
+
+// checkCreatureSpellPower mirrors Spell::CheckPower (Spell.cpp:6640-6674)
+// for creature casters: POWER_HEALTH needs health strictly above the cost
+// (SPELL_FAILED_CASTER_AURASTATE), unknown power types fail, POWER_RUNE is
+// OK (CheckRuneCost returns SPELL_CAST_OK for non-players, Spell.cpp:4914),
+// otherwise the power pool must cover the cost (SPELL_FAILED_NO_POWER).
+// Creature casters never carry a cast item.
+func checkCreatureSpellPower(spell wotlk.Spell, m *creatureMotion, cost int32) bool {
+	if m == nil {
+		return true
+	}
+	powerType := spell.PowerType
+	if powerType == creaturePowerHealth {
+		return int32(m.Health) > cost
+	}
+	if powerType >= creatureMaxPowers {
+		return false
+	}
+	if powerType == creaturePowerRune {
+		return true
+	}
+	return int32(creaturePower(m, powerType)) >= cost
+}
+
+// takeCreatureSpellPower mirrors Spell::TakePower (Spell.cpp:4779-4873) for
+// creature casters: POWER_HEALTH drains health, other powers drain the pool
+// (floored at 0 like Unit::ModifyPower), POWER_RUNE is a no-op (TakeRunePower
+// is player-only). The five-second mana timer (Spell.cpp:4872-4873) is
+// vacuous for world creatures — UNIT_FLAG2_REGENERATE_POWER is never set on
+// them (Creature.cpp/Pet.cpp/Player.cpp), so Creature::Regenerate
+// early-returns and nothing reads the stamp.
+func takeCreatureSpellPower(spell wotlk.Spell, m *creatureMotion, cost int32) {
+	if m == nil || cost <= 0 {
+		return
+	}
+	powerType := spell.PowerType
+	if powerType == creaturePowerRune {
+		return
+	}
+	if powerType == creaturePowerHealth {
+		if uint32(cost) >= m.Health {
+			m.Health = 0
+		} else {
+			m.Health -= uint32(cost)
+		}
+		return
+	}
+	if powerType < uint32(len(m.Powers)) {
+		if uint32(cost) >= m.Powers[powerType] {
+			m.Powers[powerType] = 0
+		} else {
+			m.Powers[powerType] -= uint32(cost)
+		}
+	}
+}
+
+func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotion, spellID uint32, targetGUID uint64, triggered bool) {
 	if s == nil || m == nil || spellID == 0 {
 		return
 	}
@@ -559,18 +708,35 @@ func (s *Server) castCreatureSpell(ctx context.Context, m *creatureMotion, spell
 	castTimeStamp := uint32(now.UnixMilli())
 	hitTargets := []uint64{targetGUID}
 	spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
+	var spellInfo wotlk.Spell
+	spellKnown := false
 	if s != nil && s.Data != nil {
-		if spellInfo, found, err := s.Data.Spell(spellID); err == nil && found {
-			spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
-			// Unit::CastSpell arms UNIT_STATE_CASTING for a non-triggered
-			// cast's cast time; the combat tick's early-out
-			// (CombatAI.cpp:97, 159) reads it via motion.CastingUntil.
-			// Every castCreatureSpell caller models a non-triggered cast
-			// (the kill.go AICOND_DIE death cast is C++-triggered, but its
-			// motion is dead and never ticks again).
-			if castMs := s.aiSpellCastTimeMs(spellInfo); castMs > 0 {
-				m.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
+		if si, found, err := s.Data.Spell(spellID); err == nil && found {
+			spellInfo, spellKnown = si, true
+		}
+	}
+	if spellKnown {
+		spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
+		// Unit::CastSpell arms UNIT_STATE_CASTING for a non-triggered
+		// cast's cast time; the combat tick's early-out
+		// (CombatAI.cpp:97, 159) reads it via motion.CastingUntil.
+		// Every castCreatureSpell caller models a non-triggered cast
+		// (the kill.go AICOND_DIE death cast is C++-triggered, but its
+		// motion is dead and never ticks again).
+		if castMs := s.aiSpellCastTimeMs(spellInfo); castMs > 0 {
+			m.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
+		}
+		// Spell::CheckPower (Spell.cpp:5502) + Spell::TakePower
+		// (Spell.cpp:3449, "Powers have to be taken before SendSpellGo"):
+		// a creature that cannot afford the spell fizzles — no packet, no
+		// effects — and a paying creature drains the pool. Triggered casts
+		// (TRIGGERED_IGNORE_POWER_AND_REAGENT_COST) skip both.
+		if !triggered {
+			cost := s.creatureSpellPowerCost(spellInfo, m)
+			if !checkCreatureSpellPower(spellInfo, m, cost) {
+				return
 			}
+			takeCreatureSpellPower(spellInfo, m, cost)
 		}
 	}
 	goPkt := protocol.BuildSpellGo(m.GUID, m.GUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, spellTarget)
