@@ -33,16 +33,17 @@ func chainSpellJumps(spell wotlk.Spell) (jumps uint32, isChainHeal bool) {
 	return jumps, isChainHeal
 }
 
-// chainScaledAmount ports the per-target compounding in Spell::DoEffectOnLaunchTarget
-// (Spell.cpp:7771-7777): the k-th chain jump (0 = primary target) multiplies the
-// effect's base damage/healing by EffectChainAmplitude^k, where the per-jump
-// multiplier is SpellEffectInfo::CalcDamageMultiplier (SpellInfo.cpp:537).
-// Go has no SPELLMOD_DAMAGE_MULTIPLIER spellmod infra, so the mod step is skipped.
-func chainScaledAmount(base uint32, eff wotlk.SpellEffect, jumpIndex int) uint32 {
+// chainScaledAmount applies the per-jump falloff of a chain spell:
+// base * multiplier^jumpIndex, mirroring the m_damageMultipliers
+// accumulation in Spell::DoEffectOnLaunchTarget (Spell.cpp:7771-7774).
+// multiplier is the SPELLMOD_DAMAGE_MULTIPLIER-adjusted EffectChainAmplitude
+// from SpellEffectInfo::CalcDamageMultiplier (SpellInfo.cpp:537-544),
+// computed once per effect by the caller.
+func chainScaledAmount(base uint32, multiplier float64, jumpIndex int) uint32 {
 	if jumpIndex <= 0 {
 		return base
 	}
-	return uint32(float64(base) * math.Pow(float64(eff.ChainAmplitude), float64(jumpIndex)))
+	return uint32(float64(base) * math.Pow(multiplier, float64(jumpIndex)))
 }
 
 type chainCandidate struct {

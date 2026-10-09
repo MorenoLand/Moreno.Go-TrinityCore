@@ -5554,6 +5554,97 @@ func (s *session) hasConsumeNoAmmoAura(spell wotlk.Spell) bool {
 	return false
 }
 
+// engageLaunchTarget mirrors the combat arm of Spell::DoEffectOnLaunchTarget
+// (Spell.cpp:7746-7748): when the original caster is not friendly to the
+// target and the spell is not positive (or it dispels), the caster is set in
+// combat with the target at launch if the spell has initial aggro or the
+// target is already engaged. The EVADE arm of the C++ condition is vacuous
+// in Go's model: an evaded target never stays in hitTargets.
+func (s *session) engageLaunchTarget(ctx context.Context, spell wotlk.Spell, targetGUID uint64) {
+	if s == nil || s.server == nil || s.player == nil || targetGUID == 0 || targetGUID == s.playerGUID {
+		return
+	}
+	if s.isFriendlyLaunchTarget(ctx, targetGUID) {
+		return
+	}
+	if !spellHasInitialThreat(spell) && !s.isLaunchTargetEngaged(targetGUID) {
+		return
+	}
+	if uint16(targetGUID>>48) == 0xF130 {
+		s.server.triggerCreatureAggro(ctx, targetGUID, s.playerGUID)
+		return
+	}
+	// Unit::SetInCombatWith (Unit.h:1051) runs on the caster: the caster
+	// enters combat with the target. The victim-side combat state is the
+	// victim's own CombatManager business; Go has no cross-session combat
+	// manager, so only the caster side is modeled.
+	if s.player.UnitFlags&unitFlagInCombat == 0 {
+		s.player.UnitFlags |= unitFlagInCombat
+		s.sendPlayerUpdate()
+	}
+}
+
+// isFriendlyLaunchTarget mirrors the !m_originalCaster->IsFriendlyTo(unit)
+// gate of the launch engage (Spell.cpp:7747). Player targets ride the
+// session friendliness model (team + duel + own pet); creature targets fall
+// back to the faction-template reaction (Object.cpp:2776-2842) through
+// isFriendlyFaction, which ports the friendly half including reputation
+// standing and the at-war arm.
+func (s *session) isFriendlyLaunchTarget(ctx context.Context, targetGUID uint64) bool {
+	if s == nil || s.server == nil {
+		return false
+	}
+	if s.isFriendlyToTarget(targetGUID, s.server.findSessionByGUID(targetGUID)) {
+		return true
+	}
+	if s.player == nil || uint16(targetGUID>>48) != 0xF130 {
+		return false
+	}
+	faction, ok := s.launchTargetFaction(ctx, targetGUID)
+	if !ok {
+		return false
+	}
+	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	return s.server.isFriendlyFaction(faction, caster)
+}
+
+// launchTargetFaction resolves a creature target's faction template id for
+// the launch-engage friendliness gate: the live motion first, else the
+// creature_template row (the same source triggerCreatureAggro loads when
+// the motion is absent).
+func (s *session) launchTargetFaction(ctx context.Context, targetGUID uint64) (uint32, bool) {
+	if motion := s.findCreatureMotion(targetGUID); motion != nil {
+		return motion.Faction, true
+	}
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return 0, false
+	}
+	guid := uint32(targetGUID & 0x00FFFFFF)
+	var faction int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx,
+		`SELECT COALESCE(t.faction, 0) FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ?`,
+		guid).Scan(&faction); err != nil {
+		return 0, false
+	}
+	return uint32(faction), true
+}
+
+// isLaunchTargetEngaged mirrors the unit->IsEngaged() arm of the launch
+// engage (Spell.cpp:7748): Unit::IsEngaged is IsInCombat (Unit.h:1031) —
+// the player's UNIT_FLAG_IN_COMBAT bit, the creature motion's InCombat.
+func (s *session) isLaunchTargetEngaged(targetGUID uint64) bool {
+	if s == nil || s.server == nil {
+		return false
+	}
+	if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+		return targetSess.player.UnitFlags&unitFlagInCombat != 0
+	}
+	if motion := s.findCreatureMotion(targetGUID); motion != nil {
+		return motion.InCombat
+	}
+	return false
+}
+
 func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, castItemGUID uint64, castItemEntry uint32, queuedSwing *activeCastState) {
 	if s.player == nil {
 		return
@@ -6077,14 +6168,28 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 
 	// Spell::SelectImplicitChainTargets (Spell.cpp:1582): chain spells
 	// (EffectChainTarget > 1) jump from the primary target to nearby units;
-	// chainJumpIndex records each target's jump order (0 = primary) so the
+	// chainJumpIndex records each hit jump's order (0 = primary) so the
 	// per-jump EffectChainAmplitude falloff can be applied at effect time.
+	// Spell::AddUnitTarget (Spell.cpp:2152) rolls the hit per target: a
+	// missed jump resolves no unit (DoEffectOnLaunchTarget,
+	// Spell.cpp:7736-7744) and takes a miss entry instead of a hit slot,
+	// while the remaining jumps still resolve. The exponent counts hit
+	// jumps only — missed targets return before the multiplier accumulation
+	// (Spell.cpp:7771-7774) — so the index below is hit-counted, not
+	// selection-counted. Chain-target reflect (the m_canReflect arm of
+	// Spell.cpp:2152) has no Go model; only the primary target reflects.
 	chainJumpIndex := make(map[uint64]int)
 	if !areaSpell && !friendlyListSpell && targetGUID != 0 {
 		if jumps, isChainHeal := chainSpellJumps(spell); jumps > 0 {
-			for i, extraGUID := range s.spellSearchChainTargets(ctx, spell, targetGUID, jumps, isChainHeal) {
+			jump := 0
+			for _, extraGUID := range s.spellSearchChainTargets(ctx, spell, targetGUID, jumps, isChainHeal) {
+				if missInfo := s.spellTargetMissResult(ctx, extraGUID, spell); missInfo != protocol.SpellMissNone {
+					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: extraGUID, Reason: missInfo})
+					continue
+				}
+				jump++
 				hitTargets = append(hitTargets, extraGUID)
-				chainJumpIndex[extraGUID] = i + 1
+				chainJumpIndex[extraGUID] = jump
 			}
 		}
 	}
@@ -6268,6 +6373,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		s.consumeRangedAmmo(ctx)
 	}
 
+	// Spell::DoEffectOnLaunchTarget (Spell.cpp:7746-7748): the launch-time
+	// combat engage. A target that is not friendly to the original caster
+	// puts the caster in combat at launch when the spell is not positive
+	// (or it carries a dispel effect) and the spell has initial aggro or
+	// the target is already engaged. Missed targets resolve no unit
+	// (Spell.cpp:7736-7744) and Go never keeps a missed GUID in hitTargets,
+	// so every GUID below is a live target. The hit-time half of the same
+	// C++ comment ("the target will engage once the projectile hits") is
+	// the triggerCreatureAggro call at the end of the effects loop.
+	if s.server != nil && (!spellIsPositive(spell) || spellHasEffect(spell, spellEffectDispel)) {
+		for _, guid := range hitTargets {
+			s.engageLaunchTarget(ctx, spell, guid)
+		}
+	}
+
 	goPacket := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, missStatus, target, remainingPower)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true)
 	if s.server != nil {
@@ -6369,9 +6489,38 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	var comboGainTarget uint64
 	var comboGain int8
 	applyEffects := func(effCtx context.Context) {
-		if len(missStatus) > 0 && !isReflected {
+		// Spell::DoEffectOnLaunchTarget (Spell.cpp:7736-7744): the effect
+		// unit resolves per target — a missed target gets no unit and no
+		// effects, while hit targets still resolve. The old whole-cast
+		// abort is replaced by per-target filtering; a cast where every
+		// target missed still runs nothing. A reflect entry names the
+		// original target while the cast retargets to the caster
+		// (hitTargets holds the caster), so reflect entries never filter.
+		missedTargets := make(map[uint64]struct{}, len(missStatus))
+		for _, miss := range missStatus {
+			if miss.Reason == protocol.SpellMissReflect {
+				continue
+			}
+			missedTargets[miss.TargetGUID] = struct{}{}
+		}
+		if len(missedTargets) > 0 {
+			liveTargets := make([]uint64, 0, len(hitTargets))
+			for _, guid := range hitTargets {
+				if _, missed := missedTargets[guid]; !missed {
+					liveTargets = append(liveTargets, guid)
+				}
+			}
+			hitTargets = liveTargets
+		}
+		if len(hitTargets) == 0 && !isReflected {
 			return
 		}
+		// A missed primary target resolves no unit: the unit-targeted
+		// single-target legs below must not fire on it. (On the reflect
+		// path targetGUID was reassigned to the caster and reflect entries
+		// never land in missedTargets, so the reflected cast stays live.)
+		_, primaryMissed := missedTargets[targetGUID]
+		primaryLive := !primaryMissed
 		// Eluna::SpellHit (CREATURE_EVENT_ON_HIT_BY_SPELL, event 14) fires
 		// once per spell hit on a creature target: Spell.cpp:2626
 		// (Spell::UnitTargetInfo::DoTargetSpellHit) calls CreatureAI::
@@ -6462,9 +6611,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						damage = damage * 10 / uint32(count)
 					}
 				}
+				// SpellEffectInfo::CalcDamageMultiplier (SpellInfo.cpp:537-544):
+				// the per-jump multiplier is EffectChainAmplitude with
+				// SPELLMOD_DAMAGE_MULTIPLIER applied once per effect at
+				// launch (HandleLaunchPhase, Spell.cpp:7717-7718), then
+				// accumulated per hit target (DoEffectOnLaunchTarget,
+				// Spell.cpp:7771-7774).
+				chainMult := s.applySpellModFloat(spell, spellModDamageMultiplier, float64(eff.ChainAmplitude)*100.0) / 100.0
 				for _, effectTarget := range hitTargets {
 					if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
-						targetDamage := chainScaledAmount(damage, eff, chainJumpIndex[effectTarget])
+						targetDamage := chainScaledAmount(damage, chainMult, chainJumpIndex[effectTarget])
 						// Spell::EffectWeaponDmg (SpellEffects.cpp:3171-3498):
 						// the weapon-damage computation itself
 						// (Unit::CalculateDamage, the fixed_bonus /
@@ -7098,8 +7254,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// recheck mirrors C++; the cast-time TargetAuraState gate
 				// already ran ahead of the effects.
 				swiftmend := eff.Effect == 10 && spell.TargetAuraState == auraStateSwiftmend
+				// Same CalcDamageMultiplier arm as the damage loop above:
+				// the multiplier scales healing too (Spell.cpp:7772).
+				chainMult := s.applySpellModFloat(spell, spellModDamageMultiplier, float64(eff.ChainAmplitude)*100.0) / 100.0
 				for _, effectTarget := range hitTargets {
-					targetHeal := chainScaledAmount(heal, eff, chainJumpIndex[effectTarget])
+					targetHeal := chainScaledAmount(heal, chainMult, chainJumpIndex[effectTarget])
 					if eff.Effect == spellEffectHealPct {
 						// Spell::EffectHealPct (SpellEffects.cpp:1477-1492):
 						// the effect value is a percentage of the TARGET's
@@ -7395,9 +7554,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectDiscoverTaxi: // 154: SPELL_EFFECT_DISCOVER_TAXI
 				s.handleEffectDiscoverTaxi(effCtx, eff)
 			case 114: // SPELL_EFFECT_ATTACK_ME (EffectTaunt)
-				s.handleEffectTaunt(effCtx, targetGUID, spellID)
+				// A missed primary resolves no unit (Spell.cpp:7736-7744).
+				if primaryLive {
+					s.handleEffectTaunt(effCtx, targetGUID, spellID)
+				}
 			case 96: // SPELL_EFFECT_CHARGE (EffectCharge, SpellEffects.cpp:4493)
-				s.handleEffectCharge(effCtx, targetGUID, spell)
+				if primaryLive {
+					s.handleEffectCharge(effCtx, targetGUID, spell)
+				}
 			case 85: // SPELL_EFFECT_SUMMON_PLAYER (EffectSummonPlayer, SpellEffects.cpp:3922)
 				// C++ runs at SPELL_EFFECT_HANDLE_HIT_TARGET per unit target: a
 				// player target gets SendSummonRequestFrom(caster). Only online
@@ -7475,10 +7639,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// only manipulated, never created from a creature entry.
 				// Documented no-bridge.
 			case 126: // SPELL_EFFECT_STEAL_BENEFICIAL_BUFF
-				s.handleEffectSpellsteal(effCtx, targetGUID, spell, eff)
+				if primaryLive {
+					s.handleEffectSpellsteal(effCtx, targetGUID, spell, eff)
+				}
 			case spellEffectInterruptCast: // 68: SPELL_EFFECT_INTERRUPT_CAST
-				s.handleEffectInterruptCast(effCtx, targetGUID, spell, eff)
-				interruptHandled = true
+				if primaryLive {
+					s.handleEffectInterruptCast(effCtx, targetGUID, spell, eff)
+					interruptHandled = true
+				}
 			case spellEffectCreateItem: // 24: SPELL_EFFECT_CREATE_ITEM
 				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff)
 			case spellEffectCreateItem2: // 70: SPELL_EFFECT_CREATE_ITEM_2
@@ -7800,7 +7968,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			}
 		}
-		if isTauntSpell(spellID) {
+		if primaryLive && isTauntSpell(spellID) {
 			s.handleEffectTaunt(effCtx, targetGUID, spellID)
 		}
 		if isTotemSpell(spellID) {
@@ -7808,7 +7976,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		} else if spellID == 36936 { // Totemic Recall
 			s.destroyAllTotems()
 		}
-		if !interruptHandled && isInterruptSpell(spellID) {
+		if primaryLive && !interruptHandled && isInterruptSpell(spellID) {
 			s.handleEffectInterruptCast(effCtx, targetGUID, spell, wotlk.SpellEffect{})
 		}
 		if spellID == 2641 { // Dismiss Pet
@@ -12013,6 +12181,44 @@ func magicSpellHitResult(casterLevel, victimLevel uint8, isPlayerVictim bool, bo
 	roll := rand.Float64() * 100.0
 	if roll >= modHitChance {
 		return protocol.SpellMissMiss
+	}
+	return protocol.SpellMissNone
+}
+
+// spellTargetMissResult mirrors the per-target hit resolution in
+// Spell::AddUnitTarget (Spell.cpp:2152): every target — including chain
+// jumps — gets its own SpellHitResult roll. It folds the same two legs as
+// the primary-target path above: the level/hit roll, then the binary-spell
+// resist roll. The reflect and immunity arms stay on the primary path;
+// chain targets never reflect in Go (the m_canReflect arm of
+// Spell.cpp:2152 is unmodeled).
+func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, spell wotlk.Spell) uint8 {
+	if s == nil || s.player == nil {
+		return protocol.SpellMissNone
+	}
+	var targetSess *session
+	if s.server != nil {
+		targetSess = s.server.findSessionByGUID(targetGUID)
+	}
+	targetLevel := uint8(1)
+	if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+		targetLevel = tgt.Level
+	}
+	missInfo := magicSpellHitResult(s.player.Level, targetLevel, targetSess != nil, s.getSpellHitPct())
+	if missInfo != protocol.SpellMissNone {
+		return missInfo
+	}
+	if isBinarySpell(spell) {
+		var resistances [7]uint32
+		if targetSess != nil && targetSess.player != nil {
+			resistances = targetSess.player.Resistances
+		} else if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			resistances = tgt.Resistances
+		}
+		chaosBolt := spell.SpellFamilyName == spellFamilyWarlock && spell.SpellIconID == 3178
+		if checkBinarySpellResist(resistances, uint8(spell.SchoolMask), s.player.SpellPenetration, s.player.Level, targetLevel, chaosBolt) {
+			return protocol.SpellMissResist
+		}
 	}
 	return protocol.SpellMissNone
 }
