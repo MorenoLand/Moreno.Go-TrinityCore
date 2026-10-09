@@ -242,7 +242,12 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	if s.nearTeleportPending || s.farTeleportPending {
+	// MovementHandler.cpp:294-298 — movement packets are dropped while the
+	// mover's spline is not finalized. In Go that state is a taxi flight
+	// (the arrival position is pinned at flight start and the flight spline
+	// is server-driven), so mid-flight client movement is dropped like C++
+	// drops it — never applied, never rebroadcast.
+	if s.nearTeleportPending || s.farTeleportPending || s.inFlight {
 		return true
 	}
 	b := protocol.NewReader(payload)
@@ -340,16 +345,29 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	// change on such a seat breaks auras with AURA_INTERRUPT_FLAG_TURNING
 	// (0x10, SpellDefines.h:51), and a turn on a locked seat is ignored so
 	// the server orientation stands. MovementHandler.cpp:390-402.
+	// MovementHandler.cpp:386-402 — a vehicle passenger's movement packet
+	// returns after the orientation leg: no UpdatePosition for the passenger.
+	// A seat with CanControl is the C++ vehicle mover instead: its packets
+	// drive the vehicle and relocate every passenger, so it keeps the full
+	// path below.
+	vehiclePassenger := false
 	if s.player.VehicleGUID != 0 && s.server != nil {
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
 			if _, seatInfo, _ := kit.GetSeatForPassenger(s.playerGUID); seatInfo != nil {
 				if seatInfo.HasFlag(wotlk.VehicleSeatFlagAllowTurning) {
 					if info.Orientation != s.player.Orientation {
+						// On a turning seat the reported orientation is
+						// applied to the mover (mover->SetOrientation); the
+						// passenger path returns before UpdatePosition, so
+						// the orientation apply must not depend on the gated
+						// bulk position apply below.
+						s.player.Orientation = info.Orientation
 						s.removeAurasWithInterruptFlags(auraInterruptFlagTurning)
 					}
 				} else {
 					info.Orientation = s.player.Orientation
 				}
+				vehiclePassenger = !seatInfo.CanControl()
 			}
 		}
 	}
@@ -362,71 +380,78 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		s.player.StandState = 0
 		s.sendPlayerUpdate()
 	}
-	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
-	s.updateZoneAndArea(ctx, false)
-	previousTransportGUID := s.player.TransportGUID
-	reportedTransportGUID := uint64(0)
-	reportedOnTransport := info.Flags&movementOnTransport != 0 && info.Transport != nil
-	if reportedOnTransport {
-		reportedTransportGUID = info.Transport.GUID
-	}
-	if s.server != nil {
-		contactGUID := uint64(0)
-		contactDistance := math.MaxFloat64
+	// MovementHandler.cpp:386-402 — a vehicle passenger's movement packet
+	// returns after the orientation leg above: no UpdatePosition, no zone
+	// update, no transport attachment, no passenger relocation, no duel
+	// bounds. The passenger rides the vehicle; the client-reported
+	// position is rebroadcast below but never becomes canonical.
+	if !vehiclePassenger {
+		s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
+		s.updateZoneAndArea(ctx, false)
+		previousTransportGUID := s.player.TransportGUID
+		reportedTransportGUID := uint64(0)
+		reportedOnTransport := info.Flags&movementOnTransport != 0 && info.Transport != nil
 		if reportedOnTransport {
-			contactGUID = reportedTransportGUID
-		} else {
-			probeDistance := s.server.Config.VisibilityDistanceContinents
-			if probeDistance <= 0 {
-				probeDistance = 150
-			}
-			for _, transport := range s.server.nearbyTransportSpawns(*s.player, probeDistance) {
-				distance := math.Hypot(float64(transport.X-s.player.X), float64(transport.Y-s.player.Y))
-				if distance < contactDistance {
-					contactDistance, contactGUID = distance, transportGUID(transport.GUID)
+			reportedTransportGUID = info.Transport.GUID
+		}
+		if s.server != nil {
+			contactGUID := uint64(0)
+			contactDistance := math.MaxFloat64
+			if reportedOnTransport {
+				contactGUID = reportedTransportGUID
+			} else {
+				probeDistance := s.server.Config.VisibilityDistanceContinents
+				if probeDistance <= 0 {
+					probeDistance = 150
+				}
+				for _, transport := range s.server.nearbyTransportSpawns(*s.player, probeDistance) {
+					distance := math.Hypot(float64(transport.X-s.player.X), float64(transport.Y-s.player.Y))
+					if distance < contactDistance {
+						contactDistance, contactGUID = distance, transportGUID(transport.GUID)
+					}
 				}
 			}
-		}
-		if contactGUID == 0 {
-			s.transportContactProbeGUID, s.transportContactProbeAt = 0, time.Time{}
-		} else if contactGUID != s.transportContactProbeGUID || time.Since(s.transportContactProbeAt) >= time.Second {
-			s.transportContactProbeGUID, s.transportContactProbeAt = contactGUID, time.Now()
-			s.debug("transport proximity movement", "player_guid", s.playerGUID, "player_map", s.player.Map, "player_x", s.player.X, "player_y", s.player.Y, "player_z", s.player.Z, "transport_guid", contactGUID, "transport_distance", contactDistance, "reported_transport_guid", reportedTransportGUID, "reported_on_transport", reportedOnTransport, "movement_flags", info.Flags)
-		}
-	}
-	if info.Flags&movementOnTransport != 0 && info.Transport != nil {
-		canonicalTransportGUID := info.Transport.GUID
-		if s.player.VehicleGUID == 0 && s.server != nil {
-			if spawn, found := s.server.transportSpawnForGUID(canonicalTransportGUID); found {
-				canonicalTransportGUID = transportGUID(spawn.GUID)
-			} else {
-				info.Flags &^= movementOnTransport
-				info.Transport = nil
+			if contactGUID == 0 {
+				s.transportContactProbeGUID, s.transportContactProbeAt = 0, time.Time{}
+			} else if contactGUID != s.transportContactProbeGUID || time.Since(s.transportContactProbeAt) >= time.Second {
+				s.transportContactProbeGUID, s.transportContactProbeAt = contactGUID, time.Now()
+				s.debug("transport proximity movement", "player_guid", s.playerGUID, "player_map", s.player.Map, "player_x", s.player.X, "player_y", s.player.Y, "player_z", s.player.Z, "transport_guid", contactGUID, "transport_distance", contactDistance, "reported_transport_guid", reportedTransportGUID, "reported_on_transport", reportedOnTransport, "movement_flags", info.Flags)
 			}
 		}
-		if info.Transport != nil {
-			info.Transport.GUID = canonicalTransportGUID
-			s.player.TransportGUID = canonicalTransportGUID
-			s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = info.Transport.X, info.Transport.Y, info.Transport.Z, info.Transport.Orientation
-			s.player.TransportSeat = info.Transport.Seat
+		if info.Flags&movementOnTransport != 0 && info.Transport != nil {
+			canonicalTransportGUID := info.Transport.GUID
+			if s.player.VehicleGUID == 0 && s.server != nil {
+				if spawn, found := s.server.transportSpawnForGUID(canonicalTransportGUID); found {
+					canonicalTransportGUID = transportGUID(spawn.GUID)
+				} else {
+					info.Flags &^= movementOnTransport
+					info.Transport = nil
+				}
+			}
+			if info.Transport != nil {
+				info.Transport.GUID = canonicalTransportGUID
+				s.player.TransportGUID = canonicalTransportGUID
+				s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = info.Transport.X, info.Transport.Y, info.Transport.Z, info.Transport.Orientation
+				s.player.TransportSeat = info.Transport.Seat
+			}
 		}
-	}
-	if info.Flags&movementOnTransport == 0 || info.Transport == nil {
-		s.player.TransportGUID = 0
-		s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = 0, 0, 0, 0
-		s.player.TransportSeat = 0
-	}
-	if previousTransportGUID != s.player.TransportGUID {
-		s.debug("transport attachment changed", "player_guid", s.playerGUID, "previous_transport_guid", previousTransportGUID, "transport_guid", s.player.TransportGUID, "reported_transport_guid", reportedTransportGUID, "reported_on_transport", reportedOnTransport)
-	}
-	if s.server != nil {
-		if s.player.VehicleGUID != 0 {
-			s.server.relocatePassengers(s.player.Map, s.player.InstanceID, s.player.VehicleGUID, info.X, info.Y, info.Z, info.Orientation)
-		} else {
-			s.server.relocatePassengers(s.player.Map, s.player.InstanceID, s.playerGUID, info.X, info.Y, info.Z, info.Orientation)
+		if info.Flags&movementOnTransport == 0 || info.Transport == nil {
+			s.player.TransportGUID = 0
+			s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = 0, 0, 0, 0
+			s.player.TransportSeat = 0
 		}
+		if previousTransportGUID != s.player.TransportGUID {
+			s.debug("transport attachment changed", "player_guid", s.playerGUID, "previous_transport_guid", previousTransportGUID, "transport_guid", s.player.TransportGUID, "reported_transport_guid", reportedTransportGUID, "reported_on_transport", reportedOnTransport)
+		}
+		if s.server != nil {
+			if s.player.VehicleGUID != 0 {
+				s.server.relocatePassengers(s.player.Map, s.player.InstanceID, s.player.VehicleGUID, info.X, info.Y, info.Z, info.Orientation)
+			} else {
+				s.server.relocatePassengers(s.player.Map, s.player.InstanceID, s.playerGUID, info.X, info.Y, info.Z, info.Orientation)
+			}
+		}
+		s.checkDuelBounds()
 	}
-	s.checkDuelBounds()
 
 	// Swimming state and breath mirror timer updates (TC MovementHandler.cpp:366-369):
 	// InWater follows the MOVEMENTFLAG_SWIMMING bit on a flag/state mismatch;
@@ -454,9 +479,14 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	if opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) || opcode == uint32(protocol.OpcodeMSG_MOVE_START_SWIM) {
 		s.removeAurasWithInterruptFlags(0x02000000) // AURA_INTERRUPT_FLAG_LANDING
 	}
-	s.updateFallInformationIfNeed(info, uint16(opcode))
+	// Player::UpdateFallInformationIfNeed runs only on the non-vehicle path
+	// (after UpdatePosition, MovementHandler.cpp:404-406); a vehicle
+	// passenger keeps the fall state the vehicle controller's packets set.
+	if !vehiclePassenger {
+		s.updateFallInformationIfNeed(info, uint16(opcode))
+	}
 
-	if opcode == uint32(protocol.OpcodeMSG_MOVE_STOP) || opcode == uint32(protocol.OpcodeMSG_MOVE_HEARTBEAT) || opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) {
+	if !vehiclePassenger && (opcode == uint32(protocol.OpcodeMSG_MOVE_STOP) || opcode == uint32(protocol.OpcodeMSG_MOVE_HEARTBEAT) || opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND)) {
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
 				"UPDATE characters SET position_x = ?, position_y = ?, position_z = ?, orientation = ?, map = ?, zone = ? WHERE guid = ?",
@@ -480,10 +510,12 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	writeMovementInfo(packet, info)
 	s.server.broadcastMovement(uint16(opcode), packet.Bytes(), info, s)
 	s.debug("movement accepted", "account", s.accountName, "guid", guid, "x", info.X, "y", info.Y, "z", info.Z)
-	dx := float64(info.X - s.lastStreamX)
-	dy := float64(info.Y - s.lastStreamY)
-	if dx*dx+dy*dy > 30.0*30.0 {
-		s.streamNearbyObjects(ctx)
+	if !vehiclePassenger {
+		dx := float64(info.X - s.lastStreamX)
+		dy := float64(info.Y - s.lastStreamY)
+		if dx*dx+dy*dy > 30.0*30.0 {
+			s.streamNearbyObjects(ctx)
+		}
 	}
 	return true
 }
@@ -955,10 +987,12 @@ func (s *session) handleMovementAck(ctx context.Context, payload []byte) bool {
 	return true
 }
 
-// handleForceTurnRateChangeAck processes CMSG_FORCE_TURN_RATE_CHANGE_ACK (0x2DF).
-func (s *session) handleForceTurnRateChangeAck(ctx context.Context, payload []byte) bool {
-	return s.handleMovementAck(ctx, payload)
-}
+// CMSG_FORCE_TURN_RATE_CHANGE_ACK (0x2DF) has no dedicated handler in Go:
+// Opcodes.cpp:866 routes it to WorldSession::HandleForceSpeedChangeAck
+// (MOVE_TURN_RATE), so the server.go dispatch feeds it to
+// handleForceSpeedChangeAck directly. It must never take the
+// position-applying handleMovementAck path — C++ never applies the acked
+// position on this opcode.
 
 func (s *Server) broadcastToNearby(opcode uint16, payload []byte, source *session) {
 	s.sessionsMu.RLock()

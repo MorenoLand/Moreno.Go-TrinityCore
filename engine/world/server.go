@@ -2695,7 +2695,11 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_FORCE_TURN_RATE_CHANGE_ACK):
-			if !state.authed || !state.handleForceTurnRateChangeAck(ctx, payload) {
+			// Opcodes.cpp:866 routes 0x2DF to HandleForceSpeedChangeAck
+			// (MOVE_TURN_RATE), which never applies the acked position —
+			// the turn-rate ack must not take the position-applying
+			// handleMovementAck path.
+			if !state.authed || !state.handleForceSpeedChangeAck(uint16(protocol.OpcodeCMSG_FORCE_TURN_RATE_CHANGE_ACK), ctx, payload) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_GET_CHANNEL_MEMBER_COUNT):
