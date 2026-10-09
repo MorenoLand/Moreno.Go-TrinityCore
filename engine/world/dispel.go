@@ -600,8 +600,26 @@ func (s *session) dispelCreatureAuraCharge(key creatureAuraKey, spellID uint32, 
 }
 
 func (s *session) handleEffectDispel(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
+	s.dispelEffectAsCaster(ctx, 0, targetGUID, spell, eff, nil)
+}
+
+// executePetSpellDispel runs SPELL_EFFECT_DISPEL (38) for a pet caster with
+// m_caster = the pet (SpellEffects.cpp:2429-2531): felhunter Devour Magic
+// never reached handleEffectDispel because executePetSpellWithOptions had no
+// effect-38 arm, so the dispel did nothing.
+func (s *session) executePetSpellDispel(ctx context.Context, motion *creatureMotion, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
+	if motion == nil {
+		return
+	}
+	s.dispelEffectAsCaster(ctx, motion.GUID, targetGUID, spell, eff, motion)
+}
+
+func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, petCaster *creatureMotion) {
 	if s.player == nil {
 		return
+	}
+	if casterGUID == 0 {
+		casterGUID = s.playerGUID
 	}
 
 	dispelType := uint32(eff.MiscValue)
@@ -656,27 +674,18 @@ func (s *session) handleEffectDispel(ctx context.Context, targetGUID uint64, spe
 				candidates = candidates[:len(candidates)-1]
 			}
 
-			// Devour Magic self-heal (SpellEffects.cpp:2520-2530)
-			if isDevourMagicSpell(spell.ID) {
-				healAmount := uint32(100)
-				if len(spell.Effects) > 1 && spell.Effects[1].BasePoints > 0 {
-					healAmount = uint32(spell.Effects[1].BasePoints + 1)
-				}
-				s.player.Health += healAmount
-				if s.player.Health > s.player.MaxHealth {
-					s.player.Health = s.player.MaxHealth
-				}
-				s.sendPlayerUpdate()
-			}
-
-			// Dispel Backfire / Backlash Mechanics (SpellEffects.cpp:2470-2485)
-			// Unstable Affliction: deals 9 * tick damage (cand.Amount * 9) and silences dispeller for 5 seconds (spell 31117).
+			// Dispel Backfire / Backlash Mechanics (spell_warlock.cpp:1542-1557)
+			// Unstable Affliction: deals 9 * tick damage (cand.Amount * 9) and silences the dispeller for 5 seconds (spell 31117).
 			if isUnstableAfflictionSpell(cand.SpellID) {
 				backlashDamage := cand.Amount * 9
 				if backlashDamage == 0 {
 					backlashDamage = 1800
 				}
-				s.executeSpellDamage(ctx, s.playerGUID, 31117, backlashDamage, 0)
+				if petCaster != nil {
+					s.executePetSpellDamage(ctx, petCaster, petCaster.GUID, 31117, backlashDamage, 0)
+				} else {
+					s.executeSpellDamage(ctx, casterGUID, 31117, backlashDamage, 0)
+				}
 
 				silenceSpell := wotlk.Spell{
 					ID:         31117,
@@ -687,7 +696,11 @@ func (s *session) handleEffectDispel(ctx context.Context, targetGUID uint64, spe
 					Effect: 6,  // SPELL_EFFECT_APPLY_AURA
 					Aura:   18, // SPELL_AURA_MOD_SILENCE
 				}
-				s.applyAuraToTarget(ctx, s.playerGUID, silenceSpell, silenceEff, 5000, 0, 0, 32, nil, false, s.playerGUID, false)
+				if petCaster != nil {
+					s.applyPetAura(ctx, petCaster, silenceSpell, silenceEff, petCaster.GUID, 5000, 0)
+				} else {
+					s.applyAuraToTarget(ctx, casterGUID, silenceSpell, silenceEff, 5000, 0, 0, 32, nil, false, casterGUID, false)
+				}
 			}
 
 			// Vampiric Touch: deals 2 * tick damage (cand.Amount * 2) to the dispeller (spell 64085).
@@ -696,7 +709,11 @@ func (s *session) handleEffectDispel(ctx context.Context, targetGUID uint64, spe
 				if backlashDamage == 0 {
 					backlashDamage = 680
 				}
-				s.executeSpellDamage(ctx, s.playerGUID, 64085, backlashDamage, 0)
+				if petCaster != nil {
+					s.executePetSpellDamage(ctx, petCaster, petCaster.GUID, 64085, backlashDamage, 0)
+				} else {
+					s.executeSpellDamage(ctx, casterGUID, 64085, backlashDamage, 0)
+				}
 			}
 		} else {
 			// Dispel resisted / failed
@@ -705,7 +722,7 @@ func (s *session) handleEffectDispel(ctx context.Context, targetGUID uint64, spe
 	}
 
 	if len(failList) > 0 {
-		failPkt := buildDispelFailed(s.playerGUID, targetGUID, spell.ID, failList)
+		failPkt := buildDispelFailed(casterGUID, targetGUID, spell.ID, failList)
 		_ = s.write(uint16(protocol.OpcodeSMSG_DISPEL_FAILED), failPkt, true)
 		if s.server != nil {
 			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_DISPEL_FAILED), failPkt, s)
@@ -713,7 +730,7 @@ func (s *session) handleEffectDispel(ctx context.Context, targetGUID uint64, spe
 	}
 
 	if len(successList) > 0 {
-		logPkt := buildSpellDispelLog(targetGUID, s.playerGUID, spell.ID, successList)
+		logPkt := buildSpellDispelLog(targetGUID, casterGUID, spell.ID, successList)
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLDISPELLOG), logPkt, true)
 		if targetSess != nil && targetSess != s {
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_SPELLDISPELLOG), logPkt, true)
@@ -721,6 +738,51 @@ func (s *session) handleEffectDispel(ctx context.Context, targetGUID uint64, spe
 		if s.server != nil {
 			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLDISPELLOG), logPkt, s)
 		}
+	}
+
+	// Devour Magic heal (SpellEffects.cpp:2520-2530): once per cast when at
+	// least one aura was dispelled — C++ casts triggered 19658 on the caster
+	// (the pet for pet casts), and with the Glyph of Felhunter (56249) aura
+	// the owner repeats it on itself.
+	if isDevourMagicSpell(spell.ID) && len(successList) > 0 {
+		healAmount := uint32(100)
+		if len(spell.Effects) > 1 && spell.Effects[1].BasePoints > 0 {
+			healAmount = uint32(spell.Effects[1].BasePoints + 1)
+		}
+		if petCaster != nil {
+			s.healDevourMagicPet(ctx, petCaster, healAmount)
+		} else {
+			s.player.Health += healAmount
+			if s.player.Health > s.player.MaxHealth {
+				s.player.Health = s.player.MaxHealth
+			}
+			s.sendPlayerUpdate()
+		}
+	}
+}
+
+// healDevourMagicPet applies the Devour Magic heal to the casting pet via the
+// triggered 19658 (SpellEffects.cpp:2522-2526) and, when the owner carries
+// the Glyph of Felhunter aura (56249), to the owner as well
+// (SpellEffects.cpp:2527-2529).
+func (s *session) healDevourMagicPet(ctx context.Context, petCaster *creatureMotion, healAmount uint32) {
+	if s.server == nil || petCaster == nil || healAmount == 0 {
+		return
+	}
+	s.executePetSpellHeal(ctx, petCaster, petCaster.GUID, 19658, healAmount)
+	if s.player != nil && s.playerHasAura(56249) {
+		overheal := uint32(0)
+		if uint64(s.player.Health)+uint64(healAmount) > uint64(s.player.MaxHealth) {
+			overheal = uint32(uint64(s.player.Health) + uint64(healAmount) - uint64(s.player.MaxHealth))
+		}
+		packet := buildSpellHealLog(s.playerGUID, s.playerGUID, 19658, healAmount, overheal, 0, false)
+		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, true)
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), packet, s)
+		s.player.Health += healAmount
+		if s.player.Health > s.player.MaxHealth {
+			s.player.Health = s.player.MaxHealth
+		}
+		s.sendPlayerUpdate()
 	}
 }
 

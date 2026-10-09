@@ -576,16 +576,22 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 				return true
 			}
 		}
-		// Player::KillCreditGO: group members at group reward distance share it.
+		// Player::KillCreditGO: group members at group reward distance share
+		// it (GameObject.cpp:1666-1672; Player::IsAtGroupRewardDistance,
+		// Player.cpp:24160-24173 — the distance anchor is the GO, and a dead
+		// member's distance anchors on their corpse via groupRewardAnchorPos).
 		s.creditQuestKills(ctx, entry, guid)
 		if s.groupID != 0 && s.server != nil {
-			inDungeon := s.isDungeonMap(s.player.Map)
+			inDungeon := s.isDungeonMap(goState.Map)
 			for _, m := range s.server.getGroupSessions(s.groupID) {
 				if m == s || m.player == nil {
 					continue
 				}
-				if m.player.Map == s.player.Map && m.player.InstanceID == s.player.InstanceID &&
-					(inDungeon || distance3D(s.player.X, s.player.Y, s.player.Z, m.player.X, m.player.Y, m.player.Z) <= 100.0) {
+				if m.player.Map != goState.Map || m.player.InstanceID != goState.InstanceID {
+					continue
+				}
+				mx, my, mz := groupRewardAnchorPos(m)
+				if inDungeon || distance3D(goState.X, goState.Y, goState.Z, mx, my, mz) <= s.server.Config.MaxGroupXPDistance {
 					m.creditQuestKills(ctx, entry, guid)
 				}
 			}

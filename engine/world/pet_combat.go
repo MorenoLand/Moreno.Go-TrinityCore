@@ -758,6 +758,10 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				handledEffect = true
 			}
 		}
+		if effect.Effect == spellEffectDispel {
+			s.executePetSpellDispel(ctx, motion, targetGUID, spell, effect)
+			handledEffect = true
+		}
 		if effect.Effect == 6 || effect.Effect == 27 || effect.Effect == 35 {
 			durationMs := uint32(0)
 			if spell.DurationIndex > 0 {

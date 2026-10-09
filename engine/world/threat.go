@@ -441,11 +441,27 @@ func (s *session) handleEffectTaunt(ctx context.Context, targetGUID uint64, spel
 	if s == nil || s.server == nil || targetGUID == 0 {
 		return
 	}
+	// Spell::EffectTaunt (SpellEffects.cpp:3141-3143): totems are not valid
+	// taunt targets (the DONT_REPORT cast result is silent). Checked before
+	// motionMu: the totem lifecycle takes totemMu -> motionMu, so acquiring
+	// them in the reverse order here would deadlock.
+	if s.server.isTotemGUID(targetGUID) {
+		return
+	}
 	s.server.motionMu.Lock()
 	defer s.server.motionMu.Unlock()
 
 	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
 	if motion == nil || motion.Evading {
+		return
+	}
+	// Spell::EffectTaunt (SpellEffects.cpp:3153-3157): entities that cannot
+	// have a threat list (ThreatManager.cpp:156-168 — pets, totems, triggers,
+	// player-summoned minions/guardians) reject the taunt silently; Go marks
+	// all of those with a nonzero OwnerGUID. The Hand of Reckoning (62124)
+	// 67485 sub-arm for such targets is documented unbridged pending DBC
+	// verification of 67485's effects.
+	if motion.OwnerGUID != 0 {
 		return
 	}
 	if motion.ThreatMgr == nil {

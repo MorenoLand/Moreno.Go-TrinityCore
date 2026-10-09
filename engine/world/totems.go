@@ -445,6 +445,31 @@ func (s *session) destroyTotem(slotID uint8) {
 	s.destroyTotemGUID(slotID, 0)
 }
 
+// isTotemGUID reports whether guid is a live player totem (C++ Unit::IsTotem,
+// used by gates like Spell::EffectTaunt's totem rejection,
+// SpellEffects.cpp:3141-3143).
+func (srv *Server) isTotemGUID(guid uint64) bool {
+	if srv == nil || guid == 0 {
+		return false
+	}
+	srv.totemMu.RLock()
+	defer srv.totemMu.RUnlock()
+	for _, slots := range srv.activeTotems {
+		for _, t := range slots {
+			if t == nil {
+				continue
+			}
+			t.mu.Lock()
+			live := !t.Stopped && t.TotemGUID == guid
+			t.mu.Unlock()
+			if live {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 	if s == nil || s.playerGUID == 0 || slotID >= 4 {
 		return
