@@ -17,13 +17,37 @@ const (
 	spellImplicitTargetChainHealAlly uint32 = 45 // TARGET_UNIT_TARGET_CHAINHEAL_ALLY (SharedDefines.h:1481)
 )
 
+// chainSelectionEligibleTarget mirrors the SelectImplicitChainTargets call
+// sites in Spell.cpp: chain selection only runs out of
+// SelectImplicitNearbyTargets (1173) and SelectImplicitTargetObjectTargets
+// (1575). An effect's ChainTarget > 1 is inert unless its implicit target
+// has select category NEARBY (2/3/4/38/58; 40/46 are GO/dest nearby entries
+// that chain no units) or is a UNIT object with a TARGET reference
+// (6/21/25/35/45/57/90/95). Cone (24/54/59/60/104/108), area, channel,
+// caster-dest, and caster-object effects never chain-select — Multi-Shot /
+// Swipe-style multi-hit comes from the cone selection plus
+// MaxAffectedTargets instead (Spell.cpp:1208-1215).
+func chainSelectionEligibleTarget(target uint32) bool {
+	switch target {
+	case 2, 3, 4, 38, 58, // TARGET_SELECT_CATEGORY_NEARBY unit targets
+		6, 21, 25, 35, 45, 57, 90, 95: // TARGET_OBJECT_TYPE_UNIT + TARGET_REFERENCE_TYPE_TARGET
+		return true
+	}
+	return false
+}
+
 // chainSpellJumps returns the number of additional chain jumps for a spell and
 // whether it selects allies (Chain Heal). Mirrors the maxTargets > 1 gate in
 // Spell::SelectImplicitChainTargets (Spell.cpp:1593): jumps = ChainTarget - 1.
-// Go shares one hit-target list across effects, so the largest ChainTarget wins.
+// Go shares one hit-target list across effects, so the largest ChainTarget
+// among chain-eligible effects wins. Effects whose ChainTarget > 1 rides a
+// non-eligible implicit target (cone, area, caster-object, caster-dest)
+// contribute nothing, matching the C++ call sites above.
 func chainSpellJumps(spell wotlk.Spell) (jumps uint32, isChainHeal bool) {
 	for _, eff := range spell.Effects {
-		if eff.ChainTargets > 1 && eff.ChainTargets-1 > jumps {
+		if eff.ChainTargets > 1 &&
+			(chainSelectionEligibleTarget(eff.ImplicitTargetA) || chainSelectionEligibleTarget(eff.ImplicitTargetB)) &&
+			eff.ChainTargets-1 > jumps {
 			jumps = eff.ChainTargets - 1
 		}
 		if eff.ImplicitTargetA == spellImplicitTargetChainHealAlly || eff.ImplicitTargetB == spellImplicitTargetChainHealAlly {
@@ -154,6 +178,13 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 			return
 		}
 		if spellTargetUnitBlocked(spell, unitFlags, flagsExtra, isChainHeal) {
+			return
+		}
+		// WorldObjectSpellTargetCheck (Spell.cpp:8324/8333/8344/8354): the
+		// ENEMY/ALLY/PARTY/RAID check types all reject totems, so chain
+		// selection never jumps to one (same convention as the area/cone
+		// totem rejection in spells.go).
+		if s.server.isTotemGUID(guid) {
 			return
 		}
 		dx, dy := float64(x-primary.X), float64(y-primary.Y)

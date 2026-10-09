@@ -6479,6 +6479,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// (Spell.cpp:7771-7774) — so the index below is hit-counted, not
 	// selection-counted. A reflected jump (Spell.cpp:7740) resolves its unit
 	// to the caster: its effects land on the caster with its own jump index.
+	// chainSpellJumps only counts effects whose implicit target is chain-eligible
+	// (the SelectImplicitChainTargets call sites, Spell.cpp:1173/1575) — cone,
+	// area, and caster-object ChainTarget > 1 effects never chain-select.
 	chainJumpIndex := make(map[uint64]int)
 	reflectedJumpIndexes := make([]int, 0, 1)
 	if !areaSpell && !friendlyListSpell && targetGUID != 0 {
