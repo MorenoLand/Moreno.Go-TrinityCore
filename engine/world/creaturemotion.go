@@ -615,10 +615,15 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 	if enteredCombat && fireMotion != nil {
 		// CombatAI::JustEngagedWith / CasterAI::JustEngagedWith
 		// (CombatAI.cpp:76-88, 145-164): AICOND_AGGRO template spells are
-		// cast once at the engage victim, non-triggered. The CasterAI
-		// random immediate combat-cast stays unbridged: Go has no AIName
-		// model to select CasterAI over CombatAI.
+		// cast once at the engage victim, non-triggered.
 		s.castAggroConditionSpells(ctx, fireMotion, firePlayerGUID)
+		if fireMotion.AIName == "CasterAI" {
+			// CasterAI::JustEngagedWith random immediate combat-cast
+			// (CombatAI.cpp:145-164): one randomly chosen AICOND_COMBAT
+			// spell is cast at once via DoCast; its cooldown re-arms with
+			// the cast time added.
+			s.castCasterEngageSpell(ctx, fireMotion, firePlayerGUID)
+		}
 	}
 }
 
@@ -658,6 +663,45 @@ func (s *Server) castAggroConditionSpells(ctx context.Context, m *creatureMotion
 		if aggro {
 			s.castCreatureSpell(ctx, m, spellID, victimGUID)
 		}
+	}
+}
+
+// castCasterEngageSpell bridges the immediate-cast arm of
+// CasterAI::JustEngagedWith (CombatAI.cpp:145-164): one spell is chosen at
+// random from the creature's valid template spells (the C++ _spells list,
+// CombatAI::InitializeAI — spells with DBC data only) and, if it classifies
+// AICOND_COMBAT per UnitAI::FillAISpellInfo (UnitAI.cpp:188-206), it is cast
+// at once at the engage victim via the DoCast analog. When the random pick
+// lands on an AGGRO/DIE spell nothing extra fires — matching C++.
+// LastSpell is stamped so the combat-tick rotation does not double-fire:
+// the C++ re-arms the chosen spell's cooldown with its cast time added.
+func (s *Server) castCasterEngageSpell(ctx context.Context, m *creatureMotion, victimGUID uint64) {
+	if s == nil || m == nil || victimGUID == 0 || len(m.Spells) == 0 || s.Data == nil {
+		return
+	}
+	var valid []uint32
+	var combat []bool
+	for _, spellID := range m.Spells {
+		spellInfo, found, err := s.Data.Spell(spellID)
+		if err != nil || !found {
+			continue
+		}
+		valid = append(valid, spellID)
+		die := spellInfo.Attributes&spellAttr0CastableWhileDead != 0
+		aggro := spellInfo.Attributes&spellAttr0Passive != 0
+		if !aggro && spellInfo.DurationIndex != 0 {
+			if dur, ok, derr := s.Data.SpellDuration(spellInfo.DurationIndex, 1); derr == nil && ok && dur < 0 {
+				aggro = true
+			}
+		}
+		combat = append(combat, !die && !aggro)
+	}
+	if len(valid) == 0 {
+		return
+	}
+	if pick := rand.Intn(len(valid)); combat[pick] {
+		s.castCreatureSpell(ctx, m, valid[pick], victimGUID)
+		m.LastSpell = time.Now()
 	}
 }
 
@@ -1532,9 +1576,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 			}
 			motion.LastSpell = now
-			if dist > contactDist {
-				return
-			}
+			// CombatAI::UpdateAI (CombatAI.cpp:90-106): a fired spell event
+			// and the melee swing are mutually exclusive per tick — the
+			// event arm runs instead of DoMeleeAttackIfReady, so a spell
+			// tick never also swings, at any range.
+			return
 		}
 
 		if dist > contactDist {
@@ -1558,7 +1604,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// TurretAI::UpdateAI (CombatAI.cpp:259-265) has no melee arm — it
 		// only casts spell[0] via DoSpellAttackIfReady inside the range
 		// band (already gated above) — so a turret never swings.
-		if motion.AIName == "TurretAI" {
+		// CasterAI::UpdateAI (CombatAI.cpp:167-186) likewise never calls
+		// DoMeleeAttackIfReady — a CasterAI creature casts only, and never
+		// melee-swings, even in melee range.
+		if motion.AIName == "TurretAI" || motion.AIName == "CasterAI" {
 			return
 		}
 		motion.Moving = false
