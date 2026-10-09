@@ -634,8 +634,9 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 // (SPELL_ATTR0_PASSIVE) or infinite-duration (GetDuration() == -1) — are
 // cast once at the engage victim, non-triggered. Packet-only via
 // castCreatureSpell, matching the AICOND_DIE death-cast bridge in kill.go.
-// Spells whose DBC data is unavailable keep the existing rotation
-// behavior, so a missing DBC never silences a creature's spells.
+// The InitializeAI DBC gate (CombatAI.cpp:58, via loadCreatureSpells) means
+// the list holds only DBC-valid spells here; a DBC row that disappears
+// after load is still skipped defensively.
 func (s *Server) castAggroConditionSpells(ctx context.Context, m *creatureMotion, victimGUID uint64) {
 	if s == nil || m == nil || victimGUID == 0 {
 		return
@@ -2604,6 +2605,10 @@ func (s *Server) broadcastAIReactionInInstance(mapID, instanceID uint32, guid ui
 
 // loadCreatureSpells queries spells configured for this creature entry from creature_template_spell.
 // Reference: ObjectMgr::LoadCreatureTemplateSpells (ObjectMgr.cpp:660).
+// It bridges the CombatAI::InitializeAI _spells fill (CombatAI.cpp:55-62):
+// index order from the ORDER BY `Index` (the MAX_CREATURE_SPELLS m_spells
+// array order, Creature.cpp:546-547), plus the sSpellMgr->GetSpellInfo gate —
+// only spells with DBC data join the list.
 func (s *Server) loadCreatureSpells(ctx context.Context, entry uint32) []uint32 {
 	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || entry == 0 {
 		return nil
@@ -2616,9 +2621,20 @@ func (s *Server) loadCreatureSpells(ctx context.Context, entry uint32) []uint32 
 	var spells []uint32
 	for rows.Next() {
 		var sp int64
-		if rows.Scan(&sp) == nil && sp > 0 {
+		if rows.Scan(&sp) == nil && sp > 0 && s.creatureSpellDBCValid(uint32(sp)) {
 			spells = append(spells, uint32(sp))
 		}
 	}
 	return spells
+}
+
+// creatureSpellDBCValid bridges the sSpellMgr->GetSpellInfo(spell) gate in
+// CombatAI::InitializeAI (CombatAI.cpp:58): spells without DBC data never
+// enter _spells, so they never consume rotation slots or engage/death casts.
+func (s *Server) creatureSpellDBCValid(spell uint32) bool {
+	if s == nil || s.Data == nil {
+		return true
+	}
+	_, found, err := s.Data.Spell(spell)
+	return err == nil && found
 }
