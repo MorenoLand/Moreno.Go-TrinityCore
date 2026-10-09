@@ -1575,6 +1575,86 @@ func (s *session) sendEquipError(errCode uint8, itemGUID uint64) {
 
 // handleUseItem processes CMSG_USE_ITEM (0x0AB).
 // Reference: WorldSession::HandleUseItemOpcode (SpellHandler.cpp:73).
+// takeCastItemSpellCharges mirrors Spell::TakeCastItem (Spell.cpp:4711-4781):
+// items whose template spells carry charges decrement the instance charges
+// toward zero (abs(charges) - 1 per use), persisted to item_instance.charges;
+// expendable items (negative template charges) are destroyed once the last
+// charge is spent. Returns true when the item was destroyed. The
+// TRIGGERED_IGNORE_CAST_ITEM gate is vacuous here — handleUseItem serves only
+// player-initiated (TRIGGERED_NONE) casts.
+func (s *session) takeCastItemSpellCharges(ctx context.Context, dbItemGUID, itemEntry, bagKey int64, slot uint8) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	cdb := s.server.CharactersStore.DB
+	var spellIDs, tplCharges [5]int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT spellid_1, spellid_2, spellid_3, spellid_4, spellid_5,
+		spellcharges_1, spellcharges_2, spellcharges_3, spellcharges_4, spellcharges_5
+		FROM item_template WHERE entry = ? LIMIT 1`, itemEntry).Scan(
+		&spellIDs[0], &spellIDs[1], &spellIDs[2], &spellIDs[3], &spellIDs[4],
+		&tplCharges[0], &tplCharges[1], &tplCharges[2], &tplCharges[3], &tplCharges[4]); err != nil {
+		return false
+	}
+	var defaults [5]int32
+	for i := range defaults {
+		defaults[i] = int32(tplCharges[i])
+	}
+	var rawCharges string
+	if err := cdb.QueryRowContext(ctx, `SELECT COALESCE(charges, '') FROM item_instance WHERE guid = ? LIMIT 1`, dbItemGUID).Scan(&rawCharges); err != nil {
+		return false
+	}
+	charges := parseItemSpellCharges(rawCharges, defaults)
+	expendable := false
+	withoutCharges := false
+	changed := false
+	for i := 0; i < 5; i++ {
+		if spellIDs[i] <= 0 || tplCharges[i] == 0 {
+			continue
+		}
+		if tplCharges[i] < 0 {
+			expendable = true
+		}
+		c := int32(charges[i])
+		if c != 0 {
+			// abs(charges) less at 1 after use (Spell.cpp:4751)
+			if c > 0 {
+				c--
+			} else {
+				c++
+			}
+			charges[i] = uint32(c)
+			changed = true
+		}
+		withoutCharges = (c == 0)
+	}
+	if changed {
+		var sb strings.Builder
+		for i, charge := range charges {
+			if i > 0 {
+				sb.WriteByte(' ')
+			}
+			sb.WriteString(strconv.FormatInt(int64(int32(charge)), 10))
+		}
+		_, _ = cdb.ExecContext(ctx, `UPDATE item_instance SET charges = ? WHERE guid = ?`, sb.String(), dbItemGUID)
+	}
+	if expendable && withoutCharges {
+		var count int64
+		_ = cdb.QueryRowContext(ctx, `SELECT count FROM item_instance WHERE guid = ? LIMIT 1`, dbItemGUID).Scan(&count)
+		if count > 1 {
+			_, _ = cdb.ExecContext(ctx, `UPDATE item_instance SET count = count - 1 WHERE guid = ?`, dbItemGUID)
+		} else {
+			_, _ = cdb.ExecContext(ctx, `DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?`, s.playerGUID, bagKey, slot)
+			_, _ = cdb.ExecContext(ctx, `DELETE FROM item_instance WHERE guid = ?`, dbItemGUID)
+			s.despawnItem(uint64(dbItemGUID))
+		}
+		s.adjustQuestItemCount(ctx, uint32(itemEntry), 1, false)
+		_ = s.sendInventoryItems(ctx)
+		s.sendPlayerUpdate()
+		return true
+	}
+	return false
+}
+
 func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return false
@@ -1904,21 +1984,27 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		}
 	}
 
-	// If consumable item (class == 0), decrement count or remove from inventory
-	var class int64
-	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT class FROM item_template WHERE entry = ?", itemEntry).Scan(&class)
-		if class == 0 { // ITEM_CLASS_CONSUMABLE
-			if count > 1 {
-				_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - 1 WHERE guid = ?", dbItemGUID)
-			} else {
-				_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, bagKey, slot)
-				_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", dbItemGUID)
-				s.despawnItem(uint64(dbItemGUID))
+	// Spell::TakeCastItem (Spell.cpp:4711-4781): the charge leg runs on the
+	// item cast; it returns true when the expendable item was destroyed, in
+	// which case the consumable decrement below is skipped (C++ destroys
+	// exactly one item per use).
+	if !s.takeCastItemSpellCharges(ctx, dbItemGUID, itemEntry, bagKey, slot) {
+		// If consumable item (class == 0), decrement count or remove from inventory
+		var class int64
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT class FROM item_template WHERE entry = ?", itemEntry).Scan(&class)
+			if class == 0 { // ITEM_CLASS_CONSUMABLE
+				if count > 1 {
+					_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - 1 WHERE guid = ?", dbItemGUID)
+				} else {
+					_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, bagKey, slot)
+					_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", dbItemGUID)
+					s.despawnItem(uint64(dbItemGUID))
+				}
+				s.adjustQuestItemCount(ctx, uint32(itemEntry), 1, false)
+				_ = s.sendInventoryItems(ctx)
+				s.sendPlayerUpdate()
 			}
-			s.adjustQuestItemCount(ctx, uint32(itemEntry), 1, false)
-			_ = s.sendInventoryItems(ctx)
-			s.sendPlayerUpdate()
 		}
 	}
 

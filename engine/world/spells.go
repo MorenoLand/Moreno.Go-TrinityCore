@@ -99,15 +99,17 @@ const (
 
 	spellDamageClassMagic uint32 = 1 // SPELL_DAMAGE_CLASS_MAGIC (SharedDefines.h:1580)
 
-	spellAttr0StopAttackTarget       uint32 = 0x00100000 // SPELL_ATTR0_STOP_ATTACK_TARGET (SharedDefines.h:432)
-	spellAttr0DisabledWhileActive    uint32 = 0x02000000 // SPELL_ATTR0_DISABLED_WHILE_ACTIVE (SharedDefines.h:437)
-	spellAttr0CastableWhileMounted   uint32 = 0x01000000 // SPELL_ATTR0_CASTABLE_WHILE_MOUNTED (SharedDefines.h:436)
-	spellAttr0LevelDamageCalculation uint32 = 0x00080000 // SPELL_ATTR0_LEVEL_DAMAGE_CALCULATION (SharedDefines.h:431)
-	spellAttr0Negative1              uint32 = 0x04000000 // SPELL_ATTR0_NEGATIVE_1 (SharedDefines.h:438) — forces the spell to be treated as negative
-	spellAttr2Unk3                   uint32 = 0x00000008 // SPELL_ATTR2_UNK3 (SharedDefines.h:489) — "Ignore aura scaling"; GetAuraRankForLevel returns the cast rank — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
-	spellAttr2CanTargetNotInLOS      uint32 = 0x00000004 // SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS (SharedDefines.h:488) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
-	spellAttr2HealthFunnel           uint32 = 0x00000800 // SPELL_ATTR2_HEALTH_FUNNEL (SharedDefines.h:497) — periodic-heal ticks cost the caster ManaPerSecond health — ATTR2 is Go's AttributesEx1
-	spellAttr3DrainSoul              uint32 = 0x08000000 // SPELL_ATTR3_DRAIN_SOUL (SharedDefines.h:550) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
+	spellAttr0StopAttackTarget          uint32 = 0x00100000 // SPELL_ATTR0_STOP_ATTACK_TARGET (SharedDefines.h:432)
+	spellAttr0ImpossibleDodgeParryBlock uint32 = 0x00200000 // SPELL_ATTR0_IMPOSSIBLE_DODGE_PARRY_BLOCK (SharedDefines.h:433)
+	spellAttr0DisabledWhileActive       uint32 = 0x02000000 // SPELL_ATTR0_DISABLED_WHILE_ACTIVE (SharedDefines.h:437)
+	spellAttr0CastableWhileMounted      uint32 = 0x01000000 // SPELL_ATTR0_CASTABLE_WHILE_MOUNTED (SharedDefines.h:436)
+	spellAttr0LevelDamageCalculation    uint32 = 0x00080000 // SPELL_ATTR0_LEVEL_DAMAGE_CALCULATION (SharedDefines.h:431)
+	spellAttr0Negative1                 uint32 = 0x04000000 // SPELL_ATTR0_NEGATIVE_1 (SharedDefines.h:438) — forces the spell to be treated as negative
+	spellAttr2Unk3                      uint32 = 0x00000008 // SPELL_ATTR2_UNK3 (SharedDefines.h:489) — "Ignore aura scaling"; GetAuraRankForLevel returns the cast rank — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
+	spellAttr2CanTargetNotInLOS         uint32 = 0x00000004 // SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS (SharedDefines.h:488) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
+	spellAttr2HealthFunnel              uint32 = 0x00000800 // SPELL_ATTR2_HEALTH_FUNNEL (SharedDefines.h:497) — periodic-heal ticks cost the caster ManaPerSecond health — ATTR2 is Go's AttributesEx1
+	spellAttr3DrainSoul                 uint32 = 0x08000000 // SPELL_ATTR3_DRAIN_SOUL (SharedDefines.h:550) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
+	spellAttr3BlockableSpell            uint32 = 0x00000008 // SPELL_ATTR3_BLOCKABLE_SPELL (SharedDefines.h:526) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 
 	spellFailedEquippedItemClass         uint8  = 29  // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
 	spellFailedEquippedItemClassMainhand uint8  = 30  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
@@ -6557,7 +6559,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if s.player != nil {
 				bonusHit = s.getSpellHitPct()
 			}
-			missInfo := magicSpellHitResult(s.player.Level, targetLevel, isPlayerVictim, bonusHit)
+			var missInfo uint8
+			if spell.DefenseType == spellDamageClassMelee || spell.DefenseType == spellDamageClassRanged {
+				// WorldObject::SpellHitResult (Object.cpp:2656-2660) routes
+				// DmgClass MELEE/RANGED spells through Unit::MeleeSpellHitResult
+				// (Unit.cpp:2478) instead of the magic hit table.
+				missInfo = s.meleeSpellHitResult(ctx, targetGUID, targetSess, spell, targetLevel, isPlayerVictim)
+			} else {
+				missInfo = magicSpellHitResult(s.player.Level, targetLevel, isPlayerVictim, bonusHit)
+			}
 			if missInfo != protocol.SpellMissNone {
 				hitTargets = nil
 				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: missInfo}}
@@ -13020,6 +13030,177 @@ func magicSpellHitResult(casterLevel, victimLevel uint8, isPlayerVictim bool, bo
 	if roll >= modHitChance {
 		return protocol.SpellMissMiss
 	}
+	return protocol.SpellMissNone
+}
+
+// meleeSpellHitResult mirrors Unit::MeleeSpellHitResult (Unit.cpp:2478-2619):
+// the single roll table MISS > DODGE > PARRY > BLOCK for melee spells, and
+// MISS > DEFLECT for ranged spells. WorldObject::SpellHitResult
+// (Object.cpp:2656-2660) routes DmgClass MELEE/RANGED spells here instead of
+// the magic hit table.
+func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, targetSess *session, spell wotlk.Spell, targetLevel uint8, isPlayerVictim bool) uint8 {
+	if s == nil || s.player == nil {
+		return protocol.SpellMissNone
+	}
+	attackerLevel := s.player.Level
+	if attackerLevel == 0 {
+		attackerLevel = 1
+	}
+	if targetLevel == 0 {
+		targetLevel = 1
+	}
+	leveldif := int32(targetLevel) - int32(attackerLevel)
+	ranged := spell.DefenseType == spellDamageClassRanged
+
+	// 1. Miss: Unit::MeleeSpellMissChance (Unit.cpp:12408). The +19% dual-wield
+	// arm only applies when !spellId (Unit.cpp:12419) — never for spells. The
+	// weapon/defense-skill diffs fold into the level-diff basis Go's melee
+	// path uses (combat.go rollMeleeOutcome); SPELLMOD_RESIST_MISS_CHANCE has
+	// no Go spellmod model and stays unbridged.
+	var missChance int32
+	if isPlayerVictim {
+		missChance = 500
+		if leveldif > 0 {
+			missChance += leveldif * 40
+		} else {
+			missChance += leveldif * 20
+		}
+	} else {
+		if leveldif > 10 {
+			missChance = 100 + (leveldif-10)*400
+		} else {
+			missChance = 500 + leveldif*100
+		}
+		if targetLevel < 10 {
+			missChance = int32(float64(missChance) * (float64(targetLevel) / 10.0))
+		}
+	}
+	// m_modRangedHitChance / m_modMeleeHitChance (Unit.cpp:12443-12446).
+	hitBP := int32(math.Round(s.getMeleeHitPct() * 100))
+	if ranged {
+		hitBP = int32(math.Round(s.getRangedHitPct() * 100))
+	}
+	missChance -= hitBP
+	if missChance < 0 {
+		missChance = 0
+	}
+
+	roll := rand.IntN(10000)
+	tmp := missChance
+	if roll < int(tmp) {
+		return protocol.SpellMissMiss
+	}
+
+	// 2. Mechanic resist (Unit.cpp:2497): victim->GetMechanicResistChance —
+	// Go has no mechanic model; the roll passes through unbridged.
+
+	// 3. Same spells cannot be parried/dodged (Unit.cpp:2505-2506).
+	if spell.Attributes&spellAttr0ImpossibleDodgeParryBlock != 0 {
+		return protocol.SpellMissNone
+	}
+
+	canDodge := true
+	canParry := true
+	canBlock := spell.AttributesEx3&spellAttr3BlockableSpell != 0
+
+	// Ranged attacks can only miss, resist and deflect (Unit.cpp:2516-2527).
+	if ranged {
+		canParry = false
+		canDodge = false
+	}
+
+	// A victim that is casting or CC'd cannot avoid (Unit.cpp:2510-2515):
+	// Go has no victim cast/CC state on this path — unbridged.
+
+	// Behind-arc legs (Unit.cpp:2529-2553): attackers outside the victim's
+	// front 180° arc cannot be parried or blocked, and player victims cannot
+	// dodge (creatures keep dodge vs behind attacks). The
+	// SPELL_AURA_IGNORE_HIT_DIRECTION exemption and the
+	// ATTR0_CU_REQ_CASTER_BEHIND_TARGET carve-out have no Go model.
+	attackerInFront := true
+	if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+		attackerInFront = hasInArc(tgt.Orientation, tgt.X, tgt.Y, s.player.X, s.player.Y, math.Pi)
+	}
+	if !attackerInFront {
+		canParry = false
+		canBlock = false
+		if isPlayerVictim {
+			canDodge = false
+		}
+	}
+
+	// SPELL_AURA_IGNORE_COMBAT_RESULT auras (Unit.cpp:2555-2576) have no Go
+	// aura model — unbridged.
+
+	if ranged {
+		// Deflect (Unit.cpp:2519-2526) rolls off SPELL_AURA_DEFLECT_SPELLS,
+		// which has no Go aura model — no deflect chance, returns NONE.
+		return protocol.SpellMissNone
+	}
+
+	expertiseBP := int32(math.Round(s.getExpertiseDodgeParryReductionPct() * 100))
+
+	// 4. Dodge: Unit::GetUnitDodgeChance (Unit.cpp:2657) — player victims use
+	// their derived PLAYER_DODGE_PERCENTAGE with the 0.04%/skill-point arm;
+	// creatures the 5% base with the 0.1%/level arm. Go folds the skill diff
+	// into the level-diff basis like the melee path (combat.go).
+	if canDodge && (isPlayerVictim || targetLevel >= 10) {
+		dodgeChance := int32(0)
+		if isPlayerVictim && targetSess != nil && targetSess.player != nil {
+			dodgeChance = int32(math.Round(float64(targetSess.player.DodgePercentage)*100)) + leveldif*20
+		} else {
+			dodgeChance = 500
+			if leveldif > 0 {
+				dodgeChance += leveldif * 10
+			}
+		}
+		dodgeChance -= expertiseBP
+		if dodgeChance < 0 {
+			dodgeChance = 0
+		}
+		tmp += dodgeChance
+		if roll < int(tmp) {
+			return protocol.SpellMissDodge
+		}
+	}
+
+	// 5. Parry: Unit::GetUnitParryChance — same construction as dodge with
+	// the victim's derived PLAYER_PARRY_PERCENTAGE.
+	if canParry && (isPlayerVictim || targetLevel >= 10) {
+		parryChance := int32(0)
+		if isPlayerVictim && targetSess != nil && targetSess.player != nil {
+			parryChance = int32(math.Round(float64(targetSess.player.ParryPercentage)*100)) + leveldif*20
+		} else {
+			parryChance = 500
+			if leveldif > 0 {
+				parryChance += leveldif * 10
+			}
+		}
+		parryChance -= expertiseBP
+		if parryChance < 0 {
+			parryChance = 0
+		}
+		tmp += parryChance
+		if roll < int(tmp) {
+			return protocol.SpellMissParry
+		}
+	}
+
+	// 6. Block: Unit::GetUnitBlockChance — only for ATTR3_BLOCKABLE_SPELL
+	// spells; player victims need a usable shield (CanBlock, offhand Block).
+	// Creatures have no Go block model — unbridged.
+	if canBlock {
+		blockChance := int32(0)
+		if isPlayerVictim && targetSess != nil && targetSess.player != nil &&
+			targetSess.player.CanBlock && targetSess.player.Block > 0 {
+			blockChance = int32(math.Round(float64(targetSess.player.BlockPercentage) * 100))
+		}
+		tmp += blockChance
+		if roll < int(tmp) {
+			return protocol.SpellMissBlock
+		}
+	}
+
 	return protocol.SpellMissNone
 }
 
