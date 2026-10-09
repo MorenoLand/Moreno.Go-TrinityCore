@@ -7275,7 +7275,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// (Spell.cpp:2108-2112) runs per effect through
 				// Creature::IsImmunedToSpellEffect; a zeroed mask reports
 				// SPELL_MISS_IMMUNE2 (Spell.cpp:4491-4492).
-				if len(missStatus) == 0 && targetSess == nil && s.creatureTargetFullyEffectImmune(ctx, targetGUID, spell, s) {
+				if len(missStatus) == 0 && targetSess == nil && s.creatureTargetFullyEffectImmune(ctx, targetGUID, spell, s, targetFaction) {
 					hitTargets = nil
 					missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune2}}
 				}
@@ -7307,7 +7307,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if s.creatureTargetImmuneToSpell(ctx, targetGUID, spell, s, targetFaction) {
 				hitTargets = nil
 				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
-			} else if s.creatureTargetFullyEffectImmune(ctx, targetGUID, spell, s) {
+			} else if s.creatureTargetFullyEffectImmune(ctx, targetGUID, spell, s, targetFaction) {
 				hitTargets = nil
 				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune2}}
 			}

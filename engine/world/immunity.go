@@ -454,11 +454,11 @@ type immuneAura struct {
 // The SPELL_AURA_MOD_IMMUNE_AURA_APPLY_SCHOOL (267) arm is a live
 // aura-list check in C++ (no m_spellImmune entry; handler is
 // HandleNoImmediateEffect, SpellAuraEffects.cpp:332), mirrored here.
-// Creature-side writers (template mechanic/school masks, NO_TAUNT and
-// IMMUNITY_KNOCKBACK flag-extra, the Totem/Creature override arms) and
-// the IMMUNITY_DISPEL/IMMUNITY_SCHOOL/IMMUNITY_DAMAGE lists (never
-// consulted by IsImmunedToSpellEffect) have no Go model and stay
-// documented gaps.
+// The creature-target chain (creatureImmuneToSpellEffect) mirrors the same
+// Unit arms from the Creature/Totem template writers, including the 267
+// live-aura arm. IMMUNITY_ID (spell_linked_spell negative rows,
+// ApplySpellImmune unbridged) and IMMUNITY_DISPEL (never consulted by
+// IsImmunedToSpellEffect) have no writer model and stay documented gaps.
 func (s *session) isImmunedToSpellEffect(spell wotlk.Spell, effIndex int, caster *session) bool {
 	if s == nil || s.player == nil {
 		return false
@@ -573,8 +573,8 @@ func immunedToSpellEffectEval(spell wotlk.Spell, effIndex int, target, caster *s
 				if uint32(a.misc)&spell.SchoolMask == 0 {
 					continue
 				}
-				// (caster && !IsFriendlyTo(caster)) || !IsPositiveEffect(index) (Unit.cpp:7971)
-				if caster == nil || !target.isFriendlyToPlayer(caster) || !spell.IsPositiveEffect(effIndex) {
+				// (caster && !IsFriendlyTo(caster)) || !IsPositiveEffect(index) (Unit.cpp:7987)
+				if (caster != nil && !target.isFriendlyToPlayer(caster)) || !spell.IsPositiveEffect(effIndex) {
 					return true
 				}
 			}
@@ -833,17 +833,40 @@ func (s *session) spellTargetFullyEffectImmune(spell wotlk.Spell, targetSess *se
 	return anyEffect
 }
 
+// creatureImmuneAuraApplySchoolMask is the creature-target analog of the
+// player-side 267 snapshot arm: the OR of the misc (school-mask) values of
+// the target's live SPELL_AURA_MOD_IMMUNE_AURA_APPLY_SCHOOL (267) auras
+// (GetAuraEffectsByType, Unit.cpp:7984). Go stores one activeAura per
+// spell id, so the scan reads the stored AuraType/MiscValue the same way
+// immuneAuraSnapshotLocked does for players.
+func (s *Server) creatureImmuneAuraApplySchoolMask(key creatureAuraKey) uint32 {
+	if s == nil {
+		return 0
+	}
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	var mask uint32
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.AuraType != spellAuraModImmuneAuraApplySchool {
+			continue
+		}
+		mask |= uint32(aura.MiscValue)
+	}
+	return mask
+}
+
 // creatureImmuneToSpellEffect mirrors the creature-target per-effect
 // immunity chain: Totem::IsImmunedToSpellEffect (Totem.cpp:183-204),
 // Creature::IsImmunedToSpellEffect (Creature.cpp:2336-2341), then
 // Unit::IsImmunedToSpellEffect (Unit.cpp:7952-7994) fed by the
 // Creature::LoadTemplateImmunities (Creature.cpp:2279-2313) and
 // flags_extra (Creature.cpp:634-638, 1184-1187) ApplySpellImmune writers.
-// stats carries the template rows; isTotem marks a live player totem.
-// The SPELL_AURA_MOD_IMMUNE_AURA_APPLY_SCHOOL (267) arm (Unit.cpp:7983)
-// is unmodeled: it needs the target's live aura-effect scan, which Go has
-// no reader for on creature targets.
-func creatureImmuneToSpellEffect(spell wotlk.Spell, effIndex int, stats creatureStats, isTotem bool, caster *session) bool {
+// stats carries the template rows; isTotem marks a live player totem;
+// the 267 arm scans the target's live creature auras via
+// creatureImmuneAuraApplySchoolMask (GetAuraEffectsByType, Unit.cpp:7984),
+// and friendly is the target's IsFriendlyTo(caster) verdict, precomputed
+// by the caller.
+func creatureImmuneToSpellEffect(srv *Server, key creatureAuraKey, spell wotlk.Spell, effIndex int, stats creatureStats, isTotem bool, caster *session, friendly bool) bool {
 	if effIndex < 0 || effIndex >= len(spell.Effects) {
 		return false
 	}
@@ -897,6 +920,17 @@ func creatureImmuneToSpellEffect(spell wotlk.Spell, effIndex int, stats creature
 		if stats.FlagsExtra&creatureFlagExtraNoTaunt != 0 && eff.Aura == spellAuraModTaunt {
 			return true
 		}
+		// SPELL_AURA_MOD_IMMUNE_AURA_APPLY_SCHOOL (267) arm
+		// (Unit.cpp:7981-7989): immune to the application of harmful
+		// magical effects whose school overlaps a live 267 row's misc
+		// mask — harmful means the caster exists and is not friendly to
+		// the target, or the effect is not positive.
+		if spell.AttributesEx1&spellAttr2UnaffectedByAuraSchoolImmune == 0 {
+			if mask := srv.creatureImmuneAuraApplySchoolMask(key); mask&spell.SchoolMask != 0 &&
+				((caster != nil && !friendly) || !spell.IsPositiveEffect(effIndex)) {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -907,10 +941,11 @@ func creatureImmuneToSpellEffect(spell wotlk.Spell, effIndex int, stats creature
 // template writers — spell-level mechanic and the school fold. IMMUNITY_ID
 // has no writer model (spell_linked_spell negative rows unbridged) and
 // IMMUNITY_DISPEL has no template writer, so both arms are vacuous here.
-func creatureImmuneToSpell(spell wotlk.Spell, stats creatureStats, isTotem bool, caster *session, targetFaction uint32, friendlyToCaster func(uint32) bool) bool {
+func creatureImmuneToSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, stats creatureStats, isTotem bool, caster *session, targetFaction uint32, friendlyToCaster func(uint32) bool) bool {
 	if spell.Attributes&spellAttr0UnaffectedByInvulnerability != 0 {
 		return false
 	}
+	friendly := caster != nil && friendlyToCaster != nil && friendlyToCaster(targetFaction)
 	anyEffect := false
 	immunedToAllEffects := true
 	for i := range spell.Effects {
@@ -918,7 +953,7 @@ func creatureImmuneToSpell(spell wotlk.Spell, stats creatureStats, isTotem bool,
 			continue
 		}
 		anyEffect = true
-		if !creatureImmuneToSpellEffect(spell, i, stats, isTotem, caster) {
+		if !creatureImmuneToSpellEffect(srv, key, spell, i, stats, isTotem, caster, friendly) {
 			immunedToAllEffects = false
 			break
 		}
@@ -945,7 +980,6 @@ func creatureImmuneToSpell(spell wotlk.Spell, stats creatureStats, isTotem bool,
 			if bit&schoolMask == 0 {
 				continue
 			}
-			friendly := caster != nil && friendlyToCaster != nil && friendlyToCaster(targetFaction)
 			if !spellIsPositive(spell) || caster == nil || !friendly {
 				if !canSpellPierceImmuneAura(spell, wotlk.Spell{}) {
 					schoolImmunityMask |= bit
@@ -977,6 +1011,17 @@ func (s *session) creatureTargetImmunityStats(ctx context.Context, targetGUID ui
 	return s.server.loadCreatureStats(ctx, motion.Entry), true
 }
 
+// creatureFriendlyToCaster mirrors the IsFriendlyTo(caster) verdict from
+// the target creature's side: the target faction is not attackable by the
+// caster (the same verdict the school folds use).
+func (s *session) creatureFriendlyToCaster(caster *session, targetFaction uint32) bool {
+	if s == nil || s.server == nil || caster == nil || caster.player == nil {
+		return false
+	}
+	pos := playerPos{Map: caster.player.Map, InstanceID: caster.player.InstanceID, X: caster.player.X, Y: caster.player.Y, Z: caster.player.Z, GUID: caster.playerGUID, Race: caster.player.Race, Class: caster.player.Class, Level: caster.player.Level, FactionTemplate: s.server.raceFaction(caster.player.Race), Reputations: playerReputationMap(caster.player.Reputations), Sess: caster}
+	return !s.server.isAttackableFaction(targetFaction, pos)
+}
+
 // creatureTargetImmuneToSpell is the creature-target whole-spell gate
 // (Creature::IsImmunedToSpell) at hit resolution; caster is the casting
 // session for the school fold's friendliness gate.
@@ -986,31 +1031,29 @@ func (s *session) creatureTargetImmuneToSpell(ctx context.Context, targetGUID ui
 		return false
 	}
 	isTotem := s.server.isTotemGUID(targetGUID)
-	friendly := func(faction uint32) bool {
-		if caster == nil || caster.player == nil || s.server == nil {
-			return false
-		}
-		pos := playerPos{Map: caster.player.Map, InstanceID: caster.player.InstanceID, X: caster.player.X, Y: caster.player.Y, Z: caster.player.Z, GUID: caster.playerGUID, Race: caster.player.Race, Class: caster.player.Class, Level: caster.player.Level, FactionTemplate: s.server.raceFaction(caster.player.Race), Reputations: playerReputationMap(caster.player.Reputations), Sess: caster}
-		return !s.server.isAttackableFaction(faction, pos)
+	friendlyToCaster := func(faction uint32) bool {
+		return s.creatureFriendlyToCaster(caster, faction)
 	}
-	return creatureImmuneToSpell(spell, stats, isTotem, caster, targetFaction, friendly)
+	return creatureImmuneToSpell(s.server, creatureAuraKeyForPlayer(*s.player, targetGUID), spell, stats, isTotem, caster, targetFaction, friendlyToCaster)
 }
 
 // creatureTargetFullyEffectImmune is the creature-target IMMUNE2 gate:
 // every non-zero effect per-effect immune (Spell.cpp:2108-2112, 4491-4492).
-func (s *session) creatureTargetFullyEffectImmune(ctx context.Context, targetGUID uint64, spell wotlk.Spell, caster *session) bool {
+func (s *session) creatureTargetFullyEffectImmune(ctx context.Context, targetGUID uint64, spell wotlk.Spell, caster *session, targetFaction uint32) bool {
 	stats, ok := s.creatureTargetImmunityStats(ctx, targetGUID)
 	if !ok {
 		return false
 	}
 	isTotem := s.server.isTotemGUID(targetGUID)
+	friendly := s.creatureFriendlyToCaster(caster, targetFaction)
+	key := creatureAuraKeyForPlayer(*s.player, targetGUID)
 	anyEffect := false
 	for i := range spell.Effects {
 		if spell.Effects[i].Effect == 0 {
 			continue
 		}
 		anyEffect = true
-		if !creatureImmuneToSpellEffect(spell, i, stats, isTotem, caster) {
+		if !creatureImmuneToSpellEffect(s.server, key, spell, i, stats, isTotem, caster, friendly) {
 			return false
 		}
 	}
