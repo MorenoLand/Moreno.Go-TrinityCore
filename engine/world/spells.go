@@ -115,6 +115,7 @@ const (
 	spellAuraIgnoreHitDirection           uint32 = 288 // SPELL_AURA_IGNORE_HIT_DIRECTION (SpellAuraDefines.h) — Deterrence is the only 3.3.5a source
 	spellAuraModTotalThreat               uint32 = 103 // SPELL_AURA_MOD_TOTAL_THREAT (SpellAuraDefines.h) — additive temp threat modifier, bridged on ThreatManager
 	spellAuraModRegenDuringCombat         uint32 = 116 // SPELL_AURA_MOD_REGEN_DURING_COMBAT (SpellAuraDefines.h) — health regen keeps running in combat (Second Wind)
+	spellAuraModHealthRegenInCombat       uint32 = 161 // SPELL_AURA_MOD_HEALTH_REGEN_IN_COMBAT (SpellAuraDefines.h) — flat health-regen bonus that also runs in combat (Player.cpp:2265)
 	spellAuraModCombatResultChance        uint32 = 248 // SPELL_AURA_MOD_COMBAT_RESULT_CHANCE (SpellAuraDefines.h) — attacker auras reducing victim dodge (MiscValue == VICTIMSTATE_DODGE)
 	spellAuraModTargetAbsorbSchool        uint32 = 194 // SPELL_AURA_MOD_TARGET_ABSORB_SCHOOL (SpellAuraDefines.h) — attacker's pct of damage bypassing victim absorbs
 	spellAuraModTargetAbilityAbsorbSchool uint32 = 245 // SPELL_AURA_MOD_TARGET_ABILITY_ABSORB_SCHOOL (SpellAuraDefines.h) — attacker's spell-specific pct of damage bypassing victim absorbs (CalcAbsorbResist, Unit.cpp:1840)

@@ -1428,18 +1428,25 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 
 		// 1. Health regeneration (Player::Regenerate gate, Player.cpp:2064-2072:
 		// !IsInCombat() || IsPolymorphed() || m_baseHealthRegen ||
-		// HasAuraType(116) || HasAuraType(259)): the spirit-based addValue
+		// HasAuraType(116) || HasAuraType(161); the spirit-based addValue
 		// (Player.cpp:2248-2258) also runs in combat when the player carries
 		// SPELL_AURA_MOD_REGEN_DURING_COMBAT (116), scaled by
-		// ApplyPct(addValue, GetTotalAuraModifier(116)). The polymorphed
-		// addValue, 259 (MOD_HEALTH_REGEN_IN_COMBAT), regen-percent/flat
-		// aura terms, and sitting 1.5x stay unmodeled.
+		// ApplyPct(addValue, GetTotalAuraModifier(116)); the flat
+		// SPELL_AURA_MOD_HEALTH_REGEN_IN_COMBAT (161) bonus runs in and out
+		// of combat (Player.cpp:2265). The polymorphed addValue,
+		// m_baseHealthRegen, regen-percent / MOD_REGEN flat terms, and the
+		// sitting 1.5x stay unmodeled.
 		inCombatRegen := inCombat && sess.hasAuraType(spellAuraModRegenDuringCombat)
-		if (!inCombat || inCombatRegen) && p.Health < p.MaxHealth {
-			gainF := s.octRegenHPPerSpirit(uint32(p.Class), uint32(p.Level), float64(p.Stats[4])) * octRegenLowLevelMultiplier(p.Level)
-			if inCombatRegen {
-				gainF *= (100 + float64(sess.getTotalAuraModifier(spellAuraModRegenDuringCombat))) / 100
+		inCombatFlatRegen := inCombat && sess.hasAuraType(spellAuraModHealthRegenInCombat)
+		if (!inCombat || inCombatRegen || inCombatFlatRegen) && p.Health < p.MaxHealth {
+			gainF := 0.0
+			if !inCombat || inCombatRegen {
+				gainF = s.octRegenHPPerSpirit(uint32(p.Class), uint32(p.Level), float64(p.Stats[4])) * octRegenLowLevelMultiplier(p.Level)
+				if inCombatRegen {
+					gainF *= (100 + float64(sess.getTotalAuraModifier(spellAuraModRegenDuringCombat))) / 100
+				}
 			}
+			gainF += float64(sess.getTotalAuraModifier(spellAuraModHealthRegenInCombat))
 			if gainF < 0 {
 				gainF = 0
 			}

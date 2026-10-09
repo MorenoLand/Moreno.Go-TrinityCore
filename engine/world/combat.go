@@ -1004,7 +1004,12 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	hitBonusBP := int32(math.Round(s.getRangedHitPct() * 100))
 	critBonusBP := int32(math.Round(s.getRangedCritPct() * 100))
 	expertiseBP := int32(math.Round(s.getExpertiseDodgeParryReductionPct() * 100))
-	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP)
+	// Ranged attacks dodge through the same RollMeleeOutcomeAgainst dodge
+	// arm (Unit.cpp:2255-2262, no attack-type gate), so the attacker's
+	// SPELL_AURA_MOD_COMBAT_RESULT_CHANCE (248) dodge reduction
+	// (Unit.cpp:2694-2695) applies here like the melee site above.
+	dodgeReductionBP := s.totalAuraModifierByMiscValue(spellAuraModCombatResultChance, victimStateDodge) * 100
+	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP)
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
 			if vicSess.isImmuneToDamage(1) {
