@@ -802,7 +802,14 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
 			inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
 			threat := float32(damage) * s.getThreatMultiplier(1)
+			// Unit::DealDamage (Unit.cpp:906) calls AddThreat with default
+			// args (ignoreRedirects=false): the caster's redirect registry
+			// applies to damage threat.
+			threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
 			switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
+			if rSwitched {
+				switched, newVictim = true, rVictim
+			}
 			if switched && newVictim != motion.TargetGUID {
 				motion.TargetGUID = newVictim
 				entries := motion.ThreatMgr.SortedEntries()
@@ -1204,9 +1211,16 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
 			}
 			threat := float32(damage) * s.getThreatMultiplier(uint32(schoolMask))
+			// Unit::DealDamage (Unit.cpp:906) calls AddThreat with default
+			// args (ignoreRedirects=false): the caster's redirect registry
+			// applies to damage threat.
+			threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
 			dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
 			inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
 			switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
+			if rSwitched {
+				switched, newVictim = true, rVictim
+			}
 			if switched && newVictim != motion.TargetGUID {
 				motion.TargetGUID = newVictim
 				entries := motion.ThreatMgr.SortedEntries()

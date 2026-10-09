@@ -61,10 +61,14 @@ func NewThreatManager(ownerGUID uint64) *ThreatManager {
 // melee-school immunity, confuse, breakable stun) - Go refs are removed only
 // via RemoveThreat/ClearThreat; ProcessAIUpdates/JustStartedThreateningMe
 // (boss hooks ride the new-victim broadcast instead).
-// Out of scope for this unit: AddThreat's modifier/redirection arms
-// (CalculateModifiedThreat, NO_THREAT/NO_INITIAL_AGGRO attrs, vehicle and
-// misdirection redirects) belong to the HandleThreatSpells cast-threat audit;
-// getThreatMultiplier already covers stance/aura SPELL_AURA_MOD_THREAT.
+// Out of scope for this unit: AddThreat's modifier arms
+// (CalculateModifiedThreat's SPELLMOD_THREAT spell mods) and the vehicle
+// redirect (Go has no vehicle model) belong to the HandleThreatSpells
+// cast-threat audit; the threat-redirect registry itself is bridged on the
+// session (spell_threat.go: redirectThreatRegistry, consumed by
+// splitThreatRedirects at every AddThreat site whose C++ call leaves
+// ignoreRedirects=false). getThreatMultiplier already covers stance/aura
+// SPELL_AURA_MOD_THREAT.
 func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) (switched bool, newVictim uint64) {
 	if victim == 0 {
 		return false, tm.currentVictim

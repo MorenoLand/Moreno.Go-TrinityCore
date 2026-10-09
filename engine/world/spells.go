@@ -8347,15 +8347,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// explicit no-op so the effect stops hitting the
 				// unhandled-effect debug arm.
 			case spellEffectRedirectThreat: // 130: SPELL_EFFECT_REDIRECT_THREAT (EffectRedirectThreat, SpellEffects.cpp:5411)
-				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET, registering
-				// (spellId, target, pct) on the caster's ThreatManager redirect
-				// registry (ThreatManager.cpp:729), consumed when the caster
-				// generates threat (ThreatManager.cpp:346-373). Go threat
-				// managers are creature-side only; the per-unit redirect
-				// registry + AddThreat consumption belong to the
-				// HandleThreatSpells cast-threat audit (threat.go:64-66) —
-				// explicit no-op so the effect stops hitting the
-				// unhandled-effect debug arm.
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
+				// target, registering (spellId, unitTarget, damage) on the
+				// caster's ThreatManager redirect registry
+				// (ThreatManager.cpp:727-729), consumed when the caster
+				// generates threat (ThreatManager.cpp:344-373). Go threat
+				// managers are creature-side only, so the registry lives on
+				// the session (spell_threat.go).
+				s.handleEffectRedirectThreat(spellID, eff, hitTargets)
 			case spellEffectActivateRune: // 146: SPELL_EFFECT_ACTIVATE_RUNE (EffectActivateRune, SpellEffects.cpp:5318)
 				// C++ runs this at SPELL_EFFECT_HANDLE_LAUNCH on a Death
 				// Knight caster: ready-state runes of the MiscValue type have
@@ -11040,8 +11039,11 @@ func (s *session) applySpellThreat(ctx context.Context, spell wotlk.Spell, targe
 	// ThreatManager::AddThreat step 1 (ThreatManager.cpp:315-317): a
 	// SPELL_ATTR3_NO_INITIAL_AGGRO spell generates nothing when the owner is
 	// not engaged (motion.InCombat is the engagement proxy), checked before
-	// the combat set below. The redirect and vehicle legs are unbridged —
-	// EffectThreat passes ignoreRedirects and Go has no vehicle model.
+	// the combat set below. The vehicle leg is unbridged (Go has no vehicle
+	// model). The redirect leg IS bridged: Spell::EffectThreat
+	// (SpellEffects.cpp:3470) calls AddThreat with ignoreModifiers=true but
+	// leaves ignoreRedirects at its default false (ThreatManager.h:140), so
+	// the caster's redirect registry applies to this path.
 	if spell.AttributesEx3&spellAttr3NoInitialAggro != 0 && !motion.InCombat {
 		s.server.motionMu.Unlock()
 		return
@@ -11051,7 +11053,12 @@ func (s *session) applySpellThreat(ctx context.Context, spell wotlk.Spell, targe
 	}
 	wasInCombat := motion.InCombat
 	inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z))
-	switched, victim := motion.ThreatMgr.AddThreat(s.playerGUID, float32(amount), inMelee)
+	threat := float32(amount)
+	threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
+	switched, victim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
+	if rSwitched {
+		switched, victim = true, rVictim
+	}
 	motion.TargetGUID = victim
 	motion.InCombat = true
 	motion.Moving = false
@@ -13354,10 +13361,12 @@ func (s *session) removeAura(spellID uint32) {
 	removedAuraType := uint32(0)
 	removedFakeInebriation := uint32(0)
 	removedEffectMask := uint8(0)
+	removedCasterGUID := uint64(0)
 	s.castMu.Lock()
 	if s.activeAuras != nil {
 		if aura, ok := s.activeAuras[spellID]; ok && aura != nil {
 			removedEffectMask = aura.EffectMask
+			removedCasterGUID = aura.CasterGUID
 			removedAuraType = aura.AuraType
 			wasParryAura = s.activeAuraHasEffect(aura, spellAuraModParryPercent)
 			wasMounted = aura.AuraType == spellAuraMounted
@@ -13400,6 +13409,20 @@ func (s *session) removeAura(spellID uint32) {
 	if removedEffectMask != 0 {
 		s.dropSpellMods(spellID)
 		s.removeOwnerPetAuraEffects(context.Background(), spellID, removedEffectMask)
+	}
+	// Threat-redirect cleanup (ThreatManager::UnregisterRedirectThreat): the
+	// registry is keyed by the registering spell's own id, so removing the
+	// aura of a redirect-registering spell (the Misdirection 35079 and Tricks
+	// of the Trade 59628 proc auras) drops its entries, matching the proc
+	// auras' OnRemove arms (spell_hunter.cpp:948, spell_rogue.cpp:950). C++
+	// also unregisters key 34477 on the Misdirection main-aura remove, but
+	// that key is never registered (registration keys the proc spell's id) —
+	// a dead arm needing no mapping. Vigilance (50720) unregisters
+	// (59665, warrior) from the vigilance target's manager on remove
+	// (spell_warrior.cpp:1128).
+	s.unregisterRedirectThreat(spellID)
+	if spellID == 50720 && removedCasterGUID != 0 {
+		s.unregisterRedirectThreatVictim(59665, removedCasterGUID)
 	}
 	s.removeOwnerPetAurasForSpell(context.Background(), spellID)
 
@@ -17231,7 +17254,12 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 			}
 			dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
 			inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
-			motion.ThreatMgr.AddThreat(s.playerGUID, float32(dmg), inMelee)
+			// Periodic damage ticks route through Unit::DealDamage
+			// (SpellAuraEffects.cpp:5224, damagetype DOT) whose AddThreat
+			// (Unit.cpp:906) leaves ignoreRedirects=false: the caster's
+			// redirect registry applies.
+			dmgThreat, _, _ := s.splitThreatRedirects(motion, float32(dmg))
+			motion.ThreatMgr.AddThreat(s.playerGUID, dmgThreat, inMelee)
 			motion.Moving = true
 		}
 		s.server.motionMu.Unlock()

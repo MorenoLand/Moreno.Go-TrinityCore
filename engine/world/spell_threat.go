@@ -2,9 +2,198 @@ package world
 
 import (
 	"context"
+	"sort"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
+
+// redirectThreatTarget mirrors one flattened entry of
+// ThreatManager::_redirectInfo (ThreatManager.cpp:829-845): the redirect
+// victim plus its percent share of the caster's generated threat.
+type redirectThreatTarget struct {
+	spellID uint32
+	victim  uint64
+	pct     uint32
+}
+
+// registerRedirectThreat mirrors ThreatManager::RegisterRedirectThreat
+// (ThreatManager.cpp:727-731): (spellId, victim) -> pct on the caster's
+// registry, followed by the UpdateRedirectInfo flatten.
+func (s *session) registerRedirectThreat(spellID uint32, victimGUID uint64, pct uint32) {
+	if s == nil || victimGUID == 0 || pct == 0 {
+		return
+	}
+	s.redirectMu.Lock()
+	defer s.redirectMu.Unlock()
+	if s.redirectThreatRegistry == nil {
+		s.redirectThreatRegistry = make(map[uint32]map[uint64]uint32)
+	}
+	victims := s.redirectThreatRegistry[spellID]
+	if victims == nil {
+		victims = make(map[uint64]uint32)
+		s.redirectThreatRegistry[spellID] = victims
+	}
+	victims[victimGUID] = pct
+	s.flattenRedirectThreatInfoLocked()
+}
+
+// unregisterRedirectThreat mirrors ThreatManager::UnregisterRedirectThreat(uint32)
+// (ThreatManager.cpp:733-740).
+func (s *session) unregisterRedirectThreat(spellID uint32) {
+	if s == nil {
+		return
+	}
+	s.redirectMu.Lock()
+	defer s.redirectMu.Unlock()
+	if s.redirectThreatRegistry == nil {
+		return
+	}
+	delete(s.redirectThreatRegistry, spellID)
+	s.flattenRedirectThreatInfoLocked()
+}
+
+// unregisterRedirectThreatVictim mirrors
+// ThreatManager::UnregisterRedirectThreat(uint32, ObjectGuid)
+// (ThreatManager.cpp:742-753): drops one victim under a spell id, e.g. the
+// Vigilance (50720) aura remove unregistering (59665, warrior) from the
+// vigilance target's manager (spell_warrior.cpp:1128).
+func (s *session) unregisterRedirectThreatVictim(spellID uint32, victimGUID uint64) {
+	if s == nil {
+		return
+	}
+	s.redirectMu.Lock()
+	defer s.redirectMu.Unlock()
+	victims, ok := s.redirectThreatRegistry[spellID]
+	if !ok {
+		return
+	}
+	delete(victims, victimGUID)
+	if len(victims) == 0 {
+		delete(s.redirectThreatRegistry, spellID)
+	}
+	s.flattenRedirectThreatInfoLocked()
+}
+
+// flattenRedirectThreatInfoLocked mirrors ThreatManager::UpdateRedirectInfo
+// (ThreatManager.cpp:829-845): every (spell, victim) pair contributes
+// min(100-total, pct), the total capped at 100. C++ iterates std::map
+// (key-sorted); Go sorts by spell id then victim for determinism.
+// Caller holds redirectMu.
+func (s *session) flattenRedirectThreatInfoLocked() {
+	s.redirectThreatInfo = s.redirectThreatInfo[:0]
+	if len(s.redirectThreatRegistry) == 0 {
+		return
+	}
+	spellIDs := make([]uint32, 0, len(s.redirectThreatRegistry))
+	for spellID := range s.redirectThreatRegistry {
+		spellIDs = append(spellIDs, spellID)
+	}
+	sort.Slice(spellIDs, func(i, j int) bool { return spellIDs[i] < spellIDs[j] })
+	var total uint32
+	for _, spellID := range spellIDs {
+		victims := s.redirectThreatRegistry[spellID]
+		guids := make([]uint64, 0, len(victims))
+		for guid := range victims {
+			guids = append(guids, guid)
+		}
+		sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
+		for _, guid := range guids {
+			thisPct := victims[guid]
+			if total < 100 && thisPct > 100-total {
+				thisPct = 100 - total
+			}
+			if thisPct == 0 {
+				continue
+			}
+			s.redirectThreatInfo = append(s.redirectThreatInfo, redirectThreatTarget{spellID: spellID, victim: guid, pct: thisPct})
+			total += thisPct
+			if total == 100 {
+				return
+			}
+		}
+	}
+}
+
+// splitThreatRedirects mirrors the redirect leg of ThreatManager::AddThreat
+// (ThreatManager.cpp:344-373) for threat the session's player generates on
+// motion's threat list. Each flattened entry whose victim resolves takes
+// CalculatePct(origAmount, pct) of the ORIGINAL amount onto the victim's own
+// entry (the recursive AddThreat(redirTarget, amountRedirected, spell, true,
+// true): no threat modifiers, no nested redirect — Go's direct ThreatManager
+// add is exactly that). Victim lookup is the threat-list entry first, then
+// the world (C++ _myThreatListEntries, then ObjectAccessor); a victim that
+// resolves nowhere keeps its share with the caster (the C++ `if (redirTarget)`
+// gate only subtracts on resolution). Only positive amounts redirect.
+// Caller holds motionMu. Returns the remainder for the caster's own entry,
+// plus whether any add switched the victim and the resulting victim.
+func (s *session) splitThreatRedirects(motion *creatureMotion, amount float32) (remaining float32, switched bool, newVictim uint64) {
+	remaining = amount
+	if s == nil || s.server == nil || motion == nil || motion.ThreatMgr == nil || amount <= 0 {
+		return remaining, false, motion.ThreatMgr.GetCurrentVictim()
+	}
+	s.redirectMu.Lock()
+	info := make([]redirectThreatTarget, len(s.redirectThreatInfo))
+	copy(info, s.redirectThreatInfo)
+	s.redirectMu.Unlock()
+	if len(info) == 0 {
+		return remaining, false, motion.ThreatMgr.GetCurrentVictim()
+	}
+	for _, r := range info {
+		share := amount * float32(r.pct) / 100.0
+		if share <= 0 {
+			continue
+		}
+		var victimReach float32
+		var vx, vy, vz float32
+		resolved := false
+		if ts := s.server.findSessionByGUID(r.victim); ts != nil && ts.player != nil {
+			victimReach = ts.player.CombatReach
+			vx, vy, vz = ts.player.X, ts.player.Y, ts.player.Z
+			resolved = true
+		} else if vm := s.server.findCreatureMotionLocked(motion.Map, motion.InstanceID, r.victim); vm != nil {
+			victimReach = vm.CombatReach
+			vx, vy, vz = vm.X, vm.Y, vm.Z
+			resolved = true
+		}
+		if !resolved {
+			continue
+		}
+		dist := distance3D(motion.X, motion.Y, motion.Z, vx, vy, vz)
+		inMelee := inMeleeThreatRange(motion.CombatReach, victimReach, dist)
+		if sw, nv := motion.ThreatMgr.AddThreat(r.victim, share, inMelee); sw {
+			switched, newVictim = true, nv
+		}
+		remaining -= share
+	}
+	if !switched {
+		newVictim = motion.ThreatMgr.GetCurrentVictim()
+	}
+	return remaining, switched, newVictim
+}
+
+// handleEffectRedirectThreat processes SPELL_EFFECT_REDIRECT_THREAT (130).
+// Reference: Spell::EffectRedirectThreat (SpellEffects.cpp:5411-5421) runs at
+// SPELL_EFFECT_HANDLE_HIT_TARGET per unit target, registering
+// (spellId, unitTarget, damage) on the caster's ThreatManager redirect
+// registry (ThreatManager.cpp:727-729). damage is the effect's BasePoints+1
+// (100 for the Misdirection/Tricks of the Trade/Vigilance redirect spells in
+// DBC). There is no alive check in C++; the registry key is the redirect
+// spell's own id (e.g. 35079), unregistered when its aura is removed.
+func (s *session) handleEffectRedirectThreat(spellID uint32, eff wotlk.SpellEffect, hitTargets []uint64) {
+	if s == nil || s.player == nil {
+		return
+	}
+	damage := eff.BasePoints + 1
+	if damage <= 0 {
+		return
+	}
+	for _, targetGUID := range hitTargets {
+		if targetGUID == 0 {
+			continue
+		}
+		s.registerRedirectThreat(spellID, targetGUID, uint32(damage))
+	}
+}
 
 // spellThreatEntry mirrors SpellThreatEntry (SpellMgr.h:340): one row of the
 // world `spell_threat` table (SpellMgr.cpp:1927).
@@ -135,7 +324,15 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 		}
 		dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
 		inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
+		// The C++ negative path calls AddThreat(unitCaster, threatToAdd,
+		// m_spellInfo, true) (Spell.cpp:5143): ignoreModifiers=true but
+		// ignoreRedirects stays false, so the caster's redirect registry
+		// applies to initial threat as well.
+		threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
 		switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
+		if rSwitched {
+			switched, newVictim = true, rVictim
+		}
 		if switched && newVictim != motion.TargetGUID {
 			motion.TargetGUID = newVictim
 			entries := motion.ThreatMgr.SortedEntries()

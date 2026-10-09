@@ -486,17 +486,30 @@ type session struct {
 	fishingBobberGUID         uint64 // live fishing bobber: Go arms no activeChannel for fishing, so the channel-cancel paths clear it via cancelFishingBobber
 	runes                     *dkRuneState
 	castMu                    sync.Mutex
-	schoolLockouts            map[uint32]int64
-	gcdCooldowns              map[uint32]int64 // per-category Global Cooldown expiry Unix-ms (SpellHistory::_globalCooldowns)
-	pendingBindInstanceID     uint64
-	pendingBindMapID          uint32
-	pendingBindDiff           uint32
-	pendingBindTimer          uint32
-	pendingBindMu             sync.Mutex
-	sharingQuestID            uint32
-	sharingQuestSender        uint64
-	warden                    *wardenSession
-	playerStateMu             sync.RWMutex
+	// redirectThreatRegistry mirrors ThreatManager::_redirectRegistry
+	// (ThreatManager.h): spell id -> redirect victim guid -> percent,
+	// populated by SPELL_EFFECT_REDIRECT_THREAT (Spell::EffectRedirectThreat,
+	// SpellEffects.cpp:5411) and consumed by the redirect leg of
+	// ThreatManager::AddThreat (ThreatManager.cpp:346-373). C++ keeps the
+	// registry on the unit's own ThreatManager; Go threat managers are
+	// creature-side only, so the caster-side registry lives on the session.
+	// redirectThreatInfo is the flattened, percent-capped view
+	// (ThreatManager::UpdateRedirectInfo, ThreatManager.cpp:829-845).
+	// redirectMu is a leaf lock: never held across motionMu/castMu.
+	redirectMu             sync.Mutex
+	redirectThreatRegistry map[uint32]map[uint64]uint32
+	redirectThreatInfo     []redirectThreatTarget
+	schoolLockouts         map[uint32]int64
+	gcdCooldowns           map[uint32]int64 // per-category Global Cooldown expiry Unix-ms (SpellHistory::_globalCooldowns)
+	pendingBindInstanceID  uint64
+	pendingBindMapID       uint32
+	pendingBindDiff        uint32
+	pendingBindTimer       uint32
+	pendingBindMu          sync.Mutex
+	sharingQuestID         uint32
+	sharingQuestSender     uint64
+	warden                 *wardenSession
+	playerStateMu          sync.RWMutex
 }
 
 type activeCastState struct {
