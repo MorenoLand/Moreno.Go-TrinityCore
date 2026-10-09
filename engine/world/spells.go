@@ -8285,19 +8285,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// (ProcReflectDelayed, Spell.cpp:2181) instead of consuming it at cast
 	// time. Timing-only delta, unmodeled.
 	if isDelayedBranch && targetGUID != 0 && targetGUID != s.playerGUID && spell.Speed > 0 {
-		dist := float32(20.0) // default 20 yards if positions unknown
-		if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
-			dx := target.X - s.player.X
-			dy := target.Y - s.player.Y
-			dz := target.Z - s.player.Z
-			computedDist := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
-			if computedDist > 5.0 {
-				dist = computedDist
-			} else {
-				dist = 5.0
+		// SpellEvent::Execute's first DELAYED tick re-plans at
+		// GetDelayStart() + GetDelayMoment() (Spell.cpp:7640-7646), where
+		// GetDelayMoment is the minimum targetInfo.TimeDelay across ALL
+		// targets (Spell.cpp:2167-2168) — not the explicit target's travel
+		// time.
+		minDelayMs := -1
+		for _, ht := range hitTargets {
+			if tdm := s.spellTargetTimeDelayMs(ctx, spell, ht); minDelayMs < 0 || tdm < minDelayMs {
+				minDelayMs = tdm
 			}
 		}
-		timeDelayMs := int(math.Floor(float64(dist) / float64(spell.Speed) * 1000.0))
+		timeDelayMs := minDelayMs
+		if timeDelayMs < 0 {
+			// No resolved hit targets: fall back to the explicit target's
+			// travel time.
+			timeDelayMs = s.spellTargetTimeDelayMs(ctx, spell, targetGUID)
+		}
 		// No clamp: Spell.cpp:2156-2169 computes TimeDelay as
 		// floor(dist / Speed * 1000) with no upper bound — the delay event
 		// simply re-plans at GetDelayStart() + GetDelayMoment() for the
@@ -8563,6 +8567,30 @@ func (s *session) fireSpellLinkedTriggers(ctx context.Context, spellID uint32, t
 // stopAttackOnSpellFinish stops the caster's auto-attack for spells carrying
 // SPELL_ATTR0_STOP_ATTACK_TARGET.
 // C++ authority: Spell::finish (Spell.cpp:3978-3983) calls AttackStop().
+// spellTargetTimeDelayMs mirrors Spell::handle_immediate's per-target
+// TimeDelay (Spell.cpp:2156-2169): floor(dist / Speed * 1000) with the
+// 5-yard floor; a target that is the caster itself gets delay 0
+// (m_caster == target skips the travel computation). Unresolvable targets
+// default to 20 yards.
+func (s *session) spellTargetTimeDelayMs(ctx context.Context, spell wotlk.Spell, targetGUID uint64) int {
+	if targetGUID == s.playerGUID {
+		return 0
+	}
+	dist := float32(20.0) // default 20 yards if positions unknown
+	if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
+		dx := target.X - s.player.X
+		dy := target.Y - s.player.Y
+		dz := target.Z - s.player.Z
+		computedDist := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
+		if computedDist > 5.0 {
+			dist = computedDist
+		} else {
+			dist = 5.0
+		}
+	}
+	return int(math.Floor(float64(dist) / float64(spell.Speed) * 1000.0))
+}
+
 func (s *session) stopAttackOnSpellFinish(spell wotlk.Spell) {
 	if spell.Attributes&spellAttr0StopAttackTarget == 0 {
 		return
