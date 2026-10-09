@@ -1711,6 +1711,41 @@ func (s *session) castItemReagentTakesExtra(ctx context.Context, dbItemGUID uint
 	return false
 }
 
+// checkCastItemCharges mirrors the cast-item charge arm of Spell::CheckItems
+// (Spell.cpp:6690-6696): any template spell slot carrying charges
+// (SpellCharges != 0) whose instance charges read 0 means the item is spent.
+// Returns false when the cast must be rejected. The HasItemCount and
+// null-proto arms have no bridge here: the item was resolved from the
+// player's own inventory slot above, and a missing item_template row means
+// the DB is incomplete (fail-open per this file's convention).
+func (s *session) checkCastItemCharges(ctx context.Context, dbItemGUID int64, itemEntry int64) bool {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil ||
+		s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return true
+	}
+	var tplCharges [5]int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT spellcharges_1, spellcharges_2, spellcharges_3, spellcharges_4, spellcharges_5
+		FROM item_template WHERE entry = ? LIMIT 1`, itemEntry).Scan(
+		&tplCharges[0], &tplCharges[1], &tplCharges[2], &tplCharges[3], &tplCharges[4]); err != nil {
+		return true
+	}
+	var defaults [5]int32
+	for i := range defaults {
+		defaults[i] = int32(tplCharges[i])
+	}
+	var rawCharges string
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(charges, '') FROM item_instance WHERE guid = ? LIMIT 1`, dbItemGUID).Scan(&rawCharges); err != nil {
+		return true
+	}
+	charges := parseItemSpellCharges(rawCharges, defaults)
+	for i := 0; i < 5; i++ {
+		if tplCharges[i] != 0 && int32(charges[i]) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return false
@@ -1928,6 +1963,16 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			// casts, never triggered ones.
 			if s.lastPotionId != 0 && (s.server.isPotionItem(ctx, uint32(itemEntry)) || s.server.spellIsCooldownStartedOnEvent(spell)) {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
+				return true
+			}
+			// Cast-item charge arm of Spell::CheckItems (Spell.cpp:6690-6696):
+			// a template spell slot carrying charges whose instance charges
+			// read 0 rejects the cast with SPELL_FAILED_NO_CHARGES_REMAIN
+			// before SMSG_SPELL_START. Runs ahead of the consumable arm,
+			// matching C++ CheckItems relative order.
+			if !s.checkCastItemCharges(ctx, dbItemGUID, itemEntry) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNoChargesRemain), true)
+				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "no charges remain")
 				return true
 			}
 			// Consumable full-health/full-power arm of Spell::CheckItems

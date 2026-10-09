@@ -144,6 +144,7 @@ const (
 	spellFailedNoPet                     uint8  = 84
 	spellFailedWrongPetFood              uint8  = 135
 	spellFailedNotReady                  uint8  = 67    // SPELL_FAILED_NOT_READY (SharedDefines.h:1049)
+	spellFailedNoChargesRemain           uint8  = 76    // SPELL_FAILED_NO_CHARGES_REMAIN (SharedDefines.h:1058)
 	spellFailedDontReport                uint8  = 27    // SPELL_FAILED_DONT_REPORT (SharedDefines.h:1009)
 	spellFailedAlreadyAtFullHealth       uint8  = 2     // SPELL_FAILED_ALREADY_AT_FULL_HEALTH (SharedDefines.h:984)
 	spellFailedAlreadyAtFullPower        uint8  = 4     // SPELL_FAILED_ALREADY_AT_FULL_POWER (SharedDefines.h:986)
