@@ -147,6 +147,18 @@ func (tm *ThreatManager) isTauntedLocked(victim uint64) bool {
 	return true
 }
 
+// IsTaunted reports whether the victim holds a live taunt state, the
+// HasAuraType(SPELL_AURA_MOD_TAUNT) leg of Creature::_IsTargetAcceptable
+// (Creature.cpp:2589) as seen through the bridged taunt-state model.
+func (tm *ThreatManager) IsTaunted(victim uint64) bool {
+	if tm == nil || victim == 0 {
+		return false
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	return tm.isTauntedLocked(victim)
+}
+
 // threatUpdateIntervalMs mirrors THREAT_UPDATE_INTERVAL (ThreatManager.h:86).
 const threatUpdateIntervalMs = 1000
 

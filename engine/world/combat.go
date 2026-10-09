@@ -787,6 +787,15 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 				tappedFlags = motion.DynamicFlags
 			}
 			motion.Health = newHealth
+			// Unit::DealDamage (Unit.cpp:900-907): the evade leash's
+			// last-damaged stamp — direct damage with damage > 0 resets it;
+			// DoT ticks never stamp (the tick funnel skips this), and
+			// player-owned victims (minions) are excluded from the arm.
+			// The damage-shield-aura exclusion is vacuous: Go models no
+			// shield-retaliation damage funnel.
+			if damage > 0 && motion.OwnerGUID == 0 {
+				motion.LastDamaged = now
+			}
 			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received
 			// (creature victims; creatures have no absorbed-damage model here).
 			if next, changed := s.server.addCreatureRageLocked(motion, motion.Level, damage); changed {
@@ -1198,6 +1207,13 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				tappedFlags = motion.DynamicFlags
 			}
 			motion.Health = newHealth
+			// Unit::DealDamage (Unit.cpp:900-907): the evade leash's
+			// last-damaged stamp — direct damage with damage > 0 resets it;
+			// DoT ticks never stamp (the tick funnel skips this), and
+			// player-owned victims (minions) are excluded from the arm.
+			if damage > 0 && motion.OwnerGUID == 0 {
+				motion.LastDamaged = now
+			}
 			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received
 			// (creature victims; no absorbed model on this path).
 			if next, changed := s.server.addCreatureRageLocked(motion, motion.Level, damage); changed {

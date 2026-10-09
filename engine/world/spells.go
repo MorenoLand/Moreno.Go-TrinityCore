@@ -9844,6 +9844,15 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				tappedFlags = motion.DynamicFlags
 			}
 			motion.Health = newHealth
+			// Unit::DealDamage (Unit.cpp:900-907): the evade leash's
+			// last-damaged stamp — direct spell damage with damage > 0
+			// resets it; DoT ticks never stamp (the tick funnel skips
+			// this), and player-owned victims are excluded from the arm.
+			// The damage-shield-aura exclusion is vacuous: Go models no
+			// shield-retaliation damage funnel.
+			if damage > 0 && motion.OwnerGUID == 0 {
+				motion.LastDamaged = time.Now()
+			}
 			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received
 			// (creature victims; no absorbed model on this path).
 			if next, changed := s.server.addCreatureRageLocked(motion, motion.Level, damage); changed {

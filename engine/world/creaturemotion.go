@@ -96,9 +96,16 @@ type creatureMotion struct {
 	Happiness       uint32
 	Experience      uint32
 
-	TargetGUID                uint64
-	InCombat                  bool
-	LastAttack                time.Time
+	TargetGUID uint64
+	InCombat   bool
+	LastAttack time.Time
+	// LastDamaged mirrors Creature::m_lastDamagedTime as stamped by the
+	// evade arm of Unit::DealDamage (Unit.cpp:900-907): direct (melee,
+	// ranged, spell-direct) hits with damage > 0 reset it to now +
+	// MAX_AGGRO_RESET_TIME (10s, Unit.h:40); DoT ticks never stamp it.
+	// Creature::_IsTargetAcceptable (Creature.cpp:2589) skips the leash
+	// while it is fresh (or while the creature is taunted).
+	LastDamaged               time.Time
 	LastSpell                 time.Time
 	Spells                    []uint32
 	NextSpellIdx              int
@@ -749,6 +756,9 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	motion.InCombat = false
 	motion.TargetGUID = 0
 	motion.Health = motion.MaxHealth
+	// CreatureAI::_EnterEvadeMode (CreatureAI.cpp:311): the leash's
+	// last-damaged timer resets with the evade.
+	motion.LastDamaged = time.Time{}
 	// CreatureAI::EnterEvadeMode (CreatureAI.cpp:307-311): the tap and the
 	// damage requirement reset with the evade (SetLootRecipient(nullptr)
 	// clears UNIT_DYNFLAG_TAPPED, so it rides the health broadcast).
@@ -1048,19 +1058,29 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// so the accessible-place predicate cannot be evaluated either. The flag can
 		// never be set, so the timer can never start.
 		if dist > 45.0 {
-			// Evade / drop combat if player ran too far: reset health, stop attack, and run back home
-			if motion.ThreatMgr != nil {
-				motion.ThreatMgr.RemoveThreat(motion.TargetGUID)
-			}
-			if motion.ThreatMgr != nil && !motion.ThreatMgr.IsEmpty() {
-				nextVictim := motion.ThreatMgr.GetCurrentVictim()
-				motion.TargetGUID = nextVictim
-				entries := motion.ThreatMgr.SortedEntries()
-				s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, nextVictim, entries)
+			// Creature::_IsTargetAcceptable (Creature.cpp:2589): the leash
+			// does not fire while the creature is recently damaged
+			// (MAX_AGGRO_RESET_TIME = 10s after a direct-damage hit,
+			// Unit.h:40 — DoT ticks never stamp LastDamaged, Unit.cpp:903)
+			// or while the victim holds a live taunt. The world-boss
+			// exemption (C++ skips the arm for isWorldBoss) is unmodeled:
+			// creatureMotion carries no world-boss rank.
+			taunted := motion.ThreatMgr != nil && motion.ThreatMgr.IsTaunted(motion.TargetGUID)
+			if motion.LastDamaged.IsZero() || (now.Sub(motion.LastDamaged) >= 10*time.Second && !taunted) {
+				// Evade / drop combat if player ran too far: reset health, stop attack, and run back home
+				if motion.ThreatMgr != nil {
+					motion.ThreatMgr.RemoveThreat(motion.TargetGUID)
+				}
+				if motion.ThreatMgr != nil && !motion.ThreatMgr.IsEmpty() {
+					nextVictim := motion.ThreatMgr.GetCurrentVictim()
+					motion.TargetGUID = nextVictim
+					entries := motion.ThreatMgr.SortedEntries()
+					s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, nextVictim, entries)
+					return
+				}
+				s.triggerCreatureEvade(ctx, motion, now)
 				return
 			}
-			s.triggerCreatureEvade(ctx, motion, now)
-			return
 		}
 
 		if motion.BossAI != nil {
