@@ -52,6 +52,7 @@ const (
 	spellAttr7DispelCharges                uint32 = 0x00000400 // SPELL_ATTR7_DISPEL_CHARGES (SharedDefines.h:681) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr7CanRestoreSecondaryPower     uint32 = 0x00010000 // SPELL_ATTR7_CAN_RESTORE_SECONDARY_POWER (SharedDefines.h:687) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr7IsCheatSpell                 uint32 = 0x00000008 // SPELL_ATTR7_IS_CHEAT_SPELL (SharedDefines.h:674) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
+	spellAttr7SummonPlayerTotem            uint32 = 0x00000020 // SPELL_ATTR7_SUMMON_PLAYER_TOTEM (SharedDefines.h:676) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr6AssistIgnoreImmuneFlag       uint32 = 0x00000008 // SPELL_ATTR6_ASSIST_IGNORE_IMMUNE_FLAG (SharedDefines.h:637) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6CanTargetUntargetable        uint32 = 0x01000000 // SPELL_ATTR6_CAN_TARGET_UNTARGETABLE (SharedDefines.h:658) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6DontConsumeProcCharges       uint32 = 0x00000020 // SPELL_ATTR6_DONT_CONSUME_PROC_CHARGES (SharedDefines.h:639) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
@@ -351,6 +352,13 @@ const (
 	spellEffectGameObjectRepair              = 88  // SPELL_EFFECT_GAMEOBJECT_REPAIR (SharedDefines.h:899)
 	spellEffectGameObjectSetDestructionState = 89  // SPELL_EFFECT_GAMEOBJECT_SET_DESTRUCTION_STATE (SharedDefines.h:900)
 	spellEffectEnchantHeldItem               = 92  // SPELL_EFFECT_ENCHANT_HELD_ITEM (SharedDefines.h:903)
+	spellEffectForceDeselect                 = 93  // SPELL_EFFECT_FORCE_DESELECT (SharedDefines.h:904)
+	spellEffectCastButtons                   = 97  // SPELL_EFFECT_CAST_BUTTON (SharedDefines.h:908)
+	spellEffectInebriate                     = 100 // SPELL_EFFECT_INEBRIATE (SharedDefines.h:911)
+	spellEffectSummonObjectSlot1             = 104 // SPELL_EFFECT_SUMMON_OBJECT_SLOT1 (SharedDefines.h:915)
+	spellEffectSummonObjectSlot2             = 105 // SPELL_EFFECT_SUMMON_OBJECT_SLOT2 (SharedDefines.h:916)
+	spellEffectSummonObjectSlot3             = 106 // SPELL_EFFECT_SUMMON_OBJECT_SLOT3 (SharedDefines.h:917)
+	spellEffectSummonObjectSlot4             = 107 // SPELL_EFFECT_SUMMON_OBJECT_SLOT4 (SharedDefines.h:918)
 
 	// Summon categories for the generic-summon CheckCast leg
 	// (Spell.cpp:5798-5817, SharedDefines.h:3296).
@@ -7551,6 +7559,37 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// target: the target's equipped main-hand weapon gains the
 				// MiscValue enchantment in the temp slot.
 				s.handleEffectEnchantHeldItem(effCtx, spell, eff, hitTargets)
+			case spellEffectForceDeselect: // 93: SPELL_EFFECT_FORCE_DESELECT (EffectForceDeselect, SpellEffects.cpp:4396)
+				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
+				// SMSG_BREAK_TARGET + SMSG_CLEAR_TARGET go to hostile players
+				// in visibility range, then attackers that cannot have a
+				// threat list (pets/totems/triggers) stop attacking the caster.
+				s.handleEffectForceDeselect()
+			case spellEffectCastButtons: // 97: SPELL_EFFECT_CAST_BUTTON (EffectCastButtons, SpellEffects.cpp:5622)
+				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the player
+				// caster: action buttons MiscValue+132 .. +MiscValueB holding
+				// known, off-cooldown, affordable player-totem spells are cast
+				// triggered on the caster.
+				s.handleEffectCastButtons(effCtx, eff)
+			case spellEffectInebriate: // 100: SPELL_EFFECT_INEBRIATE (EffectInebriate, SpellEffects.cpp:4143)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
+				// target: player targets gain effect damage drunkenness
+				// (capped at 100, with a 25% Drunken Vomit cast when the cap
+				// is hit from below).
+				s.handleEffectInebriate(effCtx, eff, hitTargets, castItemEntry)
+			case spellEffectSummonObjectSlot1, spellEffectSummonObjectSlot2, spellEffectSummonObjectSlot3, spellEffectSummonObjectSlot4:
+				// 104-107: SPELL_EFFECT_SUMMON_OBJECT_SLOT1-4 (EffectSummonObject,
+				// SpellEffects.cpp:4215). C++ runs this once at
+				// SPELL_EFFECT_HANDLE_HIT on the caster: the caster's object slot
+				// is cleared (despawning the old GO, with the recast null-spell-id
+				// arm), then a fresh GO spawns at the spell destination (or a
+				// close point) with the caster's faction, the spell's duration
+				// and spell id, and the slot takes the new GUID.
+				s.handleEffectSummonObject(effCtx, spell, eff, target)
+			case spellEffectSkill: // 118: SPELL_EFFECT_SKILL (EffectSkill, SpellEffects.cpp:4486)
+				// The C++ body is a single debug log line ("WORLD: SkillEFFECT")
+				// — explicit no-op so the effect stops hitting the
+				// unhandled-effect debug arm.
 			case spellEffectEnvironmentalDMG: // 7: SPELL_EFFECT_ENVIRONMENTAL_DAMAGE (EffectEnvironmentalDMG, SpellEffects.cpp:298)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
 				// target: players take Player::EnvironmentalDamage (fire),
@@ -18315,6 +18354,296 @@ func (s *session) handleEffectEnchantHeldItem(ctx context.Context, spell wotlk.S
 		targetSess.writeItemEnchantmentSlot(ctx, instanceGUID, 1, enchantID, durationMs)
 		targetSess.syncEquipmentCache(ctx)
 	}
+}
+
+// handleEffectSummonObject mirrors Spell::EffectSummonObject
+// (SpellEffects.cpp:4215), which runs once at SPELL_EFFECT_HANDLE_HIT on the
+// caster for effects 104-107 (SPELL_EFFECT_SUMMON_OBJECT_SLOT1-4): the slot's
+// previous game object is despawned (the recast arm nulls its spell id when
+// the same spell recasts, so despawn doesn't strip the spell's auras), then a
+// new GO (effect MiscValue entry) spawns at the spell destination — or a close
+// point in front of the caster when no dest is present — with the caster's
+// faction, the spell's duration and spell id, and the slot takes the new GUID.
+func (s *session) handleEffectSummonObject(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, target protocol.SpellTargetData) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	if eff.MiscValue <= 0 {
+		return
+	}
+	slot := int(eff.Effect - spellEffectSummonObjectSlot1)
+	if slot < 0 || slot >= len(s.player.ObjectSlots) {
+		return
+	}
+	mapID, instanceID := s.player.Map, s.player.InstanceID
+	if oldGUID := s.player.ObjectSlots[slot]; oldGUID != 0 {
+		// Recast case (SpellEffects.cpp:4231-4233): null the spell id when the
+		// same spell recasts, so removing the object doesn't take the
+		// spell's auras with it; then RemoveGameObject(obj, true).
+		s.server.objectsMu.Lock()
+		if st := s.server.gameObjectStateLocked(mapID, instanceID, oldGUID); st != nil && st.SpellID == spell.ID {
+			st.SpellID = 0
+		}
+		s.server.objectsMu.Unlock()
+		s.server.despawnDynamicGameObjectInInstance(mapID, instanceID, oldGUID)
+		s.player.ObjectSlots[slot] = 0
+	}
+	entry := uint32(eff.MiscValue)
+	var goType, displayID int64
+	size := 1.0
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	var sizeValue float64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT type, displayId, size FROM gameobject_template WHERE entry = ? LIMIT 1", entry).Scan(&goType, &displayID, &sizeValue); err != nil {
+		// GameObject::Create fails on an unknown entry (SpellEffects.cpp:4246).
+		return
+	}
+	if sizeValue > 0 {
+		size = sizeValue
+	}
+	var x, y, z float32
+	if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+		x, y, z = target.Destination.X, target.Destination.Y, target.Destination.Z
+	} else {
+		// WorldObject::GetClosePoint(DEFAULT_PLAYER_BOUNDING_RADIUS)
+		// (Object.cpp:3307, ObjectDefines.h:39): 0.389 in front of the caster.
+		x = s.player.X + 0.389*float32(math.Cos(float64(s.player.Orientation)))
+		y = s.player.Y + 0.389*float32(math.Sin(float64(s.player.Orientation)))
+		z = s.player.Z
+	}
+	lowGUID := s.server.nextDynamicGameObjectLowGUID()
+	dyn := &dynamicGameObjectState{GUID: gameObjectGUID(lowGUID, entry), LowGUID: lowGUID, Entry: entry, SpellID: spell.ID, Map: mapID, InstanceID: instanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, State: GameObjectStateReady, Type: uint8(goType), DisplayID: uint32(displayID), Size: float32(size), ParentRotation: [4]float32{0, 0, 0, 1}, Faction: s.server.raceFaction(s.player.Race), IsRuntimeSpawn: true}
+	// GameObject::SetRespawnTime(duration/IN_MILLISECONDS)
+	// (SpellEffects.cpp:4257): the object's lifetime is the spell duration; a
+	// non-positive duration leaves it persistent like C++.
+	if duration, found, err := s.server.Data.SpellDuration(spell.DurationIndex, 1); err == nil && found && duration > 0 {
+		dyn.DespawnTimer = time.AfterFunc(time.Duration(duration)*time.Millisecond, func() {
+			s.server.despawnDynamicGameObjectInInstance(dyn.Map, dyn.InstanceID, dyn.GUID)
+		})
+	}
+	s.server.spawnDynamicGameObject(dyn)
+	// unitCaster->m_ObjectSlot[slot] = go->GetGUID(); ExecuteLogEffectSummonObject.
+	s.player.ObjectSlots[slot] = dyn.GUID
+	s.sendSummonObjectLog(spell.ID, dyn.GUID)
+	// Documented no-bridge: GAMEOBJECT_LEVEL (Go's dynamic GO state carries no
+	// level field) and the quaternion rotation from the caster's orientation
+	// (the wild-summon bridge, handleEffectSummonObjectWild, already ships the
+	// identity rotation for the same reason).
+}
+
+// handleEffectForceDeselect mirrors Spell::EffectForceDeselect
+// (SpellEffects.cpp:4396), which runs once at SPELL_EFFECT_HANDLE_HIT on the
+// caster: SMSG_BREAK_TARGET (packed caster GUID) and SMSG_CLEAR_TARGET (raw
+// caster GUID) go to hostile players in visibility range, then every attacker
+// that cannot have a threat list stops attacking the caster.
+func (s *session) handleEffectForceDeselect() {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	breakPkt := protocol.NewBuffer(9)
+	breakPkt.WritePackedGUID(s.playerGUID)
+	clearPkt := protocol.NewBuffer(8)
+	clearPkt.WriteU64(s.playerGUID)
+	// Trinity::MessageDistDelivererToHostile + Cell::VisitWorldObjects
+	// (GridNotifiers.h:152): players in range that are hostile to the source
+	// (never the source itself); range = unitCaster->GetVisibilityRange() =
+	// DEFAULT_VISIBILITY_DISTANCE = 100.0f (ObjectDefines.h:35).
+	s.server.sessionsMu.RLock()
+	for target := range s.server.sessions {
+		if target == s || !target.authed || !target.worldReady.Load() || target.player == nil ||
+			target.player.Map != s.player.Map || target.player.InstanceID != s.player.InstanceID ||
+			target.playerAlliance() == s.playerAlliance() {
+			continue
+		}
+		if distance3D(target.player.X, target.player.Y, target.player.Z, s.player.X, s.player.Y, s.player.Z) > 100.0 {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_BREAK_TARGET), breakPkt.Bytes(), true)
+		_ = target.write(uint16(protocol.OpcodeSMSG_CLEAR_TARGET), clearPkt.Bytes(), true)
+	}
+	s.server.sessionsMu.RUnlock()
+	// The attackers arm (SpellEffects.cpp:4413-4419): TYPEID_UNIT attackers of
+	// the caster that cannot have a threat list — pets, totems, triggers and
+	// player-summoned minions (ThreatManager::CanHaveThreatList,
+	// ThreatManager.cpp:156), which in Go are exactly the motions with a nil
+	// ThreatMgr — take Unit::AttackStop (Unit.cpp:5763): drop the victim and
+	// send SMSG_ATTACK_STOP, following the stopControlledPetCombat packet
+	// pattern (combat.go:2027).
+	type stoppedMotion struct{ guid, victim uint64 }
+	var stopped []stoppedMotion
+	s.server.motionMu.Lock()
+	for _, motion := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
+		if motion == nil || motion.TargetGUID != s.playerGUID || motion.ThreatMgr != nil {
+			continue
+		}
+		stopped = append(stopped, stoppedMotion{guid: motion.GUID, victim: motion.TargetGUID})
+		motion.TargetGUID = 0
+		motion.InCombat = false
+	}
+	s.server.motionMu.Unlock()
+	for _, st := range stopped {
+		stopPkt := buildAttackStop(st.guid, st.victim, false)
+		_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, s)
+	}
+}
+
+// handleEffectCastButtons mirrors Spell::EffectCastButtons
+// (SpellEffects.cpp:5622), which runs once at SPELL_EFFECT_HANDLE_HIT on the
+// player caster: action buttons MiscValue+132 through MiscValueB holding
+// valid totem spells are cast triggered on the caster.
+func (s *session) handleEffectCastButtons(ctx context.Context, eff wotlk.SpellEffect) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	// GetActionButton returns null for out-of-range ids, so ids past the 144
+	// buttons are skipped the same way.
+	buttonID := int(eff.MiscValue) + 132
+	nButtons := int(eff.MiscValueB)
+	knownSpells := make(map[uint32]struct{}, len(s.player.Spells))
+	for _, learned := range s.player.Spells {
+		if !learned.Disabled {
+			knownSpells[learned.ID] = struct{}{}
+		}
+	}
+	nowUnix := time.Now().Unix()
+	hasCooldown := func(spellID uint32, category uint32) bool {
+		for _, cd := range s.player.Cooldowns {
+			if cd.Spell == spellID && cd.End > nowUnix {
+				return true
+			}
+			// SpellHistory::HasCooldown (SpellHistory.cpp:473-487): the
+			// category arm reads the category cooldowns independently.
+			if category != 0 && cd.Category == category && cd.CategoryEnd > nowUnix {
+				return true
+			}
+		}
+		return false
+	}
+	for ; nButtons > 0; nButtons, buttonID = nButtons-1, buttonID+1 {
+		if buttonID < 0 || buttonID >= len(s.player.Actions) {
+			continue
+		}
+		packed := s.player.Actions[buttonID]
+		// ActionButton packing (ActionButton.h): action in the low 24 bits,
+		// type in the high byte; ACTION_BUTTON_SPELL = 0.
+		if packed>>24 != 0 {
+			continue
+		}
+		//! Action button data is unverified when it's set so it can be "hacked"
+		//! to contain invalid spells, so filter here.
+		spellID := packed & 0xFFFFFF
+		if spellID == 0 {
+			continue
+		}
+		var spell wotlk.Spell
+		if s.server.Data == nil {
+			continue
+		}
+		loaded, found, err := s.server.Data.Spell(spellID)
+		if err != nil || !found {
+			continue
+		}
+		spell = loaded
+		if _, ok := knownSpells[spellID]; !ok || hasCooldown(spellID, spell.Category) {
+			continue
+		}
+		if spell.AttributesEx7&spellAttr7SummonPlayerTotem == 0 {
+			continue
+		}
+		// CalcPowerCost (SpellInfo.cpp:3154) vs the player's mana
+		// (Player::GetPower(POWER_MANA), Powers[0]).
+		if s.player.Powers[0] < s.calculateSpellPowerCost(spell) {
+			continue
+		}
+		// TriggerCastFlags(TRIGGERED_IGNORE_GCD | TRIGGERED_IGNORE_CAST_IN_PROGRESS |
+		// TRIGGERED_CAST_DIRECTLY): the castSpellDirect triggered-cast bridge.
+		s.castSpellDirect(ctx, spellID, s.playerGUID)
+	}
+}
+
+// handleEffectInebriate mirrors Spell::EffectInebriate (SpellEffects.cpp:4143),
+// which runs at SPELL_EFFECT_HANDLE_HIT_TARGET per unit target: player targets
+// gain effect damage drunkenness, capped at 100 — hitting the cap from below
+// rolls a 25% Drunken Vomit (67468) self-cast. Creature targets are an
+// explicit no-op arm (TYPEID_PLAYER gate).
+func (s *session) handleEffectInebriate(ctx context.Context, eff wotlk.SpellEffect, hitTargets []uint64, castItemEntry uint32) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	drunkMod := uint16(eff.BasePoints + 1) // Go tree convention: effect damage = BasePoints+1
+	for _, targetGUID := range hitTargets {
+		if targetGUID == 0 {
+			continue
+		}
+		targetSess := s
+		if targetGUID != s.playerGUID {
+			if found := s.server.findSessionByGUID(targetGUID); found != nil && found.player != nil {
+				targetSess = found
+			} else {
+				continue
+			}
+		}
+		currentDrunk := uint16(targetSess.player.DrunkenState)
+		if currentDrunk+drunkMod > 100 {
+			// Cap branch: SetDrunkValue(100), and the vomit roll only fires
+			// here, when the cap is reached from below (SpellEffects.cpp:4153).
+			targetSess.setPlayerDrunkValue(castItemEntry, 100)
+			if rand.Float64() < 0.25 { // rand_chance() < 25.0f
+				// C++: player->CastSpell(player, 67468, false) (Drunken Vomit).
+				// Go has no player-driven full-cast pipeline for
+				// effect-initiated self casts, so the castSpellDirect
+				// triggered-cast bridge stands in; 67468 is instant, so the
+				// visible behavior matches.
+				targetSess.castSpellDirect(ctx, 67468, targetSess.playerGUID)
+			}
+		} else {
+			targetSess.setPlayerDrunkValue(castItemEntry, uint8(currentDrunk+drunkMod))
+		}
+	}
+}
+
+// setPlayerDrunkValue mirrors Player::SetDrunkValue (Player.cpp:999): the
+// drunken value lives in PLAYER_BYTES_3 (sendPlayerUpdate broadcasts it) and
+// crossing a drunken-state threshold emits SMSG_CROSSED_INEBRIATION_THRESHOLD
+// (MiscPackets.h:254: Guid + Threshold + ItemID) to the visibility set,
+// self included. Documented no-bridge: the INVISIBILITY_DRUNK detect flag
+// (Go's stealth model tracks no invisibility-detect flags) and
+// UpdateObjectVisibility (no object-visibility manager); the drunk sobering
+// timer reset rides the existing decay arm (player_state.go:2591).
+func (s *session) setPlayerDrunkValue(itemID uint32, newDrunk uint8) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	if newDrunk > 100 {
+		newDrunk = 100
+	}
+	oldState := drunkenStateByValue(s.player.DrunkenState)
+	newState := drunkenStateByValue(uint16(newDrunk))
+	s.player.DrunkenState = uint16(newDrunk)
+	s.sendPlayerUpdate()
+	if newState == oldState {
+		return
+	}
+	pkt := protocol.NewBuffer(16)
+	pkt.WriteU64(s.playerGUID)
+	pkt.WriteU32(newState)
+	pkt.WriteU32(itemID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_CROSSED_INEBRIATION_THRESHOLD), pkt.Bytes(), true)
+	// SendMessageToSet: visibility range (DEFAULT_VISIBILITY_DISTANCE = 100.0f).
+	s.server.sessionsMu.RLock()
+	for target := range s.server.sessions {
+		if target == s || !target.authed || !target.worldReady.Load() || target.player == nil ||
+			target.player.Map != s.player.Map || target.player.InstanceID != s.player.InstanceID {
+			continue
+		}
+		if distance3D(target.player.X, target.player.Y, target.player.Z, s.player.X, s.player.Y, s.player.Z) > 100.0 {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_CROSSED_INEBRIATION_THRESHOLD), pkt.Bytes(), true)
+	}
+	s.server.sessionsMu.RUnlock()
 }
 
 // enchantTargetPrismaticID reads the item_instance enchantments column and

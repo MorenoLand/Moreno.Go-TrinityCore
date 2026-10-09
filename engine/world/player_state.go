@@ -175,10 +175,14 @@ type playerSkill struct {
 }
 
 type playerState struct {
-	GUID             uint64
-	Selection        uint64
-	PetGUID          uint64
-	PetNumber        uint32
+	GUID      uint64
+	Selection uint64
+	PetGUID   uint64
+	PetNumber uint32
+	// ObjectSlots mirrors Unit::m_ObjectSlot[4] (Unit.h): the GUIDs of the
+	// game objects summoned by SPELL_EFFECT_SUMMON_OBJECT_SLOT1-4 (104-107),
+	// used to despawn the previous object when the slot is recast.
+	ObjectSlots      [4]uint64
 	CritterGUID      uint64
 	CritterPetID     uint32
 	Name             string
