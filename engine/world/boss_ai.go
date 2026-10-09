@@ -717,26 +717,34 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	}
 	if spellKnown {
 		spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
-		// Unit::CastSpell arms UNIT_STATE_CASTING for a non-triggered
-		// cast's cast time; the combat tick's early-out
-		// (CombatAI.cpp:97, 159) reads it via motion.CastingUntil.
-		// Every castCreatureSpell caller models a non-triggered cast
-		// (the kill.go AICOND_DIE death cast is C++-triggered, but its
-		// motion is dead and never ticks again).
-		if castMs := s.aiSpellCastTimeMs(spellInfo); castMs > 0 {
-			m.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
-		}
 		// Spell::CheckPower (Spell.cpp:5502) + Spell::TakePower
 		// (Spell.cpp:3449, "Powers have to be taken before SendSpellGo"):
 		// a creature that cannot afford the spell fizzles — no packet, no
 		// effects — and a paying creature drains the pool. Triggered casts
-		// (TRIGGERED_IGNORE_POWER_AND_REAGENT_COST) skip both.
+		// (TRIGGERED_IGNORE_POWER_AND_REAGENT_COST) skip both. The
+		// caster-state block runs first, matching C++ relative order
+		// (Spell.cpp:5298-5314 precedes CheckRange at 5491 and CheckPower
+		// at 5495).
 		if !triggered {
+			if !s.checkCreatureSpellCasterState(m, spellInfo) {
+				return
+			}
 			cost := s.creatureSpellPowerCost(spellInfo, m)
 			if !checkCreatureSpellPower(spellInfo, m, cost) {
 				return
 			}
 			takeCreatureSpellPower(spellInfo, m, cost)
+		}
+		// Unit::CastSpell arms UNIT_STATE_CASTING for a non-triggered
+		// cast's cast time; the combat tick's early-out
+		// (CombatAI.cpp:97, 159) reads it via motion.CastingUntil.
+		// Stamped after the fizzle gates: a failed CheckCast never arms
+		// cast state in C++. Every castCreatureSpell caller models a
+		// non-triggered cast (the kill.go AICOND_DIE death cast is
+		// C++-triggered, but its motion is dead and never ticks again),
+		// so the triggered stamp below is inert.
+		if castMs := s.aiSpellCastTimeMs(spellInfo); castMs > 0 {
+			m.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
 		}
 	}
 	goPkt := protocol.BuildSpellGo(m.GUID, m.GUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, spellTarget)
@@ -747,6 +755,170 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	} else {
 		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, nil)
 	}
+}
+
+// checkCreatureSpellCasterState mirrors the caster-state block of
+// Spell::CheckCast (Spell.cpp:5298-5314) for creature casters: the
+// CasterAuraState / CasterAuraStateNot / CasterAuraSpell /
+// ExcludeCasterAuraSpell gates and the reqCombat SPELL_FAILED_AFFECTING_COMBAT
+// arm (SPELL_ATTR0_CANT_USED_IN_COMBAT, SpellInfo::CanBeUsedInCombat —
+// SpellInfo.cpp:1200-1203). Triggered casts skip the whole block
+// (TRIGGERED_IGNORE_CASTER_AURASTATE, SpellDefines.h:134), so every gate is
+// non-triggered only. A gate failure fizzles the cast before SendSpellGo.
+// Order follows C++: CasterAuraState, CasterAuraStateNot, CasterAuraSpell,
+// ExcludeCasterAuraSpell, then the in-combat arm.
+func (s *Server) checkCreatureSpellCasterState(m *creatureMotion, spell wotlk.Spell) bool {
+	if spell.CasterAuraSpell != 0 && !s.creatureHasAura(m, spell.CasterAuraSpell) {
+		return false
+	}
+	if spell.ExcludeCasterAuraSpell != 0 && s.creatureHasAura(m, spell.ExcludeCasterAuraSpell) {
+		return false
+	}
+	if spell.CasterAuraState != 0 && !s.creatureCasterHasAuraState(m, spell, spell.CasterAuraState) {
+		return false
+	}
+	if spell.ExcludeCasterAuraState != 0 && s.creatureCasterHasAuraState(m, spell, spell.ExcludeCasterAuraState) {
+		return false
+	}
+	if m != nil && m.InCombat && spell.Attributes&spellAttr0CantUsedInCombat != 0 &&
+		!s.creatureCasterAuraStateReqCombatExempt(m, spell) {
+		return false
+	}
+	return true
+}
+
+// creatureHasAura reports whether the creature carries the aura spell,
+// mirroring the creature-target branch of targetHasAura (spells.go): both
+// the presence map and the full active-creature-aura records count,
+// like C++ Unit::HasAura.
+func (s *Server) creatureHasAura(m *creatureMotion, spellID uint32) bool {
+	if s == nil || m == nil || spellID == 0 {
+		return false
+	}
+	key := creatureAuraKeyForMotion(m)
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	if _, found := s.creatureAuras[key][spellID]; found {
+		return true
+	}
+	_, found := s.activeCreatureAuras[key][spellID]
+	return found
+}
+
+// creatureCasterHasAuraState mirrors the session hasAuraState
+// (aura_state.go) for a creature caster, used by the caster-state block of
+// Spell::CheckCast (Spell.cpp:5298-5304). The SPELL_AURA_ABILITY_IGNORE_AURASTATE
+// bypass runs first (Unit.cpp:5946-5954); per-caster states need an aura the
+// creature itself applied (CasterGUID == motion GUID, Unit.cpp:5957-5965),
+// otherwise the unit-wide mask (health thresholds + spell-granted states)
+// decides. The GetSpellIdForDifficulty wrapper on the C++ side is omitted:
+// the player-side bridge does the same.
+func (s *Server) creatureCasterHasAuraState(m *creatureMotion, spell wotlk.Spell, state uint32) bool {
+	if state == auraStateNone || s == nil || m == nil {
+		return false
+	}
+	if s.creatureCasterIgnoresAuraState(m, spell) {
+		return true
+	}
+	if uint32(1)<<(state-1)&perCasterAuraStateMask != 0 {
+		key := creatureAuraKeyForMotion(m)
+		s.auraMu.Lock()
+		defer s.auraMu.Unlock()
+		for _, aura := range s.activeCreatureAuras[key] {
+			if aura == nil || aura.CasterGUID != m.GUID {
+				continue
+			}
+			if spellAuraStateOf(s, aura.SpellID) == state {
+				return true
+			}
+		}
+		return false
+	}
+	bit := uint32(1) << (state - 1)
+	return s.creatureCasterAuraStateMask(m)&bit != 0
+}
+
+// creatureCasterAuraStateMask builds the creature caster's unit-wide aura
+// state mask: health thresholds plus one bit per aura-granted state from the
+// server creature aura maps (Unit::ModifyAuraState, Unit.cpp:5880).
+func (s *Server) creatureCasterAuraStateMask(m *creatureMotion) uint32 {
+	if s == nil || m == nil {
+		return 0
+	}
+	mask := auraStateHealthMask(m.Health, m.MaxHealth)
+	key := creatureAuraKeyForMotion(m)
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	for spellID := range s.creatureAuras[key] {
+		if state := spellAuraStateOf(s, spellID); state != auraStateNone {
+			mask |= uint32(1) << (state - 1)
+		}
+	}
+	for spellID := range s.activeCreatureAuras[key] {
+		if state := spellAuraStateOf(s, spellID); state != auraStateNone {
+			mask |= uint32(1) << (state - 1)
+		}
+	}
+	return mask
+}
+
+// creatureCasterIgnoresAuraState mirrors casterIgnoresAuraState for a
+// creature caster: a SPELL_AURA_ABILITY_IGNORE_AURASTATE (262) effect on the
+// creature's own auras whose family mask covers the spell makes every aura
+// state query succeed (Unit.cpp:5946-5954). Presence-map entries carry no
+// effect records, so only the full active-creature-aura records participate
+// (noted gap — Lua-applied auras never grant 262).
+func (s *Server) creatureCasterIgnoresAuraState(m *creatureMotion, spell wotlk.Spell) bool {
+	if s == nil || s.Data == nil || m == nil {
+		return false
+	}
+	key := creatureAuraKeyForMotion(m)
+	s.auraMu.Lock()
+	auras := make([]*activeAura, 0, len(s.activeCreatureAuras[key]))
+	for _, aura := range s.activeCreatureAuras[key] {
+		auras = append(auras, aura)
+	}
+	s.auraMu.Unlock()
+	data := s.Data
+	return auraStateBypassApplies(auras, func(spellID uint32) (wotlk.Spell, bool) {
+		granting, found, err := data.Spell(spellID)
+		return granting, err == nil && found
+	}, spell, -1)
+}
+
+// creatureCasterAuraStateReqCombatExempt mirrors the session
+// auraStateReqCombatExempt for a creature caster: a SPELL_AURA_ABILITY_IGNORE_AURASTATE
+// (262) effect with MiscValue == 1 lifts the in-combat
+// SPELL_ATTR0_CANT_USED_IN_COMBAT gate (Spell.cpp:5280-5292).
+func (s *Server) creatureCasterAuraStateReqCombatExempt(m *creatureMotion, spell wotlk.Spell) bool {
+	if s == nil || s.Data == nil || m == nil {
+		return false
+	}
+	key := creatureAuraKeyForMotion(m)
+	s.auraMu.Lock()
+	auras := make([]*activeAura, 0, len(s.activeCreatureAuras[key]))
+	for _, aura := range s.activeCreatureAuras[key] {
+		auras = append(auras, aura)
+	}
+	s.auraMu.Unlock()
+	data := s.Data
+	return auraStateBypassApplies(auras, func(spellID uint32) (wotlk.Spell, bool) {
+		granting, found, err := data.Spell(spellID)
+		return granting, err == nil && found
+	}, spell, 1)
+}
+
+// spellAuraStateOf is the server-level twin of the session lookupAuraState:
+// it resolves a spell's aura state through the DBC store, returning
+// auraStateNone when the spell is unknown.
+func spellAuraStateOf(s *Server, spellID uint32) uint32 {
+	if s == nil || s.Data == nil {
+		return auraStateNone
+	}
+	if spell, found, err := s.Data.Spell(spellID); err == nil && found {
+		return spellAuraState(spell)
+	}
+	return auraStateNone
 }
 
 // -------------------------------------------------------------
