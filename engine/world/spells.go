@@ -5861,9 +5861,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	//     trade spell; Go resolves the trader's non-traded item directly in
 	//     applyDeferredTradeEnchant (trade.go), and client packets carry the
 	//     real item GUID, so there is no sentinel to rewrite.
-	//   - HandleLaunchPhase: the LAUNCH effect modes, launch-time combat
-	//     engage, and wand/thrown TakeAmmo legs have no Go bridge; the
-	//     ammo leg is bridged at SendSpellGo below, and the delayed leg
+	//   - HandleLaunchPhase: the LAUNCH effect modes (except the
+	//     trigger-spell whole-spell arm, bridged in the launch block),
+	//     launch-time combat engage (bridged there too), and wand/thrown
+	//     TakeAmmo legs have no Go bridge; the ammo leg is bridged at
+	//     SendSpellGo below, and the delayed leg
 	//     is the projectile travel delay before effect execution (the
 	//     spell.Speed leg further below).
 	//   - ReleaseSpellFocus: creature casters only; the caster here is always
@@ -6354,9 +6356,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// SendSpellCooldown and SendSpellGo: the SPELL_EFFECT_HANDLE_LAUNCH /
 	// SPELL_EFFECT_HANDLE_LAUNCH_TARGET effect modes, the
 	// DoEffectOnLaunchTarget combat engage, and TakeAmmo for player
-	// SPELL_ATTR0_REQ_AMMO spells. Only the ammo leg has a Go bridge:
-	//   - LAUNCH / LAUNCH_TARGET modes have no Go equivalent; all effects
-	//     resolve at hit time in applyEffects.
+	// SPELL_ATTR0_REQ_AMMO spells. Go bridges the ammo leg, the launch-time
+	// engage, and the trigger-spell whole-spell LAUNCH arm
+	// (triggerLaunchSpellEffects below); the remaining LAUNCH /
+	// LAUNCH_TARGET effect arms have no Go equivalent — all other effects
+	// resolve at hit time in applyEffects.
 	//   - The launch-time SetInCombatWith engage is a timing delta: C++
 	//     puts the caster in combat when the missile launches; Go engages
 	//     (triggerCreatureAggro) when the effects hit.
@@ -6387,6 +6391,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			s.engageLaunchTarget(ctx, spell, guid)
 		}
 	}
+
+	// Spell::EffectTriggerSpell whole-spell SPELL_EFFECT_HANDLE_LAUNCH arm
+	// (SpellEffects.cpp:966-985): HandleLaunchPhase runs every effect's
+	// LAUNCH arm before the per-target loop and before SendSpellGo. Trigger
+	// effects whose triggered spell does not need to be triggered by the
+	// caster fire exactly once per cast here (SpellEffects.cpp:969 passes);
+	// effects whose triggered spell needs caster-triggering but whose
+	// parent effect provides no unit target fire once here too, in addition
+	// to the per-target LAUNCH_TARGET arm. Effects that fire per launch
+	// target (needs-caster + parent unit mask) skip this arm per 969 and
+	// ride the per-target loop in applyEffects below.
+	s.triggerLaunchSpellEffects(ctx, spell, spellID, target)
 
 	goPacket := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, missStatus, target, remainingPower)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true)
@@ -7368,20 +7384,29 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case spellEffectTriggerSpell, spellEffectTriggerSpellWithValue:
 				// Spell::EffectTriggerSpell (SpellEffects.cpp:823-996) —
-				// audited; the per-target legs ride
-				// triggerSpellEffectTarget, which bridges the effect-64
-				// special cases (Replenish Life/Mana base-point arms, Glyph
-				// of Mirror Image, Demonic Empowerment succubus cleanse,
-				// Sayge's Dark Fortune skip, Brittle Armor / Mercurial
-				// Shield stacking), the TRIGGER_SPELL_WITH_VALUE base-point
-				// override (effect 0 only — C++ sets all effects), and the
-				// unknown-spell gate. Already-covered legs: the
-				// effectHandleMode, NeedsToBeTriggeredByCaster, and LAUNCH
-				// target-resolution gates are structural (see the helper
-				// note); the zero-trigger gate, the warn/error logs, and
-				// the GO-cast original-caster leg are documented there.
-				for _, effectTarget := range hitTargets {
-					s.triggerSpellEffectTarget(effCtx, spellID, eff, effectTarget)
+				// the per-target legs ride triggerSpellEffectTarget, which
+				// bridges the effect-64 special cases (Replenish Life/Mana
+				// base-point arms, Glyph of Mirror Image, Demonic
+				// Empowerment succubus cleanse, Sayge's Dark Fortune skip,
+				// Brittle Armor / Mercurial Shield stacking), the
+				// TRIGGER_SPELL_WITH_VALUE base-point override (effect 0
+				// only — C++ sets all effects), and the unknown-spell gate.
+				// The per-target loop is the
+				// SPELL_EFFECT_HANDLE_LAUNCH_TARGET arm (961-966): it fires
+				// only when the triggered spell needs to be triggered by
+				// the caster. Trigger effects that fire once per cast in
+				// the whole-spell LAUNCH arm (966-985) ride
+				// triggerLaunchSpellEffects in the launch block above; the
+				// zero-trigger gate, the warn/error logs, and the GO-cast
+				// original-caster leg are documented on the helper.
+				firesPerTarget := false
+				if triggered, found, err := s.server.Data.Spell(eff.TriggerSpell); err == nil && found {
+					firesPerTarget = spellNeedsToBeTriggeredByCaster(triggered, spell)
+				}
+				if firesPerTarget {
+					for _, effectTarget := range hitTargets {
+						s.triggerSpellEffectTarget(effCtx, spellID, eff, effectTarget)
+					}
 				}
 			case spellEffectAddExtraAttacks: // 19: SPELL_EFFECT_ADD_EXTRA_ATTACKS
 			case spellEffectTriggerMissile, spellEffectTriggerMissileWithValue:
@@ -9870,15 +9895,13 @@ const (
 // override, the effect-64 special cases, and the normal triggered cast. Both dispatch sites
 // (the client-cast hit loop and the triggered-cast path) share it.
 // Already-covered legs: the effectHandleMode gate (823-826, LAUNCH_TARGET /
-// LAUNCH) is structural — both Go sites run in the hit phase (the
-// combo-point arm's convention), so the LAUNCH/LAUNCH_TARGET split has no Go
-// phase model; the LAUNCH_TARGET NeedsToBeTriggeredByCaster gate (961-966)
-// has no Go model (NeedsExplicitUnitTarget plus the channeled-triggering
-// unit-mask leg, SpellInfo.cpp:1052) — Go casts on its resolved targets
-// unconditionally; the LAUNCH no-target resolution (968-985, dest-location
-// copy, caster-unit and GO fallbacks, plus the 971-972 early return) has no
-// Go counterpart — an empty hit-target list simply runs no triggers, and GO
-// casts are unmodeled tree-wide; the m_originalCasterGUID GO-cast leg
+// LAUNCH) is structural — this helper is the per-target LAUNCH_TARGET arm
+// (961-966, fires only when the triggered spell needs to be triggered by
+// the caster); the whole-spell LAUNCH arm (966-985) rides
+// triggerLaunchSpellEffects in finishSpellCast's launch block, and the
+// per-target dispatch in applyEffects gates on the same
+// NeedsToBeTriggeredByCaster predicate so the LAUNCH-fired effects no
+// longer double-fire per hit target. The m_originalCasterGUID GO-cast leg
 // (994-996) is structural for the same reason. The self-trigger skip
 // (TriggerSpell == spellID) is a Go recursion guard with no C++ counterpart.
 func (s *session) triggerSpellEffectTarget(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, effectTarget uint64) {
@@ -9916,6 +9939,72 @@ func (s *session) triggerSpellEffectTarget(ctx context.Context, spellID uint32, 
 		return
 	}
 	s.castSpellDirect(ctx, eff.TriggerSpell, effectTarget)
+}
+
+// triggerLaunchSpellEffects mirrors the whole-spell
+// SPELL_EFFECT_HANDLE_LAUNCH arm of Spell::EffectTriggerSpell
+// (SpellEffects.cpp:966-985), fired once per cast from finishSpellCast's
+// launch block (HandleLaunchPhase order: LAUNCH arms run before the
+// per-target loop and before SendSpellGo, Spell.cpp:7694/3465).
+// A trigger effect fires here when the triggered spell does NOT need to be
+// triggered by the caster (SpellEffects.cpp:966-968 whole-spell arm), or
+// when it needs caster-triggering but the parent effect provides no unit
+// target (the 969 early return passes; the per-target LAUNCH_TARGET arm
+// then fires on top). Effects that fire per launch target (needs-caster +
+// parent unit mask, 969) never reach this arm and ride the per-target loop
+// instead.
+// Target resolution follows the 971-984 fallbacks: the explicit
+// dest-location copy leg has no Go model (triggered casts carry no dest
+// target), the GO-caster leg is unmodeled tree-wide, so the explicit unit
+// target resolves first and the caster is the fallback. The LAUNCH-mode
+// special cases (828-946, Replenish Life/Mana and friends) do not run
+// here — C++ runs them only in LAUNCH_TARGET mode. The
+// TRIGGER_SPELL_WITH_VALUE base-point override (989-992) does run here.
+// The self-trigger recursion guard (TriggerSpell == spellID) is Go-only,
+// kept on both arms.
+func (s *session) triggerLaunchSpellEffects(ctx context.Context, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	for _, eff := range spell.Effects {
+		if eff.Effect != spellEffectTriggerSpell && eff.Effect != spellEffectTriggerSpellWithValue {
+			continue
+		}
+		if eff.TriggerSpell == 0 || eff.TriggerSpell == spellID {
+			// SpellEffects.cpp:948-951: no triggered spell — warn and return
+			// (the warn log has no Go equivalent).
+			continue
+		}
+		triggered, found, err := s.server.Data.Spell(eff.TriggerSpell)
+		if err != nil || !found {
+			// SpellEffects.cpp:954-958: unknown triggered spell — log error
+			// and return.
+			continue
+		}
+		needsCaster := spellNeedsToBeTriggeredByCaster(triggered, spell)
+		providesUnit := spellEffectProvidedTargetMask(eff)&targetFlagUnitMask != 0
+		if needsCaster && providesUnit {
+			// SpellEffects.cpp:969: fires per launch target instead.
+			continue
+		}
+		targetGUID := s.playerGUID
+		if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+			targetGUID = target.UnitGUID
+		}
+		if eff.Effect == spellEffectTriggerSpellWithValue {
+			// SpellEffects.cpp:989-992: TRIGGER_SPELL_WITH_VALUE sets every
+			// base point (MAX_SPELL_EFFECTS = 3, SharedDefines.h) to the
+			// effect damage (the tree-wide flat convention: BasePoints+1,
+			// clamped at zero like the damage model).
+			bp := eff.BasePoints + 1
+			if bp < 0 {
+				bp = 0
+			}
+			s.castSpellDirectWithBasePoints(ctx, eff.TriggerSpell, targetGUID, []int32{bp, bp, bp})
+			continue
+		}
+		s.castSpellDirect(ctx, eff.TriggerSpell, targetGUID)
+	}
 }
 
 // triggerSpellSpecialCase mirrors the "special cases" switch of
