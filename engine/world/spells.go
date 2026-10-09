@@ -288,7 +288,8 @@ const (
 	spellEffectSummon                  = 28  // SPELL_EFFECT_SUMMON (SharedDefines.h:839)
 	spellEffectSummonPet               = 56  // SPELL_EFFECT_SUMMON_PET (SharedDefines.h:867)
 	spellEffectCreateTamedPet          = 153 // SPELL_EFFECT_CREATE_TAMED_PET (SharedDefines.h:964)
-	spellEffectKillCredit              = 90  // SPELL_EFFECT_KILL_CREDIT (SharedDefines.h:901)
+	spellEffectKillCredit              = 90  // SPELL_EFFECT_KILL_CREDIT (SharedDefines.h:901) — EffectKillCreditPersonal
+	spellEffectKillCreditGroup         = 134 // SPELL_EFFECT_KILL_CREDIT group variant (SharedDefines.h:945) — EffectKillCredit
 	spellEffectSpiritHeal              = 117 // SPELL_EFFECT_SPIRIT_HEAL (SharedDefines.h:928)
 	spellEffectSendTaxi                = 123 // SPELL_EFFECT_SEND_TAXI (SharedDefines.h:934)
 	spellEffectDiscoverTaxi            = 154 // SPELL_EFFECT_DISCOVER_TAXI (SharedDefines.h:965)
@@ -7036,12 +7037,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleEffectDispel(effCtx, targetGUID, spell, eff)
 			case 108: // SPELL_EFFECT_DISPEL_MECHANIC
 				s.handleEffectDispelMechanic(effCtx, targetGUID, spell, eff)
-			case spellEffectKillCredit: // 90: SPELL_EFFECT_KILL_CREDIT
+			case spellEffectKillCredit: // 90: SPELL_EFFECT_KILL_CREDIT (EffectKillCreditPersonal)
 				for _, effectTarget := range hitTargets {
 					if effectTarget == 0 {
 						continue
 					}
-					s.handleEffectKillCredit(effCtx, effectTarget, spellID, eff.MiscValue)
+					s.handleEffectKillCredit(effCtx, effectTarget, eff.MiscValue)
+				}
+			case spellEffectKillCreditGroup: // 134: group kill credit (EffectKillCredit)
+				for _, effectTarget := range hitTargets {
+					if effectTarget == 0 {
+						continue
+					}
+					s.handleEffectKillCreditGroup(effCtx, effectTarget, spellID, eff.MiscValue)
 				}
 			case spellEffectSpiritHeal: // 117: SPELL_EFFECT_SPIRIT_HEAL
 				// Spell::EffectSpiritHeal (SpellEffects.cpp:5107-5124) is a

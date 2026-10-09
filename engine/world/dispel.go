@@ -220,10 +220,16 @@ func (s *session) getDispellableAuraListForPlayer(targetSess *session, dispelMas
 			continue
 		}
 
-		// Calculate dispel chance: 100 - resistChance (SpellAuras.cpp:1218-1236)
+		// Calculate dispel chance: 100 - resistChance (SpellAuras.cpp:1218-1236).
+		// 2.4.3 patch note arm (Unit.cpp:4617-4619): auras with 100% dispel
+		// resistance (chance 0) never enter the dispel list — without this
+		// they would always fail and land in SMSG_DISPEL_FAILED, which C++
+		// never sends for them. Documented no-bridge: the
+		// SPELLMOD_RESIST_DISPEL_CHANCE term (SpellAuras.cpp:1224-1226, from
+		// the aura caster's spell mods) has no Go model.
 		chance := targetSess.calcDispelChanceLocked(!isFriendly)
-		if chance < 0 {
-			chance = 0
+		if chance <= 0 {
+			continue
 		}
 
 		candidates = append(candidates, dispelCandidate{
@@ -293,7 +299,29 @@ func (s *session) getDispellableAuraListForCreature(creatureGUID uint64, dispelM
 			continue
 		}
 
+		// Aura::CalcDispelChance (SpellAuras.cpp:1218-1236): offensive
+		// dispels subtract the target's SPELL_AURA_MOD_DISPEL_RESIST total;
+		// auras at 100% resistance never enter the list (Unit.cpp:4617-4619,
+		// the 2.4.3 patch note arm). The SPELLMOD_RESIST_DISPEL_CHANCE term
+		// (SpellAuras.cpp:1224-1226) has no Go model.
 		chance := int32(100)
+		if !isFriendly {
+			resist := int32(0)
+			for _, ra := range auras {
+				if ra != nil && !ra.Stopped && ra.AuraType == spellAuraModDispelResist {
+					resist += int32(ra.Amount)
+				}
+			}
+			if resist < 0 {
+				resist = 0
+			} else if resist > 100 {
+				resist = 100
+			}
+			chance = 100 - resist
+		}
+		if chance <= 0 {
+			continue
+		}
 		candidates = append(candidates, dispelCandidate{
 			SpellID:    spellID,
 			DispelType: dispelType,

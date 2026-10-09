@@ -449,18 +449,32 @@ func (s *session) handleEffectTaunt(ctx context.Context, targetGUID uint64, spel
 		return
 	}
 	s.server.motionMu.Lock()
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
+	// Spell::EffectTaunt (SpellEffects.cpp:3147-3149): Hand of Reckoning
+	// (62124) casts triggered 67485 on non-player targets that are not
+	// already targeting the caster, before the threat-list gate. The flag is
+	// captured here and the cast runs below without motionMu held:
+	// castSpellDirect re-enters the spell pipeline, whose initial-threat leg
+	// (handleSpellInitialThreat) takes motionMu — holding it across the cast
+	// would deadlock.
+	horDamage := spellID == 62124 && motion != nil && !motion.Evading && motion.TargetGUID != s.playerGUID
+	s.server.motionMu.Unlock()
+
+	if horDamage && s.server.findSessionByGUID(targetGUID) == nil {
+		s.castSpellDirect(ctx, 67485, targetGUID)
+	}
+
+	s.server.motionMu.Lock()
 	defer s.server.motionMu.Unlock()
 
-	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
+	motion = s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
 	if motion == nil || motion.Evading {
 		return
 	}
 	// Spell::EffectTaunt (SpellEffects.cpp:3153-3157): entities that cannot
 	// have a threat list (ThreatManager.cpp:156-168 — pets, totems, triggers,
 	// player-summoned minions/guardians) reject the taunt silently; Go marks
-	// all of those with a nonzero OwnerGUID. The Hand of Reckoning (62124)
-	// 67485 sub-arm for such targets is documented unbridged pending DBC
-	// verification of 67485's effects.
+	// all of those with a nonzero OwnerGUID.
 	if motion.OwnerGUID != 0 {
 		return
 	}

@@ -1256,6 +1256,59 @@ func (s *session) questObjectivesComplete(ctx context.Context, questID uint32, e
 }
 
 // handleEffectKillCredit processes SPELL_EFFECT_KILL_CREDIT (90).
+// Mirrors TrinityCore Spell::EffectKillCreditPersonal (SpellEffects.cpp:5253-5261):
+// effect 90 credits the single target player via Player::KilledMonsterCredit
+// (Player.cpp:16636) — no group iteration, no Burn Body special-case (those
+// belong to effect 134, handleEffectKillCreditGroup).
+func (s *session) handleEffectKillCredit(ctx context.Context, targetGUID uint64, miscValue int32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	var entry uint32
+	if miscValue > 0 {
+		entry = uint32(miscValue)
+	}
+	if entry == 0 {
+		return
+	}
+
+	// Spell::EffectKillCreditPersonal requires a player unit target
+	// (SpellEffects.cpp:5258).
+	targetSess := s.resolveKillCreditTarget(targetGUID)
+	if targetSess == nil {
+		return
+	}
+	targetSess.grantKillCreditMonster(ctx, entry, targetGUID)
+}
+
+// resolveKillCreditTarget resolves the player session for a kill-credit
+// target GUID: the caster's own session when the target is the caster or
+// unset, else the online session holding that player GUID.
+func (s *session) resolveKillCreditTarget(targetGUID uint64) *session {
+	var targetSess *session
+	if targetGUID == 0 || targetGUID == s.playerGUID {
+		targetSess = s
+	} else if s.server != nil {
+		targetSess = s.server.findSessionByGUID(targetGUID)
+	}
+	if targetSess == nil || targetSess.player == nil {
+		return nil
+	}
+	return targetSess
+}
+
+// grantKillCreditMonster runs Player::KilledMonsterCredit (Player.cpp:16636):
+// the timed achievement and the KILL_CREATURE criterion run before the quest
+// loop; the quest loop itself rides creditQuestKills (the real_entry-via-
+// creature-GUID arm is vacuous here — C++ passes the player target as
+// pRewardSource, so creature_guid is empty and real_entry == entry).
+func (m *session) grantKillCreditMonster(ctx context.Context, entry uint32, targetGUID uint64) {
+	m.startTimedAchievement(timedTypeCreature, entry)
+	m.updateAchievementCriteria(criteriaTypeKillCreature, entry, 1)
+	m.creditQuestKills(ctx, entry, targetGUID)
+}
+
+// handleEffectKillCreditGroup processes SPELL_EFFECT_KILL_CREDIT group variant (134).
 // Mirrors TrinityCore Spell::EffectKillCredit (SpellEffects.cpp:5264-5280)
 // plus the Player::RewardPlayerAndGroupAtEvent (Player.cpp:24132-24158) and
 // Player::KilledMonsterCredit (Player.cpp:16636) tails it calls.
@@ -1267,7 +1320,7 @@ func (s *session) questObjectivesComplete(ctx context.Context, questID uint32, e
 // groupRewardAnchorPos — Player.cpp:24165-24166) gets the credit, but only
 // while alive or not yet released (Player.cpp:24152). Solo: the target
 // player gets it directly.
-func (s *session) handleEffectKillCredit(ctx context.Context, targetGUID uint64, spellID uint32, miscValue int32) {
+func (s *session) handleEffectKillCreditGroup(ctx context.Context, targetGUID uint64, spellID uint32, miscValue int32) {
 	if s == nil || s.player == nil {
 		return
 	}
@@ -1284,30 +1337,13 @@ func (s *session) handleEffectKillCredit(ctx context.Context, targetGUID uint64,
 
 	// Spell::EffectKillCredit requires a player unit target
 	// (SpellEffects.cpp:5269).
-	var targetSess *session
-	if targetGUID == 0 || targetGUID == s.playerGUID {
-		targetSess = s
-	} else if s.server != nil {
-		targetSess = s.server.findSessionByGUID(targetGUID)
-	}
-	if targetSess == nil || targetSess.player == nil {
+	targetSess := s.resolveKillCreditTarget(targetGUID)
+	if targetSess == nil {
 		return
 	}
 
-	credit := func(m *session) {
-		// Player::KilledMonsterCredit (Player.cpp:16636): the timed
-		// achievement and the KILL_CREATURE criterion run before the quest
-		// loop; the quest loop itself rides creditQuestKills (the
-		// real_entry-via-creature-GUID arm is vacuous here — C++ passes the
-		// player target as pRewardSource, so creature_guid is empty and
-		// real_entry == entry).
-		m.startTimedAchievement(timedTypeCreature, entry)
-		m.updateAchievementCriteria(criteriaTypeKillCreature, entry, 1)
-		m.creditQuestKills(ctx, entry, targetGUID)
-	}
-
 	if targetSess.groupID == 0 || targetSess.server == nil {
-		credit(targetSess)
+		targetSess.grantKillCreditMonster(ctx, entry, targetGUID)
 		return
 	}
 	tx, ty, tz := targetSess.player.X, targetSess.player.Y, targetSess.player.Z
@@ -1326,6 +1362,6 @@ func (s *session) handleEffectKillCredit(ctx context.Context, targetGUID uint64,
 		if m.isDeadOrGhost() && m.player.hasCorpse {
 			continue
 		}
-		credit(m)
+		m.grantKillCreditMonster(ctx, entry, targetGUID)
 	}
 }
