@@ -913,8 +913,16 @@ func (s *session) isSpellFitByClassAndRace(spellID uint32) bool {
 	return false
 }
 
-const spellEffectSkill = 118           // SPELL_EFFECT_SKILL (SharedDefines.h:929)
-const skillLineCategoryProfession = 11 // SKILL_CATEGORY_PROFESSION (SharedDefines.h:3085)
+const spellEffectSkill = 118                    // SPELL_EFFECT_SKILL (SharedDefines.h:929)
+const spellEffectSkinPlayerCorpse = 116         // SPELL_EFFECT_SKIN_PLAYER_CORPSE (SharedDefines.h:927)
+const spellEffectRedirectThreat = 130           // SPELL_EFFECT_REDIRECT_THREAT (SharedDefines.h:941)
+const spellEffectUnlearnSpecialization = 133    // SPELL_EFFECT_UNLEARN_SPECIALIZATION (SharedDefines.h:944)
+const spellEffectActivateRune = 146             // SPELL_EFFECT_ACTIVATE_RUNE (SharedDefines.h:957)
+const spellEffectTriggerRitualOfSummoning = 151 // SPELL_EFFECT_TRIGGER_SPELL_2 (SharedDefines.h:962)
+const spellEffectTitanGrip = 155                // SPELL_EFFECT_TITAN_GRIP (SharedDefines.h:966)
+const spellEffectAllowRenamePet = 159           // SPELL_EFFECT_ALLOW_RENAME_PET (SharedDefines.h:968)
+const spellEffectTalentSpecCount = 161          // SPELL_EFFECT_TALENT_SPEC_COUNT (SharedDefines.h:970)
+const skillLineCategoryProfession = 11          // SKILL_CATEGORY_PROFESSION (SharedDefines.h:3085)
 
 // isPrimaryProfessionSkill mirrors SpellMgr::IsPrimaryProfessionSkill: the skill
 // line's category is SKILL_CATEGORY_PROFESSION.

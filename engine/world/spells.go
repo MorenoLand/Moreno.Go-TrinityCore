@@ -7590,6 +7590,60 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// The C++ body is a single debug log line ("WORLD: SkillEFFECT")
 				// — explicit no-op so the effect stops hitting the
 				// unhandled-effect debug arm.
+			case spellEffectUnlearnSpecialization: // 133: SPELL_EFFECT_UNLEARN_SPECIALIZATION (EffectUnlearnSpecialization, SpellEffects.cpp:1249)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per player
+				// target: the target unlearns the effect's TriggerSpell
+				// (Player::RemoveSpell).
+				s.handleEffectUnlearnSpecialization(effCtx, eff, hitTargets)
+			case spellEffectTriggerRitualOfSummoning: // 151: SPELL_EFFECT_TRIGGER_SPELL_2 (EffectTriggerRitualOfSummoning, SpellEffects.cpp:1106)
+				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
+				// finish() the current spell, then trigger-cast the effect's
+				// TriggerSpell with no target (m_caster->CastSpell(nullptr, id,
+				// false)).
+				s.handleEffectTriggerRitualOfSummoning(effCtx, eff)
+			case spellEffectAllowRenamePet: // 159: SPELL_EFFECT_ALLOW_RENAME_PET (EffectRenamePet, SpellEffects.cpp:5525)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
+				// target: a hunter pet target gains the UNIT_CAN_BE_RENAMED
+				// byte flag (PetHandler.cpp:601 gates the rename opcode on it).
+				s.handleEffectAllowRenamePet(effCtx, hitTargets)
+			case spellEffectSkinPlayerCorpse: // 116: SPELL_EFFECT_SKIN_PLAYER_CORPSE (EffectSkinPlayerCorpse, SpellEffects.cpp:5126)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET: a dead
+				// player target's insignia is removed (RemovedInsignia). Go
+				// has no insignia/corpse-bones model (loot.go:1331-1335) —
+				// explicit no-op so the effect stops hitting the
+				// unhandled-effect debug arm.
+			case spellEffectRedirectThreat: // 130: SPELL_EFFECT_REDIRECT_THREAT (EffectRedirectThreat, SpellEffects.cpp:5411)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET, registering
+				// (spellId, target, pct) on the caster's ThreatManager redirect
+				// registry (ThreatManager.cpp:729), consumed when the caster
+				// generates threat (ThreatManager.cpp:346-373). Go threat
+				// managers are creature-side only; the per-unit redirect
+				// registry + AddThreat consumption belong to the
+				// HandleThreatSpells cast-threat audit (threat.go:64-66) —
+				// explicit no-op so the effect stops hitting the
+				// unhandled-effect debug arm.
+			case spellEffectActivateRune: // 146: SPELL_EFFECT_ACTIVATE_RUNE (EffectActivateRune, SpellEffects.cpp:5318)
+				// C++ runs this at SPELL_EFFECT_HANDLE_LAUNCH on a Death
+				// Knight caster: ready-state runes of the MiscValue type have
+				// their cooldowns zeroed (damage or 1 of them), plus the
+				// Empower Rune Weapon (47568) frost-rune sweep. LAUNCH modes
+				// have no Go equivalent (spells.go:6166-6170) — explicit
+				// no-op so the effect stops hitting the unhandled-effect
+				// debug arm.
+			case spellEffectTitanGrip: // 155: SPELL_EFFECT_TITAN_GRIP (EffectTitanGrip, SpellEffects.cpp:5402)
+				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on a player
+				// caster: SetCanTitanGrip(true, MiscValue), feeding the equip
+				// checks (Player.cpp:9776/11588-11607/23888) and the
+				// CheckTitanGripPenalty aura arm. Go models the reachable
+				// capability through the 46917 passive gate (items.go:59,
+				// terrain.go:181-200); the flag/penalty-aura arms have no Go
+				// model — explicit no-op so the effect stops hitting the
+				// unhandled-effect debug arm.
+			case spellEffectTalentSpecCount: // 161: SPELL_EFFECT_TALENT_SPEC_COUNT (EffectSpecCount, SpellEffects.cpp:5556)
+				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per player
+				// target: UpdateSpecCount(damage). Go has no dual-spec model —
+				// explicit no-op so the effect stops hitting the
+				// unhandled-effect debug arm.
 			case spellEffectEnvironmentalDMG: // 7: SPELL_EFFECT_ENVIRONMENTAL_DAMAGE (EffectEnvironmentalDMG, SpellEffects.cpp:298)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
 				// target: players take Player::EnvironmentalDamage (fire),
@@ -18644,6 +18698,87 @@ func (s *session) setPlayerDrunkValue(itemID uint32, newDrunk uint8) {
 		_ = target.write(uint16(protocol.OpcodeSMSG_CROSSED_INEBRIATION_THRESHOLD), pkt.Bytes(), true)
 	}
 	s.server.sessionsMu.RUnlock()
+}
+
+// handleEffectUnlearnSpecialization mirrors Spell::EffectUnlearnSpecialization
+// (SpellEffects.cpp:1249), which runs at SPELL_EFFECT_HANDLE_HIT_TARGET per
+// player target: the target unlearns the effect's TriggerSpell
+// (Player::RemoveSpell). The session unlearnSpell helper (commands_learn.go)
+// mirrors RemoveSpell for the command path — drop the spell row, strip auras,
+// notify the client — and is reused here per target.
+func (s *session) handleEffectUnlearnSpecialization(ctx context.Context, eff wotlk.SpellEffect, hitTargets []uint64) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	spellToUnlearn := eff.TriggerSpell
+	if spellToUnlearn == 0 {
+		return
+	}
+	for _, targetGUID := range hitTargets {
+		if targetGUID == 0 {
+			continue
+		}
+		targetSess := s
+		if targetGUID != s.playerGUID {
+			if found := s.server.findSessionByGUID(targetGUID); found != nil && found.player != nil {
+				targetSess = found
+			} else {
+				continue
+			}
+		}
+		targetSess.unlearnSpell(ctx, spellToUnlearn)
+	}
+}
+
+// handleEffectTriggerRitualOfSummoning mirrors
+// Spell::EffectTriggerRitualOfSummoning (SpellEffects.cpp:1106), which runs
+// once at SPELL_EFFECT_HANDLE_HIT on the caster: finish() the current spell,
+// then trigger-cast the effect's TriggerSpell with no target
+// (m_caster->CastSpell(nullptr, id, false)). Go has no in-flight spell object
+// to finish; the castSpellDirect triggered-cast bridge stands in, with the
+// caster as the unit target per the effect-initiated-cast convention
+// (handleEffectInebriate) — the ritual completion spells resolve their real
+// targets from implicit targets.
+func (s *session) handleEffectTriggerRitualOfSummoning(ctx context.Context, eff wotlk.SpellEffect) {
+	if s == nil || s.player == nil {
+		return
+	}
+	triggeredSpellID := eff.TriggerSpell
+	if triggeredSpellID == 0 {
+		return
+	}
+	s.castSpellDirect(ctx, triggeredSpellID, s.playerGUID)
+}
+
+// handleEffectAllowRenamePet mirrors Spell::EffectRenamePet
+// (SpellEffects.cpp:5525), which runs at SPELL_EFFECT_HANDLE_HIT_TARGET per
+// unit target: a hunter pet target gains the UNIT_CAN_BE_RENAMED byte flag
+// (UnitDefines.h:116). The flag is stored on the caster session per pet GUID
+// (petRenameAllowed) and consumed by the pet rename opcode gate
+// (PetHandler.cpp:601).
+func (s *session) handleEffectAllowRenamePet(ctx context.Context, hitTargets []uint64) {
+	if s == nil || s.server == nil || s.player == nil || s.player.PetGUID == 0 {
+		return
+	}
+	for _, targetGUID := range hitTargets {
+		if targetGUID == 0 || targetGUID != s.player.PetGUID {
+			continue
+		}
+		// C++: unitTarget must be a hunter pet (Pet::getPetType() ==
+		// HUNTER_PET).
+		petNumber := s.petNumberForGUID(targetGUID)
+		if petNumber == 0 || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+			continue
+		}
+		var petType int64
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT PetType FROM character_pet WHERE id = ? AND owner = ?", petNumber, s.playerGUID).Scan(&petType); err != nil || petType != 1 {
+			continue
+		}
+		if s.petRenameAllowed == nil {
+			s.petRenameAllowed = make(map[uint64]bool)
+		}
+		s.petRenameAllowed[targetGUID] = true
+	}
 }
 
 // enchantTargetPrismaticID reads the item_instance enchantments column and

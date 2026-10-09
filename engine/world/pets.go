@@ -2303,15 +2303,25 @@ func (s *session) handlePetRename(ctx context.Context, payload []byte) bool {
 		// PetHandler.cpp:591-596: only hunter pets can be renamed; the GUID
 		// must resolve to the player's own pet (petNumberForGUID already
 		// requires the active-pet GUID match) and the owner column must match.
-		var petType int64
-		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT PetType FROM character_pet WHERE id = ? AND owner = ?", petNumber, s.playerGUID).Scan(&petType)
+		var petType, renamed int64
+		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT PetType, renamed FROM character_pet WHERE id = ? AND owner = ?", petNumber, s.playerGUID).Scan(&petType, &renamed)
 		if petNumber == 0 || petType != 1 {
+			return true
+		}
+		// PetHandler.cpp:601 UNIT_CAN_BE_RENAMED gate: freshly tamed pets
+		// carry the flag implicitly until first renamed (Pet.cpp:267/841,
+		// persisted via the character_pet.renamed column); re-renames need
+		// the flag from SPELL_EFFECT_ALLOW_RENAME_PET (159,
+		// handleEffectAllowRenamePet).
+		if renamed != 0 && !s.petRenameAllowed[petGUID] {
 			return true
 		}
 		now := time.Now().Unix()
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
 			"UPDATE character_pet SET name = ?, renamed = 1, savetime = ? WHERE id = ? AND owner = ?",
 			newName, now, petNumber, s.playerGUID)
+		// PetHandler.cpp:624 removes the flag after a successful rename.
+		delete(s.petRenameAllowed, petGUID)
 	}
 	return true
 }

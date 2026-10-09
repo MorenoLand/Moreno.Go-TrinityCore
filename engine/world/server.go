@@ -319,6 +319,13 @@ type session struct {
 	initialLoginPending          bool
 	initialLoginFirst            bool
 	temporaryUnsummonedPetNumber uint32
+	// petRenameAllowed tracks UNIT_CAN_BE_RENAMED (UnitDefines.h:116) per pet
+	// GUID: set by SPELL_EFFECT_ALLOW_RENAME_PET (159,
+	// SpellEffects.cpp:5525) and consumed by the pet rename opcode gate
+	// (PetHandler.cpp:601); cleared after a successful rename
+	// (PetHandler.cpp:624). Freshly tamed pets carry the flag implicitly via
+	// the character_pet.renamed == 0 arm (Pet.cpp:267/841).
+	petRenameAllowed             map[uint64]bool
 	randomBGWinner               bool
 	bgData                       battlegroundLoginData
 	instanceLockTimes            map[uint32]int64
