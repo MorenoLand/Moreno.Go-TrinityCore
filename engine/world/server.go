@@ -173,7 +173,14 @@ type Server struct {
 	transports                map[uint32]*continentTransport
 	lootMu                    sync.Mutex
 	creatureLoot              map[lootObjectKey]*activeLootState
-	creatureLootOwners        map[lootObjectKey]lootOwnerState
+	// goSkillupLists mirrors GameObject::m_SkillupList (GameObject.h:190-199):
+	// the players (low GUIDs) that already took their one lockpicking
+	// skill-up from a given GO (Spell::EffectOpenLock, SpellEffects.cpp:2042-2055).
+	// C++ clears the list when the GO respawns (GameObject.cpp:573); Go's
+	// respawn-equivalent is the chest loot re-roll after its respawn delay
+	// (openGameObjectLoot), which clears the entry the same way.
+	goSkillupLists     map[lootObjectKey]map[uint32]struct{}
+	creatureLootOwners map[lootObjectKey]lootOwnerState
 	// storedContainerLoot mirrors LootItemStorage::_lootItemStore
 	// (Loot/LootItemStorage.cpp): persisted container (item) loot keyed by
 	// the container item's instance GUID, loaded at startup and kept in

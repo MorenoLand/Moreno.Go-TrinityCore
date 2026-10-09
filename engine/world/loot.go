@@ -1225,6 +1225,11 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 			loot.RoundRobinPlayer = 0
 			loot.QuestPersonalGUID = 0
 			loot.GeneratedAt = time.Now().Unix()
+			// GameObject.cpp:573: the skillup list clears on respawn —
+			// the re-roll above is Go's respawn-equivalent for
+			// default-spawned chests, so a player may take their one
+			// lockpicking skill-up from this chest again.
+			s.server.clearGoSkillups(key)
 			newLoot = true
 		} else {
 			loot.addViewer(s)
@@ -1573,15 +1578,12 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 		s.player.FishingSteps++
 		if uint16(s.player.FishingSteps) >= stepsNeeded {
 			s.player.FishingSteps = 0
-			for index := range s.player.Skills {
-				if s.player.Skills[index].Skill == 356 && s.player.Skills[index].Value < fishingMax {
-					s.player.Skills[index].Value++
-					if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-						_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_skills SET value = ? WHERE guid = ? AND skill = 356", s.player.Skills[index].Value, s.playerGUID)
-					}
-					break
-				}
-			}
+			// Player::UpdateFishingSkill (Player.cpp:5863-5884): the gain
+			// goes through UpdateSkillPro(SKILL_FISHING, 100*10,
+			// gathering_skill_gain) — the always-hit per-mill roll, the
+			// step+cap arms, the skill update broadcast, and the
+			// reach-skill-level criterion set.
+			s.updateSkillPro(ctx, skillFishing, 100*10, skillGainGathering)
 		}
 	}
 	chance := 100

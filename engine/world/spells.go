@@ -455,6 +455,7 @@ const (
 	skillChanceGrey       = 0
 	skillChanceGatherStep = 75
 	skillGainGathering    = 1
+	skillGainCrafting     = 1     // SkillGain.Crafting (World.cpp:1078)
 	skillGainProspecting  = false // SkillChance.Prospecting (World.cpp:1075)
 	skillGainMilling      = false // SkillChance.Milling (World.cpp:1076)
 )
@@ -533,6 +534,33 @@ func (s *session) updateGatherSkill(ctx context.Context, skillID, skillValue, re
 		return false
 	}
 	return s.updateSkillPro(ctx, skillID, chance, skillGainGathering)
+}
+
+// updateCraftSkill mirrors Player::UpdateCraftSkill (Player.cpp:5789-5818):
+// the first SkillLineAbility.dbc row for the spell with a nonzero SkillLine
+// feeds the pure (bonus-free) skill value into SkillGainChance(high,
+// (high+low)/2, low) and grows the skill through updateSkillPro with the
+// SkillGain.Crafting step (World.cpp:1078 default 1). The alchemy-discovery
+// arm (MECHANIC_DISCOVERY, GetSkillDiscoverySpell + LearnSpell) has no Go
+// model — documented no-bridge.
+func (s *session) updateCraftSkill(ctx context.Context, spellID uint32) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	abilities, found, err := s.server.Data.SkillLineAbilities(spellID)
+	if err != nil || !found {
+		return false
+	}
+	for _, ability := range abilities {
+		if ability.SkillLine == 0 {
+			continue
+		}
+		skillValue := uint32(playerPureSkillValue(s.player, ability.SkillLine))
+		green := (ability.TrivialRankHigh + ability.TrivialRankLow) / 2
+		chance := skillGainChance(skillValue, ability.TrivialRankHigh, green, ability.TrivialRankLow)
+		return s.updateSkillPro(ctx, ability.SkillLine, chance, skillGainCrafting)
+	}
+	return false
 }
 
 // isSelfCastOnly checks if all active spell effects target the caster unit.
@@ -2937,7 +2965,12 @@ func (s *session) handleEffectPickpocket(ctx context.Context, targetGUID uint64,
 // checkOpenLockCast), a door or button target opens via UseDoorOrButton with
 // no loot window (Spell::SendLoot, SpellEffects.cpp:1908-1911); every other
 // lockable GO target opens its loot window as LOOT_SKINNING — the disarm-trap
-// arm. The itemTarget arm (ITEM_FIELD_FLAG_UNLOCKED, SpellEffects.cpp:2032-2035)
+// arm. The pick-lock skill-up (SpellEffects.cpp:2038-2056) is wired:
+// openLockSkillParams resolves the skill-keyed lock row and
+// updateGatherSkill grows it once per GO per player via the server's
+// goSkillupLists (m_SkillupList), which the chest loot re-roll clears
+// as the respawn-equivalent; item casts skip it (!m_CastItem). The
+// itemTarget arm (ITEM_FIELD_FLAG_UNLOCKED, SpellEffects.cpp:2032-2035)
 // has no Go model: nothing in the Go item path sets per-item lock state (the
 // open-item leg refuses any LockID outright), so there is no unlockable item
 // to flag — documented no-bridge. The spell-1842 owned-trap deactivation arm
@@ -2945,7 +2978,7 @@ func (s *session) handleEffectPickpocket(ctx context.Context, targetGUID uint64,
 // GOs. The despawned-GO cheat gate (SpellEffects.cpp:1883-1889) is moot: Go
 // never despawns static GOs. The GOOBER Use arm, QUESTGIVER gossip arm, and
 // SPELL_FOCUS linked-trap arm have no Go trigger on this path.
-func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.SpellTargetData, spell wotlk.Spell, eff wotlk.SpellEffect) {
+func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.SpellTargetData, spell wotlk.Spell, eff wotlk.SpellEffect, castItem bool) {
 	if s == nil || s.player == nil || s.server == nil {
 		return
 	}
@@ -2955,6 +2988,25 @@ func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.Spel
 	}
 	if goGUID == 0 {
 		return
+	}
+	// Spell::EffectOpenLock skill-up leg (SpellEffects.cpp:2038-2056): a
+	// successful non-item cast grows the lock's gathering skill once per
+	// GO per player — the GO's m_SkillupList (GameObject.h:190-199). The
+	// pure (bonus-free) skill value gates the roll, matching
+	// Player::GetPureSkillValue. The arm also covers doors/buttons: C++
+	// runs it after UseDoorOrButton, so it sits before the door/button
+	// early return. Item casts never grow skill (the !m_CastItem gate);
+	// the item-target arm (unflagged items) stays unmodeled — Go never
+	// marks items unlocked.
+	if !castItem {
+		if skillID, reqSkillValue := s.openLockSkillParams(goGUID, uint32(eff.MiscValue)); skillID != skillNone {
+			if pure := playerPureSkillValue(s.player, skillID); pure > 0 {
+				key := lootObjectKey{MapID: s.player.Map, InstanceID: s.player.InstanceID, GUID: goGUID}
+				if !s.server.goSkillupUsed(key, uint32(s.playerGUID)) && s.updateGatherSkill(ctx, skillID, uint32(pure), reqSkillValue, 1) {
+					s.server.addGoSkillup(key, uint32(s.playerGUID))
+				}
+			}
+		}
 	}
 	// Spell::SendLoot DOOR/BUTTON arm: a pick-locked door or button opens
 	// instead of showing a loot window. The arm returns before
@@ -2983,9 +3035,8 @@ func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.Spel
 // (SpellEffects.cpp:4127-4140): the HIT_TARGET handle-mode gate is
 // structural — this dispatch is the HIT_TARGET phase — and a missing item
 // target or an item with no DisenchantID silently returns (the cast gates
-// already enforced all of this). The crafting-skill gain
-// (Player::UpdateCraftSkill, Player.cpp:5789) has no Go model (documented
-// no-bridge, same as the UpdateGatherSkill gap at 2740); the rest is
+// already enforced all of this). The crafting-skill gain is wired through
+// updateCraftSkill (Player::UpdateCraftSkill, Player.cpp:5789); the rest is
 // Player::SendLoot with LOOT_DISENCHANTING (Player.cpp:8675-8710): the
 // disenchant_loot_template fill keyed by the template's DisenchantID, no
 // money roll on this arm.
@@ -3004,6 +3055,9 @@ func (s *session) handleEffectDisenchant(ctx context.Context, target protocol.Sp
 	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(DisenchantID, 0) FROM item_template WHERE entry = ? LIMIT 1", t.entry).Scan(&disenchantID); err != nil || disenchantID == 0 {
 		return
 	}
+	// Spell::EffectDisEnchant (SpellEffects.cpp:4136): disenchanting grows
+	// the enchanter's profession skill.
+	s.updateCraftSkill(ctx, spell.ID)
 	s.openTradeSkillItemLoot(ctx, t.instanceGUID, lootTypeDisenchanting, "disenchant_loot_template", disenchantID)
 }
 
@@ -3096,6 +3150,80 @@ func goLockDataIndex(goType uint32) int {
 	default:
 		return 0
 	}
+}
+
+// openLockSkillParams mirrors the CanOpenLock skill resolution
+// (Spell.cpp:7793-7866) restricted to the skill-keyed row matching the
+// effect's MiscValue, exactly as Spell::EffectOpenLock reads it for the
+// skill-up leg (SpellEffects.cpp:2022-2032): the lock's skill lock type
+// maps to a gathering skill via SkillByLockType (SharedDefines.h:3044)
+// and Lock.dbc carries the required value. A GO whose lock is keyed by
+// item or spell only (or has no skill row for this effect) resolves to
+// SKILL_NONE and grants no skill-up.
+func (s *session) openLockSkillParams(goGUID uint64, miscValue uint32) (uint32, uint32) {
+	if s == nil || s.server == nil || s.server.Data == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return skillNone, 0
+	}
+	entry := uint32((goGUID >> 24) & 0xFFFFFF)
+	var goType int64
+	var data [5]int64
+	if err := s.server.WorldStore.DB.QueryRowContext(context.Background(),
+		"SELECT type, COALESCE(data0, 0), COALESCE(data1, 0), COALESCE(data2, 0), COALESCE(data3, 0), COALESCE(data4, 0) FROM gameobject_template WHERE entry = ? LIMIT 1", entry).Scan(&goType, &data[0], &data[1], &data[2], &data[3], &data[4]); err != nil {
+		return skillNone, 0
+	}
+	lockID := uint32(data[goLockDataIndex(uint32(goType))])
+	if lockID == 0 {
+		return skillNone, 0
+	}
+	lock, found, err := s.server.Data.Lock(lockID)
+	if err != nil || !found {
+		return skillNone, 0
+	}
+	for j := 0; j < 8; j++ {
+		if lock.Type[j] != lockKeySkill || lock.Index[j] != miscValue {
+			continue
+		}
+		if skillID := skillByLockType(lock.Index[j]); skillID != skillNone {
+			return skillID, lock.Skill[j]
+		}
+	}
+	return skillNone, 0
+}
+
+// goSkillupUsed mirrors GameObject::IsInSkillupList (GameObject.h:191-197):
+// whether this player (low GUID, ObjectGuid::GetCounter) already took their
+// skill-up from the GO. The list is guarded by lootMu, the same lock that
+// protects the loot state it clears alongside.
+func (sv *Server) goSkillupUsed(key lootObjectKey, playerLow uint32) bool {
+	sv.lootMu.Lock()
+	defer sv.lootMu.Unlock()
+	list := sv.goSkillupLists[key]
+	_, used := list[playerLow]
+	return used
+}
+
+// addGoSkillup mirrors GameObject::AddToSkillupList (GameObject.h:190).
+func (sv *Server) addGoSkillup(key lootObjectKey, playerLow uint32) {
+	sv.lootMu.Lock()
+	defer sv.lootMu.Unlock()
+	if sv.goSkillupLists == nil {
+		sv.goSkillupLists = make(map[lootObjectKey]map[uint32]struct{})
+	}
+	list := sv.goSkillupLists[key]
+	if list == nil {
+		list = make(map[uint32]struct{})
+		sv.goSkillupLists[key] = list
+	}
+	list[playerLow] = struct{}{}
+}
+
+// clearGoSkillups mirrors GameObject::ClearSkillupList on respawn
+// (GameObject.cpp:573); called from the chest loot re-roll, Go's
+// respawn-equivalent for default-spawned chests.
+func (sv *Server) clearGoSkillups(key lootObjectKey) {
+	sv.lootMu.Lock()
+	defer sv.lootMu.Unlock()
+	delete(sv.goSkillupLists, key)
 }
 
 // inventoryItemEntryByGUID resolves a wire item GUID (raw or 0x4000-high form)
@@ -6927,7 +7055,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectMilling: // 158: SPELL_EFFECT_MILLING
 				s.handleEffectProspectMilling(effCtx, target, spell, spellEffectMilling)
 			case spellEffectOpenLock: // 33: SPELL_EFFECT_OPEN_LOCK
-				s.handleEffectOpenLock(effCtx, target, spell, eff)
+				// The !m_CastItem skill-up gate (SpellEffects.cpp:2039):
+				// finishSpellCast carries the item that cast the spell
+				// (rawItemGUID/itemEntry from handleUseItem), so an item
+				// cast marks the spell item-based and skips the
+				// lockpicking skill-up.
+				s.handleEffectOpenLock(effCtx, target, spell, eff, castItemGUID != 0 || castItemEntry != 0)
 			case spellEffectLearnSpell: // 36: SPELL_EFFECT_LEARN_SPELL
 				if eff.TriggerSpell != 0 {
 					s.learnSpell(effCtx, eff.TriggerSpell)
@@ -18202,9 +18335,9 @@ func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64,
 			return
 		}
 		s.autoStoreSpellLoot(ctx, playerGUID, spell.ID, true)
-		// Player::UpdateCraftSkill (Player.cpp:5789) has no Go model: it
-		// needs the skill_line_ability DBC mapping plus the profession
-		// skill-gain formula, neither of which exists in Go.
+		// Spell::EffectCreateItem2 (SpellEffects.cpp:1702): a loot-crafting
+		// spell grows the profession skill.
+		s.updateCraftSkill(ctx, spell.ID)
 		return
 	}
 	if eff.ItemType == 0 {
@@ -18224,6 +18357,9 @@ func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64,
 	if _, err := s.storeOrStackItem(ctx, playerGUID, eff.ItemType, uint32(count)); err != nil {
 		return
 	}
+	// Spell::DoCreateItem (SpellEffects.cpp:1666): a successful craft grows
+	// the profession skill.
+	s.updateCraftSkill(ctx, spell.ID)
 }
 
 // handleEffectCreateRandomItem mirrors Spell::EffectCreateRandomItem

@@ -380,3 +380,14 @@ func playerSkillTotalValue(state *playerState, skillID uint32) int32 {
 	}
 	return 0
 }
+
+// playerPureSkillValue mirrors Player::GetPureSkillValue (Player.cpp:6220-6238):
+// the base skill value without the temporary bonus.
+func playerPureSkillValue(state *playerState, skillID uint32) uint16 {
+	for _, skill := range state.Skills {
+		if uint32(skill.Skill) == skillID {
+			return skill.Value
+		}
+	}
+	return 0
+}
