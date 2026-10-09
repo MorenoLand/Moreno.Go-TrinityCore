@@ -28,9 +28,11 @@ func buildCastFailedParams(castID uint8, spellID uint32, result uint8, params ..
 
 // castFailedExtParams mirrors the WriteCastResultInfo switch for the results
 // Go actually sends, resolved from the loaded Spell.dbc record like C++.
-// The REQUIRES_AREA hardcodes, CUSTOM_ERROR customError, and param1/param2
-// override paths have no Go send sites; TRIGGERED_DONT_REPORT_CAST_ERROR is
-// vacuous (triggered casts bypass handleCastSpell).
+// The REQUIRES_AREA hardcoded spell/area pairs have no Go send sites (the
+// uint32(0) default arm is bridged); CUSTOM_ERROR customError rides
+// buildCastFailedParams at its send sites; param1/param2 override paths have
+// no Go send sites. TRIGGERED_DONT_REPORT_CAST_ERROR is vacuous (triggered
+// casts bypass handleCastSpell).
 func (s *session) castFailedExtParams(ctx context.Context, spell wotlk.Spell, result uint8) []uint32 {
 	switch result {
 	case spellFailedRequiresSpellFocus:
@@ -53,16 +55,27 @@ func (s *session) castFailedExtParams(ctx context.Context, spell wotlk.Spell, re
 		return out
 	case spellFailedEquippedItemClass, spellFailedEquippedItemClassMainhand, spellFailedEquippedItemClassOffhand:
 		return []uint32{uint32(spell.EquippedItemClass), spell.EquippedItemSubClass}
-	case 100: // SPELL_FAILED_REAGENTS: first missing reagent item id
+	case spellFailedReagents: // SPELL_FAILED_REAGENTS: first missing reagent item id
 		return []uint32{s.firstMissingSpellReagent(ctx, spell)}
 	case spellFailedTooManyOfItem:
-		// WriteCastResultInfo (Spell.cpp:4056-4064): the created item entry —
-		// the first non-zero effect ItemType when no explicit param is set.
+		// WriteCastResultInfo (Spell.cpp:4056-4064): the trailer is the
+		// created item's ItemLimitCategory — and no trailer at all when the
+		// item has none (the C++ arm writes only when LimitCategory != 0).
 		for i := 0; i < len(spell.Effects); i++ {
 			if spell.Effects[i].ItemType != 0 {
-				return []uint32{spell.Effects[i].ItemType}
+				if s != nil && s.server != nil {
+					if info, ok := s.server.getItemStoreTemplateInfo(ctx, spell.Effects[i].ItemType); ok && info.LimitCategory != 0 {
+						return []uint32{info.LimitCategory}
+					}
+				}
+				break
 			}
 		}
+		return nil
+	case spellFailedRequiresArea:
+		// WriteCastResultInfo (Spell.cpp:4020-4042): the hardcoded area ids
+		// (3905/3842/4075) belong to spells Go never sends; every other
+		// spell falls through to the uint32(0) default arm.
 		return []uint32{0}
 	}
 	return nil

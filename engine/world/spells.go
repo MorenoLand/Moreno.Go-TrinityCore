@@ -115,6 +115,7 @@ const (
 	spellFailedNotInFront                uint8  = 61  // SPELL_FAILED_NOT_INFRONT (SharedDefines.h:1042)
 	spellFailedLineOfSight               uint8  = 47  // SPELL_FAILED_LINE_OF_SIGHT (SharedDefines.h:1029)
 	spellFailedCustomError               uint8  = 172 // SPELL_FAILED_CUSTOM_ERROR (SharedDefines.h:1154)
+	spellFailedReagents                  uint8  = 100 // SPELL_FAILED_REAGENTS (SharedDefines.h:1082)
 	spellCustomErrorGMOnly               uint32 = 65  // SPELL_CUSTOM_ERROR_GM_ONLY (SharedDefines.h:1241)
 	spellFailedBadTargets                uint8  = 12  // SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992)
 	spellFailedBmOrInvisGod              uint8  = 159 // SPELL_FAILED_BM_OR_INVISGOD (SharedDefines.h:1141)
@@ -1952,7 +1953,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		checkReagents = true
 	}
 	if checkReagents && !s.hasSpellReagents(ctx, spell) {
-		s.sendCastFailed(ctx, castID, spell, 100) // SPELL_FAILED_REAGENTS = 100
+		s.sendCastFailed(ctx, castID, spell, spellFailedReagents)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "missing reagents")
 		return true
 	}
@@ -6906,7 +6907,22 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// spells triggered during the channel can resolve TARGET_DEST_CHANNEL_TARGET.
 	if isChanneledSpell(spell) {
 		hasDest := target.Flags&protocol.SpellTargetFlagDestLocation != 0
-		s.startChannel(castID, spellID, spell, targetGUID, hasDest, target.Destination.X, target.Destination.Y, target.Destination.Z)
+		// Spell::SendChannelStart (Spell.cpp:4669-4681): the channel-object
+		// target is the caster's own GUID when the cast has a destination,
+		// else the explicit unit target (GetObjectTargetGUID — Go carries
+		// only the unit half of SpellCastTargets; gameobject targets are
+		// unmodeled), else, for spells needing no explicit unit target, the
+		// single unique target (the TARGET_SELECT_CATEGORY_NEARBY arm).
+		channelObjectGUID := uint64(0)
+		if hasDest {
+			channelObjectGUID = s.playerGUID
+		} else {
+			channelObjectGUID = target.UnitGUID
+		}
+		if channelObjectGUID == 0 && !spellNeedsExplicitUnitTarget(spell) && len(hitTargets)+len(missGUIDs) == 1 {
+			channelObjectGUID = targetGUID
+		}
+		s.startChannel(castID, spellID, spell, targetGUID, channelObjectGUID, hasDest, target.Destination.X, target.Destination.Y, target.Destination.Z)
 	}
 	s.updateAchievementCriteria(criteriaTypeCastSpell, spellID, 1)
 	s.updateAchievementCriteria(criteriaTypeCastSpell2, spellID, 1)
@@ -16478,7 +16494,7 @@ func (s *session) channelTargetForSpell(spellID uint32) uint64 {
 	s.castMu.Lock()
 	defer s.castMu.Unlock()
 	if channel := s.activeChannel; channel != nil && !channel.Stopped && channel.SpellID == spellID {
-		return channel.TargetGUID
+		return channel.ChannelObjectGUID
 	}
 	return 0
 }
@@ -18513,16 +18529,23 @@ type activeChannelState struct {
 	CastID     uint8
 	SpellID    uint32
 	TargetGUID uint64
-	TargetKey  creatureAuraKey
-	Spell      wotlk.Spell
-	DurationMs uint32
-	Remaining  time.Duration
-	PeriodMs   uint32
-	Pushbacks  int
-	Timer      *time.Timer
-	TickTimer  *time.Timer
-	DrainTimer *time.Timer
-	Stopped    bool
+	// ChannelObjectGUID is the SendChannelStart channel-target resolution
+	// (Spell.cpp:4669-4681): caster GUID when the cast has a destination,
+	// else the explicit unit target, else the single unique target for
+	// no-explicit-target spells. Carried on unitFieldChannelObject (the
+	// SetChannelObjectGuid analog) and read by channelTargetForSpell /
+	// channelDestForSpell. TargetGUID stays the aura/damage target.
+	ChannelObjectGUID uint64
+	TargetKey         creatureAuraKey
+	Spell             wotlk.Spell
+	DurationMs        uint32
+	Remaining         time.Duration
+	PeriodMs          uint32
+	Pushbacks         int
+	Timer             *time.Timer
+	TickTimer         *time.Timer
+	DrainTimer        *time.Timer
+	Stopped           bool
 	// HasDest/DestX/DestY/DestZ record the channeled spell's destination
 	// (C++ SpellCastTargets::HasDst on the channeled Spell::m_targets).
 	// Spell::SelectImplicitChannelTargets reads it for
@@ -18571,7 +18594,7 @@ func (s *session) sendChannelUpdate(remainingMs uint32) {
 // record the cast's destination (SpellCastTargets::HasDst analog) so
 // SelectImplicitChannelTargets parity (Spell.cpp:1010) can resolve
 // TARGET_DEST_CHANNEL_TARGET for spells triggered during the channel.
-func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, targetGUID uint64, hasDest bool, destX, destY, destZ float32) {
+func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, targetGUID uint64, channelObjectGUID uint64, hasDest bool, destX, destY, destZ float32) {
 	if s.player == nil || s.server.Data == nil {
 		return
 	}
@@ -18625,18 +18648,19 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 		remaining = time.Duration(durationMs) * time.Millisecond
 	}
 	channel := &activeChannelState{
-		CastID:     castID,
-		SpellID:    spellID,
-		TargetGUID: targetGUID,
-		TargetKey:  creatureAuraKeyForPlayer(*s.player, targetGUID),
-		Spell:      spell,
-		DurationMs: uint32(durationMs),
-		Remaining:  remaining,
-		PeriodMs:   period,
-		HasDest:    hasDest,
-		DestX:      destX,
-		DestY:      destY,
-		DestZ:      destZ,
+		CastID:            castID,
+		SpellID:           spellID,
+		TargetGUID:        targetGUID,
+		ChannelObjectGUID: channelObjectGUID,
+		TargetKey:         creatureAuraKeyForPlayer(*s.player, targetGUID),
+		Spell:             spell,
+		DurationMs:        uint32(durationMs),
+		Remaining:         remaining,
+		PeriodMs:          period,
+		HasDest:           hasDest,
+		DestX:             destX,
+		DestY:             destY,
+		DestZ:             destZ,
 	}
 	s.castMu.Lock()
 	s.activeChannel = channel

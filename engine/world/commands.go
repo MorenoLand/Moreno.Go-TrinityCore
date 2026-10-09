@@ -50,7 +50,7 @@ func (s *session) sendPlayerUpdate() {
 	channelGUID, channelSpell := uint64(0), uint32(0)
 	s.castMu.Lock()
 	if s.activeChannel != nil {
-		channelGUID, channelSpell = s.activeChannel.TargetGUID, s.activeChannel.SpellID
+		channelGUID, channelSpell = s.activeChannel.ChannelObjectGUID, s.activeChannel.SpellID
 	}
 	s.castMu.Unlock()
 	fields := map[int]uint32{

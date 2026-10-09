@@ -66,14 +66,14 @@ func (s *session) channelDestForSpell(ctx context.Context, spell wotlk.Spell) (x
 				if channel.HasDest {
 					return channel.DestX, channel.DestY, channel.DestZ, true
 				}
-				if channel.TargetGUID != 0 {
+				if channel.ChannelObjectGUID != 0 {
 					// C++ GetWorldObject resolves units and gameobjects; Go
 					// has no GO-target model, so players and creatures are
 					// covered.
-					if ts := s.server.findSessionByGUID(channel.TargetGUID); ts != nil && ts.player != nil {
+					if ts := s.server.findSessionByGUID(channel.ChannelObjectGUID); ts != nil && ts.player != nil {
 						return ts.player.X, ts.player.Y, ts.player.Z, true
 					}
-					if tgt, found := s.getCombatTarget(ctx, channel.TargetGUID); found {
+					if tgt, found := s.getCombatTarget(ctx, channel.ChannelObjectGUID); found {
 						return tgt.X, tgt.Y, tgt.Z, true
 					}
 				}
