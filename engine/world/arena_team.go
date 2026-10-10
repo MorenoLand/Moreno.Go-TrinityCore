@@ -152,6 +152,8 @@ const (
 	arenaTeamInviteSS          uint32 = 0x01
 	arenaTeamQuitS             uint32 = 0x03
 	arenaTeamInternal          uint32 = 0x01
+	arenaTeamNameInvalid       uint32 = 0x06
+	arenaTeamNameExistsS       uint32 = 0x07
 	arenaTeamLeaderLeaveS      uint32 = 0x08
 	arenaTeamsLocked           uint32 = 0x1E
 	alreadyInArenaTeam         uint32 = 0x02

@@ -5157,10 +5157,18 @@ func (s *session) handleAlterAppearance(ctx context.Context, payload []byte) boo
 		_ = s.write(uint16(protocol.OpcodeSMSG_BARBER_SHOP_RESULT), res.Bytes(), true)
 		return true
 	}
+	// CharacterHandler.cpp:1329-1339 — the SUCCESS packet goes out BEFORE
+	// the money is touched, the GOLD_SPENT_AT_BARBER criteria fire before
+	// the appearance is applied, and VISIT_BARBER_SHOP fires after.
+	res := protocol.NewBuffer(4)
+	res.WriteU32(0) // BARBER_SHOP_RESULT_SUCCESS
+	_ = s.write(uint16(protocol.OpcodeSMSG_BARBER_SHOP_RESULT), res.Bytes(), true)
+
 	s.player.Money -= cost
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	}
+	s.updateAchievementCriteria(criteriaTypeGoldSpentAtBarber, 0, cost)
 
 	s.player.HairStyle = uint8(hair)
 	s.player.HairColor = uint8(color)
@@ -5174,12 +5182,17 @@ func (s *session) handleAlterAppearance(ctx context.Context, payload []byte) boo
 			s.player.HairStyle, s.player.HairColor, s.player.FacialStyle, s.player.Skin, s.playerGUID)
 	}
 
-	res := protocol.NewBuffer(4)
-	res.WriteU32(0) // BARBER_SHOP_RESULT_SUCCESS
-	_ = s.write(uint16(protocol.OpcodeSMSG_BARBER_SHOP_RESULT), res.Bytes(), true)
 	s.updateAchievementCriteria(criteriaTypeVisitBarberShop, 0, 1)
-	s.updateAchievementCriteria(criteriaTypeGoldSpentAtBarber, 0, cost)
-	s.player.StandState = 0 // stand up (CharacterHandler.cpp:1339)
+	// Unit::SetStandState (Unit.cpp:10557-10569): standing breaks the
+	// NOT_SEATED-interrupt auras and broadcasts SMSG_STANDSTATE_UPDATE, like
+	// handleStandStateChange's stand arm.
+	s.player.StandState = 0
+	s.removeAurasWithInterruptFlags(auraInterruptFlagNotSeated)
+	merged := uint32(0) | uint32(s.player.StandFlags)<<16
+	stBuf := protocol.NewBuffer(1)
+	stBuf.WriteU8(0)
+	_ = s.write(uint16(protocol.OpcodeSMSG_STANDSTATE_UPDATE), stBuf.Bytes(), true)
+	s.server.broadcastPlayerValuesUpdateFromSession(s, map[int]uint32{unitFieldBytes1: merged})
 	s.sendPlayerUpdate()
 	s.debug("alter appearance applied", "account", s.accountName, "hair", hair, "color", color)
 	return true

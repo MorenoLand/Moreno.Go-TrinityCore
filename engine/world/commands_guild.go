@@ -104,9 +104,11 @@ func (s *session) guildCharactersDB() *sql.DB {
 }
 
 // guildIDByName mirrors sGuildMgr->GetGuildByName.
+// GuildMgr::GetGuildByName (GuildMgr.cpp:65-72) compares with StringEqualI
+// (case-insensitive); the query is case-insensitive too.
 func guildIDByName(ctx context.Context, cdb *sql.DB, name string) uint32 {
 	var id uint32
-	if err := cdb.QueryRowContext(ctx, "SELECT guildid FROM guild WHERE name = ? LIMIT 1", name).Scan(&id); err != nil {
+	if err := cdb.QueryRowContext(ctx, "SELECT guildid FROM guild WHERE UPPER(name) = UPPER(?) LIMIT 1", name).Scan(&id); err != nil {
 		return 0
 	}
 	return id

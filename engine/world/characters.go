@@ -2552,13 +2552,16 @@ func (s *session) handleCharCustomize(ctx context.Context, payload []byte) bool 
 	hairStyle, _ := r.ReadU8()
 	facialHair, _ := r.ReadU8()
 	face, _ := r.ReadU8()
+	// C++ normalizes the name in place (:1429); every sendCustomize echo
+	// carries the normalized name, success or not.
+	name := normalizePlayerName(rawName)
 	// SendCharCustomize appends the appearance fields only on success.
 	sendCustomize := func(code uint8, success bool) {
-		buf := protocol.NewBuffer(16 + len(rawName))
+		buf := protocol.NewBuffer(16 + len(name))
 		buf.WriteU8(code)
 		if success {
 			buf.WriteU64(guid)
-			buf.WriteCString(rawName)
+			buf.WriteCString(name)
 			buf.WriteU8(gender)
 			buf.WriteU8(skin)
 			buf.WriteU8(face)
@@ -2587,12 +2590,11 @@ func (s *session) handleCharCustomize(ctx context.Context, payload []byte) bool 
 		sendCustomize(charCreateError, false)
 		return true
 	}
-	if !utf8.ValidString(rawName) || normalizePlayerName(rawName) == "" {
+	if !utf8.ValidString(rawName) || name == "" {
 		sendCustomize(charNameNoName, false)
 		return true
 	}
-	newName := normalizePlayerName(rawName)
-	if !validCharacterName(newName) {
+	if !validCharacterName(name) {
 		sendCustomize(charNameFailure, false)
 		return true
 	}
@@ -2605,24 +2607,24 @@ func (s *session) handleCharCustomize(ctx context.Context, payload []byte) bool 
 	// name-in-use check in both trees.
 	if !s.skipReservedNameCheck {
 		var reserved int
-		if err := store.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM reserved_name WHERE name = ?", strings.ToLower(newName)).Scan(&reserved); err == nil && reserved > 0 {
+		if err := store.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM reserved_name WHERE name = ?", strings.ToLower(name)).Scan(&reserved); err == nil && reserved > 0 {
 			sendCustomize(charNameReserved, false)
 			return true
 		}
 	}
-	if nrow, nerr := store.QueryRowStatement(ctx, database.StatementID("CHAR_SEL_CHECK_NAME"), newName); nerr == nil {
+	if nrow, nerr := store.QueryRowStatement(ctx, database.StatementID("CHAR_SEL_CHECK_NAME"), name); nerr == nil {
 		var one int
-		if nrow.Scan(&one) == nil && newName != oldName {
+		if nrow.Scan(&one) == nil && name != oldName {
 			sendCustomize(charCreateNameInUse, false)
 			return true
 		}
 	}
 	// Player::Customize + name/at_login update (:1451-1470).
 	_, _ = store.DB.ExecContext(ctx, "UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, at_login = ? WHERE guid = ?",
-		newName, gender, skin, face, hairStyle, hairColor, facialHair, atLogin&^atLoginCustomize, guid)
+		name, gender, skin, face, hairStyle, hairColor, facialHair, atLogin&^atLoginCustomize, guid)
 	_, _ = store.ExecStatement(ctx, database.StatementID("CHAR_DEL_DECLINED_NAME"), guid)
 	sendCustomize(0, true)
-	s.debug("character customized", "guid", guid, "name", newName)
+	s.debug("character customized", "guid", guid, "name", name)
 	return true
 }
 

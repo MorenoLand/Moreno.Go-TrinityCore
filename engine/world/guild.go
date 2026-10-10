@@ -5130,7 +5130,31 @@ func (s *session) handlePetitionRename(ctx context.Context, payload []byte) bool
 	// a stale item from a replaced petition) -> silent return, no rename
 	// echo is sent.
 	var petitionOwner int64
-	if err := cdb.QueryRowContext(ctx, "SELECT ownerguid FROM petition WHERE petitionguid = ? LIMIT 1", petitionGUID).Scan(&petitionOwner); err != nil {
+	var petitionType uint8
+	if err := cdb.QueryRowContext(ctx, "SELECT ownerguid, type FROM petition WHERE petitionguid = ? LIMIT 1", petitionGUID).Scan(&petitionOwner, &petitionType); err != nil {
+		return true
+	}
+
+	if petitionType != charterTypeGuild {
+		// PetitionsHandler.cpp:355-365: arena-team charters do NOT run the
+		// guild arms — name-taken and name-validity answer through
+		// SendArenaTeamCommandResult(ERR_ARENA_TEAM_CREATE_S, ...).
+		var nameTaken int64
+		_ = cdb.QueryRowContext(ctx, "SELECT arenaTeamId FROM arena_team WHERE UPPER(name) = UPPER(?) LIMIT 1", newName).Scan(&nameTaken)
+		if nameTaken > 0 {
+			s.sendArenaTeamCommandResult(arenaTeamCreateS, newName, "", arenaTeamNameExistsS)
+			return true
+		}
+		if rn := []rune(newName); len(rn) < 2 || len(rn) > 24 {
+			s.sendArenaTeamCommandResult(arenaTeamCreateS, newName, "", arenaTeamNameInvalid)
+			return true
+		}
+		_, _ = cdb.ExecContext(ctx, "UPDATE petition SET name = ? WHERE petitionguid = ?", newName, petitionGUID)
+
+		buf := protocol.NewBuffer(16 + len(newName))
+		buf.WriteU64(petitionGUID)
+		buf.WriteCString(newName)
+		_ = s.write(uint16(protocol.OpcodeMSG_PETITION_RENAME), buf.Bytes(), true)
 		return true
 	}
 
