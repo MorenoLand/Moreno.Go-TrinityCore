@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"math/rand"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -36,6 +38,17 @@ type lootItem struct {
 	// never blocked (Group.cpp:1106/1261/1410), and each viewer's take
 	// marks only their own PlayerFFAItems entry (Player.cpp:25107-25113).
 	FreeForAll bool
+	// RandomSuffix mirrors LootItem::randomSuffix (Loot.h): assigned at
+	// fill time by GenerateEnchSuffixFactor (ItemEnchantmentMgr.cpp:168).
+	// RandomPropertyID mirrors LootItem::randomPropertyId (Loot.h): assigned
+	// at fill time by GenerateItemRandomPropertyId
+	// (ItemEnchantmentMgr.cpp:122) — positive for an
+	// ItemRandomProperties.dbc entry, negative for an ItemRandomSuffix.dbc
+	// entry. Both are shipped in LootView (Loot.cpp:589) so the client
+	// names the "of the X" row, and the take path persists the property id
+	// on the new item (Player::StoreLootItem, Player.cpp:25096).
+	RandomSuffix     uint32
+	RandomPropertyID int32
 }
 
 // itemFlagsCuIgnoreQuestStatus / itemFlagsCuFollowLootRules mirror
@@ -174,7 +187,13 @@ type activeLootState struct {
 // storeLootTemplateRow routes one rolled loot-template row into Items or
 // QuestItems, mirroring Loot::AddItem (Loot.cpp:141-152) where needs_quest
 // rows go to quest_items with the MAX_NR_QUEST_ITEMS cap.
-func storeLootTemplateRow(loot *activeLootState, slot, qidx *uint8, itemID, count, displayID, quality, startQuest, customFlags uint32, questRequired, freeForAll bool) {
+// storeLootTemplateRow mirrors the LootItem constructor
+// (Loot.cpp:35-54): freeforall comes from the item template's
+// ITEM_FLAG_MULTI_DROP (ItemTemplate.h:163), and randomSuffix /
+// randomPropertyID are the fill-time rolls passed in by the caller
+// (GenerateEnchSuffixFactor / GenerateItemRandomPropertyId,
+// ItemEnchantmentMgr.cpp:122/168).
+func storeLootTemplateRow(loot *activeLootState, slot, qidx *uint8, itemID, count, displayID, quality, startQuest, customFlags uint32, questRequired, freeForAll bool, randomSuffix uint32, randomPropertyID int32) {
 	if questRequired {
 		if *qidx >= maxQuestLootItems {
 			return
@@ -183,15 +202,17 @@ func storeLootTemplateRow(loot *activeLootState, slot, qidx *uint8, itemID, coun
 			loot.QuestItems = make(map[uint8]lootItem)
 		}
 		loot.QuestItems[*qidx] = lootItem{
-			Slot:          *qidx,
-			ItemEntry:     itemID,
-			Count:         count,
-			DisplayInfoID: displayID,
-			Quality:       quality,
-			NeedsQuest:    true,
-			StartQuest:    startQuest,
-			CustomFlags:   customFlags,
-			FreeForAll:    freeForAll,
+			Slot:             *qidx,
+			ItemEntry:        itemID,
+			Count:            count,
+			DisplayInfoID:    displayID,
+			Quality:          quality,
+			NeedsQuest:       true,
+			StartQuest:       startQuest,
+			CustomFlags:      customFlags,
+			FreeForAll:       freeForAll,
+			RandomSuffix:     randomSuffix,
+			RandomPropertyID: randomPropertyID,
 		}
 		*qidx++
 		return
@@ -200,14 +221,16 @@ func storeLootTemplateRow(loot *activeLootState, slot, qidx *uint8, itemID, coun
 		return
 	}
 	loot.Items[*slot] = lootItem{
-		Slot:          *slot,
-		ItemEntry:     itemID,
-		Count:         count,
-		DisplayInfoID: displayID,
-		Quality:       quality,
-		StartQuest:    startQuest,
-		CustomFlags:   customFlags,
-		FreeForAll:    freeForAll,
+		Slot:             *slot,
+		ItemEntry:        itemID,
+		Count:            count,
+		DisplayInfoID:    displayID,
+		Quality:          quality,
+		StartQuest:       startQuest,
+		CustomFlags:      customFlags,
+		FreeForAll:       freeForAll,
+		RandomSuffix:     randomSuffix,
+		RandomPropertyID: randomPropertyID,
 	}
 	*slot++
 }
@@ -234,6 +257,20 @@ type lootTemplateRow struct {
 	groupID       uint8
 	maxStack      uint32
 	flags         uint32
+	// randomProperty / randomSuffix / itemLevel / invType feed the
+	// LootItem constructor's random-enchant arms (Loot.cpp:46-47):
+	// GenerateItemRandomPropertyId needs the template's RandomProperty /
+	// RandomSuffix columns, GenerateEnchSuffixFactor the item level and
+	// inventory type (ItemEnchantmentMgr.cpp:122/168).
+	randomProperty uint32
+	randomSuffix   uint32
+	itemLevel      uint32
+	invType        uint32
+	// hasTemplate mirrors the LootStoreItem::IsValid (LootMgr.cpp:303-309)
+	// arm: a non-reference row whose item is not in item_template is
+	// skipped at load. The loader LEFT JOINs item_template, so a missing
+	// template shows as NULL.
+	hasTemplate bool
 }
 
 // fillLootTemplate mirrors LootTemplate::Process (LootMgr.cpp:562-600) driving
@@ -319,7 +356,7 @@ func (s *Server) fillLootTemplateDepth(ctx context.Context, wdb *sql.DB, table s
 			if !lootRowTakesChance(row.chance) {
 				continue
 			}
-			addLootTemplateRow(loot, slot, qidx, row)
+			s.addLootTemplateRow(ctx, wdb, loot, slot, qidx, row)
 			continue
 		}
 		g := groupIndex[row.groupID]
@@ -340,7 +377,7 @@ func (s *Server) fillLootTemplateDepth(ctx context.Context, wdb *sql.DB, table s
 	sort.Slice(groups, func(i, j int) bool { return groups[i].groupID < groups[j].groupID })
 	for _, g := range groups {
 		if row := g.roll(loot); row != nil {
-			addLootTemplateRow(loot, slot, qidx, row)
+			s.addLootTemplateRow(ctx, wdb, loot, slot, qidx, row)
 		}
 	}
 }
@@ -420,7 +457,10 @@ func lootRowTakesChance(chance float64) bool {
 // (Loot.cpp:144-152): the rolled count is split into max-stack-sized rows
 // (ItemTemplate::GetMaxStackSize, ItemTemplate.h:688 — Stackable <= 0 means
 // effectively unlimited, so an unknown maxStack disables splitting).
-func addLootTemplateRow(loot *activeLootState, slot, qidx *uint8, row *lootTemplateRow) {
+// addLootTemplateRow mirrors Loot::AddItem (Loot.cpp:141-186) driving the
+// LootItem constructor once per generated stack: the random-enchant arms
+// (Loot.cpp:46-47) roll per LootItem, so multi-stack rows roll each stack.
+func (s *Server) addLootTemplateRow(ctx context.Context, wdb *sql.DB, loot *activeLootState, slot, qidx *uint8, row *lootTemplateRow) {
 	count := row.minCount
 	if row.maxCount > row.minCount {
 		count += uint32(rand.Intn(int(row.maxCount - row.minCount + 1)))
@@ -443,8 +483,41 @@ func addLootTemplateRow(loot *activeLootState, slot, qidx *uint8, row *lootTempl
 		if row.maxStack > 0 && c > row.maxStack {
 			c = row.maxStack
 		}
-		storeLootTemplateRow(loot, slot, qidx, row.itemID, c, row.displayID, row.quality, row.startQuest, row.customFlags, row.questRequired, row.flags&itemFlagMultiDrop != 0)
+		suffix, propID := s.rollLootRandomMods(ctx, wdb, row)
+		storeLootTemplateRow(loot, slot, qidx, row.itemID, c, row.displayID, row.quality, row.startQuest, row.customFlags, row.questRequired, row.flags&itemFlagMultiDrop != 0, suffix, propID)
 	}
+}
+
+// validLootTemplateRow mirrors LootStoreItem::IsValid (LootMgr.cpp:297-365):
+// rows C++ rejects at load time with an sql.sql error are skipped. The
+// reference arm (chance==0) is subsumed by Go's lootRowTakesChance check at
+// roll time for the template path; the flat fishing path applies the same
+// filter inline.
+func validLootTemplateRow(r *lootTemplateRow) bool {
+	if r.reference != 0 {
+		// LootMgr.cpp:349-355: a zero-chance reference is skipped (the
+		// needs_quest-on-reference warning is log-only; Go ignores the
+		// flag on reference rows the same way).
+		return r.chance != 0
+	}
+	if r.minCount == 0 {
+		return false
+	}
+	if !r.hasTemplate {
+		return false
+	}
+	// LootMgr.cpp:316-321: zero chance is allowed for grouped entries
+	// only — the equal-chanced group pick.
+	if r.chance == 0 && r.groupID == 0 {
+		return false
+	}
+	if r.chance != 0 && r.chance < 0.000001 {
+		return false
+	}
+	if r.maxCount < r.minCount {
+		return false
+	}
+	return true
 }
 
 // loadLootTemplateRows loads one loot template table's rows for an entry.
@@ -454,7 +527,9 @@ func addLootTemplateRow(loot *activeLootState, slot, qidx *uint8, row *lootTempl
 func loadLootTemplateRows(ctx context.Context, wdb *sql.DB, table string, lootID int64, lootMode uint32) []lootTemplateRow {
 	full := `SELECT l.Item, l.Reference, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0),
 			COALESCE(l.QuestRequired, 0), COALESCE(t.StartQuest, 0), COALESCE(t.flagsCustom, 0),
-			COALESCE(l.LootMode, 1), COALESCE(l.GroupId, 0), COALESCE(t.Stackable, 0), COALESCE(t.Flags, 0)
+			COALESCE(l.LootMode, 1), COALESCE(l.GroupId, 0), COALESCE(t.Stackable, 0), COALESCE(t.Flags, 0),
+			COALESCE(t.RandomProperty, 0), COALESCE(t.RandomSuffix, 0), COALESCE(t.ItemLevel, 0), COALESCE(t.InventoryType, 0),
+			t.entry IS NOT NULL
 		FROM ` + table + ` AS l
 		LEFT JOIN item_template AS t ON t.entry = l.Item
 		WHERE l.Entry = ? ORDER BY l.Item`
@@ -482,21 +557,24 @@ func loadLootTemplateRows(ctx context.Context, wdb *sql.DB, table string, lootID
 		var r lootTemplateRow
 		var itemID, reference, minCount, maxCount, displayID, quality int64
 		var questRequired, startQuest, customFlags, lootModeRow, groupID, maxStack, flags int64
+		var tplRandomProp, tplRandomSuffix, tplItemLevel, tplInvType, tplHasTemplate int64
 		var chance float64
 		cols, colErr := rows.Columns()
 		if colErr != nil {
 			continue
 		}
 		var scanErr error
-		if len(cols) >= 14 {
+		if len(cols) >= 19 {
 			scanErr = rows.Scan(&itemID, &reference, &chance, &minCount, &maxCount, &displayID, &quality,
-				&questRequired, &startQuest, &customFlags, &lootModeRow, &groupID, &maxStack, &flags)
+				&questRequired, &startQuest, &customFlags, &lootModeRow, &groupID, &maxStack, &flags,
+				&tplRandomProp, &tplRandomSuffix, &tplItemLevel, &tplInvType, &tplHasTemplate)
 		} else {
 			// Either historical fallback shape (9 selected columns); the
 			// unselected generation columns keep their neutral defaults.
 			scanErr = rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality,
 				&questRequired, &startQuest, &customFlags)
 			lootModeRow = int64(lootMode)
+			tplHasTemplate = 1
 		}
 		if scanErr != nil {
 			continue
@@ -515,9 +593,152 @@ func loadLootTemplateRows(ctx context.Context, wdb *sql.DB, table string, lootID
 		r.groupID = uint8(groupID)
 		r.maxStack = uint32(maxStack)
 		r.flags = uint32(flags)
+		r.randomProperty = uint32(tplRandomProp)
+		r.randomSuffix = uint32(tplRandomSuffix)
+		r.itemLevel = uint32(tplItemLevel)
+		r.invType = uint32(tplInvType)
+		r.hasTemplate = tplHasTemplate != 0
+		// LootStoreItem::IsValid (LootMgr.cpp:297-365) skips invalid rows
+		// at load time; Go loads lazily per fill, so the filter applies
+		// here before the rows reach the roll.
+		if !validLootTemplateRow(&r) {
+			continue
+		}
 		out = append(out, r)
 	}
 	return out
+}
+
+// randomEnchantMod is one row of item_enchantment_template, mirroring the
+// EnchStoreItem list in ItemEnchantmentMgr.cpp (LoadRandomEnchantmentsTable).
+type randomEnchantMod struct {
+	ench   uint32
+	chance float64
+}
+
+// randomEnchantTable mirrors C++'s static RandomItemEnch
+// (ItemEnchantmentMgr.cpp): the item_enchantment_template rows are loaded
+// once and reloaded on `.reload item_enchantment_template`.
+var randomEnchantTable = struct {
+	sync.RWMutex
+	mods map[uint32][]randomEnchantMod
+}{mods: make(map[uint32][]randomEnchantMod)}
+
+// invalidateRandomEnchantTable drops the cached item_enchantment_template
+// rows so the next roll re-reads the table (the reload arm is otherwise a
+// plain DB probe, like the rest of the C++ flat arms).
+func invalidateRandomEnchantTable() {
+	randomEnchantTable.Lock()
+	randomEnchantTable.mods = make(map[uint32][]randomEnchantMod)
+	randomEnchantTable.Unlock()
+}
+
+// randomEnchantModsFor returns the cached (or freshly loaded)
+// item_enchantment_template rows for one template entry, mirroring
+// LoadRandomEnchantmentsTable's chance filter (0.000001 < chance <= 100).
+func randomEnchantModsFor(ctx context.Context, wdb *sql.DB, entry uint32) []randomEnchantMod {
+	randomEnchantTable.RLock()
+	mods, ok := randomEnchantTable.mods[entry]
+	randomEnchantTable.RUnlock()
+	if ok {
+		return mods
+	}
+	var loaded []randomEnchantMod
+	if wdb != nil {
+		rows, err := wdb.QueryContext(ctx, `SELECT ench, chance FROM item_enchantment_template WHERE entry = ?`, entry)
+		if err == nil {
+			for rows.Next() {
+				var ench int64
+				var chance float64
+				if rows.Scan(&ench, &chance) != nil {
+					continue
+				}
+				if chance > 0.000001 && chance <= 100 {
+					loaded = append(loaded, randomEnchantMod{ench: uint32(ench), chance: chance})
+				}
+			}
+			rows.Close()
+		}
+	}
+	randomEnchantTable.Lock()
+	if cached, ok := randomEnchantTable.mods[entry]; ok {
+		randomEnchantTable.Unlock()
+		return cached
+	}
+	randomEnchantTable.mods[entry] = loaded
+	randomEnchantTable.Unlock()
+	return loaded
+}
+
+// rollLootRandomMods mirrors the LootItem constructor's random-enchant arms
+// (Loot.cpp:46-47): randomSuffix = GenerateEnchSuffixFactor(itemid),
+// randomPropertyId = GenerateItemRandomPropertyId(itemid), rolled once per
+// LootItem at fill time.
+//
+// GenerateItemRandomPropertyId (ItemEnchantmentMgr.cpp:122-166): no template
+// RandomProperty/RandomSuffix column set returns 0; both set is a DB error
+// returning 0; otherwise the template's column picks the weighted entry from
+// item_enchantment_template (GetItemEnchantMod, :82-120, including its
+// second-chance leg), which must exist in the matching DBC — positive for
+// ItemRandomProperties.dbc, negative for ItemRandomSuffix.dbc.
+// GenerateEnchSuffixFactor (:168-245) only applies when RandomSuffix is set
+// and resolves the RandPropPoints.dbc slot for the item's level, quality
+// and inventory type (ResolveItemSuffixFactor ports that tail exactly).
+func (s *Server) rollLootRandomMods(ctx context.Context, wdb *sql.DB, row *lootTemplateRow) (uint32, int32) {
+	if row.randomProperty == 0 && row.randomSuffix == 0 {
+		return 0, 0
+	}
+	if row.randomProperty != 0 && row.randomSuffix != 0 {
+		if s != nil {
+			s.debug("loot random template error", "entry", row.itemID, "randomProperty", row.randomProperty, "randomSuffix", row.randomSuffix)
+		}
+		return 0, 0
+	}
+	entry := row.randomProperty
+	if entry == 0 {
+		entry = row.randomSuffix
+	}
+	mods := randomEnchantModsFor(ctx, wdb, entry)
+	ench := uint32(0)
+	// GetItemEnchantMod's first leg: rand_chance() is rand_norm()*100.
+	dRoll := rand.Float64() * 100
+	var fCount float64
+	for _, m := range mods {
+		fCount += m.chance
+		if fCount > dRoll {
+			ench = m.ench
+			break
+		}
+	}
+	if ench == 0 && fCount > 0 {
+		// The second-chance leg (:105-114), reached only when the chances
+		// sum below 100: irand(0, floor(fCount*100)+1)/100.
+		dRoll = float64(rand.Intn(int(math.Floor(fCount*100))+1)) / 100
+		fCount = 0
+		for _, m := range mods {
+			fCount += m.chance
+			if fCount > dRoll {
+				ench = m.ench
+				break
+			}
+		}
+	}
+	if ench == 0 {
+		return 0, 0
+	}
+	if s == nil || s.Data == nil {
+		return 0, 0
+	}
+	if row.randomProperty != 0 {
+		if _, found, err := s.Data.ItemRandomProperties(ench); err != nil || !found {
+			return 0, 0
+		}
+		return 0, int32(ench)
+	}
+	if _, found, err := s.Data.ItemRandomSuffix(ench); err != nil || !found {
+		return 0, 0
+	}
+	return ResolveItemSuffixFactor(s.Data, row.itemLevel, row.quality, row.invType, row.randomSuffix), -int32(ench)
 }
 
 type lootObjectKey struct {
@@ -1598,7 +1819,9 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 	}
 	success := forceSuccess || s.fishingHoleNearby(ctx, goState) || rand.Intn(100)+1 <= chance
 	loadRows := func(entry uint32, lootMode uint32) error {
-		rows, queryErr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0), COALESCE(t.Flags, 0)
+		rows, queryErr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0), COALESCE(t.Flags, 0),
+			COALESCE(t.RandomProperty, 0), COALESCE(t.RandomSuffix, 0), COALESCE(t.ItemLevel, 0), COALESCE(t.InventoryType, 0),
+			t.entry IS NOT NULL
 			FROM fishing_loot_template AS l LEFT JOIN item_template AS t ON t.entry = l.Item
 			WHERE l.Entry = ? AND (COALESCE(l.LootMode, 1) & ?) <> 0 ORDER BY l.Item LIMIT 18`, entry, lootMode)
 		if queryErr != nil {
@@ -1610,10 +1833,16 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 			var itemID int64
 			var chance float64
 			var minCount, maxCount, displayID, quality, flags int64
-			if scanErr := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality, &flags); scanErr != nil {
+			var tplRandomProp, tplRandomSuffix, tplItemLevel, tplInvType, tplHasTemplate int64
+			if scanErr := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality, &flags,
+				&tplRandomProp, &tplRandomSuffix, &tplItemLevel, &tplInvType, &tplHasTemplate); scanErr != nil {
 				continue
 			}
-			if chance > 0 && rand.Float64()*100 > chance {
+			// LootStoreItem::IsValid (LootMgr.cpp:297-365): the flat fishing
+			// fill has no group model, so a zero chance is never a grouped
+			// equal-chanced entry — !lootRowTakesChance drops it, matching
+			// the template path's roll-time skip.
+			if tplHasTemplate == 0 || minCount == 0 || maxCount < minCount || (chance != 0 && chance < 0.000001) || !lootRowTakesChance(chance) {
 				continue
 			}
 			count := uint32(minCount)
@@ -1625,7 +1854,19 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 			if count == 0 {
 				continue
 			}
-			loot.Items[slot] = lootItem{Slot: slot, ItemEntry: uint32(itemID), Count: count, DisplayInfoID: uint32(displayID), Quality: uint32(quality), FreeForAll: uint32(flags)&itemFlagMultiDrop != 0}
+			// The flat fishing fill builds LootItems directly; the
+			// constructor's random-enchant arms (Loot.cpp:46-47) still
+			// apply per row.
+			row := &lootTemplateRow{
+				itemID:         uint32(itemID),
+				quality:        uint32(quality),
+				randomProperty: uint32(tplRandomProp),
+				randomSuffix:   uint32(tplRandomSuffix),
+				itemLevel:      uint32(tplItemLevel),
+				invType:        uint32(tplInvType),
+			}
+			suffix, propID := s.server.rollLootRandomMods(ctx, s.server.WorldStore.DB, row)
+			loot.Items[slot] = lootItem{Slot: slot, ItemEntry: uint32(itemID), Count: count, DisplayInfoID: uint32(displayID), Quality: uint32(quality), FreeForAll: uint32(flags)&itemFlagMultiDrop != 0, RandomSuffix: suffix, RandomPropertyID: propID}
 			slot++
 		}
 		return rows.Err()
@@ -1696,7 +1937,7 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 			if !lootRowTakesChance(row.chance) {
 				continue
 			}
-			addLootTemplateRow(loot, &qslot, &qidx, row)
+			s.server.addLootTemplateRow(ctx, s.server.WorldStore.DB, loot, &qslot, &qidx, row)
 		}
 	}
 	s.server.lootMu.Lock()
@@ -1894,8 +2135,8 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 		packet.WriteU32(it.ItemEntry)
 		packet.WriteU32(it.Count)
 		packet.WriteU32(it.DisplayInfoID)
-		packet.WriteU32(0) // RandomSuffix (Loot.cpp:589: randomSuffix before randomPropertyId)
-		packet.WriteU32(0) // RandomPropertyId
+		packet.WriteU32(it.RandomSuffix) // Loot.cpp:589: randomSuffix before randomPropertyId
+		packet.WriteU32(uint32(it.RandomPropertyID))
 		packet.WriteU8(row.slotType)
 	}
 	// LootView quest arm (Loot.cpp:703-745): the viewer's quest items follow
@@ -1935,8 +2176,8 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 		packet.WriteU32(qit.ItemEntry)
 		packet.WriteU32(qit.Count)
 		packet.WriteU32(qit.DisplayInfoID)
-		packet.WriteU32(0) // RandomSuffix (Loot.cpp:589: randomSuffix before randomPropertyId)
-		packet.WriteU32(0) // RandomPropertyId
+		packet.WriteU32(qit.RandomSuffix) // Loot.cpp:589: randomSuffix before randomPropertyId
+		packet.WriteU32(uint32(qit.RandomPropertyID))
 		packet.WriteU8(qSlotType)
 	}
 	// LootView FFA arm rows (Loot.cpp:743-757): raw slot, the LootItem row,
@@ -1949,8 +2190,8 @@ func (s *session) sendLootResponse(ctx context.Context, loot *activeLootState) e
 		packet.WriteU32(it.ItemEntry)
 		packet.WriteU32(it.Count)
 		packet.WriteU32(it.DisplayInfoID)
-		packet.WriteU32(0) // RandomSuffix (Loot.cpp:589: randomSuffix before randomPropertyId)
-		packet.WriteU32(0) // RandomPropertyId
+		packet.WriteU32(it.RandomSuffix) // Loot.cpp:589: randomSuffix before randomPropertyId
+		packet.WriteU32(uint32(it.RandomPropertyID))
 		packet.WriteU8(baseSlot)
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_LOOT_RESPONSE), packet.Bytes(), true); err != nil {
@@ -2690,6 +2931,14 @@ func (s *session) storeTakenLootRow(ctx context.Context, loot *activeLootState, 
 			s.sendEquipError(equipErrInvFull, 0)
 		}
 		return true
+	}
+	// Player::StoreLootItem (Player.cpp:25096): the new item is created
+	// with the loot row's randomPropertyId. Random-enchant rows are
+	// equipment and never merge into an existing stack, so the property
+	// lands on the fresh instance (ItemGUID); a merged fill keeps the
+	// pile's existing instance untouched.
+	if it.RandomPropertyID != 0 && res != nil && !res.IsStack && res.ItemGUID != 0 {
+		_, _ = cdb.ExecContext(ctx, `UPDATE item_instance SET randomPropertyId = ? WHERE guid = ?`, it.RandomPropertyID, res.ItemGUID)
 	}
 	// Player::StoreLootItem (Player.cpp:25136-25137): a row taken from a
 	// persisted container leaves the stored loot too.

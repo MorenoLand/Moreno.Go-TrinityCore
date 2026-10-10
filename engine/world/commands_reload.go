@@ -194,6 +194,12 @@ func (s *session) runReloadArm(ctx context.Context, arm reloadArm, quiet bool) b
 			}
 		}
 	}
+	// LootItemStorage parity: C++ reloads the random-enchantment table into
+	// the static RandomItemEnch (LoadRandomEnchantmentsTable); the Go cache
+	// drops so the next roll re-reads the table.
+	if arm.table == "item_enchantment_template" {
+		invalidateRandomEnchantTable()
+	}
 	if !quiet && arm.msg != "" {
 		s.server.sendGlobalGMMessage(ctx, arm.msg)
 	}

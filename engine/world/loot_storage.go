@@ -15,14 +15,16 @@ import (
 // persisted; the reopen re-derives the display fields from the template
 // the same way the fill does.
 type storedContainerItem struct {
-	ItemEntry     uint32
-	Count         uint32
-	FollowRules   bool
-	FreeForAll    bool
-	IsBlocked     bool
-	NeedsQuest    bool
-	DisplayInfoID uint32
-	Quality       uint32
+	ItemEntry        uint32
+	Count            uint32
+	FollowRules      bool
+	FreeForAll       bool
+	IsBlocked        bool
+	NeedsQuest       bool
+	DisplayInfoID    uint32
+	Quality          uint32
+	RandomSuffix     uint32
+	RandomPropertyID int32
 }
 
 // storedContainerLoot mirrors StoredLootContainer (Loot/LootItemStorage.h):
@@ -139,15 +141,17 @@ func (s *Server) applyStoredContainerLoot(ctx context.Context, opener *session, 
 			customFlags |= itemFlagsCuFollowLootRules
 		}
 		loot.Items[slot] = lootItem{
-			Slot:          slot,
-			ItemEntry:     stored.ItemEntry,
-			Count:         stored.Count,
-			DisplayInfoID: data.DisplayInfoID,
-			Quality:       data.Quality,
-			IsBlocked:     stored.IsBlocked,
-			NeedsQuest:    stored.NeedsQuest,
-			FreeForAll:    stored.FreeForAll,
-			CustomFlags:   customFlags,
+			Slot:             slot,
+			ItemEntry:        stored.ItemEntry,
+			Count:            stored.Count,
+			DisplayInfoID:    data.DisplayInfoID,
+			Quality:          data.Quality,
+			IsBlocked:        stored.IsBlocked,
+			NeedsQuest:       stored.NeedsQuest,
+			FreeForAll:       stored.FreeForAll,
+			CustomFlags:      customFlags,
+			RandomSuffix:     stored.RandomSuffix,
+			RandomPropertyID: stored.RandomPropertyID,
 		}
 	}
 	loot.NormalSlotCount = uint8(len(loot.Items))
@@ -193,14 +197,16 @@ func (s *Server) storeNewContainerLoot(ctx context.Context, containerGUID uint64
 		// lootItem.CustomFlags — Go's fill drops it on restore without this.
 		followRules := it.CustomFlags&itemFlagsCuFollowLootRules != 0
 		st.Items = append(st.Items, storedContainerItem{
-			ItemEntry:     it.ItemEntry,
-			Count:         it.Count,
-			FollowRules:   followRules,
-			FreeForAll:    it.FreeForAll,
-			IsBlocked:     it.IsBlocked,
-			NeedsQuest:    it.NeedsQuest,
-			DisplayInfoID: data.DisplayInfoID,
-			Quality:       data.Quality,
+			ItemEntry:        it.ItemEntry,
+			Count:            it.Count,
+			FollowRules:      followRules,
+			FreeForAll:       it.FreeForAll,
+			IsBlocked:        it.IsBlocked,
+			NeedsQuest:       it.NeedsQuest,
+			DisplayInfoID:    data.DisplayInfoID,
+			Quality:          data.Quality,
+			RandomSuffix:     it.RandomSuffix,
+			RandomPropertyID: it.RandomPropertyID,
 		})
 	}
 	// LootItemStorage::AddNewStoredLoot's isLooted gate (Loot.h:236) +
@@ -229,7 +235,7 @@ func (s *Server) storeNewContainerLoot(ctx context.Context, containerGUID uint64
 	_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_DEL_ITEMCONTAINER_ITEMS", containerGUID)
 	for _, it := range st.Items {
 		_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_INS_ITEMCONTAINER_ITEMS",
-			containerGUID, it.ItemEntry, it.Count, it.FollowRules, it.FreeForAll, it.IsBlocked, false, false, it.NeedsQuest, 0, 0)
+			containerGUID, it.ItemEntry, it.Count, it.FollowRules, it.FreeForAll, it.IsBlocked, false, false, it.NeedsQuest, it.RandomPropertyID, it.RandomSuffix)
 	}
 	loot.StoredContainerGUID = containerGUID
 }
