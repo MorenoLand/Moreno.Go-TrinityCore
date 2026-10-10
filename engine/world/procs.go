@@ -1669,6 +1669,64 @@ func (s *session) procPeriodicHealthFunnelTakenAuraTriggers(ctx context.Context,
 	})
 }
 
+// procPeriodicHealTickAuraTriggers evaluates real aura procs on the done side
+// of a periodic heal tick (SpellAuraEffects.cpp:5423-5433): the tail of
+// AuraEffect::HandlePeriodicHealAurasTick runs Unit::ProcSkillsAndAuras(caster,
+// target, PROC_FLAG_DONE_PERIODIC, PROC_FLAG_TAKEN_PERIODIC,
+// PROC_SPELL_TYPE_HEAL, PROC_SPELL_PHASE_HIT, hitMask, nullptr, nullptr,
+// &healInfo) where hitMask = PROC_HIT_CRITICAL on a tick crit and
+// PROC_HIT_NORMAL otherwise. C++ passes no Spell, so ProcEventInfo::GetProcSpell
+// is nil and the triggered-cast suppression in CanSpellTriggerProcOnEvent
+// (SpellMgr.cpp:526) never engages — the tick event is deliberately NOT marked
+// triggered. Runs on the caster's own session; offline casters (no session)
+// skip the done side — documented delta, same as the damage-tick legs.
+func (s *session) procPeriodicHealTickAuraTriggers(ctx context.Context, tickSpell wotlk.Spell, schoolMask uint32, targetGUID uint64, crit bool) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	hitMask := procHitNormal
+	if crit {
+		hitMask = procHitCritical
+	}
+	spellCopy := tickSpell
+	s.procAuraTriggerLoop(ctx, targetGUID, procEventInfo{
+		typeMask:       procFlagDonePeriodic,
+		schoolMask:     schoolMask,
+		spellTypeMask:  procSpellTypeHeal,
+		spellPhaseMask: procSpellPhaseHit,
+		hitMask:        hitMask,
+		triggered:      false,
+		eventSpell:     &spellCopy,
+		actorGUID:      s.playerGUID,
+	})
+}
+
+// procPeriodicHealTickTakenAuraTriggers is the victim-side half of the
+// periodic heal tick proc (SpellAuraEffects.cpp:5423-5433): the heal target's
+// own session runs the loop so its TAKEN_PERIODIC auras gate; the trigger
+// targets the caster. No TAKEN_DAMAGE arm — C++ ORs none on the heal path.
+// Creature targets have no aura plumbing in Go.
+func (s *session) procPeriodicHealTickTakenAuraTriggers(ctx context.Context, tickSpell wotlk.Spell, schoolMask uint32, casterGUID uint64, crit bool) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	hitMask := procHitNormal
+	if crit {
+		hitMask = procHitCritical
+	}
+	spellCopy := tickSpell
+	s.procAuraTriggerLoop(ctx, casterGUID, procEventInfo{
+		typeMask:       procFlagTakenPeriodic,
+		schoolMask:     schoolMask,
+		spellTypeMask:  procSpellTypeHeal,
+		spellPhaseMask: procSpellPhaseHit,
+		hitMask:        hitMask,
+		triggered:      false,
+		eventSpell:     &spellCopy,
+		actorGUID:      casterGUID,
+	})
+}
+
 // procSpellReflectTakenAuraTriggers fires the reflector-side proc for a
 // reflected spell: ProcReflectDelayed (Spell.cpp:2069-2090, scheduled at
 // Spell.cpp:2181) runs Unit::ProcSkillsAndAuras(caster, reflector,

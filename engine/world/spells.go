@@ -19371,6 +19371,23 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			healCaster.applyHealthFunnelSelfDamage(aura.SpellID, healSpell.ManaPerSecond, effectiveHeal, uint8(aura.SchoolMask))
 		}
 
+		// Periodic-heal aura procs (SpellAuraEffects.cpp:5423-5433): the
+		// tick's tail runs Unit::ProcSkillsAndAuras with DONE_PERIODIC /
+		// TAKEN_PERIODIC, PROC_SPELL_TYPE_HEAL, PROC_SPELL_PHASE_HIT and a
+		// crit-conditional hit mask. The done side runs on the caster's
+		// session, the taken side on the heal target's session.
+		// SpellAuraEffects.cpp:5436 — %-based (obs-mod-health) ticks never
+		// proc; SpellAuraEffects.cpp:5429-5430 — item-cast heals never proc.
+		// Unknown-spell ticks skip (the proc gates need the spell data) —
+		// data gap, documented like the damage-tick legs.
+		if aura.AuraType != 20 && healKnown && aura.ItemGUID == 0 {
+			procCtx := context.Background()
+			if healCaster != nil {
+				healCaster.procPeriodicHealTickAuraTriggers(procCtx, healSpell, aura.SchoolMask, aura.TargetGUID, healCrit)
+			}
+			ts.procPeriodicHealTickTakenAuraTriggers(procCtx, healSpell, aura.SchoolMask, aura.CasterGUID, healCrit)
+		}
+
 	case 24: // SPELL_AURA_PERIODIC_ENERGIZE
 		// SpellAuraEffects.cpp:5548-5578 (HandlePeriodicEnergizeAuraTick):
 		// the target gains the flat power amount; the log carries the
@@ -20390,6 +20407,13 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				// session exists to hold it.
 				s.applyCreatureHealthFunnelSelfDamage(ctx, aura.CasterGUID, key.Map, key.InstanceID, aura.SpellID, tickSpell.ManaPerSecond, effectiveHeal, uint8(aura.SchoolMask))
 			}
+		}
+		// Periodic-heal aura procs (SpellAuraEffects.cpp:5423-5433): done
+		// side only — creature victims have no aura plumbing in Go, like the
+		// creature damage-tick legs. %-based (obs-mod-health) and item-cast
+		// ticks never proc (SpellAuraEffects.cpp:5436 / :5429-5430).
+		if aura.AuraType != 20 && tickKnown && aura.ItemGUID == 0 && tickCaster != nil {
+			tickCaster.procPeriodicHealTickAuraTriggers(ctx, tickSpell, aura.SchoolMask, aura.TargetGUID, healCrit)
 		}
 		return true
 
