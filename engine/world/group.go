@@ -1783,79 +1783,176 @@ func (s *session) handleResetInstances(ctx context.Context, payload []byte) bool
 	if s.groupID != 0 && s.server != nil {
 		grp := s.server.findGroupByID(s.groupID)
 		if grp != nil {
+			// C++ only the leader's call does anything.
 			if grp.LeaderGUID != s.playerGUID {
-				// Non-leader in group cannot reset instances (matches TC HandleResetInstancesOpcode)
 				return true
 			}
-			// Check if any group member is currently inside an instance/dungeon
+			// Group::ResetInstances (Group.cpp:2192) is a no-op for BG/BF groups.
+			if grp.GroupType&0x01 != 0 {
+				return true
+			}
 			groupSessions := s.server.getGroupSessions(s.groupID)
-			for _, memSess := range groupSessions {
-				if memSess != nil && memSess.playerLoaded && memSess.player != nil {
-					if s.isDungeonMap(memSess.player.Map) {
-						// Group member is inside the instance: fail reset
-						failBuf := protocol.NewBuffer(8)
-						failBuf.WriteU32(0) // reason 0: players inside instance
-						failBuf.WriteU32(memSess.player.Map)
-						_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_RESET_FAILED), failBuf.Bytes(), true)
-
-						notifyBuf := protocol.NewBuffer(4)
-						notifyBuf.WriteU32(memSess.player.Map)
-						_ = memSess.write(uint16(protocol.OpcodeSMSG_RESET_FAILED_NOTIFY), notifyBuf.Bytes(), true)
-						return true
-					}
+			// The handler calls only group->ResetInstances: the GROUP's binds
+			// (group_instance) are reset, not each member's own binds.
+			for _, r := range resettableBinds(s.server, s.instanceBindsForGroup(ctx, grp.DBID), grp.DungeonDiff, true) {
+				if groupMemberInsideMap(groupSessions, r.mapID) {
+					// Loaded map with players inside: the reset fails and the
+					// bind is kept (Group::ResetInstances SendResetInstanceFailed
+					// arm, Group.cpp:2229-2231).
+					failBuf := protocol.NewBuffer(8)
+					failBuf.WriteU32(0) // reason 0: players inside the instance
+					failBuf.WriteU32(r.mapID)
+					_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_RESET_FAILED), failBuf.Bytes(), true)
+					continue
 				}
-			}
-
-			// Clean up non-permanent instance bindings for group members in DB.
-			// InstanceSaveMgr::DeleteInstanceSaveIfNeeded / InstanceMap::UnloadAll
-			// (InstanceSaveMgr.cpp:618, Map.cpp:4182): resetting an instance also
-			// deletes its corpse rows (Map::DeleteCorpseData — DELETE FROM corpse
-			// WHERE mapId = ? AND instanceId = ?) so no corpse survives the reset.
-			if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-				cdb := s.server.CharactersStore.DB
-				for _, mem := range grp.Members {
-					s.deleteCorpseDataForResetBinds(ctx, mem.GUID)
-					_, _ = cdb.ExecContext(ctx, "DELETE FROM character_instance WHERE guid = ? AND permanent = 0", mem.GUID)
+				if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+					_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM group_instance WHERE guid = ? AND instance = ? AND permanent = 0", grp.DBID, r.instanceID)
 				}
+				resetBuf := protocol.NewBuffer(4)
+				resetBuf.WriteU32(r.mapID)
+				s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes())
 			}
-
-			// Broadcast SMSG_INSTANCE_RESET to all group members
-			resetBuf := protocol.NewBuffer(4)
-			resetBuf.WriteU32(0)
-			s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes())
+			// Corpse rows still go with the maps (Map::DeleteCorpseData).
+			for _, mem := range grp.Members {
+				s.deleteCorpseDataForResetBinds(ctx, mem.GUID)
+			}
 			return true
 		}
 	}
 
-	// Solo player path
-	if s.isDungeonMap(s.player.Map) {
-		failBuf := protocol.NewBuffer(8)
-		failBuf.WriteU32(0) // reason 0: players inside instance
-		failBuf.WriteU32(s.player.Map)
-		_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_RESET_FAILED), failBuf.Bytes(), true)
-
-		notifyBuf := protocol.NewBuffer(4)
-		notifyBuf.WriteU32(s.player.Map)
-		_ = s.write(uint16(protocol.OpcodeSMSG_RESET_FAILED_NOTIFY), notifyBuf.Bytes(), true)
-		return true
+	// Solo player path: Player::ResetInstances(INSTANCE_RESET_ALL, false)
+	// (Player.cpp:20648). C++ has no inside-instance check and no failure arm
+	// on this path (a solo instance "should not have any players inside");
+	// SendResetInstanceSuccess is sent per reset map.
+	for _, mapID := range s.resetCharacterBinds(ctx, s.playerGUID, s.player.DungeonDifficulty, true) {
+		resetBuf := protocol.NewBuffer(4)
+		resetBuf.WriteU32(mapID)
+		_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes(), true)
 	}
-
-	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		cdb := s.server.CharactersStore.DB
-		s.deleteCorpseDataForResetBinds(ctx, s.playerGUID)
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_instance WHERE guid = ? AND permanent = 0", s.playerGUID)
-	}
-
-	resetBuf := protocol.NewBuffer(4)
-	resetBuf.WriteU32(0)
-	_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes(), true)
 	return true
+}
+
+// raidMapID mirrors dungeonMapID for the DBC IsRaid() lookup.
+func raidMapID(srv *Server, mapID uint32) bool {
+	if srv != nil && srv.Data != nil {
+		if m, ok, err := srv.Data.Map(mapID); ok && err == nil {
+			return m.IsRaid()
+		}
+	}
+	return false
+}
+
+// groupMemberInsideMap is the Go analog of the players-inside arm in
+// Group::ResetInstances (Group.cpp:2223-2233): a bind whose map currently
+// holds an online group member cannot be reset.
+func groupMemberInsideMap(sessions []*session, mapID uint32) bool {
+	for _, memSess := range sessions {
+		if memSess != nil && memSess.playerLoaded && memSess.player != nil && memSess.player.Map == mapID {
+			return true
+		}
+	}
+	return false
+}
+
+// resettableBinds filters bind rows the way Player::ResetInstances /
+// Group::ResetInstances iterate them (Player.cpp:20648, Group.cpp:2192):
+// only binds at the current difficulty, only resettable (non-permanent)
+// saves. For INSTANCE_RESET_ALL (resetAll, non-raid) C++ additionally skips
+// raid maps and skips everything when the difficulty is heroic
+// (Player.cpp:20658-20667: "the reset all instances method can only reset
+// normal maps").
+func resettableBinds(srv *Server, rows []instanceBindRow, curDiff uint8, resetAll bool) []instanceBindRow {
+	var out []instanceBindRow
+	for _, r := range rows {
+		if r.difficulty != curDiff || r.permanent {
+			continue
+		}
+		if resetAll {
+			if curDiff == 1 { // DUNGEON_DIFFICULTY_HEROIC
+				continue
+			}
+			if raidMapID(srv, r.mapID) {
+				continue
+			}
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// resetCharacterBinds mirrors the bind-reset core of Player::ResetInstances
+// (Player.cpp:20648): every resettable bind of one character at curDiff is
+// deleted from character_instance (corpse rows go with the maps) and the
+// reset map ids are returned in DB order for the SendResetInstanceSuccess
+// arms (Player.cpp:20674, :20686).
+func (s *session) resetCharacterBinds(ctx context.Context, charGUID uint64, curDiff uint8, resetAll bool) []uint32 {
+	binds := resettableBinds(s.server, s.instanceBindsForCharacter(ctx, charGUID), curDiff, resetAll)
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return nil
+	}
+	cdb := s.server.CharactersStore.DB
+	s.deleteCorpseDataForResetBinds(ctx, charGUID)
+	var out []uint32
+	for _, r := range binds {
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_instance WHERE guid = ? AND instance = ? AND permanent = 0", charGUID, r.instanceID)
+		out = append(out, r.mapID)
+	}
+	return out
+}
+
+// resetGroupBinds mirrors Group::ResetInstances (Group.cpp:2192) for the
+// group's own binds at the group's current difficulty (raid or dungeon):
+// resettable group binds are deleted from group_instance, returning the
+// reset map ids for the SendResetInstanceSuccess arms.
+func (s *session) resetGroupBinds(ctx context.Context, grp *groupState, isRaid bool) []uint32 {
+	curDiff := grp.DungeonDiff
+	if isRaid {
+		curDiff = grp.RaidDiff
+	}
+	binds := resettableBinds(s.server, s.instanceBindsForGroup(ctx, grp.DBID), curDiff, false)
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return nil
+	}
+	cdb := s.server.CharactersStore.DB
+	var out []uint32
+	for _, r := range binds {
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM group_instance WHERE guid = ? AND instance = ? AND permanent = 0", grp.DBID, r.instanceID)
+		out = append(out, r.mapID)
+	}
+	return out
+}
+
+// sendDungeonDifficulty mirrors Player::SendDungeonDifficulty
+// (Player.cpp:20615): MSG_SET_DUNGEON_DIFFICULTY, u32 difficulty, u32 1,
+// u32 isInGroup. C++ always sends it server->client (the MSG_ opcode is
+// bidirectional).
+func (s *session) sendDungeonDifficulty(difficulty uint8, isInGroup bool) {
+	inGroup := uint32(0)
+	if isInGroup {
+		inGroup = 1
+	}
+	buf := protocol.NewBuffer(12)
+	buf.WriteU32(uint32(difficulty))
+	buf.WriteU32(1)
+	buf.WriteU32(inGroup)
+	_ = s.write(uint16(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY), buf.Bytes(), true)
+}
+
+// sendRaidDifficulty mirrors Player::SendRaidDifficulty (Player.cpp:20625).
+func (s *session) sendRaidDifficulty(difficulty uint8, isInGroup bool) {
+	inGroup := uint32(0)
+	if isInGroup {
+		inGroup = 1
+	}
+	buf := protocol.NewBuffer(12)
+	buf.WriteU32(uint32(difficulty))
+	buf.WriteU32(1)
+	buf.WriteU32(inGroup)
+	_ = s.write(uint16(protocol.OpcodeMSG_SET_RAID_DIFFICULTY), buf.Bytes(), true)
 }
 
 // handleSetDungeonDifficulty processes MSG_SET_DUNGEON_DIFFICULTY (0x329).
 // Reference: WorldSession::HandleSetDungeonDifficultyOpcode (MiscHandler.cpp:1268).
-// Protocol: Player::SendDungeonDifficulty (Player.cpp:20615):
-// uint32 difficulty, uint32 1, uint32 isInGroup
 func (s *session) handleSetDungeonDifficulty(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
 		return true
@@ -1865,34 +1962,78 @@ func (s *session) handleSetDungeonDifficulty(ctx context.Context, payload []byte
 	if err != nil {
 		return false
 	}
-	if mode >= 2 { // MAX_DUNGEON_DIFFICULTY = 2 (0=Normal, 1=Heroic)
-		mode = 0
+	// mode >= MAX_DUNGEON_DIFFICULTY (3: 0=Normal, 1=Heroic, 2=Epic,
+	// DBCEnums.h:294) is silently dropped, never clamped
+	// (MiscHandler.cpp:1275-1280).
+	if mode >= 3 {
+		return true
+	}
+	if uint8(mode) == s.player.DungeonDifficulty {
+		return true
+	}
+	// Cannot change the difficulty from inside an instance.
+	if s.isDungeonMap(s.player.Map) {
+		return true
+	}
+	if s.groupID != 0 && s.server != nil {
+		grp := s.server.findGroupByID(s.groupID)
+		// Only the group leader's call does anything.
+		if grp == nil || grp.LeaderGUID != s.playerGUID {
+			return true
+		}
+		// Group::ResetInstances is a no-op for BG/BF groups.
+		if grp.GroupType&0x01 != 0 {
+			return true
+		}
+		groupSessions := s.server.getGroupSessions(s.groupID)
+		for _, memSess := range groupSessions {
+			// == !groupGuy->IsInWorld() -> return.
+			if memSess == nil || !memSess.playerLoaded || memSess.player == nil {
+				return true
+			}
+			// == GetMap()->IsNonRaidDungeon() -> return.
+			if s.isDungeonMap(memSess.player.Map) && !raidMapID(s.server, memSess.player.Map) {
+				return true
+			}
+		}
+		// group->ResetInstances(INSTANCE_RESET_CHANGE_DIFFICULTY, false, _player).
+		for _, mapID := range s.resetGroupBinds(ctx, grp, false) {
+			resetBuf := protocol.NewBuffer(4)
+			resetBuf.WriteU32(mapID)
+			s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes())
+		}
+		// group->SetDungeonDifficulty (Group.cpp:2116): persist the group row
+		// (BG groups skip persistence), then every member gets
+		// SetDungeonDifficulty + SendDungeonDifficulty(true).
+		s.server.groupsMu.Lock()
+		grp.DungeonDiff = uint8(mode)
+		s.server.groupsMu.Unlock()
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE `groups` SET difficulty = ? WHERE guid = ?", mode, grp.DBID)
+		}
+		for _, memSess := range groupSessions {
+			if memSess == nil || !memSess.playerLoaded || memSess.player == nil {
+				continue
+			}
+			memSess.player.DungeonDifficulty = uint8(mode)
+			memSess.sendDungeonDifficulty(uint8(mode), true)
+		}
+		return true
+	}
+	// Solo path: _player->ResetInstances(INSTANCE_RESET_CHANGE_DIFFICULTY,
+	// false) then SetDungeonDifficulty; C++ sends no difficulty echo back
+	// on the solo path.
+	for _, mapID := range s.resetCharacterBinds(ctx, s.playerGUID, s.player.DungeonDifficulty, false) {
+		resetBuf := protocol.NewBuffer(4)
+		resetBuf.WriteU32(mapID)
+		_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes(), true)
 	}
 	s.player.DungeonDifficulty = uint8(mode)
-
-	isInGroup := uint32(0)
-	if s.groupID != 0 {
-		isInGroup = 1
-	}
-
-	buf := protocol.NewBuffer(12)
-	buf.WriteU32(mode)
-	buf.WriteU32(1)
-	buf.WriteU32(isInGroup)
-
-	if s.groupID != 0 && s.server != nil {
-		s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY), buf.Bytes())
-	} else {
-		_ = s.write(uint16(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY), buf.Bytes(), true)
-	}
-	_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_DIFFICULTY), buildInstanceDifficulty(mode), true)
 	return true
 }
 
 // handleSetRaidDifficulty processes MSG_SET_RAID_DIFFICULTY (0x4EB).
-// Reference: WorldSession::HandleSetRaidDifficultyOpcode (MiscHandler.cpp:1323).
-// Protocol: Player::SendRaidDifficulty (Player.cpp:20625):
-// uint32 difficulty, uint32 1, uint32 isInGroup
+// Reference: WorldSession::HandleSetRaidDifficultyOpcode (MiscHandler.cpp:1327).
 func (s *session) handleSetRaidDifficulty(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
 		return true
@@ -1902,27 +2043,74 @@ func (s *session) handleSetRaidDifficulty(ctx context.Context, payload []byte) b
 	if err != nil {
 		return false
 	}
-	if mode >= 4 { // MAX_RAID_DIFFICULTY = 4 (0=10N, 1=25N, 2=10H, 3=25H)
-		mode = 0
+	// mode >= MAX_RAID_DIFFICULTY (4: 0=10N, 1=25N, 2=10H, 3=25H,
+	// DBCEnums.h:295) is silently dropped, never clamped
+	// (MiscHandler.cpp:1334-1339).
+	if mode >= 4 {
+		return true
+	}
+	// Cannot change the difficulty from inside an instance (note: the raid
+	// handler checks IsDungeon for the player, before the same-mode check).
+	if s.isDungeonMap(s.player.Map) {
+		return true
+	}
+	if uint8(mode) == s.player.RaidDifficulty {
+		return true
+	}
+	if s.groupID != 0 && s.server != nil {
+		grp := s.server.findGroupByID(s.groupID)
+		// Only the group leader's call does anything.
+		if grp == nil || grp.LeaderGUID != s.playerGUID {
+			return true
+		}
+		// Group::ResetInstances is a no-op for BG/BF groups.
+		if grp.GroupType&0x01 != 0 {
+			return true
+		}
+		groupSessions := s.server.getGroupSessions(s.groupID)
+		for _, memSess := range groupSessions {
+			// == !groupGuy->IsInWorld() -> return.
+			if memSess == nil || !memSess.playerLoaded || memSess.player == nil {
+				return true
+			}
+			// == GetMap()->IsRaid() -> return.
+			if raidMapID(s.server, memSess.player.Map) {
+				return true
+			}
+		}
+		// group->ResetInstances(INSTANCE_RESET_CHANGE_DIFFICULTY, true, _player).
+		for _, mapID := range s.resetGroupBinds(ctx, grp, true) {
+			resetBuf := protocol.NewBuffer(4)
+			resetBuf.WriteU32(mapID)
+			s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes())
+		}
+		// group->SetRaidDifficulty (Group.cpp:2140): persist the group row
+		// (BG groups skip persistence), then every member gets
+		// SetRaidDifficulty + SendRaidDifficulty(true).
+		s.server.groupsMu.Lock()
+		grp.RaidDiff = uint8(mode)
+		s.server.groupsMu.Unlock()
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE `groups` SET raiddifficulty = ? WHERE guid = ?", mode, grp.DBID)
+		}
+		for _, memSess := range groupSessions {
+			if memSess == nil || !memSess.playerLoaded || memSess.player == nil {
+				continue
+			}
+			memSess.player.RaidDifficulty = uint8(mode)
+			memSess.sendRaidDifficulty(uint8(mode), true)
+		}
+		return true
+	}
+	// Solo path: _player->ResetInstances(INSTANCE_RESET_CHANGE_DIFFICULTY,
+	// true) then SetRaidDifficulty; C++ sends no difficulty echo back
+	// on the solo path.
+	for _, mapID := range s.resetCharacterBinds(ctx, s.playerGUID, s.player.RaidDifficulty, false) {
+		resetBuf := protocol.NewBuffer(4)
+		resetBuf.WriteU32(mapID)
+		_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes(), true)
 	}
 	s.player.RaidDifficulty = uint8(mode)
-
-	isInGroup := uint32(0)
-	if s.groupID != 0 {
-		isInGroup = 1
-	}
-
-	buf := protocol.NewBuffer(12)
-	buf.WriteU32(mode)
-	buf.WriteU32(1)
-	buf.WriteU32(isInGroup)
-
-	if s.groupID != 0 && s.server != nil {
-		s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeMSG_SET_RAID_DIFFICULTY), buf.Bytes())
-	} else {
-		_ = s.write(uint16(protocol.OpcodeMSG_SET_RAID_DIFFICULTY), buf.Bytes(), true)
-	}
-	_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_DIFFICULTY), buildInstanceDifficulty(mode), true)
 	return true
 }
 
