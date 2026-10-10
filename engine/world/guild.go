@@ -4382,11 +4382,15 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	// PetitionsHandler.cpp:94-100: the seller must be an interactable
-	// petitioner NPC. Guild charters are sold only by tabard designers
-	// (the IsTabardDesigner branch); the arena-charter branch has no Go
-	// model, so a non-tabard petitioner cannot sell here.
-	if !s.canInteractWithNPC(ctx, npcGUID, uint64(unitNPCFlagTabardDesigner)) {
+	// PetitionsHandler.cpp:85-100: the seller must be an interactable
+	// petitioner NPC (UNIT_NPC_FLAG_PETITIONER); C++ only then branches on
+	// IsTabardDesigner for the guild path. The arena-charter branch has no
+	// Go model, so a petitioner that is not a tabard designer sells nothing
+	// here.
+	if !s.canInteractWithNPC(ctx, npcGUID, uint64(unitNPCFlagPetitioner)) {
+		return true
+	}
+	if !s.creatureHasNPCFlag(ctx, npcGUID, unitNPCFlagTabardDesigner) {
 		return true
 	}
 
@@ -4409,6 +4413,23 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 	_ = cdb.QueryRowContext(ctx, "SELECT guildid FROM guild WHERE UPPER(name) = UPPER(?) LIMIT 1", name).Scan(&nameTaken)
 	if nameTaken > 0 {
 		s.sendGuildCommandResult(guildCmdCreate, name, errGuildNameExists)
+		return true
+	}
+	// ObjectMgr::IsValidCharterName (ObjectMgr.cpp:8624): bridgeable length
+	// arms (MIN_CHARTER_NAME=2, MAX_CHARTER_NAME=24, counted in runes) ->
+	// ERR_GUILD_NAME_INVALID. The strict-mask charset check has no Go bridge
+	// (standing delta).
+	if rn := []rune(name); len(rn) > 24 || len(rn) < 2 {
+		s.sendGuildCommandResult(guildCmdCreate, name, errGuildNameInvalid)
+		return true
+	}
+	// PetitionsHandler.cpp:166-171: the charter must exist in item_template,
+	// otherwise BUY_ERR_CANT_FIND_ITEM — checked before the money arm.
+	// A missing item_template table means the bridge data is not loaded;
+	// the check is skipped rather than failing the purchase.
+	var templateEntry int64
+	if terr := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT entry FROM item_template WHERE entry = ? LIMIT 1", guildCharterItemID).Scan(&templateEntry); terr != nil && !missingTable(terr) && !isMissingColumn(terr) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(npcGUID, guildCharterItemID, buyErrCantFindItem), true)
 		return true
 	}
 
@@ -4452,7 +4473,13 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 	petitionGUID := uint64(nextItemGUID)
 	s.player.Money -= cost
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, 5863, ?, ?, 1, 0, '', 0, '', 0, 0, 0, '')", nextItemGUID, s.playerGUID, s.playerGUID)
+	// PetitionsHandler.cpp:192: charter->SetUInt32Value(ITEM_FIELD_ENCHANTMENT_1_1,
+	// charter->GetGUID().GetCounter()) — the petition id (the item GUID
+	// counter) is stored in enchantment slot 0 (values[22:58]); the follow-up
+	// sendInventoryItems below re-sends the create block with it parsed from
+	// here, matching the C++ SendNewItem state.
+	enchantments := fmt.Sprintf("%d 0 0", nextItemGUID)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, 5863, ?, ?, 1, 0, '', 0, ?, 0, 0, 0, '')", nextItemGUID, s.playerGUID, s.playerGUID, enchantments)
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextItemGUID)
 	// PetitionsHandler.cpp:197-204: buying a new charter invalidates the
 	// owner's previous petition of the same type (RemovePetition). The

@@ -86,3 +86,25 @@ func (s *session) canInteractWithNPC(ctx context.Context, guid, requiredFlags ui
 	}
 	return requiredFlags == 0 || uint32(npcFlags)&uint32(requiredFlags) != 0
 }
+
+// creatureHasNPCFlag reports whether the creature behind guid carries the
+// given UNIT_NPC_FLAGS bit, using the same creature-template lookup as
+// canInteractWithNPC. Used for C++ branch checks (e.g. Creature::IsTabardDesigner
+// on an already-interacted-with petitioner) where the interact gate itself
+// used a different flag.
+func (s *session) creatureHasNPCFlag(ctx context.Context, guid uint64, flag uint32) bool {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || uint16(guid>>48) != 0xF130 {
+		return false
+	}
+	low := uint32(guid & 0x00FFFFFF)
+	entry := uint32((guid >> 24) & 0x00FFFFFF)
+	var npcFlags int64
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT t.npcflag FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ? LIMIT 1`, low, entry).Scan(&npcFlags)
+	if err != nil {
+		if missingTable(err) || isMissingColumn(err) {
+			return true
+		}
+		return false
+	}
+	return uint32(npcFlags)&flag != 0
+}
