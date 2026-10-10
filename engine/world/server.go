@@ -4724,6 +4724,38 @@ func (s *session) handleWorldStateUITimer() bool {
 	return s.write(uint16(protocol.OpcodeSMSG_WORLD_STATE_UI_TIMER_UPDATE), packet.Bytes(), true) == nil
 }
 
+// localHourTimestamp mirrors GetLocalHourTimestamp (Util.cpp:82): local
+// midnight plus the given hour, pushed one day forward unless strictly after t.
+func localHourTimestamp(t int64, hour uint8) int64 {
+	tm := time.Unix(t, 0).In(time.Local)
+	midnight := time.Date(tm.Year(), tm.Month(), tm.Day(), 0, 0, 0, 0, time.Local)
+	h := midnight.Add(time.Duration(hour) * time.Hour)
+	if h.Unix() <= t {
+		h = h.Add(24 * time.Hour)
+	}
+	return h.Unix()
+}
+
+// subsequentInstanceResetTime mirrors InstanceSaveManager::GetSubsequentResetTime
+// (InstanceSaveMgr.cpp): for an extended raid lockout the client is told the
+// reset AFTER the current one, not the current reset time. MapDifficulty.resetTime
+// is the DBC RaidDuration; RATE_INSTANCE_RESET_TIME (1.0) and
+// CONFIG_INSTANCE_RESET_TIME_HOUR (4) keep their defaults.
+func subsequentInstanceResetTime(srv *Server, mapID, difficulty uint32, resetTime int64) int64 {
+	const day = int64(86400)
+	const minute = int64(60)
+	diff, found, err := srv.Data.MapDifficulty(mapID, difficulty)
+	if err != nil || !found || diff.RaidDuration == 0 {
+		return 0
+	}
+	period := int64(float64(diff.RaidDuration)*1.0) / day * day
+	if period < day {
+		period = day
+	}
+	base := ((resetTime + minute) / day * day) + period
+	return localHourTimestamp(base, 4)
+}
+
 func (s *session) handleRequestRaidInfo(ctx context.Context) bool {
 	if !s.playerLoaded || s.player == nil {
 		return false
@@ -4739,7 +4771,7 @@ func (s *session) handleRequestRaidInfo(ctx context.Context) bool {
 		mapID      uint32
 		difficulty uint32
 		instanceID uint64
-		expired    uint8
+		notExpired uint8
 		extended   uint8
 		resetTime  uint32
 	}
@@ -4754,13 +4786,20 @@ func (s *session) handleRequestRaidInfo(ctx context.Context) bool {
 		for rows.Next() {
 			var mapID, diff, instID, extendState, resetTime int64
 			if err := rows.Scan(&mapID, &diff, &instID, &extendState, &resetTime); err == nil {
-				rem := int64(0)
-				if resetTime > now {
-					rem = resetTime - now
+				// Player::SendRaidInfo (Player.cpp:19227-19235): an extended
+				// lockout reports the subsequent reset, not the current one.
+				nextReset := resetTime
+				if extendState == 2 { // EXTEND_STATE_EXTENDED
+					nextReset = subsequentInstanceResetTime(s.server, uint32(mapID), uint32(diff), resetTime)
 				}
-				expired := uint8(0)
-				if rem == 0 && extendState != 2 { // 2 = EXTEND_STATE_EXTENDED
-					expired = 1
+				// The remaining time is written unclamped — C++ emits
+				// uint32(nextReset - now), which wraps when the reset passed.
+				rem := uint32(nextReset - now)
+				// The "not expired" byte is state-based: 1 unless the bind is
+				// EXTEND_STATE_EXPIRED (Player.cpp:19231), not time-based.
+				notExpired := uint8(0)
+				if extendState != 0 {
+					notExpired = 1
 				}
 				extended := uint8(0)
 				if extendState == 2 {
@@ -4770,9 +4809,9 @@ func (s *session) handleRequestRaidInfo(ctx context.Context) bool {
 					mapID:      uint32(mapID),
 					difficulty: uint32(diff),
 					instanceID: uint64(instID),
-					expired:    expired,
+					notExpired: notExpired,
 					extended:   extended,
-					resetTime:  uint32(rem),
+					resetTime:  rem,
 				})
 			}
 		}
@@ -4785,7 +4824,7 @@ func (s *session) handleRequestRaidInfo(ctx context.Context) bool {
 		packet.WriteU32(l.mapID)
 		packet.WriteU32(l.difficulty)
 		packet.WriteU64(l.instanceID)
-		packet.WriteU8(1 - l.expired) // 1 = not expired, 0 = expired (Player.cpp:19231)
+		packet.WriteU8(l.notExpired)
 		packet.WriteU8(l.extended)
 		packet.WriteU32(l.resetTime)
 	}

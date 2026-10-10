@@ -2259,7 +2259,12 @@ func (s *session) handleInstanceLockResponse(ctx context.Context, payload []byte
 					}
 				}
 				_, _ = cdb.ExecContext(ctx, "DELETE FROM character_instance WHERE guid = ? AND instance = ?", s.playerGUID, instanceID)
-				_, _ = cdb.ExecContext(ctx, "INSERT INTO character_instance (guid, instance, permanent, extendState) VALUES (?, ?, 1, 0)", s.playerGUID, instanceID)
+				// Player::BindToInstance(InstanceSave*, true, EXTEND_STATE_KEEP)
+				// (Player.cpp:19121): for a new bind the KEEP flag resolves to
+				// EXTEND_STATE_NORMAL (1) — the stored state must be 1, never 0
+				// (EXTEND_STATE_EXPIRED, which would make SendRaidInfo report the
+				// just-accepted lockout as expired).
+				_, _ = cdb.ExecContext(ctx, "INSERT INTO character_instance (guid, instance, permanent, extendState) VALUES (?, ?, 1, 1)", s.playerGUID, instanceID)
 			}
 			s.sendCalendarRaidLockout(mapID, difficulty, resetTime, instanceID, true)
 		}
@@ -2292,28 +2297,33 @@ func (s *session) handleSetSavedInstanceExtend(ctx context.Context, payload []by
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
-		var extendState int = 0
-		if toggleExtend != 0 {
-			extendState = 2 // EXTEND_STATE_EXTENDED
+		// CalendarHandler.cpp:793-800: GetBoundInstance(mapId, difficulty,
+		// includeExpired = toggleExtend == 1) — the bind must exist and be
+		// permanent, otherwise the toggle is a silent no-op.
+		var curState, permanent int64
+		err := cdb.QueryRowContext(ctx, `SELECT ci.extendState, ci.permanent 
+			FROM character_instance ci JOIN instance i ON i.id = ci.instance 
+			WHERE ci.guid = ? AND i.map = ? AND i.difficulty = ?`,
+			s.playerGUID, mapID, difficulty).Scan(&curState, &permanent)
+		if err != nil || permanent == 0 {
+			return true
+		}
+		// CalendarHandler.cpp:802-806: !toggleExtend or an already-expired
+		// bind resolves to EXTEND_STATE_NORMAL (1); toggling extend on from
+		// NORMAL goes to EXTEND_STATE_EXTENDED (2). Note toggle-off is NORMAL,
+		// not EXPIRED — the old code wrote 0 here, which made SendRaidInfo
+		// report the lockout as expired.
+		newState := int64(2)
+		if toggleExtend == 0 || curState == 0 {
+			newState = 1
 		}
 		_, _ = cdb.ExecContext(ctx, `UPDATE character_instance SET extendState = ? 
 			WHERE guid = ? AND instance IN (SELECT id FROM instance WHERE map = ? AND difficulty = ?)`,
-			extendState, s.playerGUID, mapID, difficulty)
-
-		var resetTime int64
-		_ = cdb.QueryRowContext(ctx, `SELECT i.resettime 
-			FROM instance i JOIN character_instance ci ON ci.instance = i.id 
-			WHERE ci.guid = ? AND i.map = ? AND i.difficulty = ?`,
-			s.playerGUID, mapID, difficulty).Scan(&resetTime)
-
-		rem := uint32(0)
-		now := time.Now().Unix()
-		if resetTime > now {
-			rem = uint32(resetTime - now)
-		}
-
-		s.sendCalendarRaidLockoutUpdated(mapID, difficulty, rem)
-		_ = s.handleRequestRaidInfo(ctx)
+			newState, s.playerGUID, mapID, difficulty)
+		// The C++ handler ends here — BindToInstance writes the row and fires
+		// OnPlayerBindToInstance (no Go hook); it sends no calendar or raid
+		// packets (the SendCalendarRaidLockoutUpdated call in the old code was
+		// Go-only behavior with no C++ source).
 	}
 	return true
 }
