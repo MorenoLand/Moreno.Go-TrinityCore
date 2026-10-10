@@ -1767,7 +1767,11 @@ func (s *session) handleNextCinematicCamera() bool {
 }
 
 func (s *session) handleOpeningCinematic() bool {
-	if !s.playerLoaded || s.player == nil || s.player.Cinematic != 0 {
+	// Reference: WorldSession::HandleOpeningCinematic (CharacterHandler.cpp:2223):
+	// only players that have not yet gained any experience can use this
+	// (PLAYER_XP must be 0); the Go Cinematic flag additionally prevents
+	// repeats after the first play.
+	if !s.playerLoaded || s.player == nil || s.player.Cinematic != 0 || s.player.XP != 0 {
 		return true
 	}
 	s.player.Cinematic = 1
@@ -2513,7 +2517,20 @@ func (s *session) handleCharCustomize(ctx context.Context, payload []byte) bool 
 		sendCustomize(charNameFailure, false)
 		return true
 	}
-	// Reserved-name table has no Go bridge (standing delta).
+	// ObjectMgr::IsReservedName (ObjectMgr.cpp:8515-8524): lowercased exact
+	// match against the reserved_name rows C++ loads from the characters DB
+	// (ObjectMgr.cpp:8482), gated on
+	// RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RESERVEDNAME
+	// (CharacterHandler.cpp:1445-1448). C++ answers CHAR_NAME_RESERVED (95)
+	// on a match; the gate sits between the name-validity check and the
+	// name-in-use check in both trees.
+	if !s.skipReservedNameCheck {
+		var reserved int
+		if err := store.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM reserved_name WHERE name = ?", strings.ToLower(newName)).Scan(&reserved); err == nil && reserved > 0 {
+			sendCustomize(charNameReserved, false)
+			return true
+		}
+	}
 	if nrow, nerr := store.QueryRowStatement(ctx, database.StatementID("CHAR_SEL_CHECK_NAME"), newName); nerr == nil {
 		var one int
 		if nrow.Scan(&one) == nil && newName != oldName {

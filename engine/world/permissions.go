@@ -136,6 +136,10 @@ const permissionTwoSideWhoList uint32 = 28
 // permissionTwoSideAddFriend mirrors rbac::RBAC_PERM_TWO_SIDE_ADD_FRIEND (RBAC.h:82).
 const permissionTwoSideAddFriend uint32 = 29
 
+// permissionSkipCheckCharacterCreationReservedName mirrors
+// rbac::RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RESERVEDNAME (RBAC.h:70).
+const permissionSkipCheckCharacterCreationReservedName uint32 = 17
+
 // permissionSilentlyJoinChannel mirrors rbac::RBAC_PERM_SILENTLY_JOIN_CHANNEL (RBAC.h:98).
 const permissionSilentlyJoinChannel uint32 = 45
 

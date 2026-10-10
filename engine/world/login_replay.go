@@ -614,6 +614,9 @@ func newReplayCharacterSession(ctx context.Context, server *Server, guid uint64)
 		if permission, err := accountHasPermission(ctx, server.AuthStore.DB, sess.accountID, server.RealmID, sess.security, permissionAllowGMFriend); err == nil {
 			sess.allowGMFriend = permission
 		}
+		if permission, err := accountHasPermission(ctx, server.AuthStore.DB, sess.accountID, server.RealmID, sess.security, permissionSkipCheckCharacterCreationReservedName); err == nil {
+			sess.skipReservedNameCheck = permission
+		}
 	}
 	return sess, nil
 }

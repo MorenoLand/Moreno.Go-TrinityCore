@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -1083,6 +1084,20 @@ func readChannelCommand(payload []byte) (string, string, bool) {
 	return name, target, true
 }
 
+// normalizeChannelTargetName mirrors ObjectMgr::normalizePlayerName's failure
+// arms (ObjectMgr.cpp:141-149): empty or invalid-UTF-8 names fail, and the
+// nine WorldSession::HandleChannel* command handlers (SetOwner, Moderator,
+// Unmoderator, Mute, Unmute, Invite, Kick, Ban, Unban — ChannelHandler.cpp
+// :164/:191/:206/:221/:236/:251/:266/:281/:296) silent-return on that failure
+// before any channel lookup. Name lookups stay case-insensitive, so the
+// title-case normalization only affects the echoed name.
+func normalizeChannelTargetName(name string) (string, bool) {
+	if name == "" || !utf8.ValidString(name) {
+		return "", false
+	}
+	return normalizePlayerName(name), true
+}
+
 // handleChannelPassword processes CMSG_CHANNEL_PASSWORD (0x09C).
 // Reference: ChannelHandler.cpp HandleChannelPassword -> Channel::Password.
 func (s *session) handleChannelPassword(ctx context.Context, payload []byte) bool {
@@ -1136,6 +1151,9 @@ func (s *session) handleChannelSetOwner(ctx context.Context, payload []byte) boo
 	name, targetName, ok := readChannelCommand(payload)
 	if !ok {
 		return false
+	}
+	if targetName, ok = normalizeChannelTargetName(targetName); !ok {
+		return true
 	}
 	s.server.channelsMu.Lock()
 	ch := s.server.channels[s.scopedChannelKey(name)]
@@ -1237,6 +1255,9 @@ func (s *session) channelSetMode(payload []byte, moderator, set bool) bool {
 	if !ok {
 		return false
 	}
+	if targetName, ok = normalizeChannelTargetName(targetName); !ok {
+		return true
+	}
 	s.server.channelsMu.Lock()
 	ch := s.server.channels[s.scopedChannelKey(name)]
 	if ch == nil {
@@ -1335,6 +1356,9 @@ func (s *session) handleChannelInvite(ctx context.Context, payload []byte) bool 
 	name, targetName, ok := readChannelCommand(payload)
 	if !ok {
 		return false
+	}
+	if targetName, ok = normalizeChannelTargetName(targetName); !ok {
+		return true
 	}
 	s.server.channelsMu.RLock()
 	ch := s.server.channels[s.scopedChannelKey(name)]
@@ -1451,6 +1475,9 @@ func (s *session) channelKickBan(payload []byte, ban bool) bool {
 	if !ok {
 		return false
 	}
+	if targetName, ok = normalizeChannelTargetName(targetName); !ok {
+		return true
+	}
 	s.server.channelsMu.Lock()
 	ch := s.server.channels[s.scopedChannelKey(name)]
 	if ch == nil {
@@ -1547,6 +1574,9 @@ func (s *session) handleChannelUnban(ctx context.Context, payload []byte) bool {
 	name, targetName, ok := readChannelCommand(payload)
 	if !ok {
 		return false
+	}
+	if targetName, ok = normalizeChannelTargetName(targetName); !ok {
+		return true
 	}
 	s.server.channelsMu.Lock()
 	ch := s.server.channels[s.scopedChannelKey(name)]

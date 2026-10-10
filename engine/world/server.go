@@ -301,6 +301,10 @@ type session struct {
 	whoSeeAllSecurityLevels bool
 	twoSideAddFriend        bool
 	allowGMFriend           bool
+	// skipReservedNameCheck caches rbac::RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RESERVEDNAME
+	// (RBAC.h:70) at auth time; the char-customize handler answers CHAR_NAME_RESERVED
+	// without it (CharacterHandler.cpp:1445).
+	skipReservedNameCheck bool
 	// ignoreIdleTimeout caches rbac::RBAC_PERM_IGNORE_IDLE_CONNECTION (RBAC.h:60)
 	// at auth time so the idle-connection sweeper needs no per-tick DB lookup,
 	// mirroring WorldSession::Update's HasPermission check (WorldSession.cpp:290).
@@ -3803,6 +3807,10 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	if s.allowGMFriend, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionAllowGMFriend); err != nil {
 		s.allowGMFriend = false
 		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionAllowGMFriend, "error", err)
+	}
+	if s.skipReservedNameCheck, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionSkipCheckCharacterCreationReservedName); err != nil {
+		s.skipReservedNameCheck = false
+		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionSkipCheckCharacterCreationReservedName, "error", err)
 	}
 	s.accountExpansion = account.Expansion
 	s.debug("world authentication accepted", "account", accountName, "build", build, "expansion", s.accountExpansion, "gm_chat", s.gmChat, "two_side_chat", s.twoSideChat, "remote", remoteAddress(s.conn))
