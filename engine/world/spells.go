@@ -192,6 +192,18 @@ const (
 	itemSubclassWeaponGun                       = 3     // ITEM_SUBCLASS_WEAPON_GUN (ItemTemplate.h:352)
 	itemSubclassWeaponCrossbow                  = 18    // ITEM_SUBCLASS_WEAPON_CROSSBOW (ItemTemplate.h:367)
 	itemSubclassWeaponDagger                    = 15    // ITEM_SUBCLASS_WEAPON_DAGGER (ItemTemplate.h:364)
+	itemSubclassWeaponAxe                       = 0     // ITEM_SUBCLASS_WEAPON_AXE (ItemTemplate.h:349)
+	itemSubclassWeaponAxe2                      = 1     // ITEM_SUBCLASS_WEAPON_AXE2 (ItemTemplate.h:350)
+	itemSubclassWeaponMace                      = 4     // ITEM_SUBCLASS_WEAPON_MACE (ItemTemplate.h:353)
+	itemSubclassWeaponMace2                     = 5     // ITEM_SUBCLASS_WEAPON_MACE2 (ItemTemplate.h:354)
+	itemSubclassWeaponPolearm                   = 6     // ITEM_SUBCLASS_WEAPON_POLEARM (ItemTemplate.h:355)
+	itemSubclassWeaponSword                     = 7     // ITEM_SUBCLASS_WEAPON_SWORD (ItemTemplate.h:356)
+	itemSubclassWeaponSword2                    = 8     // ITEM_SUBCLASS_WEAPON_SWORD2 (ItemTemplate.h:357)
+	itemSubclassWeaponStaff                     = 10    // ITEM_SUBCLASS_WEAPON_STAFF (ItemTemplate.h:359)
+	itemSubclassWeaponExotic                    = 11    // ITEM_SUBCLASS_WEAPON_EXOTIC (ItemTemplate.h:360)
+	itemSubclassWeaponExotic2                   = 12    // ITEM_SUBCLASS_WEAPON_EXOTIC2 (ItemTemplate.h:361)
+	itemSubclassWeaponFist                      = 13    // ITEM_SUBCLASS_WEAPON_FIST (ItemTemplate.h:362)
+	itemSubclassWeaponFishingPole               = 20    // ITEM_SUBCLASS_WEAPON_FISHING_POLE (ItemTemplate.h:369)
 	itemClassProjectile                  uint32 = 6     // ITEM_CLASS_PROJECTILE (ItemTemplate.h:302)
 	itemSubclassArrow                    uint32 = 2     // ITEM_SUBCLASS_ARROW (ItemTemplate.h:421)
 	itemSubclassBullet                   uint32 = 3     // ITEM_SUBCLASS_BULLET (ItemTemplate.h:422)
@@ -476,6 +488,14 @@ const (
 	spellAuraModSpellCritChanceSchool              = 71  // SPELL_AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL (SpellAuraDefines.h:151)
 	spellAuraModCritPct                            = 290 // SPELL_AURA_MOD_CRIT_PCT (SpellAuraDefines.h:370)
 	spellAuraRangedAttackPowerAttackerBonus        = 127 // SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS (SpellAuraDefines.h:207)
+	spellAuraModDamageDoneCreature                 = 59  // SPELL_AURA_MOD_DAMAGE_DONE_CREATURE (SpellAuraDefines.h:139)
+	spellAuraModMeleeAttackPowerVersus             = 102 // SPELL_AURA_MOD_MELEE_ATTACK_POWER_VERSUS (SpellAuraDefines.h:182)
+	spellAuraModRangedDamageTaken                  = 113 // SPELL_AURA_MOD_RANGED_DAMAGE_TAKEN (SpellAuraDefines.h:193)
+	spellAuraModRangedDamageTakenPct               = 114 // SPELL_AURA_MOD_RANGED_DAMAGE_TAKEN_PCT (SpellAuraDefines.h:194)
+	spellAuraModMeleeDamageTaken                   = 125 // SPELL_AURA_MOD_MELEE_DAMAGE_TAKEN (SpellAuraDefines.h:205)
+	spellAuraModMeleeDamageTakenPct                = 126 // SPELL_AURA_MOD_MELEE_DAMAGE_TAKEN_PCT (SpellAuraDefines.h:206)
+	spellAuraModRangedAttackPowerVersus            = 131 // SPELL_AURA_MOD_RANGED_ATTACK_POWER_VERSUS (SpellAuraDefines.h:211)
+	spellAuraMeleeAttackPowerAttackerBonus         = 165 // SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS (SpellAuraDefines.h:245)
 	spellAuraFly                                   = 201 // SPELL_AURA_FLY (SpellAuraDefines.h:281)
 	spellAuraWaterWalk                             = 104 // SPELL_AURA_WATER_WALK (SpellAuraDefines.h:184)
 	spellAuraFeatherFall                           = 105 // SPELL_AURA_FEATHER_FALL (SpellAuraDefines.h:185)
@@ -10667,6 +10687,13 @@ func (s *session) victimDamageTakenFlat(spell wotlk.Spell, targetGUID uint64, ta
 	if spell.SchoolMask == 0 || s.server == nil {
 		return 0
 	}
+	// Unit::MeleeDamageBonusDone (Unit.cpp:7996) has no MOD_DAMAGE_TAKEN arm:
+	// for weapon-damage spells the aura-14 flat rides the taken side
+	// (meleeWeaponDamageTaken), matching Unit::MeleeDamageBonusTaken
+	// (Unit.cpp:8163).
+	if spellHasWeaponDamageEffect(spell) {
+		return 0
+	}
 	if vs := s.server.findSessionByGUID(targetGUID); vs != nil && vs.player != nil {
 		for _, amt := range vs.auraTypeModifiersByMiscMask(auraModDamageTaken, spell.SchoolMask) {
 			total += amt
@@ -10711,6 +10738,14 @@ func (s *session) spellDamageDoneFlat(ctx context.Context, spell wotlk.Spell, ta
 				flat += amt
 			}
 		}
+	}
+	// Unit::MeleeDamageBonusDone flat half (Unit.cpp:8003-8034): weapon-damage
+	// spells take the melee flat arms — MOD_DAMAGE_DONE_CREATURE and the
+	// attack-power-attacker-bonus leg — on top of the shared fold. (The
+	// spell-power advertised benefit above is the standing pipeline delta:
+	// C++ EffectWeaponDmg never calls SpellDamageBonusDone.)
+	if spellHasWeaponDamageEffect(spell) {
+		flat += s.weaponDamageDoneFlatBonus(ctx, spell, targetGUID, target)
 	}
 	return flat
 }
@@ -10782,6 +10817,16 @@ func (s *session) spellDamagePctClassScripts(ctx context.Context, spell wotlk.Sp
 				}
 			} else if s.targetHasAura(ctx, targetGUID, 55095) { // Tundra Stalker: Frost Fever
 				addPct(ae.amount)
+			}
+		case 7293: // Rage of Rivendare: rank*2% when the victim carries a DK disease
+			if s.targetHasDKDiseaseDot(ctx, targetGUID) {
+				rank := uint32(1)
+				if s.server != nil && s.server.Data != nil {
+					if cost, err := s.server.Data.TalentSpellCost(ae.spellID); err == nil && cost > 0 {
+						rank = cost
+					}
+				}
+				addPct(int32(rank * 2))
 			}
 		case 7377: // Twisted Faith: Shadow Word: Pain on the victim
 			if s.targetHasFamilyAuraEffect(ctx, targetGUID, spellAuraPeriodicDamage, spellFamilyPriest, 0x8000) {
@@ -11366,7 +11411,239 @@ func spellDamageBonusTaken(damage uint32, spell wotlk.Spell, schoolMask uint32, 
 	return uint32(result)
 }
 
-// creatureAuraModifierSum mirrors Unit::GetTotalAuraModifier (Unit.cpp:4883):
+// spellHasWeaponDamageEffect reports whether the spell carries a weapon-damage
+// effect handled by Spell::EffectWeaponDmg (SpellEffects.cpp:3171): 58/17/31/121.
+// The Go weapon dispatch routes all four through the same flat BasePoints+1
+// treatment, so all four count as weapon spells for the melee bonus legs.
+func spellHasWeaponDamageEffect(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		switch eff.Effect {
+		case spellEffectWeaponDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectNormalizedWeaponDmg:
+			return true
+		}
+	}
+	return false
+}
+
+// meleeWeaponDamageTaken mirrors the MeleeDamageBonusTaken-only arms of
+// Unit::MeleeDamageBonusTaken (Unit.cpp:8154-8230) for weapon-damage spells:
+// the flat MOD_DAMAGE_TAKEN (misc mask = attacker melee school; the spell
+// school is used here — weapon spells are physical, so the masks coincide)
+// plus MOD_MELEE_DAMAGE_TAKEN (125) / MOD_RANGED_DAMAGE_TAKEN (113), with the
+// negative-flat clamp, then the MOD_MELEE_DAMAGE_TAKEN_PCT (126) /
+// MOD_RANGED_DAMAGE_TAKEN_PCT (114) product. The mechanic / Cheat Death /
+// MOD_DAMAGE_PERCENT_TAKEN / from-caster / Sanctified Wrath arms are shared
+// with SpellDamageBonusTaken and keep riding spellDamageBonusTaken, which this
+// runs ahead of so the flat lands before every percent multiplier, matching
+// the C++ order. Call only for weapon-damage spells.
+func (s *session) meleeWeaponDamageTaken(ctx context.Context, damage uint32, schoolMask uint32, targetGUID uint64, target combatTarget, ranged bool) uint32 {
+	if s == nil || s.server == nil || damage == 0 {
+		return damage
+	}
+	flatAura, pctAura := uint32(spellAuraModMeleeDamageTaken), uint32(spellAuraModMeleeDamageTakenPct)
+	if ranged {
+		flatAura, pctAura = uint32(spellAuraModRangedDamageTaken), uint32(spellAuraModRangedDamageTakenPct)
+	}
+	var flat int32
+	var pcts []int32
+	if vs := s.server.findSessionByGUID(targetGUID); vs != nil && vs.player != nil {
+		for _, amt := range vs.auraTypeModifiersByMiscMask(auraModDamageTaken, schoolMask) {
+			flat += amt
+		}
+		for _, amt := range vs.auraTypeModifiers(flatAura) {
+			flat += amt
+		}
+		pcts = vs.auraTypeModifiers(pctAura)
+	} else if target.GUID != 0 {
+		key := creatureAuraKeyForTarget(target)
+		for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, auraModDamageTaken, schoolMask) {
+			flat += amt
+		}
+		flat += creatureAuraModifierSum(s.server, key, flatAura)
+		// 114/126 carry no misc filter in C++ (GetTotalAuraMultiplier with no
+		// predicate); the all-bits mask folds every effect with a nonzero
+		// MiscValue, which is the whole population for these aura types.
+		pcts = creatureAuraModifiersByMiscMask(s.server, key, pctAura, 0xFFFFFFFF)
+	}
+	// Unit.cpp:8171-8172: a negative flat benefit larger than the damage zeroes it.
+	if flat < 0 && damage < uint32(-flat) {
+		return 0
+	}
+	result := int64(damage) + int64(flat)
+	if result < 0 {
+		result = 0
+	}
+	mod := 1.0
+	for _, amt := range pcts {
+		mod *= 1 + float64(amt)/100
+	}
+	result = int64(float64(result) * mod)
+	if result < 0 {
+		return 0
+	}
+	return uint32(result)
+}
+
+// weaponDamageDoneFlatBonus mirrors the flat half of Unit::MeleeDamageBonusDone
+// (Unit.cpp:7996-8036) for weapon-damage spells: MOD_DAMAGE_DONE_CREATURE (59,
+// misc mask = victim creature-type mask) plus the attack-power-attacker-bonus
+// leg — the victim's MELEE (165) / RANGED (127) ATTACK_POWER_ATTACKER_BONUS
+// auras and the MOD_MELEE (102) / MOD_RANGED (131) ATTACK_POWER_VERSUS auras
+// (misc mask = victim creature-type mask), folded as
+// int32(APbonus / 14 * GetAPMultiplier(attType, normalized)) (Unit.cpp:8033).
+// The percent half (DoneTotalMod) rides the shared spellDamagePctDone fold —
+// MOD_DAMAGE_PERCENT_DONE, MOD_DAMAGE_DONE_VERSUS (168) and
+// MOD_DAMAGE_DONE_VERSUS_AURASTATE (303) are identical arms in both C++
+// functions — and the class-script arms ride spellDamagePctClassScripts.
+func (s *session) weaponDamageDoneFlatBonus(ctx context.Context, spell wotlk.Spell, targetGUID uint64, target combatTarget) int32 {
+	if s == nil || s.server == nil {
+		return 0
+	}
+	var total int32
+	typMask, typOK := s.targetCreatureTypeMask(ctx, targetGUID)
+	if typOK && typMask != 0 {
+		for _, amt := range s.auraTypeModifiersByMiscMask(spellAuraModDamageDoneCreature, typMask) {
+			total += amt
+		}
+	}
+	ranged := isRangedWeaponSpell(spell)
+	bonusAura, versusAura := uint32(spellAuraMeleeAttackPowerAttackerBonus), uint32(spellAuraModMeleeAttackPowerVersus)
+	if ranged {
+		bonusAura, versusAura = uint32(spellAuraRangedAttackPowerAttackerBonus), uint32(spellAuraModRangedAttackPowerVersus)
+	}
+	victimAuraSum := func(auraType uint32, miscMask uint32, filtered bool) int32 {
+		var sum int32
+		if vs := s.server.findSessionByGUID(targetGUID); vs != nil && vs.player != nil {
+			if filtered {
+				for _, amt := range vs.auraTypeModifiersByMiscMask(auraType, miscMask) {
+					sum += amt
+				}
+			} else {
+				for _, amt := range vs.auraTypeModifiers(auraType) {
+					sum += amt
+				}
+			}
+			return sum
+		}
+		if target.GUID != 0 {
+			key := creatureAuraKeyForTarget(target)
+			if filtered {
+				for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, auraType, miscMask) {
+					sum += amt
+				}
+			} else {
+				sum += creatureAuraModifierSum(s.server, key, auraType)
+			}
+		}
+		return sum
+	}
+	apBonus := victimAuraSum(bonusAura, 0, false)
+	if typOK && typMask != 0 {
+		apBonus += victimAuraSum(versusAura, typMask, true)
+	}
+	if apBonus != 0 {
+		normalized := false
+		for _, eff := range spell.Effects {
+			if eff.Effect == spellEffectNormalizedWeaponDmg {
+				normalized = true
+				break
+			}
+		}
+		total += int32(float64(apBonus) / 14.0 * s.attackPowerMultiplier(ctx, ranged, normalized))
+	}
+	return total
+}
+
+// attackPowerMultiplier mirrors Unit::GetAPMultiplier (Unit.cpp:11034-11071):
+// the weapon-speed factor converting attack-power bonus into flat weapon
+// damage. Non-normalized swings use the equipped weapon's delay; normalized
+// swings use the subclass table (3.3/2.8/2.4/1.7); a missing or broken weapon
+// (equippedWeaponInstance reports broken weapons as absent, a Go-only carve-out)
+// falls back to BASE_ATTACK_TIME/1000 = 2.0 like the C++ !weapon arm. Feral
+// forms without normalization use the live attack time. The caster on this
+// path is always the player session, so the TYPEID_PLAYER arm is the live one.
+func (s *session) attackPowerMultiplier(ctx context.Context, ranged, normalized bool) float64 {
+	const baseAttackTimeMs = 2000.0
+	if s == nil || s.player == nil {
+		return baseAttackTimeMs / 1000.0
+	}
+	form := s.player.ShapeshiftForm
+	feral := form == 1 || form == 5 || form == 8 // FORM_CAT, FORM_BEAR, FORM_DIREBEAR
+	attackTime, slot := s.player.AttackTime, equipSlotMainhand
+	if ranged {
+		attackTime, slot = s.player.RangedAttackTime, equipSlotRanged
+	}
+	if feral && !normalized {
+		if attackTime == 0 {
+			return baseAttackTimeMs / 1000.0
+		}
+		return float64(attackTime) / 1000.0
+	}
+	if s.server == nil {
+		return baseAttackTimeMs / 1000.0
+	}
+	_, entry := s.equippedWeaponInstance(ctx, slot)
+	if entry == 0 {
+		return baseAttackTimeMs / 1000.0
+	}
+	tmpl, ok := s.server.getItemStoreTemplateInfo(ctx, entry)
+	if !ok {
+		return baseAttackTimeMs / 1000.0
+	}
+	if !normalized {
+		if tmpl.Delay == 0 {
+			return baseAttackTimeMs / 1000.0
+		}
+		return float64(tmpl.Delay) / 1000.0
+	}
+	switch tmpl.SubClass {
+	case itemSubclassWeaponAxe2, itemSubclassWeaponMace2, itemSubclassWeaponPolearm,
+		itemSubclassWeaponSword2, itemSubclassWeaponStaff, itemSubclassWeaponFishingPole:
+		return 3.3
+	case itemSubclassWeaponBow, itemSubclassWeaponGun, itemSubclassWeaponCrossbow, itemSubclassWeaponThrown:
+		return 2.8
+	case itemSubclassWeaponAxe, itemSubclassWeaponMace, itemSubclassWeaponSword,
+		itemSubclassWeaponExotic, itemSubclassWeaponExotic2, itemSubclassWeaponFist:
+		return 2.4
+	case itemSubclassWeaponDagger:
+		return 1.7
+	default:
+		if tmpl.Delay == 0 {
+			return baseAttackTimeMs / 1000.0
+		}
+		return float64(tmpl.Delay) / 1000.0
+	}
+}
+
+// targetHasDKDiseaseDot mirrors the victim half of the Rage of Rivendare arm
+// (Unit.cpp:6872-6877, melee twin 8108-8113): the victim carries a
+// SPELL_AURA_PERIODIC_DAMAGE aura of the death-knight family with
+// SpellFamilyFlags[1] & 0x02000000 (the disease flag word).
+func (s *session) targetHasDKDiseaseDot(ctx context.Context, targetGUID uint64) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	for _, aura := range s.victimAurasForLookup(ctx, targetGUID) {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || auraSpell.SpellFamilyName != spellFamilyDeathKnight ||
+			auraSpell.SpellFamilyFlags[1]&0x02000000 == 0 {
+			continue
+		}
+		for index, eff := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if spellEffectIsAuraEffect(eff) && eff.Aura == spellAuraPeriodicDamage {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // the sum of amounts of all live effects of the given aura type on the
 // creature, with no misc-mask filter (the periodic-tick aura-197 term in
 // Unit::SpellCritChanceTaken, Unit.cpp:7228-7234, is unfiltered).
@@ -11826,6 +12103,13 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				// EffectSchoolDMG ordering (SpellEffects.cpp:785).
 				if !instantKill && damage > 0 && s.server != nil && s.server.Data != nil {
 					if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+						// Unit::MeleeDamageBonusTaken (Unit.cpp:8154): weapon-damage
+						// spells run the melee taken legs (flat 14/125/113 with the
+						// negative clamp, then the 126/114 pct) ahead of the shared
+						// SpellDamageBonusTaken pct arms, matching the C++ order.
+						if spellHasWeaponDamageEffect(spell) {
+							damage = s.meleeWeaponDamageTaken(ctx, damage, uint32(schoolMask), targetGUID, target, isRangedWeaponSpell(spell))
+						}
 						damage = spellDamageBonusTaken(damage, spell, uint32(schoolMask), playerSess, s)
 					}
 				}
@@ -11882,6 +12166,12 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			// on every target, not just players. Applied before absorption
 			// like the player path above.
 			if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+				// Unit::MeleeDamageBonusTaken (Unit.cpp:8154) on creature victims:
+				// the melee taken legs run ahead of the shared
+				// creatureSpellDamageBonusTaken pct arms, matching the C++ order.
+				if spellHasWeaponDamageEffect(spell) && damage > 0 {
+					damage = s.meleeWeaponDamageTaken(ctx, damage, uint32(schoolMask), targetGUID, target, isRangedWeaponSpell(spell))
+				}
 				damage = creatureSpellDamageBonusTaken(s.server, damage, spell, uint32(schoolMask), creatureAuraKeyForTarget(target), s)
 			}
 			// Unit::CalculateSpellDamageTaken block arm (Unit.cpp:1013-1062):
@@ -22996,6 +23286,7 @@ type itemStoreTemplateInfo struct {
 	SpellTriggers           [5]uint32
 	SpellCharges            [5]uint32
 	RangedModRange          float32
+	Delay                   uint32
 }
 
 // getItemStoreTemplateInfo is a cached item_template lookup for the
@@ -23020,6 +23311,7 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 	}
 	var stackable, limitCategory, itemLevel, requiredLevel uint32
 	var class, subclass, quality, disenchantID, flags, requiredSkillRank, maxDurability uint32
+	var delay uint32
 	// RequiredDisenchantSkill defaults to -1 in the world item_template
 	// table; scan signed so the negative value survives, then convert to
 	// uint32 exactly like the C++ loader does (ItemTemplate.h), so the
@@ -23042,7 +23334,8 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 		COALESCE(spellid_5, 0), COALESCE(spelltrigger_5, 0),
 		COALESCE(spellcharges_1, 0), COALESCE(spellcharges_2, 0),
 		COALESCE(spellcharges_3, 0), COALESCE(spellcharges_4, 0),
-		COALESCE(spellcharges_5, 0), COALESCE(RangedModRange, 0)
+		COALESCE(spellcharges_5, 0), COALESCE(RangedModRange, 0),
+		COALESCE(delay, 0)
 		FROM item_template WHERE entry = ? LIMIT 1`, entry).Scan(
 		&stackable, &limitCategory, &itemLevel, &requiredLevel,
 		&class, &subclass, &quality, &requiredDisenchantSkill, &disenchantID,
@@ -23054,7 +23347,7 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 		&spellIDs[3], &spellTriggers[3],
 		&spellIDs[4], &spellTriggers[4],
 		&spellCharges[0], &spellCharges[1], &spellCharges[2],
-		&spellCharges[3], &spellCharges[4], &rangedModRange)
+		&spellCharges[3], &spellCharges[4], &rangedModRange, &delay)
 	if err != nil {
 		return itemStoreTemplateInfo{}, false
 	}
@@ -23064,7 +23357,7 @@ func (s *Server) getItemStoreTemplateInfo(ctx context.Context, entry uint32) (it
 		RequiredDisenchantSkill: uint32(requiredDisenchantSkill), DisenchantID: disenchantID,
 		Flags: flags, RequiredSkillRank: requiredSkillRank, MaxDurability: maxDurability,
 		SocketColors: socketColors, SpellIDs: spellIDs, SpellTriggers: spellTriggers,
-		SpellCharges: spellCharges, RangedModRange: float32(rangedModRange)}
+		SpellCharges: spellCharges, RangedModRange: float32(rangedModRange), Delay: delay}
 	s.itemStoreTemplateMu.Lock()
 	if s.itemStoreTemplates == nil {
 		s.itemStoreTemplates = make(map[uint32]itemStoreTemplateInfo)
