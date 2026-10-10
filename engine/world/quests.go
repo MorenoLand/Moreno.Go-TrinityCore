@@ -1027,6 +1027,13 @@ func (s *session) canCompleteQuest(ctx context.Context, questID uint32) bool {
 	if uint32(flags)&questAutoCompleteFlags != 0 {
 		return true
 	}
+	// Player::CanCompleteQuest (Player.cpp:14979): the autocomplete arm uses
+	// Quest::IsAutoComplete (QuestDef.cpp:315) — Method == 0 also counts, not
+	// just the QUEST_FLAGS_AUTOCOMPLETE bit.
+	var method int64
+	if err := wdb.QueryRowContext(ctx, "SELECT COALESCE(Method, 0) FROM quest_template WHERE ID = ?", questID).Scan(&method); err == nil && method == 0 {
+		return true
+	}
 
 	// Check NPC/Creature/GO kill/cast counters against quest log slot
 	var entryCounters [4]uint16

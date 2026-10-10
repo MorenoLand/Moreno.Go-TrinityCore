@@ -97,11 +97,11 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	if err != nil {
 		return false
 	}
-	if status == questStatusIncomplete && s.canCompleteQuest(ctx, questID) {
-		s.completeQuest(ctx, questID)
-		status = questStatusComplete
-	}
-	if status != questStatusComplete && view.Detail.Flags&questAutoCompleteFlags == 0 {
+	// QuestHandler.cpp:293-300 — this packet never transitions quest state;
+	// the client confirms the turn-in through the request-reward packet first.
+	// A cheat client skipping that step is rejected here exactly like the C++
+	// gate (QUEST_STATUS_COMPLETE or Quest::IsAutoComplete, QuestDef.cpp:315).
+	if status != questStatusComplete && !s.questIsAutoComplete(ctx, questID, view.Detail.Flags) {
 		s.debug("quest reward rejected", "account", s.accountName, "quest", questID, "reason", "quest incomplete", "status", status)
 		return true
 	}

@@ -39,22 +39,38 @@ func (s *session) handleQuestgiverCompleteQuest(ctx context.Context, payload []b
 	if err != nil {
 		return false
 	}
-	if status == questStatusIncomplete && s.canCompleteQuest(ctx, questID) {
-		s.completeQuest(ctx, questID)
-		status = questStatusComplete
-	}
 	view, err := s.loadQuestRewardView(ctx, questID)
 	if err != nil {
 		return false
 	}
-	if status != questStatusComplete && s.isQuestRewarded(ctx, questID) {
-		return s.sendQuestRequestItems(view, giverGUID, false, false)
+	// QuestHandler.cpp:520-565 — this packet never changes quest state: the
+	// status transition happens only in the request-reward handler, gated by
+	// CanCompleteQuest (Player.cpp:14970), after the client confirms the
+	// turn-in from the RequestItems screen.
+	if status != questStatusComplete {
+		// QuestHandler.cpp:541-548: a repeatable quest that is not complete
+		// is offered RequestItems with CanCompleteRepeatableQuest; a
+		// non-repeatable is offered it with CanRewardQuest(quest,false),
+		// which fails the status gate here unless the quest auto-completes
+		// (modeled by the required-items check below).
+		if s.questIsRepeatable(ctx, questID) {
+			return s.sendQuestRequestItems(view, giverGUID, s.canCompleteRepeatableQuest(ctx, questID, view, true), false)
+		}
+		canComplete := s.questIsAutoComplete(ctx, questID, view.Detail.Flags)
+		if canComplete && len(view.RequiredItems) != 0 {
+			canComplete, err = s.hasQuestRequiredItems(ctx, view.RequiredItems)
+			if err != nil {
+				return false
+			}
+		}
+		s.debug("quest request items", "account", s.accountName, "entry", entry, "quest", questID, "complete", canComplete)
+		return s.sendQuestRequestItems(view, giverGUID, canComplete, false)
 	}
-	if status == 0 && view.Detail.Flags&questAutoCompleteFlags == 0 {
-		return true
-	}
-	canComplete := status == questStatusComplete || view.Detail.Flags&questAutoCompleteFlags != 0
-	if canComplete && len(view.RequiredItems) != 0 {
+	canComplete := true
+	if len(view.RequiredItems) != 0 {
+		// QuestHandler.cpp:556-560: with required items still outstanding the
+		// complete branch offers RequestItems (not OfferReward); the client
+		// confirms through the request-reward packet.
 		canComplete, err = s.hasQuestRequiredItems(ctx, view.RequiredItems)
 		if err != nil {
 			return false
@@ -66,6 +82,36 @@ func (s *session) handleQuestgiverCompleteQuest(ctx context.Context, payload []b
 	}
 	s.debug("quest request items", "account", s.accountName, "entry", entry, "quest", questID, "complete", canComplete)
 	return s.sendQuestRequestItems(view, giverGUID, canComplete, false)
+}
+
+// questIsRepeatable mirrors Quest::IsRepeatable (QuestDef.h:284):
+// SpecialFlags & QUEST_SPECIAL_FLAGS_REPEATABLE (0x001), read from
+// quest_template_addon like the push-to-party arm in quests.go.
+func (s *session) questIsRepeatable(ctx context.Context, questID uint32) bool {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	var specialFlags int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags); err != nil {
+		return false
+	}
+	return specialFlags&questSpecialRepeatable != 0
+}
+
+// questIsAutoComplete mirrors Quest::IsAutoComplete (QuestDef.cpp:315):
+// Method == 0 (the default) or the QUEST_FLAGS_AUTOCOMPLETE bit in Flags.
+func (s *session) questIsAutoComplete(ctx context.Context, questID uint32, flags uint32) bool {
+	if flags&questAutoCompleteFlags != 0 {
+		return true
+	}
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	var method int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(Method, 0) FROM quest_template WHERE ID = ?", questID).Scan(&method); err != nil {
+		return false
+	}
+	return method == 0
 }
 
 func (s *session) handleQuestgiverRequestReward(ctx context.Context, payload []byte) bool {
@@ -85,7 +131,12 @@ func (s *session) handleQuestgiverRequestReward(ctx context.Context, payload []b
 	if err != nil {
 		return false
 	}
-	if status == questStatusIncomplete && s.canCompleteQuest(ctx, questID) {
+	// QuestHandler.cpp:385 — the transition is gated by CanCompleteQuest
+	// (Player.cpp:14970) alone, not by the current status: the autocomplete
+	// arm completes quests that were never accepted (status NONE). Go's
+	// canCompleteQuest rejects non-autocomplete NONE quests internally (no
+	// quest-log slot), matching the C++ find-fails-false arm.
+	if (status == questStatusIncomplete || status == 0) && s.canCompleteQuest(ctx, questID) {
 		s.completeQuest(ctx, questID)
 		status = questStatusComplete
 	}
