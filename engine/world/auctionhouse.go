@@ -51,12 +51,15 @@ func auctionOutBid(bid uint32) uint32 {
 }
 
 // auctionDeposit ports AuctionHouseMgr::GetAuctionDeposit
-// (AuctionHouseMgr.cpp:89-118). The C++ multiplier is DepositRate*0.03 from
-// AuctionHouse.dbc; that DBC data is absent on this VM, so the neutral-house
-// effective multiplier 0.05 is kept (the DepositRate term stays blocked on
-// DBC data, not the rate config).
+// (AuctionHouseMgr.cpp:89-118). The C++ multiplier is
+// CalculatePct(float(entry->DepositRate), 3) = DepositRate*0.03 from
+// AuctionHouse.dbc; DBCStructure.h notes DepositRate is stored "1/3 from
+// real", and the neutral house (id 7, the house-agnostic model used here)
+// stores 25 — a real 75% rate, so the multiplier is 0.75. That matches the
+// retail formula: neutral 12/24/48h deposits are 75%/150%/300% of the
+// vendor sell price (the timeHr term is 1/2/4 on those durations).
 func auctionDeposit(sellPrice int64, timeHr, count uint32, depositRate float64) uint32 {
-	const depositMultiplier = 0.05
+	const depositMultiplier = 0.75
 	rate := float32(depositRate)
 	// C++ GetAuctionDeposit (AuctionHouseMgr.cpp:94): no vendor sell price
 	// answers the minimum deposit. AH_MINIMUM_DEPOSIT = 100
@@ -119,6 +122,13 @@ const (
 	// the house id on MSG_AUCTION_HELLO.
 	defaultAuctionHouseID uint32 = 7
 	unitNPCFlagAuctioneer uint32 = 0x00200000
+	// TrinityCore AuctionEntry::GetAuctionCut (AuctionHouseMgr.cpp:872-877):
+	// CalculatePct(bid, auctionHouseEntry->ConsignmentRate) *
+	// sWorld->getRate(RATE_AUCTION_CUT). The neutral house (id 7, the
+	// house-agnostic model used here) carries ConsignmentRate 15 — the 15%
+	// neutral cut (faction houses take 5%). There is no Go cut-rate config;
+	// the default-1 rate is folded in.
+	auctionConsignmentPct uint32 = 15
 )
 
 type auctionRecord struct {
@@ -476,10 +486,11 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 		alreadyListed := cdb.QueryRowContext(ctx, "SELECT 1 FROM auctionhouse WHERE itemguid = ? LIMIT 1", itemGUID).Scan(&listed) == nil
 		// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:207-212): an
 		// already-listed item, a soulbound item (the representable slice of
-		// Item::CanBeTraded — Go has no loot/bag/enchant state), a temporary
-		// item, a short stack, or a mixed entry all answer
+		// Item::CanBeTraded — Go has no loot/bag/enchant state), a
+		// non-empty bag (Item::IsNotEmptyBag, via itemIsNonemptyBag), a
+		// temporary item, a short stack, or a mixed entry all answer
 		// ERR_AUCTION_DATABASE_ERROR with auction id 0.
-		if alreadyListed || flags&1 != 0 || duration != 0 || have < int64(stackCounts[j]) || entry != itemEntry {
+		if alreadyListed || flags&1 != 0 || s.itemIsNonemptyBag(ctx, uint64(itemGUID)) || duration != 0 || have < int64(stackCounts[j]) || entry != itemEntry {
 			return sellFail(errAuctionDatabaseError)
 		}
 		itemCounts[j] = have
@@ -700,8 +711,8 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		// the auction's bidder rows die with it.
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM auctionbidders WHERE id = ?", auctionID)
 
-		// Consignment cut (5%) and profit (bid + deposit - cut)
-		consignment := uint32(buyout) * 5 / 100
+		// Consignment cut (neutral 15%) and profit (bid + deposit - cut)
+		consignment := uint32(buyout) * auctionConsignmentPct / 100
 		profit := uint32(buyout) + uint32(deposit) - consignment
 		if s.server != nil {
 			if sellerSess := s.server.findSessionByGUID(uint64(ownerGUID)); sellerSess != nil {
@@ -921,64 +932,30 @@ func (s *session) handleAuctionListBidderItems(ctx context.Context, payload []by
 	}
 
 	now := time.Now().Unix()
-	// C++ AuctionHouseObject::BuildListBidderItems (AuctionHouseMgr.cpp:671-
-	// 680): the bidder list covers every auction the player has bid on (the
-	// auctionbidders set), not just ones where they are the current top
-	// bidder.
-	rows, err := cdb.QueryContext(ctx, `SELECT ah.id, ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, ii.count
-		FROM auctionhouse AS ah
-		INNER JOIN item_instance AS ii ON ii.guid = ah.itemguid
-		WHERE ah.id IN (SELECT id FROM auctionbidders WHERE bidderguid = ?) AND ah.time > ?`, s.playerGUID, now)
-	if err != nil {
-		return true
-	}
-	defer rows.Close()
+	// C++ HandleAuctionListBidderItems (AuctionHouseHandler.cpp:665-690):
+	// the client-requested outbidded auctions are written FIRST, in
+	// client-sent order, then AuctionHouseObject::BuildListBidderItems
+	// (AuctionHouseMgr.cpp:671-680) appends every auction the player has bid
+	// on (the auctionbidders set), not just ones where they are the current
+	// top bidder. C++ lists an auction twice when it appears in both; Go
+	// dedupes (a C++ quirk the client merely tolerates).
 	var auctions []auctionRecord
 	seenIDs := make(map[uint32]bool)
-	for rows.Next() {
-		var id, iGuid, iTmpl, owner, buyout, expTime, bidder, lastBid, startBid, deposit, count int64
-		if err := rows.Scan(&id, &iGuid, &iTmpl, &owner, &buyout, &expTime, &bidder, &lastBid, &startBid, &deposit, &count); err == nil {
-			seenIDs[uint32(id)] = true
-			auctions = append(auctions, auctionRecord{
-				ID:         uint32(id),
-				ItemGUID:   uint64(iGuid),
-				ItemEntry:  uint32(iTmpl),
-				ItemCount:  uint32(count),
-				Owner:      uint64(owner),
-				Buyout:     uint32(buyout),
-				ExpireTime: expTime,
-				Bidder:     uint64(bidder),
-				Bid:        uint32(lastBid),
-				StartBid:   uint32(startBid),
-				Deposit:    uint32(deposit),
-			})
+	auctionSelect := `SELECT ah.id, ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, ii.count
+		FROM auctionhouse AS ah
+		INNER JOIN item_instance AS ii ON ii.guid = ah.itemguid`
+	for _, oid := range outbidIDs {
+		for _, a := range scanAuctionRows(ctx, cdb, auctionSelect+` WHERE ah.id = ? AND ah.time > ? LIMIT 1`, oid, now) {
+			if !seenIDs[a.ID] {
+				seenIDs[a.ID] = true
+				auctions = append(auctions, a)
+			}
 		}
 	}
-
-	// Also append outbidded auctions if requested by client
-	for _, oid := range outbidIDs {
-		if seenIDs[oid] {
-			continue
-		}
-		var id, iGuid, iTmpl, owner, buyout, expTime, bidder, lastBid, startBid, deposit, count int64
-		if err := cdb.QueryRowContext(ctx, `SELECT ah.id, ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, ii.count
-			FROM auctionhouse AS ah
-			INNER JOIN item_instance AS ii ON ii.guid = ah.itemguid
-			WHERE ah.id = ? AND ah.time > ? LIMIT 1`, oid, now).Scan(&id, &iGuid, &iTmpl, &owner, &buyout, &expTime, &bidder, &lastBid, &startBid, &deposit, &count); err == nil {
-			seenIDs[uint32(id)] = true
-			auctions = append(auctions, auctionRecord{
-				ID:         uint32(id),
-				ItemGUID:   uint64(iGuid),
-				ItemEntry:  uint32(iTmpl),
-				ItemCount:  uint32(count),
-				Owner:      uint64(owner),
-				Buyout:     uint32(buyout),
-				ExpireTime: expTime,
-				Bidder:     uint64(bidder),
-				Bid:        uint32(lastBid),
-				StartBid:   uint32(startBid),
-				Deposit:    uint32(deposit),
-			})
+	for _, a := range scanAuctionRows(ctx, cdb, auctionSelect+` WHERE ah.id IN (SELECT id FROM auctionbidders WHERE bidderguid = ?) AND ah.time > ?`, s.playerGUID, now) {
+		if !seenIDs[a.ID] {
+			seenIDs[a.ID] = true
+			auctions = append(auctions, a)
 		}
 	}
 
@@ -1033,11 +1010,12 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 	now := time.Now().Unix()
 
 	// C++ HandleAuctionRemoveItem (AuctionHouseHandler.cpp:599-610): with an
-	// active bidder the seller pays the 5% auction cut; insufficient money
-	// silently aborts the cancel — no command result is sent, and the
-	// bidder-refund mail goes out before the cut is taken.
+	// active bidder the seller pays the auction cut (neutral 15% via
+	// AuctionEntry::GetAuctionCut); insufficient money silently aborts the
+	// cancel — no command result is sent, and the bidder-refund mail goes
+	// out before the cut is taken.
 	if bidderGUID > 0 && lastBid > 0 {
-		auctionCut := uint32(lastBid) * 5 / 100
+		auctionCut := uint32(lastBid) * auctionConsignmentPct / 100
 		if s.player.Money < auctionCut {
 			return true
 		}
@@ -1121,7 +1099,7 @@ func (s *session) expireAuctions(ctx context.Context) {
 			// sends SendAuctionSuccessfulMail first, then SendAuctionWonMail — the
 			// sale-pending/invoice mail (SendAuctionSalePendingMail) fires only on
 			// player buyout (AuctionHouseHandler.cpp:559) and the bot-buyer path.
-			consignment := uint32(a.lastBid) * 5 / 100
+			consignment := uint32(a.lastBid) * auctionConsignmentPct / 100
 			profit := uint32(a.lastBid) + uint32(a.deposit) - consignment
 
 			// 1. Profit mail to seller (delayed by MailDeliveryDelay, default 1 hour),
