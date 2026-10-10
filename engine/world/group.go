@@ -664,6 +664,12 @@ func (s *session) handleGroupInvite(_ context.Context, payload []byte) bool {
 		return s.sendPartyResult(partyOpInvite, memberName, errTargetNotInInstanceS)
 	}
 
+	// The invited player sits in an instance tuned to a different dungeon
+	// difficulty (GroupHandler.cpp:130)
+	if invitedSess.player.InstanceID != 0 && invitedSess.player.DungeonDifficulty != s.player.DungeonDifficulty {
+		return s.sendPartyResult(partyOpInvite, memberName, errIgnoringYouS)
+	}
+
 	// The invited player ignored the inviter
 	if s.server.chatIgnoredBy(invitedSess.playerGUID, s.playerGUID) {
 		return s.sendPartyResult(partyOpInvite, memberName, errIgnoringYouS)
@@ -674,6 +680,16 @@ func (s *session) handleGroupInvite(_ context.Context, payload []byte) bool {
 	if !s.server.socialHasFriend(invitedSess.playerGUID, s.playerGUID) &&
 		s.server.Config.PartyLevelReq > 0 && uint32(s.player.Level) < s.server.Config.PartyLevelReq {
 		return s.sendPartyResult(partyOpInvite, memberName, errInviteRestricted)
+	}
+
+	// The inviter is themselves only invited (GroupHandler.cpp:143-156): C++
+	// invites into that pending group — silently dropped while it is
+	// uncreated, ERR_NOT_LEADER once the inviter's inviter formed it.
+	if s.groupID == 0 && s.pendingGroupLeader != 0 {
+		if leaderSess := s.server.findSessionByGUID(s.pendingGroupLeader); leaderSess != nil && leaderSess.groupID != 0 {
+			return s.sendPartyResult(partyOpInvite, "", errNotLeader)
+		}
+		return true
 	}
 
 	// Invited player already in a group or has a pending invite
@@ -872,6 +888,12 @@ func (s *session) handleGroupUninvite(_ context.Context, payload []byte) bool {
 		return s.sendPartyResult(partyOpUninvite, "", errNotLeader)
 	}
 
+	// Player::CanUninviteFromGroup (Player.cpp:24457): no kicks from inside a
+	// battleground
+	if s.bgData.InstanceID != 0 {
+		return s.sendPartyResult(partyOpUninvite, "", errInviteRestricted)
+	}
+
 	target := s.server.findSessionByName(name)
 	if target == nil {
 		return s.sendPartyResult(partyOpUninvite, name, errTargetNotInGroup)
@@ -902,6 +924,12 @@ func (s *session) handleGroupUninviteGUID(_ context.Context, payload []byte) boo
 	g := s.server.findGroupByID(s.groupID)
 	if g == nil || !g.isLeaderOrAssistant(s.playerGUID) {
 		return s.sendPartyResult(partyOpUninvite, "", errNotLeader)
+	}
+
+	// Player::CanUninviteFromGroup (Player.cpp:24457): no kicks from inside a
+	// battleground
+	if s.bgData.InstanceID != 0 {
+		return s.sendPartyResult(partyOpUninvite, "", errInviteRestricted)
 	}
 
 	target := s.server.findSessionByGUID(guid)
@@ -1179,13 +1207,46 @@ func (s *session) handleGroupDisband(ctx context.Context, _ []byte) bool {
 	if !s.playerLoaded {
 		return false
 	}
-	if s.pendingGroupLeader != 0 {
-		// Cancel a pending invite we initiated (not a real TC case but safe)
-		s.pendingGroupLeader = 0
+	// A pending invite the player initiated but never formed is the inviter's
+	// cancelable group (HandleGroupDisbandOpcode's grpInvite arm): withdraw
+	// every outstanding invite. An invitee's own disband is a silent no-op in
+	// C++ — the invite is not withdrawn.
+	hasOutgoingInvite := false
+	if s.groupID == 0 && s.pendingGroupLeader == 0 {
+		s.server.sessionsMu.RLock()
+		for sess := range s.server.sessions {
+			if sess.pendingGroupLeader == s.playerGUID {
+				hasOutgoingInvite = true
+				break
+			}
+		}
+		s.server.sessionsMu.RUnlock()
+	}
+	if s.groupID == 0 && !hasOutgoingInvite {
+		return false
+	}
+
+	// HandleGroupDisbandOpcode (GroupHandler.cpp:410): no disband from inside
+	// a battleground — note the op is PARTY_OP_INVITE, not PARTY_OP_LEAVE
+	if s.bgData.InstanceID != 0 {
+		_ = s.sendPartyResult(partyOpInvite, "", errInviteRestricted)
 		return true
 	}
-	if s.groupID == 0 {
-		return false
+
+	if hasOutgoingInvite {
+		s.server.sessionsMu.RLock()
+		for sess := range s.server.sessions {
+			if sess.pendingGroupLeader == s.playerGUID {
+				sess.pendingGroupLeader = 0
+			}
+		}
+		s.server.sessionsMu.RUnlock()
+		name := ""
+		if s.player != nil {
+			name = s.player.Name
+		}
+		_ = s.sendPartyResult(partyOpLeave, name, errPartyResultOK)
+		return true
 	}
 
 	srv := s.server
@@ -1471,6 +1532,11 @@ func (s *session) handleGroupRaidConvert(_ context.Context, _ []byte) bool {
 	if !s.playerLoaded || s.groupID == 0 {
 		return false
 	}
+	// HandleGroupRaidConvertOpcode (GroupHandler.cpp:578): no conversion
+	// from inside a battleground
+	if s.bgData.InstanceID != 0 {
+		return false
+	}
 	srv := s.server
 	srv.groupsMu.Lock()
 	g := srv.groups[s.groupID]
@@ -1511,7 +1577,9 @@ func (s *session) handlePartyAssignment(_ context.Context, payload []byte) bool 
 	srv := s.server
 	srv.groupsMu.Lock()
 	g := srv.groups[s.groupID]
-	if g == nil || !g.IsRaid || !g.isLeaderOrAssistant(s.playerGUID) {
+	// HandlePartyAssignmentOpcode (GroupHandler.cpp:652) gates on leader-or-
+	// assistant only — no raid-group requirement
+	if g == nil || !g.isLeaderOrAssistant(s.playerGUID) {
 		srv.groupsMu.Unlock()
 		return false
 	}
@@ -1661,12 +1729,13 @@ func (s *session) handleRandomRoll(_ context.Context, payload []byte) bool {
 	}
 	rolled := minimum + uint32(rand.Intn(int(maximum-minimum)+1))
 
-	// SMSG_RANDOMIZE_CHAR_NAME uses MSG_RANDOM_ROLL opcode in 3.3.5a.
+	// MSG_RANDOM_ROLL reply: Min u32, Max u32, Result u32, Roller packed guid
+	// (MiscPackets.cpp:174-179: operator<< on ObjectGuid packs it)
 	b := protocol.NewBuffer(20)
 	b.WriteU32(minimum)
 	b.WriteU32(maximum)
 	b.WriteU32(rolled)
-	b.WriteU64(s.playerGUID)
+	b.WritePackedGUID(s.playerGUID)
 	pkt := b.Bytes()
 
 	_ = s.write(uint16(protocol.OpcodeMSG_RANDOM_ROLL), pkt, true)
@@ -1702,7 +1771,9 @@ func (s *session) handleGroupAssistantLeader(ctx context.Context, payload []byte
 
 	s.server.groupsMu.Lock()
 	grp := s.server.groups[s.groupID]
-	if grp == nil || !grp.isLeader(s.playerGUID) || !grp.IsRaid {
+	// HandleGroupAssistantLeaderOpcode (GroupHandler.cpp:633) gates on leader
+	// only — no raid-group requirement
+	if grp == nil || !grp.isLeader(s.playerGUID) {
 		s.server.groupsMu.Unlock()
 		return true
 	}
@@ -1745,7 +1816,9 @@ func (s *session) handleGroupChangeSubGroup(ctx context.Context, payload []byte)
 
 	s.server.groupsMu.Lock()
 	grp := s.server.groups[s.groupID]
-	if grp == nil || !grp.IsRaid || !grp.isLeaderOrAssistant(s.playerGUID) {
+	// HandleGroupChangeSubGroupOpcode (GroupHandler.cpp:594) gates on
+	// leader-or-assistant only — no raid-group requirement
+	if grp == nil || !grp.isLeaderOrAssistant(s.playerGUID) {
 		s.server.groupsMu.Unlock()
 		return true
 	}
