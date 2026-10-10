@@ -13039,6 +13039,41 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby entry object")
 		return
 	}
+	// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) runs on triggered
+	// casts too — SelectSpellTargets carries no IsTriggered gate. The
+	// single nearest PARTY/ALLY/RAID (3/4/58), ENEMY (2), ENTRY (38) or
+	// GO-entry (40) unit replaces the wire target, and a miss fails the
+	// cast with SPELL_FAILED_BAD_IMPLICIT_TARGETS (Spell.cpp:1111). The
+	// area arms take precedence like the client path above; the selection
+	// runs before the chain block so jumps seed from the selected target
+	// (Spell.cpp:1173 runs SelectImplicitChainTargets at the end of
+	// SelectImplicitNearbyTargets). The wire spellTarget keeps the
+	// caller-supplied explicit target — C++ AddUnitTarget only appends to
+	// m_UniqueTargetInfo, never rewrites m_targets.
+	nearbySelected := false
+	nearbyMatched := isFriendlyNearbySpell(spell) || isEntryNearbySpell(spell) || isHostileNearbySpell(spell) || isGONearbyEntrySpell(spell)
+	if nearbyMatched && !isAreaEnemySpell(spell) && !isFriendlyAreaSpell(spell) {
+		var nearby uint64
+		var ok bool
+		switch {
+		case isFriendlyNearbySpell(spell):
+			nearby, ok = s.spellFriendlyNearbyTarget(ctx, spell, spellTarget)
+		case isEntryNearbySpell(spell):
+			nearby, ok = s.spellEntryNearbyTarget(ctx, spell, spellID)
+		case isHostileNearbySpell(spell):
+			nearby, ok = s.spellHostileNearbyTarget(ctx, spell)
+		case isGONearbyEntrySpell(spell):
+			nearby, ok = s.spellEntryNearbyGOTarget(ctx, spell, spellID)
+		}
+		if !ok {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 11), true)
+			s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby target")
+			return
+		}
+		targetGUID = nearby
+		hitTargets = []uint64{nearby}
+		nearbySelected = true
+	}
 	// Spell::SelectImplicitTargetObjectTargets (Spell.cpp:1558-1580) runs the
 	// chain leg (Spell.cpp:1575 -> SelectImplicitChainTargets, 1582-1624) for
 	// triggered casts too — SelectSpellTargets carries no IsTriggered gate on
@@ -13062,18 +13097,29 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// cast: area selection has no BAD_IMPLICIT_TARGETS gate, unlike the
 	// nearby arms). The chain block above can never fire for area spells
 	// (chainSelectionEligibleTarget excludes the area category), so the
-	// replacement cannot discard real jumps.
-	switch {
-	case isAreaEnemySpell(spell):
-		hitTargets = s.spellAreaEnemyTargets(ctx, spell, spellTarget)
-	case isFriendlyAreaSpell(spell):
-		hitTargets = s.spellFriendlyAreaTargets(ctx, spell, spellTarget)
-	case isEntryAreaSpell(spell):
-		hitTargets = s.spellEntryAreaTargets(ctx, spell, spellID, spellTarget)
-	case isGOAreaSpell(spell):
-		hitTargets = s.spellGOAreaTargets(ctx, spell, spellID, spellTarget)
-	case isFriendlyLastTargetAreaSpell(spell) || isFriendlyTargetAreaRaidClassSpell(spell):
-		hitTargets = s.spellFriendlyRefCenteredAreaTargets(ctx, spell, spellTarget, hitTargets)
+	// replacement cannot discard real jumps. Spell::SelectImplicitConeTargets
+	// (Spell.cpp:1176) joins the same switch: friendly ALLY/ENTRY (59/60)
+	// and GO (108) cones replace the hit list with the cone search — enemy
+	// cone (24/54/104) already rides the area-enemy arm, and cone selection
+	// carries no failure gate. The whole switch is skipped when the nearby
+	// arm selected a target, matching the client path's if/else precedence.
+	if !nearbySelected {
+		switch {
+		case isAreaEnemySpell(spell):
+			hitTargets = s.spellAreaEnemyTargets(ctx, spell, spellTarget)
+		case isFriendlyAreaSpell(spell):
+			hitTargets = s.spellFriendlyAreaTargets(ctx, spell, spellTarget)
+		case isEntryAreaSpell(spell):
+			hitTargets = s.spellEntryAreaTargets(ctx, spell, spellID, spellTarget)
+		case isFriendlyConeSpell(spell):
+			hitTargets = s.spellFriendlyConeTargets(ctx, spell, spellTarget)
+		case isGOAreaSpell(spell):
+			hitTargets = s.spellGOAreaTargets(ctx, spell, spellID, spellTarget)
+		case isGOConeSpell(spell):
+			hitTargets = s.spellGOConeTargets(ctx, spell, spellID)
+		case isFriendlyLastTargetAreaSpell(spell) || isFriendlyTargetAreaRaidClassSpell(spell):
+			hitTargets = s.spellFriendlyRefCenteredAreaTargets(ctx, spell, spellTarget, hitTargets)
+		}
 	}
 	// Cast flags mirror Spell::SendSpellGo for a triggered player cast
 	// (Spell.cpp:4283-4330): PENDING for triggered non-auto-repeat casts with
