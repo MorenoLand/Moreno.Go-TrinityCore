@@ -11718,7 +11718,10 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 						damage -= b
 					}
 				}
-				if !instantKill {
+				// SPELL_ATTR4_FIXED_DAMAGE skips the whole taken-mitigation
+				// block (Unit.cpp:999); the armor and block arms above carry
+				// their own gates, and the crit arm dispatches on it.
+				if !instantKill && !(dmgSpellKnown && dmgSpell.AttributesEx4&spellAttr4FixedDamage != 0) {
 					// Unit::CalculateSpellDamageTaken (Unit.cpp:1060-1066):
 					// the melee/ranged-DmgClass arm applies CR_CRIT_TAKEN_MELEE
 					// / CR_CRIT_TAKEN_RANGED, not the CR_CRIT_TAKEN_SPELL the
@@ -11767,6 +11770,27 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				if b, ok := s.spellTakenBlockAmount(target, isPlayerVictim, nil, spell, damage); ok {
 					blocked = b
 					damage -= b
+				}
+			}
+			// Unit::CalculateSpellDamageTaken resilience arm (Unit.cpp:1079-1080,
+			// 1105-1106) with the Unit::GetCombatRatingReduction pet arm
+			// (Unit.cpp:12548-12553): the caster is a player, so a creature
+			// victim owned by a player takes the owner's resilience; wild
+			// creatures resolve to no owner session. Placed after the block
+			// arm and before absorption, matching the C++ order. Fixed-damage
+			// spells skip the whole taken-mitigation block (Unit.cpp:999).
+			if !instantKill && damage > 0 && !(spellKnown && dmgSpell.AttributesEx4&spellAttr4FixedDamage != 0) {
+				if ownerSess := s.playerOwnerSessionOfCreature(target.GUID); ownerSess != nil {
+					resilCR := CombatRatingCritTakenSpell
+					if spellKnown {
+						switch dmgSpell.DefenseType {
+						case spellDamageClassMelee:
+							resilCR = CombatRatingCritTakenMelee
+						case spellDamageClassRanged:
+							resilCR = CombatRatingCritTakenRanged
+						}
+					}
+					ownerSess.applyResilienceToDamage(true, &damage, (hitInfo&0x02) != 0, resilCR)
 				}
 			}
 			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
@@ -18627,9 +18651,11 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 		// Resilience (SpellAuraEffects.cpp:5190-5192): skipped for fixed
 		// damage; the isCrit arm now carries the real tick crit instead of
-		// the earlier hardcoded false.
+		// the earlier hardcoded false. The caster gate mirrors
+		// Aura::CanApplyResilience -> Unit::CanApplyResilience
+		// (Unit.cpp:12333): wild-creature DoTs do not trigger resilience.
 		if !fixedDamage && aura.CasterGUID != aura.TargetGUID {
-			ts.applyResilienceToDamage(true, &dmg, crit, CombatRatingCritTakenSpell)
+			ts.applyResilienceToDamage(ts.casterCanApplyResilience(aura.CasterGUID), &dmg, crit, CombatRatingCritTakenSpell)
 		}
 		// Unit::CalcAbsorbResist (Unit.cpp:1828) handles resist then absorb
 		// at the END of the tick pipeline — the earlier Go order resisted
@@ -18890,8 +18916,11 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if !fixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
 			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, dmg)
 		}
+		// Unit::CanApplyResilience (Unit.cpp:12333) caster gate: a DoT
+		// applied by a wild creature does not trigger resilience; player
+		// and player-owned-pet casters do.
 		if !fixedDamage && aura.CasterGUID != aura.TargetGUID {
-			ts.applyResilienceToDamage(true, &dmg, crit, CombatRatingCritTakenSpell)
+			ts.applyResilienceToDamage(ts.casterCanApplyResilience(aura.CasterGUID), &dmg, crit, CombatRatingCritTakenSpell)
 		}
 		resisted := uint32(0)
 		if aura.SchoolMask > 1 && aura.CasterLevel > 0 {

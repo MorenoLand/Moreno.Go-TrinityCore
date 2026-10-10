@@ -125,3 +125,44 @@ func (s *session) applyResilienceToDamage(attackerIsPlayer bool, damage *uint32,
 		*damage = uint32(math.Round(curDmg))
 	}
 }
+
+// playerOwnerSessionOfCreature resolves the player session that owns the
+// creature with the given GUID, or nil for wild creatures. Backs both the
+// caster-side Unit::CanApplyResilience gate and the victim-side pet arm of
+// Unit::GetCombatRatingReduction (Unit.cpp:12548-12553). Charm does not
+// change the C++ owner field (UNIT_FIELD_SUMMONEDBY), so a charmed unit
+// resolves to its pre-charm owner.
+func (s *session) playerOwnerSessionOfCreature(guid uint64) *session {
+	if s == nil || s.server == nil || guid == 0 {
+		return nil
+	}
+	motion := s.findCreatureMotion(guid)
+	if motion == nil {
+		return nil
+	}
+	ownerGUID := motion.OwnerGUID
+	if motion.Charmed {
+		ownerGUID = motion.CharmOwnerGUID
+	}
+	if ownerGUID == 0 {
+		return nil
+	}
+	return s.server.findSessionByGUID(ownerGUID)
+}
+
+// casterCanApplyResilience mirrors Unit::CanApplyResilience (Unit.cpp:12333)
+// with the Player override (Player.h:1628): a player caster always applies
+// resilience; any other caster applies it only when owned by a player (pets,
+// guardians, totems). Charm does not change the C++ owner field
+// (UNIT_FIELD_SUMMONEDBY), so a charmed unit resolves to its pre-charm owner.
+// The vehicle arm (a vehicle caster never applies) has no Go model — vehicle
+// occupants cast as their own GUID, which resolves to the player session.
+func (s *session) casterCanApplyResilience(casterGUID uint64) bool {
+	if s == nil || s.server == nil || casterGUID == 0 {
+		return false
+	}
+	if caster := s.server.findSessionByGUID(casterGUID); caster != nil {
+		return true
+	}
+	return s.playerOwnerSessionOfCreature(casterGUID) != nil
+}
