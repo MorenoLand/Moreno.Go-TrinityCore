@@ -70,6 +70,7 @@ const (
 	spellAttr6AssistIgnoreImmuneFlag       uint32 = 0x00000008 // SPELL_ATTR6_ASSIST_IGNORE_IMMUNE_FLAG (SharedDefines.h:637) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6CanTargetUntargetable        uint32 = 0x01000000 // SPELL_ATTR6_CAN_TARGET_UNTARGETABLE (SharedDefines.h:658) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6DontConsumeProcCharges       uint32 = 0x00000020 // SPELL_ATTR6_DONT_CONSUME_PROC_CHARGES (SharedDefines.h:639) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
+	spellAttr6CastableWhileOnVehicle       uint32 = 0x00001000 // SPELL_ATTR6_CASTABLE_WHILE_ON_VEHICLE (SharedDefines.h:646) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6NotInRaidInstance            uint32 = 0x00000800 // SPELL_ATTR6_NOT_IN_RAID_INSTANCE (SharedDefines.h:645) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr4NotStealable                 uint32 = 0x00000040 // SPELL_ATTR4_NOT_STEALABLE (SharedDefines.h:566) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4FixedDamage                  uint32 = 0x00000100 // SPELL_ATTR4_FIXED_DAMAGE (SharedDefines.h:568) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
@@ -153,6 +154,7 @@ const (
 	spellFailedNotInFront                uint8  = 61  // SPELL_FAILED_NOT_INFRONT (SharedDefines.h:1042)
 	spellFailedLineOfSight               uint8  = 47  // SPELL_FAILED_LINE_OF_SIGHT (SharedDefines.h:1029)
 	spellFailedCustomError               uint8  = 172 // SPELL_FAILED_CUSTOM_ERROR (SharedDefines.h:1154)
+	spellFailedCantDoThatRightNow        uint8  = 173 // SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW (SharedDefines.h:1155)
 	spellFailedReagents                  uint8  = 100 // SPELL_FAILED_REAGENTS (SharedDefines.h:1082)
 	spellCustomErrorGMOnly               uint32 = 65  // SPELL_CUSTOM_ERROR_GM_ONLY (SharedDefines.h:1241)
 	spellFailedBadTargets                uint8  = 12  // SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992)
@@ -428,6 +430,7 @@ const (
 
 	// Summon categories for the generic-summon CheckCast leg
 	// (Spell.cpp:5798-5817, SharedDefines.h:3296).
+	summonCategoryWild   = 0 // SUMMON_CATEGORY_WILD (SharedDefines.h:3298)
 	summonCategoryPet    = 2 // SUMMON_CATEGORY_PET
 	summonCategoryPuppet = 3 // SUMMON_CATEGORY_PUPPET — the charm arm has no Go bridge (see checkSummonCast)
 
@@ -1864,12 +1867,16 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// CheckCast vehicle arm (Spell::CheckCast, Spell.cpp:5332-5336):
 	// SpellInfo::CheckVehicle (SpellInfo.cpp:1818-1863) gates spells cast
 	// while the caster rides a vehicle — seat-flag check against the spell's
-	// attributes plus the controlled-vehicle summon restriction. Go does
-	// have a runtime vehicle model (player.VehicleGUID + vehicle kits,
-	// vehicle.go), but the CheckVehicle seat-flag gate itself is not
-	// bridged yet, so the arm currently resolves to SPELL_CAST_OK.
-	// Documented gap; the TRIGGERED_IGNORE_CASTED_WHILE_MOUNTED
-	// wrapper is vacuous for client casts (never set on this path).
+	// attributes plus the controlled-vehicle summon restriction (bridged by
+	// checkVehicleCast). The TRIGGERED_IGNORE_CASTER_MOUNTED_OR_ON_VEHICLE
+	// wrapper is vacuous for client casts (never set on this path). C++
+	// relative order: right after the moving/autorepeat arm, ahead of the
+	// conditions block.
+	if failure := s.checkVehicleCast(spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "vehicle seat restriction", "failure", failure)
+		return true
+	}
 	// CheckCast conditions block (Spell::CheckCast, Spell.cpp:5337-5348):
 	// sConditionMgr->IsObjectMeetingNotGroupedConditions(
 	// CONDITION_SOURCE_TYPE_SPELL (17, ConditionMgr.h:140), spell id,
@@ -5065,6 +5072,79 @@ func (s *session) checkMountedCast(ctx context.Context, spell wotlk.Spell) uint8
 			buf.WriteI32(mountResultShapeshifted)
 			_ = s.write(uint16(protocol.OpcodeSMSG_MOUNT_RESULT), buf.Bytes(), true)
 			return spellFailedDontReport
+		}
+	}
+	return 0
+}
+
+// checkVehicleCast mirrors SpellInfo::CheckVehicle
+// (SpellInfo.cpp:1818-1863), invoked from Spell::CheckCast
+// (Spell.cpp:5332-5336): a player riding a vehicle may only cast spells whose
+// seat flags satisfy the spell's seat mask — shapeshift-aura spells need an
+// uncontrolled seat (SpellShapeshiftForm flags lacking 0x1), spells with a
+// SPELL_AURA_MOUNTED aura need the mount-spell seat bit, and everything else
+// needs VEHICLE_SEAT_FLAG_CAN_ATTACK — unless the spell carries
+// SPELL_ATTR6_CASTABLE_WHILE_ON_VEHICLE or SPELL_ATTR0_CASTABLE_WHILE_MOUNTED.
+// A controlled seat additionally forbids summoning non-wild creatures. Failure
+// is SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW.
+//
+//   - The "creatures cast freely as passengers" arm is vacuous here (this is
+//     the client-initiated path; the caster is always the session player).
+//   - The TRIGGERED_IGNORE_CASTER_MOUNTED_OR_ON_VEHICLE wrapper is vacuous —
+//     this path never carries triggered flags.
+//   - The caster's seat comes from the kit's GetSeatForPassenger (Go's
+//     Vehicle::GetSeatForPassenger, vehicle.go:107); a missing seat row
+//     passes (C++ would null-deref), and a missing vehicle kit or missing
+//     SpellShapeshiftForm/SummonProperties rows are permissive, matching the
+//     C++ NULL arms and the terrain.go convention.
+//
+// Returns the SPELL_FAILED_* result code, 0 on success.
+func (s *session) checkVehicleCast(spell wotlk.Spell) uint8 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
+	vehicleGUID := s.player.VehicleGUID
+	if vehicleGUID == 0 {
+		return 0
+	}
+	kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, vehicleGUID)
+	if kit == nil {
+		return 0
+	}
+	var checkMask uint32
+	for _, eff := range spell.Effects {
+		if eff.Aura == spellAuraModShapeshift {
+			shape, found, err := s.server.Data.ShapeshiftForm(uint32(eff.MiscValue))
+			if err == nil && found && shape.Flags&0x1 == 0 {
+				checkMask |= wotlk.VehicleSeatFlagUncontrolled
+			}
+			break
+		}
+	}
+	if spellHasAura(spell, spellAuraMounted) {
+		checkMask |= wotlk.VehicleSeatFlagCanCastMountSpell
+	}
+	if checkMask == 0 {
+		checkMask = wotlk.VehicleSeatFlagCanAttack
+	}
+	_, seatInfo, _ := kit.GetSeatForPassenger(s.playerGUID)
+	if seatInfo == nil {
+		return 0
+	}
+	if spell.AttributesEx6&spellAttr6CastableWhileOnVehicle == 0 &&
+		spell.Attributes&spellAttr0CastableWhileMounted == 0 &&
+		seatInfo.Flags&checkMask != checkMask {
+		return spellFailedCantDoThatRightNow
+	}
+	if seatInfo.Flags&(wotlk.VehicleSeatFlagCanControl|wotlk.VehicleSeatFlagUnk2) != 0 {
+		for _, eff := range spell.Effects {
+			if eff.Effect != spellEffectSummon {
+				continue
+			}
+			props, found, err := s.server.Data.SummonProperties(uint32(eff.MiscValueB))
+			if err == nil && found && props.Control != summonCategoryWild {
+				return spellFailedCantDoThatRightNow
+			}
 		}
 	}
 	return 0
