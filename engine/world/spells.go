@@ -6131,7 +6131,7 @@ func (s *session) spellDiminishingBounced(spell wotlk.Spell, targetGUID uint64) 
 		// target is DR-affected) then the level modifier. Run on the
 		// target session so its GetDiminishing level applies; the taunt
 		// special-case mods only apply to creature targets (Unit.cpp:9069).
-		if _, newDuration, ok := targetSess.applyDiminishingToDuration(spell.ID, spell.Mechanic, uint32(maxDuration), true, false); ok && newDuration > 0 && newDuration < existing {
+		if _, newDuration, ok := targetSess.applyDiminishingToDuration(spell, uint32(maxDuration), true, false); ok && newDuration > 0 && newDuration < existing {
 			return true
 		}
 	}
@@ -12926,6 +12926,49 @@ func spellEffectImplicitTargetExplicit(effect uint32) bool {
 	return false
 }
 
+func (s *session) triggeredSpellHitResult(ctx context.Context, spell wotlk.Spell, targetGUID uint64) uint8 {
+	if s == nil || s.player == nil || s.server == nil {
+		return protocol.SpellMissNone
+	}
+	var targetFaction uint32
+	if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+		targetFaction = tgt.Faction
+	}
+	if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil {
+		// WorldObject::SpellHitResult (Object.cpp:2620) checks IsImmunedToSpell
+		// (SPELL_MISS_IMMUNE) ahead of the canReflect arm, so a target that is
+		// both immune and reflecting reports IMMUNE and never consumes its
+		// reflect aura — the client path's doReflect ordering.
+		if targetSess.isImmuneToSpell(spell, s) {
+			return protocol.SpellMissImmune
+		}
+		// WorldObject::SpellHitResult (Object.cpp:2624-2627): damage immunity
+		// reports SPELL_MISS_IMMUNE at hit resolution for spells with only
+		// damage effects — for other spells the GO packet must show a hit.
+		if spellHasOnlyDamageEffects(spell) && targetSess.isImmuneToDamageSpell(spell, spell.SchoolMask) {
+			return protocol.SpellMissImmune
+		}
+		// WorldObject::SpellHitResult (Object.cpp:2641-2648): the reflect roll,
+		// offered per Spell.cpp:622/2152 (spellReflectOffered).
+		if spellReflectOffered(spell, s, targetGUID, targetSess) && targetSess.checkSpellReflection(spell) {
+			return protocol.SpellMissReflect
+		}
+		return protocol.SpellMissNone
+	}
+	// Creature victims run the same arms in the same order (Object.cpp:2621
+	// before :2641 applies to any Unit).
+	if s.creatureTargetImmuneToSpell(ctx, targetGUID, spell, s, targetFaction) {
+		return protocol.SpellMissImmune
+	}
+	if spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s.server, creatureAuraKeyForPlayer(*s.player, targetGUID), spell, spell.SchoolMask) {
+		return protocol.SpellMissImmune
+	}
+	if s.creatureReflectOffered(spell, targetFaction) && s.server.creatureCheckSpellReflection(creatureAuraKeyForPlayer(*s.player, targetGUID), spell) {
+		return protocol.SpellMissReflect
+	}
+	return protocol.SpellMissNone
+}
+
 func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint32, targetGUID uint64, firstLogin bool, basePoints []int32, castItemGUID uint64) {
 	if s == nil || s.player == nil || spellID == 0 {
 		return
@@ -13126,22 +13169,34 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// cone (24/54/104) already rides the area-enemy arm, and cone selection
 	// carries no failure gate. The whole switch is skipped when the nearby
 	// arm selected a target, matching the client path's if/else precedence.
+	// selectionTargets is the post-selection unit list for the effect-loop
+	// fan-out below: the chain jumps appended above are stripped (they join
+	// per effect with their own ordinals), and each area/cone arm replaces
+	// it with the area search — the pre-fan-out wire-only list.
+	selectionTargets := hitTargets[:len(hitTargets)-len(chainJumpGUIDs)]
 	if !nearbySelected {
 		switch {
 		case isAreaEnemySpell(spell):
 			hitTargets = s.spellAreaEnemyTargets(ctx, spell, spellTarget)
+			selectionTargets = hitTargets
 		case isFriendlyAreaSpell(spell):
 			hitTargets = s.spellFriendlyAreaTargets(ctx, spell, spellTarget)
+			selectionTargets = hitTargets
 		case isEntryAreaSpell(spell):
 			hitTargets = s.spellEntryAreaTargets(ctx, spell, spellID, spellTarget)
+			selectionTargets = hitTargets
 		case isFriendlyConeSpell(spell):
 			hitTargets = s.spellFriendlyConeTargets(ctx, spell, spellTarget)
+			selectionTargets = hitTargets
 		case isGOAreaSpell(spell):
 			hitTargets = s.spellGOAreaTargets(ctx, spell, spellID, spellTarget)
+			selectionTargets = hitTargets
 		case isGOConeSpell(spell):
 			hitTargets = s.spellGOConeTargets(ctx, spell, spellID)
+			selectionTargets = hitTargets
 		case isFriendlyLastTargetAreaSpell(spell) || isFriendlyTargetAreaRaidClassSpell(spell):
 			hitTargets = s.spellFriendlyRefCenteredAreaTargets(ctx, spell, spellTarget, hitTargets)
+			selectionTargets = hitTargets
 		}
 	}
 	// Spell::SelectSpellTargets (Spell.cpp:789-797): a channeled spell whose
@@ -13207,13 +13262,69 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// SMSG_SPELL_GO when the spell has a visual, is channeled, or has speed.
 	// The target data carries the SelectSpellTargets per-effect UNIT/GAMEOBJECT
 	// augmentation (Spell.cpp:772-775), same as the client path above.
+	// Spell::TargetInfo::PreprocessTarget reflect leg (Spell.cpp:2350-2351) on the
+	// triggered path: every target rolls its own WorldObject::SpellHitResult
+	// (AddUnitTarget, Spell.cpp:2152), so a reflecting target sends the spell
+	// back at the caster while an immune target takes nothing. GUID 0 and the
+	// caster itself never roll (C++ `this == victim` → SPELL_MISS_NONE,
+	// Object.cpp:2635). Missed targets leave the GO hit list for the miss
+	// trailer (Spell.cpp:4504-4506); the effect loop below skips immune
+	// targets and retargets reflected ones to the caster (DoEffectOnLaunchTarget,
+	// Spell.cpp:7740).
+	triggeredMiss := make(map[uint64]uint8)
+	var triggeredMissGUIDs []uint64
+	for _, guid := range hitTargets {
+		if guid == 0 || guid == s.playerGUID {
+			continue
+		}
+		if _, done := triggeredMiss[guid]; done {
+			continue
+		}
+		if miss := s.triggeredSpellHitResult(ctx, spell, guid); miss != protocol.SpellMissNone {
+			triggeredMiss[guid] = miss
+			triggeredMissGUIDs = append(triggeredMissGUIDs, guid)
+			if miss == protocol.SpellMissReflect {
+				// ProcReflectDelayed (Spell.cpp:2181): at outbound-missile
+				// arrival the reflector's taken-side auras proc with
+				// PROC_HIT_REFLECT — the same delayed arm as the client
+				// path's doReflect, resolved against the reflector here.
+				reflectorGUID := guid
+				procTravelMs := s.spellTargetTimeDelayMs(ctx, spell, reflectorGUID)
+				procTriggered := s.triggeredNoProcEvents > 0
+				time.AfterFunc(time.Duration(procTravelMs)*time.Millisecond, func() {
+					if s.server == nil {
+						return
+					}
+					if rsess := s.server.findSessionByGUID(reflectorGUID); rsess != nil {
+						rsess.procSpellReflectTakenAuraTriggers(context.Background(), s.playerGUID, spell, procTriggered)
+					}
+				})
+			}
+		}
+	}
+	goHitTargets := make([]uint64, 0, len(hitTargets))
+	var goMissStatus []protocol.SpellMissStatus
+	for _, guid := range hitTargets {
+		if miss, ok := triggeredMiss[guid]; ok {
+			entry := protocol.SpellMissStatus{TargetGUID: guid, Reason: miss}
+			if miss == protocol.SpellMissReflect {
+				// Spell::SendSpellGo (Spell.cpp:4504-4506): ReflectStatus is
+				// the caster's own SpellHitResult — always NONE, the caster
+				// cannot reflect onto itself (Object.cpp:2635).
+				entry.ReflectStatus = protocol.SpellMissNone
+			}
+			goMissStatus = append(goMissStatus, entry)
+			continue
+		}
+		goHitTargets = append(goHitTargets, guid)
+	}
 	goTarget := spellGoPacketTarget(spell, spellTarget)
 	if spell.SpellVisual[0] != 0 || spell.SpellVisual[1] != 0 || isChanneledSpell(spell) || spell.Speed > 0 {
 		var goExtras protocol.SpellGoTrailerExtras
 		if castFlags&protocol.SpellCastFlagAmmo != 0 {
 			goExtras.Ammo = s.spellGoAmmoData(ctx)
 		}
-		goPkt := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, nil, goTarget, remainingPower, goExtras)
+		goPkt := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, goHitTargets, goMissStatus, goTarget, remainingPower, goExtras)
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 		if s.server != nil {
 			// C++ sends the caster a self-only packet carrying POWER_LEFT_SELF
@@ -13221,7 +13332,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// (Spell.cpp:4353-4366).
 			nearbyPacket := goPkt
 			if castFlags&protocol.SpellCastFlagPowerLeftSelf != 0 {
-				nearbyPacket = protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, castTimeStamp, hitTargets, nil, goTarget, nil, goExtras)
+				nearbyPacket = protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, castTimeStamp, goHitTargets, goMissStatus, goTarget, nil, goExtras)
 			}
 			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 		}
@@ -13229,8 +13340,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 
 	// Spell::_handle_immediate_phase (Spell.cpp:3718): initial spell threat
 	// (HandleThreatSpells, Spell.cpp:5096) applies to triggered casts too,
-	// before any effect handling.
-	s.handleSpellInitialThreat(ctx, spell, hitTargets, nil)
+	// before any effect handling. Missed targets ride the miss list: they
+	// count in the threat divisor but take zero threat (Spell.cpp:5123-5130).
+	s.handleSpellInitialThreat(ctx, spell, goHitTargets, triggeredMissGUIDs)
 
 	durationMs := uint32(0)
 	if s.server != nil && s.server.Data != nil && spell.DurationIndex > 0 {
@@ -13273,16 +13385,35 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// Spell::PreprocessSpellHit (Spell.cpp:2747-2749) runs on the triggered
 	// path too — triggered casts go through the same per-target processing
 	// (PreprocessTarget ahead of the effect loop).
-	s.breakHitBySpellAuras(ctx, spell, targetGUID)
-	// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2334) runs per target —
-	// the chain jumps are hit targets too, so their auras break the same way.
+	// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2334) runs per target, so the
+	// aura-break arm (PreprocessSpellHit, Spell.cpp:2747) hits every selected
+	// target — not just the wire target — plus the chain jumps. An immune
+	// target runs no PreprocessSpellHit (its _spellHitTarget stays null, so no
+	// break); a reflected target's break runs on the caster, which
+	// breakHitBySpellAuras already skips as self.
+	for _, selGUID := range selectionTargets {
+		if _, missed := triggeredMiss[selGUID]; missed {
+			continue
+		}
+		s.breakHitBySpellAuras(ctx, spell, selGUID)
+	}
 	for _, jumpGUID := range chainJumpGUIDs {
+		if _, missed := triggeredMiss[jumpGUID]; missed {
+			continue
+		}
 		s.breakHitBySpellAuras(ctx, spell, jumpGUID)
 	}
 	// Per-(cast, target) first-merge marker for the aura re-apply path
 	// (Spell.cpp:2842): only the first aura effect per target runs the
 	// ModStackAmount(+1) merge, later effects only refresh their amounts.
 	castMerged := make(map[uint64]struct{})
+	// triggeredEffectTarget is one per-effect hit on the triggered path: the
+	// jumpIndex counts chain jumps only (Spell.cpp:7771-7774) — selection
+	// targets carry 0 and take the unscaled amount.
+	type triggeredEffectTarget struct {
+		guid      uint64
+		jumpIndex int
+	}
 	for effectIndex, eff := range spell.Effects {
 		if eff.Effect == 0 && eff.Aura == 0 {
 			continue
@@ -13317,14 +13448,32 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// Spell::SelectEffectTypeImplicitTargets (Spell.cpp:1748+): for effects
 		// whose _data implicit target type is EXPLICIT, the target is the
 		// explicit unit target, falling back to the caster when there is none
-		// (the corpse leg has no Go model). On this path the explicit unit
-		// target is targetGUID; a zero targetGUID (the aura/trigger callers
-		// leave it for the fallback legs) resolves EXPLICIT-typed effects to
-		// the caster, matching C++. The CASTER leg is dead — the _data table
-		// carries zero EFFECT_IMPLICIT_TARGET_CASTER rows.
-		primaryTarget := targetGUID
-		if primaryTarget == 0 && spellEffectImplicitTargetExplicit(eff.Effect) {
-			primaryTarget = s.playerGUID
+		// (the corpse leg has no Go model). Each selection target resolves
+		// through the same fallback below: a zero targetGUID (the aura/trigger
+		// callers leave it for the fallback legs) resolves EXPLICIT-typed
+		// effects to the caster, matching C++. The CASTER leg is dead — the
+		// _data table carries zero EFFECT_IMPLICIT_TARGET_CASTER rows.
+		// Per-effect target fan-out (Spell.cpp:7712-7729 — DoEffectOnLaunchTarget runs
+		// per TargetInfo): every selected target takes the effect. The pre-fan-out
+		// code only hit the wire target, so area/cone/entry-area selections never
+		// received effects on this path. Chain jumps join per effect with their
+		// own jump ordinals (C++ effMask, Spell.cpp:1619); the falloff index counts
+		// chain jumps only (Spell.cpp:7771-7774) — selection targets take the
+		// unscaled amount. Immune targets take nothing; reflected targets resolve
+		// to the caster (Spell.cpp:7740).
+		effectTargets := make([]triggeredEffectTarget, 0, len(selectionTargets)+len(chainJumpGUIDs))
+		for _, selGUID := range selectionTargets {
+			target := selGUID
+			if target == 0 && spellEffectImplicitTargetExplicit(eff.Effect) {
+				target = s.playerGUID
+			}
+			if miss, ok := triggeredMiss[target]; ok {
+				if miss == protocol.SpellMissImmune {
+					continue
+				}
+				target = s.playerGUID
+			}
+			effectTargets = append(effectTargets, triggeredEffectTarget{guid: target})
 		}
 		// Per-effect chain threading (Spell.cpp:1582-1624): only the chaining
 		// effect reaches the jump targets (C++ adds them with that effect's
@@ -13332,18 +13481,27 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// ChainTarget-1 (the shared list carries the largest). The falloff is
 		// EffectChainAmplitude with SPELLMOD_DAMAGE_MULTIPLIER applied once per
 		// effect (Spell.cpp:7717-7718), accumulated per hit jump
-		// (Spell.cpp:7771-7774); jump index 0 is the primary target.
-		effectTargets := []uint64{primaryTarget}
+		// (Spell.cpp:7771-7774).
 		chainMult := 1.0
 		if jumpCap := int(eff.ChainTargets) - 1; jumpCap > 0 && len(chainJumpGUIDs) > 0 &&
 			(chainSelectionEligibleTarget(eff.ImplicitTargetA) || chainSelectionEligibleTarget(eff.ImplicitTargetB)) {
 			if jumpCap > len(chainJumpGUIDs) {
 				jumpCap = len(chainJumpGUIDs)
 			}
-			effectTargets = append(effectTargets, chainJumpGUIDs[:jumpCap]...)
+			for i, jumpGUID := range chainJumpGUIDs[:jumpCap] {
+				target := jumpGUID
+				if miss, ok := triggeredMiss[target]; ok {
+					if miss == protocol.SpellMissImmune {
+						continue
+					}
+					target = s.playerGUID
+				}
+				effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, jumpIndex: i + 1})
+			}
 			chainMult = s.applySpellModFloat(spell, spellModDamageMultiplier, float64(eff.ChainAmplitude)*100.0) / 100.0
 		}
-		for jumpIndex, effectTarget := range effectTargets {
+		for _, et := range effectTargets {
+			effectTarget, jumpIndex := et.guid, et.jumpIndex
 			if eff.Effect == 1 { // SPELL_EFFECT_INSTAKILL
 				s.executeSpellInstantKill(ctx, effectTarget, spellID)
 			} else if eff.Effect == 2 { // SPELL_EFFECT_SCHOOL_DAMAGE
@@ -19277,7 +19435,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		var drGroup DiminishingGroup
 		if !positive && durationMs > 0 {
 			var ok bool
-			drGroup, durationMs, ok = targetSess.applyDiminishingToDuration(spell.ID, spell.Mechanic, durationMs, true, triggeredByAura)
+			drGroup, durationMs, ok = targetSess.applyDiminishingToDuration(spell, durationMs, true, triggeredByAura)
 			if !ok {
 				// Target is immune to crowd control due to DR
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(1, spell.ID, 38), true) // SPELL_FAILED_IMMUNE = 38

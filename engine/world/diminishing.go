@@ -2,6 +2,8 @@ package world
 
 import (
 	"time"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
 
 // DiminishingGroup mirrors TrinityCore enum DiminishingGroup (SharedDefines.h:3269-3294).
@@ -203,8 +205,10 @@ func getDiminishingReturnsGroup(spellID, mechanic uint32, triggered bool) Dimini
 	}
 }
 
-// isGroupDurationLimited returns true if crowd control of this group is capped at 10 seconds in PvP.
-// Mirrors TrinityCore SpellInfo::diminishingLimitDurationCompute (SpellInfo.cpp:2465-2490).
+// isGroupDurationLimited mirrors the isGroupDurationLimited lambda inside
+// SpellInfo::diminishingLimitDurationCompute (SpellInfo.cpp:2465-2490): only
+// these groups cap the aura duration in PvP. Scatter Shot, Silence and
+// Dragon's Breath resolve DR groups but carry no duration cap in C++.
 func isGroupDurationLimited(group DiminishingGroup) bool {
 	switch group {
 	case DiminishingBanish,
@@ -218,16 +222,58 @@ func isGroupDurationLimited(group DiminishingGroup) bool {
 		DiminishingMindControl,
 		DiminishingOpeningStun,
 		DiminishingRoot,
-		DiminishingScatterShot,
-		DiminishingSilence,
 		DiminishingSleep,
 		DiminishingStun,
-		DiminishingLimitOnly,
-		DiminishingDragonsBreath:
+		DiminishingLimitOnly:
 		return true
 	default:
 		return false
 	}
+}
+
+// diminishingDurationLimitMs mirrors the diminishingLimitDurationCompute lambda
+// in SpellInfo::_LoadDiminishingReturns (SpellInfo.cpp:2462-2528): 0 when the
+// group carries no duration cap; the family-specific explicit PvP cap when one
+// matches (Wyvern Sting 6s, Repentance 6s, Faerie Fire 40s, ...); 10s otherwise.
+func diminishingDurationLimitMs(spell wotlk.Spell, group DiminishingGroup) uint32 {
+	if !isGroupDurationLimited(group) {
+		return 0
+	}
+	switch spell.SpellFamilyName {
+	case spellFamilyDruid:
+		// Faerie Fire - limit to 40 seconds in PvP (3.1)
+		if spell.SpellFamilyFlags[0]&0x400 != 0 {
+			return 40000
+		}
+	case spellFamilyHunter:
+		// Wyvern Sting
+		if spell.SpellFamilyFlags[1]&0x1000 != 0 {
+			return 6000
+		}
+		// Hunter's Mark
+		if spell.SpellFamilyFlags[0]&0x400 != 0 {
+			return 120000
+		}
+	case spellFamilyPaladin:
+		// Repentance - limit to 6 seconds in PvP
+		if spell.SpellFamilyFlags[0]&0x4 != 0 {
+			return 6000
+		}
+	case spellFamilyWarlock:
+		// Banish - limit to 6 seconds in PvP
+		if spell.SpellFamilyFlags[1]&0x8000000 != 0 {
+			return 6000
+		}
+		// Curse of Tongues - limit to 12 seconds in PvP
+		if spell.SpellFamilyFlags[2]&0x800 != 0 {
+			return 12000
+		}
+		// Curse of Elements - limit to 120 seconds in PvP
+		if spell.SpellFamilyFlags[1]&0x200 != 0 {
+			return 120000
+		}
+	}
+	return diminishingDurationLimit
 }
 
 // diminishingReturnsType mirrors TrinityCore enum DiminishingReturnsType,
@@ -323,15 +369,21 @@ func (s *session) clearDiminishings() {
 // Mirrors TrinityCore Unit::ApplyDiminishingToDuration (Unit.cpp:9036-9099).
 // The triggered flag selects the aura-proc DR group variant
 // (Spell::PreprocessSpellHit, Spell.cpp:2798 — m_triggeredByAuraSpell != null).
-func (s *session) applyDiminishingToDuration(spellID, mechanic uint32, durationMs uint32, isPvP, triggered bool) (DiminishingGroup, uint32, bool) {
-	group := getDiminishingReturnsGroup(spellID, mechanic, triggered)
+func (s *session) applyDiminishingToDuration(spell wotlk.Spell, durationMs uint32, isPvP, triggered bool) (DiminishingGroup, uint32, bool) {
+	group := getDiminishingReturnsGroup(spell.ID, spell.Mechanic, triggered)
 	if group == DiminishingNone || durationMs == 0 {
 		return DiminishingNone, durationMs, true
 	}
 
-	// 10 second PvP duration cap (WotLK 3.3.5 / TBC 2.2.0 rule)
-	if isPvP && isGroupDurationLimited(group) && durationMs > diminishingDurationLimit {
-		durationMs = diminishingDurationLimit
+	// Duration of crowd control abilities on PvP targets is limited
+	// (Unit.cpp:9048-9062, the 2.2.0 rule): the cap is the spell's
+	// DiminishDurationLimit — the family-specific explicit cap when one
+	// matches, 10s otherwise, none when the group is not duration-limited
+	// (SpellInfo.cpp:2462-2528).
+	if isPvP {
+		if limit := diminishingDurationLimitMs(spell, group); limit > 0 && durationMs > limit {
+			durationMs = limit
+		}
 	}
 
 	if group == DiminishingLimitOnly {
