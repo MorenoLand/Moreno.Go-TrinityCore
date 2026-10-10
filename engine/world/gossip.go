@@ -222,6 +222,19 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			return true
 		}
 	}
+	// HandleGossipSelectOptionOpcode (MiscHandler.cpp:131-156): gameobject and
+	// player GUIDs take their own arms — the Eluna gameobject select hook and
+	// the ScriptMgr player select hook — instead of the creature path below.
+	// Go exposes both via RegisterGameObjectGossipEvent and
+	// RegisterPlayerGossipEvent, and Lua can open menus on either source via
+	// GossipSendMenu, so selects on them must route here rather than drop at
+	// the creature lookup.
+	if uint16(guid>>48) == 0xF110 {
+		return s.handleGameObjectGossipSelect(ctx, guid, item, code)
+	}
+	if guid == s.playerGUID {
+		return s.handlePlayerGossipSelect(ctx, menuID, item, code)
+	}
 	creature := s.luaCreature(ctx, guid)
 	if creature == nil {
 		return true
@@ -541,6 +554,117 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 		}
 	}
 	s.debug("gossip selection handled", "account", s.accountName, "entry", entry, "list", listID)
+	return true
+}
+
+// handleGameObjectGossipSelect processes CMSG_GOSSIP_SELECT_OPTION for a
+// gameobject GUID — the gameobject arm of
+// WorldSession::HandleGossipSelectOptionOpcode (MiscHandler.cpp:131-136,
+// 168-173, 198-204).
+func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64, item gossipMenuItem, code string) bool {
+	if !s.playerLoaded || s.player == nil || s.server == nil {
+		return true
+	}
+	entry := uint32((guid >> 24) & 0x00FFFFFF)
+	low := uint32(guid & 0x00FFFFFF)
+	// GetGameObjectIfCanInteractWith (Player.cpp:2363-2398): the gameobject
+	// must exist, not use the "Point" icon, and be within interaction range
+	// on the player's map and instance — the handleGameObjectUse gates.
+	goState, err := s.server.getOrLoadGameObjectState(ctx, guid, low, entry, s.player.Map, s.player.InstanceID)
+	if err != nil || goState == nil || goState.IconName == "Point" {
+		return true
+	}
+	maxUseDist := 10.0
+	switch goState.Type {
+	case GameObjectTypeFishingNode:
+		maxUseDist = 100.0
+	case GameObjectTypeFishingHole:
+		maxUseDist = 20.5
+	}
+	if goState.Map != s.player.Map || goState.InstanceID != s.player.InstanceID ||
+		distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > maxUseDist {
+		return true
+	}
+	// Eluna::OnGossipSelect[Code] fires before the native arms; a Lua false
+	// return skips them (MiscHandler.cpp:198-204).
+	if s.fireGameObjectGossipSelectHook(ctx, guid, item.Sender, item.Action, code) {
+		return true
+	}
+	// Player::OnGossipSelect (Player.cpp:14580-14600): gameobjects accept
+	// only options up to GOSSIP_OPTION_QUESTGIVER; the BoxMoney sufficiency
+	// check runs before the arms, the charge after them.
+	if item.Action > 2 {
+		s.debug("gameobject gossip selection rejected: invalid option", "account", s.accountName, "entry", entry, "action", item.Action)
+		return true
+	}
+	boxCost := item.BoxMoney
+	if boxCost > 0 {
+		if s.player.Money < boxCost {
+			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(0, 0, buyErrNotEnoughMoney), true)
+			s.sendGossipComplete()
+			return true
+		}
+	}
+	switch item.Action {
+	case 1, 20: // GOSSIP_OPTION_GOSSIP / GOSSIP_OPTION_DUALSPEC_INFO
+		// Player::OnGossipSelect (Player.cpp:14604-14616): the POI fires
+		// before the submenu. The submenu re-prepare for a gameobject source
+		// has no Go loader (Go builds gossip menus for creatures only), so
+		// only the POI arm bridges; the menu otherwise stays open.
+		if item.ActionPoiID != 0 {
+			s.sendGossipPOI(ctx, item.ActionPoiID)
+		}
+	case 2: // GOSSIP_OPTION_QUESTGIVER
+		// PrepareQuestMenu+SendPreparedQuest for a gameobject source has no
+		// Go bridge — Go never opens gameobject quest menus natively — so a
+		// scripted select hook is the only consumer of this arm.
+	}
+	// Player::OnGossipSelect (Player.cpp:14699): the BoxMoney charge lands
+	// after the option arms.
+	if boxCost > 0 {
+		s.player.Money -= boxCost
+		if cdb := s.server.CharactersStore.DB; cdb != nil {
+			_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+		}
+		s.sendPlayerUpdate()
+	}
+	if s.gossip == nil && !s.gossipClosed {
+		s.gossipClosed = true
+		if err := s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true); err != nil {
+			return false
+		}
+	}
+	s.debug("gameobject gossip selection handled", "account", s.accountName, "entry", entry)
+	return true
+}
+
+// handlePlayerGossipSelect processes CMSG_GOSSIP_SELECT_OPTION for the
+// player's own GUID — the player arm of
+// WorldSession::HandleGossipSelectOptionOpcode (MiscHandler.cpp:146-151).
+// C++ accepts only the player's own GUID with the current menu (the shared
+// sender/menu gates above already enforce both), then fires
+// ScriptMgr::OnGossipSelect[Code] — Eluna's HandleGossipSelectOption(Player*,
+// menuId, ...) (LuaEngine/GossipHooks.cpp:64): ClearMenus, then (player,
+// player, sender, action, code-or-nil) with no cancel semantics
+// (CallAllFunctions). There are no native arms on this path.
+func (s *session) handlePlayerGossipSelect(ctx context.Context, menuID uint32, item gossipMenuItem, code string) bool {
+	s.gossip = nil
+	codeArg := any(nil)
+	if code != "" {
+		codeArg = code
+	}
+	if s.server != nil && s.server.Features != nil && s.server.Features.Scripts != nil {
+		kind := scripting.PlayerGossipKind(menuID)
+		if s.server.Features.Scripts.HasHook(kind, scripting.GossipEventOnSelect) {
+			if _, err := s.server.Features.Scripts.TriggerPlayerGossipEvent(ctx, menuID, scripting.GossipEventOnSelect, s.luaPlayer(), s.luaPlayer(), item.Sender, item.Action, codeArg); err != nil {
+				s.debug("lua player gossip select failed", "account", s.accountName, "menu", menuID, "error", err)
+			}
+		}
+	}
+	s.gossipClosed = true
+	if err := s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true); err != nil {
+		return false
+	}
 	return true
 }
 

@@ -102,12 +102,12 @@ const (
 // numbering (LuaEngine/Hooks.h GossipEvents). The engine fires the item
 // gossip arms (ON_HELLO, ON_SELECT) via TriggerItemGossipEvent; the
 // creature arms fire inline in engine/world/gossip.go; the gameobject hello
-// arm fires via TriggerGameObjectGossipEvent from handleGameObjectUse, and
-// the gameobject/player select arms have no fire sites — Go never opens
-// gameobject or player gossip menus (see engine/world/gameobjects.go:541),
-// so CMSG_GOSSIP_SELECT_OPTION with a gameobject/player GUID is rejected at
-// the sender check, like the C++ fire conditions in
-// HandleGossipSelectOptionOpcode (MiscHandler.cpp:138-198).
+// arm fires via TriggerGameObjectGossipEvent from handleGameObjectUse; the
+// gameobject select arm fires via TriggerGameObjectGossipEvent from the
+// gameobject branch of handleGossipSelectOption (gameobject_hooks.go), and
+// the player select arm fires via TriggerPlayerGossipEvent from the player
+// branch — both keyed like their Eluna bindings
+// (HandleGossipSelectOptionOpcode, MiscHandler.cpp:138-227).
 const (
 	GossipEventOnHello  = 1
 	GossipEventOnSelect = 2
@@ -551,6 +551,23 @@ func GameObjectGossipKind(entry uint32) string {
 // leading event.
 func (r *Runtime) TriggerGameObjectGossipEvent(ctx context.Context, entry uint32, event int, args ...any) ([]any, error) {
 	return r.Trigger(ctx, GameObjectGossipKind(entry), event, append([]any{event}, args...)...)
+}
+
+// PlayerGossipKind is the hook kind for RegisterPlayerGossipEvent(menuID,
+// event, fn): "player_gossip:<menuID>", mirroring Eluna's PlayerGossipBindings
+// menuId key (LuaEngine/GossipHooks.cpp:66).
+func PlayerGossipKind(menuID uint32) string {
+	return "player_gossip:" + strconv.FormatUint(uint64(menuID), 10)
+}
+
+// TriggerPlayerGossipEvent fires hooks registered with
+// RegisterPlayerGossipEvent(menuID, event, fn) for the given gossip menu.
+// C++ Eluna gossip hooks pass (event, player, ...) (LuaEngine/GossipHooks.cpp),
+// so the event number is prepended like TriggerGameObjectGossipEvent. The
+// player select arm passes (event, player, player, sender, action, code-or-nil)
+// with no cancel semantics (CallAllFunctions, GossipHooks.cpp:78).
+func (r *Runtime) TriggerPlayerGossipEvent(ctx context.Context, menuID uint32, event int, args ...any) ([]any, error) {
+	return r.Trigger(ctx, PlayerGossipKind(menuID), event, append([]any{event}, args...)...)
 }
 
 // TriggerInstanceEvent fires hooks registered with RegisterMapEvent(mapID,

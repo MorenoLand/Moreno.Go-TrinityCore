@@ -181,3 +181,40 @@ func (s *session) fireGameObjectGossipHelloHook(ctx context.Context, guid uint64
 	}
 	return luaCancelled(values)
 }
+
+// fireGameObjectGossipSelectHook mirrors Eluna::OnGossipSelect[Code]
+// (LuaEngine/GossipHooks.cpp:42-61): ClearMenus, then (player, go, sender,
+// action[, code]) on the GOSSIP_EVENT_ON_SELECT bindings keyed by GO entry.
+// A Lua false return cancels the native select arms, like the C++ early
+// return in HandleGossipSelectOptionOpcode (MiscHandler.cpp:198-204).
+func (s *session) fireGameObjectGossipSelectHook(ctx context.Context, guid uint64, sender, action uint32, code string) bool {
+	if s == nil || s.server == nil || uint16(guid>>48) != 0xF110 {
+		return false
+	}
+	if s.server.Features == nil || s.server.Features.Scripts == nil {
+		return false
+	}
+	goObj := s.luaGameObject(ctx, guid)
+	if goObj == nil {
+		// Dynamic/instance spawns have no gameobject-table row; resolve
+		// from the object registry instead, like the hello hook.
+		goObj = s.server.serverLuaGameObject(ctx, guid)
+	}
+	if goObj == nil {
+		return false
+	}
+	entry := uint32((guid >> 24) & 0x00FFFFFF)
+	if !s.server.Features.Scripts.HasHook(scripting.GameObjectGossipKind(entry), scripting.GossipEventOnSelect) {
+		return false
+	}
+	s.gossip = nil
+	args := []any{s.luaPlayer(), goObj, sender, action}
+	if code != "" {
+		args = append(args, code)
+	}
+	values, err := s.server.Features.Scripts.TriggerGameObjectGossipEvent(ctx, entry, scripting.GossipEventOnSelect, args...)
+	if err != nil {
+		s.debug("lua gameobject gossip select failed", "entry", entry, "error", err)
+	}
+	return luaCancelled(values)
+}
