@@ -137,11 +137,24 @@ func unpackCalendarPackedTime(packed uint32) time.Time {
 	)
 }
 
+// calendarPackedToEventTime mirrors the C++ event-time pipeline
+// LocalTimeToUTCTime(ReadPackedTime(p)) (CalendarHandler.cpp:240, Util.cpp:73):
+// ReadPackedTime decodes the packed bits as server-local wall time (mktime),
+// then LocalTimeToUTCTime adds the POSIX timezone offset (seconds west of
+// UTC). The result is what CalendarEvent stores in the eventtime column and
+// what AppendPackedTime re-packs on every send path (CalendarMgr.cpp:523+).
+func calendarPackedToEventTime(packed uint32) int64 {
+	t := unpackCalendarPackedTime(packed)
+	_, east := t.Zone()
+	return t.Unix() - int64(east)
+}
+
 // calendarEventInPast mirrors the "prevent events in the past" gate in
-// HandleCalendarAddEvent/UpdateEvent/CopyEvent (CalendarHandler.cpp:238):
-// the converted packed time must not be older than now minus the 86400s hack.
+// HandleCalendarAddEvent/UpdateEvent/CopyEvent (CalendarHandler.cpp:244):
+// C++ compares the LocalTimeToUTCTime-converted packed time against now
+// minus the 86400s hack, not the raw client value.
 func calendarEventInPast(packed uint32) bool {
-	return unpackCalendarPackedTime(packed).Unix() < time.Now().Unix()-86400
+	return calendarPackedToEventTime(packed) < time.Now().Unix()-86400
 }
 
 // calendarCreatorGuildID returns the guild of an event's creator, which is
@@ -829,10 +842,16 @@ func (s *session) handleCalendarAddEvent(ctx context.Context, payload []byte) bo
 
 		var nextID uint64 = 1
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM calendar_events").Scan(&nextID)
+		// C++ stores eventtime as LocalTimeToUTCTime(ReadPackedTime(...))
+		// (CalendarHandler.cpp:240) and time2 as the raw ReadPackedTime epoch
+		// (unkPackedTime is never converted), so the columns hold time_t, not
+		// packed bits — every send path re-packs via AppendPackedTime.
+		eventTime := uint32(calendarPackedToEventTime(packedEventTime))
+		lockDate := uint32(unpackCalendarPackedTime(packedLockDate).Unix())
 		_, _ = cdb.ExecContext(ctx,
 			`INSERT INTO calendar_events (id, creator, title, description, type, dungeon, eventtime, flags, time2)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			nextID, s.playerGUID, title, description, eventType, dungeonID, packedEventTime, flags, packedLockDate)
+			nextID, s.playerGUID, title, description, eventType, dungeonID, eventTime, flags, lockDate)
 
 		// Guild announcements carry a single Empty-GUID NOT_SIGNED_UP invite
 		// that CalendarMgr::AddInvite neither stores nor broadcasts
@@ -984,7 +1003,8 @@ func (s *session) handleCalendarUpdateEvent(ctx context.Context, payload []byte)
 		_, _ = cdb.ExecContext(ctx,
 			`UPDATE calendar_events SET title = ?, description = ?, type = ?, dungeon = ?, eventtime = ?, flags = ?, time2 = ?
 			 WHERE id = ? AND (creator = ? OR id IN (SELECT event FROM calendar_invites WHERE invitee = ? AND rank IN (1, 2)))`,
-			title, description, eventType, dungeonID, packedEventTime, flags, packedLockDate, eventID, s.playerGUID, s.playerGUID)
+			title, description, eventType, dungeonID, uint32(calendarPackedToEventTime(packedEventTime)), flags,
+			uint32(unpackCalendarPackedTime(packedLockDate).Unix()), eventID, s.playerGUID, s.playerGUID)
 
 		// SendCalendarEventUpdateAlert (CalendarMgr.cpp:515-533): u8(1), u64 event
 		// id, packed old event time, u32 flags, packed event time, u8 type,
@@ -1129,7 +1149,7 @@ func (s *session) handleCalendarCopyEvent(ctx context.Context, payload []byte) b
 		_, _ = cdb.ExecContext(ctx,
 			`INSERT INTO calendar_events (id, creator, title, description, type, dungeon, eventtime, flags, time2)
 			 SELECT ?, creator, title, description, type, dungeon, ?, flags, time2 FROM calendar_events WHERE id = ?`,
-			nextID, packedEventTime, eventID)
+			nextID, uint32(calendarPackedToEventTime(packedEventTime)), eventID)
 
 		rows, err := cdb.QueryContext(ctx, "SELECT invitee, sender, status, statustime, rank, text FROM calendar_invites WHERE event = ?", eventID)
 		if err == nil {

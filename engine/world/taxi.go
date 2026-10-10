@@ -307,6 +307,13 @@ func (s *session) sendTaxiMenu(ctx context.Context, flightMasterGUID uint64) boo
 	if curNode == 0 {
 		return true
 	}
+	// SendTaxiMenu (TaxiHandler.cpp:103-131): Grimwing in Ebon Hold
+	// (entry 29480) forces the taxi-cheater view for this menu only — the
+	// player's own flag is restored right after the packet goes out.
+	lastCheater := s.isTaxiCheater()
+	if objectUint32OrZero(creature, "Entry") == 29480 && s.player != nil {
+		s.player.ExtraFlags |= playerExtraTaxiCheat
+	}
 	// SendTaxiMenu never announces SMSG_NEW_TAXI_PATH; the map carries the
 	// player's known nodes (or the whole network for taxi cheaters).
 	packet := protocol.NewBuffer(4 + 8 + 4 + 8*taxiMaskSize)
@@ -326,6 +333,9 @@ func (s *session) sendTaxiMenu(ctx context.Context, flightMasterGUID uint64) boo
 		}
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_SHOWTAXINODES), packet.Bytes(), true)
+	if s.player != nil && !lastCheater {
+		s.player.ExtraFlags &^= playerExtraTaxiCheat
+	}
 	s.debug("taxi menu sent", "account", s.accountName, "master", flightMasterGUID, "node", curNode)
 	return true
 }
@@ -362,8 +372,11 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte) bool {
 	if len(payload) >= 20 {
 		// CMSG_ACTIVATETAXIEXPRESS: guid (8), nodeCount (4), nodes... (nodeCount * 4)
 		nodeCount, err := reader.ReadU32()
-		if err != nil || nodeCount < 2 || len(payload) < int(12+nodeCount*4) {
+		if err != nil || len(payload) < int(12+nodeCount*4) {
 			return reply(taxiErrNoSuchPath)
+		}
+		if nodeCount == 0 {
+			return true // HandleActivateTaxiExpressOpcode: empty node list returns silently
 		}
 		var nodes []uint32
 		for i := uint32(0); i < nodeCount; i++ {
@@ -375,6 +388,9 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte) bool {
 				return reply(taxiErrNotVisited)
 			}
 			nodes = append(nodes, node)
+		}
+		if len(nodes) < 2 {
+			return true // Player::ActivateTaxiPathTo: nodes.size() < 2 returns false with no reply
 		}
 		sourceNode = nodes[0]
 		destNode = nodes[len(nodes)-1]

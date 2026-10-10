@@ -1616,12 +1616,9 @@ func (s *session) loadCorpse(ctx context.Context) (corpseRecord, bool) {
 // turned into bones. The arena guard has no Go arena system yet.
 func (s *session) handleReclaimCorpse(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
-	_, err := reader.ReadU64()
-	if err != nil {
-		reader = protocol.NewReader(payload)
-		if _, err = reader.ReadPackedGUID(); err != nil {
-			return false
-		}
+	// MiscPackets.cpp:229: _worldPacket >> CorpseGUID — raw 8-byte read.
+	if _, err := reader.ReadU64(); err != nil {
+		return false
 	}
 	if !s.playerLoaded || s.player == nil {
 		return true

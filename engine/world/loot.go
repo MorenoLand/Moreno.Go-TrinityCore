@@ -1311,7 +1311,8 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	reader := protocol.NewReader(payload)
-	targetGUID, err := reader.ReadPackedGUID()
+	// LootHandler.cpp:230: recvData >> guid — a raw 8-byte read, not packed.
+	targetGUID, err := reader.ReadU64()
 	if err != nil {
 		return false
 	}
@@ -2900,7 +2901,8 @@ func (s *session) handleLootRelease(payload []byte) bool {
 		return true
 	}
 	reader := protocol.NewReader(payload)
-	targetGUID, err := reader.ReadPackedGUID()
+	// LootHandler.cpp:250: recvData >> guid — raw 8-byte read, not packed.
+	targetGUID, err := reader.ReadU64()
 	if err != nil {
 		return false
 	}

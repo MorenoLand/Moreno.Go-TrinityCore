@@ -2181,11 +2181,12 @@ func (s *session) handleDuelAccepted(ctx context.Context, payload []byte) bool {
 	if s.server != nil {
 		partner = s.server.findSessionByGUID(s.duelPartner)
 	}
-	// DuelHandler.cpp:30-34: the arbiter GUID on the wire must match the
-	// opponent's PLAYER_DUEL_ARBITER (both sides share the flag object, so the
+	// DuelHandler.cpp:31-32: recvPacket >> guid — a raw 8-byte read, not
+	// packed; the arbiter GUID on the wire must match the opponent's
+	// PLAYER_DUEL_ARBITER (both sides share the flag object, so the
 	// local copy is the equivalent check).
 	r := protocol.NewReader(payload)
-	arbiterGUID, err := r.ReadPackedGUID()
+	arbiterGUID, err := r.ReadU64()
 	if err != nil || arbiterGUID != s.player.DuelArbiter {
 		return true
 	}
