@@ -919,6 +919,10 @@ func (s *session) handleLfdPartyLockInfoRequest(ctx context.Context, payload []b
 		locks := s.getLockedDungeons(m.GUID)
 		otherLocks = append(otherLocks, memberLock{guid: m.GUID, locks: locks})
 	}
+	// TrinityCore stores the party lock map in a std::map keyed by guid
+	// (LFGHandler.cpp:233), so members serialize in ascending guid order,
+	// not group order.
+	sort.Slice(otherLocks, func(i, j int) bool { return otherLocks[i].guid < otherLocks[j].guid })
 
 	buf := protocol.NewBuffer(64)
 	buf.WriteU8(uint8(len(otherLocks)))

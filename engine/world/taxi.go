@@ -118,6 +118,18 @@ func (s *session) nearestCreatureTaxiNode(ctx context.Context, guid uint64) (uin
 	if objectUint32OrZero(creature, "NPCFlags")&unitNPCFlagFlightmaster == 0 {
 		return 0, false
 	}
+	// TrinityCore SendTaxiStatus: a hostile flight master gets no answer
+	// (TaxiHandler.cpp:28: unit->IsHostileTo(player)). NearestTaxiNode's
+	// caller in sendTaxiNodeStatusMultiple already applies the same gate.
+	low := uint32(guid & 0x00FFFFFF)
+	entry := uint32((guid >> 24) & 0x00FFFFFF)
+	var faction int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(t.faction, 0) FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?`, low, entry).Scan(&faction); err == nil {
+		player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+		if s.server.isHostileFaction(uint32(faction), player) {
+			return 0, false
+		}
+	}
 	mapID := objectUint32OrZero(creature, "Map")
 	x, okX := objectFloat32Field(creature, "X")
 	y, okY := objectFloat32Field(creature, "Y")
