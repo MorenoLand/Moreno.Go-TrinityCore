@@ -120,7 +120,7 @@ func (s *session) spellEntryAreaTargets(ctx context.Context, spell wotlk.Spell, 
 	allowDead := spellAllowsDeadTarget(spell)
 	targets := make([]uint64, 0)
 	seen := make(map[uint64]struct{})
-	s.friendlyScanCandidates(ctx, centerX, centerY, float32(radius), func(c friendlyCandidate) {
+	s.friendlyScanCandidates(ctx, centerX, centerY, float32(radius), spell, func(c friendlyCandidate) {
 		if c.mapID != s.player.Map || c.instanceID != s.player.InstanceID {
 			return
 		}

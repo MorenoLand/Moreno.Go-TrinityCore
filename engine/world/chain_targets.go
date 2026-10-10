@@ -215,7 +215,14 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 	}
 	s.server.motionMu.Unlock()
 	motionGUIDs := make(map[uint64]struct{}, len(motions))
+	// SearchChainTargets -> SearchAreaTargets -> Spell::GetSearcherTypeMask
+	// (Spell.cpp:1891/1881/1809): SPELL_ATTR3_ONLY_TARGET_PLAYERS /
+	// SPELL_ATTR3_ONLY_TARGET_GHOSTS drop the CREATURE container.
+	playersOnly := spellSearchPlayersOnly(spell)
 	for _, motion := range motions {
+		if playersOnly {
+			continue
+		}
 		motionGUIDs[motion.GUID] = struct{}{}
 		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.MaxHealth, allyOf(motion.Faction))
 	}
@@ -227,7 +234,8 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.UnitFlags, 0, targetSession.player.Health, targetSession.player.MaxHealth, targetSession.playerAlliance() == s.playerAlliance())
 	}
 	s.server.sessionsMu.RUnlock()
-	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+	// The CREATURE container is dropped by the GetSearcherTypeMask attribute arm above.
+	if !playersOnly && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, primary.Map, float64(primary.X-radius), float64(primary.X+radius), float64(primary.Y-radius), float64(primary.Y+radius))
 		if err == nil {
 			defer rows.Close()

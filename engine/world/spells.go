@@ -997,7 +997,14 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 	}
 	s.server.motionMu.Unlock()
 	motionGUIDs := make(map[uint64]struct{}, len(motions))
+	// Spell::GetSearcherTypeMask (Spell.cpp:1836-1842):
+	// SPELL_ATTR3_ONLY_TARGET_PLAYERS / SPELL_ATTR3_ONLY_TARGET_GHOSTS drop
+	// the CREATURE container, so the motion and DB sweeps contribute nothing.
+	playersOnly := spellSearchPlayersOnly(spell)
 	for _, motion := range motions {
+		if playersOnly {
+			continue
+		}
 		motionGUIDs[motion.GUID] = struct{}{}
 		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.Faction, motion.UnitFlags, motion.FlagsExtra, motion.Health)
 	}
@@ -1022,7 +1029,8 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 		targets = append(targets, targetSession.playerGUID)
 	}
 	s.server.sessionsMu.RUnlock()
-	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+	// The CREATURE container is dropped by the GetSearcherTypeMask attribute arm above.
+	if !playersOnly && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, player.Map, float64(centerX-radius), float64(centerX+radius), float64(centerY-radius), float64(centerY+radius))
 		if err == nil {
 			defer rows.Close()

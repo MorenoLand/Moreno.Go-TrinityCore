@@ -114,6 +114,12 @@ func (s *session) spellGOAreaTargets(ctx context.Context, spell wotlk.Spell, spe
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return nil
 	}
+	// Spell::GetSearcherTypeMask (Spell.cpp:1809-1842): the GOBJ base mask
+	// narrows to zero under SPELL_ATTR3_ONLY_TARGET_PLAYERS /
+	// SPELL_ATTR3_ONLY_TARGET_GHOSTS, so the search contributes nothing.
+	if spellSearchPlayersOnly(spell) {
+		return nil
+	}
 	effectMask := entryImplicitEffectMask(spell, implicitTargetGOSrcArea) | entryImplicitEffectMask(spell, implicitTargetGODestArea)
 	radius := s.spellGOAreaRadius(spell, effectMask)
 	if radius <= 0 {
@@ -186,6 +192,12 @@ func (s *session) spellGOAreaTargets(ctx context.Context, spell wotlk.Spell, spe
 // MaxTargets cap mirrors the cone path (Spell.cpp:1212).
 func (s *session) spellGOConeTargets(ctx context.Context, spell wotlk.Spell, spellID uint32) []uint64 {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return nil
+	}
+	// Spell::GetSearcherTypeMask (Spell.cpp:1809-1842): the GOBJ base mask
+	// narrows to zero under SPELL_ATTR3_ONLY_TARGET_PLAYERS /
+	// SPELL_ATTR3_ONLY_TARGET_GHOSTS, so the search contributes nothing.
+	if spellSearchPlayersOnly(spell) {
 		return nil
 	}
 	effectMask := entryImplicitEffectMask(spell, implicitTargetGOCone)

@@ -104,7 +104,7 @@ func (s *session) spellHostileNearbyTarget(ctx context.Context, spell wotlk.Spel
 	player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	bestGUID := uint64(0)
 	bestDist := maxRange
-	s.friendlyScanCandidates(ctx, s.player.X, s.player.Y, float32(maxRange), func(c friendlyCandidate) {
+	s.friendlyScanCandidates(ctx, s.player.X, s.player.Y, float32(maxRange), spell, func(c friendlyCandidate) {
 		if c.guid == s.playerGUID || c.mapID != player.Map || c.instanceID != player.InstanceID ||
 			c.health == 0 || spellTargetUnitBlocked(spell, c.unitFlags, c.flagsExtra, false) ||
 			s.server.isTotemGUID(c.guid) {
@@ -186,11 +186,16 @@ type friendlyCandidate struct {
 
 // friendlyScanCandidates visits every plausible unit once: motion creatures,
 // online players, then static creature rows inside the center/radius box.
-func (s *session) friendlyScanCandidates(ctx context.Context, cx, cy, radius float32, visit func(friendlyCandidate)) {
+func (s *session) friendlyScanCandidates(ctx context.Context, cx, cy, radius float32, spell wotlk.Spell, visit func(friendlyCandidate)) {
 	if s == nil || s.player == nil || s.server == nil {
 		return
 	}
 	mapID, instanceID := s.player.Map, s.player.InstanceID
+	// Spell::GetSearcherTypeMask (Spell.cpp:1836-1842):
+	// SPELL_ATTR3_ONLY_TARGET_PLAYERS / SPELL_ATTR3_ONLY_TARGET_GHOSTS drop
+	// the CREATURE container, so the motion and DB sweeps below contribute
+	// nothing for such spells.
+	playersOnly := spellSearchPlayersOnly(spell)
 	s.server.motionMu.Lock()
 	motionMap := s.server.motionMapLocked(mapID, instanceID)
 	motions := make([]*creatureMotion, 0, len(motionMap))
@@ -202,6 +207,9 @@ func (s *session) friendlyScanCandidates(ctx context.Context, cx, cy, radius flo
 	s.server.motionMu.Unlock()
 	motionGUIDs := make(map[uint64]struct{}, len(motions))
 	for _, motion := range motions {
+		if playersOnly {
+			continue
+		}
 		motionGUIDs[motion.GUID] = struct{}{}
 		owner := motion.OwnerGUID
 		if owner == 0 {
@@ -222,6 +230,9 @@ func (s *session) friendlyScanCandidates(ctx context.Context, cx, cy, radius flo
 			alliance: targetSession.playerAlliance() == s.playerAlliance(), class: p.Class, isPlayer: true})
 	}
 	s.server.sessionsMu.RUnlock()
+	if playersOnly {
+		return
+	}
 	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, mapID, float64(cx-radius), float64(cx+radius), float64(cy-radius), float64(cy+radius))
 		if err == nil {
@@ -427,7 +438,7 @@ func (s *session) spellFriendlyNearbyTarget(ctx context.Context, spell wotlk.Spe
 	scope := s.friendlyRefererScope(s.playerGUID)
 	bestGUID := uint64(0)
 	bestDist := maxRange
-	s.friendlyScanCandidates(ctx, s.player.X, s.player.Y, float32(maxRange), func(c friendlyCandidate) {
+	s.friendlyScanCandidates(ctx, s.player.X, s.player.Y, float32(maxRange), spell, func(c friendlyCandidate) {
 		if !s.friendlyAssistOK(spell, c, caster, allyOf) {
 			return
 		}
@@ -499,7 +510,7 @@ func (s *session) spellFriendlyConeTargets(ctx context.Context, spell wotlk.Spel
 	allyOf := func(faction uint32) bool { return !s.server.isHostileFaction(faction, caster) }
 	targets := make([]uint64, 0)
 	seen := make(map[uint64]struct{})
-	s.friendlyScanCandidates(ctx, s.player.X, s.player.Y, radius, func(c friendlyCandidate) {
+	s.friendlyScanCandidates(ctx, s.player.X, s.player.Y, radius, spell, func(c friendlyCandidate) {
 		if c.guid == 0 || c.mapID != caster.Map || c.instanceID != caster.InstanceID || c.health == 0 || spellTargetUnitBlocked(spell, c.unitFlags, c.flagsExtra, true) {
 			return
 		}
@@ -612,7 +623,7 @@ func (s *session) spellFriendlyRefCenteredAreaTargets(ctx context.Context, spell
 		if !referer.found {
 			continue
 		}
-		s.friendlyScanCandidates(ctx, referer.x, referer.y, radius, func(c friendlyCandidate) {
+		s.friendlyScanCandidates(ctx, referer.x, referer.y, radius, spell, func(c friendlyCandidate) {
 			// TARGET_CHECK_PARTY and TARGET_CHECK_RAID_CLASS both reject totems
 			// (Spell.cpp:8342/8354).
 			if c.guid == 0 || c.mapID != caster.Map || c.instanceID != caster.InstanceID || s.server.isTotemGUID(c.guid) {

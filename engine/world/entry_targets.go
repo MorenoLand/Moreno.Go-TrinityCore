@@ -153,7 +153,7 @@ func (s *session) spellEntryNearbyTarget(ctx context.Context, spell wotlk.Spell,
 	allowDead := spellAllowsDeadTarget(spell)
 	bestGUID := uint64(0)
 	bestDist := maxRange
-	s.friendlyScanCandidates(ctx, s.player.X, s.player.Y, float32(maxRange), func(c friendlyCandidate) {
+	s.friendlyScanCandidates(ctx, s.player.X, s.player.Y, float32(maxRange), spell, func(c friendlyCandidate) {
 		if c.mapID != s.player.Map || c.instanceID != s.player.InstanceID {
 			return
 		}

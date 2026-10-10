@@ -115,12 +115,21 @@ func (s *session) trajCollideFlags(ctx context.Context, entries []uint32) map[ui
 // target's 2D distance from the spell source position (Spell.cpp:8460).
 // Go has no full SpellInfo::CheckTarget, so the gate is the standing
 // unit-validity approximation: alive and not combat-disabled.
-func (s *session) trajCandidates(ctx context.Context, srcX, srcY float32, dist2d float32) []trajCandidate {
+func (s *session) trajCandidates(ctx context.Context, spell wotlk.Spell, srcX, srcY float32, dist2d float32) []trajCandidate {
 	candidates := make([]trajCandidate, 0, 16)
 	seen := make(map[uint64]struct{})
 	ori := float64(s.player.Orientation)
+	// The trajectory search runs under GRID_MAP_TYPE_MASK_ALL in C++
+	// (Spell.cpp:1643), but the per-candidate SpellInfo::CheckTarget gate
+	// (implicit, Spell.cpp:8316 -> SpellInfo.cpp:1654-1662/1712-1713) still
+	// rejects non-player candidates for ONLY_TARGET_PLAYERS spells and
+	// non-ghost candidates for ONLY_TARGET_GHOSTS spells.
+	playersOnly := spellSearchPlayersOnly(spell)
 	accept := func(guid uint64, mapID, instanceID uint32, x, y, z, combatReach float32, unitFlags, flagsExtra, health uint32, entry uint32, isPlayer bool) {
 		if guid == 0 || guid == s.playerGUID {
+			return
+		}
+		if !isPlayer && playersOnly {
 			return
 		}
 		if mapID != s.player.Map || instanceID != s.player.InstanceID || health == 0 {
@@ -241,7 +250,7 @@ func (s *session) resolveTrajDestination(ctx context.Context, spell wotlk.Spell,
 			bestDist = 300
 		}
 	}
-	candidates := s.trajCandidates(ctx, sx, sy, dist2d)
+	candidates := s.trajCandidates(ctx, spell, sx, sy, dist2d)
 	collideFlags := s.trajCollideFlags(ctx, trajCandidateEntries(candidates))
 	// targets.sort(Trinity::ObjectDistanceOrderPred(m_caster)) (Spell.cpp:1644):
 	// Object::GetDistanceOrder takes is3D = true by default (Object.cpp:1306),

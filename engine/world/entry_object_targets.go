@@ -256,6 +256,12 @@ func (s *session) spellEntryNearbyGOTarget(ctx context.Context, spell wotlk.Spel
 	if !allowGO {
 		return 0, false
 	}
+	// Spell::GetSearcherTypeMask (Spell.cpp:1809-1842): the GOBJ base mask
+	// narrows to zero under SPELL_ATTR3_ONLY_TARGET_PLAYERS /
+	// SPELL_ATTR3_ONLY_TARGET_GHOSTS, so the search contributes nothing.
+	if spellSearchPlayersOnly(spell) {
+		return 0, false
+	}
 	bestGUID := uint64(0)
 	bestDist := maxRange
 	s.scanNearbyGameObjects(ctx, float32(maxRange), func(g nearbyGameObject) {
@@ -303,6 +309,13 @@ func (s *session) spellEntryNearbyDestPosition(ctx context.Context, spell wotlk.
 		return 0, 0, 0, false
 	}
 	allowPlayers, allowCreatures, allowGO := implicitTargetEntryObjectMask(condRows, true, true, true)
+	// Spell::GetSearcherTypeMask (Spell.cpp:1809-1842): the DEST base mask
+	// narrows to PLAYER|CORPSE under SPELL_ATTR3_ONLY_TARGET_PLAYERS /
+	// SPELL_ATTR3_ONLY_TARGET_GHOSTS, so creature and gameobject candidates
+	// drop out (corpses have no Go model).
+	if spellSearchPlayersOnly(spell) {
+		allowCreatures, allowGO = false, false
+	}
 	allowDead := spellAllowsDeadTarget(spell)
 	bestX, bestY, bestZ := float32(0), float32(0), float32(0)
 	bestDist := maxRange
@@ -320,7 +333,7 @@ func (s *session) spellEntryNearbyDestPosition(ctx context.Context, spell wotlk.
 		// Unit candidates carry the 38 check terms: alive (unless the spell
 		// allows dead targets, SpellInfo.cpp:1715), not combat-disabled; the
 		// faction switch has no TARGET_CHECK_ENTRY case (Spell.cpp:8316).
-		s.friendlyScanCandidates(ctx, s.player.X, s.player.Y, float32(maxRange), func(c friendlyCandidate) {
+		s.friendlyScanCandidates(ctx, s.player.X, s.player.Y, float32(maxRange), spell, func(c friendlyCandidate) {
 			if c.mapID != s.player.Map || c.instanceID != s.player.InstanceID {
 				return
 			}
