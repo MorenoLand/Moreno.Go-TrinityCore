@@ -1851,37 +1851,14 @@ func (s *session) handleStablePet(ctx context.Context, payload []byte) bool {
 }
 
 // handleStableRevivePet processes CMSG_STABLE_REVIVE_PET (0x274).
-// Reference: WorldSession::HandleStableRevivePet (NPCHandler.cpp:455): the
-// stablemaster revives the player's dead current pet.
+// Reference: WorldSession::HandleStableRevivePet (NPCHandler.cpp:591-595):
+// "Not implemented" in C++ — the handler logs and does nothing. The old Go
+// revive behavior (reviving the dead current pet) was a deviation from C++,
+// so this is a silent no-op.
 func (s *session) handleStableRevivePet(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
 	}
-	r := protocol.NewReader(payload)
-	npcGUID, err := r.ReadU64()
-	if err != nil {
-		return false
-	}
-	if !s.checkStableMaster(ctx, npcGUID) {
-		s.sendPetStableResult(stableErrStable)
-		return true
-	}
-	cdb := s.server.CharactersStore.DB
-	if cdb == nil {
-		s.sendPetStableResult(stableErrStable)
-		return true
-	}
-	var level int64
-	if err := cdb.QueryRowContext(ctx, "SELECT level FROM character_pet WHERE owner = ? AND slot = 0 AND curhealth <= 0", s.playerGUID).Scan(&level); err != nil {
-		// nothing dead to revive is still a successful interaction
-		s.sendPetStableResult(stableSuccessUnslot)
-		return true
-	}
-	if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET curhealth = 1 WHERE owner = ? AND slot = 0", s.playerGUID); err != nil {
-		s.sendPetStableResult(stableErrStable)
-		return true
-	}
-	s.sendPetStableResult(stableSuccessUnslot)
 	return true
 }
 
@@ -1957,18 +1934,32 @@ func (s *session) handleUnstablePet(ctx context.Context, payload []byte) bool {
 		s.sendPetStableResult(stableErrStable)
 		return true
 	}
+	var stabledSlot int64
 	var stabledEntry uint32
-	if err := cdb.QueryRowContext(ctx, "SELECT entry FROM character_pet WHERE owner = ? AND id = ? AND slot > 0", s.playerGUID, petNumber).Scan(&stabledEntry); err != nil {
+	if err := cdb.QueryRowContext(ctx, "SELECT slot, entry FROM character_pet WHERE owner = ? AND id = ? AND slot > 0", s.playerGUID, petNumber).Scan(&stabledSlot, &stabledEntry); err != nil {
 		s.sendPetStableResult(stableErrStable)
 		return true
 	}
 	if !s.checkStabledPetTameable(ctx, stabledEntry) {
 		return true
 	}
-	var active int64
-	if err := cdb.QueryRowContext(ctx, "SELECT COUNT(1) FROM character_pet WHERE owner = ? AND slot = 0", s.playerGUID).Scan(&active); err != nil || active > 0 {
-		s.sendPetStableResult(stableErrStable)
-		return true
+	// Reference: WorldSession::HandleUnstablePet (NPCHandler.cpp:469-482): a
+	// summoned pet does not block the un-stabling — C++ stables the current
+	// pet into the requested pet's slot (RemovePet with
+	// PET_SAVE_FIRST_STABLE_SLOT + the slot index, i.e. the row's own slot)
+	// and then loads the requested pet into slot 0. A dead or non-hunter
+	// active pet is an error (STABLE_ERR_STABLE); only the exotic arms
+	// answer STABLE_ERR_EXOTIC.
+	var activePetType, activeHealth int64
+	if err := cdb.QueryRowContext(ctx, "SELECT PetType, curhealth FROM character_pet WHERE owner = ? AND slot = 0", s.playerGUID).Scan(&activePetType, &activeHealth); err == nil {
+		if activeHealth <= 0 || activePetType != 1 {
+			s.sendPetStableResult(stableErrStable)
+			return true
+		}
+		if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = ?, savetime = ? WHERE owner = ? AND slot = 0", stabledSlot, time.Now().Unix(), s.playerGUID); err != nil {
+			s.sendPetStableResult(stableErrStable)
+			return true
+		}
 	}
 	result, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = 0, savetime = ? WHERE owner = ? AND id = ? AND slot > 0", time.Now().Unix(), s.playerGUID, petNumber)
 	if err != nil {
