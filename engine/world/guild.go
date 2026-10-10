@@ -4841,12 +4841,17 @@ func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild (guildid, name, leaderguid, createdate) VALUES (?, ?, ?, ?)",
 		newGuildID, guildName, ownerGUID, timeNow())
 
-	// Default ranks
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_rank (guildid, rid, rname, rights, BankMoneyPerDay) VALUES (?, 0, 'Guild Master', 4294967295, 1000000)", newGuildID)
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_rank (guildid, rid, rname, rights, BankMoneyPerDay) VALUES (?, 1, 'Officer', 255, 500000)", newGuildID)
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_rank (guildid, rid, rname, rights, BankMoneyPerDay) VALUES (?, 2, 'Veteran', 67, 100000)", newGuildID)
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_rank (guildid, rid, rname, rights, BankMoneyPerDay) VALUES (?, 3, 'Member', 67, 50000)", newGuildID)
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_rank (guildid, rid, rname, rights, BankMoneyPerDay) VALUES (?, 4, 'Initiate', 67, 0)", newGuildID)
+	// Guild::_CreateDefaultGuildRanks (Guild.cpp:2428): Guild Master and
+	// Officer get GR_RIGHT_ALL (0x001DF1FF); the remaining ranks get
+	// GR_RIGHT_GCHATLISTEN|GR_RIGHT_GCHATSPEAK (0x43); every default rank
+	// starts with BankMoneyPerDay 0 (RankInfo ctor). Rank names come from
+	// the locale strings LANG_GUILD_MASTER..INITIATE (811-815).
+	chatRights := guildRightGChatListen | guildRightGChatSpeak
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_rank (guildid, rid, rname, rights, BankMoneyPerDay) VALUES (?, 0, 'Guild Master', ?, 0)", newGuildID, guildRightAll)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_rank (guildid, rid, rname, rights, BankMoneyPerDay) VALUES (?, 1, 'Officer', ?, 0)", newGuildID, guildRightAll)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_rank (guildid, rid, rname, rights, BankMoneyPerDay) VALUES (?, 2, 'Veteran', ?, 0)", newGuildID, chatRights)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_rank (guildid, rid, rname, rights, BankMoneyPerDay) VALUES (?, 3, 'Member', ?, 0)", newGuildID, chatRights)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_rank (guildid, rid, rname, rights, BankMoneyPerDay) VALUES (?, 4, 'Initiate', ?, 0)", newGuildID, chatRights)
 
 	// Add leader
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_member (guildid, guid, rank, pnote, offnote) VALUES (?, ?, 0, '', '')", newGuildID, ownerGUID)
@@ -5050,11 +5055,16 @@ func (s *session) handlePetitionRename(ctx context.Context, payload []byte) bool
 		return true
 	}
 
-	if len(newName) < 2 || len(newName) > 24 {
-		s.sendGuildCommandResult(guildCmdCreate, newName, errGuildNameInvalid)
+	// PetitionsHandler.cpp:332-337: no petition row for the charter (e.g.
+	// a stale item from a replaced petition) -> silent return, no rename
+	// echo is sent.
+	var petitionOwner int64
+	if err := cdb.QueryRowContext(ctx, "SELECT ownerguid FROM petition WHERE petitionguid = ? LIMIT 1", petitionGUID).Scan(&petitionOwner); err != nil {
 		return true
 	}
 
+	// PetitionsHandler.cpp:342-354: the name-taken arm runs before the
+	// validity arm.
 	var existingGuildID int64
 	_ = cdb.QueryRowContext(ctx, "SELECT guildid FROM guild WHERE UPPER(name) = UPPER(?) LIMIT 1", newName).Scan(&existingGuildID)
 	if existingGuildID > 0 {
@@ -5062,7 +5072,16 @@ func (s *session) handlePetitionRename(ctx context.Context, payload []byte) bool
 		return true
 	}
 
-	_, _ = cdb.ExecContext(ctx, "UPDATE petition SET name = ? WHERE petitionguid = ? AND ownerguid = ?", newName, petitionGUID, s.playerGUID)
+	// ObjectMgr::IsValidCharterName (ObjectMgr.cpp:8624): the length arms
+	// count wide characters, not bytes.
+	if rn := []rune(newName); len(rn) < 2 || len(rn) > 24 {
+		s.sendGuildCommandResult(guildCmdCreate, newName, errGuildNameInvalid)
+		return true
+	}
+
+	// Petition::UpdateName (PetitionMgr.cpp:241): keyed on the petition GUID
+	// alone, no owner gate.
+	_, _ = cdb.ExecContext(ctx, "UPDATE petition SET name = ? WHERE petitionguid = ?", newName, petitionGUID)
 
 	buf := protocol.NewBuffer(16 + len(newName))
 	buf.WriteU64(petitionGUID)
