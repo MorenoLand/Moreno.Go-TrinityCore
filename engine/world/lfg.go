@@ -440,6 +440,13 @@ func (s *session) handleLFGLeave() bool {
 	if !s.playerLoaded {
 		return true
 	}
+	// HandleLfgLeaveOpcode (LFGHandler.cpp:78): only the group leader may
+	// leave the queue — a grouped non-leader's request is a silent no-op.
+	if s.groupID != 0 && s.server != nil {
+		if g := s.server.getGroup(s.groupID); g != nil && g.LeaderGUID != s.playerGUID {
+			return true
+		}
+	}
 	if s.server.Features.LFG.Leave(s.playerGUID) {
 		s.debug("lfg leave", "account", s.accountName)
 	}
@@ -1027,7 +1034,6 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 				_ = ps.sendLFGProposalUpdate(proposal)
 				_ = ps.sendLFGUpdatePlayer(LFGUpdateGroupFound, LFGQueueEntry{GUID: pguid, State: LFGStateDungeon})
 				_ = ps.sendLFGUpdatePlayer(LFGUpdateRemovedFromQueue, LFGQueueEntry{GUID: pguid, State: LFGStateNone})
-				ps.updateAchievementCriteria(criteriaTypeUseLFDToGroup, 0, 1)
 			}
 		}
 
@@ -1080,7 +1086,9 @@ func (s *session) handleLfgSetBootVote(ctx context.Context, payload []byte) bool
 	}
 	agree := payload[0]
 	s.debug("lfg boot vote", "account", s.accountName, "agree", agree)
-	s.updateAchievementCriteria(criteriaTypeLFGVoteKick, 0, 1)
+	// The C++ handler (LFGHandler.cpp:133) only calls LFGMgr::UpdateBoot;
+	// the server never fires ACHIEVEMENT_CRITERIA_TYPE_LFG_VOTE_KICK, and
+	// Go has no boot-vote state (client-driven only), so the vote ends here.
 	return true
 }
 
@@ -1090,11 +1098,13 @@ func (s *session) handleLfgSetRoles(ctx context.Context, payload []byte) bool {
 	if len(payload) < 1 {
 		return true
 	}
+	// HandleLfgSetRolesOpcode (LFGHandler.cpp:104): groupless players are a
+	// silent no-op — C++ returns before touching roles or achievements.
+	if s.groupID == 0 {
+		return true
+	}
 	roles := payload[0] & (LFGRoleTank | LFGRoleHealer | LFGRoleDamage | LFGRoleLeader)
 	s.debug("lfg set roles", "account", s.accountName, "roles", roles)
-	if roles > 0 {
-		s.updateAchievementCriteria(criteriaTypeLFGAnyRole, 0, 1)
-	}
 
 	if s.server != nil && s.server.Features != nil && s.server.Features.LFG != nil {
 		lfg := s.server.Features.LFG
@@ -1105,21 +1115,19 @@ func (s *session) handleLfgSetRoles(ctx context.Context, payload []byte) bool {
 		}
 		lfg.mu.Unlock()
 
-		if s.groupID != 0 {
-			rc := lfg.UpdateRoleCheck(s.groupID, s.playerGUID, roles)
-			if rc != nil {
-				grp := s.server.getGroup(s.groupID)
-				if grp != nil {
-					for _, m := range grp.Members {
-						if ms := s.server.findSessionByGUID(m.GUID); ms != nil {
-							_ = ms.sendLFGRoleCheckUpdate(rc)
-						}
+		rc := lfg.UpdateRoleCheck(s.groupID, s.playerGUID, roles)
+		if rc != nil {
+			grp := s.server.getGroup(s.groupID)
+			if grp != nil {
+				for _, m := range grp.Members {
+					if ms := s.server.findSessionByGUID(m.GUID); ms != nil {
+						_ = ms.sendLFGRoleCheckUpdate(rc)
 					}
 				}
-				if rc.State == LFGRoleCheckFinished {
-					s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LFG_UPDATE_PARTY),
-						buildLFGUpdateParty(LFGUpdateAddedToQueue, LFGQueueEntry{Dungeons: rc.Dungeons, State: LFGStateQueued}))
-				}
+			}
+			if rc.State == LFGRoleCheckFinished {
+				s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LFG_UPDATE_PARTY),
+					buildLFGUpdateParty(LFGUpdateAddedToQueue, LFGQueueEntry{Dungeons: rc.Dungeons, State: LFGStateQueued}))
 			}
 		}
 	}
@@ -1133,10 +1141,8 @@ func (s *session) handleLfgSetRoles(ctx context.Context, payload []byte) bool {
 		packet.WriteU8(0)
 	}
 	packet.WriteU32(uint32(roles))
-	if s.groupID != 0 && s.server != nil {
+	if s.server != nil {
 		s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LFG_ROLE_CHOSEN), packet.Bytes())
-	} else {
-		_ = s.write(uint16(protocol.OpcodeSMSG_LFG_ROLE_CHOSEN), packet.Bytes(), true)
 	}
 	return true
 }
@@ -1277,8 +1283,19 @@ func (s *Server) completeLFGDungeon(groupID uint32, dungeonID uint32) {
 	}
 	for _, m := range members {
 		if sess := s.findSessionByGUID(m.GUID); sess != nil {
-			sess.updateAchievementCriteria(criteriaTypeLFGCompletion, dungeonID, 1)
-			sess.updateAchievementCriteria(criteriaTypeLFGDungeonReward, 0, 1)
+			// LFGMgr::FinishDungeon (LFGMgr.cpp:1664-1673): the only LFG
+			// achievement criteria the C++ server fires is
+			// USE_LFD_TO_GROUP_WITH_PLAYERS, for heroic random dungeons,
+			// miscValue = random players grouped with (the C++ fallback 4
+			// when the premade count is unknown, which it is here). The C++
+			// never fires LFG_COMPLETION or LFG_DUNGEON_REWARD.
+			if s.Data != nil {
+				if dungeon, found, err := s.Data.LFGDungeon(dungeonID & 0x00FFFFFF); err == nil && found &&
+					(dungeon.TypeID == LFGDungeonTypeRandom || dungeon.Flags&lfgFlagSeasonal != 0) &&
+					dungeon.Difficulty == 1 {
+					sess.updateAchievementCriteria(criteriaTypeUseLFDToGroup, 4, 1)
+				}
+			}
 			_ = sess.sendLFGDungeonReward(dungeonID)
 		}
 	}

@@ -1263,10 +1263,9 @@ func (s *session) handleGroupDisband(ctx context.Context, _ []byte) bool {
 		name = s.player.Name
 	}
 
-	if g.IsLFG {
-		s.updateAchievementCriteria(criteriaTypeLFGAbandon, 0, 1)
-	}
-
+	// The C++ server never fires ACHIEVEMENT_CRITERIA_TYPE_LFG_ABANDON
+	// (LFGMgr.cpp has no criteria updates outside FinishDungeon), so
+	// leaving an LFG group grants nothing.
 	if g.LeaderGUID == s.playerGUID {
 		// Leader disbands the entire group. C++ HandleGroupDisbandOpcode
 		// routes this through RemoveFromGroup(GROUP_REMOVEMETHOD_LEAVE)
