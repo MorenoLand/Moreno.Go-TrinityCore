@@ -2284,7 +2284,9 @@ func (s *session) handlePetLearnTalent(ctx context.Context, payload []byte) bool
 }
 
 func (s *session) handlePetNameQuery(ctx context.Context, payload []byte) bool {
-	if len(payload) < 5 {
+	// HandleQueryPetName (PetHandler.cpp:393-404) reads the pet number then the
+	// pet GUID with `recvData >> petguid` — a raw 8-byte read, not packed.
+	if len(payload) < 12 {
 		return true
 	}
 	r := protocol.NewReader(payload)
@@ -2292,7 +2294,7 @@ func (s *session) handlePetNameQuery(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
-	petGUID, err := r.ReadPackedGUID()
+	petGUID, err := r.ReadU64()
 	if err != nil {
 		return false
 	}

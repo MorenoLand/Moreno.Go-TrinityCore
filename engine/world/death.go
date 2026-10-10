@@ -1536,13 +1536,17 @@ func boolByte(value bool) uint8 {
 // and an accepted response must match the stored resurrecter before the stored
 // health, mana, and location are applied.
 func (s *session) handleResurrectResponse(ctx context.Context, payload []byte) bool {
+	if len(payload) < 9 {
+		return true
+	}
 	reader := protocol.NewReader(payload)
-	// MiscPackets.cpp:237-241 — Resurrecter is a packed client GUID, not a
-	// raw uint64. Reading it raw consumed the mask plus seven GUID bytes and
-	// left the eighth GUID byte to be misread as Response, so accept packets
-	// never matched the stored resurrecter and resurrection requests silently
-	// failed.
-	resurrecter, err := reader.ReadPackedGUID()
+	// ResurrectResponse::Read (MiscPackets.cpp:237-241) reads the resurrecter
+	// with `_worldPacket >> Resurrecter` — ByteBuffer's operator>>(ObjectGuid&)
+	// reads a raw 8-byte GUID, not a packed one (packed requires ReadAsPacked).
+	// A packed read consumed the mask plus seven GUID bytes and left the eighth
+	// GUID byte to be misread as Response, so accept packets never matched the
+	// stored resurrecter and resurrection requests silently failed.
+	resurrecter, err := reader.ReadU64()
 	if err != nil {
 		return false
 	}
