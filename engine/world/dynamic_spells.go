@@ -419,6 +419,34 @@ func (s *Server) delayChannelDynamicObject(casterGUID uint64, spellID uint32, de
 	s.objectsMu.Unlock()
 }
 
+// despawnCasterDynObjects mirrors the dynobj arm of Spell::cancel
+// (Spell.cpp:3251-3255): m_originalCaster->RemoveDynObject(m_spellInfo->Id)
+// sweeps every dynamic object the caster owns for the cancelled spell.
+// Interrupting a channeled persistent-area spell (Blizzard, Hurricane,
+// Rain of Fire) despawns its patch; interrupting a recast mid-cast also
+// kills the previous cast's patch — RemoveDynObject has no channeled
+// gate. Farsight-focus objects are included: DynamicObject::AddToWorld
+// binds them to the caster (DynamicObject.cpp:59), so the C++ sweep
+// reaches them too. Natural channel end keeps the object for its aura
+// duration (Spell::finish has no such arm), so only the interrupt paths
+// call this.
+func (s *Server) despawnCasterDynObjects(casterGUID uint64, spellID uint32) {
+	if s == nil || casterGUID == 0 || spellID == 0 {
+		return
+	}
+	s.objectsMu.Lock()
+	guids := make([]uint64, 0, 2)
+	for _, object := range s.dynamicSpellObjects {
+		if object != nil && object.CasterGUID == casterGUID && object.SpellID == uint64(spellID) {
+			guids = append(guids, object.GUID)
+		}
+	}
+	s.objectsMu.Unlock()
+	for _, guid := range guids {
+		s.despawnDynamicSpellObject(guid)
+	}
+}
+
 func (s *session) streamDynamicSpellObjects() {
 	if s == nil || s.server == nil || s.player == nil {
 		return

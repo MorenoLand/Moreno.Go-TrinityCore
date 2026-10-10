@@ -10591,6 +10591,14 @@ func (s *session) spawnPersistentAreaAura(ctx context.Context, spell wotlk.Spell
 	if err != nil || !durationFound || durationMs <= 0 {
 		return
 	}
+	// Aura::CalcMaxDuration (SpellAuras.cpp:871-886): the DynObjAura created
+	// by EffectPersistentAreaAura folds SPELLMOD_DURATION into the DBC
+	// duration. The haste fold (ModSpellDurationTime, Spell.cpp:2888-2895)
+	// applies only to hitInfo unit auras, never to the dynobj aura, so only
+	// the spellmod arm lands here. A non-positive result expires the aura
+	// immediately in C++; spawnDynamicSpellObject skips non-positive
+	// durations, which is the same no-patch outcome.
+	durationMs = s.applySpellMod(spell, spellModDuration, durationMs)
 	radius, radiusFound, err := s.server.Data.SpellRadius(persistent.RadiusIndex, uint32(s.player.Level))
 	if err != nil || !radiusFound || radius <= 0 {
 		return
@@ -16328,6 +16336,12 @@ func (s *session) interruptCurrentCast() {
 
 		s.sendInterrupted(castID, spellID, 0)
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedInterrupted), true)
+		// Spell::cancel (Spell.cpp:3251-3255): the RemoveDynObject arm has
+		// no channeled gate — cancelling a recast mid-cast also removes
+		// the previous cast's dynamic object of the same spell.
+		if s.server != nil {
+			s.server.despawnCasterDynObjects(s.playerGUID, spellID)
+		}
 		return
 	}
 	s.castMu.Unlock()
@@ -24506,8 +24520,13 @@ func (s *session) interruptCurrentChannel() {
 
 	// Spell::cancel (Spell.cpp:3251-3258): cancelling a channeled spell
 	// removes the game objects the channel summoned
-	// (Unit::RemoveGameObject(spellId, true)).
+	// (Unit::RemoveGameObject(spellId, true)) and every dynamic object of
+	// the spell the caster owns (Unit::RemoveDynObject — the channeled
+	// patch dies with the interrupt).
 	s.removeChannelGameObjects(channel.SpellID)
+	if s.server != nil {
+		s.server.despawnCasterDynObjects(s.playerGUID, channel.SpellID)
+	}
 
 	s.expireChannelAuras(channel)
 	s.sendChannelUpdate(0)
