@@ -687,6 +687,11 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	difficulty.WriteU32(uint32(state.DungeonDifficulty))
 	difficulty.WriteU32(1)
 	difficulty.WriteU32(0)
+	// Login equip-spell re-application (Player::_ApplyAllItemMods equip leg,
+	// Player.cpp:8385-8401): runs inside LoadFromDB before SendDungeonDifficulty
+	// in C++; the cast merges with the DB-loaded auras, resetting equip-aura
+	// durations to full, and the aura packets go out before LOGIN_VERIFY_WORLD.
+	s.applyLoginItemEquipSpells(ctx)
 	if err := s.write(uint16(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY), difficulty.Bytes(), true); err != nil {
 		return false
 	}

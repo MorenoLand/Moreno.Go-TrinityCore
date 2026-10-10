@@ -1836,6 +1836,56 @@ func (s *session) applyItemEquipSpells(ctx context.Context, dbItemGUID int64, it
 	}
 }
 
+// applyLoginItemEquipSpells mirrors the equip-spell leg of Player::_ApplyAllItemMods
+// (Player.cpp:8385-8401): at login, after the DB auras are loaded and before
+// MSG_SET_DUNGEON_DIFFICULTY/SMSG_LOGIN_VERIFY_WORLD (HandlePlayerLogin order:
+// LoadFromDB -> SendDungeonDifficulty -> LoginVerifyWorld, CharacterHandler.cpp),
+// every equipped item re-applies its ON_EQUIP spells. The cast merges with the
+// DB-loaded aura (Aura::TryRefreshStackOrCreate refresh arm), which is how login
+// resets equip-aura durations to full. The IsBroken skip rides the
+// MaxDurability/durability check; Unit::CanUseAttackType is vacuous at login (a
+// freshly loaded player never carries UNIT_FLAG_DISARMED/UNIT_FLAG2_DISARM_*).
+// Item sets (AddItemsSetItem) and enchantments (ApplyEnchantment) are separate
+// _ApplyAllItemMods legs, not part of this unit.
+func (s *session) applyLoginItemEquipSpells(ctx context.Context) {
+	if s == nil || s.player == nil {
+		return
+	}
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	type equippedItem struct {
+		guid, entry, durability int64
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx,
+		`SELECT ii.guid, ii.itemEntry, COALESCE(ii.durability, 0)
+		FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot < ? ORDER BY ci.slot`,
+		s.playerGUID, int64(inventorySlotBagEnd))
+	if err != nil {
+		return
+	}
+	var items []equippedItem
+	for rows.Next() {
+		var it equippedItem
+		if rows.Scan(&it.guid, &it.entry, &it.durability) != nil || it.guid == 0 || it.entry <= 0 {
+			continue
+		}
+		items = append(items, it)
+	}
+	rows.Close()
+	for _, it := range items {
+		// Player.cpp:8392-8393: broken items shed their equip spells at login.
+		if tmpl, ok := s.server.getItemStoreTemplateInfo(ctx, uint32(it.entry)); ok && tmpl.MaxDurability > 0 && it.durability == 0 {
+			continue
+		}
+		s.applyItemEquipSpells(ctx, it.guid, uint32(it.entry), true)
+	}
+}
+
 // updateItemEquipSpellsOnMove mirrors the _ApplyItemMods(true/false) pair
 // Player::SwapItem/StoreItem run around equipment transitions
 // (Player::_ApplyItemMods, Player.cpp:12419): an item leaving an equipment
