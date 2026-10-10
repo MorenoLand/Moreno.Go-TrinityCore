@@ -11587,6 +11587,14 @@ func (s *session) attackPowerMultiplier(ctx context.Context, ranged, normalized 
 		}
 		return float64(attackTime) / 1000.0
 	}
+	// Feral forms never see the weapon here either: normalized or not,
+	// Player::GetWeaponForAttack(useable=true) returns nullptr for
+	// IsInFeralForm (Player.cpp:11101-11102), so the lookup below would
+	// miss and Unit::GetAPMultiplier falls back to
+	// BASE_ATTACK_TIME/1000 (Unit.cpp:11047-11049).
+	if feral {
+		return baseAttackTimeMs / 1000.0
+	}
 	if s.server == nil {
 		return baseAttackTimeMs / 1000.0
 	}

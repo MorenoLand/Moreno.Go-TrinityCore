@@ -277,3 +277,43 @@ func (s *session) hasIgnoreShapeshiftAura(spell wotlk.Spell) bool {
 	}
 	return false
 }
+
+// predatoryStrikesPct mirrors the Predatory Strikes lookup in
+// Player::UpdateAttackPowerAndDamage (StatSystem.cpp:407-419): the
+// SPELL_AURA_DUMMY aura of the druid family with SpellIconID 1563 (the
+// icon-ID overload of Unit::GetAuraEffect, Unit.cpp:4510-4524 — the
+// spell must carry no family flags). Returns the EFFECT_0 (level) and
+// EFFECT_1 (weapon) percent amounts.
+func (s *session) predatoryStrikesPct() (levelPct, weaponPct float64, ok bool) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0, 0, false
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || spell.SpellFamilyName != spellFamilyDruid || spell.SpellIconID != 1563 {
+			continue
+		}
+		if spell.SpellFamilyFlags[0] != 0 || spell.SpellFamilyFlags[1] != 0 || spell.SpellFamilyFlags[2] != 0 {
+			continue
+		}
+		matched := false
+		for index, effect := range spell.Effects {
+			if index >= len(aura.Amounts) || effect.Aura != spellAuraDummy || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			matched = true
+			if index == 0 {
+				levelPct = float64(aura.Amounts[index])
+			} else if index == 1 {
+				weaponPct = float64(aura.Amounts[index])
+			}
+		}
+		if matched {
+			return levelPct, weaponPct, true
+		}
+	}
+	return 0, 0, false
+}

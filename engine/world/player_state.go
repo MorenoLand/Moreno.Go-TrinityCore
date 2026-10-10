@@ -327,6 +327,7 @@ type playerState struct {
 	Block                           uint32
 	AttackPower                     uint32
 	RangedAttackPower               uint32
+	BaseFeralAP                     uint32 // m_baseFeralAP (Player.h:2350): druid weapon-DPS feral AP bonus
 	ItemManaRegenBonus              uint32 // m_baseManaRegen (ITEM_MOD_MANA_REGENERATION, 43)
 	ItemHealthRegenBonus            uint32 // m_baseHealthRegen (ITEM_MOD_HEALTH_REGEN, 46)
 	MinDamage                       float32
@@ -2010,16 +2011,29 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 		s.setAchievementCriteria(criteriaTypeHighestPower, 0, uint32(baseMana))
 	}
 
-	// Default unarmed weapon speeds and damages
+	// Default unarmed weapon speeds and damages.
+	// Player::_ApplyWeaponDamage (Player.cpp:7821-7822) never calls
+	// SetAttackTime in feral form, so the shapeshift form's combat round
+	// time (written by loadTransformDisplay before this rebuild) must
+	// survive; the weapon damage rows are superseded by the level-based
+	// feral formula below (StatSystem.cpp:586-595).
+	feralForm := state.ShapeshiftForm == 1 || state.ShapeshiftForm == 5 || state.ShapeshiftForm == 8
 	state.MinDamage = 1.0
 	state.MaxDamage = 2.0
-	state.AttackTime = 2000
+	if !feralForm {
+		state.AttackTime = 2000
+	}
 	state.MinOffhandDamage = 1.0
 	state.MaxOffhandDamage = 2.0
-	state.OffhandAttackTime = 2000
+	if !feralForm {
+		state.OffhandAttackTime = 2000
+	}
 	state.MinRangedDamage = 1.0
 	state.MaxRangedDamage = 2.0
-	state.RangedAttackTime = 2000
+	if !feralForm {
+		state.RangedAttackTime = 2000
+	}
+	state.BaseFeralAP = 0
 	state.CombatReach = 1.5
 	state.Armor = 0
 	state.Block = 0
@@ -2059,36 +2073,88 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 				state.Resistances[r+1] += uint32(item.Resists[r])
 			}
 		}
-		// Weapon slots: 15 = Main Hand, 16 = Off Hand, 17 = Ranged
-		if slot == 15 {
-			if minDmg > 0 {
-				state.MinDamage = float32(minDmg)
+		// Weapon slots: 15 = Main Hand, 16 = Off Hand, 17 = Ranged.
+		// Player::_ApplyWeaponDamage (Player.cpp:7772-7831): in feral form
+		// the weapon damage is calculated from stats only
+		// (CalculateMinMaxDamage, StatSystem.cpp:586-595) and the weapon
+		// delay never reaches SetAttackTime (Player.cpp:7822), so the
+		// whole arm is skipped here; the level-based damage is written
+		// after the ranged legs below. The damageIndex > 0 rows feed raw
+		// weapon damage only, summed by UpdateDamagePhysical
+		// (StatSystem.cpp:62-92).
+		if !feralForm {
+			if slot == 15 {
+				if minDmg > 0 {
+					state.MinDamage = float32(minDmg)
+				}
+				if maxDmg > 0 {
+					state.MaxDamage = float32(maxDmg)
+				}
+				for i := 0; i < 4; i++ {
+					if item.ExtraMinDamage[i] > 0 {
+						state.MinDamage += float32(item.ExtraMinDamage[i])
+					}
+					if item.ExtraMaxDamage[i] > 0 {
+						state.MaxDamage += float32(item.ExtraMaxDamage[i])
+					}
+				}
+				if delay > 0 {
+					state.AttackTime = uint32(delay)
+				}
+			} else if slot == 16 {
+				if minDmg > 0 {
+					state.MinOffhandDamage = float32(minDmg)
+				}
+				if maxDmg > 0 {
+					state.MaxOffhandDamage = float32(maxDmg)
+				}
+				for i := 0; i < 4; i++ {
+					if item.ExtraMinDamage[i] > 0 {
+						state.MinOffhandDamage += float32(item.ExtraMinDamage[i])
+					}
+					if item.ExtraMaxDamage[i] > 0 {
+						state.MaxOffhandDamage += float32(item.ExtraMaxDamage[i])
+					}
+				}
+				if delay > 0 {
+					state.OffhandAttackTime = uint32(delay)
+				}
+			} else if slot == 17 {
+				if minDmg > 0 {
+					state.MinRangedDamage = float32(minDmg)
+				}
+				if maxDmg > 0 {
+					state.MaxRangedDamage = float32(maxDmg)
+				}
+				for i := 0; i < 4; i++ {
+					if item.ExtraMinDamage[i] > 0 {
+						state.MinRangedDamage += float32(item.ExtraMinDamage[i])
+					}
+					if item.ExtraMaxDamage[i] > 0 {
+						state.MaxRangedDamage += float32(item.ExtraMaxDamage[i])
+					}
+				}
+				if delay > 0 {
+					state.RangedAttackTime = uint32(delay)
+				}
 			}
-			if maxDmg > 0 {
-				state.MaxDamage = float32(maxDmg)
+		}
+		// Player::_ApplyItemBonuses druid leg (Player.cpp:7757-7770) via
+		// Player::ApplyFeralAPBonus (StatSystem.cpp:331-335): feral AP
+		// bonus from weapon DPS. dpsMod comes from ScalingStatValues
+		// (heirloom scaling — no Go model, documented no-bridge).
+		if state.Class == 11 && item.Class == itemClassWeapon && item.SubClass < 32 &&
+			(uint32(1)<<item.SubClass)&0x02A5F3 != 0 && item.Delay > 0 {
+			// ItemTemplate::getDPS (ItemTemplate.cpp:57-66) sums all five
+			// damage rows; getFeralBonus (ItemTemplate.cpp:68-78); the
+			// mask 0x02A5F3 is the melee-weapon ItemSubClassMask.dbc mask.
+			dps := item.MinDamage + item.MaxDamage
+			for i := 0; i < 4; i++ {
+				dps += item.ExtraMinDamage[i] + item.ExtraMaxDamage[i]
 			}
-			if delay > 0 {
-				state.AttackTime = uint32(delay)
-			}
-		} else if slot == 16 {
-			if minDmg > 0 {
-				state.MinOffhandDamage = float32(minDmg)
-			}
-			if maxDmg > 0 {
-				state.MaxOffhandDamage = float32(maxDmg)
-			}
-			if delay > 0 {
-				state.OffhandAttackTime = uint32(delay)
-			}
-		} else if slot == 17 {
-			if minDmg > 0 {
-				state.MinRangedDamage = float32(minDmg)
-			}
-			if maxDmg > 0 {
-				state.MaxRangedDamage = float32(maxDmg)
-			}
-			if delay > 0 {
-				state.RangedAttackTime = uint32(delay)
+			dps = dps * 500.0 / float64(item.Delay)
+			if bonus := int32(dps*14.0) - 767; bonus > 0 {
+				state.BaseFeralAP += uint32(bonus)
 			}
 		}
 		// Stats
@@ -2144,8 +2210,45 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 		baseAP = int32(totalStr*2+uint32(lvl)*3) - 20
 	case 3, 4: // Hunter, Rogue
 		baseAP = int32(totalStr+totalAgi+uint32(lvl)*2) - 20
-	case 7, 11: // Shaman, Druid
+	case 7: // Shaman
 		baseAP = int32(totalStr*2+uint32(lvl)*2) - 20
+	case 11: // Druid: Player::UpdateAttackPowerAndDamage melee arm (StatSystem.cpp:396-435)
+		baseAP = int32(totalStr*2) - 20
+		moonkin := state.ShapeshiftForm == 31 // FORM_MOONKIN
+		if feralForm || moonkin {
+			baseAP += int32(state.BaseFeralAP)
+		}
+		if feralForm {
+			if state.ShapeshiftForm == 1 { // FORM_CAT
+				baseAP += int32(totalAgi)
+			}
+			// Predatory Strikes dummy aura (SpellIconID 1563):
+			// EFFECT_0 scales with level, EFFECT_1 with the mainhand
+			// weapon's total AP bonus plus the feral bonus
+			// (StatSystem.cpp:404-427).
+			if levelPct, weaponPct, ok := s.predatoryStrikesPct(); ok {
+				baseAP += int32(float64(lvl) * levelPct / 100.0)
+				if weaponPct != 0 && state.BaseFeralAP != 0 {
+					for _, item := range equippedItems {
+						if item.Slot != 15 {
+							continue
+						}
+						// ItemTemplate::GetTotalAPBonus
+						// (ItemTemplate.cpp:141-154): ITEM_MOD_ATTACK_POWER
+						// stat values. The on-equip AP-aura spell arm has
+						// no Go model (marginal).
+						weaponAP := int64(state.BaseFeralAP)
+						for k := 0; k < 10; k++ {
+							if item.StatTypes[k] == 38 {
+								weaponAP += item.StatValues[k]
+							}
+						}
+						baseAP += int32(float64(weaponAP) * weaponPct / 100.0)
+						break
+					}
+				}
+			}
+		}
 	default:
 		baseAP = int32(totalStr) - 10
 	}
@@ -2159,6 +2262,8 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 		baseRAP = int32(uint32(lvl)*2+totalAgi*2) - 10
 	} else if state.Class == 4 || state.Class == 1 { // Rogue, Warrior
 		baseRAP = int32(uint32(lvl)+totalAgi) - 10
+	} else if state.Class == 11 && !feralForm { // Druid, non-feral (StatSystem.cpp:368-376)
+		baseRAP = int32(totalAgi) - 10
 	}
 	if baseRAP < 0 {
 		baseRAP = 0
@@ -2220,6 +2325,27 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 		rapBonus := (float32(state.RangedAttackPower) / 14.0) * speedMod
 		state.MinRangedDamage += rapBonus
 		state.MaxRangedDamage += rapBonus
+	}
+	// Player::CalculateMinMaxDamage feral arm (StatSystem.cpp:586-595):
+	// weapon damage is calculated from stats only — the level-capped
+	// (60) formula supersedes the weapon rows above (the extra damage
+	// rows, the ammo-DPS leg and the RAP leg are all skipped for ferals
+	// in C++, so they are overridden here, after those legs).
+	if feralForm {
+		capped := lvl
+		if capped > 60 {
+			capped = 60
+		}
+		feralRange := func(attackTime uint32) (float32, float32) {
+			apMod := float64(attackTime) / 1000.0
+			if apMod < 0.25 {
+				apMod = 0.25
+			}
+			return float32(float64(capped) * 0.85 * apMod), float32(float64(capped) * 1.25 * apMod)
+		}
+		state.MinDamage, state.MaxDamage = feralRange(state.AttackTime)
+		state.MinOffhandDamage, state.MaxOffhandDamage = feralRange(state.OffhandAttackTime)
+		state.MinRangedDamage, state.MaxRangedDamage = feralRange(state.RangedAttackTime)
 	}
 	s.calculatePlayerCritFields(state, lvl)
 	for school := 1; school < 7; school++ {
