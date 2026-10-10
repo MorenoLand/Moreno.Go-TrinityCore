@@ -727,6 +727,102 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 	}
 }
 
+// petCanAutoCastTarget mirrors the aura-stack precheck of Spell::CanAutoCast
+// (Spell.cpp:6461-6505): before a pet fires an autocast spell, C++ verifies
+// the target does not already carry the same spell or a stack-rule-exclusive
+// peer of any of the spell's aura effects — same spell ID, an EXCLUSIVE
+// group peer, an EXCLUSIVE_FROM_SAME_CASTER peer from this caster, or an
+// EXCLUSIVE_HIGHEST peer whose amount meets or beats this spell's base
+// points (abs(BasePoints) <= abs(peer amount)). EXCLUSIVE_SAME_EFFECT
+// carries no false arm in C++ ("further checks not necessary for autocast
+// logic"). Go's executePetAutocast fired the spell unconditionally, so pets
+// re-cast buffs onto already-buffed allies (and re-applied exclusive
+// debuffs) every tick. The CheckPetCast / SelectSpellTargets containment
+// tail of CanAutoCast (Spell.cpp:6506-6523) has no Go counterpart on the pet
+// path — Go gates power through takePetSpellPower and targets the combat
+// target directly — so it stays unbridged, as does PetAI's enemy-then-ally
+// target selection (PetAI.cpp:144-190).
+func (s *Server) petCanAutoCastTarget(ctx context.Context, owner *session, caster *creatureMotion, spell wotlk.Spell, targetGUID uint64) bool {
+	if s == nil || s.Data == nil || caster == nil || targetGUID == 0 {
+		return true
+	}
+	hasAuraEffect := false
+	for _, eff := range spell.Effects {
+		if spellEffectIsAuraEffect(eff) {
+			hasAuraEffect = true
+			break
+		}
+	}
+	if !hasAuraEffect {
+		return true
+	}
+	type auraPeer struct {
+		spellID    uint32
+		casterGUID uint64
+		amounts    [3]int32
+		mask       uint8
+	}
+	var peers []auraPeer
+	if sess := s.findSessionByGUID(targetGUID); sess != nil && sess.player != nil {
+		sess.castMu.Lock()
+		for _, a := range sess.activeAuras {
+			if a == nil || a.Stopped {
+				continue
+			}
+			peers = append(peers, auraPeer{a.SpellID, a.CasterGUID, a.Amounts, a.EffectMask})
+		}
+		sess.castMu.Unlock()
+	} else if owner != nil {
+		if target, ok := owner.getCombatTarget(ctx, targetGUID); ok {
+			s.auraMu.Lock()
+			for _, a := range s.activeCreatureAuras[creatureAuraKeyForTarget(target)] {
+				if a == nil || a.Stopped {
+					continue
+				}
+				peers = append(peers, auraPeer{a.SpellID, a.CasterGUID, a.Amounts, a.EffectMask})
+			}
+			s.auraMu.Unlock()
+		}
+	}
+	ownFirst := s.spellFirstRank(spell.ID)
+	for _, eff := range spell.Effects {
+		if !spellEffectIsAuraEffect(eff) {
+			continue
+		}
+		ownBP := absAuraAmount(eff.BasePoints)
+		for _, p := range peers {
+			exSpell, found, err := s.Data.Spell(p.spellID)
+			if err != nil || !found {
+				continue
+			}
+			for index, exEff := range exSpell.Effects {
+				if index >= 8 || exEff.Aura != eff.Aura {
+					continue
+				}
+				if p.mask&(1<<uint(index)) == 0 {
+					continue
+				}
+				if p.spellID == spell.ID {
+					return false
+				}
+				switch s.spellGroupStackRule(ownFirst, s.spellFirstRank(p.spellID)) {
+				case spellGroupStackRuleExclusive:
+					return false
+				case spellGroupStackRuleExclusiveSameCaster:
+					if caster.GUID == p.casterGUID {
+						return false
+					}
+				case spellGroupStackRuleExclusiveHighest:
+					if ownBP <= absAuraAmount(p.amounts[index]) {
+						return false
+					}
+				}
+			}
+		}
+	}
+	return true
+}
+
 // executePetAutocast casts the highest priority available pet autocast spell.
 func (s *Server) executePetAutocast(ctx context.Context, motion *creatureMotion, targetGUID uint64, now time.Time) {
 	if s == nil || motion == nil || len(motion.AutocastSpells) == 0 || s.Data == nil {
@@ -736,6 +832,12 @@ func (s *Server) executePetAutocast(ctx context.Context, motion *creatureMotion,
 	owner := s.findSessionByGUID(motion.OwnerGUID)
 	spell, found, err := s.Data.Spell(spellID)
 	if owner == nil || err != nil || !found {
+		return
+	}
+	// Spell::CanAutoCast aura-stack precheck (Spell.cpp:6461-6505): C++
+	// skips the autocast when the target already carries the spell or a
+	// stack-exclusive peer of one of its aura effects.
+	if !s.petCanAutoCastTarget(ctx, owner, motion, spell, targetGUID) {
 		return
 	}
 	owner.executePetSpell(ctx, motion, spell, 0, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: targetGUID})
