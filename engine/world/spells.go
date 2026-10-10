@@ -16785,6 +16785,17 @@ func (s *session) removeAura(spellID uint32) {
 	if s.auraSlots != nil {
 		if slot, ok := s.auraSlots[spellID]; ok {
 			s.sendAuraUpdate(slot, 0, true, false, 0, 0)
+			// AuraApplication::_Remove -> ClientUpdate(true)
+			// (SpellAuras.cpp:119-124): the slot-clear SMSG_AURA_UPDATE
+			// goes to the whole set (_target->SendMessageToSet), not just
+			// the aura's owner — nearby players must see the icon vanish
+			// too. The apply path already broadcasts (spells.go:18514);
+			// removal was self-only, leaving stale icons on observers
+			// until the target left range.
+			if s.server != nil && s.player != nil {
+				removePkt := protocol.BuildAuraUpdateWithStackEffect(s.playerGUID, s.playerGUID, slot, 0, true, false, 0, 0, 1, 1, 0x01)
+				s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, s)
+			}
 			delete(s.auraSlots, spellID)
 		}
 	}
@@ -19396,6 +19407,24 @@ func (s *session) faceChannelTargetOnPeriodicTick(aura *activeAura, spell wotlk.
 }
 
 func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
+	// Aura::UpdateOwner (SpellAuras.cpp:790-810): the channeled mod-spell
+	// arm. While the aura's caster is channeling this same spell, the
+	// channeling cast holds the spellmod taking window for the tick's
+	// folds — exhausted-charge mods stop applying and applications
+	// register on the channel's context for its whole lifetime. The
+	// taking window is pushed on the caster's session (GetSpellModOwner
+	// is the caster for player casters); triggered casts inside the
+	// tick push their own window (Spell::cast, Spell.cpp:3266-3280),
+	// suspending this one, like C++. No castMu is held on entry at any
+	// call site, so the push/pop cannot deadlock.
+	if ts.server != nil && aura != nil {
+		if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
+			if taking := casterSess.channelTakingForSpell(aura.SpellID); taking != nil {
+				casterSess.pushSpellModTaking(taking)
+				defer casterSess.endSpellModTaking()
+			}
+		}
+	}
 	// SpellAuraEffects.cpp:827-830 — _ticksDone increments before the tick
 	// handler runs, even when the handler early-returns on a dead target.
 	aura.TickCount++
@@ -20413,6 +20442,30 @@ func (s *session) channelTargetForSpell(spellID uint32) uint64 {
 	return 0
 }
 
+// channelTakingForSpell mirrors the Aura::UpdateOwner channeled arm's
+// taking-spell selection (SpellAuras.cpp:790-800): the caster's current
+// spell with the aura's own spell id — i.e. the live channel of that
+// spell — becomes the spellmod taking spell for the aura's update. The
+// returned context is the channel's own (created with the channel, so
+// registrations accumulate across ticks like m_appliedMods on the C++
+// Spell); callers push it around the tick with pushSpellModTaking and
+// pop it after. A nil return means nil-spell semantics, exactly like
+// the C++ modSpell == nullptr path. Creature casters resolve through
+// the caster's own session here; the C++ GetSpellModOwner indirection
+// (pet/totem -> owner player channeling the same spell) is unbridged —
+// an owner never channels the pet's aura spell in practice.
+func (s *session) channelTakingForSpell(spellID uint32) *spellModTakingContext {
+	if s == nil {
+		return nil
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	if channel := s.activeChannel; channel != nil && !channel.Stopped && channel.SpellID == spellID {
+		return channel.Taking
+	}
+	return nil
+}
+
 func (s *session) periodicTriggerTarget(aura *activeAura) uint64 {
 	if aura == nil {
 		return 0
@@ -20520,6 +20573,20 @@ func (s *session) scheduleCreaturePeriodicTickLockedInitial(aura *activeAura, pe
 }
 
 func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
+	// Aura::UpdateOwner (SpellAuras.cpp:790-810): the channeled mod-spell
+	// arm — same window as the player tick above. The caster resolves
+	// through its own session; a creature caster's GetSpellModOwner
+	// indirection (pet/totem -> owner player) is unbridged (see
+	// channelTakingForSpell). No auraMu/castMu is held on entry at any
+	// call site, so the push/pop cannot deadlock.
+	if s.server != nil && aura != nil {
+		if casterSess := s.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
+			if taking := casterSess.channelTakingForSpell(aura.SpellID); taking != nil {
+				casterSess.pushSpellModTaking(taking)
+				defer casterSess.endSpellModTaking()
+			}
+		}
+	}
 	// SpellAuraEffects.cpp:827-830 — _ticksDone increments before the tick
 	// handler runs, even when the handler early-returns on a dead target.
 	aura.TickCount++
@@ -22816,6 +22883,18 @@ type activeChannelState struct {
 	TickTimer         *time.Timer
 	DrainTimer        *time.Timer
 	Stopped           bool
+	// Taking is the spellmod taking context for the channeling cast —
+	// the Go model of the C++ Spell's m_appliedMods registry for the
+	// channel. Aura::UpdateOwner (SpellAuras.cpp:790-810) holds the
+	// channeling spell as the spellmod taking spell across the aura's
+	// update, so periodic ticks of the channeled aura fold spellmods
+	// under it; the context lives on the channel so registrations
+	// accumulate across the channel's ticks, and each tick pushes it
+	// (see channelTakingForSpell). Charge consumption at channel end
+	// has no Go model — the tree never drops charges from a taking
+	// context — so this only gates the exhausted-charge skip and the
+	// HasSpellModApplied PCT legs.
+	Taking *spellModTakingContext
 	// HasDest/DestX/DestY/DestZ record the channeled spell's destination
 	// (C++ SpellCastTargets::HasDst on the channeled Spell::m_targets).
 	// Spell::SelectImplicitChannelTargets reads it for
@@ -22931,6 +23010,7 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 		DestX:             destX,
 		DestY:             destY,
 		DestZ:             destZ,
+		Taking:            &spellModTakingContext{applied: make(map[*activeAura]struct{})},
 	}
 	s.castMu.Lock()
 	s.activeChannel = channel
