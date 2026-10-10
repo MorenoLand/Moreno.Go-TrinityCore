@@ -13138,6 +13138,40 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			hitTargets = s.spellFriendlyRefCenteredAreaTargets(ctx, spell, spellTarget, hitTargets)
 		}
 	}
+	// Spell::SelectSpellTargets (Spell.cpp:789-797): a channeled spell whose
+	// target selection produced no unit, gameobject, or item targets and no
+	// destination fails with SPELL_FAILED_BAD_IMPLICIT_TARGETS. The check
+	// runs inside SelectSpellTargets during _cast, before SendSpellGo, so no
+	// SMSG_SPELL_GO is sent — same arm as the client path (spells.go:7959).
+	// On this path the wire spellTarget keeps the caller-supplied explicit
+	// target (C++ GetObjectTargetGUID — the implicit arms only AddUnitTarget,
+	// never rewrite m_targets), and a TARGET_UNIT_CASTER implicit target
+	// counts as a target (C++ adds the caster via AddUnitTarget,
+	// Spell.cpp:1507). Item targets have no Go model on this path.
+	if isChanneledSpell(spell) {
+		hasTarget := spellTarget.Flags&protocol.SpellTargetFlagDestLocation != 0
+		if !hasTarget {
+			for _, g := range hitTargets {
+				if g != 0 {
+					hasTarget = true
+					break
+				}
+			}
+		}
+		if !hasTarget {
+			for _, eff := range spell.Effects {
+				if eff.ImplicitTargetA == targetUnitCaster || eff.ImplicitTargetB == targetUnitCaster {
+					hasTarget = true
+					break
+				}
+			}
+		}
+		if !hasTarget {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadImplicitTargets), true)
+			s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "channeled spell with no targets")
+			return
+		}
+	}
 	// Cast flags mirror Spell::SendSpellGo for a triggered player cast
 	// (Spell.cpp:4283-4330): PENDING for triggered non-auto-repeat casts with
 	// cast count 0 (Spell.cpp:4292), POWER_LEFT_SELF + remaining power for
@@ -13400,11 +13434,44 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		s.applyAuraToTarget(ctx, targetGUID, spell, eff, -1, durationMs, 0, 0, 1, nil, false, auraCasterGUID, false, castItemGUID)
 	}
 
+	// Spell::handle_immediate (Spell.cpp:3568-3591): channeled spells start
+	// their channel state here — duration mods then haste (Spell.cpp:3574-
+	// 3585), SendChannelStart, SPELL_STATE_CASTING, AddInterruptMask — and
+	// this runs for triggered casts too: Spell::prepare's TRIGGERED_CAST_
+	// DIRECTLY fast path is skipped for channeled spells with a duration
+	// ("Why check duration? 29350: channelled triggers channelled",
+	// Spell.cpp:3170-3171), so they reach handle_immediate via the spell
+	// event. The channel-object target mirrors SendChannelStart
+	// (Spell.cpp:4669-4681): the caster's own GUID when the cast has a
+	// destination, else the explicit unit target (the wire spellTarget's
+	// UnitGUID — post-redirect, since the implicit arms only AddUnitTarget
+	// and never rewrite m_targets), else, for spells needing no explicit
+	// unit target, the single unique target (the TARGET_SELECT_CATEGORY_
+	// NEARBY arm). startChannel no-ops for instant channels (duration 0),
+	// matching C++'s duration == 0 arm which starts no channel state; the
+	// infinite (-1) arm starts the channel with no completion timer, like
+	// C++'s SendChannelStart(-1) + SPELL_STATE_CASTING. Channel ticks then
+	// run via channelTick (the SPELL_STATE_CASTING update leg), same as the
+	// client path.
+	if isChanneledSpell(spell) {
+		hasDest := spellTarget.Flags&protocol.SpellTargetFlagDestLocation != 0
+		channelObjectGUID := uint64(0)
+		if hasDest {
+			channelObjectGUID = s.playerGUID
+		} else {
+			channelObjectGUID = spellTarget.UnitGUID
+		}
+		if channelObjectGUID == 0 && !spellNeedsExplicitUnitTarget(spell) && len(hitTargets) == 1 && hitTargets[0] != 0 {
+			channelObjectGUID = hitTargets[0]
+		}
+		s.startChannel(castID, spellID, spell, targetGUID, channelObjectGUID, hasDest, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
+	}
+
 	// Spell::handle_immediate (Spell.cpp:3493, 3613-3626): Go's triggered
-	// path models the immediate case (no delayed branch, no channel
-	// start), so the finish phase and finish(true) run here, ahead of the
-	// _cast tail below — handle_immediate is called at 3493, the
-	// spell_linked tail starts at 3503. Legs:
+	// path models the immediate case (no delayed branch), so the finish
+	// phase and finish(true) run here, ahead of the _cast tail below —
+	// handle_immediate is called at 3493, the spell_linked tail starts at
+	// 3503. Legs:
 	//   - _handle_finish_phase combo give (Spell.cpp:3737-3752): the
 	//     take leg (m_needComboPoints -> ClearComboPoints) is dead here —
 	//     prepare resets m_needComboPoints for any triggered cast via
