@@ -1577,6 +1577,16 @@ const (
 	equipErrNone                = 59
 	equipErrNotInCombat         = 60 // C++ EQUIP_ERR_NOT_IN_COMBAT (ItemDefines.h:86)
 	equipErrNotDuringArenaMatch = 78 // C++ EQUIP_ERR_NOT_DURING_ARENA_MATCH (ItemDefines.h:103)
+	// Socket-arm errors (ItemHandler.cpp:1053,1090 / Player.cpp:25331-25375):
+	equipErrItemUniqueEquipable                  = 67 // C++ EQUIP_ERR_ITEM_UNIQUE_EQUIPABLE (ItemDefines.h:93)
+	equipErrItemMaxCountEquippedSocketed         = 75 // C++ EQUIP_ERR_ITEM_MAX_COUNT_EQUIPPED_SOCKETED (ItemDefines.h:100)
+	equipErrItemUniqueEquippableSocketed         = 76 // C++ EQUIP_ERR_ITEM_UNIQUE_EQUIPPABLE_SOCKETED (ItemDefines.h:101)
+	equipErrItemMaxLimitCategoryEquippedExceeded = 89 // C++ EQUIP_ERR_ITEM_MAX_LIMIT_CATEGORY_EQUIPPED_EXCEEDED (ItemDefines.h:114)
+)
+
+// Socket colors (ItemTemplate.h:249-256).
+const (
+	socketColorMeta uint32 = 1
 )
 
 func (s *session) sendEquipError(errCode uint8, itemGUID uint64) {
@@ -4099,6 +4109,10 @@ func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
 	var gemEnchants [3]uint32
 	var gemColors [3]uint32
 	var gemEntries [3]uint32
+	// ItemHandler.cpp:988-990 — GemProps[i]==nullptr skips the whole i
+	// iteration of the placement loop; tracked so the Go fallback
+	// (gemPropID-as-enchant, color 14) never feeds the color rules.
+	var gemPropsKnown [3]bool
 	for i := 0; i < 3; i++ {
 		if gemGUIDs[i] == 0 {
 			continue
@@ -4126,6 +4140,7 @@ func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
 			if gp, ok, _ := s.server.Data.GemProperties(gemPropID); ok {
 				gemEnchants[i] = gp.EnchantID
 				gemColors[i] = gp.Type
+				gemPropsKnown[i] = true
 			}
 		}
 		if gemEnchants[i] == 0 && gemPropID != 0 {
@@ -4141,6 +4156,56 @@ func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
 		if val, err := strconv.ParseUint(fields[i], 10, 32); err == nil {
 			enchants[i] = uint32(val)
 		}
+	}
+
+	// UNIT 1 — ItemHandler.cpp:985-1013 socket placement rules. GemProps[i]
+	// lookup failure skips the whole i iteration (continue), so only
+	// gemPropsKnown slots are checked. Violations are silent rejects
+	// (C++ return;), never equip errors.
+	firstPrismatic := 0
+	for firstPrismatic < 3 && targetSockets[firstPrismatic] != 0 {
+		firstPrismatic++
+	}
+	for i := 0; i < 3; i++ {
+		if !gemPropsKnown[i] {
+			continue
+		}
+		if targetSockets[i] == 0 {
+			// Gem into a socketless slot: only a prismatic (extra) socket
+			// may take it, and only in the first colorless position
+			// (PRISMATIC_ENCHANTMENT_SLOT = 6 -> field 18).
+			if enchants[18] == 0 || i != firstPrismatic {
+				return true
+			}
+			continue
+		}
+		if targetSockets[i] == socketColorMeta && gemColors[i] != socketColorMeta {
+			return true
+		}
+		if targetSockets[i] != socketColorMeta && gemColors[i] == socketColorMeta {
+			return true
+		}
+	}
+
+	// Resolve the old gems still sitting in the sockets (SpellItemEnchantment
+	// SrcItemID), needed by the uniqueness checks below.
+	var oldGemSrc [3]uint32
+	if s.server.Data != nil {
+		for i := 0; i < 3; i++ {
+			if eid := enchants[6+3*i]; eid != 0 {
+				if en, found, _ := s.server.Data.SpellItemEnchantment(eid); found {
+					oldGemSrc[i] = en.SrcItemID
+				}
+			}
+		}
+	}
+
+	// UNITS 2-3 — ItemHandler.cpp:1021-1101 unique-equipped / limit-category
+	// checks among the sockets being set, plus the CanEquipUniqueItem
+	// (Player.cpp:25331-25375) equipment scan for equipped targets.
+	if errCode := s.socketUniquenessChecks(ctx, targetBag, targetSlot, gemEntries, oldGemSrc); errCode != equipErrOk {
+		s.sendEquipError(errCode, itemGUID)
+		return true
 	}
 
 	// Slot 2: Sock 1 (index 6)
@@ -4211,6 +4276,249 @@ func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
 	}
 	_ = s.sendInventoryItems(ctx)
 	return true
+}
+
+// socketUniquenessChecks mirrors the unique-equipped / limit-category legs of
+// WorldSession::HandleSocketOpcode (ItemHandler.cpp:1021-1101) and the
+// CanEquipUniqueItem template overload (Player.cpp:25331-25375) it invokes for
+// equipped targets. Returns the equip-error code to send, or equipErrOk when
+// the socketing is legal. C++ gates the i loop on Gems[i]!=nullptr (the gem
+// item exists), not on GemProps — so the gate here is gemEntries[i]!=0.
+func (s *session) socketUniquenessChecks(ctx context.Context, targetBag, targetSlot uint8, gemEntries [3]uint32, oldGemSrc [3]uint32) uint8 {
+	cdb := s.server.CharactersStore.DB
+	wdb := s.server.WorldStore.DB
+	if s.server.Data == nil || cdb == nil || wdb == nil {
+		return equipErrOk
+	}
+	type gemInfo struct {
+		flags    uint32
+		category uint32
+	}
+	var info [3]gemInfo
+	var isNew [3]bool
+	for i := 0; i < 3; i++ {
+		if gemEntries[i] == 0 {
+			continue
+		}
+		isNew[i] = true
+		if gd, gerr := s.loadItemQueryData(ctx, gemEntries[i]); gerr == nil {
+			info[i].flags, info[i].category = gd.Flags, gd.ItemLimitCategory
+		} else {
+			var fl, cat uint32
+			_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(Flags,0), COALESCE(ItemLimitCategory,0) FROM item_template WHERE entry = ?", gemEntries[i]).Scan(&fl, &cat)
+			info[i].flags, info[i].category = fl, cat
+		}
+	}
+	var limitNewCount [3]int
+	for i := 0; i < 3; i++ {
+		if !isNew[i] {
+			continue
+		}
+		// ItemHandler.cpp:1027-1060 — duplicate unique-equippable gem across
+		// the three sockets being set: vs new gems by entry, vs surviving
+		// old-enchant gems by SrcItemID.
+		if info[i].flags&itemFlagUniqueEquippable != 0 {
+			for j := 0; j < 3; j++ {
+				if i == j {
+					continue
+				}
+				if isNew[j] {
+					if gemEntries[j] == gemEntries[i] {
+						return equipErrItemUniqueEquippableSocketed
+					}
+				} else if oldGemSrc[j] != 0 && oldGemSrc[j] == gemEntries[i] {
+					return equipErrItemUniqueEquippableSocketed
+				}
+			}
+		}
+		// ItemHandler.cpp:1062-1093 — limit-category count over new gems
+		// plus surviving old-enchant gems; exceeding the DBC quantity
+		// rejects with the same 76 error. (limitEntry->Flags is not checked,
+		// exactly as the C++ NOTE states.)
+		if info[i].category != 0 {
+			quantity, _, found := s.tradeItemLimitCategory(ctx, info[i].category)
+			if found {
+				n := 0
+				for j := 0; j < 3; j++ {
+					if isNew[j] {
+						if info[j].category == info[i].category {
+							n++
+						}
+					} else if oldGemSrc[j] != 0 && s.socketSrcItemCategory(ctx, oldGemSrc[j]) == info[i].category {
+						n++
+					}
+				}
+				limitNewCount[i] = n
+				if n > 0 && uint32(n) > quantity {
+					return equipErrItemUniqueEquippableSocketed
+				}
+			}
+		}
+	}
+	// ItemHandler.cpp:1095-1101 — equipped target: CanEquipUniqueItem(Gems[i],
+	// slot, max(limit_newcount,0)) per new gem.
+	if targetBag != 0 || targetSlot >= equipSlotEnd {
+		return equipErrOk
+	}
+	for i := 0; i < 3; i++ {
+		if !isNew[i] {
+			continue
+		}
+		if info[i].flags&itemFlagUniqueEquippable != 0 && s.socketGemClashesEquipped(ctx, gemEntries[i], targetSlot) {
+			return equipErrItemUniqueEquipable
+		}
+		if info[i].category != 0 {
+			quantity, _, found := s.tradeItemLimitCategory(ctx, info[i].category)
+			if !found {
+				continue
+			}
+			limitCount := limitNewCount[i]
+			if limitCount < 0 {
+				limitCount = 0
+			}
+			if uint32(limitCount) > quantity {
+				return equipErrItemMaxLimitCategoryEquippedExceeded
+			}
+			need := quantity - uint32(limitCount) + 1
+			if s.socketEquippedLimitCount(ctx, info[i].category, targetSlot) >= need {
+				return equipErrItemMaxLimitCategoryEquippedExceeded
+			}
+			if s.socketEquippedGemLimitCount(ctx, info[i].category, targetSlot) >= need {
+				return equipErrItemMaxCountEquippedSocketed
+			}
+		}
+	}
+	return equipErrOk
+}
+
+// socketSrcItemCategory resolves a SpellItemEnchantment SrcItemID to its
+// template's ItemLimitCategory (ItemHandler.cpp:1082-1086).
+func (s *session) socketSrcItemCategory(ctx context.Context, srcItemID uint32) uint32 {
+	if srcItemID == 0 {
+		return 0
+	}
+	if gd, gerr := s.loadItemQueryData(ctx, srcItemID); gerr == nil {
+		return gd.ItemLimitCategory
+	}
+	var cat uint32
+	_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(ItemLimitCategory,0) FROM item_template WHERE entry = ?", srcItemID).Scan(&cat)
+	return cat
+}
+
+// socketEquippedRow is one equipped (bag 0, slot < 19) item with the data the
+// HasItem*Equipped scans need (Player.cpp:25377-25460).
+type socketEquippedRow struct {
+	entry     uint32
+	category  uint32
+	hasSocket bool
+	gemSrc    [3]uint32
+	gemCat    [3]uint32
+}
+
+func (s *session) socketEquippedRows(ctx context.Context, exceptSlot uint8) []socketEquippedRow {
+	cdb := s.server.CharactersStore.DB
+	wdb := s.server.WorldStore.DB
+	if s.server.Data == nil || cdb == nil || wdb == nil {
+		return nil
+	}
+	rows, err := cdb.QueryContext(ctx, `SELECT ii.itemEntry, COALESCE(ii.enchantments,'')
+		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot < 19 AND ci.slot != ?`, s.playerGUID, exceptSlot)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []socketEquippedRow
+	for rows.Next() {
+		var r socketEquippedRow
+		var enchStr string
+		if err := rows.Scan(&r.entry, &enchStr); err != nil {
+			continue
+		}
+		if td, terr := s.loadItemQueryData(ctx, r.entry); terr == nil {
+			r.category = td.ItemLimitCategory
+			r.hasSocket = td.Sockets[0].Color != 0
+		} else {
+			var cat, sock0 uint32
+			_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(ItemLimitCategory,0), COALESCE(socketColor_1,0) FROM item_template WHERE entry = ?", r.entry).Scan(&cat, &sock0)
+			r.category, r.hasSocket = cat, sock0 != 0
+		}
+		var vals [36]uint32
+		for fi, f := range strings.Fields(enchStr) {
+			if fi >= 36 {
+				break
+			}
+			if v, verr := strconv.ParseUint(f, 10, 32); verr == nil {
+				vals[fi] = uint32(v)
+			}
+		}
+		if vals[18] != 0 {
+			r.hasSocket = true // prismatic extra socket (Player.cpp HasGemWithLimitCategoryEquipped arm)
+		}
+		for k := 0; k < 3; k++ {
+			if eid := vals[6+3*k]; eid != 0 {
+				if en, found, _ := s.server.Data.SpellItemEnchantment(eid); found && en.SrcItemID != 0 {
+					r.gemSrc[k] = en.SrcItemID
+					r.gemCat[k] = s.socketSrcItemCategory(ctx, en.SrcItemID)
+				}
+			}
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// socketGemClashesEquipped mirrors Player::HasItemOrGemWithIdEquipped
+// (Player.cpp:25377-25410): equipment stacks are size 1, so any entry hit
+// satisfies count 1. The gem pass always applies here — the caller only ever
+// passes gems being socketed, which are gem items.
+func (s *session) socketGemClashesEquipped(ctx context.Context, gemEntry uint32, exceptSlot uint8) bool {
+	rows := s.socketEquippedRows(ctx, exceptSlot)
+	for _, r := range rows {
+		if r.entry == gemEntry {
+			return true
+		}
+	}
+	for _, r := range rows {
+		if !r.hasSocket {
+			continue
+		}
+		for k := 0; k < 3; k++ {
+			if r.gemSrc[k] == gemEntry {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// socketEquippedLimitCount mirrors Player::HasItemWithLimitCategoryEquipped
+// (Player.cpp:25411-25433): equipment count per item is 1.
+func (s *session) socketEquippedLimitCount(ctx context.Context, category uint32, exceptSlot uint8) uint32 {
+	var n uint32
+	for _, r := range s.socketEquippedRows(ctx, exceptSlot) {
+		if r.category == category {
+			n++
+		}
+	}
+	return n
+}
+
+// socketEquippedGemLimitCount mirrors Player::HasGemWithLimitCategoryEquipped
+// (Player.cpp:25434-25460) via Item::GetGemCountWithLimitCategory.
+func (s *session) socketEquippedGemLimitCount(ctx context.Context, category uint32, exceptSlot uint8) uint32 {
+	var n uint32
+	for _, r := range s.socketEquippedRows(ctx, exceptSlot) {
+		if !r.hasSocket {
+			continue
+		}
+		for k := 0; k < 3; k++ {
+			if r.gemSrc[k] != 0 && r.gemCat[k] == category {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // handleSetAmmo processes CMSG_SET_AMMO (0x268).
