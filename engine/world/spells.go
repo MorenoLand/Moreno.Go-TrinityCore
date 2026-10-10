@@ -24041,10 +24041,10 @@ func (s *MountState) PreferredFlightSpeed(canFly bool) int {
 }
 
 // handleRemoveGlyph processes CMSG_REMOVE_GLYPH (0x48A).
-// Reference: WorldSession::HandleRemoveGlyph (SpellHandler.cpp:840): read the
-// slot index, and when a glyph is socketed there clear it, persist the change,
-// and resend the talent panel so the client drops the glyph. The reference
-// also removes the glyph's granted aura; the Go server has no aura engine yet.
+// Reference: WorldSession::HandleRemoveGlyph (CharacterHandler.cpp:1341):
+// the glyph's granted aura is removed via the GlyphProperties entry, the
+// slot is cleared, and the talent panel is resent. When the slot is empty,
+// or the properties entry is missing, nothing happens (no resend).
 func (s *session) handleRemoveGlyph(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
 		return true
@@ -24060,6 +24060,20 @@ func (s *session) handleRemoveGlyph(ctx context.Context, payload []byte) bool {
 	spec := s.player.ActiveTalentGroup
 	if spec >= 2 {
 		spec = 0
+	}
+	glyphID := s.player.Glyphs[spec][slot]
+	if glyphID == 0 {
+		return true
+	}
+	if s.server == nil || s.server.Data == nil {
+		return true
+	}
+	gp, found, gerr := s.server.Data.GlyphProperties(uint32(glyphID))
+	if gerr != nil || !found {
+		return true
+	}
+	if gp.SpellID != 0 {
+		s.removeAura(gp.SpellID)
 	}
 	s.player.Glyphs[spec][slot] = 0
 

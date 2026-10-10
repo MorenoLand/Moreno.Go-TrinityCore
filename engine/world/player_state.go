@@ -5115,26 +5115,29 @@ func (s *session) handleAlterAppearance(ctx context.Context, payload []byte) boo
 		return false
 	}
 
-	s.player.HairStyle = uint8(hair)
-	s.player.HairColor = uint8(color)
-	s.player.FacialStyle = uint8(facialHair)
-	if skinColor > 0 {
-		s.player.Skin = uint8(skinColor)
-	}
+	// The barber-chair proximity arm (FindNearestGameObjectOfType(
+	// GAMEOBJECT_TYPE_BARBER_CHAIR, 5.0f) + stand-state check, :1314-1322)
+	// and the BarberShopStyleEntry type/race/sex validation (:1281-1311)
+	// have no Go bridge (no DBC barber-shop store, no type-filtered
+	// gameobject scan); the appearance fields apply unconditionally here.
+	// C++ validates and charges BEFORE applying; the previous Go code
+	// mutated the model first, which also made barberShopCost compare the
+	// new values against themselves and always return 0 (free haircuts).
 
 	// Player::GetBarberShopCost (Player.cpp:24716): the barber charges by
 	// gtBarberShopCostBase.dbc at the player's level; a missing row is
 	// unaffordable (C++ returns 0xFFFFFFFF there, which then fails
 	// HasEnoughMoney).
+	curHair, curColor, curFacial, curSkin := s.player.HairStyle, s.player.HairColor, s.player.FacialStyle, s.player.Skin
 	cost := uint32(0xFFFFFFFF)
 	if s.server != nil && s.server.Data != nil {
 		if base, found, _ := s.server.Data.GtBarberShopCostBase(uint32(s.player.Level)); found {
-			cost = barberShopCost(s.player.HairStyle, s.player.HairColor, s.player.FacialStyle, s.player.Skin,
+			cost = barberShopCost(curHair, curColor, curFacial, curSkin,
 				uint8(hair), uint8(color), uint8(facialHair), uint8(skinColor), base)
 		}
 	}
 
-	// WorldSession::HandleAlterAppearance (CharacterHandler.cpp:1314-1328):
+	// WorldSession::HandleAlterAppearance (CharacterHandler.cpp:1324-1328):
 	// without enough money the change is refused and nothing is applied.
 	if s.player.Money < cost {
 		res := protocol.NewBuffer(4)
@@ -5147,6 +5150,13 @@ func (s *session) handleAlterAppearance(ctx context.Context, payload []byte) boo
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	}
 
+	s.player.HairStyle = uint8(hair)
+	s.player.HairColor = uint8(color)
+	s.player.FacialStyle = uint8(facialHair)
+	if skinColor > 0 {
+		s.player.Skin = uint8(skinColor)
+	}
+
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET hairStyle = ?, hairColor = ?, facialStyle = ?, skin = ? WHERE guid = ?",
 			s.player.HairStyle, s.player.HairColor, s.player.FacialStyle, s.player.Skin, s.playerGUID)
@@ -5157,6 +5167,7 @@ func (s *session) handleAlterAppearance(ctx context.Context, payload []byte) boo
 	_ = s.write(uint16(protocol.OpcodeSMSG_BARBER_SHOP_RESULT), res.Bytes(), true)
 	s.updateAchievementCriteria(criteriaTypeVisitBarberShop, 0, 1)
 	s.updateAchievementCriteria(criteriaTypeGoldSpentAtBarber, 0, cost)
+	s.player.StandState = 0 // stand up (CharacterHandler.cpp:1339)
 	s.sendPlayerUpdate()
 	s.debug("alter appearance applied", "account", s.accountName, "hair", hair, "color", color)
 	return true

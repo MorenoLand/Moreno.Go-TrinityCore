@@ -12,8 +12,10 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/version"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -57,10 +59,17 @@ const (
 	charCreateLevelRequirement          = 59
 	charCreateUniqueClassLimit          = 60
 	charCreateNameInUse                 = 50
-	charDeleteSuccess                   = 71
-	charDeleteFailed                    = 72
-	charDeleteFailedGuildLeader         = 74
-	charDeleteFailedArenaCaptain        = 75
+	// SendCharRename/SendCharCustomize/SendCharFactionChange result codes
+	// (SharedDefines.h:3447-3463, :3428-3431).
+	charCreateCharacterSwapFaction = 66
+	charCreateCharacterRaceOnly    = 67
+	charNameFailure                = 88
+	charNameNoName                 = 89
+	charNameReserved               = 95
+	charDeleteSuccess              = 71
+	charDeleteFailed               = 72
+	charDeleteFailedGuildLeader    = 74
+	charDeleteFailedArenaCaptain   = 75
 	// Player::DeleteFromDB delete methods (Player.h:785-786).
 	charDeleteRemove = 0
 	charDeleteUnlink = 1
@@ -2356,7 +2365,8 @@ func (s *session) createStarterActions(ctx context.Context, guid uint64, race, c
 }
 
 // handleCharRename processes CMSG_CHAR_RENAME (0x2C7).
-// Reference: WorldSession::HandleCharRenameOpcode (CharacterHandler.cpp:1111).
+// Reference: WorldSession::HandleCharRenameOpcode/HandleCharRenameCallBack
+// (CharacterHandler.cpp:1111-1196), WorldSession::SendCharRename (:2159).
 func (s *session) handleCharRename(ctx context.Context, payload []byte) bool {
 	if len(payload) < 9 {
 		return true
@@ -2366,58 +2376,153 @@ func (s *session) handleCharRename(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
-	newName, err := r.ReadCString()
+	rawName, err := r.ReadCString()
 	if err != nil {
 		return false
 	}
-
-	cdb := s.server.CharactersStore.DB
-	if cdb != nil {
-		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET name = ? WHERE guid = ?", newName, guid)
+	// SendCharRename appends guid+name only on success; failures send the u8 code alone.
+	sendRename := func(code uint8, success bool) {
+		buf := protocol.NewBuffer(1 + 8 + len(rawName) + 1)
+		buf.WriteU8(code)
+		if success {
+			buf.WriteU64(guid)
+			buf.WriteCString(rawName)
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_RENAME), buf.Bytes(), true)
 	}
-
-	buf := protocol.NewBuffer(1 + 8 + len(newName) + 1)
-	buf.WriteU8(0) // RESPONSE_SUCCESS
-	buf.WriteU64(guid)
-	buf.WriteCString(newName)
-	_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_RENAME), buf.Bytes(), true)
+	if !utf8.ValidString(rawName) {
+		sendRename(charNameNoName, false)
+		return true
+	}
+	newName := normalizePlayerName(rawName)
+	if newName == "" {
+		sendRename(charNameNoName, false)
+		return true
+	}
+	// ObjectMgr::CheckPlayerName approximation (validCharacterName covers the
+	// length/alphabet arms; reserved-name table has no Go bridge — standing delta).
+	if !validCharacterName(newName) {
+		sendRename(charNameFailure, false)
+		return true
+	}
+	store := s.server.CharactersStore
+	if store == nil || store.DB == nil {
+		sendRename(charCreateError, false)
+		return true
+	}
+	// The character must belong to this account, carry AT_LOGIN_RENAME, and
+	// the new name must be free (CHAR_SEL_FREE_NAME, :1141).
+	var atLogin uint64
+	if err := store.DB.QueryRowContext(ctx, "SELECT at_login FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&atLogin); err != nil {
+		sendRename(charCreateError, false)
+		return true
+	}
+	if atLogin&atLoginRename == 0 {
+		sendRename(charCreateError, false)
+		return true
+	}
+	if row, err := store.QueryRowStatement(ctx, database.StatementID("CHAR_SEL_CHECK_NAME"), newName); err == nil {
+		var one int
+		if row.Scan(&one) == nil {
+			sendRename(charCreateNameInUse, false)
+			return true
+		}
+	}
+	_, _ = store.ExecStatement(ctx, database.StatementID("CHAR_UPD_CHAR_NAME_AT_LOGIN"), newName, atLogin&^atLoginRename, guid)
+	_, _ = store.ExecStatement(ctx, database.StatementID("CHAR_DEL_DECLINED_NAME"), guid)
+	sendRename(0, true)
 	s.debug("character renamed", "guid", guid, "name", newName)
 	return true
 }
 
 // handleCharCustomize processes CMSG_CHAR_CUSTOMIZE (0x473).
-// Reference: WorldSession::HandleCharCustomize (CharacterHandler.cpp:1230).
+// Reference: WorldSession::HandleCharCustomize/HandleCharCustomizeCallback
+// (CharacterHandler.cpp:1363-1490), WorldSession::SendCharCustomize (:2171).
+// Wire order (handler reads, :1376-1383): guid, name, gender, skin,
+// hairColor, hairStyle, facialHair, face — the Go parse previously read
+// face/hairStyle/hairColor/facialHair scrambled.
 func (s *session) handleCharCustomize(ctx context.Context, payload []byte) bool {
 	if len(payload) < 15 {
 		return true
 	}
 	r := protocol.NewReader(payload)
 	guid, _ := r.ReadU64()
-	newName, _ := r.ReadCString()
+	// Customizing another account's character is a cheat: C++ kicks the
+	// session (CharacterHandler.cpp:1368-1374).
+	store := s.server.CharactersStore
+	if store == nil || store.DB == nil {
+		return true
+	}
+	var legit int
+	if err := store.DB.QueryRowContext(ctx, "SELECT 1 FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&legit); err != nil {
+		s.debug("customize cheat attempt", "guid", guid)
+		s.kickSession(s)
+		return true
+	}
+	rawName, _ := r.ReadCString()
 	gender, _ := r.ReadU8()
 	skin, _ := r.ReadU8()
-	face, _ := r.ReadU8()
-	hairStyle, _ := r.ReadU8()
 	hairColor, _ := r.ReadU8()
+	hairStyle, _ := r.ReadU8()
 	facialHair, _ := r.ReadU8()
-
-	cdb := s.server.CharactersStore.DB
-	if cdb != nil {
-		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ? WHERE guid = ?",
-			newName, gender, skin, face, hairStyle, hairColor, facialHair, guid)
+	face, _ := r.ReadU8()
+	// SendCharCustomize appends the appearance fields only on success.
+	sendCustomize := func(code uint8, success bool) {
+		buf := protocol.NewBuffer(16 + len(rawName))
+		buf.WriteU8(code)
+		if success {
+			buf.WriteU64(guid)
+			buf.WriteCString(rawName)
+			buf.WriteU8(gender)
+			buf.WriteU8(skin)
+			buf.WriteU8(face)
+			buf.WriteU8(hairStyle)
+			buf.WriteU8(hairColor)
+			buf.WriteU8(facialHair)
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_CUSTOMIZE), buf.Bytes(), true)
 	}
-
-	buf := protocol.NewBuffer(16 + len(newName))
-	buf.WriteU8(0) // RESPONSE_SUCCESS
-	buf.WriteU64(guid)
-	buf.WriteCString(newName)
-	buf.WriteU8(gender)
-	buf.WriteU8(skin)
-	buf.WriteU8(face)
-	buf.WriteU8(hairStyle)
-	buf.WriteU8(hairColor)
-	buf.WriteU8(facialHair)
-	_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_CUSTOMIZE), buf.Bytes(), true)
+	var oldName string
+	var race, class, oldGender uint8
+	var atLogin uint64
+	row, err := store.QueryRowStatement(ctx, database.StatementID("CHAR_SEL_CHAR_CUSTOMIZE_INFO"), guid)
+	if err != nil || row.Scan(&oldName, &race, &class, &oldGender, &atLogin) != nil {
+		sendCustomize(charCreateError, false)
+		return true
+	}
+	// Player::ValidateAppearance (:1413) — unknown combos are a bridge gap
+	// (ValidateAppearance returns known=false without DBC data); treat a
+	// known-invalid combo as CHAR_CREATE_ERROR.
+	if valid, known, aerr := s.server.Data.ValidateAppearance(race, class, oldGender, hairStyle, hairColor, face, facialHair, skin); aerr == nil && known && !valid {
+		sendCustomize(charCreateError, false)
+		return true
+	}
+	if atLogin&atLoginCustomize == 0 {
+		sendCustomize(charCreateError, false)
+		return true
+	}
+	if !utf8.ValidString(rawName) || normalizePlayerName(rawName) == "" {
+		sendCustomize(charNameNoName, false)
+		return true
+	}
+	newName := normalizePlayerName(rawName)
+	if !validCharacterName(newName) {
+		sendCustomize(charNameFailure, false)
+		return true
+	}
+	// Reserved-name table has no Go bridge (standing delta).
+	if nrow, nerr := store.QueryRowStatement(ctx, database.StatementID("CHAR_SEL_CHECK_NAME"), newName); nerr == nil {
+		var one int
+		if nrow.Scan(&one) == nil && newName != oldName {
+			sendCustomize(charCreateNameInUse, false)
+			return true
+		}
+	}
+	// Player::Customize + name/at_login update (:1451-1470).
+	_, _ = store.DB.ExecContext(ctx, "UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, at_login = ? WHERE guid = ?",
+		newName, gender, skin, face, hairStyle, hairColor, facialHair, atLogin&^atLoginCustomize, guid)
+	_, _ = store.ExecStatement(ctx, database.StatementID("CHAR_DEL_DECLINED_NAME"), guid)
+	sendCustomize(0, true)
 	s.debug("character customized", "guid", guid, "name", newName)
 	return true
 }
@@ -2435,6 +2540,8 @@ func teamForRace(race uint8) uint32 {
 
 // handleCharRaceChange processes CMSG_CHAR_RACE_CHANGE (0x4F8).
 // Reference: WorldSession::HandleCharFactionOrRaceChange (CharacterHandler.cpp:1616).
+// Wire order (:1635-1642): guid, name, gender, skin, hairColor, hairStyle,
+// facialHair, face, race — the Go parse previously read face/hair fields scrambled.
 func (s *session) handleCharRaceChange(ctx context.Context, payload []byte) bool {
 	if len(payload) < 16 {
 		return true
@@ -2444,20 +2551,41 @@ func (s *session) handleCharRaceChange(ctx context.Context, payload []byte) bool
 	newName, _ := r.ReadCString()
 	gender, _ := r.ReadU8()
 	skin, _ := r.ReadU8()
-	face, _ := r.ReadU8()
-	hairStyle, _ := r.ReadU8()
 	hairColor, _ := r.ReadU8()
+	hairStyle, _ := r.ReadU8()
 	facialHair, _ := r.ReadU8()
+	face, _ := r.ReadU8()
 	race, _ := r.ReadU8()
 
 	cdb := s.server.CharactersStore.DB
 	if cdb != nil {
-		var oldRace uint8
-		_ = cdb.QueryRowContext(ctx, "SELECT race FROM characters WHERE guid = ?", guid).Scan(&oldRace)
+		var atLogin uint64
+		var oldRace, class uint8
+		if err := cdb.QueryRowContext(ctx, "SELECT at_login, race, class FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&atLogin, &oldRace, &class); err != nil {
+			buf := protocol.NewBuffer(1)
+			buf.WriteU8(charCreateError)
+			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
+			return true
+		}
+		// usedLoginFlag = AT_LOGIN_CHANGE_RACE (CharacterHandler.cpp:1681-1685).
+		if atLogin&atLoginChangeRace == 0 {
+			buf := protocol.NewBuffer(1)
+			buf.WriteU8(charCreateError)
+			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
+			return true
+		}
+		// sObjectMgr->GetPlayerInfo(race, class): race must be playable for the
+		// class combination (the class arm has no Go DBC bridge).
+		if playable, _ := s.server.raceDefinition(race); !playable {
+			buf := protocol.NewBuffer(1)
+			buf.WriteU8(charCreateError)
+			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
+			return true
+		}
 		// Race change must stay on the same faction team (CharacterHandler.cpp:1687)
 		if oldRace != 0 && teamForRace(oldRace) != teamForRace(race) {
 			buf := protocol.NewBuffer(1)
-			buf.WriteU8(0x38) // CHAR_CREATE_CHARACTER_RACE_ONLY
+			buf.WriteU8(charCreateCharacterRaceOnly)
 			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
 			return true
 		}
@@ -2482,6 +2610,8 @@ func (s *session) handleCharRaceChange(ctx context.Context, payload []byte) bool
 
 // handleCharFactionChange processes CMSG_CHAR_FACTION_CHANGE (0x4D9).
 // Reference: WorldSession::HandleCharFactionOrRaceChange (CharacterHandler.cpp:1616).
+// Wire order (:1635-1642): guid, name, gender, skin, hairColor, hairStyle,
+// facialHair, face, race — the Go parse previously read face/hair fields scrambled.
 func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) bool {
 	if len(payload) < 16 {
 		return true
@@ -2491,21 +2621,34 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 	newName, _ := r.ReadCString()
 	gender, _ := r.ReadU8()
 	skin, _ := r.ReadU8()
-	face, _ := r.ReadU8()
-	hairStyle, _ := r.ReadU8()
 	hairColor, _ := r.ReadU8()
+	hairStyle, _ := r.ReadU8()
 	facialHair, _ := r.ReadU8()
+	face, _ := r.ReadU8()
 	race, _ := r.ReadU8()
 
 	cdb := s.server.CharactersStore.DB
 	if cdb != nil {
+		var atLogin uint64
 		var oldRace uint8
-		_ = cdb.QueryRowContext(ctx, "SELECT race FROM characters WHERE guid = ?", guid).Scan(&oldRace)
+		if err := cdb.QueryRowContext(ctx, "SELECT at_login, race FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&atLogin, &oldRace); err != nil {
+			buf := protocol.NewBuffer(1)
+			buf.WriteU8(charCreateError)
+			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
+			return true
+		}
+		// usedLoginFlag = AT_LOGIN_CHANGE_FACTION (CharacterHandler.cpp:1681-1685).
+		if atLogin&atLoginChangeFaction == 0 {
+			buf := protocol.NewBuffer(1)
+			buf.WriteU8(charCreateError)
+			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
+			return true
+		}
 		newTeam := teamForRace(race)
 		// Faction change must swap to the opposite faction team (CharacterHandler.cpp:1687)
 		if oldRace != 0 && teamForRace(oldRace) == newTeam {
 			buf := protocol.NewBuffer(1)
-			buf.WriteU8(0x37) // CHAR_CREATE_CHARACTER_SWAP_FACTION
+			buf.WriteU8(charCreateCharacterSwapFaction)
 			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
 			return true
 		}
