@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -249,10 +250,13 @@ func (s *session) handleWhoIs(ctx context.Context, payload []byte) bool {
 		s.sendNotification("You do not have permission to use that command.")
 		return true
 	}
-	if charName == "" {
+	if charName == "" || !utf8.ValidString(charName) {
 		s.sendNotification("You must specify a character name.")
 		return true
 	}
+	// MiscHandler.cpp:1097-1101: the lookup and the reply both use the
+	// normalized name (ObjectMgr.cpp:141 fails only on empty/invalid UTF-8).
+	charName = normalizePlayerName(charName)
 	targetSession := s.server.findSessionByName(charName)
 	if targetSession == nil || !targetSession.worldReady.Load() || targetSession.player == nil {
 		s.sendNotification(fmt.Sprintf("Character '%s' is not online.", charName))

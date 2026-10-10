@@ -35,13 +35,14 @@ func (s *session) sendGMTicketDefault() {
 }
 
 // sendQueryTimeResponse mirrors WorldSession::SendQueryTimeResponse
-// (QueryHandler.cpp:83). The daily-quest reset delta has no Go model,
-// so it is sent as 0 (documented delta).
+// (QueryHandler.cpp:83). The daily-reset delta is nextDailyQuestResetTime(now)
+// minus now (World.cpp:3234-3237) — the same value handleQueryTime sends on
+// the CMSG_QUERY_TIME path.
 func (s *session) sendQueryTimeResponse() {
-	now := uint32(time.Now().Unix())
+	now := time.Now()
 	buf := protocol.NewBuffer(8)
-	buf.WriteU32(now)
-	buf.WriteU32(0)
+	buf.WriteU32(uint32(now.Unix()))
+	buf.WriteU32(uint32(nextDailyQuestResetTime(now).Sub(now).Seconds()))
 	_ = s.write(uint16(protocol.OpcodeSMSG_QUERY_TIME_RESPONSE), buf.Bytes(), true)
 }
 

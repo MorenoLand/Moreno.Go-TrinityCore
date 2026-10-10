@@ -4510,14 +4510,27 @@ func (s *session) handleNameQuery(ctx context.Context, payload []byte) bool {
 
 func (s *session) handleQueryTime() bool {
 	now := time.Now()
+	// QueryHandler.cpp:83-88 + World.cpp:3234-3237 (GetNextDailyResetTime):
+	// the second u32 is the next daily-quest reset minus now, where the next
+	// reset is the next local 03:00 per Quests.DailyResetTime (default 3).
+	delta := nextDailyQuestResetTime(now).Sub(now)
+	packet := protocol.NewBuffer(8)
+	packet.WriteU32(uint32(now.Unix()))
+	packet.WriteU32(uint32(delta.Seconds()))
+	return s.write(uint16(protocol.OpcodeSMSG_QUERY_TIME_RESPONSE), packet.Bytes(), true) == nil
+}
+
+// nextDailyQuestResetTime mirrors World::GetNextDailyResetTime
+// (World.cpp:3234-3237) via GetLocalHourTimestamp(t, hour, onlyAfterTime=true)
+// (Util.cpp:82-95): midnight local + hour, plus a day when the hour is not
+// strictly after now. CONFIG_DAILY_QUEST_RESET_TIME_HOUR defaults to 3
+// (World.cpp:982).
+func nextDailyQuestResetTime(now time.Time) time.Time {
 	next := time.Date(now.Year(), now.Month(), now.Day(), 3, 0, 0, 0, now.Location())
 	if !next.After(now) {
 		next = next.Add(24 * time.Hour)
 	}
-	packet := protocol.NewBuffer(8)
-	packet.WriteU32(uint32(now.Unix()))
-	packet.WriteU32(uint32(next.Sub(now).Seconds()))
-	return s.write(uint16(protocol.OpcodeSMSG_QUERY_TIME_RESPONSE), packet.Bytes(), true) == nil
+	return next
 }
 
 func (s *session) handlePlayedTime(ctx context.Context, payload []byte) bool {
