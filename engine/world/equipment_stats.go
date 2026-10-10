@@ -11,12 +11,16 @@ import (
 )
 
 type equippedItemStats struct {
-	Slot           int64
-	Armor          int64
-	Block          int64
-	Delay          int64
-	MinDamage      float64
-	MaxDamage      float64
+	Slot      int64
+	Armor     int64
+	Block     int64
+	Delay     int64
+	MinDamage float64
+	MaxDamage float64
+	// Player::_ApplyItemBonuses applies the template resists as
+	// UNIT_MOD_RESISTANCE_HOLY..ARCANE BASE_VALUE (Player.cpp:7735-7752);
+	// index 1..6 mirrors state.Resistances (0 is armor).
+	Resists        [6]int64
 	StatTypes      [10]int64
 	StatValues     [10]int64
 	Enchantments   string
@@ -48,6 +52,9 @@ type PlayerItemStatBonus struct {
 	RangedAttackPower uint32
 	SpellPower        uint32
 	SpellPenetration  uint32
+	ManaRegen         uint32
+	HealthRegen       uint32
+	BlockValue        uint32
 }
 
 func ResolvePlayerItemStatBonus(itemMod uint32, value int64) PlayerItemStatBonus {
@@ -68,14 +75,19 @@ func ResolvePlayerItemStatBonus(itemMod uint32, value int64) PlayerItemStatBonus
 		bonus.Stats[4] = amount
 	case 7:
 		bonus.Stats[2] = amount
+	// Player::_ApplyItemBonuses (Player.cpp:7517-7533) writes gear ratings at
+	// the raw CombatRating index (Unit.h:280-307: CR_DEFENSE_SKILL=1 ..
+	// CR_ARMOR_PENETRATION=24), and every reader (playerCombatRatingBonus,
+	// melee_stats.go, resilience.go, PLAYER_FIELD_COMBAT_RATING_1+cr) indexes
+	// state.CombatRatings by that same raw value — never CR-1.
 	case 12:
-		bonus.CombatRatings[0] = amount
-	case 13:
 		bonus.CombatRatings[1] = amount
-	case 14:
+	case 13:
 		bonus.CombatRatings[2] = amount
-	case 15:
+	case 14:
 		bonus.CombatRatings[3] = amount
+	case 15:
+		bonus.CombatRatings[4] = amount
 	case 16:
 		bonus.CombatRatings[5] = amount
 	case 17:
@@ -88,6 +100,18 @@ func ResolvePlayerItemStatBonus(itemMod uint32, value int64) PlayerItemStatBonus
 		bonus.CombatRatings[9] = amount
 	case 21:
 		bonus.CombatRatings[10] = amount
+	case 22:
+		bonus.CombatRatings[11] = amount
+	case 23:
+		bonus.CombatRatings[12] = amount
+	case 24:
+		bonus.CombatRatings[13] = amount
+	case 25:
+		bonus.CombatRatings[14] = amount
+	case 26:
+		bonus.CombatRatings[15] = amount
+	case 27:
+		bonus.CombatRatings[16] = amount
 	case 28:
 		bonus.CombatRatings[17] = amount
 	case 29:
@@ -98,6 +122,10 @@ func ResolvePlayerItemStatBonus(itemMod uint32, value int64) PlayerItemStatBonus
 		bonus.CombatRatings[5], bonus.CombatRatings[6], bonus.CombatRatings[7] = amount, amount, amount
 	case 32:
 		bonus.CombatRatings[8], bonus.CombatRatings[9], bonus.CombatRatings[10] = amount, amount, amount
+	case 33:
+		bonus.CombatRatings[11], bonus.CombatRatings[12], bonus.CombatRatings[13] = amount, amount, amount
+	case 34:
+		bonus.CombatRatings[14], bonus.CombatRatings[15], bonus.CombatRatings[16] = amount, amount, amount
 	case 35:
 		bonus.CombatRatings[14], bonus.CombatRatings[15], bonus.CombatRatings[16] = amount, amount, amount
 	case 36:
@@ -105,15 +133,24 @@ func ResolvePlayerItemStatBonus(itemMod uint32, value int64) PlayerItemStatBonus
 	case 37:
 		bonus.CombatRatings[23] = amount
 	case 38:
+		// ITEM_MOD_ATTACK_POWER (Player.cpp:7659-7662): melee AND ranged
+		// UNIT_MOD_ATTACK_POWER_* both get TOTAL_VALUE.
 		bonus.AttackPower = amount
+		bonus.RangedAttackPower = amount
 	case 39:
 		bonus.RangedAttackPower = amount
+	case 43:
+		bonus.ManaRegen = amount
 	case 44:
 		bonus.CombatRatings[24] = amount
 	case 45:
 		bonus.SpellPower = amount
+	case 46:
+		bonus.HealthRegen = amount
 	case 47:
 		bonus.SpellPenetration = amount
+	case 48:
+		bonus.BlockValue = amount
 	}
 	return bonus
 }
@@ -136,6 +173,9 @@ func (s *session) applyPlayerItemStat(state *playerState, itemMod uint32, value 
 	state.SpellPower += bonus.SpellPower
 	state.BaseSpellPower += bonus.SpellPower
 	state.SpellPenetration += bonus.SpellPenetration
+	state.Block += bonus.BlockValue
+	state.ItemManaRegenBonus += bonus.ManaRegen
+	state.ItemHealthRegenBonus += bonus.HealthRegen
 	if bonus.SpellPower > 0 {
 		s.setAchievementCriteria(criteriaTypeHighestSpellpower, 0, state.SpellPower)
 	}
@@ -153,6 +193,7 @@ func (s *session) loadEquippedItemStats(ctx context.Context, state *playerState)
 	}
 	defer rows.Close()
 	template, err := s.server.WorldStore.DB.PrepareContext(ctx, `SELECT armor, block, delay, dmg_min1, dmg_max1,
+		holy_res, fire_res, nature_res, frost_res, shadow_res, arcane_res,
 		stat_type1, stat_value1, stat_type2, stat_value2, stat_type3, stat_value3, stat_type4, stat_value4,
 		stat_type5, stat_value5, stat_type6, stat_value6, stat_type7, stat_value7, stat_type8, stat_value8,
 		stat_type9, stat_value9, stat_type10, stat_value10, MaxDurability, ItemLevel, Quality, InventoryType, RandomSuffix, SocketColor_1, SocketColor_2, SocketColor_3 FROM item_template WHERE entry = ?`)
@@ -168,6 +209,7 @@ func (s *session) loadEquippedItemStats(ctx context.Context, state *playerState)
 			return nil, err
 		}
 		err := template.QueryRowContext(ctx, entry).Scan(&item.Armor, &item.Block, &item.Delay, &item.MinDamage, &item.MaxDamage,
+			&item.Resists[0], &item.Resists[1], &item.Resists[2], &item.Resists[3], &item.Resists[4], &item.Resists[5],
 			&item.StatTypes[0], &item.StatValues[0], &item.StatTypes[1], &item.StatValues[1], &item.StatTypes[2], &item.StatValues[2], &item.StatTypes[3], &item.StatValues[3],
 			&item.StatTypes[4], &item.StatValues[4], &item.StatTypes[5], &item.StatValues[5], &item.StatTypes[6], &item.StatValues[6], &item.StatTypes[7], &item.StatValues[7],
 			&item.StatTypes[8], &item.StatValues[8], &item.StatTypes[9], &item.StatValues[9], &item.MaxDurability, &item.ItemLevel, &item.Quality, &item.InventoryType, &item.RandomSuffix, &item.SocketColors[0], &item.SocketColors[1], &item.SocketColors[2])

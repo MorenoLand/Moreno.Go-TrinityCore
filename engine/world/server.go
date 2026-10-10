@@ -1452,7 +1452,11 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 		// sitting 1.5x stay unmodeled.
 		inCombatRegen := inCombat && sess.hasAuraType(spellAuraModRegenDuringCombat)
 		inCombatFlatRegen := inCombat && sess.hasAuraType(spellAuraModHealthRegenInCombat)
-		if (!inCombat || inCombatRegen || inCombatFlatRegen) && p.Health < p.MaxHealth {
+		// Player.cpp:2066: m_baseHealthRegen alone keeps the regen block
+		// running in combat, and RegenerateHealth adds m_baseHealthRegen/2.5
+		// per 2s tick (Player.cpp:2266) alongside the aura flat term.
+		itemHealthRegen := p.ItemHealthRegenBonus > 0
+		if (!inCombat || inCombatRegen || inCombatFlatRegen || itemHealthRegen) && p.Health < p.MaxHealth {
 			gainF := 0.0
 			if !inCombat || inCombatRegen {
 				gainF = s.octRegenHPPerSpirit(uint32(p.Class), uint32(p.Level), float64(p.Stats[4])) * octRegenLowLevelMultiplier(p.Level)
@@ -1461,6 +1465,7 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 				}
 			}
 			gainF += float64(sess.getTotalAuraModifier(spellAuraModHealthRegenInCombat))
+			gainF += float64(p.ItemHealthRegenBonus) / 2.5
 			if gainF < 0 {
 				gainF = 0
 			}
@@ -1513,6 +1518,9 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 				// Outside 5-second rule
 				if now.Sub(sess.lastCastTime) >= 5*time.Second {
 					gain := s.manaRegenTickGain(uint32(p.Class), p.Level, p.Stats[3], p.Stats[4])
+					// StatSystem.cpp:921: the mp5 term is
+					// (auraMods + m_baseManaRegen)/5 per 2s tick.
+					gain += uint32(float64(p.ItemManaRegenBonus) / 5.0)
 					if gain > 0 {
 						if p.Powers[0]+gain >= p.MaxPowers[0] {
 							p.Powers[0] = p.MaxPowers[0]

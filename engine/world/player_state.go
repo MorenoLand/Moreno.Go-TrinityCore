@@ -327,6 +327,8 @@ type playerState struct {
 	Block                           uint32
 	AttackPower                     uint32
 	RangedAttackPower               uint32
+	ItemManaRegenBonus              uint32 // m_baseManaRegen (ITEM_MOD_MANA_REGENERATION, 43)
+	ItemHealthRegenBonus            uint32 // m_baseHealthRegen (ITEM_MOD_HEALTH_REGEN, 46)
 	MinDamage                       float32
 	MaxDamage                       float32
 	AttackTime                      uint32
@@ -2023,6 +2025,11 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	state.Block = 0
 	state.AttackPower = 0
 	state.RangedAttackPower = 0
+	state.ItemManaRegenBonus = 0
+	state.ItemHealthRegenBonus = 0
+	for i := range state.Resistances {
+		state.Resistances[i] = 0
+	}
 	state.ItemHealthBonus = 0
 	state.ItemManaBonus = 0
 	state.SpellPower = 0
@@ -2046,6 +2053,11 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 		}
 		if block > 0 {
 			state.Block += uint32(block)
+		}
+		for r := 0; r < 6; r++ {
+			if item.Resists[r] > 0 {
+				state.Resistances[r+1] += uint32(item.Resists[r])
+			}
 		}
 		// Weapon slots: 15 = Main Hand, 16 = Off Hand, 17 = Ranged
 		if slot == 15 {
