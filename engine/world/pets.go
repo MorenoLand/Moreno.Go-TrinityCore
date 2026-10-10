@@ -2322,6 +2322,96 @@ func (s *session) petKnowsSpell(ctx context.Context, motion *creatureMotion, spe
 	return err == nil && found != 0
 }
 
+// maxPetTalentRank mirrors MAX_PET_TALENT_RANK: pet talents carry at most 5 ranks.
+const maxPetTalentRank = 5
+
+// learnPetTalent mirrors Player::LearnPetTalent (Player.cpp:25563-25702),
+// shared by CMSG_PET_LEARN_TALENT and CMSG_LEARN_PREVIEW_TALENTS_PET. The
+// pet GUID must resolve to the session's live pet and the talent must
+// exist. The requested rank must sit strictly above the best rank of that
+// talent the pet already knows (C++: curtalent_maxrank >= talentRank+1 is a
+// silent no-op), which also blocks rank downgrades; all lower known ranks
+// are unlearned like Pet::learnSpell's rank-chain arm, and the learned
+// spell is added to the live motion's spell list so later HasSpell checks
+// see it. Free-talent-point accounting (Pet::GetFreeTalentPoints) and the
+// family PetTalentMask / tier-point / prereq gates have no Go model yet
+// (no usedTalentCount, no CreatureFamily entry) and stay documented
+// deviations.
+func (s *session) learnPetTalent(ctx context.Context, petNumber uint32, petGUID uint64, talentID uint32, talentRank uint32) {
+	if petNumber == 0 || talentRank >= maxPetTalentRank || s == nil || s.server == nil ||
+		s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.Data == nil {
+		return
+	}
+	tEntry, ok, err := s.server.Data.Talent(talentID)
+	if err != nil || !ok {
+		return
+	}
+	motion := s.controlledPetMotion(petGUID)
+	if motion == nil {
+		return
+	}
+	known := [maxPetTalentRank]bool{}
+	for i := 0; i < maxPetTalentRank; i++ {
+		if tEntry.SpellRank[i] == 0 {
+			continue
+		}
+		for _, sp := range motion.Spells {
+			if sp == tEntry.SpellRank[i] {
+				known[i] = true
+				break
+			}
+		}
+	}
+	curMax := -1
+	for i := maxPetTalentRank - 1; i >= 0; i-- {
+		if known[i] {
+			curMax = i
+			break
+		}
+	}
+	if int(talentRank) <= curMax {
+		return
+	}
+	spellID := tEntry.SpellRank[talentRank]
+	if spellID == 0 {
+		s.debug("pet learn talent missing spell", "account", s.accountName, "talent", talentID, "rank", talentRank)
+		return
+	}
+	for _, sp := range motion.Spells {
+		if sp == spellID {
+			return
+		}
+	}
+	cdb := s.server.CharactersStore.DB
+	var unlearned []uint32
+	for i := 0; i < int(talentRank); i++ {
+		if !known[i] {
+			continue
+		}
+		oldSpell := tEntry.SpellRank[i]
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM pet_spell WHERE guid = ? AND spell = ?", petNumber, oldSpell)
+		unlearned = append(unlearned, oldSpell)
+		unlearnBuf := protocol.NewBuffer(4)
+		unlearnBuf.WriteU32(oldSpell)
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_UNLEARNED_SPELL), unlearnBuf.Bytes(), true)
+	}
+	_, _ = cdb.ExecContext(ctx, "INSERT OR REPLACE INTO pet_spell (guid, spell, active) VALUES (?, ?, 1)", petNumber, spellID)
+	s.server.motionMu.Lock()
+	for _, oldSpell := range unlearned {
+		for j, sp := range motion.Spells {
+			if sp == oldSpell {
+				motion.Spells = append(motion.Spells[:j], motion.Spells[j+1:]...)
+				break
+			}
+		}
+	}
+	motion.Spells = append(motion.Spells, spellID)
+	s.server.motionMu.Unlock()
+	learnedBuf := protocol.NewBuffer(4)
+	learnedBuf.WriteU32(spellID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_PET_LEARNED_SPELL), learnedBuf.Bytes(), true)
+}
+
 func (s *session) handlePetLearnTalent(ctx context.Context, payload []byte) bool {
 	if len(payload) < 16 {
 		return true
@@ -2331,25 +2421,12 @@ func (s *session) handlePetLearnTalent(ctx context.Context, payload []byte) bool
 	talentID, _ := r.ReadU32()
 	rank, _ := r.ReadU32()
 	petNumber := s.petNumberForGUID(petGUID)
-	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil && s.server.Data != nil {
-		if tEntry, ok, err := s.server.Data.Talent(talentID); err == nil && ok && rank < 5 {
-			spellID := tEntry.SpellRank[rank]
-			if spellID != 0 {
-				if rank > 0 && tEntry.SpellRank[rank-1] != 0 {
-					oldSpell := tEntry.SpellRank[rank-1]
-					_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM pet_spell WHERE guid = ? AND spell = ?", petNumber, oldSpell)
-					unlearnBuf := protocol.NewBuffer(4)
-					unlearnBuf.WriteU32(oldSpell)
-					_ = s.write(uint16(protocol.OpcodeSMSG_PET_UNLEARNED_SPELL), unlearnBuf.Bytes(), true)
-				}
-				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "INSERT OR REPLACE INTO pet_spell (guid, spell, active) VALUES (?, ?, 1)", petNumber, spellID)
-				learnedBuf := protocol.NewBuffer(4)
-				learnedBuf.WriteU32(spellID)
-				_ = s.write(uint16(protocol.OpcodeSMSG_PET_LEARNED_SPELL), learnedBuf.Bytes(), true)
-				s.sendTalentsInfo(true)
-				s.sendPetSpells(ctx, petNumber, 0, 1)
-			}
-		}
+	s.learnPetTalent(ctx, petNumber, petGUID, talentID, rank)
+	// PetHandler.cpp:852-861: SendTalentsInfoData(true) runs even when the
+	// learn was a silent no-op. PetSpellInitialize only fires for a real pet.
+	s.sendTalentsInfo(true)
+	if petNumber != 0 {
+		s.sendPetSpells(ctx, petNumber, 0, 1)
 	}
 	s.debug("pet learn talent", "account", s.accountName, "pet", petNumber, "talent", talentID, "rank", rank)
 	return true
@@ -2624,6 +2701,32 @@ func (s *session) handlePetSpellAutocast(ctx context.Context, payload []byte) bo
 		return false
 	}
 	petNumber := s.petNumberForGUID(petGUID)
+	// PetHandler.cpp:709-727: C++ returns without touching pet_spell/abdata
+	// when the spell info is missing (GetSpellInfo), the pet hasn't learned
+	// the spell (Unit::HasSpell), or the spell is not autocastable
+	// (SpellInfo::IsAutocastable: passive or SPELL_ATTR1_UNAUTOCASTABLE_BY_PET,
+	// the two flags petSpellPassive/petSpellNoAutocast mirror). The
+	// pet-number gate above already enforces the guardian-pet/charmed
+	// ownership check (petNumberForGUID only resolves the session's pet);
+	// charmed creatures have no CharmInfo model in Go, so the
+	// ToggleCreatureAutocast arm is unreachable and stays undocumented.
+	if petNumber != 0 && s != nil && s.server != nil && s.server.Data != nil {
+		spell, found, spellErr := s.server.Data.Spell(spellID)
+		motion := s.controlledPetMotion(petGUID)
+		hasSpell := false
+		if motion != nil {
+			for _, sp := range motion.Spells {
+				if sp == spellID {
+					hasSpell = true
+					break
+				}
+			}
+		}
+		if spellErr != nil || !found || motion == nil || !hasSpell ||
+			spell.Attributes&petSpellPassive != 0 || spell.AttributesEx&petSpellNoAutocast != 0 {
+			return true
+		}
+	}
 	s.syncPetSpellAutocast(ctx, petNumber, spellID, state)
 	s.debug("pet spell autocast", "account", s.accountName, "pet", petNumber, "spell", spellID, "state", state)
 	return true
@@ -2680,6 +2783,13 @@ func (s *session) stopOwnPetAttacks() {
 // Reference: WorldSession::HandleRequestPetInfoOpcode (PetHandler.cpp:412) and Player::SendPetSpells (Player.cpp:21107-21145).
 func (s *session) handleRequestPetInfo(ctx context.Context, payload []byte) bool {
 	if s.player == nil {
+		return true
+	}
+	// PetHandler.cpp:891-910 + Player::PetSpellInitialize (Player.cpp:21098):
+	// the request keys off the live pet; with no live pet (and no charmed
+	// unit, which has no spell-init model in Go) C++ sends nothing. The old
+	// slot-0 DB row fallback answered for pets that weren't live.
+	if s.controlledPetMotion(s.player.PetGUID) == nil {
 		return true
 	}
 	cdb := s.server.CharactersStore.DB
@@ -2789,27 +2899,13 @@ func (s *session) handleLearnPreviewTalentsPet(ctx context.Context, payload []by
 	talentCount, _ := r.ReadU32()
 	petNumber := s.petNumberForGUID(petGUID)
 
-	for i := uint32(0); i < talentCount && r.Remaining() >= 8; i++ {
+	// PetHandler.cpp:864-884: the client sends at most 24 talents, rounded up
+	// to a 30-entry cap.
+	const maxPreviewPetTalents = 30
+	for i := uint32(0); i < talentCount && i < maxPreviewPetTalents && r.Remaining() >= 8; i++ {
 		talentID, _ := r.ReadU32()
 		rank, _ := r.ReadU32()
-		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil && s.server.Data != nil {
-			if tEntry, ok, err := s.server.Data.Talent(talentID); err == nil && ok && rank < 5 {
-				spellID := tEntry.SpellRank[rank]
-				if spellID != 0 {
-					if rank > 0 && tEntry.SpellRank[rank-1] != 0 {
-						oldSpell := tEntry.SpellRank[rank-1]
-						_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM pet_spell WHERE guid = ? AND spell = ?", petNumber, oldSpell)
-						unlearnBuf := protocol.NewBuffer(4)
-						unlearnBuf.WriteU32(oldSpell)
-						_ = s.write(uint16(protocol.OpcodeSMSG_PET_UNLEARNED_SPELL), unlearnBuf.Bytes(), true)
-					}
-					_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "INSERT OR REPLACE INTO pet_spell (guid, spell, active) VALUES (?, ?, 1)", petNumber, spellID)
-					learnedBuf := protocol.NewBuffer(4)
-					learnedBuf.WriteU32(spellID)
-					_ = s.write(uint16(protocol.OpcodeSMSG_PET_LEARNED_SPELL), learnedBuf.Bytes(), true)
-				}
-			}
-		}
+		s.learnPetTalent(ctx, petNumber, petGUID, talentID, rank)
 	}
 	s.sendTalentsInfo(true)
 	s.sendPetSpells(ctx, petNumber, 0, 1)
