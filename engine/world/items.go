@@ -698,9 +698,11 @@ func (s *session) handleAutoEquipItem(ctx context.Context, payload []byte) bool 
 	if db == nil {
 		return true
 	}
+	// HandleAutoEquipItemOpcode (ItemHandler.cpp:121-124): a missing source
+	// item — including an invalid source bag (GetItemByPos returns null) —
+	// is a silent return ("only at cheat"), not an equip error.
 	srcBagKey, ok := s.inventoryBagKey(ctx, srcBag)
 	if !ok {
-		s.sendEquipError(equipErrItemNotFound, 0)
 		return true
 	}
 	var itemGUID, itemEntry int64
@@ -708,7 +710,6 @@ func (s *session) handleAutoEquipItem(ctx context.Context, payload []byte) bool 
 		JOIN item_instance AS ii ON ii.guid = ci.item
 		WHERE ci.guid = ? AND ci.bag = ? AND ci.slot = ? LIMIT 1`, s.playerGUID, srcBagKey, srcSlot).Scan(&itemGUID, &itemEntry)
 	if err != nil || itemGUID == 0 || itemEntry == 0 {
-		s.sendEquipError(equipErrItemNotFound, 0)
 		return true
 	}
 	var invType int64
@@ -718,6 +719,11 @@ func (s *session) handleAutoEquipItem(ctx context.Context, payload []byte) bool 
 	destSlot, ok := s.chooseAutoEquipSlot(ctx, uint8(invType), itemEntry)
 	if !ok {
 		s.sendEquipError(equipErrItemDoesntGoToSlot, uint64(itemGUID))
+		return true
+	}
+	// HandleAutoEquipItemOpcode (ItemHandler.cpp:131-132): equipping into the
+	// slot the item already occupies is a silent no-op.
+	if srcBagKey == 0 && srcSlot == destSlot {
 		return true
 	}
 	// Check 2H Weapon equipping in slot 15: unequip offhand if present
@@ -784,8 +790,13 @@ func (s *session) handleAutoEquipItemSlot(ctx context.Context, payload []byte) b
 	err = db.QueryRowContext(ctx, `SELECT ci.bag, ci.slot, ii.itemEntry FROM character_inventory AS ci
 		JOIN item_instance AS ii ON ii.guid = ci.item
 		WHERE ci.guid = ? AND ci.item = ? LIMIT 1`, s.playerGUID, itemGUID).Scan(&srcBag, &srcSlot, &itemEntry)
+	// HandleAutoEquipItemSlotOpcode (ItemHandler.cpp:97-100): a missing item
+	// or an item already sitting in the destination slot is a silent return
+	// — no equip error.
 	if err != nil || itemGUID == 0 {
-		s.sendEquipError(equipErrItemNotFound, rawItemGUID)
+		return true
+	}
+	if srcBag == 0 && srcSlot == int64(dstSlot) {
 		return true
 	}
 	var invType int64
@@ -826,6 +837,20 @@ func (s *session) handleSwapInvItem(ctx context.Context, payload []byte) bool {
 	dstSlot := payload[0]
 	srcSlot := payload[1]
 	if srcSlot == dstSlot {
+		return true
+	}
+	// HandleSwapInvItemOpcode (ItemHandler.cpp:90-101): slot validity is
+	// Player::IsValidPos(INVENTORY_SLOT_BAG_0, slot, true) — bag-0 slots
+	// 0..73 only — and it fires BEFORE SwapItem's empty-source arm: an
+	// invalid source slot answers EQUIP_ERR_ITEM_NOT_FOUND, an invalid
+	// destination slot EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT (null item guids
+	// == the C++ nullptr, nullptr).
+	if srcSlot > 73 {
+		s.sendEquipError(equipErrItemNotFound, 0)
+		return true
+	}
+	if dstSlot > 73 {
+		s.sendEquipError(equipErrItemDoesntGoToSlot, 0)
 		return true
 	}
 	db := s.server.CharactersStore.DB
@@ -3129,19 +3154,26 @@ func (s *session) handleAutoStoreBagItem(ctx context.Context, payload []byte) bo
 		return true
 	}
 	srcBagKey, _ := s.inventoryBagKey(ctx, srcBag)
-	if srcBagKey == 0 && srcSlot >= invSlotBagStart && srcSlot < invSlotBagEnd {
+	// HandleAutoStoreBagItemOpcode (ItemHandler.cpp:725): the
+	// destination-bag validity gate (IsValidPos(dstbag, NULL_SLOT, false))
+	// fires BEFORE the unequip check and answers
+	// EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT with null item guids
+	// == SendEquipError(..., nullptr, nullptr).
+	dstKey, ok := s.inventoryBagKey(ctx, dstBag)
+	if !ok {
+		s.sendEquipError(equipErrItemDoesntGoToSlot, 0)
+		return true
+	}
+	// HandleAutoStoreBagItemOpcode (ItemHandler.cpp:731-737): the
+	// CanUnequipItem arm covers equipment/bag positions; the Go bag
+	// approximation covers bag slots 19..22 and bank bag slots 67..73
+	// (Player::IsBagPos, Player.cpp:10174-82).
+	isBagSlot := srcBagKey == 0 && ((srcSlot >= invSlotBagStart && srcSlot < invSlotBagEnd) || (srcSlot >= 67 && srcSlot < 74))
+	if isBagSlot {
 		if !s.isBagEmpty(ctx, itemGUID) {
 			s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(itemGUID))
 			return true
 		}
-	}
-	dstKey, ok := s.inventoryBagKey(ctx, dstBag)
-	if !ok {
-		// ItemHandler.cpp:721-725: IsValidPos(dstbag, NULL_SLOT, false)
-		// answers EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT for an invalid
-		// destination bag — not a silent return.
-		s.sendEquipError(equipErrItemDoesntGoToSlot, uint64(itemGUID))
-		return true
 	}
 	slot, ok := s.freeInventorySlot(ctx, dstKey)
 	if !ok {
