@@ -27,6 +27,8 @@ const (
 	mechanicInterrupt                  uint32 = 26         // MECHANIC_INTERRUPT (SharedDefines.h:1383)
 	spellAuraModDecreaseSpeed          uint32 = 33         // SPELL_AURA_MOD_DECREASE_SPEED (SpellAuraDefines.h:113)
 	spellAuraModDisarm                 uint32 = 67         // SPELL_AURA_MOD_DISARM (SpellAuraDefines.h:147)
+	spellAuraModDisarmOffhand          uint32 = 254        // SPELL_AURA_MOD_DISARM_OFFHAND (SpellAuraDefines.h:334)
+	spellAuraModDisarmRanged           uint32 = 278        // SPELL_AURA_MOD_DISARM_RANGED (SpellAuraDefines.h:358)
 	// Creature-side immunity writers (Creature::LoadTemplateImmunities,
 	// Creature.cpp:2279-2313; flags_extra arms, Creature.cpp:634-638 /
 	// 1184-1187; Totem::IsImmunedToSpellEffect, Totem.cpp:183-204).

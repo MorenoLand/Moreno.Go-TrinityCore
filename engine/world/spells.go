@@ -16856,6 +16856,17 @@ func (s *session) removeAura(spellID uint32) {
 	if (wasTransform || wasShapeshift) && s.player != nil {
 		s.refreshTransformDisplay(context.Background())
 	}
+	// Player::SetShapeshiftForm remove leg (Player.cpp:21809-21811): losing
+	// the form re-runs the AP/damage pair; mirror with the wholesale
+	// rebuild (the apply leg above carries the gain-side half).
+	if wasShapeshift && s.player != nil {
+		_ = s.calculatePlayerStats(context.Background(), s.player)
+	}
+	// AuraEffect::HandleAuraModDisarm remove leg
+	// (SpellAuraEffects.cpp:2284-2348).
+	if removedAuraType == spellAuraModDisarm || removedAuraType == spellAuraModDisarmOffhand || removedAuraType == spellAuraModDisarmRanged {
+		s.removeDisarmAura(removedAuraType)
+	}
 	if wasStealth && s.player != nil && !s.hasAuraType(spellAuraStealth) {
 		s.player.StandFlags &^= unitStandFlagCreep
 		s.player.AuraVision &^= playerAuraVisionStealth
@@ -17070,6 +17081,126 @@ func (s *session) refreshTransformDisplay(ctx context.Context) {
 		return
 	}
 	s.loadTransformDisplay(ctx, s.player)
+}
+
+// applyDisarmAura mirrors the apply leg of AuraEffect::HandleAuraModDisarm
+// (SpellAuraEffects.cpp:2284-2348): only the first effect of a given type
+// sets the flag (C++ GetAuraEffectsByType(type).size() > 1 early-out — the
+// new aura is already registered at this point), then the flag flip is
+// pushed to the client and the weapon-bonus legs re-evaluate through the
+// wholesale stat rebuild, whose CanUseAttackType gate mirrors
+// Unit::CanUseAttackType (Unit.cpp:2462-2475). The
+// ApplyItemDependentAuras(item, false) leg is UNIT 3's work; the creature
+// UpdateDamagePhysical leg (SpellAuraEffects.cpp:2347-2348) has no bridge —
+// Go creature motions carry no equipment model. The IsInFeralForm skip is
+// vacuous: the build's weapon arms are already feral-gated.
+func (s *session) applyDisarmAura(ctx context.Context, auraType uint32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	if s.countActiveAuraType(auraType) > 1 {
+		return
+	}
+	switch auraType {
+	case spellAuraModDisarm:
+		s.player.UnitFlags |= unitFlagDisarmed
+	case spellAuraModDisarmOffhand:
+		s.player.UnitFlags2 |= unitFlag2DisarmOffhand
+	case spellAuraModDisarmRanged:
+		s.player.UnitFlags2 |= unitFlag2DisarmRanged
+	default:
+		return
+	}
+	s.sendPlayerUnitFlagsUpdate()
+	// Player::ApplyItemDependentAuras(item, false)
+	// (SpellAuraEffects.cpp:2334; Player.cpp:7923-7942): strip the disarmed
+	// slot's item-dependent auras even though the item stays equipped — the
+	// apply case's UpdateWeaponDependentAuras skip (C++ "already handled on
+	// item dependent aura removal") needs no analog: the wholesale rebuild
+	// below re-filters weapon-dependent crit auras per attack type.
+	s.removeDisarmedSlotDependentAuras(ctx, auraType)
+	_ = s.calculatePlayerStats(ctx, s.player)
+}
+
+// removeDisarmedSlotDependentAuras mirrors the
+// Player::ApplyItemDependentAuras(item, false) leg: the disarmed slot's
+// item-dependent passive auras are stripped even though the item stays
+// equipped. C++ fetches the slot's item with no broken or weapon-class
+// gate (SpellAuraEffects.cpp:2331-2334), so this uses the raw slot row
+// rather than equippedWeaponInstance, which folds both gates.
+func (s *session) removeDisarmedSlotDependentAuras(ctx context.Context, auraType uint32) {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	var slot uint8
+	switch auraType {
+	case spellAuraModDisarm:
+		slot = equipSlotMainhand
+	case spellAuraModDisarmOffhand:
+		slot = equipSlotOffhand
+	case spellAuraModDisarmRanged:
+		slot = equipSlotRanged
+	default:
+		return
+	}
+	var itemGUID int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		`SELECT ci.item FROM character_inventory ci WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot = ? LIMIT 1`,
+		s.playerGUID, int64(slot)).Scan(&itemGUID); err != nil || itemGUID == 0 {
+		return
+	}
+	s.removeItemDependentAuras(ctx, uint64(itemGUID))
+}
+
+// removeDisarmAura mirrors the remove leg: the flag clears only when no
+// other effect of the same type remains (C++ HasAuraType(type) gate), and
+// the _ApplyWeaponDamage apply=true leg re-arms the weapon bonuses — the
+// wholesale rebuild again, with the flag now cleared.
+func (s *session) removeDisarmAura(auraType uint32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	if s.countActiveAuraType(auraType) > 0 {
+		return
+	}
+	switch auraType {
+	case spellAuraModDisarm:
+		s.player.UnitFlags &^= unitFlagDisarmed
+	case spellAuraModDisarmOffhand:
+		s.player.UnitFlags2 &^= unitFlag2DisarmOffhand
+	case spellAuraModDisarmRanged:
+		s.player.UnitFlags2 &^= unitFlag2DisarmRanged
+	default:
+		return
+	}
+	s.sendPlayerUnitFlagsUpdate()
+	// Player::ApplyItemDependentAuras(item, true) (SpellAuraEffects.cpp:2338;
+	// Player.cpp:7923-7942): re-add the slot's item-dependent auras now the
+	// item is usable again; Go's scan skips auras already present, so the
+	// single-item C++ leg and this whole-spellbook pass converge. The
+	// _ApplyWeaponDamage apply=true leg + UpdateWeaponDependentAuras
+	// (SpellAuraEffects.cpp:2340-2342) re-arm through the wholesale rebuild,
+	// which re-filters weapon-dependent crit auras per attack type.
+	s.applyItemDependentAuras(context.Background())
+	_ = s.calculatePlayerStats(context.Background(), s.player)
+}
+
+// countActiveAuraType counts live active auras of one aura type — the Go
+// side of Unit::GetAuraEffectsByType(type).size() for the disarm
+// first-effect / remaining-effect gates.
+func (s *session) countActiveAuraType(auraType uint32) int {
+	if s == nil {
+		return 0
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	count := 0
+	for _, aura := range s.activeAuras {
+		if aura != nil && !aura.Stopped && aura.AuraType == auraType {
+			count++
+		}
+	}
+	return count
 }
 
 // refreshAuraEffectBasepoints mirrors the per-effect half of the
@@ -18887,6 +19018,24 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		if eff.Aura == 36 || eff.Aura == 56 {
 			targetSess.refreshTransformDisplay(ctx)
+		}
+		// Player::SetShapeshiftForm (Player.cpp:21795-21812) always re-runs
+		// the melee + ranged UpdateAttackPowerAndDamage pair on a form
+		// change; the wholesale calculatePlayerStats rebuild is that
+		// pair's Go equivalent, and the feral-damage/AP arms in the build
+		// read state.ShapeshiftForm as written just above. The transform
+		// (56) handler (AuraEffect::HandleTransform) is display-only and
+		// never touches form state, so only the shapeshift (36) apply
+		// triggers the rebuild.
+		if eff.Aura == 36 {
+			_ = targetSess.calculatePlayerStats(ctx, targetSess.player)
+		}
+		// AuraEffect::HandleAuraModDisarm apply leg
+		// (SpellAuraEffects.cpp:2284-2348): the flag is set BEFORE the
+		// weapon-bonus re-eval so it is reflected in
+		// Unit::CanUseAttackType (Unit.cpp:2462-2475).
+		if eff.Aura == spellAuraModDisarm || eff.Aura == spellAuraModDisarmOffhand || eff.Aura == spellAuraModDisarmRanged {
+			targetSess.applyDisarmAura(ctx, eff.Aura)
 		}
 
 		stackCount := uint8(1)

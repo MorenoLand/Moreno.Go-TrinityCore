@@ -137,6 +137,8 @@ const (
 	unitFlagMount                          uint32 = 0x08000000
 	unitFlagSkinnable                      uint32 = 0x04000000
 	unitFlag2RegeneratePower               uint32 = 0x00000800
+	unitFlag2DisarmOffhand                 uint32 = 0x00000080 // UNIT_FLAG2_DISARM_OFFHAND (UnitDefines.h:168)
+	unitFlag2DisarmRanged                  uint32 = 0x00000400 // UNIT_FLAG2_DISARM_RANGED (UnitDefines.h:170)
 	unitFlagInCombat                       uint32 = 0x00080000
 	unitFlagLooting                        uint32 = 0x00000400 // UNIT_FLAG_LOOTING (UnitDefines.h:134)
 	unitFlagPreparation                    uint32 = 0x00000020 // UNIT_FLAG_PREPARATION (UnitDefines.h:129)
@@ -282,6 +284,7 @@ type playerState struct {
 	DuelTeam                        uint32
 	FarsightGUID                    uint64 // PLAYER_FARSIGHT viewpoint GUID (EffectAddFarsight); runtime-only like C++
 	UnitFlags                       uint32
+	UnitFlags2                      uint32 // UNIT_FIELD_FLAGS_2: disarm offhand/ranged bits (UnitDefines.h:168-170)
 	HomebindMap                     uint32
 	HomebindZone                    uint32
 	HomebindX                       float32
@@ -2018,6 +2021,12 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	// survive; the weapon damage rows are superseded by the level-based
 	// feral formula below (StatSystem.cpp:586-595).
 	feralForm := state.ShapeshiftForm == 1 || state.ShapeshiftForm == 5 || state.ShapeshiftForm == 8
+	// Unit::CanUseAttackType (Unit.cpp:2462-2475): a disarmed attack type's
+	// weapon arms never apply — Player::_ApplyWeaponDamage
+	// (Player.cpp:7772-7775) early-outs on apply while the flag is set.
+	disarmedMain := state.UnitFlags&unitFlagDisarmed != 0
+	disarmedOffhand := state.UnitFlags2&unitFlag2DisarmOffhand != 0
+	disarmedRanged := state.UnitFlags2&unitFlag2DisarmRanged != 0
 	state.MinDamage = 1.0
 	state.MaxDamage = 2.0
 	if !feralForm {
@@ -2083,7 +2092,7 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 		// weapon damage only, summed by UpdateDamagePhysical
 		// (StatSystem.cpp:62-92).
 		if !feralForm {
-			if slot == 15 {
+			if slot == 15 && !disarmedMain {
 				if minDmg > 0 {
 					state.MinDamage = float32(minDmg)
 				}
@@ -2101,7 +2110,7 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 				if delay > 0 {
 					state.AttackTime = uint32(delay)
 				}
-			} else if slot == 16 {
+			} else if slot == 16 && !disarmedOffhand {
 				if minDmg > 0 {
 					state.MinOffhandDamage = float32(minDmg)
 				}
@@ -2119,7 +2128,7 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 				if delay > 0 {
 					state.OffhandAttackTime = uint32(delay)
 				}
-			} else if slot == 17 {
+			} else if slot == 17 && !disarmedRanged {
 				if minDmg > 0 {
 					state.MinRangedDamage = float32(minDmg)
 				}
@@ -3469,7 +3478,7 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 		class = 1
 	}
 	values[unitFieldBytes0] = uint32(race) | uint32(class)<<8 | uint32(state.Gender)<<16 | uint32(powerType)<<24
-	values[unitFieldFlags2] = unitFlag2RegeneratePower
+	values[unitFieldFlags2] = unitFlag2RegeneratePower | state.UnitFlags2
 	values[unitFieldHoverHeight] = math.Float32bits(1)
 	values[unitFieldBytes1] = uint32(state.StandState) | uint32(state.StandFlags)<<16
 	values[unitFieldFaction] = s.raceFaction(state.Race)
@@ -4259,6 +4268,26 @@ func (s *session) sendPlayerMountUpdate() {
 		s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
 	}
 	s.sendPlayerCollisionHeight()
+}
+
+// sendPlayerUnitFlagsUpdate pushes UNIT_FIELD_FLAGS + UNIT_FIELD_FLAGS_2 as a
+// values update — the Go side of Unit::SetFlag/RemoveFlag's client update for
+// flag flips that don't go through the other flag writers (disarm auras).
+func (s *session) sendPlayerUnitFlagsUpdate() {
+	if s == nil || s.player == nil {
+		return
+	}
+	packet, err := s.server.buildPlayerValuesUpdate(s.playerGUID, map[int]uint32{
+		unitFieldFlags:  unitFlagPlayerControlled | s.player.UnitFlags,
+		unitFieldFlags2: unitFlag2RegeneratePower | s.player.UnitFlags2,
+	})
+	if err != nil {
+		return
+	}
+	_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
+	}
 }
 
 func (s *session) sendPlayerCollisionHeight() {
