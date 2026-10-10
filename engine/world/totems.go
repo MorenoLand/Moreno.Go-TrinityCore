@@ -68,6 +68,11 @@ type activeTotem struct {
 	// newly acquired hostile, so the GUID is remembered until the totem
 	// has no hostile in range again.
 	LastPingVictim uint64
+	// MagnetUsed marks a Grounding Totem whose SPELL_AURA_SPELL_MAGNET
+	// charge has been consumed by the SelectExplicitTargets redirect
+	// (WorldObject::GetMagicHitRedirectTarget, Object.cpp:3188-3217):
+	// one redirect per totem, mirroring the C++ DropCharge.
+	MagnetUsed bool
 }
 
 var totemDefinitions = map[uint32]TotemDef{
@@ -545,6 +550,91 @@ func (s *session) liveTotemSpellID(slotID uint8) uint32 {
 		return 0
 	}
 	return totem.SpellID
+}
+
+// groundingTotemMagnetGUID mirrors the SPELL_DAMAGE_CLASS_MAGIC arm of
+// Spell::SelectExplicitTargets (Spell.cpp:724-757) via
+// WorldObject::GetMagicHitRedirectTarget (Object.cpp:3188-3217): while the
+// victim carries the SPELL_AURA_SPELL_MAGNET aura (96, SpellAuraDefines.h:176)
+// sourced from a live Grounding Totem, the next harmful magic spell with an
+// explicit enemy (or non-friendly plain-unit) target is redirected onto the
+// totem and the magnet is consumed. C++ drops one aura charge, delayed by the
+// missile travel time when the spell has Speed (Object.cpp:3204-3211); Go
+// consumes the totem's magnet at selection time.
+//
+// Go models no aura-96 row on players (grounding totem 8177 is summoned with
+// TotemPulseNone), so the live totem in the victim's air slot is the magnet:
+// one redirect per totem, then MagnetUsed. The melee/ranged arm
+// (Unit::GetMeleeHitRedirectTarget, Unit.cpp:6349-6363 —
+// SPELL_AURA_ADD_CASTER_HIT_TRIGGER, aura 111) has no Go-modeled source and
+// stays unbridged, as does the Speed>0 charge-delay nuance.
+func (s *session) groundingTotemMagnetGUID(ctx context.Context, spell wotlk.Spell, victimGUID uint64) (uint64, bool) {
+	if s == nil || s.server == nil || s.player == nil || victimGUID == 0 {
+		return 0, false
+	}
+	// DmgClass gate: only SPELL_DAMAGE_CLASS_MAGIC redirects here
+	// (Spell.cpp:739-741). Go's DefenseType is the DBC DmgClass field.
+	if spell.DefenseType != spellDamageClassMagic {
+		return 0, false
+	}
+	// Object.cpp:3191-3193: abilities, CANT_BE_REDIRECTED, and
+	// UNAFFECTED_BY_INVULNERABILITY spells ignore magnets.
+	if spell.Attributes&spellAttr0Ability != 0 || spell.AttributesEx&spellAttr1CantBeRedirected != 0 || spell.Attributes&spellAttr0UnaffectedByInvulnerability != 0 {
+		return 0, false
+	}
+	// Spell.cpp:728-731: the redirect only runs for explicit enemy-unit
+	// targets, or plain unit targets not friendly to the caster.
+	explicitMask := spellExplicitUnitTargetMask(spell)
+	var victimSess *session
+	if victimGUID == s.playerGUID {
+		victimSess = s
+	} else {
+		victimSess = s.server.findSessionByGUID(victimGUID)
+	}
+	if victimSess == nil {
+		// The magnet aura lives on the totem's owner; without a live player
+		// victim there is no magnet to consult.
+		return 0, false
+	}
+	if explicitMask&targetFlagUnitEnemy == 0 {
+		if explicitMask&targetFlagUnit == 0 || s.isFriendlyToTarget(victimGUID, victimSess) {
+			return 0, false
+		}
+	}
+	// The magnet: the victim's live Grounding Totem (air slot, spell 8177).
+	s.server.totemMu.RLock()
+	totem := s.server.activeTotems[victimGUID][TotemSlotAir]
+	s.server.totemMu.RUnlock()
+	if totem == nil || totem.SpellID != 8177 {
+		return 0, false
+	}
+	totem.mu.Lock()
+	totemGUID := totem.TotemGUID
+	consumed := totem.Stopped || totem.MagnetUsed
+	totem.mu.Unlock()
+	if consumed {
+		return 0, false
+	}
+	// Object.cpp:3200: the magnet must pass CheckExplicitTarget and
+	// IsValidAttackTarget — Go's unit-block and faction gates on the totem.
+	tgt, ok := s.getCombatTarget(ctx, totemGUID)
+	if !ok || tgt.Health == 0 {
+		return 0, false
+	}
+	if spellTargetUnitBlocked(spell, tgt.UnitFlags, tgt.FlagsExtra, false) {
+		return 0, false
+	}
+	if s.explicitTargetFactionBlocked(explicitMask, totemGUID, tgt) {
+		return 0, false
+	}
+	totem.mu.Lock()
+	if totem.Stopped || totem.MagnetUsed {
+		totem.mu.Unlock()
+		return 0, false
+	}
+	totem.MagnetUsed = true
+	totem.mu.Unlock()
+	return totemGUID, true
 }
 
 // handleEffectDestroyAllTotems processes SPELL_EFFECT_DESTROY_ALL_TOTEMS (110).

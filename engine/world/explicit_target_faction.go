@@ -21,6 +21,7 @@ const (
 	targetFlagDestLocation   uint32 = 0x40     // TARGET_FLAG_DEST_LOCATION (SpellInfo.h:45)
 	targetFlagGameObject     uint32 = 0x800    // TARGET_FLAG_GAMEOBJECT (SpellInfo.h:54)
 	targetFlagGameObjectItem uint32 = 0x4000   // TARGET_FLAG_GAMEOBJECT_ITEM (SpellInfo.h:58)
+	targetFlagItem           uint32 = 0x10     // TARGET_FLAG_ITEM (SpellInfo.h:52)
 	targetFlagUnitMinipet    uint32 = 0x10000  // TARGET_FLAG_UNIT_MINIPET (SpellInfo.h:60)
 	// targetFlagUnitMask mirrors TARGET_FLAG_UNIT_MASK (SpellInfo.h:70-71).
 	targetFlagUnitMask uint32 = targetFlagUnit | targetFlagUnitRaid | targetFlagUnitParty | targetFlagUnitEnemy | targetFlagUnitAlly | targetFlagUnitDead | targetFlagUnitMinipet | targetFlagUnitPassenger
@@ -80,6 +81,102 @@ func spellExplicitUnitTargetMask(spell wotlk.Spell) uint32 {
 	return mask
 }
 
+// spellEffectExplicitUsedTargetFlag ports the used-target-object-type column
+// of SpellEffectInfo::_data (SpellInfo.cpp:618-775) for effects whose static
+// implicit-target type is EFFECT_IMPLICIT_TARGET_EXPLICIT (SpellInfo.h:144),
+// as a target-flag mask via GetTargetFlagMask (SpellInfo.cpp:38-64). Effects
+// absent from the table are not EXPLICIT-typed and contribute nothing.
+func spellEffectExplicitUsedTargetFlag(effect uint32) uint32 {
+	switch effect {
+	case 5, 29, 43, 69, 83, 144, 145:
+		return targetFlagDestLocation | targetFlagUnit // TARGET_OBJECT_TYPE_UNIT_AND_DEST
+	case 18, 113:
+		return targetFlagCorpseAlly // TARGET_OBJECT_TYPE_CORPSE_ALLY
+	case 116:
+		return targetFlagCorpseEnemy // TARGET_OBJECT_TYPE_CORPSE_ENEMY
+	case 27, 28, 50, 56, 72, 76, 81, 104, 105, 106, 107, 109, 135, 149:
+		return targetFlagDestLocation // TARGET_OBJECT_TYPE_DEST
+	case 33:
+		return targetFlagGameObjectItem // TARGET_OBJECT_TYPE_GOBJ_ITEM
+	case 86, 87, 88, 89:
+		return targetFlagGameObject // TARGET_OBJECT_TYPE_GOBJ
+	case 53, 54, 99, 101, 127, 156:
+		return targetFlagItem // TARGET_OBJECT_TYPE_ITEM
+	case 1, 2, 6, 7, 8, 9, 10, 11, 16, 17, 19, 24, 31, 35, 36, 38, 40, 41,
+		44, 45, 55, 57, 58, 59, 62, 63, 65, 66, 67, 68, 70, 71, 73, 75,
+		80, 82, 90, 91, 92, 95, 96, 98, 100, 102, 103, 108, 111, 112,
+		114, 115, 117, 119, 120, 121, 123, 124, 125, 126, 128, 129, 130,
+		132, 133, 136, 137, 138, 139, 140, 141, 142, 143, 146, 147, 150,
+		153, 154, 157:
+		return targetFlagUnit // TARGET_OBJECT_TYPE_UNIT
+	default:
+		return 0
+	}
+}
+
+// spellMissingExplicitTargetMask mirrors the GetMissingTargetMask arm of
+// SpellInfo::_InitializeExplicitTargetMask (SpellInfo.cpp:3358-3371): for
+// each effect whose static implicit-target type is
+// EFFECT_IMPLICIT_TARGET_EXPLICIT, the used target object type's flag mask
+// (SpellEffectInfo::GetMissingTargetMask, SpellInfo.cpp:581-603) is OR'd into
+// the explicit mask when the effect's own implicit targets don't already
+// provide it. baseMask is the mask accumulated from the DBC Targets field and
+// the per-effect GetExplicitTargetMask bits, matching the sequential C++
+// loop; the src/dst latch mirrors the trailing switch of
+// SpellImplicitTargetInfo::GetExplicitTargetMask (SpellInfo.cpp:203-212) —
+// no implicit target number carries TARGET_OBJECT_TYPE_UNIT_AND_DEST, so the
+// flag-based latch is exact. The no-max-range strip (SpellInfo.cpp:3367-3369)
+// is unmodeled: it needs the DBC SpellRange row, which the pure mask
+// functions cannot reach; it only fires for self-range spells whose EXPLICIT
+// used type is uncovered, a combination with no known spell.
+func spellMissingExplicitTargetMask(spell wotlk.Spell, baseMask uint32) uint32 {
+	mask := baseMask
+	var srcSet, dstSet bool
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		for _, tgt := range [2]uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			fl := spellImplicitTargetObjectFlag(tgt)
+			if fl&targetFlagSourceLocation != 0 {
+				srcSet = true
+			}
+			if fl&targetFlagDestLocation != 0 {
+				dstSet = true
+			}
+		}
+		used := spellEffectExplicitUsedTargetFlag(eff.Effect)
+		if used == 0 {
+			continue
+		}
+		effMask := used
+		provided := spellEffectProvidedTargetMask(eff) | mask
+		if provided&targetFlagUnitMask != 0 {
+			effMask &^= targetFlagUnitMask
+		}
+		if provided&(targetFlagCorpseAlly|targetFlagCorpseEnemy) != 0 {
+			effMask &^= targetFlagUnitMask | targetFlagCorpseAlly | targetFlagCorpseEnemy
+		}
+		if provided&targetFlagGameObjectItem != 0 {
+			effMask &^= targetFlagGameObjectItem | targetFlagGameObject | targetFlagItem
+		}
+		if provided&targetFlagGameObject != 0 {
+			effMask &^= targetFlagGameObject | targetFlagGameObjectItem
+		}
+		if provided&targetFlagItem != 0 {
+			effMask &^= targetFlagItem | targetFlagGameObjectItem
+		}
+		if dstSet || provided&targetFlagDestLocation != 0 {
+			effMask &^= targetFlagDestLocation
+		}
+		if srcSet || provided&targetFlagSourceLocation != 0 {
+			effMask &^= targetFlagSourceLocation
+		}
+		mask |= effMask
+	}
+	return mask &^ baseMask
+}
+
 // spellExplicitObjectTargetMask mirrors the object-target half of
 // SpellInfo::GetExplicitTargetMask (SpellInfo.cpp:1956;
 // _InitializeExplicitTargetMask, SpellInfo.cpp:3344-3370) as tested by
@@ -96,9 +193,9 @@ func spellExplicitUnitTargetMask(spell wotlk.Spell) uint32 {
 // (TARGET_GAMEOBJECT_ITEM_TARGET). The CORPSE bits never survive
 // GetExplicitTargetMask (TARGET_OBJECT_TYPE_CORPSE hits the default arm),
 // so the null arm's CORPSE leg is dead in C++. The SRC/DEST-location and
-// TRAJ legs are irrelevant to the null arm. Documented delta: the
-// GetMissingTargetMask extension (SpellInfo.cpp:3364) for
-// EFFECT_IMPLICIT_TARGET_EXPLICIT effects is unmodeled.
+// TRAJ legs are irrelevant to the null arm. The GetMissingTargetMask
+// extension (SpellInfo.cpp:3364) for EFFECT_IMPLICIT_TARGET_EXPLICIT
+// effects rides spellMissingExplicitTargetMask above.
 func spellExplicitObjectTargetMask(spell wotlk.Spell) uint32 {
 	mask := spell.Targets & (targetFlagUnitMask | targetFlagGameObject | targetFlagGameObjectItem)
 	if spellNeedsExplicitUnitTarget(spell) {
@@ -117,7 +214,9 @@ func spellExplicitObjectTargetMask(spell wotlk.Spell) uint32 {
 			}
 		}
 	}
-	return mask
+	// The GetMissingTargetMask extension (SpellInfo.cpp:3364) for
+	// EFFECT_IMPLICIT_TARGET_EXPLICIT effects.
+	return mask | spellMissingExplicitTargetMask(spell, mask)
 }
 
 // explicitSelectionTargetOK mirrors the selection-adoption gate in

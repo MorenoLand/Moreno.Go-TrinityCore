@@ -94,6 +94,7 @@ const (
 	spellAttr0OnNextSwing2                 uint32 = 0x00000400 // SPELL_ATTR0_ON_NEXT_SWING_2 (SharedDefines.h:422) — tested against Attributes (DBC attr0), no clash with the custom-attr const above
 	spellAttr2NotNeedShapeshift            uint32 = 0x00080000 // SPELL_ATTR2_NOT_NEED_SHAPESHIFT (SharedDefines.h:505) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr1CantBeReflected              uint32 = 0x00000080 // SPELL_ATTR1_CANT_BE_REFLECTED (SharedDefines.h:456)
+	spellAttr1CantBeRedirected             uint32 = 0x00000008 // SPELL_ATTR1_CANT_BE_REDIRECTED (SharedDefines.h:452) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr1CantTargetSelf               uint32 = 0x00080000 // SPELL_ATTR1_CANT_TARGET_SELF (SharedDefines.h:468) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr1CantTargetInCombat           uint32 = 0x00000100 // SPELL_ATTR1_CANT_TARGET_IN_COMBAT (SharedDefines.h:457) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr1ReqComboPoints1              uint32 = 0x00100000 // SPELL_ATTR1_REQ_COMBO_POINTS1 (SharedDefines.h:469) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
@@ -3480,12 +3481,15 @@ func (s *session) unitTargetPowerType(guid uint64) (int32, bool) {
 // (TARGET_UNIT_TARGET_AREA_RAID_CLASS via the RAID_CLASS fall-through),
 // and the dest entries 63-71/74/75 — tested by target number below. The
 // GetMissingTargetMask extension for EFFECT_IMPLICIT_TARGET_EXPLICIT
-// effects (SpellInfo.cpp:3364) is unmodeled (explicit_target_faction.go:92).
+// effects (SpellInfo.cpp:3364) rides spellMissingExplicitTargetMask
+// (explicit_target_faction.go); the no-max-range strip (SpellInfo.cpp:3367)
+// is unmodeled there.
 func spellNeedsExplicitUnitTarget(spell wotlk.Spell) bool {
 	if spell.Targets&targetFlagUnitMask != 0 {
 		return true
 	}
-	if mask := spellExplicitUnitTargetMask(spell); mask&targetFlagUnitMask != 0 {
+	unitMask := spellExplicitUnitTargetMask(spell)
+	if unitMask&targetFlagUnitMask != 0 {
 		return true
 	}
 	for _, eff := range spell.Effects {
@@ -3499,7 +3503,7 @@ func spellNeedsExplicitUnitTarget(spell wotlk.Spell) bool {
 			}
 		}
 	}
-	return false
+	return spellMissingExplicitTargetMask(spell, spell.Targets|unitMask)&targetFlagUnitMask != 0
 }
 
 // spellGoPacketTarget mirrors the target-mask arm of Spell::SelectSpellTargets
@@ -7076,7 +7080,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// wire/selection/self-default fallbacks that mirror Spell::SetTargetMap
 	// (Spell.cpp:668-700). Remaining deltas: the CORPSE leg is dead in C++
 	// (GetExplicitTargetMask never produces corpse bits); the
-	// GetMissingTargetMask extension (SpellInfo.cpp:3364) is unmodeled; the
+	// GetMissingTargetMask extension (SpellInfo.cpp:3364) now rides
+	// spellMissingExplicitTargetMask in spellExplicitObjectTargetMask below
+	// (self-range strip unmodeled); the
 	// selection fallback is validated through the CheckExplicitTarget unit
 	// gates (explicitSelectionTargetOK, Spell.cpp:684-690); Go's non-harmful
 	// self default is wider than C++'s
@@ -7153,6 +7159,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "explicit target GM/invisible")
 					return
 				}
+			}
+			// Spell::SelectExplicitTargets (Spell.cpp:724-757): the magic
+			// redirect arm (WorldObject::GetMagicHitRedirectTarget,
+			// Object.cpp:3188-3217) runs after the explicit-target gates —
+			// C++ redirects inside SelectSpellTargets, which follows CheckCast
+			// in _cast. A live Grounding Totem magnet on the victim pulls the
+			// explicit unit target onto the totem (and the SMSG_SPELL_GO unit
+			// target with it, mirroring m_targets.SetUnitTarget).
+			if redirectGUID, ok := s.groundingTotemMagnetGUID(ctx, spell, explicitUnitGUID); ok {
+				explicitUnitGUID = redirectGUID
+				target.UnitGUID = redirectGUID
 			}
 			// Self is exempt from the gates above (CheckTarget's
 			// `unitTarget != caster` arm, SpellInfo.cpp:1738) and is a valid
@@ -7800,6 +7817,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	casterGUID := s.playerGUID
 	if castItemGUID != 0 {
 		casterGUID = castItemGUID | (uint64(0x4000) << 48)
+	}
+	// Spell::SelectSpellTargets (Spell.cpp:789-807): a channeled spell whose
+	// target selection produced no unit, gameobject, or item targets and no
+	// destination fails with SPELL_FAILED_BAD_IMPLICIT_TARGETS. The check runs
+	// inside SelectSpellTargets during _cast (Spell.cpp:3410), before
+	// TakePower/TakeReagents and SendSpellGo, so no SMSG_SPELL_GO is sent.
+	// Go carries only the unit half of SpellCastTargets (gameobject/item
+	// targets are unmodeled) and counts missed targets via missStatus, the
+	// same way C++ keeps misses in m_UniqueTargetInfo.
+	if isChanneledSpell(spell) && len(hitTargets)+len(missStatus) == 0 && target.Flags&protocol.SpellTargetFlagDestLocation == 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadImplicitTargets), true)
+		s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "channeled spell with no targets")
+		return
 	}
 	// Spell::SendSpellGo (Spell.cpp:4302-4315, 4343-4366): the Death Knight
 	// rune arm sets CAST_FLAG_NO_GCD ("not needed, but Blizzard sends it")
