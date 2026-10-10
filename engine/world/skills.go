@@ -375,8 +375,45 @@ func (s *session) handleUnlearnSkill(ctx context.Context, payload []byte) bool {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_skills WHERE guid = ? AND skill = ?", s.playerGUID, skillID)
 	}
 
+	// Player::SetSkill remove arm (Player.cpp:6144-6164): unlearn the
+	// first-rank spell of every SkillLineAbility row for the skill, with
+	// RemoveSpell's higher-rank cascade (Player.cpp:3708-3713). The
+	// spells-requiring-spell leg (Player.cpp:3714-3718) has no Go bridge
+	// (Go keeps no reverse learn map), and the UpdateSkillEnchantments leg
+	// has no skill-enchantment model.
+	if s.server != nil && s.server.Data != nil {
+		if abilities, aok, aerr := s.server.Data.SkillLineAbilitiesForSkill(skillID); aerr == nil && aok {
+			for _, ab := range abilities {
+				s.unlearnSpellRankChain(ctx, s.server.getFirstSpellInChain(ab.Spell))
+			}
+		}
+	}
+
 	s.sendPlayerUpdate()
 	return true
+}
+
+// unlearnSpellRankChain mirrors the Player::RemoveSpell rank recursion
+// (Player.cpp:3708-3713) used by the SetSkill remove arm: unlearn the spell
+// and walk up the rank chain while the higher rank is known. Higher ranks
+// that are talent spells are skipped (the GetTalentSpellPos arm).
+func (s *session) unlearnSpellRankChain(ctx context.Context, spellID uint32) {
+	if spellID == 0 || !s.hasLearnedSpell(spellID) {
+		return
+	}
+	next := uint32(0)
+	if s.server != nil {
+		next = s.server.getNextSpellInChain(spellID)
+	}
+	s.unlearnSpell(ctx, spellID)
+	if next != 0 && s.hasLearnedSpell(next) {
+		if s.server != nil && s.server.Data != nil {
+			if cost, cerr := s.server.Data.TalentSpellCost(next); cerr == nil && cost > 0 {
+				return
+			}
+		}
+		s.unlearnSpellRankChain(ctx, next)
+	}
 }
 
 const (
@@ -436,37 +473,45 @@ func (s *session) resetTalents(ctx context.Context, free bool) bool {
 	if !free && !s.server.Config.NoResetTalentsCost {
 		cost = s.resetTalentsCost()
 		if s.player.Money < cost {
+			// Player::ResetTalents (Player.cpp:4013): SendBuyError(
+			// BUY_ERR_NOT_ENOUGHT_MONEY, nullptr, 0, 0) before returning
+			// false; the opcode handler then sends the (0,0)
+			// MSG_TALENT_WIPE_CONFIRM reply.
+			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(0, 0, buyErrNotEnoughMoney), true)
 			return false
 		}
 	}
 
-	// Unlearn the highest known rank spell of every talent.
-	cdb := s.server.CharactersStore.DB
-	for talentID, rank := range s.player.Talents {
+	// Player::ResetTalents unlearns every known rank spell of every class
+	// talent via RemoveSpell (Player.cpp:4019-4053): the spell row is dropped
+	// (persisted by _SaveSpells) and its auras stripped, and the search arm
+	// (Player.cpp:4045-4047) also unlearns spells a talent teaches through
+	// SPELL_EFFECT_LEARN_SPELL trigger effects.
+	for talentID := range s.player.Talents {
 		if s.server.Data == nil {
 			continue
 		}
-		if tEntry, ok, err := s.server.Data.Talent(talentID); err == nil && ok && uint32(rank) < uint32(len(tEntry.SpellRank)) {
-			spellID := tEntry.SpellRank[rank]
-			if spellID != 0 {
-				// Player::ResetTalents unlearns each talent spell via
-				// RemoveSpell(spell, true): the spell row is dropped (persisted
-				// by _SaveSpells) and its auras stripped. The triggered
-				// SPELL_EFFECT_LEARN_SPELL spells C++ also unlearns have no Go
-				// model (no spell-effect introspection on talent rows here).
-				_, _ = cdb.ExecContext(ctx, "DELETE FROM character_spell WHERE guid = ? AND spell = ?", s.playerGUID, spellID)
-				if s.hasAura(spellID) {
-					s.removeAura(spellID)
+		tEntry, ok, err := s.server.Data.Talent(talentID)
+		if err != nil || !ok {
+			continue
+		}
+		for _, spellID := range tEntry.SpellRank {
+			if spellID == 0 || !s.hasLearnedSpell(spellID) {
+				continue
+			}
+			s.unlearnSpell(ctx, spellID)
+			if info, iok, ierr := s.server.Data.Spell(spellID); ierr == nil && iok {
+				for i := range info.Effects {
+					if info.Effects[i].Effect == spellEffectLearnSpell && info.Effects[i].TriggerSpell != 0 {
+						s.unlearnSpell(ctx, info.Effects[i].TriggerSpell)
+					}
 				}
-				s.removeOwnerPetAurasForSpell(ctx, spellID)
-				removed := protocol.NewBuffer(4)
-				removed.WriteU32(spellID)
-				_ = s.write(uint16(protocol.OpcodeSMSG_REMOVED_SPELL), removed.Bytes(), true)
 			}
 		}
 	}
 
 	s.player.Talents = make(map[uint32]uint8)
+	cdb := s.server.CharactersStore.DB
 	if _, err := cdb.ExecContext(ctx, "DELETE FROM character_talent WHERE guid = ? AND talentGroup = ?", s.playerGUID, s.player.ActiveTalentGroup); err != nil {
 		s.debug("talent reset persistence failed", "account", s.accountName, "error", err)
 	}
