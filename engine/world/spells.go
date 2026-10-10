@@ -7184,9 +7184,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// target and none is sent, with the GAMEOBJECT_ITEM + itemTarget escape)
 	// is bridged below via spellExplicitObjectTargetMask, evaluated after the
 	// wire/selection/self-default fallbacks that mirror Spell::SetTargetMap
-	// (Spell.cpp:668-700). Remaining deltas: the CORPSE leg is dead in C++
-	// (GetExplicitTargetMask never produces corpse bits); the
-	// GetMissingTargetMask extension (SpellInfo.cpp:3364) now rides
+	// (Spell.cpp:668-700). The object-target validity arm (Spell.cpp:668-678)
+	// rides explicitWireTargetFitsMask: a wire target whose object type the
+	// explicit mask does not need is dropped (GO wire targets never adopt as
+	// units — they ride the GOTargetInfo path; corpse wire targets are always
+	// dropped since the mask never carries corpse bits). Remaining deltas:
+	// the GetMissingTargetMask extension (SpellInfo.cpp:3364) now rides
 	// spellMissingExplicitTargetMask in spellExplicitObjectTargetMask below
 	// (self-range strip unmodeled); the
 	// selection fallback is validated through the CheckExplicitTarget unit
@@ -7205,7 +7208,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// CASTER-reference unit targets (pet 5, vehicle 94) resolve from the
 		// caster and take precedence over the wire/selection/self fallbacks.
 		hitTargets = append(hitTargets, casterUnitGUID)
-	} else if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+	} else if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 && explicitWireTargetFitsMask(spell, target) {
+		// Spell::InitExplicitTargets (Spell.cpp:668-678): the wire target is
+		// adopted only when its object type fits the spell's explicit mask —
+		// a mismatched wire target is dropped like C++'s RemoveObjectTarget.
+		// Gameobject wire targets never land here; they ride the GO path
+		// (C++ GOTargetInfo, Go's wire-GO append below).
 		explicitUnitGUID = target.UnitGUID
 	} else if s.selection != 0 && s.explicitSelectionTargetOK(ctx, spell, s.selection) {
 		// Spell::SetTargetMap (Spell.cpp:684-690): the caster's selection is
@@ -7227,11 +7235,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// C++'s (ALLY/PARTY/RAID only), so the arm only fires for spells that fell
 	// through every fallback.
 	if explicitUnitGUID == 0 && len(hitTargets) == 0 {
-		if needed := spellExplicitObjectTargetMask(spell); needed&(targetFlagUnitMask|targetFlagGameObject|targetFlagGameObjectItem) != 0 {
-			if needed&targetFlagGameObjectItem == 0 || target.Flags&protocol.SpellTargetFlagItemWireMask == 0 || target.ItemGUID == 0 {
-				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
-				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no explicit target for mask-needing spell")
-				return
+		// A gameobject wire target satisfies the null-target arm the same way
+		// C++'s non-null GO object target does (SpellInfo.cpp:1784): it rides
+		// the GOTargetInfo path, never the unit adoption above, so the cast
+		// must not fail here for GO-needing spells.
+		wireGOSatisfies := spellGameObjectTargetGUID(target) != 0 &&
+			spellExplicitObjectTargetMask(spell)&(targetFlagGameObject|targetFlagGameObjectItem) != 0
+		if !wireGOSatisfies {
+			if needed := spellExplicitObjectTargetMask(spell); needed&(targetFlagUnitMask|targetFlagGameObject|targetFlagGameObjectItem) != 0 {
+				if needed&targetFlagGameObjectItem == 0 || target.Flags&protocol.SpellTargetFlagItemWireMask == 0 || target.ItemGUID == 0 {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
+					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no explicit target for mask-needing spell")
+					return
+				}
 			}
 		}
 	}
@@ -7693,8 +7709,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// above do (AddGOTarget). Without this, a harmful gameobject-targeted
 	// cast fizzles at the empty-hitTargets return below while C++ runs
 	// GOTargetInfo::DoTargetSpellHit for it. Placed after the hit roll: GO
-	// targets never roll SpellHitResult in C++.
-	if wireGO := spellGameObjectTargetGUID(target); wireGO != 0 {
+	// targets never roll SpellHitResult in C++. The mask gate is the
+	// InitExplicitTargets object-target validity arm (Spell.cpp:668-678): a
+	// GO wire target the spell's explicit mask does not need is dropped with
+	// the object target and never reaches the GO container.
+	if wireGO := spellGameObjectTargetGUID(target); wireGO != 0 &&
+		spellExplicitObjectTargetMask(spell)&(targetFlagGameObject|targetFlagGameObjectItem) != 0 {
 		seenGO := false
 		for _, guid := range hitTargets {
 			if guid == wireGO {

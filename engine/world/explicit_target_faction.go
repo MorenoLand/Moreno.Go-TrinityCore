@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // Explicit-target hostility/faction gates for SpellInfo::CheckExplicitTarget.
@@ -196,6 +197,27 @@ func spellMissingExplicitTargetMask(spell wotlk.Spell, baseMask uint32) uint32 {
 // TRAJ legs are irrelevant to the null arm. The GetMissingTargetMask
 // extension (SpellInfo.cpp:3364) for EFFECT_IMPLICIT_TARGET_EXPLICIT
 // effects rides spellMissingExplicitTargetMask above.
+// explicitWireTargetFitsMask mirrors the object-target validity arm of
+// Spell::InitExplicitTargets (Spell.cpp:668-678): a wire target whose object
+// type the spell's explicit mask does not need is dropped before the
+// selection/self fallbacks run. A gameobject wire target is never adopted as
+// the explicit unit target — C++ keeps it as the GO object target on the
+// GOTargetInfo path (Go's gameobject_destructible.go wire-GO append is the
+// mirror). Corpse wire targets are always dropped: GetExplicitTargetMask
+// never produces corpse bits (SpellInfo.cpp:134-212), so the C++ CORPSE arm
+// always removes them. A unit wire target (player, creature, pet, minipet —
+// C++ ToUnit covers them all, including a not-released player corpse) needs
+// a unit bit in the mask.
+func explicitWireTargetFitsMask(spell wotlk.Spell, target protocol.SpellTargetData) bool {
+	if target.Flags&protocol.SpellTargetFlagGameObject != 0 {
+		return false
+	}
+	if target.Flags&(protocol.SpellTargetFlagCorpseEnemy|protocol.SpellTargetFlagCorpseAlly) != 0 {
+		return false
+	}
+	return spellExplicitObjectTargetMask(spell)&targetFlagUnitMask != 0
+}
+
 func spellExplicitObjectTargetMask(spell wotlk.Spell) uint32 {
 	mask := spell.Targets & (targetFlagUnitMask | targetFlagGameObject | targetFlagGameObjectItem)
 	if spellNeedsExplicitUnitTarget(spell) {
