@@ -405,8 +405,11 @@ func (s *session) handleGuildQuery(ctx context.Context, payload []byte) bool {
 	}
 	reader := protocol.NewReader(payload)
 	guildID, err := reader.ReadU32()
+	// WorldSession::HandleGuildQueryOpcode (GuildHandler.cpp:33): a zero guild
+	// id is a silent no-op, and an unknown guild is skipped inside
+	// sendGuildQueryResponse — neither closes the connection.
 	if err != nil || guildID == 0 {
-		return false
+		return true
 	}
 	return s.sendGuildQueryResponse(ctx, guildID)
 }
@@ -969,7 +972,9 @@ func (s *session) handleGuildInfo(ctx context.Context) bool {
 
 	buf := protocol.NewBuffer(128)
 	buf.WriteCString(name)
-	buf.WriteU32(uint32(createdDate))
+	// GuildInfoResponse::Write (GuildPackets.cpp:50-58): the create date is a
+	// 4-byte packed time (ByteBuffer::AppendPackedTime), not a raw unix u32.
+	buf.WritePackedTime(time.Unix(createdDate, 0))
 	buf.WriteI32(int32(memberCount))
 	buf.WriteI32(int32(accountCount))
 	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_INFO), buf.Bytes(), true)
