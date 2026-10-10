@@ -510,6 +510,9 @@ const (
 	spellSchoolMaskNormal                          = 1    // SPELL_SCHOOL_MASK_NORMAL (SharedDefines.h:324)
 	spellAuraAttackPowerPercent                    = 166
 	spellAuraRangedAttackPowerPercent              = 167
+	spellAuraModAttackPower                        = 99  // SPELL_AURA_MOD_ATTACK_POWER (SpellAuraDefines.h:179)
+	spellAuraModRangedAttackPower                  = 124 // SPELL_AURA_MOD_RANGED_ATTACK_POWER (SpellAuraDefines.h:204)
+	spellAuraModDamageDone                         = 13  // SPELL_AURA_MOD_DAMAGE_DONE (SpellAuraDefines.h:93)
 	spellAuraCastingSpeedNotStack                  = 65
 	spellAuraHasteSpells                           = 216
 	spellAuraFakeInebriation                       = 304
@@ -7962,9 +7965,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						s.executeSpellInstantKill(effCtx, effectTarget, spellID)
 					}
 				}
-			case 2, 17, 31, 58: // Damage effects (School damage, Weapon damage, etc.)
+			case 2, 17, 31, 58, 121: // Damage effects (School damage, Weapon damage, etc.)
 				damageEffectSeen = true
 				damage := uint32(eff.BasePoints + 1)
+				// Effect 121 (SPELL_EFFECT_NORMALIZED_WEAPON_DMG) rides the
+				// weapon-damage path: Spell::EffectWeaponDmg
+				// (SpellEffects.cpp:3396-3405) folds its CalculateDamage into
+				// fixed_bonus exactly like 17/58, differing only via the
+				// normalized flag into the unmodeled Unit::CalculateDamage
+				// swing — so the flat BasePoints+1 treatment is identical.
 				// Spell::EffectSchoolDMG (SpellEffects.cpp:334-348): Meteor-like
 				// GENERIC-family spells carrying SPELL_ATTR0_CU_SHARE_DAMAGE
 				// divide the damage by the number of targets hit with this
@@ -8053,11 +8062,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						// last weapon-damage effect in the spell runs the
 						// family switch; earlier ones return without doing
 						// anything. C++ counts all four weapon effect types
-						// (17/31/58/121) in that scan — 121
-						// (NORMALIZED_WEAPON_DMG) never reaches this
-						// dispatch, but it still suppresses the arm when it
-						// follows, like C++.
-						weaponDamageEffect := eff.Effect == spellEffectWeaponDamage || eff.Effect == spellEffectWeaponDamageNoschool || eff.Effect == spellEffectWeaponPercentDamage
+						// (17/31/58/121) in that scan, and all four reach
+						// this dispatch: 121 (NORMALIZED_WEAPON_DMG) differs
+						// from 58 only via the normalized flag into the
+						// unmodeled Unit::CalculateDamage swing, so the flat
+						// BasePoints+1 treatment is identical.
+						weaponDamageEffect := eff.Effect == spellEffectWeaponDamage || eff.Effect == spellEffectWeaponDamageNoschool || eff.Effect == spellEffectWeaponPercentDamage || eff.Effect == spellEffectNormalizedWeaponDmg
 						lastWeaponEffect := true
 						for later := effectIndex + 1; later < len(spell.Effects); later++ {
 							switch spell.Effects[later].Effect {
@@ -8102,13 +8112,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							// Spell::EffectWeaponDmg (SpellEffects.cpp:3193-3200):
 							// the Mocking Blow arm zeroes the damage (m_damage
 							// = 0, return) when the target is immune to effect
-							// 1 or is a player. The immunity leg is a
-							// documented no-bridge — there is no per-effect
-							// immunity check on the damage path — while the
-							// TYPEID_PLAYER leg mirrors as a skip of this
-							// target's damage: a target resolving to a player
-							// session takes nothing from this arm.
+							// 1 or is a player. The TYPEID_PLAYER leg mirrors
+							// as a skip of this target's damage: a target
+							// resolving to a player session takes nothing from
+							// this arm. The immunity leg
+							// (IsImmunedToSpellEffect(m_spellInfo, EFFECT_1,
+							// unitCaster)) rides
+							// creatureTargetImmuneToSpellEffect — the
+							// AddUnitTarget strip (Spell.cpp:2108-2112) only
+							// zeroes the mask when every effect is immune, so
+							// an effect-1-only immune target still reaches
+							// this arm and must be zeroed here, like C++.
 							if effectTarget == s.playerGUID || (s.server != nil && s.server.findSessionByGUID(effectTarget) != nil) {
+								continue
+							}
+							if s.creatureTargetImmuneToSpellEffect(effCtx, effectTarget, spell, 1, s) {
 								continue
 							}
 						}
@@ -8209,15 +8227,25 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							}
 						}
 						// Spell::EffectWeaponDmg (SpellEffects.cpp:3279-3287): the
-						// Paladin arm is documented no-bridge. Seal of Command
-						// Unleashed (3282-3286, Id == 20467) adds 0.08 *
-						// GetTotalAttackPowerValue(BASE_ATTACK) plus 0.13 *
-						// SpellBaseDamageBonusDone(school) to spell_bonus —
-						// blocked on the missing total-AP model (standing
-						// delta; grep for TotalAttackPowerValue: empty). The
-						// spellpower leg alone is readable from
-						// s.player.SpellPower, but the AP leg closes the arm.
-						// Revisit when the total-AP model lands.
+						// Paladin arm. Seal of Command Unleashed (3282-3286,
+						// Id == 20467) adds int32(0.08 *
+						// GetTotalAttackPowerValue(BASE_ATTACK)) plus int32(
+						// 0.13 * SpellBaseDamageBonusDone(school)) to
+						// spell_bonus — the two C++ truncations are separate.
+						// totalDamagePercentMod is 1.0 for this spell (no
+						// paladin pct arm), so the bonus lands on targetDamage
+						// ahead of the SPELLMOD_DAMAGE application inside
+						// executeSpellDamage, matching the C++ order
+						// (spell_bonus at :3453, ApplySpellMod at :3458-3459).
+						// SpellBaseDamageBonusDone is GetTotalAuraModifierByMiscMask
+						// (SPELL_AURA_MOD_DAMAGE_DONE, school) (Unit.cpp:7134).
+						// The max(0, ...) guard mirrors the C++ clamp at
+						// :3462: a negative damage-done aura could otherwise
+						// wrap the uint32.
+						if weaponDamageEffect && lastWeaponEffect && spell.SpellFamilyName == spellFamilyPaladin && spell.ID == 20467 {
+							bonus := int32(0.08*s.totalAttackPowerValue(false)) + int32(0.13*s.playerAuraModifierByMiscMask(spellAuraModDamageDone, int32(spell.SchoolMask)))
+							targetDamage = uint32(max(int64(targetDamage)+int64(bonus), 0))
+						}
 						// Spell::EffectWeaponDmg (SpellEffects.cpp:3289-3295): the
 						// Shaman arm is documented no-bridge. Stormstrike
 						// (3292-3294) fires the Skyshatter Harness set bonus:
@@ -8234,13 +8262,22 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						// Sunder Armor trigger above. Revisit only when the
 						// override-class-scripts aura model lands.
 						// Spell::EffectWeaponDmg (SpellEffects.cpp:3311-3317): the
-						// Hunter arm is documented no-bridge. Kill Shot
-						// (3313-3316, SpellFamilyFlags[1] & 0x800000) adds
-						// 0.4 * GetTotalAttackPowerValue(RANGED_ATTACK) to
-						// spell_bonus — blocked on the missing ranged-AP
-						// model (no RANGED_ATTACK attack power anywhere in
-						// the tree; creatures.go only models ranged attack
-						// time). Revisit when the ranged-AP model lands.
+						// Hunter arm. Kill Shot (3313-3316,
+						// SpellFamilyFlags[1] & 0x800000) adds int32(0.4 *
+						// GetTotalAttackPowerValue(RANGED_ATTACK)) to
+						// spell_bonus. totalDamagePercentMod is 1.0 for this
+						// spell (no hunter pct arm on the weapon path), so the
+						// bonus lands on targetDamage ahead of the
+						// SPELLMOD_DAMAGE application inside
+						// executeSpellDamage, matching the C++ order
+						// (spell_bonus at :3453, ApplySpellMod at :3458-3459).
+						// The helper floors at zero, so the bonus is never
+						// negative and no clamp is needed.
+						if weaponDamageEffect && lastWeaponEffect && spell.SpellFamilyName == spellFamilyHunter && spell.SpellFamilyFlags[1]&0x800000 != 0 {
+							if bonus := int32(0.4 * s.totalAttackPowerValue(true)); bonus > 0 {
+								targetDamage += uint32(bonus)
+							}
+						}
 						if weaponDamageEffect && lastWeaponEffect && spell.SpellFamilyName == spellFamilyDeathKnight {
 							// Spell::EffectWeaponDmg (SpellEffects.cpp:3318-3385):
 							// the DeathKnight arms. The C++ family case runs

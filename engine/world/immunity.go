@@ -1067,6 +1067,29 @@ func (s *session) spellTargetFullyEffectImmune(spell wotlk.Spell, targetSess *se
 	return anyEffect
 }
 
+// creatureTargetImmuneToSpellEffect is the single-effect form of
+// creatureTargetImmuneToSpell: Unit::IsImmunedToSpellEffect (Unit.cpp:7952-7994)
+// for creature targets. It serves the Mocking Blow arm of
+// Spell::EffectWeaponDmg (SpellEffects.cpp:3193-3200), which zeroes the damage
+// when the target is immune to EFFECT_1 even though the weapon-damage effect
+// itself still hits — the AddUnitTarget strip (Spell.cpp:2108-2112) only
+// reports IMMUNE2 when every effect is immune, so this leg is not redundant
+// with the hit-resolution gates.
+func (s *session) creatureTargetImmuneToSpellEffect(ctx context.Context, targetGUID uint64, spell wotlk.Spell, effIndex int, caster *session) bool {
+	if s == nil || s.server == nil || s.player == nil {
+		return false
+	}
+	stats, ok := s.creatureTargetImmunityStats(ctx, targetGUID)
+	if !ok {
+		return false
+	}
+	var targetFaction uint32
+	if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+		targetFaction = tgt.Faction
+	}
+	return creatureImmuneToSpellEffect(s.server, creatureAuraKeyForPlayer(*s.player, targetGUID), spell, effIndex, stats, s.server.isTotemGUID(targetGUID), caster, s.creatureFriendlyToCaster(caster, targetFaction))
+}
+
 // creatureImmuneToDamageSpell is the creature-target analog of
 // isImmuneToDamageSpell: Unit::IsImmunedToDamage(SpellInfo const*)
 // (Unit.cpp:7818-7860) applies to any Unit, but Go's player-only
