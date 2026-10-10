@@ -22,9 +22,13 @@ const (
 	implicitTargetDestCasterFrontLeap  uint32 = 55 // TARGET_DEST_CASTER_FRONT_LEAP (SharedDefines.h:1500)
 	implicitTargetDestCasterRandom     uint32 = 72 // TARGET_DEST_CASTER_RANDOM (SharedDefines.h:1517)
 	implicitTargetDestCasterRadius     uint32 = 73 // TARGET_DEST_CASTER_RADIUS
+	implicitTargetDestCasterFishing    uint32 = 39 // TARGET_DEST_CASTER_FISHING (SharedDefines.h:1484)
 
 	defaultTotemDistance = 3.0 // DefaultTotemDistance (Spell.cpp:1404)
 	petFollowDistanceDBC = 1.0 // PET_FOLLOW_DIST (PetDefines.h:84)
+	// DEFAULT_PLAYER_BOUNDING_RADIUS (ObjectDefines.h:39), the bounding
+	// radius WorldObject::GetClosePoint adds to the fishing point distance.
+	defaultPlayerBoundingRadius = 0.388999998569489
 )
 
 func isCasterDestTarget(target uint32) bool {
@@ -146,6 +150,51 @@ func totemSpellDestTarget(spell wotlk.Spell) (uint32, uint32, bool) {
 	return 0, 0, false
 }
 
+// spellHasFishingDestTarget reports whether any active effect carries
+// TARGET_DEST_CASTER_FISHING (39, SelectImplicitCasterDestTargets,
+// Spell.cpp:1359).
+func spellHasFishingDestTarget(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		if eff.ImplicitTargetA == implicitTargetDestCasterFishing || eff.ImplicitTargetB == implicitTargetDestCasterFishing {
+			return true
+		}
+	}
+	return false
+}
+
+// fishingDestPoint ports the TARGET_DEST_CASTER_FISHING (39) arm of
+// Spell::SelectImplicitCasterDestTargets (Spell.cpp:1359-1389): the bobber
+// point resolves server-side — a random distance in [minRange, maxRange]
+// (SpellInfo::GetMinRange/GetMaxRange(true) = the friendly DBC pair) along
+// a random angle in [-17.5°, +17.5°] via
+// WorldObject::GetClosePoint(DEFAULT_PLAYER_BOUNDING_RADIUS) (Object.cpp:
+// 3307). Like C++, any client-supplied destination is ignored. The
+// liquid-level legs are no-bridge: Go has no map-height/liquid model, so
+// the SPELL_FAILED_NOT_HERE / SPELL_FAILED_TOO_SHALLOW cast failures
+// cannot fire, and z keeps the caster's height instead of the liquid level.
+func (s *session) fishingDestPoint(spell wotlk.Spell) (x, y, z float32) {
+	x, y, z = s.player.X, s.player.Y, s.player.Z
+	var minRange, maxRange float32
+	if s.server != nil && s.server.Data != nil && spell.RangeIndex != 0 {
+		if entry, ok, err := s.server.Data.SpellRange(spell.RangeIndex); err == nil && ok {
+			minRange, maxRange = entry.MinFriendly, entry.MaxFriendly
+		}
+	}
+	// frand(minDist, maxDist) (Spell.cpp:1362).
+	dist := minRange
+	if maxRange > minRange {
+		dist = minRange + rand.Float32()*(maxRange-minRange)
+	}
+	// Spell.cpp:1364: angle = rand_norm() * 35° - 17.5°, in radians.
+	angle := rand.Float32()*float32(35.0*math.Pi/180.0) - float32(17.5*math.Pi/180.0)
+	a := s.player.Orientation + angle
+	offset := dist + defaultPlayerBoundingRadius
+	return x + offset*float32(math.Cos(float64(a))), y + offset*float32(math.Sin(float64(a))), z
+}
+
 // spellTargetPositionDest ports the TARGET_DEST_DB (17) arm of
 // Spell::SelectImplicitCasterDestTargets (Spell.cpp:1342-1357): the
 // destination comes from `spell_target_position` for (spellID, effIndex).
@@ -154,7 +203,7 @@ func totemSpellDestTarget(spell wotlk.Spell) (uint32, uint32, bool) {
 // map. A zero row orientation falls back to the caster's orientation,
 // mirroring Spell::EffectTeleportUnits (SpellEffects.cpp:1219-1221) where
 // the unit target is the caster. No row returns false — C++ falls back to
-// the object target (the caster), a self-teleport no-op.
+// the object target (Spell.cpp:1353-1356), which the caller bridges.
 func (s *session) spellTargetPositionDest(ctx context.Context, spell wotlk.Spell, spellID uint32, effIndex uint32) (x, y, z, orientation float32, mapID uint32, ok bool) {
 	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return 0, 0, 0, 0, 0, false

@@ -189,8 +189,9 @@ func spellHasDestFamilyTarget(spell wotlk.Spell) bool {
 // resolveImplicitSpellDestination mirrors the destination half of
 // Spell::SelectSpellTargets (Spell.cpp:758-794) for the target-dest and
 // dest-dest families, the caster-dest family (SelectImplicitCasterDestTargets,
-// Spell.cpp:1312), the 89 traj destination, the 76/106 channel
-// destinations, and TARGET_DEST_NEARBY_ENTRY (46, the DEST half of
+// Spell.cpp:1312), TARGET_DEST_CASTER_FISHING (39, Spell.cpp:1359), the 89
+// traj destination, the 76/106 channel destinations, and
+// TARGET_DEST_NEARBY_ENTRY (46, the DEST half of
 // Spell::SelectImplicitNearbyTargets, Spell.cpp:1036): it starts from the
 // client-supplied destination (falling back to the caster position, like
 // CheckDst in Spell.cpp:6523) and applies the per-effect resolutions in
@@ -205,7 +206,7 @@ func spellHasDestFamilyTarget(spell wotlk.Spell) bool {
 // false when a 46 effect finds no object, which fails the cast with
 // SPELL_FAILED_BAD_IMPLICIT_TARGETS (Spell.cpp:1111).
 func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData) (protocol.SpellTargetData, bool) {
-	if s == nil || s.player == nil || s.server == nil || (!spellHasDestFamilyTarget(spell) && !spellHasCasterDestTarget(spell) && !spellHasTrajTarget(spell) && !spellHasChannelDestTarget(spell) && !spellHasDestNearbyEntryTarget(spell)) {
+	if s == nil || s.player == nil || s.server == nil || (!spellHasDestFamilyTarget(spell) && !spellHasCasterDestTarget(spell) && !spellHasFishingDestTarget(spell) && !spellHasTrajTarget(spell) && !spellHasChannelDestTarget(spell) && !spellHasDestNearbyEntryTarget(spell)) {
 		return target, true
 	}
 	x, y, z := s.player.X, s.player.Y, s.player.Z
@@ -243,6 +244,14 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 					combatReach = 1.5
 				}
 				x, y, z = resolveCasterDestPosition(s.server.Data, targetType, eff.RadiusIndex, uint32(s.player.Level), s.player.X, s.player.Y, s.player.Z, s.player.Orientation, combatReach)
+			case targetType == implicitTargetDestCasterFishing:
+				// Spell::SelectImplicitCasterDestTargets (Spell.cpp:1359-1389):
+				// TARGET_DEST_CASTER_FISHING (39) — the bobber point resolves
+				// server-side, overwriting any client-supplied destination
+				// (the pre-strip client-dest gate). The liquid-level
+				// NOT_HERE/TOO_SHALLOW fail arms are no-bridge (no
+				// map-height/liquid model).
+				x, y, z = s.fishingDestPoint(spell)
 			case isTargetDestTarget(targetType):
 				// C++ asserts a non-null object target here; without a
 				// resolvable unit target Go keeps the current destination.

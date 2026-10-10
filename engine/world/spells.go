@@ -9275,10 +9275,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// Spell::SelectImplicitCasterDestTargets
 					// (Spell.cpp:1342-1357): TARGET_DEST_DB (17) — fixed
 					// teleports (e.g. 3561 Teleport: Stormwind) resolve the
-					// destination from `spell_target_position`. No row falls
-					// back to the object target (the caster) in C++ — a
-					// self-teleport no-op — so Go does nothing.
+					// destination from `spell_target_position`.
 					s.teleportTo(mapID, x, y, z, ori)
+				} else {
+					// Spell::SelectImplicitCasterDestTargets
+					// (Spell.cpp:1353-1357): no row falls back to the object
+					// target — the explicit unit target, not the caster —
+					// and EffectTeleportUnits (SpellEffects.cpp:1214-1216)
+					// teleports the unit target there. A zero dest
+					// orientation substitutes the unit target's orientation
+					// (SpellEffects.cpp:1222); the unit target here is the
+					// caster. With no object target the dest stays the
+					// caster position (Spell.cpp:1314) — a no-op.
+					if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+						if obj, found := s.getCombatTarget(effCtx, target.UnitGUID); found {
+							ori := obj.Orientation
+							if ori == 0 {
+								ori = s.player.Orientation
+							}
+							s.teleportTo(s.player.Map, obj.X, obj.Y, obj.Z, ori)
+						}
+					}
 				}
 			case 162: // SPELL_EFFECT_TALENT_SPEC_SELECT
 				targetSpec := uint8(0)
@@ -12948,14 +12965,19 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		spellTargetFlags = protocol.SpellTargetFlagUnit
 	}
 	spellTarget := protocol.SpellTargetData{Flags: spellTargetFlags, UnitGUID: targetGUID}
-	// Spell::SelectImplicitChannelTargets (Spell.cpp:980-1032): a triggered
-	// spell with channel-dest implicit targets (76/106) resolves its
-	// destination from the currently channeled spell, so the SMSG_SPELL_GO
-	// spell-target block and dest-consuming read sites see it. Nothing is
-	// resolved when no channel is live (the C++ null gate).
-	if x, y, z, ok := s.channelDestForSpell(ctx, spell); ok {
-		spellTarget.Flags |= protocol.SpellTargetFlagDestLocation
-		spellTarget.Destination = protocol.SpellTargetLocation{X: x, Y: y, Z: z}
+	// Spell::SelectSpellTargets (Spell.cpp:758-800) runs on triggered casts
+	// too — Spell::cast (Spell.cpp:3264) calls it regardless of the
+	// TRIGGERED flags (only the CheckCast gauntlet and the cast-bar sends
+	// are skipped), so the dest-family implicit targets (target-dest,
+	// dest-dest, caster-dest, fishing 39, traj 89, channel 76/106, nearby
+	// entry 46) resolve server-side here, not just the 76/106 channel leg
+	// the pre-strip code handled. The 46 BAD_IMPLICIT_TARGETS failure
+	// (Spell.cpp:1111) fails the triggered cast the same way.
+	spellTarget, destOK := s.resolveImplicitSpellDestination(ctx, spell, spellID, spellTarget)
+	if !destOK {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 11), true)
+		s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby entry object")
+		return
 	}
 	// Cast flags mirror Spell::SendSpellGo for a triggered player cast
 	// (Spell.cpp:4283-4330): PENDING for triggered non-auto-repeat casts with
