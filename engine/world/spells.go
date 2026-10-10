@@ -1529,7 +1529,54 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	}
 	learned := s.hasActiveSpell(spellID)
 	gmMode := s.player.ExtraFlags&playerExtraGMOn != 0 || s.player.PlayerFlags&playerFlagGM != 0
-	if !found || spell.Attributes&spellAttributePassive != 0 || !canPlayerCastSpell(learned, gmMode) {
+	// HandleCastSpellOpcode vehicle-caster arm (SpellHandler.cpp:386-397):
+	// while riding a vehicle the client sends the vehicle's own spells on
+	// this opcode; in C++ the mover is the vehicle creature and its HasSpell
+	// decides. Go has no mover model (the session caster is always the
+	// player), so the arm keys on VehicleGUID instead: a spell the ridden
+	// vehicle's creature entry knows is castable even though the player
+	// never learned it. Delta: C++ casts with the vehicle creature as the
+	// caster (range measured from the vehicle, threat attributed to it); Go
+	// has no creature-caster pipeline on this path, so the cast still runs
+	// as the player — positions coincide because the passenger rides the
+	// vehicle. The IsOnVehicle/CheckVehicle half is vacuous here
+	// (VehicleGUID != 0 already means the player rides it); the CheckVehicle
+	// seat-flag gate belongs to the CheckCast arm (Spell.cpp:5332), not
+	// this one.
+	vehicleSpell := false
+	if !learned && !gmMode && s.player.VehicleGUID != 0 {
+		vehicleSpell = s.vehicleKnowsSpell(ctx, spellID)
+	}
+	// HandleCastSpellOpcode unlearned-spell arms (SpellHandler.cpp:392-410).
+	// The lock-case arm (GameObject::GetSpellForLock, GameObject.cpp:2765)
+	// allows the cast when the cast spell is the GO target's spell-for-lock;
+	// unlike the trigger arm below it does not trigger the cast (C++ sets
+	// no TRIGGERED flag on this path).
+	lockAllowed := false
+	if !learned && !gmMode && !vehicleSpell {
+		var goGUID uint64
+		if target.Flags&protocol.SpellTargetFlagGameObject != 0 && target.UnitGUID != 0 && uint16(target.UnitGUID>>48) == 0xF110 {
+			goGUID = target.UnitGUID
+		}
+		lockAllowed = s.spellForLockMatchesCast(ctx, spellID, goGUID)
+	}
+	// The clientside-periodic-trigger arm (SpellHandler.cpp:403-407): a
+	// SPELL_AURA_PERIODIC_TRIGGER_SPELL_FROM_CLIENT (48) aura whose effect
+	// triggers this spell allows the cast as fully triggered
+	// (TRIGGERED_FULL_MASK, SpellDefines.h:153). castSpellDirectWithOverrides
+	// is Go's Unit::CastSpell(id, triggered=true); the wire unit target
+	// seeds its implicit target selection, matching C++ keeping the client
+	// targets while skipping the CheckCast gauntlet.
+	if !learned && !gmMode && !vehicleSpell && !lockAllowed && s.playerHasPeriodicTriggerAura(spellID) {
+		var wireTarget uint64
+		if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 {
+			wireTarget = target.UnitGUID
+		}
+		s.castSpellDirectWithOverrides(ctx, spellID, wireTarget, false, nil, 0)
+		s.debug("spell cast accepted", "account", s.accountName, "spell", spellID, "reason", "periodic trigger from client")
+		return true
+	}
+	if !found || spell.Attributes&spellAttributePassive != 0 || (!vehicleSpell && !lockAllowed && !canPlayerCastSpell(learned, gmMode)) {
 		s.debug("spell cast ignored", "account", s.accountName, "spell", spellID, "reason", spellCastIgnoreReason(spell, found, learned))
 		return true
 	}
@@ -1817,11 +1864,11 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// CheckCast vehicle arm (Spell::CheckCast, Spell.cpp:5332-5336):
 	// SpellInfo::CheckVehicle (SpellInfo.cpp:1818-1863) gates spells cast
 	// while the caster rides a vehicle — seat-flag check against the spell's
-	// attributes plus the controlled-vehicle summon restriction — but the
-	// caster is never in a vehicle on this path: Go has no runtime vehicle
-	// model (no GetVehicle / no vehicle kit on the session player; only the
-	// DBC consts in data/wotlk/vehicle.go exist), so the arm always resolves
-	// to SPELL_CAST_OK. Documented no-bridge; the TRIGGERED_IGNORE_CASTED_WHILE_MOUNTED
+	// attributes plus the controlled-vehicle summon restriction. Go does
+	// have a runtime vehicle model (player.VehicleGUID + vehicle kits,
+	// vehicle.go), but the CheckVehicle seat-flag gate itself is not
+	// bridged yet, so the arm currently resolves to SPELL_CAST_OK.
+	// Documented gap; the TRIGGERED_IGNORE_CASTED_WHILE_MOUNTED
 	// wrapper is vacuous for client casts (never set on this path).
 	// CheckCast conditions block (Spell::CheckCast, Spell.cpp:5337-5348):
 	// sConditionMgr->IsObjectMeetingNotGroupedConditions(
@@ -16212,6 +16259,155 @@ func (s *session) hasActiveSpell(spellID uint32) bool {
 
 func canPlayerCastSpell(learned, gmMode bool) bool {
 	return learned || gmMode
+}
+
+// vehicleKnowsSpell mirrors the HasSpell half of the HandleCastSpellOpcode
+// vehicle-caster arm (SpellHandler.cpp:386-388): the ridden vehicle's
+// creature entry knows the spell when it appears in its creature spells
+// (the same loadCreatureSpells source vehicle.go uses for the action bar).
+func (s *session) vehicleKnowsSpell(ctx context.Context, spellID uint32) bool {
+	if s == nil || s.player == nil || s.server == nil || s.player.VehicleGUID == 0 {
+		return false
+	}
+	kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)
+	if kit == nil || kit.CreatureEntry == 0 {
+		return false
+	}
+	for _, known := range s.server.loadCreatureSpells(ctx, kit.CreatureEntry) {
+		if known == spellID {
+			return true
+		}
+	}
+	return false
+}
+
+// spellForLockMatchesCast mirrors GameObject::GetSpellForLock
+// (GameObject.cpp:2765-2799) for the HandleCastSpellOpcode unlearned-spell
+// allow arm (SpellHandler.cpp:397-400): the cast spell is the GO target's
+// spell-for-lock when a LOCK_KEY_SPELL case names it, or when a
+// LOCK_KEY_SKILL case's open-lock spell is it — the first qualifying player
+// spell in ascending ID order (C++'s ordered spell map), where qualifying
+// means an SPELL_EFFECT_OPEN_LOCK effect whose MiscValue matches the lock
+// skill and whose CalcValue meets the required value. LOCK_KEY_NONE cases
+// are skipped and LOCK_KEY_ITEM (or anything else) ends the scan, exactly
+// like C++; a lock case that names a different spell returns false at once
+// rather than falling through to later cases.
+func (s *session) spellForLockMatchesCast(ctx context.Context, spellID uint32, goGUID uint64) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil ||
+		s.server.WorldStore == nil || s.server.WorldStore.DB == nil || goGUID == 0 {
+		return false
+	}
+	entry := uint32((goGUID >> 24) & 0xFFFFFF)
+	var goType uint32
+	var data [5]int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx,
+		"SELECT type, COALESCE(data0,0), COALESCE(data1,0), COALESCE(data2,0), COALESCE(data3,0), COALESCE(data4,0) FROM gameobject_template WHERE entry = ? LIMIT 1",
+		entry).Scan(&goType, &data[0], &data[1], &data[2], &data[3], &data[4]); err != nil {
+		return false
+	}
+	lockID := uint32(data[goLockDataIndex(goType)])
+	if lockID == 0 {
+		return false
+	}
+	lock, found, err := s.server.Data.Lock(lockID)
+	if err != nil || !found {
+		return false
+	}
+	for j := 0; j < 8; j++ {
+		switch lock.Type[j] {
+		case lockKeySpell:
+			return lock.Index[j] == spellID
+		case lockKeySkill:
+			best := uint32(0)
+			for _, pSpell := range s.player.Spells {
+				sp, ok, serr := s.server.Data.Spell(pSpell.ID)
+				if serr != nil || !ok {
+					continue
+				}
+				for i := range sp.Effects {
+					e := &sp.Effects[i]
+					if e.Effect != spellEffectOpenLock || uint32(e.MiscValue) != lock.Index[j] {
+						continue
+					}
+					if e.CalcValue() < int32(lock.Skill[j]) {
+						continue
+					}
+					if best == 0 || pSpell.ID < best {
+						best = pSpell.ID
+					}
+					break
+				}
+			}
+			if best != 0 {
+				return best == spellID
+			}
+		case 0: // LOCK_KEY_NONE: skipped (GameObject.cpp:2780-2781)
+			continue
+		default: // LOCK_KEY_ITEM and anything else: end of scan (:2787-2788)
+			return false
+		}
+	}
+	return false
+}
+
+// auraMapHasTriggerSpell is the map-backed core of
+// Unit::HasAuraTypeWithTriggerSpell (Unit.cpp:4707-4714) for
+// SPELL_AURA_PERIODIC_TRIGGER_SPELL_FROM_CLIENT (48): an active aura effect
+// of that type whose spell-effect TriggerSpell matches spellID. The
+// EffectMask marks the effect indices the aura application covers, matching
+// C++'s per-effect GetEffIndex walk.
+func auraMapHasTriggerSpell(s *session, auras map[uint32]*activeAura, spellID uint32) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	for _, aura := range auras {
+		if aura == nil || aura.AuraType != spellAuraPeriodicTriggerSpellFromClient {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for i := range spell.Effects {
+			if i >= 8 || aura.EffectMask&(1<<uint(i)) == 0 {
+				continue
+			}
+			if e := &spell.Effects[i]; e.Aura == spellAuraPeriodicTriggerSpellFromClient && e.TriggerSpell == spellID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// playerHasPeriodicTriggerAura mirrors the caster half of the
+// HandleCastSpellOpcode clientside-periodic-trigger arm
+// (SpellHandler.cpp:403-407): an active
+// SPELL_AURA_PERIODIC_TRIGGER_SPELL_FROM_CLIENT (48) aura effect whose
+// TriggerSpell is spellID. activeAuras carries the EffectMask so that leg
+// is per-effect like C++; the s.auras ID set has no mask, so its leg scans
+// every effect of the aura spell.
+func (s *session) playerHasPeriodicTriggerAura(spellID uint32) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	if auraMapHasTriggerSpell(s, s.activeAuras, spellID) {
+		return true
+	}
+	for auraSpellID := range s.auras {
+		spell, found, err := s.server.Data.Spell(auraSpellID)
+		if err != nil || !found {
+			continue
+		}
+		for i := range spell.Effects {
+			if e := &spell.Effects[i]; e.Aura == spellAuraPeriodicTriggerSpellFromClient && e.TriggerSpell == spellID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func spellCastIgnoreReason(spell wotlk.Spell, found, learned bool) string {

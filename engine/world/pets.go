@@ -2181,7 +2181,20 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	spell, found, spellErr := s.server.Data.Spell(spellID)
-	if spellErr != nil || !found || spell.Attributes&spellAttributePassive != 0 || !s.petKnowsSpell(ctx, motion, spellID) {
+	petKnows := s.petKnowsSpell(ctx, motion, spellID)
+	// HandlePetCastSpellOpcode (PetHandler.cpp:791-796): an unlearned pet
+	// spell is allowed when the pet carries a
+	// SPELL_AURA_PERIODIC_TRIGGER_SPELL_FROM_CLIENT (48) aura whose effect
+	// triggers it; the cast is fully triggered (TRIGGERED_FULL_MASK,
+	// SpellDefines.h:153), which executePetSpellWithOptions carries.
+	triggered := false
+	if !petKnows && s.server != nil {
+		petKey := creatureAuraKey{Map: s.player.Map, InstanceID: s.player.InstanceID, GUID: petGUID}
+		s.server.auraMu.Lock()
+		triggered = auraMapHasTriggerSpell(s, s.server.activeCreatureAuras[petKey], spellID)
+		s.server.auraMu.Unlock()
+	}
+	if spellErr != nil || !found || spell.Attributes&spellAttributePassive != 0 || (!petKnows && !triggered) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
 		return true
 	}
@@ -2272,7 +2285,7 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
 		return true
 	}
-	if !s.executePetSpell(ctx, motion, spell, castCount, target) {
+	if !s.executePetSpellWithOptions(ctx, motion, spell, castCount, target, triggered) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
 	}
 	s.debug("pet cast spell", "account", s.accountName, "pet", petGUID, "spell", spellID, "castCount", castCount)
