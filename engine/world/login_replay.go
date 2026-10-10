@@ -499,6 +499,11 @@ func validateWorldReadyFanout(server *Server, source *session) error {
 	}
 	peer.groupID, peer.player.GuildID = groupID, guildID
 	sender := &session{server: fanoutServer, authed: true, playerLoaded: true, playerGUID: senderGUID, groupID: groupID, player: &playerState{GUID: senderGUID, Map: source.player.Map, InstanceID: source.player.InstanceID, Name: "WorldReadyReplaySender", GuildID: guildID}}
+	// SendPetitionSigns (PetitionsHandler.cpp:243-248) drops the signs when
+	// the OFFERER is in a guild, so the petition offer is driven by a
+	// guildless session; the C++ offer path does not require the offerer to
+	// own the petition row.
+	petitionOfferer := &session{server: fanoutServer, authed: true, playerLoaded: true, playerGUID: senderGUID, player: &playerState{GUID: senderGUID, Map: source.player.Map, InstanceID: source.player.InstanceID, Name: "WorldReadyPetitionOfferer"}}
 	group := &groupState{ID: groupID, LeaderGUID: senderGUID, Members: []groupMember{{GUID: senderGUID, Name: sender.player.Name}, {GUID: guid, Name: peer.player.Name}}}
 	petitionGUID := uint64(0x7ffffffe)
 	if _, err := petitionDB.Exec("INSERT INTO petition (ownerguid, petitionguid, name, type) VALUES (?, ?, ?, ?)", int64(senderGUID), int64(petitionGUID), "WorldReadyReplayGuild", 9); err != nil {
@@ -541,7 +546,7 @@ func validateWorldReadyFanout(server *Server, source *session) error {
 	fanoutServer.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(source.playerGUID, guid), sourcePeer)
 	fanoutServer.broadcastGroupList(group)
 	sender.broadcastGuildMemberLogin()
-	sender.handleOfferPetition(context.Background(), petitionPayload.Bytes())
+	petitionOfferer.handleOfferPetition(context.Background(), petitionPayload.Bytes())
 	if got := countOpcode(protocol.OpcodeSMSG_ATTACK_START); got != beforeAttack {
 		return fmt.Errorf("world-ready fanout sent attack-start to pre-create session: count %d -> %d", beforeAttack, got)
 	}
@@ -562,7 +567,7 @@ func validateWorldReadyFanout(server *Server, source *session) error {
 	fanoutServer.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(source.playerGUID, guid), sourcePeer)
 	fanoutServer.broadcastGroupList(group)
 	sender.broadcastGuildMemberLogin()
-	sender.handleOfferPetition(context.Background(), petitionPayload.Bytes())
+	petitionOfferer.handleOfferPetition(context.Background(), petitionPayload.Bytes())
 	if got := countOpcode(protocol.OpcodeSMSG_ATTACK_START); got != beforeAttack+1 {
 		return fmt.Errorf("world-ready fanout did not reach the mapped peer: attack-start count %d -> %d", beforeAttack, got)
 	}
@@ -579,7 +584,7 @@ func validateWorldReadyFanout(server *Server, source *session) error {
 	missingPetition.WriteU32(0)
 	missingPetition.WriteU64(petitionGUID + 1)
 	missingPetition.WriteU64(petitionPeerGUID)
-	sender.handleOfferPetition(context.Background(), missingPetition.Bytes())
+	petitionOfferer.handleOfferPetition(context.Background(), missingPetition.Bytes())
 	if got := countOpcode(protocol.OpcodeSMSG_PETITION_SHOW_SIGNATURES); got != beforePetition+1 {
 		return fmt.Errorf("petition replay emitted signatures for a missing petition: count %d -> %d", beforePetition+1, got)
 	}

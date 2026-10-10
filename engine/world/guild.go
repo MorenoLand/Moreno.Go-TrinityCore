@@ -4478,7 +4478,11 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 	// the check is skipped rather than failing the purchase.
 	var templateEntry int64
 	if terr := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT entry FROM item_template WHERE entry = ? LIMIT 1", guildCharterItemID).Scan(&templateEntry); terr != nil && !missingTable(terr) && !isMissingColumn(terr) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(npcGUID, guildCharterItemID, buyErrCantFindItem), true)
+		// PetitionsHandler.cpp:166-171 + Player::SendBuyError
+		// (Player.cpp:13635): the CANT_FIND_ITEM arm passes a null
+		// creature, so the packet carries an empty vendor GUID, not the
+		// NPC's.
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(0, guildCharterItemID, buyErrCantFindItem), true)
 		return true
 	}
 
@@ -4547,13 +4551,17 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 // sendPetitionShowSignatures sends SMSG_PETITION_SHOW_SIGNATURES (0x1BF).
 // Reference: WorldSession::SendPetitionSigns (PetitionsHandler.cpp:243).
 func (s *session) sendPetitionShowSignatures(target *session, petitionGUID uint64) {
-	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || target == nil || target.player == nil || !target.worldReady.Load() {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || target == nil || target.player == nil || !target.worldReady.Load() || s.player == nil {
 		return
 	}
 	cdb := s.server.CharactersStore.DB
 
 	var ownerGUID, petitionType int64
-	if err := cdb.QueryRow("SELECT ownerguid, type FROM petition WHERE petitionguid = ? LIMIT 1", petitionGUID).Scan(&ownerGUID, &petitionType); err != nil || petitionType == 9 && target.player.GuildID != 0 {
+	// SendPetitionSigns (PetitionsHandler.cpp:243-248) gates on the CALLER's
+	// guild id (_player->GetGuildId()), not the target's: on the offer path
+	// the signs are dropped when the OFFERER is in a guild, even though the
+	// packet is addressed to the target.
+	if err := cdb.QueryRow("SELECT ownerguid, type FROM petition WHERE petitionguid = ? LIMIT 1", petitionGUID).Scan(&ownerGUID, &petitionType); err != nil || petitionType == 9 && s.player.GuildID != 0 {
 		return
 	}
 
@@ -4931,6 +4939,18 @@ func (s *session) handleOfferPetition(ctx context.Context, payload []byte) bool 
 			return true
 		}
 
+		// PetitionsHandler.cpp:524-528: the petition must exist before the
+		// target arms run — an offer naming a dead petition is silently
+		// dropped, not answered with faction/guild errors.
+		cdb := s.server.CharactersStore.DB
+		if cdb == nil {
+			return true
+		}
+		var petitionRow int64
+		if err := cdb.QueryRowContext(ctx, "SELECT 1 FROM petition WHERE petitionguid = ? LIMIT 1", petitionGUID).Scan(&petitionRow); err != nil {
+			return true
+		}
+
 		// Cross-faction check (PetitionsHandler.cpp:541): skipped when
 		// AllowTwoSide.Interaction.Guild is enabled.
 		if s.server != nil && !s.server.Config.AllowTwoSideInteractionGuild &&
@@ -5039,8 +5059,15 @@ func (s *session) handlePetitionRename(ctx context.Context, payload []byte) bool
 		return false
 	}
 	newName, err := r.ReadCString()
-	if err != nil || newName == "" {
+	if err != nil {
 		return false
+	}
+	if newName == "" {
+		// HandlePetitionRenameGuild (PetitionsHandler.cpp:342-354): an
+		// empty name reaches the validity arm and answers
+		// ERR_GUILD_NAME_INVALID; it does not drop the session.
+		s.sendGuildCommandResult(guildCmdCreate, newName, errGuildNameInvalid)
+		return true
 	}
 
 	cdb := s.server.CharactersStore.DB
