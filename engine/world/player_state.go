@@ -4921,6 +4921,9 @@ func (s *session) handleShowingHelm(ctx context.Context, payload []byte) bool {
 	return true
 }
 
+// maxTitleIndex mirrors MAX_TITLE_INDEX (Player.h:411: KNOWN_TITLES_SIZE*64 = 192).
+const maxTitleIndex = 192
+
 // handleSetTitle processes CMSG_SET_TITLE (0x374).
 // Reference: WorldSession::HandleSetTitleOpcode (MiscHandler.cpp:1236).
 func (s *session) handleSetTitle(ctx context.Context, payload []byte) bool {
@@ -4929,11 +4932,19 @@ func (s *session) handleSetTitle(ctx context.Context, payload []byte) bool {
 	}
 	r := protocol.NewReader(payload)
 	title, err := r.ReadI32()
-	if err != nil || title <= 0 {
-		s.player.ChosenTitle = 0
-	} else {
+	if err != nil {
+		return true
+	}
+	// MiscHandler.cpp:1244-1250 — only a known title in range sets the field:
+	// unknown-but-in-range titles return silently, out-of-range titles clear it.
+	switch {
+	case title > 0 && title < maxTitleIndex && s.playerHasTitle(uint32(title)):
 		s.player.ChosenTitle = uint32(title)
 		s.updateAchievementCriteria(criteriaTypeOwnRank, s.player.ChosenTitle, 1)
+	case title > 0 && title < maxTitleIndex:
+		return true
+	default:
+		s.player.ChosenTitle = 0
 	}
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET chosenTitle = ? WHERE guid = ?", s.player.ChosenTitle, s.playerGUID)

@@ -23590,13 +23590,28 @@ func (s *session) modifyPlayerSpellCooldown(spellID uint32, cooldownModMs int32)
 }
 
 // handleFarSight processes CMSG_FAR_SIGHT (0x27A).
-// Reference: WorldSession::HandleFarSightOpcode (SpellHandler.cpp).
+// Reference: WorldSession::HandleFarSightOpcode (MiscHandler.cpp:1212).
+//
+// C++ arms: apply -> GetViewpoint() resolves the PLAYER_FARSIGHT GUID to a live
+// viewpoint object (a missing seer is a debug log only), then SetSeer(target);
+// !apply -> SetSeer(self) — the client returns its camera itself and
+// PLAYER_FARSIGHT stays set until the viewpoint despawns; finally
+// UpdateVisibilityForPlayer().
+// SetSeer has no wire arm: the client's camera already follows PLAYER_FARSIGHT,
+// which handleEffectAddFarsight pushes through sendPlayerUpdate.
+// DOCUMENTED DELTA: UpdateVisibilityForPlayer() stays no-bridge — Go has no
+// object-visibility notifier; object updates arrive through the regular
+// update path.
 func (s *session) handleFarSight(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
-	op := payload[0]
-	s.debug("far sight opcode", "account", s.accountName, "op", op)
+	if payload[0] != 0 {
+		if s.server.findDynamicSpellObject(s.player.FarsightGUID) == nil {
+			s.debug("far sight: requests non-existing seer", "account", s.accountName, "farsight", s.player.FarsightGUID)
+		}
+	}
+	_ = ctx
 	return true
 }
 

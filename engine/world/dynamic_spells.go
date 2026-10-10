@@ -107,6 +107,15 @@ func buildDynamicSpellObjectUpdate(object *dynamicSpellObjectState) []byte {
 	return block.Bytes()
 }
 
+func (s *Server) findDynamicSpellObject(guid uint64) *dynamicSpellObjectState {
+	if s == nil || guid == 0 {
+		return nil
+	}
+	s.objectsMu.RLock()
+	defer s.objectsMu.RUnlock()
+	return s.dynamicSpellObjects[guid]
+}
+
 func (s *Server) spawnDynamicSpellObject(object *dynamicSpellObjectState, duration time.Duration) {
 	if s == nil || object == nil || duration <= 0 {
 		return
