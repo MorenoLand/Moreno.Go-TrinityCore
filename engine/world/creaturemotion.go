@@ -662,6 +662,13 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 	fireMotion := motion
 	firePlayerGUID := playerGUID
 	s.motionMu.Unlock()
+	// CreatureGroup::MemberEngagingTarget (CreatureGroups.cpp:226-255) via
+	// Creature::AtEngage (Creature.cpp:3431-3453): formation assists fire on
+	// fresh engages only (enteredCombat) — in C++ they ride AtEngage, not
+	// every damage event.
+	if enteredCombat && fireMotion != nil {
+		s.memberEngagingTarget(ctx, fireMotion, firePlayerGUID)
+	}
 	if enteredCombat && fireMotion != nil {
 		var target any
 		if playerSess != nil {
@@ -2601,6 +2608,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			} else {
 				s.scheduleAISpellEvents(motion, now)
 			}
+			// Creature::AtEngage arm (Creature.cpp:3431-3453): formation
+			// members assist per CreatureGroup::MemberEngagingTarget
+			// (CreatureGroups.cpp:226-255). Fresh engage by construction —
+			// the acquisition scan only runs when !InCombat.
+			s.memberEngagingTarget(ctx, motion, p.GUID)
 			return
 		}
 	}

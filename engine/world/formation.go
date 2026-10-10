@@ -4,6 +4,8 @@ import (
 	"context"
 	"math"
 	"time"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // This file bridges the creature formation system: FormationMgr /
@@ -13,7 +15,9 @@ import (
 // creature_formations rows previously had a write path only (the
 // WORLD_INS_CREATURE_FORMATION statement); nothing ever read them.
 
-const flagIdleInFormation = 0x200 // GroupAIFlags::FLAG_IDLE_IN_FORMATION (CreatureGroups.h): member follows the leader when pathing idly
+const flagIdleInFormation = 0x200   // GroupAIFlags::FLAG_IDLE_IN_FORMATION (CreatureGroups.h): member follows the leader when pathing idly
+const flagMembersAssistLeader = 0x1 // GroupAIFlags::FLAG_MEMBERS_ASSIST_LEADER (CreatureGroups.h): members engage when the leader engages
+const flagLeaderAssistsMember = 0x2 // GroupAIFlags::FLAG_LEADER_ASSISTS_MEMBER (CreatureGroups.h): the leader engages when a member engages
 
 type formationRow struct {
 	leaderGUID uint32
@@ -92,6 +96,89 @@ func (s *Server) addFormationRow(memberLow uint32, row formationRow) {
 	}
 	s.formationRows[memberLow] = row
 	s.formationLeaders[row.leaderGUID] = append(s.formationLeaders[row.leaderGUID], memberLow)
+}
+
+// memberEngagingTarget bridges CreatureGroup::MemberEngagingTarget
+// (CreatureGroups.cpp:226-255), reached via Creature::AtEngage
+// (Creature.cpp:3431-3453) — the Go call sites are the two fresh-engage
+// paths (player-damage aggro, sight acquisition). When a formation member
+// engages a target, live formation members assist per the row's GroupAI:
+// FLAG_MEMBERS_ASSIST_LEADER (0x1) makes members engage when the leader
+// engages; FLAG_LEADER_ASSISTS_MEMBER (0x2) makes the leader engage when a
+// member engages (FLAG_MEMBERS_ASSIST_MEMBER, 0x3, is both). Each assist
+// mirrors Unit::EngageWithTarget (Unit.cpp:8429-8438): a zero-threat seed
+// plus combat state. Like C++, assisted engages never cascade —
+// EngageWithTarget does not run AtEngage, so no _engaging recursion guard
+// is needed. Members already fighting the same target are skipped (C++'s
+// AddThreat is idempotent; Go's explicit attack-start broadcast is not).
+// The charm re-engage path deliberately does not call this: its C++ owner
+// is Unit::EngageWithTarget, which never runs AtEngage/MemberEngagingTarget.
+func (s *Server) memberEngagingTarget(ctx context.Context, motion *creatureMotion, targetGUID uint64) {
+	if s == nil || motion == nil || targetGUID == 0 {
+		return
+	}
+	s.ensureFormationsLoaded(ctx)
+	memberLow := uint32(motion.GUID & 0x00FFFFFF)
+	row, ok := s.formationRowFor(memberLow)
+	if !ok || row.groupAI == 0 {
+		return
+	}
+	leaderLow := row.leaderGUID
+	if memberLow == leaderLow {
+		if row.groupAI&flagMembersAssistLeader == 0 {
+			return
+		}
+	} else if row.groupAI&flagLeaderAssistsMember == 0 {
+		return
+	}
+	// IsValidAttackTarget (Object.cpp:2930) from each member's perspective:
+	// the target is always a player in Go and the engage sites already
+	// validated it for the engager, so the live essence is that the target
+	// player is still online and alive (no GM/UNATTACKABLE models in Go).
+	targetSess := s.findSessionByGUID(targetGUID)
+	if targetSess == nil || targetSess.player == nil || targetSess.player.Health == 0 {
+		return
+	}
+	s.formationMu.RLock()
+	memberLows := append([]uint32(nil), s.formationLeaders[leaderLow]...)
+	s.formationMu.RUnlock()
+	var engaged []*creatureMotion
+	s.motionMu.Lock()
+	motions := s.motionMapLocked(motion.Map, motion.InstanceID)
+	for _, low := range memberLows {
+		var member *creatureMotion
+		for guid, m := range motions {
+			if uint32(guid&0x00FFFFFF) == low {
+				member = m
+				break
+			}
+		}
+		if member == nil || member == motion || member.Health == 0 {
+			continue
+		}
+		isLeader := low == leaderLow
+		if !((!isLeader && row.groupAI&flagMembersAssistLeader != 0) || (isLeader && row.groupAI&flagLeaderAssistsMember != 0)) {
+			continue
+		}
+		if member.InCombat && member.TargetGUID == targetGUID {
+			continue
+		}
+		if member.ThreatMgr == nil {
+			member.ThreatMgr = NewThreatManager(member)
+		}
+		member.ThreatMgr.AddThreat(targetGUID, 0.0, true)
+		member.TargetGUID = targetGUID
+		member.InCombat = true
+		member.Moving = false
+		engaged = append(engaged, member)
+	}
+	s.motionMu.Unlock()
+	for _, member := range engaged {
+		s.broadcastAIReactionInInstance(motion.Map, motion.InstanceID, member.GUID, 2)
+		startPkt := buildAttackStart(member.GUID, targetGUID)
+		_ = targetSess.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, true)
+		s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, targetSess)
+	}
 }
 
 // formationLeaderStartedMoving mirrors CreatureGroup::LeaderStartedMoving
