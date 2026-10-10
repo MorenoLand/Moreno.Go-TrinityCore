@@ -31,10 +31,12 @@ type equippedItemStats struct {
 }
 
 const (
-	itemEnchantmentTypeStat = 5
-	itemModMana             = 0
-	itemModHealth           = 1
-	itemModSpellPower       = 45
+	itemEnchantmentTypeEquipSpell = 3
+	itemEnchantmentTypeResistance = 4
+	itemEnchantmentTypeStat       = 5
+	itemModMana                   = 0
+	itemModHealth                 = 1
+	itemModSpellPower             = 45
 )
 
 type PlayerItemStatBonus struct {
@@ -346,14 +348,24 @@ func (s *session) applyItemStatEnchantment(state *playerState, enchantID uint32,
 		return nil
 	}
 	for index, effect := range entry.Effects {
-		if effect != itemEnchantmentTypeStat {
-			continue
-		}
 		amount := entry.EffectPointsMin[index]
 		if amount == 0 && suffix {
 			amount = suffixAmount
 		}
-		s.applyPlayerItemStat(state, entry.EffectArg[index], int64(amount))
+		switch effect {
+		case itemEnchantmentTypeStat:
+			s.applyPlayerItemStat(state, entry.EffectArg[index], int64(amount))
+		case itemEnchantmentTypeResistance:
+			// ITEM_ENCHANTMENT_TYPE_RESISTANCE (Player.cpp:14002-14021):
+			// HandleStatFlatModifier(UNIT_MOD_RESISTANCE_START + EffectArg,
+			// TOTAL_VALUE, amount): EffectArg 0..5 = Holy..Arcane, and Go's
+			// Resistances[0] is armor, so the school lands at index +1. The
+			// random-suffix amount arm (Player.cpp:14004-14018) rides the
+			// suffixAmount computed by the caller, like the stat arm.
+			if entry.EffectArg[index] <= 5 {
+				state.Resistances[entry.EffectArg[index]+1] += amount
+			}
+		}
 	}
 	return nil
 }

@@ -687,6 +687,10 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	difficulty.WriteU32(uint32(state.DungeonDifficulty))
 	difficulty.WriteU32(1)
 	difficulty.WriteU32(0)
+	// Item-dependent passive auras (Player::_ApplyAllItemMods first loop,
+	// Player.cpp:8361-8380): runs before the equip-spell leg like the C++
+	// loop order; aura packets go out before LOGIN_VERIFY_WORLD.
+	s.applyItemDependentAuras(ctx)
 	// Login equip-spell re-application (Player::_ApplyAllItemMods equip leg,
 	// Player.cpp:8385-8401): runs inside LoadFromDB before SendDungeonDifficulty
 	// in C++; the cast merges with the DB-loaded auras, resetting equip-aura

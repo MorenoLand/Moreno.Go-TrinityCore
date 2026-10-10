@@ -1169,6 +1169,8 @@ func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 	// destroyed equipped item sheds its equip spells before the row goes.
 	if bagKey == 0 && slot < equipSlotEnd && (currentCount <= int64(count) || count == 0) {
 		s.applyItemEquipSpells(ctx, itemGUID, uint32(itemEntry), false)
+		s.removeItemDependentAuras(ctx, uint64(itemGUID))
+		s.applyEnchantEquipSpells(ctx, itemGUID, uint32(itemEntry), false)
 	}
 	if currentCount <= int64(count) || count == 0 {
 		_, _ = db.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, itemGUID)
@@ -1883,6 +1885,7 @@ func (s *session) applyLoginItemEquipSpells(ctx context.Context) {
 			continue
 		}
 		s.applyItemEquipSpells(ctx, it.guid, uint32(it.entry), true)
+		s.applyEnchantEquipSpells(ctx, it.guid, uint32(it.entry), true)
 	}
 }
 
@@ -1913,12 +1916,328 @@ func (s *session) updateItemEquipSpellsOnMove(ctx context.Context, itemGUID, fro
 		return
 	}
 	// C++ SwapItem/StoreItem order: the old position's mods leave before the
-	// new position's apply.
+	// new position's apply (Player::_ApplyItemMods, Player.cpp:7446: equip
+	// spell, item-dependent auras, enchantment legs in that order).
 	if wasEquipped {
 		s.applyItemEquipSpells(ctx, itemGUID, uint32(itemEntry), false)
+		s.removeItemDependentAuras(ctx, uint64(itemGUID))
+		s.applyEnchantEquipSpells(ctx, itemGUID, uint32(itemEntry), false)
 	}
 	if isEquipped {
 		s.applyItemEquipSpells(ctx, itemGUID, uint32(itemEntry), true)
+		s.applyItemDependentAuras(ctx)
+		s.applyEnchantEquipSpells(ctx, itemGUID, uint32(itemEntry), true)
+	}
+}
+
+// equippedItemRef is one equipped item for requirement scans.
+type equippedItemRef struct {
+	slot  uint8
+	guid  uint64
+	entry uint32
+}
+
+// loadUseableEquippedItems mirrors GetUseableItemByPos (Item.cpp) over the
+// equipped range: bag 0, slot < 19, skipping broken items (a broken item is
+// not useable for spell requirements, Item.cpp:799-832).
+func (s *session) loadUseableEquippedItems(ctx context.Context) []equippedItemRef {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return nil
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx,
+		`SELECT ci.slot, ci.item, ii.itemEntry, COALESCE(ii.durability, 0)
+		FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot < 19`, s.playerGUID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var items []equippedItemRef
+	for rows.Next() {
+		var slot, guid, entry, durability int64
+		if rows.Scan(&slot, &guid, &entry, &durability) != nil || guid == 0 || entry <= 0 || slot < 0 || slot >= 19 {
+			continue
+		}
+		if tmpl, ok := s.server.getItemStoreTemplateInfo(ctx, uint32(entry)); ok && tmpl.MaxDurability > 0 && durability == 0 {
+			continue
+		}
+		items = append(items, equippedItemRef{slot: uint8(slot), guid: uint64(guid), entry: uint32(entry)})
+	}
+	return items
+}
+
+// hasItemFitToSpellRequirements mirrors Player::HasItemFitToSpellRequirements
+// (Player.cpp:23916-23969): whether some useable equipped item other than
+// ignoreItemGUID satisfies the spell's equipped-item requirements via
+// Item::IsFitToSpellRequirements. The weapon scan covers mainhand..ranged
+// (Player.cpp:23927-23932); the armor scan covers the offhand shield slot,
+// then head..mainhand, then ranged (Player.cpp:23934-23963); tabards carry no
+// dependent spells (Player.cpp:23956). The Shield-Wall special case
+// (Player.cpp:23947-23953) — a non-passive spell with aura effects stays even
+// without the required item — rides the passive check on the spell.
+func (s *session) hasItemFitToSpellRequirements(ctx context.Context, spell wotlk.Spell, ignoreItemGUID uint64) bool {
+	if spell.EquippedItemClass < 0 {
+		return true
+	}
+	items := s.loadUseableEquippedItems(ctx)
+	fitsSlot := func(slot uint8) bool {
+		for _, it := range items {
+			if it.slot != slot || it.guid == ignoreItemGUID {
+				continue
+			}
+			info, ok := s.getItemTemplateClassInfo(ctx, it.entry)
+			if !ok {
+				continue
+			}
+			if isItemFitToSpell(spell, info.Class, info.SubClass, info.InvType) {
+				return true
+			}
+		}
+		return false
+	}
+	switch spell.EquippedItemClass {
+	case itemClassWeapon:
+		for slot := equipSlotMainhand; slot < equipSlotTabard; slot++ {
+			if fitsSlot(slot) {
+				return true
+			}
+		}
+	case itemClassArmor:
+		if spell.EquippedItemSubClass&(1<<itemSubclassArmorBuckler|1<<itemSubclassArmorShield) != 0 {
+			if fitsSlot(equipSlotOffhand) {
+				return true
+			}
+			if spell.Attributes&spellAttributePassive == 0 {
+				for _, eff := range spell.Effects {
+					if eff.Effect == 6 || eff.Aura != 0 {
+						return true
+					}
+				}
+			}
+		}
+		for slot := uint8(0); slot < equipSlotMainhand; slot++ {
+			if fitsSlot(slot) {
+				return true
+			}
+		}
+		if fitsSlot(equipSlotRanged) {
+			return true
+		}
+	default:
+		return false
+	}
+	return false
+}
+
+// applyItemDependentAuras mirrors the apply leg of
+// Player::ApplyItemDependentAuras (Player.cpp:7923-7942): every known active
+// non-disabled passive spell that carries an equipped-item requirement
+// (EquippedItemClass >= 0) and is not already an aura gains it when some
+// equipped item meets the spell's requirements. The aura is added directly
+// (C++ AddAura(spellId, this) — "no SMSG_SPELL_GO in sniff found"): a
+// triggered self-cast with the player as caster and no cast packets, per the
+// direct-cast convention. The C++ apply path ignores the item argument and
+// scans the whole spell map, so one call covers every equipment change.
+func (s *session) applyItemDependentAuras(ctx context.Context) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil ||
+		s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx,
+		`SELECT spell FROM character_spell WHERE guid = ? AND active <> 0 AND disabled = 0`, s.playerGUID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var spellID uint32
+		if rows.Scan(&spellID) != nil || spellID == 0 {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(spellID)
+		if err != nil || !found {
+			continue
+		}
+		if spell.Attributes&spellAttributePassive == 0 || spell.EquippedItemClass < 0 {
+			continue
+		}
+		if s.hasAura(spellID) {
+			continue
+		}
+		if !s.hasItemFitToSpellRequirements(ctx, spell, 0) {
+			continue
+		}
+		s.castSpellDirectWithOverrides(ctx, spellID, s.playerGUID, false, nil, 0)
+	}
+}
+
+// removeItemDependentAuras mirrors Player::RemoveItemDependentAurasAndCasts
+// (Player.cpp:23989-24021): every self-cast aura whose spell no longer meets
+// the equipped-item requirements once removedItemGUID is ignored is stripped.
+// Item-cast auras ride the equip-spell removal legs, not this one: Go's
+// item-cast convention records the item GUID on the aura, so the C++
+// GetCasterGUID() == GetGUID() gate maps to the plain player-GUID check.
+// Cross-target owned auras (caster = player, target = someone else) have no
+// Go model — Go tracks auras on the target's session — so only the player's
+// own auras are scanned. The current-cast arm (Player.cpp:24014-24018) stops
+// the active cast/channel when its spell no longer fits; Go has no
+// SPELL_STATE_DELAYED distinct from the active cast window, so the delayed
+// carve-out is vacuous.
+func (s *session) removeItemDependentAuras(ctx context.Context, removedItemGUID uint64) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	fits := func(spell wotlk.Spell) bool {
+		return s.hasItemFitToSpellRequirements(ctx, spell, removedItemGUID)
+	}
+	s.castMu.Lock()
+	var strip []uint32
+	for spellID, aura := range s.activeAuras {
+		if aura == nil || aura.Stopped || aura.CasterGUID != s.playerGUID {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(spellID)
+		if err != nil || !found || spell.EquippedItemClass < 0 {
+			continue
+		}
+		if !fits(spell) {
+			strip = append(strip, spellID)
+		}
+	}
+	var castSpellIDs []uint32
+	var channelSpell wotlk.Spell
+	hasChannel := false
+	if s.activeCast != nil {
+		castSpellIDs = append(castSpellIDs, s.activeCast.SpellID)
+	}
+	if s.activeChannel != nil && !s.activeChannel.Stopped {
+		channelSpell, hasChannel = s.activeChannel.Spell, true
+	}
+	s.castMu.Unlock()
+	for _, spellID := range strip {
+		s.removeAura(spellID)
+	}
+	stop := false
+	for _, id := range castSpellIDs {
+		if spell, found, err := s.server.Data.Spell(id); err == nil && found &&
+			spell.EquippedItemClass >= 0 && !fits(spell) {
+			stop = true
+		}
+	}
+	if hasChannel && channelSpell.EquippedItemClass >= 0 && !fits(channelSpell) {
+		stop = true
+	}
+	if stop {
+		s.stopSpellLifecycle()
+	}
+}
+
+// applyEnchantEquipSpells mirrors the ITEM_ENCHANTMENT_TYPE_EQUIP_SPELL arm of
+// Player::ApplyEnchantment (Player.cpp:13953-14000): for each of the 12
+// enchantment slots, an EQUIP_SPELL effect casts its EffectArg as a triggered
+// aura with the item as cast item (CastSpellExtraArgs(Item*),
+// SpellDefines.h:165: TRIGGERED_FULL_MASK + CastItem), or sheds exactly those
+// auras via RemoveAurasDueToItemSpell on unequip. The ConditionID/MinLevel/
+// RequiredSkill gates, the prismatic-socket skill gate (Player.cpp:13935-13944)
+// and the broken-item gate (Player.cpp:13946) mirror the C++ ApplyEnchantment
+// pre-arms; Go skips ConditionID-carrying enchants outright like the existing
+// stat arm (no EnchantmentFitsRequirements evaluator). Random-suffix items
+// carry the AllocationPct*SuffixFactor/10000 basepoints on every effect
+// (Player.cpp:13962-13978).
+func (s *session) applyEnchantEquipSpells(ctx context.Context, dbItemGUID int64, itemEntry uint32, apply bool) {
+	if s == nil || s.player == nil || dbItemGUID == 0 || itemEntry == 0 {
+		return
+	}
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil ||
+		s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.Data == nil {
+		return
+	}
+	var enchantments string
+	var randomPropertyID, durability int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		`SELECT COALESCE(enchantments, ''), COALESCE(randomPropertyId, 0), COALESCE(durability, 0) FROM item_instance WHERE guid = ? LIMIT 1`,
+		dbItemGUID).Scan(&enchantments, &randomPropertyID, &durability); err != nil {
+		return
+	}
+	var itemLevel, quality, invType, maxDurability, randomSuffix int64
+	var sockColors [3]int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx,
+		`SELECT ItemLevel, Quality, InventoryType, MaxDurability, RandomSuffix, SocketColor_1, SocketColor_2, SocketColor_3 FROM item_template WHERE entry = ? LIMIT 1`,
+		itemEntry).Scan(&itemLevel, &quality, &invType, &maxDurability, &randomSuffix,
+		&sockColors[0], &sockColors[1], &sockColors[2]); err != nil {
+		return
+	}
+	if maxDurability > 0 && durability == 0 {
+		return
+	}
+	fields := strings.Fields(enchantments)
+	var prismatic wotlk.SpellItemEnchantmentEntry
+	prismaticFound := false
+	if len(fields) > 18 {
+		if prismaticID, err := strconv.ParseUint(fields[18], 10, 32); err == nil && prismaticID != 0 {
+			prismatic, prismaticFound, _ = s.server.Data.SpellItemEnchantment(uint32(prismaticID))
+		}
+	}
+	suffixBasePoints := func(enchantID uint32) int32 {
+		if randomPropertyID >= 0 {
+			return 0
+		}
+		suffix, found, err := s.server.Data.ItemRandomSuffix(uint32(-randomPropertyID))
+		if err != nil || !found {
+			return 0
+		}
+		factor := ResolveItemSuffixFactor(s.server.Data, uint32(itemLevel), uint32(quality), uint32(invType), uint32(randomSuffix))
+		if factor == 0 {
+			return 0
+		}
+		for k, ench := range suffix.Enchantment {
+			if ench == enchantID {
+				return int32(suffix.AllocationPct[k] * factor / 10000)
+			}
+		}
+		return 0
+	}
+	for slot := 0; slot < 12; slot++ {
+		idx := slot * 3
+		if idx >= len(fields) {
+			break
+		}
+		enchantID, err := strconv.ParseUint(fields[idx], 10, 32)
+		if err != nil || enchantID == 0 {
+			continue
+		}
+		enchant, found, err := s.server.Data.SpellItemEnchantment(uint32(enchantID))
+		if err != nil || !found {
+			continue
+		}
+		if enchant.ConditionID != 0 || uint32(s.player.Level) < enchant.MinLevel ||
+			playerSkillValue(s.player, enchant.RequiredSkillID) < enchant.RequiredSkillRank {
+			continue
+		}
+		if slot >= 2 && slot <= 4 && sockColors[slot-2] == 0 {
+			if !prismaticFound || (prismatic.RequiredSkillID > 0 &&
+				playerSkillValue(s.player, prismatic.RequiredSkillID) < prismatic.RequiredSkillRank) {
+				continue
+			}
+		}
+		for i, effect := range enchant.Effects {
+			if effect != itemEnchantmentTypeEquipSpell || enchant.EffectArg[i] == 0 {
+				continue
+			}
+			spellID := enchant.EffectArg[i]
+			if _, found, err := s.server.Data.Spell(spellID); err != nil || !found {
+				continue
+			}
+			if apply {
+				var basePoints []int32
+				if bp := suffixBasePoints(uint32(enchantID)); bp != 0 {
+					basePoints = []int32{bp, bp, bp}
+				}
+				s.castSpellDirectWithOverrides(ctx, spellID, s.playerGUID, false, basePoints, uint64(dbItemGUID))
+			} else {
+				s.removeAurasDueToItemSpell(spellID, uint64(dbItemGUID))
+			}
+		}
 	}
 }
 
