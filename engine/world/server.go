@@ -2774,10 +2774,6 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleGetMirrorImageData(ctx, payload) {
 				return
 			}
-		case uint32(protocol.OpcodeCMSG_GMTICKETSYSTEM_TOGGLE):
-			if !state.authed || !state.handleGmTicketSystemToggle(ctx, payload) {
-				return
-			}
 		case uint32(protocol.OpcodeCMSG_GRANT_LEVEL):
 			if !state.authed || !state.handleGrantLevel(ctx, payload) {
 				return

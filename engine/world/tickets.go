@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"strconv"
 	"time"
@@ -70,11 +71,13 @@ func (s *session) handleGMTicketGetTicket(ctx context.Context, payload []byte) b
 		var message string
 		var response string
 		var needMoreHelp uint8
+		var escalated uint8
+		var viewed uint8
 		var lastModifiedTime int64
 		var completed int64
 		err := s.server.CharactersStore.DB.QueryRowContext(ctx,
-			"SELECT id, description, response, needMoreHelp, lastModifiedTime, completed FROM gm_ticket WHERE playerGuid = ? AND closedBy = 0 LIMIT 1",
-			s.playerGUID).Scan(&ticketID, &message, &response, &needMoreHelp, &lastModifiedTime, &completed)
+			"SELECT id, description, response, needMoreHelp, escalated, viewed, lastModifiedTime, completed FROM gm_ticket WHERE playerGuid = ? AND closedBy = 0 LIMIT 1",
+			s.playerGUID).Scan(&ticketID, &message, &response, &needMoreHelp, &escalated, &viewed, &lastModifiedTime, &completed)
 		if err == nil && ticketID > 0 {
 			if completed != 0 {
 				// TicketHandler.cpp:174: completed tickets answer with the
@@ -82,9 +85,21 @@ func (s *session) handleGMTicketGetTicket(ctx context.Context, payload []byte) b
 				s.sendGMResponseReceived(ticketID, message, response)
 				return true
 			}
-			age := float32(time.Now().Unix() - lastModifiedTime)
+			// TicketMgr.cpp:127 (GmTicket::WritePacket): ages are days
+			// (GetAge divides by DAY), not seconds.
+			age := float32(time.Now().Unix()-lastModifiedTime) / 86400
 			if age < 0 {
 				age = 0
+			}
+			// TicketMgr.cpp:140: the escalated byte is min(status, 2)
+			// (TICKET_IN_ESCALATION_QUEUE); the viewed byte is the
+			// GMTICKET_OPENEDBYGM_STATUS_* flag.
+			if escalated > 2 {
+				escalated = 2
+			}
+			var viewedFlag uint8
+			if viewed != 0 {
+				viewedFlag = 1
 			}
 			buf := protocol.NewBuffer(32 + len(message))
 			buf.WriteU32(gmTicketStatusHasText)
@@ -94,8 +109,8 @@ func (s *session) handleGMTicketGetTicket(ctx context.Context, payload []byte) b
 			buf.WriteF32(age)
 			buf.WriteF32(0) // oldest ticket age
 			buf.WriteF32(0) // last change age
-			buf.WriteU8(0)  // escalated
-			buf.WriteU8(0)  // viewed
+			buf.WriteU8(escalated)
+			buf.WriteU8(viewedFlag)
 			return s.write(uint16(protocol.OpcodeSMSG_GMTICKET_GETTICKET), buf.Bytes(), true) == nil
 		}
 	}
@@ -174,8 +189,9 @@ func (s *session) handleGMTicketCreate(ctx context.Context, payload []byte) bool
 				buf.WriteU32(gmTicketResponseCreateError)
 				return s.write(uint16(protocol.OpcodeSMSG_GMTICKET_CREATE), buf.Bytes(), true) == nil
 			}
-			// TicketHandler.cpp:49: a completed ticket is closed first.
-			_, _ = cdb.ExecContext(ctx, "UPDATE gm_ticket SET closedBy = ? WHERE id = ?", s.playerGUID, existingID)
+			// TicketHandler.cpp:49: a completed ticket is closed first
+			// (TicketMgr::CloseTicket also flips the type to closed).
+			_, _ = cdb.ExecContext(ctx, "UPDATE gm_ticket SET closedBy = ?, type = 1 WHERE id = ?", s.playerGUID, existingID)
 		}
 		var nextID uint32 = 1
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM gm_ticket").Scan(&nextID)
@@ -188,10 +204,19 @@ func (s *session) handleGMTicketCreate(ctx context.Context, payload []byte) bool
 		if needMoreHelpBool != 0 {
 			needMoreHelp = 1
 		}
+		// GmTicket::SetGmAction keeps needResponse only in memory (the
+		// needResponse==17 arm); it has no DB column. The type column is
+		// always TICKET_TYPE_OPEN for a new ticket (TicketMgr.cpp:54).
+		_ = needResponse
 		_, _ = cdb.ExecContext(ctx,
 			`INSERT INTO gm_ticket (id, type, playerGuid, name, description, createTime, mapId, posX, posY, posZ, lastModifiedTime, closedBy, assignedTo, comment, response, completed, escalated, viewed, needMoreHelp, resolvedBy)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, '', '', 0, 0, 0, ?, 0)`,
-			nextID, needResponse, s.playerGUID, playerName, message, now, mapId, x, y, z, now, needMoreHelp)
+			 VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, '', '', 0, 0, 0, ?, 0)`,
+			nextID, s.playerGUID, playerName, message, now, mapId, x, y, z, now, needMoreHelp)
+		// TicketHandler.cpp:120: GMs hear about the new ticket
+		// (LANG_COMMAND_TICKETNEW 2000, inlined from TDB enUS recall).
+		if s.server != nil {
+			s.server.broadcastMessageChatGM(ctx, fmt.Sprintf("New ticket from %s: Ticket %d created.", playerName, nextID))
+		}
 	}
 
 	buf := protocol.NewBuffer(4)
@@ -215,12 +240,23 @@ func (s *session) handleGMTicketUpdate(ctx context.Context, payload []byte) bool
 	// ticket; otherwise the response is UPDATE_ERROR.
 	response := gmTicketResponseUpdateError
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		now := time.Now().Unix()
-		res, _ := s.server.CharactersStore.DB.ExecContext(ctx,
-			"UPDATE gm_ticket SET description = ?, lastModifiedTime = ? WHERE playerGuid = ? AND closedBy = 0",
-			message, now, s.playerGUID)
-		if n, _ := res.RowsAffected(); n > 0 {
+		cdb := s.server.CharactersStore.DB
+		var ticketID uint32
+		if err := cdb.QueryRowContext(ctx,
+			"SELECT id FROM gm_ticket WHERE playerGuid = ? AND closedBy = 0 LIMIT 1",
+			s.playerGUID).Scan(&ticketID); err == nil && ticketID > 0 {
+			now := time.Now().Unix()
+			_, _ = cdb.ExecContext(ctx,
+				"UPDATE gm_ticket SET description = ?, lastModifiedTime = ? WHERE id = ?",
+				message, now, ticketID)
 			response = gmTicketResponseUpdateSuccess
+			// TicketHandler.cpp:141: GMs hear about the update
+			// (LANG_COMMAND_TICKETUPDATED 2001, inlined from TDB enUS recall).
+			playerName := s.accountName
+			if s.player != nil && s.player.Name != "" {
+				playerName = s.player.Name
+			}
+			s.server.broadcastMessageChatGM(ctx, fmt.Sprintf("Ticket %d updated by %s.", ticketID, playerName))
 		}
 	}
 
@@ -235,13 +271,25 @@ func (s *session) handleGMTicketDelete(ctx context.Context, payload []byte) bool
 	// TicketHandler.cpp:155: the delete only acts on an existing open
 	// ticket, then re-sends the (now empty) ticket state.
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		res, _ := s.server.CharactersStore.DB.ExecContext(ctx,
-			"UPDATE gm_ticket SET closedBy = ? WHERE playerGuid = ? AND closedBy = 0",
+		cdb := s.server.CharactersStore.DB
+		var ticketID uint32
+		_ = cdb.QueryRowContext(ctx,
+			"SELECT id FROM gm_ticket WHERE playerGuid = ? AND closedBy = 0 LIMIT 1",
+			s.playerGUID).Scan(&ticketID)
+		res, _ := cdb.ExecContext(ctx,
+			"UPDATE gm_ticket SET closedBy = ?, type = 1 WHERE playerGuid = ? AND closedBy = 0",
 			s.playerGUID, s.playerGUID)
 		if n, _ := res.RowsAffected(); n > 0 {
 			buf := protocol.NewBuffer(4)
 			buf.WriteU32(gmTicketResponseDeleted)
 			_ = s.write(uint16(protocol.OpcodeSMSG_GMTICKET_DELETETICKET), buf.Bytes(), true)
+			// TicketHandler.cpp:160: GMs hear about the abandon
+			// (LANG_COMMAND_TICKETPLAYERABANDON 2002, inlined from TDB enUS recall).
+			playerName := s.accountName
+			if s.player != nil && s.player.Name != "" {
+				playerName = s.player.Name
+			}
+			s.server.broadcastMessageChatGM(ctx, fmt.Sprintf("Ticket %d abandoned by %s.", ticketID, playerName))
 			s.sendGMTicketDefault()
 		}
 	}
@@ -253,9 +301,10 @@ func (s *session) handleGMTicketDelete(ctx context.Context, payload []byte) bool
 func (s *session) handleGMResponseResolve(ctx context.Context, payload []byte) bool {
 	// TicketHandler.cpp:272: the resolve only acts on an existing open
 	// ticket; the survey prompt rolls against ChanceOfGMSurvey.
+	// TicketMgr::CloseTicket sets closedBy (+type), never completed.
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		res, _ := s.server.CharactersStore.DB.ExecContext(ctx,
-			"UPDATE gm_ticket SET closedBy = ?, completed = 1 WHERE playerGuid = ? AND closedBy = 0",
+			"UPDATE gm_ticket SET closedBy = ?, type = 1 WHERE playerGuid = ? AND closedBy = 0",
 			s.playerGUID, s.playerGUID)
 		if n, _ := res.RowsAffected(); n > 0 {
 			var getSurvey uint8
@@ -288,39 +337,66 @@ func (s *session) handleGMSurveySubmit(ctx context.Context, payload []byte) bool
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
-		now := time.Now().Unix()
-		res, err := cdb.ExecContext(ctx, "INSERT INTO gm_survey (guid, mainSurvey, comment, createTime) VALUES (?, ?, '', ?)", s.playerGUID, mainSurvey, now)
+		// TicketHandler.cpp:198-236: the sub-survey and survey rows land
+		// in one transaction; a failed hyperlink validation returns before
+		// the commit, so nothing is persisted on that arm. The gm_survey
+		// schema here uses AUTO_INCREMENT for surveyId (C++ tracks it in
+		// memory via LoadSurveys/MAX), so the row id still comes from the
+		// insert.
+		tx, err := cdb.BeginTx(ctx, nil)
 		if err == nil {
-			surveyID, _ := res.LastInsertId()
-			// TicketHandler.cpp:209: the same sub-survey is never stored
-			// twice for one survey.
-			seen := make(map[uint32]bool)
-			for i := 0; i < 10 && r.Remaining() >= 5; i++ {
-				qID, _ := r.ReadU32()
-				ans, _ := r.ReadU8()
-				comm, _ := r.ReadCString()
-				if qID == 0 || seen[qID] {
-					continue
+			committed := false
+			defer func() {
+				if !committed {
+					_ = tx.Rollback()
 				}
-				seen[qID] = true
-				// TicketHandler.cpp:220: an invalid hyperlink in a
-				// sub-survey comment drops the whole submit.
-				if !s.validateHyperlinksAndMaybeKick(ctx, comm) {
-					return true
+			}()
+			now := time.Now().Unix()
+			res, err := tx.ExecContext(ctx, "INSERT INTO gm_survey (guid, mainSurvey, comment, createTime) VALUES (?, ?, '', ?)", s.playerGUID, mainSurvey, now)
+			if err == nil {
+				surveyID, _ := res.LastInsertId()
+				// TicketHandler.cpp:209: the same sub-survey is never stored
+				// twice for one survey.
+				seen := make(map[uint32]bool)
+				valid := true
+				for i := 0; i < 10 && r.Remaining() >= 5 && valid; i++ {
+					qID, _ := r.ReadU32()
+					// TicketHandler.cpp:212: a zero sub-survey id ends the
+					// list — the trailing bytes are the survey comment.
+					if qID == 0 {
+						break
+					}
+					ans, _ := r.ReadU8()
+					comm, _ := r.ReadCString()
+					if seen[qID] {
+						continue
+					}
+					seen[qID] = true
+					// TicketHandler.cpp:220: an invalid hyperlink in a
+					// sub-survey comment drops the whole submit.
+					if !s.validateHyperlinksAndMaybeKick(ctx, comm) {
+						valid = false
+						break
+					}
+					_, _ = tx.ExecContext(ctx, "INSERT INTO gm_subsurvey (surveyId, questionId, answer, answerComment) VALUES (?, ?, ?, ?)", surveyID, qID, ans, comm)
 				}
-				_, _ = cdb.ExecContext(ctx, "INSERT INTO gm_subsurvey (surveyId, questionId, answer, answerComment) VALUES (?, ?, ?, ?)", surveyID, qID, ans, comm)
-			}
-			// TicketHandler.cpp:228: the trailing comment belongs to the
-			// survey row itself.
-			if finalComment, err := r.ReadCString(); err == nil && finalComment != "" {
-				// TicketHandler.cpp:234: an invalid hyperlink in the
-				// survey comment drops the submit (the sub-survey rows
-				// above already landed, matching C++'s per-comment
-				// return).
-				if !s.validateHyperlinksAndMaybeKick(ctx, finalComment) {
-					return true
+				var finalComment string
+				if valid {
+					// TicketHandler.cpp:228: the trailing comment belongs to the
+					// survey row itself.
+					finalComment, _ = r.ReadCString()
+					// TicketHandler.cpp:234: an invalid hyperlink in the
+					// survey comment drops the submit.
+					if finalComment != "" && !s.validateHyperlinksAndMaybeKick(ctx, finalComment) {
+						valid = false
+					}
 				}
-				_, _ = cdb.ExecContext(ctx, "UPDATE gm_survey SET comment = ? WHERE surveyId = ?", finalComment, surveyID)
+				if valid {
+					if finalComment != "" {
+						_, _ = tx.ExecContext(ctx, "UPDATE gm_survey SET comment = ? WHERE surveyId = ?", finalComment, surveyID)
+					}
+					committed = tx.Commit() == nil
+				}
 			}
 		}
 	}
@@ -351,12 +427,10 @@ func (s *session) handleGMReportLag(ctx context.Context, payload []byte) bool {
 	return true
 }
 
-// handleGmTicketSystemToggle processes CMSG_GMTICKETSYSTEM_TOGGLE (0x29A).
-func (s *session) handleGmTicketSystemToggle(ctx context.Context, payload []byte) bool {
-	buf := protocol.NewBuffer(4)
-	buf.WriteU32(gmTicketQueueStatusEnabled)
-	return s.write(uint16(protocol.OpcodeSMSG_GMTICKET_SYSTEMSTATUS), buf.Bytes(), true) == nil
-}
+// CMSG_GMTICKETSYSTEM_TOGGLE (0x29A) is STATUS_NEVER in
+// Opcodes.cpp:797 — the C++ server never dispatches it, so no Go handler
+// is registered. The queue toggle lives in the .ticket togglesystem GM
+// command (commands_ticket.go), matching cs_ticket.cpp.
 
 // handleBug processes CMSG_BUG (0x1CA).
 // Reference: WorldSession::HandleBugOpcode (MiscHandler.cpp:551).
