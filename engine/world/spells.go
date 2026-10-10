@@ -13877,7 +13877,7 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 	}
 
 	if s.server != nil && effectiveHeal > 0 {
-		s.server.distributeHealingThreat(ctx, s.playerGUID, targetGUID, effectiveHeal)
+		s.server.distributeHealingThreat(ctx, s.playerGUID, targetGUID, effectiveHeal, false)
 	}
 
 	// Real aura procs on the done side of a direct heal (TrinityCore
@@ -18972,7 +18972,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		ts.sendPlayerUpdate()
 
 		if ts.server != nil && heal > overheal {
-			ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, heal-overheal)
+			ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, heal-overheal, false)
 		}
 
 		// SpellAuraEffects.cpp:5411-5433 — Health Funnel caster cost, after
@@ -19143,7 +19143,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			if creatureCaster {
 				ts.server.distributeCreatureHealingThreat(context.Background(), ts.player.Map, ts.player.InstanceID, aura.CasterGUID, aura.TargetGUID, effectiveHeal)
 			} else {
-				ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, effectiveHeal)
+				ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, effectiveHeal, false)
 			}
 		}
 
@@ -19167,9 +19167,8 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// matches. Go has no player PowerType model; the drain below
 		// naturally no-ops when the target's MaxPowers[powerType] is 0.
 		// UNIT_STATE_ISOLATED / IsImmunedToDamage have no Go model
-		// (SendTickImmune unbridged), and the persistent-area-aura
-		// SpellHitResult gate stays unbridged — Go runs no miss roll on
-		// dynobj ticks, consistent with cases 3 and 53.
+		// (SendTickImmune unbridged). The persistent-area-aura SpellHitResult
+		// gate is bridged by persistentAreaTickMissed at the top of this case.
 		if leechCaster == nil || leechCaster.player == nil || leechCaster.player.Health == 0 || ts.player.Health == 0 {
 			break
 		}
@@ -19211,8 +19210,8 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			drained = oldPower - ts.player.Powers[powerType]
 		}
 		// SpellPeriodicAuraLogInfo carries the drained amount; gainMultiplier
-		// = SpellEffectInfo::CalcValueMultiplier — the ValueMultiplier DBC
-		// field has no Go model, mana-leech spells carry 1.0.
+		// = SpellEffectInfo::CalcValueMultiplier (DBC ValueMultiplier via
+		// valueMultiplierForAura in applyPeriodicManaLeechGain).
 		logPkt := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, uint32(powerType), drained)
 		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if ts.server != nil {
@@ -19265,7 +19264,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// ThreatManager::ForwardThreatForAssistingMe(caster, gain * 0.5f) —
 		// distributeHealingThreat already folds the 0.5 in.
 		if ts.server != nil && gained > 0 {
-			ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, gained)
+			ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, gained, true)
 		}
 
 	case 162: // SPELL_AURA_POWER_BURN
@@ -19512,7 +19511,7 @@ func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, 
 	// Unit::ForwardThreatForAssistingMe(caster, effectiveHeal * 0.5) — the 0.5
 	// is inside distributeHealingThreat.
 	if s.server != nil && effectiveHeal > 0 {
-		s.server.distributeHealingThreat(context.Background(), casterSess.playerGUID, casterSess.playerGUID, effectiveHeal)
+		s.server.distributeHealingThreat(context.Background(), casterSess.playerGUID, casterSess.playerGUID, effectiveHeal, false)
 	}
 }
 
@@ -19871,7 +19870,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			if heal > overheal {
 				effectiveHeal := heal - overheal
 				if tickCaster != nil {
-					s.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, effectiveHeal)
+					s.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, effectiveHeal, false)
 				} else {
 					s.server.distributeCreatureHealingThreat(context.Background(), key.Map, key.InstanceID, aura.CasterGUID, aura.TargetGUID, effectiveHeal)
 				}
@@ -20084,7 +20083,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			if creatureCaster {
 				s.server.distributeCreatureHealingThreat(ctx, key.Map, key.InstanceID, aura.CasterGUID, aura.TargetGUID, effectiveHeal)
 			} else {
-				s.server.distributeHealingThreat(ctx, aura.CasterGUID, aura.TargetGUID, effectiveHeal)
+				s.server.distributeHealingThreat(ctx, aura.CasterGUID, aura.TargetGUID, effectiveHeal, false)
 			}
 		}
 		return true
@@ -20230,9 +20229,10 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt21, s)
 		}
 		// ThreatManager::ForwardThreatForAssistingMe(caster, gain * 0.5f) —
-		// distributeHealingThreat already folds the 0.5 in.
+		// distributeHealingThreat already folds the 0.5 in. The obs-mod-power
+		// call passes ignoreModifiers=true (SpellAuraEffects.cpp:5545).
 		if s.server != nil && gained > 0 {
-			s.server.distributeHealingThreat(ctx, aura.CasterGUID, aura.TargetGUID, gained)
+			s.server.distributeHealingThreat(ctx, aura.CasterGUID, aura.TargetGUID, gained, true)
 		}
 		return true
 
@@ -20507,18 +20507,20 @@ func (s *session) applyCreatureHealthFunnelSelfDamage(ctx context.Context, caste
 // applyPeriodicManaLeechGain runs the caster-gain half of
 // HandlePeriodicManaLeechAuraTick (SpellAuraEffects.cpp:5489-5504), shared by
 // the player and creature tick paths: the caster gains drained x
-// CalcValueMultiplier power (the multiplier's ValueMultiplier DBC field has no
-// Go model; mana-leech spells carry 1.0), takes 0.5x threat on the gain —
-// "energize is not modified by threat modifiers" (the shared splitter applies
-// the 0.5x factor; the healer-threat-multiplier fold is a Go-side
-// approximation) — and Drain Mana refunds its Mana Feed percentage to a live
-// guardian pet.
+// CalcValueMultiplier power (DBC ValueMultiplier = EffectAmplitude via
+// valueMultiplierForAura; the SPELLMOD_VALUE_MULTIPLIER term has no Go model),
+// takes 0.5x threat on the gain with threat modifiers ignored
+// (ThreatManager::AddThreat ignoreModifiers=true) — and Drain Mana refunds its
+// Mana Feed percentage to a live guardian pet.
 func (s *session) applyPeriodicManaLeechGain(ctx context.Context, caster *session, aura *activeAura, tickSpell wotlk.Spell, tickKnown bool, powerType int32, drained uint32) {
 	if caster == nil || caster.player == nil || drained == 0 || powerType < 0 || powerType > 6 {
 		return
 	}
-	// int32 gainAmount = int32(drainedAmount * gainMultiplier), gainMultiplier = 1.0.
-	gain := int64(drained)
+	// int32 gainAmount = int32(drainedAmount * gainMultiplier).
+	gain := int64(effectValueMultiplied(drained, s.valueMultiplierForAura(aura.SpellID, spellAuraPeriodicManaLeech)))
+	if gain == 0 {
+		return
+	}
 	idx := uint32(powerType)
 	oldPower := caster.player.Powers[idx]
 	caster.adjustSpellPower(ctx, aura.CasterGUID, powerType, gain)
@@ -20530,14 +20532,21 @@ func (s *session) applyPeriodicManaLeechGain(ctx context.Context, caster *sessio
 		return
 	}
 	// SpellAuraEffects.cpp:5492 — target->GetThreatManager().AddThreat(caster,
-	// gainedAmount * 0.5f, ...).
-	s.server.distributeHealingThreat(ctx, aura.CasterGUID, aura.TargetGUID, gained)
+	// gainedAmount * 0.5f, spell, ignoreModifiers=true): energize threat skips
+	// the healer-threat multiplier fold.
+	s.server.distributeHealingThreat(ctx, aura.CasterGUID, aura.TargetGUID, gained, true)
 	// Drain Mana - Mana Feed effect (SpellAuraEffects.cpp:5495-5503).
 	if tickKnown && tickSpell.SpellFamilyName == spellFamilyWarlock && tickSpell.SpellFamilyFlags[0]&0x10 != 0 {
 		if pet := caster.livePetMotion(); pet != nil {
+			// C++ reads GetBase()->GetEffect(EFFECT_1)->GetAmount() — the
+			// applied amount, which is BasePoints+1 per the tree's aura-apply
+			// convention (the Go leech aura only carries same-aura-type
+			// effects, so effect 1 is read from the DBC instead).
 			manaFeedVal := uint32(0)
-			if len(tickSpell.Effects) > 1 && tickSpell.Effects[1].BasePoints > 0 {
-				manaFeedVal = uint32(tickSpell.Effects[1].BasePoints)
+			if len(tickSpell.Effects) > 1 {
+				if amt := tickSpell.Effects[1].BasePoints + 1; amt > 0 {
+					manaFeedVal = uint32(amt)
+				}
 			}
 			if manaFeedVal > 0 {
 				feedAmount := uint32(float64(gained) * float64(manaFeedVal) / 100.0)

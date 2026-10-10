@@ -1233,7 +1233,7 @@ func (s *session) handleEffectTaunt(ctx context.Context, targetGUID uint64, spel
 // Formula mirrors TrinityCore Unit::SendHealSpellLog and Unit::DoAttack (Unit.cpp:6550-6580):
 // Base threat = effectiveHeal * 0.5 * healerThreatMultiplier.
 // Threat is divided equally by the number of engaged creatures.
-func (s *Server) distributeHealingThreat(ctx context.Context, healerGUID, targetGUID uint64, effectiveHeal uint32) {
+func (s *Server) distributeHealingThreat(ctx context.Context, healerGUID, targetGUID uint64, effectiveHeal uint32, ignoreModifiers bool) {
 	if s == nil || healerGUID == 0 || effectiveHeal == 0 {
 		return
 	}
@@ -1243,7 +1243,13 @@ func (s *Server) distributeHealingThreat(ctx context.Context, healerGUID, target
 		return
 	}
 
-	mult := healerSess.getThreatMultiplier(2) // Holy/Healing school mask = 2
+	// ThreatManager::AddThreat / ForwardThreatForAssistingMe take an
+	// ignoreModifiers flag: energize gains (mana leech, innervate-style
+	// obs-mod-power ticks) pass true, heal paths pass false.
+	mult := float32(1.0)
+	if !ignoreModifiers {
+		mult = healerSess.getThreatMultiplier(2) // Holy/Healing school mask = 2
+	}
 	totalThreat := float32(effectiveHeal) * 0.5 * mult
 	if totalThreat <= 0 {
 		return
