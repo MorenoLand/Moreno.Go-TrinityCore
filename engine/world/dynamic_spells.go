@@ -178,7 +178,7 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 			if caster.hasDynamicAreaAura(targetGUID, object.SpellData.ID) {
 				continue
 			}
-			caster.applyAuraToTarget(ctx, targetGUID, object.SpellData, object.AuraEffect, -1, object.AuraDurationMs, object.AuraPeriodMs, object.AuraAmount, uint32(object.AuraSchoolMask), nil, false, object.CasterGUID, true, 0)
+			caster.applyAuraToTarget(ctx, targetGUID, object.SpellData, object.AuraEffect, -1, object.AuraDurationMs, object.AuraPeriodMs, object.AuraAmount, uint32(object.AuraSchoolMask), nil, false, object.CasterGUID, true, 0, false)
 			if object.AuraHolders == nil {
 				object.AuraHolders = make(map[uint64]struct{})
 			}
