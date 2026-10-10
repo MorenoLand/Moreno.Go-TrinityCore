@@ -868,6 +868,13 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	if periodMs == 0 && (effect.Aura == 3 || effect.Aura == 8 || effect.Aura == 23 || effect.Aura == 24 || effect.Aura == 89) {
 		periodMs = 3000
 	}
+	// AuraEffect::CalculatePeriodic (SpellAuraEffects.cpp:596-599): a pet
+	// caster's SPELLMOD_ACTIVATION_TIME mods fold through the spellmod owner
+	// (the pet's owner — this session). The haste legs read the pet's own
+	// UNIT_MOD_CAST_SPEED, which has no Go model.
+	if periodMs > 0 {
+		periodMs = uint32(max(s.applySpellMod(spell, spellModActivationTime, int32(periodMs)), 1))
+	}
 	if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
 		targetSess.castMu.Lock()
 		if targetSess.activeAuras == nil {
@@ -938,7 +945,7 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, true)
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, targetSess)
 		if periodMs > 0 {
-			targetSess.schedulePlayerPeriodicTick(aura, periodMs)
+			targetSess.schedulePlayerPeriodicTickInitial(aura, periodMs, periodicTickInitialDelay(spell, periodMs))
 		}
 		if durationMs > 0 && durationMs < 18000000 {
 			aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() { targetSess.expirePlayerAura(spell.ID) })
@@ -1021,7 +1028,7 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, true)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, s)
 	if periodMs > 0 {
-		s.scheduleCreaturePeriodicTick(aura, periodMs)
+		s.scheduleCreaturePeriodicTickInitial(aura, periodMs, periodicTickInitialDelay(spell, periodMs))
 	}
 	if durationMs > 0 && durationMs < 18000000 {
 		aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() { s.expireCreatureAura(targetKey, spell.ID, slot) })

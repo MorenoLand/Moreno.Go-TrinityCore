@@ -17245,6 +17245,39 @@ func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (du
 	if periodMs == 0 && (eff.Aura == 3 || eff.Aura == 8 || eff.Aura == 23 || eff.Aura == 24 || eff.Aura == 89) {
 		periodMs = 3000
 	}
+	// AuraEffect::CalculatePeriodic (SpellAuraEffects.cpp:565-637): the DBC
+	// amplitude is not the tick interval until the caster's mods fold in.
+	// SPELLMOD_ACTIVATION_TIME (talents) applies first via the spellmod
+	// owner; then haste compression — channeled auras route through
+	// ModSpellDurationTime (Object.cpp:2475-2495: SPELLMOD_CASTING_TIME then
+	// the UNIT_MOD_CAST_SPEED multiply; channeled without
+	// ATTR5_HASTE_AFFECT_DURATION early-returns with no compression), and
+	// non-channeled auras carrying ATTR5_HASTE_AFFECT_DURATION (or affected
+	// by a SPELL_AURA_PERIODIC_HASTE/316 aura, which has no Go model — the
+	// arm is vacuous here) multiply by UNIT_MOD_CAST_SPEED, i.e. divide by
+	// 1+hastePct/100 (ApplyPercentModFloatVar, Unit.cpp:10842-10845). The
+	// int32() truncation is the C++ cast; the floor of 1ms keeps a
+	// pathological mod from producing a zero-period timer.
+	if periodMs > 0 {
+		periodMs = uint32(max(s.applySpellMod(spell, spellModActivationTime, int32(periodMs)), 1))
+		if isChanneledSpell(spell) {
+			if spell.AttributesEx5&spellAttr5HasteAffectDuration != 0 {
+				if modded := s.applySpellMod(spell, spellModCastingTime, int32(periodMs)); modded > 0 {
+					periodMs = uint32(modded)
+				}
+				if hastePct := s.getSpellHastePct(); hastePct > 0 {
+					periodMs = uint32(float64(periodMs) / (1.0 + hastePct/100.0))
+				}
+			}
+		} else if spell.AttributesEx5&spellAttr5HasteAffectDuration != 0 {
+			if hastePct := s.getSpellHastePct(); hastePct > 0 {
+				periodMs = uint32(float64(periodMs) / (1.0 + hastePct/100.0))
+			}
+		}
+		if periodMs == 0 {
+			periodMs = 1
+		}
+	}
 	amount = uint32(eff.BasePoints + 1)
 	if amount <= 1 && isAreaEnemySpell(spell) {
 		for _, areaEffect := range spell.Effects {
@@ -18415,12 +18448,18 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				existing.Timer.Stop()
 				existing.Timer = nil
 			}
+			// Aura::RefreshTimers (SpellAuras.cpp:930-940) recomputes the
+			// amplitude with the current haste on EVERY refresh and zeroes
+			// the tick counter (AuraEffect::ResetPeriodic always resets
+			// _ticksDone) — only the timer restart is gated on
+			// resetPeriodicTimer.
+			existing.PeriodMs = periodMs
+			existing.TickCount = 0
 			if resetPeriodic {
 				if existing.TickTimer != nil {
 					existing.TickTimer.Stop()
 					existing.TickTimer = nil
 				}
-				existing.PeriodMs = periodMs
 			}
 			slot, effectMask, charges := existing.Slot, existing.EffectMask, existing.RemainingCharges
 			targetSess.castMu.Unlock()
@@ -18428,8 +18467,8 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			// (SpellAuraEffects.cpp:657-683): the merged aura's refreshed
 			// amounts update the registered modifier values, no re-register.
 			targetSess.refreshSpellModValues(existing)
-			if resetPeriodic && periodMs > 0 {
-				targetSess.schedulePlayerPeriodicTick(existing, periodMs)
+			if resetPeriodic && existing.PeriodMs > 0 {
+				targetSess.schedulePlayerPeriodicTickInitial(existing, existing.PeriodMs, periodicTickInitialDelay(spell, existing.PeriodMs))
 			}
 			if durationMs > 0 && durationMs < 18000000 {
 				targetSess.castMu.Lock()
@@ -18705,8 +18744,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			targetSess.server.refreshPlayerVisibility()
 		}
 
-		if periodMs > 0 {
-			targetSess.schedulePlayerPeriodicTick(aura, periodMs)
+		// AuraEffect::CalculatePeriodic's m_isPeriodic gate
+		// (SpellAuraEffects.cpp:588-596): only a nonzero amplitude starts
+		// the tick timer — the mount-flight aura above had PeriodMs zeroed
+		// and previously kept a spurious no-op timer.
+		if aura.PeriodMs > 0 {
+			targetSess.schedulePlayerPeriodicTickInitial(aura, aura.PeriodMs, periodicTickInitialDelay(spell, aura.PeriodMs))
 		}
 		if durationMs > 0 && durationMs < 18000000 {
 			targetSess.castMu.Lock()
@@ -18801,12 +18844,17 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			existing.Timer.Stop()
 			existing.Timer = nil
 		}
+		// Creature-side mirror of the player merge above: Aura::RefreshTimers
+		// (SpellAuras.cpp:930-940) recomputes the amplitude with the current
+		// haste on EVERY refresh and zeroes the tick counter — only the
+		// timer restart is gated on resetPeriodicTimer.
+		existing.PeriodMs = periodMs
+		existing.TickCount = 0
 		if resetPeriodic {
 			if existing.TickTimer != nil {
 				existing.TickTimer.Stop()
 				existing.TickTimer = nil
 			}
-			existing.PeriodMs = periodMs
 		}
 		slot, effectMask := existing.Slot, existing.EffectMask
 		s.server.auraMu.Unlock()
@@ -18816,8 +18864,8 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		if eff.Aura == spellAuraModTaunt {
 			s.server.applyCreatureTaunt(targetKey, s.playerGUID, durationMs)
 		}
-		if resetPeriodic && periodMs > 0 {
-			s.scheduleCreaturePeriodicTick(existing, periodMs)
+		if resetPeriodic && existing.PeriodMs > 0 {
+			s.scheduleCreaturePeriodicTickInitial(existing, existing.PeriodMs, periodicTickInitialDelay(spell, existing.PeriodMs))
 		}
 		if durationMs > 0 && durationMs < 18000000 {
 			s.server.auraMu.Lock()
@@ -18938,8 +18986,8 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, s)
 
-	if periodMs > 0 {
-		s.scheduleCreaturePeriodicTick(aura, periodMs)
+	if aura.PeriodMs > 0 {
+		s.scheduleCreaturePeriodicTickInitial(aura, aura.PeriodMs, periodicTickInitialDelay(spell, aura.PeriodMs))
 	}
 	if durationMs > 0 && durationMs < 18000000 {
 		s.server.auraMu.Lock()
@@ -18963,14 +19011,42 @@ func AffectsPlayerVisibility(auraType uint32) bool {
 	return affectsPlayerVisibility(auraType)
 }
 
+// periodicTickInitialDelay mirrors AuraEffect::ResetPeriodic
+// (SpellAuraEffects.cpp:553-563): with SPELL_ATTR5_START_PERIODIC_AT_APPLY
+// the periodic timer starts AT the amplitude, so the first tick fires on the
+// first world update after apply — a zero initial delay in Go's timer model,
+// with every later tick on the normal amplitude. A refresh that resets the
+// periodic timer (Aura::RefreshTimers, SpellAuras.cpp:930) re-arms the same
+// way; a proc-triggered refresh keeps the running countdown (no reschedule).
+func periodicTickInitialDelay(spell wotlk.Spell, periodMs uint32) uint32 {
+	if spell.AttributesEx5&spellAttr5StartPeriodicAtApply != 0 {
+		return 0
+	}
+	return periodMs
+}
+
 func (ts *session) schedulePlayerPeriodicTick(aura *activeAura, periodMs uint32) {
+	ts.schedulePlayerPeriodicTickInitial(aura, periodMs, periodMs)
+}
+
+// schedulePlayerPeriodicTickInitial mirrors AuraEffect::ResetPeriodic
+// (SpellAuraEffects.cpp:553-563): with SPELL_ATTR5_START_PERIODIC_AT_APPLY
+// the periodic timer starts AT the amplitude, so the first tick fires on the
+// first world update after apply — a zero initial delay in Go's timer model,
+// with every later tick on the normal amplitude. Callers that know the spell
+// pass 0 for that attribute; everything else passes periodMs.
+func (ts *session) schedulePlayerPeriodicTickInitial(aura *activeAura, periodMs, initialDelayMs uint32) {
 	ts.castMu.Lock()
-	ts.schedulePlayerPeriodicTickLocked(aura, periodMs)
+	ts.schedulePlayerPeriodicTickLockedInitial(aura, periodMs, initialDelayMs)
 	ts.castMu.Unlock()
 }
 
 func (ts *session) schedulePlayerPeriodicTickLocked(aura *activeAura, periodMs uint32) {
-	aura.TickTimer = time.AfterFunc(time.Duration(periodMs)*time.Millisecond, func() {
+	ts.schedulePlayerPeriodicTickLockedInitial(aura, periodMs, periodMs)
+}
+
+func (ts *session) schedulePlayerPeriodicTickLockedInitial(aura *activeAura, periodMs, initialDelayMs uint32) {
+	aura.TickTimer = time.AfterFunc(time.Duration(initialDelayMs)*time.Millisecond, func() {
 		ts.castMu.Lock()
 		if aura.Stopped || ts.player == nil || ts.player.Health == 0 {
 			ts.castMu.Unlock()
@@ -18985,7 +19061,12 @@ func (ts *session) schedulePlayerPeriodicTickLocked(aura *activeAura, periodMs u
 		if stillRunning {
 			ts.castMu.Lock()
 			if !aura.Stopped {
-				ts.schedulePlayerPeriodicTickLocked(aura, periodMs)
+				// Aura::RefreshTimers (SpellAuras.cpp:930-940) recomputes the
+				// amplitude on every refresh while a proc-triggered refresh
+				// keeps the running countdown — the running timer is not
+				// restarted, but every tick after the residual uses the
+				// current PeriodMs, like C++ using the recomputed _amplitude.
+				ts.schedulePlayerPeriodicTickLocked(aura, aura.PeriodMs)
 			}
 			ts.castMu.Unlock()
 		}
@@ -20065,16 +20146,28 @@ func (ts *session) expirePlayerAura(spellID uint32) {
 }
 
 func (s *session) scheduleCreaturePeriodicTick(aura *activeAura, periodMs uint32) {
+	s.scheduleCreaturePeriodicTickInitial(aura, periodMs, periodMs)
+}
+
+// scheduleCreaturePeriodicTickInitial is the creature-side mirror of
+// schedulePlayerPeriodicTickInitial — SPELL_ATTR5_START_PERIODIC_AT_APPLY
+// fires the first tick on apply (AuraEffect::ResetPeriodic,
+// SpellAuraEffects.cpp:553-563).
+func (s *session) scheduleCreaturePeriodicTickInitial(aura *activeAura, periodMs, initialDelayMs uint32) {
 	if s.server == nil {
 		return
 	}
 	s.server.auraMu.Lock()
-	s.scheduleCreaturePeriodicTickLocked(aura, periodMs)
+	s.scheduleCreaturePeriodicTickLockedInitial(aura, periodMs, initialDelayMs)
 	s.server.auraMu.Unlock()
 }
 
 func (s *session) scheduleCreaturePeriodicTickLocked(aura *activeAura, periodMs uint32) {
-	aura.TickTimer = time.AfterFunc(time.Duration(periodMs)*time.Millisecond, func() {
+	s.scheduleCreaturePeriodicTickLockedInitial(aura, periodMs, periodMs)
+}
+
+func (s *session) scheduleCreaturePeriodicTickLockedInitial(aura *activeAura, periodMs, initialDelayMs uint32) {
+	aura.TickTimer = time.AfterFunc(time.Duration(initialDelayMs)*time.Millisecond, func() {
 		if s.server == nil {
 			return
 		}
@@ -20095,7 +20188,10 @@ func (s *session) scheduleCreaturePeriodicTickLocked(aura *activeAura, periodMs 
 		if stillRunning {
 			s.server.auraMu.Lock()
 			if !aura.Stopped {
-				s.scheduleCreaturePeriodicTickLocked(aura, periodMs)
+				// Like the player leg above: the running countdown is kept
+				// across refreshes, but later ticks use the recomputed
+				// PeriodMs (Aura::RefreshTimers, SpellAuras.cpp:930-940).
+				s.scheduleCreaturePeriodicTickLocked(aura, aura.PeriodMs)
 			}
 			s.server.auraMu.Unlock()
 		}
