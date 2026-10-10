@@ -33,6 +33,33 @@ var bankBagSlotPrices = []uint32{
 	bankSlotPrice7,
 }
 
+// BuyBankSlot result codes mirror BuyBankSlotResultCode (Player.h:113-116):
+// note the non-obvious order — OK is 3, not 0.
+const (
+	bankSlotResultFailedTooMany     uint32 = 0 // ERR_BANKSLOT_FAILED_TOO_MANY
+	bankSlotResultInsufficientFunds uint32 = 1 // ERR_BANKSLOT_INSUFFICIENT_FUNDS
+	bankSlotResultNotBanker         uint32 = 2 // ERR_BANKSLOT_NOTBANKER
+	bankSlotResultOK                uint32 = 3 // ERR_BANKSLOT_OK
+)
+
+// canUseBank mirrors WorldSession::CanUseBank (BankHandler.cpp:32-44): a zero
+// banker GUID falls back to the banker the player last talked to
+// (m_currentBankerGUID, latched by SendShowBank). The ".bank" command path
+// (banker GUID == own GUID == current banker) bypasses the interact check;
+// everything else needs an interactable UNIT_NPC_FLAG_BANKER creature.
+func (s *session) canUseBank(ctx context.Context, bankerGUID uint64) bool {
+	if bankerGUID == 0 {
+		bankerGUID = s.currentBankerGUID
+	}
+	if bankerGUID != 0 && bankerGUID == s.playerGUID && bankerGUID == s.currentBankerGUID {
+		return true
+	}
+	if bankerGUID == 0 {
+		return false
+	}
+	return s.canInteractWithNPC(ctx, bankerGUID, uint64(unitNPCFlagBanker))
+}
+
 // handleBankerActivate processes CMSG_BANKER_ACTIVATE (0x1B7).
 // Reference: WorldSession::HandleBankerActivateOpcode (BankHandler.cpp:46).
 func (s *session) handleBankerActivate(ctx context.Context, payload []byte) bool {
@@ -46,10 +73,18 @@ func (s *session) handleBankerActivate(ctx context.Context, payload []byte) bool
 	}
 	// BankHandler.cpp:46-53 (HandleBankerActivateOpcode): the NPC must be
 	// interactable as a banker (UNIT_NPC_FLAG_BANKER), otherwise silent drop.
+	// The feign-death strip (HasUnitState(UNIT_STATE_DIED) ->
+	// RemoveAurasByType(SPELL_AURA_FEIGN_DEATH)) has no Go bridge — Go tracks
+	// no player unit states and models no feign-death aura type (standing
+	// Go-wide delta, same as the other NPC-activate handlers).
 	if !s.canInteractWithNPC(ctx, bankerGUID, uint64(unitNPCFlagBanker)) {
 		return true
 	}
 
+	// SendShowBank (BankHandler.cpp:183-188) latches the banker GUID
+	// (m_currentBankerGUID) before sending SMSG_SHOW_BANK, which carries only
+	// the banker GUID (8 bytes).
+	s.currentBankerGUID = bankerGUID
 	res := protocol.NewBuffer(8)
 	res.WriteU64(bankerGUID)
 	return s.write(uint16(protocol.OpcodeSMSG_SHOW_BANK), res.Bytes(), true) == nil
@@ -72,6 +107,15 @@ func (s *session) handleBuyBankSlot(ctx context.Context, payload []byte) bool {
 		return false
 	}
 
+	// BankHandler.cpp:141-146: the banker must be usable first, otherwise the
+	// result packet answers ERR_BANKSLOT_NOTBANKER (not a silent drop).
+	res := protocol.NewBuffer(4)
+	if !s.canUseBank(ctx, bankerGUID) {
+		res.WriteU32(bankSlotResultNotBanker)
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_BANK_SLOT_RESULT), res.Bytes(), true)
+		return true
+	}
+
 	// Count purchased bank bag slots from characters table or player state
 	purchasedCount := int(s.player.BankBagSlots)
 	var dbSlots int64
@@ -79,17 +123,18 @@ func (s *session) handleBuyBankSlot(ctx context.Context, payload []byte) bool {
 		purchasedCount = int(dbSlots)
 	}
 
-	res := protocol.NewBuffer(12)
-	res.WriteU64(bankerGUID)
+	// C++ looks up BankBagSlotPrices[owned+1]; a missing row means too many.
+	// Go's price table has one row per purchasable slot, so owned >= len is
+	// the same gate.
 	if purchasedCount >= len(bankBagSlotPrices) {
-		res.WriteU32(1) // ERR_BANKSLOT_FAILED_TOO_MANY
+		res.WriteU32(bankSlotResultFailedTooMany)
 		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_BANK_SLOT_RESULT), res.Bytes(), true)
 		return true
 	}
 
 	cost := bankBagSlotPrices[purchasedCount]
 	if s.player.Money < cost {
-		res.WriteU32(2) // ERR_BANKSLOT_INSUFFICIENT_FUNDS
+		res.WriteU32(bankSlotResultInsufficientFunds)
 		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_BANK_SLOT_RESULT), res.Bytes(), true)
 		return true
 	}
@@ -101,7 +146,9 @@ func (s *session) handleBuyBankSlot(ctx context.Context, payload []byte) bool {
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	}
 
-	res.WriteU32(0) // ERR_BANKSLOT_OK
+	// SMSG_BUY_BANK_SLOT_RESULT carries only the u32 result (BankPackets.h:60-67);
+	// the banker GUID is not echoed back.
+	res.WriteU32(bankSlotResultOK)
 	s.updateAchievementCriteria(criteriaTypeBuyBankSlot, 0, 1)
 	_ = s.write(uint16(protocol.OpcodeSMSG_BUY_BANK_SLOT_RESULT), res.Bytes(), true)
 	s.sendPlayerMoneyUpdate()
@@ -125,6 +172,12 @@ func (s *session) handleAutoBankItem(ctx context.Context, payload []byte) bool {
 		return false
 	}
 
+	// BankHandler.cpp:66-70: silent drop without an interactable banker —
+	// the bank window is a banker-scoped session, not a free action.
+	if !s.canUseBank(ctx, 0) {
+		return true
+	}
+
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return false
@@ -142,6 +195,16 @@ func (s *session) handleAutoBankItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// AUDIT vs Player::CanBankItem (Player.cpp:11671) auto path
+	// (NULL_BAG/NULL_SLOT): the remaining validation arms have no Go
+	// counterpart — m_lootGenerated (Go has no loot-on-item model),
+	// IsBindedNotWith (Go tracks no binding state), currency-token slots
+	// (Go has no hidden currency bag), and CanTakeMoreSimilarItems
+	// (stack-merge is unmodeled tree-wide; Go moves whole items). The
+	// dest==own-pos EQUIP_ERR_NONE guard (BankHandler.cpp:79-83) is a
+	// defensive no-op arm: the item's own slot stays occupied during
+	// CanBankItem's scan, so the auto path cannot resolve to it — Go's
+	// first-free-slot scan is the equivalent outcome.
 	// 1. Find free bank slot among 39..66
 	occupied := make(map[uint8]bool)
 	rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= ? AND slot <= ?", s.playerGUID, bankSlotStart, bankSlotEnd)
@@ -217,6 +280,11 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 	srcSlot, err := r.ReadU8()
 	if err != nil {
 		return false
+	}
+
+	// BankHandler.cpp:99-103: silent drop without an interactable banker.
+	if !s.canUseBank(ctx, 0) {
+		return true
 	}
 
 	cdb := s.server.CharactersStore.DB

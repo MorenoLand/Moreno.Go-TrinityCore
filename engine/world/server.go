@@ -307,6 +307,12 @@ type session struct {
 	playerGUID        uint64
 	playerLoading     bool
 	playerLoaded      bool
+	// currentBankerGUID mirrors WorldSession::m_currentBankerGUID
+	// (WorldSession.h): the banker creature the player last opened the bank
+	// with, latched by SendShowBank (BankHandler.cpp:183-188) and consumed by
+	// CanUseBank's zero-GUID fallback (BankHandler.cpp:32-44). Transient
+	// session state — never persisted, like the C++ member.
+	currentBankerGUID uint64
 	inQueue           bool
 	pendingAddonInfo  []byte
 	worldReady        atomic.Bool
