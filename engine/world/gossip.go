@@ -85,7 +85,10 @@ func (s *session) helloCreatureNPC(ctx context.Context, payload []byte, required
 	s.removeAurasWithInterruptFlags(auraInterruptFlagTalk)
 	// The spirit-guide arm exists only on the gossip path;
 	// WorldSession::HandleQuestgiverHelloOpcode (QuestHandler.cpp:78) has none.
-	if !questPath && s.isDeadOrGhost() && isBattlegroundMap(s.player.Map) && npcFlags&npcFlagSpiritGuide != 0 {
+	// WorldSession::HandleGossipHelloOpcode (NPCHandler.cpp:171-185) checks
+	// only the battleground — no death gate: a living player clicking a
+	// spirit guide in a BG is queued for resurrection the same way.
+	if !questPath && isBattlegroundMap(s.player.Map) && npcFlags&npcFlagSpiritGuide != 0 {
 		// WorldSession::HandleGossipHelloOpcode (NPCHandler.cpp:171-185): a
 		// spirit guide queues the ghost (== AddPlayerToResurrectQueue) and
 		// answers with the wave timer (== SendAreaSpiritHealerQueryOpcode)
@@ -141,10 +144,13 @@ func (s *session) helloCreatureNPC(ctx context.Context, payload []byte, required
 				return s.write(uint16(protocol.OpcodeMSG_TABARDVENDOR_ACTIVATE), tabard.Bytes(), true) == nil
 			}
 			if npcFlags&0x200000 != 0 { // UNIT_NPC_FLAG_AUCTIONEER (0x200000)
-				auction := protocol.NewBuffer(9)
-				auction.WriteU64(guid)
-				auction.WriteU8(1)
-				return s.write(uint16(protocol.OpcodeMSG_AUCTION_HELLO), auction.Bytes(), true) == nil
+				// Routes through WorldSession::SendAuctionHello
+				// (AuctionHouseHandler.cpp:59-75): the 13-byte layout
+				// (guid + u32 house id + u8 enabled) and the auction level
+				// gate, not the bare 9-byte write this fallthrough had.
+				s.gossipClosed = true
+				s.sendAuctionHelloPacket(guid)
+				return true
 			}
 			if npcFlags&0x400000 != 0 { // UNIT_NPC_FLAG_STABLEMASTER (0x400000)
 				stableBuf := protocol.NewBuffer(8)
@@ -292,7 +298,13 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			s.sendTrainerList(ctx, guid)
 			s.gossipClosed = true
 		} else if item.Action == 8 { // GOSSIP_OPTION_INNKEEPER
-			s.gossipClosed = true
+			// Player::OnGossipSelect (Player.cpp:14663-14666): SendCloseGossip
+			// runs before Player::SetBindPoint, which itself only sends
+			// SMSG_BINDER_CONFIRM (Player.cpp:9597-9600) — the bind lands on
+			// CMSG_BINDER_ACTIVATE.
+			if !s.sendGossipComplete() {
+				return false
+			}
 			bind := protocol.NewBuffer(8)
 			bind.WriteU64(guid)
 			if err := s.write(uint16(protocol.OpcodeSMSG_BINDER_CONFIRM), bind.Bytes(), true); err != nil {
@@ -306,27 +318,35 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 				return false
 			}
 		} else if item.Action == 11 { // GOSSIP_OPTION_TABARDDESIGNER
-			s.gossipClosed = true
+			// Player::OnGossipSelect (Player.cpp:14669-14671): SendCloseGossip
+			// before MSG_TABARDVENDOR_ACTIVATE.
+			if !s.sendGossipComplete() {
+				return false
+			}
 			tabard := protocol.NewBuffer(8)
 			tabard.WriteU64(guid)
 			if err := s.write(uint16(protocol.OpcodeMSG_TABARDVENDOR_ACTIVATE), tabard.Bytes(), true); err != nil {
 				return false
 			}
 		} else if item.Action == 13 { // GOSSIP_OPTION_AUCTIONEER
+			// Player::OnGossipSelect (Player.cpp:14672-14674) routes through
+			// WorldSession::SendAuctionHello (AuctionHouseHandler.cpp:59-75):
+			// the packet is guid + u32 house id + u8 enabled behind the
+			// auction level gate — not the bare 9-byte write this arm had.
 			s.gossipClosed = true
-			auction := protocol.NewBuffer(9)
-			auction.WriteU64(guid)
-			auction.WriteU8(1)
-			if err := s.write(uint16(protocol.OpcodeMSG_AUCTION_HELLO), auction.Bytes(), true); err != nil {
-				return false
-			}
+			s.sendAuctionHelloPacket(guid)
 		} else if item.Action == 14 { // GOSSIP_OPTION_STABLEPET
 			s.gossipClosed = true
 			stableBuf := protocol.NewBuffer(8)
 			stableBuf.WriteU64(guid)
 			return s.handleListStabledPets(ctx, stableBuf.Bytes())
 		} else if item.Action == 16 { // GOSSIP_OPTION_UNLEARNTALENTS
-			s.gossipClosed = true
+			// Player::OnGossipSelect (Player.cpp:14649-14651): SendCloseGossip
+			// (SMSG_GOSSIP_COMPLETE) goes out BEFORE SendTalentWipeConfirm —
+			// the menu must close before the wipe-confirm dialog opens.
+			if !s.sendGossipComplete() {
+				return false
+			}
 			wipeBuf := protocol.NewBuffer(12)
 			wipeBuf.WriteU64(guid)
 			// Player::SendTalentWipeConfirm (Player.cpp:9605): the prompt shows
@@ -378,10 +398,12 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 				return true
 			}
 		} else if item.Action == 10 { // GOSSIP_OPTION_PETITIONER
-			// Player::OnGossipSelect (Player.cpp:14660-14663): the menu closes
-			// and the petition list opens. Go has no petition-show model
-			// (only arena-charter deletion), so the menu closes with no list.
-			s.gossipClosed = true
+			// Player::OnGossipSelect (Player.cpp:14666-14668): SendCloseGossip
+			// runs before SendPetitionShowList. Go has no petition-show model
+			// (only arena-charter deletion), so only the close is bridged.
+			if !s.sendGossipComplete() {
+				return false
+			}
 		} else if item.Action == 12 { // GOSSIP_OPTION_BATTLEFIELD
 			// Player::OnGossipSelect (Player.cpp:14684-14696): the battleground
 			// type is derived from the creature entry via
@@ -395,10 +417,12 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			s.gossipClosed = true
 			s.sendBattlefieldList(guid, 0, bgTypeID)
 		} else if item.Action == 17 { // GOSSIP_OPTION_UNLEARNPETTALENTS
-			// Player::OnGossipSelect (Player.cpp:14653-14656): the menu closes
-			// and pet talents reset. Go's pet talents reset only at login —
-			// no interactive model — so the menu closes with no reset.
-			s.gossipClosed = true
+			// Player::OnGossipSelect (Player.cpp:14653-14656): SendCloseGossip
+			// before ResetPetTalents. Go's pet talents reset only at login —
+			// no interactive model — so only the close is bridged.
+			if !s.sendGossipComplete() {
+				return false
+			}
 		} else if item.Action == 18 { // GOSSIP_OPTION_LEARNDUALSPEC
 			// Player::OnGossipSelect (Player.cpp:14636-14646): gated on a
 			// single spec and CONFIG_MIN_DUALSPEC_LEVEL (40, World.cpp

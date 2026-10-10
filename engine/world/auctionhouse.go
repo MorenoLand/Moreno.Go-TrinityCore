@@ -135,6 +135,30 @@ type auctionRecord struct {
 	Deposit    uint32
 }
 
+// sendAuctionHelloPacket ports WorldSession::SendAuctionHello
+// (AuctionHouseHandler.cpp:59-75): below CONFIG_AUCTION_LEVEL_REQ
+// ("LevelReq.Auction", default 1, World.cpp:683) the LANG_AUCTION_REQ (6607)
+// notification fires and the window never opens. The wire layout is the
+// auctioneer GUID, the auction-house id u32, then the enabled byte; the
+// faction->house-entry lookup has no Go model, so the packet carries the
+// house-agnostic neutral id (defaultAuctionHouseID) — the same id the
+// auction mails use. (The feign-death strip has no Go model.)
+func (s *session) sendAuctionHelloPacket(guid uint64) {
+	auctionLevelReq := uint32(1)
+	if s.server != nil {
+		auctionLevelReq = s.server.Config.AuctionLevelReq
+	}
+	if s.player == nil || uint32(s.player.Level) < auctionLevelReq {
+		s.sendNotification(fmt.Sprintf("You must reach level %d to use the auction house.", auctionLevelReq))
+		return
+	}
+	packet := protocol.NewBuffer(13)
+	packet.WriteU64(guid)
+	packet.WriteU32(defaultAuctionHouseID) // Neutral / Standard AH ID
+	packet.WriteU8(1)                      // Enabled
+	_ = s.write(uint16(protocol.OpcodeMSG_AUCTION_HELLO), packet.Bytes(), true)
+}
+
 func (s *session) handleAuctionHello(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
@@ -151,24 +175,11 @@ func (s *session) handleAuctionHello(ctx context.Context, payload []byte) bool {
 	if !s.canInteractWithNPC(ctx, guid, uint64(unitNPCFlagAuctioneer)) {
 		return true
 	}
-	// C++ WorldSession::SendAuctionHello (AuctionHouseHandler.cpp:57-66):
-	// below CONFIG_AUCTION_LEVEL_REQ ("LevelReq.Auction", default 1,
-	// World.cpp:683) the LANG_AUCTION_REQ (6607) notification fires and the
-	// window never opens. (The faction->house-entry lookup and the
-	// feign-death strip have no Go model: the AH is house-agnostic.)
-	auctionLevelReq := uint32(1)
-	if s.server != nil {
-		auctionLevelReq = s.server.Config.AuctionLevelReq
-	}
-	if uint32(s.player.Level) < auctionLevelReq {
-		s.sendNotification(fmt.Sprintf("You must reach level %d to use the auction house.", auctionLevelReq))
-		return true
-	}
-	packet := protocol.NewBuffer(13)
-	packet.WriteU64(guid)
-	packet.WriteU32(defaultAuctionHouseID) // Neutral / Standard AH ID
-	packet.WriteU8(1)                      // Enabled
-	_ = s.write(uint16(protocol.OpcodeMSG_AUCTION_HELLO), packet.Bytes(), true)
+	// C++ WorldSession::SendAuctionHello (AuctionHouseHandler.cpp:57-66): the
+	// level gate and packet layout live in sendAuctionHelloPacket; the
+	// gossip select arm and the gossip-hello auctioneer fallthrough route
+	// through the same helper.
+	s.sendAuctionHelloPacket(guid)
 	s.debug("auction hello handled", "account", s.accountName, "auctioneer", guid)
 	return true
 }

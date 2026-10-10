@@ -561,7 +561,22 @@ func (s *session) loadQuestMenuItem(ctx context.Context, questID, icon uint32, p
 	if minLevel > int64(playerLevel) {
 		return nil, nil
 	}
-	return &gossipQuestItem{ID: questID, Icon: icon, Level: int32(level), Flags: uint32(flags), AutoComplete: uint32(flags)&questAutoCompleteFlags != 0, Title: title.String}, nil
+	// PlayerMenu::SendGossipMenu (GossipDef.cpp:230): the per-quest byte is
+	// IsAutoComplete() && IsRepeatable() && !IsDailyOrWeekly() && !IsMonthly()
+	// — not the bare AUTOCOMPLETE flag: IsAutoComplete (QuestDef.cpp:315)
+	// also counts Method == 0, and repeatable + daily/weekly/monthly arms
+	// from the quest_template_addon SpecialFlags still apply.
+	var method, specialFlags int64
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(Method, 0) FROM quest_template WHERE ID = ?", questID).Scan(&method)
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
+	}
+	isAutoComplete := method == 0 || uint32(flags)&questAutoCompleteFlags != 0
+	autoCompleteByte := isAutoComplete &&
+		specialFlags&questSpecialRepeatable != 0 &&
+		uint32(flags)&(questFlagsDaily|questFlagsWeekly) == 0 &&
+		specialFlags&questSpecialMonthly == 0
+	return &gossipQuestItem{ID: questID, Icon: icon, Level: int32(level), Flags: uint32(flags), AutoComplete: autoCompleteByte, Title: title.String}, nil
 }
 
 func loadQuestRelationIDs(ctx context.Context, db *sql.DB, table string, entry uint32) ([]uint32, error) {
