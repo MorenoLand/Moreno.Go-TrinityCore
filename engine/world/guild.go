@@ -1535,8 +1535,10 @@ func (s *session) handleGuildDelRank(ctx context.Context) bool {
 // Reference: WorldSession::HandleGuildSetRankPermissions (GuildHandler.cpp:166),
 // Guild::HandleSetRankInfo (Guild.cpp:1414-1431), GuildSetRankPermissions::Read
 // (GuildPackets.cpp:181-193: RankID u32, Flags u32, RankName cstr,
-// WithdrawGoldLimit u32, then GUILD_BANK_MAX_TABS x (TabFlags u8,
-// TabWithdrawItemLimit u32)).
+// WithdrawGoldLimit u32, then GUILD_BANK_MAX_TABS x (TabFlags u32,
+// TabWithdrawItemLimit u32) — the flags are dwords on the wire, truncated
+// to uint8 by the handler (GuildHandler.cpp:172:
+// uint8(packet.TabFlags[tabId]))).
 func (s *session) handleGuildRank(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
@@ -1555,10 +1557,10 @@ func (s *session) handleGuildRank(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	goldLimit, _ := r.ReadU32()
-	tabFlags := make([]uint8, guildBankMaxTabs)
+	tabFlags := make([]uint32, guildBankMaxTabs)
 	tabLimits := make([]uint32, guildBankMaxTabs)
 	for i := range tabFlags {
-		f, ferr := r.ReadU8()
+		f, ferr := r.ReadU32()
 		if ferr != nil {
 			return false
 		}
@@ -1611,7 +1613,10 @@ func (s *session) handleGuildRank(ctx context.Context, payload []byte) bool {
 	var purchasedTabs int64
 	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM guild_bank_tab WHERE guildid = ?", guildID).Scan(&purchasedTabs)
 	for tab := int64(0); tab < purchasedTabs && tab < int64(guildBankMaxTabs); tab++ {
-		gbright := uint32(tabFlags[tab])
+		// GuildHandler.cpp:172 truncates the packet's u32 flag to uint8
+		// before GuildBankRightsAndSlots stores it (CHAR_INS_GUILD_BANK_RIGHT
+		// writes it as int8).
+		gbright := uint32(uint8(tabFlags[tab]))
 		slots := tabLimits[tab]
 		if rankID == 0 {
 			gbright = uint32(guildBankRightFull)
